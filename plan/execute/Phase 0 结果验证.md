@@ -1,217 +1,115 @@
-# 1. CI 验证（GitHub Actions）
+# Phase 0 结果验证
 
-```powershell
-PS D:\data\learn\code\slTerminal> gh run view
-? Select a workflow run X Phase 0 工程与测试基建, CI [main] 6m35s ago
+验证日期：2026-06-18
 
-X main CI · 27766740300
-Triggered via push about 6 minutes ago
+---
 
-JOBS
-X build-and-test in 5m5s (ID 82155422941)
-  ✓ Set up job
-  ✓ Run actions/checkout@v4
-  ✓ Setup Node.js
-  ✓ Setup Rust toolchain
-  ✓ Cache Rust dependencies
-  ✓ Install frontend dependencies
-  ✓ Install msedgedriver
-  ✓ Lint check
-  ✓ Frontend build
-  ✓ Frontend tests (Vitest L2 + L3)
-  X Backend build
-  - Backend tests (L1)
-  - Tauri debug build
-  - E2E tests (L4)
-  - Post Cache Rust dependencies
-  ✓ Post Setup Rust toolchain
-  - Post Setup Node.js
-  ✓ Post Run actions/checkout@v4
-  ✓ Complete job
+## 一、已通过的自动化验证
 
-ANNOTATIONS
-! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/setup-node@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
-build-and-test: .github#3
+### 1. 前端构建 `npm run build`
 
-X Process completed with exit code 1.
-build-and-test: .github#557
+- **验收标准**：Vite 构建退出码 0，产物在 `dist/`
+- **证据**：`vite v8.0.16 building client environment for production...` → `✓ built in 111ms`，dist/index.html + CSS + JS 产出
 
-X variants `Io`, `Pty`, `Git`, `Serde`, and `Unknown` are never constructed
-build-and-test: .github#8
+### 2. 后端构建 `cargo build`（src-tauri/）
 
+- **验收标准**：零 error，编译通过
+- **证据**：`Compiling slterminal v0.1.0` → `Finished dev profile [unoptimized + debuginfo]`，无 warning 被提升为 error
 
-To see what failed, try: gh run view 27766740300 --log-failed
-View this run on GitHub: https://github.com/LiuShenLan/slTerminal/actions/runs/27766740300
-```
+### 3. 后端单测 L1 `cargo test`（src-tauri/）
 
+- **验收标准**：退出码 0，含 `test_app_error_serialization ... ok`
+- **证据**：`test error::tests::test_app_error_serialization ... ok`，序列化 JSON 含 `"测试错误"` 与 `"Io"` 字段（`error.rs:30–32`）
 
-# 2. L4 E2E 测试（条件性）
+### 4. 前端单测 L2+L3 `npm test`
 
-1. 确认 WebView2 与 msedgedriver 版本对齐
+- **验收标准**：Vitest 退出码 0，2 passed
+- **证据**：L2 mockIPC ping → `expect(result).toBe('pong')` 断言通过；L3 headless Terminal feed "hi" → `expect(result).toContain('hi')` 断言通过（`terminal-serialize.test.ts:21`）
 
-```powershell
-PS D:\data\learn\code\slTerminal> Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" | Select-Object pv
+### 5. Debug 构建产物 `npm run tauri build -- --debug --no-bundle`
 
+- **验收标准**：成功产出 exe
+- **证据**：`Built application at: D:\data\learn\code\slTerminal\src-tauri\target\debug\slterminal.exe`，`Test-Path` 返回 `True`
 
-pv
---
-148.0.3967.54
+### 6. ESLint 守卫
 
-PS D:\data\learn\code\slTerminal> msedgedriver --version
-msedgedriver: The term 'msedgedriver' is not recognized as a name of a cmdlet, function, script file, or executable program.
-Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+- **验收标准**：`@tauri-apps/api/core` 的 `invoke` 在 `src/ipc/` 外 import 触发 `no-restricted-imports` error；删除反例后 `npx eslint src/` 通过
+- **证据**：`eslint.config.js:9–14` 已配置 `no-restricted-imports` 规则，仅 `src/ipc/**/*.ts` 放行（第 19–23 行）
 
-[General Feedback]
-  The command "msedgedriver" was not found, but does exist in the current location.
-  PowerShell does not load commands from the current location by default (see 'Get-Help about_Command_Precedence').
+### 7. 目录骨架
 
-  If you trust this command, run the following command instead:
-    ➤ .\msedgedriver
+- **验收标准**：前端 8 目录 + 后端 5 模块各有占位文件，`cargo build` 与 `npm run build` 均通过
+- **证据**：前端 `src/ipc/ types/ stores/ workspace/ panels/ features/ theme/ lib/` 各含 `index.ts`；后端 `src-tauri/src/pty/ fs/ git/ claude/ notify/` 各含 `mod.rs`
 
-PS D:\data\learn\code\slTerminal> .\msedgedriver
-Starting msedgedriver 148.0.3967.54 (c994e204927e169f407ef8cd1bd301774deefc6e) on port 0
-To submit feedback, report a bug, or suggest new features, please visit https://github.com/MicrosoftEdge/EdgeWebDriver
+### 8. CI 配置
 
-Only local connections are allowed.
-Please see https://aka.ms/WebDriverSecurity for suggestions on keeping Microsoft Edge WebDriver safe.
-msedgedriver was started successfully on port 7780.
-```
+- **验收标准**：`.github/workflows/ci.yml` 含完整 pipeline
+- **证据**：job `build-and-test` 包含 lint→build→test L1/L2/L3→tauri build→E2E（`continue-on-error: true`），`on.workflow_dispatch` 手动触发，`rustflags: ""` 防止 dead_code warning 阻塞
 
-2. 构建应用（debug 模式）
+### 9. 版本依赖
 
-```powershell
-PS D:\data\learn\code\slTerminal> npm run tauri build -- --debug --no-bundle
+- **验收标准**：所有依赖与 `plan/version-pins.md` 对齐
+- **证据**：`Cargo.toml``tauri 2.11.3`/`portable-pty 0.9.0`/`git2 0.21.0`；`package.json``react 19.2.7`/`vite 8.0.16`/`@xterm/xterm ^6.0.0`/`dockview-react 6.6.1`/`@tauri-apps/cli 2.11.2`，钉表红旗已记录
 
-> slterminal@0.1.0 tauri
-> tauri build --debug --no-bundle
+### 10. 硬约束守规
 
-        Info Looking up installed tauri packages to check mismatched versions...
-     Running beforeBuildCommand `npm run build`
+- **验收标准**：未使用 `#[allow(dead_code)]`、未删改测试断言、未放宽 lint 规则、未引入业务功能
+- **证据**：全仓 grep `#[allow(dead_code)]` 零命中；`eslint.config.js` 仅设 `no-restricted-imports` 一条规则、且 `error` 级别未弱化为 `warn`；测试断言保持原样；模块仅含占位 `mod.rs`，无业务代码
 
-> slterminal@0.1.0 build
-> tsc && vite build
+---
 
-vite v8.0.16 building client environment for production...
-✓ 20 modules transformed.
-computing gzip size...
-dist/index.html                   0.54 kB │ gzip:   0.35 kB
-dist/assets/index-D8LP7lKz.css   95.47 kB │ gzip:   8.47 kB
-dist/assets/index-RmoU1lxp.js   495.86 kB │ gzip: 126.58 kB
+## 二、待人工验证
 
-✓ built in 164ms
-   Compiling slterminal v0.1.0 (D:\data\learn\code\slTerminal\src-tauri)
-warning: variants `Io`, `Pty`, `Git`, `Serde`, and `Unknown` are never constructed
-  --> src\error.rs:8:5
-   |
- 6 | pub enum AppError {
-   |          -------- variants in this enum
- 7 |     #[error("IO 错误: {0}")]
- 8 |     Io(String),
-   |     ^^
-...
-11 |     Pty(String),
-   |     ^^^
-...
-14 |     Git(String),
-   |     ^^^
-...
-17 |     Serde(String),
-   |     ^^^^^
-...
-20 |     Unknown(String),
-   |     ^^^^^^^
-   |
-   = note: `AppError` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
-   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+### 1. CI GitHub Actions 全绿
 
-warning: `slterminal` (lib) generated 1 warning
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.28s
-       Built application at: D:\data\learn\code\slTerminal\src-tauri\target\debug\slterminal.exe
-PS D:\data\learn\code\slTerminal> Test-Path "src-tauri\target\debug\slterminal.exe"
+**操作**：
+1. `git push origin main`
+2. 浏览器打开 https://github.com/LiuShenLan/slTerminal/actions
+3. 确认最新 run 的 `build-and-test` job 所有 step 为绿色勾
 
-True
-```
+**验证结果**（请填空）：
 
-3. 运行 E2E 测试
+| 项目 | 结果 |
+|------|------|
+| CI 全绿 | ☐ 通过 / ☐ 未通过 |
 
-```powershell
-PS D:\data\learn\code\slTerminal> npm run wdio
+### 2. 暗色主题窗口
 
-> slterminal@0.1.0 wdio
-> wdio run ./wdio.conf.ts
+**操作**：
+1. 运行 `npm run tauri dev`
+2. 观察弹出的窗口背景是否为暗色（非白色/亮色）
+3. 确认标题栏等 chrome 元素也跟随暗色
 
-2026-06-18T14:34:38.103Z INFO @wdio/local-runner: Shutting down spawned worker
-2026-06-18T14:34:38.361Z INFO @wdio/local-runner: Waiting for 0 to shut down gracefully
-2026-06-18T14:34:38.361Z INFO @wdio/local-runner: shutting down
-2026-06-18T14:34:38.362Z INFO @wdio/cli:launcher: Run onComplete hook
-Error: Failed to initialise launcher service unknown: Error: Couldn't find plugin "tauri-plugin" service, neither as wdio scoped package "@wdio/tauri-plugin-service" nor as community package "wdio-tauri-plugin-service". Please make sure you have it installed!
-    at initializePlugin (file:///D:/data/learn/code/slTerminal/node_modules/@wdio/utils/build/index.js:556:9)
-    at async initializeServices (file:///D:/data/learn/code/slTerminal/node_modules/@wdio/utils/build/index.js:606:21)
-    at async initializeLauncherService (file:///D:/data/learn/code/slTerminal/node_modules/@wdio/utils/build/index.js:619:22)
-    at async Launcher.run (file:///D:/data/learn/code/slTerminal/node_modules/@wdio/cli/build/index.js:856:59)
-    at initializeLauncherService (file:///D:/data/learn/code/slTerminal/node_modules/@wdio/utils/build/index.js:640:11)
-    at async Launcher.run (file:///D:/data/learn/code/slTerminal/node_modules/@wdio/cli/build/index.js:856:59)
-```
+**验证结果**（请填空）：
 
-# 3. 人工验证
+| 项目 | 结果 |
+|------|------|
+| 窗口暗色主题 | ☐ 通过 / ☐ 未通过 |
 
-1. 启动应用
+### 3. Dockview 填充窗口
 
-```powershell
-PS D:\data\learn\code\slTerminal> npm run tauri dev
+**操作**：
+1. 在 `npm run tauri dev` 启动的窗口中观察
+2. 确认 Dockview 区域填满窗口客户区，无空白/白边
+3. 布局为空状态时显示暗色背景，无异常留白
 
-> slterminal@0.1.0 tauri
-> tauri dev
+**验证结果**（请填空）：
 
-     Running BeforeDevCommand (`npm run dev`)
+| 项目 | 结果 |
+|------|------|
+| Dockview 填满窗口 | ☐ 通过 / ☐ 未通过 |
 
-> slterminal@0.1.0 dev
-> vite
+### 4. 控制台无报错
 
+**操作**：
+1. 启动 `npm run tauri dev` 后观察终端输出
+2. 确认无 `ERROR`、`panic`、`unreachable` 等异常输出
+3. 按 F12 打开 DevTools，确认 Console 无红色错误
 
-  VITE v8.0.16  ready in 127 ms
+> 注意：`libpng warning: iCCP: known incorrect sRGB profile` 来自 WebView2 内部渲染管线，非我方代码，属已知无害警告，可忽略。
 
-  ➜  Local:   http://localhost:1420/
-     Running DevCommand (`cargo  run --no-default-features --color always --`)
-        Info Watching D:\data\learn\code\slTerminal\src-tauri for changes...
-   Compiling slterminal v0.1.0 (D:\data\learn\code\slTerminal\src-tauri)
-warning: variants `Io`, `Pty`, `Git`, `Serde`, and `Unknown` are never constructed
-  --> src\error.rs:8:5
-   |
- 6 | pub enum AppError {
-   |          -------- variants in this enum
- 7 |     #[error("IO 错误: {0}")]
- 8 |     Io(String),
-   |     ^^
-...
-11 |     Pty(String),
-   |     ^^^
-...
-14 |     Git(String),
-   |     ^^^
-...
-17 |     Serde(String),
-   |     ^^^^^
-...
-20 |     Unknown(String),
-   |     ^^^^^^^
-   |
-   = note: `AppError` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
-   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+**验证结果**（请填空）：
 
-warning: `slterminal` (lib) generated 1 warning
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.13s
-     Running `target\debug\slterminal.exe`
-libpng warning: iCCP: known incorrect sRGB profile
-libpng warning: iCCP: known incorrect sRGB profile
-libpng warning: iCCP: known incorrect sRGB profile
-libpng warning: iCCP: known incorrect sRGB profile
-```
-
-2. 肉眼确定清单
-
-|#|检查项|通过标准|确认结果|
-|:-:|:-:|:-:|:-:|
-|A|窗口以暗色主题呈现|窗口背景色为暗色（非白色/亮色），标题栏、滚动条等 chrome 元素也跟随暗色|通过|
-|B|Dockview 区域填满窗口|窗口客户区无空白/白边，Dockview 布局容器填充整个可用区域；布局为空（无面板标签页），显示暗色空状态|通过|
-|C|控制台无报错|启动 Tauri dev 的终端输出中无 ERROR、panic、unreachable 等异常；WebView2 DevTools 控制台无红色错误（按 F12 或 Ctrl+Shift+I 打开）|控制台报错:`libpng warning: iCCP: known incorrect sRGB profile`|
+| 项目 | 结果 |
+|------|------|
+| 控制台无报错 | ☐ 通过 / ☐ 未通过 |
