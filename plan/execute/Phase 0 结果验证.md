@@ -71,7 +71,41 @@
 
 | 项目 | 结果 |
 |------|------|
-| CI 全绿 | ☐ 通过 / ☐ 未通过 |
+| CI 全绿 | 通过 |
+
+```powershell
+PS D:\data\learn\code\slTerminal> gh run view
+? Select a workflow run ✓ Phase 0 工程与测试基建, CI [main] 7m11s ago
+
+✓ main CI · 27789476477
+Triggered via push about 7 minutes ago
+
+JOBS
+✓ build-and-test in 6m30s (ID 82234585835)
+
+ANNOTATIONS
+! Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/setup-node@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+build-and-test: .github#3
+
+X Process completed with exit code 1.
+build-and-test: .github#29
+
+! variants `Io`, `Pty`, `Git`, `Serde`, and `Unknown` are never constructed
+build-and-test: .github#8
+
+! variants `Pty`, `Git`, `Serde`, and `Unknown` are never constructed
+build-and-test: .github#11
+
+! variants `Io`, `Pty`, `Git`, `Serde`, and `Unknown` are never constructed
+build-and-test: .github#8
+
+! variants `Io`, `Pty`, `Git`, `Serde`, and `Unknown` are never constructed
+build-and-test: .github#8
+
+
+For more information about the job, try: gh run view --job=82234585835
+View this run on GitHub: https://github.com/LiuShenLan/slTerminal/actions/runs/27789476477
+```
 
 ### 2. 暗色主题窗口
 
@@ -84,7 +118,7 @@
 
 | 项目 | 结果 |
 |------|------|
-| 窗口暗色主题 | ☐ 通过 / ☐ 未通过 |
+| 窗口暗色主题 | 通过 |
 
 ### 3. Dockview 填充窗口
 
@@ -97,7 +131,7 @@
 
 | 项目 | 结果 |
 |------|------|
-| Dockview 填满窗口 | ☐ 通过 / ☐ 未通过 |
+| Dockview 填满窗口 | 通过 |
 
 ### 4. 控制台无报错
 
@@ -112,4 +146,4 @@
 
 | 项目 | 结果 |
 |------|------|
-| 控制台无报错 | ☐ 通过 / ☐ 未通过 |
+| 控制台无报错 | 通过 |
