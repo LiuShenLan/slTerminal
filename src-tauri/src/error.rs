@@ -3,6 +3,7 @@ use thiserror::Error;
 
 /// 应用统一错误类型，所有 Tauri 命令返回 Result<_, AppError>
 #[derive(Debug, Error, Serialize)]
+#[allow(dead_code)]
 pub enum AppError {
     #[error("IO 错误: {0}")]
     Io(String),

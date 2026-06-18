@@ -26,7 +26,7 @@ export const config: WebdriverIO.Config = {
     {
       driverProvider: 'official',
     },
-  ], 'tauri-plugin'],
+  ]],
 
   framework: 'mocha',
 

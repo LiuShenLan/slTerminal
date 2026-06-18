@@ -1,14 +1,14 @@
 # 1. CI 验证（GitHub Actions）
 
-```
+```powershell
 PS D:\data\learn\code\slTerminal> gh run view
-? Select a workflow run X Phase 0 工程与测试基建, CI [main] 20m15s ago
+? Select a workflow run X Phase 0 工程与测试基建, CI [main] 6m35s ago
 
-X main CI · 27763999006
-Triggered via push about 20 minutes ago
+X main CI · 27766740300
+Triggered via push about 6 minutes ago
 
 JOBS
-X build-and-test in 5m24s (ID 82145606590)
+X build-and-test in 5m5s (ID 82155422941)
   ✓ Set up job
   ✓ Run actions/checkout@v4
   ✓ Setup Node.js
@@ -40,8 +40,8 @@ X variants `Io`, `Pty`, `Git`, `Serde`, and `Unknown` are never constructed
 build-and-test: .github#8
 
 
-To see what failed, try: gh run view 27763999006 --log-failed
-View this run on GitHub: https://github.com/LiuShenLan/slTerminal/actions/runs/27763999006
+To see what failed, try: gh run view 27766740300 --log-failed
+View this run on GitHub: https://github.com/LiuShenLan/slTerminal/actions/runs/27766740300
 ```
 
 
@@ -56,6 +56,25 @@ PS D:\data\learn\code\slTerminal> Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\M
 pv
 --
 148.0.3967.54
+
+PS D:\data\learn\code\slTerminal> msedgedriver --version
+msedgedriver: The term 'msedgedriver' is not recognized as a name of a cmdlet, function, script file, or executable program.
+Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+
+[General Feedback]
+  The command "msedgedriver" was not found, but does exist in the current location.
+  PowerShell does not load commands from the current location by default (see 'Get-Help about_Command_Precedence').
+
+  If you trust this command, run the following command instead:
+    ➤ .\msedgedriver
+
+PS D:\data\learn\code\slTerminal> .\msedgedriver
+Starting msedgedriver 148.0.3967.54 (c994e204927e169f407ef8cd1bd301774deefc6e) on port 0
+To submit feedback, report a bug, or suggest new features, please visit https://github.com/MicrosoftEdge/EdgeWebDriver
+
+Only local connections are allowed.
+Please see https://aka.ms/WebDriverSecurity for suggestions on keeping Microsoft Edge WebDriver safe.
+msedgedriver was started successfully on port 7780.
 ```
 
 2. 构建应用（debug 模式）
@@ -79,7 +98,7 @@ dist/index.html                   0.54 kB │ gzip:   0.35 kB
 dist/assets/index-D8LP7lKz.css   95.47 kB │ gzip:   8.47 kB
 dist/assets/index-RmoU1lxp.js   495.86 kB │ gzip: 126.58 kB
 
-✓ built in 108ms
+✓ built in 164ms
    Compiling slterminal v0.1.0 (D:\data\learn\code\slTerminal\src-tauri)
 warning: variants `Io`, `Pty`, `Git`, `Serde`, and `Unknown` are never constructed
   --> src\error.rs:8:5
@@ -106,224 +125,37 @@ warning: variants `Io`, `Pty`, `Git`, `Serde`, and `Unknown` are never construct
    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
 
 warning: `slterminal` (lib) generated 1 warning
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.14s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.28s
        Built application at: D:\data\learn\code\slTerminal\src-tauri\target\debug\slterminal.exe
 PS D:\data\learn\code\slTerminal> Test-Path "src-tauri\target\debug\slterminal.exe"
+
 True
 ```
 
 3. 运行 E2E 测试
 
 ```powershell
-PS D:\data\learn\code\slTerminal> npm ci
+PS D:\data\learn\code\slTerminal> npm run wdio
 
-added 187 packages in 3s
+> slterminal@0.1.0 wdio
+> wdio run ./wdio.conf.ts
 
-55 packages are looking for funding
-  run `npm fund` for details
-PS D:\data\learn\code\slTerminal> npx wdio run wdio.conf.js
-
-                 -:...........................-:.
-                 +                              +
-              `` +      `...`        `...`      + `
-            ./+/ +    .:://:::`    `::///::`  ` + ++/.
-           .+oo+ +    /:+ooo+-/    /-+ooo+-/ ./ + +oo+.
-           -ooo+ +    /-+ooo+-/    /-+ooo+-/ .: + +ooo.
-            -+o+ +    `::///:-`    `::///::`    + +o+-
-             ``. /.     `````        `````     .: .``
-                  .----------------------------.
-           `-::::::::::::::::::::::::::::::::::::::::-`
-          .+oooo/:------------------------------:/oooo+.
-      `.--/oooo-                                  :oooo/--.`
-    .::-``:oooo`                                  .oooo-``-::.
-  ./-`    -oooo`--.: :.--                         .oooo-    `-/.
- -/`    `-/oooo////////////////////////////////////oooo/.`    `/-
-`+`   `/+oooooooooooooooooooooooooooooooooooooooooooooooo+:`   .+`
--/    +o/.:oooooooooooooooooooooooooooooooooooooooooooo:-/o/    +.
--/   .o+  -oooosoooososssssooooo------------------:oooo- `oo`   +.
--/   .o+  -oooodooohyyssosshoooo`                 .oooo-  oo.   +.
--/   .o+  -oooodooysdooooooyyooo` `.--.``     .:::-oooo-  oo.   +.
--/   .o+  -oooodoyyodsoooooyyooo.//-..-:/:.`.//.`./oooo-  oo.   +.
--/   .o+  -oooohsyoooyysssysoooo+-`     `-:::.    .oooo-  oo.   +.
--/   .o+  -ooooosooooooosooooooo+//////////////////oooo-  oo.   +.
--/   .o+  -oooooooooooooooooooooooooooooooooooooooooooo-  oo.   +.
--/   .o+  -oooooooooooooooooooooooooooooooooooooooooooo-  oo.   +.
--+////o+` -oooo---:///:----://::------------------:oooo- `oo////+-
-+ooooooo/`-oooo``:-```.:`.:.`.+/-    .::::::::::` .oooo-`+ooooooo+
-oooooooo+`-oooo`-- `/` .:+  -/-`/`   .::::::::::  .oooo-.+oooooooo
-+-/+://-/ -oooo-`:`.o-`:.:-````.:    .///:``````  -oooo-`/-//:+:-+
-: :..--:-:.+ooo+/://o+/-.-:////:-....-::::-....--/+ooo+.:.:--.-- /
-- /./`-:-` .:///+/ooooo/+///////////////+++ooooo/+///:. .-:.`+./ :
-:-:/.           :`ooooo`/`              .:.ooooo :           ./---
-                :`ooooo`/`              .:.ooooo :
-                :`ooooo./`              .:-ooooo :
-                :`ooooo./`              .:-ooooo :
-            `...:-+++++:/.              ./:+++++-:...`
-           :-.````````/../              /.-:````````.:-
-          -/::::::::://:/+             `+/:+::::::::::+.
-          :oooooooooooo++/              +++oooooooooooo-
-
-                           Webdriver.IO
-              Next-gen browser and mobile automation
-                    test framework for Node.js
-
-
-Creating WebdriverIO project in D:\data\learn\code\slTerminal\run
-
-Installing packages:  @wdio/cli
-
-
-added 391 packages in 6s
-
-145 packages are looking for funding
-  run `npm fund` for details
-
-Finished installing packages.
-
-Running WDIO CLI Wizard...
-
-===============================
-🤖 WDIO Configuration Wizard 🧙
-===============================
-
-? A project named "slterminal" was detected at "D:\data\learn\code\slTerminal", cor✔ A project named "slterminal" was detected at "D:\data\learn\code\slTerminal",
-correct? Yes
-✔ What type of testing would you like to do? Desktop Testing - of Electron, Tauri, or macOS Applications
-    > https://webdriver.io/docs/desktop-testing
-✔ What type of desktop application are you testing? Tauri (https://tauri.app/)
-✔ Which WebDriver provider would you like to use for Tauri? Official tauri-driver (cross-platform, Cargo-installed)
-✔ Install @wdio/tauri-plugin for richer in-webview integration (browser.tauri.execute, mocking)? Yes
-✔ Path to your built Tauri binary (leave blank to use the default `cargo tauri build` output)?
-✔ Which framework do you want to use? Mocha (https://mochajs.org/)
-✔ Do you want to use Typescript to write tests? Yes
-✔ Do you want WebdriverIO to autogenerate some test files? Yes
-✔ What should be the location of your spec files? D:\data\learn\code\slTerminal\test\specs\**\*.ts
-✔ Which reporter do you want to use? spec
-✔ Do you want to add a plugin to your test setup?
-✔ Do you want to add a service to your test setup? tauri, tauri-plugin
-✔ Do you want me to run `npm install` Yes
-
-
-Installing packages using npm:
-- @wdio/local-runner@latest
-- @wdio/mocha-framework@latest
-- @wdio/spec-reporter@latest
-- @wdio/tauri-service@latest
-- @wdio/tauri-plugin@latest
-- @types/node
-- @wdio/globals@latest
-- expect-webdriverio
-
-
-npm warn deprecated inflight@1.0.6: This module is not supported, and leaks memory. Do not use it. Check out lru-cache if you want a good and tested way to coalesce async requests by a key value, which is much more comprehensive and powerful.
-npm warn deprecated glob@8.1.0: Glob versions prior to v9 are no longer supported
-
-added 97 packages in 3s
-
-163 packages are looking for funding
-  run `npm fund` for details
-✔ Success!
-
-Creating a WebdriverIO config file...
-✔ Success!
-
-Autogenerate test files...
-✔ Success!
-
-Adding "wdio" script to package.json
-✔ Success!
-
-🤖 Successfully setup project at D:\data\learn\code\slTerminal 🎉
-
-Join our Discord Community Server and instantly find answers to your issues or queries. Or just join and say hi 👋!
-  🔗 https://discord.webdriver.io
-
-Visit the project on GitHub to report bugs 🐛 or raise feature requests 💡:
-  🔗 https://github.com/webdriverio/webdriverio
-
-🦀 Tauri requires a couple of Rust-side additions before tests can run:
-
-  1. Install the official tauri-driver via Cargo:
-
-       cargo install tauri-driver --locked
-
-  2. On Linux, set `WEBKIT_DISABLE_DMABUF_RENDERER=1` in your shell when running tests.
-
-  Frontend plugin (@wdio/tauri-plugin) was added to your npm dependencies.
-  See https://webdriver.io/docs/desktop-testing/tauri/plugin-setup for wiring instructions.
-
-Full Tauri setup docs:
-  🔗 https://webdriver.io/docs/desktop-testing/tauri
-To run your tests, execute:
-$ cd D:\data\learn\code\slTerminal
-$ npm run wdio
-
-Adding scripts to package.json
-node:internal/modules/cjs/loader:1502
-  const err = new Error(message);
-              ^
-
-Error: Cannot find module 'D:\data\learn\code\slTerminal\run\package.json'
-Require stack:
-- D:\cache\nodejs\node_cache\_npx\471611576716610c\node_modules\wdio\build\index.js
-- D:\cache\nodejs\node_cache\_npx\471611576716610c\node_modules\wdio\bin\wdio.js
-    at Module._resolveFilename (node:internal/modules/cjs/loader:1502:15)
-    at wrapResolveFilename (node:internal/modules/cjs/loader:1073:27)
-    at defaultResolveImplForCJSLoading (node:internal/modules/cjs/loader:1097:10)
-    at resolveForCJSWithHooks (node:internal/modules/cjs/loader:1118:12)
-    at Module._load (node:internal/modules/cjs/loader:1287:25)
-    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
-    at Module.require (node:internal/modules/cjs/loader:1602:12)
-    at require (node:internal/modules/helpers:191:16)
-    at createWebdriverIO (D:\cache\nodejs\node_cache\_npx\471611576716610c\node_modules\wdio\build\index.js:81:21) {
-  code: 'MODULE_NOT_FOUND',
-  requireStack: [
-    'D:\\cache\\nodejs\\node_cache\\_npx\\471611576716610c\\node_modules\\wdio\\build\\index.js',
-    'D:\\cache\\nodejs\\node_cache\\_npx\\471611576716610c\\node_modules\\wdio\\bin\\wdio.js'
-  ]
-}
-
-Node.js v26.1.0
+2026-06-18T14:34:38.103Z INFO @wdio/local-runner: Shutting down spawned worker
+2026-06-18T14:34:38.361Z INFO @wdio/local-runner: Waiting for 0 to shut down gracefully
+2026-06-18T14:34:38.361Z INFO @wdio/local-runner: shutting down
+2026-06-18T14:34:38.362Z INFO @wdio/cli:launcher: Run onComplete hook
+Error: Failed to initialise launcher service unknown: Error: Couldn't find plugin "tauri-plugin" service, neither as wdio scoped package "@wdio/tauri-plugin-service" nor as community package "wdio-tauri-plugin-service". Please make sure you have it installed!
+    at initializePlugin (file:///D:/data/learn/code/slTerminal/node_modules/@wdio/utils/build/index.js:556:9)
+    at async initializeServices (file:///D:/data/learn/code/slTerminal/node_modules/@wdio/utils/build/index.js:606:21)
+    at async initializeLauncherService (file:///D:/data/learn/code/slTerminal/node_modules/@wdio/utils/build/index.js:619:22)
+    at async Launcher.run (file:///D:/data/learn/code/slTerminal/node_modules/@wdio/cli/build/index.js:856:59)
+    at initializeLauncherService (file:///D:/data/learn/code/slTerminal/node_modules/@wdio/utils/build/index.js:640:11)
+    at async Launcher.run (file:///D:/data/learn/code/slTerminal/node_modules/@wdio/cli/build/index.js:856:59)
 ```
 
 # 3. 人工验证
 
-1. 前提条件
-
-```powershell
-PS D:\data\learn\code\slTerminal\src-tauri> cargo check
-   Compiling cfg-if v1.0.4
-   ...
-    Checking tauri-runtime-wry v2.11.3
-warning: variants `Io`, `Pty`, `Git`, `Serde`, and `Unknown` are never constructed
-  --> src\error.rs:8:5
-   |
- 6 | pub enum AppError {
-   |          -------- variants in this enum
- 7 |     #[error("IO 错误: {0}")]
- 8 |     Io(String),
-   |     ^^
-...
-11 |     Pty(String),
-   |     ^^^
-...
-14 |     Git(String),
-   |     ^^^
-...
-17 |     Serde(String),
-   |     ^^^^^
-...
-20 |     Unknown(String),
-   |     ^^^^^^^
-   |
-   = note: `AppError` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
-   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
-
-warning: `slterminal` (lib) generated 1 warning
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 35.77s
-```
-
-2. 启动应用
+1. 启动应用
 
 ```powershell
 PS D:\data\learn\code\slTerminal> npm run tauri dev
@@ -337,7 +169,7 @@ PS D:\data\learn\code\slTerminal> npm run tauri dev
 > vite
 
 
-  VITE v8.0.16  ready in 549 ms
+  VITE v8.0.16  ready in 127 ms
 
   ➜  Local:   http://localhost:1420/
      Running DevCommand (`cargo  run --no-default-features --color always --`)
@@ -368,7 +200,7 @@ warning: variants `Io`, `Pty`, `Git`, `Serde`, and `Unknown` are never construct
    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
 
 warning: `slterminal` (lib) generated 1 warning
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.14s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.13s
      Running `target\debug\slterminal.exe`
 libpng warning: iCCP: known incorrect sRGB profile
 libpng warning: iCCP: known incorrect sRGB profile
@@ -376,7 +208,7 @@ libpng warning: iCCP: known incorrect sRGB profile
 libpng warning: iCCP: known incorrect sRGB profile
 ```
 
-3. 肉眼确定清单
+2. 肉眼确定清单
 
 |#|检查项|通过标准|确认结果|
 |:-:|:-:|:-:|:-:|
