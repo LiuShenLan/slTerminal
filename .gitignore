@@ -23,8 +23,8 @@ dist-ssr
 *.sln
 *.sw?
 
+# Temp
+temp/
+
 # Rust
 src-tauri/target/
-
-# temp
-temp

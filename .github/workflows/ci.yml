@@ -43,14 +43,16 @@ jobs:
         run: npm test
 
       - name: Backend build
-        run: cd src-tauri && cargo build
+        working-directory: src-tauri
+        run: cargo build
 
       - name: Backend tests (L1)
-        run: cd src-tauri && cargo test
+        working-directory: src-tauri
+        run: cargo test
 
       - name: Tauri debug build
         run: npm run tauri build -- --debug --no-bundle
 
       - name: E2E tests (L4)
-        run: cd e2e-tests && npm ci && npm test
+        run: npm run wdio
         continue-on-error: true
