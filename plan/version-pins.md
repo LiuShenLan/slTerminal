@@ -10,7 +10,7 @@
 | tauri-build | 2.6.3 | Tauri 构建时代码生成（Cargo build script） | https://crates.io/crates/tauri-build | 独立版本体系，不与 tauri crate 同步发版 |
 | portable-pty | 0.9.0 | 跨平台 PTY 接口（Windows ConPTY） | https://crates.io/crates/portable-pty | Windows spawn **必须串行化**（一把 SPAWN_LOCK），并发 spawn 会卡死 ConPTY 输出管道；cwd 反斜杠规范化；cwd/命令边界需借助 OSC 7/133 跟踪 |
 | git2 | 0.21.0 | libgit2 Rust 绑定（git 操作） | https://crates.io/crates/git2 | 依赖系统 libgit2 或 vendored 构建 |
-| notify | 8.2.1 | 文件系统变更监控（跨平台） | https://crates.io/crates/notify | 最新 9.0.0-rc.4 为预发布版，生产环境应钉 stable 8.x |
+| notify | 9.0.0-rc.4 | 文件系统变更监控（跨平台，Phase 0 占位） | https://crates.io/crates/notify | Phase 0 评估可接受（rc.4），正式发布后单独验证 |
 
 ## 二、Tauri JS — 运行时与 CLI
 
@@ -78,7 +78,7 @@
 5. **xterm.js #4779 Canvas 渲染器可能移除**：WebView2 无 GPU 场景的唯一高性能后备消失风险
 6. **Dockview fromJSON 损坏 API 状态** (#341)：layoutSerde.ts 必须 try/catch 包裹 + 校验组件名白名单
 7. **msedgedriver 版本检测依赖社区工具**：chippers/msedgedriver-tool 为社区维护，非 Tauri 官方
-8. **notify 9.0.0-rc.4 非 stable**：生产环境应使用 8.x，9.x 正式发布后单独验证
+8. **notify 9.0.0-rc.4 非 stable**：Phase 0 已评估可接受（rc.4 仅占位，无文件监听需求），9.x 正式发布后单独验证
 9. **WebView2 软件渲染缺陷** (#4574)：无 GPU 加速时 WebGL2 回退到软件模拟导致字符丢失
 10. **生产环境白屏风险**：Vite 构建产物绝对路径、hash 路由未配置、frontendDist 指向错误均会导致 WebView2 白屏
 11. **DPI 缩放浮点精度模糊**：WebView2 在 125%/150%/175% DPI 下 canvas 后备存储可能多 1px 产生模糊

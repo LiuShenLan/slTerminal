@@ -2,6 +2,8 @@ use serde::Serialize;
 use thiserror::Error;
 
 /// 应用统一错误类型，所有 Tauri 命令返回 Result<_, AppError>
+// Phase 0 占位变体，后续 phase 构造；保留 -D warnings 全局生效
+#[allow(dead_code)]
 #[derive(Debug, Error, Serialize)]
 pub enum AppError {
     #[error("IO 错误: {0}")]

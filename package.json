@@ -10,7 +10,7 @@
     "tauri": "tauri",
     "test": "vitest run",
     "lint": "eslint src/",
-    "wdio": "wdio run ./wdio.conf.ts"
+    "wdio": "node ./e2e-tests/run-wdio.cjs"
   },
   "dependencies": {
     "@tauri-apps/plugin-opener": "^2",
@@ -26,7 +26,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/api": "2.11.1",
     "@tauri-apps/cli": "2.11.2",
     "@types/node": "^25.9.3",
     "@types/react": "^19.1.8",
@@ -42,6 +42,7 @@
     "eslint": "^10.5.0",
     "expect-webdriverio": "^5.6.8",
     "jsdom": "^29.1.1",
+    "patch-package": "^8.0.1",
     "typescript": "6.0.3",
     "typescript-eslint": "^8.61.1",
     "vite": "8.0.16",

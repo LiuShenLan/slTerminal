@@ -22,7 +22,6 @@ jobs:
       - name: Setup Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          rustflags: ""
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -58,4 +57,3 @@ jobs:
 
       - name: E2E tests (L4)
         run: npm run wdio
-        continue-on-error: true
