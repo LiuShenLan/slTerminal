@@ -26,6 +26,8 @@ dist-ssr
 # Temp
 temp/
 .temp/
+tmp/
+.tmp/
 
 # Rust
 src-tauri/target/

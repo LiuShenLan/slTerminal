@@ -1,0 +1,688 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>xterm.js 渲染引擎技术报告</title>
+<style>
+  :root {
+    --bg: #1e1e2e;
+    --bg-card: #282840;
+    --bg-code: #181825;
+    --text: #cdd6f4;
+    --text-dim: #a6adc8;
+    --accent: #89b4fa;
+    --accent2: #f5c2e7;
+    --accent3: #a6e3a1;
+    --accent4: #fab387;
+    --accent5: #f38ba8;
+    --border: #45475a;
+    --table-stripe: #313244;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    padding: 0;
+  }
+  article { max-width: 960px; margin: 0 auto; padding: 60px 40px; }
+  h1 {
+    font-size: 2.2em;
+    text-align: center;
+    margin-bottom: 8px;
+    color: var(--accent);
+    font-weight: 700;
+  }
+  .subtitle {
+    text-align: center;
+    color: var(--text-dim);
+    margin-bottom: 48px;
+    font-size: 0.95em;
+  }
+  h2 {
+    font-size: 1.5em;
+    color: var(--accent2);
+    border-left: 4px solid var(--accent2);
+    padding-left: 14px;
+    margin: 48px 0 18px;
+  }
+  h3 {
+    font-size: 1.15em;
+    color: var(--accent3);
+    margin: 26px 0 10px;
+  }
+  h4 {
+    font-size: 1.02em;
+    color: var(--accent4);
+    margin: 18px 0 8px;
+  }
+  p { margin-bottom: 14px; }
+  ul, ol { margin: 6px 0 14px 24px; }
+  li { margin-bottom: 5px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0 20px;
+    font-size: 0.93em;
+  }
+  th, td {
+    padding: 10px 14px;
+    text-align: left;
+    border: 1px solid var(--border);
+  }
+  th {
+    background: var(--bg-card);
+    color: var(--accent4);
+    font-weight: 600;
+  }
+  tr:nth-child(even) td { background: var(--table-stripe); }
+
+  pre {
+    background: var(--bg-code);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px 20px;
+    overflow-x: auto;
+    margin: 14px 0 20px;
+    font-size: 0.88em;
+    line-height: 1.5;
+  }
+  code {
+    font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', Consolas, monospace;
+    font-size: 0.92em;
+  }
+  p code, li code {
+    background: var(--bg-code);
+    padding: 1px 6px;
+    border-radius: 3px;
+    border: 1px solid var(--border);
+  }
+
+  .callout {
+    border-left: 4px solid var(--accent);
+    background: rgba(137, 180, 250, 0.08);
+    padding: 14px 18px;
+    margin: 18px 0;
+    border-radius: 0 6px 6px 0;
+    font-size: 0.94em;
+  }
+  .callout-warn {
+    border-left-color: var(--accent5);
+    background: rgba(243, 139, 168, 0.08);
+  }
+
+  .arch-diagram {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 24px;
+    margin: 18px 0;
+    font-family: 'Cascadia Code', 'Fira Code', Consolas, monospace;
+    font-size: 0.85em;
+    line-height: 1.8;
+    overflow-x: auto;
+    white-space: pre;
+  }
+
+  hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 48px 0 24px;
+  }
+  .sources {
+    font-size: 0.88em;
+    color: var(--text-dim);
+  }
+  .sources li { margin-bottom: 3px; }
+
+  .toc {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px 28px;
+    margin: 28px 0 36px;
+  }
+  .toc ol { margin-bottom: 0; }
+  .toc a { color: var(--accent3); }
+</style>
+</head>
+<body>
+<article>
+
+<h1>xterm.js 渲染引擎技术报告</h1>
+<p class="subtitle">版本范围：xterm.js 3.x — 6.x &nbsp;|&nbsp; 调研日期：2026-06-18</p>
+
+<!-- TOC -->
+<div class="toc">
+<h3 style="margin-top:0">目录</h3>
+<ol>
+  <li><a href="#s1">xterm.js 支持哪几种渲染器？</a></li>
+  <li><a href="#s2">每种渲染器的工作原理和性能特点</a></li>
+  <li><a href="#s3">WebGL Renderer 如何利用 GPU 加速？</a></li>
+  <li><a href="#s4">WebGL addon 的架构设计</a></li>
+  <li><a href="#s5">官方推荐选择</a></li>
+  <li><a href="#s6">性能 benchmark 数据</a></li>
+  <li><a href="#s7">xterm.js 5.x/6.x 渲染方面的重大变化</a></li>
+</ol>
+</div>
+
+<!-- ============ 1 ============ -->
+<h2 id="s1">1. xterm.js 支持哪几种渲染器？</h2>
+
+<p>xterm.js 历史上曾存在三种渲染器，截至 v6.0（2025-12-22 发布），仅保留两种：</p>
+
+<table>
+  <tr><th>渲染器</th><th>类型</th><th>状态 (v6.0+)</th><th>说明</th></tr>
+  <tr>
+    <td><strong>DOM Renderer</strong></td>
+    <td>内置</td>
+    <td style="color:#a6e3a1">活跃</td>
+    <td>每个终端单元格一个 <code>&lt;span&gt;</code> 节点，无需 GPU，始终可用。自 v5.0 起成为默认渲染器</td>
+  </tr>
+  <tr>
+    <td><strong>Canvas Renderer</strong></td>
+    <td>addon → 已移除</td>
+    <td style="color:#f38ba8">v6.0 删除</td>
+    <td>v5.0 从核心移入 <code>@xterm/addon-canvas</code>；v6.0 通过 <a href="https://github.com/xtermjs/xterm.js/pull/5105">PR #5105</a> 彻底移除</td>
+  </tr>
+  <tr>
+    <td><strong>WebGL Renderer</strong></td>
+    <td>addon</td>
+    <td style="color:#a6e3a1">活跃</td>
+    <td><code>@xterm/addon-webgl</code>，使用 WebGL2 实现 GPU 加速。官方推荐的性能路径</td>
+  </tr>
+</table>
+
+<div class="callout">
+<strong>演进路线：</strong>DOM（v1–v4 默认）→ Canvas 出现（PR #938, 2017）→ WebGL 出现（2019）→ Canvas 移出核心（v5.0, 2022）→ Canvas 彻底删除（v6.0, 2025）。现在的 xterm.js 只有两条渲染路径：<strong>DOM（回退）</strong>和 <strong>WebGL（性能）</strong>。
+</div>
+
+<div class="callout callout-warn">
+<strong>注意：</strong>v6.0 同时删除了 <code>rendererType</code> 选项和 <code>setOption()</code> 方法。此前用 <code>rendererType: 'canvas'</code> 的配置在 v6.0 中将直接报错。
+</div>
+
+
+<!-- ============ 2 ============ -->
+<h2 id="s2">2. 每种渲染器的工作原理和性能特点</h2>
+
+<h3>2.1 DOM Renderer</h3>
+
+<p><strong>工作原理：</strong></p>
+<ul>
+  <li>为屏幕上每个字符分配一个独立的 <code>&lt;span&gt;</code> 元素。一个 220 列 x 50 行的终端视口约产生 <strong>11,000+ 个 span 节点</strong></li>
+  <li>每帧 diff 当前与目标状态，仅更新变化的单元格</li>
+  <li>字符属性（前景色、背景色、粗体、斜体、下划线等）通过 <code>setAttribute</code> 直接写入 DOM</li>
+</ul>
+
+<p><strong>性能瓶颈：</strong></p>
+<ul>
+  <li><code>getAttribute</code> / <code>setAttribute</code> 占据约 <strong>50% 脚本时间</strong>（约 800ms），详见 <a href="https://github.com/xtermjs/xterm.js/issues/4658">DOM renderer care package issue #4658</a></li>
+  <li>大量 DOM 节点导致浏览器布局引擎反复重排（reflow），高吞吐输出时帧率降至 <strong>20-30 FPS</strong></li>
+  <li>colortest 场景下渲染耗时约 <strong>3,000ms</strong></li>
+</ul>
+
+<h3>2.2 Canvas Renderer（已移除）</h3>
+
+<p><strong>工作原理：</strong></p>
+<ul>
+  <li>多个 <code>&lt;canvas&gt;</code> 元素按层叠放：Text（文字）→ Selection（选区）→ Link（链接下划线）→ Cursor（光标）</li>
+  <li>ASCII 字符预先渲染到 <code>ImageBitmap</code> 纹理图集（texture atlas），绘制时直接从图集采样，避免重复 <code>fillText</code></li>
+  <li>基于脏区域 diff 的增量渲染：仅重绘变化的单元格区域</li>
+</ul>
+
+<p><strong>性能数据（来源：<a href="https://github.com/xtermjs/xterm.js/pull/938">PR #938</a>，Chrome 60 / MacBook Pro）：</strong></p>
+<table>
+  <tr><th>场景</th><th>DOM (v2.9.2)</th><th>Canvas</th><th>提升倍数</th></tr>
+  <tr><td>键入单个字符</td><td>4–5 ms</td><td>0.4–0.5 ms</td><td>~10x</td></tr>
+  <tr><td>vtop 空闲</td><td>22–73 ms</td><td>0.8–1.6 ms</td><td>27–46x</td></tr>
+  <tr><td>ls -lR 大目录</td><td>17–25 ms</td><td>2.3–4.6 ms</td><td>5–7x</td></tr>
+  <tr><td>yes（洪水输出）</td><td>17–30 ms</td><td>1–1.3 ms</td><td>17–23x</td></tr>
+</table>
+
+<p>单个字符变更通常 &lt; <strong>0.25 ms</strong> vs DOM 的 ~6ms。但 Canvas 仍是 CPU 侧 2D 渲染，WebGL 出现后沦为过渡方案。</p>
+
+<h3>2.3 WebGL Renderer</h3>
+
+<p><strong>工作原理：</strong></p>
+<ul>
+  <li>单一 <code>&lt;canvas&gt;</code> 元素，使用 WebGL2 API</li>
+  <li>整个终端视口的字符数据组织为 <strong>TypedArray</strong>，单次 <code>drawElementsInstanced</code> 调用全部推送到 GPU</li>
+  <li>CPU 耗时 &gt;90% 用于数据解析/准备，&lt;10% 用于实际渲染指令</li>
+  <li>稳定维持 <strong>58-60 FPS</strong></li>
+</ul>
+
+<p><strong>与其他渲染器的性能对比：</strong></p>
+<table>
+  <tr><th>指标</th><th>DOM</th><th>Canvas (已移除)</th><th>WebGL</th></tr>
+  <tr><td>帧率（高负载）</td><td>20–30 FPS</td><td>40–60 FPS</td><td>58–60 FPS</td></tr>
+  <tr><td>colortest</td><td>~3,000 ms</td><td>—</td><td>~50 ms <span style="color:var(--text-dim)">(60x)</span></td></tr>
+  <tr><td>ls -lR</td><td>17–25 ms</td><td>2.3–4.6 ms</td><td>&lt;1 ms</td></tr>
+  <tr><td>vs Canvas 相对性能</td><td>—</td><td>基准</td><td>最多 900% 更快</td></tr>
+</table>
+
+
+<!-- ============ 3 ============ -->
+<h2 id="s3">3. WebGL Renderer 如何利用 GPU 加速？</h2>
+
+<p>WebGL 渲染器通过四个核心技术实现 GPU 加速：纹理图集、实例化渲染、紧凑数据布局、分层渲染管线。</p>
+
+<h3>3.1 纹理图集 (Texture Atlas)</h3>
+
+<p>字符字形不逐次 <code>fillText</code>，而是预先光栅化到 GPU 纹理中：</p>
+<ul>
+  <li><strong>多页设计</strong>：每页从 512x512 起始，按需扩展至最大 4096x4096（v5.1.0 引入）</li>
+  <li><strong>页数上限</strong>：<code>Math.min(32, gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS))</code>，硬上限 32 页，防止着色器代码过长导致编译失败（<a href="https://github.com/xtermjs/xterm.js/issues/4273">Issue #4273</a>）</li>
+  <li><strong>纹理格式</strong>：RGBA / UNSIGNED_BYTE，CLAMP_TO_EDGE 包裹模式</li>
+  <li><strong>版本追踪</strong>：每页有版本号，仅在页内容变化时重新上传 <code>texImage2D</code> + <code>generateMipmap</code></li>
+  <li><strong>共享缓存</strong>：<code>CharAtlasCache</code> 跨 WebGL 实例共享，引用计数管理生命周期</li>
+</ul>
+
+<h3>3.2 实例化渲染 (Instanced Rendering)</h3>
+
+<p>这是 WebGL 渲染器性能碾压 DOM/Canvas 的最关键设计：</p>
+
+<ul>
+  <li>使用 <strong><code>drawElementsInstanced()</code></strong>，<strong>一次 draw call</strong> 渲染终端<strong>全部</strong>字符</li>
+  <li>每个字符是一个 <strong>实例</strong>（instance），共享同一个模板四边形（unit quad）</li>
+  <li>绘制基元为 <code>TRIANGLE_STRIP</code>（两个三角形拼成矩形）</li>
+  <li>缓冲区提示为 <code>STREAM_DRAW</code>，适合每帧更新的场景</li>
+</ul>
+
+<h3>3.3 实例数据布局（11 floats / cell）</h3>
+
+<p>每个单元格携带 11 个 float（44 字节）的属性数据：</p>
+
+<table>
+  <tr><th>属性名</th><th>类型</th><th>含义</th></tr>
+  <tr><td><code>a_offset</code></td><td>vec2</td><td>字形在单元格内的偏移量</td></tr>
+  <tr><td><code>a_size</code></td><td>vec2</td><td>字形宽高</td></tr>
+  <tr><td><code>a_texpage</code></td><td>float</td><td>纹理图集页码索引</td></tr>
+  <tr><td><code>a_texcoord</code></td><td>vec2</td><td>纹理坐标 (UV)</td></tr>
+  <tr><td><code>a_texsize</code></td><td>vec2</td><td>纹理空间中的尺寸</td></tr>
+  <tr><td><code>a_cellpos</code></td><td>vec2</td><td>单元格行列位置</td></tr>
+</table>
+
+<p>这些属性以交叉存储（interleaved）方式组织在单个缓冲区中，<code>vertexAttribDivisor</code> 设为 1 实现逐实例而非逐顶点的数据读取。</p>
+
+<h3>3.4 着色器管线</h3>
+
+<p><strong>顶点着色器</strong>（GLSL 300 es）：</p>
+<ul>
+  <li>将单元格坐标从像素空间映射到裁剪空间（<code>u_projection * vec4(zeroToOne, 0, 1)</code>）</li>
+  <li>输出 <code>v_texcoord</code>（UV坐标）和 <code>v_texpage</code>（flat int，纹理页号）</li>
+</ul>
+
+<p><strong>片段着色器</strong>（<strong>动态生成</strong>）：</p>
+<ul>
+  <li>根据 <code>maxAtlasPages</code> 运行时生成 if/else 分支链</li>
+  <li>接收 <code>sampler2D u_texture[N]</code> 数组（N = 纹理页数）</li>
+  <li>根据 <code>v_texpage</code> 选择正确的采样器，执行 <code>texture(u_texture[i], v_texcoord)</code></li>
+  <li>精度限定符：<code>precision lowp float</code></li>
+</ul>
+
+<p><strong>矩形着色器</strong>（背景色/选区）：</p>
+<ul>
+  <li>独立着色器程序，接收 <code>a_position</code>、<code>a_size</code>、<code>a_color</code></li>
+  <li>仅输出纯色，无纹理采样</li>
+</ul>
+
+<h3>3.5 分层渲染 + 双缓冲</h3>
+
+<p>渲染顺序（由 <code>WebglRenderer</code> 协调）：</p>
+
+<div class="arch-diagram">RectangleRenderer (背景色、选区)
+  →
+GlyphRenderer (文字字形)
+  →
+LinkRenderer (链接下划线)
+  →
+CursorRenderer (光标，v5.3.0 起移入 GPU 画布)</div>
+
+<p>使用 <strong>双缓冲</strong>机制，<code>STREAM_DRAW</code> 提示让驱动优化"每帧覆盖"的使用模式。</p>
+
+
+<!-- ============ 4 ============ -->
+<h2 id="s4">4. WebGL addon 的架构设计</h2>
+
+<h3>4.1 源码结构</h3>
+
+<p>所有 WebGL addon 源码位于：<code>addons/addon-webgl/src/</code></p>
+
+<div class="arch-diagram">addons/addon-webgl/src/
+├── WebglAddon.ts          # 入口：激活/停用/dispose
+├── WebglRenderer.ts       # 总协调器：管理渲染层、纹理图集、帧循环
+├── GlyphRenderer.ts       # 字形渲染：编译着色器、管理实例顶点缓冲区
+├── RectangleRenderer.ts   # 矩形渲染：背景色、选区高亮
+├── LinkRenderer.ts        # 链接下划线渲染
+├── CursorRenderer.ts      # 光标渲染 (v5.3.0 起原生 GPU 渲染)
+├── RenderModel.ts         # 单元格模型：Uint32Array 存储每cell状态
+├── WebglCharAtlas.ts      # 纹理图集：多页纹理管理、版本追踪
+├── WebglUtils.ts          # 工具：createProgram、投影矩阵等
+└── atlas/
+    └── CharAtlasCache.ts  # 图集缓存：跨实例共享、引用计数</div>
+
+<h3>4.2 核心类关系</h3>
+
+<pre><code>WebglAddon
+  └── activate(terminal) → 创建 WebglRenderer
+                              ├── GlyphRenderer      (主要渲染)
+                              │     ├── 动态生成片段着色器
+                              │     ├── 11-float 实例化顶点缓冲区
+                              │     └── 纹理引用 → WebglCharAtlas
+                              ├── RectangleRenderer  (背景层)
+                              ├── LinkRenderer       (链接层)
+                              ├── CursorRenderer     (光标层)
+                              ├── RenderModel        (Uint32Array 状态存储)
+                              └── WebglCharAtlas     (多页纹理图集)
+                                    └── 注册到 CharAtlasCache</code></pre>
+
+<h3>4.3 RenderModel -- 单元格状态存储</h3>
+
+<p><code>RenderModel</code> 使用 <strong><code>Uint32Array</code></strong> 存储每个单元格的渲染状态，每个单元格 4 个 uint32：</p>
+
+<table>
+  <tr><th>索引</th><th>字段</th><th>含义</th></tr>
+  <tr><td>0</td><td>bgColor</td><td>背景颜色 (packed RGBA)</td></tr>
+  <tr><td>1</td><td>fgColor</td><td>前景颜色 (packed RGBA)</td></tr>
+  <tr><td>2</td><td>charCode</td><td>字符码点 + 合并字符标记位 (<code>COMBINED_CHAR_BIT_MASK = 0x80000000</code>)</td></tr>
+  <tr><td>3</td><td>extAttrs</td><td>扩展属性 (粗体/斜体/下划线/闪烁/反显等)</td></tr>
+</table>
+
+<p>总大小：<code>rows * cols * 4 * 4</code> 字节。220x50 终端约 176 KB。</p>
+
+<h3>4.4 纹理图集缓存</h3>
+
+<p><code>CharAtlasCache</code> 是关键共享基础设施：</p>
+<ul>
+  <li><strong>跨 WebglAddon 实例共享</strong>：同一应用内多个终端可复用缓存</li>
+  <li><strong>引用计数</strong>：<code>acquireTextureAtlas()</code> 获取，<code>releaseTextureAtlas()</code> 释放</li>
+  <li><strong>多页管理</strong>：<code>WebglCharAtlas</code> 内部维护页面数组，懒加载新页</li>
+  <li><strong>版本增量更新</strong>：页面 canvas 变更时递增版本号，渲染器检测版本不匹配后上传纹理</li>
+</ul>
+
+<h3>4.5 着色器编译策略</h3>
+
+<p>片段着色器在 <code>GlyphRenderer</code> 构造函数中<strong>动态生成</strong>：</p>
+<ul>
+  <li>从 <code>gl.MAX_TEXTURE_IMAGE_UNITS</code> 获取最大纹理单元数</li>
+  <li>硬上限 32 页（防止某些平台 128 单元导致的"Expression too complex"编译错误）</li>
+  <li>生成 if/else 链，每个分支绑定一个纹理单元：<code>if (v_texpage == N) { outColor = texture(u_texture[N], v_texcoord); }</code></li>
+  <li>编译失败时捕获错误并回退到 DOM</li>
+</ul>
+
+
+<!-- ============ 5 ============ -->
+<h2 id="s5">5. 官方推荐选择</h2>
+
+<h3>5.1 基本原则：WebGL 优先，DOM 兜底</h3>
+
+<div class="callout">
+<strong>推荐模式（来自 @xterm/addon-webgl 官方文档）：</strong>
+<ol>
+  <li>尝试加载 <code>WebglAddon</code></li>
+  <li>加载失败 → 静默回退到 DOM 渲染器（无需任何操作，DOM 为内置默认）</li>
+  <li>运行时 GPU 上下文丢失 → <code>onContextLoss</code> 触发 <code>dispose()</code>，自动回退 DOM</li>
+</ol>
+</div>
+
+<h3>5.2 标准接入代码</h3>
+
+<pre><code>import { Terminal } from '@xterm/xterm';
+import { WebglAddon } from '@xterm/addon-webgl';
+
+const term = new Terminal();
+term.open(document.getElementById('terminal'));
+
+try {
+  const webglAddon = new WebglAddon();
+  webglAddon.onContextLoss(e =&gt; {
+    webglAddon.dispose();  // 终端自动回退到 DOM 渲染器
+  });
+  term.loadAddon(webglAddon);
+} catch (e) {
+  // WebGL2 不可用，终端默认使用 DOM 渲染器，无需额外处理
+  console.warn('WebGL2 不可用，使用 DOM 渲染器');
+}
+</pre></code></pre>
+
+<h3>5.3 GPU 硬件检测</h3>
+
+<p>在加载 WebglAddon 之前，建议先检测真实 GPU 硬件是否存在：</p>
+
+<pre><code>function detectWebGL2() {
+  const canvas = document.createElement('canvas');
+  const gl = canvas.getContext('webgl2', {
+    failIfMajorPerformanceCaveat: true  // 关键：拒绝软件渲染器
+  });
+  return !!gl;
+}</code></pre>
+
+<p>Chrome/Chromium 存在一个有问题的软件 WebGL2 模拟器（<a href="https://github.com/xtermjs/xterm.js/issues/4574">Issue #4574</a>），会导致字符缺失或渲染异常。<code>failIfMajorPerformanceCaveat: true</code> 确保只有真实 GPU 才走 WebGL 路径。</p>
+
+<h3>5.4 上下文丢失处理</h3>
+
+<table>
+  <tr><th>事件</th><th>处理策略</th></tr>
+  <tr><td><code>onContextLoss</code></td><td>调用 <code>addon.dispose()</code>，终端自动回退 DOM。无需手动切换</td></tr>
+  <tr><td><code>loadAddon</code> 抛异常</td><td>捕获、记录日志、继续使用 DOM。用户无感知</td></tr>
+  <tr><td>GPU 进程崩溃</td><td>自动触发 <code>onContextLoss</code>，同上处理</td></tr>
+  <tr><td>系统休眠/唤醒</td><td>浏览器可能回收上下文，触发 <code>onContextLoss</code></td></tr>
+</table>
+
+<h3>5.5 多面板终端策略</h3>
+
+<p>Chromium 每个渲染器进程限制约 <strong>16 个活跃 WebGL 上下文</strong>。对于多面板终端应用（如 VS Code、终端模拟器），推荐使用 <strong>单上下文聚焦模型</strong>（来自 <a href="https://github.com/daintreehq/daintree/issues/3156">daintree#3156</a>）：</p>
+
+<ul>
+  <li><strong>仅聚焦终端</strong>使用 WebGL 渲染</li>
+  <li><strong>所有非聚焦终端</strong>使用 DOM 渲染器</li>
+  <li>焦点切换时：<strong>dispose 旧 WebGL 上下文 → 在新终端创建新 WebglAddon</strong></li>
+  <li>加入去抖动（50-500ms）防止快速切换引起频繁重构</li>
+  <li>稳定状态：整个应用中<strong>仅有 1 个</strong>活跃 WebGL 上下文</li>
+</ul>
+
+<pre><code>// 多面板下的焦点切换策略（概念代码）
+let activeWebglAddon: WebglAddon | null = null;
+
+function onTerminalFocus(gained: Terminal, lost: Terminal) {
+  // 先释放旧上下文
+  activeWebglAddon?.dispose();
+  activeWebglAddon = null;
+
+  // 为新聚焦终端创建 WebGL
+  try {
+    const addon = new WebglAddon();
+    addon.onContextLoss(() =&gt; addon.dispose());
+    gained.loadAddon(addon);
+    activeWebglAddon = addon;
+  } catch {
+    // 静默回退 DOM
+  }
+}</code></pre>
+
+
+<!-- ============ 6 ============ -->
+<h2 id="s6">6. 性能 benchmark 数据</h2>
+
+<p>以下数据来自多个官方来源：xterm.js 发布说明、PR 测试报告、xterm-benchmark 项目、VS Code 博客。</p>
+
+<h3>6.1 WebGL vs Canvas 基准测试（v4.3.0 官方）</h3>
+
+<p>来源：<a href="https://github.com/xtermjs/xterm.js">xterm.js v4.3.0 发布说明</a></p>
+<table>
+  <tr><th>测试环境</th><th>WebGL 相对 Canvas</th></tr>
+  <tr><td>Windows, Intel Xeon, AMD FirePro</td><td>最多 <strong>900% 更快</strong></td></tr>
+</table>
+
+<h3>6.2 渲染耗时对比（colortest）</h3>
+
+<p>来源：<a href="https://github.com/xtermjs/xterm.js/issues/4658">DOM renderer care package #4658</a></p>
+<table>
+  <tr><th>渲染器</th><th>耗时</th><th>相对 DOM</th></tr>
+  <tr><td>DOM</td><td>~3,000 ms</td><td>基准</td></tr>
+  <tr><td>WebGL</td><td>~50 ms</td><td><strong>~60x 更快</strong></td></tr>
+</table>
+
+<h3>6.3 Canvas PR #938 基准测试（Chrome 60 / MacBook Pro）</h3>
+
+<p>来源：<a href="https://github.com/xtermjs/xterm.js/pull/938">Pull Request #938</a>（2017）</p>
+<table>
+  <tr><th>场景</th><th>DOM</th><th>Canvas</th><th>倍数</th></tr>
+  <tr><td>单个字符</td><td>4–5 ms</td><td>0.4–0.5 ms</td><td>~10x</td></tr>
+  <tr><td>vtop 空闲</td><td>22–73 ms</td><td>0.8–1.6 ms</td><td>27–46x</td></tr>
+  <tr><td>ls -lR</td><td>17–25 ms</td><td>2.3–4.6 ms</td><td>5–7x</td></tr>
+  <tr><td>yes 洪水</td><td>17–30 ms</td><td>1–1.3 ms</td><td>17–23x</td></tr>
+</table>
+
+<h3>6.4 输入吞吐量对比（v3.9.0 TypedArray 迁移）</h3>
+
+<p>来源：<a href="https://github.com/xtermjs/xterm.js">xterm.js v3.9.0 发布说明</a></p>
+<table>
+  <tr><th>缓冲区实现</th><th>JS 堆内存</th><th>GC 耗时占比</th><th>输入吞吐</th></tr>
+  <tr><td>JavaScript Array</td><td>25–50 MB</td><td>15–25%</td><td>7–8 MB/s</td></tr>
+  <tr><td>TypedArray</td><td>8–15 MB</td><td>&lt; 3%</td><td><strong>17–19 MB/s</strong></td></tr>
+</table>
+
+<p>TypedArray 迁移带来：吞吐提升 <strong>~2.5x</strong>、内存减少 <strong>~68-72%</strong>、GC 开销从 15-25% 降至 &lt;3%。这为后续 WebGL 渲染器的数据管线奠定了基础。</p>
+
+<h3>6.5 内存占用对比</h3>
+
+<p>来源：<a href="https://github.com/daintreehq/daintree/issues/3156">daintree#3156</a></p>
+<table>
+  <tr><th>渲染器</th><th>DOM 节点数</th><th>相对内存</th></tr>
+  <tr><td>DOM</td><td>11,000+ 个 &lt;span&gt;</td><td>基准</td></tr>
+  <tr><td>WebGL</td><td>1 个 &lt;canvas&gt;</td><td><strong>减少 ~72%</strong></td></tr>
+</table>
+
+<h3>6.6 性能数据汇总</h3>
+
+<table>
+  <tr><th>维度</th><th>DOM</th><th>Canvas（已移除）</th><th>WebGL</th></tr>
+  <tr><td>colortest 耗时</td><td>~3,000ms</td><td>—</td><td>~50ms (60x)</td></tr>
+  <tr><td>ls -lR 耗时</td><td>17–25ms</td><td>2.3–4.6ms</td><td>&lt;1ms</td></tr>
+  <tr><td>单字符变更</td><td>4–5ms</td><td>0.4–0.5ms</td><td>&lt;0.1ms</td></tr>
+  <tr><td>帧率（高负载）</td><td>20–30 FPS</td><td>40–60 FPS</td><td>58–60 FPS</td></tr>
+  <tr><td>输入吞吐</td><td>—</td><td>—</td><td>17–19 MB/s</td></tr>
+  <tr><td>内存 (220x50)</td><td>基准</td><td>—</td><td>-72%</td></tr>
+  <tr><td>vs Canvas 相对值</td><td>—</td><td>基准</td><td>最多 900%</td></tr>
+</table>
+
+
+<!-- ============ 7 ============ -->
+<h2 id="s7">7. xterm.js 5.x/6.x 渲染方面的重大变化</h2>
+
+<h3>7.1 v5.0.0（2022-11-01）</h3>
+<p>来源：<a href="https://github.com/xtermjs/xterm.js/releases/tag/5.0.0">Release 5.0.0</a></p>
+<ul>
+  <li><strong>Canvas 渲染器从核心移至 addon</strong>：从 <code>xterm</code> 核心包中剥离，变为独立包 <code>xterm-addon-canvas</code>（后改为 <code>@xterm/addon-canvas</code>）</li>
+  <li><strong>核心包体积缩减</strong>：379 KB → 265 KB（减少约 30%）</li>
+  <li><strong>DOM 成为新默认渲染器</strong>：原默认是 Canvas，现改为 DOM</li>
+  <li><strong>新下划线样式</strong>：支持 <code>undercurl</code>、<code>dotted</code>、<code>dashed</code>、<code>double</code> 等</li>
+  <li><strong>Smooth scroll</strong>：平滑滚动（使用 <code>transform</code>/<code>scrollTop</code>）</li>
+  <li><strong>Powerline 字形改进</strong>：支持更多 Powerline 特殊字符</li>
+  <li><strong>装饰（Decorations）系统</strong>：浮层式 UI 元素，不污染终端内容层</li>
+</ul>
+
+<h3>7.2 v5.1.0（2022-12-19）</h3>
+<p>来源：<a href="https://github.com/xtermjs/xterm.js/releases/tag/5.1.0">Release 5.1.0</a>、<a href="https://github.com/xtermjs/xterm.js/discussions/4334">Discussion #4334</a></p>
+<ul>
+  <li><strong>多页纹理图集</strong>：从单页 1024x1024 升级为多页系统，每页 512x512 起始、最大 4096x4096。理论上无限字形空间</li>
+  <li><strong>Canvas / WebGL 共享纹理图集</strong>：统一图集代码，降低重复维护成本</li>
+  <li><strong>WebGL 在 Safari 16+ 启用</strong>：此前 Safari 不支持 WebGL2，是 Canvas 渲染器保留的主要原因之一</li>
+  <li><strong>延迟纹理图集预热</strong>：使用 <code>requestIdleCallback</code> 推迟启动时的图集构建，加快首屏</li>
+  <li><strong>8 个新 Powerline Extra 字形</strong></li>
+</ul>
+
+<h3>7.3 v5.3.0（2023-09-08）</h3>
+<p>来源：<a href="https://newreleases.io/project/github/xtermjs/xterm.js/release/5.3.0">Release 5.3.0</a></p>
+<ul>
+  <li><strong>DOM 渲染器大幅加速</strong>：多个 PR（#4605, #4631, #4651, #4662, #4681, #4754）修复了 <code>setAttribute</code> 瓶颈、改进选择渲染一致性等</li>
+  <li><strong>WebGL 光标迁移到 GPU 画布</strong>：光标不再使用独立 DOM 覆盖层，直接在 WebGL 画布中渲染（PR #4568），提升 GPU 模式下的光标渲染性能和一致性</li>
+  <li><strong>纹理图集利用率优化</strong>：修复字形合并时的损坏问题</li>
+  <li>smooth scroll 扩展到 <code>scrollLines</code>、<code>scrollPages</code> 等方法</li>
+</ul>
+
+<h3>7.4 v5.4.0（2023-12）</h3>
+<p>来源：<a href="https://github.com/xtermjs/xterm.js/releases">Release 5.4.0</a></p>
+<ul>
+  <li><strong>包名迁移至 @xterm 作用域</strong>：<code>xterm</code> → <code>@xterm/xterm</code>，<code>xterm-addon-webgl</code> → <code>@xterm/addon-webgl</code>，<code>xterm-addon-fit</code> → <code>@xterm/addon-fit</code> 等。旧包名全部标记为 deprecated</li>
+  <li>迁移原因：<strong>安全</strong>——作用域包消除命名歧义，防止 typosquatting 攻击</li>
+  <li>对渲染无直接影响，但所有后续版本均使用新包名</li>
+</ul>
+
+<h3>7.5 v6.0.0（2025-12-22）-- 渲染器重大分水岭</h3>
+<p>来源：<a href="https://github.com/xtermjs/xterm.js/issues/4779">Issue #4779</a>、<a href="https://github.com/xtermjs/xterm.js/pull/5105">PR #5105</a>、<a href="https://github.com/microsoft/vscode/issues/106202">VS Code #106202</a></p>
+
+<div class="callout callout-warn">
+<strong>v6.0.0</strong> 是 xterm.js 渲染架构的<strong>决定性版本</strong>。Canvas 渲染器被彻底删除，渲染路径从三条缩减为两条。
+</div>
+
+<p><strong>详细变更：</strong></p>
+<ul>
+  <li><strong>@xterm/addon-canvas 完全移除</strong>（PR #5105）：团队称"多年前就想删除"，Safari WebGL2 支持是最后的绊脚石。移除约 1-2k 行代码，减少维护负担</li>
+  <li><strong>rendererType 选项删除</strong>：不再可配置渲染器类型。DOM 始终是内置回退，WebGL 通过 addon 启用</li>
+  <li><strong>setOption() 方法删除</strong>：改为直接 <code>options</code> 属性赋值</li>
+  <li><strong>windowsMode 选项删除</strong>：不再可用</li>
+  <li><strong>bellStyle 选项删除</strong>：替换为 <code>onBell</code> 事件回调</li>
+  <li><strong>Viewport/scrollbar 重构</strong>（PR #5096）：行为和 API 发生变化</li>
+</ul>
+
+<p><strong>迁移影响：</strong></p>
+<ul>
+  <li>VS Code 将设置项从 <code>terminal.integrated.rendererType</code>（选项：auto/canvas/dom/experimentalWebgl）改为 <code>terminal.integrated.gpuAcceleration</code>（选项：auto/on/off）</li>
+  <li>RStudio 等大量下游项目在升级时主动接入 WebGL addon（<a href="https://github.com/rstudio/rstudio/pull/16820">rstudio#16820</a>）</li>
+  <li>如果旧代码引用了 <code>rendererType: 'canvas'</code>，升级到 v6.0 会直接报错</li>
+</ul>
+
+<h3>7.6 版本演进总结</h3>
+
+<table>
+  <tr><th>版本</th><th>日期</th><th>DOM</th><th>Canvas</th><th>WebGL</th><th>核心变化</th></tr>
+  <tr><td>v4.x</td><td>2020-21</td><td style="color:#f38ba8">可选</td><td style="color:#a6e3a1">默认</td><td style="color:#a6e3a1">addon</td><td>Canvas 为默认，WebGL 成熟</td></tr>
+  <tr><td>v5.0</td><td>2022-11</td><td style="color:#a6e3a1;font-weight:bold">默认</td><td style="color:#fab387">addon</td><td style="color:#a6e3a1">addon</td><td>Canvas 移出核心，DOM 变默认</td></tr>
+  <tr><td>v5.1</td><td>2022-12</td><td style="color:#a6e3a1">默认</td><td style="color:#fab387">addon</td><td style="color:#a6e3a1">addon</td><td>多页纹理图集，Safari WebGL2</td></tr>
+  <tr><td>v5.3</td><td>2023-09</td><td style="color:#a6e3a1">默认</td><td style="color:#fab387">addon</td><td style="color:#a6e3a1">addon</td><td>DOM 加速，WebGL 原生光标</td></tr>
+  <tr><td>v5.4</td><td>2023-12</td><td style="color:#a6e3a1">默认</td><td style="color:#fab387">addon</td><td style="color:#a6e3a1">addon</td><td>包名迁移 @xterm 作用域</td></tr>
+  <tr><td>v6.0</td><td>2025-12</td><td style="color:#a6e3a1;font-weight:bold">内置</td><td style="color:#f38ba8;font-weight:bold">已删除</td><td style="color:#a6e3a1;font-weight:bold">addon</td><td>Canvas 删除，仅 DOM + WebGL</td></tr>
+</table>
+
+
+<!-- ============ Sources ============ -->
+<hr>
+<h2>来源索引</h2>
+<div class="sources">
+<ol>
+  <li><a href="https://github.com/xtermjs/xterm.js">xtermjs/xterm.js</a> -- 官方仓库</li>
+  <li><a href="https://github.com/xtermjs/xterm.js/releases/tag/5.0.0">xterm.js v5.0.0 Release Notes</a></li>
+  <li><a href="https://github.com/xtermjs/xterm.js/releases/tag/5.1.0">xterm.js v5.1.0 Release Notes</a></li>
+  <li><a href="https://github.com/xtermjs/xterm.js/discussions/4334">xterm.js v5.1.0 Discussion #4334</a></li>
+  <li><a href="https://github.com/xtermjs/xterm.js/releases/tag/6.0.0">xterm.js v6.0.0 Release Notes</a></li>
+  <li><a href="https://github.com/xtermjs/xterm.js/issues/4779">Remove the canvas renderer addon -- Issue #4779</a></li>
+  <li><a href="https://github.com/xtermjs/xterm.js/pull/5105">Remove the canvas renderer -- PR #5105</a></li>
+  <li><a href="https://github.com/xtermjs/xterm.js/pull/938">Render using canvas -- PR #938</a></li>
+  <li><a href="https://github.com/xtermjs/xterm.js/issues/4658">DOM renderer: care package issue #4658</a></li>
+  <li><a href="https://github.com/xtermjs/xterm.js/issues/4604">Faster DOM renderer -- Issue #4604</a></li>
+  <li><a href="https://github.com/xtermjs/xterm.js/issues/4273">webgl: large MAX_TEXTURE_IMAGE_UNITS causing "Expression too complex" -- Issue #4273</a></li>
+  <li><a href="https://github.com/microsoft/vscode/issues/106202">Transition the default terminal renderer to use WebGL -- VS Code #106202</a></li>
+  <li><a href="https://github.com/daintreehq/daintree/issues/3156">Focused terminal uses CPU-heavy DOM renderer instead of WebGL -- daintree #3156</a></li>
+  <li><a href="https://code.visualstudio.com/blogs/2017/10/03/terminal-renderer">Integrated Terminal Performance Improvements -- VS Code Blog (2017)</a></li>
+  <li><a href="https://news.ycombinator.com/item?id=27131659">I wrote the terminal canvas renderers in VS Code -- Hacker News</a></li>
+  <li><a href="https://github.com/xtermjs/xterm-benchmark">xtermjs/xterm-benchmark</a> -- 官方性能测试工具</li>
+  <li><a href="https://www.npmjs.com/package/@xterm/addon-webgl">@xterm/addon-webgl -- npm</a></li>
+  <li><a href="https://github.com/xtermjs/xterm.js">xterm.js v3.9.0 Release Notes (TypedArray buffer benchmarks)</a></li>
+  <li><a href="https://github.com/rstudio/rstudio/pull/16820">Update xterm.js to 6.0.0 -- RStudio PR #16820</a></li>
+  <li><a href="https://github.com/gardener/dashboard/issues/1798">Update to xterm.js &gt; 5.4.0 and migrate to new @xterm scoped packages -- gardener #1798</a></li>
+  <li><a href="https://newreleases.io/project/github/xtermjs/xterm.js/release/5.3.0">xterm.js 5.3.0 Release Notes</a></li>
+  <li><a href="https://newreleases.io/project/github/xtermjs/xterm.js/release/5.4.0">xterm.js 5.4.0 Release Notes</a></li>
+  <li><a href="https://blog.csdn.net/gitblog_00303/article/details/156090119">xterm.js WebGL 渲染器 GPU 加速指南</a></li>
+</ol>
+</div>
+
+</article>
+</body>
+</html>
