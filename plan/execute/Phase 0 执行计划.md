@@ -371,3 +371,185 @@ Phase 'CI'
 | E8 | CI L4 | 去 `continue-on-error: true`，L4 必须真绿 | D2+CI agent |
 
 > 补救 runbook 与首次执行计划(§1–§7)互补：首次负责 "从零建"，补救负责 "补齐缺口 + 回归不破"。共同目标是 5.0 §8 DoD 全部满足。
+
+---
+
+## 9. Phase 0 补救执行计划·第二轮（`/goal` + dynamic workflow）
+
+> 背景：首轮补救（§8）后第二轮验收审计（[勘误 v2](./Phase 0 验收审计.md)）结论——**L1–L4 实跑全过、DoD 实质达成、报告无失实**（原 4 处"失实"经 E1–E5 决策表 + `tauri info`/`Cargo.lock`/action.yml 一手证据逐条撤销）。D1–D7 全部兑现。残留仅 9 项确定性小修，无代码级决策冲突。本章沿用 §8 范式：`/goal` 锁终态 + 1 个 dynamic workflow 并行收口。
+
+### 9.1 残留项清单（来自审计 v2 §4 + §5.2）
+
+| # | 项 | 性质 | 落点 |
+|---|---|------|------|
+| R1 | 红旗 #1 文本未关 | 纯文档 | `version-pins.md` 红旗 #1 标"已收口" |
+| R2 | CI msedgedriver 死代码 | 确定性删除 | `ci.yml:31-35` |
+| R3 | getTitle 时序+断言 | 需验证 | `test.e2e.ts` 加等待 + `toBe('slTerminal')` |
+| R4 | patch-package 死依赖 | 确定性删除 | `package.json:45` |
+| R5 | 钉表 §六 过时 | 纯文档 | `version-pins.md` 改 tauri-driver 行 + 补 wdio 三件 |
+| R6 | tracing info! 默认静默 | 确定性 | `lib.rs` 默认 filter 改 `unwrap_or_else("info")` |
+| R7 | Node 20 deprecation | 可选小修 | `ci.yml` checkout/setup-node → v5 |
+| R8 | `--no-bundle` 偏差注明 | 纯文档 | 验证报告注明 |
+| R9 | 回归 + CI 真绿 | 验证 | 本地跑 + push |
+
+### 9.2 三层结构
+
+```
+/goal ................. 第二轮补救 DoD（9 项 + 回归不破 + CI 绿），未达成自动续轮
+  └ dynamic workflow .. 一次性后台编排：
+       Phase 'Fixes'   → parallel(R1..R7)  ← 文件不重叠，并行扇出
+       Phase 'Verify'  → parallel(cargo test, npm test, tauri build, npm run wdio)
+       Phase 'CI'      → push → gh run view → 回灌绿
+```
+
+### 9.3 `/goal` 完成条件
+
+```
+/goal Phase 0 第二轮补救全部完成，下列每项在本会话中均有真实命令输出自证：
+(1) R1 红旗 #1 已关：grep version-pins.md 红旗 #1 含"已收口（精确钉 2.11.3/2.11.1 + lockfile + tauri build 内置检测，tauri info 验证兼容）"；
+(2) R2 msedgedriver 死代码已删：grep ci.yml 无 "msedgedriver" 命中；
+(3) R3 getTitle 加固：npm run wdio 退出 0，spec 含 toBe('slTerminal') 断言且 PASSED（贴完整输出）；
+(4) R4 patch-package 已移除：grep package.json 无 "patch-package" 命中，npm ci 仍成功；
+(5) R5 钉表 §六 已更新：version-pins.md §六 含 @wdio/tauri-service、@wdio/tauri-plugin、tauri-plugin-wdio-webdriver（1.1.0），无 tauri-driver 行（或标注废弃）；
+(6) R6 tracing 默认 filter：cargo build 通过，cargo run 输出含"slTerminal 启动"日志行（无 RUST_LOG 也可见）；
+(7) R7（如做）Node actions 升 v5：ci.yml 含 actions/checkout@v5、actions/setup-node@v5；
+(8) 回归不破：cargo test 通过、npm test 通过（L2+L3）、tauri build --debug 成功；
+(9) CI 真绿：git push 后 gh run view 输出全绿（含 L4 step，无 continue-on-error，无 msedgedriver step）。
+硬约束：不弱化断言、不放宽 lint、不改动已通过项的逻辑（仅加固 getTitle）、不引入业务功能。
+以上未全部满足则继续；30 turns 后停止并逐项汇报缺口。
+```
+
+### 9.4 Dynamic workflow 编排
+
+#### 触发方式
+
+```
+ultracode: 按以下编排执行 slTerminal Phase 0 第二轮补救 R1-R7，只做计划内修改、不做无关改动，每阶段完成后贴命令输出回主会话
+```
+
+#### Workflow 脚本结构
+
+```
+Phase 'Fixes' [parallel]  ← 7 项文件不重叠，全部并行
+  agent R1 — 红旗 #1 文本收口（version-pins.md）
+  agent R2 — 删 msedgedriver 步（ci.yml）
+  agent R3 — getTitle 加固（test.e2e.ts）
+  agent R4 — 移 patch-package（package.json）
+  agent R5 — 钉表 §六 更新（version-pins.md）
+  agent R6 — tracing 默认 filter（lib.rs + Cargo.toml）
+  agent R7 — bump actions v5（ci.yml，可选）
+
+Phase 'Verify' [parallel]  ← R1–R7 全部完成后回归
+  agent V1 — cargo test + cargo build
+  agent V2 — npm test + npm ci
+  agent V3 — tauri build --debug
+  agent V4 — npm run wdio（含 toBe 断言）
+
+Phase 'CI'
+  agent push — git add + commit + push → gh run view → 贴 CI 绿
+```
+
+> **R1 与 R5 同改 `version-pins.md`**：为避免并行写冲突，R5 在 R1 之后串行（或合并为单一 agent 改钉表）。workflow 内用 `pipeline` 或显式 barrier 保证 R1→R5 顺序。其余 R2/R3/R4/R6/R7 文件互不重叠，真并行。
+
+#### 各 agent 任务卡
+
+##### Agent R1 + R5 — 钉表收口（合并，sonnet）
+
+| 项目 | 内容 |
+|------|------|
+| **任务** | R1 关红旗 #1 + R5 更新钉表 §六 |
+| **操作** | ① `version-pins.md` 红旗 #1 文本：在原"须锁死…加版本一致性检查"后追加"**（已收口：精确钉 2.11.3/2.11.1 + lockfile 锁版本 + tauri build 内置检测，`tauri info` 验证 pair 兼容）**"；② §六：删/改 `tauri-driver 2.0.6` 行（标注"已改用 embedded driver，不用 tauri-driver"），补三行——`@wdio/tauri-service 1.1.0`、`@wdio/tauri-plugin 1.1.0`、`tauri-plugin-wdio-webdriver 1.1.0`（与 Cargo.lock 一致） |
+| **产出** | 钉表红旗 #1 已关、§六 与实际 E2E 方案一致 |
+| **验收** | grep：红旗 #1 含"已收口"、§六 含 wdio 三件且版本 1.1.0 |
+
+##### Agent R2 — 删 msedgedriver 步（sonnet）
+
+| 项目 | 内容 |
+|------|------|
+| **任务** | 删 `ci.yml:31-35` msedgedriver 安装步骤 |
+| **操作** | 删除 `Install msedgedriver` 整个 step（embedded driver 用 webview2-com 驱动 ICoreWebView2 COM，零 msedgedriver 依赖，本轮本地无 msedgedriver 仍 PASS 已证） |
+| **产出** | ci.yml 无 msedgedriver step |
+| **验收** | grep `ci.yml` 无 "msedgedriver"；CI 结构仍完整 |
+
+##### Agent R3 — getTitle 加固（sonnet）
+
+| 项目 | 内容 |
+|------|------|
+| **任务** | `test.e2e.ts` 加 webview/标题就绪等待 + 断言改精确匹配 |
+| **操作** | ① 在 `getTitle()` 前加 `browser.waitUntil(async () => (await browser.getTitle()) === 'slTerminal', { timeout: 10000, timeoutMsg: '标题未就绪' })` 或用 `browser.getTitle()` 轮询直到非 `localhost`/非空；② 断言从 `expect(title).toBeTruthy()` 改 `expect(title).toBe('slTerminal')`；③ 注释说明时序问题（getTitle 取 document.title，加载初期可能取到瞬态值） |
+| **产出** | 健壮的 E2E 标题断言 |
+| **验收** | `npm run wdio` 退出 0，输出含 `toBe('slTerminal')` PASSED |
+| **注意** | 若 `toBe('slTerminal')` 偶发失败（时序仍未解决），回退为 `waitUntil` + `toContain('slTerminal')`，但优先 toBe |
+
+##### Agent R4 — 移 patch-package（sonnet）
+
+| 项目 | 内容 |
+|------|------|
+| **任务** | 移除 `package.json:45` 的 `patch-package` 死依赖 |
+| **操作** | ① `package.json` 删 `patch-package` 行；② 确认无 `postinstall` 脚本引用（若有一并删）；③ 确认无 `patches/` 目录（本就无）；④ `npm ci` 重新装验证 |
+| **产出** | package.json 无 patch-package |
+| **验收** | grep `package.json` 无 "patch-package"；`npm ci` 成功 |
+
+##### Agent R6 — tracing 默认 filter（sonnet）
+
+| 项目 | 内容 |
+|------|------|
+| **任务** | 使 `tracing::info!("slTerminal 启动")` 默认可见（无需 RUST_LOG） |
+| **操作** | `lib.rs:22` 从 `EnvFilter::from_default_env()` 改为 `EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"))`——无 RUST_LOG 时默认 info 级，启动日志可见 |
+| **产出** | 启动日志默认输出 |
+| **验收** | `cargo build` 通过；`cargo run`（或 tauri dev）输出含 `slTerminal 启动`（无 RUST_LOG） |
+
+##### Agent R7 — bump actions v5（可选，sonnet）
+
+| 项目 | 内容 |
+|------|------|
+| **任务** | 消 Node 20 deprecation 警告 |
+| **操作** | `ci.yml`：`actions/checkout@v4`→`@v5`、`actions/setup-node@v4`→`@v5` |
+| **产出** | CI 无 Node 20 deprecation annotation |
+| **验收** | push 后 CI 输出无 deprecation 警告 |
+
+#### Phase 'Verify' — 回归验证（4 agent 并行，sonnet）
+
+| Agent | 命令 | 期望 |
+|-------|------|------|
+| **V1 后端** | `cargo test`（src-tauri/）+ `cargo build` | 退出 0，零 error/warning，2 测试 PASS |
+| **V2 前端** | `npm ci` + `npm test` | npm ci 成功（验证 patch-package 移除）；npm test L2+L3 PASS |
+| **V3 构建** | `npm run tauri build -- --debug --no-bundle` | 成功产出 exe，无版本不匹配 |
+| **V4 L4** | `npm run wdio` | 退出 0，`toBe('slTerminal')` PASSED，贴完整输出 |
+
+#### Phase 'CI' — push + 验证（1 agent，sonnet）
+
+| 项目 | 内容 |
+|------|------|
+| **任务** | 提交、推送、等 CI 全绿、贴输出 |
+| **操作** | ① `git add -A && git commit -m "Phase 0 补救第二轮: R1-R7 小修收口"`；② `git push origin main`；③ `gh run view`（或 `gh run watch`）等全绿；④ 贴输出，确认无 msedgedriver step、无 Node deprecation、L4 真绿 |
+| **产出** | CI 全绿证据 |
+| **验收** | `gh run view` 所有 step 绿，无 msedgedriver step |
+
+### 9.5 手动收尾
+
+1. **重写验证报告**：`Phase 0 结果验证.md` 同步——§4 改"getTitle 时序敏感，已加 waitUntil + toBe('slTerminal') 精确断言"、删 msedgedriver 相关、§9 红旗 #1 标已收口、（-D warnings / D5 表述无需改，均准确）。
+2. **R8 偏差注明**：验证报告注明"`tauri build --debug --no-bundle` 省 bundling 时间，仍产 exe"。
+3. **DoD 逐条复核**：对照 5.0 §7.1/§7.2/§8，确认全绿→Phase 0 如实收口。
+
+### 9.6 执行顺序速查
+
+1. `claude --version`（≥2.1.154 有 workflow），确认 allowlist 含 `cargo`/`npm`/`gh`/`git`。
+2. 设 `/goal <§9.3 条件>`。
+3. 触发 workflow：`ultracode: §9.4 编排 R1-R7 第二轮补救...` → 审批 → `/workflows` 观察。
+4. Workflow 三 Phase 跑通、证据回灌。
+5. `/goal` 判定达成自动 clear。
+6. 重写验证报告 → DoD 复核 → Phase 0 如实收口。
+
+### 9.7 决策台账（第二轮补救）
+
+| # | 议题 | 决策 | 落点 |
+|---|------|------|------|
+| F1 | 编排 | `/goal` 锁终态 + 1 个 dynamic workflow 并行（沿用 §8 范式） | §9.2 |
+| F2 | R1+R5 合并 | 同改 version-pins.md，串行避免写冲突 | R1+R5 agent |
+| F3 | R3 getTitle | waitUntil 等就绪 + 断言改 `toBe('slTerminal')`，失败回退 toContain | R3 agent |
+| F4 | R6 tracing | 默认 filter `unwrap_or_else("info")`，启动日志默认可见 | R6 agent |
+| F5 | R7 可选 | bump actions v5 消 Node 20 deprecation | R7 agent |
+| F6 | 回归范围 | L1–L4 + build 全回归，确保小修不破既有 | Phase Verify |
+
+> 第二轮补救聚焦"收口残留小修 + 回归不破"，无代码级决策冲突（D2/D5 经勘误已确认无需改）。目标：审计 v2 §7 收口路径全过 → Phase 0 如实通过。

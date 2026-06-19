@@ -51,7 +51,10 @@
 | 包名 | 钉住版本 | 说明/用途 | 来源 URL | 兼容性注意事项 |
 |------|----------|-----------|----------|---------------|
 | vitest | 4.1.9 | 前端单元/组件测试框架 | https://www.npmjs.com/package/vitest | 需 jsdom 环境 + polyfill window.crypto.getRandomValues；afterEach 中同时调 clearMocks() + vitest cleanup |
-| tauri-driver | 2.0.6 | Tauri WebDriver 代理 | https://crates.io/crates/tauri-driver | 不自动追加 .exe 后缀 (#11317)；host 用 127.0.0.1 不用 localhost；maxInstances=1 |
+| @wdio/cli | 9.28.0 | WDIO CLI 入口（L4 E2E） | https://www.npmjs.com/package/@wdio/cli | — |
+| @wdio/tauri-service | 1.1.0 | Tauri E2E launcher（Phase 0 用 embedded driverProvider） | https://www.npmjs.com/package/@wdio/tauri-service | 与 @wdio/tauri-plugin 同版本 |
+| @wdio/tauri-plugin | 1.1.0 | Tauri WDIO 插件（types/服务端交互） | https://www.npmjs.com/package/@wdio/tauri-plugin | 与 @wdio/tauri-service 同版本 |
+| tauri-plugin-wdio-webdriver | 1.1.0 | Rust 端 embedded WebDriver（替代 tauri-driver，零 msedgedriver 依赖） | https://crates.io/crates/tauri-plugin-wdio-webdriver | Phase 0 起用，tauri-driver 已弃用 |
 | webdriverio | 9.28.0 | E2E 浏览器自动化框架 | https://www.npmjs.com/package/webdriverio | 只参考 v9 API（ESM-only） |
 
 ## 七、脚手架
@@ -71,7 +74,7 @@
 
 ### 红旗清单（需在后续 phase 关注）
 
-1. **Tauri 前后端 patch 不同步**（tauri crate 2.11.3 vs @tauri-apps/api 2.11.1）：phase 0 落地后须锁死两端精确版本号并加入版本一致性检查
+1. **Tauri 前后端 patch 不同步**（tauri crate 2.11.3 vs @tauri-apps/api 2.11.1）：**已收口（精确钉 2.11.3/2.11.1 + lockfile 锁版本 + tauri build 内置检测，`tauri info` 验证 pair 兼容）**，Phase 1+ 无需额外动作
 2. **WebView2 最低版本数值模糊**：运行时最低 101.0.1210.39，示例值 110.0.1531.0。slTerminal 应选 110.0.1531.0 作为基线
 3. **@xterm/addon-canvas 兼容性无官方互锁声明**：需在集成测试中验证与 xterm 6.0.0 的协同工作
 4. **Tauri CLI v2.11.0 bundle.resources 跨平台路径 bug** (#15342)：已锁 CLI >= 2.11.2 规避
