@@ -1,12 +1,17 @@
 // Workspace — 统一分屏页签区
 //
-// 暴露 window.__dockviewApi 供 E2E 测试使用
+// 右键菜单可新建终端/编辑器，addPanel 传 renderer: 'always' 保持 PTY 存活。
+// 暴露 window.__dockviewApi 供 E2E 测试使用。
 
 import React, { useCallback } from "react";
 import {
   DockviewReact,
   type DockviewApi,
   type IDockviewPanelProps,
+  type GetTabContextMenuItemsParams,
+  type ReactContextMenuItemConfig,
+  type BuiltInContextMenuItem,
+  type IDockviewHeaderActionsProps,
 } from "dockview-react";
 import { panelRegistry } from "./panelRegistry";
 import { saveLayout } from "./layoutSerde";
@@ -36,18 +41,101 @@ const Watermark: React.FC = () => (
   </div>
 );
 
+/** 顶栏右侧 "+" 按钮 —— 点击新建终端 */
+const RightHeaderActions: React.FC<IDockviewHeaderActionsProps> = ({
+  containerApi,
+}) => {
+  const handleNewTerminal = () => {
+    const id = `terminal-${Date.now()}`;
+    containerApi.addPanel({
+      id,
+      component: "terminal",
+      params: { panelId: id },
+      renderer: "always",
+    });
+  };
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        height: "100%",
+        paddingRight: 4,
+      }}
+    >
+      <button
+        onClick={handleNewTerminal}
+        style={{
+          background: "none",
+          border: "1px solid #444",
+          color: "#ccc",
+          cursor: "pointer",
+          fontSize: 16,
+          width: 24,
+          height: 24,
+          borderRadius: 4,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          lineHeight: 1,
+        }}
+        title="新建终端"
+      >
+        +
+      </button>
+    </div>
+  );
+};
+
 const Workspace: React.FC = () => {
-  const onReady = useCallback(
-    (event: { api: DockviewApi }) => {
-      const { api } = event;
+  const onReady = useCallback((event: { api: DockviewApi }) => {
+    const { api } = event;
 
-      // 暴露给 E2E 测试
-      window.__dockviewApi = api;
+    // 暴露给 E2E 测试
+    window.__dockviewApi = api;
 
-      api.onDidLayoutChange(() => {
-        const layout = saveLayout(api);
-        console.debug("布局已变更", layout);
-      });
+    api.onDidLayoutChange(() => {
+      const layout = saveLayout(api);
+      console.debug("布局已变更", layout);
+    });
+  }, []);
+
+  /** 页签右键菜单 */
+  const getTabContextMenuItems = useCallback(
+    (params: GetTabContextMenuItemsParams): (BuiltInContextMenuItem | ReactContextMenuItemConfig)[] => {
+      const { api } = params;
+
+      const newTerminalId = `terminal-${Date.now()}`;
+      const newEditorId = `editor-${Date.now()}`;
+
+      return [
+        {
+          label: "新建终端",
+          action: () => {
+            api.addPanel({
+              id: newTerminalId,
+              component: "terminal",
+              params: { panelId: newTerminalId },
+              renderer: "always",
+            });
+          },
+        },
+        {
+          label: "新建编辑器",
+          action: () => {
+            api.addPanel({
+              id: newEditorId,
+              component: "editor",
+              params: { panelId: newEditorId },
+            });
+          },
+        },
+        "separator",
+        "close",
+        "closeOthers",
+        "closeAll",
+      ];
     },
     [],
   );
@@ -59,6 +147,8 @@ const Workspace: React.FC = () => {
       onReady={onReady}
       watermarkComponent={Watermark}
       defaultTabComponent={DefaultTab}
+      rightHeaderActionsComponent={RightHeaderActions}
+      getTabContextMenuItems={getTabContextMenuItems}
     />
   );
 };

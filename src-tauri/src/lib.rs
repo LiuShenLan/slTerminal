@@ -8,6 +8,7 @@ mod notify;
 
 use error::AppError;
 use state::AppState;
+use tauri_plugin_prevent_default::{Builder as PreventDefaultBuilder, Flags};
 
 /// ping 命令 — Phase 0 占位，用于验证 IPC 链路和测试基建
 #[tauri::command]
@@ -26,7 +27,14 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_wdio_webdriver::init())
-        .plugin(tauri_plugin_prevent_default::init())
+        .plugin(
+            PreventDefaultBuilder::default()
+                .with_flags(
+                    Flags::all()
+                        .difference(Flags::FIND | Flags::DEV_TOOLS),
+                )
+                .build(),
+        )
         .manage(AppState::new())
         .invoke_handler(tauri::generate_handler![
             ping,

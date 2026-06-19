@@ -14,6 +14,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { terminalOptions } from "./theme";
 import { pty } from "../../ipc";
 import type { PtyEvent } from "../../types";
+import { setActiveTerminal, installKeyboardHandler } from "./keyboard";
 
 export interface UseXtermOptions {
   /** 容器 DOM 元素 */
@@ -33,6 +34,7 @@ export function useXterm({ container, cols, rows, panelId }: UseXtermOptions) {
   const sessionIdRef = useRef<string | null>(null);
   const pendingBufferRef = useRef<string[]>([]);
   const rafIdRef = useRef<number | null>(null);
+  const e2eTextBufferRef = useRef<string[]>([]);
 
   /** 检测 WebGL2 是否可用 */
   const detectWebgl = useCallback((): boolean => {
@@ -66,6 +68,9 @@ export function useXterm({ container, cols, rows, panelId }: UseXtermOptions) {
         const text = new TextDecoder().decode(
           new Uint8Array(event.data.bytes),
         );
+        // 累积到 E2E 文本缓冲
+        e2eTextBufferRef.current.push(text);
+
         // 小数据立即写，大数据 rAF 合帧
         if (text.length < 256) {
           terminalRef.current?.write(text);
@@ -124,6 +129,10 @@ export function useXterm({ container, cols, rows, panelId }: UseXtermOptions) {
     // 挂载到 DOM
     term.open(container);
 
+    // 注册键盘处理器（Ctrl+Shift+C/V 复制粘贴）
+    installKeyboardHandler();
+    setActiveTerminal(term);
+
     // 字体预加载后刷新布局
     document.fonts.ready.then(() => {
       try {
@@ -147,7 +156,7 @@ export function useXterm({ container, cols, rows, panelId }: UseXtermOptions) {
     });
     resizeObserver.observe(container);
 
-    // E2E 测试辅助：暴露 PTY 写入函数（先挂后异步填充 sessionId）
+    // E2E 测试辅助：暴露 PTY 读写钩子（挂在 container DOM 上）
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const e2eHelper: any = container;
     e2eHelper.__e2e_sessionReady = false;
@@ -155,6 +164,14 @@ export function useXterm({ container, cols, rows, panelId }: UseXtermOptions) {
       if (sessionIdRef.current) {
         pty.write(sessionIdRef.current, new TextEncoder().encode(data));
       }
+    };
+    // 文本缓冲读取（累积 PTY 输出 + 直接写入）
+    e2eHelper.__e2e_getTerminalText = () =>
+      e2eTextBufferRef.current.join("");
+    // 直接写入终端（绕过 PTY，用于验证缓冲机制）
+    e2eHelper.__e2e_writeToTerminal = (text: string) => {
+      term.write(text);
+      e2eTextBufferRef.current.push(text);
     };
 
     // 挂载时 spawn PTY
@@ -188,6 +205,7 @@ export function useXterm({ container, cols, rows, panelId }: UseXtermOptions) {
       if (sessionIdRef.current) {
         pty.kill(sessionIdRef.current);
       }
+      setActiveTerminal(null);
       webglAddonRef.current?.dispose();
       fitAddonRef.current?.dispose();
       term.dispose();
