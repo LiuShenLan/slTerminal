@@ -16,6 +16,25 @@ fn ping() -> Result<String, AppError> {
     Ok("pong".to_string())
 }
 
+/// 获取 Windows 真实 build 号（F3 动态检测）
+///
+/// 通过 RtlGetNtVersionNumbers 获取，取低 16 位（& 0xFFFF）。
+/// 非 Windows 平台返回 Unknown 错误——前端需 try/catch fallback 到 21376。
+#[cfg(windows)]
+#[tauri::command]
+fn get_windows_build_number() -> Result<u32, AppError> {
+    let (_, _, build) = nt_version::get();
+    Ok(build & 0xFFFF)
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+fn get_windows_build_number() -> Result<u32, AppError> {
+    Err(AppError::Unknown(
+        "get_windows_build_number 仅 Windows 平台支持".to_string(),
+    ))
+}
+
 /// 注册所有 Tauri 命令和全局状态
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -38,6 +57,7 @@ pub fn run() {
         .manage(AppState::new())
         .invoke_handler(tauri::generate_handler![
             ping,
+            get_windows_build_number,
             pty::spawn::pty_spawn,
             pty::spawn::pty_write,
             pty::spawn::pty_resize,

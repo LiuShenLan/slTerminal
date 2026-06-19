@@ -15,3 +15,31 @@ if (typeof global.ResizeObserver === 'undefined') {
     disconnect() {}
   };
 }
+
+// jsdom 缺少 matchMedia（xterm.js open() 依赖）
+if (typeof window.matchMedia !== 'function') {
+  Object.defineProperty(window, 'matchMedia', {
+    writable: true,
+    value: (query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    }),
+  });
+}
+
+// jsdom 缺少 document.fonts（xterm.js 字体预加载依赖）
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+if (typeof (document as any).fonts === 'undefined') {
+  Object.defineProperty(document, 'fonts', {
+    writable: true,
+    value: {
+      ready: Promise.resolve(),
+    },
+  });
+}

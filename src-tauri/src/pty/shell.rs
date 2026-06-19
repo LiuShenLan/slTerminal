@@ -1,13 +1,15 @@
 /// Shell 选择与 PowerShell profile 注入
 ///
 /// shell 选择策略：pwsh.exe → powershell.exe → cmd.exe 回退。
-/// PowerShell 通过 -File 参数加载集成脚本，注入 OSC 序列跟踪 CWD 和命令边界。
+/// PowerShell 通过 -EncodedCommand（UTF-16LE Base64）内联集成脚本，
+/// 消除 %APPDATA% 文件写入——避免 AMSI/ASR 误杀。
+use base64::Engine;
 use portable_pty::CommandBuilder;
 
 /// 解析 shell 程序，返回已配置好参数的基础 CommandBuilder
 ///
 /// 用户指定则直接使用；否则按 pwsh → powershell → cmd 顺序检测。
-/// PowerShell 自动加入 -NoProfile -NoLogo -File <script> 参数。
+/// PowerShell 自动加入 -NoProfile -NoLogo -EncodedCommand <base64> 参数。
 pub fn resolve_shell(user_shell: Option<&str>) -> CommandBuilder {
     if let Some(shell) = user_shell {
         return CommandBuilder::new(shell);
@@ -29,26 +31,26 @@ pub fn resolve_shell(user_shell: Option<&str>) -> CommandBuilder {
 
 /// 为 PowerShell 构建带 profile 注入的 CommandBuilder
 ///
-/// 使用 -NoProfile -NoLogo -File <script> 启动。
+/// 使用 -NoProfile -NoLogo -EncodedCommand <base64(UTF-16LE script)> 启动。
+/// 脚本通过 include_str! 嵌入，不写磁盘。
 fn build_pwsh_command(pwsh: &str) -> CommandBuilder {
     let mut cmd = CommandBuilder::new(pwsh);
     cmd.arg("-NoProfile");
     cmd.arg("-NoLogo");
-    cmd.arg("-File");
-
-    // 获取集成脚本的路径
-    let appdata = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
-    let script_dir = std::path::PathBuf::from(&appdata).join("slTerminal");
-    let script_path = script_dir.join("shell-integration.ps1");
-
-    // 确保脚本存在
-    if !script_path.exists() {
-        let _ = std::fs::create_dir_all(&script_dir);
-        let _ = std::fs::write(&script_path, get_shell_integration_script());
-    }
-
-    cmd.arg(script_path.to_string_lossy().to_string());
+    cmd.arg("-EncodedCommand");
+    cmd.arg(encode_utf16le_base64(get_shell_integration_script()));
     cmd
+}
+
+/// 将字符串编码为 UTF-16LE 后 Base64
+///
+/// PowerShell -EncodedCommand 要求 UTF-16LE 无 BOM + 标准 Base64。
+fn encode_utf16le_base64(script: &str) -> String {
+    let bytes: Vec<u8> = script
+        .encode_utf16()
+        .flat_map(|c| c.to_le_bytes())
+        .collect();
+    base64::engine::general_purpose::STANDARD.encode(&bytes)
 }
 
 /// 检查可执行文件是否在 PATH 中
@@ -86,5 +88,22 @@ mod tests {
         let script = get_shell_integration_script();
         assert!(!script.is_empty(), "集成脚本不应为空");
         assert!(script.contains("OSC"), "脚本应定义 OSC 序列");
+    }
+
+    #[test]
+    fn test_encode_utf16le_base64_roundtrip() {
+        let original = "Write-Host 'hello'";
+        let encoded = encode_utf16le_base64(original);
+        // 解码验证（PowerShell 接受的格式）
+        let decoded_bytes = base64::engine::general_purpose::STANDARD
+            .decode(&encoded)
+            .expect("base64 解码失败");
+        // UTF-16LE → UTF-8
+        let u16s: Vec<u16> = decoded_bytes
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        let decoded = String::from_utf16(&u16s).expect("UTF-16 解码失败");
+        assert_eq!(decoded, original);
     }
 }

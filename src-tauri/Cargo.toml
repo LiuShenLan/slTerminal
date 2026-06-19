@@ -33,8 +33,10 @@ uuid = { version = "1", features = ["v4"] }
 tauri-plugin-prevent-default = "5"
 anyhow = "1"
 tokio = { version = "1", features = ["rt"] }
+base64 = "0.22"
 
 [target.'cfg(windows)'.dependencies]
+nt_version = "0.1"
 windows = { version = "0.61", features = [
   "Win32_System_JobObjects",
   "Win32_System_Threading",

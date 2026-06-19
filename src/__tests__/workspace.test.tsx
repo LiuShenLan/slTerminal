@@ -17,12 +17,15 @@ afterEach(() => {
 });
 
 describe('Workspace', () => {
-  it('closing_last_panel_shows_empty_state', () => {
+  it('onReady 自动创建终端面板', () => {
     mockIPC(() => null);
 
     const { container } = render(<Workspace />);
 
-    // 空布局应显示 watermark 文本
-    expect(container.textContent).toContain('打开终端或编辑器开始工作');
+    // F1: onReady 自动创建终端 + Watermark 含按钮（终端创建前瞬间可见）
+    // 终端面板创建后显示 tab 标签和加载遮罩
+    const text = container.textContent ?? '';
+    expect(text).toContain('terminal-init'); // 自动创建的终端 tab
+    expect(text).toContain('正在连接...'); // 加载遮罩
   });
 });

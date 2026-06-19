@@ -47,3 +47,17 @@ export async function resize(
 export async function kill(sessionId: string): Promise<void> {
   await invoke("pty_kill", { sessionId });
 }
+
+/**
+ * 获取 Windows 真实 build 号（F3 动态检测）
+ *
+ * 通过 RtlGetNtVersionNumbers 获取，取低 16 位。
+ * 非 Windows 平台返回 21376（ConPTY 阈值 fallback）。
+ */
+export async function getWindowsBuildNumber(): Promise<number> {
+  try {
+    return await invoke<number>("get_windows_build_number");
+  } catch {
+    return 21376;
+  }
+}

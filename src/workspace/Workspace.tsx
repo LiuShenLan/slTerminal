@@ -1,5 +1,7 @@
 // Workspace — 统一分屏页签区
 //
+// 启动时自动创建终端面板（onReady）。
+// Watermark 提供"新建终端""新建编辑器"按钮。
 // 右键菜单可新建终端/编辑器，addPanel 传 renderer: 'always' 保持 PTY 存活。
 // 暴露 window.__dockviewApi 供 E2E 测试使用。
 
@@ -12,6 +14,7 @@ import {
   type ReactContextMenuItemConfig,
   type BuiltInContextMenuItem,
   type IDockviewHeaderActionsProps,
+  type IWatermarkPanelProps,
 } from "dockview-react";
 import { panelRegistry } from "./panelRegistry";
 import { saveLayout } from "./layoutSerde";
@@ -25,19 +28,67 @@ declare global {
 
 const WATERMARK_TEXT = "打开终端或编辑器开始工作";
 
-const Watermark: React.FC = () => (
+/** Watermark 空态组件——含新建面板按钮 */
+const Watermark: React.FC<IWatermarkPanelProps> = ({ containerApi }) => (
   <div
     style={{
       display: "flex",
+      flexDirection: "column",
       alignItems: "center",
       justifyContent: "center",
       height: "100%",
       color: "#6C6C6C",
       fontSize: 14,
       userSelect: "none",
+      gap: 12,
     }}
   >
-    {WATERMARK_TEXT}
+    <span>{WATERMARK_TEXT}</span>
+    <div style={{ display: "flex", gap: 8 }}>
+      <button
+        onClick={() => {
+          const id = `terminal-${Date.now()}`;
+          containerApi.addPanel({
+            id,
+            component: "terminal",
+            params: { panelId: id },
+            renderer: "always",
+          });
+        }}
+        style={{
+          background: "#2D2D2D",
+          border: "1px solid #444",
+          color: "#ccc",
+          cursor: "pointer",
+          fontSize: 13,
+          padding: "4px 12px",
+          borderRadius: 4,
+        }}
+      >
+        新建终端
+      </button>
+      <button
+        onClick={() => {
+          const id = `editor-${Date.now()}`;
+          containerApi.addPanel({
+            id,
+            component: "editor",
+            params: { panelId: id },
+          });
+        }}
+        style={{
+          background: "#2D2D2D",
+          border: "1px solid #444",
+          color: "#ccc",
+          cursor: "pointer",
+          fontSize: 13,
+          padding: "4px 12px",
+          borderRadius: 4,
+        }}
+      >
+        新建编辑器
+      </button>
+    </div>
   </div>
 );
 
@@ -94,6 +145,15 @@ const Workspace: React.FC = () => {
 
     // 暴露给 E2E 测试
     window.__dockviewApi = api;
+
+    // 启动时自动创建终端面板
+    const initPanelId = `terminal-init-${Date.now()}`;
+    api.addPanel({
+      id: initPanelId,
+      component: "terminal",
+      params: { panelId: initPanelId },
+      renderer: "always",
+    });
 
     api.onDidLayoutChange(() => {
       const layout = saveLayout(api);

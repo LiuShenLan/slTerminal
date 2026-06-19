@@ -35,8 +35,5 @@ export const terminalOptions: ITerminalOptions = {
   cursorStyle: "bar",
   allowProposedApi: true,
   scrollback: 2000,
-  windowsPty: {
-    backend: "conpty",
-    buildNumber: 21376,
-  },
+  windowsPty: {},
 };

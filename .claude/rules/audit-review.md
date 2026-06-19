@@ -1,6 +1,6 @@
 ---
 paths:
-   - "plan/execute/*结果验证.md"
+   - "plan/execute/**/*结果验证.md"
 description: "Phase 验收审计方法论——记录 Phase 0/1 审计积累的审查流程、常见陷阱、技术事实速查和证据判断准绳"
 ---
 

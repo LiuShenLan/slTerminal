@@ -2,9 +2,9 @@
 //
 // 职责：
 // - 创建 Terminal 实例（WebGL 优先 + DOM 兜底）
-// - 管理 WebGL context（仅焦点终端持有，失焦 dispose）
+// - 管理 WebGL context（仅焦点终端持有，失焦 dispose 自动回退 DOM）
 // - 挂载时 spawn PTY，卸载时 kill
-// - 输出原子渲染（DEC 2026 包裹 / rAF 合帧）
+// - 输出原子渲染（rAF 合帧）
 // - StrictMode 防御（useRef guard clause）
 
 import { useEffect, useRef, useCallback } from "react";
@@ -25,9 +25,11 @@ export interface UseXtermOptions {
   rows: number;
   /** 面板 ID，用于关联 PTY 会话 */
   panelId: string;
+  /** Windows 真实 build 号（F3 动态检测），用于 ConPTY reflow 阈值 */
+  windowsBuildNumber?: number;
 }
 
-export function useXterm({ container, cols, rows, panelId }: UseXtermOptions) {
+export function useXterm({ container, cols, rows, panelId, windowsBuildNumber }: UseXtermOptions) {
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const webglAddonRef = useRef<WebglAddon | null>(null);
@@ -97,6 +99,14 @@ export function useXterm({ container, cols, rows, panelId }: UseXtermOptions) {
     const term = new Terminal(terminalOptions);
     terminalRef.current = term;
 
+    // F3: 动态设置 ConPTY buildNumber（真实 OS build，覆盖 theme.ts 硬编码）
+    if (windowsBuildNumber !== undefined) {
+      term.options.windowsPty = {
+        backend: "conpty",
+        buildNumber: windowsBuildNumber,
+      };
+    }
+
     // FitAddon
     const fitAddon = new FitAddon();
     fitAddonRef.current = fitAddon;
@@ -109,16 +119,10 @@ export function useXterm({ container, cols, rows, panelId }: UseXtermOptions) {
         webglAddonRef.current = webglAddon;
         term.loadAddon(webglAddon);
 
-        // 监听 context loss → 回退 DOM
-        const handleContextLoss = () => {
-          if (webglAddonRef.current) {
-            term.loadAddon(webglAddonRef.current);
-          }
-        };
+        // 监听 context loss → dispose 自动回退 DOM 渲染器
         webglAddon.onContextLoss(() => {
           webglAddonRef.current?.dispose();
           webglAddonRef.current = null;
-          handleContextLoss();
         });
       } catch {
         // WebGL 加载失败，DOM 兜底
@@ -211,7 +215,7 @@ export function useXterm({ container, cols, rows, panelId }: UseXtermOptions) {
       term.dispose();
       terminalRef.current = null;
     };
-  }, [container, panelId, cols, rows, detectWebgl, flushBuffer, handlePtyOutput]);
+  }, [container, panelId, cols, rows, windowsBuildNumber, detectWebgl, flushBuffer, handlePtyOutput]);
 
   return {
     /** 聚焦终端输入 */
