@@ -53,7 +53,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **cwd 反斜杠**：传给 ConPTY 前把 cwd 规范化成 `\`（`CreateProcessW` 对 `/` 行为异常）。
 - **cwd / 命令边界跟踪**：portable-pty 在 Windows 不返回 cwd → 注入 PowerShell profile 发 OSC 7（cwd）+ OSC 133 A/B/C/D（提示符边界 + 退出码），宿主据此跟踪，不解析提示符。
 - **键盘 / IME**：Shift+Tab、Ctrl 组合键用 xterm.js `attachCustomKeyEventHandler` 接管；中文 IME 合成要尽早测。
-- E2E 测试在 Tauri 用不了 Playwright（非 Chromium），只能走 WebDriver（tauri-driver + WebdriverIO + msedgedriver）。
+- E2E 测试在 Tauri 用不了 Playwright（非 Chromium）。Phase 0 起用 embedded driver（`@wdio/tauri-service` + `tauri-plugin-wdio-webdriver` → `webview2-com` 驱动 ICoreWebView2 COM），零 msedgedriver 依赖。
 
 ## 命令（项目脚手架尚未创建，以下为规划值，见 phase 0）
 

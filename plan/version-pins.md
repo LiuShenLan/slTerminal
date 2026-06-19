@@ -80,7 +80,7 @@
 4. **Tauri CLI v2.11.0 bundle.resources 跨平台路径 bug** (#15342)：已锁 CLI >= 2.11.2 规避
 5. **xterm.js #4779 Canvas 渲染器可能移除**：WebView2 无 GPU 场景的唯一高性能后备消失风险
 6. **Dockview fromJSON 损坏 API 状态** (#341)：layoutSerde.ts 必须 try/catch 包裹 + 校验组件名白名单
-7. **msedgedriver 版本检测依赖社区工具**：chippers/msedgedriver-tool 为社区维护，非 Tauri 官方
+7. **msedgedriver 版本检测依赖社区工具**：chippers/msedgedriver-tool 为社区维护，非 Tauri 官方。**（不再适用：Phase 0 已改用 embedded driver + webview2-com，零 msedgedriver 依赖）**
 8. **notify 9.0.0-rc.4 非 stable**：Phase 0 已评估可接受（rc.4 仅占位，无文件监听需求），9.x 正式发布后单独验证
 9. **WebView2 软件渲染缺陷** (#4574)：无 GPU 加速时 WebGL2 回退到软件模拟导致字符丢失
 10. **生产环境白屏风险**：Vite 构建产物绝对路径、hash 路由未配置、frontendDist 指向错误均会导致 WebView2 白屏

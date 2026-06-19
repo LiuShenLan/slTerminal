@@ -172,6 +172,7 @@ src/__tests__/
 2. **`libpng iCCP` 警告**：来自 WebView2 内部渲染管线，非我方代码，属已知无害警告。
 3. **`npm test` 噪声**：`HTMLCanvasElement.getContext() not implemented`（jsdom 环境限制，不影响断言）。
 4. **L4 teardown 噪声**：`Failed to clear mock store`（`@wdio/tauri-service` session 销毁时序问题，不影响 spec 结果）。
+5. **L4 startup 噪声**：`Failed to get window states: Tauri core.invoke not available after 5s timeout`（embedded driver 初始化时序，core.invoke 尚未就绪时窗口状态查询超时，不影响 spec 结果及 getTitle 断言）。
 
 ---
 
