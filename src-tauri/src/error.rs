@@ -2,7 +2,6 @@ use serde::Serialize;
 use thiserror::Error;
 
 /// 应用统一错误类型，所有 Tauri 命令返回 Result<_, AppError>
-// Phase 0 占位变体，后续 phase 构造；保留 -D warnings 全局生效
 #[allow(dead_code)]
 #[derive(Debug, Error, Serialize)]
 pub enum AppError {
@@ -20,6 +19,31 @@ pub enum AppError {
 
     #[error("未知错误: {0}")]
     Unknown(String),
+
+    #[error("会话未找到: {0}")]
+    SessionNotFound(String),
+
+    #[error("Channel 发送失败: {0}")]
+    ChannelSend(String),
+}
+
+impl From<std::io::Error> for AppError {
+    fn from(e: std::io::Error) -> Self {
+        AppError::Io(e.to_string())
+    }
+}
+
+/// portable-pty 使用 anyhow::Error，通过 Display 转换
+impl From<anyhow::Error> for AppError {
+    fn from(e: anyhow::Error) -> Self {
+        AppError::Pty(e.to_string())
+    }
+}
+
+impl From<serde_json::Error> for AppError {
+    fn from(e: serde_json::Error) -> Self {
+        AppError::Serde(e.to_string())
+    }
 }
 
 #[cfg(test)]

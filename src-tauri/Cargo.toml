@@ -29,4 +29,16 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 portable-pty = "0.9.0"
 git2 = "0.21.0"
 notify = "9.0.0-rc.4"
+uuid = { version = "1", features = ["v4"] }
+tauri-plugin-prevent-default = "5"
+anyhow = "1"
+tokio = { version = "1", features = ["rt"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = [
+  "Win32_System_JobObjects",
+  "Win32_System_Threading",
+  "Win32_Foundation",
+  "Win32_Security",
+] }
 

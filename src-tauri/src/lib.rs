@@ -26,8 +26,17 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_wdio_webdriver::init())
-        .manage(AppState {})
-        .invoke_handler(tauri::generate_handler![ping])
+        .plugin(tauri_plugin_prevent_default::init())
+        .manage(AppState::new())
+        .invoke_handler(tauri::generate_handler![
+            ping,
+            pty::spawn::pty_spawn,
+            pty::spawn::pty_write,
+            pty::spawn::pty_resize,
+            pty::spawn::pty_kill,
+            fs::fs_read_file,
+            fs::fs_write_file,
+        ])
         .run(tauri::generate_context!())
         .expect("启动应用失败");
 }

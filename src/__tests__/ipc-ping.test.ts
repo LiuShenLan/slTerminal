@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { mockIPC, clearMocks } from '@tauri-apps/api/mocks';
-import { invoke } from '../ipc/index';
+// eslint-disable-next-line no-restricted-imports
+import { invoke } from '@tauri-apps/api/core';
 
 afterEach(() => {
   clearMocks();
