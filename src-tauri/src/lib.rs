@@ -24,7 +24,7 @@ fn ping() -> Result<String, AppError> {
 #[tauri::command]
 fn get_windows_build_number() -> Result<u32, AppError> {
     let (_, _, build) = nt_version::get();
-    Ok(build & 0xFFFF)
+    Ok(build & 0x0FFFFFFF)  // 清除高 4 位构建类型标志（0xF=零售版），低 28 位为实际 build 号
 }
 
 #[cfg(not(windows))]

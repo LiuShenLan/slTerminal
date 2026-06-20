@@ -29,6 +29,22 @@ export interface UseXtermOptions {
   windowsBuildNumber?: number;
 }
 
+/** 检查终端是否可以安全执行 fit 操作（五条件守卫） */
+export function canFit(
+    terminal: Terminal | null | undefined,
+    fitAddon: FitAddon | null | undefined,
+    containerEl: HTMLElement | null | undefined,
+    isDisposedRef: { current: boolean }
+): boolean {
+    if (!terminal || !fitAddon) return false;    // 条件1: 实例存在
+    if (!containerEl) return false;               // 条件2: 容器存在
+    if (containerEl.offsetWidth === 0 ||           // 条件3: 非 display:none
+        containerEl.offsetHeight === 0) return false;
+    if (!terminal.element) return false;           // 条件4: open() 已调用
+    if (isDisposedRef.current) return false;       // 条件5: 未销毁
+    return true;
+}
+
 export function useXterm({ container, cols, rows, panelId, windowsBuildNumber }: UseXtermOptions) {
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -37,6 +53,7 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber }:
   const pendingBufferRef = useRef<string[]>([]);
   const rafIdRef = useRef<number | null>(null);
   const e2eTextBufferRef = useRef<string[]>([]);
+  const isDisposedRef = useRef(false);
 
   /** 检测 WebGL2 是否可用 */
   const detectWebgl = useCallback((): boolean => {
@@ -96,7 +113,7 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber }:
     if (!container || terminalRef.current) return;
 
     // 创建 Terminal
-    const term = new Terminal(terminalOptions);
+    const term = new Terminal({ ...terminalOptions, cols: 80, rows: 24 });
     terminalRef.current = term;
 
     // F3: 动态设置 ConPTY buildNumber（真实 OS build，覆盖 theme.ts 硬编码）
@@ -139,26 +156,10 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber }:
 
     // 字体预加载后刷新布局
     document.fonts.ready.then(() => {
-      try {
+      if (canFit(term, fitAddon, container, isDisposedRef)) {
         fitAddon.fit();
-      } catch {
-        // fit 在极端情况可能失败，忽略
       }
     });
-
-    // ResizeObserver：容器变化 → fit + 通知后端
-    const resizeObserver = new ResizeObserver(() => {
-      try {
-        fitAddon.fit();
-        const dims = fitAddon.proposeDimensions();
-        if (dims && sessionIdRef.current) {
-          pty.resize(sessionIdRef.current, dims.cols, dims.rows);
-        }
-      } catch {
-        // resize 失败不影响渲染
-      }
-    });
-    resizeObserver.observe(container);
 
     // E2E 测试辅助：暴露 PTY 读写钩子（挂在 container DOM 上）
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -202,7 +203,7 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber }:
 
     return () => {
       // 清理
-      resizeObserver.disconnect();
+      isDisposedRef.current = true;
       if (rafIdRef.current !== null) {
         cancelAnimationFrame(rafIdRef.current);
       }
@@ -216,6 +217,70 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber }:
       terminalRef.current = null;
     };
   }, [container, panelId, cols, rows, windowsBuildNumber, detectWebgl, flushBuffer, handlePtyOutput]);
+
+  // G2 Layer 2+4: ResizeObserver 独立注册——与 Terminal 创建解耦
+  // 门控：首次同步 fit，后续 rAF 去重
+  useEffect(() => {
+    if (!container || !terminalRef.current || !fitAddonRef.current) return;
+
+    const term = terminalRef.current;
+    const fitAddon = fitAddonRef.current;
+    let rafPending = false;
+    let initialFitDone = false;
+
+    const doFit = () => {
+      if (!canFit(term, fitAddon, container, isDisposedRef)) return;
+      try {
+        fitAddon.fit();
+        initialFitDone = true;
+        const dims = fitAddon.proposeDimensions();
+        if (dims && sessionIdRef.current) {
+          pty.resize(sessionIdRef.current, dims.cols, dims.rows);
+        }
+      } catch {
+        // fit 失败不影响渲染
+      }
+    };
+
+    const resizeObserver = new ResizeObserver(() => {
+      if (rafPending) return;
+      rafPending = true;
+      requestAnimationFrame(() => {
+        rafPending = false;
+        doFit();
+      });
+    });
+    resizeObserver.observe(container);
+
+    // 首次同步 fit（门控：容器就绪后立即 fit）
+    if (!initialFitDone) {
+      requestAnimationFrame(() => doFit());
+    }
+
+    // G2 Layer 5: setTimeout 回退——WebView2 ResizeObserver 可能触发 {0,0} 后静默
+    const delays = [0, 50, 200];
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    delays.forEach((delay) => {
+      timers.push(setTimeout(() => doFit(), delay));
+    });
+
+    return () => {
+      resizeObserver.disconnect();
+      timers.forEach(clearTimeout);
+    };
+  }, [container]);
+
+  // F3 Bug 1 修复: 独立 useEffect 监听 windowsBuildNumber 异步更新
+  // 主 useEffect 的 StrictMode 守卫不拦截此 effect，确保 Terminal 创建后 windowsPty 生效
+  useEffect(() => {
+    const term = terminalRef.current;
+    if (term && windowsBuildNumber !== undefined) {
+      term.options.windowsPty = {
+        backend: "conpty",
+        buildNumber: windowsBuildNumber,
+      };
+    }
+  }, [windowsBuildNumber]);
 
   return {
     /** 聚焦终端输入 */

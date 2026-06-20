@@ -12,6 +12,10 @@ export default tseslint.config(
           importNames: ['invoke'],
           message: 'invoke 只允许在 src/ipc/ 目录内使用。请通过 src/ipc/ 暴露的领域函数间接调用。',
         }],
+        patterns: [{
+          group: ['@tauri-apps/plugin-*'],
+          message: '@tauri-apps/plugin-* 包只允许在 src/ipc/ 目录内使用。请通过 src/ipc/ 暴露的领域函数间接调用。',
+        }],
       }],
     },
   },

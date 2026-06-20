@@ -8,10 +8,18 @@
 
 import { useEffect, useRef, useCallback } from "react";
 import { EditorView, keymap } from "@codemirror/view";
-import { EditorState } from "@codemirror/state";
+import { EditorState, Compartment, type Extension } from "@codemirror/state";
 import { basicSetup } from "codemirror";
 import { oneDark } from "@codemirror/theme-one-dark";
-import { save } from "@tauri-apps/plugin-dialog";
+import { javascript } from "@codemirror/lang-javascript";
+import { python } from "@codemirror/lang-python";
+import { rust } from "@codemirror/lang-rust";
+import { json } from "@codemirror/lang-json";
+import { html } from "@codemirror/lang-html";
+import { css } from "@codemirror/lang-css";
+import { markdown } from "@codemirror/lang-markdown";
+import { xml } from "@codemirror/lang-xml";
+import { save } from "../../ipc/dialog";
 import { fs } from "../../ipc";
 
 export interface UseCodeMirrorOptions {
@@ -21,9 +29,49 @@ export interface UseCodeMirrorOptions {
   filePath?: string;
 }
 
+/** 根据文件扩展名返回对应的 CodeMirror 语言扩展 */
+export function getLanguageExtension(filename?: string): Extension {
+  if (!filename) return javascript();
+
+  const ext = filename.slice(filename.lastIndexOf(".")).toLowerCase();
+  switch (ext) {
+    case ".js":
+    case ".ts":
+    case ".tsx":
+    case ".jsx":
+    case ".mjs":
+    case ".cjs":
+      return javascript();
+    case ".py":
+    case ".pyw":
+      return python();
+    case ".rs":
+      return rust();
+    case ".json":
+    case ".jsonc":
+      return json();
+    case ".html":
+    case ".htm":
+      return html();
+    case ".css":
+    case ".scss":
+    case ".less":
+      return css();
+    case ".md":
+    case ".markdown":
+      return markdown();
+    case ".xml":
+    case ".svg":
+      return xml();
+    default:
+      return javascript();
+  }
+}
+
 export function useCodeMirror({ container, filePath }: UseCodeMirrorOptions) {
   const viewRef = useRef<EditorView | null>(null);
   const filePathRef = useRef<string | undefined>(filePath);
+  const langCompartment = useRef(new Compartment());
 
   /** Ctrl+S 保存 — G3: 无 filePath 时弹出另存为对话框 */
   const handleSave = useCallback(async () => {
@@ -78,7 +126,7 @@ export function useCodeMirror({ container, filePath }: UseCodeMirrorOptions) {
       const view = new EditorView({
         state: EditorState.create({
           doc,
-          extensions: [basicSetup, oneDark, saveKeymap],
+          extensions: [basicSetup, oneDark, langCompartment.current.of(getLanguageExtension(filePath)), saveKeymap],
         }),
         parent: container,
       });
@@ -97,6 +145,16 @@ export function useCodeMirror({ container, filePath }: UseCodeMirrorOptions) {
       cleanup();
     };
   }, [container, filePath, handleSave]);
+
+  // D3: filePath 变化时重新配置语言扩展（Compartment.reconfigure 不丢失文档状态）
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({
+      effects: langCompartment.current.reconfigure(getLanguageExtension(filePath)),
+    });
+    filePathRef.current = filePath;
+  }, [filePath]);
 
   return {
     /** 获取当前编辑器内容 */
