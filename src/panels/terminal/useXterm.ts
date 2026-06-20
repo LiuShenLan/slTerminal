@@ -9,6 +9,7 @@
 
 import { useEffect, useRef, useCallback } from "react";
 import { Terminal } from "@xterm/xterm";
+import "@xterm/xterm/css/xterm.css";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { terminalOptions } from "./theme";
@@ -83,14 +84,12 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber }:
   /** 处理 PTY 输出事件 */
   const handlePtyOutput = useCallback(
     (event: PtyEvent) => {
-      if (event.type === "Output") {
+      if (event.type === "output") {
         const text = new TextDecoder().decode(
           new Uint8Array(event.data.bytes),
         );
-        // 累积到 E2E 文本缓冲
         e2eTextBufferRef.current.push(text);
 
-        // 小数据立即写，大数据 rAF 合帧
         if (text.length < 256) {
           terminalRef.current?.write(text);
         } else {
@@ -99,7 +98,7 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber }:
             rafIdRef.current = requestAnimationFrame(flushBuffer);
           }
         }
-      } else if (event.type === "Exit") {
+      } else if (event.type === "exit") {
         terminalRef.current?.writeln(
           `\r\n[进程已退出，代码: ${event.data.code ?? "?"}]`,
         );
@@ -210,7 +209,7 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber }:
       fitFrames++;
       const elapsed = performance.now() - fitStartTime;
 
-      if (container.offsetWidth > 0) {
+      if (container.offsetWidth > 0 && container.offsetHeight > 0) {
         if (canFit(term, fitAddon, container, isDisposedRef)) {
           try {
             fitAddon.fit();

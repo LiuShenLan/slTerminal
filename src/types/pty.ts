@@ -2,8 +2,8 @@
 
 /** PTY 输出事件 */
 export type PtyEvent =
-  | { type: "Output"; data: { bytes: number[] } }
-  | { type: "Exit"; data: { code: number | null } };
+  | { type: "output"; data: { bytes: number[] } }
+  | { type: "exit"; data: { code: number | null } };
 
 /** PTY spawn 请求参数 */
 export interface SpawnRequest {
