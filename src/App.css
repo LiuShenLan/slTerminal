@@ -37,3 +37,7 @@ html, body, #root {
   background: var(--sl-bg-primary);
   color: var(--sl-fg-primary);
 }
+
+.dv-dockview .dv-overlay-render-container {
+  height: 100%;
+}

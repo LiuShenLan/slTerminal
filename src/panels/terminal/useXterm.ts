@@ -108,9 +108,13 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber }:
     [flushBuffer],
   );
 
+  // 主 useEffect：Terminal 生命周期 + PTY spawn + ResizeObserver
   useEffect(() => {
     // StrictMode guard: 防止双重挂载
     if (!container || terminalRef.current) return;
+
+    // F1: 重置销毁标记
+    isDisposedRef.current = false;
 
     // 创建 Terminal
     const term = new Terminal({ ...terminalOptions, cols: 80, rows: 24 });
@@ -154,11 +158,13 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber }:
     installKeyboardHandler();
     setActiveTerminal(term);
 
-    // 字体预加载后刷新布局
+    // 字体预加载后刷新布局（包裹 rAF 确保布局稳定）
     document.fonts.ready.then(() => {
-      if (canFit(term, fitAddon, container, isDisposedRef)) {
-        fitAddon.fit();
-      }
+      requestAnimationFrame(() => {
+        if (canFit(term, fitAddon, container, isDisposedRef)) {
+          fitAddon.fit();
+        }
+      });
     });
 
     // E2E 测试辅助：暴露 PTY 读写钩子（挂在 container DOM 上）
@@ -179,17 +185,57 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber }:
       e2eTextBufferRef.current.push(text);
     };
 
-    // 挂载时 spawn PTY
-    pty
-      .spawn({ panelId, cols, rows }, handlePtyOutput)
-      .then((sessionId) => {
-        sessionIdRef.current = sessionId;
-        e2eHelper.__e2e_sessionReady = true;
-      })
-      .catch((err) => {
-        term.writeln(`\r\n[PTY spawn 失败: ${err}]`);
-        e2eHelper.__e2e_error = String(err);
-      });
+    // P1: rAF 轮询 offsetWidth>0 → fit → proposeDimensions → pty.spawn(真实尺寸)
+    // 30 帧 / 500ms 上限，超时回退 80x24
+    let fitRafId: number | null = null;
+    let fitFrames = 0;
+    const MAX_FRAMES = 30;
+    const FIT_TIMEOUT = 500;
+    const fitStartTime = performance.now();
+
+    const doSpawn = (realCols: number, realRows: number) => {
+      pty
+        .spawn({ panelId, cols: realCols, rows: realRows }, handlePtyOutput)
+        .then((sessionId) => {
+          sessionIdRef.current = sessionId;
+          e2eHelper.__e2e_sessionReady = true;
+        })
+        .catch((err) => {
+          term.writeln(`\r\n[PTY spawn 失败: ${err}]`);
+          e2eHelper.__e2e_error = String(err);
+        });
+    };
+
+    const pollFitAndSpawn = () => {
+      fitFrames++;
+      const elapsed = performance.now() - fitStartTime;
+
+      if (container.offsetWidth > 0) {
+        if (canFit(term, fitAddon, container, isDisposedRef)) {
+          try {
+            fitAddon.fit();
+            const dims = fitAddon.proposeDimensions();
+            if (dims) {
+              doSpawn(dims.cols, dims.rows);
+              return;
+            }
+          } catch {
+            // fit 失败 → 回退
+          }
+        }
+        doSpawn(80, 24);
+        return;
+      }
+
+      if (fitFrames >= MAX_FRAMES || elapsed >= FIT_TIMEOUT) {
+        doSpawn(80, 24);
+        return;
+      }
+
+      fitRafId = requestAnimationFrame(pollFitAndSpawn);
+    };
+
+    fitRafId = requestAnimationFrame(pollFitAndSpawn);
 
     // 终端输入 → 后端
     term.onData((data) => {
@@ -201,12 +247,52 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber }:
       }
     });
 
+    // ResizeObserver：容器尺寸变化时 fit + 延迟 resize PTY
+    let roRafPending = false;
+    let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const doFit = () => {
+      if (!canFit(term, fitAddon, container, isDisposedRef)) return;
+      try {
+        fitAddon.fit();
+        const dims = fitAddon.proposeDimensions();
+        if (dims && sessionIdRef.current) {
+          // RO 回调中 PTY resize 加 100ms debounce
+          if (resizeTimer !== null) clearTimeout(resizeTimer);
+          resizeTimer = setTimeout(() => {
+            if (sessionIdRef.current && dims) {
+              pty.resize(sessionIdRef.current, dims.cols, dims.rows);
+            }
+          }, 100);
+        }
+      } catch {
+        // fit 失败不影响渲染
+      }
+    };
+
+    const resizeObserver = new ResizeObserver(() => {
+      if (roRafPending) return;
+      roRafPending = true;
+      requestAnimationFrame(() => {
+        roRafPending = false;
+        doFit();
+      });
+    });
+    resizeObserver.observe(container);
+
     return () => {
       // 清理
       isDisposedRef.current = true;
+      if (fitRafId !== null) {
+        cancelAnimationFrame(fitRafId);
+      }
       if (rafIdRef.current !== null) {
         cancelAnimationFrame(rafIdRef.current);
       }
+      if (resizeTimer !== null) {
+        clearTimeout(resizeTimer);
+      }
+      resizeObserver.disconnect();
       if (sessionIdRef.current) {
         pty.kill(sessionIdRef.current);
       }
@@ -216,59 +302,7 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber }:
       term.dispose();
       terminalRef.current = null;
     };
-  }, [container, panelId, cols, rows, windowsBuildNumber, detectWebgl, flushBuffer, handlePtyOutput]);
-
-  // G2 Layer 2+4: ResizeObserver 独立注册——与 Terminal 创建解耦
-  // 门控：首次同步 fit，后续 rAF 去重
-  useEffect(() => {
-    if (!container || !terminalRef.current || !fitAddonRef.current) return;
-
-    const term = terminalRef.current;
-    const fitAddon = fitAddonRef.current;
-    let rafPending = false;
-    let initialFitDone = false;
-
-    const doFit = () => {
-      if (!canFit(term, fitAddon, container, isDisposedRef)) return;
-      try {
-        fitAddon.fit();
-        initialFitDone = true;
-        const dims = fitAddon.proposeDimensions();
-        if (dims && sessionIdRef.current) {
-          pty.resize(sessionIdRef.current, dims.cols, dims.rows);
-        }
-      } catch {
-        // fit 失败不影响渲染
-      }
-    };
-
-    const resizeObserver = new ResizeObserver(() => {
-      if (rafPending) return;
-      rafPending = true;
-      requestAnimationFrame(() => {
-        rafPending = false;
-        doFit();
-      });
-    });
-    resizeObserver.observe(container);
-
-    // 首次同步 fit（门控：容器就绪后立即 fit）
-    if (!initialFitDone) {
-      requestAnimationFrame(() => doFit());
-    }
-
-    // G2 Layer 5: setTimeout 回退——WebView2 ResizeObserver 可能触发 {0,0} 后静默
-    const delays = [0, 50, 200];
-    const timers: ReturnType<typeof setTimeout>[] = [];
-    delays.forEach((delay) => {
-      timers.push(setTimeout(() => doFit(), delay));
-    });
-
-    return () => {
-      resizeObserver.disconnect();
-      timers.forEach(clearTimeout);
-    };
-  }, [container]);
+  }, [container, panelId, cols, rows, detectWebgl, flushBuffer, handlePtyOutput]);
 
   // F3 Bug 1 修复: 独立 useEffect 监听 windowsBuildNumber 异步更新
   // 主 useEffect 的 StrictMode 守卫不拦截此 effect，确保 Terminal 创建后 windowsPty 生效

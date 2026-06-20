@@ -37,6 +37,7 @@ fn build_pwsh_command(pwsh: &str) -> CommandBuilder {
     let mut cmd = CommandBuilder::new(pwsh);
     cmd.arg("-NoProfile");
     cmd.arg("-NoLogo");
+    cmd.arg("-NoExit");
     cmd.arg("-EncodedCommand");
     cmd.arg(encode_utf16le_base64(get_shell_integration_script()));
     cmd
