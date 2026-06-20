@@ -35,5 +35,5 @@ export const terminalOptions: ITerminalOptions = {
   cursorStyle: "bar",
   allowProposedApi: true,
   scrollback: 2000,
-  windowsPty: {},
+  // windowsPty 由 F3 useEffect 在获取真实 build 号后动态设置，不在此预设空对象
 };

@@ -90,8 +90,10 @@ pub fn pty_spawn(
     let raw_writer = pair.master.take_writer()?;
     let writer: Arc<Mutex<Box<dyn std::io::Write + Send>>> = Arc::new(Mutex::new(raw_writer));
 
-    // Windows: openpty() 后立即向 stdin 写 CPR \x1b[1;1R
-    // 补偿 ConPTY VtIo::StartIfNeeded() DSR 握手
+    // Windows: spawn 前向 stdin 写 CPR \x1b[1;1R
+    // 补偿 ConPTY VtIo::StartIfNeeded() DSR 握手。
+    // 提前注入确保 ConPTY 首次读取 input pipe 时即获得 CPR 应答，避免 DSR 死锁。
+    // 蜂鸣+首字符消失由 reader.rs 的 strip_conpty_startup() 处理——与此无关。
     #[cfg(windows)]
     {
         let mut w = writer.lock().unwrap();
@@ -110,7 +112,7 @@ pub fn pty_spawn(
         }
     }
 
-    // 克隆 reader，启动 reader 线程
+    // 克隆 reader，启动 reader 线程（reader.rs 首轮读取剥离 ConPTY 启动注入序列）
     let reader = pair.master.try_clone_reader()?;
 
     let reader_handle = std::thread::spawn(move || {
