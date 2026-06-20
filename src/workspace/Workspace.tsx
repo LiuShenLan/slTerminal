@@ -5,7 +5,7 @@
 // 右键菜单可新建终端/编辑器，addPanel 传 renderer: 'always' 保持 PTY 存活。
 // 暴露 window.__dockviewApi 供 E2E 测试使用。
 
-import React, { useCallback } from "react";
+import React, { useCallback, useRef } from "react";
 import {
   DockviewReact,
   type DockviewApi,
@@ -140,7 +140,14 @@ const RightHeaderActions: React.FC<IDockviewHeaderActionsProps> = ({
 };
 
 const Workspace: React.FC = () => {
+  /// G1a: React StrictMode 下 onReady 会触发两次（mount→unmount→remount），
+  /// useRef 守卫跳过第二次触发，防止 addPanel 双发导致 Dockview 状态异常
+  const isReadyRef = useRef(false);
+
   const onReady = useCallback((event: { api: DockviewApi }) => {
+    if (isReadyRef.current) return;
+    isReadyRef.current = true;
+
     const { api } = event;
 
     // 暴露给 E2E 测试

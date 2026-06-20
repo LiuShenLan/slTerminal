@@ -174,24 +174,36 @@ pub fn pty_resize(
 }
 
 /// 销毁 PTY 会话 — 杀子进程 → 回收 reader 线程 → 从 PtyState 移除
+///
+/// G1b: async + spawn_blocking。先提取 session 后释放 RwLock 写锁，
+/// 再在 spawn_blocking 中执行 kill+join+drop（ClosePseudoConsole 在 pre-Win11 24H2 上永久阻塞），
+/// 避免持锁阻塞导致后续命令级联卡死。
 #[tauri::command]
-pub fn pty_kill(
+pub async fn pty_kill(
     state: tauri::State<'_, AppState>,
     session_id: String,
 ) -> Result<(), AppError> {
-    let mut sessions = state.pty.sessions.write().unwrap();
-    let mut session = sessions
-        .remove(&session_id)
-        .ok_or_else(|| AppError::SessionNotFound(session_id.clone()))?;
+    // 提取 session 后释放写锁（锁在此 scope 结束时释放，<1ms）
+    let session = {
+        let mut sessions = state.pty.sessions.write().unwrap();
+        sessions
+            .remove(&session_id)
+            .ok_or_else(|| AppError::SessionNotFound(session_id.clone()))?
+    };
 
-    // 杀子进程
-    let mut child = session.child.lock().unwrap();
-    let _ = child.kill();
-
-    // 等待 reader 线程退出
-    if let Some(handle) = session.reader_handle.take() {
-        let _ = handle.join();
-    }
+    // blocking 线程中执行 kill+join+drop，不阻塞 IPC worker
+    tokio::task::spawn_blocking(move || {
+        let mut session = session;
+        let mut child = session.child.lock().unwrap();
+        let _ = child.kill();
+        drop(child);
+        if let Some(handle) = session.reader_handle.take() {
+            let _ = handle.join();
+        }
+        // session drop → master drop → ClosePseudoConsole
+    })
+    .await
+    .map_err(|e| AppError::Pty(format!("pty_kill join error: {e}")))?;
 
     Ok(())
 }

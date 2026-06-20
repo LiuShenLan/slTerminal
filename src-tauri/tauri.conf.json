@@ -15,6 +15,7 @@
         "title": "slTerminal",
         "width": 1200,
         "height": 800,
+        "dragDropEnabled": false,
         "theme": "Dark",
         "backgroundColor": "#1e1e2e"
       }

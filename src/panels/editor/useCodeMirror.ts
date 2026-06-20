@@ -3,7 +3,7 @@
 // 职责：
 // - 创建 EditorView（暗色 oneDark 主题 + basicSetup）
 // - 打开文件时 ipc.fs.readFile → 填充内容
-// - Ctrl+S → ipc.fs.writeFile 保存
+// - Ctrl+S → 有 filePath 直接保存，无 filePath 弹出"另存为"对话框（G3）
 // - cleanup 中 view.destroy()（箭头函数调，防 this 丢失）
 
 import { useEffect, useRef, useCallback } from "react";
@@ -11,6 +11,7 @@ import { EditorView, keymap } from "@codemirror/view";
 import { EditorState } from "@codemirror/state";
 import { basicSetup } from "codemirror";
 import { oneDark } from "@codemirror/theme-one-dark";
+import { save } from "@tauri-apps/plugin-dialog";
 import { fs } from "../../ipc";
 
 export interface UseCodeMirrorOptions {
@@ -24,11 +25,21 @@ export function useCodeMirror({ container, filePath }: UseCodeMirrorOptions) {
   const viewRef = useRef<EditorView | null>(null);
   const filePathRef = useRef<string | undefined>(filePath);
 
-  /** Ctrl+S 保存 */
-  const handleSave = useCallback(() => {
+  /** Ctrl+S 保存 — G3: 无 filePath 时弹出另存为对话框 */
+  const handleSave = useCallback(async () => {
     const view = viewRef.current;
-    const path = filePathRef.current;
-    if (!view || !path) return;
+    if (!view) return;
+
+    let path = filePathRef.current;
+    if (!path) {
+      const selected = await save({
+        defaultPath: "Untitled.txt",
+        filters: [{ name: "所有文件", extensions: ["*"] }],
+      });
+      if (!selected) return;
+      path = selected;
+      filePathRef.current = path;
+    }
 
     const content = view.state.doc.toString();
     fs.writeFile(path, content).catch((err) => {
