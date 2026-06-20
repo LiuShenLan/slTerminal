@@ -28,6 +28,7 @@ pub enum PtyEvent {
 /// 终端尺寸信息（Phase 1 前端 DTO 保留，后续使用）
 #[allow(dead_code)]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PtySizeDto {
     pub rows: u16,
     pub cols: u16,

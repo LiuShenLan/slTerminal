@@ -4,6 +4,7 @@ use thiserror::Error;
 /// 应用统一错误类型，所有 Tauri 命令返回 Result<_, AppError>
 #[allow(dead_code)]
 #[derive(Debug, Error, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum AppError {
     #[error("IO 错误: {0}")]
     Io(String),
@@ -55,6 +56,6 @@ mod tests {
         let err = AppError::Io("测试错误".to_string());
         let json = serde_json::to_string(&err).unwrap();
         assert!(json.contains("测试错误"));
-        assert!(json.contains("Io"));
+        assert!(json.contains("io"));
     }
 }
