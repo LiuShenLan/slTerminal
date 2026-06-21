@@ -171,51 +171,124 @@ const ProjectRow: React.FC<{
   </div>
 );
 
-/** L2 操作页面行 */
+/** L2 操作页面行（支持内联重命名） */
 const PageRow: React.FC<{
   page: OperationPage;
   depth: number;
   selected: boolean;
   onClick: () => void;
   onContextMenu: (e: React.MouseEvent) => void;
-}> = ({ page, depth, selected, onClick, onContextMenu }) => (
-  <div
-    onClick={onClick}
-    onContextMenu={onContextMenu}
-    style={{
-      display: "flex",
-      alignItems: "center",
-      padding: "2px 8px",
-      paddingLeft: 8 + depth * 16,
-      cursor: "pointer",
-      userSelect: "none",
-      fontSize: 13,
-      color: "var(--sb-fg)",
-      background: selected ? "var(--sb-selected)" : "transparent",
-      height: 26,
-    }}
-    onMouseEnter={(e) => {
-      if (!selected)
-        (e.target as HTMLDivElement).style.background = "var(--sb-hover)";
-    }}
-    onMouseLeave={(e) => {
-      if (!selected)
-        (e.target as HTMLDivElement).style.background = "transparent";
-    }}
-  >
-    <span style={{ width: 16, flexShrink: 0 }} />
-    <span style={{ marginRight: 4, flexShrink: 0 }}>📄</span>
-    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-      {page.name}
-    </span>
-  </div>
-);
+  isRenaming: boolean;
+  onRename: (newName: string) => void;
+  onCancelRename: () => void;
+}> = ({
+  page,
+  depth,
+  selected,
+  onClick,
+  onContextMenu,
+  isRenaming,
+  onRename,
+  onCancelRename,
+}) => {
+  const [editValue, setEditValue] = useState("");
+
+  // 父组件触发重命名 → 进入编辑模式
+  useEffect(() => {
+    if (isRenaming) {
+      setEditValue(page.name);
+    }
+  }, [isRenaming, page.name]);
+
+  const confirmRename = useCallback(() => {
+    const trimmed = editValue.trim();
+    if (trimmed && trimmed !== page.name) {
+      onRename(trimmed);
+    } else {
+      onCancelRename();
+    }
+  }, [editValue, page.name, onRename, onCancelRename]);
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === "Enter") {
+        confirmRename();
+      } else if (e.key === "Escape") {
+        onCancelRename();
+      }
+    },
+    [confirmRename, onCancelRename],
+  );
+
+  return (
+    <div
+      onClick={isRenaming ? undefined : onClick}
+      onContextMenu={onContextMenu}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        padding: "2px 8px",
+        paddingLeft: 8 + depth * 16,
+        cursor: "pointer",
+        userSelect: "none",
+        fontSize: 13,
+        color: "var(--sb-fg)",
+        background: selected ? "var(--sb-selected)" : "transparent",
+        height: 26,
+      }}
+      onMouseEnter={(e) => {
+        if (!selected)
+          (e.target as HTMLDivElement).style.background = "var(--sb-hover)";
+      }}
+      onMouseLeave={(e) => {
+        if (!selected)
+          (e.target as HTMLDivElement).style.background = "transparent";
+      }}
+    >
+      <span style={{ width: 16, flexShrink: 0 }} />
+      <span style={{ marginRight: 4, flexShrink: 0 }}>📄</span>
+      {isRenaming ? (
+        <input
+          value={editValue}
+          onChange={(e) => setEditValue(e.target.value)}
+          onBlur={confirmRename}
+          onKeyDown={handleKeyDown}
+          autoFocus
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            flex: 1,
+            background: "#3C3C3C",
+            border: "1px solid #007ACC",
+            color: "#D4D4D4",
+            fontSize: 13,
+            padding: "0 4px",
+            outline: "none",
+            borderRadius: 2,
+            minWidth: 0,
+          }}
+        />
+      ) : (
+        <span
+          style={{
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {page.name}
+        </span>
+      )}
+    </div>
+  );
+};
 
 // ---- Props ----
 
 interface SidebarTreeProps {
   /** 切换操作页面（由 Workspace 注入，持有 dockview API） */
   switchToPage: (projectId: string, pageId: string) => void;
+  /** 删除操作页面（由 Workspace 层编排，区分当前/非当前页面） */
+  onDeletePage: (projectId: string, pageId: string) => void;
 }
 
 // ---- 辅助 ----
@@ -242,13 +315,12 @@ function makeDefaultLayout(panelId: string): Record<string, unknown> {
 
 // ---- 主组件 ----
 
-const SidebarTree: React.FC<SidebarTreeProps> = ({ switchToPage }) => {
+const SidebarTree: React.FC<SidebarTreeProps> = ({ switchToPage, onDeletePage }) => {
   const projects = useProjects((s) => s.projects);
   const expandedNodes = useProjects((s) => s.expandedNodes);
   const toggleExpand = useProjects((s) => s.toggleExpand);
   const addProject = useProjects((s) => s.addProject);
   const addPage = useProjects((s) => s.addPage);
-  const removePage = useProjects((s) => s.removePage);
   const renamePage = useProjects((s) => s.renamePage);
   const globalActivePageId = useLayout((s) => s.activePageId);
 
@@ -258,6 +330,9 @@ const SidebarTree: React.FC<SidebarTreeProps> = ({ switchToPage }) => {
     y: 0,
     items: [],
   });
+
+  /** 当前正在内联重命名的页面 ID（null = 无） */
+  const [renamingPageId, setRenamingPageId] = useState<string | null>(null);
 
   // "添加项目"按钮 — 选择任意文件夹，无需 git 检查
   const handleAddProject = useCallback(async () => {
@@ -319,22 +394,12 @@ const SidebarTree: React.FC<SidebarTreeProps> = ({ switchToPage }) => {
     [addPage],
   );
 
-  // 删除操作页面
+  // 删除操作页面（委托 Workspace 层编排：清空 Dockview + store 移除 + 页面切换）
   const handleDeletePage = useCallback(
     (projectId: string, pageId: string) => {
-      removePage(projectId, pageId);
+      onDeletePage(projectId, pageId);
     },
-    [removePage],
-  );
-
-  // 重命名操作页面
-  const handleRenamePage = useCallback(
-    (projectId: string, pageId: string) => {
-      const newName = prompt("新页面名称:");
-      if (!newName?.trim()) return;
-      renamePage(projectId, pageId, newName.trim());
-    },
-    [renamePage],
+    [onDeletePage],
   );
 
   const closeContextMenu = useCallback(() => {
@@ -424,6 +489,12 @@ const SidebarTree: React.FC<SidebarTreeProps> = ({ switchToPage }) => {
                       depth={1}
                       selected={isSelected}
                       onClick={() => switchToPage(projId, page.pageId)}
+                      isRenaming={renamingPageId === page.pageId}
+                      onRename={(newName) => {
+                        renamePage(projId, page.pageId, newName);
+                        setRenamingPageId(null);
+                      }}
+                      onCancelRename={() => setRenamingPageId(null)}
                       onContextMenu={(e) => {
                         e.preventDefault();
                         setContextMenu({
@@ -433,8 +504,7 @@ const SidebarTree: React.FC<SidebarTreeProps> = ({ switchToPage }) => {
                           items: [
                             {
                               label: "重命名操作页面",
-                              action: () =>
-                                handleRenamePage(projId, page.pageId),
+                              action: () => setRenamingPageId(page.pageId),
                             },
                             {
                               label: "删除操作页面",

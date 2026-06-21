@@ -17,6 +17,7 @@ import { pty } from "../../ipc";
 import type { PtyEvent } from "../../types";
 import { setActiveTerminal, installKeyboardHandler } from "./keyboard";
 import { useLayout } from "../../stores/layout";
+import { TerminalRegistry } from "./TerminalRegistry";
 
 export interface UseXtermOptions {
   /** 容器 DOM 元素 */
@@ -112,48 +113,65 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
 
   // 主 useEffect：Terminal 生命周期 + PTY spawn + ResizeObserver
   useEffect(() => {
-    // StrictMode guard: 防止双重挂载
-    if (!container || terminalRef.current) return;
+    if (!container) return;
+
+    // H6-A2: 查 Registry，有缓存则复用 Terminal/addon 实例（跳过创建，保留 WebGL context）
+    const cachedRegistered = TerminalRegistry.get(panelId);
+
+    // StrictMode guard：仅无缓存时防止双重挂载
+    if (!cachedRegistered && terminalRef.current) return;
 
     // F1: 重置销毁标记
     isDisposedRef.current = false;
 
-    // 创建 Terminal
-    const term = new Terminal({ ...terminalOptions, cols: 80, rows: 24 });
-    terminalRef.current = term;
+    let term: Terminal;
+    let fitAddon: FitAddon;
 
-    // F3: 动态设置 ConPTY buildNumber（真实 OS build，覆盖 theme.ts 硬编码）
-    if (windowsBuildNumber !== undefined) {
-      term.options.windowsPty = {
-        backend: "conpty",
-        buildNumber: windowsBuildNumber,
-      };
-    }
+    if (cachedRegistered) {
+      // 复用缓存的 Terminal 实例（term.open(el) 重新挂载 DOM，WebGL 上下文保留）
+      term = cachedRegistered.term;
+      fitAddon = cachedRegistered.fitAddon;
+      terminalRef.current = term;
+      fitAddonRef.current = fitAddon;
+      webglAddonRef.current = cachedRegistered.webglAddon;
+    } else {
+      // 创建新 Terminal
+      term = new Terminal({ ...terminalOptions, cols: 80, rows: 24 });
+      terminalRef.current = term;
 
-    // FitAddon
-    const fitAddon = new FitAddon();
-    fitAddonRef.current = fitAddon;
-    term.loadAddon(fitAddon);
+      // F3: 动态设置 ConPTY buildNumber（真实 OS build，覆盖 theme.ts 硬编码）
+      if (windowsBuildNumber !== undefined) {
+        term.options.windowsPty = {
+          backend: "conpty",
+          buildNumber: windowsBuildNumber,
+        };
+      }
 
-    // WebGL addon（预检 → 通过则加载，不可用则 DOM 兜底）
-    if (detectWebgl()) {
-      try {
-        const webglAddon = new WebglAddon();
-        webglAddonRef.current = webglAddon;
-        term.loadAddon(webglAddon);
+      // FitAddon
+      fitAddon = new FitAddon();
+      fitAddonRef.current = fitAddon;
+      term.loadAddon(fitAddon);
 
-        // 监听 context loss → dispose 自动回退 DOM 渲染器
-        webglAddon.onContextLoss(() => {
-          webglAddonRef.current?.dispose();
+      // WebGL addon（预检 → 通过则加载，不可用则 DOM 兜底）
+      if (detectWebgl()) {
+        try {
+          const webglAddon = new WebglAddon();
+          webglAddonRef.current = webglAddon;
+          term.loadAddon(webglAddon);
+
+          // 监听 context loss → dispose 自动回退 DOM 渲染器
+          webglAddon.onContextLoss(() => {
+            webglAddonRef.current?.dispose();
+            webglAddonRef.current = null;
+          });
+        } catch {
+          // WebGL 加载失败，DOM 兜底
           webglAddonRef.current = null;
-        });
-      } catch {
-        // WebGL 加载失败，DOM 兜底
-        webglAddonRef.current = null;
+        }
       }
     }
 
-    // 挂载到 DOM
+    // 挂载到 DOM（两种路径均需——缓存的 Term 已脱离旧 DOM）
     term.open(container);
 
     // 注册键盘处理器（Ctrl+Shift+C/V 复制粘贴）
@@ -239,15 +257,17 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
 
     fitRafId = requestAnimationFrame(pollFitAndSpawn);
 
-    // 终端输入 → 后端
-    term.onData((data) => {
-      if (sessionIdRef.current) {
-        pty.write(
-          sessionIdRef.current,
-          new TextEncoder().encode(data),
-        );
-      }
-    });
+    // 终端输入 → 后端（仅新创建时注册，缓存的 Term 已有监听器）
+    if (!cachedRegistered) {
+      term.onData((data) => {
+        if (sessionIdRef.current) {
+          pty.write(
+            sessionIdRef.current,
+            new TextEncoder().encode(data),
+          );
+        }
+      });
+    }
 
     // ResizeObserver：容器尺寸变化时 fit + 延迟 resize PTY
     let roRafPending = false;
@@ -295,19 +315,33 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
         clearTimeout(resizeTimer);
       }
       resizeObserver.disconnect();
-      if (sessionIdRef.current) {
-        // N2: 布局切换时不杀 PTY（进程存活在 TerminalRegistry 中）
-        const isSwitching = useLayout.getState().isLayoutSwitching;
-        if (!isSwitching) {
-          pty.kill(sessionIdRef.current);
+
+      const isSwitching = useLayout.getState().isLayoutSwitching;
+      const sid = sessionIdRef.current;
+
+      if (isSwitching) {
+        // H6-A3: 页面切换 → 不 dispose，存入 Registry 供后续复用
+        setActiveTerminal(null);
+        if (terminalRef.current && fitAddonRef.current && sid) {
+          TerminalRegistry.register(panelId, {
+            term: terminalRef.current,
+            sessionId: sid,
+            webglAddon: webglAddonRef.current,
+            fitAddon: fitAddonRef.current,
+          });
         }
-        // switching 时：PTY 进程存活，由 TerminalRegistry.get(panelId) 查询复用
+      } else {
+        // 用户主动关闭面板 → 正常销毁
+        if (sid) {
+          pty.kill(sid);
+        }
+        TerminalRegistry.remove(panelId);
+        setActiveTerminal(null);
+        webglAddonRef.current?.dispose();
+        fitAddonRef.current?.dispose();
+        terminalRef.current?.dispose();
+        terminalRef.current = null;
       }
-      setActiveTerminal(null);
-      webglAddonRef.current?.dispose();
-      fitAddonRef.current?.dispose();
-      term.dispose();
-      terminalRef.current = null;
     };
   }, [container, panelId, cols, rows, detectWebgl, flushBuffer, handlePtyOutput]);
 

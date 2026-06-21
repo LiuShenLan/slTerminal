@@ -33,6 +33,20 @@ declare global {
 
 const WATERMARK_TEXT = "打开终端或编辑器开始工作";
 
+/** per-page 面板序列号计数器（稳定 ID——不含 Date.now()） */
+const panelSeqMap = new Map<string, number>();
+
+/** 生成确定性面板 ID：terminal-{pageId}-{seq} / editor-{pageId}-{seq} */
+function nextPanelId(prefix: string): string {
+  const pageId = useLayout.getState().activePageId;
+  if (pageId) {
+    const seq = panelSeqMap.get(pageId) ?? 0;
+    panelSeqMap.set(pageId, seq + 1);
+    return `${prefix}-${pageId}-${seq}`;
+  }
+  return `${prefix}-${Date.now()}`; // 无活跃页面时兜底
+}
+
 /** 获取当前活跃页面的 cwd */
 function getActivePageCwd(): string | undefined {
   const activePageId = useLayout.getState().activePageId;
@@ -64,7 +78,7 @@ const Watermark: React.FC<IWatermarkPanelProps> = ({ containerApi }) => (
     <div style={{ display: "flex", gap: 8 }}>
       <button
         onClick={() => {
-          const id = `terminal-${Date.now()}`;
+          const id = nextPanelId("terminal");
           const cwd = getActivePageCwd();
           containerApi.addPanel({
             id,
@@ -87,7 +101,7 @@ const Watermark: React.FC<IWatermarkPanelProps> = ({ containerApi }) => (
       </button>
       <button
         onClick={() => {
-          const id = `editor-${Date.now()}`;
+          const id = nextPanelId("editor");
           const cwd = getActivePageCwd();
           containerApi.addPanel({
             id,
@@ -116,7 +130,7 @@ const RightHeaderActions: React.FC<IDockviewHeaderActionsProps> = ({
   containerApi,
 }) => {
   const handleNewTerminal = () => {
-    const id = `terminal-${Date.now()}`;
+    const id = nextPanelId("terminal");
     const cwd = getActivePageCwd();
     containerApi.addPanel({
       id,
@@ -160,7 +174,6 @@ const RightHeaderActions: React.FC<IDockviewHeaderActionsProps> = ({
 };
 
 const Workspace: React.FC = () => {
-  const isReadyRef = useRef(false);
   const apiRef = useRef<DockviewApi | null>(null);
   /** 脏布局跟踪：页面切换前冲刷到 store */
   const dirtyPageIdRef = useRef<string | null>(null);
@@ -224,11 +237,41 @@ const Workspace: React.FC = () => {
     }
   }, [flushDirtyLayout]);
 
+  /** S1: 删除操作页面（区分场景 A/B：当前页 vs 非当前页） */
+  const onDeletePage = useCallback(
+    (projectId: string, pageId: string) => {
+      const api = apiRef.current;
+      if (!api) return;
+
+      const layoutStore = useLayout.getState();
+      const isActive = layoutStore.activePageId === pageId;
+
+      if (isActive) {
+        // 场景 A：删除当前活跃页面 → 先冲刷布局，再清空 Dockview
+        flushDirtyLayout();
+        api.clear();
+        layoutStore.setActivePage(null);
+      }
+
+      // 场景 A+B：从 store 移除页面数据
+      useProjects.getState().removePage(projectId, pageId);
+
+      if (isActive) {
+        // 场景 A：切换到剩余页面（removePage 已将 project.activePageId 指向下一个）
+        const nextPageId =
+          useProjects.getState().projects[projectId]?.activePageId;
+        if (nextPageId) {
+          switchToPage(projectId, nextPageId);
+        }
+      }
+      // 场景 B：删除非当前页 → Dockview 不变，仅侧栏更新
+    },
+    [flushDirtyLayout, switchToPage],
+  );
+
   const onReady = useCallback(
     (event: { api: DockviewApi }) => {
-      if (isReadyRef.current) return;
-      isReadyRef.current = true;
-
+      // S4-D2: 条件渲染已保证数据就绪，无需 isReadyRef 防护
       const { api } = event;
       apiRef.current = api;
 
@@ -253,7 +296,9 @@ const Workspace: React.FC = () => {
       if (!restored) {
         // 有项目但无保存布局 → 创建默认终端
         if (Object.keys(projects).length > 0) {
-          const initPanelId = `terminal-init-${Date.now()}`;
+          const initPanelId = activePageId
+            ? `terminal-${activePageId}-init`
+            : `terminal-init-${Date.now()}`;
           api.addPanel({
             id: initPanelId,
             component: "terminal",
@@ -272,12 +317,23 @@ const Workspace: React.FC = () => {
         }, 0);
       });
 
-      // H7: 布局变更 → 标记脏（延迟写入 store，切换页面前冲刷）
+      // S4-D3: 布局变更 → 直接写入 store（触发 2s debounce→保存管道）
       api.onDidLayoutChange(() => {
         if (restoreGuardRef.current) return;
         const activeId = useLayout.getState().activePageId;
         if (!activeId) return;
-        dirtyPageIdRef.current = activeId;
+        const layout = saveLayout(api);
+        const { projects: projs } = useProjects.getState();
+        for (const [, proj] of Object.entries(projs)) {
+          if (proj.pages.some((p) => p.pageId === activeId)) {
+            useProjects.getState().updatePageLayout(
+              proj.projectId,
+              activeId,
+              layout as Record<string, unknown>,
+            );
+            break;
+          }
+        }
       });
     },
     [],
@@ -289,8 +345,8 @@ const Workspace: React.FC = () => {
     ): (BuiltInContextMenuItem | ReactContextMenuItemConfig)[] => {
       const { api } = params;
 
-      const newTerminalId = `terminal-${Date.now()}`;
-      const newEditorId = `editor-${Date.now()}`;
+      const newTerminalId = nextPanelId("terminal");
+      const newEditorId = nextPanelId("editor");
 
       return [
         {
@@ -325,7 +381,7 @@ const Workspace: React.FC = () => {
 
   return (
     <div style={{ display: "flex", width: "100%", height: "100%" }}>
-      <SidebarTree switchToPage={switchToPage} />
+      <SidebarTree switchToPage={switchToPage} onDeletePage={onDeletePage} />
       <div style={{ flex: 1, minWidth: 0, height: "100%" }}>
         <DockviewReact
           className="dockview-theme-dark"
