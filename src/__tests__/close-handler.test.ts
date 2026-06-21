@@ -104,6 +104,7 @@ vi.mock("../stores/projects", () => ({
   },
   loadAllProjects: mocks.mockLoadAllProjects,
   saveAllProjects: mocks.mockSaveAllProjects,
+  cancelPendingSave: vi.fn(),
   markPersistenceReady: mocks.mockMarkPersistenceReady,
 }));
 

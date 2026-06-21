@@ -233,7 +233,12 @@ const Workspace: React.FC = () => {
       projectsStore.switchToPage(projectId, pageId);
       layoutStore.setActivePage(pageId);
     } finally {
-      layoutStore.setLayoutSwitching(false);
+      // React 18 批处理会将面板卸载延迟到事件处理器返回后才执行，
+      // 须等 React 处理完所有 useEffect cleanup 再重置标志。
+      // 否则 cleanup 中 isLayoutSwitching 已为 false，终端走销毁路径而非缓存。
+      setTimeout(() => {
+        layoutStore.setLayoutSwitching(false);
+      }, 0);
     }
   }, [flushDirtyLayout]);
 

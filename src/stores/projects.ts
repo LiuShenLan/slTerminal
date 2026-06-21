@@ -269,6 +269,14 @@ export function markPersistenceReady(): void {
   initialized = true;
 }
 
+/** 取消待执行的 debounced 保存（关闭钩子中避免竞态） */
+export function cancelPendingSave(): void {
+  if (saveTimer !== null) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+}
+
 useProjects.subscribe(() => {
   if (!initialized) return;
   if (saveTimer !== null) clearTimeout(saveTimer);

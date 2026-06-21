@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Workspace } from "./workspace";
-import { loadAllProjects, markPersistenceReady, saveAllProjects, useProjects } from "./stores/projects";
+import { loadAllProjects, markPersistenceReady, saveAllProjects, cancelPendingSave, useProjects } from "./stores/projects";
 import { useLayout } from "./stores/layout";
 import { saveLayout } from "./workspace/layoutSerde";
 import "dockview-react/dist/styles/dockview.css";
@@ -88,8 +88,12 @@ function App() {
             }
           }
         }
-        // 2. 同步保存到磁盘（绕过 2s debounce）
-        await saveAllProjects();
+        // 2. 同步保存到磁盘（清除 debounce 定时器 + 3s 超时防挂起）
+        cancelPendingSave();
+        await Promise.race([
+          saveAllProjects(),
+          new Promise<void>((resolve) => setTimeout(resolve, 3000)),
+        ]);
         // 3. 保存 activePageId
         if (activePageId) {
           try {
@@ -99,7 +103,8 @@ function App() {
       } catch (err) {
         console.error("[slTerminal] 关闭保存失败:", err);
       }
-      // 4. 强制销毁（destroy 不会重新触发 onCloseRequested）
+      // 4. 强制销毁（destroy 在 try/catch 外，保存失败不阻塞关闭）
+      // 注：destroy() 不重新触发 onCloseRequested（Tauri 2 保证）
       await appWindow.destroy();
     });
     return () => { unlisten.then((fn) => fn()); };
