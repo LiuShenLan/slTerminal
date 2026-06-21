@@ -55,12 +55,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **键盘 / IME**：Shift+Tab、Ctrl 组合键用 xterm.js `attachCustomKeyEventHandler` 接管；中文 IME 合成要尽早测。
 - E2E 测试在 Tauri 用不了 Playwright（非 Chromium）。Phase 0 起用 embedded driver（`@wdio/tauri-service` + `tauri-plugin-wdio-webdriver` → `webview2-com` 驱动 ICoreWebView2 COM），零 msedgedriver 依赖。
 
-## 命令（项目脚手架尚未创建，以下为规划值，见 phase 0）
+## 命令
 
-- 后端测试：`cargo test`（在 `src-tauri/`）。
-- 前端测试：`npm test`（Vitest + `@tauri-apps/api/mocks`）。
-- 终端渲染测试（L3）：`@xterm/headless` + serialize 断言。
-- 构建：`tauri build --debug`。
-- 开发运行：`npm run tauri dev`。
+- 后端测试：`cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1`
+- 前端测试：`npm test`（Vitest + `@tauri-apps/api/mocks`）
+- 终端渲染测试（L3）：`npm run test:l3`
+- 静态检查：`npx tsc --noEmit` + `npx eslint src/` + `cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings`
+- 开发运行：`npm run tauri dev`
+- 构建：`npx tauri build --debug --no-bundle`
 
-> 脚手架由 `npm create tauri-app`（React+TS+Vite）初始化；CI 走 GitHub Actions `windows-latest`。实际命令以 phase 0 落地后的 `package.json` / `Cargo.toml` 为准。
+### E2E 测试（T8 WDIO）
+
+**每次自动化验收必须先 build 再 wdio**。`npm run wdio` 依赖 `npx tauri build --debug --no-bundle` 的构建产物（`src-tauri/target/debug/slterminal.exe`），二进制过期会导致测试结果不可靠。
+
+```
+npx tauri build --debug --no-bundle
+npm run wdio
+```
+
+> 技术栈：`@wdio/tauri-service` 1.1.0 + `tauri-plugin-wdio-webdriver` 1.1.0，driverProvider: `embedded`（`webview2-com` COM 直连 ICoreWebView2，零 msedgedriver 依赖）。
+> 已知无害噪声：`Tauri core.invoke not available after 5s timeout`——embedded 模式下降级到 WebDriver HTTP 协议，不影响测试结果。

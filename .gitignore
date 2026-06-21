@@ -32,3 +32,6 @@ tmp/
 # Rust
 src-tauri/target/
 datalearncodeterax-ai-temp/
+
+# Runtime persistence
+slterminal-projects.json
