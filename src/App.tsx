@@ -1,5 +1,6 @@
-import React from "react";
+import React, { useEffect } from "react";
 import { Workspace } from "./workspace";
+import { loadAllProjects, markPersistenceReady } from "./stores/projects";
 import "dockview-react/dist/styles/dockview.css";
 
 /** 错误边界 */
@@ -34,6 +35,15 @@ class ErrorBoundary extends React.Component<
 }
 
 function App() {
+  // H6 修复：启动时从磁盘恢复项目数据
+  useEffect(() => {
+    loadAllProjects().then(() => {
+      markPersistenceReady();
+    }).catch(() => {
+      markPersistenceReady(); // 即使加载失败也标记就绪，允许后续保存
+    });
+  }, []);
+
   return (
     <ErrorBoundary>
       <div style={{ width: "100vw", height: "100vh", background: "#1e1e2e" }}>

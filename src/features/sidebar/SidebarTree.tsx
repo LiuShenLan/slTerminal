@@ -10,6 +10,7 @@ import type { Project, OperationPage } from "../../stores/projects";
 import { useLayout } from "../../stores/layout";
 import { git } from "../../ipc";
 import { open } from "../../ipc/dialog";
+import { CreateWorktreeDialog } from "../worktree";
 import type { WorktreeInfo, WorktreeBinding } from "../../types/git";
 
 // ---- CSS 变量（暗色主题） ----
@@ -140,9 +141,11 @@ const ProjectRow: React.FC<{
   depth: number;
   expanded: boolean;
   onToggle: () => void;
-}> = ({ project, depth, expanded, onToggle }) => (
+  onContextMenu: (e: React.MouseEvent) => void;
+}> = ({ project, depth, expanded, onToggle, onContextMenu }) => (
   <div
     onClick={onToggle}
+    onContextMenu={onContextMenu}
     style={{
       display: "flex",
       alignItems: "center",
@@ -293,6 +296,26 @@ const SidebarTree: React.FC<SidebarTreeProps> = ({ switchToPage }) => {
     items: [],
   });
 
+  // H3: CreateWorktreeDialog 状态
+  const [worktreeDialogProject, setWorktreeDialogProject] = useState<Project | null>(null);
+
+  // H3: 项目级新建 worktree
+  const handleNewWorktree = useCallback(
+    (project: Project) => {
+      setWorktreeDialogProject(project);
+    },
+    [],
+  );
+
+  const handleWorktreeCreated = useCallback(
+    (projectId: string, worktree: WorktreeInfo, defaultPage: OperationPage) => {
+      addPage(projectId, defaultPage);
+      useProjects.getState().addWorktree(projectId, worktree);
+      setWorktreeDialogProject(null);
+    },
+    [addPage],
+  );
+
   // "添加项目"按钮
   const handleAddProject = useCallback(async () => {
     try {
@@ -307,7 +330,8 @@ const SidebarTree: React.FC<SidebarTreeProps> = ({ switchToPage }) => {
 
       const isRepo = await git.isRepo(dirPath);
       if (!isRepo) {
-        console.warn(`[slTerminal] "${dirPath}" 不是 git 仓库`);
+        // B3 修复：非 git 目录给出用户可见提示
+        alert(`"${dirPath}" 不是 git 仓库。\n\n目前仅支持 git 仓库项目——非 git 目录功能正在开发中。`);
         return;
       }
 
@@ -490,6 +514,28 @@ const SidebarTree: React.FC<SidebarTreeProps> = ({ switchToPage }) => {
                 depth={0}
                 expanded={projExpanded}
                 onToggle={() => toggleExpand(projId)}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setContextMenu({
+                    visible: true,
+                    x: e.clientX,
+                    y: e.clientY,
+                    items: [
+                      {
+                        label: "新建工作树",
+                        action: () => handleNewWorktree(project),
+                      },
+                      {
+                        label: "删除项目",
+                        action: () => {
+                          if (window.confirm(`确定删除项目 "${project.name}"？`)) {
+                            useProjects.getState().removeProject(projId);
+                          }
+                        },
+                      },
+                    ],
+                  });
+                }}
               />
 
               {projExpanded &&
@@ -578,6 +624,15 @@ const SidebarTree: React.FC<SidebarTreeProps> = ({ switchToPage }) => {
 
       {/* 右键菜单 */}
       <ContextMenu state={contextMenu} onClose={closeContextMenu} />
+
+      {/* H3: 项目级新建 worktree 对话框 */}
+      {worktreeDialogProject && (
+        <CreateWorktreeDialog
+          project={worktreeDialogProject}
+          onClose={() => setWorktreeDialogProject(null)}
+          onCreated={handleWorktreeCreated}
+        />
+      )}
     </div>
   );
 };

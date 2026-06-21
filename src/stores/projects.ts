@@ -280,6 +280,45 @@ export const useProjects = create<ProjectsState>()((set, get) => ({
       },
   }));
 
+// ── 持久化连线（H6 修复） ──
+
+const PERSIST_PATH = "slterminal-projects.json";
+
+/** 启动加载：从磁盘恢复项目数据 */
+export async function loadAllProjects(): Promise<void> {
+  try {
+    await useProjects.getState().loadFromDisk(PERSIST_PATH);
+  } catch {
+    // 首次启动或文件损坏，保持默认空状态
+  }
+}
+
+/** 保存全部项目数据到磁盘 */
+export async function saveAllProjects(): Promise<void> {
+  try {
+    await useProjects.getState().saveToDisk(PERSIST_PATH);
+  } catch (err) {
+    console.error("[slTerminal] 保存项目数据失败:", err);
+  }
+}
+
+// 变更即保存（2s debounce）—— 唯一抵抗 taskkill/关机的手段
+let saveTimer: ReturnType<typeof setTimeout> | null = null;
+let initialized = false;
+
+// 标记初始化完成（loadFromDisk 调用后），避免首次加载触发保存
+export function markPersistenceReady(): void {
+  initialized = true;
+}
+
+useProjects.subscribe(() => {
+  if (!initialized) return;
+  if (saveTimer !== null) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    saveAllProjects();
+  }, 2000);
+});
+
 // ── ID 工具函数（供外部创建节点时生成 ID） ──
 
 export function createProjectId(): string {

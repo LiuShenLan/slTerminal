@@ -1,5 +1,5 @@
 // Phase 1 L2 Workspace 测试
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mockIPC, clearMocks } from '@tauri-apps/api/mocks';
 
 // jsdom 缺少 ResizeObserver（Dockview 依赖）
@@ -11,21 +11,54 @@ global.ResizeObserver = class ResizeObserver {
 
 import { render } from '@testing-library/react';
 import Workspace from '../workspace/Workspace';
+import { useProjects } from '../stores/projects';
+
+beforeEach(() => {
+  useProjects.setState({
+    projects: {},
+    deletionLock: { pendingDelete: null, acquiredAt: null },
+    expandedNodes: {},
+  });
+});
 
 afterEach(() => {
   clearMocks();
 });
 
 describe('Workspace', () => {
-  it('onReady 自动创建终端面板', () => {
+  it('B1 修复：无项目时不自动创建终端，显示空白 Watermark', () => {
     mockIPC(() => null);
 
     const { container } = render(<Workspace />);
 
-    // F1: onReady 自动创建终端 + Watermark 含按钮（终端创建前瞬间可见）
-    // 终端面板创建后显示 tab 标签和加载遮罩
+    // B1: store 为空时不应自动创建终端面板
+    // 应显示 Watermark 空态和侧栏空白态
     const text = container.textContent ?? '';
-    expect(text).toContain('terminal-init'); // 自动创建的终端 tab
-    expect(text).toContain('正在连接...'); // 加载遮罩
+    expect(text).toContain('打开终端或编辑器开始工作'); // Watermark
+    expect(text).toContain('添加项目'); // 侧栏工具栏
+  });
+
+  it('有项目时 onReady 自动创建终端面板', () => {
+    mockIPC(() => null);
+
+    // 预先在 store 中添加一个项目
+    const projId = 'test-proj-onready';
+    useProjects.getState().addProject({
+      projectId: projId,
+      name: 'test',
+      rootPath: '/tmp/test',
+      worktrees: [],
+      pages: [],
+      activePageId: null,
+      version: 1,
+    });
+
+    const { container } = render(<Workspace />);
+
+    const text = container.textContent ?? '';
+    expect(text).toContain('terminal-init'); // 有项目时自动创建终端
+
+    // 清理
+    useProjects.getState().removeProject(projId);
   });
 });

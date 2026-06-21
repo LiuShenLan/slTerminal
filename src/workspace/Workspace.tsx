@@ -196,9 +196,11 @@ const Workspace: React.FC = () => {
       const targetPage = project.pages.find((p) => p.pageId === pageId);
       const targetLayout = targetPage?.layout;
 
-      api.clear();
+      // B2 修复：fromJSON 内部已调用 clear()，前置 clear 破坏 reuseExistingPanels
       if (targetLayout && Object.keys(targetLayout).length > 0) {
         loadLayout(api, targetLayout);
+      } else {
+        api.clear(); // 无保存布局时才主动清空
       }
 
       projectsStore.switchToPage(projectId, pageId);
@@ -218,13 +220,17 @@ const Workspace: React.FC = () => {
 
       window.__dockviewApi = api;
 
-      const initPanelId = `terminal-init-${Date.now()}`;
-      api.addPanel({
-        id: initPanelId,
-        component: "terminal",
-        params: { panelId: initPanelId },
-        renderer: "always",
-      });
+      // B1 修复：仅在有项目时自动创建终端，空白态不自动打开
+      const { projects } = useProjects.getState();
+      if (Object.keys(projects).length > 0) {
+        const initPanelId = `terminal-init-${Date.now()}`;
+        api.addPanel({
+          id: initPanelId,
+          component: "terminal",
+          params: { panelId: initPanelId },
+          renderer: "always",
+        });
+      }
 
       api.onDidLayoutChange(() => {
         const layout = saveLayout(api);
