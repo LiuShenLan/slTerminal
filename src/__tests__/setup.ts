@@ -1,4 +1,5 @@
 import { randomFillSync } from 'node:crypto';
+import '@testing-library/jest-dom/vitest';
 
 // jsdom 缺少 crypto.getRandomValues（xterm.js 等库依赖）
 Object.defineProperty(window, 'crypto', {

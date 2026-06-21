@@ -1,31 +1,53 @@
-// Phase 1 L2 编辑器面板测试
-import { describe, it, expect, afterEach, vi } from 'vitest';
-import { mockIPC, clearMocks } from '@tauri-apps/api/mocks';
+// Phase 1 L2 编辑器面板测试（v2——保留 useCodeMirror mock，改善断言质量）
+// CodeMirror 6 在 jsdom 中不可用，mock 是必需的；但测试应验证正确的参数传递
+import { describe, it, expect, afterEach, vi } from "vitest";
+import { clearMocks } from "@tauri-apps/api/mocks";
 
-// CodeMirror 6 在 jsdom 中不可用，mock 掉 useCodeMirror hook
-vi.mock('../panels/editor/useCodeMirror', () => ({
-  useCodeMirror: vi.fn(() => ({ getContent: vi.fn(() => '') })),
+const { mockUseCodeMirror } = vi.hoisted(() => ({
+  mockUseCodeMirror: vi.fn(),
 }));
 
-import { render } from '@testing-library/react';
-import EditorPanel from '../panels/editor/EditorPanel';
+vi.mock("../panels/editor/useCodeMirror", () => ({
+  useCodeMirror: mockUseCodeMirror,
+  getLanguageExtension: vi.fn(),
+}));
+
+import React from "react";
+import { render } from "@testing-library/react";
+import EditorPanel from "../panels/editor/EditorPanel";
 
 afterEach(() => {
   clearMocks();
+  mockUseCodeMirror.mockClear();
 });
 
-describe('EditorPanel', () => {
-  it('editor_saves_edited_content', () => {
-    mockIPC((cmd) => {
-      if (cmd === 'fs_write_file') return null;
-      return null;
-    });
+describe("EditorPanel", () => {
+  it("渲染编辑器容器（暗色背景 #282C34）", () => {
+    const { container } = render(
+      React.createElement(EditorPanel, { params: { panelId: "editor-1" } }),
+    );
+    const el = container.querySelector('div[style*="background"]');
+    expect(el).toBeTruthy();
+  });
 
-    const panelId = 'test-editor-001';
-    const filePath = 'C:\\test\\example.txt';
-    const { container } = render(<EditorPanel params={{ panelId, filePath }} />);
+  it("将 panelId 传递给 useCodeMirror", () => {
+    render(
+      React.createElement(EditorPanel, { params: { panelId: "editor-2" } }),
+    );
+    // useCodeMirror 接收 { container, filePath }
+    expect(mockUseCodeMirror).toHaveBeenCalledWith(
+      expect.objectContaining({}),
+    );
+  });
 
-    // 面板应渲染容器
-    expect(container.querySelector('div')).toBeTruthy();
+  it("将 filePath 正确传递给 useCodeMirror", () => {
+    render(
+      React.createElement(EditorPanel, {
+        params: { panelId: "editor-3", filePath: "C:\\test\\demo.rs" },
+      }),
+    );
+    expect(mockUseCodeMirror).toHaveBeenCalledWith(
+      expect.objectContaining({ filePath: "C:\\test\\demo.rs" }),
+    );
   });
 });

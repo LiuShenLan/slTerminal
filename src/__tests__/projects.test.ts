@@ -93,4 +93,38 @@ describe("projects store", () => {
     const { projects } = useProjects.getState();
     expect(projects[project.projectId].activePageId).toBe(page1.pageId);
   });
+
+  // S2 重命名
+  it("renamePage 应更新操作页面名称", () => {
+    const page = makePage("原名");
+    const project = makeProject({ pages: [page] });
+    useProjects.getState().addProject(project);
+
+    useProjects.getState().renamePage(project.projectId, page.pageId, "新名称");
+
+    const updated = useProjects.getState().projects[project.projectId].pages[0];
+    expect(updated.name).toBe("新名称");
+  });
+
+  it("renamePage 空字符串 → 允许空名称", () => {
+    const page = makePage("原名");
+    const project = makeProject({ pages: [page] });
+    useProjects.getState().addProject(project);
+
+    useProjects.getState().renamePage(project.projectId, page.pageId, "");
+
+    const updated = useProjects.getState().projects[project.projectId].pages[0];
+    expect(updated.name).toBe("");
+  });
+
+  it("renamePage 不存在的 pageId → 状态不变", () => {
+    const page = makePage("保持");
+    const project = makeProject({ pages: [page] });
+    useProjects.getState().addProject(project);
+
+    useProjects.getState().renamePage(project.projectId, "nonexistent", "新");
+
+    const updated = useProjects.getState().projects[project.projectId].pages[0];
+    expect(updated.name).toBe("保持");
+  });
 });

@@ -34,8 +34,11 @@ jobs:
       - name: Frontend build
         run: npm run build
 
-      - name: Frontend tests (Vitest L2 + L3)
+      - name: Frontend unit tests (L2)
         run: npm test
+
+      - name: Terminal render tests (L3)
+        run: npm run test:l3
 
       - name: Backend build
         working-directory: src-tauri

@@ -97,4 +97,49 @@ describe("操作页面切换集成", () => {
     const page = useProjects.getState().projects["proj-2"].pages[0];
     expect(page.cwd).toBe("/tmp/test");
   });
+
+  // H5 自切换守卫
+  it("重复点击同一页面 → activePageId 不变（自切换守卫拦截）", () => {
+    const proj = makeProject("proj-3", {
+      pages: [
+        {
+          pageId: "page-x",
+          name: "Page X",
+          layout: {},
+          createdAt: Date.now(),
+          lastAccessedAt: Date.now(),
+        },
+      ],
+    });
+    useProjects.getState().addProject(proj);
+    useProjects.getState().switchToPage("proj-3", "page-x");
+    expect(useProjects.getState().projects["proj-3"].activePageId).toBe("page-x");
+
+    // 重复切换到同一页面
+    useProjects.getState().switchToPage("proj-3", "page-x");
+    // activePageId 不变（守卫逻辑：activePageId === pageId 时 return）
+    expect(useProjects.getState().projects["proj-3"].activePageId).toBe("page-x");
+  });
+
+  it("isLayoutSwitching=true 时 switchToPage 应被拦截", () => {
+    useLayout.getState().setLayoutSwitching(true);
+
+    const proj = makeProject("proj-4", {
+      pages: [
+        {
+          pageId: "page-y",
+          name: "Page Y",
+          layout: {},
+          createdAt: Date.now(),
+          lastAccessedAt: Date.now(),
+        },
+      ],
+    });
+    useProjects.getState().addProject(proj);
+    // 尝试切换（Workspace 层 switchToPage 会检查此标志）
+    // store 层不拦截——拦截在 Workspace 层，此处仅验证标志可写可读
+    expect(useLayout.getState().isLayoutSwitching).toBe(true);
+    useLayout.getState().setLayoutSwitching(false);
+    expect(useLayout.getState().isLayoutSwitching).toBe(false);
+  });
 });

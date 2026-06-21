@@ -1,41 +1,95 @@
-// Phase 1 L2 终端面板测试
-import { describe, it, expect, afterEach, vi } from 'vitest';
-import { mockIPC, clearMocks } from '@tauri-apps/api/mocks';
+// Phase 1 L2 终端面板测试（v2——使用真实 useXterm + mock 依赖）
+// 复用 terminal-lifecycle.test.ts 的 mock 策略，避免空壳测试
+import { describe, it, expect, afterEach, vi } from "vitest";
 
-// xterm.js 在 jsdom 中不可用，mock 掉整个 useXterm hook
-vi.mock('../panels/terminal/useXterm', () => ({
-  useXterm: vi.fn(() => ({ focus: vi.fn() })),
-}));
-
-import { render, screen } from '@testing-library/react';
-import TerminalPanel from '../panels/terminal/TerminalPanel';
-
-afterEach(() => {
-  clearMocks();
+// ─── Hoisted mocks（复用 terminal-lifecycle 模式） ───
+const mocks = vi.hoisted(() => {
+  const terminal = {
+    open: vi.fn(),
+    dispose: vi.fn(),
+    loadAddon: vi.fn(),
+    write: vi.fn(),
+    writeln: vi.fn(),
+    onData: vi.fn(),
+    focus: vi.fn(),
+    element: document.createElement("div"),
+    options: {} as Record<string, unknown>,
+  };
+  const fitAddon = {
+    fit: vi.fn(),
+    proposeDimensions: vi.fn(() => ({ cols: 80, rows: 24 })),
+    dispose: vi.fn(),
+  };
+  const pty = {
+    spawn: vi.fn().mockResolvedValue("mock-session-001"),
+    kill: vi.fn(),
+    write: vi.fn(),
+    resize: vi.fn(),
+    getWindowsBuildNumber: vi.fn().mockResolvedValue(26100),
+  };
+  return { terminal, fitAddon, pty };
 });
 
-describe('TerminalPanel', () => {
-  it('terminal_panel_spawns_on_mount', () => {
-    mockIPC((cmd) => {
-      if (cmd === 'pty_spawn') return 'test-session-id';
-      return null;
-    });
+vi.mock("@xterm/xterm", () => ({
+  Terminal: vi.fn(function () {
+    return mocks.terminal;
+  }),
+}));
 
-    const panelId = 'test-panel-001';
-    render(<TerminalPanel params={{ panelId }} />);
+vi.mock("@xterm/addon-fit", () => ({
+  FitAddon: vi.fn(function () {
+    return mocks.fitAddon;
+  }),
+}));
 
-    // 面板应渲染容器
-    const container = document.querySelector('[style*="height: 100%"]');
-    expect(container).toBeTruthy();
+vi.mock("@xterm/addon-webgl", () => ({
+  WebglAddon: vi.fn(function () {
+    return { onContextLoss: vi.fn(), dispose: vi.fn() };
+  }),
+}));
 
-    // 应显示加载遮罩 "正在连接..."
-    expect(screen.getByText('正在连接...')).toBeTruthy();
+vi.mock("../ipc", () => ({
+  pty: mocks.pty,
+}));
+
+import React from "react";
+import { render, screen, waitFor } from "@testing-library/react";
+import TerminalPanel from "../panels/terminal/TerminalPanel";
+
+afterEach(() => {
+  vi.clearAllMocks();
+});
+
+describe("TerminalPanel", () => {
+  it("挂载时显示'正在连接…'加载遮罩", () => {
+    render(React.createElement(TerminalPanel, { params: { panelId: "test-p1" } }));
+    expect(screen.getByText("正在连接...")).toBeTruthy();
   });
 
-  it('terminal_input_writes', () => {
-    const panelId = 'test-panel-002';
-    const { container } = render(<TerminalPanel params={{ panelId }} />);
+  it("挂载后通过 IPC 获取 Windows build 号（F3 检测）", async () => {
+    render(React.createElement(TerminalPanel, { params: { panelId: "test-p1" } }));
+    await waitFor(() => {
+      expect(mocks.pty.getWindowsBuildNumber).toHaveBeenCalled();
+    });
+  });
 
-    expect(container.querySelector('div')).toBeTruthy();
+  it("挂载后 spawn PTY session", async () => {
+    vi.useFakeTimers();
+    render(React.createElement(TerminalPanel, { params: { panelId: "test-p2" } }));
+    await vi.runAllTimersAsync();
+    expect(mocks.pty.spawn).toHaveBeenCalledWith(
+      expect.objectContaining({ panelId: "test-p2" }),
+      expect.any(Function),
+    );
+    vi.useRealTimers();
+  });
+
+  it("渲染 .xterm 容器供 xterm.js 挂载", async () => {
+    vi.useFakeTimers();
+    render(React.createElement(TerminalPanel, { params: { panelId: "test-p3" } }));
+    await vi.runAllTimersAsync();
+    // Terminal.open(container) 被调用——验证 xterm 挂载
+    expect(mocks.terminal.open).toHaveBeenCalled();
+    vi.useRealTimers();
   });
 });
