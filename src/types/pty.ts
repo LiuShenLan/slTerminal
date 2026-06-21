@@ -12,6 +12,4 @@ export interface SpawnRequest {
   rows: number;
   cwd?: string;
   shell?: string;
-  /** 绑定的 worktree 路径（可选，用于 git 上下文） */
-  worktree?: string;
 }

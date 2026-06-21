@@ -16,7 +16,6 @@ import { terminalOptions } from "./theme";
 import { pty } from "../../ipc";
 import type { PtyEvent } from "../../types";
 import { setActiveTerminal, installKeyboardHandler } from "./keyboard";
-import { TerminalRegistry } from "./TerminalRegistry";
 import { useLayout } from "../../stores/layout";
 
 export interface UseXtermOptions {
@@ -30,7 +29,7 @@ export interface UseXtermOptions {
   panelId: string;
   /** Windows 真实 build 号（F3 动态检测），用于 ConPTY reflow 阈值 */
   windowsBuildNumber?: number;
-  /** 终端工作目录（Phase 2：来自 worktree binding） */
+  /** 终端工作目录（来自操作页面 cwd） */
   cwd?: string;
 }
 
@@ -202,8 +201,6 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
         .then((sessionId) => {
           sessionIdRef.current = sessionId;
           e2eHelper.__e2e_sessionReady = true;
-          // N2: 注册到全局注册表（跨页面切换存活）
-          TerminalRegistry.register(panelId, sessionId, cwd);
         })
         .catch((err) => {
           term.writeln(`\r\n[PTY spawn 失败: ${err}]`);

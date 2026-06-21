@@ -2,7 +2,7 @@
 //
 // 外层 flexbox：侧栏 (250px) + Dockview。
 // 启动时自动创建终端面板（onReady）。
-// Watermark 提供"新建终端""新建编辑器"按钮，新面板自动携带当前页面 binding。
+// Watermark 提供"新建终端""新建编辑器"按钮，新面板自动携带当前页面 cwd。
 // 右键菜单可新建终端/编辑器，addPanel 传 renderer: 'always' 保持 PTY 存活。
 // 暴露 window.__dockviewApi 供 E2E 测试使用。
 // 操作页面切换：saveLayout → store → api.clear() → fromJSON(目标, reuseExistingPanels: true)
@@ -23,7 +23,6 @@ import { saveLayout, loadLayout } from "./layoutSerde";
 import { SidebarTree } from "../features/sidebar";
 import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
-import type { WorktreeBinding } from "../types/git";
 
 // E2E 测试用全局 API 类型声明
 declare global {
@@ -34,14 +33,14 @@ declare global {
 
 const WATERMARK_TEXT = "打开终端或编辑器开始工作";
 
-/** 获取当前活跃页面的 worktree 绑定 */
-function getActivePageBinding(): WorktreeBinding | undefined {
+/** 获取当前活跃页面的 cwd */
+function getActivePageCwd(): string | undefined {
   const activePageId = useLayout.getState().activePageId;
   if (!activePageId) return undefined;
   const { projects } = useProjects.getState();
   for (const [, proj] of Object.entries(projects)) {
     const page = proj.pages.find((p) => p.pageId === activePageId);
-    if (page?.binding) return page.binding;
+    if (page?.cwd) return page.cwd;
   }
   return undefined;
 }
@@ -66,11 +65,11 @@ const Watermark: React.FC<IWatermarkPanelProps> = ({ containerApi }) => (
       <button
         onClick={() => {
           const id = `terminal-${Date.now()}`;
-          const binding = getActivePageBinding();
+          const cwd = getActivePageCwd();
           containerApi.addPanel({
             id,
             component: "terminal",
-            params: { panelId: id, binding },
+            params: { panelId: id, cwd },
             renderer: "always",
           });
         }}
@@ -89,11 +88,11 @@ const Watermark: React.FC<IWatermarkPanelProps> = ({ containerApi }) => (
       <button
         onClick={() => {
           const id = `editor-${Date.now()}`;
-          const binding = getActivePageBinding();
+          const cwd = getActivePageCwd();
           containerApi.addPanel({
             id,
             component: "editor",
-            params: { panelId: id, binding },
+            params: { panelId: id, cwd },
           });
         }}
         style={{
@@ -118,11 +117,11 @@ const RightHeaderActions: React.FC<IDockviewHeaderActionsProps> = ({
 }) => {
   const handleNewTerminal = () => {
     const id = `terminal-${Date.now()}`;
-    const binding = getActivePageBinding();
+    const cwd = getActivePageCwd();
     containerApi.addPanel({
       id,
       component: "terminal",
-      params: { panelId: id, binding },
+      params: { panelId: id, cwd },
       renderer: "always",
     });
   };

@@ -47,7 +47,6 @@ describe('Workspace', () => {
       projectId: projId,
       name: 'test',
       rootPath: '/tmp/test',
-      worktrees: [],
       pages: [],
       activePageId: null,
       version: 1,

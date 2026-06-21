@@ -1,6 +1,1 @@
 export { SidebarTree } from "./sidebar";
-export {
-  CreateWorktreeDialog,
-  DeleteWorktreeConfirm,
-  sanitizeBranchName,
-} from "./worktree";

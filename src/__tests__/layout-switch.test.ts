@@ -9,7 +9,6 @@ function makeProject(id: string, overrides?: Partial<Project>): Project {
     projectId: id,
     name: "test-project",
     rootPath: "/tmp/test",
-    worktrees: [],
     pages: [],
     activePageId: null,
     version: 1,
@@ -76,17 +75,17 @@ describe("操作页面切换集成", () => {
     expect(state.projects["proj-1"].activePageId).toBe("page-b");
   });
 
-  it("有 binding 的页面应可在 layout store 中跟踪活跃页面", () => {
-    useLayout.getState().setActivePage("page-with-binding");
-    expect(useLayout.getState().activePageId).toBe("page-with-binding");
+  it("有 cwd 的页面应可在 layout store 中跟踪活跃页面", () => {
+    useLayout.getState().setActivePage("page-with-cwd");
+    expect(useLayout.getState().activePageId).toBe("page-with-cwd");
 
     const proj = makeProject("proj-2", {
       pages: [
         {
-          pageId: "page-with-binding",
-          name: "Bound Page",
+          pageId: "page-with-cwd",
+          name: "Cwd Page",
           layout: {},
-          binding: { worktreePath: "/tmp/wt", branchName: "feat" },
+          cwd: "/tmp/test",
           createdAt: Date.now(),
           lastAccessedAt: Date.now(),
         },
@@ -94,9 +93,8 @@ describe("操作页面切换集成", () => {
     });
     useProjects.getState().addProject(proj);
 
-    // 验证 binding 存在
+    // 验证 cwd 存在
     const page = useProjects.getState().projects["proj-2"].pages[0];
-    expect(page.binding?.worktreePath).toBe("/tmp/wt");
-    expect(page.binding?.branchName).toBe("feat");
+    expect(page.cwd).toBe("/tmp/test");
   });
 });

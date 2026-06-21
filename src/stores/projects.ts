@@ -1,11 +1,10 @@
-// projects — 项目/操作页三层数据模型存储
+// projects — 项目/操作页数据模型存储
 //
-// 三层模型：Project → OperationPage → Panel（面板由 Dockview 管理，不在此 store）
+// 二级模型：Project → OperationPage（面板由 Dockview 管理，不在此 store）
 // CAS 锁：deletionLock 用于两阶段删除（标记 → 确认）
-// 持久化：persist 中间件暂用内存存储桶，loadFromDisk/saveToDisk 供启动/退出时调用
+// 持久化：Zustand subscribe + 2s debounce 变更即保存
 
 import { create } from "zustand";
-import type { WorktreeInfo, WorktreeBinding } from "../types/git";
 import * as fs from "../ipc/fs";
 
 // ── 数据模型 ──────────────────────────────────────────────
@@ -14,7 +13,6 @@ export interface Project {
   projectId: string;
   name: string;
   rootPath: string;
-  worktrees: WorktreeInfo[];
   pages: OperationPage[];
   activePageId: string | null;
   version: number;
@@ -24,7 +22,8 @@ export interface OperationPage {
   pageId: string;
   name: string;
   layout: Record<string, unknown>;
-  binding?: WorktreeBinding;
+  /** 终端工作目录（项目根路径） */
+  cwd?: string;
   createdAt: number;
   lastAccessedAt: number;
 }
@@ -52,8 +51,6 @@ interface ProjectsState {
 
   addProject: (project: Project) => void;
   removeProject: (projectId: string) => void;
-  addWorktree: (projectId: string, worktree: WorktreeInfo) => void;
-  removeWorktree: (projectId: string, worktreePath: string) => void;
   addPage: (projectId: string, page: OperationPage) => void;
   removePage: (projectId: string, pageId: string) => void;
   switchToPage: (projectId: string, pageId: string) => void;
@@ -94,45 +91,6 @@ export const useProjects = create<ProjectsState>()((set, get) => ({
             projects: next,
             expandedNodes: nextExpanded,
             deletionLock: { pendingDelete: null, acquiredAt: null },
-          };
-        }),
-
-      // ── Worktree ─────────────────────────────────────────
-
-      addWorktree: (projectId, worktree) =>
-        set((state) => {
-          const project = state.projects[projectId];
-          if (!project) return state;
-          // 去重：已存在同路径 worktree 则不添加
-          if (project.worktrees.some((w) => w.path === worktree.path))
-            return state;
-          return {
-            projects: {
-              ...state.projects,
-              [projectId]: {
-                ...project,
-                worktrees: [...project.worktrees, worktree],
-                version: project.version + 1,
-              },
-            },
-          };
-        }),
-
-      removeWorktree: (projectId, worktreePath) =>
-        set((state) => {
-          const project = state.projects[projectId];
-          if (!project) return state;
-          return {
-            projects: {
-              ...state.projects,
-              [projectId]: {
-                ...project,
-                worktrees: project.worktrees.filter(
-                  (w) => w.path !== worktreePath,
-                ),
-                version: project.version + 1,
-              },
-            },
           };
         }),
 

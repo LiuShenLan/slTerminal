@@ -5,15 +5,14 @@
 
 import { TerminalPanel } from "../panels/terminal";
 import { EditorPanel } from "../panels/editor";
-import type { WorktreeBinding } from "../types/git";
 
 /** Dockview 面板组件注册表 */
 export const panelRegistry = {
   terminal: TerminalPanel as React.FC<{
-    params: { panelId: string; binding?: WorktreeBinding };
+    params: { panelId: string; cwd?: string };
   }>,
   editor: EditorPanel as React.FC<{
-    params: { panelId: string; filePath?: string; binding?: WorktreeBinding };
+    params: { panelId: string; filePath?: string; cwd?: string };
   }>,
 };
 

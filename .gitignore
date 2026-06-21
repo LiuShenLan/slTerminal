@@ -32,6 +32,3 @@ tmp/
 # Rust
 src-tauri/target/
 datalearncodeterax-ai-temp/
-
-# Phase 2 worktree 目录
-.claude/worktrees/
