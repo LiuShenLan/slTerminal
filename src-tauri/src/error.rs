@@ -18,6 +18,9 @@ pub enum AppError {
     #[error("序列化错误: {0}")]
     Serde(String),
 
+    #[error("工作树错误: {0}")]
+    Worktree(String),
+
     #[error("未知错误: {0}")]
     Unknown(String),
 

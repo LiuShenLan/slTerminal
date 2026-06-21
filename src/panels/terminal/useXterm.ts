@@ -16,6 +16,8 @@ import { terminalOptions } from "./theme";
 import { pty } from "../../ipc";
 import type { PtyEvent } from "../../types";
 import { setActiveTerminal, installKeyboardHandler } from "./keyboard";
+import { TerminalRegistry } from "./TerminalRegistry";
+import { useLayout } from "../../stores/layout";
 
 export interface UseXtermOptions {
   /** 容器 DOM 元素 */
@@ -200,6 +202,8 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
         .then((sessionId) => {
           sessionIdRef.current = sessionId;
           e2eHelper.__e2e_sessionReady = true;
+          // N2: 注册到全局注册表（跨页面切换存活）
+          TerminalRegistry.register(panelId, sessionId, cwd);
         })
         .catch((err) => {
           term.writeln(`\r\n[PTY spawn 失败: ${err}]`);
@@ -295,7 +299,12 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
       }
       resizeObserver.disconnect();
       if (sessionIdRef.current) {
-        pty.kill(sessionIdRef.current);
+        // N2: 布局切换时不杀 PTY（进程存活在 TerminalRegistry 中）
+        const isSwitching = useLayout.getState().isLayoutSwitching;
+        if (!isSwitching) {
+          pty.kill(sessionIdRef.current);
+        }
+        // switching 时：PTY 进程存活，由 TerminalRegistry.get(panelId) 查询复用
       }
       setActiveTerminal(null);
       webglAddonRef.current?.dispose();

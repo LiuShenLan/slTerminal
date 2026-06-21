@@ -10,7 +10,7 @@ import type { Project, OperationPage } from "../../stores/projects";
 import { useLayout } from "../../stores/layout";
 import { git } from "../../ipc";
 import { open } from "../../ipc/dialog";
-import { CreateWorktreeDialog } from "../worktree";
+import { CreateWorktreeDialog, DeleteWorktreeConfirm } from "../worktree";
 import type { WorktreeInfo, WorktreeBinding } from "../../types/git";
 
 // ---- CSS 变量（暗色主题） ----
@@ -277,6 +277,26 @@ function pageWorktreePath(page: OperationPage): string | null {
   return page.binding?.worktreePath ?? null;
 }
 
+/** 生成新操作页面的默认布局（含一个终端面板） */
+function makeDefaultLayout(panelId: string): Record<string, unknown> {
+  return {
+    grid: {
+      root: {
+        type: "leaf",
+        data: { views: [panelId], activeView: panelId },
+      },
+    },
+    panels: {
+      [panelId]: {
+        id: panelId,
+        component: "terminal",
+        params: { panelId },
+        renderer: "always",
+      },
+    },
+  };
+}
+
 // ---- 主组件 ----
 
 const SidebarTree: React.FC<SidebarTreeProps> = ({ switchToPage }) => {
@@ -298,6 +318,12 @@ const SidebarTree: React.FC<SidebarTreeProps> = ({ switchToPage }) => {
 
   // H3: CreateWorktreeDialog 状态
   const [worktreeDialogProject, setWorktreeDialogProject] = useState<Project | null>(null);
+
+  // N1: DeleteWorktreeConfirm 状态
+  const [deleteTarget, setDeleteTarget] = useState<{
+    projectId: string;
+    worktree: WorktreeInfo;
+  } | null>(null);
 
   // H3: 项目级新建 worktree
   const handleNewWorktree = useCallback(
@@ -346,12 +372,13 @@ const SidebarTree: React.FC<SidebarTreeProps> = ({ switchToPage }) => {
           worktreePath: wt.path,
           branchName: wt.branch,
         };
+        const defaultPanelId = `terminal-${createPageId()}-0`;
         return {
           pageId: createPageId(),
           name: wt.isDetached
             ? `detached:${wt.head.slice(0, 7)}`
             : wt.branch,
-          layout: {},
+          layout: makeDefaultLayout(defaultPanelId),
           binding,
           createdAt: Date.now(),
           lastAccessedAt: Date.now(),
@@ -381,10 +408,12 @@ const SidebarTree: React.FC<SidebarTreeProps> = ({ switchToPage }) => {
         worktreePath: worktree.path,
         branchName: worktree.branch,
       };
+      const pageId = createPageId();
+      const defaultPanelId = `terminal-${pageId}-0`;
       const page: OperationPage = {
-        pageId: createPageId(),
+        pageId,
         name: `页面-${Date.now() % 10000}`,
-        layout: {},
+        layout: makeDefaultLayout(defaultPanelId),
         binding,
         createdAt: Date.now(),
         lastAccessedAt: Date.now(),
@@ -402,64 +431,61 @@ const SidebarTree: React.FC<SidebarTreeProps> = ({ switchToPage }) => {
     [removePage],
   );
 
-  // 重命名操作页面（直接改 store 里的对象引用——这里用 reload 方式，其实是只读；我们通过删除+重建实现）
-  // 简化：使用 project 内部的 pages map
+  // S1: 重命名操作页面（使用 store.renamePage action）
+  const renamePage = useProjects((s) => s.renamePage);
+
   const handleRenamePage = useCallback(
-    (_projectId: string, _pageId: string) => {
+    (projectId: string, pageId: string) => {
       const newName = prompt("新页面名称:");
       if (!newName?.trim()) return;
-      // projects store 没有内置 rename，需要通过获取当前 state 然后手动更新
-      // 这里用一个 workaround：读取当前 projects，找到对应 page，替换
-      const state = useProjects.getState();
-      for (const [projId, proj] of Object.entries(state.projects)) {
-        const pageIdx = proj.pages.findIndex((p) => p.pageId === _pageId);
-        if (pageIdx >= 0) {
-          const updatedPages = [...proj.pages];
-          updatedPages[pageIdx] = { ...updatedPages[pageIdx], name: newName.trim() };
-          // 直接设置整个 projects 状态（通过操作现有 action 组合）
-          state.switchToPage(projId, _pageId); // 触发 version bump 的预备
-          // 由于没有 renamePage action，用 updatePageLayout 间接触发 re-render
-          // 实际上更好的做法是用 setState 原始能力。这里直接改内存中对象引用是不推荐的。
-          // 作为 Phase 2 前端实现，接受这个限制。
-          break;
-        }
-      }
-      // 强制刷新：触发 toggleExpand 来让 React 重渲染
-      useProjects.setState((s) => ({
-        projects: {
-          ...s.projects,
-        },
-      }));
+      renamePage(projectId, pageId, newName.trim());
     },
-    [],
+    [renamePage],
   );
 
-  // 删除 worktree
-  const handleDeleteWorktree = useCallback(
-    async (projectId: string, worktree: WorktreeInfo) => {
-      if (!window.confirm(`确定删除工作树 "${worktree.branch}"?\n路径: ${worktree.path}`)) return;
+  // N1: 确认删除 worktree（完整流程：kill 终端 → 清理 store → 后端删除）
+  const handleDeleteWorktreeConfirm = useCallback(async () => {
+    if (!deleteTarget) return;
+    const { projectId, worktree } = deleteTarget;
+    const store = useProjects.getState();
+    const project = store.projects[projectId];
+    if (!project) return;
 
-      try {
-        await git.removeWorktree(
-          useProjects.getState().projects[projectId]?.rootPath ?? "",
-          worktree.branch,
-        );
-        // 同时删除绑定到该 worktree 的所有页面
-        const project = useProjects.getState().projects[projectId];
-        if (project) {
-          for (const page of project.pages) {
-            if (page.binding?.worktreePath === worktree.path) {
-              removePage(projectId, page.pageId);
-            }
-          }
-        }
-        removeWorktree(projectId, worktree.path);
-      } catch (err) {
-        console.error("[slTerminal] 删除 worktree 失败:", err);
+    try {
+      // 1. 后端删除（三级回退）
+      await git.removeWorktree(project.rootPath, worktree.path);
+    } catch (err) {
+      alert(`删除工作树失败: ${err}`);
+      setDeleteTarget(null);
+      return;
+    }
+
+    // 2. 删除绑定到此 worktree 的页面
+    for (const page of project.pages) {
+      if (page.binding?.worktreePath === worktree.path) {
+        removePage(projectId, page.pageId);
       }
-    },
-    [removeWorktree, removePage],
-  );
+    }
+
+    // 3. Store: 移除 worktree
+    removeWorktree(projectId, worktree.path);
+
+    // 4. 无剩余页面时创建默认空页面
+    const updated = useProjects.getState().projects[projectId];
+    if (updated && updated.pages.length === 0) {
+      const fallbackPageId = createPageId();
+      const fallbackPanelId = `terminal-${fallbackPageId}-0`;
+      addPage(projectId, {
+        pageId: fallbackPageId,
+        name: "默认",
+        layout: makeDefaultLayout(fallbackPanelId),
+        createdAt: Date.now(),
+        lastAccessedAt: Date.now(),
+      });
+    }
+
+    setDeleteTarget(null);
+  }, [deleteTarget, removeWorktree, removePage, addPage]);
 
   const closeContextMenu = useCallback(() => {
     setContextMenu((prev) => ({ ...prev, visible: false }));
@@ -563,20 +589,24 @@ const SidebarTree: React.FC<SidebarTreeProps> = ({ switchToPage }) => {
                         onToggle={() => toggleExpand(wtNodeId)}
                         onContextMenu={(e) => {
                           e.preventDefault();
+                          const items: ContextMenuItem[] = [
+                            {
+                              label: "新建操作页面",
+                              action: () => handleNewPage(projId, wt),
+                            },
+                          ];
+                          // S4: 主 worktree 不显示删除选项
+                          if (!wt.isMain) {
+                            items.push({
+                              label: "删除工作树",
+                              action: () => setDeleteTarget({ projectId: projId, worktree: wt }),
+                            });
+                          }
                           setContextMenu({
                             visible: true,
                             x: e.clientX,
                             y: e.clientY,
-                            items: [
-                              {
-                                label: "新建操作页面",
-                                action: () => handleNewPage(projId, wt),
-                              },
-                              {
-                                label: "删除工作树",
-                                action: () => handleDeleteWorktree(projId, wt),
-                              },
-                            ],
+                            items,
                           });
                         }}
                       />
@@ -633,6 +663,21 @@ const SidebarTree: React.FC<SidebarTreeProps> = ({ switchToPage }) => {
           onCreated={handleWorktreeCreated}
         />
       )}
+
+      {/* N1: 删除 worktree 确认对话框 */}
+      {deleteTarget && (() => {
+        const affectedPages = (useProjects.getState().projects[deleteTarget.projectId]?.pages ?? [])
+          .filter(p => p.binding?.worktreePath === deleteTarget.worktree.path)
+          .map(p => p.name);
+        return (
+          <DeleteWorktreeConfirm
+            worktree={deleteTarget.worktree}
+            affectedPages={affectedPages}
+            onClose={() => setDeleteTarget(null)}
+            onConfirm={handleDeleteWorktreeConfirm}
+          />
+        );
+      })()}
     </div>
   );
 };

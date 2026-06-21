@@ -27,10 +27,10 @@ export async function addWorktree(
   return invoke<WorktreeInfo>("git_worktree_add", { repoPath, name });
 }
 
-/** 移除 worktree */
+/** 移除 worktree（传入完整路径） */
 export async function removeWorktree(
   repoPath: string,
-  name: string,
+  worktreePath: string,
 ): Promise<void> {
-  await invoke("git_worktree_remove", { repoPath, name });
+  await invoke("git_worktree_remove", { repoPath, worktreePath });
 }

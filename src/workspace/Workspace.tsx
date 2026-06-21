@@ -163,6 +163,30 @@ const RightHeaderActions: React.FC<IDockviewHeaderActionsProps> = ({
 const Workspace: React.FC = () => {
   const isReadyRef = useRef(false);
   const apiRef = useRef<DockviewApi | null>(null);
+  /** 脏布局跟踪：页面切换前冲刷到 store */
+  const dirtyPageIdRef = useRef<string | null>(null);
+  /** fromJSON 恢复守卫：程序化恢复时不触发布局保存 */
+  const restoreGuardRef = useRef(false);
+
+  /** 冲刷脏布局到 store */
+  const flushDirtyLayout = useCallback(() => {
+    const dirtyId = dirtyPageIdRef.current;
+    const api = apiRef.current;
+    if (!dirtyId || !api) return;
+    const layout = saveLayout(api);
+    const { projects } = useProjects.getState();
+    for (const [, proj] of Object.entries(projects)) {
+      if (proj.pages.some((p) => p.pageId === dirtyId)) {
+        useProjects.getState().updatePageLayout(
+          proj.projectId,
+          dirtyId,
+          layout as Record<string, unknown>,
+        );
+        break;
+      }
+    }
+    dirtyPageIdRef.current = null;
+  }, []);
 
   /** 操作页面切换 */
   const switchToPage = useCallback((projectId: string, pageId: string) => {
@@ -171,27 +195,18 @@ const Workspace: React.FC = () => {
 
     const layoutStore = useLayout.getState();
     if (layoutStore.isLayoutSwitching) return;
+    // H6: 自切换守卫 — 点击已激活页面无操作
+    if (layoutStore.activePageId === pageId) return;
+
     layoutStore.setLayoutSwitching(true);
 
     try {
+      // 冲刷当前页脏布局
+      flushDirtyLayout();
+
       const projectsStore = useProjects.getState();
       const project = projectsStore.projects[projectId];
       if (!project) return;
-
-      const currentLayout = saveLayout(api);
-      const currentActiveId = layoutStore.activePageId;
-      if (currentActiveId) {
-        for (const [, proj] of Object.entries(projectsStore.projects)) {
-          if (proj.pages.some((p) => p.pageId === currentActiveId)) {
-            projectsStore.updatePageLayout(
-              proj.projectId,
-              currentActiveId,
-              currentLayout as Record<string, unknown>,
-            );
-            break;
-          }
-        }
-      }
 
       const targetPage = project.pages.find((p) => p.pageId === pageId);
       const targetLayout = targetPage?.layout;
@@ -208,7 +223,7 @@ const Workspace: React.FC = () => {
     } finally {
       layoutStore.setLayoutSwitching(false);
     }
-  }, []);
+  }, [flushDirtyLayout]);
 
   const onReady = useCallback(
     (event: { api: DockviewApi }) => {
@@ -220,21 +235,50 @@ const Workspace: React.FC = () => {
 
       window.__dockviewApi = api;
 
-      // B1 修复：仅在有项目时自动创建终端，空白态不自动打开
+      // H7: 尝试恢复上次活跃页面的布局
+      const { activePageId } = useLayout.getState();
       const { projects } = useProjects.getState();
-      if (Object.keys(projects).length > 0) {
-        const initPanelId = `terminal-init-${Date.now()}`;
-        api.addPanel({
-          id: initPanelId,
-          component: "terminal",
-          params: { panelId: initPanelId },
-          renderer: "always",
-        });
+      let restored = false;
+
+      if (activePageId) {
+        for (const [, proj] of Object.entries(projects)) {
+          const page = proj.pages.find((p) => p.pageId === activePageId);
+          if (page?.layout && Object.keys(page.layout).length > 0) {
+            loadLayout(api, page.layout);
+            restored = true;
+            break;
+          }
+        }
       }
 
+      if (!restored) {
+        // 有项目但无保存布局 → 创建默认终端
+        if (Object.keys(projects).length > 0) {
+          const initPanelId = `terminal-init-${Date.now()}`;
+          api.addPanel({
+            id: initPanelId,
+            component: "terminal",
+            params: { panelId: initPanelId },
+            renderer: "always",
+          });
+        }
+        // 无项目 → Watermark 自然显示
+      }
+
+      // H7: fromJSON 恢复守卫 — 程序化恢复不触发保存
+      api.onDidLayoutFromJSON(() => {
+        restoreGuardRef.current = true;
+        setTimeout(() => {
+          restoreGuardRef.current = false;
+        }, 0);
+      });
+
+      // H7: 布局变更 → 标记脏（延迟写入 store，切换页面前冲刷）
       api.onDidLayoutChange(() => {
-        const layout = saveLayout(api);
-        console.debug("布局已变更", layout);
+        if (restoreGuardRef.current) return;
+        const activeId = useLayout.getState().activePageId;
+        if (!activeId) return;
+        dirtyPageIdRef.current = activeId;
       });
     },
     [],

@@ -97,7 +97,7 @@ describe("git IPC mock 测试", () => {
     await expect(
       invoke("git_worktree_remove", {
         repoPath: "/tmp/repo",
-        name: "feat",
+        worktreePath: "/tmp/repo/.claude/worktrees/feat",
       }),
     ).resolves.toBeNull();
   });

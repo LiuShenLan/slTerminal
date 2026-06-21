@@ -5,6 +5,7 @@
 
 use crate::error::AppError;
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 
 /// 工作树信息 DTO（camelCase → 前端）
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -116,52 +117,104 @@ pub fn git_worktree_add(repo_path: String, name: String) -> Result<WorktreeInfo,
     })
 }
 
-/// 删除 worktree
-#[tauri::command]
-pub fn git_worktree_remove(repo_path: String, name: String) -> Result<(), AppError> {
-    let sanitized = sanitize_branch_name(&name);
-    let worktree_path = format!(".claude/worktrees/{sanitized}");
+/// 验证 worktree 不是主工作树（规范化路径比较）
+fn validate_worktree_is_not_main(repo_path: &str, worktree_path: &str) -> Result<(), AppError> {
+    let repo = git2::Repository::open(repo_path)
+        .map_err(|e| AppError::Git(format!("无法打开仓库: {e}")))?;
+    let main_path = repo
+        .workdir()
+        .ok_or_else(|| AppError::Git("仓库无工作目录".to_string()))?;
+    let worktree_canon = Path::new(worktree_path)
+        .canonicalize()
+        .unwrap_or_else(|_| PathBuf::from(worktree_path));
+    let main_canon = main_path
+        .canonicalize()
+        .unwrap_or_else(|_| main_path.to_path_buf());
+    if worktree_canon == main_canon {
+        return Err(AppError::Worktree("不能删除主工作树".to_string()));
+    }
+    Ok(())
+}
 
-    let output = std::process::Command::new("git")
+/// 删除 worktree（三级回退：git remove → cmd rmdir → remove_dir_all）
+///
+/// 接受完整 worktree 路径（非分支名），路径由前端从 worktree list 获取。
+#[tauri::command]
+pub fn git_worktree_remove(repo_path: String, worktree_path: String) -> Result<(), AppError> {
+    // 预检：禁止删除主工作树
+    validate_worktree_is_not_main(&repo_path, &worktree_path)?;
+
+    // Level 1: git worktree remove --force
+    let git_remove = std::process::Command::new("git")
         .args(["worktree", "remove", "--force", &worktree_path])
         .current_dir(&repo_path)
         .output();
 
-    match output {
-        Ok(o) if o.status.success() => {
+    if let Ok(ref o) = git_remove {
+        if o.status.success() {
             let _ = std::process::Command::new("git")
                 .args(["worktree", "prune"])
                 .current_dir(&repo_path)
                 .output();
             return Ok(());
         }
-        _ => {
-            let full_path = format!("{}/{}", repo_path.replace('\\', "/"), worktree_path);
-            #[cfg(windows)]
-            {
-                let _ = std::process::Command::new("cmd.exe")
-                    .args(["/c", &format!("attrib -R \"{}\\\\*\" /S /D", full_path)])
-                    .output();
-                let output = std::process::Command::new("cmd.exe")
-                    .args(["/c", &format!("rmdir /S /Q \"{}\"", full_path)])
-                    .output()
-                    .map_err(|e| AppError::Git(format!("rmdir 失败: {e}")))?;
-                if !output.status.success() {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    return Err(AppError::Git(format!("删除 worktree 目录失败: {stderr}")));
-                }
-            }
-            #[cfg(not(windows))]
-            {
-                std::fs::remove_dir_all(&full_path)
-                    .map_err(|e| AppError::Git(format!("删除 worktree 目录失败: {e}")))?;
-            }
+    }
+
+    // 若路径已不存在，视为成功
+    if !Path::new(&worktree_path).exists() {
+        let _ = std::process::Command::new("git")
+            .args(["worktree", "prune"])
+            .current_dir(&repo_path)
+            .output();
+        return Ok(());
+    }
+
+    // Level 2: cmd.exe rmdir（不穿透 NTFS junction，安全）
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("cmd.exe")
+            .args([
+                "/c",
+                &format!("attrib -R \"{}\\\\*\" /S /D", worktree_path),
+            ])
+            .output();
+        let rmdir = std::process::Command::new("cmd.exe")
+            .args(["/c", &format!("rmdir /S /Q \"{}\"", worktree_path)])
+            .output()
+            .map_err(|e| AppError::Worktree(format!("rmdir 失败: {e}")))?;
+        if rmdir.status.success() && !Path::new(&worktree_path).exists() {
             let _ = std::process::Command::new("git")
                 .args(["worktree", "prune"])
                 .current_dir(&repo_path)
                 .output();
+            return Ok(());
         }
     }
+
+    // Level 3: remove_dir_all 兜底（处理只读/长路径/交接点）
+    if Path::new(&worktree_path).exists() {
+        // Windows 长路径前缀
+        let rm_path = if cfg!(windows) {
+            format!("\\\\?\\{}", worktree_path)
+        } else {
+            worktree_path.clone()
+        };
+        std::fs::remove_dir_all(&rm_path).map_err(|e| {
+            AppError::Worktree(format!("删除 worktree 目录失败: {e}"))
+        })?;
+    }
+
+    if Path::new(&worktree_path).exists() {
+        return Err(AppError::Worktree(
+            "删除失败: 目录仍存在, 可能被占用".to_string(),
+        ));
+    }
+
+    let _ = std::process::Command::new("git")
+        .args(["worktree", "prune"])
+        .current_dir(&repo_path)
+        .output();
+
     Ok(())
 }
 
@@ -237,8 +290,13 @@ mod tests {
             .any(|w| w.path.contains(".claude/worktrees/test-wt"));
         assert!(found, "list 应包含新添加的 worktree");
 
-        // 4. worktree remove
-        let remove_result = git_worktree_remove(repo_path.clone(), "test-wt".to_string());
+        // 4. worktree remove（传入完整路径，从 list 获取）
+        let added_wt_path = list
+            .iter()
+            .find(|w| w.path.contains(".claude/worktrees/test-wt"))
+            .map(|w| w.path.clone())
+            .unwrap_or_else(|| format!("{}/.claude/worktrees/test-wt", repo_path));
+        let remove_result = git_worktree_remove(repo_path.clone(), added_wt_path);
         assert!(remove_result.is_ok(), "worktree remove 应成功: {:?}", remove_result.err());
 
         // 5. worktree list 不含已删除条目
@@ -262,8 +320,8 @@ mod tests {
         run_git(&repo_path, &["add", "."]);
         run_git(&repo_path, &["commit", "-m", "init"]);
 
-        // 尝试删除一个不存在的 worktree
-        let result = git_worktree_remove(repo_path.clone(), "nonexistent-wt".to_string());
+        // 尝试删除一个不存在的 worktree 路径
+        let result = git_worktree_remove(repo_path.clone(), format!("{}/.claude/worktrees/nonexistent-wt", repo_path));
         // remove 对不存在的 worktree 可能返回错误或成功（取决于 git 版本），
         // 但至少不应 panic。此处仅验证函数不崩溃。
         let _ = result;

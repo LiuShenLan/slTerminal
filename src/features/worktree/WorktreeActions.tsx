@@ -122,10 +122,27 @@ export const CreateWorktreeDialog: React.FC<CreateWorktreeDialogProps> = ({
         worktreePath: worktree.path,
         branchName: worktree.branch,
       };
+      const pageId = createPageId();
+      const defaultPanelId = `terminal-${pageId}-0`;
       const defaultPage: OperationPage = {
-        pageId: createPageId(),
+        pageId,
         name: sanitized,
-        layout: {},
+        layout: {
+          grid: {
+            root: {
+              type: "leaf",
+              data: { views: [defaultPanelId], activeView: defaultPanelId },
+            },
+          },
+          panels: {
+            [defaultPanelId]: {
+              id: defaultPanelId,
+              component: "terminal",
+              params: { panelId: defaultPanelId },
+              renderer: "always",
+            },
+          },
+        },
         binding,
         createdAt: Date.now(),
         lastAccessedAt: Date.now(),
