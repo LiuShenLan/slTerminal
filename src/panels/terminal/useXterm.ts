@@ -28,6 +28,8 @@ export interface UseXtermOptions {
   panelId: string;
   /** Windows 真实 build 号（F3 动态检测），用于 ConPTY reflow 阈值 */
   windowsBuildNumber?: number;
+  /** 终端工作目录（Phase 2：来自 worktree binding） */
+  cwd?: string;
 }
 
 /** 检查终端是否可以安全执行 fit 操作（五条件守卫） */
@@ -46,7 +48,7 @@ export function canFit(
     return true;
 }
 
-export function useXterm({ container, cols, rows, panelId, windowsBuildNumber }: UseXtermOptions) {
+export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, cwd }: UseXtermOptions) {
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const webglAddonRef = useRef<WebglAddon | null>(null);
@@ -194,7 +196,7 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber }:
 
     const doSpawn = (realCols: number, realRows: number) => {
       pty
-        .spawn({ panelId, cols: realCols, rows: realRows }, handlePtyOutput)
+        .spawn({ panelId, cols: realCols, rows: realRows, cwd }, handlePtyOutput)
         .then((sessionId) => {
           sessionIdRef.current = sessionId;
           e2eHelper.__e2e_sessionReady = true;

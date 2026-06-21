@@ -65,6 +65,13 @@ pub fn run() {
             pty::spawn::pty_kill,
             fs::fs_read_file,
             fs::fs_write_file,
+            fs::save_settings,
+            fs::load_settings,
+            git::git_is_repo,
+            git::git_root,
+            git::worktree::git_worktree_list,
+            git::worktree::git_worktree_add,
+            git::worktree::git_worktree_remove,
         ])
         .run(tauri::generate_context!())
         .expect("启动应用失败");

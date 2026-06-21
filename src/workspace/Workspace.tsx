@@ -1,9 +1,11 @@
 // Workspace — 统一分屏页签区
 //
+// 外层 flexbox：侧栏 (250px) + Dockview。
 // 启动时自动创建终端面板（onReady）。
-// Watermark 提供"新建终端""新建编辑器"按钮。
+// Watermark 提供"新建终端""新建编辑器"按钮，新面板自动携带当前页面 binding。
 // 右键菜单可新建终端/编辑器，addPanel 传 renderer: 'always' 保持 PTY 存活。
 // 暴露 window.__dockviewApi 供 E2E 测试使用。
+// 操作页面切换：saveLayout → store → api.clear() → fromJSON(目标, reuseExistingPanels: true)
 
 import React, { useCallback, useRef } from "react";
 import {
@@ -17,7 +19,11 @@ import {
   type IWatermarkPanelProps,
 } from "dockview-react";
 import { panelRegistry } from "./panelRegistry";
-import { saveLayout } from "./layoutSerde";
+import { saveLayout, loadLayout } from "./layoutSerde";
+import { SidebarTree } from "../features/sidebar";
+import { useProjects } from "../stores/projects";
+import { useLayout } from "../stores/layout";
+import type { WorktreeBinding } from "../types/git";
 
 // E2E 测试用全局 API 类型声明
 declare global {
@@ -28,7 +34,19 @@ declare global {
 
 const WATERMARK_TEXT = "打开终端或编辑器开始工作";
 
-/** Watermark 空态组件——含新建面板按钮 */
+/** 获取当前活跃页面的 worktree 绑定 */
+function getActivePageBinding(): WorktreeBinding | undefined {
+  const activePageId = useLayout.getState().activePageId;
+  if (!activePageId) return undefined;
+  const { projects } = useProjects.getState();
+  for (const [, proj] of Object.entries(projects)) {
+    const page = proj.pages.find((p) => p.pageId === activePageId);
+    if (page?.binding) return page.binding;
+  }
+  return undefined;
+}
+
+/** Watermark 空态组件 */
 const Watermark: React.FC<IWatermarkPanelProps> = ({ containerApi }) => (
   <div
     style={{
@@ -48,10 +66,11 @@ const Watermark: React.FC<IWatermarkPanelProps> = ({ containerApi }) => (
       <button
         onClick={() => {
           const id = `terminal-${Date.now()}`;
+          const binding = getActivePageBinding();
           containerApi.addPanel({
             id,
             component: "terminal",
-            params: { panelId: id },
+            params: { panelId: id, binding },
             renderer: "always",
           });
         }}
@@ -70,10 +89,11 @@ const Watermark: React.FC<IWatermarkPanelProps> = ({ containerApi }) => (
       <button
         onClick={() => {
           const id = `editor-${Date.now()}`;
+          const binding = getActivePageBinding();
           containerApi.addPanel({
             id,
             component: "editor",
-            params: { panelId: id },
+            params: { panelId: id, binding },
           });
         }}
         style={{
@@ -92,16 +112,17 @@ const Watermark: React.FC<IWatermarkPanelProps> = ({ containerApi }) => (
   </div>
 );
 
-/** 顶栏右侧 "+" 按钮 —— 点击新建终端 */
+/** 顶栏右侧 "+" 按钮 */
 const RightHeaderActions: React.FC<IDockviewHeaderActionsProps> = ({
   containerApi,
 }) => {
   const handleNewTerminal = () => {
     const id = `terminal-${Date.now()}`;
+    const binding = getActivePageBinding();
     containerApi.addPanel({
       id,
       component: "terminal",
-      params: { panelId: id },
+      params: { panelId: id, binding },
       renderer: "always",
     });
   };
@@ -140,37 +161,83 @@ const RightHeaderActions: React.FC<IDockviewHeaderActionsProps> = ({
 };
 
 const Workspace: React.FC = () => {
-  /// G1a: React StrictMode 下 onReady 会触发两次（mount→unmount→remount），
-  /// useRef 守卫跳过第二次触发，防止 addPanel 双发导致 Dockview 状态异常
   const isReadyRef = useRef(false);
+  const apiRef = useRef<DockviewApi | null>(null);
 
-  const onReady = useCallback((event: { api: DockviewApi }) => {
-    if (isReadyRef.current) return;
-    isReadyRef.current = true;
+  /** 操作页面切换 */
+  const switchToPage = useCallback((projectId: string, pageId: string) => {
+    const api = apiRef.current;
+    if (!api) return;
 
-    const { api } = event;
+    const layoutStore = useLayout.getState();
+    if (layoutStore.isLayoutSwitching) return;
+    layoutStore.setLayoutSwitching(true);
 
-    // 暴露给 E2E 测试
-    window.__dockviewApi = api;
+    try {
+      const projectsStore = useProjects.getState();
+      const project = projectsStore.projects[projectId];
+      if (!project) return;
 
-    // 启动时自动创建终端面板
-    const initPanelId = `terminal-init-${Date.now()}`;
-    api.addPanel({
-      id: initPanelId,
-      component: "terminal",
-      params: { panelId: initPanelId },
-      renderer: "always",
-    });
+      const currentLayout = saveLayout(api);
+      const currentActiveId = layoutStore.activePageId;
+      if (currentActiveId) {
+        for (const [, proj] of Object.entries(projectsStore.projects)) {
+          if (proj.pages.some((p) => p.pageId === currentActiveId)) {
+            projectsStore.updatePageLayout(
+              proj.projectId,
+              currentActiveId,
+              currentLayout as Record<string, unknown>,
+            );
+            break;
+          }
+        }
+      }
 
-    api.onDidLayoutChange(() => {
-      const layout = saveLayout(api);
-      console.debug("布局已变更", layout);
-    });
+      const targetPage = project.pages.find((p) => p.pageId === pageId);
+      const targetLayout = targetPage?.layout;
+
+      api.clear();
+      if (targetLayout && Object.keys(targetLayout).length > 0) {
+        loadLayout(api, targetLayout);
+      }
+
+      projectsStore.switchToPage(projectId, pageId);
+      layoutStore.setActivePage(pageId);
+    } finally {
+      layoutStore.setLayoutSwitching(false);
+    }
   }, []);
 
-  /** 页签右键菜单 */
+  const onReady = useCallback(
+    (event: { api: DockviewApi }) => {
+      if (isReadyRef.current) return;
+      isReadyRef.current = true;
+
+      const { api } = event;
+      apiRef.current = api;
+
+      window.__dockviewApi = api;
+
+      const initPanelId = `terminal-init-${Date.now()}`;
+      api.addPanel({
+        id: initPanelId,
+        component: "terminal",
+        params: { panelId: initPanelId },
+        renderer: "always",
+      });
+
+      api.onDidLayoutChange(() => {
+        const layout = saveLayout(api);
+        console.debug("布局已变更", layout);
+      });
+    },
+    [],
+  );
+
   const getTabContextMenuItems = useCallback(
-    (params: GetTabContextMenuItemsParams): (BuiltInContextMenuItem | ReactContextMenuItemConfig)[] => {
+    (
+      params: GetTabContextMenuItemsParams,
+    ): (BuiltInContextMenuItem | ReactContextMenuItemConfig)[] => {
       const { api } = params;
 
       const newTerminalId = `terminal-${Date.now()}`;
@@ -208,15 +275,20 @@ const Workspace: React.FC = () => {
   );
 
   return (
-    <DockviewReact
-      className="dockview-theme-dark"
-      components={panelRegistry}
-      onReady={onReady}
-      watermarkComponent={Watermark}
-      defaultTabComponent={DefaultTab}
-      rightHeaderActionsComponent={RightHeaderActions}
-      getTabContextMenuItems={getTabContextMenuItems}
-    />
+    <div style={{ display: "flex", width: "100%", height: "100%" }}>
+      <SidebarTree switchToPage={switchToPage} />
+      <div style={{ flex: 1, minWidth: 0, height: "100%" }}>
+        <DockviewReact
+          className="dockview-theme-dark"
+          components={panelRegistry}
+          onReady={onReady}
+          watermarkComponent={Watermark}
+          defaultTabComponent={DefaultTab}
+          rightHeaderActionsComponent={RightHeaderActions}
+          getTabContextMenuItems={getTabContextMenuItems}
+        />
+      </div>
+    </div>
   );
 };
 

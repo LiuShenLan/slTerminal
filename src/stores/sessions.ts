@@ -9,6 +9,8 @@ export interface SessionInfo {
   sessionId: string;
   panelId: string;
   cwd?: string;
+  /** 绑定的 worktree ID（路径），用于关联 git 上下文 */
+  worktreeId?: string;
   isActive: boolean;
 }
 
@@ -44,3 +46,18 @@ export const useSessions = create<SessionsState>((set) => ({
       };
     }),
 }));
+
+// ── 查询辅助函数（模块级，从 useSessions.getState() 取快照） ──
+
+/** 获取属于指定 worktree 的所有会话 */
+export function getSessionsByWorktree(worktreeId: string): SessionInfo[] {
+  const { sessions } = useSessions.getState();
+  return Object.values(sessions).filter(
+    (s) => s.worktreeId === worktreeId,
+  );
+}
+
+/** 获取属于指定 worktree 的所有面板 ID */
+export function getPanelIdsByWorktree(worktreeId: string): string[] {
+  return getSessionsByWorktree(worktreeId).map((s) => s.panelId);
+}

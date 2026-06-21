@@ -41,3 +41,8 @@ html, body, #root {
 .dv-dockview .dv-overlay-render-container {
   height: 100%;
 }
+
+/* Phase 2: flex 容器内 dockview 撑满 */
+.dv-dockview {
+  height: 100%;
+}

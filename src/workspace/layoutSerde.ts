@@ -2,6 +2,7 @@
 //
 // 布局单点：操作页面布局只经此处用 Dockview toJSON/fromJSON 存取（硬约束 #7）。
 // fromJSON 加 try/catch + 白名单校验（防 Dockview #341 损坏 API 状态）。
+// Phase 2: reuseExistingPanels: true 保持 PTY 会话存活（终端保活三层防御）。
 
 import type { DockviewApi } from "dockview-react";
 import { isValidPanelType } from "./panelRegistry";
@@ -29,7 +30,7 @@ export function loadLayout(
       }
     }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    api.fromJSON(layout as any);
+    api.fromJSON(layout as any, { reuseExistingPanels: true });
   } catch (err) {
     console.error("布局恢复失败:", err);
   }

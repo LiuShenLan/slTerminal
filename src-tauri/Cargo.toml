@@ -35,6 +35,9 @@ tauri-plugin-prevent-default = "5"
 anyhow = "1"
 tokio = { version = "1", features = ["rt"] }
 base64 = "0.22"
+tempfile = "3"
+wait-timeout = "0.2"
+dirs = "6"
 
 [target.'cfg(windows)'.dependencies]
 nt_version = "0.1"

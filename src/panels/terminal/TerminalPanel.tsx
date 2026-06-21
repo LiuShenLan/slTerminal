@@ -2,15 +2,19 @@
 //
 // 挂载即创建 xterm.js 实例 → 获取 Windows build 号 → spawn PTY → 订阅输出 → 发送输入。
 // 面板由 Dockview 管理生命周期。
+// 从 Dockview params 读取 binding?.worktreePath 作为 cwd。
 
 import React, { useRef, useState, useEffect } from "react";
 import { useXterm } from "./useXterm";
 import { pty } from "../../ipc";
+import type { WorktreeBinding } from "../../types/git";
 
 interface TerminalPanelProps {
   /** Dockview 传入的面板参数 */
   params: {
     panelId: string;
+    /** worktree 绑定信息（可选），用于设置终端 cwd */
+    binding?: WorktreeBinding;
   };
 }
 
@@ -28,10 +32,13 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ params }) => {
   // F3: IPC 获取真实 Windows build 号（动态设置 ConPTY reflow 阈值）
   useEffect(() => {
     pty.getWindowsBuildNumber().then((bn) => {
-      console.log('[slTerminal] Windows build:', bn);
+      console.log("[slTerminal] Windows build:", bn);
       setBuildNumber(bn);
     });
   }, []);
+
+  // 从 binding 计算 cwd
+  const cwd = params.binding?.worktreePath;
 
   const { focus } = useXterm({
     container,
@@ -39,6 +46,7 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ params }) => {
     rows: 24,
     panelId: params.panelId,
     windowsBuildNumber: buildNumber,
+    cwd,
   });
 
   // 首帧数据到达时隐藏加载遮罩
