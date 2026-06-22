@@ -22,6 +22,12 @@ pub struct PtyState {
     pub spawn_lock: Mutex<()>,
 }
 
+impl Default for PtyState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PtyState {
     pub fn new() -> Self {
         Self {
@@ -36,10 +42,39 @@ pub struct AppState {
     pub pty: PtyState,
 }
 
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AppState {
     pub fn new() -> Self {
         Self {
             pty: PtyState::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pty_state_new_empty() {
+        let pty = PtyState::new();
+        assert!(
+            pty.sessions.read().unwrap().is_empty(),
+            "新建 PtyState 的 sessions 应为空"
+        );
+    }
+
+    #[test]
+    fn test_app_state_new() {
+        let state = AppState::new();
+        assert!(
+            state.pty.sessions.read().unwrap().is_empty(),
+            "AppState::new() 应成功创建并持有空的 PtyState"
+        );
     }
 }

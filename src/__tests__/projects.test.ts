@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { useProjects, createProjectId, createPageId } from "../stores/projects";
+import {
+  useProjects,
+  createProjectId,
+  createPageId,
+  cancelPendingSave,
+} from "../stores/projects";
 import type { Project, OperationPage } from "../stores/projects";
 
 /** 构造测试用 OperationPage */
@@ -39,6 +44,8 @@ describe("projects store", () => {
       expandedNodes: {},
     });
   });
+
+  // ── 已有的 Project CRUD 测试 ──────────────────────────────
 
   it("addProject 应在 store 中添加新项目", () => {
     const project = makeProject();
@@ -94,7 +101,8 @@ describe("projects store", () => {
     expect(projects[project.projectId].activePageId).toBe(page1.pageId);
   });
 
-  // S2 重命名
+  // ── 已有的 renamePage 测试 ────────────────────────────────
+
   it("renamePage 应更新操作页面名称", () => {
     const page = makePage("原名");
     const project = makeProject({ pages: [page] });
@@ -126,5 +134,177 @@ describe("projects store", () => {
 
     const updated = useProjects.getState().projects[project.projectId].pages[0];
     expect(updated.name).toBe("保持");
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // 以下为本次追加的测试用例
+  // ═══════════════════════════════════════════════════════════
+
+  // ── updatePageLayout ─────────────────────────────────────
+
+  it("updatePageLayout 应更新已存在页面的 layout 字段", () => {
+    const page = makePage("test-page");
+    const project = makeProject({ pages: [page] });
+    useProjects.getState().addProject(project);
+
+    const newLayout = { panels: { panel1: { size: 100 } } };
+    useProjects.getState().updatePageLayout(project.projectId, page.pageId, newLayout);
+
+    const updated = useProjects.getState().projects[project.projectId].pages[0];
+    expect(updated.layout).toEqual(newLayout);
+  });
+
+  it("updatePageLayout 不存在的 projectId → 状态不变", () => {
+    const page = makePage("test-page");
+    const project = makeProject({ pages: [page] });
+    useProjects.getState().addProject(project);
+
+    const stateBefore = useProjects.getState().projects;
+    useProjects.getState().updatePageLayout("nonexistent-proj", page.pageId, { x: 1 });
+
+    expect(useProjects.getState().projects).toEqual(stateBefore);
+  });
+
+  it("updatePageLayout 不存在的 pageId → 页面不变但 version 仍递增（守卫仅检查 projectId）", () => {
+    const page = makePage("test-page");
+    const project = makeProject({ pages: [page], version: 5 });
+    useProjects.getState().addProject(project);
+
+    useProjects.getState().updatePageLayout(project.projectId, "nonexistent-page", { x: 1 });
+
+    const updated = useProjects.getState().projects[project.projectId];
+    expect(updated.pages[0].layout).toEqual(page.layout);
+    expect(updated.version).toBe(6);
+  });
+
+  it("updatePageLayout 应递增 version", () => {
+    const page = makePage("test-page");
+    const project = makeProject({ pages: [page], version: 3 });
+    useProjects.getState().addProject(project);
+
+    useProjects.getState().updatePageLayout(project.projectId, page.pageId, { y: 2 });
+
+    expect(useProjects.getState().projects[project.projectId].version).toBe(4);
+  });
+
+  // ── toggleExpand ─────────────────────────────────────────
+
+  it("toggleExpand 应展开已折叠的节点", () => {
+    useProjects.setState({ expandedNodes: { "node-1": false } });
+
+    useProjects.getState().toggleExpand("node-1");
+
+    expect(useProjects.getState().expandedNodes["node-1"]).toBe(true);
+  });
+
+  it("toggleExpand 应折叠已展开的节点", () => {
+    useProjects.setState({ expandedNodes: { "node-1": true } });
+
+    useProjects.getState().toggleExpand("node-1");
+
+    expect(useProjects.getState().expandedNodes["node-1"]).toBe(false);
+  });
+
+  it("toggleExpand 不存在的 nodeId → 新键被设为 true（!undefined === true）", () => {
+    expect(useProjects.getState().expandedNodes["new-node"]).toBeUndefined();
+
+    useProjects.getState().toggleExpand("new-node");
+
+    expect(useProjects.getState().expandedNodes["new-node"]).toBe(true);
+  });
+
+  // ── cancelPendingSave ────────────────────────────────────
+
+  it("cancelPendingSave 应作为可调用函数导出", () => {
+    expect(typeof cancelPendingSave).toBe("function");
+    // 无参数调用不抛错（空定时器场景）
+    expect(() => cancelPendingSave()).not.toThrow();
+  });
+
+  // ── removePage 边界 ──────────────────────────────────────
+
+  it("removePage 移除最后一个页面 → activePageId 变为 null", () => {
+    const page = makePage("only-page");
+    const project = makeProject({ pages: [page], activePageId: page.pageId });
+    useProjects.getState().addProject(project);
+
+    useProjects.getState().removePage(project.projectId, page.pageId);
+
+    const updated = useProjects.getState().projects[project.projectId];
+    expect(updated.pages).toHaveLength(0);
+    expect(updated.activePageId).toBeNull();
+  });
+
+  it("removePage 移除非当前活跃页面 → activePageId 保持不变", () => {
+    const page1 = makePage("page-1");
+    const page2 = makePage("page-2");
+    const page3 = makePage("page-3");
+    const project = makeProject({ pages: [page1, page2, page3], activePageId: page1.pageId });
+    useProjects.getState().addProject(project);
+
+    useProjects.getState().removePage(project.projectId, page2.pageId);
+
+    const updated = useProjects.getState().projects[project.projectId];
+    expect(updated.pages).toHaveLength(2);
+    expect(updated.activePageId).toBe(page1.pageId);
+  });
+
+  // ── switchToPage 增强 ────────────────────────────────────
+
+  it("switchToPage 应更新 lastAccessedAt 为非零值", () => {
+    const page = makePage("test-page");
+    page.lastAccessedAt = 0; // 设已知初始值
+    const project = makeProject({ pages: [page], activePageId: null });
+    useProjects.getState().addProject(project);
+
+    useProjects.getState().switchToPage(project.projectId, page.pageId);
+
+    const updated = useProjects.getState().projects[project.projectId].pages[0];
+    expect(updated.lastAccessedAt).toBeGreaterThan(0);
+  });
+
+  it("switchToPage 应递增 version", () => {
+    const page = makePage("test-page");
+    const project = makeProject({ pages: [page], version: 5 });
+    useProjects.getState().addProject(project);
+
+    useProjects.getState().switchToPage(project.projectId, page.pageId);
+
+    expect(useProjects.getState().projects[project.projectId].version).toBe(6);
+  });
+
+  // ── 不存在 projectId 的守卫 ──────────────────────────────
+
+  it("addPage 不存在的 projectId → 状态不变", () => {
+    const stateBefore = useProjects.getState().projects;
+    useProjects.getState().addPage("nonexistent", makePage("p"));
+
+    expect(useProjects.getState().projects).toEqual(stateBefore);
+  });
+
+  it("removePage 不存在的 projectId → 状态不变", () => {
+    const stateBefore = useProjects.getState().projects;
+    useProjects.getState().removePage("nonexistent", "any-page");
+
+    expect(useProjects.getState().projects).toEqual(stateBefore);
+  });
+
+  it("switchToPage 不存在的 projectId → 状态不变", () => {
+    const stateBefore = useProjects.getState().projects;
+    useProjects.getState().switchToPage("nonexistent", "any-page");
+
+    expect(useProjects.getState().projects).toEqual(stateBefore);
+  });
+
+  // ── ID 格式 ──────────────────────────────────────────────
+
+  it("createProjectId 应以 'proj-' 开头", () => {
+    const id = createProjectId();
+    expect(id.startsWith("proj-")).toBe(true);
+  });
+
+  it("createPageId 应以 'page-' 开头", () => {
+    const id = createPageId();
+    expect(id.startsWith("page-")).toBe(true);
   });
 });

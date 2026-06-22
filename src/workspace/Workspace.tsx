@@ -315,7 +315,7 @@ const Workspace: React.FC = () => {
   React.useEffect(() => {
     const id = useLayout.getState().activePageId;
     if (id) ensurePageInitialized(id);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div style={{ display: "flex", width: "100%", height: "100%" }}>
