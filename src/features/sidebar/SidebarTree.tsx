@@ -295,9 +295,10 @@ interface SidebarTreeProps {
 
 /** 生成新操作页面的默认布局（含一个终端面板）
  *
- * 注意：Dockview fromJSON 要求 grid root 必须是 type: "branch"，
- * 单面板需用 branch 包裹 leaf 节点。leaf 根会导致 "root must be of type branch" 错误。 */
+ * 注意：Dockview fromJSON 要求 grid root 为 "branch"，leaf.data.id 为 string，
+ * 顶层 activeGroup 必须匹配 leaf 的 group id。 */
 function makeDefaultLayout(panelId: string): Record<string, unknown> {
+  const groupId = `group-${panelId}`;
   return {
     grid: {
       root: {
@@ -305,7 +306,7 @@ function makeDefaultLayout(panelId: string): Record<string, unknown> {
         data: [
           {
             type: "leaf",
-            data: { views: [panelId], activeView: panelId },
+            data: { views: [panelId], activeView: panelId, id: groupId },
             size: 100,
           },
         ],
@@ -320,6 +321,7 @@ function makeDefaultLayout(panelId: string): Record<string, unknown> {
         renderer: "always",
       },
     },
+    activeGroup: groupId,
   };
 }
 

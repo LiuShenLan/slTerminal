@@ -7,6 +7,7 @@ import { describe, it, expect } from "vitest";
 
 /** 从 SidebarTree.tsx 提取的 makeDefaultLayout（保持同步） */
 function makeDefaultLayout(panelId: string): Record<string, unknown> {
+  const groupId = `group-${panelId}`;
   return {
     grid: {
       root: {
@@ -14,7 +15,7 @@ function makeDefaultLayout(panelId: string): Record<string, unknown> {
         data: [
           {
             type: "leaf",
-            data: { views: [panelId], activeView: panelId },
+            data: { views: [panelId], activeView: panelId, id: groupId },
             size: 100,
           },
         ],
@@ -29,6 +30,7 @@ function makeDefaultLayout(panelId: string): Record<string, unknown> {
         renderer: "always",
       },
     },
+    activeGroup: groupId,
   };
 }
 
@@ -50,6 +52,9 @@ describe("makeDefaultLayout 格式验证", () => {
     const leafData = leaf.data as Record<string, unknown>;
     expect(leafData.views).toEqual(["test-panel-2"]);
     expect(leafData.activeView).toBe("test-panel-2");
+    // group id 必须为 string（Dockview fromJSON 强制要求）
+    expect(typeof leafData.id).toBe("string");
+    expect(leafData.id).toBe("group-test-panel-2");
   });
 
   it("panels 定义必须用 contentComponent（非 component）", () => {
@@ -61,6 +66,13 @@ describe("makeDefaultLayout 格式验证", () => {
     expect(panel.contentComponent).toBe("terminal");
     expect(panel.component).toBeUndefined();
     expect(panel.renderer).toBe("always");
+  });
+
+  it("顶层 activeGroup 必须与 leaf node 的 data.id 一致", () => {
+    const layout = makeDefaultLayout("test-panel-active");
+    expect(layout.activeGroup).toBe("group-test-panel-active");
+    // activeGroup 必须为 string
+    expect(typeof layout.activeGroup).toBe("string");
   });
 
   it("panels 应包含 params 字段（面板参数透传）", () => {
