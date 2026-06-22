@@ -168,17 +168,12 @@ const PageDockview: React.FC<PageDockviewProps> = ({
     onApiReady(api);
 
     // 恢复保存的布局或创建默认终端
+    let restored = false;
     if (savedLayout && Object.keys(savedLayout).length > 0) {
-      try {
-        loadLayout(api, savedLayout);
-        // fromJSON 可能抛异常（旧格式不兼容），catch 中回退
-      } catch {
-        const id = nextPanelId();
-        api.addPanel({ id, component: "terminal",
-          params: { panelId: id, cwd }, renderer: "always" });
-      }
-    } else {
-      // 无保存布局 → 创建默认终端
+      restored = loadLayout(api, savedLayout);
+    }
+    if (!restored) {
+      // 无保存布局 或 恢复失败 → 创建默认终端
       const id = nextPanelId();
       api.addPanel({ id, component: "terminal",
         params: { panelId: id, cwd }, renderer: "always" });
