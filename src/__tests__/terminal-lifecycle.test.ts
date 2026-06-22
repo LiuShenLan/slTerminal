@@ -1,17 +1,12 @@
-// terminal-lifecycle.test.ts — useXterm H6 集成测试
+// terminal-lifecycle.test.ts — useXterm 终端生命周期集成测试
 //
-// 用最小 TestHarness 组件包裹 useXterm，通过 render + unmount + store 控制
-// isLayoutSwitching 标志，验证页面切换时 Terminal 的缓存/复用/销毁三条路径。
-//
-// H6 路径 1：页面切换 → isLayoutSwitching=true → 卸载时缓存到 Registry
-// H6 路径 2：用户关闭  → isLayoutSwitching=false → 卸载时 dispose + kill
-// H6 路径 3（删除页面）：同路径 2
+// 多 Dockview 实例架构：页面切换时不销毁终端（CSS 显隐），仅用户关闭面板时 dispose。
+// 此测试验证 mount → spawn + cleanup → dispose 的基本生命周期路径。
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import React from "react";
 import { render } from "@testing-library/react";
 import { useLayout } from "../stores/layout";
-import { TerminalRegistry } from "../panels/terminal/TerminalRegistry";
 import type { Terminal } from "@xterm/xterm";
 import type { FitAddon } from "@xterm/addon-fit";
 import type { WebglAddon } from "@xterm/addon-webgl";
@@ -132,11 +127,10 @@ function TestHarness({ container, panelId, cwd }: TestHarnessProps) {
 
 // ─── 测试套件 ───
 
-describe("H6 页面切换——Terminal 保留（路径 1）", () => {
+describe("终端基本生命周期", () => {
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    useLayout.setState({ activePageId: null, isLayoutSwitching: false });
-    TerminalRegistry._clear();
+    useLayout.setState({ activePageId: null });
     mocks.resetAll();
   });
 
@@ -144,95 +138,28 @@ describe("H6 页面切换——Terminal 保留（路径 1）", () => {
     vi.useRealTimers();
   });
 
-  it("1. isLayoutSwitching=true 时卸载 → Terminal 缓存到 Registry，不 dispose 不 kill", async () => {
-    useLayout.getState().setLayoutSwitching(true);
+  it("1. 挂载 → 创建 Terminal + spawn PTY", async () => {
     const container = containerStub();
-
     const { unmount } = render(
-      React.createElement(TestHarness, { container, panelId: "h6-p1" }),
+      React.createElement(TestHarness, { container, panelId: "test-p1" }),
     );
 
-    // 推进 rAF 轮询 + PTY spawn 微任务
     await vi.runAllTimersAsync();
 
+    expect(mocks.terminalCreateCount).toBe(1);
     expect(mocks.pty.spawn).toHaveBeenCalledTimes(1);
-
-    // 卸载 → 触发 useEffect cleanup
-    unmount();
-
-    expect(TerminalRegistry.has("h6-p1")).toBe(true);
-    expect(mocks.terminal.dispose).not.toHaveBeenCalled();
-    expect(mocks.pty.kill).not.toHaveBeenCalled();
-  });
-
-  it("2. 有缓存时重新挂载 → 复用缓存的 Terminal，不创建新实例", async () => {
-    // 预填充 Registry（模拟上次切换时缓存）
-    TerminalRegistry.register("h6-p2", {
-      term: mocks.terminal,
-      sessionId: "sid-cached",
-      webglAddon: null,
-      fitAddon: mocks.fitAddon,
-    });
-
-    const createCountBefore = mocks.terminalCreateCount;
-
-    const { unmount } = render(
-      React.createElement(TestHarness, { container: containerStub(), panelId: "h6-p2" }),
+    expect(mocks.pty.spawn).toHaveBeenCalledWith(
+      expect.objectContaining({ panelId: "test-p1" }),
+      expect.any(Function),
     );
 
-    await vi.runAllTimersAsync();
-
-    // 不应创建新 Terminal
-    expect(mocks.terminalCreateCount).toBe(createCountBefore);
-    // 缓存的 term.open 应被调用来重新挂载 DOM
-    expect(mocks.terminal.open).toHaveBeenCalled();
-
     unmount();
   });
 
-  it("3. 有缓存时重新挂载 → 不重复注册 onData 监听器", async () => {
-    TerminalRegistry.register("h6-p3", {
-      term: mocks.terminal,
-      sessionId: "sid-cached",
-      webglAddon: null,
-      fitAddon: mocks.fitAddon,
-    });
-
-    // onData 在 Terminal 接口中类型为 IEvent<string, void>，需 cast 访问 spy
-    const onDataSpy = mocks.terminal.onData as unknown as ReturnType<typeof vi.fn>;
-    const onDataCallsBefore = onDataSpy.mock.calls.length;
-
+  it("2. 卸载 → dispose Terminal + kill PTY", async () => {
+    const container = containerStub();
     const { unmount } = render(
-      React.createElement(TestHarness, { container: containerStub(), panelId: "h6-p3" }),
-    );
-
-    await vi.runAllTimersAsync();
-
-    // onData 不应被重复调用（缓存路径跳过 onData 注册）
-    expect(onDataSpy).toHaveBeenCalledTimes(onDataCallsBefore);
-
-    unmount();
-  });
-});
-
-describe("H6 用户关闭——Terminal 销毁（路径 2）", () => {
-  beforeEach(() => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    useLayout.setState({ activePageId: null, isLayoutSwitching: false });
-    TerminalRegistry._clear();
-    mocks.resetAll();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("4. isLayoutSwitching=false 时卸载 → pty.kill + Registry.remove + term.dispose", async () => {
-    // 确保 isLayoutSwitching 为 false（默认）
-    expect(useLayout.getState().isLayoutSwitching).toBe(false);
-
-    const { unmount } = render(
-      React.createElement(TestHarness, { container: containerStub(), panelId: "close-p1" }),
+      React.createElement(TestHarness, { container, panelId: "test-p2" }),
     );
 
     await vi.runAllTimersAsync();
@@ -242,38 +169,42 @@ describe("H6 用户关闭——Terminal 销毁（路径 2）", () => {
     unmount();
 
     expect(mocks.pty.kill).toHaveBeenCalledWith("mock-session-001");
-    expect(TerminalRegistry.has("close-p1")).toBe(false);
     expect(mocks.terminal.dispose).toHaveBeenCalled();
   });
 
-  it("5. 无缓存时正常挂载 → 创建新 Terminal + spawn PTY", async () => {
-    expect(TerminalRegistry.has("fresh-p1")).toBe(false);
+  it("3. 卸载后不残留状态（多次挂载卸载各自独立）", async () => {
+    const container = containerStub();
 
-    const { unmount } = render(
-      React.createElement(TestHarness, { container: containerStub(), panelId: "fresh-p1" }),
+    // 第一次挂载卸载
+    const { unmount: unmount1 } = render(
+      React.createElement(TestHarness, { container, panelId: "test-p3" }),
     );
+    await vi.runAllTimersAsync();
+    unmount1();
 
+    // 第二次挂载（同一 panelId）→ 全新 Terminal + spawn
+    mocks.resetAll();
+    const { unmount: unmount2 } = render(
+      React.createElement(TestHarness, { container, panelId: "test-p3" }),
+    );
     await vi.runAllTimersAsync();
 
     expect(mocks.terminalCreateCount).toBe(1);
     expect(mocks.pty.spawn).toHaveBeenCalledTimes(1);
-    expect(mocks.pty.spawn).toHaveBeenCalledWith(
-      expect.objectContaining({ panelId: "fresh-p1" }),
-      expect.any(Function),
-    );
 
-    unmount();
+    unmount2();
+    expect(mocks.terminal.dispose).toHaveBeenCalled();
   });
 
-  it("6. 卸载后 Registry 中无残留", async () => {
+  it("4. 无容器时 effect 应提前返回", () => {
     const { unmount } = render(
-      React.createElement(TestHarness, { container: containerStub(), panelId: "no-residue" }),
+      React.createElement(TestHarness, { container: null, panelId: "test-p4" }),
     );
 
-    await vi.runAllTimersAsync();
+    // 无 container → useEffect 提前 return → 不创建任何东西
+    expect(mocks.terminalCreateCount).toBe(0);
+    expect(mocks.pty.spawn).not.toHaveBeenCalled();
 
     unmount();
-
-    expect(TerminalRegistry.has("no-residue")).toBe(false);
   });
 });

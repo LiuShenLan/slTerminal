@@ -54,7 +54,7 @@ function populateStore() {
     expandedNodes: { "proj-1": true },
     deletionLock: { pendingDelete: null, acquiredAt: null },
   });
-  useLayout.setState({ activePageId: "page-1", isLayoutSwitching: false });
+  useLayout.setState({ activePageId: "page-1" });
 }
 
 function renderSidebar() {
@@ -76,7 +76,7 @@ describe("侧栏交互", () => {
       expandedNodes: {},
       deletionLock: { pendingDelete: null, acquiredAt: null },
     });
-    useLayout.setState({ activePageId: null, isLayoutSwitching: false });
+    useLayout.setState({ activePageId: null });
   });
 
   describe("H1 树结构与交互", () => {

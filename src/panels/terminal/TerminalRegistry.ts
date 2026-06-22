@@ -36,6 +36,16 @@ export const TerminalRegistry = {
   },
 
   /** 仅用于调试/测试 */
+  _size(): number {
+    return registry.size;
+  },
+
+  /** 仅用于调试/测试 */
+  _dump(): string[] {
+    return Array.from(registry.keys());
+  },
+
+  /** 仅用于调试/测试 */
   _clear(): void {
     registry.clear();
   },

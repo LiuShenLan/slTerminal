@@ -293,19 +293,29 @@ interface SidebarTreeProps {
 
 // ---- 辅助 ----
 
-/** 生成新操作页面的默认布局（含一个终端面板） */
+/** 生成新操作页面的默认布局（含一个终端面板）
+ *
+ * 注意：Dockview fromJSON 要求 grid root 必须是 type: "branch"，
+ * 单面板需用 branch 包裹 leaf 节点。leaf 根会导致 "root must be of type branch" 错误。 */
 function makeDefaultLayout(panelId: string): Record<string, unknown> {
   return {
     grid: {
       root: {
-        type: "leaf",
-        data: { views: [panelId], activeView: panelId },
+        type: "branch",
+        data: [
+          {
+            type: "leaf",
+            data: { views: [panelId], activeView: panelId },
+            size: 100,
+          },
+        ],
+        size: 100,
       },
     },
     panels: {
       [panelId]: {
         id: panelId,
-        component: "terminal",
+        contentComponent: "terminal",
         params: { panelId },
         renderer: "always",
       },

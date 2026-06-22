@@ -18,7 +18,7 @@ function makeProject(id: string, overrides?: Partial<Project>): Project {
 
 describe("layout store", () => {
   beforeEach(() => {
-    useLayout.setState({ activePageId: null, isLayoutSwitching: false });
+    useLayout.setState({ activePageId: null });
   });
 
   it("初始状态 activePageId 应为 null", () => {
@@ -30,12 +30,10 @@ describe("layout store", () => {
     expect(useLayout.getState().activePageId).toBe("page-123");
   });
 
-  it("setLayoutSwitching 应切换布局锁状态", () => {
-    expect(useLayout.getState().isLayoutSwitching).toBe(false);
-    useLayout.getState().setLayoutSwitching(true);
-    expect(useLayout.getState().isLayoutSwitching).toBe(true);
-    useLayout.getState().setLayoutSwitching(false);
-    expect(useLayout.getState().isLayoutSwitching).toBe(false);
+  it("setActivePage(null) 应清空活跃页面", () => {
+    useLayout.getState().setActivePage("page-456");
+    useLayout.getState().setActivePage(null);
+    expect(useLayout.getState().activePageId).toBeNull();
   });
 });
 
@@ -46,7 +44,7 @@ describe("操作页面切换集成", () => {
       deletionLock: { pendingDelete: null, acquiredAt: null },
       expandedNodes: {},
     });
-    useLayout.setState({ activePageId: null, isLayoutSwitching: false });
+    useLayout.setState({ activePageId: null });
   });
 
   it("switchToPage 应在 projects store 中更新活跃页面", () => {
@@ -121,25 +119,18 @@ describe("操作页面切换集成", () => {
     expect(useProjects.getState().projects["proj-3"].activePageId).toBe("page-x");
   });
 
-  it("isLayoutSwitching=true 时 switchToPage 应被拦截", () => {
-    useLayout.getState().setLayoutSwitching(true);
-
-    const proj = makeProject("proj-4", {
+  it("切换到另一页面后 activePageId 应正确更新", () => {
+    const proj = makeProject("proj-5", {
       pages: [
-        {
-          pageId: "page-y",
-          name: "Page Y",
-          layout: {},
-          createdAt: Date.now(),
-          lastAccessedAt: Date.now(),
-        },
+        { pageId: "page-1", name: "P1", layout: {}, createdAt: Date.now(), lastAccessedAt: Date.now() },
+        { pageId: "page-2", name: "P2", layout: {}, createdAt: Date.now(), lastAccessedAt: Date.now() },
       ],
     });
     useProjects.getState().addProject(proj);
-    // 尝试切换（Workspace 层 switchToPage 会检查此标志）
-    // store 层不拦截——拦截在 Workspace 层，此处仅验证标志可写可读
-    expect(useLayout.getState().isLayoutSwitching).toBe(true);
-    useLayout.getState().setLayoutSwitching(false);
-    expect(useLayout.getState().isLayoutSwitching).toBe(false);
+    useProjects.getState().switchToPage("proj-5", "page-1");
+    expect(useProjects.getState().projects["proj-5"].activePageId).toBe("page-1");
+
+    useProjects.getState().switchToPage("proj-5", "page-2");
+    expect(useProjects.getState().projects["proj-5"].activePageId).toBe("page-2");
   });
 });

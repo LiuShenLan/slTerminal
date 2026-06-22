@@ -1,157 +1,62 @@
 {
   "projects": {
-    "proj-1782023818931-1": {
-      "projectId": "proj-1782023818931-1",
-      "name": "D:/data/learn/code/slTerminal/",
-      "rootPath": "D:/data/learn/code/slTerminal/",
-      "worktrees": [
-        {
-          "path": "D:/data/learn/code/slTerminal",
-          "branch": "refs/heads/main",
-          "head": "61df11c62b7edf9b514b2f23da9913ecb65e4a34",
-          "isBare": false,
-          "isDetached": false,
-          "isMain": false
-        }
-      ],
+    "proj-1782029734071-1": {
+      "projectId": "proj-1782029734071-1",
+      "name": "slTerminal",
+      "rootPath": "D:\\data\\learn\\code\\slTerminal",
       "pages": [
         {
-          "pageId": "page-1782023818931-3",
-          "name": "refs/heads/main",
-          "layout": {
-            "grid": {
-              "root": {
-                "type": "leaf",
-                "data": {
-                  "views": [
-                    "terminal-page-1782023818931-2-0"
-                  ],
-                  "activeView": "terminal-page-1782023818931-2-0"
-                }
-              }
-            },
-            "panels": {
-              "terminal-page-1782023818931-2-0": {
-                "id": "terminal-page-1782023818931-2-0",
-                "component": "terminal",
-                "params": {
-                  "panelId": "terminal-page-1782023818931-2-0"
-                },
-                "renderer": "always"
-              }
-            }
-          },
-          "binding": {
-            "worktreePath": "D:/data/learn/code/slTerminal",
-            "branchName": "refs/heads/main"
-          },
-          "createdAt": 1782023818931,
-          "lastAccessedAt": 1782023839984
-        }
-      ],
-      "activePageId": "page-1782023818931-3",
-      "version": 2
-    },
-    "proj-1782023891890-4": {
-      "projectId": "proj-1782023891890-4",
-      "name": "D:/data/learn/note/",
-      "rootPath": "D:/data/learn/note/",
-      "worktrees": [
-        {
-          "path": "D:/data/learn/note",
-          "branch": "refs/heads/main",
-          "head": "c0c984d1d15413b0ea0383a2c74bb71bb900a8b1",
-          "isBare": false,
-          "isDetached": false,
-          "isMain": false
-        },
-        {
-          "path": "D:/data/learn/note/.claude/worktrees/test",
-          "branch": "refs/heads/worktree-test",
-          "head": "c0c984d1d15413b0ea0383a2c74bb71bb900a8b1",
-          "isBare": false,
-          "isDetached": false,
-          "isMain": false
-        }
-      ],
-      "pages": [
-        {
-          "pageId": "page-1782023891890-6",
-          "name": "refs/heads/main",
+          "pageId": "page-1782029734071-2",
+          "name": "slTerminal",
           "layout": {
             "grid": {
               "root": {
                 "type": "branch",
                 "data": [],
-                "size": 495
+                "size": 883
               },
-              "width": 490,
-              "height": 495,
+              "width": 602,
+              "height": 883,
               "orientation": "HORIZONTAL"
             },
             "panels": {}
           },
-          "binding": {
-            "worktreePath": "D:/data/learn/note",
-            "branchName": "refs/heads/main"
-          },
-          "createdAt": 1782023891890,
-          "lastAccessedAt": 1782024239859
-        },
+          "cwd": "D:\\data\\learn\\code\\slTerminal",
+          "createdAt": 1782029734071,
+          "lastAccessedAt": 1782087820550
+        }
+      ],
+      "activePageId": "page-1782029734071-2",
+      "version": 21
+    },
+    "proj-1782087786731-6": {
+      "projectId": "proj-1782087786731-6",
+      "name": "java",
+      "rootPath": "D:\\data\\learn\\code\\java",
+      "pages": [
         {
-          "pageId": "page-1782024072885-1",
-          "name": "页面-2885",
+          "pageId": "page-1782087786731-7",
+          "name": "java",
           "layout": {
             "grid": {
               "root": {
                 "type": "branch",
-                "data": [
-                  {
-                    "type": "leaf",
-                    "data": {
-                      "views": [
-                        "terminal-1782024232052"
-                      ],
-                      "activeView": "terminal-1782024232052",
-                      "id": "3"
-                    },
-                    "size": 530
-                  }
-                ],
-                "size": 562
+                "data": [],
+                "size": 883
               },
-              "width": 530,
-              "height": 562,
+              "width": 602,
+              "height": 883,
               "orientation": "HORIZONTAL"
             },
-            "panels": {
-              "terminal-1782024232052": {
-                "id": "terminal-1782024232052",
-                "contentComponent": "terminal",
-                "tabComponent": "props.defaultTabComponent",
-                "params": {
-                  "panelId": "terminal-1782024232052",
-                  "binding": {
-                    "worktreePath": "D:/data/learn/note/.claude/worktrees/test",
-                    "branchName": "refs/heads/worktree-test"
-                  }
-                },
-                "title": "terminal-1782024232052",
-                "renderer": "always"
-              }
-            },
-            "activeGroup": "3"
+            "panels": {}
           },
-          "binding": {
-            "worktreePath": "D:/data/learn/note/.claude/worktrees/test",
-            "branchName": "refs/heads/worktree-test"
-          },
-          "createdAt": 1782024072885,
-          "lastAccessedAt": 1782024240399
+          "cwd": "D:\\data\\learn\\code\\java",
+          "createdAt": 1782087786731,
+          "lastAccessedAt": 1782087821218
         }
       ],
-      "activePageId": "page-1782024072885-1",
-      "version": 23
+      "activePageId": "page-1782087786731-7",
+      "version": 17
     }
   },
   "deletionLock": {
@@ -159,12 +64,13 @@
     "acquiredAt": null
   },
   "expandedNodes": {
-    "proj-1782023818931-1": true,
     "proj-1782023818931-1:wt:D:/data/learn/code/slTerminal": true,
-    "proj-1782023891890-4": true,
     "proj-1782023891890-4:wt:D:/data/learn/note/.claude/worktrees/test2": false,
     "proj-1782023891890-4:wt:D:/data/learn/note/.claude/worktrees/test": true,
     "proj-1782023891890-4:wt:D:/data/learn/note": true,
-    "page-1782024072885-1": true
+    "page-1782024072885-1": true,
+    "proj-1782029734071-1": true,
+    "page-1782087762116-5": true,
+    "proj-1782087786731-6": true
   }
 }
