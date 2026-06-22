@@ -22,8 +22,8 @@ describe('slTerminal Phase 1 E2E', () => {
       { timeout: 10000, timeoutMsg: 'Dockview API 未就绪' },
     );
 
-    // 2. 创建终端面板（renderer: 'always' 保持 PTY 存活）
-    const panelId = 'e2e-test-terminal';
+    // 2. 创建终端面板（唯一 ID 避免与 onReady 恢复布局的旧面板碰撞）
+    const panelId = 'e2e-terminal-' + Date.now();
     await browser.execute((pid) => {
       window.__dockviewApi!.addPanel({
         id: pid,
