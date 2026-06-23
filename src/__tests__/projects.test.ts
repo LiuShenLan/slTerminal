@@ -307,4 +307,56 @@ describe("projects store", () => {
     const id = createPageId();
     expect(id.startsWith("page-")).toBe(true);
   });
+
+  // ── addPage activePageId 保留 ─────────────────────────────
+
+  it("addPage 已有 activePageId 时不改变活跃页面", () => {
+    const page1 = makePage("page-1");
+    const project = makeProject({ pages: [page1], activePageId: page1.pageId });
+    useProjects.getState().addProject(project);
+
+    const page2 = makePage("page-2");
+    useProjects.getState().addPage(project.projectId, page2);
+
+    const updated = useProjects.getState().projects[project.projectId];
+    // activePageId 应保持为 page1，不因新增页面改变
+    expect(updated.activePageId).toBe(page1.pageId);
+  });
+
+  // ── markPersistenceReady + subscribe ──────────────────────
+
+  it("markPersistenceReady 应允许后续 save 操作", async () => {
+    const { markPersistenceReady } = await import("../stores/projects");
+    // 首次调用不抛错
+    expect(() => markPersistenceReady()).not.toThrow();
+  });
+
+  // ── removeProject 清理 expandedNodes ──────────────────────
+
+  it("removeProject 应同时清理 expandedNodes", () => {
+    const project = makeProject();
+    useProjects.getState().addProject(project);
+    useProjects.setState({ expandedNodes: { [project.projectId]: true } });
+
+    useProjects.getState().removeProject(project.projectId);
+
+    expect(useProjects.getState().expandedNodes[project.projectId]).toBeUndefined();
+  });
+
+  // ── removePage 不存在 pageId ────────────────────────────
+
+  it("removePage 不存在的 pageId → version 递增但页面列表不变", () => {
+    const page = makePage("keep");
+    const project = makeProject({ pages: [page], activePageId: page.pageId, version: 3 });
+    useProjects.getState().addProject(project);
+
+    useProjects.getState().removePage(project.projectId, "nonexistent-page");
+
+    const updated = useProjects.getState().projects[project.projectId];
+    // 页面列表不变
+    expect(updated.pages).toHaveLength(1);
+    expect(updated.pages[0].pageId).toBe(page.pageId);
+    // version 仍递增（removePage 无条件递增）
+    expect(updated.version).toBe(4);
+  });
 });

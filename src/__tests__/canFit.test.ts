@@ -62,3 +62,35 @@ describe('canFit 五条件守卫', () => {
     expect(canFit(terminalStub(), fitAddonStub(), containerStub(1920, 1080), { current: false })).toBe(true);
   });
 });
+
+// ═══════════════════════════════════════════════════════════
+// 以下为本次追加的测试用例
+// ═══════════════════════════════════════════════════════════
+
+describe('canFit — 参数 null/undefined 守卫', () => {
+  it('isDisposedRef 为 null → false（不抛 NPE）', () => {
+    expect(canFit(terminalStub(), fitAddonStub(), containerStub(100, 100), null)).toBe(false);
+  });
+
+  it('isDisposedRef 为 undefined → false（不抛 NPE）', () => {
+    expect(canFit(terminalStub(), fitAddonStub(), containerStub(100, 100), undefined)).toBe(false);
+  });
+
+  it('terminal 为 undefined → false', () => {
+    expect(canFit(undefined, fitAddonStub(), containerStub(100, 100), { current: false })).toBe(false);
+  });
+
+  it('fitAddon 为 undefined → false', () => {
+    expect(canFit(terminalStub(), undefined, containerStub(100, 100), { current: false })).toBe(false);
+  });
+
+  it('container 为 undefined → false', () => {
+    expect(canFit(terminalStub(), fitAddonStub(), undefined, { current: false })).toBe(false);
+  });
+});
+
+describe('canFit — 零尺寸容器', () => {
+  it('container.offsetWidth 和 offsetHeight 同时为 0 → false', () => {
+    expect(canFit(terminalStub(), fitAddonStub(), containerStub(0, 0), { current: false })).toBe(false);
+  });
+});

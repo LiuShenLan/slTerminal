@@ -37,8 +37,9 @@ export function canFit(
     terminal: Terminal | null | undefined,
     fitAddon: FitAddon | null | undefined,
     containerEl: HTMLElement | null | undefined,
-    isDisposedRef: { current: boolean }
+    isDisposedRef: { current: boolean } | null | undefined
 ): boolean {
+    if (!isDisposedRef) return false;              // 条件0: ref 存在
     if (!terminal || !fitAddon) return false;    // 条件1: 实例存在
     if (!containerEl) return false;               // 条件2: 容器存在
     if (containerEl.offsetWidth === 0 ||           // 条件3: 非 display:none

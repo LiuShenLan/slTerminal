@@ -132,4 +132,38 @@ describe("侧栏交互", () => {
       expect(mocks.mockOnDeletePage).toHaveBeenCalledWith("proj-1", "page-1");
     });
   });
+
+  describe("S3 内联重命名", () => {
+    it("7. 右键菜单包含'重命名操作页面'选项", () => {
+      populateStore();
+      const { getAllByText } = renderSidebar();
+      fireEvent.contextMenu(getAllByText("操作页面 1")[0]);
+
+      // 验证菜单项存在
+      const items = getAllByText("重命名操作页面");
+      expect(items.length).toBeGreaterThan(0);
+    });
+
+    it("8. 空白态按'+'不触发系统错误", () => {
+      const { getAllByTitle } = renderSidebar();
+      // 空 store 下点击添加项目按钮不抛错
+      const buttons = getAllByTitle("添加项目");
+      expect(() => fireEvent.click(buttons[0])).not.toThrow();
+    });
+  });
+
+  describe("项目删除确认", () => {
+    it("10. 右键'删除项目'+ confirm 拒绝 → 不删除", () => {
+      const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+      populateStore();
+
+      const { getAllByText } = renderSidebar();
+      fireEvent.contextMenu(getAllByText("测试项目")[0]);
+      fireEvent.click(getAllByText("删除项目")[0]);
+
+      // store 中项目仍存在
+      expect(useProjects.getState().projects["proj-1"]).toBeDefined();
+      confirmSpy.mockRestore();
+    });
+  });
 });

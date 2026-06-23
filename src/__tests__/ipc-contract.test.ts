@@ -10,6 +10,7 @@ import { mockIPC, clearMocks } from '@tauri-apps/api/mocks';
 import { Channel } from '@tauri-apps/api/core';
 import * as pty from '../ipc/pty';
 import * as fs from '../ipc/fs';
+import * as settings from '../ipc/settings';
 // ping 测试用——index.ts 直接重导出 @tauri-apps/api/core 的 invoke
 // eslint-disable-next-line no-restricted-imports
 import { invoke } from '@tauri-apps/api/core';
@@ -139,6 +140,55 @@ describe('fs IPC 合约', () => {
       path: 'C:\\output.txt',
       content: 'hello world',
     });
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// Settings IPC
+// ═══════════════════════════════════════════════════════════════════
+
+describe('settings IPC 合约', () => {
+  it('loadSettings: 应调用 load_settings 命令，无参数', async () => {
+    const spy = vi.fn();
+    mockIPC((cmd, args) => {
+      spy(cmd, args);
+      if (cmd === 'load_settings') return { theme: 'dark' };
+    });
+
+    const result = await settings.loadSettings();
+    expect(result).toEqual({ theme: 'dark' });
+    expect(spy).toHaveBeenCalledWith('load_settings', {});
+  });
+
+  it('loadSettings: 返回 null 表示首次启动', async () => {
+    mockIPC((cmd) => {
+      if (cmd === 'load_settings') return null;
+    });
+
+    const result = await settings.loadSettings();
+    expect(result).toBeNull();
+  });
+
+  it('saveSettings: 应调用 save_settings 命令，参数包含 settings', async () => {
+    const spy = vi.fn();
+    mockIPC((cmd, args) => {
+      spy(cmd, args);
+    });
+
+    await settings.saveSettings({ fontSize: 16, theme: 'dark' });
+    expect(spy).toHaveBeenCalledWith('save_settings', {
+      settings: { fontSize: 16, theme: 'dark' },
+    });
+  });
+
+  it('saveSettings: 空对象也正常调用 invoke', async () => {
+    const spy = vi.fn();
+    mockIPC((cmd, args) => {
+      spy(cmd, args);
+    });
+
+    await settings.saveSettings({});
+    expect(spy).toHaveBeenCalledWith('save_settings', { settings: {} });
   });
 });
 
