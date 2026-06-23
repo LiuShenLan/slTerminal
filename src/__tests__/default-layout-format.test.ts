@@ -4,35 +4,7 @@
 // 关键约束：grid root 必须为 type: "branch"（非 "leaf"），面板定义必须用 contentComponent。
 
 import { describe, it, expect } from "vitest";
-
-/** 从 SidebarTree.tsx 提取的 makeDefaultLayout（保持同步） */
-function makeDefaultLayout(panelId: string): Record<string, unknown> {
-  const groupId = `group-${panelId}`;
-  return {
-    grid: {
-      root: {
-        type: "branch",
-        data: [
-          {
-            type: "leaf",
-            data: { views: [panelId], activeView: panelId, id: groupId },
-            size: 100,
-          },
-        ],
-        size: 100,
-      },
-    },
-    panels: {
-      [panelId]: {
-        id: panelId,
-        contentComponent: "terminal",
-        params: { panelId },
-        renderer: "always",
-      },
-    },
-    activeGroup: groupId,
-  };
-}
+import { makeDefaultLayout } from "../features/sidebar/SidebarTree";
 
 describe("makeDefaultLayout 格式验证", () => {
   it("grid.root.type 必须为 'branch'（Dockview fromJSON 强制要求）", () => {

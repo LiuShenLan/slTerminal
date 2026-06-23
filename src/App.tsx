@@ -7,7 +7,7 @@ import { saveLayout } from "./workspace/layoutSerde";
 import "dockview-react/dist/styles/dockview.css";
 
 /** 错误边界 */
-class ErrorBoundary extends React.Component<
+export class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
   { error: Error | null }
 > {

@@ -4,7 +4,8 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render } from "@testing-library/react";
-import App from "../App";
+import React from "react";
+import { ErrorBoundary } from "../App";
 
 // mock Tauri window API
 vi.mock("@tauri-apps/api/window", () => ({
@@ -42,58 +43,49 @@ vi.mock("../workspace/layoutSerde", () => ({
   saveLayout: vi.fn(() => ({})),
 }));
 
-// Dynamically mock workspace with throw option for error boundary tests
-// Note: ErrorBoundary 的异常子组件需要覆盖 App 内部的 Workspace
+/** 会抛错的子组件，用于测试错误边界 */
 const ThrowError: React.FC = () => {
   throw new Error("模拟渲染错误");
 };
 
-describe("ErrorBoundary — 错误边界", () => {
+describe("ErrorBoundary", () => {
   beforeEach(() => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     delete (window as unknown as Record<string, unknown>).__sltermError;
   });
 
-  it("1. 正常启动：显示 Loading 文本", () => {
-    const { container } = render(<App />);
-    // 初始渲染显示 Loading
-    expect(container.textContent).toContain("slTerminal 启动中");
-  });
-
-  it("2. ErrorBoundary 正常透传 children（无错误时不拦截）", async () => {
-    const { container } = render(<App />);
-
-    // 没有错误 → 不应显示错误消息
+  it("1. 正常 children 透传（无错误时不拦截）", () => {
+    const { container } = render(
+      <ErrorBoundary>
+        <div>正常内容</div>
+      </ErrorBoundary>,
+    );
+    expect(container.textContent).toContain("正常内容");
     expect(container.textContent).not.toContain("应用渲染错误");
   });
 
-  it("3. getDerivedStateFromError 正确返回 error 状态", () => {
-    // 动态导入 ErrorBoundary 类进行单元测试
+  it("2. 子组件抛错 → 渲染 <h2>应用渲染错误</h2> + message + stack", () => {
     const { container } = render(
-      React.createElement(
-        class extends React.Component<{ children: React.ReactNode }, { error: Error | null }> {
-          constructor(props: { children: React.ReactNode }) {
-            super(props);
-            this.state = { error: null };
-          }
-          static getDerivedStateFromError(error: Error) {
-            return { error };
-          }
-          render() {
-            if (this.state.error) {
-              return React.createElement("div", null, "Error: " + this.state.error.message);
-            }
-            return this.props.children;
-          }
-        },
-        { children: React.createElement(ThrowError) },
-      ),
+      <ErrorBoundary>
+        <ThrowError />
+      </ErrorBoundary>,
     );
+    expect(container.textContent).toContain("应用渲染错误");
+    expect(container.textContent).toContain("模拟渲染错误");
+    // 两个 <pre>：message 和 stack
+    const pres = container.querySelectorAll("pre");
+    expect(pres.length).toBe(2);
+    expect(pres[0].textContent).toContain("模拟渲染错误");
+    expect(pres[1].textContent).toContain("Error: 模拟渲染错误");
+  });
 
-    // 错误被捕获，显示错误消息
-    expect(container.textContent).toContain("Error: 模拟渲染错误");
+  it("3. 子组件抛错 → window.__sltermError 被赋值，console.error 被调用", () => {
+    render(
+      <ErrorBoundary>
+        <ThrowError />
+      </ErrorBoundary>,
+    );
+    expect((window as unknown as Record<string, unknown>).__sltermError).toBeDefined();
+    expect(console.error).toHaveBeenCalled();
   });
 });
-
-// 内联 React 引用（避免循环依赖）
-import React from "react";

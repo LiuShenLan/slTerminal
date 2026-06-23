@@ -5,7 +5,7 @@
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import React from "react";
-import { render, fireEvent } from "@testing-library/react";
+import { render, fireEvent, waitFor, cleanup } from "@testing-library/react";
 
 // ─── Hoisted mocks ───
 const mocks = vi.hoisted(() => {
@@ -69,6 +69,7 @@ function renderSidebar() {
 // ─── Tests ───
 describe("侧栏交互", () => {
   beforeEach(() => {
+    cleanup(); // 清理前一个测试的 DOM 残留（测试间隔离）
     mocks.resetAll();
     // 重置 store 到空初始状态
     useProjects.setState({
@@ -100,6 +101,23 @@ describe("侧栏交互", () => {
       // 不填充 store，保持空状态
       const { getAllByTitle } = renderSidebar();
       expect(getAllByTitle("添加项目")[0]).toBeTruthy();
+    });
+
+    it("4. 点击展开/折叠按钮 → 子节点可见性切换", () => {
+      populateStore();
+      const { getAllByText, queryByText } = renderSidebar();
+
+      // 初始展开，子页面可见
+      expect(getAllByText("操作页面 1")[0]).toBeTruthy();
+      expect(getAllByText("操作页面 2")[0]).toBeTruthy();
+
+      // 点击项目节点切换折叠
+      fireEvent.click(getAllByText("测试项目")[0]);
+
+      // 折叠后子页面不可见
+      expect(queryByText("操作页面 1")).toBeNull();
+      expect(queryByText("操作页面 2")).toBeNull();
+      expect(useProjects.getState().expandedNodes["proj-1"]).toBe(false);
     });
   });
 
@@ -150,10 +168,124 @@ describe("侧栏交互", () => {
       const buttons = getAllByTitle("添加项目");
       expect(() => fireEvent.click(buttons[0])).not.toThrow();
     });
+
+    it("9. 右键操作页面 → 点击'重命名操作页面' → 出现 input 且值为原名称", async () => {
+      populateStore();
+      const { getAllByText } = renderSidebar();
+      fireEvent.contextMenu(getAllByText("操作页面 1")[0]);
+
+      // 找到右键菜单项并用原生 click 触发（绕开 fireEvent 在 jsdom 中的 React 事件处理差异）
+      const renameItems = getAllByText("重命名操作页面");
+      expect(renameItems.length).toBeGreaterThan(0);
+      (renameItems[0] as HTMLElement).click();
+
+      // setRenamingPageId 触发 PageRow 重渲染 → 等 input 出现
+      await waitFor(() => {
+        const input = document.querySelector("input");
+        expect(input).toBeTruthy();
+        expect((input as HTMLInputElement).value).toBe("操作页面 1");
+      });
+    });
+
+    it("10. 内联重命名 → 输入新名称 → Enter 确认 → 页面名更新", async () => {
+      populateStore();
+      const { getAllByText } = renderSidebar();
+      fireEvent.contextMenu(getAllByText("操作页面 1")[0]);
+
+      const renameItems = getAllByText("重命名操作页面");
+      expect(renameItems.length).toBeGreaterThan(0);
+      (renameItems[0] as HTMLElement).click();
+
+      await waitFor(() => {
+        expect(document.querySelector("input")).toBeTruthy();
+      });
+
+      const input = document.querySelector("input")!;
+      fireEvent.change(input, { target: { value: "新名称" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      const page = useProjects
+        .getState()
+        .projects["proj-1"]
+        ?.pages.find((p) => p.pageId === "page-1");
+      expect(page?.name).toBe("新名称");
+    });
+
+    it("11. 内联重命名 → Escape 取消 → 原名不变", async () => {
+      populateStore();
+      const { getAllByText } = renderSidebar();
+      fireEvent.contextMenu(getAllByText("操作页面 1")[0]);
+
+      const renameItems = getAllByText("重命名操作页面");
+      expect(renameItems.length).toBeGreaterThan(0);
+      (renameItems[0] as HTMLElement).click();
+
+      await waitFor(() => {
+        expect(document.querySelector("input")).toBeTruthy();
+      });
+
+      const input = document.querySelector("input")!;
+      fireEvent.change(input, { target: { value: "新名称" } });
+      fireEvent.keyDown(input, { key: "Escape" });
+
+      const page = useProjects
+        .getState()
+        .projects["proj-1"]
+        ?.pages.find((p) => p.pageId === "page-1");
+      expect(page?.name).toBe("操作页面 1");
+    });
+
+    it("12. 内联重命名 → 输入空白 → Enter → 走取消分支（不调用 renamePage）", async () => {
+      populateStore();
+      const { getAllByText } = renderSidebar();
+      fireEvent.contextMenu(getAllByText("操作页面 1")[0]);
+
+      const renameItems = getAllByText("重命名操作页面");
+      expect(renameItems.length).toBeGreaterThan(0);
+      (renameItems[0] as HTMLElement).click();
+
+      await waitFor(() => {
+        expect(document.querySelector("input")).toBeTruthy();
+      });
+
+      const input = document.querySelector("input")!;
+      fireEvent.change(input, { target: { value: "   " } });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      const page = useProjects
+        .getState()
+        .projects["proj-1"]
+        ?.pages.find((p) => p.pageId === "page-1");
+      expect(page?.name).toBe("操作页面 1");
+    });
+
+    it("13. 内联重命名 → 输入与原名称相同 → Enter → 不调用 renamePage", async () => {
+      populateStore();
+      const { getAllByText } = renderSidebar();
+      fireEvent.contextMenu(getAllByText("操作页面 1")[0]);
+
+      const renameItems = getAllByText("重命名操作页面");
+      expect(renameItems.length).toBeGreaterThan(0);
+      (renameItems[0] as HTMLElement).click();
+
+      await waitFor(() => {
+        expect(document.querySelector("input")).toBeTruthy();
+      });
+
+      const input = document.querySelector("input")!;
+      fireEvent.change(input, { target: { value: "操作页面 1" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      const page = useProjects
+        .getState()
+        .projects["proj-1"]
+        ?.pages.find((p) => p.pageId === "page-1");
+      expect(page?.name).toBe("操作页面 1");
+    });
   });
 
   describe("项目删除确认", () => {
-    it("10. 右键'删除项目'+ confirm 拒绝 → 不删除", () => {
+    it("14. 右键'删除项目'+ confirm 拒绝 → 不删除", () => {
       const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
       populateStore();
 
@@ -164,6 +296,44 @@ describe("侧栏交互", () => {
       // store 中项目仍存在
       expect(useProjects.getState().projects["proj-1"]).toBeDefined();
       confirmSpy.mockRestore();
+    });
+
+    it("15. 右键'删除项目'+ confirm 接受 → 项目被移除", () => {
+      const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+      populateStore();
+
+      const { getAllByText } = renderSidebar();
+      fireEvent.contextMenu(getAllByText("测试项目")[0]);
+      fireEvent.click(getAllByText("删除项目")[0]);
+
+      expect(useProjects.getState().projects["proj-1"]).toBeUndefined();
+      confirmSpy.mockRestore();
+    });
+  });
+
+  describe("添加项目完整流程", () => {
+    it("16. 点击 + 添加项目 → dialog.open 选择文件夹 → store 创建项目", async () => {
+      mocks.mockOpenDialog.mockResolvedValueOnce("C:\\new-project");
+
+      const { getAllByTitle } = renderSidebar();
+      fireEvent.click(getAllByTitle("添加项目")[0]);
+
+      // 等待异步操作完成
+      await waitFor(() => {
+        const projects = Object.values(useProjects.getState().projects);
+        expect(projects.length).toBeGreaterThan(0);
+      });
+
+      const state = useProjects.getState();
+      const project = Object.values(state.projects)[0];
+      expect(project.rootPath).toBe("C:\\new-project");
+      expect(project.pages.length).toBe(1);
+      expect(project.pages[0].cwd).toBe("C:\\new-project");
+      expect(mocks.mockOpenDialog).toHaveBeenCalledWith({
+        directory: true,
+        multiple: false,
+        title: "选择项目文件夹",
+      });
     });
   });
 });

@@ -297,7 +297,7 @@ interface SidebarTreeProps {
  *
  * 注意：Dockview fromJSON 要求 grid root 为 "branch"，leaf.data.id 为 string，
  * 顶层 activeGroup 必须匹配 leaf 的 group id。 */
-function makeDefaultLayout(panelId: string): Record<string, unknown> {
+export function makeDefaultLayout(panelId: string): Record<string, unknown> {
   const groupId = `group-${panelId}`;
   return {
     grid: {

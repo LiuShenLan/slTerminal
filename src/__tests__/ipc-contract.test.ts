@@ -106,6 +106,44 @@ describe('pty IPC 合约', () => {
     const build = await pty.getWindowsBuildNumber();
     expect(build).toBe(21376);
   });
+
+  // ── 异常路径 ──────────────────────────────────────────────
+
+  it('spawn: invoke 失败时异常应传播给调用方', async () => {
+    mockIPC((cmd) => {
+      if (cmd === 'pty_spawn') throw new Error('conpty init failed');
+    });
+
+    await expect(
+      pty.spawn({ panelId: 'p1', cwd: 'C:\\tmp', cols: 80, rows: 24 }, vi.fn()),
+    ).rejects.toThrow('conpty init failed');
+  });
+
+  it('write: invoke 失败时异常应传播', async () => {
+    mockIPC((cmd) => {
+      if (cmd === 'pty_write') throw new Error('session closed');
+    });
+
+    await expect(
+      pty.write('session-1', new Uint8Array([65])),
+    ).rejects.toThrow('session closed');
+  });
+
+  it('resize: invoke 失败时异常应传播', async () => {
+    mockIPC((cmd) => {
+      if (cmd === 'pty_resize') throw new Error('invalid session');
+    });
+
+    await expect(pty.resize('bad-session', 100, 30)).rejects.toThrow('invalid session');
+  });
+
+  it('kill: invoke 失败时异常应传播', async () => {
+    mockIPC((cmd) => {
+      if (cmd === 'pty_kill') throw new Error('already dead');
+    });
+
+    await expect(pty.kill('dead-session')).rejects.toThrow('already dead');
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════
@@ -140,6 +178,24 @@ describe('fs IPC 合约', () => {
       path: 'C:\\output.txt',
       content: 'hello world',
     });
+  });
+
+  // ── 异常路径 ──────────────────────────────────────────────
+
+  it('readFile: invoke 失败时异常应传播', async () => {
+    mockIPC((cmd) => {
+      if (cmd === 'fs_read_file') throw new Error('access denied');
+    });
+
+    await expect(fs.readFile('C:\\protected.txt')).rejects.toThrow('access denied');
+  });
+
+  it('writeFile: invoke 失败时异常应传播', async () => {
+    mockIPC((cmd) => {
+      if (cmd === 'fs_write_file') throw new Error('disk full');
+    });
+
+    await expect(fs.writeFile('C:\\full.txt', 'data')).rejects.toThrow('disk full');
   });
 });
 
@@ -189,6 +245,26 @@ describe('settings IPC 合约', () => {
 
     await settings.saveSettings({});
     expect(spy).toHaveBeenCalledWith('save_settings', { settings: {} });
+  });
+
+  // ── 异常路径 ──────────────────────────────────────────────
+
+  it('loadSettings: invoke 失败时异常应传播', async () => {
+    mockIPC((cmd) => {
+      if (cmd === 'load_settings') throw new Error('config file corrupted');
+    });
+
+    await expect(settings.loadSettings()).rejects.toThrow('config file corrupted');
+  });
+
+  it('saveSettings: invoke 失败时异常应传播', async () => {
+    mockIPC((cmd) => {
+      if (cmd === 'save_settings') throw new Error('permission denied');
+    });
+
+    await expect(settings.saveSettings({ theme: 'dark' })).rejects.toThrow(
+      'permission denied',
+    );
   });
 });
 

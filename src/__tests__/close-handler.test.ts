@@ -220,4 +220,49 @@ describe("onCloseRequested 关闭钩子", () => {
     expect(localStorageStub.getItem("slterm-last-active-page")).toBe("test-page-1");
     expect(mocks.mockDestroy).toHaveBeenCalled();
   });
+
+  it("5. saveAllProjects 超过 3s → Promise.race 超时触发 → destroy 仍被调用", async () => {
+    (window as unknown as Record<string, unknown>).__dockviewApi = { _mock: true };
+
+    // 先用真实定时器捕获 handler
+    const handler = await renderAndCapture();
+
+    // 切换到假定时器
+    vi.useFakeTimers();
+
+    // saveAllProjects 返回永不完结的 Promise
+    let neverResolve: () => void;
+    const neverPromise = new Promise<void>((resolve) => {
+      neverResolve = resolve;
+    });
+    mocks.mockSaveAllProjects.mockReturnValue(neverPromise);
+
+    // 触发关闭（不要 await，handler 会卡在 Promise.race）
+    const closePromise = handler(closeEvent());
+
+    // 推进 3000ms 触发 race 超时
+    vi.advanceTimersByTime(3000);
+
+    await closePromise;
+
+    expect(mocks.mockDestroy).toHaveBeenCalled();
+
+    vi.useRealTimers();
+    neverResolve!(); // 清理未完结的 Promise
+  });
+
+  it("6. localStorage.setItem 抛异常 → 静默捕获，不阻止 destroy", async () => {
+    (window as unknown as Record<string, unknown>).__dockviewApi = { _mock: true };
+
+    // 让 localStorage.setItem 抛出异常
+    localStorageStub.setItem = () => {
+      throw new Error("quota exceeded");
+    };
+
+    const handler = await renderAndCapture();
+    await handler(closeEvent());
+
+    // destroy 在 try/catch 外部，确保始终调用
+    expect(mocks.mockDestroy).toHaveBeenCalled();
+  });
 });

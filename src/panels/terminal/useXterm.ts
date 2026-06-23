@@ -32,6 +32,19 @@ export interface UseXtermOptions {
   cwd?: string;
 }
 
+/** 检测 WebGL2 是否可用（纯函数，无副作用） */
+export function detectWebgl(): boolean {
+  try {
+    const canvas = document.createElement("canvas");
+    const gl = canvas.getContext("webgl2", {
+      failIfMajorPerformanceCaveat: true,
+    });
+    return gl !== null;
+  } catch {
+    return false;
+  }
+}
+
 /** 检查终端是否可以安全执行 fit 操作（五条件守卫） */
 export function canFit(
     terminal: Terminal | null | undefined,
@@ -58,19 +71,6 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
   const rafIdRef = useRef<number | null>(null);
   const e2eTextBufferRef = useRef<string[]>([]);
   const isDisposedRef = useRef(false);
-
-  /** 检测 WebGL2 是否可用 */
-  const detectWebgl = useCallback((): boolean => {
-    try {
-      const canvas = document.createElement("canvas");
-      const gl = canvas.getContext("webgl2", {
-        failIfMajorPerformanceCaveat: true,
-      });
-      return gl !== null;
-    } catch {
-      return false;
-    }
-  }, []);
 
   /** 将缓冲数据合并写入终端 */
   const flushBuffer = useCallback(() => {
@@ -324,7 +324,7 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
       terminalRef.current?.dispose();
       terminalRef.current = null;
     };
-  }, [container, panelId, cols, rows, detectWebgl, flushBuffer, handlePtyOutput]);
+  }, [container, panelId, cols, rows, flushBuffer, handlePtyOutput]);
 
   // F3 Bug 1 修复: 独立 useEffect 监听 windowsBuildNumber 异步更新
   // 主 useEffect 的 StrictMode 守卫不拦截此 effect，确保 Terminal 创建后 windowsPty 生效
