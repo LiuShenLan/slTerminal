@@ -51,7 +51,7 @@ pub fn run() {
             PreventDefaultBuilder::default()
                 .with_flags(
                     Flags::all()
-                        .difference(Flags::FIND | Flags::DEV_TOOLS),
+                        .difference(Flags::FIND),
                 )
                 .build(),
         )
