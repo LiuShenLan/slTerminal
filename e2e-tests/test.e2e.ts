@@ -11,6 +11,14 @@ describe('slTerminal Phase 1 E2E', () => {
   });
 
   it('打开终端→写入文本→验证缓冲含 e2e_marker', async () => {
+    // 0. 程序化创建测试项目（绕过原生文件夹对话框，适配多 Dockview 架构）
+    await browser.execute(() => {
+      const createProject = (window as any).__slterm_e2e_createProject;
+      if (typeof createProject === 'function') {
+        createProject('C:\\e2e-test');
+      }
+    });
+
     // 1. 等待 Dockview API
     await browser.waitUntil(
       async () => {

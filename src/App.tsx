@@ -1,10 +1,48 @@
 import React, { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Workspace } from "./workspace";
-import { loadAllProjects, markPersistenceReady, saveAllProjects, cancelPendingSave, useProjects } from "./stores/projects";
+import {
+  loadAllProjects, markPersistenceReady, saveAllProjects, cancelPendingSave,
+  useProjects, createProjectId, createPageId,
+} from "./stores/projects";
+import type { OperationPage, Project } from "./stores/projects";
 import { useLayout } from "./stores/layout";
 import { saveLayout } from "./workspace/layoutSerde";
+import { makeDefaultLayout } from "./features/sidebar/SidebarTree";
 import "dockview-react/dist/styles/dockview.css";
+
+// E2E 测试辅助：暴露程序化创建项目的 API（绕过原生文件夹对话框）
+if (typeof window !== "undefined") {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (window as any).__slterm_e2e_createProject = (dirPath: string) => {
+    const name = dirPath.split(/[/\\]/).pop() || dirPath;
+    const projectId = createProjectId();
+    const pageId = createPageId();
+    const defaultPanelId = `terminal-${pageId}-0`;
+
+    const page: OperationPage = {
+      pageId,
+      name,
+      layout: makeDefaultLayout(defaultPanelId),
+      cwd: dirPath,
+      createdAt: Date.now(),
+      lastAccessedAt: Date.now(),
+    };
+
+    const project: Project = {
+      projectId,
+      name,
+      rootPath: dirPath,
+      pages: [page],
+      activePageId: pageId,
+      version: 1,
+    };
+
+    useProjects.getState().addProject(project);
+    useLayout.getState().setActivePage(pageId);
+    return pageId;
+  };
+}
 
 /** 错误边界 */
 export class ErrorBoundary extends React.Component<

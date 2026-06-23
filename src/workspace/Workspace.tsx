@@ -311,11 +311,10 @@ const Workspace: React.FC = () => {
       }
     }, []);
 
-  // 启动时初始化活跃页面
+  // E2E 兼容：activePageId 变化时自动初始化对应页面（Workspace 挂载后生效）
   React.useEffect(() => {
-    const id = useLayout.getState().activePageId;
-    if (id) ensurePageInitialized(id);
-  }, []);
+    if (activePageId) ensurePageInitialized(activePageId);
+  }, [activePageId, ensurePageInitialized]);
 
   return (
     <div style={{ display: "flex", width: "100%", height: "100%" }}>
