@@ -1,62 +1,95 @@
 {
   "projects": {
-    "proj-1782029734071-1": {
-      "projectId": "proj-1782029734071-1",
-      "name": "slTerminal",
-      "rootPath": "D:\\data\\learn\\code\\slTerminal",
-      "pages": [
-        {
-          "pageId": "page-1782029734071-2",
-          "name": "slTerminal",
-          "layout": {
-            "grid": {
-              "root": {
-                "type": "branch",
-                "data": [],
-                "size": 883
-              },
-              "width": 602,
-              "height": 883,
-              "orientation": "HORIZONTAL"
-            },
-            "panels": {}
-          },
-          "cwd": "D:\\data\\learn\\code\\slTerminal",
-          "createdAt": 1782029734071,
-          "lastAccessedAt": 1782087820550
-        }
-      ],
-      "activePageId": "page-1782029734071-2",
-      "version": 21
-    },
-    "proj-1782087786731-6": {
-      "projectId": "proj-1782087786731-6",
+    "proj-1782225856601-1": {
+      "projectId": "proj-1782225856601-1",
       "name": "java",
       "rootPath": "D:\\data\\learn\\code\\java",
       "pages": [
         {
-          "pageId": "page-1782087786731-7",
-          "name": "java",
+          "pageId": "page-1782226446799-6",
+          "name": "页面-6799",
           "layout": {
             "grid": {
               "root": {
                 "type": "branch",
-                "data": [],
+                "data": [
+                  {
+                    "type": "leaf",
+                    "data": {
+                      "views": [
+                        "terminal-page-1782226446799-6-0"
+                      ],
+                      "activeView": "terminal-page-1782226446799-6-0",
+                      "id": "2"
+                    },
+                    "size": 883
+                  }
+                ],
                 "size": 883
               },
               "width": 602,
-              "height": 883,
-              "orientation": "HORIZONTAL"
+              "height": 883
             },
-            "panels": {}
+            "panels": {
+              "terminal-page-1782226446799-6-0": {
+                "id": "terminal-page-1782226446799-6-0",
+                "contentComponent": "editor",
+                "tabComponent": "props.defaultTabComponent",
+                "params": {
+                  "panelId": "terminal-page-1782226446799-6-0",
+                  "cwd": "D:\\data\\learn\\code\\java"
+                },
+                "title": "terminal-page-1782226446799-6-0"
+              }
+            },
+            "activeGroup": "2"
           },
           "cwd": "D:\\data\\learn\\code\\java",
-          "createdAt": 1782087786731,
-          "lastAccessedAt": 1782087821218
+          "createdAt": 1782226446799,
+          "lastAccessedAt": 1782226446799
+        },
+        {
+          "pageId": "page-1782226507560-1",
+          "name": "页面-7560",
+          "layout": {
+            "grid": {
+              "root": {
+                "type": "branch",
+                "data": [
+                  {
+                    "type": "leaf",
+                    "data": {
+                      "views": [
+                        "terminal-page-1782226507560-1-0"
+                      ],
+                      "activeView": "terminal-page-1782226507560-1-0",
+                      "id": "group-terminal-page-1782226507560-1-0"
+                    },
+                    "size": 100
+                  }
+                ],
+                "size": 100
+              }
+            },
+            "panels": {
+              "terminal-page-1782226507560-1-0": {
+                "id": "terminal-page-1782226507560-1-0",
+                "contentComponent": "terminal",
+                "params": {
+                  "panelId": "terminal-page-1782226507560-1-0"
+                },
+                "renderer": "always"
+              }
+            },
+            "activeGroup": "group-terminal-page-1782226507560-1-0"
+          },
+          "cwd": "D:\\data\\learn\\code\\java",
+          "createdAt": 1782226507560,
+          "lastAccessedAt": 1782226507560
         }
       ],
-      "activePageId": "page-1782087786731-7",
-      "version": 17
+      "activePageId": "page-1782226446799-6",
+      "version": 73
     }
   },
   "deletionLock": {
@@ -69,8 +102,9 @@
     "proj-1782023891890-4:wt:D:/data/learn/note/.claude/worktrees/test": true,
     "proj-1782023891890-4:wt:D:/data/learn/note": true,
     "page-1782024072885-1": true,
-    "proj-1782029734071-1": true,
     "page-1782087762116-5": true,
-    "proj-1782087786731-6": true
+    "proj-1782225856601-1": true,
+    "page-1782226446799-6": true,
+    "page-1782226507560-1": true
   }
 }
