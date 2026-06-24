@@ -77,4 +77,13 @@ describe("makeDefaultLayout 格式验证", () => {
     expect(restored.panels["test-json-roundtrip"].contentComponent).toBe("terminal");
     expect(restored.panels["test-json-roundtrip"].id).toBe("test-json-roundtrip");
   });
+
+  it("grid.orientation 必须为 'HORIZONTAL'（fromJSON 时 root BranchNode 方向依赖此字段）", () => {
+    const layout = makeDefaultLayout("test-orientation");
+    const grid = layout.grid as Record<string, unknown>;
+    expect(grid.orientation).toBe("HORIZONTAL");
+    // 二次验证：序列化后不丢失
+    const restored = JSON.parse(JSON.stringify(layout));
+    expect((restored.grid as Record<string, unknown>).orientation).toBe("HORIZONTAL");
+  });
 });

@@ -175,6 +175,60 @@ describe("patchLegacyLayout — 旧格式修补（通过 loadLayout）", () => {
 
     expect(() => loadLayout(api, layout)).not.toThrow();
   });
+
+  it("7a. grid.orientation 缺失 → 自动补为 'HORIZONTAL'", () => {
+    const layout = {
+      grid: {
+        // 无 orientation 字段 — 旧版本 makeDefaultLayout 产出的格式
+        root: {
+          type: "branch",
+          data: [{
+            type: "leaf",
+            data: { views: ["p7a"], activeView: "p7a", id: "g7a" },
+            size: 100,
+          }],
+          size: 100,
+        },
+      },
+      panels: {
+        p7a: { id: "p7a", contentComponent: "terminal", params: {}, renderer: "always" },
+      },
+      activeGroup: "g7a",
+    };
+
+    loadLayout(api, layout);
+
+    const callArg = (api.fromJSON as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const grid = callArg.grid as Record<string, unknown>;
+    expect(grid.orientation).toBe("HORIZONTAL");
+  });
+
+  it("7b. grid.orientation 已存在 → 原值保留", () => {
+    const layout = {
+      grid: {
+        orientation: "VERTICAL", // 刻意非 HORIZONTAL
+        root: {
+          type: "branch",
+          data: [{
+            type: "leaf",
+            data: { views: ["p7b"], activeView: "p7b", id: "g7b" },
+            size: 100,
+          }],
+          size: 100,
+        },
+      },
+      panels: {
+        p7b: { id: "p7b", contentComponent: "terminal", params: {} },
+      },
+      activeGroup: "g7b",
+    };
+
+    loadLayout(api, layout);
+
+    const callArg = (api.fromJSON as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const grid = callArg.grid as Record<string, unknown>;
+    expect(grid.orientation).toBe("VERTICAL");
+  });
 });
 
 // ====== loadLayout 返回值和校验 ======
