@@ -36,6 +36,11 @@ function patchLegacyLayout(layout: Record<string, unknown>): void {
     const grid = layout.grid as Record<string, unknown> | undefined;
     if (!grid || !grid.root) return;
 
+    // 修补 grid 缺少 orientation → 默认 HORIZONTAL
+    if (typeof grid.orientation !== "string") {
+      grid.orientation = "HORIZONTAL";
+    }
+
     const root = grid.root as Record<string, unknown>;
     if (root.type !== "branch" || !Array.isArray(root.data)) return;
 

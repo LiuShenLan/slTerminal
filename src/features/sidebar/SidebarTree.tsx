@@ -301,6 +301,7 @@ export function makeDefaultLayout(panelId: string): Record<string, unknown> {
   const groupId = `group-${panelId}`;
   return {
     grid: {
+      orientation: "HORIZONTAL",
       root: {
         type: "branch",
         data: [
