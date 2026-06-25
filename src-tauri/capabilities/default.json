@@ -8,6 +8,8 @@
     "core:window:allow-destroy",
     "opener:default",
     "dialog:default",
-    "wdio-webdriver:default"
+    "wdio-webdriver:default",
+    "clipboard-manager:allow-write-text",
+    "clipboard-manager:allow-read-text"
   ]
 }

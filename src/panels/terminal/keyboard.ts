@@ -7,6 +7,7 @@
 // - IME 合成中 → 全透传
 
 import type { Terminal } from "@xterm/xterm";
+import { writeText, readText } from "@tauri-apps/plugin-clipboard-manager";
 
 /** 当前活跃终端引用（由 useXterm 在 Terminal 创建后注册） */
 let activeTerminal: Terminal | null = null;
@@ -37,7 +38,7 @@ function handleKeyDown(e: KeyboardEvent): void {
   if (e.ctrlKey && e.shiftKey && e.code === "KeyC") {
     const selection = term.getSelection();
     if (selection) {
-      navigator.clipboard.writeText(selection).catch(() => {});
+      writeText(selection);
     }
     e.preventDefault();
     e.stopPropagation();
@@ -46,12 +47,9 @@ function handleKeyDown(e: KeyboardEvent): void {
 
   // Ctrl+Shift+V → 粘贴剪贴板内容到终端
   if (e.ctrlKey && e.shiftKey && e.code === "KeyV") {
-    navigator.clipboard
-      .readText()
-      .then((text) => {
-        term.paste(text);
-      })
-      .catch(() => {});
+    readText().then((text) => {
+      term.paste(text);
+    }).catch(() => {});
     e.preventDefault();
     e.stopPropagation();
     return;

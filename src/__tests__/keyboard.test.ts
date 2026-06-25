@@ -9,10 +9,23 @@
 //   6. 非目标组合键透传
 //   7. 剪贴板 API 拒绝时的 fallback
 //   8. setActiveTerminal(null) 注销后透传
+//   9. navigator.clipboard 未定义时不崩溃（Tauri/WebView2 环境）
 
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
 import { setActiveTerminal, installKeyboardHandler } from "../panels/terminal/keyboard";
 import type { Terminal } from "@xterm/xterm";
+
+// ====== mock tauri clipboard plugin ======
+
+const { writeTextMock, readTextMock } = vi.hoisted(() => ({
+  writeTextMock: vi.fn(),
+  readTextMock: vi.fn(),
+}));
+
+vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({
+  writeText: writeTextMock,
+  readText: readTextMock,
+}));
 
 // ====== 辅助工具 ======
 
@@ -46,23 +59,13 @@ function dispatchKeydown(opts: {
   return event;
 }
 
-// ====== 全局 clipboard mock ======
-
-let writeTextMock: ReturnType<typeof vi.fn>;
-let readTextMock: ReturnType<typeof vi.fn>;
-
 // ====== 测试套件 ======
 
 describe("keyboard 终端键盘事件处理", () => {
   beforeAll(() => {
-    // jsdom 中 navigator.clipboard.writeText/readText 未实现，手动提供
-    writeTextMock = vi.fn().mockResolvedValue(undefined);
-    readTextMock = vi.fn().mockResolvedValue("");
-    Object.defineProperty(navigator, "clipboard", {
-      value: { writeText: writeTextMock, readText: readTextMock },
-      writable: true,
-      configurable: true,
-    });
+    // mock 已在 vi.hoisted() 中创建，此处配置返回值
+    writeTextMock.mockResolvedValue(undefined);
+    readTextMock.mockResolvedValue("");
     // 安装全局捕获阶段键盘处理器（installed 守卫防止重复安装）
     installKeyboardHandler();
   });
@@ -229,6 +232,62 @@ describe("keyboard 终端键盘事件处理", () => {
         code: "KeyN",
       });
       expect(event.defaultPrevented).toBe(false);
+    });
+  });
+
+  // ========== 7a. Tauri 无 navigator.clipboard 场景 ==========
+
+  describe("navigator.clipboard 在 Tauri/WebView2 中不可用时", () => {
+    it("Ctrl+Shift+C 不依赖 navigator.clipboard，仍正常阻止默认事件", () => {
+      // 模拟 Tauri 环境：移除 navigator.clipboard
+      const originalClipboard = navigator.clipboard;
+      Object.defineProperty(navigator, "clipboard", {
+        value: undefined,
+        writable: true,
+        configurable: true,
+      });
+
+      setActiveTerminal(terminalStub({ getSelection: () => "selected" }));
+
+      const event = dispatchKeydown({
+        ctrlKey: true,
+        shiftKey: true,
+        code: "KeyC",
+      });
+
+      expect(event.defaultPrevented).toBe(true);
+
+      // 恢复 clipboard
+      Object.defineProperty(navigator, "clipboard", {
+        value: originalClipboard,
+        writable: true,
+        configurable: true,
+      });
+    });
+
+    it("Ctrl+Shift+V 不依赖 navigator.clipboard，仍正常阻止默认事件", () => {
+      const originalClipboard = navigator.clipboard;
+      Object.defineProperty(navigator, "clipboard", {
+        value: undefined,
+        writable: true,
+        configurable: true,
+      });
+
+      setActiveTerminal(terminalStub());
+
+      const event = dispatchKeydown({
+        ctrlKey: true,
+        shiftKey: true,
+        code: "KeyV",
+      });
+
+      expect(event.defaultPrevented).toBe(true);
+
+      Object.defineProperty(navigator, "clipboard", {
+        value: originalClipboard,
+        writable: true,
+        configurable: true,
+      });
     });
   });
 

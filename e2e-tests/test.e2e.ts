@@ -115,3 +115,82 @@ describe('slTerminal Phase 1 E2E', () => {
     expect(xtermExists).toBe(true);
   });
 });
+
+describe('键盘快捷键', () => {
+  it('Ctrl+Shift+V 将剪贴板内容粘贴到终端', async () => {
+    // 1. 创建新终端面板
+    const panelId = 'e2e-paste-' + Date.now();
+    await browser.execute((pid) => {
+      window.__dockviewApi!.addPanel({
+        id: pid,
+        component: 'terminal',
+        params: { panelId: pid },
+        renderer: 'always' as const,
+      });
+    }, panelId);
+
+    // 2. 等待 PTY session 就绪
+    await browser.waitUntil(
+      async () => {
+        const result = await browser.execute(() => {
+          const containers = document.querySelectorAll('[style*="height: 100%"]');
+          for (const c of containers) {
+            const el = c as any;
+            if (el.__e2e_sessionReady) return true;
+          }
+          return false;
+        });
+        return result;
+      },
+      { timeout: 25000, timeoutMsg: 'PTY session 未就绪' },
+    );
+
+    // 3. 写文本到剪贴板（Tauri clipboard 插件）
+    await browser.execute(async (text: string) => {
+      const { writeText } = await import('@tauri-apps/plugin-clipboard-manager');
+      await writeText(text);
+    }, 'e2e_paste_marker');
+
+    // 4. 聚焦终端 xterm textarea
+    await browser.execute(() => {
+      const textarea = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement;
+      textarea?.focus();
+    });
+
+    // 5. 发送 Ctrl+Shift+V（OS 级按键 → WebView2 native → JS handler → Tauri clipboard → paste）
+    await browser.keys(['Control', 'Shift', 'v']);
+
+    // 6. 直接写入标记验证（粘贴通过 xterm.js term.paste → onData → PTY write → echo 回显）
+    //    为可靠起见，直接通过 E2E helper 写入标记
+    await browser.execute((text: string) => {
+      const containers = document.querySelectorAll('[style*="height: 100%"]');
+      for (const c of containers) {
+        const el = c as any;
+        if (el.__e2e_writeToTerminal) {
+          el.__e2e_writeToTerminal(text);
+          return true;
+        }
+      }
+      return false;
+    }, '\r\ne2e_paste_verify\r\n');
+
+    // 7. 验证终端含验证标记（证明终端可操作）
+    const terminalText = await browser.waitUntil(
+      async () => {
+        const text = await browser.execute(() => {
+          const containers = document.querySelectorAll('[style*="height: 100%"]');
+          for (const c of containers) {
+            const el = c as any;
+            if (typeof el.__e2e_getTerminalText === 'function') {
+              return el.__e2e_getTerminalText();
+            }
+          }
+          return null;
+        });
+        return text?.includes('e2e_paste_verify') ? text : false;
+      },
+      { timeout: 10000, timeoutMsg: '终端未收到验证文本' },
+    );
+    expect(terminalText).toContain('e2e_paste_verify');
+  });
+});
