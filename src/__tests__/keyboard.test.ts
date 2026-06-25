@@ -22,7 +22,7 @@ const { writeTextMock, readTextMock } = vi.hoisted(() => ({
   readTextMock: vi.fn(),
 }));
 
-vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({
+vi.mock("../ipc/clipboard", () => ({
   writeText: writeTextMock,
   readText: readTextMock,
 }));
