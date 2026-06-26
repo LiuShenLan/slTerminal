@@ -1,1 +1,1 @@
-export {};
+export { GIT_FILE_COLORS, GIT_GUTTER_COLORS, EXPLORER_COLORS } from "./colors";

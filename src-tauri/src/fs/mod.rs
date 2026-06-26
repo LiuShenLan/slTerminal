@@ -3,9 +3,26 @@
 /// 阻塞 I/O 用 spawn_blocking 包装，不阻塞 tokio runtime。
 /// 设置用 tempfile 原子写入 + .bak 备份兜底。
 use crate::error::AppError;
+use serde::Serialize;
 use std::io::Write as _;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
+
+/// 目录条目
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirEntry {
+    /// 文件/目录名
+    pub name: String,
+    /// 完整路径
+    pub path: String,
+    /// 是否为目录
+    pub is_dir: bool,
+    /// 文件大小（字节），仅文件时有值
+    pub size: Option<u64>,
+    /// 最后修改时间（Unix 毫秒），仅文件时有值
+    pub modified: Option<u64>,
+}
 
 /// 读取文件内容（UTF-8 文本）
 #[tauri::command]
@@ -96,8 +113,229 @@ pub async fn load_settings() -> Result<serde_json::Value, AppError> {
     result
 }
 
+/// 递归读取目录内容
+///
+/// 过滤 `.claude/worktrees/`、`.git/`、`node_modules/`。
+/// 结果按文件夹→文件排序，同类型按名称字母排序。
+#[tauri::command]
+pub async fn fs_read_dir(path: String) -> Result<Vec<DirEntry>, AppError> {
+    tokio::task::spawn_blocking(move || {
+        let mut entries: Vec<DirEntry> = Vec::new();
+        let dir = std::fs::read_dir(&path)?;
+
+        for entry in dir {
+            let entry = entry?;
+            let name = entry.file_name().to_string_lossy().to_string();
+
+            // 过滤隐私/重型目录
+            if name == ".claude" || name == ".git" || name == "node_modules" {
+                continue;
+            }
+
+            let file_type = entry.file_type()?;
+            let is_dir = file_type.is_dir();
+            let path_str = entry.path().to_string_lossy().replace('\\', "/");
+
+            let (size, modified) = if is_dir {
+                (None, None)
+            } else {
+                let meta = entry.metadata()?;
+                let mtime = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_millis() as u64);
+                (Some(meta.len()), mtime)
+            };
+
+            entries.push(DirEntry {
+                name,
+                path: path_str,
+                is_dir,
+                size,
+                modified,
+            });
+        }
+
+        // 按文件夹→文件排序，同类型按名称字母排序
+        entries.sort_by(|a, b| {
+            b.is_dir
+                .cmp(&a.is_dir)
+                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        });
+
+        Ok(entries)
+    })
+    .await
+    .map_err(|e| AppError::Io(format!("spawn_blocking 失败: {e}")))?
+}
+
+/// 创建目录（递归创建父目录）
+#[tauri::command]
+pub async fn fs_create_dir(path: String) -> Result<(), AppError> {
+    tokio::task::spawn_blocking(move || {
+        std::fs::create_dir_all(&path)?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| AppError::Io(format!("spawn_blocking 失败: {e}")))?
+}
+
+/// 删除文件或目录（永久删除，不进回收站）
+///
+/// 删除目录时递归删除所有子级。
+#[tauri::command]
+pub async fn fs_delete(path: String) -> Result<(), AppError> {
+    tokio::task::spawn_blocking(move || {
+        let p = PathBuf::from(&path);
+        if !p.exists() {
+            return Err(AppError::Io(format!("路径不存在: {path}")));
+        }
+        if p.is_dir() {
+            std::fs::remove_dir_all(&path)?;
+        } else {
+            std::fs::remove_file(&path)?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| AppError::Io(format!("spawn_blocking 失败: {e}")))?
+}
+
+/// 重命名/移动文件或目录
+///
+/// 目标路径存在时覆盖。
+#[tauri::command]
+pub async fn fs_rename(src: String, dst: String) -> Result<(), AppError> {
+    tokio::task::spawn_blocking(move || {
+        // 若目标存在且为目录，先删除
+        let dst_path = PathBuf::from(&dst);
+        if dst_path.exists() && dst_path.is_dir() {
+            std::fs::remove_dir_all(&dst)?;
+        }
+        std::fs::rename(&src, &dst)?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| AppError::Io(format!("spawn_blocking 失败: {e}")))?
+}
+
+/// fs_read_dir/create_dir/delete/rename 单元测试
 #[cfg(test)]
-mod tests {
+mod read_dir_tests {
+    use super::*;
+
+    #[test]
+    fn test_fs_read_dir_lists_children() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.txt"), "a").unwrap();
+        std::fs::write(dir.path().join("b.txt"), "b").unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+
+        let mut entries: Vec<DirEntry> = Vec::new();
+        for entry in std::fs::read_dir(dir.path()).unwrap() {
+            let entry = entry.unwrap();
+            let name = entry.file_name().to_string_lossy().to_string();
+            let is_dir = entry.file_type().unwrap().is_dir();
+            entries.push(DirEntry {
+                name, path: entry.path().to_string_lossy().replace('\\', "/"),
+                is_dir, size: None, modified: None,
+            });
+        }
+        assert_eq!(entries.len(), 3, "应返回 2 文件 + 1 子目录");
+    }
+
+    #[test]
+    fn test_fs_read_dir_filters_dotgit() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".git")).unwrap();
+        std::fs::write(dir.path().join("visible.txt"), "ok").unwrap();
+
+        let mut entries: Vec<DirEntry> = Vec::new();
+        for entry in std::fs::read_dir(dir.path()).unwrap() {
+            let entry = entry.unwrap();
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name == ".git" { continue; }
+            let is_dir = entry.file_type().unwrap().is_dir();
+            entries.push(DirEntry {
+                name, path: entry.path().to_string_lossy().replace('\\', "/"),
+                is_dir, size: None, modified: None,
+            });
+        }
+        assert_eq!(entries.len(), 1, "应过滤 .git");
+    }
+
+    #[test]
+    fn test_fs_read_dir_filters_node_modules() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("node_modules")).unwrap();
+        std::fs::write(dir.path().join("visible.txt"), "ok").unwrap();
+
+        let mut entries: Vec<DirEntry> = Vec::new();
+        for entry in std::fs::read_dir(dir.path()).unwrap() {
+            let entry = entry.unwrap();
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name == "node_modules" { continue; }
+            let is_dir = entry.file_type().unwrap().is_dir();
+            entries.push(DirEntry {
+                name, path: entry.path().to_string_lossy().replace('\\', "/"),
+                is_dir, size: None, modified: None,
+            });
+        }
+        assert_eq!(entries.len(), 1, "应过滤 node_modules");
+    }
+
+    #[test]
+    fn test_fs_create_dir_creates() {
+        let base = tempfile::tempdir().unwrap();
+        let new_dir = base.path().join("new_folder");
+        std::fs::create_dir_all(&new_dir).unwrap();
+        assert!(new_dir.exists(), "目录应被创建");
+    }
+
+    #[test]
+    fn test_fs_create_dir_parent_creation() {
+        let base = tempfile::tempdir().unwrap();
+        let nested = base.path().join("a").join("b").join("c");
+        std::fs::create_dir_all(&nested).unwrap();
+        assert!(nested.exists(), "嵌套目录应被创建");
+    }
+
+    #[test]
+    fn test_fs_delete_file_removes() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("to_delete.txt");
+        std::fs::write(&file, "delete me").unwrap();
+        assert!(file.exists());
+        std::fs::remove_file(&file).unwrap();
+        assert!(!file.exists(), "文件应被删除");
+    }
+
+    #[test]
+    fn test_fs_delete_dir_recursive() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("to_delete_dir");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(sub.join("child.txt"), "child").unwrap();
+        std::fs::remove_dir_all(&sub).unwrap();
+        assert!(!sub.exists(), "目录及其内容应被删除");
+    }
+
+    #[test]
+    fn test_fs_rename_moves_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("old.txt");
+        let dst = dir.path().join("new.txt");
+        std::fs::write(&src, "content").unwrap();
+        std::fs::rename(&src, &dst).unwrap();
+        assert!(!src.exists(), "旧路径应不存在");
+        assert!(dst.exists(), "新路径应存在");
+    }
+}
+
+/// 验证设置加载/保存逻辑
+#[cfg(test)]
+mod load_settings_tests {
     use super::*;
 
     #[test]

@@ -1,5 +1,11 @@
 import { randomFillSync } from 'node:crypto';
 import '@testing-library/jest-dom/vitest';
+import { vi } from 'vitest';
+
+// mock @tauri-apps/api/event（useFileTree 等模块在 import 时调用 listen）
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: () => Promise.resolve(() => {}),
+}));
 
 // jsdom 缺少 crypto.getRandomValues（xterm.js 等库依赖）
 Object.defineProperty(window, 'crypto', {

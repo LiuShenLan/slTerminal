@@ -4,6 +4,7 @@ mod pty;
 mod fs;
 mod claude;
 mod notify;
+mod git;
 
 pub use error::AppError;
 pub use state::AppState;
@@ -69,10 +70,17 @@ pub fn run() {
             pty::spawn::pty_write,
             pty::spawn::pty_resize,
             pty::spawn::pty_kill,
+            pty::spawn::pty_reattach,
             fs::fs_read_file,
             fs::fs_write_file,
+            fs::fs_read_dir,
+            fs::fs_create_dir,
+            fs::fs_delete,
+            fs::fs_rename,
             fs::save_settings,
             fs::load_settings,
+            git::git_status,
+            git::git_diff,
         ])
         .run(tauri::generate_context!())
         .expect("启动应用失败");

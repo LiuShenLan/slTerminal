@@ -16,6 +16,7 @@ import { terminalOptions } from "./theme";
 import { pty } from "../../ipc";
 import type { PtyEvent } from "../../types";
 import { setActiveTerminal, installKeyboardHandler } from "./keyboard";
+import { TerminalRegistry } from "./TerminalRegistry";
 
 export interface UseXtermOptions {
   /** 容器 DOM 元素 */
@@ -213,6 +214,13 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
         .spawn({ panelId, cols, rows, cwd }, handlePtyOutput)
         .then((sessionId) => {
           sessionIdRef.current = sessionId;
+          // E1: 注册到 TerminalRegistry（跨页面切换时可供 reattach 查询）
+          TerminalRegistry.register(panelId, {
+            term,
+            sessionId,
+            webglAddon: webglAddonRef.current,
+            fitAddon,
+          });
           e2eHelper.__e2e_sessionReady = true;
           console.log(`[H6] ✅ spawn OK panelId="${panelId}" sessionId="${sessionId}"`);
         })

@@ -1,29 +1,43 @@
 /// PTY reader 线程 — 阻塞读取 PTY 输出 → Channel 推送 PtyEvent
 ///
+/// E1: Channel 断开时不退出，写入 ring buffer 等待 reattach。
+///
 /// 独立线程运行，不阻塞 tokio runtime。读取到 EOF（子进程退出）时发送 Exit 事件并退出。
 ///
 /// Windows: 首轮读取时剥离 ConPTY VtIo::StartIfNeeded() 注入的启动序列
 /// （OSC 标题含 BEL→蜂鸣、清屏/归位→首字符被覆盖、DSR/光标查询），
 /// 后续读取原样透传。
 use crate::pty::spawn::PtyEvent;
+use crate::state::ring_buffer_append;
+use std::collections::VecDeque;
 use std::io::Read;
+use std::sync::{Arc, Mutex, RwLock};
 use tauri::ipc::Channel;
 
-/// reader 线程主循环
+/// reader 线程主循环（E1: 支持重连）
 ///
+/// - channel: 可替换的 Channel 引用，pty_reattach 通过写锁替换
+/// - ring: 64KB ring buffer，Channel 断开时缓存输出
 /// - 循环读取 PTY 输出，通过 Channel 发送 Output 事件
 /// - Ok(0) = EOF → 发 Exit 事件 → 退出
-/// - 错误 → 尝试发 Exit(Some(-1)) → 退出
+/// - Channel send 失败 → 写 ring buffer，等待 reattach
 /// - Windows 首轮读取剥离 ConPTY 启动注入序列
-pub fn reader_loop(mut reader: Box<dyn Read + Send>, on_output: Channel<PtyEvent>) {
+pub fn reader_loop(
+    mut reader: Box<dyn Read + Send>,
+    channel: Arc<RwLock<Option<Channel<PtyEvent>>>>,
+    ring: Arc<Mutex<VecDeque<u8>>>,
+) {
     let mut buf = [0u8; 4096];
     let mut startup_drained = false;
 
     loop {
         match reader.read(&mut buf) {
             Ok(0) => {
-                // EOF — 子进程已退出
-                let _ = on_output.send(PtyEvent::Exit { code: Some(0) });
+                // EOF — 子进程已退出，尝试发送 Exit
+                let ch = channel.read().unwrap();
+                if let Some(ref c) = *ch {
+                    let _ = c.send(PtyEvent::Exit { code: Some(0) });
+                }
                 break;
             }
             Ok(n) => {
@@ -37,14 +51,29 @@ pub fn reader_loop(mut reader: Box<dyn Read + Send>, on_output: Channel<PtyEvent
                     }
                     stripped
                 };
-                if on_output.send(PtyEvent::Output { bytes }).is_err() {
-                    // Channel 已关闭（前端断开），停止读取
-                    break;
+
+                // 尝试通过 Channel 发送
+                let ch = channel.read().unwrap();
+                if let Some(ref c) = *ch {
+                    if c.send(PtyEvent::Output {
+                        bytes: bytes.clone(),
+                    })
+                    .is_err()
+                    {
+                        // Channel 已关闭 → 写入 ring buffer
+                        ring_buffer_append(&ring, &bytes);
+                    }
+                } else {
+                    // 无 Channel（首次 spawn 前或 reattach 之间）→ 写 ring buffer
+                    ring_buffer_append(&ring, &bytes);
                 }
             }
             Err(e) => {
                 tracing::warn!("PTY reader 错误: {e}");
-                let _ = on_output.send(PtyEvent::Exit { code: Some(-1) });
+                let ch = channel.read().unwrap();
+                if let Some(ref c) = *ch {
+                    let _ = c.send(PtyEvent::Exit { code: Some(-1) });
+                }
                 break;
             }
         }
@@ -72,8 +101,6 @@ fn strip_conpty_startup(data: &[u8]) -> Vec<u8> {
     while i < data.len() {
         if data[i] == 0x1b {
             // OSC 序列（ESC ]）——以 BEL(0x07) 或 ST(ESC \) 终结
-            // 仅剥离 ConPTY 启动注入的 OSC 0（窗口标题）和 OSC 2（窗口标题变体），
-            // 保留 shell 集成的 OSC 7（CWD）/ 9;9（ConEmu CWD）/ 133（提示符边界）
             if i + 1 < data.len() && data[i + 1] == b']' {
                 if i + 2 < data.len() && (data[i + 2] == b'0' || data[i + 2] == b'2') {
                     if let Some(end) = find_osc_end(&data[i..]) {
@@ -81,7 +108,6 @@ fn strip_conpty_startup(data: &[u8]) -> Vec<u8> {
                         continue;
                     }
                 }
-                // 非 ConPTY 启动 OSC，保留
                 result.push(data[i]);
                 i += 1;
                 continue;
@@ -93,7 +119,6 @@ fn strip_conpty_startup(data: &[u8]) -> Vec<u8> {
                     i += len;
                     continue;
                 }
-                // 非启动序列的 CSI，保留
                 result.push(data[i]);
                 i += 1;
                 continue;
@@ -106,33 +131,25 @@ fn strip_conpty_startup(data: &[u8]) -> Vec<u8> {
     result
 }
 
-/// 定位 OSC 序列的结束位置（含终结符），未终结返回 None
 fn find_osc_end(data: &[u8]) -> Option<usize> {
-    // data[0] == ESC, data[1] == ']'
     for j in 2..data.len() {
         match data[j] {
-            0x07 => return Some(j + 1), // BEL 终结
-            0x1b if j + 1 < data.len() && data[j + 1] == b'\\' => return Some(j + 2), // ST 终结
+            0x07 => return Some(j + 1),
+            0x1b if j + 1 < data.len() && data[j + 1] == b'\\' => return Some(j + 2),
             _ => {}
         }
     }
-    None // 跨缓冲区，未终结
+    None
 }
 
-/// 匹配已知的 ConPTY 启动 CSI 序列，返回序列字节长度；不匹配返回 None
 fn match_csi_startup(data: &[u8]) -> Option<usize> {
-    // data[0] == ESC, data[1] == '['
     if data.len() < 3 {
         return None;
     }
     match data[2] {
-        // ESC [ H — 光标归位
         b'H' => Some(3),
-        // ESC [ 2 J / ESC [ 3 J — 清屏/擦除回滚
         b'2' | b'3' if data.len() >= 4 && data[3] == b'J' => Some(4),
-        // ESC [ 6 n — DSR 光标查询
         b'6' if data.len() >= 4 && data[3] == b'n' => Some(4),
-        // ESC [ ? 2 5 h / l — 光标显隐
         b'?' if data.len() >= 6
             && data[3] == b'2'
             && data[4] == b'5'
@@ -140,7 +157,6 @@ fn match_csi_startup(data: &[u8]) -> Option<usize> {
         {
             Some(6)
         }
-        // ESC [ s / ESC [ u — 保存/恢复光标（部分 ConPTY 版本注入）
         b's' | b'u' => Some(3),
         _ => None,
     }
@@ -152,7 +168,6 @@ mod tests {
 
     #[test]
     fn test_strip_osc_title_bel() {
-        // \x1b]0;pwsh\x07 → 应全部剥离
         let input = b"\x1b]0;pwsh\x07";
         assert_eq!(strip_conpty_startup(input), b"");
     }
@@ -189,14 +204,12 @@ mod tests {
 
     #[test]
     fn test_strip_startup_preserve_shell_output() {
-        // ConPTY 启动序列后紧跟 shell 输出
         let input = b"\x1b]0;pwsh\x07\x1b[2J\x1b[HPS C:\\> ";
         assert_eq!(strip_conpty_startup(input), b"PS C:\\> ");
     }
 
     #[test]
     fn test_preserve_osc7_cwd() {
-        // OSC 7（我们的 shell 集成 CWD 序列）应保留
         let input = b"\x1b]7;file:///C:/Users\x1b\\";
         assert_eq!(strip_conpty_startup(input), input);
     }

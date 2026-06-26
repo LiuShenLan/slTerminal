@@ -47,6 +47,12 @@ impl From<serde_json::Error> for AppError {
     }
 }
 
+impl From<git2::Error> for AppError {
+    fn from(e: git2::Error) -> Self {
+        AppError::Git(e.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

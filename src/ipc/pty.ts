@@ -48,6 +48,23 @@ export async function kill(sessionId: string): Promise<void> {
   await invoke("pty_kill", { sessionId });
 }
 
+/** PTY 重连 — 替换 Channel 并回放 ring buffer（E1）
+ *
+ * 页面切换后调用，将新 Channel 绑定到已有 session，
+ * 回放 ring buffer 中缓存的最近输出以恢复终端内容。
+ */
+export async function reattach(
+  sessionId: string,
+  onOutput: (event: PtyEvent) => void,
+): Promise<void> {
+  const channel = new Channel<PtyEvent>();
+  channel.onmessage = onOutput;
+  await invoke("pty_reattach", {
+    sessionId,
+    onOutput: channel,
+  });
+}
+
 /**
  * 获取 Windows 真实 build 号（F3 动态检测）
  *

@@ -1,0 +1,223 @@
+// useFileTree.ts — 文件树数据 hook
+//
+// 职责：
+// - 调用 fs_read_dir 获取目录内容
+// - 订阅 "fs-event" 进行增量刷新（200ms 去抖）
+// - 调用 git_status 获取 git 文件状态
+// - 处理 need_rescan 全量刷新
+
+import { useState, useEffect, useCallback, useRef } from "react";
+import { listen } from "@tauri-apps/api/event";
+import { readDir } from "../../ipc/fs";
+import { gitStatus } from "../../ipc/git";
+import type { DirEntry } from "../../types/fs";
+
+export interface TreeNode {
+  entry: DirEntry;
+  expanded: boolean;
+  children: TreeNode[];
+  loading: boolean;
+  gitStatus?: string;
+}
+
+interface UseFileTreeOptions {
+  rootPath: string | null;
+}
+
+export function useFileTree({ rootPath }: UseFileTreeOptions) {
+  const [rootNodes, setRootNodes] = useState<TreeNode[]>([]);
+  const [gitStatusMap, setGitStatusMap] = useState<Map<string, string>>(
+    new Map(),
+  );
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const rootPathRef = useRef<string | null>(rootPath);
+  rootPathRef.current = rootPath;
+
+  /** 读取目录内容并转换为 TreeNode */
+  const loadDirectory = useCallback(
+    async (dirPath: string): Promise<TreeNode[]> => {
+      try {
+        const entries = await readDir(dirPath);
+        return entries.map((entry) => ({
+          entry,
+          expanded: false,
+          children: [],
+          loading: false,
+        }));
+      } catch {
+        return [];
+      }
+    },
+    [],
+  );
+
+  /** 加载根目录 */
+  const loadRoot = useCallback(async () => {
+    if (!rootPath) {
+      setRootNodes([]);
+      return;
+    }
+    const nodes = await loadDirectory(rootPath);
+    setRootNodes(nodes);
+  }, [rootPath, loadDirectory]);
+
+  /** 加载子目录 */
+  const loadChildren = useCallback(
+    async (parentPath: string): Promise<TreeNode[]> => {
+      return loadDirectory(parentPath);
+    },
+    [loadDirectory],
+  );
+
+  /** 切换文件夹展开/折叠 */
+  const toggleExpand = useCallback(
+    async (nodePath: string) => {
+      setRootNodes((prev) => {
+        const updateNode = (nodes: TreeNode[]): TreeNode[] =>
+          nodes.map((node) => {
+            if (node.entry.path === nodePath) {
+              if (node.expanded) {
+                // 折叠
+                return { ...node, expanded: false };
+              }
+              // 展开 → 返回带 loading 标记的节点，触发异步加载
+              const newChildren = node.children.length === 0 && !node.loading;
+              return {
+                ...node,
+                expanded: true,
+                loading: newChildren,
+              };
+            }
+            if (node.expanded && node.children.length > 0) {
+              return { ...node, children: updateNode(node.children) };
+            }
+            return node;
+          });
+        return updateNode(prev);
+      });
+
+      // 异步加载子目录数据
+      const children = await loadChildren(nodePath);
+      setRootNodes((prev) => {
+        const updateNode = (nodes: TreeNode[]): TreeNode[] =>
+          nodes.map((node) => {
+            if (node.entry.path === nodePath) {
+              return {
+                ...node,
+                children: children.map((child) => ({
+                  ...child,
+                  gitStatus: gitStatusMap.get(child.entry.path),
+                })),
+                loading: false,
+              };
+            }
+            if (node.expanded && node.children.length > 0) {
+              return { ...node, children: updateNode(node.children) };
+            }
+            return node;
+          });
+        return updateNode(prev);
+      });
+    },
+    [loadChildren, gitStatusMap],
+  );
+
+  /** 刷新展开的节点（文件变更时增量刷新） */
+  const refreshExpanded = useCallback(async () => {
+    const rp = rootPathRef.current;
+    if (!rp) return;
+
+    setRootNodes((prev) => {
+      const needsRefresh = (nodes: TreeNode[]): boolean => {
+        return nodes.some(
+          (n) => n.expanded || (n.children.length > 0 && needsRefresh(n.children)),
+        );
+      };
+
+      if (!needsRefresh(prev)) return prev;
+      return prev;
+    });
+
+    // 重新加载根目录
+    await loadRoot();
+
+    // 刷新 git 状态
+    try {
+      const statuses = await gitStatus(rp);
+      const map = new Map<string, string>();
+      for (const s of statuses) {
+        map.set(s.path, s.status);
+      }
+      setGitStatusMap(map);
+    } catch {
+      // 非 git 仓库，清除 git 状态
+      setGitStatusMap(new Map());
+    }
+  }, [loadRoot]);
+
+  /** 全量刷新（need_rescan 触发） */
+  const fullRefresh = useCallback(async () => {
+    await loadRoot();
+    const rp = rootPathRef.current;
+    if (rp) {
+      try {
+        const statuses = await gitStatus(rp);
+        const map = new Map<string, string>();
+        for (const s of statuses) {
+          map.set(s.path, s.status);
+        }
+        setGitStatusMap(map);
+      } catch {
+        setGitStatusMap(new Map());
+      }
+    }
+  }, [loadRoot]);
+
+  // 根路径变更时重新加载
+  useEffect(() => {
+    loadRoot();
+    // 同时加载 git 状态
+    if (rootPath) {
+      gitStatus(rootPath)
+        .then((statuses) => {
+          const map = new Map<string, string>();
+          for (const s of statuses) {
+            map.set(s.path, s.status);
+          }
+          setGitStatusMap(map);
+        })
+        .catch(() => setGitStatusMap(new Map()));
+    }
+  }, [rootPath, loadRoot]);
+
+  // 订阅文件系统事件（200ms 去抖增量刷新）
+  useEffect(() => {
+    const unlisten = listen<{
+      paths: string[];
+      kind: string;
+      detail: string;
+    }>("fs-event", () => {
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current);
+      }
+      debounceRef.current = setTimeout(() => {
+        refreshExpanded();
+      }, 200);
+    });
+
+    return () => {
+      unlisten.then((fn) => fn());
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current);
+      }
+    };
+  }, [refreshExpanded]);
+
+  return {
+    rootNodes,
+    gitStatusMap,
+    toggleExpand,
+    refresh: refreshExpanded,
+    fullRefresh,
+  };
+}

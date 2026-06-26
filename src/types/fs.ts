@@ -1,10 +1,15 @@
-// FS 相关类型定义 — 与 Rust fs/mod.rs 中命令参数一一对应
+// 文件系统相关类型定义 — 与 Rust fs/mod.rs 命令参数一一对应
 
-/** 文件读取结果 */
-export type ReadResult = string;
-
-/** 文件写入请求 */
-export interface WriteRequest {
+/** 目录条目 */
+export interface DirEntry {
+  /** 文件/目录名 */
+  name: string;
+  /** 完整路径 */
   path: string;
-  content: string;
+  /** 是否为目录 */
+  isDir: boolean;
+  /** 文件大小（字节），仅文件时有值 */
+  size?: number;
+  /** 最后修改时间（Unix 毫秒），仅文件时有值 */
+  modified?: number;
 }

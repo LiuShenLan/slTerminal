@@ -18,9 +18,12 @@ import {
   type IDockviewHeaderActionsProps,
   type IWatermarkPanelProps,
 } from "dockview-react";
+import { Allotment } from "allotment";
+import "allotment/dist/style.css";
 import { panelRegistry } from "./panelRegistry";
 import { saveLayout, loadLayout } from "./layoutSerde";
 import { SidebarTree } from "../features/sidebar";
+import { ExplorerPanel } from "../features/explorer";
 import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
 
@@ -317,23 +320,32 @@ const Workspace: React.FC = () => {
   }, [activePageId, ensurePageInitialized]);
 
   return (
-    <div style={{ display: "flex", width: "100%", height: "100%" }}>
-      <SidebarTree switchToPage={switchToPage} onDeletePage={onDeletePage} />
-      <div style={{ flex: 1, minWidth: 0, height: "100%", position: "relative" }}>
-        {allPages.map((page) =>
-          initializedPages.has(page.pageId) ? (
-            <PageDockview
-              key={page.pageId}
-              pageId={page.pageId}
-              cwd={page.cwd}
-              savedLayout={page.layout}
-              visible={page.pageId === activePageId}
-              onReady={(api) => handlePageApiReady(page.pageId, api)}
-              onLayoutChange={(layout) => handlePageLayoutChange(page.pageId, layout)}
-            />
-          ) : null
-        )}
-      </div>
+    <div style={{ width: "100%", height: "100%" }}>
+      <Allotment>
+        <Allotment.Pane preferredSize={250} minSize={160} maxSize={400}>
+          <SidebarTree switchToPage={switchToPage} onDeletePage={onDeletePage} />
+        </Allotment.Pane>
+        <Allotment.Pane preferredSize={250} minSize={180} maxSize={500}>
+          <ExplorerPanel />
+        </Allotment.Pane>
+        <Allotment.Pane minSize={200}>
+          <div style={{ width: "100%", height: "100%", position: "relative" }}>
+            {allPages.map((page) =>
+              initializedPages.has(page.pageId) ? (
+                <PageDockview
+                  key={page.pageId}
+                  pageId={page.pageId}
+                  cwd={page.cwd}
+                  savedLayout={page.layout}
+                  visible={page.pageId === activePageId}
+                  onReady={(api) => handlePageApiReady(page.pageId, api)}
+                  onLayoutChange={(layout) => handlePageLayoutChange(page.pageId, layout)}
+                />
+              ) : null
+            )}
+          </div>
+        </Allotment.Pane>
+      </Allotment>
     </div>
   );
 };

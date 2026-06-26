@@ -10,8 +10,9 @@ use crate::error::AppError;
 use crate::pty::shell;
 use crate::state::{AppState, PtySession};
 use portable_pty::{native_pty_system, PtySize};
+use std::collections::VecDeque;
 use std::io::Write as _;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use tauri::ipc::Channel;
 use uuid::Uuid;
 
@@ -112,11 +113,18 @@ pub fn pty_spawn(
         }
     }
 
+    // E1: 创建可替换 Channel 和 ring buffer
+    let channel: Arc<RwLock<Option<Channel<PtyEvent>>>> =
+        Arc::new(RwLock::new(Some(on_output)));
+    let output_ring: Arc<Mutex<VecDeque<u8>>> = Arc::new(Mutex::new(VecDeque::new()));
+
     // 克隆 reader，启动 reader 线程（reader.rs 首轮读取剥离 ConPTY 启动注入序列）
     let reader = pair.master.try_clone_reader()?;
+    let reader_channel = channel.clone();
+    let reader_ring = output_ring.clone();
 
     let reader_handle = std::thread::spawn(move || {
-        crate::pty::reader::reader_loop(reader, on_output);
+        crate::pty::reader::reader_loop(reader, reader_channel, reader_ring);
     });
 
     // 保存会话
@@ -125,6 +133,8 @@ pub fn pty_spawn(
         child: Mutex::new(child),
         writer,
         reader_handle: Some(reader_handle),
+        channel,
+        output_ring,
     };
 
     state
@@ -207,6 +217,37 @@ pub async fn pty_kill(
     })
     .await
     .map_err(|e| AppError::Pty(format!("pty_kill join error: {e}")))?;
+
+    Ok(())
+}
+
+/// PTY 重连 — 替换 Channel 并回放 ring buffer 内容
+///
+/// 前端页面切换后调用此命令将新 Channel 绑定到已有 PTY session。
+/// 回放 ring buffer 中缓存的最近输出以恢复终端显示内容。
+#[tauri::command]
+pub fn pty_reattach(
+    state: tauri::State<'_, AppState>,
+    session_id: String,
+    on_output: Channel<PtyEvent>,
+) -> Result<(), AppError> {
+    let sessions = state.pty.sessions.read().unwrap();
+    let session = sessions
+        .get(&session_id)
+        .ok_or_else(|| AppError::SessionNotFound(session_id.clone()))?;
+
+    // 1. 替换 Channel
+    let mut ch = session.channel.write().unwrap();
+    *ch = Some(on_output);
+
+    // 2. 回放 ring buffer
+    let ring = session.output_ring.lock().unwrap();
+    if !ring.is_empty() {
+        let data: Vec<u8> = ring.iter().copied().collect();
+        if let Some(ref c) = *ch {
+            let _ = c.send(PtyEvent::Output { bytes: data });
+        }
+    }
 
     Ok(())
 }
