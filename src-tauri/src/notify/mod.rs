@@ -18,6 +18,9 @@ use notify_debouncer_full::{new_debouncer, DebounceEventResult};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
+use crate::error::AppError;
+use crate::state::AppState;
+
 /// 发送到前端的文件系统事件载荷
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -168,6 +171,39 @@ impl Drop for FileWatcher {
             let _ = tx.send(());
         }
     }
+}
+
+/// 启动/切换文件系统监听
+///
+/// 前端在项目打开时调用此命令，传入项目根路径。
+/// 若已有 watcher 在运行则先停止旧的，再为新路径启动。
+#[tauri::command]
+pub fn fs_watch(
+    path: String,
+    state: tauri::State<'_, AppState>,
+    app_handle: AppHandle,
+) -> Result<(), AppError> {
+    let watch_path = PathBuf::from(&path);
+    if !watch_path.exists() {
+        return Err(AppError::Io(format!("路径不存在: {path}")));
+    }
+
+    let mut watcher_guard = state
+        .file_watcher
+        .lock()
+        .map_err(|e| AppError::Unknown(format!("获取 file_watcher 锁失败: {e}")))?;
+
+    // 停止旧 watcher（若存在）
+    if let Some(mut old) = watcher_guard.take() {
+        old.stop();
+    }
+
+    let watcher = FileWatcher::start(app_handle, vec![watch_path], 300)
+        .map_err(|e| AppError::Unknown(format!("启动文件监听失败: {e}")))?;
+
+    *watcher_guard = Some(watcher);
+    tracing::info!("文件监听已启动: {path}");
+    Ok(())
 }
 
 /// 将 DebouncedEvent 分类为前端友好的载荷
@@ -337,5 +373,78 @@ mod tests {
 
         assert!(watcher.is_running());
         drop(watcher);
+    }
+
+    /// 验证 watcher 替换模式：停止旧 watcher → 创建新 watcher
+    /// 对应 fs_watch 命令的核心逻辑（停止旧→启动新）
+    #[test]
+    fn file_watcher_replacement_stops_old() {
+        // 创建旧 watcher
+        let (old_stop_tx, _old_stop_rx) = mpsc::channel::<()>();
+        let (_old_event_tx, old_event_rx) = mpsc::channel::<DebounceEventResult>();
+        let old_handle = std::thread::spawn(move || {
+            loop {
+                match old_event_rx.recv_timeout(Duration::from_millis(50)) {
+                    Ok(_) => {}
+                    Err(_) => break,
+                }
+            }
+        });
+
+        let mut old_watcher = FileWatcher {
+            stop_tx: Some(old_stop_tx),
+            thread_handle: Some(old_handle),
+            watch_paths: Arc::new(Mutex::new(vec![])),
+        };
+        assert!(old_watcher.is_running(), "旧 watcher 应运行中");
+
+        // 停止旧 watcher
+        old_watcher.stop();
+        assert!(!old_watcher.is_running(), "stop 后旧 watcher 应停止");
+
+        // 创建新 watcher（模拟切换项目根路径）
+        let (new_stop_tx, _new_stop_rx) = mpsc::channel::<()>();
+        let (_new_event_tx, new_event_rx) = mpsc::channel::<DebounceEventResult>();
+        let new_handle = std::thread::spawn(move || {
+            loop {
+                match new_event_rx.recv_timeout(Duration::from_millis(50)) {
+                    Ok(_) => {}
+                    Err(_) => break,
+                }
+            }
+        });
+
+        let new_watcher = FileWatcher {
+            stop_tx: Some(new_stop_tx),
+            thread_handle: Some(new_handle),
+            watch_paths: Arc::new(Mutex::new(vec![])),
+        };
+        assert!(new_watcher.is_running(), "新 watcher 应运行中");
+    }
+
+    /// 验证 stop 后再次 stop 不 panic（幂等性）
+    #[test]
+    fn file_watcher_stop_is_idempotent() {
+        let (stop_tx, _stop_rx) = mpsc::channel::<()>();
+        let (_event_tx, event_rx) = mpsc::channel::<DebounceEventResult>();
+        let handle = std::thread::spawn(move || {
+            loop {
+                match event_rx.recv_timeout(Duration::from_millis(50)) {
+                    Ok(_) => {}
+                    Err(_) => break,
+                }
+            }
+        });
+
+        let mut watcher = FileWatcher {
+            stop_tx: Some(stop_tx),
+            thread_handle: Some(handle),
+            watch_paths: Arc::new(Mutex::new(vec![])),
+        };
+
+        watcher.stop();
+        // 第二次 stop 不应 panic（stop_tx 已被 take）
+        watcher.stop();
+        assert!(!watcher.is_running());
     }
 }

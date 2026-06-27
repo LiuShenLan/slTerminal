@@ -11,6 +11,7 @@ import { Channel } from '@tauri-apps/api/core';
 import * as pty from '../ipc/pty';
 import * as fs from '../ipc/fs';
 import * as settings from '../ipc/settings';
+import * as notify from '../ipc/notify';
 // ping 测试用——index.ts 直接重导出 @tauri-apps/api/core 的 invoke
 // eslint-disable-next-line no-restricted-imports
 import { invoke } from '@tauri-apps/api/core';
@@ -265,6 +266,48 @@ describe('settings IPC 合约', () => {
     await expect(settings.saveSettings({ theme: 'dark' })).rejects.toThrow(
       'permission denied',
     );
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// Notify IPC
+// ═══════════════════════════════════════════════════════════════════
+
+describe('notify IPC 合约', () => {
+  it('startWatch: 应调用 fs_watch 命令，参数包含 path', async () => {
+    const spy = vi.fn();
+    mockIPC((cmd, args) => {
+      spy(cmd, args);
+    });
+
+    await notify.startWatch('C:\\test-project');
+
+    expect(spy).toHaveBeenCalledWith('fs_watch', {
+      path: 'C:\\test-project',
+    });
+  });
+
+  it('startWatch: 路径包含正斜杠时应原样传递', async () => {
+    const spy = vi.fn();
+    mockIPC((cmd, args) => {
+      spy(cmd, args);
+    });
+
+    await notify.startWatch('D:/projects/my-app');
+
+    expect(spy).toHaveBeenCalledWith('fs_watch', {
+      path: 'D:/projects/my-app',
+    });
+  });
+
+  // ── 异常路径 ──────────────────────────────────────────────
+
+  it('startWatch: invoke 失败时异常应传播', async () => {
+    mockIPC((cmd) => {
+      if (cmd === 'fs_watch') throw new Error('路径不存在');
+    });
+
+    await expect(notify.startWatch('C:\\nonexistent')).rejects.toThrow('路径不存在');
   });
 });
 

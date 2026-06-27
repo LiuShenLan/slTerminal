@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::thread::JoinHandle;
 use tauri::ipc::Channel;
 
+use crate::notify::FileWatcher;
 use crate::pty::spawn::PtyEvent;
 
 /// PTY 会话 — 持有 master（读写/缩放）、子进程、writer 和 reader 线程句柄
@@ -47,6 +48,8 @@ impl PtyState {
 /// 应用全局状态，各模块通过 AppState 共享资源
 pub struct AppState {
     pub pty: PtyState,
+    /// 文件系统监听器（由前端 fs_watch 命令按需创建/替换）
+    pub file_watcher: Mutex<Option<FileWatcher>>,
 }
 
 impl Default for AppState {
@@ -59,6 +62,7 @@ impl AppState {
     pub fn new() -> Self {
         Self {
             pty: PtyState::new(),
+            file_watcher: Mutex::new(None),
         }
     }
 }
@@ -99,6 +103,10 @@ mod tests {
         assert!(
             state.pty.sessions.read().unwrap().is_empty(),
             "AppState::new() 应成功创建并持有空的 PtyState"
+        );
+        assert!(
+            state.file_watcher.lock().unwrap().is_none(),
+            "AppState::new() 初始时 file_watcher 应为 None"
         );
     }
 

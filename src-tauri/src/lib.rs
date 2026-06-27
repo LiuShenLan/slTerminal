@@ -81,6 +81,7 @@ pub fn run() {
             fs::load_settings,
             git::git_status,
             git::git_diff,
+            notify::fs_watch,
         ])
         .run(tauri::generate_context!())
         .expect("启动应用失败");

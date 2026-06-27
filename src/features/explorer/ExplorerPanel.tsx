@@ -9,6 +9,7 @@ import React, { useEffect, useCallback } from "react";
 import { useFileTree } from "./useFileTree";
 import { FileTree } from "./FileTree";
 import { createDir, deleteEntry, rename, writeFile } from "../../ipc/fs";
+import { startWatch } from "../../ipc/notify";
 import { useProjects } from "../../stores/projects";
 import { useLayout } from "../../stores/layout";
 import { EXPLORER_COLORS } from "../../theme";
@@ -19,6 +20,7 @@ export const ExplorerPanel: React.FC = () => {
 
   // 查找活跃项目的根路径
   let rootPath: string | null = null;
+  let projectRootPath: string | null = null;
   if (activePageId) {
     for (const [, proj] of Object.entries(projects)) {
       const activePage = proj.pages.find(
@@ -26,6 +28,7 @@ export const ExplorerPanel: React.FC = () => {
       );
       if (activePage) {
         rootPath = activePage.cwd || proj.rootPath;
+        projectRootPath = proj.rootPath;
         break;
       }
     }
@@ -37,6 +40,15 @@ export const ExplorerPanel: React.FC = () => {
   useEffect(() => {
     refresh();
   }, [rootPath, refresh]);
+
+  // 当项目根路径变化时启动文件监听（后端 emit fs-event → 前端增量刷新）
+  useEffect(() => {
+    if (projectRootPath) {
+      startWatch(projectRootPath).catch((err) =>
+        console.error("启动文件监听失败:", err),
+      );
+    }
+  }, [projectRootPath]);
 
   /** 双击文件 → 打开编辑器面板 */
   const handleOpenFile = useCallback(
