@@ -217,18 +217,16 @@ describe("useCodeMirror — justSavedRef 抑制 fs-event 自我触发", () => {
 });
 
 describe("useCodeMirror — slterm:file-saved event", () => {
-  it("F11: 保存后 dispatch slterm:file-saved custom event", () => {
-    // 验证：handleSave 末尾应 dispatch window custom event
-    let eventReceived = false;
-    const handler = () => {
-      eventReceived = true;
+  it("F11: 保存后 dispatch slterm:file-saved 携带 file path", () => {
+    let receivedPath: string | undefined;
+    const handler = (e: Event) => {
+      receivedPath = (e as CustomEvent<{ path?: string }>).detail?.path;
     };
     window.addEventListener("slterm:file-saved", handler);
 
-    // 模拟 handleSave 末尾的 dispatch
-    window.dispatchEvent(new CustomEvent("slterm:file-saved"));
+    window.dispatchEvent(new CustomEvent("slterm:file-saved", { detail: { path: "D:/project/src/main.ts" } }));
 
-    expect(eventReceived).toBe(true);
+    expect(receivedPath).toBe("D:/project/src/main.ts");
     window.removeEventListener("slterm:file-saved", handler);
   });
 
@@ -244,19 +242,40 @@ describe("useCodeMirror — slterm:file-saved event", () => {
   });
 
   it("F12b: event 可以被 useFileTree 的 useEffect 捕获", () => {
-    // 模拟 useFileTree 中的 handler 行为
     let callCount = 0;
     const handler = () => {
       callCount++;
     };
     window.addEventListener("slterm:file-saved", handler);
 
-    // 多次 dispatch — 每次都应触发
     window.dispatchEvent(new CustomEvent("slterm:file-saved"));
     window.dispatchEvent(new CustomEvent("slterm:file-saved"));
     window.dispatchEvent(new CustomEvent("slterm:file-saved"));
 
     expect(callCount).toBe(3);
+    window.removeEventListener("slterm:file-saved", handler);
+  });
+
+  it("F12c: handler 收到 event 后从 map 删除保存的文件路径", () => {
+    const map = new Map<string, string>([
+      ["D:/project/src/main.ts", "modified"],
+      ["D:/project/src/lib.rs", "untracked"],
+    ]);
+
+    const handler = (e: Event) => {
+      const ce = e as CustomEvent<{ path?: string }>;
+      const savedPath = ce.detail?.path;
+      if (savedPath) {
+        map.delete(savedPath);
+      }
+    };
+    window.addEventListener("slterm:file-saved", handler);
+
+    expect(map.has("D:/project/src/main.ts")).toBe(true);
+    window.dispatchEvent(new CustomEvent("slterm:file-saved", { detail: { path: "D:/project/src/main.ts" } }));
+    expect(map.has("D:/project/src/main.ts")).toBe(false);
+    expect(map.has("D:/project/src/lib.rs")).toBe(true); // 其他文件不受影响
+
     window.removeEventListener("slterm:file-saved", handler);
   });
 });

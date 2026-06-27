@@ -129,7 +129,7 @@ export function useCodeMirror({ container, filePath }: UseCodeMirrorOptions) {
       .catch(() => {});
 
     // 磁盘已写入完成，通知文件浏览器刷新 git 着色
-    window.dispatchEvent(new CustomEvent("slterm:file-saved"));
+    window.dispatchEvent(new CustomEvent("slterm:file-saved", { detail: { path: normalizedPath } }));
   }, []);
 
   useEffect(() => {

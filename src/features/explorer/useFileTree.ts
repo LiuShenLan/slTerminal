@@ -148,7 +148,6 @@ export function useFileTree({ rootPath }: UseFileTreeOptions) {
       }
       setGitStatusMap(map);
     } catch {
-      // 非 git 仓库，清除 git 状态
       setGitStatusMap(new Map());
     }
   }, [loadRoot]);
@@ -213,8 +212,18 @@ export function useFileTree({ rootPath }: UseFileTreeOptions) {
 
   // 监听编辑器保存事件，立即刷新 git 着色（不依赖 fs-event 的时序竞态）
   useEffect(() => {
-    const handler = () => {
-      // 跳过 debounce，保存事件已确认磁盘写入完成
+    const handler = (e: Event) => {
+      const ce = e as CustomEvent<{ path?: string }>;
+      const savedPath = ce.detail?.path;
+      if (savedPath) {
+        // 立即清除已保存文件的 git 状态（先显示白色），
+        // 解决 autocrlf 导致 git2 始终报告 modified 的场景
+        setGitStatusMap((prev) => {
+          const next = new Map(prev);
+          next.delete(savedPath);
+          return next;
+        });
+      }
       refreshExpanded();
     };
     window.addEventListener("slterm:file-saved", handler);
