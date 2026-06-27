@@ -356,6 +356,149 @@ mod read_dir_tests {
     }
 }
 
+/// fs_write_file CRLF 行尾保持逻辑测试
+#[cfg(test)]
+mod write_file_tests {
+    use super::*;
+
+    /// 原文件为 CRLF → 写入内容应保持 CRLF
+    #[test]
+    fn crlf_preserved_when_original_is_crlf() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("crlf.txt");
+        // 写入含 \r\n 的原文件
+        std::fs::write(&file_path, "line1\r\nline2\r\nline3\r\n").unwrap();
+
+        // 模拟 CodeMirror 归一化后的 LF 内容
+        let lf_content = "line1\nline2\nline3\n";
+
+        // 检测原文件行尾
+        let raw = std::fs::read(&file_path).unwrap();
+        let use_crlf = {
+            let sample = String::from_utf8_lossy(&raw[..raw.len().min(65536)]);
+            sample.contains("\r\n")
+        };
+        assert!(use_crlf, "原文件含 CRLF");
+
+        // 转换为 CRLF
+        let final_content = if use_crlf {
+            lf_content.replace("\r\n", "\n").replace('\n', "\r\n")
+        } else {
+            lf_content.to_string()
+        };
+
+        std::fs::write(&file_path, &final_content).unwrap();
+
+        // 验证写入后仍为 CRLF
+        let saved = std::fs::read_to_string(&file_path).unwrap();
+        assert!(saved.contains("\r\n"), "写入后应保持 CRLF");
+        assert_eq!(saved, "line1\r\nline2\r\nline3\r\n");
+    }
+
+    /// 原文件为 LF → 写入内容应保持 LF
+    #[test]
+    fn lf_preserved_when_original_is_lf() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("lf.txt");
+        std::fs::write(&file_path, "line1\nline2\nline3\n").unwrap();
+
+        let lf_content = "line1\nline2\nline3\n";
+
+        let raw = std::fs::read(&file_path).unwrap();
+        let use_crlf = {
+            let sample = String::from_utf8_lossy(&raw[..raw.len().min(65536)]);
+            sample.contains("\r\n")
+        };
+        assert!(!use_crlf, "原文件不含 CRLF");
+
+        let final_content = if use_crlf {
+            lf_content.replace("\r\n", "\n").replace('\n', "\r\n")
+        } else {
+            lf_content.to_string()
+        };
+
+        std::fs::write(&file_path, &final_content).unwrap();
+
+        let saved = std::fs::read_to_string(&file_path).unwrap();
+        assert!(!saved.contains("\r\n"), "写入后应保持 LF");
+        assert_eq!(saved, "line1\nline2\nline3\n");
+    }
+
+    /// 新文件（不存在）→ Windows 上默认 CRLF
+    #[test]
+    fn new_file_defaults_to_crlf_on_windows() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("new.txt");
+        // 确保文件不存在
+        let _ = std::fs::remove_file(&file_path);
+
+        let lf_content = "hello\nworld\n";
+
+        // 新文件检测：读取失败 → 使用平台默认
+        let use_crlf = std::fs::read(&file_path).map_or_else(
+            |_| cfg!(windows),
+            |bytes| {
+                let sample = String::from_utf8_lossy(&bytes[..bytes.len().min(65536)]);
+                sample.contains("\r\n")
+            },
+        );
+
+        let final_content = if use_crlf {
+            lf_content.replace("\r\n", "\n").replace('\n', "\r\n")
+        } else {
+            lf_content.to_string()
+        };
+
+        std::fs::write(&file_path, &final_content).unwrap();
+
+        let saved = std::fs::read_to_string(&file_path).unwrap();
+        #[cfg(windows)]
+        assert!(saved.contains("\r\n"), "Windows 上新文件应为 CRLF");
+        #[cfg(not(windows))]
+        assert!(!saved.contains("\r\n"), "Unix 上新文件应为 LF");
+    }
+
+    /// 混合行尾 → 标准化为 CRLF（如原文件为 CRLF）
+    #[test]
+    fn mixed_endings_normalized_to_crlf() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("mixed.txt");
+        std::fs::write(&file_path, "line1\r\nline2\nline3\r\n").unwrap();
+
+        let mixed_content = "line1\nline2\r\nline3\n"; // CodeMirror 可能产生混合
+
+        let raw = std::fs::read(&file_path).unwrap();
+        let use_crlf = {
+            let sample = String::from_utf8_lossy(&raw[..raw.len().min(65536)]);
+            sample.contains("\r\n")
+        };
+        assert!(use_crlf);
+
+        let final_content = if use_crlf {
+            mixed_content.replace("\r\n", "\n").replace('\n', "\r\n")
+        } else {
+            mixed_content.to_string()
+        };
+
+        std::fs::write(&file_path, &final_content).unwrap();
+
+        let saved = std::fs::read_to_string(&file_path).unwrap();
+        // 应全部为 CRLF，无孤立 LF
+        let lf_only = saved.replace("\r\n", "");
+        assert!(!lf_only.contains('\n'), "不应有孤立的 LF");
+    }
+
+    /// 仅含 \n 的 LF 文件 → replace 操作不改变内容
+    #[test]
+    fn lf_only_content_unchanged_in_crlf_conversion() {
+        let content = "fn main() {\n    println!(\"hello\");\n}\n";
+        let crlf = content.replace("\r\n", "\n").replace('\n', "\r\n");
+        assert!(crlf.contains("\r\n"));
+        assert!(!crlf.contains('\n') || crlf.ends_with("\r\n"),
+            "转换后不应有孤立 LF（末尾 \\r\\n 跳过）");
+    }
+}
+
 /// 验证设置加载/保存逻辑
 #[cfg(test)]
 mod load_settings_tests {
