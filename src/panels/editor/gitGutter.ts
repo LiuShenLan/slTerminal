@@ -19,7 +19,7 @@ import { GIT_GUTTER_COLORS } from "../../theme/colors";
 // 配色直接从 GIT_GUTTER_COLORS token 引用。
 
 /** 新增行标记 — 绿色竖条 */
-class AddedMarker extends GutterMarker {
+export class AddedMarker extends GutterMarker {
   toDOM(): Node {
     const el = document.createElement("div");
     el.style.cssText = `background-color:${GIT_GUTTER_COLORS.added};width:3px;height:100%;margin-left:6px;`;
@@ -28,10 +28,20 @@ class AddedMarker extends GutterMarker {
 }
 
 /** 修改行标记 — 蓝色竖条 */
-class ModifiedMarker extends GutterMarker {
+export class ModifiedMarker extends GutterMarker {
   toDOM(): Node {
     const el = document.createElement("div");
     el.style.cssText = `background-color:${GIT_GUTTER_COLORS.modified};width:3px;height:100%;margin-left:6px;`;
+    return el;
+  }
+}
+
+/** 透明占位标记 — 用于 initialSpacer 固定 gutter 宽度，防止 marker 从无到有时文本偏移导致光标错位 */
+export class SpacerMarker extends GutterMarker {
+  toDOM(): Node {
+    const el = document.createElement("div");
+    // 宽度 = 3px + 6px margin-left = 9px，与 AddedMarker/ModifiedMarker 一致
+    el.style.cssText = "width:3px;height:1px;margin-left:6px;";
     return el;
   }
 }
@@ -164,6 +174,9 @@ export function diffGutter() {
     gutter({
       class: "cm-diff-gutter",
       markers: (view): RangeSet<GutterMarker> => view.state.field(diffMarkersField),
+      // 固定 gutter 宽度为 9px（3px + 6px margin-left），无标记时也占位，
+      // 防止 marker 从无到有时 gutter 宽度突变导致文本右移而光标未同步偏移
+      initialSpacer: () => new SpacerMarker(),
     }),
   ];
 }

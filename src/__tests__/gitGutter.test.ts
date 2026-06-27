@@ -9,6 +9,10 @@ import { GIT_GUTTER_COLORS } from "../theme/colors";
 import {
   setDiffMarkers,
   diffMarkersField,
+  SpacerMarker,
+  AddedMarker,
+  ModifiedMarker,
+  diffGutter,
 } from "../panels/editor/gitGutter";
 
 // ── Helpers ──
@@ -210,6 +214,80 @@ describe("gitGutter", () => {
         effects: setDiffMarkers.of([]),
       });
       expect(markerCount(tr2.state)).toBe(0);
+    });
+  });
+
+  describe("SpacerMarker — 固定 gutter 宽度", () => {
+    it("G13: SpacerMarker toDOM() 返回 HTMLElement", () => {
+      const marker = new SpacerMarker();
+      const dom = marker.toDOM() as HTMLElement;
+      expect(dom).toBeInstanceOf(HTMLElement);
+      expect(dom.tagName).toBe("DIV");
+    });
+
+    it("G14: SpacerMarker toDOM() 宽度 = 3px + 6px margin-left", () => {
+      const marker = new SpacerMarker();
+      const dom = marker.toDOM() as HTMLElement;
+      // width:3px + margin-left:6px = 9px 总宽度，与 AddedMarker/ModifiedMarker 一致
+      expect(dom.style.width).toBe("3px");
+      expect(dom.style.marginLeft).toBe("6px");
+    });
+
+    it("G15: SpacerMarker toDOM() 无背景色 — 透明占位", () => {
+      const marker = new SpacerMarker();
+      const dom = marker.toDOM() as HTMLElement;
+      // backgroundColor 为空或 transparent
+      const bg = dom.style.backgroundColor;
+      expect(bg === "" || bg === "transparent").toBe(true);
+    });
+
+    it("G16: SpacerMarker toDOM() height=1px — 占位不撑满行高", () => {
+      const marker = new SpacerMarker();
+      const dom = marker.toDOM() as HTMLElement;
+      // height=1px，不影响行高测量；与 AddedMarker 的 height:100% 不同
+      expect(dom.style.height).toBe("1px");
+    });
+
+    it("G17: AddedMarker toDOM() 宽度与 SpacerMarker 一致 (3px)", () => {
+      const spacer = new SpacerMarker().toDOM() as HTMLElement;
+      const added = new AddedMarker().toDOM() as HTMLElement;
+      expect(added.style.width).toBe(spacer.style.width);
+      expect(added.style.marginLeft).toBe(spacer.style.marginLeft);
+    });
+
+    it("G18: ModifiedMarker toDOM() 宽度与 SpacerMarker 一致 (3px)", () => {
+      const spacer = new SpacerMarker().toDOM() as HTMLElement;
+      const modified = new ModifiedMarker().toDOM() as HTMLElement;
+      expect(modified.style.width).toBe(spacer.style.width);
+      expect(modified.style.marginLeft).toBe(spacer.style.marginLeft);
+    });
+
+    it("G19: diffGutter() 返回扩展数组含 diffMarkersField", () => {
+      const extensions = diffGutter();
+      expect(Array.isArray(extensions)).toBe(true);
+      expect(extensions.length).toBeGreaterThanOrEqual(2);
+      // 数组中应含 diffMarkersField
+      expect(extensions).toContain(diffMarkersField);
+    });
+
+    it("G20: diffGutter() 返回 gutter 扩展包含 initialSpacer", () => {
+      // diffGutter() 返回数组含 diffMarkersField + gutter({...})
+      // gutter 扩展本身是一个 Extension，在 jsdom 下可通过 EditorState 验证
+      const state = EditorState.create({
+        doc: "",
+        extensions: [diffGutter()],
+      });
+      // extension 加载成功，不抛异常
+      const field = state.field(diffMarkersField);
+      expect(field).toBeDefined();
+      // 空文档无 marker
+      let count = 0;
+      const cursor = field.iter();
+      while (cursor.value !== null) {
+        count++;
+        cursor.next();
+      }
+      expect(count).toBe(0);
     });
   });
 });
