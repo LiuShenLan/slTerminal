@@ -155,22 +155,96 @@ pub async fn git_diff(repo_path: String, file_path: String) -> Result<Vec<DiffHu
 
         let mut hunks: Vec<DiffHunk> = Vec::new();
 
-        // 使用 DiffHunk 原生方法提取行信息
+        // 用 line callback 逐行处理，精确识别实际变更行（跳过 context 行），
+        // 避免整段 hunk 的 old_lines/new_lines 包含三行上下文导致多余着色。
+        // 连续同类型行合并为一个 DiffHunk。
+        let mut cur_kind: Option<char> = None; // '+' 新增 | '-' 删除
+        let mut cur_old_start: u32 = 0;
+        let mut cur_new_start: u32 = 0;
+        let mut cur_old_count: u32 = 0;
+        let mut cur_new_count: u32 = 0;
+
+        let mut flush_group = |_kind: Option<char>,
+                               old_start: u32,
+                               old_count: u32,
+                               new_start: u32,
+                               new_count: u32| {
+            if old_count == 0 && new_count == 0 {
+                return;
+            }
+            hunks.push(DiffHunk {
+                old_start,
+                old_lines: old_count,
+                new_start,
+                new_lines: new_count,
+            });
+        };
+
         diff.foreach(
-            &mut |_delta, _num| true, // file callback — 继续
-            None,                      // binary callback — 跳过
-            Some(&mut |_delta, hunk| {
-                hunks.push(DiffHunk {
-                    old_start: hunk.old_start(),
-                    old_lines: hunk.old_lines(),
-                    new_start: hunk.new_start(),
-                    new_lines: hunk.new_lines(),
-                });
+            &mut |_delta, _num| true, // file callback
+            None,                      // binary callback
+            None,                      // hunk callback — 不用，直接走 line callback
+            Some(&mut |_delta, _hunk, line| {
+                // line.origin() 返回 char: '+' 新增 | '-' 删除 | ' ' 上下文
+                let c = line.origin();
+                let is_add = c == '+';
+                let is_del = c == '-';
+                let is_ctx = !is_add && !is_del;
+                let new_kind: Option<char> = if is_add {
+                    Some('+')
+                } else if is_del {
+                    Some('-')
+                } else {
+                    None
+                };
+
+                if is_ctx || new_kind != cur_kind {
+                    // flush 上一组
+                    flush_group(
+                        cur_kind,
+                        cur_old_start,
+                        cur_old_count,
+                        cur_new_start,
+                        cur_new_count,
+                    );
+                    cur_kind = new_kind;
+                    cur_old_start = 0;
+                    cur_new_start = 0;
+                    cur_old_count = 0;
+                    cur_new_count = 0;
+                }
+
+                if is_add {
+                    let n = line.new_lineno().unwrap_or(0);
+                    if cur_new_count == 0 {
+                        cur_new_start = n;
+                    }
+                    cur_new_count += 1;
+                } else if is_del {
+                    let o = line.old_lineno().unwrap_or(0);
+                    if cur_old_count == 0 {
+                        cur_old_start = o;
+                        // 删除的 new 位置近似取 old 位置
+                        if cur_new_count == 0 {
+                            cur_new_start = o;
+                        }
+                    }
+                    cur_old_count += 1;
+                }
+
                 true
             }),
-            None, // line callback — 不需要逐行处理
         )
         .map_err(|e| AppError::Git(format!("diff foreach 失败: {e}")))?;
+
+        // flush 最后一组
+        flush_group(
+            cur_kind,
+            cur_old_start,
+            cur_old_count,
+            cur_new_start,
+            cur_new_count,
+        );
 
         Ok(hunks)
     })
