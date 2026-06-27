@@ -103,6 +103,20 @@ export function useCodeMirror({ container, filePath }: UseCodeMirrorOptions) {
     fs.writeFile(path, content).catch((err) => {
       console.error("保存失败:", err);
     });
+
+    // P13: 保存后刷新 diff gutter
+    const normalizedPath = path.replace(/\\/g, "/");
+    const repoDir =
+      normalizedPath.lastIndexOf("/") >= 0
+        ? normalizedPath.slice(0, normalizedPath.lastIndexOf("/"))
+        : ".";
+    gitDiff(repoDir, normalizedPath)
+      .then((hunks) => {
+        if (hunks.length > 0 && viewRef.current) {
+          updateDiffGutter(viewRef.current, hunks);
+        }
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -159,17 +173,22 @@ export function useCodeMirror({ container, filePath }: UseCodeMirrorOptions) {
 
       // D1: 文件打开后加载 diff 边栏
       if (filePath) {
+        const normalizedPath = filePath.replace(/\\/g, "/");
+        const parentDir =
+          normalizedPath.lastIndexOf("/") >= 0
+            ? normalizedPath.slice(0, normalizedPath.lastIndexOf("/"))
+            : ".";
         try {
-          const parentDir =
-            filePath.lastIndexOf("/") >= 0
-              ? filePath.slice(0, filePath.lastIndexOf("/"))
-              : ".";
-          const loadedHunks = await gitDiff(parentDir, filePath);
+          const loadedHunks = await gitDiff(parentDir, normalizedPath);
           if (loadedHunks.length > 0) {
             updateDiffGutter(view, loadedHunks);
           }
-        } catch {
-          // 非 git 仓库，diff 不可用，静默
+        } catch (err) {
+          // 非 git 仓库静默（git2 打开仓库失败），其他错误 console.warn
+          const msg = String(err ?? "");
+          if (!msg.includes("打开仓库失败")) {
+            console.warn("加载 diff 边栏失败:", err);
+          }
         }
       }
     };

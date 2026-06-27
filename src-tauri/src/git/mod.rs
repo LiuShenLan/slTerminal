@@ -127,11 +127,14 @@ pub async fn git_diff(repo_path: String, file_path: String) -> Result<Vec<DiffHu
 
         // 基准：HEAD tree vs 工作区+index
         let mut opts = git2::DiffOptions::new();
-        // 将 file_path 转为相对于仓库根的路径
-        let repo_path_std = std::path::Path::new(&repo_path);
+        // 用 repo.workdir() 做 strip_prefix 基准（而非信任传入的 repo_path）。
+        // git2 可从未知子目录找到 repo，但 pathspec 需相对 workdir。
+        let workdir = repo
+            .workdir()
+            .ok_or_else(|| AppError::Git("仓库无工作目录（可能为 bare repo）".to_string()))?;
         let file_path_std = std::path::Path::new(&file_path);
         let rel_path_str = file_path_std
-            .strip_prefix(repo_path_std)
+            .strip_prefix(workdir)
             .unwrap_or(file_path_std)
             .to_string_lossy()
             .replace('\\', "/");
@@ -675,5 +678,128 @@ mod tests {
         .unwrap();
 
         assert!(found_old_gt_new, "删除行后 old_lines 应 > new_lines");
+    }
+
+    // ---- P8+P11: git_diff 路径验证 ----
+
+    /// 验证 pathspec 使用 workdir() 而非传入的 repo_path。
+    /// 从子目录传入 repo_path 不影响实际的 pathspec 计算。
+    #[test]
+    fn git_diff_pathspec_uses_workdir() {
+        let (_dir, path) = init_temp_repo();
+        // 先创建子目录，再 commit 文件
+        std::fs::create_dir_all(path.join("src")).unwrap();
+        commit_file(&path, "src/main.rs", "fn main() {}\n");
+
+        // 在子目录中修改文件
+        std::fs::write(path.join("src").join("main.rs"), "fn main() { println!(); }\n").unwrap();
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let head = repo.head().unwrap();
+        let tree = head.peel_to_tree().unwrap();
+
+        // 模拟：从子目录调用 git_diff，传入 parent_dir 作为 repo_path
+        let workdir = repo.workdir().unwrap();
+        let file_path = path.join("src").join("main.rs");
+        let rel = file_path.strip_prefix(workdir).unwrap().to_string_lossy().replace('\\', "/");
+        // pathspec 应为 repo-相对路径，如 "src/main.rs"
+        assert_eq!(rel, "src/main.rs", "pathspec 应为 repo-相对路径而非仅文件名");
+
+        let mut opts = git2::DiffOptions::new();
+        opts.pathspec(&rel);
+        let diff = repo
+            .diff_tree_to_workdir_with_index(Some(&tree), Some(&mut opts))
+            .unwrap();
+
+        let mut hunk_count = 0u32;
+        diff.foreach(
+            &mut |_delta, _num| true,
+            None,
+            Some(&mut |_delta, _hunk| { hunk_count += 1; true }),
+            None,
+        )
+        .unwrap();
+        assert!(hunk_count > 0, "正确的 pathspec 应匹配到 diff");
+    }
+
+    /// 从错误父目录传入 repo_path 时，workdir() 纠正后仍能正确 strip
+    #[test]
+    fn git_diff_absolute_file_path_works() {
+        let (_dir, path) = init_temp_repo();
+        commit_file(&path, "lib.rs", "pub fn add() -> i32 { 1 }\n");
+        std::fs::write(path.join("lib.rs"), "pub fn add() -> i32 { 2 }\n").unwrap();
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let head = repo.head().unwrap();
+        let tree = head.peel_to_tree().unwrap();
+
+        let workdir = repo.workdir().unwrap();
+        let file_path = path.join("lib.rs");
+        let rel = file_path.strip_prefix(workdir).unwrap().to_string_lossy().replace('\\', "/");
+        assert_eq!(rel, "lib.rs");
+
+        let mut opts = git2::DiffOptions::new();
+        opts.pathspec(&rel);
+        let diff = repo
+            .diff_tree_to_workdir_with_index(Some(&tree), Some(&mut opts))
+            .unwrap();
+
+        let mut hunk_count = 0u32;
+        diff.foreach(
+            &mut |_delta, _num| true,
+            None,
+            Some(&mut |_delta, _hunk| { hunk_count += 1; true }),
+            None,
+        )
+        .unwrap();
+        assert!(hunk_count > 0, "绝对路径 strip 后应正确匹配");
+    }
+
+    /// 反斜杠路径 → pathspec 归一化为正斜杠
+    #[test]
+    fn git_diff_path_forward_slash_normalized() {
+        let (_dir, path) = init_temp_repo();
+        commit_file(&path, "test.rs", "// comment\n");
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let workdir = repo.workdir().unwrap();
+
+        // 模拟 Windows 反斜杠路径
+        let raw = format!("{}\\test.rs", workdir.display());
+        let file_path_std = std::path::Path::new(&raw);
+        let rel = file_path_std
+            .strip_prefix(workdir)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        // 不应含反斜杠
+        assert!(!rel.contains('\\'), "pathspec 不应含反斜杠: {rel}");
+        assert_eq!(rel, "test.rs");
+    }
+
+    /// 深层嵌套文件：pathspec 应为完整相对路径
+    #[test]
+    fn git_diff_deep_nested_file() {
+        let (_dir, path) = init_temp_repo();
+        let deep = path.join("src").join("components").join("ui");
+        std::fs::create_dir_all(&deep).unwrap();
+        let deep_file = deep.join("Button.tsx");
+        std::fs::write(&deep_file, "export const Button = () => null;\n").unwrap();
+        git_add(&path, "src/components/ui/Button.tsx");
+        Command::new("git")
+            .args(["commit", "-m", "add deep file"])
+            .current_dir(&path)
+            .output()
+            .unwrap();
+        std::fs::write(&deep_file, "export const Button = () => <div/>;\n").unwrap();
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let workdir = repo.workdir().unwrap();
+        let rel = deep_file.strip_prefix(workdir).unwrap().to_string_lossy().replace('\\', "/");
+        assert_eq!(
+            rel,
+            "src/components/ui/Button.tsx",
+            "深层嵌套文件 pathspec 应为完整 repo-相对路径"
+        );
     }
 }
