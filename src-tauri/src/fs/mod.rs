@@ -36,6 +36,9 @@ pub async fn fs_read_file(path: String) -> Result<String, AppError> {
 }
 
 /// 写入文件内容（覆盖模式，UTF-8）
+///
+/// 写入前检测原文件行尾风格（CRLF/LF），保持与源文件一致，
+/// 避免 CodeMirror 内部 LF 归一化导致保存后行尾突变 → git 误判 modified。
 #[tauri::command]
 pub async fn fs_write_file(path: String, content: String) -> Result<(), AppError> {
     let _ = tokio::task::spawn_blocking(move || -> Result<(), AppError> {
@@ -43,7 +46,27 @@ pub async fn fs_write_file(path: String, content: String) -> Result<(), AppError
         if let Some(parent) = PathBuf::from(&path).parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(&path, &content)?;
+
+        // 检测原文件行尾风格：读原始字节检查是否含 \r\n
+        let use_crlf = std::fs::read(&path).map_or_else(
+            // 新文件：Windows 默认 CRLF
+            |_| cfg!(windows),
+            |bytes| {
+                // 取前 64KB 样本检测 CRLF
+                let sample = String::from_utf8_lossy(&bytes[..bytes.len().min(65536)]);
+                sample.contains("\r\n")
+            },
+        );
+
+        // 保持与原文件一致的行尾风格
+        let final_content = if use_crlf {
+            // 将 LF 转为 CRLF（跳过已有的 CRLF）
+            content.replace("\r\n", "\n").replace('\n', "\r\n")
+        } else {
+            content
+        };
+
+        std::fs::write(&path, &final_content)?;
         Ok(())
     })
     .await
