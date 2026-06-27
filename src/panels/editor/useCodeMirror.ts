@@ -28,7 +28,7 @@ import { markdown } from "@codemirror/lang-markdown";
 import { xml } from "@codemirror/lang-xml";
 import { save } from "../../ipc/dialog";
 import { fs } from "../../ipc";
-import { diffGutter, updateDiffGutter } from "./gitGutter";
+import { diffGutter, updateDiffGutter, clearDiffGutter } from "./gitGutter";
 import { listen } from "@tauri-apps/api/event";
 import { gitDiff } from "../../ipc/git";
 
@@ -122,8 +122,11 @@ export function useCodeMirror({ container, filePath }: UseCodeMirrorOptions) {
         : ".";
     gitDiff(repoDir, normalizedPath)
       .then((hunks) => {
-        if (hunks.length > 0 && viewRef.current) {
-          updateDiffGutter(viewRef.current, hunks);
+        if (hunks.length > 0) {
+          if (viewRef.current) updateDiffGutter(viewRef.current, hunks);
+        } else {
+          // 文件已干净（匹配 HEAD）→ 清除旧 diff 标记
+          if (viewRef.current) clearDiffGutter(viewRef.current);
         }
       })
       .catch(() => {});
