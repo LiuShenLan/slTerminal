@@ -1214,4 +1214,278 @@ mod tests {
         assert!(json.contains("\"status\""), "应包含 status: {json}");
         assert!(!json.contains("\"Path\""), "不应包含 PascalCase");
     }
+
+    // ---- 行级 diff 精确性测试（line callback 逻辑） ----
+
+    /// 调用实际的 git2 diff API + line callback 逻辑，返回 DiffHunk 列表。
+    /// 模拟 git_diff 命令的行级处理。
+    fn compute_diff_hunks(repo: &git2::Repository, file_path: &std::path::Path) -> Vec<DiffHunk> {
+        let tree = repo.head().unwrap().peel_to_tree().unwrap();
+        let mut opts = git2::DiffOptions::new();
+        let rel = file_path.strip_prefix(repo.workdir().unwrap()).unwrap()
+            .to_string_lossy().replace('\\', "/");
+        opts.pathspec(&rel);
+
+        let diff = repo.diff_tree_to_workdir_with_index(Some(&tree), Some(&mut opts)).unwrap();
+
+        let mut hunks: Vec<DiffHunk> = Vec::new();
+        let mut del_start: u32 = 0;
+        let mut del_count: u32 = 0;
+        let mut add_start: u32 = 0;
+        let mut add_count: u32 = 0;
+        let mut prev_was_del = false;
+
+        let mut flush_pending = |ds: u32, dc: u32, as_: u32, ac: u32| {
+            if dc == 0 && ac == 0 { return; }
+            if dc > 0 && ac > 0 {
+                let shared = dc.min(ac);
+                hunks.push(DiffHunk { old_start: ds, old_lines: shared, new_start: as_, new_lines: shared });
+                if dc > shared {
+                    hunks.push(DiffHunk { old_start: ds + shared, old_lines: dc - shared, new_start: ds + shared, new_lines: 0 });
+                }
+                if ac > shared {
+                    hunks.push(DiffHunk { old_start: 0, old_lines: 0, new_start: as_ + shared, new_lines: ac - shared });
+                }
+            } else if dc > 0 {
+                hunks.push(DiffHunk { old_start: ds, old_lines: dc, new_start: ds, new_lines: 0 });
+            } else {
+                hunks.push(DiffHunk { old_start: 0, old_lines: 0, new_start: as_, new_lines: ac });
+            }
+        };
+
+        diff.foreach(
+            &mut |_, _| true, None, None,
+            Some(&mut |_, _, line| {
+                let c = line.origin();
+                if c == '+' {
+                    let n = line.new_lineno().unwrap_or(0);
+                    if add_count == 0 { add_start = n; }
+                    add_count += 1;
+                    prev_was_del = false;
+                } else if c == '-' {
+                    let o = line.old_lineno().unwrap_or(0);
+                    if prev_was_del && add_count > 0 {
+                        flush_pending(0, 0, add_start, add_count);
+                        add_start = 0; add_count = 0;
+                    }
+                    if del_count == 0 { del_start = o; }
+                    del_count += 1;
+                    prev_was_del = true;
+                } else {
+                    flush_pending(del_start, del_count, add_start, add_count);
+                    del_start = 0; del_count = 0; add_start = 0; add_count = 0;
+                    prev_was_del = false;
+                }
+                true
+            }),
+        ).unwrap();
+        flush_pending(del_start, del_count, add_start, add_count);
+        hunks
+    }
+
+    #[test]
+    fn line_callback_single_modified_line() {
+        let (_dir, path) = init_temp_repo();
+        commit_file(&path, "f.txt", "line1\nline2\nline3\n");
+        // 修改 line2
+        fs::write(path.join("f.txt"), "line1\nline2 MODIFIED\nline3\n").unwrap();
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let hunks = compute_diff_hunks(&repo, &path.join("f.txt"));
+
+        assert_eq!(hunks.len(), 1, "单行修改应只有 1 个 hunk");
+        assert_eq!(hunks[0].old_lines, 1, "old_lines=1");
+        assert_eq!(hunks[0].new_lines, 1, "new_lines=1 → ModifiedMarker");
+    }
+
+    #[test]
+    fn line_callback_context_lines_not_included() {
+        let (_dir, path) = init_temp_repo();
+        // 创建一个有 10 行的文件，只修改中间 1 行
+        let content: String = (1..=10).map(|i| format!("line{i}\n")).collect();
+        commit_file(&path, "f.txt", &content);
+        // 修改第 5 行
+        let new_content: String = (1..=10).map(|i| {
+            if i == 5 { format!("line{i} MODIFIED\n") } else { format!("line{i}\n") }
+        }).collect();
+        fs::write(path.join("f.txt"), &new_content).unwrap();
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let hunks = compute_diff_hunks(&repo, &path.join("f.txt"));
+
+        // 只修改了 1 行，应只有 1 个 hunk，old_lines=1（不包含 context）
+        assert_eq!(hunks.len(), 1, "单行修改只应有 1 个 hunk，不含 context");
+        assert_eq!(hunks[0].old_lines, 1, "不应包含 context 行");
+        assert_eq!(hunks[0].new_lines, 1, "不应包含 context 行");
+    }
+
+    #[test]
+    fn line_callback_pure_addition() {
+        let (_dir, path) = init_temp_repo();
+        commit_file(&path, "f.txt", "line1\nline2\n");
+        // 在 line1 后插入 3 行
+        fs::write(path.join("f.txt"), "line1\nnewA\nnewB\nnewC\nline2\n").unwrap();
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let hunks = compute_diff_hunks(&repo, &path.join("f.txt"));
+
+        let added = hunks.iter().find(|h| h.old_lines == 0);
+        assert!(added.is_some(), "应有纯新增 hunk（old_lines=0）");
+        assert_eq!(added.unwrap().new_lines, 3, "new_lines=3（3 行新增）");
+    }
+
+    #[test]
+    fn line_callback_pure_deletion() {
+        let (_dir, path) = init_temp_repo();
+        commit_file(&path, "f.txt", "line1\nline2\nline3\nline4\n");
+        // 删除 line2, line3
+        fs::write(path.join("f.txt"), "line1\nline4\n").unwrap();
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let hunks = compute_diff_hunks(&repo, &path.join("f.txt"));
+
+        let deleted = hunks.iter().find(|h| h.new_lines == 0);
+        assert!(deleted.is_some(), "应有纯删除 hunk（new_lines=0）");
+        assert_eq!(deleted.unwrap().old_lines, 2, "old_lines=2（2 行删除）");
+    }
+
+    #[test]
+    fn line_callback_modified_plus_extra_additions() {
+        let (_dir, path) = init_temp_repo();
+        commit_file(&path, "f.txt", "line1\nline2\nline3\n");
+        fs::write(path.join("f.txt"), "line1\nline2 NEW\nline3\nline4 NEW\nline5 NEW\n").unwrap();
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let hunks = compute_diff_hunks(&repo, &path.join("f.txt"));
+
+        // 应包含 modified（蓝色）hunk
+        let modified = hunks.iter().find(|h| h.old_lines > 0 && h.new_lines > 0);
+        assert!(modified.is_some(), "应有 modified hunk");
+        assert_eq!(modified.unwrap().old_lines, modified.unwrap().new_lines,
+            "modified 的 old/new 行数应相等");
+
+        // 应包含新增（绿色）hunk（old_lines=0）
+        let added = hunks.iter().find(|h| h.old_lines == 0 && h.new_lines > 0);
+        assert!(added.is_some(), "应有额外新增 hunk");
+        assert!(added.unwrap().new_lines > 0, "new_lines > 0");
+
+        // 所有 hunk 的变更行数之和应覆盖全部改动
+        let total_del: u32 = hunks.iter().map(|h| h.old_lines).sum();
+        let total_add: u32 = hunks.iter().map(|h| h.new_lines).sum();
+        assert!(total_del > 0, "应有删除行");
+        assert!(total_add > total_del, "新增行应多于删除行");
+    }
+
+    #[test]
+    fn line_callback_modified_plus_extra_deletions() {
+        let (_dir, path) = init_temp_repo();
+        commit_file(&path, "f.txt", "line1\nold2\nold3\nold4\nold5\n");
+        fs::write(path.join("f.txt"), "line1\nnew2\nnew3\n").unwrap();
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let hunks = compute_diff_hunks(&repo, &path.join("f.txt"));
+
+        // 应包含 modified（蓝色）hunk
+        let modified = hunks.iter().find(|h| h.old_lines > 0 && h.new_lines > 0);
+        assert!(modified.is_some(), "应有 modified hunk");
+        assert_eq!(modified.unwrap().old_lines, modified.unwrap().new_lines,
+            "modified 的 old/new 行数应相等");
+
+        // 应包含删除（灰三角）hunk（new_lines=0）
+        let deleted = hunks.iter().find(|h| h.old_lines > 0 && h.new_lines == 0);
+        assert!(deleted.is_some(), "应有多余删除 hunk");
+        assert!(deleted.unwrap().old_lines > 0, "old_lines > 0");
+
+        // 删除行应多于修改行
+        let total_del: u32 = hunks.iter().map(|h| h.old_lines).sum();
+        let total_add: u32 = hunks.iter().map(|h| h.new_lines).sum();
+        assert!(total_del > total_add, "删除行应多于新增行");
+    }
+
+    #[test]
+    fn line_callback_multiple_change_groups() {
+        let (_dir, path) = init_temp_repo();
+        commit_file(&path, "f.txt", "A1\nA2\nA3\nB1\nB2\nB3\n");
+        // 修改 A2 和 B2（中间有 context 行 A3/B1）
+        fs::write(path.join("f.txt"), "A1\nA2 MOD\nA3\nB1\nB2 MOD\nB3\n").unwrap();
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let hunks = compute_diff_hunks(&repo, &path.join("f.txt"));
+
+        // 两处独立的修改
+        let modified = hunks.iter().filter(|h| h.old_lines > 0 && h.new_lines > 0).count();
+        assert_eq!(modified, 2, "应有 2 个独立的 modified hunk");
+    }
+
+    #[test]
+    fn line_callback_no_changes_returns_empty() {
+        let (_dir, path) = init_temp_repo();
+        commit_file(&path, "f.txt", "unchanged\n");
+        // 不修改
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let hunks = compute_diff_hunks(&repo, &path.join("f.txt"));
+
+        assert_eq!(hunks.len(), 0, "无修改应返回 0 hunk");
+    }
+
+    #[test]
+    fn line_callback_delete_all_lines() {
+        let (_dir, path) = init_temp_repo();
+        commit_file(&path, "f.txt", "a\nb\nc\n");
+        // 全部删除
+        fs::write(path.join("f.txt"), "").unwrap();
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let hunks = compute_diff_hunks(&repo, &path.join("f.txt"));
+
+        // 全删应只有删除类 hunk（new_lines=0），无 modified 或 added
+        let deleted_hunks: Vec<_> = hunks.iter().filter(|h| h.new_lines == 0).collect();
+        assert!(!deleted_hunks.is_empty(), "全删应有删除 hunk");
+        let total_deleted: u32 = deleted_hunks.iter().map(|h| h.old_lines).sum();
+        assert_eq!(total_deleted, 3, "总计 3 行删除");
+        // 不应有 modified 或 added
+        assert!(hunks.iter().all(|h| h.new_lines == 0), "全删不应有新增行");
+    }
+
+    #[test]
+    fn line_callback_add_all_new_lines_after_commit() {
+        let (_dir, path) = init_temp_repo();
+        // 先 commit 一个空文件，再追加 3 行 → 纯新增
+        commit_file(&path, "f.txt", "original\n");
+        fs::write(path.join("f.txt"), "original\nnewA\nnewB\nnewC\n").unwrap();
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let hunks = compute_diff_hunks(&repo, &path.join("f.txt"));
+
+        // 应有纯新增 hunk
+        let added = hunks.iter().find(|h| h.old_lines == 0 && h.new_lines > 0);
+        assert!(added.is_some(), "追加行应有 added hunk");
+        assert_eq!(added.unwrap().new_lines, 3, "3 行纯新增");
+    }
+
+    // ---- Repository::discover 验证 ----
+
+    #[test]
+    fn repository_discover_from_subdirectory() {
+        let (_dir, path) = init_temp_repo();
+        commit_file(&path, "test.txt", "hello\n");
+        // 在子目录中 discover
+        let sub = path.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+
+        let result = git2::Repository::discover(&sub);
+        assert!(result.is_ok(), "discover 应从子目录找到仓库");
+    }
+
+    #[test]
+    fn repository_discover_from_deep_subdirectory() {
+        let (_dir, path) = init_temp_repo();
+        commit_file(&path, "test.txt", "hello\n");
+        let deep = path.join("a").join("b").join("c");
+        std::fs::create_dir_all(&deep).unwrap();
+
+        let result = git2::Repository::discover(&deep);
+        assert!(result.is_ok(), "discover 应从深层子目录找到仓库");
+    }
 }
