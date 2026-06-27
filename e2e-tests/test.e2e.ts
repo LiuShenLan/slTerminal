@@ -145,10 +145,14 @@ describe('键盘快捷键', () => {
       { timeout: 25000, timeoutMsg: 'PTY session 未就绪' },
     );
 
-    // 3. 写文本到剪贴板（Tauri clipboard 插件）
-    await browser.execute(async (text: string) => {
-      const { writeText } = await import('@tauri-apps/plugin-clipboard-manager');
-      await writeText(text);
+    // 3. 写文本到剪贴板（通过应用侧 E2E helper，避免 browser.execute 中裸模块解析失败）
+    await browser.execute((text: string) => {
+      const writeClipboard = (window as any).__slterm_e2e_writeClipboard;
+      if (typeof writeClipboard !== 'function') {
+        throw new Error('__slterm_e2e_writeClipboard 未就绪（clipboard IPC 动态导入未完成）');
+      }
+      // clipboard writeText 返回 Promise，但 browser.execute 支持 async 回调
+      return writeClipboard(text);
     }, 'e2e_paste_marker');
 
     // 4. 聚焦终端 xterm textarea
