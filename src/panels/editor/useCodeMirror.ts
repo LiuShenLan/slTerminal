@@ -106,9 +106,13 @@ export function useCodeMirror({ container, filePath }: UseCodeMirrorOptions) {
     justSavedRef.current = true;
 
     const content = view.state.doc.toString();
-    fs.writeFile(path, content).catch((err) => {
+
+    // 等待磁盘写入完成再刷新 diff 和 git 着色（避免 fire-and-forget 时序竞态）
+    try {
+      await fs.writeFile(path, content);
+    } catch (err) {
       console.error("保存失败:", err);
-    });
+    }
 
     // P13: 保存后刷新 diff gutter
     const normalizedPath = path.replace(/\\/g, "/");
@@ -124,7 +128,7 @@ export function useCodeMirror({ container, filePath }: UseCodeMirrorOptions) {
       })
       .catch(() => {});
 
-    // 通知文件浏览器刷新 git 着色（避免仅依赖 fs-event 的时序竞态）
+    // 磁盘已写入完成，通知文件浏览器刷新 git 着色
     window.dispatchEvent(new CustomEvent("slterm:file-saved"));
   }, []);
 
