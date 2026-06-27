@@ -82,6 +82,9 @@ export function useCodeMirror({ container, filePath }: UseCodeMirrorOptions) {
   const viewRef = useRef<EditorView | null>(null);
   const filePathRef = useRef<string | undefined>(filePath);
   const langCompartment = useRef(new Compartment());
+  // 保存后短时间内抑制 fs-event auto-reload，避免将自己的写入误判为外部改动、
+  // 执行全量文档替换从而破坏 diff gutter 的标记（RangeSet.map 会把所有 marker 清空）
+  const justSavedRef = useRef(false);
 
   /** Ctrl+S 保存 — G3: 无 filePath 时弹出另存为对话框 */
   const handleSave = useCallback(async () => {
@@ -98,6 +101,9 @@ export function useCodeMirror({ container, filePath }: UseCodeMirrorOptions) {
       path = selected;
       filePathRef.current = path;
     }
+
+    // 标记为自己保存，防止后续 fs-event 误判为外部改动而清空 diff 标记
+    justSavedRef.current = true;
 
     const content = view.state.doc.toString();
     fs.writeFile(path, content).catch((err) => {
@@ -219,6 +225,12 @@ export function useCodeMirror({ container, filePath }: UseCodeMirrorOptions) {
     const unlisten = listen<{ paths: string[]; kind: string }>(
       "fs-event",
       (event) => {
+        // 跳过自己保存触发的文件事件，避免 auto-reload 清空 diff gutter 标记
+        if (justSavedRef.current) {
+          justSavedRef.current = false;
+          return;
+        }
+
         const currentPath = filePathRef.current;
         if (!currentPath) return;
 
