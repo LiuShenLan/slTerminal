@@ -155,96 +155,109 @@ pub async fn git_diff(repo_path: String, file_path: String) -> Result<Vec<DiffHu
 
         let mut hunks: Vec<DiffHunk> = Vec::new();
 
-        // 用 line callback 逐行处理，精确识别实际变更行（跳过 context 行），
-        // 避免整段 hunk 的 old_lines/new_lines 包含三行上下文导致多余着色。
-        // 连续同类型行合并为一个 DiffHunk。
-        let mut cur_kind: Option<char> = None; // '+' 新增 | '-' 删除
-        let mut cur_old_start: u32 = 0;
-        let mut cur_new_start: u32 = 0;
-        let mut cur_old_count: u32 = 0;
-        let mut cur_new_count: u32 = 0;
+        // 用 line callback 逐行处理，精确识别实际变更行（跳过 context 行）。
+        // 关键逻辑：git unified diff 中修改 = 删除('-')后紧跟新增('+')，
+        // 二者应合并为 {old_lines>0, new_lines>0} → ModifiedMarker（蓝色），
+        // 而非拆成独立的 Deleted + Added。
+        let mut del_start: u32 = 0;
+        let mut del_count: u32 = 0;
+        let mut add_start: u32 = 0;
+        let mut add_count: u32 = 0;
 
-        let mut flush_group = |_kind: Option<char>,
-                               old_start: u32,
-                               old_count: u32,
-                               new_start: u32,
-                               new_count: u32| {
-            if old_count == 0 && new_count == 0 {
+        let mut flush_pending = |del_s: u32, del_c: u32, add_s: u32, add_c: u32| {
+            if del_c == 0 && add_c == 0 {
                 return;
             }
-            hunks.push(DiffHunk {
-                old_start,
-                old_lines: old_count,
-                new_start,
-                new_lines: new_count,
-            });
+            if del_c > 0 && add_c > 0 {
+                // 修改：删除+新增 按相同行数配对为 ModifiedMarker
+                let shared = del_c.min(add_c);
+                hunks.push(DiffHunk {
+                    old_start: del_s,
+                    old_lines: shared,
+                    new_start: add_s,
+                    new_lines: shared,
+                });
+                // 多余的删除行
+                if del_c > shared {
+                    hunks.push(DiffHunk {
+                        old_start: del_s + shared,
+                        old_lines: del_c - shared,
+                        new_start: del_s + shared,
+                        new_lines: 0,
+                    });
+                }
+                // 多余的新增行
+                if add_c > shared {
+                    hunks.push(DiffHunk {
+                        old_start: 0,
+                        old_lines: 0,
+                        new_start: add_s + shared,
+                        new_lines: add_c - shared,
+                    });
+                }
+            } else if del_c > 0 {
+                // 纯删除
+                hunks.push(DiffHunk {
+                    old_start: del_s,
+                    old_lines: del_c,
+                    new_start: del_s,
+                    new_lines: 0,
+                });
+            } else {
+                // 纯新增
+                hunks.push(DiffHunk {
+                    old_start: 0,
+                    old_lines: 0,
+                    new_start: add_s,
+                    new_lines: add_c,
+                });
+            }
         };
+
+        let mut prev_was_del = false; // 上一行是否为 '-'，用于检测 '-→+' 修改模式
 
         diff.foreach(
             &mut |_delta, _num| true, // file callback
             None,                      // binary callback
-            None,                      // hunk callback — 不用，直接走 line callback
+            None,                      // hunk callback
             Some(&mut |_delta, _hunk, line| {
-                // line.origin() 返回 char: '+' 新增 | '-' 删除 | ' ' 上下文
                 let c = line.origin();
-                let is_add = c == '+';
-                let is_del = c == '-';
-                let is_ctx = !is_add && !is_del;
-                let new_kind: Option<char> = if is_add {
-                    Some('+')
-                } else if is_del {
-                    Some('-')
-                } else {
-                    None
-                };
-
-                if is_ctx || new_kind != cur_kind {
-                    // flush 上一组
-                    flush_group(
-                        cur_kind,
-                        cur_old_start,
-                        cur_old_count,
-                        cur_new_start,
-                        cur_new_count,
-                    );
-                    cur_kind = new_kind;
-                    cur_old_start = 0;
-                    cur_new_start = 0;
-                    cur_old_count = 0;
-                    cur_new_count = 0;
-                }
-
-                if is_add {
+                if c == '+' {
                     let n = line.new_lineno().unwrap_or(0);
-                    if cur_new_count == 0 {
-                        cur_new_start = n;
+                    if add_count == 0 {
+                        add_start = n;
                     }
-                    cur_new_count += 1;
-                } else if is_del {
+                    add_count += 1;
+                    prev_was_del = false;
+                } else if c == '-' {
                     let o = line.old_lineno().unwrap_or(0);
-                    if cur_old_count == 0 {
-                        cur_old_start = o;
-                        // 删除的 new 位置近似取 old 位置
-                        if cur_new_count == 0 {
-                            cur_new_start = o;
+                    if prev_was_del {
+                        // 遇到新的 '-' 组：之前有多余的新增行，无配对删除 → 先 flush
+                        if add_count > 0 {
+                            flush_pending(0, 0, add_start, add_count);
+                            add_start = 0;
+                            add_count = 0;
                         }
                     }
-                    cur_old_count += 1;
+                    if del_count == 0 {
+                        del_start = o;
+                    }
+                    del_count += 1;
+                    prev_was_del = true;
+                } else {
+                    // context 行 → flush 当前累积的变更组
+                    flush_pending(del_start, del_count, add_start, add_count);
+                    del_start = 0; del_count = 0;
+                    add_start = 0; add_count = 0;
+                    prev_was_del = false;
                 }
-
                 true
             }),
         )
         .map_err(|e| AppError::Git(format!("diff foreach 失败: {e}")))?;
 
-        // flush 最后一组
-        flush_group(
-            cur_kind,
-            cur_old_start,
-            cur_old_count,
-            cur_new_start,
-            cur_new_count,
-        );
+        // flush 末尾残留组
+        flush_pending(del_start, del_count, add_start, add_count);
 
         Ok(hunks)
     })
