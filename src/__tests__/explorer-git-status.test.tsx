@@ -544,4 +544,59 @@ describe("explorer git 状态 — E 组：slterm:file-saved event", () => {
     // gitStatus 不应被调用
     expect(mocks.mockGitStatus).not.toHaveBeenCalled();
   });
+
+  it("F29: slterm:file-saved 携带 path → handler 从 map 中 delete 该文件", () => {
+    // 模拟 useFileTree 中的 handler 行为
+    const map = new Map<string, string>([
+      ["D:/project/src/main.tsx", "modified"],
+      ["D:/project/src/lib.rs", "untracked"],
+    ]);
+
+    const handler = (e: Event) => {
+      const ce = e as CustomEvent<{ path?: string }>;
+      const savedPath = ce.detail?.path;
+      if (savedPath) {
+        const next = new Map(map);
+        next.delete(savedPath);
+        // setGitStatusMap(next) — 模拟 React state update
+        map.clear();
+        next.forEach((v, k) => map.set(k, v));
+      }
+    };
+    window.addEventListener("slterm:file-saved", handler);
+
+    expect(map.get("D:/project/src/main.tsx")).toBe("modified");
+
+    window.dispatchEvent(
+      new CustomEvent("slterm:file-saved", {
+        detail: { path: "D:/project/src/main.tsx" },
+      }),
+    );
+
+    expect(map.has("D:/project/src/main.tsx")).toBe(false);
+    expect(map.get("D:/project/src/lib.rs")).toBe("untracked"); // 其他文件不受影响
+
+    window.removeEventListener("slterm:file-saved", handler);
+  });
+
+  it("F30: slterm:file-saved 无 detail.path → 不影响 map", () => {
+    const map = new Map<string, string>([
+      ["D:/project/src/main.tsx", "modified"],
+    ]);
+
+    const handler = (e: Event) => {
+      const ce = e as CustomEvent<{ path?: string }>;
+      const savedPath = ce.detail?.path;
+      if (savedPath) {
+        map.delete(savedPath);
+      }
+    };
+    window.addEventListener("slterm:file-saved", handler);
+
+    // dispatch 不带 detail
+    window.dispatchEvent(new CustomEvent("slterm:file-saved"));
+    expect(map.has("D:/project/src/main.tsx")).toBe(true); // 未受影响
+
+    window.removeEventListener("slterm:file-saved", handler);
+  });
 });

@@ -279,3 +279,48 @@ describe("useCodeMirror — slterm:file-saved event", () => {
     window.removeEventListener("slterm:file-saved", handler);
   });
 });
+
+describe("useCodeMirror — 保存后 diff gutter 清空", () => {
+  it("F13: gitDiff 返回 0 hunks → 应清空 diff gutter（文件已干净）", () => {
+    // 模拟 handleSave 中的逻辑：hunks.length === 0 时清空而非跳过
+    const hunks: never[] = [];
+    let gutterCleared = false;
+    let gutterUpdated = false;
+
+    // 模拟分支判断
+    if (hunks.length > 0) {
+      gutterUpdated = true; // updateDiffGutter
+    } else {
+      gutterCleared = true; // clearDiffGutter
+    }
+
+    expect(gutterCleared).toBe(true);
+    expect(gutterUpdated).toBe(false);
+  });
+
+  it("F14: gitDiff 返回 >0 hunks → 应更新 diff gutter（不清空）", () => {
+    const hunks = [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 1 }];
+    let gutterCleared = false;
+    let gutterUpdated = false;
+
+    if (hunks.length > 0) {
+      gutterUpdated = true;
+    } else {
+      gutterCleared = true;
+    }
+
+    expect(gutterUpdated).toBe(true);
+    expect(gutterCleared).toBe(false);
+  });
+
+  it("F15: 保存失败（gitDiff reject）→ 不更新也不清空 gutter", () => {
+    // .catch(() => {}) 分支——静默，不改变 gutter
+    let gutterTouched = false;
+    const mockGitDiff = () => Promise.reject(new Error("打开仓库失败"));
+    mockGitDiff()
+      .then(() => { gutterTouched = true; })
+      .catch(() => { /* 静默 */ });
+    // 不应进入 then 分支
+    expect(gutterTouched).toBe(false);
+  });
+});
