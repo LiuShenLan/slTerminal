@@ -123,6 +123,9 @@ export function useCodeMirror({ container, filePath }: UseCodeMirrorOptions) {
         }
       })
       .catch(() => {});
+
+    // 通知文件浏览器刷新 git 着色（避免仅依赖 fs-event 的时序竞态）
+    window.dispatchEvent(new CustomEvent("slterm:file-saved"));
   }, []);
 
   useEffect(() => {

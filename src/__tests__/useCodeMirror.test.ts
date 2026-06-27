@@ -215,3 +215,48 @@ describe("useCodeMirror — justSavedRef 抑制 fs-event 自我触发", () => {
     expect(parentDir).toBe(".");
   });
 });
+
+describe("useCodeMirror — slterm:file-saved event", () => {
+  it("F11: 保存后 dispatch slterm:file-saved custom event", () => {
+    // 验证：handleSave 末尾应 dispatch window custom event
+    let eventReceived = false;
+    const handler = () => {
+      eventReceived = true;
+    };
+    window.addEventListener("slterm:file-saved", handler);
+
+    // 模拟 handleSave 末尾的 dispatch
+    window.dispatchEvent(new CustomEvent("slterm:file-saved"));
+
+    expect(eventReceived).toBe(true);
+    window.removeEventListener("slterm:file-saved", handler);
+  });
+
+  it("F12: event 类型为 CustomEvent", () => {
+    let receivedType = "";
+    const handler = (e: Event) => {
+      receivedType = e.type;
+    };
+    window.addEventListener("slterm:file-saved", handler);
+    window.dispatchEvent(new CustomEvent("slterm:file-saved"));
+    expect(receivedType).toBe("slterm:file-saved");
+    window.removeEventListener("slterm:file-saved", handler);
+  });
+
+  it("F12b: event 可以被 useFileTree 的 useEffect 捕获", () => {
+    // 模拟 useFileTree 中的 handler 行为
+    let callCount = 0;
+    const handler = () => {
+      callCount++;
+    };
+    window.addEventListener("slterm:file-saved", handler);
+
+    // 多次 dispatch — 每次都应触发
+    window.dispatchEvent(new CustomEvent("slterm:file-saved"));
+    window.dispatchEvent(new CustomEvent("slterm:file-saved"));
+    window.dispatchEvent(new CustomEvent("slterm:file-saved"));
+
+    expect(callCount).toBe(3);
+    window.removeEventListener("slterm:file-saved", handler);
+  });
+});

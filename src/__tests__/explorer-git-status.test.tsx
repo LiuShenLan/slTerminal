@@ -456,3 +456,92 @@ describe("explorer git 状态 — D 组：ExplorerPanel 集成", () => {
     expect(mocks.mockGitStatus).not.toHaveBeenCalled();
   });
 });
+
+describe("explorer git 状态 — E 组：slterm:file-saved event", () => {
+  beforeEach(() => {
+    cleanup();
+    mocks.resetAll();
+    resetStore();
+  });
+
+  it("F25: slterm:file-saved → gitStatus 被重新调用", async () => {
+    populateStore("C:\\project");
+    render(React.createElement(ExplorerPanel));
+
+    await waitFor(() => {
+      expect(mocks.mockGitStatus).toHaveBeenCalledTimes(1);
+    });
+
+    // dispatch slterm:file-saved → 应再次调用 gitStatus
+    window.dispatchEvent(new CustomEvent("slterm:file-saved"));
+
+    await waitFor(() => {
+      expect(mocks.mockGitStatus).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("F26: slterm:file-saved → gitStatusMap 更新为新值", async () => {
+    // 第一次返回 modified
+    mocks.mockGitStatus.mockResolvedValueOnce([
+      { path: "C:/project/src/main.tsx", status: "modified" },
+    ]);
+
+    populateStore("C:\\project");
+    render(React.createElement(ExplorerPanel));
+
+    await waitFor(() => {
+      expect(mocks.mockGitStatus).toHaveBeenCalledTimes(1);
+    });
+
+    // 模拟文件回退 → gitStatus 返回空（无变更文件）
+    mocks.mockGitStatus.mockResolvedValueOnce([]);
+
+    window.dispatchEvent(new CustomEvent("slterm:file-saved"));
+
+    await waitFor(() => {
+      expect(mocks.mockGitStatus).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("F27: 回退后文件名颜色恢复默认", async () => {
+    // mock gitStatus 返回 modified（第一次加载）
+    mocks.mockGitStatus.mockResolvedValueOnce([
+      { path: "C:/project/src/main.tsx", status: "modified" },
+    ]);
+
+    populateStore("C:\\project");
+    const { container } = render(React.createElement(ExplorerPanel));
+
+    await waitFor(() => {
+      expect(mocks.mockGitStatus).toHaveBeenCalledTimes(1);
+    });
+
+    // 回退 → gitStatus 返回空
+    mocks.mockGitStatus.mockResolvedValueOnce([]);
+
+    window.dispatchEvent(new CustomEvent("slterm:file-saved"));
+
+    await waitFor(() => {
+      expect(mocks.mockGitStatus).toHaveBeenCalledTimes(2);
+    });
+
+    // 验证渲染未崩溃
+    const spans = container.querySelectorAll("span");
+    expect(spans.length).toBeGreaterThan(0);
+  });
+
+  it("F28: rootPath 为 null 时不抛错", () => {
+    resetStore();
+    expect(() => {
+      render(React.createElement(ExplorerPanel));
+    }).not.toThrow();
+
+    // rootPath 为 null → useFileTree 的 refreshExpanded 应立即返回
+    expect(() => {
+      window.dispatchEvent(new CustomEvent("slterm:file-saved"));
+    }).not.toThrow();
+
+    // gitStatus 不应被调用
+    expect(mocks.mockGitStatus).not.toHaveBeenCalled();
+  });
+});

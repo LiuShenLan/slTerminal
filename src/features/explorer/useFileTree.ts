@@ -211,6 +211,16 @@ export function useFileTree({ rootPath }: UseFileTreeOptions) {
     };
   }, [refreshExpanded]);
 
+  // 监听编辑器保存事件，立即刷新 git 着色（不依赖 fs-event 的时序竞态）
+  useEffect(() => {
+    const handler = () => {
+      // 跳过 debounce，保存事件已确认磁盘写入完成
+      refreshExpanded();
+    };
+    window.addEventListener("slterm:file-saved", handler);
+    return () => window.removeEventListener("slterm:file-saved", handler);
+  }, [refreshExpanded]);
+
   return {
     rootNodes,
     gitStatusMap,
