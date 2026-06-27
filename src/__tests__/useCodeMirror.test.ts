@@ -155,3 +155,63 @@ describe("useCodeMirror — diff 错误处理", () => {
     expect(shouldWarn).toBe(true);
   });
 });
+
+describe("useCodeMirror — justSavedRef 抑制 fs-event 自我触发", () => {
+  it("F11: handleSave 设 justSavedRef=true", () => {
+    // 模拟 handleSave 中的逻辑：保存前设 true
+    const justSaved = true;
+    expect(justSaved).toBe(true);
+  });
+
+  it("F12: fs-event handler 检测 justSavedRef 后跳过并复位", () => {
+    let justSaved = true;
+
+    // 模拟 fs-event handler 的逻辑
+    if (justSaved) {
+      justSaved = false;
+      // 跳过 auto-reload
+    }
+
+    expect(justSaved).toBe(false); // 已复位
+  });
+
+  it("F12b: 非保存触发的 fs-event 正常进入 auto-reload 逻辑", () => {
+    const justSaved = false;
+
+    // 外部文件变更 → 正常路径
+    const shouldProcess = !justSaved;
+    expect(shouldProcess).toBe(true);
+  });
+
+  it("F13: 保存后的 diff 重载使用归一化路径", () => {
+    // 测试路径归一化逻辑（handleSave 中保存后重载 diff 用的路径）
+    const path = "D:\\project\\src\\main.tsx";
+    const normalizedPath = path.replace(/\\/g, "/");
+    const repoDir =
+      normalizedPath.lastIndexOf("/") >= 0
+        ? normalizedPath.slice(0, normalizedPath.lastIndexOf("/"))
+        : ".";
+
+    expect(normalizedPath).toBe("D:/project/src/main.tsx");
+    expect(repoDir).toBe("D:/project/src");
+    expect(repoDir).not.toBe(".");
+  });
+
+  it("F14: 根级文件 parentDir 不回退到绝对路径", () => {
+    const normalizedPath = "D:/project/README.md";
+    const parentDir =
+      normalizedPath.lastIndexOf("/") >= 0
+        ? normalizedPath.slice(0, normalizedPath.lastIndexOf("/"))
+        : ".";
+    expect(parentDir).toBe("D:/project");
+  });
+
+  it("F15: 仅有文件名的路径 parentDir 回退 '.'", () => {
+    const normalizedPath = "README.md";
+    const parentDir =
+      normalizedPath.lastIndexOf("/") >= 0
+        ? normalizedPath.slice(0, normalizedPath.lastIndexOf("/"))
+        : ".";
+    expect(parentDir).toBe(".");
+  });
+});

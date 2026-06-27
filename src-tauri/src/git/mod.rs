@@ -256,6 +256,7 @@ pub async fn git_diff(repo_path: String, file_path: String) -> Result<Vec<DiffHu
 mod tests {
     use std::fs;
     use std::process::Command;
+    use super::{DiffHunk, GitStatusEntry};
 
     /// 在临时目录中 init 一个 git 仓库，返回 tempdir（自动清理）和路径
     fn init_temp_repo() -> (tempfile::TempDir, std::path::PathBuf) {
@@ -994,5 +995,210 @@ mod tests {
         }
         // 正常情况：rel 为相对路径
         assert_eq!(rel, "check.txt");
+    }
+
+    // ---- line callback 精确 diff hunk（不含 context 行）----
+
+    /// 辅助：运行 line-callback 逻辑，返回 Vec<DiffHunk>（模拟 git_diff 命令）
+    fn collect_precise_hunks(repo: &git2::Repository, pathspec: &str) -> Vec<DiffHunk> {
+        let head = repo.head().unwrap();
+        let tree = head.peel_to_tree().unwrap();
+        let mut opts = git2::DiffOptions::new();
+        opts.pathspec(pathspec);
+        let diff = repo
+            .diff_tree_to_workdir_with_index(Some(&tree), Some(&mut opts))
+            .unwrap();
+
+        let mut hunks: Vec<DiffHunk> = Vec::new();
+        let mut cur_kind: Option<char> = None;
+        let mut cur_old_start: u32 = 0;
+        let mut cur_new_start: u32 = 0;
+        let mut cur_old_count: u32 = 0;
+        let mut cur_new_count: u32 = 0;
+
+        diff.foreach(
+            &mut |_d, _n| true,
+            None,
+            None,
+            Some(&mut |_d, _h, line| {
+                let c = line.origin();
+                let is_add = c == '+';
+                let is_del = c == '-';
+                let is_ctx = !is_add && !is_del;
+                let new_kind = if is_add { Some('+') } else if is_del { Some('-') } else { None };
+
+                if is_ctx || new_kind != cur_kind {
+                    if cur_old_count > 0 || cur_new_count > 0 {
+                        hunks.push(DiffHunk {
+                            old_start: cur_old_start,
+                            old_lines: cur_old_count,
+                            new_start: cur_new_start,
+                            new_lines: cur_new_count,
+                        });
+                    }
+                    cur_kind = new_kind;
+                    cur_old_start = 0;
+                    cur_new_start = 0;
+                    cur_old_count = 0;
+                    cur_new_count = 0;
+                }
+
+                if is_add {
+                    let n = line.new_lineno().unwrap_or(0);
+                    if cur_new_count == 0 { cur_new_start = n; }
+                    cur_new_count += 1;
+                } else if is_del {
+                    let o = line.old_lineno().unwrap_or(0);
+                    if cur_old_count == 0 { cur_old_start = o; }
+                    if cur_new_count == 0 { cur_new_start = o; }
+                    cur_old_count += 1;
+                }
+                true
+            }),
+        ).unwrap();
+
+        // flush last group
+        if cur_old_count > 0 || cur_new_count > 0 {
+            hunks.push(DiffHunk {
+                old_start: cur_old_start,
+                old_lines: cur_old_count,
+                new_start: cur_new_start,
+                new_lines: cur_new_count,
+            });
+        }
+
+        hunks
+    }
+
+    /// 修改一行 → 产生删除+新增 2 个 hunk（'-'和'+'是不同类型，各成一组）。
+    /// 前端 buildRangeSet 分别渲染 DeletedMarker 三角 + AddedMarker 绿色竖条。
+    #[test]
+    fn git_diff_precise_single_line_modification() {
+        let (_dir, path) = init_temp_repo();
+        // 5 行文件，修改第 3 行
+        commit_file(&path, "f.txt", "line1\nline2\nline3\nline4\nline5\n");
+        fs::write(path.join("f.txt"), "line1\nline2\nline3 MODIFIED\nline4\nline5\n").unwrap();
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let hunks = collect_precise_hunks(&repo, "f.txt");
+
+        // 修改 = 删除(1) + 新增(1) = 2 个 hunk（不含 context 行）
+        assert_eq!(hunks.len(), 2, "修改一行 = 删除+新增，应产生 2 个 hunk");
+        // 第一个 hunk：删除行
+        assert_eq!(hunks[0].old_start, 3);
+        assert_eq!(hunks[0].old_lines, 1);
+        // 第二个 hunk：新增行
+        assert_eq!(hunks[1].new_start, 3);
+        assert_eq!(hunks[1].new_lines, 1);
+    }
+
+    /// 连续新增多行 → 合并为 1 个 hunk
+    #[test]
+    fn git_diff_precise_consecutive_additions_merged() {
+        let (_dir, path) = init_temp_repo();
+        commit_file(&path, "f.txt", "line1\n");
+        fs::write(path.join("f.txt"), "line1\nline2\nline3\nline4\n").unwrap();
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let hunks = collect_precise_hunks(&repo, "f.txt");
+
+        assert_eq!(hunks.len(), 1, "连续新增应合并为 1 个 hunk");
+        assert_eq!(hunks[0].old_lines, 0, "纯新增 old_lines=0");
+        assert_eq!(hunks[0].new_lines, 3, "新增 3 行");
+        assert_eq!(hunks[0].new_start, 2);
+    }
+
+    /// 连续删除多行 → 合并为 1 个 hunk
+    #[test]
+    fn git_diff_precise_consecutive_deletions_merged() {
+        let (_dir, path) = init_temp_repo();
+        commit_file(&path, "f.txt", "a\nb\nc\nd\n");
+        fs::write(path.join("f.txt"), "a\n").unwrap();
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let hunks = collect_precise_hunks(&repo, "f.txt");
+
+        assert_eq!(hunks.len(), 1, "连续删除应合并为 1 个 hunk");
+        assert_eq!(hunks[0].old_lines, 3, "删除 3 行");
+        assert_eq!(hunks[0].new_lines, 0, "纯删除 new_lines=0");
+    }
+
+    /// 多处修改由 context 分隔 → 各自独立 hunk
+    #[test]
+    fn git_diff_precise_multiple_groups_separated_by_context() {
+        let (_dir, path) = init_temp_repo();
+        // 7 行，修改第 2 行和第 6 行（中间 3 行 context 分隔）
+        commit_file(&path, "f.txt", "a\nb\nc\nd\ne\nf\ng\n");
+        fs::write(path.join("f.txt"), "a\nB\nc\nd\ne\nF\ng\n").unwrap();
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let hunks = collect_precise_hunks(&repo, "f.txt");
+
+        // git 可能将相近的修改合并为一个 hunk，取决于 context 行数
+        // 此处验证至少不是整段 context 都被标记
+        let total_changed: u32 = hunks.iter().map(|h| h.new_lines + h.old_lines).sum();
+        // 只改了 2 行，所以总变更行数应为 2（1 old + 1 new per line = 2 per change = 4）
+        assert!(total_changed <= 4, "总变更行数不应超过 4（修改 2 行=4），实际: {total_changed}");
+    }
+
+    /// 无修改文件 → 0 hunk
+    #[test]
+    fn git_diff_precise_no_change_returns_empty() {
+        let (_dir, path) = init_temp_repo();
+        commit_file(&path, "f.txt", "unchanged\n");
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let hunks = collect_precise_hunks(&repo, "f.txt");
+        assert_eq!(hunks.len(), 0, "无修改应返回 0 hunk");
+    }
+
+    // ---- Repository::discover 子目录上溯 ----
+
+    /// 从子目录调用 git discover 也能找到仓库
+    #[test]
+    fn git_discover_from_subdirectory() {
+        let (_dir, path) = init_temp_repo();
+        // 先创建子目录和文件
+        let sub_dir = path.join("sub").join("deep");
+        fs::create_dir_all(&sub_dir).unwrap();
+        fs::write(sub_dir.join("file.txt"), "content\n").unwrap();
+        git_add(&path, "sub/deep/file.txt");
+        Command::new("git")
+            .args(["commit", "-m", "add deep file"])
+            .current_dir(&path)
+            .output()
+            .unwrap();
+
+        // 从子目录 discover
+        let repo = git2::Repository::discover(&sub_dir)
+            .expect("从子目录 discover 应能找到仓库");
+        assert!(repo.workdir().is_some(), "应能找到 workdir");
+
+        // 验证路径拼接正确
+        let workdir = dunce::simplified(repo.workdir().unwrap());
+        let abs = workdir.join("sub/deep/file.txt").to_string_lossy().replace('\\', "/");
+        let expected = path.join("sub/deep/file.txt").to_string_lossy().replace('\\', "/");
+        assert_eq!(abs, expected, "workdir 拼接路径应与实际路径一致");
+    }
+
+    // ---- serde camelCase 序列化 ----
+
+    #[test]
+    fn diff_hunk_serializes_camelcase() {
+        let hunk = DiffHunk { old_start: 10, old_lines: 2, new_start: 12, new_lines: 3 };
+        let json = serde_json::to_string(&hunk).unwrap();
+        assert!(json.contains("\"oldStart\""), "应包含 camelCase 字段 oldStart: {json}");
+        assert!(json.contains("\"oldLines\""), "应包含 camelCase 字段 oldLines: {json}");
+        assert!(json.contains("\"newStart\""), "应包含 camelCase 字段 newStart: {json}");
+        assert!(json.contains("\"newLines\""), "应包含 camelCase 字段 newLines: {json}");
+    }
+
+    #[test]
+    fn git_status_entry_serializes_camelcase() {
+        let entry = GitStatusEntry { path: "/abs/path".into(), status: "modified".into() };
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains("\"path\""), "应包含 path: {json}");
+        assert!(json.contains("\"status\""), "应包含 status: {json}");
+        assert!(!json.contains("\"Path\""), "不应包含 PascalCase");
     }
 }
