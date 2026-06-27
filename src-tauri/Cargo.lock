@@ -3778,6 +3778,7 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "dirs",
+ "dunce",
  "git2",
  "notify",
  "notify-debouncer-full",

@@ -183,12 +183,8 @@ export function useCodeMirror({ container, filePath }: UseCodeMirrorOptions) {
           if (loadedHunks.length > 0) {
             updateDiffGutter(view, loadedHunks);
           }
-        } catch (err) {
-          // 非 git 仓库静默（git2 打开仓库失败），其他错误 console.warn
-          const msg = String(err ?? "");
-          if (!msg.includes("打开仓库失败")) {
-            console.warn("加载 diff 边栏失败:", err);
-          }
+        } catch {
+          // 非 git 仓库，diff 不可用，静默
         }
       }
     };

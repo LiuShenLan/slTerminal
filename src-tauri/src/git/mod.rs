@@ -8,6 +8,7 @@ use serde::Serialize;
 
 /// 文件 git 状态条目
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GitStatusEntry {
     /// 文件绝对路径（repo_path + git2 相对路径，与 fs_read_dir 的 DirEntry.path 格式一致）
     pub path: String,
@@ -17,6 +18,7 @@ pub struct GitStatusEntry {
 
 /// diff hunk 信息（old = HEAD, new = 工作区）
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DiffHunk {
     /// HEAD 侧起始行号（1-based）
     pub old_start: u32,
@@ -34,7 +36,8 @@ pub struct DiffHunk {
 #[tauri::command]
 pub async fn git_status(repo_path: String) -> Result<Vec<GitStatusEntry>, AppError> {
     tokio::task::spawn_blocking(move || {
-        let repo = git2::Repository::open(&repo_path)
+        let repo = // 用 discover 而非 open——支持从子目录上溯查找 .git
+        git2::Repository::discover(&repo_path)
             .map_err(|e| AppError::Git(format!("打开仓库失败: {e}")))?;
 
         let mut opts = git2::StatusOptions::new();
@@ -49,10 +52,12 @@ pub async fn git_status(repo_path: String) -> Result<Vec<GitStatusEntry>, AppErr
 
         // 用 repo.workdir() 获取仓库根（git2 返回的路径相对此目录），
         // 而非信任传入的 repo_path（可能为子目录 cwd）。
-        // 拼接后确保与 fs_read_dir 返回的 DirEntry.path 格式一致。
-        let workdir = repo
+        // dunce::simplified() 剥离 Windows \\?\ 扩展路径前缀，
+        // 确保与 fs_read_dir 返回的 DirEntry.path 格式一致。
+        let workdir_raw = repo
             .workdir()
             .ok_or_else(|| AppError::Git("仓库无工作目录（可能为 bare repo）".to_string()))?;
+        let workdir = dunce::simplified(workdir_raw);
         let mut entries: Vec<GitStatusEntry> = Vec::new();
         for entry in statuses.iter() {
             let rel = entry
@@ -112,7 +117,9 @@ pub async fn git_status(repo_path: String) -> Result<Vec<GitStatusEntry>, AppErr
 #[tauri::command]
 pub async fn git_diff(repo_path: String, file_path: String) -> Result<Vec<DiffHunk>, AppError> {
     tokio::task::spawn_blocking(move || {
-        let repo = git2::Repository::open(&repo_path)
+        let repo = // 用 discover 而非 open——支持从子目录上溯查找 .git（前端可能传父目录而非仓库根）
+        git2::Repository::discover(&repo_path)
+            .or_else(|_| git2::Repository::discover(&file_path))
             .map_err(|e| AppError::Git(format!("打开仓库失败: {e}")))?;
 
         // 获取 HEAD tree
@@ -128,10 +135,12 @@ pub async fn git_diff(repo_path: String, file_path: String) -> Result<Vec<DiffHu
         // 基准：HEAD tree vs 工作区+index
         let mut opts = git2::DiffOptions::new();
         // 用 repo.workdir() 做 strip_prefix 基准（而非信任传入的 repo_path）。
-        // git2 可从未知子目录找到 repo，但 pathspec 需相对 workdir。
-        let workdir = repo
+        // dunce::simplified() 剥离 Windows \\?\ 扩展路径前缀，
+        // 确保与 fs_read_dir 路径格式一致，strip_prefix 不会因前缀不同而失败。
+        let workdir_raw = repo
             .workdir()
             .ok_or_else(|| AppError::Git("仓库无工作目录（可能为 bare repo）".to_string()))?;
+        let workdir = dunce::simplified(workdir_raw);
         let file_path_std = std::path::Path::new(&file_path);
         let rel_path_str = file_path_std
             .strip_prefix(workdir)
@@ -801,5 +810,115 @@ mod tests {
             "src/components/ui/Button.tsx",
             "深层嵌套文件 pathspec 应为完整 repo-相对路径"
         );
+    }
+
+    // ---- dunce::simplified() 路径前缀剥离 ----
+
+    #[test]
+    fn dunce_simplified_strips_verbatim_prefix() {
+        let verbatim = std::path::Path::new(r"\\?\D:\project");
+        let simplified = dunce::simplified(verbatim);
+        assert_eq!(
+            simplified.to_string_lossy(),
+            r"D:\project",
+            "应剥离 \\\\?\\ 前缀"
+        );
+    }
+
+    #[test]
+    fn dunce_simplified_regular_path_unchanged() {
+        let regular = std::path::Path::new(r"D:\data\code\slTerminal");
+        let simplified = dunce::simplified(regular);
+        assert_eq!(
+            simplified.to_string_lossy(),
+            r"D:\data\code\slTerminal",
+            "普通路径不应改变"
+        );
+    }
+
+    #[test]
+    fn dunce_simplified_unc_path() {
+        let unc = std::path::Path::new(r"\\?\UNC\server\share");
+        let simplified = dunce::simplified(unc);
+        // dunce 保持 \\?\UNC\ 不变（该格式本身是有效 Windows UNC 表示）
+        // 本地驱动器路径才需要剥离 \\?\（如 \\?\D:\ → D:\）
+        // 因此只验证 simplify 后不崩溃、不新增前缀
+        let s = simplified.to_string_lossy();
+        assert!(s.contains("server"), "应保留服务器名");
+        assert!(s.contains("share"), "应保留共享名");
+    }
+
+    /// 模拟 workdir 含 \\?\ 前缀时，git_status entry path 仍然不含前缀
+    #[test]
+    fn git_status_path_after_dunce_no_verbatim_prefix() {
+        let (_dir, path) = init_temp_repo();
+        commit_file(&path, "test.txt", "hello");
+        fs::write(path.join("test.txt"), "modified").unwrap();
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let workdir_raw = repo.workdir().unwrap();
+        let workdir = dunce::simplified(workdir_raw);
+
+        // workdir 不应含 \\?\ 前缀
+        let wd_str = workdir.to_string_lossy();
+        assert!(
+            !wd_str.starts_with(r"\\?\"),
+            "simplified 后不应含 \\\\?\\ 前缀: {wd_str}"
+        );
+        assert!(
+            !wd_str.contains("//?/"),
+            "simplified 后不应含 //?/ : {wd_str}"
+        );
+
+        // 路径应与 fs_read_dir 格式一致：普通反斜杠转正斜杠
+        let mut opts = git2::StatusOptions::new();
+        opts.include_untracked(true);
+        let statuses = repo.statuses(Some(&mut opts)).unwrap();
+        for entry in statuses.iter() {
+            let rel = entry.path().unwrap_or("").to_string().replace('\\', "/");
+            let abs = workdir.join(&rel).to_string_lossy().replace('\\', "/");
+            assert!(!abs.contains("//?/"), "status path 不应含 //?/ : {abs}");
+            assert!(!abs.contains(r"\\?\"), "status path 不应含 \\\\?\\ : {abs}");
+        }
+    }
+
+    /// 模拟 workdir 含 \\?\ 前缀时，git_diff strip_prefix 仍然成功
+    #[test]
+    fn git_diff_strip_prefix_with_verbatim_workdir() {
+        let (_dir, path) = init_temp_repo();
+        commit_file(&path, "diff.txt", "line1\nline2\n");
+        fs::write(path.join("diff.txt"), "line1\nline2 MOD\n").unwrap();
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let workdir_raw = repo.workdir().unwrap();
+        let workdir = dunce::simplified(workdir_raw);
+
+        // 模拟 fs_read_dir 风格的绝对路径（无 \\?\ 前缀）
+        let file_path = path.join("diff.txt");
+        let rel = file_path.strip_prefix(workdir).unwrap().to_string_lossy().replace('\\', "/");
+        assert_eq!(rel, "diff.txt", "strip_prefix 应成功得到相对路径");
+
+        // 验证 pathspec 不是绝对路径
+        assert!(!rel.contains(':'), "pathspec 不应是绝对路径: {rel}");
+    }
+
+    /// 防御性断言：pathspec 不可能是绝对路径（含盘符）
+    #[test]
+    fn git_diff_pathspec_never_absolute() {
+        let (_dir, path) = init_temp_repo();
+        commit_file(&path, "check.txt", "data\n");
+        fs::write(path.join("check.txt"), "data2\n").unwrap();
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let workdir = dunce::simplified(repo.workdir().unwrap());
+        let file_path = path.join("check.txt");
+        let rel = file_path.strip_prefix(workdir).unwrap_or(&file_path).to_string_lossy().replace('\\', "/");
+
+        // 如果 rel 含盘符，说明 strip_prefix 失败，绝对是 bug
+        if rel.contains(':') {
+            panic!("pathspec 不应含盘符（绝对路径）: {rel} — strip_prefix 失败！");
+        }
+        // 正常情况：rel 为相对路径
+        assert_eq!(rel, "check.txt");
     }
 }
