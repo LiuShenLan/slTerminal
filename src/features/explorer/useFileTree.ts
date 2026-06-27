@@ -17,7 +17,6 @@ export interface TreeNode {
   expanded: boolean;
   children: TreeNode[];
   loading: boolean;
-  gitStatus?: string;
 }
 
 interface UseFileTreeOptions {
@@ -106,7 +105,6 @@ export function useFileTree({ rootPath }: UseFileTreeOptions) {
                 ...node,
                 children: children.map((child) => ({
                   ...child,
-                  gitStatus: gitStatusMap.get(child.entry.path),
                 })),
                 loading: false,
               };
@@ -119,7 +117,7 @@ export function useFileTree({ rootPath }: UseFileTreeOptions) {
         return updateNode(prev);
       });
     },
-    [loadChildren, gitStatusMap],
+    [loadChildren],
   );
 
   /** 刷新展开的节点（文件变更时增量刷新） */

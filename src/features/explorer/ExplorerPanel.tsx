@@ -34,7 +34,7 @@ export const ExplorerPanel: React.FC = () => {
     }
   }
 
-  const { rootNodes, toggleExpand, refresh } = useFileTree({ rootPath });
+  const { rootNodes, gitStatusMap, toggleExpand, refresh } = useFileTree({ rootPath });
 
   // 当活跃项目变化时刷新
   useEffect(() => {
@@ -202,6 +202,7 @@ export const ExplorerPanel: React.FC = () => {
             <FileTree
               nodes={rootNodes}
               depth={0}
+              gitStatusMap={gitStatusMap}
               onToggleExpand={toggleExpand}
               onOpenFile={handleOpenFile}
               onOpenInTerminal={handleOpenInTerminal}

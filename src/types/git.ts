@@ -2,7 +2,7 @@
 
 /** 文件 git 状态条目 */
 export interface GitStatusEntry {
-  /** 相对仓库根的文件路径 */
+  /** 文件绝对路径（与 fs_read_dir 的 DirEntry.path 格式一致） */
   path: string;
   /** git 状态：modified | added | deleted | renamed | untracked | conflict | ignored */
   status: string;

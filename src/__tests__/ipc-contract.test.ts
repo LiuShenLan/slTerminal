@@ -12,6 +12,7 @@ import * as pty from '../ipc/pty';
 import * as fs from '../ipc/fs';
 import * as settings from '../ipc/settings';
 import * as notify from '../ipc/notify';
+import * as git from '../ipc/git';
 // ping 测试用——index.ts 直接重导出 @tauri-apps/api/core 的 invoke
 // eslint-disable-next-line no-restricted-imports
 import { invoke } from '@tauri-apps/api/core';
@@ -308,6 +309,88 @@ describe('notify IPC 合约', () => {
     });
 
     await expect(notify.startWatch('C:\\nonexistent')).rejects.toThrow('路径不存在');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// Git IPC
+// ═══════════════════════════════════════════════════════════════════
+
+describe('git IPC 合约', () => {
+  it('gitStatus: 应调用 git_status 命令，参数包含 repoPath', async () => {
+    const spy = vi.fn();
+    mockIPC((cmd, args) => {
+      spy(cmd, args);
+      if (cmd === 'git_status') return [];
+    });
+
+    await git.gitStatus('C:\\test-repo');
+
+    expect(spy).toHaveBeenCalledWith('git_status', {
+      repoPath: 'C:\\test-repo',
+    });
+  });
+
+  it('gitStatus: 返回 GitStatusEntry[] 数组', async () => {
+    mockIPC((cmd) => {
+      if (cmd === 'git_status') return [
+        { path: 'D:/repo/src/main.tsx', status: 'modified' },
+        { path: 'D:/repo/src/lib.rs', status: 'untracked' },
+      ];
+    });
+
+    const entries = await git.gitStatus('D:\\repo');
+    expect(entries).toHaveLength(2);
+    expect(entries[0].path).toBe('D:/repo/src/main.tsx');
+    expect(entries[0].status).toBe('modified');
+    expect(entries[1].path).toBe('D:/repo/src/lib.rs');
+    expect(entries[1].status).toBe('untracked');
+  });
+
+  it('gitStatus: invoke 失败时异常应传播', async () => {
+    mockIPC((cmd) => {
+      if (cmd === 'git_status') throw new Error('not a git repository');
+    });
+
+    await expect(git.gitStatus('C:\\not-git')).rejects.toThrow('not a git repository');
+  });
+
+  it('gitDiff: 应调用 git_diff 命令，参数包含 repoPath 和 filePath', async () => {
+    const spy = vi.fn();
+    mockIPC((cmd, args) => {
+      spy(cmd, args);
+      if (cmd === 'git_diff') return [];
+    });
+
+    await git.gitDiff('C:\\repo', 'C:\\repo\\src\\main.rs');
+
+    expect(spy).toHaveBeenCalledWith('git_diff', {
+      repoPath: 'C:\\repo',
+      filePath: 'C:\\repo\\src\\main.rs',
+    });
+  });
+
+  it('gitDiff: 返回 DiffHunk[] 数组', async () => {
+    mockIPC((cmd) => {
+      if (cmd === 'git_diff') return [
+        { oldStart: 1, oldLines: 2, newStart: 1, newLines: 3 },
+        { oldStart: 10, oldLines: 1, newStart: 11, newLines: 0 },
+      ];
+    });
+
+    const hunks = await git.gitDiff('C:\\repo', 'C:\\repo\\src\\main.rs');
+    expect(hunks).toHaveLength(2);
+    expect(hunks[0].oldStart).toBe(1);
+    expect(hunks[0].oldLines).toBe(2);
+    expect(hunks[1].newLines).toBe(0);
+  });
+
+  it('gitDiff: invoke 失败时异常应传播', async () => {
+    mockIPC((cmd) => {
+      if (cmd === 'git_diff') throw new Error('unborn branch');
+    });
+
+    await expect(git.gitDiff('C:\\empty', 'f.txt')).rejects.toThrow('unborn branch');
   });
 });
 

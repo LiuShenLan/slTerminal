@@ -9,7 +9,7 @@
 import React, { useState, useCallback } from "react";
 import { FileIcon } from "./FileIcon";
 import type { TreeNode } from "./useFileTree";
-import { EXPLORER_COLORS } from "../../theme";
+import { EXPLORER_COLORS, GIT_FILE_COLORS } from "../../theme";
 
 // ---- 右键菜单 ----
 
@@ -93,6 +93,7 @@ const ContextMenu: React.FC<{
 interface FileTreeProps {
   nodes: TreeNode[];
   depth: number;
+  gitStatusMap: Map<string, string>;
   onToggleExpand: (path: string) => void;
   onOpenFile: (path: string) => void;
   onOpenInTerminal: (path: string) => void;
@@ -107,11 +108,14 @@ interface FileTreeProps {
 const TreeNodeRow: React.FC<{
   node: TreeNode;
   depth: number;
+  gitStatusMap: Map<string, string>;
   onToggleExpand: (path: string) => void;
   onOpenFile: (path: string) => void;
   onContextMenu: (e: React.MouseEvent) => void;
-}> = ({ node, depth, onToggleExpand, onOpenFile, onContextMenu }) => {
-  const { entry, expanded, loading, gitStatus } = node;
+}> = ({ node, depth, gitStatusMap, onToggleExpand, onOpenFile, onContextMenu }) => {
+  const { entry, expanded, loading } = node;
+  // 渲染时实时查表，避免节点创建时写入 → 闭包陈旧/时序断裂问题
+  const gitStatus = gitStatusMap.get(entry.path);
   const indent = depth * 16;
 
   return (
@@ -174,25 +178,14 @@ const TreeNodeRow: React.FC<{
         />
       </span>
 
-      {/* 文件名 */}
+      {/* 文件名 — git 状态色引用 GIT_FILE_COLORS token（配色单点） */}
       <span
         style={{
           overflow: "hidden",
           textOverflow: "ellipsis",
           whiteSpace: "nowrap",
           color: gitStatus
-            ? (() => {
-                const m: Record<string, string> = {
-                  modified: "#6897BB",
-                  added: "#629755",
-                  untracked: "#D1675A",
-                  deleted: "#6C6C6C",
-                  renamed: "#3A8484",
-                  conflict: "#D5756C",
-                  ignored: "#848504",
-                };
-                return m[gitStatus] || EXPLORER_COLORS.fg;
-              })()
+            ? (GIT_FILE_COLORS[gitStatus as keyof typeof GIT_FILE_COLORS] ?? EXPLORER_COLORS.fg)
             : EXPLORER_COLORS.fg,
         }}
       >
@@ -207,6 +200,7 @@ const TreeNodeRow: React.FC<{
 export const FileTree: React.FC<FileTreeProps> = ({
   nodes,
   depth,
+  gitStatusMap,
   onToggleExpand,
   onOpenFile,
   onOpenInTerminal,
@@ -390,6 +384,7 @@ export const FileTree: React.FC<FileTreeProps> = ({
             <TreeNodeRow
               node={node}
               depth={depth}
+              gitStatusMap={gitStatusMap}
               onToggleExpand={onToggleExpand}
               onOpenFile={onOpenFile}
               onContextMenu={(e) => {
@@ -485,6 +480,7 @@ export const FileTree: React.FC<FileTreeProps> = ({
             <FileTree
               nodes={node.children}
               depth={depth + 1}
+              gitStatusMap={gitStatusMap}
               onToggleExpand={onToggleExpand}
               onOpenFile={onOpenFile}
               onOpenInTerminal={onOpenInTerminal}
