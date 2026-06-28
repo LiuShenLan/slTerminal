@@ -30,6 +30,37 @@ pub struct DiffHunk {
     pub new_lines: u32,
 }
 
+/// 将 git2::Status flags 映射为前端状态字符串
+///
+/// 返回 None 表示无变更（Current），调用方跳过该条目。
+fn status_to_str(status: git2::Status) -> Option<&'static str> {
+    if status.is_conflicted() {
+        Some("conflict")
+    } else if status.contains(git2::Status::WT_DELETED)
+        || status.contains(git2::Status::INDEX_DELETED)
+    {
+        Some("deleted")
+    } else if status.contains(git2::Status::INDEX_RENAMED)
+        || status.contains(git2::Status::WT_RENAMED)
+    {
+        Some("renamed")
+    } else if status.contains(git2::Status::INDEX_NEW) {
+        // 仅 INDEX_NEW（staged 新文件），不含 WT_NEW（untracked）
+        Some("added")
+    } else if status.contains(git2::Status::WT_MODIFIED)
+        || status.contains(git2::Status::INDEX_MODIFIED)
+    {
+        Some("modified")
+    } else if status.is_ignored() {
+        Some("ignored")
+    } else if status.contains(git2::Status::WT_NEW) {
+        // 纯 WT_NEW（无 INDEX_NEW）→ untracked
+        Some("untracked")
+    } else {
+        None // Current（无变更）→ 跳过
+    }
+}
+
 /// 获取指定仓库的文件 git 状态
 ///
 /// 非 git 仓库返回 AppError::Git。
@@ -72,30 +103,9 @@ pub async fn git_status(repo_path: String) -> Result<Vec<GitStatusEntry>, AppErr
                 .replace('\\', "/");
 
             let status_flag = entry.status();
-            let status_str = if status_flag.is_conflicted() {
-                "conflict"
-            } else if status_flag.contains(git2::Status::WT_DELETED)
-                || status_flag.contains(git2::Status::INDEX_DELETED)
-            {
-                "deleted"
-            } else if status_flag.contains(git2::Status::INDEX_RENAMED)
-                || status_flag.contains(git2::Status::WT_RENAMED)
-            {
-                "renamed"
-            } else if status_flag.contains(git2::Status::INDEX_NEW)
-                || status_flag.contains(git2::Status::WT_NEW)
-            {
-                "added"
-            } else if status_flag.contains(git2::Status::WT_MODIFIED)
-                || status_flag.contains(git2::Status::INDEX_MODIFIED)
-            {
-                "modified"
-            } else if status_flag.is_ignored() {
-                "ignored"
-            } else if status_flag.contains(git2::Status::WT_NEW) {
-                "untracked"
-            } else {
-                continue; // 跳过 Current（无变更）
+            let status_str = match status_to_str(status_flag) {
+                Some(s) => s,
+                None => continue, // 跳过 Current（无变更）
             };
 
             entries.push(GitStatusEntry {
@@ -320,6 +330,140 @@ mod tests {
             .current_dir(repo_path)
             .output()
             .unwrap();
+    }
+
+    // ---- B1: status_to_str 纯函数映射测试 ----
+
+    #[test]
+    fn status_to_str_untracked() {
+        // untracked 文件：仅 WT_NEW，无 INDEX_NEW
+        let flags = git2::Status::WT_NEW;
+        assert_eq!(
+            super::status_to_str(flags),
+            Some("untracked"),
+            "未 add 的新文件应映射为 untracked（红色）"
+        );
+    }
+
+    #[test]
+    fn status_to_str_added_index_new_only() {
+        // git add 后的新文件：仅 INDEX_NEW
+        let flags = git2::Status::INDEX_NEW;
+        assert_eq!(
+            super::status_to_str(flags),
+            Some("added"),
+            "staged 新文件应映射为 added（绿色）"
+        );
+    }
+
+    #[test]
+    fn status_to_str_added_index_new_with_wt_new() {
+        // staged 新文件无后续修改：git2 同时置 INDEX_NEW 和 WT_NEW
+        let flags = git2::Status::INDEX_NEW | git2::Status::WT_NEW;
+        assert_eq!(
+            super::status_to_str(flags),
+            Some("added"),
+            "staged 新文件（INDEX_NEW|WT_NEW）应映射为 added"
+        );
+    }
+
+    #[test]
+    fn status_to_str_added_index_new_with_wt_modified() {
+        // staged 新文件后又有工作区修改：INDEX_NEW | WT_MODIFIED
+        let flags = git2::Status::INDEX_NEW | git2::Status::WT_MODIFIED;
+        assert_eq!(
+            super::status_to_str(flags),
+            Some("added"),
+            "staged 新文件后修改（INDEX_NEW|WT_MODIFIED）应映射为 added"
+        );
+    }
+
+    #[test]
+    fn status_to_str_modified_wt() {
+        // 已跟踪文件的工作区修改
+        let flags = git2::Status::WT_MODIFIED;
+        assert_eq!(
+            super::status_to_str(flags),
+            Some("modified"),
+            "工作区修改应映射为 modified（蓝色）"
+        );
+    }
+
+    #[test]
+    fn status_to_str_modified_index() {
+        // staged 修改
+        let flags = git2::Status::INDEX_MODIFIED;
+        assert_eq!(
+            super::status_to_str(flags),
+            Some("modified"),
+            "staged 修改应映射为 modified"
+        );
+    }
+
+    #[test]
+    fn status_to_str_deleted_wt() {
+        // 工作区删除
+        let flags = git2::Status::WT_DELETED;
+        assert_eq!(
+            super::status_to_str(flags),
+            Some("deleted"),
+            "工作区删除应映射为 deleted（灰色）"
+        );
+    }
+
+    #[test]
+    fn status_to_str_deleted_index() {
+        // staged 删除
+        let flags = git2::Status::INDEX_DELETED;
+        assert_eq!(
+            super::status_to_str(flags),
+            Some("deleted"),
+            "staged 删除应映射为 deleted"
+        );
+    }
+
+    #[test]
+    fn status_to_str_renamed_index() {
+        // staged 重命名
+        let flags = git2::Status::INDEX_RENAMED;
+        assert_eq!(
+            super::status_to_str(flags),
+            Some("renamed"),
+            "staged 重命名应映射为 renamed"
+        );
+    }
+
+    #[test]
+    fn status_to_str_renamed_wt() {
+        // 工作区重命名
+        let flags = git2::Status::WT_RENAMED;
+        assert_eq!(
+            super::status_to_str(flags),
+            Some("renamed"),
+            "工作区重命名应映射为 renamed"
+        );
+    }
+
+    #[test]
+    fn status_to_str_ignored() {
+        // gitignore 忽略的文件
+        let flags = git2::Status::IGNORED;
+        assert_eq!(
+            super::status_to_str(flags),
+            Some("ignored"),
+            "gitignore 忽略的文件应映射为 ignored"
+        );
+    }
+
+    #[test]
+    fn status_to_str_current_returns_none() {
+        // 无变更文件
+        let flags = git2::Status::CURRENT;
+        assert_eq!(
+            super::status_to_str(flags),
+            None,
+            "无变更文件应返回 None（跳过）"
+        );
     }
 
     #[test]
