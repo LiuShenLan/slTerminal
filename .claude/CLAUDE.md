@@ -4,22 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目性质
 
-**slTerminal** — 面向 Windows 10/11、专为 Claude Code CLI 调优的通用终端模拟器。当前仓库**只有规划文档，尚无代码**：实现按 `plan/` 中的分阶段计划逐步落地。开工前先读对应阶段文档，不要凭空臆造结构。
+**slTerminal** — 面向 Windows 10/11、专为 Claude Code CLI 调优的通用终端模拟器。
 
 定位约束（贯穿全程，不可违背）：
 - Windows 原生跑 `claude`（不走 WSL）；单窗口单实例；仅暗色模式；渲染 GPU 加速。
 - 默认 shell：PowerShell 7（`pwsh.exe` → `powershell.exe` → `cmd.exe` 回退）。
 - 复制 = `Ctrl+Shift+C`（`Ctrl+C` 保留为中断，供 claude 取消）。
-
-## 规划文档（实现前必读）
-
-| 文档 | 内容 |
-|------|------|
-| `plan/1. 需求与分阶段计划.md` | 需求规格 + M1–M6 里程碑 + JetBrains 暗色配色表 |
-| `plan/2. 详细方案与最小demo.md` | 技术选型 + IPC 契约 + 最小 demo + Windows 关键坑 |
-| `plan/3. 技术架构设计文档.md` | **架构 + 模块路径划分 + 硬性开发约束（第七节）** |
-| `plan/4. 完整开发计划.md` | 完整开发方法学 |
-| `plan/5.0–5.6 phase-*.md` | 每个 phase 的开发文档与验收标准（5.0 = 工程与测试基建） |
 
 ## 架构（两进程模型）
 
