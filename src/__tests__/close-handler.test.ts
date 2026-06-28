@@ -1,7 +1,7 @@
 // close-handler.test.ts — App onCloseRequested 关闭钩子自动化测试
 //
-// 用 vi.mock 替代 @tauri-apps/api/window + stores + layoutSerde + Workspace，
-// render <App /> 后捕获 onCloseRequested 回调，模拟关闭事件验证四步序列。
+// 用 vi.mock 替代 ipc/window + stores + layoutSerde + Workspace，
+// render <App /> 后捕获 registerCloseHandler 回调，模拟关闭事件验证保存序列。
 // 覆盖：正常关闭 / 保存失败仍销毁 / 无 activePageId / 无 __dockviewApi
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
@@ -10,10 +10,8 @@ import { render, waitFor } from "@testing-library/react";
 
 // ─── Hoisted：跨 mock 工厂共享的 mutable 状态 ───
 const mocks = vi.hoisted(() => {
-  let capturedHandler: ((event: { preventDefault: () => void }) => void | Promise<void>) | null = null;
+  let capturedHandler: (() => void | Promise<void>) | null = null;
 
-  const mockPreventDefault = vi.fn();
-  const mockDestroy = vi.fn().mockResolvedValue(undefined);
   const mockSaveAllProjects = vi.fn().mockResolvedValue(undefined);
   const mockLoadAllProjects = vi.fn().mockResolvedValue(undefined);
   const mockMarkPersistenceReady = vi.fn();
@@ -26,7 +24,7 @@ const mocks = vi.hoisted(() => {
     get capturedHandler() {
       return capturedHandler;
     },
-    set capturedHandler(h: ((event: { preventDefault: () => void }) => void | Promise<void>) | null) {
+    set capturedHandler(h: (() => void | Promise<void>) | null) {
       capturedHandler = h;
     },
     get mockActivePageId() {
@@ -35,8 +33,6 @@ const mocks = vi.hoisted(() => {
     set mockActivePageId(v: string | null) {
       mockActivePageId = v;
     },
-    mockPreventDefault,
-    mockDestroy,
     mockSaveAllProjects,
     mockLoadAllProjects,
     mockMarkPersistenceReady,
@@ -46,8 +42,6 @@ const mocks = vi.hoisted(() => {
     resetAll() {
       capturedHandler = null;
       mockActivePageId = "test-page-1";
-      mockPreventDefault.mockClear();
-      mockDestroy.mockClear();
       mockSaveAllProjects.mockClear();
       mockLoadAllProjects.mockClear();
       mockMarkPersistenceReady.mockClear();
@@ -59,14 +53,11 @@ const mocks = vi.hoisted(() => {
 
 // ─── Module mocks ───
 
-vi.mock("@tauri-apps/api/window", () => ({
-  getCurrentWindow: vi.fn(() => ({
-    onCloseRequested: vi.fn((handler: (event: { preventDefault: () => void }) => void | Promise<void>) => {
-      mocks.capturedHandler = handler;
-      return Promise.resolve(() => {});
-    }),
-    destroy: mocks.mockDestroy,
-  })),
+vi.mock("../ipc/window", () => ({
+  registerCloseHandler: vi.fn((cb: () => Promise<void>) => {
+    mocks.capturedHandler = cb;
+    return () => {};
+  }),
 }));
 
 vi.mock("../workspace", () => ({
@@ -75,6 +66,30 @@ vi.mock("../workspace", () => ({
 
 vi.mock("../workspace/layoutSerde", () => ({
   saveLayout: vi.fn(() => ({ panels: {}, grid: {} })),
+}));
+
+// P1-19: mock pty + TerminalRegistry（App 关闭时 kill 活跃 session）
+vi.mock("../ipc", () => ({
+  pty: { kill: vi.fn().mockResolvedValue(undefined) },
+}));
+
+vi.mock("../panels/terminal/TerminalRegistry", () => ({
+  TerminalRegistry: {
+    getAll: vi.fn(() => new Map()),
+    register: vi.fn(),
+    get: vi.fn(),
+    remove: vi.fn(),
+    has: vi.fn(),
+    _size: vi.fn(() => 0),
+    _dump: vi.fn(() => []),
+    _clear: vi.fn(),
+  },
+}));
+
+// P1-03: mock lib ErrorBoundary（避免渲染实际组件）
+vi.mock("../lib", () => ({
+  ErrorBoundary: ({ children }: { children: React.ReactNode }) =>
+    React.createElement(React.Fragment, null, children),
 }));
 
 vi.mock("../stores/layout", () => ({
@@ -132,19 +147,14 @@ function setupLocalStorage() {
   return stub;
 }
 
-/** 渲染 App 并等待 onCloseRequested handler 注册完成 */
-async function renderAndCapture(): Promise<(event: { preventDefault: () => void }) => void | Promise<void>> {
+/** 渲染 App 并等待 registerCloseHandler 回调注册完成 */
+async function renderAndCapture(): Promise<() => void | Promise<void>> {
   render(React.createElement(App));
-  // onCloseRequested 在 useEffect 中同步注册，render 后立即可用
+  // registerCloseHandler 在 useEffect 中同步注册，render 后立即可用
   await waitFor(() => {
     expect(mocks.capturedHandler).not.toBeNull();
   });
   return mocks.capturedHandler!;
-}
-
-/** 构造关闭事件 stub */
-function closeEvent(): { preventDefault: () => void } {
-  return { preventDefault: mocks.mockPreventDefault };
 }
 
 // ─── 测试套件 ───
@@ -158,15 +168,14 @@ describe("onCloseRequested 关闭钩子", () => {
     delete ((window as unknown) as Record<string, unknown>).__dockviewApi;
   });
 
-  it("1. 正常关闭流程：preventDefault → flush layout → saveAllProjects → localStorage → destroy", async () => {
+  it("1. 正常关闭流程：flush layout → saveAllProjects → localStorage", async () => {
     // 模拟 Dockview API 已就绪
     (window as unknown as Record<string, unknown>).__dockviewApi = { _mock: true };
 
     const handler = await renderAndCapture();
-    await handler(closeEvent());
+    await handler();
 
-    // 验证四步序列
-    expect(mocks.mockPreventDefault).toHaveBeenCalled();
+    // 验证三步保存序列（preventDefault + destroy 由 registerCloseHandler 封装处理）
     // flush: updatePageLayout 被调用
     expect(mocks.mockUpdatePageLayout).toHaveBeenCalledWith(
       "proj-1",
@@ -177,51 +186,47 @@ describe("onCloseRequested 关闭钩子", () => {
     expect(mocks.mockSaveAllProjects).toHaveBeenCalled();
     // localStorage
     expect(localStorageStub.getItem("slterm-last-active-page")).toBe("test-page-1");
-    // destroy
-    expect(mocks.mockDestroy).toHaveBeenCalled();
   });
 
-  it("2. saveAllProjects 抛出异常 → 仍调用 destroy（保存失败不阻塞关闭）", async () => {
+  it("2. saveAllProjects 抛出异常 → 回调仍可完成（不崩溃，destroy 由 registerCloseHandler finally 保证）", async () => {
     (window as unknown as Record<string, unknown>).__dockviewApi = { _mock: true };
     mocks.mockSaveAllProjects.mockRejectedValueOnce(new Error("磁盘满"));
 
     const handler = await renderAndCapture();
-    await handler(closeEvent());
+    await handler();
 
-    // destroy 在 try/catch 外部，确保始终调用
-    expect(mocks.mockDestroy).toHaveBeenCalled();
+    // 不应崩溃
+    expect(mocks.mockUpdatePageLayout).toHaveBeenCalled();
   });
 
-  it("3. 无 activePageId → 跳过 flush layout 和 localStorage，仅 saveAllProjects + destroy", async () => {
+  it("3. 无 activePageId → 跳过 flush layout 和 localStorage，仅 saveAllProjects", async () => {
     mocks.mockActivePageId = null;
     (window as unknown as Record<string, unknown>).__dockviewApi = { _mock: true };
 
     const handler = await renderAndCapture();
-    await handler(closeEvent());
+    await handler();
 
     // flush 和 localStorage 应跳过
     expect(mocks.mockUpdatePageLayout).not.toHaveBeenCalled();
     expect(localStorageStub.getItem("slterm-last-active-page")).toBeNull();
-    // save + destroy 仍需调用
+    // save 仍需调用
     expect(mocks.mockSaveAllProjects).toHaveBeenCalled();
-    expect(mocks.mockDestroy).toHaveBeenCalled();
   });
 
-  it("4. 无 __dockviewApi → 跳过 layout flush，仅 saveAllProjects + localStorage + destroy", async () => {
+  it("4. 无 __dockviewApi → 跳过 layout flush，仅 saveAllProjects + localStorage", async () => {
     // 不设置 window.__dockviewApi（模拟 Dockview 未初始化场景）
 
     const handler = await renderAndCapture();
-    await handler(closeEvent());
+    await handler();
 
     // flush 跳过（无 __dockviewApi）
     expect(mocks.mockUpdatePageLayout).not.toHaveBeenCalled();
-    // save + localStorage + destroy 仍需调用
+    // save + localStorage 仍需调用
     expect(mocks.mockSaveAllProjects).toHaveBeenCalled();
     expect(localStorageStub.getItem("slterm-last-active-page")).toBe("test-page-1");
-    expect(mocks.mockDestroy).toHaveBeenCalled();
   });
 
-  it("5. saveAllProjects 超过 3s → Promise.race 超时触发 → destroy 仍被调用", async () => {
+  it("5. saveAllProjects 超过 3s → Promise.race 超时触发 → 回调完成", async () => {
     (window as unknown as Record<string, unknown>).__dockviewApi = { _mock: true };
 
     // 先用真实定时器捕获 handler
@@ -238,20 +243,21 @@ describe("onCloseRequested 关闭钩子", () => {
     mocks.mockSaveAllProjects.mockReturnValue(neverPromise);
 
     // 触发关闭（不要 await，handler 会卡在 Promise.race）
-    const closePromise = handler(closeEvent());
+    const closePromise = handler();
 
     // 推进 3000ms 触发 race 超时
     vi.advanceTimersByTime(3000);
 
     await closePromise;
 
-    expect(mocks.mockDestroy).toHaveBeenCalled();
+    // 不应卡死
+    expect(mocks.mockSaveAllProjects).toHaveBeenCalled();
 
     vi.useRealTimers();
     neverResolve!(); // 清理未完结的 Promise
   });
 
-  it("6. localStorage.setItem 抛异常 → 静默捕获，不阻止 destroy", async () => {
+  it("6. localStorage.setItem 抛异常 → 静默捕获，不阻止完成", async () => {
     (window as unknown as Record<string, unknown>).__dockviewApi = { _mock: true };
 
     // 让 localStorage.setItem 抛出异常
@@ -260,9 +266,9 @@ describe("onCloseRequested 关闭钩子", () => {
     };
 
     const handler = await renderAndCapture();
-    await handler(closeEvent());
+    await handler();
 
-    // destroy 在 try/catch 外部，确保始终调用
-    expect(mocks.mockDestroy).toHaveBeenCalled();
+    // 不应崩溃
+    expect(mocks.mockSaveAllProjects).toHaveBeenCalled();
   });
 });

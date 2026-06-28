@@ -18,11 +18,8 @@ vi.mock("../ipc/clipboard", () => ({
   readText: vi.fn().mockResolvedValue(""),
 }));
 
-vi.mock("@tauri-apps/api/window", () => ({
-  getCurrentWindow: vi.fn(() => ({
-    onCloseRequested: vi.fn(() => ({ then: vi.fn((fn: () => void) => fn()) })),
-    destroy: vi.fn().mockResolvedValue(undefined),
-  })),
+vi.mock("../ipc/window", () => ({
+  registerCloseHandler: vi.fn(() => () => {}),
 }));
 
 vi.mock("../workspace", () => ({

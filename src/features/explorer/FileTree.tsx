@@ -9,7 +9,16 @@
 import React, { useState, useCallback } from "react";
 import { FileIcon } from "./FileIcon";
 import type { TreeNode } from "./useFileTree";
-import { EXPLORER_COLORS, GIT_FILE_COLORS } from "../../theme";
+import {
+  EXPLORER_COLORS,
+  GIT_FILE_COLORS,
+  SIDEBAR_BG,
+  SIDEBAR_FG,
+  ACTIVE_SELECTION_BG,
+  INPUT_BG,
+  FOCUS_BORDER,
+  CONTEXT_MENU_BORDER,
+} from "../../theme";
 import { ask } from "../../ipc/dialog";
 
 // ---- 右键菜单 ----
@@ -52,8 +61,8 @@ const ContextMenu: React.FC<{
         position: "fixed",
         left: state.x,
         top: state.y,
-        background: "#252526",
-        border: "1px solid #454545",
+        background: SIDEBAR_BG,
+        border: `1px solid ${CONTEXT_MENU_BORDER}`,
         borderRadius: 4,
         padding: "4px 0",
         minWidth: 160,
@@ -71,12 +80,12 @@ const ContextMenu: React.FC<{
           style={{
             padding: "4px 12px",
             cursor: "pointer",
-            color: "#D4D4D4",
+            color: SIDEBAR_FG,
             fontSize: 13,
             userSelect: "none",
           }}
           onMouseEnter={(e) => {
-            (e.target as HTMLDivElement).style.background = "#094771";
+            (e.target as HTMLDivElement).style.background = ACTIVE_SELECTION_BG;
           }}
           onMouseLeave={(e) => {
             (e.target as HTMLDivElement).style.background = "transparent";
@@ -376,9 +385,9 @@ export const FileTree: React.FC<FileTreeProps> = ({
                 autoFocus
                 style={{
                   flex: 1,
-                  background: "#3C3C3C",
-                  border: "1px solid #007ACC",
-                  color: "#D4D4D4",
+                  background: INPUT_BG,
+                  border: `1px solid ${FOCUS_BORDER}`,
+                  color: SIDEBAR_FG,
                   fontSize: 13,
                   padding: "0 4px",
                   outline: "none",
@@ -429,9 +438,9 @@ export const FileTree: React.FC<FileTreeProps> = ({
                 autoFocus
                 style={{
                   flex: 1,
-                  background: "#3C3C3C",
-                  border: "1px solid #007ACC",
-                  color: "#D4D4D4",
+                  background: INPUT_BG,
+                  border: `1px solid ${FOCUS_BORDER}`,
+                  color: SIDEBAR_FG,
                   fontSize: 13,
                   padding: "0 4px",
                   outline: "none",
@@ -469,9 +478,9 @@ export const FileTree: React.FC<FileTreeProps> = ({
                 autoFocus
                 style={{
                   flex: 1,
-                  background: "#3C3C3C",
-                  border: "1px solid #007ACC",
-                  color: "#D4D4D4",
+                  background: INPUT_BG,
+                  border: `1px solid ${FOCUS_BORDER}`,
+                  color: SIDEBAR_FG,
                   fontSize: 13,
                   padding: "0 4px",
                   outline: "none",

@@ -10,7 +10,7 @@ PTY 管理——Windows ConPTY 终端模拟核心。负责 shell 进程的完整
 
 ```
 shell.rs          → resolve_shell() 返回 CommandBuilder
-mod.rs/spawn.rs   → pty_spawn() 握 SPAWN_LOCK → openpty → spawn_command → reader 线程
+mod.rs/spawn.rs   → pty_spawn() 握 SPAWN_LOCK（仅 openpty→spawn_command）→ reader 线程（锁外）
 reader.rs         → reader_loop() 独立线程阻塞读 → Channel 推 PtyEvent
 mod.rs            → pty_write / pty_resize / pty_kill / pty_reattach
 state.rs          → PtySession 结构体 + PtyState 全局 HashMap
@@ -21,7 +21,7 @@ state.rs          → PtySession 结构体 + PtyState 全局 HashMap
 - `Output { bytes: Vec<u8> }` — 原始终端输出字节
 - `Exit { code: Option<i32> }` — 子进程退出
 
-**PtySession**（`state.rs`）：`master`（Mutex<dyn MasterPty>）、`child`（Mutex<dyn Child>）、`writer`（Arc<Mutex<dyn Write>>，take_writer 仅一次故共享）、`reader_handle`、`channel`（Arc<RwLock<Option<Channel>>>，可替换用于 reattach）、`output_ring`（64KB FIFO，Channel 断开时缓存）。
+**PtySession**（`state.rs`）：`master`（Mutex<dyn MasterPty>）、`child`（Arc<Mutex<dyn Child>>）、`writer`（Arc<Mutex<dyn Write>>，take_writer 仅一次故共享）、`reader_handle`、`channel`（Arc<RwLock<Option<Channel>>>，可替换用于 reattach）、`output_ring`（256KB FIFO，Channel 断开时缓存）。
 
 ## 关键约束
 
@@ -31,7 +31,7 @@ state.rs          → PtySession 结构体 + PtyState 全局 HashMap
 
 ### SPAWN_LOCK 串行化
 
-**并发 spawn 会卡死 ConPTY 输出管道**。`pty_spawn` 全程握 `state.pty.spawn_lock`（Mutex）。spawn 操作必须严格串行。
+**并发 spawn 会卡死 ConPTY 输出管道**。`pty_spawn` 中 SPAWN_LOCK 仅保护 ConPTY 创建 + 子进程启动（`openpty` → `spawn_command`），reader 线程启动和 sessions 插入在锁外执行。
 
 ### CPR 注入（Windows）
 
@@ -55,7 +55,7 @@ state.rs          → PtySession 结构体 + PtyState 全局 HashMap
 
 ### Channel 可替换 + ring buffer 回放（E1）
 
-`reader_loop` 通过 `Arc<RwLock<Option<Channel>>>` 引用 Channel。Channel 断开时写入 `output_ring`（64KB FIFO，按 1KB 粒度整行丢弃）。`pty_reattach` 替换 Channel 并回放 ring buffer 内容，用于前端页面切换后恢复终端显示。
+`reader_loop` 通过 `Arc<RwLock<Option<Channel>>>` 引用 Channel。Channel 断开时写入 `output_ring`（256KB FIFO，按 1KB 粒度整行丢弃）。`pty_reattach` 替换 Channel 并回放 ring buffer 内容，用于前端页面切换后恢复终端显示。
 
 ### ConPTY 启动序列剥离
 

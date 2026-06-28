@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from "react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { useEffect, useState } from "react";
+import { registerCloseHandler } from "./ipc/window";
 import { Workspace } from "./workspace";
 import {
   loadAllProjects, markPersistenceReady, saveAllProjects, cancelPendingSave,
@@ -10,6 +10,10 @@ import { useLayout } from "./stores/layout";
 import { saveLayout } from "./workspace/layoutSerde";
 import { makeDefaultLayout } from "./features/sidebar/SidebarTree";
 import { writeText } from "./ipc/clipboard";
+import { pty } from "./ipc";
+import { TerminalRegistry } from "./panels/terminal/TerminalRegistry";
+import { ErrorBoundary } from "./lib";
+import { PANEL_BG, INPUT_BORDER, APP_BG } from "./theme";
 import "dockview-react/dist/styles/dockview.css";
 
 // E2E pending 标记：__slterm_e2e_createProject 调用时设为 true，
@@ -54,37 +58,6 @@ if (typeof window !== "undefined") {
   };
 }
 
-/** 错误边界 */
-export class ErrorBoundary extends React.Component<
-  { children: React.ReactNode },
-  { error: Error | null }
-> {
-  constructor(props: { children: React.ReactNode }) {
-    super(props);
-    this.state = { error: null };
-  }
-  static getDerivedStateFromError(error: Error) {
-    return { error };
-  }
-  componentDidCatch(error: Error, info: React.ErrorInfo) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (window as any).__sltermError = { message: error.message, stack: error.stack, componentStack: info.componentStack };
-    console.error("[slTerminal] 渲染错误:", error, info);
-  }
-  render() {
-    if (this.state.error) {
-      return (
-        <div style={{ padding: 20, color: "#F44747", background: "#1E1E1E", height: "100vh", fontFamily: "monospace", fontSize: 13 }}>
-          <h2>应用渲染错误</h2>
-          <pre style={{ whiteSpace: "pre-wrap" }}>{this.state.error.message}</pre>
-          <pre style={{ whiteSpace: "pre-wrap", color: "#999", fontSize: 11 }}>{this.state.error.stack}</pre>
-        </div>
-      );
-    }
-    return this.props.children;
-  }
-}
-
 function App() {
   /** S4-D1: 数据就绪后才渲染 Workspace，消除启动竞态 */
   const [ready, setReady] = useState(false);
@@ -93,6 +66,8 @@ function App() {
   useEffect(() => {
     const init = async () => {
       try {
+        // P2-07: loadAllProjects 内部 JSON.parse 当前数据量小无影响，
+        // 若未来项目数据文件膨胀到 MB 级，可改为流式解析或 IndexedDB 存储。
         await loadAllProjects();
       } catch {
         // 首次启动或文件损坏，保持默认空状态
@@ -117,12 +92,31 @@ function App() {
     init();
   }, []);
 
-  // S4-D4: 关闭前冲刷持久化（onCloseRequested 双出口防线 + destroy 防循环）
+  // S4-D4: 关闭前冲刷持久化（registerCloseHandler 封装 preventDefault + destroy）
   useEffect(() => {
-    const appWindow = getCurrentWindow();
-    const unlisten = appWindow.onCloseRequested(async (event) => {
-      event.preventDefault();
+    const unlisten = registerCloseHandler(async () => {
       try {
+        // 0. 杀掉所有活跃 PTY session（P1-19：窗口关闭前清理子进程）
+        //    通过 TerminalRegistry 遍历所有已注册终端，逐个 kill
+        const allSessions = TerminalRegistry.getAll();
+        if (allSessions.size > 0) {
+          const killPromises: Promise<void>[] = [];
+          allSessions.forEach((entry) => {
+            if (entry.sessionId) {
+              killPromises.push(
+                pty.kill(entry.sessionId).catch((err) => {
+                  console.error(`[slTerminal] 关闭时 kill PTY 失败 (${entry.sessionId}):`, err);
+                }),
+              );
+            }
+          });
+          // 并发 kill 所有 session，最长等待 3 秒
+          await Promise.race([
+            Promise.all(killPromises),
+            new Promise<void>((resolve) => setTimeout(resolve, 3000)),
+          ]);
+        }
+
         // 1. flush dirty layout
         const { activePageId } = useLayout.getState();
         if (activePageId && window.__dockviewApi) {
@@ -154,11 +148,8 @@ function App() {
       } catch (err) {
         console.error("[slTerminal] 关闭保存失败:", err);
       }
-      // 4. 强制销毁（destroy 在 try/catch 外，保存失败不阻塞关闭）
-      // 注：destroy() 不重新触发 onCloseRequested（Tauri 2 保证）
-      await appWindow.destroy();
     });
-    return () => { unlisten.then((fn) => fn()); };
+    return unlisten;
   }, []);
 
   if (!ready) {
@@ -168,11 +159,11 @@ function App() {
           style={{
             width: "100vw",
             height: "100vh",
-            background: "#1E1E1E",
+            background: PANEL_BG,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            color: "#6C6C6C",
+            color: INPUT_BORDER,
             fontSize: 14,
             fontFamily: "monospace",
           }}
@@ -185,7 +176,7 @@ function App() {
 
   return (
     <ErrorBoundary>
-      <div style={{ width: "100vw", height: "100vh", background: "#1e1e2e" }}>
+      <div style={{ width: "100vw", height: "100vh", background: APP_BG }}>
         <Workspace />
       </div>
     </ErrorBoundary>

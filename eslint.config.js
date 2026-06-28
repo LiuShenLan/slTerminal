@@ -15,6 +15,9 @@ export default tseslint.config(
         patterns: [{
           group: ['@tauri-apps/plugin-*'],
           message: '@tauri-apps/plugin-* 包只允许在 src/ipc/ 目录内使用。请通过 src/ipc/ 暴露的领域函数间接调用。',
+        }, {
+          group: ['@tauri-apps/api/window', '@tauri-apps/api/event'],
+          message: '@tauri-apps/api/window 和 @tauri-apps/api/event 只允许在 src/ipc/ 目录内使用。请通过 src/ipc/ 暴露的领域函数间接调用。',
         }],
       }],
     },

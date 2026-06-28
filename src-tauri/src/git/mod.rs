@@ -4,7 +4,10 @@
 //! 阻塞 I/O 用 spawn_blocking 包裹。
 
 use crate::error::AppError;
+use crate::state::AppState;
 use serde::Serialize;
+use std::path::PathBuf;
+use tauri::State;
 
 /// 文件 git 状态条目
 #[derive(Debug, Clone, Serialize)]
@@ -61,16 +64,65 @@ fn status_to_str(status: git2::Status) -> Option<&'static str> {
     }
 }
 
+/// 从缓存获取或创建 Repository（以 workdir 为 key）
+///
+/// git2::Repository 是 Send 但未实现 Clone trait；
+/// 缓存命中时通过 `Repository::open` 重新打开以绕过生命周期耦合。
+fn get_or_open_repo(
+    cache: &std::sync::Mutex<std::collections::HashMap<PathBuf, git2::Repository>>,
+    search_path: &str,
+) -> Result<(git2::Repository, PathBuf), AppError> {
+    let search = PathBuf::from(search_path);
+
+    // 缓存命中检测：遍历已缓存的 workdir，若 search_path 在某 workdir 子树内则命中
+    {
+        let cache_guard = cache
+            .lock()
+            .map_err(|e| AppError::Git(format!("获取 git_repo_cache 锁失败: {e}")))?;
+        for workdir in cache_guard.keys() {
+            if search.starts_with(workdir) || workdir.starts_with(&search) {
+                let wd = workdir.clone();
+                drop(cache_guard);
+                let repo = git2::Repository::open(&wd)
+                    .map_err(|e| AppError::Git(format!("打开仓库失败: {e}")))?;
+                return Ok((repo, wd));
+            }
+        }
+    }
+
+    // 缓存未命中：discover + 缓存
+    let repo = git2::Repository::discover(search_path)
+        .map_err(|e| AppError::Git(format!("打开仓库失败: {e}")))?;
+    let workdir_raw = repo
+        .workdir()
+        .ok_or_else(|| AppError::Git("仓库无工作目录（可能为 bare repo）".to_string()))?;
+    let workdir = dunce::simplified(workdir_raw).to_path_buf();
+
+    // 存入缓存（保留 repo 句柄标记此 workdir 可达）
+    let mut cache_guard = cache
+        .lock()
+        .map_err(|e| AppError::Git(format!("获取 git_repo_cache 锁失败: {e}")))?;
+    cache_guard.insert(workdir.clone(), repo);
+    drop(cache_guard);
+
+    // 从磁盘重新打开独立实例返回
+    let repo = git2::Repository::open(&workdir)
+        .map_err(|e| AppError::Git(format!("重新打开仓库失败: {e}")))?;
+    Ok((repo, workdir))
+}
+
 /// 获取指定仓库的文件 git 状态
 ///
 /// 非 git 仓库返回 AppError::Git。
 #[tauri::command]
-pub async fn git_status(repo_path: String) -> Result<Vec<GitStatusEntry>, AppError> {
-    tokio::task::spawn_blocking(move || {
-        let repo = // 用 discover 而非 open——支持从子目录上溯查找 .git
-        git2::Repository::discover(&repo_path)
-            .map_err(|e| AppError::Git(format!("打开仓库失败: {e}")))?;
+pub async fn git_status(
+    repo_path: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<GitStatusEntry>, AppError> {
+    // 从缓存获取/创建 Repository（先获取，避免 spawn_blocking 内锁）
+    let (repo, workdir) = get_or_open_repo(&state.git_repo_cache, &repo_path)?;
 
+    match tokio::task::spawn_blocking(move || {
         let mut opts = git2::StatusOptions::new();
         opts.include_untracked(true)
             .include_ignored(true)
@@ -81,14 +133,8 @@ pub async fn git_status(repo_path: String) -> Result<Vec<GitStatusEntry>, AppErr
             .statuses(Some(&mut opts))
             .map_err(|e| AppError::Git(format!("获取状态失败: {e}")))?;
 
-        // 用 repo.workdir() 获取仓库根（git2 返回的路径相对此目录），
-        // 而非信任传入的 repo_path（可能为子目录 cwd）。
-        // dunce::simplified() 剥离 Windows \\?\ 扩展路径前缀，
+        // workdir 从缓存 helper 传入（已 dunce::simplified），
         // 确保与 fs_read_dir 返回的 DirEntry.path 格式一致。
-        let workdir_raw = repo
-            .workdir()
-            .ok_or_else(|| AppError::Git("仓库无工作目录（可能为 bare repo）".to_string()))?;
-        let workdir = dunce::simplified(workdir_raw);
         let mut entries: Vec<GitStatusEntry> = Vec::new();
         for entry in statuses.iter() {
             let rel = entry
@@ -117,7 +163,10 @@ pub async fn git_status(repo_path: String) -> Result<Vec<GitStatusEntry>, AppErr
         Ok(entries)
     })
     .await
-    .map_err(|e| AppError::Io(format!("spawn_blocking 失败: {e}")))?
+    {
+        Ok(inner) => inner,
+        Err(e) => Err(AppError::TaskJoin(e.to_string())),
+    }
 }
 
 /// 获取指定文件的 HEAD ↔ 工作区 diff hunks
@@ -125,13 +174,16 @@ pub async fn git_status(repo_path: String) -> Result<Vec<GitStatusEntry>, AppErr
 /// 用于编辑器行内 diff 边栏。
 /// 仓库尚无提交（UnbornBranch）时返回 Err。
 #[tauri::command]
-pub async fn git_diff(repo_path: String, file_path: String) -> Result<Vec<DiffHunk>, AppError> {
-    tokio::task::spawn_blocking(move || {
-        let repo = // 用 discover 而非 open——支持从子目录上溯查找 .git（前端可能传父目录而非仓库根）
-        git2::Repository::discover(&repo_path)
-            .or_else(|_| git2::Repository::discover(&file_path))
-            .map_err(|e| AppError::Git(format!("打开仓库失败: {e}")))?;
+pub async fn git_diff(
+    repo_path: String,
+    file_path: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<DiffHunk>, AppError> {
+    // 从缓存获取/创建 Repository（以 repo_path 或 file_path 搜索）
+    let search_path = if !repo_path.is_empty() { &repo_path } else { &file_path };
+    let (repo, workdir) = get_or_open_repo(&state.git_repo_cache, search_path)?;
 
+    match tokio::task::spawn_blocking(move || {
         // 获取 HEAD tree
         let tree = match repo.head() {
             Ok(head) => Some(
@@ -144,13 +196,8 @@ pub async fn git_diff(repo_path: String, file_path: String) -> Result<Vec<DiffHu
 
         // 基准：HEAD tree vs 工作区+index
         let mut opts = git2::DiffOptions::new();
-        // 用 repo.workdir() 做 strip_prefix 基准（而非信任传入的 repo_path）。
-        // dunce::simplified() 剥离 Windows \\?\ 扩展路径前缀，
+        // workdir 从缓存 helper 传入（已 dunce::simplified），
         // 确保与 fs_read_dir 路径格式一致，strip_prefix 不会因前缀不同而失败。
-        let workdir_raw = repo
-            .workdir()
-            .ok_or_else(|| AppError::Git("仓库无工作目录（可能为 bare repo）".to_string()))?;
-        let workdir = dunce::simplified(workdir_raw);
         let file_path_std = std::path::Path::new(&file_path);
         let rel_path_str = file_path_std
             .strip_prefix(workdir)
@@ -272,7 +319,10 @@ pub async fn git_diff(repo_path: String, file_path: String) -> Result<Vec<DiffHu
         Ok(hunks)
     })
     .await
-    .map_err(|e| AppError::Io(format!("spawn_blocking 失败: {e}")))?
+    {
+        Ok(inner) => inner,
+        Err(e) => Err(AppError::TaskJoin(e.to_string())),
+    }
 }
 
 #[cfg(test)]

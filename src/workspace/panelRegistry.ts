@@ -6,6 +6,11 @@
 import { TerminalPanel } from "../panels/terminal";
 import { EditorPanel } from "../panels/editor";
 
+/** 终端面板类型标识 */
+export const PANEL_TERMINAL = "terminal" as const;
+/** 编辑器面板类型标识 */
+export const PANEL_EDITOR = "editor" as const;
+
 /** Dockview 面板组件注册表 */
 export const panelRegistry = {
   terminal: TerminalPanel as React.FC<{
@@ -22,7 +27,7 @@ export const terminalTabConfig = {
 };
 
 /** 面板类型列表（用于 fromJSON 校验白名单） */
-export const PANEL_TYPES = ["terminal", "editor"] as const;
+export const PANEL_TYPES = [PANEL_TERMINAL, PANEL_EDITOR] as const;
 export type PanelType = (typeof PANEL_TYPES)[number];
 
 /** 检查面板类型是否有效 */

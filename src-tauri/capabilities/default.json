@@ -1,15 +1,16 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window",
+  "description": "主窗口权限声明",
   "windows": ["main"],
   "permissions": [
     "core:default",
     "core:window:allow-destroy",
     "opener:default",
     "dialog:default",
-    "wdio-webdriver:default",
     "clipboard-manager:allow-write-text",
-    "clipboard-manager:allow-read-text"
-  ]
+    "clipboard-manager:allow-read-text",
+    "wdio-webdriver:default"
+  ],
+  "_p0-07-note": "Tauri 2 默认行为：invoke_handler 注册的自定义命令（ping、pty_*、fs_*、git_*、notify_* 等 18 个）自动对所有窗口放行，无需逐条声明。app: 命名空间属于 @tauri-apps/api/app 插件，与自定义应用命令无关。如后续需严格白名单模式，在 build.rs 中配置 AppManifest::commands。"
 }

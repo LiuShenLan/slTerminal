@@ -8,6 +8,11 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mockIPC, clearMocks } from '@tauri-apps/api/mocks';
 import { Channel } from '@tauri-apps/api/core';
+
+// setup.ts 全局 mock 了 ../ipc/notify → 本测试需要真实 startWatch 实现
+vi.mock("../ipc/notify", async (importOriginal) => {
+  return importOriginal<typeof import("../ipc/notify")>();
+});
 import * as pty from '../ipc/pty';
 import * as fs from '../ipc/fs';
 import * as settings from '../ipc/settings';
@@ -146,6 +151,37 @@ describe('pty IPC 合约', () => {
 
     await expect(pty.kill('dead-session')).rejects.toThrow('already dead');
   });
+
+  // ── reattach（Channel 替换 + ring buffer 回放）────────────
+
+  it('reattach: 应调用 pty_reattach 命令，参数包含 sessionId 和 onOutput Channel', async () => {
+    const spy = vi.fn();
+    mockIPC((cmd, args) => {
+      spy(cmd, args);
+    });
+
+    const onOutput = vi.fn();
+    await pty.reattach('session-9', onOutput);
+
+    expect(spy).toHaveBeenCalledTimes(1);
+
+    const [cmd, args] = spy.mock.calls[0] as [string, Record<string, unknown>];
+    expect(cmd).toBe('pty_reattach');
+    expect(args.sessionId).toBe('session-9');
+    expect(args.onOutput).toBeInstanceOf(Channel);
+    // 验证 channel.onmessage 已绑定为 onOutput 回调
+    expect((args.onOutput as Channel<unknown>).onmessage).toBe(onOutput);
+  });
+
+  it('reattach: invoke 失败时异常应传播给调用方', async () => {
+    mockIPC((cmd) => {
+      if (cmd === 'pty_reattach') throw new Error('session not found');
+    });
+
+    await expect(
+      pty.reattach('ghost-session', vi.fn()),
+    ).rejects.toThrow('session not found');
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════
@@ -198,6 +234,94 @@ describe('fs IPC 合约', () => {
     });
 
     await expect(fs.writeFile('C:\\full.txt', 'data')).rejects.toThrow('disk full');
+  });
+
+  // ── 目录操作 ──────────────────────────────────────────────
+
+  it('readDir: 应调用 fs_read_dir 命令，参数包含 path', async () => {
+    const spy = vi.fn();
+    mockIPC((cmd, args) => {
+      spy(cmd, args);
+      if (cmd === 'fs_read_dir') return [
+        { name: 'src', path: 'C:/test/src', isDir: true },
+        { name: 'README.md', path: 'C:/test/README.md', isDir: false, size: 1024, modified: 1700000000000 },
+      ];
+    });
+
+    const entries = await fs.readDir('C:\\test');
+
+    expect(entries).toHaveLength(2);
+    expect(entries[0].name).toBe('src');
+    expect(entries[0].isDir).toBe(true);
+    expect(spy).toHaveBeenCalledWith('fs_read_dir', { path: 'C:\\test' });
+  });
+
+  it('readDir: invoke 失败时异常应传播', async () => {
+    mockIPC((cmd) => {
+      if (cmd === 'fs_read_dir') throw new Error('path not found');
+    });
+
+    await expect(fs.readDir('C:\\nope')).rejects.toThrow('path not found');
+  });
+
+  it('createDir: 应调用 fs_create_dir 命令，参数包含 path', async () => {
+    const spy = vi.fn();
+    mockIPC((cmd, args) => {
+      spy(cmd, args);
+    });
+
+    await fs.createDir('C:\\new-folder');
+
+    expect(spy).toHaveBeenCalledWith('fs_create_dir', { path: 'C:\\new-folder' });
+  });
+
+  it('createDir: invoke 失败时异常应传播', async () => {
+    mockIPC((cmd) => {
+      if (cmd === 'fs_create_dir') throw new Error('permission denied');
+    });
+
+    await expect(fs.createDir('C:\\protected')).rejects.toThrow('permission denied');
+  });
+
+  it('deleteEntry: 应调用 fs_delete 命令，参数包含 path', async () => {
+    const spy = vi.fn();
+    mockIPC((cmd, args) => {
+      spy(cmd, args);
+    });
+
+    await fs.deleteEntry('C:\\to-delete.txt');
+
+    expect(spy).toHaveBeenCalledWith('fs_delete', { path: 'C:\\to-delete.txt' });
+  });
+
+  it('deleteEntry: invoke 失败时异常应传播', async () => {
+    mockIPC((cmd) => {
+      if (cmd === 'fs_delete') throw new Error('file locked');
+    });
+
+    await expect(fs.deleteEntry('C:\\locked.txt')).rejects.toThrow('file locked');
+  });
+
+  it('rename: 应调用 fs_rename 命令，参数包含 src 和 dst', async () => {
+    const spy = vi.fn();
+    mockIPC((cmd, args) => {
+      spy(cmd, args);
+    });
+
+    await fs.rename('C:\\old.txt', 'C:\\new.txt');
+
+    expect(spy).toHaveBeenCalledWith('fs_rename', {
+      src: 'C:\\old.txt',
+      dst: 'C:\\new.txt',
+    });
+  });
+
+  it('rename: invoke 失败时异常应传播', async () => {
+    mockIPC((cmd) => {
+      if (cmd === 'fs_rename') throw new Error('target exists');
+    });
+
+    await expect(fs.rename('C:\\a.txt', 'C:\\b.txt')).rejects.toThrow('target exists');
   });
 });
 

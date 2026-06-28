@@ -18,15 +18,11 @@ const mockLocalStorage = {
 
 // ─── Hoisted mocks（在 App.tsx 模块加载前生效）───
 const mocks = vi.hoisted(() => ({
-  mockGetCurrentWindow: vi.fn(() => ({
-    onCloseRequested: vi.fn(() => Promise.resolve(() => {})),
-    destroy: vi.fn(() => Promise.resolve()),
-  })),
   mockWriteText: vi.fn(() => Promise.resolve()),
 }));
 
-vi.mock("@tauri-apps/api/window", () => ({
-  getCurrentWindow: mocks.mockGetCurrentWindow,
+vi.mock("../ipc/window", () => ({
+  registerCloseHandler: vi.fn(() => () => {}),
 }));
 
 vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({
@@ -34,8 +30,9 @@ vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({
   readText: vi.fn(() => Promise.resolve("")),
 }));
 
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: () => Promise.resolve(() => {}),
+vi.mock("../ipc/notify", () => ({
+  onFsEvent: () => () => {},
+  startWatch: () => Promise.resolve(),
 }));
 
 // ─── 导入 App 模块（触发 __slterm_e2e_createProject 挂载到 window）───

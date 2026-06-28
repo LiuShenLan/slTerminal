@@ -61,6 +61,7 @@ vi.mock("../ipc/git", () => ({
 
 vi.mock("../ipc/notify", () => ({
   startWatch: mocks.mockStartWatch,
+  onFsEvent: () => () => {},
 }));
 
 // Mock Dockview API

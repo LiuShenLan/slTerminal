@@ -29,7 +29,7 @@ import { xml } from "@codemirror/lang-xml";
 import { save } from "../../ipc/dialog";
 import { fs } from "../../ipc";
 import { diffGutter, updateDiffGutter, clearDiffGutter } from "./gitGutter";
-import { listen } from "@tauri-apps/api/event";
+import { onFsEvent } from "../../ipc/notify";
 import { gitDiff } from "../../ipc/git";
 
 export interface UseCodeMirrorOptions {
@@ -85,6 +85,8 @@ export function useCodeMirror({ container, filePath }: UseCodeMirrorOptions) {
   // 保存后短时间内抑制 fs-event auto-reload，避免将自己的写入误判为外部改动、
   // 执行全量文档替换从而破坏 diff gutter 的标记（RangeSet.map 会把所有 marker 清空）
   const justSavedRef = useRef(false);
+  // P1-17: 组件卸载标记，防止 async initEditor 在 unmount 后操作 DOM
+  const mountedRef = useRef(false);
 
   /** Ctrl+S 保存 — G3: 无 filePath 时弹出另存为对话框 */
   const handleSave = useCallback(async () => {
@@ -111,7 +113,9 @@ export function useCodeMirror({ container, filePath }: UseCodeMirrorOptions) {
     try {
       await fs.writeFile(path, content);
     } catch (err) {
-      console.error("保存失败:", err);
+      // P1-05: 保存失败时显示通知，保留编辑器内容不清空
+      window.alert(`保存失败: ${err}`);
+      return;
     }
 
     // P13: 保存后刷新 diff gutter
@@ -129,7 +133,8 @@ export function useCodeMirror({ container, filePath }: UseCodeMirrorOptions) {
           if (viewRef.current) clearDiffGutter(viewRef.current);
         }
       })
-      .catch(() => {});
+      // P2-15: gitDiff 失败时 console.warn，不再静默吞错
+      .catch((err) => { console.warn("[slTerminal] git diff 刷新失败:", err); });
 
     // 磁盘已写入完成，通知文件浏览器刷新 git 着色
     window.dispatchEvent(new CustomEvent("slterm:file-saved", { detail: { path: normalizedPath } }));
@@ -141,17 +146,38 @@ export function useCodeMirror({ container, filePath }: UseCodeMirrorOptions) {
     filePathRef.current = filePath;
 
     // 异步加载文件内容
+    // P1-17: fire-and-forget async，开头标记 mounted，await 后检查标记再操作 DOM
     const initEditor = async () => {
+      mountedRef.current = true;
       let doc = "";
 
       if (filePath) {
         try {
           doc = await fs.readFile(filePath);
+          // P2-10: 大文件检查 — UTF-8 文本 length 近似文件字节数
+          const sizeHint = doc.length;
+          if (sizeHint > 10_000_000) {
+            // >10MB：直接拒绝，将文档设为错误提示
+            doc = `// [slTerminal] 文件过大（约${(sizeHint / 1_000_000).toFixed(1)}MB），已拒绝打开以保护内存。`;
+            filePathRef.current = undefined; // 防止误保存覆盖原文件
+          } else if (sizeHint > 1_000_000) {
+            // >1MB：弹窗警告，用户可选择继续或取消
+            const proceed = window.confirm(
+              `文件较大（约${(sizeHint / 1_000_000).toFixed(1)}MB），打开可能影响性能。\n\n确定继续？`,
+            );
+            if (!proceed) {
+              doc = `// [slTerminal] 用户取消打开大文件（约${(sizeHint / 1_000_000).toFixed(1)}MB）。`;
+              filePathRef.current = undefined;
+            }
+          }
         } catch (err) {
           console.error("读取文件失败:", err);
           doc = `// 读取失败: ${err}\n`;
         }
       }
+
+      // P1-17: 组件可能已在 await 期间卸载，检查后避免 EditorView DOM 泄漏
+      if (!mountedRef.current) return;
 
       const saveKeymap = keymap.of([
         {
@@ -208,6 +234,8 @@ export function useCodeMirror({ container, filePath }: UseCodeMirrorOptions) {
     initEditor();
 
     return () => {
+      // P1-17: 标记组件已卸载，阻止 pending async 操作 DOM
+      mountedRef.current = false;
       // 箭头函数调 destroy，防止 this 丢失
       const cleanup = () => {
         viewRef.current?.destroy();
@@ -232,51 +260,36 @@ export function useCodeMirror({ container, filePath }: UseCodeMirrorOptions) {
 
   // D3: 监听外部文件改动
   useEffect(() => {
-    const unlisten = listen<{ paths: string[]; kind: string }>(
-      "fs-event",
-      (event) => {
-        // 跳过自己保存触发的文件事件，避免 auto-reload 清空 diff gutter 标记
-        if (justSavedRef.current) {
-          justSavedRef.current = false;
-          return;
-        }
+    const unlisten = onFsEvent((event) => {
+      // 跳过自己保存触发的文件事件，避免 auto-reload 清空 diff gutter 标记
+      if (justSavedRef.current) {
+        justSavedRef.current = false;
+        return;
+      }
 
-        const currentPath = filePathRef.current;
-        if (!currentPath) return;
+      const currentPath = filePathRef.current;
+      if (!currentPath) return;
 
-        // 规范化路径比较
-        const normalizedCurrent = currentPath.replace(/\\/g, "/");
-        const affected = event.payload.paths.some(
-          (p) => p.replace(/\\/g, "/") === normalizedCurrent,
+      // 规范化路径比较
+      const normalizedCurrent = currentPath.replace(/\\/g, "/");
+      const affected = event.paths.some(
+        (p) => p.replace(/\\/g, "/") === normalizedCurrent,
+      );
+      if (!affected) return;
+
+      // 仅处理 Modify 事件
+      if (event.kind !== "Modify") return;
+
+      const view = viewRef.current;
+      if (!view) return;
+
+      if (dirtyRef.current) {
+        // 有未保存修改 → 弹窗选择
+        const choice = window.confirm(
+          `文件 "${currentPath}" 已被外部修改。\n\n当前编辑器有未保存的修改。\n\n• 确定 = 重载（丢弃本地修改）\n• 取消 = 保留本地修改`,
         );
-        if (!affected) return;
-
-        // 仅处理 Modify 事件
-        if (event.payload.kind !== "Modify") return;
-
-        const view = viewRef.current;
-        if (!view) return;
-
-        if (dirtyRef.current) {
-          // 有未保存修改 → 弹窗选择
-          const choice = window.confirm(
-            `文件 "${currentPath}" 已被外部修改。\n\n当前编辑器有未保存的修改。\n\n• 确定 = 重载（丢弃本地修改）\n• 取消 = 保留本地修改`,
-          );
-          if (choice) {
-            // 重载
-            fs.readFile(currentPath).then((content) => {
-              view.dispatch({
-                changes: {
-                  from: 0,
-                  to: view.state.doc.length,
-                  insert: content,
-                },
-              });
-              dirtyRef.current = false;
-            }).catch(() => {});
-          }
-        } else {
-          // 无修改 → 自动重载
+        if (choice) {
+          // 重载
           fs.readFile(currentPath).then((content) => {
             view.dispatch({
               changes: {
@@ -285,13 +298,27 @@ export function useCodeMirror({ container, filePath }: UseCodeMirrorOptions) {
                 insert: content,
               },
             });
-          }).catch(() => {});
+            dirtyRef.current = false;
+          // P2-16: 外部修改重载失败时 console.warn
+          }).catch((err) => { console.warn("[slTerminal] 外部修改重载失败:", err); });
         }
-      },
-    );
+      } else {
+        // 无修改 → 自动重载
+        fs.readFile(currentPath).then((content) => {
+          view.dispatch({
+            changes: {
+              from: 0,
+              to: view.state.doc.length,
+              insert: content,
+            },
+          });
+          // P2-16: 外部修改重载失败时 console.warn
+        }).catch((err) => { console.warn("[slTerminal] 外部修改重载失败:", err); });
+      }
+    });
 
     return () => {
-      unlisten.then((fn) => fn());
+      unlisten();
     };
   }, []);
 

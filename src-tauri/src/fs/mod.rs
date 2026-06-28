@@ -1,12 +1,11 @@
-/// 文件系统模块 — 文件读/写命令 + 设置持久化
+/// 文件系统模块 — 文件读/写命令
 ///
 /// 阻塞 I/O 用 spawn_blocking 包装，不阻塞 tokio runtime。
-/// 设置用 tempfile 原子写入 + .bak 备份兜底。
 use crate::error::AppError;
+use crate::state::AppState;
 use serde::Serialize;
-use std::io::Write as _;
-use std::path::PathBuf;
-use tempfile::NamedTempFile;
+use std::path::{Path, PathBuf};
+use tauri::State;
 
 /// 目录条目
 #[derive(Debug, Clone, Serialize)]
@@ -24,15 +23,98 @@ pub struct DirEntry {
     pub modified: Option<u64>,
 }
 
+/// 验证目标路径是否在项目根目录子树内（路径 sandbox）
+///
+/// canonicalize 项目根与目标路径后比对前缀。
+/// 若 project_root 未设置则跳过校验（开发兼容）。
+pub(crate) fn validate_path_within_root(root_opt: &Option<PathBuf>, target: &Path) -> Result<(), AppError> {
+    let root = match root_opt {
+        Some(r) => r,
+        None => return Ok(()), // project_root 未设置，跳过校验
+    };
+    let canonical_root = dunce::canonicalize(root)
+        .map_err(|e| AppError::IoKind { kind: "path".into(), message: format!("无法解析项目根路径: {e}") })?;
+
+    // 尝试直接 canonicalize 目标（路径已存在）
+    let canonical_target = if let Ok(c) = dunce::canonicalize(target) {
+        c
+    } else {
+        // 目标不存在（如新建文件/目录）：沿父级上溯找到已存在的祖先，
+        // 再拼接剩余路径
+        let mut ancestor = target.to_path_buf();
+        loop {
+            if let Ok(c) = dunce::canonicalize(&ancestor) {
+                let remainder = target
+                    .strip_prefix(&ancestor)
+                    .unwrap_or(Path::new(""));
+                break c.join(remainder);
+            }
+            match ancestor.parent() {
+                Some(p) => ancestor = p.to_path_buf(),
+                None => {
+                    // 无已存在祖先，退化为 root + target 拼接检查
+                    break canonical_root.join(target);
+                }
+            }
+        }
+    };
+
+    if !canonical_target.starts_with(&canonical_root) {
+        return Err(AppError::IoKind { kind: "path".into(), message: "路径超出项目范围".into() });
+    }
+    Ok(())
+}
+
+/// 设置当前项目根路径（前端打开项目时调用）
+#[tauri::command]
+pub fn set_project_root(
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<(), AppError> {
+    let p = PathBuf::from(&path);
+    if !p.exists() {
+        return Err(AppError::IoKind { kind: "path".into(), message: format!("路径不存在: {path}") });
+    }
+    let mut root = state
+        .project_root
+        .write()
+        .map_err(|e| AppError::IoKind { kind: "lock".into(), message: format!("获取 project_root 锁失败: {e}") })?;
+    *root = Some(p);
+    Ok(())
+}
+
+/// 清除 git 仓库缓存（目录切换时调用）
+#[tauri::command]
+pub fn clear_git_cache(state: State<'_, AppState>) -> Result<(), AppError> {
+    let mut cache = state
+        .git_repo_cache
+        .lock()
+        .map_err(|e| AppError::Git(format!("获取 git_repo_cache 锁失败: {e}")))?;
+    cache.clear();
+    Ok(())
+}
+
 /// 读取文件内容（UTF-8 文本）
 #[tauri::command]
-pub async fn fs_read_file(path: String) -> Result<String, AppError> {
-    let content = tokio::task::spawn_blocking(move || -> Result<String, AppError> {
+pub async fn fs_read_file(path: String, state: State<'_, AppState>) -> Result<String, AppError> {
+    // 路径 sandbox 校验
+    {
+        let root = state
+            .project_root
+            .read()
+            .map_err(|e| AppError::IoKind { kind: "lock".into(), message: format!("获取 project_root 锁失败: {e}") })?;
+        validate_path_within_root(&root, Path::new(&path))?;
+    }
+
+    let content = match tokio::task::spawn_blocking(move || -> Result<String, AppError> {
         Ok(std::fs::read_to_string(&path)?)
     })
     .await
-    .map_err(|e| AppError::Io(format!("spawn_blocking 失败: {e}")))?;
-    content
+    {
+        Ok(inner) => inner,
+        Err(e) => Err(AppError::TaskJoin(e.to_string())),
+    }?;
+    Ok(content)
 }
 
 /// 写入文件内容（覆盖模式，UTF-8）
@@ -40,8 +122,21 @@ pub async fn fs_read_file(path: String) -> Result<String, AppError> {
 /// 写入前检测原文件行尾风格（CRLF/LF），保持与源文件一致，
 /// 避免 CodeMirror 内部 LF 归一化导致保存后行尾突变 → git 误判 modified。
 #[tauri::command]
-pub async fn fs_write_file(path: String, content: String) -> Result<(), AppError> {
-    let _ = tokio::task::spawn_blocking(move || -> Result<(), AppError> {
+pub async fn fs_write_file(
+    path: String,
+    content: String,
+    state: State<'_, AppState>,
+) -> Result<(), AppError> {
+    // 路径 sandbox 校验
+    {
+        let root = state
+            .project_root
+            .read()
+            .map_err(|e| AppError::IoKind { kind: "lock".into(), message: format!("获取 project_root 锁失败: {e}") })?;
+        validate_path_within_root(&root, Path::new(&path))?;
+    }
+
+    match tokio::task::spawn_blocking(move || -> Result<(), AppError> {
         // 确保父目录存在
         if let Some(parent) = PathBuf::from(&path).parent() {
             std::fs::create_dir_all(parent)?;
@@ -70,70 +165,11 @@ pub async fn fs_write_file(path: String, content: String) -> Result<(), AppError
         Ok(())
     })
     .await
-    .map_err(|e| AppError::Io(format!("spawn_blocking 失败: {e}")))?;
+    {
+        Ok(inner) => inner,
+        Err(e) => Err(AppError::TaskJoin(e.to_string())),
+    }?;
     Ok(())
-}
-
-/// 获取应用数据目录（~/.slterminal）
-fn app_data_dir() -> Result<PathBuf, AppError> {
-    let home = dirs::home_dir()
-        .ok_or_else(|| AppError::Io("无法获取用户主目录".to_string()))?;
-    Ok(home.join(".slterminal"))
-}
-
-/// 持久化设置（原子写入：tempfile → flush → persist，.bak 备份兜底）
-#[tauri::command]
-pub async fn save_settings(settings: serde_json::Value) -> Result<(), AppError> {
-    let app_dir = app_data_dir()?;
-    std::fs::create_dir_all(&app_dir)?;
-    let settings_path = app_dir.join("settings.json");
-
-    let _ = tokio::task::spawn_blocking(move || -> Result<(), AppError> {
-        let json = serde_json::to_string_pretty(&settings)?;
-        let mut tmp = NamedTempFile::new_in(&app_dir)?;
-        tmp.write_all(json.as_bytes())?;
-        tmp.flush()?;
-        if settings_path.exists() {
-            let bak = app_dir.join("settings.json.bak");
-            let _ = std::fs::copy(&settings_path, &bak);
-        }
-        tmp.persist(&settings_path)
-            .map_err(|e| AppError::Io(format!("persist 失败: {e}")))?;
-        Ok(())
-    })
-    .await
-    .map_err(|e| AppError::Io(format!("spawn_blocking 失败: {e}")))?;
-    Ok(())
-}
-
-/// 加载持久化设置，失败从 .bak 恢复，仍失败返回 Null
-#[tauri::command]
-pub async fn load_settings() -> Result<serde_json::Value, AppError> {
-    let app_dir = app_data_dir()?;
-    let settings_path = app_dir.join("settings.json");
-
-    let app_dir_clone = app_dir.clone();
-    let result = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, AppError> {
-        match std::fs::read_to_string(&settings_path) {
-            Ok(content) => match serde_json::from_str(&content) {
-                Ok(v) => Ok(v),
-                Err(_) => {
-                    let bak = app_dir_clone.join("settings.json.bak");
-                    if let Ok(bak_content) = std::fs::read_to_string(&bak) {
-                        if let Ok(v) = serde_json::from_str(&bak_content) {
-                            let _ = std::fs::write(&settings_path, &bak_content);
-                            return Ok(v);
-                        }
-                    }
-                    Ok(serde_json::Value::Null)
-                }
-            },
-            Err(_) => Ok(serde_json::Value::Null),
-        }
-    })
-    .await
-    .map_err(|e| AppError::Io(format!("spawn_blocking 失败: {e}")))?;
-    result
 }
 
 /// 递归读取目录内容
@@ -142,7 +178,7 @@ pub async fn load_settings() -> Result<serde_json::Value, AppError> {
 /// 结果按文件夹→文件排序，同类型按名称字母排序。
 #[tauri::command]
 pub async fn fs_read_dir(path: String) -> Result<Vec<DirEntry>, AppError> {
-    tokio::task::spawn_blocking(move || {
+    match tokio::task::spawn_blocking(move || {
         let mut entries: Vec<DirEntry> = Vec::new();
         let dir = std::fs::read_dir(&path)?;
 
@@ -190,29 +226,54 @@ pub async fn fs_read_dir(path: String) -> Result<Vec<DirEntry>, AppError> {
         Ok(entries)
     })
     .await
-    .map_err(|e| AppError::Io(format!("spawn_blocking 失败: {e}")))?
+    {
+        Ok(inner) => inner,
+        Err(e) => Err(AppError::TaskJoin(e.to_string())),
+    }
 }
 
 /// 创建目录（递归创建父目录）
 #[tauri::command]
-pub async fn fs_create_dir(path: String) -> Result<(), AppError> {
-    tokio::task::spawn_blocking(move || {
+pub async fn fs_create_dir(path: String, state: State<'_, AppState>) -> Result<(), AppError> {
+    // 路径 sandbox 校验
+    {
+        let root = state
+            .project_root
+            .read()
+            .map_err(|e| AppError::IoKind { kind: "lock".into(), message: format!("获取 project_root 锁失败: {e}") })?;
+        validate_path_within_root(&root, Path::new(&path))?;
+    }
+
+    match tokio::task::spawn_blocking(move || {
         std::fs::create_dir_all(&path)?;
         Ok(())
     })
     .await
-    .map_err(|e| AppError::Io(format!("spawn_blocking 失败: {e}")))?
+    {
+        Ok(inner) => inner,
+        Err(e) => Err(AppError::TaskJoin(e.to_string())),
+    }
 }
 
-/// 删除文件或目录（永久删除，不进回收站）
+/// 删除文件或目录。
 ///
+/// 注意：此操作为永久删除，不进回收站。
 /// 删除目录时递归删除所有子级。
 #[tauri::command]
-pub async fn fs_delete(path: String) -> Result<(), AppError> {
-    tokio::task::spawn_blocking(move || {
+pub async fn fs_delete(path: String, state: State<'_, AppState>) -> Result<(), AppError> {
+    // 路径 sandbox 校验
+    {
+        let root = state
+            .project_root
+            .read()
+            .map_err(|e| AppError::IoKind { kind: "lock".into(), message: format!("获取 project_root 锁失败: {e}") })?;
+        validate_path_within_root(&root, Path::new(&path))?;
+    }
+
+    match tokio::task::spawn_blocking(move || {
         let p = PathBuf::from(&path);
         if !p.exists() {
-            return Err(AppError::Io(format!("路径不存在: {path}")));
+            return Err(AppError::IoKind { kind: "path".into(), message: format!("路径不存在: {path}") });
         }
         if p.is_dir() {
             std::fs::remove_dir_all(&path)?;
@@ -222,15 +283,32 @@ pub async fn fs_delete(path: String) -> Result<(), AppError> {
         Ok(())
     })
     .await
-    .map_err(|e| AppError::Io(format!("spawn_blocking 失败: {e}")))?
+    {
+        Ok(inner) => inner,
+        Err(e) => Err(AppError::TaskJoin(e.to_string())),
+    }
 }
 
 /// 重命名/移动文件或目录
 ///
 /// 目标路径存在时覆盖。
 #[tauri::command]
-pub async fn fs_rename(src: String, dst: String) -> Result<(), AppError> {
-    tokio::task::spawn_blocking(move || {
+pub async fn fs_rename(
+    src: String,
+    dst: String,
+    state: State<'_, AppState>,
+) -> Result<(), AppError> {
+    // 路径 sandbox 校验（源路径和目标路径都须在项目根内）
+    {
+        let root = state
+            .project_root
+            .read()
+            .map_err(|e| AppError::IoKind { kind: "lock".into(), message: format!("获取 project_root 锁失败: {e}") })?;
+        validate_path_within_root(&root, Path::new(&src))?;
+        validate_path_within_root(&root, Path::new(&dst))?;
+    }
+
+    match tokio::task::spawn_blocking(move || {
         // 若目标存在且为目录，先删除
         let dst_path = PathBuf::from(&dst);
         if dst_path.exists() && dst_path.is_dir() {
@@ -240,7 +318,10 @@ pub async fn fs_rename(src: String, dst: String) -> Result<(), AppError> {
         Ok(())
     })
     .await
-    .map_err(|e| AppError::Io(format!("spawn_blocking 失败: {e}")))?
+    {
+        Ok(inner) => inner,
+        Err(e) => Err(AppError::TaskJoin(e.to_string())),
+    }
 }
 
 /// fs_read_dir/create_dir/delete/rename 单元测试
@@ -494,178 +575,5 @@ mod write_file_tests {
         assert!(crlf.contains("\r\n"));
         assert!(!crlf.contains('\n') || crlf.ends_with("\r\n"),
             "转换后不应有孤立 LF（末尾 \\r\\n 跳过）");
-    }
-}
-
-/// 验证设置加载/保存逻辑
-#[cfg(test)]
-mod load_settings_tests {
-    use super::*;
-
-    #[test]
-    fn test_fs_read_write_roundtrip() {
-        let tmp = std::env::temp_dir().join("slterm_test_roundtrip.txt");
-        let test_content = "hello slTerminal 测试内容\r\n第二行";
-
-        // 写
-        std::fs::write(&tmp, test_content).unwrap();
-
-        // 读
-        let read = std::fs::read_to_string(&tmp).unwrap();
-        assert_eq!(read, test_content);
-
-        // 清理
-        let _ = std::fs::remove_file(&tmp);
-    }
-
-    /// 路径不存在时 read_to_string 返回 io::Error
-    #[test]
-    fn test_fs_read_file_not_found() {
-        let tmp = std::env::temp_dir().join("slterm_nonexistent_test_file.txt");
-        // 确保文件不存在
-        let _ = std::fs::remove_file(&tmp);
-        let result = std::fs::read_to_string(&tmp);
-        assert!(
-            result.is_err(),
-            "读取不存在的文件应返回错误"
-        );
-    }
-
-    /// 写入不存在的目录时 create_dir_all 自动创建父目录
-    #[test]
-    fn test_fs_write_file_parent_creation() {
-        let base = std::env::temp_dir().join("slterm_test_parent_creation");
-        let file_path = base.join("subdir").join("nested").join("test.txt");
-
-        // 清理旧数据
-        let _ = std::fs::remove_dir_all(&base);
-
-        // 模拟 fs_write_file 逻辑：确保父目录存在
-        if let Some(parent) = file_path.parent() {
-            std::fs::create_dir_all(parent).unwrap();
-        }
-        std::fs::write(&file_path, "parent 自动创建").unwrap();
-
-        let read = std::fs::read_to_string(&file_path).unwrap();
-        assert_eq!(read, "parent 自动创建");
-
-        // 清理
-        let _ = std::fs::remove_dir_all(&base);
-    }
-
-    /// 完整 save → load 往返（使用临时目录）
-    #[test]
-    fn test_save_settings_and_load() {
-        let dir = tempfile::tempdir().unwrap();
-        let settings_path = dir.path().join("settings.json");
-        let settings: serde_json::Value = serde_json::json!({
-            "theme": "jetbrains-dark",
-            "fontSize": 14
-        });
-
-        // --- save 逻辑（同步版）---
-        let json = serde_json::to_string_pretty(&settings).unwrap();
-        let mut tmp = NamedTempFile::new_in(dir.path()).unwrap();
-        tmp.write_all(json.as_bytes()).unwrap();
-        tmp.flush().unwrap();
-        // 首次写入，无旧文件
-        tmp.persist(&settings_path).unwrap();
-
-        // --- load 逻辑（同步版）---
-        let content = std::fs::read_to_string(&settings_path).unwrap();
-        let loaded: serde_json::Value = serde_json::from_str(&content).unwrap();
-
-        assert_eq!(loaded, settings);
-    }
-
-    /// 文件不存在时 load_settings 返回 Null
-    #[test]
-    fn test_load_settings_file_not_found() {
-        let dir = tempfile::tempdir().unwrap();
-        let settings_path = dir.path().join("settings.json");
-        // 确保文件不存在
-        let _ = std::fs::remove_file(&settings_path);
-
-        let result = std::fs::read_to_string(&settings_path);
-        assert!(result.is_err(), "文件不存在时 read 应失败");
-
-        // 对应 load_settings 中 Err(_) → Ok(Null) 分支
-        let value: serde_json::Value = match result {
-            Ok(_) => serde_json::Value::Null,
-            Err(_) => serde_json::Value::Null,
-        };
-        assert!(value.is_null());
-    }
-
-    /// JSON 损坏时从 .bak 恢复
-    #[test]
-    fn test_load_settings_corrupt_json_fallback_to_bak() {
-        let dir = tempfile::tempdir().unwrap();
-        let settings_path = dir.path().join("settings.json");
-        let bak_path = dir.path().join("settings.json.bak");
-
-        let valid_json = r#"{"theme":"dark","fontSize":14}"#;
-        let corrupt_json = "not valid json {{{broken";
-
-        // 写入 bak
-        std::fs::write(&bak_path, valid_json).unwrap();
-        // 写入损坏的 settings
-        std::fs::write(&settings_path, corrupt_json).unwrap();
-
-        // 模拟 load_settings 逻辑
-        let content = std::fs::read_to_string(&settings_path).unwrap();
-        let value: serde_json::Value = match serde_json::from_str(&content) {
-            Ok(v) => v,
-            Err(_) => {
-                // 回退到 .bak
-                let bak_content = std::fs::read_to_string(&bak_path).unwrap();
-                let v: serde_json::Value = serde_json::from_str(&bak_content).unwrap();
-                // 自动修复 settings.json
-                let _ = std::fs::write(&settings_path, &bak_content);
-                v
-            }
-        };
-
-        assert_eq!(
-            value,
-            serde_json::json!({"theme": "dark", "fontSize": 14})
-        );
-        // 验证 settings.json 已被修复
-        let repaired: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
-        assert_eq!(
-            repaired,
-            serde_json::json!({"theme": "dark", "fontSize": 14})
-        );
-    }
-
-    /// JSON 损坏且无 .bak 时返回 Null
-    #[test]
-    fn test_load_settings_corrupt_json_no_bak() {
-        let dir = tempfile::tempdir().unwrap();
-        let settings_path = dir.path().join("settings.json");
-        let corrupt_json = "definitely not json {{{";
-
-        std::fs::write(&settings_path, corrupt_json).unwrap();
-
-        // 模拟 load_settings 逻辑
-        let content = std::fs::read_to_string(&settings_path).unwrap();
-        let value: serde_json::Value = match serde_json::from_str(&content) {
-            Ok(v) => v,
-            Err(_) => {
-                let bak_path = dir.path().join("settings.json.bak");
-                if let Ok(bak_content) = std::fs::read_to_string(&bak_path) {
-                    if let Ok(v) = serde_json::from_str(&bak_content) {
-                        v
-                    } else {
-                        serde_json::Value::Null
-                    }
-                } else {
-                    serde_json::Value::Null
-                }
-            }
-        };
-
-        assert!(value.is_null(), "无 .bak 时应返回 Null");
     }
 }

@@ -35,6 +35,11 @@ export const TerminalRegistry = {
     return registry.has(panelId);
   },
 
+  /** 返回所有已注册终端的 panelId → RegisteredTerminal 映射（只读） */
+  getAll(): ReadonlyMap<string, RegisteredTerminal> {
+    return registry;
+  },
+
   /** 仅用于调试/测试 */
   _size(): number {
     return registry.size;

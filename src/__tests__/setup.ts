@@ -6,9 +6,10 @@ import { vi } from 'vitest';
 // detectWebgl.test.ts 通过 vi.spyOn 覆盖此 mock（mockRestore 恢复到本 mock）
 vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
 
-// mock @tauri-apps/api/event（useFileTree 等模块在 import 时调用 listen）
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: () => Promise.resolve(() => {}),
+// mock ipc/notify（useFileTree / useCodeMirror 在 import 时调用 onFsEvent）
+vi.mock("../ipc/notify", () => ({
+  onFsEvent: () => () => {},
+  startWatch: () => Promise.resolve(),
 }));
 
 // jsdom 缺少 crypto.getRandomValues（xterm.js 等库依赖）

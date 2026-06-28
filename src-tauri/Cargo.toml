@@ -21,6 +21,10 @@ tauri-build = { version = "2.6.3", features = [] }
 tauri = { version = "2.11.3", features = [] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
+# P0-08: wdio-webdriver 依赖始终编译，但插件初始化在 lib.rs 中用 #[cfg(debug_assertions)] 门控。
+# debug_assertions 不是 Cargo 支持的 target cfg predicate，
+# 因此无法在 Cargo.toml 层面按 profile 排除依赖。
+# 生产构建中插件代码存在但从不初始化——WebDriver 服务器不会被启动。
 tauri-plugin-wdio-webdriver = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -28,6 +32,8 @@ thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 portable-pty = "0.9.0"
+# P1-25: notify 9.0.0 仍为 RC 阶段（最新稳定版 8.2.0, 2025-08-03）。
+# rc.4 (2026-05-02) 为当前最新 RC。关注 https://crates.io/crates/notify 正式发布后升级。
 notify = "9.0.0-rc.4"
 uuid = { version = "1", features = ["v4"] }
 tauri-plugin-prevent-default = { version = "5", features = ["platform-windows"] }
@@ -38,6 +44,8 @@ base64 = "0.22"
 tempfile = "3"
 dirs = "6"
 git2 = { version = "0.20", features = ["vendored-libgit2"] }
+# P1-25: notify-debouncer-full 0.8.0-rc.2 跟随 notify 9.0.0 RC。
+# notify 正式发布后同步升级此依赖。
 notify-debouncer-full = "0.8.0-rc.2"
 dunce = "1"
 

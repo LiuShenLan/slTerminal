@@ -1,6 +1,15 @@
+import { invoke } from "@tauri-apps/api/core";
+
 export * as pty from "./pty";
 export * as fs from "./fs";
+export * as git from "./git";
 export * as settings from "./settings";
+export * as notify from "./notify";
+export * as clipboard from "./clipboard";
+export * as dialog from "./dialog";
+export * as window from "./window";
 
-// Phase 0 向后兼容：ping 命令（测试用）
-export { invoke } from "@tauri-apps/api/core";
+/** 验证 IPC 链路和测试基建 — Phase 0 占位命令 */
+export async function ping(): Promise<string> {
+  return await invoke("ping");
+}

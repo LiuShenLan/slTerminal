@@ -15,7 +15,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { terminalOptions } from "./theme";
 import { pty } from "../../ipc";
 import type { PtyEvent } from "../../types";
-import { setActiveTerminal, clearActiveTerminalIfMine, installKeyboardHandler } from "./keyboard";
+import { setActiveTerminal, clearActiveTerminalIfMine, installKeyboardHandler, uninstallKeyboardHandler } from "./keyboard";
 import { TerminalRegistry } from "./TerminalRegistry";
 
 export interface UseXtermOptions {
@@ -31,18 +31,77 @@ export interface UseXtermOptions {
   windowsBuildNumber?: number;
   /** 终端工作目录（来自操作页面 cwd） */
   cwd?: string;
+  /** 面板是否可见（页面切换时 CSS display:none → WebGL 释放） */
+  visible?: boolean;
 }
 
-/** 检测 WebGL2 是否可用（纯函数，无副作用） */
+// P2-44: 模块级 WebGL 检测缓存，避免每次 mount 创建临时 canvas
+let webglCache: boolean | null = null;
+
+/** 检测 WebGL2 是否可用（首次调用检测并缓存，后续直接返回缓存结果） */
 export function detectWebgl(): boolean {
+  if (webglCache !== null) return webglCache;
   try {
     const canvas = document.createElement("canvas");
     const gl = canvas.getContext("webgl2", {
       failIfMajorPerformanceCaveat: true,
     });
-    return gl !== null;
+    webglCache = gl !== null;
   } catch {
-    return false;
+    webglCache = false;
+  }
+  return webglCache;
+}
+
+/** 重置 WebGL 检测缓存（仅测试使用，生产环境无需调用） */
+export function resetWebglCache(): void {
+  webglCache = null;
+}
+
+// P2-43: WebGL context loss 后延迟重建（指数退避，最多 5 次）
+// 当前仅 dispose 后永久退化到 DOM 渲染器，改为延迟重建
+const WEBGL_RETRY_DELAYS = [1000, 2000, 4000, 8000, 16000]; // ms
+const WEBGL_RETRY_MAX = WEBGL_RETRY_DELAYS.length;
+
+function setupWebglWithRetry(
+  term: Terminal,
+  webglAddonRef: { current: WebglAddon | null },
+  attempt: number = 0,
+): void {
+  if (!detectWebgl()) return; // WebGL 不可用，永久 DOM 兜底
+
+  try {
+    const webglAddon = new WebglAddon();
+    webglAddonRef.current = webglAddon;
+    term.loadAddon(webglAddon);
+
+    webglAddon.onContextLoss(() => {
+      webglAddonRef.current?.dispose();
+      webglAddonRef.current = null;
+      // 指数退避重试
+      if (attempt < WEBGL_RETRY_MAX) {
+        const delay = WEBGL_RETRY_DELAYS[attempt];
+        console.warn(
+          `[WebGL] context loss，${delay}ms 后第 ${attempt + 1}/${WEBGL_RETRY_MAX} 次重建...`,
+        );
+        setTimeout(() => {
+          setupWebglWithRetry(term, webglAddonRef, attempt + 1);
+        }, delay);
+      } else {
+        console.warn(
+          `[WebGL] 已达最大重试次数 (${WEBGL_RETRY_MAX})，回退 DOM 渲染器`,
+        );
+      }
+    });
+  } catch {
+    webglAddonRef.current = null;
+    // 加载失败也重试（context 可能处于过渡状态）
+    if (attempt < WEBGL_RETRY_MAX) {
+      const delay = WEBGL_RETRY_DELAYS[attempt];
+      setTimeout(() => {
+        setupWebglWithRetry(term, webglAddonRef, attempt + 1);
+      }, delay);
+    }
   }
 }
 
@@ -63,7 +122,7 @@ export function canFit(
     return true;
 }
 
-export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, cwd }: UseXtermOptions) {
+export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, cwd, visible }: UseXtermOptions) {
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const webglAddonRef = useRef<WebglAddon | null>(null);
@@ -72,6 +131,16 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
   const rafIdRef = useRef<number | null>(null);
   const e2eTextBufferRef = useRef<string[]>([]);
   const isDisposedRef = useRef(false);
+  /** P2-02: 复用 TextDecoder 实例，避免每次 PTY 输出都 new */
+  const decoderRef = useRef(new TextDecoder());
+  /** P1-01/02: 记录最近一次 spawn 尺寸，供重试使用 */
+  const lastColsRef = useRef<number>(80);
+  const lastRowsRef = useRef<number>(24);
+  /** P1-01/02: Enter 重试 disposable，确保重试前清理旧监听 */
+  const retryDisposableRef = useRef<{ dispose: () => void } | null>(null);
+  /** P1-01/02: 跨闭包共享 doSpawn / setupRetry（handlePtyOutput 通过 ref 触发重连） */
+  const doSpawnRef = useRef<((cols: number, rows: number) => void) | null>(null);
+  const setupRetryRef = useRef<((cols: number, rows: number) => void) | null>(null);
 
   /** 将缓冲数据合并写入终端 */
   const flushBuffer = useCallback(() => {
@@ -89,10 +158,15 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
   const handlePtyOutput = useCallback(
     (event: PtyEvent) => {
       if (event.type === "output") {
-        const text = new TextDecoder().decode(
+        // P2-02: 复用 decoderRef，避免每次 new TextDecoder
+        const text = decoderRef.current.decode(
           new Uint8Array(event.data.bytes),
         );
         e2eTextBufferRef.current.push(text);
+        // P2-01: 每 1000 行截断，防止 E2E 文本缓冲无限增长
+        if (e2eTextBufferRef.current.length > 1000) {
+          e2eTextBufferRef.current.splice(0, e2eTextBufferRef.current.length - 1000);
+        }
 
         if (text.length < 256) {
           terminalRef.current?.write(text);
@@ -103,9 +177,12 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
           }
         }
       } else if (event.type === "exit") {
+        // P1-02: 进程退出后清除 sessionId，提示按 Enter 重新连接
+        sessionIdRef.current = null;
         terminalRef.current?.writeln(
-          `\r\n[进程已退出，代码: ${event.data.code ?? "?"}]`,
+          `\r\n进程已退出 (退出码: ${event.data.code ?? "?"})\r\n按 Enter 重新连接...\r\n`,
         );
+        setupRetryRef.current?.(lastColsRef.current, lastRowsRef.current);
       }
     },
     [flushBuffer],
@@ -142,30 +219,18 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
     fitAddonRef.current = fitAddon;
     term.loadAddon(fitAddon);
 
-    // WebGL addon（预检 → 通过则加载，不可用则 DOM 兜底）
+    // WebGL addon（P2-43: context loss 后延迟重建，非永久退化）
     if (detectWebgl()) {
-      try {
-        const webglAddon = new WebglAddon();
-        webglAddonRef.current = webglAddon;
-        term.loadAddon(webglAddon);
-
-        // 监听 context loss → dispose 自动回退 DOM 渲染器
-        webglAddon.onContextLoss(() => {
-          webglAddonRef.current?.dispose();
-          webglAddonRef.current = null;
-        });
-      } catch {
-        // WebGL 加载失败，DOM 兜底
-        webglAddonRef.current = null;
-      }
+      setupWebglWithRetry(term, webglAddonRef);
     }
 
     // 挂载到 DOM
     term.open(container);
 
-    // 注册键盘处理器（Ctrl+Shift+C/V 复制粘贴）— 焦点驱动
+    // 注册焦点事件（Ctrl+Shift+C/V 复制粘贴）— 焦点驱动
     // xterm.js v6 无 public onFocus/onBlur 事件，用 DOM focusin/focusout 跟踪焦点终端
-    installKeyboardHandler();
+    // 注：全局键盘处理器 installKeyboardHandler 由独立 useEffect 管理（不受 StrictMode 守卫影响）
+
     const onTerminalFocusIn = () => setActiveTerminal(term);
     const onTerminalFocusOut = (e: FocusEvent) => {
       // 仅当焦点离开终端 DOM 子树的才算 blur（内部焦点转移不触发）
@@ -191,7 +256,8 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
     e2eHelper.__e2e_sessionReady = false;
     e2eHelper.__e2e_writeToPty = (data: string) => {
       if (sessionIdRef.current) {
-        pty.write(sessionIdRef.current, new TextEncoder().encode(data));
+        pty.write(sessionIdRef.current, new TextEncoder().encode(data))
+          .catch((err) => console.error("E2E PTY write 失败:", err));
       }
     };
     // 文本缓冲读取（累积 PTY 输出 + 直接写入）
@@ -218,7 +284,13 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
       if (!Number.isFinite(realCols) || !Number.isFinite(realRows)) {
         console.warn(`[H6] ⚠️ proposeDimensions 返回 NaN，回退 80x24 (raw: cols=${realCols} rows=${realRows})`);
       }
+      // P1-01/02: 记录尺寸供重试使用
+      lastColsRef.current = cols;
+      lastRowsRef.current = rows;
       console.log(`[H6] 🚀 pty.spawn panelId="${panelId}" cols=${cols} rows=${rows}`);
+      // P2-14 终端数量软上限：当前无限制，每个面板创建一个 ConPTY + reader 线程。
+      // 若有需要，可在此处检查活跃 session 数量：若超阈值（如 16 个），弹窗提示用户先关闭闲置终端。
+      // 阈值建议通过 settings 配置，不硬编码。计数器通过 TerminalRegistry.size 或后端 PtyState.sessions.len() 获取。
       pty
         .spawn({ panelId, cols, rows, cwd }, handlePtyOutput)
         .then((sessionId) => {
@@ -234,11 +306,31 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
           console.log(`[H6] ✅ spawn OK panelId="${panelId}" sessionId="${sessionId}"`);
         })
         .catch((err) => {
-          term.writeln(`\r\n[PTY spawn 失败: ${err}]`);
+          // P1-01: spawn 失败 → 提示按 Enter 重试
+          term.writeln(`\r\n[重新连接] 按 Enter 重试...\r\n`);
           e2eHelper.__e2e_error = String(err);
           console.error(`[H6] ❌ spawn FAIL panelId="${panelId}"`, err);
+          setupRetryRef.current?.(cols, rows);
         });
     };
+
+    /** P1-01/02: 设置一次性 Enter 监听，触发后重新 spawn */
+    const setupRetry = (t: Terminal, cols: number, rows: number) => {
+      retryDisposableRef.current?.dispose();
+      const disposable = t.onData((data) => {
+        if (data === "\r") {
+          // Enter 键 → 移除监听 → 重新 spawn
+          disposable.dispose();
+          retryDisposableRef.current = null;
+          doSpawn(cols, rows);
+        }
+      });
+      retryDisposableRef.current = disposable;
+    };
+
+    // P1-01/02: 暴露 doSpawn / setupRetry 供 handlePtyOutput（exit 事件）和 catch 块通过 ref 调用
+    doSpawnRef.current = doSpawn;
+    setupRetryRef.current = (cols, rows) => setupRetry(term, cols, rows);
 
     const pollFitAndSpawn = () => {
       fitFrames++;
@@ -278,40 +370,29 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
           pty.write(
             sessionIdRef.current,
             new TextEncoder().encode(data),
-          );
+          ).catch((err) => console.error("PTY write 失败:", err));
         }
       });
 
-    // ResizeObserver：容器尺寸变化时 fit + 延迟 resize PTY
-    let roRafPending = false;
+    // P2-03: ResizeObserver — fit() 与 resize 合并到同一 100ms debounce，
+    // 避免窗口拖拽/分屏时高频触发多余的 fit 和 PTY resize
     let resizeTimer: ReturnType<typeof setTimeout> | null = null;
 
-    const doFit = () => {
-      if (!canFit(term, fitAddon, container, isDisposedRef)) return;
-      try {
-        fitAddon.fit();
-        const dims = fitAddon.proposeDimensions();
-        if (dims && sessionIdRef.current) {
-          // RO 回调中 PTY resize 加 100ms debounce
-          if (resizeTimer !== null) clearTimeout(resizeTimer);
-          resizeTimer = setTimeout(() => {
-            if (sessionIdRef.current && dims) {
-              pty.resize(sessionIdRef.current, dims.cols, dims.rows);
-            }
-          }, 100);
-        }
-      } catch {
-        // fit 失败不影响渲染
-      }
-    };
-
     const resizeObserver = new ResizeObserver(() => {
-      if (roRafPending) return;
-      roRafPending = true;
-      requestAnimationFrame(() => {
-        roRafPending = false;
-        doFit();
-      });
+      if (!canFit(term, fitAddon, container, isDisposedRef)) return;
+      if (resizeTimer !== null) clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        try {
+          fitAddon.fit();
+          const dims = fitAddon.proposeDimensions();
+          if (dims && sessionIdRef.current) {
+            pty.resize(sessionIdRef.current, dims.cols, dims.rows)
+              .catch((err) => console.error("PTY resize 失败:", err));
+          }
+        } catch {
+          // fit 失败不影响渲染
+        }
+      }, 100);
     });
     resizeObserver.observe(container);
 
@@ -333,18 +414,37 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
       // 页面切换不再销毁终端（多 Dockview 实例 + CSS 显隐），仅用户关闭面板时走到此分支
       console.log(`[H6] cleanup panelId="${panelId}" | sid=${sid} → DISPOSE`);
       if (sid) {
-        pty.kill(sid);
+        pty.kill(sid).catch(() => {}); // cleanup 中静默吞错，进程可能已退出
       }
+      TerminalRegistry.remove(panelId);
       // 移除焦点事件监听（在 dispose 前，避免 DOM 移除触发 focusout handler）
       term.element?.removeEventListener("focusin", onTerminalFocusIn);
       term.element?.removeEventListener("focusout", onTerminalFocusOut);
       clearActiveTerminalIfMine(term);
+      // P1-01/02: 清理重试 Enter 监听
+      retryDisposableRef.current?.dispose();
+      retryDisposableRef.current = null;
+      // P1-01/02: 清空跨闭包 ref，防止卸载后 setRetryRef 回调访问已销毁的 term
+      doSpawnRef.current = null;
+      setupRetryRef.current = null;
       webglAddonRef.current?.dispose();
       fitAddonRef.current?.dispose();
       terminalRef.current?.dispose();
       terminalRef.current = null;
+      // P2-01: 清空 E2E 文本缓冲
+      e2eTextBufferRef.current.length = 0;
     };
   }, [container, panelId, cols, rows, flushBuffer, handlePtyOutput]);
+
+  // 键盘处理器生命周期：独立 useEffect，不受 StrictMode 守卫影响
+  // 引用计数确保多终端场景下只安装一次，最后一个终端卸载时才移除 listener
+  useEffect(() => {
+    if (!container) return;
+    installKeyboardHandler();
+    return () => {
+      uninstallKeyboardHandler();
+    };
+  }, [container]);
 
   // F3 Bug 1 修复: 独立 useEffect 监听 windowsBuildNumber 异步更新
   // 主 useEffect 的 StrictMode 守卫不拦截此 effect，确保 Terminal 创建后 windowsPty 生效
@@ -357,6 +457,26 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
       };
     }
   }, [windowsBuildNumber]);
+
+  // P1-13: WebGL 按可见性管理 — 页面隐藏（display:none）时释放 WebGL 资源，
+  // 重新可见时重检测并重建 WebGL addon。DOM 渲染器始终可用无需干预。
+  useEffect(() => {
+    const term = terminalRef.current;
+    if (!term) return;
+
+    if (visible === false) {
+      // 隐藏：释放 WebGL addon，回退 DOM 渲染器
+      if (webglAddonRef.current) {
+        webglAddonRef.current.dispose();
+        webglAddonRef.current = null;
+      }
+    } else if (visible === true) {
+      // P2-43: 可见时若 WebGL 未加载且可用，延迟重建（非一次性失败）
+      if (!webglAddonRef.current && detectWebgl()) {
+        setupWebglWithRetry(term, webglAddonRef);
+      }
+    }
+  }, [visible]);
 
   return {
     /** 聚焦终端输入 */

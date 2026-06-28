@@ -5,6 +5,7 @@
 
 import React, { useRef, useState, useEffect } from "react";
 import { useCodeMirror } from "./useCodeMirror";
+import { EDITOR_BG } from "../../theme";
 
 interface EditorPanelProps {
   /** Dockview 传入的面板参数 */
@@ -33,7 +34,7 @@ const EditorPanel: React.FC<EditorPanelProps> = ({ params }) => {
       style={{
         width: "100%",
         height: "100%",
-        background: "#282C34",
+        background: EDITOR_BG,
         overflow: "auto",
       }}
     />

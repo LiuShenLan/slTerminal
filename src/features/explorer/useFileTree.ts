@@ -7,7 +7,7 @@
 // - 处理 need_rescan 全量刷新
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { onFsEvent } from "../../ipc/notify";
 import { readDir } from "../../ipc/fs";
 import { gitStatus } from "../../ipc/git";
 import type { DirEntry } from "../../types/fs";
@@ -189,11 +189,7 @@ export function useFileTree({ rootPath }: UseFileTreeOptions) {
 
   // 订阅文件系统事件（200ms 去抖增量刷新）
   useEffect(() => {
-    const unlisten = listen<{
-      paths: string[];
-      kind: string;
-      detail: string;
-    }>("fs-event", () => {
+    const unlisten = onFsEvent(() => {
       if (debounceRef.current) {
         clearTimeout(debounceRef.current);
       }
@@ -203,7 +199,7 @@ export function useFileTree({ rootPath }: UseFileTreeOptions) {
     });
 
     return () => {
-      unlisten.then((fn) => fn());
+      unlisten();
       if (debounceRef.current) {
         clearTimeout(debounceRef.current);
       }

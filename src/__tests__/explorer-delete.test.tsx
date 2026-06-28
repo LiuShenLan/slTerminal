@@ -5,6 +5,7 @@
 //   E2 组：ask 参数验证 — 消息/title/kind
 //   E3 组：ExplorerPanel 集成 — deleteEntry → refresh 链路
 //   E4 组：边界条件 — 右键菜单包含"删除"项
+//   E5 组：操作失败 UI 通知 — 删除/重命名/新建文件/新建文件夹失败 → 内联错误横幅
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import React from "react";
@@ -65,6 +66,7 @@ vi.mock("../ipc/git", () => ({
 
 vi.mock("../ipc/notify", () => ({
   startWatch: mocks.mockStartWatch,
+  onFsEvent: () => () => {},
 }));
 
 // ─── 真实模块导入（mock 之后）───
@@ -309,7 +311,7 @@ describe("ExplorerPanel 删除集成", () => {
     });
   });
 
-  it("8. 删除失败 → console.error 捕获，不崩溃", async () => {
+  it("8. 删除失败 → UI 错误横幅显示", async () => {
     mocks.mockAsk.mockResolvedValue(true);
     mocks.mockDeleteEntry.mockRejectedValue(new Error("权限不足"));
 
@@ -317,11 +319,9 @@ describe("ExplorerPanel 删除集成", () => {
       { name: "readonly.txt", path: "C:/test-project/readonly.txt", isDir: false, size: 32, modified: 1 },
     ]);
 
-    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
     seedProject();
 
-    const { getAllByText } = renderExplorerPanel();
+    const { getAllByText, getByTestId } = renderExplorerPanel();
 
     await waitFor(() => {
       expect(getAllByText("readonly.txt").length).toBeGreaterThan(0);
@@ -330,11 +330,12 @@ describe("ExplorerPanel 删除集成", () => {
     fireEvent.contextMenu(getAllByText("readonly.txt")[0]);
     fireEvent.click(getAllByText("删除")[0]);
 
+    // UI 错误横幅应出现，包含错误消息
     await waitFor(() => {
-      expect(consoleSpy).toHaveBeenCalledWith("删除失败:", expect.any(Error));
+      const banner = getByTestId("explorer-error-banner");
+      expect(banner.textContent).toContain("删除失败");
+      expect(banner.textContent).toContain("权限不足");
     });
-
-    consoleSpy.mockRestore();
   });
 });
 
@@ -360,5 +361,109 @@ describe("FileTree 右键菜单结构", () => {
     fireEvent.contextMenu(getAllByText("public")[0]);
 
     expect(getAllByText("删除").length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// =====================================================================
+// E5 组：操作失败 UI 通知 — 删除/重命名/新建文件/新建文件夹失败 → 内联错误横幅
+// =====================================================================
+
+describe("ExplorerPanel 操作失败 UI 通知", () => {
+  it("11. 重命名失败 → UI 错误横幅显示", async () => {
+    mocks.mockRename.mockRejectedValue(new Error("文件被锁定"));
+    mocks.mockReadDir.mockResolvedValue([
+      { name: "locked.ts", path: "C:/test-project/locked.ts", isDir: false, size: 32, modified: 1 },
+    ]);
+
+    seedProject();
+
+    const { getAllByText, getByTestId } = renderExplorerPanel();
+
+    await waitFor(() => {
+      expect(getAllByText("locked.ts").length).toBeGreaterThan(0);
+    });
+
+    // 右键 → 重命名
+    fireEvent.contextMenu(getAllByText("locked.ts")[0]);
+    fireEvent.click(getAllByText("重命名")[0]);
+
+    // 内联输入框出现，修改文件名并回车确认
+    const inputs = document.querySelectorAll('input');
+    const renameInput = inputs[inputs.length - 1] as HTMLInputElement;
+    fireEvent.change(renameInput, { target: { value: "new-name.ts" } });
+    fireEvent.keyDown(renameInput, { key: "Enter" });
+
+    // UI 错误横幅应出现
+    await waitFor(() => {
+      const banner = getByTestId("explorer-error-banner");
+      expect(banner.textContent).toContain("重命名失败");
+      expect(banner.textContent).toContain("文件被锁定");
+    });
+  });
+
+  it("12. 新建文件失败 → UI 错误横幅显示", async () => {
+    mocks.mockWriteFile.mockRejectedValue(new Error("磁盘空间不足"));
+    mocks.mockReadDir.mockResolvedValue([
+      { name: "src", path: "C:/test-project/src", isDir: true, size: undefined, modified: undefined },
+    ]);
+    mocks.mockAsk.mockResolvedValue(false);
+
+    seedProject();
+
+    const { getAllByText, getByTestId } = renderExplorerPanel();
+
+    await waitFor(() => {
+      expect(getAllByText("src").length).toBeGreaterThan(0);
+    });
+
+    // 右键文件夹 → 新建文件
+    fireEvent.contextMenu(getAllByText("src")[0]);
+    fireEvent.click(getAllByText("新建文件")[0]);
+
+    // 内联输入框出现，输入文件名并回车确认
+    const inputs = document.querySelectorAll('input');
+    const newFileInput = inputs[inputs.length - 1] as HTMLInputElement;
+    fireEvent.change(newFileInput, { target: { value: "newfile.ts" } });
+    fireEvent.keyDown(newFileInput, { key: "Enter" });
+
+    // UI 错误横幅应出现
+    await waitFor(() => {
+      const banner = getByTestId("explorer-error-banner");
+      expect(banner.textContent).toContain("新建文件失败");
+      expect(banner.textContent).toContain("磁盘空间不足");
+    });
+  });
+
+  it("13. 新建文件夹失败 → UI 错误横幅显示", async () => {
+    mocks.mockCreateDir.mockRejectedValue(new Error("权限不足"));
+    mocks.mockReadDir.mockResolvedValue([
+      { name: "lib", path: "C:/test-project/lib", isDir: true, size: undefined, modified: undefined },
+    ]);
+    mocks.mockAsk.mockResolvedValue(false);
+
+    seedProject();
+
+    const { getAllByText, getByTestId } = renderExplorerPanel();
+
+    await waitFor(() => {
+      expect(getAllByText("lib").length).toBeGreaterThan(0);
+    });
+
+    // 右键文件夹 → 新建文件夹
+    fireEvent.contextMenu(getAllByText("lib")[0]);
+    fireEvent.click(getAllByText("新建文件夹")[0]);
+
+    // 内联输入框出现，输入文件夹名并回车确认
+    const inputs = document.querySelectorAll('input');
+    const newFolderInput = inputs[inputs.length - 1] as HTMLInputElement;
+    fireEvent.change(newFolderInput, { target: { value: "newfolder" } });
+    fireEvent.keyDown(newFolderInput, { key: "Enter" });
+
+    // UI 错误横幅应出现
+    await waitFor(() => {
+      const banner = getByTestId("explorer-error-banner");
+      expect(banner.textContent).toContain("新建文件夹失败");
+      expect(banner.textContent).toContain("权限不足");
+    });
   });
 });

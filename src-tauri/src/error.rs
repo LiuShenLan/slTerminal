@@ -2,12 +2,11 @@ use serde::Serialize;
 use thiserror::Error;
 
 /// 应用统一错误类型，所有 Tauri 命令返回 Result<_, AppError>
-#[allow(dead_code)]
 #[derive(Debug, Error, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AppError {
-    #[error("IO 错误: {0}")]
-    Io(String),
+    #[error("IO 错误({kind}): {message}")]
+    IoKind { kind: String, message: String },
 
     #[error("PTY 错误: {0}")]
     Pty(String),
@@ -24,20 +23,19 @@ pub enum AppError {
     #[error("会话未找到: {0}")]
     SessionNotFound(String),
 
-    #[error("Channel 发送失败: {0}")]
-    ChannelSend(String),
+    #[error("异步任务异常: {0}")]
+    TaskJoin(String),
+
+    #[error("文件监听错误: {0}")]
+    Notify(String),
 }
 
 impl From<std::io::Error> for AppError {
     fn from(e: std::io::Error) -> Self {
-        AppError::Io(e.to_string())
-    }
-}
-
-/// portable-pty 使用 anyhow::Error，通过 Display 转换
-impl From<anyhow::Error> for AppError {
-    fn from(e: anyhow::Error) -> Self {
-        AppError::Pty(e.to_string())
+        AppError::IoKind {
+            kind: format!("{:?}", e.kind()),
+            message: e.to_string(),
+        }
     }
 }
 
@@ -53,29 +51,36 @@ impl From<git2::Error> for AppError {
     }
 }
 
+impl From<tokio::task::JoinError> for AppError {
+    fn from(e: tokio::task::JoinError) -> Self {
+        AppError::TaskJoin(e.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_app_error_serialization() {
-        let err = AppError::Io("测试错误".to_string());
+        let err = AppError::IoKind { kind: "NotFound".into(), message: "测试错误".into() };
         let json = serde_json::to_string(&err).unwrap();
         assert!(json.contains("测试错误"));
-        assert!(json.contains("io"));
+        assert!(json.contains("ioKind"));
     }
 
     /// 确保所有变体的 Display 不 panic 且输出非空
     #[test]
     fn test_all_error_variants_display() {
         let errors: Vec<AppError> = vec![
-            AppError::Io("磁盘已满".to_string()),
+            AppError::IoKind { kind: "Other".into(), message: "磁盘已满".to_string() },
             AppError::Pty("PTY 进程崩溃".to_string()),
             AppError::Git("rebase 冲突".to_string()),
             AppError::Serde("JSON 键缺失".to_string()),
             AppError::Unknown("未分类错误".to_string()),
             AppError::SessionNotFound("uuid-12345".to_string()),
-            AppError::ChannelSend("channel 已关闭".to_string()),
+            AppError::TaskJoin("join error".to_string()),
+            AppError::Notify("watcher 启动失败".to_string()),
         ];
         for err in &errors {
             let display = format!("{err}");
@@ -83,31 +88,20 @@ mod tests {
         }
     }
 
-    /// 验证 From<std::io::Error> 转换为 Io 变体
+    /// 验证 From<std::io::Error> 转换为 IoKind 变体并保留 ErrorKind
     #[test]
     fn test_from_io_error() {
         let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "文件不存在");
         let app_err: AppError = io_err.into();
         match app_err {
-            AppError::Io(msg) => assert!(
-                msg.contains("文件不存在"),
-                "消息应包含原始错误信息，实际: {msg}"
-            ),
-            other => panic!("std::io::Error 应转为 AppError::Io，实际: {other:?}"),
-        }
-    }
-
-    /// 验证 From<anyhow::Error> 转换为 Pty 变体
-    #[test]
-    fn test_from_anyhow_error() {
-        let anyhow_err = anyhow::anyhow!("PTY spawn 超时");
-        let app_err: AppError = anyhow_err.into();
-        match app_err {
-            AppError::Pty(msg) => assert!(
-                msg.contains("PTY spawn 超时"),
-                "消息应包含原始错误信息，实际: {msg}"
-            ),
-            other => panic!("anyhow::Error 应转为 AppError::Pty，实际: {other:?}"),
+            AppError::IoKind { kind, message } => {
+                assert!(kind.contains("NotFound"), "kind 应保留 ErrorKind::NotFound，实际: {kind}");
+                assert!(
+                    message.contains("文件不存在"),
+                    "消息应包含原始错误信息，实际: {message}"
+                );
+            }
+            other => panic!("std::io::Error 应转为 AppError::IoKind，实际: {other:?}"),
         }
     }
 

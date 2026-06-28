@@ -24,7 +24,6 @@ use crate::state::AppState;
 /// 发送到前端的文件系统事件载荷
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
 pub struct FsEventPayload {
     /// 受影响的路径列表
     pub paths: Vec<String>,
@@ -37,17 +36,16 @@ pub struct FsEventPayload {
 /// 可运行时控制的文件系统监听器
 ///
 /// 生命周期：由 AppState 持有，应用关闭时 Drop → debouncer 自动 stop。
-#[allow(dead_code)]
 pub struct FileWatcher {
     /// 停止事件处理线程的通道
     stop_tx: Option<mpsc::Sender<()>>,
     /// 事件处理线程的 JoinHandle
     thread_handle: Option<std::thread::JoinHandle<()>>,
-    /// 当前监听的根路径
+    /// 当前监听的根路径（被 watcher 线程的 Arc clone 持有，struct 字段仅用于生命周期绑定）
+    #[allow(dead_code)]
     watch_paths: Arc<Mutex<Vec<PathBuf>>>,
 }
 
-#[allow(dead_code)]
 impl FileWatcher {
     /// 启动文件系统监听器
     ///
@@ -94,12 +92,17 @@ impl FileWatcher {
                                 for event in &events {
                                     // need_rescan — 通知前端全量刷新
                                     if event.need_rescan() {
+                                        let wps_lock = match wps.lock() {
+                                            Ok(g) => g,
+                                            Err(e) => {
+                                                tracing::error!("fs-watcher 锁获取失败: {e}");
+                                                continue;
+                                            }
+                                        };
                                         let _ = app_handle.emit(
                                             "fs-event",
                                             FsEventPayload {
-                                                paths: wps
-                                                    .lock()
-                                                    .unwrap()
+                                                paths: wps_lock
                                                     .iter()
                                                     .map(|p| p.display().to_string())
                                                     .collect(),
@@ -156,7 +159,7 @@ impl FileWatcher {
     }
 
     /// 检查监听线程是否仍在运行
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn is_running(&self) -> bool {
         self.thread_handle
             .as_ref()
@@ -185,29 +188,50 @@ pub fn fs_watch(
 ) -> Result<(), AppError> {
     let watch_path = PathBuf::from(&path);
     if !watch_path.exists() {
-        return Err(AppError::Io(format!("路径不存在: {path}")));
+        return Err(AppError::Notify(format!("路径不存在: {path}")));
     }
 
-    let mut watcher_guard = state
-        .file_watcher
-        .lock()
-        .map_err(|e| AppError::Unknown(format!("获取 file_watcher 锁失败: {e}")))?;
+    // 路径 sandbox 校验（P1-28）
+    {
+        let root = state
+            .project_root
+            .read()
+            .map_err(|e| AppError::Notify(format!("获取 project_root 锁失败: {e}")))?;
+        crate::fs::validate_path_within_root(&root, &watch_path)?;
+    }
 
-    // 停止旧 watcher（若存在）
-    if let Some(mut old) = watcher_guard.take() {
+    // P1-14: 先提取旧 watcher（持有锁），释放锁后 stop，再重新获取锁写入新 watcher。
+    // 避免 stop() 阻塞期间持有锁导致后续命令级联卡死。
+    let old_watcher = {
+        let mut watcher_guard = state
+            .file_watcher
+            .lock()
+            .map_err(|e| AppError::Notify(format!("获取 file_watcher 锁失败: {e}")))?;
+        watcher_guard.take()
+    };
+    // 锁已释放
+
+    // 在锁外 stop 旧 watcher
+    if let Some(mut old) = old_watcher {
         old.stop();
     }
 
     let watcher = FileWatcher::start(app_handle, vec![watch_path], 300)
-        .map_err(|e| AppError::Unknown(format!("启动文件监听失败: {e}")))?;
+        .map_err(|e| AppError::Notify(format!("启动文件监听失败: {e}")))?;
 
-    *watcher_guard = Some(watcher);
+    // 重新获取锁写入新 watcher
+    {
+        let mut watcher_guard = state
+            .file_watcher
+            .lock()
+            .map_err(|e| AppError::Notify(format!("获取 file_watcher 锁失败: {e}")))?;
+        *watcher_guard = Some(watcher);
+    }
     tracing::info!("文件监听已启动: {path}");
     Ok(())
 }
 
 /// 将 DebouncedEvent 分类为前端友好的载荷
-#[allow(dead_code)]
 fn classify_event(event: &notify_debouncer_full::DebouncedEvent) -> FsEventPayload {
     let paths: Vec<String> = event
         .paths

@@ -1,18 +1,15 @@
-// error-boundary.test.tsx — App.tsx ErrorBoundary 类组件测试
+// error-boundary.test.tsx — ErrorBoundary 类组件测试
 //
 // 验证 getDerivedStateFromError + componentDidCatch + render 错误态 + 正常透传。
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render } from "@testing-library/react";
 import React from "react";
-import { ErrorBoundary } from "../App";
+import { ErrorBoundary } from "../lib";
 
-// mock Tauri window API
-vi.mock("@tauri-apps/api/window", () => ({
-  getCurrentWindow: vi.fn(() => ({
-    onCloseRequested: vi.fn(() => ({ then: vi.fn((fn: () => void) => fn()) })),
-    destroy: vi.fn(),
-  })),
+// mock ipc window
+vi.mock("../ipc/window", () => ({
+  registerCloseHandler: vi.fn(() => () => {}),
 }));
 
 // mock workspace

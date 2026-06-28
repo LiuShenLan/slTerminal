@@ -2,13 +2,14 @@ mod error;
 mod state;
 mod pty;
 mod fs;
-mod claude;
+mod settings;
 mod notify;
 mod git;
 
 pub use error::AppError;
 pub use state::AppState;
 pub use state::PtyState;
+use crate::pty::build::get_windows_build_number;
 use tauri_plugin_prevent_default::{Builder as PreventDefaultBuilder, Flags, PlatformOptions};
 
 /// ping 命令 — Phase 0 占位，用于验证 IPC 链路和测试基建
@@ -17,26 +18,15 @@ fn ping() -> Result<String, AppError> {
     Ok("pong".to_string())
 }
 
-/// 获取 Windows 真实 build 号（F3 动态检测）
-///
-/// 通过 RtlGetNtVersionNumbers 获取，取低 16 位（& 0xFFFF）。
-/// 非 Windows 平台返回 Unknown 错误——前端需 try/catch fallback 到 21376。
-#[cfg(windows)]
-#[tauri::command]
-fn get_windows_build_number() -> Result<u32, AppError> {
-    let (_, _, build) = nt_version::get();
-    Ok(build & 0x0FFFFFFF)  // 清除高 4 位构建类型标志（0xF=零售版），低 28 位为实际 build 号
-}
-
-#[cfg(not(windows))]
-#[tauri::command]
-fn get_windows_build_number() -> Result<u32, AppError> {
-    Err(AppError::Unknown(
-        "get_windows_build_number 仅 Windows 平台支持".to_string(),
-    ))
-}
-
 /// 注册所有 Tauri 命令和全局状态
+///
+/// ## 权限模型说明（P0-07）
+///
+/// Tauri 2 默认行为：`invoke_handler` 注册的自定义命令自动对所有窗口/webview 放行，
+/// 无需在 `capabilities/default.json` 中逐条声明。
+/// `app:` 命名空间属于 `@tauri-apps/api/app` 插件，与自定义应用命令无关。
+/// 如需严格显式权限控制，可在 build.rs 中配置 `AppManifest::commands` 以 opt-in
+/// 白名单模式——当前项目采用 Tauri 2 默认行为。
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tracing_subscriber::fmt()
@@ -44,10 +34,19 @@ pub fn run() {
         .init();
     tracing::info!("slTerminal 启动");
 
-    tauri::Builder::default()
+    // wdio-webdriver 仅 debug 构建启用，生产构建排除（P0-08）
+    #[cfg(debug_assertions)]
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_wdio_webdriver::init())
+        .plugin(tauri_plugin_wdio_webdriver::init());
+
+    #[cfg(not(debug_assertions))]
+    let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init());
+
+    match builder
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(
             PreventDefaultBuilder::default()
@@ -78,14 +77,22 @@ pub fn run() {
             fs::fs_create_dir,
             fs::fs_delete,
             fs::fs_rename,
-            fs::save_settings,
-            fs::load_settings,
+            settings::save_settings,
+            settings::load_settings,
+            fs::set_project_root,
+            fs::clear_git_cache,
             git::git_status,
             git::git_diff,
             notify::fs_watch,
         ])
         .run(tauri::generate_context!())
-        .expect("启动应用失败");
+    {
+        Ok(()) => {}
+        Err(e) => {
+            eprintln!("slTerminal 启动失败: {e}");
+            std::process::exit(1);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -101,7 +108,7 @@ mod tests {
 
     #[test]
     fn test_get_windows_build_number_returns_number() {
-        let result = get_windows_build_number();
+        let result = crate::pty::build::get_windows_build_number();
         #[cfg(windows)]
         {
             assert!(

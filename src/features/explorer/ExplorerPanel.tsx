@@ -5,14 +5,15 @@
 // - 双击文件 → 在焦点操作页面打开编辑器面板
 // - 右键菜单 CRUD 操作
 
-import React, { useEffect, useCallback } from "react";
+import React, { useEffect, useCallback, useState, useRef } from "react";
 import { useFileTree } from "./useFileTree";
 import { FileTree } from "./FileTree";
 import { createDir, deleteEntry, rename, writeFile } from "../../ipc/fs";
 import { startWatch } from "../../ipc/notify";
 import { useProjects } from "../../stores/projects";
 import { useLayout } from "../../stores/layout";
-import { EXPLORER_COLORS } from "../../theme";
+import { EXPLORER_COLORS, SEPARATOR_BG, INPUT_BORDER, ERROR_BANNER_BG, ERROR_BANNER_BORDER, ERROR_BANNER_FG } from "../../theme";
+import { PANEL_TERMINAL, PANEL_EDITOR } from "../../workspace/panelRegistry";
 
 export const ExplorerPanel: React.FC = () => {
   const projects = useProjects((s) => s.projects);
@@ -35,6 +36,23 @@ export const ExplorerPanel: React.FC = () => {
   }
 
   const { rootNodes, gitStatusMap, toggleExpand, refresh } = useFileTree({ rootPath });
+
+  // 操作失败内联错误提示
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showError = useCallback((msg: string) => {
+    setErrorMsg(msg);
+    if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
+    errorTimerRef.current = setTimeout(() => setErrorMsg(null), 5000);
+  }, []);
+
+  // 清理定时器
+  useEffect(() => {
+    return () => {
+      if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
+    };
+  }, []);
 
   // 当活跃项目变化时刷新
   useEffect(() => {
@@ -60,7 +78,7 @@ export const ExplorerPanel: React.FC = () => {
         const panelId = `editor-${Date.now()}`;
         dockApi.addPanel({
           id: panelId,
-          component: "editor",
+          component: PANEL_EDITOR,
           params: { panelId, filePath },
         });
       }
@@ -81,7 +99,7 @@ export const ExplorerPanel: React.FC = () => {
         const panelId = `terminal-open-${Date.now()}`;
         dockApi.addPanel({
           id: panelId,
-          component: "terminal",
+          component: PANEL_TERMINAL,
           params: { panelId, cwd: dir },
           renderer: "always",
         });
@@ -103,9 +121,10 @@ export const ExplorerPanel: React.FC = () => {
         refresh();
       } catch (err) {
         console.error("重命名失败:", err);
+        showError(`重命名失败: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
-    [refresh],
+    [refresh, showError],
   );
 
   /** 删除 */
@@ -116,9 +135,10 @@ export const ExplorerPanel: React.FC = () => {
         refresh();
       } catch (err) {
         console.error("删除失败:", err);
+        showError(`删除失败: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
-    [refresh],
+    [refresh, showError],
   );
 
   /** 新建文件 */
@@ -129,9 +149,10 @@ export const ExplorerPanel: React.FC = () => {
         refresh();
       } catch (err) {
         console.error("新建文件失败:", err);
+        showError(`新建文件失败: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
-    [refresh],
+    [refresh, showError],
   );
 
   /** 新建文件夹 */
@@ -142,9 +163,10 @@ export const ExplorerPanel: React.FC = () => {
         refresh();
       } catch (err) {
         console.error("新建文件夹失败:", err);
+        showError(`新建文件夹失败: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
-    [refresh],
+    [refresh, showError],
   );
 
   return (
@@ -164,10 +186,10 @@ export const ExplorerPanel: React.FC = () => {
           display: "flex",
           alignItems: "center",
           padding: "4px 8px",
-          borderBottom: "1px solid #333",
+          borderBottom: `1px solid ${SEPARATOR_BG}`,
           height: 28,
           fontSize: 11,
-          color: "#6C6C6C",
+          color: INPUT_BORDER,
           textTransform: "uppercase",
           letterSpacing: 1,
           userSelect: "none",
@@ -176,6 +198,44 @@ export const ExplorerPanel: React.FC = () => {
       >
         文件浏览器
       </div>
+
+      {/* 操作失败内联错误提示 */}
+      {errorMsg && (
+        <div
+          data-testid="explorer-error-banner"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: "4px 8px",
+            background: ERROR_BANNER_BG,
+            borderBottom: `1px solid ${ERROR_BANNER_BORDER}`,
+            color: ERROR_BANNER_FG,
+            fontSize: 12,
+            flexShrink: 0,
+            minHeight: 24,
+          }}
+        >
+          <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {errorMsg}
+          </span>
+          <button
+            onClick={() => setErrorMsg(null)}
+            style={{
+              background: "none",
+              border: "none",
+              color: ERROR_BANNER_FG,
+              cursor: "pointer",
+              fontSize: 14,
+              padding: "0 4px",
+              lineHeight: 1,
+            }}
+            aria-label="关闭错误提示"
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       {/* 文件树 */}
       <div
@@ -191,7 +251,7 @@ export const ExplorerPanel: React.FC = () => {
             <div
               style={{
                 padding: 16,
-                color: "#6C6C6C",
+                color: INPUT_BORDER,
                 fontSize: 12,
                 textAlign: "center",
               }}
@@ -216,7 +276,7 @@ export const ExplorerPanel: React.FC = () => {
           <div
             style={{
               padding: 16,
-              color: "#6C6C6C",
+              color: INPUT_BORDER,
               fontSize: 12,
               textAlign: "center",
             }}

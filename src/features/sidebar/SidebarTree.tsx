@@ -9,13 +9,28 @@ import { useProjects, createProjectId, createPageId } from "../../stores/project
 import type { Project, OperationPage } from "../../stores/projects";
 import { useLayout } from "../../stores/layout";
 import { open } from "../../ipc/dialog";
+import { PANEL_TERMINAL } from "../../workspace/panelRegistry";
+import {
+  PANEL_BG,
+  SIDEBAR_FG,
+  DROPDOWN_BG,
+  SIDEBAR_BG,
+  ACTIVE_SELECTION_BG,
+  INPUT_BG,
+  FOCUS_BORDER,
+  PLACEHOLDER_FG,
+  INPUT_BORDER,
+  SEPARATOR_BG,
+  CONTEXT_MENU_BORDER,
+  EXPLORER_COLORS,
+} from "../../theme";
 
 // ---- CSS 变量（暗色主题） ----
 const SIDEBAR_CSS = {
-  "--sb-bg": "#1E1E1E",
-  "--sb-fg": "#D4D4D4",
-  "--sb-hover": "#2A2D2E",
-  "--sb-selected": "#37373D",
+  "--sb-bg": PANEL_BG,
+  "--sb-fg": SIDEBAR_FG,
+  "--sb-hover": DROPDOWN_BG,
+  "--sb-selected": EXPLORER_COLORS.selected,
 } as React.CSSProperties;
 // ---- 右键菜单类型 ----
 
@@ -59,8 +74,8 @@ const ContextMenu: React.FC<{
         position: "fixed",
         left: state.x,
         top: state.y,
-        background: "#252526",
-        border: "1px solid #454545",
+        background: SIDEBAR_BG,
+        border: `1px solid ${CONTEXT_MENU_BORDER}`,
         borderRadius: 4,
         padding: "4px 0",
         minWidth: 160,
@@ -78,12 +93,12 @@ const ContextMenu: React.FC<{
           style={{
             padding: "4px 12px",
             cursor: "pointer",
-            color: "#D4D4D4",
+            color: SIDEBAR_FG,
             fontSize: 13,
             userSelect: "none",
           }}
           onMouseEnter={(e) => {
-            (e.target as HTMLDivElement).style.background = "#094771";
+            (e.target as HTMLDivElement).style.background = ACTIVE_SELECTION_BG;
           }}
           onMouseLeave={(e) => {
             (e.target as HTMLDivElement).style.background = "transparent";
@@ -104,7 +119,7 @@ const Toolbar: React.FC<{ onAddProject: () => void }> = ({ onAddProject }) => (
       display: "flex",
       alignItems: "center",
       padding: "4px 8px",
-      borderBottom: "1px solid #333",
+      borderBottom: `1px solid ${SEPARATOR_BG}`,
       height: 32,
     }}
   >
@@ -113,8 +128,8 @@ const Toolbar: React.FC<{ onAddProject: () => void }> = ({ onAddProject }) => (
       title="添加项目"
       style={{
         background: "none",
-        border: "1px solid #444",
-        color: "#D4D4D4",
+        border: `1px solid ${SEPARATOR_BG}`,
+        color: SIDEBAR_FG,
         cursor: "pointer",
         fontSize: 12,
         padding: "2px 8px",
@@ -158,7 +173,7 @@ const ProjectRow: React.FC<{
       (e.target as HTMLDivElement).style.background = "transparent";
     }}
   >
-    <span style={{ width: 16, fontSize: 10, flexShrink: 0, color: "#808080" }}>
+    <span style={{ width: 16, fontSize: 10, flexShrink: 0, color: PLACEHOLDER_FG }}>
       {expanded ? "▼" : "▶"}
     </span>
     <span style={{ marginRight: 4, flexShrink: 0 }}>📁</span>
@@ -254,9 +269,9 @@ const PageRow: React.FC<{
           onClick={(e) => e.stopPropagation()}
           style={{
             flex: 1,
-            background: "#3C3C3C",
-            border: "1px solid #007ACC",
-            color: "#D4D4D4",
+            background: INPUT_BG,
+            border: `1px solid ${FOCUS_BORDER}`,
+            color: SIDEBAR_FG,
             fontSize: 13,
             padding: "0 4px",
             outline: "none",
@@ -314,7 +329,7 @@ export function makeDefaultLayout(panelId: string): Record<string, unknown> {
     panels: {
       [panelId]: {
         id: panelId,
-        contentComponent: "terminal",
+        contentComponent: PANEL_TERMINAL,
         params: { panelId },
         renderer: "always",
       },
@@ -431,7 +446,7 @@ const SidebarTree: React.FC<SidebarTreeProps> = ({ switchToPage, onDeletePage })
         minWidth: 0,
         height: "100%",
         background: "var(--sb-bg)",
-        borderRight: "1px solid #333",
+        borderRight: `1px solid ${SEPARATOR_BG}`,
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
@@ -445,7 +460,7 @@ const SidebarTree: React.FC<SidebarTreeProps> = ({ switchToPage, onDeletePage })
           <div
             style={{
               padding: 16,
-              color: "#6C6C6C",
+              color: INPUT_BORDER,
               fontSize: 12,
               textAlign: "center",
             }}

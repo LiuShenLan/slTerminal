@@ -29,6 +29,7 @@ temp/
 tmp/
 .tmp/
 debug/
+doc/
 
 # Rust
 src-tauri/target/

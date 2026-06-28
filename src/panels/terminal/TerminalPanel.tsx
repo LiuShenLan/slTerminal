@@ -4,9 +4,11 @@
 // 面板由 Dockview 管理生命周期。
 // 从 Dockview params 读取 cwd 作为终端工作目录。
 
-import React, { useRef, useState, useEffect } from "react";
+import React, { useRef, useState, useEffect, useMemo } from "react";
 import { useXterm } from "./useXterm";
 import { pty } from "../../ipc";
+import { useLayout } from "../../stores";
+import { PANEL_BG, INPUT_BORDER } from "../../theme";
 
 interface TerminalPanelProps {
   /** Dockview 传入的面板参数 */
@@ -38,6 +40,15 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ params }) => {
 
   const cwd = params.cwd;
 
+  // P1-13: 从 panelId 解析所属 pageId，对比 activePageId 判断可见性
+  // panelId 格式: terminal-{pageId}-{seq}
+  const pageId = useMemo(() => {
+    const match = params.panelId.match(/^terminal-(.+)-(\d+)$/);
+    return match ? match[1] : "";
+  }, [params.panelId]);
+  const activePageId = useLayout((s) => s.activePageId);
+  const visible = activePageId === pageId;
+
   const { focus } = useXterm({
     container,
     cols: 80,
@@ -45,6 +56,7 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ params }) => {
     panelId: params.panelId,
     windowsBuildNumber: buildNumber,
     cwd,
+    visible,
   });
 
   // 首帧数据到达时隐藏加载遮罩
@@ -59,7 +71,7 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ params }) => {
       style={{
         width: "100%",
         height: "100%",
-        background: "#1E1E1E",
+        background: PANEL_BG,
         position: "relative",
       }}
       onClick={focus}
@@ -72,9 +84,9 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ params }) => {
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            color: "#6C6C6C",
+            color: INPUT_BORDER,
             fontSize: 14,
-            background: "#1E1E1E",
+            background: PANEL_BG,
             transition: "opacity 0.3s",
             pointerEvents: "none",
           }}

@@ -10,6 +10,8 @@ fn main() {
         if let Ok(mut f) = std::fs::File::create(&path) {
             use std::io::Write;
             let _ = writeln!(f, "PANIC: {:?}", info);
+        } else {
+            eprintln!("PANIC: {:?}", info);
         }
     }));
     slterminal_lib::run()

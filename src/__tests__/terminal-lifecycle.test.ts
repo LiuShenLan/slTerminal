@@ -40,9 +40,9 @@ const mocks = vi.hoisted(() => {
 
   const pty = {
     spawn: vi.fn().mockResolvedValue("mock-session-001"),
-    kill: vi.fn(),
-    write: vi.fn(),
-    resize: vi.fn(),
+    kill: vi.fn().mockResolvedValue(undefined),
+    write: vi.fn().mockResolvedValue(undefined),
+    resize: vi.fn().mockResolvedValue(undefined),
   };
 
   return {

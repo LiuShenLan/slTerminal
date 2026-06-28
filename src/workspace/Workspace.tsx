@@ -20,12 +20,14 @@ import {
 } from "dockview-react";
 import { Allotment } from "allotment";
 import "allotment/dist/style.css";
-import { panelRegistry } from "./panelRegistry";
+import { panelRegistry, PANEL_TERMINAL, PANEL_EDITOR } from "./panelRegistry";
 import { saveLayout, loadLayout } from "./layoutSerde";
 import { SidebarTree } from "../features/sidebar";
 import { ExplorerPanel } from "../features/explorer";
 import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
+import { ErrorBoundary } from "../lib";
+import { INPUT_BORDER, SECONDARY_BG, BUTTON_FG, PLACEHOLDER_FG, SEPARATOR_BG } from "../theme";
 
 declare global {
   interface Window {
@@ -46,7 +48,7 @@ function createWatermark(
   const Watermark: React.FC<IWatermarkPanelProps> = ({ containerApi }) => (
     <div
       style={{ display: "flex", flexDirection: "column", alignItems: "center",
-        justifyContent: "center", height: "100%", color: "#6C6C6C", fontSize: 14,
+        justifyContent: "center", height: "100%", color: INPUT_BORDER, fontSize: 14,
         userSelect: "none", gap: 12 }}
     >
       <span>{WATERMARK_TEXT}</span>
@@ -54,19 +56,19 @@ function createWatermark(
         <button
           onClick={() => {
             const id = nextPanelId();
-            containerApi.addPanel({ id, component: "terminal",
+            containerApi.addPanel({ id, component: PANEL_TERMINAL,
               params: { panelId: id, cwd }, renderer: "always" });
           }}
-          style={{ background: "#2D2D2D", border: "1px solid #444", color: "#ccc",
+          style={{ background: SECONDARY_BG, border: `1px solid ${SEPARATOR_BG}`, color: BUTTON_FG,
             cursor: "pointer", fontSize: 13, padding: "4px 12px", borderRadius: 4 }}
         >新建终端</button>
         <button
           onClick={() => {
             const id = nextPanelId();
-            containerApi.addPanel({ id, component: "editor",
+            containerApi.addPanel({ id, component: PANEL_EDITOR,
               params: { panelId: id, cwd } });
           }}
-          style={{ background: "#2D2D2D", border: "1px solid #444", color: "#ccc",
+          style={{ background: SECONDARY_BG, border: `1px solid ${SEPARATOR_BG}`, color: BUTTON_FG,
             cursor: "pointer", fontSize: 13, padding: "4px 12px", borderRadius: 4 }}
         >新建编辑器</button>
       </div>
@@ -85,10 +87,10 @@ function createRightHeader(
       <button
         onClick={() => {
           const id = nextPanelId();
-          containerApi.addPanel({ id, component: "terminal",
+          containerApi.addPanel({ id, component: PANEL_TERMINAL,
             params: { panelId: id, cwd }, renderer: "always" });
         }}
-        style={{ background: "none", border: "1px solid #444", color: "#ccc",
+        style={{ background: "none", border: `1px solid ${SEPARATOR_BG}`, color: BUTTON_FG,
           cursor: "pointer", fontSize: 16, width: 24, height: 24, borderRadius: 4,
           display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1 }}
         title="新建终端"
@@ -107,10 +109,10 @@ function createGetContextMenu(
     const newEditorId = nextPanelId();
     return [
       { label: "新建终端", action: () => { params.api.addPanel(
-          { id: newTerminalId, component: "terminal", params: { panelId: newTerminalId },
+          { id: newTerminalId, component: PANEL_TERMINAL, params: { panelId: newTerminalId },
             renderer: "always" }); } },
       { label: "新建编辑器", action: () => { params.api.addPanel(
-          { id: newEditorId, component: "editor", params: { panelId: newEditorId } }); } },
+          { id: newEditorId, component: PANEL_EDITOR, params: { panelId: newEditorId } }); } },
       "separator",
       "close", "closeOthers", "closeAll",
     ];
@@ -128,7 +130,7 @@ const DefaultTab: React.FC<IDockviewPanelProps> = (props) => {
       <span style={{ fontSize: 13 }}>{title}</span>
       <button
         onClick={(e) => { e.stopPropagation(); api.close(); }}
-        style={{ background: "none", border: "none", color: "#808080",
+        style={{ background: "none", border: "none", color: PLACEHOLDER_FG,
           cursor: "pointer", padding: "0 2px", fontSize: 14, lineHeight: 1 }}
         title="关闭"
       >×</button>
@@ -179,7 +181,7 @@ const PageDockview: React.FC<PageDockviewProps> = ({
     if (!restored) {
       // 无保存布局 或 恢复失败 → 创建默认终端
       const id = nextPanelId();
-      api.addPanel({ id, component: "terminal",
+      api.addPanel({ id, component: PANEL_TERMINAL,
         params: { panelId: id, cwd }, renderer: "always" });
     }
 
@@ -269,6 +271,9 @@ const Workspace: React.FC = () => {
     const isActive = layoutStore.activePageId === pageId;
 
     // 销毁该页面的 Dockview（触发面板卸载 → useXterm cleanup → PTY kill）
+    // P2-49: dockview-react api.dispose() 内部自动清理所有事件监听器
+    // （onDidLayoutChange、onDidLayoutFromJSON、onDidActiveGroupChange 等），
+    // 也会触发所有面板的 dispose，无需额外手动解绑。
     const api = pageApiMapRef.current.get(pageId);
     if (api) {
       api.clear();
@@ -336,15 +341,16 @@ const Workspace: React.FC = () => {
           <div style={{ width: "100%", height: "100%", position: "relative" }}>
             {allPages.map((page) =>
               initializedPages.has(page.pageId) ? (
-                <PageDockview
-                  key={page.pageId}
-                  pageId={page.pageId}
-                  cwd={page.cwd}
-                  savedLayout={page.layout}
-                  visible={page.pageId === activePageId}
-                  onReady={(api) => handlePageApiReady(page.pageId, api)}
-                  onLayoutChange={(layout) => handlePageLayoutChange(page.pageId, layout)}
-                />
+                <ErrorBoundary key={page.pageId} variant="inline">
+                  <PageDockview
+                    pageId={page.pageId}
+                    cwd={page.cwd}
+                    savedLayout={page.layout}
+                    visible={page.pageId === activePageId}
+                    onReady={(api) => handlePageApiReady(page.pageId, api)}
+                    onLayoutChange={(layout) => handlePageLayoutChange(page.pageId, layout)}
+                  />
+                </ErrorBoundary>
               ) : null
             )}
           </div>

@@ -17,15 +17,18 @@ use tauri::ipc::Channel;
 /// reader 线程主循环（E1: 支持重连）
 ///
 /// - channel: 可替换的 Channel 引用，pty_reattach 通过写锁替换
-/// - ring: 64KB ring buffer，Channel 断开时缓存输出
+/// - ring: ring buffer，总是缓存最近输出供 reattach 回放
+/// - child: P2-11 子进程句柄，EOF 时调用 wait() 获取真实退出码
+/// - exit_code: P2-42 退出状态共享，reader 设置后 pty_reattach 检测
 /// - 循环读取 PTY 输出，通过 Channel 发送 Output 事件
 /// - Ok(0) = EOF → 发 Exit 事件 → 退出
-/// - Channel send 失败 → 写 ring buffer，等待 reattach
 /// - Windows 首轮读取剥离 ConPTY 启动注入序列
 pub fn reader_loop(
     mut reader: Box<dyn Read + Send>,
     channel: Arc<RwLock<Option<Channel<PtyEvent>>>>,
     ring: Arc<Mutex<VecDeque<u8>>>,
+    child: Arc<Mutex<Box<dyn portable_pty::Child + Send>>>,
+    exit_code: Arc<Mutex<Option<i32>>>,
 ) {
     let mut buf = [0u8; 4096];
     let mut startup_drained = false;
@@ -33,10 +36,41 @@ pub fn reader_loop(
     loop {
         match reader.read(&mut buf) {
             Ok(0) => {
-                // EOF — 子进程已退出，尝试发送 Exit
-                let ch = channel.read().unwrap();
+                // EOF — 子进程已退出
+                // P2-11: 从 child.wait() 获取真实退出码而非硬编码 0
+                let code = match child.lock() {
+                    Ok(mut c) => {
+                        match c.wait() {
+                            Ok(status) => Some(status.exit_code() as i32),
+                            Err(e) => {
+                                tracing::warn!("child.wait() 失败: {e}");
+                                None
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("reader_loop child 锁获取失败: {e}");
+                        None
+                    }
+                };
+
+                // P2-42: 记录退出码到共享状态，供 pty_reattach 检测
+                if let Ok(mut ec) = exit_code.lock() {
+                    *ec = code;
+                }
+
+                let ch = match channel.read() {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::error!("reader_loop channel 锁获取失败: {e}");
+                        tracing::info!("进程退出，退出码: {:?}", code);
+                        break;
+                    }
+                };
                 if let Some(ref c) = *ch {
-                    let _ = c.send(PtyEvent::Exit { code: Some(0) });
+                    let _ = c.send(PtyEvent::Exit { code });
+                } else {
+                    tracing::info!("进程退出（无 Channel），退出码: {:?}", code);
                 }
                 break;
             }
@@ -52,25 +86,35 @@ pub fn reader_loop(
                     stripped
                 };
 
-                // 尝试通过 Channel 发送
-                let ch = channel.read().unwrap();
-                if let Some(ref c) = *ch {
-                    if c.send(PtyEvent::Output {
-                        bytes: bytes.clone(),
-                    })
-                    .is_err()
-                    {
-                        // Channel 已关闭 → 写入 ring buffer
-                        ring_buffer_append(&ring, &bytes);
+                let ch = match channel.read() {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::error!("reader_loop channel 锁获取失败: {e}");
+                        break;
                     }
-                } else {
-                    // 无 Channel（首次 spawn 前或 reattach 之间）→ 写 ring buffer
-                    ring_buffer_append(&ring, &bytes);
+                };
+                // P2-46: 总是先缓存到 ring buffer（不 clone），再 send 消耗 bytes
+                // 成功路径零 clone，失败路径（Channel 断连）ring buffer 已有数据
+                if let Err(e) = ring_buffer_append(&ring, &bytes) {
+                    tracing::warn!("ring buffer 写入失败: {e}");
+                }
+                if let Some(ref c) = *ch {
+                    let _ = c.send(PtyEvent::Output { bytes }); // move bytes，不 clone
                 }
             }
             Err(e) => {
                 tracing::warn!("PTY reader 错误: {e}");
-                let ch = channel.read().unwrap();
+                // P2-42: 记录错误退出码到共享状态
+                if let Ok(mut ec) = exit_code.lock() {
+                    *ec = Some(-1);
+                }
+                let ch = match channel.read() {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::error!("reader_loop channel 锁获取失败: {e}");
+                        break;
+                    }
+                };
                 if let Some(ref c) = *ch {
                     let _ = c.send(PtyEvent::Exit { code: Some(-1) });
                 }

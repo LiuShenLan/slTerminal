@@ -16,34 +16,24 @@ const mocks = vi.hoisted(() => {
   const mockSaveAllProjects = vi.fn().mockResolvedValue(undefined);
   const mockMarkPersistenceReady = vi.fn();
   const mockSetActivePage = vi.fn();
-  let capturedHandler: ((e: { preventDefault: () => void }) => void | Promise<void>) | null = null;
 
   return {
     mockLoadAllProjects,
     mockSaveAllProjects,
     mockMarkPersistenceReady,
     mockSetActivePage,
-    get capturedHandler() { return capturedHandler; },
-    set capturedHandler(h: typeof capturedHandler) { capturedHandler = h; },
     resetAll() {
       mockLoadAllProjects.mockClear();
       mockSaveAllProjects.mockClear();
       mockMarkPersistenceReady.mockClear();
       mockSetActivePage.mockClear();
-      capturedHandler = null;
     },
   };
 });
 
 // ─── Module mocks ───
-vi.mock("@tauri-apps/api/window", () => ({
-  getCurrentWindow: vi.fn(() => ({
-    onCloseRequested: vi.fn((h: (e: { preventDefault: () => void }) => void | Promise<void>) => {
-      mocks.capturedHandler = h;
-      return Promise.resolve(() => {});
-    }),
-    destroy: vi.fn().mockResolvedValue(undefined),
-  })),
+vi.mock("../ipc/window", () => ({
+  registerCloseHandler: vi.fn(() => () => {}),
 }));
 
 vi.mock("../workspace", () => ({

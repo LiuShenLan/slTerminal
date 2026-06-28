@@ -3,10 +3,14 @@
 // detectWebgl 决定终端使用 WebGL 渲染器还是 DOM 兜底渲染器。
 // 纯函数：无副作用（仅创建临时 canvas），可控的返回分支。
 
-import { describe, it, expect, vi } from "vitest";
-import { detectWebgl } from "../panels/terminal/useXterm";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { detectWebgl, resetWebglCache } from "../panels/terminal/useXterm";
 
 describe("detectWebgl", () => {
+  // P2-44: detectWebgl 使用模块级缓存，每个测试前需重置
+  beforeEach(() => {
+    resetWebglCache();
+  });
   it("1. WebGL2 可用 → 返回 true", () => {
     const spy = vi
       .spyOn(HTMLCanvasElement.prototype, "getContext")

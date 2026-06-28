@@ -27,13 +27,12 @@ fn test_pty_state_creation() {
 #[test]
 fn test_app_error_display_no_panic() {
     let errors: Vec<AppError> = vec![
-        AppError::Io("io 测试".to_string()),
+        AppError::IoKind { kind: "Other".into(), message: "io 测试".to_string() },
         AppError::Pty("pty 测试".to_string()),
         AppError::Git("git 测试".to_string()),
         AppError::Serde("serde 测试".to_string()),
         AppError::Unknown("unknown 测试".to_string()),
         AppError::SessionNotFound("session-1".to_string()),
-        AppError::ChannelSend("channel 测试".to_string()),
     ];
     for err in &errors {
         // Display 不应 panic

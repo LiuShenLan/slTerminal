@@ -12,7 +12,7 @@
 //   9. navigator.clipboard 未定义时不崩溃（Tauri/WebView2 环境）
 
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
-import { setActiveTerminal, clearActiveTerminalIfMine, installKeyboardHandler } from "../panels/terminal/keyboard";
+import { setActiveTerminal, clearActiveTerminalIfMine, installKeyboardHandler, uninstallKeyboardHandler } from "../panels/terminal/keyboard";
 import type { Terminal } from "@xterm/xterm";
 
 // ====== mock tauri clipboard plugin ======
@@ -80,6 +80,10 @@ describe("keyboard 终端键盘事件处理", () => {
   afterEach(() => {
     // 每个测试后注销终端引用，避免测试间交叉污染
     setActiveTerminal(null);
+    // 重置键盘处理器状态：卸载（平衡 beforeAll 中的安装）→ 重新安装
+    // 确保每个测试都以 handler 已安装的状态开始
+    uninstallKeyboardHandler();
+    installKeyboardHandler();
   });
 
   // ========== 1. IME 组合态透传 ==========
@@ -466,6 +470,78 @@ describe("keyboard 终端键盘事件处理", () => {
       // 等待微任务清空，确保 .catch() 消费了 rejection（不向上抛出）
       await new Promise<void>((r) => setTimeout(r, 0));
       // 未触发 unhandledrejection 即视为通过（vitest 默认对未捕获 rejection 报错）
+    });
+  });
+
+  // ========== 12. uninstall 后事件不再被处理 ==========
+
+  describe("uninstall 后事件不再被处理", () => {
+    it("36. 卸载全局监听器后 Ctrl+Shift+C 透传（即使 activeTerminal 有值）", () => {
+      setActiveTerminal(terminalStub({ getSelection: () => "text" }));
+
+      // 确认安装状态下事件被拦截
+      const event1 = dispatchKeydown({
+        ctrlKey: true, shiftKey: true, code: "KeyC",
+      });
+      expect(event1.defaultPrevented).toBe(true);
+
+      // 卸载全局监听器（afterEach 已重置，当前 count=1）
+      uninstallKeyboardHandler();
+
+      // 卸载后事件透传
+      const event2 = dispatchKeydown({
+        ctrlKey: true, shiftKey: true, code: "KeyC",
+      });
+      expect(event2.defaultPrevented).toBe(false);
+    });
+
+    it("37. 卸载后重新安装 → 事件再次被拦截", () => {
+      setActiveTerminal(terminalStub({ getSelection: () => "text" }));
+
+      // 卸载
+      uninstallKeyboardHandler();
+      // 重新安装
+      installKeyboardHandler();
+
+      const event = dispatchKeydown({
+        ctrlKey: true, shiftKey: true, code: "KeyC",
+      });
+      expect(event.defaultPrevented).toBe(true);
+    });
+  });
+
+  // ========== 13. 跨测试 installed 标志不污染 ==========
+
+  describe("installed 标志跨测试不污染", () => {
+    it("38. afterEach 重置后新测试以已安装状态开始", () => {
+      // afterEach 已调用 uninstall + reinstall，handler 应处于已安装状态
+      setActiveTerminal(terminalStub({ getSelection: () => "text" }));
+
+      const event = dispatchKeydown({
+        ctrlKey: true, shiftKey: true, code: "KeyC",
+      });
+      expect(event.defaultPrevented).toBe(true);
+    });
+
+    it("39. 多次 install/uninstall 配对后 handler 仍在预期状态", () => {
+      // 模拟多次配对调用（类似 StrictMode 或面板反复开关）
+      installKeyboardHandler();
+      uninstallKeyboardHandler();
+      installKeyboardHandler();
+      uninstallKeyboardHandler();
+      // 此时 count=0，handler 已卸载
+
+      // 手动恢复到已安装状态
+      installKeyboardHandler();
+
+      setActiveTerminal(terminalStub({ getSelection: () => "text" }));
+      const event = dispatchKeydown({
+        ctrlKey: true, shiftKey: true, code: "KeyC",
+      });
+      expect(event.defaultPrevented).toBe(true);
+
+      // 平衡手动安装（afterEach 会再 uninstall+reinstall）
+      uninstallKeyboardHandler();
     });
   });
 });

@@ -231,6 +231,17 @@ export const useProjects = create<ProjectsState>()((set, get) => ({
 
       saveToDisk: async (filePath: string) => {
         const { projects, deletionLock, expandedNodes } = get();
+        // P2-06: JSON.stringify 当前数据量小（数个 Project / 十数个 Page），
+        // 全量序列化开销可忽略。若未来项目数量增长到百级，可考虑增量保存
+        // （仅序列化变更项目）或去掉 pretty-print (null, 2) 减少 IO 体积。
+        //
+        // P2-12 应急恢复：当前直接覆盖写，若写入中途崩溃/磁盘满则文件损坏。
+        // 应急方案：改为原子写入模式（先写 .tmp 再 rename，类 POSIX 原子操作）。
+        //   1. await fs.writeFile(filePath + ".tmp", data)
+        //   2. await fs.rename(filePath + ".tmp", filePath)
+        // 启动时 loadFromDisk 增加恢复逻辑：
+        //   - 若主文件不存在但 .tmp 存在，尝试从 .tmp 恢复
+        //   - 若两者都存在，对比 mtime，取更新的
         await fs.writeFile(
           filePath,
           JSON.stringify({ projects, deletionLock, expandedNodes }, null, 2),
