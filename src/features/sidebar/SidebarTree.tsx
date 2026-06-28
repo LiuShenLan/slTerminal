@@ -17,9 +17,6 @@ const SIDEBAR_CSS = {
   "--sb-hover": "#2A2D2E",
   "--sb-selected": "#37373D",
 } as React.CSSProperties;
-
-const SIDEBAR_WIDTH = 250;
-
 // ---- 右键菜单类型 ----
 
 interface ContextMenuState {
@@ -430,8 +427,8 @@ const SidebarTree: React.FC<SidebarTreeProps> = ({ switchToPage, onDeletePage })
     <div
       style={{
         ...SIDEBAR_CSS,
-        width: SIDEBAR_WIDTH,
-        minWidth: SIDEBAR_WIDTH,
+        width: "100%",
+        minWidth: 0,
         height: "100%",
         background: "var(--sb-bg)",
         borderRight: "1px solid #333",

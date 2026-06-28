@@ -311,6 +311,100 @@ describe("侧栏交互", () => {
     });
   });
 
+  describe("布局样式 — 宽度自适应", () => {
+    it("17. 根 div width = '100%'（非固定像素）", () => {
+      populateStore();
+      const { container } = renderSidebar();
+      // SidebarTree 根 div = container.firstChild 下第一个 div
+      const rootDiv = container.querySelector('div[style*="width"]');
+      expect(rootDiv).toBeTruthy();
+      // width 应为 "100%" 而非固定像素
+      expect((rootDiv as HTMLElement).style.width).toBe("100%");
+    });
+
+    it("18. 根 div minWidth = '0px'（非 250px）", () => {
+      populateStore();
+      const { container } = renderSidebar();
+      const rootDiv = container.querySelector('div[style*="width"]');
+      expect(rootDiv).toBeTruthy();
+      // minWidth 应为 0（允许缩窄到 Allotment minSize=160）
+      expect((rootDiv as HTMLElement).style.minWidth).not.toBe("250px");
+      // jsdom 把 minWidth:0 序列化为 "0px"
+      const mw = (rootDiv as HTMLElement).style.minWidth;
+      expect(mw === "0px" || mw === "0").toBe(true);
+    });
+
+    it("19. 根 div overflow = 'hidden' — 窄宽度下内容不溢出", () => {
+      populateStore();
+      const { container } = renderSidebar();
+      const rootDiv = container.querySelector('div[style*="width"]');
+      expect(rootDiv).toBeTruthy();
+      expect((rootDiv as HTMLElement).style.overflow).toBe("hidden");
+    });
+
+    it("20. 根 div height = '100%' — 高度填满 Pane", () => {
+      populateStore();
+      const { container } = renderSidebar();
+      const rootDiv = container.querySelector('div[style*="width"]');
+      expect(rootDiv).toBeTruthy();
+      expect((rootDiv as HTMLElement).style.height).toBe("100%");
+    });
+
+    it("21. 项目名称 span 含文本截断 CSS", () => {
+      populateStore();
+      const { getByText } = renderSidebar();
+      // 项目名称 "测试项目" 在 span 中，其容器为 ProjectRow
+      // 找到名称 span：overflow:hidden + textOverflow:ellipsis + whiteSpace:nowrap
+      const nameSpan = getByText("测试项目");
+      expect(nameSpan).toBeTruthy();
+      const style = (nameSpan as HTMLElement).style;
+      expect(style.overflow).toBe("hidden");
+      expect(style.textOverflow).toBe("ellipsis");
+      expect(style.whiteSpace).toBe("nowrap");
+    });
+
+    it("22. 操作页面名称 span 含文本截断 CSS", () => {
+      populateStore();
+      const { getByText } = renderSidebar();
+      const nameSpan = getByText("操作页面 1");
+      expect(nameSpan).toBeTruthy();
+      const style = (nameSpan as HTMLElement).style;
+      expect(style.overflow).toBe("hidden");
+      expect(style.textOverflow).toBe("ellipsis");
+      expect(style.whiteSpace).toBe("nowrap");
+    });
+
+    it("23. 重命名 input minWidth = 0 — 窄宽度下可收缩", async () => {
+      populateStore();
+      const { getAllByText } = renderSidebar();
+      // 触发重命名 → 等 input 出现
+      fireEvent.contextMenu(getAllByText("操作页面 1")[0]);
+      const renameItems = getAllByText("重命名操作页面");
+      expect(renameItems.length).toBeGreaterThan(0);
+      (renameItems[0] as HTMLElement).click();
+
+      await waitFor(() => {
+        expect(document.querySelector("input")).toBeTruthy();
+      });
+
+      const input = document.querySelector("input")!;
+      expect(input.style.minWidth).not.toBe("250px");
+      const mw = input.style.minWidth;
+      expect(mw === "0px" || mw === "0").toBe(true);
+    });
+
+    it("24. SIDEBAR_WIDTH 常量已移除 — 根 div width 非 250px", () => {
+      populateStore();
+      const { container } = renderSidebar();
+      const rootDiv = container.querySelector('div[style*="width"]');
+      expect(rootDiv).toBeTruthy();
+      // SIDEBAR_WIDTH=250 已被删除，width 不应再是 "250px"
+      expect((rootDiv as HTMLElement).style.width).not.toBe("250px");
+      // minWidth 也不应再是 "250px"
+      expect((rootDiv as HTMLElement).style.minWidth).not.toBe("250px");
+    });
+  });
+
   describe("添加项目完整流程", () => {
     it("16. 点击 + 添加项目 → dialog.open 选择文件夹 → store 创建项目", async () => {
       mocks.mockOpenDialog.mockResolvedValueOnce("C:\\new-project");
