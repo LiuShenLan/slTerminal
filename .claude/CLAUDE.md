@@ -67,14 +67,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > **给他人分享**：zip 解压到任意目录，双击 `slterminal.exe` 即可运行。不写注册表、不写 C 盘。
 > 首次运行 Windows SmartScreen 会提示"Windows protected your PC"→ 点"更多信息"→"仍要运行"。
 
-### E2E 测试（T8 WDIO）
+## 模块
 
-**每次自动化验收必须先 build 再 wdio**。`npm run wdio` 依赖 `npx tauri build --debug --no-bundle` 的构建产物（`src-tauri/target/debug/slterminal.exe`），二进制过期会导致测试结果不可靠。
+### 简单模块
 
-```
-npx tauri build --debug --no-bundle
-npm run wdio
-```
-
-> 技术栈：`@wdio/tauri-service` 1.1.0 + `tauri-plugin-wdio-webdriver` 1.1.0，driverProvider: `embedded`（`webview2-com` COM 直连 ICoreWebView2，零 msedgedriver 依赖）。
-> 已知无害噪声：`Tauri core.invoke not available after 5s timeout`——embedded 模式下降级到 WebDriver HTTP 协议，不影响测试结果。
+| 模块 | 职责 | 入口 | 详情 |
+|------|------|------|------|
+| src/ipc | IPC 通信层，前端 invoke 唯一入口 | src/ipc/index.ts | @../src/ipc/CLAUDE.md |
+| src/panels | Dockview 面板系统（terminal + editor） | src/panels/index.ts | @../src/panels/CLAUDE.md |
+| src/stores | Zustand 状态管理，会话单点 | src/stores/index.ts | @../src/stores/CLAUDE.md |
+| src/workspace | 工作区布局管理（Dockview serde + 面板注册） | src/workspace/Workspace.tsx | @../src/workspace/CLAUDE.md |
+| src-tauri/src/pty | PTY 管理，Windows ConPTY 核心 | src-tauri/src/pty/mod.rs | @../src-tauri/src/pty/CLAUDE.md |
+| e2e-tests | WDIO E2E 端到端测试 | e2e-tests/wdio.conf.ts | @../e2e-tests/CLAUDE.md |
