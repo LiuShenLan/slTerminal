@@ -64,6 +64,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 开发运行：`npm run tauri dev`
 - 构建：`npx tauri build --debug --no-bundle`
 
+### 发布打包
+
+**一键打包**：`.\.claude\package.ps1 -Version "0.1.0"`（release 模式，单文件 15.9MB exe → 5.7MB zip）
+加 `-Debug` 用 debug 模式（exe + dll 两个文件，~20MB）。
+
+手动步骤：
+1. `npx tauri build --no-bundle` → `src-tauri/target/release/slterminal.exe`（单文件自包含）
+2. `Compress-Archive src-tauri/target/release/slterminal.exe slterminal-v0.1.0-x64.zip`
+3. GitHub Releases → 创建 Tag `v0.1.0` → 上传 zip
+
+> **给他人分享**：zip 解压到任意目录，双击 `slterminal.exe` 即可运行。不写注册表、不写 C 盘。
+> 首次运行 Windows SmartScreen 会提示"Windows protected your PC"→ 点"更多信息"→"仍要运行"。
+
 ### E2E 测试（T8 WDIO）
 
 **每次自动化验收必须先 build 再 wdio**。`npm run wdio` 依赖 `npx tauri build --debug --no-bundle` 的构建产物（`src-tauri/target/debug/slterminal.exe`），二进制过期会导致测试结果不可靠。
