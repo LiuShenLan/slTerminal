@@ -10,6 +10,7 @@ import React, { useState, useCallback } from "react";
 import { FileIcon } from "./FileIcon";
 import type { TreeNode } from "./useFileTree";
 import { EXPLORER_COLORS, GIT_FILE_COLORS } from "../../theme";
+import { ask } from "../../ipc/dialog";
 
 // ---- 右键菜单 ----
 
@@ -254,9 +255,12 @@ export const FileTree: React.FC<FileTreeProps> = ({
             label: "删除",
             action: () => {
               const name = node.entry.name;
-              if (window.confirm(`确定删除 "${name}"？此操作不可撤销。`)) {
-                onDelete(node.entry.path);
-              }
+              ask(`确定删除 "${name}"？此操作不可撤销。`, {
+                title: "确认删除",
+                kind: "warning",
+              }).then((ok) => {
+                if (ok) onDelete(node.entry.path);
+              });
             },
           },
         ],
@@ -302,9 +306,12 @@ export const FileTree: React.FC<FileTreeProps> = ({
             label: "删除",
             action: () => {
               const name = node.entry.name;
-              if (window.confirm(`确定删除文件夹 "${name}"？此操作不可撤销。`)) {
-                onDelete(node.entry.path);
-              }
+              ask(`确定删除文件夹 "${name}"？此操作不可撤销。`, {
+                title: "确认删除",
+                kind: "warning",
+              }).then((ok) => {
+                if (ok) onDelete(node.entry.path);
+              });
             },
           },
         ],

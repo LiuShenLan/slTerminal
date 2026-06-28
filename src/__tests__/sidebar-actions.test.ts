@@ -309,6 +309,22 @@ describe("侧栏交互", () => {
       expect(useProjects.getState().projects["proj-1"]).toBeUndefined();
       confirmSpy.mockRestore();
     });
+
+    it("16. 项目删除 confirm 消息含项目名和'确定删除项目'", () => {
+      const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+      populateStore();
+
+      const { getAllByText } = renderSidebar();
+      fireEvent.contextMenu(getAllByText("测试项目")[0]);
+      fireEvent.click(getAllByText("删除项目")[0]);
+
+      expect(confirmSpy).toHaveBeenCalledTimes(1);
+      const message = confirmSpy.mock.calls[0][0];
+      expect(message).toContain("测试项目");
+      expect(message).toContain("确定删除项目");
+
+      confirmSpy.mockRestore();
+    });
   });
 
   describe("布局样式 — 宽度自适应", () => {

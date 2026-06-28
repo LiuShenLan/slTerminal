@@ -58,7 +58,8 @@ pub fn run() {
                 .platform(
                     PlatformOptions::new()
                         .browser_accelerator_keys(false)
-                        .dev_tools(false),
+                        .dev_tools(false)
+                        .default_script_dialogs(true),
                 )
                 .build(),
         )
