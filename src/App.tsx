@@ -12,6 +12,10 @@ import { makeDefaultLayout } from "./features/sidebar/SidebarTree";
 import { writeText } from "./ipc/clipboard";
 import "dockview-react/dist/styles/dockview.css";
 
+// E2E pending 标记：__slterm_e2e_createProject 调用时设为 true，
+// 阻止 init 序列的 localStorage 恢复覆盖 E2E 设置的 activePageId
+let e2eProjectPending = false;
+
 // E2E 测试辅助：暴露程序化创建项目的 API（绕过原生文件夹对话框）
 if (typeof window !== "undefined") {
   // E2E 测试辅助：暴露 clipboard helper（静态 import，同步挂载，无竞态）
@@ -20,6 +24,7 @@ if (typeof window !== "undefined") {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (window as any).__slterm_e2e_createProject = (dirPath: string) => {
+    e2eProjectPending = true; // 阻止 localStorage 恢复覆盖
     const name = dirPath.split(/[/\\]/).pop() || dirPath;
     const projectId = createProjectId();
     const pageId = createPageId();
@@ -95,10 +100,13 @@ function App() {
       markPersistenceReady();
 
       // 数据就绪后恢复上次 activePageId（确保 pageId 对应的项目数据已加载）
+      // E2E 模式跳过：__slterm_e2e_createProject 已设 e2eProjectPending=true
       try {
-        const lastPage = localStorage.getItem("slterm-last-active-page");
-        if (lastPage) {
-          useLayout.getState().setActivePage(lastPage);
+        if (!e2eProjectPending) {
+          const lastPage = localStorage.getItem("slterm-last-active-page");
+          if (lastPage) {
+            useLayout.getState().setActivePage(lastPage);
+          }
         }
       } catch {
         // localStorage 不可用时静默失败

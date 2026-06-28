@@ -30,6 +30,7 @@ import { useLayout } from "../stores/layout";
 declare global {
   interface Window {
     __dockviewApi?: DockviewApi;
+    __slterm_e2e_workspaceReady?: boolean;
   }
 }
 
@@ -215,6 +216,9 @@ const PageDockview: React.FC<PageDockviewProps> = ({
 // ---- Workspace 主组件 ----
 
 const Workspace: React.FC = () => {
+  // E2E 测试就绪信号：Workspace 挂载后立即可见（渲染阶段同步设置，非 useEffect）
+  window.__slterm_e2e_workspaceReady = true;
+
   const pageApiMapRef = useRef<Map<string, DockviewApi>>(new Map());
   const [initializedPages, setInitializedPages] = useState<Set<string>>(new Set());
 

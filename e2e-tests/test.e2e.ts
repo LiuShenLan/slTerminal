@@ -11,7 +11,17 @@ describe('slTerminal Phase 1 E2E', () => {
   });
 
   it('打开终端→写入文本→验证缓冲含 e2e_marker', async () => {
-    // 0. 程序化创建测试项目（绕过原生文件夹对话框，适配多 Dockview 架构）
+    // 0a. 等待 Workspace 就绪（消除 createProject 与 App init 的竞态）
+    await browser.waitUntil(
+      async () => {
+        return await browser.execute(() => {
+          return (window as any).__slterm_e2e_workspaceReady === true;
+        });
+      },
+      { timeout: 15000, timeoutMsg: 'Workspace 未就绪（__slterm_e2e_workspaceReady 超时）' },
+    );
+
+    // 0b. 程序化创建测试项目（绕过原生文件夹对话框，适配多 Dockview 架构）
     await browser.execute(() => {
       const createProject = (window as any).__slterm_e2e_createProject;
       if (typeof createProject === 'function') {
@@ -27,7 +37,7 @@ describe('slTerminal Phase 1 E2E', () => {
         });
         return hasApi === true;
       },
-      { timeout: 10000, timeoutMsg: 'Dockview API 未就绪' },
+      { timeout: 20000, timeoutMsg: 'Dockview API 未就绪' },
     );
 
     // 2. 创建终端面板（唯一 ID 避免与 onReady 恢复布局的旧面板碰撞）
