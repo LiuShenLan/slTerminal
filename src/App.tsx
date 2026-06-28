@@ -9,16 +9,14 @@ import type { OperationPage, Project } from "./stores/projects";
 import { useLayout } from "./stores/layout";
 import { saveLayout } from "./workspace/layoutSerde";
 import { makeDefaultLayout } from "./features/sidebar/SidebarTree";
+import { writeText } from "./ipc/clipboard";
 import "dockview-react/dist/styles/dockview.css";
 
 // E2E 测试辅助：暴露程序化创建项目的 API（绕过原生文件夹对话框）
 if (typeof window !== "undefined") {
-  // 动态导入 clipboard IPC wrapper（避免顶层 import 导致 tree-shaking 问题）
-  // E2E 测试在 browser.execute() 中无法解析裸模块标识符，需走应用侧 import
-  import("./ipc/clipboard").then(({ writeText }) => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (window as any).__slterm_e2e_writeClipboard = writeText;
-  });
+  // E2E 测试辅助：暴露 clipboard helper（静态 import，同步挂载，无竞态）
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (window as any).__slterm_e2e_writeClipboard = writeText;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (window as any).__slterm_e2e_createProject = (dirPath: string) => {

@@ -2,6 +2,10 @@ import { randomFillSync } from 'node:crypto';
 import '@testing-library/jest-dom/vitest';
 import { vi } from 'vitest';
 
+// 静音 jsdom HTMLCanvasElement.getContext 未实现警告
+// detectWebgl.test.ts 通过 vi.spyOn 覆盖此 mock（mockRestore 恢复到本 mock）
+vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
+
 // mock @tauri-apps/api/event（useFileTree 等模块在 import 时调用 listen）
 vi.mock("@tauri-apps/api/event", () => ({
   listen: () => Promise.resolve(() => {}),
