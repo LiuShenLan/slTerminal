@@ -17,6 +17,13 @@ export function setActiveTerminal(term: Terminal | null): void {
   activeTerminal = term;
 }
 
+/** 仅当指定终端仍是 activeTerminal 时才清空（防 blur/focus 竞态：A blur → B focus 时 A 的 blur 不清 B） */
+export function clearActiveTerminalIfMine(term: Terminal): void {
+  if (activeTerminal === term) {
+    activeTerminal = null;
+  }
+}
+
 /** 是否已安装全局监听器 */
 let installed = false;
 
@@ -38,7 +45,9 @@ function handleKeyDown(e: KeyboardEvent): void {
   if (e.ctrlKey && e.shiftKey && e.code === "KeyC") {
     const selection = term.getSelection();
     if (selection) {
-      writeText(selection);
+      writeText(selection).catch((err) => {
+        console.error("[slTerminal] 复制到剪贴板失败:", err);
+      });
     }
     e.preventDefault();
     e.stopPropagation();

@@ -15,7 +15,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { terminalOptions } from "./theme";
 import { pty } from "../../ipc";
 import type { PtyEvent } from "../../types";
-import { setActiveTerminal, installKeyboardHandler } from "./keyboard";
+import { setActiveTerminal, clearActiveTerminalIfMine, installKeyboardHandler } from "./keyboard";
 import { TerminalRegistry } from "./TerminalRegistry";
 
 export interface UseXtermOptions {
@@ -163,9 +163,18 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
     // 挂载到 DOM
     term.open(container);
 
-    // 注册键盘处理器（Ctrl+Shift+C/V 复制粘贴）
+    // 注册键盘处理器（Ctrl+Shift+C/V 复制粘贴）— 焦点驱动
+    // xterm.js v6 无 public onFocus/onBlur 事件，用 DOM focusin/focusout 跟踪焦点终端
     installKeyboardHandler();
-    setActiveTerminal(term);
+    const onTerminalFocusIn = () => setActiveTerminal(term);
+    const onTerminalFocusOut = (e: FocusEvent) => {
+      // 仅当焦点离开终端 DOM 子树的才算 blur（内部焦点转移不触发）
+      if (!e.relatedTarget || !term.element?.contains(e.relatedTarget as Node)) {
+        clearActiveTerminalIfMine(term);
+      }
+    };
+    term.element?.addEventListener("focusin", onTerminalFocusIn);
+    term.element?.addEventListener("focusout", onTerminalFocusOut);
 
     // 字体预加载后刷新布局（包裹 rAF 确保布局稳定）
     document.fonts.ready.then(() => {
@@ -326,7 +335,10 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
       if (sid) {
         pty.kill(sid);
       }
-      setActiveTerminal(null);
+      // 移除焦点事件监听（在 dispose 前，避免 DOM 移除触发 focusout handler）
+      term.element?.removeEventListener("focusin", onTerminalFocusIn);
+      term.element?.removeEventListener("focusout", onTerminalFocusOut);
+      clearActiveTerminalIfMine(term);
       webglAddonRef.current?.dispose();
       fitAddonRef.current?.dispose();
       terminalRef.current?.dispose();

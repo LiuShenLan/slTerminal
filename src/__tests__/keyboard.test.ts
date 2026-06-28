@@ -12,7 +12,7 @@
 //   9. navigator.clipboard 未定义时不崩溃（Tauri/WebView2 环境）
 
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
-import { setActiveTerminal, installKeyboardHandler } from "../panels/terminal/keyboard";
+import { setActiveTerminal, clearActiveTerminalIfMine, installKeyboardHandler } from "../panels/terminal/keyboard";
 import type { Terminal } from "@xterm/xterm";
 
 // ====== mock tauri clipboard plugin ======
@@ -315,6 +315,157 @@ describe("keyboard 终端键盘事件处理", () => {
         code: "KeyC",
       });
       expect(passed.defaultPrevented).toBe(false);
+    });
+  });
+
+  // ========== 9. clearActiveTerminalIfMine 身份校验清空 ==========
+
+  describe("clearActiveTerminalIfMine 身份校验", () => {
+    it("28. 匹配终端 → 清空 activeTerminal", () => {
+      const termA = terminalStub({ getSelection: () => "A" });
+      setActiveTerminal(termA);
+
+      clearActiveTerminalIfMine(termA);
+
+      // 清空后 Ctrl+Shift+C 透传
+      const event = dispatchKeydown({
+        ctrlKey: true,
+        shiftKey: true,
+        code: "KeyC",
+      });
+      expect(event.defaultPrevented).toBe(false);
+    });
+
+    it("29. 不匹配终端 → 不清空 activeTerminal", () => {
+      const termA = terminalStub({ getSelection: () => "A" });
+      const termB = terminalStub({ getSelection: () => "B" });
+      setActiveTerminal(termA);
+
+      // B 失焦，但 activeTerminal 是 A → 不应清空
+      clearActiveTerminalIfMine(termB);
+
+      // activeTerminal 仍是 A，Ctrl+Shift+C 仍操作 A
+      const event = dispatchKeydown({
+        ctrlKey: true,
+        shiftKey: true,
+        code: "KeyC",
+      });
+      expect(event.defaultPrevented).toBe(true);
+      expect(writeTextMock).toHaveBeenCalledWith("A");
+    });
+
+    it("30. activeTerminal 已为 null → 无操作（幂等）", () => {
+      setActiveTerminal(null);
+      const term = terminalStub();
+
+      // 不应抛出异常
+      expect(() => clearActiveTerminalIfMine(term)).not.toThrow();
+
+      // activeTerminal 仍是 null
+      const event = dispatchKeydown({
+        ctrlKey: true,
+        shiftKey: true,
+        code: "KeyC",
+      });
+      expect(event.defaultPrevented).toBe(false);
+    });
+  });
+
+  // ========== 10. 多终端焦点迁移 ==========
+
+  describe("多终端焦点迁移", () => {
+    it("31. 焦点从终端 A 切换到 B → Ctrl+Shift+C 操作 B 的选中", () => {
+      const termA = terminalStub({ getSelection: () => "text-from-A" });
+      const termB = terminalStub({ getSelection: () => "text-from-B" });
+
+      // 初始：A 创建 → A 聚焦
+      setActiveTerminal(termA);
+      const eventA = dispatchKeydown({
+        ctrlKey: true, shiftKey: true, code: "KeyC",
+      });
+      expect(writeTextMock).toHaveBeenCalledWith("text-from-A");
+      expect(eventA.defaultPrevented).toBe(true);
+
+      // 切换到 B（A blur → B focus）
+      setActiveTerminal(termB);
+      writeTextMock.mockClear();
+      const eventB = dispatchKeydown({
+        ctrlKey: true, shiftKey: true, code: "KeyC",
+      });
+      expect(writeTextMock).toHaveBeenCalledWith("text-from-B");
+      expect(eventB.defaultPrevented).toBe(true);
+    });
+
+    it("32. 终端 A 失焦后 Ctrl+Shift+C 透传", () => {
+      const termA = terminalStub({ getSelection: () => "A" });
+      setActiveTerminal(termA);
+
+      // A 失焦（用户点击文件树等非终端区域）
+      clearActiveTerminalIfMine(termA);
+
+      const event = dispatchKeydown({
+        ctrlKey: true, shiftKey: true, code: "KeyC",
+      });
+      expect(event.defaultPrevented).toBe(false);
+      expect(writeTextMock).not.toHaveBeenCalled();
+    });
+
+    it("33. 焦点回到终端 A → Ctrl+Shift+C 再次操作 A", () => {
+      const termA = terminalStub({ getSelection: () => "A-returns" });
+
+      // A 聚焦 → 失焦 → 再次聚焦
+      setActiveTerminal(termA);
+      clearActiveTerminalIfMine(termA); // blur
+      setActiveTerminal(termA);         // focus again
+      writeTextMock.mockClear();
+
+      const event = dispatchKeydown({
+        ctrlKey: true, shiftKey: true, code: "KeyC",
+      });
+      expect(event.defaultPrevented).toBe(true);
+      expect(writeTextMock).toHaveBeenCalledWith("A-returns");
+    });
+
+    it("35. 两个终端各有选中 → 只复制当前活跃终端的", () => {
+      const termA = terminalStub({ getSelection: () => "A-selection" });
+      const termB = terminalStub({ getSelection: () => "B-selection" });
+
+      // A 活跃
+      setActiveTerminal(termA);
+      writeTextMock.mockClear();
+      dispatchKeydown({ ctrlKey: true, shiftKey: true, code: "KeyC" });
+      expect(writeTextMock).toHaveBeenCalledWith("A-selection");
+      expect(writeTextMock).toHaveBeenCalledTimes(1);
+
+      // 切换到 B
+      setActiveTerminal(termB);
+      writeTextMock.mockClear();
+      dispatchKeydown({ ctrlKey: true, shiftKey: true, code: "KeyC" });
+      expect(writeTextMock).toHaveBeenCalledWith("B-selection");
+      expect(writeTextMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // ========== 11. writeText 拒绝（生产级错误处理） ==========
+
+  describe("Ctrl+Shift+C writeText 拒绝", () => {
+    it("34. writeText 拒绝 → 事件仍阻止默认，不向上抛出", async () => {
+      // 模拟剪贴板写入失败（如权限不足）
+      writeTextMock.mockRejectedValue(new Error("NotAllowedError"));
+      setActiveTerminal(terminalStub({ getSelection: () => "text" }));
+
+      const event = dispatchKeydown({
+        ctrlKey: true,
+        shiftKey: true,
+        code: "KeyC",
+      });
+
+      expect(event.defaultPrevented).toBe(true);
+      expect(writeTextMock).toHaveBeenCalledWith("text");
+
+      // 等待微任务清空，确保 .catch() 消费了 rejection（不向上抛出）
+      await new Promise<void>((r) => setTimeout(r, 0));
+      // 未触发 unhandledrejection 即视为通过（vitest 默认对未捕获 rejection 报错）
     });
   });
 });
