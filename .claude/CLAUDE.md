@@ -54,6 +54,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 开发运行：`npm run tauri dev`
 - 构建：`npx tauri build --debug --no-bundle`
 
+> 全量自动化测试用例清单（635 用例）→ @.claude/test-inventory.md
+
 ### 发布打包
 
 **一键打包**：`.\.claude\package.ps1 -Version "0.1.0"`（release 模式，单文件 15.9MB exe → 5.7MB zip）
