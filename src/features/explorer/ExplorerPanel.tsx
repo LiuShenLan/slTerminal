@@ -12,6 +12,7 @@ import { createDir, deleteEntry, rename, writeFile } from "../../ipc/fs";
 import { startWatch } from "../../ipc/notify";
 import { useProjects } from "../../stores/projects";
 import { useLayout } from "../../stores/layout";
+import { titleManager } from "../../workspace/titleManager";
 import { EXPLORER_COLORS, SEPARATOR_BG, INPUT_BORDER, ERROR_BANNER_BG, ERROR_BANNER_BORDER, ERROR_BANNER_FG } from "../../theme";
 import { PANEL_TERMINAL, PANEL_EDITOR } from "../../workspace/panelRegistry";
 
@@ -72,18 +73,52 @@ export const ExplorerPanel: React.FC = () => {
   const handleOpenFile = useCallback(
     (filePath: string) => {
       if (!activePageId) return;
-      // 通过全局 dockview API 在活跃页面中打开编辑器
       const dockApi = window.__dockviewApi;
-      if (dockApi) {
-        const panelId = `editor-${Date.now()}`;
-        dockApi.addPanel({
-          id: panelId,
-          component: PANEL_EDITOR,
-          params: { panelId, filePath },
-        });
+      if (!dockApi) return;
+
+      // 去重：相同文件路径不重复打开，聚焦已有面板
+      const existingPanelId = titleManager.findExistingEditor(
+        activePageId,
+        filePath,
+      );
+      if (existingPanelId) {
+        const existingPanel = dockApi.getPanel(existingPanelId);
+        if (existingPanel) {
+          existingPanel.focus();
+          return;
+        }
+      }
+
+      // 计算标题（无闪烁——addPanel 时直接传入）
+      const root = projectRootPath || rootPath || "";
+      const title = root
+        ? titleManager.getFileEditorTitle(activePageId, root, filePath)
+        : titleManager.getFileEditorTitle(activePageId, "", filePath);
+
+      const panelId = `editor-${Date.now()}`;
+      dockApi.addPanel({
+        id: panelId,
+        component: PANEL_EDITOR,
+        title,
+        params: { panelId, filePath },
+      });
+
+      // 注册到标题管理器（后续关闭/冲突重算依赖此注册）
+      titleManager.registerEditor(activePageId, panelId, filePath);
+
+      // 新文件打开后重算整个页面标题（可能触发既有面板的冲突更新）
+      if (root) {
+        const apiForUpdates = window.__dockviewApi;
+        if (apiForUpdates) {
+          const updates = titleManager.recomputeTitles(activePageId, root);
+          for (const { panelId: pid, title: t } of updates) {
+            const p = apiForUpdates.getPanel(pid);
+            if (p) p.api.setTitle(t);
+          }
+        }
       }
     },
-    [activePageId],
+    [activePageId, projectRootPath, rootPath],
   );
 
   /** 在终端中打开（打开文件所在目录的终端） */
@@ -97,15 +132,19 @@ export const ExplorerPanel: React.FC = () => {
             ? path.slice(0, path.lastIndexOf("/"))
             : path;
         const panelId = `terminal-open-${Date.now()}`;
+        const title = activePageId
+          ? titleManager.getTerminalTitle(activePageId)
+          : "terminal";
         dockApi.addPanel({
           id: panelId,
           component: PANEL_TERMINAL,
+          title,
           params: { panelId, cwd: dir },
           renderer: "always",
         });
       }
     },
-    [],
+    [activePageId],
   );
 
   /** 重命名 */

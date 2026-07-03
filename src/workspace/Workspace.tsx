@@ -7,7 +7,7 @@
 // 约束：#7 布局单点 — 每个 PageDockview 的 onDidLayoutChange 直接写 store
 //       #8 会话单点 — 终端会话只在面板内管理，不跨页面
 
-import React, { useCallback, useRef, useState, useMemo } from "react";
+import React, { useCallback, useRef, useState, useMemo, useEffect } from "react";
 import {
   DockviewReact,
   type DockviewApi,
@@ -22,6 +22,8 @@ import { Allotment } from "allotment";
 import "allotment/dist/style.css";
 import { panelRegistry, PANEL_TERMINAL, PANEL_EDITOR } from "./panelRegistry";
 import { saveLayout, loadLayout } from "./layoutSerde";
+import { titleManager } from "./titleManager";
+import type { TitleUpdate } from "./titleManager";
 import { SidebarTree } from "../features/sidebar";
 import { ExplorerPanel } from "../features/explorer";
 import { useProjects } from "../stores/projects";
@@ -33,6 +35,14 @@ declare global {
   interface Window {
     __dockviewApi?: DockviewApi;
     __slterm_e2e_workspaceReady?: boolean;
+    // E2E 标题测试辅助
+    __slterm_e2e_registerAndRecompute?: (
+      pageId: string,
+      rootPath: string,
+      panelId: string,
+      filePath?: string,
+    ) => void;
+    __slterm_e2e_getActivePageInfo?: () => { pageId: string; rootPath: string } | null;
   }
 }
 
@@ -43,6 +53,7 @@ const WATERMARK_TEXT = "打开终端或编辑器开始工作";
 /** 创建 Watermark 组件（捕获 pageId + cwd 闭包） */
 function createWatermark(
   nextPanelId: () => string,
+  pageId: string,
   cwd: string | undefined,
 ): React.FC<IWatermarkPanelProps> {
   const Watermark: React.FC<IWatermarkPanelProps> = ({ containerApi }) => (
@@ -56,7 +67,8 @@ function createWatermark(
         <button
           onClick={() => {
             const id = nextPanelId();
-            containerApi.addPanel({ id, component: PANEL_TERMINAL,
+            const title = titleManager.getTerminalTitle(pageId);
+            containerApi.addPanel({ id, component: PANEL_TERMINAL, title,
               params: { panelId: id, cwd }, renderer: "always" });
           }}
           style={{ background: SECONDARY_BG, border: `1px solid ${SEPARATOR_BG}`, color: BUTTON_FG,
@@ -65,8 +77,10 @@ function createWatermark(
         <button
           onClick={() => {
             const id = nextPanelId();
-            containerApi.addPanel({ id, component: PANEL_EDITOR,
+            const title = titleManager.getEditorTitle(pageId);
+            containerApi.addPanel({ id, component: PANEL_EDITOR, title,
               params: { panelId: id, cwd } });
+            titleManager.registerEditor(pageId, id);
           }}
           style={{ background: SECONDARY_BG, border: `1px solid ${SEPARATOR_BG}`, color: BUTTON_FG,
             cursor: "pointer", fontSize: 13, padding: "4px 12px", borderRadius: 4 }}
@@ -80,6 +94,7 @@ function createWatermark(
 /** 创建 RightHeaderActions 组件（捕获 pageId + cwd 闭包） */
 function createRightHeader(
   nextPanelId: () => string,
+  pageId: string,
   cwd: string | undefined,
 ): React.FC<IDockviewHeaderActionsProps> {
   const Header: React.FC<IDockviewHeaderActionsProps> = ({ containerApi }) => (
@@ -87,7 +102,8 @@ function createRightHeader(
       <button
         onClick={() => {
           const id = nextPanelId();
-          containerApi.addPanel({ id, component: PANEL_TERMINAL,
+          const title = titleManager.getTerminalTitle(pageId);
+          containerApi.addPanel({ id, component: PANEL_TERMINAL, title,
             params: { panelId: id, cwd }, renderer: "always" });
         }}
         style={{ background: "none", border: `1px solid ${SEPARATOR_BG}`, color: BUTTON_FG,
@@ -103,16 +119,21 @@ function createRightHeader(
 /** 创建 getTabContextMenuItems 回调（捕获 pageId 闭包） */
 function createGetContextMenu(
   nextPanelId: () => string,
+  pageId: string,
 ): (params: GetTabContextMenuItemsParams) => (BuiltInContextMenuItem | ReactContextMenuItemConfig)[] {
   return (params: GetTabContextMenuItemsParams) => {
     const newTerminalId = nextPanelId();
     const newEditorId = nextPanelId();
     return [
       { label: "新建终端", action: () => { params.api.addPanel(
-          { id: newTerminalId, component: PANEL_TERMINAL, params: { panelId: newTerminalId },
-            renderer: "always" }); } },
-      { label: "新建编辑器", action: () => { params.api.addPanel(
-          { id: newEditorId, component: PANEL_EDITOR, params: { panelId: newEditorId } }); } },
+          { id: newTerminalId, component: PANEL_TERMINAL, title: titleManager.getTerminalTitle(pageId),
+            params: { panelId: newTerminalId }, renderer: "always" }); } },
+      { label: "新建编辑器", action: () => {
+          params.api.addPanel(
+          { id: newEditorId, component: PANEL_EDITOR, title: titleManager.getEditorTitle(pageId),
+            params: { panelId: newEditorId } });
+          titleManager.registerEditor(pageId, newEditorId);
+        } },
       "separator",
       "close", "closeOthers", "closeAll",
     ];
@@ -123,7 +144,13 @@ function createGetContextMenu(
 
 const DefaultTab: React.FC<IDockviewPanelProps> = (props) => {
   const { api } = props;
-  const title = api.title || api.component || "";
+  const [title, setTitle] = React.useState(api.title || api.component || "");
+  React.useEffect(() => {
+    const disposable = api.onDidTitleChange((event) => {
+      setTitle(event.title);
+    });
+    return () => disposable.dispose();
+  }, [api]);
   return (
     <div style={{ display: "flex", alignItems: "center", height: "100%",
       padding: "0 8px", gap: 6, userSelect: "none" }}>
@@ -143,14 +170,51 @@ const DefaultTab: React.FC<IDockviewPanelProps> = (props) => {
 interface PageDockviewProps {
   pageId: string;
   cwd: string | undefined;
+  rootPath: string | undefined;
   savedLayout: Record<string, unknown> | undefined;
   visible: boolean;
   onReady: (api: DockviewApi) => void;
   onLayoutChange: (layout: Record<string, unknown>) => void;
 }
 
+/** 将 TitleUpdate[] 应用到 DockviewApi（批量 setTitle） */
+function applyTitleUpdates(
+  api: DockviewApi,
+  updates: TitleUpdate[],
+): void {
+  for (const { panelId, title } of updates) {
+    const panel = api.getPanel(panelId);
+    if (panel) panel.api.setTitle(title);
+  }
+}
+
+/** 遍历 DockviewApi 中所有编辑器面板，重建 titleManager 注册表并重算标题 */
+function rebuildAndRecomputeTitles(
+  api: DockviewApi,
+  pageId: string,
+  rootPath: string | undefined,
+): void {
+  if (!rootPath) return;
+
+  // 遍历所有面板，重建注册表
+  for (const panel of api.panels) {
+    const params = panel.params as { panelId?: string; filePath?: string } | undefined;
+    if (!params?.panelId) continue;
+    const component = panel.view?.contentComponent;
+    if (component === PANEL_EDITOR) {
+      const filePath = params.filePath;
+      // 先注销旧条目（避免 fromJSON 重复注册）
+      titleManager.unregisterEditor(pageId, params.panelId);
+      titleManager.registerEditor(pageId, params.panelId, filePath);
+    }
+  }
+
+  const updates = titleManager.recomputeTitles(pageId, rootPath);
+  applyTitleUpdates(api, updates);
+}
+
 const PageDockview: React.FC<PageDockviewProps> = ({
-  pageId, cwd, savedLayout, visible, onReady: onApiReady, onLayoutChange,
+  pageId, cwd, rootPath, savedLayout, visible, onReady: onApiReady, onLayoutChange,
 }) => {
   const apiRef = useRef<DockviewApi | null>(null);
   const panelSeqRef = useRef(0);
@@ -163,10 +227,18 @@ const PageDockview: React.FC<PageDockviewProps> = ({
   }, [pageId]);
 
   // per-page 子组件（useMemo 防止每次渲染重建组件引用）
-  const Watermark = useMemo(() => createWatermark(nextPanelId, cwd), [nextPanelId, cwd]);
-  const RightHeader = useMemo(() => createRightHeader(nextPanelId, cwd), [nextPanelId, cwd]);
+  const Watermark = useMemo(
+    () => createWatermark(nextPanelId, pageId, cwd),
+    [nextPanelId, pageId, cwd],
+  );
+  const RightHeader = useMemo(
+    () => createRightHeader(nextPanelId, pageId, cwd),
+    [nextPanelId, pageId, cwd],
+  );
   const getTabContextMenuItems = useMemo(
-    () => createGetContextMenu(nextPanelId), [nextPanelId]);
+    () => createGetContextMenu(nextPanelId, pageId),
+    [nextPanelId, pageId],
+  );
 
   const handleReady = useCallback((event: { api: DockviewApi }) => {
     const { api } = event;
@@ -181,8 +253,14 @@ const PageDockview: React.FC<PageDockviewProps> = ({
     if (!restored) {
       // 无保存布局 或 恢复失败 → 创建默认终端
       const id = nextPanelId();
-      api.addPanel({ id, component: PANEL_TERMINAL,
+      const title = titleManager.getTerminalTitle(pageId);
+      api.addPanel({ id, component: PANEL_TERMINAL, title,
         params: { panelId: id, cwd }, renderer: "always" });
+    }
+
+    // 从保存布局恢复后，重建编辑器注册表并重算标题（忽略持久化的 title）
+    if (restored) {
+      rebuildAndRecomputeTitles(api, pageId, rootPath);
     }
 
     // fromJSON 恢复守卫 — 程序化恢复不触发布局保存
@@ -197,7 +275,41 @@ const PageDockview: React.FC<PageDockviewProps> = ({
       const layout = saveLayout(api);
       onLayoutChange(layout as Record<string, unknown>);
     });
-  }, [onApiReady, savedLayout, cwd, nextPanelId, onLayoutChange]);
+
+    // 面板关闭 → 注销编辑器 + 重算剩余面板标题
+    api.onDidRemovePanel((panel) => {
+      const params = panel.params as { panelId?: string } | undefined;
+      if (params?.panelId) {
+        titleManager.unregisterEditor(pageId, params.panelId);
+      }
+      if (rootPath) {
+        const updates = titleManager.recomputeTitles(pageId, rootPath);
+        applyTitleUpdates(api, updates);
+      }
+    });
+  }, [onApiReady, savedLayout, cwd, pageId, rootPath, nextPanelId, onLayoutChange]);
+
+  // 监听 slterm:file-saved-as 事件（Ctrl+S 另存为 / 首次保存后更新标题）
+  useEffect(() => {
+    const onSaveAs = (e: Event) => {
+      const detail = (e as CustomEvent).detail as {
+        panelId: string;
+        oldPath: string | null;
+        newPath: string;
+      };
+      if (!rootPath) return;
+      const updates = titleManager.handleSaveAs(
+        pageId, detail.panelId, detail.newPath, rootPath,
+      );
+      const api = apiRef.current;
+      if (api) applyTitleUpdates(api, updates);
+    };
+
+    window.addEventListener("slterm:file-saved-as", onSaveAs);
+    return () => {
+      window.removeEventListener("slterm:file-saved-as", onSaveAs);
+    };
+  }, [pageId, rootPath]);
 
   return (
     <div style={{ display: visible ? "block" : "none",
@@ -221,6 +333,43 @@ const Workspace: React.FC = () => {
   // E2E 测试就绪信号：Workspace 挂载后立即可见（渲染阶段同步设置，非 useEffect）
   window.__slterm_e2e_workspaceReady = true;
 
+  // E2E 标题测试辅助（允许测试脚本通过程序化 API 创建面板并验证标题）
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (window as any).__slterm_e2e_registerAndRecompute = (
+    pageId: string,
+    rootPath: string,
+    panelId: string,
+    filePath?: string,
+  ) => {
+    titleManager.registerEditor(pageId, panelId, filePath);
+    const api = window.__dockviewApi;
+    if (api && rootPath) {
+      const updates = titleManager.recomputeTitles(pageId, rootPath);
+      for (const { panelId: pid, title } of updates) {
+        const p = api.getPanel(pid);
+        if (p) p.api.setTitle(title);
+      }
+    }
+  };
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (window as any).__slterm_e2e_getActivePageInfo = () => {
+    const state = useProjects.getState();
+    const activeId = useLayout.getState().activePageId;
+    if (!activeId) return null;
+    for (const [, proj] of Object.entries(state.projects)) {
+      for (const page of proj.pages) {
+        if (page.pageId === activeId) {
+          return {
+            pageId: page.pageId,
+            rootPath: proj.rootPath,
+          };
+        }
+      }
+    }
+    return null;
+  };
+
   const pageApiMapRef = useRef<Map<string, DockviewApi>>(new Map());
   const [initializedPages, setInitializedPages] = useState<Set<string>>(new Set());
 
@@ -230,13 +379,13 @@ const Workspace: React.FC = () => {
   /** 收集所有操作页面（扁平化列表） */
   const allPages = useMemo(() => {
     const pages: {
-      projectId: string; pageId: string;
+      projectId: string; pageId: string; rootPath: string;
       cwd?: string; layout?: Record<string, unknown>;
     }[] = [];
     for (const [projId, proj] of Object.entries(projects)) {
       for (const page of proj.pages) {
         pages.push({
-          projectId: projId, pageId: page.pageId,
+          projectId: projId, pageId: page.pageId, rootPath: proj.rootPath,
           cwd: page.cwd, layout: page.layout as Record<string, unknown> | undefined,
         });
       }
@@ -345,6 +494,7 @@ const Workspace: React.FC = () => {
                   <PageDockview
                     pageId={page.pageId}
                     cwd={page.cwd}
+                    rootPath={page.rootPath}
                     savedLayout={page.layout}
                     visible={page.pageId === activePageId}
                     onReady={(api) => handlePageApiReady(page.pageId, api)}

@@ -26,6 +26,7 @@ const EditorPanel: React.FC<EditorPanelProps> = ({ params }) => {
   useCodeMirror({
     container,
     filePath: params.filePath,
+    panelId: params.panelId,
   });
 
   return (

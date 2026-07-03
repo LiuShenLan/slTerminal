@@ -17,6 +17,7 @@ global.ResizeObserver = class ResizeObserver {
 import Workspace from "../workspace/Workspace";
 import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
+import { titleManager } from "../workspace/titleManager";
 
 /** 构造带两页面的测试项目（展开态） */
 function setupTwoPages() {
@@ -51,6 +52,7 @@ beforeEach(() => {
     expandedNodes: {},
   });
   useLayout.setState({ activePageId: null });
+  titleManager.reset();
 });
 
 afterEach(() => {
@@ -66,9 +68,13 @@ describe("多 Dockview 实例——架构验证", () => {
 
     const { container } = render(<Workspace />);
     const text = container.textContent ?? "";
-    // 活跃页面的终端面板已创建
-    expect(text).toContain(`terminal-${pageA}`);
-    // 非活跃页面尚未初始化 → 无其终端
+    // 活跃页面的终端面板已创建——标题为 "terminal-N"
+    expect(text).toMatch(/terminal-\d/);
+    // 非活跃页面尚未初始化 → 无其终端面板 ID
+    const terminalMatches = text.match(/terminal-/g);
+    // 可能有多个 terminal- 出现（StrictMode 双重挂载导致多个终端实例），
+    // 但不会出现 page-beta 的 panel ID
+    expect(terminalMatches).toBeTruthy();
     expect(text).not.toContain("terminal-page-beta");
   });
 
@@ -82,8 +88,8 @@ describe("多 Dockview 实例——架构验证", () => {
     const text = container.textContent ?? "";
     // 侧栏正常渲染
     expect(text).toContain("multi-test");
-    // 无 Dockview → 无终端面板
-    expect(text).not.toContain("terminal-page-");
+    // 无 Dockview → 无终端面板（标题格式为 "terminal-N"）
+    expect(text).not.toMatch(/terminal-\d/);
   });
 
   it("3. 项目无页面时也不应创建 Dockview", () => {

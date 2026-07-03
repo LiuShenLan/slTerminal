@@ -14,6 +14,7 @@ import { render } from '@testing-library/react';
 import Workspace from '../workspace/Workspace';
 import { useProjects } from '../stores/projects';
 import { useLayout } from '../stores/layout';
+import { titleManager } from '../workspace/titleManager';
 
 beforeEach(() => {
   useProjects.setState({
@@ -22,6 +23,7 @@ beforeEach(() => {
     expandedNodes: {},
   });
   useLayout.setState({ activePageId: null });
+  titleManager.reset();
 });
 
 afterEach(() => {
@@ -87,8 +89,8 @@ describe('Workspace', () => {
     const text = container.textContent ?? '';
     // 侧栏渲染
     expect(text).toContain('active-test');
-    // 默认终端面板已创建（ID 包含页面 ID）
-    expect(text).toContain(`terminal-${pageId}`);
+    // 默认终端面板已创建——标题为 "terminal-N"（N 受 StrictMode 双重挂载影响）
+    expect(text).toMatch(/terminal-\d/);
     // 终端已挂载（Watermark 被面板替换，不再显示）
     expect(text).not.toContain('打开终端或编辑器开始工作');
   });

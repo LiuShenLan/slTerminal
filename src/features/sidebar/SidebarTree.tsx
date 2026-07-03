@@ -330,6 +330,7 @@ export function makeDefaultLayout(panelId: string): Record<string, unknown> {
       [panelId]: {
         id: panelId,
         contentComponent: PANEL_TERMINAL,
+        title: "terminal-0",
         params: { panelId },
         renderer: "always",
       },

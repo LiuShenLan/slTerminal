@@ -34,9 +34,8 @@ describe("EditorPanel", () => {
     render(
       React.createElement(EditorPanel, { params: { panelId: "editor-2" } }),
     );
-    // useCodeMirror 接收 { container, filePath }
     expect(mockUseCodeMirror).toHaveBeenCalledWith(
-      expect.objectContaining({}),
+      expect.objectContaining({ panelId: "editor-2" }),
     );
   });
 
@@ -48,6 +47,33 @@ describe("EditorPanel", () => {
     );
     expect(mockUseCodeMirror).toHaveBeenCalledWith(
       expect.objectContaining({ filePath: "C:\\test\\demo.rs" }),
+    );
+  });
+
+  it("同时传递 filePath 和 panelId 给 useCodeMirror", () => {
+    render(
+      React.createElement(EditorPanel, {
+        params: { panelId: "editor-4", filePath: "/home/user/main.py" },
+      }),
+    );
+    expect(mockUseCodeMirror).toHaveBeenCalledWith(
+      expect.objectContaining({
+        panelId: "editor-4",
+        filePath: "/home/user/main.py",
+      }),
+    );
+  });
+
+  it("空白编辑器（无 filePath）正确渲染容器", () => {
+    const { container } = render(
+      React.createElement(EditorPanel, { params: { panelId: "editor-0" } }),
+    );
+    // 仍渲染容器
+    const el = container.querySelector('div[style*="background"]');
+    expect(el).toBeTruthy();
+    // 传 undefined filePath 给 useCodeMirror
+    expect(mockUseCodeMirror).toHaveBeenCalledWith(
+      expect.objectContaining({ filePath: undefined, panelId: "editor-0" }),
     );
   });
 });

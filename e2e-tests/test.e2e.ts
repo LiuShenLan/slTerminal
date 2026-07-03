@@ -1,5 +1,25 @@
 import { expect, browser } from '@wdio/globals';
 
+/** 等待页签标题变为指定值（轮询 Dockview panel title） */
+async function waitForPanelTitle(
+  panelId: string,
+  expectedTitle: string,
+  timeout = 10000,
+): Promise<string> {
+  const title = await browser.waitUntil(
+    async () => {
+      const t = await browser.execute((pid: string) => {
+        const panel = window.__dockviewApi?.getPanel(pid);
+        return panel?.api.title ?? null;
+      }, panelId);
+      if (t === expectedTitle) return t;
+      return false;
+    },
+    { timeout, timeoutMsg: `面板 ${panelId} 标题未在 ${timeout}ms 内变为 "${expectedTitle}"` },
+  );
+  return title as string;
+}
+
 describe('slTerminal Phase 1 E2E', () => {
   it('应正常启动并显示 slTerminal 标题', async () => {
     await browser.waitUntil(
@@ -206,5 +226,213 @@ describe('键盘快捷键', () => {
       { timeout: 10000, timeoutMsg: '终端未收到验证文本' },
     );
     expect(terminalText).toContain('e2e_paste_verify');
+  });
+});
+
+describe('页签标题', () => {
+  it('终端页签标题为 terminal-N', async () => {
+    // 等待 Workspace 就绪
+    await browser.waitUntil(
+      async () => await browser.execute(() => (window as any).__slterm_e2e_workspaceReady === true),
+      { timeout: 15000, timeoutMsg: 'Workspace 未就绪' },
+    );
+
+    // 创建测试项目
+    await browser.execute(() => {
+      const createProject = (window as any).__slterm_e2e_createProject;
+      if (typeof createProject === 'function') createProject('C:\\e2e-title-test');
+    });
+
+    // 等待 Dockview API
+    await browser.waitUntil(
+      async () => await browser.execute(() => typeof window.__dockviewApi !== 'undefined'),
+      { timeout: 20000, timeoutMsg: 'Dockview API 未就绪' },
+    );
+
+    // 创建终端面板（带标题）
+    const panelId = 'e2e-title-term-' + Date.now();
+    await browser.execute((pid: string) => {
+      window.__dockviewApi!.addPanel({
+        id: pid,
+        component: 'terminal',
+        title: 'terminal-99',
+        params: { panelId: pid },
+        renderer: 'always' as const,
+      });
+    }, panelId);
+
+    // 验证标题
+    const title = await waitForPanelTitle(panelId, 'terminal-99', 10000);
+    expect(title).toBe('terminal-99');
+
+    // 验证可以通过 API 动态修改标题
+    await browser.execute((pid: string) => {
+      const panel = window.__dockviewApi?.getPanel(pid);
+      panel?.api.setTitle('terminal-custom');
+    }, panelId);
+
+    const updatedTitle = await waitForPanelTitle(panelId, 'terminal-custom', 5000);
+    expect(updatedTitle).toBe('terminal-custom');
+  });
+
+  it('编辑器页签标题为文件名', async () => {
+    // 等待 Workspace 就绪
+    await browser.waitUntil(
+      async () => await browser.execute(() => (window as any).__slterm_e2e_workspaceReady === true),
+      { timeout: 15000 },
+    );
+
+    // 获取活跃页面信息
+    const pageInfo = await browser.execute(() => {
+      return (window as any).__slterm_e2e_getActivePageInfo?.() ?? null;
+    });
+    if (!pageInfo) throw new Error('无法获取活跃页面信息');
+
+    const { pageId, rootPath } = pageInfo as { pageId: string; rootPath: string };
+
+    // 创建编辑器面板（带文件路径）
+    const panelId = 'e2e-title-editor-' + Date.now();
+    const testFilePath = 'C:\\e2e-title-test\\src\\main.ts';
+
+    await browser.execute(
+      (args: { pid: string; testPath: string }) => {
+        window.__dockviewApi!.addPanel({
+          id: args.pid,
+          component: 'editor',
+          title: 'main.ts',
+          params: { panelId: args.pid, filePath: args.testPath },
+        });
+      },
+      { pid: panelId, testPath: testFilePath },
+    );
+
+    // 验证标题显示为文件名
+    const title = await waitForPanelTitle(panelId, 'main.ts', 10000);
+    expect(title).toBe('main.ts');
+
+    // 注册文件编辑器并验证标题重算（单文件无冲突，保持 basename）
+    await browser.execute(
+      (args: { pageId: string; rootPath: string; pid: string; testPath: string }) => {
+        (window as any).__slterm_e2e_registerAndRecompute?.(
+          args.pageId,
+          args.rootPath,
+          args.pid,
+          args.testPath,
+        );
+      },
+      { pageId, rootPath, pid: panelId, testPath: testFilePath },
+    );
+
+    const recomputedTitle = await waitForPanelTitle(panelId, 'main.ts', 5000);
+    expect(recomputedTitle).toBe('main.ts');
+  });
+
+  it('同名文件冲突时显示相对路径', async () => {
+    // 等待就绪
+    await browser.waitUntil(
+      async () => await browser.execute(() => (window as any).__slterm_e2e_workspaceReady === true),
+      { timeout: 15000 },
+    );
+
+    const pageInfo = await browser.execute(() => {
+      return (window as any).__slterm_e2e_getActivePageInfo?.() ?? null;
+    });
+    if (!pageInfo) throw new Error('无法获取活跃页面信息');
+
+    const { pageId, rootPath } = pageInfo as { pageId: string; rootPath: string };
+
+    // 创建第一个编辑器（src/index.ts）
+    const pid1 = 'e2e-conflict-1-' + Date.now();
+    const path1 = 'C:\\e2e-title-test\\src\\index.ts';
+    await browser.execute(
+      (args: { pid: string; path: string; pageId: string; root: string }) => {
+        window.__dockviewApi!.addPanel({
+          id: args.pid, component: 'editor', title: 'index.ts',
+          params: { panelId: args.pid, filePath: args.path },
+        });
+        (window as any).__slterm_e2e_registerAndRecompute?.(
+          args.pageId, args.root, args.pid, args.path,
+        );
+      },
+      { pid: pid1, path: path1, pageId, root: rootPath },
+    );
+
+    // 创建第二个编辑器（lib/index.ts）—— 同名不同路径
+    const pid2 = 'e2e-conflict-2-' + Date.now();
+    const path2 = 'C:\\e2e-title-test\\lib\\index.ts';
+    await browser.execute(
+      (args: { pid: string; path: string; pageId: string; root: string }) => {
+        window.__dockviewApi!.addPanel({
+          id: args.pid, component: 'editor', title: 'lib/index.ts',
+          params: { panelId: args.pid, filePath: args.path },
+        });
+        (window as any).__slterm_e2e_registerAndRecompute?.(
+          args.pageId, args.root, args.pid, args.path,
+        );
+      },
+      { pid: pid2, path: path2, pageId, root: rootPath },
+    );
+
+    // 验证两个编辑器都显示为相对路径
+    const title1 = await waitForPanelTitle(pid1, 'src/index.ts', 10000);
+    const title2 = await waitForPanelTitle(pid2, 'lib/index.ts', 5000);
+    expect(title1).toBe('src/index.ts');
+    expect(title2).toBe('lib/index.ts');
+  });
+
+  it('关闭同名面板后剩余面板切回 basename', async () => {
+    // 等待就绪
+    await browser.waitUntil(
+      async () => await browser.execute(() => (window as any).__slterm_e2e_workspaceReady === true),
+      { timeout: 15000 },
+    );
+
+    const pageInfo = await browser.execute(() => {
+      return (window as any).__slterm_e2e_getActivePageInfo?.() ?? null;
+    });
+    if (!pageInfo) throw new Error('无法获取活跃页面信息');
+
+    const { pageId, rootPath } = pageInfo as { pageId: string; rootPath: string };
+
+    // 创建两个同名编辑器
+    const pid1 = 'e2e-reclose-1-' + Date.now();
+    const pid2 = 'e2e-reclose-2-' + Date.now();
+    const path1 = 'C:\\e2e-title-test\\a\\utils.ts';
+    const path2 = 'C:\\e2e-title-test\\b\\utils.ts';
+
+    await browser.execute(
+      (args: {
+        pid1: string; pid2: string; path1: string; path2: string;
+        pageId: string; root: string;
+      }) => {
+        const api = window.__dockviewApi!;
+        api.addPanel({
+          id: args.pid1, component: 'editor', title: 'a/utils.ts',
+          params: { panelId: args.pid1, filePath: args.path1 },
+        });
+        api.addPanel({
+          id: args.pid2, component: 'editor', title: 'b/utils.ts',
+          params: { panelId: args.pid2, filePath: args.path2 },
+        });
+        const reg = (window as any).__slterm_e2e_registerAndRecompute!;
+        reg(args.pageId, args.root, args.pid1, args.path1);
+        reg(args.pageId, args.root, args.pid2, args.path2);
+      },
+      { pid1, pid2, path1, path2, pageId, root: rootPath },
+    );
+
+    // 验证冲突状态
+    expect(await waitForPanelTitle(pid1, 'a/utils.ts', 5000)).toBe('a/utils.ts');
+    expect(await waitForPanelTitle(pid2, 'b/utils.ts', 5000)).toBe('b/utils.ts');
+
+    // 关闭第二个面板（pid2）
+    await browser.execute((pid: string) => {
+      const panel = window.__dockviewApi?.getPanel(pid);
+      panel?.api.close();
+    }, pid2);
+
+    // 验证 pid1 标题切回 basename（关闭冲突面板后自动重算）
+    const finalTitle = await waitForPanelTitle(pid1, 'utils.ts', 10000);
+    expect(finalTitle).toBe('utils.ts');
   });
 });

@@ -37,6 +37,8 @@ export interface UseCodeMirrorOptions {
   container: HTMLElement | null;
   /** 要打开的文件路径（可选，空则新建空白缓冲区） */
   filePath?: string;
+  /** 面板 ID（用于 save-as 事件通知） */
+  panelId?: string;
 }
 
 /** 根据文件扩展名返回对应的 CodeMirror 语言扩展 */
@@ -78,7 +80,7 @@ export function getLanguageExtension(filename?: string): Extension {
   }
 }
 
-export function useCodeMirror({ container, filePath }: UseCodeMirrorOptions) {
+export function useCodeMirror({ container, filePath, panelId }: UseCodeMirrorOptions) {
   const viewRef = useRef<EditorView | null>(null);
   const filePathRef = useRef<string | undefined>(filePath);
   const langCompartment = useRef(new Compartment());
@@ -93,7 +95,8 @@ export function useCodeMirror({ container, filePath }: UseCodeMirrorOptions) {
     const view = viewRef.current;
     if (!view) return;
 
-    let path = filePathRef.current;
+    const oldPath = filePathRef.current;
+    let path = oldPath;
     if (!path) {
       const selected = await save({
         defaultPath: "Untitled.txt",
@@ -136,9 +139,19 @@ export function useCodeMirror({ container, filePath }: UseCodeMirrorOptions) {
       // P2-15: gitDiff 失败时 console.warn，不再静默吞错
       .catch((err) => { console.warn("[slTerminal] git diff 刷新失败:", err); });
 
-    // 磁盘已写入完成，通知文件浏览器刷新 git 着色
-    window.dispatchEvent(new CustomEvent("slterm:file-saved", { detail: { path: normalizedPath } }));
-  }, []);
+    // 通知标题管理器：路径变更（空白编辑器首次保存 或 另存为到新路径）
+    if (oldPath !== path && panelId) {
+      const oldNormalized = oldPath ? oldPath.replace(/\\/g, "/") : null;
+      window.dispatchEvent(new CustomEvent("slterm:file-saved-as", {
+        detail: { panelId, oldPath: oldNormalized, newPath: normalizedPath },
+      }));
+    }
+
+    // 通知文件浏览器刷新 git 着色
+    window.dispatchEvent(new CustomEvent("slterm:file-saved", {
+      detail: { path: normalizedPath, panelId },
+    }));
+  }, [panelId]);
 
   useEffect(() => {
     if (!container) return;
