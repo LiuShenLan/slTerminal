@@ -473,14 +473,7 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
     } else if (visible === true) {
       // P2-43: 可见时若 WebGL 未加载且可用，延迟重建（非一次性失败）
       if (!webglAddonRef.current && detectWebgl()) {
-        const t1 = performance.now();
         setupWebglWithRetry(term, webglAddonRef);
-        // 性能追踪：WebGL addon 创建耗时
-        const trace = (window as { __perfTrace?: { t0: number; steps: Array<{ name: string; ts: number; delta?: number }> } }).__perfTrace;
-        if (trace) {
-          const now = performance.now();
-          trace.steps.push({ name: `useXterm:WebGL-setup:${panelId}`, ts: now, delta: Math.round(now - t1) });
-        }
       }
     }
   }, [visible]);

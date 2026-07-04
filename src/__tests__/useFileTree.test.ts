@@ -159,7 +159,7 @@ describe("useFileTree — F1 消除重复 IPC", () => {
   });
 
   it("F1-5: 重命名文件后 refresh 重新调用 readDir", async () => {
-    const { result, rerender } = renderHook(
+    const { result } = renderHook(
       ({ rootPath }) => useFileTree({ rootPath: rootPath as string | null }),
       { initialProps: { rootPath: "C:/project" as string | null } },
     );
@@ -177,7 +177,7 @@ describe("useFileTree — F1 消除重复 IPC", () => {
   });
 
   it("F1-6: 删除文件后 refresh 重新调用 readDir", async () => {
-    const { result, rerender } = renderHook(
+    const { result } = renderHook(
       ({ rootPath }) => useFileTree({ rootPath: rootPath as string | null }),
       { initialProps: { rootPath: "C:/project" as string | null } },
     );

@@ -12,15 +12,6 @@ import { readDir } from "../../ipc/fs";
 import { gitStatus } from "../../ipc/git";
 import type { DirEntry } from "../../types/fs";
 
-/** 性能追踪辅助 */
-function ftPerfMark(name: string) {
-  const trace = (window as { __perfTrace?: { t0: number; steps: Array<{ name: string; ts: number; delta?: number }> } }).__perfTrace;
-  if (trace) {
-    const now = performance.now();
-    trace.steps.push({ name, ts: now, delta: now - trace.t0 });
-  }
-}
-
 export interface TreeNode {
   entry: DirEntry;
   expanded: boolean;
@@ -47,9 +38,7 @@ export function useFileTree({ rootPath }: UseFileTreeOptions) {
   const loadDirectory = useCallback(
     async (dirPath: string): Promise<TreeNode[]> => {
       try {
-        const t1 = performance.now();
         const entries = await readDir(dirPath);
-        ftPerfMark(`readDir:${dirPath} | delta=${Math.round(performance.now() - t1)}ms | entries=${entries.length}`);
         return entries.map((entry) => ({
           entry,
           expanded: false,
@@ -139,7 +128,6 @@ export function useFileTree({ rootPath }: UseFileTreeOptions) {
   const refreshExpanded = useCallback(async () => {
     const rp = rootPathRef.current;
     if (!rp) return;
-    ftPerfMark("refreshExpanded:start");
 
     setRootNodes((prev) => {
       const needsRefresh = (nodes: TreeNode[]): boolean => {
@@ -151,17 +139,13 @@ export function useFileTree({ rootPath }: UseFileTreeOptions) {
       if (!needsRefresh(prev)) return prev;
       return prev;
     });
-    ftPerfMark("refreshExpanded:needsRefresh-done");
 
     // 重新加载根目录
     await loadRoot();
-    ftPerfMark("refreshExpanded:loadRoot-done");
 
     // 刷新 git 状态
     try {
-      const t1 = performance.now();
       const statuses = await gitStatus(rp);
-      ftPerfMark(`gitStatus | delta=${Math.round(performance.now() - t1)}ms | entries=${statuses.length}`);
       const map = new Map<string, string>();
       for (const s of statuses) {
         map.set(s.path, s.status);
@@ -170,7 +154,6 @@ export function useFileTree({ rootPath }: UseFileTreeOptions) {
     } catch {
       setGitStatusMap(new Map());
     }
-    ftPerfMark("refreshExpanded:done");
   }, [loadRoot]);
 
   /** 全量刷新（need_rescan 触发） */
@@ -194,24 +177,17 @@ export function useFileTree({ rootPath }: UseFileTreeOptions) {
   // 根路径变更时重新加载
   useEffect(() => {
     const gen = ++genRef.current;
-    ftPerfMark(`useFileTree:load-effect:rootPath=${rootPath || "null"} | gen=${gen}`);
     loadRoot(gen);
     // 同时加载 git 状态
     if (rootPath) {
-      const t1 = performance.now();
       gitStatus(rootPath)
         .then((statuses) => {
           if (gen !== genRef.current) return; // 丢弃旧请求（rootPath 已变化）
-          ftPerfMark(`useFileTree:gitStatus-effect | delta=${Math.round(performance.now() - t1)}ms | entries=${statuses.length}`);
           const map = new Map<string, string>();
           for (const s of statuses) {
             map.set(s.path, s.status);
           }
           setGitStatusMap(map);
-          // 用 rAF 测量 setState 触发渲染后的 paint
-          requestAnimationFrame(() => {
-            ftPerfMark("useFileTree:gitStatus-paint-done");
-          });
         })
         .catch(() => {
           if (gen !== genRef.current) return; // 丢弃旧请求的错误处理

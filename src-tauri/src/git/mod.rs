@@ -7,7 +7,6 @@ use crate::error::AppError;
 use crate::state::AppState;
 use serde::Serialize;
 use std::path::PathBuf;
-use std::time::Instant;
 use tauri::State;
 
 /// 文件 git 状态条目
@@ -124,7 +123,6 @@ pub async fn git_status(
     let (repo, workdir) = get_or_open_repo(&state.git_repo_cache, &repo_path)?;
 
     match tokio::task::spawn_blocking(move || {
-        let start = Instant::now();
         let mut opts = git2::StatusOptions::new();
         opts.include_untracked(true)
             .include_ignored(true)
@@ -161,12 +159,6 @@ pub async fn git_status(
                 status: status_str.to_string(),
             });
         }
-
-        eprintln!(
-            "[PERF-RUST] git_status | path={repo_path} | entries={} | elapsed={:?}",
-            entries.len(),
-            start.elapsed()
-        );
 
         Ok(entries)
     })

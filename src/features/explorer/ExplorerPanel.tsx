@@ -16,15 +16,6 @@ import { titleManager } from "../../workspace/titleManager";
 import { EXPLORER_COLORS, SEPARATOR_BG, INPUT_BORDER, ERROR_BANNER_BG, ERROR_BANNER_BORDER, ERROR_BANNER_FG } from "../../theme";
 import { PANEL_TERMINAL, PANEL_EDITOR } from "../../workspace/panelRegistry";
 
-/** 性能追踪辅助 */
-function explorerPerfMark(name: string) {
-  const trace = (window as { __perfTrace?: { t0: number; steps: Array<{ name: string; ts: number; delta?: number }> } }).__perfTrace;
-  if (trace) {
-    const now = performance.now();
-    trace.steps.push({ name, ts: now, delta: now - trace.t0 });
-  }
-}
-
 export const ExplorerPanel: React.FC = () => {
   const projects = useProjects((s) => s.projects);
   const activePageId = useLayout((s) => s.activePageId);
@@ -44,8 +35,6 @@ export const ExplorerPanel: React.FC = () => {
       }
     }
   }
-
-  explorerPerfMark(`ExplorerPanel-render:rootPath=${rootPath || "null"}`);
 
   const { rootNodes, gitStatusMap, toggleExpand, refresh } = useFileTree({ rootPath });
 
