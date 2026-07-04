@@ -305,9 +305,9 @@ describe("ExplorerPanel 删除集成", () => {
     });
 
     // refresh 会再次调用 readDir
-    // 初始化时两个 useEffect 各调用一次（useFileTree.loadRoot + ExplorerPanel.refresh），删除后 refresh 再调一次 = 3
+    // 初始化时 useFileTree.loadRoot 调用一次，删除后 refresh 再调一次 = 2
     await waitFor(() => {
-      expect(mocks.mockReadDir).toHaveBeenCalledTimes(3);
+      expect(mocks.mockReadDir).toHaveBeenCalledTimes(2);
     });
   });
 

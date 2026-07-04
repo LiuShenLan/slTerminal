@@ -31,6 +31,13 @@ import { useLayout } from "../stores/layout";
 import { ErrorBoundary } from "../lib";
 import { INPUT_BORDER, SECONDARY_BG, BUTTON_FG, PLACEHOLDER_FG, SEPARATOR_BG } from "../theme";
 
+/** 性能追踪条目 */
+interface PerfStep {
+  name: string;
+  ts: number;
+  delta?: number;
+}
+
 declare global {
   interface Window {
     __dockviewApi?: DockviewApi;
@@ -43,7 +50,47 @@ declare global {
       filePath?: string,
     ) => void;
     __slterm_e2e_getActivePageInfo?: () => { pageId: string; rootPath: string } | null;
+    // 性能追踪
+    __perfTrace?: { t0: number; steps: PerfStep[] };
   }
+}
+
+/** 推送性能标记（仅开发调试用，生产路径无开销——条件检查 window.__perfTrace） */
+function perfMark(name: string) {
+  if (typeof window === "undefined") return;
+  const t = window.__perfTrace;
+  if (!t) return;
+  const now = performance.now();
+  t.steps.push({ name, ts: now, delta: now - t.t0 });
+}
+
+/** 导出性能追踪到控制台 */
+function dumpPerfTrace() {
+  if (typeof window === "undefined") return;
+  const t = window.__perfTrace;
+  if (!t) return;
+  // 3 秒后导出（等待异步操作完成）
+  setTimeout(() => {
+    if (!window.__perfTrace) return;
+    const steps = window.__perfTrace.steps;
+    console.log(
+      "%c[PERF] 页面切换时间线 %c(total=%c%dms%c)",
+      "font-weight:bold;color:#f0c040",
+      "",
+      "color:#4fc3f7",
+      Math.round((steps[steps.length - 1]?.ts ?? 0) - (steps[0]?.ts ?? 0)),
+      "",
+    );
+    console.table(
+      steps.map((s, i) => ({
+        "#": i,
+        "操作": s.name,
+        "累计ms": Math.round(s.ts - steps[0].ts),
+        "间隔ms": i > 0 ? Math.round(s.ts - steps[i - 1].ts) : 0,
+      })),
+    );
+    delete window.__perfTrace;
+  }, 3000);
 }
 
 const WATERMARK_TEXT = "打开终端或编辑器开始工作";
@@ -272,8 +319,11 @@ const PageDockview: React.FC<PageDockviewProps> = ({
     // 布局变更 → 保存到 store（硬约束 #7）
     api.onDidLayoutChange(() => {
       if (restoreGuardRef.current) return;
+      const t1 = performance.now();
       const layout = saveLayout(api);
+      perfMark(`onDidLayoutChange:saveLayout(${pageId})`);
       onLayoutChange(layout as Record<string, unknown>);
+      perfMark(`onDidLayoutChange:done(${pageId}) | delta=${Math.round(performance.now() - t1)}ms`);
     });
 
     // 面板关闭 → 注销编辑器 + 重算剩余面板标题
@@ -314,6 +364,7 @@ const PageDockview: React.FC<PageDockviewProps> = ({
   return (
     <div style={{ display: visible ? "block" : "none",
       width: "100%", height: "100%" }}>
+      {visible && (perfMark(`PageDockview-show:${pageId}`), null)}
       <DockviewReact
         className="dockview-theme-dark"
         components={panelRegistry}
@@ -376,6 +427,9 @@ const Workspace: React.FC = () => {
   const activePageId = useLayout((s) => s.activePageId);
   const projects = useProjects((s) => s.projects);
 
+  // 性能追踪：Workspace 进入渲染
+  perfMark(`Workspace-render:active=${activePageId}`);
+
   /** 收集所有操作页面（扁平化列表） */
   const allPages = useMemo(() => {
     const pages: {
@@ -406,12 +460,22 @@ const Workspace: React.FC = () => {
     const layoutStore = useLayout.getState();
     if (layoutStore.activePageId === pageId) return;
 
+    // 初始化性能追踪
+    window.__perfTrace = { t0: performance.now(), steps: [] };
+    perfMark(`switchToPage:${pageId}`);
+
     ensurePageInitialized(pageId);
+    perfMark("ensurePageInitialized-done");
     layoutStore.setActivePage(pageId);
+    perfMark("setActivePage-done");
 
     // 更新 E2E 全局 API 指向活跃页面
     const api = pageApiMapRef.current.get(pageId);
     if (api) window.__dockviewApi = api;
+    perfMark("switchToPage-end");
+
+    // 3 秒后导出性能追踪
+    dumpPerfTrace();
   }, [ensurePageInitialized]);
 
   /** 删除操作页面 */
@@ -463,10 +527,12 @@ const Workspace: React.FC = () => {
   /** PageDockview 布局变更: 写入 store */
   const handlePageLayoutChange = useCallback(
     (pageId: string, layout: Record<string, unknown>) => {
+      const t1 = performance.now();
       const { projects: projs } = useProjects.getState();
       for (const [projId, proj] of Object.entries(projs)) {
         if (proj.pages.some((p) => p.pageId === pageId)) {
           useProjects.getState().updatePageLayout(projId, pageId, layout);
+          perfMark(`updatePageLayout(${pageId}) | delta=${Math.round(performance.now() - t1)}ms`);
           break;
         }
       }

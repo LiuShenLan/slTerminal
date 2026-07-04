@@ -5,6 +5,7 @@ use crate::error::AppError;
 use crate::state::AppState;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 use tauri::State;
 
 /// 目录条目
@@ -179,6 +180,7 @@ pub async fn fs_write_file(
 #[tauri::command]
 pub async fn fs_read_dir(path: String) -> Result<Vec<DirEntry>, AppError> {
     match tokio::task::spawn_blocking(move || {
+        let start = Instant::now();
         let mut entries: Vec<DirEntry> = Vec::new();
         let dir = std::fs::read_dir(&path)?;
 
@@ -216,12 +218,18 @@ pub async fn fs_read_dir(path: String) -> Result<Vec<DirEntry>, AppError> {
             });
         }
 
+        let count = entries.len();
         // 按文件夹→文件排序，同类型按名称字母排序
         entries.sort_by(|a, b| {
             b.is_dir
                 .cmp(&a.is_dir)
                 .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
         });
+
+        eprintln!(
+            "[PERF-RUST] fs_read_dir | path={path} | entries={count} | elapsed={:?}",
+            start.elapsed()
+        );
 
         Ok(entries)
     })

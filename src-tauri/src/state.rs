@@ -5,7 +5,7 @@ use std::thread::JoinHandle;
 use tauri::ipc::Channel;
 
 use crate::error::AppError;
-use crate::notify::FileWatcher;
+use crate::notify::pool::LruWatcherPool;
 use crate::pty::spawn::PtyEvent;
 
 /// PTY 会话 — 持有 master（读写/缩放）、子进程、writer 和 reader 线程句柄
@@ -58,8 +58,8 @@ impl PtyState {
 /// 应用全局状态，各模块通过 AppState 共享资源
 pub struct AppState {
     pub pty: PtyState,
-    /// 文件系统监听器（由前端 fs_watch 命令按需创建/替换）
-    pub file_watcher: Mutex<Option<FileWatcher>>,
+    /// 文件系统监听器池（按项目根路径缓存，最多 5 个，LRU 淘汰）
+    pub file_watchers: Mutex<LruWatcherPool>,
     /// 当前项目根路径（由前端打开项目时设置，用于路径 sandbox 校验）
     pub project_root: RwLock<Option<PathBuf>>,
     /// git 仓库缓存：workdir → Repository（目录切换时清除）
@@ -76,7 +76,7 @@ impl AppState {
     pub fn new() -> Self {
         Self {
             pty: PtyState::new(),
-            file_watcher: Mutex::new(None),
+            file_watchers: Mutex::new(LruWatcherPool::new(5)),
             project_root: RwLock::new(None),
             git_repo_cache: Mutex::new(HashMap::new()),
         }
@@ -128,8 +128,8 @@ mod tests {
             "AppState::new() 应成功创建并持有空的 PtyState"
         );
         assert!(
-            state.file_watcher.lock().unwrap().is_none(),
-            "AppState::new() 初始时 file_watcher 应为 None"
+            state.file_watchers.lock().unwrap().is_empty(),
+            "AppState::new() 初始时 file_watchers 池应为空"
         );
         assert!(
             state.project_root.read().unwrap().is_none(),

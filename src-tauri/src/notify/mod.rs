@@ -8,6 +8,7 @@
 //! 技术栈：notify = "9.0.0-rc.4" + notify-debouncer-full = "0.8.0-rc.2"
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -44,7 +45,12 @@ pub struct FileWatcher {
     /// 当前监听的根路径（被 watcher 线程的 Arc clone 持有，struct 字段仅用于生命周期绑定）
     #[allow(dead_code)]
     watch_paths: Arc<Mutex<Vec<PathBuf>>>,
+    /// 暂停标记：true 时 watcher 线程收到事件不上报前端
+    paused: Arc<AtomicBool>,
 }
+
+// 池模块（定义在 pool.rs，此处引用）
+pub mod pool;
 
 impl FileWatcher {
     /// 启动文件系统监听器
@@ -75,12 +81,14 @@ impl FileWatcher {
         }
 
         let watch_paths_arc = Arc::new(Mutex::new(watch_paths));
+        let paused = Arc::new(AtomicBool::new(false));
 
         let thread_handle = std::thread::Builder::new()
             .name("fs-watcher".into())
             .spawn({
                 let app_handle = app_handle.clone();
                 let wps = watch_paths_arc.clone();
+                let paused_clone = paused.clone();
 
                 move || {
                     // debouncer 存活于本线程，退出时自动 Drop
@@ -89,6 +97,10 @@ impl FileWatcher {
                     loop {
                         match event_rx.recv_timeout(Duration::from_millis(100)) {
                             Ok(Ok(events)) => {
+                                // 暂停状态：跳过事件上报（watcher 仍运行，OS 句柄保留）
+                                if paused_clone.load(Ordering::Relaxed) {
+                                    continue;
+                                }
                                 for event in &events {
                                     // need_rescan — 通知前端全量刷新
                                     if event.need_rescan() {
@@ -144,6 +156,7 @@ impl FileWatcher {
             stop_tx: Some(stop_tx),
             thread_handle: Some(thread_handle),
             watch_paths: watch_paths_arc,
+            paused,
         })
     }
 
@@ -158,6 +171,21 @@ impl FileWatcher {
         tracing::info!("文件系统监听器已完全停止");
     }
 
+    /// 暂停事件上报（watcher 线程继续运行，保留 OS 句柄）
+    pub fn pause(&self) {
+        self.paused.store(true, Ordering::Relaxed);
+    }
+
+    /// 恢复事件上报
+    pub fn resume(&self) {
+        self.paused.store(false, Ordering::Relaxed);
+    }
+
+    /// 查询是否处于暂停状态
+    pub fn is_paused(&self) -> bool {
+        self.paused.load(Ordering::Relaxed)
+    }
+
     /// 检查监听线程是否仍在运行
     #[cfg(test)]
     pub fn is_running(&self) -> bool {
@@ -169,24 +197,31 @@ impl FileWatcher {
 
 impl Drop for FileWatcher {
     fn drop(&mut self) {
-        // 确保线程退出
+        // 发送停止信号并等待线程退出（确保 OS 句柄释放）
         if let Some(tx) = self.stop_tx.take() {
             let _ = tx.send(());
+        }
+        if let Some(handle) = self.thread_handle.take() {
+            let _ = handle.join();
         }
     }
 }
 
-/// 启动/切换文件系统监听
+/// 启动/切换文件系统监听（watcher 池模式）
 ///
-/// 前端在项目打开时调用此命令，传入项目根路径。
-/// 若已有 watcher 在运行则先停止旧的，再为新路径启动。
+/// 前端在项目切换时调用。内部维护最多 5 个 watcher 的 LRU 缓存池：
+/// - 命中缓存：pause 其他 watcher，resume 目标，不重建
+/// - 未命中：暂停现有 watcher，新建并插入池（超限时淘汰 LRU）
+///
+/// 此模式避免每次切换都 `stop()` + `start()`（Windows 上 `ReadDirectoryChangesW`
+/// 递归注册 26K 文件的 target/ 目录需约 2 秒）。
 #[tauri::command]
 pub fn fs_watch(
     path: String,
     state: tauri::State<'_, AppState>,
     app_handle: AppHandle,
 ) -> Result<(), AppError> {
-    let watch_path = PathBuf::from(&path);
+    let watch_path = dunce::simplified(std::path::Path::new(&path)).to_path_buf();
     if !watch_path.exists() {
         return Err(AppError::Notify(format!("路径不存在: {path}")));
     }
@@ -200,33 +235,25 @@ pub fn fs_watch(
         crate::fs::validate_path_within_root(&root, &watch_path)?;
     }
 
-    // P1-14: 先提取旧 watcher（持有锁），释放锁后 stop，再重新获取锁写入新 watcher。
-    // 避免 stop() 阻塞期间持有锁导致后续命令级联卡死。
-    let old_watcher = {
-        let mut watcher_guard = state
-            .file_watcher
-            .lock()
-            .map_err(|e| AppError::Notify(format!("获取 file_watcher 锁失败: {e}")))?;
-        watcher_guard.take()
-    };
-    // 锁已释放
+    let mut pool = state
+        .file_watchers
+        .lock()
+        .map_err(|e| AppError::Notify(format!("获取 file_watchers 锁失败: {e}")))?;
 
-    // 在锁外 stop 旧 watcher
-    if let Some(mut old) = old_watcher {
-        old.stop();
+    // 暂停其他 watcher，恢复/激活目标
+    pool.pause_all_except(&watch_path);
+
+    // 命中缓存：直接返回
+    if pool.get(&watch_path).is_some() {
+        tracing::info!("文件监听已恢复（缓存命中）: {path}");
+        return Ok(());
     }
 
-    let watcher = FileWatcher::start(app_handle, vec![watch_path], 300)
+    // 未命中：创建新 watcher 并插入池（超限时自动淘汰 LRU）
+    let watcher = FileWatcher::start(app_handle, vec![watch_path.clone()], 300)
         .map_err(|e| AppError::Notify(format!("启动文件监听失败: {e}")))?;
 
-    // 重新获取锁写入新 watcher
-    {
-        let mut watcher_guard = state
-            .file_watcher
-            .lock()
-            .map_err(|e| AppError::Notify(format!("获取 file_watcher 锁失败: {e}")))?;
-        *watcher_guard = Some(watcher);
-    }
+    pool.insert(watch_path, watcher);
     tracing::info!("文件监听已启动: {path}");
     Ok(())
 }
@@ -326,6 +353,7 @@ mod tests {
             stop_tx: Some(stop_tx),
             thread_handle: Some(handle),
             watch_paths: Arc::new(Mutex::new(vec![])),
+            paused: Arc::new(AtomicBool::new(false)),
         };
 
         watcher.stop();
@@ -363,6 +391,7 @@ mod tests {
             stop_tx: Some(_stop_tx),
             thread_handle: Some(handle),
             watch_paths: Arc::new(Mutex::new(vec![])),
+            paused: Arc::new(AtomicBool::new(false)),
         };
 
         drop(watcher);
@@ -393,6 +422,7 @@ mod tests {
             stop_tx: Some(stop_tx),
             thread_handle: Some(handle),
             watch_paths: Arc::new(Mutex::new(vec![])),
+            paused: Arc::new(AtomicBool::new(false)),
         };
 
         assert!(watcher.is_running());
@@ -419,6 +449,7 @@ mod tests {
             stop_tx: Some(old_stop_tx),
             thread_handle: Some(old_handle),
             watch_paths: Arc::new(Mutex::new(vec![])),
+            paused: Arc::new(AtomicBool::new(false)),
         };
         assert!(old_watcher.is_running(), "旧 watcher 应运行中");
 
@@ -442,6 +473,7 @@ mod tests {
             stop_tx: Some(new_stop_tx),
             thread_handle: Some(new_handle),
             watch_paths: Arc::new(Mutex::new(vec![])),
+            paused: Arc::new(AtomicBool::new(false)),
         };
         assert!(new_watcher.is_running(), "新 watcher 应运行中");
     }
@@ -464,6 +496,7 @@ mod tests {
             stop_tx: Some(stop_tx),
             thread_handle: Some(handle),
             watch_paths: Arc::new(Mutex::new(vec![])),
+            paused: Arc::new(AtomicBool::new(false)),
         };
 
         watcher.stop();
