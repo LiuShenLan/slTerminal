@@ -13,6 +13,7 @@ import { writeText } from "./ipc/clipboard";
 import { pty } from "./ipc";
 import { TerminalRegistry } from "./panels/terminal/TerminalRegistry";
 import { ErrorBoundary } from "./lib";
+import { getShortcutRegistry, createGlobalShortcuts } from "./features/shortcuts";
 import { PANEL_BG, INPUT_BORDER, APP_BG } from "./theme";
 import "dockview-react/dist/styles/dockview.css";
 
@@ -150,6 +151,13 @@ function App() {
       }
     });
     return unlisten;
+  }, []);
+
+  // 注册全局快捷键（Ctrl+W 关闭活跃页签）
+  useEffect(() => {
+    const registry = getShortcutRegistry();
+    const commands = createGlobalShortcuts(() => window.__dockviewApi);
+    return registry.register(commands);
   }, []);
 
   if (!ready) {

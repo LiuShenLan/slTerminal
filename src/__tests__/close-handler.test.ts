@@ -125,6 +125,19 @@ vi.mock("../stores/projects", () => ({
 
 vi.mock("dockview-react/dist/styles/dockview.css", () => ({}));
 
+// 阻止真实 ShortcutRegistry 在 close-handler 测试中安装全局 keydown 监听器
+vi.mock("../features/shortcuts", () => ({
+  getShortcutRegistry: () => ({
+    register: vi.fn(() => vi.fn()), // 返回空注销函数
+    unregister: vi.fn(),
+    pushContext: vi.fn(),
+    popContext: vi.fn(),
+    _reset: vi.fn(),
+  }),
+  createGlobalShortcuts: vi.fn(() => []),
+  useShortcutContext: vi.fn(),
+}));
+
 // ─── 导入被测模块（在 mocks 之后） ───
 import App from "../App";
 

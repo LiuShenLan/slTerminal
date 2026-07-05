@@ -7,7 +7,7 @@
 // - 输出原子渲染（rAF 合帧）
 // - StrictMode 防御（useRef guard clause）
 
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useMemo } from "react";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { FitAddon } from "@xterm/addon-fit";
@@ -15,7 +15,8 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { terminalOptions } from "./theme";
 import { pty } from "../../ipc";
 import type { PtyEvent } from "../../types";
-import { setActiveTerminal, clearActiveTerminalIfMine, installKeyboardHandler, uninstallKeyboardHandler } from "./keyboard";
+import { createTerminalShortcuts } from "./keyboard";
+import { useShortcutContext } from "../../features/shortcuts";
 import { TerminalRegistry } from "./TerminalRegistry";
 
 export interface UseXtermOptions {
@@ -142,6 +143,14 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
   const doSpawnRef = useRef<((cols: number, rows: number) => void) | null>(null);
   const setupRetryRef = useRef<((cols: number, rows: number) => void) | null>(null);
 
+  // 终端快捷键命令（通过 ref 获取 terminal，避免闭包捕获已销毁实例）
+  const terminalShortcutCommands = useMemo(
+    () => createTerminalShortcuts(() => terminalRef.current),
+    [],
+  );
+  // 注册快捷键 + 管理焦点上下文（focusin→pushContext, focusout→popContext）
+  useShortcutContext("terminal", terminalShortcutCommands, container);
+
   /** 将缓冲数据合并写入终端 */
   const flushBuffer = useCallback(() => {
     rafIdRef.current = null;
@@ -226,20 +235,6 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
 
     // 挂载到 DOM
     term.open(container);
-
-    // 注册焦点事件（Ctrl+Shift+C/V 复制粘贴）— 焦点驱动
-    // xterm.js v6 无 public onFocus/onBlur 事件，用 DOM focusin/focusout 跟踪焦点终端
-    // 注：全局键盘处理器 installKeyboardHandler 由独立 useEffect 管理（不受 StrictMode 守卫影响）
-
-    const onTerminalFocusIn = () => setActiveTerminal(term);
-    const onTerminalFocusOut = (e: FocusEvent) => {
-      // 仅当焦点离开终端 DOM 子树的才算 blur（内部焦点转移不触发）
-      if (!e.relatedTarget || !term.element?.contains(e.relatedTarget as Node)) {
-        clearActiveTerminalIfMine(term);
-      }
-    };
-    term.element?.addEventListener("focusin", onTerminalFocusIn);
-    term.element?.addEventListener("focusout", onTerminalFocusOut);
 
     // 字体预加载后刷新布局（包裹 rAF 确保布局稳定）
     document.fonts.ready.then(() => {
@@ -417,10 +412,6 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
         pty.kill(sid).catch(() => {}); // cleanup 中静默吞错，进程可能已退出
       }
       TerminalRegistry.remove(panelId);
-      // 移除焦点事件监听（在 dispose 前，避免 DOM 移除触发 focusout handler）
-      term.element?.removeEventListener("focusin", onTerminalFocusIn);
-      term.element?.removeEventListener("focusout", onTerminalFocusOut);
-      clearActiveTerminalIfMine(term);
       // P1-01/02: 清理重试 Enter 监听
       retryDisposableRef.current?.dispose();
       retryDisposableRef.current = null;
@@ -435,16 +426,6 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
       e2eTextBufferRef.current.length = 0;
     };
   }, [container, panelId, cols, rows, flushBuffer, handlePtyOutput]);
-
-  // 键盘处理器生命周期：独立 useEffect，不受 StrictMode 守卫影响
-  // 引用计数确保多终端场景下只安装一次，最后一个终端卸载时才移除 listener
-  useEffect(() => {
-    if (!container) return;
-    installKeyboardHandler();
-    return () => {
-      uninstallKeyboardHandler();
-    };
-  }, [container]);
 
   // F3 Bug 1 修复: 独立 useEffect 监听 windowsBuildNumber 异步更新
   // 主 useEffect 的 StrictMode 守卫不拦截此 effect，确保 Terminal 创建后 windowsPty 生效

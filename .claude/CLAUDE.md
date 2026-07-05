@@ -90,6 +90,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | src/workspace | 工作区布局管理（Dockview serde + 面板注册 + titleManager） | src/workspace/Workspace.tsx | @../src/workspace/CLAUDE.md |
 | src/lib | 通用工具（路径函数 `basename`/`isChildOf`/`relativePath`） | src/lib/index.ts | @../src/lib/CLAUDE.md |
 | src/features/explorer | 文件浏览器（FileTree + useFileTree gen 取消） | src/features/explorer/ExplorerPanel.tsx | @../src/features/explorer/CLAUDE.md |
+| src/features/shortcuts | 快捷键模块（ShortcutRegistry 单例 + useShortcutContext hook） | src/features/shortcuts/index.ts | @../src/features/shortcuts/CLAUDE.md |
 | src-tauri/src/pty | PTY 管理，Windows ConPTY 核心 | src-tauri/src/pty/mod.rs | @../src-tauri/src/pty/CLAUDE.md |
 | src-tauri/src/notify | 文件系统监听（LruWatcherPool 缓存 + pause/resume 切换） | src-tauri/src/notify/mod.rs | @../src-tauri/src/notify/CLAUDE.md |
 | e2e-tests | WDIO E2E 端到端测试 | e2e-tests/wdio.conf.ts | @../e2e-tests/CLAUDE.md |
