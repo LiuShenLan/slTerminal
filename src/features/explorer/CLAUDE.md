@@ -37,3 +37,50 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - 所有文件操作经 `src/ipc/` 层调用，禁止组件内直接 `invoke`
 - `onFsEvent` 通过 Tauri `listen()` 全局订阅，`useFileTree` 内 200ms debounce
+
+## 测试模式
+
+测试文件位于 `src/__tests__/`，命名规则 `explorer-*.test.tsx`。
+
+### 技术栈
+
+- Vitest（jsdom 环境）+ React Testing Library（`render` / `fireEvent` / `waitFor`）
+- 不使用 Playwright / Cypress / 真实浏览器
+- 使用 `React.createElement(Component, props)` 而非 JSX
+
+### Mock 模式
+
+**`vi.hoisted()` 必须**：所有 mock 状态在 `vi.hoisted()` 中创建，确保在模块级 `vi.mock()` 执行前就绪。
+
+**三个 IPC 模块必须 mock**：
+- `../ipc/fs` — `readDir`, `writeFile`, `createDir`, `deleteEntry`, `rename`
+- `../ipc/git` — `gitStatus`
+- `../ipc/notify` — `startWatch`, `onFsEvent`
+
+**UI 弹窗 mock**（删除确认等）：
+- `@tauri-apps/plugin-dialog` — `ask`
+
+**Zustand stores** 使用真实实现（不 mock），通过 `.setState()` 种子数据，`beforeEach` 中重置。
+
+### 组件渲染
+
+**FileTree 独立渲染**：
+```ts
+function renderFileTree(nodes: TreeNode[], overrides = {}) {
+  const props = { nodes, depth: 0, gitStatusMap: new Map(), ...overrides };
+  return render(React.createElement(FileTree, props));
+}
+```
+
+**ExplorerPanel 集成渲染**：需先种子 `useProjects` + `useLayout` + `window.__dockviewApi`。
+
+### 右键菜单测试
+
+- 触发：`fireEvent.contextMenu(element)` 找目标元素
+- 菜单项定位：`getAllByText("标签名")`，注意 StrictMode 双渲染导致重复元素
+- 点击菜单项：`fireEvent.click(items[0])`
+- 内联输入框定位：`document.querySelectorAll('input')` 取最后一个（无 role/label）
+
+### 异步断言
+
+CRUD 操作涉及 IPC mock（Promise），使用 `await waitFor(() => { expect(...) })` 等待 mock 调用完成。

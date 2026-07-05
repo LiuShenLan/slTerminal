@@ -281,31 +281,19 @@ export const ExplorerPanel: React.FC = () => {
         }}
       >
         {rootPath ? (
-          rootNodes.length === 0 ? (
-            <div
-              style={{
-                padding: 16,
-                color: INPUT_BORDER,
-                fontSize: 12,
-                textAlign: "center",
-              }}
-            >
-              空目录
-            </div>
-          ) : (
-            <FileTree
-              nodes={rootNodes}
-              depth={0}
-              gitStatusMap={gitStatusMap}
-              onToggleExpand={toggleExpand}
-              onOpenFile={handleOpenFile}
-              onOpenInTerminal={handleOpenInTerminal}
-              onRename={handleRename}
-              onDelete={handleDelete}
-              onNewFile={handleNewFile}
-              onNewFolder={handleNewFolder}
-            />
-          )
+          <FileTree
+            rootPath={rootPath}
+            nodes={rootNodes}
+            depth={0}
+            gitStatusMap={gitStatusMap}
+            onToggleExpand={toggleExpand}
+            onOpenFile={handleOpenFile}
+            onOpenInTerminal={handleOpenInTerminal}
+            onRename={handleRename}
+            onDelete={handleDelete}
+            onNewFile={handleNewFile}
+            onNewFolder={handleNewFolder}
+          />
         ) : (
           <div
             style={{

@@ -16,6 +16,7 @@ import {
   SIDEBAR_FG,
   ACTIVE_SELECTION_BG,
   INPUT_BG,
+  INPUT_BORDER,
   FOCUS_BORDER,
   CONTEXT_MENU_BORDER,
 } from "../../theme";
@@ -111,6 +112,7 @@ interface FileTreeProps {
   onDelete: (path: string) => void;
   onNewFile: (parentPath: string) => void;
   onNewFolder: (parentPath: string) => void;
+  rootPath?: string; // 项目根路径，用于根级空白区域右键创建文件/文件夹
 }
 
 // ---- 单行节点 ----
@@ -218,6 +220,7 @@ export const FileTree: React.FC<FileTreeProps> = ({
   onDelete,
   onNewFile,
   onNewFolder,
+  rootPath,
 }) => {
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
     visible: false,
@@ -357,7 +360,112 @@ export const FileTree: React.FC<FileTreeProps> = ({
     [onNewFolder],
   );
 
-  return (
+  /** 构建根级空白区域右键菜单（depth === 0 且 rootPath 存在时） */
+  const rootContextMenu = useCallback(
+    (e: React.MouseEvent) => {
+      if (!rootPath) return;
+      e.preventDefault();
+      setContextMenu({
+        visible: true,
+        x: e.clientX,
+        y: e.clientY,
+        items: [
+          {
+            label: "新建文件",
+            action: () => setNewFileName(rootPath),
+          },
+          {
+            label: "新建文件夹",
+            action: () => setNewFolderName(rootPath),
+          },
+        ],
+      });
+    },
+    [rootPath],
+  );
+
+  // 根级内联输入框渲染（复用已有样式，depth+1=1 缩进）
+  const renderRootInlineInput = () => (
+    <>
+      {rootPath && newFileName === rootPath && (
+        <div
+          style={{
+            display: "flex",
+            paddingLeft: 8 + (depth + 1) * 16 + 12 + 4 + 14,
+            paddingRight: 8,
+            height: 24,
+            alignItems: "center",
+          }}
+        >
+          <input
+            placeholder="文件名"
+            onBlur={(e) => confirmNewFile(rootPath, e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter")
+                confirmNewFile(
+                  rootPath,
+                  (e.target as HTMLInputElement).value,
+                );
+              if (e.key === "Escape") setNewFileName(null);
+            }}
+            autoFocus
+            style={{
+              flex: 1,
+              background: INPUT_BG,
+              border: `1px solid ${FOCUS_BORDER}`,
+              color: SIDEBAR_FG,
+              fontSize: 13,
+              padding: "0 4px",
+              outline: "none",
+              borderRadius: 2,
+              minWidth: 0,
+            }}
+          />
+        </div>
+      )}
+      {rootPath && newFolderName === rootPath && (
+        <div
+          style={{
+            display: "flex",
+            paddingLeft: 8 + (depth + 1) * 16 + 12 + 4 + 14,
+            paddingRight: 8,
+            height: 24,
+            alignItems: "center",
+          }}
+        >
+          <input
+            placeholder="文件夹名"
+            onBlur={(e) =>
+              confirmNewFolder(rootPath, e.target.value)
+            }
+            onKeyDown={(e) => {
+              if (e.key === "Enter")
+                confirmNewFolder(
+                  rootPath,
+                  (e.target as HTMLInputElement).value,
+                );
+              if (e.key === "Escape") setNewFolderName(null);
+            }}
+            autoFocus
+            style={{
+              flex: 1,
+              background: INPUT_BG,
+              border: `1px solid ${FOCUS_BORDER}`,
+              color: SIDEBAR_FG,
+              fontSize: 13,
+              padding: "0 4px",
+              outline: "none",
+              borderRadius: 2,
+              minWidth: 0,
+            }}
+          />
+        </div>
+      )}
+    </>
+  );
+
+  // 公共树节点渲染（depth > 0 直接返回，depth === 0 套 wrapper）
+  const treeContent = (
     <>
       {nodes.map((node) => (
         <React.Fragment key={node.entry.path}>
@@ -513,4 +621,31 @@ export const FileTree: React.FC<FileTreeProps> = ({
       <ContextMenu state={contextMenu} onClose={closeContextMenu} />
     </>
   );
+
+  // 顶层（depth === 0）：wrapper div 捕获空白区域右键
+  if (depth === 0) {
+    return (
+      <div
+        style={{ minHeight: "100%" }}
+        onContextMenu={rootContextMenu}
+      >
+        {nodes.length === 0 && rootPath && (
+          <div
+            style={{
+              padding: 16,
+              color: INPUT_BORDER,
+              fontSize: 12,
+              textAlign: "center",
+            }}
+          >
+            空目录
+          </div>
+        )}
+        {renderRootInlineInput()}
+        {treeContent}
+      </div>
+    );
+  }
+
+  return treeContent;
 };
