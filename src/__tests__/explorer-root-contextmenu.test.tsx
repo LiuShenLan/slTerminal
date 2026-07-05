@@ -198,7 +198,7 @@ describe("FileTree 空白区域右键菜单 — UI 行为", () => {
   });
 
   it("R3: 树节点右键不触发根菜单，仍弹出文件菜单", () => {
-    const { container, getAllByText, queryByText } = renderFileTree({
+    const { getAllByText, queryByText } = renderFileTree({
       rootPath: "C:/proj",
       nodes: [makeFileNode("index.ts", "C:/proj/index.ts")],
     });
