@@ -11,6 +11,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 默认 shell：PowerShell 7（`pwsh.exe` → `powershell.exe` → `cmd.exe` 回退）。
 - 复制 = `Ctrl+Shift+C`（`Ctrl+C` 保留为中断，供 claude 取消）。
 
+## 文档规范
+
+所有非代码文档（CLAUDE.md、设计文档、测试清单等）遵循渐进式披露原则：
+
+- 根 `.claude/CLAUDE.md` 只保留全局约束和模块索引
+- 模块级实现细节（关键模式、架构决策、文件职责）放在对应子路径的 `CLAUDE.md`
+- 修改或新增代码时，同步更新所属子路径的 CLAUDE.md，不在根文件展开细节
+
 ## 架构（两进程模型）
 
 **Rust 后端拥有一切 OS 访问；Web 前端只做 UI，经 IPC 调用后端。**
