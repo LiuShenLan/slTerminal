@@ -22,7 +22,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `Workspace.tsx` | 主组件：多页面管理、PageDockview 工厂、侧边栏/资源管理器三栏布局（Allotment） |
 | `layoutSerde.ts` | 布局序列化/反序列化：`saveLayout`（`api.toJSON()`）、`loadLayout`（`api.fromJSON()` + 旧格式修补 + 白名单过滤） |
 | `panelRegistry.ts` | 面板类型注册表：硬约束 #5 惟一定义点，白名单 `PANEL_TYPES = ["terminal", "editor"]` |
-| `titleManager.ts` | 页签标题集中管理：terminal-N / editor-N 编号、文件标题冲突检测、handleSaveAs |
+| `titleManager.ts` | 页签标题集中管理：terminal-N 编号、文件标题冲突检测、handleSaveAs |
 
 ## 硬约束
 
@@ -66,7 +66,7 @@ SidebarTree.switchToPage(projectId, pageId)
 ## 页签标题集中管理（`titleManager.ts`）
 
 - 终端页签 = `terminal-N`（每页独立从 0 开始，关闭不重算）
-- 编辑器页签 = 文件名；同名冲突 → 相对路径（相对 `Project.rootPath`）；空白编辑器 = `editor-N`
+- 编辑器页签 = 文件名；同名冲突 → 相对路径（相对 `Project.rootPath`）
 - 布局持久化时忽略保存的 `title`，从 `params.filePath` 重新计算
 - Save-As 通过 `slterm:file-saved-as` CustomEvent 通知 Workspace 层重算标题
 - 重复文件打开：`findExistingEditor` 查重 → 聚焦已有面板（不改布局）

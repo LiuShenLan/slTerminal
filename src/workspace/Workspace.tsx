@@ -74,17 +74,6 @@ function createWatermark(
           style={{ background: SECONDARY_BG, border: `1px solid ${SEPARATOR_BG}`, color: BUTTON_FG,
             cursor: "pointer", fontSize: 13, padding: "4px 12px", borderRadius: 4 }}
         >新建终端</button>
-        <button
-          onClick={() => {
-            const id = nextPanelId();
-            const title = titleManager.getEditorTitle(pageId);
-            containerApi.addPanel({ id, component: PANEL_EDITOR, title,
-              params: { panelId: id, cwd } });
-            titleManager.registerEditor(pageId, id);
-          }}
-          style={{ background: SECONDARY_BG, border: `1px solid ${SEPARATOR_BG}`, color: BUTTON_FG,
-            cursor: "pointer", fontSize: 13, padding: "4px 12px", borderRadius: 4 }}
-        >新建编辑器</button>
       </div>
     </div>
   );
@@ -123,17 +112,10 @@ function createGetContextMenu(
 ): (params: GetTabContextMenuItemsParams) => (BuiltInContextMenuItem | ReactContextMenuItemConfig)[] {
   return (params: GetTabContextMenuItemsParams) => {
     const newTerminalId = nextPanelId();
-    const newEditorId = nextPanelId();
     return [
       { label: "新建终端", action: () => { params.api.addPanel(
           { id: newTerminalId, component: PANEL_TERMINAL, title: titleManager.getTerminalTitle(pageId),
             params: { panelId: newTerminalId }, renderer: "always" }); } },
-      { label: "新建编辑器", action: () => {
-          params.api.addPanel(
-          { id: newEditorId, component: PANEL_EDITOR, title: titleManager.getEditorTitle(pageId),
-            params: { panelId: newEditorId } });
-          titleManager.registerEditor(pageId, newEditorId);
-        } },
       "separator",
       "close", "closeOthers", "closeAll",
     ];

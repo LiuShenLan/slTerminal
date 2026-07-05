@@ -27,13 +27,13 @@ export function createTitleManager() {
   /** Map<pageId, Map<panelId, EditorEntry>> — 编辑器注册表 */
   const registry = new Map<string, Map<string, EditorEntry>>();
 
-  /** Map<pageId, { terminal: number; editor: number }> — 序号计数器 */
-  const counters = new Map<string, { terminal: number; editor: number }>();
+  /** Map<pageId, { terminal: number }> — 序号计数器 */
+  const counters = new Map<string, { terminal: number }>();
 
   function getCounter(pageId: string) {
     let c = counters.get(pageId);
     if (!c) {
-      c = { terminal: 0, editor: 0 };
+      c = { terminal: 0 };
       counters.set(pageId, c);
     }
     return c;
@@ -52,12 +52,6 @@ export function createTitleManager() {
   function getTerminalTitle(pageId: string): string {
     const c = getCounter(pageId);
     return `terminal-${c.terminal++}`;
-  }
-
-  /** 空白编辑器页签标题 "editor-N"，每页独立 */
-  function getEditorTitle(pageId: string): string {
-    const c = getCounter(pageId);
-    return `editor-${c.editor++}`;
   }
 
   /**
@@ -197,7 +191,6 @@ export function createTitleManager() {
 
   return {
     getTerminalTitle,
-    getEditorTitle,
     getFileEditorTitle,
     registerEditor,
     unregisterEditor,

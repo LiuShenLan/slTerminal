@@ -42,31 +42,6 @@ describe("createTitleManager", () => {
     });
   });
 
-  // ---- 空白编辑器标题 ----
-
-  describe("getEditorTitle", () => {
-    it("单个空白编辑器标题为 editor-0", () => {
-      expect(tm.getEditorTitle("page1")).toBe("editor-0");
-    });
-
-    it("多个空白编辑器顺序递增", () => {
-      expect(tm.getEditorTitle("page1")).toBe("editor-0");
-      expect(tm.getEditorTitle("page1")).toBe("editor-1");
-    });
-
-    it("不同页面独立计数", () => {
-      expect(tm.getEditorTitle("page1")).toBe("editor-0");
-      expect(tm.getEditorTitle("page2")).toBe("editor-0");
-    });
-
-    it("与终端计数器独立", () => {
-      expect(tm.getTerminalTitle("page1")).toBe("terminal-0");
-      expect(tm.getEditorTitle("page1")).toBe("editor-0");
-      expect(tm.getTerminalTitle("page1")).toBe("terminal-1");
-      expect(tm.getEditorTitle("page1")).toBe("editor-1");
-    });
-  });
-
   // ---- 文件编辑器标题 ----
 
   describe("getFileEditorTitle", () => {
