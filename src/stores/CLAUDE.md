@@ -8,9 +8,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Store 清单
 
-### `sessions.ts` — 会话状态（硬约束 #8 会话单点）
+### `sessions.ts` — 会话状态（硬约束 #8 会话元数据单点）
 
-- `SessionInfo { sessionId, panelId, cwd?, isActive }`，以 `panelId` 为 key 存入 `Record<string, SessionInfo>`。
+- `SessionInfo { sessionId, panelId, cwd?, isActive }`，以 `panelId` 为 key 存入 `Record<string, SessionInfo>`。此为前端会话元数据，不包含 PTY 进程引用（与后端 PtySession 概念不同——参见 `CONTEXT.md`）。
 - 操作：`setSession` / `removeSession` / `setActive`。`setActive` 对不存在的 panelId 是幂等的（直接返回原 state）。
 - 面板类型只订阅 `sessions[ownPanelId]`，不自存 session 数据。
 - 终端面板的 PTY 进程映射（`Map<sessionId, PtyProcess>`）不走此 store，在面板内部用模块级 `Map` 管理以绕过 React 渲染循环。
@@ -20,7 +20,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 极简 store：仅跟踪 `activePageId: string | null`，通过 `setActivePage` 设置。
 - **不持有布局数据**——布局序列化数据（Dockview `toJSON/fromJSON`）存在 `projects.ts` 的 `OperationPage.layout` 字段。
 
-### `projects.ts` — 项目/操作页数据模型与持久化
+### `projects.ts` — 项目/操作页面数据模型与持久化
 
 - 二级模型：`Project` → `OperationPage[]`。面板由 Dockview 管理，不在此 store。
 - 所有变更操作（CRUD + rename + switchToPage + updatePageLayout）自动递增 `project.version`。

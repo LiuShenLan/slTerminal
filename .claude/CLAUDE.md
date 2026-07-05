@@ -41,7 +41,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 5. **面板封闭**：Dockview 面板只能是 `panels/` 下注册过的类型；新增类型 = 加目录 + 在 `panelRegistry.ts` 注册。
 6. **配色单点**：JetBrains git 配色（文件名色、行内 diff 色）只在 `theme/colors.ts` 定义；组件引用 token，禁止硬编码颜色。
 7. **布局单点**：操作页面布局只经 `workspace/layoutSerde.ts` 用 Dockview `toJSON/fromJSON` 存取。
-8. **会话单点**：会话真值（id/活动状态/cwd）只在 `stores/sessions.ts`；面板只订阅，不自存。
+8. **会话元数据单点**：前端会话元数据（SessionInfo：id/活动状态/cwd）只在 `stores/sessions.ts`；面板只订阅，不自存。PTY 进程映射（PtySession）不走此 store——由终端面板内部模块级 Map 管理以绕过 React 渲染循环。
 9. **平台分支收敛**：`#[cfg(windows)]` 只允许出现在 `pty/spawn.rs`、`pty/shell.rs` 等明确处，业务逻辑不撒 cfg。
 10. **权限最小化**：新增命令必须在 `capabilities/` 显式放行，不用通配 `*`。
 
@@ -93,3 +93,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | src-tauri/src/pty | PTY 管理，Windows ConPTY 核心 | src-tauri/src/pty/mod.rs | @../src-tauri/src/pty/CLAUDE.md |
 | src-tauri/src/notify | 文件系统监听（LruWatcherPool 缓存 + pause/resume 切换） | src-tauri/src/notify/mod.rs | @../src-tauri/src/notify/CLAUDE.md |
 | e2e-tests | WDIO E2E 端到端测试 | e2e-tests/wdio.conf.ts | @../e2e-tests/CLAUDE.md |
+
+## 需求编号索引
+
+代码和文档中引用的短标识符（H*/E*/P*/L*）定义：
+
+| 标识符 | 类型 | 含义 |
+|--------|------|------|
+| H6 | 需求 | 终端跨页面存活——页面切换不杀 PTY 进程 |
+| E1 | 需求 | Channel 可替换 + ring buffer 回放——PTY 重连机制 |
+| P1-19 | 问题 | 窗口关闭前杀子进程——Tauri on_window_event 清理 PTY |
+| P2-49 | 问题 | dockview-react dispose 内部自动清理——无需手动清 |
+| L3 | 测试层级 | 终端渲染测试——`npm run test:l3`（xterm.js 渲染集成验证） |
+
+> 完整测试层级定义（L1–L4/E2E）见 `.claude/test-inventory.md`。

@@ -1,4 +1,4 @@
-// projects — 项目/操作页数据模型存储
+// projects — 项目/操作页面数据模型存储
 //
 // 二级模型：Project → OperationPage（面板由 Dockview 管理，不在此 store）
 // CAS 锁：deletionLock 用于两阶段删除（标记 → 确认）

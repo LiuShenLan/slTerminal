@@ -40,10 +40,12 @@ npm run wdio          # → node ./e2e-tests/run-wdio.cjs
 | `__slterm_e2e_createProject(path)` | 程序化创建测试项目（绕过原生对话框） |
 | `__slterm_e2e_writeClipboard(text)` | 写入剪贴板（绕过 browser.execute 中裸模块解析） |
 | `__dockviewApi` | Dockview 布局 API（`addPanel` 等） |
-| `__e2e_sessionReady` | PTY session 就绪标志（挂载在终端容器 DOM 元素上） |
-| `__e2e_writeToPty(text)` | 向 PTY 写入文本 |
-| `__e2e_writeToTerminal(text)` | 直接向 xterm 缓冲写入（绕过 PTY） |
-| `__e2e_getTerminalText()` | 读取 xterm 终端缓冲内容 |
+| `__e2e_sessionReady` | PTY session 就绪标志（挂载在终端容器 DOM 元素上，非 window 全局） |
+| `__e2e_writeToPty(text)` | 向 PTY 写入文本（挂载在终端容器 DOM 元素上） |
+| `__e2e_writeToTerminal(text)` | 直接向 xterm 缓冲写入（绕过 PTY）（挂载在终端容器 DOM 元素上） |
+| `__e2e_getTerminalText()` | 读取 xterm 终端缓冲内容（挂载在终端容器 DOM 元素上） |
+
+> **命名约定说明**：`__slterm_e2e_*` 前缀的对象挂载在 `window` 上（全局）；`__e2e_*` 前缀的对象挂载在终端容器 DOM 元素上（局部）。两套命名反映挂载位置不同——`__e2e_*` 对象随面板销毁而消失，不能作为 `window` 全局。未来可统一为 `__slterm_e2e_*` 前缀。
 
 ## 已知无害噪声
 

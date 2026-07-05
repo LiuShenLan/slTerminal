@@ -28,7 +28,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **#5 面板封闭**：新增面板类型 → 在 `panels/` 下创建目录 → 在 `panelRegistry.ts` 注册 → `PANEL_TYPES` 数组追加类型名
 - **#7 布局单点**：操作页面布局只经 `layoutSerde.ts` 存取。`PageDockview.onDidLayoutChange` → `saveLayout()` → `handlePageLayoutChange()` → `useProjects.updatePageLayout()`
-- **#8 会话单点**：终端会话只在面板内管理（`panels/terminal/`），Workspace 不持有会话引用
+- **#8 会话元数据单点**：终端 PTY 会话只在面板内管理（`panels/terminal/`），Workspace 不持有会话引用
 
 ## 数据流
 
@@ -55,7 +55,8 @@ SidebarTree.switchToPage(projectId, pageId)
 - **`useLayout`** (`stores/layout.ts`)：只跟踪 `activePageId`，不持有布局数据
 - **`useProjects`** (`stores/projects.ts`)：Project → OperationPage 二级模型，持有布局和 cwd
 - **`panelRegistry`**：被 Workspace 传给 DockviewReact 的 `components` prop
-- **SidebarTree / ExplorerPanel**：Workspace 子组件，通过 props 接收 `switchToPage` / `onDeletePage`
+- **SidebarTree**（侧边栏）：项目/操作页面树，位于左侧第一栏，通过 props 接收 `switchToPage` / `onDeletePage`
+- **ExplorerPanel**（文件浏览器）：活跃项目的文件树，位于左侧第二栏，订阅 `onFsEvent` 做增量刷新
 
 ## E2E 测试支持
 
