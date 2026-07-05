@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 职责
 
-工作区布局管理——多 Dockview 实例、布局序列化/反序列化、面板类型注册。
+工作区布局管理——多 Dockview 实例、布局序列化/反序列化、面板类型注册、**页签标题集中管理**。
 
 ## 架构决策
 
@@ -22,6 +22,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `Workspace.tsx` | 主组件：多页面管理、PageDockview 工厂、侧边栏/资源管理器三栏布局（Allotment） |
 | `layoutSerde.ts` | 布局序列化/反序列化：`saveLayout`（`api.toJSON()`）、`loadLayout`（`api.fromJSON()` + 旧格式修补 + 白名单过滤） |
 | `panelRegistry.ts` | 面板类型注册表：硬约束 #5 惟一定义点，白名单 `PANEL_TYPES = ["terminal", "editor"]` |
+| `titleManager.ts` | 页签标题集中管理：terminal-N / editor-N 编号、文件标题冲突检测、handleSaveAs |
 
 ## 硬约束
 
@@ -60,6 +61,15 @@ SidebarTree.switchToPage(projectId, pageId)
 
 - `window.__slterm_e2e_workspaceReady`：Workspace 挂载时同步设置（渲染阶段，非 `useEffect`），WDIO 脚本轮询此标志等待就绪
 - `window.__dockviewApi`：始终指向当前活跃页面的 DockviewApi，E2E 脚本通过它创建面板/执行操作
+
+## 页签标题集中管理（`titleManager.ts`）
+
+- 终端页签 = `terminal-N`（每页独立从 0 开始，关闭不重算）
+- 编辑器页签 = 文件名；同名冲突 → 相对路径（相对 `Project.rootPath`）；空白编辑器 = `editor-N`
+- 布局持久化时忽略保存的 `title`，从 `params.filePath` 重新计算
+- Save-As 通过 `slterm:file-saved-as` CustomEvent 通知 Workspace 层重算标题
+- 重复文件打开：`findExistingEditor` 查重 → 聚焦已有面板（不改布局）
+- `onDidRemovePanel` 监听面板关闭 → 注销 + 重算剩余面板标题
 
 ## 旧格式兼容
 

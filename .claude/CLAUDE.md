@@ -44,7 +44,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **cwd / 命令边界跟踪**：portable-pty 在 Windows 不返回 cwd → 注入 PowerShell profile 发 OSC 7（cwd）+ OSC 133 A/B/C/D（提示符边界 + 退出码），宿主据此跟踪，不解析提示符。
 - **键盘 / IME**：Shift+Tab、Ctrl 组合键用 xterm.js `attachCustomKeyEventHandler` 接管；中文 IME 合成要尽早测。
 - E2E 测试在 Tauri 用不了 Playwright（非 Chromium）。Phase 0 起用 embedded driver（`@wdio/tauri-service` + `tauri-plugin-wdio-webdriver` → `webview2-com` 驱动 ICoreWebView2 COM），零 msedgedriver 依赖。
-- **watcher 重建开销**：`notify` 在 Windows 上调用 `ReadDirectoryChangesW` 递归注册目录树，大目录（如 `target/` 26K 文件）耗时约 2s。不要频繁 `stop()` + `start()` watcher——用 `LruWatcherPool`（`notify/pool.rs`）缓存 + pause/resume 切换。
+- **watcher 重建开销**：`notify` 在 Windows 上调用 `ReadDirectoryChangesW` 递归注册目录树，大目录（如 `target/` 26K 文件）耗时约 2s。不要频繁 `stop()` + `start()` watcher——用 `LruWatcherPool`（`notify/pool.rs`）缓存 + pause/resume 切换。详见 @../src-tauri/src/notify/CLAUDE.md
 
 ## 命令
 
@@ -80,32 +80,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | src/panels | Dockview 面板系统（terminal + editor） | src/panels/index.ts | @../src/panels/CLAUDE.md |
 | src/stores | Zustand 状态管理，会话单点 | src/stores/index.ts | @../src/stores/CLAUDE.md |
 | src/workspace | 工作区布局管理（Dockview serde + 面板注册 + titleManager） | src/workspace/Workspace.tsx | @../src/workspace/CLAUDE.md |
-| src/lib | 通用工具（路径函数 `basename`/`isChildOf`/`relativePath`） | src/lib/index.ts | — |
-| src/features/explorer | 文件浏览器（FileTree + useFileTree gen 取消） | src/features/explorer/ExplorerPanel.tsx | — |
+| src/lib | 通用工具（路径函数 `basename`/`isChildOf`/`relativePath`） | src/lib/index.ts | @../src/lib/CLAUDE.md |
+| src/features/explorer | 文件浏览器（FileTree + useFileTree gen 取消） | src/features/explorer/ExplorerPanel.tsx | @../src/features/explorer/CLAUDE.md |
 | src-tauri/src/pty | PTY 管理，Windows ConPTY 核心 | src-tauri/src/pty/mod.rs | @../src-tauri/src/pty/CLAUDE.md |
-| src-tauri/src/notify | 文件系统监听（LruWatcherPool 缓存 + pause/resume 切换） | src-tauri/src/notify/mod.rs | — |
+| src-tauri/src/notify | 文件系统监听（LruWatcherPool 缓存 + pause/resume 切换） | src-tauri/src/notify/mod.rs | @../src-tauri/src/notify/CLAUDE.md |
 | e2e-tests | WDIO E2E 端到端测试 | e2e-tests/wdio.conf.ts | @../e2e-tests/CLAUDE.md |
-
-## 关键模式（修改前必读）
-
-### 页签标题集中管理（`src/workspace/titleManager.ts`）
-
-- 终端页签 = `terminal-N`（每页独立从 0 开始，关闭不重算）
-- 编辑器页签 = 文件名；同名冲突 → 相对路径（相对 `Project.rootPath`）；空白编辑器 = `editor-N`
-- 布局持久化时忽略保存的 `title`，从 `params.filePath` 重新计算
-- Save-As 通过 `slterm:file-saved-as` CustomEvent 通知 Workspace 层重算标题
-- 重复文件打开：`findExistingEditor` 查重 → 聚焦已有面板（不改布局）
-
-### Generation 异步取消（`src/features/explorer/useFileTree.ts`）
-
-- `genRef` 计数器在 `rootPath` 变化时递增
-- `loadRoot(gen)` 返回后检查 `gen !== genRef.current` → 丢弃过期结果
-- `gitStatus().then()` 回调同样检查 generation
-- 仅 `rootPath` effect 中的调用使用 generation——`refreshExpanded`（CRUD 操作/fs 事件）不传 gen
-
-### Watcher 池 ( `src-tauri/src/notify/pool.rs` )
-
-- `LruWatcherPool` 缓存最多 5 个 `FileWatcher`，LRU 淘汰
-- 切换项目：`pause_all_except(target)` → 命中缓存则 resume，未命中则创建
-- `FileWatcher.paused: Arc<AtomicBool>` 控制事件上报；暂停时线程仍在运行（保留 OS 句柄）
-- 池 Drop 时 `stop_all()` 确保所有线程 join
