@@ -73,12 +73,6 @@ cargo test --manifest-path src-tauri/Cargo.toml pty -- --test-threads=1
 
 # 运行单个测试
 cargo test --manifest-path src-tauri/Cargo.toml <test_name> -- --test-threads=1
-
-# 静态检查
-cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
-
-# 开发运行（启动完整应用）
-npm run tauri dev
 ```
 
 ## 修改注意事项

@@ -50,7 +50,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **spawn 串行化**：并发 spawn 会卡死 ConPTY 输出管道 → 用一把 `SPAWN_LOCK` 把 spawn 串起来（`pty/spawn.rs`）。
 - **cwd 反斜杠**：传给 ConPTY 前把 cwd 规范化成 `\`（`CreateProcessW` 对 `/` 行为异常）。
 - **cwd / 命令边界跟踪**：portable-pty 在 Windows 不返回 cwd → 注入 PowerShell profile 发 OSC 7（cwd）+ OSC 133 A/B/C/D（提示符边界 + 退出码），宿主据此跟踪，不解析提示符。
-- **键盘 / IME**：Shift+Tab、Ctrl 组合键用 xterm.js `attachCustomKeyEventHandler` 接管；中文 IME 合成要尽早测。
+- **键盘 / IME**：Shift+Tab、Ctrl 组合键用 xterm.js `attachCustomKeyEventHandler` 接管；中文 IME 合成要尽早测。详见 @../src/panels/CLAUDE.md
 - E2E 测试在 Tauri 用不了 Playwright（非 Chromium）。Phase 0 起用 embedded driver（`@wdio/tauri-service` + `tauri-plugin-wdio-webdriver` → `webview2-com` 驱动 ICoreWebView2 COM），零 msedgedriver 依赖。
 - **watcher 重建开销**：`notify` 在 Windows 上调用 `ReadDirectoryChangesW` 递归注册目录树，大目录（如 `target/` 26K 文件）耗时约 2s。不要频繁 `stop()` + `start()` watcher——用 `LruWatcherPool`（`notify/pool.rs`）缓存 + pause/resume 切换。详见 @../src-tauri/src/notify/CLAUDE.md
 
