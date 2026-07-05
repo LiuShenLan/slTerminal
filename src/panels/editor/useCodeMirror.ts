@@ -32,6 +32,13 @@ import { diffGutter, updateDiffGutter, clearDiffGutter } from "./gitGutter";
 import { onFsEvent } from "../../ipc/notify";
 import { gitDiff } from "../../ipc/git";
 
+/** 编辑器字体 CSS spec —— 可独立测试 */
+export const EDITOR_FONT_SPEC = {
+  ".cm-scroller": { fontFamily: `"JetBrains Mono", monospace` },
+};
+/** 编辑器字体主题 —— JetBrains Mono Regular */
+export const EDITOR_FONT_THEME = EditorView.theme(EDITOR_FONT_SPEC);
+
 export interface UseCodeMirrorOptions {
   /** 容器 DOM 元素 */
   container: HTMLElement | null;
@@ -209,6 +216,7 @@ export function useCodeMirror({ container, filePath, panelId }: UseCodeMirrorOpt
           extensions: [
             basicSetup,
             oneDark,
+            EDITOR_FONT_THEME,
             search({ top: true }),
             highlightSelectionMatches(),
             keymap.of([...searchKeymap]),
