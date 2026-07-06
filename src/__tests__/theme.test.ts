@@ -48,8 +48,8 @@ describe("terminalOptions 配色验证", () => {
     expect(Number.isInteger(terminalOptions.fontSize)).toBe(true);
   });
 
-  it("7. fontFamily 包含 Cascadia Code", () => {
-    expect(terminalOptions.fontFamily).toContain("Cascadia Code");
+  it("7. fontFamily 为 JetBrains Mono", () => {
+    expect(terminalOptions.fontFamily).toContain("JetBrains Mono");
   });
 
   it("8. cursorBlink 为 true", () => {
