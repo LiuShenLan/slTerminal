@@ -7,6 +7,7 @@ import {
 } from "./stores/projects";
 import type { OperationPage, Project } from "./stores/projects";
 import { useLayout } from "./stores/layout";
+import { useFontSize } from "./stores/fontSize";
 import { saveLayout } from "./workspace/layoutSerde";
 import { makeDefaultLayout } from "./features/sidebar/SidebarTree";
 import { writeText } from "./ipc/clipboard";
@@ -66,6 +67,13 @@ function App() {
   // S4-D1: 启动加载（单一时序：loadAllProjects → 恢复 activePageId → setReady → 渲染 Workspace）
   useEffect(() => {
     const init = async () => {
+      try {
+        // 加载字体大小偏好（先于项目数据，确保面板渲染时已有正确值）
+        await useFontSize.getState().loadFromDisk();
+      } catch {
+        // 首次启动或文件损坏，保持默认值
+      }
+
       try {
         // P2-07: loadAllProjects 内部 JSON.parse 当前数据量小无影响，
         // 若未来项目数据文件膨胀到 MB 级，可改为流式解析或 IndexedDB 存储。

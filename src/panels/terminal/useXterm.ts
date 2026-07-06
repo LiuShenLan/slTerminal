@@ -34,6 +34,10 @@ export interface UseXtermOptions {
   cwd?: string;
   /** 面板是否可见（页面切换时 CSS display:none → WebGL 释放） */
   visible?: boolean;
+  /** 终端字体大小（运行时动态调节，默认 14） */
+  fontSize?: number;
+  /** 字体大小变更回调（Ctrl+Wheel 触发） */
+  onFontSizeChange?: (size: number) => void;
 }
 
 // P2-44: 模块级 WebGL 检测缓存，避免每次 mount 创建临时 canvas
@@ -123,7 +127,7 @@ export function canFit(
     return true;
 }
 
-export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, cwd, visible }: UseXtermOptions) {
+export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, cwd, visible, fontSize, onFontSizeChange }: UseXtermOptions) {
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const webglAddonRef = useRef<WebglAddon | null>(null);
@@ -211,7 +215,7 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
 
     // xterm.js 不支持 term.open() 二次调用（GitHub Issue #4978）
     // 每次挂载均创建新 Terminal 实例，Phase 3 由 ring buffer + pty_reattach 恢复内容
-    const term = new Terminal({ ...terminalOptions, cols: 80, rows: 24 });
+    const term = new Terminal({ ...terminalOptions, cols: 80, rows: 24, fontSize: fontSize ?? 14 });
     console.log(`[H6] 🆕 NEW Terminal panelId="${panelId}"`);
     terminalRef.current = term;
 
@@ -458,6 +462,57 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
       }
     }
   }, [visible]);
+
+  // 字体大小动态调节：当 fontSize 变化时更新终端并重新适配布局
+  useEffect(() => {
+    const term = terminalRef.current;
+    if (!term || fontSize === undefined) return;
+
+    term.options.fontSize = fontSize;
+
+    if (!canFit(term, fitAddonRef.current, container, isDisposedRef)) return;
+
+    try {
+      fitAddonRef.current!.fit();
+      const dims = fitAddonRef.current!.proposeDimensions();
+      if (dims && sessionIdRef.current) {
+        pty.resize(sessionIdRef.current, dims.cols, dims.rows)
+          .catch((err) => console.error("PTY resize 失败:", err));
+      }
+    } catch {
+      // fit 失败不影响渲染
+    }
+  }, [fontSize, container]);
+
+  // Ctrl+鼠标滚轮 调节字体大小
+  useEffect(() => {
+    if (!container || !onFontSizeChange) return;
+
+    const CLAMP_MIN = 8;
+    const CLAMP_MAX = 32;
+
+    const handleWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey) return; // 非 Ctrl 滚轮透传给 xterm.js scrollback
+
+      e.preventDefault();
+      e.stopPropagation();
+
+      // 从 terminal 实例读取当前字体大小，避免闭包过时
+      const currentSize = terminalRef.current?.options.fontSize ?? 14;
+      const direction = e.deltaY < 0 ? 1 : -1; // 上滚放大，下滚缩小
+      const newSize = Math.max(CLAMP_MIN, Math.min(CLAMP_MAX, currentSize + direction));
+
+      if (newSize !== currentSize) {
+        onFontSizeChange(newSize);
+      }
+    };
+
+    container.addEventListener("wheel", handleWheel, { capture: true, passive: false });
+
+    return () => {
+      container.removeEventListener("wheel", handleWheel, { capture: true });
+    };
+  }, [container, onFontSizeChange]);
 
   return {
     /** 聚焦终端输入 */

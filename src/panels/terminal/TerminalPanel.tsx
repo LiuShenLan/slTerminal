@@ -7,7 +7,7 @@
 import React, { useRef, useState, useEffect, useMemo } from "react";
 import { useXterm } from "./useXterm";
 import { pty } from "../../ipc";
-import { useLayout } from "../../stores";
+import { useLayout, useFontSize } from "../../stores";
 import { PANEL_BG, INPUT_BORDER } from "../../theme";
 
 interface TerminalPanelProps {
@@ -49,6 +49,10 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ params }) => {
   const activePageId = useLayout((s) => s.activePageId);
   const visible = activePageId === pageId;
 
+  // 字体大小：从 store 订阅 + 通过 setter 回调变更
+  const terminalFontSize = useFontSize((s) => s.terminalFontSize);
+  const setTerminalFontSize = useFontSize((s) => s.setTerminalFontSize);
+
   const { focus } = useXterm({
     container,
     cols: 80,
@@ -57,6 +61,8 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ params }) => {
     windowsBuildNumber: buildNumber,
     cwd,
     visible,
+    fontSize: terminalFontSize,
+    onFontSizeChange: setTerminalFontSize,
   });
 
   // 首帧数据到达时隐藏加载遮罩

@@ -20,6 +20,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 极简 store：仅跟踪 `activePageId: string | null`，通过 `setActivePage` 设置。
 - **不持有布局数据**——布局序列化数据（Dockview `toJSON/fromJSON`）存在 `projects.ts` 的 `OperationPage.layout` 字段。
 
+### `fontSize.ts` — 字体大小设置
+
+- 终端/编辑器独立字体大小（`terminalFontSize` / `editorFontSize`），默认 14，范围 [8, 32]。
+- setter 内部 clamp，变更通过 Zustand `subscribe` + 2s debounce 自动保存到 `~/.slterminal/settings.json`。
+- `loadFromDisk()` 在 App 启动时调用，先于项目数据加载。
+- `loaded` 守卫防止启动加载阶段触发空写。
+- IP 调用：通过 `src/ipc/settings` 的 `loadSettings` / `saveSettings` 读写磁盘。
+
 ### `projects.ts` — 项目/操作页面数据模型与持久化
 
 - 二级模型：`Project` → `OperationPage[]`。面板由 Dockview 管理，不在此 store。
@@ -41,7 +49,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 测试
 
-- 测试文件：`src/__tests__/sessions.test.ts`、`src/__tests__/projects.test.ts`。
+- 测试文件：`src/__tests__/sessions.test.ts`、`src/__tests__/projects.test.ts`、`src/__tests__/fontSize.test.ts`。
 - 测试用 `getState()` 直接操作和断言，不依赖 React 渲染。`beforeEach` 中显式重置状态。
 - 运行：`npm test`（Vitest）。
 

@@ -29,6 +29,7 @@ export const terminalOptions: ITerminalOptions = {
     brightCyan: "#29B8DB",
     brightWhite: "#FFFFFF",
   },
+  // 编译时默认值，运行时由 useFontSize store 覆盖（Ctrl+Wheel 动态调节）
   fontSize: 14,
   fontFamily: "Cascadia Code, Consolas, 'Courier New', monospace",
   cursorBlink: true,

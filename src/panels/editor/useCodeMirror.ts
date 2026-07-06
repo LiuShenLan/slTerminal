@@ -39,6 +39,16 @@ export const EDITOR_FONT_SPEC = {
 /** 编辑器字体主题 —— JetBrains Mono Regular */
 export const EDITOR_FONT_THEME = EditorView.theme(EDITOR_FONT_SPEC);
 
+/** 创建带 fontSize 的编辑器字体主题扩展（用于 Compartment 热切换） */
+export function createEditorFontExtension(fontSize: number): Extension {
+  return EditorView.theme({
+    ".cm-scroller": {
+      fontFamily: `"JetBrains Mono", monospace`,
+      fontSize: `${fontSize}px`,
+    },
+  });
+}
+
 export interface UseCodeMirrorOptions {
   /** 容器 DOM 元素 */
   container: HTMLElement | null;
@@ -46,6 +56,10 @@ export interface UseCodeMirrorOptions {
   filePath?: string;
   /** 面板 ID（用于 save-as 事件通知） */
   panelId?: string;
+  /** 编辑器字体大小（运行时动态调节，默认 14） */
+  fontSize?: number;
+  /** 字体大小变更回调（Ctrl+Wheel 触发） */
+  onFontSizeChange?: (size: number) => void;
 }
 
 /** 根据文件扩展名返回对应的 CodeMirror 语言扩展 */
@@ -87,10 +101,14 @@ export function getLanguageExtension(filename?: string): Extension {
   }
 }
 
-export function useCodeMirror({ container, filePath, panelId }: UseCodeMirrorOptions) {
+export function useCodeMirror({ container, filePath, panelId, fontSize, onFontSizeChange }: UseCodeMirrorOptions) {
   const viewRef = useRef<EditorView | null>(null);
   const filePathRef = useRef<string | undefined>(filePath);
   const langCompartment = useRef(new Compartment());
+  /** 字体 Compartment —— 热切换字体大小不丢文档状态 */
+  const fontCompartment = useRef(new Compartment());
+  /** 字体大小 ref —— wheel handler 中读取，避免闭包捕获过时值 */
+  const fontSizeRef = useRef<number>(fontSize ?? 14);
   // 保存后短时间内抑制 fs-event auto-reload，避免将自己的写入误判为外部改动、
   // 执行全量文档替换从而破坏 diff gutter 的标记（RangeSet.map 会把所有 marker 清空）
   const justSavedRef = useRef(false);
@@ -216,7 +234,7 @@ export function useCodeMirror({ container, filePath, panelId }: UseCodeMirrorOpt
           extensions: [
             basicSetup,
             oneDark,
-            EDITOR_FONT_THEME,
+            fontCompartment.current.of(createEditorFontExtension(fontSize ?? 14)),
             search({ top: true }),
             highlightSelectionMatches(),
             keymap.of([...searchKeymap]),
@@ -342,6 +360,48 @@ export function useCodeMirror({ container, filePath, panelId }: UseCodeMirrorOpt
       unlisten();
     };
   }, []);
+
+  // 字体大小动态调节：fontSize 变化时通过 Compartment 热切换，不丢文档状态
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view || fontSize === undefined) return;
+
+    fontSizeRef.current = fontSize;
+    view.dispatch({
+      effects: fontCompartment.current.reconfigure(
+        createEditorFontExtension(fontSize)
+      ),
+    });
+  }, [fontSize]);
+
+  // Ctrl+鼠标滚轮 调节字体大小
+  useEffect(() => {
+    if (!container || !onFontSizeChange) return;
+
+    const CLAMP_MIN = 8;
+    const CLAMP_MAX = 32;
+
+    const handleWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey) return; // 非 Ctrl 滚轮透传
+
+      e.preventDefault();
+      e.stopPropagation();
+
+      const currentSize = fontSizeRef.current;
+      const direction = e.deltaY < 0 ? 1 : -1; // 上滚放大，下滚缩小
+      const newSize = Math.max(CLAMP_MIN, Math.min(CLAMP_MAX, currentSize + direction));
+
+      if (newSize !== currentSize) {
+        onFontSizeChange(newSize);
+      }
+    };
+
+    container.addEventListener("wheel", handleWheel, { capture: true, passive: false });
+
+    return () => {
+      container.removeEventListener("wheel", handleWheel, { capture: true });
+    };
+  }, [container, onFontSizeChange]);
 
   return {
     /** 获取当前编辑器内容 */

@@ -14,6 +14,7 @@ const {
   mockUnregisterFn,
   mockFit,
   mockProposeDimensions,
+  mockOnFontSizeChange,
 } = vi.hoisted(() => ({
   mockPushContext: vi.fn(),
   mockPopContext: vi.fn(),
@@ -21,6 +22,7 @@ const {
   mockUnregisterFn: vi.fn(),
   mockFit: vi.fn(),
   mockProposeDimensions: vi.fn(() => ({ cols: 80, rows: 24 })),
+  mockOnFontSizeChange: vi.fn(),
 }));
 
 // ─── 捕获 mock Terminal 实例（供测试验证 addEventListener 调用） ───
@@ -498,5 +500,233 @@ describe("ResizeObserver 尺寸变化 → fit → pty.resize 链路", () => {
     // 验证只执行了一次 fit + resize（debounce 生效）
     expect(mockFit).toHaveBeenCalledTimes(1);
     expect(pty.resize).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+// 字体大小调节 — 终端 fontSize 传递 + Ctrl+Wheel
+// ═══════════════════════════════════════════════════════════
+
+describe("字体大小调节", () => {
+  let container: HTMLDivElement;
+
+  beforeEach(() => {
+    container = createContainer();
+    capturedTerminal = null;
+    vi.clearAllMocks();
+    mockProposeDimensions.mockReturnValue({ cols: 80, rows: 24 });
+  });
+
+  // ── Terminal 构造 ──
+
+  it("38. Terminal 创建时使用传入的 fontSize", () => {
+    renderHook(() =>
+      useXterm({ container, cols: 80, rows: 24, panelId: "fs-1", fontSize: 18 }),
+    );
+
+    expect(capturedTerminal).not.toBeNull();
+    // Terminal 构造函数传了配置，验证 terminal 被创建
+    expect(capturedTerminal?.open).toHaveBeenCalled();
+  });
+
+  it("39. 不传 fontSize 时正常创建（使用默认值）", () => {
+    renderHook(() =>
+      useXterm({ container, cols: 80, rows: 24, panelId: "fs-2" }),
+    );
+
+    expect(capturedTerminal?.open).toHaveBeenCalled();
+  });
+
+  // ── fontSize effect ──
+
+  it("40. fontSize 变化触发 fit + resize", async () => {
+    const { rerender } = renderHook(
+      ({ fontSize }) =>
+        useXterm({ container, cols: 80, rows: 24, panelId: "fs-3", fontSize }),
+      { initialProps: { fontSize: 14 } },
+    );
+
+    await waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    });
+
+    mockFit.mockClear();
+    mockProposeDimensions.mockClear();
+    (pty.resize as ReturnType<typeof vi.fn>).mockClear();
+
+    rerender({ fontSize: 18 });
+
+    await waitFor(() => {
+      expect(mockFit).toHaveBeenCalled();
+    });
+
+    expect(mockProposeDimensions).toHaveBeenCalled();
+    expect(pty.resize).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(Number),
+      expect.any(Number),
+    );
+  });
+
+  it("41. 无 sessionId 时只 fit 不 resize", async () => {
+    const zeroContainer = document.createElement("div");
+    Object.defineProperty(zeroContainer, "offsetWidth", { value: 0, configurable: true });
+    Object.defineProperty(zeroContainer, "offsetHeight", { value: 0, configurable: true });
+
+    const { rerender } = renderHook(
+      ({ fontSize }) =>
+        useXterm({ container: zeroContainer, cols: 80, rows: 24, panelId: "fs-4", fontSize }),
+      { initialProps: { fontSize: 14 } },
+    );
+
+    // pty.spawn 未被调用（尺寸为 0）
+    expect(pty.spawn).not.toHaveBeenCalled();
+
+    Object.defineProperty(zeroContainer, "offsetWidth", { value: 800, configurable: true });
+    Object.defineProperty(zeroContainer, "offsetHeight", { value: 600, configurable: true });
+
+    mockFit.mockClear();
+    rerender({ fontSize: 20 });
+
+    await waitFor(() => {
+      expect(mockFit).toHaveBeenCalled();
+    });
+
+    expect(pty.resize).not.toHaveBeenCalled();
+  });
+
+  // ── Ctrl+Wheel ──
+
+  it("42. Ctrl+上滚（deltaY<0）→ onFontSizeChange +1", () => {
+    renderHook(() =>
+      useXterm({
+        container,
+        cols: 80,
+        rows: 24,
+        panelId: "fs-5",
+        fontSize: 14,
+        onFontSizeChange: mockOnFontSizeChange,
+      }),
+    );
+
+    const event = new WheelEvent("wheel", {
+      ctrlKey: true,
+      deltaY: -100,
+      cancelable: true,
+    });
+    container.dispatchEvent(event);
+
+    expect(mockOnFontSizeChange).toHaveBeenCalledWith(15);
+  });
+
+  it("43. Ctrl+下滚（deltaY>0）→ onFontSizeChange -1", () => {
+    renderHook(() =>
+      useXterm({
+        container,
+        cols: 80,
+        rows: 24,
+        panelId: "fs-6",
+        fontSize: 14,
+        onFontSizeChange: mockOnFontSizeChange,
+      }),
+    );
+
+    const event = new WheelEvent("wheel", {
+      ctrlKey: true,
+      deltaY: 100,
+      cancelable: true,
+    });
+    container.dispatchEvent(event);
+
+    expect(mockOnFontSizeChange).toHaveBeenCalledWith(13);
+  });
+
+  it("44. 非 Ctrl 滚轮透传 → onFontSizeChange 不调用", () => {
+    renderHook(() =>
+      useXterm({
+        container,
+        cols: 80,
+        rows: 24,
+        panelId: "fs-7",
+        fontSize: 14,
+        onFontSizeChange: mockOnFontSizeChange,
+      }),
+    );
+
+    const event = new WheelEvent("wheel", {
+      ctrlKey: false,
+      deltaY: 100,
+      cancelable: true,
+    });
+    container.dispatchEvent(event);
+
+    expect(mockOnFontSizeChange).not.toHaveBeenCalled();
+  });
+
+  it("45. 到达下限 8 → 缩小不触发 onFontSizeChange", () => {
+    renderHook(() =>
+      useXterm({
+        container,
+        cols: 80,
+        rows: 24,
+        panelId: "fs-8",
+        fontSize: 8,
+        onFontSizeChange: mockOnFontSizeChange,
+      }),
+    );
+
+    if (capturedTerminal) capturedTerminal.options.fontSize = 8;
+
+    const event = new WheelEvent("wheel", {
+      ctrlKey: true,
+      deltaY: 100,
+      cancelable: true,
+    });
+    container.dispatchEvent(event);
+
+    expect(mockOnFontSizeChange).not.toHaveBeenCalled();
+  });
+
+  it("46. 到达上限 32 → 放大不触发 onFontSizeChange", () => {
+    renderHook(() =>
+      useXterm({
+        container,
+        cols: 80,
+        rows: 24,
+        panelId: "fs-9",
+        fontSize: 32,
+        onFontSizeChange: mockOnFontSizeChange,
+      }),
+    );
+
+    if (capturedTerminal) capturedTerminal.options.fontSize = 32;
+
+    const event = new WheelEvent("wheel", {
+      ctrlKey: true,
+      deltaY: -100,
+      cancelable: true,
+    });
+    container.dispatchEvent(event);
+
+    expect(mockOnFontSizeChange).not.toHaveBeenCalled();
+  });
+
+  it("47. 未传 onFontSizeChange → wheel 不报错", () => {
+    renderHook(() =>
+      useXterm({
+        container,
+        cols: 80,
+        rows: 24,
+        panelId: "fs-10",
+        fontSize: 14,
+      }),
+    );
+
+    const event = new WheelEvent("wheel", {
+      ctrlKey: true,
+      deltaY: -100,
+      cancelable: true,
+    });
+    expect(() => container.dispatchEvent(event)).not.toThrow();
   });
 });

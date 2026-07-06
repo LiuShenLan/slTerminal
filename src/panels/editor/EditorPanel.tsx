@@ -5,6 +5,7 @@
 
 import React, { useRef, useState, useEffect } from "react";
 import { useCodeMirror } from "./useCodeMirror";
+import { useFontSize } from "../../stores";
 import { EDITOR_BG } from "../../theme";
 
 interface EditorPanelProps {
@@ -23,10 +24,15 @@ const EditorPanel: React.FC<EditorPanelProps> = ({ params }) => {
     setContainer(containerRef.current);
   }, []);
 
+  const editorFontSize = useFontSize((s) => s.editorFontSize);
+  const setEditorFontSize = useFontSize((s) => s.setEditorFontSize);
+
   useCodeMirror({
     container,
     filePath: params.filePath,
     panelId: params.panelId,
+    fontSize: editorFontSize,
+    onFontSizeChange: setEditorFontSize,
   });
 
   return (
