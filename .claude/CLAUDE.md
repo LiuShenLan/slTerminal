@@ -63,7 +63,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 开发运行：`npm run tauri dev`
 - 构建：`npx tauri build --debug --no-bundle`
 
-> 全量自动化测试用例清单（819 用例：Rust 125 + 前端 694）→ @.claude/test-inventory.md
+> 全量自动化测试用例清单（833 用例：Rust 125 + 前端 708）→ @.claude/test-inventory.md
 
 ### 发布打包
 

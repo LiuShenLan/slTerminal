@@ -7,6 +7,7 @@ export {
   PANEL_HTML_VIEWER,
   FILE_PANEL_TYPES,
   isValidPanelType,
+  isAlwaysRenderPanel,
 } from "./panelRegistry";
 export type { PanelType } from "./panelRegistry";
 export { saveLayout, loadLayout } from "./layoutSerde";

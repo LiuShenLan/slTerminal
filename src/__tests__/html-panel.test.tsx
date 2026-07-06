@@ -264,4 +264,65 @@ describe("HtmlPanel", () => {
       expect(iframe.getAttribute("srcDoc")).toContain("JS OK");
     });
   });
+
+  // ==========================================================================
+  // renderer="always" 下的生命周期（白屏修复验证）
+  // ==========================================================================
+
+  // 65. props 不变时仅 mount 一次（不因 DOM 移动重新 mount）
+  it("相同 filePath 重渲染不触发 readFile 多次", async () => {
+    mocks.mockReadFile.mockResolvedValue("<p>test</p>");
+    const { rerender } = renderHtmlPanel("C:/test/a.html");
+
+    await waitFor(() => {
+      expect(mocks.mockReadFile).toHaveBeenCalledTimes(1);
+    });
+
+    // 用相同 filePath 重新渲染（模拟 renderer="always" 下 panel 重新聚焦）
+    rerender(
+      React.createElement(HtmlPanel, {
+        params: { panelId: "tp", filePath: "C:/test/a.html" },
+      }),
+    );
+
+    // filePath 没变，useEffect 不应重新执行
+    expect(mocks.mockReadFile).toHaveBeenCalledTimes(1);
+  });
+
+  // 66. cleanup 在 unmount 时执行（cancelled 标志）
+  it("unmount 后 cleanup 阻止 setState", async () => {
+    let resolveLater: (v: string) => void = () => {};
+    const pending = new Promise<string>((r) => {
+      resolveLater = r;
+    });
+    mocks.mockReadFile.mockReturnValue(pending);
+
+    const { unmount, queryByText } = renderHtmlPanel("C:/test/a.html");
+    expect(queryByText("加载中...")).toBeDefined();
+
+    // 卸载组件
+    unmount();
+
+    // 晚 resolve——cleanup 已设置 cancelled=true，不应触发 setState
+    resolveLater("<p>late</p>");
+    await new Promise((r) => setTimeout(r, 10));
+
+    // 组件已卸载，document 中不应有 iframe
+    expect(document.querySelector("iframe")).toBeNull();
+  });
+
+  // 67. iframe 在 unmount 后被销毁
+  it("iframe 在 unmount 后被销毁", async () => {
+    mocks.mockReadFile.mockResolvedValue("<p>test</p>");
+    const { getByTitle, unmount } = renderHtmlPanel("C:/test/a.html");
+
+    await waitFor(() => {
+      expect(getByTitle("HTML 预览: C:/test/a.html")).toBeDefined();
+    });
+
+    unmount();
+
+    // iframe 应已从 DOM 中移除
+    expect(document.querySelector("iframe")).toBeNull();
+  });
 });

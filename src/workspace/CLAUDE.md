@@ -21,7 +21,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `index.ts` | 公共 API 出口：Workspace 组件、panelRegistry、PANEL_TYPES、`saveLayout`/`loadLayout` |
 | `Workspace.tsx` | 主组件：多页面管理、PageDockview 工厂、侧边栏/资源管理器三栏布局（Allotment） |
 | `layoutSerde.ts` | 布局序列化/反序列化：`saveLayout`（`api.toJSON()`）、`loadLayout`（`api.fromJSON()` + 旧格式修补 + 白名单过滤） |
-| `panelRegistry.ts` | 面板类型注册表：硬约束 #5 惟一定义点，白名单 `PANEL_TYPES = ["terminal", "editor", "htmlviewer"]`，`FILE_PANEL_TYPES` 文件型面板集合（参与标题计算） |
+| `panelRegistry.ts` | 面板类型注册表：硬约束 #5 惟一定义点，白名单 `PANEL_TYPES = ["terminal", "editor", "htmlviewer"]`，`FILE_PANEL_TYPES` 文件型面板集合（参与标题计算），`isAlwaysRenderPanel()` 判断是否需要 renderer="always" |
 | `titleManager.ts` | 页签标题集中管理：terminal-N 编号、文件标题冲突检测、handleSaveAs |
 
 ## 硬约束

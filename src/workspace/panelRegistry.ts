@@ -50,3 +50,12 @@ export const FILE_PANEL_TYPES: ReadonlySet<string> = new Set([
 export function isValidPanelType(type: string): type is PanelType {
   return PANEL_TYPES.includes(type as PanelType);
 }
+
+/**
+ * 检查面板是否应使用 renderer="always" 模式。
+ * terminal — 保持 PTY 存活；文件预览类（htmlviewer 等）— 避免 iframe/canvas browsing context 销毁重建导致白屏。
+ * editor 故意排除——CodeMirror 重建无视觉闪屏，且大文件编辑器若始终挂载会显著增加内存开销。
+ */
+export function isAlwaysRenderPanel(type: string): boolean {
+  return type === PANEL_TERMINAL || (type !== PANEL_EDITOR && isValidPanelType(type));
+}

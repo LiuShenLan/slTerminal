@@ -14,7 +14,7 @@ import { useProjects } from "../../stores/projects";
 import { useLayout } from "../../stores/layout";
 import { titleManager } from "../../workspace/titleManager";
 import { EXPLORER_COLORS, SEPARATOR_BG, INPUT_BORDER, ERROR_BANNER_BG, ERROR_BANNER_BORDER, ERROR_BANNER_FG } from "../../theme";
-import { PANEL_TERMINAL, PANEL_EDITOR } from "../../workspace/panelRegistry";
+import { PANEL_TERMINAL, PANEL_EDITOR, isAlwaysRenderPanel } from "../../workspace/panelRegistry";
 import { fileViewerRegistry } from "../fileViewers";
 
 export const ExplorerPanel: React.FC = () => {
@@ -95,11 +95,15 @@ export const ExplorerPanel: React.FC = () => {
         : titleManager.getFileEditorTitle(activePageId, "", filePath);
 
       const panelId = `${panelType}-${Date.now()}`;
+      // 文件预览类面板（htmlviewer 等）使用 renderer: "always" 保持 iframe/canvas
+      // browsing context 存活，避免页签切换/分屏时 DOM 移除导致白屏闪屏
+      const renderer = isAlwaysRenderPanel(panelType) ? ("always" as const) : undefined;
       dockApi.addPanel({
         id: panelId,
         component: panelType,
         title,
         params: { panelId, filePath },
+        ...(renderer ? { renderer } : {}),
       });
 
       // 注册到标题管理器（后续关闭/冲突重算依赖此注册）
