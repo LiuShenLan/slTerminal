@@ -137,14 +137,10 @@ impl FileWatcher {
                             Err(mpsc::RecvTimeoutError::Timeout) => {
                                 // 正常超时，检查是否应退出
                                 if stop_rx.try_recv().is_ok() {
-                                    tracing::info!(
-                                        "收到停止信号，文件系统监听器退出"
-                                    );
                                     break;
                                 }
                             }
                             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                                tracing::info!("事件通道断开，文件系统监听器退出");
                                 break;
                             }
                         }
@@ -168,7 +164,6 @@ impl FileWatcher {
         if let Some(handle) = self.thread_handle.take() {
             let _ = handle.join();
         }
-        tracing::info!("文件系统监听器已完全停止");
     }
 
     /// 暂停事件上报（watcher 线程继续运行，保留 OS 句柄）
@@ -245,7 +240,6 @@ pub fn fs_watch(
 
     // 命中缓存：直接返回
     if pool.get(&watch_path).is_some() {
-        tracing::info!("文件监听已恢复（缓存命中）: {path}");
         return Ok(());
     }
 
@@ -254,7 +248,6 @@ pub fn fs_watch(
         .map_err(|e| AppError::Notify(format!("启动文件监听失败: {e}")))?;
 
     pool.insert(watch_path, watcher);
-    tracing::info!("文件监听已启动: {path}");
     Ok(())
 }
 

@@ -16,11 +16,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **`useFileTree` 自包含加载**：`rootPath` 变化时 `useFileTree` 内部 effect 自动调用 `loadRoot()` + `gitStatus()`。ExplorerPanel 只负责调用 CRUD 操作后的 `refresh()`，**不在 `rootPath` 变化时重复刷新**（历史重复 effect 已删除）。
 
+**`handleOpenFile` 面板分派**：不再硬编码 `PANEL_EDITOR`，改为通过 `fileViewerRegistry.resolve(filePath)` 决定面板类型。命中策略（如 `.html` → `"htmlviewer"`）则用对应面板，返回 null 回退 `"editor"`。新增文件预览类型无需修改 ExplorerPanel。
+
 ## 文件
 
 | 文件 | 职责 |
 |------|------|
-| `ExplorerPanel.tsx` | React 容器组件：活跃项目推导、文件树渲染、CRUD 事件处理、`fs_watch` 启动 |
+| `ExplorerPanel.tsx` | React 容器组件：活跃项目推导、文件树渲染、CRUD 事件处理、`handleOpenFile` 面板分派（FileViewerRegistry）、`fs_watch` 启动 |
 | `useFileTree.ts` | 文件树数据 hook：`loadRoot` / `loadDirectory` / `toggleExpand` / `refreshExpanded` / generation 取消 |
 | `FileTree.tsx` | 递归树组件：节点渲染、git 状态着色、右键菜单 |
 | `FileIcon.tsx` | 文件图标映射（扩展名→emoji） |
@@ -32,6 +34,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **`src/ipc/notify.ts`** — `startWatch` 启动后端监听 + `onFsEvent` 增量刷新
 - **`src/stores/projects.ts` + `src/stores/layout.ts`** — 活跃项目 `rootPath` 推导
 - **`src/workspace/titleManager.ts`** — 文件打开时计算编辑器页签标题 + 去重
+- **`src/features/fileViewers/FileViewerRegistry.ts`** — 策略模式决定文件用哪个面板类型打开（`.html` → `"htmlviewer"`，未知 → `"editor"`）
 
 ## IPC 约束
 

@@ -63,7 +63,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 开发运行：`npm run tauri dev`
 - 构建：`npx tauri build --debug --no-bundle`
 
-> 全量自动化测试用例清单（727 用例：Rust 125 + 前端 602）→ @.claude/test-inventory.md
+> 全量自动化测试用例清单（819 用例：Rust 125 + 前端 694）→ @.claude/test-inventory.md
 
 ### 发布打包
 
@@ -85,11 +85,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | 模块 | 职责 | 入口 | 详情 |
 |------|------|------|------|
 | src/ipc | IPC 通信层，前端 invoke 唯一入口 | src/ipc/index.ts | @../src/ipc/CLAUDE.md |
-| src/panels | Dockview 面板系统（terminal + editor） | src/panels/index.ts | @../src/panels/CLAUDE.md |
+| src/panels | Dockview 面板系统（terminal + editor + html） | src/panels/index.ts | @../src/panels/CLAUDE.md |
 | src/stores | Zustand 状态管理，会话单点 | src/stores/index.ts | @../src/stores/CLAUDE.md |
 | src/workspace | 工作区布局管理（Dockview serde + 面板注册 + titleManager） | src/workspace/Workspace.tsx | @../src/workspace/CLAUDE.md |
 | src/lib | 通用工具（路径函数 `basename`/`isChildOf`/`relativePath`） | src/lib/index.ts | @../src/lib/CLAUDE.md |
-| src/features/explorer | 文件浏览器（FileTree + useFileTree gen 取消） | src/features/explorer/ExplorerPanel.tsx | @../src/features/explorer/CLAUDE.md |
+| src/features/explorer | 文件浏览器（FileTree + useFileTree gen 取消 + FileViewerRegistry 分派） | src/features/explorer/ExplorerPanel.tsx | @../src/features/explorer/CLAUDE.md |
+| src/features/fileViewers | 文件查看器注册表（策略模式，扩展名→面板类型映射） | src/features/fileViewers/index.ts | @../src/features/fileViewers/CLAUDE.md |
 | src/features/shortcuts | 快捷键模块（ShortcutRegistry 单例 + useShortcutContext hook） | src/features/shortcuts/index.ts | @../src/features/shortcuts/CLAUDE.md |
 | src-tauri/src/pty | PTY 管理，Windows ConPTY 核心 | src-tauri/src/pty/mod.rs | @../src-tauri/src/pty/CLAUDE.md |
 | src-tauri/src/notify | 文件系统监听（LruWatcherPool 缓存 + pause/resume 切换） | src-tauri/src/notify/mod.rs | @../src-tauri/src/notify/CLAUDE.md |

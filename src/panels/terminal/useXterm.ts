@@ -216,7 +216,6 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
     // xterm.js 不支持 term.open() 二次调用（GitHub Issue #4978）
     // 每次挂载均创建新 Terminal 实例，Phase 3 由 ring buffer + pty_reattach 恢复内容
     const term = new Terminal({ ...terminalOptions, cols: 80, rows: 24, fontSize: fontSize ?? 14 });
-    console.log(`[H6] 🆕 NEW Terminal panelId="${panelId}"`);
     terminalRef.current = term;
 
     // F3: 动态设置 ConPTY buildNumber（真实 OS build，覆盖 theme.ts 硬编码）
@@ -286,7 +285,6 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
       // P1-01/02: 记录尺寸供重试使用
       lastColsRef.current = cols;
       lastRowsRef.current = rows;
-      console.log(`[H6] 🚀 pty.spawn panelId="${panelId}" cols=${cols} rows=${rows}`);
       // P2-14 终端数量软上限：当前无限制，每个面板创建一个 ConPTY + reader 线程。
       // 若有需要，可在此处检查活跃 session 数量：若超阈值（如 16 个），弹窗提示用户先关闭闲置终端。
       // 阈值建议通过 settings 配置，不硬编码。计数器通过 TerminalRegistry.size 或后端 PtyState.sessions.len() 获取。
@@ -302,7 +300,6 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
             fitAddon,
           });
           e2eHelper.__e2e_sessionReady = true;
-          console.log(`[H6] ✅ spawn OK panelId="${panelId}" sessionId="${sessionId}"`);
         })
         .catch((err) => {
           // P1-01: spawn 失败 → 提示按 Enter 重试
@@ -411,7 +408,6 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
 
       const sid = sessionIdRef.current;
       // 页面切换不再销毁终端（多 Dockview 实例 + CSS 显隐），仅用户关闭面板时走到此分支
-      console.log(`[H6] cleanup panelId="${panelId}" | sid=${sid} → DISPOSE`);
       if (sid) {
         pty.kill(sid).catch(() => {}); // cleanup 中静默吞错，进程可能已退出
       }

@@ -33,7 +33,6 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ params }) => {
   // F3: IPC 获取真实 Windows build 号（动态设置 ConPTY reflow 阈值）
   useEffect(() => {
     pty.getWindowsBuildNumber().then((bn) => {
-      console.log("[slTerminal] Windows build:", bn);
       setBuildNumber(bn);
     });
   }, []);

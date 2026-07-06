@@ -1,5 +1,5 @@
-// Prevents additional console window on Windows in release, DO NOT REMOVE!!
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// 所有构建模式均隐藏 Windows 控制台窗口
+#![windows_subsystem = "windows"]
 
 fn main() {
     // Phase 0 panic hook：将 panic 信息写入文件以便诊断

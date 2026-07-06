@@ -3,16 +3,19 @@ import {
   panelRegistry,
   terminalTabConfig,
   PANEL_TYPES,
+  PANEL_HTML_VIEWER,
+  FILE_PANEL_TYPES,
   isValidPanelType,
 } from "../workspace/panelRegistry";
 
 describe("panelRegistry", () => {
-  // 1. panelRegistry 包含 "terminal" 和 "editor" 两个键
-  it("包含 terminal 和 editor 两个键", () => {
+  // 1. panelRegistry 包含 terminal、editor、htmlviewer 三个键
+  it("包含 terminal、editor、htmlviewer 三个键", () => {
     const keys = Object.keys(panelRegistry);
-    expect(keys).toHaveLength(2);
+    expect(keys).toHaveLength(3);
     expect(keys).toContain("terminal");
     expect(keys).toContain("editor");
+    expect(keys).toContain("htmlviewer");
   });
 
   // 2. terminal 注册项的 component 是 TerminalPanel
@@ -24,6 +27,12 @@ describe("panelRegistry", () => {
   // 3. editor 注册项的 component 是 EditorPanel
   it("editor 注册项为函数组件", () => {
     const entry = panelRegistry.editor;
+    expect(typeof entry).toBe("function");
+  });
+
+  // 新增：htmlviewer 注册项为函数组件
+  it("htmlviewer 注册项为函数组件", () => {
+    const entry = panelRegistry.htmlviewer;
     expect(typeof entry).toBe("function");
   });
 });
@@ -45,19 +54,20 @@ describe("terminalTabConfig", () => {
 });
 
 describe("PANEL_TYPES", () => {
-  // 6. PANEL_TYPES 包含 ["terminal", "editor"]
-  it('包含 ["terminal", "editor"]', () => {
-    expect(PANEL_TYPES).toEqual(["terminal", "editor"]);
+  // 6. PANEL_TYPES 包含 ["terminal", "editor", "htmlviewer"]
+  it('包含 ["terminal", "editor", "htmlviewer"]', () => {
+    expect(PANEL_TYPES).toEqual(["terminal", "editor", "htmlviewer"]);
   });
 
-  it("长度为 2", () => {
-    expect(PANEL_TYPES).toHaveLength(2);
+  it("长度为 3", () => {
+    expect(PANEL_TYPES).toHaveLength(3);
   });
 
   it("as const 只读，元素类型为字面量", () => {
     // TypeScript 编译期保证，运行时验证值一致
     expect(PANEL_TYPES[0]).toBe("terminal");
     expect(PANEL_TYPES[1]).toBe("editor");
+    expect(PANEL_TYPES[2]).toBe("htmlviewer");
   });
 });
 
@@ -70,6 +80,11 @@ describe("isValidPanelType", () => {
   // 8. isValidPanelType("editor") → true
   it('"editor" 返回 true', () => {
     expect(isValidPanelType("editor")).toBe(true);
+  });
+
+  // 新增：isValidPanelType("htmlviewer") → true
+  it('"htmlviewer" 返回 true', () => {
+    expect(isValidPanelType("htmlviewer")).toBe(true);
   });
 
   // 9. isValidPanelType("unknown") → false
@@ -101,5 +116,29 @@ describe("isValidPanelType", () => {
       // 不应进入此分支
       expect.unreachable("合法类型应通过校验");
     }
+  });
+});
+
+describe("FILE_PANEL_TYPES", () => {
+  it('包含 "editor"', () => {
+    expect(FILE_PANEL_TYPES.has("editor")).toBe(true);
+  });
+
+  it('包含 "htmlviewer"', () => {
+    expect(FILE_PANEL_TYPES.has("htmlviewer")).toBe(true);
+  });
+
+  it('不包含 "terminal"', () => {
+    expect(FILE_PANEL_TYPES.has("terminal")).toBe(false);
+  });
+
+  it("size 为 2", () => {
+    expect(FILE_PANEL_TYPES.size).toBe(2);
+  });
+});
+
+describe("PANEL_HTML_VIEWER", () => {
+  it('值为 "htmlviewer"', () => {
+    expect(PANEL_HTML_VIEWER).toBe("htmlviewer");
   });
 });

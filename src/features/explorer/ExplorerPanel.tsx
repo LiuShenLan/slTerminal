@@ -15,6 +15,7 @@ import { useLayout } from "../../stores/layout";
 import { titleManager } from "../../workspace/titleManager";
 import { EXPLORER_COLORS, SEPARATOR_BG, INPUT_BORDER, ERROR_BANNER_BG, ERROR_BANNER_BORDER, ERROR_BANNER_FG } from "../../theme";
 import { PANEL_TERMINAL, PANEL_EDITOR } from "../../workspace/panelRegistry";
+import { fileViewerRegistry } from "../fileViewers";
 
 export const ExplorerPanel: React.FC = () => {
   const projects = useProjects((s) => s.projects);
@@ -84,16 +85,19 @@ export const ExplorerPanel: React.FC = () => {
         }
       }
 
+      // 通过 FileViewerRegistry 决定面板类型（未知类型回退 editor）
+      const panelType = fileViewerRegistry.resolve(filePath) ?? PANEL_EDITOR;
+
       // 计算标题（无闪烁——addPanel 时直接传入）
       const root = projectRootPath || rootPath || "";
       const title = root
         ? titleManager.getFileEditorTitle(activePageId, root, filePath)
         : titleManager.getFileEditorTitle(activePageId, "", filePath);
 
-      const panelId = `editor-${Date.now()}`;
+      const panelId = `${panelType}-${Date.now()}`;
       dockApi.addPanel({
         id: panelId,
-        component: PANEL_EDITOR,
+        component: panelType,
         title,
         params: { panelId, filePath },
       });

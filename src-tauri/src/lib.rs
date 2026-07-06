@@ -30,9 +30,8 @@ fn ping() -> Result<String, AppError> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")))
+        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")))
         .init();
-    tracing::info!("slTerminal 启动");
 
     // wdio-webdriver 仅 debug 构建启用，生产构建排除（P0-08）
     #[cfg(debug_assertions)]

@@ -20,7 +20,7 @@ import {
 } from "dockview-react";
 import { Allotment } from "allotment";
 import "allotment/dist/style.css";
-import { panelRegistry, PANEL_TERMINAL, PANEL_EDITOR } from "./panelRegistry";
+import { panelRegistry, PANEL_TERMINAL, FILE_PANEL_TYPES } from "./panelRegistry";
 import { saveLayout, loadLayout } from "./layoutSerde";
 import { titleManager } from "./titleManager";
 import type { TitleUpdate } from "./titleManager";
@@ -183,7 +183,7 @@ function rebuildAndRecomputeTitles(
     const params = panel.params as { panelId?: string; filePath?: string } | undefined;
     if (!params?.panelId) continue;
     const component = panel.view?.contentComponent;
-    if (component === PANEL_EDITOR) {
+    if (component && FILE_PANEL_TYPES.has(component)) {
       const filePath = params.filePath;
       // 先注销旧条目（避免 fromJSON 重复注册）
       titleManager.unregisterEditor(pageId, params.panelId);

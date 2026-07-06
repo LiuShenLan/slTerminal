@@ -63,14 +63,11 @@ pub fn reader_loop(
                     Ok(c) => c,
                     Err(e) => {
                         tracing::error!("reader_loop channel 锁获取失败: {e}");
-                        tracing::info!("进程退出，退出码: {:?}", code);
                         break;
                     }
                 };
                 if let Some(ref c) = *ch {
                     let _ = c.send(PtyEvent::Exit { code });
-                } else {
-                    tracing::info!("进程退出（无 Channel），退出码: {:?}", code);
                 }
                 break;
             }
