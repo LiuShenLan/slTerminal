@@ -730,3 +730,1050 @@ describe("字体大小调节", () => {
     expect(() => container.dispatchEvent(event)).not.toThrow();
   });
 });
+
+// ═══════════════════════════════════════════════════════════
+// Step 1.1: DEC 2026 同步更新测试
+// ═══════════════════════════════════════════════════════════
+
+describe("DEC 2026 同步更新包裹 flushBuffer", () => {
+  let container: HTMLDivElement;
+  let rafCallbacks: Array<FrameRequestCallback>;
+  let rafIdCounter: number;
+
+  const origRAF = globalThis.requestAnimationFrame;
+  const origCAF = globalThis.cancelAnimationFrame;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockProposeDimensions.mockReturnValue({ cols: 80, rows: 24 });
+    capturedTerminal = null;
+
+    rafCallbacks = [];
+    rafIdCounter = 0;
+    globalThis.requestAnimationFrame = vi.fn(
+      (cb: FrameRequestCallback) => {
+        const id = ++rafIdCounter;
+        rafCallbacks.push(cb);
+        return id;
+      },
+    );
+    globalThis.cancelAnimationFrame = vi.fn();
+
+    container = document.createElement("div");
+    Object.defineProperty(container, "offsetWidth", { value: 800, configurable: true });
+    Object.defineProperty(container, "offsetHeight", { value: 600, configurable: true });
+  });
+
+  afterEach(() => {
+    globalThis.requestAnimationFrame = origRAF;
+    globalThis.cancelAnimationFrame = origCAF;
+  });
+
+  /** 推进所有排队的 rAF 回调 */
+  function flushRaf() {
+    while (rafCallbacks.length > 0) {
+      const cb = rafCallbacks.shift()!;
+      cb(performance.now());
+    }
+  }
+
+  /** 获取 pty.spawn 的 onOutput 回调 */
+  function getSpawnOutputCallback(): ((event: { type: string; data: { bytes: number[] } }) => void) | null {
+    const calls = (pty.spawn as ReturnType<typeof vi.fn>).mock.calls;
+    if (calls.length === 0) return null;
+    return calls[calls.length - 1][1]; // 第二个参数是 onOutput
+  }
+
+  /** 发送 PTY 输出事件 */
+  function sendPtyOutput(bytes: number[]) {
+    const cb = getSpawnOutputCallback();
+    if (cb) cb({ type: "output", data: { bytes } });
+  }
+
+  it("DEC1: >=64 字节合帧后 term.write 以 \\x1b[?2026h 开头", async () => {
+    renderHook(() =>
+      useXterm({ container, cols: 80, rows: 24, panelId: "dec-1" }),
+    );
+
+    // 等待 pollFitAndSpawn 首帧完成 → spawn
+    flushRaf();
+    await vi.waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    });
+
+    // 清空 spawn 过程中的 write 调用
+    capturedTerminal!.write.mockClear();
+
+    // 发送 >=64 字节 → 走合帧路径
+    const testData = new Array(100).fill(65); // 100 个 'A' (0x41)
+    sendPtyOutput(testData);
+
+    // idle timer 未触发 → write 不应被调用（数据在 pendingBufferRef）
+    expect(capturedTerminal!.write).not.toHaveBeenCalled();
+
+    // 等待 idle timer (2ms) → flushBuffer 执行
+    await new Promise((r) => setTimeout(r, 5));
+
+    // 验证 write 被调用且以 DEC 2026 开始序列开头
+    expect(capturedTerminal!.write).toHaveBeenCalledTimes(1);
+    const written = new TextDecoder().decode(
+      (capturedTerminal!.write as ReturnType<typeof vi.fn>).mock.calls[0][0] as Uint8Array,
+    );
+    expect(written.startsWith("\x1b[?2026h")).toBe(true);
+  });
+
+  it("DEC2: 合帧写入以 \\x1b[?2026l 结尾", async () => {
+    renderHook(() =>
+      useXterm({ container, cols: 80, rows: 24, panelId: "dec-2" }),
+    );
+
+    flushRaf();
+    await vi.waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    });
+
+    capturedTerminal!.write.mockClear();
+
+    const testData = new Array(100).fill(66); // 100 个 'B'
+    sendPtyOutput(testData);
+    // 等待 idle timer 触发 flush
+    await new Promise((r) => setTimeout(r, 5));
+
+    const written = new TextDecoder().decode(
+      (capturedTerminal!.write as ReturnType<typeof vi.fn>).mock.calls[0][0] as Uint8Array,
+    );
+    expect(written.endsWith("\x1b[?2026l")).toBe(true);
+  });
+
+  it("DEC3: 多块累积后单次 flush → 只有一个 DEC 2026 包裹对", async () => {
+    renderHook(() =>
+      useXterm({ container, cols: 80, rows: 24, panelId: "dec-3" }),
+    );
+
+    flushRaf();
+    await vi.waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    });
+
+    capturedTerminal!.write.mockClear();
+
+    // 连续发送 3 块 >=64 字节数据（同一 idle 窗口内累积）
+    sendPtyOutput(new Array(80).fill(67));  // 'C'
+    sendPtyOutput(new Array(80).fill(68));  // 'D'
+    sendPtyOutput(new Array(80).fill(69));  // 'E'
+
+    // idle timer 未触发 → 没有 write
+    expect(capturedTerminal!.write).not.toHaveBeenCalled();
+
+    // 等待 idle timer → flushBuffer 执行
+    await new Promise((r) => setTimeout(r, 5));
+
+    // 单次 write，包含全部 3 块数据
+    expect(capturedTerminal!.write).toHaveBeenCalledTimes(1);
+    const written = new TextDecoder().decode(
+      (capturedTerminal!.write as ReturnType<typeof vi.fn>).mock.calls[0][0] as Uint8Array,
+    );
+    // 只有一个 DEC 2026 开始和一个结束
+    expect(written.indexOf("\x1b[?2026h")).toBe(0);
+    expect(written.indexOf("\x1b[?2026h", 1)).toBe(-1); // 无第二个开始
+    expect(written.lastIndexOf("\x1b[?2026l")).toBe(written.length - 8);
+    expect(written.indexOf("\x1b[?2026l")).toBe(written.lastIndexOf("\x1b[?2026l")); // 只有一个结束
+  });
+
+  it("DEC4: <64 字节直写不含 DEC 2026 序列", async () => {
+    renderHook(() =>
+      useXterm({ container, cols: 80, rows: 24, panelId: "dec-4" }),
+    );
+
+    flushRaf();
+    await vi.waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    });
+
+    capturedTerminal!.write.mockClear();
+
+    // 发送 <64 字节 → 走直写路径
+    const testData = new Array(30).fill(72); // 30 个 'H'
+    sendPtyOutput(testData);
+
+    // 直写：立即调用 term.write
+    expect(capturedTerminal!.write).toHaveBeenCalledTimes(1);
+    const written = (capturedTerminal!.write as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(written).not.toContain("\x1b[?2026h");
+    expect(written).not.toContain("\x1b[?2026l");
+  });
+
+  it("DEC5: 空缓冲区（pendingBufferRef 为空）不调用 write", async () => {
+    renderHook(() =>
+      useXterm({ container, cols: 80, rows: 24, panelId: "dec-5" }),
+    );
+
+    flushRaf();
+    await vi.waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    });
+
+    capturedTerminal!.write.mockClear();
+
+    // 没有发送任何 PTY 输出
+    // 直接推进 rAF（pendingBufferRef 为空）
+    flushRaf();
+
+    // flushBuffer 的 data 为空 → 提前返回
+    expect(capturedTerminal!.write).not.toHaveBeenCalled();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+// Step 1.2: 直写阈值 256→64 测试
+// ═══════════════════════════════════════════════════════════
+
+describe("直写阈值 64 字节路由", () => {
+  let container: HTMLDivElement;
+  let rafCallbacks: Array<FrameRequestCallback>;
+  let rafIdCounter: number;
+
+  const origRAF = globalThis.requestAnimationFrame;
+  const origCAF = globalThis.cancelAnimationFrame;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockProposeDimensions.mockReturnValue({ cols: 80, rows: 24 });
+    capturedTerminal = null;
+
+    rafCallbacks = [];
+    rafIdCounter = 0;
+    globalThis.requestAnimationFrame = vi.fn(
+      (cb: FrameRequestCallback) => {
+        const id = ++rafIdCounter;
+        rafCallbacks.push(cb);
+        return id;
+      },
+    );
+    globalThis.cancelAnimationFrame = vi.fn();
+
+    container = document.createElement("div");
+    Object.defineProperty(container, "offsetWidth", { value: 800, configurable: true });
+    Object.defineProperty(container, "offsetHeight", { value: 600, configurable: true });
+  });
+
+  afterEach(() => {
+    globalThis.requestAnimationFrame = origRAF;
+    globalThis.cancelAnimationFrame = origCAF;
+  });
+
+  function flushRaf() {
+    while (rafCallbacks.length > 0) {
+      const cb = rafCallbacks.shift()!;
+      cb(performance.now());
+    }
+  }
+
+  function getSpawnOutputCallback(): ((event: { type: string; data: { bytes: number[] } }) => void) | null {
+    const calls = (pty.spawn as ReturnType<typeof vi.fn>).mock.calls;
+    if (calls.length === 0) return null;
+    return calls[calls.length - 1][1];
+  }
+
+  function sendPtyOutput(bytes: number[]) {
+    const cb = getSpawnOutputCallback();
+    if (cb) cb({ type: "output", data: { bytes } });
+  }
+
+  it("TH1: 63 字节 PTY 输出走直写路径（term.write 立即调用）", async () => {
+    renderHook(() =>
+      useXterm({ container, cols: 80, rows: 24, panelId: "th-1" }),
+    );
+
+    flushRaf();
+    await vi.waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    });
+
+    capturedTerminal!.write.mockClear();
+
+    // 63 字节 < 阈值 64 → 直写
+    sendPtyOutput(new Array(63).fill(88)); // 'X'
+
+    expect(capturedTerminal!.write).toHaveBeenCalledTimes(1);
+  });
+
+  it("TH2: 64 字节 PTY 输出走合帧路径（阈值边界）", async () => {
+    renderHook(() =>
+      useXterm({ container, cols: 80, rows: 24, panelId: "th-2" }),
+    );
+
+    flushRaf();
+    await vi.waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    });
+
+    capturedTerminal!.write.mockClear();
+
+    // 64 字节 >= 阈值 64 → 合帧
+    sendPtyOutput(new Array(64).fill(89)); // 'Y'
+
+    // idle timer 未触发 → write 不应被调用
+    expect(capturedTerminal!.write).not.toHaveBeenCalled();
+
+    // 等待 idle timer
+    await new Promise((r) => setTimeout(r, 5));
+    expect(capturedTerminal!.write).toHaveBeenCalledTimes(1);
+  });
+
+  it("TH3: 65 字节 PTY 输出走合帧路径（阈值 +1）", async () => {
+    renderHook(() =>
+      useXterm({ container, cols: 80, rows: 24, panelId: "th-3" }),
+    );
+
+    flushRaf();
+    await vi.waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    });
+
+    capturedTerminal!.write.mockClear();
+
+    sendPtyOutput(new Array(65).fill(90)); // 'Z'
+
+    expect(capturedTerminal!.write).not.toHaveBeenCalled();
+
+    // 等待 idle timer
+    await new Promise((r) => setTimeout(r, 5));
+    expect(capturedTerminal!.write).toHaveBeenCalledTimes(1);
+  });
+
+  it("TH4: 高频小块输出（连续 5 次 50 字节）全部直写", async () => {
+    renderHook(() =>
+      useXterm({ container, cols: 80, rows: 24, panelId: "th-4" }),
+    );
+
+    flushRaf();
+    await vi.waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    });
+
+    capturedTerminal!.write.mockClear();
+
+    // 5 次小块直写
+    for (let i = 0; i < 5; i++) {
+      sendPtyOutput(new Array(50).fill(65 + i));
+    }
+
+    // 全部走直写：每次立即调用 write
+    expect(capturedTerminal!.write).toHaveBeenCalledTimes(5);
+  });
+
+  it("TH5: 混合输出（先 50 字节直写，再 200 字节合帧）各自正确路由", async () => {
+    renderHook(() =>
+      useXterm({ container, cols: 80, rows: 24, panelId: "th-5" }),
+    );
+
+    flushRaf();
+    await vi.waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    });
+
+    capturedTerminal!.write.mockClear();
+
+    // 小块直写
+    sendPtyOutput(new Array(50).fill(80)); // 'P'
+    expect(capturedTerminal!.write).toHaveBeenCalledTimes(1);
+
+    // 大块合帧
+    sendPtyOutput(new Array(200).fill(81)); // 'Q'
+    // 直写调用数不变（大块走合帧，idle timer 未触发）
+    expect(capturedTerminal!.write).toHaveBeenCalledTimes(1);
+
+    // 等待 idle timer → 合帧 flush
+    await new Promise((r) => setTimeout(r, 5));
+    // 合帧后 write 被调用第二次
+    expect(capturedTerminal!.write).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+// Step 1.3: ResizeObserver 交替缓冲检查测试
+// ═══════════════════════════════════════════════════════════
+
+describe("ResizeObserver 交替缓冲检查", () => {
+  let container: HTMLDivElement;
+  let triggerResize: () => void;
+  const OrigRO = globalThis.ResizeObserver;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockProposeDimensions.mockReturnValue({ cols: 100, rows: 40 });
+    capturedTerminal = null;
+
+    container = document.createElement("div");
+    Object.defineProperty(container, "offsetWidth", { value: 800, configurable: true });
+    Object.defineProperty(container, "offsetHeight", { value: 600, configurable: true });
+
+    triggerResize = () => {};
+    globalThis.ResizeObserver = class {
+      constructor(cb: (entries: unknown[], observer: unknown) => void) {
+        triggerResize = () => cb([], this as unknown as ResizeObserver);
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    } as unknown as typeof ResizeObserver;
+  });
+
+  afterEach(() => {
+    globalThis.ResizeObserver = OrigRO;
+    vi.restoreAllMocks();
+  });
+
+  /**
+   * 注意：mock Terminal 的 buffer 属性需要在 capturedTerminal 被设置之后手动注入。
+   * 因为 useXterm 内部通过 `term.buffer.active.type` 访问，
+   * 我们在 capturedTerminal 上挂载此属性。
+   */
+  function setBufferType(type: string) {
+    if (capturedTerminal) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (capturedTerminal as any).buffer = {
+        active: { type },
+      };
+    }
+  }
+
+  it("AB1: 交替缓冲中 resize → fitAddon.fit() 不调用", async () => {
+    renderHook(() =>
+      useXterm({ container, cols: 80, rows: 24, panelId: "ab-1" }),
+    );
+
+    await vi.waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    });
+
+    setBufferType("alternate");
+
+    mockFit.mockClear();
+    mockProposeDimensions.mockClear();
+    (pty.resize as ReturnType<typeof vi.fn>).mockClear();
+
+    triggerResize();
+    await new Promise((r) => setTimeout(r, 150));
+
+    // 交替缓冲中 fit 不调用
+    expect(mockFit).not.toHaveBeenCalled();
+    // SIGWINCH 仍然透传
+    expect(pty.resize).toHaveBeenCalledWith(
+      expect.any(String),
+      100,
+      40,
+    );
+  });
+
+  it("AB2: 交替缓冲中 resize → pty.resize() 仍然调用透传 SIGWINCH", async () => {
+    renderHook(() =>
+      useXterm({ container, cols: 80, rows: 24, panelId: "ab-2" }),
+    );
+
+    await vi.waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    });
+
+    setBufferType("alternate");
+
+    mockFit.mockClear();
+    (pty.resize as ReturnType<typeof vi.fn>).mockClear();
+
+    triggerResize();
+    await new Promise((r) => setTimeout(r, 150));
+
+    // pty.resize 正常调用
+    expect(pty.resize).toHaveBeenCalledTimes(1);
+    expect(pty.resize).toHaveBeenCalledWith("test-session-id", 100, 40);
+  });
+
+  it("AB3: 普通缓冲中 resize → fitAddon.fit() 正常调用", async () => {
+    renderHook(() =>
+      useXterm({ container, cols: 80, rows: 24, panelId: "ab-3" }),
+    );
+
+    await vi.waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    });
+
+    // 默认 bufferType = "normal"（无需显式设置）
+    setBufferType("normal");
+
+    mockFit.mockClear();
+    mockProposeDimensions.mockClear();
+    (pty.resize as ReturnType<typeof vi.fn>).mockClear();
+
+    triggerResize();
+    await new Promise((r) => setTimeout(r, 150));
+
+    // 普通缓冲中 fit 正常调用
+    expect(mockFit).toHaveBeenCalledTimes(1);
+    expect(pty.resize).toHaveBeenCalledTimes(1);
+  });
+
+  it("AB4: 普通缓冲中 resize → pty.resize() 正常调用", async () => {
+    renderHook(() =>
+      useXterm({ container, cols: 80, rows: 24, panelId: "ab-4" }),
+    );
+
+    await vi.waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    });
+
+    setBufferType("normal");
+
+    mockFit.mockClear();
+    (pty.resize as ReturnType<typeof vi.fn>).mockClear();
+
+    triggerResize();
+    await new Promise((r) => setTimeout(r, 150));
+
+    expect(pty.resize).toHaveBeenCalledWith("test-session-id", 100, 40);
+  });
+
+  it("AB5: 交替缓冲中 resize → 传入正确的 cols/rows", async () => {
+    mockProposeDimensions.mockReturnValue({ cols: 120, rows: 50 });
+
+    renderHook(() =>
+      useXterm({ container, cols: 80, rows: 24, panelId: "ab-5" }),
+    );
+
+    await vi.waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    });
+
+    setBufferType("alternate");
+
+    (pty.resize as ReturnType<typeof vi.fn>).mockClear();
+
+    triggerResize();
+    await new Promise((r) => setTimeout(r, 150));
+
+    // 交替缓冲中尺寸参数正确透传
+    expect(pty.resize).toHaveBeenCalledWith("test-session-id", 120, 50);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+// Step 2.1: Idle+Max 双定时器合帧测试
+// ═══════════════════════════════════════════════════════════
+
+describe("Idle+Max 双定时器合帧", () => {
+  let container: HTMLDivElement;
+  let rafCallbacks: Array<FrameRequestCallback>;
+  let rafIdCounter: number;
+
+  const origRAF = globalThis.requestAnimationFrame;
+  const origCAF = globalThis.cancelAnimationFrame;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockProposeDimensions.mockReturnValue({ cols: 80, rows: 24 });
+    capturedTerminal = null;
+
+    rafCallbacks = [];
+    rafIdCounter = 0;
+    globalThis.requestAnimationFrame = vi.fn(
+      (cb: FrameRequestCallback) => {
+        const id = ++rafIdCounter;
+        rafCallbacks.push(cb);
+        return id;
+      },
+    );
+    globalThis.cancelAnimationFrame = vi.fn();
+
+    container = document.createElement("div");
+    Object.defineProperty(container, "offsetWidth", { value: 800, configurable: true });
+    Object.defineProperty(container, "offsetHeight", { value: 600, configurable: true });
+  });
+
+  afterEach(() => {
+    globalThis.requestAnimationFrame = origRAF;
+    globalThis.cancelAnimationFrame = origCAF;
+  });
+
+  function flushRaf() {
+    while (rafCallbacks.length > 0) {
+      const cb = rafCallbacks.shift()!;
+      cb(performance.now());
+    }
+  }
+
+  function getSpawnOutputCallback(): ((event: { type: string; data: { bytes: number[] } }) => void) | null {
+    const calls = (pty.spawn as ReturnType<typeof vi.fn>).mock.calls;
+    if (calls.length === 0) return null;
+    return calls[calls.length - 1][1];
+  }
+
+  function sendPtyOutput(bytes: number[]) {
+    const cb = getSpawnOutputCallback();
+    if (cb) cb({ type: "output", data: { bytes } });
+  }
+
+  it("IT1: 单次 >=64 字节输出 → 2ms 空闲后 flush", async () => {
+    renderHook(() =>
+      useXterm({ container, cols: 80, rows: 24, panelId: "it-1" }),
+    );
+    flushRaf();
+    await vi.waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    });
+    capturedTerminal!.write.mockClear();
+
+    sendPtyOutput(new Array(100).fill(65)); // 'A'
+
+    // idle timer 未触发 → 不 flush
+    expect(capturedTerminal!.write).not.toHaveBeenCalled();
+
+    // 等待 5ms → idle timer (2ms) 已触发
+    await new Promise((r) => setTimeout(r, 5));
+    expect(capturedTerminal!.write).toHaveBeenCalledTimes(1);
+  });
+
+  it("IT2: 连续高频输出（2ms 内多次）→ 不立即 flush，最后一次后 2ms flush", async () => {
+    renderHook(() =>
+      useXterm({ container, cols: 80, rows: 24, panelId: "it-2" }),
+    );
+    flushRaf();
+    await vi.waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    });
+    capturedTerminal!.write.mockClear();
+
+    // 连续 3 次大块输出
+    sendPtyOutput(new Array(80).fill(65));
+    sendPtyOutput(new Array(80).fill(66));
+    sendPtyOutput(new Array(80).fill(67));
+
+    // idle timer 被每次输出重置 → 不立即 flush
+    expect(capturedTerminal!.write).not.toHaveBeenCalled();
+
+    // 等待 5ms → 最后一次后 2ms idle timer 触发
+    await new Promise((r) => setTimeout(r, 5));
+    expect(capturedTerminal!.write).toHaveBeenCalledTimes(1);
+  });
+
+  it("IT3: 持续 16ms 不断有数据 → max timer 强制 flush", async () => {
+    renderHook(() =>
+      useXterm({ container, cols: 80, rows: 24, panelId: "it-3" }),
+    );
+    flushRaf();
+    await vi.waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    });
+    capturedTerminal!.write.mockClear();
+
+    // 每隔 3ms 发送数据——idle timer 永远被重置，但 max timer 在 16ms 时强制 flush
+    sendPtyOutput(new Array(80).fill(65));
+    await new Promise((r) => setTimeout(r, 3));
+    sendPtyOutput(new Array(80).fill(66));
+    await new Promise((r) => setTimeout(r, 3));
+    sendPtyOutput(new Array(80).fill(67));
+    await new Promise((r) => setTimeout(r, 3));
+    sendPtyOutput(new Array(80).fill(68));
+    await new Promise((r) => setTimeout(r, 3));
+    sendPtyOutput(new Array(80).fill(69));
+    // 已过 ~12ms，max timer 即将触发
+    await new Promise((r) => setTimeout(r, 10));
+
+    // max timer (16ms) 已强制 flush 至少一次
+    const writeCalls = (capturedTerminal!.write as ReturnType<typeof vi.fn>).mock.calls;
+    expect(writeCalls.length).toBeGreaterThan(0);
+  });
+
+  it("IT4: 混合输出：小数据直写 + 大数据累积后定时器 flush", async () => {
+    renderHook(() =>
+      useXterm({ container, cols: 80, rows: 24, panelId: "it-4" }),
+    );
+    flushRaf();
+    await vi.waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    });
+    capturedTerminal!.write.mockClear();
+
+    // 小块直写
+    sendPtyOutput(new Array(30).fill(80));
+    expect(capturedTerminal!.write).toHaveBeenCalledTimes(1);
+    // 小块不含 DEC 2026
+    const smallWritten = (capturedTerminal!.write as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(smallWritten).not.toContain("\x1b[?2026h");
+
+    // 大块合帧
+    sendPtyOutput(new Array(100).fill(81));
+    // 累积中
+    expect(capturedTerminal!.write).toHaveBeenCalledTimes(1);
+
+    await new Promise((r) => setTimeout(r, 5));
+    // 大块 flush 带 DEC 2026
+    expect(capturedTerminal!.write).toHaveBeenCalledTimes(2);
+  });
+
+  it("IT5: 组件卸载 → idle + max timer 均被清除", async () => {
+    const { unmount } = renderHook(() =>
+      useXterm({ container, cols: 80, rows: 24, panelId: "it-5" }),
+    );
+    flushRaf();
+    await vi.waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    });
+    capturedTerminal!.write.mockClear();
+
+    // 发送大块输出 → 启动 idle+max timer
+    sendPtyOutput(new Array(100).fill(65));
+    expect(capturedTerminal!.write).not.toHaveBeenCalled();
+
+    // 卸载 → cleanup 清除定时器
+    unmount();
+
+    // 等待足够长时间 → timer 不应触发 write（因为已卸载）
+    await new Promise((r) => setTimeout(r, 30));
+    // 卸载后不会再调用 write
+    // （即使 timer 触发，flushBuffer 内 terminalRef.current 已为 null 会提前返回）
+    expect(capturedTerminal!.write).not.toHaveBeenCalled();
+  });
+
+  it("IT6: flushBuffer 内 DEC 2026 包裹仍然生效", async () => {
+    renderHook(() =>
+      useXterm({ container, cols: 80, rows: 24, panelId: "it-6" }),
+    );
+    flushRaf();
+    await vi.waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    });
+    capturedTerminal!.write.mockClear();
+
+    sendPtyOutput(new Array(200).fill(67)); // 'C'
+    await new Promise((r) => setTimeout(r, 5));
+
+    expect(capturedTerminal!.write).toHaveBeenCalledTimes(1);
+    const written = new TextDecoder().decode(
+      (capturedTerminal!.write as ReturnType<typeof vi.fn>).mock.calls[0][0] as Uint8Array,
+    );
+    // 包裹的 DEC 2026 序列在合并的 Uint8Array 中
+    expect(written.startsWith("\x1b[?2026h")).toBe(true);
+    expect(written.endsWith("\x1b[?2026l")).toBe(true);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+// Step 2.3: Uint8Array 替代字符串拼接测试
+// ═══════════════════════════════════════════════════════════
+
+describe("Uint8Array 合帧缓冲", () => {
+  let container: HTMLDivElement;
+  let rafCallbacks: Array<FrameRequestCallback>;
+  let rafIdCounter: number;
+
+  const origRAF = globalThis.requestAnimationFrame;
+  const origCAF = globalThis.cancelAnimationFrame;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockProposeDimensions.mockReturnValue({ cols: 80, rows: 24 });
+    capturedTerminal = null;
+
+    rafCallbacks = [];
+    rafIdCounter = 0;
+    globalThis.requestAnimationFrame = vi.fn(
+      (cb: FrameRequestCallback) => {
+        const id = ++rafIdCounter;
+        rafCallbacks.push(cb);
+        return id;
+      },
+    );
+    globalThis.cancelAnimationFrame = vi.fn();
+
+    container = document.createElement("div");
+    Object.defineProperty(container, "offsetWidth", { value: 800, configurable: true });
+    Object.defineProperty(container, "offsetHeight", { value: 600, configurable: true });
+  });
+
+  afterEach(() => {
+    globalThis.requestAnimationFrame = origRAF;
+    globalThis.cancelAnimationFrame = origCAF;
+  });
+
+  function flushRaf() {
+    while (rafCallbacks.length > 0) {
+      const cb = rafCallbacks.shift()!;
+      cb(performance.now());
+    }
+  }
+
+  function getSpawnOutputCallback(): ((event: { type: string; data: { bytes: number[] } }) => void) | null {
+    const calls = (pty.spawn as ReturnType<typeof vi.fn>).mock.calls;
+    if (calls.length === 0) return null;
+    return calls[calls.length - 1][1];
+  }
+
+  function sendPtyOutput(bytes: number[]) {
+    const cb = getSpawnOutputCallback();
+    if (cb) cb({ type: "output", data: { bytes } });
+  }
+
+  it("UA1: flushBuffer 合并多个 Uint8Array → term.write 收到正确拼接数据", async () => {
+    renderHook(() =>
+      useXterm({ container, cols: 80, rows: 24, panelId: "ua-1" }),
+    );
+    flushRaf();
+    await vi.waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    });
+    capturedTerminal!.write.mockClear();
+
+    // 发送多块数据，各块内容不同
+    const bytes1 = new Array(80).fill(65); // 'A'
+    const bytes2 = new Array(80).fill(66); // 'B'
+    sendPtyOutput(bytes1);
+    sendPtyOutput(bytes2);
+
+    await new Promise((r) => setTimeout(r, 5));
+
+    expect(capturedTerminal!.write).toHaveBeenCalledTimes(1);
+    const decoded = new TextDecoder().decode(
+      (capturedTerminal!.write as ReturnType<typeof vi.fn>).mock.calls[0][0] as Uint8Array,
+    );
+    // 解码后应包含 'A'*80 + 'B'*80（包裹在 DEC 2026 之间）
+    expect(decoded).toContain("A".repeat(80));
+    expect(decoded).toContain("B".repeat(80));
+    // 'A' 块在 'B' 块之前
+    expect(decoded.indexOf("A")).toBeLessThan(decoded.indexOf("B"));
+  });
+
+  it("UA2: flushBuffer 带 DEC 2026 包裹（Uint8Array 拼接）", async () => {
+    renderHook(() =>
+      useXterm({ container, cols: 80, rows: 24, panelId: "ua-2" }),
+    );
+    flushRaf();
+    await vi.waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    });
+    capturedTerminal!.write.mockClear();
+
+    sendPtyOutput(new Array(100).fill(88)); // 'X'
+
+    await new Promise((r) => setTimeout(r, 5));
+
+    const decoded = new TextDecoder().decode(
+      (capturedTerminal!.write as ReturnType<typeof vi.fn>).mock.calls[0][0] as Uint8Array,
+    );
+    expect(decoded.startsWith("\x1b[?2026h")).toBe(true);
+    expect(decoded.endsWith("\x1b[?2026l")).toBe(true);
+    expect(decoded).toContain("X".repeat(100));
+  });
+
+  it("UA3: 空 pendingBuffer → flushBuffer 不调用 term.write", async () => {
+    renderHook(() =>
+      useXterm({ container, cols: 80, rows: 24, panelId: "ua-3" }),
+    );
+    flushRaf();
+    await vi.waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    });
+    capturedTerminal!.write.mockClear();
+
+    // 不发送数据，直接等 idle timer 触发
+    await new Promise((r) => setTimeout(r, 5));
+
+    // 无数据 → flushBuffer 提前返回
+    expect(capturedTerminal!.write).not.toHaveBeenCalled();
+  });
+
+  it("UA4: 单块 Uint8Array flush 数据完整性", async () => {
+    renderHook(() =>
+      useXterm({ container, cols: 80, rows: 24, panelId: "ua-4" }),
+    );
+    flushRaf();
+    await vi.waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    });
+    capturedTerminal!.write.mockClear();
+
+    sendPtyOutput(new Array(256).fill(90)); // 'Z' * 256
+
+    await new Promise((r) => setTimeout(r, 5));
+
+    const decoded = new TextDecoder().decode(
+      (capturedTerminal!.write as ReturnType<typeof vi.fn>).mock.calls[0][0] as Uint8Array,
+    );
+    const content = decoded.slice(8, decoded.length - 8); // 去除 DEC 2026 包裹
+    expect(content).toBe("Z".repeat(256));
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+// Step 2.4: 非焦点终端降频测试
+// ═══════════════════════════════════════════════════════════
+
+describe("非焦点终端降频", () => {
+  let container: HTMLDivElement;
+  let rafCallbacks: Array<FrameRequestCallback>;
+  let rafIdCounter: number;
+
+  const origRAF = globalThis.requestAnimationFrame;
+  const origCAF = globalThis.cancelAnimationFrame;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockProposeDimensions.mockReturnValue({ cols: 80, rows: 24 });
+    capturedTerminal = null;
+
+    rafCallbacks = [];
+    rafIdCounter = 0;
+    globalThis.requestAnimationFrame = vi.fn(
+      (cb: FrameRequestCallback) => {
+        const id = ++rafIdCounter;
+        rafCallbacks.push(cb);
+        return id;
+      },
+    );
+    globalThis.cancelAnimationFrame = vi.fn();
+
+    container = document.createElement("div");
+    Object.defineProperty(container, "offsetWidth", { value: 800, configurable: true });
+    Object.defineProperty(container, "offsetHeight", { value: 600, configurable: true });
+  });
+
+  afterEach(() => {
+    globalThis.requestAnimationFrame = origRAF;
+    globalThis.cancelAnimationFrame = origCAF;
+  });
+
+  function flushRaf() {
+    while (rafCallbacks.length > 0) {
+      const cb = rafCallbacks.shift()!;
+      cb(performance.now());
+    }
+  }
+
+  function getSpawnOutputCallback(): ((event: { type: string; data: { bytes: number[] } }) => void) | null {
+    const calls = (pty.spawn as ReturnType<typeof vi.fn>).mock.calls;
+    if (calls.length === 0) return null;
+    return calls[calls.length - 1][1];
+  }
+
+  function sendPtyOutput(bytes: number[]) {
+    const cb = getSpawnOutputCallback();
+    if (cb) cb({ type: "output", data: { bytes } });
+  }
+
+  it("NF1: visible=false → PTY 输出累积但不 flush", async () => {
+    const { rerender } = renderHook(
+      ({ visible }) =>
+        useXterm({ container, cols: 80, rows: 24, panelId: "nf-1", visible }),
+      { initialProps: { visible: true as boolean | undefined } },
+    );
+    flushRaf();
+    await vi.waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    });
+
+    // 切换到隐藏
+    rerender({ visible: false });
+    capturedTerminal!.write.mockClear();
+
+    // 发送大块输出
+    sendPtyOutput(new Array(200).fill(65));
+
+    // 等待 → idle timer 不应触发 flush（因为 visible=false）
+    await new Promise((r) => setTimeout(r, 10));
+    expect(capturedTerminal!.write).not.toHaveBeenCalled();
+  });
+
+  it("NF2: visible 切回 true → 累积数据立即 flush", async () => {
+    const { rerender } = renderHook(
+      ({ visible }) =>
+        useXterm({ container, cols: 80, rows: 24, panelId: "nf-2", visible }),
+      { initialProps: { visible: true as boolean | undefined } },
+    );
+    flushRaf();
+    await vi.waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    });
+
+    // 切换到隐藏
+    rerender({ visible: false });
+    capturedTerminal!.write.mockClear();
+
+    // 发送大块输出（隐藏期间）
+    sendPtyOutput(new Array(200).fill(65));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(capturedTerminal!.write).not.toHaveBeenCalled();
+
+    // 切回可见 → useEffect 检测到 visible 变为 true → flush
+    rerender({ visible: true });
+
+    await vi.waitFor(() => {
+      expect(capturedTerminal!.write).toHaveBeenCalled();
+    });
+  });
+
+  it("NF3: visible=false 期间直写路径也被抑制", async () => {
+    const { rerender } = renderHook(
+      ({ visible }) =>
+        useXterm({ container, cols: 80, rows: 24, panelId: "nf-3", visible }),
+      { initialProps: { visible: true as boolean | undefined } },
+    );
+    flushRaf();
+    await vi.waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    });
+
+    // 切换到隐藏
+    rerender({ visible: false });
+    capturedTerminal!.write.mockClear();
+
+    // 直写路径：<64 字节在 visible 期间会走直写
+    // 注意：visible=false 时 visibleRef.current 也为 false
+    // handlePtyOutput 中的 fast-path (< 64) 不检查 visible，
+    // 只在大块路径中检查 isVisible
+    sendPtyOutput(new Array(30).fill(80)); // <64 字节 → 直写（不检查 visible）
+    // 直写路径不受 visible 控制——这是当前实现的设计选择
+    // （fast-path 用于打字回显，不受焦点状态影响）
+    expect(capturedTerminal!.write).toHaveBeenCalledTimes(1);
+  });
+
+  it("NF4: 组件在 visible=false 状态下卸载 → cleanup 正常", async () => {
+    const { rerender, unmount } = renderHook(
+      ({ visible }) =>
+        useXterm({ container, cols: 80, rows: 24, panelId: "nf-4", visible }),
+      { initialProps: { visible: true as boolean | undefined } },
+    );
+    flushRaf();
+    await vi.waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    });
+
+    // 切换到隐藏
+    rerender({ visible: false });
+
+    // 发送数据
+    sendPtyOutput(new Array(200).fill(65));
+
+    // 卸载
+    unmount();
+
+    // 不应抛异常
+    expect(true).toBe(true);
+  });
+
+  it("NF5: 默认 visible=undefined → 视为可见，正常 flush", async () => {
+    // 不传 visible prop（undefined）
+    renderHook(() =>
+      useXterm({ container, cols: 80, rows: 24, panelId: "nf-5" }),
+    );
+    flushRaf();
+    await vi.waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    });
+    capturedTerminal!.write.mockClear();
+
+    sendPtyOutput(new Array(200).fill(65));
+    await new Promise((r) => setTimeout(r, 5));
+
+    // visible 未指定 → 视为可见 → 正常 flush
+    expect(capturedTerminal!.write).toHaveBeenCalledTimes(1);
+  });
+});

@@ -16,6 +16,26 @@ use std::sync::{Arc, Mutex, RwLock};
 use tauri::ipc::Channel;
 use uuid::Uuid;
 
+/// PSEUDOCONSOLE_PASSTHROUGH_MODE flag — Win11 22H2+ (build >= 22621)
+///
+/// 启用后 ConPTY 原样转发 VT bytes 跳过内部 OpenConsole.exe 处理，
+/// 消除双重渲染开销（约 10-20x 吞吐提升）。
+///
+/// 当前 portable-pty 0.9.x 不暴露 CreatePseudoConsole 的 dwFlags 参数，
+/// 需 fork portable-pty 或 upstream 支持后集成。此常量保留供后续使用。
+#[cfg(windows)]
+#[allow(dead_code)] // 基础设施：待 portable-pty 支持后集成
+const PSEUDOCONSOLE_PASSTHROUGH_MODE: u32 = 0x8;
+
+/// 检测当前 OS 是否支持 PASSTHROUGH_MODE
+///
+/// Win11 22H2 = build 22621。参数化 build 号以支持测试注入。
+#[cfg(windows)]
+#[allow(dead_code)] // 基础设施：待 portable-pty 支持后集成
+pub fn detect_passthrough_support(build_number: u32) -> bool {
+    build_number >= 22621
+}
+
 /// PTY 输出事件 — 通过 Channel 推送到前端
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "camelCase")]
@@ -391,4 +411,38 @@ unsafe fn create_and_assign_job(pid: u32, job_name_wide: &[u16]) -> Result<JobHa
     let _ = CloseHandle(process);
 
     Ok(JobHandle::new(job))
+}
+
+// ─── PASSTHROUGH_MODE 测试 ───
+
+#[cfg(all(test, windows))]
+mod passthrough_tests {
+    use super::*;
+
+    #[test]
+    fn passthrough_flag_value_is_0x8() {
+        assert_eq!(PSEUDOCONSOLE_PASSTHROUGH_MODE, 0x8);
+    }
+
+    #[test]
+    fn passthrough_win11_22h2_enabled() {
+        // Win11 22H2 = build 22621
+        assert!(detect_passthrough_support(22621));
+        assert!(detect_passthrough_support(26100)); // Win11 24H2
+    }
+
+    #[test]
+    fn passthrough_win10_disabled() {
+        assert!(!detect_passthrough_support(19041)); // Win10 2004
+        assert!(!detect_passthrough_support(22000)); // Win11 21H2
+        assert!(!detect_passthrough_support(22620)); // 刚好低于阈值
+    }
+
+    #[test]
+    fn passthrough_os_detection_boundary() {
+        // 边界值测试
+        assert!(!detect_passthrough_support(0)); // 无效 build
+        assert!(detect_passthrough_support(22621)); // 恰好等于阈值
+        assert!(detect_passthrough_support(u32::MAX)); // 最大 build
+    }
 }

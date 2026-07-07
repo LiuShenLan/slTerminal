@@ -14,6 +14,10 @@ use std::io::Read;
 use std::sync::{Arc, Mutex, RwLock};
 use tauri::ipc::Channel;
 
+/// reader 线程读取缓冲区大小
+/// 189KB/s 输出场景：16KB → 约 12 次/秒 read() 调用（4KB 为 47 次/秒）
+pub const READER_BUF_SIZE: usize = 16384;
+
 /// reader 线程主循环（E1: 支持重连）
 ///
 /// - channel: 可替换的 Channel 引用，pty_reattach 通过写锁替换
@@ -30,7 +34,7 @@ pub fn reader_loop(
     child: Arc<Mutex<Box<dyn portable_pty::Child + Send>>>,
     exit_code: Arc<Mutex<Option<i32>>>,
 ) {
-    let mut buf = [0u8; 4096];
+    let mut buf = [0u8; READER_BUF_SIZE];
     let mut startup_drained = false;
 
     loop {
@@ -253,5 +257,48 @@ mod tests {
     fn test_preserve_osc7_cwd() {
         let input = b"\x1b]7;file:///C:/Users\x1b\\";
         assert_eq!(strip_conpty_startup(input), input);
+    }
+
+    // ─── Step 1.4: 缓冲区大小测试 ───
+
+    #[test]
+    fn reader_buf_size_is_16k() {
+        assert_eq!(READER_BUF_SIZE, 16384);
+    }
+
+    #[test]
+    fn strip_startup_with_large_payload() {
+        // >4KB 连续非启动数据完整保留（验证大数据块不被截断）
+        let payload = vec![b'X'; 10000];
+        // 在开头插入需要剥离的启动序列
+        let prefix = b"\x1b]0;pwsh\x07\x1b[2J\x1b[H";
+        let mut input = prefix.to_vec();
+        input.extend_from_slice(&payload);
+        input.extend_from_slice(b"END_MARKER");
+
+        let result = strip_conpty_startup(&input);
+        // 剥离后应包含完整 payload + END_MARKER
+        assert_eq!(result.len(), payload.len() + 10); // 10000 + 10 (END_MARKER)
+        assert!(result.ends_with(b"END_MARKER"));
+        // 前缀已被剥离
+        assert!(!result.starts_with(b"\x1b]"));
+    }
+
+    #[test]
+    fn strip_startup_with_16k_boundary() {
+        // 数据跨 16KB 边界：启动序列 + 16KB 数据
+        // 验证 strip_conpty_startup 在接近新缓冲区大小的数据上正常工作
+        let payload = vec![b'Y'; READER_BUF_SIZE];
+        // 开头插入启动序列
+        let prefix = b"\x1b[2J\x1b[H";
+        let mut input = prefix.to_vec();
+        input.extend_from_slice(&payload);
+        input.extend_from_slice(b"TAIL");
+
+        let result = strip_conpty_startup(&input);
+        // 剥离后应 = 16KB payload + TAIL
+        assert_eq!(result.len(), READER_BUF_SIZE + 4); // 16KB + 4 (TAIL)
+        assert!(result.starts_with(b"Y"));
+        assert!(result.ends_with(b"TAIL"));
     }
 }

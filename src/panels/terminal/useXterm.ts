@@ -4,7 +4,7 @@
 // - 创建 Terminal 实例（WebGL 优先 + DOM 兜底）
 // - 管理 WebGL context（仅焦点终端持有，失焦 dispose 自动回退 DOM）
 // - 挂载时 spawn PTY，卸载时 kill
-// - 输出原子渲染（rAF 合帧）
+// - 输出原子渲染（Idle+Max 双定时器合帧 + DEC 2026 同步更新）
 // - StrictMode 防御（useRef guard clause）
 
 import { useEffect, useRef, useCallback, useMemo } from "react";
@@ -132,8 +132,16 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
   const fitAddonRef = useRef<FitAddon | null>(null);
   const webglAddonRef = useRef<WebglAddon | null>(null);
   const sessionIdRef = useRef<string | null>(null);
-  const pendingBufferRef = useRef<string[]>([]);
-  const rafIdRef = useRef<number | null>(null);
+  // 输出合帧缓冲区（Uint8Array 替代字符串拼接，减少 GC 压力）
+  const pendingBufferRef = useRef<Uint8Array[]>([]);
+  // 缓冲区字节计数（限制 64KB 上限，防止非焦点终端内存无限增长）
+  const pendingBufSizeRef = useRef(0);
+  // Idle+Max 双定时器：适应 Ink 高频小块 burst 输出模式
+  const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const maxTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // visible 快照 ref：避免 handlePtyOutput 依赖 visible 导致 PTY 回调重建
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
   const e2eTextBufferRef = useRef<string[]>([]);
   const isDisposedRef = useRef(false);
   /** P2-02: 复用 TextDecoder 实例，避免每次 PTY 输出都 new */
@@ -155,38 +163,93 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
   // 注册快捷键 + 管理焦点上下文（focusin→pushContext, focusout→popContext）
   useShortcutContext("terminal", terminalShortcutCommands, container);
 
-  /** 将缓冲数据合并写入终端 */
+  // Idle+Max 定时器常量
+  const IDLE_FLUSH_MS = 2;
+  const MAX_FLUSH_MS = 16;
+  const MAX_PENDING_BYTES = 65536; // 64KB 上限，防止非焦点终端内存无限增长
+
+  /** 将缓冲数据合并写入终端（DEC 2026 同步更新包裹，消除撕裂） */
   const flushBuffer = useCallback(() => {
-    rafIdRef.current = null;
-    const term = terminalRef.current;
-    if (!term) return;
-    const data = pendingBufferRef.current.join("");
-    pendingBufferRef.current = [];
-    if (data) {
-      term.write(data);
+    // 清除定时器
+    if (idleTimerRef.current !== null) {
+      clearTimeout(idleTimerRef.current);
+      idleTimerRef.current = null;
     }
+    if (maxTimerRef.current !== null) {
+      clearTimeout(maxTimerRef.current);
+      maxTimerRef.current = null;
+    }
+
+    const term = terminalRef.current;
+    const chunks = pendingBufferRef.current;
+    pendingBufferRef.current = [];
+    pendingBufSizeRef.current = 0;
+    if (!term || chunks.length === 0) return;
+
+    // 合并 Uint8Array 块（零字符串分配，减少 GC 压力）
+    const totalLen = chunks.reduce((sum, c) => sum + c.length, 0);
+    const merged = new Uint8Array(totalLen);
+    let offset = 0;
+    for (const chunk of chunks) {
+      merged.set(chunk, offset);
+      offset += chunk.length;
+    }
+
+    // DEC 2026 包裹为 Uint8Array
+    const enc = new TextEncoder();
+    const prefix = enc.encode("\x1b[?2026h");
+    const suffix = enc.encode("\x1b[?2026l");
+    const wrapped = new Uint8Array(prefix.length + merged.length + suffix.length);
+    wrapped.set(prefix, 0);
+    wrapped.set(merged, prefix.length);
+    wrapped.set(suffix, prefix.length + merged.length);
+
+    term.write(wrapped);
   }, []);
 
   /** 处理 PTY 输出事件 */
   const handlePtyOutput = useCallback(
     (event: PtyEvent) => {
       if (event.type === "output") {
-        // P2-02: 复用 decoderRef，避免每次 new TextDecoder
-        const text = decoderRef.current.decode(
-          new Uint8Array(event.data.bytes),
-        );
+        const rawBytes = new Uint8Array(event.data.bytes);
+        const text = decoderRef.current.decode(rawBytes);
         e2eTextBufferRef.current.push(text);
         // P2-01: 每 1000 行截断，防止 E2E 文本缓冲无限增长
         if (e2eTextBufferRef.current.length > 1000) {
           e2eTextBufferRef.current.splice(0, e2eTextBufferRef.current.length - 1000);
         }
 
-        if (text.length < 256) {
+        // 直写阈值 64 字节：Ink 逐 token 输出通常 64-200 字节，
+        // 降到 64 确保绝大多数 Ink 小块走合帧 + DEC 2026 路径
+        if (text.length < 64) {
           terminalRef.current?.write(text);
         } else {
-          pendingBufferRef.current.push(text);
-          if (rafIdRef.current === null) {
-            rafIdRef.current = requestAnimationFrame(flushBuffer);
+          // 内存上限：超出 64KB 丢弃最旧数据块（非焦点终端保护）
+          if (pendingBufSizeRef.current + rawBytes.length > MAX_PENDING_BYTES) {
+            while (pendingBufSizeRef.current > 0 && pendingBufSizeRef.current + rawBytes.length > MAX_PENDING_BYTES) {
+              const dropped = pendingBufferRef.current.shift();
+              if (dropped) pendingBufSizeRef.current -= dropped.length;
+              else break;
+            }
+          }
+
+          pendingBufferRef.current.push(rawBytes);
+          pendingBufSizeRef.current += rawBytes.length;
+
+          // 非焦点终端：仅累积不 flush，切回可见时统一回放
+          const isVisible = visibleRef.current !== false;
+          if (isVisible) {
+            // Idle 定时器：2ms 内无新数据则 flush（适应 Ink burst 模式）
+            if (idleTimerRef.current !== null) clearTimeout(idleTimerRef.current);
+            idleTimerRef.current = setTimeout(flushBuffer, IDLE_FLUSH_MS);
+
+            // Max 定时器：确保 16ms 内至少 flush 一次（防止饥饿）
+            if (maxTimerRef.current === null) {
+              maxTimerRef.current = setTimeout(() => {
+                maxTimerRef.current = null;
+                flushBuffer();
+              }, MAX_FLUSH_MS);
+            }
           }
         }
       } else if (event.type === "exit") {
@@ -379,12 +442,21 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
       if (resizeTimer !== null) clearTimeout(resizeTimer);
       resizeTimer = setTimeout(() => {
         try {
-          fitAddon.fit();
           const dims = fitAddon.proposeDimensions();
-          if (dims && sessionIdRef.current) {
+          if (!dims || !sessionIdRef.current) return;
+
+          // 交替缓冲（Claude Code CLAUDE_CODE_NO_FLICKER=1 全屏模式）：
+          // 跳过 fit+reflow——TUI 应用收到 SIGWINCH 后会自己重绘
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          if ((term as any).buffer?.active?.type === "alternate") {
             pty.resize(sessionIdRef.current, dims.cols, dims.rows)
               .catch((err) => console.error("PTY resize 失败:", err));
+            return;
           }
+
+          fitAddon.fit();
+          pty.resize(sessionIdRef.current, dims.cols, dims.rows)
+            .catch((err) => console.error("PTY resize 失败:", err));
         } catch {
           // fit 失败不影响渲染
         }
@@ -398,8 +470,11 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
       if (fitRafId !== null) {
         cancelAnimationFrame(fitRafId);
       }
-      if (rafIdRef.current !== null) {
-        cancelAnimationFrame(rafIdRef.current);
+      if (idleTimerRef.current !== null) {
+        clearTimeout(idleTimerRef.current);
+      }
+      if (maxTimerRef.current !== null) {
+        clearTimeout(maxTimerRef.current);
       }
       if (resizeTimer !== null) {
         clearTimeout(resizeTimer);
@@ -440,7 +515,7 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
   }, [windowsBuildNumber]);
 
   // P1-13: WebGL 按可见性管理 — 页面隐藏（display:none）时释放 WebGL 资源，
-  // 重新可见时重检测并重建 WebGL addon。DOM 渲染器始终可用无需干预。
+  // 重新可见时重检测并重建 WebGL addon + flush 累积的 PTY 输出。
   useEffect(() => {
     const term = terminalRef.current;
     if (!term) return;
@@ -456,8 +531,12 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
       if (!webglAddonRef.current && detectWebgl()) {
         setupWebglWithRetry(term, webglAddonRef);
       }
+      // 切回可见时立即 flush 非焦点期间累积的 PTY 输出
+      if (pendingBufferRef.current.length > 0) {
+        flushBuffer();
+      }
     }
-  }, [visible]);
+  }, [visible, flushBuffer]);
 
   // 字体大小动态调节：当 fontSize 变化时更新终端并重新适配布局
   useEffect(() => {

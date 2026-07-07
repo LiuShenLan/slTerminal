@@ -11,7 +11,7 @@ PTY 管理——Windows ConPTY 终端模拟核心。负责 shell 进程的完整
 ```
 shell.rs          → resolve_shell() 返回 CommandBuilder
 mod.rs/spawn.rs   → pty_spawn() 握 SPAWN_LOCK（仅 openpty→spawn_command）→ reader 线程（锁外）
-reader.rs         → reader_loop() 独立线程阻塞读 → Channel 推 PtyEvent
+reader.rs         → reader_loop() 独立线程阻塞读 → Channel 推 PtyEvent（READER_BUF_SIZE=16KB）
 mod.rs            → pty_write / pty_resize / pty_kill / pty_reattach
 state.rs          → PtySession 结构体 + PtyState 全局 HashMap
 ```
@@ -65,6 +65,14 @@ state.rs          → PtySession 结构体 + PtyState 全局 HashMap
 
 `shell.rs`：`pwsh.exe` → `powershell.exe` → `cmd.exe` 回退。PowerShell 通过 `-EncodedCommand`（UTF-16LE Base64）内联集成脚本（`include_str!("../../assets/shell-integration.ps1")`），消除 `%APPDATA%` 文件写入，避免 AMSI/ASR 误杀。集成脚本注入 OSC 7（cwd 跟踪）+ OSC 133 A/B/D（提示符边界+退出码）+ UTF-8 编码修复。
 
+### PASSTHROUGH_MODE 基础设施（Win11 22H2+）
+
+`spawn.rs` 定义了 `PSEUDOCONSOLE_PASSTHROUGH_MODE` 常量（0x8）和 `detect_passthrough_support(build_number)` 检测函数（阈值 build ≥ 22621）。启用后 ConPTY 原样转发 VT bytes 跳过内部 OpenConsole.exe 处理，消除双重渲染开销（约 10-20x 吞吐提升）。当前 `portable-pty` 0.9.x 不暴露 `CreatePseudoConsole` 的 `dwFlags` 参数，基础设施就绪待 upstream 或 fork 集成。
+
+### reader 缓冲区大小
+
+`reader.rs` 的 `READER_BUF_SIZE` 常量设为 16384（16KB）。189KB/s 输出场景下约 12 次/秒 read() 调用（4KB 为 47 次/秒），减少约 75% 系统调用。
+
 ## 命令
 
 ```bash
@@ -82,3 +90,5 @@ cargo test --manifest-path src-tauri/Cargo.toml <test_name> -- --test-threads=1
 3. 新增 `#[cfg(windows)]` 块需确认是否应放在本模块（架构约束 #9）
 4. 修改 `shell-integration.ps1` 后要跑 `test_shell_integration_script_embedded` 测试确认嵌入内容正确
 5. `reader.rs` 的 `strip_conpty_startup` 修改后务必跑全部 strip 相关测试，确认不误杀正常输出
+6. 修改 `READER_BUF_SIZE` 后跑 `reader_buf_size_is_16k` + `strip_startup_with_16k_boundary` + `strip_startup_with_large_payload` 测试
+7. `detect_passthrough_support` 修改阈值后跑 `passthrough_*` 4 条边界测试
