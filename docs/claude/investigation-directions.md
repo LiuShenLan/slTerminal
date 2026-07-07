@@ -93,17 +93,3 @@ Claude Code 使用 OSC 52 序列实现 `/copy` 命令（stdout 写入 base64 编
 | 5g | 焦点事件 (DECSET 1004) | Claude Code 需要焦点事件来暂停/恢复动画。xterm.js 支持 `ESC[I`/`ESC[O`，但需确认 WebView2 焦点变化是否正确反映到 xterm.js。 |
 | 5h | 多行输入 | Claude Code 支持 `\`+Enter、`Alt+Enter`、`Shift+Enter`、`Ctrl+J` 等多种多行输入方式。xterm.js 对 Shift+Enter 的组合键识别是否正常？`attachCustomKeyEventHandler` 是否需要接管此组合键？Kitty 键盘协议 (CSI u) 对 `Enter` vs `Shift+Enter` 的区分是否被正确透传？ |
 | 5i | 全屏模式 (`CLAUDE_CODE_NO_FLICKER=1`) | Claude Code 全屏模式启用备用屏幕缓冲区 (DEC 1049)、DEC 2026 同步更新、鼠标事件。xterm.js 对 DEC 1049 切换是否平滑（无残影/内容泄漏到主缓冲区）？DEC 2026 (BSU/ESU) 是否被 xterm.js 支持？全屏模式 resize 时内容是否会泄漏到 scrollback？全屏模式下的鼠标滚轮/点击是否正常工作？退出全屏后终端状态是否正确恢复？ |
-
----
-
-## 验证方式
-
-完成调查后需逐一验证：
-
-1. **闪烁/撕裂**：在 slTerminal 中运行 `claude`，触发长文本流式输出，肉眼观察 + 录制帧率
-2. **颜色**：对比 slTerminal vs Windows Terminal 中 claude 的语法高亮、diff 着色
-3. **resize**：反复拖拽分屏边界，观察 claude 输出是否错位
-4. **剪贴板**：claude 内执行 `/copy`，粘贴到外部编辑器验证中文是否乱码
-5. **多行输入**：测试 `Shift+Enter`、`Ctrl+J`、`\`+Enter 三种多行方式是否正常工作
-6. **全屏模式**：`CLAUDE_CODE_NO_FLICKER=1 claude` 启动，测试全屏渲染、resize、鼠标交互、退出恢复
-7. **预防性方向**：逐个检查环境变量宣告、键盘响应、超链接可点击性
