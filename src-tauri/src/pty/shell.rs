@@ -6,10 +6,22 @@
 use base64::Engine;
 use portable_pty::CommandBuilder;
 
+/// 解析后的 Shell 信息（不依赖 portable-pty 类型）
+///
+/// 用于直接构建 CreateProcessW 参数，绕过 CommandBuilder 的 pub(crate) 限制。
+#[derive(Debug, Clone)]
+pub struct ShellInfo {
+    /// Shell 可执行文件路径（如 "pwsh.exe"）
+    pub program: String,
+    /// 命令行参数列表（不含 program 本身）
+    pub args: Vec<String>,
+}
+
 /// 解析 shell 程序，返回已配置好参数的基础 CommandBuilder
 ///
 /// 用户指定则直接使用；否则按 pwsh → powershell → cmd 顺序检测。
 /// PowerShell 自动加入 -NoProfile -NoLogo -EncodedCommand <base64> 参数。
+#[allow(dead_code)] // 保留供非 Windows 平台 fallback
 pub fn resolve_shell(user_shell: Option<&str>) -> CommandBuilder {
     if let Some(shell) = user_shell {
         return CommandBuilder::new(shell);
@@ -29,6 +41,47 @@ pub fn resolve_shell(user_shell: Option<&str>) -> CommandBuilder {
     CommandBuilder::new("cmd.exe")
 }
 
+/// 解析 shell 程序，返回不依赖 portable-pty 的 ShellInfo
+///
+/// 与 resolve_shell 相同的检测逻辑，但返回纯数据结构，
+/// 供自定义 ConPTY 创建流程（绕过 CommandBuilder）使用。
+/// program 字段为完整路径（通过 which_full_path 解析），
+/// 确保 CreateProcessW(lpApplicationName=...) 可正确定位可执行文件。
+pub fn resolve_shell_info(user_shell: Option<&str>) -> ShellInfo {
+    // 用户指定 shell：直接用指定路径（可能已是完整路径）
+    if let Some(shell) = user_shell {
+        // 尝试解析完整路径（如果 shell 是短名的话）
+        let program = if shell.contains('\\') || shell.contains('/') {
+            // 已有路径分隔符，原样使用
+            shell.to_string()
+        } else {
+            // 短名 → 在 PATH 中解析
+            which_full_path(shell).unwrap_or_else(|| shell.to_string())
+        };
+        return ShellInfo {
+            program,
+            args: vec![],
+        };
+    }
+
+    if let Some(path) = which_full_path("pwsh.exe") {
+        return build_pwsh_info(&path);
+    }
+
+    if let Some(path) = which_full_path("powershell.exe") {
+        return build_pwsh_info(&path);
+    }
+
+    // cmd.exe 始终在 System32 下，which_full_path 可能找不到（PATH 不含 System32 的极端情况），
+    // 直接用完整路径回退
+    let cmd_path = which_full_path("cmd.exe")
+        .unwrap_or_else(|| r"C:\Windows\System32\cmd.exe".to_string());
+    ShellInfo {
+        program: cmd_path,
+        args: vec![],
+    }
+}
+
 /// 为 PowerShell 构建带 profile 注入的 CommandBuilder
 ///
 /// 使用 -NoProfile -NoLogo -EncodedCommand <base64(UTF-16LE script)> 启动。
@@ -43,6 +96,21 @@ fn build_pwsh_command(pwsh: &str) -> CommandBuilder {
     cmd
 }
 
+/// 为 PowerShell 构建 ShellInfo（不依赖 portable-pty）
+/// pwsh 参数为完整路径（由 which_full_path 解析）
+fn build_pwsh_info(pwsh_path: &str) -> ShellInfo {
+    ShellInfo {
+        program: pwsh_path.to_string(),
+        args: vec![
+            "-NoProfile".to_string(),
+            "-NoLogo".to_string(),
+            "-NoExit".to_string(),
+            "-EncodedCommand".to_string(),
+            encode_utf16le_base64(get_shell_integration_script()),
+        ],
+    }
+}
+
 /// 将字符串编码为 UTF-16LE 后 Base64
 ///
 /// PowerShell -EncodedCommand 要求 UTF-16LE 无 BOM + 标准 Base64。
@@ -54,17 +122,25 @@ fn encode_utf16le_base64(script: &str) -> String {
     base64::engine::general_purpose::STANDARD.encode(&bytes)
 }
 
-/// 检查可执行文件是否在 PATH 中
-fn which_exists(name: &str) -> bool {
+/// 在 PATH 中查找可执行文件，返回完整路径
+///
+/// 遍历 PATH 目录，找到第一个匹配的可执行文件后返回其完整路径。
+/// 未找到返回 None。
+fn which_full_path(name: &str) -> Option<String> {
     if let Ok(path) = std::env::var("PATH") {
         for dir in path.split(';') {
             let full = std::path::PathBuf::from(dir).join(name);
             if full.exists() {
-                return true;
+                return Some(full.to_string_lossy().into_owned());
             }
         }
     }
-    false
+    None
+}
+
+/// 检查可执行文件是否在 PATH 中
+fn which_exists(name: &str) -> bool {
+    which_full_path(name).is_some()
 }
 
 /// 获取 shell 集成脚本内容
@@ -79,9 +155,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_which_exists_pwsh() {
-        let found = which_exists("pwsh.exe") || which_exists("powershell.exe");
-        assert!(found, "至少 pwsh 或 powershell 应存在");
+    fn test_which_full_path_finds_pwsh_or_powershell() {
+        let found = which_full_path("pwsh.exe")
+            .or_else(|| which_full_path("powershell.exe"));
+        assert!(found.is_some(), "至少 pwsh 或 powershell 应存在");
+        let path = found.unwrap();
+        assert!(path.contains('\\') || path.contains('/'), "应返回完整路径，实际: {path}");
+        assert!(path.ends_with(".exe"), "路径应以 .exe 结尾，实际: {path}");
+    }
+
+    #[test]
+    fn test_which_full_path_nonexistent() {
+        assert!(which_full_path("__nonexistent_xyz__.exe").is_none());
+    }
+
+    #[test]
+    fn test_resolve_shell_info_returns_full_path() {
+        let info = if which_full_path("pwsh.exe").is_some() || which_full_path("powershell.exe").is_some() {
+            resolve_shell_info(None)
+        } else {
+            // 无 pwsh 时至少 cmd 能找到
+            resolve_shell_info(Some("cmd.exe"))
+        };
+        // program 应是完整路径（含路径分隔符）
+        assert!(
+            info.program.contains('\\') || info.program.contains('/'),
+            "ShellInfo.program 应为完整路径，实际: {}", info.program
+        );
     }
 
     #[test]

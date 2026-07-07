@@ -1,5 +1,5 @@
 /// Phase 1 PTY 集成测试
-use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+use portable_pty::{native_pty_system, CommandBuilder, PtySize, MasterPty, ChildKiller, Child};
 use std::io::{Read, Write};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -87,6 +87,70 @@ fn pty_kill_no_orphan() {
             _ => std::thread::sleep(Duration::from_millis(200)),
         }
     }
+}
+
+/// pty_spawn_custom_conpty: 验证 conpty_custom 模块的 spawn_conpty_child 可正常启动子进程
+#[cfg(windows)]
+#[test]
+fn pty_spawn_custom_conpty() {
+    use slterminal_lib::pty::{shell, spawn::conpty_custom};
+
+    let shell_info = shell::resolve_shell_info(Some("cmd.exe"));
+    let (hpc, master) = conpty_custom::create_conpty_pair(80, 24, 26100)
+        .expect("create_conpty_pair 应成功");
+
+    // CPR 注入
+    let mut writer = master.take_writer().expect("take_writer 应成功");
+    use std::io::Write;
+    writer.write_all(b"\x1b[1;1R").unwrap();
+    writer.flush().unwrap();
+
+    let extra_envs: Vec<(String, String)> = vec![
+        ("COLORTERM".into(), "truecolor".into()),
+        ("TERM".into(), "xterm-256color".into()),
+    ];
+
+    let mut child = conpty_custom::spawn_conpty_child(
+        hpc,
+        &shell_info,
+        &extra_envs,
+        None,
+    )
+    .expect("spawn_conpty_child 应成功");
+
+    let pid = child.process_id();
+    assert!(pid.is_some(), "子进程应有 PID");
+
+    // 回显验证子进程存活
+    let mut reader = master.try_clone_reader().expect("try_clone_reader 应成功");
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    writer.write_all(b"echo CUSTOM_CONPTY_OK\r\n").unwrap();
+    writer.flush().unwrap();
+
+    let mut output = Vec::new();
+    let start = std::time::Instant::now();
+    while start.elapsed() < std::time::Duration::from_secs(10) {
+        let mut buf = [0u8; 4096];
+        match reader.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                output.extend_from_slice(&buf[..n]);
+                if String::from_utf8_lossy(&output).contains("CUSTOM_CONPTY_OK") {
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+
+    let text = String::from_utf8_lossy(&output);
+    assert!(
+        text.contains("CUSTOM_CONPTY_OK"),
+        "输出应包含 CUSTOM_CONPTY_OK，实际: {text}"
+    );
+
+    drop(writer);
+    let _ = child.kill();
 }
 
 /// osc_cwd_venv_parsed: shell集成脚本验证

@@ -154,6 +154,8 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
   /** P1-01/02: 跨闭包共享 doSpawn / setupRetry（handlePtyOutput 通过 ref 触发重连） */
   const doSpawnRef = useRef<((cols: number, rows: number) => void) | null>(null);
   const setupRetryRef = useRef<((cols: number, rows: number) => void) | null>(null);
+  /** resize X/Y 分离 debounce：跟踪上次尺寸，区分行/列变化 */
+  const prevDimsRef = useRef<{ cols: number; rows: number } | null>(null);
 
   // 终端快捷键命令（通过 ref 获取 terminal，避免闭包捕获已销毁实例）
   const terminalShortcutCommands = useMemo(
@@ -433,34 +435,66 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
         }
       });
 
-    // P2-03: ResizeObserver — fit() 与 resize 合并到同一 100ms debounce，
-    // 避免窗口拖拽/分屏时高频触发多余的 fit 和 PTY resize
+    // P2-03: ResizeObserver — fit() 与 resize 合并 debounce，X/Y 分离策略
+    // - 仅行数变化（廉价，无需 re-wrap）：立即 resize
+    // - 列数变化（昂贵，需 re-wrap 所有行）：100ms debounce
+    // - resize 前先 flush 积压的旧尺寸 PTY 输出，防止错位
     let resizeTimer: ReturnType<typeof setTimeout> | null = null;
 
     const resizeObserver = new ResizeObserver(() => {
       if (!canFit(term, fitAddon, container, isDisposedRef)) return;
-      if (resizeTimer !== null) clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(() => {
-        try {
-          const dims = fitAddon.proposeDimensions();
-          if (!dims || !sessionIdRef.current) return;
 
-          // 交替缓冲（Claude Code CLAUDE_CODE_NO_FLICKER=1 全屏模式）：
-          // 跳过 fit+reflow——TUI 应用收到 SIGWINCH 后会自己重绘
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          if ((term as any).buffer?.active?.type === "alternate") {
-            pty.resize(sessionIdRef.current, dims.cols, dims.rows)
-              .catch((err) => console.error("PTY resize 失败:", err));
-            return;
-          }
+      try {
+        const dims = fitAddon.proposeDimensions();
+        // 修复 1：补 NaN 检查——proposeDimensions 可能返回 NaN（xtermjs#4338）
+        if (!dims || !Number.isFinite(dims.cols) || !Number.isFinite(dims.rows) || !sessionIdRef.current) {
+          return;
+        }
 
-          fitAddon.fit();
+        const prev = prevDimsRef.current;
+        const colsChanged = prev === null || dims.cols !== prev.cols;
+        const rowsChanged = prev === null || dims.rows !== prev.rows;
+        prevDimsRef.current = dims;
+
+        // 无变化：跳过
+        if (!colsChanged && !rowsChanged) return;
+
+        // 交替缓冲（Claude Code CLAUDE_CODE_NO_FLICKER=1 全屏模式）：
+        // 跳过 fit+reflow——TUI 应用收到 SIGWINCH 后会自己重绘
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const isAlternate = (term as any).buffer?.active?.type === "alternate";
+
+        // 修复 3：resize 前 flush 积压缓冲区——确保旧尺寸 PTY 数据不出现在新视口中
+        flushBuffer();
+
+        if (rowsChanged && !colsChanged) {
+          // 修复 2：仅行数变化 → 立即 resize（廉价，无需 re-wrap）
+          if (!isAlternate) fitAddon.fit();
           pty.resize(sessionIdRef.current, dims.cols, dims.rows)
             .catch((err) => console.error("PTY resize 失败:", err));
-        } catch {
-          // fit 失败不影响渲染
+          return;
         }
-      }, 100);
+
+        // 列数变化（或首次 resize）→ 100ms debounce
+        if (resizeTimer !== null) clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(() => {
+          flushBuffer(); // debounce 期间新积压的数据也清掉
+          try {
+            if (isAlternate) {
+              pty.resize(sessionIdRef.current!, dims.cols, dims.rows)
+                .catch((err) => console.error("PTY resize 失败:", err));
+            } else {
+              fitAddon.fit();
+              pty.resize(sessionIdRef.current!, dims.cols, dims.rows)
+                .catch((err) => console.error("PTY resize 失败:", err));
+            }
+          } catch {
+            // fit 失败不影响渲染
+          }
+        }, 100);
+      } catch {
+        // fit 失败不影响渲染
+      }
     });
     resizeObserver.observe(container);
 

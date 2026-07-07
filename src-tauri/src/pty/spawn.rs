@@ -9,31 +9,510 @@
 use crate::error::AppError;
 use crate::pty::shell;
 use crate::state::{AppState, PtySession};
-use portable_pty::{native_pty_system, PtySize};
+#[cfg(not(windows))]
+use portable_pty::native_pty_system;
+use portable_pty::PtySize;
 use std::collections::VecDeque;
 use std::io::Write as _;
 use std::sync::{Arc, Mutex, RwLock};
 use tauri::ipc::Channel;
 use uuid::Uuid;
 
-/// PSEUDOCONSOLE_PASSTHROUGH_MODE flag — Win11 22H2+ (build >= 22621)
-///
-/// 启用后 ConPTY 原样转发 VT bytes 跳过内部 OpenConsole.exe 处理，
-/// 消除双重渲染开销（约 10-20x 吞吐提升）。
-///
-/// 当前 portable-pty 0.9.x 不暴露 CreatePseudoConsole 的 dwFlags 参数，
-/// 需 fork portable-pty 或 upstream 支持后集成。此常量保留供后续使用。
-#[cfg(windows)]
-#[allow(dead_code)] // 基础设施：待 portable-pty 支持后集成
-const PSEUDOCONSOLE_PASSTHROUGH_MODE: u32 = 0x8;
+// ─── ConPTY flag 常量（绕过 portable-pty 直接调 Win32 API）───
+//
+// portable-pty 0.9.0 硬编码 flags=0x7（INHERIT_CURSOR|RESIZE_QUIRK|WIN32_INPUT_MODE），
+// 不暴露 CreatePseudoConsole dwFlags 参数。此处绕过 openpty()，直接调用 windows crate
+// 的 CreatePseudoConsole，按 OS build 动态决定是否启用 PASSTHROUGH_MODE (0x8)。
 
-/// 检测当前 OS 是否支持 PASSTHROUGH_MODE
-///
-/// Win11 22H2 = build 22621。参数化 build 号以支持测试注入。
 #[cfg(windows)]
-#[allow(dead_code)] // 基础设施：待 portable-pty 支持后集成
-pub fn detect_passthrough_support(build_number: u32) -> bool {
-    build_number >= 22621
+pub mod conpty_custom {
+    use anyhow::{bail, ensure, Error};
+    use filedescriptor::{FileDescriptor, Pipe};
+    use portable_pty::{Child, ChildKiller, MasterPty, PtySize};
+    use std::io::{Read, Write};
+    use std::mem;
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use std::sync::{Arc, Mutex};
+    use windows::Win32::System::Console::{
+        ClosePseudoConsole, CreatePseudoConsole, ResizePseudoConsole, HPCON, COORD,
+        PSEUDOCONSOLE_INHERIT_CURSOR,
+    };
+    use windows::Win32::System::Threading::{
+        CreateProcessW, DeleteProcThreadAttributeList, InitializeProcThreadAttributeList,
+        UpdateProcThreadAttribute, EXTENDED_STARTUPINFO_PRESENT, PROCESS_INFORMATION,
+        PROCESS_CREATION_FLAGS, LPPROC_THREAD_ATTRIBUTE_LIST, STARTF_USESTDHANDLES,
+        STARTUPINFOEXW,
+    };
+    use windows::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
+    use windows::core::{PCWSTR, PWSTR};
+
+    // ─── flag 常量（windows crate 仅定义 PSEUDOCONSOLE_INHERIT_CURSOR）───
+    const FLAG_RESIZE_QUIRK: u32 = 0x2;
+    const FLAG_WIN32_INPUT_MODE: u32 = 0x4;
+    const FLAG_PASSTHROUGH_MODE: u32 = 0x8;
+
+    const PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE: usize = 0x00020016;
+    const CREATE_UNICODE_ENVIRONMENT: u32 = 0x00000400;
+
+    /// 计算 ConPTY flags：基础 0x7，Win11 22H2+ (build>=22621) 追加 PASSTHROUGH_MODE
+    pub fn compute_conpty_flags(build_number: u32) -> u32 {
+        let mut flags =
+            PSEUDOCONSOLE_INHERIT_CURSOR | FLAG_RESIZE_QUIRK | FLAG_WIN32_INPUT_MODE;
+        if build_number >= 22621 {
+            flags |= FLAG_PASSTHROUGH_MODE;
+        }
+        flags
+    }
+
+    /// 将 UTF-8 字符串编码为以 null 结尾的 UTF-16LE 向量
+    fn to_wide_null(s: &str) -> Vec<u16> {
+        s.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    /// 构建 CreateProcessW 命令行（程序路径 + 参数的单行字符串）
+    fn build_cmdline(program: &str, args: &[String]) -> Vec<u16> {
+        let mut s = String::new();
+        // 程序路径含空格时加引号
+        let quote = program.contains(' ');
+        if quote { s.push('"'); }
+        s.push_str(program);
+        if quote { s.push('"'); }
+        for arg in args {
+            s.push(' ');
+            if arg.contains(' ') || arg.contains('\t') {
+                s.push('"');
+                s.push_str(arg);
+                s.push('"');
+            } else {
+                s.push_str(arg);
+            }
+        }
+        to_wide_null(&s)
+    }
+
+    /// 构造环境块（继承当前进程环境 + 追加/覆盖 extra_envs）
+    fn build_env_block(extra_envs: &[(String, String)]) -> Vec<u16> {
+        use std::os::windows::ffi::OsStrExt;
+        let mut base: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        // 读取当前进程环境变量
+        for (k, v) in std::env::vars() {
+            base.insert(k, v);
+        }
+        for (k, v) in extra_envs {
+            base.insert(k.clone(), v.clone());
+        }
+        // 构造 null 分隔的宽字符串块：KEY=VALUE\0KEY=VALUE\0\0
+        let mut buf: Vec<u16> = Vec::new();
+        for (k, v) in &base {
+            let entry = format!("{}={}", k, v);
+            buf.extend(std::ffi::OsStr::new(&entry).encode_wide());
+            buf.push(0);
+        }
+        buf.push(0);
+        buf
+    }
+
+    /// 轻量 STARTUPINFOEXW 属性列表 wrapper
+    struct AttrList {
+        data: Vec<u8>,
+    }
+
+    impl AttrList {
+        fn with_capacity(num_attributes: u32) -> Result<Self, Error> {
+            let mut bytes_required: usize = 0;
+            unsafe {
+                let _ = InitializeProcThreadAttributeList(None, num_attributes, Some(0), &mut bytes_required);
+            };
+            let mut data = vec![0u8; bytes_required];
+            let res = unsafe {
+                InitializeProcThreadAttributeList(
+                    Some(LPPROC_THREAD_ATTRIBUTE_LIST(data.as_mut_ptr() as *mut _)),
+                    num_attributes,
+                    Some(0),
+                    &mut bytes_required,
+                )
+            };
+            if res.is_err() {
+                bail!("InitializeProcThreadAttributeList 失败");
+            }
+            Ok(Self { data })
+        }
+
+        fn as_mut_ptr(&mut self) -> LPPROC_THREAD_ATTRIBUTE_LIST {
+            LPPROC_THREAD_ATTRIBUTE_LIST(self.data.as_mut_ptr() as *mut _)
+        }
+
+        /// 将 HPCON 附加到属性列表，使子进程连接到此伪控制台
+        fn set_pty(&mut self, hpc: HPCON) -> Result<(), Error> {
+            let res = unsafe {
+                UpdateProcThreadAttribute(
+                    self.as_mut_ptr(),
+                    0,
+                    PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
+                    Some(hpc.0 as *const std::ffi::c_void), // HPCON 值（非指针）作为 lpvalue
+                    mem::size_of::<HPCON>(),
+                    None,
+                    None,
+                )
+            };
+            ensure!(
+                !res.is_err(),
+                "UpdateProcThreadAttribute 失败"
+            );
+            Ok(())
+        }
+    }
+
+    impl Drop for AttrList {
+        fn drop(&mut self) {
+            unsafe {
+                DeleteProcThreadAttributeList(self.as_mut_ptr());
+            }
+        }
+    }
+
+    // ─── ConPtyMaster: 实现 portable_pty::MasterPty 的自定义类型 ───
+
+    struct ConPtyInner {
+        hpc: HPCON,
+        readable: FileDescriptor,
+        writable: Option<FileDescriptor>,
+        size: PtySize,
+    }
+
+    /// 自定义 MasterPty 实现，持有直接通过 Win32 API 创建的 HPCON
+    pub struct ConPtyMaster {
+        inner: Arc<Mutex<ConPtyInner>>,
+    }
+
+    // Downcast trait（便携式 pty::MasterPty 要求）由 mopa blanket impl 自动实现，无需手动
+
+    impl MasterPty for ConPtyMaster {
+        fn resize(&self, size: PtySize) -> Result<(), Error> {
+            let mut inner = self.inner.lock().unwrap();
+            // 检查 HPCON 有效性（初始化或已关闭时为 INVALID_HANDLE_VALUE）
+            if inner.hpc.is_invalid() {
+                inner.size = size;
+                return Ok(());
+            }
+            let coord = COORD {
+                X: size.cols as i16,
+                Y: size.rows as i16,
+            };
+            unsafe { ResizePseudoConsole(inner.hpc, coord)? };
+            inner.size = size;
+            Ok(())
+        }
+
+        fn get_size(&self) -> Result<PtySize, Error> {
+            Ok(self.inner.lock().unwrap().size)
+        }
+
+        fn try_clone_reader(&self) -> Result<Box<dyn Read + Send>, Error> {
+            Ok(Box::new(self.inner.lock().unwrap().readable.try_clone()?))
+        }
+
+        fn take_writer(&self) -> Result<Box<dyn Write + Send>, Error> {
+            Ok(Box::new(
+                self.inner
+                    .lock()
+                    .unwrap()
+                    .writable
+                    .take()
+                    .ok_or_else(|| anyhow::anyhow!("writer 已被取走（仅允许 take 一次）"))?,
+            ))
+        }
+    }
+
+    /// 子进程句柄 RAII wrapper
+    pub struct RawChild {
+        proc_handle: Mutex<OwnedHandle>,
+        pid: u32,
+    }
+
+    impl std::fmt::Debug for RawChild {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("RawChild").field("pid", &self.pid).finish()
+        }
+    }
+
+    // Downcast trait（便携式 pty::Child 要求）由 mopa blanket impl 自动实现
+
+    impl ChildKiller for RawChild {
+        fn kill(&mut self) -> std::io::Result<()> {
+            use windows::Win32::System::Threading::TerminateProcess;
+            let proc = self.proc_handle.lock().unwrap();
+            unsafe {
+                TerminateProcess(HANDLE(proc.as_raw_handle() as *mut std::ffi::c_void), 1)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            }
+            Ok(())
+        }
+
+        fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
+            // ChildKiller 通过互斥锁共享进程句柄，无需克隆
+            // 此方法仅用于 trait 兼容，不应被调用
+            unimplemented!("RawChild 不支持 clone_killer")
+        }
+    }
+
+    impl Child for RawChild {
+        fn try_wait(&mut self) -> std::io::Result<Option<portable_pty::ExitStatus>> {
+            use windows::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject};
+
+            let proc = self.proc_handle.lock().unwrap();
+            unsafe {
+                let result = WaitForSingleObject(
+                    HANDLE(proc.as_raw_handle() as *mut std::ffi::c_void),
+                    0,
+                );
+                // WAIT_TIMEOUT = 0x0000_0102, WAIT_OBJECT_0 = 0x0000_0000
+                if result.0 == 0x0000_0102 {
+                    return Ok(None);
+                }
+                let mut exit_code: u32 = 0;
+                GetExitCodeProcess(HANDLE(proc.as_raw_handle() as *mut std::ffi::c_void), &mut exit_code)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                Ok(Some(portable_pty::ExitStatus::with_exit_code(exit_code)))
+            }
+        }
+
+        fn wait(&mut self) -> std::io::Result<portable_pty::ExitStatus> {
+            use windows::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject};
+            const INFINITE: u32 = 0xFFFF_FFFF;
+
+            let proc = self.proc_handle.lock().unwrap();
+            unsafe {
+                WaitForSingleObject(HANDLE(proc.as_raw_handle() as *mut std::ffi::c_void), INFINITE);
+                let mut exit_code: u32 = 0;
+                GetExitCodeProcess(HANDLE(proc.as_raw_handle() as *mut std::ffi::c_void), &mut exit_code)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                Ok(portable_pty::ExitStatus::with_exit_code(exit_code))
+            }
+        }
+
+        fn process_id(&self) -> Option<u32> {
+            Some(self.pid)
+        }
+
+        fn as_raw_handle(&self) -> Option<std::os::windows::raw::HANDLE> {
+            let proc = self.proc_handle.lock().unwrap();
+            Some(proc.as_raw_handle() as std::os::windows::raw::HANDLE)
+        }
+    }
+
+    impl Drop for ConPtyInner {
+        fn drop(&mut self) {
+            // ConPTY 关闭前确保 writer 已 drop（stops child stdin → EOF 传递）
+            drop(self.writable.take());
+            if !self.hpc.is_invalid() {
+                unsafe { ClosePseudoConsole(self.hpc) };
+            }
+        }
+    }
+
+    /// 创建 ConPTY 管道对 + MasterPty 包装
+    ///
+    /// 返回 (HPCON, ConPtyMaster) 供后续 spawn 和 session 注册。
+    /// HPCON 单独返回是因为 spawn_conpty_child 需要直接引用它
+    /// （ProcThreadAttributeList::set_pty 需要 HPCON 值）。
+    pub fn create_conpty_pair(
+        cols: u16,
+        rows: u16,
+        build_number: u32,
+    ) -> Result<(HPCON, ConPtyMaster), Error> {
+        let stdin_pipe = Pipe::new()?;
+        let stdout_pipe = Pipe::new()?;
+
+        let flags = compute_conpty_flags(build_number);
+        let size = COORD {
+            X: cols as i16,
+            Y: rows as i16,
+        };
+
+        let hpc = unsafe {
+            CreatePseudoConsole(
+                size,
+                HANDLE(stdin_pipe.read.as_raw_handle() as *mut std::ffi::c_void),
+                HANDLE(stdout_pipe.write.as_raw_handle() as *mut std::ffi::c_void),
+                flags,
+            )
+        }?;
+
+        let master = ConPtyMaster {
+            inner: Arc::new(Mutex::new(ConPtyInner {
+                hpc,
+                readable: stdout_pipe.read,
+                writable: Some(stdin_pipe.write),
+                size: PtySize {
+                    rows,
+                    cols,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                },
+            })),
+        };
+
+        Ok((hpc, master))
+    }
+
+    /// 使用自定义 HPCON 启动子进程
+    ///
+    /// shell_info: 从 shell::resolve_shell_info() 获取的 shell 程序信息
+    /// extra_envs: 额外环境变量（COLORTERM, TERM, TERM_PROGRAM 等）
+    /// cwd: 工作目录（可选）
+    pub fn spawn_conpty_child(
+        hpc: HPCON,
+        shell_info: &super::super::shell::ShellInfo,
+        extra_envs: &[(String, String)],
+        cwd: Option<&str>,
+    ) -> Result<RawChild, Error> {
+        let app_name = to_wide_null(&shell_info.program);
+        let mut cmd_line = build_cmdline(&shell_info.program, &shell_info.args);
+        let env_block = build_env_block(extra_envs);
+
+        let mut si: STARTUPINFOEXW = unsafe { mem::zeroed() };
+        si.StartupInfo.cb = mem::size_of::<STARTUPINFOEXW>() as u32;
+        si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+        si.StartupInfo.hStdInput = INVALID_HANDLE_VALUE;
+        si.StartupInfo.hStdOutput = INVALID_HANDLE_VALUE;
+        si.StartupInfo.hStdError = INVALID_HANDLE_VALUE;
+
+        let mut attrs = AttrList::with_capacity(1)?;
+        attrs.set_pty(hpc)?;
+        si.lpAttributeList = attrs.as_mut_ptr();
+
+        let cwd_wide: Option<Vec<u16>> = cwd.map(|c| to_wide_null(&c.replace('/', "\\")));
+
+        let mut pi: PROCESS_INFORMATION = unsafe { mem::zeroed() };
+        let res = unsafe {
+            CreateProcessW(
+                PCWSTR::from_raw(app_name.as_ptr()),
+                Some(PWSTR::from_raw(cmd_line.as_mut_ptr())),
+                None,
+                None,
+                false,
+                EXTENDED_STARTUPINFO_PRESENT | PROCESS_CREATION_FLAGS(CREATE_UNICODE_ENVIRONMENT),
+                Some(env_block.as_ptr() as *const std::ffi::c_void),
+                cwd_wide
+                    .as_ref()
+                    .map_or(PCWSTR::null(), |c| PCWSTR::from_raw(c.as_ptr())),
+                &si.StartupInfo,
+                &mut pi,
+            )
+        };
+
+        if res.is_err() {
+            let err = std::io::Error::last_os_error();
+            bail!(
+                "CreateProcessW `{}` 失败: {}",
+                shell_info.program,
+                err
+            );
+        }
+
+        // 关闭子进程的主线程句柄（不需要），进程句柄由 RawChild 持有
+        unsafe {
+            let _ = CloseHandle(HANDLE(pi.hThread.0));
+        }
+
+        Ok(RawChild {
+            proc_handle: Mutex::new(unsafe { OwnedHandle::from_raw_handle(pi.hProcess.0 as _) }),
+            pid: pi.dwProcessId,
+        })
+    }
+
+    // ─── 测试 ───
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        // T1: compute_conpty_flags（4 条）
+        #[test]
+        fn flags_win10_returns_0x7() {
+            assert_eq!(compute_conpty_flags(19041), 0x7);
+        }
+
+        #[test]
+        fn flags_win11_21h2_returns_0x7() {
+            assert_eq!(compute_conpty_flags(22000), 0x7);
+        }
+
+        #[test]
+        fn flags_win11_22h2_returns_0xf() {
+            assert_eq!(compute_conpty_flags(22621), 0xF);
+        }
+
+        #[test]
+        fn flags_win11_24h2_returns_0xf() {
+            assert_eq!(compute_conpty_flags(26100), 0xF);
+        }
+
+        // T3: 常量值验证（4 条）
+        #[test]
+        fn flag_inherit_cursor_is_0x1() {
+            assert_eq!(PSEUDOCONSOLE_INHERIT_CURSOR, 0x1);
+        }
+
+        #[test]
+        fn flag_resize_quirk_is_0x2() {
+            assert_eq!(FLAG_RESIZE_QUIRK, 0x2);
+        }
+
+        #[test]
+        fn flag_win32_input_mode_is_0x4() {
+            assert_eq!(FLAG_WIN32_INPUT_MODE, 0x4);
+        }
+
+        #[test]
+        fn flag_passthrough_mode_is_0x8() {
+            assert_eq!(FLAG_PASSTHROUGH_MODE, 0x8);
+        }
+
+        // T2: ConPtyMaster MasterPty trait（4 条，依赖实际 Pipe 创建）
+        #[test]
+        fn master_get_size_initial() {
+            let (_hpc, master) = create_conpty_pair(80, 24, 26100).unwrap();
+            assert_eq!(master.get_size().unwrap().cols, 80);
+            assert_eq!(master.get_size().unwrap().rows, 24);
+        }
+
+        #[test]
+        fn master_take_writer_first_succeeds() {
+            let (_hpc, master) = create_conpty_pair(80, 24, 26100).unwrap();
+            let writer = master.take_writer();
+            assert!(writer.is_ok());
+        }
+
+        #[test]
+        fn master_take_writer_second_fails() {
+            let (_hpc, master) = create_conpty_pair(80, 24, 26100).unwrap();
+            let _ = master.take_writer();
+            assert!(master.take_writer().is_err());
+        }
+
+        #[test]
+        fn master_try_clone_reader_succeeds() {
+            let (_hpc, master) = create_conpty_pair(80, 24, 26100).unwrap();
+            let reader = master.try_clone_reader();
+            assert!(reader.is_ok());
+        }
+
+        // T4: ProcThreadAttributeList 生命周期（2 条）
+        #[test]
+        fn attr_list_create_and_drop() {
+            let list = AttrList::with_capacity(1);
+            assert!(list.is_ok());
+            // Drop 时不应 panic
+        }
+
+        #[test]
+        fn attr_list_as_mut_ptr_non_null() {
+            let mut list = AttrList::with_capacity(1).unwrap();
+            let ptr = list.as_mut_ptr().0;
+            assert!(!ptr.is_null());
+        }
+    }
 }
 
 /// PTY 输出事件 — 通过 Channel 推送到前端
@@ -108,44 +587,48 @@ pub fn pty_spawn(
 
     let session_id = Uuid::new_v4().to_string();
 
-    // 选择 shell 程序（shell.rs 已配置好 CommandBuilder 参数）
-    let mut cmd = shell::resolve_shell(request.shell.as_deref());
+    // 解析 shell 程序（不依赖 portable-pty CommandBuilder，直接获取结构化信息）
+    let shell_info = shell::resolve_shell_info(request.shell.as_deref());
 
     // 注入终端能力环境变量——Claude Code 依赖此宣告启用 True Color
-    // COLORTERM=truecolor 是 Chalk/supports-color 的核心检测信号
-    // TERM=xterm-256color 是传统 terminfo 能力宣告（部分应用不看 COLORTERM）
-    cmd.env("COLORTERM", "truecolor");
-    cmd.env("TERM", "xterm-256color");
-    cmd.env("TERM_PROGRAM", "slTerminal");
+    let extra_envs: Vec<(String, String)> = vec![
+        ("COLORTERM".into(), "truecolor".into()),
+        ("TERM".into(), "xterm-256color".into()),
+        ("TERM_PROGRAM".into(), "slTerminal".into()),
+    ];
 
-    // 设置工作目录，规范化反斜杠（Windows ConPTY 需要 \ 分隔符）
-    if let Some(cwd) = &request.cwd {
-        let normalized = cwd.replace('/', "\\");
-        cmd.cwd(normalized);
-    }
+    // 创建 PTY 并获取 master +（Windows 独有）HPCON 用于子进程 spawn
+    // Windows: 绕过 portable-pty openpty，直接调 Win32 CreatePseudoConsole 控制 flags
+    #[cfg(windows)]
+    let (conpty_hpc, conpty_master) = {
+        let build = super::build::get_windows_build_number().unwrap_or(0);
+        conpty_custom::create_conpty_pair(request.cols, request.rows, build)
+            .map_err(|e| AppError::Pty(e.to_string()))?
+    };
+    #[cfg(windows)]
+    let master: Box<dyn portable_pty::MasterPty + Send> = Box::new(conpty_master);
 
-    // 传递 pane token：脚本初始化后用此值设置 SLTERM_PANE_ID，
-    // 并在嵌套检测前检查 SLTERM_PANE_ID（不直接注入，避免误判跳过）
-
-    // 创建 PTY
-    let pty_system = native_pty_system();
-    let pair = pty_system.openpty(PtySize {
-        rows: request.rows,
-        cols: request.cols,
-        pixel_width: 0,
-        pixel_height: 0,
-    })
-    .map_err(|e| AppError::Pty(e.to_string()))?;
+    /// 非 Windows: 使用 portable-pty 原生 openpty
+    #[cfg(not(windows))]
+    let (master, slave) = {
+        let pty_system = native_pty_system();
+        let pair = pty_system.openpty(PtySize {
+            rows: request.rows,
+            cols: request.cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|e| AppError::Pty(e.to_string()))?;
+        (pair.master, pair.slave)
+    };
 
     // take_writer 只能调一次（0.9.0 破坏性变更），Arc<Mutex> 共享
-    let raw_writer = pair.master.take_writer()
+    let raw_writer = master.take_writer()
         .map_err(|e| AppError::Pty(e.to_string()))?;
     let writer: Arc<Mutex<Box<dyn std::io::Write + Send>>> = Arc::new(Mutex::new(raw_writer));
 
     // Windows: spawn 前向 stdin 写 CPR \x1b[1;1R
     // 补偿 ConPTY VtIo::StartIfNeeded() DSR 握手。
-    // 提前注入确保 ConPTY 首次读取 input pipe 时即获得 CPR 应答，避免 DSR 死锁。
-    // 蜂鸣+首字符消失由 reader.rs 的 strip_conpty_startup() 处理——与此无关。
     #[cfg(windows)]
     {
         let mut w = writer.lock().map_err(|e| AppError::Pty(format!("锁获取失败: {}", e)))?;
@@ -154,8 +637,28 @@ pub fn pty_spawn(
     }
 
     // spawn 子进程
-    let child = pair.slave.spawn_command(cmd)
-        .map_err(|e| AppError::Pty(e.to_string()))?;
+    #[cfg(windows)]
+    let child: Box<dyn portable_pty::Child + Send> = Box::new(
+        conpty_custom::spawn_conpty_child(
+            conpty_hpc,
+            &shell_info,
+            &extra_envs,
+            request.cwd.as_deref(),
+        )
+        .map_err(|e| AppError::Pty(e.to_string()))?
+    );
+    #[cfg(not(windows))]
+    let child: Box<dyn portable_pty::Child + Send> = {
+        let mut cmd = shell::resolve_shell(request.shell.as_deref());
+        cmd.env("COLORTERM", "truecolor");
+        cmd.env("TERM", "xterm-256color");
+        cmd.env("TERM_PROGRAM", "slTerminal");
+        if let Some(cwd) = &request.cwd {
+            cmd.cwd(cwd.replace('/', "\\"));
+        }
+        slave.spawn_command(cmd)
+            .map_err(|e| AppError::Pty(e.to_string()))?
+    };
 
     // Windows: 将子进程放入 Job Object 防止孤儿进程
     #[cfg(windows)]
@@ -180,7 +683,7 @@ pub fn pty_spawn(
         Arc::new(Mutex::new(child));
 
     // 克隆 reader，启动 reader 线程（reader.rs 首轮读取剥离 ConPTY 启动注入序列）
-    let reader = pair.master.try_clone_reader()
+    let reader = master.try_clone_reader()
         .map_err(|e| AppError::Pty(e.to_string()))?;
     let reader_channel = channel.clone();
     let reader_ring = output_ring.clone();
@@ -195,7 +698,7 @@ pub fn pty_spawn(
 
     // 保存会话
     let session = PtySession {
-        master: Mutex::new(pair.master),
+        master: Mutex::new(master),
         child,
         writer,
         reader_handle: Some(reader_handle),
@@ -418,38 +921,4 @@ unsafe fn create_and_assign_job(pid: u32, job_name_wide: &[u16]) -> Result<JobHa
     let _ = CloseHandle(process);
 
     Ok(JobHandle::new(job))
-}
-
-// ─── PASSTHROUGH_MODE 测试 ───
-
-#[cfg(all(test, windows))]
-mod passthrough_tests {
-    use super::*;
-
-    #[test]
-    fn passthrough_flag_value_is_0x8() {
-        assert_eq!(PSEUDOCONSOLE_PASSTHROUGH_MODE, 0x8);
-    }
-
-    #[test]
-    fn passthrough_win11_22h2_enabled() {
-        // Win11 22H2 = build 22621
-        assert!(detect_passthrough_support(22621));
-        assert!(detect_passthrough_support(26100)); // Win11 24H2
-    }
-
-    #[test]
-    fn passthrough_win10_disabled() {
-        assert!(!detect_passthrough_support(19041)); // Win10 2004
-        assert!(!detect_passthrough_support(22000)); // Win11 21H2
-        assert!(!detect_passthrough_support(22620)); // 刚好低于阈值
-    }
-
-    #[test]
-    fn passthrough_os_detection_boundary() {
-        // 边界值测试
-        assert!(!detect_passthrough_support(0)); // 无效 build
-        assert!(detect_passthrough_support(22621)); // 恰好等于阈值
-        assert!(detect_passthrough_support(u32::MAX)); // 最大 build
-    }
 }

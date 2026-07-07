@@ -1,6 +1,6 @@
 mod error;
 mod state;
-mod pty;
+pub mod pty;
 mod fs;
 mod settings;
 mod notify;
