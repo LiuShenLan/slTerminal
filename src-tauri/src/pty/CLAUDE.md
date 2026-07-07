@@ -65,6 +65,15 @@ state.rs          → PtySession 结构体 + PtyState 全局 HashMap
 
 `shell.rs`：`pwsh.exe` → `powershell.exe` → `cmd.exe` 回退。PowerShell 通过 `-EncodedCommand`（UTF-16LE Base64）内联集成脚本（`include_str!("../../assets/shell-integration.ps1")`），消除 `%APPDATA%` 文件写入，避免 AMSI/ASR 误杀。集成脚本注入 OSC 7（cwd 跟踪）+ OSC 133 A/B/D（提示符边界+退出码）+ UTF-8 编码修复。
 
+### 终端能力环境变量注入
+
+`pty_spawn` 在 `resolve_shell()` 之后、`spawn_command()` 之前通过 `cmd.env()` 注入三个环境变量：
+- `COLORTERM=truecolor` — Chalk/supports-color 的核心检测信号，Claude Code 依赖此变量启用 24-bit RGB
+- `TERM=xterm-256color` — 传统 terminfo 能力宣告（部分应用不看 COLORTERM，防御性设置）
+- `TERM_PROGRAM=slTerminal` — 品牌标识（非功能性，行业惯例）
+
+注入在 spawn 阶段（非 shell rc），确保子进程一启动即可见。三个变量对 pwsh/powershell/cmd 统一注入，不加 shell 类型判断。
+
 ### PASSTHROUGH_MODE 基础设施（Win11 22H2+）
 
 `spawn.rs` 定义了 `PSEUDOCONSOLE_PASSTHROUGH_MODE` 常量（0x8）和 `detect_passthrough_support(build_number)` 检测函数（阈值 build ≥ 22621）。启用后 ConPTY 原样转发 VT bytes 跳过内部 OpenConsole.exe 处理，消除双重渲染开销（约 10-20x 吞吐提升）。当前 `portable-pty` 0.9.x 不暴露 `CreatePseudoConsole` 的 `dwFlags` 参数，基础设施就绪待 upstream 或 fork 集成。

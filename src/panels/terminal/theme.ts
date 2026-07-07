@@ -36,5 +36,7 @@ export const terminalOptions: ITerminalOptions = {
   cursorStyle: "bar",
   allowProposedApi: true,
   scrollback: 5000,
+  // 显式声明，消除对 xterm.js 默认值 true 的隐式依赖（仅影响 ANSI 16 色粗体→亮色映射，不影响 True Color）
+  drawBoldTextInBrightColors: true,
   // windowsPty 由 F3 useEffect 在获取真实 build 号后动态设置，不在此预设空对象
 };

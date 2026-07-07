@@ -92,6 +92,30 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_shell_accepts_env_vars() {
+        // 验证 resolve_shell 返回的 CommandBuilder 支持 .env() 调用
+        // 这是 pty_spawn 中注入 COLORTERM/TERM/TERM_PROGRAM 的前提条件
+        let mut cmd = resolve_shell(Some("cmd.exe"));
+        cmd.env("COLORTERM", "truecolor");
+        cmd.env("TERM", "xterm-256color");
+        cmd.env("TERM_PROGRAM", "slTerminal");
+        // 不 panic 即通过
+    }
+
+    #[test]
+    fn test_build_pwsh_command_accepts_env_vars() {
+        // pwsh 路径的 CommandBuilder 同样支持 .env()
+        let mut cmd = if which_exists("pwsh.exe") {
+            resolve_shell(None)
+        } else {
+            resolve_shell(Some("pwsh.exe"))
+        };
+        cmd.env("COLORTERM", "truecolor");
+        cmd.env("TERM", "xterm-256color");
+        // 不 panic 即通过
+    }
+
+    #[test]
     fn test_encode_utf16le_base64_roundtrip() {
         let original = "Write-Host 'hello'";
         let encoded = encode_utf16le_base64(original);

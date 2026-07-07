@@ -67,4 +67,8 @@ describe("terminalOptions 配色验证", () => {
   it("11. allowProposedApi 为 true", () => {
     expect(terminalOptions.allowProposedApi).toBe(true);
   });
+
+  it("12. drawBoldTextInBrightColors 显式为 true", () => {
+    expect(terminalOptions.drawBoldTextInBrightColors).toBe(true);
+  });
 });

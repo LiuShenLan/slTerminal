@@ -111,6 +111,13 @@ pub fn pty_spawn(
     // 选择 shell 程序（shell.rs 已配置好 CommandBuilder 参数）
     let mut cmd = shell::resolve_shell(request.shell.as_deref());
 
+    // 注入终端能力环境变量——Claude Code 依赖此宣告启用 True Color
+    // COLORTERM=truecolor 是 Chalk/supports-color 的核心检测信号
+    // TERM=xterm-256color 是传统 terminfo 能力宣告（部分应用不看 COLORTERM）
+    cmd.env("COLORTERM", "truecolor");
+    cmd.env("TERM", "xterm-256color");
+    cmd.env("TERM_PROGRAM", "slTerminal");
+
     // 设置工作目录，规范化反斜杠（Windows ConPTY 需要 \ 分隔符）
     if let Some(cwd) = &request.cwd {
         let normalized = cwd.replace('/', "\\");
