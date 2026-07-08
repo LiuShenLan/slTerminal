@@ -1160,7 +1160,7 @@ describe("ResizeObserver 交替缓冲检查", () => {
     }
   }
 
-  it("AB1: 交替缓冲中 resize → fitAddon.fit() 不调用", async () => {
+  it("AB1: 交替缓冲中 resize → fitAddon.fit() 被调用（更新 xterm.js 网格尺寸）", async () => {
     renderHook(() =>
       useXterm({ container, cols: 80, rows: 24, panelId: "ab-1" }),
     );
@@ -1178,8 +1178,8 @@ describe("ResizeObserver 交替缓冲检查", () => {
     triggerResize();
     await new Promise((r) => setTimeout(r, 150));
 
-    // 交替缓冲中 fit 不调用
-    expect(mockFit).not.toHaveBeenCalled();
+    // 交替缓冲中 fit 被调用（同步 xterm.js 网格尺寸与 PTY 新尺寸）
+    expect(mockFit).toHaveBeenCalled();
     // SIGWINCH 仍然透传
     expect(pty.resize).toHaveBeenCalledWith(
       expect.any(String),
@@ -1959,5 +1959,436 @@ describe("OSC 52 剪贴板支持", () => {
 
     const result3 = capturedOsc52Handler!("c;?");
     expect(result3).toBe(true);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+// Resize 后画面撕裂修复：cancelPendingFlush 测试
+// ═══════════════════════════════════════════════════════════
+
+describe("cancelPendingFlush", () => {
+  let container: HTMLDivElement;
+  let rafCallbacks: Array<FrameRequestCallback>;
+  let rafIdCounter: number;
+  let triggerResize: () => void;
+  const OrigRO = globalThis.ResizeObserver;
+
+  const origRAF = globalThis.requestAnimationFrame;
+  const origCAF = globalThis.cancelAnimationFrame;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockProposeDimensions.mockReturnValue({ cols: 80, rows: 24 });
+    capturedTerminal = null;
+
+    rafCallbacks = [];
+    rafIdCounter = 0;
+    globalThis.requestAnimationFrame = vi.fn(
+      (cb: FrameRequestCallback) => {
+        const id = ++rafIdCounter;
+        rafCallbacks.push(cb);
+        return id;
+      },
+    );
+    globalThis.cancelAnimationFrame = vi.fn();
+
+    container = document.createElement("div");
+    Object.defineProperty(container, "offsetWidth", { value: 800, configurable: true });
+    Object.defineProperty(container, "offsetHeight", { value: 600, configurable: true });
+
+    triggerResize = () => {};
+    globalThis.ResizeObserver = class {
+      constructor(cb: (entries: unknown[], observer: unknown) => void) {
+        triggerResize = () => cb([], this as unknown as ResizeObserver);
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    } as unknown as typeof ResizeObserver;
+  });
+
+  afterEach(() => {
+    globalThis.requestAnimationFrame = origRAF;
+    globalThis.cancelAnimationFrame = origCAF;
+    globalThis.ResizeObserver = OrigRO;
+    vi.restoreAllMocks();
+  });
+
+  function flushRaf() {
+    while (rafCallbacks.length > 0) {
+      const cb = rafCallbacks.shift()!;
+      cb(performance.now());
+    }
+  }
+
+  function getSpawnOutputCallback() {
+    const calls = (pty.spawn as ReturnType<typeof vi.fn>).mock.calls;
+    if (calls.length === 0) return null;
+    return calls[calls.length - 1][1] as (event: { type: string; data: { bytes: number[] } }) => void;
+  }
+
+  function sendPtyOutput(bytes: number[]) {
+    const cb = getSpawnOutputCallback();
+    if (cb) cb({ type: "output", data: { bytes } });
+  }
+
+  async function mountAndWait() {
+    const result = renderHook(() =>
+      useXterm({ container, cols: 80, rows: 24, panelId: "cpf-test" }),
+    );
+    flushRaf();
+    await vi.waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    });
+    return result;
+  }
+
+  // ─── cancelPendingFlush 单元测试 ───
+
+  it("CPF1: 取消时清除 idle 定时器", async () => {
+    const { result } = await mountAndWait();
+    capturedTerminal!.write.mockClear();
+
+    sendPtyOutput(new Array(100).fill(65));
+    expect(capturedTerminal!.write).not.toHaveBeenCalled();
+
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+    result.current._test!.cancelPendingFlush();
+
+    expect(clearTimeoutSpy).toHaveBeenCalled();
+    expect(result.current._test!.getPendingBuffer()).toHaveLength(0);
+
+    await new Promise((r) => setTimeout(r, 5));
+    expect(capturedTerminal!.write).not.toHaveBeenCalled();
+    clearTimeoutSpy.mockRestore();
+  });
+
+  it("CPF2: 取消时清除 max 定时器", async () => {
+    const { result } = await mountAndWait();
+    capturedTerminal!.write.mockClear();
+
+    sendPtyOutput(new Array(100).fill(65));
+
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+    result.current._test!.cancelPendingFlush();
+
+    expect(clearTimeoutSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+
+    await new Promise((r) => setTimeout(r, 20));
+    expect(capturedTerminal!.write).not.toHaveBeenCalled();
+    clearTimeoutSpy.mockRestore();
+  });
+
+  it("CPF3: 取消时清空缓冲区", async () => {
+    const { result } = await mountAndWait();
+
+    sendPtyOutput(new Array(80).fill(65));
+    sendPtyOutput(new Array(80).fill(66));
+    sendPtyOutput(new Array(80).fill(67));
+
+    expect(result.current._test!.getPendingBuffer()).toHaveLength(3);
+
+    result.current._test!.cancelPendingFlush();
+    expect(result.current._test!.getPendingBuffer()).toHaveLength(0);
+  });
+
+  it("CPF4: 取消时重置字节计数", async () => {
+    const { result } = await mountAndWait();
+
+    sendPtyOutput(new Array(200).fill(65));
+    sendPtyOutput(new Array(312).fill(66));
+
+    result.current._test!.cancelPendingFlush();
+    expect(result.current._test!.getPendingBuffer()).toHaveLength(0);
+
+    sendPtyOutput(new Array(100).fill(67));
+    expect(result.current._test!.getPendingBuffer()).toHaveLength(1);
+  });
+
+  it("CPF5: 空缓冲取消不抛异常", async () => {
+    const { result } = await mountAndWait();
+
+    expect(result.current._test!.getPendingBuffer()).toHaveLength(0);
+
+    expect(() => {
+      result.current._test!.cancelPendingFlush();
+    }).not.toThrow();
+
+    expect(result.current._test!.getPendingBuffer()).toHaveLength(0);
+  });
+
+  // ─── cancelPendingFlush vs flushBuffer ───
+
+  it("CPF8: cancelPendingFlush 不写入终端", async () => {
+    const { result } = await mountAndWait();
+    capturedTerminal!.write.mockClear();
+
+    sendPtyOutput(new Array(200).fill(65));
+    expect(capturedTerminal!.write).not.toHaveBeenCalled();
+
+    result.current._test!.cancelPendingFlush();
+    expect(capturedTerminal!.write).not.toHaveBeenCalled();
+
+    sendPtyOutput(new Array(200).fill(66));
+    result.current._test!.flushBuffer();
+    expect(capturedTerminal!.write).toHaveBeenCalledTimes(1);
+  });
+
+  // ─── ResizeObserver 集成测试 ───
+
+  it("CPF6: ResizeObserver 用 cancelPendingFlush 不写入旧数据", async () => {
+    await mountAndWait();
+    capturedTerminal!.write.mockClear();
+
+    sendPtyOutput(new Array(200).fill(65));
+    expect(capturedTerminal!.write).not.toHaveBeenCalled();
+
+    mockProposeDimensions.mockReturnValue({ cols: 70, rows: 24 });
+    triggerResize();
+    await new Promise((r) => setTimeout(r, 10));
+
+    mockProposeDimensions.mockReturnValue({ cols: 60, rows: 24 });
+    triggerResize();
+
+    await new Promise((r) => setTimeout(r, 150));
+
+    const writeCalls = (capturedTerminal!.write as ReturnType<typeof vi.fn>).mock.calls;
+    if (writeCalls.length > 0) {
+      for (const call of writeCalls) {
+        const decoded = new TextDecoder().decode(call[0] as Uint8Array);
+        expect(decoded).not.toContain("A".repeat(200));
+      }
+    }
+  });
+
+  it("CPF7: resize 后新数据正常 DEC 2026 合帧", async () => {
+    const { result } = await mountAndWait();
+    capturedTerminal!.write.mockClear();
+
+    mockProposeDimensions.mockReturnValue({ cols: 60, rows: 30 });
+    triggerResize();
+    await new Promise((r) => setTimeout(r, 150));
+
+    expect(result.current._test!.getPendingBuffer()).toHaveLength(0);
+
+    capturedTerminal!.write.mockClear();
+
+    sendPtyOutput(new Array(200).fill(88));
+    expect(result.current._test!.getPendingBuffer()).toHaveLength(1);
+
+    await new Promise((r) => setTimeout(r, 5));
+    expect(capturedTerminal!.write).toHaveBeenCalledTimes(1);
+    const decoded = new TextDecoder().decode(
+      (capturedTerminal!.write as ReturnType<typeof vi.fn>).mock.calls[0][0] as Uint8Array,
+    );
+    expect(decoded.startsWith("\x1b[?2026h")).toBe(true);
+  });
+
+  it("CPF9: 列变化 debounce 合并 resize（不产生多余写）", async () => {
+    const { result } = await mountAndWait();
+    capturedTerminal!.write.mockClear();
+    mockFit.mockClear();
+    (pty.resize as ReturnType<typeof vi.fn>).mockClear();
+
+    sendPtyOutput(new Array(200).fill(65));
+    expect(result.current._test!.getPendingBuffer()).toHaveLength(1);
+
+    mockProposeDimensions.mockReturnValue({ cols: 70, rows: 30 });
+    triggerResize();
+    mockProposeDimensions.mockReturnValue({ cols: 60, rows: 30 });
+    triggerResize();
+    mockProposeDimensions.mockReturnValue({ cols: 50, rows: 30 });
+    triggerResize();
+
+    await new Promise((r) => setTimeout(r, 150));
+
+    expect(pty.resize).toHaveBeenCalledTimes(1);
+    expect(mockFit).toHaveBeenCalledTimes(1);
+  });
+
+  it("CPF10: 仅行变化立即 fit + resize", async () => {
+    await mountAndWait();
+    capturedTerminal!.write.mockClear();
+    mockFit.mockClear();
+    (pty.resize as ReturnType<typeof vi.fn>).mockClear();
+
+    triggerResize();
+    await new Promise((r) => setTimeout(r, 150));
+
+    mockFit.mockClear();
+    (pty.resize as ReturnType<typeof vi.fn>).mockClear();
+    capturedTerminal!.write.mockClear();
+
+    mockProposeDimensions.mockReturnValue({ cols: 80, rows: 30 });
+    triggerResize();
+
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(mockFit).toHaveBeenCalled();
+    expect(pty.resize).toHaveBeenCalledWith(
+      expect.any(String),
+      80,
+      30,
+    );
+  });
+
+  // ─── 第二轮修复：交替缓冲中始终调用 fit() ───
+
+  function setBufferType(type: string) {
+    if (capturedTerminal) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (capturedTerminal as any).buffer = { active: { type } };
+    }
+  }
+
+  it("CPF11: 交替缓冲 + 行变化 → fit 被调用更新网格", async () => {
+    await mountAndWait();
+    mockFit.mockClear();
+    (pty.resize as ReturnType<typeof vi.fn>).mockClear();
+
+    setBufferType("alternate");
+
+    // 初始化 prevDimsRef
+    triggerResize();
+    await new Promise((r) => setTimeout(r, 150));
+
+    mockFit.mockClear();
+    (pty.resize as ReturnType<typeof vi.fn>).mockClear();
+
+    // 仅行变化（列不变）
+    mockProposeDimensions.mockReturnValue({ cols: 80, rows: 30 });
+    triggerResize();
+
+    await new Promise((r) => setTimeout(r, 10));
+
+    // 交替缓冲也必须调 fit（更新 xterm.js 网格与 PTY 新尺寸同步）
+    expect(mockFit).toHaveBeenCalled();
+    expect(pty.resize).toHaveBeenCalledWith("test-session-id", 80, 30);
+  });
+
+  it("CPF12: 交替缓冲 + 列变化 debounce → fit 被调用", async () => {
+    await mountAndWait();
+    mockFit.mockClear();
+    (pty.resize as ReturnType<typeof vi.fn>).mockClear();
+
+    setBufferType("alternate");
+
+    triggerResize();
+    await new Promise((r) => setTimeout(r, 150));
+
+    mockFit.mockClear();
+    (pty.resize as ReturnType<typeof vi.fn>).mockClear();
+
+    // 列变化 → 进入 debounce 分支
+    mockProposeDimensions.mockReturnValue({ cols: 60, rows: 40 });
+    triggerResize();
+
+    await new Promise((r) => setTimeout(r, 150));
+
+    // debounce 后 fit 被调用
+    expect(mockFit).toHaveBeenCalledTimes(1);
+    expect(pty.resize).toHaveBeenCalledWith("test-session-id", 60, 40);
+  });
+
+  it("CPF13: 交替缓冲 + 行变化 → fit 先于 pty.resize", async () => {
+    await mountAndWait();
+    mockFit.mockClear();
+    (pty.resize as ReturnType<typeof vi.fn>).mockClear();
+
+    setBufferType("alternate");
+
+    triggerResize();
+    await new Promise((r) => setTimeout(r, 150));
+    mockFit.mockClear();
+    (pty.resize as ReturnType<typeof vi.fn>).mockClear();
+
+    mockProposeDimensions.mockReturnValue({ cols: 80, rows: 30 });
+    triggerResize();
+    await new Promise((r) => setTimeout(r, 10));
+
+    // 验证调用顺序：fit 在 resize 之前
+    const fitOrder = mockFit.mock.invocationCallOrder[0];
+    const resizeOrder = (pty.resize as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0];
+    expect(fitOrder).toBeLessThan(resizeOrder);
+  });
+
+  it("CPF14: 普通缓冲 + 行变化 → fit 被调用（未受影响）", async () => {
+    await mountAndWait();
+    mockFit.mockClear();
+    (pty.resize as ReturnType<typeof vi.fn>).mockClear();
+
+    setBufferType("normal");
+
+    triggerResize();
+    await new Promise((r) => setTimeout(r, 150));
+    mockFit.mockClear();
+    (pty.resize as ReturnType<typeof vi.fn>).mockClear();
+
+    mockProposeDimensions.mockReturnValue({ cols: 80, rows: 30 });
+    triggerResize();
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(mockFit).toHaveBeenCalled();
+    expect(pty.resize).toHaveBeenCalledWith("test-session-id", 80, 30);
+  });
+
+  it("CPF15: 交替缓冲 + 尺寸无变化 → 不调用 fit/resize", async () => {
+    await mountAndWait();
+    mockFit.mockClear();
+    (pty.resize as ReturnType<typeof vi.fn>).mockClear();
+
+    setBufferType("alternate");
+
+    // 设置 prevDimsRef
+    mockProposeDimensions.mockReturnValue({ cols: 80, rows: 24 });
+    triggerResize();
+    await new Promise((r) => setTimeout(r, 150));
+
+    mockFit.mockClear();
+    (pty.resize as ReturnType<typeof vi.fn>).mockClear();
+
+    // 尺寸不变
+    mockProposeDimensions.mockReturnValue({ cols: 80, rows: 24 });
+    triggerResize();
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(mockFit).not.toHaveBeenCalled();
+    expect(pty.resize).not.toHaveBeenCalled();
+  });
+
+  it("CPF16: cancelPendingFlush 在 fit 更新网格之前", async () => {
+    const { result } = await mountAndWait();
+    capturedTerminal!.write.mockClear();
+    mockFit.mockClear();
+    (pty.resize as ReturnType<typeof vi.fn>).mockClear();
+
+    setBufferType("alternate");
+
+    // 发送旧尺寸数据到缓冲
+    sendPtyOutput(new Array(200).fill(65));
+    expect(result.current._test!.getPendingBuffer()).toHaveLength(1);
+
+    triggerResize();
+    await new Promise((r) => setTimeout(r, 150));
+    mockFit.mockClear();
+    (pty.resize as ReturnType<typeof vi.fn>).mockClear();
+    capturedTerminal!.write.mockClear();
+
+    // 再次发送数据 + 触发 resize
+    mockProposeDimensions.mockReturnValue({ cols: 60, rows: 30 });
+    sendPtyOutput(new Array(200).fill(66));
+    triggerResize();
+    await new Promise((r) => setTimeout(r, 150));
+
+    // 旧缓冲数据被丢弃（cancelPendingFlush）
+    const writeCalls = (capturedTerminal!.write as ReturnType<typeof vi.fn>).mock.calls;
+    if (writeCalls.length > 0) {
+      for (const call of writeCalls) {
+        const decoded = new TextDecoder().decode(call[0] as Uint8Array);
+        expect(decoded).not.toContain("A".repeat(200));
+      }
+    }
+    // fit 被调用（更新网格）
+    expect(mockFit).toHaveBeenCalled();
   });
 });

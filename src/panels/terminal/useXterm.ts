@@ -171,6 +171,20 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
   const MAX_FLUSH_MS = 16;
   const MAX_PENDING_BYTES = 65536; // 64KB 上限，防止非焦点终端内存无限增长
 
+  /** 取消定时器 + 丢弃待 flush 数据（不渲染）——用于 resize 场景 */
+  const cancelPendingFlush = useCallback(() => {
+    if (idleTimerRef.current !== null) {
+      clearTimeout(idleTimerRef.current);
+      idleTimerRef.current = null;
+    }
+    if (maxTimerRef.current !== null) {
+      clearTimeout(maxTimerRef.current);
+      maxTimerRef.current = null;
+    }
+    pendingBufferRef.current = [];
+    pendingBufSizeRef.current = 0;
+  }, []);
+
   /** 将缓冲数据合并写入终端（DEC 2026 同步更新包裹，消除撕裂） */
   const flushBuffer = useCallback(() => {
     // 清除定时器
@@ -493,17 +507,13 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
         // 无变化：跳过
         if (!colsChanged && !rowsChanged) return;
 
-        // 交替缓冲（Claude Code CLAUDE_CODE_NO_FLICKER=1 全屏模式）：
-        // 跳过 fit+reflow——TUI 应用收到 SIGWINCH 后会自己重绘
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const isAlternate = (term as any).buffer?.active?.type === "alternate";
-
-        // 修复 3：resize 前 flush 积压缓冲区——确保旧尺寸 PTY 数据不出现在新视口中
-        flushBuffer();
+        // resize 前丢弃积压缓冲区——旧尺寸数据渲染到新视口会造成错位/撕裂，
+        // 直接丢弃由 Ink SIGWINCH 后全帧重绘替代
+        cancelPendingFlush();
 
         if (rowsChanged && !colsChanged) {
-          // 修复 2：仅行数变化 → 立即 resize（廉价，无需 re-wrap）
-          if (!isAlternate) fitAddon.fit();
+          // 仅行数变化 → 立即 fit + resize（廉价，无需 re-wrap）
+          fitAddon.fit();
           pty.resize(sessionIdRef.current, dims.cols, dims.rows)
             .catch((err) => console.error("PTY resize 失败:", err));
           return;
@@ -512,16 +522,11 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
         // 列数变化（或首次 resize）→ 100ms debounce
         if (resizeTimer !== null) clearTimeout(resizeTimer);
         resizeTimer = setTimeout(() => {
-          flushBuffer(); // debounce 期间新积压的数据也清掉
+          cancelPendingFlush(); // debounce 期间新积压的旧尺寸数据直接丢弃
           try {
-            if (isAlternate) {
-              pty.resize(sessionIdRef.current!, dims.cols, dims.rows)
+            fitAddon.fit();
+            pty.resize(sessionIdRef.current!, dims.cols, dims.rows)
                 .catch((err) => console.error("PTY resize 失败:", err));
-            } else {
-              fitAddon.fit();
-              pty.resize(sessionIdRef.current!, dims.cols, dims.rows)
-                .catch((err) => console.error("PTY resize 失败:", err));
-            }
           } catch {
             // fit 失败不影响渲染
           }
@@ -570,7 +575,7 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
       // P2-01: 清空 E2E 文本缓冲
       e2eTextBufferRef.current.length = 0;
     };
-  }, [container, panelId, cols, rows, flushBuffer, handlePtyOutput]);
+  }, [container, panelId, cols, rows, flushBuffer, cancelPendingFlush, handlePtyOutput]);
 
   // F3 Bug 1 修复: 独立 useEffect 监听 windowsBuildNumber 异步更新
   // 主 useEffect 的 StrictMode 守卫不拦截此 effect，确保 Terminal 创建后 windowsPty 生效
@@ -664,5 +669,11 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
     focus: useCallback(() => {
       terminalRef.current?.focus();
     }, []),
+    /** 测试专用（生产代码忽略此字段） */
+    _test: {
+      cancelPendingFlush,
+      flushBuffer,
+      getPendingBuffer: () => pendingBufferRef.current,
+    },
   };
 }
