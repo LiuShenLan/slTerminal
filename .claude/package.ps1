@@ -1,9 +1,9 @@
 # slTerminal 便携版打包脚本
-# 用法: .\.claude\package.ps1 [-Version "0.1.0"] [-Debug]
+# 用法: .\.claude\package.ps1 [-Version "0.2.0"] [-Debug]
 # 产物: slterminal-v{version}-x64.zip（项目根目录）
 
 param(
-    [string]$Version = "0.1.0",
+    [string]$Version = "0.2.0",
     [switch]$Debug
 )
 
