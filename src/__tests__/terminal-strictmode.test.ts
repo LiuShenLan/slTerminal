@@ -23,6 +23,9 @@ const mocks = vi.hoisted(() => {
     focus: vi.fn(),
     element: document.createElement("div"),
     options: {} as Record<string, unknown>,
+    parser: {
+      registerOscHandler: vi.fn(() => ({ dispose: vi.fn() })),
+    },
   } as unknown as Terminal;
 
   const fitAddon = {

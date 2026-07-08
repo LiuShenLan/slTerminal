@@ -14,6 +14,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { terminalOptions } from "./theme";
 import { pty } from "../../ipc";
+import { writeText } from "../../ipc/clipboard";
 import type { PtyEvent } from "../../types";
 import { createTerminalShortcuts } from "./keyboard";
 import { useShortcutContext } from "../../features/shortcuts";
@@ -332,6 +333,39 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
       e2eTextBufferRef.current.push(text);
     };
 
+    // OSC 52 剪贴板：拦截 Claude Code /copy 命令，写入系统剪贴板
+    // 安全策略：仅写入、仅系统剪贴板(c)、仅可见面板、payload≤1MB、禁止读
+    const osc52Disposable = term.parser.registerOscHandler(52, (data: string) => {
+      const semicolonIdx = data.indexOf(";");
+      if (semicolonIdx === -1) return true;
+
+      const selector = data.substring(0, semicolonIdx);
+      const payload = data.substring(semicolonIdx + 1);
+
+      // 仅系统剪贴板（c），忽略 p（primary）和 q（secondary）
+      if (selector && selector !== "c") return true;
+      // 禁止读请求
+      if (payload === "?" || payload.length === 0) return true;
+      // Payload 上限 1MB
+      if (payload.length > 1048576) return true;
+      // 焦点门控：非可见面板忽略
+      if (visibleRef.current === false) return true;
+
+      try {
+        // atob 返回二进制字符串（每字符一个字节），需经 UTF-8 解码
+        const binary = atob(payload);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) {
+          bytes[i] = binary.charCodeAt(i);
+        }
+        const text = new TextDecoder().decode(bytes);
+        writeText(text).catch((e) => console.error("[OSC52] 写剪贴板失败:", e));
+      } catch {
+        // base64 解码失败，静默忽略
+      }
+      return true;
+    });
+
     // P1: rAF 轮询 offsetWidth>0 → fit → proposeDimensions → pty.spawn(真实尺寸)
     // 30 帧 / 500ms 上限，超时回退 80x24
     let fitRafId: number | null = null;
@@ -521,6 +555,8 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
         pty.kill(sid).catch(() => {}); // cleanup 中静默吞错，进程可能已退出
       }
       TerminalRegistry.remove(panelId);
+      // OSC 52 剪贴板 handler 清理
+      osc52Disposable.dispose();
       // P1-01/02: 清理重试 Enter 监听
       retryDisposableRef.current?.dispose();
       retryDisposableRef.current = null;

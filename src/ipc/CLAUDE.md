@@ -17,7 +17,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `git.ts` | `git/` | `git_status`, `git_diff` |
 | `settings.ts` | settings | `load_settings`, `save_settings` |
 | `notify.ts` | `notify/` | `fs_watch` |
-| `clipboard.ts` | Tauri plugin | 直接 re-export `@tauri-apps/plugin-clipboard-manager` |
+| `clipboard.ts` | Tauri plugin | 直接 re-export `@tauri-apps/plugin-clipboard-manager`。由 `keyboard.ts`（Ctrl+Shift+C/V）和 `useXterm.ts`（OSC 52 handler）消费 |
 | `dialog.ts` | Tauri plugin | 直接 re-export `@tauri-apps/plugin-dialog` |
 | `index.ts` | — | barrel export，统一对外暴露 |
 

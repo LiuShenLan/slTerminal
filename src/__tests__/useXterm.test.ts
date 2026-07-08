@@ -38,7 +38,13 @@ let capturedTerminal: {
   getSelection: ReturnType<typeof vi.fn>;
   paste: ReturnType<typeof vi.fn>;
   options: Record<string, unknown>;
+  parser: {
+    registerOscHandler: ReturnType<typeof vi.fn>;
+  };
 } | null = null;
+
+// OSC 52 测试：捕获 registerOscHandler(52, ...) 注册的回调
+let capturedOsc52Handler: ((data: string) => boolean) | null = null;
 
 // ─── Module mocks（路径相对于被测源文件 useXterm.ts 的 import 解析） ───
 vi.mock("@xterm/xterm", () => {
@@ -55,6 +61,12 @@ vi.mock("@xterm/xterm", () => {
     getSelection = vi.fn(() => "");
     paste = vi.fn();
     options: Record<string, unknown> = {};
+    parser = {
+      registerOscHandler: vi.fn((osc: number, handler: (data: string) => boolean) => {
+        if (osc === 52) capturedOsc52Handler = handler;
+        return { dispose: vi.fn() };
+      }),
+    };
 
     constructor() {
       const el = document.createElement("div");
@@ -94,6 +106,15 @@ vi.mock("../ipc", () => ({
     kill: vi.fn().mockResolvedValue(undefined),
     getWindowsBuildNumber: vi.fn().mockResolvedValue(22621),
   },
+}));
+
+// OSC 52 测试：mock writeText（src/ipc/clipboard.ts）
+const { mockWriteText } = vi.hoisted(() => ({
+  mockWriteText: vi.fn(),
+}));
+vi.mock("../ipc/clipboard", () => ({
+  writeText: mockWriteText,
+  readText: vi.fn(),
 }));
 
 vi.mock("@xterm/addon-fit", () => ({
@@ -1775,5 +1796,168 @@ describe("非焦点终端降频", () => {
 
     // visible 未指定 → 视为可见 → 正常 flush
     expect(capturedTerminal!.write).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+// Investigation 4: OSC 52 剪贴板支持测试
+// ═══════════════════════════════════════════════════════════
+
+describe("OSC 52 剪贴板支持", () => {
+  let container: HTMLDivElement;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockProposeDimensions.mockReturnValue({ cols: 80, rows: 24 });
+    mockWriteText.mockResolvedValue(undefined);
+    capturedTerminal = null;
+    capturedOsc52Handler = null;
+
+    container = document.createElement("div");
+    Object.defineProperty(container, "offsetWidth", { value: 800, configurable: true });
+    Object.defineProperty(container, "offsetHeight", { value: 600, configurable: true });
+  });
+
+  /** 渲染 hook 并等待 pty spawn 完成（触发 registerOscHandler） */
+  async function mountAndWaitForSpawn() {
+    renderHook(() =>
+      useXterm({ container, cols: 80, rows: 24, panelId: "osc-test" }),
+    );
+    await vi.waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    });
+    // 验证 handler 已注册
+    expect(capturedOsc52Handler).not.toBeNull();
+  }
+
+  it("OSC1: 正常写入 — selector=c, 有效 base64 → writeText 被调用", async () => {
+    await mountAndWaitForSpawn();
+    mockWriteText.mockClear();
+
+    // "Hello" 的 base64: SGVsbG8=
+    const result = capturedOsc52Handler!("c;SGVsbG8=");
+
+    expect(result).toBe(true);
+    expect(mockWriteText).toHaveBeenCalledWith("Hello");
+  });
+
+  it("OSC2: CJK 内容 — 中文 base64 → writeText 正确解码", async () => {
+    await mountAndWaitForSpawn();
+    mockWriteText.mockClear();
+
+    // "你好" → UTF-8 bytes → base64
+    const utf8Bytes = new TextEncoder().encode("你好");
+    const base64 = btoa(String.fromCharCode(...utf8Bytes));
+    const result = capturedOsc52Handler!("c;" + base64);
+
+    expect(result).toBe(true);
+    expect(mockWriteText).toHaveBeenCalledWith("你好");
+  });
+
+  it("OSC3: 空选择器 — 默认系统剪贴板 → writeText 被调用", async () => {
+    await mountAndWaitForSpawn();
+    mockWriteText.mockClear();
+
+    const result = capturedOsc52Handler!(";SGVsbG8=");
+
+    expect(result).toBe(true);
+    expect(mockWriteText).toHaveBeenCalledWith("Hello");
+  });
+
+  it("OSC4: 查询请求 — Pd=? → writeText 不调用", async () => {
+    await mountAndWaitForSpawn();
+    mockWriteText.mockClear();
+
+    const result = capturedOsc52Handler!("c;?");
+
+    expect(result).toBe(true);
+    expect(mockWriteText).not.toHaveBeenCalled();
+  });
+
+  it("OSC5: 空 payload → writeText 不调用", async () => {
+    await mountAndWaitForSpawn();
+    mockWriteText.mockClear();
+
+    const result = capturedOsc52Handler!("c;");
+
+    expect(result).toBe(true);
+    expect(mockWriteText).not.toHaveBeenCalled();
+  });
+
+  it("OSC6: 无效 base64 → 不抛异常，writeText 不调用", async () => {
+    await mountAndWaitForSpawn();
+    mockWriteText.mockClear();
+
+    expect(() => {
+      const result = capturedOsc52Handler!("c;!!!INVALID!!!");
+      expect(result).toBe(true);
+    }).not.toThrow();
+
+    expect(mockWriteText).not.toHaveBeenCalled();
+  });
+
+  it("OSC7: 非系统剪贴板 — selector=p → writeText 不调用", async () => {
+    await mountAndWaitForSpawn();
+    mockWriteText.mockClear();
+
+    const result = capturedOsc52Handler!("p;SGVsbG8=");
+
+    expect(result).toBe(true);
+    expect(mockWriteText).not.toHaveBeenCalled();
+  });
+
+  it("OSC8: 无分号格式 → writeText 不调用", async () => {
+    await mountAndWaitForSpawn();
+    mockWriteText.mockClear();
+
+    const result = capturedOsc52Handler!("SGVsbG8=");
+
+    expect(result).toBe(true);
+    expect(mockWriteText).not.toHaveBeenCalled();
+  });
+
+  it("OSC9: 超大 payload（>1MB）→ writeText 不调用", async () => {
+    await mountAndWaitForSpawn();
+    mockWriteText.mockClear();
+
+    // 构造 1MB + 1 字节的 payload
+    const hugePayload = "A".repeat(1048577); // 1MB + 1
+    const result = capturedOsc52Handler!("c;" + hugePayload);
+
+    expect(result).toBe(true);
+    expect(mockWriteText).not.toHaveBeenCalled();
+  });
+
+  it("OSC10: 非焦点面板（visible=false）→ writeText 不调用", async () => {
+    // 以 visible=false 渲染，等待 spawn
+    renderHook(() =>
+      useXterm({ container, cols: 80, rows: 24, panelId: "osc-focus", visible: false }),
+    );
+    await vi.waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    });
+    expect(capturedOsc52Handler).not.toBeNull();
+    mockWriteText.mockClear();
+
+    const result = capturedOsc52Handler!("c;SGVsbG8=");
+
+    // visible=false → visibleRef.current === false → 焦点门控生效
+    expect(result).toBe(true);
+    expect(mockWriteText).not.toHaveBeenCalled();
+  });
+
+  it("OSC11: handler 返回 true 吞噬序列（阻止写入终端显示）", async () => {
+    await mountAndWaitForSpawn();
+
+    // 有效 OSC 52 → handler 返回 true → 序列被吞噬
+    const result = capturedOsc52Handler!("c;SGVsbG8=");
+    expect(result).toBe(true);
+
+    // 无效 OSC 52 → handler 也返回 true → 同样吞噬
+    const result2 = capturedOsc52Handler!("p;SGVsbG8=");
+    expect(result2).toBe(true);
+
+    const result3 = capturedOsc52Handler!("c;?");
+    expect(result3).toBe(true);
   });
 });
