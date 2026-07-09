@@ -49,9 +49,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 测试
 
-- 测试文件：`src/__tests__/sessions.test.ts`、`src/__tests__/projects.test.ts`、`src/__tests__/fontSize.test.ts`。
-- 测试用 `getState()` 直接操作和断言，不依赖 React 渲染。`beforeEach` 中显式重置状态。
-- 运行：`npm test`（Vitest）。
+### 测试文件
+
+| Store | 测试文件 | 用例数 | 覆盖范围 |
+|-------|---------|--------|---------|
+| `sessions` | `sessions.test.ts` | 10 | setSession/removeSession/setActive、幂等性、多 session 共存 |
+| `projects` | `projects.test.ts` | 37 | Project/Page CRUD、持久化（loadFromDisk/saveToDisk）、version 递增、ID 生成 |
+| `layout` | `layout.test.ts` | 4 | activePageId 设置/清空/重复 |
+| `fontSize` | `fontSize.test.ts` | 16 | 默认值、clamp、loadFromDisk（多种分支）、debounce 持久化 |
+
+### 测试模式
+
+- **使用真实 store 而非 mock**：Zustand `create()` 创建的真实 store，`beforeEach` 中 `.setState()` 重置到初始状态
+- **`getState()` 直接操作**：测试不依赖 React 渲染，通过 `.getState()` 操作和断言——避免 jsdom 无关的环境差异
+- **持久化测试**（projects / fontSize）：mock `src/ipc/fs` 或 `src/ipc/settings` 返回模拟数据，验证 save/load 往返 + 异常降级 + `loaded` 守卫
+- **debounce 测试**：用 `vi.useFakeTimers()` + `vi.advanceTimersByTime()` 控制时间，验证 debounce 窗口内的批量保存
+- **运行**：`npm test`（Vitest，含在 L2 全量中）
 
 ## 新增 Store 规则
 

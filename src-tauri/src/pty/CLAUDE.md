@@ -142,3 +142,78 @@ cargo test --manifest-path src-tauri/Cargo.toml <test_name> -- --test-threads=1
 7. 修改 `conpty_custom` 模块（flags 计算、AttrList、ConPtyMaster、RawChild、spawn 逻辑）后跑 `conpty_custom::tests` 全部 14 条测试 + `pty_integration_tests` 的 `pty_spawn_custom_conpty` 端到端测试
 8. 修改 `resolve_shell_info()` / `which_full_path()` 后跑 `shell::tests` 全部 9 条测试
 9. `resolve_shell_info()` 返回的 `ShellInfo.program` **必须是完整路径**（非短名）——否则 `CreateProcessW(lpApplicationName=..., lpCommandLine=...)` 找不到可执行文件
+
+## 测试模式
+
+Rust 测试分布在 3 个位置：
+
+| 位置 | 类型 | 用例数 | 访问级别 |
+|------|------|--------|---------|
+| `pty/reader.rs` `#[cfg(test)]` | 单元测试 | 21 | `use super::*` 访问 `pub(crate)` 和私有项 |
+| `pty/spawn.rs` `#[cfg(test)]` | 单元测试 | 14 | 在 `conpty_custom` 子模块内 |
+| `pty/shell.rs` `#[cfg(test)]` | 单元测试 | 8 | `use super::*` |
+| `tests/pty_integration_tests.rs` | 集成测试 | 5 | 仅能访问 `pub` API |
+
+### 单元测试组织
+
+所有单元测试遵循标准 Rust 模式——`#[cfg(test)] mod tests` 嵌入源文件底部，`use super::*` 导入父模块全部项。无独立 test 子目录或共享 helper 模块。
+
+### ConPTY 隔离测试（spawn.rs）
+
+`conpty_custom` 模块的 `create_conpty_pair()` 可独立调用，不依赖完整 spawn 流程：
+
+```rust
+// 直接创建 PTY 对，不 spawn 子进程
+let (hpc, master) = create_conpty_pair(80, 24, 22621).unwrap();
+// 验证初始尺寸
+assert_eq!(master.get_size().unwrap(), PtySize { rows: 24, cols: 80, .. });
+// 验证 writer 仅可 take 一次
+assert!(master.take_writer().is_ok());
+assert!(master.take_writer().is_err()); // 第二次失败
+```
+
+测试覆盖：`compute_conpty_flags`（4 条——Win10 0x7 / Win11 21H2 0x7 / Win11 22H2+ 0xf）、flag 常量值验证（4 条）、`ConPtyMaster` MasterPty trait（4 条）、`AttrList` 生命周期（2 条）。
+
+### 启动序列剥离测试（reader.rs）
+
+`strip_conpty_startup()` 是纯函数——输入字节数组，输出剥离后的字节数组：
+
+```rust
+// 验证剥离 ConPTY 启动序列
+assert_eq!(
+    strip_conpty_startup(b"\x1b]0;pwsh\x07\x1b[2J\x1b[HPS C:\\> "),
+    b"PS C:\\> "
+);
+```
+
+测试覆盖：剥离 OSC 标题/BEL、清屏（CSI 2J/3J）、光标归位（CSI H）、DSR（CSI 6n）、光标显隐（CSI ?25h/l）；保留 OSC 7 cwd、普通文本、ESC[s/ESC[u；16KB 边界 + >4KB 大数据块完整保留。
+
+### DA1 查询模拟测试（reader.rs）
+
+`mirror_da1_query()` 纯函数测试：
+- 标准 DA1 `ESC[c]` 检测 ✓
+- 前导零 `ESC[0c]` 检测 ✓
+- DA2 `ESC[>c]` 不触发
+- 普通文本含 `[c` 不误触发
+- XTVERSION `ESC[>0q]` 不触发
+
+### 集成测试（tests/pty_integration_tests.rs）
+
+真实 spawn `cmd.exe`，端到端验证 PTY 通信：
+
+```rust
+static SPAWN_LOCK: Mutex<()> = Mutex::new(()); // 串行化
+
+fn spawn_cmd() -> (Box<dyn MasterPty>, Box<dyn Child>, Box<dyn Read>, Box<dyn Write>) {
+    let _lock = SPAWN_LOCK.lock().unwrap();
+    // 创建 PTY → spawn cmd.exe → 返回四种 handle
+}
+```
+
+测试覆盖：echo roundtrip（写入 `echo marker` → 读取验证 marker 出现）、resize 应用（spawn → resize 30×100 → `get_size()` 验证）、kill 无孤儿（spawn → kill → `try_wait()` 验证子进程退出）、自定义 ConPTY spawn（仅 Windows CI runner）、shell 集成脚本 OSC 序列验证。
+
+### 运行约束
+
+- **所有 PTY 测试必须 `--test-threads=1`**：`SPAWN_LOCK` + ConPTY 资源限制，并发 spawn 会死锁输出管道
+- 集成测试在 Windows CI runner 上运行（依赖系统 ConPTY API）
+- `shell.rs` 测试依赖 `include_str!("../../assets/shell-integration.ps1")` 编译期嵌入

@@ -51,3 +51,57 @@ FileWatcher {
 - **路径规范化**：池 key 使用 `dunce::simplified()` 处理，与 `fs_read_dir` 保持一致。
 - **Drop 保证**：`LruWatcherPool::drop()` → `stop_all()` → 遍历 join 所有线程。AppState 销毁时自动触发。
 - **路径 sandbox**：`fs_watch` 在创建 watcher 前校验 `validate_path_within_root()`。
+
+## 测试模式
+
+Rust 测试分布在 2 个位置：
+
+| 位置 | 类型 | 用例数 |
+|------|------|--------|
+| `notify/mod.rs` `#[cfg(test)]` | 单元测试 | 7 |
+| `notify/pool.rs` `#[cfg(test)]` | 单元测试 | 12 |
+
+### 无 AppHandle 测试
+
+`FileWatcher::start()` 需要 `AppHandle`（Tauri 运行时资源），单元测试无法创建。因此测试使用**手动构造模式**——直接初始化 `FileWatcher` 结构体字段，绕过 `start()`：
+
+```rust
+// 手动构造，用 mpsc channel 模拟停止信号和线程
+let (stop_tx, stop_rx) = std::sync::mpsc::channel();
+let handle = std::thread::spawn(move || {
+    while stop_rx.recv_timeout(Duration::from_millis(100)).is_err() {}
+});
+let watcher = FileWatcher {
+    stop_tx: Some(stop_tx),
+    thread_handle: Some(handle),
+    watch_paths: Arc::new(Mutex::new(vec![])),
+    paused: Arc::new(AtomicBool::new(false)),
+};
+```
+
+### FileWatcher 生命周期测试（mod.rs）
+
+- `stop()` 幂等：`stop_tx.take()` 后再次 stop 不 panic
+- `Drop` 线程退出：`drop(watcher)` 后验证 `thread.is_finished()` 返回 true
+- 替换模式：旧 watcher stop → 新 watcher 创建，验证 `is_running()` 状态切换
+- `FsEventPayload` serde：验证 `camelCase` 字段命名
+
+### LruWatcherPool 测试（pool.rs）
+
+`make_test_watcher(name)` 工厂函数创建模拟 FileWatcher（纯 mpsc + AtomicBool，无真实文件系统监听），12 条测试覆盖：
+
+- **缓存命中**：insert 后 get 获取同一实例
+- **LRU 淘汰**：池满（capacity=5）时淘汰最久未访问的 watcher
+- **pause_all_except**：目标 path 暂停其他所有 watcher
+- **replace**：相同 path 再次 insert 替换旧 watcher
+- **remove / stop_all / Drop**：逐个验证资源释放
+
+```rust
+fn make_test_watcher(name: &str) -> FileWatcher {
+    // 创建带 mpsc channel 的 FileWatcher，线程空转等待 stop 信号
+}
+```
+
+### `#[cfg(test)]` helper 方法
+
+`FileWatcher::is_running()` 仅在 `#[cfg(test)]` 下编译，避免生产代码暴露内部线程状态。

@@ -72,6 +72,53 @@ SidebarTree.switchToPage(projectId, pageId)
 - 重复文件打开：`findExistingEditor` 查重 → 聚焦已有面板（不改布局）
 - `onDidRemovePanel` 监听面板关闭 → 注销 + 重算剩余面板标题
 
+## 测试模式
+
+测试文件位于 `src/__tests__/`：`layoutSerde.test.ts`、`default-layout-format.test.ts`、`panelRegistry.test.ts`、`titleManager.test.ts`、`workspace*.test.tsx`。
+
+### 技术栈
+
+- Vitest（jsdom）+ React Testing Library
+- Dockview 组件全量 mock：`vi.mock("dockview-react", () => ({ DockviewReact: vi.fn(() => null) }))`
+- Allotment 布局容器 mock
+- Zustand stores 使用真实实现 + `beforeEach` 种子数据
+
+### 布局序列化测试
+
+`layoutSerde.test.ts`（16 用例）：
+- **旧格式修补**：`patchLegacyLayout` 处理 `component`→`contentComponent` 迁移、缺失 `grid.orientation` 默认值、`leaf.data.id` 缺失生成、`activeGroup` 缺失填充
+- **白名单过滤**：`PANEL_TYPES` 外类型的面板不被恢复
+- **深拷贝验证**：`toJSON` 输出不与输入共享引用
+- 纯函数测试，无需 React 渲染环境
+
+`default-layout-format.test.ts`（8 用例）：
+- `makeDefaultLayout` 输出结构验证：`grid.root.type` 为 `"branch"`、leaf 节点结构、`orientation` 为 `"HORIZONTAL"`
+- JSON 往返一致性 + 独立布局（两次调用不共享引用）
+
+### 面板注册表测试
+
+`panelRegistry.test.ts`（23 用例）：
+- 三个面板注册验证（terminal/editor/htmlviewer）
+- `PANEL_TYPES` 常量完整性 + `isValidPanelType` type predicate（大小写敏感）
+- `FILE_PANEL_TYPES` Set 语义（编辑器 + 文件预览面板）
+
+### 页签标题测试
+
+`titleManager.test.ts`（29 用例）：
+- `createTitleManager` 工厂，验证终端 `terminal-N` 递增、编辑器 basename/同名冲突相对路径
+- `findExistingEditor` 查重、`registerAndRecompute` 重算、`handleSaveAs` 路径变更
+
+### 多实例与 E2E 标记测试
+
+`workspace-multi-instance.test.tsx`（4 用例）：
+- 多页面切换时 Dockview 实例各自存活（不销毁重建）
+- CSS 显隐控制 + `initializedPages` 惰性初始化
+- 需种子 `useProjects`（多个页面）+ `useLayout`（活跃页面 ID）
+
+`workspace-e2e-ready.test.tsx`（4 用例）：
+- `window.__slterm_e2e_workspaceReady` 在渲染阶段（非 `useEffect`）同步设置
+- 未挂载不存在、卸载保留、mock 全部子组件
+
 ## 旧格式兼容
 
 `layoutSerde.ts` 的 `patchLegacyLayout` 处理早期 `makeDefaultLayout` 产出的缺失字段：

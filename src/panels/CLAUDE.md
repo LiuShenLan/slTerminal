@@ -112,6 +112,87 @@ xterm.js 6.0.0 原生支持 OSC 8 解析渲染。`useXterm.ts` 在 `term.open()`
 - **前端不碰 OS**：面板组件和 hooks 中所有系统调用（PTY、文件读写、剪贴板、git diff）必须经 `src/ipc/` 层调用，禁止直接 `invoke`
 - **IPC 边界**：`terminal/useXterm.ts` 通过 `ipc/pty` 调 spawn/write/resize/kill；`editor/useCodeMirror.ts` 通过 `ipc/fs` 读写文件、`ipc/git` 获取 diff、`ipc/dialog` 弹另存为；`terminal/keyboard.ts` 命令 handler 通过 `ipc/clipboard` 读写剪贴板；`useShortcutContext` hook 管理快捷键注册与焦点上下文
 
+## 测试模式
+
+测试文件位于 `src/__tests__/`，命名规则：`terminal*.test.ts(x)`、`editor*.test.ts(x)`、`html-panel.test.tsx`、`keyboard.test.ts`。L3 测试位于 `test/terminal/`。
+
+### 技术栈
+
+- Vitest（jsdom 环境）+ React Testing Library（`renderHook` / `render`）
+- `@tauri-apps/api/mocks` 的 `mockIPC` 拦截 Tauri IPC
+- 不使用 Playwright / Cypress / 真实浏览器
+
+### useXterm 测试模式（96 条用例，项目最大测试文件）
+
+useXterm 是项目中 mock 依赖最多的 hook——需 mock 8 个模块才能隔离测试：
+
+| Mock 模块 | 原因 | 关键验证 |
+|-----------|------|---------|
+| `@xterm/xterm` | jsdom 无 DOM Terminal | 捕获 `Terminal` 构造实例到 `capturedTerminal`，供测试验证 `write`/`open`/`dispose` 调用 |
+| `@xterm/addon-fit` | jsdom 无布局 | `proposeDimensions` 返回模拟 cols/rows |
+| `@xterm/addon-webgl` | jsdom 无 WebGL | stub WebglAddon，测试 `onContextLoss` 回退 |
+| `../ipc/pty` | IPC 层 | `spawn`/`write`/`resize`/`kill` 调用参数验证 |
+| `../ipc/clipboard` | IPC 层 | OSC 52 写入路径验证 |
+| `./keyboard` | 面板内快捷键 | stub `createTerminalShortcuts` |
+| `../features/shortcuts` | 快捷键注册 | 验证 `useShortcutContext` 参数（context + commands + element） |
+| `@tauri-apps/plugin-opener` | OSC 8 | stub `openUrl` |
+
+**关键测试模式**：
+
+- **vi.hoisted() 共享状态**：所有 mock 函数在 `vi.hoisted()` 中创建（如 `mockSpawn`、`capturedTerminal`），确保在模块级 `vi.mock()` 执行前就绪
+- **PTY 输出注入**：从 `pty.spawn` mock 提取 `onOutput` 回调，`sendPtyOutput(bytes)` 注入模拟数据，验证合帧/直写分流
+- **Idle+Max 双定时器**：`setTimeout(fn, 2)` 等待验证 idle timer 触发 flush；连续高频发送验证 max timer（16ms）强制 flush
+- **DEC 2026 包裹**：`flushBuffer` 输出以 `\x1b[?2026h` 开头、`\x1b[?2026l` 结尾——验证原子渲染包裹
+- **非焦点降频**：`rerender({ visible: false })` 后 PTY 输出不写终端；切回 `visible: true` 后立即回放缓冲
+- **OSC 52 handler**：捕获 `registerOscHandler(52, ...)` 注册的回调，直接调用验证 base64 解码、CJK 支持、焦点门控、>1MB payload 拒绝
+- **attachCustomKeyEventHandler**：捕获注册的 handler，用 `makeKeyEvent()` 构造 `KeyboardEvent`，验证 `preventDefault` 返回值
+- **_test 接口**：`useXterm` 返回 `_test` 对象（`{ cancelPendingFlush, flushBuffer, getPendingBuffer }`），供测试直接调用内部函数
+
+### 终端生命周期与组件测试
+
+| 文件 | 用例数 | 模式 |
+|------|--------|------|
+| `terminal-lifecycle.test.ts` | 4 | 挂载→创建→卸载→dispose 完整链路；mock `pty.spawn` 验证调用参数 |
+| `terminal-strictmode.test.ts` | 4 | `useRef` guard 防止 React StrictMode 双挂载时重复创建 Terminal 实例 |
+| `terminal.test.tsx` | 4 | TerminalPanel 组件：mock `useXterm` 返回 stub，验证 loading 遮罩/Windows build/spawn |
+| `canFit.test.ts` | 15 | 纯函数边界测试：五条件守卫（null/undefined/0/isDisposed/no element） |
+| `detectWebgl.test.ts` | 3 | `vi.spyOn(HTMLCanvasElement.prototype, 'getContext')` 模拟三种分支 |
+
+### 键盘与快捷键测试
+
+| 文件 | 用例数 | 模式 |
+|------|--------|------|
+| `keyboard.test.ts` | 10 | handler 直接调用（非 DOM 事件）：通过 getter 访问 terminal ref（防闭包悬空引用）；Ctrl+C 不注册→透传 |
+| `shortcuts.test.ts` | 26 | `_reset()` 隔离每次测试；指纹 O(1) 匹配；上下文栈竞态模拟 |
+| `globalCommands.test.ts` | 12 | `createGlobalShortcuts(getApi)` 延迟求值 DockviewApi |
+
+### 编辑器测试
+
+| 文件 | 用例数 | 模式 |
+|------|--------|------|
+| `useCodeMirror.test.ts` | 9 | `EditorState.create` 验证字体扩展；Compartment reconfigure 不重复 dispatch |
+| `editor.test.tsx` | 5 | EditorPanel 组件：mock `useCodeMirror` 返回 stub，验证 panelId/filePath 传递 |
+| `editor-confirm.test.ts` | 6 | `vi.spyOn(window, 'confirm')` 模拟用户选择；dirty 状态分支 |
+| `editor-font.test.ts` | 8 | 字体 CSS 选择器断言（`.cm-scroller` vs `.cm-editor`） |
+| `gitGutter.test.ts` | 20 | StateEffect → RangeSet 映射验证；GutterMarker DOM 颜色断言；SpacerMarker 宽度一致性 |
+| `language-mapping.test.ts` | 23 | 扩展名→语言扩展全表验证（`.js`/`.ts`/`.py`/`.rs`/`.json` 等） |
+
+### HTML 面板测试
+
+`html-panel.test.tsx`（18 用例）：
+- 三态渲染：loading（转圈）→ loaded（iframe srcDoc）→ error（错误信息）
+- 竞态取消：快速切换 filePath 时旧请求 pending resolve 不覆盖新内容
+- sandbox 属性验证 + renderer="always" 生命周期
+
+### L3 终端 headless 测试
+
+L3 测试位于 `test/terminal/`，使用 `@xterm/headless`（零 DOM 依赖）+ `@xterm/addon-serialize`：
+
+- 运行环境：`vitest.l3.config.ts`（`environment: 'node'`，非 jsdom），仅包含 `test/terminal/**/*.test.ts`
+- `terminal-serialize.test.ts`（1 用例）：xterm feed 后 serialize 验证文本保留
+- `keyboard.test.ts`（4 用例）：pwsh 提示符渲染快照、Claude TUI ANSI 颜色快照、Shift+Tab CBT 编码（`\x1b[Z`）、Ctrl+C ETX 编码（`\x03`）
+- `writeSync(term, data)`：`term.write(data, callback)` 的 Promise 化辅助，必须等 callback 完成后才能 serialize
+
 ## 添加新面板类型的步骤
 
 1. 在 `src/panels/` 下创建 `newtype/` 目录，含 `index.ts`、`NewTypePanel.tsx` 和必要的 hooks

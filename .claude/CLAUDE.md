@@ -56,14 +56,30 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 命令
 
-- 后端测试：`cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1`
-- 前端测试：`npm test`（Vitest + `@tauri-apps/api/mocks`）
-- 终端渲染测试（L3）：`npm run test:l3`
-- 静态检查：`npx tsc --noEmit` + `npx eslint src/` + `cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings`
 - 开发运行：`npm run tauri dev`
 - 构建：`npx tauri build --debug --no-bundle`
 
-> 全量自动化测试用例清单（833 用例：Rust 125 + 前端 708）→ @.claude/test-inventory.md
+## 测试策略
+
+四级测试金字塔，按执行速度和隔离度分层。完整用例清单 → `@.claude/test-inventory.md`。
+
+| 层级 | 名称 | 技术栈 | 运行命令 | 约用例数 |
+|------|------|--------|----------|---------|
+| L1 | Rust 单元/集成 | `cargo test`、`tempfile` 隔离 | `cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1` | ~139 |
+| L2 | 前端单元/集成 | Vitest + jsdom | `npm test` | ~730 |
+| L3 | 终端 headless 渲染 | Vitest + `@xterm/headless` | `npm run test:l3` | 5 |
+| L4 | 端到端 (E2E) | WDIO + embedded driver | `npm run wdio` | 7 |
+
+核心原则：
+- **隔离优先**：L1 用 `tempfile::tempdir()` 隔离文件系统、`SPAWN_LOCK` 串行化 PTY；L2 用 `vi.mock()` 隔离 IPC/终端库；L4 用 embedded driver 隔离浏览器依赖
+- **L1/L2 覆盖所有 PR**，L3/L4 覆盖关键路径变更
+- **L1 必须 `--test-threads=1`**：ConPTY 并发 spawn 会死锁
+- **模块测试模式见各子路径 CLAUDE.md**，不在根文件展开
+
+静态检查门禁：
+- TypeScript：`npx tsc --noEmit`
+- ESLint：`npx eslint src/`
+- Clippy：`cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings`
 
 ### 发布打包
 
@@ -108,4 +124,4 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | P2-49 | 问题 | dockview-react dispose 内部自动清理——无需手动清 |
 | L3 | 测试层级 | 终端渲染测试——`npm run test:l3`（xterm.js 渲染集成验证） |
 
-> 完整测试层级定义（L1–L4/E2E）见 `.claude/test-inventory.md`。
+> 测试策略概览见上方「测试策略」章节；完整用例清单见 `.claude/test-inventory.md`。
