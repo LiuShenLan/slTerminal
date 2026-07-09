@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => {
     writeln: vi.fn(),
     onData: vi.fn(),
     focus: vi.fn(),
+    attachCustomKeyEventHandler: vi.fn(),
     element: document.createElement("div"),
     options: {} as Record<string, unknown>,
     parser: {

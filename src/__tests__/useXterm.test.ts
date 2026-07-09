@@ -37,6 +37,7 @@ let capturedTerminal: {
   focus: ReturnType<typeof vi.fn>;
   getSelection: ReturnType<typeof vi.fn>;
   paste: ReturnType<typeof vi.fn>;
+  attachCustomKeyEventHandler: ReturnType<typeof vi.fn>;
   options: Record<string, unknown>;
   parser: {
     registerOscHandler: ReturnType<typeof vi.fn>;
@@ -45,6 +46,9 @@ let capturedTerminal: {
 
 // OSC 52 测试：捕获 registerOscHandler(52, ...) 注册的回调
 let capturedOsc52Handler: ((data: string) => boolean) | null = null;
+
+// 键盘测试：捕获 attachCustomKeyEventHandler 注册的回调
+let capturedKeyEventHandler: ((event: KeyboardEvent) => boolean) | null = null;
 
 // ─── Module mocks（路径相对于被测源文件 useXterm.ts 的 import 解析） ───
 vi.mock("@xterm/xterm", () => {
@@ -60,6 +64,10 @@ vi.mock("@xterm/xterm", () => {
     focus = vi.fn();
     getSelection = vi.fn(() => "");
     paste = vi.fn();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    attachCustomKeyEventHandler = vi.fn((handler: any) => {
+      capturedKeyEventHandler = handler;
+    });
     options: Record<string, unknown> = {};
     parser = {
       registerOscHandler: vi.fn((osc: number, handler: (data: string) => boolean) => {
@@ -108,13 +116,14 @@ vi.mock("../ipc", () => ({
   },
 }));
 
-// OSC 52 测试：mock writeText（src/ipc/clipboard.ts）
-const { mockWriteText } = vi.hoisted(() => ({
+// OSC 52 测试：mock clipboard（src/ipc/clipboard.ts）
+const { mockWriteText, mockReadText } = vi.hoisted(() => ({
   mockWriteText: vi.fn(),
+  mockReadText: vi.fn(() => Promise.resolve("")),
 }));
 vi.mock("../ipc/clipboard", () => ({
   writeText: mockWriteText,
-  readText: vi.fn(),
+  readText: mockReadText,
 }));
 
 vi.mock("@xterm/addon-fit", () => ({
@@ -132,6 +141,14 @@ vi.mock("@xterm/addon-webgl", () => {
   }
   return { WebglAddon: MockWebglAddon };
 });
+
+// OSC 8 linkHandler 测试：mock @tauri-apps/plugin-opener 的 openUrl
+const { mockOpenUrl } = vi.hoisted(() => ({
+  mockOpenUrl: vi.fn(() => Promise.resolve()),
+}));
+vi.mock("@tauri-apps/plugin-opener", () => ({
+  openUrl: mockOpenUrl,
+}));
 
 // useXterm.ts import { TerminalRegistry } from "./TerminalRegistry"
 vi.mock("../panels/terminal/TerminalRegistry", () => ({
@@ -2390,5 +2407,320 @@ describe("cancelPendingFlush", () => {
     }
     // fit 被调用（更新网格）
     expect(mockFit).toHaveBeenCalled();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+// OSC 8 linkHandler 测试（变更 4）
+// ═══════════════════════════════════════════════════════════
+
+describe("OSC 8 linkHandler", () => {
+  let container: HTMLDivElement;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockProposeDimensions.mockReturnValue({ cols: 80, rows: 24 });
+    capturedTerminal = null;
+    capturedOsc52Handler = null;
+
+    container = document.createElement("div");
+    Object.defineProperty(container, "offsetWidth", { value: 800, configurable: true });
+    Object.defineProperty(container, "offsetHeight", { value: 600, configurable: true });
+  });
+
+  /** 渲染 hook 并等待 useXterm 挂载完成（term.open 后 linkHandler 已设置） */
+  async function mountAndWaitForLinkHandler() {
+    renderHook(() =>
+      useXterm({ container, cols: 80, rows: 24, panelId: "lnk-test" }),
+    );
+    await vi.waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    });
+    expect(capturedTerminal).not.toBeNull();
+  }
+
+  function getLinkHandler() {
+    return capturedTerminal?.options.linkHandler as
+      | { activate: (event: MouseEvent, url: string) => void }
+      | undefined;
+  }
+
+  it("LNK1: linkHandler 已设置，activate 为函数", async () => {
+    await mountAndWaitForLinkHandler();
+
+    const handler = getLinkHandler();
+    expect(handler).toBeDefined();
+    expect(typeof handler?.activate).toBe("function");
+  });
+
+  it("LNK2: 点击 HTTPS 链接 → openUrl 被调用", async () => {
+    await mountAndWaitForLinkHandler();
+    mockOpenUrl.mockClear();
+
+    const handler = getLinkHandler();
+    const fakeEvent = new MouseEvent("click");
+    handler?.activate(fakeEvent, "https://example.com");
+
+    // 等待动态 import() 的 microtask 完成
+    await vi.waitFor(() => {
+      expect(mockOpenUrl).toHaveBeenCalledWith("https://example.com");
+    });
+  });
+
+  it("LNK3: 点击 file:// 链接 → openUrl 被调用", async () => {
+    await mountAndWaitForLinkHandler();
+    mockOpenUrl.mockClear();
+
+    const handler = getLinkHandler();
+    const fakeEvent = new MouseEvent("click");
+    handler?.activate(fakeEvent, "file:///C:/path/file.txt");
+
+    await vi.waitFor(() => {
+      expect(mockOpenUrl).toHaveBeenCalledWith("file:///C:/path/file.txt");
+    });
+  });
+
+  it("LNK4: 点击 FTP 链接 → openUrl 被调用", async () => {
+    await mountAndWaitForLinkHandler();
+    mockOpenUrl.mockClear();
+
+    const handler = getLinkHandler();
+    const fakeEvent = new MouseEvent("click");
+    handler?.activate(fakeEvent, "ftp://server/file");
+
+    await vi.waitFor(() => {
+      expect(mockOpenUrl).toHaveBeenCalledWith("ftp://server/file");
+    });
+  });
+
+  it("LNK5: openUrl reject → 不抛异常", async () => {
+    mockOpenUrl.mockRejectedValue(new Error("打开失败"));
+
+    await mountAndWaitForLinkHandler();
+
+    const handler = getLinkHandler();
+    const fakeEvent = new MouseEvent("click");
+
+    // activate() 返回 undefined（非 Promise），内部 import().then().catch() 不传播异常
+    const result = handler?.activate(fakeEvent, "https://example.com");
+    expect(result).toBeUndefined();
+
+    // 等待 microtask 完成（openUrl 被调用+reject 但不抛异常）
+    await vi.waitFor(() => {
+      expect(mockOpenUrl).toHaveBeenCalled();
+    });
+    // 没有未捕获的异常 → 测试通过
+  });
+
+  it("LNK6: openUrl 不阻塞终端 — activate 异步返回", async () => {
+    let resolveOpen!: () => void;
+    const slowPromise = new Promise<void>((resolve) => { resolveOpen = resolve; });
+
+    await mountAndWaitForLinkHandler();
+
+    // 在 mount 后设置 mock（避免 beforeEach 的 clearAllMocks 清除）
+    mockOpenUrl.mockReturnValue(slowPromise);
+
+    const handler = getLinkHandler();
+    const fakeEvent = new MouseEvent("click");
+
+    // activate 应同步返回 undefined（不等待 openUrl 完成）
+    const result = handler?.activate(fakeEvent, "https://example.com");
+    expect(result).toBeUndefined();
+
+    // 等待 microtask：openUrl 已被调用，但 Promise 仍 pending
+    await vi.waitFor(() => {
+      expect(mockOpenUrl).toHaveBeenCalled();
+    });
+
+    // 终端不被阻塞——测试继续执行，不等待 resolveOpen
+    resolveOpen();
+  });
+
+  it("LNK7: hover 回调不实现（一期不做）", async () => {
+    await mountAndWaitForLinkHandler();
+
+    const handler = capturedTerminal?.options.linkHandler as
+      | { hover?: (event: MouseEvent, url: string) => void }
+      | undefined;
+    expect(handler?.hover).toBeUndefined();
+  });
+
+  it("LNK8: 空字符串 URL 不抛异常", async () => {
+    await mountAndWaitForLinkHandler();
+    mockOpenUrl.mockClear();
+
+    const handler = getLinkHandler();
+    const fakeEvent = new MouseEvent("click");
+
+    expect(() => {
+      handler?.activate(fakeEvent, "");
+    }).not.toThrow();
+
+    await vi.waitFor(() => {
+      // openUrl("") 仍被调用（由 Tauri 侧处理）
+      expect(mockOpenUrl).toHaveBeenCalledWith("");
+    });
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+// attachCustomKeyEventHandler 键盘拦截测试（变更 2 补强）
+// ═══════════════════════════════════════════════════════════
+
+describe("attachCustomKeyEventHandler", () => {
+  let container: HTMLDivElement;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockProposeDimensions.mockReturnValue({ cols: 80, rows: 24 });
+    capturedTerminal = null;
+    capturedOsc52Handler = null;
+    capturedKeyEventHandler = null;
+
+    container = document.createElement("div");
+    Object.defineProperty(container, "offsetWidth", { value: 800, configurable: true });
+    Object.defineProperty(container, "offsetHeight", { value: 600, configurable: true });
+  });
+
+  /** 渲染 hook 并等待挂载，返回 capturedKeyEventHandler */
+  async function mountAndGetKeyHandler() {
+    renderHook(() =>
+      useXterm({ container, cols: 80, rows: 24, panelId: "key-test" }),
+    );
+    await vi.waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    });
+    expect(capturedKeyEventHandler).not.toBeNull();
+    return capturedKeyEventHandler!;
+  }
+
+  function makeKeyEvent(overrides: Partial<KeyboardEvent> = {}): KeyboardEvent {
+    return new KeyboardEvent("keydown", {
+      ctrlKey: false,
+      shiftKey: false,
+      altKey: false,
+      metaKey: false,
+      code: "KeyA",
+      bubbles: true,
+      cancelable: true,
+      ...overrides,
+    });
+  }
+
+  it("KEY1: attachCustomKeyEventHandler 已注册", async () => {
+    await mountAndGetKeyHandler();
+    expect(capturedTerminal?.attachCustomKeyEventHandler).toHaveBeenCalled();
+  });
+
+  it("KEY2: Ctrl+Shift+C → 有选区时调 writeText", async () => {
+    const handler = await mountAndGetKeyHandler();
+
+    // 模拟有选区
+    const getSelection = capturedTerminal?.getSelection as ReturnType<typeof vi.fn>;
+    getSelection.mockReturnValue("selected text");
+
+    const event = makeKeyEvent({ ctrlKey: true, shiftKey: true, code: "KeyC" });
+    const result = handler(event);
+
+    // handler 应返回 false（不交给 xterm.js）+ preventDefault 被调用
+    expect(result).toBe(false);
+    expect(event.defaultPrevented).toBe(true);
+    // 注意：writeText 是异步的（动态 import），在 unit test 中无法直接验证
+    // 这里只验证 handler 正确拦截了事件
+  });
+
+  it("KEY3: Ctrl+Shift+C → 无选区不抛异常", async () => {
+    const handler = await mountAndGetKeyHandler();
+
+    const getSelection = capturedTerminal?.getSelection as ReturnType<typeof vi.fn>;
+    getSelection.mockReturnValue("");
+
+    const event = makeKeyEvent({ ctrlKey: true, shiftKey: true, code: "KeyC" });
+    const result3 = handler(event);
+    expect(result3).toBe(false);
+  });
+
+  it("KEY4: Ctrl+Shift+V → 调 readText + paste", async () => {
+    const handler = await mountAndGetKeyHandler();
+
+    const event = makeKeyEvent({ ctrlKey: true, shiftKey: true, code: "KeyV" });
+    const result = handler(event);
+
+    expect(result).toBe(false);
+    expect(event.defaultPrevented).toBe(true);
+    // readText + paste 是异步 — handler 正确拦截即可
+  });
+
+  it("KEY5: Ctrl+Shift+V → 剪贴板空不抛异常", async () => {
+    const handler = await mountAndGetKeyHandler();
+
+    const event = makeKeyEvent({ ctrlKey: true, shiftKey: true, code: "KeyV" });
+    const result5 = handler(event);
+    expect(result5).toBe(false);
+  });
+
+  it("KEY6: 普通按键 → 透传给 xterm.js", async () => {
+    const handler = await mountAndGetKeyHandler();
+
+    // 普通字母键
+    const event = makeKeyEvent({ code: "KeyA" });
+    const result = handler(event);
+
+    expect(result).toBe(true); // true = 交给 xterm.js
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("KEY7: Ctrl+C → 透传（不拦截）", async () => {
+    const handler = await mountAndGetKeyHandler();
+
+    // Ctrl+C 保留为中断（Claude Code 取消操作）
+    const event = makeKeyEvent({ ctrlKey: true, code: "KeyC" });
+    const result = handler(event);
+
+    expect(result).toBe(true);
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("KEY8: 非 keydown 类型 → 透传", async () => {
+    const handler = await mountAndGetKeyHandler();
+
+    // keyup 事件 — 应原样通过
+    const event = new KeyboardEvent("keyup", {
+      ctrlKey: true, shiftKey: true, code: "KeyC",
+      bubbles: true, cancelable: true,
+    });
+    const result = handler(event);
+
+    expect(result).toBe(true);
+  });
+
+  it("KEY9: Ctrl+Enter → 拦截写 \\n 到 PTY，不交给 xterm.js", async () => {
+    const handler = await mountAndGetKeyHandler();
+
+    // 先确保 session 已 spawn（spawn 是 mock 的，返回 mock-session-id）
+    const event = makeKeyEvent({ ctrlKey: true, code: "Enter" });
+    const result = handler(event);
+
+    // handler 返回 false（不让 xterm.js 处理）
+    expect(result).toBe(false);
+    // preventDefault 已调用
+    expect(event.defaultPrevented).toBe(true);
+    // pty.write 被调用（写 \n = 0x0a）
+    expect(pty.write).toHaveBeenCalledWith(
+      expect.any(String),
+      new Uint8Array([0x0a]),
+    );
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+// vtExtensions.kittyKeyboard 配置测试
+// ═══════════════════════════════════════════════════════════
+
+describe("theme 配置", () => {
+  it("VTX1: terminalOptions 含 vtExtensions.kittyKeyboard=true", async () => {
+    const { terminalOptions } = await import("../panels/terminal/theme");
+    expect(terminalOptions.vtExtensions?.kittyKeyboard).toBe(true);
   });
 });

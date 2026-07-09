@@ -38,5 +38,8 @@ export const terminalOptions: ITerminalOptions = {
   scrollback: 5000,
   // 显式声明，消除对 xterm.js 默认值 true 的隐式依赖（仅影响 ANSI 16 色粗体→亮色映射，不影响 True Color）
   drawBoldTextInBrightColors: true,
+  // Kitty 键盘协议（CSI u）：允许子进程（如 Claude Code）通过 CSI>1u 激活 Disambiguate 模式，
+  // 使 xterm.js 被动编码 Ctrl+Enter、Shift+Enter 等修饰键组合为独立的 CSI u 序列
+  vtExtensions: { kittyKeyboard: true },
   // windowsPty 由 F3 useEffect 在获取真实 build 号后动态设置，不在此预设空对象
 };

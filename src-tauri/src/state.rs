@@ -1,5 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::JoinHandle;
 use tauri::ipc::Channel;
@@ -25,6 +26,8 @@ pub struct PtySession {
     pub output_ring: Arc<Mutex<VecDeque<u8>>>,
     /// P2-42: 子进程退出码（reader 线程在 EOF/错误时设置，pty_reattach 检测后发送 Exit）
     pub exit_code: Arc<Mutex<Option<i32>>>,
+    /// DA1 注入防重复标志（同一会话只注入一次 ESC[?64;22c 响应）
+    pub da1_injected: Arc<AtomicBool>,
     /// Windows Job Object 句柄（孤儿防护，drop 时 CloseHandle）
     /// 此 #[cfg] 虽在 state.rs，但 PtySession 是 PTY 概念，
     /// 符合架构约束 #9 "等明确处" 精神

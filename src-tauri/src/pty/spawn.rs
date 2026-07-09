@@ -14,6 +14,7 @@ use portable_pty::native_pty_system;
 use portable_pty::PtySize;
 use std::collections::VecDeque;
 use std::io::Write as _;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, RwLock};
 use tauri::ipc::Channel;
 use uuid::Uuid;
@@ -692,8 +693,17 @@ pub fn pty_spawn(
     let exit_code_slot: Arc<Mutex<Option<i32>>> = Arc::new(Mutex::new(None));
     let reader_exit_code = exit_code_slot.clone();
 
+    // DA1 注入防重复标志
+    let da1_injected = Arc::new(AtomicBool::new(false));
+
+    let writer_reader = writer.clone();
+    let da1_injected_reader = da1_injected.clone();
+
     let reader_handle = std::thread::spawn(move || {
-        crate::pty::reader::reader_loop(reader, reader_channel, reader_ring, reader_child, reader_exit_code);
+        crate::pty::reader::reader_loop(
+            reader, reader_channel, reader_ring, reader_child, reader_exit_code,
+            writer_reader, da1_injected_reader,
+        );
     });
 
     // 保存会话
@@ -705,6 +715,7 @@ pub fn pty_spawn(
         channel,
         output_ring,
         exit_code: exit_code_slot,
+        da1_injected,
         #[cfg(windows)]
         job_object: job_handle,
     };

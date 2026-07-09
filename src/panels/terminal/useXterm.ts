@@ -319,6 +319,60 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
     // 挂载到 DOM
     term.open(container);
 
+    // ── 键盘事件自定义处理器（在 xterm.js 内部 keydown 之前拦截）──
+    // Ctrl+Shift+C/V：双重保障——ShortcutRegistry 路径（窗口级 capture）若失效，
+    //   此 handler 作为 fallback 直接处理。
+    // Ctrl+Enter：xterm.js 传统 handler 将 Ctrl+Enter 编码为 \r（同 Enter），
+    //   Kitty 协议虽已启用但需应用端主动发 CSI>1u 激活，不可靠。
+    //   此处直接拦截 Ctrl+Enter 写 \n（Ctrl+J 行为）到 PTY，绕过整个 xterm.js 键盘链路。
+    term.attachCustomKeyEventHandler((event: KeyboardEvent) => {
+      // 仅处理 keydown，忽略 keyup/keypress（xterm.js 对每次 keydown 均调用此 handler）
+      if (event.type !== "keydown") return true;
+
+      // Ctrl+Enter：换行——xterm.js 不区分 Ctrl+Enter/Enter，此处直接写 \n 到 PTY
+      if (event.ctrlKey && !event.shiftKey && event.code === "Enter") {
+        event.preventDefault();
+        if (sessionIdRef.current) {
+          pty.write(sessionIdRef.current, new Uint8Array([0x0a]))
+            .catch(() => {});
+        }
+        return false; // false = 不交给 xterm.js 进一步处理
+      }
+
+      // Ctrl+Shift+C：复制选区到系统剪贴板
+      if (event.ctrlKey && event.shiftKey && event.code === "KeyC") {
+        const selection = term.getSelection();
+        if (selection) {
+          import("../../ipc/clipboard").then(({ writeText }) =>
+            writeText(selection).catch(() => {})
+          );
+        }
+        event.preventDefault();
+        return false;
+      }
+
+      // Ctrl+Shift+V：从系统剪贴板粘贴
+      if (event.ctrlKey && event.shiftKey && event.code === "KeyV") {
+        import("../../ipc/clipboard").then(({ readText }) =>
+          readText().then((text) => term.paste(text)).catch(() => {})
+        );
+        event.preventDefault();
+        return false;
+      }
+
+      return true; // 其他按键交给 xterm.js 默认处理
+    });
+
+    // OSC 8 超链接：点击后通过系统默认浏览器打开
+    // linkHandler 是行为/副作用，非视觉配置，与 OSC 52 handler 同模式
+    term.options.linkHandler = {
+      activate: (_event, url) => {
+        import("@tauri-apps/plugin-opener").then(({ openUrl }) =>
+          openUrl(url).catch(() => {})
+        );
+      },
+    };
+
     // 字体预加载后刷新布局（包裹 rAF 确保布局稳定）
     document.fonts.ready.then(() => {
       requestAnimationFrame(() => {

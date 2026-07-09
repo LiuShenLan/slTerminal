@@ -1,7 +1,34 @@
 // Phase 1 L2 Workspace 测试 — 多 Dockview 实例架构
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mockIPC, clearMocks } from '@tauri-apps/api/mocks';
+
+// Mock @xterm/xterm — xterm.js 6.1+ 渲染器初始化在 jsdom 中抛异常（WidthCache 需要真实 DOM 指标）
+vi.mock("@xterm/xterm", () => ({
+  Terminal: vi.fn(function (this: Record<string, unknown>) {
+    this.open = vi.fn();
+    this.dispose = vi.fn();
+    this.loadAddon = vi.fn();
+    this.write = vi.fn();
+    this.writeln = vi.fn();
+    this.onData = vi.fn();
+    this.focus = vi.fn();
+    this.attachCustomKeyEventHandler = vi.fn();
+    this.element = document.createElement("div");
+    this.options = {} as Record<string, unknown>;
+    this.parser = { registerOscHandler: vi.fn(() => ({ dispose: vi.fn() })) };
+    return this;
+  }),
+}));
+
+vi.mock("@xterm/addon-fit", () => ({
+  FitAddon: vi.fn(function (this: Record<string, unknown>) {
+    this.fit = vi.fn();
+    this.proposeDimensions = vi.fn(() => ({ cols: 80, rows: 24 }));
+    this.dispose = vi.fn();
+    return this;
+  }),
+}));
 
 // jsdom 缺少 ResizeObserver（Dockview 依赖）
 global.ResizeObserver = class ResizeObserver {

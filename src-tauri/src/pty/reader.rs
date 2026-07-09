@@ -10,7 +10,8 @@
 use crate::pty::spawn::PtyEvent;
 use crate::state::ring_buffer_append;
 use std::collections::VecDeque;
-use std::io::Read;
+use std::io::{Read, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use tauri::ipc::Channel;
 
@@ -33,6 +34,8 @@ pub fn reader_loop(
     ring: Arc<Mutex<VecDeque<u8>>>,
     child: Arc<Mutex<Box<dyn portable_pty::Child + Send>>>,
     exit_code: Arc<Mutex<Option<i32>>>,
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
+    da1_injected: Arc<AtomicBool>,
 ) {
     let mut buf = [0u8; READER_BUF_SIZE];
     let mut startup_drained = false;
@@ -94,6 +97,19 @@ pub fn reader_loop(
                         break;
                     }
                 };
+                // DA1 查询模拟响应：Claude Code Ink 渲染器启动时发 ESC[c 作为同步哨兵。
+                // ConPTY 拦截 DA1 查询后内部处理，不向子进程 stdout 返回响应。
+                // 导致 Ink waitFor 永不 resolve，阻塞约 60s。
+                // 此处检测子进程发出的 DA1 查询，向 stdin 注入 ESC[?64;22c（VT420+ANSI 颜色）
+                // 模拟 ConPTY 的一致行为。同一会话仅注入一次（AtomicBool 防重复）。
+                if !da1_injected.load(Ordering::Relaxed) && mirror_da1_query(&bytes) {
+                    da1_injected.store(true, Ordering::Relaxed);
+                    // 向子进程 stdin 注入 DA1 响应（不阻塞 reader 线程）
+                    if let Ok(mut w) = writer.lock() {
+                        let _ = w.write_all(b"\x1b[?64;22c");
+                        let _ = w.flush();
+                    }
+                }
                 // P2-46: 总是先缓存到 ring buffer（不 clone），再 send 消耗 bytes
                 // 成功路径零 clone，失败路径（Channel 断连）ring buffer 已有数据
                 if let Err(e) = ring_buffer_append(&ring, &bytes) {
@@ -202,9 +218,30 @@ fn match_csi_startup(data: &[u8]) -> Option<usize> {
         {
             Some(6)
         }
-        b's' | b'u' => Some(3),
         _ => None,
     }
+}
+
+/// 检测输出字节流中是否含有 DA1 终端查询（ESC[c 或 ESC[0c）
+///
+/// DA2 (ESC[>c) 和 XTVERSION (ESC[>0q) 不触发——两者走不同的检测路径。
+/// 此函数使用滑动窗口扫描，在 reader 线程每轮 read() 结果上调用。
+fn mirror_da1_query(data: &[u8]) -> bool {
+    // 滑动窗口扫描 ESC [ [0] c
+    for i in 0..data.len().saturating_sub(2) {
+        if data[i] == 0x1b && data[i + 1] == b'[' {
+            let rest = &data[i + 2..];
+            // ESC[c — 不含额外参数的标准 DA1 查询
+            if rest.first() == Some(&b'c') {
+                return true;
+            }
+            // ESC[0c — 含前导 0 的变体（某些应用发出此格式）
+            if rest.len() >= 2 && rest[0] == b'0' && rest[1] == b'c' {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -284,6 +321,32 @@ mod tests {
         assert!(!result.starts_with(b"\x1b]"));
     }
 
+    // ─── 变更 1: ESC[s/ESC[u 不再误剥离（防御性回归）───
+    // ESC[s/ESC[u 只有 2 字节（不含 '['），永远不会进入 CSI 序列匹配器。
+    // 删除 b's'|b'u' 分支后，添加以下测试以确认行为不变。
+
+    #[test]
+    fn strip_preserves_save_cursor() {
+        // ES1: ESC[s（标准 VT100 保存光标）不被剥离
+        let input = b"\x1b[s hello";
+        assert_eq!(strip_conpty_startup(input), input);
+    }
+
+    #[test]
+    fn strip_preserves_restore_cursor() {
+        // ES2: ESC[u（标准 VT100 恢复光标）不被剥离
+        let input = b"\x1b[u world";
+        assert_eq!(strip_conpty_startup(input), input);
+    }
+
+    #[test]
+    fn strip_existing_tests_still_pass() {
+        // ES3: 删除死代码不影响现有剥离行为——ESC[H 仍被剥离
+        assert_eq!(strip_conpty_startup(b"\x1b[H"), b"");
+        // ESC[2J 仍被剥离
+        assert_eq!(strip_conpty_startup(b"\x1b[2J"), b"");
+    }
+
     #[test]
     fn strip_startup_with_16k_boundary() {
         // 数据跨 16KB 边界：启动序列 + 16KB 数据
@@ -300,5 +363,44 @@ mod tests {
         assert_eq!(result.len(), READER_BUF_SIZE + 4); // 16KB + 4 (TAIL)
         assert!(result.starts_with(b"Y"));
         assert!(result.ends_with(b"TAIL"));
+    }
+
+    // ─── 变更 2: mirror_da1_query 单元测试 ───
+
+    #[test]
+    fn da1_standard_query_detected() {
+        // DA1_U1: 标准 DA1 查询 ESC[c
+        assert!(mirror_da1_query(b"\x1b[c"));
+    }
+
+    #[test]
+    fn da1_with_leading_zero_detected() {
+        // DA1_U2: 含前导数字的 DA1 ESC[0c
+        assert!(mirror_da1_query(b"\x1b[0c"));
+    }
+
+    #[test]
+    fn da2_not_detected() {
+        // DA1_U3: DA2 (ESC[>c) 不触发
+        assert!(!mirror_da1_query(b"\x1b[>c"));
+    }
+
+    #[test]
+    fn plain_text_not_falsely_detected() {
+        // DA1_U4: 普通文本含 c 不误触发（无 ESC 前缀）
+        assert!(!mirror_da1_query(b"hello [c world"));
+    }
+
+    #[test]
+    fn xtversion_not_detected() {
+        // DA1_U7: XTVERSION ESC[>0q 不触发
+        assert!(!mirror_da1_query(b"\x1b[>0q"));
+    }
+
+    #[test]
+    fn da1_embedded_in_output_detected() {
+        // DA1 查询嵌入在正常输出流中仍能被检测
+        let input = b"prompt> \x1b[c more output";
+        assert!(mirror_da1_query(input));
     }
 }

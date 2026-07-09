@@ -4,9 +4,36 @@
 // 注：jsdom 中 DockviewReact 的 onReady 会创建终端面板，React StrictMode 双重挂载
 // 会导致多个 Terminal 实例，测试仅验证架构层面的行为（panel ID 存在性 + DOM 结构）。
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mockIPC, clearMocks } from "@tauri-apps/api/mocks";
 import { render } from "@testing-library/react";
+
+// Mock @xterm/xterm — xterm.js 6.1+ 渲染器初始化在 jsdom 中抛异常（WidthCache 需要真实 DOM 指标）
+vi.mock("@xterm/xterm", () => ({
+  Terminal: vi.fn(function (this: Record<string, unknown>) {
+    this.open = vi.fn();
+    this.dispose = vi.fn();
+    this.loadAddon = vi.fn();
+    this.write = vi.fn();
+    this.writeln = vi.fn();
+    this.onData = vi.fn();
+    this.focus = vi.fn();
+    this.attachCustomKeyEventHandler = vi.fn();
+    this.element = document.createElement("div");
+    this.options = {} as Record<string, unknown>;
+    this.parser = { registerOscHandler: vi.fn(() => ({ dispose: vi.fn() })) };
+    return this;
+  }),
+}));
+
+vi.mock("@xterm/addon-fit", () => ({
+  FitAddon: vi.fn(function (this: Record<string, unknown>) {
+    this.fit = vi.fn();
+    this.proposeDimensions = vi.fn(() => ({ cols: 80, rows: 24 }));
+    this.dispose = vi.fn();
+    return this;
+  }),
+}));
 
 global.ResizeObserver = class ResizeObserver {
   observe() {}
