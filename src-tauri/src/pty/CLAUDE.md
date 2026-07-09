@@ -106,6 +106,21 @@ state.rs          → PtySession 结构体 + PtyState 全局 HashMap
 
 `reader.rs` 的 `READER_BUF_SIZE` 常量设为 16384（16KB）。189KB/s 输出场景下约 12 次/秒 read() 调用（4KB 为 47 次/秒），减少约 75% 系统调用。
 
+### DA1 查询模拟响应
+
+Claude Code 的 Ink 渲染器启动时发送 DA1 查询（`ESC[c`）作为同步哨兵。ConPTY 拦截 DA1 查询后内部处理，不向子进程 stdout 返回响应。Ink 的 `waitFor` Promise 永不 resolve，阻塞约 60s。
+
+`reader_loop` 在 startup_drained 后扫描输出中的 DA1 查询（`ESC[c` / `ESC[0c`），通过 `mirror_da1_query()` 检测。检测到后向子进程 stdin 注入 `ESC[?64;22c`（VT420 + ANSI 颜色），模拟 ConPTY + conhost 的一致行为。`std::sync::atomic::AtomicBool` 防重复注入（每会话一次）。
+
+涉及的变更：
+- `reader.rs`：`mirror_da1_query()` 扫描函数 + reader_loop 中注入逻辑；`reader_loop` 签名新增 `writer: Arc<Mutex<Box<dyn Write + Send>>>` + `da1_injected: Arc<AtomicBool>` 参数
+- `state.rs`：`PtySession` 新增 `da1_injected: Arc<AtomicBool>` 字段
+- `spawn.rs`：spawn 时创建 `da1_injected` 并传递 writer + flag 到 reader 线程
+
+### ESC[s/ESC[u 误剥离修复
+
+`strip_conpty_startup()` 的 `match_csi_startup` 中原有 `b's' | b'u' => Some(3)` 分支，将标准 VT100 光标保存/恢复（`ESC[s`/`ESC[u`）误标记为 ConPTY 启动序列。该分支实际为死代码——`ESC[s`/`ESC[u` 仅 2 字节（不含 `[`），永远不进入 CSI 序列匹配器。已删除。
+
 ## 命令
 
 ```bash
