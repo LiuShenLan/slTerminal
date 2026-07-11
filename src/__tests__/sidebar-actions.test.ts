@@ -422,7 +422,7 @@ describe("侧栏交互", () => {
   });
 
   describe("添加项目完整流程", () => {
-    it("16. 点击 + 添加项目 → dialog.open 选择文件夹 → store 创建项目", async () => {
+    it("16. 点击 + 添加项目 → dialog.open 选择文件夹 → store 创建项目 + layout 为空", async () => {
       mocks.mockOpenDialog.mockResolvedValueOnce("C:\\new-project");
 
       const { getAllByTitle } = renderSidebar();
@@ -439,11 +439,130 @@ describe("侧栏交互", () => {
       expect(project.rootPath).toBe("C:\\new-project");
       expect(project.pages.length).toBe(1);
       expect(project.pages[0].cwd).toBe("C:\\new-project");
+      // T9: layout 为空对象（新建页面不含默认终端面板）
+      expect(project.pages[0].layout).toEqual({});
+      expect(project.pages[0].layout).not.toHaveProperty("grid");
       expect(mocks.mockOpenDialog).toHaveBeenCalledWith({
         directory: true,
         multiple: false,
         title: "选择项目文件夹",
       });
+    });
+
+    it("T10: 新建项目 page.layout 中无 terminal 面板定义", async () => {
+      mocks.mockOpenDialog.mockResolvedValueOnce("C:\\dev\\my-app");
+
+      const { getAllByTitle } = renderSidebar();
+      fireEvent.click(getAllByTitle("添加项目")[0]);
+
+      await waitFor(() => {
+        const projects = Object.values(useProjects.getState().projects);
+        expect(projects.length).toBeGreaterThan(0);
+      });
+
+      const project = Object.values(useProjects.getState().projects)[0];
+      const layout = project.pages[0].layout as Record<string, unknown>;
+      // 无 panels 字段、无 terminal 相关内容
+      expect(layout.panels).toBeUndefined();
+      expect(layout.grid).toBeUndefined();
+      expect(layout.activeGroup).toBeUndefined();
+    });
+
+    it("T11: 新建项目后 store 中 pages[0].cwd 匹配选中的文件夹路径", async () => {
+      mocks.mockOpenDialog.mockResolvedValueOnce("D:\\work\\rust-project");
+
+      const { getAllByTitle } = renderSidebar();
+      fireEvent.click(getAllByTitle("添加项目")[0]);
+
+      await waitFor(() => {
+        const projects = Object.values(useProjects.getState().projects);
+        expect(projects.length).toBeGreaterThan(0);
+      });
+
+      const project = Object.values(useProjects.getState().projects)[0];
+      expect(project.pages[0].cwd).toBe("D:\\work\\rust-project");
+      expect(project.rootPath).toBe("D:\\work\\rust-project");
+    });
+
+    it("T12: dialog 取消时 store 不变（不创建项目）", async () => {
+      mocks.mockOpenDialog.mockResolvedValueOnce(null); // 用户取消
+
+      const { getAllByTitle } = renderSidebar();
+      fireEvent.click(getAllByTitle("添加项目")[0]);
+
+      // 等待异步操作完成（handleAddProject 中的 catch 分支）
+      await waitFor(() => {
+        // dialog 已被调用
+        expect(mocks.mockOpenDialog).toHaveBeenCalled();
+      });
+
+      // store 仍为空（无项目被创建）
+      const state = useProjects.getState();
+      expect(Object.values(state.projects)).toHaveLength(0);
+    });
+  });
+
+  describe("新建操作页面（handleNewPage）", () => {
+    it("T13: 右键项目→新建操作页面→page.layout 为空对象", () => {
+      populateStore();
+      const { getAllByText } = renderSidebar();
+
+      // 右键项目节点 → 打开菜单
+      fireEvent.contextMenu(getAllByText("测试项目")[0]);
+      // 点击"新建操作页面"
+      const newPageItems = getAllByText("新建操作页面");
+      expect(newPageItems.length).toBeGreaterThan(0);
+      fireEvent.click(newPageItems[0]);
+
+      // store 中已有 3 个 page（原 2 + 新 1）
+      const project = useProjects.getState().projects["proj-1"];
+      expect(project).toBeDefined();
+      expect(project.pages.length).toBe(3);
+
+      // 最新页面 layout 为空
+      const newPage = project.pages[2];
+      expect(newPage.layout).toEqual({});
+      expect(newPage.layout).not.toHaveProperty("grid");
+    });
+
+    it("T14: 新建页面后 projects store page 数量 +1", () => {
+      populateStore();
+      const { getAllByText } = renderSidebar();
+
+      // 初始 2 页
+      const before = useProjects.getState().projects["proj-1"].pages.length;
+      expect(before).toBe(2);
+
+      fireEvent.contextMenu(getAllByText("测试项目")[0]);
+      fireEvent.click(getAllByText("新建操作页面")[0]);
+
+      const after = useProjects.getState().projects["proj-1"].pages.length;
+      expect(after).toBe(3);
+    });
+
+    it("T15: 新建页面 cwd 继承项目 rootPath", () => {
+      populateStore();
+      const { getAllByText } = renderSidebar();
+
+      fireEvent.contextMenu(getAllByText("测试项目")[0]);
+      fireEvent.click(getAllByText("新建操作页面")[0]);
+
+      const project = useProjects.getState().projects["proj-1"];
+      const newPage = project.pages[2];
+      expect(newPage.cwd).toBe("C:\\test");
+      expect(newPage.cwd).toBe(project.rootPath);
+    });
+
+    it("T16: 新建页面名格式为 '页面-XXXX'", () => {
+      populateStore();
+      const { getAllByText } = renderSidebar();
+
+      fireEvent.contextMenu(getAllByText("测试项目")[0]);
+      fireEvent.click(getAllByText("新建操作页面")[0]);
+
+      const project = useProjects.getState().projects["proj-1"];
+      const newPage = project.pages[2];
+      expect(newPage.name).toMatch(/^页面-\d+$/);
     });
   });
 });

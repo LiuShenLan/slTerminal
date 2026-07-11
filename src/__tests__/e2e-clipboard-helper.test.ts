@@ -58,7 +58,7 @@ vi.mock("../stores/projects", () => ({
 
 vi.mock("../features/sidebar/SidebarTree", () => ({
   default: () => null,
-  makeDefaultLayout: vi.fn(() => ({})),
+  makeEmptyLayout: vi.fn(() => ({})),
 }));
 
 vi.mock("dockview-react/dist/styles/dockview.css", () => ({}));

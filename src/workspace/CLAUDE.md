@@ -14,6 +14,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **fromJSON 恢复守卫**：`restoreGuardRef` 阻止 `onDidLayoutChange` 在程序化恢复布局时向 store 写回。`onDidLayoutFromJSON` 事件中置 true，`setTimeout(0)` 异步复位——因为 Dockview 会在 JSON 恢复后立即触发 layout change。
 
+**不自动创建默认终端**：`handleReady` 在布局恢复失败（空布局 `{}` 或损坏数据）时不再兜底创建终端面板。空白页面由 Watermark 组件接管显示（"打开终端或编辑器开始工作"），用户通过 Watermark 按钮或页签 "+" 按钮手动创建终端。新建页面的空布局由 `SidebarTree.makeEmptyLayout()` 提供。已有页面布局恢复路径不变。
+
 ## 文件
 
 | 文件 | 职责 |
@@ -92,8 +94,7 @@ SidebarTree.switchToPage(projectId, pageId)
 - 纯函数测试，无需 React 渲染环境
 
 `default-layout-format.test.ts`（8 用例）：
-- `makeDefaultLayout` 输出结构验证：`grid.root.type` 为 `"branch"`、leaf 节点结构、`orientation` 为 `"HORIZONTAL"`
-- JSON 往返一致性 + 独立布局（两次调用不共享引用）
+- `makeEmptyLayout` 空布局验证：返回 `{}`、独立对象、JSON 往返一致性、纯对象检查
 
 ### 面板注册表测试
 

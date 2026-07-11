@@ -94,10 +94,12 @@ describe("__slterm_e2e_createProject", () => {
     const proj = Object.values(projects)[0];
     const page = proj.pages[0];
 
-    // layout 是合法对象（含 grid 根）
+    // T24: layout 为空对象（新建页面不自动包含 terminal）
     expect(page.layout).toBeDefined();
     expect(typeof page.layout).toBe("object");
-    expect(page.layout).toHaveProperty("grid");
+    expect(page.layout).toEqual({});
+    // T25: layout 无 grid 属性
+    expect(page.layout).not.toHaveProperty("grid");
 
     // cwd 匹配传入路径
     expect(page.cwd).toBe("D:\\my-project");

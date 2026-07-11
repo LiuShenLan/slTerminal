@@ -38,9 +38,7 @@ vi.mock("../workspace/layoutSerde", () => ({
 
 vi.mock("../features/sidebar", () => ({
   SidebarTree: vi.fn(() => null),
-  makeDefaultLayout: vi.fn(() => ({
-    grid: { orientation: "HORIZONTAL", root: { type: "branch", data: [] } },
-  })),
+  makeEmptyLayout: vi.fn(() => ({})),
 }));
 
 vi.mock("../features/explorer", () => ({

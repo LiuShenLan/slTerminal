@@ -227,18 +227,13 @@ const PageDockview: React.FC<PageDockviewProps> = ({
     apiRef.current = api;
     onApiReady(api);
 
-    // 恢复保存的布局或创建默认终端
+    // 恢复保存的布局（无布局时留空，由 Watermark 组件接管显示）
     let restored = false;
     if (savedLayout && Object.keys(savedLayout).length > 0) {
       restored = loadLayout(api, savedLayout);
     }
-    if (!restored) {
-      // 无保存布局 或 恢复失败 → 创建默认终端
-      const id = nextPanelId();
-      const title = titleManager.getTerminalTitle(pageId);
-      api.addPanel({ id, component: PANEL_TERMINAL, title,
-        params: { panelId: id, cwd }, renderer: "always" });
-    }
+    // 不创建默认终端——空白页面由 watermarkComponent 渲染
+    // "打开终端或编辑器开始工作"，用户可点击"新建终端"按钮
 
     // 从保存布局恢复后，重建编辑器注册表并重算标题（忽略持久化的 title）
     if (restored) {

@@ -9,7 +9,6 @@ import { useProjects, createProjectId, createPageId } from "../../stores/project
 import type { Project, OperationPage } from "../../stores/projects";
 import { useLayout } from "../../stores/layout";
 import { open } from "../../ipc/dialog";
-import { PANEL_TERMINAL } from "../../workspace/panelRegistry";
 import {
   PANEL_BG,
   SIDEBAR_FG,
@@ -305,38 +304,12 @@ interface SidebarTreeProps {
 
 // ---- 辅助 ----
 
-/** 生成新操作页面的默认布局（含一个终端面板）
+/** 生成新操作页面的空白布局（不含任何默认面板）。
  *
- * 注意：Dockview fromJSON 要求 grid root 为 "branch"，leaf.data.id 为 string，
- * 顶层 activeGroup 必须匹配 leaf 的 group id。 */
-export function makeDefaultLayout(panelId: string): Record<string, unknown> {
-  const groupId = `group-${panelId}`;
-  return {
-    grid: {
-      orientation: "HORIZONTAL",
-      root: {
-        type: "branch",
-        data: [
-          {
-            type: "leaf",
-            data: { views: [panelId], activeView: panelId, id: groupId },
-            size: 100,
-          },
-        ],
-        size: 100,
-      },
-    },
-    panels: {
-      [panelId]: {
-        id: panelId,
-        contentComponent: PANEL_TERMINAL,
-        title: "terminal-0",
-        params: { panelId },
-        renderer: "always",
-      },
-    },
-    activeGroup: groupId,
-  };
+ * 新页面显示 Watermark 组件（"打开终端或编辑器开始工作"），
+ * 用户通过 Watermark 按钮或页签 "+" 按钮手动创建终端。 */
+export function makeEmptyLayout(): Record<string, unknown> {
+  return {};
 }
 
 // ---- 主组件 ----
@@ -377,11 +350,10 @@ const SidebarTree: React.FC<SidebarTreeProps> = ({ switchToPage, onDeletePage })
 
       // 创建默认操作页面（cwd = 所选目录路径）
       const pageId = createPageId();
-      const defaultPanelId = `terminal-${pageId}-0`;
       const page: OperationPage = {
         pageId,
         name,
-        layout: makeDefaultLayout(defaultPanelId),
+        layout: makeEmptyLayout(),
         cwd: dirPath,
         createdAt: Date.now(),
         lastAccessedAt: Date.now(),
@@ -406,11 +378,10 @@ const SidebarTree: React.FC<SidebarTreeProps> = ({ switchToPage, onDeletePage })
   const handleNewPage = useCallback(
     (projectId: string, cwd: string) => {
       const pageId = createPageId();
-      const defaultPanelId = `terminal-${pageId}-0`;
       const page: OperationPage = {
         pageId,
         name: `页面-${Date.now() % 10000}`,
-        layout: makeDefaultLayout(defaultPanelId),
+        layout: makeEmptyLayout(),
         cwd,
         createdAt: Date.now(),
         lastAccessedAt: Date.now(),

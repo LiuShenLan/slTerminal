@@ -1,89 +1,61 @@
-// default-layout-format.test.ts — makeDefaultLayout 格式验证
+// default-layout-format.test.ts — makeEmptyLayout 格式验证
 //
-// 验证 SidebarTree.tsx 中 makeDefaultLayout 产出的布局能被 Dockview fromJSON 接受。
-// 关键约束：grid root 必须为 type: "branch"（非 "leaf"），面板定义必须用 contentComponent。
+// 验证 SidebarTree.tsx 中 makeEmptyLayout 产出空布局对象，
+// 新建页面不包含任何默认面板（terminal 等），由 Watermark 组件接管显示。
 
 import { describe, it, expect } from "vitest";
-import { makeDefaultLayout } from "../features/sidebar/SidebarTree";
+import { makeEmptyLayout } from "../features/sidebar/SidebarTree";
 
-describe("makeDefaultLayout 格式验证", () => {
-  it("grid.root.type 必须为 'branch'（Dockview fromJSON 强制要求）", () => {
-    const layout = makeDefaultLayout("test-panel-1");
-    const root = (layout.grid as Record<string, unknown>).root as Record<string, unknown>;
-    expect(root.type).toBe("branch");
-    expect(Array.isArray(root.data)).toBe(true);
-    expect((root.data as unknown[]).length).toBeGreaterThan(0);
+describe("makeEmptyLayout 空布局验证", () => {
+  it("T1: 返回值为空对象", () => {
+    const layout = makeEmptyLayout();
+    expect(layout).toEqual({});
   });
 
-  it("grid.root.data[0] 必须是 type: 'leaf' 的叶子节点", () => {
-    const layout = makeDefaultLayout("test-panel-2");
-    const root = (layout.grid as Record<string, unknown>).root as Record<string, unknown>;
-    const leaf = (root.data as unknown[])[0] as Record<string, unknown>;
-    expect(leaf.type).toBe("leaf");
-    expect(leaf.size).toBe(100);
-    const leafData = leaf.data as Record<string, unknown>;
-    expect(leafData.views).toEqual(["test-panel-2"]);
-    expect(leafData.activeView).toBe("test-panel-2");
-    // group id 必须为 string（Dockview fromJSON 强制要求）
-    expect(typeof leafData.id).toBe("string");
-    expect(leafData.id).toBe("group-test-panel-2");
+  it("T2: 两次调用返回独立对象（修改一个不影响另一个）", () => {
+    const a = makeEmptyLayout() as Record<string, unknown>;
+    const b = makeEmptyLayout() as Record<string, unknown>;
+
+    (a as Record<string, unknown>).mutated = true;
+    expect(a.mutated).toBe(true);
+    expect((b as Record<string, unknown>).mutated).toBeUndefined();
   });
 
-  it("panels 定义必须用 contentComponent（非 component）", () => {
-    const layout = makeDefaultLayout("test-panel-3");
-    const panels = layout.panels as Record<string, Record<string, unknown>>;
-    const panel = panels["test-panel-3"];
-    expect(panel.id).toBe("test-panel-3");
-    // fromJSON 反序列化器读取 contentComponent 字段，非 component
-    expect(panel.contentComponent).toBe("terminal");
-    expect(panel.component).toBeUndefined();
-    expect(panel.renderer).toBe("always");
-  });
-
-  it("顶层 activeGroup 必须与 leaf node 的 data.id 一致", () => {
-    const layout = makeDefaultLayout("test-panel-active");
-    expect(layout.activeGroup).toBe("group-test-panel-active");
-    // activeGroup 必须为 string
-    expect(typeof layout.activeGroup).toBe("string");
-  });
-
-  it("panels 应包含 params 字段（面板参数透传）", () => {
-    const layout = makeDefaultLayout("test-panel-4");
-    const panels = layout.panels as Record<string, Record<string, unknown>>;
-    const panel = panels["test-panel-4"];
-    const params = panel.params as Record<string, unknown>;
-    expect(params.panelId).toBe("test-panel-4");
-  });
-
-  it("不同 panelId 应生成独立的布局", () => {
-    const layout1 = makeDefaultLayout("panel-a");
-    const layout2 = makeDefaultLayout("panel-b");
-    const panels1 = layout1.panels as Record<string, unknown>;
-    const panels2 = layout2.panels as Record<string, unknown>;
-
-    expect(panels1["panel-a"]).toBeDefined();
-    expect(panels1["panel-b"]).toBeUndefined();
-    expect(panels2["panel-b"]).toBeDefined();
-    expect(panels2["panel-a"]).toBeUndefined();
-  });
-
-  it("布局 JSON 序列化再反序列化应保持结构一致", () => {
-    const layout = makeDefaultLayout("test-json-roundtrip");
+  it("T3: JSON 序列化+反序列化往返后仍为 {}", () => {
+    const layout = makeEmptyLayout();
     const json = JSON.stringify(layout);
+    expect(json).toBe("{}");
     const restored = JSON.parse(json);
-
-    expect(restored.grid.root.type).toBe("branch");
-    expect(restored.panels["test-json-roundtrip"]).toBeDefined();
-    expect(restored.panels["test-json-roundtrip"].contentComponent).toBe("terminal");
-    expect(restored.panels["test-json-roundtrip"].id).toBe("test-json-roundtrip");
+    expect(restored).toEqual({});
   });
 
-  it("grid.orientation 必须为 'HORIZONTAL'（fromJSON 时 root BranchNode 方向依赖此字段）", () => {
-    const layout = makeDefaultLayout("test-orientation");
-    const grid = layout.grid as Record<string, unknown>;
-    expect(grid.orientation).toBe("HORIZONTAL");
-    // 二次验证：序列化后不丢失
-    const restored = JSON.parse(JSON.stringify(layout));
-    expect((restored.grid as Record<string, unknown>).orientation).toBe("HORIZONTAL");
+  it("T4: Object.keys 长度为 0", () => {
+    const layout = makeEmptyLayout();
+    expect(Object.keys(layout)).toHaveLength(0);
+  });
+
+  it("T5: 返回值非 null", () => {
+    const layout = makeEmptyLayout();
+    expect(layout).not.toBeNull();
+  });
+
+  it("T6: 返回值为纯对象（constructor === Object）", () => {
+    const layout = makeEmptyLayout();
+    expect(layout.constructor).toBe(Object);
+  });
+
+  it("T7: 无原型链属性污染", () => {
+    const layout = makeEmptyLayout();
+    // 仅自有属性（非继承）
+    expect(layout.hasOwnProperty("toString")).toBe(false);
+    expect(layout.hasOwnProperty("__proto__")).toBe(false);
+  });
+
+  it("T8: typeof 为 'object'", () => {
+    const layout = makeEmptyLayout();
+    expect(typeof layout).toBe("object");
+    // 排除数组和 null
+    expect(Array.isArray(layout)).toBe(false);
+    expect(layout).not.toBeNull();
   });
 });

@@ -9,7 +9,7 @@ import type { OperationPage, Project } from "./stores/projects";
 import { useLayout } from "./stores/layout";
 import { useFontSize } from "./stores/fontSize";
 import { saveLayout } from "./workspace/layoutSerde";
-import { makeDefaultLayout } from "./features/sidebar/SidebarTree";
+import { makeEmptyLayout } from "./features/sidebar/SidebarTree";
 import { writeText } from "./ipc/clipboard";
 import { pty } from "./ipc";
 import { TerminalRegistry } from "./panels/terminal/TerminalRegistry";
@@ -34,12 +34,11 @@ if (typeof window !== "undefined") {
     const name = dirPath.split(/[/\\]/).pop() || dirPath;
     const projectId = createProjectId();
     const pageId = createPageId();
-    const defaultPanelId = `terminal-${pageId}-0`;
 
     const page: OperationPage = {
       pageId,
       name,
-      layout: makeDefaultLayout(defaultPanelId),
+      layout: makeEmptyLayout(),
       cwd: dirPath,
       createdAt: Date.now(),
       lastAccessedAt: Date.now(),

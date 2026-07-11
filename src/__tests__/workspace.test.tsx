@@ -90,19 +90,19 @@ describe('Workspace', () => {
     expect(text).not.toContain('打开终端或编辑器开始工作');
   });
 
-  it('有活跃页面时：Dockview 初始化 + 自动创建终端面板', () => {
+  it('T17: 活跃页面 + layout 为空 → Watermark 显示（不自动创建终端）', () => {
     mockIPC(() => null);
 
-    const pageId = 'page-test-active';
+    const pageId = 'page-test-empty';
     useProjects.getState().addProject({
-      projectId: 'proj-active',
-      name: 'active-test',
-      rootPath: '/tmp/active',
+      projectId: 'proj-empty',
+      name: 'empty-layout-test',
+      rootPath: '/tmp/empty',
       pages: [{
         pageId,
-        name: 'Test Page',
+        name: 'Empty Page',
         layout: {},
-        cwd: '/tmp/active',
+        cwd: '/tmp/empty',
         createdAt: Date.now(),
         lastAccessedAt: Date.now(),
       }],
@@ -115,10 +115,40 @@ describe('Workspace', () => {
 
     const text = container.textContent ?? '';
     // 侧栏渲染
-    expect(text).toContain('active-test');
-    // 默认终端面板已创建——标题为 "terminal-N"（N 受 StrictMode 双重挂载影响）
-    expect(text).toMatch(/terminal-\d/);
-    // 终端已挂载（Watermark 被面板替换，不再显示）
-    expect(text).not.toContain('打开终端或编辑器开始工作');
+    expect(text).toContain('empty-layout-test');
+    // Watermark 显示（无默认终端）
+    expect(text).toContain('打开终端或编辑器开始工作');
+    // 不创建 terminal 面板
+    expect(text).not.toMatch(/terminal-\d/);
+  });
+
+  it('T18: 活跃页面 + layout 为空 → 文本不含 terminal-', () => {
+    mockIPC(() => null);
+
+    const pageId = 'page-no-term';
+    useProjects.getState().addProject({
+      projectId: 'proj-no-term',
+      name: 'no-terminal',
+      rootPath: '/tmp/no-term',
+      pages: [{
+        pageId,
+        name: 'No Terminal',
+        layout: {},
+        cwd: '/tmp/no-term',
+        createdAt: Date.now(),
+        lastAccessedAt: Date.now(),
+      }],
+      activePageId: pageId,
+      version: 1,
+    });
+    useLayout.setState({ activePageId: pageId });
+
+    const { container } = render(<Workspace />);
+
+    const text = container.textContent ?? '';
+    // 确认 terminal 面板标题不在 DOM 中
+    expect(text).not.toContain('terminal-');
+    // Watermark 仍然可见
+    expect(text).toContain('打开终端或编辑器开始工作');
   });
 });
