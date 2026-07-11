@@ -16,6 +16,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **`useFileTree` 自包含加载**：`rootPath` 变化时 `useFileTree` 内部 effect 自动调用 `loadRoot()` + `gitStatus()`。ExplorerPanel 只负责调用 CRUD 操作后的 `refresh()`，**不在 `rootPath` 变化时重复刷新**（历史重复 effect 已删除）。
 
+**刷新保留展开状态（`reloadPreservingExpanded`）**：文件变更刷新（Ctrl+S 的 `slterm:file-saved`、fs-event、CRUD 后 `refresh()`）统一走 `refreshExpanded`。旧实现直接 `loadRoot()` 整树替换 → `loadDirectory` 硬编码 `expanded: false` → 丢弃全部展开状态（任何文件变更都折叠整棵树）。现改为 `reloadPreservingExpanded` 递归重载：以旧树（经 `rootNodesRef` 镜像读取）为蓝图，边重建边比对——每层用 `Map<path, oldNode>` 匹配，命中 `old.expanded && isDir` 则递归 `readDir` 下钻并保留 `expanded=true`，天然支持任意深度。既保留展开状态，又反映子目录内文件增删。
+
+- 已展开目录被磁盘删除 → 父层 `readDir` 不再返回该项，节点连子树自然消失（复用 `loadDirectory` 容错，无需特判）。
+- 已展开子目录 `readDir` 抛错 → `loadDirectory` catch 返回 `[]`，该目录 children 为空、不冒泡。
+- `reloadPreservingExpanded` **不传 gen**（操作当前页数据），不碰 `loadRoot` 的 generation 取消机制。`loadRoot`/`fullRefresh` 保持整树替换语义不变。
+- 权衡：深层多展开分支会并发多次 `readDir`（每展开层一次），fs-event 路径有 200ms 去抖限流，file-saved 路径无去抖。
+
 **`handleOpenFile` 面板分派**：不再硬编码 `PANEL_EDITOR`，改为通过 `fileViewerRegistry.resolve(filePath)` 决定面板类型。命中策略（如 `.html` → `"htmlviewer"`）则用对应面板，返回 null 回退 `"editor"`。文件预览类面板（htmlviewer 等）通过 `isAlwaysRenderPanel()` 自动设置 `renderer: "always"` 保持 iframe browsing context 存活，避免页签切换白屏。新增文件预览类型无需修改 ExplorerPanel。
 
 ## 文件
@@ -23,7 +30,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | 文件 | 职责 |
 |------|------|
 | `ExplorerPanel.tsx` | React 容器组件：活跃项目推导、文件树渲染、CRUD 事件处理、`handleOpenFile` 面板分派（FileViewerRegistry）、`fs_watch` 启动 |
-| `useFileTree.ts` | 文件树数据 hook：`loadRoot` / `loadDirectory` / `toggleExpand` / `refreshExpanded` / generation 取消 |
+| `useFileTree.ts` | 文件树数据 hook：`loadRoot` / `loadDirectory` / `toggleExpand` / `refreshExpanded`（经 `reloadPreservingExpanded` 递归重载保留展开状态）/ generation 取消 |
 | `FileTree.tsx` | 递归树组件：节点渲染、git 状态着色、右键菜单 |
 | `FileIcon.tsx` | 文件图标映射（扩展名→emoji） |
 
@@ -87,3 +94,12 @@ function renderFileTree(nodes: TreeNode[], overrides = {}) {
 ### 异步断言
 
 CRUD 操作涉及 IPC mock（Promise），使用 `await waitFor(() => { expect(...) })` 等待 mock 调用完成。
+
+### 刷新保留展开状态测试（`explorer-refresh-preserve.test.tsx`，17 用例）
+
+验证 `reloadPreservingExpanded` 递归重载保留展开状态。用 `renderHook(useFileTree)` 直接驱动，非组件渲染：
+
+- **虚拟文件系统**：`makeVfs({ dirPath: DirEntry[] })` 构造 `Map`，`readDir` 用 `mockImplementation((dirPath) => vfs.get(dirPath))` 按路径分派；测试中动态 `vfs.set/delete` 模拟磁盘增删。
+- **展开辅助**：`expand(result, path)` = `act(toggleExpand)` + `waitFor(expanded===true && loading===false)`。
+- **fs-event 触发**：`onFsEvent` mock 保存回调，`triggerFsEvent()` 手动触发；配 `vi.useFakeTimers()` + `advanceTimersByTimeAsync(250)` 跨过 200ms 去抖。
+- 覆盖矩阵 A–E：递归重建正确性（R1–R4/R7/R8/R10）、边界容错（R6/R9/R11/R12）、gitStatus 路径（R5/R13）、三条触发路径（R14 file-saved / R15 fs-event / R16 CRUD refresh）、竞态 last-write-wins（R17）。

@@ -31,6 +31,9 @@ export function useFileTree({ rootPath }: UseFileTreeOptions) {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const rootPathRef = useRef<string | null>(rootPath);
   rootPathRef.current = rootPath;
+  // 镜像最新 rootNodes，供 reloadPreservingExpanded 异步回调读取「触发时刻的旧树」
+  const rootNodesRef = useRef<TreeNode[]>(rootNodes);
+  rootNodesRef.current = rootNodes;
   // generation 计数器：rootPath 每次变化时递增，异步回调中检查以丢弃旧请求
   const genRef = useRef(0);
 
@@ -124,24 +127,45 @@ export function useFileTree({ rootPath }: UseFileTreeOptions) {
     [loadChildren],
   );
 
-  /** 刷新展开的节点（文件变更时增量刷新） */
+  /** 递归重载文件树：对旧树中所有已展开目录（任意深度）重新 readDir 重建子树，
+   *  保留 expanded=true；同时反映子目录内文件增删。不传 gen（操作当前页数据）。 */
+  const reloadPreservingExpanded = useCallback(async () => {
+    const rp = rootPathRef.current;
+    if (!rp) {
+      setRootNodes([]);
+      return;
+    }
+
+    // 递归重建 dirPath 一层：新一层与旧节点按 path 匹配，曾展开的目录递归下钻
+    const rebuild = async (
+      dirPath: string,
+      oldNodes: TreeNode[],
+    ): Promise<TreeNode[]> => {
+      const fresh = await loadDirectory(dirPath); // 全新一层：expanded=false/children=[]/loading=false
+      const oldByPath = new Map(oldNodes.map((n) => [n.entry.path, n]));
+      return Promise.all(
+        fresh.map(async (node) => {
+          const old = oldByPath.get(node.entry.path);
+          if (old?.expanded && node.entry.isDir) {
+            const children = await rebuild(node.entry.path, old.children);
+            return { ...node, expanded: true, children, loading: false };
+          }
+          return node; // 文件 / 新增项 / 曾折叠项：保持折叠
+        }),
+      );
+    };
+
+    const next = await rebuild(rp, rootNodesRef.current);
+    setRootNodes(next);
+  }, [loadDirectory]);
+
+  /** 刷新展开的节点（文件变更时增量刷新，保留展开状态） */
   const refreshExpanded = useCallback(async () => {
     const rp = rootPathRef.current;
     if (!rp) return;
 
-    setRootNodes((prev) => {
-      const needsRefresh = (nodes: TreeNode[]): boolean => {
-        return nodes.some(
-          (n) => n.expanded || (n.children.length > 0 && needsRefresh(n.children)),
-        );
-      };
-
-      if (!needsRefresh(prev)) return prev;
-      return prev;
-    });
-
-    // 重新加载根目录
-    await loadRoot();
+    // 保留展开态整树重载（替代原 loadRoot() 的整树折叠替换）
+    await reloadPreservingExpanded();
 
     // 刷新 git 状态
     try {
@@ -154,7 +178,7 @@ export function useFileTree({ rootPath }: UseFileTreeOptions) {
     } catch {
       setGitStatusMap(new Map());
     }
-  }, [loadRoot]);
+  }, [reloadPreservingExpanded]);
 
   /** 全量刷新（need_rescan 触发） */
   const fullRefresh = useCallback(async () => {
