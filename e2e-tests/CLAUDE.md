@@ -21,7 +21,7 @@ npm run wdio          # → node ./e2e-tests/run-wdio.cjs
 | 文件 | 用途 |
 |------|------|
 | `wdio.conf.ts` | WDIO 配置：local runner、mocha BDD、embedded driverProvider、单实例端口 4445、60s 超时 |
-| `test.e2e.ts` | 测试用例：启动标题验证、终端创建/PTY 通信/缓冲断言、键盘快捷键（Ctrl+Shift+V 粘贴）、页签标题、**编辑器 Ctrl+S 保存写盘（验证 C1 capture 路径命中）** |
+| `test.e2e.ts` | 测试用例：启动标题验证、终端创建/PTY 通信/缓冲断言、键盘快捷键（Ctrl+Shift+V 粘贴）、页签标题、编辑器 Ctrl+S 保存写盘、**HTML iframe 内 Ctrl+W 转发关闭页签** |
 | `run-wdio.cjs` | Node 版本兼容启动器 |
 
 ## 配置要点
@@ -39,6 +39,7 @@ npm run wdio          # → node ./e2e-tests/run-wdio.cjs
 | `__slterm_e2e_workspaceReady` | Workspace 就绪标志 |
 | `__slterm_e2e_createProject(path)` | 程序化创建测试项目（绕过原生对话框） |
 | `__slterm_e2e_writeClipboard(text)` | 写入剪贴板（绕过 browser.execute 中裸模块解析） |
+| `__slterm_e2e_shortcutDebug()` | 诊断：返回 `{ stack, commands }`（ShortcutRegistry 上下文栈 + 已注册命令 id） |
 | `__dockviewApi` | Dockview 布局 API（`addPanel` 等） |
 | `__e2e_sessionReady` | PTY session 就绪标志（挂载在终端容器 DOM 元素上，非 window 全局） |
 | `__e2e_writeToPty(text)` | 向 PTY 写入文本（挂载在终端容器 DOM 元素上） |
@@ -56,5 +57,7 @@ npm run wdio          # → node ./e2e-tests/run-wdio.cjs
 embedded WDIO 驱动**无法把 OS 级按键（`browser.keys`）投递进 WebView2 页面** —— `browser.keys` 发出的 keydown 不会到达页面 DOM。因此：
 
 - 终端 `Ctrl+Shift+V` 用例发完按键后**直接写标记**（`__e2e_writeToTerminal`）验证终端可操作，并不断言真实按键效果。
-- 编辑器 `Ctrl+S` 保存用例在**页面内 `browser.execute` dispatch 合成 `keydown` 到 `window`**，由 `ShortcutRegistry` 的 window capture 监听器真实捕获（与生产同一路径）→ `editor.save` → 真实 IPC `fs.writeFile` 写盘，以文件 **mtime 变化** 断言。唯一"不真实"处是事件来源为 JS dispatch 而非 OS 键盘（驱动能力所限）；capture 监听 + context 栈匹配 + 命令 handler + 写盘全链路均在真实二进制中执行。
-- 相关诊断 helper：`window.__slterm_e2e_shortcutDebug()` 返回 `{ stack, commands }`（上下文栈 + 已注册命令 id），用于断言 C1 设置正确。
+- 编辑器 `Ctrl+S` 保存用例：`.click()` 聚焦 CodeMirror 在 headless WebView2 中不稳定，故改用**合成 `focusin` 事件**（`usePanelFocus` 监听的即是 focusin）激活 "editor" 上下文 + 设为聚焦编辑器，再在页面内 `browser.execute` dispatch 合成 `keydown` 到 `window`（重试循环直到写盘），由 `ShortcutRegistry` window capture 真实捕获 → `editor.save` → 真实 IPC `fs.writeFile`，以文件 **mtime 变化** 断言。
+- HTML `Ctrl+W` 用例：因 `allow-same-origin` 与父同源，经 `iframe.contentDocument.dispatchEvent(合成 keydown)` 触发**真实的** `attachGlobalShortcutForwarder`（生产同一 handler）→ preventDefault + 重放到父 `window` → `global.closeTab` 关活跃面板，断言 `__dockviewApi.getPanel(id)` 变 `undefined`。
+- 唯一"不真实"处是事件来源为 JS dispatch 而非 OS 键盘（驱动能力所限）；监听/上下文匹配/命令 handler/写盘/转发全链路均在真实二进制中执行。
+- 相关诊断 helper：`window.__slterm_e2e_shortcutDebug()` 返回 `{ stack, commands }`（上下文栈 + 已注册命令 id），用于断言快捷键设置正确。
