@@ -1,12 +1,12 @@
 # 自动化测试用例清单
 
-全量 **646** 用例（Rust 113 + 前端 525 + L3 5 + E2E 3），2026-06-30 实测更新。
+全量 **663** 用例（Rust 113 + 前端 542 + L3 5 + E2E 3），2026-07-11 实测更新。
 
-> L3 5 用例同时被 `npm test`（T2）和 `npm run test:l3`（T3）覆盖，此处保留独立列出。去重后唯一用例数 641。
+> L3 5 用例同时被 `npm test`（T2）和 `npm run test:l3`（T3）覆盖，此处保留独立列出。去重后唯一用例数 658。
 
-## 前端测试（41 文件 / 525 用例）— Vitest + jsdom
+## 前端测试（42 文件 / 542 用例）— Vitest + jsdom
 
-> `npm test` 实际运行 41 文件 525 用例（含 `test/terminal/` 下 2 文件 5 用例）。L3 用例详见独立章节。
+> `npm test` 实际运行 42 文件 542 用例（含 `test/terminal/` 下 2 文件 5 用例）。L3 用例详见独立章节。
 
 ### IPC 层（2 文件 / 41 用例）
 
@@ -54,11 +54,12 @@
 | `src/__tests__/projects.test.ts` | 37 | CRUD/持久化(loadFromDisk/saveToDisk)/version 递增/ID 生成/expandedNodes/边界守卫 |
 | `src/__tests__/sessions.test.ts` | 10 | setSession/removeSession/setActive/多 session 共存/幂等 |
 
-### 资源管理器（4 文件 / 74 用例）
+### 资源管理器（5 文件 / 91 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
 | `src/__tests__/explorer-git-status.test.tsx` | 32 | useFileTree/gitStatusMap 查表着色/配色 token/F5 untracked/slterm:file-saved |
+| `src/__tests__/explorer-refresh-preserve.test.tsx` | 17 | 刷新保留展开状态（reloadPreservingExpanded 递归重建/边界容错/gitStatus 刷新/三条触发路径 file-saved·fs-event·CRUD/竞态） |
 | `src/__tests__/explorer-delete.test.tsx` | 13 | ask 弹窗分支/右键菜单/操作失败 UI 通知 |
 | `src/__tests__/explorer-notify.test.tsx` | 12 | startWatch 调用时机/projectRootPath/loadRoot/toggleExpand |
 | `src/__tests__/FileIcon.test.tsx` | 17 | 8 种扩展名图标 + 目录图标 + git 状态着色 |
