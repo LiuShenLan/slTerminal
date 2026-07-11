@@ -19,6 +19,10 @@ import type { PtyEvent } from "../../types";
 import { createTerminalShortcuts } from "./keyboard";
 import { useShortcutContext } from "../../features/shortcuts";
 import { TerminalRegistry } from "./TerminalRegistry";
+// 命令行→标题/图标规则（side-effect import 注册规则）
+import "./tabRules";
+import { tabTitleRegistry } from "./TabTitleRegistry";
+import type { TabState } from "./TabTitleRegistry";
 
 export interface UseXtermOptions {
   /** 容器 DOM 元素 */
@@ -39,6 +43,8 @@ export interface UseXtermOptions {
   fontSize?: number;
   /** 字体大小变更回调（Ctrl+Wheel 触发） */
   onFontSizeChange?: (size: number) => void;
+  /** 命令运行状态变更回调（OSC 133 检测到注册命令启动/退出时触发） */
+  onTabStateChange?: (state: TabState) => void;
 }
 
 // P2-44: 模块级 WebGL 检测缓存，避免每次 mount 创建临时 canvas
@@ -128,7 +134,7 @@ export function canFit(
     return true;
 }
 
-export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, cwd, visible, fontSize, onFontSizeChange }: UseXtermOptions) {
+export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, cwd, visible, fontSize, onFontSizeChange, onTabStateChange }: UseXtermOptions) {
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const webglAddonRef = useRef<WebglAddon | null>(null);
@@ -157,6 +163,11 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
   const setupRetryRef = useRef<((cols: number, rows: number) => void) | null>(null);
   /** resize X/Y 分离 debounce：跟踪上次尺寸，区分行/列变化 */
   const prevDimsRef = useRef<{ cols: number; rows: number } | null>(null);
+  /** 当前是否有注册的命令在运行（如 claude） */
+  const isCommandRunningRef = useRef(false);
+  /** onTabStateChange 回调 ref（避免 handlePtyOutput 依赖回调导致重建） */
+  const onTabStateChangeRef = useRef(onTabStateChange);
+  onTabStateChangeRef.current = onTabStateChange;
 
   // 终端快捷键命令（通过 ref 获取 terminal，避免闭包捕获已销毁实例）
   const terminalShortcutCommands = useMemo(
@@ -272,6 +283,11 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
       } else if (event.type === "exit") {
         // P1-02: 进程退出后清除 sessionId，提示按 Enter 重新连接
         sessionIdRef.current = null;
+        // 进程退出时若命令正在运行，重置页签状态
+        if (isCommandRunningRef.current) {
+          isCommandRunningRef.current = false;
+          onTabStateChangeRef.current?.({ active: false });
+        }
         terminalRef.current?.writeln(
           `\r\n进程已退出 (退出码: ${event.data.code ?? "?"})\r\n按 Enter 重新连接...\r\n`,
         );
@@ -434,6 +450,31 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
       return true;
     });
 
+    // OSC 133 命令边界检测：shell-integration.ps1 发射 OSC 133 C（命令启动）和
+    // OSC 133;D（命令退出），xterm.js 解析器剥离 OSC number 前缀（133），
+    // handler 收到的 data 为 "C;claude" 或 "D;0"
+    const osc133Disposable = term.parser.registerOscHandler(133, (data: string) => {
+      const semicolonIndex = data.indexOf(";");
+      const type = semicolonIndex >= 0 ? data.slice(0, semicolonIndex) : data;
+
+      if (type === "C") {
+        // OSC 133 C — 命令即将执行
+        const command = semicolonIndex >= 0 ? data.slice(semicolonIndex + 1).trim() : "";
+        const rule = tabTitleRegistry.match(command);
+        if (rule) {
+          isCommandRunningRef.current = true;
+          onTabStateChangeRef.current?.({ active: true, title: rule.title, icon: rule.icon });
+        }
+      } else if (type === "D" && isCommandRunningRef.current) {
+        // OSC 133 ; D — 命令执行完毕
+        isCommandRunningRef.current = false;
+        onTabStateChangeRef.current?.({ active: false });
+      }
+
+      // 返回 false 不消费序列，xterm.js 仍渲染提示符
+      return false;
+    });
+
     // P1: rAF 轮询 offsetWidth>0 → fit → proposeDimensions → pty.spawn(真实尺寸)
     // 30 帧 / 500ms 上限，超时回退 80x24
     let fitRafId: number | null = null;
@@ -467,6 +508,8 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
             fitAddon,
           });
           e2eHelper.__e2e_sessionReady = true;
+          // PTY spawn 初始化：重置命令运行状态（覆盖持久化残留）
+          onTabStateChangeRef.current?.({ active: false });
         })
         .catch((err) => {
           // P1-01: spawn 失败 → 提示按 Enter 重试
@@ -616,6 +659,8 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
       TerminalRegistry.remove(panelId);
       // OSC 52 剪贴板 handler 清理
       osc52Disposable.dispose();
+      // OSC 133 handler 清理
+      osc133Disposable.dispose();
       // P1-01/02: 清理重试 Enter 监听
       retryDisposableRef.current?.dispose();
       retryDisposableRef.current = null;

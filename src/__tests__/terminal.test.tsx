@@ -31,7 +31,16 @@ const mocks = vi.hoisted(() => {
     resize: vi.fn(),
     getWindowsBuildNumber: vi.fn().mockResolvedValue(26100),
   };
-  return { terminal, fitAddon, pty };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const mockApi: any = {
+    title: "terminal-0",
+    setTitle: vi.fn(),
+    updateParameters: vi.fn(),
+    onDidTitleChange: vi.fn(() => ({ dispose: vi.fn() })),
+    onDidParametersChange: vi.fn(() => ({ dispose: vi.fn() })),
+    close: vi.fn(),
+  };
+  return { terminal, fitAddon, pty, mockApi };
 });
 
 vi.mock("@xterm/xterm", () => ({
@@ -66,12 +75,12 @@ afterEach(() => {
 
 describe("TerminalPanel", () => {
   it("挂载时显示'正在连接…'加载遮罩", () => {
-    render(React.createElement(TerminalPanel, { params: { panelId: "test-p1" } }));
+    render(React.createElement(TerminalPanel, { api: mocks.mockApi, params: { panelId: "test-p1" } }));
     expect(screen.getByText("正在连接...")).toBeTruthy();
   });
 
   it("挂载后通过 IPC 获取 Windows build 号（F3 检测）", async () => {
-    render(React.createElement(TerminalPanel, { params: { panelId: "test-p1" } }));
+    render(React.createElement(TerminalPanel, { api: mocks.mockApi, params: { panelId: "test-p1" } }));
     await waitFor(() => {
       expect(mocks.pty.getWindowsBuildNumber).toHaveBeenCalled();
     });
@@ -79,7 +88,7 @@ describe("TerminalPanel", () => {
 
   it("挂载后 spawn PTY session", async () => {
     vi.useFakeTimers();
-    render(React.createElement(TerminalPanel, { params: { panelId: "test-p2" } }));
+    render(React.createElement(TerminalPanel, { api: mocks.mockApi, params: { panelId: "test-p2" } }));
     await vi.runAllTimersAsync();
     expect(mocks.pty.spawn).toHaveBeenCalledWith(
       expect.objectContaining({ panelId: "test-p2" }),
@@ -90,7 +99,7 @@ describe("TerminalPanel", () => {
 
   it("渲染 .xterm 容器供 xterm.js 挂载", async () => {
     vi.useFakeTimers();
-    render(React.createElement(TerminalPanel, { params: { panelId: "test-p3" } }));
+    render(React.createElement(TerminalPanel, { api: mocks.mockApi, params: { panelId: "test-p3" } }));
     await vi.runAllTimersAsync();
     // Terminal.open(container) 被调用——验证 xterm 挂载
     expect(mocks.terminal.open).toHaveBeenCalled();

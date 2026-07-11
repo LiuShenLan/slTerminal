@@ -4,13 +4,17 @@
 // 面板由 Dockview 管理生命周期。
 // 从 Dockview params 读取 cwd 作为终端工作目录。
 
-import React, { useRef, useState, useEffect, useMemo } from "react";
+import React, { useRef, useState, useEffect, useMemo, useCallback } from "react";
 import { useXterm } from "./useXterm";
 import { pty } from "../../ipc";
 import { useLayout, useFontSize } from "../../stores";
 import { PANEL_BG, INPUT_BORDER } from "../../theme";
+import type { TabState } from "./TabTitleRegistry";
+import type { DockviewPanelApi } from "dockview-react";
 
 interface TerminalPanelProps {
+  /** Dockview 传入的面板 API */
+  api: DockviewPanelApi;
   /** Dockview 传入的面板参数 */
   params: {
     panelId: string;
@@ -19,7 +23,7 @@ interface TerminalPanelProps {
   };
 }
 
-const TerminalPanel: React.FC<TerminalPanelProps> = ({ params }) => {
+const TerminalPanel: React.FC<TerminalPanelProps> = ({ api, params }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [container, setContainer] = useState<HTMLDivElement | null>(null);
   const [loading, setLoading] = useState(true);
@@ -52,6 +56,19 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ params }) => {
   const terminalFontSize = useFontSize((s) => s.terminalFontSize);
   const setTerminalFontSize = useFontSize((s) => s.setTerminalFontSize);
 
+  // 命令运行状态变化 → 更新 Dockview 页签标题和图标
+  const originalTitleRef = useRef(api.title ?? "terminal");
+  const handleTabStateChange = useCallback((state: TabState) => {
+    if (state.active) {
+      originalTitleRef.current = api.title ?? "terminal";
+      api.setTitle(state.title!);
+      api.updateParameters({ ...params, tabIcon: state.icon! });
+    } else {
+      api.setTitle(originalTitleRef.current);
+      api.updateParameters({ ...params, tabIcon: null });
+    }
+  }, [api, params]);
+
   const { focus } = useXterm({
     container,
     cols: 80,
@@ -62,6 +79,7 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ params }) => {
     visible,
     fontSize: terminalFontSize,
     onFontSizeChange: setTerminalFontSize,
+    onTabStateChange: handleTabStateChange,
   });
 
   // 首帧数据到达时隐藏加载遮罩

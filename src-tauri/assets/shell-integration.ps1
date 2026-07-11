@@ -49,5 +49,17 @@ function prompt {
     }
 }
 
+# Enter hook：在命令执行前发射 OSC 133 C 携带命令行文本，
+# 供前端检测特定命令（如 claude）以切换页签标题/图标
+Set-PSReadLineKeyHandler -Chord Enter -ScriptBlock {
+    $line = $null
+    $cursor = 0
+    [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor)
+    if ($line -and $line.Trim()) {
+        Write-Osc "133;C" $line.Trim()
+    }
+    [Microsoft.PowerShell.PSConsoleReadLine]::AcceptLine()
+}
+
 Update-Cwd
 Send-PrePrompt

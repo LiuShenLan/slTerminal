@@ -124,18 +124,43 @@ function createGetContextMenu(
 
 // ---- DefaultTab ----
 
+/** 扩展的 params 类型（终端面板通过 updateParameters 设置 tabIcon） */
+interface TabParams {
+  panelId?: string;
+  filePath?: string;
+  cwd?: string;
+  tabIcon?: string | null;
+}
+
 const DefaultTab: React.FC<IDockviewPanelProps> = (props) => {
-  const { api } = props;
+  const { api, params } = props;
+  const tabParams = params as TabParams;
   const [title, setTitle] = React.useState(api.title || api.component || "");
+  const [tabIcon, setTabIcon] = React.useState<string | null>(
+    tabParams?.tabIcon ?? null,
+  );
   React.useEffect(() => {
-    const disposable = api.onDidTitleChange((event) => {
+    const d1 = api.onDidTitleChange((event) => {
       setTitle(event.title);
     });
-    return () => disposable.dispose();
+    const d2 = api.onDidParametersChange((event) => {
+      // event 就是 Parameters 对象本身（Dockview PanelApi.onDidParametersChange
+      // 类型签名为 Event<Parameters>，回调直接接收 Parameters 对象）
+      const p = event as TabParams;
+      setTabIcon(p?.tabIcon ?? null);
+    });
+    return () => {
+      d1.dispose();
+      d2.dispose();
+    };
   }, [api]);
   return (
     <div style={{ display: "flex", alignItems: "center", height: "100%",
       padding: "0 8px", gap: 6, userSelect: "none" }}>
+      {tabIcon && (
+        <img src={tabIcon} width={16} height={16}
+          style={{ flexShrink: 0, display: "block" }} alt="" />
+      )}
       <span style={{ fontSize: 13 }}>{title}</span>
       <button
         onClick={(e) => { e.stopPropagation(); api.close(); }}
