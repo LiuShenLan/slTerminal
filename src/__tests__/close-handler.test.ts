@@ -132,10 +132,16 @@ vi.mock("../features/shortcuts", () => ({
     unregister: vi.fn(),
     pushContext: vi.fn(),
     popContext: vi.fn(),
+    setOverrides: vi.fn(),
     _reset: vi.fn(),
   }),
   createGlobalShortcuts: vi.fn(() => []),
-  useShortcutContext: vi.fn(),
+  usePanelFocus: vi.fn(),
+  wireKeybindings: vi.fn(() => vi.fn()), // 返回空 unsubscribe
+  // App 经面板 keyboard 工厂间接依赖 commandFromMeta（createTerminal/EditorShortcuts）
+  commandFromMeta: (id: string, handler: (e: KeyboardEvent) => boolean) => ({
+    id, handler, defaultKey: null, context: "global", priority: 0, title: id, category: "global",
+  }),
 }));
 
 // ─── 导入被测模块（在 mocks 之后） ───

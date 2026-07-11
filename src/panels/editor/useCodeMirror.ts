@@ -8,7 +8,7 @@
 // - 监听外部文件改动（fs-event）→ 干净自动重载 / 脏弹窗选择
 // - cleanup 中 view.destroy()（箭头函数调，防 this 丢失）
 
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useMemo } from "react";
 import { EditorView, keymap } from "@codemirror/view";
 import {
   EditorState,
@@ -31,6 +31,8 @@ import { fs } from "../../ipc";
 import { diffGutter, updateDiffGutter, clearDiffGutter } from "./gitGutter";
 import { onFsEvent } from "../../ipc/notify";
 import { gitDiff } from "../../ipc/git";
+import { usePanelFocus } from "../../features/shortcuts";
+import { setActiveEditor, clearActiveEditor, type EditorActions } from "./activeEditor";
 
 /** 编辑器字体 CSS spec —— 可独立测试 */
 export const EDITOR_FONT_SPEC = {
@@ -178,6 +180,20 @@ export function useCodeMirror({ container, filePath, panelId, fontSize, onFontSi
     }));
   }, [panelId]);
 
+  // Ctrl+S 迁入 ShortcutRegistry（editor context）：window capture 命中后 stopPropagation
+  // 屏蔽 CodeMirror 的 keymap；Ctrl+F/撤销等未注册 → 注册表 miss → 冒泡回 CM 内部 keymap。
+  // 命令在 App 一次性注册，本实例聚焦时经 setActiveEditor 设为派发目标（多编辑器下始终保存聚焦实例）。
+  // 用 ref 保持 handleSave 最新引用（依赖 panelId 会变）。
+  const handleSaveRef = useRef(handleSave);
+  handleSaveRef.current = handleSave;
+  const editorActions = useMemo<EditorActions>(
+    () => ({ save: () => { void handleSaveRef.current(); } }),
+    [],
+  );
+  const activateEditor = useCallback(() => setActiveEditor(editorActions), [editorActions]);
+  const deactivateEditor = useCallback(() => clearActiveEditor(editorActions), [editorActions]);
+  usePanelFocus("editor", container, activateEditor, deactivateEditor);
+
   useEffect(() => {
     if (!container) return;
 
@@ -217,17 +233,6 @@ export function useCodeMirror({ container, filePath, panelId, fontSize, onFontSi
       // P1-17: 组件可能已在 await 期间卸载，检查后避免 EditorView DOM 泄漏
       if (!mountedRef.current) return;
 
-      const saveKeymap = keymap.of([
-        {
-          key: "Mod-s",
-          run: () => {
-            handleSave();
-            return true;
-          },
-          preventDefault: true,
-        },
-      ]);
-
       const view = new EditorView({
         state: EditorState.create({
           doc,
@@ -244,7 +249,6 @@ export function useCodeMirror({ container, filePath, panelId, fontSize, onFontSi
             }),
             langCompartment.current.of(getLanguageExtension(filePath)),
             diffGutter(),
-            saveKeymap,
           ],
         }),
         parent: container,

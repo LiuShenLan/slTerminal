@@ -4,3 +4,5 @@ export { useProjects, createProjectId, createPageId, loadAllProjects, saveAllPro
 export type { Project, OperationPage } from "./projects";
 export { useLayout } from "./layout";
 export { useFontSize } from "./fontSize";
+export { useKeybindings } from "./keybindings";
+export type { KeybindingsState } from "./keybindings";

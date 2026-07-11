@@ -10,9 +10,9 @@
 //   7. global 上下文（始终匹配）
 //   8. handler 返回值（true→preventDefault+stopPropagation、false→透传）
 
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { getShortcutRegistry } from "../features/shortcuts/ShortcutRegistry";
-import type { ShortcutCommand } from "../features/shortcuts/types";
+import type { Command } from "../features/shortcuts/types";
 
 /** 派发 keydown 事件到 window，返回事件对象供断言 */
 function dispatchKeydown(opts: {
@@ -38,10 +38,12 @@ function dispatchKeydown(opts: {
 }
 
 /** 构造测试命令 */
-function cmd(overrides: Partial<ShortcutCommand> = {}): ShortcutCommand {
+function cmd(overrides: Partial<Command> = {}): Command {
   return {
     id: "test.cmd",
-    keystroke: { ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, code: "KeyA" },
+    title: "测试命令",
+    category: "global",
+    defaultKey: { ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, code: "KeyA" },
     context: "global",
     priority: 0,
     handler: () => true,
@@ -95,7 +97,7 @@ describe("ShortcutRegistry", () => {
       const unreg = registry.register([
         cmd({
           id: "a",
-          keystroke: { ctrlKey: true, shiftKey: false, altKey: false, metaKey: false, code: "KeyA" },
+          defaultKey: { ctrlKey: true, shiftKey: false, altKey: false, metaKey: false, code: "KeyA" },
           handler: () => true,
         }),
       ]);
@@ -208,8 +210,8 @@ describe("ShortcutRegistry", () => {
     it("同按键不同 priority → 高优先先匹配", () => {
       const calls: string[] = [];
       const unreg1 = registry.register([
-        cmd({ id: "low", priority: 0, keystroke: ctrlA, handler: () => { calls.push("low"); return true; } }),
-        cmd({ id: "high", priority: 100, keystroke: ctrlA, handler: () => { calls.push("high"); return true; } }),
+        cmd({ id: "low", priority: 0, defaultKey: ctrlA, handler: () => { calls.push("low"); return true; } }),
+        cmd({ id: "high", priority: 100, defaultKey: ctrlA, handler: () => { calls.push("high"); return true; } }),
       ]);
       handlers.push(unreg1);
 
@@ -221,11 +223,11 @@ describe("ShortcutRegistry", () => {
       const calls: string[] = [];
       const unreg = registry.register([
         cmd({
-          id: "cmd-a", keystroke: ctrlA, context: "terminal", priority: 100,
+          id: "cmd-a", defaultKey: ctrlA, context: "terminal", priority: 100,
           handler: () => { calls.push("terminal"); return true; },
         }),
         cmd({
-          id: "cmd-b", keystroke: ctrlA, context: "editor", priority: 100,
+          id: "cmd-b", defaultKey: ctrlA, context: "editor", priority: 100,
           handler: () => { calls.push("editor"); return true; },
         }),
       ]);
@@ -241,7 +243,7 @@ describe("ShortcutRegistry", () => {
 
     it("handler 返回 false → 事件透传，不阻止默认", () => {
       const unreg = registry.register([
-        cmd({ id: "pass", keystroke: ctrlA, handler: () => false }),
+        cmd({ id: "pass", defaultKey: ctrlA, handler: () => false }),
       ]);
       handlers.push(unreg);
 
@@ -255,7 +257,7 @@ describe("ShortcutRegistry", () => {
   describe("KeyStroke 严格匹配", () => {
     it("修饰键不完全匹配时透传", () => {
       const unreg = registry.register([
-        cmd({ id: "cs-a", keystroke: { ctrlKey: true, shiftKey: true, altKey: false, metaKey: false, code: "KeyA" }, handler: () => true }),
+        cmd({ id: "cs-a", defaultKey: { ctrlKey: true, shiftKey: true, altKey: false, metaKey: false, code: "KeyA" }, handler: () => true }),
       ]);
       handlers.push(unreg);
 
@@ -266,7 +268,7 @@ describe("ShortcutRegistry", () => {
 
     it("code 不匹配时透传", () => {
       const unreg = registry.register([
-        cmd({ id: "ctrl-c", keystroke: { ctrlKey: true, shiftKey: false, altKey: false, metaKey: false, code: "KeyC" }, handler: () => true }),
+        cmd({ id: "ctrl-c", defaultKey: { ctrlKey: true, shiftKey: false, altKey: false, metaKey: false, code: "KeyC" }, handler: () => true }),
       ]);
       handlers.push(unreg);
 
@@ -276,7 +278,7 @@ describe("ShortcutRegistry", () => {
 
     it("无修饰键时匹配普通键", () => {
       const unreg = registry.register([
-        cmd({ id: "plain", keystroke: { ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, code: "KeyA" }, handler: () => true }),
+        cmd({ id: "plain", defaultKey: { ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, code: "KeyA" }, handler: () => true }),
       ]);
       handlers.push(unreg);
 
@@ -292,7 +294,7 @@ describe("ShortcutRegistry", () => {
       const unreg = registry.register([
         cmd({
           id: "ctrl-v",
-          keystroke: { ctrlKey: true, shiftKey: false, altKey: false, metaKey: false, code: "KeyV" },
+          defaultKey: { ctrlKey: true, shiftKey: false, altKey: false, metaKey: false, code: "KeyV" },
           handler: () => true,
         }),
       ]);
@@ -306,7 +308,7 @@ describe("ShortcutRegistry", () => {
       const unreg = registry.register([
         cmd({
           id: "ime-cmd",
-          keystroke: { ctrlKey: true, shiftKey: false, altKey: false, metaKey: false, code: "KeyV" },
+          defaultKey: { ctrlKey: true, shiftKey: false, altKey: false, metaKey: false, code: "KeyV" },
           allowDuringComposition: true,
           handler: () => true,
         }),
@@ -325,7 +327,7 @@ describe("ShortcutRegistry", () => {
       const unreg = registry.register([
         cmd({
           id: "global-cmd",
-          keystroke: { ctrlKey: true, shiftKey: true, altKey: false, metaKey: false, code: "F1" },
+          defaultKey: { ctrlKey: true, shiftKey: true, altKey: false, metaKey: false, code: "F1" },
           context: "global",
           handler: () => true,
         }),
@@ -347,12 +349,12 @@ describe("ShortcutRegistry", () => {
       const unreg = registry.register([
         cmd({
           id: "global-f", context: "global", priority: 0,
-          keystroke: { ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, code: "KeyF" },
+          defaultKey: { ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, code: "KeyF" },
           handler: () => { calls.push("global"); return true; },
         }),
         cmd({
           id: "terminal-f", context: "terminal", priority: 100,
-          keystroke: { ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, code: "KeyF" },
+          defaultKey: { ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, code: "KeyF" },
           handler: () => { calls.push("terminal"); return true; },
         }),
       ]);
@@ -373,7 +375,7 @@ describe("ShortcutRegistry", () => {
 
     it("handler 返回 true → preventDefault + stopPropagation", () => {
       const unreg = registry.register([
-        cmd({ id: "prevent", keystroke: ctrlK, handler: () => true }),
+        cmd({ id: "prevent", defaultKey: ctrlK, handler: () => true }),
       ]);
       handlers.push(unreg);
 
@@ -383,7 +385,7 @@ describe("ShortcutRegistry", () => {
 
     it("handler 返回 false → 事件透传", () => {
       const unreg = registry.register([
-        cmd({ id: "pass", keystroke: ctrlK, handler: () => false }),
+        cmd({ id: "pass", defaultKey: ctrlK, handler: () => false }),
       ]);
       handlers.push(unreg);
 
@@ -402,12 +404,195 @@ describe("ShortcutRegistry", () => {
 
     it("无候选命令匹配时事件透传", () => {
       const unreg = registry.register([
-        cmd({ id: "ctrl-c", keystroke: { ctrlKey: true, shiftKey: false, altKey: false, metaKey: false, code: "KeyC" }, handler: () => true }),
+        cmd({ id: "ctrl-c", defaultKey: { ctrlKey: true, shiftKey: false, altKey: false, metaKey: false, code: "KeyC" }, handler: () => true }),
       ]);
       handlers.push(unreg);
 
       const event = dispatchKeydown({ ctrlKey: true, code: "KeyJ" });
       expect(event.defaultPrevented).toBe(false);
+    });
+  });
+
+  // ---- 10. 用户覆盖层（setOverrides） ----
+
+  describe("setOverrides 重绑/解绑/降级", () => {
+    const ctrlG = { ctrlKey: true, shiftKey: false, altKey: false, metaKey: false, code: "KeyG" } as const;
+
+    it("重绑：覆盖后新键命中、旧默认键失配", () => {
+      const unreg = registry.register([cmd({ id: "x", defaultKey: ctrlG, handler: () => true })]);
+      handlers.push(unreg);
+      registry.setOverrides({ x: "Ctrl+Alt+KeyG" });
+
+      const onNew = dispatchKeydown({ ctrlKey: true, altKey: true, code: "KeyG" });
+      expect(onNew.defaultPrevented).toBe(true);
+      const onOld = dispatchKeydown({ ctrlKey: true, code: "KeyG" });
+      expect(onOld.defaultPrevented).toBe(false);
+    });
+
+    it("null 解绑：默认键不再匹配", () => {
+      const unreg = registry.register([cmd({ id: "x", defaultKey: ctrlG, handler: () => true })]);
+      handlers.push(unreg);
+      registry.setOverrides({ x: null });
+
+      const e = dispatchKeydown({ ctrlKey: true, code: "KeyG" });
+      expect(e.defaultPrevented).toBe(false);
+    });
+
+    it("非法 keystroke 串 → warn + 回退默认键", () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const unreg = registry.register([cmd({ id: "x", defaultKey: ctrlG, handler: () => true })]);
+      handlers.push(unreg);
+      registry.setOverrides({ x: "Bad+KeyG" }); // 未知修饰键 → parseKeystroke 返回 null
+
+      const e = dispatchKeydown({ ctrlKey: true, code: "KeyG" });
+      expect(e.defaultPrevented).toBe(true); // 回退默认键仍生效
+      expect(warn).toHaveBeenCalled();
+      warn.mockRestore();
+    });
+
+    it("保留键覆盖 → warn + 回退默认键", () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const unreg = registry.register([
+        cmd({
+          id: "x",
+          context: "terminal",
+          defaultKey: { ctrlKey: true, shiftKey: true, altKey: false, metaKey: false, code: "KeyC" },
+          handler: () => true,
+        }),
+      ]);
+      handlers.push(unreg);
+      registry.pushContext("terminal");
+      registry.setOverrides({ x: "Ctrl+KeyC" }); // Ctrl+C 在 terminal 为保留键
+
+      // 覆盖被拒 → 默认 Ctrl+Shift+C 仍生效
+      const onDefault = dispatchKeydown({ ctrlKey: true, shiftKey: true, code: "KeyC" });
+      expect(onDefault.defaultPrevented).toBe(true);
+      // Ctrl+C 未被绑定 → 透传（SIGINT 保护）
+      const onCtrlC = dispatchKeydown({ ctrlKey: true, code: "KeyC" });
+      expect(onCtrlC.defaultPrevented).toBe(false);
+      expect(warn).toHaveBeenCalled();
+      warn.mockRestore();
+    });
+
+    it("同 context 同键冲突 → rebuildIndex 时 warn", () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const unreg = registry.register([
+        cmd({ id: "a", context: "terminal", defaultKey: ctrlG, handler: () => true }),
+        cmd({ id: "b", context: "terminal", defaultKey: ctrlG, handler: () => true }),
+      ]);
+      handlers.push(unreg);
+      expect(warn).toHaveBeenCalled();
+      warn.mockRestore();
+    });
+
+    it("_reset 清空 overrides", () => {
+      const unreg = registry.register([cmd({ id: "x", defaultKey: ctrlG, handler: () => true })]);
+      handlers.push(unreg);
+      registry.setOverrides({ x: "Ctrl+Alt+KeyG" });
+      registry._reset();
+      handlers = [];
+      // 重新注册（无覆盖）→ 默认键生效
+      const unreg2 = registry.register([cmd({ id: "x", defaultKey: ctrlG, handler: () => true })]);
+      handlers.push(unreg2);
+      const e = dispatchKeydown({ ctrlKey: true, code: "KeyG" });
+      expect(e.defaultPrevented).toBe(true);
+    });
+  });
+
+  // ---- 11. resolve（委托解析） ----
+
+  describe("resolve", () => {
+    const ctrlG = { ctrlKey: true, shiftKey: false, altKey: false, metaKey: false, code: "KeyG" } as const;
+    function ev() {
+      return new KeyboardEvent("keydown", { ctrlKey: true, code: "KeyG", bubbles: true, cancelable: true });
+    }
+
+    it("无 forceContext：依赖 contextStack", () => {
+      const unreg = registry.register([cmd({ id: "x", context: "terminal", defaultKey: ctrlG, handler: () => true })]);
+      handlers.push(unreg);
+
+      expect(registry.resolve(ev())).toBe(false); // 栈空 → 未命中
+      registry.pushContext("terminal");
+      expect(registry.resolve(ev())).toBe(true); // 栈含 terminal → 命中
+    });
+
+    it("forceContext 栈空仍命中", () => {
+      const unreg = registry.register([cmd({ id: "x", context: "terminal", defaultKey: ctrlG, handler: () => true })]);
+      handlers.push(unreg);
+      // 不 pushContext
+      expect(registry.resolve(ev(), "terminal")).toBe(true);
+    });
+
+    it("forceContext 下 global 命令仍匹配", () => {
+      const unreg = registry.register([cmd({ id: "g", context: "global", defaultKey: ctrlG, handler: () => true })]);
+      handlers.push(unreg);
+      expect(registry.resolve(ev(), "terminal")).toBe(true);
+    });
+
+    it("resolve 不调用 preventDefault", () => {
+      const unreg = registry.register([cmd({ id: "x", context: "terminal", defaultKey: ctrlG, handler: () => true })]);
+      handlers.push(unreg);
+      const e = ev();
+      const consumed = registry.resolve(e, "terminal");
+      expect(consumed).toBe(true);
+      expect(e.defaultPrevented).toBe(false); // resolve 不 preventDefault
+    });
+
+    it("forceContext 平手时优先于 global", () => {
+      const calls: string[] = [];
+      const unreg = registry.register([
+        cmd({ id: "g", context: "global", priority: 100, defaultKey: ctrlG, handler: () => { calls.push("global"); return true; } }),
+        cmd({ id: "t", context: "terminal", priority: 100, defaultKey: ctrlG, handler: () => { calls.push("terminal"); return true; } }),
+      ]);
+      handlers.push(unreg);
+      registry.resolve(ev(), "terminal");
+      expect(calls).toEqual(["terminal"]);
+    });
+
+    it("未命中返回 false", () => {
+      expect(registry.resolve(ev(), "terminal")).toBe(false);
+    });
+  });
+
+  // ---- 12. exportContextBindings / listCommands ----
+
+  describe("exportContextBindings / listCommands", () => {
+    it("exportContextBindings 含 global + 指定 context，排除其他", () => {
+      const unreg = registry.register([
+        cmd({ id: "g", context: "global", defaultKey: { ctrlKey: true, shiftKey: false, altKey: false, metaKey: false, code: "KeyW" } }),
+        cmd({ id: "t", context: "terminal", defaultKey: { ctrlKey: true, shiftKey: true, altKey: false, metaKey: false, code: "KeyC" } }),
+        cmd({ id: "e", context: "editor", defaultKey: { ctrlKey: true, shiftKey: false, altKey: false, metaKey: false, code: "KeyS" } }),
+      ]);
+      handlers.push(unreg);
+
+      const out = registry.exportContextBindings("terminal");
+      const ids = out.map((b) => b.id).sort();
+      expect(ids).toEqual(["g", "t"]);
+      const gBind = out.find((b) => b.id === "g")!;
+      expect(gBind.keystroke).toBe("Ctrl+KeyW");
+    });
+
+    it("exportContextBindings 排除已解绑命令", () => {
+      const unreg = registry.register([
+        cmd({ id: "g", context: "global", defaultKey: { ctrlKey: true, shiftKey: false, altKey: false, metaKey: false, code: "KeyW" } }),
+      ]);
+      handlers.push(unreg);
+      registry.setOverrides({ g: null });
+      expect(registry.exportContextBindings("terminal")).toEqual([]);
+    });
+
+    it("listCommands 返回已注册命令元数据（不含 handler）", () => {
+      const unreg = registry.register([
+        cmd({ id: "a", title: "命令A", category: "terminal", context: "terminal" }),
+        cmd({ id: "b", title: "命令B", category: "editor", context: "editor" }),
+      ]);
+      handlers.push(unreg);
+      const metas = registry.listCommands();
+      expect(metas).toHaveLength(2);
+      const a = metas.find((m) => m.id === "a")!;
+      expect(a.title).toBe("命令A");
+      expect(a.category).toBe("terminal");
+      expect("handler" in a).toBe(false);
     });
   });
 });

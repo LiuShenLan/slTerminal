@@ -28,6 +28,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `loaded` 守卫防止启动加载阶段触发空写。
 - IP 调用：通过 `src/ipc/settings` 的 `loadSettings` / `saveSettings` 读写磁盘。
 
+### `keybindings.ts` — 快捷键自定义绑定（用户覆盖层）
+
+- `overrides: Record<commandId, keystrokeString | null>`——用户对命令的重绑（`null` = 解绑，缺省 = 用默认键）。持久化于 `~/.slterminal/settings.json` 的 `keybindings` 段。
+- 操作：`setBinding(id, ks|null)` / `clearBinding(id)` / `resetAll`。
+- `loadFromDisk` 读 `saved.keybindings` 并 **sanitize**（只保留值为 `string|null` 的项，丢弃脏数据）。`loaded` 守卫防启动空写；变更 2s debounce 保存。
+- **独立写入靠后端浅合并**：`save_settings` 只写 `{ keybindings }` slice，后端 `settings.rs` 浅合并 top-level 键，不擦除 `fontSize` 等其他段（故 `fontSize.ts` 无需改动，两 store 各写各的互不覆盖）。
+- overrides 经 `App.tsx` 的 `wireKeybindings(getShortcutRegistry(), useKeybindings)` 注入 `ShortcutRegistry.setOverrides` 构建绑定表。
+- 与 `src/features/shortcuts` 的关系：本 store 只存覆盖数据，校验/降级/绑定表构建在注册表侧（`isReserved` + `effectiveKeystroke`）。
+
 ### `projects.ts` — 项目/操作页面数据模型与持久化
 
 - 二级模型：`Project` → `OperationPage[]`。面板由 Dockview 管理，不在此 store。
@@ -57,6 +66,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `projects` | `projects.test.ts` | 37 | Project/Page CRUD、持久化（loadFromDisk/saveToDisk）、version 递增、ID 生成 |
 | `layout` | `layout.test.ts` | 4 | activePageId 设置/清空/重复 |
 | `fontSize` | `fontSize.test.ts` | 16 | 默认值、clamp、loadFromDisk（多种分支）、debounce 持久化 |
+| `keybindings` | `keybindings.test.ts` | 16 | 默认空、setBinding/clearBinding/resetAll、loadFromDisk（合法/sanitize 脏值/缺失/非对象/异常）、loaded 守卫、debounce → saveSettings({keybindings}) |
 
 ### 测试模式
 

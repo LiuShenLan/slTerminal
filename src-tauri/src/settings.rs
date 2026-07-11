@@ -14,7 +14,22 @@ fn app_data_dir() -> Result<PathBuf, AppError> {
     Ok(home.join(".slterminal"))
 }
 
-/// 持久化设置（原子写入：tempfile → flush → persist，.bak 备份兜底）
+/// 浅合并：incoming 的 top-level 键覆盖 existing。
+/// 两者均为 JSON 对象时逐键合并；否则 incoming 整体胜出（兼容缺失/损坏/非对象设置）。
+fn merge_settings(existing: serde_json::Value, incoming: serde_json::Value) -> serde_json::Value {
+    match (existing, incoming) {
+        (serde_json::Value::Object(mut base), serde_json::Value::Object(inc)) => {
+            for (k, v) in inc {
+                base.insert(k, v);
+            }
+            serde_json::Value::Object(base)
+        }
+        // existing 非对象（缺失/损坏 → Null）或 incoming 非对象：用 incoming 整体
+        (_, incoming) => incoming,
+    }
+}
+
+/// 持久化设置（读现有 → 浅合并 top-level 键 → 原子写入：tempfile → flush → persist，.bak 备份兜底）
 #[tauri::command]
 pub async fn save_settings(settings: serde_json::Value) -> Result<(), AppError> {
     let app_dir = app_data_dir()?;
@@ -22,7 +37,14 @@ pub async fn save_settings(settings: serde_json::Value) -> Result<(), AppError> 
     let settings_path = app_dir.join("settings.json");
 
     match tokio::task::spawn_blocking(move || -> Result<(), AppError> {
-        let json = serde_json::to_string_pretty(&settings)?;
+        // 读现有 settings.json（不存在/损坏视作 Null），与 incoming 浅合并
+        let existing = std::fs::read_to_string(&settings_path)
+            .ok()
+            .and_then(|c| serde_json::from_str::<serde_json::Value>(&c).ok())
+            .unwrap_or(serde_json::Value::Null);
+        let merged = merge_settings(existing, settings);
+
+        let json = serde_json::to_string_pretty(&merged)?;
         let mut tmp = NamedTempFile::new_in(&app_dir)?;
         tmp.write_all(json.as_bytes())?;
         tmp.flush()?;
@@ -191,5 +213,47 @@ mod tests {
         };
 
         assert!(value.is_null(), "无 .bak 时应返回 Null");
+    }
+
+    // ── merge_settings 浅合并 ──
+
+    /// 合并保留 existing 中 incoming 未涉及的 top-level 键
+    #[test]
+    fn test_merge_preserves_foreign_keys() {
+        let existing = serde_json::json!({ "terminalFontSize": 14, "editorFontSize": 16 });
+        let incoming = serde_json::json!({ "keybindings": { "terminal.copy": "Ctrl+Alt+KeyC" } });
+        let merged = merge_settings(existing, incoming);
+        assert_eq!(merged["terminalFontSize"], 14);
+        assert_eq!(merged["editorFontSize"], 16);
+        assert_eq!(merged["keybindings"]["terminal.copy"], "Ctrl+Alt+KeyC");
+    }
+
+    /// 合并时 incoming 覆盖 existing 的同名键
+    #[test]
+    fn test_merge_overwrites_same_key() {
+        let existing = serde_json::json!({ "a": 1, "b": 2 });
+        let incoming = serde_json::json!({ "a": 99 });
+        let merged = merge_settings(existing, incoming);
+        assert_eq!(merged["a"], 99);
+        assert_eq!(merged["b"], 2);
+    }
+
+    /// existing 为 Null（文件缺失/损坏）时用 incoming 初始化
+    #[test]
+    fn test_merge_null_existing_initializes_with_incoming() {
+        let merged = merge_settings(
+            serde_json::Value::Null,
+            serde_json::json!({ "keybindings": {} }),
+        );
+        assert_eq!(merged, serde_json::json!({ "keybindings": {} }));
+    }
+
+    /// incoming 非对象时整体替换（极端兜底）
+    #[test]
+    fn test_merge_non_object_incoming_replaces() {
+        let existing = serde_json::json!({ "a": 1 });
+        let incoming = serde_json::json!("scalar");
+        let merged = merge_settings(existing, incoming);
+        assert_eq!(merged, serde_json::json!("scalar"));
     }
 }

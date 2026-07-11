@@ -2,23 +2,25 @@
 //
 // 职责：
 // - 全局 capture-phase keydown 监听器（唯一，引用计数控制生命周期）
-// - 命令注册/注销 + 指纹索引
+// - 命令注册/注销 + 指纹索引（按 默认键 ⊕ 用户覆盖层 合并后的"有效键"建索引）
 // - 上下文栈管理（pushContext/popContext 带竞态防护）
-// - 匹配算法：IME 守卫 → KeyStroke 严格匹配 → 上下文过滤 → 优先级排序
+// - 匹配算法（findWinner）：IME 守卫 → KeyStroke 严格匹配 → 上下文过滤 → 优先级排序
+// - resolve()：供 xterm attachCustomKeyEventHandler 委托（强制 context，不依赖焦点栈）
+// - setOverrides()：注入用户覆盖，校验+静默降级后重建绑定表
 //
-// 设计模式：命令模式（ShortcutCommand）+ 注册表模式（Map）+ 单例模式（模块级实例）
+// 设计模式：命令模式（Command）+ 注册表单例 + 分层配置合并（默认 ⊕ 覆盖）+ 观察者（覆盖变更→重建）
 
-import type { ShortcutCommand, ShortcutContext, ShortcutRegistryAPI, KeyStroke } from "./types";
-
-/** 计算按键指纹，用作索引键（如 "Ctrl+Shift+KeyC"） */
-function keystrokeFingerprint(ks: KeyStroke): string {
-  const mods: string[] = [];
-  if (ks.ctrlKey) mods.push("Ctrl");
-  if (ks.shiftKey) mods.push("Shift");
-  if (ks.altKey) mods.push("Alt");
-  if (ks.metaKey) mods.push("Meta");
-  return mods.length > 0 ? `${mods.join("+")}+${ks.code}` : ks.code;
-}
+import type {
+  Command,
+  CommandMeta,
+  ShortcutContext,
+  ShortcutRegistryAPI,
+  KeyStroke,
+  KeybindingOverrides,
+  ExportedBinding,
+} from "./types";
+import { formatKeystroke, parseKeystroke } from "./keystroke";
+import { isReserved } from "./reserved";
 
 /** 从 KeyboardEvent 提取 KeyStroke */
 function eventToKeyStroke(e: KeyboardEvent): KeyStroke {
@@ -36,13 +38,16 @@ const GLOBAL = "global";
 
 class ShortcutRegistry implements ShortcutRegistryAPI {
   /** 按 id 索引所有命令，O(1) 注销 */
-  private commands = new Map<string, ShortcutCommand>();
+  private commands = new Map<string, Command>();
 
-  /** 指纹 → 命令列表索引，加速按键匹配 */
-  private fingerprintIndex = new Map<string, ShortcutCommand[]>();
+  /** 指纹 → 命令列表索引，加速按键匹配（按有效键构建） */
+  private fingerprintIndex = new Map<string, Command[]>();
 
   /** 活跃上下文栈（末尾 = 最后聚焦的面板） */
   private contextStack: ShortcutContext[] = [];
+
+  /** 用户覆盖层（commandId → keystroke 字符串 | null） */
+  private overrides: KeybindingOverrides = {};
 
   /** 是否已向 window 添加 keydown 监听器 */
   private installed = false;
@@ -69,7 +74,7 @@ class ShortcutRegistry implements ShortcutRegistryAPI {
   // ---- 公共 API ----
 
   /** 注册一组命令，返回注销函数 */
-  register(commands: ShortcutCommand[]): () => void {
+  register(commands: Command[]): () => void {
     const ids: string[] = [];
     for (const cmd of commands) {
       if (!this.commands.has(cmd.id)) {
@@ -126,15 +131,85 @@ class ShortcutRegistry implements ShortcutRegistryAPI {
       : null;
   }
 
+  /** 设置用户覆盖层并重建绑定表 */
+  setOverrides(overrides: KeybindingOverrides): void {
+    this.overrides = overrides ?? {};
+    this.rebuildIndex();
+  }
+
+  /**
+   * 直接解析并执行键盘事件（供 xterm attachCustomKeyEventHandler 委托）。
+   * forceContext 指定时强制在该 context（+global）下匹配，不依赖 contextStack。
+   * 返回是否被命令消费；不调用 preventDefault（调用方自行处理）。
+   */
+  resolve(event: KeyboardEvent, forceContext?: ShortcutContext): boolean {
+    const winner = this.findWinner(event, forceContext);
+    return winner ? winner.handler(event) : false;
+  }
+
+  /** 导出某 context 当前生效的绑定（含 global，排除解绑），供未来 iframe 转发脚本用 */
+  exportContextBindings(context: ShortcutContext): ExportedBinding[] {
+    const out: ExportedBinding[] = [];
+    for (const cmd of this.commands.values()) {
+      if (cmd.context !== GLOBAL && cmd.context !== context) continue;
+      const eff = this.effectiveKeystroke(cmd);
+      if (eff) out.push({ id: cmd.id, keystroke: formatKeystroke(eff) });
+    }
+    return out;
+  }
+
+  /** 列出当前已注册命令的元数据（未来可视化 UI 用） */
+  listCommands(): CommandMeta[] {
+    return [...this.commands.values()].map((c) => ({
+      id: c.id,
+      title: c.title,
+      category: c.category,
+      context: c.context,
+      defaultKey: c.defaultKey,
+      priority: c.priority,
+      allowDuringComposition: c.allowDuringComposition,
+    }));
+  }
+
   // ---- 内部方法 ----
 
-  /** 重建指纹索引 */
+  /**
+   * 计算命令的有效键（默认 ⊕ 覆盖）。
+   * 用户覆盖：null → 解绑（返回 null）；非法/保留键 → console.warn + 回退默认键；合法 → 用之。
+   * 无覆盖 → 默认键（默认键可信，不过 isReserved 校验）。
+   */
+  private effectiveKeystroke(cmd: Command): KeyStroke | null {
+    if (Object.prototype.hasOwnProperty.call(this.overrides, cmd.id)) {
+      const raw = this.overrides[cmd.id];
+      if (raw === null) return null; // 显式解绑
+      const ks = parseKeystroke(raw);
+      if (!ks) {
+        console.warn(`[shortcuts] 非法 keystroke "${raw}"（命令 ${cmd.id}），回退默认键`);
+        return cmd.defaultKey;
+      }
+      if (isReserved(ks, cmd.context)) {
+        console.warn(
+          `[shortcuts] 保留键 "${raw}"（命令 ${cmd.id}, context ${cmd.context}）不可绑定，回退默认键`,
+        );
+        return cmd.defaultKey;
+      }
+      return ks;
+    }
+    return cmd.defaultKey;
+  }
+
+  /** 重建指纹索引（按有效键） */
   private rebuildIndex(): void {
     this.fingerprintIndex.clear();
     for (const cmd of this.commands.values()) {
-      const fp = keystrokeFingerprint(cmd.keystroke);
+      const eff = this.effectiveKeystroke(cmd);
+      if (!eff) continue; // 解绑的命令不进索引
+      const fp = formatKeystroke(eff);
       const list = this.fingerprintIndex.get(fp);
       if (list) {
+        if (list.some((c) => c.context === cmd.context)) {
+          console.warn(`[shortcuts] 键位冲突：${fp} 在 context "${cmd.context}" 已被占用（新增 ${cmd.id}）`);
+        }
         list.push(cmd);
       } else {
         this.fingerprintIndex.set(fp, [cmd]);
@@ -142,31 +217,41 @@ class ShortcutRegistry implements ShortcutRegistryAPI {
     }
   }
 
-  /** 全局 keydown 处理器（箭头函数属性，确保 this 绑定） */
-  private handleKeyDown = (e: KeyboardEvent): void => {
-    // IME 合成中：仅匹配 allowDuringComposition 命令
-    const fp = keystrokeFingerprint(eventToKeyStroke(e));
+  /**
+   * 匹配算法（handleKeyDown 与 resolve 共用）。
+   * 指纹查候选 → IME 守卫 + 上下文过滤 → priority DESC + 上下文优先排序 → 返回 winner。
+   */
+  private findWinner(e: KeyboardEvent, forceContext?: ShortcutContext): Command | null {
+    const fp = formatKeystroke(eventToKeyStroke(e));
     const candidates = this.fingerprintIndex.get(fp);
-    if (!candidates || candidates.length === 0) return;
+    if (!candidates || candidates.length === 0) return null;
 
-    // 按上下文 + IME 过滤
     const matching = candidates.filter((cmd) => {
       if (e.isComposing && !cmd.allowDuringComposition) return false;
-      return cmd.context === GLOBAL || this.contextStack.includes(cmd.context);
+      if (cmd.context === GLOBAL) return true;
+      return forceContext ? cmd.context === forceContext : this.contextStack.includes(cmd.context);
     });
+    if (matching.length === 0) return null;
 
-    if (matching.length === 0) return;
-
-    // 排序：priority DESC → contextStack index DESC（栈顶/最后聚焦优先）
     matching.sort((a, b) => {
       if (a.priority !== b.priority) return b.priority - a.priority;
-      const aIdx = this.contextStack.lastIndexOf(a.context);
-      const bIdx = this.contextStack.lastIndexOf(b.context);
-      return bIdx - aIdx;
+      if (forceContext) {
+        // 强制 context 下：forceContext 命令优先于 global
+        const aForced = a.context === forceContext ? 1 : 0;
+        const bForced = b.context === forceContext ? 1 : 0;
+        return bForced - aForced;
+      }
+      // 焦点栈内越晚聚焦越优先（global 的 context 不在栈中，lastIndexOf 返回 -1，排最后）
+      return this.contextStack.lastIndexOf(b.context) - this.contextStack.lastIndexOf(a.context);
     });
 
-    const winner = matching[0];
-    if (winner.handler(e)) {
+    return matching[0];
+  }
+
+  /** 全局 keydown 处理器（箭头函数属性，确保 this 绑定） */
+  private handleKeyDown = (e: KeyboardEvent): void => {
+    const winner = this.findWinner(e);
+    if (winner && winner.handler(e)) {
       e.preventDefault();
       e.stopPropagation();
     }
@@ -189,6 +274,7 @@ class ShortcutRegistry implements ShortcutRegistryAPI {
     this.commands.clear();
     this.fingerprintIndex.clear();
     this.contextStack = [];
+    this.overrides = {};
     this.ensureListenerRemoved();
     this.refCount = 0;
   }

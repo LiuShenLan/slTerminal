@@ -8,13 +8,16 @@ import {
 import type { OperationPage, Project } from "./stores/projects";
 import { useLayout } from "./stores/layout";
 import { useFontSize } from "./stores/fontSize";
+import { useKeybindings } from "./stores/keybindings";
 import { saveLayout } from "./workspace/layoutSerde";
 import { makeEmptyLayout } from "./features/sidebar/SidebarTree";
 import { writeText } from "./ipc/clipboard";
 import { pty } from "./ipc";
 import { TerminalRegistry } from "./panels/terminal/TerminalRegistry";
 import { ErrorBoundary } from "./lib";
-import { getShortcutRegistry, createGlobalShortcuts } from "./features/shortcuts";
+import { getShortcutRegistry, createGlobalShortcuts, wireKeybindings } from "./features/shortcuts";
+import { createTerminalShortcuts } from "./panels/terminal/keyboard";
+import { createEditorShortcuts } from "./panels/editor/keyboard";
 import { PANEL_BG, INPUT_BORDER, APP_BG } from "./theme";
 import "dockview-react/dist/styles/dockview.css";
 
@@ -27,6 +30,13 @@ if (typeof window !== "undefined") {
   // E2E 测试辅助：暴露 clipboard helper（静态 import，同步挂载，无竞态）
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (window as any).__slterm_e2e_writeClipboard = writeText;
+
+  // E2E 诊断：暴露快捷键注册表状态（上下文栈 + 已注册命令）
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (window as any).__slterm_e2e_shortcutDebug = () => {
+    const r = getShortcutRegistry();
+    return { stack: r._contextStack(), commands: r.listCommands().map((c) => c.id) };
+  };
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (window as any).__slterm_e2e_createProject = (dirPath: string) => {
@@ -71,6 +81,13 @@ function App() {
         await useFontSize.getState().loadFromDisk();
       } catch {
         // 首次启动或文件损坏，保持默认值
+      }
+
+      try {
+        // 加载快捷键自定义绑定（覆盖层）——先于面板注册，确保注册表构建时已有覆盖
+        await useKeybindings.getState().loadFromDisk();
+      } catch {
+        // 首次启动或文件损坏，保持默认（空覆盖）
       }
 
       try {
@@ -160,11 +177,19 @@ function App() {
     return unlisten;
   }, []);
 
-  // 注册全局快捷键（Ctrl+W 关闭活跃页签）
+  // 注册全局 + 面板级快捷键（一次性；面板命令 handler 经 active 指针派发到聚焦实例）
   useEffect(() => {
     const registry = getShortcutRegistry();
-    const commands = createGlobalShortcuts(() => window.__dockviewApi);
-    return registry.register(commands);
+    return registry.register([
+      ...createGlobalShortcuts(() => window.__dockviewApi),
+      ...createTerminalShortcuts(),
+      ...createEditorShortcuts(),
+    ]);
+  }, []);
+
+  // 将用户自定义绑定（覆盖层）持续同步到注册表
+  useEffect(() => {
+    return wireKeybindings(getShortcutRegistry(), useKeybindings);
   }, []);
 
   if (!ready) {

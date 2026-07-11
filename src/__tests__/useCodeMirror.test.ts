@@ -87,6 +87,13 @@ vi.mock("./gitGutter", () => ({
   clearDiffGutter: vi.fn(),
 }));
 
+// 只 stub usePanelFocus，保留其余真实实现
+const { mockUsePanelFocus } = vi.hoisted(() => ({ mockUsePanelFocus: vi.fn() }));
+vi.mock("../features/shortcuts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../features/shortcuts")>();
+  return { ...actual, usePanelFocus: mockUsePanelFocus };
+});
+
 import { useCodeMirror } from "../panels/editor/useCodeMirror";
 
 // ─── 辅助函数 ───
@@ -279,5 +286,19 @@ describe("useCodeMirror 字体大小", () => {
       cancelable: true,
     });
     expect(() => container.dispatchEvent(event)).not.toThrow();
+  });
+
+  // ── Ctrl+S 迁入 ShortcutRegistry ──
+
+  it("10. 注册 editor 上下文快捷键（usePanelFocus）", () => {
+    renderHook(() =>
+      useCodeMirror({ container, filePath: "/test/file.js", panelId: "p10" }),
+    );
+    expect(mockUsePanelFocus).toHaveBeenCalledWith(
+      "editor",
+      container,
+      expect.any(Function), // onActivate → setActiveEditor
+      expect.any(Function), // onDeactivate → clearActiveEditor
+    );
   });
 });

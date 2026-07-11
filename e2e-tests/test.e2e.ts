@@ -1,4 +1,7 @@
 import { expect, browser } from '@wdio/globals';
+import { mkdtempSync, writeFileSync, readFileSync, statSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 /** 等待页签标题变为指定值（轮询 Dockview panel title） */
 async function waitForPanelTitle(
@@ -434,5 +437,114 @@ describe('页签标题', () => {
     // 验证 pid1 标题切回 basename（关闭冲突面板后自动重算）
     const finalTitle = await waitForPanelTitle(pid1, 'utils.ts', 10000);
     expect(finalTitle).toBe('utils.ts');
+  });
+});
+
+describe('编辑器保存 (Ctrl+S)', () => {
+  // 说明：embedded WDIO 驱动无法把 OS 级按键（browser.keys）投递进 WebView2 页面
+  //（终端 Ctrl+Shift+V 用例同样绕过——它直接写标记而非断言真实按键）。
+  // 故本用例在页面内 dispatch 合成 keydown 到 window——由 ShortcutRegistry 的
+  // window capture 监听器真实捕获（与生产同一路径）→ editor.save → 真实 IPC fs.writeFile 写盘，
+  // 以文件 mtime 变化断言写盘发生。覆盖 C1：capture 监听 + context 栈匹配 + 命令 handler + 写盘全链路。
+  it('聚焦编辑器后 Ctrl+S → 经 capture 路径真实写盘（mtime 更新）', async () => {
+    // 0. Node 侧创建真实临时目录 + 文件（唯一 marker；后端 project_root 未设置 → 路径 sandbox 跳过）
+    const marker = 'e2e_save_' + Date.now();
+    const tempDir = mkdtempSync(join(tmpdir(), 'slterm-e2e-save-'));
+    const filePath = join(tempDir, 'save.txt');
+    writeFileSync(filePath, marker, 'utf8');
+    const mtimeBefore = statSync(filePath).mtimeMs;
+
+    try {
+      // 1. 等待 Workspace 就绪
+      await browser.waitUntil(
+        async () => await browser.execute(() => (window as any).__slterm_e2e_workspaceReady === true),
+        { timeout: 15000, timeoutMsg: 'Workspace 未就绪' },
+      );
+
+      // 2. 程序化创建项目（根 = 临时目录）
+      await browser.execute((dir: string) => {
+        (window as any).__slterm_e2e_createProject?.(dir);
+      }, tempDir);
+
+      // 3. 等待 Dockview API
+      await browser.waitUntil(
+        async () => await browser.execute(() => typeof window.__dockviewApi !== 'undefined'),
+        { timeout: 20000, timeoutMsg: 'Dockview API 未就绪' },
+      );
+
+      // 4. 打开编辑器面板（加载临时文件）
+      const panelId = 'e2e-save-editor-' + Date.now();
+      await browser.execute(
+        (args: { pid: string; path: string }) => {
+          window.__dockviewApi!.addPanel({
+            id: args.pid,
+            component: 'editor',
+            params: { panelId: args.pid, filePath: args.path },
+          });
+        },
+        { pid: panelId, path: filePath },
+      );
+
+      // 5. 等待编辑器加载文件内容（某个 .cm-content 含唯一 marker）
+      await browser.waitUntil(
+        async () =>
+          await browser.execute((m: string) => {
+            const nodes = document.querySelectorAll('.cm-content');
+            for (const n of nodes) {
+              if ((n.textContent ?? '').includes(m)) return true;
+            }
+            return false;
+          }, marker),
+        { timeout: 15000, timeoutMsg: '编辑器未加载文件内容（.cm-content 未出现 marker）' },
+      );
+
+      // 6. 标记目标编辑器并真实点击聚焦 → 真实 focusin 冒泡到 container → pushContext("editor")
+      const marked = await browser.execute((m: string) => {
+        const nodes = document.querySelectorAll('.cm-content');
+        for (const n of nodes) {
+          if ((n.textContent ?? '').includes(m)) {
+            (n as HTMLElement).setAttribute('data-e2e-save', '1');
+            return true;
+          }
+        }
+        return false;
+      }, marker);
+      expect(marked).toBe(true);
+      await browser.$('[data-e2e-save="1"]').click();
+
+      // 7. 确认 C1 设置正确：editor.save 已注册且 "editor" 上下文已激活
+      const dbg = await browser.execute(() => (window as any).__slterm_e2e_shortcutDebug?.());
+      expect(dbg?.commands).toContain('editor.save');
+      expect(dbg?.stack).toContain('editor');
+
+      // 8. 在页面内 dispatch 合成 keydown 到 window（ShortcutRegistry capture 监听器真实捕获）
+      const consumed = await browser.execute(() => {
+        const e = new KeyboardEvent('keydown', {
+          ctrlKey: true, code: 'KeyS', key: 's', bubbles: true, cancelable: true,
+        });
+        window.dispatchEvent(e);
+        return e.defaultPrevented; // capture handler 命中 → preventDefault → true
+      });
+      expect(consumed).toBe(true); // 证明 window capture 命中 editor.save 并阻止默认
+
+      // 9. 断言真实写盘：mtime 更新且内容仍为编辑器 doc（marker）
+      await browser.waitUntil(
+        () => {
+          try {
+            const st = statSync(filePath);
+            return st.mtimeMs > mtimeBefore && readFileSync(filePath, 'utf8').includes(marker);
+          } catch {
+            return false;
+          }
+        },
+        { timeout: 8000, timeoutMsg: 'Ctrl+S 未经 capture 路径写盘（文件 mtime 未更新）' },
+      );
+
+      expect(statSync(filePath).mtimeMs).toBeGreaterThan(mtimeBefore);
+      expect(readFileSync(filePath, 'utf8')).toContain(marker);
+    } finally {
+      // 清理临时目录
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });

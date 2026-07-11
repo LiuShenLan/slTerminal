@@ -37,14 +37,20 @@ describe("createGlobalShortcuts", () => {
       expect(cmds[0].id).toBe("global.closeTab");
     });
 
-    it("keystroke 为 Ctrl+W（仅 ctrlKey，code: KeyW）", () => {
+    it("defaultKey 为 Ctrl+W（仅 ctrlKey，code: KeyW）", () => {
       const cmds = createGlobalShortcuts(() => undefined);
-      const ks = cmds[0].keystroke;
+      const ks = cmds[0].defaultKey!;
       expect(ks.ctrlKey).toBe(true);
       expect(ks.shiftKey).toBe(false);
       expect(ks.altKey).toBe(false);
       expect(ks.metaKey).toBe(false);
       expect(ks.code).toBe("KeyW");
+    });
+
+    it("title 与 category 来自命令目录", () => {
+      const cmds = createGlobalShortcuts(() => undefined);
+      expect(cmds[0].title).toBe("关闭当前页签");
+      expect(cmds[0].category).toBe("global");
     });
 
     it("context 为 global", () => {

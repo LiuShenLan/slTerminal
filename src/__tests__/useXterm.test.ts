@@ -12,6 +12,7 @@ const {
   mockPopContext,
   mockRegister,
   mockUnregisterFn,
+  mockResolve,
   mockFit,
   mockProposeDimensions,
   mockOnFontSizeChange,
@@ -20,6 +21,7 @@ const {
   mockPopContext: vi.fn(),
   mockRegister: vi.fn(() => vi.fn()), // 返回注销函数
   mockUnregisterFn: vi.fn(),
+  mockResolve: vi.fn<(e: KeyboardEvent, ctx?: string) => boolean>(() => false), // 委托解析：默认未消费
   mockFit: vi.fn(),
   mockProposeDimensions: vi.fn(() => ({ cols: 80, rows: 24 })),
   mockOnFontSizeChange: vi.fn(),
@@ -85,22 +87,18 @@ vi.mock("@xterm/xterm", () => {
   return { Terminal: MockTerminal };
 });
 
-// useXterm.ts import { createTerminalShortcuts } from "./keyboard" → 返回空命令列表
-vi.mock("../panels/terminal/keyboard", () => ({
-  createTerminalShortcuts: vi.fn(() => []),
-}));
-
-// useXterm.ts import { useShortcutContext } from "../../features/shortcuts"
-const { mockUseShortcutContext } = vi.hoisted(() => ({
-  mockUseShortcutContext: vi.fn(),
+// useXterm.ts import { usePanelFocus } from "../../features/shortcuts"
+const { mockUsePanelFocus } = vi.hoisted(() => ({
+  mockUsePanelFocus: vi.fn(),
 }));
 vi.mock("../features/shortcuts", () => ({
-  useShortcutContext: mockUseShortcutContext,
+  usePanelFocus: mockUsePanelFocus,
   getShortcutRegistry: () => ({
     register: mockRegister,
     unregister: mockUnregisterFn,
     pushContext: mockPushContext,
     popContext: mockPopContext,
+    resolve: mockResolve,
     _reset: vi.fn(),
   }),
 }));
@@ -187,25 +185,17 @@ describe("useXterm 快捷键集成", () => {
     vi.clearAllMocks();
   });
 
-  it("36. 调用 useShortcutContext 传入 terminal 上下文和 container", () => {
+  it("36. 调用 usePanelFocus 传入 terminal 上下文、container 与激活/停用回调", () => {
     renderHook(() =>
       useXterm({ container, cols: 80, rows: 24, panelId: "test-36" }),
     );
 
-    expect(mockUseShortcutContext).toHaveBeenCalledWith(
+    expect(mockUsePanelFocus).toHaveBeenCalledWith(
       "terminal",
-      expect.any(Array), // ShortcutCommand[]
       container,
+      expect.any(Function), // onActivate → setActiveTerminal
+      expect.any(Function), // onDeactivate → clearActiveTerminal
     );
-  });
-
-  it("37. 调用 createTerminalShortcuts 生成命令列表", async () => {
-    const { createTerminalShortcuts } = await import("../panels/terminal/keyboard");
-    renderHook(() =>
-      useXterm({ container, cols: 80, rows: 24, panelId: "test-37" }),
-    );
-
-    expect(createTerminalShortcuts).toHaveBeenCalled();
   });
 });
 
@@ -2613,79 +2603,55 @@ describe("attachCustomKeyEventHandler", () => {
     expect(capturedTerminal?.attachCustomKeyEventHandler).toHaveBeenCalled();
   });
 
-  it("KEY2: Ctrl+Shift+C → 有选区时调 writeText", async () => {
+  it("KEY2: keydown → 委托 registry.resolve(event, 'terminal')", async () => {
     const handler = await mountAndGetKeyHandler();
+    mockResolve.mockClear();
 
-    // 模拟有选区
-    const getSelection = capturedTerminal?.getSelection as ReturnType<typeof vi.fn>;
-    getSelection.mockReturnValue("selected text");
+    const event = makeKeyEvent({ ctrlKey: true, shiftKey: true, code: "KeyC" });
+    handler(event);
+
+    expect(mockResolve).toHaveBeenCalledTimes(1);
+    expect(mockResolve.mock.calls[0][0]).toBe(event);
+    expect(mockResolve.mock.calls[0][1]).toBe("terminal");
+  });
+
+  it("KEY3: resolve 返回 true（命令消费）→ handler 返回 false + preventDefault", async () => {
+    const handler = await mountAndGetKeyHandler();
+    mockResolve.mockReturnValue(true);
 
     const event = makeKeyEvent({ ctrlKey: true, shiftKey: true, code: "KeyC" });
     const result = handler(event);
 
-    // handler 应返回 false（不交给 xterm.js）+ preventDefault 被调用
-    expect(result).toBe(false);
+    expect(result).toBe(false); // 不交给 xterm.js
     expect(event.defaultPrevented).toBe(true);
-    // 注意：writeText 是异步的（动态 import），在 unit test 中无法直接验证
-    // 这里只验证 handler 正确拦截了事件
   });
 
-  it("KEY3: Ctrl+Shift+C → 无选区不抛异常", async () => {
+  it("KEY4: resolve 返回 false（未命中）→ handler 返回 true 透传 + 不 preventDefault", async () => {
     const handler = await mountAndGetKeyHandler();
+    mockResolve.mockReturnValue(false);
 
-    const getSelection = capturedTerminal?.getSelection as ReturnType<typeof vi.fn>;
-    getSelection.mockReturnValue("");
-
-    const event = makeKeyEvent({ ctrlKey: true, shiftKey: true, code: "KeyC" });
-    const result3 = handler(event);
-    expect(result3).toBe(false);
-  });
-
-  it("KEY4: Ctrl+Shift+V → 调 readText + paste", async () => {
-    const handler = await mountAndGetKeyHandler();
-
-    const event = makeKeyEvent({ ctrlKey: true, shiftKey: true, code: "KeyV" });
+    const event = makeKeyEvent({ ctrlKey: true, code: "KeyC" }); // Ctrl+C 不注册 → 透传
     const result = handler(event);
 
-    expect(result).toBe(false);
-    expect(event.defaultPrevented).toBe(true);
-    // readText + paste 是异步 — handler 正确拦截即可
-  });
-
-  it("KEY5: Ctrl+Shift+V → 剪贴板空不抛异常", async () => {
-    const handler = await mountAndGetKeyHandler();
-
-    const event = makeKeyEvent({ ctrlKey: true, shiftKey: true, code: "KeyV" });
-    const result5 = handler(event);
-    expect(result5).toBe(false);
-  });
-
-  it("KEY6: 普通按键 → 透传给 xterm.js", async () => {
-    const handler = await mountAndGetKeyHandler();
-
-    // 普通字母键
-    const event = makeKeyEvent({ code: "KeyA" });
-    const result = handler(event);
-
-    expect(result).toBe(true); // true = 交给 xterm.js
+    expect(result).toBe(true); // 交给 xterm.js（编码 \x03 到 PTY）
     expect(event.defaultPrevented).toBe(false);
   });
 
-  it("KEY7: Ctrl+C → 透传（不拦截）", async () => {
+  it("KEY5: 普通字母键 resolve 未命中 → 透传", async () => {
     const handler = await mountAndGetKeyHandler();
+    mockResolve.mockReturnValue(false);
 
-    // Ctrl+C 保留为中断（Claude Code 取消操作）
-    const event = makeKeyEvent({ ctrlKey: true, code: "KeyC" });
+    const event = makeKeyEvent({ code: "KeyA" });
     const result = handler(event);
 
     expect(result).toBe(true);
     expect(event.defaultPrevented).toBe(false);
   });
 
-  it("KEY8: 非 keydown 类型 → 透传", async () => {
+  it("KEY6: 非 keydown 类型 → 直接透传，不调用 resolve", async () => {
     const handler = await mountAndGetKeyHandler();
+    mockResolve.mockClear();
 
-    // keyup 事件 — 应原样通过
     const event = new KeyboardEvent("keyup", {
       ctrlKey: true, shiftKey: true, code: "KeyC",
       bubbles: true, cancelable: true,
@@ -2693,24 +2659,7 @@ describe("attachCustomKeyEventHandler", () => {
     const result = handler(event);
 
     expect(result).toBe(true);
-  });
-
-  it("KEY9: Ctrl+Enter → 拦截写 \\n 到 PTY，不交给 xterm.js", async () => {
-    const handler = await mountAndGetKeyHandler();
-
-    // 先确保 session 已 spawn（spawn 是 mock 的，返回 mock-session-id）
-    const event = makeKeyEvent({ ctrlKey: true, code: "Enter" });
-    const result = handler(event);
-
-    // handler 返回 false（不让 xterm.js 处理）
-    expect(result).toBe(false);
-    // preventDefault 已调用
-    expect(event.defaultPrevented).toBe(true);
-    // pty.write 被调用（写 \n = 0x0a）
-    expect(pty.write).toHaveBeenCalledWith(
-      expect.any(String),
-      new Uint8Array([0x0a]),
-    );
+    expect(mockResolve).not.toHaveBeenCalled();
   });
 });
 

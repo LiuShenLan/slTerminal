@@ -16,8 +16,8 @@ import { terminalOptions } from "./theme";
 import { pty } from "../../ipc";
 import { writeText } from "../../ipc/clipboard";
 import type { PtyEvent } from "../../types";
-import { createTerminalShortcuts } from "./keyboard";
-import { useShortcutContext } from "../../features/shortcuts";
+import { setActiveTerminal, clearActiveTerminal, type TerminalActions } from "./activeTerminal";
+import { usePanelFocus, getShortcutRegistry } from "../../features/shortcuts";
 import { TerminalRegistry } from "./TerminalRegistry";
 // 命令行→标题/图标规则（side-effect import 注册规则）
 import "./tabRules";
@@ -169,13 +169,26 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
   const onTabStateChangeRef = useRef(onTabStateChange);
   onTabStateChangeRef.current = onTabStateChange;
 
-  // 终端快捷键命令（通过 ref 获取 terminal，避免闭包捕获已销毁实例）
-  const terminalShortcutCommands = useMemo(
-    () => createTerminalShortcuts(() => terminalRef.current),
-    [],
+  // 向 PTY 写原始字节（稳定引用，供 Ctrl+Enter 换行命令用）
+  const writeToPty = useCallback((data: Uint8Array) => {
+    if (sessionIdRef.current) {
+      pty.write(sessionIdRef.current, data).catch(() => {});
+    }
+  }, []);
+  // 本终端对外暴露的动作——聚焦时设为 active，快捷键命令经 getActiveTerminal() 派发到此
+  // （通过 ref 获取 terminal，避免闭包捕获已销毁实例）
+  const terminalActions = useMemo<TerminalActions>(
+    () => ({
+      getSelection: () => terminalRef.current?.getSelection(),
+      paste: (text: string) => terminalRef.current?.paste(text),
+      writeToPty,
+    }),
+    [writeToPty],
   );
-  // 注册快捷键 + 管理焦点上下文（focusin→pushContext, focusout→popContext）
-  useShortcutContext("terminal", terminalShortcutCommands, container);
+  const activateTerminal = useCallback(() => setActiveTerminal(terminalActions), [terminalActions]);
+  const deactivateTerminal = useCallback(() => clearActiveTerminal(terminalActions), [terminalActions]);
+  // 焦点上下文 + 聚焦实例跟踪（命令在 App 一次性注册，此处只 push/pop context + set/clear active）
+  usePanelFocus("terminal", container, activateTerminal, deactivateTerminal);
 
   // Idle+Max 定时器常量
   const IDLE_FLUSH_MS = 2;
@@ -335,48 +348,20 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
     // 挂载到 DOM
     term.open(container);
 
-    // ── 键盘事件自定义处理器（在 xterm.js 内部 keydown 之前拦截）──
-    // Ctrl+Shift+C/V：双重保障——ShortcutRegistry 路径（窗口级 capture）若失效，
-    //   此 handler 作为 fallback 直接处理。
-    // Ctrl+Enter：xterm.js 传统 handler 将 Ctrl+Enter 编码为 \r（同 Enter），
-    //   Kitty 协议虽已启用但需应用端主动发 CSI>1u 激活，不可靠。
-    //   此处直接拦截 Ctrl+Enter 写 \n（Ctrl+J 行为）到 PTY，绕过整个 xterm.js 键盘链路。
+    // ── 键盘事件委托（在 xterm.js 内部 keydown 之前拦截）──
+    // 双重保障：ShortcutRegistry 窗口级 capture 路径若因 xterm 6.1 focusin 未冒泡而失效，
+    //   此 handler 委托进注册表、用 terminal context 解析同一绑定表（单一真值源，可重绑）。
+    //   命中（如 Ctrl+Shift+C/V、Ctrl+Enter 换行）→ 已由命令 handler 处理，不交给 xterm.js；
+    //   未命中（如 Ctrl+C）→ 透传 xterm.js，编码为控制字节发往 PTY。
     term.attachCustomKeyEventHandler((event: KeyboardEvent) => {
       // 仅处理 keydown，忽略 keyup/keypress（xterm.js 对每次 keydown 均调用此 handler）
       if (event.type !== "keydown") return true;
-
-      // Ctrl+Enter：换行——xterm.js 不区分 Ctrl+Enter/Enter，此处直接写 \n 到 PTY
-      if (event.ctrlKey && !event.shiftKey && event.code === "Enter") {
+      const consumed = getShortcutRegistry().resolve(event, "terminal");
+      if (consumed) {
         event.preventDefault();
-        if (sessionIdRef.current) {
-          pty.write(sessionIdRef.current, new Uint8Array([0x0a]))
-            .catch(() => {});
-        }
-        return false; // false = 不交给 xterm.js 进一步处理
+        return false; // 已处理 → 不交给 xterm.js
       }
-
-      // Ctrl+Shift+C：复制选区到系统剪贴板
-      if (event.ctrlKey && event.shiftKey && event.code === "KeyC") {
-        const selection = term.getSelection();
-        if (selection) {
-          import("../../ipc/clipboard").then(({ writeText }) =>
-            writeText(selection).catch(() => {})
-          );
-        }
-        event.preventDefault();
-        return false;
-      }
-
-      // Ctrl+Shift+V：从系统剪贴板粘贴
-      if (event.ctrlKey && event.shiftKey && event.code === "KeyV") {
-        import("../../ipc/clipboard").then(({ readText }) =>
-          readText().then((text) => term.paste(text)).catch(() => {})
-        );
-        event.preventDefault();
-        return false;
-      }
-
-      return true; // 其他按键交给 xterm.js 默认处理
+      return true; // 未命中 → 透传 xterm.js（Ctrl+C 等控制字符）
     });
 
     // OSC 8 超链接：点击后通过系统默认浏览器打开

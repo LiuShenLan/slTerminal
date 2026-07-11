@@ -1,3 +1,13 @@
 export { SidebarTree } from "./sidebar";
-export { getShortcutRegistry, useShortcutContext } from "./shortcuts";
-export type { KeyStroke, ShortcutCommand, ShortcutContext, Priority, ShortcutRegistryAPI } from "./shortcuts";
+export { getShortcutRegistry, usePanelFocus, wireKeybindings } from "./shortcuts";
+export type {
+  KeyStroke,
+  Command,
+  CommandMeta,
+  CommandCategory,
+  ShortcutContext,
+  Priority,
+  KeybindingOverrides,
+  ExportedBinding,
+  ShortcutRegistryAPI,
+} from "./shortcuts";
