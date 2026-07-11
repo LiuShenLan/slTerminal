@@ -15,6 +15,7 @@ import {
   Compartment,
   type Extension,
 } from "@codemirror/state";
+import { indentWithTab } from "@codemirror/commands";
 import { basicSetup } from "codemirror";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { search, searchKeymap, highlightSelectionMatches } from "@codemirror/search";
@@ -243,6 +244,8 @@ export function useCodeMirror({ container, filePath, panelId, fontSize, onFontSi
             search({ top: true }),
             highlightSelectionMatches(),
             keymap.of([...searchKeymap]),
+            // Tab 缩进 / Shift+Tab 反缩进（basicSetup 出于无障碍默认不绑 Tab，此处显式启用）
+            keymap.of([indentWithTab]),
             // D3: 跟踪文档修改
             EditorView.updateListener.of((update) => {
               if (update.docChanged) dirtyRef.current = true;

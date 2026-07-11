@@ -18,3 +18,4 @@ export { COMMAND_CATALOG, COMMAND_META_BY_ID, commandFromMeta } from "./commandC
 export { formatKeystroke, parseKeystroke, isValidKeystrokeString } from "./keystroke";
 export { isReserved } from "./reserved";
 export { wireKeybindings } from "./wireKeybindings";
+export { attachGlobalShortcutForwarder } from "./forwardGlobalShortcuts";

@@ -80,6 +80,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `commandCatalog.ts` | 命令目录单一真值源：`COMMAND_CATALOG`/`COMMAND_META_BY_ID`/`commandFromMeta` |
 | `usePanelFocus.ts` | React hook：focusin→pushContext+onActivate，focusout→popContext+onDeactivate，卸载清理。**只跟踪焦点上下文与聚焦实例，不每实例注册命令**（取代旧 useShortcutContext） |
 | `wireKeybindings.ts` | 覆盖层→注册表接线纯 helper：`wireKeybindings(registry, store)`（立即应用 + 订阅重应用，返回 unsubscribe） |
+| `forwardGlobalShortcuts.ts` | iframe 键盘桥：`attachGlobalShortcutForwarder(doc)` 给同源 iframe.contentDocument 挂 capture keydown，命中全局绑定则 preventDefault + 重放到父 window，返回 detach |
 | `globalCommands.ts` | 全局快捷键工厂：`createGlobalShortcuts`（`global.closeTab`） |
 | `index.ts` | barrel export |
 
@@ -159,9 +160,11 @@ handler: () => { const t = getActiveTerminal(); if (!t) return false; t.getSelec
 const actions = { getSelection: () => terminalRef.current?.getSelection() };
 ```
 
-## 已知限制
+## HTML iframe 全局键转发（已实现）
 
-**HTML iframe 转发本期未做**：HTML 面板内容在 `<iframe srcDoc>` 中，iframe 内 keydown 不冒泡到父 window，焦点进 iframe 后全局快捷键失效。架构已预留 `exportContextBindings("global")` 供将来注入转发脚本用。
+HTML 面板内容在 `<iframe sandbox="allow-scripts allow-same-origin" srcDoc>` 中，iframe 内 `keydown` 不冒泡到父 window，焦点进 iframe 后全局快捷键（如 Ctrl+W）本会失效。
+
+因 `allow-same-origin` 与父同源，`forwardGlobalShortcuts.ts` 的 `attachGlobalShortcutForwarder(doc)` 给 `iframe.contentDocument` 挂 capture keydown 监听（运行在父上下文）：命中**全局 context 绑定**（动态 `exportContextBindings("global")`）→ `preventDefault` + 合成 keydown 重放到父 window → 注册表正常分发（`global.closeTab` → 关活跃面板）。`HtmlPanel` 在 iframe `onLoad` 时挂载、重载/卸载时 detach。仅重放命中全局绑定的键，页面其余键不受影响。
 
 ## 测试覆盖
 
@@ -172,6 +175,7 @@ const actions = { getSelection: () => terminalRef.current?.getSelection() };
 | `commandCatalog.test.ts` | 5 命令齐全 + 元数据、id 唯一、defaultKey 合法且非自身保留、commandFromMeta 合并/抛错 |
 | `shortcuts.test.ts` | 注册/注销、引用计数、上下文栈竞态、匹配排序、IME 透传、global、handler 返回值、**setOverrides 重绑/解绑/降级/冲突、resolve/forceContext、exportContextBindings、listCommands、_reset 清 overrides** |
 | `wireKeybindings.test.ts` | 立即应用、store 变更重应用、unsubscribe |
+| `forwardGlobalShortcuts.test.ts` | 命中全局键→preventDefault+重放(props 正确)、非全局键不转发、多绑定/空绑定、detach 后失效、修饰键指纹区分 |
 | `usePanelFocus.test.ts` | focusin→pushContext+onActivate、focusout(离子树)→popContext+onDeactivate、内部焦点转移不触发、卸载清理 |
 | `globalCommands.test.ts` | createGlobalShortcuts 命令结构（defaultKey/title/category）、Ctrl+W 关闭、无面板透传、延迟求值 |
 | `keyboard.test.ts` | createTerminalShortcuts()（无参）copy/paste/newline 经 getActiveTerminal 派发、无 active 透传、Ctrl+C 不注册 |

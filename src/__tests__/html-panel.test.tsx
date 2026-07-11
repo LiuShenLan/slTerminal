@@ -8,7 +8,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import React from "react";
-import { render, cleanup, waitFor } from "@testing-library/react";
+import { render, cleanup, waitFor, fireEvent } from "@testing-library/react";
 
 // ─── Hoisted mocks ───
 const mocks = vi.hoisted(() => {
@@ -23,6 +23,15 @@ const mocks = vi.hoisted(() => {
 
 vi.mock("../ipc/fs", () => ({
   readFile: mocks.mockReadFile,
+}));
+
+// iframe 键盘桥 mock（HtmlPanel 仅从 features/shortcuts import attachGlobalShortcutForwarder）
+const { mockAttach, mockDetach } = vi.hoisted(() => {
+  const mockDetach = vi.fn();
+  return { mockAttach: vi.fn((doc: Document) => { void doc; return mockDetach; }), mockDetach };
+});
+vi.mock("../features/shortcuts", () => ({
+  attachGlobalShortcutForwarder: mockAttach,
 }));
 
 // ─── 真实模块导入（mock 之后）───
@@ -42,6 +51,8 @@ function renderHtmlPanel(filePath: string | undefined) {
 describe("HtmlPanel", () => {
   beforeEach(() => {
     mocks.resetAll();
+    mockAttach.mockClear();
+    mockDetach.mockClear();
   });
 
   afterEach(() => {
@@ -324,5 +335,57 @@ describe("HtmlPanel", () => {
 
     // iframe 应已从 DOM 中移除
     expect(document.querySelector("iframe")).toBeNull();
+  });
+
+  // ==========================================================================
+  // iframe 全局键转发桥
+  // ==========================================================================
+
+  // 68. iframe onLoad 后给 contentDocument 挂全局键转发
+  it("iframe onLoad 后 attachGlobalShortcutForwarder 被以 contentDocument 调用", async () => {
+    mocks.mockReadFile.mockResolvedValue("<p>test</p>");
+    const { getByTitle } = renderHtmlPanel("C:/test/a.html");
+
+    const iframe = (await waitFor(() =>
+      getByTitle("HTML 预览: C:/test/a.html"),
+    )) as HTMLIFrameElement;
+    fireEvent.load(iframe);
+
+    // jsdom 可能自动 fire 一次 load，故不断言精确次数，只验证以 contentDocument 挂载过
+    expect(mockAttach).toHaveBeenCalled();
+    expect(mockAttach.mock.calls.some((c) => c[0] === iframe.contentDocument)).toBe(true);
+  });
+
+  // 69. 组件卸载 → detach 被调用
+  it("挂载 forwarder 后 unmount → detach 被调用", async () => {
+    mocks.mockReadFile.mockResolvedValue("<p>test</p>");
+    const { getByTitle, unmount } = renderHtmlPanel("C:/test/a.html");
+
+    const iframe = (await waitFor(() =>
+      getByTitle("HTML 预览: C:/test/a.html"),
+    )) as HTMLIFrameElement;
+    fireEvent.load(iframe); // 确保已挂载 forwarder
+
+    const detachBefore = mockDetach.mock.calls.length;
+    unmount();
+    expect(mockDetach.mock.calls.length).toBeGreaterThan(detachBefore);
+  });
+
+  // 70. 重载（再次 load）→ 每次 load 增 1 attach + 先 detach 旧的
+  it("iframe 重载 → 先 detach 旧再 attach 新（增量）", async () => {
+    mocks.mockReadFile.mockResolvedValue("<p>test</p>");
+    const { getByTitle } = renderHtmlPanel("C:/test/a.html");
+
+    const iframe = (await waitFor(() =>
+      getByTitle("HTML 预览: C:/test/a.html"),
+    )) as HTMLIFrameElement;
+    fireEvent.load(iframe); // 已挂载一次
+
+    const attachBefore = mockAttach.mock.calls.length;
+    const detachBefore = mockDetach.mock.calls.length;
+    fireEvent.load(iframe); // 重载：detach 旧 + attach 新
+
+    expect(mockAttach.mock.calls.length).toBe(attachBefore + 1);
+    expect(mockDetach.mock.calls.length).toBe(detachBefore + 1);
   });
 });

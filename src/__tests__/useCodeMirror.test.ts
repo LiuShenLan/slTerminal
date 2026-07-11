@@ -301,4 +301,15 @@ describe("useCodeMirror 字体大小", () => {
       expect.any(Function), // onDeactivate → clearActiveEditor
     );
   });
+
+  it("11. Tab 缩进：keymap 含 indentWithTab", async () => {
+    renderHook(() =>
+      useCodeMirror({ container, filePath: "/test/file.js", panelId: "p11" }),
+    );
+    await waitFor(() => expect(capturedStateExtensions).toBeDefined());
+
+    const { keymap } = await import("@codemirror/view"); // mock 的 keymap.of
+    const { indentWithTab } = await import("@codemirror/commands"); // 真实引用
+    expect(keymap.of).toHaveBeenCalledWith(expect.arrayContaining([indentWithTab]));
+  });
 });

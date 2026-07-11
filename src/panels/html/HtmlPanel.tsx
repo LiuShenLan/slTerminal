@@ -7,8 +7,9 @@
 // 三态：loading → loaded (iframe) / error
 // 通过 cancelled 标志防止组件卸载或快速切换 filePath 时的竞态。
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { fs } from "../../ipc";
+import { attachGlobalShortcutForwarder } from "../../features/shortcuts";
 import { PANEL_BG, ERROR_FG } from "../../theme";
 
 /** HtmlPanel 接收的面板参数 */
@@ -48,6 +49,30 @@ const iframeStyle: React.CSSProperties = {
 
 const HtmlPanel: React.FC<HtmlPanelProps> = ({ params }) => {
   const [state, setState] = useState<LoadState>({ kind: "loading" });
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  /** iframe 键盘桥 detach 函数（onLoad 时挂载，重载/卸载时移除） */
+  const detachForwarderRef = useRef<(() => void) | null>(null);
+
+  /**
+   * iframe 加载完成后，给其 contentDocument 挂全局快捷键转发（同源可访问）。
+   * 每次 load（srcDoc 变化重载）先 detach 旧的再挂新的。
+   */
+  const handleIframeLoad = () => {
+    detachForwarderRef.current?.();
+    detachForwarderRef.current = null;
+    const doc = iframeRef.current?.contentDocument;
+    if (doc) {
+      detachForwarderRef.current = attachGlobalShortcutForwarder(doc);
+    }
+  };
+
+  // 组件卸载时移除转发监听
+  useEffect(() => {
+    return () => {
+      detachForwarderRef.current?.();
+      detachForwarderRef.current = null;
+    };
+  }, []);
 
   useEffect(() => {
     if (!params.filePath) {
@@ -96,6 +121,8 @@ const HtmlPanel: React.FC<HtmlPanelProps> = ({ params }) => {
 
   return (
     <iframe
+      ref={iframeRef}
+      onLoad={handleIframeLoad}
       sandbox={SANDBOX_FLAGS}
       srcDoc={state.html}
       title={`HTML 预览: ${params.filePath}`}

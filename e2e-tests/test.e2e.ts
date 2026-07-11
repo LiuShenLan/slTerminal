@@ -510,40 +510,115 @@ describe('编辑器保存 (Ctrl+S)', () => {
         return false;
       }, marker);
       expect(marked).toBe(true);
-      await browser.$('[data-e2e-save="1"]').click();
-
-      // 7. 确认 C1 设置正确：editor.save 已注册且 "editor" 上下文已激活
-      const dbg = await browser.execute(() => (window as any).__slterm_e2e_shortcutDebug?.());
-      expect(dbg?.commands).toContain('editor.save');
-      expect(dbg?.stack).toContain('editor');
-
-      // 8. 在页面内 dispatch 合成 keydown 到 window（ShortcutRegistry capture 监听器真实捕获）
-      const consumed = await browser.execute(() => {
-        const e = new KeyboardEvent('keydown', {
-          ctrlKey: true, code: 'KeyS', key: 's', bubbles: true, cancelable: true,
-        });
-        window.dispatchEvent(e);
-        return e.defaultPrevented; // capture handler 命中 → preventDefault → true
+      // 触发 editor 焦点上下文：usePanelFocus 监听 container 的 focusin 事件 →
+      // 在 .cm-content 上 dispatch 合成 focusin（bubbles）→ 冒泡到 container → pushContext + setActiveEditor。
+      // 用合成事件而非 .click()——headless WebView2 中点击 CodeMirror 聚焦不稳定。
+      await browser.execute(() => {
+        const el = document.querySelector('[data-e2e-save="1"]');
+        el?.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
       });
-      expect(consumed).toBe(true); // 证明 window capture 命中 editor.save 并阻止默认
 
-      // 9. 断言真实写盘：mtime 更新且内容仍为编辑器 doc（marker）
+      // 7. 轮询等待 editor.save 已注册且 "editor" 上下文已激活
       await browser.waitUntil(
-        () => {
-          try {
-            const st = statSync(filePath);
-            return st.mtimeMs > mtimeBefore && readFileSync(filePath, 'utf8').includes(marker);
-          } catch {
-            return false;
-          }
+        async () => {
+          const dbg = await browser.execute(() => (window as any).__slterm_e2e_shortcutDebug?.());
+          return dbg?.commands?.includes('editor.save') && dbg?.stack?.includes('editor');
         },
-        { timeout: 8000, timeoutMsg: 'Ctrl+S 未经 capture 路径写盘（文件 mtime 未更新）' },
+        { timeout: 8000, timeoutMsg: 'editor.save 未注册或 "editor" 上下文未激活' },
+      );
+
+      // 8-9. 每轮向 window dispatch 合成 Ctrl+S（capture 监听真实捕获）直到写盘：
+      //      mtime 前进 + 内容仍为编辑器 doc（marker）。dispatch-in-loop 消除首发时序竞态。
+      await browser.waitUntil(
+        async () =>
+          await browser.execute((): boolean => {
+            window.dispatchEvent(new KeyboardEvent('keydown', {
+              ctrlKey: true, code: 'KeyS', key: 's', bubbles: true, cancelable: true,
+            }));
+            return true;
+          }).then(() => {
+            try {
+              const st = statSync(filePath);
+              return st.mtimeMs > mtimeBefore && readFileSync(filePath, 'utf8').includes(marker);
+            } catch {
+              return false;
+            }
+          }),
+        { timeout: 10000, timeoutMsg: 'Ctrl+S 未经 capture 路径写盘（文件 mtime 未更新）' },
       );
 
       expect(statSync(filePath).mtimeMs).toBeGreaterThan(mtimeBefore);
       expect(readFileSync(filePath, 'utf8')).toContain(marker);
     } finally {
       // 清理临时目录
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('HTML 面板 Ctrl+W 转发', () => {
+  // 焦点在 iframe 内时，全局键经 forwardGlobalShortcuts 重放到父 window → global.closeTab 关活跃面板。
+  // embedded 驱动无法投递 OS 键，但可经同源 iframe.contentDocument 在页面内 dispatch 合成 keydown，
+  // 触发真实 forwarder → 重放 → 关面板全链路（真实二进制）。
+  it('iframe 内 Ctrl+W → 转发关闭该 HTML 页签', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'slterm-e2e-html-'));
+    const htmlPath = join(tempDir, 'page.html');
+    writeFileSync(htmlPath, '<h1>e2e html</h1>', 'utf8');
+
+    try {
+      await browser.waitUntil(
+        async () => await browser.execute(() => (window as any).__slterm_e2e_workspaceReady === true),
+        { timeout: 15000, timeoutMsg: 'Workspace 未就绪' },
+      );
+      await browser.execute((dir: string) => {
+        (window as any).__slterm_e2e_createProject?.(dir);
+      }, tempDir);
+      await browser.waitUntil(
+        async () => await browser.execute(() => typeof window.__dockviewApi !== 'undefined'),
+        { timeout: 20000, timeoutMsg: 'Dockview API 未就绪' },
+      );
+
+      const panelId = 'e2e-html-' + Date.now();
+      await browser.execute(
+        (args: { pid: string; path: string }) => {
+          window.__dockviewApi!.addPanel({
+            id: args.pid,
+            component: 'htmlviewer',
+            params: { panelId: args.pid, filePath: args.path },
+          });
+        },
+        { pid: panelId, path: htmlPath },
+      );
+
+      // 等待 iframe 渲染（htmlviewer 读文件后渲染 iframe）
+      await browser.waitUntil(
+        async () => await browser.execute(() => !!document.querySelector('iframe')),
+        { timeout: 15000, timeoutMsg: 'HTML iframe 未渲染' },
+      );
+
+      // 每轮向 iframe.contentDocument 派发合成 Ctrl+W（同源可访问），直到面板关闭
+      // （容忍 forwarder onLoad 挂载的短暂时延）
+      await browser.waitUntil(
+        async () =>
+          await browser.execute((pid: string) => {
+            const iframe = document.querySelector('iframe') as HTMLIFrameElement | null;
+            const doc = iframe?.contentDocument;
+            if (doc) {
+              doc.dispatchEvent(new KeyboardEvent('keydown', {
+                ctrlKey: true, code: 'KeyW', key: 'w', bubbles: true, cancelable: true,
+              }));
+            }
+            return window.__dockviewApi?.getPanel(pid) === undefined;
+          }, panelId),
+        { timeout: 10000, timeoutMsg: 'HTML 面板未被 Ctrl+W 转发关闭' },
+      );
+
+      const closed = await browser.execute(
+        (pid: string) => window.__dockviewApi?.getPanel(pid) === undefined,
+        panelId,
+      );
+      expect(closed).toBe(true);
+    } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
