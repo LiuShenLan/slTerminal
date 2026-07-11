@@ -16,6 +16,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **不自动创建默认终端**：`handleReady` 在布局恢复失败（空布局 `{}` 或损坏数据）时不再兜底创建终端面板。空白页面由 Watermark 组件接管显示（"打开终端或编辑器开始工作"），用户通过 Watermark 按钮或页签 "+" 按钮手动创建终端。新建页面的空布局由 `SidebarTree.makeEmptyLayout()` 提供。已有页面布局恢复路径不变。
 
+**DefaultTab 页签图标渲染**：`DefaultTab` 通过 `params.tabIcon` 控制图标显示。终端面板在检测到注册命令运行时通过 `api.updateParameters({ tabIcon: "..." })` 设置图标，退出时设为 `null`。`DefaultTab` 订阅 `api.onDidParametersChange` 动态切换。
+
+> **关键坑**：Dockview `PanelApi.onDidParametersChange` 类型为 `Event<Parameters>`，回调直接接收 `Parameters` 对象（扁平 key-value），不是 `{ params: Parameters }` 包裹结构。错误写成 `event.params.tabIcon` 会导致始终读到 `undefined`。
+
 ## 文件
 
 | 文件 | 职责 |
@@ -73,6 +77,12 @@ SidebarTree.switchToPage(projectId, pageId)
 - Save-As 通过 `slterm:file-saved-as` CustomEvent 通知 Workspace 层重算标题
 - 重复文件打开：`findExistingEditor` 查重 → 聚焦已有面板（不改布局）
 - `onDidRemovePanel` 监听面板关闭 → 注销 + 重算剩余面板标题
+- **页签图标**：`DefaultTab` 通过 `params.tabIcon`（由 `TerminalPanel` 通过 `api.updateParameters` 设置）控制终端图标渲染。非终端面板不设置此字段，无图标
+
+## Dockview 事件结构注意事项
+
+- `api.onDidTitleChange`：回调接收 `TitleEvent { title: string }` → `event.title`
+- **`api.onDidParametersChange`**：回调直接接收 `Parameters` 对象（`Record<string, unknown>`），**不是** `{ params: Parameters }` 包裹 → `event.tabIcon`，**非** `event.params.tabIcon`
 
 ## 测试模式
 
