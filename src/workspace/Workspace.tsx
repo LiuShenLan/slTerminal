@@ -86,14 +86,15 @@ function createRightHeader(
   pageId: string,
   cwd: string | undefined,
 ): React.FC<IDockviewHeaderActionsProps> {
-  const Header: React.FC<IDockviewHeaderActionsProps> = ({ containerApi }) => (
+  const Header: React.FC<IDockviewHeaderActionsProps> = ({ containerApi, group }) => (
     <div style={{ display: "flex", alignItems: "center", height: "100%", paddingRight: 4 }}>
       <button
         onClick={() => {
           const id = nextPanelId();
           const title = titleManager.getTerminalTitle(pageId);
           containerApi.addPanel({ id, component: PANEL_TERMINAL, title,
-            params: { panelId: id, cwd }, renderer: "always" });
+            params: { panelId: id, cwd }, renderer: "always",
+            position: { referenceGroup: group } });
         }}
         style={{ background: "none", border: `1px solid ${SEPARATOR_BG}`, color: BUTTON_FG,
           cursor: "pointer", fontSize: 16, width: 24, height: 24, borderRadius: 4,
@@ -115,7 +116,8 @@ function createGetContextMenu(
     return [
       { label: "新建终端", action: () => { params.api.addPanel(
           { id: newTerminalId, component: PANEL_TERMINAL, title: titleManager.getTerminalTitle(pageId),
-            params: { panelId: newTerminalId }, renderer: "always" }); } },
+            params: { panelId: newTerminalId }, renderer: "always",
+            position: { referenceGroup: params.group } }); } },
       "separator",
       "close", "closeOthers", "closeAll",
     ];
@@ -513,3 +515,6 @@ const Workspace: React.FC = () => {
 };
 
 export default Workspace;
+
+// 供测试验证 RightHeader/ContextMenu 的 addPanel 行为
+export { createRightHeader, createGetContextMenu };
