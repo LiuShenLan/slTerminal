@@ -201,23 +201,29 @@ export function useFileTree({ rootPath }: UseFileTreeOptions) {
   // 根路径变更时重新加载
   useEffect(() => {
     const gen = ++genRef.current;
+    // rootPath 变化时立即清空旧数据，避免残留旧项目的文件树
+    if (!rootPath) {
+      setRootNodes([]);
+      setGitStatusMap(new Map());
+      return;
+    }
+    setRootNodes([]);
+    setGitStatusMap(new Map());
     loadRoot(gen);
     // 同时加载 git 状态
-    if (rootPath) {
-      gitStatus(rootPath)
-        .then((statuses) => {
-          if (gen !== genRef.current) return; // 丢弃旧请求（rootPath 已变化）
-          const map = new Map<string, string>();
-          for (const s of statuses) {
-            map.set(s.path, s.status);
-          }
-          setGitStatusMap(map);
-        })
-        .catch(() => {
-          if (gen !== genRef.current) return; // 丢弃旧请求的错误处理
-          setGitStatusMap(new Map());
-        });
-    }
+    gitStatus(rootPath)
+      .then((statuses) => {
+        if (gen !== genRef.current) return; // 丢弃旧请求（rootPath 已变化）
+        const map = new Map<string, string>();
+        for (const s of statuses) {
+          map.set(s.path, s.status);
+        }
+        setGitStatusMap(map);
+      })
+      .catch(() => {
+        if (gen !== genRef.current) return; // 丢弃旧请求的错误处理
+        setGitStatusMap(new Map());
+      });
   }, [rootPath, loadRoot]);
 
   // 订阅文件系统事件（200ms 去抖增量刷新）

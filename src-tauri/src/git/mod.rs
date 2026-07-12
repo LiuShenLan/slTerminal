@@ -125,7 +125,6 @@ pub async fn git_status(
     match tokio::task::spawn_blocking(move || {
         let mut opts = git2::StatusOptions::new();
         opts.include_untracked(true)
-            .include_ignored(true)
             .include_unreadable(true)
             .include_unreadable_as_untracked(true);
 
@@ -612,6 +611,102 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let result = git2::Repository::open(tmp.path());
         assert!(result.is_err(), "非 git 目录应返回错误");
+    }
+
+    // ---- P0: include_ignored(false) 行为验证 ----
+
+    #[test]
+    fn git_status_excludes_ignored_files() {
+        let (_dir, path) = init_temp_repo();
+        commit_file(&path, "main.rs", "fn main() {}");
+        // 添加 .gitignore 忽略 *.log
+        fs::write(path.join(".gitignore"), "*.log\n").unwrap();
+        fs::write(path.join("test.log"), "ignored content").unwrap();
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let mut opts = git2::StatusOptions::new();
+        opts.include_untracked(true);
+        // 不设置 include_ignored → 被忽略文件不出现
+        let statuses = repo.statuses(Some(&mut opts)).unwrap();
+
+        // test.log 不应出现在 status 中
+        let has_ignored = statuses.iter().any(|e| {
+            let rel = e.path().unwrap_or("");
+            rel.contains("test.log")
+        });
+        assert!(!has_ignored, ".gitignore 忽略的文件不应出现在状态输出中");
+
+        // main.rs 无变更 → CURRENT → 被 skip；仅 .gitignore 本身作为 untracked 出现
+        let status_paths: Vec<String> = statuses.iter()
+            .filter_map(|e| e.path().map(|s| s.to_string()))
+            .collect();
+        assert!(!status_paths.iter().any(|p| p.contains("test.log")), "test.log 不应在 status 中");
+        assert!(status_paths.iter().any(|p| p == ".gitignore"), ".gitignore 本身应作为 untracked 出现");
+    }
+
+    #[test]
+    fn git_status_includes_untracked_not_ignored() {
+        let (_dir, path) = init_temp_repo();
+        commit_file(&path, "main.rs", "fn main() {}");
+        // untracked.txt 不匹配 .gitignore
+        fs::write(path.join(".gitignore"), "*.log\n").unwrap();
+        fs::write(path.join("untracked.txt"), "new file").unwrap();
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let mut opts = git2::StatusOptions::new();
+        opts.include_untracked(true);
+        let statuses = repo.statuses(Some(&mut opts)).unwrap();
+
+        let has_untracked = statuses.iter().any(|e| {
+            let rel = e.path().unwrap_or("");
+            rel == "untracked.txt" && e.status().contains(git2::Status::WT_NEW)
+        });
+        assert!(has_untracked, "未被忽略的未跟踪文件仍应出现");
+    }
+
+    #[test]
+    fn git_status_includes_modified_tracked() {
+        let (_dir, path) = init_temp_repo();
+        commit_file(&path, "main.rs", "original");
+        fs::write(path.join(".gitignore"), "*.log\n").unwrap();
+        // 修改已跟踪文件
+        fs::write(path.join("main.rs"), "modified").unwrap();
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let mut opts = git2::StatusOptions::new();
+        opts.include_untracked(true);
+        let statuses = repo.statuses(Some(&mut opts)).unwrap();
+
+        let has_modified = statuses.iter().any(|e| {
+            let rel = e.path().unwrap_or("");
+            rel == "main.rs" && e.status().contains(git2::Status::WT_MODIFIED)
+        });
+        assert!(has_modified, "修改的已跟踪文件应正常显示状态");
+    }
+
+    #[test]
+    fn git_status_tracked_then_ignored_still_shows_status() {
+        let (_dir, path) = init_temp_repo();
+        // 先提交文件
+        commit_file(&path, "config.toml", "version = 1");
+        // 然后加入 .gitignore
+        fs::write(path.join(".gitignore"), "*.toml\n").unwrap();
+        // 修改已跟踪文件
+        fs::write(path.join("config.toml"), "version = 2").unwrap();
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let mut opts = git2::StatusOptions::new();
+        opts.include_untracked(true);
+        let statuses = repo.statuses(Some(&mut opts)).unwrap();
+
+        let config_status = statuses.iter().find(|e| {
+            e.path().unwrap_or("") == "config.toml"
+        });
+        assert!(config_status.is_some(), "已跟踪后被忽略的文件仍应出现在状态中");
+        assert!(
+            config_status.unwrap().status().contains(git2::Status::WT_MODIFIED),
+            "已跟踪文件的修改状态应正常显示"
+        );
     }
 
     // ---- P1: git_status 绝对路径验证 ----

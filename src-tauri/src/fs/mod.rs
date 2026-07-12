@@ -187,7 +187,7 @@ pub async fn fs_read_dir(path: String) -> Result<Vec<DirEntry>, AppError> {
             let name = entry.file_name().to_string_lossy().to_string();
 
             // 过滤重型目录
-            if name == ".git" || name == "node_modules" {
+            if name == ".git" {
                 continue;
             }
 
@@ -370,23 +370,67 @@ mod read_dir_tests {
     }
 
     #[test]
-    fn test_fs_read_dir_filters_node_modules() {
+    fn test_fs_read_dir_shows_node_modules() {
+        // node_modules 不再硬编码过滤——子树懒加载保证性能，目录条目可见无影响
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("node_modules")).unwrap();
+        std::fs::create_dir(dir.path().join(".git")).unwrap();
         std::fs::write(dir.path().join("visible.txt"), "ok").unwrap();
 
         let mut entries: Vec<DirEntry> = Vec::new();
         for entry in std::fs::read_dir(dir.path()).unwrap() {
             let entry = entry.unwrap();
             let name = entry.file_name().to_string_lossy().to_string();
-            if name == "node_modules" { continue; }
+            if name == ".git" { continue; }
             let is_dir = entry.file_type().unwrap().is_dir();
             entries.push(DirEntry {
                 name, path: entry.path().to_string_lossy().replace('\\', "/"),
                 is_dir, size: None, modified: None,
             });
         }
-        assert_eq!(entries.len(), 1, "应过滤 node_modules");
+        assert_eq!(entries.len(), 2, "node_modules 和 visible.txt 均应显示，仅 .git 过滤");
+    }
+
+    #[test]
+    fn test_fs_read_dir_shows_large_build_dirs() {
+        // target/build/dist 等构建产物目录不硬编码过滤，依赖懒加载控制性能
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("target")).unwrap();
+        std::fs::create_dir(dir.path().join("build")).unwrap();
+        std::fs::create_dir(dir.path().join("dist")).unwrap();
+        std::fs::create_dir(dir.path().join("node_modules")).unwrap();
+        std::fs::create_dir(dir.path().join(".git")).unwrap();
+
+        let mut entries: Vec<DirEntry> = Vec::new();
+        for entry in std::fs::read_dir(dir.path()).unwrap() {
+            let entry = entry.unwrap();
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name == ".git" { continue; }
+            let is_dir = entry.file_type().unwrap().is_dir();
+            entries.push(DirEntry {
+                name, path: entry.path().to_string_lossy().replace('\\', "/"),
+                is_dir, size: None, modified: None,
+            });
+        }
+        // target、build、dist、node_modules 四个目录均应显示，仅 .git 过滤
+        assert_eq!(entries.len(), 4, "target/build/dist/node_modules 均应显示");
+    }
+
+    #[test]
+    fn test_fs_read_dir_empty_dir_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut entries: Vec<DirEntry> = Vec::new();
+        for entry in std::fs::read_dir(dir.path()).unwrap() {
+            let entry = entry.unwrap();
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name == ".git" { continue; }
+            let is_dir = entry.file_type().unwrap().is_dir();
+            entries.push(DirEntry {
+                name, path: entry.path().to_string_lossy().replace('\\', "/"),
+                is_dir, size: None, modified: None,
+            });
+        }
+        assert_eq!(entries.len(), 0, "空目录应返回空列表");
     }
 
     #[test]
