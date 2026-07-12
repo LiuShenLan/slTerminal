@@ -119,7 +119,7 @@ describe('Workspace', () => {
     // Watermark 显示（无默认终端）
     expect(text).toContain('打开终端或编辑器开始工作');
     // 不创建 terminal 面板
-    expect(text).not.toMatch(/terminal-\d/);
+    expect(text).not.toMatch(/terminal-/);
   });
 
   it('T18: 活跃页面 + layout 为空 → 文本不含 terminal-', () => {

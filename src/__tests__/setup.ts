@@ -2,6 +2,60 @@ import { randomFillSync } from 'node:crypto';
 import '@testing-library/jest-dom/vitest';
 import { vi } from 'vitest';
 
+// ─── 全局 mock 工厂（供 vi.hoisted() 中使用） ───
+// vi.hoisted() 运行在 ESM import 之前，无法通过 import/require 加载外部模块，
+// 因此将共享工厂注册到 globalThis，使其在 vi.hoisted() 回调中可用。
+
+type Fn = ReturnType<typeof vi.fn>;
+
+interface FsMockOverrides {
+  readDir?: Fn; readFile?: Fn; createDir?: Fn; deleteEntry?: Fn; rename?: Fn; writeFile?: Fn;
+}
+
+function createFsMocks(overrides?: FsMockOverrides) {
+  return {
+    readDir: overrides?.readDir ?? vi.fn().mockResolvedValue([]),
+    readFile: overrides?.readFile ?? vi.fn(),
+    createDir: overrides?.createDir ?? vi.fn(),
+    deleteEntry: overrides?.deleteEntry ?? vi.fn(),
+    rename: overrides?.rename ?? vi.fn(),
+    writeFile: overrides?.writeFile ?? vi.fn(),
+  };
+}
+
+function createGitMocks(overrides?: { gitStatus?: Fn }) {
+  return { gitStatus: overrides?.gitStatus ?? vi.fn().mockResolvedValue([]) };
+}
+
+function createNotifyMocks(overrides?: { startWatch?: Fn; onFsEvent?: Fn }) {
+  let fsEventCallback: (() => void) | null = null;
+  return {
+    startWatch: overrides?.startWatch ?? vi.fn().mockResolvedValue(undefined),
+    onFsEvent: overrides?.onFsEvent ?? vi.fn((cb: () => void) => {
+      fsEventCallback = cb;
+      return () => { fsEventCallback = null; };
+    }),
+    triggerFsEvent() { fsEventCallback?.(); },
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+(globalThis as any).__createFsMocks = createFsMocks;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+(globalThis as any).__createGitMocks = createGitMocks;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+(globalThis as any).__createNotifyMocks = createNotifyMocks;
+
+// 类型声明以消除 TS 报错
+declare global {
+  // eslint-disable-next-line no-var
+  var __createFsMocks: typeof createFsMocks;
+  // eslint-disable-next-line no-var
+  var __createGitMocks: typeof createGitMocks;
+  // eslint-disable-next-line no-var
+  var __createNotifyMocks: typeof createNotifyMocks;
+}
+
 // 静音 jsdom HTMLCanvasElement.getContext 未实现警告
 // detectWebgl.test.ts 通过 vi.spyOn 覆盖此 mock（mockRestore 恢复到本 mock）
 vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);

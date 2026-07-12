@@ -136,6 +136,8 @@ export function canFit(
 
 export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, cwd, visible, fontSize, onFontSizeChange, onTabStateChange }: UseXtermOptions) {
   const terminalRef = useRef<Terminal | null>(null);
+  /** StrictMode 双重挂载守卫：记录已初始化的 panelId，同 panelId 的 remount 跳过 */
+  const smGuardRef = useRef<string | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const webglAddonRef = useRef<WebglAddon | null>(null);
   const sessionIdRef = useRef<string | null>(null);
@@ -314,10 +316,11 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
   useEffect(() => {
     if (!container) return;
 
-    // StrictMode guard：防止双重挂载
-    if (terminalRef.current) {
+    // StrictMode guard：防止双重挂载（同 panelId 仅初始化一次）
+    if (smGuardRef.current === panelId) {
       return;
     }
+    smGuardRef.current = panelId;
 
     // F1: 重置销毁标记
     isDisposedRef.current = false;

@@ -7,20 +7,23 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import React from "react";
 import { render, cleanup, renderHook, waitFor, act } from "@testing-library/react";
 
-// ─── Hoisted mocks ───
+// ─── 共享 mock（通过 setup.ts 注册到 globalThis，vi.hoisted 中可用）───
+import { mockEntry } from "./helpers/vfs";
+
 const mocks = vi.hoisted(() => {
-  const mockStartWatch = vi.fn().mockResolvedValue(undefined);
-  const mockReadDir = vi.fn().mockResolvedValue([]);
-  const mockGitStatus = vi.fn().mockResolvedValue([]);
+  const fs = __createFsMocks();
+  const git = __createGitMocks();
+  // 此文件使用 startWatch mock，不依赖 onFsEvent 回调模式
+  const startWatch = vi.fn().mockResolvedValue(undefined);
 
   return {
-    mockStartWatch,
-    mockReadDir,
-    mockGitStatus,
+    get mockStartWatch() { return startWatch; },
+    get mockReadDir() { return fs.readDir; },
+    get mockGitStatus() { return git.gitStatus; },
     resetAll() {
-      mockStartWatch.mockClear();
-      mockReadDir.mockClear();
-      mockGitStatus.mockClear();
+      startWatch.mockClear();
+      fs.readDir.mockClear();
+      git.gitStatus.mockClear();
     },
   };
 });
@@ -47,7 +50,6 @@ import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
 import { ExplorerPanel } from "../features/explorer";
 import { useFileTree } from "../features/explorer/useFileTree";
-import type { DirEntry } from "../types/fs";
 
 // ─── 辅助函数 ───
 
@@ -227,17 +229,6 @@ describe("ExplorerPanel 文件监听集成", () => {
 // ═══════════════════════════════════════════════════════════
 // P2-50: useFileTree hook 测试 — loadRoot / toggleExpand / loadChildren 状态转换
 // ═══════════════════════════════════════════════════════════
-
-/** 辅助：创建模拟 DirEntry */
-function mockEntry(name: string, isDir: boolean, path?: string): DirEntry {
-  const p = path ?? `/test/${name}`;
-  return {
-    name,
-    path: p,
-    isDir,
-    ...(isDir ? {} : { size: 1024, modified: Date.now() }),
-  };
-}
 
 describe("useFileTree 状态转换", () => {
   beforeEach(() => {

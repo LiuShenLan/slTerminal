@@ -392,4 +392,67 @@ describe("ExplorerPanel + FileViewerRegistry 集成", () => {
     expect(call.params).toBeDefined();
     expect(call.params.filePath).toBeDefined();
   });
+
+  // ========================================================================
+  // P1-6: 文件查看器去重路径测试
+  // ========================================================================
+
+  // 65. 重复打开相同文件 → findExistingEditor 命中 → focus 调用，addPanel 不二次调用
+  it("重复打开相同文件只聚焦已有面板，不创建新面板", async () => {
+    populateStore();
+    const { findAllByText } = render(React.createElement(ExplorerPanel));
+
+    // 第一次双击 index.html → addPanel 调用 + titleManager 注册
+    const htmlItems = await findAllByText("index.html");
+    const htmlItem = htmlItems.find((el) => el.tagName === "SPAN");
+    fireEvent.doubleClick(htmlItem!);
+
+    await waitFor(() => {
+      expect(mocks.mockAddPanel).toHaveBeenCalledTimes(1);
+    });
+
+    // 清空 addPanel 和 focus 的调用记录，准备测试第二次双击
+    mocks.mockAddPanel.mockClear();
+    mocks.mockFocus.mockClear();
+
+    // 第二次双击同一个文件
+    fireEvent.doubleClick(htmlItem!);
+
+    // addPanel 不应被第二次调用（去重命中）
+    expect(mocks.mockAddPanel).not.toHaveBeenCalled();
+
+    // focus 应被调用（聚焦已有面板）
+    expect(mocks.mockFocus).toHaveBeenCalledTimes(1);
+  });
+
+  // 66. 重复打开不同文件 → addPanel 正常调用（不去重）
+  it("打开不同文件不触发去重，addPanel 正常调用", async () => {
+    populateStore();
+    const { findAllByText } = render(React.createElement(ExplorerPanel));
+
+    // 先打开 index.html
+    let htmlItems = await findAllByText("index.html");
+    let htmlItem = htmlItems.find((el) => el.tagName === "SPAN");
+    fireEvent.doubleClick(htmlItem!);
+
+    await waitFor(() => {
+      expect(mocks.mockAddPanel).toHaveBeenCalledTimes(1);
+    });
+
+    mocks.mockAddPanel.mockClear();
+    mocks.mockFocus.mockClear();
+
+    // 再打开 app.ts（不同文件）
+    const tsItems = await findAllByText("app.ts");
+    const tsItem = tsItems.find((el) => el.tagName === "SPAN");
+    fireEvent.doubleClick(tsItem!);
+
+    await waitFor(() => {
+      expect(mocks.mockAddPanel).toHaveBeenCalledTimes(1);
+    });
+
+    // addPanel 被调用（新文件无去重）
+    expect(mocks.mockAddPanel).toHaveBeenCalledTimes(1);
+    // focus 未因去重调用（是全新打开）
+  });
 });

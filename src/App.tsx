@@ -67,6 +67,40 @@ if (typeof window !== "undefined") {
     useLayout.getState().setActivePage(pageId);
     return pageId;
   };
+
+  // E2E 测试辅助：根据 pageId 查找所属 projectId
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (window as any).__slterm_e2e_getProjectIdForPage = (pageId: string) => {
+    const { projects } = useProjects.getState();
+    for (const [projId, proj] of Object.entries(projects)) {
+      if (proj.pages.some((p) => p.pageId === pageId)) {
+        return projId;
+      }
+    }
+    return null;
+  };
+
+  // E2E 测试辅助：在已有项目中新增操作页面（用于 H6 跨页面存活测试）
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (window as any).__slterm_e2e_addPage = (projectId: string, name: string, rootPath: string) => {
+    const pageId = createPageId();
+    const page: OperationPage = {
+      pageId,
+      name,
+      layout: makeEmptyLayout(),
+      cwd: rootPath,
+      createdAt: Date.now(),
+      lastAccessedAt: Date.now(),
+    };
+    useProjects.getState().addPage(projectId, page);
+    return pageId;
+  };
+
+  // E2E 测试辅助：切换活跃页面（用于 H6 跨页面切换验证）
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (window as any).__slterm_e2e_switchToPage = (pageId: string) => {
+    useLayout.getState().setActivePage(pageId);
+  };
 }
 
 function App() {

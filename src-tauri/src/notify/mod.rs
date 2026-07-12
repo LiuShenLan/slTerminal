@@ -258,8 +258,12 @@ fn classify_event(event: &notify_debouncer_full::DebouncedEvent) -> FsEventPaylo
         .iter()
         .map(|p| p.display().to_string())
         .collect();
+    classify_by_kind(&event.kind, paths)
+}
 
-    let (kind, detail) = match &event.kind {
+/// 根据 EventKind 和路径生成前端事件载荷（纯函数，可单测）
+fn classify_by_kind(kind: &notify::EventKind, paths: Vec<String>) -> FsEventPayload {
+    let (kind_str, detail) = match kind {
         EventKind::Create(create_kind) => {
             let d = match create_kind {
                 CreateKind::File => "File",
@@ -294,7 +298,7 @@ fn classify_event(event: &notify_debouncer_full::DebouncedEvent) -> FsEventPaylo
 
     FsEventPayload {
         paths,
-        kind: kind.to_string(),
+        kind: kind_str.to_string(),
         detail,
     }
 }
@@ -302,12 +306,165 @@ fn classify_event(event: &notify_debouncer_full::DebouncedEvent) -> FsEventPaylo
 #[cfg(test)]
 mod tests {
     use super::*;
+    use notify::EventKind;
+    use notify::event::{CreateKind, ModifyKind, RemoveKind, AccessKind, RenameMode, DataChange, AccessMode};
 
-    /// 验证 classify_event 对不同事件类型的分类正确性
-    ///
-    /// 注意：无法在单元测试中直接构造 DebouncedEvent（字段不公开），
-    /// 因此测试 limited 到 FsEventPayload 序列化和 FileWatcher 生命周期。
+    // ─── classify_by_kind 测试（覆盖全部 7 种 EventKind 变体） ───
 
+    fn paths() -> Vec<String> {
+        vec!["/test/file.txt".to_string()]
+    }
+
+    #[test]
+    fn classify_create_file() {
+        let p = classify_by_kind(&EventKind::Create(CreateKind::File), paths());
+        assert_eq!(p.kind, "Create");
+        assert_eq!(p.detail, "File");
+    }
+
+    #[test]
+    fn classify_create_folder() {
+        let p = classify_by_kind(&EventKind::Create(CreateKind::Folder), paths());
+        assert_eq!(p.kind, "Create");
+        assert_eq!(p.detail, "Folder");
+    }
+
+    #[test]
+    fn classify_create_any() {
+        let p = classify_by_kind(&EventKind::Create(CreateKind::Any), paths());
+        assert_eq!(p.kind, "Create");
+        assert_eq!(p.detail, "Any");
+    }
+
+    #[test]
+    fn classify_create_other() {
+        let p = classify_by_kind(&EventKind::Create(CreateKind::Other), paths());
+        assert_eq!(p.kind, "Create");
+        assert_eq!(p.detail, "Other");
+    }
+
+    #[test]
+    fn classify_remove_file() {
+        let p = classify_by_kind(&EventKind::Remove(RemoveKind::File), paths());
+        assert_eq!(p.kind, "Remove");
+        assert_eq!(p.detail, "File");
+    }
+
+    #[test]
+    fn classify_remove_folder() {
+        let p = classify_by_kind(&EventKind::Remove(RemoveKind::Folder), paths());
+        assert_eq!(p.kind, "Remove");
+        assert_eq!(p.detail, "Folder");
+    }
+
+    #[test]
+    fn classify_remove_any() {
+        let p = classify_by_kind(&EventKind::Remove(RemoveKind::Any), paths());
+        assert_eq!(p.kind, "Remove");
+        assert_eq!(p.detail, "Any");
+    }
+
+    #[test]
+    fn classify_remove_other() {
+        let p = classify_by_kind(&EventKind::Remove(RemoveKind::Other), paths());
+        assert_eq!(p.kind, "Remove");
+        assert_eq!(p.detail, "Other");
+    }
+
+    #[test]
+    fn classify_modify_data() {
+        let p = classify_by_kind(
+            &EventKind::Modify(ModifyKind::Data(DataChange::Any)),
+            paths(),
+        );
+        assert_eq!(p.kind, "Modify");
+        assert_eq!(p.detail, "Content");
+    }
+
+    #[test]
+    fn classify_modify_metadata() {
+        let p = classify_by_kind(
+            &EventKind::Modify(ModifyKind::Metadata(notify::event::MetadataKind::Any)),
+            paths(),
+        );
+        assert_eq!(p.kind, "Modify");
+        assert_eq!(p.detail, "Metadata");
+    }
+
+    #[test]
+    fn classify_modify_name() {
+        let p = classify_by_kind(
+            &EventKind::Modify(ModifyKind::Name(RenameMode::From)),
+            paths(),
+        );
+        assert_eq!(p.kind, "Modify");
+        assert!(p.detail.contains("Name"), "Name 变体 detail 应包含 Name 前缀");
+        assert!(p.detail.contains("From"), "应包含 RenameMode::From");
+    }
+
+    #[test]
+    fn classify_modify_name_to() {
+        let p = classify_by_kind(
+            &EventKind::Modify(ModifyKind::Name(RenameMode::To)),
+            paths(),
+        );
+        assert_eq!(p.kind, "Modify");
+        assert!(p.detail.contains("To"));
+    }
+
+    #[test]
+    fn classify_modify_name_both() {
+        let p = classify_by_kind(
+            &EventKind::Modify(ModifyKind::Name(RenameMode::Both)),
+            paths(),
+        );
+        assert_eq!(p.kind, "Modify");
+        assert!(p.detail.contains("Both"));
+    }
+
+    #[test]
+    fn classify_modify_other() {
+        // ModifyKind::Other 变体 hit 通配 _ 分支
+        let p = classify_by_kind(
+            &EventKind::Modify(ModifyKind::Other),
+            paths(),
+        );
+        assert_eq!(p.kind, "Modify");
+        assert_eq!(p.detail, "Other");
+    }
+
+    #[test]
+    fn classify_access() {
+        let p = classify_by_kind(&EventKind::Access(AccessKind::Close(AccessMode::Any)), paths());
+        assert_eq!(p.kind, "Access");
+        assert_eq!(p.detail, "Any");
+    }
+
+    #[test]
+    fn classify_other() {
+        let p = classify_by_kind(&EventKind::Other, paths());
+        assert_eq!(p.kind, "Other");
+        assert_eq!(p.detail, "Meta");
+    }
+
+    #[test]
+    fn classify_any() {
+        // EventKind::Any hit 通配 _ 分支
+        let p = classify_by_kind(&EventKind::Any, paths());
+        assert_eq!(p.kind, "Unknown");
+        assert_eq!(p.detail, "Unknown");
+    }
+
+    #[test]
+    fn classify_preserves_paths() {
+        let paths = vec!["/a/b.txt".to_string(), "/c/d.txt".to_string()];
+        let p = classify_by_kind(&EventKind::Create(CreateKind::File), paths.clone());
+        assert_eq!(p.paths, paths);
+    }
+
+    // ─── FileWatcher 生命周期测试 ───
+
+    /// 验证 FsEventPayload 序列化为 camelCase
     #[test]
     fn fs_event_payload_serializes_camel_case() {
         let payload = FsEventPayload {

@@ -5,7 +5,7 @@
 // 2. 参数结构正确（字段名、类型）
 // 3. 返回类型正确
 
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { mockIPC, clearMocks } from '@tauri-apps/api/mocks';
 import { Channel } from '@tauri-apps/api/core';
 
@@ -13,11 +13,25 @@ import { Channel } from '@tauri-apps/api/core';
 vi.mock("../ipc/notify", async (importOriginal) => {
   return importOriginal<typeof import("../ipc/notify")>();
 });
+
+// Mock @tauri-apps/api/event — onFsEvent 依赖 listen
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(),
+}));
+
+// Mock @tauri-apps/api/window — registerCloseHandler 依赖 getCurrentWindow
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: vi.fn(),
+}));
+
+import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import * as pty from '../ipc/pty';
 import * as fs from '../ipc/fs';
 import * as settings from '../ipc/settings';
 import * as notify from '../ipc/notify';
 import * as git from '../ipc/git';
+import * as windowIpc from '../ipc/window';
 // ping 测试用——index.ts 直接重导出 @tauri-apps/api/core 的 invoke
 // eslint-disable-next-line no-restricted-imports
 import { invoke } from '@tauri-apps/api/core';
@@ -434,6 +448,47 @@ describe('notify IPC 合约', () => {
 
     await expect(notify.startWatch('C:\\nonexistent')).rejects.toThrow('路径不存在');
   });
+
+  // ── onFsEvent（事件订阅）──────────────────────────────────
+
+  it('onFsEvent: 应调用 listen("fs-event", callback)', () => {
+    const mockUnlisten = vi.fn();
+    vi.mocked(listen).mockResolvedValue(mockUnlisten);
+
+    const cb = vi.fn();
+    notify.onFsEvent(cb);
+
+    expect(listen).toHaveBeenCalledWith("fs-event", expect.any(Function));
+  });
+
+  it('onFsEvent: listen 回调应解包 event.payload 传给 callback', () => {
+    let capturedHandler: ((event: any) => void) | null = null;
+    vi.mocked(listen).mockImplementation(
+      ((_event: string, handler: (event: any) => void) => {
+        capturedHandler = handler;
+        return Promise.resolve(vi.fn());
+      }) as any,
+    );
+
+    const cb = vi.fn();
+    notify.onFsEvent(cb);
+
+    const testPayload = { paths: ["C:/a.txt"], kind: "modify" as const };
+    capturedHandler!({ payload: testPayload });
+    expect(cb).toHaveBeenCalledWith(testPayload);
+  });
+
+  it('onFsEvent: 返回的 unsubscribe 调用后应触发 unlisten', async () => {
+    const mockUnlisten = vi.fn();
+    vi.mocked(listen).mockResolvedValue(mockUnlisten);
+
+    const unsub = notify.onFsEvent(vi.fn());
+    // unsub() 内部调 unlisten.then(fn => fn())，微任务刷新后 mockUnlisten 应被调用
+    unsub();
+    await Promise.resolve();
+
+    expect(mockUnlisten).toHaveBeenCalled();
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════
@@ -515,6 +570,73 @@ describe('git IPC 合约', () => {
     });
 
     await expect(git.gitDiff('C:\\empty', 'f.txt')).rejects.toThrow('unborn branch');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// Window IPC
+// ═══════════════════════════════════════════════════════════════════
+
+describe('window IPC 合约', () => {
+  let mockDestroy: ReturnType<typeof vi.fn>;
+  let mockOnCloseRequested: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    mockDestroy = vi.fn().mockResolvedValue(undefined);
+    mockOnCloseRequested = vi.fn();
+    vi.mocked(getCurrentWindow).mockReturnValue({
+      onCloseRequested: mockOnCloseRequested,
+      destroy: mockDestroy,
+    } as unknown as ReturnType<typeof getCurrentWindow>);
+  });
+
+  it('registerCloseHandler: onCloseRequested 回调中调用 preventDefault', () => {
+    mockOnCloseRequested.mockReturnValue(Promise.resolve(vi.fn()));
+    windowIpc.registerCloseHandler(vi.fn().mockResolvedValue(undefined));
+
+    const handler = mockOnCloseRequested.mock.calls[0][0] as (e: { preventDefault: () => void }) => void;
+    const mockEvent = { preventDefault: vi.fn() };
+
+    handler(mockEvent);
+    expect(mockEvent.preventDefault).toHaveBeenCalled();
+  });
+
+  it('registerCloseHandler: cb 成功后调用 destroy', async () => {
+    mockOnCloseRequested.mockReturnValue(Promise.resolve(vi.fn()));
+    const cb = vi.fn().mockResolvedValue(undefined);
+    windowIpc.registerCloseHandler(cb);
+
+    const handler = mockOnCloseRequested.mock.calls[0][0] as (e: { preventDefault: () => void }) => Promise<void>;
+    await handler({ preventDefault: vi.fn() });
+
+    expect(cb).toHaveBeenCalled();
+    expect(mockDestroy).toHaveBeenCalled();
+  });
+
+  it('registerCloseHandler: cb 抛错后 finally 中仍调 destroy', async () => {
+    mockOnCloseRequested.mockReturnValue(Promise.resolve(vi.fn()));
+    const cb = vi.fn().mockRejectedValue(new Error('save failed'));
+    windowIpc.registerCloseHandler(cb);
+
+    const handler = mockOnCloseRequested.mock.calls[0][0] as (e: { preventDefault: () => void }) => Promise<void>;
+    try {
+      await handler({ preventDefault: vi.fn() });
+    } catch {
+      // 预期：handler 因 cb reject 而整体 reject，但 finally 中 destroy 仍被调用
+    }
+
+    expect(mockDestroy).toHaveBeenCalled();
+  });
+
+  it('registerCloseHandler: 返回的清理函数调用 unlisten', async () => {
+    const mockUnlisten = vi.fn();
+    mockOnCloseRequested.mockReturnValue(Promise.resolve(mockUnlisten));
+
+    const unsub = windowIpc.registerCloseHandler(vi.fn().mockResolvedValue(undefined));
+    unsub();
+    await Promise.resolve();
+
+    expect(mockUnlisten).toHaveBeenCalled();
   });
 });
 

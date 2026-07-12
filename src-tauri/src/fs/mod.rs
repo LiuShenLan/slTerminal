@@ -324,10 +324,30 @@ pub async fn fs_rename(
     }
 }
 
+/// 测试辅助：从 &AppState 构造 tauri::State
+///
+/// tauri::State 无公开构造函数（内部仅由 Tauri 依赖注入创建），
+/// 但其布局为 `State(&T)`（单字段元组结构体），与 `&T` 等大。
+/// SAFETY: 仅供测试。transmute 的前提是二者字节等大且在调用期间引用有效。
+#[cfg(test)]
+unsafe fn as_tauri_state<'a, T: Send + Sync + 'static>(t: &'a T) -> tauri::State<'a, T> {
+    std::mem::transmute::<&'a T, tauri::State<'a, T>>(t)
+}
+
+/// 创建测试用 AppState（project_root=None，sandbox 校验默认放行）
+#[cfg(test)]
+fn test_app_state() -> AppState {
+    AppState::new()
+}
+
 /// fs_read_dir/create_dir/delete/rename 单元测试
 #[cfg(test)]
 mod read_dir_tests {
     use super::*;
+
+    fn run<F: std::future::Future>(f: F) -> F::Output {
+        tokio::runtime::Runtime::new().unwrap().block_on(f)
+    }
 
     #[test]
     fn test_fs_read_dir_lists_children() {
@@ -336,17 +356,26 @@ mod read_dir_tests {
         std::fs::write(dir.path().join("b.txt"), "b").unwrap();
         std::fs::create_dir(dir.path().join("sub")).unwrap();
 
-        let mut entries: Vec<DirEntry> = Vec::new();
-        for entry in std::fs::read_dir(dir.path()).unwrap() {
-            let entry = entry.unwrap();
-            let name = entry.file_name().to_string_lossy().to_string();
-            let is_dir = entry.file_type().unwrap().is_dir();
-            entries.push(DirEntry {
-                name, path: entry.path().to_string_lossy().replace('\\', "/"),
-                is_dir, size: None, modified: None,
-            });
-        }
+        let entries = run(fs_read_dir(dir.path().to_string_lossy().to_string())).unwrap();
         assert_eq!(entries.len(), 3, "应返回 2 文件 + 1 子目录");
+
+        // 验证 DirEntry 结构体字段
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&"a.txt"));
+        assert!(names.contains(&"b.txt"));
+        assert!(names.contains(&"sub"));
+
+        // 验证排序：文件夹在前
+        let first_is_dir = entries.first().unwrap().is_dir;
+        assert!(first_is_dir, "首个条目应为目录（文件夹优先排序）");
+
+        // 验证文件具有 size 和 modified 字段
+        for entry in &entries {
+            if !entry.is_dir {
+                assert!(entry.size.is_some(), "文件应具有 size");
+                assert!(entry.modified.is_some(), "文件应具有 modified");
+            }
+        }
     }
 
     #[test]
@@ -355,18 +384,9 @@ mod read_dir_tests {
         std::fs::create_dir(dir.path().join(".git")).unwrap();
         std::fs::write(dir.path().join("visible.txt"), "ok").unwrap();
 
-        let mut entries: Vec<DirEntry> = Vec::new();
-        for entry in std::fs::read_dir(dir.path()).unwrap() {
-            let entry = entry.unwrap();
-            let name = entry.file_name().to_string_lossy().to_string();
-            if name == ".git" { continue; }
-            let is_dir = entry.file_type().unwrap().is_dir();
-            entries.push(DirEntry {
-                name, path: entry.path().to_string_lossy().replace('\\', "/"),
-                is_dir, size: None, modified: None,
-            });
-        }
-        assert_eq!(entries.len(), 1, "应过滤 .git");
+        let entries = run(fs_read_dir(dir.path().to_string_lossy().to_string())).unwrap();
+        assert_eq!(entries.len(), 1, "应过滤 .git，仅返回 visible.txt");
+        assert_eq!(entries[0].name, "visible.txt");
     }
 
     #[test]
@@ -377,17 +397,11 @@ mod read_dir_tests {
         std::fs::create_dir(dir.path().join(".git")).unwrap();
         std::fs::write(dir.path().join("visible.txt"), "ok").unwrap();
 
-        let mut entries: Vec<DirEntry> = Vec::new();
-        for entry in std::fs::read_dir(dir.path()).unwrap() {
-            let entry = entry.unwrap();
-            let name = entry.file_name().to_string_lossy().to_string();
-            if name == ".git" { continue; }
-            let is_dir = entry.file_type().unwrap().is_dir();
-            entries.push(DirEntry {
-                name, path: entry.path().to_string_lossy().replace('\\', "/"),
-                is_dir, size: None, modified: None,
-            });
-        }
+        let entries = run(fs_read_dir(dir.path().to_string_lossy().to_string())).unwrap();
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&"node_modules"), "node_modules 应显示");
+        assert!(names.contains(&"visible.txt"), "visible.txt 应显示");
+        assert!(!names.contains(&".git"), ".git 应被过滤");
         assert_eq!(entries.len(), 2, "node_modules 和 visible.txt 均应显示，仅 .git 过滤");
     }
 
@@ -401,35 +415,20 @@ mod read_dir_tests {
         std::fs::create_dir(dir.path().join("node_modules")).unwrap();
         std::fs::create_dir(dir.path().join(".git")).unwrap();
 
-        let mut entries: Vec<DirEntry> = Vec::new();
-        for entry in std::fs::read_dir(dir.path()).unwrap() {
-            let entry = entry.unwrap();
-            let name = entry.file_name().to_string_lossy().to_string();
-            if name == ".git" { continue; }
-            let is_dir = entry.file_type().unwrap().is_dir();
-            entries.push(DirEntry {
-                name, path: entry.path().to_string_lossy().replace('\\', "/"),
-                is_dir, size: None, modified: None,
-            });
-        }
-        // target、build、dist、node_modules 四个目录均应显示，仅 .git 过滤
-        assert_eq!(entries.len(), 4, "target/build/dist/node_modules 均应显示");
+        let entries = run(fs_read_dir(dir.path().to_string_lossy().to_string())).unwrap();
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&"target"));
+        assert!(names.contains(&"build"));
+        assert!(names.contains(&"dist"));
+        assert!(names.contains(&"node_modules"));
+        assert!(!names.contains(&".git"));
+        assert_eq!(entries.len(), 4, "target/build/dist/node_modules 均应显示，仅 .git 过滤");
     }
 
     #[test]
     fn test_fs_read_dir_empty_dir_returns_empty() {
         let dir = tempfile::tempdir().unwrap();
-        let mut entries: Vec<DirEntry> = Vec::new();
-        for entry in std::fs::read_dir(dir.path()).unwrap() {
-            let entry = entry.unwrap();
-            let name = entry.file_name().to_string_lossy().to_string();
-            if name == ".git" { continue; }
-            let is_dir = entry.file_type().unwrap().is_dir();
-            entries.push(DirEntry {
-                name, path: entry.path().to_string_lossy().replace('\\', "/"),
-                is_dir, size: None, modified: None,
-            });
-        }
+        let entries = run(fs_read_dir(dir.path().to_string_lossy().to_string())).unwrap();
         assert_eq!(entries.len(), 0, "空目录应返回空列表");
     }
 
@@ -439,19 +438,10 @@ mod read_dir_tests {
         std::fs::create_dir(dir.path().join(".claude")).unwrap();
         std::fs::write(dir.path().join("visible.txt"), "ok").unwrap();
 
-        let mut entries: Vec<DirEntry> = Vec::new();
-        for entry in std::fs::read_dir(dir.path()).unwrap() {
-            let entry = entry.unwrap();
-            let name = entry.file_name().to_string_lossy().to_string();
-            let is_dir = entry.file_type().unwrap().is_dir();
-            entries.push(DirEntry {
-                name,
-                path: entry.path().to_string_lossy().replace('\\', "/"),
-                is_dir,
-                size: None,
-                modified: None,
-            });
-        }
+        let entries = run(fs_read_dir(dir.path().to_string_lossy().to_string())).unwrap();
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&".claude"), ".claude 目录应显示");
+        assert!(names.contains(&"visible.txt"), "visible.txt 应显示");
         assert_eq!(entries.len(), 2, ".claude 和 visible.txt 均应显示");
     }
 
@@ -459,15 +449,25 @@ mod read_dir_tests {
     fn test_fs_create_dir_creates() {
         let base = tempfile::tempdir().unwrap();
         let new_dir = base.path().join("new_folder");
-        std::fs::create_dir_all(&new_dir).unwrap();
+        let app_state = test_app_state();
+        let state = unsafe { as_tauri_state(&app_state) };
+
+        run(fs_create_dir(new_dir.to_string_lossy().to_string(), state)).unwrap();
         assert!(new_dir.exists(), "目录应被创建");
+
+        // 通过 fs_read_dir 验证目录存在
+        let entries = run(fs_read_dir(base.path().to_string_lossy().to_string())).unwrap();
+        assert!(entries.iter().any(|e| e.name == "new_folder" && e.is_dir));
     }
 
     #[test]
     fn test_fs_create_dir_parent_creation() {
         let base = tempfile::tempdir().unwrap();
         let nested = base.path().join("a").join("b").join("c");
-        std::fs::create_dir_all(&nested).unwrap();
+        let app_state = test_app_state();
+        let state = unsafe { as_tauri_state(&app_state) };
+
+        run(fs_create_dir(nested.to_string_lossy().to_string(), state)).unwrap();
         assert!(nested.exists(), "嵌套目录应被创建");
     }
 
@@ -477,7 +477,10 @@ mod read_dir_tests {
         let file = dir.path().join("to_delete.txt");
         std::fs::write(&file, "delete me").unwrap();
         assert!(file.exists());
-        std::fs::remove_file(&file).unwrap();
+
+        let app_state = test_app_state();
+        let state = unsafe { as_tauri_state(&app_state) };
+        run(fs_delete(file.to_string_lossy().to_string(), state)).unwrap();
         assert!(!file.exists(), "文件应被删除");
     }
 
@@ -487,7 +490,10 @@ mod read_dir_tests {
         let sub = dir.path().join("to_delete_dir");
         std::fs::create_dir(&sub).unwrap();
         std::fs::write(sub.join("child.txt"), "child").unwrap();
-        std::fs::remove_dir_all(&sub).unwrap();
+
+        let app_state = test_app_state();
+        let state = unsafe { as_tauri_state(&app_state) };
+        run(fs_delete(sub.to_string_lossy().to_string(), state)).unwrap();
         assert!(!sub.exists(), "目录及其内容应被删除");
     }
 
@@ -497,9 +503,188 @@ mod read_dir_tests {
         let src = dir.path().join("old.txt");
         let dst = dir.path().join("new.txt");
         std::fs::write(&src, "content").unwrap();
-        std::fs::rename(&src, &dst).unwrap();
+
+        let app_state = test_app_state();
+        let state = unsafe { as_tauri_state(&app_state) };
+        run(fs_rename(
+            src.to_string_lossy().to_string(),
+            dst.to_string_lossy().to_string(),
+            state,
+        ))
+        .unwrap();
         assert!(!src.exists(), "旧路径应不存在");
         assert!(dst.exists(), "新路径应存在");
+
+        // 通过 fs_read_dir 验证
+        let entries = run(fs_read_dir(dir.path().to_string_lossy().to_string())).unwrap();
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&"new.txt"));
+        assert!(!names.contains(&"old.txt"));
+    }
+}
+
+/// validate_path_within_root 路径沙箱测试
+#[cfg(test)]
+mod sandbox_tests {
+    use super::*;
+
+    /// root_opt 为 None → 跳过校验，返回 Ok
+    #[test]
+    fn validate_root_none_allows_any_path() {
+        let result = validate_path_within_root(&None, std::path::Path::new("C:\\any\\path"));
+        assert!(result.is_ok(), "root_opt=None 应放行任意路径");
+    }
+
+    /// 路径在根内 → 返回 Ok
+    #[test]
+    fn validate_path_inside_root() {
+        let root = tempfile::tempdir().unwrap();
+        let child = root.path().join("inside.txt");
+        std::fs::write(&child, "ok").unwrap();
+
+        let result = validate_path_within_root(
+            &Some(root.path().to_path_buf()),
+            &child,
+        );
+        assert!(result.is_ok(), "根内路径应放行");
+    }
+
+    /// 子目录路径在根内 → 返回 Ok
+    #[test]
+    fn validate_subdir_inside_root() {
+        let root = tempfile::tempdir().unwrap();
+        let subdir = root.path().join("sub").join("deep");
+        std::fs::create_dir_all(&subdir).unwrap();
+        let file = subdir.join("test.txt");
+        std::fs::write(&file, "ok").unwrap();
+
+        let result = validate_path_within_root(
+            &Some(root.path().to_path_buf()),
+            &file,
+        );
+        assert!(result.is_ok(), "子目录内文件应放行");
+    }
+
+    /// 路径在根外 → 返回 Err
+    #[test]
+    fn validate_path_outside_root_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let file = outside.path().join("outside.txt");
+        std::fs::write(&file, "bad").unwrap();
+
+        let result = validate_path_within_root(
+            &Some(root.path().to_path_buf()),
+            &file,
+        );
+        assert!(result.is_err(), "根外路径应拒绝");
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("超出项目范围"), "错误消息应含'超出项目范围'");
+    }
+
+    /// 目标路径不存在 → 沿父级上溯找到已存在祖先（降级路径）
+    #[test]
+    fn validate_nonexistent_path_ancestor_fallback() {
+        let root = tempfile::tempdir().unwrap();
+        // 创建一个已存在的父目录，再指向其中不存在的文件
+        let parent = root.path().join("existing_parent");
+        std::fs::create_dir(&parent).unwrap();
+        let nonexistent = parent.join("not_created_yet.txt");
+
+        let result = validate_path_within_root(
+            &Some(root.path().to_path_buf()),
+            &nonexistent,
+        );
+        assert!(result.is_ok(), "不存在的文件（父目录在根内）应放行");
+    }
+
+    /// 不存在的路径在根外 → 沿父级上溯后仍在根外，应拒绝
+    #[test]
+    fn validate_nonexistent_path_outside_root_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let nonexistent = outside.path().join("not_exists.txt");
+
+        let result = validate_path_within_root(
+            &Some(root.path().to_path_buf()),
+            &nonexistent,
+        );
+        assert!(result.is_err(), "根外不存在的路径应拒绝");
+    }
+
+    /// 路径穿越攻击（../ 逃逸） → 应拒绝
+    #[test]
+    fn validate_path_traversal_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        // 构造 root/sub/../outside → 应该在 canonicalize 后逃出 root
+        let subdir = root.path().join("sub");
+        std::fs::create_dir(&subdir).unwrap();
+        let traversal = subdir.join("..").join("..").join("Windows");
+
+        let result = validate_path_within_root(
+            &Some(root.path().to_path_buf()),
+            &traversal,
+        );
+        // ../ 逃逸经 canonicalize 后应解析到根外路径
+        assert!(result.is_err(), "路径穿越应拒绝");
+    }
+
+    /// 符号链接指向根外 → 应拒绝
+    #[cfg(windows)]
+    #[test]
+    fn validate_symlink_outside_root_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let outside_file = outside.path().join("target.txt");
+        std::fs::write(&outside_file, "data").unwrap();
+
+        let link = root.path().join("link.txt");
+        // Windows 符号链接（需管理员权限，优雅降级）
+        let symlink_result = std::os::windows::fs::symlink_file(&outside_file, &link);
+        if symlink_result.is_err() {
+            // 无权限创建符号链接时跳过测试
+            return;
+        }
+
+        let result = validate_path_within_root(
+            &Some(root.path().to_path_buf()),
+            &link,
+        );
+        assert!(result.is_err(), "指向根外的符号链接应拒绝");
+    }
+
+    /// root 本身是 symlink → 应仍能正确校验
+    #[cfg(windows)]
+    #[test]
+    fn validate_root_is_symlink() {
+        let original_root = tempfile::tempdir().unwrap();
+        let file = original_root.path().join("data.txt");
+        std::fs::write(&file, "ok").unwrap();
+
+        // 创建到 root 的 symlink
+        let link_parent = tempfile::tempdir().unwrap();
+        let link_root = link_parent.path().join("linked_root");
+        let symlink_result = std::os::windows::fs::symlink_dir(&original_root, &link_root);
+        if symlink_result.is_err() {
+            return; // 无权限，跳过
+        }
+
+        let linked_file = link_root.join("data.txt");
+        let result = validate_path_within_root(
+            &Some(link_root),
+            &linked_file,
+        );
+        assert!(result.is_ok(), "symlink 根内路径应放行");
+    }
+
+    /// 根路径自身 canonicalize 失败 → 返回 Err
+    #[test]
+    fn validate_root_canonicalize_fails() {
+        let result = validate_path_within_root(
+            &Some(std::path::PathBuf::from("Z:\\nonexistent_drive\\root")),
+            std::path::Path::new("Z:\\nonexistent_drive\\root\\file.txt"),
+        );
+        assert!(result.is_err(), "根 canonicalize 失败应返回 Err");
     }
 }
 

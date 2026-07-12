@@ -9,11 +9,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 
 // ─── Hoisted mocks ───
-const { mockDispatch, mockDestroy, mockOnFontSizeChange, mockReconfigure } = vi.hoisted(() => ({
+const { mockDispatch, mockDestroy, mockOnFontSizeChange, mockReconfigure, mockDialogSave } = vi.hoisted(() => ({
   mockDispatch: vi.fn(),
   mockDestroy: vi.fn(),
   mockOnFontSizeChange: vi.fn(),
   mockReconfigure: vi.fn().mockReturnValue([]),
+  mockDialogSave: vi.fn<(options?: { defaultPath?: string; filters?: Array<{ name: string; extensions: string[] }> }) => Promise<string | null>>(),
 }));
 
 let capturedStateExtensions: unknown[] | null = null;
@@ -83,10 +84,15 @@ vi.mock("../ipc/git", () => ({
   gitDiff: vi.fn().mockResolvedValue([]),
 }));
 
-vi.mock("./gitGutter", () => ({
+vi.mock("../panels/editor/gitGutter", () => ({
   diffGutter: vi.fn(() => []),
   updateDiffGutter: vi.fn(),
   clearDiffGutter: vi.fn(),
+}));
+
+// useCodeMirror.ts import { save } from "../../ipc/dialog"
+vi.mock("../ipc/dialog", () => ({
+  save: mockDialogSave,
 }));
 
 // 只 stub usePanelFocus，保留其余真实实现
@@ -98,6 +104,10 @@ vi.mock("../features/shortcuts", async (importOriginal) => {
 
 import { useCodeMirror } from "../panels/editor/useCodeMirror";
 import { getActiveEditor } from "../panels/editor/activeEditor";
+// 导入 mocked 模块，供 handleSave 测试验证 IPC 调用
+import { fs } from "../ipc";
+import { gitDiff } from "../ipc/git";
+import { updateDiffGutter, clearDiffGutter } from "../panels/editor/gitGutter";
 
 // ─── 辅助函数 ───
 
@@ -474,5 +484,211 @@ describe("useCodeMirror 字体大小", () => {
     // 验证 activate 回调是函数
     const activateFn = mockUsePanelFocus.mock.calls[0][2];
     expect(typeof activateFn).toBe("function");
+  });
+});
+
+// ─── handleSave 保存逻辑 ───
+
+describe("handleSave 保存逻辑", () => {
+  let container: HTMLDivElement;
+
+  /** 渲染 hook、等待 EditorView 初始化、通过 usePanelFocus 激活编辑器，返回 editorActions */
+  async function renderAndActivate(overrides?: Partial<Parameters<typeof useCodeMirror>[0]>) {
+    const result = renderHook(() =>
+      useCodeMirror({
+        container,
+        filePath: "/test/save.js",
+        panelId: "hs",
+        ...overrides,
+      }),
+    );
+
+    // 等待异步 initEditor 完成（EditorView 创建 → viewRef.current 就位）
+    await waitFor(() => expect(capturedStateExtensions).toBeDefined());
+
+    // 通过 mockUsePanelFocus 的 activate 回调设置 activeEditor
+    const activateCall = mockUsePanelFocus.mock.calls[mockUsePanelFocus.mock.calls.length - 1];
+    const activateFn = activateCall?.[2] as (() => void) | undefined;
+    if (activateFn) activateFn();
+
+    return result;
+  }
+
+  beforeEach(() => {
+    container = createContainer();
+    capturedStateExtensions = null;
+    vi.clearAllMocks();
+    // 默认：save 对话框取消
+    mockDialogSave.mockResolvedValue(null);
+    // fs.writeFile 默认成功
+    (fs.writeFile as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    // gitDiff 默认返回空（干净文件）
+    (gitDiff as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    container.innerHTML = "";
+  });
+
+  it("HS1: 有 filePath 时直接保存——调 writeFile，不弹另存为对话框", async () => {
+    const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+
+    await renderAndActivate({ filePath: "/test/save.js", panelId: "hs-1" });
+
+    const editor = getActiveEditor()!;
+    expect(editor).not.toBeNull();
+    editor.save();
+
+    // handleSave 是 async → 等待 writeFile 被调用
+    await waitFor(() => {
+      expect(fs.writeFile).toHaveBeenCalledWith("/test/save.js", expect.any(String));
+    });
+
+    // 有 filePath → 不应弹另存为对话框
+    expect(mockDialogSave).not.toHaveBeenCalled();
+
+    dispatchSpy.mockRestore();
+  });
+
+  it("HS2: 无 filePath 时弹出另存为对话框", async () => {
+    mockDialogSave.mockResolvedValue(null); // 用户取消
+
+    // filePath 为 undefined → 弹出另存为
+    await renderAndActivate({ filePath: undefined, panelId: "hs-2" });
+
+    const editor = getActiveEditor()!;
+    editor.save();
+
+    await waitFor(() => {
+      expect(mockDialogSave).toHaveBeenCalledWith({
+        defaultPath: "Untitled.txt",
+        filters: [{ name: "所有文件", extensions: ["*"] }],
+      });
+    });
+
+    // 用户取消 → 不调 writeFile
+    expect(fs.writeFile).not.toHaveBeenCalled();
+  });
+
+  it("HS3: 无 filePath + 用户选择路径 → writeFile 写到新路径", async () => {
+    mockDialogSave.mockResolvedValue("/user/selected/path.txt");
+
+    await renderAndActivate({ filePath: undefined, panelId: "hs-3" });
+
+    const editor = getActiveEditor()!;
+    editor.save();
+
+    await waitFor(() => {
+      expect(mockDialogSave).toHaveBeenCalled();
+    });
+
+    await waitFor(() => {
+      expect(fs.writeFile).toHaveBeenCalledWith("/user/selected/path.txt", expect.any(String));
+    });
+  });
+
+  it("HS4: 保存成功后调 gitDiff 刷新 gutter", async () => {
+    (gitDiff as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { oldStart: 1, oldEnd: 2, newStart: 1, newEnd: 3, header: "@@ -1,2 +1,3 @@" },
+    ]);
+
+    await renderAndActivate({ filePath: "/test/save.js", panelId: "hs-4" });
+
+    const editor = getActiveEditor()!;
+    editor.save();
+
+    // 等待 gitDiff 被调用 + then 回调执行
+    await waitFor(() => {
+      expect(gitDiff).toHaveBeenCalled();
+    });
+
+    await waitFor(() => {
+      expect(updateDiffGutter).toHaveBeenCalled();
+    });
+  });
+
+  it("HS5: 保存后文件干净（无 diff）→ clearDiffGutter 被调用", async () => {
+    (gitDiff as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+    await renderAndActivate({ filePath: "/test/save.js", panelId: "hs-5" });
+
+    const editor = getActiveEditor()!;
+    editor.save();
+
+    await waitFor(() => {
+      expect(gitDiff).toHaveBeenCalled();
+    });
+
+    await waitFor(() => {
+      expect(clearDiffGutter).toHaveBeenCalled();
+    });
+  });
+
+  it("HS6: 保存失败 → window.alert 被调用", async () => {
+    (fs.writeFile as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("磁盘已满"));
+
+    const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => {});
+
+    await renderAndActivate({ filePath: "/test/save.js", panelId: "hs-6" });
+
+    const editor = getActiveEditor()!;
+    editor.save();
+
+    await waitFor(() => {
+      expect(fs.writeFile).toHaveBeenCalled();
+    });
+
+    await waitFor(() => {
+      expect(alertSpy).toHaveBeenCalled();
+    });
+
+    alertSpy.mockRestore();
+  });
+
+  it("HS7: 保存成功后派发 slterm:file-saved CustomEvent", async () => {
+    const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+
+    await renderAndActivate({ filePath: "/test/save.js", panelId: "hs-7" });
+
+    const editor = getActiveEditor()!;
+    editor.save();
+
+    await waitFor(() => {
+      expect(fs.writeFile).toHaveBeenCalled();
+    });
+
+    // CustomEvent 的 type/detail 是非枚举 getter，需直接访问属性
+    expect(dispatchSpy).toHaveBeenCalled();
+    const savedEvent = dispatchSpy.mock.calls[0][0] as CustomEvent;
+    expect(savedEvent.type).toBe("slterm:file-saved");
+    expect((savedEvent as CustomEvent<{ path: string }>).detail.path).toBe("/test/save.js");
+
+    dispatchSpy.mockRestore();
+  });
+
+  it("HS8: 无 filePath 首次保存 → 派发 slterm:file-saved-as（路径变更）", async () => {
+    mockDialogSave.mockResolvedValue("/new/path.txt");
+    const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+
+    await renderAndActivate({ filePath: undefined, panelId: "hs-8" });
+
+    const editor = getActiveEditor()!;
+    editor.save();
+
+    await waitFor(() => {
+      expect(fs.writeFile).toHaveBeenCalled();
+    });
+
+    // oldPath(undefined) !== path("/new/path.txt") → 派发 file-saved-as
+    expect(dispatchSpy).toHaveBeenCalled();
+    const savedAsEvent = dispatchSpy.mock.calls[0][0] as CustomEvent;
+    expect(savedAsEvent.type).toBe("slterm:file-saved-as");
+    expect((savedAsEvent as CustomEvent<{ panelId: string; oldPath: string | null; newPath: string }>).detail).toEqual({
+      panelId: "hs-8",
+      oldPath: null,
+      newPath: "/new/path.txt",
+    });
+
+    dispatchSpy.mockRestore();
   });
 });

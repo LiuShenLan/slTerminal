@@ -285,6 +285,41 @@ describe("ShortcutRegistry", () => {
       const event = dispatchKeydown({ code: "KeyA" });
       expect(event.defaultPrevented).toBe(true);
     });
+
+    it("metaKey=true 时匹配", () => {
+      const unreg = registry.register([
+        cmd({
+          id: "meta-cmd",
+          defaultKey: { ctrlKey: false, shiftKey: false, altKey: false, metaKey: true, code: "KeyM" },
+          handler: () => true,
+        }),
+      ]);
+      handlers.push(unreg);
+
+      const event = dispatchKeydown({ metaKey: true, code: "KeyM" });
+      expect(event.defaultPrevented).toBe(true);
+    });
+
+    it("metaKey + ctrlKey 组合精确匹配", () => {
+      const unreg = registry.register([
+        cmd({
+          id: "ctrl-meta",
+          defaultKey: { ctrlKey: true, shiftKey: false, altKey: false, metaKey: true, code: "KeyM" },
+          handler: () => true,
+        }),
+      ]);
+      handlers.push(unreg);
+
+      // 仅 metaKey 不匹配
+      const e1 = dispatchKeydown({ metaKey: true, code: "KeyM" });
+      expect(e1.defaultPrevented).toBe(false);
+      // 仅 ctrlKey 不匹配
+      const e2 = dispatchKeydown({ ctrlKey: true, code: "KeyM" });
+      expect(e2.defaultPrevented).toBe(false);
+      // ctrlKey + metaKey 匹配
+      const e3 = dispatchKeydown({ ctrlKey: true, metaKey: true, code: "KeyM" });
+      expect(e3.defaultPrevented).toBe(true);
+    });
   });
 
   // ---- 6. IME 透传 ----
@@ -381,6 +416,18 @@ describe("ShortcutRegistry", () => {
 
       const event = dispatchKeydown({ ctrlKey: true, code: "KeyK" });
       expect(event.defaultPrevented).toBe(true);
+    });
+
+    it("handler 返回 true → stopPropagation 被调用", () => {
+      const stopSpy = vi.spyOn(Event.prototype, "stopPropagation");
+      const unreg = registry.register([
+        cmd({ id: "stop", defaultKey: ctrlK, handler: () => true }),
+      ]);
+      handlers.push(unreg);
+
+      dispatchKeydown({ ctrlKey: true, code: "KeyK" });
+      expect(stopSpy).toHaveBeenCalled();
+      stopSpy.mockRestore();
     });
 
     it("handler 返回 false → 事件透传", () => {

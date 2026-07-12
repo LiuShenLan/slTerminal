@@ -65,10 +65,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 | 层级 | 名称 | 技术栈 | 运行命令 | 约用例数 |
 |------|------|--------|----------|---------|
-| L1 | Rust 单元/集成 | `cargo test`、`tempfile` 隔离 | `cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1` | ~139 |
-| L2 | 前端单元/集成 | Vitest + jsdom | `npm test` | ~730 |
-| L3 | 终端 headless 渲染 | Vitest + `@xterm/headless` | `npm run test:l3` | 5 |
-| L4 | 端到端 (E2E) | WDIO + embedded driver | `npm run wdio` | 7 |
+| L1 | Rust 单元/集成 | `cargo test`、`tempfile` 隔离 | `cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1` | ~193 |
+| L2 | 前端单元/集成 | Vitest + jsdom | `npm test` | ~1022 |
+| L3 | 终端 headless 渲染 | Vitest + `@xterm/headless` | `npm run test:l3` | 9 |
+| L4 | 端到端 (E2E) | WDIO + embedded driver | `npm run wdio` | 11 |
 
 核心原则：
 - **隔离优先**：L1 用 `tempfile::tempdir()` 隔离文件系统、`SPAWN_LOCK` 串行化 PTY；L2 用 `vi.mock()` 隔离 IPC/终端库；L4 用 embedded driver 隔离浏览器依赖

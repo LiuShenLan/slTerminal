@@ -12,32 +12,24 @@
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { renderHook, waitFor, act, cleanup } from "@testing-library/react";
-import type { DirEntry } from "../types/fs";
 
-// ─── Hoisted mocks ───
+// ─── 共享 mock（通过 setup.ts 注册到 globalThis，vi.hoisted 中可用）───
+import { makeVfs, mockEntry, findNode } from "./helpers/vfs";
+
 const mocks = vi.hoisted(() => {
-  const mockReadDir = vi.fn();
-  const mockGitStatus = vi.fn();
-  // 保存 onFsEvent 注册的回调，供测试手动触发（模拟后端 fs-event）
-  let fsEventCallback: (() => void) | null = null;
-  const mockOnFsEvent = vi.fn((cb: () => void) => {
-    fsEventCallback = cb;
-    return () => {
-      fsEventCallback = null;
-    };
-  });
+  const fs = __createFsMocks();
+  const git = __createGitMocks();
+  const notify = __createNotifyMocks();
+
   return {
-    mockReadDir,
-    mockGitStatus,
-    mockOnFsEvent,
-    triggerFsEvent() {
-      fsEventCallback?.();
-    },
+    get mockReadDir() { return fs.readDir; },
+    get mockGitStatus() { return git.gitStatus; },
+    get mockOnFsEvent() { return notify.onFsEvent; },
+    get triggerFsEvent() { return notify.triggerFsEvent; },
     resetAll() {
-      mockReadDir.mockReset();
-      mockGitStatus.mockReset();
-      mockOnFsEvent.mockClear();
-      fsEventCallback = null;
+      fs.readDir.mockReset();
+      git.gitStatus.mockReset();
+      notify.onFsEvent.mockClear();
     },
   };
 });
@@ -59,45 +51,9 @@ vi.mock("../ipc/notify", () => ({
   onFsEvent: mocks.mockOnFsEvent,
 }));
 
-// 在 IPC mock 之后导入被测 hook
 import { useFileTree } from "../features/explorer/useFileTree";
 
 // ─── 辅助 ───
-
-/** 创建模拟 DirEntry */
-function mockEntry(name: string, isDir: boolean, path: string): DirEntry {
-  return {
-    name,
-    path,
-    isDir,
-    ...(isDir ? {} : { size: 1024, modified: 1 }),
-  };
-}
-
-/**
- * 虚拟文件系统：Map<dirPath, DirEntry[]>。
- * mockReadDir 按传入 dirPath 分派对应子项；测试可动态增删 entries 模拟磁盘变更。
- */
-function makeVfs(initial: Record<string, DirEntry[]>) {
-  const vfs = new Map<string, DirEntry[]>(Object.entries(initial));
-  mocks.mockReadDir.mockImplementation(async (dirPath: string) => {
-    if (!vfs.has(dirPath)) throw new Error(`ENOENT: ${dirPath}`);
-    return vfs.get(dirPath)!;
-  });
-  return vfs;
-}
-
-/** 在 rootNodes 中按 path 查找节点（递归） */
-function findNode(nodes: ReturnType<typeof useFileTree>["rootNodes"], path: string):
-  | ReturnType<typeof useFileTree>["rootNodes"][number]
-  | undefined {
-  for (const n of nodes) {
-    if (n.entry.path === path) return n;
-    const found = findNode(n.children, path);
-    if (found) return found;
-  }
-  return undefined;
-}
 
 /** 展开指定路径（驱动 toggleExpand + 等待异步 children 加载） */
 async function expand(
@@ -125,7 +81,7 @@ describe("useFileTree 刷新保留展开状态", () => {
   // ═══ A. reloadPreservingExpanded 递归重建正确性 ═══
 
   it("R1: 单层展开目录 → refresh() 后 expanded 保留且 children 保留", async () => {
-    makeVfs({
+    makeVfs(mocks.mockReadDir, {
       "/proj": [mockEntry("src", true, "/proj/src")],
       "/proj/src": [mockEntry("a.ts", false, "/proj/src/a.ts")],
     });
@@ -145,7 +101,7 @@ describe("useFileTree 刷新保留展开状态", () => {
   });
 
   it("R2: 展开目录磁盘新增文件 → refresh 后 children 含新文件（折叠态）", async () => {
-    const vfs = makeVfs({
+    const vfs = makeVfs(mocks.mockReadDir, {
       "/proj": [mockEntry("src", true, "/proj/src")],
       "/proj/src": [mockEntry("a.ts", false, "/proj/src/a.ts")],
     });
@@ -169,7 +125,7 @@ describe("useFileTree 刷新保留展开状态", () => {
   });
 
   it("R3: 展开目录磁盘删除文件 → refresh 后 children 不含该文件", async () => {
-    const vfs = makeVfs({
+    const vfs = makeVfs(mocks.mockReadDir, {
       "/proj": [mockEntry("src", true, "/proj/src")],
       "/proj/src": [
         mockEntry("a.ts", false, "/proj/src/a.ts"),
@@ -192,7 +148,7 @@ describe("useFileTree 刷新保留展开状态", () => {
   });
 
   it("R4: 多层嵌套展开（root→src→components）→ refresh 后三层 expanded 全保留", async () => {
-    makeVfs({
+    makeVfs(mocks.mockReadDir, {
       "/proj": [mockEntry("src", true, "/proj/src")],
       "/proj/src": [mockEntry("components", true, "/proj/src/components")],
       "/proj/src/components": [
@@ -221,7 +177,7 @@ describe("useFileTree 刷新保留展开状态", () => {
   });
 
   it("R7: 未展开兄弟目录 refresh 后仍折叠（不误展开）", async () => {
-    makeVfs({
+    makeVfs(mocks.mockReadDir, {
       "/proj": [
         mockEntry("src", true, "/proj/src"),
         mockEntry("docs", true, "/proj/docs"),
@@ -245,7 +201,7 @@ describe("useFileTree 刷新保留展开状态", () => {
   });
 
   it("R8: 空目录展开后 refresh → 保持 expanded、children=[]", async () => {
-    makeVfs({
+    makeVfs(mocks.mockReadDir, {
       "/proj": [mockEntry("empty", true, "/proj/empty")],
       "/proj/empty": [],
     });
@@ -263,7 +219,7 @@ describe("useFileTree 刷新保留展开状态", () => {
   });
 
   it("R10: 旧节点 expanded 但新一层同 path 变为文件 → 不递归、不报错", async () => {
-    const vfs = makeVfs({
+    const vfs = makeVfs(mocks.mockReadDir, {
       "/proj": [mockEntry("thing", true, "/proj/thing")],
       "/proj/thing": [mockEntry("x.ts", false, "/proj/thing/x.ts")],
     });
@@ -287,7 +243,7 @@ describe("useFileTree 刷新保留展开状态", () => {
   // ═══ B. 边界与容错分支 ═══
 
   it("R6: 已展开目录被磁盘删除 → 节点连子树消失、不抛错", async () => {
-    const vfs = makeVfs({
+    const vfs = makeVfs(mocks.mockReadDir, {
       "/proj": [
         mockEntry("src", true, "/proj/src"),
         mockEntry("keep", true, "/proj/keep"),
@@ -312,7 +268,7 @@ describe("useFileTree 刷新保留展开状态", () => {
   });
 
   it("R11: 已展开子目录 readDir 抛错 → 该目录 children 为空、不冒泡异常", async () => {
-    const vfs = makeVfs({
+    const vfs = makeVfs(mocks.mockReadDir, {
       "/proj": [mockEntry("src", true, "/proj/src")],
       "/proj/src": [mockEntry("a.ts", false, "/proj/src/a.ts")],
     });
@@ -351,7 +307,7 @@ describe("useFileTree 刷新保留展开状态", () => {
   });
 
   it("R12: 根目录被删（readDir 抛错）→ rootNodes 置空、不抛错", async () => {
-    const vfs = makeVfs({
+    const vfs = makeVfs(mocks.mockReadDir, {
       "/proj": [mockEntry("src", true, "/proj/src")],
       "/proj/src": [mockEntry("a.ts", false, "/proj/src/a.ts")],
     });
@@ -372,7 +328,7 @@ describe("useFileTree 刷新保留展开状态", () => {
   // ═══ C. gitStatus 刷新路径 ═══
 
   it("R5: refresh 后 gitStatus 被调用、gitStatusMap 更新", async () => {
-    makeVfs({
+    makeVfs(mocks.mockReadDir, {
       "/proj": [mockEntry("src", true, "/proj/src")],
       "/proj/src": [mockEntry("a.ts", false, "/proj/src/a.ts")],
     });
@@ -396,7 +352,7 @@ describe("useFileTree 刷新保留展开状态", () => {
   });
 
   it("R13: gitStatus 抛错 → gitStatusMap 降级为空 Map、不冒泡", async () => {
-    makeVfs({
+    makeVfs(mocks.mockReadDir, {
       "/proj": [mockEntry("src", true, "/proj/src")],
       "/proj/src": [mockEntry("a.ts", false, "/proj/src/a.ts")],
     });
@@ -423,7 +379,7 @@ describe("useFileTree 刷新保留展开状态", () => {
   // ═══ D. 三条触发路径均保留展开 ═══
 
   it("R14: dispatch slterm:file-saved → 展开状态保留（Ctrl+S 路径）", async () => {
-    makeVfs({
+    makeVfs(mocks.mockReadDir, {
       "/proj": [mockEntry("src", true, "/proj/src")],
       "/proj/src": [mockEntry("a.ts", false, "/proj/src/a.ts")],
     });
@@ -447,7 +403,7 @@ describe("useFileTree 刷新保留展开状态", () => {
   it("R15: fs-event 触发（200ms 去抖）→ 展开状态保留", async () => {
     vi.useFakeTimers();
     try {
-      makeVfs({
+      makeVfs(mocks.mockReadDir, {
         "/proj": [mockEntry("src", true, "/proj/src")],
         "/proj/src": [mockEntry("a.ts", false, "/proj/src/a.ts")],
       });
@@ -474,7 +430,7 @@ describe("useFileTree 刷新保留展开状态", () => {
   });
 
   it("R16: 直接调 refresh()（CRUD 路径）→ 展开状态保留", async () => {
-    makeVfs({
+    makeVfs(mocks.mockReadDir, {
       "/proj": [mockEntry("src", true, "/proj/src")],
       "/proj/src": [mockEntry("a.ts", false, "/proj/src/a.ts")],
     });
@@ -492,7 +448,7 @@ describe("useFileTree 刷新保留展开状态", () => {
   // ═══ E. 竞态 ═══
 
   it("R17: 连续两次 refresh（后者磁盘不同）→ last-write-wins 且展开保留", async () => {
-    const vfs = makeVfs({
+    const vfs = makeVfs(mocks.mockReadDir, {
       "/proj": [mockEntry("src", true, "/proj/src")],
       "/proj/src": [mockEntry("a.ts", false, "/proj/src/a.ts")],
     });

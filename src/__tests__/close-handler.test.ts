@@ -4,7 +4,7 @@
 // render <App /> 后捕获 registerCloseHandler 回调，模拟关闭事件验证保存序列。
 // 覆盖：正常关闭 / 保存失败仍销毁 / 无 activePageId / 无 __dockviewApi
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import React from "react";
 import { render, waitFor } from "@testing-library/react";
 
@@ -289,5 +289,147 @@ describe("onCloseRequested 关闭钩子", () => {
 
     // 不应崩溃
     expect(mocks.mockSaveAllProjects).toHaveBeenCalled();
+  });
+});
+
+// ─── P1-7: PTY kill 路径测试 ───
+
+import { TerminalRegistry } from "../panels/terminal/TerminalRegistry";
+import { pty } from "../ipc";
+
+describe("onCloseRequested PTY kill 路径", () => {
+  beforeEach(() => {
+    mocks.resetAll();
+    setupLocalStorage();
+    delete ((window as unknown) as Record<string, unknown>).__dockviewApi;
+    // 重置 TerminalRegistry mock 为空 Map
+    vi.mocked(TerminalRegistry.getAll).mockReturnValue(new Map());
+    vi.mocked(pty.kill).mockReset();
+    vi.mocked(pty.kill).mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function renderAndCapture(): Promise<() => void | Promise<void>> {
+    render(React.createElement(App));
+    await waitFor(() => {
+      expect(mocks.capturedHandler).not.toBeNull();
+    });
+    return mocks.capturedHandler!;
+  }
+
+  it("7. TerminalRegistry 有活跃 session → pty.kill 被调用", async () => {
+    (window as unknown as Record<string, unknown>).__dockviewApi = { _mock: true };
+
+    vi.mocked(TerminalRegistry.getAll).mockReturnValue(
+      new Map([
+        ["panel-1", { term: {} as never, sessionId: "session-001", webglAddon: null, fitAddon: {} as never }],
+        ["panel-2", { term: {} as never, sessionId: "session-002", webglAddon: null, fitAddon: {} as never }],
+      ]),
+    );
+
+    const handler = await renderAndCapture();
+    await handler();
+
+    // 每个 session 都调用了 pty.kill
+    expect(pty.kill).toHaveBeenCalledWith("session-001");
+    expect(pty.kill).toHaveBeenCalledWith("session-002");
+    expect(pty.kill).toHaveBeenCalledTimes(2);
+  });
+
+  it("8. 单条 kill 失败 → 不阻塞其他 kill（catch 静默处理）", async () => {
+    (window as unknown as Record<string, unknown>).__dockviewApi = { _mock: true };
+
+    // session-001 的 kill 失败
+    vi.mocked(pty.kill)
+      .mockRejectedValueOnce(new Error("process not found"))
+      .mockResolvedValueOnce(undefined);
+
+    vi.mocked(TerminalRegistry.getAll).mockReturnValue(
+      new Map([
+        ["panel-1", { term: {} as never, sessionId: "session-001", webglAddon: null, fitAddon: {} as never }],
+        ["panel-2", { term: {} as never, sessionId: "session-002", webglAddon: null, fitAddon: {} as never }],
+      ]),
+    );
+
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const handler = await renderAndCapture();
+    await handler();
+
+    // 两个 kill 都被调用
+    expect(pty.kill).toHaveBeenCalledTimes(2);
+    // 失败日志已输出
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining("[slTerminal] 关闭时 kill PTY 失败 (session-001):"),
+      expect.any(Error),
+    );
+
+    consoleSpy.mockRestore();
+  });
+
+  it("9. 并发 kill + 单条失败 → Promise.all 不 reject（每条有 .catch）", async () => {
+    (window as unknown as Record<string, unknown>).__dockviewApi = { _mock: true };
+
+    // 全部失败也不抛异常
+    vi.mocked(pty.kill).mockRejectedValue(new Error("kill failed"));
+
+    vi.mocked(TerminalRegistry.getAll).mockReturnValue(
+      new Map([
+        ["panel-1", { term: {} as never, sessionId: "session-001", webglAddon: null, fitAddon: {} as never }],
+      ]),
+    );
+
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const handler = await renderAndCapture();
+    // 不应抛异常
+    await expect(handler()).resolves.toBeUndefined();
+
+    consoleSpy.mockRestore();
+  });
+
+  it("10. kill 超过 3s → Promise.race 超时不阻塞关闭", async () => {
+    (window as unknown as Record<string, unknown>).__dockviewApi = { _mock: true };
+
+    // kill 永远不 resolve
+    vi.mocked(pty.kill).mockReturnValue(new Promise(() => {}));
+
+    vi.mocked(TerminalRegistry.getAll).mockReturnValue(
+      new Map([
+        ["panel-1", { term: {} as never, sessionId: "session-001", webglAddon: null, fitAddon: {} as never }],
+      ]),
+    );
+
+    const handler = await renderAndCapture();
+
+    vi.useFakeTimers();
+
+    // 触发关闭
+    const closePromise = handler();
+
+    // 推进 3000ms 触发 race 超时
+    vi.advanceTimersByTime(3000);
+
+    await closePromise;
+
+    // 不应卡死
+    expect(pty.kill).toHaveBeenCalledWith("session-001");
+
+    vi.useRealTimers();
+  });
+
+  it("11. TerminalRegistry 为空 Map → pty.kill 不调用", async () => {
+    (window as unknown as Record<string, unknown>).__dockviewApi = { _mock: true };
+
+    vi.mocked(TerminalRegistry.getAll).mockReturnValue(new Map());
+
+    const handler = await renderAndCapture();
+    await handler();
+
+    // size=0 → 整个 kill 代码块跳过
+    expect(pty.kill).not.toHaveBeenCalled();
   });
 });

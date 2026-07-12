@@ -5,9 +5,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { DockviewApi } from "dockview-react";
 
-// mock isValidPanelType（只认 terminal 和 editor）
+// mock isValidPanelType（与真实 PANEL_TYPES 对齐：terminal / editor / htmlviewer）
 vi.mock("../workspace/panelRegistry", () => ({
-  isValidPanelType: (id: string) => id === "terminal" || id === "editor",
+  isValidPanelType: (id: string) => ["terminal", "editor", "htmlviewer"].includes(id),
 }));
 
 import { loadLayout, saveLayout } from "../workspace/layoutSerde";

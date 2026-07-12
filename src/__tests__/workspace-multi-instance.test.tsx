@@ -98,7 +98,7 @@ describe("多 Dockview 实例——架构验证", () => {
     // Watermark 文本可见（空布局不创建默认终端）
     expect(text).toContain("打开终端或编辑器开始工作");
     // 不创建 terminal 面板
-    expect(text).not.toMatch(/terminal-\d/);
+    expect(text).not.toMatch(/terminal-/);
   });
 
   it("2. 无活跃页面时不应初始化任何 Dockview", () => {
@@ -112,7 +112,7 @@ describe("多 Dockview 实例——架构验证", () => {
     // 侧栏正常渲染
     expect(text).toContain("multi-test");
     // 无 Dockview → 无终端面板（标题格式为 "terminal-N"）
-    expect(text).not.toMatch(/terminal-\d/);
+    expect(text).not.toMatch(/terminal-/);
   });
 
   it("3. 项目无页面时也不应创建 Dockview", () => {

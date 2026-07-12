@@ -70,6 +70,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `../ipc/git` — `gitStatus`
 - `../ipc/notify` — `startWatch`, `onFsEvent`
 
+**共享 mock 工厂**（`src/__tests__/` 下）：
+- `testMocks/explorerMocks.ts` — IPC mock 接口定义，实现在 `setup.ts` 中经 `globalThis` 注入供 `vi.hoisted()` 使用
+- `helpers/vfs.ts` — `makeVfs` / `findNode` / `mockEntry` 虚拟文件系统辅助
+- `helpers/workspace-setup.ts` — `resetProjectStores` / `seedExplorerProject` store 种子工厂
+- 已试点迁移 `explorer-rootpath-clear`、`explorer-refresh-preserve`、`explorer-notify` 三个文件
+
 **UI 弹窗 mock**（删除确认等）：
 - `@tauri-apps/plugin-dialog` — `ask`
 

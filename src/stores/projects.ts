@@ -288,6 +288,15 @@ export function cancelPendingSave(): void {
   }
 }
 
+/** 仅测试用：重置持久化状态（清 timer + 重置 initialized 标记） */
+export function _resetPersistence(): void {
+  if (saveTimer !== null) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+  initialized = false;
+}
+
 useProjects.subscribe(() => {
   if (!initialized) return;
   if (saveTimer !== null) clearTimeout(saveTimer);

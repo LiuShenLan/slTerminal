@@ -14,11 +14,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **暂停 ≠ 停止**：`paused` 标记仅阻止 `app_handle.emit("fs-event")` 上报前端。watcher 线程和 debouncer 继续运行，OS 文件监听句柄保持有效。
 
+**事件分类纯函数化**：`classify_event()` 原依赖 `DebouncedEvent`（字段不公开，不可测试）。现拆分为编排层 `classify_event(event: DebouncedEvent)` + 纯函数 `classify_by_kind(kind: &EventKind, paths: Vec<String>) -> FsEventPayload`。`EventKind` 是 notify crate 公开枚举，可直接构造测试——覆盖全部 7 种 EventKind 及子类型（19 条测试）。
+
 ## 文件
 
 | 文件 | 职责 |
 |------|------|
-| `mod.rs` | `FileWatcher` 结构体 + `fs_watch` Tauri 命令 + `classify_event` 事件分类 |
+| `mod.rs` | `FileWatcher` 结构体 + `fs_watch` Tauri 命令 + `classify_event` 事件分类（委托纯函数 `classify_by_kind`） |
 | `pool.rs` | `LruWatcherPool` — LRU 淘汰的 watcher 缓存池 |
 
 ## FileWatcher
@@ -58,7 +60,7 @@ Rust 测试分布在 2 个位置：
 
 | 位置 | 类型 | 用例数 |
 |------|------|--------|
-| `notify/mod.rs` `#[cfg(test)]` | 单元测试 | 7 |
+| `notify/mod.rs` `#[cfg(test)]` | 单元测试 | 7 + 19 (classify) |
 | `notify/pool.rs` `#[cfg(test)]` | 单元测试 | 12 |
 
 ### 无 AppHandle 测试

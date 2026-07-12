@@ -170,10 +170,10 @@ HTML 面板内容在 `<iframe sandbox="allow-scripts allow-same-origin" srcDoc>`
 
 | 文件 | 覆盖范围 |
 |------|----------|
-| `keystroke.test.ts` | formatKeystroke 各组合 + 固定序、parseKeystroke 合法往返/各类非法、isValidKeystrokeString、format∘parse 恒等 |
+| `keystroke.test.ts` | formatKeystroke 各组合（含 Meta 修饰键）+ 固定序、parseKeystroke 合法往返/各类非法、isValidKeystrokeString、format∘parse 恒等 |
 | `reserved.test.ts` | isReserved 各 context、每个保留键命中、非保留键放行、global 两集并集 |
 | `commandCatalog.test.ts` | 6 命令齐全 + 元数据、id 唯一、defaultKey 合法且非自身保留、commandFromMeta 合并/抛错 |
-| `shortcuts.test.ts` | 注册/注销、引用计数、上下文栈竞态、匹配排序、IME 透传、global、handler 返回值、**setOverrides 重绑/解绑/降级/冲突、resolve/forceContext、exportContextBindings、listCommands、_reset 清 overrides** |
+| `shortcuts.test.ts` | 注册/注销、引用计数、上下文栈竞态、匹配排序（含 metaKey 修饰键）、IME 透传、global、handler 返回值+stopPropagation、**setOverrides 重绑/解绑/降级/冲突、resolve/forceContext、exportContextBindings、listCommands、_reset 清 overrides** |
 | `wireKeybindings.test.ts` | 立即应用、store 变更重应用、unsubscribe |
 | `forwardGlobalShortcuts.test.ts` | 命中全局键→preventDefault+重放(props 正确)、非全局键不转发、多绑定/空绑定、detach 后失效、修饰键指纹区分 |
 | `usePanelFocus.test.ts` | focusin→pushContext+onActivate、focusout(离子树)→popContext+onDeactivate、内部焦点转移不触发、卸载清理 |

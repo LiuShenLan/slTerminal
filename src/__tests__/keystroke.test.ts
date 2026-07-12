@@ -36,6 +36,17 @@ describe("formatKeystroke", () => {
     // 无论字段设置顺序，输出恒为 Ctrl+Alt
     expect(formatKeystroke(ks({ altKey: true, ctrlKey: true, code: "KeyD" }))).toBe("Ctrl+Alt+KeyD");
   });
+
+  it("Meta 单独修饰键正确输出", () => {
+    expect(formatKeystroke(ks({ metaKey: true, code: "KeyK" }))).toBe("Meta+KeyK");
+    expect(formatKeystroke(ks({ metaKey: true, code: "Escape" }))).toBe("Meta+Escape");
+  });
+
+  it("Meta 与其他修饰键组合按规范序", () => {
+    // Ctrl→Shift→Alt→Meta 固定序
+    expect(formatKeystroke(ks({ ctrlKey: true, metaKey: true, code: "KeyW" }))).toBe("Ctrl+Meta+KeyW");
+    expect(formatKeystroke(ks({ shiftKey: true, metaKey: true, code: "KeyX" }))).toBe("Shift+Meta+KeyX");
+  });
 });
 
 describe("parseKeystroke", () => {
@@ -50,6 +61,11 @@ describe("parseKeystroke", () => {
     expect(parseKeystroke("Ctrl+Shift+Alt+Meta+KeyX")).toEqual(
       ks({ ctrlKey: true, shiftKey: true, altKey: true, metaKey: true, code: "KeyX" }),
     );
+  });
+
+  it("Meta 单独修饰键解析", () => {
+    expect(parseKeystroke("Meta+KeyK")).toEqual(ks({ metaKey: true, code: "KeyK" }));
+    expect(parseKeystroke("Ctrl+Meta+KeyW")).toEqual(ks({ ctrlKey: true, metaKey: true, code: "KeyW" }));
   });
 
   it("空串 → null", () => {
@@ -94,7 +110,7 @@ describe("isValidKeystrokeString", () => {
 });
 
 describe("format ∘ parse 恒等", () => {
-  const cases = ["KeyA", "Ctrl+KeyS", "Ctrl+Shift+KeyC", "Shift+Tab", "Ctrl+Shift+Alt+Meta+KeyX", "Enter", "Ctrl+Enter"];
+  const cases = ["KeyA", "Ctrl+KeyS", "Ctrl+Shift+KeyC", "Shift+Tab", "Ctrl+Shift+Alt+Meta+KeyX", "Enter", "Ctrl+Enter", "Meta+KeyK", "Ctrl+Meta+KeyW"];
   for (const s of cases) {
     it(`"${s}" 往返一致`, () => {
       const parsed = parseKeystroke(s);

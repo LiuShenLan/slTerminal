@@ -384,135 +384,24 @@ mod tests {
     // ---- B1: status_to_str 纯函数映射测试 ----
 
     #[test]
-    fn status_to_str_untracked() {
-        // untracked 文件：仅 WT_NEW，无 INDEX_NEW
-        let flags = git2::Status::WT_NEW;
-        assert_eq!(
-            super::status_to_str(flags),
-            Some("untracked"),
-            "未 add 的新文件应映射为 untracked（红色）"
-        );
-    }
-
-    #[test]
-    fn status_to_str_added_index_new_only() {
-        // git add 后的新文件：仅 INDEX_NEW
-        let flags = git2::Status::INDEX_NEW;
-        assert_eq!(
-            super::status_to_str(flags),
-            Some("added"),
-            "staged 新文件应映射为 added（绿色）"
-        );
-    }
-
-    #[test]
-    fn status_to_str_added_index_new_with_wt_new() {
-        // staged 新文件无后续修改：git2 同时置 INDEX_NEW 和 WT_NEW
-        let flags = git2::Status::INDEX_NEW | git2::Status::WT_NEW;
-        assert_eq!(
-            super::status_to_str(flags),
-            Some("added"),
-            "staged 新文件（INDEX_NEW|WT_NEW）应映射为 added"
-        );
-    }
-
-    #[test]
-    fn status_to_str_added_index_new_with_wt_modified() {
-        // staged 新文件后又有工作区修改：INDEX_NEW | WT_MODIFIED
-        let flags = git2::Status::INDEX_NEW | git2::Status::WT_MODIFIED;
-        assert_eq!(
-            super::status_to_str(flags),
-            Some("added"),
-            "staged 新文件后修改（INDEX_NEW|WT_MODIFIED）应映射为 added"
-        );
-    }
-
-    #[test]
-    fn status_to_str_modified_wt() {
-        // 已跟踪文件的工作区修改
-        let flags = git2::Status::WT_MODIFIED;
-        assert_eq!(
-            super::status_to_str(flags),
-            Some("modified"),
-            "工作区修改应映射为 modified（蓝色）"
-        );
-    }
-
-    #[test]
-    fn status_to_str_modified_index() {
-        // staged 修改
-        let flags = git2::Status::INDEX_MODIFIED;
-        assert_eq!(
-            super::status_to_str(flags),
-            Some("modified"),
-            "staged 修改应映射为 modified"
-        );
-    }
-
-    #[test]
-    fn status_to_str_deleted_wt() {
-        // 工作区删除
-        let flags = git2::Status::WT_DELETED;
-        assert_eq!(
-            super::status_to_str(flags),
-            Some("deleted"),
-            "工作区删除应映射为 deleted（灰色）"
-        );
-    }
-
-    #[test]
-    fn status_to_str_deleted_index() {
-        // staged 删除
-        let flags = git2::Status::INDEX_DELETED;
-        assert_eq!(
-            super::status_to_str(flags),
-            Some("deleted"),
-            "staged 删除应映射为 deleted"
-        );
-    }
-
-    #[test]
-    fn status_to_str_renamed_index() {
-        // staged 重命名
-        let flags = git2::Status::INDEX_RENAMED;
-        assert_eq!(
-            super::status_to_str(flags),
-            Some("renamed"),
-            "staged 重命名应映射为 renamed"
-        );
-    }
-
-    #[test]
-    fn status_to_str_renamed_wt() {
-        // 工作区重命名
-        let flags = git2::Status::WT_RENAMED;
-        assert_eq!(
-            super::status_to_str(flags),
-            Some("renamed"),
-            "工作区重命名应映射为 renamed"
-        );
-    }
-
-    #[test]
-    fn status_to_str_ignored() {
-        // gitignore 忽略的文件
-        let flags = git2::Status::IGNORED;
-        assert_eq!(
-            super::status_to_str(flags),
-            Some("ignored"),
-            "gitignore 忽略的文件应映射为 ignored"
-        );
-    }
-
-    #[test]
-    fn status_to_str_current_returns_none() {
-        // 无变更文件
-        let flags = git2::Status::CURRENT;
-        assert_eq!(
-            super::status_to_str(flags),
-            None,
-            "无变更文件应返回 None（跳过）"
-        );
+    fn test_status_to_str_all_flags() {
+        let cases = vec![
+            (git2::Status::WT_NEW, Some("untracked")),
+            (git2::Status::INDEX_NEW, Some("added")),
+            (git2::Status::INDEX_NEW | git2::Status::WT_NEW, Some("added")),
+            (git2::Status::INDEX_NEW | git2::Status::WT_MODIFIED, Some("added")),
+            (git2::Status::WT_MODIFIED, Some("modified")),
+            (git2::Status::INDEX_MODIFIED, Some("modified")),
+            (git2::Status::WT_DELETED, Some("deleted")),
+            (git2::Status::INDEX_DELETED, Some("deleted")),
+            (git2::Status::INDEX_RENAMED, Some("renamed")),
+            (git2::Status::WT_RENAMED, Some("renamed")),
+            (git2::Status::IGNORED, Some("ignored")),
+            (git2::Status::CURRENT, None),
+        ];
+        for (flags, expected) in cases {
+            assert_eq!(super::status_to_str(flags), expected);
+        }
     }
 
     #[test]
@@ -1299,81 +1188,7 @@ mod tests {
         assert_eq!(rel, "check.txt");
     }
 
-    // ---- line callback 精确 diff hunk（不含 context 行）----
-
-    /// 辅助：运行 line-callback 逻辑，返回 Vec<DiffHunk>（模拟 git_diff 命令）
-    fn collect_precise_hunks(repo: &git2::Repository, pathspec: &str) -> Vec<DiffHunk> {
-        let head = repo.head().unwrap();
-        let tree = head.peel_to_tree().unwrap();
-        let mut opts = git2::DiffOptions::new();
-        opts.pathspec(pathspec);
-        let diff = repo
-            .diff_tree_to_workdir_with_index(Some(&tree), Some(&mut opts))
-            .unwrap();
-
-        let mut hunks: Vec<DiffHunk> = Vec::new();
-        let mut cur_kind: Option<char> = None;
-        let mut cur_old_start: u32 = 0;
-        let mut cur_new_start: u32 = 0;
-        let mut cur_old_count: u32 = 0;
-        let mut cur_new_count: u32 = 0;
-
-        diff.foreach(
-            &mut |_d, _n| true,
-            None,
-            None,
-            Some(&mut |_d, _h, line| {
-                let c = line.origin();
-                let is_add = c == '+';
-                let is_del = c == '-';
-                let is_ctx = !is_add && !is_del;
-                let new_kind = if is_add { Some('+') } else if is_del { Some('-') } else { None };
-
-                if is_ctx || new_kind != cur_kind {
-                    if cur_old_count > 0 || cur_new_count > 0 {
-                        hunks.push(DiffHunk {
-                            old_start: cur_old_start,
-                            old_lines: cur_old_count,
-                            new_start: cur_new_start,
-                            new_lines: cur_new_count,
-                        });
-                    }
-                    cur_kind = new_kind;
-                    cur_old_start = 0;
-                    cur_new_start = 0;
-                    cur_old_count = 0;
-                    cur_new_count = 0;
-                }
-
-                if is_add {
-                    let n = line.new_lineno().unwrap_or(0);
-                    if cur_new_count == 0 { cur_new_start = n; }
-                    cur_new_count += 1;
-                } else if is_del {
-                    let o = line.old_lineno().unwrap_or(0);
-                    if cur_old_count == 0 { cur_old_start = o; }
-                    if cur_new_count == 0 { cur_new_start = o; }
-                    cur_old_count += 1;
-                }
-                true
-            }),
-        ).unwrap();
-
-        // flush last group
-        if cur_old_count > 0 || cur_new_count > 0 {
-            hunks.push(DiffHunk {
-                old_start: cur_old_start,
-                old_lines: cur_old_count,
-                new_start: cur_new_start,
-                new_lines: cur_new_count,
-            });
-        }
-
-        hunks
-    }
-
-    /// 修改一行 → 产生删除+新增 2 个 hunk（'-'和'+'是不同类型，各成一组）。
-    /// 前端 buildRangeSet 分别渲染 DeletedMarker 三角 + AddedMarker 绿色竖条。
+    /// 修改一行 → compute_diff_hunks 将删除+新增合并为 modified hunk
     #[test]
     fn git_diff_precise_single_line_modification() {
         let (_dir, path) = init_temp_repo();
@@ -1382,16 +1197,14 @@ mod tests {
         fs::write(path.join("f.txt"), "line1\nline2\nline3 MODIFIED\nline4\nline5\n").unwrap();
 
         let repo = git2::Repository::open(&path).unwrap();
-        let hunks = collect_precise_hunks(&repo, "f.txt");
+        let hunks = compute_diff_hunks(&repo, &path.join("f.txt"));
 
-        // 修改 = 删除(1) + 新增(1) = 2 个 hunk（不含 context 行）
-        assert_eq!(hunks.len(), 2, "修改一行 = 删除+新增，应产生 2 个 hunk");
-        // 第一个 hunk：删除行
+        // 修改 = 删除+新增合并为 1 个 modified hunk（生产算法：'-'→'+' → prev_was_del 配对）
+        assert_eq!(hunks.len(), 1, "修改一行应合并为 1 个 modified hunk");
         assert_eq!(hunks[0].old_start, 3);
         assert_eq!(hunks[0].old_lines, 1);
-        // 第二个 hunk：新增行
-        assert_eq!(hunks[1].new_start, 3);
-        assert_eq!(hunks[1].new_lines, 1);
+        assert_eq!(hunks[0].new_start, 3);
+        assert_eq!(hunks[0].new_lines, 1);
     }
 
     /// 连续新增多行 → 合并为 1 个 hunk
@@ -1402,7 +1215,7 @@ mod tests {
         fs::write(path.join("f.txt"), "line1\nline2\nline3\nline4\n").unwrap();
 
         let repo = git2::Repository::open(&path).unwrap();
-        let hunks = collect_precise_hunks(&repo, "f.txt");
+        let hunks = compute_diff_hunks(&repo, &path.join("f.txt"));
 
         assert_eq!(hunks.len(), 1, "连续新增应合并为 1 个 hunk");
         assert_eq!(hunks[0].old_lines, 0, "纯新增 old_lines=0");
@@ -1418,14 +1231,14 @@ mod tests {
         fs::write(path.join("f.txt"), "a\n").unwrap();
 
         let repo = git2::Repository::open(&path).unwrap();
-        let hunks = collect_precise_hunks(&repo, "f.txt");
+        let hunks = compute_diff_hunks(&repo, &path.join("f.txt"));
 
         assert_eq!(hunks.len(), 1, "连续删除应合并为 1 个 hunk");
         assert_eq!(hunks[0].old_lines, 3, "删除 3 行");
         assert_eq!(hunks[0].new_lines, 0, "纯删除 new_lines=0");
     }
 
-    /// 多处修改由 context 分隔 → 各自独立 hunk
+    /// 多处修改由 context 分隔 → 各自独立 modified hunk
     #[test]
     fn git_diff_precise_multiple_groups_separated_by_context() {
         let (_dir, path) = init_temp_repo();
@@ -1434,12 +1247,12 @@ mod tests {
         fs::write(path.join("f.txt"), "a\nB\nc\nd\ne\nF\ng\n").unwrap();
 
         let repo = git2::Repository::open(&path).unwrap();
-        let hunks = collect_precise_hunks(&repo, "f.txt");
+        let hunks = compute_diff_hunks(&repo, &path.join("f.txt"));
 
-        // git 可能将相近的修改合并为一个 hunk，取决于 context 行数
-        // 此处验证至少不是整段 context 都被标记
+        // 两处独立修改，各合并为 modified hunk
+        let modified_count = hunks.iter().filter(|h| h.old_lines > 0 && h.new_lines > 0).count();
+        assert_eq!(modified_count, 2, "应有 2 个独立的 modified hunk");
         let total_changed: u32 = hunks.iter().map(|h| h.new_lines + h.old_lines).sum();
-        // 只改了 2 行，所以总变更行数应为 2（1 old + 1 new per line = 2 per change = 4）
         assert!(total_changed <= 4, "总变更行数不应超过 4（修改 2 行=4），实际: {total_changed}");
     }
 
@@ -1450,7 +1263,7 @@ mod tests {
         commit_file(&path, "f.txt", "unchanged\n");
 
         let repo = git2::Repository::open(&path).unwrap();
-        let hunks = collect_precise_hunks(&repo, "f.txt");
+        let hunks = compute_diff_hunks(&repo, &path.join("f.txt"));
         assert_eq!(hunks.len(), 0, "无修改应返回 0 hunk");
     }
 
@@ -1776,5 +1589,60 @@ mod tests {
 
         let result = git2::Repository::discover(&deep);
         assert!(result.is_ok(), "discover 应从深层子目录找到仓库");
+    }
+
+    // ---- M14: get_or_open_repo 缓存与边界测试 ----
+
+    #[test]
+    fn get_or_open_repo_cache_miss() {
+        let (_dir, path) = init_temp_repo();
+        commit_file(&path, "test.txt", "hello");
+
+        let cache = std::sync::Mutex::new(std::collections::HashMap::new());
+        let result = super::get_or_open_repo(&cache, &path.to_string_lossy());
+        assert!(result.is_ok(), "首次访问应成功（cache miss → discover → 缓存）");
+        let (_repo, workdir) = result.unwrap();
+        assert_eq!(workdir, dunce::simplified(path.as_path()));
+    }
+
+    #[test]
+    fn get_or_open_repo_cache_hit() {
+        let (_dir, path) = init_temp_repo();
+        commit_file(&path, "test.txt", "hello");
+
+        let cache = std::sync::Mutex::new(std::collections::HashMap::new());
+        // 首次访问 → 缓存
+        let result1 = super::get_or_open_repo(&cache, &path.to_string_lossy());
+        assert!(result1.is_ok(), "首次访问应成功");
+
+        // 从子目录访问 → 缓存命中（子目录在 workdir 子树内）
+        let sub = path.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        let result2 = super::get_or_open_repo(&cache, &sub.to_string_lossy());
+        assert!(result2.is_ok(), "子目录访问应缓存命中");
+    }
+
+    #[test]
+    fn get_or_open_repo_discover_failure() {
+        // 非 git 目录 → discover 失败
+        let tmp = tempfile::tempdir().unwrap();
+        let non_repo = tmp.path().join("not_a_repo");
+        std::fs::create_dir_all(&non_repo).unwrap();
+
+        let cache = std::sync::Mutex::new(std::collections::HashMap::new());
+        let result = super::get_or_open_repo(&cache, &non_repo.to_string_lossy());
+        assert!(result.is_err(), "非 git 目录 discover 应失败");
+    }
+
+    #[test]
+    fn get_or_open_repo_bare_repo_returns_err() {
+        // bare repo 无工作目录 → workdir() 返回 None → Err
+        let tmp = tempfile::tempdir().unwrap();
+        let bare_path = tmp.path().join("bare.git");
+        git2::Repository::init_bare(&bare_path).unwrap();
+
+        let cache = std::sync::Mutex::new(std::collections::HashMap::new());
+        let result = super::get_or_open_repo(&cache, &bare_path.to_string_lossy());
+        assert!(result.is_err(), "bare repo 无 workdir 应返回错误");
     }
 }

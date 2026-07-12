@@ -488,8 +488,8 @@ pub mod conpty_custom {
         #[test]
         fn master_take_writer_second_fails() {
             let (_hpc, master) = create_conpty_pair(80, 24, 26100).unwrap();
-            let _ = master.take_writer();
-            assert!(master.take_writer().is_err());
+            assert!(master.take_writer().is_ok(), "第一次 take_writer 应成功");
+            assert!(master.take_writer().is_err(), "第二次 take_writer 应失败");
         }
 
         #[test]

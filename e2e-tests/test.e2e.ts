@@ -150,7 +150,7 @@ describe('slTerminal Phase 1 E2E', () => {
 });
 
 describe('键盘快捷键', () => {
-  it('Ctrl+Shift+V 将剪贴板内容粘贴到终端', async () => {
+  it('终端面板可通过 E2E helper 写入文本并读取', async () => {
     // 1. 创建新终端面板
     const panelId = 'e2e-paste-' + Date.now();
     await browser.execute((pid) => {
@@ -618,6 +618,261 @@ describe('HTML 面板 Ctrl+W 转发', () => {
         panelId,
       );
       expect(closed).toBe(true);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('终端跨页面存活 (H6)', () => {
+  // H6 需求：终端跨页面存活——页面切换不杀 PTY 进程。
+  // 多 Dockview 实例架构：页面切换通过 CSS display:none/block 隐藏/显示，
+  // 终端 xterm.js 实例不销毁，PTY 进程持续运行。
+  // 验证：创建终端写标记 → 切到第二页 → 切回 → 标记仍在。
+  it('should preserve terminal content after switching to another page and back', async () => {
+    // 1. 等待 Workspace 就绪
+    await browser.waitUntil(
+      async () => await browser.execute(() => (window as any).__slterm_e2e_workspaceReady === true),
+      { timeout: 15000, timeoutMsg: 'Workspace 未就绪' },
+    );
+
+    // 2. 创建测试项目（page1 + 终端）
+    const tempDir = mkdtempSync(join(tmpdir(), 'slterm-e2e-h6-'));
+    try {
+      const page1Id = await browser.execute((dir: string) => {
+        return (window as any).__slterm_e2e_createProject?.(dir);
+      }, tempDir);
+
+      // 3. 等待 Dockview API
+      await browser.waitUntil(
+        async () => await browser.execute(() => typeof window.__dockviewApi !== 'undefined'),
+        { timeout: 20000, timeoutMsg: 'Dockview API 未就绪' },
+      );
+
+      // 4. 在 page1 上创建终端面板
+      const panelId = 'e2e-h6-term-' + Date.now();
+      await browser.execute((pid: string) => {
+        window.__dockviewApi!.addPanel({
+          id: pid,
+          component: 'terminal',
+          params: { panelId: pid },
+          renderer: 'always' as const,
+        });
+      }, panelId);
+
+      // 5. 等待 PTY session 就绪
+      await browser.waitUntil(
+        async () => {
+          return await browser.execute(() => {
+            const containers = document.querySelectorAll('[style*="height: 100%"]');
+            for (const c of containers) {
+              if ((c as any).__e2e_sessionReady) return true;
+            }
+            return false;
+          });
+        },
+        { timeout: 25000, timeoutMsg: 'PTY session 未就绪' },
+      );
+
+      // 6. 写入跨页面标记
+      const marker = 'H6_CROSS_PAGE_MARKER_' + Date.now();
+      await browser.execute((text: string) => {
+        const containers = document.querySelectorAll('[style*="height: 100%"]');
+        for (const c of containers) {
+          const el = c as any;
+          if (el.__e2e_writeToTerminal) {
+            el.__e2e_writeToTerminal(text);
+            return true;
+          }
+        }
+        return false;
+      }, '\r\n' + marker + '\r\n');
+
+      // 7. 验证标记存在
+      await browser.waitUntil(
+        async () => {
+          const text = await browser.execute(() => {
+            const containers = document.querySelectorAll('[style*="height: 100%"]');
+            for (const c of containers) {
+              const el = c as any;
+              if (typeof el.__e2e_getTerminalText === 'function') {
+                return el.__e2e_getTerminalText();
+              }
+            }
+            return null;
+          });
+          return text?.includes(marker) ? text : false;
+        },
+        { timeout: 10000, timeoutMsg: '终端未包含 page1 标记' },
+      );
+
+      // 8. 获取 projectId，创建 page2
+      const projectId = await browser.execute((pid: string) => {
+        return (window as any).__slterm_e2e_getProjectIdForPage?.(pid) ?? null;
+      }, page1Id);
+      if (!projectId) throw new Error('无法获取 projectId');
+
+      const page2Id = await browser.execute(
+        (args: { projId: string; rootPath: string }) => {
+          return (window as any).__slterm_e2e_addPage?.(args.projId, 'page2', args.rootPath) ?? null;
+        },
+        { projId: projectId, rootPath: tempDir },
+      );
+      if (!page2Id) throw new Error('无法创建 page2');
+
+      // 9. 切换到 page2
+      await browser.execute((pid: string) => {
+        (window as any).__slterm_e2e_switchToPage?.(pid);
+      }, page2Id);
+
+      // 10. 短暂等待页面切换生效
+      await browser.pause(500);
+
+      // 11. 切回 page1
+      await browser.execute((pid: string) => {
+        (window as any).__slterm_e2e_switchToPage?.(pid);
+      }, page1Id);
+
+      // 12. 等待页面切换生效
+      await browser.pause(500);
+
+      // 13. 验证 page1 终端内容仍含标记（H6 核心断言）
+      const textAfterSwitch = await browser.execute((m: string) => {
+        const containers = document.querySelectorAll('[style*="height: 100%"]');
+        for (const c of containers) {
+          const el = c as any;
+          if (typeof el.__e2e_getTerminalText === 'function') {
+            const text = el.__e2e_getTerminalText();
+            if (text.includes(m)) return text;
+          }
+        }
+        return null;
+      }, marker);
+
+      expect(textAfterSwitch).not.toBeNull();
+      expect(textAfterSwitch).toContain(marker);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('编辑器 dirty→clean 保存', () => {
+  // 验证编辑器修改内容后 Ctrl+S 将新内容写盘（区别于仅验证 mtime 变化）。
+  // embedded 驱动无法键盘输入，故通过外部写盘触发编辑器 auto-reload，
+  // 然后 Ctrl+S 保存当前内容，验证磁盘文件与编辑器内容一致。
+  it('should persist modified content to disk after external change triggers reload then Ctrl+S save', async () => {
+    const initialContent = 'v1_initial_content_' + Date.now();
+    const modifiedContent = 'v2_modified_content_' + Date.now();
+    const tempDir = mkdtempSync(join(tmpdir(), 'slterm-e2e-save-dirty-'));
+    const filePath = join(tempDir, 'dirty_save.txt');
+    writeFileSync(filePath, initialContent, 'utf8');
+    const mtimeBefore = statSync(filePath).mtimeMs;
+
+    try {
+      // 1. 等待 Workspace 就绪
+      await browser.waitUntil(
+        async () => await browser.execute(() => (window as any).__slterm_e2e_workspaceReady === true),
+        { timeout: 15000, timeoutMsg: 'Workspace 未就绪' },
+      );
+
+      // 2. 创建项目
+      await browser.execute((dir: string) => {
+        (window as any).__slterm_e2e_createProject?.(dir);
+      }, tempDir);
+
+      // 3. 等待 Dockview API
+      await browser.waitUntil(
+        async () => await browser.execute(() => typeof window.__dockviewApi !== 'undefined'),
+        { timeout: 20000, timeoutMsg: 'Dockview API 未就绪' },
+      );
+
+      // 4. 打开编辑器面板
+      const panelId = 'e2e-dirty-save-' + Date.now();
+      await browser.execute(
+        (args: { pid: string; path: string }) => {
+          window.__dockviewApi!.addPanel({
+            id: args.pid,
+            component: 'editor',
+            params: { panelId: args.pid, filePath: args.path },
+          });
+        },
+        { pid: panelId, path: filePath },
+      );
+
+      // 5. 等待编辑器加载初始内容
+      await browser.waitUntil(
+        async () =>
+          await browser.execute((m: string) => {
+            const nodes = document.querySelectorAll('.cm-content');
+            for (const n of nodes) {
+              if ((n.textContent ?? '').includes(m)) return true;
+            }
+            return false;
+          }, initialContent),
+        { timeout: 15000, timeoutMsg: '编辑器未加载初始内容' },
+      );
+
+      // 6. 外部修改文件内容（模拟用户编辑后）
+      writeFileSync(filePath, modifiedContent, 'utf8');
+
+      // 7. 等待编辑器 auto-reload 加载修改后内容（轮询 .cm-content）
+      await browser.waitUntil(
+        async () =>
+          await browser.execute((m: string) => {
+            const nodes = document.querySelectorAll('.cm-content');
+            for (const n of nodes) {
+              if ((n.textContent ?? '').includes(m)) return true;
+            }
+            return false;
+          }, modifiedContent),
+        { timeout: 15000, timeoutMsg: '编辑器未 auto-reload 修改后内容' },
+      );
+
+      // 8. 激活 editor 上下文（合成 focusin）
+      await browser.execute((m: string) => {
+        const nodes = document.querySelectorAll('.cm-content');
+        for (const n of nodes) {
+          if ((n.textContent ?? '').includes(m)) {
+            (n as HTMLElement).setAttribute('data-e2e-dirty-save', '1');
+            n.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+            return;
+          }
+        }
+      }, modifiedContent);
+
+      // 9. 等待 editor.save 可调度
+      await browser.waitUntil(
+        async () => {
+          const dbg = await browser.execute(() => (window as any).__slterm_e2e_shortcutDebug?.());
+          return dbg?.commands?.includes('editor.save') && dbg?.stack?.includes('editor');
+        },
+        { timeout: 8000, timeoutMsg: 'editor.save 未就绪' },
+      );
+
+      // 10. 轮询 dispatch Ctrl+S 直到写盘
+      await browser.waitUntil(
+        async () =>
+          await browser.execute((): boolean => {
+            window.dispatchEvent(new KeyboardEvent('keydown', {
+              ctrlKey: true, code: 'KeyS', key: 's', bubbles: true, cancelable: true,
+            }));
+            return true;
+          }).then(() => {
+            try {
+              const st = statSync(filePath);
+              return st.mtimeMs > mtimeBefore && readFileSync(filePath, 'utf8').includes(modifiedContent);
+            } catch {
+              return false;
+            }
+          }),
+        { timeout: 10000, timeoutMsg: 'Ctrl+S 未将修改后内容写盘' },
+      );
+
+      // 11. 断言磁盘文件包含修改后内容
+      const diskContent = readFileSync(filePath, 'utf8');
+      expect(diskContent).toContain(modifiedContent);
+      expect(statSync(filePath).mtimeMs).toBeGreaterThan(mtimeBefore);
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }

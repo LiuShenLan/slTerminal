@@ -106,6 +106,15 @@ state.rs          → PtySession 结构体 + PtyState 全局 HashMap
 
 `reader.rs` 的 `READER_BUF_SIZE` 常量设为 16384（16KB）。189KB/s 输出场景下约 12 次/秒 read() 调用（4KB 为 47 次/秒），减少约 75% 系统调用。
 
+### reader_loop 决策逻辑纯函数化
+
+`reader_loop()` 约 90 行含 7 个关键分支（EOF/正常读取/错误/DA1 注入/ring buffer 写入/Channel 断连/Windows 首轮剥离），已将可测试逻辑抽取为纯函数：
+
+- **`apply_startup_strip(startup_drained, data) -> Option<Vec<u8>>`** — 首轮读取时剥离 ConPTY 启动序列（OSC 标题/BEL/清屏/光标归位/DSR），返回 None 表示全部剥离（跳过），Some 返回剥离后数据。`startup_drained=true` 时原样返回。6 条测试覆盖：已排空透传、全剥离跳空、部分剥离保留正文、无启动序列原样返回
+- **`should_inject_da1(already_injected, data) -> bool`** — 检测输出中的 DA1 查询（`ESC[c`/`ESC[0c]`），纯布尔参数替代 AtomicBool。4 条测试覆盖：已注入跳过、含 DA1 需注入、不含 DA1 不注入、DA1 嵌入数据中
+
+剩余 I/O 编排（channel send vs ring buffer 回退、EOF `child.wait()`、`tracing::warn!`）因依赖 Mutex/RwLock/系统调用无法纯函数化——已逐分支在测试注释中标明依赖类型，标记为"已尽力"。
+
 ### DA1 查询模拟响应
 
 Claude Code 的 Ink 渲染器启动时发送 DA1 查询（`ESC[c`）作为同步哨兵。ConPTY 拦截 DA1 查询后内部处理，不向子进程 stdout 返回响应。Ink 的 `waitFor` Promise 永不 resolve，阻塞约 60s。

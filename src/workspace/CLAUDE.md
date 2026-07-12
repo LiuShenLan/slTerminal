@@ -99,7 +99,7 @@ SidebarTree.switchToPage(projectId, pageId)
 
 `layoutSerde.test.ts`（16 用例）：
 - **旧格式修补**：`patchLegacyLayout` 处理 `component`→`contentComponent` 迁移、缺失 `grid.orientation` 默认值、`leaf.data.id` 缺失生成、`activeGroup` 缺失填充
-- **白名单过滤**：`PANEL_TYPES` 外类型的面板不被恢复
+- **白名单过滤**：`PANEL_TYPES` 外类型的面板不被恢复（mock `isValidPanelType` 对齐真实 `PANEL_TYPES = ["terminal", "editor", "htmlviewer"]`）
 - **深拷贝验证**：`toJSON` 输出不与输入共享引用
 - 纯函数测试，无需 React 渲染环境
 
@@ -124,6 +124,7 @@ SidebarTree.switchToPage(projectId, pageId)
 `workspace-multi-instance.test.tsx`（4 用例）：
 - 多页面切换时 Dockview 实例各自存活（不销毁重建）
 - CSS 显隐控制 + `initializedPages` 惰性初始化
+- 断言使用 `not.toMatch(/terminal-/)`（面板 ID 格式 `terminal-{pageId}-{seq}`，pageId 以字母开头——早期 `/terminal-\d/` 要求数字紧跟在 terminal- 后，永不匹配）
 - 需种子 `useProjects`（多个页面）+ `useLayout`（活跃页面 ID）
 
 `workspace-e2e-ready.test.tsx`（4 用例）：

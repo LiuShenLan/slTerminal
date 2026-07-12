@@ -79,15 +79,16 @@ pub fn reader_loop(
                 break;
             }
             Ok(n) => {
-                let bytes = if startup_drained {
-                    buf[..n].to_vec()
-                } else {
-                    startup_drained = true;
-                    let stripped = strip_conpty_startup(&buf[..n]);
-                    if stripped.is_empty() {
-                        continue; // 全部被剥离，读下一轮
+                // 首轮剥离 ConPTY 启动序列（纯函数），全部剥离则跳过本轮
+                let bytes = match apply_startup_strip(startup_drained, &buf[..n]) {
+                    Some(b) => {
+                        startup_drained = true;
+                        b
                     }
-                    stripped
+                    None => {
+                        startup_drained = true;
+                        continue;
+                    }
                 };
 
                 let ch = match channel.read() {
@@ -102,7 +103,7 @@ pub fn reader_loop(
                 // 导致 Ink waitFor 永不 resolve，阻塞约 60s。
                 // 此处检测子进程发出的 DA1 查询，向 stdin 注入 ESC[?64;22c（VT420+ANSI 颜色）
                 // 模拟 ConPTY 的一致行为。同一会话仅注入一次（AtomicBool 防重复）。
-                if !da1_injected.load(Ordering::Relaxed) && mirror_da1_query(&bytes) {
+                if should_inject_da1(da1_injected.load(Ordering::Relaxed), &bytes) {
                     da1_injected.store(true, Ordering::Relaxed);
                     // 向子进程 stdin 注入 DA1 响应（不阻塞 reader 线程）
                     if let Ok(mut w) = writer.lock() {
@@ -222,6 +223,32 @@ fn match_csi_startup(data: &[u8]) -> Option<usize> {
     }
 }
 
+/// 对首轮读取应用 ConPTY 启动序列剥离
+///
+/// 若 `startup_drained` 为 true（非首轮），原样返回 `Some(data.to_vec())`。
+/// 若为 false（首轮），调用 `strip_conpty_startup` 剥离启动序列；
+/// 剥离后为空则返回 `None`（调用方跳过本轮），否则返回 `Some(剥离后数据)`。
+fn apply_startup_strip(startup_drained: bool, data: &[u8]) -> Option<Vec<u8>> {
+    if startup_drained {
+        Some(data.to_vec())
+    } else {
+        let stripped = strip_conpty_startup(data);
+        if stripped.is_empty() {
+            None
+        } else {
+            Some(stripped)
+        }
+    }
+}
+
+/// 判断是否需要向子进程注入 DA1 响应
+///
+/// 条件：尚未注入过（`already_injected == false`）且当前输出含 DA1 查询序列。
+/// 纯函数，不依赖 AtomicBool，便于单元测试。
+fn should_inject_da1(already_injected: bool, data: &[u8]) -> bool {
+    !already_injected && mirror_da1_query(data)
+}
+
 /// 检测输出字节流中是否含有 DA1 终端查询（ESC[c 或 ESC[0c）
 ///
 /// DA2 (ESC[>c) 和 XTVERSION (ESC[>0q) 不触发——两者走不同的检测路径。
@@ -247,6 +274,40 @@ fn mirror_da1_query(data: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ─── M11: reader_loop 主循环纯函数化分析 ───
+    //
+    // reader_loop 主循环有三个 match 分支，均已审查可抽取性：
+    //
+    // 1. Ok(0) — EOF 分支：
+    //    - child.wait()          → portable_pty::Child::wait() 是系统调用（Windows WaitForSingleObject），I/O
+    //    - exit_code.lock()       → std::sync::Mutex，运行时同步原语
+    //    - channel.read()         → std::sync::RwLock，运行时同步原语
+    //    - c.send(PtyEvent::Exit) → Tauri IPC Channel::send()，I/O
+    //
+    // 2. Ok(n) — 数据分支：
+    //    - apply_startup_strip()  → ✅ 已抽取为纯函数（Phase 2）
+    //    - channel.read()         → RwLock
+    //    - should_inject_da1()    → ✅ 已抽取为纯函数（Phase 2）
+    //    - writer.lock()+write_all()+flush() → Mutex + 管道 I/O
+    //    - ring_buffer_append()   → Mutex + VecDeque 状态变更
+    //    - c.send(PtyEvent::Output) → Channel::send()，I/O
+    //
+    // 3. Err(e) — 读错误分支：
+    //    - tracing::warn!()       → 日志宏，I/O
+    //    - exit_code.lock()       → Mutex
+    //    - channel.read()         → RwLock
+    //    - c.send(PtyEvent::Exit) → Channel::send()，I/O
+    //
+    // 三个分支中重复出现的 "read channel → if Some → send event" 模式
+    // 需要 Arc<RwLock<Option<Channel<PtyEvent>>>> —— 真正的同步原语，
+    // 无法在不引入运行时依赖的前提下构造测试输入。
+    //
+    // 结论：reader_loop 中剩余的所有分支决策均依赖同步原语或系统调用，
+    // 无法进一步抽取为纯函数。apply_startup_strip 和 should_inject_da1
+    // 已覆盖主循环中全部可纯函数化的决策逻辑。
+    //
+    // M11 状态：已尽力——剩余均为 I/O 编排无法纯函数化。
 
     #[test]
     fn test_strip_osc_title_bel() {
@@ -402,5 +463,66 @@ mod tests {
         // DA1 查询嵌入在正常输出流中仍能被检测
         let input = b"prompt> \x1b[c more output";
         assert!(mirror_da1_query(input));
+    }
+
+    // ─── apply_startup_strip 纯函数测试 ───
+
+    #[test]
+    fn startup_strip_drained_passthrough() {
+        // 非首轮：原样返回
+        let data = b"normal output";
+        let result = apply_startup_strip(true, data);
+        assert_eq!(result, Some(data.to_vec()));
+    }
+
+    #[test]
+    fn startup_strip_first_round_all_stripped() {
+        // 首轮全部为启动序列 → 返回 None（跳过本轮）
+        let result = apply_startup_strip(false, b"\x1b]0;pwsh\x07\x1b[2J\x1b[H");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn startup_strip_first_round_partial_strip() {
+        // 首轮启动序列后跟正常输出 → 剥离前缀
+        let result = apply_startup_strip(false, b"\x1b[2J\x1b[HPS C:\\> ");
+        assert_eq!(result, Some(b"PS C:\\> ".to_vec()));
+    }
+
+    #[test]
+    fn startup_strip_first_round_no_startup_seq() {
+        // 首轮无启动序列（如 cmd.exe 场景）→ 原样返回
+        let data = b"Microsoft Windows [Version 10.0]\r\n";
+        let result = apply_startup_strip(false, data);
+        assert_eq!(result, Some(data.to_vec()));
+    }
+
+    // ─── should_inject_da1 纯函数测试 ───
+
+    #[test]
+    fn da1_inject_already_injected_returns_false() {
+        // 已注入过 → 不再注入
+        assert!(!should_inject_da1(true, b"\x1b[c"));
+        assert!(!should_inject_da1(true, b"normal output"));
+    }
+
+    #[test]
+    fn da1_inject_not_injected_with_da1_returns_true() {
+        // 未注入 + 含 DA1 查询 → 应注入
+        assert!(should_inject_da1(false, b"\x1b[c"));
+        assert!(should_inject_da1(false, b"\x1b[0c"));
+    }
+
+    #[test]
+    fn da1_inject_not_injected_without_da1_returns_false() {
+        // 未注入但无 DA1 → 不注入
+        assert!(!should_inject_da1(false, b"normal output"));
+        assert!(!should_inject_da1(false, b"\x1b[>c")); // DA2 不触发
+    }
+
+    #[test]
+    fn da1_inject_embedded_in_output() {
+        // DA1 嵌入在正常输出中
+        assert!(should_inject_da1(false, b"prompt> \x1b[c more"));
     }
 }

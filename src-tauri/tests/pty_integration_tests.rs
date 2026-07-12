@@ -87,6 +87,7 @@ fn pty_kill_no_orphan() {
             _ => std::thread::sleep(Duration::from_millis(200)),
         }
     }
+    assert!(child.try_wait().unwrap().is_some(), "kill 后进程应退出");
 }
 
 /// pty_spawn_custom_conpty: 验证 conpty_custom 模块的 spawn_conpty_child 可正常启动子进程

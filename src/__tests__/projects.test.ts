@@ -7,6 +7,8 @@ import {
   cancelPendingSave,
   loadAllProjects,
   saveAllProjects,
+  markPersistenceReady,
+  _resetPersistence,
 } from "../stores/projects";
 import type { Project, OperationPage } from "../stores/projects";
 
@@ -40,6 +42,8 @@ function makeProject(overrides?: Partial<Project>): Project {
 
 describe("projects store", () => {
   beforeEach(() => {
+    // 重置持久化状态（清 timer + 复位 initialized 标记），防止上一用例 subscribe 触发写盘
+    _resetPersistence();
     // 重置 store 到初始状态
     useProjects.setState({
       projects: {},
@@ -333,7 +337,6 @@ describe("projects store", () => {
   // ── markPersistenceReady + subscribe ──────────────────────
 
   it("markPersistenceReady 应允许后续 save 操作", async () => {
-    const { markPersistenceReady } = await import("../stores/projects");
     // 首次调用不抛错
     expect(() => markPersistenceReady()).not.toThrow();
   });
@@ -546,5 +549,121 @@ describe("projects store", () => {
     );
 
     consoleSpy.mockRestore();
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // M2: debounce 持久化测试
+  // ═══════════════════════════════════════════════════════════
+
+  it("M2.1 initialized=false 时不触发 saveAllProjects（subscribe 守卫）", () => {
+    vi.useFakeTimers();
+
+    // _resetPersistence 已在 beforeEach 中调用，initialized=false
+    // 触发 state 变更
+    const project = makeProject();
+    useProjects.getState().addProject(project);
+
+    // 推进 3s（远超 2s debounce）
+    vi.advanceTimersByTime(3000);
+
+    // saveAllProjects 不应被触发——检查 fs_write_file 未被调用
+    // 由于 subscribe 回调检查 !initialized → return，不会设 timer
+    const spy = vi.fn();
+    mockIPC((cmd, args) => { spy(cmd, args); });
+
+    // 再推进一次确认无 pending timer
+    vi.advanceTimersByTime(2000);
+    expect(spy).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
+  });
+
+  it("M2.2 markPersistenceReady() 后变更 → 2s debounce → saveAllProjects", () => {
+    vi.useFakeTimers();
+
+    // 设置 mockIPC 以处理 saveAllProjects → saveToDisk → fs_write_file
+    const writeSpy = vi.fn();
+    mockIPC((cmd, args) => {
+      if (cmd === "fs_write_file") writeSpy(cmd, args);
+    });
+
+    // 标记持久化就绪
+    markPersistenceReady();
+
+    // 触发变更
+    const project = makeProject();
+    useProjects.getState().addProject(project);
+
+    // 不到 2s 不触发
+    vi.advanceTimersByTime(1500);
+    expect(writeSpy).not.toHaveBeenCalled();
+
+    // 到达 2s 触发
+    vi.advanceTimersByTime(600);
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+
+    vi.useRealTimers();
+  });
+
+  it("M2.3 多次变更合并为一次写入（debounce 重置 timer）", () => {
+    vi.useFakeTimers();
+
+    const writeSpy = vi.fn();
+    mockIPC((cmd, args) => {
+      if (cmd === "fs_write_file") writeSpy(cmd, args);
+    });
+
+    markPersistenceReady();
+
+    // 连续三次变更，每次间隔 500ms
+    const project = makeProject();
+    useProjects.getState().addProject(project);
+    vi.advanceTimersByTime(500);
+
+    useProjects.getState().addPage(project.projectId, makePage("p2"));
+    vi.advanceTimersByTime(500);
+
+    useProjects.getState().toggleExpand("node-1");
+    vi.advanceTimersByTime(500);
+
+    // 此时距首次变更 1500ms，距末次变更 500ms，debounce 未到
+    expect(writeSpy).not.toHaveBeenCalled();
+
+    // 推进到末次变更后 2s
+    vi.advanceTimersByTime(1500);
+
+    // 仅触发一次写入
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+
+    vi.useRealTimers();
+  });
+
+  it("M2.4 cancelPendingSave() 取消待执行的 timer", () => {
+    vi.useFakeTimers();
+
+    const writeSpy = vi.fn();
+    mockIPC((cmd, args) => {
+      if (cmd === "fs_write_file") writeSpy(cmd, args);
+    });
+
+    markPersistenceReady();
+
+    // 触发变更
+    const project = makeProject();
+    useProjects.getState().addProject(project);
+
+    // 推进 1s（timer 未到）
+    vi.advanceTimersByTime(1000);
+
+    // 取消待执行的保存
+    cancelPendingSave();
+
+    // 推进到原本会触发的时间点
+    vi.advanceTimersByTime(2000);
+
+    // 不应有写入（timer 已被清除）
+    expect(writeSpy).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
   });
 });
