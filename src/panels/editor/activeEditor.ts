@@ -7,6 +7,8 @@
 /** 聚焦编辑器对外暴露的动作（供快捷键命令 handler 调用） */
 export interface EditorActions {
   save: () => void;
+  /** Alt+Z 切换自动换行 */
+  toggleWordWrap: () => void;
 }
 
 let active: EditorActions | null = null;

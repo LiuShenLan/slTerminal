@@ -110,6 +110,10 @@ export function useCodeMirror({ container, filePath, panelId, fontSize, onFontSi
   const langCompartment = useRef(new Compartment());
   /** 字体 Compartment —— 热切换字体大小不丢文档状态 */
   const fontCompartment = useRef(new Compartment());
+  /** 自动换行 Compartment —— Alt+Z 热切换，默认关闭 */
+  const wrapCompartment = useRef(new Compartment());
+  /** 自动换行当前状态 ref —— toggle 读取，避免 jsdom 中 view.lineWrapping 不可靠 */
+  const wordWrapRef = useRef(false);
   /** 字体大小 ref —— wheel handler 中读取，避免闭包捕获过时值 */
   const fontSizeRef = useRef<number>(fontSize ?? 14);
   // 保存后短时间内抑制 fs-event auto-reload，避免将自己的写入误判为外部改动、
@@ -188,7 +192,21 @@ export function useCodeMirror({ container, filePath, panelId, fontSize, onFontSi
   const handleSaveRef = useRef(handleSave);
   handleSaveRef.current = handleSave;
   const editorActions = useMemo<EditorActions>(
-    () => ({ save: () => { void handleSaveRef.current(); } }),
+    () => ({
+      save: () => { void handleSaveRef.current(); },
+      /** Alt+Z 切换自动换行 */
+      toggleWordWrap: () => {
+        const view = viewRef.current;
+        if (!view) return;
+        const wrapping = wordWrapRef.current;
+        view.dispatch({
+          effects: wrapCompartment.current.reconfigure(
+            wrapping ? [] : EditorView.lineWrapping,
+          ),
+        });
+        wordWrapRef.current = !wrapping;
+      },
+    }),
     [],
   );
   const activateEditor = useCallback(() => setActiveEditor(editorActions), [editorActions]);
@@ -241,6 +259,7 @@ export function useCodeMirror({ container, filePath, panelId, fontSize, onFontSi
             basicSetup,
             oneDark,
             fontCompartment.current.of(createEditorFontExtension(fontSize ?? 14)),
+            wrapCompartment.current.of([]), // 默认关闭自动换行
             search({ top: true }),
             highlightSelectionMatches(),
             keymap.of([...searchKeymap]),

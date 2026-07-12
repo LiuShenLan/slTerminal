@@ -20,7 +20,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### 命令目录单一真值源（`commandCatalog.ts`）
 
-所有可重绑命令的 `title/category/defaultKey/priority` 集中在 `COMMAND_CATALOG`。各面板工厂经 `commandFromMeta(id, handler)` 合并 handler。新增可重绑命令 = 目录追加一条 + 工厂提供 handler。当前命令：`global.closeTab`、`terminal.copy`、`terminal.paste`、`terminal.newline`、`editor.save`。
+所有可重绑命令的 `title/category/defaultKey/priority` 集中在 `COMMAND_CATALOG`。各面板工厂经 `commandFromMeta(id, handler)` 合并 handler。新增可重绑命令 = 目录追加一条 + 工厂提供 handler。当前命令：`global.closeTab`、`terminal.copy`、`terminal.paste`、`terminal.newline`、`editor.save`、`editor.toggleWordWrap`。
 
 ### 命令注册一次 + active 指针派发到聚焦实例（多实例正确性）
 
@@ -137,7 +137,7 @@ usePanelFocus("terminal", container, activate, deactivate);
 |------|------|------|
 | 1. WebView2 硬编码 | 运行时级别 | `Ctrl+W`（窗口关闭被禁用，事件可穿透 DOM） |
 | 2. `tauri-plugin-prevent-default` | 浏览器加速键拦截 | `Ctrl+P`、`Ctrl+R`、F12（`Ctrl+F` 已排除） |
-| 3. 应用 ShortcutRegistry | 前端 capture-phase keydown | `Ctrl+Shift+C/V`、`Ctrl+W`、`Ctrl+S` |
+| 3. 应用 ShortcutRegistry | 前端 capture-phase keydown | `Ctrl+Shift+C/V`、`Ctrl+W`、`Ctrl+S`、`Alt+Z` |
 
 ### Ctrl+C 保留为中断
 
@@ -172,14 +172,14 @@ HTML 面板内容在 `<iframe sandbox="allow-scripts allow-same-origin" srcDoc>`
 |------|----------|
 | `keystroke.test.ts` | formatKeystroke 各组合 + 固定序、parseKeystroke 合法往返/各类非法、isValidKeystrokeString、format∘parse 恒等 |
 | `reserved.test.ts` | isReserved 各 context、每个保留键命中、非保留键放行、global 两集并集 |
-| `commandCatalog.test.ts` | 5 命令齐全 + 元数据、id 唯一、defaultKey 合法且非自身保留、commandFromMeta 合并/抛错 |
+| `commandCatalog.test.ts` | 6 命令齐全 + 元数据、id 唯一、defaultKey 合法且非自身保留、commandFromMeta 合并/抛错 |
 | `shortcuts.test.ts` | 注册/注销、引用计数、上下文栈竞态、匹配排序、IME 透传、global、handler 返回值、**setOverrides 重绑/解绑/降级/冲突、resolve/forceContext、exportContextBindings、listCommands、_reset 清 overrides** |
 | `wireKeybindings.test.ts` | 立即应用、store 变更重应用、unsubscribe |
 | `forwardGlobalShortcuts.test.ts` | 命中全局键→preventDefault+重放(props 正确)、非全局键不转发、多绑定/空绑定、detach 后失效、修饰键指纹区分 |
 | `usePanelFocus.test.ts` | focusin→pushContext+onActivate、focusout(离子树)→popContext+onDeactivate、内部焦点转移不触发、卸载清理 |
 | `globalCommands.test.ts` | createGlobalShortcuts 命令结构（defaultKey/title/category）、Ctrl+W 关闭、无面板透传、延迟求值 |
 | `keyboard.test.ts` | createTerminalShortcuts()（无参）copy/paste/newline 经 getActiveTerminal 派发、无 active 透传、Ctrl+C 不注册 |
-| `editor-keyboard.test.ts` | createEditorShortcuts()（无参）save 经 getActiveEditor 派发、无 active 透传 |
+| `editor-keyboard.test.ts` | createEditorShortcuts()（无参）save/toggleWordWrap 经 getActiveEditor 派发、无 active 透传、聚焦覆盖 |
 | `activeTerminal.test.ts` / `activeEditor.test.ts` | active 指针 set/get/覆盖、clear 仅在匹配时生效 |
 
 ```bash

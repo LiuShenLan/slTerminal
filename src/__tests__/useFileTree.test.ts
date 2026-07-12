@@ -8,13 +8,16 @@ import { renderHook, act, waitFor } from "@testing-library/react";
 
 // ─── Hoisted mocks ───
 const mocks = vi.hoisted(() => {
-  let mockReadDirImpl = () => Promise.resolve([] as { name: string; path: string; isDir: boolean; size: number | null; modified: number | null }[]);
-  let mockGitStatusImpl = () => Promise.resolve([] as { path: string; status: string }[]);
+  type DirEntry = { name: string; path: string; isDir: boolean; size: number | null; modified: number | null };
+  type GitStatusEntry = { path: string; status: string };
 
-  const mockReadDir = vi.fn().mockImplementation((path: string) => mockReadDirImpl(path));
-  const mockGitStatus = vi.fn().mockImplementation((path: string) => mockGitStatusImpl(path));
+  let mockReadDirImpl: (path: string) => Promise<DirEntry[]> = () => Promise.resolve([]);
+  let mockGitStatusImpl: (path: string) => Promise<GitStatusEntry[]> = () => Promise.resolve([]);
 
-  const makeEntry = (name: string, isDir = false) => ({
+  const mockReadDir = vi.fn<(path: string) => Promise<DirEntry[]>>().mockImplementation((path) => mockReadDirImpl(path));
+  const mockGitStatus = vi.fn<(path: string) => Promise<GitStatusEntry[]>>().mockImplementation((path) => mockGitStatusImpl(path));
+
+  const makeEntry = (name: string, isDir = false): DirEntry => ({
     name,
     path: `C:/project/${name}`,
     isDir,
@@ -35,16 +38,16 @@ const mocks = vi.hoisted(() => {
       mockGitStatusImpl = () => Promise.resolve([
         { path: "C:/project/a.ts", status: "modified" },
       ]);
-      mockReadDir.mockImplementation((path: string) => mockReadDirImpl(path));
-      mockGitStatus.mockImplementation((path: string) => mockGitStatusImpl(path));
+      mockReadDir.mockImplementation((path) => mockReadDirImpl(path));
+      mockGitStatus.mockImplementation((path) => mockGitStatusImpl(path));
     },
-    setReadDirImpl(fn: (path: string) => Promise<ReturnType<typeof makeEntry>[]>) {
+    setReadDirImpl(fn: (path: string) => Promise<DirEntry[]>) {
       mockReadDirImpl = fn;
-      mockReadDir.mockImplementation((path: string) => mockReadDirImpl(path));
+      mockReadDir.mockImplementation((path) => mockReadDirImpl(path));
     },
-    setGitStatusImpl(fn: (path: string) => Promise<{ path: string; status: string }[]>) {
+    setGitStatusImpl(fn: (path: string) => Promise<GitStatusEntry[]>) {
       mockGitStatusImpl = fn;
-      mockGitStatus.mockImplementation((path: string) => mockGitStatusImpl(path));
+      mockGitStatus.mockImplementation((path) => mockGitStatusImpl(path));
     },
   };
 });

@@ -64,6 +64,14 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
     defaultKey: key("KeyS", { ctrl: true }),
     priority: 100,
   },
+  {
+    id: "editor.toggleWordWrap",
+    title: "切换自动换行",
+    category: "editor",
+    context: "editor",
+    defaultKey: key("KeyZ", { alt: true }),
+    priority: 100,
+  },
 ];
 
 /** id → 元数据，O(1) 查找 */

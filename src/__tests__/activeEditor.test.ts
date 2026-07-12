@@ -11,7 +11,7 @@ import {
 } from "../panels/editor/activeEditor";
 
 function make(): EditorActions {
-  return { save: vi.fn() };
+  return { save: vi.fn(), toggleWordWrap: vi.fn() };
 }
 
 afterEach(() => {
@@ -36,6 +36,13 @@ describe("activeEditor", () => {
     setActiveEditor(a);
     setActiveEditor(b);
     expect(getActiveEditor()).toBe(b);
+  });
+
+  it("toggleWordWrap 可被调用", () => {
+    const a = make();
+    setActiveEditor(a);
+    getActiveEditor()!.toggleWordWrap();
+    expect(a.toggleWordWrap).toHaveBeenCalledTimes(1);
   });
 
   it("clear 仅在匹配时生效（防竞态：A blur 不清 B）", () => {

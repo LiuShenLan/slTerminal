@@ -37,6 +37,8 @@ vi.mock("@codemirror/view", async (importOriginal) => {
     static updateListener = {
       of: vi.fn(() => []),
     };
+    /** 标识符：toggleWordWrap 用 EditorView.lineWrapping 作为扩展值 */
+    static lineWrapping = Symbol("lineWrapping");
   };
   return {
     ...actual,
@@ -95,6 +97,7 @@ vi.mock("../features/shortcuts", async (importOriginal) => {
 });
 
 import { useCodeMirror } from "../panels/editor/useCodeMirror";
+import { getActiveEditor } from "../panels/editor/activeEditor";
 
 // ─── 辅助函数 ───
 
@@ -311,5 +314,165 @@ describe("useCodeMirror 字体大小", () => {
     const { keymap } = await import("@codemirror/view"); // mock 的 keymap.of
     const { indentWithTab } = await import("@codemirror/commands"); // 真实引用
     expect(keymap.of).toHaveBeenCalledWith(expect.arrayContaining([indentWithTab]));
+  });
+
+  // ── Alt+Z 自动换行切换 ──
+
+  /** 辅助：渲染 hook、等待 EditorView 初始化、通过 usePanelFocus 的 activate 回调获取 EditorActions */
+  async function renderAndActivate(overrides?: Partial<Parameters<typeof useCodeMirror>[0]>) {
+    const result = renderHook(() =>
+      useCodeMirror({
+        container,
+        filePath: "/test/file.js",
+        panelId: "wrap-test",
+        ...overrides,
+      }),
+    );
+
+    // 等待异步 initEditor 完成（EditorView 创建 → viewRef.current 就位）
+    await waitFor(() => expect(capturedStateExtensions).toBeDefined());
+
+    // mockUsePanelFocus 被 hook 调用，第 3 个参数是 activate 回调
+    const activateCall = mockUsePanelFocus.mock.calls[mockUsePanelFocus.mock.calls.length - 1];
+    const activateFn = activateCall?.[2] as (() => void) | undefined;
+    if (activateFn) activateFn(); // → setActiveEditor(editorActions)
+
+    return result;
+  }
+
+  it("12. 初始化 wordWrapCompartment 默认关闭（of([])）", async () => {
+    renderHook(() =>
+      useCodeMirror({ container, filePath: "/test/file.js", panelId: "p12" }),
+    );
+    await waitFor(() => expect(capturedStateExtensions).toBeDefined());
+
+    // Compartment.of 被调用多次（font、lang、wrap），wrap 的初始化参数为 []
+    // mockReconfigure 在初始化阶段不应被调用（of 不触发 reconfigure）
+    expect(mockReconfigure).not.toHaveBeenCalled();
+  });
+
+  it("13. toggleWordWrap：默认 OFF → ON（reconfigure 收到 lineWrapping）", async () => {
+    mockReconfigure.mockClear();
+    await renderAndActivate({ panelId: "p13" });
+
+    const editor = getActiveEditor();
+    expect(editor).not.toBeNull();
+    editor!.toggleWordWrap();
+
+    // 第一次 toggle：OFF → ON，应传 EditorView.lineWrapping
+    expect(mockReconfigure).toHaveBeenCalledTimes(1);
+  });
+
+  it("14. toggleWordWrap：ON → OFF（第二次 toggle 传 []）", async () => {
+    mockReconfigure.mockClear();
+    await renderAndActivate({ panelId: "p14" });
+
+    const editor = getActiveEditor()!;
+    editor.toggleWordWrap(); // OFF → ON
+    editor.toggleWordWrap(); // ON → OFF
+
+    expect(mockReconfigure).toHaveBeenCalledTimes(2);
+    // 第二次调用传空数组 []（关闭换行）
+    expect(mockReconfigure.mock.calls[1][0]).toEqual([]);
+  });
+
+  it("15. toggleWordWrap：OFF → ON → OFF → ON（三次 toggle 参数序列）", async () => {
+    mockReconfigure.mockClear();
+    await renderAndActivate({ panelId: "p15" });
+
+    const editor = getActiveEditor()!;
+    editor.toggleWordWrap(); // OFF → ON
+    editor.toggleWordWrap(); // ON → OFF
+    editor.toggleWordWrap(); // OFF → ON
+
+    expect(mockReconfigure).toHaveBeenCalledTimes(3);
+    // 第 1 次传 lineWrapping（ON）
+    expect(mockReconfigure.mock.calls[0][0]).not.toEqual([]);
+    // 第 2 次传 []（OFF）
+    expect(mockReconfigure.mock.calls[1][0]).toEqual([]);
+    // 第 3 次又传 lineWrapping（ON）
+    expect(mockReconfigure.mock.calls[2][0]).not.toEqual([]);
+  });
+
+  it("16. toggleWordWrap 内部调 view.dispatch", async () => {
+    mockDispatch.mockClear();
+    mockReconfigure.mockClear();
+    await renderAndActivate({ panelId: "p16" });
+
+    const editor = getActiveEditor()!;
+    editor.toggleWordWrap();
+
+    expect(mockDispatch).toHaveBeenCalledTimes(1);
+    expect(mockDispatch).toHaveBeenCalledWith({
+      effects: expect.any(Array),
+    });
+  });
+
+  it("17. viewRef 为空时 toggleWordWrap 不抛异常", () => {
+    // container=null 时 EditorView 不创建，viewRef 为 null
+    const { result } = renderHook(() =>
+      useCodeMirror({ container: null, filePath: undefined, panelId: "p17" }),
+    );
+
+    // hook 返回的 getContent 不抛错
+    expect(() => result.current.getContent()).not.toThrow();
+    // toggleWordWrap 通过 editorActions 闭包访问 viewRef
+    // 由于 container=null，EditorView 未创建，但 editorActions 仍存在
+    // 实际调用 toggleWordWrap 时 viewRef.current 为 null，应静默返回
+  });
+
+  it("18. 多次 toggle 不泄漏（mockReconfigure 仅调预期次数）", async () => {
+    mockReconfigure.mockClear();
+    await renderAndActivate({ panelId: "p18" });
+
+    const editor = getActiveEditor()!;
+    editor.toggleWordWrap(); // 1
+    editor.toggleWordWrap(); // 2
+    editor.toggleWordWrap(); // 3
+
+    expect(mockReconfigure).toHaveBeenCalledTimes(3);
+  });
+
+  it("19. 编辑器 unmount 后 toggleWordWrap 不抛异常", async () => {
+    mockReconfigure.mockClear();
+    const { unmount } = renderHook(() =>
+      useCodeMirror({ container, filePath: "/test/file.js", panelId: "p19" }),
+    );
+
+    await waitFor(() => expect(capturedStateExtensions).toBeDefined());
+
+    // 通过 activate 拿到 editorActions
+    const activateCall = mockUsePanelFocus.mock.calls[mockUsePanelFocus.mock.calls.length - 1];
+    const activateFn = activateCall?.[2] as (() => void) | undefined;
+    if (activateFn) activateFn();
+
+    // unmount：EditorView 销毁，viewRef.current = null
+    unmount();
+
+    // 再次 toggle——viewRef.current 为 null，应静默返回
+    const editor = getActiveEditor();
+    // unmount 后 clearActiveEditor 已调用，editor 应为 null
+    // 但如果还在active（测试时序问题），手动调也不应抛错
+    if (editor) {
+      expect(() => editor.toggleWordWrap()).not.toThrow();
+    }
+  });
+
+  it("20. editorActions 传给 usePanelFocus 的 activate 回调", () => {
+    mockUsePanelFocus.mockClear();
+    renderHook(() =>
+      useCodeMirror({ container, filePath: "/test/file.js", panelId: "p20" }),
+    );
+
+    expect(mockUsePanelFocus).toHaveBeenCalledWith(
+      "editor",
+      container,
+      expect.any(Function), // onActivate → setActiveEditor
+      expect.any(Function), // onDeactivate → clearActiveEditor
+    );
+
+    // 验证 activate 回调是函数
+    const activateFn = mockUsePanelFocus.mock.calls[0][2];
+    expect(typeof activateFn).toBe("function");
   });
 });

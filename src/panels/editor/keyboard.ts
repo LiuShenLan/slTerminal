@@ -22,5 +22,11 @@ export function createEditorShortcuts(): Command[] {
       e.save();
       return true;
     }),
+    commandFromMeta("editor.toggleWordWrap", () => {
+      const e = getActiveEditor();
+      if (!e) return false;
+      e.toggleWordWrap();
+      return true;
+    }),
   ];
 }

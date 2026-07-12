@@ -14,6 +14,7 @@ const EXPECTED_IDS = [
   "terminal.paste",
   "terminal.newline",
   "editor.save",
+  "editor.toggleWordWrap",
 ];
 
 describe("COMMAND_CATALOG", () => {
@@ -82,5 +83,16 @@ describe("commandFromMeta", () => {
 
   it("未知 id 抛错", () => {
     expect(() => commandFromMeta("does.not.exist", () => true)).toThrow(/未知命令 id/);
+  });
+
+  it("合并 editor.toggleWordWrap handler 与元数据", () => {
+    const handler = vi.fn(() => true);
+    const cmd = commandFromMeta("editor.toggleWordWrap", handler);
+    expect(cmd.id).toBe("editor.toggleWordWrap");
+    expect(cmd.context).toBe("editor");
+    expect(cmd.defaultKey).toEqual({
+      ctrlKey: false, shiftKey: false, altKey: true, metaKey: false, code: "KeyZ",
+    });
+    expect(cmd.handler).toBe(handler);
   });
 });
