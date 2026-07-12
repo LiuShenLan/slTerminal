@@ -1,4 +1,4 @@
-// Phase 1 L2 终端面板测试（v2——使用真实 useXterm + mock 依赖）
+// L2 终端面板测试——使用真实 useXterm + mock 依赖
 // 复用 terminal-lifecycle.test.ts 的 mock 策略，避免空壳测试
 import { describe, it, expect, afterEach, vi } from "vitest";
 

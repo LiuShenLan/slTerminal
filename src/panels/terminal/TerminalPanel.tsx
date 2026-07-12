@@ -12,6 +12,9 @@ import { PANEL_BG, INPUT_BORDER } from "../../theme";
 import type { TabState } from "./TabTitleRegistry";
 import type { DockviewPanelApi } from "dockview-react";
 
+/** 加载遮罩兜底超时（ms）——首帧数据未到达时自动隐藏 */
+const LOADING_MASK_TIMEOUT_MS = 1500;
+
 interface TerminalPanelProps {
   /** Dockview 传入的面板 API */
   api: DockviewPanelApi;
@@ -34,11 +37,15 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ api, params }) => {
     setContainer(containerRef.current);
   }, []);
 
-  // F3: IPC 获取真实 Windows build 号（动态设置 ConPTY reflow 阈值）
+  // 获取真实 Windows build 号（动态设置 ConPTY reflow 阈值）
   useEffect(() => {
+    let cancelled = false;
     pty.getWindowsBuildNumber().then((bn) => {
-      setBuildNumber(bn);
+      if (!cancelled) {
+        setBuildNumber(bn);
+      }
     });
+    return () => { cancelled = true; };
   }, []);
 
   const cwd = params.cwd;
@@ -84,7 +91,7 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ api, params }) => {
 
   // 首帧数据到达时隐藏加载遮罩
   useEffect(() => {
-    const timer = setTimeout(() => setLoading(false), 1500);
+    const timer = setTimeout(() => setLoading(false), LOADING_MASK_TIMEOUT_MS);
     return () => clearTimeout(timer);
   }, []);
 

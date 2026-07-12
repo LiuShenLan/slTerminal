@@ -7,6 +7,9 @@
 import { create } from "zustand";
 import * as fs from "../ipc/fs";
 
+/** 持久化 debounce 间隔（毫秒），供 fontSize/keybindings 等 store 共用 */
+export const PERSIST_DEBOUNCE_MS = 2000;
+
 // ── 数据模型 ──────────────────────────────────────────────
 
 export interface Project {
@@ -302,7 +305,7 @@ useProjects.subscribe(() => {
   if (saveTimer !== null) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     saveAllProjects();
-  }, 2000);
+  }, PERSIST_DEBOUNCE_MS);
 });
 
 // ── ID 工具函数（供外部创建节点时生成 ID） ──

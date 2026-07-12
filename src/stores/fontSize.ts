@@ -8,6 +8,7 @@
 
 import { create } from "zustand";
 import { loadSettings, saveSettings } from "../ipc/settings";
+import { PERSIST_DEBOUNCE_MS } from "./projects";
 
 /** 字体大小范围 */
 export const FONT_SIZE_MIN = 8;
@@ -74,5 +75,13 @@ useFontSize.subscribe((state) => {
     }).catch(() => {
       // 静默吞错，fontsSize 非关键数据
     });
-  }, 2000);
+  }, PERSIST_DEBOUNCE_MS);
 });
+
+/** 取消待执行的 debounced 保存（关闭钩子中避免竞态） */
+export function cancelPendingSave(): void {
+  if (saveTimer !== null) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+}

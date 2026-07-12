@@ -12,6 +12,9 @@ import { readDir } from "../../ipc/fs";
 import { gitStatus } from "../../ipc/git";
 import type { DirEntry } from "../../types/fs";
 
+/** 文件系统事件去抖延迟（ms） */
+const FS_EVENT_DEBOUNCE_MS = 200;
+
 export interface TreeNode {
   entry: DirEntry;
   expanded: boolean;
@@ -234,7 +237,7 @@ export function useFileTree({ rootPath }: UseFileTreeOptions) {
       }
       debounceRef.current = setTimeout(() => {
         refreshExpanded();
-      }, 200);
+      }, FS_EVENT_DEBOUNCE_MS);
     });
 
     return () => {

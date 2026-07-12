@@ -1,4 +1,4 @@
-// Phase 1 L2 Workspace 测试 — 多 Dockview 实例架构
+// L2 Workspace 测试 — 多 Dockview 实例架构
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mockIPC, clearMocks } from '@tauri-apps/api/mocks';

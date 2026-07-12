@@ -7,8 +7,8 @@ import {
 } from "./stores/projects";
 import type { OperationPage, Project } from "./stores/projects";
 import { useLayout } from "./stores/layout";
-import { useFontSize } from "./stores/fontSize";
-import { useKeybindings } from "./stores/keybindings";
+import { useFontSize, cancelPendingSave as cancelFontSizeSave } from "./stores/fontSize";
+import { useKeybindings, cancelPendingSave as cancelKeybindingsSave } from "./stores/keybindings";
 import { saveLayout } from "./workspace/layoutSerde";
 import { makeEmptyLayout } from "./features/sidebar/SidebarTree";
 import { writeText } from "./ipc/clipboard";
@@ -20,6 +20,11 @@ import { createTerminalShortcuts } from "./panels/terminal/keyboard";
 import { createEditorShortcuts } from "./panels/editor/keyboard";
 import { PANEL_BG, INPUT_BORDER, APP_BG } from "./theme";
 import "dockview-react/dist/styles/dockview.css";
+
+/** 关闭等待超时（ms）——kill PTY / flush 持久化的最大等待时间 */
+const SHUTDOWN_TIMEOUT_MS = 3000;
+/** localStorage key：上次活跃页面 ID */
+const LS_LAST_ACTIVE_PAGE_KEY = "slterm-last-active-page";
 
 // E2E pending 标记：__slterm_e2e_createProject 调用时设为 true，
 // 阻止 init 序列的 localStorage 恢复覆盖 E2E 设置的 activePageId
@@ -137,7 +142,7 @@ function App() {
       // E2E 模式跳过：__slterm_e2e_createProject 已设 e2eProjectPending=true
       try {
         if (!e2eProjectPending) {
-          const lastPage = localStorage.getItem("slterm-last-active-page");
+          const lastPage = localStorage.getItem(LS_LAST_ACTIVE_PAGE_KEY);
           if (lastPage) {
             useLayout.getState().setActivePage(lastPage);
           }
@@ -172,7 +177,7 @@ function App() {
           // 并发 kill 所有 session，最长等待 3 秒
           await Promise.race([
             Promise.all(killPromises),
-            new Promise<void>((resolve) => setTimeout(resolve, 3000)),
+            new Promise<void>((resolve) => setTimeout(resolve, SHUTDOWN_TIMEOUT_MS)),
           ]);
         }
 
@@ -192,16 +197,18 @@ function App() {
             }
           }
         }
-        // 2. 同步保存到磁盘（清除 debounce 定时器 + 3s 超时防挂起）
+        // 2. 同步保存到磁盘（清除各 store debounce 定时器 + 3s 超时防挂起）
         cancelPendingSave();
+        cancelFontSizeSave();
+        cancelKeybindingsSave();
         await Promise.race([
           saveAllProjects(),
-          new Promise<void>((resolve) => setTimeout(resolve, 3000)),
+          new Promise<void>((resolve) => setTimeout(resolve, SHUTDOWN_TIMEOUT_MS)),
         ]);
         // 3. 保存 activePageId
         if (activePageId) {
           try {
-            localStorage.setItem("slterm-last-active-page", activePageId);
+            localStorage.setItem(LS_LAST_ACTIVE_PAGE_KEY, activePageId);
           } catch { /* localStorage 不可用时静默失败 */ }
         }
       } catch (err) {

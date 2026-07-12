@@ -48,11 +48,8 @@ function createNotifyMocks(overrides?: { startWatch?: Fn; onFsEvent?: Fn }) {
 
 // 类型声明以消除 TS 报错
 declare global {
-  // eslint-disable-next-line no-var
   var __createFsMocks: typeof createFsMocks;
-  // eslint-disable-next-line no-var
   var __createGitMocks: typeof createGitMocks;
-  // eslint-disable-next-line no-var
   var __createNotifyMocks: typeof createNotifyMocks;
 }
 

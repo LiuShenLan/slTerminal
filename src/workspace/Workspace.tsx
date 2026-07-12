@@ -46,6 +46,15 @@ declare global {
   }
 }
 
+/** Allotment 三栏布局尺寸约束（px） */
+const SIDEBAR_PREFERRED_SIZE = 250;
+const SIDEBAR_MIN_SIZE = 160;
+const SIDEBAR_MAX_SIZE = 400;
+const EXPLORER_PREFERRED_SIZE = 250;
+const EXPLORER_MIN_SIZE = 180;
+const EXPLORER_MAX_SIZE = 500;
+const MAIN_MIN_SIZE = 200;
+
 const WATERMARK_TEXT = "打开终端或编辑器开始工作";
 
 // ---- 工厂函数：创建 per-page 的 Dockview 子组件 ----
@@ -484,13 +493,13 @@ const Workspace: React.FC = () => {
   return (
     <div style={{ width: "100%", height: "100%" }}>
       <Allotment>
-        <Allotment.Pane preferredSize={250} minSize={160} maxSize={400}>
+        <Allotment.Pane preferredSize={SIDEBAR_PREFERRED_SIZE} minSize={SIDEBAR_MIN_SIZE} maxSize={SIDEBAR_MAX_SIZE}>
           <SidebarTree switchToPage={switchToPage} onDeletePage={onDeletePage} />
         </Allotment.Pane>
-        <Allotment.Pane preferredSize={250} minSize={180} maxSize={500}>
+        <Allotment.Pane preferredSize={EXPLORER_PREFERRED_SIZE} minSize={EXPLORER_MIN_SIZE} maxSize={EXPLORER_MAX_SIZE}>
           <ExplorerPanel />
         </Allotment.Pane>
-        <Allotment.Pane minSize={200}>
+        <Allotment.Pane minSize={MAIN_MIN_SIZE}>
           <div style={{ width: "100%", height: "100%", position: "relative" }}>
             {allPages.map((page) =>
               initializedPages.has(page.pageId) ? (

@@ -2,7 +2,7 @@
 #![windows_subsystem = "windows"]
 
 fn main() {
-    // Phase 0 panic hook：将 panic 信息写入文件以便诊断
+    // panic hook：将 panic 信息写入文件以便诊断
     std::panic::set_hook(Box::new(|info| {
         let path = std::env::current_dir()
             .unwrap_or_else(|_| ".".into())

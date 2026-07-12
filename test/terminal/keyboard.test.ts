@@ -1,4 +1,4 @@
-// Phase 1 L3 终端渲染测试 — 键盘编码 + 提示符渲染
+// L3 终端渲染测试 — 键盘编码 + 提示符渲染
 // 使用 @xterm/headless + @xterm/addon-serialize
 
 import { describe, it, expect } from 'vitest';

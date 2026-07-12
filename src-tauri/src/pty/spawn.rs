@@ -619,7 +619,7 @@ pub fn pty_spawn(
     // Windows: 绕过 portable-pty openpty，直接调 Win32 CreatePseudoConsole 控制 flags
     #[cfg(windows)]
     let (conpty_hpc, conpty_master) = {
-        let build = super::build::get_windows_build_number().unwrap_or_else(|e| {
+        let build = super::win_build::get_windows_build_number().unwrap_or_else(|e| {
             tracing::warn!("无法获取 Windows build 号，降级使用基础 ConPTY flags（无 PASSTHROUGH_MODE）: {}", e);
             0
         });

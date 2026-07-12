@@ -23,7 +23,7 @@ async function waitForPanelTitle(
   return title as string;
 }
 
-describe('slTerminal Phase 1 E2E', () => {
+describe('slTerminal E2E', () => {
   it('应正常启动并显示 slTerminal 标题', async () => {
     await browser.waitUntil(
       async () => (await browser.getTitle()) === 'slTerminal',

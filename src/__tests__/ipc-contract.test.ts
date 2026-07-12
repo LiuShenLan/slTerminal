@@ -24,7 +24,9 @@ vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: vi.fn(),
 }));
 
+// eslint-disable-next-line no-restricted-imports
 import { listen } from "@tauri-apps/api/event";
+// eslint-disable-next-line no-restricted-imports
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import * as pty from '../ipc/pty';
 import * as fs from '../ipc/fs';
@@ -462,11 +464,14 @@ describe('notify IPC 合约', () => {
   });
 
   it('onFsEvent: listen 回调应解包 event.payload 传给 callback', () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let capturedHandler: ((event: any) => void) | null = null;
     vi.mocked(listen).mockImplementation(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ((_event: string, handler: (event: any) => void) => {
         capturedHandler = handler;
         return Promise.resolve(vi.fn());
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       }) as any,
     );
 

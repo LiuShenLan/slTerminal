@@ -431,8 +431,8 @@ describe("ExplorerPanel + FileViewerRegistry 集成", () => {
     const { findAllByText } = render(React.createElement(ExplorerPanel));
 
     // 先打开 index.html
-    let htmlItems = await findAllByText("index.html");
-    let htmlItem = htmlItems.find((el) => el.tagName === "SPAN");
+    const htmlItems = await findAllByText("index.html");
+    const htmlItem = htmlItems.find((el) => el.tagName === "SPAN");
     fireEvent.doubleClick(htmlItem!);
 
     await waitFor(() => {

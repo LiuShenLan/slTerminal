@@ -1,4 +1,4 @@
-// Phase 1 L2 编辑器面板测试（v2——保留 useCodeMirror mock，改善断言质量）
+// L2 编辑器面板测试——保留 useCodeMirror mock（CodeMirror 6 在 jsdom 不可用），验证正确的参数传递
 // CodeMirror 6 在 jsdom 中不可用，mock 是必需的；但测试应验证正确的参数传递
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { clearMocks } from "@tauri-apps/api/mocks";

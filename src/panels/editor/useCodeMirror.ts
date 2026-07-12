@@ -35,6 +35,11 @@ import { gitDiff } from "../../ipc/git";
 import { usePanelFocus } from "../../features/shortcuts";
 import { setActiveEditor, clearActiveEditor, type EditorActions } from "./activeEditor";
 
+/** 文件大小上限（字节）——超过此值拒绝打开，保护内存 */
+const MAX_FILE_SIZE_BYTES = 10_000_000;
+/** 大文件警告阈值（字节）——超过此值弹窗确认 */
+const LARGE_FILE_WARN_BYTES = 1_000_000;
+
 /** 编辑器字体 CSS spec —— 可独立测试 */
 export const EDITOR_FONT_SPEC = {
   ".cm-scroller": { fontFamily: `"JetBrains Mono", monospace` },
@@ -229,11 +234,11 @@ export function useCodeMirror({ container, filePath, panelId, fontSize, onFontSi
           doc = await fs.readFile(filePath);
           // P2-10: 大文件检查 — UTF-8 文本 length 近似文件字节数
           const sizeHint = doc.length;
-          if (sizeHint > 10_000_000) {
+          if (sizeHint > MAX_FILE_SIZE_BYTES) {
             // >10MB：直接拒绝，将文档设为错误提示
             doc = `// [slTerminal] 文件过大（约${(sizeHint / 1_000_000).toFixed(1)}MB），已拒绝打开以保护内存。`;
             filePathRef.current = undefined; // 防止误保存覆盖原文件
-          } else if (sizeHint > 1_000_000) {
+          } else if (sizeHint > LARGE_FILE_WARN_BYTES) {
             // >1MB：弹窗警告，用户可选择继续或取消
             const proceed = window.confirm(
               `文件较大（约${(sizeHint / 1_000_000).toFixed(1)}MB），打开可能影响性能。\n\n确定继续？`,

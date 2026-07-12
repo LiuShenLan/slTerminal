@@ -29,6 +29,11 @@ type LoadState =
 /** iframe sandbox 权限：允许脚本执行和同源访问，禁止顶层导航/弹窗/模态框 */
 const SANDBOX_FLAGS = "allow-scripts allow-same-origin";
 
+/** 加载中提示文字颜色 */
+const LOADING_FG = "#6C6C6C";
+/** iframe 默认背景色（模拟浏览器白底） */
+const IFRAME_BG = "#FFFFFF";
+
 /** 居中容器样式 */
 const centerStyle: React.CSSProperties = {
   width: "100%",
@@ -44,7 +49,7 @@ const iframeStyle: React.CSSProperties = {
   width: "100%",
   height: "100%",
   border: "none",
-  background: "#FFFFFF",
+  background: IFRAME_BG,
 };
 
 const HtmlPanel: React.FC<HtmlPanelProps> = ({ params }) => {
@@ -104,7 +109,7 @@ const HtmlPanel: React.FC<HtmlPanelProps> = ({ params }) => {
   if (state.kind === "loading") {
     return (
       <div style={centerStyle}>
-        <span style={{ color: "#6C6C6C", fontSize: 13 }}>加载中...</span>
+        <span style={{ color: LOADING_FG, fontSize: 13 }}>加载中...</span>
       </div>
     );
   }

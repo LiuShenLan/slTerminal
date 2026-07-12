@@ -1,4 +1,4 @@
-/// Phase 1 PTY 集成测试
+/// PTY 集成测试
 use portable_pty::{native_pty_system, CommandBuilder, PtySize, MasterPty, ChildKiller, Child};
 use std::io::{Read, Write};
 use std::sync::Mutex;
@@ -162,7 +162,7 @@ fn osc_cwd_venv_parsed() {
     assert!(script.contains("9;9"), "应包含 OSC 9;9 CWD 跟踪");
     assert!(script.contains("133"), "应包含 OSC 133 命令边界");
     assert!(script.contains("UTF8") || script.contains("65001"), "应包含 UTF-8 编码修复");
-    assert!(!script.contains("$env:SLTERM_PANE_ID"), "Phase 1 无嵌套检测（留待 Phase 5）");
+    assert!(!script.contains("$env:SLTERM_PANE_ID"), "无嵌套检测");
     assert!(
         script.contains("[char]0x1b") || script.contains("0x1b"),
         "应使用 [char]0x1b PS 5.1 兼容写法"

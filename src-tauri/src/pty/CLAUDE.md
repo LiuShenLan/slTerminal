@@ -130,6 +130,17 @@ Claude Code 的 Ink 渲染器启动时发送 DA1 查询（`ESC[c`）作为同步
 
 `strip_conpty_startup()` 的 `match_csi_startup` 中原有 `b's' | b'u' => Some(3)` 分支，将标准 VT100 光标保存/恢复（`ESC[s`/`ESC[u`）误标记为 ConPTY 启动序列。该分支实际为死代码——`ESC[s`/`ESC[u` 仅 2 字节（不含 `[`），永远不进入 CSI 序列匹配器。已删除。
 
+## 文件
+
+| 文件 | 职责 |
+|------|------|
+| `mod.rs` | PTY 模块入口：`pty_spawn`、`pty_write`、`pty_resize`、`pty_kill`、`pty_reattach` 等 Tauri 命令 |
+| `spawn.rs` | PTY 进程创建：SPAWN_LOCK 串行化 + `conpty_custom::create_conpty_pair()` 自定义 ConPTY 创建 + PtyEvent 枚举定义 |
+| `reader.rs` | 独立 reader 线程：`reader_loop()` 阻塞读取 PTY 输出 → Channel 推送 PtyEvent；`strip_conpty_startup()` 启动序列剥离；`apply_startup_strip()` 纯函数；`mirror_da1_query()` DA1 查询检测 |
+| `shell.rs` | Shell 发现与选择：`resolve_shell()` / `resolve_shell_info()` → pwsh → powershell → cmd 回退；`which_full_path()` PATH 解析 |
+| `state.rs` | `PtySession` 结构体 + `PtyState` 全局 HashMap：master、child、writer、reader_handle、channel（可替换）、output_ring（256KB FIFO）、da1_injected |
+| `win_build.rs` | Windows build 号获取：通过 `nt_version` crate 的 RtlGetNtVersionNumbers 获取真实 build 号（低 28 位），非 Windows 平台返回 Unknown 错误 |
+
 ## 命令
 
 ```bash

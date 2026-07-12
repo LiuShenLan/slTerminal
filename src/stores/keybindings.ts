@@ -11,6 +11,7 @@
 import { create } from "zustand";
 import { loadSettings, saveSettings } from "../ipc/settings";
 import type { KeybindingOverrides } from "../features/shortcuts";
+import { PERSIST_DEBOUNCE_MS } from "./projects";
 
 export interface KeybindingsState {
   /** 用户覆盖层：commandId → keystroke 字符串 | null（解绑） */
@@ -78,5 +79,13 @@ useKeybindings.subscribe((state) => {
     saveSettings({ keybindings: state.overrides }).catch(() => {
       // 静默吞错，非关键数据
     });
-  }, 2000);
+  }, PERSIST_DEBOUNCE_MS);
 });
+
+/** 取消待执行的 debounced 保存（关闭钩子中避免竞态） */
+export function cancelPendingSave(): void {
+  if (saveTimer !== null) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+}

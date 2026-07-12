@@ -33,7 +33,7 @@ export interface UseXtermOptions {
   rows: number;
   /** 面板 ID，用于关联 PTY 会话 */
   panelId: string;
-  /** Windows 真实 build 号（F3 动态检测），用于 ConPTY reflow 阈值 */
+  /** Windows 真实 build 号（动态检测），用于 ConPTY reflow 阈值 */
   windowsBuildNumber?: number;
   /** 终端工作目录（来自操作页面 cwd） */
   cwd?: string;
@@ -45,6 +45,18 @@ export interface UseXtermOptions {
   onFontSizeChange?: (size: number) => void;
   /** 命令运行状态变更回调（OSC 133 检测到注册命令启动/退出时触发） */
   onTabStateChange?: (state: TabState) => void;
+}
+
+/** useXterm hook 返回类型 */
+export interface UseXtermReturn {
+  /** 聚焦终端输入 */
+  focus: () => void;
+  /** 测试专用接口（生产代码忽略） */
+  _test: {
+    cancelPendingFlush: () => void;
+    flushBuffer: () => void;
+    getPendingBuffer: () => Uint8Array[];
+  };
 }
 
 // P2-44: 模块级 WebGL 检测缓存，避免每次 mount 创建临时 canvas
@@ -74,6 +86,24 @@ export function resetWebglCache(): void {
 // 当前仅 dispose 后永久退化到 DOM 渲染器，改为延迟重建
 const WEBGL_RETRY_DELAYS = [1000, 2000, 4000, 8000, 16000]; // ms
 const WEBGL_RETRY_MAX = WEBGL_RETRY_DELAYS.length;
+
+/** fallback 终端尺寸与字体大小 */
+const DEFAULT_COLS = 80;
+const DEFAULT_ROWS = 24;
+const DEFAULT_FONT_SIZE = 14;
+
+/** DEC 2026 同步更新 ANSI 转义序列 */
+const DEC2026_PREFIX = "\x1b[?2026h";
+const DEC2026_SUFFIX = "\x1b[?2026l";
+
+/** 合帧分流阈值（字节）：小于此值直写终端，大于等于此值走合帧 + DEC 2026 路径 */
+const DIRECT_WRITE_THRESHOLD = 64;
+/** OSC 52 剪贴板 payload 上限（1MB），防止 DoS */
+const MAX_OSC52_PAYLOAD = 1048576;
+/** 列数变化 resize debounce 时间（毫秒）：宽度变化需 re-wrap 所有行，成本高 */
+const COL_RESIZE_DEBOUNCE_MS = 100;
+/** E2E 测试文本缓冲行数上限，防止内存无限增长 */
+const E2E_BUFFER_MAX_LINES = 1000;
 
 function setupWebglWithRetry(
   term: Terminal,
@@ -134,7 +164,7 @@ export function canFit(
     return true;
 }
 
-export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, cwd, visible, fontSize, onFontSizeChange, onTabStateChange }: UseXtermOptions) {
+export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, cwd, visible, fontSize, onFontSizeChange, onTabStateChange }: UseXtermOptions): UseXtermReturn {
   const terminalRef = useRef<Terminal | null>(null);
   /** StrictMode 双重挂载守卫：记录已初始化的 panelId，同 panelId 的 remount 跳过 */
   const smGuardRef = useRef<string | null>(null);
@@ -156,8 +186,8 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
   /** P2-02: 复用 TextDecoder 实例，避免每次 PTY 输出都 new */
   const decoderRef = useRef(new TextDecoder());
   /** P1-01/02: 记录最近一次 spawn 尺寸，供重试使用 */
-  const lastColsRef = useRef<number>(80);
-  const lastRowsRef = useRef<number>(24);
+  const lastColsRef = useRef<number>(DEFAULT_COLS);
+  const lastRowsRef = useRef<number>(DEFAULT_ROWS);
   /** P1-01/02: Enter 重试 disposable，确保重试前清理旧监听 */
   const retryDisposableRef = useRef<{ dispose: () => void } | null>(null);
   /** P1-01/02: 跨闭包共享 doSpawn / setupRetry（handlePtyOutput 通过 ref 触发重连） */
@@ -240,8 +270,8 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
 
     // DEC 2026 包裹为 Uint8Array
     const enc = new TextEncoder();
-    const prefix = enc.encode("\x1b[?2026h");
-    const suffix = enc.encode("\x1b[?2026l");
+    const prefix = enc.encode(DEC2026_PREFIX);
+    const suffix = enc.encode(DEC2026_SUFFIX);
     const wrapped = new Uint8Array(prefix.length + merged.length + suffix.length);
     wrapped.set(prefix, 0);
     wrapped.set(merged, prefix.length);
@@ -257,14 +287,14 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
         const rawBytes = new Uint8Array(event.data.bytes);
         const text = decoderRef.current.decode(rawBytes);
         e2eTextBufferRef.current.push(text);
-        // P2-01: 每 1000 行截断，防止 E2E 文本缓冲无限增长
-        if (e2eTextBufferRef.current.length > 1000) {
-          e2eTextBufferRef.current.splice(0, e2eTextBufferRef.current.length - 1000);
+        // P2-01: 每 E2E_BUFFER_MAX_LINES 行截断，防止 E2E 文本缓冲无限增长
+        if (e2eTextBufferRef.current.length > E2E_BUFFER_MAX_LINES) {
+          e2eTextBufferRef.current.splice(0, e2eTextBufferRef.current.length - E2E_BUFFER_MAX_LINES);
         }
 
-        // 直写阈值 64 字节：Ink 逐 token 输出通常 64-200 字节，
-        // 降到 64 确保绝大多数 Ink 小块走合帧 + DEC 2026 路径
-        if (text.length < 64) {
+        // 直写阈值：Ink 逐 token 输出通常 64-200 字节，
+        // DIRECT_WRITE_THRESHOLD 确保绝大多数 Ink 小块走合帧 + DEC 2026 路径
+        if (text.length < DIRECT_WRITE_THRESHOLD) {
           terminalRef.current?.write(text);
         } else {
           // 内存上限：超出 64KB 丢弃最旧数据块（非焦点终端保护）
@@ -326,8 +356,8 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
     isDisposedRef.current = false;
 
     // xterm.js 不支持 term.open() 二次调用（GitHub Issue #4978）
-    // 每次挂载均创建新 Terminal 实例，Phase 3 由 ring buffer + pty_reattach 恢复内容
-    const term = new Terminal({ ...terminalOptions, cols: 80, rows: 24, fontSize: fontSize ?? 14 });
+    // 每次挂载均创建新 Terminal 实例，由 ring buffer + pty_reattach 恢复内容
+    const term = new Terminal({ ...terminalOptions, cols: DEFAULT_COLS, rows: DEFAULT_ROWS, fontSize: fontSize ?? DEFAULT_FONT_SIZE });
     terminalRef.current = term;
 
     // F3: 动态设置 ConPTY buildNumber（真实 OS build，覆盖 theme.ts 硬编码）
@@ -418,8 +448,8 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
       if (selector && selector !== "c") return true;
       // 禁止读请求
       if (payload === "?" || payload.length === 0) return true;
-      // Payload 上限 1MB
-      if (payload.length > 1048576) return true;
+      // Payload 上限 MAX_OSC52_PAYLOAD
+      if (payload.length > MAX_OSC52_PAYLOAD) return true;
       // 焦点门控：非可见面板忽略
       if (visibleRef.current === false) return true;
 
@@ -473,10 +503,10 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
 
     const doSpawn = (realCols: number, realRows: number) => {
       // NaN 守卫：缓存 Terminal 复用后，proposeDimensions 可能返回 NaN（字符尺寸未重算）
-      const cols = Number.isFinite(realCols) ? realCols : 80;
-      const rows = Number.isFinite(realRows) ? realRows : 24;
+      const cols = Number.isFinite(realCols) ? realCols : DEFAULT_COLS;
+      const rows = Number.isFinite(realRows) ? realRows : DEFAULT_ROWS;
       if (!Number.isFinite(realCols) || !Number.isFinite(realRows)) {
-        console.warn(`[H6] ⚠️ proposeDimensions 返回 NaN，回退 80x24 (raw: cols=${realCols} rows=${realRows})`);
+        console.warn(`[H6] ⚠️ proposeDimensions 返回 NaN，回退 ${DEFAULT_COLS}x${DEFAULT_ROWS} (raw: cols=${realCols} rows=${realRows})`);
       }
       // P1-01/02: 记录尺寸供重试使用
       lastColsRef.current = cols;
@@ -544,12 +574,12 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
             // fit 失败 → 回退
           }
         }
-        doSpawn(80, 24);
+        doSpawn(DEFAULT_COLS, DEFAULT_ROWS);
         return;
       }
 
       if (fitFrames >= MAX_FRAMES || elapsed >= FIT_TIMEOUT) {
-        doSpawn(80, 24);
+        doSpawn(DEFAULT_COLS, DEFAULT_ROWS);
         return;
       }
 
@@ -604,7 +634,7 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
           return;
         }
 
-        // 列数变化（或首次 resize）→ 100ms debounce
+        // 列数变化（或首次 resize）→ COL_RESIZE_DEBOUNCE_MS debounce
         if (resizeTimer !== null) clearTimeout(resizeTimer);
         resizeTimer = setTimeout(() => {
           cancelPendingFlush(); // debounce 期间新积压的旧尺寸数据直接丢弃
@@ -615,7 +645,7 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
           } catch {
             // fit 失败不影响渲染
           }
-        }, 100);
+        }, COL_RESIZE_DEBOUNCE_MS);
       } catch {
         // fit 失败不影响渲染
       }
@@ -735,7 +765,7 @@ export function useXterm({ container, cols, rows, panelId, windowsBuildNumber, c
       e.stopPropagation();
 
       // 从 terminal 实例读取当前字体大小，避免闭包过时
-      const currentSize = terminalRef.current?.options.fontSize ?? 14;
+      const currentSize = terminalRef.current?.options.fontSize ?? DEFAULT_FONT_SIZE;
       const direction = e.deltaY < 0 ? 1 : -1; // 上滚放大，下滚缩小
       const newSize = Math.max(CLAMP_MIN, Math.min(CLAMP_MAX, currentSize + direction));
 

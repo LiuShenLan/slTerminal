@@ -9,10 +9,10 @@ mod git;
 pub use error::AppError;
 pub use state::AppState;
 pub use state::PtyState;
-use crate::pty::build::get_windows_build_number;
+use crate::pty::win_build::get_windows_build_number;
 use tauri_plugin_prevent_default::{Builder as PreventDefaultBuilder, Flags, PlatformOptions};
 
-/// ping 命令 — Phase 0 占位，用于验证 IPC 链路和测试基建
+/// ping 命令 — 占位，用于验证 IPC 链路和测试基建
 #[tauri::command]
 fn ping() -> Result<String, AppError> {
     Ok("pong".to_string())
@@ -105,7 +105,7 @@ mod tests {
 
     #[test]
     fn test_get_windows_build_number_returns_number() {
-        let result = crate::pty::build::get_windows_build_number();
+        let result = crate::pty::win_build::get_windows_build_number();
         #[cfg(windows)]
         {
             assert!(

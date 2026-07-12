@@ -9,7 +9,7 @@ export * as clipboard from "./clipboard";
 export * as dialog from "./dialog";
 export * as window from "./window";
 
-/** 验证 IPC 链路和测试基建 — Phase 0 占位命令 */
+/** 验证 IPC 链路和测试基建 — 占位命令 */
 export async function ping(): Promise<string> {
   return await invoke("ping");
 }

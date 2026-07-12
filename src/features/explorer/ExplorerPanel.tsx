@@ -17,6 +17,9 @@ import { EXPLORER_COLORS, SEPARATOR_BG, INPUT_BORDER, ERROR_BANNER_BG, ERROR_BAN
 import { PANEL_TERMINAL, PANEL_EDITOR, isAlwaysRenderPanel } from "../../workspace/panelRegistry";
 import { fileViewerRegistry } from "../fileViewers";
 
+/** 操作失败错误提示自动消失时间（ms） */
+const ERROR_AUTO_DISMISS_MS = 5000;
+
 export const ExplorerPanel: React.FC = () => {
   const projects = useProjects((s) => s.projects);
   const activePageId = useLayout((s) => s.activePageId);
@@ -46,7 +49,7 @@ export const ExplorerPanel: React.FC = () => {
   const showError = useCallback((msg: string) => {
     setErrorMsg(msg);
     if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
-    errorTimerRef.current = setTimeout(() => setErrorMsg(null), 5000);
+    errorTimerRef.current = setTimeout(() => setErrorMsg(null), ERROR_AUTO_DISMISS_MS);
   }, []);
 
   // 清理定时器
