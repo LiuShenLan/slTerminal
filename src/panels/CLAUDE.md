@@ -166,7 +166,7 @@ xterm.js 6.0.0 原生支持 OSC 8 解析渲染。`useXterm.ts` 在 `term.open()`
 - `@tauri-apps/api/mocks` 的 `mockIPC` 拦截 Tauri IPC
 - 不使用 Playwright / Cypress / 真实浏览器
 
-### useXterm 测试模式（98 条用例，项目最大测试文件）
+### useXterm 测试模式（111 条用例，拆分 2 文件——`use-xterm-output.test.ts` 37 条 + `use-xterm-lifecycle.test.ts` 74 条）
 
 useXterm 是项目中 mock 依赖最多的 hook——需 mock 7 个模块才能隔离测试：
 

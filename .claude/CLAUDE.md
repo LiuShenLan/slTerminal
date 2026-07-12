@@ -66,7 +66,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | 层级 | 名称 | 技术栈 | 运行命令 | 约用例数 |
 |------|------|--------|----------|---------|
 | L1 | Rust 单元/集成 | `cargo test`、`tempfile` 隔离 | `cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1` | ~193 |
-| L2 | 前端单元/集成 | Vitest + jsdom | `npm test` | ~1022 |
+| L2 | 前端单元/集成 | Vitest + jsdom | `npm test` | ~1002 |
 | L3 | 终端 headless 渲染 | Vitest + `@xterm/headless` | `npm run test:l3` | 9 |
 | L4 | 端到端 (E2E) | WDIO + embedded driver | `npm run wdio` | 11 |
 

@@ -51,7 +51,7 @@ export const TerminalRegistry = {
   },
 
   /** 仅用于调试/测试 */
-  _clear(): void {
+  _reset(): void {
     registry.clear();
   },
 };

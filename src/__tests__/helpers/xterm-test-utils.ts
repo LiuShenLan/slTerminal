@@ -1,6 +1,6 @@
 // xterm-test-utils.ts — useXterm 测试共享工厂函数
 //
-// 消除 useXterm.test.ts 中 5 类重复模式：
+// 消除 use-xterm-*.test.ts 中 5 类重复模式：
 //   rAF mock、容器创建、PTY output spy、ResizeObserver mock、setBufferType
 
 import { vi } from "vitest";

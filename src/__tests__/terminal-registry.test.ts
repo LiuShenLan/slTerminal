@@ -1,7 +1,7 @@
 // TerminalRegistry 单元测试——Map 操作 + 幂等性 + 生命周期
 //
 // TerminalRegistry 是终端跨页面复用的核心基础设施。
-// 测试覆盖 register/get/remove/has/_clear 七个场景。
+// 测试覆盖 register/get/remove/has/_reset 七个场景。
 
 import { describe, it, expect, beforeEach } from "vitest";
 import { TerminalRegistry } from "../panels/terminal/TerminalRegistry";
@@ -28,7 +28,7 @@ function makeEntry(overrides?: {
 
 describe("TerminalRegistry", () => {
   beforeEach(() => {
-    TerminalRegistry._clear();
+    TerminalRegistry._reset();
   });
 
   it("register + get 往返：注册后应能取回相同 entry", () => {
@@ -71,12 +71,12 @@ describe("TerminalRegistry", () => {
     expect(TerminalRegistry.get("panel-dup")!.sessionId).toBe("second");
   });
 
-  it("_clear 应清空所有已注册条目", () => {
+  it("_reset 应清空所有已注册条目", () => {
     TerminalRegistry.register("a", makeEntry());
     TerminalRegistry.register("b", makeEntry());
     expect(TerminalRegistry.has("a")).toBe(true);
     expect(TerminalRegistry.has("b")).toBe(true);
-    TerminalRegistry._clear();
+    TerminalRegistry._reset();
     expect(TerminalRegistry.has("a")).toBe(false);
     expect(TerminalRegistry.has("b")).toBe(false);
   });
