@@ -42,7 +42,7 @@ const EditorPanel: React.FC<EditorPanelProps> = ({ params }) => {
         width: "100%",
         height: "100%",
         background: EDITOR_BG,
-        overflow: "auto",
+        overflow: "clip",
       }}
     />
   );

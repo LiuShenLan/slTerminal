@@ -76,4 +76,47 @@ describe("EditorPanel", () => {
       expect.objectContaining({ filePath: undefined, panelId: "editor-0" }),
     );
   });
+
+  // ── 横向滚动条修复：容器 overflow 样式 ──
+
+  it("容器 div 设置 overflow: clip（非 overflow: auto/hidden）", () => {
+    const { container } = render(
+      React.createElement(EditorPanel, { params: { panelId: "editor-5" } }),
+    );
+    const el = container.querySelector('div[style*="overflow"]');
+    expect(el).toBeTruthy();
+    // 内联 style 字符串包含 overflow: clip
+    expect(el!.getAttribute("style")).toContain("overflow: clip");
+  });
+
+  it("容器 div 不包含 overflow: auto（防回归，确保双滚动上下文已消除）", () => {
+    const { container } = render(
+      React.createElement(EditorPanel, { params: { panelId: "editor-6" } }),
+    );
+    const el = container.querySelector('div[style*="overflow"]');
+    expect(el).toBeTruthy();
+    const style = el!.getAttribute("style")!;
+    expect(style).not.toContain("overflow: auto");
+    expect(style).not.toContain("overflow: hidden");
+  });
+
+  it("容器 div 保留 width: 100% 和 height: 100%", () => {
+    const { container } = render(
+      React.createElement(EditorPanel, { params: { panelId: "editor-7" } }),
+    );
+    const el = container.querySelector('div[style*="overflow"]');
+    expect(el).toBeTruthy();
+    const style = el!.getAttribute("style")!;
+    expect(style).toContain("width: 100%");
+    expect(style).toContain("height: 100%");
+  });
+
+  it("容器 div 保留 background 暗色编辑器背景", () => {
+    const { container } = render(
+      React.createElement(EditorPanel, { params: { panelId: "editor-8" } }),
+    );
+    const el = container.querySelector('div[style*="overflow"]');
+    expect(el).toBeTruthy();
+    expect(el!.getAttribute("style")).toContain("background");
+  });
 });

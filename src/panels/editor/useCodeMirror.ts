@@ -258,6 +258,9 @@ export function useCodeMirror({ container, filePath, panelId, fontSize, onFontSi
           extensions: [
             basicSetup,
             oneDark,
+            // .cm-editor 高度→.cm-scroller height:100%约束→溢出→滚动条。
+            // 如缺失，.cm-editor height:auto(=内容高)→scroller=内容高→无溢出→无滚动条。
+            EditorView.theme({ "&": { height: "100%" } }),
             fontCompartment.current.of(createEditorFontExtension(fontSize ?? 14)),
             wrapCompartment.current.of([]), // 默认关闭自动换行
             search({ top: true }),
