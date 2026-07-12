@@ -47,8 +47,8 @@ describe("makeEmptyLayout 空布局验证", () => {
   it("T7: 无原型链属性污染", () => {
     const layout = makeEmptyLayout();
     // 仅自有属性（非继承）
-    expect(layout.hasOwnProperty("toString")).toBe(false);
-    expect(layout.hasOwnProperty("__proto__")).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(layout, "toString")).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(layout, "__proto__")).toBe(false);
   });
 
   it("T8: typeof 为 'object'", () => {

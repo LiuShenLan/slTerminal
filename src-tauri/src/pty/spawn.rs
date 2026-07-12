@@ -157,7 +157,7 @@ pub mod conpty_custom {
                 )
             };
             ensure!(
-                !res.is_err(),
+                res.is_ok(),
                 "UpdateProcThreadAttribute 失败"
             );
             Ok(())
@@ -244,8 +244,8 @@ pub mod conpty_custom {
             use windows::Win32::System::Threading::TerminateProcess;
             let proc = self.proc_handle.lock().unwrap();
             unsafe {
-                TerminateProcess(HANDLE(proc.as_raw_handle() as *mut std::ffi::c_void), 1)
-                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                TerminateProcess(HANDLE(proc.as_raw_handle()), 1)
+                    .map_err(std::io::Error::other)?;
             }
             Ok(())
         }
@@ -264,7 +264,7 @@ pub mod conpty_custom {
             let proc = self.proc_handle.lock().unwrap();
             unsafe {
                 let result = WaitForSingleObject(
-                    HANDLE(proc.as_raw_handle() as *mut std::ffi::c_void),
+                    HANDLE(proc.as_raw_handle()),
                     0,
                 );
                 // WAIT_TIMEOUT = 0x0000_0102, WAIT_OBJECT_0 = 0x0000_0000
@@ -272,8 +272,8 @@ pub mod conpty_custom {
                     return Ok(None);
                 }
                 let mut exit_code: u32 = 0;
-                GetExitCodeProcess(HANDLE(proc.as_raw_handle() as *mut std::ffi::c_void), &mut exit_code)
-                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                GetExitCodeProcess(HANDLE(proc.as_raw_handle()), &mut exit_code)
+                    .map_err(std::io::Error::other)?;
                 Ok(Some(portable_pty::ExitStatus::with_exit_code(exit_code)))
             }
         }
@@ -284,10 +284,10 @@ pub mod conpty_custom {
 
             let proc = self.proc_handle.lock().unwrap();
             unsafe {
-                WaitForSingleObject(HANDLE(proc.as_raw_handle() as *mut std::ffi::c_void), INFINITE);
+                WaitForSingleObject(HANDLE(proc.as_raw_handle()), INFINITE);
                 let mut exit_code: u32 = 0;
-                GetExitCodeProcess(HANDLE(proc.as_raw_handle() as *mut std::ffi::c_void), &mut exit_code)
-                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                GetExitCodeProcess(HANDLE(proc.as_raw_handle()), &mut exit_code)
+                    .map_err(std::io::Error::other)?;
                 Ok(portable_pty::ExitStatus::with_exit_code(exit_code))
             }
         }
@@ -334,8 +334,8 @@ pub mod conpty_custom {
         let hpc = unsafe {
             CreatePseudoConsole(
                 size,
-                HANDLE(stdin_pipe.read.as_raw_handle() as *mut std::ffi::c_void),
-                HANDLE(stdout_pipe.write.as_raw_handle() as *mut std::ffi::c_void),
+                HANDLE(stdin_pipe.read.as_raw_handle()),
+                HANDLE(stdout_pipe.write.as_raw_handle()),
                 flags,
             )
         }?;

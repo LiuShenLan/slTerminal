@@ -142,6 +142,7 @@ cargo test --manifest-path src-tauri/Cargo.toml <test_name> -- --test-threads=1
 7. 修改 `conpty_custom` 模块（flags 计算、AttrList、ConPtyMaster、RawChild、spawn 逻辑）后跑 `conpty_custom::tests` 全部 14 条测试 + `pty_integration_tests` 的 `pty_spawn_custom_conpty` 端到端测试
 8. 修改 `resolve_shell_info()` / `which_full_path()` 后跑 `shell::tests` 全部 9 条测试
 9. `resolve_shell_info()` 返回的 `ShellInfo.program` **必须是完整路径**（非短名）——否则 `CreateProcessW(lpApplicationName=..., lpCommandLine=...)` 找不到可执行文件
+10. ConPTY 指针 cast：`as_raw_handle()` 已返回 `*mut c_void`，无需再 `as *mut std::ffi::c_void`——Clippy `unnecessary-cast` 会报错。同理 `std::io::Error::new(std::io::ErrorKind::Other, e)` 简化为 `std::io::Error::other(e)`（Rust 1.74+），`.map_err(|e| std::io::Error::other(e))` 进一步简化为 `.map_err(std::io::Error::other)`
 
 ## 测试模式
 

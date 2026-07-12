@@ -8,8 +8,8 @@ import { renderHook, act, waitFor } from "@testing-library/react";
 
 // ─── Hoisted mocks ───
 const mocks = vi.hoisted(() => {
-  let mockReadDirImpl = (_path: string) => Promise.resolve([] as { name: string; path: string; isDir: boolean; size: number | null; modified: number | null }[]);
-  let mockGitStatusImpl = (_path: string) => Promise.resolve([] as { path: string; status: string }[]);
+  let mockReadDirImpl = () => Promise.resolve([] as { name: string; path: string; isDir: boolean; size: number | null; modified: number | null }[]);
+  let mockGitStatusImpl = () => Promise.resolve([] as { path: string; status: string }[]);
 
   const mockReadDir = vi.fn().mockImplementation((path: string) => mockReadDirImpl(path));
   const mockGitStatus = vi.fn().mockImplementation((path: string) => mockGitStatusImpl(path));
@@ -29,10 +29,10 @@ const mocks = vi.hoisted(() => {
     resetAll() {
       mockReadDir.mockClear();
       mockGitStatus.mockClear();
-      mockReadDirImpl = (_path: string) => Promise.resolve([
+      mockReadDirImpl = () => Promise.resolve([
         makeEntry("a.ts"), makeEntry("b.ts"), makeEntry("src", true),
       ]);
-      mockGitStatusImpl = (_path: string) => Promise.resolve([
+      mockGitStatusImpl = () => Promise.resolve([
         { path: "C:/project/a.ts", status: "modified" },
       ]);
       mockReadDir.mockImplementation((path: string) => mockReadDirImpl(path));
