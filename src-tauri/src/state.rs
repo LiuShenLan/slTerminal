@@ -1,5 +1,5 @@
 use std::collections::{HashMap, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::JoinHandle;
@@ -29,10 +29,16 @@ pub struct PtySession {
     /// DA1 注入防重复标志（同一会话只注入一次 ESC[?64;22c 响应）
     pub da1_injected: Arc<AtomicBool>,
     /// Windows Job Object 句柄（孤儿防护，drop 时 CloseHandle）
-    /// 此 #[cfg] 虽在 state.rs，但 PtySession 是 PTY 概念，
-    /// 符合架构约束 #9 "等明确处" 精神
-    #[cfg(windows)]
+    /// 非 Windows 平台为零大小占位类型
     pub job_object: Option<crate::pty::spawn::JobHandle>,
+}
+
+impl Drop for PtySession {
+    fn drop(&mut self) {
+        if let Some(handle) = self.reader_handle.take() {
+            let _ = handle.join();
+        }
+    }
 }
 
 /// PTY 全局状态 — HashMap 按 session_id 索引，加 spawn 串行锁
@@ -84,6 +90,48 @@ impl AppState {
             git_repo_cache: Mutex::new(HashMap::new()),
         }
     }
+}
+
+/// 验证目标路径是否在项目根目录子树内（路径 sandbox）
+///
+/// canonicalize 项目根与目标路径后比对前缀。
+/// 若 project_root 未设置则跳过校验（开发兼容）。
+pub fn validate_path_within_root(root_opt: &Option<PathBuf>, target: &Path) -> Result<(), AppError> {
+    let root = match root_opt {
+        Some(r) => r,
+        None => return Ok(()), // project_root 未设置，跳过校验
+    };
+    let canonical_root = dunce::canonicalize(root)
+        .map_err(|e| AppError::IoKind { kind: "path".into(), message: format!("无法解析项目根路径: {e}") })?;
+
+    // 尝试直接 canonicalize 目标（路径已存在）
+    let canonical_target = if let Ok(c) = dunce::canonicalize(target) {
+        c
+    } else {
+        // 目标不存在（如新建文件/目录）：沿父级上溯找到已存在的祖先，
+        // 再拼接剩余路径
+        let mut ancestor = target.to_path_buf();
+        loop {
+            if let Ok(c) = dunce::canonicalize(&ancestor) {
+                let remainder = target
+                    .strip_prefix(&ancestor)
+                    .unwrap_or(Path::new(""));
+                break c.join(remainder);
+            }
+            match ancestor.parent() {
+                Some(p) => ancestor = p.to_path_buf(),
+                None => {
+                    // 无已存在祖先，退化为 root + target 拼接检查
+                    break canonical_root.join(target);
+                }
+            }
+        }
+    };
+
+    if !canonical_target.starts_with(&canonical_root) {
+        return Err(AppError::IoKind { kind: "path".into(), message: "路径超出项目范围".into() });
+    }
+    Ok(())
 }
 
 /// ring buffer 最大容量（256KB，保留最近约 4000+ 行终端输出）
@@ -182,5 +230,170 @@ mod tests {
         assert!(buf.len() <= RING_BUFFER_CAPACITY);
         // 淘汰后第一个字节应是完整行起始 'X'（非截断的中间字节）
         assert_eq!(buf[0], b'X', "淘汰后应以完整行起始，避免截断");
+    }
+}
+
+/// validate_path_within_root 路径沙箱测试
+#[cfg(test)]
+mod sandbox_tests {
+    use super::*;
+
+    /// root_opt 为 None → 跳过校验，返回 Ok
+    #[test]
+    fn validate_root_none_allows_any_path() {
+        let result = validate_path_within_root(&None, std::path::Path::new("C:\\any\\path"));
+        assert!(result.is_ok(), "root_opt=None 应放行任意路径");
+    }
+
+    /// 路径在根内 → 返回 Ok
+    #[test]
+    fn validate_path_inside_root() {
+        let root = tempfile::tempdir().unwrap();
+        let child = root.path().join("inside.txt");
+        std::fs::write(&child, "ok").unwrap();
+
+        let result = validate_path_within_root(
+            &Some(root.path().to_path_buf()),
+            &child,
+        );
+        assert!(result.is_ok(), "根内路径应放行");
+    }
+
+    /// 子目录路径在根内 → 返回 Ok
+    #[test]
+    fn validate_subdir_inside_root() {
+        let root = tempfile::tempdir().unwrap();
+        let subdir = root.path().join("sub").join("deep");
+        std::fs::create_dir_all(&subdir).unwrap();
+        let file = subdir.join("test.txt");
+        std::fs::write(&file, "ok").unwrap();
+
+        let result = validate_path_within_root(
+            &Some(root.path().to_path_buf()),
+            &file,
+        );
+        assert!(result.is_ok(), "子目录内文件应放行");
+    }
+
+    /// 路径在根外 → 返回 Err
+    #[test]
+    fn validate_path_outside_root_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let file = outside.path().join("outside.txt");
+        std::fs::write(&file, "bad").unwrap();
+
+        let result = validate_path_within_root(
+            &Some(root.path().to_path_buf()),
+            &file,
+        );
+        assert!(result.is_err(), "根外路径应拒绝");
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("超出项目范围"), "错误消息应含'超出项目范围'");
+    }
+
+    /// 目标路径不存在 → 沿父级上溯找到已存在祖先（降级路径）
+    #[test]
+    fn validate_nonexistent_path_ancestor_fallback() {
+        let root = tempfile::tempdir().unwrap();
+        // 创建一个已存在的父目录，再指向其中不存在的文件
+        let parent = root.path().join("existing_parent");
+        std::fs::create_dir(&parent).unwrap();
+        let nonexistent = parent.join("not_created_yet.txt");
+
+        let result = validate_path_within_root(
+            &Some(root.path().to_path_buf()),
+            &nonexistent,
+        );
+        assert!(result.is_ok(), "不存在的文件（父目录在根内）应放行");
+    }
+
+    /// 不存在的路径在根外 → 沿父级上溯后仍在根外，应拒绝
+    #[test]
+    fn validate_nonexistent_path_outside_root_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let nonexistent = outside.path().join("not_exists.txt");
+
+        let result = validate_path_within_root(
+            &Some(root.path().to_path_buf()),
+            &nonexistent,
+        );
+        assert!(result.is_err(), "根外不存在的路径应拒绝");
+    }
+
+    /// 路径穿越攻击（../ 逃逸） → 应拒绝
+    #[test]
+    fn validate_path_traversal_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        // 构造 root/sub/../outside → 应该在 canonicalize 后逃出 root
+        let subdir = root.path().join("sub");
+        std::fs::create_dir(&subdir).unwrap();
+        let traversal = subdir.join("..").join("..").join("Windows");
+
+        let result = validate_path_within_root(
+            &Some(root.path().to_path_buf()),
+            &traversal,
+        );
+        // ../ 逃逸经 canonicalize 后应解析到根外路径
+        assert!(result.is_err(), "路径穿越应拒绝");
+    }
+
+    /// 符号链接指向根外 → 应拒绝
+    #[cfg(windows)]
+    #[test]
+    fn validate_symlink_outside_root_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let outside_file = outside.path().join("target.txt");
+        std::fs::write(&outside_file, "data").unwrap();
+
+        let link = root.path().join("link.txt");
+        // Windows 符号链接（需管理员权限，优雅降级）
+        let symlink_result = std::os::windows::fs::symlink_file(&outside_file, &link);
+        if symlink_result.is_err() {
+            // 无权限创建符号链接时跳过测试
+            return;
+        }
+
+        let result = validate_path_within_root(
+            &Some(root.path().to_path_buf()),
+            &link,
+        );
+        assert!(result.is_err(), "指向根外的符号链接应拒绝");
+    }
+
+    /// root 本身是 symlink → 应仍能正确校验
+    #[cfg(windows)]
+    #[test]
+    fn validate_root_is_symlink() {
+        let original_root = tempfile::tempdir().unwrap();
+        let file = original_root.path().join("data.txt");
+        std::fs::write(&file, "ok").unwrap();
+
+        // 创建到 root 的 symlink
+        let link_parent = tempfile::tempdir().unwrap();
+        let link_root = link_parent.path().join("linked_root");
+        let symlink_result = std::os::windows::fs::symlink_dir(&original_root, &link_root);
+        if symlink_result.is_err() {
+            return; // 无权限，跳过
+        }
+
+        let linked_file = link_root.join("data.txt");
+        let result = validate_path_within_root(
+            &Some(link_root),
+            &linked_file,
+        );
+        assert!(result.is_ok(), "symlink 根内路径应放行");
+    }
+
+    /// 根路径自身 canonicalize 失败 → 返回 Err
+    #[test]
+    fn validate_root_canonicalize_fails() {
+        let result = validate_path_within_root(
+            &Some(std::path::PathBuf::from("Z:\\nonexistent_drive\\root")),
+            std::path::Path::new("Z:\\nonexistent_drive\\root\\file.txt"),
+        );
+        assert!(result.is_err(), "根 canonicalize 失败应返回 Err");
     }
 }

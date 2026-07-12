@@ -190,7 +190,7 @@ pub mod conpty_custom {
 
     impl MasterPty for ConPtyMaster {
         fn resize(&self, size: PtySize) -> Result<(), Error> {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.inner.lock().expect("ConPtyInner lock poisoned");
             // 检查 HPCON 有效性（初始化或已关闭时为 INVALID_HANDLE_VALUE）
             if inner.hpc.is_invalid() {
                 inner.size = size;
@@ -206,18 +206,18 @@ pub mod conpty_custom {
         }
 
         fn get_size(&self) -> Result<PtySize, Error> {
-            Ok(self.inner.lock().unwrap().size)
+            Ok(self.inner.lock().expect("ConPtyInner lock poisoned").size)
         }
 
         fn try_clone_reader(&self) -> Result<Box<dyn Read + Send>, Error> {
-            Ok(Box::new(self.inner.lock().unwrap().readable.try_clone()?))
+            Ok(Box::new(self.inner.lock().expect("ConPtyInner lock poisoned").readable.try_clone()?))
         }
 
         fn take_writer(&self) -> Result<Box<dyn Write + Send>, Error> {
             Ok(Box::new(
                 self.inner
                     .lock()
-                    .unwrap()
+                    .expect("ConPtyInner lock poisoned")
                     .writable
                     .take()
                     .ok_or_else(|| anyhow::anyhow!("writer 已被取走（仅允许 take 一次）"))?,
@@ -242,7 +242,7 @@ pub mod conpty_custom {
     impl ChildKiller for RawChild {
         fn kill(&mut self) -> std::io::Result<()> {
             use windows::Win32::System::Threading::TerminateProcess;
-            let proc = self.proc_handle.lock().unwrap();
+            let proc = self.proc_handle.lock().expect("RawChild proc_handle lock poisoned");
             unsafe {
                 TerminateProcess(HANDLE(proc.as_raw_handle()), 1)
                     .map_err(std::io::Error::other)?;
@@ -253,7 +253,13 @@ pub mod conpty_custom {
         fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
             // ChildKiller 通过互斥锁共享进程句柄，无需克隆
             // 此方法仅用于 trait 兼容，不应被调用
-            unimplemented!("RawChild 不支持 clone_killer")
+            let proc_handle = self.proc_handle.lock().expect("RawChild proc_handle lock poisoned");
+            let duped = proc_handle.try_clone()
+                .expect("RawChild clone_killer: 复制进程句柄失败");
+            Box::new(RawChild {
+                proc_handle: Mutex::new(duped),
+                pid: self.pid,
+            })
         }
     }
 
@@ -261,7 +267,7 @@ pub mod conpty_custom {
         fn try_wait(&mut self) -> std::io::Result<Option<portable_pty::ExitStatus>> {
             use windows::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject};
 
-            let proc = self.proc_handle.lock().unwrap();
+            let proc = self.proc_handle.lock().expect("RawChild proc_handle lock poisoned");
             unsafe {
                 let result = WaitForSingleObject(
                     HANDLE(proc.as_raw_handle()),
@@ -282,7 +288,7 @@ pub mod conpty_custom {
             use windows::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject};
             const INFINITE: u32 = 0xFFFF_FFFF;
 
-            let proc = self.proc_handle.lock().unwrap();
+            let proc = self.proc_handle.lock().expect("RawChild proc_handle lock poisoned");
             unsafe {
                 WaitForSingleObject(HANDLE(proc.as_raw_handle()), INFINITE);
                 let mut exit_code: u32 = 0;
@@ -297,7 +303,7 @@ pub mod conpty_custom {
         }
 
         fn as_raw_handle(&self) -> Option<std::os::windows::raw::HANDLE> {
-            let proc = self.proc_handle.lock().unwrap();
+            let proc = self.proc_handle.lock().expect("RawChild proc_handle lock poisoned");
             Some(proc.as_raw_handle() as std::os::windows::raw::HANDLE)
         }
     }
@@ -556,6 +562,17 @@ unsafe impl Send for JobHandle {}
 #[cfg(windows)]
 unsafe impl Sync for JobHandle {}
 
+/// 非 Windows 平台：JobHandle 为零大小占位类型（无 Job Object 概念）
+#[cfg(not(windows))]
+pub struct JobHandle;
+
+#[cfg(not(windows))]
+impl JobHandle {
+    pub fn new_dummy() -> Self {
+        Self
+    }
+}
+
 /// spawn 参数
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -602,7 +619,10 @@ pub fn pty_spawn(
     // Windows: 绕过 portable-pty openpty，直接调 Win32 CreatePseudoConsole 控制 flags
     #[cfg(windows)]
     let (conpty_hpc, conpty_master) = {
-        let build = super::build::get_windows_build_number().unwrap_or(0);
+        let build = super::build::get_windows_build_number().unwrap_or_else(|e| {
+            tracing::warn!("无法获取 Windows build 号，降级使用基础 ConPTY flags（无 PASSTHROUGH_MODE）: {}", e);
+            0
+        });
         conpty_custom::create_conpty_pair(request.cols, request.rows, build)
             .map_err(|e| AppError::Pty(e.to_string()))?
     };
@@ -661,12 +681,19 @@ pub fn pty_spawn(
             .map_err(|e| AppError::Pty(e.to_string()))?
     };
 
-    // Windows: 将子进程放入 Job Object 防止孤儿进程
-    #[cfg(windows)]
+    // 将子进程放入 Job Object 防止孤儿进程（Windows 平台），
+    // 非 Windows 平台返回 None
     let job_handle = {
-        if let Some(pid) = child.process_id() {
-            Some(add_to_job_object(pid)?)
-        } else {
+        #[cfg(windows)]
+        {
+            if let Some(pid) = child.process_id() {
+                Some(add_to_job_object(pid)?)
+            } else {
+                None
+            }
+        }
+        #[cfg(not(windows))]
+        {
             None
         }
     };

@@ -20,7 +20,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 | 文件 | 职责 |
 |------|------|
-| `mod.rs` | `FileWatcher` 结构体 + `fs_watch` Tauri 命令 + `classify_event` 事件分类（委托纯函数 `classify_by_kind`） |
+| `mod.rs` | `FileWatcher` 结构体 + `notify_watch` Tauri 命令 + `classify_event` 事件分类（委托纯函数 `classify_by_kind`） |
 | `pool.rs` | `LruWatcherPool` — LRU 淘汰的 watcher 缓存池 |
 
 ## FileWatcher
@@ -38,7 +38,7 @@ FileWatcher {
 - `pause()` / `resume()` / `is_paused()` — AtomicBool 控制
 - `Drop` — 发送停止信号 + join 线程，确保 OS 句柄释放
 
-## `fs_watch` 命令
+## `notify_watch` 命令
 
 ```
 前端 startWatch(path)
@@ -52,7 +52,7 @@ FileWatcher {
 - **watcher 重建开销**：不要在每次页面切换时 `stop()` + `start()` watcher。始终走池的 `pause_all_except`。
 - **路径规范化**：池 key 使用 `dunce::simplified()` 处理，与 `fs_read_dir` 保持一致。
 - **Drop 保证**：`LruWatcherPool::drop()` → `stop_all()` → 遍历 join 所有线程。AppState 销毁时自动触发。
-- **路径 sandbox**：`fs_watch` 在创建 watcher 前校验 `validate_path_within_root()`。
+- **路径 sandbox**：`notify_watch` 在创建 watcher 前校验 `validate_path_within_root()`。
 
 ## 测试模式
 

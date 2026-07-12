@@ -50,7 +50,9 @@ pub async fn save_settings(settings: serde_json::Value) -> Result<(), AppError> 
         tmp.flush()?;
         if settings_path.exists() {
             let bak = app_dir.join("settings.json.bak");
-            let _ = std::fs::copy(&settings_path, &bak);
+            if let Err(e) = std::fs::copy(&settings_path, &bak) {
+                tracing::warn!("settings .bak 备份失败: {}", e);
+            }
         }
         tmp.persist(&settings_path)
             .map_err(|e| AppError::IoKind { kind: format!("{:?}", e.error.kind()), message: format!("persist 失败: {e}") })?;

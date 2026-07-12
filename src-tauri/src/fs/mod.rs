@@ -3,9 +3,13 @@
 /// 阻塞 I/O 用 spawn_blocking 包装，不阻塞 tokio runtime。
 use crate::error::AppError;
 use crate::state::AppState;
+use crate::state::validate_path_within_root;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use tauri::State;
+
+/// CRLF 检测样本最大字节数（取前 64KB 判定原文件行尾风格）
+const CRLF_SAMPLE_MAX_BYTES: usize = 65536;
 
 /// 目录条目
 #[derive(Debug, Clone, Serialize)]
@@ -21,48 +25,6 @@ pub struct DirEntry {
     pub size: Option<u64>,
     /// 最后修改时间（Unix 毫秒），仅文件时有值
     pub modified: Option<u64>,
-}
-
-/// 验证目标路径是否在项目根目录子树内（路径 sandbox）
-///
-/// canonicalize 项目根与目标路径后比对前缀。
-/// 若 project_root 未设置则跳过校验（开发兼容）。
-pub(crate) fn validate_path_within_root(root_opt: &Option<PathBuf>, target: &Path) -> Result<(), AppError> {
-    let root = match root_opt {
-        Some(r) => r,
-        None => return Ok(()), // project_root 未设置，跳过校验
-    };
-    let canonical_root = dunce::canonicalize(root)
-        .map_err(|e| AppError::IoKind { kind: "path".into(), message: format!("无法解析项目根路径: {e}") })?;
-
-    // 尝试直接 canonicalize 目标（路径已存在）
-    let canonical_target = if let Ok(c) = dunce::canonicalize(target) {
-        c
-    } else {
-        // 目标不存在（如新建文件/目录）：沿父级上溯找到已存在的祖先，
-        // 再拼接剩余路径
-        let mut ancestor = target.to_path_buf();
-        loop {
-            if let Ok(c) = dunce::canonicalize(&ancestor) {
-                let remainder = target
-                    .strip_prefix(&ancestor)
-                    .unwrap_or(Path::new(""));
-                break c.join(remainder);
-            }
-            match ancestor.parent() {
-                Some(p) => ancestor = p.to_path_buf(),
-                None => {
-                    // 无已存在祖先，退化为 root + target 拼接检查
-                    break canonical_root.join(target);
-                }
-            }
-        }
-    };
-
-    if !canonical_target.starts_with(&canonical_root) {
-        return Err(AppError::IoKind { kind: "path".into(), message: "路径超出项目范围".into() });
-    }
-    Ok(())
 }
 
 /// 读取文件内容（UTF-8 文本）
@@ -119,7 +81,7 @@ pub async fn fs_write_file(
             |_| cfg!(windows),
             |bytes| {
                 // 取前 64KB 样本检测 CRLF
-                let sample = String::from_utf8_lossy(&bytes[..bytes.len().min(65536)]);
+                let sample = String::from_utf8_lossy(&bytes[..bytes.len().min(CRLF_SAMPLE_MAX_BYTES)]);
                 sample.contains("\r\n")
             },
         );
@@ -494,174 +456,11 @@ mod read_dir_tests {
     }
 }
 
-/// validate_path_within_root 路径沙箱测试
-#[cfg(test)]
-mod sandbox_tests {
-    use super::*;
-
-    /// root_opt 为 None → 跳过校验，返回 Ok
-    #[test]
-    fn validate_root_none_allows_any_path() {
-        let result = validate_path_within_root(&None, std::path::Path::new("C:\\any\\path"));
-        assert!(result.is_ok(), "root_opt=None 应放行任意路径");
-    }
-
-    /// 路径在根内 → 返回 Ok
-    #[test]
-    fn validate_path_inside_root() {
-        let root = tempfile::tempdir().unwrap();
-        let child = root.path().join("inside.txt");
-        std::fs::write(&child, "ok").unwrap();
-
-        let result = validate_path_within_root(
-            &Some(root.path().to_path_buf()),
-            &child,
-        );
-        assert!(result.is_ok(), "根内路径应放行");
-    }
-
-    /// 子目录路径在根内 → 返回 Ok
-    #[test]
-    fn validate_subdir_inside_root() {
-        let root = tempfile::tempdir().unwrap();
-        let subdir = root.path().join("sub").join("deep");
-        std::fs::create_dir_all(&subdir).unwrap();
-        let file = subdir.join("test.txt");
-        std::fs::write(&file, "ok").unwrap();
-
-        let result = validate_path_within_root(
-            &Some(root.path().to_path_buf()),
-            &file,
-        );
-        assert!(result.is_ok(), "子目录内文件应放行");
-    }
-
-    /// 路径在根外 → 返回 Err
-    #[test]
-    fn validate_path_outside_root_rejected() {
-        let root = tempfile::tempdir().unwrap();
-        let outside = tempfile::tempdir().unwrap();
-        let file = outside.path().join("outside.txt");
-        std::fs::write(&file, "bad").unwrap();
-
-        let result = validate_path_within_root(
-            &Some(root.path().to_path_buf()),
-            &file,
-        );
-        assert!(result.is_err(), "根外路径应拒绝");
-        let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("超出项目范围"), "错误消息应含'超出项目范围'");
-    }
-
-    /// 目标路径不存在 → 沿父级上溯找到已存在祖先（降级路径）
-    #[test]
-    fn validate_nonexistent_path_ancestor_fallback() {
-        let root = tempfile::tempdir().unwrap();
-        // 创建一个已存在的父目录，再指向其中不存在的文件
-        let parent = root.path().join("existing_parent");
-        std::fs::create_dir(&parent).unwrap();
-        let nonexistent = parent.join("not_created_yet.txt");
-
-        let result = validate_path_within_root(
-            &Some(root.path().to_path_buf()),
-            &nonexistent,
-        );
-        assert!(result.is_ok(), "不存在的文件（父目录在根内）应放行");
-    }
-
-    /// 不存在的路径在根外 → 沿父级上溯后仍在根外，应拒绝
-    #[test]
-    fn validate_nonexistent_path_outside_root_rejected() {
-        let root = tempfile::tempdir().unwrap();
-        let outside = tempfile::tempdir().unwrap();
-        let nonexistent = outside.path().join("not_exists.txt");
-
-        let result = validate_path_within_root(
-            &Some(root.path().to_path_buf()),
-            &nonexistent,
-        );
-        assert!(result.is_err(), "根外不存在的路径应拒绝");
-    }
-
-    /// 路径穿越攻击（../ 逃逸） → 应拒绝
-    #[test]
-    fn validate_path_traversal_rejected() {
-        let root = tempfile::tempdir().unwrap();
-        // 构造 root/sub/../outside → 应该在 canonicalize 后逃出 root
-        let subdir = root.path().join("sub");
-        std::fs::create_dir(&subdir).unwrap();
-        let traversal = subdir.join("..").join("..").join("Windows");
-
-        let result = validate_path_within_root(
-            &Some(root.path().to_path_buf()),
-            &traversal,
-        );
-        // ../ 逃逸经 canonicalize 后应解析到根外路径
-        assert!(result.is_err(), "路径穿越应拒绝");
-    }
-
-    /// 符号链接指向根外 → 应拒绝
-    #[cfg(windows)]
-    #[test]
-    fn validate_symlink_outside_root_rejected() {
-        let root = tempfile::tempdir().unwrap();
-        let outside = tempfile::tempdir().unwrap();
-        let outside_file = outside.path().join("target.txt");
-        std::fs::write(&outside_file, "data").unwrap();
-
-        let link = root.path().join("link.txt");
-        // Windows 符号链接（需管理员权限，优雅降级）
-        let symlink_result = std::os::windows::fs::symlink_file(&outside_file, &link);
-        if symlink_result.is_err() {
-            // 无权限创建符号链接时跳过测试
-            return;
-        }
-
-        let result = validate_path_within_root(
-            &Some(root.path().to_path_buf()),
-            &link,
-        );
-        assert!(result.is_err(), "指向根外的符号链接应拒绝");
-    }
-
-    /// root 本身是 symlink → 应仍能正确校验
-    #[cfg(windows)]
-    #[test]
-    fn validate_root_is_symlink() {
-        let original_root = tempfile::tempdir().unwrap();
-        let file = original_root.path().join("data.txt");
-        std::fs::write(&file, "ok").unwrap();
-
-        // 创建到 root 的 symlink
-        let link_parent = tempfile::tempdir().unwrap();
-        let link_root = link_parent.path().join("linked_root");
-        let symlink_result = std::os::windows::fs::symlink_dir(&original_root, &link_root);
-        if symlink_result.is_err() {
-            return; // 无权限，跳过
-        }
-
-        let linked_file = link_root.join("data.txt");
-        let result = validate_path_within_root(
-            &Some(link_root),
-            &linked_file,
-        );
-        assert!(result.is_ok(), "symlink 根内路径应放行");
-    }
-
-    /// 根路径自身 canonicalize 失败 → 返回 Err
-    #[test]
-    fn validate_root_canonicalize_fails() {
-        let result = validate_path_within_root(
-            &Some(std::path::PathBuf::from("Z:\\nonexistent_drive\\root")),
-            std::path::Path::new("Z:\\nonexistent_drive\\root\\file.txt"),
-        );
-        assert!(result.is_err(), "根 canonicalize 失败应返回 Err");
-    }
-}
-
 /// fs_write_file CRLF 行尾保持逻辑测试
 #[cfg(test)]
 mod write_file_tests {
+    use super::*;
+
     /// 原文件为 CRLF → 写入内容应保持 CRLF
     #[test]
     fn crlf_preserved_when_original_is_crlf() {
@@ -676,7 +475,7 @@ mod write_file_tests {
         // 检测原文件行尾
         let raw = std::fs::read(&file_path).unwrap();
         let use_crlf = {
-            let sample = String::from_utf8_lossy(&raw[..raw.len().min(65536)]);
+            let sample = String::from_utf8_lossy(&raw[..raw.len().min(CRLF_SAMPLE_MAX_BYTES)]);
             sample.contains("\r\n")
         };
         assert!(use_crlf, "原文件含 CRLF");
@@ -707,7 +506,7 @@ mod write_file_tests {
 
         let raw = std::fs::read(&file_path).unwrap();
         let use_crlf = {
-            let sample = String::from_utf8_lossy(&raw[..raw.len().min(65536)]);
+            let sample = String::from_utf8_lossy(&raw[..raw.len().min(CRLF_SAMPLE_MAX_BYTES)]);
             sample.contains("\r\n")
         };
         assert!(!use_crlf, "原文件不含 CRLF");
@@ -739,7 +538,7 @@ mod write_file_tests {
         let use_crlf = std::fs::read(&file_path).map_or_else(
             |_| cfg!(windows),
             |bytes| {
-                let sample = String::from_utf8_lossy(&bytes[..bytes.len().min(65536)]);
+                let sample = String::from_utf8_lossy(&bytes[..bytes.len().min(CRLF_SAMPLE_MAX_BYTES)]);
                 sample.contains("\r\n")
             },
         );
@@ -770,7 +569,7 @@ mod write_file_tests {
 
         let raw = std::fs::read(&file_path).unwrap();
         let use_crlf = {
-            let sample = String::from_utf8_lossy(&raw[..raw.len().min(65536)]);
+            let sample = String::from_utf8_lossy(&raw[..raw.len().min(CRLF_SAMPLE_MAX_BYTES)]);
             sample.contains("\r\n")
         };
         assert!(use_crlf);

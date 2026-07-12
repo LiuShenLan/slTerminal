@@ -413,7 +413,7 @@ describe('settings IPC 合约', () => {
 // ═══════════════════════════════════════════════════════════════════
 
 describe('notify IPC 合约', () => {
-  it('startWatch: 应调用 fs_watch 命令，参数包含 path', async () => {
+  it('startWatch: 应调用 notify_watch 命令，参数包含 path', async () => {
     const spy = vi.fn();
     mockIPC((cmd, args) => {
       spy(cmd, args);
@@ -421,7 +421,7 @@ describe('notify IPC 合约', () => {
 
     await notify.startWatch('C:\\test-project');
 
-    expect(spy).toHaveBeenCalledWith('fs_watch', {
+    expect(spy).toHaveBeenCalledWith('notify_watch', {
       path: 'C:\\test-project',
     });
   });
@@ -434,7 +434,7 @@ describe('notify IPC 合约', () => {
 
     await notify.startWatch('D:/projects/my-app');
 
-    expect(spy).toHaveBeenCalledWith('fs_watch', {
+    expect(spy).toHaveBeenCalledWith('notify_watch', {
       path: 'D:/projects/my-app',
     });
   });
@@ -443,7 +443,7 @@ describe('notify IPC 合约', () => {
 
   it('startWatch: invoke 失败时异常应传播', async () => {
     mockIPC((cmd) => {
-      if (cmd === 'fs_watch') throw new Error('路径不存在');
+      if (cmd === 'notify_watch') throw new Error('路径不存在');
     });
 
     await expect(notify.startWatch('C:\\nonexistent')).rejects.toThrow('路径不存在');

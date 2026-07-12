@@ -211,7 +211,7 @@ impl Drop for FileWatcher {
 /// 此模式避免每次切换都 `stop()` + `start()`（Windows 上 `ReadDirectoryChangesW`
 /// 递归注册 26K 文件的 target/ 目录需约 2 秒）。
 #[tauri::command]
-pub fn fs_watch(
+pub fn notify_watch(
     path: String,
     state: tauri::State<'_, AppState>,
     app_handle: AppHandle,
@@ -227,7 +227,7 @@ pub fn fs_watch(
             .project_root
             .read()
             .map_err(|e| AppError::Notify(format!("获取 project_root 锁失败: {e}")))?;
-        crate::fs::validate_path_within_root(&root, &watch_path)?;
+        crate::state::validate_path_within_root(&root, &watch_path)?;
     }
 
     let mut pool = state
@@ -580,7 +580,7 @@ mod tests {
     }
 
     /// 验证 watcher 替换模式：停止旧 watcher → 创建新 watcher
-    /// 对应 fs_watch 命令的核心逻辑（停止旧→启动新）
+    /// 对应 notify_watch 命令的核心逻辑（停止旧→启动新）
     #[test]
     fn file_watcher_replacement_stops_old() {
         // 创建旧 watcher

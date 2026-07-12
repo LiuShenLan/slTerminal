@@ -74,7 +74,9 @@ pub fn reader_loop(
                     }
                 };
                 if let Some(ref c) = *ch {
-                    let _ = c.send(PtyEvent::Exit { code });
+                    if let Err(e) = c.send(PtyEvent::Exit { code }) {
+                        tracing::debug!("Channel send 失败（前端可能已断开）: {}", e);
+                    }
                 }
                 break;
             }
@@ -107,8 +109,12 @@ pub fn reader_loop(
                     da1_injected.store(true, Ordering::Relaxed);
                     // 向子进程 stdin 注入 DA1 响应（不阻塞 reader 线程）
                     if let Ok(mut w) = writer.lock() {
-                        let _ = w.write_all(b"\x1b[?64;22c");
-                        let _ = w.flush();
+                        if let Err(e) = w.write_all(b"\x1b[?64;22c") {
+                            tracing::warn!("DA1 响应注入失败: {}", e);
+                        }
+                        if let Err(e) = w.flush() {
+                            tracing::warn!("DA1 响应注入失败: {}", e);
+                        }
                     }
                 }
                 // P2-46: 总是先缓存到 ring buffer（不 clone），再 send 消耗 bytes
@@ -117,7 +123,9 @@ pub fn reader_loop(
                     tracing::warn!("ring buffer 写入失败: {e}");
                 }
                 if let Some(ref c) = *ch {
-                    let _ = c.send(PtyEvent::Output { bytes }); // move bytes，不 clone
+                    if let Err(e) = c.send(PtyEvent::Output { bytes }) {
+                        tracing::debug!("Channel send 失败（前端可能已断开）: {}", e);
+                    }
                 }
             }
             Err(e) => {
@@ -134,7 +142,9 @@ pub fn reader_loop(
                     }
                 };
                 if let Some(ref c) = *ch {
-                    let _ = c.send(PtyEvent::Exit { code: Some(-1) });
+                    if let Err(e) = c.send(PtyEvent::Exit { code: Some(-1) }) {
+                        tracing::debug!("Channel send 失败（前端可能已断开）: {}", e);
+                    }
                 }
                 break;
             }
