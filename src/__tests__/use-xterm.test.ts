@@ -5,6 +5,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
+import { useFontSize } from "../stores";
 
 // ─── Hoisted mocks ───
 const {
@@ -544,9 +545,9 @@ describe("字体大小调节", () => {
     capturedTerminal = null;
     vi.clearAllMocks();
     mockProposeDimensions.mockReturnValue({ cols: 80, rows: 24 });
+    // 重置字体大小 store 防止跨测试状态泄露
+    useFontSize.setState({ terminalFontSize: 14 });
   });
-
-  // ── Terminal 构造 ──
 
   it("38. Terminal 创建时使用传入的 fontSize", () => {
     renderHook(() =>
@@ -693,6 +694,9 @@ describe("字体大小调节", () => {
   });
 
   it("45. 到达下限 8 → 缩小不触发 onFontSizeChange", () => {
+    // 设置 store 字体大小为下限 8（useFontSizeBridge 从 store 读取基准值）
+    useFontSize.setState({ terminalFontSize: 8 });
+
     renderHook(() =>
       useXterm({
         container,
@@ -703,8 +707,6 @@ describe("字体大小调节", () => {
         onFontSizeChange: mockOnFontSizeChange,
       }),
     );
-
-    if (capturedTerminal) capturedTerminal.options.fontSize = 8;
 
     const event = new WheelEvent("wheel", {
       ctrlKey: true,
@@ -717,6 +719,9 @@ describe("字体大小调节", () => {
   });
 
   it("46. 到达上限 32 → 放大不触发 onFontSizeChange", () => {
+    // 设置 store 字体大小为上限 32（useFontSizeBridge 从 store 读取基准值）
+    useFontSize.setState({ terminalFontSize: 32 });
+
     renderHook(() =>
       useXterm({
         container,
@@ -727,8 +732,6 @@ describe("字体大小调节", () => {
         onFontSizeChange: mockOnFontSizeChange,
       }),
     );
-
-    if (capturedTerminal) capturedTerminal.options.fontSize = 32;
 
     const event = new WheelEvent("wheel", {
       ctrlKey: true,
@@ -1302,8 +1305,6 @@ describe("Uint8Array 合帧缓冲", () => {
     expect(decoded).toContain("X".repeat(100));
   });
 
-  it("UA4: 单块 Uint8Array flush 数据完整性", async () => {
-    });
   it("UA4: 单块 Uint8Array flush 数据完整性", async () => {
     renderHook(() =>
       useXterm({ container, cols: 80, rows: 24, panelId: "ua-4" }),
