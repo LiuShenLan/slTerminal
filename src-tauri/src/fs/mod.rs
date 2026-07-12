@@ -174,7 +174,7 @@ pub async fn fs_write_file(
 
 /// 递归读取目录内容
 ///
-/// 过滤 `.claude/worktrees/`、`.git/`、`node_modules/`。
+/// 过滤 `.git/`、`node_modules/`（重型目录，非用户编辑文件）。
 /// 结果按文件夹→文件排序，同类型按名称字母排序。
 #[tauri::command]
 pub async fn fs_read_dir(path: String) -> Result<Vec<DirEntry>, AppError> {
@@ -186,8 +186,8 @@ pub async fn fs_read_dir(path: String) -> Result<Vec<DirEntry>, AppError> {
             let entry = entry?;
             let name = entry.file_name().to_string_lossy().to_string();
 
-            // 过滤隐私/重型目录
-            if name == ".claude" || name == ".git" || name == "node_modules" {
+            // 过滤重型目录
+            if name == ".git" || name == "node_modules" {
                 continue;
             }
 
@@ -387,6 +387,28 @@ mod read_dir_tests {
             });
         }
         assert_eq!(entries.len(), 1, "应过滤 node_modules");
+    }
+
+    #[test]
+    fn test_fs_read_dir_shows_dotclaude() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".claude")).unwrap();
+        std::fs::write(dir.path().join("visible.txt"), "ok").unwrap();
+
+        let mut entries: Vec<DirEntry> = Vec::new();
+        for entry in std::fs::read_dir(dir.path()).unwrap() {
+            let entry = entry.unwrap();
+            let name = entry.file_name().to_string_lossy().to_string();
+            let is_dir = entry.file_type().unwrap().is_dir();
+            entries.push(DirEntry {
+                name,
+                path: entry.path().to_string_lossy().replace('\\', "/"),
+                is_dir,
+                size: None,
+                modified: None,
+            });
+        }
+        assert_eq!(entries.len(), 2, ".claude 和 visible.txt 均应显示");
     }
 
     #[test]
