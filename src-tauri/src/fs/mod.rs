@@ -65,35 +65,6 @@ pub(crate) fn validate_path_within_root(root_opt: &Option<PathBuf>, target: &Pat
     Ok(())
 }
 
-/// 设置当前项目根路径（前端打开项目时调用）
-#[tauri::command]
-pub fn set_project_root(
-    path: String,
-    state: State<'_, AppState>,
-) -> Result<(), AppError> {
-    let p = PathBuf::from(&path);
-    if !p.exists() {
-        return Err(AppError::IoKind { kind: "path".into(), message: format!("路径不存在: {path}") });
-    }
-    let mut root = state
-        .project_root
-        .write()
-        .map_err(|e| AppError::IoKind { kind: "lock".into(), message: format!("获取 project_root 锁失败: {e}") })?;
-    *root = Some(p);
-    Ok(())
-}
-
-/// 清除 git 仓库缓存（目录切换时调用）
-#[tauri::command]
-pub fn clear_git_cache(state: State<'_, AppState>) -> Result<(), AppError> {
-    let mut cache = state
-        .git_repo_cache
-        .lock()
-        .map_err(|e| AppError::Git(format!("获取 git_repo_cache 锁失败: {e}")))?;
-    cache.clear();
-    Ok(())
-}
-
 /// 读取文件内容（UTF-8 文本）
 #[tauri::command]
 pub async fn fs_read_file(path: String, state: State<'_, AppState>) -> Result<String, AppError> {

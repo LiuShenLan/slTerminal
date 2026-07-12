@@ -78,8 +78,6 @@ pub fn run() {
             fs::fs_rename,
             settings::save_settings,
             settings::load_settings,
-            fs::set_project_root,
-            fs::clear_git_cache,
             git::git_status,
             git::git_diff,
             notify::fs_watch,
