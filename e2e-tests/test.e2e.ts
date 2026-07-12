@@ -78,7 +78,7 @@ describe('slTerminal E2E', () => {
     const state = await browser.waitUntil(
       async () => {
         const result = await browser.execute(() => {
-          const containers = document.querySelectorAll('[style*="height: 100%"]');
+          const containers = document.querySelectorAll('[data-e2e="terminal-container"]');
           for (const c of containers) {
             const el = c as any;
             if (el.__e2e_sessionReady) return { ready: true };
@@ -97,7 +97,7 @@ describe('slTerminal E2E', () => {
 
     // 4. 通过 E2E helper 写入 echo 命令到 PTY
     await browser.execute(() => {
-      const containers = document.querySelectorAll('[style*="height: 100%"]');
+      const containers = document.querySelectorAll('[data-e2e="terminal-container"]');
       for (const c of containers) {
         const el = c as any;
         if (el.__e2e_writeToPty) {
@@ -110,7 +110,7 @@ describe('slTerminal E2E', () => {
 
     // 5. 额外直接写入标记到终端（绕过 PTY，验证缓冲机制）
     await browser.execute(() => {
-      const containers = document.querySelectorAll('[style*="height: 100%"]');
+      const containers = document.querySelectorAll('[data-e2e="terminal-container"]');
       for (const c of containers) {
         const el = c as any;
         if (el.__e2e_writeToTerminal) {
@@ -125,7 +125,7 @@ describe('slTerminal E2E', () => {
     const terminalText = await browser.waitUntil(
       async () => {
         const text = await browser.execute(() => {
-          const containers = document.querySelectorAll('[style*="height: 100%"]');
+          const containers = document.querySelectorAll('[data-e2e="terminal-container"]');
           for (const c of containers) {
             const el = c as any;
             if (typeof el.__e2e_getTerminalText === 'function') {
@@ -166,7 +166,7 @@ describe('键盘快捷键', () => {
     await browser.waitUntil(
       async () => {
         const result = await browser.execute(() => {
-          const containers = document.querySelectorAll('[style*="height: 100%"]');
+          const containers = document.querySelectorAll('[data-e2e="terminal-container"]');
           for (const c of containers) {
             const el = c as any;
             if (el.__e2e_sessionReady) return true;
@@ -200,7 +200,7 @@ describe('键盘快捷键', () => {
     // 6. 直接写入标记验证（粘贴通过 xterm.js term.paste → onData → PTY write → echo 回显）
     //    为可靠起见，直接通过 E2E helper 写入标记
     await browser.execute((text: string) => {
-      const containers = document.querySelectorAll('[style*="height: 100%"]');
+      const containers = document.querySelectorAll('[data-e2e="terminal-container"]');
       for (const c of containers) {
         const el = c as any;
         if (el.__e2e_writeToTerminal) {
@@ -215,7 +215,7 @@ describe('键盘快捷键', () => {
     const terminalText = await browser.waitUntil(
       async () => {
         const text = await browser.execute(() => {
-          const containers = document.querySelectorAll('[style*="height: 100%"]');
+          const containers = document.querySelectorAll('[data-e2e="terminal-container"]');
           for (const c of containers) {
             const el = c as any;
             if (typeof el.__e2e_getTerminalText === 'function') {
@@ -664,7 +664,7 @@ describe('终端跨页面存活 (H6)', () => {
       await browser.waitUntil(
         async () => {
           return await browser.execute(() => {
-            const containers = document.querySelectorAll('[style*="height: 100%"]');
+            const containers = document.querySelectorAll('[data-e2e="terminal-container"]');
             for (const c of containers) {
               if ((c as any).__e2e_sessionReady) return true;
             }
@@ -677,7 +677,7 @@ describe('终端跨页面存活 (H6)', () => {
       // 6. 写入跨页面标记
       const marker = 'H6_CROSS_PAGE_MARKER_' + Date.now();
       await browser.execute((text: string) => {
-        const containers = document.querySelectorAll('[style*="height: 100%"]');
+        const containers = document.querySelectorAll('[data-e2e="terminal-container"]');
         for (const c of containers) {
           const el = c as any;
           if (el.__e2e_writeToTerminal) {
@@ -692,7 +692,7 @@ describe('终端跨页面存活 (H6)', () => {
       await browser.waitUntil(
         async () => {
           const text = await browser.execute(() => {
-            const containers = document.querySelectorAll('[style*="height: 100%"]');
+            const containers = document.querySelectorAll('[data-e2e="terminal-container"]');
             for (const c of containers) {
               const el = c as any;
               if (typeof el.__e2e_getTerminalText === 'function') {
@@ -738,7 +738,7 @@ describe('终端跨页面存活 (H6)', () => {
 
       // 13. 验证 page1 终端内容仍含标记（H6 核心断言）
       const textAfterSwitch = await browser.execute((m: string) => {
-        const containers = document.querySelectorAll('[style*="height: 100%"]');
+        const containers = document.querySelectorAll('[data-e2e="terminal-container"]');
         for (const c of containers) {
           const el = c as any;
           if (typeof el.__e2e_getTerminalText === 'function') {

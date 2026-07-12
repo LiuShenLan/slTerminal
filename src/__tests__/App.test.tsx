@@ -35,8 +35,13 @@ vi.mock("../ipc/notify", () => ({
   startWatch: () => Promise.resolve(),
 }));
 
-// ─── 导入 App 模块（触发 __slterm_e2e_createProject 挂载到 window）───
-import "../App";
+vi.mock("../features/sidebar/SidebarTree", () => ({
+  default: () => null,
+  makeEmptyLayout: vi.fn(() => ({})),
+}));
+
+// ─── 导入 stores + E2E helpers（不依赖 App 模块）───
+import { installAllE2eHelpers } from "../../e2e-tests/helpers";
 import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
 
@@ -63,6 +68,8 @@ describe("__slterm_e2e_createProject", () => {
     vi.clearAllMocks();
     resetStores();
     localStorage.clear();
+    // 挂载 E2E helper 到 window（替代旧 App.tsx 模块级代码）
+    installAllE2eHelpers();
   });
 
   it("1. 调用后 projects store 含新项目，rootPath + pages 正确", () => {

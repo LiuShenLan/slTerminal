@@ -18,6 +18,7 @@ import type { ITerminalOptions } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import type { WebglAddon } from "@xterm/addon-webgl";
 import { detectWebgl, setupWebglWithRetry } from "./webgl";
+import { initTerminalE2e } from "../../../e2e-tests/helpers";
 
 // ---- 常量 ----
 
@@ -137,22 +138,21 @@ export function useTerminalInstance(
 
     // E2E 测试辅助钩子（仅开发模式）
     if (import.meta.env.DEV) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const e2eHelper: any = container;
-      e2eHelper.__e2e_writeToTerminal = (text: string) => {
-        if (isDisposedRef.current) return;
-        term.write(text);
-        e2eTextBufferRef.current.push(text);
-        // 防止内存无限增长
-        if (e2eTextBufferRef.current.length > E2E_BUFFER_MAX_LINES) {
-          e2eTextBufferRef.current.splice(
-            0,
-            e2eTextBufferRef.current.length - E2E_BUFFER_MAX_LINES,
-          );
-        }
-      };
-      e2eHelper.__e2e_getTerminalText = () =>
-        e2eTextBufferRef.current.join("");
+      initTerminalE2e(container, {
+        writeToTerminal: (text: string) => {
+          if (isDisposedRef.current) return;
+          term.write(text);
+          e2eTextBufferRef.current.push(text);
+          // 防止内存无限增长
+          if (e2eTextBufferRef.current.length > E2E_BUFFER_MAX_LINES) {
+            e2eTextBufferRef.current.splice(
+              0,
+              e2eTextBufferRef.current.length - E2E_BUFFER_MAX_LINES,
+            );
+          }
+        },
+        getTerminalText: () => e2eTextBufferRef.current.join(""),
+      });
     }
 
     return () => {

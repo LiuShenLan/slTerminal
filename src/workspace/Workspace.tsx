@@ -30,19 +30,11 @@ import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
 import { ErrorBoundary } from "../lib";
 import { INPUT_BORDER, SECONDARY_BG, BUTTON_FG, PLACEHOLDER_FG, SEPARATOR_BG } from "../theme";
+import { markWorkspaceReady } from "../../e2e-tests/helpers";
 
 declare global {
   interface Window {
     __dockviewApi?: DockviewApi;
-    __slterm_e2e_workspaceReady?: boolean;
-    // E2E 标题测试辅助
-    __slterm_e2e_registerAndRecompute?: (
-      pageId: string,
-      rootPath: string,
-      panelId: string,
-      filePath?: string,
-    ) => void;
-    __slterm_e2e_getActivePageInfo?: () => { pageId: string; rootPath: string } | null;
   }
 }
 
@@ -344,44 +336,9 @@ const PageDockview: React.FC<PageDockviewProps> = ({
 
 const Workspace: React.FC = () => {
   // E2E 测试就绪信号：Workspace 挂载后立即可见（渲染阶段同步设置，非 useEffect）
-  window.__slterm_e2e_workspaceReady = true;
-
-  // E2E 标题测试辅助（允许测试脚本通过程序化 API 创建面板并验证标题）
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (window as any).__slterm_e2e_registerAndRecompute = (
-    pageId: string,
-    rootPath: string,
-    panelId: string,
-    filePath?: string,
-  ) => {
-    titleManager.registerEditor(pageId, panelId, filePath);
-    const api = window.__dockviewApi;
-    if (api && rootPath) {
-      const updates = titleManager.recomputeTitles(pageId, rootPath);
-      for (const { panelId: pid, title } of updates) {
-        const p = api.getPanel(pid);
-        if (p) p.api.setTitle(title);
-      }
-    }
-  };
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (window as any).__slterm_e2e_getActivePageInfo = () => {
-    const state = useProjects.getState();
-    const activeId = useLayout.getState().activePageId;
-    if (!activeId) return null;
-    for (const [, proj] of Object.entries(state.projects)) {
-      for (const page of proj.pages) {
-        if (page.pageId === activeId) {
-          return {
-            pageId: page.pageId,
-            rootPath: proj.rootPath,
-          };
-        }
-      }
-    }
-    return null;
-  };
+  if (import.meta.env.DEV) {
+    markWorkspaceReady();
+  }
 
   const pageApiMapRef = useRef<Map<string, DockviewApi>>(new Map());
   const [initializedPages, setInitializedPages] = useState<Set<string>>(new Set());

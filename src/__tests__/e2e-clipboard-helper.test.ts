@@ -1,11 +1,11 @@
 // e2e-clipboard-helper.test.ts — E2E clipboard helper 自动化测试
 //
-// 验证 App.tsx 顶层代码同步挂载的 E2E helper：
-// - __slterm_e2e_writeClipboard 同步可用（非动态 import Promise）
+// 验证 installAllE2eHelpers() 挂载的 E2E helper：
+// - __slterm_e2e_writeClipboard 可用且为函数
 // - 调用 writeClipboard → writeText（来自 ipc/clipboard）
 // - __slterm_e2e_createProject 不受影响
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // ─── Hoisted mocks ───
 const { mockWriteText } = vi.hoisted(() => ({
@@ -50,6 +50,7 @@ vi.mock("../stores/projects", () => ({
   useProjects: {
     getState: vi.fn(() => ({
       projects: {},
+      addProject: vi.fn(),
       updatePageLayout: vi.fn(),
     })),
     setState: vi.fn(),
@@ -63,11 +64,15 @@ vi.mock("../features/sidebar/SidebarTree", () => ({
 
 vi.mock("dockview-react/dist/styles/dockview.css", () => ({}));
 
-// 导入 App 触发模块顶层代码（挂载 E2E helpers）
-import "../App";
+// 导入 E2E helpers 并挂载
+import { installAllE2eHelpers } from "../../e2e-tests/helpers";
 
 // ─── Tests ───
 describe("E2E clipboard helper", () => {
+  beforeEach(() => {
+    installAllE2eHelpers();
+  });
+
   it("25. __slterm_e2e_writeClipboard 同步可用且为函数", () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const helper = (window as any).__slterm_e2e_writeClipboard;

@@ -34,6 +34,8 @@ import { onFsEvent } from "../../ipc/notify";
 import { gitDiff } from "../../ipc/git";
 import { usePanelFocus } from "../../features/shortcuts";
 import { setActiveEditor, clearActiveEditor, type EditorActions } from "./activeEditor";
+import { useFontSizeWheel } from "../../lib/useFontSizeWheel";
+import { FONT_SIZE_MIN, FONT_SIZE_MAX } from "../../stores/fontSize";
 
 /** 文件大小上限（字节）——超过此值拒绝打开，保护内存 */
 const MAX_FILE_SIZE_BYTES = 10_000_000;
@@ -121,9 +123,10 @@ export function useCodeMirror({ container, filePath, panelId, fontSize, onFontSi
   const wordWrapRef = useRef(false);
   /** 字体大小 ref —— wheel handler 中读取，避免闭包捕获过时值 */
   const fontSizeRef = useRef<number>(fontSize ?? 14);
-  // 保存后短时间内抑制 fs-event auto-reload，避免将自己的写入误判为外部改动、
+  // 保存后按文件路径抑制 fs-event auto-reload，避免将自己的写入误判为外部改动、
   // 执行全量文档替换从而破坏 diff gutter 的标记（RangeSet.map 会把所有 marker 清空）
-  const justSavedRef = useRef(false);
+  // Set<string> 按路径去重：多编辑器同时保存时 boolean 标记会被他人清空，Set 各自独立
+  const justSavedRef = useRef(new Set<string>());
   // P1-17: 组件卸载标记，防止 async initEditor 在 unmount 后操作 DOM
   const mountedRef = useRef(false);
 
@@ -144,8 +147,9 @@ export function useCodeMirror({ container, filePath, panelId, fontSize, onFontSi
       filePathRef.current = path;
     }
 
-    // 标记为自己保存，防止后续 fs-event 误判为外部改动而清空 diff 标记
-    justSavedRef.current = true;
+    // 标记自己保存的文件路径，防止后续 fs-event 误判为外部改动而清空 diff 标记
+    // Set 按路径去重：多编辑器同时保存时各自路径独立，不互相影响
+    justSavedRef.current.add(path);
 
     const content = view.state.doc.toString();
 
@@ -334,13 +338,16 @@ export function useCodeMirror({ container, filePath, panelId, fontSize, onFontSi
   // D3: 监听外部文件改动
   useEffect(() => {
     const unlisten = onFsEvent((event) => {
-      // 跳过自己保存触发的文件事件，避免 auto-reload 清空 diff gutter 标记
-      if (justSavedRef.current) {
-        justSavedRef.current = false;
-        return;
+      const currentPath = filePathRef.current;
+      if (currentPath) {
+        // 按文件路径去重：仅跳过该编辑器实例自己保存触发的文件事件
+        const normalizedCurrent = currentPath.replace(/\\/g, "/");
+        if (justSavedRef.current.has(normalizedCurrent)) {
+          justSavedRef.current.delete(normalizedCurrent);
+          return;
+        }
       }
 
-      const currentPath = filePathRef.current;
       if (!currentPath) return;
 
       // 规范化路径比较
@@ -408,34 +415,10 @@ export function useCodeMirror({ container, filePath, panelId, fontSize, onFontSi
     });
   }, [fontSize]);
 
-  // Ctrl+鼠标滚轮 调节字体大小
-  useEffect(() => {
-    if (!container || !onFontSizeChange) return;
-
-    const CLAMP_MIN = 8;
-    const CLAMP_MAX = 32;
-
-    const handleWheel = (e: WheelEvent) => {
-      if (!e.ctrlKey) return; // 非 Ctrl 滚轮透传
-
-      e.preventDefault();
-      e.stopPropagation();
-
-      const currentSize = fontSizeRef.current;
-      const direction = e.deltaY < 0 ? 1 : -1; // 上滚放大，下滚缩小
-      const newSize = Math.max(CLAMP_MIN, Math.min(CLAMP_MAX, currentSize + direction));
-
-      if (newSize !== currentSize) {
-        onFontSizeChange(newSize);
-      }
-    };
-
-    container.addEventListener("wheel", handleWheel, { capture: true, passive: false });
-
-    return () => {
-      container.removeEventListener("wheel", handleWheel, { capture: true });
-    };
-  }, [container, onFontSizeChange]);
+  // Ctrl+滚轮调节字体大小（共享 hook，含 Mac Cmd+Wheel）
+  useFontSizeWheel(container, FONT_SIZE_MIN, FONT_SIZE_MAX, fontSizeRef, (size) => {
+    onFontSizeChange?.(size);
+  });
 
   return {
     /** 获取当前编辑器内容 */

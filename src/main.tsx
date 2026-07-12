@@ -18,6 +18,11 @@ async function bootstrap() {
     });
   }
 
+  // E2E 辅助仅在 DEV 模式下动态导入——生产构建完全不包含此文件
+  if (import.meta.env.DEV) {
+    import("../e2e-tests/helpers").then((m) => m.installAllE2eHelpers());
+  }
+
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <React.StrictMode>
       <App />

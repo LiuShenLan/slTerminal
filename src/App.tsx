@@ -3,15 +3,12 @@ import { registerCloseHandler } from "./ipc/window";
 import { Workspace } from "./workspace";
 import {
   loadAllProjects, markPersistenceReady, saveAllProjects, cancelPendingSave,
-  useProjects, createProjectId, createPageId,
+  useProjects,
 } from "./stores/projects";
-import type { OperationPage, Project } from "./stores/projects";
 import { useLayout } from "./stores/layout";
 import { useFontSize, cancelPendingSave as cancelFontSizeSave } from "./stores/fontSize";
 import { useKeybindings, cancelPendingSave as cancelKeybindingsSave } from "./stores/keybindings";
 import { saveLayout } from "./workspace/layoutSerde";
-import { makeEmptyLayout } from "./features/sidebar/SidebarTree";
-import { writeText } from "./ipc/clipboard";
 import { pty } from "./ipc";
 import { TerminalRegistry } from "./panels/terminal/TerminalRegistry";
 import { ErrorBoundary } from "./lib";
@@ -25,88 +22,6 @@ import "dockview-react/dist/styles/dockview.css";
 const SHUTDOWN_TIMEOUT_MS = 3000;
 /** localStorage key：上次活跃页面 ID */
 const LS_LAST_ACTIVE_PAGE_KEY = "slterm-last-active-page";
-
-// E2E pending 标记：__slterm_e2e_createProject 调用时设为 true，
-// 阻止 init 序列的 localStorage 恢复覆盖 E2E 设置的 activePageId
-let e2eProjectPending = false;
-
-// E2E 测试辅助：暴露程序化创建项目的 API（绕过原生文件夹对话框）
-if (typeof window !== "undefined") {
-  // E2E 测试辅助：暴露 clipboard helper（静态 import，同步挂载，无竞态）
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (window as any).__slterm_e2e_writeClipboard = writeText;
-
-  // E2E 诊断：暴露快捷键注册表状态（上下文栈 + 已注册命令）
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (window as any).__slterm_e2e_shortcutDebug = () => {
-    const r = getShortcutRegistry();
-    return { stack: r._contextStack(), commands: r.listCommands().map((c) => c.id) };
-  };
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (window as any).__slterm_e2e_createProject = (dirPath: string) => {
-    e2eProjectPending = true; // 阻止 localStorage 恢复覆盖
-    const name = dirPath.split(/[/\\]/).pop() || dirPath;
-    const projectId = createProjectId();
-    const pageId = createPageId();
-
-    const page: OperationPage = {
-      pageId,
-      name,
-      layout: makeEmptyLayout(),
-      cwd: dirPath,
-      createdAt: Date.now(),
-      lastAccessedAt: Date.now(),
-    };
-
-    const project: Project = {
-      projectId,
-      name,
-      rootPath: dirPath,
-      pages: [page],
-      activePageId: pageId,
-      version: 1,
-    };
-
-    useProjects.getState().addProject(project);
-    useLayout.getState().setActivePage(pageId);
-    return pageId;
-  };
-
-  // E2E 测试辅助：根据 pageId 查找所属 projectId
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (window as any).__slterm_e2e_getProjectIdForPage = (pageId: string) => {
-    const { projects } = useProjects.getState();
-    for (const [projId, proj] of Object.entries(projects)) {
-      if (proj.pages.some((p) => p.pageId === pageId)) {
-        return projId;
-      }
-    }
-    return null;
-  };
-
-  // E2E 测试辅助：在已有项目中新增操作页面（用于 H6 跨页面存活测试）
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (window as any).__slterm_e2e_addPage = (projectId: string, name: string, rootPath: string) => {
-    const pageId = createPageId();
-    const page: OperationPage = {
-      pageId,
-      name,
-      layout: makeEmptyLayout(),
-      cwd: rootPath,
-      createdAt: Date.now(),
-      lastAccessedAt: Date.now(),
-    };
-    useProjects.getState().addPage(projectId, page);
-    return pageId;
-  };
-
-  // E2E 测试辅助：切换活跃页面（用于 H6 跨页面切换验证）
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (window as any).__slterm_e2e_switchToPage = (pageId: string) => {
-    useLayout.getState().setActivePage(pageId);
-  };
-}
 
 function App() {
   /** S4-D1: 数据就绪后才渲染 Workspace，消除启动竞态 */
@@ -139,9 +54,9 @@ function App() {
       markPersistenceReady();
 
       // 数据就绪后恢复上次 activePageId（确保 pageId 对应的项目数据已加载）
-      // E2E 模式跳过：__slterm_e2e_createProject 已设 e2eProjectPending=true
+      // E2E 模式跳过：__slterm_e2e_createProject 已设 window.__slterm_e2e_projectPending=true
       try {
-        if (!e2eProjectPending) {
+        if (!window.__slterm_e2e_projectPending) {
           const lastPage = localStorage.getItem(LS_LAST_ACTIVE_PAGE_KEY);
           if (lastPage) {
             useLayout.getState().setActivePage(lastPage);

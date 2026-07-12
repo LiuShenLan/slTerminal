@@ -98,6 +98,7 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ api, params }) => {
   return (
     <div
       ref={containerRef}
+      data-e2e="terminal-container"
       style={{
         width: "100%",
         height: "100%",

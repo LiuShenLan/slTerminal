@@ -13,7 +13,7 @@
 // - usePtyResize.ts       — ResizeObserver X/Y 分离 debounce
 // - useClipboardHandler.ts — OSC 52 剪贴板拦截
 // - useCommandDetection.ts — OSC 133 命令边界检测 + 页签标题
-// - useFontSizeBridge.ts   — 字体大小 store 订阅 + Ctrl+Wheel
+// - useFontSizeWheel.ts (src/lib/) — Ctrl+Wheel 共享 hook
 // - webgl.ts              — WebGL 检测 + WebglAddon 加载
 
 import { useEffect, useRef, useCallback, useMemo, useState } from "react";
@@ -26,15 +26,21 @@ import { usePtyOutput } from "./usePtyOutput";
 import { usePtyResize } from "./usePtyResize";
 import { useClipboardHandler } from "./useClipboardHandler";
 import { useCommandDetection } from "./useCommandDetection";
-import { useFontSizeBridge } from "./useFontSizeBridge";
 export { detectWebgl, resetWebglCache } from "./webgl";
 import { pty } from "../../ipc";
 import { setActiveTerminal, clearActiveTerminal, type TerminalActions } from "./activeTerminal";
 import { usePanelFocus, getShortcutRegistry } from "../../features/shortcuts";
 import { TerminalRegistry } from "./TerminalRegistry";
+import { useFontSizeWheel } from "../../lib/useFontSizeWheel";
+import { FONT_SIZE_MIN, FONT_SIZE_MAX } from "../../stores/fontSize";
 // 命令行→标题/图标规则（side-effect import 注册规则）
 import "./tabRules";
 import type { TabState } from "./TabTitleRegistry";
+import {
+  installTerminalWriteToPty,
+  setTerminalSessionReady,
+  setTerminalSessionError,
+} from "../../../e2e-tests/helpers";
 
 export interface UseXtermOptions {
   /** 容器 DOM 元素 */
@@ -99,11 +105,15 @@ export function useXterm({
 }: UseXtermOptions): UseXtermReturn {
 
   // ═══════════════════════════════════════════════════════════════
-  // 1. 字体大小（useFontSizeBridge — Ctrl+Wheel 处理 + store 订阅）
-  //    fontSize prop 优先级高于 bridge 返回值，保持 TerminalPanel 控制权
-  //    onChange 回调兼容旧 onFontSizeChange 接口，通知调用方字体大小变化
+  // 1. 字体大小（Ctrl+Wheel 共享 hook + store 订阅）
+  //    fontSize prop 来自 TerminalPanel（store.terminalFontSize），fontSizeRef 跟踪当前值
+  //    wheel handler 直接调 onFontSizeChange（即 store.setTerminalFontSize）
   // ═══════════════════════════════════════════════════════════════
-  useFontSizeBridge(container, onFontSizeChange);
+  const fontSizeRef = useRef(fontSize ?? 14);
+  fontSizeRef.current = fontSize ?? 14;
+  useFontSizeWheel(container, FONT_SIZE_MIN, FONT_SIZE_MAX, fontSizeRef, (size) => {
+    onFontSizeChange?.(size);
+  });
 
   // ═══════════════════════════════════════════════════════════════
   // 2. Terminal 实例 + addon 生命周期（useTerminalInstance）
@@ -232,17 +242,17 @@ export function useXterm({
       },
     };
 
-    // E2E 测试辅助钩子（挂在 container DOM 上）
-    // __e2e_writeToTerminal / __e2e_getTerminalText 由 useTerminalInstance 在 DEV 模式下注入
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const e2eHelper: any = container;
-    e2eHelper.__e2e_sessionReady = false;
-    e2eHelper.__e2e_writeToPty = (data: string) => {
-      if (sessionIdRef.current) {
-        pty.write(sessionIdRef.current, new TextEncoder().encode(data))
-          .catch((err) => console.error("E2E PTY write 失败:", err));
-      }
-    };
+    // E2E 测试辅助钩子——委托给 helpers.ts（DEV 模式编译时条件排除）
+    // __e2e_writeToTerminal / __e2e_getTerminalText 由 useTerminalInstance 在 DEV 模式下安装
+    if (import.meta.env.DEV) {
+      setTerminalSessionReady(container, false);
+      installTerminalWriteToPty(container, (data: string) => {
+        if (sessionIdRef.current) {
+          pty.write(sessionIdRef.current, new TextEncoder().encode(data))
+            .catch((err) => console.error("E2E PTY write 失败:", err));
+        }
+      });
+    }
 
     // ── PTY spawn ──
     // rAF 轮询容器就绪 → fit → proposeDimensions → pty.spawn(真实尺寸)
@@ -275,13 +285,13 @@ export function useXterm({
             webglAddon: webglAddonRef.current,
             fitAddon,
           });
-          e2eHelper.__e2e_sessionReady = true;
+          if (import.meta.env.DEV) setTerminalSessionReady(container, true);
           // PTY spawn 初始化：重置命令运行状态（覆盖持久化残留）
           resetCommandState();
         })
         .catch((err) => {
           term.writeln(`\r\n[重新连接] 按 Enter 重试...\r\n`);
-          e2eHelper.__e2e_error = String(err);
+          if (import.meta.env.DEV) setTerminalSessionError(container, String(err));
           console.error(`[H6] ❌ spawn FAIL panelId="${panelId}"`, err);
           // 设置 Enter 重连监听（不立即重新 spawn，由用户按 Enter 触发）
           setupRetry(cols, rows);
