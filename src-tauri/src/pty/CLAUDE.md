@@ -12,8 +12,8 @@ PTY 管理——Windows ConPTY 终端模拟核心。负责 shell 进程的完整
 shell.rs          → resolve_shell() 返回 CommandBuilder（传统路径）+ resolve_shell_info() 返回 ShellInfo（自定义 ConPTY 路径）
 mod.rs/spawn.rs   → pty_spawn() 握 SPAWN_LOCK → conpty_custom::create_conpty_pair()（绕过 portable-pty，直接调 Win32）→ reader 线程（锁外）
 reader.rs         → reader_loop() 独立线程阻塞读 → Channel 推 PtyEvent（READER_BUF_SIZE=16KB）
-mod.rs            → pty_write / pty_resize / pty_kill / pty_reattach
-state.rs          → PtySession 结构体 + PtyState 全局 HashMap
+spawn.rs          → pty_spawn / pty_write / pty_resize / pty_kill / pty_reattach（Tauri 命令）
+src-tauri/src/state.rs（顶层模块，非 pty 子模块）→ PtySession 结构体 + PtyState 全局 HashMap
 ```
 
 **PtyEvent 枚举**（`spawn.rs`，带 tag 的 serde 枚举，`camelCase` 序列化）：
@@ -21,7 +21,15 @@ state.rs          → PtySession 结构体 + PtyState 全局 HashMap
 - `Output { bytes: Vec<u8> }` — 原始终端输出字节
 - `Exit { code: Option<i32> }` — 子进程退出
 
-**PtySession**（`state.rs`）：`master`（Mutex<dyn MasterPty>）、`child`（Arc<Mutex<dyn Child>>）、`writer`（Arc<Mutex<dyn Write>>，take_writer 仅一次故共享）、`reader_handle`、`channel`（Arc<RwLock<Option<Channel>>>，可替换用于 reattach）、`output_ring`（256KB FIFO，Channel 断开时缓存）。
+**PtySession**（`state.rs`）：`master`（Mutex<dyn MasterPty>）、`child`（Arc<Mutex<dyn Child>>）、`writer`（Arc<Mutex<dyn Write>>，take_writer 仅一次故共享）、`reader_handle`、`channel`（Arc<RwLock<Option<Channel>>>，可替换用于 reattach）、`output_ring`（256KB FIFO，Channel 断开时缓存）、`da1_injected`（Arc<AtomicBool>）、`job_object`（JobHandle，Windows Job Object / 非 Windows 零大小占位）、`exit_code`（Arc<Mutex<Option<i32>>>）。
+
+### PtySession Drop
+
+PtySession 实现 Drop，drop 时 join reader_handle 线程防止隐式 detach。
+
+### JobHandle 跨平台设计
+
+JobHandle 在 `#[cfg(windows)]` 下为 HANDLE RAII 包装；`#[cfg(not(windows))]` 为零大小占位类型（`new_dummy()`），state.rs 无需条件编译。
 
 ## 关键约束
 
@@ -134,11 +142,11 @@ Claude Code 的 Ink 渲染器启动时发送 DA1 查询（`ESC[c`）作为同步
 
 | 文件 | 职责 |
 |------|------|
-| `mod.rs` | PTY 模块入口：`pty_spawn`、`pty_write`、`pty_resize`、`pty_kill`、`pty_reattach` 等 Tauri 命令 |
-| `spawn.rs` | PTY 进程创建：SPAWN_LOCK 串行化 + `conpty_custom::create_conpty_pair()` 自定义 ConPTY 创建 + PtyEvent 枚举定义 |
+| `mod.rs` | PTY 模块入口：模块声明 + re-export |
+| `spawn.rs` | Tauri 命令（`pty_spawn`/`pty_write`/`pty_resize`/`pty_kill`/`pty_reattach`）+ ConPTY 自定义实现 + PtyEvent 枚举定义 |
 | `reader.rs` | 独立 reader 线程：`reader_loop()` 阻塞读取 PTY 输出 → Channel 推送 PtyEvent；`strip_conpty_startup()` 启动序列剥离；`apply_startup_strip()` 纯函数；`mirror_da1_query()` DA1 查询检测 |
 | `shell.rs` | Shell 发现与选择：`resolve_shell()` / `resolve_shell_info()` → pwsh → powershell → cmd 回退；`which_full_path()` PATH 解析 |
-| `state.rs` | `PtySession` 结构体 + `PtyState` 全局 HashMap：master、child、writer、reader_handle、channel（可替换）、output_ring（256KB FIFO）、da1_injected |
+| `state.rs` | 位于 `src-tauri/src/state.rs`（顶层模块）：`PtySession` 结构体 + `PtyState` 全局 HashMap + `validate_path_within_root` 路径沙箱 |
 | `win_build.rs` | Windows build 号获取：通过 `nt_version` crate 的 RtlGetNtVersionNumbers 获取真实 build 号（低 28 位），非 Windows 平台返回 Unknown 错误 |
 
 ## 命令
@@ -155,25 +163,26 @@ cargo test --manifest-path src-tauri/Cargo.toml <test_name> -- --test-threads=1
 
 1. 新增 Tauri 命令后必须在 `lib.rs` 的 `generate_handler!` 注册，并在 `capabilities/` 显式放行
 2. Rust `snake_case` ↔ JS `camelCase`，改 DTO 必须双边对应修改
-3. 新增 `#[cfg(windows)]` 块需确认是否应放在本模块（架构约束 #9）
+3. 新增 `#[cfg(windows)]` 块需确认是否应放在本模块（架构约束 #9）。`win_build.rs` 更名已避开 cargo build script 歧义
 4. 修改 `shell-integration.ps1` 后要跑 `test_shell_integration_script_embedded` 测试确认嵌入内容正确
 5. `reader.rs` 的 `strip_conpty_startup` 修改后务必跑全部 strip 相关测试，确认不误杀正常输出
 6. 修改 `READER_BUF_SIZE` 后跑 `reader_buf_size_is_16k` + `strip_startup_with_16k_boundary` + `strip_startup_with_large_payload` 测试
 7. 修改 `conpty_custom` 模块（flags 计算、AttrList、ConPtyMaster、RawChild、spawn 逻辑）后跑 `conpty_custom::tests` 全部 14 条测试 + `pty_integration_tests` 的 `pty_spawn_custom_conpty` 端到端测试
-8. 修改 `resolve_shell_info()` / `which_full_path()` 后跑 `shell::tests` 全部 9 条测试
+8. 修改 `resolve_shell_info()` / `which_full_path()` 后跑 `shell::tests` 全部 7 条测试
 9. `resolve_shell_info()` 返回的 `ShellInfo.program` **必须是完整路径**（非短名）——否则 `CreateProcessW(lpApplicationName=..., lpCommandLine=...)` 找不到可执行文件
 10. ConPTY 指针 cast：`as_raw_handle()` 已返回 `*mut c_void`，无需再 `as *mut std::ffi::c_void`——Clippy `unnecessary-cast` 会报错。同理 `std::io::Error::new(std::io::ErrorKind::Other, e)` 简化为 `std::io::Error::other(e)`（Rust 1.74+），`.map_err(|e| std::io::Error::other(e))` 进一步简化为 `.map_err(std::io::Error::other)`
 
 ## 测试模式
 
-Rust 测试分布在 3 个位置：
+Rust 测试分布在 5 个位置：
 
 | 位置 | 类型 | 用例数 | 访问级别 |
 |------|------|--------|---------|
-| `pty/reader.rs` `#[cfg(test)]` | 单元测试 | 21 | `use super::*` 访问 `pub(crate)` 和私有项 |
+| `pty/reader.rs` `#[cfg(test)]` | 单元测试 | 28 | `use super::*` 访问 `pub(crate)` 和私有项 |
 | `pty/spawn.rs` `#[cfg(test)]` | 单元测试 | 14 | 在 `conpty_custom` 子模块内 |
-| `pty/shell.rs` `#[cfg(test)]` | 单元测试 | 8 | `use super::*` |
+| `pty/shell.rs` `#[cfg(test)]` | 单元测试 | 7 | `use super::*` |
 | `tests/pty_integration_tests.rs` | 集成测试 | 5 | 仅能访问 `pub` API |
+| `state.rs` `#[cfg(test)]` | 单元测试 | 15 | sandbox 路径校验纯函数测试 |
 
 ### 单元测试组织
 

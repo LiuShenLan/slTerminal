@@ -23,6 +23,7 @@ npm run wdio          # → node ./e2e-tests/run-wdio.cjs
 | `wdio.conf.ts` | WDIO 配置：local runner、mocha BDD、embedded driverProvider、单实例端口 4445、60s 超时 |
 | `test.e2e.ts` | 测试用例（11 条，7 describe）：启动标题、终端 PTY 通信+缓冲断言、终端写入读取（E2E helper）、**H6 终端跨页面存活**、页签标题+冲突、**编辑器 dirty→clean 保存**、HTML iframe Ctrl+W 转发关闭 |
 | `run-wdio.cjs` | Node 版本兼容启动器 |
+| `helpers.ts` | E2E 辅助函数（`installAllE2eHelpers()` 统一注入全局对象） |
 
 ## 配置要点
 
@@ -30,9 +31,19 @@ npm run wdio          # → node ./e2e-tests/run-wdio.cjs
 - `driverProvider: 'embedded'` — Tauri 内嵌 WebDriver，不走 msedgedriver
 - `maxInstances: 1` — 单实例串行执行
 
+## 加载机制
+
+E2E helpers 通过 `main.tsx` 中 `import.meta.env.DEV` 条件动态导入，生产构建 tree-shake 排除。
+
+## DOM 选择器约定
+
+使用 `data-e2e` 属性定位元素（如 `data-e2e='terminal-container'`），禁止 CSS 内联样式选择器。
+
 ## 测试与应用的通信方式
 
 测试代码运行在 Node 进程，通过 `browser.execute()` 在 WebView2 内执行 JS，依赖应用侧注入的 window 全局对象：
+
+> 以下对象均由 `helpers.ts` 的 `installAllE2eHelpers()` 在 DEV 模式下动态挂载
 
 | 全局对象 | 用途 |
 |----------|------|

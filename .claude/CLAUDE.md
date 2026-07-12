@@ -41,7 +41,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 5. **面板封闭**：Dockview 面板只能是 `panels/` 下注册过的类型；新增类型 = 加目录 + 在 `panelRegistry.ts` 注册。
 6. **配色单点**：JetBrains git 配色（文件名色、行内 diff 色）只在 `theme/colors.ts` 定义；组件引用 token，禁止硬编码颜色。
 7. **布局单点**：操作页面布局只经 `workspace/layoutSerde.ts` 用 Dockview `toJSON/fromJSON` 存取。
-8. **会话元数据单点**：前端会话元数据（SessionInfo：id/活动状态/cwd）只在 `stores/sessions.ts`；面板只订阅，不自存。PTY 进程映射（PtySession）不走此 store——由终端面板内部模块级 Map 管理以绕过 React 渲染循环。
+8. **会话元数据单点**：PTY 进程映射仅在 `panels/terminal/TerminalRegistry`（模块级 Map）管理，前端会话元数据已合并。面板只订阅，不自存。
 9. **平台分支收敛**：`#[cfg(windows)]` 只允许出现在 `pty/spawn.rs`、`pty/shell.rs` 等明确处，业务逻辑不撒 cfg。
 10. **权限最小化**：新增命令必须在 `capabilities/` 显式放行，不用通配 `*`。
 
@@ -66,8 +66,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | 层级 | 名称 | 技术栈 | 运行命令 | 约用例数 |
 |------|------|--------|----------|---------|
 | L1 | Rust 单元/集成 | `cargo test`、`tempfile` 隔离 | `cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1` | ~193 |
-| L2 | 前端单元/集成 | Vitest + jsdom | `npm test` | ~1002 |
-| L3 | 终端 headless 渲染 | Vitest + `@xterm/headless` | `npm run test:l3` | 9 |
+| L2 | 前端单元/集成 | Vitest + jsdom | `npm test` | ~1016 |
+| L3 | 终端 headless 渲染 | Vitest + `@xterm/headless` | `npm run test:l3` | 116 |
 | L4 | 端到端 (E2E) | WDIO + embedded driver | `npm run wdio` | 11 |
 
 核心原则：
@@ -101,10 +101,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | 模块 | 职责 | 入口 | 详情 |
 |------|------|------|------|
 | src/ipc | IPC 通信层，前端 invoke 唯一入口 | src/ipc/index.ts | @../src/ipc/CLAUDE.md |
+| src/ipc/shell.ts | openUrl wrapper（封装 @tauri-apps/plugin-opener） | src/ipc/shell.ts | @../src/ipc/CLAUDE.md |
 | src/panels | Dockview 面板系统（terminal + editor + html） | src/panels/index.ts | @../src/panels/CLAUDE.md |
-| src/stores | Zustand 状态管理，会话单点 | src/stores/index.ts | @../src/stores/CLAUDE.md |
+| src/stores | Zustand 状态管理（projects/layout/fontSize/keybindings） | src/stores/index.ts | @../src/stores/CLAUDE.md |
 | src/workspace | 工作区布局管理（Dockview serde + 面板注册 + titleManager） | src/workspace/Workspace.tsx | @../src/workspace/CLAUDE.md |
-| src/lib | 通用工具（路径函数 `basename`/`isChildOf`/`relativePath`） | src/lib/index.ts | @../src/lib/CLAUDE.md |
+| src/lib | 通用工具 + createActivePointer 泛型工厂 + useFontSizeWheel 共享 hook + ErrorBoundary（路径函数 `basename`/`isChildOf`/`relativePath`） | src/lib/index.ts | @../src/lib/CLAUDE.md |
 | src/features/explorer | 文件浏览器（FileTree + useFileTree gen 取消 + FileViewerRegistry 分派） | src/features/explorer/ExplorerPanel.tsx | @../src/features/explorer/CLAUDE.md |
 | src/features/fileViewers | 文件查看器注册表（策略模式，扩展名→面板类型映射） | src/features/fileViewers/index.ts | @../src/features/fileViewers/CLAUDE.md |
 | src/features/shortcuts | 快捷键模块（ShortcutRegistry 单例 + usePanelFocus hook + Command/Keybinding 分离 + 用户自定义重绑定） | src/features/shortcuts/index.ts | @../src/features/shortcuts/CLAUDE.md |

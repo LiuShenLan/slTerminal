@@ -26,11 +26,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 |------|------|
 | `index.ts` | 公共 API 出口：Workspace 组件、panelRegistry、PANEL_TYPES、`saveLayout`/`loadLayout`（从 `../panelRegistry` 重导出） |
 | `Workspace.tsx` | 主组件：阶段1清理后已废弃，实际渲染委托给 PageDockviewHost |
-| `PageDockviewHost.tsx` | 单页面 Dockview 实例：DefaultTab、Watermark、RightHeader、ContextMenu、布局恢复 |
+| `PageDockviewHost.tsx` | 单页面 Dockview 实例宿主组件（React.memo 包裹）：DefaultTab、Watermark、RightHeader、ContextMenu、布局恢复 |
 | `layoutSerde.ts` | 布局序列化/反序列化：`saveLayout`（`api.toJSON()`）、`loadLayout`（`api.fromJSON()` + 旧格式修补 + 白名单过滤） |
-| `titleManager.ts` | 页签标题集中管理：terminal-N 编号、文件标题冲突检测、handleSaveAs |
+| `titleManager.ts` | 页签标题集中管理：terminal-N 编号、文件标题冲突检测、handleSaveAs、onDeletePage(pageId)：清理该页面 registry 和 counters 条目 |
 
-> **panelRegistry.ts 已提取到 `src/panelRegistry.ts`**：面板注册表是全局架构组件，被 workspace、explorer、测试等多方引用，不应埋于 workspace 子路径。
+> **panelRegistry.ts 已提取到 `src/panelRegistry.ts`（已提取为共享配置层）**：面板注册表是全局架构组件，被 workspace、explorer、测试等多方引用，不应埋于 workspace 子路径。
 
 ## 硬约束
 
@@ -79,6 +79,7 @@ SidebarTree.switchToPage(projectId, pageId)
 - Save-As 通过 `slterm:file-saved-as` CustomEvent 通知 Workspace 层重算标题
 - 重复文件打开：`findExistingEditor` 查重 → 聚焦已有面板（不改布局）
 - `onDidRemovePanel` 监听面板关闭 → 注销 + 重算剩余面板标题
+- `onDeletePage` 在页面删除时清理该页所有标题注册和计数器
 - **页签图标**：`DefaultTab` 通过 `params.tabIcon`（由 `TerminalPanel` 通过 `api.updateParameters` 设置）控制终端图标渲染。非终端面板不设置此字段，无图标
 
 ## Dockview 事件结构注意事项

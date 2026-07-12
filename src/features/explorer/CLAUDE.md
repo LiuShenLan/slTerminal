@@ -32,7 +32,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 | 文件 | 职责 |
 |------|------|
-| `ExplorerPanel.tsx` | React 容器组件：活跃项目推导、文件树渲染、CRUD 事件处理、`handleOpenFile` 面板分派（FileViewerRegistry）、`fs_watch` 启动 |
+| `ExplorerPanel.tsx` | React 容器组件：活跃项目推导、文件树渲染、CRUD 事件处理、`handleOpenFile` 面板分派（FileViewerRegistry）、`notify_watch` 启动 |
 | `useFileTree.ts` | 文件树数据 hook：`loadRoot` / `loadDirectory` / `toggleExpand` / `refreshExpanded`（经 `reloadPreservingExpanded` 递归重载保留展开状态）/ generation 取消 |
 | `FileTree.tsx` | 递归树组件：节点渲染、git 状态着色、右键菜单 |
 | `FileIcon.tsx` | 文件图标映射（扩展名→emoji） |
@@ -41,7 +41,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **`src/ipc/fs.ts`** — `readDir` / `writeFile` / `createDir` / `deleteEntry` / `rename`
 - **`src/ipc/git.ts`** — `gitStatus` 着色
-- **`src/ipc/notify.ts`** — `startWatch` 启动后端监听 + `onFsEvent` 增量刷新
+- **`src/ipc/notify.ts`** — `notify_watch` 启动后端监听 + `onFsEvent` 增量刷新
 - **`src/stores/projects.ts` + `src/stores/layout.ts`** — 活跃项目 `rootPath` 推导
 - **`src/workspace/titleManager.ts`** — 文件打开时计算编辑器页签标题 + 去重
 - **`src/features/fileViewers/FileViewerRegistry.ts`** — 策略模式决定文件用哪个面板类型打开（`.html` → `"htmlviewer"`，未知 → `"editor"`）

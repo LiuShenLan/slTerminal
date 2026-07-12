@@ -52,7 +52,7 @@ FileWatcher {
 - **watcher 重建开销**：不要在每次页面切换时 `stop()` + `start()` watcher。始终走池的 `pause_all_except`。
 - **路径规范化**：池 key 使用 `dunce::simplified()` 处理，与 `fs_read_dir` 保持一致。
 - **Drop 保证**：`LruWatcherPool::drop()` → `stop_all()` → 遍历 join 所有线程。AppState 销毁时自动触发。
-- **路径 sandbox**：`notify_watch` 在创建 watcher 前校验 `validate_path_within_root()`。
+- **路径 sandbox**：`notify_watch` 在创建 watcher 前校验 `validate_path_within_root()`（该函数已从 `fs/mod.rs` 迁移至 `crate::state`）。
 
 ## 测试模式
 
@@ -60,7 +60,7 @@ Rust 测试分布在 2 个位置：
 
 | 位置 | 类型 | 用例数 |
 |------|------|--------|
-| `notify/mod.rs` `#[cfg(test)]` | 单元测试 | 7 + 19 (classify) |
+| `notify/mod.rs` `#[cfg(test)]` | 单元测试 | 24 |
 | `notify/pool.rs` `#[cfg(test)]` | 单元测试 | 12 |
 
 ### 无 AppHandle 测试

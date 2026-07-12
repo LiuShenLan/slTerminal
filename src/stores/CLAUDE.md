@@ -4,16 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 目录职责
 
-`src/stores/` 是 Zustand 状态管理层——项目唯一的全局状态真值来源。每个 store 覆盖一类状态域，面板只订阅（`useXxx((s) => s.field)`），不自存状态（硬约束 #8）。
+`src/stores/` 是 Zustand 状态管理层——项目唯一的全局状态真值来源。每个 store 覆盖一类状态域，面板只订阅（`useXxx((s) => s.field)`），不自存状态。PTY 进程映射在 `panels/terminal/TerminalRegistry`（模块级 Map）管理（硬约束 #8）。
 
 ## Store 清单
-
-### `sessions.ts` — 会话状态（硬约束 #8 会话元数据单点）
-
-- `SessionInfo { sessionId, panelId, cwd?, isActive }`，以 `panelId` 为 key 存入 `Record<string, SessionInfo>`。此为前端会话元数据，不包含 PTY 进程引用（与后端 PtySession 概念不同——参见 `CONTEXT.md`）。
-- 操作：`setSession` / `removeSession` / `setActive`。`setActive` 对不存在的 panelId 是幂等的（直接返回原 state）。
-- 面板类型只订阅 `sessions[ownPanelId]`，不自存 session 数据。
-- 终端面板的 PTY 进程映射（`Map<sessionId, PtyProcess>`）不走此 store，在面板内部用模块级 `Map` 管理以绕过 React 渲染循环。
 
 ### `layout.ts` — 布局状态
 
@@ -62,7 +55,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 | Store | 测试文件 | 用例数 | 覆盖范围 |
 |-------|---------|--------|---------|
-| `sessions` | `sessions.test.ts` | 10 | setSession/removeSession/setActive、幂等性、多 session 共存 |
 | `projects` | `projects.test.ts` | 41 | Project/Page CRUD、持久化（loadFromDisk/saveToDisk）、version 递增、ID 生成、subscribe+debounce 持久化链（`_resetPersistence()` 测试辅助） |
 | `layout` | `layout.test.ts` | 4 | activePageId 设置/清空/重复 |
 | `fontSize` | `fontSize.test.ts` | 16 | 默认值、clamp、loadFromDisk（多种分支）、debounce 持久化 |

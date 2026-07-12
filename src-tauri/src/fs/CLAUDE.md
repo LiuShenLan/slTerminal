@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 职责
 
-文件系统操作模块——封装 `fs_read_dir`、`fs_read_file`、`fs_write_file`、`fs_create_dir`、`fs_delete`、`fs_rename` Tauri 命令，适配 Windows 行尾和路径沙箱。
+文件系统操作模块——封装 `fs_read_dir`、`fs_read_file`、`fs_write_file`、`fs_create_dir`、`fs_delete`、`fs_rename` Tauri 命令，适配 Windows 行尾和路径沙箱。路径沙箱核心函数 `validate_path_within_root` 已迁移至 `state.rs`，本模块通过 `use crate::state::validate_path_within_root` 导入。
 
 ## 测试模式
 
-测试位于 `fs/mod.rs` 的两个 `#[cfg(test)]` 模块：`read_dir_tests`（10 用例）+ `write_file_tests`（5 用例）。
+测试位于 `fs/mod.rs` 的两个 `#[cfg(test)]` 模块：`read_dir_tests` + `write_file_tests`（共 16 用例）。sandbox 测试现位于 `state.rs`（15 条 `#[test]`）。
 
 ### tempfile 隔离
 

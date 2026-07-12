@@ -34,7 +34,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **`src/stores/projects.ts`** — `addProject` / `addPage` / `removeProject` / `removePage`（CRUD）
 - **`src/ipc/dialog.ts`** — `open()` 原生文件夹选择对话框
-- **`src/workspace/Workspace.tsx`** — `switchToPage` / `onDeletePage` 回调（通过 props 传入）
+- **`src/workspace/PageDockviewHost.tsx`** — `switchToPage` / `onDeletePage` 回调通过 Workspace 层传递
 - **`src/panelRegistry.ts`** — PANEL_TERMINAL 常量（**仅 Watermark/RightHeader 使用，SidebarTree 不再引用**）
 
 ## 测试模式

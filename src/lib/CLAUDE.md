@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 职责
 
-通用工具函数——纯函数，无副作用，不依赖 React 或任何外部状态。
+通用工具函数 + 共享 hooks + 错误边界
 
 ## 文件
 
@@ -12,6 +12,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 |------|------|
 | `index.ts` | 公共 API 出口 |
 | `path.ts` | 路径工具函数：`normalizePath` / `basename` / `isChildOf` / `relativePath` |
+| `activePointer.ts` | `createActivePointer<T>()` 泛型工厂，供 terminal/editor 复用 |
+| `useFontSizeWheel.ts` | Ctrl+Wheel 字体缩放共享 hook，供 useXterm/useCodeMirror 复用 |
+| `ErrorBoundary.tsx` | React 错误边界组件 |
 
 ## path.ts — 路径规范
 
