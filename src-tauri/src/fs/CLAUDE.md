@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 测试模式
 
-测试位于 `fs/mod.rs` 的两个 `#[cfg(test)]` 模块：`read_dir_tests`（8 用例）+ `write_file_tests`（5 用例）。
+测试位于 `fs/mod.rs` 的两个 `#[cfg(test)]` 模块：`read_dir_tests`（10 用例）+ `write_file_tests`（5 用例）。
 
 ### tempfile 隔离
 
@@ -24,7 +24,7 @@ std::fs::write(&file, "hello").unwrap();
 
 ### 测试组织
 
-- `read_dir_tests`：列出子项、过滤 `.git`/`node_modules`、创建目录（单层/嵌套）、删除（文件/递归目录）、重命名
+- `read_dir_tests`：列出子项、过滤 `.git`（仅此一个硬编码过滤，`node_modules`/`target` 等依赖懒加载控制性能）、创建目录（单层/嵌套）、删除（文件/递归目录）、重命名、空目录边界、构建产物目录可见
 - `write_file_tests`：CRLF 行尾保留（CRLF→CRLF、LF→LF）、新文件平台默认行尾（Windows CRLF / Unix LF）、混合行尾归一化
 
 ### CRLF 行尾保留测试

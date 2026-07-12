@@ -8,8 +8,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 架构决策
 
-**Generation 异步取消**：切换项目页面时 `rootPath` 变化，`useFileTree` 的 effect 发起新 `loadRoot()` + `gitStatus()` 异步请求。旧 `rootPath` 的请求可能在新请求之后才返回，导致 `setRootNodes` 写入过期数据。`genRef` 计数器每次 `rootPath` 变化递增，旧请求的回调检查 `gen !== genRef.current` 后丢弃结果。
+**Generation 异步取消 + rootPath 清空**：切换项目页面时 `rootPath` 变化，effect 首**先同步清空** `rootNodes`（设为 `[]`）和 `gitStatusMap`（设为空 `Map`），立即消除旧项目文件树残留。之后发起新 `loadRoot(gen)` + `gitStatus(rootPath)` 异步请求。`genRef` 计数器每次 `rootPath` 变化递增，旧请求的回调检查 `gen !== genRef.current` 后丢弃结果。
 
+- rootPath 为 `null` 时也立即清空，不做 IPC 调用
+- 清空是同步的——`setRootNodes([])` 与后续 `setRootNodes(nodes)` 在同一渲染批次，中间不可见
+- `rootPath` 不变时不触发清空（React deps 未变化）
 - 仅 `rootPath` effect 中的调用使用 generation
 - `refreshExpanded`（CRUD 操作 / fs-event / file-saved 回调）不传 gen——它们操作的是当前页数据
 - `loadRoot(gen?)` 的 `gen` 参数是可选的后向兼容接口
@@ -103,3 +106,12 @@ CRUD 操作涉及 IPC mock（Promise），使用 `await waitFor(() => { expect(.
 - **展开辅助**：`expand(result, path)` = `act(toggleExpand)` + `waitFor(expanded===true && loading===false)`。
 - **fs-event 触发**：`onFsEvent` mock 保存回调，`triggerFsEvent()` 手动触发；配 `vi.useFakeTimers()` + `advanceTimersByTimeAsync(250)` 跨过 200ms 去抖。
 - 覆盖矩阵 A–E：递归重建正确性（R1–R4/R7/R8/R10）、边界容错（R6/R9/R11/R12）、gitStatus 路径（R5/R13）、三条触发路径（R14 file-saved / R15 fs-event / R16 CRUD refresh）、竞态 last-write-wins（R17）。
+
+### rootPath 变化清空测试（`explorer-rootpath-clear.test.tsx`，6 用例）
+
+验证 `rootPath` 变化时 `rootNodes` 和 `gitStatusMap` 立即清空。用 `renderHook(useFileTree)` + `rerender` 驱动 `rootPath` 变化：
+
+- **T2.1/T2.2/T2.3**：切换项目 / rootPath 为 null / 新数据正确加载 — 基本清空行为
+- **T2.4**：快速连续切换 A→B→C，gen 检查丢弃 B 的结果，最终为 C 的数据
+- **T2.5**：同值 rerender 不清空（React deps 未变化）
+- **T2.6**：首次挂载 `rootNodes` 为 `[]`
