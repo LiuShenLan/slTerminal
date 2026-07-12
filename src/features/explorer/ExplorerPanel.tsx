@@ -14,7 +14,7 @@ import { useProjects } from "../../stores/projects";
 import { useLayout } from "../../stores/layout";
 import { titleManager } from "../../workspace/titleManager";
 import { EXPLORER_COLORS, SEPARATOR_BG, INPUT_BORDER, ERROR_BANNER_BG, ERROR_BANNER_BORDER, ERROR_BANNER_FG } from "../../theme";
-import { PANEL_TERMINAL, PANEL_EDITOR, isAlwaysRenderPanel } from "../../workspace/panelRegistry";
+import { PANEL_TERMINAL, PANEL_EDITOR, isAlwaysRenderPanel } from "../../panelRegistry";
 import { fileViewerRegistry } from "../fileViewers";
 
 /** 操作失败错误提示自动消失时间（ms） */

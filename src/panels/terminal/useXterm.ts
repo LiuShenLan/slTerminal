@@ -28,6 +28,7 @@ import { useClipboardHandler } from "./useClipboardHandler";
 import { useCommandDetection } from "./useCommandDetection";
 export { detectWebgl, resetWebglCache } from "./webgl";
 import { pty } from "../../ipc";
+import { openUrl } from "../../ipc/shell";
 import { setActiveTerminal, clearActiveTerminal, type TerminalActions } from "./activeTerminal";
 import { usePanelFocus, getShortcutRegistry } from "../../features/shortcuts";
 import { TerminalRegistry } from "./TerminalRegistry";
@@ -236,9 +237,7 @@ export function useXterm({
     // OSC 8 超链接：点击后通过系统默认浏览器打开
     term.options.linkHandler = {
       activate: (_event, url) => {
-        import("@tauri-apps/plugin-opener").then(({ openUrl }) =>
-          openUrl(url).catch(() => {})
-        );
+        openUrl(url).catch(() => {});
       },
     };
 

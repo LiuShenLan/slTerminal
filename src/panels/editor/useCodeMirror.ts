@@ -320,7 +320,7 @@ export function useCodeMirror({ container, filePath, panelId, fontSize, onFontSi
       };
       cleanup();
     };
-  }, [container, filePath, handleSave]);
+  }, [container, filePath]);
 
   // D3: filePath 变化时重新配置语言扩展（Compartment.reconfigure 不丢失文档状态）
   useEffect(() => {

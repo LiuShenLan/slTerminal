@@ -27,7 +27,7 @@ vi.mock("allotment", () => ({
   Allotment: mocks.MockAllotment,
 }));
 
-vi.mock("../workspace/panelRegistry", () => ({
+vi.mock("../panelRegistry", () => ({
   panelRegistry: {},
 }));
 

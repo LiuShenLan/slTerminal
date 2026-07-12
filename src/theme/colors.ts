@@ -64,6 +64,10 @@ export const ACTIVE_SELECTION_BG = "#094771";
 export const SEPARATOR_BG = "#444";
 export const CONTEXT_MENU_BORDER = "#454545";
 
+// HTML 面板色
+export const HTML_PANEL_LOADING_FG = "#6C6C6C";
+export const HTML_PANEL_IFRAME_BG = "#FFFFFF";
+
 // 错误提示色
 export const ERROR_BANNER_BG = "#5A1D1D";
 export const ERROR_BANNER_BORDER = "#8B0000";

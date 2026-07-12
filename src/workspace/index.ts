@@ -8,6 +8,6 @@ export {
   FILE_PANEL_TYPES,
   isValidPanelType,
   isAlwaysRenderPanel,
-} from "./panelRegistry";
-export type { PanelType } from "./panelRegistry";
+} from "../panelRegistry";
+export type { PanelType } from "../panelRegistry";
 export { saveLayout, loadLayout } from "./layoutSerde";

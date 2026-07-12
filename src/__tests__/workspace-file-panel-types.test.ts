@@ -3,7 +3,7 @@
 // 验证文件型面板集合的成员关系 + renderer 模式判断。
 
 import { describe, it, expect } from "vitest";
-import { FILE_PANEL_TYPES, isAlwaysRenderPanel } from "../workspace/panelRegistry";
+import { FILE_PANEL_TYPES, isAlwaysRenderPanel } from "../panelRegistry";
 
 describe("FILE_PANEL_TYPES", () => {
   // 55. FILE_PANEL_TYPES 为 Set 类型

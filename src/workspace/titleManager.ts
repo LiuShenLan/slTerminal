@@ -167,6 +167,15 @@ export function createTitleManager() {
   }
 
   /**
+   * 页面删除时清理该页所有标题管理状态。
+   * 应在 Workspace 删除页面回调中调用。
+   */
+  function onDeletePage(pageId: string): void {
+    registry.delete(pageId);
+    counters.delete(pageId);
+  }
+
+  /**
    * 另存为后更新文件路径，并返回该页面所有编辑器的标题更新。
    * 调用方负责通过 DockviewApi 执行 setTitle。
    */
@@ -197,6 +206,7 @@ export function createTitleManager() {
     findExistingEditor,
     recomputeTitles,
     handleSaveAs,
+    onDeletePage,
     reset,
   };
 }

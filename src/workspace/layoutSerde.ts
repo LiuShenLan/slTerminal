@@ -4,7 +4,7 @@
 // fromJSON 前修补旧格式（缺少 leaf.data.id / activeGroup），返回 boolean 供调用方回退。
 
 import type { DockviewApi } from "dockview-react";
-import { isValidPanelType } from "./panelRegistry";
+import { isValidPanelType } from "../panelRegistry";
 
 /** 从 Dockview API 导出布局 JSON */
 export function saveLayout(api: DockviewApi): object {

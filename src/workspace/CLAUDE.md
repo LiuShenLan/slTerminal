@@ -24,15 +24,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 | 文件 | 职责 |
 |------|------|
-| `index.ts` | 公共 API 出口：Workspace 组件、panelRegistry、PANEL_TYPES、`saveLayout`/`loadLayout` |
-| `Workspace.tsx` | 主组件：多页面管理、PageDockview 工厂、侧边栏/资源管理器三栏布局（Allotment） |
+| `index.ts` | 公共 API 出口：Workspace 组件、panelRegistry、PANEL_TYPES、`saveLayout`/`loadLayout`（从 `../panelRegistry` 重导出） |
+| `Workspace.tsx` | 主组件：阶段1清理后已废弃，实际渲染委托给 PageDockviewHost |
+| `PageDockviewHost.tsx` | 单页面 Dockview 实例：DefaultTab、Watermark、RightHeader、ContextMenu、布局恢复 |
 | `layoutSerde.ts` | 布局序列化/反序列化：`saveLayout`（`api.toJSON()`）、`loadLayout`（`api.fromJSON()` + 旧格式修补 + 白名单过滤） |
-| `panelRegistry.ts` | 面板类型注册表：硬约束 #5 惟一定义点，白名单 `PANEL_TYPES = ["terminal", "editor", "htmlviewer"]`，`FILE_PANEL_TYPES` 文件型面板集合（参与标题计算），`isAlwaysRenderPanel()` 判断是否需要 renderer="always" |
 | `titleManager.ts` | 页签标题集中管理：terminal-N 编号、文件标题冲突检测、handleSaveAs |
+
+> **panelRegistry.ts 已提取到 `src/panelRegistry.ts`**：面板注册表是全局架构组件，被 workspace、explorer、测试等多方引用，不应埋于 workspace 子路径。
 
 ## 硬约束
 
-- **#5 面板封闭**：新增面板类型 → 在 `panels/` 下创建目录 → 在 `panelRegistry.ts` 注册 → `PANEL_TYPES` 数组追加类型名
+- **#5 面板封闭**：新增面板类型 → 在 `panels/` 下创建目录 → 在 `src/panelRegistry.ts` 注册 → `PANEL_TYPES` 数组追加类型名
 - **#7 布局单点**：操作页面布局只经 `layoutSerde.ts` 存取。`PageDockview.onDidLayoutChange` → `saveLayout()` → `handlePageLayoutChange()` → `useProjects.updatePageLayout()`
 - **#8 会话元数据单点**：终端 PTY 会话只在面板内管理（`panels/terminal/`），Workspace 不持有会话引用
 

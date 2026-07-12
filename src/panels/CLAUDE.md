@@ -151,7 +151,7 @@ xterm.js 6.0.0 原生支持 OSC 8 解析渲染。`useXterm.ts` 在 `term.open()`
 
 ## 硬约束
 
-- **#5 面板封闭**：新增面板类型流程为 `panels/<newtype>/` 创建目录 → 实现面板组件 → 在 `workspace/panelRegistry.ts` 注册 → `PANEL_TYPES` 追加类型名
+- **#5 面板封闭**：新增面板类型流程为 `panels/<newtype>/` 创建目录 → 实现面板组件 → 在 `panelRegistry.ts` 注册 → `PANEL_TYPES` 追加类型名
 - **#6 配色单点**：所有颜色从 `theme/colors.ts` token 引用（如 `GIT_GUTTER_COLORS`），禁止硬编码色值。终端配色是历史遗留的独立主题定义
 - **前端不碰 OS**：面板组件和 hooks 中所有系统调用（PTY、文件读写、剪贴板、git diff）必须经 `src/ipc/` 层调用，禁止直接 `invoke`
 - **IPC 边界**：`terminal/useXterm.ts` 通过 `ipc/pty` 调 spawn/write/resize/kill；`editor/useCodeMirror.ts` 通过 `ipc/fs` 读写文件、`ipc/git` 获取 diff、`ipc/dialog` 弹另存为；`terminal/keyboard.ts` 命令 handler 通过 `ipc/clipboard` 读写剪贴板；`usePanelFocus` hook 管理焦点上下文与聚焦实例跟踪（命令在 App 一次性注册）。`terminal/TerminalPanel.tsx` 通过 `onTabStateChange` 回调桥接 useXterm → Dockview API（`api.setTitle` / `api.updateParameters`），不引入新 IPC 命令
@@ -254,6 +254,6 @@ L3 测试位于 `test/terminal/`，使用 `@xterm/headless`（零 DOM 依赖）+
 
 1. 在 `src/panels/` 下创建 `newtype/` 目录，含 `index.ts`、`NewTypePanel.tsx` 和必要的 hooks
 2. 在 `src/panels/index.ts` 添加 `export { NewTypePanel } from "./newtype";`
-3. 在 `src/workspace/panelRegistry.ts` 的 `panelRegistry` 对象中注册组件映射
+3. 在 `src/panelRegistry.ts` 的 `panelRegistry` 对象中注册组件映射
 4. 在 `PANEL_TYPES` 数组中追加 `"newtype"`
 5. 如涉及新 IPC 命令，在 `src-tauri/capabilities/` 显式放行

@@ -6,7 +6,7 @@ import {
   PANEL_HTML_VIEWER,
   FILE_PANEL_TYPES,
   isValidPanelType,
-} from "../workspace/panelRegistry";
+} from "../panelRegistry";
 
 describe("panelRegistry", () => {
   // 1. panelRegistry 包含 terminal、editor、htmlviewer 三个键

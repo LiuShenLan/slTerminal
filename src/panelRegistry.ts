@@ -3,9 +3,9 @@
 // 面板只能是此处注册过的类型（硬约束 #5）。
 // 新增面板类型 = 加目录 + 在此注册。
 
-import { TerminalPanel } from "../panels/terminal";
-import { EditorPanel } from "../panels/editor";
-import { HtmlPanel } from "../panels/html";
+import { TerminalPanel } from "./panels/terminal";
+import { EditorPanel } from "./panels/editor";
+import { HtmlPanel } from "./panels/html";
 
 /** 终端面板类型标识 */
 export const PANEL_TERMINAL = "terminal" as const;

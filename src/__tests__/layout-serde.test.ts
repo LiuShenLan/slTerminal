@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { DockviewApi } from "dockview-react";
 
 // mock isValidPanelType（与真实 PANEL_TYPES 对齐：terminal / editor / htmlviewer）
-vi.mock("../workspace/panelRegistry", () => ({
+vi.mock("../panelRegistry", () => ({
   isValidPanelType: (id: string) => ["terminal", "editor", "htmlviewer"].includes(id),
 }));
 
