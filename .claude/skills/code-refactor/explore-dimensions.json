@@ -1,0 +1,78 @@
+{
+  "description": "代码仓探索维度定义。每个维度对应一个 Explore Agent，输出到 docs/ 目录。",
+  "outputDir": "docs/",
+  "dimensions": [
+    {
+      "id": "01-frontend-architecture",
+      "title": "前端架构与组件设计",
+      "outputFile": "docs/01-frontend-architecture.md",
+      "focus": [
+        "组件层次结构是否合理、职责是否单一",
+        "面板系统的代码复用情况",
+        "IPC 层封装完整性（有无 invoke 泄露）",
+        "Zustand Store 设计（跨 Store 隐式依赖、状态冗余）",
+        "Dockview 布局系统的集成质量",
+        "快捷键系统的扩展性"
+      ],
+      "files": ["src/App.tsx", "src/main.tsx", "src/panels/", "src/ipc/", "src/stores/", "src/workspace/", "src/features/shortcuts/", "src/types/", "src/lib/", "src/theme/"]
+    },
+    {
+      "id": "02-backend-architecture",
+      "title": "后端架构与 Rust 代码",
+      "outputFile": "docs/02-backend-architecture.md",
+      "focus": [
+        "PTY 模块职责划分、错误处理",
+        "ConPTY 自定义实现的健壮性",
+        "文件系统/Git/Notify 模块代码质量",
+        "共享状态设计的锁粒度和竞态条件",
+        "命令注册完整性和权限放行",
+        "错误类型体系的覆盖度"
+      ],
+      "files": ["src-tauri/src/pty/", "src-tauri/src/fs/", "src-tauri/src/git/", "src-tauri/src/notify/", "src-tauri/src/state.rs", "src-tauri/src/error.rs", "src-tauri/src/lib.rs", "src-tauri/Cargo.toml"]
+    },
+    {
+      "id": "03-code-quality",
+      "title": "代码质量与最佳实践",
+      "outputFile": "docs/03-code-quality.md",
+      "focus": [
+        "TypeScript 类型安全（any/类型断言/副作用）",
+        "Rust 代码安全（unsafe/unwrap/expect/Clippy）",
+        "代码重复与魔法数字",
+        "注释与文档准确性",
+        "命名规范一致性（snake_case/camelCase 映射）",
+        "依赖版本（过期/风险依赖）"
+      ],
+      "files": ["src/", "src-tauri/src/", "package.json", "src-tauri/Cargo.toml"]
+    },
+    {
+      "id": "04-test-system",
+      "title": "测试体系",
+      "outputFile": "docs/04-test-system.md",
+      "focus": [
+        "L1-L4 各层级测试覆盖率和质量",
+        "测试辅助工具的复用情况",
+        "重复测试、脆弱测试、缺失边界测试",
+        "CI 配置与测试策略对齐",
+        "test-inventory.md 的准确性"
+      ],
+      "files": ["src/__tests__/", "src-tauri/src/**/mod.rs", "src-tauri/tests/", "test/terminal/", "e2e-tests/", ".github/workflows/ci.yml", ".claude/test-inventory.md"]
+    },
+    {
+      "id": "05-performance-maintainability",
+      "title": "性能与可维护性",
+      "outputFile": "docs/05-performance-maintainability.md",
+      "focus": [
+        "前端渲染性能（Dockview 多实例、xterm.js WebGL、ResizeObserver）",
+        "后端 I/O 性能（PTY reader、文件监听、大目录处理）",
+        "内存管理（useXterm 生命周期、ring buffer、事件监听器泄漏）",
+        "构建配置优化空间",
+        "模块耦合度与循环依赖",
+        "10 条架构约束合规性"
+      ],
+      "files": ["src/workspace/Workspace.tsx", "src/panels/terminal/", "src/panels/editor/", "src-tauri/src/pty/", "src-tauri/src/notify/", "src-tauri/src/state.rs", "vite.config.ts", "tauri.conf.json"]
+    }
+  ],
+  "summaryOutput": "docs/00-summary.md",
+  "checklistOutput": "docs/refactoring-checklist.md",
+  "note": "修改此文件可调整探索维度、输出路径和 Agent 关注点。id 和 outputFile 需保持一致编号。"
+}

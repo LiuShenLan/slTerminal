@@ -1,0 +1,70 @@
+{
+  "project": {
+    "name": "slTerminal",
+    "defaultBranch": "main"
+  },
+  "commands": {
+    "tsCheck": "npx tsc --noEmit",
+    "eslint": "npx eslint src/",
+    "clippy": "cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings",
+    "frontendTest": "npm test",
+    "rustTest": "cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1",
+    "l3Test": "npm run test:l3",
+    "e2eBuild": "npx tauri build --debug --no-bundle",
+    "e2eTest": "npm run wdio",
+    "fullFrontendCheck": "npx tsc --noEmit && npx eslint src/ && npm test",
+    "fullBackendCheck": "cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings && cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1",
+    "fullCheck": "npx tsc --noEmit && npx eslint src/ && cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings && npm test && cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1"
+  },
+  "modules": {
+    "frontend": { "root": "src/", "extensions": [".ts", ".tsx"] },
+    "backend": { "root": "src-tauri/src/", "extensions": [".rs"] },
+    "e2eTests": { "root": "e2e-tests/" },
+    "l3Tests": { "root": "test/terminal/" },
+    "docs": { "root": "docs/" }
+  },
+  "architecture": {
+    "constraintCount": 10,
+    "constraints": [
+      "前端不碰OS/文件/进程，invoke仅出现在src/ipc/",
+      "后端按功能分模块，模块间不穿透，共享经state.rs",
+      "命令统一注册于lib.rs generate_handler!",
+      "DTO双边对应 snake_case↔camelCase",
+      "面板封闭，只注册于panelRegistry.ts",
+      "配色单点，颜色从theme/colors.ts引用",
+      "布局单点，只经layoutSerde.ts存取",
+      "PTY进程映射在TerminalRegistry管理（模块级Map）",
+      "#[cfg(windows)]仅在pty/模块出现",
+      "权限最小化，capabilities显式放行"
+    ]
+  },
+  "claudeMdFiles": [
+    ".claude/CLAUDE.md",
+    "src/ipc/CLAUDE.md",
+    "src/panels/CLAUDE.md",
+    "src/stores/CLAUDE.md",
+    "src/workspace/CLAUDE.md",
+    "src/lib/CLAUDE.md",
+    "src/features/explorer/CLAUDE.md",
+    "src/features/fileViewers/CLAUDE.md",
+    "src/features/shortcuts/CLAUDE.md",
+    "src/features/sidebar/CLAUDE.md",
+    "src-tauri/src/pty/CLAUDE.md",
+    "src-tauri/src/notify/CLAUDE.md",
+    "src-tauri/src/fs/CLAUDE.md",
+    "src-tauri/src/git/CLAUDE.md",
+    "e2e-tests/CLAUDE.md"
+  ],
+  "testLevels": {
+    "L1": { "name": "Rust 单元/集成", "command": "cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1" },
+    "L2": { "name": "前端单元/集成", "command": "npm test" },
+    "L3": { "name": "终端 headless", "command": "npm run test:l3" },
+    "L4": { "name": "端到端 E2E", "command": "npm run wdio" }
+  },
+  "workflow": {
+    "maxParallelAgents": 5,
+    "fixMaxRetries": 3,
+    "commitPerStage": true,
+    "useWorktree": false
+  }
+}
