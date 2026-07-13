@@ -333,7 +333,10 @@ mod tests {
     /// 在临时目录中 init 一个 git 仓库，返回 tempdir（自动清理）和路径
     fn init_temp_repo() -> (tempfile::TempDir, std::path::PathBuf) {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().to_path_buf();
+        // CI runner 的 %TEMP% 含 8.3 短名（如 RUNNER~1），而 git2 workdir 返回长名，
+        // 两者 strip_prefix/路径断言会不匹配（dunce::simplified 只剥 verbatim 前缀、
+        // 不解析短名→长名）。canonicalize 统一为长名，从源头消除短/长名差异。
+        let path = dunce::canonicalize(dir.path()).unwrap();
 
         Command::new("git")
             .args(["init"])
@@ -974,7 +977,7 @@ mod tests {
         let tree = head.peel_to_tree().unwrap();
 
         // 模拟：从子目录调用 git_diff，传入 parent_dir 作为 repo_path
-        let workdir = repo.workdir().unwrap();
+        let workdir = dunce::simplified(repo.workdir().unwrap());
         let file_path = path.join("src").join("main.rs");
         let rel = file_path.strip_prefix(workdir).unwrap().to_string_lossy().replace('\\', "/");
         // pathspec 应为 repo-相对路径，如 "src/main.rs"
@@ -1008,7 +1011,7 @@ mod tests {
         let head = repo.head().unwrap();
         let tree = head.peel_to_tree().unwrap();
 
-        let workdir = repo.workdir().unwrap();
+        let workdir = dunce::simplified(repo.workdir().unwrap());
         let file_path = path.join("lib.rs");
         let rel = file_path.strip_prefix(workdir).unwrap().to_string_lossy().replace('\\', "/");
         assert_eq!(rel, "lib.rs");
@@ -1069,7 +1072,7 @@ mod tests {
         std::fs::write(&deep_file, "export const Button = () => <div/>;\n").unwrap();
 
         let repo = git2::Repository::open(&path).unwrap();
-        let workdir = repo.workdir().unwrap();
+        let workdir = dunce::simplified(repo.workdir().unwrap());
         let rel = deep_file.strip_prefix(workdir).unwrap().to_string_lossy().replace('\\', "/");
         assert_eq!(
             rel,
@@ -1324,7 +1327,7 @@ mod tests {
     fn compute_diff_hunks(repo: &git2::Repository, file_path: &std::path::Path) -> Vec<DiffHunk> {
         let tree = repo.head().unwrap().peel_to_tree().unwrap();
         let mut opts = git2::DiffOptions::new();
-        let rel = file_path.strip_prefix(repo.workdir().unwrap()).unwrap()
+        let rel = file_path.strip_prefix(dunce::simplified(repo.workdir().unwrap())).unwrap()
             .to_string_lossy().replace('\\', "/");
         opts.pathspec(&rel);
 
@@ -1603,6 +1606,58 @@ mod tests {
         assert!(result.is_ok(), "首次访问应成功（cache miss → discover → 缓存）");
         let (_repo, workdir) = result.unwrap();
         assert_eq!(workdir, dunce::simplified(path.as_path()));
+    }
+
+    // ---- CI 门禁回归守卫（8.3 短名根因 + L1 串行化） ----
+
+    /// T1: init_temp_repo 返回规范化（长名/非 verbatim）路径，与 git2 workdir strip_prefix 成功。
+    /// 根因守卫——runner 上若回退为 dir.path() 短名，(a) 立即失败。本地无短名则 (a) 平凡通过。
+    #[test]
+    fn init_temp_repo_path_canonicalized_and_strips() {
+        let (_dir, path) = init_temp_repo();
+        // (a) 幂等：已是 canonical 形式
+        assert_eq!(path, dunce::canonicalize(&path).unwrap());
+        // (b) 无 verbatim 前缀
+        assert!(!path.to_string_lossy().contains(r"\\?\"));
+        // (c) 与 git2 workdir strip_prefix 成功（8.3 短名根因守卫）
+        commit_file(&path, "x.txt", "a\n");
+        let repo = git2::Repository::open(&path).unwrap();
+        let workdir = dunce::simplified(repo.workdir().unwrap());
+        let rel = path
+            .join("x.txt")
+            .strip_prefix(workdir)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        assert_eq!(rel, "x.txt");
+    }
+
+    /// T2: get_or_open_repo 返回的 workdir 与规范化 path 一致（强化 cache_miss 语义）。
+    #[test]
+    fn get_or_open_repo_workdir_equals_canonical_path() {
+        let (_dir, path) = init_temp_repo();
+        commit_file(&path, "t.txt", "x");
+        let cache = std::sync::Mutex::new(std::collections::HashMap::new());
+        let (_repo, workdir) =
+            super::get_or_open_repo(&cache, &path.to_string_lossy()).unwrap();
+        assert_eq!(
+            workdir,
+            dunce::simplified(dunce::canonicalize(&path).unwrap().as_path()),
+        );
+    }
+
+    /// T3: CI L1 step 必须 --test-threads=1（ConPTY 并发 spawn 死锁防护）。配置不变量守卫。
+    #[test]
+    fn ci_l1_uses_single_test_thread() {
+        let ci = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../.github/workflows/ci.yml"
+        ))
+        .unwrap();
+        assert!(
+            ci.contains("--test-threads=1"),
+            "CI L1 step 必须 --test-threads=1（ConPTY 并发 spawn 死锁防护）"
+        );
     }
 
     #[test]
