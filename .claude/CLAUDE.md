@@ -53,6 +53,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **键盘 / IME**：Shift+Tab、Ctrl 组合键用 xterm.js `attachCustomKeyEventHandler` 接管；中文 IME 合成要尽早测。详见 @../src/panels/CLAUDE.md
 - E2E 测试在 Tauri 用不了 Playwright（非 Chromium）。Phase 0 起用 embedded driver（`@wdio/tauri-service` + `tauri-plugin-wdio-webdriver` → `webview2-com` 驱动 ICoreWebView2 COM），零 msedgedriver 依赖。
 - **watcher 重建开销**：`notify` 在 Windows 上调用 `ReadDirectoryChangesW` 递归注册目录树，大目录（如 `target/` 26K 文件）耗时约 2s。不要频繁 `stop()` + `start()` watcher——用 `LruWatcherPool`（`notify/pool.rs`）缓存 + pause/resume 切换。详见 @../src-tauri/src/notify/CLAUDE.md
+- **测试 tempdir 8.3 短名**：GitHub runner 用户 `runneradmin` 的 `%TEMP%` 是 8.3 短名 `RUNNER~1`，`tempfile::tempdir()` 返回短名而 git2/规范化 API 返回长名——任何 Rust 测试用 tempdir 路径做 `strip_prefix`/断言比较会在 CI 上失败（本地不复现）。用 `dunce::canonicalize` 统一为长名（`dunce::simplified` 只剥 verbatim、不解短名）。详见 @../src-tauri/src/git/CLAUDE.md
 
 ## 命令
 
@@ -65,8 +66,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 | 层级 | 名称 | 技术栈 | 运行命令 | 约用例数 |
 |------|------|--------|----------|---------|
-| L1 | Rust 单元/集成 | `cargo test`、`tempfile` 隔离 | `cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1` | ~193 |
-| L2 | 前端单元/集成 | Vitest + jsdom | `npm test` | ~1020 |
+| L1 | Rust 单元/集成 | `cargo test`、`tempfile` 隔离 | `cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1` | ~196 |
+| L2 | 前端单元/集成 | Vitest + jsdom | `npm test` | ~1042 |
 | L3 | 终端 headless 渲染 | Vitest + `@xterm/headless` | `npm run test:l3` | 116 |
 | L4 | 端到端 (E2E) | WDIO + embedded driver | `npm run e2e`（= `build:e2e` + `wdio`） | 12 |
 
@@ -106,7 +107,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | src/panels | Dockview 面板系统（terminal + editor + html） | src/panels/index.ts | @../src/panels/CLAUDE.md |
 | src/stores | Zustand 状态管理（projects/layout/fontSize/keybindings） | src/stores/index.ts | @../src/stores/CLAUDE.md |
 | src/workspace | 工作区布局管理（Dockview serde + 面板注册 + titleManager） | src/workspace/Workspace.tsx | @../src/workspace/CLAUDE.md |
-| src/lib | 通用工具 + createActivePointer 泛型工厂 + useFontSizeWheel 共享 hook + ErrorBoundary（路径函数 `basename`/`isChildOf`/`relativePath`） | src/lib/index.ts | @../src/lib/CLAUDE.md |
+| src/lib | 通用工具 + createActivePointer 泛型工厂 + useFontSizeWheel 共享 hook + ErrorBoundary + E2E_ENABLED 门控开关（路径函数 `basename`/`isChildOf`/`relativePath`） | src/lib/index.ts | @../src/lib/CLAUDE.md |
 | src/features/explorer | 文件浏览器（FileTree + useFileTree gen 取消 + FileViewerRegistry 分派） | src/features/explorer/ExplorerPanel.tsx | @../src/features/explorer/CLAUDE.md |
 | src/features/fileViewers | 文件查看器注册表（策略模式，扩展名→面板类型映射） | src/features/fileViewers/index.ts | @../src/features/fileViewers/CLAUDE.md |
 | src/features/shortcuts | 快捷键模块（ShortcutRegistry 单例 + usePanelFocus hook + Command/Keybinding 分离 + 用户自定义重绑定） | src/features/shortcuts/index.ts | @../src/features/shortcuts/CLAUDE.md |
