@@ -622,6 +622,69 @@ describe('HTML 面板 Ctrl+W 转发', () => {
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
+
+  // CSP 修复验证：主窗口 CSP 含 script-src 'unsafe-inline' + 关闭 script nonce 注入后，
+  // srcdoc 继承的策略放行内联 <script> 与内联事件属性。真实 WebView2 强制 CSP，
+  // 修复前这些断言会失败（脚本被 CSP 拦截）。经同源 contentDocument 读取执行结果。
+  it('内联 <script> 与内联事件属性在预览中执行', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'slterm-e2e-csp-'));
+    const htmlPath = join(tempDir, 'inline.html');
+    writeFileSync(
+      htmlPath,
+      '<!doctype html><html><body>' +
+        '<script>document.body.setAttribute("data-script-ran","1")</script>' +
+        '<button id="b" onclick="this.setAttribute(\'data-clicked\',\'1\')">x</button>' +
+        '</body></html>',
+      'utf8',
+    );
+
+    try {
+      await browser.waitUntil(
+        async () => await browser.execute(() => (window as any).__slterm_e2e_workspaceReady === true),
+        { timeout: 15000, timeoutMsg: 'Workspace 未就绪' },
+      );
+      await browser.execute((dir: string) => {
+        (window as any).__slterm_e2e_createProject?.(dir);
+      }, tempDir);
+      await browser.waitUntil(
+        async () => await browser.execute(() => typeof window.__dockviewApi !== 'undefined'),
+        { timeout: 20000, timeoutMsg: 'Dockview API 未就绪' },
+      );
+
+      const panelId = 'e2e-csp-' + Date.now();
+      await browser.execute(
+        (args: { pid: string; path: string }) => {
+          window.__dockviewApi!.addPanel({
+            id: args.pid,
+            component: 'htmlviewer',
+            params: { panelId: args.pid, filePath: args.path },
+          });
+        },
+        { pid: panelId, path: htmlPath },
+      );
+
+      // 等内联 <script> 执行（iframe 加载解析时运行）；修复前 CSP 会拦截，此处超时即失败
+      await browser.waitUntil(
+        async () =>
+          await browser.execute(() => {
+            const iframe = document.querySelector('iframe') as HTMLIFrameElement | null;
+            return iframe?.contentDocument?.body?.getAttribute('data-script-ran') === '1';
+          }),
+        { timeout: 15000, timeoutMsg: '内联 <script> 未执行（CSP 拦截？）' },
+      );
+
+      // 触发内联 onclick，验证内联事件属性已注册为处理器并执行
+      const clicked = await browser.execute(() => {
+        const iframe = document.querySelector('iframe') as HTMLIFrameElement | null;
+        const btn = iframe?.contentDocument?.getElementById('b') as HTMLElement | null;
+        btn?.click();
+        return btn?.getAttribute('data-clicked') === '1';
+      });
+      expect(clicked).toBe(true);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('终端跨页面存活 (H6)', () => {

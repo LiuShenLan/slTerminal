@@ -1,6 +1,6 @@
 # 自动化测试用例清单
 
-全量 **~1229** 用例（Rust 193 + 前端 1016 + L3 9 + E2E 11），2026-07-13 实测更新。
+全量 **~1234** 用例（Rust 193 + 前端 1020 + L3 9 + E2E 12），2026-07-13 实测更新。
 
 > L3 9 用例同时被 `npm test`（L2）和 `npm run test:l3`（L3）覆盖，此处保留独立列出。去重后唯一用例数 **1220**。
 
@@ -126,13 +126,14 @@
 | `src/__tests__/e2e-create-project.test.ts` | 3 | pending 标记→localStorage 恢复交互 |
 | `src/__tests__/e2e-clipboard-helper.test.ts` | 3 | writeClipboard/createProject 函数可用性 |
 
-### 通用工具/其他（4 文件 / 76 用例）
+### 通用工具/其他（5 文件 / 80 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
 | `src/__tests__/path.test.ts` | 27 | normalizePath/basename/isChildOf/relativePath 边界覆盖 |
 | `src/__tests__/file-viewer-registry.test.ts` | 25 | 扩展名注册/策略链式调用/隐藏文件排除/大小写 |
 | `src/__tests__/html-panel.test.tsx` | 21 | 三态渲染/竞态取消/sandbox 属性/forwardGlobalShortcuts |
+| `src/__tests__/csp-config.test.ts` | 4 | tauri.conf.json CSP 不变量：script-src unsafe-inline/dangerousDisableAssetCspModification/default-src 严格/仅内联边界守卫 |
 | `src/__tests__/error-boundary.test.tsx` | 3 | 正常透传/抛错 UI/`__sltermError` 赋值 |
 
 ## Rust 后端测试（12 文件 / 193 用例）— `cargo test`
@@ -170,7 +171,7 @@ Rust 模块中无测试的文件（4 个）：`pty/mod.rs`、`pty/build.rs`、`m
 | `test/terminal/terminal-serialize.test.ts` | 5 | 基本文本序列化、多行输出（12 行）、ANSI 颜色保留（红/绿/粗体+重置码）、大块数据（>1000 字符、哨兵验证）、CSI 光标定位（CUP `\x1b[5;10H`） |
 | `test/terminal/keyboard.test.ts` | 4 | pwsh 提示符渲染快照、Claude TUI ANSI 颜色快照、Shift+Tab CBT 编码（`\x1b[Z`）、Ctrl+C ETX 编码（`\x03` onData） |
 
-## E2E 端到端测试（1 文件 / 11 用例）— `npm run wdio`
+## E2E 端到端测试（1 文件 / 12 用例）— `npm run wdio`
 
 | 用例 | 覆盖范围 |
 |------|---------|
@@ -184,6 +185,7 @@ Rust 模块中无测试的文件（4 个）：`pty/mod.rs`、`pty/build.rs`、`m
 | 聚焦编辑器后 Ctrl+S → 经 capture 路径真实写盘（mtime 更新） | C1: capture 监听 + context 栈匹配 + 命令 handler + 写盘全链路 |
 | 编辑器 dirty→clean 保存 | 外部写盘→auto-reload→Ctrl+S 保存新内容→磁盘断言 |
 | iframe 内 Ctrl+W → 转发关闭该 HTML 页签 | forwardGlobalShortcuts 真实转发+重放+closeTab 全链路 |
+| 内联 &lt;script&gt; 与内联事件属性在预览中执行 | CSP 修复：真实 WebView2 强制 CSP 下经同源 contentDocument 验证内联脚本+onclick 执行 |
 | should preserve terminal content after switching to another page and back | H6 终端跨页面存活（多 Dockview 实例 + CSS 显隐） |
 
 E2E 架构：`@wdio/tauri-service` 1.1.0 embedded driver（`webview2-com` COM 直连 `ICoreWebView2`，零 msedgedriver 依赖）。
