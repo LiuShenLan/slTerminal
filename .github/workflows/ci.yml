@@ -40,6 +40,20 @@ jobs:
       - name: Frontend build
         run: npm run build
 
+      # 安全守卫：生产构建必须已 tree-shake E2E helper（VITE_E2E 未设 → E2E_ENABLED=false）。
+      # installAllE2eHelpers / __slterm_e2e_createProject 仅存在于 e2e-tests/helpers.ts；
+      # 若命中说明门控失效、测试后门泄漏进生产二进制 → 失败构建。
+      # 注意：__slterm_e2e_projectPending 是生产代码合法读取的标志，不在此列。
+      - name: Guard — 生产 dist 不含 E2E helper
+        shell: pwsh
+        run: |
+          $hits = Select-String -Path dist/assets/*.js -SimpleMatch -Pattern 'installAllE2eHelpers','__slterm_e2e_createProject'
+          if ($hits) {
+            $hits | ForEach-Object { Write-Host $_.Line }
+            throw "E2E helper 泄漏进生产 dist——门控失效"
+          }
+          Write-Host "OK: 生产 dist 不含 E2E helper"
+
       - name: Frontend unit tests (L2)
         run: npm test
 
@@ -54,8 +68,11 @@ jobs:
         working-directory: src-tauri
         run: cargo test
 
-      - name: Tauri debug build
+      # E2E 二进制：设 VITE_E2E=1 使前端 vite build 保留 E2E helper（否则 wdio 卡"Workspace 未就绪"）
+      - name: Tauri debug build (E2E-enabled)
         run: npm run tauri build -- --debug --no-bundle
+        env:
+          VITE_E2E: '1'
 
       - name: E2E tests (L4)
         run: npm run wdio

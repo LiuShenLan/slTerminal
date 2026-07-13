@@ -6,7 +6,7 @@
 // - StrictMode 双挂载守卫（smGuardRef）
 // - 字体大小动态更新（term.options.fontSize）
 // - Terminal 实例清理链（dispose addon + 取消 WebGL 重试定时器）
-// - E2E 测试辅助钩子（仅 import.meta.env.DEV）
+// - E2E 测试辅助钩子（仅 E2E_ENABLED：dev serve 或 VITE_E2E=1 构建）
 //
 // 与 useXterm 的职责分离：
 // - useTerminalInstance（本 hook）：Terminal 实例 + addon 管理
@@ -19,6 +19,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import type { WebglAddon } from "@xterm/addon-webgl";
 import { detectWebgl, setupWebglWithRetry } from "./webgl";
 import { initTerminalE2e } from "../../../e2e-tests/helpers";
+import { E2E_ENABLED } from "../../lib/e2eEnabled";
 
 // ---- 常量 ----
 
@@ -136,8 +137,8 @@ export function useTerminalInstance(
     // 标记就绪
     isReadyRef.current = true;
 
-    // E2E 测试辅助钩子（仅开发模式）
-    if (import.meta.env.DEV) {
+    // E2E 测试辅助钩子（E2E_ENABLED：dev serve 或 VITE_E2E=1 构建）
+    if (E2E_ENABLED) {
       initTerminalE2e(container, {
         writeToTerminal: (text: string) => {
           if (isDisposedRef.current) return;

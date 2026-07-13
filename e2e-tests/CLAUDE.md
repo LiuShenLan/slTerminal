@@ -10,11 +10,14 @@ E2E 端到端测试 — 使用 WDIO + `@wdio/tauri-service` 1.1.0 + `tauri-plugi
 
 ```bash
 # 完整验收流程（必须先 build 再 wdio，二进制过期会导致结果不可靠）
-npx tauri build --debug --no-bundle
+npm run build:e2e     # = cross-env VITE_E2E=1 tauri build --debug --no-bundle
 npm run wdio          # → node ./e2e-tests/run-wdio.cjs
+# 或一步：npm run e2e（= build:e2e && wdio）
 ```
 
 `npm run wdio` 由 `run-wdio.cjs` 启动：Node >= 26 时自动下载便携 Node 22（undici 8 与 webdriverio 不兼容），Node 22 直接运行。
+
+> **必须 `VITE_E2E=1` 构建**：E2E helper 由 `E2E_ENABLED`（`src/lib/e2eEnabled.ts`）门控。`tauri build` 的前端恒走 `vite build`（production，`import.meta.env.DEV=false`，与 `--debug`/`--mode` 无关——`--debug` 只管 Rust 壳），故必须经 `VITE_E2E=1` 才能保留 helper。直接 `tauri build --debug` 会 tree-shake 掉 helper，wdio 全部卡在"Workspace 未就绪"。
 
 ## 文件结构
 
@@ -33,7 +36,7 @@ npm run wdio          # → node ./e2e-tests/run-wdio.cjs
 
 ## 加载机制
 
-E2E helpers 通过 `main.tsx` 中 `import.meta.env.DEV` 条件动态导入，生产构建 tree-shake 排除。
+E2E helpers 通过 `main.tsx` 中 `E2E_ENABLED`（`src/lib/e2eEnabled.ts`）条件动态导入：dev serve 时 `import.meta.env.DEV=true`，E2E 构建时经 `VITE_E2E=1` 打开；生产发布构建二者皆 false → tree-shake 排除。同一开关门控 Workspace 就绪标志与终端级 helper（`useTerminalInstance`/`useXterm` 共 6 处）。CI 有生产 dist grep 守卫强制"生产不含 helper"。
 
 ## DOM 选择器约定
 

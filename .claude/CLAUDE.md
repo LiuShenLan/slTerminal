@@ -68,12 +68,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | L1 | Rust 单元/集成 | `cargo test`、`tempfile` 隔离 | `cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1` | ~193 |
 | L2 | 前端单元/集成 | Vitest + jsdom | `npm test` | ~1020 |
 | L3 | 终端 headless 渲染 | Vitest + `@xterm/headless` | `npm run test:l3` | 116 |
-| L4 | 端到端 (E2E) | WDIO + embedded driver | `npm run wdio` | 12 |
+| L4 | 端到端 (E2E) | WDIO + embedded driver | `npm run e2e`（= `build:e2e` + `wdio`） | 12 |
 
 核心原则：
 - **隔离优先**：L1 用 `tempfile::tempdir()` 隔离文件系统、`SPAWN_LOCK` 串行化 PTY；L2 用 `vi.mock()` 隔离 IPC/终端库；L4 用 embedded driver 隔离浏览器依赖
 - **L1/L2 覆盖所有 PR**，L3/L4 覆盖关键路径变更
 - **L1 必须 `--test-threads=1`**：ConPTY 并发 spawn 会死锁
+- **L4 必须 `VITE_E2E=1` 构建**（用 `npm run e2e`/`build:e2e`）：E2E helper 由 `E2E_ENABLED` 门控，`tauri build` 前端恒为 production `vite build`（`DEV=false`），不设开关则 helper 被 tree-shake、wdio 全部卡"Workspace 未就绪"
 - **模块测试模式见各子路径 CLAUDE.md**，不在根文件展开
 
 静态检查门禁：

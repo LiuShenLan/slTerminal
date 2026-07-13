@@ -22,7 +22,7 @@ import { SidebarTree } from "../features/sidebar";
 import { ExplorerPanel } from "../features/explorer";
 import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
-import { ErrorBoundary } from "../lib";
+import { ErrorBoundary, E2E_ENABLED } from "../lib";
 import { markWorkspaceReady } from "../../e2e-tests/helpers";
 
 declare global {
@@ -44,7 +44,7 @@ const MAIN_MIN_SIZE = 200;
 
 const Workspace: React.FC = () => {
   // E2E 测试就绪信号：Workspace 挂载后立即可见（渲染阶段同步设置，非 useEffect）
-  if (import.meta.env.DEV) {
+  if (E2E_ENABLED) {
     markWorkspaceReady();
   }
 

@@ -33,6 +33,7 @@ import { setActiveTerminal, clearActiveTerminal, type TerminalActions } from "./
 import { usePanelFocus, getShortcutRegistry } from "../../features/shortcuts";
 import { TerminalRegistry } from "./TerminalRegistry";
 import { useFontSizeWheel } from "../../lib/useFontSizeWheel";
+import { E2E_ENABLED } from "../../lib/e2eEnabled";
 import { FONT_SIZE_MIN, FONT_SIZE_MAX } from "../../stores/fontSize";
 // 命令行→标题/图标规则（side-effect import 注册规则）
 import "./tabRules";
@@ -241,9 +242,9 @@ export function useXterm({
       },
     };
 
-    // E2E 测试辅助钩子——委托给 helpers.ts（DEV 模式编译时条件排除）
-    // __e2e_writeToTerminal / __e2e_getTerminalText 由 useTerminalInstance 在 DEV 模式下安装
-    if (import.meta.env.DEV) {
+    // E2E 测试辅助钩子——委托给 helpers.ts（E2E_ENABLED 时编译期保留，生产 tree-shake）
+    // __e2e_writeToTerminal / __e2e_getTerminalText 由 useTerminalInstance 在 E2E_ENABLED 时安装
+    if (E2E_ENABLED) {
       setTerminalSessionReady(container, false);
       installTerminalWriteToPty(container, (data: string) => {
         if (sessionIdRef.current) {
@@ -284,13 +285,13 @@ export function useXterm({
             webglAddon: webglAddonRef.current,
             fitAddon,
           });
-          if (import.meta.env.DEV) setTerminalSessionReady(container, true);
+          if (E2E_ENABLED) setTerminalSessionReady(container, true);
           // PTY spawn 初始化：重置命令运行状态（覆盖持久化残留）
           resetCommandState();
         })
         .catch((err) => {
           term.writeln(`\r\n[重新连接] 按 Enter 重试...\r\n`);
-          if (import.meta.env.DEV) setTerminalSessionError(container, String(err));
+          if (E2E_ENABLED) setTerminalSessionError(container, String(err));
           console.error(`[H6] ❌ spawn FAIL panelId="${panelId}"`, err);
           // 设置 Enter 重连监听（不立即重新 spawn，由用户按 Enter 触发）
           setupRetry(cols, rows);
