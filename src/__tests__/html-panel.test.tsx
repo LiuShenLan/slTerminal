@@ -1,22 +1,28 @@
 // html-panel.test.tsx — HtmlPanel 组件测试
 //
-// 覆盖路径：
+// 覆盖：
 //   1. 渲染状态 — loading/loaded(iframe)/error/三态切换
 //   2. iframe 属性 — srcDoc/sandbox/style
 //   3. 竞态取消 — 快速切换 filePath / 卸载后 resolve
 //   4. 边界 — 空 HTML / 大内容 / script 标签
+//   5. 注入脚本内容 — 键盘转发 + 片段链接拦截
+//   6. postMessage 键盘转发桥
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import React from "react";
-import { render, cleanup, waitFor, fireEvent } from "@testing-library/react";
+import { render, cleanup, waitFor } from "@testing-library/react";
 
 // ─── Hoisted mocks ───
 const mocks = vi.hoisted(() => {
   const mockReadFile = vi.fn();
+  const mockExportContextBindings = vi.fn<() => { keystroke: string }[]>(() => []);
   return {
     mockReadFile,
+    mockExportContextBindings,
     resetAll() {
       mockReadFile.mockReset();
+      mockExportContextBindings.mockReset();
+      mockExportContextBindings.mockReturnValue([]);
     },
   };
 });
@@ -25,16 +31,12 @@ vi.mock("../ipc/fs", () => ({
   readFile: mocks.mockReadFile,
 }));
 
-// iframe 键盘桥 mock（HtmlPanel 仅从 features/shortcuts import attachGlobalShortcutForwarder）
-const { mockAttach, mockDetach } = vi.hoisted(() => {
-  const mockDetach = vi.fn();
-  return { mockAttach: vi.fn((doc: Document) => { void doc; return mockDetach; }), mockDetach };
-});
-vi.mock("../features/shortcuts", () => ({
-  attachGlobalShortcutForwarder: mockAttach,
+vi.mock("../features/shortcuts/ShortcutRegistry", () => ({
+  getShortcutRegistry: () => ({
+    exportContextBindings: mocks.mockExportContextBindings,
+  }),
 }));
 
-// ─── 真实模块导入（mock 之后）───
 import { HtmlPanel } from "../panels/html";
 
 function renderHtmlPanel(filePath: string | undefined) {
@@ -51,8 +53,6 @@ function renderHtmlPanel(filePath: string | undefined) {
 describe("HtmlPanel", () => {
   beforeEach(() => {
     mocks.resetAll();
-    mockAttach.mockClear();
-    mockDetach.mockClear();
   });
 
   afterEach(() => {
@@ -63,15 +63,13 @@ describe("HtmlPanel", () => {
   // 渲染状态
   // ==========================================================================
 
-  // 24. 初始渲染显示加载中
   it("初始渲染显示加载中", () => {
-    mocks.mockReadFile.mockReturnValue(new Promise(() => {})); // 永不 resolve
+    mocks.mockReadFile.mockReturnValue(new Promise(() => {}));
     const { getByText } = renderHtmlPanel("C:/test/index.html");
     expect(getByText("加载中...")).toBeDefined();
   });
 
-  // 25. 加载完成后渲染 iframe
-  it("加载完成后渲染 iframe", async () => {
+  it("加载完成后渲染 iframe（srcDoc）", async () => {
     mocks.mockReadFile.mockResolvedValue("<h1>Hello</h1>");
     const { getByTitle } = renderHtmlPanel("C:/test/index.html");
     await waitFor(() => {
@@ -81,19 +79,26 @@ describe("HtmlPanel", () => {
     });
   });
 
-  // 26. iframe 含 sandbox 属性
-  it("iframe 含 sandbox 属性", async () => {
+  it("iframe sandbox 为 allow-scripts", async () => {
     mocks.mockReadFile.mockResolvedValue("<p>test</p>");
     const { getByTitle } = renderHtmlPanel("C:/test/index.html");
     await waitFor(() => {
       const iframe = getByTitle("HTML 预览: C:/test/index.html");
-      expect(iframe.getAttribute("sandbox")).toBe(
-        "allow-scripts allow-same-origin",
-      );
+      expect(iframe.getAttribute("sandbox")).toBe("allow-scripts");
     });
   });
 
-  // 27. 加载完成后"加载中"文字消失
+  it("iframe 不含 srcDoc 以外的 url 属性", async () => {
+    mocks.mockReadFile.mockResolvedValue("<p>test</p>");
+    const { getByTitle } = renderHtmlPanel("C:/test/index.html");
+    await waitFor(() => {
+      const iframe = getByTitle("HTML 预览: C:/test/index.html");
+      // src 不设置（用 srcDoc），src 应为空或 about:blank
+      const src = iframe.getAttribute("src");
+      expect(src === null || src === "" || src === "about:blank").toBe(true);
+    });
+  });
+
   it('加载完成后"加载中"文字消失', async () => {
     mocks.mockReadFile.mockResolvedValue("<p>done</p>");
     const { queryByText } = renderHtmlPanel("C:/test/index.html");
@@ -102,7 +107,6 @@ describe("HtmlPanel", () => {
     });
   });
 
-  // 28. readFile reject 显示错误信息
   it("readFile reject 显示错误信息", async () => {
     mocks.mockReadFile.mockRejectedValue(new Error("权限不足"));
     const { getByText } = renderHtmlPanel("C:/test/index.html");
@@ -111,32 +115,27 @@ describe("HtmlPanel", () => {
     });
   });
 
-  // 29. 错误信息红色
   it("错误信息红色", async () => {
     mocks.mockReadFile.mockRejectedValue(new Error("fail"));
     const { getByText } = renderHtmlPanel("C:/test/index.html");
     await waitFor(() => {
       const el = getByText("加载失败: fail");
-      expect(el.style.color).toBe("rgb(244, 71, 71)"); // #F44747
+      expect(el.style.color).toBe("rgb(244, 71, 71)");
     });
   });
 
-  // 30. filePath 为 undefined 显示错误
   it("filePath 为 undefined 显示错误", () => {
     const { getByText } = renderHtmlPanel(undefined);
     expect(getByText("加载失败: 未指定文件路径")).toBeDefined();
   });
 
-  // 31. 加载中背景色为 PANEL_BG
   it("加载中背景色为 PANEL_BG", () => {
     mocks.mockReadFile.mockReturnValue(new Promise(() => {}));
     const { container } = renderHtmlPanel("C:/test/index.html");
     const outerDiv = container.firstChild as HTMLElement;
-    // jsdom 将颜色标准化为 rgb 格式
     expect(outerDiv.style.background).toBe("rgb(30, 30, 30)");
   });
 
-  // 32. iframe 样式填满容器
   it("iframe 样式填满容器", async () => {
     mocks.mockReadFile.mockResolvedValue("<p>test</p>");
     const { getByTitle } = renderHtmlPanel("C:/test/index.html");
@@ -144,7 +143,6 @@ describe("HtmlPanel", () => {
       const iframe = getByTitle("HTML 预览: C:/test/index.html");
       expect(iframe.style.width).toBe("100%");
       expect(iframe.style.height).toBe("100%");
-      // jsdom 将 border: none 标准化为 border: medium
       expect(iframe.style.border).toBe("medium");
     });
   });
@@ -153,7 +151,6 @@ describe("HtmlPanel", () => {
   // 竞态取消
   // ==========================================================================
 
-  // 33. 快速切换 filePath 后旧请求结果不覆盖新请求
   it("快速切换 filePath 后旧请求结果不覆盖新请求", async () => {
     let resolveOld: (v: string) => void = () => {};
     const oldPromise = new Promise<string>((resolve) => {
@@ -161,32 +158,25 @@ describe("HtmlPanel", () => {
     });
 
     mocks.mockReadFile
-      .mockReturnValueOnce(oldPromise) // 第一次：pending
-      .mockResolvedValueOnce("<h1>New Content</h1>"); // 第二次：立即 resolve
+      .mockReturnValueOnce(oldPromise)
+      .mockResolvedValueOnce("<h1>New Content</h1>");
 
     const { rerender, getByTitle } = renderHtmlPanel("C:/test/old.html");
 
-    // 用新 filePath 重新渲染（模拟面板切换）
     rerender(
       React.createElement(HtmlPanel, {
-        params: {
-          panelId: "test-panel-1",
-          filePath: "C:/test/new.html",
-        },
+        params: { panelId: "test-panel-1", filePath: "C:/test/new.html" },
       }),
     );
 
-    // 旧请求晚 resolve —— 不应影响当前状态
     resolveOld("<h1>Old Content</h1>");
 
     await waitFor(() => {
       const iframe = getByTitle("HTML 预览: C:/test/new.html");
-      // srcDoc 应为新内容
-      expect(iframe.getAttribute("srcDoc")).toBe("<h1>New Content</h1>");
+      expect(iframe.getAttribute("srcDoc")).toContain("<h1>New Content</h1>");
     });
   });
 
-  // 34. 组件卸载后 readFile resolve 不 setState
   it("组件卸载后 readFile resolve 不报错", async () => {
     let resolveLater: (v: string) => void = () => {};
     const pending = new Promise<string>((resolve) => {
@@ -197,14 +187,10 @@ describe("HtmlPanel", () => {
     const { unmount } = renderHtmlPanel("C:/test/index.html");
     unmount();
 
-    // 卸载后 resolve 不应抛出 "Can't perform a React state update" 警告
-    // 此测试只要不抛异常即通过
     resolveLater("<p>late</p>");
-    // 等一个 microtask 确保 promise 回调执行
     await new Promise((r) => setTimeout(r, 10));
   });
 
-  // 35. 连续三次切换只显示最后一次结果
   it("连续三次切换只显示最后一次结果", async () => {
     let resolveFirst: (v: string) => void = () => {};
     const firstPromise = new Promise<string>((r) => {
@@ -230,12 +216,11 @@ describe("HtmlPanel", () => {
       }),
     );
 
-    // 第一次的 promise 晚 resolve
     resolveFirst("<h1>First</h1>");
 
     await waitFor(() => {
       const iframe = getByTitle("HTML 预览: C:/test/3.html");
-      expect(iframe.getAttribute("srcDoc")).toBe("<h1>Third</h1>");
+      expect(iframe.getAttribute("srcDoc")).toContain("<h1>Third</h1>");
     });
   });
 
@@ -243,44 +228,135 @@ describe("HtmlPanel", () => {
   // 边界
   // ==========================================================================
 
-  // 36. 空 HTML 文件渲染空 iframe
-  it("空 HTML 文件渲染空 iframe", async () => {
+  it("空 HTML 文件渲染含注入脚本的完整文档", async () => {
     mocks.mockReadFile.mockResolvedValue("");
     const { getByTitle } = renderHtmlPanel("C:/test/empty.html");
     await waitFor(() => {
       const iframe = getByTitle("HTML 预览: C:/test/empty.html");
-      expect(iframe.getAttribute("srcDoc")).toBe("");
+      // 空 HTML 经 injectScript 后变成最小完整文档
+      expect(iframe.getAttribute("srcDoc")).toContain("<html>");
     });
   });
 
-  // 37. 很大 HTML 内容（~100KB）
-  it("很大 HTML 内容正常渲染", async () => {
+  it("很大 HTML 内容 srcDoc 正常包含", async () => {
     const bigContent = "<html><body>" + "x".repeat(100_000) + "</body></html>";
     mocks.mockReadFile.mockResolvedValue(bigContent);
     const { getByTitle } = renderHtmlPanel("C:/test/big.html");
     await waitFor(() => {
       const iframe = getByTitle("HTML 预览: C:/test/big.html");
-      expect(iframe.getAttribute("srcDoc")).toBe(bigContent);
+      expect(iframe.getAttribute("srcDoc")).toContain("x".repeat(100_000));
     });
   });
 
-  // 38. HTML 含 script 标签
-  it("HTML 含 script 标签正常渲染（sandbox 内执行）", async () => {
+  it("HTML 含 script 标签——原始 script 与注入脚本共存于 srcDoc", async () => {
     mocks.mockReadFile.mockResolvedValue(
       "<html><body><script>document.body.innerHTML='JS OK'</script></body></html>",
     );
     const { getByTitle } = renderHtmlPanel("C:/test/script.html");
     await waitFor(() => {
       const iframe = getByTitle("HTML 预览: C:/test/script.html");
-      expect(iframe.getAttribute("srcDoc")).toContain("JS OK");
+      const doc = iframe.getAttribute("srcDoc")!;
+      expect(doc).toContain("JS OK");
+      expect(doc).toContain("slterm_key");
     });
   });
 
   // ==========================================================================
-  // renderer="always" 下的生命周期（白屏修复验证）
+  // 注入脚本内容验证（键盘转发 + 片段链接拦截）
   // ==========================================================================
 
-  // 65. props 不变时仅 mount 一次（不因 DOM 移动重新 mount）
+  it("注入脚本含键盘转发标识符", async () => {
+    mocks.mockReadFile.mockResolvedValue("<p>test</p>");
+    const { getByTitle } = renderHtmlPanel("C:/test/a.html");
+    await waitFor(() => {
+      const iframe = getByTitle("HTML 预览: C:/test/a.html") as HTMLIFrameElement;
+      expect(iframe.getAttribute("srcDoc")).toContain("slterm_key");
+    });
+  });
+
+  it("注入脚本含片段链接拦截 scrollIntoView", async () => {
+    mocks.mockReadFile.mockResolvedValue("<p>test</p>");
+    const { getByTitle } = renderHtmlPanel("C:/test/a.html");
+    await waitFor(() => {
+      const iframe = getByTitle("HTML 预览: C:/test/a.html") as HTMLIFrameElement;
+      expect(iframe.getAttribute("srcDoc")).toContain("scrollIntoView");
+    });
+  });
+
+  it("H1: 注入脚本含 scrollIntoView + class-based toggle", async () => {
+    mocks.mockReadFile.mockResolvedValue("<p>test</p>");
+    const { getByTitle } = renderHtmlPanel("C:/test/a.html");
+    await waitFor(() => {
+      const doc = (getByTitle("HTML 预览: C:/test/a.html") as HTMLIFrameElement).getAttribute("srcDoc")!;
+      expect(doc).toContain("scrollIntoView");
+      expect(doc).toContain("classList.add");
+      expect(doc).toContain("classList.remove");
+    });
+  });
+
+  it("H2: 注入脚本含 closest('a') 链接检测", async () => {
+    mocks.mockReadFile.mockResolvedValue("<p>test</p>");
+    const { getByTitle } = renderHtmlPanel("C:/test/a.html");
+    await waitFor(() => {
+      const doc = (getByTitle("HTML 预览: C:/test/a.html") as HTMLIFrameElement).getAttribute("srcDoc")!;
+      expect(doc).toContain("closest");
+      expect(doc).toContain('"a"');
+    });
+  });
+
+  it("H3: 片段链接拦截使用 preventDefault", async () => {
+    mocks.mockReadFile.mockResolvedValue("<p>test</p>");
+    const { getByTitle } = renderHtmlPanel("C:/test/a.html");
+    await waitFor(() => {
+      const doc = (getByTitle("HTML 预览: C:/test/a.html") as HTMLIFrameElement).getAttribute("srcDoc")!;
+      expect(doc).toContain("preventDefault");
+    });
+  });
+
+  it("H4: 注入脚本含 dataset.sltermHash 状态跟踪", async () => {
+    mocks.mockReadFile.mockResolvedValue("<p>test</p>");
+    const { getByTitle } = renderHtmlPanel("C:/test/a.html");
+    await waitFor(() => {
+      const doc = (getByTitle("HTML 预览: C:/test/a.html") as HTMLIFrameElement).getAttribute("srcDoc")!;
+      expect(doc).toContain("dataset.sltermHash");
+    });
+  });
+
+  it("H5: 注入脚本含键盘转发 + 片段拦截 + CSS 注入", async () => {
+    mocks.mockReadFile.mockResolvedValue("<p>test</p>");
+    const { getByTitle } = renderHtmlPanel("C:/test/a.html");
+    await waitFor(() => {
+      const doc = (getByTitle("HTML 预览: C:/test/a.html") as HTMLIFrameElement).getAttribute("srcDoc")!;
+      // 键盘转发
+      expect(doc).toContain("slterm_key");
+      expect(doc).toContain("postMessage");
+      // 片段拦截 + toggle
+      expect(doc).toContain("scrollIntoView");
+      expect(doc).toContain("classList.add");
+      expect(doc).toContain("classList.remove");
+      // CSS 注入
+      expect(doc).toContain("createElement");
+      expect(doc).toContain("slterm-target");
+      // 两个 addEventListener
+      const matches = doc.match(/addEventListener/g);
+      expect(matches).not.toBeNull();
+      expect(matches!.length).toBe(2);
+    });
+  });
+
+  it("H6: 注入后原始可见内容保留", async () => {
+    mocks.mockReadFile.mockResolvedValue("<h1>Hello World</h1>");
+    const { getByTitle } = renderHtmlPanel("C:/test/a.html");
+    await waitFor(() => {
+      const iframe = getByTitle("HTML 预览: C:/test/a.html") as HTMLIFrameElement;
+      expect(iframe.getAttribute("srcDoc")).toContain("<h1>Hello World</h1>");
+    });
+  });
+
+  // ==========================================================================
+  // renderer="always" 生命周期
+  // ==========================================================================
+
   it("相同 filePath 重渲染不触发 readFile 多次", async () => {
     mocks.mockReadFile.mockResolvedValue("<p>test</p>");
     const { rerender } = renderHtmlPanel("C:/test/a.html");
@@ -289,18 +365,15 @@ describe("HtmlPanel", () => {
       expect(mocks.mockReadFile).toHaveBeenCalledTimes(1);
     });
 
-    // 用相同 filePath 重新渲染（模拟 renderer="always" 下 panel 重新聚焦）
     rerender(
       React.createElement(HtmlPanel, {
         params: { panelId: "tp", filePath: "C:/test/a.html" },
       }),
     );
 
-    // filePath 没变，useEffect 不应重新执行
     expect(mocks.mockReadFile).toHaveBeenCalledTimes(1);
   });
 
-  // 66. cleanup 在 unmount 时执行（cancelled 标志）
   it("unmount 后 cleanup 阻止 setState", async () => {
     let resolveLater: (v: string) => void = () => {};
     const pending = new Promise<string>((r) => {
@@ -311,18 +384,14 @@ describe("HtmlPanel", () => {
     const { unmount, queryByText } = renderHtmlPanel("C:/test/a.html");
     expect(queryByText("加载中...")).toBeDefined();
 
-    // 卸载组件
     unmount();
 
-    // 晚 resolve——cleanup 已设置 cancelled=true，不应触发 setState
     resolveLater("<p>late</p>");
     await new Promise((r) => setTimeout(r, 10));
 
-    // 组件已卸载，document 中不应有 iframe
     expect(document.querySelector("iframe")).toBeNull();
   });
 
-  // 67. iframe 在 unmount 后被销毁
   it("iframe 在 unmount 后被销毁", async () => {
     mocks.mockReadFile.mockResolvedValue("<p>test</p>");
     const { getByTitle, unmount } = renderHtmlPanel("C:/test/a.html");
@@ -333,59 +402,69 @@ describe("HtmlPanel", () => {
 
     unmount();
 
-    // iframe 应已从 DOM 中移除
     expect(document.querySelector("iframe")).toBeNull();
   });
 
   // ==========================================================================
-  // iframe 全局键转发桥
+  // postMessage 键盘转发桥
   // ==========================================================================
 
-  // 68. iframe onLoad 后给 contentDocument 挂全局键转发
-  it("iframe onLoad 后 attachGlobalShortcutForwarder 被以 contentDocument 调用", async () => {
+  it("postMessage 命中全局快捷键 → window.dispatchEvent", async () => {
+    mocks.mockExportContextBindings.mockReturnValue([{ keystroke: "Ctrl+KeyW" }]);
     mocks.mockReadFile.mockResolvedValue("<p>test</p>");
-    const { getByTitle } = renderHtmlPanel("C:/test/a.html");
+    renderHtmlPanel("C:/test/a.html");
 
-    const iframe = (await waitFor(() =>
-      getByTitle("HTML 预览: C:/test/a.html"),
-    )) as HTMLIFrameElement;
-    fireEvent.load(iframe);
+    const spy = vi.spyOn(window, "dispatchEvent");
+    window.postMessage(
+      {
+        type: "slterm_key",
+        fingerprint: "Ctrl+KeyW",
+        ctrlKey: true, shiftKey: false, altKey: false, metaKey: false,
+        code: "KeyW", key: "w",
+      },
+      "*",
+    );
 
-    // jsdom 可能自动 fire 一次 load，故不断言精确次数，只验证以 contentDocument 挂载过
-    expect(mockAttach).toHaveBeenCalled();
-    expect(mockAttach.mock.calls.some((c) => c[0] === iframe.contentDocument)).toBe(true);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(spy).toHaveBeenCalled();
+    spy.mockRestore();
+    mocks.mockExportContextBindings.mockReturnValue([]);
   });
 
-  // 69. 组件卸载 → detach 被调用
-  it("挂载 forwarder 后 unmount → detach 被调用", async () => {
+  it("postMessage 非 slterm_key type → 忽略", async () => {
     mocks.mockReadFile.mockResolvedValue("<p>test</p>");
-    const { getByTitle, unmount } = renderHtmlPanel("C:/test/a.html");
+    renderHtmlPanel("C:/test/a.html");
 
-    const iframe = (await waitFor(() =>
-      getByTitle("HTML 预览: C:/test/a.html"),
-    )) as HTMLIFrameElement;
-    fireEvent.load(iframe); // 确保已挂载 forwarder
+    const spy = vi.spyOn(window, "dispatchEvent");
+    window.postMessage({ type: "other", fingerprint: "Ctrl+KeyW" }, "*");
 
-    const detachBefore = mockDetach.mock.calls.length;
-    unmount();
-    expect(mockDetach.mock.calls.length).toBeGreaterThan(detachBefore);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
   });
 
-  // 70. 重载（再次 load）→ 每次 load 增 1 attach + 先 detach 旧的
-  it("iframe 重载 → 先 detach 旧再 attach 新（增量）", async () => {
+  it("postMessage 非全局快捷键 → 忽略", async () => {
     mocks.mockReadFile.mockResolvedValue("<p>test</p>");
-    const { getByTitle } = renderHtmlPanel("C:/test/a.html");
+    renderHtmlPanel("C:/test/a.html");
 
-    const iframe = (await waitFor(() =>
-      getByTitle("HTML 预览: C:/test/a.html"),
-    )) as HTMLIFrameElement;
-    fireEvent.load(iframe); // 已挂载一次
+    const spy = vi.spyOn(window, "dispatchEvent");
+    window.postMessage(
+      {
+        type: "slterm_key",
+        fingerprint: "Ctrl+KeyA",
+        ctrlKey: true, shiftKey: false, altKey: false, metaKey: false,
+        code: "KeyA", key: "a",
+      },
+      "*",
+    );
 
-    const attachBefore = mockAttach.mock.calls.length;
-    const detachBefore = mockDetach.mock.calls.length;
-    fireEvent.load(iframe); // 重载：detach 旧 + attach 新
+    await new Promise((r) => setTimeout(r, 10));
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
 
-    expect(mockAttach.mock.calls.length).toBe(attachBefore + 1);
-    expect(mockDetach.mock.calls.length).toBe(detachBefore + 1);
+  it("无 filePath 时不创建 iframe（error 态）", () => {
+    const { queryByTitle } = renderHtmlPanel(undefined);
+    expect(queryByTitle(/HTML 预览/)).toBeNull();
   });
 });

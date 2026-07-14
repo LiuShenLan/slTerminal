@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>内联脚本/事件测试</title>
+<style>
+  :root { color-scheme: dark; }
+  body { background: #1e1e1e; color: #d4d4d4; font: 14px/1.6 "Segoe UI", system-ui, sans-serif; margin: 20px; }
+  h2 { color: #569cd6; border-bottom: 1px solid #333; padding-bottom: 4px; margin-top: 20px; }
+  .test-group { margin: 12px 0; padding: 12px; background: #252526; border-radius: 6px; }
+  button, input, select, textarea { margin: 4px; }
+  button { padding: 6px 14px; background: #0e639c; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
+  button:hover { background: #1177bb; }
+  input, select, textarea { background: #333; color: #ccc; border: 1px solid #555; padding: 4px 8px; border-radius: 3px; }
+  .ok { color: #4ec9b0; font-weight: bold; }
+  hr { border-color: #333; margin: 20px 0; }
+</style>
+</head>
+<body>
+<h1>内联脚本 & 事件属性测试</h1>
+<p>每个测试项自带内联代码，点击/操作后自身变色表示成功。DevTools Console (F12) 可看 CSP 违规。</p>
+
+<!-- ====== 内联 <script> ====== -->
+<h2>1. 内联 &lt;script&gt;</h2>
+<div class="test-group">
+  <p>1a. <span id="t1a" style="color:#888">等待脚本执行...</span></p>
+  <p>1b. <span id="t1b" style="color:#888">等待 DOM 操作...</span></p>
+</div>
+<script>
+  document.getElementById("t1a").textContent = "✅ 内联 script 已执行";
+  document.getElementById("t1a").className = "ok";
+</script>
+<script>
+  var el = document.getElementById("t1b");
+  if (el) { el.textContent = "✅ DOM 操作正常"; el.className = "ok"; }
+</script>
+
+<!-- ====== 内联事件属性：点击类 ====== -->
+<h2>2. 点击事件属性</h2>
+<div class="test-group">
+  <button onclick="this.textContent='✅ onclick 触发';this.className='ok';this.style.background='#1a5a1a'">
+    点击我（onclick）
+  </button>
+  <button ondblclick="this.textContent='✅ ondblclick 触发';this.className='ok';this.style.background='#1a5a1a'">
+    双击我（ondblclick）
+  </button>
+  <span onclick="this.textContent='✅ span onclick 触发';this.className='ok'" style="cursor:pointer;color:#888;">
+    点击这段文字（span onclick）
+  </span>
+</div>
+
+<!-- ====== 鼠标事件属性 ====== -->
+<h2>3. 鼠标事件属性</h2>
+<div class="test-group">
+  <button onmouseover="this.textContent='✅ onmouseover';this.style.background='#1a5a1a'"
+          onmouseout="this.style.background='#0e639c'">
+    悬停我（onmouseover）
+  </button>
+  <button onmousedown="this.textContent='✅ onmousedown';this.style.background='#1a5a1a'"
+          onmouseup="this.textContent='✅ onmouseup';this.style.background='#0e639c'">
+    按我（onmousedown/up）
+  </button>
+  <button oncontextmenu="this.textContent='✅ oncontextmenu';this.style.background='#1a5a1a';return false;">
+    右键我（oncontextmenu）
+  </button>
+</div>
+
+<!-- ====== 焦点事件 ====== -->
+<h2>4. 焦点事件属性</h2>
+<div class="test-group">
+  <input type="text" value="聚焦我"
+         onfocus="this.style.borderColor='#4ec9b0';this.style.background='#1a3a1a'"
+         onblur="this.style.borderColor='#f14c4c'"
+         style="width:200px;">
+  <span style="font-size:12px;color:#888;">← 聚焦变绿框 / 离开变红框</span>
+</div>
+
+<!-- ====== 输入事件 ====== -->
+<h2>5. 输入事件属性</h2>
+<div class="test-group">
+  <input type="text" value="在这里输入"
+         oninput="this.style.background='#1a3a1a'"
+         style="width:200px;">
+  <span style="font-size:12px;color:#888;">← 输入文字变绿底</span>
+</div>
+
+<!-- ====== 键盘事件 ====== -->
+<h2>6. 键盘事件属性</h2>
+<div class="test-group">
+  <input type="text" value="聚焦后按键"
+         onkeydown="this.value='✅ onkeydown: '+event.key"
+         style="width:250px;">
+</div>
+
+<!-- ====== 表单事件 ====== -->
+<h2>7. 表单事件属性</h2>
+<div class="test-group">
+  <form onsubmit="document.getElementById('t7a').textContent='✅ onsubmit 触发';document.getElementById('t7a').className='ok';return false;">
+    <input type="text" value="test" onchange="document.getElementById('t7b').textContent='✅ onchange 触发';document.getElementById('t7b').className='ok'">
+    <button type="submit">提交表单</button>
+    <span id="t7a" style="color:#888">等待 onsubmit...</span>
+    <span id="t7b" style="color:#888">等待 onchange...</span>
+  </form>
+</div>
+
+<!-- ====== 媒体/资源事件 ====== -->
+<h2>8. onload / onerror</h2>
+<div class="test-group">
+  <span id="t8a" style="color:#888">等待 onerror...</span>
+  <img src="x-nonexistent.png" onerror="document.getElementById('t8a').textContent='✅ onerror 触发';document.getElementById('t8a').className='ok'" style="display:none;">
+</div>
+
+<!-- ====== 内联脚本函数 + 事件属性 ====== -->
+<h2>9. 内联脚本定义函数 + 事件属性调用</h2>
+<script>
+  function handleIt(el) { el.textContent = "✅ 内联函数被调用"; el.className = "ok"; el.style.background = "#1a5a1a"; }
+</script>
+<div class="test-group">
+  <button onclick="handleIt(this)">点击（调用内联脚本中的函数）</button>
+</div>
+
+<!-- ====== element.onxxx = fn ====== -->
+<h2>10. JS 赋值事件处理器</h2>
+<div class="test-group">
+  <button id="btn10">element.onclick = fn</button>
+  <span id="t10" style="color:#888">等待点击...</span>
+</div>
+<script>
+  document.getElementById("btn10").onclick = function() {
+    this.textContent = "✅ onxxx = fn 成功"; this.className = "ok"; this.style.background = "#1a5a1a";
+    document.getElementById("t10").textContent = "✅"; document.getElementById("t10").className = "ok";
+  };
+</script>
+
+<!-- ====== eval / new Function（需 unsafe-eval） ====== -->
+<h2>11. eval / new Function（预期被拦，需 unsafe-eval）</h2>
+<div class="test-group">
+  <p>11a. <span id="t11a" style="color:#888">等待 eval...</span></p>
+  <p>11b. <span id="t11b" style="color:#888">等待 new Function...</span></p>
+</div>
+<script>
+  try { eval("document.getElementById('t11a').textContent='✅ eval 成功';document.getElementById('t11a').className='ok';"); }
+  catch(e) { document.getElementById("t11a").textContent = "❌ eval 被拦截（预期）: " + e.message.split(":")[0]; }
+  try { new Function("document.getElementById('t11b').textContent='✅';")();
+        document.getElementById("t11b").textContent = "✅ new Function 成功"; document.getElementById("t11b").className = "ok"; }
+  catch(e) { document.getElementById("t11b").textContent = "❌ new Function 被拦截（预期）: " + e.message.split(":")[0]; }
+</script>
+
+<hr>
+<p style="font-size:12px;color:#888;">
+  <b>总结</b>：内联 &lt;script&gt; 和内联事件属性（onclick/onmouseover/onkeydown 等）依赖 CSP <code>script-src 'unsafe-inline'</code> + <code>dangerousDisableAssetCspModification</code>。<br>
+  eval / new Function 额外需要 <code>'unsafe-eval'</code>（当前未加，如需要可加上）。<br>
+  打开 F12 Console 可查看具体 CSP 违规报告。
+</p>
+
+</body>
+</html>

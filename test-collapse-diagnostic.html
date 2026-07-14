@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>折叠卡片诊断</title>
+<style>
+  :root { color-scheme: dark; }
+  body { background: #1e1e1e; color: #d4d4d4; font: 14px/1.6 "Segoe UI", system-ui, sans-serif; margin: 20px; max-width: 700px; }
+  h2 { color: #569cd6; border-bottom: 1px solid #333; padding-bottom: 4px; margin-top: 24px; }
+  .card { margin: 10px 0; padding: 12px; background: #252526; border-radius: 6px; border: 1px solid #333; }
+  .card-header { cursor: pointer; font-weight: bold; padding: 4px 0; user-select: none; }
+  .card-body { padding: 8px 0; color: #888; border-top: 1px solid #333; margin-top: 8px; }
+  .ok { color: #4ec9b0; }
+  .fail { color: #f14c4c; }
+  code { background: #333; padding: 1px 4px; border-radius: 2px; font-size: 12px; }
+  hr { border-color: #333; margin: 20px 0; }
+</style>
+</head>
+<body>
+<h1>折叠卡片诊断</h1>
+<p>请在 <b>slTerminal</b> 中打开此文件，逐一测试每个卡片能否点击展开。同时打开 F12 Console 看错误。</p>
+
+<!-- ====== 测试 1：原生 <details> ====== -->
+<h2>1. 原生 &lt;details&gt;（零 JS）</h2>
+<div class="card">
+  <details>
+    <summary>▶ 点击展开（纯 HTML，不依赖任何 JS）</summary>
+    <div class="card-body">
+      ✅ 如果你能看到这段文字，说明 <code>&lt;details&gt;</code> 原生展开正常。<br>
+      这是浏览器内置行为，不依赖任何 JavaScript。
+    </div>
+  </details>
+</div>
+
+<!-- ====== 测试 2：CSS :target 方式 + slterm-target 回退 ====== -->
+<h2>2. CSS :target + .slterm-target 回退（点击展开/收回）</h2>
+<div class="card">
+  <a href="#card2-body" class="card-header" id="card2-trigger">▶ 点击展开/收回（:target + .slterm-target 双保险）</a>
+  <div id="card2-body" class="card-body" style="display:none;">
+    ✅ 如果你能看到这段文字，说明卡片展开正常。<br>
+    再次点击上方链接应收回。不依赖 <code>location.hash</code>。
+  </div>
+</div>
+<style>
+  #card2-body:target,
+  #card2-body.slterm-target { display: block !important; }
+  #card2-body:target ~ a { display: none; } /* 隐藏"收起"不重要 */
+</style>
+
+<!-- ====== 测试 3：CSS checkbox hack ====== -->
+<h2>3. CSS checkbox hack（零 JS）</h2>
+<div class="card">
+  <label for="card3-toggle" class="card-header" style="cursor:pointer;">▶ 点击展开（checkbox hack，纯 CSS）</label>
+  <input type="checkbox" id="card3-toggle" style="display:none;">
+  <div id="card3-body" class="card-body" style="display:none;">
+    ✅ 如果你能看到这段文字，说明 CSS checkbox hack 正常。
+  </div>
+</div>
+<style>
+  #card3-toggle:checked ~ #card3-body { display: block !important; }
+</style>
+
+<!-- ====== 测试 4：内联 onclick 事件属性 ====== -->
+<h2>4. 内联 onclick 事件属性（零外部 JS）</h2>
+<div class="card">
+  <div class="card-header" onclick="
+    var body = this.nextElementSibling;
+    var visible = body.style.display !== 'none';
+    body.style.display = visible ? 'none' : 'block';
+    this.textContent = (visible ? '▶' : '▼') + ' ' + this.textContent.substring(2);
+  ">▶ 点击展开（内联 onclick 属性）</div>
+  <div class="card-body" style="display:none;">
+    ✅ 如果你能看到这段文字，说明内联 onclick 事件属性正常。
+  </div>
+</div>
+
+<!-- ====== 测试 5：内联 script 定义函数 + onclick 调用 ====== -->
+<h2>5. 内联 &lt;script&gt; 函数 + onclick 调用（零外部 JS）</h2>
+<script>
+  function toggleCard5(header) {
+    var body = header.nextElementSibling;
+    var visible = body.style.display !== 'none';
+    body.style.display = visible ? 'none' : 'block';
+    header.textContent = (visible ? '▶' : '▼') + ' ' + header.textContent.substring(2);
+  }
+</script>
+<div class="card">
+  <div class="card-header" onclick="toggleCard5(this)">▶ 点击展开（内联 script 函数）</div>
+  <div class="card-body" style="display:none;">
+    ✅ 如果你能看到这段文字，说明内联 script 函数 + onclick 调用正常。
+  </div>
+</div>
+
+<!-- ====== 测试 6：addEventListener 动态绑定 ====== -->
+<h2>6. addEventListener 动态绑定（零外部 JS）</h2>
+<div class="card">
+  <div class="card-header" id="card6-header">▶ 点击展开（addEventListener）</div>
+  <div class="card-body" id="card6-body" style="display:none;">
+    ✅ 如果你能看到这段文字，说明 addEventListener 正常。
+  </div>
+</div>
+<script>
+  document.getElementById("card6-header").addEventListener("click", function() {
+    var body = document.getElementById("card6-body");
+    var visible = body.style.display !== "none";
+    body.style.display = visible ? "none" : "block";
+    document.getElementById("card6-header").textContent =
+      (visible ? "▶" : "▼") + " 点击展开（addEventListener）";
+  });
+</script>
+
+<!-- ====== 测试 7：内联 <script> 中调用 eval ====== -->
+<h2>7. <code>eval()</code> 切换（需 unsafe-eval）</h2>
+<script>
+  function toggleCard7(header) {
+    var body = header.nextElementSibling;
+    var visible = body.style.display !== 'none';
+    // 使用 eval 来切换（故意用 eval 测试）
+    try {
+      eval("body.style.display = '" + (visible ? 'none' : 'block') + "';");
+      header.textContent = (visible ? '▶' : '▼') + ' eval 切换卡片（点击展开）';
+    } catch(e) {
+      header.textContent = '❌ eval 被拦截: ' + e.message.substring(0, 50) + '...';
+      header.style.color = '#f14c4c';
+    }
+  }
+</script>
+<div class="card">
+  <div class="card-header" onclick="toggleCard7(this)" style="cursor:pointer;">
+    ▶ 点击展开（使用 eval 切换——预期被 CSP 拦截）
+  </div>
+  <div class="card-body" style="display:none;">
+    ✅ 如果你能看到这段文字，说明 eval 可用。（预期看不到）
+  </div>
+</div>
+
+<!-- ====== 测试 8：使用 <script src="..."> 引用外部脚本 ====== -->
+<h2>8. 外部脚本 &lt;script src="..."&gt;</h2>
+<div class="card">
+  <p>本页面尝试加载一个 <b>不存在的本地脚本</b>：</p>
+  <pre style="background:#1a1a1a;padding:8px;overflow-x:auto;">&lt;script src="./nonexistent-helper.js"&gt;&lt;/script&gt;</pre>
+  <span id="test8-result" style="color:#888;">等待...</span>
+</div>
+<script>
+  // 这个脚本标签在页面中定义，但因为 ./nonexistent-helper.js 不存在，加载会失败
+  // 我们用 onerror 检测
+  var s = document.createElement("script");
+  s.src = "./nonexistent-helper.js";
+  s.onload = function() {
+    document.getElementById("test8-result").textContent = "✅ 外部脚本加载成功（意外）";
+    document.getElementById("test8-result").className = "ok";
+  };
+  s.onerror = function() {
+    document.getElementById("test8-result").textContent = "❌ 外部脚本加载失败（预期：文件不存在 / CSP 拦截 / URL 解析错误）— 请查看 F12 Console";
+    document.getElementById("test8-result").className = "fail";
+  };
+  document.body.appendChild(s);
+</script>
+
+<!-- ====== 测试 9：CDN 脚本加载 ====== -->
+<h2>9. CDN 脚本加载（跨域）</h2>
+<div class="card">
+  <p>尝试从 CDN 加载一个微小的脚本（<code>script-src 'self'</code> 预期拦截）：</p>
+  <pre style="background:#1a1a1a;padding:8px;overflow-x:auto;">&lt;script src="https://cdn.jsdelivr.net/npm/lodash"&gt;&lt;/script&gt;</pre>
+  <span id="test9-result" style="color:#888;">等待...</span>
+</div>
+<script>
+  var s2 = document.createElement("script");
+  s2.src = "https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js";
+  s2.onload = function() {
+    document.getElementById("test9-result").textContent = "✅ CDN 脚本加载成功（意外：CSP 未生效）";
+    document.getElementById("test9-result").className = "ok";
+  };
+  s2.onerror = function() {
+    document.getElementById("test9-result").textContent = "❌ CDN 脚本加载失败（预期：CSP script-src 'self' 拦截跨域脚本）— 请查看 F12 Console";
+    document.getElementById("test9-result").className = "fail";
+  };
+  document.body.appendChild(s2);
+</script>
+
+<!-- ====== 测试 10：new Function 动态创建 ====== -->
+<h2>10. <code>new Function()</code> 动态函数（需 unsafe-eval）</h2>
+<div class="card">
+  <p>尝试 <code>new Function("alert(1)")</code>：</p>
+  <span id="test10-result" style="color:#888;">等待...</span>
+</div>
+<script>
+  try {
+    var fn = new Function("return 'ok';");
+    var r = fn();
+    document.getElementById("test10-result").textContent = "✅ new Function 可用（意外）: " + r;
+    document.getElementById("test10-result").className = "ok";
+  } catch(e) {
+    document.getElementById("test10-result").textContent = "❌ new Function 被拦截（预期）: " + e.message.split(":")[0];
+    document.getElementById("test10-result").className = "fail";
+  }
+</script>
+
+<hr>
+<h2>诊断总结</h2>
+<div style="background:#1a1a1a;padding:12px;border-radius:4px;font-size:13px;">
+  <p><b>请告诉我：</b></p>
+  <ol>
+    <li>测试 1-6（零外部 JS 的卡片）—— 哪些能展开？哪些不能？</li>
+    <li>测试 7（eval）—— 点击后卡片文字变什么？</li>
+    <li>测试 8（外部脚本）和 9（CDN）—— Console 里有什么错误信息？</li>
+    <li>你的原始 HTML 文件里有没有 <code>&lt;script src="..."&gt;</code> 标签？</li>
+    <li>你的原始 HTML 文件里，点击卡片时 Console 报什么错？</li>
+  </ol>
+  <p><b>推测</b>：如果你的文件引用了 CDN 库（Bootstrap/jQuery）或相对路径 <code>&lt;script src="./app.js"&gt;</code>，这些外部脚本在 <code>srcDoc</code> iframe 中无法加载——CDN 被 CSP 拦截，相对路径解析不到文件目录。</p>
+</div>
+
+</body>
+</html>

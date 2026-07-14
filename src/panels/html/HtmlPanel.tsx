@@ -1,15 +1,18 @@
 // HtmlPanel — HTML 文件浏览器式预览面板
 //
-// 使用 iframe + srcDoc 渲染 HTML 文件内容，达到类浏览器视觉效果。
-// sandbox 属性限制脚本能力：allow-scripts 允许 JS 执行，allow-same-origin
-// 允许访问同源存储；但不含 allow-top-navigation / allow-popups / allow-modals。
+// 使用 iframe + srcDoc 渲染 HTML 文件内容。
+// sandbox="allow-scripts"（不含 allow-same-origin），防止 Tauri 注入 App JS bundle。
+// WebView2 sandboxed iframe 不支持 #fragment 导航（srcdoc→跳父URL、blob→"not allowed"），
+// 故注入脚本拦截 <a href="#..."> 点击，preventDefault + 手动 scrollIntoView。
+// 键盘转发（Ctrl+W）用注入脚本 + postMessage。
 //
 // 三态：loading → loaded (iframe) / error
 // 通过 cancelled 标志防止组件卸载或快速切换 filePath 时的竞态。
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { fs } from "../../ipc";
-import { attachGlobalShortcutForwarder } from "../../features/shortcuts";
+import { injectScript } from "../../lib";
+import { getShortcutRegistry } from "../../features/shortcuts/ShortcutRegistry";
 import { PANEL_BG, ERROR_FG, HTML_PANEL_LOADING_FG, HTML_PANEL_IFRAME_BG } from "../../theme";
 
 /** HtmlPanel 接收的面板参数 */
@@ -26,8 +29,36 @@ type LoadState =
   | { kind: "loaded"; html: string }
   | { kind: "error"; message: string };
 
-/** iframe sandbox 权限：允许脚本执行和同源访问，禁止顶层导航/弹窗/模态框 */
-const SANDBOX_FLAGS = "allow-scripts allow-same-origin";
+/** iframe sandbox 权限：仅允许脚本执行，不含 allow-same-origin（防止 Tauri 注入 App JS） */
+const SANDBOX_FLAGS = "allow-scripts";
+
+/** 注入到 HTML 内容中的脚本标记（幂等检测） */
+const INJECTED_MARKER = "__slterm_key";
+
+/**
+ * 注入到 HTML 内容中的脚本，包含三部分：
+ * 1) 键盘转发——keydown capture → postMessage 到父窗口
+ * 2) 片段链接拦截——<a href="#..."> 点击 preventDefault + class-based :target 模拟
+ *    （WebView2 sandboxed iframe 不支持 location.hash 导航）
+ * 3) CSS 注入——.slterm-target 基础样式（:target 备选）
+ */
+const INJECTED_SCRIPT =
+  `<script>` +
+  // CSS：.slterm-target 作为 :target 备选
+  `var s=document.createElement("style");s.textContent=".slterm-target{display:block!important}";document.head.appendChild(s);` +
+  // 键盘转发
+  `document.addEventListener("keydown",function(e){window.parent.postMessage({type:"slterm_key",fingerprint:(e.ctrlKey?"Ctrl+":"")+(e.shiftKey?"Shift+":"")+(e.altKey?"Alt+":"")+(e.metaKey?"Meta+":"")+e.code,ctrlKey:e.ctrlKey,shiftKey:e.shiftKey,altKey:e.altKey,metaKey:e.metaKey,code:e.code,key:e.key},"*")},true);` +
+  // 片段链接拦截 + class-based :target 模拟
+  `var _h=null;document.addEventListener("click",function(e){var a=e.target.closest("a");if(!a)return;var h=a.getAttribute("href");if(!h||h.charAt(0)!=="#")return;e.preventDefault();var id=h.slice(1);` +
+  // 点击 # → 清除状态
+  `if(!id){if(_h){var o=document.getElementById(_h);if(o)o.classList.remove("slterm-target");_h=null;delete document.documentElement.dataset.sltermHash};window.scrollTo({top:0,behavior:"smooth"});return}` +
+  // 同片段 → toggle
+  `if(id===_h){var o=document.getElementById(_h);if(o)o.classList.remove("slterm-target");_h=null;delete document.documentElement.dataset.sltermHash;return}` +
+  // 不同片段 → 切换
+  `if(_h){var o=document.getElementById(_h);if(o)o.classList.remove("slterm-target")}` +
+  `var el=document.getElementById(id);if(el){el.classList.add("slterm-target");el.scrollIntoView({behavior:"smooth"});document.documentElement.dataset.sltermHash=id;_h=id}` +
+  `},true)` +
+  `</script>`;
 
 /** 居中容器样式 */
 const centerStyle: React.CSSProperties = {
@@ -49,29 +80,35 @@ const iframeStyle: React.CSSProperties = {
 
 const HtmlPanel: React.FC<HtmlPanelProps> = ({ params }) => {
   const [state, setState] = useState<LoadState>({ kind: "loading" });
-  const iframeRef = useRef<HTMLIFrameElement>(null);
-  /** iframe 键盘桥 detach 函数（onLoad 时挂载，重载/卸载时移除） */
-  const detachForwarderRef = useRef<(() => void) | null>(null);
 
   /**
-   * iframe 加载完成后，给其 contentDocument 挂全局快捷键转发（同源可访问）。
-   * 每次 load（srcDoc 变化重载）先 detach 旧的再挂新的。
+   * 监听 iframe 内 postMessage 发来的键盘事件。
+   * 命中全局快捷键 → 合成 keydown 在父 window 上重放 → ShortcutRegistry 正常分发。
    */
-  const handleIframeLoad = () => {
-    detachForwarderRef.current?.();
-    detachForwarderRef.current = null;
-    const doc = iframeRef.current?.contentDocument;
-    if (doc) {
-      detachForwarderRef.current = attachGlobalShortcutForwarder(doc);
-    }
-  };
-
-  // 组件卸载时移除转发监听
   useEffect(() => {
-    return () => {
-      detachForwarderRef.current?.();
-      detachForwarderRef.current = null;
+    const handleMessage = (e: MessageEvent) => {
+      if (!e.data || e.data.type !== "slterm_key") return;
+      const fingerprint: string | undefined = e.data.fingerprint;
+      if (!fingerprint) return;
+      const registry = getShortcutRegistry();
+      const globalBindings = registry.exportContextBindings("global");
+      if (globalBindings.some((b) => b.keystroke === fingerprint)) {
+        window.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            ctrlKey: e.data.ctrlKey ?? false,
+            shiftKey: e.data.shiftKey ?? false,
+            altKey: e.data.altKey ?? false,
+            metaKey: e.data.metaKey ?? false,
+            code: e.data.code ?? "",
+            key: e.data.key ?? "",
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      }
     };
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
   }, []);
 
   useEffect(() => {
@@ -121,10 +158,8 @@ const HtmlPanel: React.FC<HtmlPanelProps> = ({ params }) => {
 
   return (
     <iframe
-      ref={iframeRef}
-      onLoad={handleIframeLoad}
       sandbox={SANDBOX_FLAGS}
-      srcDoc={state.html}
+      srcDoc={injectScript(state.html, INJECTED_SCRIPT, INJECTED_MARKER)}
       title={`HTML 预览: ${params.filePath}`}
       style={iframeStyle}
     />

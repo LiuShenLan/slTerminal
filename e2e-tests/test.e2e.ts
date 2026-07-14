@@ -557,10 +557,10 @@ describe('编辑器保存 (Ctrl+S)', () => {
 });
 
 describe('HTML 面板 Ctrl+W 转发', () => {
-  // 焦点在 iframe 内时，全局键经 forwardGlobalShortcuts 重放到父 window → global.closeTab 关活跃面板。
-  // embedded 驱动无法投递 OS 键，但可经同源 iframe.contentDocument 在页面内 dispatch 合成 keydown，
-  // 触发真实 forwarder → 重放 → 关面板全链路（真实二进制）。
-  it('iframe 内 Ctrl+W → 转发关闭该 HTML 页签', async () => {
+  // 焦点在 iframe 内时，全局键经注入脚本 postMessage 到父 window → global.closeTab 关活跃面板。
+  // embedded 驱动无法投递 OS 键，改由 window.postMessage 模拟注入脚本发送 Ctrl+W，
+  // 触发真实的父窗口 handler → ShortcutRegistry → 关面板全链路（真实二进制）。
+  it('iframe 内 Ctrl+W postMessage → 转发关闭该 HTML 页签', async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'slterm-e2e-html-'));
     const htmlPath = join(tempDir, 'page.html');
     writeFileSync(htmlPath, '<h1>e2e html</h1>', 'utf8');
@@ -590,27 +590,25 @@ describe('HTML 面板 Ctrl+W 转发', () => {
         { pid: panelId, path: htmlPath },
       );
 
-      // 等待 iframe 渲染（htmlviewer 读文件后渲染 iframe）
+      // 等待 iframe 渲染
       await browser.waitUntil(
         async () => await browser.execute(() => !!document.querySelector('iframe')),
         { timeout: 15000, timeoutMsg: 'HTML iframe 未渲染' },
       );
 
-      // 每轮向 iframe.contentDocument 派发合成 Ctrl+W（同源可访问），直到面板关闭
-      // （容忍 forwarder onLoad 挂载的短暂时延）
+      // 发送 postMessage 模拟注入脚本发送 Ctrl+W（去掉 allow-same-origin 后不访问 contentDocument）
       await browser.waitUntil(
         async () =>
           await browser.execute((pid: string) => {
-            const iframe = document.querySelector('iframe') as HTMLIFrameElement | null;
-            const doc = iframe?.contentDocument;
-            if (doc) {
-              doc.dispatchEvent(new KeyboardEvent('keydown', {
-                ctrlKey: true, code: 'KeyW', key: 'w', bubbles: true, cancelable: true,
-              }));
-            }
+            window.postMessage({
+              type: 'slterm_key',
+              fingerprint: 'Ctrl+KeyW',
+              ctrlKey: true, shiftKey: false, altKey: false, metaKey: false,
+              code: 'KeyW', key: 'w',
+            }, '*');
             return window.__dockviewApi?.getPanel(pid) === undefined;
           }, panelId),
-        { timeout: 10000, timeoutMsg: 'HTML 面板未被 Ctrl+W 转发关闭' },
+        { timeout: 10000, timeoutMsg: 'HTML 面板未被 Ctrl+W postMessage 转发关闭' },
       );
 
       const closed = await browser.execute(
@@ -624,16 +622,19 @@ describe('HTML 面板 Ctrl+W 转发', () => {
   });
 
   // CSP 修复验证：主窗口 CSP 含 script-src 'unsafe-inline' + 关闭 script nonce 注入后，
-  // srcdoc 继承的策略放行内联 <script> 与内联事件属性。真实 WebView2 强制 CSP，
-  // 修复前这些断言会失败（脚本被 CSP 拦截）。经同源 contentDocument 读取执行结果。
+  // srcdoc 继承的策略放行内联 <script> 与内联事件属性。真实 WebView2 强制 CSP。
+  // 去掉 allow-same-origin 后不访问 contentDocument，HTML 内通过 postMessage 上报结果。
   it('内联 <script> 与内联事件属性在预览中执行', async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'slterm-e2e-csp-'));
     const htmlPath = join(tempDir, 'inline.html');
+    // HTML 自动测试：内联 script 执行 → postMessage 上报；
+    // setTimeout 自动点击按钮触发 onclick → postMessage 上报
     writeFileSync(
       htmlPath,
       '<!doctype html><html><body>' +
-        '<script>document.body.setAttribute("data-script-ran","1")</script>' +
-        '<button id="b" onclick="this.setAttribute(\'data-clicked\',\'1\')">x</button>' +
+        '<script>document.body.setAttribute("data-script-ran","1");window.parent.postMessage({type:"e2e_script_ran"},"*");' +
+        'setTimeout(function(){var b=document.getElementById("b");b.click();},50)</script>' +
+        '<button id="b" onclick="this.setAttribute(\'data-clicked\',\'1\');window.parent.postMessage({type:\'e2e_onclick_done\'},\'*\')">x</button>' +
         '</body></html>',
       'utf8',
     );
@@ -651,6 +652,17 @@ describe('HTML 面板 Ctrl+W 转发', () => {
         { timeout: 20000, timeoutMsg: 'Dockview API 未就绪' },
       );
 
+      // 安装 postMessage 监听，收集 iframe 上报的结果
+      await browser.execute(() => {
+        (window as any).__e2e_html_results = {};
+        window.addEventListener('message', (e) => {
+          if (e.data?.type === 'e2e_script_ran')
+            (window as any).__e2e_html_results.scriptRan = true;
+          if (e.data?.type === 'e2e_onclick_done')
+            (window as any).__e2e_html_results.onclickDone = true;
+        });
+      });
+
       const panelId = 'e2e-csp-' + Date.now();
       await browser.execute(
         (args: { pid: string; path: string }) => {
@@ -663,24 +675,22 @@ describe('HTML 面板 Ctrl+W 转发', () => {
         { pid: panelId, path: htmlPath },
       );
 
-      // 等内联 <script> 执行（iframe 加载解析时运行）；修复前 CSP 会拦截，此处超时即失败
+      // 等内联 <script> 执行并上报
       await browser.waitUntil(
-        async () =>
-          await browser.execute(() => {
-            const iframe = document.querySelector('iframe') as HTMLIFrameElement | null;
-            return iframe?.contentDocument?.body?.getAttribute('data-script-ran') === '1';
-          }),
+        async () => await browser.execute(() => (window as any).__e2e_html_results?.scriptRan === true),
         { timeout: 15000, timeoutMsg: '内联 <script> 未执行（CSP 拦截？）' },
       );
 
-      // 触发内联 onclick，验证内联事件属性已注册为处理器并执行
-      const clicked = await browser.execute(() => {
-        const iframe = document.querySelector('iframe') as HTMLIFrameElement | null;
-        const btn = iframe?.contentDocument?.getElementById('b') as HTMLElement | null;
-        btn?.click();
-        return btn?.getAttribute('data-clicked') === '1';
-      });
-      expect(clicked).toBe(true);
+      // 等 setTimeout 触发 onclick 并上报
+      await browser.waitUntil(
+        async () => await browser.execute(() => (window as any).__e2e_html_results?.onclickDone === true),
+        { timeout: 15000, timeoutMsg: '内联 onclick 未执行（CSP 拦截？）' },
+      );
+
+      const scriptRan = await browser.execute(() => (window as any).__e2e_html_results?.scriptRan === true);
+      const onclickDone = await browser.execute(() => (window as any).__e2e_html_results?.onclickDone === true);
+      expect(scriptRan).toBe(true);
+      expect(onclickDone).toBe(true);
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
