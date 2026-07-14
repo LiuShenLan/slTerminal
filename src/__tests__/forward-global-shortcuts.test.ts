@@ -261,4 +261,47 @@ describe("注入脚本结构验证", () => {
     expect(INJECTED_SCRIPT).toContain('createElement("style")');
     expect(INJECTED_SCRIPT).toContain('.slterm-target{display:block!important}');
   });
+
+  // ========================================================================
+  // 边界 (E6-E9)
+  // ========================================================================
+
+  it("E6: keyup 事件 → forwarder 忽略不处理", () => {
+    mockExportContextBindings.mockReturnValue([{ id: "global.closeTab", keystroke: "Ctrl+KeyW" }]);
+    const detach = attachGlobalShortcutForwarder(document);
+
+    const spy = vi.spyOn(window, "dispatchEvent");
+    const e = new KeyboardEvent("keyup", {
+      ctrlKey: true, code: "KeyW", key: "w", bubbles: true, cancelable: true,
+    });
+    document.dispatchEvent(e);
+
+    expect(e.defaultPrevented).toBe(false);
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+    detach();
+  });
+
+  it("E7: attachGlobalShortcutForwarder 收到非 keydown 类型事件不处理", () => {
+    // keyup/keypress 默认透传——forwarder 只注册 "keydown" listener
+    mockExportContextBindings.mockReturnValue([{ id: "g", keystroke: "Ctrl+KeyW" }]);
+    const detach = attachGlobalShortcutForwarder(document);
+
+    const e = new KeyboardEvent("keypress", {
+      ctrlKey: true, code: "KeyW", key: "w", bubbles: true, cancelable: true,
+    });
+    document.dispatchEvent(e);
+    expect(e.defaultPrevented).toBe(false);
+    detach();
+  });
+
+  it("E8: 注入脚本 _h 变量初始化为 null", () => {
+    expect(INJECTED_SCRIPT).toContain("var _h=null");
+  });
+
+  it("E9: 注入脚本 style 注入在 keydown 注册之前", () => {
+    const styleIdx = INJECTED_SCRIPT.indexOf('createElement("style")');
+    const keydownIdx = INJECTED_SCRIPT.indexOf('addEventListener("keydown"');
+    expect(styleIdx).toBeLessThan(keydownIdx);
+  });
 });

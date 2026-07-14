@@ -146,4 +146,59 @@ describe("injectScript", () => {
     const bodyIdx = result.indexOf("<body");
     expect(scriptIdx).toBeLessThan(bodyIdx);
   });
+
+  // ==========================================================================
+  // 边界 (E1-E5)
+  // ==========================================================================
+
+  // E1: marker 在 HTML 注释中 → 仍跳过（幂等）
+  it("marker 在 HTML 注释中 → 不重复注入（幂等）", () => {
+    const html = `<!-- ${MARKER} --><html><head></head><body></body></html>`;
+    const result = injectScript(html, SCRIPT, MARKER);
+    // includes 在注释中也能匹配——这是预期行为，防止重复注入
+    expect(result).not.toContain(SCRIPT);
+    expect(result).toBe(html);
+  });
+
+  // E2: 重复 <head> 标签 → 脚本在第一个 </head> 前
+  it("重复 </head> → 脚本插入在第一个 </head> 前", () => {
+    const html = "<html><head></head><head></head><body></body></html>";
+    const result = injectScript(html, SCRIPT, MARKER);
+    expect(result).toContain(SCRIPT);
+    const firstHeadClose = result.indexOf("</head>");
+    const scriptIdx = result.indexOf(SCRIPT);
+    expect(scriptIdx).toBeLessThan(firstHeadClose);
+    // 第二个 </head> 仍在
+    const secondHead = result.indexOf("</head>", firstHeadClose + 7);
+    expect(secondHead).toBeGreaterThan(firstHeadClose);
+  });
+
+  // E3: 超大输入不抛异常
+  it("超大输入（~500KB）不抛异常且返回含脚本", () => {
+    const big = "<html><head></head><body>" + "x".repeat(500_000) + "</body></html>";
+    const start = Date.now();
+    const result = injectScript(big, SCRIPT, MARKER);
+    const elapsed = Date.now() - start;
+    expect(result).toContain(SCRIPT);
+    expect(result).toContain("x".repeat(500_000));
+    expect(elapsed).toBeLessThan(500);
+  });
+
+  // E4: script 参数为空字符串
+  it("script 参数为空字符串 → 不破坏 HTML 结构", () => {
+    const html = "<html><head></head><body><p>x</p></body></html>";
+    const result = injectScript(html, "", MARKER);
+    expect(result).toContain("<p>x</p>");
+    // 不应含空的 <script></script>
+    expect(result).not.toMatch(/<script>\s*<\/script>/);
+  });
+
+  // E5: marker 为空字符串 → 幂等跳过（"".includes("") === true）
+  it("marker 为空字符串 → 幂等跳过生效，不重复注入", () => {
+    const html = "<html><head></head><body></body></html>";
+    // 空 marker: "".includes("") → true → 跳过注入
+    const r1 = injectScript(html, SCRIPT, "");
+    expect(r1).toBe(html);
+    expect(r1).not.toContain(SCRIPT);
+  });
 });

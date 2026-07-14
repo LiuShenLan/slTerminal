@@ -467,4 +467,65 @@ describe("HtmlPanel", () => {
     const { queryByTitle } = renderHtmlPanel(undefined);
     expect(queryByTitle(/HTML 预览/)).toBeNull();
   });
+
+  // ==========================================================================
+  // 边界 (E10-E14)
+  // ==========================================================================
+
+  it("E10: postMessage data 为 null → 不抛异常", () => {
+    mocks.mockReadFile.mockResolvedValue("<p>test</p>");
+    renderHtmlPanel("C:/test/a.html");
+    // data 为 null 时 !e.data 短路，不崩溃
+    expect(() => window.postMessage(null, "*")).not.toThrow();
+  });
+
+  it("E11: postMessage data 缺 fingerprint → 忽略", async () => {
+    mocks.mockReadFile.mockResolvedValue("<p>test</p>");
+    renderHtmlPanel("C:/test/a.html");
+
+    const spy = vi.spyOn(window, "dispatchEvent");
+    window.postMessage({ type: "slterm_key" }, "*");
+
+    await new Promise((r) => setTimeout(r, 10));
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("E12: readFile throw 非 Error 对象 → 错误消息用 String(err)", async () => {
+    mocks.mockReadFile.mockRejectedValue("权限不足");
+    const { getByText } = renderHtmlPanel("C:/test/index.html");
+    await waitFor(() => {
+      expect(getByText("加载失败: 权限不足")).toBeDefined();
+    });
+  });
+
+  it("E13: readFile throw 普通对象 → 不崩溃", async () => {
+    mocks.mockReadFile.mockRejectedValue({ code: 500 });
+    const { getByText } = renderHtmlPanel("C:/test/index.html");
+    await waitFor(() => {
+      expect(getByText(/加载失败/)).toBeDefined();
+    });
+  });
+
+  it("E14: postMessage 缺 ctrlKey 等字段 → KeyboardEvent 用 ?? false 兜底", async () => {
+    mocks.mockExportContextBindings.mockReturnValue([{ keystroke: "Ctrl+KeyW" }]);
+    mocks.mockReadFile.mockResolvedValue("<p>test</p>");
+    renderHtmlPanel("C:/test/a.html");
+
+    const spy = vi.spyOn(window, "dispatchEvent");
+    // 只发 fingerprint 和 type，缺所有修饰键字段
+    window.postMessage(
+      { type: "slterm_key", fingerprint: "Ctrl+KeyW" },
+      "*",
+    );
+
+    await new Promise((r) => setTimeout(r, 10));
+    expect(spy).toHaveBeenCalled();
+    const event = spy.mock.calls[spy.mock.calls.length - 1]?.[0] as KeyboardEvent;
+    expect(event.ctrlKey).toBe(false);
+    expect(event.shiftKey).toBe(false);
+    expect(event.code).toBe("");
+    spy.mockRestore();
+    mocks.mockExportContextBindings.mockReturnValue([]);
+  });
 });
