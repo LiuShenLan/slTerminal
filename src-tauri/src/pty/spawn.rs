@@ -23,7 +23,7 @@ use uuid::Uuid;
 //
 // portable-pty 0.9.0 硬编码 flags=0x7（INHERIT_CURSOR|RESIZE_QUIRK|WIN32_INPUT_MODE），
 // 不暴露 CreatePseudoConsole dwFlags 参数。此处绕过 openpty()，直接调用 windows crate
-// 的 CreatePseudoConsole，按 OS build 动态决定是否启用 PASSTHROUGH_MODE (0x8)。
+// 的 CreatePseudoConsole，完全控制 flags（当前固定 0x7，见 compute_conpty_flags 注释）。
 
 #[cfg(windows)]
 pub mod conpty_custom {
@@ -50,19 +50,21 @@ pub mod conpty_custom {
     // ─── flag 常量（windows crate 仅定义 PSEUDOCONSOLE_INHERIT_CURSOR）───
     const FLAG_RESIZE_QUIRK: u32 = 0x2;
     const FLAG_WIN32_INPUT_MODE: u32 = 0x4;
-    const FLAG_PASSTHROUGH_MODE: u32 = 0x8;
 
     const PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE: usize = 0x00020016;
     const CREATE_UNICODE_ENVIRONMENT: u32 = 0x00000400;
 
-    /// 计算 ConPTY flags：基础 0x7，Win11 22H2+ (build>=22621) 追加 PASSTHROUGH_MODE
-    pub fn compute_conpty_flags(build_number: u32) -> u32 {
-        let mut flags =
-            PSEUDOCONSOLE_INHERIT_CURSOR | FLAG_RESIZE_QUIRK | FLAG_WIN32_INPUT_MODE;
-        if build_number >= 22621 {
-            flags |= FLAG_PASSTHROUGH_MODE;
-        }
-        flags
+    /// 计算 ConPTY flags：固定 0x7（INHERIT_CURSOR | RESIZE_QUIRK | WIN32_INPUT_MODE）。
+    ///
+    /// **勿启用 PASSTHROUGH_MODE (0x8)**：passthrough 下 conhost 对子进程输出直通不解析，
+    /// 无法跟踪子进程的 DECSET 1000/1002/1006 mouse mode 请求，导致 terminal→child 方向的
+    /// SGR mouse report 不被转发（microsoft/terminal#376；PR #9970 的转发机制依赖 conhost
+    /// 解析子进程输出）——claude 等全屏 TUI 的鼠标滚轮完全失效。2026-07 在 Win11 build 26200
+    /// 实测确认：去掉 0x8 后滚轮恢复，claude 输出流畅度无肉眼可见退化。
+    /// 保留 build_number 参数：flags 与 OS build 的关联是 ConPTY 领域接口，若未来 ConPTY
+    /// 修复 passthrough 的 input 转发可按 build 恢复。
+    pub fn compute_conpty_flags(_build_number: u32) -> u32 {
+        PSEUDOCONSOLE_INHERIT_CURSOR | FLAG_RESIZE_QUIRK | FLAG_WIN32_INPUT_MODE
     }
 
     /// 将 UTF-8 字符串编码为以 null 结尾的 UTF-16LE 向量
@@ -434,7 +436,8 @@ pub mod conpty_custom {
     mod tests {
         use super::*;
 
-        // T1: compute_conpty_flags（4 条）
+        // T1: compute_conpty_flags（4 条）——锁死「任何 build 都不启用 PASSTHROUGH_MODE」
+        // （回归守卫：passthrough 会吞 terminal→child 的 SGR mouse report，见函数注释）
         #[test]
         fn flags_win10_returns_0x7() {
             assert_eq!(compute_conpty_flags(19041), 0x7);
@@ -446,16 +449,16 @@ pub mod conpty_custom {
         }
 
         #[test]
-        fn flags_win11_22h2_returns_0xf() {
-            assert_eq!(compute_conpty_flags(22621), 0xF);
+        fn flags_win11_22h2_returns_0x7() {
+            assert_eq!(compute_conpty_flags(22621), 0x7);
         }
 
         #[test]
-        fn flags_win11_24h2_returns_0xf() {
-            assert_eq!(compute_conpty_flags(26100), 0xF);
+        fn flags_win11_24h2_returns_0x7() {
+            assert_eq!(compute_conpty_flags(26100), 0x7);
         }
 
-        // T3: 常量值验证（4 条）
+        // T3: 常量值验证（3 条）
         #[test]
         fn flag_inherit_cursor_is_0x1() {
             assert_eq!(PSEUDOCONSOLE_INHERIT_CURSOR, 0x1);
@@ -469,11 +472,6 @@ pub mod conpty_custom {
         #[test]
         fn flag_win32_input_mode_is_0x4() {
             assert_eq!(FLAG_WIN32_INPUT_MODE, 0x4);
-        }
-
-        #[test]
-        fn flag_passthrough_mode_is_0x8() {
-            assert_eq!(FLAG_PASSTHROUGH_MODE, 0x8);
         }
 
         // T2: ConPtyMaster MasterPty trait（4 条，依赖实际 Pipe 创建）
@@ -620,7 +618,7 @@ pub fn pty_spawn(
     #[cfg(windows)]
     let (conpty_hpc, conpty_master) = {
         let build = super::win_build::get_windows_build_number().unwrap_or_else(|e| {
-            tracing::warn!("无法获取 Windows build 号，降级使用基础 ConPTY flags（无 PASSTHROUGH_MODE）: {}", e);
+            tracing::warn!("无法获取 Windows build 号: {}", e);
             0
         });
         conpty_custom::create_conpty_pair(request.cols, request.rows, build)

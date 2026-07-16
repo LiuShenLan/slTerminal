@@ -86,12 +86,14 @@ JobHandle 在 `#[cfg(windows)]` 下为 HANDLE RAII 包装；`#[cfg(not(windows))
 
 `spawn.rs` 中的 `conpty_custom` 模块（`#[cfg(windows)]`，约 300 行）绕过 `portable_pty::native_pty_system().openpty()`，直接调用 `windows` crate 的 `CreatePseudoConsole`/`CreateProcessW`，实现对 ConPTY flags 的完全控制。
 
-**动机**：`portable-pty` 0.9.0 内部硬编码 flags=0x7（INHERIT_CURSOR | RESIZE_QUIRK | WIN32_INPUT_MODE），不暴露 `CreatePseudoConsole` 的 `dwFlags` 参数，无法按 OS build 动态启用 `PASSTHROUGH_MODE`（0x8，Win11 22H2+ 约 10-20x 吞吐提升）。
+**动机**：`portable-pty` 0.9.0 内部硬编码 flags=0x7（INHERIT_CURSOR | RESIZE_QUIRK | WIN32_INPUT_MODE），不暴露 `CreatePseudoConsole` 的 `dwFlags` 参数。最初为按 OS build 动态启用 `PASSTHROUGH_MODE`（0x8，Win11 22H2+ 输出吞吐优化）而绕过；后 PASSTHROUGH_MODE 已移除（见下），自定义路径保留用于 flags 完全控制。
+
+> **PASSTHROUGH_MODE (0x8) 已移除，勿重新启用**：passthrough 下 conhost 对子进程输出直通不解析，无法跟踪子进程的 DECSET 1000/1002/1006 mouse mode 请求，导致 terminal→child 方向的 SGR mouse report 不被转发（microsoft/terminal#376；PR #9970 的转发机制依赖 conhost 解析子进程输出）——claude 等全屏 TUI（v2.1.89+ 默认 alt buffer + mouse tracking）的鼠标滚轮完全失效。2026-07 在 Win11 build 26200 实测确认：诊断埋点显示 xterm 的 SGR wheel report（`\x1b[<64/65;x;yM`）完整写入 ConPTY stdin 但 claude 无反应；去掉 0x8 后滚轮恢复，claude 输出流畅度无肉眼可见退化。`compute_conpty_flags` 的 4 条测试锁死「任何 build 都返回 0x7」。
 
 **自定义组件**：
 | 类型 | 职责 |
 |------|------|
-| `compute_conpty_flags(build)` | 计算 flags：基础 0x7，build ≥ 22621 追加 PASSTHROUGH_MODE |
+| `compute_conpty_flags(build)` | 计算 flags：固定 0x7（PASSTHROUGH_MODE 已移除——吞 mouse input，见上）；保留 build 参数供未来按 build 恢复 |
 | `AttrList` | `PROC_THREAD_ATTRIBUTE_LIST` RAII wrapper（`Initialize`→`Update`→`Delete`） |
 | `ConPtyMaster` | 实现 `portable_pty::MasterPty`（resize/get_size/try_clone_reader/take_writer），持有通过 `windows` crate 创建的 HPCON |
 | `RawChild` | 实现 `portable_pty::Child + ChildKiller`，封装 `OwnedHandle` + `TerminateProcess` |
@@ -167,7 +169,7 @@ cargo test --manifest-path src-tauri/Cargo.toml <test_name> -- --test-threads=1
 4. 修改 `shell-integration.ps1` 后要跑 `test_shell_integration_script_embedded` 测试确认嵌入内容正确
 5. `reader.rs` 的 `strip_conpty_startup` 修改后务必跑全部 strip 相关测试，确认不误杀正常输出
 6. 修改 `READER_BUF_SIZE` 后跑 `reader_buf_size_is_16k` + `strip_startup_with_16k_boundary` + `strip_startup_with_large_payload` 测试
-7. 修改 `conpty_custom` 模块（flags 计算、AttrList、ConPtyMaster、RawChild、spawn 逻辑）后跑 `conpty_custom::tests` 全部 14 条测试 + `pty_integration_tests` 的 `pty_spawn_custom_conpty` 端到端测试
+7. 修改 `conpty_custom` 模块（flags 计算、AttrList、ConPtyMaster、RawChild、spawn 逻辑）后跑 `conpty_custom::tests` 全部 13 条测试 + `pty_integration_tests` 的 `pty_spawn_custom_conpty` 端到端测试。**改 `compute_conpty_flags` 前必读其注释**——启用 PASSTHROUGH_MODE 会静默破坏 claude 全屏 TUI 滚轮（mouse input 不转发），改后须实测 claude 滚轮不回归
 8. 修改 `resolve_shell_info()` / `which_full_path()` 后跑 `shell::tests` 全部 7 条测试
 9. `resolve_shell_info()` 返回的 `ShellInfo.program` **必须是完整路径**（非短名）——否则 `CreateProcessW(lpApplicationName=..., lpCommandLine=...)` 找不到可执行文件
 10. ConPTY 指针 cast：`as_raw_handle()` 已返回 `*mut c_void`，无需再 `as *mut std::ffi::c_void`——Clippy `unnecessary-cast` 会报错。同理 `std::io::Error::new(std::io::ErrorKind::Other, e)` 简化为 `std::io::Error::other(e)`（Rust 1.74+），`.map_err(|e| std::io::Error::other(e))` 进一步简化为 `.map_err(std::io::Error::other)`
@@ -179,7 +181,7 @@ Rust 测试分布在 5 个位置：
 | 位置 | 类型 | 用例数 | 访问级别 |
 |------|------|--------|---------|
 | `pty/reader.rs` `#[cfg(test)]` | 单元测试 | 28 | `use super::*` 访问 `pub(crate)` 和私有项 |
-| `pty/spawn.rs` `#[cfg(test)]` | 单元测试 | 14 | 在 `conpty_custom` 子模块内 |
+| `pty/spawn.rs` `#[cfg(test)]` | 单元测试 | 13 | 在 `conpty_custom` 子模块内 |
 | `pty/shell.rs` `#[cfg(test)]` | 单元测试 | 7 | `use super::*` |
 | `tests/pty_integration_tests.rs` | 集成测试 | 5 | 仅能访问 `pub` API |
 | `state.rs` `#[cfg(test)]` | 单元测试 | 15 | sandbox 路径校验纯函数测试 |
@@ -202,7 +204,7 @@ assert!(master.take_writer().is_ok());
 assert!(master.take_writer().is_err()); // 第二次失败
 ```
 
-测试覆盖：`compute_conpty_flags`（4 条——Win10 0x7 / Win11 21H2 0x7 / Win11 22H2+ 0xf）、flag 常量值验证（4 条）、`ConPtyMaster` MasterPty trait（4 条）、`AttrList` 生命周期（2 条）。
+测试覆盖：`compute_conpty_flags`（4 条——全部 build 均返回 0x7，锁死 PASSTHROUGH_MODE 不启用）、flag 常量值验证（3 条）、`ConPtyMaster` MasterPty trait（4 条）、`AttrList` 生命周期（2 条）。
 
 ### 启动序列剥离测试（reader.rs）
 

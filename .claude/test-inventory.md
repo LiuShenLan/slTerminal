@@ -145,7 +145,7 @@
 | `src-tauri/src/notify/mod.rs` | 24 | FileWatcher 生命周期（创建/stop/Drop/替换/幂等）+ classify_by_kind 事件分类（全 7 种 EventKind） |
 | `src-tauri/src/fs/mod.rs` | 16 | read_dir（列表/过滤 .git/创建目录/删除/重命名）；write_file（CRLF/LF 保留/新建默认 CRLF/混合行尾） |
 | `src-tauri/src/state.rs` | 15 | PtyState 空初始化/AppState 创建/ring buffer append+eviction+换行边界/validate_path_within_root 沙箱（root_opt=None/根内/子目录/根外/不存在的路径/路径穿越/符号链接/canonicalize 失败） |
-| `src-tauri/src/pty/spawn.rs` | 14 | compute_conpty_flags（Win10/Win11 21H2/Win11 22H2+）/flag 常量值/ConPtyMaster MasterPty trait/AttrList |
+| `src-tauri/src/pty/spawn.rs` | 13 | compute_conpty_flags（全 build 返回 0x7，锁死 PASSTHROUGH_MODE 不启用）/flag 常量值/ConPtyMaster MasterPty trait/AttrList |
 | `src-tauri/src/notify/pool.rs` | 12 | LruWatcherPool: 缓存命中/LRU 淘汰/pause_all_except/replace/remove/stop_all/Drop |
 | `src-tauri/src/settings.rs` | 8 | 读写往返/文件不存在/JSON 损坏回退 .bak/无 .bak 降级/浅合并/shadow 目录 |
 | `src-tauri/src/pty/shell.rs` | 7 | pwsh 发现/shell-integration.ps1 嵌入/UTF-16LE Base64 往返/which_full_path |
