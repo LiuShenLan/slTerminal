@@ -1,6 +1,4 @@
 // layoutSerde.test.ts — patchLegacyLayout + loadLayout + saveLayout 单元测试
-//
-// layoutSerde 覆盖率 0%，核心逻辑（旧格式修补、白名单校验、返回成败）完全无测试。
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { DockviewApi } from "dockview-react";
@@ -366,5 +364,201 @@ describe("saveLayout", () => {
     const result = saveLayout(api);
     expect(api.toJSON).toHaveBeenCalledTimes(1);
     expect(result).toEqual({ mock: "layout" });
+  });
+});
+
+// ====== TE-06: 嵌套 branch 修补 + activeGroup 保留 ======
+
+describe("patchLegacyLayout — 嵌套 branch + activeGroup 保留", () => {
+  let api: DockviewApi;
+
+  beforeEach(() => {
+    api = mockApi();
+  });
+
+  it("15. 两层嵌套 branch（root branch → child branch → leaf）：不崩溃，嵌套 leaf 不修补", () => {
+    // patchLegacyLayout 只遍历 root.data 的直接子节点，嵌套 branch 被跳过
+    const layout = {
+      grid: {
+        root: {
+          type: "branch",
+          data: [{
+            type: "branch",
+            data: [{
+              type: "leaf",
+              data: { views: ["nested-p1"], activeView: "nested-p1" }, // 缺 id，不会被修补
+              size: 100,
+            }],
+            size: 100,
+          }],
+          size: 100,
+        },
+      },
+      panels: {
+        "nested-p1": { id: "nested-p1", component: "terminal", params: {} },
+      },
+      // 无 activeGroup — 不会被设置（无直接 leaf 子节点）
+    };
+
+    expect(() => loadLayout(api, layout)).not.toThrow();
+
+    const callArg = (api.fromJSON as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const callLayout = callArg as Record<string, unknown>;
+
+    // grid.orientation 仍补齐
+    expect((callLayout.grid as Record<string, unknown>).orientation).toBe("HORIZONTAL");
+
+    // 嵌套 branch 内的 leaf.data.id 未被修补
+    const root = (callLayout.grid as Record<string, unknown>).root as Record<string, unknown>;
+    const rootChildren = root.data as Record<string, unknown>[];
+    const nestedBranch = rootChildren[0] as Record<string, unknown>;
+    const nestedChildren = nestedBranch.data as Record<string, unknown>[];
+    const nestedLeaf = nestedChildren[0].data as Record<string, unknown>;
+    expect(nestedLeaf.id).toBeUndefined();
+
+    // activeGroup 未被设置（无直接 leaf）
+    expect(callLayout.activeGroup).toBeUndefined();
+  });
+
+  it("16. 同层混合 branch + leaf：直接 leaf 被修补，嵌套 leaf 跳过，activeGroup 来自直接 leaf", () => {
+    const layout = {
+      grid: {
+        root: {
+          type: "branch",
+          data: [
+            {
+              type: "leaf",
+              data: { views: ["direct-p1"], activeView: "direct-p1" }, // 缺 id → 会被修补
+              size: 50,
+            },
+            {
+              type: "branch",
+              data: [{
+                type: "leaf",
+                data: { views: ["nested-p2"], activeView: "nested-p2" }, // 缺 id → 不会被修补
+                size: 100,
+              }],
+              size: 50,
+            },
+          ],
+          size: 100,
+        },
+      },
+      panels: {
+        "direct-p1": { id: "direct-p1", component: "terminal", params: {} },
+        "nested-p2": { id: "nested-p2", component: "terminal", params: {} },
+      },
+    };
+
+    loadLayout(api, layout);
+
+    const callArg = (api.fromJSON as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const root = (callArg.grid as Record<string, unknown>).root as Record<string, unknown>;
+    const children = root.data as Record<string, unknown>[];
+
+    // 直接 leaf 的 id 被修补
+    const directLeaf = children[0].data as Record<string, unknown>;
+    expect(directLeaf.id).toBe("group-direct-p1");
+
+    // 嵌套 branch 内的 leaf 未被修补
+    const nestedBranch = children[1] as Record<string, unknown>;
+    const nestedChildren = nestedBranch.data as Record<string, unknown>[];
+    const nestedLeaf = nestedChildren[0].data as Record<string, unknown>;
+    expect(nestedLeaf.id).toBeUndefined();
+
+    // activeGroup 来自第一个直接 leaf
+    const callLayout = callArg as Record<string, unknown>;
+    expect(callLayout.activeGroup).toBe("group-direct-p1");
+  });
+
+  it("17. activeGroup 已存在 → 保留原值不被覆盖", () => {
+    // 布局中第二个 leaf 的 id 更靠前，但 activeGroup 已指定为第一个 leaf
+    const layout = {
+      grid: {
+        root: {
+          type: "branch",
+          data: [
+            { type: "leaf", data: { views: ["p1"], activeView: "p1", id: "group-p1" }, size: 50 },
+            { type: "leaf", data: { views: ["p2"], activeView: "p2", id: "group-p2" }, size: 50 },
+          ],
+          size: 100,
+        },
+      },
+      panels: {
+        p1: { id: "p1", contentComponent: "terminal", params: {} },
+        p2: { id: "p2", contentComponent: "terminal", params: {} },
+      },
+      activeGroup: "group-p2", // 已存在 → 不被覆盖
+    };
+
+    loadLayout(api, layout);
+
+    const callArg = (api.fromJSON as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const callLayout = callArg as Record<string, unknown>;
+    expect(callLayout.activeGroup).toBe("group-p2");
+  });
+
+  it("18. activeGroup 缺失 → 设为第一个直接 leaf 的 id", () => {
+    // 三个 leaf，activeGroup 应设为第一个的 id
+    const layout = {
+      grid: {
+        root: {
+          type: "branch",
+          data: [
+            { type: "leaf", data: { views: ["a"], activeView: "a", id: "ga" }, size: 33 },
+            { type: "leaf", data: { views: ["b"], activeView: "b", id: "gb" }, size: 33 },
+            { type: "leaf", data: { views: ["c"], activeView: "c", id: "gc" }, size: 34 },
+          ],
+          size: 100,
+        },
+      },
+      panels: {
+        a: { id: "a", contentComponent: "terminal", params: {} },
+        b: { id: "b", contentComponent: "terminal", params: {} },
+        c: { id: "c", contentComponent: "terminal", params: {} },
+      },
+      // 无 activeGroup
+    };
+
+    loadLayout(api, layout);
+
+    const callArg = (api.fromJSON as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const callLayout = callArg as Record<string, unknown>;
+    // 始终取第一个 leaf 的 id
+    expect(callLayout.activeGroup).toBe("ga");
+  });
+
+  it("19. 三层嵌套 branch 不崩溃，grid.orientation 补齐", () => {
+    const layout = {
+      grid: {
+        // 无 orientation
+        root: {
+          type: "branch",
+          data: [{
+            type: "branch",
+            data: [{
+              type: "branch",
+              data: [{
+                type: "leaf",
+                data: { views: ["deep"], activeView: "deep" },
+                size: 100,
+              }],
+              size: 100,
+            }],
+            size: 100,
+          }],
+          size: 100,
+        },
+      },
+      panels: {
+        deep: { id: "deep", component: "terminal", params: {} },
+      },
+    };
+
+    expect(() => loadLayout(api, layout)).not.toThrow();
+
+    const callArg = (api.fromJSON as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const grid = (callArg as Record<string, unknown>).grid as Record<string, unknown>;
+    expect(grid.orientation).toBe("HORIZONTAL");
   });
 });

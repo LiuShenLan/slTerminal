@@ -168,3 +168,219 @@ fn osc_cwd_venv_parsed() {
         "应使用 [char]0x1b PS 5.1 兼容写法"
     );
 }
+
+/// pty_reattach_ring_buffer_replay: 验证 reattach 时 ring buffer 回放与清空
+///
+/// 模拟部署场景：
+///   1. spawn cmd.exe → PTY 输出经 reader 线程写入 ring buffer
+///   2. 写命令产生输出 → ring buffer 累积
+///   3. "reattach": drain ring buffer 获取回放数据
+///   4. 验证 drain 后 buffer 为空
+///   5. 写新命令 → 新输出继续被 reader 线程捕获到 ring buffer
+#[cfg(windows)]
+#[test]
+fn pty_reattach_ring_buffer_replay() {
+    let _lock = SPAWN_LOCK.lock().unwrap();
+    use slterminal_lib::pty::{shell, spawn::conpty_custom};
+    use std::collections::VecDeque;
+    use std::io::Write as _;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    // 1. spawn cmd.exe
+    let shell_info =
+        shell::resolve_shell_info(Some("cmd.exe")).expect("resolve_shell_info 应成功");
+    let (hpc, master) = conpty_custom::create_conpty_pair(80, 24, 26100)
+        .expect("create_conpty_pair 应成功");
+
+    // CPR 注入（对齐生产代码 pty_spawn）
+    let mut writer = master.take_writer().expect("take_writer 应成功");
+    writer.write_all(b"\x1b[1;1R").unwrap();
+    writer.flush().unwrap();
+
+    let extra_envs: Vec<(String, String)> = vec![
+        ("COLORTERM".into(), "truecolor".into()),
+        ("TERM".into(), "xterm-256color".into()),
+    ];
+
+    let mut child = conpty_custom::spawn_conpty_child(hpc, &shell_info, &extra_envs, None)
+        .expect("spawn_conpty_child 应成功");
+
+    // 2. 创建 ring buffer + reader 线程（模拟 reader_loop 写入 ring buffer）
+    let ring: Arc<Mutex<VecDeque<u8>>> = Arc::new(Mutex::new(VecDeque::new()));
+    let ring_for_reader = ring.clone();
+    let mut reader = master.try_clone_reader().expect("try_clone_reader 应成功");
+
+    let reader_handle = std::thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) => break, // EOF — 子进程已退出
+                Ok(n) => {
+                    ring_for_reader.lock().unwrap().extend(&buf[..n]);
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    // 等待 cmd.exe 启动完成
+    std::thread::sleep(Duration::from_millis(500));
+
+    // 3. 写第一阶段命令 → 输出经 reader 线程累积到 ring buffer
+    writer.write_all(b"echo REATTACH_P1_MARKER\r\n").unwrap();
+    writer.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(1000));
+
+    // 4. "Reattach": drain ring buffer 获取回放数据
+    let replay: Vec<u8> = ring.lock().unwrap().drain(..).collect();
+    let replay_text = String::from_utf8_lossy(&replay);
+    assert!(
+        replay_text.contains("REATTACH_P1_MARKER"),
+        "回放数据应包含 REATTACH_P1_MARKER，实际长度={}，内容片段: {}...",
+        replay.len(),
+        &replay_text[..replay_text.len().min(200)]
+    );
+    assert!(
+        !replay_text.is_empty(),
+        "回放数据不应为空（cmd banner + echo 输出）"
+    );
+
+    // 5. drain 后 ring buffer 必须为空（避免重复回放）
+    assert!(
+        ring.lock().unwrap().is_empty(),
+        "reattach drain 后 ring buffer 应为空"
+    );
+
+    // 6. 写第二阶段命令 → 验证 reattach 后新输出正常被 reader 线程捕获
+    writer.write_all(b"echo REATTACH_P2_MARKER\r\n").unwrap();
+    writer.flush().unwrap();
+    std::thread::sleep(Duration::from_millis(1000));
+
+    let post_attach: Vec<u8> = ring.lock().unwrap().drain(..).collect();
+    let post_text = String::from_utf8_lossy(&post_attach);
+    assert!(
+        post_text.contains("REATTACH_P2_MARKER"),
+        "reattach 后新输出应被捕获到 ring buffer，实际内容: {post_text}"
+    );
+
+    // 7. 清理：先 ClosePseudoConsole（使 reader.read() 返回 EOF/error）
+    // 再 join reader 线程，顺序错误会导致 reader 永久阻塞
+    drop(writer);
+    let _ = child.kill();
+    // ClosePseudoConsole 在 master drop 时调用——这会关闭 ConPTY 管道，
+    // reader 线程的 read() 随即返回错误或 EOF，线程退出
+    drop(master);
+    // 短暂等待 reader 线程处理管道关闭
+    std::thread::sleep(Duration::from_millis(200));
+    drop(ring);
+    let _ = reader_handle.join();
+}
+
+/// pty_session_isolation: 验证独立 spawn 的两个 session 互不干扰
+///
+/// 创建两个独立的 conpty_custom PTY 对 → 各自写回显命令 → 各自读取输出验证。
+/// session A 的输出不含 session B 的 marker，反之亦然。
+#[cfg(windows)]
+#[test]
+fn pty_session_isolation() {
+    let _lock = SPAWN_LOCK.lock().unwrap();
+    use slterminal_lib::pty::{shell, spawn::conpty_custom};
+    use std::io::Write as _;
+    use std::time::Duration;
+
+    // Session A
+    let shell_info =
+        shell::resolve_shell_info(Some("cmd.exe")).expect("resolve_shell_info 应成功");
+    let (hpc_a, master_a) = conpty_custom::create_conpty_pair(80, 24, 26100)
+        .expect("create_conpty_pair A 应成功");
+    let mut writer_a = master_a.take_writer().expect("take_writer A 应成功");
+    writer_a.write_all(b"\x1b[1;1R").unwrap();
+    writer_a.flush().unwrap();
+    let extra_envs: Vec<(String, String)> = vec![];
+    let mut child_a = conpty_custom::spawn_conpty_child(hpc_a, &shell_info, &extra_envs, None)
+        .expect("spawn_conpty_child A 应成功");
+    let mut reader_a = master_a.try_clone_reader().expect("try_clone_reader A 应成功");
+
+    // Session B（独立 PTY 对）
+    let shell_info_b =
+        shell::resolve_shell_info(Some("cmd.exe")).expect("resolve_shell_info B 应成功");
+    let (hpc_b, master_b) = conpty_custom::create_conpty_pair(80, 24, 26100)
+        .expect("create_conpty_pair B 应成功");
+    let mut writer_b = master_b.take_writer().expect("take_writer B 应成功");
+    writer_b.write_all(b"\x1b[1;1R").unwrap();
+    writer_b.flush().unwrap();
+    let mut child_b = conpty_custom::spawn_conpty_child(hpc_b, &shell_info_b, &extra_envs, None)
+        .expect("spawn_conpty_child B 应成功");
+    let mut reader_b = master_b.try_clone_reader().expect("try_clone_reader B 应成功");
+
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Session A 写命令
+    writer_a.write_all(b"echo SESSION_A_ONLY\r\n").unwrap();
+    writer_a.flush().unwrap();
+
+    // Session B 写命令
+    writer_b.write_all(b"echo SESSION_B_ONLY\r\n").unwrap();
+    writer_b.flush().unwrap();
+
+    std::thread::sleep(Duration::from_millis(1000));
+
+    // 读取 Session A 输出——轮询直到出现 SESSION_A_ONLY marker（同 pty_roundtrip 模式）
+    let mut output_a = Vec::new();
+    let start_a = std::time::Instant::now();
+    while start_a.elapsed() < Duration::from_secs(10) {
+        let mut buf = [0u8; 4096];
+        match reader_a.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                output_a.extend_from_slice(&buf[..n]);
+                if String::from_utf8_lossy(&output_a).contains("SESSION_A_ONLY") {
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    let text_a = String::from_utf8_lossy(&output_a);
+    assert!(
+        text_a.contains("SESSION_A_ONLY"),
+        "Session A 输出应包含 SESSION_A_ONLY，实际长度={}，内容: {text_a}", output_a.len()
+    );
+    assert!(
+        !text_a.contains("SESSION_B_ONLY"),
+        "Session A 输出不应包含 Session B 的 marker（输出隔离）"
+    );
+
+    // 读取 Session B 输出——轮询直到出现 SESSION_B_ONLY marker
+    let mut output_b = Vec::new();
+    let start_b = std::time::Instant::now();
+    while start_b.elapsed() < Duration::from_secs(10) {
+        let mut buf = [0u8; 4096];
+        match reader_b.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                output_b.extend_from_slice(&buf[..n]);
+                if String::from_utf8_lossy(&output_b).contains("SESSION_B_ONLY") {
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    let text_b = String::from_utf8_lossy(&output_b);
+    assert!(
+        text_b.contains("SESSION_B_ONLY"),
+        "Session B 输出应包含 SESSION_B_ONLY，实际长度={}，内容: {text_b}", output_b.len()
+    );
+
+    // 清理：先 ClosePseudoConsole 再 drop reader（避免读端阻塞）
+    drop(writer_a);
+    drop(writer_b);
+    let _ = child_a.kill();
+    let _ = child_b.kill();
+    drop(master_a);
+    drop(master_b);
+    drop(reader_a);
+    drop(reader_b);
+}

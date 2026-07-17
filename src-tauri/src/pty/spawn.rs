@@ -544,6 +544,138 @@ pub mod conpty_custom {
             let ptr = list.as_mut_ptr().0;
             assert!(!ptr.is_null());
         }
+
+        // ─── T5: build_env_block 环境变量注入测试 ───
+        // 验证 pty_spawn 注入的三个终端能力环境变量正确编码到 ConPTY 环境块
+
+        #[test]
+        fn test_build_env_block_terminal_env_vars_included() {
+            let extra = vec![
+                ("COLORTERM".into(), "truecolor".into()),
+                ("TERM".into(), "xterm-256color".into()),
+                ("TERM_PROGRAM".into(), "slTerminal".into()),
+            ];
+            let block = build_env_block(&extra);
+            let text = String::from_utf16_lossy(&block);
+            assert!(
+                text.contains("COLORTERM=truecolor"),
+                "环境块应包含 COLORTERM=truecolor，实际内容: {text}"
+            );
+            assert!(
+                text.contains("TERM=xterm-256color"),
+                "环境块应包含 TERM=xterm-256color，实际内容: {text}"
+            );
+            assert!(
+                text.contains("TERM_PROGRAM=slTerminal"),
+                "环境块应包含 TERM_PROGRAM=slTerminal，实际内容: {text}"
+            );
+        }
+
+        #[test]
+        fn test_build_env_block_extra_overrides_existing() {
+            // 取一个已知存在的 Windows 环境变量做覆盖测试
+            let extra = vec![("COMPUTERNAME".into(), "TEST_OVERRIDE_VALUE".into())];
+            let block = build_env_block(&extra);
+            let text = String::from_utf16_lossy(&block);
+            assert!(
+                text.contains("COMPUTERNAME=TEST_OVERRIDE_VALUE"),
+                "extra_env 应覆盖已有环境变量 COMPUTERNAME，实际内容: {text}"
+            );
+            // 确保只有一条 COMPUTERNAME（被覆盖而非追加）
+            let count = text.matches("COMPUTERNAME=").count();
+            assert_eq!(
+                count, 1,
+                "COMPUTERNAME 在环境块中应仅出现一次（被覆盖），实际出现 {count} 次"
+            );
+        }
+
+        #[test]
+        fn test_build_env_block_preserves_inherited_vars() {
+            let extra = vec![("SLTERM_TEST_DUMMY".into(), "dummy_value".into())];
+            let block = build_env_block(&extra);
+            let text = String::from_utf16_lossy(&block);
+            // Windows 必定存在的系统变量
+            assert!(
+                text.contains("SYSTEMROOT="),
+                "应保留继承的系统变量 SYSTEMROOT"
+            );
+            assert!(
+                text.contains("SLTERM_TEST_DUMMY=dummy_value"),
+                "应追加新变量 SLTERM_TEST_DUMMY"
+            );
+        }
+
+        #[test]
+        fn test_build_env_block_double_null_terminated() {
+            let extra = vec![("A".into(), "B".into())];
+            let block = build_env_block(&extra);
+            // 环境块应以双 null 结尾（\0\0）
+            let len = block.len();
+            assert!(len >= 2, "环境块长度应 ≥ 2");
+            assert_eq!(
+                block[len - 1], 0,
+                "环境块最后一个 wchar 应为 null"
+            );
+            assert_eq!(
+                block[len - 2], 0,
+                "环境块倒数第二个 wchar 应为 null（双 null 终止）"
+            );
+        }
+
+        // ─── T6: to_wide_null / cwd 反斜杠规范化测试 ───
+        // 验证 spawn_conpty_child 中 cwd.replace('/', '\\') 的编码正确性
+
+        #[test]
+        fn test_cwd_forward_slash_to_backslash_encoding() {
+            // 模拟 spawn_conpty_child 中对 cwd 的处理：正斜杠→反斜杠
+            let cwd_raw = "C:/Users/test/project";
+            let normalized = cwd_raw.replace('/', "\\");
+            assert_eq!(normalized, "C:\\Users\\test\\project",
+                "cwd 正斜杠应转换为反斜杠");
+            let wide = to_wide_null(&normalized);
+            // 验证 null 终止
+            assert!(wide.ends_with(&[0]), "应以 null 结尾");
+            // 去掉尾部 null 后解码验证
+            let text = String::from_utf16_lossy(&wide[..wide.len() - 1]);
+            assert_eq!(text, "C:\\Users\\test\\project",
+                "反斜杠路径应正确编码为 UTF-16LE");
+        }
+
+        #[test]
+        fn test_cwd_no_trailing_slash_unchanged() {
+            // 不含正斜杠的路径无需转换
+            let cwd = "C:\\Users\\test";
+            let normalized = cwd.replace('/', "\\");
+            assert_eq!(normalized, "C:\\Users\\test",
+                "纯反斜杠路径应保持不变");
+            let wide = to_wide_null(&normalized);
+            let text = String::from_utf16_lossy(&wide[..wide.len() - 1]);
+            assert_eq!(text, "C:\\Users\\test");
+        }
+
+        #[test]
+        fn test_cwd_mixed_slashes_normalized() {
+            // 混合斜杠：只有 / 转为 \
+            let cwd = "C:/Users\\test/project\\sub";
+            let normalized = cwd.replace('/', "\\");
+            assert_eq!(normalized, "C:\\Users\\test\\project\\sub",
+                "混合斜杠应将 / 统一为 \\");
+        }
+
+        #[test]
+        fn test_to_wide_null_empty_string() {
+            let wide = to_wide_null("");
+            assert_eq!(wide, vec![0], "空字符串编码为仅含 null 终止符");
+        }
+
+        #[test]
+        fn test_to_wide_null_ascii() {
+            let wide = to_wide_null("hello");
+            assert_eq!(wide.len(), 6, "5 字符 + 1 null = 6 个 u16");
+            assert_eq!(wide[0], b'h' as u16);
+            assert_eq!(wide[4], b'o' as u16);
+            assert_eq!(wide[5], 0, "应以 null 结尾");
+        }
     }
 }
 
@@ -1125,4 +1257,212 @@ unsafe fn create_and_assign_job(pid: u32, job_name_wide: &[u16]) -> Result<JobHa
     let _ = CloseHandle(process);
 
     Ok(JobHandle::new(job))
+}
+
+// ─── spawn.rs 模块级测试：ring buffer 回放 + session 隔离 ───
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::PtyState;
+    use portable_pty::MasterPty;
+    use std::collections::VecDeque;
+    use std::sync::atomic::AtomicBool;
+
+    /// ring buffer drain 回放：drain 后内容正确回放，buffer 清零，后续写入正常
+    #[test]
+    fn test_ring_buffer_replay_drain_and_continue() {
+        let ring = Arc::new(Mutex::new(VecDeque::new()));
+
+        // 阶段 1: 模拟 Channel 断开时 reader 线程向 ring buffer 写数据
+        ring.lock().unwrap().extend(b"LINE_A\n");
+        ring.lock().unwrap().extend(b"LINE_B\n");
+        ring.lock().unwrap().extend(b"LINE_C\n");
+        assert_eq!(ring.lock().unwrap().len(), 21); // 3 × 7 bytes
+
+        // 阶段 2: reattach 时 drain 回放 ring buffer 全部内容
+        let replay: Vec<u8> = ring.lock().unwrap().drain(..).collect();
+        let text = String::from_utf8_lossy(&replay);
+        assert!(text.contains("LINE_A"), "回放数据应含 LINE_A");
+        assert!(text.contains("LINE_B"), "回放数据应含 LINE_B");
+        assert!(text.contains("LINE_C"), "回放数据应含 LINE_C");
+
+        // 阶段 3: drain 后 buffer 必须为空（避免 reattach 后重复回放）
+        assert!(ring.lock().unwrap().is_empty(), "drain 后 buffer 应为空");
+
+        // 阶段 4: reattach 后新输出继续写入 ring buffer
+        ring.lock().unwrap().extend(b"POST_D\n");
+        assert_eq!(ring.lock().unwrap().len(), 7, "新数据应正常写入");
+    }
+
+    /// ring buffer 空 buffer drain 不会 panic（防御性验证）
+    #[test]
+    fn test_ring_buffer_empty_drain_no_panic() {
+        let ring = Arc::new(Mutex::new(VecDeque::new()));
+        let drained: Vec<u8> = ring.lock().unwrap().drain(..).collect();
+        assert!(drained.is_empty());
+        assert!(ring.lock().unwrap().is_empty());
+    }
+
+    /// ring buffer 部分 drain 只移除指定范围
+    #[test]
+    fn test_ring_buffer_partial_drain() {
+        let ring = Arc::new(Mutex::new(VecDeque::new()));
+        ring.lock().unwrap().extend(b"0123456789");
+        // drain 前 5 字节
+        let front: Vec<u8> = ring.lock().unwrap().drain(0..5).collect();
+        assert_eq!(front, b"01234");
+        assert_eq!(ring.lock().unwrap().len(), 5);
+        assert_eq!(ring.lock().unwrap()[0], b'5');
+    }
+
+    /// 验证 PtyState session 移除不级联：移除一个 session 不影响其他 session
+    #[cfg(windows)]
+    #[test]
+    fn test_session_removal_does_not_cascade() {
+        let pty_state = PtyState::new();
+
+        // 创建三个独立 PTY session
+        let sa = make_test_session("panel-a");
+        let sb = make_test_session("panel-b");
+        let sc = make_test_session("panel-c");
+
+        {
+            let mut sessions = pty_state.sessions.write().unwrap();
+            sessions.insert("sid-a".into(), sa);
+            sessions.insert("sid-b".into(), sb);
+            sessions.insert("sid-c".into(), sc);
+        }
+        assert_eq!(pty_state.sessions.read().unwrap().len(), 3);
+
+        // 移除中间 session（sid-b）
+        let removed = pty_state.sessions.write().unwrap().remove("sid-b");
+        assert!(removed.is_some(), "sid-b 应存在且可移除");
+
+        // 验证 sid-a 和 sid-c 仍存在
+        {
+            let sessions = pty_state.sessions.read().unwrap();
+            assert!(
+                sessions.contains_key("sid-a"),
+                "移除 sid-b 后 sid-a 应仍存在——不得级联删除"
+            );
+            assert!(
+                sessions.contains_key("sid-c"),
+                "移除 sid-b 后 sid-c 应仍存在——不得级联删除"
+            );
+            assert!(!sessions.contains_key("sid-b"), "sid-b 应已移除");
+            assert_eq!(sessions.len(), 2, "移除一个后应剩余 2 个 session");
+
+            // panel_id 归属正确
+            assert_eq!(sessions.get("sid-a").unwrap().panel_id, "panel-a");
+            assert_eq!(sessions.get("sid-c").unwrap().panel_id, "panel-c");
+        }
+
+        // 清理：杀子进程防止残留
+        for sid in &["sid-a", "sid-c"] {
+            if let Some(s) = pty_state.sessions.write().unwrap().remove(*sid) {
+                if let Ok(mut c) = s.child.lock() {
+                    let _ = c.kill();
+                }
+            };
+        }
+    }
+
+    /// 同 panel_id 的不同 session 可独立存在与移除
+    #[cfg(windows)]
+    #[test]
+    fn test_sessions_with_same_panel_id_independent() {
+        let pty_state = PtyState::new();
+        let s1 = make_test_session("panel-x");
+        let s2 = make_test_session("panel-x"); // 同 panel_id
+
+        pty_state.sessions.write().unwrap().insert("sid-1".into(), s1);
+        pty_state.sessions.write().unwrap().insert("sid-2".into(), s2);
+        assert_eq!(pty_state.sessions.read().unwrap().len(), 2);
+
+        // 移除 sid-1，sid-2 应不受影响
+        let removed = pty_state.sessions.write().unwrap().remove("sid-1");
+        assert!(removed.is_some());
+        // 显式 drop removed 以释放锁引用
+        drop(removed);
+
+        let sessions = pty_state.sessions.read().unwrap();
+        assert!(!sessions.contains_key("sid-1"));
+        assert!(sessions.contains_key("sid-2"), "同 panel_id 的另一 session 应仍存在");
+        assert_eq!(sessions.get("sid-2").unwrap().panel_id, "panel-x");
+        drop(sessions);
+
+        // 清理
+        if let Some(s) = pty_state.sessions.write().unwrap().remove("sid-2") {
+            if let Ok(mut c) = s.child.lock() {
+                let _ = c.kill();
+            }
+        };
+    }
+
+    /// 移除不存在的 session 返回 None，不影响已有 session
+    #[cfg(windows)]
+    #[test]
+    fn test_remove_nonexistent_session_no_side_effect() {
+        let pty_state = PtyState::new();
+        let s = make_test_session("panel-y");
+        pty_state.sessions.write().unwrap().insert("sid-y".into(), s);
+        assert_eq!(pty_state.sessions.read().unwrap().len(), 1);
+
+        // 移除不存在的 key
+        let result = pty_state.sessions.write().unwrap().remove("sid-nonexistent");
+        assert!(result.is_none(), "移除不存在的 session 应返回 None");
+
+        // 已有 session 不受影响
+        let sessions = pty_state.sessions.read().unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert!(sessions.contains_key("sid-y"));
+        drop(sessions);
+
+        // 清理
+        if let Some(s) = pty_state.sessions.write().unwrap().remove("sid-y") {
+            if let Ok(mut c) = s.child.lock() {
+                let _ = c.kill();
+            }
+        };
+    }
+
+    // ─── 辅助函数 ───
+
+    /// 创建最小 PtySession 供 session 隔离测试使用
+    /// 使用 conpty_custom 创建真实 ConPTY 对 + 启动 cmd.exe 子进程
+    #[cfg(windows)]
+    fn make_test_session(panel_id: &str) -> PtySession {
+        let shell_info =
+            crate::pty::shell::resolve_shell_info(Some("cmd.exe")).expect("resolve_shell_info 应成功");
+        let (hpc, conpty_master) =
+            conpty_custom::create_conpty_pair(80, 24, 26100).expect("create_conpty_pair 应成功");
+        // CPR 注入（对齐生产代码 pty_spawn 行为）
+        let mut w = conpty_master.take_writer().expect("take_writer 应成功");
+        use std::io::Write as _;
+        w.write_all(b"\x1b[1;1R").unwrap();
+        w.flush().unwrap();
+        let writer: Arc<Mutex<Box<dyn std::io::Write + Send>>> = Arc::new(Mutex::new(w));
+
+        let extra_envs: Vec<(String, String)> = vec![
+            ("COLORTERM".into(), "truecolor".into()),
+            ("TERM".into(), "xterm-256color".into()),
+            ("TERM_PROGRAM".into(), "slTerminal".into()),
+        ];
+        let child = conpty_custom::spawn_conpty_child(hpc, &shell_info, &extra_envs, None)
+            .expect("spawn_conpty_child 应成功");
+
+        PtySession {
+            master: Arc::new(Mutex::new(Box::new(conpty_master))),
+            child: Arc::new(Mutex::new(Box::new(child))),
+            writer,
+            reader_handle: None,
+            channel: Arc::new(RwLock::new(None)),
+            output_ring: Arc::new(Mutex::new(VecDeque::new())),
+            exit_code: Arc::new(Mutex::new(None)),
+            da1_injected: Arc::new(AtomicBool::new(false)),
+            job_object: None,
+            panel_id: panel_id.to_string(),
+        }
+    }
 }

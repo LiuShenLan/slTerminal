@@ -289,5 +289,106 @@ describe("createTitleManager", () => {
         title: "src/index.ts",
       });
     });
+
+    it("SaveAs 解决同名冲突——原冲突文件恢复 basename", () => {
+      // 两个同名 index.ts 存在冲突
+      tm.registerEditor("page1", "editor-1", "D:/project/src/index.ts");
+      tm.registerEditor("page1", "editor-2", "D:/project/lib/index.ts");
+
+      // 将 editor-2 另存为其他文件名，冲突解除
+      const updates = tm.handleSaveAs(
+        "page1",
+        "editor-2",
+        "D:/project/lib/unique.ts",
+        ROOT,
+      );
+
+      expect(updates).toHaveLength(2);
+      // editor-1 为唯一 index.ts，恢复 basename
+      expect(updates).toContainEqual({ panelId: "editor-1", title: "index.ts" });
+      // editor-2 新文件名唯一
+      expect(updates).toContainEqual({ panelId: "editor-2", title: "unique.ts" });
+    });
+
+    it("SaveAs 导致三路同名冲突", () => {
+      // 先有两个不同名的文件（无冲突）
+      tm.registerEditor("page1", "editor-1", "D:/project/src/index.ts");
+      tm.registerEditor("page1", "editor-2", "D:/project/lib/index.ts");
+      // editor-3 原名为 unique.ts
+      tm.registerEditor("page1", "editor-3", "D:/project/lib/unique.ts");
+
+      // 将 editor-3 另存为第三个 index.ts，导致三路冲突
+      const updates = tm.handleSaveAs(
+        "page1",
+        "editor-3",
+        "D:/project/test/index.ts",
+        ROOT,
+      );
+
+      expect(updates).toHaveLength(3);
+      // 三个文件同名为 index.ts，全部显示相对路径
+      expect(updates).toContainEqual({ panelId: "editor-1", title: "src/index.ts" });
+      expect(updates).toContainEqual({ panelId: "editor-2", title: "lib/index.ts" });
+      expect(updates).toContainEqual({ panelId: "editor-3", title: "test/index.ts" });
+    });
+  });
+
+  // ---- onDeletePage ----
+
+  describe("onDeletePage", () => {
+    it("删除后 registry 条目被清理，已注册编辑器不可查找", () => {
+      tm.registerEditor("page1", "editor-1", "D:/project/src/index.ts");
+      tm.registerEditor("page1", "editor-2", "D:/project/src/main.ts");
+      tm.onDeletePage("page1");
+
+      expect(tm.findExistingEditor("page1", "D:/project/src/index.ts")).toBeNull();
+      expect(tm.findExistingEditor("page1", "D:/project/src/main.ts")).toBeNull();
+    });
+
+    it("删除后 counters 条目被清理，终端编号重置为 terminal-0", () => {
+      expect(tm.getTerminalTitle("page1")).toBe("terminal-0");
+      expect(tm.getTerminalTitle("page1")).toBe("terminal-1");
+      expect(tm.getTerminalTitle("page1")).toBe("terminal-2");
+      tm.onDeletePage("page1");
+
+      // 重新使用同一 pageId，从 terminal-0 开始
+      expect(tm.getTerminalTitle("page1")).toBe("terminal-0");
+      expect(tm.getTerminalTitle("page1")).toBe("terminal-1");
+    });
+
+    it("删除不存在的 pageId 不抛异常", () => {
+      expect(() => tm.onDeletePage("nonexistent")).not.toThrow();
+    });
+
+    it("删除一个页面不影响其他页面的 registry 和 counters", () => {
+      // page1 注册编辑器 + 消费终端编号
+      tm.registerEditor("page1", "editor-1", "D:/project/src/index.ts");
+      expect(tm.getTerminalTitle("page1")).toBe("terminal-0");
+      expect(tm.getTerminalTitle("page1")).toBe("terminal-1");
+
+      // page2 独立注册
+      tm.registerEditor("page2", "editor-2", "D:/project/lib/util.ts");
+      expect(tm.getTerminalTitle("page2")).toBe("terminal-0");
+
+      // 删除 page1
+      tm.onDeletePage("page1");
+
+      // page1 已清空
+      expect(tm.findExistingEditor("page1", "D:/project/src/index.ts")).toBeNull();
+      expect(tm.getTerminalTitle("page1")).toBe("terminal-0");
+
+      // page2 完全不受影响
+      expect(tm.findExistingEditor("page2", "D:/project/lib/util.ts")).toBe("editor-2");
+      expect(tm.getTerminalTitle("page2")).toBe("terminal-1");
+    });
+
+    it("删除后 recomputeTitles 返回空数组", () => {
+      tm.registerEditor("page1", "editor-1", "D:/project/src/index.ts");
+      tm.registerEditor("page1", "editor-2", "D:/project/src/main.ts");
+      tm.onDeletePage("page1");
+
+      const updates = tm.recomputeTitles("page1", "D:/project");
+      expect(updates).toEqual([]);
+    });
   });
 });
