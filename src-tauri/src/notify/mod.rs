@@ -230,24 +230,42 @@ pub fn notify_watch(
         crate::state::validate_path_within_root(&root, &watch_path)?;
     }
 
-    let mut pool = state
-        .file_watchers
-        .lock()
-        .map_err(|e| AppError::Notify(format!("获取 file_watchers 锁失败: {e}")))?;
+    // 阶段 1：持池锁 → pause_all_except + 缓存检查
+    {
+        let mut pool = state
+            .file_watchers
+            .lock()
+            .map_err(|e| AppError::Notify(format!("获取 file_watchers 锁失败: {e}")))?;
 
-    // 暂停其他 watcher，恢复/激活目标
-    pool.pause_all_except(&watch_path);
+        // 暂停其他 watcher，恢复/激活目标
+        pool.pause_all_except(&watch_path);
 
-    // 命中缓存：直接返回
-    if pool.get(&watch_path).is_some() {
-        return Ok(());
-    }
+        // 命中缓存：直接返回
+        if pool.get(&watch_path).is_some() {
+            return Ok(());
+        }
+    } // 池锁在此释放
 
-    // 未命中：创建新 watcher 并插入池（超限时自动淘汰 LRU）
+    // 阶段 2：锁外创建 watcher（含 debouncer.watch 阻塞调用，避免持锁阻塞其他线程）
     let watcher = FileWatcher::start(app_handle, vec![watch_path.clone()], 300)
         .map_err(|e| AppError::Notify(format!("启动文件监听失败: {e}")))?;
 
-    pool.insert(watch_path, watcher);
+    // 阶段 3：短暂持锁插入池（处理可能的竞态——另一线程可能已为同一路径创建 watcher）
+    {
+        let mut pool = state
+            .file_watchers
+            .lock()
+            .map_err(|e| AppError::Notify(format!("获取 file_watchers 锁失败: {e}")))?;
+
+        // 竞态检查：若另一线程已在阶段 2 期间插入同路径 watcher，丢弃当前 watcher
+        if pool.get(&watch_path).is_some() {
+            // watcher 在此作用域结束时 drop → FileWatcher::drop 发送停止信号并 join 线程
+            return Ok(());
+        }
+
+        // 未命中：插入新 watcher（超限时自动淘汰 LRU）
+        pool.insert(watch_path, watcher);
+    }
     Ok(())
 }
 

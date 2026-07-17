@@ -76,14 +76,15 @@ pub async fn fs_write_file(
             std::fs::create_dir_all(parent)?;
         }
 
-        // 检测原文件行尾风格：读原始字节检查是否含 \r\n
-        let use_crlf = std::fs::read(&path).map_or_else(
+        // 检测原文件行尾风格：只读前 CRLF_SAMPLE_MAX_BYTES 字节样本（避免全量读大文件）
+        let use_crlf = std::fs::File::open(&path).map_or_else(
             // 新文件：Windows 默认 CRLF
             |_| cfg!(windows),
-            |bytes| {
-                // 取前 64KB 样本检测 CRLF
-                let sample = String::from_utf8_lossy(&bytes[..bytes.len().min(CRLF_SAMPLE_MAX_BYTES)]);
-                sample.contains("\r\n")
+            |mut file| {
+                use std::io::Read;
+                let mut buf = vec![0u8; CRLF_SAMPLE_MAX_BYTES];
+                let n = file.read(&mut buf).unwrap_or(0);
+                String::from_utf8_lossy(&buf[..n]).contains("\r\n")
             },
         );
 
@@ -235,7 +236,7 @@ pub async fn fs_delete(path: String, state: State<'_, AppState>) -> Result<(), A
 
 /// 重命名/移动文件或目录
 ///
-/// 目标路径存在时覆盖。
+/// 目标为已存在文件时覆盖（先删除再 rename，Windows 兼容），目标为已存在目录时返回错误。
 #[tauri::command]
 pub async fn fs_rename(
     src: String,
@@ -254,10 +255,17 @@ pub async fn fs_rename(
     }
 
     match tokio::task::spawn_blocking(move || {
-        // 若目标存在且为目录，先删除
+        // 目标为已存在目录 → 拒绝覆盖（防止静默递归删除）
         let dst_path = PathBuf::from(&dst);
-        if dst_path.exists() && dst_path.is_dir() {
-            std::fs::remove_dir_all(&dst)?;
+        if dst_path.exists() {
+            if dst_path.is_dir() {
+                return Err(AppError::IoKind {
+                    kind: "path".into(),
+                    message: format!("目标路径是已有目录，无法覆盖: {dst}"),
+                });
+            }
+            // 目标为已存在文件 → 先删除再 rename（Windows 上 std::fs::rename 不覆盖已有文件）
+            std::fs::remove_file(&dst_path)?;
         }
         std::fs::rename(&src, &dst)?;
         Ok(())
@@ -620,5 +628,218 @@ mod write_file_tests {
         assert!(crlf.contains("\r\n"));
         assert!(!crlf.contains('\n') || crlf.ends_with("\r\n"),
             "转换后不应有孤立 LF（末尾 \\r\\n 跳过）");
+    }
+}
+
+/// 命令包装层单元测试（TE-14）：参数透传、错误映射、sandbox 校验分支
+/// 以及 SEC-04 fs_rename 覆盖已有文件 / 拒绝已有目录行为验证
+#[cfg(test)]
+mod command_wrapper_tests {
+    use super::*;
+
+    fn run<F: std::future::Future>(f: F) -> F::Output {
+        tokio::runtime::Runtime::new().unwrap().block_on(f)
+    }
+
+    /// 创建带 project_root 的 AppState（用于 sandbox 真校验测试）
+    fn test_app_state_with_root(root: PathBuf) -> AppState {
+        let state = AppState::new();
+        *state.project_root.write().unwrap() = Some(root);
+        state
+    }
+
+    // ===== fs_read_file =====
+
+    #[test]
+    fn test_fs_read_file_returns_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("read.txt");
+        std::fs::write(&file, "hello world").unwrap();
+
+        let app_state = test_app_state_with_root(dir.path().to_path_buf());
+        let state = unsafe { as_tauri_state(&app_state) };
+        let content = run(fs_read_file(file.to_string_lossy().to_string(), state)).unwrap();
+        assert_eq!(content, "hello world");
+    }
+
+    #[test]
+    fn test_fs_read_file_not_found_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("ghost.txt");
+
+        let app_state = test_app_state_with_root(dir.path().to_path_buf());
+        let state = unsafe { as_tauri_state(&app_state) };
+        let result = run(fs_read_file(file.to_string_lossy().to_string(), state));
+        assert!(result.is_err(), "不存在的文件应返回错误");
+    }
+
+    #[test]
+    fn test_fs_read_file_outside_root_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let file = outside.path().join("secret.txt");
+        std::fs::write(&file, "secret").unwrap();
+
+        let app_state = test_app_state_with_root(root.path().to_path_buf());
+        let state = unsafe { as_tauri_state(&app_state) };
+        let result = run(fs_read_file(file.to_string_lossy().to_string(), state));
+        assert!(result.is_err(), "根外路径应被沙箱拒绝");
+    }
+
+    // ===== fs_write_file =====
+
+    #[test]
+    fn test_fs_write_file_writes_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("output.txt");
+
+        let app_state = test_app_state_with_root(dir.path().to_path_buf());
+        let state = unsafe { as_tauri_state(&app_state) };
+        run(fs_write_file(
+            file.to_string_lossy().to_string(),
+            "hello world".to_string(),
+            state,
+        ))
+        .unwrap();
+        assert!(file.exists());
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "hello world");
+    }
+
+    #[test]
+    fn test_fs_write_file_outside_root_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let file = outside.path().join("evil.txt");
+
+        let app_state = test_app_state_with_root(root.path().to_path_buf());
+        let state = unsafe { as_tauri_state(&app_state) };
+        let result = run(fs_write_file(
+            file.to_string_lossy().to_string(),
+            "bad".to_string(),
+            state,
+        ));
+        assert!(result.is_err(), "根外路径应被沙箱拒绝");
+    }
+
+    // ===== fs_read_dir =====
+
+    #[test]
+    fn test_fs_read_dir_returns_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.txt"), "a").unwrap();
+
+        let app_state = test_app_state_with_root(dir.path().to_path_buf());
+        let state = unsafe { as_tauri_state(&app_state) };
+        let entries = run(fs_read_dir(dir.path().to_string_lossy().to_string(), state)).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "a.txt");
+    }
+
+    #[test]
+    fn test_fs_read_dir_not_found_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let nonexistent = dir.path().join("ghost_dir");
+
+        let app_state = test_app_state_with_root(dir.path().to_path_buf());
+        let state = unsafe { as_tauri_state(&app_state) };
+        let result = run(fs_read_dir(nonexistent.to_string_lossy().to_string(), state));
+        assert!(result.is_err(), "不存在的目录应返回错误");
+    }
+
+    #[test]
+    fn test_fs_read_dir_outside_root_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+
+        let app_state = test_app_state_with_root(root.path().to_path_buf());
+        let state = unsafe { as_tauri_state(&app_state) };
+        let result = run(fs_read_dir(
+            outside.path().to_string_lossy().to_string(),
+            state,
+        ));
+        assert!(result.is_err(), "根外路径应被沙箱拒绝");
+    }
+
+    // ===== fs_rename（SEC-04：覆盖文件 / 拒绝目录） =====
+
+    #[test]
+    fn test_fs_rename_overwrites_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src.txt");
+        let dst = dir.path().join("dst.txt");
+        std::fs::write(&src, "new content").unwrap();
+        std::fs::write(&dst, "old content").unwrap();
+
+        let app_state = test_app_state_with_root(dir.path().to_path_buf());
+        let state = unsafe { as_tauri_state(&app_state) };
+        run(fs_rename(
+            src.to_string_lossy().to_string(),
+            dst.to_string_lossy().to_string(),
+            state,
+        ))
+        .unwrap();
+        assert!(!src.exists(), "源文件应不存在");
+        assert_eq!(
+            std::fs::read_to_string(&dst).unwrap(),
+            "new content",
+            "目标文件应为源文件内容（覆盖成功）"
+        );
+    }
+
+    #[test]
+    fn test_fs_rename_rejects_existing_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("file.txt");
+        let dst = dir.path().join("existing_dir");
+        std::fs::write(&src, "keep").unwrap();
+        std::fs::create_dir(&dst).unwrap();
+
+        let app_state = test_app_state_with_root(dir.path().to_path_buf());
+        let state = unsafe { as_tauri_state(&app_state) };
+        let result = run(fs_rename(
+            src.to_string_lossy().to_string(),
+            dst.to_string_lossy().to_string(),
+            state,
+        ));
+        assert!(result.is_err(), "目标为已有目录应返回错误");
+        assert!(src.exists(), "源文件应保留（未被移动）");
+        assert!(dst.exists(), "目标目录应保留（未被递归删除）");
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("目录") || msg.contains("无法覆盖"), "错误消息应说明目标为目录");
+    }
+
+    #[test]
+    fn test_fs_rename_source_outside_root_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let src = outside.path().join("file.txt");
+        let dst = root.path().join("dst.txt");
+        std::fs::write(&src, "data").unwrap();
+
+        let app_state = test_app_state_with_root(root.path().to_path_buf());
+        let state = unsafe { as_tauri_state(&app_state) };
+        let result = run(fs_rename(
+            src.to_string_lossy().to_string(),
+            dst.to_string_lossy().to_string(),
+            state,
+        ));
+        assert!(result.is_err(), "源路径在根外应被沙箱拒绝");
+    }
+
+    #[test]
+    fn test_fs_rename_dest_outside_root_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let src = root.path().join("src.txt");
+        std::fs::write(&src, "data").unwrap();
+
+        let app_state = test_app_state_with_root(root.path().to_path_buf());
+        let state = unsafe { as_tauri_state(&app_state) };
+        let result = run(fs_rename(
+            src.to_string_lossy().to_string(),
+            outside.path().join("escape.txt").to_string_lossy().to_string(),
+            state,
+        ));
+        assert!(result.is_err(), "目标路径在根外应被沙箱拒绝");
     }
 }

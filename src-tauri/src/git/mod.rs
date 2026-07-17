@@ -4,9 +4,9 @@
 //! 阻塞 I/O 用 spawn_blocking 包裹。
 
 use crate::error::AppError;
-use crate::state::AppState;
+use crate::state::{AppState, validate_path_within_root};
 use serde::Serialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::State;
 
 /// 文件 git 状态条目
@@ -68,21 +68,26 @@ fn status_to_str(status: git2::Status) -> Option<&'static str> {
 ///
 /// git2::Repository 是 Send 但未实现 Clone trait；
 /// 缓存命中时通过 `Repository::open` 重新打开以绕过生命周期耦合。
+/// project_root 用于 discover 路径沙箱校验（防上溯到父仓库泄露），
+/// 未设置时在测试模式下豁免。
 fn get_or_open_repo(
     cache: &std::sync::Mutex<std::collections::HashMap<PathBuf, git2::Repository>>,
     search_path: &str,
+    project_root: &Option<PathBuf>,
 ) -> Result<(git2::Repository, PathBuf), AppError> {
     let search = PathBuf::from(search_path);
 
-    // 缓存命中检测：遍历已缓存的 workdir，若 search_path 在某 workdir 子树内则命中
+    // 缓存命中检测：仅 search 在 workdir 子树内时命中（不含反向匹配，防子仓库误命中）
     {
         let cache_guard = cache
             .lock()
             .map_err(|e| AppError::Git(format!("获取 git_repo_cache 锁失败: {e}")))?;
         for workdir in cache_guard.keys() {
-            if search.starts_with(workdir) || workdir.starts_with(&search) {
+            if search.starts_with(workdir) {
                 let wd = workdir.clone();
                 drop(cache_guard);
+                // 验证缓存的 workdir 仍在 project_root 内
+                validate_path_within_root(project_root, &wd)?;
                 let repo = git2::Repository::open(&wd)
                     .map_err(|e| AppError::Git(format!("打开仓库失败: {e}")))?;
                 return Ok((repo, wd));
@@ -97,6 +102,9 @@ fn get_or_open_repo(
         .workdir()
         .ok_or_else(|| AppError::Git("仓库无工作目录（可能为 bare repo）".to_string()))?;
     let workdir = dunce::simplified(workdir_raw).to_path_buf();
+
+    // 验证 discover 到的 workdir 在 project_root 内（防上溯到父仓库泄露）
+    validate_path_within_root(project_root, &workdir)?;
 
     // 存入缓存（保留 repo 句柄标记此 workdir 可达）
     let mut cache_guard = cache
@@ -119,8 +127,17 @@ pub async fn git_status(
     repo_path: String,
     state: State<'_, AppState>,
 ) -> Result<Vec<GitStatusEntry>, AppError> {
-    // 从缓存获取/创建 Repository（先获取，避免 spawn_blocking 内锁）
-    let (repo, workdir) = get_or_open_repo(&state.git_repo_cache, &repo_path)?;
+    // 块作用域限界：RwLockReadGuard 非 Send，必须在 .await 前 drop
+    let (repo, workdir) = {
+        let root = state
+            .project_root
+            .read()
+            .map_err(|e| AppError::Git(format!("获取 project_root 锁失败: {e}")))?;
+        // 路径沙箱校验
+        validate_path_within_root(&root, Path::new(&repo_path))?;
+        // 从缓存获取/创建 Repository
+        get_or_open_repo(&state.git_repo_cache, &repo_path, &root)?
+    };
 
     match tokio::task::spawn_blocking(move || {
         let mut opts = git2::StatusOptions::new();
@@ -178,144 +195,25 @@ pub async fn git_diff(
     file_path: String,
     state: State<'_, AppState>,
 ) -> Result<Vec<DiffHunk>, AppError> {
-    // 从缓存获取/创建 Repository（以 repo_path 或 file_path 搜索）
-    let search_path = if !repo_path.is_empty() { &repo_path } else { &file_path };
-    let (repo, workdir) = get_or_open_repo(&state.git_repo_cache, search_path)?;
+    // 块作用域限界：RwLockReadGuard 非 Send，必须在 .await 前 drop
+    let (repo, _workdir) = {
+        let root = state
+            .project_root
+            .read()
+            .map_err(|e| AppError::Git(format!("获取 project_root 锁失败: {e}")))?;
+        // 路径沙箱校验
+        if !repo_path.is_empty() {
+            validate_path_within_root(&root, Path::new(&repo_path))?;
+        }
+        validate_path_within_root(&root, Path::new(&file_path))?;
+
+        // 从缓存获取/创建 Repository（以 repo_path 或 file_path 搜索）
+        let search_path = if !repo_path.is_empty() { &repo_path } else { &file_path };
+        get_or_open_repo(&state.git_repo_cache, search_path, &root)?
+    };
 
     match tokio::task::spawn_blocking(move || {
-        // 获取 HEAD tree
-        let tree = match repo.head() {
-            Ok(head) => Some(
-                head.peel_to_tree()
-                    .map_err(|e| AppError::Git(format!("获取 HEAD tree 失败: {e}")))?,
-            ),
-            Err(e) if e.code() == git2::ErrorCode::UnbornBranch => None,
-            Err(e) => return Err(AppError::Git(format!("获取 HEAD 失败: {e}"))),
-        };
-
-        // 基准：HEAD tree vs 工作区+index
-        let mut opts = git2::DiffOptions::new();
-        // workdir 从缓存 helper 传入（已 dunce::simplified），
-        // 确保与 fs_read_dir 路径格式一致，strip_prefix 不会因前缀不同而失败。
-        let file_path_std = std::path::Path::new(&file_path);
-        let rel_path_str = file_path_std
-            .strip_prefix(workdir)
-            .unwrap_or(file_path_std)
-            .to_string_lossy()
-            .replace('\\', "/");
-        opts.pathspec(&rel_path_str);
-
-        let diff = repo
-            .diff_tree_to_workdir_with_index(tree.as_ref(), Some(&mut opts))
-            .map_err(|e| AppError::Git(format!("生成 diff 失败: {e}")))?;
-
-        let mut hunks: Vec<DiffHunk> = Vec::new();
-
-        // 用 line callback 逐行处理，精确识别实际变更行（跳过 context 行）。
-        // 关键逻辑：git unified diff 中修改 = 删除('-')后紧跟新增('+')，
-        // 二者应合并为 {old_lines>0, new_lines>0} → ModifiedMarker（蓝色），
-        // 而非拆成独立的 Deleted + Added。
-        let mut del_start: u32 = 0;
-        let mut del_count: u32 = 0;
-        let mut add_start: u32 = 0;
-        let mut add_count: u32 = 0;
-
-        let mut flush_pending = |del_s: u32, del_c: u32, add_s: u32, add_c: u32| {
-            if del_c == 0 && add_c == 0 {
-                return;
-            }
-            if del_c > 0 && add_c > 0 {
-                // 修改：删除+新增 按相同行数配对为 ModifiedMarker
-                let shared = del_c.min(add_c);
-                hunks.push(DiffHunk {
-                    old_start: del_s,
-                    old_lines: shared,
-                    new_start: add_s,
-                    new_lines: shared,
-                });
-                // 多余的删除行
-                if del_c > shared {
-                    hunks.push(DiffHunk {
-                        old_start: del_s + shared,
-                        old_lines: del_c - shared,
-                        new_start: del_s + shared,
-                        new_lines: 0,
-                    });
-                }
-                // 多余的新增行
-                if add_c > shared {
-                    hunks.push(DiffHunk {
-                        old_start: 0,
-                        old_lines: 0,
-                        new_start: add_s + shared,
-                        new_lines: add_c - shared,
-                    });
-                }
-            } else if del_c > 0 {
-                // 纯删除
-                hunks.push(DiffHunk {
-                    old_start: del_s,
-                    old_lines: del_c,
-                    new_start: del_s,
-                    new_lines: 0,
-                });
-            } else {
-                // 纯新增
-                hunks.push(DiffHunk {
-                    old_start: 0,
-                    old_lines: 0,
-                    new_start: add_s,
-                    new_lines: add_c,
-                });
-            }
-        };
-
-        let mut prev_was_del = false; // 上一行是否为 '-'，用于检测 '-→+' 修改模式
-
-        diff.foreach(
-            &mut |_delta, _num| true, // file callback
-            None,                      // binary callback
-            None,                      // hunk callback
-            Some(&mut |_delta, _hunk, line| {
-                let c = line.origin();
-                if c == '+' {
-                    let n = line.new_lineno().unwrap_or(0);
-                    if add_count == 0 {
-                        add_start = n;
-                    }
-                    add_count += 1;
-                    prev_was_del = false;
-                } else if c == '-' {
-                    let o = line.old_lineno().unwrap_or(0);
-                    if prev_was_del {
-                        // 遇到新的 '-' 组：之前有多余的新增行，无配对删除 → 先 flush
-                        if add_count > 0 {
-                            flush_pending(0, 0, add_start, add_count);
-                            add_start = 0;
-                            add_count = 0;
-                        }
-                    }
-                    if del_count == 0 {
-                        del_start = o;
-                    }
-                    del_count += 1;
-                    prev_was_del = true;
-                } else {
-                    // context 行 → flush 当前累积的变更组
-                    flush_pending(del_start, del_count, add_start, add_count);
-                    del_start = 0; del_count = 0;
-                    add_start = 0; add_count = 0;
-                    prev_was_del = false;
-                }
-                true
-            }),
-        )
-        .map_err(|e| AppError::Git(format!("diff foreach 失败: {e}")))?;
-
-        // flush 末尾残留组
-        flush_pending(del_start, del_count, add_start, add_count);
-
-        Ok(hunks)
+        compute_diff_hunks(&repo, Path::new(&file_path))
     })
     .await
     {
@@ -324,11 +222,154 @@ pub async fn git_diff(
     }
 }
 
+/// 计算文件 HEAD ↔ 工作区的精确 diff hunks（行级合并）
+///
+/// 将增删行按上下文分组合并：'-'→'+' 配对为 modified hunk，
+/// 纯 '+' → added hunk，纯 '-' → deleted hunk。
+/// file_path 为绝对路径，函数内自动 strip workdir 前缀。
+/// 仓库尚无提交（UnbornBranch）时返回空 Vec。
+pub(crate) fn compute_diff_hunks(
+    repo: &git2::Repository,
+    file_path: &Path,
+) -> Result<Vec<DiffHunk>, AppError> {
+    // 获取 HEAD tree
+    let tree = match repo.head() {
+        Ok(head) => Some(
+            head.peel_to_tree()
+                .map_err(|e| AppError::Git(format!("获取 HEAD tree 失败: {e}")))?,
+        ),
+        Err(e) if e.code() == git2::ErrorCode::UnbornBranch => None,
+        Err(e) => return Err(AppError::Git(format!("获取 HEAD 失败: {e}"))),
+    };
+
+    let mut opts = git2::DiffOptions::new();
+    let workdir = dunce::simplified(
+        repo.workdir()
+            .ok_or_else(|| AppError::Git("仓库无工作目录（可能为 bare repo）".to_string()))?,
+    );
+    let rel = file_path
+        .strip_prefix(workdir)
+        .unwrap_or(file_path)
+        .to_string_lossy()
+        .replace('\\', "/");
+    opts.pathspec(&rel);
+
+    let diff = repo
+        .diff_tree_to_workdir_with_index(tree.as_ref(), Some(&mut opts))
+        .map_err(|e| AppError::Git(format!("生成 diff 失败: {e}")))?;
+
+    // 行级回调收集 hunks（合并连续的 '-' 和 '+' 为 modified hunk）
+    let mut hunks: Vec<DiffHunk> = Vec::new();
+    let mut del_start: u32 = 0;
+    let mut del_count: u32 = 0;
+    let mut add_start: u32 = 0;
+    let mut add_count: u32 = 0;
+
+    let mut flush_pending = |ds: u32, dc: u32, as_: u32, ac: u32| {
+        if dc == 0 && ac == 0 {
+            return;
+        }
+        if dc > 0 && ac > 0 {
+            // 修改：删除+新增 按相同行数配对为 ModifiedMarker
+            let shared = dc.min(ac);
+            hunks.push(DiffHunk {
+                old_start: ds,
+                old_lines: shared,
+                new_start: as_,
+                new_lines: shared,
+            });
+            // 多余的删除行
+            if dc > shared {
+                hunks.push(DiffHunk {
+                    old_start: ds + shared,
+                    old_lines: dc - shared,
+                    new_start: ds + shared,
+                    new_lines: 0,
+                });
+            }
+            // 多余的新增行
+            if ac > shared {
+                hunks.push(DiffHunk {
+                    old_start: 0,
+                    old_lines: 0,
+                    new_start: as_ + shared,
+                    new_lines: ac - shared,
+                });
+            }
+        } else if dc > 0 {
+            // 纯删除
+            hunks.push(DiffHunk {
+                old_start: ds,
+                old_lines: dc,
+                new_start: ds,
+                new_lines: 0,
+            });
+        } else {
+            // 纯新增
+            hunks.push(DiffHunk {
+                old_start: 0,
+                old_lines: 0,
+                new_start: as_,
+                new_lines: ac,
+            });
+        }
+    };
+
+    let mut prev_was_del = false; // 上一行是否为 '-'，用于检测 '-→+' 修改模式
+
+    diff.foreach(
+        &mut |_delta, _num| true, // file callback
+        None,                      // binary callback
+        None,                      // hunk callback
+        Some(&mut |_delta, _hunk, line| {
+            let c = line.origin();
+            if c == '+' {
+                let n = line.new_lineno().unwrap_or(0);
+                if add_count == 0 {
+                    add_start = n;
+                }
+                add_count += 1;
+                prev_was_del = false;
+            } else if c == '-' {
+                let o = line.old_lineno().unwrap_or(0);
+                if prev_was_del {
+                    // 遇到新的 '-' 组：之前有多余的新增行，无配对删除 → 先 flush
+                    if add_count > 0 {
+                        flush_pending(0, 0, add_start, add_count);
+                        add_start = 0;
+                        add_count = 0;
+                    }
+                }
+                if del_count == 0 {
+                    del_start = o;
+                }
+                del_count += 1;
+                prev_was_del = true;
+            } else {
+                // context 行 → flush 当前累积的变更组
+                flush_pending(del_start, del_count, add_start, add_count);
+                del_start = 0;
+                del_count = 0;
+                add_start = 0;
+                add_count = 0;
+                prev_was_del = false;
+            }
+            true
+        }),
+    )
+    .map_err(|e| AppError::Git(format!("diff foreach 失败: {e}")))?;
+
+    // flush 末尾残留组
+    flush_pending(del_start, del_count, add_start, add_count);
+
+    Ok(hunks)
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
     use std::process::Command;
-    use super::{DiffHunk, GitStatusEntry};
+    use super::{DiffHunk, GitStatusEntry, compute_diff_hunks};
 
     /// 在临时目录中 init 一个 git 仓库，返回 tempdir（自动清理）和路径
     fn init_temp_repo() -> (tempfile::TempDir, std::path::PathBuf) {
@@ -1200,7 +1241,7 @@ mod tests {
         fs::write(path.join("f.txt"), "line1\nline2\nline3 MODIFIED\nline4\nline5\n").unwrap();
 
         let repo = git2::Repository::open(&path).unwrap();
-        let hunks = compute_diff_hunks(&repo, &path.join("f.txt"));
+        let hunks = compute_diff_hunks(&repo, &path.join("f.txt")).unwrap();
 
         // 修改 = 删除+新增合并为 1 个 modified hunk（生产算法：'-'→'+' → prev_was_del 配对）
         assert_eq!(hunks.len(), 1, "修改一行应合并为 1 个 modified hunk");
@@ -1218,7 +1259,7 @@ mod tests {
         fs::write(path.join("f.txt"), "line1\nline2\nline3\nline4\n").unwrap();
 
         let repo = git2::Repository::open(&path).unwrap();
-        let hunks = compute_diff_hunks(&repo, &path.join("f.txt"));
+        let hunks = compute_diff_hunks(&repo, &path.join("f.txt")).unwrap();
 
         assert_eq!(hunks.len(), 1, "连续新增应合并为 1 个 hunk");
         assert_eq!(hunks[0].old_lines, 0, "纯新增 old_lines=0");
@@ -1234,7 +1275,7 @@ mod tests {
         fs::write(path.join("f.txt"), "a\n").unwrap();
 
         let repo = git2::Repository::open(&path).unwrap();
-        let hunks = compute_diff_hunks(&repo, &path.join("f.txt"));
+        let hunks = compute_diff_hunks(&repo, &path.join("f.txt")).unwrap();
 
         assert_eq!(hunks.len(), 1, "连续删除应合并为 1 个 hunk");
         assert_eq!(hunks[0].old_lines, 3, "删除 3 行");
@@ -1250,7 +1291,7 @@ mod tests {
         fs::write(path.join("f.txt"), "a\nB\nc\nd\ne\nF\ng\n").unwrap();
 
         let repo = git2::Repository::open(&path).unwrap();
-        let hunks = compute_diff_hunks(&repo, &path.join("f.txt"));
+        let hunks = compute_diff_hunks(&repo, &path.join("f.txt")).unwrap();
 
         // 两处独立修改，各合并为 modified hunk
         let modified_count = hunks.iter().filter(|h| h.old_lines > 0 && h.new_lines > 0).count();
@@ -1266,7 +1307,7 @@ mod tests {
         commit_file(&path, "f.txt", "unchanged\n");
 
         let repo = git2::Repository::open(&path).unwrap();
-        let hunks = compute_diff_hunks(&repo, &path.join("f.txt"));
+        let hunks = compute_diff_hunks(&repo, &path.join("f.txt")).unwrap();
         assert_eq!(hunks.len(), 0, "无修改应返回 0 hunk");
     }
 
@@ -1321,72 +1362,7 @@ mod tests {
     }
 
     // ---- 行级 diff 精确性测试（line callback 逻辑） ----
-
-    /// 调用实际的 git2 diff API + line callback 逻辑，返回 DiffHunk 列表。
-    /// 模拟 git_diff 命令的行级处理。
-    fn compute_diff_hunks(repo: &git2::Repository, file_path: &std::path::Path) -> Vec<DiffHunk> {
-        let tree = repo.head().unwrap().peel_to_tree().unwrap();
-        let mut opts = git2::DiffOptions::new();
-        let rel = file_path.strip_prefix(dunce::simplified(repo.workdir().unwrap())).unwrap()
-            .to_string_lossy().replace('\\', "/");
-        opts.pathspec(&rel);
-
-        let diff = repo.diff_tree_to_workdir_with_index(Some(&tree), Some(&mut opts)).unwrap();
-
-        let mut hunks: Vec<DiffHunk> = Vec::new();
-        let mut del_start: u32 = 0;
-        let mut del_count: u32 = 0;
-        let mut add_start: u32 = 0;
-        let mut add_count: u32 = 0;
-        let mut prev_was_del = false;
-
-        let mut flush_pending = |ds: u32, dc: u32, as_: u32, ac: u32| {
-            if dc == 0 && ac == 0 { return; }
-            if dc > 0 && ac > 0 {
-                let shared = dc.min(ac);
-                hunks.push(DiffHunk { old_start: ds, old_lines: shared, new_start: as_, new_lines: shared });
-                if dc > shared {
-                    hunks.push(DiffHunk { old_start: ds + shared, old_lines: dc - shared, new_start: ds + shared, new_lines: 0 });
-                }
-                if ac > shared {
-                    hunks.push(DiffHunk { old_start: 0, old_lines: 0, new_start: as_ + shared, new_lines: ac - shared });
-                }
-            } else if dc > 0 {
-                hunks.push(DiffHunk { old_start: ds, old_lines: dc, new_start: ds, new_lines: 0 });
-            } else {
-                hunks.push(DiffHunk { old_start: 0, old_lines: 0, new_start: as_, new_lines: ac });
-            }
-        };
-
-        diff.foreach(
-            &mut |_, _| true, None, None,
-            Some(&mut |_, _, line| {
-                let c = line.origin();
-                if c == '+' {
-                    let n = line.new_lineno().unwrap_or(0);
-                    if add_count == 0 { add_start = n; }
-                    add_count += 1;
-                    prev_was_del = false;
-                } else if c == '-' {
-                    let o = line.old_lineno().unwrap_or(0);
-                    if prev_was_del && add_count > 0 {
-                        flush_pending(0, 0, add_start, add_count);
-                        add_start = 0; add_count = 0;
-                    }
-                    if del_count == 0 { del_start = o; }
-                    del_count += 1;
-                    prev_was_del = true;
-                } else {
-                    flush_pending(del_start, del_count, add_start, add_count);
-                    del_start = 0; del_count = 0; add_start = 0; add_count = 0;
-                    prev_was_del = false;
-                }
-                true
-            }),
-        ).unwrap();
-        flush_pending(del_start, del_count, add_start, add_count);
-        hunks
-    }
+    // 共用 compute_diff_hunks 生产函数（见上文 pub(crate) fn），测试直调无需副本。
 
     #[test]
     fn line_callback_single_modified_line() {
@@ -1396,7 +1372,7 @@ mod tests {
         fs::write(path.join("f.txt"), "line1\nline2 MODIFIED\nline3\n").unwrap();
 
         let repo = git2::Repository::open(&path).unwrap();
-        let hunks = compute_diff_hunks(&repo, &path.join("f.txt"));
+        let hunks = compute_diff_hunks(&repo, &path.join("f.txt")).unwrap();
 
         assert_eq!(hunks.len(), 1, "单行修改应只有 1 个 hunk");
         assert_eq!(hunks[0].old_lines, 1, "old_lines=1");
@@ -1416,7 +1392,7 @@ mod tests {
         fs::write(path.join("f.txt"), &new_content).unwrap();
 
         let repo = git2::Repository::open(&path).unwrap();
-        let hunks = compute_diff_hunks(&repo, &path.join("f.txt"));
+        let hunks = compute_diff_hunks(&repo, &path.join("f.txt")).unwrap();
 
         // 只修改了 1 行，应只有 1 个 hunk，old_lines=1（不包含 context）
         assert_eq!(hunks.len(), 1, "单行修改只应有 1 个 hunk，不含 context");
@@ -1432,7 +1408,7 @@ mod tests {
         fs::write(path.join("f.txt"), "line1\nnewA\nnewB\nnewC\nline2\n").unwrap();
 
         let repo = git2::Repository::open(&path).unwrap();
-        let hunks = compute_diff_hunks(&repo, &path.join("f.txt"));
+        let hunks = compute_diff_hunks(&repo, &path.join("f.txt")).unwrap();
 
         let added = hunks.iter().find(|h| h.old_lines == 0);
         assert!(added.is_some(), "应有纯新增 hunk（old_lines=0）");
@@ -1447,7 +1423,7 @@ mod tests {
         fs::write(path.join("f.txt"), "line1\nline4\n").unwrap();
 
         let repo = git2::Repository::open(&path).unwrap();
-        let hunks = compute_diff_hunks(&repo, &path.join("f.txt"));
+        let hunks = compute_diff_hunks(&repo, &path.join("f.txt")).unwrap();
 
         let deleted = hunks.iter().find(|h| h.new_lines == 0);
         assert!(deleted.is_some(), "应有纯删除 hunk（new_lines=0）");
@@ -1461,7 +1437,7 @@ mod tests {
         fs::write(path.join("f.txt"), "line1\nline2 NEW\nline3\nline4 NEW\nline5 NEW\n").unwrap();
 
         let repo = git2::Repository::open(&path).unwrap();
-        let hunks = compute_diff_hunks(&repo, &path.join("f.txt"));
+        let hunks = compute_diff_hunks(&repo, &path.join("f.txt")).unwrap();
 
         // 应包含 modified（蓝色）hunk
         let modified = hunks.iter().find(|h| h.old_lines > 0 && h.new_lines > 0);
@@ -1488,7 +1464,7 @@ mod tests {
         fs::write(path.join("f.txt"), "line1\nnew2\nnew3\n").unwrap();
 
         let repo = git2::Repository::open(&path).unwrap();
-        let hunks = compute_diff_hunks(&repo, &path.join("f.txt"));
+        let hunks = compute_diff_hunks(&repo, &path.join("f.txt")).unwrap();
 
         // 应包含 modified（蓝色）hunk
         let modified = hunks.iter().find(|h| h.old_lines > 0 && h.new_lines > 0);
@@ -1515,7 +1491,7 @@ mod tests {
         fs::write(path.join("f.txt"), "A1\nA2 MOD\nA3\nB1\nB2 MOD\nB3\n").unwrap();
 
         let repo = git2::Repository::open(&path).unwrap();
-        let hunks = compute_diff_hunks(&repo, &path.join("f.txt"));
+        let hunks = compute_diff_hunks(&repo, &path.join("f.txt")).unwrap();
 
         // 两处独立的修改
         let modified = hunks.iter().filter(|h| h.old_lines > 0 && h.new_lines > 0).count();
@@ -1529,7 +1505,7 @@ mod tests {
         // 不修改
 
         let repo = git2::Repository::open(&path).unwrap();
-        let hunks = compute_diff_hunks(&repo, &path.join("f.txt"));
+        let hunks = compute_diff_hunks(&repo, &path.join("f.txt")).unwrap();
 
         assert_eq!(hunks.len(), 0, "无修改应返回 0 hunk");
     }
@@ -1542,7 +1518,7 @@ mod tests {
         fs::write(path.join("f.txt"), "").unwrap();
 
         let repo = git2::Repository::open(&path).unwrap();
-        let hunks = compute_diff_hunks(&repo, &path.join("f.txt"));
+        let hunks = compute_diff_hunks(&repo, &path.join("f.txt")).unwrap();
 
         // 全删应只有删除类 hunk（new_lines=0），无 modified 或 added
         let deleted_hunks: Vec<_> = hunks.iter().filter(|h| h.new_lines == 0).collect();
@@ -1561,7 +1537,7 @@ mod tests {
         fs::write(path.join("f.txt"), "original\nnewA\nnewB\nnewC\n").unwrap();
 
         let repo = git2::Repository::open(&path).unwrap();
-        let hunks = compute_diff_hunks(&repo, &path.join("f.txt"));
+        let hunks = compute_diff_hunks(&repo, &path.join("f.txt")).unwrap();
 
         // 应有纯新增 hunk
         let added = hunks.iter().find(|h| h.old_lines == 0 && h.new_lines > 0);
@@ -1602,7 +1578,7 @@ mod tests {
         commit_file(&path, "test.txt", "hello");
 
         let cache = std::sync::Mutex::new(std::collections::HashMap::new());
-        let result = super::get_or_open_repo(&cache, &path.to_string_lossy());
+        let result = super::get_or_open_repo(&cache, &path.to_string_lossy(), &None);
         assert!(result.is_ok(), "首次访问应成功（cache miss → discover → 缓存）");
         let (_repo, workdir) = result.unwrap();
         assert_eq!(workdir, dunce::simplified(path.as_path()));
@@ -1639,7 +1615,7 @@ mod tests {
         commit_file(&path, "t.txt", "x");
         let cache = std::sync::Mutex::new(std::collections::HashMap::new());
         let (_repo, workdir) =
-            super::get_or_open_repo(&cache, &path.to_string_lossy()).unwrap();
+            super::get_or_open_repo(&cache, &path.to_string_lossy(), &None).unwrap();
         assert_eq!(
             workdir,
             dunce::simplified(dunce::canonicalize(&path).unwrap().as_path()),
@@ -1667,14 +1643,65 @@ mod tests {
 
         let cache = std::sync::Mutex::new(std::collections::HashMap::new());
         // 首次访问 → 缓存
-        let result1 = super::get_or_open_repo(&cache, &path.to_string_lossy());
+        let result1 = super::get_or_open_repo(&cache, &path.to_string_lossy(), &None);
         assert!(result1.is_ok(), "首次访问应成功");
 
         // 从子目录访问 → 缓存命中（子目录在 workdir 子树内）
         let sub = path.join("sub");
         std::fs::create_dir_all(&sub).unwrap();
-        let result2 = super::get_or_open_repo(&cache, &sub.to_string_lossy());
+        let result2 = super::get_or_open_repo(&cache, &sub.to_string_lossy(), &None);
         assert!(result2.is_ok(), "子目录访问应缓存命中");
+    }
+
+    // BE-06: 缓存的子仓库不应被父目录误命中
+    #[test]
+    fn get_or_open_repo_cache_no_false_hit_for_subrepo() {
+        let (_dir, path) = init_temp_repo();
+        commit_file(&path, "root.txt", "root content");
+
+        // 在子目录创建嵌套 git 仓库
+        let sub = path.join("nested");
+        std::fs::create_dir_all(&sub).unwrap();
+        Command::new("git")
+            .args(["init"])
+            .current_dir(&sub)
+            .output()
+            .unwrap();
+        // 在子仓库中 commit 一个文件
+        let sub_file = sub.join("nested.txt");
+        std::fs::write(&sub_file, "nested content").unwrap();
+        Command::new("git")
+            .args(["add", "nested.txt"])
+            .current_dir(&sub)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "nested"])
+            .current_dir(&sub)
+            .output()
+            .unwrap();
+
+        let cache = std::sync::Mutex::new(std::collections::HashMap::new());
+
+        // 先访问子目录 → 缓存子仓库 workdir
+        let result_sub = super::get_or_open_repo(&cache, &sub.to_string_lossy(), &None);
+        assert!(result_sub.is_ok(), "子仓库访问应成功");
+        let (_sub_repo, sub_workdir) = result_sub.unwrap();
+        assert_eq!(sub_workdir, dunce::simplified(sub.as_path()));
+
+        // 再访问父目录 → 不应命中子仓库缓存（父目录不在子仓库子树内）
+        let result_parent = super::get_or_open_repo(&cache, &path.to_string_lossy(), &None);
+        assert!(result_parent.is_ok(), "父目录访问应成功");
+        let (_parent_repo, parent_workdir) = result_parent.unwrap();
+        assert_eq!(
+            parent_workdir,
+            dunce::simplified(path.as_path()),
+            "父目录不应命中子仓库缓存，应 discover 到父仓库"
+        );
+
+        // 缓存中应有父子两个仓库各自的工作目录
+        let cache_guard = cache.lock().unwrap();
+        assert_eq!(cache_guard.len(), 2, "缓存中应有父子两个仓库");
     }
 
     #[test]
@@ -1685,7 +1712,7 @@ mod tests {
         std::fs::create_dir_all(&non_repo).unwrap();
 
         let cache = std::sync::Mutex::new(std::collections::HashMap::new());
-        let result = super::get_or_open_repo(&cache, &non_repo.to_string_lossy());
+        let result = super::get_or_open_repo(&cache, &non_repo.to_string_lossy(), &None);
         assert!(result.is_err(), "非 git 目录 discover 应失败");
     }
 
@@ -1697,7 +1724,7 @@ mod tests {
         git2::Repository::init_bare(&bare_path).unwrap();
 
         let cache = std::sync::Mutex::new(std::collections::HashMap::new());
-        let result = super::get_or_open_repo(&cache, &bare_path.to_string_lossy());
+        let result = super::get_or_open_repo(&cache, &bare_path.to_string_lossy(), &None);
         assert!(result.is_err(), "bare repo 无 workdir 应返回错误");
     }
 }
