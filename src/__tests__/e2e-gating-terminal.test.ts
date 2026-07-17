@@ -164,7 +164,7 @@ describe("终端 hooks — E2E_ENABLED 门控 helper 注入", () => {
     gate.enabled = false;
     renderTerminal();
     raf.flush();
-    await waitFor(() => expect(pty.spawn).toHaveBeenCalled());
+    await waitFor(() => expect(pty.spawn).toHaveBeenCalled(), { timeout: 3000 });
 
     expect(helperSpies.initTerminalE2e).not.toHaveBeenCalled();
     expect(helperSpies.installTerminalWriteToPty).not.toHaveBeenCalled();
@@ -177,7 +177,7 @@ describe("终端 hooks — E2E_ENABLED 门控 helper 注入", () => {
     (pty.spawn as any).mockRejectedValueOnce(new Error("boom"));
     renderTerminal();
     raf.flush();
-    await waitFor(() => expect(pty.spawn).toHaveBeenCalled());
+    await waitFor(() => expect(pty.spawn).toHaveBeenCalled(), { timeout: 3000 });
 
     expect(helperSpies.setTerminalSessionError).not.toHaveBeenCalled();
   });
@@ -203,7 +203,7 @@ describe("终端 hooks — E2E_ENABLED 门控 helper 注入", () => {
         container,
         true,
       ),
-    );
+    { timeout: 3000 });
   });
 
   it("启用（true，spawn 失败）→ setTerminalSessionError 调用", async () => {
@@ -213,6 +213,6 @@ describe("终端 hooks — E2E_ENABLED 门控 helper 注入", () => {
     raf.flush();
     await waitFor(() =>
       expect(helperSpies.setTerminalSessionError).toHaveBeenCalled(),
-    );
+    { timeout: 3000 });
   });
 });

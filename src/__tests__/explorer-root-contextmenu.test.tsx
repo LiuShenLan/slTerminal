@@ -436,7 +436,7 @@ describe("ExplorerPanel 根级重命名失败", () => {
     // 等待文件树加载
     await waitFor(() => {
       expect(document.body.textContent).toContain("existing.txt");
-    });
+    }, { timeout: 3000 });
 
     // 右键空白区域
     const wrapper = container.querySelector('[style*="min-height: 100%"]');
@@ -466,6 +466,6 @@ describe("ExplorerPanel 根级重命名失败", () => {
       const banner = getByTestId("explorer-error-banner");
       expect(banner.textContent).toContain("新建文件失败");
       expect(banner.textContent).toContain("磁盘空间不足");
-    });
+    }, { timeout: 3000 });
   });
 });

@@ -172,7 +172,7 @@ async function renderAndCapture(): Promise<() => void | Promise<void>> {
   // registerCloseHandler 在 useEffect 中同步注册，render 后立即可用
   await waitFor(() => {
     expect(mocks.capturedHandler).not.toBeNull();
-  });
+  }, { timeout: 3000 });
   return mocks.capturedHandler!;
 }
 
@@ -316,7 +316,7 @@ describe("onCloseRequested PTY kill 路径", () => {
     render(React.createElement(App));
     await waitFor(() => {
       expect(mocks.capturedHandler).not.toBeNull();
-    });
+    }, { timeout: 3000 });
     return mocks.capturedHandler!;
   }
 

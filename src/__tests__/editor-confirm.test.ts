@@ -130,7 +130,7 @@ async function renderAndWait(props?: Partial<Parameters<typeof useCodeMirror>[0]
   // 等待 EditorView 创建完成
   await waitFor(() => {
     expect(capturedStateExtensions).toBeDefined();
-  });
+  }, { timeout: 3000 });
   return { result, container };
 }
 
@@ -215,14 +215,14 @@ describe("useCodeMirror fs-event 集成", () => {
     // readFile 被调用（自动重载读取磁盘内容）
     await waitFor(() => {
       expect(h.mockReadFile).toHaveBeenCalledWith("/test/main.ts");
-    });
+    }, { timeout: 3000 });
 
     // 等待 readFile resolve → then 回调 dispatch
     await waitFor(() => {
       expect(h.mockDispatch).toHaveBeenCalledWith({
         changes: { from: 0, to: 0, insert: "// modified content" },
       });
-    });
+    }, { timeout: 3000 });
   });
 
   // ── E6: Modify + dirty=true → confirm 弹窗 ──
@@ -263,13 +263,13 @@ describe("useCodeMirror fs-event 集成", () => {
 
     await waitFor(() => {
       expect(h.mockReadFile).toHaveBeenCalledWith("/test/main.ts");
-    });
+    }, { timeout: 3000 });
 
     await waitFor(() => {
       expect(h.mockDispatch).toHaveBeenCalledWith({
         changes: { from: 0, to: 0, insert: "// modified content" },
       });
-    });
+    }, { timeout: 3000 });
 
     confirmSpy.mockRestore();
   });

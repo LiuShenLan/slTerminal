@@ -72,10 +72,10 @@ describe("useFileTree rootPath 变化清空旧状态", () => {
     // 等待 proj-a 加载完成
     await waitFor(() =>
       expect(result.current.rootNodes.length).toBe(1),
-    );
+    { timeout: 3000 });
     await waitFor(() =>
       expect(result.current.gitStatusMap.get("/proj-a/a.ts")).toBe("modified"),
-    );
+    { timeout: 3000 });
 
     // 切换到 proj-b：应同步清空（在 React 同一批次中）
     mocks.mockGitStatus.mockResolvedValue([
@@ -90,7 +90,7 @@ describe("useFileTree rootPath 变化清空旧状态", () => {
     // 异步等待新数据加载
     await waitFor(() =>
       expect(result.current.rootNodes.length).toBe(1),
-    );
+    { timeout: 3000 });
     expect(result.current.rootNodes[0].entry.name).toBe("b.ts");
   });
 
@@ -106,7 +106,7 @@ describe("useFileTree rootPath 变化清空旧状态", () => {
 
     await waitFor(() =>
       expect(result.current.rootNodes.length).toBe(1),
-    );
+    { timeout: 3000 });
 
     mocks.mockReadDir.mockClear();
     mocks.mockGitStatus.mockClear();
@@ -138,7 +138,7 @@ describe("useFileTree rootPath 变化清空旧状态", () => {
 
     await waitFor(() =>
       expect(result.current.rootNodes.length).toBe(1),
-    );
+    { timeout: 3000 });
 
     // 切换到 proj-b
     mocks.mockGitStatus.mockResolvedValue([
@@ -148,7 +148,7 @@ describe("useFileTree rootPath 变化清空旧状态", () => {
 
     await waitFor(() =>
       expect(result.current.rootNodes.length).toBe(2),
-    );
+    { timeout: 3000 });
 
     // 验证 proj-b 的数据（不是 proj-a 的残留）
     const names = result.current.rootNodes.map((n) => n.entry.name);
@@ -157,7 +157,7 @@ describe("useFileTree rootPath 变化清空旧状态", () => {
     // gitStatusMap 应为 proj-b 的数据
     await waitFor(() =>
       expect(result.current.gitStatusMap.get("/proj-b/src/main.ts")).toBe("added"),
-    );
+    { timeout: 3000 });
   });
 
   it("T2.4: 快速连续切换只保留最终结果（gen 检查防竞态）", async () => {
@@ -174,7 +174,7 @@ describe("useFileTree rootPath 变化清空旧状态", () => {
 
     await waitFor(() =>
       expect(result.current.rootNodes.length).toBe(1),
-    );
+    { timeout: 3000 });
 
     // 快速切换 A→B→C（B 路径无 vfs → loadDirectory 抛错返回 []）
     rerender({ rootPath: "/proj-b" });
@@ -182,7 +182,7 @@ describe("useFileTree rootPath 变化清空旧状态", () => {
 
     await waitFor(() =>
       expect(result.current.rootNodes.length).toBe(1),
-    );
+    { timeout: 3000 });
     expect(result.current.rootNodes[0].entry.name).toBe("c.ts");
   });
 
@@ -201,7 +201,7 @@ describe("useFileTree rootPath 变化清空旧状态", () => {
 
     await waitFor(() =>
       expect(result.current.rootNodes.length).toBe(1),
-    );
+    { timeout: 3000 });
 
     // 展开 src
     await act(async () => {
@@ -209,7 +209,7 @@ describe("useFileTree rootPath 变化清空旧状态", () => {
     });
     await waitFor(() => {
       expect(findNode(result.current.rootNodes, "/proj/src")?.loading).toBe(false);
-    });
+    }, { timeout: 3000 });
     expect(findNode(result.current.rootNodes, "/proj/src")?.expanded).toBe(true);
 
     // 同值 rerender

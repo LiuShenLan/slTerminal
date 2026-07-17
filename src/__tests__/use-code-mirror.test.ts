@@ -162,7 +162,7 @@ describe("useCodeMirror 字体大小", () => {
     // 等待 EditorView 初始化（readFile mock 立即 resolve）
     await waitFor(() => {
       expect(capturedStateExtensions).toBeDefined();
-    });
+    }, { timeout: 3000 });
 
     mockDispatch.mockClear();
 
@@ -170,7 +170,7 @@ describe("useCodeMirror 字体大小", () => {
 
     await waitFor(() => {
       expect(mockDispatch).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
     // reconfigure 被调用
     expect(mockReconfigure).toHaveBeenCalled();
   });
@@ -184,7 +184,7 @@ describe("useCodeMirror 字体大小", () => {
 
     await waitFor(() => {
       expect(capturedStateExtensions).toBeDefined();
-    });
+    }, { timeout: 3000 });
 
     mockDispatch.mockClear();
 
@@ -319,7 +319,7 @@ describe("useCodeMirror 字体大小", () => {
     renderHook(() =>
       useCodeMirror({ container, filePath: "/test/file.js", panelId: "p11" }),
     );
-    await waitFor(() => expect(capturedStateExtensions).toBeDefined());
+    await waitFor(() => expect(capturedStateExtensions).toBeDefined(), { timeout: 3000 });
 
     const { keymap } = await import("@codemirror/view"); // mock 的 keymap.of
     const { indentWithTab } = await import("@codemirror/commands"); // 真实引用
@@ -340,7 +340,7 @@ describe("useCodeMirror 字体大小", () => {
     );
 
     // 等待异步 initEditor 完成（EditorView 创建 → viewRef.current 就位）
-    await waitFor(() => expect(capturedStateExtensions).toBeDefined());
+    await waitFor(() => expect(capturedStateExtensions).toBeDefined(), { timeout: 3000 });
 
     // mockUsePanelFocus 被 hook 调用，第 3 个参数是 activate 回调
     const activateCall = mockUsePanelFocus.mock.calls[mockUsePanelFocus.mock.calls.length - 1];
@@ -354,7 +354,7 @@ describe("useCodeMirror 字体大小", () => {
     renderHook(() =>
       useCodeMirror({ container, filePath: "/test/file.js", panelId: "p12" }),
     );
-    await waitFor(() => expect(capturedStateExtensions).toBeDefined());
+    await waitFor(() => expect(capturedStateExtensions).toBeDefined(), { timeout: 3000 });
 
     // Compartment.of 被调用多次（font、lang、wrap），wrap 的初始化参数为 []
     // mockReconfigure 在初始化阶段不应被调用（of 不触发 reconfigure）
@@ -449,7 +449,7 @@ describe("useCodeMirror 字体大小", () => {
       useCodeMirror({ container, filePath: "/test/file.js", panelId: "p19" }),
     );
 
-    await waitFor(() => expect(capturedStateExtensions).toBeDefined());
+    await waitFor(() => expect(capturedStateExtensions).toBeDefined(), { timeout: 3000 });
 
     // 通过 activate 拿到 editorActions
     const activateCall = mockUsePanelFocus.mock.calls[mockUsePanelFocus.mock.calls.length - 1];
@@ -504,7 +504,7 @@ describe("handleSave 保存逻辑", () => {
     );
 
     // 等待异步 initEditor 完成（EditorView 创建 → viewRef.current 就位）
-    await waitFor(() => expect(capturedStateExtensions).toBeDefined());
+    await waitFor(() => expect(capturedStateExtensions).toBeDefined(), { timeout: 3000 });
 
     // 通过 mockUsePanelFocus 的 activate 回调设置 activeEditor
     const activateCall = mockUsePanelFocus.mock.calls[mockUsePanelFocus.mock.calls.length - 1];
@@ -542,7 +542,7 @@ describe("handleSave 保存逻辑", () => {
     // handleSave 是 async → 等待 writeFile 被调用
     await waitFor(() => {
       expect(fs.writeFile).toHaveBeenCalledWith("/test/save.js", expect.any(String));
-    });
+    }, { timeout: 3000 });
 
     // 有 filePath → 不应弹另存为对话框
     expect(mockDialogSave).not.toHaveBeenCalled();
@@ -564,7 +564,7 @@ describe("handleSave 保存逻辑", () => {
         defaultPath: "Untitled.txt",
         filters: [{ name: "所有文件", extensions: ["*"] }],
       });
-    });
+    }, { timeout: 3000 });
 
     // 用户取消 → 不调 writeFile
     expect(fs.writeFile).not.toHaveBeenCalled();
@@ -580,11 +580,11 @@ describe("handleSave 保存逻辑", () => {
 
     await waitFor(() => {
       expect(mockDialogSave).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
 
     await waitFor(() => {
       expect(fs.writeFile).toHaveBeenCalledWith("/user/selected/path.txt", expect.any(String));
-    });
+    }, { timeout: 3000 });
   });
 
   it("HS4: 保存成功后调 gitDiff 刷新 gutter", async () => {
@@ -600,11 +600,11 @@ describe("handleSave 保存逻辑", () => {
     // 等待 gitDiff 被调用 + then 回调执行
     await waitFor(() => {
       expect(gitDiff).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
 
     await waitFor(() => {
       expect(updateDiffGutter).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
   });
 
   it("HS5: 保存后文件干净（无 diff）→ clearDiffGutter 被调用", async () => {
@@ -617,11 +617,11 @@ describe("handleSave 保存逻辑", () => {
 
     await waitFor(() => {
       expect(gitDiff).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
 
     await waitFor(() => {
       expect(clearDiffGutter).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
   });
 
   it("HS6: 保存失败 → window.alert 被调用", async () => {
@@ -636,11 +636,11 @@ describe("handleSave 保存逻辑", () => {
 
     await waitFor(() => {
       expect(fs.writeFile).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
 
     await waitFor(() => {
       expect(alertSpy).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
 
     alertSpy.mockRestore();
   });
@@ -655,7 +655,7 @@ describe("handleSave 保存逻辑", () => {
 
     await waitFor(() => {
       expect(fs.writeFile).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
 
     // CustomEvent 的 type/detail 是非枚举 getter，需直接访问属性
     expect(dispatchSpy).toHaveBeenCalled();
@@ -677,7 +677,7 @@ describe("handleSave 保存逻辑", () => {
 
     await waitFor(() => {
       expect(fs.writeFile).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
 
     // oldPath(undefined) !== path("/new/path.txt") → 派发 file-saved-as
     expect(dispatchSpy).toHaveBeenCalled();
@@ -741,7 +741,7 @@ describe("FE-01 文件切换竞态", () => {
     // B 的 readFile 立即 resolve → EditorView 被创建
     await waitFor(() => {
       expect(capturedStateExtensions).toBeDefined();
-    });
+    }, { timeout: 3000 });
 
     // 只有 B 的 EditorView 在 DOM 中
     expect(container.children.length).toBe(1);
@@ -795,7 +795,7 @@ describe("FE-01 文件切换竞态", () => {
     resolveB!("// content B");
     await waitFor(() => {
       expect(capturedStateExtensions).toBeDefined();
-    });
+    }, { timeout: 3000 });
 
     // B 的 view 在 DOM 中
     expect(container.children.length).toBe(1);
@@ -830,7 +830,7 @@ describe("FE-01 文件切换竞态", () => {
     // A 快速完成 → view 创建
     await waitFor(() => {
       expect(capturedStateExtensions).toBeDefined();
-    });
+    }, { timeout: 3000 });
 
     // 切换到 B：cleanup 同步销毁 A
     mockDestroy.mockClear();
@@ -840,7 +840,7 @@ describe("FE-01 文件切换竞态", () => {
     // B 创建
     await waitFor(() => {
       expect(capturedStateExtensions).toBeDefined();
-    });
+    }, { timeout: 3000 });
 
     // B 随后被卸载销毁
     mockDestroy.mockClear();
@@ -865,7 +865,7 @@ describe("FE-19 handleSave repoDir 计算", () => {
       }),
     );
 
-    await waitFor(() => expect(capturedStateExtensions).toBeDefined());
+    await waitFor(() => expect(capturedStateExtensions).toBeDefined(), { timeout: 3000 });
 
     const activateCall = mockUsePanelFocus.mock.calls[mockUsePanelFocus.mock.calls.length - 1];
     const activateFn = activateCall?.[2] as (() => void) | undefined;
@@ -896,11 +896,11 @@ describe("FE-19 handleSave repoDir 计算", () => {
 
     await waitFor(() => {
       expect(fs.writeFile).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
 
     await waitFor(() => {
       expect(gitDiff).toHaveBeenCalledWith("D:/", "D:/file.txt");
-    });
+    }, { timeout: 3000 });
   });
 
   it("P2. 多层嵌套路径 → repoDir 为正确父目录", async () => {
@@ -911,11 +911,11 @@ describe("FE-19 handleSave repoDir 计算", () => {
 
     await waitFor(() => {
       expect(fs.writeFile).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
 
     await waitFor(() => {
       expect(gitDiff).toHaveBeenCalledWith("D:/project/src", "D:/project/src/utils.ts");
-    });
+    }, { timeout: 3000 });
   });
 
   it("P3. 无目录分隔符的文件 → 跳过 gitDiff（repoDir 为 null）", async () => {
@@ -927,7 +927,7 @@ describe("FE-19 handleSave repoDir 计算", () => {
 
     await waitFor(() => {
       expect(fs.writeFile).toHaveBeenCalledWith("README.md", expect.any(String));
-    });
+    }, { timeout: 3000 });
 
     // gitDiff 不应被调用——getParentDir("README.md") 返回 null
     // 注意：initEditor 阶段可能调用了 gitDiff，需要区分

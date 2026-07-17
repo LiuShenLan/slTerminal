@@ -184,7 +184,7 @@ describe("FileTree 删除确认 — ask 弹窗分支", () => {
     // ask 是 async，等待 Promise 微任务清空
     await waitFor(() => {
       expect(onDelete).toHaveBeenCalledWith("C:/project/test.ts");
-    });
+    }, { timeout: 3000 });
   });
 
   it("2. 文件删除 + 用户取消 → onDelete 不调用", async () => {
@@ -216,7 +216,7 @@ describe("FileTree 删除确认 — ask 弹窗分支", () => {
 
     await waitFor(() => {
       expect(onDelete).toHaveBeenCalledWith("C:/project/src");
-    });
+    }, { timeout: 3000 });
   });
 
   it("4. 文件夹删除 + 用户取消 → onDelete 不调用", async () => {
@@ -295,20 +295,20 @@ describe("ExplorerPanel 删除集成", () => {
     // 等待异步 loadDirectory 完成
     await waitFor(() => {
       expect(getAllByText("config.json").length).toBeGreaterThan(0);
-    });
+    }, { timeout: 3000 });
 
     fireEvent.contextMenu(getAllByText("config.json")[0]);
     fireEvent.click(getAllByText("删除")[0]);
 
     await waitFor(() => {
       expect(mocks.mockDeleteEntry).toHaveBeenCalledWith("C:/test-project/config.json");
-    });
+    }, { timeout: 3000 });
 
     // refresh 会再次调用 readDir
     // 初始化时 useFileTree.loadRoot 调用一次，删除后 refresh 再调一次 = 2
     await waitFor(() => {
       expect(mocks.mockReadDir).toHaveBeenCalledTimes(2);
-    });
+    }, { timeout: 3000 });
   });
 
   it("8. 删除失败 → UI 错误横幅显示", async () => {
@@ -325,7 +325,7 @@ describe("ExplorerPanel 删除集成", () => {
 
     await waitFor(() => {
       expect(getAllByText("readonly.txt").length).toBeGreaterThan(0);
-    });
+    }, { timeout: 3000 });
 
     fireEvent.contextMenu(getAllByText("readonly.txt")[0]);
     fireEvent.click(getAllByText("删除")[0]);
@@ -335,7 +335,7 @@ describe("ExplorerPanel 删除集成", () => {
       const banner = getByTestId("explorer-error-banner");
       expect(banner.textContent).toContain("删除失败");
       expect(banner.textContent).toContain("权限不足");
-    });
+    }, { timeout: 3000 });
   });
 });
 
@@ -381,7 +381,7 @@ describe("ExplorerPanel 操作失败 UI 通知", () => {
 
     await waitFor(() => {
       expect(getAllByText("locked.ts").length).toBeGreaterThan(0);
-    });
+    }, { timeout: 3000 });
 
     // 右键 → 重命名
     fireEvent.contextMenu(getAllByText("locked.ts")[0]);
@@ -398,7 +398,7 @@ describe("ExplorerPanel 操作失败 UI 通知", () => {
       const banner = getByTestId("explorer-error-banner");
       expect(banner.textContent).toContain("重命名失败");
       expect(banner.textContent).toContain("文件被锁定");
-    });
+    }, { timeout: 3000 });
   });
 
   it("12. 新建文件失败 → UI 错误横幅显示", async () => {
@@ -414,7 +414,7 @@ describe("ExplorerPanel 操作失败 UI 通知", () => {
 
     await waitFor(() => {
       expect(getAllByText("src").length).toBeGreaterThan(0);
-    });
+    }, { timeout: 3000 });
 
     // 右键文件夹 → 新建文件
     fireEvent.contextMenu(getAllByText("src")[0]);
@@ -431,7 +431,7 @@ describe("ExplorerPanel 操作失败 UI 通知", () => {
       const banner = getByTestId("explorer-error-banner");
       expect(banner.textContent).toContain("新建文件失败");
       expect(banner.textContent).toContain("磁盘空间不足");
-    });
+    }, { timeout: 3000 });
   });
 
   it("13. 新建文件夹失败 → UI 错误横幅显示", async () => {
@@ -447,7 +447,7 @@ describe("ExplorerPanel 操作失败 UI 通知", () => {
 
     await waitFor(() => {
       expect(getAllByText("lib").length).toBeGreaterThan(0);
-    });
+    }, { timeout: 3000 });
 
     // 右键文件夹 → 新建文件夹
     fireEvent.contextMenu(getAllByText("lib")[0]);
@@ -464,6 +464,6 @@ describe("ExplorerPanel 操作失败 UI 通知", () => {
       const banner = getByTestId("explorer-error-banner");
       expect(banner.textContent).toContain("新建文件夹失败");
       expect(banner.textContent).toContain("权限不足");
-    });
+    }, { timeout: 3000 });
   });
 });

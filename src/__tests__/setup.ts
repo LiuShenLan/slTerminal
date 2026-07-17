@@ -1,6 +1,6 @@
 import { randomFillSync } from 'node:crypto';
 import '@testing-library/jest-dom/vitest';
-import { vi } from 'vitest';
+import { vi, beforeAll, afterAll } from 'vitest';
 
 // ─── 全局 mock 工厂（供 vi.hoisted() 中使用） ───
 // vi.hoisted() 运行在 ESM import 之前，无法通过 import/require 加载外部模块，
@@ -54,10 +54,36 @@ declare global {
 }
 
 // 静音 jsdom HTMLCanvasElement.getContext 未实现警告
-// detectWebgl.test.ts 通过 vi.spyOn 覆盖此 mock（mockRestore 恢复到本 mock）
-vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
+// 用 beforeAll/afterAll 包装（安装/恢复成对），防跨文件泄漏：
+// - 某测试文件的 mockRestore 不会影响后续文件——每个文件由 beforeAll 重新安装
+// - 若测试文件已在模块级 vi.spyOn 覆盖（如 use-xterm-integration.test.ts），
+//   isMockFunction 守卫避免覆盖其自定义实现
+beforeAll(() => {
+  if (!vi.isMockFunction(HTMLCanvasElement.prototype.getContext)) {
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
+  }
+});
 
-// mock ipc/notify（useFileTree / useCodeMirror 在 import 时调用 onFsEvent）
+afterAll(() => {
+  const getContext = HTMLCanvasElement.prototype.getContext;
+  if (vi.isMockFunction(getContext)) {
+    getContext.mockRestore();
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// 全局 mock：ipc/notify（useFileTree / useCodeMirror 在 import 时调用 onFsEvent）
+//
+// ⚠️ 警告：本 vi.mock 会遮蔽 ../ipc/notify 的真实实现。
+// 需要真实 startWatch / onFsEvent 的测试（例如 IPC 合约测试），
+// 必须在自身测试文件内用 vi.mock 显式覆盖，导入原始模块：
+//
+//   vi.mock("../ipc/notify", async (importOriginal) => {
+//     return importOriginal<typeof import("../ipc/notify")>();
+//   });
+//
+// 参考：ipc-contract.test.ts 顶部做法（L12-15）。
+// ═══════════════════════════════════════════════════════════════
 vi.mock("../ipc/notify", () => ({
   onFsEvent: () => () => {},
   startWatch: () => Promise.resolve(),

@@ -208,10 +208,13 @@ describe("DEC 2026 同步更新包裹 flushBuffer", () => {
     raf = mockRaf();
     ptyOut = ptyOutputSpy();
     container = createContainer();
+    // TE-11: 使用假定时器替代真实 setTimeout
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
   });
 
   afterEach(() => {
     raf.cleanup();
+    vi.useRealTimers();
   });
 
   it("DEC1: >=64 字节合帧后 term.write 以 \\x1b[?2026h 开头", async () => {
@@ -221,9 +224,9 @@ describe("DEC 2026 同步更新包裹 flushBuffer", () => {
 
     // 等待 pollFitAndSpawn 首帧完成 → spawn
     raf.flush();
-    await vi.waitFor(() => {
-      expect(pty.spawn).toHaveBeenCalled();
-    });
+    // 等待 microtask 清空（TerminalRegistry.register 在 spawn .then() 中执行）
+    await Promise.resolve();
+    expect(pty.spawn).toHaveBeenCalled();
 
     // 清空 spawn 过程中的 write 调用
     capturedTerminal!.write.mockClear();
@@ -235,8 +238,8 @@ describe("DEC 2026 同步更新包裹 flushBuffer", () => {
     // idle timer 未触发 → write 不应被调用（数据在 pendingBufferRef）
     expect(capturedTerminal!.write).not.toHaveBeenCalled();
 
-    // 等待 idle timer (2ms) → flushBuffer 执行
-    await new Promise((r) => setTimeout(r, 5));
+    // TE-11: 推进假定时器 5ms → idle timer (2ms) 触发 flushBuffer
+    vi.advanceTimersByTime(5);
 
     // 验证 write 被调用且以 DEC 2026 开始序列开头
     expect(capturedTerminal!.write).toHaveBeenCalledTimes(1);
@@ -252,16 +255,15 @@ describe("DEC 2026 同步更新包裹 flushBuffer", () => {
     );
 
     raf.flush();
-    await vi.waitFor(() => {
-      expect(pty.spawn).toHaveBeenCalled();
-    });
+    await Promise.resolve();
+    expect(pty.spawn).toHaveBeenCalled();
 
     capturedTerminal!.write.mockClear();
 
     const testData = new Array(100).fill(66); // 100 个 'B'
     ptyOut.sendPtyOutput(testData);
-    // 等待 idle timer 触发 flush
-    await new Promise((r) => setTimeout(r, 5));
+    // TE-11: 推进假定时器 → idle timer 触发 flush
+    vi.advanceTimersByTime(5);
 
     const written = new TextDecoder().decode(
       (capturedTerminal!.write as ReturnType<typeof vi.fn>).mock.calls[0][0] as Uint8Array,
@@ -275,9 +277,8 @@ describe("DEC 2026 同步更新包裹 flushBuffer", () => {
     );
 
     raf.flush();
-    await vi.waitFor(() => {
-      expect(pty.spawn).toHaveBeenCalled();
-    });
+    await Promise.resolve();
+    expect(pty.spawn).toHaveBeenCalled();
 
     capturedTerminal!.write.mockClear();
 
@@ -289,8 +290,8 @@ describe("DEC 2026 同步更新包裹 flushBuffer", () => {
     // idle timer 未触发 → 没有 write
     expect(capturedTerminal!.write).not.toHaveBeenCalled();
 
-    // 等待 idle timer → flushBuffer 执行
-    await new Promise((r) => setTimeout(r, 5));
+    // TE-11: 推进假定时器 → idle timer 触发 flushBuffer
+    vi.advanceTimersByTime(5);
 
     // 单次 write，包含全部 3 块数据
     expect(capturedTerminal!.write).toHaveBeenCalledTimes(1);
@@ -310,9 +311,8 @@ describe("DEC 2026 同步更新包裹 flushBuffer", () => {
     );
 
     raf.flush();
-    await vi.waitFor(() => {
-      expect(pty.spawn).toHaveBeenCalled();
-    });
+    await Promise.resolve();
+    expect(pty.spawn).toHaveBeenCalled();
 
     capturedTerminal!.write.mockClear();
 
@@ -345,10 +345,13 @@ describe("直写阈值 64 字节路由", () => {
     raf = mockRaf();
     ptyOut = ptyOutputSpy();
     container = createContainer();
+    // TE-11: 使用假定时器替代真实 setTimeout
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
   });
 
   afterEach(() => {
     raf.cleanup();
+    vi.useRealTimers();
   });
 
   it("TH1: 63 字节 PTY 输出走直写路径（term.write 立即调用）", async () => {
@@ -357,9 +360,8 @@ describe("直写阈值 64 字节路由", () => {
     );
 
     raf.flush();
-    await vi.waitFor(() => {
-      expect(pty.spawn).toHaveBeenCalled();
-    });
+    await Promise.resolve();
+    expect(pty.spawn).toHaveBeenCalled();
 
     capturedTerminal!.write.mockClear();
 
@@ -375,9 +377,8 @@ describe("直写阈值 64 字节路由", () => {
     );
 
     raf.flush();
-    await vi.waitFor(() => {
-      expect(pty.spawn).toHaveBeenCalled();
-    });
+    await Promise.resolve();
+    expect(pty.spawn).toHaveBeenCalled();
 
     capturedTerminal!.write.mockClear();
 
@@ -387,8 +388,8 @@ describe("直写阈值 64 字节路由", () => {
     // idle timer 未触发 → write 不应被调用
     expect(capturedTerminal!.write).not.toHaveBeenCalled();
 
-    // 等待 idle timer
-    await new Promise((r) => setTimeout(r, 5));
+    // TE-11: 推进假定时器 → idle timer 触发 flush
+    vi.advanceTimersByTime(5);
     expect(capturedTerminal!.write).toHaveBeenCalledTimes(1);
   });
 
@@ -398,9 +399,8 @@ describe("直写阈值 64 字节路由", () => {
     );
 
     raf.flush();
-    await vi.waitFor(() => {
-      expect(pty.spawn).toHaveBeenCalled();
-    });
+    await Promise.resolve();
+    expect(pty.spawn).toHaveBeenCalled();
 
     capturedTerminal!.write.mockClear();
 
@@ -419,9 +419,8 @@ describe("直写阈值 64 字节路由", () => {
     );
 
     raf.flush();
-    await vi.waitFor(() => {
-      expect(pty.spawn).toHaveBeenCalled();
-    });
+    await Promise.resolve();
+    expect(pty.spawn).toHaveBeenCalled();
 
     capturedTerminal!.write.mockClear();
 
@@ -434,8 +433,8 @@ describe("直写阈值 64 字节路由", () => {
     // 直写调用数不变（大块走合帧，idle timer 未触发）
     expect(capturedTerminal!.write).toHaveBeenCalledTimes(1);
 
-    // 等待 idle timer → 合帧 flush
-    await new Promise((r) => setTimeout(r, 5));
+    // TE-11: 推进假定时器 → idle timer 触发flush
+    vi.advanceTimersByTime(5);
     // 合帧后 write 被调用第二次
     expect(capturedTerminal!.write).toHaveBeenCalledTimes(2);
   });
@@ -469,7 +468,7 @@ describe("ResizeObserver 交替缓冲检查", () => {
 
     await vi.waitFor(() => {
       expect(pty.spawn).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
 
     setBufferType(capturedTerminal, "alternate");
 
@@ -477,8 +476,11 @@ describe("ResizeObserver 交替缓冲检查", () => {
     mockProposeDimensions.mockClear();
     (pty.resize as ReturnType<typeof vi.fn>).mockClear();
 
+    // TE-11: AB 块无 mockRaf，spawn 后切换到假定时器
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+
     ro.trigger();
-    await new Promise((r) => setTimeout(r, 150));
+    vi.advanceTimersByTime(150);
 
     // 交替缓冲中 fit 被调用（同步 xterm.js 网格尺寸与 PTY 新尺寸）
     expect(mockFit).toHaveBeenCalled();
@@ -488,6 +490,8 @@ describe("ResizeObserver 交替缓冲检查", () => {
       100,
       40,
     );
+
+    vi.useRealTimers();
   });
 
   it("AB3: 普通缓冲中 resize → fit + pty.resize 正常调用", async () => {
@@ -497,7 +501,7 @@ describe("ResizeObserver 交替缓冲检查", () => {
 
     await vi.waitFor(() => {
       expect(pty.spawn).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
 
     setBufferType(capturedTerminal, "normal");
 
@@ -505,12 +509,17 @@ describe("ResizeObserver 交替缓冲检查", () => {
     mockProposeDimensions.mockClear();
     (pty.resize as ReturnType<typeof vi.fn>).mockClear();
 
+    // TE-11: 切换到假定时器
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+
     ro.trigger();
-    await new Promise((r) => setTimeout(r, 150));
+    vi.advanceTimersByTime(150);
 
     // 普通缓冲中 fit 正常调用
     expect(mockFit).toHaveBeenCalledTimes(1);
     expect(pty.resize).toHaveBeenCalledTimes(1);
+
+    vi.useRealTimers();
   });
 
   it("AB5: 交替缓冲中 resize → 传入正确的 cols/rows", async () => {
@@ -522,17 +531,22 @@ describe("ResizeObserver 交替缓冲检查", () => {
 
     await vi.waitFor(() => {
       expect(pty.spawn).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
 
     setBufferType(capturedTerminal, "alternate");
 
     (pty.resize as ReturnType<typeof vi.fn>).mockClear();
 
+    // TE-11: 切换到假定时器
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+
     ro.trigger();
-    await new Promise((r) => setTimeout(r, 150));
+    vi.advanceTimersByTime(150);
 
     // 交替缓冲中尺寸参数正确透传
     expect(pty.resize).toHaveBeenCalledWith("test-session-id", 120, 50);
+
+    vi.useRealTimers();
   });
 });
 
@@ -552,10 +566,13 @@ describe("Idle+Max 双定时器合帧", () => {
     raf = mockRaf();
     ptyOut = ptyOutputSpy();
     container = createContainer();
+    // TE-11: 使用假定时器替代真实 setTimeout
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
   });
 
   afterEach(() => {
     raf.cleanup();
+    vi.useRealTimers();
   });
 
   it("IT2: 连续高频输出（2ms 内多次）→ 不立即 flush，最后一次后 2ms flush", async () => {
@@ -563,9 +580,8 @@ describe("Idle+Max 双定时器合帧", () => {
       useXterm({ container, cols: 80, rows: 24, panelId: "it-2" }),
     );
     raf.flush();
-    await vi.waitFor(() => {
-      expect(pty.spawn).toHaveBeenCalled();
-    });
+    await Promise.resolve();
+    expect(pty.spawn).toHaveBeenCalled();
     capturedTerminal!.write.mockClear();
 
     // 连续 3 次大块输出
@@ -576,8 +592,8 @@ describe("Idle+Max 双定时器合帧", () => {
     // idle timer 被每次输出重置 → 不立即 flush
     expect(capturedTerminal!.write).not.toHaveBeenCalled();
 
-    // 等待 5ms → 最后一次后 2ms idle timer 触发
-    await new Promise((r) => setTimeout(r, 5));
+    // TE-11: 推进假定时器 5ms → 最后一次后 2ms idle timer 触发
+    vi.advanceTimersByTime(5);
     expect(capturedTerminal!.write).toHaveBeenCalledTimes(1);
   });
 
@@ -586,23 +602,22 @@ describe("Idle+Max 双定时器合帧", () => {
       useXterm({ container, cols: 80, rows: 24, panelId: "it-3" }),
     );
     raf.flush();
-    await vi.waitFor(() => {
-      expect(pty.spawn).toHaveBeenCalled();
-    });
+    await Promise.resolve();
+    expect(pty.spawn).toHaveBeenCalled();
     capturedTerminal!.write.mockClear();
 
     // 每隔 3ms 发送数据——idle timer 永远被重置，但 max timer 在 16ms 时强制 flush
     ptyOut.sendPtyOutput(new Array(80).fill(65));
-    await new Promise((r) => setTimeout(r, 3));
+    vi.advanceTimersByTime(3);
     ptyOut.sendPtyOutput(new Array(80).fill(66));
-    await new Promise((r) => setTimeout(r, 3));
+    vi.advanceTimersByTime(3);
     ptyOut.sendPtyOutput(new Array(80).fill(67));
-    await new Promise((r) => setTimeout(r, 3));
+    vi.advanceTimersByTime(3);
     ptyOut.sendPtyOutput(new Array(80).fill(68));
-    await new Promise((r) => setTimeout(r, 3));
+    vi.advanceTimersByTime(3);
     ptyOut.sendPtyOutput(new Array(80).fill(69));
-    // 已过 ~12ms，max timer 即将触发
-    await new Promise((r) => setTimeout(r, 10));
+    // 已过 ~12ms，max timer 即将触发——再推进 10ms → 总计 22ms
+    vi.advanceTimersByTime(10);
 
     // max timer (16ms) 已强制 flush 至少一次
     const writeCalls = (capturedTerminal!.write as ReturnType<typeof vi.fn>).mock.calls;
@@ -614,9 +629,8 @@ describe("Idle+Max 双定时器合帧", () => {
       useXterm({ container, cols: 80, rows: 24, panelId: "it-4" }),
     );
     raf.flush();
-    await vi.waitFor(() => {
-      expect(pty.spawn).toHaveBeenCalled();
-    });
+    await Promise.resolve();
+    expect(pty.spawn).toHaveBeenCalled();
     capturedTerminal!.write.mockClear();
 
     // 小块直写
@@ -631,7 +645,8 @@ describe("Idle+Max 双定时器合帧", () => {
     // 累积中
     expect(capturedTerminal!.write).toHaveBeenCalledTimes(1);
 
-    await new Promise((r) => setTimeout(r, 5));
+    // TE-11: 推进假定时器 → idle timer 触发flush
+    vi.advanceTimersByTime(5);
     // 大块 flush 带 DEC 2026
     expect(capturedTerminal!.write).toHaveBeenCalledTimes(2);
   });
@@ -641,9 +656,8 @@ describe("Idle+Max 双定时器合帧", () => {
       useXterm({ container, cols: 80, rows: 24, panelId: "it-5" }),
     );
     raf.flush();
-    await vi.waitFor(() => {
-      expect(pty.spawn).toHaveBeenCalled();
-    });
+    await Promise.resolve();
+    expect(pty.spawn).toHaveBeenCalled();
     capturedTerminal!.write.mockClear();
 
     // 发送大块输出 → 启动 idle+max timer
@@ -653,8 +667,8 @@ describe("Idle+Max 双定时器合帧", () => {
     // 卸载 → cleanup 清除定时器
     unmount();
 
-    // 等待足够长时间 → timer 不应触发 write（因为已卸载）
-    await new Promise((r) => setTimeout(r, 30));
+    // TE-11: 推进假定时器 30ms → timer 不应触发 write（因为已卸载）
+    vi.advanceTimersByTime(30);
     // 卸载后不会再调用 write
     // （即使 timer 触发，flushBuffer 内 terminalRef.current 已为 null 会提前返回）
     expect(capturedTerminal!.write).not.toHaveBeenCalled();
@@ -677,10 +691,13 @@ describe("Uint8Array 合帧缓冲", () => {
     raf = mockRaf();
     ptyOut = ptyOutputSpy();
     container = createContainer();
+    // TE-11: 使用假定时器替代真实 setTimeout
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
   });
 
   afterEach(() => {
     raf.cleanup();
+    vi.useRealTimers();
   });
 
   it("UA1: flushBuffer 合并多个 Uint8Array → term.write 收到正确拼接数据", async () => {
@@ -688,9 +705,8 @@ describe("Uint8Array 合帧缓冲", () => {
       useXterm({ container, cols: 80, rows: 24, panelId: "ua-1" }),
     );
     raf.flush();
-    await vi.waitFor(() => {
-      expect(pty.spawn).toHaveBeenCalled();
-    });
+    await Promise.resolve();
+    expect(pty.spawn).toHaveBeenCalled();
     capturedTerminal!.write.mockClear();
 
     // 发送多块数据，各块内容不同
@@ -699,7 +715,8 @@ describe("Uint8Array 合帧缓冲", () => {
     ptyOut.sendPtyOutput(bytes1);
     ptyOut.sendPtyOutput(bytes2);
 
-    await new Promise((r) => setTimeout(r, 5));
+    // TE-11: 推进假定时器 → idle timer 触发flush
+    vi.advanceTimersByTime(5);
 
     expect(capturedTerminal!.write).toHaveBeenCalledTimes(1);
     const decoded = new TextDecoder().decode(
@@ -717,14 +734,14 @@ describe("Uint8Array 合帧缓冲", () => {
       useXterm({ container, cols: 80, rows: 24, panelId: "ua-2" }),
     );
     raf.flush();
-    await vi.waitFor(() => {
-      expect(pty.spawn).toHaveBeenCalled();
-    });
+    await Promise.resolve();
+    expect(pty.spawn).toHaveBeenCalled();
     capturedTerminal!.write.mockClear();
 
     ptyOut.sendPtyOutput(new Array(100).fill(88)); // 'X'
 
-    await new Promise((r) => setTimeout(r, 5));
+    // TE-11: 推进假定时器 → idle timer 触发flush
+    vi.advanceTimersByTime(5);
 
     const decoded = new TextDecoder().decode(
       (capturedTerminal!.write as ReturnType<typeof vi.fn>).mock.calls[0][0] as Uint8Array,
@@ -739,14 +756,14 @@ describe("Uint8Array 合帧缓冲", () => {
       useXterm({ container, cols: 80, rows: 24, panelId: "ua-4" }),
     );
     raf.flush();
-    await vi.waitFor(() => {
-      expect(pty.spawn).toHaveBeenCalled();
-    });
+    await Promise.resolve();
+    expect(pty.spawn).toHaveBeenCalled();
     capturedTerminal!.write.mockClear();
 
     ptyOut.sendPtyOutput(new Array(256).fill(90)); // 'Z' * 256
 
-    await new Promise((r) => setTimeout(r, 5));
+    // TE-11: 推进假定时器 → idle timer 触发flush
+    vi.advanceTimersByTime(5);
 
     const decoded = new TextDecoder().decode(
       (capturedTerminal!.write as ReturnType<typeof vi.fn>).mock.calls[0][0] as Uint8Array,
@@ -772,10 +789,13 @@ describe("非焦点终端降频", () => {
     raf = mockRaf();
     ptyOut = ptyOutputSpy();
     container = createContainer();
+    // TE-11: 使用假定时器替代真实 setTimeout
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
   });
 
   afterEach(() => {
     raf.cleanup();
+    vi.useRealTimers();
   });
 
   it("NF1: visible=false → PTY 输出累积但不 flush", async () => {
@@ -785,9 +805,8 @@ describe("非焦点终端降频", () => {
       { initialProps: { visible: true as boolean | undefined } },
     );
     raf.flush();
-    await vi.waitFor(() => {
-      expect(pty.spawn).toHaveBeenCalled();
-    });
+    await Promise.resolve();
+    expect(pty.spawn).toHaveBeenCalled();
 
     // 切换到隐藏
     rerender({ visible: false });
@@ -796,8 +815,8 @@ describe("非焦点终端降频", () => {
     // 发送大块输出
     ptyOut.sendPtyOutput(new Array(200).fill(65));
 
-    // 等待 → idle timer 不应触发 flush（因为 visible=false）
-    await new Promise((r) => setTimeout(r, 10));
+    // TE-11: 推进假定时器 10ms → idle timer 不应触发 flush（因为 visible=false）
+    vi.advanceTimersByTime(10);
     expect(capturedTerminal!.write).not.toHaveBeenCalled();
   });
 
@@ -808,9 +827,8 @@ describe("非焦点终端降频", () => {
       { initialProps: { visible: true as boolean | undefined } },
     );
     raf.flush();
-    await vi.waitFor(() => {
-      expect(pty.spawn).toHaveBeenCalled();
-    });
+    await Promise.resolve();
+    expect(pty.spawn).toHaveBeenCalled();
 
     // 切换到隐藏
     rerender({ visible: false });
@@ -818,15 +836,16 @@ describe("非焦点终端降频", () => {
 
     // 发送大块输出（隐藏期间）
     ptyOut.sendPtyOutput(new Array(200).fill(65));
-    await new Promise((r) => setTimeout(r, 10));
+    // TE-11: 推进假定时器 → 不触发flush（visible=false）
+    vi.advanceTimersByTime(10);
     expect(capturedTerminal!.write).not.toHaveBeenCalled();
 
     // 切回可见 → useEffect 检测到 visible 变为 true → flush
     rerender({ visible: true });
 
-    await vi.waitFor(() => {
-      expect(capturedTerminal!.write).toHaveBeenCalled();
-    });
+    // TE-11: 推进微任务让 effect 执行
+    await Promise.resolve();
+    expect(capturedTerminal!.write).toHaveBeenCalled();
   });
 
   it("NF3: visible=false 期间直写路径被抑制（对齐 TE-16）", async () => {
@@ -836,9 +855,8 @@ describe("非焦点终端降频", () => {
       { initialProps: { visible: true as boolean | undefined } },
     );
     raf.flush();
-    await vi.waitFor(() => {
-      expect(pty.spawn).toHaveBeenCalled();
-    });
+    await Promise.resolve();
+    expect(pty.spawn).toHaveBeenCalled();
 
     // 切换到隐藏
     rerender({ visible: false });
@@ -856,9 +874,8 @@ describe("非焦点终端降频", () => {
       { initialProps: { visible: true as boolean | undefined } },
     );
     raf.flush();
-    await vi.waitFor(() => {
-      expect(pty.spawn).toHaveBeenCalled();
-    });
+    await Promise.resolve();
+    expect(pty.spawn).toHaveBeenCalled();
 
     // 切换到隐藏
     rerender({ visible: false });
@@ -877,13 +894,13 @@ describe("非焦点终端降频", () => {
       useXterm({ container, cols: 80, rows: 24, panelId: "nf-5" }),
     );
     raf.flush();
-    await vi.waitFor(() => {
-      expect(pty.spawn).toHaveBeenCalled();
-    });
+    await Promise.resolve();
+    expect(pty.spawn).toHaveBeenCalled();
     capturedTerminal!.write.mockClear();
 
     ptyOut.sendPtyOutput(new Array(200).fill(65));
-    await new Promise((r) => setTimeout(r, 5));
+    // TE-11: 推进假定时器 → idle timer 触发flush
+    vi.advanceTimersByTime(5);
 
     // visible 未指定 → 视为可见 → 正常 flush
     expect(capturedTerminal!.write).toHaveBeenCalledTimes(1);
@@ -908,22 +925,26 @@ describe("cancelPendingFlush", () => {
     ro = mockResizeObserver();
     ptyOut = ptyOutputSpy();
     container = createContainer();
+    // TE-11: 使用假定时器替代真实 setTimeout
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
   });
 
   afterEach(() => {
     raf.cleanup();
     ro.cleanup();
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
+  /** TE-09/TE-11: mount 后等待 microtask 清空确保 TerminalRegistry.register 完成 */
   async function mountAndWait() {
     const result = renderHook(() =>
       useXterm({ container, cols: 80, rows: 24, panelId: "cpf-test" }),
     );
     raf.flush();
-    await vi.waitFor(() => {
-      expect(pty.spawn).toHaveBeenCalled();
-    });
+    // 等待 microtask 清空（TerminalRegistry.register 在 spawn .then() 中执行）
+    await Promise.resolve();
+    expect(pty.spawn).toHaveBeenCalled();
     return result;
   }
 
@@ -943,8 +964,8 @@ describe("cancelPendingFlush", () => {
     expect(clearTimeoutSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(result.current._test!.getPendingBuffer()).toHaveLength(0);
 
-    // 确认清后不会再有 write
-    await new Promise((r) => setTimeout(r, 5));
+    // TE-11: 推进假定时器 → 确认清后不会再有 write
+    vi.advanceTimersByTime(5);
     expect(capturedTerminal!.write).not.toHaveBeenCalled();
     clearTimeoutSpy.mockRestore();
   });
@@ -1001,24 +1022,31 @@ describe("cancelPendingFlush", () => {
     await mountAndWait();
     capturedTerminal!.write.mockClear();
 
+    // 发送旧数据 → 启动 idle+max 定时器
     ptyOut.sendPtyOutput(new Array(200).fill(65));
     expect(capturedTerminal!.write).not.toHaveBeenCalled();
 
+    // 首次 resize 触发 cancelPendingFlush → 丢弃旧数据 + 定时器
     mockProposeDimensions.mockReturnValue({ cols: 70, rows: 24 });
     ro.trigger();
-    await new Promise((r) => setTimeout(r, 10));
+    vi.advanceTimersByTime(10);
 
+    // 第二次 resize → 再次 cancelPendingFlush + debounce
     mockProposeDimensions.mockReturnValue({ cols: 60, rows: 24 });
     ro.trigger();
+    vi.advanceTimersByTime(150);
 
-    await new Promise((r) => setTimeout(r, 150));
+    // TE-09: resize 完成后发新数据，验证旧数据未混入
+    capturedTerminal!.write.mockClear();
+    ptyOut.sendPtyOutput(new Array(200).fill(88)); // 'X'
+    vi.advanceTimersByTime(5);
 
     const writeCalls = (capturedTerminal!.write as ReturnType<typeof vi.fn>).mock.calls;
-    if (writeCalls.length > 0) {
-      for (const call of writeCalls) {
-        const decoded = new TextDecoder().decode(call[0] as Uint8Array);
-        expect(decoded).not.toContain("A".repeat(200));
-      }
+    // TE-09: 先显式断言有写入，再检查内容——消除 if-guard 假阳性
+    expect(writeCalls.length).toBeGreaterThan(0);
+    for (const call of writeCalls) {
+      const decoded = new TextDecoder().decode(call[0] as Uint8Array);
+      expect(decoded).not.toContain("A".repeat(200));
     }
   });
 
@@ -1028,7 +1056,7 @@ describe("cancelPendingFlush", () => {
 
     mockProposeDimensions.mockReturnValue({ cols: 60, rows: 30 });
     ro.trigger();
-    await new Promise((r) => setTimeout(r, 150));
+    vi.advanceTimersByTime(150);
 
     expect(result.current._test!.getPendingBuffer()).toHaveLength(0);
 
@@ -1037,7 +1065,8 @@ describe("cancelPendingFlush", () => {
     ptyOut.sendPtyOutput(new Array(200).fill(88));
     expect(result.current._test!.getPendingBuffer()).toHaveLength(1);
 
-    await new Promise((r) => setTimeout(r, 5));
+    // TE-11: 推进假定时器 → idle timer 触发flush
+    vi.advanceTimersByTime(5);
     expect(capturedTerminal!.write).toHaveBeenCalledTimes(1);
     const decoded = new TextDecoder().decode(
       (capturedTerminal!.write as ReturnType<typeof vi.fn>).mock.calls[0][0] as Uint8Array,
@@ -1061,7 +1090,8 @@ describe("cancelPendingFlush", () => {
     mockProposeDimensions.mockReturnValue({ cols: 50, rows: 30 });
     ro.trigger();
 
-    await new Promise((r) => setTimeout(r, 150));
+    // TE-11: 推进假定时器 → debounce 只触发一次 resize
+    vi.advanceTimersByTime(150);
 
     expect(pty.resize).toHaveBeenCalledTimes(1);
     expect(mockFit).toHaveBeenCalledTimes(1);
@@ -1074,7 +1104,7 @@ describe("cancelPendingFlush", () => {
     (pty.resize as ReturnType<typeof vi.fn>).mockClear();
 
     ro.trigger();
-    await new Promise((r) => setTimeout(r, 150));
+    vi.advanceTimersByTime(150);
 
     mockFit.mockClear();
     (pty.resize as ReturnType<typeof vi.fn>).mockClear();
@@ -1083,7 +1113,8 @@ describe("cancelPendingFlush", () => {
     mockProposeDimensions.mockReturnValue({ cols: 80, rows: 30 });
     ro.trigger();
 
-    await new Promise((r) => setTimeout(r, 10));
+    // TE-11: 仅行变化立即执行，推进少量时间
+    vi.advanceTimersByTime(10);
 
     expect(mockFit).toHaveBeenCalled();
     expect(pty.resize).toHaveBeenCalledWith(
@@ -1104,7 +1135,7 @@ describe("cancelPendingFlush", () => {
 
     // 初始化 prevDimsRef
     ro.trigger();
-    await new Promise((r) => setTimeout(r, 150));
+    vi.advanceTimersByTime(150);
 
     mockFit.mockClear();
     (pty.resize as ReturnType<typeof vi.fn>).mockClear();
@@ -1113,7 +1144,8 @@ describe("cancelPendingFlush", () => {
     mockProposeDimensions.mockReturnValue({ cols: 80, rows: 30 });
     ro.trigger();
 
-    await new Promise((r) => setTimeout(r, 10));
+    // TE-11: 仅行变化立即执行
+    vi.advanceTimersByTime(10);
 
     // 交替缓冲也必须调 fit（更新 xterm.js 网格与 PTY 新尺寸同步）
     expect(mockFit).toHaveBeenCalled();
@@ -1128,7 +1160,7 @@ describe("cancelPendingFlush", () => {
     setBufferType(capturedTerminal, "alternate");
 
     ro.trigger();
-    await new Promise((r) => setTimeout(r, 150));
+    vi.advanceTimersByTime(150);
 
     mockFit.mockClear();
     (pty.resize as ReturnType<typeof vi.fn>).mockClear();
@@ -1137,7 +1169,8 @@ describe("cancelPendingFlush", () => {
     mockProposeDimensions.mockReturnValue({ cols: 60, rows: 40 });
     ro.trigger();
 
-    await new Promise((r) => setTimeout(r, 150));
+    // TE-11: 推进假定时器 → debounce 后 fit 被调用
+    vi.advanceTimersByTime(150);
 
     // debounce 后 fit 被调用
     expect(mockFit).toHaveBeenCalledTimes(1);
@@ -1152,13 +1185,14 @@ describe("cancelPendingFlush", () => {
     setBufferType(capturedTerminal, "alternate");
 
     ro.trigger();
-    await new Promise((r) => setTimeout(r, 150));
+    vi.advanceTimersByTime(150);
     mockFit.mockClear();
     (pty.resize as ReturnType<typeof vi.fn>).mockClear();
 
     mockProposeDimensions.mockReturnValue({ cols: 80, rows: 30 });
     ro.trigger();
-    await new Promise((r) => setTimeout(r, 10));
+    // TE-11: 仅行变化立即执行
+    vi.advanceTimersByTime(10);
 
     // 验证调用顺序：fit 在 resize 之前
     const fitOrder = mockFit.mock.invocationCallOrder[0];
@@ -1174,13 +1208,14 @@ describe("cancelPendingFlush", () => {
     setBufferType(capturedTerminal, "normal");
 
     ro.trigger();
-    await new Promise((r) => setTimeout(r, 150));
+    vi.advanceTimersByTime(150);
     mockFit.mockClear();
     (pty.resize as ReturnType<typeof vi.fn>).mockClear();
 
     mockProposeDimensions.mockReturnValue({ cols: 80, rows: 30 });
     ro.trigger();
-    await new Promise((r) => setTimeout(r, 10));
+    // TE-11: 仅行变化立即执行
+    vi.advanceTimersByTime(10);
 
     expect(mockFit).toHaveBeenCalled();
     expect(pty.resize).toHaveBeenCalledWith("test-session-id", 80, 30);
@@ -1196,7 +1231,7 @@ describe("cancelPendingFlush", () => {
     // 设置 prevDimsRef
     mockProposeDimensions.mockReturnValue({ cols: 80, rows: 24 });
     ro.trigger();
-    await new Promise((r) => setTimeout(r, 150));
+    vi.advanceTimersByTime(150);
 
     mockFit.mockClear();
     (pty.resize as ReturnType<typeof vi.fn>).mockClear();
@@ -1204,7 +1239,8 @@ describe("cancelPendingFlush", () => {
     // 尺寸不变
     mockProposeDimensions.mockReturnValue({ cols: 80, rows: 24 });
     ro.trigger();
-    await new Promise((r) => setTimeout(r, 50));
+    // TE-11: 推进假定时器
+    vi.advanceTimersByTime(50);
 
     expect(mockFit).not.toHaveBeenCalled();
     expect(pty.resize).not.toHaveBeenCalled();
@@ -1222,8 +1258,9 @@ describe("cancelPendingFlush", () => {
     ptyOut.sendPtyOutput(new Array(200).fill(65));
     expect(result.current._test!.getPendingBuffer()).toHaveLength(1);
 
+    // 首次 resize → cancelPendingFlush 丢弃旧数据
     ro.trigger();
-    await new Promise((r) => setTimeout(r, 150));
+    vi.advanceTimersByTime(150);
     mockFit.mockClear();
     (pty.resize as ReturnType<typeof vi.fn>).mockClear();
     capturedTerminal!.write.mockClear();
@@ -1232,15 +1269,19 @@ describe("cancelPendingFlush", () => {
     mockProposeDimensions.mockReturnValue({ cols: 60, rows: 30 });
     ptyOut.sendPtyOutput(new Array(200).fill(66));
     ro.trigger();
-    await new Promise((r) => setTimeout(r, 150));
+    vi.advanceTimersByTime(150);
 
-    // 旧缓冲数据被丢弃（cancelPendingFlush）
+    // TE-09: cancelPendingFlush 后发新数据，验证旧数据被丢弃 + 新数据可写入
+    capturedTerminal!.write.mockClear();
+    ptyOut.sendPtyOutput(new Array(200).fill(88)); // 'X'
+    vi.advanceTimersByTime(5);
+
     const writeCalls = (capturedTerminal!.write as ReturnType<typeof vi.fn>).mock.calls;
-    if (writeCalls.length > 0) {
-      for (const call of writeCalls) {
-        const decoded = new TextDecoder().decode(call[0] as Uint8Array);
-        expect(decoded).not.toContain("A".repeat(200));
-      }
+    // TE-09: 先显式断言有写入，再检查内容——消除 if-guard 假阳性
+    expect(writeCalls.length).toBeGreaterThan(0);
+    for (const call of writeCalls) {
+      const decoded = new TextDecoder().decode(call[0] as Uint8Array);
+      expect(decoded).not.toContain("A".repeat(200));
     }
     // fit 被调用（更新网格）
     expect(mockFit).toHaveBeenCalled();

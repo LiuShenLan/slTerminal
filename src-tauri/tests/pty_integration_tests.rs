@@ -23,39 +23,46 @@ fn spawn_cmd() -> (Box<dyn portable_pty::MasterPty + Send>, Box<dyn portable_pty
     (pair.master, child, reader, writer)
 }
 
+/// 轮询读取 PTY 输出直到出现 marker 或超时 10s
+/// 每次读取间隔 50ms 避免忙等
+fn read_until_marker(reader: &mut dyn Read, marker: &str) -> Vec<u8> {
+    let mut output = Vec::new();
+    let start = std::time::Instant::now();
+    let timeout = Duration::from_secs(10);
+    while start.elapsed() < timeout {
+        let mut buf = [0u8; 4096];
+        match reader.read(&mut buf) {
+            Ok(0) => break, // EOF
+            Ok(n) => {
+                output.extend_from_slice(&buf[..n]);
+                if String::from_utf8_lossy(&output).contains(marker) {
+                    return output;
+                }
+            }
+            Err(_) => break,
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    output
+}
+
 /// pty_roundtrip: spawn cmd → 写 echo → 验证输出含目标文本
 #[test]
 fn pty_roundtrip() {
     let (_master, mut child, mut reader, mut writer) = spawn_cmd();
 
-    // 等待 cmd.exe 启动完成（足够长的固定等待）
-    std::thread::sleep(Duration::from_millis(800));
-
-    // 先写入命令（在读取之前，确保 reader 有数据可读）
+    // 写命令（不再固定 sleep 等待启动——写入经 PTY 缓冲，cmd 就绪后自动处理）
     writer.write_all(b"echo hello_test_marker\r\n").unwrap();
     writer.flush().unwrap();
 
-    // 再读取输出：包含 cmd banner + echo 命令 + hello_test_marker
-    let mut output = Vec::new();
-    let start = std::time::Instant::now();
-    while start.elapsed() < Duration::from_secs(10) {
-        let mut buf = [0u8; 4096];
-        match reader.read(&mut buf) {
-            Ok(0) => break, // EOF — cmd 可能已退出
-            Ok(n) => {
-                output.extend_from_slice(&buf[..n]);
-                if String::from_utf8_lossy(&output).contains("hello_test_marker") {
-                    break;
-                }
-            }
-            Err(_) => break,
-        }
-    }
-
+    // 轮询读取输出直到出现 marker（50ms 间隔，上限 10s）
+    let output = read_until_marker(&mut *reader, "hello_test_marker");
     let text = String::from_utf8_lossy(&output);
     assert!(
         text.contains("hello_test_marker"),
-        "PTY 输出应包含 hello_test_marker，实际长度: {}，内容: {}", output.len(), text
+        "PTY 输出应包含 hello_test_marker，实际长度: {}，内容: {}",
+        output.len(),
+        text
     );
 
     drop(writer);
@@ -80,13 +87,22 @@ fn pty_kill_no_orphan() {
     let pid = child.process_id();
     assert!(pid.is_some(), "子进程应有 PID");
     child.kill().unwrap();
-    std::thread::sleep(Duration::from_millis(1000));
-    for _ in 0..5 {
+
+    // 轮询 try_wait 直到进程退出或超时 10s（替代固定 sleep 1s + for 循环）
+    let start = std::time::Instant::now();
+    let timeout = Duration::from_secs(10);
+    loop {
         match child.try_wait() {
             Ok(Some(_)) => break,
-            _ => std::thread::sleep(Duration::from_millis(200)),
+            _ => {
+                if start.elapsed() >= timeout {
+                    panic!("kill 后进程应在 10s 内退出");
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
         }
     }
+    // 退出后再检查一次确保状态一致
     assert!(child.try_wait().unwrap().is_some(), "kill 后进程应退出");
 }
 
@@ -122,28 +138,13 @@ fn pty_spawn_custom_conpty() {
     let pid = child.process_id();
     assert!(pid.is_some(), "子进程应有 PID");
 
-    // 回显验证子进程存活
+    // 回显验证子进程存活（不再固定 sleep 等待启动）
     let mut reader = master.try_clone_reader().expect("try_clone_reader 应成功");
-    std::thread::sleep(std::time::Duration::from_millis(500));
     writer.write_all(b"echo CUSTOM_CONPTY_OK\r\n").unwrap();
     writer.flush().unwrap();
 
-    let mut output = Vec::new();
-    let start = std::time::Instant::now();
-    while start.elapsed() < std::time::Duration::from_secs(10) {
-        let mut buf = [0u8; 4096];
-        match reader.read(&mut buf) {
-            Ok(0) => break,
-            Ok(n) => {
-                output.extend_from_slice(&buf[..n]);
-                if String::from_utf8_lossy(&output).contains("CUSTOM_CONPTY_OK") {
-                    break;
-                }
-            }
-            Err(_) => break,
-        }
-    }
-
+    // 轮询读取输出直到出现 marker（50ms 间隔，上限 10s）
+    let output = read_until_marker(&mut *reader, "CUSTOM_CONPTY_OK");
     let text = String::from_utf8_lossy(&output);
     assert!(
         text.contains("CUSTOM_CONPTY_OK"),
@@ -224,13 +225,27 @@ fn pty_reattach_ring_buffer_replay() {
         }
     });
 
-    // 等待 cmd.exe 启动完成
-    std::thread::sleep(Duration::from_millis(500));
-
     // 3. 写第一阶段命令 → 输出经 reader 线程累积到 ring buffer
     writer.write_all(b"echo REATTACH_P1_MARKER\r\n").unwrap();
     writer.flush().unwrap();
-    std::thread::sleep(Duration::from_millis(1000));
+
+    // 轮询 ring buffer 直到出现 P1 marker（替代固定 sleep）
+    let start = std::time::Instant::now();
+    let timeout = Duration::from_secs(10);
+    loop {
+        let has_marker = {
+            let guard = ring.lock().unwrap();
+            let snapshot: Vec<u8> = guard.iter().copied().collect();
+            String::from_utf8_lossy(&snapshot).contains("REATTACH_P1_MARKER")
+        };
+        if has_marker {
+            break;
+        }
+        if start.elapsed() >= timeout {
+            panic!("ring buffer 应在 10s 内包含 REATTACH_P1_MARKER");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
 
     // 4. "Reattach": drain ring buffer 获取回放数据
     let replay: Vec<u8> = ring.lock().unwrap().drain(..).collect();
@@ -255,7 +270,23 @@ fn pty_reattach_ring_buffer_replay() {
     // 6. 写第二阶段命令 → 验证 reattach 后新输出正常被 reader 线程捕获
     writer.write_all(b"echo REATTACH_P2_MARKER\r\n").unwrap();
     writer.flush().unwrap();
-    std::thread::sleep(Duration::from_millis(1000));
+
+    // 轮询 ring buffer 直到出现 P2 marker（替代固定 sleep）
+    let start = std::time::Instant::now();
+    loop {
+        let has_marker = {
+            let guard = ring.lock().unwrap();
+            let snapshot: Vec<u8> = guard.iter().copied().collect();
+            String::from_utf8_lossy(&snapshot).contains("REATTACH_P2_MARKER")
+        };
+        if has_marker {
+            break;
+        }
+        if start.elapsed() >= timeout {
+            panic!("ring buffer 应在 10s 内包含 REATTACH_P2_MARKER");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
 
     let post_attach: Vec<u8> = ring.lock().unwrap().drain(..).collect();
     let post_text = String::from_utf8_lossy(&post_attach);
@@ -271,9 +302,8 @@ fn pty_reattach_ring_buffer_replay() {
     // ClosePseudoConsole 在 master drop 时调用——这会关闭 ConPTY 管道，
     // reader 线程的 read() 随即返回错误或 EOF，线程退出
     drop(master);
-    // 短暂等待 reader 线程处理管道关闭
-    std::thread::sleep(Duration::from_millis(200));
     drop(ring);
+    // reader 线程在管道关闭后自动退出，直接 join（不再固定 sleep）
     let _ = reader_handle.join();
 }
 
@@ -287,7 +317,6 @@ fn pty_session_isolation() {
     let _lock = SPAWN_LOCK.lock().unwrap();
     use slterminal_lib::pty::{shell, spawn::conpty_custom};
     use std::io::Write as _;
-    use std::time::Duration;
 
     // Session A
     let shell_info =
@@ -314,9 +343,7 @@ fn pty_session_isolation() {
         .expect("spawn_conpty_child B 应成功");
     let mut reader_b = master_b.try_clone_reader().expect("try_clone_reader B 应成功");
 
-    std::thread::sleep(Duration::from_millis(500));
-
-    // Session A 写命令
+    // Session A 写命令（不再固定 sleep 等待启动）
     writer_a.write_all(b"echo SESSION_A_ONLY\r\n").unwrap();
     writer_a.flush().unwrap();
 
@@ -324,54 +351,26 @@ fn pty_session_isolation() {
     writer_b.write_all(b"echo SESSION_B_ONLY\r\n").unwrap();
     writer_b.flush().unwrap();
 
-    std::thread::sleep(Duration::from_millis(1000));
-
-    // 读取 Session A 输出——轮询直到出现 SESSION_A_ONLY marker（同 pty_roundtrip 模式）
-    let mut output_a = Vec::new();
-    let start_a = std::time::Instant::now();
-    while start_a.elapsed() < Duration::from_secs(10) {
-        let mut buf = [0u8; 4096];
-        match reader_a.read(&mut buf) {
-            Ok(0) => break,
-            Ok(n) => {
-                output_a.extend_from_slice(&buf[..n]);
-                if String::from_utf8_lossy(&output_a).contains("SESSION_A_ONLY") {
-                    break;
-                }
-            }
-            Err(_) => break,
-        }
-    }
+    // 读取 Session A 输出——轮询直到出现 marker（50ms 间隔，上限 10s）
+    let output_a = read_until_marker(&mut *reader_a, "SESSION_A_ONLY");
     let text_a = String::from_utf8_lossy(&output_a);
     assert!(
         text_a.contains("SESSION_A_ONLY"),
-        "Session A 输出应包含 SESSION_A_ONLY，实际长度={}，内容: {text_a}", output_a.len()
+        "Session A 输出应包含 SESSION_A_ONLY，实际长度={}，内容: {text_a}",
+        output_a.len()
     );
     assert!(
         !text_a.contains("SESSION_B_ONLY"),
         "Session A 输出不应包含 Session B 的 marker（输出隔离）"
     );
 
-    // 读取 Session B 输出——轮询直到出现 SESSION_B_ONLY marker
-    let mut output_b = Vec::new();
-    let start_b = std::time::Instant::now();
-    while start_b.elapsed() < Duration::from_secs(10) {
-        let mut buf = [0u8; 4096];
-        match reader_b.read(&mut buf) {
-            Ok(0) => break,
-            Ok(n) => {
-                output_b.extend_from_slice(&buf[..n]);
-                if String::from_utf8_lossy(&output_b).contains("SESSION_B_ONLY") {
-                    break;
-                }
-            }
-            Err(_) => break,
-        }
-    }
+    // 读取 Session B 输出——轮询直到出现 marker（50ms 间隔，上限 10s）
+    let output_b = read_until_marker(&mut *reader_b, "SESSION_B_ONLY");
     let text_b = String::from_utf8_lossy(&output_b);
     assert!(
         text_b.contains("SESSION_B_ONLY"),
-        "Session B 输出应包含 SESSION_B_ONLY，实际长度={}，内容: {text_b}", output_b.len()
+        "Session B 输出应包含 SESSION_B_ONLY，实际长度={}，内容: {text_b}",
+        output_b.len()
     );
 
     // 清理：先 ClosePseudoConsole 再 drop reader（避免读端阻塞）

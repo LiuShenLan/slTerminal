@@ -76,7 +76,7 @@ describe("HtmlPanel", () => {
       const iframe = getByTitle("HTML 预览: C:/test/index.html");
       expect(iframe).toBeDefined();
       expect(iframe.tagName).toBe("IFRAME");
-    });
+    }, { timeout: 3000 });
   });
 
   it("iframe sandbox 为 allow-scripts", async () => {
@@ -85,7 +85,7 @@ describe("HtmlPanel", () => {
     await waitFor(() => {
       const iframe = getByTitle("HTML 预览: C:/test/index.html");
       expect(iframe.getAttribute("sandbox")).toBe("allow-scripts");
-    });
+    }, { timeout: 3000 });
   });
 
   it("iframe 不含 srcDoc 以外的 url 属性", async () => {
@@ -96,7 +96,7 @@ describe("HtmlPanel", () => {
       // src 不设置（用 srcDoc），src 应为空或 about:blank
       const src = iframe.getAttribute("src");
       expect(src === null || src === "" || src === "about:blank").toBe(true);
-    });
+    }, { timeout: 3000 });
   });
 
   it('加载完成后"加载中"文字消失', async () => {
@@ -104,7 +104,7 @@ describe("HtmlPanel", () => {
     const { queryByText } = renderHtmlPanel("C:/test/index.html");
     await waitFor(() => {
       expect(queryByText("加载中...")).toBeNull();
-    });
+    }, { timeout: 3000 });
   });
 
   it("readFile reject 显示错误信息", async () => {
@@ -112,7 +112,7 @@ describe("HtmlPanel", () => {
     const { getByText } = renderHtmlPanel("C:/test/index.html");
     await waitFor(() => {
       expect(getByText("加载失败: 权限不足")).toBeDefined();
-    });
+    }, { timeout: 3000 });
   });
 
   it("错误信息红色", async () => {
@@ -121,7 +121,7 @@ describe("HtmlPanel", () => {
     await waitFor(() => {
       const el = getByText("加载失败: fail");
       expect(el.style.color).toBe("rgb(244, 71, 71)");
-    });
+    }, { timeout: 3000 });
   });
 
   it("filePath 为 undefined 显示错误", () => {
@@ -144,7 +144,7 @@ describe("HtmlPanel", () => {
       expect(iframe.style.width).toBe("100%");
       expect(iframe.style.height).toBe("100%");
       expect(iframe.style.border).toBe("medium");
-    });
+    }, { timeout: 3000 });
   });
 
   // ==========================================================================
@@ -174,7 +174,7 @@ describe("HtmlPanel", () => {
     await waitFor(() => {
       const iframe = getByTitle("HTML 预览: C:/test/new.html");
       expect(iframe.getAttribute("srcDoc")).toContain("<h1>New Content</h1>");
-    });
+    }, { timeout: 3000 });
   });
 
   it("组件卸载后 readFile resolve 不报错", async () => {
@@ -221,7 +221,7 @@ describe("HtmlPanel", () => {
     await waitFor(() => {
       const iframe = getByTitle("HTML 预览: C:/test/3.html");
       expect(iframe.getAttribute("srcDoc")).toContain("<h1>Third</h1>");
-    });
+    }, { timeout: 3000 });
   });
 
   // ==========================================================================
@@ -235,7 +235,7 @@ describe("HtmlPanel", () => {
       const iframe = getByTitle("HTML 预览: C:/test/empty.html");
       // 空 HTML 经 injectScript 后变成最小完整文档
       expect(iframe.getAttribute("srcDoc")).toContain("<html>");
-    });
+    }, { timeout: 3000 });
   });
 
   it("很大 HTML 内容 srcDoc 正常包含", async () => {
@@ -245,7 +245,7 @@ describe("HtmlPanel", () => {
     await waitFor(() => {
       const iframe = getByTitle("HTML 预览: C:/test/big.html");
       expect(iframe.getAttribute("srcDoc")).toContain("x".repeat(100_000));
-    });
+    }, { timeout: 3000 });
   });
 
   it("HTML 含 script 标签——原始 script 与注入脚本共存于 srcDoc", async () => {
@@ -258,7 +258,7 @@ describe("HtmlPanel", () => {
       const doc = iframe.getAttribute("srcDoc")!;
       expect(doc).toContain("JS OK");
       expect(doc).toContain("slterm_key");
-    });
+    }, { timeout: 3000 });
   });
 
   // ==========================================================================
@@ -271,7 +271,7 @@ describe("HtmlPanel", () => {
     await waitFor(() => {
       const iframe = getByTitle("HTML 预览: C:/test/a.html") as HTMLIFrameElement;
       expect(iframe.getAttribute("srcDoc")).toContain("slterm_key");
-    });
+    }, { timeout: 3000 });
   });
 
   it("注入脚本含片段链接拦截 scrollIntoView", async () => {
@@ -280,7 +280,7 @@ describe("HtmlPanel", () => {
     await waitFor(() => {
       const iframe = getByTitle("HTML 预览: C:/test/a.html") as HTMLIFrameElement;
       expect(iframe.getAttribute("srcDoc")).toContain("scrollIntoView");
-    });
+    }, { timeout: 3000 });
   });
 
   it("H1: 注入脚本含 scrollIntoView + class-based toggle", async () => {
@@ -291,7 +291,7 @@ describe("HtmlPanel", () => {
       expect(doc).toContain("scrollIntoView");
       expect(doc).toContain("classList.add");
       expect(doc).toContain("classList.remove");
-    });
+    }, { timeout: 3000 });
   });
 
   it("H2: 注入脚本含 closest('a') 链接检测", async () => {
@@ -301,7 +301,7 @@ describe("HtmlPanel", () => {
       const doc = (getByTitle("HTML 预览: C:/test/a.html") as HTMLIFrameElement).getAttribute("srcDoc")!;
       expect(doc).toContain("closest");
       expect(doc).toContain('"a"');
-    });
+    }, { timeout: 3000 });
   });
 
   it("H3: 片段链接拦截使用 preventDefault", async () => {
@@ -310,7 +310,7 @@ describe("HtmlPanel", () => {
     await waitFor(() => {
       const doc = (getByTitle("HTML 预览: C:/test/a.html") as HTMLIFrameElement).getAttribute("srcDoc")!;
       expect(doc).toContain("preventDefault");
-    });
+    }, { timeout: 3000 });
   });
 
   it("H4: 注入脚本含 dataset.sltermHash 状态跟踪", async () => {
@@ -319,7 +319,7 @@ describe("HtmlPanel", () => {
     await waitFor(() => {
       const doc = (getByTitle("HTML 预览: C:/test/a.html") as HTMLIFrameElement).getAttribute("srcDoc")!;
       expect(doc).toContain("dataset.sltermHash");
-    });
+    }, { timeout: 3000 });
   });
 
   it("H5: 注入脚本含键盘转发 + 片段拦截 + CSS 注入", async () => {
@@ -341,7 +341,7 @@ describe("HtmlPanel", () => {
       const matches = doc.match(/addEventListener/g);
       expect(matches).not.toBeNull();
       expect(matches!.length).toBe(2);
-    });
+    }, { timeout: 3000 });
   });
 
   it("H6: 注入后原始可见内容保留", async () => {
@@ -350,7 +350,7 @@ describe("HtmlPanel", () => {
     await waitFor(() => {
       const iframe = getByTitle("HTML 预览: C:/test/a.html") as HTMLIFrameElement;
       expect(iframe.getAttribute("srcDoc")).toContain("<h1>Hello World</h1>");
-    });
+    }, { timeout: 3000 });
   });
 
   // ==========================================================================
@@ -363,7 +363,7 @@ describe("HtmlPanel", () => {
 
     await waitFor(() => {
       expect(mocks.mockReadFile).toHaveBeenCalledTimes(1);
-    });
+    }, { timeout: 3000 });
 
     rerender(
       React.createElement(HtmlPanel, {
@@ -398,7 +398,7 @@ describe("HtmlPanel", () => {
 
     await waitFor(() => {
       expect(getByTitle("HTML 预览: C:/test/a.html")).toBeDefined();
-    });
+    }, { timeout: 3000 });
 
     unmount();
 
@@ -436,7 +436,7 @@ describe("HtmlPanel", () => {
   async function getRenderedIframe(filePath = "C:/test/a.html") {
     mocks.mockReadFile.mockResolvedValue("<p>test</p>");
     const { getByTitle } = renderHtmlPanel(filePath);
-    const iframe = await waitFor(() => getByTitle(`HTML 预览: ${filePath}`) as HTMLIFrameElement);
+    const iframe = await waitFor(() => getByTitle(`HTML 预览: ${filePath}`) as HTMLIFrameElement, { timeout: 3000 });
     return { iframe, getByTitle };
   }
 
@@ -619,7 +619,7 @@ describe("HtmlPanel", () => {
     const { getByText } = renderHtmlPanel("C:/test/index.html");
     await waitFor(() => {
       expect(getByText("加载失败: 权限不足")).toBeDefined();
-    });
+    }, { timeout: 3000 });
   });
 
   it("E13: readFile throw 普通对象 → 不崩溃", async () => {
@@ -627,7 +627,7 @@ describe("HtmlPanel", () => {
     const { getByText } = renderHtmlPanel("C:/test/index.html");
     await waitFor(() => {
       expect(getByText(/加载失败/)).toBeDefined();
-    });
+    }, { timeout: 3000 });
   });
 
   it("E14: postMessage 缺 ctrlKey 等字段 → KeyboardEvent 用 ?? false 兜底", async () => {

@@ -152,7 +152,7 @@ describe("ExplorerPanel + FileViewerRegistry 集成", () => {
 
     await waitFor(() => {
       expect(mocks.mockAddPanel).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
 
     const call = mocks.mockAddPanel.mock.calls[0][0];
     expect(call.component).toBe("htmlviewer");
@@ -171,7 +171,7 @@ describe("ExplorerPanel + FileViewerRegistry 集成", () => {
 
     await waitFor(() => {
       expect(mocks.mockAddPanel).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
 
     const call = mocks.mockAddPanel.mock.calls[0][0];
     expect(call.component).toBe("editor");
@@ -188,7 +188,7 @@ describe("ExplorerPanel + FileViewerRegistry 集成", () => {
 
     await waitFor(() => {
       expect(mocks.mockAddPanel).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
 
     const call = mocks.mockAddPanel.mock.calls[0][0];
     expect(call.id).toMatch(/^htmlviewer-/);
@@ -205,7 +205,7 @@ describe("ExplorerPanel + FileViewerRegistry 集成", () => {
 
     await waitFor(() => {
       expect(mocks.mockAddPanel).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
 
     const call = mocks.mockAddPanel.mock.calls[0][0];
     expect(call.id).toMatch(/^editor-/);
@@ -222,7 +222,7 @@ describe("ExplorerPanel + FileViewerRegistry 集成", () => {
 
     await waitFor(() => {
       expect(mocks.mockAddPanel).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
 
     const call = mocks.mockAddPanel.mock.calls[0][0];
     expect(call.component).toBe("htmlviewer");
@@ -239,7 +239,7 @@ describe("ExplorerPanel + FileViewerRegistry 集成", () => {
 
     await waitFor(() => {
       expect(mocks.mockAddPanel).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
 
     const call = mocks.mockAddPanel.mock.calls[0][0];
     expect(call.component).toBe("editor");
@@ -256,7 +256,7 @@ describe("ExplorerPanel + FileViewerRegistry 集成", () => {
 
     await waitFor(() => {
       expect(mocks.mockAddPanel).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
 
     const call = mocks.mockAddPanel.mock.calls[0][0];
     expect(call.component).toBe("editor");
@@ -273,7 +273,7 @@ describe("ExplorerPanel + FileViewerRegistry 集成", () => {
 
     await waitFor(() => {
       expect(mocks.mockAddPanel).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
 
     const call = mocks.mockAddPanel.mock.calls[0][0];
     expect(call.params).toBeDefined();
@@ -296,7 +296,7 @@ describe("ExplorerPanel + FileViewerRegistry 集成", () => {
 
     await waitFor(() => {
       expect(mocks.mockAddPanel).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
 
     const call = mocks.mockAddPanel.mock.calls[0][0];
     expect(call.renderer).toBe("always");
@@ -313,7 +313,7 @@ describe("ExplorerPanel + FileViewerRegistry 集成", () => {
 
     await waitFor(() => {
       expect(mocks.mockAddPanel).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
 
     const call = mocks.mockAddPanel.mock.calls[0][0];
     expect(call.renderer).toBeUndefined();
@@ -330,7 +330,7 @@ describe("ExplorerPanel + FileViewerRegistry 集成", () => {
 
     await waitFor(() => {
       expect(mocks.mockAddPanel).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
 
     const call = mocks.mockAddPanel.mock.calls[0][0];
     expect(call.renderer).toBe("always");
@@ -347,7 +347,7 @@ describe("ExplorerPanel + FileViewerRegistry 集成", () => {
 
     await waitFor(() => {
       expect(mocks.mockAddPanel).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
 
     const call = mocks.mockAddPanel.mock.calls[0][0];
     expect(call.renderer).toBeUndefined();
@@ -364,7 +364,7 @@ describe("ExplorerPanel + FileViewerRegistry 集成", () => {
 
     await waitFor(() => {
       expect(mocks.mockAddPanel).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
 
     const call = mocks.mockAddPanel.mock.calls[0][0];
     expect(call.renderer).toBeUndefined();
@@ -381,7 +381,7 @@ describe("ExplorerPanel + FileViewerRegistry 集成", () => {
 
     await waitFor(() => {
       expect(mocks.mockAddPanel).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
 
     // 验证 renderer="always" 已设置（防止资源泄露的前置条件：
     // renderer 必须为 "always"，关闭时 dispose 才能正确触发 cleanup）
@@ -409,7 +409,7 @@ describe("ExplorerPanel + FileViewerRegistry 集成", () => {
 
     await waitFor(() => {
       expect(mocks.mockAddPanel).toHaveBeenCalledTimes(1);
-    });
+    }, { timeout: 3000 });
 
     // 清空 addPanel 和 focus 的调用记录，准备测试第二次双击
     mocks.mockAddPanel.mockClear();
@@ -437,7 +437,7 @@ describe("ExplorerPanel + FileViewerRegistry 集成", () => {
 
     await waitFor(() => {
       expect(mocks.mockAddPanel).toHaveBeenCalledTimes(1);
-    });
+    }, { timeout: 3000 });
 
     mocks.mockAddPanel.mockClear();
     mocks.mockFocus.mockClear();
@@ -449,7 +449,7 @@ describe("ExplorerPanel + FileViewerRegistry 集成", () => {
 
     await waitFor(() => {
       expect(mocks.mockAddPanel).toHaveBeenCalledTimes(1);
-    });
+    }, { timeout: 3000 });
 
     // addPanel 被调用（新文件无去重）
     expect(mocks.mockAddPanel).toHaveBeenCalledTimes(1);

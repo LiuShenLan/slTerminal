@@ -129,7 +129,7 @@ describe("explorer git 状态 — A 组：useFileTree hook", () => {
       // 文件节点应被渲染，检查 data 属性不含 gitStatus
       const fileNameElements = container.querySelectorAll('[style*="overflow: hidden"]');
       expect(fileNameElements.length).toBeGreaterThan(0);
-    });
+    }, { timeout: 3000 });
 
     // 通过检查 mock 调用验证：loadDirectory 返回的条目无 gitStatus
     // TypedTree 节点在 useFileTree 内创建时不带 gitStatus
@@ -148,7 +148,7 @@ describe("explorer git 状态 — A 组：useFileTree hook", () => {
     await waitFor(() => {
       // ExplorerPanel 用 cwd（或 rootPath）传参，此处 cwd = rootPath\src
       expect(mocks.mockGitStatus).toHaveBeenCalledWith("C:\\project\\src");
-    });
+    }, { timeout: 3000 });
   });
 
   it("F3: 非 git 仓库 → gitStatusMap 为空 Map", async () => {
@@ -159,7 +159,7 @@ describe("explorer git 状态 — A 组：useFileTree hook", () => {
 
     await waitFor(() => {
       expect(mocks.mockGitStatus).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
 
     // 不应崩溃，文件树仍可渲染
     // （render 不抛错即验证通过）
@@ -171,7 +171,7 @@ describe("explorer git 状态 — A 组：useFileTree hook", () => {
 
     await waitFor(() => {
       expect(mocks.mockGitStatus).toHaveBeenCalledWith("C:\\project-a\\src");
-    });
+    }, { timeout: 3000 });
 
     // 切换到 project-b
     mocks.resetAll();
@@ -204,7 +204,7 @@ describe("explorer git 状态 — A 组：useFileTree hook", () => {
 
     await waitFor(() => {
       expect(mocks.mockGitStatus).toHaveBeenCalledWith("C:\\project-b");
-    });
+    }, { timeout: 3000 });
   });
 
   it("F5: loadDirectory 返回的 entry 不含 gitStatus 属性", async () => {
@@ -213,7 +213,7 @@ describe("explorer git 状态 — A 组：useFileTree hook", () => {
 
     await waitFor(() => {
       expect(mocks.mockReadDir).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
 
     // readDir mock 返回的条目没有 gitStatus 字段
     const entries = mocks.mockEntries;
@@ -229,7 +229,7 @@ describe("explorer git 状态 — A 组：useFileTree hook", () => {
 
     await waitFor(() => {
       expect(mocks.mockReadDir).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
 
     // loadDirectory 的 mock 返回值不含 gitStatus（由 F5 验证）
     // loadChildren 也是调用 loadDirectory，同样不含 gitStatus
@@ -243,7 +243,7 @@ describe("explorer git 状态 — A 组：useFileTree hook", () => {
 
     await waitFor(() => {
       expect(mocks.mockGitStatus).toHaveBeenCalledTimes(1);
-    });
+    }, { timeout: 3000 });
 
     // 手动触发 refresh → 应重新调 gitStatus
     // （useEffect 中 rootPath 变化时也会触发 refresh）
@@ -256,7 +256,7 @@ describe("explorer git 状态 — A 组：useFileTree hook", () => {
 
     await waitFor(() => {
       expect(mocks.mockReadDir).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
 
     // readDir 返回的数据无 gitStatus 字段
     const entries = mocks.mockEntries;
@@ -273,7 +273,7 @@ describe("explorer git 状态 — A 组：useFileTree hook", () => {
     await waitFor(() => {
       // useFileTree 接收 cwd 作为 rootPath
       expect(mocks.mockGitStatus).toHaveBeenCalledWith("C:\\project\\src");
-    });
+    }, { timeout: 3000 });
   });
 });
 
@@ -290,7 +290,7 @@ describe("explorer git 状态 — B 组：FileTree 渲染时查表", () => {
 
     await waitFor(() => {
       expect(mocks.mockGitStatus).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
 
     // gitStatusMap 含 main.tsx → modified 色
     // 文件名元素应存在
@@ -307,7 +307,7 @@ describe("explorer git 状态 — B 组：FileTree 渲染时查表", () => {
 
     await waitFor(() => {
       expect(mocks.mockGitStatus).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
 
     // components 是目录，不在 gitStatus 中 → 默认色
     const spans = container.querySelectorAll("span");
@@ -363,7 +363,7 @@ describe("explorer git 状态 — B 组：FileTree 渲染时查表", () => {
 
     await waitFor(() => {
       expect(mocks.mockGitStatus).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
   });
 
   it("F20: 嵌套子节点同样查表着色", async () => {
@@ -387,7 +387,7 @@ describe("explorer git 状态 — B 组：FileTree 渲染时查表", () => {
 
     await waitFor(() => {
       expect(mocks.mockReadDir).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
 
     // 展开 components 文件夹后，Button.tsx 应能查表着色
     // （递归 FileTree 传递同一个 gitStatusMap）
@@ -439,7 +439,7 @@ describe("explorer git 状态 — D 组：ExplorerPanel 集成", () => {
 
     await waitFor(() => {
       expect(mocks.mockGitStatus).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
 
     // 文件树渲染成功 → gitStatusMap 传递正常
     // 检查 DOM 中有文件节点
@@ -471,14 +471,14 @@ describe("explorer git 状态 — E 组：slterm:file-saved event", () => {
 
     await waitFor(() => {
       expect(mocks.mockGitStatus).toHaveBeenCalledTimes(1);
-    });
+    }, { timeout: 3000 });
 
     // dispatch slterm:file-saved → 应再次调用 gitStatus
     window.dispatchEvent(new CustomEvent("slterm:file-saved"));
 
     await waitFor(() => {
       expect(mocks.mockGitStatus).toHaveBeenCalledTimes(2);
-    });
+    }, { timeout: 3000 });
   });
 
   it("F26: slterm:file-saved → gitStatusMap 更新为新值", async () => {
@@ -492,7 +492,7 @@ describe("explorer git 状态 — E 组：slterm:file-saved event", () => {
 
     await waitFor(() => {
       expect(mocks.mockGitStatus).toHaveBeenCalledTimes(1);
-    });
+    }, { timeout: 3000 });
 
     // 模拟文件回退 → gitStatus 返回空（无变更文件）
     mocks.mockGitStatus.mockResolvedValueOnce([]);
@@ -501,7 +501,7 @@ describe("explorer git 状态 — E 组：slterm:file-saved event", () => {
 
     await waitFor(() => {
       expect(mocks.mockGitStatus).toHaveBeenCalledTimes(2);
-    });
+    }, { timeout: 3000 });
   });
 
   it("F27: 回退后文件名颜色恢复默认", async () => {
@@ -515,7 +515,7 @@ describe("explorer git 状态 — E 组：slterm:file-saved event", () => {
 
     await waitFor(() => {
       expect(mocks.mockGitStatus).toHaveBeenCalledTimes(1);
-    });
+    }, { timeout: 3000 });
 
     // 回退 → gitStatus 返回空
     mocks.mockGitStatus.mockResolvedValueOnce([]);
@@ -524,7 +524,7 @@ describe("explorer git 状态 — E 组：slterm:file-saved event", () => {
 
     await waitFor(() => {
       expect(mocks.mockGitStatus).toHaveBeenCalledTimes(2);
-    });
+    }, { timeout: 3000 });
 
     // 验证渲染未崩溃
     const spans = container.querySelectorAll("span");

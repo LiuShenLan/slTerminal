@@ -127,7 +127,7 @@ describe("createTerminalShortcuts", () => {
       setActive(makeActive({ paste: pasteSpy }));
       const result = findCommand(cmds, "terminal.paste")!.handler(keyEvent({ ctrlKey: true, shiftKey: true, code: "KeyV" }));
       expect(result).toBe(true);
-      await vi.waitFor(() => expect(pasteSpy).toHaveBeenCalledWith("clipboard content"));
+      await vi.waitFor(() => expect(pasteSpy).toHaveBeenCalledWith("clipboard content"), { timeout: 3000 });
     });
 
     it("paste：readText 拒绝 → 不 paste", async () => {

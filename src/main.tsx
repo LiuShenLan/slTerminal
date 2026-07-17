@@ -26,7 +26,6 @@ async function bootstrap() {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       console.error("[slTerminal]", msg);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- innerHTML 赋值不需要类型安全
       document.body.innerHTML =
         `<div style="display:flex;align-items:center;justify-content:center;height:100vh;` +
         `background:#1e1e1e;color:#f44747;font-family:monospace;font-size:14px;padding:20px;">` +

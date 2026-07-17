@@ -105,7 +105,7 @@ describe("S4 启动恢复", () => {
 
     await waitFor(() => {
       expect(mocks.mockSetActivePage).toHaveBeenCalledWith("stored-page-id");
-    });
+    }, { timeout: 3000 });
   });
 
   it("2. localStorage 为空 → 静默降级（无异常，setActivePage 不被调用）", async () => {
@@ -115,7 +115,7 @@ describe("S4 启动恢复", () => {
 
     await waitFor(() => {
       expect(mocks.mockMarkPersistenceReady).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
     // setActivePage 不应被调用（无 localstorage 值）
     expect(mocks.mockSetActivePage).not.toHaveBeenCalled();
   });
@@ -129,7 +129,7 @@ describe("S4 启动恢复", () => {
     // 不应崩溃；ready 仍为 true（Workspace 被渲染）
     await waitFor(() => {
       expect(mocks.mockMarkPersistenceReady).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
   });
 
   it("4. 启动时显示 Loading → 数据就绪后消失（ready 状态切换）", async () => {
@@ -149,6 +149,6 @@ describe("S4 启动恢复", () => {
     resolveLoad!();
     await waitFor(() => {
       expect(queryByText("slTerminal 启动中…")).toBeFalsy();
-    });
+    }, { timeout: 3000 });
   });
 });

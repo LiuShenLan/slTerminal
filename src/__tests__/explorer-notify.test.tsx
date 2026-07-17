@@ -3,9 +3,9 @@
 // 验证：项目根路径变化时 ExplorerPanel 调用 startWatch 启动文件监听。
 // 使用 mock ipc/notify + 真实 stores，遵循 sidebar-actions 模式。
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import React from "react";
-import { render, cleanup, renderHook, waitFor, act } from "@testing-library/react";
+import { render, cleanup, renderHook, act } from "@testing-library/react";
 
 // ─── 共享 mock（通过 setup.ts 注册到 globalThis，vi.hoisted 中可用）───
 import { mockEntry } from "./helpers/vfs";
@@ -242,6 +242,11 @@ describe("useFileTree 状态转换", () => {
       mockEntry("README.md", false, "/test/README.md"),
     ]);
     mocks.mockGitStatus.mockResolvedValue([]);
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   describe("loadRoot 状态转换", () => {
@@ -251,9 +256,9 @@ describe("useFileTree 状态转换", () => {
       // 初始状态：空数组（异步加载中）
       expect(result.current.rootNodes).toEqual([]);
 
-      await waitFor(() => {
+      await vi.waitFor(() => {
         expect(result.current.rootNodes.length).toBe(3);
-      });
+      }, { timeout: 3000 });
 
       expect(mocks.mockReadDir).toHaveBeenCalledWith("/test");
       expect(mocks.mockReadDir).toHaveBeenCalledTimes(1);
@@ -273,8 +278,8 @@ describe("useFileTree 状态转换", () => {
       // 同步设置为空
       expect(result.current.rootNodes).toEqual([]);
 
-      // 等待异步完成，确保 readDir 未被调用
-      await new Promise((r) => setTimeout(r, 50));
+      // 推进时间，确保 readDir 未被调用
+      await vi.advanceTimersByTimeAsync(50);
       expect(mocks.mockReadDir).not.toHaveBeenCalled();
     });
 
@@ -284,9 +289,9 @@ describe("useFileTree 状态转换", () => {
         { initialProps: { rootPath: "/test" as string | null } },
       );
 
-      await waitFor(() => {
+      await vi.waitFor(() => {
         expect(result.current.rootNodes.length).toBe(3);
-      });
+      }, { timeout: 3000 });
       expect(mocks.mockReadDir).toHaveBeenCalledWith("/test");
 
       // 变更 rootPath
@@ -298,9 +303,9 @@ describe("useFileTree 状态转换", () => {
 
       rerender({ rootPath: "/other" });
 
-      await waitFor(() => {
+      await vi.waitFor(() => {
         expect(result.current.rootNodes.length).toBe(2);
-      });
+      }, { timeout: 3000 });
       expect(mocks.mockReadDir).toHaveBeenCalledWith("/other");
     });
   });
@@ -321,9 +326,9 @@ describe("useFileTree 状态转换", () => {
 
       const { result } = renderHook(() => useFileTree({ rootPath: "/test" }));
 
-      await waitFor(() => {
+      await vi.waitFor(() => {
         expect(result.current.rootNodes.length).toBe(3);
-      });
+      }, { timeout: 3000 });
 
       const gitBefore = mocks.mockGitStatus.mock.calls.length;
 
@@ -367,9 +372,9 @@ describe("useFileTree 状态转换", () => {
 
       const { result } = renderHook(() => useFileTree({ rootPath: "/test" }));
 
-      await waitFor(() => {
+      await vi.waitFor(() => {
         expect(result.current.rootNodes.length).toBe(1);
-      });
+      }, { timeout: 3000 });
 
       // 展开
       await act(async () => {
@@ -399,9 +404,9 @@ describe("useFileTree 状态转换", () => {
       const { result } = renderHook(() => useFileTree({ rootPath: "/test" }));
 
       // loadDirectory 的 catch 分支静默返回 []
-      await waitFor(() => {
+      await vi.waitFor(() => {
         expect(mocks.mockReadDir).toHaveBeenCalled();
-      });
+      }, { timeout: 3000 });
 
       expect(result.current.rootNodes).toEqual([]);
     });

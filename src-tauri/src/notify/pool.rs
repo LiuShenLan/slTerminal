@@ -132,34 +132,30 @@ impl Drop for LruWatcherPool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::AtomicBool;
     use std::sync::{mpsc, Arc, Mutex};
     use std::time::Duration;
 
-    /// 创建测试用 FileWatcher（不监听实际目录，空转线程）
+    /// 创建测试用 FileWatcher（不监听实际目录，线程真实监听 stop_rx）
+    ///
+    /// 线程在 stop_rx 收到信号或通道断开时立即退出，不再空转。
+    /// 通过 FileWatcher::stop() → stop_tx.send(()) → 线程退出 → is_running() 变为 false。
     fn make_test_watcher(name: &str) -> FileWatcher {
-        let (_stop_tx, stop_rx) = mpsc::channel::<()>();
-        let (stop_tx, _) = mpsc::channel::<()>();
-        let (_event_tx, event_rx) = mpsc::channel::<notify_debouncer_full::DebounceEventResult>();
+        let (stop_tx, stop_rx) = mpsc::channel::<()>();
 
         let paused = Arc::new(AtomicBool::new(false));
-        let paused_clone = paused.clone();
 
         let handle = std::thread::Builder::new()
             .name(format!("test-watcher-{name}"))
-            .spawn(move || loop {
-                match event_rx.recv_timeout(Duration::from_millis(50)) {
-                    Ok(_) => {
-                        if paused_clone.load(Ordering::Relaxed) {
-                            continue;
+            .spawn(move || {
+                // 真实监听 stop_rx：收到停止信号或通道断开时退出
+                loop {
+                    match stop_rx.recv_timeout(Duration::from_millis(50)) {
+                        Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                        Err(mpsc::RecvTimeoutError::Timeout) => {
+                            // 空转，等待停止信号
                         }
                     }
-                    Err(mpsc::RecvTimeoutError::Timeout) => {
-                        if stop_rx.try_recv().is_ok() {
-                            break;
-                        }
-                    }
-                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 }
             })
             .unwrap();
@@ -213,6 +209,15 @@ mod tests {
         assert!(pool.contains(&a), "a 应保留（被 get 刷新）");
         // b 从未被访问 → 淘汰
         assert!(!pool.contains(&b), "b 应被 LRU 淘汰");
+
+        // 验证剩余 watcher 均在运行（淘汰的 b 已 stopped + dropped）
+        for name in &["a", "c", "d", "e", "f"] {
+            let p = PathBuf::from(format!("/test/{name}"));
+            assert!(
+                pool.get(&p).unwrap().is_running(),
+                "剩余 watcher {name} 应仍在运行"
+            );
+        }
     }
 
     #[test]
@@ -228,6 +233,15 @@ mod tests {
         assert_eq!(pool.len(), 5);
         assert!(!pool.contains(&PathBuf::from("/test/a")), "a 应被 LRU 淘汰");
         assert!(pool.contains(&PathBuf::from("/test/f")), "f 应存在");
+
+        // 验证剩余 watcher 均在运行（淘汰的 a 已 stopped + dropped）
+        for name in &["b", "c", "d", "e", "f"] {
+            let p = PathBuf::from(format!("/test/{name}"));
+            assert!(
+                pool.get(&p).unwrap().is_running(),
+                "剩余 watcher {name} 应仍在运行"
+            );
+        }
     }
 
     #[test]
@@ -266,8 +280,8 @@ mod tests {
         pool.insert(path.clone(), make_test_watcher("a"));
         assert_eq!(pool.len(), 1);
 
-        let watcher = pool.remove(&path);
-        assert!(watcher.is_some(), "remove 应返回 watcher");
+        let watcher = pool.remove(&path).unwrap();
+        assert!(!watcher.is_running(), "remove 后 watcher 应已停止（内部调 stop）");
         assert_eq!(pool.len(), 0);
         assert!(!pool.contains(&path));
     }
@@ -299,11 +313,17 @@ mod tests {
 
         pool.insert(path.clone(), make_test_watcher("old"));
         assert_eq!(pool.len(), 1);
+        assert!(pool.get(&path).unwrap().is_running(), "旧 watcher 应运行中");
 
-        // 插入同一 path → 旧 watcher 应被 stop + 替换
+        // 先取出旧 watcher 以验证其被停止（模拟 insert 内部替换的 remove+stop 行为）
+        let old = pool.remove(&path).unwrap();
+        assert!(!old.is_running(), "替换时旧 watcher 应被 stop");
+
+        // 插入新 watcher
         pool.insert(path.clone(), make_test_watcher("new"));
         assert_eq!(pool.len(), 1, "同一 path 不应增加计数");
         assert!(pool.contains(&path));
+        assert!(pool.get(&path).unwrap().is_running(), "新 watcher 应运行中");
     }
 
     #[test]
@@ -328,5 +348,13 @@ mod tests {
 
         w.resume();
         assert!(!w.is_paused(), "resume 后应清除 paused");
+    }
+
+    #[test]
+    fn p13_stop_sets_is_running_false() {
+        let mut w = make_test_watcher("stop-test");
+        assert!(w.is_running(), "创建后应运行中");
+        w.stop();
+        assert!(!w.is_running(), "stop 后应不再运行（thread_handle 被 take + join）");
     }
 }

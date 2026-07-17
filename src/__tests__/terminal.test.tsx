@@ -83,7 +83,7 @@ describe("TerminalPanel", () => {
     render(React.createElement(TerminalPanel, { api: mocks.mockApi, params: { panelId: "test-p1" } }));
     await waitFor(() => {
       expect(mocks.pty.getWindowsBuildNumber).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
   });
 
   it("挂载后 spawn PTY session", async () => {

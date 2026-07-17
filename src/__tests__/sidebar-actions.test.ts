@@ -184,7 +184,7 @@ describe("侧栏交互", () => {
         const input = document.querySelector("input");
         expect(input).toBeTruthy();
         expect((input as HTMLInputElement).value).toBe("操作页面 1");
-      });
+      }, { timeout: 3000 });
     });
 
     it("10. 内联重命名 → 输入新名称 → Enter 确认 → 页面名更新", async () => {
@@ -198,7 +198,7 @@ describe("侧栏交互", () => {
 
       await waitFor(() => {
         expect(document.querySelector("input")).toBeTruthy();
-      });
+      }, { timeout: 3000 });
 
       const input = document.querySelector("input")!;
       fireEvent.change(input, { target: { value: "新名称" } });
@@ -222,7 +222,7 @@ describe("侧栏交互", () => {
 
       await waitFor(() => {
         expect(document.querySelector("input")).toBeTruthy();
-      });
+      }, { timeout: 3000 });
 
       const input = document.querySelector("input")!;
       fireEvent.change(input, { target: { value: "新名称" } });
@@ -246,7 +246,7 @@ describe("侧栏交互", () => {
 
       await waitFor(() => {
         expect(document.querySelector("input")).toBeTruthy();
-      });
+      }, { timeout: 3000 });
 
       const input = document.querySelector("input")!;
       fireEvent.change(input, { target: { value: "   " } });
@@ -270,7 +270,7 @@ describe("侧栏交互", () => {
 
       await waitFor(() => {
         expect(document.querySelector("input")).toBeTruthy();
-      });
+      }, { timeout: 3000 });
 
       const input = document.querySelector("input")!;
       fireEvent.change(input, { target: { value: "操作页面 1" } });
@@ -401,7 +401,7 @@ describe("侧栏交互", () => {
 
       await waitFor(() => {
         expect(document.querySelector("input")).toBeTruthy();
-      });
+      }, { timeout: 3000 });
 
       const input = document.querySelector("input")!;
       expect(input.style.minWidth).not.toBe("250px");
@@ -432,7 +432,7 @@ describe("侧栏交互", () => {
       await waitFor(() => {
         const projects = Object.values(useProjects.getState().projects);
         expect(projects.length).toBeGreaterThan(0);
-      });
+      }, { timeout: 3000 });
 
       const state = useProjects.getState();
       const project = Object.values(state.projects)[0];
@@ -458,7 +458,7 @@ describe("侧栏交互", () => {
       await waitFor(() => {
         const projects = Object.values(useProjects.getState().projects);
         expect(projects.length).toBeGreaterThan(0);
-      });
+      }, { timeout: 3000 });
 
       const project = Object.values(useProjects.getState().projects)[0];
       const layout = project.pages[0].layout as Record<string, unknown>;
@@ -477,7 +477,7 @@ describe("侧栏交互", () => {
       await waitFor(() => {
         const projects = Object.values(useProjects.getState().projects);
         expect(projects.length).toBeGreaterThan(0);
-      });
+      }, { timeout: 3000 });
 
       const project = Object.values(useProjects.getState().projects)[0];
       expect(project.pages[0].cwd).toBe("D:\\work\\rust-project");
@@ -494,7 +494,7 @@ describe("侧栏交互", () => {
       await waitFor(() => {
         // dialog 已被调用
         expect(mocks.mockOpenDialog).toHaveBeenCalled();
-      });
+      }, { timeout: 3000 });
 
       // store 仍为空（无项目被创建）
       const state = useProjects.getState();

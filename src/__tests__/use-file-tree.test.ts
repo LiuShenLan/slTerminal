@@ -3,7 +3,7 @@
 // F1: 消除重复 IPC — 验证 rootPath 变化时 loadRoot 只调用一次
 // F3: generation 取消机制 — 验证旧异步请求结果被丢弃
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
 
 // ─── Hoisted mocks ───
@@ -91,7 +91,7 @@ describe("useFileTree — F1 消除重复 IPC", () => {
 
     await waitFor(() => {
       expect(mocks.mockReadDir).toHaveBeenCalledTimes(1);
-    });
+    }, { timeout: 3000 });
 
     // 切换到另一个 rootPath（应只再调一次 readDir）
     mocks.setReadDirImpl(() => Promise.resolve([
@@ -101,7 +101,7 @@ describe("useFileTree — F1 消除重复 IPC", () => {
 
     await waitFor(() => {
       expect(mocks.mockReadDir).toHaveBeenCalledTimes(2);
-    });
+    }, { timeout: 3000 });
   });
 
   it("F1-2: rootPath 从 null 变为有效路径时正确加载", async () => {
@@ -116,7 +116,7 @@ describe("useFileTree — F1 消除重复 IPC", () => {
 
     await waitFor(() => {
       expect(result.current.rootNodes.length).toBe(3);
-    });
+    }, { timeout: 3000 });
     expect(result.current.rootNodes[0].entry.name).toBe("a.ts");
   });
 
@@ -128,13 +128,13 @@ describe("useFileTree — F1 消除重复 IPC", () => {
 
     await waitFor(() => {
       expect(result.current.rootNodes.length).toBeGreaterThan(0);
-    });
+    }, { timeout: 3000 });
 
     rerender({ rootPath: null });
 
     await waitFor(() => {
       expect(result.current.rootNodes).toEqual([]);
-    });
+    }, { timeout: 3000 });
   });
 
   it("F1-4: 两个不同 rootPath 切换时数据正确", async () => {
@@ -152,13 +152,13 @@ describe("useFileTree — F1 消除重复 IPC", () => {
 
     await waitFor(() => {
       expect(result.current.rootNodes[0]?.entry.name).toBe("alpha.ts");
-    });
+    }, { timeout: 3000 });
 
     rerender({ rootPath: "C:/project-b" });
 
     await waitFor(() => {
       expect(result.current.rootNodes[0]?.entry.name).toBe("beta.ts");
-    });
+    }, { timeout: 3000 });
   });
 
   it("F1-5: 重命名文件后 refresh 重新调用 readDir", async () => {
@@ -169,7 +169,7 @@ describe("useFileTree — F1 消除重复 IPC", () => {
 
     await waitFor(() => {
       expect(mocks.mockReadDir).toHaveBeenCalledTimes(1);
-    });
+    }, { timeout: 3000 });
 
     // 手动调用 refresh（模拟 CRUD 操作后刷新）
     await act(async () => {
@@ -187,7 +187,7 @@ describe("useFileTree — F1 消除重复 IPC", () => {
 
     await waitFor(() => {
       expect(mocks.mockReadDir).toHaveBeenCalledTimes(1);
-    });
+    }, { timeout: 3000 });
 
     const callCountBefore = mocks.mockReadDir.mock.calls.length;
 
@@ -205,7 +205,7 @@ describe("useFileTree — F1 消除重复 IPC", () => {
 
     await waitFor(() => {
       expect(mocks.mockReadDir).toHaveBeenCalledTimes(1);
-    });
+    }, { timeout: 3000 });
 
     await act(async () => {
       await result.current.refresh();
@@ -221,7 +221,7 @@ describe("useFileTree — F1 消除重复 IPC", () => {
 
     await waitFor(() => {
       expect(mocks.mockReadDir).toHaveBeenCalledTimes(1);
-    });
+    }, { timeout: 3000 });
 
     await act(async () => {
       await result.current.refresh();
@@ -237,6 +237,11 @@ describe("useFileTree — F1 消除重复 IPC", () => {
 describe("useFileTree — F3 Generation 取消机制", () => {
   beforeEach(() => {
     mocks.resetAll();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("F3-1: 快速切换 rootPath 两次，只有最后一次生效", async () => {
@@ -259,18 +264,16 @@ describe("useFileTree — F3 Generation 取消机制", () => {
     rerender({ rootPath: "C:/project-a" });
     rerender({ rootPath: "C:/project-b" });
 
-    // 等待快请求完成
-    await waitFor(() => {
+    // vi.waitFor 与 fake timers 兼容，自动推进时间轮询
+    await vi.waitFor(() => {
       expect(result.current.rootNodes.length).toBeGreaterThan(0);
-    });
+    }, { timeout: 3000 });
 
-    // 即使慢请求返回，也应该显示 project-b 的数据
     expect(result.current.rootNodes[0].entry.name).toBe("new.ts");
 
-    // 等待慢请求也完成，确保 generation 检查生效
-    await new Promise((r) => setTimeout(r, 300));
-
-    // 数据仍应该是 project-b 的
+    // 推进时间触发慢请求的 setTimeout(200ms)
+    await vi.advanceTimersByTimeAsync(300);
+    // generation 检查生效，仍是快结果
     expect(result.current.rootNodes[0].entry.name).toBe("new.ts");
   });
 
@@ -292,14 +295,12 @@ describe("useFileTree — F3 Generation 取消机制", () => {
     rerender({ rootPath: "C:/project-slow" });
     rerender({ rootPath: "C:/project-fast" });
 
-    await waitFor(() => {
+    await vi.waitFor(() => {
       expect(result.current.rootNodes[0]?.entry.name).toBe("fast-result.ts");
-    });
+    }, { timeout: 3000 });
 
-    // 等待慢请求完成
-    await new Promise((r) => setTimeout(r, 300));
-
-    // 数据应保持为快请求的结果
+    // 推进时间触发慢请求
+    await vi.advanceTimersByTimeAsync(300);
     expect(result.current.rootNodes[0]?.entry.name).toBe("fast-result.ts");
   });
 
@@ -321,15 +322,13 @@ describe("useFileTree — F3 Generation 取消机制", () => {
     rerender({ rootPath: "C:/project-slow" });
     rerender({ rootPath: "C:/project-fast" });
 
-    await waitFor(() => {
+    await vi.waitFor(() => {
       const map = result.current.gitStatusMap;
       expect(map.get("C:/project-fast/b.ts")).toBe("added");
-    });
+    }, { timeout: 3000 });
 
-    // 等待慢请求完成
-    await new Promise((r) => setTimeout(r, 300));
-
-    // 不应包含慢请求的数据
+    // 推进时间触发慢请求
+    await vi.advanceTimersByTimeAsync(300);
     const map = result.current.gitStatusMap;
     expect(map.get("C:/project-slow/a.ts")).toBeUndefined();
   });
@@ -339,19 +338,19 @@ describe("useFileTree — F3 Generation 取消机制", () => {
       () => useFileTree({ rootPath: "C:/project" }),
     );
 
-    await waitFor(() => {
+    await vi.waitFor(() => {
       expect(mocks.mockReadDir).toHaveBeenCalledWith("C:/project");
-    });
+    }, { timeout: 3000 });
 
-    await waitFor(() => {
+    await vi.waitFor(() => {
       expect(result.current.rootNodes.length).toBe(3);
       expect(result.current.rootNodes[0].entry.name).toBe("a.ts");
-    });
+    }, { timeout: 3000 });
 
     // gitStatus 也应正常返回
-    await waitFor(() => {
+    await vi.waitFor(() => {
       expect(result.current.gitStatusMap.get("C:/project/a.ts")).toBe("modified");
-    });
+    }, { timeout: 3000 });
   });
 
   it("F3-5: generation 在多次切换后正确递增", async () => {
@@ -366,9 +365,9 @@ describe("useFileTree — F3 Generation 取消机制", () => {
     }
 
     // 验证 readDir 被调用了 5 次（每次切换都触发 loadRoot）
-    await waitFor(() => {
+    await vi.waitFor(() => {
       expect(mocks.mockReadDir).toHaveBeenCalledTimes(5);
-    });
+    }, { timeout: 3000 });
 
     // 最后一次切换的数据应生效
     expect(mocks.mockReadDir).toHaveBeenLastCalledWith("C:/project-4");
@@ -379,9 +378,9 @@ describe("useFileTree — F3 Generation 取消机制", () => {
       () => useFileTree({ rootPath: "C:/project" }),
     );
 
-    await waitFor(() => {
+    await vi.waitFor(() => {
       expect(result.current.rootNodes.length).toBe(3);
-    });
+    }, { timeout: 3000 });
 
     expect(result.current.rootNodes[0].entry.name).toBe("a.ts");
     expect(result.current.rootNodes[1].entry.name).toBe("b.ts");
@@ -407,14 +406,12 @@ describe("useFileTree — F3 Generation 取消机制", () => {
     // 立即切换到 project-b（project-a 的 gitStatus 尚在等待中）
     rerender({ rootPath: "C:/project-b" });
 
-    await waitFor(() => {
+    await vi.waitFor(() => {
       expect(result.current.rootNodes.length).toBe(3);
-    });
+    }, { timeout: 3000 });
 
-    // 等待慢 gitStatus 完成
-    await new Promise((r) => setTimeout(r, 300));
-
-    // 不应包含 project-a 的 gitStatus 数据（已被 generation 检查丢弃）
+    // 推进时间触发慢 gitStatus
+    await vi.advanceTimersByTimeAsync(300);
     expect(result.current.gitStatusMap.get("C:/project-a/x.ts")).toBeUndefined();
   });
 });

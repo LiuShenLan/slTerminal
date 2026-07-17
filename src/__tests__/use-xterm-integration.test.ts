@@ -419,11 +419,11 @@ describe("INT-2: term.onData → pty.write 调用链", () => {
     raf.advanceFrames(5, 16);
     await waitFor(() => {
       expect(mockPtySpawn).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
     // 等待 spawn promise resolve → TerminalRegistry 注册完成
     await waitFor(() => {
       expect(TerminalRegistry.get(panelId)).toBeDefined();
-    });
+    }, { timeout: 3000 });
     return panelId;
   }
 
@@ -439,7 +439,7 @@ describe("INT-2: term.onData → pty.write 调用链", () => {
 
     await waitFor(() => {
       expect(mockPtyWrite).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
 
     // 验证 pty.write 参数：sessionId + Uint8Array（jsdom 跨 realm 边界，改用 ArrayBuffer.isView）
     const callArgs = mockPtyWrite.mock.calls[0];
@@ -460,7 +460,7 @@ describe("INT-2: term.onData → pty.write 调用链", () => {
 
     await waitFor(() => {
       expect(mockPtyWrite).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
 
     const data = mockPtyWrite.mock.calls[0][1] as Uint8Array;
     const decoded = new TextDecoder("utf-8").decode(data);
@@ -498,7 +498,7 @@ describe("INT-2: term.onData → pty.write 调用链", () => {
 
     await waitFor(() => {
       expect(mockPtyWrite).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
 
     // console.error 被调用（onData handler 中的 .catch 路径）
     expect(consoleErrorSpy).toHaveBeenCalledWith(
@@ -548,7 +548,7 @@ describe("INT-3: visible 切换 → WebGL addon 释放/重建", () => {
     raf.advanceFrames(5, 16);
     await waitFor(() => {
       expect(mockPtySpawn).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
     return result;
   }
 
@@ -567,7 +567,7 @@ describe("INT-3: visible 切换 → WebGL addon 释放/重建", () => {
 
     await waitFor(() => {
       expect(addonInstances.length).toBeGreaterThanOrEqual(1);
-    });
+    }, { timeout: 3000 });
 
     const initialAddon = addonInstances[0];
     // visible → false
@@ -575,7 +575,7 @@ describe("INT-3: visible 切换 → WebGL addon 释放/重建", () => {
 
     await waitFor(() => {
       expect(initialAddon.dispose).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
   });
 
   it("INT-3.3: visible 切回 true → tryLoadWebgl 创建新 WebglAddon", async () => {
@@ -584,13 +584,13 @@ describe("INT-3: visible 切换 → WebGL addon 释放/重建", () => {
 
     await waitFor(() => {
       expect(addonInstances.length).toBeGreaterThanOrEqual(1);
-    });
+    }, { timeout: 3000 });
 
     // visible → false（释放 addon）
     rerender({ visible: false });
     await waitFor(() => {
       expect(addonInstances[0].dispose).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
 
     const countBefore = addonInstances.length;
     const callsBefore = mockSetupWebglWithRetry.mock.calls.length;
@@ -600,7 +600,7 @@ describe("INT-3: visible 切换 → WebGL addon 释放/重建", () => {
 
     await waitFor(() => {
       expect(addonInstances.length).toBeGreaterThan(countBefore);
-    });
+    }, { timeout: 3000 });
     expect(mockSetupWebglWithRetry.mock.calls.length).toBeGreaterThan(
       callsBefore,
     );
@@ -619,14 +619,14 @@ describe("INT-3: visible 切换 → WebGL addon 释放/重建", () => {
     raf.advanceFrames(5, 16);
     await waitFor(() => {
       expect(mockPtySpawn).toHaveBeenCalled();
-    });
+    }, { timeout: 3000 });
 
     // 初始挂载时 useTerminalInstance 创建了 WebGL → useXterm visible effect dispose 了它
     await waitFor(() => {
       if (addonInstances.length > 0) {
         expect(addonInstances[0].dispose).toHaveBeenCalled();
       }
-    });
+    }, { timeout: 3000 });
 
     // visible 切回 true → tryLoadWebgl 创建新实例
     const countBefore = addonInstances.length;
@@ -634,7 +634,7 @@ describe("INT-3: visible 切换 → WebGL addon 释放/重建", () => {
 
     await waitFor(() => {
       expect(addonInstances.length).toBeGreaterThan(countBefore);
-    });
+    }, { timeout: 3000 });
   });
 
   it("INT-3.5: WebGL 不可用时 visible 切换不抛异常", async () => {

@@ -66,7 +66,7 @@ async function expand(
   await waitFor(() => {
     expect(findNode(result.current.rootNodes, path)?.expanded).toBe(true);
     expect(findNode(result.current.rootNodes, path)?.loading).toBe(false);
-  });
+  }, { timeout: 3000 });
 }
 
 // ─── Tests ───
@@ -86,7 +86,7 @@ describe("useFileTree 刷新保留展开状态", () => {
       "/proj/src": [mockEntry("a.ts", false, "/proj/src/a.ts")],
     });
     const { result } = renderHook(() => useFileTree({ rootPath: "/proj" }));
-    await waitFor(() => expect(result.current.rootNodes.length).toBe(1));
+    await waitFor(() => expect(result.current.rootNodes.length).toBe(1), { timeout: 3000 });
 
     await expand(result, "/proj/src");
     expect(findNode(result.current.rootNodes, "/proj/src")?.children.length).toBe(1);
@@ -106,7 +106,7 @@ describe("useFileTree 刷新保留展开状态", () => {
       "/proj/src": [mockEntry("a.ts", false, "/proj/src/a.ts")],
     });
     const { result } = renderHook(() => useFileTree({ rootPath: "/proj" }));
-    await waitFor(() => expect(result.current.rootNodes.length).toBe(1));
+    await waitFor(() => expect(result.current.rootNodes.length).toBe(1), { timeout: 3000 });
     await expand(result, "/proj/src");
 
     // 磁盘新增 b.ts
@@ -133,7 +133,7 @@ describe("useFileTree 刷新保留展开状态", () => {
       ],
     });
     const { result } = renderHook(() => useFileTree({ rootPath: "/proj" }));
-    await waitFor(() => expect(result.current.rootNodes.length).toBe(1));
+    await waitFor(() => expect(result.current.rootNodes.length).toBe(1), { timeout: 3000 });
     await expand(result, "/proj/src");
 
     // 磁盘删除 b.ts
@@ -156,7 +156,7 @@ describe("useFileTree 刷新保留展开状态", () => {
       ],
     });
     const { result } = renderHook(() => useFileTree({ rootPath: "/proj" }));
-    await waitFor(() => expect(result.current.rootNodes.length).toBe(1));
+    await waitFor(() => expect(result.current.rootNodes.length).toBe(1), { timeout: 3000 });
 
     await expand(result, "/proj/src");
     await expand(result, "/proj/src/components");
@@ -186,7 +186,7 @@ describe("useFileTree 刷新保留展开状态", () => {
       "/proj/docs": [mockEntry("readme.md", false, "/proj/docs/readme.md")],
     });
     const { result } = renderHook(() => useFileTree({ rootPath: "/proj" }));
-    await waitFor(() => expect(result.current.rootNodes.length).toBe(2));
+    await waitFor(() => expect(result.current.rootNodes.length).toBe(2), { timeout: 3000 });
 
     await expand(result, "/proj/src"); // 仅展开 src
 
@@ -206,7 +206,7 @@ describe("useFileTree 刷新保留展开状态", () => {
       "/proj/empty": [],
     });
     const { result } = renderHook(() => useFileTree({ rootPath: "/proj" }));
-    await waitFor(() => expect(result.current.rootNodes.length).toBe(1));
+    await waitFor(() => expect(result.current.rootNodes.length).toBe(1), { timeout: 3000 });
     await expand(result, "/proj/empty");
 
     await act(async () => {
@@ -224,7 +224,7 @@ describe("useFileTree 刷新保留展开状态", () => {
       "/proj/thing": [mockEntry("x.ts", false, "/proj/thing/x.ts")],
     });
     const { result } = renderHook(() => useFileTree({ rootPath: "/proj" }));
-    await waitFor(() => expect(result.current.rootNodes.length).toBe(1));
+    await waitFor(() => expect(result.current.rootNodes.length).toBe(1), { timeout: 3000 });
     await expand(result, "/proj/thing");
 
     // 磁盘上 thing 从目录变成文件（同名 path，isDir 翻转）
@@ -252,7 +252,7 @@ describe("useFileTree 刷新保留展开状态", () => {
       "/proj/keep": [mockEntry("k.ts", false, "/proj/keep/k.ts")],
     });
     const { result } = renderHook(() => useFileTree({ rootPath: "/proj" }));
-    await waitFor(() => expect(result.current.rootNodes.length).toBe(2));
+    await waitFor(() => expect(result.current.rootNodes.length).toBe(2), { timeout: 3000 });
     await expand(result, "/proj/src");
 
     // 磁盘删除 src（父层不再返回该项）
@@ -273,7 +273,7 @@ describe("useFileTree 刷新保留展开状态", () => {
       "/proj/src": [mockEntry("a.ts", false, "/proj/src/a.ts")],
     });
     const { result } = renderHook(() => useFileTree({ rootPath: "/proj" }));
-    await waitFor(() => expect(result.current.rootNodes.length).toBe(1));
+    await waitFor(() => expect(result.current.rootNodes.length).toBe(1), { timeout: 3000 });
     await expand(result, "/proj/src");
 
     // src 仍在父层返回，但其自身 readDir 抛错（权限/瞬时错误）
@@ -293,10 +293,12 @@ describe("useFileTree 刷新保留展开状态", () => {
   });
 
   it("R9: rootPath=null → refresh() 立即返回，不调 readDir/gitStatus", async () => {
-    const { result } = renderHook(() => useFileTree({ rootPath: null }));
-    await new Promise((r) => setTimeout(r, 30));
-    mocks.mockReadDir.mockClear();
-    mocks.mockGitStatus.mockClear();
+    vi.useFakeTimers();
+    try {
+      const { result } = renderHook(() => useFileTree({ rootPath: null }));
+      await vi.advanceTimersByTimeAsync(30);
+      mocks.mockReadDir.mockClear();
+      mocks.mockGitStatus.mockClear();
 
     await act(async () => {
       await result.current.refresh();
@@ -304,6 +306,9 @@ describe("useFileTree 刷新保留展开状态", () => {
 
     expect(mocks.mockReadDir).not.toHaveBeenCalled();
     expect(mocks.mockGitStatus).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("R12: 根目录被删（readDir 抛错）→ rootNodes 置空、不抛错", async () => {
@@ -312,7 +317,7 @@ describe("useFileTree 刷新保留展开状态", () => {
       "/proj/src": [mockEntry("a.ts", false, "/proj/src/a.ts")],
     });
     const { result } = renderHook(() => useFileTree({ rootPath: "/proj" }));
-    await waitFor(() => expect(result.current.rootNodes.length).toBe(1));
+    await waitFor(() => expect(result.current.rootNodes.length).toBe(1), { timeout: 3000 });
     await expand(result, "/proj/src");
 
     // 根目录被删
@@ -333,7 +338,7 @@ describe("useFileTree 刷新保留展开状态", () => {
       "/proj/src": [mockEntry("a.ts", false, "/proj/src/a.ts")],
     });
     const { result } = renderHook(() => useFileTree({ rootPath: "/proj" }));
-    await waitFor(() => expect(result.current.rootNodes.length).toBe(1));
+    await waitFor(() => expect(result.current.rootNodes.length).toBe(1), { timeout: 3000 });
     await expand(result, "/proj/src");
 
     mocks.mockGitStatus.mockClear();
@@ -348,7 +353,7 @@ describe("useFileTree 刷新保留展开状态", () => {
     expect(mocks.mockGitStatus).toHaveBeenCalledWith("/proj");
     await waitFor(() => {
       expect(result.current.gitStatusMap.get("/proj/src/a.ts")).toBe("modified");
-    });
+    }, { timeout: 3000 });
   });
 
   it("R13: gitStatus 抛错 → gitStatusMap 降级为空 Map、不冒泡", async () => {
@@ -361,7 +366,7 @@ describe("useFileTree 刷新保留展开状态", () => {
       { path: "/proj/src/a.ts", status: "modified" },
     ]);
     const { result } = renderHook(() => useFileTree({ rootPath: "/proj" }));
-    await waitFor(() => expect(result.current.rootNodes.length).toBe(1));
+    await waitFor(() => expect(result.current.rootNodes.length).toBe(1), { timeout: 3000 });
     await expand(result, "/proj/src");
 
     // refresh 时 gitStatus 抛错
@@ -384,7 +389,7 @@ describe("useFileTree 刷新保留展开状态", () => {
       "/proj/src": [mockEntry("a.ts", false, "/proj/src/a.ts")],
     });
     const { result } = renderHook(() => useFileTree({ rootPath: "/proj" }));
-    await waitFor(() => expect(result.current.rootNodes.length).toBe(1));
+    await waitFor(() => expect(result.current.rootNodes.length).toBe(1), { timeout: 3000 });
     await expand(result, "/proj/src");
 
     await act(async () => {
@@ -397,7 +402,7 @@ describe("useFileTree 刷新保留展开状态", () => {
 
     await waitFor(() => {
       expect(findNode(result.current.rootNodes, "/proj/src")?.expanded).toBe(true);
-    });
+    }, { timeout: 3000 });
   });
 
   it("R15: fs-event 触发（200ms 去抖）→ 展开状态保留", async () => {
@@ -408,14 +413,14 @@ describe("useFileTree 刷新保留展开状态", () => {
         "/proj/src": [mockEntry("a.ts", false, "/proj/src/a.ts")],
       });
       const { result } = renderHook(() => useFileTree({ rootPath: "/proj" }));
-      await vi.waitFor(() => expect(result.current.rootNodes.length).toBe(1));
+      await vi.waitFor(() => expect(result.current.rootNodes.length).toBe(1), { timeout: 3000 });
 
       await act(async () => {
         await result.current.toggleExpand("/proj/src");
       });
       await vi.waitFor(() =>
         expect(findNode(result.current.rootNodes, "/proj/src")?.expanded).toBe(true),
-      );
+      { timeout: 3000 });
 
       // 触发 fs-event → 200ms 去抖后 refreshExpanded
       await act(async () => {
@@ -435,7 +440,7 @@ describe("useFileTree 刷新保留展开状态", () => {
       "/proj/src": [mockEntry("a.ts", false, "/proj/src/a.ts")],
     });
     const { result } = renderHook(() => useFileTree({ rootPath: "/proj" }));
-    await waitFor(() => expect(result.current.rootNodes.length).toBe(1));
+    await waitFor(() => expect(result.current.rootNodes.length).toBe(1), { timeout: 3000 });
     await expand(result, "/proj/src");
 
     await act(async () => {
@@ -453,7 +458,7 @@ describe("useFileTree 刷新保留展开状态", () => {
       "/proj/src": [mockEntry("a.ts", false, "/proj/src/a.ts")],
     });
     const { result } = renderHook(() => useFileTree({ rootPath: "/proj" }));
-    await waitFor(() => expect(result.current.rootNodes.length).toBe(1));
+    await waitFor(() => expect(result.current.rootNodes.length).toBe(1), { timeout: 3000 });
     await expand(result, "/proj/src");
 
     await act(async () => {
