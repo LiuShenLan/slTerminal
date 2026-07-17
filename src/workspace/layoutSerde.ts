@@ -70,7 +70,8 @@ function patchLegacyLayout(layout: Record<string, unknown>): void {
  * 恢复布局到 Dockview，返回是否成功
  *
  * 失败原因包括：旧格式不兼容、组件白名单过滤后无剩余面板、Dockview 内部异常。
- * 调用方应在失败时回退到默认布局（创建默认终端）。
+ * 调用方应在失败时交由 Watermark 组件接管（显示"打开终端或编辑器开始工作"），
+ * 用户通过 Watermark 按钮或页签 "+" 按钮手动创建终端，不再自动兜底创建默认终端。
  */
 export function loadLayout(
   api: DockviewApi,
@@ -94,8 +95,7 @@ export function loadLayout(
     // 修补旧格式（缺少 leaf.data.id / activeGroup）
     patchLegacyLayout(layout);
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    api.fromJSON(layout as any, { reuseExistingPanels: true });
+    api.fromJSON(layout as unknown as Parameters<DockviewApi["fromJSON"]>[0], { reuseExistingPanels: true });
     return true;
   } catch (err) {
     console.error("布局恢复失败:", err);

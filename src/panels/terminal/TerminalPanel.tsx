@@ -69,7 +69,7 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ api, params }) => {
     if (state.active) {
       originalTitleRef.current = api.title ?? "terminal";
       api.setTitle(state.title!);
-      api.updateParameters({ ...params, tabIcon: state.icon! });
+      api.updateParameters({ ...params, tabIcon: state.icon ?? null });
     } else {
       api.setTitle(originalTitleRef.current);
       api.updateParameters({ ...params, tabIcon: null });

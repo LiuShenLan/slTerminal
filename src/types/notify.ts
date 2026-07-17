@@ -2,5 +2,5 @@
 export interface FsEventPayload {
   paths: string[];
   kind: string;
-  detail: string;
+  detail?: string;
 }

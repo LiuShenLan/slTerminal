@@ -80,7 +80,10 @@ describe("main.tsx bootstrap", () => {
     globalThis.setInterval = origSetInterval;
     globalThis.clearInterval = origClearInterval;
     vi.restoreAllMocks();
-    document.body.removeChild(rootDiv);
+    // rootDiv 可能已被超时错误页的 innerHTML 替换移除（测试 3）
+    if (rootDiv.parentNode) {
+      document.body.removeChild(rootDiv);
+    }
   });
 
   it("1. __TAURI_INTERNALS__ 已存在 → 立即挂载 React，不轮询", async () => {
@@ -140,8 +143,8 @@ describe("main.tsx bootstrap", () => {
     expect(mockClearInterval).toHaveBeenCalled();
   });
 
-  it("3. __TAURI_INTERNALS__ 不存在且永远不就绪 → 永不调用 createRoot", async () => {
-    // 场景：IPC 永远不就绪（理论路径，实际不应发生）
+  it("3. 轮询 200 次后超时 → 显示错误提示 + 清理定时器 + 不挂载 React", async () => {
+    // 场景：IPC 始终不就绪，200 次轮询（10s）后触发超时
     vi.resetModules();
     const importPromise = import("../main");
 
@@ -151,15 +154,21 @@ describe("main.tsx bootstrap", () => {
     // 轮询已启动
     expect(mockSetInterval).toHaveBeenCalledWith(expect.any(Function), 50);
 
-    // 多次触发轮询回调，但 __TAURI_INTERNALS__ 始终不存在
-    for (let i = 0; i < 10; i++) {
+    // 模拟 200 次轮询但 __TAURI_INTERNALS__ 始终不存在 → 应触发超时
+    for (let i = 0; i < 200; i++) {
       capturedSetIntervalCallbacks[0]();
     }
 
     await new Promise((r) => setTimeout(r, 10));
 
-    // 验证：ReactDOM 从未被调用
+    // 验证：clearInterval 被调用（超时后清理）
+    expect(mockClearInterval).toHaveBeenCalled();
+
+    // 验证：ReactDOM 从未被调用（超时后不挂载）
     expect(mockCreateRoot).not.toHaveBeenCalled();
     expect(mockRender).not.toHaveBeenCalled();
+
+    // 验证：body 显示了错误提示
+    expect(document.body.innerHTML).toContain("Tauri IPC 初始化超时");
   });
 });

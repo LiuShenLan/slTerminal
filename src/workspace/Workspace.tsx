@@ -165,22 +165,27 @@ const Workspace: React.FC = () => {
     onLayoutChange: (layout: Record<string, unknown>) => void;
   }>>(new Map());
 
-  // 清理已删除页面的回调 + 确保当前页面回调存在
-  const activePageIds = new Set(allPages.map((p) => p.pageId));
-  for (const key of pageCallbacksRef.current.keys()) {
-    if (!activePageIds.has(key)) {
-      pageCallbacksRef.current.delete(key);
+  // FE-03: 回调 map 维护移入 useEffect（依赖 allPages），渲染期 ref 只读。
+  // 避免 StrictMode/并发模式下渲染阶段直接增删 ref 导致双注册或半一致状态。
+  useEffect(() => {
+    const activePageIds = new Set(allPages.map((p) => p.pageId));
+    // 清理已删除页面的回调
+    for (const key of pageCallbacksRef.current.keys()) {
+      if (!activePageIds.has(key)) {
+        pageCallbacksRef.current.delete(key);
+      }
     }
-  }
-  for (const page of allPages) {
-    if (!pageCallbacksRef.current.has(page.pageId)) {
-      pageCallbacksRef.current.set(page.pageId, {
-        onReady: (api: DockviewApi) => handlePageApiReadyRef.current(page.pageId, api),
-        onLayoutChange: (layout: Record<string, unknown>) =>
-          handlePageLayoutChangeRef.current(page.pageId, layout),
-      });
+    // 确保当前页面回调存在（惰性创建，pageId 生命周期内引用不变）
+    for (const page of allPages) {
+      if (!pageCallbacksRef.current.has(page.pageId)) {
+        pageCallbacksRef.current.set(page.pageId, {
+          onReady: (api: DockviewApi) => handlePageApiReadyRef.current(page.pageId, api),
+          onLayoutChange: (layout: Record<string, unknown>) =>
+            handlePageLayoutChangeRef.current(page.pageId, layout),
+        });
+      }
     }
-  }
+  }, [allPages]);
 
   // E2E 兼容：activePageId 变化时自动初始化对应页面（Workspace 挂载后生效）
   useEffect(() => {

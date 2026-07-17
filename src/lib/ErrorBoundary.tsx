@@ -38,8 +38,7 @@ export class ErrorBoundary extends React.Component<
   }
 
   componentDidCatch(error: Error, info: React.ErrorInfo): void {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (window as any).__sltermError = {
+    window.__sltermError = {
       message: error.message,
       stack: error.stack,
       componentStack: info.componentStack,

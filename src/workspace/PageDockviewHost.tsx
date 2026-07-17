@@ -17,7 +17,7 @@ import {
   type IDockviewHeaderActionsProps,
   type IWatermarkPanelProps,
 } from "dockview-react";
-import { panelRegistry, PANEL_TERMINAL, FILE_PANEL_TYPES } from "../panelRegistry";
+import { panelRegistry, PANEL_TERMINAL } from "../panelRegistry";
 import { saveLayout, loadLayout } from "./layoutSerde";
 import { titleManager } from "./titleManager";
 import type { TitleUpdate } from "./titleManager";
@@ -162,9 +162,10 @@ function rebuildAndRecomputeTitles(
   for (const panel of api.panels) {
     const params = panel.params as { panelId?: string; filePath?: string } | undefined;
     if (!params?.panelId) continue;
-    const component = panel.view?.contentComponent;
-    if (component && FILE_PANEL_TYPES.has(component)) {
-      const filePath = params.filePath;
+    // FE-22: 从 params 判断面板类型（替代 panel.view?.contentComponent 非公共 API）
+    // 文件型面板（editor/htmlviewer）的 params 携带 filePath
+    const filePath = params.filePath;
+    if (filePath !== undefined) {
       // 先注销旧条目（避免 fromJSON 重复注册）
       titleManager.unregisterEditor(pageId, params.panelId);
       titleManager.registerEditor(pageId, params.panelId, filePath);
@@ -233,6 +234,8 @@ const PageDockview: React.FC<PageDockviewProps> = React.memo(({
   const apiRef = useRef<DockviewApi | null>(null);
   const panelSeqRef = useRef(0);
   const restoreGuardRef = useRef(false);
+  /** 收集 handleReady 内注册的三个 disposable（onDidLayoutFromJSON/onDidLayoutChange/onDidRemovePanel） */
+  const disposablesRef = useRef<Array<{ dispose(): void }>>([]);
 
   // F2: savedLayout 通过 useRef 读取，不进入 handleReady 的 useCallback deps
   const savedLayoutRef = useRef(savedLayout);
@@ -264,6 +267,10 @@ const PageDockview: React.FC<PageDockviewProps> = React.memo(({
     apiRef.current = api;
     onApiReady(api);
 
+    // FE-04: 先清理旧监听器（handleReady 重触发或页面重建时防泄漏）
+    disposablesRef.current.forEach((d) => d.dispose());
+    disposablesRef.current = [];
+
     // 恢复保存的布局（无布局时留空，由 Watermark 组件接管显示）
     const layout = savedLayoutRef.current;
     let restored = false;
@@ -279,31 +286,44 @@ const PageDockview: React.FC<PageDockviewProps> = React.memo(({
     }
 
     // fromJSON 恢复守卫 — 程序化恢复不触发布局保存
-    api.onDidLayoutFromJSON(() => {
-      restoreGuardRef.current = true;
-      setTimeout(() => { restoreGuardRef.current = false; }, 0);
-    });
+    disposablesRef.current.push(
+      api.onDidLayoutFromJSON(() => {
+        restoreGuardRef.current = true;
+        setTimeout(() => { restoreGuardRef.current = false; }, 0);
+      }),
+    );
 
     // 布局变更 → 保存到 store（硬约束 #7）
-    api.onDidLayoutChange(() => {
-      if (restoreGuardRef.current) return;
-      const layout = saveLayout(api);
-      onLayoutChange(layout as Record<string, unknown>);
-    });
+    disposablesRef.current.push(
+      api.onDidLayoutChange(() => {
+        if (restoreGuardRef.current) return;
+        const layout = saveLayout(api);
+        onLayoutChange(layout as Record<string, unknown>);
+      }),
+    );
 
     // 面板关闭 → 注销编辑器 + 重算剩余面板标题
-    api.onDidRemovePanel((panel) => {
-      const params = panel.params as { panelId?: string } | undefined;
-      if (params?.panelId) {
-        titleManager.unregisterEditor(pageId, params.panelId);
-      }
-      if (rootPath) {
-        const updates = titleManager.recomputeTitles(pageId, rootPath);
-        applyTitleUpdates(api, updates);
-      }
-    });
+    disposablesRef.current.push(
+      api.onDidRemovePanel((panel) => {
+        const params = panel.params as { panelId?: string } | undefined;
+        if (params?.panelId) {
+          titleManager.unregisterEditor(pageId, params.panelId);
+        }
+        if (rootPath) {
+          const updates = titleManager.recomputeTitles(pageId, rootPath);
+          applyTitleUpdates(api, updates);
+        }
+      }),
+    );
   }, [onApiReady, cwd, pageId, rootPath, nextPanelId, onLayoutChange]);
   // 注意：savedLayout 已从 deps 移除——通过 savedLayoutRef 读取最新值
+
+  // FE-04: 组件卸载时清理所有 disposable（onDidLayoutFromJSON/onDidLayoutChange/onDidRemovePanel）
+  useEffect(() => {
+    return () => {
+      disposablesRef.current.forEach((d) => d.dispose());
+    };
+  }, []);
 
   // 监听 slterm:file-saved-as 事件（Ctrl+S 另存为 / 首次保存后更新标题）
   useEffect(() => {

@@ -101,15 +101,22 @@ export const ExplorerPanel: React.FC = () => {
       // 文件预览类面板（htmlviewer 等）使用 renderer: "always" 保持 iframe/canvas
       // browsing context 存活，避免页签切换/分屏时 DOM 移除导致白屏闪屏
       const renderer = isAlwaysRenderPanel(panelType) ? ("always" as const) : undefined;
-      dockApi.addPanel({
-        id: panelId,
-        component: panelType,
-        title,
-        params: { panelId, filePath },
-        ...(renderer ? { renderer } : {}),
-      });
 
-      // 注册到标题管理器（后续关闭/冲突重算依赖此注册）
+      // addPanel 可能抛异常（如布局状态不一致），try-catch 防止 titleManager 状态污染
+      try {
+        dockApi.addPanel({
+          id: panelId,
+          component: panelType,
+          title,
+          params: { panelId, filePath },
+          ...(renderer ? { renderer } : {}),
+        });
+      } catch {
+        // 面板创建失败，跳过标题注册（titleManager 与 DOM 保持无孤记录）
+        return;
+      }
+
+      // 仅在 addPanel 成功后注册到标题管理器（保持两状态一致）
       titleManager.registerEditor(activePageId, panelId, filePath);
 
       // 新文件打开后重算整个页面标题（可能触发既有面板的冲突更新）

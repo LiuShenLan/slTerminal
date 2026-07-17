@@ -170,15 +170,18 @@ export function useFileTree({ rootPath }: UseFileTreeOptions) {
     // 保留展开态整树重载（替代原 loadRoot() 的整树折叠替换）
     await reloadPreservingExpanded();
 
-    // 刷新 git 状态
+    // 刷新 git 状态（generation 检查防竞态：rootPath 切换时丢弃旧请求结果）
+    const gen = genRef.current;
     try {
       const statuses = await gitStatus(rp);
+      if (gen !== genRef.current) return; // rootPath 已变化，丢弃过期结果
       const map = new Map<string, string>();
       for (const s of statuses) {
         map.set(s.path, s.status);
       }
       setGitStatusMap(map);
     } catch {
+      if (gen !== genRef.current) return; // rootPath 已变化，丢弃过期错误
       setGitStatusMap(new Map());
     }
   }, [reloadPreservingExpanded]);
