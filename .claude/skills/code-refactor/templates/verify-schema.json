@@ -33,5 +33,5 @@
       }
     }
   },
-  "required": ["allFixed", "failedItems"]
+  "required": ["allFixed", "failedItems", "details"]
 }

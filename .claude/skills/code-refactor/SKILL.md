@@ -69,18 +69,21 @@ description: 当需要对整个代码仓做系统性审查与重构（多维度 
 - **Stage 间允许重复碰同一文件**：Stage 串行执行 + 每 Stage commit，先后 Stage 改同一文件无冲突（如 spawn.rs 可先后出现在安全 Stage 与补测 Stage）
 - **文档同步固定为最后一个 Stage**——文档必须反映所有代码 Stage 完成后的最终状态
 - 高风险项（核心模块重构）独立 Stage 并在计划标注人工验证点
+- **跨边界契约写死**：Stage 拆分跨前后端/多 agent 共享接口时（IPC 命令名+签名+参数、token 命名、数据结构字段），契约原文写死在 stages 文档与各脚本头部——两边 agent 不各自推断
+- **共享常量/token 改动**：prompt 要求 agent 先查全部消费方再动笔
+- **无法自动化验证的假设**（规范推断、平台行为）：代码注释记录假设来源 + stages 文档标注人工验证点，由收尾实测兜底
 
 **产出**：`docs/refactoring-stages.md`，每个 Stage 必须包含：
 - 改动项 ID 列表 + agent 文件分工表（label / 负责项 / 文件，证明无文件重叠）
 - 实现要点（含项目特定坑的引用）
-- **验证项（`__VERIFY_ITEMS__`）**：每条是 grep/测试可机械检验的断言，不写"检查是否合理"
-- commit message
+- **验证项**：每条是 grep/Read/测试可机械检验的断言，不写"检查是否合理"；"禁止存在 X"类写语义式（"不限变量名，须 Read 代码确认"），防改名迎合。执行期断言落盘为 `verify/stage-NN.md` 独立文件（见 Step 5.4）
+- commit message（代码 Stage `refactor:` 前缀，文档 Stage `docs:` 前缀）
 
 计划文档同时写入 Step 5 执行规则与 Step 6 收尾步骤，使后续阶段可直接消费。**Step 3/4 只输出计划文档，不改任何代码。**
 
 ### Step 5: 执行阶段
 
-主 agent 逐 Stage 执行。每个 Stage 使用 Workflow 工具：
+主 agent 逐 Stage 串行执行，严格按顺序不跳阶段。每个 Stage 一个 Workflow 脚本：
 
 **阶段 Workflow 结构**（见 `templates/stage-workflow.js`）：
 ```
@@ -92,18 +95,51 @@ Phase 4: 逐项验证 → agent 逐条检查，返回结构化结果
 
 Workflow 返回后，主 agent 检查 `verifyResult.allFixed`：
 - `true` → 所有项通过 → `git commit` → 下一阶段
-- `false` → 启动修复 Workflow
+- `false` → 启动修复 Workflow（`templates/fix-workflow.js`），循环直到 `allFixed === true`，最多 3 轮
 
-**修复 Workflow 结构**（见 `templates/fix-workflow.js`）：
-```
-Phase 1: 修复问题 → agent 修复 failedItems
-Phase 2: 全量测试 → agent 执行所有测试
-Phase 3: 逐项验证 → agent 重新检查
-```
+**执行 agent 的 prompt 必须显式声明项目禁区**——从 config.json `forbiddenZones` 读取，写入脚本 PREAMBLE。
 
-主 agent 循环直到 `allFixed === true`。
+#### 5.1 脚本生成纪律
 
-**执行 agent 的 prompt 必须显式声明项目禁区**（从根 CLAUDE.md 提取）。本项目禁区示例：`compute_conpty_flags` 固定 0x7 不可动（PASSTHROUGH_MODE 吞鼠标输入）。
+- **逐 ID 对照 checklist 原文写脚本**，禁止凭记忆或凭 stages 摘要——凭记忆曾致 4 个 Stage 脚本与 checklist 编号/内容大面积错位
+- 写完逐 ID 自检：脚本内每个 ID 的表述 ↔ checklist 条目一致
+- 脚本落盘为文件（`workflows/stage-NN-*.js`），用 `Workflow({ scriptPath })` 调用，不内联——便于预检与 resume
+- 首次调用前**语法预检**：Workflow 运行时允许顶层 `return`，标准 `node --check` 误判非法——用 `new Function` 包 async 函数体仅编译不执行：
+  ```bash
+  for f in workflows/*.js; do
+    node -e 'const fs=require("fs");const src=fs.readFileSync(process.argv[1],"utf8").replace(/^export\s+const\s+meta/m,"const meta");try{new Function("agent","parallel","pipeline","phase","log","args","budget","workflow","meta",`"use strict"; return (async()=>{ ${src} \n})`);console.log("OK: "+process.argv[1])}catch(e){console.log("FAIL: "+process.argv[1]+" -- "+e.message)}' "$f"
+  done
+  ```
+
+#### 5.2 Workflow 运行时语义（踩坑实录）
+
+- `agent()` 未返回（被跳过/API 错误）时返回 `null` → 脚本必须写兜底默认值（`rawVerify ?? {...}`），否则主 agent 拿到 undefined
+- `resumeFromRunId` 只对**未完成** run 有效：已正常结束的 run 全命中缓存、原样返回——verify 已结束的 no-return 靠 resume 救是死循环
+- **no-return 按阶段分流**：verify 阶段 → 主 agent inline spawn 单个 verify agent（复用脚本内 prompt+schema+verify 文件+testResult）；重构/测试阶段 → `TaskStop` + `resumeFromRunId`
+- `meta` 必须纯字面量（无变量/函数调用/模板插值）
+
+#### 5.3 并行 agent 测试纪律
+
+- 同一 Stage 并行 agent **不跑有共享资源冲突的测试**（PTY/端口/全局锁类）——重构阶段只做编译级检查（如 `cargo test --no-run`），真实执行统一由全量测试 agent 单点跑（跨进程并发同样死锁）
+- cargo 系命令共享 target 目录锁，并行时排队属正常——测试 prompt 注明"勿中止"
+
+#### 5.4 verify 体系
+
+- 断言抽为独立 `verify/stage-NN.md`（模板 `templates/verify-file.md`）——stage 脚本与 fix-loop 共用同一真值源，修复循环与初验同一标尺
+- verify prompt 三件套：意图核对总则（"不仅核对字面断言，还须 Read 代码判断实现是否达成断言意图——字面通过但意图未达判 partial 并说明理由"）+ 测试结果拼入 prompt（agent 不重跑）+ no-return 兜底
+- schema `required: ['allFixed', 'failedItems', 'details']`
+
+#### 5.5 测试 agent 报告格式
+
+每命令一行 exit code + 通过/失败；失败附**前 50 行**错误摘要，勿贴完整输出——testResult 会拼入 verify prompt，超长会撑爆上下文。
+
+#### 5.6 主 agent 编排
+
+- `git add` 路径限定枚举所有 Stage 可触路径（从 config.json `gitAddPaths` 读取，含 `.claude/` 精确文件——文档 Stage 会改根 CLAUDE.md），不用 `-A`；commit 前 `git status` 甄别预期外改动
+- commit message 以 stages 文档各 Stage 原文为准（文档 Stage 是 `docs:` 前缀，非一律 `refactor:`）
+- 时间盒：后台运行期间每 15-20 分钟查 /workflows；单 Stage 超 60 分钟无进展 → `TaskStop` + 报告用户
+- 执行计划含进度跟踪表，支持全局暂停/恢复（恢复时从首个未完成 Stage 继续，其前 commit 已落盘无需重做）
+- 文档同步类 agent 必须先读 `git log`/diff 再动笔，禁凭记忆写文档
 
 ### Step 6: 收尾
 
@@ -120,6 +156,8 @@ Phase 3: 逐项验证 → agent 重新检查
 - **modules**: 前端/后端/测试模块路径
 - **architecture**: 架构约束定义
 - **claudeMdFiles**: CLAUDE.md 文件清单（重构后需同步更新）
+- **workflow.gitAddPaths**: Stage commit 的 `git add` 路径限定枚举（含 `.claude/` 精确文件）
+- **workflow.forbiddenZones**: 项目禁区清单（写入各脚本 PREAMBLE）
 
 修改 `config.json` 即可适配不同的测试框架或目录结构。
 
@@ -134,10 +172,11 @@ Phase 3: 逐项验证 → agent 重新检查
 | 文件 | 用途 |
 |------|------|
 | `stage-workflow.js` | 单阶段重构 Workflow 模板 |
-| `fix-workflow.js` | 修复循环 Workflow 模板 |
+| `fix-workflow.js` | 修复循环 Workflow 模板（args 参数化，强制校验） |
 | `verify-schema.json` | 验证结果 JSON Schema |
+| `verify-file.md` | 逐 Stage 验证断言文件模板（stage 脚本与 fix-loop 共用的唯一真值源） |
 
-主 agent 使用时：读取模板 → 替换 `__PLACEHOLDER__` → 传给 `Workflow({ script: ... })`。
+主 agent 使用时：读取模板 → 替换 `__PLACEHOLDER__` → 落盘 `workflows/stage-NN-*.js` → 语法预检（见 5.1）→ `Workflow({ scriptPath })` 调用。
 
 ### 占位符说明
 
@@ -148,15 +187,28 @@ Phase 3: 逐项验证 → agent 重新检查
 | `__STAGE_NAME__` | Workflow 名称 (stage1-xxx) |
 | `__PARALLEL_AGENTS__` | 并行 agent 数组，每个含 `label` 和 `prompt` |
 | `__SEQUENTIAL_AGENTS__` | pipeline 阶段数组（无可留空） |
-| `__FAILED_ITEMS__` | 修复 Workflow 中需要修复的项 ID 列表 (JSON 数组) |
 | `__PROJECT_ROOT__` | 项目根路径（从 config.json 读取） |
 | `__TEST_COMMANDS__` | 测试命令列表（从 config.json 的 commands 读取） |
+| `__VERIFY_FILE__` | 断言文件路径（如 `workflows/verify/stage-01.md`） |
+| `__FORBIDDEN_ZONES__` | 项目禁区文本（从 config.json `forbiddenZones` 读取） |
+| `__PREAMBLE_EXTRA__` | Stage 特殊纪律（如"只改测试"，无可留空） |
+| `__CHECKLIST_FILE__` | checklist 文件路径（fix-workflow.js 用） |
+| `__STAGES_FILE__` | stages 文件路径（fix-workflow.js 用） |
+
+> 串行块转换占位符 `__SEQUENTIAL_PHASE__` / `__SEQUENTIAL_PHASE_BLOCK__` / `__SEQUENTIAL_RESULT__`：`__SEQUENTIAL_AGENTS__` 非空时按 stage-workflow.js 文末「替换说明」展开，为空时删除对应行——三者不进入上表。
 
 ## 注意事项
 
-- 每阶段一个 commit：`refactor: StageN — 描述`
+- 每阶段一个 commit，message 以 stages 文档原文为准（代码 Stage `refactor:`，文档 Stage `docs:`）
 - 直接 main 分支操作，不使用 git worktree
 - 单阶段内并行 agent ≤ 5 个；**两个并行 agent 禁止改同一文件**（硬性）
 - 核心重构（如模块拆分）放在独立 Stage，分配更多 agent
 - 修复循环最多 3 轮，超过需人工介入
 - 每个执行 agent 只改分配给自己的项，不顺手改无关代码（surgical changes）
+
+**Red flags（踩坑实录，出现即停）：**
+- 凭记忆写 workflow 脚本——必须逐 ID 对照 checklist 原文
+- 用 `node --check` 预检含顶层 return 的 Workflow 脚本——误报，用 5.1 的 `new Function` 预检
+- 对已正常结束的 run 用 `resumeFromRunId` 救 no-return——全命中缓存死循环；verify 阶段改 inline spawn
+- `git add -A`——必须路径限定，且枚举含 `.claude/` 精确文件
+- 并行 agent 各自跑资源共享型测试（如含 PTY spawn 的 `cargo test`）——跨进程并发死锁
