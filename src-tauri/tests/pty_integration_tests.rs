@@ -96,7 +96,7 @@ fn pty_kill_no_orphan() {
 fn pty_spawn_custom_conpty() {
     use slterminal_lib::pty::{shell, spawn::conpty_custom};
 
-    let shell_info = shell::resolve_shell_info(Some("cmd.exe"));
+    let shell_info = shell::resolve_shell_info(Some("cmd.exe")).expect("resolve_shell_info 应成功");
     let (hpc, master) = conpty_custom::create_conpty_pair(80, 24, 26100)
         .expect("create_conpty_pair 应成功");
 

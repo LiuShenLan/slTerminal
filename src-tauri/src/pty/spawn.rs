@@ -8,12 +8,13 @@
 /// - 孤儿进程：每个子进程放入 Job Object，JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
 use crate::error::AppError;
 use crate::pty::shell;
-use crate::state::{AppState, PtySession};
+use crate::state::{self as app_state, AppState, PtySession};
 #[cfg(not(windows))]
 use portable_pty::native_pty_system;
 use portable_pty::PtySize;
 use std::collections::VecDeque;
 use std::io::Write as _;
+use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, RwLock};
 use tauri::ipc::Channel;
@@ -581,34 +582,55 @@ impl JobHandle {
 pub struct SpawnRequest {
     /// 前端生成的 panel ID
     pub panel_id: String,
-    /// 终端列数
+    /// 终端列数（BE-14: 反序列化后校验 ≤ i16::MAX）
     pub cols: u16,
-    /// 终端行数
+    /// 终端行数（BE-14: 反序列化后校验 ≤ i16::MAX）
     pub rows: u16,
-    /// 工作目录（可选，默认用户主目录）
+    /// 工作目录（可选，默认用户主目录；SEC-02: 经 validate_path_within_root 校验）
     pub cwd: Option<String>,
-    /// shell 程序路径（可选，自动检测 pwsh→powershell→cmd）
+    /// shell 程序路径（可选，自动检测 pwsh→powershell→cmd；SEC-02: 经 validate_shell_allowlist 校验）
     pub shell: Option<String>,
 }
 
 /// 创建 PTY 并启动 shell，返回 session_id
 ///
 /// 输出通过 on_output Channel 持续推送到前端。
-/// SPAWN_LOCK 仅保护 ConPTY 创建 + 子进程启动（Windows ConPTY 并发 spawn 卡死），
-/// reader 线程启动和 sessions 插入在锁外执行。
+/// BE-01: async + spawn_blocking，阻塞 I/O 不占 IPC worker。
+/// BE-12: SPAWN_LOCK 仅保护 create_conpty_pair + spawn_conpty_child（锁内），
+/// take_writer、CPR 注入、add_to_job_object 在锁外。
 #[tauri::command]
-pub fn pty_spawn(
+pub async fn pty_spawn(
     state: tauri::State<'_, AppState>,
     on_output: Channel<PtyEvent>,
     request: SpawnRequest,
 ) -> Result<String, AppError> {
-    // 串行化 spawn（仅保护 ConPTY 创建 + 子进程启动，并发 spawn 会卡死输出管道）
-    let _lock = state.pty.spawn_lock.lock().map_err(|e| AppError::Pty(format!("锁获取失败: {}", e)))?;
+    // BE-14: COORD 尺寸校验——cols/rows 不能超过 i16::MAX，防止 as i16 回绕
+    if request.cols > i16::MAX as u16 || request.rows > i16::MAX as u16 {
+        return Err(AppError::Pty(format!(
+            "终端尺寸超限: cols={}, rows={}, 最大允许值={}",
+            request.cols, request.rows, i16::MAX
+        )));
+    }
+
+    // SEC-02: shell 白名单校验（仅允许 pwsh/powershell/cmd）
+    if let Some(ref shell) = request.shell {
+        shell::validate_shell_allowlist(shell)?;
+    }
+
+    // SEC-02: cwd 路径沙箱校验
+    if let Some(ref cwd) = request.cwd {
+        let root = state
+            .project_root
+            .read()
+            .map_err(|e| AppError::Pty(format!("获取 project_root 锁失败: {}", e)))?;
+        app_state::validate_path_within_root(&root, Path::new(cwd))?;
+    }
 
     let session_id = Uuid::new_v4().to_string();
+    let panel_id = request.panel_id.clone();
 
     // 解析 shell 程序（不依赖 portable-pty CommandBuilder，直接获取结构化信息）
-    let shell_info = shell::resolve_shell_info(request.shell.as_deref());
+    let shell_info = shell::resolve_shell_info(request.shell.as_deref())?;
 
     // 注入终端能力环境变量——Claude Code 依赖此宣告启用 True Color
     let extra_envs: Vec<(String, String)> = vec![
@@ -617,133 +639,169 @@ pub fn pty_spawn(
         ("TERM_PROGRAM".into(), "slTerminal".into()),
     ];
 
-    // 创建 PTY 并获取 master +（Windows 独有）HPCON 用于子进程 spawn
-    // Windows: 绕过 portable-pty openpty，直接调 Win32 CreatePseudoConsole 控制 flags
-    #[cfg(windows)]
-    let (conpty_hpc, conpty_master) = {
-        let build = super::win_build::get_windows_build_number().unwrap_or_else(|e| {
-            tracing::warn!("无法获取 Windows build 号: {}", e);
-            0
-        });
-        conpty_custom::create_conpty_pair(request.cols, request.rows, build)
-            .map_err(|e| AppError::Pty(e.to_string()))?
-    };
-    #[cfg(windows)]
-    let master: Box<dyn portable_pty::MasterPty + Send> = Box::new(conpty_master);
+    // BE-01: clone spawn_lock Arc 移送 spawn_blocking 内获取
+    let spawn_lock = state.pty.spawn_lock.clone();
+    let cols = request.cols;
+    let rows = request.rows;
+    let cwd = request.cwd.clone();
+    // 非 Windows 路径仍需 user_shell 供 resolve_shell 使用
+    #[allow(unused_variables)]
+    let user_shell = request.shell.clone();
 
-    /// 非 Windows: 使用 portable-pty 原生 openpty
-    #[cfg(not(windows))]
-    let (master, slave) = {
-        let pty_system = native_pty_system();
-        let pair = pty_system.openpty(PtySize {
-            rows: request.rows,
-            cols: request.cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .map_err(|e| AppError::Pty(e.to_string()))?;
-        (pair.master, pair.slave)
-    };
+    let session = tokio::task::spawn_blocking(move || -> Result<PtySession, AppError> {
+        // BE-12: SPAWN_LOCK 仅保护 create_conpty_pair + spawn_conpty_child
+        let _lock = spawn_lock
+            .lock()
+            .map_err(|e| AppError::Pty(format!("锁获取失败: {}", e)))?;
 
-    // take_writer 只能调一次（0.9.0 破坏性变更），Arc<Mutex> 共享
-    let raw_writer = master.take_writer()
-        .map_err(|e| AppError::Pty(e.to_string()))?;
-    let writer: Arc<Mutex<Box<dyn std::io::Write + Send>>> = Arc::new(Mutex::new(raw_writer));
+        // 创建 PTY 并获取 master +（Windows 独有）HPCON 用于子进程 spawn
+        // Windows: 绕过 portable-pty openpty，直接调 Win32 CreatePseudoConsole 控制 flags
+        #[cfg(windows)]
+        let (conpty_hpc, conpty_master) = {
+            let build = super::win_build::get_windows_build_number().unwrap_or_else(|e| {
+                tracing::warn!("无法获取 Windows build 号: {}", e);
+                0
+            });
+            conpty_custom::create_conpty_pair(cols, rows, build)
+                .map_err(|e| AppError::Pty(e.to_string()))?
+        };
+        #[cfg(windows)]
+        let master: Box<dyn portable_pty::MasterPty + Send> = Box::new(conpty_master);
 
-    // Windows: spawn 前向 stdin 写 CPR \x1b[1;1R
-    // 补偿 ConPTY VtIo::StartIfNeeded() DSR 握手。
-    #[cfg(windows)]
-    {
-        let mut w = writer.lock().map_err(|e| AppError::Pty(format!("锁获取失败: {}", e)))?;
-        w.write_all(b"\x1b[1;1R")?;
-        w.flush()?;
-    }
+        /// 非 Windows: 使用 portable-pty 原生 openpty
+        #[cfg(not(windows))]
+        let (master, slave) = {
+            let pty_system = native_pty_system();
+            let pair = pty_system
+                .openpty(PtySize {
+                    rows,
+                    cols,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                })
+                .map_err(|e| AppError::Pty(e.to_string()))?;
+            (pair.master, pair.slave)
+        };
 
-    // spawn 子进程
-    #[cfg(windows)]
-    let child: Box<dyn portable_pty::Child + Send> = Box::new(
-        conpty_custom::spawn_conpty_child(
-            conpty_hpc,
-            &shell_info,
-            &extra_envs,
-            request.cwd.as_deref(),
-        )
-        .map_err(|e| AppError::Pty(e.to_string()))?
-    );
-    #[cfg(not(windows))]
-    let child: Box<dyn portable_pty::Child + Send> = {
-        let mut cmd = shell::resolve_shell(request.shell.as_deref());
-        cmd.env("COLORTERM", "truecolor");
-        cmd.env("TERM", "xterm-256color");
-        cmd.env("TERM_PROGRAM", "slTerminal");
-        if let Some(cwd) = &request.cwd {
-            cmd.cwd(cwd.replace('/', "\\"));
-        }
-        slave.spawn_command(cmd)
-            .map_err(|e| AppError::Pty(e.to_string()))?
-    };
+        // spawn 子进程（仍在 SPAWN_LOCK 内）
+        #[cfg(windows)]
+        let mut child: Box<dyn portable_pty::Child + Send> = Box::new(
+            conpty_custom::spawn_conpty_child(
+                conpty_hpc,
+                &shell_info,
+                &extra_envs,
+                cwd.as_deref(),
+            )
+            .map_err(|e| AppError::Pty(e.to_string()))?,
+        );
+        #[cfg(not(windows))]
+        let child: Box<dyn portable_pty::Child + Send> = {
+            let mut cmd = shell::resolve_shell(user_shell.as_deref())?;
+            cmd.env("COLORTERM", "truecolor");
+            cmd.env("TERM", "xterm-256color");
+            cmd.env("TERM_PROGRAM", "slTerminal");
+            if let Some(ref cwd) = cwd {
+                cmd.cwd(cwd.replace('/', "\\"));
+            }
+            slave
+                .spawn_command(cmd)
+                .map_err(|e| AppError::Pty(e.to_string()))?
+        };
 
-    // 将子进程放入 Job Object 防止孤儿进程（Windows 平台），
-    // 非 Windows 平台使用零大小占位（对齐 pty/CLAUDE.md 跨平台设计）
-    let job_handle: Option<JobHandle> = {
+        // BE-12: 释放 SPAWN_LOCK——子进程已启动，后续操作（take_writer、CPR、Job Object）无需串行化
+        drop(_lock);
+
+        // take_writer 只能调一次（0.9.0 破坏性变更），Arc<Mutex> 共享
+        let raw_writer = master
+            .take_writer()
+            .map_err(|e| AppError::Pty(e.to_string()))?;
+        let writer: Arc<Mutex<Box<dyn std::io::Write + Send>>> =
+            Arc::new(Mutex::new(raw_writer));
+
+        // Windows: spawn 后向 stdin 写 CPR \x1b[1;1R（锁外）
+        // 补偿 ConPTY VtIo::StartIfNeeded() DSR 握手。
         #[cfg(windows)]
         {
-            child.process_id().map(add_to_job_object).transpose()?
+            let mut w = writer
+                .lock()
+                .map_err(|e| AppError::Pty(format!("锁获取失败: {}", e)))?;
+            w.write_all(b"\x1b[1;1R")?;
+            w.flush()?;
         }
+
+        // 将子进程放入 Job Object 防止孤儿进程（锁外）
+        #[cfg(windows)]
+        let pid = child.process_id();
+        #[cfg(windows)]
+        let job_handle = match pid {
+            Some(pid) => match add_to_job_object(pid) {
+                Ok(handle) => Some(handle),
+                Err(e) => {
+                    // BE-02: Job Object 创建/分配失败时显式杀子进程，不留孤儿
+                    child.kill().ok();
+                    return Err(e);
+                }
+            },
+            None => None,
+        };
         #[cfg(not(windows))]
-        {
-            Some(JobHandle::new_dummy())
-        }
-    };
+        let job_handle: Option<JobHandle> = Some(JobHandle::new_dummy());
 
-    // SPAWN_LOCK 临界区结束：ConPTY 已创建完毕，后续操作（reader 线程启动、sessions 插入）无需串行化
-    drop(_lock);
+        // E1: 创建可替换 Channel 和 ring buffer
+        let channel: Arc<RwLock<Option<Channel<PtyEvent>>>> =
+            Arc::new(RwLock::new(Some(on_output)));
+        let output_ring: Arc<Mutex<VecDeque<u8>>> = Arc::new(Mutex::new(VecDeque::new()));
 
-    // E1: 创建可替换 Channel 和 ring buffer
-    let channel: Arc<RwLock<Option<Channel<PtyEvent>>>> =
-        Arc::new(RwLock::new(Some(on_output)));
-    let output_ring: Arc<Mutex<VecDeque<u8>>> = Arc::new(Mutex::new(VecDeque::new()));
+        // P2-11: child 包装为 Arc<Mutex<>>，reader 线程通过 clone 获取真实退出码
+        let child: Arc<Mutex<Box<dyn portable_pty::Child + Send>>> =
+            Arc::new(Mutex::new(child));
 
-    // P2-11: child 包装为 Arc<Mutex<>>，reader 线程通过 clone 获取真实退出码
-    let child: Arc<Mutex<Box<dyn portable_pty::Child + Send>>> =
-        Arc::new(Mutex::new(child));
+        // 克隆 reader，启动 reader 线程（reader.rs 首轮读取剥离 ConPTY 启动注入序列）
+        let reader = master
+            .try_clone_reader()
+            .map_err(|e| AppError::Pty(e.to_string()))?;
+        let reader_channel = channel.clone();
+        let reader_ring = output_ring.clone();
+        let reader_child = child.clone();
+        // P2-13: reader 线程通过此 Arc 回写真实退出码，同时也是 session 的 exit_code
+        let exit_code_slot: Arc<Mutex<Option<i32>>> = Arc::new(Mutex::new(None));
+        let reader_exit_code = exit_code_slot.clone();
 
-    // 克隆 reader，启动 reader 线程（reader.rs 首轮读取剥离 ConPTY 启动注入序列）
-    let reader = master.try_clone_reader()
-        .map_err(|e| AppError::Pty(e.to_string()))?;
-    let reader_channel = channel.clone();
-    let reader_ring = output_ring.clone();
-    let reader_child = child.clone();
-    // P2-13: reader 线程通过此 Arc 回写真实退出码，同时也是 session 的 exit_code
-    let exit_code_slot: Arc<Mutex<Option<i32>>> = Arc::new(Mutex::new(None));
-    let reader_exit_code = exit_code_slot.clone();
+        // DA1 注入防重复标志
+        let da1_injected = Arc::new(AtomicBool::new(false));
 
-    // DA1 注入防重复标志
-    let da1_injected = Arc::new(AtomicBool::new(false));
+        let writer_reader = writer.clone();
+        let da1_injected_reader = da1_injected.clone();
 
-    let writer_reader = writer.clone();
-    let da1_injected_reader = da1_injected.clone();
+        let reader_handle = std::thread::spawn(move || {
+            crate::pty::reader::reader_loop(
+                reader,
+                reader_channel,
+                reader_ring,
+                reader_child,
+                reader_exit_code,
+                writer_reader,
+                da1_injected_reader,
+            );
+        });
 
-    let reader_handle = std::thread::spawn(move || {
-        crate::pty::reader::reader_loop(
-            reader, reader_channel, reader_ring, reader_child, reader_exit_code,
-            writer_reader, da1_injected_reader,
-        );
-    });
+        Ok(PtySession {
+            master: Arc::new(Mutex::new(master)),
+            child,
+            writer,
+            reader_handle: Some(reader_handle),
+            channel,
+            output_ring,
+            exit_code: exit_code_slot,
+            da1_injected,
+            job_object: job_handle,
+            panel_id, // SEC-08: 记录归属 panel
+        })
+    })
+    .await
+    .map_err(|e| AppError::Pty(format!("pty_spawn join error: {e}")))??;
 
-    // 保存会话
-    let session = PtySession {
-        master: Mutex::new(master),
-        child,
-        writer,
-        reader_handle: Some(reader_handle),
-        channel,
-        output_ring,
-        exit_code: exit_code_slot,
-        da1_injected,
-        job_object: job_handle,
-    };
-
+    // 保存会话（在 async 上下文中，不在 spawn_blocking 内）
     state
         .pty
         .sessions
@@ -755,48 +813,96 @@ pub fn pty_spawn(
 }
 
 /// 向 PTY 写入数据（来自前端键盘输入）
+///
+/// BE-01: async + spawn_blocking，write_all/flush 不阻塞 IPC worker。
+/// SEC-08: 校验 panel_id 与 session 归属一致。
 #[tauri::command]
-pub fn pty_write(
+pub async fn pty_write(
     state: tauri::State<'_, AppState>,
     session_id: String,
+    panel_id: String,
     data: Vec<u8>,
 ) -> Result<(), AppError> {
-    let sessions = state.pty.sessions.read().map_err(|e| AppError::Pty(format!("锁获取失败: {}", e)))?;
-    let session = sessions
-        .get(&session_id)
-        .ok_or_else(|| AppError::SessionNotFound(session_id.clone()))?;
-    let mut writer = session.writer.lock().map_err(|e| AppError::Pty(format!("锁获取失败: {}", e)))?;
-    writer.write_all(&data)?;
-    writer.flush()?;
-    Ok(())
+    let writer = {
+        let sessions = state
+            .pty
+            .sessions
+            .read()
+            .map_err(|e| AppError::Pty(format!("锁获取失败: {}", e)))?;
+        let session = sessions
+            .get(&session_id)
+            .ok_or_else(|| AppError::SessionNotFound(session_id.clone()))?;
+        // SEC-08: 校验 session 归属
+        if session.panel_id != panel_id {
+            return Err(AppError::Pty(format!(
+                "会话归属不匹配: 请求 panel_id={}, session panel_id={}",
+                panel_id, session.panel_id
+            )));
+        }
+        session.writer.clone()
+    };
+
+    tokio::task::spawn_blocking(move || -> Result<(), AppError> {
+        let mut w = writer
+            .lock()
+            .map_err(|e| AppError::Pty(format!("锁获取失败: {}", e)))?;
+        w.write_all(&data)?;
+        w.flush()?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| AppError::Pty(format!("pty_write join error: {e}")))?
 }
 
 /// 调整 PTY 终端尺寸
 ///
-/// 锁嵌套：sessions.read() → session.master.lock()。
-/// 当前安全：外层是共享读锁（RwLock read），内层是独立 Mutex，无其他代码路径反向获取。
-/// 未来重构：若新增 sessions.write() → master.lock() 或 master.lock() → sessions.write() 路径，
-/// 需重新评估死锁风险，考虑将 resize 改为先 clone Arc 再操作。
+/// BE-01: async + spawn_blocking，ResizePseudoConsole 不阻塞 IPC worker。
+/// SEC-08: 校验 panel_id 与 session 归属一致。
+///
+/// 锁嵌套注意事项：sessions.read() → 提取 master Arc → spawn_blocking 内 master.lock()。
+/// 由于 Arc clone 在 sessions 读锁释放后才进入 spawn_blocking，无死锁风险。
 #[tauri::command]
-pub fn pty_resize(
+pub async fn pty_resize(
     state: tauri::State<'_, AppState>,
     session_id: String,
+    panel_id: String,
     cols: u16,
     rows: u16,
 ) -> Result<(), AppError> {
-    let sessions = state.pty.sessions.read().map_err(|e| AppError::Pty(format!("锁获取失败: {}", e)))?;
-    let session = sessions
-        .get(&session_id)
-        .ok_or_else(|| AppError::SessionNotFound(session_id.clone()))?;
-    let master = session.master.lock().map_err(|e| AppError::Pty(format!("锁获取失败: {}", e)))?;
-    master.resize(PtySize {
-        rows,
-        cols,
-        pixel_width: 0,
-        pixel_height: 0,
+    let master = {
+        let sessions = state
+            .pty
+            .sessions
+            .read()
+            .map_err(|e| AppError::Pty(format!("锁获取失败: {}", e)))?;
+        let session = sessions
+            .get(&session_id)
+            .ok_or_else(|| AppError::SessionNotFound(session_id.clone()))?;
+        // SEC-08: 校验 session 归属
+        if session.panel_id != panel_id {
+            return Err(AppError::Pty(format!(
+                "会话归属不匹配: 请求 panel_id={}, session panel_id={}",
+                panel_id, session.panel_id
+            )));
+        }
+        session.master.clone()
+    };
+
+    tokio::task::spawn_blocking(move || -> Result<(), AppError> {
+        let m = master
+            .lock()
+            .map_err(|e| AppError::Pty(format!("锁获取失败: {}", e)))?;
+        m.resize(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|e| AppError::Pty(e.to_string()))?;
+        Ok(())
     })
-    .map_err(|e| AppError::Pty(e.to_string()))?;
-    Ok(())
+    .await
+    .map_err(|e| AppError::Pty(format!("pty_resize join error: {e}")))?
 }
 
 /// 销毁 PTY 会话 — 杀子进程 → 回收 reader 线程 → 从 PtyState 移除
@@ -804,14 +910,30 @@ pub fn pty_resize(
 /// G1b: async + spawn_blocking。先提取 session 后释放 RwLock 写锁，
 /// 再在 spawn_blocking 中执行 kill+join+drop（ClosePseudoConsole 在 pre-Win11 24H2 上永久阻塞），
 /// 避免持锁阻塞导致后续命令级联卡死。
+/// SEC-08: 校验 panel_id 与 session 归属一致后再移除。
 #[tauri::command]
 pub async fn pty_kill(
     state: tauri::State<'_, AppState>,
     session_id: String,
+    panel_id: String,
 ) -> Result<(), AppError> {
     // 提取 session 后释放写锁（锁在此 scope 结束时释放，<1ms）
     let session = {
-        let mut sessions = state.pty.sessions.write().map_err(|e| AppError::Pty(format!("锁获取失败: {}", e)))?;
+        let mut sessions = state
+            .pty
+            .sessions
+            .write()
+            .map_err(|e| AppError::Pty(format!("锁获取失败: {}", e)))?;
+        // SEC-08: 先校验归属再 remove
+        let stored = sessions
+            .get(&session_id)
+            .ok_or_else(|| AppError::SessionNotFound(session_id.clone()))?;
+        if stored.panel_id != panel_id {
+            return Err(AppError::Pty(format!(
+                "会话归属不匹配: 请求 panel_id={}, session panel_id={}",
+                panel_id, stored.panel_id
+            )));
+        }
         sessions
             .remove(&session_id)
             .ok_or_else(|| AppError::SessionNotFound(session_id.clone()))?
@@ -820,7 +942,10 @@ pub async fn pty_kill(
     // blocking 线程中执行 kill+join+drop，不阻塞 IPC worker
     tokio::task::spawn_blocking(move || -> Result<(), AppError> {
         let mut session = session;
-        let mut child = session.child.lock().map_err(|e| AppError::Pty(format!("锁获取失败: {}", e)))?;
+        let mut child = session
+            .child
+            .lock()
+            .map_err(|e| AppError::Pty(format!("锁获取失败: {}", e)))?;
         let _ = child.kill();
         drop(child);
         if let Some(handle) = session.reader_handle.take() {
@@ -838,44 +963,66 @@ pub async fn pty_kill(
 /// 前端页面切换后调用此命令将新 Channel 绑定到已有 PTY session。
 /// P2-45: 回放后 drain 清空 ring buffer，避免重复数据堆积。
 /// P2-42: 检测子进程退出码，若已退出则发送 Exit 事件。
+/// BE-01: async + spawn_blocking，ring buffer drain + Channel::send 不阻塞 IPC worker。
 #[tauri::command]
-pub fn pty_reattach(
+pub async fn pty_reattach(
     state: tauri::State<'_, AppState>,
     session_id: String,
     on_output: Channel<PtyEvent>,
 ) -> Result<(), AppError> {
-    let sessions = state.pty.sessions.read().map_err(|e| AppError::Pty(format!("锁获取失败: {}", e)))?;
-    let session = sessions
-        .get(&session_id)
-        .ok_or_else(|| AppError::SessionNotFound(session_id.clone()))?;
+    let (channel, output_ring, exit_code) = {
+        let sessions = state
+            .pty
+            .sessions
+            .read()
+            .map_err(|e| AppError::Pty(format!("锁获取失败: {}", e)))?;
+        let session = sessions
+            .get(&session_id)
+            .ok_or_else(|| AppError::SessionNotFound(session_id.clone()))?;
+        (
+            session.channel.clone(),
+            session.output_ring.clone(),
+            session.exit_code.clone(),
+        )
+    };
 
-    // 1. 替换 Channel
-    let mut ch = session.channel.write().map_err(|e| AppError::Pty(format!("锁获取失败: {}", e)))?;
-    *ch = Some(on_output);
+    tokio::task::spawn_blocking(move || -> Result<(), AppError> {
+        // 1. 替换 Channel
+        let mut ch = channel
+            .write()
+            .map_err(|e| AppError::Pty(format!("锁获取失败: {}", e)))?;
+        *ch = Some(on_output);
 
-    // 2. 回放 ring buffer 并清空（P2-45: drain 同时清空，无需额外 clear）
-    {
-        let mut ring = session.output_ring.lock().map_err(|e| AppError::Pty(format!("锁获取失败: {}", e)))?;
-        let data: Vec<u8> = ring.drain(..).collect();
-        drop(ring); // 释放锁再 send
-        if !data.is_empty() {
-            if let Some(ref c) = *ch {
-                let _ = c.send(PtyEvent::Output { bytes: data });
+        // 2. 回放 ring buffer 并清空（P2-45: drain 同时清空，无需额外 clear）
+        {
+            let mut ring = output_ring
+                .lock()
+                .map_err(|e| AppError::Pty(format!("锁获取失败: {}", e)))?;
+            let data: Vec<u8> = ring.drain(..).collect();
+            drop(ring); // 释放锁再 send
+            if !data.is_empty() {
+                if let Some(ref c) = *ch {
+                    let _ = c.send(PtyEvent::Output { bytes: data });
+                }
             }
         }
-    }
 
-    // 3. 检查退出状态（P2-42: reader 线程可能已记录退出码）
-    {
-        let code = *session.exit_code.lock().map_err(|e| AppError::Pty(format!("锁获取失败: {}", e)))?;
-        if let Some(code) = code {
-            if let Some(ref c) = *ch {
-                let _ = c.send(PtyEvent::Exit { code: Some(code) });
+        // 3. 检查退出状态（P2-42: reader 线程可能已记录退出码）
+        {
+            let code = *exit_code
+                .lock()
+                .map_err(|e| AppError::Pty(format!("锁获取失败: {}", e)))?;
+            if let Some(code) = code {
+                if let Some(ref c) = *ch {
+                    let _ = c.send(PtyEvent::Exit { code: Some(code) });
+                }
             }
         }
-    }
 
-    Ok(())
+        Ok(())
+    })
+    .await
+    .map_err(|e| AppError::Pty(format!("pty_reattach join error: {e}")))?
 }
 
 /// Windows Job Object — 将子进程与父进程生命周期绑定，防止孤儿进程

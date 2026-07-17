@@ -11,8 +11,8 @@ use crate::pty::spawn::PtyEvent;
 
 /// PTY 会话 — 持有 master（读写/缩放）、子进程、writer 和 reader 线程句柄
 pub struct PtySession {
-    /// PTY master 端，用于 resize；Mutex 包裹以满足 Sync 要求
-    pub master: Mutex<Box<dyn portable_pty::MasterPty + Send>>,
+    /// PTY master 端，用于 resize；Arc<Mutex<>> 包裹以支持跨线程访问（BE-01: pty_resize 在 spawn_blocking 内需要 clone）
+    pub master: Arc<Mutex<Box<dyn portable_pty::MasterPty + Send>>>,
     /// 子进程句柄，用于 kill 和获取退出码
     /// P2-11: 改为 Arc<Mutex<>> 以在 reader 线程中调用 child.wait() 获取真实退出码
     pub child: Arc<Mutex<Box<dyn portable_pty::Child + Send>>>,
@@ -31,6 +31,8 @@ pub struct PtySession {
     /// Windows Job Object 句柄（孤儿防护，drop 时 CloseHandle）
     /// 非 Windows 平台为零大小占位类型
     pub job_object: Option<crate::pty::spawn::JobHandle>,
+    /// SEC-08: 前端 panel ID，用于校验 pty_write/resize/kill 的调用方归属
+    pub panel_id: String,
 }
 
 impl Drop for PtySession {
@@ -46,7 +48,8 @@ pub struct PtyState {
     /// session_id → PtySession
     pub sessions: RwLock<HashMap<String, PtySession>>,
     /// ConPTY spawn 串行化锁（Windows 并发 spawn 会卡死输出管道）
-    pub spawn_lock: Mutex<()>,
+    /// BE-01: Arc 包装以支持 pty_spawn 在 spawn_blocking 内获取锁
+    pub spawn_lock: Arc<Mutex<()>>,
 }
 
 impl Default for PtyState {
@@ -59,7 +62,7 @@ impl PtyState {
     pub fn new() -> Self {
         Self {
             sessions: RwLock::new(HashMap::new()),
-            spawn_lock: Mutex::new(()),
+            spawn_lock: Arc::new(Mutex::new(())),
         }
     }
 }
