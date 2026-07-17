@@ -62,7 +62,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### 前向接口（未来扩展预留）
 
-- `exportContextBindings(context)`：导出某 context 当前生效绑定（含 global，排除解绑），供将来 HTML iframe 转发脚本注入用。
+- `exportContextBindings(context)`：导出某 context 当前生效绑定（含 global，排除解绑），供 HtmlPanel postMessage 键盘转发 `handleMessage` 中动态比对全局快捷键用。
 - `listCommands()`：列出已注册命令元数据，供将来可视化设置 UI 枚举用。
 
 ### 指纹索引 + 引用计数
@@ -80,7 +80,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `commandCatalog.ts` | 命令目录单一真值源：`COMMAND_CATALOG`/`COMMAND_META_BY_ID`/`commandFromMeta` |
 | `usePanelFocus.ts` | React hook：focusin→pushContext+onActivate，focusout→popContext+onDeactivate，卸载清理。**只跟踪焦点上下文与聚焦实例，不每实例注册命令**（取代旧 useShortcutContext） |
 | `wireKeybindings.ts` | 覆盖层→注册表接线纯 helper：`wireKeybindings(registry, store)`（立即应用 + 订阅重应用，返回 unsubscribe） |
-| `forwardGlobalShortcuts.ts` | iframe 键盘桥：`attachGlobalShortcutForwarder(doc)` 给同源 iframe.contentDocument 挂 capture keydown，命中全局绑定则 preventDefault + 重放到父 window，返回 detach |
 | `globalCommands.ts` | 全局快捷键工厂：`createGlobalShortcuts`（`global.closeTab`） |
 | `index.ts` | barrel export |
 
@@ -162,11 +161,15 @@ const actions = { getSelection: () => terminalRef.current?.getSelection() };
 
 ## HTML iframe 全局键转发（已实现）
 
-HTML 面板内容在 `<iframe sandbox="allow-scripts allow-same-origin" srcDoc>` 中，iframe 内 `keydown` 不冒泡到父 window，焦点进 iframe 后全局快捷键（如 Ctrl+W）本会失效。
+HTML 面板内容在 `<iframe sandbox="allow-scripts" srcDoc={...}>` 中（不含 `allow-same-origin`），iframe 内 keydown 不冒泡到父 window。焦点进 iframe 后全局快捷键（如 Ctrl+W）本会失效。
 
-因 `allow-same-origin` 与父同源，`forwardGlobalShortcuts.ts` 的 `attachGlobalShortcutForwarder(doc)` 给 `iframe.contentDocument` 挂 capture keydown 监听（运行在父上下文）：命中**全局 context 绑定**（动态 `exportContextBindings("global")`）→ `preventDefault` + 合成 keydown 重放到父 window → 注册表正常分发（`global.closeTab` → 关活跃面板）。`HtmlPanel` 在 iframe `onLoad` 时挂载、重载/卸载时 detach。仅重放命中全局绑定的键，页面其余键不受影响。
+**注入脚本 postMessage 路径**（当前方案）：`HtmlPanel.tsx` 注入脚本在 iframe 内 `keydown` capture → `window.parent.postMessage({type:"slterm_key", fingerprint, ...}, "null")`。父窗口 `useEffect` 中的 `handleMessage` 监听 `"message"` 事件：校验 `e.origin === "null"`（srcdoc opaque origin）+ `e.source === iframe.contentWindow` → `exportContextBindings("global")` 动态比对 → 命中则 `window.dispatchEvent(合成KeyboardEvent)`（附带 `__slterm_postMessage` 信任标记）→ `ShortcutRegistry` 正常分发（`global.closeTab` → 关活跃面板）。页面其余按键不受影响。
+
+**旧 `forwardGlobalShortcuts.ts` 已删除**（Stage 8 FE-13）：原 `attachGlobalShortcutForwarder(doc)` 需 `allow-same-origin` 才能访问 `iframe.contentDocument`，与 sandbox 安全策略冲突；postMessage 方案无需同源，安全面更优。旧文件及其专属测试 `forward-global-shortcuts.test.ts` 均已删除。
 
 ## 测试覆盖
+
+> 用例数为快照，最新计数以 `.claude/test-inventory.md` 为准。
 
 | 文件 | 覆盖范围 |
 |------|----------|
@@ -175,7 +178,6 @@ HTML 面板内容在 `<iframe sandbox="allow-scripts allow-same-origin" srcDoc>`
 | `commandCatalog.test.ts` | 6 命令齐全 + 元数据、id 唯一、defaultKey 合法且非自身保留、commandFromMeta 合并/抛错 |
 | `shortcuts.test.ts` | 注册/注销、引用计数、上下文栈竞态、匹配排序（含 metaKey 修饰键）、IME 透传、global、handler 返回值+stopPropagation、**setOverrides 重绑/解绑/降级/冲突、resolve/forceContext、exportContextBindings、listCommands、_reset 清 overrides** |
 | `wireKeybindings.test.ts` | 立即应用、store 变更重应用、unsubscribe |
-| `forwardGlobalShortcuts.test.ts` | 命中全局键→preventDefault+重放(props 正确)、非全局键不转发、多绑定/空绑定、detach 后失效、修饰键指纹区分 |
 | `usePanelFocus.test.ts` | focusin→pushContext+onActivate、focusout(离子树)→popContext+onDeactivate、内部焦点转移不触发、卸载清理 |
 | `globalCommands.test.ts` | createGlobalShortcuts 命令结构（defaultKey/title/category）、Ctrl+W 关闭、无面板透传、延迟求值 |
 | `keyboard.test.ts` | createTerminalShortcuts()（无参）copy/paste/newline 经 getActiveTerminal 派发、无 active 透传、Ctrl+C 不注册 |

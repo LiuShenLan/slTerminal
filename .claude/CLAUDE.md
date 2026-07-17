@@ -30,12 +30,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 规划目录结构（实现时落到既定位置，不另起炉灶）：
 - 前端 `src/`：`ipc/`（唯一通信层）、`types/`、`stores/`、`workspace/`（布局 + titleManager）、`panels/`（terminal/editor）、`features/`、`theme/`、`lib/`。
-- 后端 `src-tauri/src/`：`lib.rs`（注册命令/State/run）、`error.rs`、`state.rs`，功能模块 `pty/ fs/ git/ claude/ notify/`。
+- 后端 `src-tauri/src/`：`lib.rs`（注册命令/State/run）、`error.rs`、`state.rs`，功能模块 `pty/ fs/ git/ notify/`。
 
 ## 硬性开发约束（来自架构文档第七节，新增功能必须遵守）
 
 1. **前端绝不直接碰 OS/文件/进程**：`invoke` 只允许出现在 `src/ipc/`；其它文件只调用 `ipc/` 暴露的领域函数。
-2. **后端按功能分模块**（pty/fs/git/claude/notify）：模块间不互相穿透，共享只经 `state.rs` 的 `AppState`。
+2. **后端按功能分模块**（pty/fs/git/notify）：模块间不互相穿透，共享只经 `state.rs` 的 `AppState`。
 3. **命令统一注册**于 `lib.rs` 的 `generate_handler!`；一律返回 `Result<_, AppError>`；阻塞 I/O 用 `spawn_blocking`。
 4. **DTO 双边对应**：`src/types/` ↔ Rust 模块 DTO 一一对应；Rust `snake_case` ↔ JS `camelCase`，改一边必须改另一边。
 5. **面板封闭**：Dockview 面板只能是 `panels/` 下注册过的类型；新增类型 = 加目录 + 在 `panelRegistry.ts` 注册。
@@ -43,7 +43,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 7. **布局单点**：操作页面布局只经 `workspace/layoutSerde.ts` 用 Dockview `toJSON/fromJSON` 存取。
 8. **会话元数据单点**：PTY 进程映射仅在 `panels/terminal/TerminalRegistry`（模块级 Map）管理，前端会话元数据已合并。面板只订阅，不自存。
 9. **平台分支收敛**：`#[cfg(windows)]` 只允许出现在 `pty/spawn.rs`、`pty/shell.rs` 等明确处，业务逻辑不撒 cfg。
-10. **权限最小化**：新增命令必须在 `capabilities/` 显式放行，不用通配 `*`。
+10. **权限最小化**：Tauri 2 自定义命令默认放行，`capabilities/` 只管插件权限；不追加通配 `*`。
 
 ## Windows 关键坑（PTY 实现时必踩）
 
@@ -66,12 +66,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 四级测试金字塔，按执行速度和隔离度分层。完整用例清单 → `@.claude/test-inventory.md`。
 
-| 层级 | 名称 | 技术栈 | 运行命令 | 约用例数 |
-|------|------|--------|----------|---------|
-| L1 | Rust 单元/集成 | `cargo test`、`tempfile` 隔离 | `cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1` | ~196 |
-| L2 | 前端单元/集成 | Vitest + jsdom | `npm test` | ~1095 |
-| L3 | 终端 headless 渲染 | Vitest + `@xterm/headless` | `npm run test:l3` | 116 |
-| L4 | 端到端 (E2E) | WDIO + embedded driver | `npm run e2e`（= `build:e2e` + `wdio`） | 12 |
+| 层级 | 名称 | 技术栈 | 运行命令 | 用例数 |
+|------|------|--------|----------|--------|
+| L1 | Rust 单元/集成 | `cargo test`、`tempfile` 隔离 | `cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1` | 见 test-inventory |
+| L2 | 前端单元/集成 | Vitest + jsdom | `npm test` | 见 test-inventory |
+| L3 | 终端 headless 渲染 | Vitest + `@xterm/headless` | `npm run test:l3` | 见 test-inventory |
+| L4 | 端到端 (E2E) | WDIO + embedded driver | `npm run e2e`（= `build:e2e` + `wdio`） | 见 test-inventory |
 
 核心原则：
 - **隔离优先**：L1 用 `tempfile::tempdir()` 隔离文件系统、`SPAWN_LOCK` 串行化 PTY；L2 用 `vi.mock()` 隔离 IPC/终端库；L4 用 embedded driver 隔离浏览器依赖

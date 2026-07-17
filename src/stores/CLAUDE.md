@@ -72,5 +72,5 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 1. 新 store 文件放在 `src/stores/` 下。
 2. 在 `index.ts` 中 re-export store hook 和类型。
-3. 如需持久化，委托给 `src/ipc/fs`，不在 store 内直接调用 Tauri `invoke`。
+3. 持久化按数据类型委托对应 IPC 模块：settings 类（`fontSize`/`keybindings`）走 `src/ipc/settings`（`~/.slterminal/settings.json`）；项目数据类（`projects`）走 `src/ipc/fs`（`slterminal-projects.json`）。不在 store 内直接调用 Tauri `invoke`。
 4. 避免跨 store 的隐式依赖——store 之间如需协调，在上层组件或命令中完成。
