@@ -18,16 +18,32 @@ const {
   mockFit,
   mockProposeDimensions,
   mockOnFontSizeChange,
-} = vi.hoisted(() => ({
-  mockPushContext: vi.fn(),
-  mockPopContext: vi.fn(),
-  mockRegister: vi.fn(() => vi.fn()), // 返回注销函数
-  mockUnregisterFn: vi.fn(),
-  mockResolve: vi.fn<(e: KeyboardEvent, ctx?: string) => boolean>(() => false), // 委托解析：默认未消费
-  mockFit: vi.fn(),
-  mockProposeDimensions: vi.fn(() => ({ cols: 80, rows: 24 })),
-  mockOnFontSizeChange: vi.fn(),
-}));
+  mockRegistryMap,
+  mockRegistryRegister,
+  mockRegistryGet,
+  mockRegistryRemove,
+} = vi.hoisted(() => {
+  const registry = new Map<string, { sessionId: string }>();
+  return {
+    mockPushContext: vi.fn(),
+    mockPopContext: vi.fn(),
+    mockRegister: vi.fn(() => vi.fn()), // 返回注销函数
+    mockUnregisterFn: vi.fn(),
+    mockResolve: vi.fn<(e: KeyboardEvent, ctx?: string) => boolean>(() => false), // 委托解析：默认未消费
+    mockFit: vi.fn(),
+    mockProposeDimensions: vi.fn(() => ({ cols: 80, rows: 24 })),
+    mockOnFontSizeChange: vi.fn(),
+    mockRegistryMap: registry,
+    mockRegistryRegister: vi.fn((panelId: string, entry: { sessionId: string }) => {
+      registry.set(panelId, entry);
+    }),
+    mockRegistryGet: vi.fn((panelId: string) => registry.get(panelId)),
+    mockRegistryRemove: vi.fn((panelId: string) => {
+      registry.delete(panelId);
+      return true;
+    }),
+  };
+});
 
 // ─── 捕获 mock Terminal 实例（供测试验证 addEventListener 调用） ───
 let capturedTerminal: {
@@ -157,9 +173,9 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
 // useXterm.ts import { TerminalRegistry } from "./TerminalRegistry"
 vi.mock("../panels/terminal/TerminalRegistry", () => ({
   TerminalRegistry: {
-    register: vi.fn(),
-    get: vi.fn(),
-    remove: vi.fn(),
+    register: mockRegistryRegister,
+    get: mockRegistryGet,
+    remove: mockRegistryRemove,
   },
 }));
 
@@ -189,6 +205,11 @@ import {
   mockResizeObserver,
   setBufferType,
 } from "./helpers/xterm-test-utils";
+
+// ─── 全局 beforeEach：清空 mock Registry 状态（约束 #8：仅 register 后 get 才返回 entry） ───
+beforeEach(() => {
+  mockRegistryMap.clear();
+});
 
 // ─── 测试套件 ───
 
@@ -695,7 +716,7 @@ describe("字体大小调节", () => {
   });
 
   it("45. 到达下限 8 → 缩小不触发 onFontSizeChange", () => {
-    // 设置 store 字体大小为下限 8（useFontSizeBridge 从 store 读取基准值）
+    // 设置 store 字体大小为下限 8（useFontSizeWheel 从 store 读取基准值）
     useFontSize.setState({ terminalFontSize: 8 });
 
     renderHook(() =>
@@ -720,7 +741,7 @@ describe("字体大小调节", () => {
   });
 
   it("46. 到达上限 32 → 放大不触发 onFontSizeChange", () => {
-    // 设置 store 字体大小为上限 32（useFontSizeBridge 从 store 读取基准值）
+    // 设置 store 字体大小为上限 32（useFontSizeWheel 从 store 读取基准值）
     useFontSize.setState({ terminalFontSize: 32 });
 
     renderHook(() =>

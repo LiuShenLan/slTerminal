@@ -13,6 +13,7 @@ import type { MutableRefObject } from "react";
 import { type Terminal } from "@xterm/xterm";
 import { type FitAddon } from "@xterm/addon-fit";
 import { pty } from "../../ipc";
+import { TerminalRegistry } from "./TerminalRegistry";
 
 /** 列数变化 resize debounce 时间（毫秒）：宽度变化需 re-wrap 所有行，成本高 */
 const COL_RESIZE_DEBOUNCE_MS = 100;
@@ -25,7 +26,7 @@ const COL_RESIZE_DEBOUNCE_MS = 100;
  * @param container         终端容器 DOM 元素
  * @param terminal          xterm.js Terminal 实例（可为 null，null 时 effect 不执行）
  * @param fitAddon          FitAddon 实例（可为 null）
- * @param ptySessionIdRef   PTY 会话 ID ref（非 null 表示 PTY 已 spawn，允许 resize，动态读取最新值）
+ * @param panelId           面板 ID，用于从 TerminalRegistry 读取 sessionId（约束 #8 单点元数据）
  * @param cancelPendingFlush 丢弃输出缓冲合帧的回调（resize 前调用，防止旧尺寸数据错位）
  * @param isReady           终端是否就绪（canFit + 未销毁等复合条件）
  * @param isDisposedRef     组件是否已销毁 ref（回调中防御性检查，防止 unmount 后回调触发）
@@ -34,7 +35,7 @@ export function usePtyResize(
   container: HTMLElement | null,
   terminal: Terminal | null,
   fitAddon: FitAddon | null,
-  ptySessionIdRef: MutableRefObject<string | null>,
+  panelId: string,
   cancelPendingFlush: () => void,
   isReady: boolean,
   isDisposedRef?: MutableRefObject<boolean>,
@@ -66,7 +67,7 @@ export function usePtyResize(
       try {
         const dims = fitAddon.proposeDimensions();
         // NaN 守卫：proposeDimensions 可能返回 NaN（xtermjs#4338）
-        const sid = ptySessionIdRef.current;
+        const sid = TerminalRegistry.get(panelId)?.sessionId;
         if (!dims || !Number.isFinite(dims.cols) || !Number.isFinite(dims.rows) || !sid) {
           return;
         }
@@ -96,7 +97,7 @@ export function usePtyResize(
           cancelPendingFlushRef.current();
           try {
             fitAddon.fit();
-            const currentSid = ptySessionIdRef.current;
+            const currentSid = TerminalRegistry.get(panelId)?.sessionId;
             if (currentSid) {
               pty.resize(currentSid, dims.cols, dims.rows).catch(() => {});
             }

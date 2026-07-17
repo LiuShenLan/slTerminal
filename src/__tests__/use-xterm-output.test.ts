@@ -15,15 +15,31 @@ const {
   mockResolve,
   mockFit,
   mockProposeDimensions,
-} = vi.hoisted(() => ({
-  mockPushContext: vi.fn(),
-  mockPopContext: vi.fn(),
-  mockRegister: vi.fn(() => vi.fn()), // 返回注销函数
-  mockUnregisterFn: vi.fn(),
-  mockResolve: vi.fn<(e: KeyboardEvent, ctx?: string) => boolean>(() => false), // 委托解析：默认未消费
-  mockFit: vi.fn(),
-  mockProposeDimensions: vi.fn(() => ({ cols: 80, rows: 24 })),
-}));
+  mockRegistryMap,
+  mockRegistryRegister,
+  mockRegistryGet,
+  mockRegistryRemove,
+} = vi.hoisted(() => {
+  const registry = new Map<string, { sessionId: string }>();
+  return {
+    mockPushContext: vi.fn(),
+    mockPopContext: vi.fn(),
+    mockRegister: vi.fn(() => vi.fn()), // 返回注销函数
+    mockUnregisterFn: vi.fn(),
+    mockResolve: vi.fn<(e: KeyboardEvent, ctx?: string) => boolean>(() => false), // 委托解析：默认未消费
+    mockFit: vi.fn(),
+    mockProposeDimensions: vi.fn(() => ({ cols: 80, rows: 24 })),
+    mockRegistryMap: registry,
+    mockRegistryRegister: vi.fn((panelId: string, entry: { sessionId: string }) => {
+      registry.set(panelId, entry);
+    }),
+    mockRegistryGet: vi.fn((panelId: string) => registry.get(panelId)),
+    mockRegistryRemove: vi.fn((panelId: string) => {
+      registry.delete(panelId);
+      return true;
+    }),
+  };
+});
 
 // ─── 捕获 mock Terminal 实例（供测试验证 addEventListener 调用） ───
 let capturedTerminal: {
@@ -137,9 +153,9 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
 // useXterm.ts import { TerminalRegistry } from "./TerminalRegistry"
 vi.mock("../panels/terminal/TerminalRegistry", () => ({
   TerminalRegistry: {
-    register: vi.fn(),
-    get: vi.fn(),
-    remove: vi.fn(),
+    register: mockRegistryRegister,
+    get: mockRegistryGet,
+    remove: mockRegistryRemove,
   },
 }));
 
@@ -168,6 +184,11 @@ import {
   mockResizeObserver,
   setBufferType,
 } from "./helpers/xterm-test-utils";
+
+// ─── 全局 beforeEach：清空 mock Registry 状态（约束 #8：仅 register 后 get 才返回 entry） ───
+beforeEach(() => {
+  mockRegistryMap.clear();
+});
 
 // ─── 测试套件 ───
 
@@ -808,7 +829,7 @@ describe("非焦点终端降频", () => {
     });
   });
 
-  it("NF3: visible=false 期间直写路径也被抑制", async () => {
+  it("NF3: visible=false 期间直写路径被抑制（对齐 TE-16）", async () => {
     const { rerender } = renderHook(
       ({ visible }) =>
         useXterm({ container, cols: 80, rows: 24, panelId: "nf-3", visible }),
@@ -823,14 +844,9 @@ describe("非焦点终端降频", () => {
     rerender({ visible: false });
     capturedTerminal!.write.mockClear();
 
-    // 直写路径：<64 字节在 visible 期间会走直写
-    // 注意：visible=false 时 visibleRef.current 也为 false
-    // handlePtyOutput 中的 fast-path (< 64) 不检查 visible，
-    // 只在大块路径中检查 isVisible
-    ptyOut.sendPtyOutput(new Array(30).fill(80)); // <64 字节 → 直写（不检查 visible）
-    // 直写路径不受 visible 控制——这是当前实现的设计选择
-    // （fast-path 用于打字回显，不受焦点状态影响）
-    expect(capturedTerminal!.write).toHaveBeenCalledTimes(1);
+    // TE-16: visible=false 时，<64 字节直写路径也走累积缓冲，不直写终端
+    ptyOut.sendPtyOutput(new Array(30).fill(80)); // <64 字节 → 被 visible 门控抑制
+    expect(capturedTerminal!.write).not.toHaveBeenCalled();
   });
 
   it("NF4: 组件在 visible=false 状态下卸载 → kill PTY", async () => {

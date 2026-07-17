@@ -45,6 +45,8 @@ export interface UsePtyOutputReturn {
   e2eTextBufferRef: MutableRefObject<string[]>;
   /** 获取当前待 flush 缓冲快照（仅测试用） */
   getPendingBuffer: () => Uint8Array[];
+  /** retry disposable ref（供 useXterm cleanup 显式清理，FE-08） */
+  retryDisposableRef: MutableRefObject<{ dispose: () => void } | null>;
 }
 
 /**
@@ -57,7 +59,7 @@ export interface UsePtyOutputReturn {
  * 合帧管道：PTY 输出 → handlePtyOutput → 阈值分流 → 合帧缓冲 → 双定时器 → flushBuffer → xterm.js
  *
  * @param terminal        xterm.js Terminal 实例 ref
- * @param ptySessionId    PTY 会话 ID ref（exit 时置 null）
+ * @param panelId         面板 ID（供日志/调试用）
  * @param visible         面板是否可见（非焦点终端降频积累）
  * @param onTabStateChange  页签状态变更回调（命令运行/退出时触发）
  * @param onRetrySpawn    重连 spawn 回调 ref（Enter 触发时调用，由 useXterm 设置）
@@ -66,7 +68,7 @@ export interface UsePtyOutputReturn {
  */
 export function usePtyOutput(
   terminal: MutableRefObject<Terminal | null>,
-  ptySessionId: MutableRefObject<string | null>,
+  _panelId: string,
   visible: boolean,
   onTabStateChange?: (state: TabState) => void,
   onRetrySpawn?: MutableRefObject<((cols: number, rows: number) => void) | null>,
@@ -196,8 +198,9 @@ export function usePtyOutput(
         // 直写阈值：使用 rawBytes.length（字节）而非 text.length（字符）
         // CJK 字符在 UTF-8 中每字符 3 字节，text.length 会低估实际数据量，
         // 导致含中文的 Ink 输出绕过合帧路径造成撕裂
-        if (rawBytes.length < DIRECT_WRITE_THRESHOLD) {
-          // 直写路径：打字回显等极小数据，低延迟优先
+        const isVisible = visibleRef.current !== false;
+        if (rawBytes.length < DIRECT_WRITE_THRESHOLD && isVisible) {
+          // 直写路径：极小数据且面板可见时低延迟优先
           terminal.current?.write(text);
         } else {
           // 合帧路径：≥64 字节走缓冲 + DEC 2026 原子渲染
@@ -218,7 +221,6 @@ export function usePtyOutput(
           pendingBufSizeRef.current += rawBytes.length;
 
           // 非焦点终端降频：仅累积不 flush，切回可见时统一回放
-          const isVisible = visibleRef.current !== false;
           if (isVisible) {
             // Idle 定时器：IDLE_FLUSH_MS 内无新数据则 flush（适应 Ink burst 模式）
             if (idleTimerRef.current !== null) clearTimeout(idleTimerRef.current);
@@ -235,7 +237,7 @@ export function usePtyOutput(
         }
       } else if (event.type === "exit") {
         // 进程退出处理
-        ptySessionId.current = null;
+        // 注意：不再自管 sessionId 副本——PTY session 生命周期由 TerminalRegistry 集中管理（约束 #8）
 
         // 若命令正在运行则重置页签状态（恢复原标题和图标）
         if (isCommandRunningRef.current) {
@@ -252,7 +254,7 @@ export function usePtyOutput(
         setupRetry(retryDimsRef.current.cols, retryDimsRef.current.rows);
       }
     },
-    [flushBuffer, setupRetry, terminal, ptySessionId],
+    [flushBuffer, setupRetry, terminal],
   );
 
   return {
@@ -263,5 +265,6 @@ export function usePtyOutput(
     setupRetry,
     e2eTextBufferRef,
     getPendingBuffer: () => pendingBufferRef.current,
+    retryDisposableRef,
   };
 }

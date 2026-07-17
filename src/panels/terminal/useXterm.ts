@@ -61,7 +61,7 @@ export interface UseXtermOptions {
   visible?: boolean;
   /** 终端字体大小（运行时动态调节，默认 14） */
   fontSize?: number;
-  /** 字体大小变更回调（Ctrl+Wheel 触发）——已由 useFontSizeBridge 内部处理，保留仅接口兼容 */
+  /** 字体大小变更回调（Ctrl+Wheel 触发）——已由 useFontSizeWheel 内部处理，保留仅接口兼容 */
   onFontSizeChange?: (size: number) => void;
   /** 命令运行状态变更回调（OSC 133 检测到注册命令启动/退出时触发） */
   onTabStateChange?: (state: TabState) => void;
@@ -136,9 +136,6 @@ export function useXterm({
   /** Terminal 状态变量——当 Terminal 实例就绪时设置，触发下游 hook 的 useEffect 重新注册 */
   const [termState, setTermState] = useState<Terminal | null>(null);
 
-  /** PTY 会话 ID */
-  const sessionIdRef = useRef<string | null>(null);
-
   /** 最近一次 spawn 使用的尺寸（供 exit/retry 使用） */
   const lastColsRef = useRef(DEFAULT_COLS);
   const lastRowsRef = useRef(DEFAULT_ROWS);
@@ -153,10 +150,11 @@ export function useXterm({
   // 4. 终端快捷键上下文（active terminal + focus context）
   // ═══════════════════════════════════════════════════════════════
   const writeToPty = useCallback((data: Uint8Array) => {
-    if (sessionIdRef.current) {
-      pty.write(sessionIdRef.current, data).catch(() => {});
+    const sid = TerminalRegistry.get(panelId)?.sessionId;
+    if (sid) {
+      pty.write(sid, data).catch(() => {});
     }
-  }, []);
+  }, [panelId]);
 
   const terminalActions = useMemo<TerminalActions>(
     () => ({
@@ -175,9 +173,9 @@ export function useXterm({
   // ═══════════════════════════════════════════════════════════════
 
   // PTY 输出处理（合帧缓冲 + Idle+Max 定时器 + 进程退出/重连）
-  const { flushBuffer, cancelPendingFlush, handlePtyOutput, getPendingBuffer, setupRetry } = usePtyOutput(
+  const { flushBuffer, cancelPendingFlush, handlePtyOutput, getPendingBuffer, setupRetry, retryDisposableRef } = usePtyOutput(
     terminalRef,
-    sessionIdRef,
+    panelId,
     visible ?? true,
     onTabStateChange,
     doSpawnRef,
@@ -191,7 +189,7 @@ export function useXterm({
     container,
     termState,
     fitAddonRef.current,
-    sessionIdRef,
+    panelId,
     cancelPendingFlush,
     isReady,
     isDisposedRef,
@@ -247,8 +245,9 @@ export function useXterm({
     if (E2E_ENABLED) {
       setTerminalSessionReady(container, false);
       installTerminalWriteToPty(container, (data: string) => {
-        if (sessionIdRef.current) {
-          pty.write(sessionIdRef.current, new TextEncoder().encode(data))
+        const sid = TerminalRegistry.get(panelId)?.sessionId;
+        if (sid) {
+          pty.write(sid, new TextEncoder().encode(data))
             .catch((err) => console.error("E2E PTY write 失败:", err));
         }
       });
@@ -277,8 +276,7 @@ export function useXterm({
       pty
         .spawn({ panelId, cols, rows, cwd }, handlePtyOutput)
         .then((sessionId) => {
-          sessionIdRef.current = sessionId;
-          // 注册到 TerminalRegistry（跨页面切换时可供 reattach 查询）
+          // 注册到 TerminalRegistry（跨页面切换时可供 reattach 查询，约束 #8 单点元数据）
           TerminalRegistry.register(panelId, {
             term,
             sessionId,
@@ -334,9 +332,10 @@ export function useXterm({
 
     // 终端输入 → 后端
     term.onData((data) => {
-      if (sessionIdRef.current) {
+      const sid = TerminalRegistry.get(panelId)?.sessionId;
+      if (sid) {
         pty.write(
-          sessionIdRef.current,
+          sid,
           new TextEncoder().encode(data),
         ).catch((err) => console.error("PTY write 失败:", err));
       }
@@ -349,9 +348,13 @@ export function useXterm({
         cancelAnimationFrame(fitRafId);
       }
 
-      const sid = sessionIdRef.current;
-      if (sid) {
-        pty.kill(sid).catch(() => {});
+      // FE-08: 先清理 retry disposable（Terminal dispose 前的显式路径）
+      retryDisposableRef.current?.dispose();
+      retryDisposableRef.current = null;
+
+      const entry = TerminalRegistry.get(panelId);
+      if (entry) {
+        pty.kill(entry.sessionId).catch(() => {});
       }
       TerminalRegistry.remove(panelId);
       doSpawnRef.current = null;
@@ -397,8 +400,9 @@ export function useXterm({
     try {
       fitAddonRef.current!.fit();
       const dims = fitAddonRef.current!.proposeDimensions();
-      if (dims && sessionIdRef.current) {
-        pty.resize(sessionIdRef.current, dims.cols, dims.rows)
+      const sid = TerminalRegistry.get(panelId)?.sessionId;
+      if (dims && sid) {
+        pty.resize(sid, dims.cols, dims.rows)
           .catch((err) => console.error("PTY resize 失败:", err));
       }
     } catch {

@@ -78,9 +78,38 @@ export function useTerminalInstance(
   const e2eTextBufferRef = useRef<string[]>([]);
   /** WebGL 加载取消函数（cleanup 中调用，停止重试并释放 addon） */
   const webglCancelRef = useRef<(() => void) | null>(null);
+  /** document.fonts.ready 取消标志（cleanup 后置 true，rAF 回调双重检查） */
+  const fontsReadyCancelledRef = useRef(false);
 
   // 记录上次 fontSize 值，避免相同值触发 effect
   const prevFontSizeRef = useRef<number | undefined>(undefined);
+
+  // 内部销毁逻辑：effect cleanup 与 dispose 回调共用
+  const performDispose = useCallback(() => {
+    if (isDisposedRef.current) return;
+    isDisposedRef.current = true;
+    isReadyRef.current = false;
+
+    // 取消 document.fonts.ready 后续回调
+    fontsReadyCancelledRef.current = true;
+
+    // 取消 WebGL 重试 + dispose addon（webgl.ts 的 cancel 负责清理）
+    webglCancelRef.current?.();
+    webglCancelRef.current = null;
+    webglAddonRef.current = null;
+
+    // dispose addon 和 Terminal
+    fitAddonRef.current?.dispose();
+    fitAddonRef.current = null;
+    terminalRef.current?.dispose();
+    terminalRef.current = null;
+
+    // 清空 E2E 文本缓冲
+    e2eTextBufferRef.current.length = 0;
+
+    // 注意：不重置 smGuardRef——与 useXterm 原行为一致，StrictMode 双重挂载时
+    // smGuardRef 保持 true 防止第二次 mount 重建 Terminal 实例
+  }, []);
 
   // 主生命周期：创建 Terminal + addon + 挂载 DOM
   useEffect(() => {
@@ -92,6 +121,7 @@ export function useTerminalInstance(
 
     // 重置销毁标记
     isDisposedRef.current = false;
+    fontsReadyCancelledRef.current = false;
 
     // 创建 Terminal 实例（xterm.js 不支持二次 open()，每次挂载均新建）
     const term = new Terminal({
@@ -122,7 +152,8 @@ export function useTerminalInstance(
     // 字体预加载后刷新布局（包裹 rAF 确保布局稳定）
     document.fonts.ready.then(() => {
       requestAnimationFrame(() => {
-        if (isDisposedRef.current) return;
+        // 双重检查取消状态：cleanup 中置 true 阻止后续回调
+        if (fontsReadyCancelledRef.current || isDisposedRef.current) return;
         // 容器尺寸为 0（display:none）时跳过，防止无效 fit
         if (!container || container.offsetWidth === 0 || container.offsetHeight === 0) return;
         if (!term.element) return;
@@ -156,28 +187,7 @@ export function useTerminalInstance(
       });
     }
 
-    return () => {
-      // ── 清理链 ——
-      isDisposedRef.current = true;
-      isReadyRef.current = false;
-
-      // 取消 WebGL 重试 + dispose addon（webgl.ts 的 cancel 负责清理）
-      webglCancelRef.current?.();
-      webglCancelRef.current = null;
-      webglAddonRef.current = null;
-
-      // dispose addon 和 Terminal
-      fitAddonRef.current?.dispose();
-      fitAddonRef.current = null;
-      terminalRef.current?.dispose();
-      terminalRef.current = null;
-
-      // 清空 E2E 文本缓冲
-      e2eTextBufferRef.current.length = 0;
-
-      // 注意：不重置 smGuardRef——与 useXterm 原行为一致，StrictMode 双重挂载时
-      // smGuardRef 保持 true 防止第二次 mount 重建 Terminal 实例
-    };
+    return performDispose;
   }, [container]);
   // options 和 fontSize 变化不重建 Terminal——字体由独立 effect 处理，
   // options 在挂载时确定，运行时不变
@@ -204,24 +214,8 @@ export function useTerminalInstance(
     webglCancelRef.current = cancel;
   }, []);
 
-  // dispose 回调（供外部主动销毁，幂等）
-  const dispose = useCallback(() => {
-    if (isDisposedRef.current) return;
-    isDisposedRef.current = true;
-    isReadyRef.current = false;
-
-    // 取消 WebGL 重试 + dispose addon（webgl.ts 的 cancel 负责清理）
-    webglCancelRef.current?.();
-    webglCancelRef.current = null;
-    webglAddonRef.current = null;
-    fitAddonRef.current?.dispose();
-    fitAddonRef.current = null;
-    terminalRef.current?.dispose();
-    terminalRef.current = null;
-
-    e2eTextBufferRef.current.length = 0;
-    // 注意：不重置 smGuardRef，与 useEffect cleanup 行为一致
-  }, []);
+  // dispose 回调（供外部主动销毁，幂等，与 effect cleanup 共用 performDispose）
+  const dispose = performDispose;
 
   return {
     terminal: terminalRef,
