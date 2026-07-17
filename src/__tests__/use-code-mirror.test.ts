@@ -692,3 +692,249 @@ describe("handleSave 保存逻辑", () => {
     dispatchSpy.mockRestore();
   });
 });
+
+// ─── FE-01: 文件切换竞态（generation 计数）───
+
+describe("FE-01 文件切换竞态", () => {
+  let container: HTMLDivElement;
+
+  beforeEach(() => {
+    container = createContainer();
+    capturedStateExtensions = null;
+    vi.clearAllMocks();
+    mockDialogSave.mockResolvedValue(null);
+    (fs.writeFile as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    (gitDiff as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    container.innerHTML = "";
+    // 恢复 readFile 默认实现
+    (fs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue("");
+  });
+
+  it("R1. 快速连续切换 filePath A→B → 最终显示 B 内容，过期 A 的 view 未创建", async () => {
+    // 创建延迟 Promise：A 的 readFile 挂起，B 的 readFile 立即完成
+    let resolveA!: (value: string) => void;
+    const deferredA = new Promise<string>((r) => { resolveA = r; });
+
+    const readFileMock = fs.readFile as ReturnType<typeof vi.fn>;
+    readFileMock.mockImplementation(async (path: string) => {
+      if (path === "/test/a.js") return deferredA;
+      return "// content B";
+    });
+
+    mockDestroy.mockClear();
+
+    const { rerender, unmount } = renderHook(
+      ({ fp }) => useCodeMirror({ container, filePath: fp, panelId: "race-1" }),
+      { initialProps: { fp: "/test/a.js" } as { fp: string | undefined } },
+    );
+
+    // 此时 initEditor 等待 deferredA（readFile 未完成），EditorView 尚未创建
+    expect(capturedStateExtensions).toBeNull();
+    expect(container.children.length).toBe(0);
+
+    // 快速切换到 B（触发 cleanup + 新 effect）
+    rerender({ fp: "/test/b.js" });
+
+    // B 的 readFile 立即 resolve → EditorView 被创建
+    await waitFor(() => {
+      expect(capturedStateExtensions).toBeDefined();
+    });
+
+    // 只有 B 的 EditorView 在 DOM 中
+    expect(container.children.length).toBe(1);
+
+    // 现在让 A 的 readFile 完成（过期）
+    resolveA("// content A");
+
+    // 微任务队列清空
+    await new Promise((r) => setTimeout(r, 10));
+
+    // A 的过期结果被 generation 检查丢弃，没有额外 EditorView 被创建
+    expect(container.children.length).toBe(1);
+
+    // cleanup（rerender 时）viewRef 为 null（A 未创建 view），mockDestroy 尚未被调用
+    expect(mockDestroy).not.toHaveBeenCalled();
+
+    // 卸载：cleanup 销毁 B 的 view
+    unmount();
+    expect(mockDestroy).toHaveBeenCalledTimes(1);
+  });
+
+  it("R2. gen 检查阻止过期 initEditor 覆盖新 viewRef", async () => {
+    // A 先完成但 B 紧随其后切换 —— 验证 gen 检查而非时序依赖
+    let resolveA!: (value: string) => void;
+    let resolveB!: (value: string) => void;
+    const deferredA = new Promise<string>((r) => { resolveA = r; });
+    const deferredB = new Promise<string>((r) => { resolveB = r; });
+
+    const readFileMock = fs.readFile as ReturnType<typeof vi.fn>;
+    // 第一次调用（A）→ deferredA；第二次（B）→ deferredB
+    readFileMock.mockImplementationOnce(() => deferredA);
+    readFileMock.mockImplementationOnce(() => deferredB);
+    // 后续调用回退默认（""），但本测试不会触发
+
+    mockDestroy.mockClear();
+
+    const { rerender, unmount } = renderHook(
+      ({ fp }) => useCodeMirror({ container, filePath: fp, panelId: "race-2" }),
+      { initialProps: { fp: "/test/a.js" } as { fp: string | undefined } },
+    );
+
+    expect(capturedStateExtensions).toBeNull();
+
+    // 切换到 B（cleanup: mountedRef=false, viewRef=null → no destroy）
+    rerender({ fp: "/test/b.js" });
+
+    // 两个 readFile 都在挂起
+    expect(capturedStateExtensions).toBeNull();
+
+    // B 先完成
+    resolveB!("// content B");
+    await waitFor(() => {
+      expect(capturedStateExtensions).toBeDefined();
+    });
+
+    // B 的 view 在 DOM 中
+    expect(container.children.length).toBe(1);
+    mockDestroy.mockClear(); // 重置计数，后续断言只关注 A 的过期结果
+
+    // A 后完成（过期）
+    resolveA!("// content A");
+    await new Promise((r) => setTimeout(r, 10));
+
+    // gen 检查阻止：A 不创建 view，不调 destroy（因为没创建过）
+    expect(container.children.length).toBe(1);
+    // rerender cleanup 时 viewRef 为 null（A 未创建 view），gen 检查又阻止 A 创建，
+    // 所以 A 的路径上始终无 destroy 调用
+    mockDestroy.mockClear();
+
+    unmount();
+    expect(mockDestroy).toHaveBeenCalledTimes(1);
+  });
+
+  it("R3. 正常切换（无竞态）→ A 创建后被销毁，B 独立创建", async () => {
+    // 场景：A 快速完成 → view 创建 → 切换到 B → A 的 view 被 cleanup 销毁 → B 创建
+    const readFileMock = fs.readFile as ReturnType<typeof vi.fn>;
+    readFileMock.mockResolvedValue("// content"); // 快速完成
+
+    mockDestroy.mockClear();
+
+    const { rerender, unmount } = renderHook(
+      ({ fp }) => useCodeMirror({ container, filePath: fp, panelId: "race-3" }),
+      { initialProps: { fp: "/test/a.js" } as { fp: string | undefined } },
+ );
+
+    // A 快速完成 → view 创建
+    await waitFor(() => {
+      expect(capturedStateExtensions).toBeDefined();
+    });
+
+    // 切换到 B：cleanup 同步销毁 A
+    mockDestroy.mockClear();
+    rerender({ fp: "/test/b.js" });
+    expect(mockDestroy).toHaveBeenCalledTimes(1); // A 被销毁
+
+    // B 创建
+    await waitFor(() => {
+      expect(capturedStateExtensions).toBeDefined();
+    });
+
+    // B 随后被卸载销毁
+    mockDestroy.mockClear();
+    unmount();
+    expect(mockDestroy).toHaveBeenCalledTimes(1); // B 被销毁
+  });
+});
+
+// ─── FE-19: repoDir 计算修复 ───
+
+describe("FE-19 handleSave repoDir 计算", () => {
+  let container: HTMLDivElement;
+
+  /** 渲染 hook 并等待 EditorView 初始化，返回 activate 后的 editorActions */
+  async function renderAndActivate(overrides?: Partial<Parameters<typeof useCodeMirror>[0]>) {
+    const result = renderHook(() =>
+      useCodeMirror({
+        container,
+        filePath: "/test/save.js",
+        panelId: "fe19",
+        ...overrides,
+      }),
+    );
+
+    await waitFor(() => expect(capturedStateExtensions).toBeDefined());
+
+    const activateCall = mockUsePanelFocus.mock.calls[mockUsePanelFocus.mock.calls.length - 1];
+    const activateFn = activateCall?.[2] as (() => void) | undefined;
+    if (activateFn) activateFn();
+
+    return result;
+  }
+
+  beforeEach(() => {
+    container = createContainer();
+    capturedStateExtensions = null;
+    vi.clearAllMocks();
+    mockDialogSave.mockResolvedValue(null);
+    (fs.writeFile as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    (gitDiff as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (fs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue("// content");
+  });
+
+  afterEach(() => {
+    container.innerHTML = "";
+  });
+
+  it("P1. 盘符根目录文件 → repoDir 为 D:/（非 D:）", async () => {
+    await renderAndActivate({ filePath: "D:/file.txt", panelId: "p1" });
+
+    const editor = getActiveEditor()!;
+    editor.save();
+
+    await waitFor(() => {
+      expect(fs.writeFile).toHaveBeenCalled();
+    });
+
+    await waitFor(() => {
+      expect(gitDiff).toHaveBeenCalledWith("D:/", "D:/file.txt");
+    });
+  });
+
+  it("P2. 多层嵌套路径 → repoDir 为正确父目录", async () => {
+    await renderAndActivate({ filePath: "D:/project/src/utils.ts", panelId: "p2" });
+
+    const editor = getActiveEditor()!;
+    editor.save();
+
+    await waitFor(() => {
+      expect(fs.writeFile).toHaveBeenCalled();
+    });
+
+    await waitFor(() => {
+      expect(gitDiff).toHaveBeenCalledWith("D:/project/src", "D:/project/src/utils.ts");
+    });
+  });
+
+  it("P3. 无目录分隔符的文件 → 跳过 gitDiff（repoDir 为 null）", async () => {
+    // filePath 不含 "/" → getParentDir 返回 null → 不调 gitDiff
+    await renderAndActivate({ filePath: "README.md", panelId: "p3" });
+
+    const editor = getActiveEditor()!;
+    editor.save();
+
+    await waitFor(() => {
+      expect(fs.writeFile).toHaveBeenCalledWith("README.md", expect.any(String));
+    });
+
+    // gitDiff 不应被调用——getParentDir("README.md") 返回 null
+    // 注意：initEditor 阶段可能调用了 gitDiff，需要区分
+    const gitDiffCalls = (gitDiff as ReturnType<typeof vi.fn>).mock.calls;
+    const savePhaseCalls = gitDiffCalls.filter(
+      (call) => call[1] === "README.md",
+    );
+    expect(savePhaseCalls.length).toBe(0);
+  });
+});

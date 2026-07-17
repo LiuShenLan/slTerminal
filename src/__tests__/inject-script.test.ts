@@ -92,6 +92,49 @@ describe("injectScript", () => {
   });
 
   // ==========================================================================
+  // FE-02: 宿主 HTML 含 </script> 被转义，防止提前闭合注入脚本
+  // ==========================================================================
+
+  it("宿主 HTML 含 </script> 被转义为 <\\/script>（大小写不敏感）", () => {
+    const html = "<html><head></head><body><p></script></p></body></html>";
+    const result = injectScript(html, SCRIPT, MARKER);
+    // 宿主 HTML 中的 </script> 被转义
+    expect(result).toContain("<\\/script>");
+    // 注入脚本标签自身的 </script> 不受影响
+    expect(result).toContain("<script>/* FORWARDER */</script>");
+  });
+
+  it("宿主 HTML 含大写 </SCRIPT> 也被转义", () => {
+    const html = "<html><head></head><body><pre></SCRIPT></pre></body></html>";
+    const result = injectScript(html, SCRIPT, MARKER);
+    expect(result).toContain("<\\/script>");
+    expect(result).not.toContain("</SCRIPT>");
+  });
+
+  it("宿主 HTML 含混合大小写 </Script> 也被转义", () => {
+    const html = "<html><head></head><body></Script></body></html>";
+    const result = injectScript(html, SCRIPT, MARKER);
+    expect(result).toContain("<\\/script>");
+  });
+
+  it("宿主 HTML 多处 </script> 全部转义", () => {
+    const html =
+      "<html><head></head><body><div></script></div><span></script></span></body></html>";
+    const result = injectScript(html, SCRIPT, MARKER);
+    // 注入脚本标签自身的 </script> 在注入脚本内，宿主部分的全部转义
+    const hostPart = result.split("/* FORWARDER */")[0];
+    expect(hostPart).not.toMatch("</script>");
+  });
+
+  it("宿主 HTML 无 </script> 时不受影响（与旧行为一致）", () => {
+    const html =
+      "<html><head></head><body><p>Hello World</p></body></html>";
+    const result = injectScript(html, SCRIPT, MARKER);
+    expect(result).toContain("Hello World");
+    expect(result).toContain(SCRIPT);
+  });
+
+  // ==========================================================================
   // I7: 已含 marker → 幂等，不重复注入
   // ==========================================================================
   it("已含 marker 不重复注入（幂等）", () => {

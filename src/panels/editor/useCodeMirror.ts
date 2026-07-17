@@ -28,6 +28,7 @@ import { css } from "@codemirror/lang-css";
 import { markdown } from "@codemirror/lang-markdown";
 import { xml } from "@codemirror/lang-xml";
 import { save } from "../../ipc/dialog";
+import { normalizePath } from "../../lib/path";
 import { fs } from "../../ipc";
 import { diffGutter, updateDiffGutter, clearDiffGutter } from "./gitGutter";
 import { onFsEvent } from "../../ipc/notify";
@@ -111,6 +112,19 @@ export function getLanguageExtension(filename?: string): Extension {
   }
 }
 
+/** 获取文件父目录路径；无有效父目录时返回 null（跳过 gitDiff） */
+function getParentDir(filePath: string): string | null {
+  const normalized = normalizePath(filePath);
+  const lastSlash = normalized.lastIndexOf("/");
+  if (lastSlash < 0) return null;
+  const parent = normalized.slice(0, lastSlash);
+  // 根目录下文件（如 "/file" → ""）
+  if (parent === "") return null;
+  // 仅盘符（如 "D:"）→ 补斜杠为 "D:/"
+  if (/^[A-Za-z]:$/.test(parent)) return parent + "/";
+  return parent;
+}
+
 export function useCodeMirror({ container, filePath, panelId, fontSize, onFontSizeChange }: UseCodeMirrorOptions) {
   const viewRef = useRef<EditorView | null>(null);
   const filePathRef = useRef<string | undefined>(filePath);
@@ -129,6 +143,8 @@ export function useCodeMirror({ container, filePath, panelId, fontSize, onFontSi
   const justSavedRef = useRef(new Set<string>());
   // P1-17: 组件卸载标记，防止 async initEditor 在 unmount 后操作 DOM
   const mountedRef = useRef(false);
+  // generation 计数器：filePath 每次变化时递增，异步回调中比对以丢弃过期结果
+  const genRef = useRef(0);
 
   /** Ctrl+S 保存 — G3: 无 filePath 时弹出另存为对话框 */
   const handleSave = useCallback(async () => {
@@ -163,22 +179,21 @@ export function useCodeMirror({ container, filePath, panelId, fontSize, onFontSi
     }
 
     // P13: 保存后刷新 diff gutter
-    const normalizedPath = path.replace(/\\/g, "/");
-    const repoDir =
-      normalizedPath.lastIndexOf("/") >= 0
-        ? normalizedPath.slice(0, normalizedPath.lastIndexOf("/"))
-        : ".";
-    gitDiff(repoDir, normalizedPath)
-      .then((hunks) => {
-        if (hunks.length > 0) {
-          if (viewRef.current) updateDiffGutter(viewRef.current, hunks);
-        } else {
-          // 文件已干净（匹配 HEAD）→ 清除旧 diff 标记
-          if (viewRef.current) clearDiffGutter(viewRef.current);
-        }
-      })
-      // P2-15: gitDiff 失败时 console.warn，不再静默吞错
-      .catch((err) => { console.warn("[slTerminal] git diff 刷新失败:", err); });
+    const normalizedPath = normalizePath(path);
+    const repoDir = getParentDir(normalizedPath);
+    if (repoDir) {
+      gitDiff(repoDir, normalizedPath)
+        .then((hunks) => {
+          if (hunks.length > 0) {
+            if (viewRef.current) updateDiffGutter(viewRef.current, hunks);
+          } else {
+            // 文件已干净（匹配 HEAD）→ 清除旧 diff 标记
+            if (viewRef.current) clearDiffGutter(viewRef.current);
+          }
+        })
+        // P2-15: gitDiff 失败时 console.warn，不再静默吞错
+        .catch((err) => { console.warn("[slTerminal] git diff 刷新失败:", err); });
+    }
 
     // 通知标题管理器：路径变更（空白编辑器首次保存 或 另存为到新路径）
     if (oldPath !== path && panelId) {
@@ -226,6 +241,7 @@ export function useCodeMirror({ container, filePath, panelId, fontSize, onFontSi
     if (!container) return;
 
     filePathRef.current = filePath;
+    const gen = ++genRef.current;
 
     // 异步加载文件内容
     // P1-17: fire-and-forget async，开头标记 mounted，await 后检查标记再操作 DOM
@@ -236,6 +252,8 @@ export function useCodeMirror({ container, filePath, panelId, fontSize, onFontSi
       if (filePath) {
         try {
           doc = await fs.readFile(filePath);
+          // generation 检查：filePath 已切换则丢弃过期结果
+          if (genRef.current !== gen) return;
           // P2-10: 大文件检查 — UTF-8 文本 length 近似文件字节数
           const sizeHint = doc.length;
           if (sizeHint > MAX_FILE_SIZE_BYTES) {
@@ -260,6 +278,8 @@ export function useCodeMirror({ container, filePath, panelId, fontSize, onFontSi
 
       // P1-17: 组件可能已在 await 期间卸载，检查后避免 EditorView DOM 泄漏
       if (!mountedRef.current) return;
+      // generation 检查：filePath 已切换则丢弃过期结果
+      if (genRef.current !== gen) return;
 
       const view = new EditorView({
         state: EditorState.create({
@@ -292,18 +312,19 @@ export function useCodeMirror({ container, filePath, panelId, fontSize, onFontSi
 
       // D1: 文件打开后加载 diff 边栏
       if (filePath) {
-        const normalizedPath = filePath.replace(/\\/g, "/");
-        const parentDir =
-          normalizedPath.lastIndexOf("/") >= 0
-            ? normalizedPath.slice(0, normalizedPath.lastIndexOf("/"))
-            : ".";
-        try {
-          const loadedHunks = await gitDiff(parentDir, normalizedPath);
-          if (loadedHunks.length > 0) {
-            updateDiffGutter(view, loadedHunks);
+        const normalizedPath = normalizePath(filePath);
+        const repoDir = getParentDir(normalizedPath);
+        if (repoDir) {
+          try {
+            const loadedHunks = await gitDiff(repoDir, normalizedPath);
+            // generation 检查：filePath 已切换则丢弃过期结果（view 可能已被 cleanup 销毁）
+            if (genRef.current !== gen) return;
+            if (loadedHunks.length > 0) {
+              updateDiffGutter(view, loadedHunks);
+            }
+          } catch {
+            // 非 git 仓库，diff 不可用，静默
           }
-        } catch {
-          // 非 git 仓库，diff 不可用，静默
         }
       }
     };

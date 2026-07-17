@@ -2,6 +2,16 @@
 //
 // 用于 HtmlPanel：在设置 srcDoc 前将键盘转发脚本注入到 HTML 内容中。
 // 纯函数、不访问 DOM、不抛异常。
+// 注入前转义宿主 HTML 中的 </script>（大小写不敏感），防止提前闭合注入的脚本标签。
+
+/**
+ * 转义 HTML 中的 </script> 闭合标签，防止提前闭合外层的注入脚本标签。
+ * 大小写不敏感匹配，替换为 <\/script>（反斜杠转义斜杠）。
+ * 纯函数，不抛异常。
+ */
+function escapeScriptClose(html: string): string {
+  return html.replace(/<\/script>/gi, "<\\/script>");
+}
 
 /**
  * 将脚本字符串注入到 HTML 的 </head> 之前或 <body 之前。
@@ -26,30 +36,33 @@ export function injectScript(
     return `<html><head>${script}</head><body></body></html>`;
   }
 
+  // 先转义宿主 HTML 中的 </script>，防提前闭合注入脚本
+  const safeHtml = escapeScriptClose(html);
+
   // 策略 1: 在 </head> 之前插入（大小写不敏感）
-  const headClose = /<\/head>/i.exec(html);
+  const headClose = /<\/head>/i.exec(safeHtml);
   if (headClose) {
     return (
-      html.slice(0, headClose.index) + script + html.slice(headClose.index)
+      safeHtml.slice(0, headClose.index) + script + safeHtml.slice(headClose.index)
     );
   }
 
   // 策略 2: 在 <body 之前插入（大小写不敏感，匹配 <body 开头标签）
-  const bodyOpen = /<body\b/i.exec(html);
+  const bodyOpen = /<body\b/i.exec(safeHtml);
   if (bodyOpen) {
     return (
-      html.slice(0, bodyOpen.index) + script + html.slice(bodyOpen.index)
+      safeHtml.slice(0, bodyOpen.index) + script + safeHtml.slice(bodyOpen.index)
     );
   }
 
   // 策略 3: 在 </html> 之前插入
-  const htmlClose = /<\/html>/i.exec(html);
+  const htmlClose = /<\/html>/i.exec(safeHtml);
   if (htmlClose) {
     return (
-      html.slice(0, htmlClose.index) + script + html.slice(htmlClose.index)
+      safeHtml.slice(0, htmlClose.index) + script + safeHtml.slice(htmlClose.index)
     );
   }
 
   // 兜底：追加到末尾
-  return html + script;
+  return safeHtml + script;
 }

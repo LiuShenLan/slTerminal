@@ -407,59 +407,81 @@ describe("HtmlPanel", () => {
 
   // ==========================================================================
   // postMessage 键盘转发桥
+  //
+  // 注意：handleMessage 校验 e.origin === "null" + e.source === iframe.contentWindow。
+  // window.postMessage() 在 jsdom 中不走 window.dispatchEvent（与浏览器行为不同），
+  // 故直接 dispatchEvent(new MessageEvent(...)) 构造测试消息。spy 统计需过滤
+  // MessageEvent（测试自身派发），只检查 KeyboardEvent（handler 派发）。
   // ==========================================================================
 
-  it("postMessage 命中全局快捷键 → window.dispatchEvent", async () => {
-    mocks.mockExportContextBindings.mockReturnValue([{ keystroke: "Ctrl+KeyW" }]);
+  /** 辅助：构造通过 origin + source 校验的 MessageEvent 并 dispatch */
+  function dispatchTrustedKey(iframe: HTMLIFrameElement, data: Record<string, unknown>) {
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        origin: "null",
+        source: iframe.contentWindow,
+        data,
+      }),
+    );
+  }
+
+  /** 从 spy 中统计 handler 派发的 KeyboardEvent */
+  function kbDispatchCount(spy: ReturnType<typeof vi.spyOn>) {
+    return spy.mock.calls.filter(
+      (call: unknown[]) => call[0] instanceof KeyboardEvent,
+    ).length;
+  }
+
+  /** 等待 iframe 渲染后获取其 DOM 元素 */
+  async function getRenderedIframe(filePath = "C:/test/a.html") {
     mocks.mockReadFile.mockResolvedValue("<p>test</p>");
-    renderHtmlPanel("C:/test/a.html");
+    const { getByTitle } = renderHtmlPanel(filePath);
+    const iframe = await waitFor(() => getByTitle(`HTML 预览: ${filePath}`) as HTMLIFrameElement);
+    return { iframe, getByTitle };
+  }
+
+  it("postMessage 命中全局快捷键 → 派发 KeyboardEvent", async () => {
+    mocks.mockExportContextBindings.mockReturnValue([{ keystroke: "Ctrl+KeyW" }]);
+    const { iframe } = await getRenderedIframe();
 
     const spy = vi.spyOn(window, "dispatchEvent");
-    window.postMessage(
-      {
-        type: "slterm_key",
-        fingerprint: "Ctrl+KeyW",
-        ctrlKey: true, shiftKey: false, altKey: false, metaKey: false,
-        code: "KeyW", key: "w",
-      },
-      "*",
-    );
+    dispatchTrustedKey(iframe, {
+      type: "slterm_key",
+      fingerprint: "Ctrl+KeyW",
+      ctrlKey: true, shiftKey: false, altKey: false, metaKey: false,
+      code: "KeyW", key: "w",
+    });
 
     await new Promise((r) => setTimeout(r, 10));
-    expect(spy).toHaveBeenCalled();
+    expect(kbDispatchCount(spy)).toBeGreaterThan(0);
     spy.mockRestore();
     mocks.mockExportContextBindings.mockReturnValue([]);
   });
 
   it("postMessage 非 slterm_key type → 忽略", async () => {
-    mocks.mockReadFile.mockResolvedValue("<p>test</p>");
-    renderHtmlPanel("C:/test/a.html");
+    const { iframe } = await getRenderedIframe();
 
     const spy = vi.spyOn(window, "dispatchEvent");
-    window.postMessage({ type: "other", fingerprint: "Ctrl+KeyW" }, "*");
+    dispatchTrustedKey(iframe, { type: "other", fingerprint: "Ctrl+KeyW" });
 
     await new Promise((r) => setTimeout(r, 10));
-    expect(spy).not.toHaveBeenCalled();
+    expect(kbDispatchCount(spy)).toBe(0);
     spy.mockRestore();
   });
 
   it("postMessage 非全局快捷键 → 忽略", async () => {
-    mocks.mockReadFile.mockResolvedValue("<p>test</p>");
-    renderHtmlPanel("C:/test/a.html");
+    const { iframe } = await getRenderedIframe();
 
     const spy = vi.spyOn(window, "dispatchEvent");
-    window.postMessage(
-      {
-        type: "slterm_key",
-        fingerprint: "Ctrl+KeyA",
-        ctrlKey: true, shiftKey: false, altKey: false, metaKey: false,
-        code: "KeyA", key: "a",
-      },
-      "*",
-    );
+    dispatchTrustedKey(iframe, {
+      type: "slterm_key",
+      fingerprint: "Ctrl+KeyA",
+      ctrlKey: true, shiftKey: false, altKey: false, metaKey: false,
+      code: "KeyA", key: "a",
+    });
 
     await new Promise((r) => setTimeout(r, 10));
-    expect(spy).not.toHaveBeenCalled();
+    expect(kbDispatchCount(spy)).toBe(0);
     spy.mockRestore();
   });
 
@@ -469,25 +491,126 @@ describe("HtmlPanel", () => {
   });
 
   // ==========================================================================
+  // SEC-03: origin + source 校验
+  // ==========================================================================
+
+  it("SEC-03: 伪造 origin 的消息被忽略", async () => {
+    mocks.mockExportContextBindings.mockReturnValue([{ keystroke: "Ctrl+KeyW" }]);
+    const { iframe } = await getRenderedIframe();
+
+    const spy = vi.spyOn(window, "dispatchEvent");
+    // 用非 "null" origin 构造消息 → origin 校验不通过，忽略
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        origin: "http://evil.com",
+        source: iframe.contentWindow,
+        data: {
+          type: "slterm_key",
+          fingerprint: "Ctrl+KeyW",
+          ctrlKey: true, shiftKey: false, altKey: false, metaKey: false,
+          code: "KeyW", key: "w",
+        },
+      }),
+    );
+
+    await new Promise((r) => setTimeout(r, 10));
+    expect(kbDispatchCount(spy)).toBe(0);
+    spy.mockRestore();
+    mocks.mockExportContextBindings.mockReturnValue([]);
+  });
+
+  it("SEC-03: 非本 iframe source 的消息被忽略", async () => {
+    mocks.mockExportContextBindings.mockReturnValue([{ keystroke: "Ctrl+KeyW" }]);
+    await getRenderedIframe();
+
+    const spy = vi.spyOn(window, "dispatchEvent");
+    // 用 window（父窗口）作为 source → source 校验不通过，忽略
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        origin: "null",
+        source: window, // 非 iframe.contentWindow
+        data: {
+          type: "slterm_key",
+          fingerprint: "Ctrl+KeyW",
+          ctrlKey: true, shiftKey: false, altKey: false, metaKey: false,
+          code: "KeyW", key: "w",
+        },
+      }),
+    );
+
+    await new Promise((r) => setTimeout(r, 10));
+    expect(kbDispatchCount(spy)).toBe(0);
+    spy.mockRestore();
+    mocks.mockExportContextBindings.mockReturnValue([]);
+  });
+
+  it("SEC-03: 本 iframe 消息（origin=null + source 匹配）正常转发", async () => {
+    mocks.mockExportContextBindings.mockReturnValue([{ keystroke: "Ctrl+KeyW" }]);
+    const { iframe } = await getRenderedIframe();
+
+    const spy = vi.spyOn(window, "dispatchEvent");
+    dispatchTrustedKey(iframe, {
+      type: "slterm_key",
+      fingerprint: "Ctrl+KeyW",
+      ctrlKey: true, shiftKey: false, altKey: false, metaKey: false,
+      code: "KeyW", key: "w",
+    });
+
+    await new Promise((r) => setTimeout(r, 10));
+    expect(kbDispatchCount(spy)).toBeGreaterThan(0);
+
+    // 验证合成 KeyboardEvent 携带信任标记
+    const kbCalls = spy.mock.calls.filter(([e]) => e instanceof KeyboardEvent);
+    const kbEvent = kbCalls[0]![0] as KeyboardEvent & { __slterm_postMessage?: boolean };
+    expect(kbEvent.__slterm_postMessage).toBe(true);
+
+    spy.mockRestore();
+    mocks.mockExportContextBindings.mockReturnValue([]);
+  });
+
+  it("SEC-03: origin=null 但 source 为 null 时忽略（无 source 的消息不可信）", async () => {
+    mocks.mockExportContextBindings.mockReturnValue([{ keystroke: "Ctrl+KeyW" }]);
+    await getRenderedIframe();
+
+    const spy = vi.spyOn(window, "dispatchEvent");
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        origin: "null",
+        source: null, // 无 source
+        data: {
+          type: "slterm_key",
+          fingerprint: "Ctrl+KeyW",
+          ctrlKey: true,
+        },
+      }),
+    );
+
+    await new Promise((r) => setTimeout(r, 10));
+    expect(kbDispatchCount(spy)).toBe(0);
+    spy.mockRestore();
+    mocks.mockExportContextBindings.mockReturnValue([]);
+  });
+
+  // ==========================================================================
   // 边界 (E10-E14)
   // ==========================================================================
 
-  it("E10: postMessage data 为 null → 不抛异常", () => {
-    mocks.mockReadFile.mockResolvedValue("<p>test</p>");
-    renderHtmlPanel("C:/test/a.html");
-    // data 为 null 时 !e.data 短路，不崩溃
-    expect(() => window.postMessage(null, "*")).not.toThrow();
+  it("E10: postMessage data 为 null → 不抛异常", async () => {
+    const { iframe } = await getRenderedIframe();
+    // data 为 null 时 !e.data 短路，不崩溃（前提：通过 origin + source 校验）
+    expect(() => {
+      dispatchTrustedKey(iframe, null as unknown as Record<string, unknown>);
+    }).not.toThrow();
   });
 
   it("E11: postMessage data 缺 fingerprint → 忽略", async () => {
-    mocks.mockReadFile.mockResolvedValue("<p>test</p>");
-    renderHtmlPanel("C:/test/a.html");
+    const { iframe } = await getRenderedIframe();
 
     const spy = vi.spyOn(window, "dispatchEvent");
-    window.postMessage({ type: "slterm_key" }, "*");
+    dispatchTrustedKey(iframe, { type: "slterm_key" });
 
     await new Promise((r) => setTimeout(r, 10));
-    expect(spy).not.toHaveBeenCalled();
+    expect(kbDispatchCount(spy)).toBe(0);
     spy.mockRestore();
   });
 
@@ -509,19 +632,16 @@ describe("HtmlPanel", () => {
 
   it("E14: postMessage 缺 ctrlKey 等字段 → KeyboardEvent 用 ?? false 兜底", async () => {
     mocks.mockExportContextBindings.mockReturnValue([{ keystroke: "Ctrl+KeyW" }]);
-    mocks.mockReadFile.mockResolvedValue("<p>test</p>");
-    renderHtmlPanel("C:/test/a.html");
+    const { iframe } = await getRenderedIframe();
 
     const spy = vi.spyOn(window, "dispatchEvent");
     // 只发 fingerprint 和 type，缺所有修饰键字段
-    window.postMessage(
-      { type: "slterm_key", fingerprint: "Ctrl+KeyW" },
-      "*",
-    );
+    dispatchTrustedKey(iframe, { type: "slterm_key", fingerprint: "Ctrl+KeyW" });
 
     await new Promise((r) => setTimeout(r, 10));
-    expect(spy).toHaveBeenCalled();
-    const event = spy.mock.calls[spy.mock.calls.length - 1]?.[0] as KeyboardEvent;
+    const kbCalls = spy.mock.calls.filter(([e]) => e instanceof KeyboardEvent);
+    expect(kbCalls.length).toBeGreaterThan(0);
+    const event = kbCalls[0]![0] as KeyboardEvent;
     expect(event.ctrlKey).toBe(false);
     expect(event.shiftKey).toBe(false);
     expect(event.code).toBe("");
