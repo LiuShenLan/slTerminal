@@ -65,6 +65,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             ping,
             get_windows_build_number,
+            state::set_project_root,
             pty::spawn::pty_spawn,
             pty::spawn::pty_write,
             pty::spawn::pty_resize,

@@ -6,6 +6,7 @@
 
 import { create } from "zustand";
 import * as fs from "../ipc/fs";
+import { setProjectRoot } from "../ipc/fs";
 
 /** 持久化 debounce 间隔（毫秒），供 fontSize/keybindings 等 store 共用 */
 export const PERSIST_DEBOUNCE_MS = 2000;
@@ -148,6 +149,12 @@ export const useProjects = create<ProjectsState>()((set, get) => ({
         set((state) => {
           const project = state.projects[projectId];
           if (!project) return state;
+          // SEC-01: 通知后端当前项目根路径（路径沙箱边界）
+          if (project.rootPath) {
+            setProjectRoot(project.rootPath).catch((err) =>
+              console.error("[slTerminal] 设置项目根路径失败:", err),
+            );
+          }
           return {
             projects: {
               ...state.projects,

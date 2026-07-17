@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::JoinHandle;
-use tauri::ipc::Channel;
+use tauri::{ipc::Channel, State};
 
 use crate::error::AppError;
 use crate::notify::pool::LruWatcherPool;
@@ -94,43 +94,64 @@ impl AppState {
 
 /// 验证目标路径是否在项目根目录子树内（路径 sandbox）
 ///
-/// canonicalize 项目根与目标路径后比对前缀。
-/// 若 project_root 未设置则跳过校验（开发兼容）。
+/// 相对路径先以 project_root 为基准 join 成绝对路径，再 dunce::canonicalize。
+/// 目标不存在时拒绝（不再做"上溯到存在祖先 + join + starts_with"的词法比较）。
+/// project_root 未设置时拒绝（#[cfg(test)] 豁免，避免每个测试都需设置 project_root）。
 pub fn validate_path_within_root(root_opt: &Option<PathBuf>, target: &Path) -> Result<(), AppError> {
     let root = match root_opt {
         Some(r) => r,
-        None => return Ok(()), // project_root 未设置，跳过校验
-    };
-    let canonical_root = dunce::canonicalize(root)
-        .map_err(|e| AppError::IoKind { kind: "path".into(), message: format!("无法解析项目根路径: {e}") })?;
-
-    // 尝试直接 canonicalize 目标（路径已存在）
-    let canonical_target = if let Ok(c) = dunce::canonicalize(target) {
-        c
-    } else {
-        // 目标不存在（如新建文件/目录）：沿父级上溯找到已存在的祖先，
-        // 再拼接剩余路径
-        let mut ancestor = target.to_path_buf();
-        loop {
-            if let Ok(c) = dunce::canonicalize(&ancestor) {
-                let remainder = target
-                    .strip_prefix(&ancestor)
-                    .unwrap_or(Path::new(""));
-                break c.join(remainder);
+        None => {
+            // 测试豁免：project_root 未设置时放行
+            if cfg!(test) {
+                return Ok(());
             }
-            match ancestor.parent() {
-                Some(p) => ancestor = p.to_path_buf(),
-                None => {
-                    // 无已存在祖先，退化为 root + target 拼接检查
-                    break canonical_root.join(target);
-                }
-            }
+            return Err(AppError::IoKind {
+                kind: "path".into(),
+                message: "项目根路径未设置，拒绝文件访问".into(),
+            });
         }
     };
+    let canonical_root = dunce::canonicalize(root).map_err(|e| AppError::IoKind {
+        kind: "path".into(),
+        message: format!("无法解析项目根路径: {e}"),
+    })?;
+
+    // 相对路径先以 project_root 为基准 join 成绝对路径
+    let target = if target.is_relative() {
+        canonical_root.join(target)
+    } else {
+        target.to_path_buf()
+    };
+
+    // 直接 canonicalize 目标，失败则拒绝（不再上溯祖先做词法比较）
+    let canonical_target = dunce::canonicalize(&target).map_err(|_| AppError::IoKind {
+        kind: "path".into(),
+        message: "目标路径不存在或无法解析".into(),
+    })?;
 
     if !canonical_target.starts_with(&canonical_root) {
-        return Err(AppError::IoKind { kind: "path".into(), message: "路径超出项目范围".into() });
+        return Err(AppError::IoKind {
+            kind: "path".into(),
+            message: "路径超出项目范围".into(),
+        });
     }
+    Ok(())
+}
+
+/// 设置当前项目根路径（由前端打开项目时调用）
+///
+/// canonicalize 后写入 AppState.project_root，用于后续文件操作的路径 sandbox 校验。
+#[tauri::command]
+pub fn set_project_root(path: String, state: State<'_, AppState>) -> Result<(), AppError> {
+    let canonical = dunce::canonicalize(Path::new(&path)).map_err(|e| AppError::IoKind {
+        kind: "path".into(),
+        message: format!("无法解析项目路径: {e}"),
+    })?;
+    let mut root = state.project_root.write().map_err(|e| AppError::IoKind {
+        kind: "lock".into(),
+        message: format!("获取 project_root 锁失败: {e}"),
+    })?;
+    *root = Some(canonical);
     Ok(())
 }
 
@@ -292,9 +313,9 @@ mod sandbox_tests {
         assert!(msg.contains("超出项目范围"), "错误消息应含'超出项目范围'");
     }
 
-    /// 目标路径不存在 → 沿父级上溯找到已存在祖先（降级路径）
+    /// 目标路径不存在 → 新语义拒绝（不再上溯祖先做词法比较）
     #[test]
-    fn validate_nonexistent_path_ancestor_fallback() {
+    fn validate_nonexistent_path_rejected() {
         let root = tempfile::tempdir().unwrap();
         // 创建一个已存在的父目录，再指向其中不存在的文件
         let parent = root.path().join("existing_parent");
@@ -305,7 +326,9 @@ mod sandbox_tests {
             &Some(root.path().to_path_buf()),
             &nonexistent,
         );
-        assert!(result.is_ok(), "不存在的文件（父目录在根内）应放行");
+        assert!(result.is_err(), "不存在的路径应拒绝（不再做祖先上溯）");
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("不存在") || msg.contains("无法解析"), "错误消息应提示路径不存在");
     }
 
     /// 不存在的路径在根外 → 沿父级上溯后仍在根外，应拒绝

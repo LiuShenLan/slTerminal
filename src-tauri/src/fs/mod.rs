@@ -60,13 +60,14 @@ pub async fn fs_write_file(
     content: String,
     state: State<'_, AppState>,
 ) -> Result<(), AppError> {
-    // 路径 sandbox 校验
+    // 路径 sandbox 校验（验证父目录——文件可能尚不存在，如新建/另存为）
     {
         let root = state
             .project_root
             .read()
             .map_err(|e| AppError::IoKind { kind: "lock".into(), message: format!("获取 project_root 锁失败: {e}") })?;
-        validate_path_within_root(&root, Path::new(&path))?;
+        let check_path = Path::new(&path).parent().unwrap_or(Path::new("."));
+        validate_path_within_root(&root, check_path)?;
     }
 
     match tokio::task::spawn_blocking(move || -> Result<(), AppError> {
@@ -110,7 +111,16 @@ pub async fn fs_write_file(
 /// 过滤 `.git/`、`node_modules/`（重型目录，非用户编辑文件）。
 /// 结果按文件夹→文件排序，同类型按名称字母排序。
 #[tauri::command]
-pub async fn fs_read_dir(path: String) -> Result<Vec<DirEntry>, AppError> {
+pub async fn fs_read_dir(path: String, state: State<'_, AppState>) -> Result<Vec<DirEntry>, AppError> {
+    // 路径 sandbox 校验
+    {
+        let root = state
+            .project_root
+            .read()
+            .map_err(|e| AppError::IoKind { kind: "lock".into(), message: format!("获取 project_root 锁失败: {e}") })?;
+        validate_path_within_root(&root, Path::new(&path))?;
+    }
+
     match tokio::task::spawn_blocking(move || {
         let mut entries: Vec<DirEntry> = Vec::new();
         let dir = std::fs::read_dir(&path)?;
@@ -168,13 +178,14 @@ pub async fn fs_read_dir(path: String) -> Result<Vec<DirEntry>, AppError> {
 /// 创建目录（递归创建父目录）
 #[tauri::command]
 pub async fn fs_create_dir(path: String, state: State<'_, AppState>) -> Result<(), AppError> {
-    // 路径 sandbox 校验
+    // 路径 sandbox 校验（验证父目录——目标目录可能尚不存在）
     {
         let root = state
             .project_root
             .read()
             .map_err(|e| AppError::IoKind { kind: "lock".into(), message: format!("获取 project_root 锁失败: {e}") })?;
-        validate_path_within_root(&root, Path::new(&path))?;
+        let check_path = Path::new(&path).parent().unwrap_or(Path::new("."));
+        validate_path_within_root(&root, check_path)?;
     }
 
     match tokio::task::spawn_blocking(move || {
@@ -231,14 +242,15 @@ pub async fn fs_rename(
     dst: String,
     state: State<'_, AppState>,
 ) -> Result<(), AppError> {
-    // 路径 sandbox 校验（源路径和目标路径都须在项目根内）
+    // 路径 sandbox 校验（源路径必须存在，目标路径验证父目录——目标可能尚不存在）
     {
         let root = state
             .project_root
             .read()
             .map_err(|e| AppError::IoKind { kind: "lock".into(), message: format!("获取 project_root 锁失败: {e}") })?;
         validate_path_within_root(&root, Path::new(&src))?;
-        validate_path_within_root(&root, Path::new(&dst))?;
+        let dst_parent = Path::new(&dst).parent().unwrap_or(Path::new("."));
+        validate_path_within_root(&root, dst_parent)?;
     }
 
     match tokio::task::spawn_blocking(move || {
@@ -289,7 +301,9 @@ mod read_dir_tests {
         std::fs::write(dir.path().join("b.txt"), "b").unwrap();
         std::fs::create_dir(dir.path().join("sub")).unwrap();
 
-        let entries = run(fs_read_dir(dir.path().to_string_lossy().to_string())).unwrap();
+        let app_state = test_app_state();
+        let state = unsafe { as_tauri_state(&app_state) };
+        let entries = run(fs_read_dir(dir.path().to_string_lossy().to_string(), state)).unwrap();
         assert_eq!(entries.len(), 3, "应返回 2 文件 + 1 子目录");
 
         // 验证 DirEntry 结构体字段
@@ -317,7 +331,9 @@ mod read_dir_tests {
         std::fs::create_dir(dir.path().join(".git")).unwrap();
         std::fs::write(dir.path().join("visible.txt"), "ok").unwrap();
 
-        let entries = run(fs_read_dir(dir.path().to_string_lossy().to_string())).unwrap();
+        let app_state = test_app_state();
+        let state = unsafe { as_tauri_state(&app_state) };
+        let entries = run(fs_read_dir(dir.path().to_string_lossy().to_string(), state)).unwrap();
         assert_eq!(entries.len(), 1, "应过滤 .git，仅返回 visible.txt");
         assert_eq!(entries[0].name, "visible.txt");
     }
@@ -330,7 +346,9 @@ mod read_dir_tests {
         std::fs::create_dir(dir.path().join(".git")).unwrap();
         std::fs::write(dir.path().join("visible.txt"), "ok").unwrap();
 
-        let entries = run(fs_read_dir(dir.path().to_string_lossy().to_string())).unwrap();
+        let app_state = test_app_state();
+        let state = unsafe { as_tauri_state(&app_state) };
+        let entries = run(fs_read_dir(dir.path().to_string_lossy().to_string(), state)).unwrap();
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
         assert!(names.contains(&"node_modules"), "node_modules 应显示");
         assert!(names.contains(&"visible.txt"), "visible.txt 应显示");
@@ -348,7 +366,9 @@ mod read_dir_tests {
         std::fs::create_dir(dir.path().join("node_modules")).unwrap();
         std::fs::create_dir(dir.path().join(".git")).unwrap();
 
-        let entries = run(fs_read_dir(dir.path().to_string_lossy().to_string())).unwrap();
+        let app_state = test_app_state();
+        let state = unsafe { as_tauri_state(&app_state) };
+        let entries = run(fs_read_dir(dir.path().to_string_lossy().to_string(), state)).unwrap();
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
         assert!(names.contains(&"target"));
         assert!(names.contains(&"build"));
@@ -361,7 +381,9 @@ mod read_dir_tests {
     #[test]
     fn test_fs_read_dir_empty_dir_returns_empty() {
         let dir = tempfile::tempdir().unwrap();
-        let entries = run(fs_read_dir(dir.path().to_string_lossy().to_string())).unwrap();
+        let app_state = test_app_state();
+        let state = unsafe { as_tauri_state(&app_state) };
+        let entries = run(fs_read_dir(dir.path().to_string_lossy().to_string(), state)).unwrap();
         assert_eq!(entries.len(), 0, "空目录应返回空列表");
     }
 
@@ -371,7 +393,9 @@ mod read_dir_tests {
         std::fs::create_dir(dir.path().join(".claude")).unwrap();
         std::fs::write(dir.path().join("visible.txt"), "ok").unwrap();
 
-        let entries = run(fs_read_dir(dir.path().to_string_lossy().to_string())).unwrap();
+        let app_state = test_app_state();
+        let state = unsafe { as_tauri_state(&app_state) };
+        let entries = run(fs_read_dir(dir.path().to_string_lossy().to_string(), state)).unwrap();
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
         assert!(names.contains(&".claude"), ".claude 目录应显示");
         assert!(names.contains(&"visible.txt"), "visible.txt 应显示");
@@ -385,11 +409,11 @@ mod read_dir_tests {
         let app_state = test_app_state();
         let state = unsafe { as_tauri_state(&app_state) };
 
-        run(fs_create_dir(new_dir.to_string_lossy().to_string(), state)).unwrap();
+        run(fs_create_dir(new_dir.to_string_lossy().to_string(), state.clone())).unwrap();
         assert!(new_dir.exists(), "目录应被创建");
 
         // 通过 fs_read_dir 验证目录存在
-        let entries = run(fs_read_dir(base.path().to_string_lossy().to_string())).unwrap();
+        let entries = run(fs_read_dir(base.path().to_string_lossy().to_string(), state)).unwrap();
         assert!(entries.iter().any(|e| e.name == "new_folder" && e.is_dir));
     }
 
@@ -442,14 +466,14 @@ mod read_dir_tests {
         run(fs_rename(
             src.to_string_lossy().to_string(),
             dst.to_string_lossy().to_string(),
-            state,
+            state.clone(),
         ))
         .unwrap();
         assert!(!src.exists(), "旧路径应不存在");
         assert!(dst.exists(), "新路径应存在");
 
         // 通过 fs_read_dir 验证
-        let entries = run(fs_read_dir(dir.path().to_string_lossy().to_string())).unwrap();
+        let entries = run(fs_read_dir(dir.path().to_string_lossy().to_string(), state)).unwrap();
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
         assert!(names.contains(&"new.txt"));
         assert!(!names.contains(&"old.txt"));

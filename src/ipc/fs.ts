@@ -36,3 +36,8 @@ export async function deleteEntry(path: string): Promise<void> {
 export async function rename(src: string, dst: string): Promise<void> {
   await invoke("fs_rename", { src, dst });
 }
+
+/** 设置项目根路径（路径沙箱边界，后端据此校验文件操作） */
+export async function setProjectRoot(path: string): Promise<void> {
+  await invoke("set_project_root", { path });
+}

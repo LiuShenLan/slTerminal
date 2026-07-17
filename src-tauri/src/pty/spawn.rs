@@ -684,19 +684,15 @@ pub fn pty_spawn(
     };
 
     // 将子进程放入 Job Object 防止孤儿进程（Windows 平台），
-    // 非 Windows 平台返回 None
-    let job_handle = {
+    // 非 Windows 平台使用零大小占位（对齐 pty/CLAUDE.md 跨平台设计）
+    let job_handle: Option<JobHandle> = {
         #[cfg(windows)]
         {
-            if let Some(pid) = child.process_id() {
-                Some(add_to_job_object(pid)?)
-            } else {
-                None
-            }
+            child.process_id().map(add_to_job_object).transpose()?
         }
         #[cfg(not(windows))]
         {
-            None
+            Some(JobHandle::new_dummy())
         }
     };
 
@@ -745,7 +741,6 @@ pub fn pty_spawn(
         output_ring,
         exit_code: exit_code_slot,
         da1_injected,
-        #[cfg(windows)]
         job_object: job_handle,
     };
 

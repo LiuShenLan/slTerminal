@@ -9,6 +9,7 @@
  */
 
 import { writeText } from "../src/ipc/clipboard";
+import { setProjectRoot } from "../src/ipc/fs";
 import { getShortcutRegistry } from "../src/features/shortcuts";
 import { useProjects, createProjectId, createPageId } from "../src/stores/projects";
 import type { OperationPage, Project } from "../src/stores/projects";
@@ -149,6 +150,10 @@ function installProjectHelpers(): void {
 
     useProjects.getState().addProject(project);
     useLayout.getState().setActivePage(pageId);
+    // SEC-01: 同步项目根路径到后端（路径沙箱边界）
+    setProjectRoot(dirPath).catch((err) =>
+      console.error("[slTerminal e2e] 设置项目根路径失败:", err),
+    );
     return pageId;
   };
 

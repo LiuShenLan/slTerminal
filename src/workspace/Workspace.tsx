@@ -23,6 +23,7 @@ import { ExplorerPanel } from "../features/explorer";
 import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
 import { ErrorBoundary, E2E_ENABLED } from "../lib";
+import { setProjectRoot } from "../ipc/fs";
 import { markWorkspaceReady } from "../../e2e-tests/helpers";
 
 declare global {
@@ -185,6 +186,25 @@ const Workspace: React.FC = () => {
   useEffect(() => {
     if (activePageId) ensurePageInitialized(activePageId);
   }, [activePageId, ensurePageInitialized]);
+
+  // SEC-01: 活动项目变化时同步项目根路径到后端（路径沙箱边界）
+  const prevRootRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!activePageId) return;
+    // 从当前快照推导活跃项目的 rootPath（避免以 projects 为 deps 导致频繁触发）
+    const { projects: currentProjects } = useProjects.getState();
+    for (const [, proj] of Object.entries(currentProjects)) {
+      if (proj.pages.some((p) => p.pageId === activePageId)) {
+        if (proj.rootPath && proj.rootPath !== prevRootRef.current) {
+          prevRootRef.current = proj.rootPath;
+          setProjectRoot(proj.rootPath).catch((err) =>
+            console.error("[slTerminal] 设置项目根路径失败:", err),
+          );
+        }
+        break;
+      }
+    }
+  }, [activePageId]);
 
   return (
     <div style={{ width: "100%", height: "100%" }}>
