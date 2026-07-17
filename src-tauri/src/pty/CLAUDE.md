@@ -88,7 +88,7 @@ JobHandle 在 `#[cfg(windows)]` 下为 HANDLE RAII 包装；`#[cfg(not(windows))
 
 **动机**：`portable-pty` 0.9.0 内部硬编码 flags=0x7（INHERIT_CURSOR | RESIZE_QUIRK | WIN32_INPUT_MODE），不暴露 `CreatePseudoConsole` 的 `dwFlags` 参数。最初为按 OS build 动态启用 `PASSTHROUGH_MODE`（0x8，Win11 22H2+ 输出吞吐优化）而绕过；后 PASSTHROUGH_MODE 已移除（见下），自定义路径保留用于 flags 完全控制。
 
-> **PASSTHROUGH_MODE (0x8) 已移除，勿重新启用**：passthrough 下 conhost 对子进程输出直通不解析，无法跟踪子进程的 DECSET 1000/1002/1006 mouse mode 请求，导致 terminal→child 方向的 SGR mouse report 不被转发（microsoft/terminal#376；PR #9970 的转发机制依赖 conhost 解析子进程输出）——claude 等全屏 TUI（v2.1.89+ 默认 alt buffer + mouse tracking）的鼠标滚轮完全失效。2026-07 在 Win11 build 26200 实测确认：诊断埋点显示 xterm 的 SGR wheel report（`\x1b[<64/65;x;yM`）完整写入 ConPTY stdin 但 claude 无反应；去掉 0x8 后滚轮恢复，claude 输出流畅度无肉眼可见退化。`compute_conpty_flags` 的 4 条测试锁死「任何 build 都返回 0x7」。
+> **PASSTHROUGH_MODE (0x8) 已移除，勿重新启用**：0x8 下 claude 等全屏 TUI（v2.1.89+ 默认 alt buffer + mouse tracking）的鼠标滚轮完全失效。2026-07 在 Win11 build 26200 真实 app 双向实测确认：诊断埋点显示 xterm 的 SGR wheel report（`\x1b[<64/65;x;yM`）完整写入 ConPTY stdin 但 claude 无反应；去掉 0x8 后滚轮恢复，claude 输出流畅度无肉眼可见退化。疑似机制为 passthrough 下 conhost 不解析子进程输出、不跟踪 DECSET mouse mode（microsoft/terminal#376；PR #9970）。**注意：无法用最小实验/自动化测试守卫此回归**——node 直接子进程的最小复现（DECSET 1002/1003/1006 + alt buffer + 60fps 帧刷写负载）在 0xF 下 stdin 的 SGR report 仍原样透传，阻断条件仅真实 claude 场景（pwsh→claude 进程树 + kitty 协议）复现，行为级集成测试会产生假阴性（0x8 下也绿）故未落地。`compute_conpty_flags` 的 4 条测试锁死「任何 build 都返回 0x7」（配置层守卫）；**改 flags 必须实测真实 claude 滚轮**。
 
 **自定义组件**：
 | 类型 | 职责 |

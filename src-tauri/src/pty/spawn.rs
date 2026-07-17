@@ -56,11 +56,15 @@ pub mod conpty_custom {
 
     /// 计算 ConPTY flags：固定 0x7（INHERIT_CURSOR | RESIZE_QUIRK | WIN32_INPUT_MODE）。
     ///
-    /// **勿启用 PASSTHROUGH_MODE (0x8)**：passthrough 下 conhost 对子进程输出直通不解析，
-    /// 无法跟踪子进程的 DECSET 1000/1002/1006 mouse mode 请求，导致 terminal→child 方向的
-    /// SGR mouse report 不被转发（microsoft/terminal#376；PR #9970 的转发机制依赖 conhost
-    /// 解析子进程输出）——claude 等全屏 TUI 的鼠标滚轮完全失效。2026-07 在 Win11 build 26200
-    /// 实测确认：去掉 0x8 后滚轮恢复，claude 输出流畅度无肉眼可见退化。
+    /// **勿启用 PASSTHROUGH_MODE (0x8)**：0x8 下 claude 等全屏 TUI（v2.1.89+ 默认
+    /// alt buffer + mouse tracking）的鼠标滚轮完全失效。2026-07 在 Win11 build 26200
+    /// 真实 app 双向实测：0xF 时 xterm 的 SGR wheel report（`\x1b[<64/65;x;yM`）完整写入
+    /// ConPTY stdin 但 claude 无反应，去掉 0x8 后滚轮恢复，输出流畅度无肉眼可见退化。
+    /// 疑似机制：passthrough 下 conhost 不解析子进程输出、不跟踪 DECSET 1000/1002/1006
+    /// mouse mode（microsoft/terminal#376、PR #9970）——但**最小复现实验失败**：node 直接
+    /// 子进程（DECSET 1002/1003/1006 + alt buffer + 60fps 负载）在 0xF 下 stdin 的 SGR
+    /// report 仍原样透传，阻断条件仅真实 claude 场景（pwsh→claude 进程树 + kitty 协议）
+    /// 复现。因此**验证本函数改动必须实测真实 claude 滚轮**，勿以最小实验/单测绿为依据。
     /// 保留 build_number 参数：flags 与 OS build 的关联是 ConPTY 领域接口，若未来 ConPTY
     /// 修复 passthrough 的 input 转发可按 build 恢复。
     pub fn compute_conpty_flags(_build_number: u32) -> u32 {
