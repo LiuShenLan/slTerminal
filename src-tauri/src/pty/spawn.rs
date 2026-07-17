@@ -98,20 +98,23 @@ pub mod conpty_custom {
         to_wide_null(&s)
     }
 
-    /// 构造环境块（继承当前进程环境 + 追加/覆盖 extra_envs）
+    /// 构造环境块（继承当前进程环境 + 追加/覆盖 extra_envs）。
+    /// 用 Vec 保持插入顺序，extra_envs 覆盖同名字段——确保环境块确定性。
     fn build_env_block(extra_envs: &[(String, String)]) -> Vec<u16> {
         use std::os::windows::ffi::OsStrExt;
-        let mut base: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-        // 读取当前进程环境变量
-        for (k, v) in std::env::vars() {
-            base.insert(k, v);
-        }
+        // 用 Vec 保持确定性顺序（HashMap 迭代顺序非确定性）
+        let mut env: Vec<(String, String)> = std::env::vars().collect();
         for (k, v) in extra_envs {
-            base.insert(k.clone(), v.clone());
+            // 覆盖已有键或追加到末尾
+            if let Some(existing) = env.iter_mut().find(|(ek, _)| ek == k) {
+                existing.1 = v.clone();
+            } else {
+                env.push((k.clone(), v.clone()));
+            }
         }
         // 构造 null 分隔的宽字符串块：KEY=VALUE\0KEY=VALUE\0\0
         let mut buf: Vec<u16> = Vec::new();
-        for (k, v) in &base {
+        for (k, v) in &env {
             let entry = format!("{}={}", k, v);
             buf.extend(std::ffi::OsStr::new(&entry).encode_wide());
             buf.push(0);
@@ -197,7 +200,7 @@ pub mod conpty_custom {
 
     impl MasterPty for ConPtyMaster {
         fn resize(&self, size: PtySize) -> Result<(), Error> {
-            let mut inner = self.inner.lock().expect("ConPtyInner lock poisoned");
+            let mut inner = self.inner.lock().map_err(|e| anyhow::anyhow!("ConPtyInner lock poisoned: {e}"))?;
             // 检查 HPCON 有效性（初始化或已关闭时为 INVALID_HANDLE_VALUE）
             if inner.hpc.is_invalid() {
                 inner.size = size;
@@ -207,24 +210,25 @@ pub mod conpty_custom {
                 X: size.cols as i16,
                 Y: size.rows as i16,
             };
+            // SAFETY: ResizePseudoConsole 是 Win32 ConPTY API；hpc 由 CreatePseudoConsole 创建，coord 基于已验证的 PtySize
             unsafe { ResizePseudoConsole(inner.hpc, coord)? };
             inner.size = size;
             Ok(())
         }
 
         fn get_size(&self) -> Result<PtySize, Error> {
-            Ok(self.inner.lock().expect("ConPtyInner lock poisoned").size)
+            Ok(self.inner.lock().map_err(|e| anyhow::anyhow!("ConPtyInner lock poisoned: {e}"))?.size)
         }
 
         fn try_clone_reader(&self) -> Result<Box<dyn Read + Send>, Error> {
-            Ok(Box::new(self.inner.lock().expect("ConPtyInner lock poisoned").readable.try_clone()?))
+            Ok(Box::new(self.inner.lock().map_err(|e| anyhow::anyhow!("ConPtyInner lock poisoned: {e}"))?.readable.try_clone()?))
         }
 
         fn take_writer(&self) -> Result<Box<dyn Write + Send>, Error> {
             Ok(Box::new(
                 self.inner
                     .lock()
-                    .expect("ConPtyInner lock poisoned")
+                    .map_err(|e| anyhow::anyhow!("ConPtyInner lock poisoned: {e}"))?
                     .writable
                     .take()
                     .ok_or_else(|| anyhow::anyhow!("writer 已被取走（仅允许 take 一次）"))?,
@@ -232,9 +236,10 @@ pub mod conpty_custom {
         }
     }
 
-    /// 子进程句柄 RAII wrapper
+    /// 子进程句柄 RAII wrapper。
+    /// proc_handle 用 Arc 共享，支持 clone_killer 无锁复制。
     pub struct RawChild {
-        proc_handle: Mutex<OwnedHandle>,
+        proc_handle: Arc<Mutex<OwnedHandle>>,
         pid: u32,
     }
 
@@ -249,7 +254,8 @@ pub mod conpty_custom {
     impl ChildKiller for RawChild {
         fn kill(&mut self) -> std::io::Result<()> {
             use windows::Win32::System::Threading::TerminateProcess;
-            let proc = self.proc_handle.lock().expect("RawChild proc_handle lock poisoned");
+            let proc = self.proc_handle.lock().map_err(|e| std::io::Error::other(format!("RawChild proc_handle lock poisoned: {e}")))?;
+            // SAFETY: TerminateProcess 是 Win32 API；HANDLE 来自 CreateProcessW 创建的有效子进程句柄
             unsafe {
                 TerminateProcess(HANDLE(proc.as_raw_handle()), 1)
                     .map_err(std::io::Error::other)?;
@@ -258,13 +264,10 @@ pub mod conpty_custom {
         }
 
         fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
-            // ChildKiller 通过互斥锁共享进程句柄，无需克隆
-            // 此方法仅用于 trait 兼容，不应被调用
-            let proc_handle = self.proc_handle.lock().expect("RawChild proc_handle lock poisoned");
-            let duped = proc_handle.try_clone()
-                .expect("RawChild clone_killer: 复制进程句柄失败");
+            // 通过 Arc 共享进程句柄，无需克隆 HANDLE 或加锁
+            // 此方法仅用于 trait 兼容
             Box::new(RawChild {
-                proc_handle: Mutex::new(duped),
+                proc_handle: Arc::clone(&self.proc_handle),
                 pid: self.pid,
             })
         }
@@ -273,16 +276,22 @@ pub mod conpty_custom {
     impl Child for RawChild {
         fn try_wait(&mut self) -> std::io::Result<Option<portable_pty::ExitStatus>> {
             use windows::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject};
+            use windows::Win32::Foundation::WAIT_OBJECT_0;
 
-            let proc = self.proc_handle.lock().expect("RawChild proc_handle lock poisoned");
+            let proc = self.proc_handle.lock().map_err(|e| std::io::Error::other(format!("RawChild proc_handle lock poisoned: {e}")))?;
+            // SAFETY: WaitForSingleObject 和 GetExitCodeProcess 是 Win32 API；HANDLE 来自 CreateProcessW 创建的有效子进程句柄
             unsafe {
-                let result = WaitForSingleObject(
-                    HANDLE(proc.as_raw_handle()),
-                    0,
-                );
-                // WAIT_TIMEOUT = 0x0000_0102, WAIT_OBJECT_0 = 0x0000_0000
+                let result = WaitForSingleObject(HANDLE(proc.as_raw_handle()), 0);
+                // WAIT_TIMEOUT = 0x0000_0102: 子进程仍在运行
                 if result.0 == 0x0000_0102 {
                     return Ok(None);
+                }
+                // WAIT_OBJECT_0 = 0x0000_0000: 子进程已退出
+                if result != WAIT_OBJECT_0 {
+                    return Err(std::io::Error::other(format!(
+                        "WaitForSingleObject 失败: 返回值 0x{:08X}",
+                        result.0
+                    )));
                 }
                 let mut exit_code: u32 = 0;
                 GetExitCodeProcess(HANDLE(proc.as_raw_handle()), &mut exit_code)
@@ -293,11 +302,19 @@ pub mod conpty_custom {
 
         fn wait(&mut self) -> std::io::Result<portable_pty::ExitStatus> {
             use windows::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject};
+            use windows::Win32::Foundation::WAIT_OBJECT_0;
             const INFINITE: u32 = 0xFFFF_FFFF;
 
-            let proc = self.proc_handle.lock().expect("RawChild proc_handle lock poisoned");
+            let proc = self.proc_handle.lock().map_err(|e| std::io::Error::other(format!("RawChild proc_handle lock poisoned: {e}")))?;
+            // SAFETY: WaitForSingleObject 和 GetExitCodeProcess 是 Win32 API；HANDLE 来自 CreateProcessW 创建的有效子进程句柄
             unsafe {
-                WaitForSingleObject(HANDLE(proc.as_raw_handle()), INFINITE);
+                let result = WaitForSingleObject(HANDLE(proc.as_raw_handle()), INFINITE);
+                if result != WAIT_OBJECT_0 {
+                    return Err(std::io::Error::other(format!(
+                        "WaitForSingleObject 失败: 返回值 0x{:08X}",
+                        result.0
+                    )));
+                }
                 let mut exit_code: u32 = 0;
                 GetExitCodeProcess(HANDLE(proc.as_raw_handle()), &mut exit_code)
                     .map_err(std::io::Error::other)?;
@@ -310,7 +327,8 @@ pub mod conpty_custom {
         }
 
         fn as_raw_handle(&self) -> Option<std::os::windows::raw::HANDLE> {
-            let proc = self.proc_handle.lock().expect("RawChild proc_handle lock poisoned");
+            // 锁中毒时返回 None（句柄已不可靠）
+            let proc = self.proc_handle.lock().ok()?;
             Some(proc.as_raw_handle() as std::os::windows::raw::HANDLE)
         }
     }
@@ -320,6 +338,7 @@ pub mod conpty_custom {
             // ConPTY 关闭前确保 writer 已 drop（stops child stdin → EOF 传递）
             drop(self.writable.take());
             if !self.hpc.is_invalid() {
+                // SAFETY: ClosePseudoConsole 是 Win32 ConPTY 清理 API；hpc 由 CreatePseudoConsole 创建，仅调用一次
                 unsafe { ClosePseudoConsole(self.hpc) };
             }
         }
@@ -344,6 +363,7 @@ pub mod conpty_custom {
             Y: rows as i16,
         };
 
+        // SAFETY: CreatePseudoConsole 是 Win32 ConPTY 创建 API；管道句柄来自 filedescriptor::Pipe，在其生命周期内有效
         let hpc = unsafe {
             CreatePseudoConsole(
                 size,
@@ -398,6 +418,8 @@ pub mod conpty_custom {
 
         let cwd_wide: Option<Vec<u16>> = cwd.map(|c| to_wide_null(&c.replace('/', "\\")));
 
+        // SAFETY: CreateProcessW 是 Win32 进程创建 API；app_name/cmd_line/cwd/env_block 均在栈上保持存活；
+        // lpAttributeList 由 AttrList 管理生命周期；pi 是未初始化的 PROCESS_INFORMATION 输出参数
         let mut pi: PROCESS_INFORMATION = unsafe { mem::zeroed() };
         let res = unsafe {
             CreateProcessW(
@@ -431,7 +453,7 @@ pub mod conpty_custom {
         }
 
         Ok(RawChild {
-            proc_handle: Mutex::new(unsafe { OwnedHandle::from_raw_handle(pi.hProcess.0 as _) }),
+            proc_handle: Arc::new(Mutex::new(unsafe { OwnedHandle::from_raw_handle(pi.hProcess.0 as _) })),
             pid: pi.dwProcessId,
         })
     }

@@ -82,13 +82,14 @@ pub fn reader_loop(
             }
             Ok(n) => {
                 // 首轮剥离 ConPTY 启动序列（纯函数），全部剥离则跳过本轮
+                // 仅当出现真实非启动输出后才置 drained——若本轮全为启动序列（None），
+                // 保持剥离状态以处理跨 16KB 边界的残留启动序列（BE-13）
                 let bytes = match apply_startup_strip(startup_drained, &buf[..n]) {
                     Some(b) => {
                         startup_drained = true;
                         b
                     }
                     None => {
-                        startup_drained = true;
                         continue;
                     }
                 };
@@ -497,6 +498,32 @@ mod tests {
         // 首轮启动序列后跟正常输出 → 剥离前缀
         let result = apply_startup_strip(false, b"\x1b[2J\x1b[HPS C:\\> ");
         assert_eq!(result, Some(b"PS C:\\> ".to_vec()));
+    }
+
+    #[test]
+    fn startup_strip_across_buffer_boundary() {
+        // BE-13: 跨缓冲区边界的启动序列剥离——第一轮全为启动序列（None），
+        // 不置 drained；第二轮仍有启动序列 + 真实输出，应继续剥离
+        let r1 = apply_startup_strip(false, b"\x1b]0;pwsh\x07");
+        assert_eq!(r1, None); // 第一轮全部是 OSC 标题 → 跳过
+
+        // 第二轮仍用 startup_drained=false（模拟 reader_loop 中 None 分支不改 drained）
+        let r2 = apply_startup_strip(false, b"\x1b[2J\x1b[HPS C:\\> ");
+        assert_eq!(r2, Some(b"PS C:\\> ".to_vec())); // 清屏+归位被剥离，保留真实输出
+    }
+
+    #[test]
+    fn startup_strip_multi_round_all_startup_then_real() {
+        // BE-13: 多轮纯启动序列后出现真实输出——验证 drained 仅在 Some 时才置
+        // 模拟三轮：OSC 标题 → 清屏 → 光标归位+真实输出
+        let r1 = apply_startup_strip(false, b"\x1b]0;pwsh\x07");
+        assert_eq!(r1, None);
+
+        let r2 = apply_startup_strip(false, b"\x1b[2J");
+        assert_eq!(r2, None);
+
+        let r3 = apply_startup_strip(false, b"\x1b[?25h\x1b[HHello World");
+        assert_eq!(r3, Some(b"Hello World".to_vec()));
     }
 
     #[test]
