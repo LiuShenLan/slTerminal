@@ -2,8 +2,7 @@
 
 :root {
   /* JetBrains 暗色配色基础色 */
-  --sl-bg-primary: #1e1e2e;
-  --sl-bg-secondary: #2b2b3c;
+  /* --sl-bg-primary / --sl-bg-secondary 由 ROOT_CSS_VARS（colors.ts）经 main.tsx 注入 */
   --sl-fg-primary: #cdd6f4;
   --sl-fg-secondary: #a6adc8;
 

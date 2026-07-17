@@ -47,6 +47,8 @@ export const SIDEBAR_BG = "#252526";
 export const SECONDARY_BG = "#2D2D2D";
 export const DROPDOWN_BG = "#2A2D2E";
 export const APP_BG = "#1e1e2e";
+export const APP_BG_PRIMARY = "#1e1e2e";
+export const APP_BG_SECONDARY = "#2b2b3c";
 export const EDITOR_BG = "#282C34";
 
 // 前景/文字色
@@ -64,11 +66,34 @@ export const ACTIVE_SELECTION_BG = "#094771";
 export const SEPARATOR_BG = "#444";
 export const CONTEXT_MENU_BORDER = "#454545";
 
+// 阴影
+export const SHADOW_MENU = "rgba(0,0,0,0.5)";
+
 // HTML 面板色
 export const HTML_PANEL_LOADING_FG = "#6C6C6C";
 export const HTML_PANEL_IFRAME_BG = "#FFFFFF";
+
+// 侧栏配色 token 组（约束 #6 单点）
+export const SIDEBAR_COLORS = {
+  bg: "#252526",
+  fg: "#D4D4D4",
+  hover: "#2A2D2E",
+  selected: "#37373D",
+  border: "#444",
+  contextMenuBorder: "#454545",
+  contextMenuShadow: "0 4px 12px rgba(0,0,0,0.5)",
+} as const;
 
 // 错误提示色
 export const ERROR_BANNER_BG = "#5A1D1D";
 export const ERROR_BANNER_BORDER = "#8B0000";
 export const ERROR_BANNER_FG = "#F48771";
+
+// --- CSS 变量桥接（供 App.css :root 变量从 TS token 取值）---
+// SIDEBAR_CSS 模式：JS 对象映射 CSS 自定义属性名 → colors.ts token 值，
+// 在 main.tsx 注入 document.documentElement，App.css 仅通过 var() 引用。
+
+export const ROOT_CSS_VARS = {
+  "--sl-bg-primary": APP_BG_PRIMARY,
+  "--sl-bg-secondary": APP_BG_SECONDARY,
+} as const;

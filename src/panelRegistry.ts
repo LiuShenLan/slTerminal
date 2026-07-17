@@ -57,5 +57,6 @@ export function isValidPanelType(type: string): type is PanelType {
  * editor 故意排除——CodeMirror 重建无视觉闪屏，且大文件编辑器若始终挂载会显著增加内存开销。
  */
 export function isAlwaysRenderPanel(type: string): boolean {
-  return type === PANEL_TERMINAL || (type !== PANEL_EDITOR && isValidPanelType(type));
+  // 除 editor 外所有已注册面板类型均需始终渲染（terminal 保 PTY，htmlviewer 等保 iframe browsing context）
+  return type !== PANEL_EDITOR && isValidPanelType(type);
 }

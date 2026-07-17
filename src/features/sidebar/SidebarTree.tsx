@@ -11,25 +11,20 @@ import { useLayout } from "../../stores/layout";
 import { open } from "../../ipc/dialog";
 import {
   PANEL_BG,
-  SIDEBAR_FG,
-  DROPDOWN_BG,
-  SIDEBAR_BG,
+  SIDEBAR_COLORS,
   ACTIVE_SELECTION_BG,
   INPUT_BG,
   FOCUS_BORDER,
   PLACEHOLDER_FG,
   INPUT_BORDER,
-  SEPARATOR_BG,
-  CONTEXT_MENU_BORDER,
-  EXPLORER_COLORS,
 } from "../../theme";
 
 // ---- CSS 变量（暗色主题） ----
 const SIDEBAR_CSS = {
   "--sb-bg": PANEL_BG,
-  "--sb-fg": SIDEBAR_FG,
-  "--sb-hover": DROPDOWN_BG,
-  "--sb-selected": EXPLORER_COLORS.selected,
+  "--sb-fg": SIDEBAR_COLORS.fg,
+  "--sb-hover": SIDEBAR_COLORS.hover,
+  "--sb-selected": SIDEBAR_COLORS.selected,
 } as React.CSSProperties;
 // ---- 右键菜单类型 ----
 
@@ -73,13 +68,13 @@ const ContextMenu: React.FC<{
         position: "fixed",
         left: state.x,
         top: state.y,
-        background: SIDEBAR_BG,
-        border: `1px solid ${CONTEXT_MENU_BORDER}`,
+        background: SIDEBAR_COLORS.bg,
+        border: `1px solid ${SIDEBAR_COLORS.contextMenuBorder}`,
         borderRadius: 4,
         padding: "4px 0",
         minWidth: 160,
         zIndex: 1000,
-        boxShadow: "0 4px 12px rgba(0,0,0,0.5)",
+        boxShadow: SIDEBAR_COLORS.contextMenuShadow,
       }}
     >
       {state.items.map((item, i) => (
@@ -92,7 +87,7 @@ const ContextMenu: React.FC<{
           style={{
             padding: "4px 12px",
             cursor: "pointer",
-            color: SIDEBAR_FG,
+            color: SIDEBAR_COLORS.fg,
             fontSize: 13,
             userSelect: "none",
           }}
@@ -118,7 +113,7 @@ const Toolbar: React.FC<{ onAddProject: () => void }> = ({ onAddProject }) => (
       display: "flex",
       alignItems: "center",
       padding: "4px 8px",
-      borderBottom: `1px solid ${SEPARATOR_BG}`,
+      borderBottom: `1px solid ${SIDEBAR_COLORS.border}`,
       height: 32,
     }}
   >
@@ -127,8 +122,8 @@ const Toolbar: React.FC<{ onAddProject: () => void }> = ({ onAddProject }) => (
       title="添加项目"
       style={{
         background: "none",
-        border: `1px solid ${SEPARATOR_BG}`,
-        color: SIDEBAR_FG,
+        border: `1px solid ${SIDEBAR_COLORS.border}`,
+        color: SIDEBAR_COLORS.fg,
         cursor: "pointer",
         fontSize: 12,
         padding: "2px 8px",
@@ -270,7 +265,7 @@ const PageRow: React.FC<{
             flex: 1,
             background: INPUT_BG,
             border: `1px solid ${FOCUS_BORDER}`,
-            color: SIDEBAR_FG,
+            color: SIDEBAR_COLORS.fg,
             fontSize: 13,
             padding: "0 4px",
             outline: "none",
@@ -418,7 +413,7 @@ const SidebarTree: React.FC<SidebarTreeProps> = ({ switchToPage, onDeletePage })
         minWidth: 0,
         height: "100%",
         background: "var(--sb-bg)",
-        borderRight: `1px solid ${SEPARATOR_BG}`,
+        borderRight: `1px solid ${SIDEBAR_COLORS.border}`,
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",

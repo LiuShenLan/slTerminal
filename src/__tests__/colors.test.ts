@@ -12,11 +12,14 @@ import {
   GIT_FILE_COLORS,
   GIT_GUTTER_COLORS,
   EXPLORER_COLORS,
+  SIDEBAR_COLORS,
   PANEL_BG,
   SIDEBAR_BG,
   SECONDARY_BG,
   DROPDOWN_BG,
   APP_BG,
+  APP_BG_PRIMARY,
+  APP_BG_SECONDARY,
   EDITOR_BG,
   SIDEBAR_FG,
   ERROR_FG,
@@ -29,9 +32,11 @@ import {
   ACTIVE_SELECTION_BG,
   SEPARATOR_BG,
   CONTEXT_MENU_BORDER,
+  SHADOW_MENU,
   ERROR_BANNER_BG,
   ERROR_BANNER_BORDER,
   ERROR_BANNER_FG,
+  ROOT_CSS_VARS,
 } from "../theme";
 
 const HEX6_RE = /^#[0-9A-Fa-f]{6}$/;
@@ -102,6 +107,34 @@ describe("theme/colors.ts 配色 token", () => {
     );
   });
 
+  describe("SIDEBAR_COLORS（侧栏树专用色，FE-24 提取）", () => {
+    it("包含 7 个 token", () => {
+      expect(Object.keys(SIDEBAR_COLORS)).toHaveLength(7);
+    });
+
+    const sidebarCases = [
+      { key: "bg", expected: "#252526" },
+      { key: "fg", expected: "#D4D4D4" },
+      { key: "hover", expected: "#2A2D2E" },
+      { key: "selected", expected: "#37373D" },
+      { key: "border", expected: "#444" },
+      { key: "contextMenuBorder", expected: "#454545" },
+    ];
+
+    it.each(sidebarCases)(
+      "$key 值为合法 hex ($expected)",
+      ({ expected }: { expected: string }) => {
+        expect(expected).toMatch(/^#[0-9A-Fa-f]{3,6}$/);
+      },
+    );
+
+    it("contextMenuShadow 为合法阴影字符串", () => {
+      expect(SIDEBAR_COLORS.contextMenuShadow).toMatch(
+        /^0 4px 12px rgba\(0,0,0,0\.5\)$/,
+      );
+    });
+  });
+
   describe("通用 UI 色（独立 token）", () => {
     const uiTokenCases = [
       // 背景色
@@ -110,6 +143,8 @@ describe("theme/colors.ts 配色 token", () => {
       { name: "SECONDARY_BG", value: SECONDARY_BG, expected: "#2D2D2D" },
       { name: "DROPDOWN_BG", value: DROPDOWN_BG, expected: "#2A2D2E" },
       { name: "APP_BG", value: APP_BG, expected: "#1e1e2e" },
+      { name: "APP_BG_PRIMARY", value: APP_BG_PRIMARY, expected: "#1e1e2e" },
+      { name: "APP_BG_SECONDARY", value: APP_BG_SECONDARY, expected: "#2b2b3c" },
       { name: "EDITOR_BG", value: EDITOR_BG, expected: "#282C34" },
       // 前景/文字色
       { name: "SIDEBAR_FG", value: SIDEBAR_FG, expected: "#D4D4D4" },
@@ -130,8 +165,8 @@ describe("theme/colors.ts 配色 token", () => {
       { name: "ERROR_BANNER_FG", value: ERROR_BANNER_FG, expected: "#F48771" },
     ];
 
-    it("共 20 个 UI token", () => {
-      expect(uiTokenCases).toHaveLength(20);
+    it("共 22 个 UI token", () => {
+      expect(uiTokenCases).toHaveLength(22);
     });
 
     it.each(uiTokenCases)(
@@ -148,5 +183,40 @@ describe("theme/colors.ts 配色 token", () => {
         expect(value).toBe(expected);
       },
     );
+  });
+
+  describe("SHADOW_MENU（上下文菜单阴影色，FE-24）", () => {
+    it("值为 rgba(0,0,0,0.5)", () => {
+      expect(SHADOW_MENU).toBe("rgba(0,0,0,0.5)");
+    });
+
+    it("为非空字符串", () => {
+      expect(typeof SHADOW_MENU).toBe("string");
+      expect(SHADOW_MENU.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("ROOT_CSS_VARS（CSS 变量桥接，FE-24）", () => {
+    it("包含 --sl-bg-primary 和 --sl-bg-secondary", () => {
+      const keys = Object.keys(ROOT_CSS_VARS);
+      expect(keys).toContain("--sl-bg-primary");
+      expect(keys).toContain("--sl-bg-secondary");
+      expect(keys).toHaveLength(2);
+    });
+
+    it("--sl-bg-primary 引用 APP_BG_PRIMARY", () => {
+      expect(ROOT_CSS_VARS["--sl-bg-primary"]).toBe(APP_BG_PRIMARY);
+    });
+
+    it("--sl-bg-secondary 引用 APP_BG_SECONDARY", () => {
+      expect(ROOT_CSS_VARS["--sl-bg-secondary"]).toBe(APP_BG_SECONDARY);
+    });
+
+    it("所有值均为非空字符串", () => {
+      for (const value of Object.values(ROOT_CSS_VARS)) {
+        expect(typeof value).toBe("string");
+        expect(value.length).toBeGreaterThan(0);
+      }
+    });
   });
 });

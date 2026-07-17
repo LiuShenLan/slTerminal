@@ -14,6 +14,7 @@ import {
   GIT_FILE_COLORS,
   SIDEBAR_BG,
   SIDEBAR_FG,
+  SIDEBAR_COLORS,
   ACTIVE_SELECTION_BG,
   INPUT_BG,
   INPUT_BORDER,
@@ -21,6 +22,20 @@ import {
   CONTEXT_MENU_BORDER,
 } from "../../theme";
 import { ask } from "../../ipc/dialog";
+
+// ---- 文件树布局几何常量 ----
+// 用于计算各节点的 paddingLeft，对齐文件名文本起始位置
+
+/** 节点行左侧基准内边距 (px)，与行样式的 padding: "1px 8px" 左侧一致 */
+const PADDING_BASE = 8;
+/** 每层深度缩进宽度 (px) */
+const INDENT = 16;
+/** 展开/折叠箭头占位宽度 (px)，对应 TreeNodeRow 中箭头 <span> 的 width */
+const ARROW_WIDTH = 12;
+/** 文件图标右侧外边距 (px)，对应图标 <span> 的 marginRight */
+const ICON_MARGIN = 4;
+/** 文件图标视觉宽度 (px)，对齐 FileIcon 渲染后的实际占用宽度 */
+const ICON_WIDTH = 14;
 
 // ---- 右键菜单 ----
 
@@ -68,7 +83,7 @@ const ContextMenu: React.FC<{
         padding: "4px 0",
         minWidth: 160,
         zIndex: 1000,
-        boxShadow: "0 4px 12px rgba(0,0,0,0.5)",
+        boxShadow: SIDEBAR_COLORS.contextMenuShadow,
       }}
     >
       {state.items.map((item, i) => (
@@ -128,7 +143,7 @@ const TreeNodeRow: React.FC<{
   const { entry, expanded, loading } = node;
   // 渲染时实时查表，避免节点创建时写入 → 闭包陈旧/时序断裂问题
   const gitStatus = gitStatusMap.get(entry.path);
-  const indent = depth * 16;
+  const indent = depth * INDENT;
 
   return (
     <div
@@ -147,7 +162,7 @@ const TreeNodeRow: React.FC<{
         display: "flex",
         alignItems: "center",
         padding: "1px 8px",
-        paddingLeft: 8 + indent,
+        paddingLeft: PADDING_BASE + indent,
         cursor: "pointer",
         userSelect: "none",
         fontSize: 13,
@@ -391,7 +406,7 @@ export const FileTree: React.FC<FileTreeProps> = ({
         <div
           style={{
             display: "flex",
-            paddingLeft: 8 + (depth + 1) * 16 + 12 + 4 + 14,
+            paddingLeft: PADDING_BASE + (depth + 1) * INDENT + ARROW_WIDTH + ICON_MARGIN + ICON_WIDTH,
             paddingRight: 8,
             height: 24,
             alignItems: "center",
@@ -427,7 +442,7 @@ export const FileTree: React.FC<FileTreeProps> = ({
         <div
           style={{
             display: "flex",
-            paddingLeft: 8 + (depth + 1) * 16 + 12 + 4 + 14,
+            paddingLeft: PADDING_BASE + (depth + 1) * INDENT + ARROW_WIDTH + ICON_MARGIN + ICON_WIDTH,
             paddingRight: 8,
             height: 24,
             alignItems: "center",
@@ -474,7 +489,7 @@ export const FileTree: React.FC<FileTreeProps> = ({
             <div
               style={{
                 display: "flex",
-                paddingLeft: 8 + depth * 16 + 12 + 4 + 14,
+                paddingLeft: PADDING_BASE + depth * INDENT + ARROW_WIDTH + ICON_MARGIN + ICON_WIDTH,
                 paddingRight: 8,
                 height: 24,
                 alignItems: "center",
@@ -526,7 +541,7 @@ export const FileTree: React.FC<FileTreeProps> = ({
             <div
               style={{
                 display: "flex",
-                paddingLeft: 8 + (depth + 1) * 16 + 12 + 4 + 14,
+                paddingLeft: PADDING_BASE + (depth + 1) * INDENT + ARROW_WIDTH + ICON_MARGIN + ICON_WIDTH,
                 paddingRight: 8,
                 height: 24,
                 alignItems: "center",
@@ -564,7 +579,7 @@ export const FileTree: React.FC<FileTreeProps> = ({
             <div
               style={{
                 display: "flex",
-                paddingLeft: 8 + (depth + 1) * 16 + 12 + 4 + 14,
+                paddingLeft: PADDING_BASE + (depth + 1) * INDENT + ARROW_WIDTH + ICON_MARGIN + ICON_WIDTH,
                 paddingRight: 8,
                 height: 24,
                 alignItems: "center",
