@@ -40,6 +40,17 @@ vi.mock("../features/sidebar/SidebarTree", () => ({
   makeEmptyLayout: vi.fn(() => ({})),
 }));
 
+vi.mock("../ipc/fs", () => ({
+  setProjectRoot: vi.fn(() => Promise.resolve()),
+  readDir: vi.fn(() => Promise.resolve([])),
+  readFile: vi.fn(() => Promise.resolve("")),
+  writeFile: vi.fn(() => Promise.resolve()),
+  createDir: vi.fn(() => Promise.resolve()),
+  deleteEntry: vi.fn(() => Promise.resolve()),
+  rename: vi.fn(() => Promise.resolve()),
+  exists: vi.fn(() => Promise.resolve(false)),
+}));
+
 // ─── 导入 stores + E2E helpers（不依赖 App 模块）───
 import { installAllE2eHelpers } from "../../e2e-tests/helpers";
 import { useProjects } from "../stores/projects";
@@ -55,7 +66,7 @@ function resetStores() {
   useLayout.setState({ activePageId: null });
 }
 
-function callCreateProject(dirPath: string): string {
+async function callCreateProject(dirPath: string): Promise<string> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const fn = (window as any).__slterm_e2e_createProject;
   if (typeof fn !== "function") throw new Error("__slterm_e2e_createProject 未挂载");
@@ -72,8 +83,8 @@ describe("__slterm_e2e_createProject", () => {
     installAllE2eHelpers();
   });
 
-  it("1. 调用后 projects store 含新项目，rootPath + pages 正确", () => {
-    callCreateProject("C:\\e2e-test");
+  it("1. 调用后 projects store 含新项目，rootPath + pages 正确", async () => {
+    await callCreateProject("C:\\e2e-test");
 
     const { projects } = useProjects.getState();
     const projectIds = Object.keys(projects);
@@ -85,8 +96,8 @@ describe("__slterm_e2e_createProject", () => {
     expect(proj.pages[0].cwd).toBe("C:\\e2e-test");
   });
 
-  it("2. 调用后 activePageId 为新建的 pageId（返回值匹配）", () => {
-    const returnedPageId = callCreateProject("C:\\e2e-test");
+  it("2. 调用后 activePageId 为新建的 pageId（返回值匹配）", async () => {
+    const returnedPageId = await callCreateProject("C:\\e2e-test");
     const { activePageId } = useLayout.getState();
 
     expect(activePageId).toBe(returnedPageId);
@@ -94,8 +105,8 @@ describe("__slterm_e2e_createProject", () => {
     expect(activePageId).toMatch(/^page-/);
   });
 
-  it("3. 创建的 page 含正确的 layout + cwd", () => {
-    callCreateProject("D:\\my-project");
+  it("3. 创建的 page 含正确的 layout + cwd", async () => {
+    await callCreateProject("D:\\my-project");
 
     const { projects } = useProjects.getState();
     const proj = Object.values(projects)[0];
@@ -115,12 +126,12 @@ describe("__slterm_e2e_createProject", () => {
     expect(page.name).toBe("my-project");
   });
 
-  it("4. E2E pending 标记阻止 localStorage lastPage 覆盖 activePageId", () => {
+  it("4. E2E pending 标记阻止 localStorage lastPage 覆盖 activePageId", async () => {
     // 模拟：localStorage 有上次会话残留
     localStorage.setItem("slterm-last-active-page", "page-old-session");
 
     // 调 createProject（内部设 e2eProjectPending=true → 跳过 localStorage 恢复）
-    const e2ePageId = callCreateProject("C:\\e2e-test");
+    const e2ePageId = await callCreateProject("C:\\e2e-test");
 
     // 验证 activePageId 是 E2E 创建的 pageId，而非 localStorage 残留
     const { activePageId } = useLayout.getState();
@@ -128,9 +139,9 @@ describe("__slterm_e2e_createProject", () => {
     expect(activePageId).not.toBe("page-old-session");
   });
 
-  it("5. 重复调用创建多个项目不互相覆盖", () => {
-    callCreateProject("C:\\proj-a");
-    callCreateProject("D:\\proj-b");
+  it("5. 重复调用创建多个项目不互相覆盖", async () => {
+    await callCreateProject("C:\\proj-a");
+    await callCreateProject("D:\\proj-b");
 
     const { projects } = useProjects.getState();
     const ids = Object.keys(projects);

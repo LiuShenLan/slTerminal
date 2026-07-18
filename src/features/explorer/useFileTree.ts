@@ -51,7 +51,8 @@ export function useFileTree({ rootPath }: UseFileTreeOptions) {
           children: [],
           loading: false,
         }));
-      } catch {
+      } catch (err) {
+        console.error("[slTerminal] readDir 失败:", dirPath, err);
         return [];
       }
     },
@@ -226,7 +227,8 @@ export function useFileTree({ rootPath }: UseFileTreeOptions) {
         }
         setGitStatusMap(map);
       })
-      .catch(() => {
+      .catch((err) => {
+        console.error("[slTerminal] gitStatus 失败:", rootPath, err);
         if (gen !== genRef.current) return; // 丢弃旧请求的错误处理
         setGitStatusMap(new Map());
       });

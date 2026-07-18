@@ -80,10 +80,29 @@ const Workspace: React.FC = () => {
     });
   }, []);
 
-  /** 操作页面切换（仅更新 activePageId + CSS 显隐，projectId 保留兼容 SidebarTree 接口） */
-  const switchToPage = useCallback((_projectId: string, pageId: string) => {
+  /** 操作页面切换（仅更新 activePageId + CSS 显隐，projectId 保留兼容 SidebarTree 接口）
+   *
+   * DBG-5: 切换页面时先 await setProjectRoot（失败 console.error 降级继续），
+   *        再 setActivePage，确保子组件 effect 中的 fs_read_dir 等 IPC 调用
+   *        能在后端 project_root 就绪后通过路径沙箱校验。 */
+  const switchToPage = useCallback(async (_projectId: string, pageId: string) => {
     const layoutStore = useLayout.getState();
     if (layoutStore.activePageId === pageId) return;
+
+    // 查找 pageId 所属项目的 rootPath 并同步到后端（必须在 setActivePage 之前）
+    const { projects: currentProjects } = useProjects.getState();
+    for (const [, proj] of Object.entries(currentProjects)) {
+      if (proj.pages.some((p) => p.pageId === pageId)) {
+        if (proj.rootPath) {
+          try {
+            await setProjectRoot(proj.rootPath);
+          } catch (err) {
+            console.error("[slTerminal] 设置项目根路径失败:", err);
+          }
+        }
+        break;
+      }
+    }
 
     ensurePageInitialized(pageId);
     layoutStore.setActivePage(pageId);

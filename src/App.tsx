@@ -10,6 +10,7 @@ import { useFontSize, cancelPendingSave as cancelFontSizeSave } from "./stores/f
 import { useKeybindings, cancelPendingSave as cancelKeybindingsSave } from "./stores/keybindings";
 import { saveLayout } from "./workspace/layoutSerde";
 import { pty } from "./ipc";
+import { setProjectRoot } from "./ipc/fs";
 import { TerminalRegistry } from "./panels/terminal/TerminalRegistry";
 import { ErrorBoundary } from "./lib";
 import { getShortcutRegistry, createGlobalShortcuts, wireKeybindings } from "./features/shortcuts";
@@ -59,6 +60,20 @@ function App() {
         if (!window.__slterm_e2e_projectPending) {
           const lastPage = localStorage.getItem(LS_LAST_ACTIVE_PAGE_KEY);
           if (lastPage) {
+            // DBG-6: setActivePage 前先同步项目根路径到后端（路径沙箱前置条件）
+            const { projects: currentProjects } = useProjects.getState();
+            for (const [, proj] of Object.entries(currentProjects)) {
+              if (proj.pages.some((p) => p.pageId === lastPage)) {
+                if (proj.rootPath) {
+                  try {
+                    await setProjectRoot(proj.rootPath);
+                  } catch (err) {
+                    console.error("[slTerminal] 启动恢复—设置项目根路径失败:", err);
+                  }
+                }
+                break;
+              }
+            }
             useLayout.getState().setActivePage(lastPage);
           }
         }

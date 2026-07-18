@@ -28,10 +28,10 @@ declare global {
     // 诊断
     __slterm_e2e_shortcutDebug?: () => { stack: string[]; commands: string[] };
     // 项目管理
-    __slterm_e2e_createProject?: (dirPath: string) => string;
+    __slterm_e2e_createProject?: (dirPath: string) => Promise<string>;
     __slterm_e2e_getProjectIdForPage?: (pageId: string) => string | null;
     __slterm_e2e_addPage?: (projectId: string, name: string, rootPath: string) => string;
-    __slterm_e2e_switchToPage?: (pageId: string) => void;
+    __slterm_e2e_switchToPage?: (pageId: string) => Promise<void>;
     // 页签标题
     __slterm_e2e_registerAndRecompute?: (
       pageId: string, rootPath: string, panelId: string, filePath?: string
@@ -124,7 +124,7 @@ function installShortcutDebug(): void {
 /** __slterm_e2e_createProject / __slterm_e2e_addPage / __slterm_e2e_switchToPage / __slterm_e2e_getProjectIdForPage */
 function installProjectHelpers(): void {
   // __slterm_e2e_createProject —— 程序化创建测试项目（绕过原生对话框）
-  window.__slterm_e2e_createProject = (dirPath: string) => {
+  window.__slterm_e2e_createProject = async (dirPath: string) => {
     window.__slterm_e2e_projectPending = true; // 阻止 localStorage 恢复覆盖
     const name = dirPath.split(/[/\\]/).pop() || dirPath;
     const projectId = createProjectId();
@@ -149,11 +149,13 @@ function installProjectHelpers(): void {
     };
 
     useProjects.getState().addProject(project);
+    // DBG-8: setProjectRoot 必须在 setActivePage 之前（路径沙箱前置条件）
+    try {
+      await setProjectRoot(dirPath);
+    } catch (err) {
+      console.error("[slTerminal e2e] 设置项目根路径失败:", err);
+    }
     useLayout.getState().setActivePage(pageId);
-    // SEC-01: 同步项目根路径到后端（路径沙箱边界）
-    setProjectRoot(dirPath).catch((err) =>
-      console.error("[slTerminal e2e] 设置项目根路径失败:", err),
-    );
     return pageId;
   };
 
@@ -184,7 +186,21 @@ function installProjectHelpers(): void {
   };
 
   // __slterm_e2e_switchToPage —— 切换活跃页面（H6 跨页面切换验证）
-  window.__slterm_e2e_switchToPage = (pageId: string) => {
+  window.__slterm_e2e_switchToPage = async (pageId: string) => {
+    // DBG-8: setActivePage 前先同步项目根路径到后端（路径沙箱前置条件）
+    const { projects } = useProjects.getState();
+    for (const [, proj] of Object.entries(projects)) {
+      if (proj.pages.some((p) => p.pageId === pageId)) {
+        if (proj.rootPath) {
+          try {
+            await setProjectRoot(proj.rootPath);
+          } catch (err) {
+            console.error("[slTerminal e2e] 切换页面—设置项目根路径失败:", err);
+          }
+        }
+        break;
+      }
+    }
     useLayout.getState().setActivePage(pageId);
   };
 }
