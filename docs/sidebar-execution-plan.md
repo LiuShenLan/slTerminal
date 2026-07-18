@@ -19,11 +19,11 @@
 
 | Stage | 内容 | ID | 脚本 | 状态 |
 |-------|------|-----|------|------|
-| 1 | 状态层：sideBarState/dropTarget 纯函数 + SideViewRegistry + sideBar store + L2 测试 | SB-1~13 | `workflows/stage-01-state-layer.js` | 未开始 |
-| 2 | UI 组件：ActivityBar + SideBarArea + sideViewDefs + L2 测试 | SB-14~20 | `workflows/stage-02-ui-components.js` | 未开始 |
-| 3 | Workspace 集成 + App 接线 + 现有测试适配 | SB-21~24 | `workflows/stage-03-workspace-integration.js` | 未开始 |
-| 4 | E2E helpers + 2 条 L4 用例 | SB-25 | `workflows/stage-04-e2e.js` | 未开始 |
-| 5 | 文档同步（8 处） | SB-26 | `workflows/stage-05-docs-sync.js` | 未开始 |
+| 1 | 状态层：sideBarState/dropTarget 纯函数 + SideViewRegistry + sideBar store + L2 测试 | SB-1~13 | `docs/workflows/stage-01-state-layer.js` | 未开始 |
+| 2 | UI 组件：ActivityBar + SideBarArea + sideViewDefs + L2 测试 | SB-14~20 | `docs/workflows/stage-02-ui-components.js` | 未开始 |
+| 3 | Workspace 集成 + App 接线 + 现有测试适配 | SB-21~24 | `docs/workflows/stage-03-workspace-integration.js` | 未开始 |
+| 4 | E2E helpers + 2 条 L4 用例 | SB-25 | `docs/workflows/stage-04-e2e.js` | 未开始 |
+| 5 | 文档同步（8 处） | SB-26 | `docs/workflows/stage-05-docs-sync.js` | 未开始 |
 
 恢复规则：中断后从首个「未开始」Stage 继续，其前 commit 已落盘无需重做。
 
@@ -114,7 +114,7 @@ export function cancelPendingSave(): void;
 
 ### 验证项
 
-断言真值源：`workflows/verify/stage-01.md`。测试门禁：`tsc` / `eslint` / `npm test`。关键断言：
+断言真值源：`docs/workflows/verify/stage-01.md`。测试门禁：`tsc` / `eslint` / `npm test`。关键断言：
 
 - `sideBarState.ts` 导出签名与 §2 契约逐字一致（Read 比对）
 - `toggleViewPure` 无历史记忆：任何路径下返回的 OpenState 不含被替换视图（用例断言）
@@ -144,7 +144,7 @@ export function cancelPendingSave(): void;
 
 ### 验证项
 
-断言真值源：`workflows/verify/stage-02.md`。测试门禁：`tsc` / `eslint` / `npm test`。关键断言：
+断言真值源：`docs/workflows/verify/stage-02.md`。测试门禁：`tsc` / `eslint` / `npm test`。关键断言：
 
 - ActivityBar/SideBarArea 无硬编码色值（grep `#[0-9a-fA-F]{3,6}` 两文件为零）
 - ActivityBar 按钮带 `data-e2e="activity-btn-<id>"` 与 `title`
@@ -176,7 +176,7 @@ export function cancelPendingSave(): void;
 
 ### 验证项
 
-断言真值源：`workflows/verify/stage-03.md`。测试门禁：`tsc` / `eslint` / `npm test` / `npx vite build`。关键断言：
+断言真值源：`docs/workflows/verify/stage-03.md`。测试门禁：`tsc` / `eslint` / `npm test` / `npx vite build`。关键断言：
 
 - Workspace.tsx 无 `SIDEBAR_PREFERRED_SIZE`/`EXPLORER_PREFERRED_SIZE` 等旧常量（grep 为零）；三 pane 顺序：ActivityBar → SideBarArea → 主区
 - `SidebarTree`/`ExplorerPanel` 组件本体零改动（git diff 为空）
@@ -209,7 +209,7 @@ export function cancelPendingSave(): void;
 
 ### 验证项
 
-断言真值源：`workflows/verify/stage-04.md`。关键断言：
+断言真值源：`docs/workflows/verify/stage-04.md`。关键断言：
 
 - `npm run e2e` 全绿（14 用例：12 存量 + 2 新增）
 - helpers 注入在 `E2E_ENABLED` 门控内（Read 确认）；生产构建 grep 无 `__slterm_e2e_getSideBarState`
