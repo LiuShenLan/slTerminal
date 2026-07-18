@@ -38,3 +38,6 @@ datalearncodeterax-ai-temp/
 # Runtime persistence
 slterminal-projects.json
 coverage/
+
+# codegraph
+.codegraph/
