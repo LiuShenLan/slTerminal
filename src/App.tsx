@@ -80,11 +80,11 @@ function App() {
         const allSessions = TerminalRegistry.getAll();
         if (allSessions.size > 0) {
           const killPromises: Promise<void>[] = [];
-          allSessions.forEach((entry) => {
+          allSessions.forEach((entry, panelId) => {
             if (entry.sessionId) {
               killPromises.push(
-                pty.kill(entry.sessionId).catch((err) => {
-                  console.error(`[slTerminal] 关闭时 kill PTY 失败 (${entry.sessionId}):`, err);
+                pty.kill(entry.sessionId, panelId).catch((err) => {
+                  console.error(`[slTerminal] 关闭时 kill PTY 失败 (${entry.sessionId}, ${panelId}):`, err);
                 }),
               );
             }

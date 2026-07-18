@@ -484,8 +484,9 @@ describe("ResizeObserver 交替缓冲检查", () => {
 
     // 交替缓冲中 fit 被调用（同步 xterm.js 网格尺寸与 PTY 新尺寸）
     expect(mockFit).toHaveBeenCalled();
-    // SIGWINCH 仍然透传
+    // SIGWINCH 仍然透传（含 panelId）
     expect(pty.resize).toHaveBeenCalledWith(
+      expect.any(String),
       expect.any(String),
       100,
       40,
@@ -543,8 +544,8 @@ describe("ResizeObserver 交替缓冲检查", () => {
     ro.trigger();
     vi.advanceTimersByTime(150);
 
-    // 交替缓冲中尺寸参数正确透传
-    expect(pty.resize).toHaveBeenCalledWith("test-session-id", 120, 50);
+    // 交替缓冲中尺寸参数正确透传（含 panelId）
+    expect(pty.resize).toHaveBeenCalledWith("test-session-id", "ab-5", 120, 50);
 
     vi.useRealTimers();
   });
@@ -1119,6 +1120,7 @@ describe("cancelPendingFlush", () => {
     expect(mockFit).toHaveBeenCalled();
     expect(pty.resize).toHaveBeenCalledWith(
       expect.any(String),
+      expect.any(String),
       80,
       30,
     );
@@ -1149,7 +1151,7 @@ describe("cancelPendingFlush", () => {
 
     // 交替缓冲也必须调 fit（更新 xterm.js 网格与 PTY 新尺寸同步）
     expect(mockFit).toHaveBeenCalled();
-    expect(pty.resize).toHaveBeenCalledWith("test-session-id", 80, 30);
+    expect(pty.resize).toHaveBeenCalledWith("test-session-id", "cpf-test", 80, 30);
   });
 
   it("CPF12: 交替缓冲 + 列变化 debounce → fit 被调用", async () => {
@@ -1172,9 +1174,9 @@ describe("cancelPendingFlush", () => {
     // TE-11: 推进假定时器 → debounce 后 fit 被调用
     vi.advanceTimersByTime(150);
 
-    // debounce 后 fit 被调用
+    // debounce 后 fit 被调用（含 panelId）
     expect(mockFit).toHaveBeenCalledTimes(1);
-    expect(pty.resize).toHaveBeenCalledWith("test-session-id", 60, 40);
+    expect(pty.resize).toHaveBeenCalledWith("test-session-id", "cpf-test", 60, 40);
   });
 
   it("CPF13: 交替缓冲 + 行变化 → fit 先于 pty.resize", async () => {
@@ -1218,7 +1220,7 @@ describe("cancelPendingFlush", () => {
     vi.advanceTimersByTime(10);
 
     expect(mockFit).toHaveBeenCalled();
-    expect(pty.resize).toHaveBeenCalledWith("test-session-id", 80, 30);
+    expect(pty.resize).toHaveBeenCalledWith("test-session-id", "cpf-test", 80, 30);
   });
 
   it("CPF15: 交替缓冲 + 尺寸无变化 → 不调用 fit/resize", async () => {

@@ -152,7 +152,7 @@ export function useXterm({
   const writeToPty = useCallback((data: Uint8Array) => {
     const sid = TerminalRegistry.get(panelId)?.sessionId;
     if (sid) {
-      pty.write(sid, data).catch(() => {});
+      pty.write(sid, panelId, data).catch(() => {});
     }
   }, [panelId]);
 
@@ -247,7 +247,7 @@ export function useXterm({
       installTerminalWriteToPty(container, (data: string) => {
         const sid = TerminalRegistry.get(panelId)?.sessionId;
         if (sid) {
-          pty.write(sid, new TextEncoder().encode(data))
+          pty.write(sid, panelId, new TextEncoder().encode(data))
             .catch((err) => console.error("E2E PTY write 失败:", err));
         }
       });
@@ -336,6 +336,7 @@ export function useXterm({
       if (sid) {
         pty.write(
           sid,
+          panelId,
           new TextEncoder().encode(data),
         ).catch((err) => console.error("PTY write 失败:", err));
       }
@@ -354,7 +355,7 @@ export function useXterm({
 
       const entry = TerminalRegistry.get(panelId);
       if (entry) {
-        pty.kill(entry.sessionId).catch(() => {});
+        pty.kill(entry.sessionId, panelId).catch(() => {});
       }
       TerminalRegistry.remove(panelId);
       doSpawnRef.current = null;
@@ -402,7 +403,7 @@ export function useXterm({
       const dims = fitAddonRef.current!.proposeDimensions();
       const sid = TerminalRegistry.get(panelId)?.sessionId;
       if (dims && sid) {
-        pty.resize(sid, dims.cols, dims.rows)
+        pty.resize(sid, panelId, dims.cols, dims.rows)
           .catch((err) => console.error("PTY resize 失败:", err));
       }
     } catch {

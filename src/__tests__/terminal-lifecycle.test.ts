@@ -172,7 +172,7 @@ describe("终端基本生命周期", () => {
 
     unmount();
 
-    expect(mocks.pty.kill).toHaveBeenCalledWith("mock-session-001");
+    expect(mocks.pty.kill).toHaveBeenCalledWith("mock-session-001", "test-p2");
     expect(mocks.terminal.dispose).toHaveBeenCalled();
   });
 

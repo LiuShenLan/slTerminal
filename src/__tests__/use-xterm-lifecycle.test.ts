@@ -473,11 +473,12 @@ describe("ResizeObserver 尺寸变化 → fit → pty.resize 链路", () => {
     // TE-11: 推进假定时器 150ms（等待 100ms debounce + 缓冲）
     vi.advanceTimersByTime(150);
 
-    // 验证链路：fit → proposeDimensions → pty.resize
+    // 验证链路：fit → proposeDimensions → pty.resize（含 panelId）
     expect(mockFit).toHaveBeenCalled();
     expect(mockProposeDimensions).toHaveBeenCalled();
     expect(pty.resize).toHaveBeenCalledWith(
       expect.any(String), // sessionId（"test-session-id"）
+      expect.any(String), // panelId（"resize-1"）
       100, // cols
       40,  // rows
     );
@@ -634,6 +635,7 @@ describe("字体大小调节", () => {
 
     expect(mockProposeDimensions).toHaveBeenCalled();
     expect(pty.resize).toHaveBeenCalledWith(
+      expect.any(String),
       expect.any(String),
       expect.any(Number),
       expect.any(Number),
@@ -1180,6 +1182,7 @@ describe("cancelPendingFlush", () => {
     expect(mockFit).toHaveBeenCalled();
     expect(pty.resize).toHaveBeenCalledWith(
       expect.any(String),
+      expect.any(String),
       80,
       30,
     );
@@ -1210,7 +1213,7 @@ describe("cancelPendingFlush", () => {
 
     // 交替缓冲也必须调 fit（更新 xterm.js 网格与 PTY 新尺寸同步）
     expect(mockFit).toHaveBeenCalled();
-    expect(pty.resize).toHaveBeenCalledWith("test-session-id", 80, 30);
+    expect(pty.resize).toHaveBeenCalledWith("test-session-id", "cpf-test", 80, 30);
   });
 
   it("CPF12: 交替缓冲 + 列变化 debounce → fit 被调用", async () => {
@@ -1233,9 +1236,9 @@ describe("cancelPendingFlush", () => {
     // TE-11: 推进假定时器 → debounce 后 fit 被调用
     vi.advanceTimersByTime(150);
 
-    // debounce 后 fit 被调用
+    // debounce 后 fit 被调用（含 panelId）
     expect(mockFit).toHaveBeenCalledTimes(1);
-    expect(pty.resize).toHaveBeenCalledWith("test-session-id", 60, 40);
+    expect(pty.resize).toHaveBeenCalledWith("test-session-id", "cpf-test", 60, 40);
   });
 
   it("CPF13: 交替缓冲 + 行变化 → fit 先于 pty.resize", async () => {
@@ -1279,7 +1282,7 @@ describe("cancelPendingFlush", () => {
     vi.advanceTimersByTime(10);
 
     expect(mockFit).toHaveBeenCalled();
-    expect(pty.resize).toHaveBeenCalledWith("test-session-id", 80, 30);
+    expect(pty.resize).toHaveBeenCalledWith("test-session-id", "cpf-test", 80, 30);
   });
 
   it("CPF15: 交替缓冲 + 尺寸无变化 → 不调用 fit/resize", async () => {

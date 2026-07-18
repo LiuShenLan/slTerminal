@@ -441,11 +441,12 @@ describe("INT-2: term.onData → pty.write 调用链", () => {
       expect(mockPtyWrite).toHaveBeenCalled();
     }, { timeout: 3000 });
 
-    // 验证 pty.write 参数：sessionId + Uint8Array（jsdom 跨 realm 边界，改用 ArrayBuffer.isView）
+    // 验证 pty.write 参数：sessionId + panelId + Uint8Array（含 panelId 签名）
     const callArgs = mockPtyWrite.mock.calls[0];
     expect(callArgs[0]).toBe("test-session-id");
-    expect(ArrayBuffer.isView(callArgs[1])).toBe(true);
-    const decoded = new TextDecoder("utf-8").decode(callArgs[1] as Uint8Array);
+    expect(callArgs[1]).toBe("int-2-1");
+    expect(ArrayBuffer.isView(callArgs[2])).toBe(true);
+    const decoded = new TextDecoder("utf-8").decode(callArgs[2] as Uint8Array);
     expect(decoded).toBe("echo hello\r");
   });
 
@@ -462,7 +463,7 @@ describe("INT-2: term.onData → pty.write 调用链", () => {
       expect(mockPtyWrite).toHaveBeenCalled();
     }, { timeout: 3000 });
 
-    const data = mockPtyWrite.mock.calls[0][1] as Uint8Array;
+    const data = mockPtyWrite.mock.calls[0][2] as Uint8Array;
     const decoded = new TextDecoder("utf-8").decode(data);
     expect(decoded).toBe("你好世界");
   });

@@ -76,39 +76,42 @@ describe('pty IPC 合约', () => {
     });
 
     const testData = new Uint8Array([72, 101, 108, 108, 111]); // "Hello"
-    await pty.write('session-1', testData);
+    await pty.write('session-1', 'panel-1', testData);
 
     expect(spy).toHaveBeenCalledWith('pty_write', {
       sessionId: 'session-1',
+      panelId: 'panel-1',
       data: [72, 101, 108, 108, 111],
     });
   });
 
-  it('resize: 应调用 pty_resize 命令，参数包含 sessionId, cols, rows', async () => {
+  it('resize: 应调用 pty_resize 命令，参数包含 sessionId, panelId, cols, rows', async () => {
     const spy = vi.fn();
     mockIPC((cmd, args) => {
       spy(cmd, args);
     });
 
-    await pty.resize('session-2', 100, 30);
+    await pty.resize('session-2', 'panel-2', 100, 30);
 
     expect(spy).toHaveBeenCalledWith('pty_resize', {
       sessionId: 'session-2',
+      panelId: 'panel-2',
       cols: 100,
       rows: 30,
     });
   });
 
-  it('kill: 应调用 pty_kill 命令，参数包含 sessionId', async () => {
+  it('kill: 应调用 pty_kill 命令，参数包含 sessionId 和 panelId', async () => {
     const spy = vi.fn();
     mockIPC((cmd, args) => {
       spy(cmd, args);
     });
 
-    await pty.kill('session-3');
+    await pty.kill('session-3', 'panel-3');
 
     expect(spy).toHaveBeenCalledWith('pty_kill', {
       sessionId: 'session-3',
+      panelId: 'panel-3',
     });
   });
 
@@ -148,7 +151,7 @@ describe('pty IPC 合约', () => {
     });
 
     await expect(
-      pty.write('session-1', new Uint8Array([65])),
+      pty.write('session-1', 'panel-1', new Uint8Array([65])),
     ).rejects.toThrow('session closed');
   });
 
@@ -157,7 +160,7 @@ describe('pty IPC 合约', () => {
       if (cmd === 'pty_resize') throw new Error('invalid session');
     });
 
-    await expect(pty.resize('bad-session', 100, 30)).rejects.toThrow('invalid session');
+    await expect(pty.resize('bad-session', 'panel-1', 100, 30)).rejects.toThrow('invalid session');
   });
 
   it('kill: invoke 失败时异常应传播', async () => {
@@ -165,7 +168,7 @@ describe('pty IPC 合约', () => {
       if (cmd === 'pty_kill') throw new Error('already dead');
     });
 
-    await expect(pty.kill('dead-session')).rejects.toThrow('already dead');
+    await expect(pty.kill('dead-session', 'panel-1')).rejects.toThrow('already dead');
   });
 
   // ── reattach（Channel 替换 + ring buffer 回放）────────────
@@ -197,6 +200,48 @@ describe('pty IPC 合约', () => {
     await expect(
       pty.reattach('ghost-session', vi.fn()),
     ).rejects.toThrow('session not found');
+  });
+});
+
+// ── PTY 命令 payload 契约守卫 ───────────────────────────
+// 断言每个命令 invoke payload 的键集合精确匹配，
+// 任何未来单边加/减键立即红。
+
+describe('PTY 命令 payload 契约守卫', () => {
+  it('pty_write: payload 键恰好为 sessionId/panelId/data', async () => {
+    const spy = vi.fn();
+    mockIPC((cmd, args) => {
+      spy(cmd, args);
+    });
+
+    await pty.write('s1', 'p1', new Uint8Array([65]));
+
+    const [, args] = spy.mock.calls[0] as [string, Record<string, unknown>];
+    expect(Object.keys(args).sort()).toEqual(['data', 'panelId', 'sessionId']);
+  });
+
+  it('pty_resize: payload 键恰好为 sessionId/panelId/cols/rows', async () => {
+    const spy = vi.fn();
+    mockIPC((cmd, args) => {
+      spy(cmd, args);
+    });
+
+    await pty.resize('s2', 'p2', 100, 30);
+
+    const [, args] = spy.mock.calls[0] as [string, Record<string, unknown>];
+    expect(Object.keys(args).sort()).toEqual(['cols', 'panelId', 'rows', 'sessionId']);
+  });
+
+  it('pty_kill: payload 键恰好为 sessionId/panelId', async () => {
+    const spy = vi.fn();
+    mockIPC((cmd, args) => {
+      spy(cmd, args);
+    });
+
+    await pty.kill('s3', 'p3');
+
+    const [, args] = spy.mock.calls[0] as [string, Record<string, unknown>];
+    expect(Object.keys(args).sort()).toEqual(['panelId', 'sessionId']);
   });
 });
 

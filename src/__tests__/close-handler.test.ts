@@ -333,9 +333,9 @@ describe("onCloseRequested PTY kill 路径", () => {
     const handler = await renderAndCapture();
     await handler();
 
-    // 每个 session 都调用了 pty.kill
-    expect(pty.kill).toHaveBeenCalledWith("session-001");
-    expect(pty.kill).toHaveBeenCalledWith("session-002");
+    // 每个 session 都调用了 pty.kill（含 panelId——App.tsx 从 Map key 获取）
+    expect(pty.kill).toHaveBeenCalledWith("session-001", "panel-1");
+    expect(pty.kill).toHaveBeenCalledWith("session-002", "panel-2");
     expect(pty.kill).toHaveBeenCalledTimes(2);
   });
 
@@ -363,7 +363,7 @@ describe("onCloseRequested PTY kill 路径", () => {
     expect(pty.kill).toHaveBeenCalledTimes(2);
     // 失败日志已输出
     expect(consoleSpy).toHaveBeenCalledWith(
-      expect.stringContaining("[slTerminal] 关闭时 kill PTY 失败 (session-001):"),
+      expect.stringContaining("[slTerminal] 关闭时 kill PTY 失败 (session-001, panel-1):"),
       expect.any(Error),
     );
 
@@ -416,7 +416,7 @@ describe("onCloseRequested PTY kill 路径", () => {
     await closePromise;
 
     // 不应卡死
-    expect(pty.kill).toHaveBeenCalledWith("session-001");
+    expect(pty.kill).toHaveBeenCalledWith("session-001", "panel-1");
 
     vi.useRealTimers();
   });

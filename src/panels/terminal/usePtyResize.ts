@@ -86,7 +86,7 @@ export function usePtyResize(
         if (rowsChanged && !colsChanged) {
           // 仅行数变化 → 立即 fit + resize（廉价，无需 re-wrap）
           fitAddon.fit();
-          pty.resize(sid, dims.cols, dims.rows).catch(() => {});
+          pty.resize(sid, panelId, dims.cols, dims.rows).catch(() => {});
           return;
         }
 
@@ -99,7 +99,7 @@ export function usePtyResize(
             fitAddon.fit();
             const currentSid = TerminalRegistry.get(panelId)?.sessionId;
             if (currentSid) {
-              pty.resize(currentSid, dims.cols, dims.rows).catch(() => {});
+              pty.resize(currentSid, panelId, dims.cols, dims.rows).catch(() => {});
             }
           } catch {
             // fit 失败不影响渲染
