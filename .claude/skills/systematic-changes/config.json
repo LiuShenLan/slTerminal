@@ -67,7 +67,7 @@
     "fixMaxRetries": 3,
     "commitPerStage": true,
     "useWorktree": false,
-    "gitAddPaths": ["src/", "src-tauri/", "e2e-tests/", "test/", ".claude/CLAUDE.md", ".claude/test-inventory.md"],
+    "gitAddPaths": ["src/", "src-tauri/", "e2e-tests/", "test/", ".claude/CLAUDE.md", ".claude/test-inventory.md", "docs/"],
     "forbiddenZones": [
       "compute_conpty_flags 固定 0x7，任何 agent 不得修改 ConPTY flags（含其 4 条守卫测试）——PASSTHROUGH_MODE (0x8) 吞 claude TUI 鼠标滚轮输入"
     ]
