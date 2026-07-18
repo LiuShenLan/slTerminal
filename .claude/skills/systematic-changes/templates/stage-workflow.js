@@ -10,6 +10,9 @@
 //      脚本头部注释，并行 agent 不各自推断
 //   3. 若本 Stage 有特殊纪律（如"只改测试"），写进 PREAMBLE_EXTRA，
 //      并在头部注释注明 fix-loop 调用时 args.constraints 应传的值
+//   4. 门禁命令按 Stage 触碰文件选择——触及 tsc/eslint 覆盖外文件
+//      （如 e2e-tests/helpers.ts 不在根 tsconfig include）时，
+//      __TEST_COMMANDS__ 必须补 npx vite build 构建级兜底
 //
 // 占位符:
 //   __STAGE_NAME__        - Workflow 名称 (e.g. "stage1-xxx")

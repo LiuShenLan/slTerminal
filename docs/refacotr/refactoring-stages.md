@@ -5,7 +5,7 @@
 
 ## 执行规则（Step 5 约束，每 Stage 必须遵守）
 
-1. **每 Stage 一个 Workflow**：并行重构 →（可选）串行重构 → 全量测试 → 逐项验证，模板 `.claude/skills/code-refactor/templates/stage-workflow.js`。
+1. **每 Stage 一个 Workflow**：并行重构 →（可选）串行重构 → 全量测试 → 逐项验证，模板 `.claude/skills/systematic-changes/templates/stage-workflow.js`。
 2. **单 Stage 并行 agent ≤ 5**；改动同一文件的项并入同一 agent 或串行 pipeline，**不允许两个并行 agent 改同一文件**。
 3. **全量测试命令**（每 Stage 必跑，来自 `config.json` 的 `fullCheck`）：
    ```

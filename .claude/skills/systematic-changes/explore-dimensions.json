@@ -70,6 +70,19 @@
         "10 条架构约束合规性"
       ],
       "files": ["src/workspace/Workspace.tsx", "src/panels/terminal/", "src/panels/editor/", "src-tauri/src/pty/", "src-tauri/src/notify/", "src-tauri/src/state.rs", "vite.config.ts", "tauri.conf.json"]
+    },
+    {
+      "id": "06-contract-consistency",
+      "title": "跨边界契约一致性",
+      "outputFile": "docs/06-contract-consistency.md",
+      "focus": [
+        "Tauri 命令签名双边对照（Rust 必填参数 vs 前端 invoke payload，缺一即运行时 reject）",
+        "DTO 字段 snake_case↔camelCase 双边对应（src/types/ ↔ Rust serde）",
+        "IPC wrapper 调用点全量（含 App.tsx 清理钩子等边缘调用点）",
+        "E2E helpers 与生产代码的模式一致性（时序/参数复制同一 bug）",
+        "Channel/Event payload 结构与前端消费端一致性"
+      ],
+      "files": ["src/ipc/", "src/types/", "src-tauri/src/lib.rs", "src-tauri/src/pty/spawn.rs", "src-tauri/src/fs/", "src-tauri/src/notify/", "src-tauri/src/git/", "e2e-tests/helpers.ts"]
     }
   ],
   "summaryOutput": "docs/00-summary.md",

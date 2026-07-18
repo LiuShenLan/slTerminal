@@ -10,6 +10,7 @@
     "frontendTest": "npm test",
     "rustTest": "cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1",
     "l3Test": "npm run test:l3",
+    "viteBuild": "npx vite build",
     "e2eBuild": "npx tauri build --debug --no-bundle",
     "e2eTest": "npm run wdio",
     "fullFrontendCheck": "npx tsc --noEmit && npx eslint src/ && npm test",

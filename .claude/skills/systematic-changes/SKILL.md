@@ -1,20 +1,20 @@
 ---
-name: code-refactor
-description: 当需要对整个代码仓做系统性审查与重构（多维度 review → 问题清单 → 分阶段修复），或已有 review 报告需转化为分阶段执行计划时使用。
+name: systematic-changes
+description: 当需要对整个代码仓做系统性审查与重构（多维度 review → 问题清单 → 分阶段修复），或已有 review 报告需转化为分阶段执行计划，或已有故障排查/debug 报告需转化为分阶段修复计划时使用。
 ---
 
-# 系统性代码重构 Skill
+# 系统性变更 Skill（重构 / 修复）
 
 ## 概述
 
-此 skill 编码了 slTerminal 项目的系统性重构流程：**探索→计划→分阶段 Workflow 执行→验证循环→提交**。
+此 skill 编码了 slTerminal 项目的系统性变更流程（重构或修复）：**探索→计划→分阶段 Workflow 执行→验证循环→提交**。
 
-核心思路：将重构问题按模块和依赖关系分组为多个 Stage，每个 Stage 内使用 Workflow 工具并行编排 subagent，通过"重构→全量测试→逐项验证→修复循环"确保每阶段零回归。
+核心思路：将变更问题按模块和依赖关系分组为多个 Stage，每个 Stage 内使用 Workflow 工具并行编排 subagent，通过"变更→全量测试→逐项验证→修复循环"确保每阶段零回归。
 
 ## 使用方式
 
 ```
-/code-refactor "<重构目标描述>"
+/systematic-changes "<变更目标描述>"
 ```
 
 也可分步调用：已完成 Step 1/2 后，要求"执行 Step 3/4 制定计划但不执行"。
@@ -23,7 +23,7 @@ description: 当需要对整个代码仓做系统性审查与重构（多维度 
 
 ### Step 1: 探索
 
-**维度先经用户确认**：`explore-dimensions.json` 的默认 5 维只是起点，实际维度（数量、划分）用 AskUserQuestion 与用户敲定后再 spawn。有效的补充维度：架构硬约束合规、安全审查、文档与代码一致性。
+**维度先经用户确认**：`explore-dimensions.json` 的默认 6 维只是起点，实际维度（数量、划分）用 AskUserQuestion 与用户敲定后再 spawn。有效的补充维度：架构硬约束合规、安全审查、文档与代码一致性、跨边界契约一致性（前后端命令签名/必填字段/DTO 双边对照——缺此维度曾漏检"后端加必填参数、前端未同步"故障）。
 
 **Review subagent prompt 必备四要素**（缺一会出事故）：
 1. **只读 review，禁止修改任何代码**
@@ -56,8 +56,19 @@ description: 当需要对整个代码仓做系统性审查与重构（多维度 
 - "改代码 vs 改文档"矛盾项（如约束与实际行为不符，往哪边对齐）
 - 引入新功能或行为变更的项（如启用从未生效的沙箱）
 - 大范围测试补写是否纳入
+- 防复发/回归测试是否纳入（守护本次修复的契约守卫、时序断言等）
 
-**产出**：`docs/refactoring-checklist.md`——按优先级（P0-P4）+ 模块组织的完整清单，每项含 ID、位置、修复要点。50-80 项均属正常规模。
+**产出**：`docs/refactoring-checklist.md`（修复类任务用 `docs/debug-checklist.md`，按任务性质命名）——按优先级（P0-P4）+ 模块组织的完整清单，每项含 ID、位置、修复要点。50-80 项均属正常规模。
+
+#### 修复类清单（debug 报告输入）的必备项
+
+输入为故障分析报告（而非全量 review）时，除逐故障修复项外，清单必须含以下五类项（本次 DBG-1~11 实证，缺一则同类故障必复发）：
+
+1. **波及面全量调用点**：从分析报告精确引用全部调用点（含边缘调用点，如 `App.tsx` 关窗清理 kill），逐项成清单条目，verify 逐点机械断言（DBG-2 = 8 处调用点逐一列出）。不接受"大致位置"。
+2. **契约守卫测试**：跨边界契约（IPC 命令/参数、DTO 字段）变更必配 payload **键集合精确匹配**测试（DBG-4）——存在性断言防不住字段增删漂移。
+3. **mock 边界盲区认知**：mockIPC 只守 JS 侧形状——后端必填参数缺失时 invoke 必 reject 且被 `.catch` 吞掉 = 运行时静默失败、测试全绿（故障B 正是如此漏过四级测试）。契约类清单项的 verify 不得仅以 mock 层测试通过为据。
+4. **静默 catch 可观测性**：修复路径上的 `catch { return [] }`/`.catch(() => {})` 至少补 `console.error`（DBG-7）——静默 catch 既是故障放大器也是定位障碍。
+5. **前置条件前置化 + 辅助代码清扫**：后端有全局状态门控（sandbox root、归属校验）时，前端状态切换必须把门控设置作为**前置 await**，不能只靠 effect 兜底（DBG-5/6）；且清扫范围必须含测试辅助代码——`e2e-tests/helpers.ts` 曾复制生产代码同一时序倒置 bug（DBG-8）。
 
 ### Step 4: 划分阶段
 
@@ -72,12 +83,13 @@ description: 当需要对整个代码仓做系统性审查与重构（多维度 
 - **跨边界契约写死**：Stage 拆分跨前后端/多 agent 共享接口时（IPC 命令名+签名+参数、token 命名、数据结构字段），契约原文写死在 stages 文档与各脚本头部——两边 agent 不各自推断
 - **共享常量/token 改动**：prompt 要求 agent 先查全部消费方再动笔
 - **无法自动化验证的假设**（规范推断、平台行为）：代码注释记录假设来源 + stages 文档标注人工验证点，由收尾实测兜底
+- **门禁命令按 Stage 触碰文件选择**：被 touch 文件不在静态检查覆盖内（如 `e2e-tests/helpers.ts` 不在根 tsconfig include）时，该 Stage 门禁须补构建级命令（`npx vite build` 打包图验证兜底）——tsc include 外的文件没有构建级门禁等于没门禁
 
 **产出**：`docs/refactoring-stages.md`，每个 Stage 必须包含：
 - 改动项 ID 列表 + agent 文件分工表（label / 负责项 / 文件，证明无文件重叠）
 - 实现要点（含项目特定坑的引用）
 - **验证项**：每条是 grep/Read/测试可机械检验的断言，不写"检查是否合理"；"禁止存在 X"类写语义式（"不限变量名，须 Read 代码确认"），防改名迎合。执行期断言落盘为 `verify/stage-NN.md` 独立文件（见 Step 5.4）
-- commit message（代码 Stage `refactor:` 前缀，文档 Stage `docs:` 前缀）
+- commit message（前缀按变更性质：重构 `refactor:`、修复 `fix:`、文档 `docs:`）
 
 计划文档同时写入 Step 5 执行规则与 Step 6 收尾步骤，使后续阶段可直接消费。**Step 3/4 只输出计划文档，不改任何代码。**
 
@@ -126,6 +138,7 @@ Workflow 返回后，主 agent 检查 `verifyResult.allFixed`：
 #### 5.4 verify 体系
 
 - 断言抽为独立 `verify/stage-NN.md`（模板 `templates/verify-file.md`）——stage 脚本与 fix-loop 共用同一真值源，修复循环与初验同一标尺
+- **语义式断言**："禁止存在 X"类写语义式（"不限变量名，须 Read 代码确认"）；**正向意图断言同样写语义式**——如"panelId 必须来自 TerminalRegistry 的 Map 键，不接受字面量""不存在未前置 `await setProjectRoot` 的 `setActivePage` 调用点""文档描述须对照当前代码核实不撒谎"，防字面通过/改名迎合
 - verify prompt 三件套：意图核对总则（"不仅核对字面断言，还须 Read 代码判断实现是否达成断言意图——字面通过但意图未达判 partial 并说明理由"）+ 测试结果拼入 prompt（agent 不重跑）+ no-return 兜底
 - schema `required: ['allFixed', 'failedItems', 'details']`
 
@@ -199,7 +212,7 @@ Workflow 返回后，主 agent 检查 `verifyResult.allFixed`：
 
 ## 注意事项
 
-- 每阶段一个 commit，message 以 stages 文档原文为准（代码 Stage `refactor:`，文档 Stage `docs:`）
+- 每阶段一个 commit，message 以 stages 文档原文为准（前缀按变更性质：`refactor:`/`fix:`/`docs:`）
 - 直接 main 分支操作，不使用 git worktree
 - 单阶段内并行 agent ≤ 5 个；**两个并行 agent 禁止改同一文件**（硬性）
 - 核心重构（如模块拆分）放在独立 Stage，分配更多 agent
@@ -212,3 +225,7 @@ Workflow 返回后，主 agent 检查 `verifyResult.allFixed`：
 - 对已正常结束的 run 用 `resumeFromRunId` 救 no-return——全命中缓存死循环；verify 阶段改 inline spawn
 - `git add -A`——必须路径限定，且枚举含 `.claude/` 精确文件
 - 并行 agent 各自跑资源共享型测试（如含 PTY spawn 的 `cargo test`）——跨进程并发死锁
+- 跨边界契约只改一侧——后端加必填参数，前端 wrapper/调用点未同步（故障B：终端输入全静默失败）
+- 以为 mock 边界的契约测试能守住真实反序列化——mockIPC 过不了后端必填校验，`.catch` 一吞测试全绿
+- 修时序/契约 bug 漏扫 E2E helpers 等辅助代码——它们常与生产代码复制同一模式、同一 bug
+- 门禁一刀切——tsc include 外的文件（如 `e2e-tests/helpers.ts`）没有构建级门禁等于没门禁
