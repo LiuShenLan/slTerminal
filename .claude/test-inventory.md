@@ -2,7 +2,7 @@
 
 > **本文档是项目用例数唯一真值源。** 所有 CLAUDE.md、README、CI 配置中引用的用例数均以此文件为准。更新测试后必须同步本文档。
 
-全量 **1416** 用例（Rust 243 + 前端 1045 + L3 116 + E2E 12），2026-07-17 实测更新。
+全量 **1446** 用例（Rust 243 + 前端 1075 + L3 116 + E2E 12），2026-07-18 实测更新。
 
 > **计数口径**：前端 (L2) 用例数以 `grep -cE '^\s*(it|test)\(' src/__tests__/*.test.ts src/__tests__/*.test.tsx` 展开的 `it`/`test` 块数为准（Vitest 实际运行数）；L3 同理 `test/terminal/*.test.ts`；Rust (L1) 以 `grep -c '#\[test\]'` 统计的 `#[test]` 属性数为准。L3 的 116 用例同时被 L2 (`npm test`) 和独立 L3 (`npm run test:l3`) 执行，但此处各层独立计数，不做去重。
 
@@ -27,15 +27,15 @@
 
 > `pty/mod.rs`、`pty/win_build.rs`、`main.rs` 不含 `#[test]`，不在此列。
 
-## L2 — 前端单元/集成测试（70 文件 / 1045 用例）
+## L2 — 前端单元/集成测试（72 文件 / 1075 用例）
 
 运行：`npm test`（Vitest + jsdom）
 
-### IPC 层（2 文件 / 48 用例）
+### IPC 层（2 文件 / 51 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
-| `src/__tests__/ipc-contract.test.ts` | 47 | pty/fs/settings/notify/git 全模块 IPC 命令合约验证 |
+| `src/__tests__/ipc-contract.test.ts` | 50 | pty/fs/settings/notify/git 全模块 IPC 命令合约验证 + DBG-4 PTY 命令 payload 契约守卫（3 条：键集合精确匹配） |
 | `src/__tests__/ipc-ping.test.ts` | 1 | mockIPC ping/pong 拦截 |
 
 ### 终端面板（14 文件 / 182 用例）
@@ -70,7 +70,7 @@
 | `src/__tests__/editor-keyboard.test.ts` | 7 | `createEditorShortcuts()` save/toggleWordWrap 经 active 指针派发 |
 | `src/__tests__/active-editor.test.ts` | 5 | active 指针 set/get/覆盖、clear 仅匹配时生效 |
 
-### 工作区/布局/页签（11 文件 / 153 用例）
+### 工作区/布局/页签（12 文件 / 167 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
@@ -78,6 +78,7 @@
 | `src/__tests__/panel-registry.test.ts` | 23 | 注册表/PANEL_TYPES/isValidPanelType/FILE_PANEL_TYPES |
 | `src/__tests__/layout-serde.test.ts` | 21 | 旧格式修补/白名单过滤/深拷贝/嵌套 branch/activeGroup 保留 |
 | `src/__tests__/workspace-header-actions.test.tsx` | 16 | RightHeader Watermark 按钮/页签操作 |
+| `src/__tests__/workspace-switch-order.test.tsx` | 14 | DBG-9：`switchToPage` 时序契约——`setProjectRoot` 先于 `setActivePage` 生效/reject 降级/SEC-01 effect 兜底/兼容性排查 |
 | `src/__tests__/workspace-defaulttab.test.tsx` | 14 | DefaultTab 渲染 + `onDidParametersChange` 事件结构回归 |
 | `src/__tests__/workspace-file-panel-types.test.ts` | 11 | FILE_PANEL_TYPES/isAlwaysRenderPanel |
 | `src/__tests__/default-layout-format.test.ts` | 8 | grid/panels/activeGroup/orientation 格式验证 |
@@ -95,7 +96,7 @@
 | `src/__tests__/keybindings.test.ts` | 16 | setBinding/clearBinding/resetAll/sanitize/loaded 守卫/debounce |
 | `src/__tests__/layout.test.ts` | 4 | activePageId 设置/清空/重复 |
 
-### 资源管理器（9 文件 / 143 用例）
+### 资源管理器（10 文件 / 156 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
@@ -107,6 +108,7 @@
 | `src/__tests__/explorer-root-contextmenu.test.tsx` | 14 | 根节点右键菜单/新建文件+文件夹 |
 | `src/__tests__/explorer-delete.test.tsx` | 13 | ask 弹窗分支/右键菜单/操作失败 UI 通知 |
 | `src/__tests__/explorer-notify.test.tsx` | 12 | startWatch 调用时机/loadRoot/toggleExpand |
+| `src/__tests__/explorer-sandbox-race.test.tsx` | 13 | DBG-10：路径沙箱竞态回归——deferred `setProjectRoot` 验证 resolve 前 `readDir` 不被调用/resolve 后正常加载/reject 降级 |
 | `src/__tests__/explorer-rootpath-clear.test.tsx` | 6 | rootPath 变化清空/快速切换 gen 丢弃/同值不清空 |
 
 ### 侧栏（1 文件 / 33 用例）
@@ -217,5 +219,6 @@ embedded WDIO 驱动**无法将 OS 级按键（`browser.keys`）投递进 WebVie
 
 ## 历史变更
 
+- 2026-07-18：DBG-11 同步——纳入 Stage 1/2 新增用例（DBG-4 契约守卫 3 条、DBG-9 switchToPage 时序 14 条、DBG-10 explorer-sandbox-race 13 条），L2 1045→1075，全量 1416→1446。
 - 2026-07-17：重写——实测全量用例数（L1=243, L2=1045, L3=116, L4=12），统一计数口径，标注 E2E 键盘局限，声明唯一真值源。纳入 Stage 9/10 新增用例。
 - 2026-07-13（旧版）：全量 ~1234 用例（Rust 193 + 前端 1020 + L3 9 + E2E 12），计数失实且 L3 少报 107 用例。

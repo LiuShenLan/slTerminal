@@ -6,6 +6,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 文件系统操作模块——封装 `fs_read_dir`、`fs_read_file`、`fs_write_file`、`fs_create_dir`、`fs_delete`、`fs_rename` Tauri 命令，适配 Windows 行尾和路径沙箱。路径沙箱核心函数 `validate_path_within_root` 已迁移至 `state.rs`，本模块通过 `use crate::state::validate_path_within_root` 导入。
 
+## 路径沙箱对前端加载时序的要求
+
+`validate_path_within_root`（`state.rs`）对 `project_root=None` 一律拒绝访问（非 `cfg!(test)` 路径）。覆盖全部 10 个命令：`fs_read_file`/`fs_write`/`fs_read_dir`/`fs_create_dir`/`fs_delete`/`fs_rename`（本模块）、`notify_watch`（`notify/mod.rs`）、`git_status`/`git_diff`（`git/mod.rs`）、`pty_spawn` 的 cwd（`pty/spawn.rs`）。
+
+**前端消费方必须保证 `project_root` 已在后端设置**，方可调用上述命令。当前保障路径：
+
+| 触发路径 | 保障方式 |
+|----------|---------|
+| 用户点击侧栏页面 | `Workspace.switchToPage`（async）先 `await setProjectRoot(rootPath)` 再 `setActivePage`（DBG-5） |
+| 应用启动恢复 lastPage | `App.tsx` 先 `await setProjectRoot` 再 `setActivePage`（DBG-6） |
+| E2E helper 创建项目/切换页面 | `__slterm_e2e_createProject`/`__slterm_e2e_switchToPage` 内部先 `await setProjectRoot`（DBG-8） |
+| SEC-01 effect 兜底 | `Workspace.tsx` effect 中 fire-and-forget `setProjectRoot`（保留服务 `pty_spawn` 等非 Explorer 链路） |
+
+> **React effect 时序坑**：同一 commit 的 passive effect 子组件先于父组件执行。若 `setProjectRoot` 仅在父 effect 中 fire-and-forget，子组件（如 `ExplorerPanel` → `useFileTree` → `readDir`）必在 `set_project_root` 到达后端前被 sandbox 拒绝——这不是概率竞态，是确定性失败。详见 `docs/debug/refactor-regressions.md` 故障A。
+
 ## 测试模式
 
 测试位于 `fs/mod.rs` 的两个 `#[cfg(test)]` 模块：`read_dir_tests` + `write_file_tests`（共 16 用例）。sandbox 测试现位于 `state.rs`（15 条 `#[test]`）。

@@ -12,7 +12,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 | 文件 | 后端模块 | 封装的命令 |
 |------|---------|-----------|
-| `pty.ts` | `pty/` | `pty_spawn`, `pty_write`, `pty_resize`, `pty_kill`, `pty_reattach`, `get_windows_build_number` |
+| `pty.ts` | `pty/` | `pty_spawn`, `pty_write`, `pty_resize`, `pty_kill`, `pty_reattach`, `get_windows_build_number`。`write`/`resize`/`kill` 三 wrapper 签名含 `panelId`（归属校验，后端 SEC-08），invoke payload 同步传 `panelId`（JS `panelId` ↔ Rust `panel_id` 由 Tauri 自动转换） |
 | `fs.ts` | `fs/` | `fs_read_file`, `fs_write_file`, `fs_read_dir`, `fs_create_dir`, `fs_delete`, `fs_rename` |
 | `git.ts` | `git/` | `git_status`, `git_diff` |
 | `settings.ts` | settings | `load_settings`, `save_settings` |
@@ -31,11 +31,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **类型对应**：封装函数的参数/返回值使用 `src/types/` 中的 DTO 类型，与 Rust 端 `snake_case` 字段对应。
 - **thin wrapper**：clipboard、dialog 和 shell 是 Tauri 官方插件的直接 re-export，仅为了聚合到本层，不添加额外逻辑。新增 Tauri 插件导入遵循同一模式。
 - **命名**：函数名 camelCase，对应的 Rust 命令为 snake_case（如 `pty_spawn` → `spawn()`）。
-- **参数序列化**：`Uint8Array` 需转 `Array.from(data)` 再传给 `invoke`（pty.write）。
+- **参数序列化**：`Uint8Array` 需转 `Array.from(data)` 再传给 `invoke`（`pty.write`）。`write`/`resize`/`kill` 的 invoke payload 均含 `panelId`（后端 SEC-08 归属校验），调用方须传入作用域内现成的 panelId。
 
 ## 测试模式
 
-测试文件：`src/__tests__/ipc-contract.test.ts`（47 用例）+ `ipc-ping.test.ts`（1 用例）。
+测试文件：`src/__tests__/ipc-contract.test.ts`（50 用例，含 3 条 DBG-4 契约守卫）+ `ipc-ping.test.ts`（1 用例）。
 
 ### IPC 合约测试
 

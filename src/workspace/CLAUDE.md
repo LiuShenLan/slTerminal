@@ -20,6 +20,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 > **关键坑**：Dockview `PanelApi.onDidParametersChange` 类型为 `Event<Parameters>`，回调直接接收 `Parameters` 对象（扁平 key-value），不是 `{ params: Parameters }` 包裹结构。错误写成 `event.params.tabIcon` 会导致始终读到 `undefined`。
 
+**setProjectRoot 前置为页面切换前置条件**：`project_root` 是 `activePageId` 生效的前提，不是它的副作用。`switchToPage`（`Workspace.tsx`）改为 async——先 `await setProjectRoot(rootPath)` 再 `setActivePage(pageId)`。`App.tsx` 启动恢复 `lastPage` 同样先 `await setProjectRoot`。SEC-01 effect（`Workspace.tsx`）保留兜底（服务于 `pty_spawn` 等其它消费者 + E2E helper 直设 `activePageId` 的路径）。根因：React 同一 commit 的 passive effect 子组件先于父组件执行——旧代码中 `setProjectRoot` 在父 effect 执行时，子组件（ExplorerPanel）的 `fs_read_dir` 已因 `project_root=None` 被路径沙箱拒绝。详见 `docs/debug/refactor-regressions.md` 故障A。
+
 ## 文件
 
 | 文件 | 职责 |
@@ -52,11 +54,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 页面切换流：
 ```
 SidebarTree.switchToPage(projectId, pageId)
-  → ensurePageInitialized(pageId)  // 首次切换时挂载 PageDockview
+  → 查 useProjects.getState() 获取 pageId 所属项目 rootPath
+  → await setProjectRoot(rootPath)  // 路径沙箱前置条件（失败 console.error 降级，仍继续切换）
+  → ensurePageInitialized(pageId)   // 首次切换时挂载 PageDockview
   → useLayout.setActivePage(pageId)
   → React 重渲染，目标页面 display:block，其余 display:none
   → window.__dockviewApi 更新指向活跃页面
 ```
+
+> **DBG-5**: `switchToPage` 改为 async——`setProjectRoot` 必须在 `setActivePage` 之前完成，确保子组件 effect 中的 `fs_read_dir`/`git_status`/`notify_watch` 等 IPC 调用在后端 `project_root` 就绪后通过路径沙箱校验。
 
 ## 关键集成点
 
@@ -133,6 +139,11 @@ SidebarTree.switchToPage(projectId, pageId)
 `workspace-e2e-ready.test.tsx`（4 用例）：
 - `window.__slterm_e2e_workspaceReady` 在渲染阶段（非 `useEffect`）同步设置
 - 未挂载不存在、卸载保留、mock 全部子组件
+
+`workspace-switch-order.test.tsx`（14 用例，DBG-9）：
+- `switchToPage` 时序契约：`setProjectRoot` 先于 `setActivePage` 生效
+- `setProjectRoot` 失败时降级（`console.error` + 仍完成切换）
+- SEC-01 effect 兜底验证 + 现有测试兼容性排查
 
 ## 旧格式兼容
 
