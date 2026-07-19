@@ -476,9 +476,9 @@ describe("场景序列（S1–S6）", () => {
 // ── 常量验证 ──
 
 describe("常量", () => {
-  it("DEFAULT_ZONES 上区含 projects 和 explorer", () => {
+  it("DEFAULT_ZONES 上区含 projects、explorer 和 commit", () => {
     expect(DEFAULT_ZONES).toEqual({
-      top: ["projects", "explorer"],
+      top: ["projects", "explorer", "commit"],
       bottom: [],
     });
   });

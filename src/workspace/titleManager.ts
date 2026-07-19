@@ -11,6 +11,8 @@ import { normalizePath, basename, relativePath } from "../lib/path";
 /** 编辑器注册条目 */
 export interface EditorEntry {
   filePath?: string;
+  /** git 页签后缀，如 "(git diff)"，无后缀为普通编辑器 */
+  suffix?: string;
 }
 
 /** 标题更新指令（调用方通过 DockviewApi 执行） */
@@ -62,9 +64,10 @@ export function createTitleManager() {
     pageId: string,
     panelId: string,
     filePath?: string,
+    suffix?: string,
   ): void {
     const page = getPageRegistry(pageId);
-    page.set(panelId, { filePath });
+    page.set(panelId, { filePath, suffix });
   }
 
   /** 注销编辑器面板。在面板关闭时调用。 */
@@ -80,13 +83,19 @@ export function createTitleManager() {
   function findExistingEditor(
     pageId: string,
     filePath: string,
+    suffix?: string,
   ): string | null {
     const page = registry.get(pageId);
     if (!page) return null;
     const target = normalizePath(filePath);
     for (const [panelId, entry] of page) {
       if (entry.filePath && normalizePath(entry.filePath) === target) {
-        return panelId;
+        // suffix 传入时仅匹配同 suffix 条目；不传时仅匹配无 suffix 条目
+        if (suffix !== undefined) {
+          if (entry.suffix === suffix) return panelId;
+        } else {
+          if (!entry.suffix) return panelId;
+        }
       }
     }
     return null;
@@ -100,6 +109,7 @@ export function createTitleManager() {
     pageId: string,
     rootPath: string,
     filePath: string,
+    suffix?: string,
   ): string {
     const name = basename(filePath);
     const page = getPageRegistry(pageId);
@@ -116,11 +126,9 @@ export function createTitleManager() {
       }
     }
 
-    if (!hasConflict) return name;
-
-    // 有冲突 → 显示相对路径，不在项目树中则显示绝对路径
-    const rel = relativePath(filePath, rootPath);
-    return rel ?? normalizedNew;
+    const base = !hasConflict ? name : (relativePath(filePath, rootPath) ?? normalizedNew);
+    // 拼接 git 页签后缀（如 "(git diff)"），无后缀不拼
+    return suffix ? `${base}${suffix}` : base;
   }
 
   /**
@@ -152,15 +160,16 @@ export function createTitleManager() {
       const name = basename(entry.filePath);
       const count = nameCounts.get(name) || 0;
 
+      let base: string;
       if (count <= 1) {
-        updates.push({ panelId, title: name });
+        base = name;
       } else {
-        const rel = relativePath(entry.filePath, rootPath);
-        updates.push({
-          panelId,
-          title: rel ?? normalizePath(entry.filePath),
-        });
+        base = relativePath(entry.filePath, rootPath) ?? normalizePath(entry.filePath);
       }
+
+      // 拼接 suffix（如 "(git diff)"），无 suffix 不拼
+      const title = entry.suffix ? `${base}${entry.suffix}` : base;
+      updates.push({ panelId, title });
     }
 
     return updates;

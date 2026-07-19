@@ -29,9 +29,9 @@ export interface SideBarSlice {
 
 // ── 默认值常量 ──
 
-/** 默认按钮归属：项目列表、文件浏览器均在上区 */
+/** 默认按钮归属：项目列表、文件浏览器、commit 均在上区 */
 export const DEFAULT_ZONES: Zones = {
-  top: ["projects", "explorer"],
+  top: ["projects", "explorer", "commit"],
   bottom: [],
 };
 

@@ -31,7 +31,7 @@ import {
   SPLIT_MAX,
 } from "../features/sideViews/sideBarState";
 
-// 测试用 stub 视图定义
+// 测试用 stub 视图定义（需与 DEFAULT_ZONES 中的 id 对齐，否则 reconcileZones 会过滤未注册 id）
 function registerTestViews(): void {
   sideViewRegistry.register({
     id: "projects",
@@ -43,6 +43,12 @@ function registerTestViews(): void {
     id: "explorer",
     title: "文件浏览器",
     icon: "📁",
+    component: () => null,
+  });
+  sideViewRegistry.register({
+    id: "commit",
+    title: "Commit",
+    icon: "🔀",
     component: () => null,
   });
 }
@@ -164,7 +170,8 @@ describe("sideBar store", () => {
     });
     await useSideBar.getState().loadFromDisk();
     const s = useSideBar.getState();
-    expect(s.zones).toEqual({ top: ["explorer", "projects"], bottom: [] });
+    // reconcileZones 补全注册表中缺失的 commit
+    expect(s.zones).toEqual({ top: ["explorer", "projects", "commit"], bottom: [] });
     expect(s.open).toEqual({ top: "explorer", bottom: null });
     expect(s.width).toBe(320);
     expect(s.splitRatio).toBe(0.7);
@@ -248,8 +255,8 @@ describe("sideBar store", () => {
     });
     await useSideBar.getState().loadFromDisk();
     const s = useSideBar.getState();
-    // "ghost" 被过滤掉，explorer 补全到上区末尾
-    expect(s.zones.top).toEqual(["projects", "explorer"]);
+    // "ghost" 被过滤掉，explorer 和 commit 补全到上区末尾
+    expect(s.zones.top).toEqual(["projects", "explorer", "commit"]);
     expect(s.zones.bottom).toEqual([]);
     // open 指向未注册 id → 清 null
     expect(s.open).toEqual({ top: null, bottom: null });

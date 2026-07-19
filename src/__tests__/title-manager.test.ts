@@ -333,6 +333,72 @@ describe("createTitleManager", () => {
     });
   });
 
+  // ---- suffix 标题后缀支持 ----
+
+  describe("suffix 标题后缀支持", () => {
+    const ROOT = "D:/project";
+
+    // -- getFileEditorTitle with suffix --
+
+    it("无冲突时 basename 拼接 suffix", () => {
+      const title = tm.getFileEditorTitle(
+        "page1", ROOT, "D:/project/src/a.ts", "(git diff)",
+      );
+      expect(title).toBe("a.ts(git diff)");
+    });
+
+    it("有同名冲突时 relPath 拼接 suffix", () => {
+      tm.registerEditor("page1", "editor-1", "D:/project/src/a.ts");
+      const title = tm.getFileEditorTitle(
+        "page1", ROOT, "D:/project/lib/a.ts", "(git diff)",
+      );
+      expect(title).toBe("lib/a.ts(git diff)");
+    });
+
+    // -- recomputeTitles with suffix --
+
+    it("recomputeTitles 保留各 entry 的 suffix（普通编辑器 + git 页签同名混合）", () => {
+      tm.registerEditor("page1", "editor-1", "D:/project/src/index.ts"); // 无 suffix
+      tm.registerEditor("page1", "diff-1", "D:/project/src/index.ts", "(git diff)"); // 有 suffix
+      const updates = tm.recomputeTitles("page1", ROOT);
+      expect(updates).toHaveLength(2);
+      expect(updates).toContainEqual({ panelId: "editor-1", title: "src/index.ts" });
+      expect(updates).toContainEqual({ panelId: "diff-1", title: "src/index.ts(git diff)" });
+    });
+
+    it("recomputeTitles 无 suffix 条目不拼接后缀", () => {
+      tm.registerEditor("page1", "editor-1", "D:/project/src/unique.ts");
+      const updates = tm.recomputeTitles("page1", ROOT);
+      expect(updates).toEqual([{ panelId: "editor-1", title: "unique.ts" }]);
+    });
+
+    // -- findExistingEditor with suffix --
+
+    it("findExistingEditor 带 suffix 匹配同 suffix 条目", () => {
+      tm.registerEditor("page1", "diff-1", "D:/project/src/index.ts", "(git diff)");
+      const found = tm.findExistingEditor("page1", "D:/project/src/index.ts", "(git diff)");
+      expect(found).toBe("diff-1");
+    });
+
+    it("findExistingEditor 不带 suffix 不匹配带 suffix 条目", () => {
+      tm.registerEditor("page1", "diff-1", "D:/project/src/index.ts", "(git diff)");
+      const found = tm.findExistingEditor("page1", "D:/project/src/index.ts");
+      expect(found).toBeNull();
+    });
+
+    it("findExistingEditor 带 suffix 不匹配无 suffix 条目", () => {
+      tm.registerEditor("page1", "editor-1", "D:/project/src/index.ts"); // 无 suffix
+      const found = tm.findExistingEditor("page1", "D:/project/src/index.ts", "(git diff)");
+      expect(found).toBeNull();
+    });
+
+    it("findExistingEditor 不同 suffix 不相互匹配", () => {
+      tm.registerEditor("page1", "diff-1", "D:/project/src/index.ts", "(git diff)");
+      const found = tm.findExistingEditor("page1", "D:/project/src/index.ts", "(git add)");
+      expect(found).toBeNull();
+    });
+  });
+
   // ---- onDeletePage ----
 
   describe("onDeletePage", () => {

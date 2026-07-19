@@ -33,7 +33,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### `sideBar.ts` — 侧栏视图状态
 
 - 状态形状：`zones: Zones`（按钮归属——`{top: string[], bottom: string[]}`）、`open: OpenState`（各半区打开的视图 id——`{top: string|null, bottom: string|null}`）、`width: number`（侧栏区宽度，默认 250，范围 [160, 500]）、`splitRatio: number`（上下分割比例，默认 0.5，范围 [0.1, 0.9]）。
-- 默认态：`DEFAULT_ZONES = {top:["projects","explorer"], bottom:[]}`、`DEFAULT_OPEN = {top:"projects", bottom:null}`。
+- 默认态：`DEFAULT_ZONES = {top:["projects","explorer","commit"], bottom:[]}`、`DEFAULT_OPEN = {top:"projects", bottom:null}`。
 - 操作方法：`toggleView(id)` / `moveButton(id, zone, index)` 委托 `sideBarState` 纯函数；`setWidth` / `setSplitRatio` 内部 clamp。
 - 持久化照 `fontSize.ts` 模式：`loadFromDisk` 读 `~/.slterminal/settings.json` 的 `sideBar` 段 → `sanitizeSideBar`（校验+clamp）→ `reconcileZones`（对齐注册表）→ 置 `loaded:true`；变更后 2s debounce → `saveSettings({sideBar})`（后端浅合并，不擦 fontSize/keybindings 段）。
 - 导出 `cancelPendingSave()` 供 App 关窗冲刷。
