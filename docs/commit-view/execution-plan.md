@@ -13,7 +13,7 @@
 | 03 gitshow 面板 | `docs/commit-view/workflows/stage-03-gitshow-panel.js` | ✅ 已 commit | allFixed=true (fix-loop 2轮), 1323 tests | `9dbb09b` | 1 agent |
 | 04 diff 面板 | `docs/commit-view/workflows/stage-04-diff-panel.js` | ✅ 已 commit | allFixed=true (fix-loop 1轮), 1359 tests | `84169a8` | 2 agent 并行 |
 | 05 commit 视图 | `docs/commit-view/workflows/stage-05-commit-view.js` | ✅ 已 commit | allFixed=true, 1387 tests | `a61adf1` | 1 agent |
-| 06 E2E | `docs/commit-view/workflows/stage-06-e2e.js` | ⬜ 未开始 | — | — | 1 agent；门禁含 wdio |
+| 06 E2E | `docs/commit-view/workflows/stage-06-e2e.js` | ✅ 已 commit | allFixed=true (fix-loop 2轮), 16 E2E 全绿 | `e73e837` | 1 agent |
 | 07 文档同步 | `docs/commit-view/workflows/stage-07-docs.js` | ⬜ 未开始 | — | — | 1 agent |
 
 状态图例：⬜ 未开始 / 🔄 进行中 / ✅ 已 commit / ❌ 修复循环超限（人工介入）

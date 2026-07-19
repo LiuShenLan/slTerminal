@@ -2,17 +2,17 @@
 
 > **本文档是项目用例数唯一真值源。** 所有 CLAUDE.md、README、CI 配置中引用的用例数均以此文件为准。更新测试后必须同步本文档。
 
-全量 **1580** 用例（Rust 243 + 前端 1207 + L3 116 + E2E 14），2026-07-19 实测更新。
+全量 **1769** 用例（Rust 251 + 前端 1387 + L3 116 + E2E 15），2026-07-19 实测更新。
 
 > **计数口径**：前端 (L2) 用例数以 `grep -cE '^\s*(it|test)\(' src/__tests__/*.test.ts src/__tests__/*.test.tsx` 展开的 `it`/`test` 块数为准（Vitest 实际运行数）；L3 同理 `test/terminal/*.test.ts`；Rust (L1) 以 `grep -c '#\[test\]'` 统计的 `#[test]` 属性数为准。L3 的 116 用例同时被 L2 (`npm test`) 和独立 L3 (`npm run test:l3`) 执行，但此处各层独立计数，不做去重。
 
-## L1 — Rust 单元/集成测试（11 文件 / 243 用例）
+## L1 — Rust 单元/集成测试（11 文件 / 251 用例）
 
 运行：`cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1`
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
-| `src-tauri/src/git/mod.rs` | 62 | status_to_str/git_status/git_diff/line_callback/dunce/序列化/repository |
+| `src-tauri/src/git/mod.rs` | 70 | status_to_str/git_status/git_diff/git_file_at_head/recurse_untracked_dirs/oldPath/rename_detection/line_callback/dunce/序列化/repository |
 | `src-tauri/src/pty/reader.rs` | 30 | ConPTY 启动序列剥离/DA1 查询检测/apply_startup_strip/should_inject_da1/mirror_da1_query/16KB 边界 |
 | `src-tauri/src/pty/spawn.rs` | 28 | compute_conpty_flags/flag 常量/ConPtyMaster MasterPty trait/AttrList + env 注入/cwd 规范化/ring buffer 回放/session 隔离 |
 | `src-tauri/src/fs/mod.rs` | 28 | read_dir/write_file/create_dir/delete/rename + 命令包装单测 |
@@ -27,15 +27,15 @@
 
 > `pty/mod.rs`、`pty/win_build.rs`、`main.rs` 不含 `#[test]`，不在此列。
 
-## L2 — 前端单元/集成测试（78 文件 / 1193 用例）
+## L2 — 前端单元/集成测试（85 文件 / 1387 用例）
 
 运行：`npm test`（Vitest + jsdom）
 
-### IPC 层（2 文件 / 51 用例）
+### IPC 层（2 文件 / 54 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
-| `src/__tests__/ipc-contract.test.ts` | 50 | pty/fs/settings/notify/git 全模块 IPC 命令合约验证 + DBG-4 PTY 命令 payload 契约守卫（3 条：键集合精确匹配） |
+| `src/__tests__/ipc-contract.test.ts` | 53 | pty/fs/settings/notify/git 全模块 IPC 命令合约验证 + DBG-4 PTY 命令 payload 契约守卫（3 条：键集合精确匹配） |
 | `src/__tests__/ipc-ping.test.ts` | 1 | mockIPC ping/pong 拦截 |
 
 ### 终端面板（14 文件 / 182 用例）
@@ -57,30 +57,30 @@
 | `src/__tests__/detect-webgl.test.ts` | 3 | WebGL2 可用/不可用/抛异常 |
 | `src/__tests__/terminal-strictmode.test.ts` | 2 | `smGuardRef` 防双重挂载 |
 
-### 编辑器面板（6 文件 / 111 用例）
+### 编辑器面板（8 文件 / 125 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
 | `src/__tests__/use-code-mirror.test.ts` | 34 | 字体扩展/Compartment reconfigure/handleSave/gitDiff/slterm:file-saved + file-saved-as event |
+| `src/__tests__/git-gutter.test.ts` | 28 | StateEffect → RangeSet 映射/GutterMarker DOM/SpacerMarker + HEAD 侧 old 行号映射/buildHeadRangeSet/headDiffGutter |
 | `src/__tests__/language-mapping.test.ts` | 23 | 扩展名→CodeMirror 语言映射 + 未知回退 |
-| `src/__tests__/git-gutter.test.ts` | 20 | StateEffect → RangeSet 映射/GutterMarker DOM/SpacerMarker |
 | `src/__tests__/editor-confirm.test.ts` | 11 | dirty/clean 外部修改确认/订阅取消/kind 过滤 |
 | `src/__tests__/editor.test.tsx` | 9 | EditorPanel 渲染/panelId/filePath 传递 + `overflow: clip` 样式 |
 | `src/__tests__/editor-font.test.ts` | 8 | 字体 CSS 选择器（`.cm-scroller` vs `.cm-editor`） |
 | `src/__tests__/editor-keyboard.test.ts` | 7 | `createEditorShortcuts()` save/toggleWordWrap 经 active 指针派发 |
 | `src/__tests__/active-editor.test.ts` | 5 | active 指针 set/get/覆盖、clear 仅匹配时生效 |
 
-### 工作区/布局/页签（12 文件 / 167 用例）
+### 工作区/布局/页签（12 文件 / 187 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
-| `src/__tests__/title-manager.test.ts` | 36 | terminal-N 递增/编辑器 basename/同名冲突相对路径/handleSaveAs/onDeletePage |
-| `src/__tests__/panel-registry.test.ts` | 23 | 注册表/PANEL_TYPES/isValidPanelType/FILE_PANEL_TYPES |
+| `src/__tests__/title-manager.test.ts` | 44 | terminal-N 递增/编辑器 basename/同名冲突相对路径/handleSaveAs/onDeletePage/suffix 标题生成/冲突重算保留后缀/findExistingEditor 匹配隔离 |
+| `src/__tests__/panel-registry.test.ts` | 29 | 注册表/PANEL_TYPES/isValidPanelType/FILE_PANEL_TYPES（5 面板：terminal/editor/htmlviewer/gitshow/diff） |
 | `src/__tests__/layout-serde.test.ts` | 21 | 旧格式修补/白名单过滤/深拷贝/嵌套 branch/activeGroup 保留 |
 | `src/__tests__/workspace-header-actions.test.tsx` | 16 | RightHeader Watermark 按钮/页签操作 |
 | `src/__tests__/workspace-switch-order.test.tsx` | 14 | DBG-9：`switchToPage` 时序契约——`setProjectRoot` 先于 `setActivePage` 生效/reject 降级/SEC-01 effect 兜底/兼容性排查 |
 | `src/__tests__/workspace-defaulttab.test.tsx` | 14 | DefaultTab 渲染 + `onDidParametersChange` 事件结构回归 |
-| `src/__tests__/workspace-file-panel-types.test.ts` | 11 | FILE_PANEL_TYPES/isAlwaysRenderPanel |
+| `src/__tests__/workspace-file-panel-types.test.ts` | 13 | FILE_PANEL_TYPES/isAlwaysRenderPanel（5 面板：terminal/editor/htmlviewer/gitshow/diff） |
 | `src/__tests__/default-layout-format.test.ts` | 8 | grid/panels/activeGroup/orientation 格式验证 |
 | `src/__tests__/layout-switch.test.ts` | 7 | 页面切换集成/自切换守卫 |
 | `src/__tests__/workspace-multi-instance.test.tsx` | 4 | 多 Dockview 实例惰性初始化/删除活跃页面 |
@@ -127,6 +127,20 @@
 | `src/__tests__/activityBar.test.tsx` | 29 | 渲染结构(3)/active(2)/toggle(2)/title(1)/dragStart(2)/dragOver+drop同zone(3)/dragEnd(1)/防御(1)/hover(2)/跨区状态机(5)/zone边界(3)/指示线清理(4)——拖拽向外层容器派发，clientY 经 installRectSpy mock |
 | `src/__tests__/sideBarArea.test.tsx` | 14 | 四态布局/Allotment preferredSize splitRatio/display:none-flex 切换/保挂载/跨区卸载重建/props 透传/onChange→setSplitRatio/PANEL_BG token/首次双开 splitRatio 重置 |
 | `src/__tests__/workspace-sideviews.test.tsx` | 13 | 活动栏 pane 40px 固定/侧栏区 pane visible=anyOpen 四态/preferredSize 来自 store/onChange→setWidth/主区 pane/props 透传 |
+
+### Commit 视图（1 文件 / 28 用例）
+
+| 文件 | 用例 | 覆盖范围 |
+|------|------|---------|
+| `src/__tests__/commit-view.test.tsx` | 28 | 状态机四态/mock gitStatus+onFsEvent/列表渲染（文件名 GIT_FILE_COLORS token/计数/排序/空态）/折叠交互/双击分派 4 类状态（mock dockApi+真实 titleManager）/去重聚焦/fs-event 200ms debounce/rootPath 切换清空重载 |
+
+### Diff/GitShow 面板（3 文件 / 40 用例）
+
+| 文件 | 用例 | 覆盖范围 |
+|------|------|---------|
+| `src/__tests__/diff-alignment.test.ts` | 16 | computeAlignment 纯函数全分支：纯新增/纯删除/等行修改/多删少/多增少/多 hunk 合并/空 hunks |
+| `src/__tests__/diff-panel.test.tsx` | 11 | mock gitFileAtHead+fs.readFile+gitDiff+onFsEvent、双栏渲染、加载态+错误占位、保存后刷新链 |
+| `src/__tests__/gitshow-panel.test.tsx` | 13 | mock gitFileAtHead、三态（loading/content/error）、readOnly 断言、oldPath 优先 |
 
 ### 快捷键/命令系统（8 文件 / 116 用例）
 
@@ -190,7 +204,7 @@
 | `test/terminal/ansi-correctness.test.ts` | 30 | ANSI 颜色正确性——16 色前景/背景、256 色（标准/216 色立方/灰度）、TrueColor 24-bit 前景/背景/混合、SGR 属性（粗体/斜体/下划线/双下划线/慢闪/反显/隐藏/删除线/弱化/上划线）、SGR 组合叠加、SGR 重置/子参数重置、DEC 私有模式（DECTCEM/DECOM/DECAWM）、DECSC/DECRC、RIS、DECSTBM |
 | `test/terminal/osc.test.ts` | 9 | OSC 序列——标题（OSC 0/2 BEL/ST）、调色板（OSC 4 单索引/多索引）、嵌入完整性（OSC 在正常输出中/穿插文本/后紧跟文本不丢失） |
 
-## L4 — E2E 端到端测试（1 文件 / 14 用例）
+## L4 — E2E 端到端测试（1 文件 / 15 用例）
 
 运行：`npm run e2e`（= `npm run build:e2e` + `npm run wdio`）  
 技术栈：WDIO + `@wdio/tauri-service` 1.1.0 + embedded driver（`webview2-com` COM 直连 `ICoreWebView2`）
@@ -211,6 +225,8 @@
 | should preserve terminal content after switching to another page and back | H6 终端跨页面存活（多 Dockview 实例 + CSS 显隐） |
 | 点击侧栏按钮切换视图显示/隐藏（R1/R2） | 活动栏按钮真实点击→open 状态变化→侧栏区 visible 联动→store 状态断言 |
 | 拖拽按钮跨区移动（R6/R7） | DataTransfer 合成拖拽事件跨区→zones + open 跟随（R6 跟随替换/R7 未打开仅归属）→store 状态断言 |
+| Commit 视图应显示真实的 Changes 与 Unversioned 文件列表 | git CLI 搭建真实仓库（init+commit+modified+untracked）→toggleSideView("commit")→断言 Changes/Unversioned 条目数与文件名 |
+| 双击 modified 文件应打开 diff 页签 | 双击 modified 文件 → 断言 __dockviewApi 出现 title 含 `(git diff)` 的面板且存在 `data-e2e="diff-left"`/`diff-right` |
 
 ### E2E 键盘输入限制（TE-17）
 
@@ -232,8 +248,9 @@ embedded WDIO 驱动**无法将 OS 级按键（`browser.keys`）投递进 WebVie
 
 ## 历史变更
 
-- 2026-07-19：侧栏视图系统（SB-26）——新增 L2「侧栏视图」类目 6 文件 118 用例（sideBarState 50 + sideViewRegistry 7 + sideBar 19 + activityBar 16 + sideBarArea 13 + workspace-sideviews 13）；L4 新增「侧栏视图」describe 2 用例（12→14）。L2 1075→1193，全量 1446→1566。
+- 2026-07-19：commit 视图（CV-DOC）——L1 git/mod.rs 62→70（+8：git_file_at_head/recurse_untracked_dirs/oldPath/rename_detection），L1 243→251。L2 新增「Commit 视图」类目 1 文件 28 用例 +「Diff/GitShow 面板」3 文件 40 用例（diff-alignment 16 + diff-panel 11 + gitshow-panel 13），既有文件增量：ipc-contract 50→53 + git-gutter 20→28 + panel-registry 23→29 + title-manager 36→44 + workspace-file-panel-types 11→13。L2 1207→1387。L4 新增「commit 视图」describe 2 用例，14→15。全量 1580→1769。
 - 2026-07-19（fix）：跨区拖拽修复 + 中线 zone 判定 + splitRatio 重置——activityBar 16→29（+13 跨区/边界/清理），sideBarArea 13→14（+1 splitRatio 重置）。L2 1193→1207，全量 1566→1580。
+- 2026-07-19：侧栏视图系统（SB-26）——新增 L2「侧栏视图」类目 6 文件 118 用例（sideBarState 50 + sideViewRegistry 7 + sideBar 19 + activityBar 16 + sideBarArea 13 + workspace-sideviews 13）；L4 新增「侧栏视图」describe 2 用例（12→14）。L2 1075→1193，全量 1446→1566。
 - 2026-07-18：DBG-11 同步——纳入 Stage 1/2 新增用例（DBG-4 契约守卫 3 条、DBG-9 switchToPage 时序 14 条、DBG-10 explorer-sandbox-race 13 条），L2 1045→1075，全量 1416→1446。
 - 2026-07-17：重写——实测全量用例数（L1=243, L2=1045, L3=116, L4=12），统一计数口径，标注 E2E 键盘局限，声明唯一真值源。纳入 Stage 9/10 新增用例。
 - 2026-07-13（旧版）：全量 ~1234 用例（Rust 193 + 前端 1020 + L3 9 + E2E 12），计数失实且 L3 少报 107 用例。

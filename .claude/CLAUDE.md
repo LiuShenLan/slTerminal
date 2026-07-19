@@ -106,7 +106,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 |------|------|------|------|
 | src/ipc | IPC 通信层，前端 invoke 唯一入口 | src/ipc/index.ts | @../src/ipc/CLAUDE.md |
 | src/ipc/shell.ts | openUrl wrapper（封装 @tauri-apps/plugin-opener） | src/ipc/shell.ts | @../src/ipc/CLAUDE.md |
-| src/panels | Dockview 面板系统（terminal + editor + html） | src/panels/index.ts | @../src/panels/CLAUDE.md |
+| src/panels | Dockview 面板系统（terminal + editor + html + gitshow + diff） | src/panels/index.ts | @../src/panels/CLAUDE.md |
 | src/stores | Zustand 状态管理（projects/layout/fontSize/keybindings） | src/stores/index.ts | @../src/stores/CLAUDE.md |
 | src/workspace | 工作区布局管理（Dockview serde + 面板注册 + titleManager） | src/workspace/Workspace.tsx | @../src/workspace/CLAUDE.md |
 | src/lib | 通用工具 + createActivePointer 泛型工厂 + useFontSizeWheel 共享 hook + ErrorBoundary + E2E_ENABLED 门控开关（路径函数 `basename`/`isChildOf`/`relativePath`） | src/lib/index.ts | @../src/lib/CLAUDE.md |
@@ -115,6 +115,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | src/features/shortcuts | 快捷键模块（ShortcutRegistry 单例 + usePanelFocus hook + Command/Keybinding 分离 + 用户自定义重绑定） | src/features/shortcuts/index.ts | @../src/features/shortcuts/CLAUDE.md |
 | src/features/sidebar | 侧栏项目/页面二级树（项目/页面 CRUD + 页面切换导航） | src/features/sidebar/index.ts | @../src/features/sidebar/CLAUDE.md |
 | src/features/sideViews | 侧栏视图系统——活动栏+共享侧栏区+单槽位状态机 | src/features/sideViews/index.ts | @../src/features/sideViews/CLAUDE.md |
+| src/features/commit | Commit 侧栏视图（git 变更列表 + 状态→面板分派） | src/features/commit/index.ts | @../src/features/commit/CLAUDE.md |
 | src-tauri/src/pty | PTY 管理，Windows ConPTY 核心 | src-tauri/src/pty/mod.rs | @../src-tauri/src/pty/CLAUDE.md |
 | src-tauri/src/notify | 文件系统监听（LruWatcherPool 缓存 + pause/resume 切换） | src-tauri/src/notify/mod.rs | @../src-tauri/src/notify/CLAUDE.md |
 | e2e-tests | WDIO E2E 端到端测试 | e2e-tests/wdio.conf.ts | @../e2e-tests/CLAUDE.md |

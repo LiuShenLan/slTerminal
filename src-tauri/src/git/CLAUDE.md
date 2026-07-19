@@ -4,11 +4,41 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 职责
 
-Git 版本控制模块——基于 `git2` crate，封装 `git_status`（文件状态着色）和 `git_diff`（行级差异），通过 Tauri 命令向前端暴露 CamelCase DTO。
+Git 版本控制模块——基于 `git2` crate，封装 `git_status`（文件状态着色）、`git_diff`（行级差异）和 `git_file_at_head`（HEAD 文件内容），通过 Tauri 命令向前端暴露 CamelCase DTO。
+
+## 命令
+
+### git_status
+
+参数：`repo_path: String`。返回 `Vec<GitStatusEntry>`。
+
+`StatusOptions` 配置：`.recurse_untracked_dirs(true)` + `.renames_head_to_index(true).renames_index_to_workdir(true)`。未跟踪目录内文件逐个返回（非 `foo/` 单条目）。rename 检测开启后 `INDEX_RENAMED`/`WT_RENAMED` 状态位正常运行时可被置位。
+
+### GitStatusEntry.oldPath
+
+renamed 条目（`INDEX_RENAMED` / `WT_RENAMED`）从 delta 的 `old_file()` 取旧路径，拼接为与 `path` 同格式的绝对路径。非 renamed → `None`（序列化 `oldPath: null`，camelCase）。前提：`git_status` 的 `StatusOptions` 须开启 `.renames_head_to_index(true).renames_index_to_workdir(true)`，否则 rename 检测不工作、`oldPath` 恒 null。
+
+### git_diff
+
+参数：`(repo_path: String, file_path: String)`。返回 `Vec<DiffHunk>`（`oldStart/oldLines/newStart/newLines`，均为 1-based）。
+
+### git_file_at_head（新增命令）
+
+参数：`(repo_path: String, file_path: String)`。返回 `Result<String, AppError>`。
+
+实现流程：① `validate_path_within_root` 校验 file_path（路径沙箱）；② 复用 `get_or_open_repo`（搜 file_path 所属仓库）；③ `spawn_blocking` 内：`repo.head()` → `peel_to_tree` → 按 workdir 相对路径取 blob → `String::from_utf8_lossy` 转字符串。
+
+**HEAD 不存在错误约定**：`UnbornBranch`（仓库尚无提交）或文件不在 HEAD tree → `AppError::Git`，消息含 `"HEAD 中不存在"`。前端 catch 任意错误显示占位文案"该文件在 HEAD 中不存在"，不解析错误内容。
+
+**workdir strip**：用 `dunce::simplified`（8.3 短名坑，见下方测试工厂注释）。
+
+### 注册
+
+三条命令均在 `src-tauri/src/lib.rs` 的 `generate_handler!` 注册（`git_status`、`git_diff`、`git_file_at_head`）。
 
 ## 测试模式
 
-测试位于 `git/mod.rs` 的 `#[cfg(test)] mod tests`（61 用例），是 Rust 端最大的单文件测试模块。
+测试位于 `git/mod.rs` 的 `#[cfg(test)] mod tests`（70 用例），是 Rust 端最大的单文件测试模块。
 
 ### 测试工厂
 

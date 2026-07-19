@@ -63,7 +63,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `sideBarState.ts` | 类型定义（Zone/Zones/OpenState/LayoutKind/SideBarSlice）+ 默认值常量（DEFAULT_ZONES/DEFAULT_OPEN/ACTIVITY_BAR_SIZE/WIDTH_* /SPLIT_*）+ 纯函数（toggleViewPure/moveButtonPure/deriveLayout/reconcileZones/sanitizeSideBar） |
 | `sideViewRegistry.ts` | `SideViewRegistry` 模块级单例：`register(def)`（同 id 覆盖）/`getAll()`（注册序）/`get(id)`/`_reset()`（仅测试） |
 | `dropTarget.ts` | `computeDropTarget` 纯函数——零 DOM 访问，根据 clientY + 按钮矩形列表计算落点 zone + index |
-| `sideViewDefs.ts` | side-effect 注册文件：注册 `projects`（📋 项目列表）+ `explorer`（📁 文件浏览器）两条视图。新增视图在此追加 `sideViewRegistry.register(...)` |
+| `sideViewDefs.ts` | side-effect 注册文件：注册 `projects`（📋 项目列表）+ `explorer`（📁 文件浏览器）+ `commit`（🔀 Commit）三条视图。新增视图在此追加 `sideViewRegistry.register(...)` |
 | `ActivityBar.tsx` | 活动栏组件：40px 宽 flex 列（上区按钮组 + flex:1 间隔 + 下区按钮组）、点击开关（R1/R2）、HTML5 拖拽换区/排序、VS Code 风格 active 态指示条（左侧 2px FOCUS_BORDER）、`data-e2e` 选择器。配色全部 `theme/colors.ts` token（硬约束 #6） |
 | `SideBarArea.tsx` | 侧栏区组件：`<Allotment vertical proportionalLayout>` 两 pane（上/下半区），每 pane `visible={!!open[zone]}`、`preferredSize` 由 splitRatio 控制；半区内按 zones 顺序渲染视图槽（`display: open[zone]===v.id ? "flex" : "none"` 保挂载）；onChange 仅双开时换算 ratio 写回 store |
 
