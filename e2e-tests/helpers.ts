@@ -16,6 +16,7 @@ import type { OperationPage, Project } from "../src/stores/projects";
 import { useLayout } from "../src/stores/layout";
 import { makeEmptyLayout } from "../src/features/sidebar/SidebarTree";
 import { titleManager } from "../src/workspace/titleManager";
+import { useSideBar } from "../src/stores/sideBar";
 
 // ── Window 全局类型扩展 ──
 
@@ -39,7 +40,20 @@ declare global {
     __slterm_e2e_getActivePageInfo?: () => { pageId: string; rootPath: string } | null;
     // 初始化竞态协调
     __slterm_e2e_projectPending?: boolean;
+    // 侧栏视图（SB-25）
+    __slterm_e2e_getSideBarState?: () => SideBarSnapshot | null;
+    __slterm_e2e_toggleSideView?: (id: string) => void;
+    __slterm_e2e_moveSideViewButton?: (id: string, zone: string, index: number) => void;
   }
+}
+
+/** useSideBar.getState() 的纯数据快照（去函数键，供 browser.execute 序列化） */
+interface SideBarSnapshot {
+  zones: { top: string[]; bottom: string[] };
+  open: { top: string | null; bottom: string | null };
+  width: number;
+  splitRatio: number;
+  loaded: boolean;
 }
 
 // ── installAllE2eHelpers —— 主入口 ──
@@ -50,6 +64,7 @@ export function installAllE2eHelpers(): void {
   installShortcutDebug();
   installProjectHelpers();
   installTitleHelpers();
+  installSideBarHelpers();
 
   // 标记 Workspace 就绪（Workspace 组件渲染时同步设置）
   window.__slterm_e2e_workspaceReady = false;
@@ -242,5 +257,31 @@ function installTitleHelpers(): void {
       }
     }
     return null;
+  };
+}
+
+/** __slterm_e2e_getSideBarState / __slterm_e2e_toggleSideView / __slterm_e2e_moveSideViewButton */
+function installSideBarHelpers(): void {
+  // __slterm_e2e_getSideBarState —— 返回 useSideBar 纯数据快照（去函数键，可安全经 browser.execute 序列化）
+  window.__slterm_e2e_getSideBarState = () => {
+    const state = useSideBar.getState();
+    return {
+      zones: { top: [...state.zones.top], bottom: [...state.zones.bottom] },
+      open: { top: state.open.top, bottom: state.open.bottom },
+      width: state.width,
+      splitRatio: state.splitRatio,
+      loaded: state.loaded,
+    };
+  };
+
+  // __slterm_e2e_toggleSideView —— 等价点击活动栏按钮，走 store.toggleView（委托 toggleViewPure）
+  window.__slterm_e2e_toggleSideView = (id: string) => {
+    useSideBar.getState().toggleView(id);
+  };
+
+  // __slterm_e2e_moveSideViewButton —— 等价拖拽落点，走 store.moveButton（委托 moveButtonPure）
+  // zone 类型为 "top" | "bottom"，调用方保证传入合法值
+  window.__slterm_e2e_moveSideViewButton = (id: string, zone: string, index: number) => {
+    useSideBar.getState().moveButton(id, zone as "top" | "bottom", index);
   };
 }
