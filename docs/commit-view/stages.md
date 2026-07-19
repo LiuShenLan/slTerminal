@@ -38,7 +38,7 @@
 - 前端 `gitFileAtHead` wrapper 照 `gitDiff` 同文件格式；ipc-contract 测试照现有四维模式
 - 只做编译级检查（`cargo test --no-run`），真实测试由全量测试 agent 单点跑
 
-**验证项**（详见 `docs/workflows/verify/stage-01.md`）：recurse 选项存在且测试新增；oldPath serde camelCase；命令注册 + 错误消息含"HEAD 中不存在"；wrapper 命令名/参数精确匹配；全部门禁绿。
+**验证项**（详见 `docs/commit-view/workflows/verify/stage-01.md`）：recurse 选项存在且测试新增；oldPath serde camelCase；命令注册 + 错误消息含"HEAD 中不存在"；wrapper 命令名/参数精确匹配；全部门禁绿。
 
 **commit**：`feat: git_file_at_head 命令 + git_status 递归未跟踪 + oldPath 字段`
 
@@ -61,7 +61,7 @@
 - title-suffix：suffix 语义严格按契约表——`findExistingEditor(pageId, filePath, suffix?)` 不传时仅匹配无 suffix 条目（ExplorerPanel 现有调用点零改动、行为不变）；`getFileEditorTitle` 与 `recomputeTitles` 都在末尾拼 suffix；`handleSaveAs` 不动
 - sidebar-default：先 grep `DEFAULT_ZONES` 全部消费方再动笔；默认值断言逐处更新为 `["projects", "explorer", "commit"]`
 
-**验证项**（详见 `docs/workflows/verify/stage-02.md`）：suffix 标题/冲突重算/去重隔离测试存在且通过；DEFAULT_ZONES 含 commit 且全仓默认值断言无残留旧值。
+**验证项**（详见 `docs/commit-view/workflows/verify/stage-02.md`）：suffix 标题/冲突重算/去重隔离测试存在且通过；DEFAULT_ZONES 含 commit 且全仓默认值断言无残留旧值。
 
 **commit**：`feat: titleManager 标题后缀支持 + commit 按钮默认归属`
 
@@ -85,7 +85,7 @@
 - `PANEL_GIT_SHOW = "gitshow"`；`PANEL_TYPES` 追加；`FILE_PANEL_TYPES` 追加 gitshow 与 diff（先 grep 消费方确认）；`workspace-file-panel-types.test.ts` 的 size 断言 2→4 同步更新
 - `isAlwaysRenderPanel` 决策：**改为显式白名单**（`terminal` + `htmlviewer`），gitshow/diff 不 always。理由：always 的动机是保 PTY 存活 / iframe browsing context，CM 重建无视觉闪屏；gitshow/diff 与 editor 同样承载大文件 CM，always 挂载与 editor 排除理由（大文件内存开销）相悖。行为对齐 editor；Stage 05 openCommitFile 经 `isAlwaysRenderPanel` 自然不 always，无需特判
 
-**验证项**（详见 `docs/workflows/verify/stage-03.md`）：面板注册 + PANEL_TYPES 四类型（diff Stage 04 才注册）；只读配置存在；oldPath 优先调用；错误占位文案；阈值常量复用（无新数值字面量）。
+**验证项**（详见 `docs/commit-view/workflows/verify/stage-03.md`）：面板注册 + PANEL_TYPES 四类型（diff Stage 04 才注册）；只读配置存在；oldPath 优先调用；错误占位文案；阈值常量复用（无新数值字面量）。
 
 **commit**：`feat: gitshow 只读面板（HEAD 版本查看）`
 
@@ -116,7 +116,7 @@
   - renderer 策略照 Stage 03 决策：`isAlwaysRenderPanel` 已为显式白名单（terminal + htmlviewer），diff 不 always（行为对齐 editor），本 Stage 确认即可、不再改动该函数
 - data-e2e 预留：`diff-panel` / `diff-left` / `diff-right`
 
-**验证项**（详见 `docs/workflows/verify/stage-04.md`）：computeAlignment 全分支测试；buildHeadRangeSet 签名与映射测试；滚动同步防循环；保存后重 gitDiff 断言；注册五类型齐全；无双 side 硬编码颜色。
+**验证项**（详见 `docs/commit-view/workflows/verify/stage-04.md`）：computeAlignment 全分支测试；buildHeadRangeSet 签名与映射测试；滚动同步防循环；保存后重 gitDiff 断言；注册五类型齐全；无双 side 硬编码颜色。
 
 **人工验证点**（占位对齐与滚动同步的真实渲染行为 jsdom/E2E 无法自动验证，列入 Step 6 收尾实测）：
 1. 占位行高与文本行高一致，未改动行双侧视觉平齐
@@ -152,7 +152,7 @@
 - 视图 props：SideViewComponentProps（switchToPage/onDeletePage）用不到，箭头包装忽略（照 explorer 注册模式）
 - 测试：mock `../ipc/git`、`../ipc/notify`；真实 stores 种子（照 explorer 测试模式，`helpers/workspace-setup.ts` 可复用）；`window.__dockviewApi` mock addPanel/getPanel
 
-**验证项**（详见 `docs/workflows/verify/stage-05.md`）：状态机 4 态文案精确；映射表四类状态齐全且与契约一致；data-e2e 属性存在；颜色引用 token 无硬编码；sideViewDefs 含 commit 注册。
+**验证项**（详见 `docs/commit-view/workflows/verify/stage-05.md`）：状态机 4 态文案精确；映射表四类状态齐全且与契约一致；data-e2e 属性存在；颜色引用 token 无硬编码；sideViewDefs 含 commit 注册。
 
 **commit**：`feat: commit 侧栏视图（Changes/Unversioned 列表 + 双击分派）`
 
@@ -175,7 +175,7 @@
 - 选择器一律 `data-e2e`；helpers 已有 `__slterm_e2e_toggleSideView`，无需新 helper（CV-TE-02 仅 Node 侧脚手架）
 - **门禁**：`npm run e2e`（= build:e2e + wdio，VITE_E2E=1 必须）+ `npm test` 防前端回归；e2e-tests 不在根 tsconfig include，构建级门禁由 build:e2e 承担
 
-**验证项**（详见 `docs/workflows/verify/stage-06.md`）：2 用例存在且 wdio 通过；脚手架隔离清理；无 CSS 内联样式选择器。
+**验证项**（详见 `docs/commit-view/workflows/verify/stage-06.md`）：2 用例存在且 wdio 通过；脚手架隔离清理；无 CSS 内联样式选择器。
 
 **commit**：`test: commit 视图 E2E——列表渲染 + diff 页签打开 2 用例`
 
@@ -196,7 +196,7 @@
 - 各 CLAUDE.md 只更新所属模块段落，遵守渐进式披露（根文件不展开细节）
 - test-inventory 用例数取数口径：L2 对照本 Stage 全量测试的 `npm test` 统计行；L1/L3/L4 对照源文件静态计数（L1: grep `#[test]`；L3/L4: grep `it(`），不依赖 cargo/wdio 实跑输出
 
-**验证项**（详见 `docs/workflows/verify/stage-07.md`）：根 CLAUDE.md 模块表含 features/commit 行；panels CLAUDE.md 含 gitshow/diff；git CLAUDE.md 含 git_file_at_head；文档描述与代码一致（抽查断言）。
+**验证项**（详见 `docs/commit-view/workflows/verify/stage-07.md`）：根 CLAUDE.md 模块表含 features/commit 行；panels CLAUDE.md 含 gitshow/diff；git CLAUDE.md 含 git_file_at_head；文档描述与代码一致（抽查断言）。
 
 **commit**：`docs: commit 视图模块文档同步 + 用例数更新`
 
@@ -204,8 +204,8 @@
 
 ## Step 5 执行规则（主 agent 消费）
 
-1. 逐 Stage 串行：`Workflow({ scriptPath: "docs/workflows/stage-NN-*.js" })` → 检查 `verifyResult.allFixed`
-2. `false` → `Workflow({ scriptPath: "docs/workflows/fix-loop.js", args: { stage, failedItems, fixContext, verifyFile, constraints } })`，最多 3 轮；超过人工介入
+1. 逐 Stage 串行：`Workflow({ scriptPath: "docs/commit-view/workflows/stage-NN-*.js" })` → 检查 `verifyResult.allFixed`
+2. `false` → `Workflow({ scriptPath: "docs/commit-view/workflows/fix-loop.js", args: { stage, failedItems, fixContext, verifyFile, constraints } })`，最多 3 轮；超过人工介入
 3. no-return 分流：verify 阶段 → inline spawn 单 verify agent（复用脚本 prompt + verify 文件 + testResult）；重构/测试阶段 → `TaskStop` + `resumeFromRunId`
 4. commit：`git add` 路径限定（`src/ src-tauri/ e2e-tests/ test/ .claude/CLAUDE.md .claude/test-inventory.md docs/`），commit 前 `git status` 甄别预期外改动；message 以本文档各 Stage 原文为准
 5. 时间盒：后台运行每 15-20 分钟查 /workflows；单 Stage 超 60 分钟无进展 → `TaskStop` + 报告用户

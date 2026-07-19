@@ -1,7 +1,7 @@
 // =====================================================================
 // Stage Workflow 模板（实战版）
 // =====================================================================
-// 用法: 读取此文件，替换 __PLACEHOLDER__，落盘 docs/workflows/stage-NN-*.js，
+// 用法: 读取此文件，替换 __PLACEHOLDER__，落盘 docs/<task>/workflows/stage-NN-*.js，
 //       语法预检（SKILL.md 5.1）后传给 Workflow({ scriptPath })
 //
 // 生成纪律（违反曾致脚本与 checklist 大面积错位）:
@@ -28,7 +28,7 @@
 //   __PARALLEL_AGENTS__   - 并行 agent 数组, JSON: [{label, prompt}, ...]
 //   __SEQUENTIAL_AGENTS__ - 串行 pipeline 阶段（无则见文末替换说明）
 //   __TEST_COMMANDS__     - 全量测试命令清单（config.json commands）
-//   __VERIFY_FILE__       - 断言文件路径（docs/workflows/verify/stage-NN.md）
+//   __VERIFY_FILE__       - 断言文件路径（docs/<task>/workflows/verify/stage-NN.md）
 // =====================================================================
 
 export const meta = {

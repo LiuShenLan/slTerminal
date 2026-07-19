@@ -1,6 +1,6 @@
 # Commit 视图计划文档 Review
 
-> Review 对象：`docs/commit-view/`（checklist.md / stages.md / execution-plan.md）+ `docs/workflows/`（stage-01~07 脚本、fix-loop.js、verify/stage-01~07.md）
+> Review 对象：`docs/commit-view/`（checklist.md / stages.md / execution-plan.md）+ `docs/commit-view/workflows/`（stage-01~07 脚本、fix-loop.js、verify/stage-01~07.md）
 > 对照规范：`.claude/skills/systematic-changes-plan/SKILL.md`（Step 3/4/5）+ 需求真值源 `docs/commit-view/requirements.md`
 > 结论：**高危 2 / 中危 6 / 低危 4**。脚本语法预检 8/8 实跑通过（execution-plan 的"已预检"声称属实）；逐 ID 对照无错位；测试命令三方（脚本↔verify↔stages 门禁列）一致。
 
@@ -10,7 +10,7 @@
 
 ### H1：renamed 检测前提不成立——`git_status` 未开启 rename 检测，CV-BE-02 oldPath 恒为 null，FR-7 renamed / B14 落空
 
-**位置**：`docs/commit-view/checklist.md` CV-BE-02；`docs/workflows/stage-01-git-backend.js` CV-BE-02 段；`docs/workflows/verify/stage-01.md` CV-BE-02 断言
+**位置**：`docs/commit-view/checklist.md` CV-BE-02；`docs/commit-view/workflows/stage-01-git-backend.js` CV-BE-02 段；`docs/commit-view/workflows/verify/stage-01.md` CV-BE-02 断言
 
 **问题**：计划全链（需求 FR-3/FR-6/FR-7/B14 → checklist CV-BE-02 → stage-01 脚本 → verify 断言）假定 `INDEX_RENAMED`/`WT_RENAMED` 状态会出现并从中取 `oldPath`，但现状 `git_status` 的 `StatusOptions` 链仅 `include_untracked(true).include_unreadable(true).include_unreadable_as_untracked(true)`（`src-tauri/src/git/mod.rs:143-146`），**未开启 `renames_head_to_index(true)` / `renames_index_to_workdir(true)`**。git2 status 默认不做 rename 检测——重命名表现为 deleted + untracked 两条独立条目，renamed 状态位运行时永不置位（`status_to_str` 的 renamed 分支 `mod.rs:46-47` 现状即死代码，其测试 `mod.rs:441-442` 直接构造状态位、不经过真实 status 计算，故测试绿但行为不存在）。
 
@@ -23,7 +23,7 @@
 
 ### H2：execution-plan 的 fix-loop args 规范与 fix-loop.js / stage-06 / stage-07 头部注释矛盾
 
-**位置**：`docs/commit-view/execution-plan.md`「fix-loop args 规范」段；对照 `docs/workflows/fix-loop.js:14-16`、`docs/workflows/stage-06-e2e.js:9`、`docs/workflows/stage-07-docs.js:5`
+**位置**：`docs/commit-view/execution-plan.md`「fix-loop args 规范」段；对照 `docs/commit-view/workflows/fix-loop.js:14-16`、`docs/commit-view/workflows/stage-06-e2e.js:9`、`docs/commit-view/workflows/stage-07-docs.js:5`
 
 **问题**：execution-plan 写 `constraints: ""  // 各 Stage 无特殊约束（无"只改测试"类纪律）`，示意主 agent 对所有 Stage 传空串；但 fix-loop.js 注释明确 Stage 06 应传 `"本 Stage 只改 e2e-tests/ 下文件，禁止改 src/ 与 src-tauri/ 生产代码"`、Stage 07 应传 `"本 Stage 只改 *.md 文档，禁止改代码"`，两个 stage 脚本头部注释亦同。
 
@@ -37,7 +37,7 @@
 
 ### M1：测试文件名全链写错——`panelRegistry.test.ts` 实为 `panel-registry.test.ts`
 
-**位置**（8 处）：`docs/commit-view/checklist.md` CV-FE-04、CV-FE-09；`docs/commit-view/stages.md` Stage 03 / Stage 04 分工表；`docs/workflows/stage-03-gitshow-panel.js` CV-FE-04 段；`docs/workflows/stage-04-diff-panel.js` CV-FE-09 段；`docs/workflows/verify/stage-03.md` 回归条目；`docs/workflows/verify/stage-04.md` CV-FE-09 条目
+**位置**（8 处）：`docs/commit-view/checklist.md` CV-FE-04、CV-FE-09；`docs/commit-view/stages.md` Stage 03 / Stage 04 分工表；`docs/commit-view/workflows/stage-03-gitshow-panel.js` CV-FE-04 段；`docs/commit-view/workflows/stage-04-diff-panel.js` CV-FE-09 段；`docs/commit-view/workflows/verify/stage-03.md` 回归条目；`docs/commit-view/workflows/verify/stage-04.md` CV-FE-09 条目
 
 **问题**：实际文件为 `src/__tests__/panel-registry.test.ts`（连字符），全链 8 处均写 `panelRegistry.test.ts`（驼峰）。
 
@@ -47,7 +47,7 @@
 
 ### M2：Stage 03 漏列 `workspace-file-panel-types.test.ts`——其断言 `FILE_PANEL_TYPES.size === 2`，Stage 03 后必红
 
-**位置**：`docs/commit-view/checklist.md` CV-FE-04；`docs/commit-view/stages.md` Stage 03 分工表；`docs/workflows/stage-03-gitshow-panel.js` CV-FE-04 段；`docs/workflows/verify/stage-03.md` 回归条目
+**位置**：`docs/commit-view/checklist.md` CV-FE-04；`docs/commit-view/stages.md` Stage 03 分工表；`docs/commit-view/workflows/stage-03-gitshow-panel.js` CV-FE-04 段；`docs/commit-view/workflows/verify/stage-03.md` 回归条目
 
 **问题**：`src/__tests__/workspace-file-panel-types.test.ts:31` 断言 `expect(FILE_PANEL_TYPES.size).toBe(2)`。Stage 03 将 FILE_PANEL_TYPES 扩为 4（+gitshow+diff）后该断言必失败，但 checklist / 分工表 / 脚本 / verify 均未列此文件（只提了 panel-registry.test.ts）。
 
@@ -65,7 +65,7 @@
 
 ### M4：verify stage-03 回归条目措辞自相矛盾
 
-**位置**：`docs/workflows/verify/stage-03.md` 回归条目
+**位置**：`docs/commit-view/workflows/verify/stage-03.md` 回归条目
 
 **问题**：原文"断言与五类型现状一致（gitshow 已注册、diff 尚未注册属预期……）"——Stage 03 完成后 PANEL_TYPES 为 4 类型（terminal/editor/htmlviewer/gitshow），"五类型"与"diff 尚未注册"自相矛盾；且 stage-03 脚本 CV-FE-04 写的是"三面板→四面板断言"，verify 与脚本口径不一致。verify agent 无法判定该按 4 还是 5 断言，可能误判或放过。
 
@@ -73,7 +73,7 @@
 
 ### M5：diff 占位对齐 / 滚动同步属"无法自动化验证的假设"，stages 未标注人工验证点
 
-**位置**：`docs/commit-view/stages.md` Stage 04；`docs/workflows/verify/stage-04.md`
+**位置**：`docs/commit-view/stages.md` Stage 04；`docs/commit-view/workflows/verify/stage-04.md`
 
 **问题**：SKILL Step 4 规则："无法自动化验证的假设（规范推断、平台行为）：代码注释记录假设来源 + stages 文档标注人工验证点，由收尾实测兜底"。FR-7 的占位对齐（`Decoration.widget` 空白行高度=文本行高、双侧视觉平齐）与滚动同步真实行为在 jsdom（L2）无法渲染验证；Stage 06 E2E 仅断言 `diff-left`/`diff-right` 存在，不验证对齐视觉与滚动跟随。stages.md 全文档无任何人工验证点标注。
 
@@ -83,7 +83,7 @@
 
 ### M6：Stage 07 verify 断言所需数据（cargo/L3/L4 用例数）超出本 Stage 门禁产出
 
-**位置**：`docs/workflows/stage-07-docs.js` CV-DOC-03 段 + 测试命令；`docs/workflows/verify/stage-07.md` CV-DOC-03 断言
+**位置**：`docs/commit-view/workflows/stage-07-docs.js` CV-DOC-03 段 + 测试命令；`docs/commit-view/workflows/verify/stage-07.md` CV-DOC-03 断言
 
 **问题**：verify CV-DOC-03 断言"test-inventory 各层级用例数与 `npm test` / `cargo test` 实际输出一致（对照全量测试结果中的统计行核实）"，stage-07 prompt 也要求"按 npm test 与 cargo test 实际输出的用例数更新"——但 Stage 07 门禁仅 tsc + eslint + npm test，**无 cargo test 统计行**；L4 用例数（Stage 06 新增 2 条后 14→16）的数据在 Stage 06 的 wdio 输出中，Stage 07 不可得。verify prompt 又声明"测试类断言据此判定（无需重跑）"——数据源缺失使该断言不可核实，只能判 partial 或被迫重跑。
 
@@ -97,7 +97,7 @@
 
 ### L1：CV-BE-01 未提示 `recurse_untracked_dirs` 对 explorer 侧的波及面
 
-**位置**：`docs/commit-view/checklist.md` CV-BE-01；`docs/workflows/stage-01-git-backend.js` CV-BE-01 段
+**位置**：`docs/commit-view/checklist.md` CV-BE-01；`docs/commit-view/workflows/stage-01-git-backend.js` CV-BE-01 段
 
 **问题**：需求 FR-4 已明示已知副作用"文件浏览器中新目录下每个文件都会标红（属缺陷修正，预期接受）"，但 checklist 与脚本均未提示 agent 该改动波及 ExplorerPanel git 着色行为及相关测试（explorer 系列测试若断言目录级 untracked 聚合将失败）。虽然全量测试门禁兜底，但 agent 无预期地遭遇跨模块测试失败会拉长修复循环。
 

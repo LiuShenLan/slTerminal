@@ -63,7 +63,7 @@ const testResult = await agent(`
 phase('逐项验证')
 const rawVerify = await agent(`
 逐项检查 Stage 07 的改动是否实际生效（项目根 D:/data/learn/code/slTerminal）。
-先读 docs/workflows/verify/stage-07.md 获取断言清单，用 Grep/Read 逐条核实并给出证据（文件+行号）。
+先读 docs/commit-view/workflows/verify/stage-07.md 获取断言清单，用 Grep/Read 逐条核实并给出证据（文件+行号）。
 总则：不仅核对字面断言，还须 Read 代码判断实现是否达成断言意图——字面通过但意图未达判 partial 并说明理由。文档类断言必须对照真实代码核实，防文档撒谎。
 以下为测试 agent 的全量测试执行结果，测试类断言据此判定（无需重跑）：
 ---

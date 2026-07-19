@@ -1,7 +1,7 @@
 // =====================================================================
 // Fix Workflow 模板（实战版）— 阶段验证不通过时的修复循环
 // =====================================================================
-// 用法: 读取此文件，替换 __PLACEHOLDER__，落盘 docs/workflows/fix-loop.js，
+// 用法: 读取此文件，替换 __PLACEHOLDER__，落盘 docs/<task>/workflows/fix-loop.js，
 //       语法预检后由主 agent 调用：
 //         Workflow({ scriptPath, args: { stage, failedItems, fixContext, verifyFile, constraints } })
 //
@@ -9,7 +9,7 @@
 //   stage: number      — 所属 Stage 编号（用于 label 与报告）
 //   failedItems: string[] — 未通过项 ID 列表（必填，非空；来自 Stage verify）
 //   fixContext: string — verify agent 给出的 details 证据原文（失败原因线索）
-//   verifyFile: string — 断言清单文件路径（必填，如 docs/workflows/verify/stage-01.md）
+//   verifyFile: string — 断言清单文件路径（必填，如 docs/<task>/workflows/verify/stage-01.md）
 //                        ——与 Stage 脚本同一真值源，保证修复循环与 Stage 验证同一标尺
 //   constraints: string — Stage 特殊纪律（可选；如"只改测试"Stage 传
 //                        "本 Stage 只改测试，禁止改生产代码"——值见对应 Stage 脚本头注释）
@@ -37,7 +37,7 @@ if (!args || !Array.isArray(args.failedItems) || args.failedItems.length === 0) 
   throw new Error('fix-loop 需要 args.failedItems（非空数组）')
 }
 if (typeof args.verifyFile !== 'string' || args.verifyFile.length === 0) {
-  throw new Error('fix-loop 需要 args.verifyFile（断言清单文件路径，如 docs/workflows/verify/stage-01.md）')
+  throw new Error('fix-loop 需要 args.verifyFile（断言清单文件路径，如 docs/<task>/workflows/verify/stage-01.md）')
 }
 
 const STAGE = args.stage ?? 0
