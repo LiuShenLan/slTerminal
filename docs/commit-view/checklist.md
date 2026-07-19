@@ -1,6 +1,6 @@
 # Commit 侧栏视图开发清单
 
-> 需求真值源：`docs/commit-view-requirements.md`（FR-1~FR-11、B1~B14）。
+> 需求真值源：`docs/commit-view/requirements.md`（FR-1~FR-11、B1~B14）。
 > ID 编号：`CV-BE`（后端）/ `CV-FE`（前端）/ `CV-TE`（E2E）/ `CV-DOC`（文档）。
 > 每项含位置、实现要点、测试要求。Stage 划分按 ID 引用，见 `docs/commit-view/stages.md`。
 > 优先级组织：本清单为 feature 开发，实施优先级由 Stage 依赖顺序表达（BE → FE 基础 → 面板 → 视图 → E2E → 文档），不逐项标 P 级。

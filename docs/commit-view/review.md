@@ -1,7 +1,7 @@
 # Commit 视图计划文档 Review
 
 > Review 对象：`docs/commit-view/`（checklist.md / stages.md / execution-plan.md）+ `docs/workflows/`（stage-01~07 脚本、fix-loop.js、verify/stage-01~07.md）
-> 对照规范：`.claude/skills/systematic-changes-plan/SKILL.md`（Step 3/4/5）+ 需求真值源 `docs/commit-view-requirements.md`
+> 对照规范：`.claude/skills/systematic-changes-plan/SKILL.md`（Step 3/4/5）+ 需求真值源 `docs/commit-view/requirements.md`
 > 结论：**高危 2 / 中危 6 / 低危 4**。脚本语法预检 8/8 实跑通过（execution-plan 的"已预检"声称属实）；逐 ID 对照无错位；测试命令三方（脚本↔verify↔stages 门禁列）一致。
 
 ---
