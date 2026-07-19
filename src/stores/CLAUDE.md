@@ -30,6 +30,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - overrides 经 `App.tsx` 的 `wireKeybindings(getShortcutRegistry(), useKeybindings)` 注入 `ShortcutRegistry.setOverrides` 构建绑定表。
 - 与 `src/features/shortcuts` 的关系：本 store 只存覆盖数据，校验/降级/绑定表构建在注册表侧（`isReserved` + `effectiveKeystroke`）。
 
+### `sideBar.ts` — 侧栏视图状态
+
+- 状态形状：`zones: Zones`（按钮归属——`{top: string[], bottom: string[]}`）、`open: OpenState`（各半区打开的视图 id——`{top: string|null, bottom: string|null}`）、`width: number`（侧栏区宽度，默认 250，范围 [160, 500]）、`splitRatio: number`（上下分割比例，默认 0.5，范围 [0.1, 0.9]）。
+- 默认态：`DEFAULT_ZONES = {top:["projects","explorer"], bottom:[]}`、`DEFAULT_OPEN = {top:"projects", bottom:null}`。
+- 操作方法：`toggleView(id)` / `moveButton(id, zone, index)` 委托 `sideBarState` 纯函数；`setWidth` / `setSplitRatio` 内部 clamp。
+- 持久化照 `fontSize.ts` 模式：`loadFromDisk` 读 `~/.slterminal/settings.json` 的 `sideBar` 段 → `sanitizeSideBar`（校验+clamp）→ `reconcileZones`（对齐注册表）→ 置 `loaded:true`；变更后 2s debounce → `saveSettings({sideBar})`（后端浅合并，不擦 fontSize/keybindings 段）。
+- 导出 `cancelPendingSave()` 供 App 关窗冲刷。
+
 ### `projects.ts` — 项目/操作页面数据模型与持久化
 
 - 二级模型：`Project` → `OperationPage[]`。面板由 Dockview 管理，不在此 store。
@@ -56,6 +64,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | Store | 测试文件 | 用例数 | 覆盖范围 |
 |-------|---------|--------|---------|
 | `projects` | `projects.test.ts` | 41 | Project/Page CRUD、持久化（loadFromDisk/saveToDisk）、version 递增、ID 生成、subscribe+debounce 持久化链（`_resetPersistence()` 测试辅助） |
+| `sideBar` | `sideBar.test.ts` | 19 | 默认值/toggle/move 经 store 委托纯函数、setWidth/setSplitRatio clamp、loadFromDisk 5 分支（合法/脏数据/缺失/异常/reconcileZones）、loaded 守卫、2s debounce saveSettings({sideBar}) payload 键集合精确匹配、saveSettings 失败静默吞错 |
 | `layout` | `layout.test.ts` | 4 | activePageId 设置/清空/重复 |
 | `fontSize` | `fontSize.test.ts` | 16 | 默认值、clamp、loadFromDisk（多种分支）、debounce 持久化 |
 | `keybindings` | `keybindings.test.ts` | 16 | 默认空、setBinding/clearBinding/resetAll、loadFromDisk（合法/sanitize 脏值/缺失/非对象/异常）、loaded 守卫、debounce → saveSettings({keybindings}) |

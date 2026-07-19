@@ -2,7 +2,7 @@
 
 > **本文档是项目用例数唯一真值源。** 所有 CLAUDE.md、README、CI 配置中引用的用例数均以此文件为准。更新测试后必须同步本文档。
 
-全量 **1446** 用例（Rust 243 + 前端 1075 + L3 116 + E2E 12），2026-07-18 实测更新。
+全量 **1566** 用例（Rust 243 + 前端 1193 + L3 116 + E2E 14），2026-07-19 实测更新。
 
 > **计数口径**：前端 (L2) 用例数以 `grep -cE '^\s*(it|test)\(' src/__tests__/*.test.ts src/__tests__/*.test.tsx` 展开的 `it`/`test` 块数为准（Vitest 实际运行数）；L3 同理 `test/terminal/*.test.ts`；Rust (L1) 以 `grep -c '#\[test\]'` 统计的 `#[test]` 属性数为准。L3 的 116 用例同时被 L2 (`npm test`) 和独立 L3 (`npm run test:l3`) 执行，但此处各层独立计数，不做去重。
 
@@ -27,7 +27,7 @@
 
 > `pty/mod.rs`、`pty/win_build.rs`、`main.rs` 不含 `#[test]`，不在此列。
 
-## L2 — 前端单元/集成测试（72 文件 / 1075 用例）
+## L2 — 前端单元/集成测试（78 文件 / 1193 用例）
 
 运行：`npm test`（Vitest + jsdom）
 
@@ -117,6 +117,17 @@
 |------|------|---------|
 | `src/__tests__/sidebar-actions.test.ts` | 33 | 树结构/右键菜单/内联重命名/项目删除确认/布局 CSS/添加项目 |
 
+### 侧栏视图（6 文件 / 118 用例）
+
+| 文件 | 用例 | 覆盖范围 |
+|------|------|---------|
+| `src/__tests__/sideBarState.test.ts` | 50 | toggleViewPure/moveButtonPure/deriveLayout/reconcileZones/sanitizeSideBar + S1-S6 场景序列 |
+| `src/__tests__/sideViewRegistry.test.ts` | 7 | register/getAll/get/重复注册覆盖/未注册 get→undefined/_reset 隔离 |
+| `src/__tests__/sideBar.test.ts` | 19 | 默认值/toggle/move 经 store/loadFromDisk 5 分支/loaded 守卫/debounce saveSettings payload 键集合精确匹配 |
+| `src/__tests__/activityBar.test.tsx` | 16 | 上下区按钮组/active 指示条/click→toggleView/dragStart dataTransfer 内容/dragOver computeDropTarget/drop→moveButton/dragEnd 清拖拽/hover |
+| `src/__tests__/sideBarArea.test.tsx` | 13 | 四态布局/Allotment preferredSize splitRatio/display:none-flex 切换/保挂载/跨区卸载重建/props 透传/onChange→setSplitRatio/PANEL_BG token |
+| `src/__tests__/workspace-sideviews.test.tsx` | 13 | 活动栏 pane 40px 固定/侧栏区 pane visible=anyOpen 四态/preferredSize 来自 store/onChange→setWidth/主区 pane/props 透传 |
+
 ### 快捷键/命令系统（8 文件 / 116 用例）
 
 | 文件 | 用例 | 覆盖范围 |
@@ -179,7 +190,7 @@
 | `test/terminal/ansi-correctness.test.ts` | 30 | ANSI 颜色正确性——16 色前景/背景、256 色（标准/216 色立方/灰度）、TrueColor 24-bit 前景/背景/混合、SGR 属性（粗体/斜体/下划线/双下划线/慢闪/反显/隐藏/删除线/弱化/上划线）、SGR 组合叠加、SGR 重置/子参数重置、DEC 私有模式（DECTCEM/DECOM/DECAWM）、DECSC/DECRC、RIS、DECSTBM |
 | `test/terminal/osc.test.ts` | 9 | OSC 序列——标题（OSC 0/2 BEL/ST）、调色板（OSC 4 单索引/多索引）、嵌入完整性（OSC 在正常输出中/穿插文本/后紧跟文本不丢失） |
 
-## L4 — E2E 端到端测试（1 文件 / 12 用例）
+## L4 — E2E 端到端测试（1 文件 / 14 用例）
 
 运行：`npm run e2e`（= `npm run build:e2e` + `npm run wdio`）  
 技术栈：WDIO + `@wdio/tauri-service` 1.1.0 + embedded driver（`webview2-com` COM 直连 `ICoreWebView2`）
@@ -198,6 +209,8 @@
 | iframe 内 Ctrl+W → postMessage 转发关闭该 HTML 页签 | postMessage 键盘桥：注入脚本→parent.postMessage→handleMessage 校验 origin→ShortcutRegistry 分发→global.closeTab（forwardGlobalShortcuts 已删除，FE-13） |
 | 内联 `<script>` 与内联事件属性在预览中执行 | CSP 修复：真实 WebView2 强制 CSP 下经 srcdoc opaque origin 验证内联脚本+onclick 执行 |
 | should preserve terminal content after switching to another page and back | H6 终端跨页面存活（多 Dockview 实例 + CSS 显隐） |
+| 点击侧栏按钮切换视图显示/隐藏（R1/R2） | 活动栏按钮真实点击→open 状态变化→侧栏区 visible 联动→store 状态断言 |
+| 拖拽按钮跨区移动（R6/R7） | DataTransfer 合成拖拽事件跨区→zones + open 跟随（R6 跟随替换/R7 未打开仅归属）→store 状态断言 |
 
 ### E2E 键盘输入限制（TE-17）
 
@@ -219,6 +232,7 @@ embedded WDIO 驱动**无法将 OS 级按键（`browser.keys`）投递进 WebVie
 
 ## 历史变更
 
+- 2026-07-19：侧栏视图系统（SB-26）——新增 L2「侧栏视图」类目 6 文件 118 用例（sideBarState 50 + sideViewRegistry 7 + sideBar 19 + activityBar 16 + sideBarArea 13 + workspace-sideviews 13）；L4 新增「侧栏视图」describe 2 用例（12→14）。L2 1075→1193，全量 1446→1566。
 - 2026-07-18：DBG-11 同步——纳入 Stage 1/2 新增用例（DBG-4 契约守卫 3 条、DBG-9 switchToPage 时序 14 条、DBG-10 explorer-sandbox-race 13 条），L2 1045→1075，全量 1416→1446。
 - 2026-07-17：重写——实测全量用例数（L1=243, L2=1045, L3=116, L4=12），统一计数口径，标注 E2E 键盘局限，声明唯一真值源。纳入 Stage 9/10 新增用例。
 - 2026-07-13（旧版）：全量 ~1234 用例（Rust 193 + 前端 1020 + L3 9 + E2E 12），计数失实且 L3 少报 107 用例。

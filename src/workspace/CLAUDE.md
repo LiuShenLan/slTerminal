@@ -27,7 +27,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | 文件 | 职责 |
 |------|------|
 | `index.ts` | 公共 API 出口：Workspace 组件、panelRegistry、PANEL_TYPES、`saveLayout`/`loadLayout`（从 `../panelRegistry` 重导出） |
-| `Workspace.tsx` | 主组件：三栏布局（Allotment）容器 + 页面生命周期管理（`ensurePageInitialized`/`pageCallbacksRef`），单页渲染委托 PageDockviewHost |
+| `Workspace.tsx` | 主组件：三栏布局（Allotment）容器——活动栏(40px固定)+侧栏区(visible=anyOpen)+主区 + 页面生命周期管理（`ensurePageInitialized`/`pageCallbacksRef`），单页渲染委托 PageDockviewHost；`import sideViewDefs` 触发 side-effect 注册 |
 | `PageDockviewHost.tsx` | 单页面 Dockview 实例宿主组件（React.memo 包裹）：DefaultTab、Watermark、RightHeader、ContextMenu、布局恢复 |
 | `layoutSerde.ts` | 布局序列化/反序列化：`saveLayout`（`api.toJSON()`）、`loadLayout`（`api.fromJSON()` + 旧格式修补 + 白名单过滤） |
 | `titleManager.ts` | 页签标题集中管理：terminal-N 编号、文件标题冲突检测、handleSaveAs、onDeletePage(pageId)：清理该页面 registry 和 counters 条目 |
@@ -64,13 +64,42 @@ SidebarTree.switchToPage(projectId, pageId)
 
 > **DBG-5**: `switchToPage` 改为 async——`setProjectRoot` 必须在 `setActivePage` 之前完成，确保子组件 effect 中的 `fs_read_dir`/`git_status`/`notify_watch` 等 IPC 调用在后端 `project_root` 就绪后通过路径沙箱校验。
 
+## 布局架构（三栏 Allotment）
+
+Workspace 使用 Allotment 实现三栏布局（旧为常驻四栏，侧栏视图系统引入后改造）：
+
+```
+┌──────────┬──────────────────┬─────────────────────────┐
+│ 活动栏    │ 侧栏区            │ 主区                     │
+│ 40px 固定 │ visible=anyOpen  │ Dockview（flex:1）       │
+│          │ ┌──────────────┐ │                         │
+│ 📋       │ │ 上半区视图槽   │ │                         │
+│ 📁       │ │ (display:none │ │  page1 display:block    │
+│          │ │  保挂载)      │ │  page2 display:none     │
+│          │ ├──────────────┤ │                         │
+│          │ │ 下半区视图槽   │ │                         │
+│          │ │ (splitRatio) │ │                         │
+│          │ └──────────────┘ │                         │
+└──────────┴──────────────────┴─────────────────────────┘
+```
+
+- **pane1（活动栏）**：`preferredSize=40 minSize=40 maxSize=40`，渲染 `<ActivityBar />`
+- **pane2（侧栏区）**：`preferredSize=width minSize=WIDTH_MIN maxSize=WIDTH_MAX visible=anyOpen`，渲染 `<SideBarArea />`（内含垂直 Allotment 上下半区）。宽度经外层 Allotment `onChange` 同步到 `sideBar` store 持久化（`settings.json` 的 `sideBar.width` 段）
+- **pane3（主区）**：`minSize=200`，多 Dockview 实例按 `activePageId` 做 CSS `display:none/block` 显隐
+- **anyOpen**：由 `deriveLayout(open)` 纯推导——`hidden`→`false`，其余三态（single-top/single-bottom/split）→`true`
+- **侧栏区上下分割比例**：`splitRatio` 持久化于 `settings.json` 的 `sideBar.splitRatio` 段，由 `SideBarArea` 内垂直 Allotment 的 `onChange` 同步
+- 已删除旧六常量 `SIDEBAR_*`/`EXPLORER_*`，尺寸常量统一在 `src/features/sideViews/sideBarState.ts`
+
 ## 关键集成点
 
 - **`useLayout`** (`stores/layout.ts`)：只跟踪 `activePageId`，不持有布局数据
 - **`useProjects`** (`stores/projects.ts`)：Project → OperationPage 二级模型，持有布局和 cwd
+- **`useSideBar`** (`stores/sideBar.ts`)：侧栏视图状态（zones/open/width/splitRatio），Workspace 订阅 `open`/`width` 控制 pane2 可见性和宽度
 - **`panelRegistry`**：被 Workspace 传给 DockviewReact 的 `components` prop
-- **SidebarTree**（侧边栏）：项目/操作页面树，位于左侧第一栏，通过 props 接收 `switchToPage` / `onDeletePage`
-- **ExplorerPanel**（文件浏览器）：活跃项目的文件树，位于左侧第二栏，订阅 `onFsEvent` 做增量刷新
+- **`ActivityBar`** (`features/sideViews/ActivityBar.tsx`)：活动栏组件，渲染于 pane1，消费 `sideViewRegistry` + `useSideBar`
+- **`SideBarArea`** (`features/sideViews/SideBarArea.tsx`)：侧栏区组件，渲染于 pane2，通过 `sideViewDefs` 注册的两条视图（projects/explorer）以 display:none 保挂载切换
+- **SidebarTree**（侧边栏）：项目/操作页面树，宿主从 Allotment 常驻栏变为 `SideBarArea` 视图槽（经 `sideViewDefs` 注册为 `projects` 视图），组件本体不变
+- **ExplorerPanel**（文件浏览器）：活跃项目的文件树，宿主同上变为视图槽（经 `sideViewDefs` 注册为 `explorer` 视图），组件本体不变。按钮跨区拖拽导致视图跨 pane 移动时组件重建（ADR-0001）
 
 ## E2E 测试支持
 

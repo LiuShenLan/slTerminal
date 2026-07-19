@@ -114,6 +114,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | src/features/fileViewers | 文件查看器注册表（策略模式，扩展名→面板类型映射） | src/features/fileViewers/index.ts | @../src/features/fileViewers/CLAUDE.md |
 | src/features/shortcuts | 快捷键模块（ShortcutRegistry 单例 + usePanelFocus hook + Command/Keybinding 分离 + 用户自定义重绑定） | src/features/shortcuts/index.ts | @../src/features/shortcuts/CLAUDE.md |
 | src/features/sidebar | 侧栏项目/页面二级树（项目/页面 CRUD + 页面切换导航） | src/features/sidebar/index.ts | @../src/features/sidebar/CLAUDE.md |
+| src/features/sideViews | 侧栏视图系统——活动栏+共享侧栏区+单槽位状态机 | src/features/sideViews/index.ts | @../src/features/sideViews/CLAUDE.md |
 | src-tauri/src/pty | PTY 管理，Windows ConPTY 核心 | src-tauri/src/pty/mod.rs | @../src-tauri/src/pty/CLAUDE.md |
 | src-tauri/src/notify | 文件系统监听（LruWatcherPool 缓存 + pause/resume 切换） | src-tauri/src/notify/mod.rs | @../src-tauri/src/notify/CLAUDE.md |
 | e2e-tests | WDIO E2E 端到端测试 | e2e-tests/wdio.conf.ts | @../e2e-tests/CLAUDE.md |

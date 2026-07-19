@@ -30,12 +30,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `index.ts` | barrel export：SidebarTree 组件 + makeEmptyLayout |
 | `SidebarTree.tsx` | 侧栏主组件：二级树渲染、工具栏、右键菜单、handleAddProject/handleNewPage/handleDeletePage |
 
+## 宿主变更
+
+SidebarTree 组件本体不变。宿主从 Allotment 常驻栏（Workspace 四栏布局中独立的 `<Allotment.Pane>`）变为侧栏区视图槽——经 `src/features/sideViews/sideViewDefs.ts` 注册为 `projects` 视图，由 `SideBarArea` 经 `display:none/flex` 切换渲染。组件接收的 `switchToPage` / `onDeletePage` props 由 `SideBarArea` 透传，与原宿主的 props 来源一致。
+
 ## 关键集成点
 
 - **`src/stores/projects.ts`** — `addProject` / `addPage` / `removeProject` / `removePage`（CRUD）
 - **`src/ipc/dialog.ts`** — `open()` 原生文件夹选择对话框
-- **`src/workspace/PageDockviewHost.tsx`** — `switchToPage` / `onDeletePage` 回调通过 Workspace 层传递
-- **`src/panelRegistry.ts`** — PANEL_TERMINAL 常量（**仅 Watermark/RightHeader 使用，SidebarTree 不再引用**）
+- **`src/workspace/Workspace.tsx`** — `switchToPage` / `onDeletePage` 回调经 Workspace → SideBarArea → SidebarTree 透传
+- **`src/features/sideViews/sideViewDefs.ts`** — SidebarTree 注册为 `projects` 视图（id: "projects", title: "项目列表", icon: "📋"）
 
 ## 测试模式
 

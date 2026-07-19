@@ -37,6 +37,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `FileTree.tsx` | 递归树组件：节点渲染、git 状态着色、右键菜单 |
 | `FileIcon.tsx` | 文件图标映射（扩展名→emoji） |
 
+## 宿主变更
+
+ExplorerPanel 组件本体不变。宿主从 Allotment 常驻栏（Workspace 四栏布局中独立的 `<Allotment.Pane>`）变为侧栏区视图槽——经 `src/features/sideViews/sideViewDefs.ts` 注册为 `explorer` 视图（`id: "explorer"`, `title: "文件浏览器"`, `icon: "📁"`，`component: () => React.createElement(ExplorerPanel)`），由 `SideBarArea` 经 `display:none/flex` 切换渲染。
+
+**已知行为：换区重建丢失展开状态**（ADR-0001）。当用户从活动栏拖拽 `explorer` 按钮跨区（上→下或下→上），React 将组件从旧 pane 卸载、在新 pane 重新挂载——ExplorerPanel 内部状态（文件树展开状态、`rootNodes`）全部丢失。此行为在 ADR-0001 中已确认接受：换区为低频操作（用户通常设定一次后不改），重建成本低于跨父节点保持实例的架构复杂度。
+
 ## 关键集成点
 
 - **`src/ipc/fs.ts`** — `readDir` / `writeFile` / `createDir` / `deleteEntry` / `rename`
@@ -45,6 +51,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **`src/stores/projects.ts` + `src/stores/layout.ts`** — 活跃项目 `rootPath` 推导
 - **`src/workspace/titleManager.ts`** — 文件打开时计算编辑器页签标题 + 去重
 - **`src/features/fileViewers/FileViewerRegistry.ts`** — 策略模式决定文件用哪个面板类型打开（`.html` → `"htmlviewer"`，未知 → `"editor"`）
+- **`src/features/sideViews/sideViewDefs.ts`** — ExplorerPanel 注册为 `explorer` 视图（`id: "explorer"`, icon: "📁"）
 
 ## IPC 约束
 
