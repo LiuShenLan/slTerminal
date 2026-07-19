@@ -456,4 +456,34 @@ describe("SideBarArea", () => {
     );
     expect(projectsSlot).not.toBeNull();
   });
+
+  // ─── SB-20.13: 首次双开 splitRatio 重置为 0.5 ───
+  it("从单视图过渡到双视图时 splitRatio 重置为默认 0.5", () => {
+    const setSplitRatioSpy = vi.spyOn(
+      useSideBar.getState(),
+      "setSplitRatio",
+    );
+
+    // 模拟：上区打开、下区关闭、splitRatio 为极端值（上次手动调过）
+    useSideBar.setState({
+      splitRatio: 0.9,
+      open: { top: "projects", bottom: null },
+      zones: { top: ["projects"], bottom: ["explorer"] },
+    });
+
+    // 首次渲染——bothOpen=false, 不触发重置
+    const { rerender } = render(
+      React.createElement(SideBarArea, defaultProps),
+    );
+    expect(setSplitRatioSpy).not.toHaveBeenCalled();
+
+    // 下区被打开 → bothOpen: false→true
+    useSideBar.setState({ open: { top: "projects", bottom: "explorer" } });
+    rerender(
+      React.createElement(SideBarArea, defaultProps),
+    );
+
+    expect(setSplitRatioSpy).toHaveBeenCalledWith(0.5);
+    setSplitRatioSpy.mockRestore();
+  });
 });

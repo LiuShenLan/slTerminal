@@ -4,7 +4,7 @@
 // 每半区一槽位，视图通过 display:none/flex 切换保挂载。
 // 换区重建为已知行为（ADR-0001）：组件随 zones 跨 pane 移动即卸载重建。
 
-import React from "react";
+import React, { useEffect, useRef } from "react";
 import { Allotment } from "allotment";
 import "allotment/dist/style.css";
 import { useSideBar } from "../../stores/sideBar";
@@ -52,6 +52,15 @@ export const SideBarArea: React.FC<SideBarAreaProps> = ({
   const topOpen = open.top !== null;
   const bottomOpen = open.bottom !== null;
   const bothOpen = topOpen && bottomOpen;
+
+  // 从单视图过渡到双视图时重置 splitRatio → 上下各 50%
+  const prevBothOpen = useRef(bothOpen);
+  useEffect(() => {
+    if (bothOpen && !prevBothOpen.current) {
+      setSplitRatio(0.5);
+    }
+    prevBothOpen.current = bothOpen;
+  }, [bothOpen, setSplitRatio]);
 
   return (
     <div

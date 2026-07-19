@@ -10,7 +10,7 @@
 // 硬约束 #6：全部颜色引用 theme/colors.ts token，禁止硬编码色值
 // 零新依赖：HTML5 DnD 原生，不引入 react-dnd / dnd-kit
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { useSideBar } from "../../stores/sideBar";
 import { sideViewRegistry } from "./sideViewRegistry";
 import { computeDropTarget } from "./dropTarget";
@@ -89,9 +89,24 @@ export function ActivityBar() {
     setDropIndicator(null);
   }, []);
 
-  /** 收集指定 zone 内各按钮的屏幕矩形（供 computeDropTarget 使用） */
+  /** 根据 clientY 在活动栏内的相对位置判定目标 zone——容器垂直中点以上→"top"，以下→"bottom" */
+  const resolveTargetZone = useCallback(
+    (clientY: number, root: HTMLElement): Zone => {
+      const rect = root.getBoundingClientRect();
+      const boundary = rect.top + rect.height / 2;
+      return clientY >= boundary ? "bottom" : "top";
+    },
+    [],
+  );
+
+  /** 活动栏根容器 ref——供 getButtonRects 限定查询范围 */
+  const barRef = useRef<HTMLDivElement>(null);
+
+  /** 收集指定 zone 内各按钮的屏幕矩形（供 computeDropTarget 使用，限定根容器内查询） */
   const getButtonRects = useCallback((zone: Zone): ButtonRect[] => {
-    const container = document.querySelector(`[data-zone="${zone}"]`);
+    const root = barRef.current;
+    if (!root) return [];
+    const container = root.querySelector(`[data-zone="${zone}"]`);
     if (!container) return [];
     const buttons = container.querySelectorAll("[data-view-id]");
     const rects: ButtonRect[] = [];
@@ -104,7 +119,7 @@ export function ActivityBar() {
     return rects;
   }, []);
 
-  /** 渲染单个半区按钮组 */
+  /** 渲染单个半区按钮组（仅结构+样式，拖拽事件在外层容器统一处理） */
   const renderZone = (zone: Zone) => {
     const ids = zones[zone];
     const defs = ids
@@ -112,34 +127,7 @@ export function ActivityBar() {
       .filter((d): d is NonNullable<typeof d> => d != null);
 
     return (
-      <div
-        data-zone={zone}
-        onDragOver={(e) => {
-          e.preventDefault();
-          e.dataTransfer.dropEffect = "move";
-          const rects = getButtonRects(zone);
-          const target = computeDropTarget(e.clientY, rects, zone);
-          setDropIndicator(target);
-        }}
-        onDragLeave={(e) => {
-          // 仅当真正离开该 zone 容器时才清指示线
-          if (e.currentTarget === e.target) {
-            setDropIndicator(null);
-          }
-        }}
-        onDrop={(e) => {
-          e.preventDefault();
-          const id = e.dataTransfer.getData(DND_TYPE);
-          if (id && dropIndicator) {
-            useSideBar.getState().moveButton(
-              id,
-              dropIndicator.zone,
-              dropIndicator.index,
-            );
-          }
-          clearDragState();
-        }}
-      >
+      <div data-zone={zone}>
         {defs.map((def, index) => {
           const isActive = open[zone] === def.id;
           const isDragging = draggingId === def.id;
@@ -203,7 +191,39 @@ export function ActivityBar() {
   };
 
   return (
-    <div style={containerStyle}>
+    <div
+      ref={barRef}
+      data-e2e="activity-bar"
+      style={containerStyle}
+      onDragOver={(e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        const root = barRef.current;
+        if (!root) return;
+        const targetZone = resolveTargetZone(e.clientY, root);
+        const rects = getButtonRects(targetZone);
+        const target = computeDropTarget(e.clientY, rects, targetZone);
+        setDropIndicator(target);
+      }}
+      onDragLeave={(e) => {
+        // 仅当拖拽真正离开活动栏时才清指示线（子元素间转移不触发）
+        if (e.currentTarget === e.target) {
+          setDropIndicator(null);
+        }
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        const id = e.dataTransfer.getData(DND_TYPE);
+        if (id && dropIndicator) {
+          useSideBar.getState().moveButton(
+            id,
+            dropIndicator.zone,
+            dropIndicator.index,
+          );
+        }
+        clearDragState();
+      }}
+    >
       {renderZone("top")}
       <div style={spacerStyle} />
       {renderZone("bottom")}
