@@ -13,6 +13,10 @@
 //   4. 门禁命令按 Stage 触碰文件选择——触及 tsc/eslint 覆盖外文件
 //      （如 e2e-tests/helpers.ts 不在根 tsconfig include）时，
 //      __TEST_COMMANDS__ 必须补 npx vite build 构建级兜底
+//   5. stages 分工表文件清单 = 各 agent prompt 触碰文件全集（含"仅加
+//      export"微改文件）——漏列使"无文件重叠"证明失真
+//   6. prompt 引用既有文件路径必须 Glob 核实，禁凭记忆（实证：
+//      panel-registry.test.ts 被 8 处误写为驼峰 panelRegistry.test.ts）
 //
 // 占位符:
 //   __STAGE_NAME__        - Workflow 名称 (e.g. "stage1-xxx")
