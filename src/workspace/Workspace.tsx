@@ -18,8 +18,17 @@ import { Allotment } from "allotment";
 import "allotment/dist/style.css";
 import PageDockview from "./PageDockviewHost";
 import { titleManager } from "./titleManager";
-import { SidebarTree } from "../features/sidebar";
-import { ExplorerPanel } from "../features/explorer";
+// 侧栏视图：side-effect 注册（类比 tabRules.ts，静态 import 链保证 App init 的 loadFromDisk 运行时注册已完成）
+import "../features/sideViews/sideViewDefs";
+import {
+  ActivityBar,
+  SideBarArea,
+  ACTIVITY_BAR_SIZE,
+  WIDTH_MIN,
+  WIDTH_MAX,
+  deriveLayout,
+} from "../features/sideViews";
+import { useSideBar } from "../stores/sideBar";
 import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
 import { ErrorBoundary, E2E_ENABLED } from "../lib";
@@ -32,13 +41,7 @@ declare global {
   }
 }
 
-/** Allotment 三栏布局尺寸约束（px） */
-const SIDEBAR_PREFERRED_SIZE = 250;
-const SIDEBAR_MIN_SIZE = 160;
-const SIDEBAR_MAX_SIZE = 400;
-const EXPLORER_PREFERRED_SIZE = 250;
-const EXPLORER_MIN_SIZE = 180;
-const EXPLORER_MAX_SIZE = 500;
+/** Allotment 主区最小宽度（px）。活动栏与侧栏区尺寸常量来自 ../features/sideViews */
 const MAIN_MIN_SIZE = 200;
 
 // ---- Workspace 主组件 ----
@@ -54,6 +57,10 @@ const Workspace: React.FC = () => {
 
   const activePageId = useLayout((s) => s.activePageId);
   const projects = useProjects((s) => s.projects);
+  const sideOpen = useSideBar((s) => s.open);
+  const sideWidth = useSideBar((s) => s.width);
+  const setSideWidth = useSideBar((s) => s.setWidth);
+  const anyOpen = deriveLayout(sideOpen) !== "hidden";
 
   /** 收集所有操作页面（扁平化列表） */
   const allPages = useMemo(() => {
@@ -232,13 +239,21 @@ const Workspace: React.FC = () => {
 
   return (
     <div style={{ width: "100%", height: "100%" }}>
-      <Allotment>
-        <Allotment.Pane preferredSize={SIDEBAR_PREFERRED_SIZE} minSize={SIDEBAR_MIN_SIZE} maxSize={SIDEBAR_MAX_SIZE}>
-          <SidebarTree switchToPage={switchToPage} onDeletePage={onDeletePage} />
+      <Allotment onChange={(sizes) => {
+        // 侧栏区可见时同步宽度到 store（setWidth 内部 clamp，无需重复校验）
+        if (anyOpen && sizes.length >= 2) {
+          setSideWidth(sizes[1]);
+        }
+      }}>
+        {/* pane1: 活动栏 — 40px 固定 */}
+        <Allotment.Pane preferredSize={ACTIVITY_BAR_SIZE} minSize={ACTIVITY_BAR_SIZE} maxSize={ACTIVITY_BAR_SIZE}>
+          <ActivityBar />
         </Allotment.Pane>
-        <Allotment.Pane preferredSize={EXPLORER_PREFERRED_SIZE} minSize={EXPLORER_MIN_SIZE} maxSize={EXPLORER_MAX_SIZE}>
-          <ExplorerPanel />
+        {/* pane2: 侧栏区 — 可显隐，宽度持久化 */}
+        <Allotment.Pane preferredSize={sideWidth} minSize={WIDTH_MIN} maxSize={WIDTH_MAX} visible={anyOpen}>
+          <SideBarArea switchToPage={switchToPage} onDeletePage={onDeletePage} />
         </Allotment.Pane>
+        {/* pane3: 主区 — 不变 */}
         <Allotment.Pane minSize={MAIN_MIN_SIZE}>
           <div style={{ width: "100%", height: "100%", position: "relative" }}>
             {allPages.map((page) => {

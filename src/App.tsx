@@ -8,6 +8,7 @@ import {
 import { useLayout } from "./stores/layout";
 import { useFontSize, cancelPendingSave as cancelFontSizeSave } from "./stores/fontSize";
 import { useKeybindings, cancelPendingSave as cancelKeybindingsSave } from "./stores/keybindings";
+import { useSideBar, cancelPendingSave as cancelSideBarSave } from "./stores/sideBar";
 import { saveLayout } from "./workspace/layoutSerde";
 import { pty } from "./ipc";
 import { setProjectRoot } from "./ipc/fs";
@@ -43,6 +44,13 @@ function App() {
         await useKeybindings.getState().loadFromDisk();
       } catch {
         // 首次启动或文件损坏，保持默认（空覆盖）
+      }
+
+      try {
+        // 加载侧栏视图状态——区划/开关/宽度/比例，先于项目数据确保 Workspace 渲染时已有正确值
+        await useSideBar.getState().loadFromDisk();
+      } catch {
+        // 首次启动或文件损坏，保持默认值
       }
 
       try {
@@ -131,6 +139,7 @@ function App() {
         cancelPendingSave();
         cancelFontSizeSave();
         cancelKeybindingsSave();
+        cancelSideBarSave();
         await Promise.race([
           saveAllProjects(),
           new Promise<void>((resolve) => setTimeout(resolve, SHUTDOWN_TIMEOUT_MS)),

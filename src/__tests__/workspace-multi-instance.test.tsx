@@ -44,6 +44,7 @@ global.ResizeObserver = class ResizeObserver {
 import Workspace from "../workspace/Workspace";
 import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
+import { useSideBar } from "../stores/sideBar";
 import { titleManager } from "../workspace/titleManager";
 
 /** 构造带两页面的测试项目（展开态） */
@@ -79,6 +80,14 @@ beforeEach(() => {
     expandedNodes: {},
   });
   useLayout.setState({ activePageId: null });
+  // 种子侧栏 store 默认值（Workspace 三栏改造后依赖 sideBar 状态）
+  useSideBar.setState({
+    zones: { top: ["projects", "explorer"], bottom: [] },
+    open: { top: "projects", bottom: null },
+    width: 250,
+    splitRatio: 0.5,
+    loaded: true,
+  });
   titleManager.reset();
 });
 
