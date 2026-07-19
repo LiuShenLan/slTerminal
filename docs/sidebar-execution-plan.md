@@ -240,6 +240,6 @@ export function cancelPendingSave(): void;
 - [x] 需求定稿（`docs/sidebar-requirements.md` v1.0，12 轮 grilling）
 - [x] 术语落盘（`CONTEXT.md`「侧栏」节）+ ADR-0001（`.claude/adr.md`）
 - [x] checklist 与执行计划落盘（`docs/sidebar-checklist.md` + 本文件）
-- [ ] 5 个 workflow 脚本 + 5 个 verify 断言文件落盘（`docs/workflows/`）
-- [ ] 5 个 JS 脚本语法预检通过
-- [ ] 用户确认启动 Stage 1
+- [x] 5 个 workflow 脚本 + 5 个 verify 断言文件落盘（`docs/workflows/`）
+- [x] 5 个 JS 脚本语法预检通过（2026-07-19）
+- [x] 用户确认启动 Stage 1（2026-07-19）
