@@ -35,12 +35,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 与项目现有注册表对比：同 `TabTitleRegistry`（`panels/terminal/`）的 `register/getAll/_reset` 模式；同 `ShortcutRegistry` 的模块级单例模式；同 `FileViewerRegistry` 的注册即用零额外配置模式。
 
-### HTML5 拖拽（零依赖）
+### HTML5 拖拽——外层容器统一处理 + 容器中点 zone 判定
 
-活动栏拖拽采用 HTML5 原生 DnD API，零外部依赖（不引入 react-dnd / dnd-kit）：
+活动栏拖拽采用 HTML5 原生 DnD API，零外部依赖（不引入 react-dnd / dnd-kit）。
+
+**架构决策**：`onDragOver`/`onDrop`/`onDragLeave` 在外层容器（`<div ref={barRef} data-e2e="activity-bar" style={containerStyle}>`）上统一处理，而非各 zone div 各自处理。**根因**：空 zone div 高度为 0，Chromium hit-test 跳过零高度元素（`codereview.chromium.org/2234173002`），导致 `dragover`/`drop` 永不触发。外层容器 `height: 100%` 全高永远可命中。
+
+**zone 判定**：`resolveTargetZone(clientY, root)`——容器垂直中点以上 → `"top"`，以下 → `"bottom"`（`clientY >= rect.top + rect.height / 2`）。同区内精确定位仍用 `computeDropTarget` 纯函数。
 
 - **起点**：按钮 `draggable` + `onDragStart` → `dataTransfer.setData("application/x-side-view-id", id)` + `effectAllowed = "move"` + 按钮半透明态
-- **落点判定**：`computeDropTarget(clientY, buttonRects, zone)` 纯函数——clientY 在按钮上半→该按钮 index（插前方），下半→index+1（插后方），空白区→数组末尾。调用方通过 `getBoundingClientRect()` 收集按钮矩形传入，函数本体不碰 DOM
+- **落点判定**：`computeDropTarget(clientY, buttonRects, zone)` 纯函数——clientY 在按钮上半→该按钮 index（插前方），下半→index+1（插后方），空白区→数组末尾。调用方通过 `barRef.current.querySelector` + `getBoundingClientRect()` 收集按钮矩形传入，函数本体不碰 DOM
 - **指示线**：`onDragOver` 调 `computeDropTarget` → set `dropIndicator` state → 渲染 2px 指示条（颜色=FOCUS_BORDER token）
 - **执行**：`onDrop` → `useSideBar.getState().moveButton(id, zone, index)`（委托 `moveButtonPure` 纯函数）
 - **拖拽仅活动栏内有效**：外部不监听 drop，按钮不能拖出活动栏
@@ -49,6 +53,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **槽位内切换（display:none）**：同一半区内切换视图时，旧视图 div `display:none`，新视图 div `display:flex`。两者均保持挂载——状态不丢（同 React 条件渲染 vs display 策略的经典权衡）
 - **换区重建（已知行为）**：当按钮被拖拽跨区（上→下或下→上），zones 变化导致视图组件从上区 pane 移入下区 pane。React 将其视为不同父节点下的组件，触发卸载+重建——组件内部状态丢失。此行为在 ADR-0001 中已确认接受（权衡：换区为低频操作，重建成本低于跨父节点保持实例的复杂度）
+- **首次双开 splitRatio 重置**：从单视图（仅一个半区有打开视图）过渡到双视图时，`SideBarArea` 通过 `useEffect` 将 `splitRatio` 重置为 0.5，确保上下各半——避免残留上次手动调节的极端值（如 0.9/0.1）导致一侧不可见
 
 ## 文件
 
@@ -78,7 +83,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 测试模式
 
-测试文件位于 `src/__tests__/`：`sideBarState.test.ts`（50 用例）、`sideViewRegistry.test.ts`（7 用例）、`sideBar.test.ts`（19 用例）、`activityBar.test.tsx`（16 用例）、`sideBarArea.test.tsx`（13 用例）、`workspace-sideviews.test.tsx`（13 用例）。共 118 用例。
+测试文件位于 `src/__tests__/`：`sideBarState.test.ts`（50 用例）、`sideViewRegistry.test.ts`（7 用例）、`sideBar.test.ts`（19 用例）、`activityBar.test.tsx`（29 用例）、`sideBarArea.test.tsx`（14 用例）、`workspace-sideviews.test.tsx`（13 用例）。共 132 用例。
+
+### activityBar 拖拽测试要点
+
+拖拽事件向外层容器 `[data-e2e="activity-bar"]` 派发（非 zone `<div>`）。关键辅助函数：
+- `installRectSpy(buttonRects, bottomZoneTop)`：mock `getBoundingClientRect`，为按钮 + zone 容器 + 活动栏根容器（height=600, midpoint=300）统一提供模拟矩形
+- `dispatchDragEvent(element, type, dt, clientY?)`：可选 `clientY` 供 zone 判定使用
+- 29 用例覆盖：渲染结构（3）、active 态（2）、点击 toggle（2）、title/e2e（1）、dragStart（2）、dragOver/drop 同 zone（3）、dragEnd（1）、未注册防御（1）、hover（2）、跨区拖拽状态机（5）、zone 判定边界（3）、指示线/清理（4）
 
 ### 技术栈
 

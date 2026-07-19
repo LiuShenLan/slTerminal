@@ -2,7 +2,7 @@
 
 > **本文档是项目用例数唯一真值源。** 所有 CLAUDE.md、README、CI 配置中引用的用例数均以此文件为准。更新测试后必须同步本文档。
 
-全量 **1566** 用例（Rust 243 + 前端 1193 + L3 116 + E2E 14），2026-07-19 实测更新。
+全量 **1580** 用例（Rust 243 + 前端 1207 + L3 116 + E2E 14），2026-07-19 实测更新。
 
 > **计数口径**：前端 (L2) 用例数以 `grep -cE '^\s*(it|test)\(' src/__tests__/*.test.ts src/__tests__/*.test.tsx` 展开的 `it`/`test` 块数为准（Vitest 实际运行数）；L3 同理 `test/terminal/*.test.ts`；Rust (L1) 以 `grep -c '#\[test\]'` 统计的 `#[test]` 属性数为准。L3 的 116 用例同时被 L2 (`npm test`) 和独立 L3 (`npm run test:l3`) 执行，但此处各层独立计数，不做去重。
 
@@ -117,15 +117,15 @@
 |------|------|---------|
 | `src/__tests__/sidebar-actions.test.ts` | 33 | 树结构/右键菜单/内联重命名/项目删除确认/布局 CSS/添加项目 |
 
-### 侧栏视图（6 文件 / 118 用例）
+### 侧栏视图（6 文件 / 132 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
 | `src/__tests__/sideBarState.test.ts` | 50 | toggleViewPure/moveButtonPure/deriveLayout/reconcileZones/sanitizeSideBar + S1-S6 场景序列 |
 | `src/__tests__/sideViewRegistry.test.ts` | 7 | register/getAll/get/重复注册覆盖/未注册 get→undefined/_reset 隔离 |
 | `src/__tests__/sideBar.test.ts` | 19 | 默认值/toggle/move 经 store/loadFromDisk 5 分支/loaded 守卫/debounce saveSettings payload 键集合精确匹配 |
-| `src/__tests__/activityBar.test.tsx` | 16 | 上下区按钮组/active 指示条/click→toggleView/dragStart dataTransfer 内容/dragOver computeDropTarget/drop→moveButton/dragEnd 清拖拽/hover |
-| `src/__tests__/sideBarArea.test.tsx` | 13 | 四态布局/Allotment preferredSize splitRatio/display:none-flex 切换/保挂载/跨区卸载重建/props 透传/onChange→setSplitRatio/PANEL_BG token |
+| `src/__tests__/activityBar.test.tsx` | 29 | 渲染结构(3)/active(2)/toggle(2)/title(1)/dragStart(2)/dragOver+drop同zone(3)/dragEnd(1)/防御(1)/hover(2)/跨区状态机(5)/zone边界(3)/指示线清理(4)——拖拽向外层容器派发，clientY 经 installRectSpy mock |
+| `src/__tests__/sideBarArea.test.tsx` | 14 | 四态布局/Allotment preferredSize splitRatio/display:none-flex 切换/保挂载/跨区卸载重建/props 透传/onChange→setSplitRatio/PANEL_BG token/首次双开 splitRatio 重置 |
 | `src/__tests__/workspace-sideviews.test.tsx` | 13 | 活动栏 pane 40px 固定/侧栏区 pane visible=anyOpen 四态/preferredSize 来自 store/onChange→setWidth/主区 pane/props 透传 |
 
 ### 快捷键/命令系统（8 文件 / 116 用例）
@@ -233,6 +233,7 @@ embedded WDIO 驱动**无法将 OS 级按键（`browser.keys`）投递进 WebVie
 ## 历史变更
 
 - 2026-07-19：侧栏视图系统（SB-26）——新增 L2「侧栏视图」类目 6 文件 118 用例（sideBarState 50 + sideViewRegistry 7 + sideBar 19 + activityBar 16 + sideBarArea 13 + workspace-sideviews 13）；L4 新增「侧栏视图」describe 2 用例（12→14）。L2 1075→1193，全量 1446→1566。
+- 2026-07-19（fix）：跨区拖拽修复 + 中线 zone 判定 + splitRatio 重置——activityBar 16→29（+13 跨区/边界/清理），sideBarArea 13→14（+1 splitRatio 重置）。L2 1193→1207，全量 1566→1580。
 - 2026-07-18：DBG-11 同步——纳入 Stage 1/2 新增用例（DBG-4 契约守卫 3 条、DBG-9 switchToPage 时序 14 条、DBG-10 explorer-sandbox-race 13 条），L2 1045→1075，全量 1416→1446。
 - 2026-07-17：重写——实测全量用例数（L1=243, L2=1045, L3=116, L4=12），统一计数口径，标注 E2E 键盘局限，声明唯一真值源。纳入 Stage 9/10 新增用例。
 - 2026-07-13（旧版）：全量 ~1234 用例（Rust 193 + 前端 1020 + L3 9 + E2E 12），计数失实且 L3 少报 107 用例。
