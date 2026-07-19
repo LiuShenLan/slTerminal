@@ -11,7 +11,7 @@
 | 01 后端 git 能力 | `docs/commit-view/workflows/stage-01-git-backend.js` | ✅ 已 commit | allFixed=true, 5/5 门禁绿 | `b01cff7` | 1 agent |
 | 02 前端基础设施 | `docs/commit-view/workflows/stage-02-fe-infra.js` | ✅ 已 commit | allFixed=true (fix-loop 1轮), 1303 tests | `eca166a` | 2 agent 并行 |
 | 03 gitshow 面板 | `docs/commit-view/workflows/stage-03-gitshow-panel.js` | ✅ 已 commit | allFixed=true (fix-loop 2轮), 1323 tests | `9dbb09b` | 1 agent |
-| 04 diff 面板 | `docs/commit-view/workflows/stage-04-diff-panel.js` | ⬜ 未开始 | — | — | 2 agent 并行 |
+| 04 diff 面板 | `docs/commit-view/workflows/stage-04-diff-panel.js` | ✅ 已 commit | allFixed=true (fix-loop 1轮), 1359 tests | `84169a8` | 2 agent 并行 |
 | 05 commit 视图 | `docs/commit-view/workflows/stage-05-commit-view.js` | ⬜ 未开始 | — | — | 1 agent |
 | 06 E2E | `docs/commit-view/workflows/stage-06-e2e.js` | ⬜ 未开始 | — | — | 1 agent；门禁含 wdio |
 | 07 文档同步 | `docs/commit-view/workflows/stage-07-docs.js` | ⬜ 未开始 | — | — | 1 agent |

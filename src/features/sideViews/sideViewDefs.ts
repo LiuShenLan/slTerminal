@@ -9,6 +9,7 @@
 import React from "react";
 import { SidebarTree } from "../sidebar";
 import { ExplorerPanel } from "../explorer";
+import { CommitView } from "../commit";
 import { sideViewRegistry } from "./sideViewRegistry";
 
 // 注册项目列表视图（📋）
@@ -26,4 +27,12 @@ sideViewRegistry.register({
   title: "文件浏览器",
   icon: "📁",
   component: () => React.createElement(ExplorerPanel),
+});
+
+// 注册 commit 视图（🔀）
+sideViewRegistry.register({
+  id: "commit",
+  title: "Commit",
+  icon: "🔀",
+  component: () => React.createElement(CommitView),
 });
