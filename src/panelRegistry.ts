@@ -6,6 +6,7 @@
 import { TerminalPanel } from "./panels/terminal";
 import { EditorPanel } from "./panels/editor";
 import { HtmlPanel } from "./panels/html";
+import { GitShowPanel } from "./panels/gitshow";
 
 /** 终端面板类型标识 */
 export const PANEL_TERMINAL = "terminal" as const;
@@ -13,6 +14,10 @@ export const PANEL_TERMINAL = "terminal" as const;
 export const PANEL_EDITOR = "editor" as const;
 /** HTML 预览面板类型标识 */
 export const PANEL_HTML_VIEWER = "htmlviewer" as const;
+/** Git HEAD 只读查看面板类型标识 */
+export const PANEL_GIT_SHOW = "gitshow" as const;
+/** Git 双栏 diff 面板类型标识——Stage 04 实现，此处仅注册占位 */
+export const PANEL_DIFF = "diff" as const;
 
 /** Dockview 面板组件注册表 */
 export const panelRegistry = {
@@ -24,6 +29,9 @@ export const panelRegistry = {
   }>,
   htmlviewer: HtmlPanel as React.FC<{
     params: { panelId: string; filePath?: string };
+  }>,
+  gitshow: GitShowPanel as React.FC<{
+    params: { panelId: string; filePath: string; oldPath?: string; repoPath: string };
   }>,
 };
 
@@ -37,6 +45,8 @@ export const PANEL_TYPES = [
   PANEL_TERMINAL,
   PANEL_EDITOR,
   PANEL_HTML_VIEWER,
+  PANEL_GIT_SHOW,
+  PANEL_DIFF,
 ] as const;
 export type PanelType = (typeof PANEL_TYPES)[number];
 
@@ -44,6 +54,8 @@ export type PanelType = (typeof PANEL_TYPES)[number];
 export const FILE_PANEL_TYPES: ReadonlySet<string> = new Set([
   PANEL_EDITOR,
   PANEL_HTML_VIEWER,
+  PANEL_GIT_SHOW,
+  PANEL_DIFF,
 ]);
 
 /** 检查面板类型是否有效 */
@@ -53,10 +65,9 @@ export function isValidPanelType(type: string): type is PanelType {
 
 /**
  * 检查面板是否应使用 renderer="always" 模式。
- * terminal — 保持 PTY 存活；文件预览类（htmlviewer 等）— 避免 iframe/canvas browsing context 销毁重建导致白屏。
- * editor 故意排除——CodeMirror 重建无视觉闪屏，且大文件编辑器若始终挂载会显著增加内存开销。
+ * 显式白名单：terminal（保持 PTY 存活）+ htmlviewer（避免 iframe browsing context 销毁重建导致白屏）。
+ * editor / gitshow / diff 故意排除——CM6 重建无视觉闪屏，且大文件编辑器若始终挂载会显著增加内存开销。
  */
 export function isAlwaysRenderPanel(type: string): boolean {
-  // 除 editor 外所有已注册面板类型均需始终渲染（terminal 保 PTY，htmlviewer 等保 iframe browsing context）
-  return type !== PANEL_EDITOR && isValidPanelType(type);
+  return type === PANEL_TERMINAL || type === PANEL_HTML_VIEWER;
 }

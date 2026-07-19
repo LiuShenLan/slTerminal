@@ -39,9 +39,9 @@ import { useFontSizeWheel } from "../../lib/useFontSizeWheel";
 import { FONT_SIZE_MIN, FONT_SIZE_MAX } from "../../stores/fontSize";
 
 /** 文件大小上限（字节）——超过此值拒绝打开，保护内存 */
-const MAX_FILE_SIZE_BYTES = 10_000_000;
+export const MAX_FILE_SIZE_BYTES = 10_000_000;
 /** 大文件警告阈值（字节）——超过此值弹窗确认 */
-const LARGE_FILE_WARN_BYTES = 1_000_000;
+export const LARGE_FILE_WARN_BYTES = 1_000_000;
 
 /** 编辑器字体 CSS spec —— 可独立测试 */
 export const EDITOR_FONT_SPEC = {
