@@ -9,14 +9,15 @@ import {
 } from "../panelRegistry";
 
 describe("panelRegistry", () => {
-  // 1. panelRegistry 包含 terminal、editor、htmlviewer、gitshow 四个键
-  it("包含 terminal、editor、htmlviewer、gitshow 四个键", () => {
+  // 1. panelRegistry 包含 terminal、editor、htmlviewer、gitshow、diff 五个键
+  it("包含 terminal、editor、htmlviewer、gitshow、diff 五个键", () => {
     const keys = Object.keys(panelRegistry);
-    expect(keys).toHaveLength(4);
+    expect(keys).toHaveLength(5);
     expect(keys).toContain("terminal");
     expect(keys).toContain("editor");
     expect(keys).toContain("htmlviewer");
     expect(keys).toContain("gitshow");
+    expect(keys).toContain("diff");
   });
 
   // 2. terminal 注册项的 component 是 TerminalPanel
@@ -40,6 +41,12 @@ describe("panelRegistry", () => {
   // 新增：gitshow 注册项为函数组件
   it("gitshow 注册项为函数组件", () => {
     const entry = panelRegistry.gitshow;
+    expect(typeof entry).toBe("function");
+  });
+
+  // 新增：diff 注册项为函数组件
+  it("diff 注册项为函数组件", () => {
+    const entry = panelRegistry.diff;
     expect(typeof entry).toBe("function");
   });
 });

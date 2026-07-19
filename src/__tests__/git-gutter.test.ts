@@ -13,6 +13,7 @@ import {
   AddedMarker,
   ModifiedMarker,
   diffGutter,
+  buildHeadRangeSet,
 } from "../panels/editor/gitGutter";
 
 // ── Helpers ──
@@ -214,6 +215,97 @@ describe("gitGutter", () => {
         effects: setDiffMarkers.of([]),
       });
       expect(markerCount(tr2.state)).toBe(0);
+    });
+  });
+
+  describe("buildHeadRangeSet — HEAD 侧（old 行号）映射", () => {
+    /** 辅助：直接用 buildHeadRangeSet 构建 RangeSet 并计数 */
+    function headMarkerCount(doc: string, hunks: DiffHunk[]): number {
+      const state = createState(doc);
+      const set = buildHeadRangeSet(state, hunks);
+      let count = 0;
+      const cursor = set.iter();
+      while (cursor.value !== null) {
+        count++;
+        cursor.next();
+      }
+      return count;
+    }
+
+    it("H1: 单行修改 → old 行标 ModifiedMarker", () => {
+      // oldStart=2, oldLines=1, newLines=1 → 1 个 ModifiedMarker 在 line 2
+      const doc = "line1\nline2\nline3\n";
+      const hunks: DiffHunk[] = [
+        { oldStart: 2, oldLines: 1, newStart: 2, newLines: 1 },
+      ];
+      expect(headMarkerCount(doc, hunks)).toBe(1);
+    });
+
+    it("H2: 连续删除 → old 行全部标 DeletedMarker", () => {
+      // oldStart=2, oldLines=3, newLines=0 → 3 个 DeletedMarker 在 line 2,3,4
+      const doc = "keep\nold2\nold3\nold4\nkeep\n";
+      const hunks: DiffHunk[] = [
+        { oldStart: 2, oldLines: 3, newStart: 2, newLines: 0 },
+      ];
+      expect(headMarkerCount(doc, hunks)).toBe(3);
+    });
+
+    it("H3: oldLines > newLines 混合 hunk — 共享行 Modified + 剩余 old 行 Deleted", () => {
+      // oldStart=2, oldLines=4, newLines=2 → shared=2 Modified (line 2,3) + 2 Deleted (line 4,5)
+      const doc = "L1\nL2\nL3\nL4\nL5\nL6\n";
+      const hunks: DiffHunk[] = [
+        { oldStart: 2, oldLines: 4, newStart: 2, newLines: 2 },
+      ];
+      // 4 markers: 2 Modified + 2 Deleted
+      expect(headMarkerCount(doc, hunks)).toBe(4);
+    });
+
+    it("H4: 纯新增（oldLines=0）→ HEAD 侧无标记", () => {
+      const doc = "line1\nline2\n";
+      const hunks: DiffHunk[] = [
+        { oldStart: 0, oldLines: 0, newStart: 2, newLines: 3 },
+      ];
+      expect(headMarkerCount(doc, hunks)).toBe(0);
+    });
+
+    it("H5: newLines > oldLines 混合 hunk — 共享行 Modified，HEAD 侧无额外标记", () => {
+      // oldStart=3, oldLines=2, newLines=5 → shared=2 Modified (line 3,4)，无 Deleted
+      const doc = "A\nB\nC\nD\nE\nF\n";
+      const hunks: DiffHunk[] = [
+        { oldStart: 3, oldLines: 2, newStart: 3, newLines: 5 },
+      ];
+      expect(headMarkerCount(doc, hunks)).toBe(2);
+    });
+
+    it("H6: oldStart 超出文档行数 → 不崩溃，返回空集", () => {
+      const doc = "short\n";
+      const hunks: DiffHunk[] = [
+        { oldStart: 100, oldLines: 1, newStart: 100, newLines: 0 },
+      ];
+      expect(headMarkerCount(doc, hunks)).toBe(0);
+    });
+
+    it("H7: 多 hunk 混合 — 修改+删除+新增", () => {
+      // hunk1: 纯新增 (oldLines=0) → 0
+      // hunk2: 单行修改 (1,1) → 1 Modified
+      // hunk3: 纯删除 (3,0) → 3 Deleted
+      const doc = "A\nB\nC\nD\nE\nF\nG\nH\n";
+      const hunks: DiffHunk[] = [
+        { oldStart: 1, oldLines: 0, newStart: 1, newLines: 2 },
+        { oldStart: 3, oldLines: 1, newStart: 3, newLines: 1 },
+        { oldStart: 5, oldLines: 3, newStart: 5, newLines: 0 },
+      ];
+      // 0 + 1 + 3 = 4 markers
+      expect(headMarkerCount(doc, hunks)).toBe(4);
+    });
+
+    it("H8: 等行修改 → 全部 old 行标 ModifiedMarker", () => {
+      // oldStart=2, oldLines=3, newLines=3 → 3 ModifiedMarker
+      const doc = "X\nA\nB\nC\nY\n";
+      const hunks: DiffHunk[] = [
+        { oldStart: 2, oldLines: 3, newStart: 2, newLines: 3 },
+      ];
+      expect(headMarkerCount(doc, hunks)).toBe(3);
     });
   });
 

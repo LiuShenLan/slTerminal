@@ -7,6 +7,7 @@ import { TerminalPanel } from "./panels/terminal";
 import { EditorPanel } from "./panels/editor";
 import { HtmlPanel } from "./panels/html";
 import { GitShowPanel } from "./panels/gitshow";
+import { DiffPanel } from "./panels/diff";
 
 /** 终端面板类型标识 */
 export const PANEL_TERMINAL = "terminal" as const;
@@ -31,6 +32,9 @@ export const panelRegistry = {
     params: { panelId: string; filePath?: string };
   }>,
   gitshow: GitShowPanel as React.FC<{
+    params: { panelId: string; filePath: string; oldPath?: string; repoPath: string };
+  }>,
+  diff: DiffPanel as React.FC<{
     params: { panelId: string; filePath: string; oldPath?: string; repoPath: string };
   }>,
 };

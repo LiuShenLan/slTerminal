@@ -181,6 +181,72 @@ export function diffGutter() {
   ];
 }
 
+// ── HEAD 侧（old 行号）RangeSet 构建 ──────────────────────────
+
+/**
+ * 将 unified diff hunk 数组转换为 HEAD 侧 RangeSet&lt;GutterMarker&gt;。
+ *
+ * 与 buildRangeSet（工作区侧，映射 new 行号）互补——本函数按 **old 行号**
+ * 映射，供 diff 面板左侧 HEAD 内容区使用。
+ *
+ * 映射规则（old 行号，1-based）：
+ * - oldLines=0 → 纯新增，HEAD 侧无对应行，不产生任何标记
+ * - newLines=0 → 纯删除，oldStart..oldStart+oldLines-1 全部标 DeletedMarker
+ * - 两者均>0 →
+ *     - 前 min(oldLines,newLines) 行标 ModifiedMarker
+ *     - oldLines>newLines 时，剩余 old 行标 DeletedMarker
+ *     - newLines>oldLines 时，HEAD 侧无额外标记
+ */
+export function buildHeadRangeSet(
+  state: EditorState,
+  hunks: DiffHunk[],
+): RangeSet<GutterMarker> {
+  const builder = new RangeSetBuilder<GutterMarker>();
+  const doc = state.doc;
+
+  // 预取行信息缓存，减少 doc.line() 调用
+  const lineCache = new Map<number, { from: number }>();
+  const getLineFrom = (lineNo: number): number => {
+    if (lineNo <= 0 || lineNo > doc.lines) return -1;
+    let cached = lineCache.get(lineNo);
+    if (!cached) {
+      cached = { from: doc.line(lineNo).from };
+      lineCache.set(lineNo, cached);
+    }
+    return cached.from;
+  };
+
+  for (const hunk of hunks) {
+    if (hunk.oldLines === 0) {
+      // 纯新增：HEAD 侧无对应内容，跳过
+      continue;
+    } else if (hunk.newLines === 0) {
+      // 纯删除：所有 old 行标 DeletedMarker
+      for (let i = 0; i < hunk.oldLines; i++) {
+        const pos = getLineFrom(hunk.oldStart + i);
+        if (pos >= 0) builder.add(pos, pos, new DeletedMarker());
+      }
+    } else {
+      // 修改：min(oldLines,newLines) 行标 ModifiedMarker
+      const shared = Math.min(hunk.oldLines, hunk.newLines);
+      for (let i = 0; i < shared; i++) {
+        const pos = getLineFrom(hunk.oldStart + i);
+        if (pos >= 0) builder.add(pos, pos, new ModifiedMarker());
+      }
+
+      // old 侧超出 → DeletedMarker
+      if (hunk.oldLines > hunk.newLines) {
+        for (let i = shared; i < hunk.oldLines; i++) {
+          const pos = getLineFrom(hunk.oldStart + i);
+          if (pos >= 0) builder.add(pos, pos, new DeletedMarker());
+        }
+      }
+    }
+  }
+
+  return builder.finish();
+}
+
 // ── 更新函数 ─────────────────────────────────────────────────
 
 /**
@@ -204,5 +270,59 @@ export function updateDiffGutter(view: EditorView, hunks: DiffHunk[]): void {
 export function clearDiffGutter(view: EditorView): void {
   view.dispatch({
     effects: setDiffMarkers.of([]),
+  });
+}
+
+// ── HEAD 侧 Gutter StateField + Effect ─────────────────────────
+
+/** 从外部设置 HEAD 侧 diff 标记 */
+export const setHeadDiffMarkers = StateEffect.define<DiffHunk[]>();
+
+/** HEAD 侧 diff 标记 StateField（独立于工作区侧的 diffMarkersField） */
+export const headDiffMarkersField = StateField.define<RangeSet<GutterMarker>>({
+  create(): RangeSet<GutterMarker> {
+    return RangeSet.empty;
+  },
+
+  update(set: RangeSet<GutterMarker>, tr): RangeSet<GutterMarker> {
+    set = set.map(tr.changes);
+
+    for (const e of tr.effects) {
+      if (e.is(setHeadDiffMarkers)) {
+        if (e.value.length === 0) {
+          set = RangeSet.empty;
+        } else {
+          set = buildHeadRangeSet(tr.state, e.value);
+        }
+      }
+    }
+
+    return set;
+  },
+});
+
+/** 返回 HEAD 侧 diff gutter 扩展（同 diffGutter 模式，使用 old 行号映射） */
+export function headDiffGutter() {
+  return [
+    headDiffMarkersField,
+    gutter({
+      class: "cm-diff-gutter",
+      markers: (view): RangeSet<GutterMarker> => view.state.field(headDiffMarkersField),
+      initialSpacer: () => new SpacerMarker(),
+    }),
+  ];
+}
+
+/** 更新 HEAD 侧 diff 边栏标记 */
+export function updateHeadDiffGutter(view: EditorView, hunks: DiffHunk[]): void {
+  view.dispatch({
+    effects: setHeadDiffMarkers.of(hunks),
+  });
+}
+
+/** 清除 HEAD 侧 diff 边栏标记 */
+export function clearHeadDiffGutter(view: EditorView): void {
+  view.dispatch({
+    effects: setHeadDiffMarkers.of([]),
   });
 }
