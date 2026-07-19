@@ -81,6 +81,7 @@ pub fn run() {
             settings::load_settings,
             git::git_status,
             git::git_diff,
+            git::git_file_at_head,
             notify::notify_watch,
         ])
         .run(tauri::generate_context!())

@@ -17,6 +17,8 @@ pub struct GitStatusEntry {
     pub path: String,
     /// git 状态：modified | added | deleted | renamed | untracked | conflict | ignored
     pub status: String,
+    /// 重命名前的旧绝对路径（仅 renamed 条目有值，camelCase 序列化为 oldPath）
+    pub old_path: Option<String>,
 }
 
 /// diff hunk 信息（old = HEAD, new = 工作区）
@@ -143,7 +145,10 @@ pub async fn git_status(
         let mut opts = git2::StatusOptions::new();
         opts.include_untracked(true)
             .include_unreadable(true)
-            .include_unreadable_as_untracked(true);
+            .include_unreadable_as_untracked(true)
+            .recurse_untracked_dirs(true)            // FR-4: 递归列出未跟踪目录内文件
+            .renames_head_to_index(true)              // CV-BE-02: 启用 HEAD→index 重命名检测
+            .renames_index_to_workdir(true);          // CV-BE-02: 启用 index→workdir 重命名检测
 
         let statuses = repo
             .statuses(Some(&mut opts))
@@ -170,9 +175,27 @@ pub async fn git_status(
                 None => continue, // 跳过 Current（无变更）
             };
 
+            // 提取重命名条目的旧路径（绝对路径，\\→/ 规范化）
+            let old_path = if status_flag.contains(git2::Status::INDEX_RENAMED) {
+                entry.head_to_index().and_then(|delta| {
+                    delta.old_file().path().map(|p| {
+                        workdir.join(p).to_string_lossy().replace('\\', "/")
+                    })
+                })
+            } else if status_flag.contains(git2::Status::WT_RENAMED) {
+                entry.index_to_workdir().and_then(|delta| {
+                    delta.old_file().path().map(|p| {
+                        workdir.join(p).to_string_lossy().replace('\\', "/")
+                    })
+                })
+            } else {
+                None
+            };
+
             entries.push(GitStatusEntry {
                 path,
                 status: status_str.to_string(),
+                old_path,
             });
         }
 
@@ -365,11 +388,77 @@ pub(crate) fn compute_diff_hunks(
     Ok(hunks)
 }
 
+/// 获取指定文件在 HEAD commit 中的内容（只读 blob）
+///
+/// 仓库尚无提交（UnbornBranch）或文件不在 HEAD tree → AppError::Git，消息含"HEAD 中不存在"。
+#[tauri::command]
+pub async fn git_file_at_head(
+    repo_path: String,
+    file_path: String,
+    state: State<'_, AppState>,
+) -> Result<String, AppError> {
+    // 块作用域限界：RwLockReadGuard 非 Send，必须在 .await 前 drop
+    let (repo, workdir) = {
+        let root = state
+            .project_root
+            .read()
+            .map_err(|e| AppError::Git(format!("获取 project_root 锁失败: {e}")))?;
+        // 路径沙箱校验
+        validate_path_within_root(&root, Path::new(&file_path))?;
+        // 从缓存获取/创建 Repository
+        let search_path = if !repo_path.is_empty() { &repo_path } else { &file_path };
+        get_or_open_repo(&state.git_repo_cache, search_path, &root)?
+    };
+
+    match tokio::task::spawn_blocking(move || {
+        let tree = match repo.head() {
+            Ok(head) => head
+                .peel_to_tree()
+                .map_err(|e| AppError::Git(format!("获取 HEAD tree 失败: {e}")))?,
+            Err(e) if e.code() == git2::ErrorCode::UnbornBranch => {
+                return Err(AppError::Git("HEAD 中不存在：尚无提交记录".to_string()));
+            }
+            Err(e) => return Err(AppError::Git(format!("获取 HEAD 失败: {e}"))),
+        };
+
+        // workdir 由 get_or_open_repo 返回（已 dunce::simplified），防 8.3 短名
+        let rel = Path::new(&file_path)
+            .strip_prefix(&workdir)
+            .unwrap_or(Path::new(&file_path))
+            .to_string_lossy()
+            .replace('\\', "/");
+
+        let entry = tree
+            .get_path(Path::new(&rel))
+            .map_err(|e| {
+                if e.code() == git2::ErrorCode::NotFound {
+                    AppError::Git(format!("文件在 HEAD 中不存在: {rel}"))
+                } else {
+                    AppError::Git(format!("获取 tree 条目失败: {e}"))
+                }
+            })?;
+
+        let blob = entry
+            .to_object(&repo)
+            .map_err(|e| AppError::Git(format!("获取 object 失败: {e}")))?
+            .peel_to_blob()
+            .map_err(|e| AppError::Git(format!("peel to blob 失败: {e}")))?;
+
+        Ok(String::from_utf8_lossy(blob.content()).to_string())
+    })
+    .await
+    {
+        Ok(inner) => inner,
+        Err(e) => Err(AppError::TaskJoin(e.to_string())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
     use std::process::Command;
     use super::{DiffHunk, GitStatusEntry, compute_diff_hunks};
+    use crate::AppError;
 
     /// 在临时目录中 init 一个 git 仓库，返回 tempdir（自动清理）和路径
     fn init_temp_repo() -> (tempfile::TempDir, std::path::PathBuf) {
@@ -814,6 +903,49 @@ mod tests {
             }
         }
         assert!(found, "应找到 deleted 文件");
+    }
+
+    // ---- CV-BE-01: recurse_untracked_dirs 递归列出未跟踪目录内文件 ----
+
+    #[test]
+    fn git_status_recurse_untracked_dirs() {
+        let (_dir, path) = init_temp_repo();
+        commit_file(&path, "tracked.txt", "tracked");
+
+        // 创建含多文件的未跟踪目录
+        let sub = path.join("newdir");
+        fs::create_dir(&sub).unwrap();
+        fs::write(sub.join("a.txt"), "a").unwrap();
+        fs::write(sub.join("b.txt"), "b").unwrap();
+        // 嵌套子目录
+        fs::create_dir(sub.join("nested")).unwrap();
+        fs::write(sub.join("nested").join("c.txt"), "c").unwrap();
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let mut opts = git2::StatusOptions::new();
+        opts.include_untracked(true)
+            .recurse_untracked_dirs(true);
+        let statuses = repo.statuses(Some(&mut opts)).unwrap();
+
+        // 收集所有 untracked 路径
+        let untracked_paths: Vec<String> = statuses.iter()
+            .filter(|e| {
+                let s = e.status();
+                s.contains(git2::Status::WT_NEW) && !s.contains(git2::Status::INDEX_NEW)
+            })
+            .map(|e| e.path().unwrap_or("").to_string().replace('\\', "/"))
+            .collect();
+
+        // 每个文件单独出现，不是目录单条目 "newdir/"
+        assert!(untracked_paths.contains(&"newdir/a.txt".to_string()),
+            "应包含 newdir/a.txt，实际: {untracked_paths:?}");
+        assert!(untracked_paths.contains(&"newdir/b.txt".to_string()),
+            "应包含 newdir/b.txt，实际: {untracked_paths:?}");
+        assert!(untracked_paths.contains(&"newdir/nested/c.txt".to_string()),
+            "应包含 newdir/nested/c.txt，实际: {untracked_paths:?}");
+        // 不应出现目录条目
+        assert!(!untracked_paths.contains(&"newdir/".to_string()),
+            "递归模式下不应出现目录单条目 newdir/，实际: {untracked_paths:?}");
     }
 
     #[test]
@@ -1354,15 +1486,127 @@ mod tests {
 
     #[test]
     fn git_status_entry_serializes_camelcase() {
-        let entry = GitStatusEntry { path: "/abs/path".into(), status: "modified".into() };
+        let entry = GitStatusEntry { path: "/abs/path".into(), status: "modified".into(), old_path: None };
         let json = serde_json::to_string(&entry).unwrap();
         assert!(json.contains("\"path\""), "应包含 path: {json}");
         assert!(json.contains("\"status\""), "应包含 status: {json}");
+        assert!(json.contains("\"oldPath\""), "应包含 camelCase 字段 oldPath: {json}");
         assert!(!json.contains("\"Path\""), "不应包含 PascalCase");
+        // 非 renamed 条目 oldPath 应为 null
+        assert!(json.contains("\"oldPath\":null"), "非 renamed 条目 oldPath 应为 null: {json}");
+    }
+
+    #[test]
+    fn git_status_entry_renamed_has_old_path_camelcase() {
+        let entry = GitStatusEntry {
+            path: "/repo/new.txt".into(),
+            status: "renamed".into(),
+            old_path: Some("/repo/old.txt".into()),
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains("\"oldPath\":\"/repo/old.txt\""), "renamed 条目 oldPath 应为旧路径: {json}");
     }
 
     // ---- 行级 diff 精确性测试（line callback 逻辑） ----
     // 共用 compute_diff_hunks 生产函数（见上文 pub(crate) fn），测试直调无需副本。
+
+    // ---- CV-BE-02: GitStatusEntry oldPath 重命名检测（git mv 真实构造） ----
+
+    #[test]
+    fn git_status_renamed_has_old_path() {
+        let (_dir, path) = init_temp_repo();
+        // commit 文件后用 git mv 重命名（blob 相同 → git2 rename 检测识别）
+        commit_file(&path, "old_name.txt", "identical content");
+        Command::new("git")
+            .args(["mv", "old_name.txt", "new_name.txt"])
+            .current_dir(&path)
+            .output()
+            .unwrap();
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let mut opts = git2::StatusOptions::new();
+        opts.include_untracked(true)
+            .renames_head_to_index(true)
+            .renames_index_to_workdir(true);
+        let statuses = repo.statuses(Some(&mut opts)).unwrap();
+
+        let workdir = dunce::simplified(repo.workdir().unwrap());
+        let expected_old = workdir
+            .join("old_name.txt")
+            .to_string_lossy()
+            .replace('\\', "/");
+
+        // 查找 renamed 条目
+        let renamed: Vec<_> = statuses.iter()
+            .filter(|e| {
+                let s = e.status();
+                s.contains(git2::Status::INDEX_RENAMED) || s.contains(git2::Status::WT_RENAMED)
+            })
+            .collect();
+
+        assert!(!renamed.is_empty(), "git mv 后应检测到 renamed 条目");
+        for entry in &renamed {
+            let status_flag = entry.status();
+            let old_path = if status_flag.contains(git2::Status::INDEX_RENAMED) {
+                entry.head_to_index().and_then(|delta| {
+                    delta.old_file().path().map(|p| {
+                        workdir.join(p).to_string_lossy().replace('\\', "/")
+                    })
+                })
+            } else if status_flag.contains(git2::Status::WT_RENAMED) {
+                entry.index_to_workdir().and_then(|delta| {
+                    delta.old_file().path().map(|p| {
+                        workdir.join(p).to_string_lossy().replace('\\', "/")
+                    })
+                })
+            } else {
+                None
+            };
+            assert_eq!(old_path.as_deref(), Some(&expected_old[..]),
+                "renamed 条目的 oldPath 应为旧绝对路径");
+        }
+    }
+
+    #[test]
+    fn git_status_non_renamed_old_path_is_none() {
+        let (_dir, path) = init_temp_repo();
+        // modified 文件 —— 非 renamed
+        commit_file(&path, "test.txt", "original");
+        fs::write(path.join("test.txt"), "modified content").unwrap();
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let mut opts = git2::StatusOptions::new();
+        opts.include_untracked(true).renames_head_to_index(true).renames_index_to_workdir(true);
+        let statuses = repo.statuses(Some(&mut opts)).unwrap();
+
+        let workdir = dunce::simplified(repo.workdir().unwrap());
+
+        for entry in statuses.iter() {
+            let status_flag = entry.status();
+            if status_flag.contains(git2::Status::INDEX_RENAMED)
+                || status_flag.contains(git2::Status::WT_RENAMED)
+            {
+                continue; // 跳过 renamed 条目（如预期不应存在）
+            }
+            // 非 renamed 条目 oldPath 应为 None
+            let old_path = if status_flag.contains(git2::Status::INDEX_RENAMED) {
+                entry.head_to_index().and_then(|delta| {
+                    delta.old_file().path().map(|p| {
+                        workdir.join(p).to_string_lossy().replace('\\', "/")
+                    })
+                })
+            } else if status_flag.contains(git2::Status::WT_RENAMED) {
+                entry.index_to_workdir().and_then(|delta| {
+                    delta.old_file().path().map(|p| {
+                        workdir.join(p).to_string_lossy().replace('\\', "/")
+                    })
+                })
+            } else {
+                None
+            };
+            assert!(old_path.is_none(), "非 renamed 条目 oldPath 应为 None");
+        }
+    }
 
     #[test]
     fn line_callback_single_modified_line() {
@@ -1726,5 +1970,95 @@ mod tests {
         let cache = std::sync::Mutex::new(std::collections::HashMap::new());
         let result = super::get_or_open_repo(&cache, &bare_path.to_string_lossy(), &None);
         assert!(result.is_err(), "bare repo 无 workdir 应返回错误");
+    }
+
+    // ---- CV-BE-03: git_file_at_head 测试 ----
+
+    /// 用 compute_file_at_head 辅助函数直接测 Tree 读取逻辑
+    fn read_file_at_head(repo: &git2::Repository, file_path: &std::path::Path) -> Result<String, AppError> {
+        let tree = repo.head()
+            .map_err(|e| AppError::Git(format!("{}", e)))?
+            .peel_to_tree()
+            .map_err(|e| AppError::Git(format!("{}", e)))?;
+
+        let workdir = dunce::simplified(
+            repo.workdir()
+                .ok_or_else(|| AppError::Git("bare repo".to_string()))?,
+        );
+        let rel = file_path
+            .strip_prefix(workdir)
+            .unwrap_or(file_path)
+            .to_string_lossy()
+            .replace('\\', "/");
+
+        let entry = tree.get_path(std::path::Path::new(&rel))
+            .map_err(|e| AppError::Git(format!("not found: {e}")))?;
+
+        let blob = entry.to_object(repo)
+            .map_err(|e| AppError::Git(format!("{}", e)))?
+            .peel_to_blob()
+            .map_err(|e| AppError::Git(format!("{}", e)))?;
+
+        Ok(String::from_utf8_lossy(blob.content()).to_string())
+    }
+
+    #[test]
+    fn git_file_at_head_reads_content() {
+        let (_dir, path) = init_temp_repo();
+        commit_file(&path, "readme.md", "# Hello\n\nWorld\n");
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let content = read_file_at_head(&repo, &path.join("readme.md")).unwrap();
+        assert_eq!(content, "# Hello\n\nWorld\n");
+    }
+
+    #[test]
+    fn git_file_at_head_unborn_branch_err() {
+        let (_dir, path) = init_temp_repo();
+        // 空仓库无 commit → UnbornBranch
+        let repo = git2::Repository::open(&path).unwrap();
+        let result = repo.head();
+        match result {
+            Err(e) if e.code() == git2::ErrorCode::UnbornBranch => {
+                // 预期：HEAD 不存在
+            }
+            _ => panic!("空仓库应返回 UnbornBranch"),
+        }
+    }
+
+    #[test]
+    fn git_file_at_head_file_not_in_tree() {
+        let (_dir, path) = init_temp_repo();
+        commit_file(&path, "existing.txt", "present");
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let result = read_file_at_head(&repo, &path.join("nonexistent.txt"));
+        assert!(result.is_err(), "不存在的文件应返回错误");
+        let err = result.unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("not found") || msg.contains("HEAD"),
+            "错误消息应指出文件不存在，实际: {msg}"
+        );
+    }
+
+    #[test]
+    fn git_file_at_head_subdirectory_file() {
+        let (_dir, path) = init_temp_repo();
+        // 在子目录中创建并 commit 文件
+        let sub = path.join("src").join("lib");
+        fs::create_dir_all(&sub).unwrap();
+        let file_path = sub.join("mod.rs");
+        fs::write(&file_path, "pub fn hello() {}").unwrap();
+        git_add(&path, "src/lib/mod.rs");
+        Command::new("git")
+            .args(["commit", "-m", "add nested"])
+            .current_dir(&path)
+            .output()
+            .unwrap();
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let content = read_file_at_head(&repo, &file_path).unwrap();
+        assert_eq!(content, "pub fn hello() {}");
     }
 }

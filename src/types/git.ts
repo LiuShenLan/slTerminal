@@ -6,6 +6,11 @@ export interface GitStatusEntry {
   path: string;
   /** git 状态：modified | added | deleted | renamed | untracked | conflict | ignored */
   status: string;
+  /**
+   * 重命名前的旧绝对路径（仅 status === "renamed" 时有值，其它状态为 null）
+   * 格式与 path 一致（正斜杠分隔的绝对路径）
+   */
+  oldPath: string | null;
 }
 
 /** diff hunk 信息（old = HEAD, new = 工作区） */

@@ -16,3 +16,14 @@ export async function gitDiff(
 ): Promise<DiffHunk[]> {
   return invoke<DiffHunk[]>("git_diff", { repoPath, filePath });
 }
+
+/**
+ * 获取指定文件在 HEAD commit 中的内容（只读 blob）
+ * 仓库尚无提交或文件不在 HEAD → invoke 抛出 AppError::Git，消息含"HEAD 中不存在"
+ */
+export async function gitFileAtHead(
+  repoPath: string,
+  filePath: string,
+): Promise<string> {
+  return invoke<string>("git_file_at_head", { repoPath, filePath });
+}

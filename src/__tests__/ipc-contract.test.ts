@@ -621,6 +621,39 @@ describe('git IPC 合约', () => {
 
     await expect(git.gitDiff('C:\\empty', 'f.txt')).rejects.toThrow('unborn branch');
   });
+
+  it('gitFileAtHead: 应调用 git_file_at_head 命令，参数包含 repoPath 和 filePath', async () => {
+    const spy = vi.fn();
+    mockIPC((cmd, args) => {
+      spy(cmd, args);
+      if (cmd === 'git_file_at_head') return 'HEAD 文件内容';
+    });
+
+    const content = await git.gitFileAtHead('C:\\repo', 'C:\\repo\\src\\main.rs');
+
+    expect(content).toBe('HEAD 文件内容');
+    expect(spy).toHaveBeenCalledWith('git_file_at_head', {
+      repoPath: 'C:\\repo',
+      filePath: 'C:\\repo\\src\\main.rs',
+    });
+  });
+
+  it('gitFileAtHead: 返回 HEAD 文件内容字符串', async () => {
+    mockIPC((cmd) => {
+      if (cmd === 'git_file_at_head') return 'line1\nline2\nline3\n';
+    });
+
+    const content = await git.gitFileAtHead('C:\\repo', 'C:\\repo\\f.txt');
+    expect(content).toBe('line1\nline2\nline3\n');
+  });
+
+  it('gitFileAtHead: invoke 失败时异常应传播', async () => {
+    mockIPC((cmd) => {
+      if (cmd === 'git_file_at_head') throw new Error('文件在 HEAD 中不存在');
+    });
+
+    await expect(git.gitFileAtHead('C:\\repo', 'C:\\repo\\ghost.txt')).rejects.toThrow('文件在 HEAD 中不存在');
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════
