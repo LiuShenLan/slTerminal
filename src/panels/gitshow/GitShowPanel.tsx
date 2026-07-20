@@ -2,14 +2,15 @@
 //
 // 通过 gitFileAtHead 获取文件在 HEAD commit 中的内容，用 CM6 只读模式展示。
 // 三态：loading → content / error（"该文件在 HEAD 中不存在"）。
-// CM6 只读：EditorState.readOnly.of(true) + EditorView.editable.of(false)。
+// CM6 只读：EditorState.readOnly.of(true)——状态层阻止编辑，编辑器保持可聚焦（支持搜索和快捷键）。
 // 大文件阈值从 useCodeMirror 复用，禁止新造数值。
 
-import React, { useRef, useState, useEffect } from "react";
-import { EditorView } from "@codemirror/view";
-import { EditorState } from "@codemirror/state";
+import React, { useRef, useState, useEffect, useCallback, useMemo } from "react";
+import { EditorView, keymap } from "@codemirror/view";
+import { EditorState, Compartment } from "@codemirror/state";
 import { basicSetup } from "codemirror";
 import { oneDark } from "@codemirror/theme-one-dark";
+import { search, searchKeymap, highlightSelectionMatches } from "@codemirror/search";
 import { gitFileAtHead } from "../../ipc/git";
 import { getLanguageExtension } from "../editor/useCodeMirror";
 import {
@@ -18,6 +19,10 @@ import {
   createEditorFontExtension,
 } from "../editor/useCodeMirror";
 import { useFontSize } from "../../stores";
+import { useFontSizeWheel } from "../../lib/useFontSizeWheel";
+import { FONT_SIZE_MIN, FONT_SIZE_MAX } from "../../stores/fontSize";
+import { usePanelFocus } from "../../features/shortcuts";
+import { setActiveEditor, clearActiveEditor, type EditorActions } from "../editor/activeEditor";
 import { EDITOR_BG, ERROR_FG, HTML_PANEL_LOADING_FG, PANEL_BG } from "../../theme";
 
 /** GitShowPanel 接收的面板参数 */
@@ -62,6 +67,25 @@ const GitShowPanel: React.FC<GitShowPanelProps> = ({ params }) => {
   const viewRef = useRef<EditorView | null>(null);
   const [state, setState] = useState<LoadState>({ kind: "loading" });
   const editorFontSize = useFontSize((s) => s.editorFontSize);
+  const setEditorFontSize = useFontSize((s) => s.setEditorFontSize);
+  const fontSizeRef = useRef(editorFontSize);
+  fontSizeRef.current = editorFontSize;
+
+  // callback ref：div 条件渲染（仅 content 态挂载），ref 在 commit 后才赋值，
+  // 导致 render 期间 containerRef.current 恒为 null。callback ref + 额外重渲染
+  // 让 useFontSizeWheel / usePanelFocus 在容器可用后以非 null 值执行。
+  const [, setRenderKey] = useState(0);
+  const setContainerRef = useCallback((el: HTMLDivElement | null) => {
+    if (el && !containerRef.current) {
+      containerRef.current = el;
+      setRenderKey((k) => k + 1);
+    }
+  }, []);
+
+  // Compartments：字体/自动换行热切换（不销毁重建 EditorView）
+  const fontCompartment = useRef(new Compartment());
+  const wrapCompartment = useRef(new Compartment());
+  const wordWrapRef = useRef(false);
 
   // 加载 HEAD 文件内容
   useEffect(() => {
@@ -119,10 +143,17 @@ const GitShowPanel: React.FC<GitShowPanelProps> = ({ params }) => {
           oneDark,
           // .cm-editor 高度→.cm-scroller height:100%约束→溢出→滚动条（同 editor）
           EditorView.theme({ "&": { height: "100%" } }),
-          createEditorFontExtension(editorFontSize),
-          // 只读：不可编辑 + 光标不可见
+          // 字体/自动换行用 Compartment 热切换，不销毁重建 EditorView
+          fontCompartment.current.of(createEditorFontExtension(editorFontSize)),
+          wrapCompartment.current.of([]), // 默认关闭自动换行
+          // 搜索（Ctrl+F/G/Shift+Ctrl+G）——basicSetup 含 searchKeymap 但不含面板 UI
+          search({ top: true }),
+          highlightSelectionMatches(),
+          keymap.of([...searchKeymap]),
+          // 只读：不可编辑（readOnly 阻止内容修改；不用 editable.of(false)，
+          // 后者设 contentEditable=false 会导致编辑器不可聚焦，
+          // 进而 CM6 键绑定（Ctrl+F/G）和 usePanelFocus（Alt+Z）全部失效）
           EditorState.readOnly.of(true),
-          EditorView.editable.of(false),
           getLanguageExtension(params.filePath),
         ],
       }),
@@ -135,7 +166,45 @@ const GitShowPanel: React.FC<GitShowPanelProps> = ({ params }) => {
       newView.destroy();
       viewRef.current = null;
     };
-  }, [state.kind, params.filePath, editorFontSize]);
+  }, [state.kind, params.filePath]);
+
+  // 字体 Compartment 热切换：字号变化时仅 reconfigure，不销毁重建 EditorView
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({
+      effects: fontCompartment.current.reconfigure(
+        createEditorFontExtension(editorFontSize),
+      ),
+    });
+  }, [editorFontSize]);
+
+  // Ctrl+滚轮调节字体大小（共享 hook，含 Mac Cmd+Wheel）
+  useFontSizeWheel(containerRef.current, FONT_SIZE_MIN, FONT_SIZE_MAX, fontSizeRef, setEditorFontSize);
+
+  // Alt+Z 自动换行切换（通过 ShortcutRegistry → getActiveEditor() 派发）
+  const toggleWordWrap = useCallback(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    const wrapping = wordWrapRef.current;
+    view.dispatch({
+      effects: wrapCompartment.current.reconfigure(
+        wrapping ? [] : EditorView.lineWrapping,
+      ),
+    });
+    wordWrapRef.current = !wrapping;
+  }, []);
+
+  const editorActions = useMemo<EditorActions>(
+    () => ({
+      save: () => {}, // no-op：只读面板无保存操作
+      toggleWordWrap,
+    }),
+    [toggleWordWrap],
+  );
+  const activateEditor = useCallback(() => setActiveEditor(editorActions), [editorActions]);
+  const deactivateEditor = useCallback(() => clearActiveEditor(editorActions), [editorActions]);
+  usePanelFocus("editor", containerRef.current, activateEditor, deactivateEditor);
 
   if (state.kind === "loading") {
     return (
@@ -155,7 +224,7 @@ const GitShowPanel: React.FC<GitShowPanelProps> = ({ params }) => {
     );
   }
 
-  return <div ref={containerRef} style={cmContainerStyle} />;
+  return <div ref={setContainerRef} style={cmContainerStyle} />;
 };
 
 export default GitShowPanel;

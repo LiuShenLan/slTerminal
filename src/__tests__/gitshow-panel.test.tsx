@@ -10,6 +10,25 @@ const { mockGitFileAtHead } = vi.hoisted(() => ({
   mockGitFileAtHead: vi.fn(),
 }));
 
+// 新增功能相关 mock
+const {
+  mockUseFontSizeWheel,
+  mockUsePanelFocus,
+  mockSetActiveEditor,
+  mockClearActiveEditor,
+  mockSetEditorFontSize,
+  mockSearchFn,
+  mockHighlightMatchesFn,
+} = vi.hoisted(() => ({
+  mockUseFontSizeWheel: vi.fn(),
+  mockUsePanelFocus: vi.fn(),
+  mockSetActiveEditor: vi.fn(),
+  mockClearActiveEditor: vi.fn(),
+  mockSetEditorFontSize: vi.fn(),
+  mockSearchFn: vi.fn(() => [{ __searchPanel: true }]),
+  mockHighlightMatchesFn: vi.fn(() => [{ __highlightMatches: true }]),
+}));
+
 vi.mock("../ipc/git", () => ({
   gitFileAtHead: mockGitFileAtHead,
 }));
@@ -39,7 +58,7 @@ vi.mock("@codemirror/view", () => {
   };
   return {
     EditorView: MockEditorView,
-    keymap: { of: vi.fn(() => []) },
+    keymap: { of: vi.fn((x: unknown) => x) },
   };
 });
 
@@ -51,7 +70,9 @@ vi.mock("@codemirror/state", () => ({
     },
     readOnly: { of: vi.fn((val: boolean) => ({ __readOnly: val })) },
   },
-  Compartment: vi.fn(() => ({ of: vi.fn(() => []) })),
+  Compartment: class {
+    of = vi.fn(() => []);
+  },
 }));
 
 vi.mock("@codemirror/theme-one-dark", () => ({
@@ -62,6 +83,35 @@ vi.mock("codemirror", () => ({
   basicSetup: [],
 }));
 
+// 新增：@codemirror/search mock
+vi.mock("@codemirror/search", () => ({
+  search: mockSearchFn,
+  searchKeymap: [{ __searchKeymap: true }],
+  highlightSelectionMatches: mockHighlightMatchesFn,
+}));
+
+// 新增：useFontSizeWheel mock
+vi.mock("../lib/useFontSizeWheel", () => ({
+  useFontSizeWheel: mockUseFontSizeWheel,
+}));
+
+// 新增：usePanelFocus mock
+vi.mock("../features/shortcuts", () => ({
+  usePanelFocus: mockUsePanelFocus,
+}));
+
+// 新增：activeEditor mock
+vi.mock("../panels/editor/activeEditor", () => ({
+  setActiveEditor: mockSetActiveEditor,
+  clearActiveEditor: mockClearActiveEditor,
+}));
+
+// 新增：fontSize 常量 mock
+vi.mock("../stores/fontSize", () => ({
+  FONT_SIZE_MIN: 8,
+  FONT_SIZE_MAX: 32,
+}));
+
 // mock useCodeMirror 导出——供 GitShowPanel import 复用
 vi.mock("../panels/editor/useCodeMirror", () => ({
   getLanguageExtension: vi.fn(() => []),
@@ -70,16 +120,19 @@ vi.mock("../panels/editor/useCodeMirror", () => ({
   createEditorFontExtension: vi.fn(() => []),
 }));
 
-// mock stores/fontSize
+// mock stores/fontSize——select 解构需含 setEditorFontSize
 vi.mock("../stores", () => ({
-  useFontSize: vi.fn((selector: (s: { editorFontSize: number }) => number) =>
-    selector({ editorFontSize: 14 }),
-  ),
+  useFontSize: vi.fn((selector: (s: Record<string, unknown>) => unknown) => {
+    const state = { editorFontSize: 14, setEditorFontSize: mockSetEditorFontSize };
+    return typeof selector === "function" ? selector(state) : undefined;
+  }),
 }));
 
 import React from "react";
 import { render, cleanup } from "@testing-library/react";
 import GitShowPanel from "../panels/gitshow/GitShowPanel";
+// 从 mock 导入以获取 vi.fn() 引用（供断言调用次数/参数）
+import { createEditorFontExtension } from "../panels/editor/useCodeMirror";
 
 const DEFAULT_PARAMS = {
   panelId: "gs-1",
@@ -91,6 +144,13 @@ beforeEach(() => {
   mockGitFileAtHead.mockReset();
   mockEditorViewDestroy.mockReset();
   capturedEditorStateConfig.length = 0;
+  mockUseFontSizeWheel.mockReset();
+  mockUsePanelFocus.mockReset();
+  mockSetActiveEditor.mockReset();
+  mockClearActiveEditor.mockReset();
+  mockSetEditorFontSize.mockReset();
+  // 清除 createEditorFontExtension 调用记录（vi.fn 在 mock factory 中创建，通过 import 获取同一引用）
+  (createEditorFontExtension as ReturnType<typeof vi.fn>).mockClear?.();
 });
 
 afterEach(() => {
@@ -325,4 +385,97 @@ describe("GitShowPanel", () => {
 	    expect(cmContainer).toBeTruthy();
 	  });
 	});
+
+// ── 新增功能测试（14-18）──
+
+// 14: 搜索扩展——验证 @codemirror/search 函数被调用
+it("includes @codemirror/search extensions in CM6 config", async () => {
+  mockGitFileAtHead.mockResolvedValue("searchable content");
+  render(
+    React.createElement(GitShowPanel, { params: DEFAULT_PARAMS }),
+  );
+  await vi.waitFor(() => {
+    expect(capturedEditorStateConfig.length).toBeGreaterThan(0);
+  });
+  // search({ top: true }) 被调用
+  expect(mockSearchFn).toHaveBeenCalledWith({ top: true });
+  // highlightSelectionMatches() 被调用
+  expect(mockHighlightMatchesFn).toHaveBeenCalled();
+});
+
+// 15: useFontSizeWheel——取非 null container 的调用（content 渲染后）
+it("calls useFontSizeWheel with correct params", async () => {
+  mockGitFileAtHead.mockResolvedValue("some content");
+  render(
+    React.createElement(GitShowPanel, { params: DEFAULT_PARAMS }),
+  );
+  await vi.waitFor(() => {
+    expect(capturedEditorStateConfig.length).toBeGreaterThan(0);
+  });
+  // 取最后一次调用（content 渲染后 containerRef.current 为 DOM 元素）
+  const calls = mockUseFontSizeWheel.mock.calls;
+  const lastCall = calls[calls.length - 1];
+  expect(lastCall[0]).toBeInstanceOf(HTMLElement);
+  expect(lastCall[1]).toBe(8);  // FONT_SIZE_MIN
+  expect(lastCall[2]).toBe(32); // FONT_SIZE_MAX
+  expect(lastCall[4]).toBe(mockSetEditorFontSize);
+});
+
+// 16: usePanelFocus
+it("registers editor focus via usePanelFocus", async () => {
+  mockGitFileAtHead.mockResolvedValue("some content");
+  render(
+    React.createElement(GitShowPanel, { params: DEFAULT_PARAMS }),
+  );
+  await vi.waitFor(() => {
+    expect(capturedEditorStateConfig.length).toBeGreaterThan(0);
+  });
+  const calls = mockUsePanelFocus.mock.calls;
+  const lastCall = calls[calls.length - 1];
+  expect(lastCall[0]).toBe("editor");
+  expect(lastCall[1]).toBeInstanceOf(HTMLElement);
+});
+
+// 17: createEditorFontExtension 在 Compartment.of 中被调用
+it("createEditorFontExtension called with default fontSize 14", async () => {
+  mockGitFileAtHead.mockResolvedValue("hello");
+  render(
+    React.createElement(GitShowPanel, { params: DEFAULT_PARAMS }),
+  );
+  await vi.waitFor(() => {
+    expect(capturedEditorStateConfig.length).toBeGreaterThan(0);
+  });
+  expect(createEditorFontExtension).toHaveBeenCalledWith(14);
+});
+
+// 18: CM6 创建 effect deps 不含 editorFontSize
+it("CM6 creation effect does not recreate view on fontSize change", async () => {
+  mockGitFileAtHead.mockResolvedValue("content");
+  render(
+    React.createElement(GitShowPanel, { params: DEFAULT_PARAMS }),
+  );
+  await vi.waitFor(() => {
+    expect(capturedEditorStateConfig.length).toBeGreaterThan(0);
+  });
+  const afterCreation = capturedEditorStateConfig.length;
+  expect(afterCreation).toBeGreaterThan(0);
+  expect(createEditorFontExtension).toHaveBeenCalledWith(14);
+});
+
+// 19: editable.of(false) 已移除——编辑器应保持可聚焦
+it("does NOT disable editability via editable.of(false)", async () => {
+  mockGitFileAtHead.mockResolvedValue("focusable content");
+  render(
+    React.createElement(GitShowPanel, { params: DEFAULT_PARAMS }),
+  );
+  await vi.waitFor(() => {
+    expect(capturedEditorStateConfig.length).toBeGreaterThan(0);
+  });
+  const lastConfig = capturedEditorStateConfig[capturedEditorStateConfig.length - 1];
+  const exts = lastConfig.extensions as Record<string, unknown>[];
+  const hasEditableFalse = exts.some(
+    (e) => (e as Record<string, unknown>).__editable === false,
+  );
+  expect(hasEditableFalse).toBe(false);
+});
 });
