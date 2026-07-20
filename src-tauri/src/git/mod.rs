@@ -459,6 +459,7 @@ mod tests {
     use std::process::Command;
     use super::{DiffHunk, GitStatusEntry, compute_diff_hunks};
     use crate::AppError;
+    use crate::state::validate_path_within_root;
 
     /// 在临时目录中 init 一个 git 仓库，返回 tempdir（自动清理）和路径
     fn init_temp_repo() -> (tempfile::TempDir, std::path::PathBuf) {
@@ -2060,5 +2061,32 @@ mod tests {
         let repo = git2::Repository::open(&path).unwrap();
         let content = read_file_at_head(&repo, &file_path).unwrap();
         assert_eq!(content, "pub fn hello() {}");
+    }
+
+    /// 已删除文件：validate_path_within_root 放行 + read_file_at_head 查到 HEAD 内容
+    #[test]
+    fn git_file_at_head_deleted_file_roundtrip() {
+        let (_dir, path) = init_temp_repo();
+        commit_file(&path, "will_delete.txt", "content before deletion\n");
+
+        let file_path = path.join("will_delete.txt");
+        // 物理删除文件
+        std::fs::remove_file(&file_path).unwrap();
+        assert!(!file_path.exists(), "前置：文件应已删除");
+
+        // ① validate_path_within_root 对已删除路径应放行
+        let validation = validate_path_within_root(
+            &Some(path.clone()),
+            &file_path,
+        );
+        assert!(
+            validation.is_ok(),
+            "已删除文件路径应通过沙箱校验，实际: {validation:?}"
+        );
+
+        // ② read_file_at_head 应成功返回 HEAD 中的原始内容
+        let repo = git2::Repository::open(&path).unwrap();
+        let content = read_file_at_head(&repo, &file_path).unwrap();
+        assert_eq!(content, "content before deletion\n");
     }
 }

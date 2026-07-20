@@ -95,10 +95,45 @@ impl AppState {
     }
 }
 
+/// 对路径做 canonicalize；若路径不存在则上溯到最近存在的祖先目录，
+/// canonicalize 后再拼接不存在的剩余部分。
+fn canonicalize_or_ancestor(target: &Path) -> std::io::Result<PathBuf> {
+    match dunce::canonicalize(target) {
+        Ok(canonical) => Ok(canonical),
+        Err(_) => {
+            // 上溯到最近存在的祖先
+            let mut current = target.to_path_buf();
+            let mut remainder: Vec<std::ffi::OsString> = Vec::new();
+            while !current.exists() {
+                if let Some(name) = current.file_name() {
+                    remainder.push(name.to_os_string());
+                }
+                match current.parent() {
+                    Some(parent) => current = parent.to_path_buf(),
+                    None => {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::NotFound,
+                            "无法定位目标路径的任何存在祖先",
+                        ));
+                    }
+                }
+            }
+            // 此时 current 存在，对其 canonicalize
+            let canonical_ancestor = dunce::canonicalize(&current)?;
+            // 拼接剩余部分（逆序还原）
+            let mut result = canonical_ancestor;
+            for component in remainder.into_iter().rev() {
+                result = result.join(component);
+            }
+            Ok(result)
+        }
+    }
+}
+
 /// 验证目标路径是否在项目根目录子树内（路径 sandbox）
 ///
 /// 相对路径先以 project_root 为基准 join 成绝对路径，再 dunce::canonicalize。
-/// 目标不存在时拒绝（不再做"上溯到存在祖先 + join + starts_with"的词法比较）。
+/// 目标不存在时上溯到最近存在的祖先目录，canonicalize 后再拼接剩余部分做校验。
 /// project_root 未设置时拒绝（#[cfg(test)] 豁免，避免每个测试都需设置 project_root）。
 pub fn validate_path_within_root(root_opt: &Option<PathBuf>, target: &Path) -> Result<(), AppError> {
     let root = match root_opt {
@@ -126,10 +161,10 @@ pub fn validate_path_within_root(root_opt: &Option<PathBuf>, target: &Path) -> R
         target.to_path_buf()
     };
 
-    // 直接 canonicalize 目标，失败则拒绝（不再上溯祖先做词法比较）
-    let canonical_target = dunce::canonicalize(&target).map_err(|_| AppError::IoKind {
+    // canonicalize 目标；不存在时上溯到最近存在的祖先再拼接
+    let canonical_target = canonicalize_or_ancestor(&target).map_err(|_| AppError::IoKind {
         kind: "path".into(),
-        message: "目标路径不存在或无法解析".into(),
+        message: "目标路径不在项目范围内或无法解析".into(),
     })?;
 
     if !canonical_target.starts_with(&canonical_root) {
@@ -316,9 +351,9 @@ mod sandbox_tests {
         assert!(msg.contains("超出项目范围"), "错误消息应含'超出项目范围'");
     }
 
-    /// 目标路径不存在 → 新语义拒绝（不再上溯祖先做词法比较）
+    /// 目标路径不存在（根内） → 上溯到最近存在的祖先后放行
     #[test]
-    fn validate_nonexistent_path_rejected() {
+    fn validate_nonexistent_path_accepted() {
         let root = tempfile::tempdir().unwrap();
         // 创建一个已存在的父目录，再指向其中不存在的文件
         let parent = root.path().join("existing_parent");
@@ -329,9 +364,7 @@ mod sandbox_tests {
             &Some(root.path().to_path_buf()),
             &nonexistent,
         );
-        assert!(result.is_err(), "不存在的路径应拒绝（不再做祖先上溯）");
-        let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("不存在") || msg.contains("无法解析"), "错误消息应提示路径不存在");
+        assert!(result.is_ok(), "根内不存在的路径应上溯到祖先后放行");
     }
 
     /// 不存在的路径在根外 → 沿父级上溯后仍在根外，应拒绝
@@ -421,5 +454,164 @@ mod sandbox_tests {
             std::path::Path::new("Z:\\nonexistent_drive\\root\\file.txt"),
         );
         assert!(result.is_err(), "根 canonicalize 失败应返回 Err");
+    }
+
+    // ---- canonicalize_or_ancestor 纯函数测试 ----
+
+    /// 已存在文件直接 canonicalize
+    #[test]
+    fn canonicalize_or_ancestor_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("real.txt");
+        std::fs::write(&file, "data").unwrap();
+
+        let result = canonicalize_or_ancestor(&file).unwrap();
+        let expected = dunce::canonicalize(&file).unwrap();
+        assert_eq!(result, expected, "已存在文件应直接 canonicalize");
+    }
+
+    /// 仅叶子不存在 → 上溯到父目录后拼接
+    #[test]
+    fn canonicalize_or_ancestor_one_level_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("sub")).unwrap();
+        let missing = dir.path().join("sub").join("ghost.txt");
+
+        let result = canonicalize_or_ancestor(&missing).unwrap();
+        // 结果应在 dir 子树内
+        let canonical_dir = dunce::canonicalize(dir.path()).unwrap();
+        assert!(
+            result.starts_with(&canonical_dir),
+            "拼接后路径应在 root 内，实际: {result:?}"
+        );
+        assert!(
+            result.ends_with("ghost.txt"),
+            "应以缺失文件名结尾，实际: {result:?}"
+        );
+    }
+
+    /// 多层不存在 → 上溯到最近存在祖先后逐层拼接
+    #[test]
+    fn canonicalize_or_ancestor_deep_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let existing = dir.path().join("base");
+        std::fs::create_dir(&existing).unwrap();
+        let deep_missing = existing.join("a").join("b").join("c").join("deep.txt");
+
+        let result = canonicalize_or_ancestor(&deep_missing).unwrap();
+        assert!(result.ends_with("deep.txt"), "应以文件名结尾");
+        // 中间路径组件应保留（b/c/deep.txt 的祖先是 base → canonicalize 后拼接 a/b/c/deep.txt）
+        let result_str = result.to_string_lossy();
+        assert!(result_str.contains("a"), "应保留中间层 a");
+        assert!(result_str.contains("b"), "应保留中间层 b");
+    }
+
+    /// root 本身就是最近存在祖先
+    #[test]
+    fn canonicalize_or_ancestor_root_itself_is_ancestor() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("orphan.txt");
+
+        let result = canonicalize_or_ancestor(&missing).unwrap();
+        let canonical_root = dunce::canonicalize(dir.path()).unwrap();
+        assert_eq!(result, canonical_root.join("orphan.txt"));
+    }
+
+    /// 路径包含 .. 逃逸 → 上溯祖先后 canonicalize 解析真实位置
+    #[test]
+    fn canonicalize_or_ancestor_path_traversal_via_dotdot() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        // root/sub 存在
+        std::fs::create_dir_all(root.path().join("sub")).unwrap();
+        // 构造: root/sub/../../outside_tempdir/nonexistent.txt
+        // 上溯应找到 outside_tempdir（存在，但在 root 外）
+        let traversal = root
+            .path()
+            .join("sub")
+            .join("..")
+            .join("..")
+            .join(outside.path().file_name().unwrap())
+            .join("nonexistent.txt");
+
+        let result = canonicalize_or_ancestor(&traversal).unwrap();
+        // 最近存在祖先是 outside tempdir → canonicalize 后应解析到根外
+        let canonical_root = dunce::canonicalize(root.path()).unwrap();
+        assert!(
+            !result.starts_with(&canonical_root),
+            ".. 逃逸应使结果逃出 root，实际: {result:?}"
+        );
+    }
+
+    /// 祖先有符号链接 → canonicalize 解析 symlink 真实指向
+    #[cfg(windows)]
+    #[test]
+    fn canonicalize_or_ancestor_symlink_ancestor() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        // 在 root 内创建 symlink 指向外部目录
+        let link = root.path().join("link_to_outside");
+        let symlink_result = std::os::windows::fs::symlink_dir(&outside, &link);
+        if symlink_result.is_err() {
+            return; // 无权限，跳过
+        }
+        // link/exists.txt 存在，link/ghost.txt 不存在
+        std::fs::write(link.join("exists.txt"), "ok").unwrap();
+        let missing = link.join("ghost.txt");
+
+        let result = canonicalize_or_ancestor(&missing).unwrap();
+        // 上溯祖先 link.join("ghost.txt") → ghost.txt 不存在 → parent = link
+        // link 存在 → canonicalize → 解析到 outside 目录
+        // 再 join "ghost.txt" → outside/ghost.txt
+        let canonical_outside = dunce::canonicalize(outside.path()).unwrap();
+        assert_eq!(result, canonical_outside.join("ghost.txt"));
+    }
+
+    /// 所有祖先都不存在 → 返回 Err
+    #[test]
+    fn canonicalize_or_ancestor_no_ancestor_exists() {
+        let nonexistent = std::path::Path::new("Z:\\not_a_real_drive\\a\\b\\c.txt");
+        let result = canonicalize_or_ancestor(nonexistent);
+        assert!(result.is_err(), "无存在祖先时应返回 Err");
+    }
+
+    // ---- validate_path_within_root 新语义测试 ----
+
+    /// 多层不存在的目录结构在根内 → 放行
+    #[test]
+    fn validate_nonexistent_deep_path_accepted() {
+        let root = tempfile::tempdir().unwrap();
+        let existing = root.path().join("src");
+        std::fs::create_dir(&existing).unwrap();
+        let deep = existing.join("components").join("ui").join("NewFeature.tsx");
+
+        let result = validate_path_within_root(
+            &Some(root.path().to_path_buf()),
+            &deep,
+        );
+        assert!(result.is_ok(), "根内多层不存在路径应放行");
+    }
+
+    /// 不存在的路径含 .. 穿越到根外 → 拒绝
+    #[test]
+    fn validate_nonexistent_path_traversal_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        // root/sub 存在
+        std::fs::create_dir_all(root.path().join("sub")).unwrap();
+        // root/sub/../../outside_tempdir/nonexistent.txt
+        let traversal = root
+            .path()
+            .join("sub")
+            .join("..")
+            .join("..")
+            .join(outside.path().file_name().unwrap())
+            .join("ghost.txt");
+
+        let result = validate_path_within_root(
+            &Some(root.path().to_path_buf()),
+            &traversal,
+        );
+        assert!(result.is_err(), ".. 逃逸的不存在路径应拒绝");
     }
 }
