@@ -10,13 +10,17 @@ import React from "react";
 
 // ── mock 状态（vi.hoisted 确保模块级 mock 前就绪） ─────────
 
-const { mockGitFileAtHead, mockGitDiff, mockReadFile, mockWriteFile, mockOnFsEvent } = vi.hoisted(
+const { mockGitFileAtHead, mockGitDiff, mockReadFile, mockWriteFile, mockOnFsEvent,
+  mockUseFontSizeWheel, mockSetEditorFontSize, mockUsePanelFocus } = vi.hoisted(
   () => ({
     mockGitFileAtHead: vi.fn(),
     mockGitDiff: vi.fn(),
     mockReadFile: vi.fn(),
     mockWriteFile: vi.fn(),
     mockOnFsEvent: vi.fn(),
+    mockUseFontSizeWheel: vi.fn(),
+    mockSetEditorFontSize: vi.fn(),
+    mockUsePanelFocus: vi.fn(),
   }),
 );
 
@@ -38,13 +42,24 @@ vi.mock("../ipc/notify", () => ({
   onFsEvent: mockOnFsEvent,
 }));
 
+vi.mock("../lib/useFontSizeWheel", () => ({
+  useFontSizeWheel: mockUseFontSizeWheel,
+}));
+
+vi.mock("../stores/fontSize", () => ({
+  FONT_SIZE_MIN: 8,
+  FONT_SIZE_MAX: 32,
+}));
+
 vi.mock("../stores", () => ({
-  useFontSize: (selector: (s: { editorFontSize: number }) => unknown) =>
-    selector({ editorFontSize: 14 }),
+  useFontSize: (selector: (s: Record<string, unknown>) => unknown) => {
+    const state = { editorFontSize: 14, setEditorFontSize: mockSetEditorFontSize };
+    return typeof selector === "function" ? selector(state) : undefined;
+  },
 }));
 
 vi.mock("../features/shortcuts", () => ({
-  usePanelFocus: vi.fn(),
+  usePanelFocus: mockUsePanelFocus,
 }));
 
 vi.mock("../editor/activeEditor", () => ({
@@ -326,5 +341,87 @@ describe("DiffPanel", () => {
 
     // readFile 仅初始调用 1 次
     expect(mockReadFile).toHaveBeenCalledTimes(1);
+  });
+
+  // ── 新增：快捷键支持测试（12-15）────────────────────────────
+
+  // 12: 左栏不使用 editable.of(false)——验证编辑器可聚焦
+  it("left panel does NOT use editable.of(false)", async () => {
+    const { container } = render(
+      React.createElement(DiffPanel, { params: makeParams() }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
+    });
+    const leftContent = container
+      .querySelector('[data-e2e="diff-left"]')!
+      .querySelector(".cm-content") as HTMLElement;
+    expect(leftContent).toBeTruthy();
+    // editable.of(false) 会设 contentEditable="false"；
+    // 修复后应为 "true"（CM6 默认）或 "inherit"
+    expect(leftContent.contentEditable).not.toBe("false");
+  });
+
+  // 13: 左栏含搜索扩展——Ctrl+F 触发搜索面板出现
+  it("left panel includes search extensions (Ctrl+F opens search)", async () => {
+    const { container } = render(
+      React.createElement(DiffPanel, { params: makeParams() }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
+    });
+    // 搜索面板初始隐藏，需 Ctrl+F 触发
+    const leftContent = container
+      .querySelector('[data-e2e="diff-left"]')!
+      .querySelector(".cm-content") as HTMLElement;
+    expect(leftContent).toBeTruthy();
+    // 聚焦左栏内容区
+    leftContent.focus();
+    // 模拟 Ctrl+F
+    leftContent.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "f", ctrlKey: true, bubbles: true }),
+    );
+    // CM6 searchKeymap 应打开搜索面板
+    await waitFor(() => {
+      const leftEditor = container
+        .querySelector('[data-e2e="diff-left"]')!
+        .querySelector(".cm-editor");
+      const searchPanel = leftEditor?.querySelector(".cm-panel.cm-search");
+      expect(searchPanel).toBeTruthy();
+    });
+  });
+
+  // 14: useFontSizeWheel 左右各调用一次
+  it("calls useFontSizeWheel for both panels", async () => {
+    const { container } = render(
+      React.createElement(DiffPanel, { params: makeParams() }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
+    });
+    expect(mockUseFontSizeWheel).toHaveBeenCalled();
+    const calls = mockUseFontSizeWheel.mock.calls;
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    // 参数 2=8（FONT_SIZE_MIN），参数 3=32（FONT_SIZE_MAX）
+    expect(calls[0][1]).toBe(8);
+    expect(calls[0][2]).toBe(32);
+    expect(calls[1][1]).toBe(8);
+    expect(calls[1][2]).toBe(32);
+  });
+
+  // 15: usePanelFocus 注册左栏和右栏
+  it("usePanelFocus registers both left AND right containers", async () => {
+    const { container } = render(
+      React.createElement(DiffPanel, { params: makeParams() }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
+    });
+    expect(mockUsePanelFocus).toHaveBeenCalled();
+    const calls = mockUsePanelFocus.mock.calls;
+    // 至少两次调用：右栏 + 左栏
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    // 所有调用 context 参数均为 "editor"
+    calls.forEach((c) => expect(c[0]).toBe("editor"));
   });
 });

@@ -19,6 +19,7 @@ import {
   StateField,
   StateEffect,
   RangeSetBuilder,
+  Compartment,
 } from "@codemirror/state";
 import { basicSetup } from "codemirror";
 import { oneDark } from "@codemirror/theme-one-dark";
@@ -45,6 +46,8 @@ import {
 import { usePanelFocus } from "../../features/shortcuts";
 import { setActiveEditor, clearActiveEditor, type EditorActions } from "../editor/activeEditor";
 import { useFontSize } from "../../stores";
+import { useFontSizeWheel } from "../../lib/useFontSizeWheel";
+import { FONT_SIZE_MIN, FONT_SIZE_MAX } from "../../stores/fontSize";
 import { computeAlignment } from "./alignment";
 import { EDITOR_BG, ERROR_FG, HTML_PANEL_LOADING_FG, PANEL_BG, SEPARATOR_BG } from "../../theme";
 
@@ -166,6 +169,16 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ params }) => {
   const rightViewRef = useRef<EditorView | null>(null);
   const [state, setState] = useState<PanelState>({ kind: "loading" });
   const editorFontSize = useFontSize((s) => s.editorFontSize);
+  const setEditorFontSize = useFontSize((s) => s.setEditorFontSize);
+  const fontSizeRef = useRef(editorFontSize);
+  fontSizeRef.current = editorFontSize;
+
+  // Compartments：字体/自动换行热切换，左右栏各独立实例（CM6 Compartment 绑定到特定 EditorState，不能跨 view 共享）
+  const leftFontCompartment = useRef(new Compartment());
+  const rightFontCompartment = useRef(new Compartment());
+  const leftWrapCompartment = useRef(new Compartment());
+  const rightWrapCompartment = useRef(new Compartment());
+  const wordWrapRef = useRef(false);
 
   // 容器 DOM 元素状态捕获（同 EditorPanel 模式——ref 变化不触发渲染，需 state 桥接）
   const [rightContainer, setRightContainer] = useState<HTMLDivElement | null>(null);
@@ -370,17 +383,43 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ params }) => {
   const handleSaveRef = useRef(handleSave);
   handleSaveRef.current = handleSave;
 
-  // 注册为"当前聚焦编辑器"——Ctrl+S 走 editor.save 命令派发到这里
+  // 自动换行 toggle——左右栏同步
+  const toggleWordWrap = useCallback(() => {
+    const leftView = leftViewRef.current;
+    const rightView = rightViewRef.current;
+    const wrapping = wordWrapRef.current;
+    const ext = wrapping ? [] : EditorView.lineWrapping;
+    leftView?.dispatch({ effects: leftWrapCompartment.current.reconfigure(ext) });
+    rightView?.dispatch({ effects: rightWrapCompartment.current.reconfigure(ext) });
+    wordWrapRef.current = !wrapping;
+  }, []);
+
+  // 注册为"当前聚焦编辑器"——Ctrl+S/Alt+Z 走 editor 命令派发到这里
   const editorActions = useMemo<EditorActions>(
     () => ({
       save: () => { void handleSaveRef.current(); },
-      toggleWordWrap: () => { /* diff 面板不支持自动换行切换 */ },
+      toggleWordWrap,
     }),
-    [],
+    [toggleWordWrap],
   );
   const activateEditor = useCallback(() => setActiveEditor(editorActions), [editorActions]);
   const deactivateEditor = useCallback(() => clearActiveEditor(editorActions), [editorActions]);
   usePanelFocus("editor", rightContainer, activateEditor, deactivateEditor);
+
+  // 左栏也注册 focus——让 Alt+Z 在左栏聚焦时同样生效
+  const leftContainerEl = leftContainerRef.current;
+  usePanelFocus("editor", leftContainerEl, activateEditor, deactivateEditor);
+
+  // Ctrl+滚轮调节字体大小——左右栏容器各注册一次
+  useFontSizeWheel(leftContainerEl, FONT_SIZE_MIN, FONT_SIZE_MAX, fontSizeRef, setEditorFontSize);
+  useFontSizeWheel(rightContainer, FONT_SIZE_MIN, FONT_SIZE_MAX, fontSizeRef, setEditorFontSize);
+
+  // 字体 Compartment 热切换：字号变化时仅 reconfigure，不销毁重建 EditorView
+  useEffect(() => {
+    const ext = createEditorFontExtension(editorFontSize);
+    leftViewRef.current?.dispatch({ effects: leftFontCompartment.current.reconfigure(ext) });
+    rightViewRef.current?.dispatch({ effects: rightFontCompartment.current.reconfigure(ext) });
+  }, [editorFontSize]);
 
   // ── 右侧外部文件修改监听 ────────────────────────────────────
 
@@ -470,9 +509,12 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ params }) => {
           basicSetup,
           oneDark,
           EditorView.theme({ "&": { height: "100%" } }),
-          createEditorFontExtension(editorFontSize),
+          leftFontCompartment.current.of(createEditorFontExtension(editorFontSize)),
+          leftWrapCompartment.current.of([]),
+          search({ top: true }),
+          highlightSelectionMatches(),
+          keymap.of([...searchKeymap]),
           EditorState.readOnly.of(true),
-          EditorView.editable.of(false),
           getLanguageExtension(filePath),
           headDiffGutter(),
           placeholderField,
@@ -492,7 +534,7 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ params }) => {
       leftView.destroy();
       leftViewRef.current = null;
     };
-  }, [state.kind, state.kind === "ready" ? (state as { headContent: string }).headContent : null, editorFontSize, filePath]);
+  }, [state.kind, state.kind === "ready" ? (state as { headContent: string }).headContent : null, filePath]);
 
   // 右侧可编辑 CM（工作区）——内容变化时重建
   useEffect(() => {
@@ -512,7 +554,8 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ params }) => {
           basicSetup,
           oneDark,
           EditorView.theme({ "&": { height: "100%" } }),
-          createEditorFontExtension(editorFontSize),
+          rightFontCompartment.current.of(createEditorFontExtension(editorFontSize)),
+          rightWrapCompartment.current.of([]),
           search({ top: true }),
           highlightSelectionMatches(),
           keymap.of([...searchKeymap]),
@@ -545,7 +588,7 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ params }) => {
       rightView.destroy();
       rightViewRef.current = null;
     };
-  }, [state.kind, state.kind === "ready" ? (state as { workdirContent: string }).workdirContent : null, editorFontSize, filePath]);
+  }, [state.kind, state.kind === "ready" ? (state as { workdirContent: string }).workdirContent : null, filePath]);
 
   // ── 渲染 ─────────────────────────────────────────────────────
 
