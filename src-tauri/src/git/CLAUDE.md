@@ -26,11 +26,13 @@ renamed 条目（`INDEX_RENAMED` / `WT_RENAMED`）从 delta 的 `old_file()` 取
 
 参数：`(repo_path: String, file_path: String)`。返回 `Result<String, AppError>`。
 
-实现流程：① `validate_path_within_root` 校验 file_path（路径沙箱）；② 复用 `get_or_open_repo`（搜 file_path 所属仓库）；③ `spawn_blocking` 内：`repo.head()` → `peel_to_tree` → 按 workdir 相对路径取 blob → `String::from_utf8_lossy` 转字符串。
+实现流程：① `validate_path_within_root` 校验 file_path（路径沙箱——对已删除文件同样有效：`canonicalize_or_ancestor` 在路径不存在时上溯到最近存在的祖先目录后拼接校验）；② 复用 `get_or_open_repo`（搜 file_path 所属仓库）；③ `spawn_blocking` 内：`repo.head()` → `peel_to_tree` → 按 workdir 相对路径取 blob → `String::from_utf8_lossy` 转字符串。
 
 **HEAD 不存在错误约定**：`UnbornBranch`（仓库尚无提交）或文件不在 HEAD tree → `AppError::Git`，消息含 `"HEAD 中不存在"`。前端 catch 任意错误显示占位文案"该文件在 HEAD 中不存在"，不解析错误内容。
 
 **workdir strip**：用 `dunce::simplified`（8.3 短名坑，见下方测试工厂注释）。
+
+**已删除文件路径校验**：`validate_path_within_root`（`state.rs`）最初调用 `dunce::canonicalize(file_path)`，要求文件存在于磁盘上——已删除文件会被拒绝。已修改为 `canonicalize_or_ancestor`：路径不存在时上溯到最近存在的祖先目录，canonicalize 后再拼接剩余部分做校验。安全不变：祖先的 canonicalize 解析所有 symlink/`..` 穿越。
 
 ### 注册
 
@@ -38,7 +40,7 @@ renamed 条目（`INDEX_RENAMED` / `WT_RENAMED`）从 delta 的 `old_file()` 取
 
 ## 测试模式
 
-测试位于 `git/mod.rs` 的 `#[cfg(test)] mod tests`（70 用例），是 Rust 端最大的单文件测试模块。
+测试位于 `git/mod.rs` 的 `#[cfg(test)] mod tests`（71 用例），是 Rust 端最大的单文件测试模块。
 
 ### 测试工厂
 

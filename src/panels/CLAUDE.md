@@ -88,11 +88,16 @@ HTML 内容通过 `<iframe sandbox="allow-scripts" srcDoc={...}>` 渲染（**不
 - **安全权衡**：面板仅用于预览**可信本地 HTML**。代价是主应用全局失去 script 的 nonce 加固（`default-src 'self'` 仍拦远程脚本加载，`'unsafe-inline'` 只放行内联；当前无已知注入路径：xterm 只解释 ANSI、CodeMirror 纯文本、React 全程转义）。**勿收紧回严格 script-src——会静默破坏预览**（有 L2 `csp-config.test.ts` 守卫）。
 - **sandbox 不含 `allow-same-origin`**：去掉后 iframe 为 opaque origin，脚本仍通过 `'unsafe-inline'` 可执行（CSP 继承自父窗口，`script-src 'unsafe-inline'` 生效）。CSS `:target` 片段导航不再被 Tauri 注入的 React Router 劫持。
 
-### gitshow：CM6 只读 + HEAD 内容查看
+### gitshow：CM6 只读 + HEAD 内容查看 + 编辑器快捷键
 
-`GitShowPanel` 通过 `gitFileAtHead(repoPath, oldPath ?? filePath)` 获取文件在 HEAD commit 中的内容，用 CodeMirror 6 只读模式展示（`EditorState.readOnly.of(true)` + `EditorView.editable.of(false)`）。三态：loading → content / error（"该文件在 HEAD 中不存在"）。
+`GitShowPanel` 通过 `gitFileAtHead(repoPath, oldPath ?? filePath)` 获取文件在 HEAD commit 中的内容，用 CodeMirror 6 只读模式展示。三态：loading → content / error（"该文件在 HEAD 中不存在"）。
 
-- **只读不可编辑**：同时设置 `readOnly` + `editable`，光标不可见、键盘输入无效
+- **只读但可聚焦**：仅用 `EditorState.readOnly.of(true)` 阻止编辑；不使用 `EditorView.editable.of(false)`（后者设 `contentEditable=false` 会导致编辑器不可聚焦，CM6 内部键绑定和 ShortcutRegistry 全部失效）
+- **Ctrl+Wheel 字体缩放**：调用 `useFontSizeWheel`（`src/lib/useFontSizeWheel.ts`）共享 hook
+- **Ctrl+F/Ctrl+G 搜索**：扩展列表含 `search({top:true})` + `searchKeymap` + `highlightSelectionMatches`（`@codemirror/search`，`basicSetup` 不含此功能）
+- **Alt+Z 自动换行**：`wrapCompartment` + `toggleWordWrap`，通过 `usePanelFocus("editor")` → `setActiveEditor` → `ShortcutRegistry` 派发
+- **字号 Compartment 热切换**：`fontCompartment.reconfigure()` 替代硬编码 `createEditorFontExtension`，字号变化不销毁重建 EditorView
+- **callback ref 容器桥接**：`<div>` 在 content 态才挂载，`ref.current` 在 render 期间为 null。`useCallback` ref + `setRenderKey` 触发额外渲染，确保 `useFontSizeWheel`/`usePanelFocus` 在容器就绪后收到非 null DOM 元素
 - **大文件阈值复用**：从 `useCodeMirror` 导出 `MAX_FILE_SIZE_BYTES` / `LARGE_FILE_WARN_BYTES`，超限拒绝/警告。禁止新造数值
 - **错误契约**：catch 任意错误 → 占位文案"该文件在 HEAD 中不存在"，不解析错误内容
 - **语言扩展复用**：`getLanguageExtension(filePath)` 从 `useCodeMirror` 导出复用
@@ -113,6 +118,13 @@ HTML 内容通过 `<iframe sandbox="allow-scripts" srcDoc={...}>` 渲染（**不
 **左侧 .git 变更刷新**：`onFsEvent` 检测 `.git` 路径变更 → 重取 HEAD 内容更新左侧 CM。
 
 **右侧外部修改**：`onFsEvent` 检测文件路径匹配 → 净自动重载 / 脏弹窗确认（同 editor 语义）。
+
+**编辑器快捷键**（同 gitshow 模式）：
+- **只读但可聚焦**：左栏仅用 `EditorState.readOnly.of(true)`，不使用 `EditorView.editable.of(false)`
+- **Ctrl+Wheel 字体缩放**：左栏/右栏容器各调用一次 `useFontSizeWheel`
+- **Ctrl+F 搜索**：左栏和右栏均注册 `search({top:true})` + `searchKeymap` + `highlightSelectionMatches`
+- **Alt+Z 自动换行**：左右栏独立 `Compartment`（`leftWrapCompartment`/`rightWrapCompartment`），`toggleWordWrap` 同步切换两侧，通过 `usePanelFocus("editor")` 在左右栏均注册
+- **字号 Compartment 热切换**：左右栏各自独立 `fontCompartment`（CM6 Compartment 绑定到特定 EditorState，不可跨 view 共享），`useEffect` 监听 `editorFontSize` 变化做 `reconfigure`；CM6 创建 effect deps 不含 `editorFontSize`
 
 ### Ctrl+C 保留为中断
 
@@ -325,19 +337,27 @@ useXterm 是编排层——mock 6 个子 hook 才能隔离测试（`useFontSizeB
 
 ### gitshow 面板测试
 
-`gitshow-panel.test.tsx`（13 用例）：
-- mock `../ipc/git` `gitFileAtHead`
+`gitshow-panel.test.tsx`（19 用例）：
+- mock `../ipc/git` `gitFileAtHead`、`@codemirror/search`、`useFontSizeWheel`、`usePanelFocus`、`activeEditor`
 - 三态渲染：loading → content（CM6 只读编辑器）→ error 占位文案"该文件在 HEAD 中不存在"
-- `EditorState.readOnly` 断言只读
+- `EditorState.readOnly` 断言只读；`editable.of(false)` 断言不存在（编辑器可聚焦）
+- `@codemirror/search` 扩展注册验证（`mockSearchFn` 调用参数）
+- `useFontSizeWheel` 参数验证（container/min/max/setter）
+- `usePanelFocus("editor")` 注册验证
+- `createEditorFontExtension` 调用验证（默认字号 14）
 - `oldPath` 优先于 `filePath` 调用 gitFileAtHead
 
 ### diff 面板测试
 
-`diff-panel.test.tsx`（11 用例）：
-- mock `gitFileAtHead` + `fs.readFile` + `gitDiff` + `onFsEvent`
+`diff-panel.test.tsx`（15 用例）：
+- mock `gitFileAtHead` + `fs.readFile` + `gitDiff` + `onFsEvent` + `useFontSizeWheel` + `usePanelFocus`
 - 双栏渲染验证（`data-e2e="diff-left"` / `diff-right`）
 - 加载态 + 错误占位文案
 - 保存后刷新链（`fs.writeFile` → `gitDiff` 重调 → gutter 更新）
+- 左栏 `contentEditable` 不为 `"false"`（编辑器可聚焦）
+- 左栏 `Ctrl+F` 触发 `.cm-panel.cm-search` 出现
+- `useFontSizeWheel` 左右各调用一次
+- `usePanelFocus` 左右栏各注册一次
 
 `diff-alignment.test.ts`（16 用例）：
 - `computeAlignment` 纯函数全分支覆盖：纯新增/纯删除/等行修改/多删少/多增少/多 hunk 合并/空 hunks
