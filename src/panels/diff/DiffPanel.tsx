@@ -1,7 +1,7 @@
 // DiffPanel — Git 双栏 diff 面板
 //
 // 职责：
-// - 纵向均分两栏：左 = HEAD 只读 CM + HEAD gutter，右 = 工作区可编辑 CM + workdir gutter
+// - 横向均分两栏：左 = HEAD 只读 CM + HEAD gutter，右 = 工作区可编辑 CM + workdir gutter
 // - 占位对齐：computeAlignment → Decoration.widget 空白行，保持两侧视觉对齐
 // - 垂直滚动同步（一侧滚动 → 另一侧 scrollTop 跟随，syncingRef 防循环），水平滚动独立
 // - 右侧 Ctrl+S：usePanelFocus("editor") + setActiveEditor → fs.writeFile → gitDiff → 刷新
@@ -180,12 +180,22 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ params }) => {
   const rightWrapCompartment = useRef(new Compartment());
   const wordWrapRef = useRef(false);
 
-  // 容器 DOM 元素状态捕获（同 EditorPanel 模式——ref 变化不触发渲染，需 state 桥接）
-  const [rightContainer, setRightContainer] = useState<HTMLDivElement | null>(null);
+  // renderKey 桥接：容器 div 在 "ready" 态才挂载，DOM commit 后 ref 才非 null。
+  // state.kind 变为 "ready" 后的 effect 触发额外渲染，使 hooks 以非 null 容器执行。
+  // bridgedRef 防无限循环 + 支持 filePath 切换后重新桥接。
+  const [, setRenderKey] = useState(0);
+  const bridgedRef = useRef(false);
 
   useEffect(() => {
-    setRightContainer(rightContainerRef.current);
-  }, []);
+    if (state.kind === "ready") {
+      if (!bridgedRef.current) {
+        bridgedRef.current = true;
+        setRenderKey((k) => k + 1);
+      }
+    } else {
+      bridgedRef.current = false;
+    }
+  }, [state.kind]);
 
   // 滚动同步——syncingRef 防循环
   const syncingRef = useRef(false);
@@ -404,15 +414,16 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ params }) => {
   );
   const activateEditor = useCallback(() => setActiveEditor(editorActions), [editorActions]);
   const deactivateEditor = useCallback(() => clearActiveEditor(editorActions), [editorActions]);
-  usePanelFocus("editor", rightContainer, activateEditor, deactivateEditor);
+
+  // renderKey bridge effect 确保首次 "ready" 渲染后 ref.current 非 null
+  usePanelFocus("editor", rightContainerRef.current, activateEditor, deactivateEditor);
 
   // 左栏也注册 focus——让 Alt+Z 在左栏聚焦时同样生效
-  const leftContainerEl = leftContainerRef.current;
-  usePanelFocus("editor", leftContainerEl, activateEditor, deactivateEditor);
+  usePanelFocus("editor", leftContainerRef.current, activateEditor, deactivateEditor);
 
   // Ctrl+滚轮调节字体大小——左右栏容器各注册一次
-  useFontSizeWheel(leftContainerEl, FONT_SIZE_MIN, FONT_SIZE_MAX, fontSizeRef, setEditorFontSize);
-  useFontSizeWheel(rightContainer, FONT_SIZE_MIN, FONT_SIZE_MAX, fontSizeRef, setEditorFontSize);
+  useFontSizeWheel(leftContainerRef.current, FONT_SIZE_MIN, FONT_SIZE_MAX, fontSizeRef, setEditorFontSize);
+  useFontSizeWheel(rightContainerRef.current, FONT_SIZE_MIN, FONT_SIZE_MAX, fontSizeRef, setEditorFontSize);
 
   // 字体 Compartment 热切换：字号变化时仅 reconfigure，不销毁重建 EditorView
   useEffect(() => {
@@ -615,21 +626,21 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ params }) => {
         width: "100%",
         height: "100%",
         display: "flex",
-        flexDirection: "column",
+        flexDirection: "row",
       }}
     >
-      <div style={{ flex: "50%", display: "flex", borderBottom: `1px solid ${SEPARATOR_BG}` }}>
+      <div style={{ flex: "50%", display: "flex", minWidth: 0, borderRight: `1px solid ${SEPARATOR_BG}` }}>
         <div
           data-e2e="diff-left"
           ref={leftContainerRef}
-          style={{ flex: 1, background: EDITOR_BG, overflow: "clip" }}
+          style={{ flex: 1, background: EDITOR_BG, overflow: "clip", minWidth: 0 }}
         />
       </div>
-      <div style={{ flex: "50%", display: "flex" }}>
+      <div style={{ flex: "50%", display: "flex", minWidth: 0 }}>
         <div
           data-e2e="diff-right"
           ref={rightContainerRef}
-          style={{ flex: 1, background: EDITOR_BG, overflow: "clip" }}
+          style={{ flex: 1, background: EDITOR_BG, overflow: "clip", minWidth: 0 }}
         />
       </div>
     </div>

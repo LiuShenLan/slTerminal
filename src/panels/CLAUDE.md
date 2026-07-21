@@ -105,7 +105,7 @@ HTML 内容通过 `<iframe sandbox="allow-scripts" srcDoc={...}>` 渲染（**不
 
 ### diff：双栏占位对齐 + 滚动同步 + 双侧 gutter
 
-`DiffPanel` 纵向均分两栏（flex 50/50）：左 = HEAD 只读 CM + HEAD gutter + 占位行，右 = 工作区可编辑 CM + workdir gutter + 占位行。
+`DiffPanel` 横向均分两栏（flex 50/50）：左 = HEAD 只读 CM + HEAD gutter + 占位行，右 = 工作区可编辑 CM + workdir gutter + 占位行。
 
 **占位对齐（`alignment.ts`）**：`computeAlignment(hunks)` 纯函数根据 DiffHunk[] 计算左右两侧需插入占位行的位置与数量——纯新增行左侧插占位，纯删除行右侧插占位，行数不等侧插差值。结果通过 CM6 `Decoration.widget` 渲染块级占位行（不可选中、不响应指针事件）。规则：oldLines=0→左侧插入 newLines 个；newLines=0→右侧插入 oldLines 个；modified 不等→少的一侧插差值；等行→无需占位。纯函数零 DOM 访问（照 dropTarget 模式）。
 
@@ -125,6 +125,18 @@ HTML 内容通过 `<iframe sandbox="allow-scripts" srcDoc={...}>` 渲染（**不
 - **Ctrl+F 搜索**：左栏和右栏均注册 `search({top:true})` + `searchKeymap` + `highlightSelectionMatches`
 - **Alt+Z 自动换行**：左右栏独立 `Compartment`（`leftWrapCompartment`/`rightWrapCompartment`），`toggleWordWrap` 同步切换两侧，通过 `usePanelFocus("editor")` 在左右栏均注册
 - **字号 Compartment 热切换**：左右栏各自独立 `fontCompartment`（CM6 Compartment 绑定到特定 EditorState，不可跨 view 共享），`useEffect` 监听 `editorFontSize` 变化做 `reconfigure`；CM6 创建 effect deps 不含 `editorFontSize`
+
+**CSS flexbox `min-width: auto` 与 `minWidth: 0` 修复**：
+
+DiffPanel 的 DOM 层级为双层 flex 嵌套——外层 `diff-panel`（flex row）→ wrapper（flex: 50%）→ diff-left/diff-right（flex: 1, overflow: clip）。CSS flexbox 默认 `min-width: auto` 使 flex 子项拒绝收缩到内容宽度以下——CM6 `.cm-content`（`flex-shrink: 0`，`white-space: pre`）随长行横向扩展，逐层撑开 flex 子项，导致分界线偏离 50% 中线。`overflow: clip` 不创建 scroll container，因此不触发 flexbox 的 min-width 归零规则（仅 `overflow: hidden|scroll|auto` 有此效果）。
+
+**修复**：四个 flex 子项（左右 wrapper + diff-left/diff-right）均加 `minWidth: 0`，显式覆盖 `min-width: auto`。`overflow: clip` 保留——裁剪溢出但不吸收滚轮事件，确保滚轮穿透到 `.cm-scroller`。
+
+**容器 ref 桥接（renderKey + bridgedRef）**：
+
+DiffPanel 的加载/错误/就绪三态中，容器 div 仅在 `"ready"` 态挂载。`useRef` 在 React commit 后才绑定 DOM 元素——首次 `"ready"` 渲染期间 `ref.current` 仍为 null。旧代码的 `useEffect([], [])` bridge（右容器）和直接 `ref.current` 读取（左容器）均无法在条件渲染下获取非 null DOM 元素。
+
+**修复**：`renderKey` state + `bridgedRef` guard + `useEffect([state.kind])`——effect 在 commit 后运行（ref 已绑定），设 `bridgedRef = true` 防重入，`setRenderKey` 触发额外渲染。`state.kind !== "ready"` 时重置 `bridgedRef`，支持 filePath 切换后重新桥接。效果：`useFontSizeWheel` / `usePanelFocus` 在 bridge 重渲染时以非 null 容器执行。
 
 ### Ctrl+C 保留为中断
 
@@ -234,7 +246,7 @@ xterm.js 6.0.0 原生支持 OSC 8 解析渲染。`useXterm.ts` 在 `term.open()`
 | `gitshow/index.ts` | GitShowPanel 导出 |
 | `gitshow/GitShowPanel.tsx` | HEAD 文件只读查看面板：gitFileAtHead 取内容 → CM6 只读（readOnly+editable）+ oneDark + 语言扩展 + 字体主题；三态（loading/content/error）；大文件阈值复用；任意错误 → "该文件在 HEAD 中不存在" |
 | `diff/index.ts` | DiffPanel 导出 + DiffPanelParams 类型 |
-| `diff/DiffPanel.tsx` | Git 双栏 diff 面板：纵向均分两栏（左 HEAD 只读 + 右工作区可编辑）、占位对齐（Decoration.widget）、垂直滚动同步（syncingRef）、双侧 gutter（headDiffGutter + diffGutter）、右侧 Ctrl+S 保存刷新链、左侧 .git 变更刷新 HEAD、右侧外部修改检测（净重载/脏弹窗） |
+| `diff/DiffPanel.tsx` | Git 双栏 diff 面板：横向均分两栏（flex 50/50 + minWidth:0 防内容撑开）、容器 ref 桥接（renderKey + bridgedRef 支持条件渲染）、占位对齐（Decoration.widget）、垂直滚动同步（syncingRef）、双侧 gutter（headDiffGutter + diffGutter）、右侧 Ctrl+S 保存刷新链、左侧 .git 变更刷新 HEAD、右侧外部修改检测（净重载/脏弹窗） |
 | `diff/alignment.ts` | `computeAlignment(hunks)` 纯函数：DiffHunk[] → `{ left: Map<afterLine, count>, right: Map<afterLine, count> }`。规则：纯新增左侧插占位、纯删除右侧插占位、modified 行数不等少侧插差值。零 DOM 访问
 
 ## 硬约束

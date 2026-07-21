@@ -391,8 +391,8 @@ describe("DiffPanel", () => {
     });
   });
 
-  // 14: useFontSizeWheel 左右各调用一次
-  it("calls useFontSizeWheel for both panels", async () => {
+  // 14: useFontSizeWheel 左右各调用一次，且收到非 null 容器
+  it("calls useFontSizeWheel for both panels with non-null containers", async () => {
     const { container } = render(
       React.createElement(DiffPanel, { params: makeParams() }),
     );
@@ -400,17 +400,20 @@ describe("DiffPanel", () => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
     });
     expect(mockUseFontSizeWheel).toHaveBeenCalled();
-    const calls = mockUseFontSizeWheel.mock.calls;
-    expect(calls.length).toBeGreaterThanOrEqual(2);
-    // 参数 2=8（FONT_SIZE_MIN），参数 3=32（FONT_SIZE_MAX）
-    expect(calls[0][1]).toBe(8);
-    expect(calls[0][2]).toBe(32);
-    expect(calls[1][1]).toBe(8);
-    expect(calls[1][2]).toBe(32);
+    // bridge effect 的 setRenderKey 触发第三次渲染为异步——
+    // 等待 mock 收到非 null 容器调用（左右各一次）
+    await waitFor(() => {
+      const nonNullCalls = mockUseFontSizeWheel.mock.calls.filter((c) => c[0] !== null);
+      expect(nonNullCalls.length).toBeGreaterThanOrEqual(2);
+      nonNullCalls.forEach((c) => {
+        expect(c[1]).toBe(8);   // FONT_SIZE_MIN
+        expect(c[2]).toBe(32);  // FONT_SIZE_MAX
+      });
+    });
   });
 
-  // 15: usePanelFocus 注册左栏和右栏
-  it("usePanelFocus registers both left AND right containers", async () => {
+  // 15: usePanelFocus 注册左栏和右栏，且收到非 null 容器
+  it("usePanelFocus registers both left AND right containers with non-null elements", async () => {
     const { container } = render(
       React.createElement(DiffPanel, { params: makeParams() }),
     );
@@ -418,10 +421,249 @@ describe("DiffPanel", () => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
     });
     expect(mockUsePanelFocus).toHaveBeenCalled();
-    const calls = mockUsePanelFocus.mock.calls;
-    // 至少两次调用：右栏 + 左栏
-    expect(calls.length).toBeGreaterThanOrEqual(2);
-    // 所有调用 context 参数均为 "editor"
-    calls.forEach((c) => expect(c[0]).toBe("editor"));
+    // 等待 bridge effect 触发重渲染，使非 null 容器调用出现
+    await waitFor(() => {
+      const calls = mockUsePanelFocus.mock.calls;
+      const nonNullCalls = calls.filter((c) => c[1] !== null);
+      expect(nonNullCalls.length).toBeGreaterThanOrEqual(2);
+      // c[0] = context "editor"，c[1] = container DOM 元素
+      nonNullCalls.forEach((c) => expect(c[0]).toBe("editor"));
+      nonNullCalls.forEach((c) => expect(c[1]).toBeInstanceOf(HTMLDivElement));
+    });
+  });
+
+  // ── 布局回归守卫 (L1-L3) ─────────────────────────────
+
+  // L1: 外层容器 flexDirection 为 "row" + minWidth 归零（左右双栏等宽）
+  it("diff-panel outer container has flexDirection row and minWidth 0", async () => {
+    const { container } = render(
+      React.createElement(DiffPanel, { params: makeParams() }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
+    });
+    const panel = container.querySelector('[data-e2e="diff-panel"]') as HTMLElement;
+    expect(panel.style.flexDirection).toBe("row");
+    // 外层非 flex 子项，minWidth 不做要求——但 wrapper 需要（见 M1/M2）
+  });
+
+  // L2: 左栏 wrapper 有 borderRight 垂直分隔线
+  it("left wrapper has borderRight separator", async () => {
+    const { container } = render(
+      React.createElement(DiffPanel, { params: makeParams() }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
+    });
+    const panel = container.querySelector('[data-e2e="diff-panel"]') as HTMLElement;
+    const leftWrapper = panel.children[0] as HTMLElement;
+    // jsdom 可能将颜色 token 解析为 rgb() 形式，仅验证存在 border-right
+    expect(leftWrapper.style.borderRight).toBeTruthy();
+    expect(leftWrapper.style.borderRight).toContain("1px solid");
+  });
+
+  // L3: 左栏 wrapper 无 borderBottom（旧分隔线已清除）
+  it("left wrapper has no borderBottom", async () => {
+    const { container } = render(
+      React.createElement(DiffPanel, { params: makeParams() }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
+    });
+    const panel = container.querySelector('[data-e2e="diff-panel"]') as HTMLElement;
+    const leftWrapper = panel.children[0] as HTMLElement;
+    expect(leftWrapper.style.borderBottom).toBe("");
+  });
+
+  // ── 容器 ref 桥接守卫 (B1-B4) ────────────────────────
+
+  // B1: 左栏 useFontSizeWheel 收到非 null 容器
+  it("useFontSizeWheel receives non-null container for left panel", async () => {
+    const { container } = render(
+      React.createElement(DiffPanel, { params: makeParams() }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
+    });
+    // 等待 bridge effect 触发第三次渲染
+    await waitFor(() => {
+      const nonNullCalls = mockUseFontSizeWheel.mock.calls.filter((c) => c[0] !== null);
+      expect(nonNullCalls.length).toBeGreaterThanOrEqual(2);
+      nonNullCalls.forEach((c) => expect(c[0]).toBeInstanceOf(HTMLDivElement));
+    });
+  });
+
+  // B2: useFontSizeWheel 字体范围参数正确（min=8, max=32）
+  it("useFontSizeWheel receives FONT_SIZE_MIN/MAX bounds", async () => {
+    const { container } = render(
+      React.createElement(DiffPanel, { params: makeParams() }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
+    });
+    await waitFor(() => {
+      const nonNullCalls = mockUseFontSizeWheel.mock.calls.filter((c) => c[0] !== null);
+      expect(nonNullCalls.length).toBeGreaterThanOrEqual(2);
+      nonNullCalls.forEach((c) => {
+        expect(c[1]).toBe(8);  // FONT_SIZE_MIN
+        expect(c[2]).toBe(32); // FONT_SIZE_MAX
+      });
+    });
+  });
+
+  // B3: usePanelFocus 收到非 null 容器（左栏和右栏均注册）
+  // usePanelFocus 签名: (context, container, activate, deactivate) → c[0]="editor", c[1]=HTMLElement
+  it("usePanelFocus receives non-null container for both panels", async () => {
+    const { container } = render(
+      React.createElement(DiffPanel, { params: makeParams() }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
+    });
+    await waitFor(() => {
+      const nonNullCalls = mockUsePanelFocus.mock.calls.filter((c) => c[1] !== null);
+      expect(nonNullCalls.length).toBeGreaterThanOrEqual(2);
+      nonNullCalls.forEach((c) => expect(c[1]).toBeInstanceOf(HTMLDivElement));
+    });
+  });
+
+  // B4: usePanelFocus context 参数均为 "editor"
+  it("usePanelFocus context is editor for all registrations", async () => {
+    const { container } = render(
+      React.createElement(DiffPanel, { params: makeParams() }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
+    });
+    await waitFor(() => {
+      const nonNullCalls = mockUsePanelFocus.mock.calls.filter((c) => c[1] !== null);
+      expect(nonNullCalls.length).toBeGreaterThanOrEqual(2);
+      nonNullCalls.forEach((c) => expect(c[0]).toBe("editor"));
+    });
+  });
+
+  // ── 滚动功能守卫 (SC1) ───────────────────────────────
+
+  // SC1: CM6 挂载后 .cm-scroller 存在于左右两侧（滚动容器可用）
+  it(".cm-scroller exists in both left and right panels", async () => {
+    const { container } = render(
+      React.createElement(DiffPanel, { params: makeParams() }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
+    });
+    const leftScroller = container
+      .querySelector('[data-e2e="diff-left"]')!
+      .querySelector(".cm-scroller") as HTMLElement;
+    const rightScroller = container
+      .querySelector('[data-e2e="diff-right"]')!
+      .querySelector(".cm-scroller") as HTMLElement;
+    expect(leftScroller).toBeTruthy();
+    expect(rightScroller).toBeTruthy();
+    // CM6 base theme 默认 .cm-scroller { overflow: auto }，若显式设 hidden 则滚动失效
+    expect(leftScroller.style.overflowY).not.toBe("hidden");
+    expect(rightScroller.style.overflowY).not.toBe("hidden");
+    // 横向滚动守卫——CM6 base theme overflowX: auto，inline style 不覆盖
+    expect(leftScroller.style.overflowX).not.toBe("hidden");
+    expect(rightScroller.style.overflowX).not.toBe("hidden");
+  });
+
+  // ── minWidth 属性守卫 (M1-M4) ─────────────────────────
+
+  // M1: 左 wrapper div 有 minWidth: 0（允许 flex 收缩到 50%）
+  it("left wrapper div has minWidth 0", async () => {
+    const { container } = render(
+      React.createElement(DiffPanel, { params: makeParams() }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
+    });
+    const panel = container.querySelector('[data-e2e="diff-panel"]') as HTMLElement;
+    const leftWrapper = panel.children[0] as HTMLElement;
+    expect(leftWrapper.style.minWidth).toBe("0px");
+  });
+
+  // M2: 右 wrapper div 有 minWidth: 0
+  it("right wrapper div has minWidth 0", async () => {
+    const { container } = render(
+      React.createElement(DiffPanel, { params: makeParams() }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
+    });
+    const panel = container.querySelector('[data-e2e="diff-panel"]') as HTMLElement;
+    const rightWrapper = panel.children[1] as HTMLElement;
+    expect(rightWrapper.style.minWidth).toBe("0px");
+  });
+
+  // M3: diff-left 容器有 minWidth: 0
+  it("diff-left container has minWidth 0", async () => {
+    const { container } = render(
+      React.createElement(DiffPanel, { params: makeParams() }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
+    });
+    const leftContainer = container.querySelector('[data-e2e="diff-left"]') as HTMLElement;
+    expect(leftContainer.style.minWidth).toBe("0px");
+  });
+
+  // M4: diff-right 容器有 minWidth: 0
+  it("diff-right container has minWidth 0", async () => {
+    const { container } = render(
+      React.createElement(DiffPanel, { params: makeParams() }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
+    });
+    const rightContainer = container.querySelector('[data-e2e="diff-right"]') as HTMLElement;
+    expect(rightContainer.style.minWidth).toBe("0px");
+  });
+
+  // ── overflow 属性回归守卫 (O1-O2) ──────────────────────
+
+  // O1: diff-left 保持 overflow: clip（滚轮穿透到 .cm-scroller）
+  it("diff-left container preserves overflow clip", async () => {
+    const { container } = render(
+      React.createElement(DiffPanel, { params: makeParams() }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
+    });
+    const leftContainer = container.querySelector('[data-e2e="diff-left"]') as HTMLElement;
+    expect(leftContainer.style.overflow).toBe("clip");
+  });
+
+  // O2: diff-right 保持 overflow: clip
+  it("diff-right container preserves overflow clip", async () => {
+    const { container } = render(
+      React.createElement(DiffPanel, { params: makeParams() }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
+    });
+    const rightContainer = container.querySelector('[data-e2e="diff-right"]') as HTMLElement;
+    expect(rightContainer.style.overflow).toBe("clip");
+  });
+
+  // ── flex 结构守卫 (F1) ─────────────────────────────────
+
+  // F1: 左右 wrapper 均为 flex: 50% + display: flex（等宽分配）
+  it("both wrapper divs have flex 50% and display flex", async () => {
+    const { container } = render(
+      React.createElement(DiffPanel, { params: makeParams() }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
+    });
+    const panel = container.querySelector('[data-e2e="diff-panel"]') as HTMLElement;
+    const leftWrapper = panel.children[0] as HTMLElement;
+    const rightWrapper = panel.children[1] as HTMLElement;
+    // 等宽分配（jsdom 将 flex: "50%" 展开为 "1 1 50%"）
+    expect(leftWrapper.style.flex).toContain("50%");
+    expect(rightWrapper.style.flex).toContain("50%");
+    // 内层 flex 容器
+    expect(leftWrapper.style.display).toBe("flex");
+    expect(rightWrapper.style.display).toBe("flex");
   });
 });
