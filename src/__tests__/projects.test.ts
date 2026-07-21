@@ -391,11 +391,11 @@ describe("projects store", () => {
     };
 
     mockIPC((cmd) => {
-      if (cmd === "fs_read_file") return JSON.stringify(mockData);
+      if (cmd === "load_projects") return JSON.stringify(mockData);
     });
 
     const { loadFromDisk } = useProjects.getState();
-    await loadFromDisk("C:\\test\\projects.json");
+    await loadFromDisk();
 
     const { projects, expandedNodes, deletionLock } = useProjects.getState();
     expect(projects["proj-1"].name).toBe("从磁盘加载的项目");
@@ -406,14 +406,14 @@ describe("projects store", () => {
 
   it("loadFromDisk JSON 损坏 → catch 静默降级，状态不变", async () => {
     mockIPC((cmd) => {
-      if (cmd === "fs_read_file") return "这不是合法的 JSON {{{";
+      if (cmd === "load_projects") return "这不是合法的 JSON {{{";
     });
 
     const stateBefore = structuredClone(useProjects.getState().projects);
 
     const { loadFromDisk } = useProjects.getState();
     // 不应抛错
-    await expect(loadFromDisk("bad.json")).resolves.toBeUndefined();
+    await expect(loadFromDisk()).resolves.toBeUndefined();
 
     // 状态保持初始空值
     expect(useProjects.getState().projects).toEqual(stateBefore);
@@ -421,15 +421,17 @@ describe("projects store", () => {
   });
 
   it("loadFromDisk 文件不存在 → 静默降级，状态不变", async () => {
+    // Rust 端返回 "{}" 表示文件不存在/首次启动
     mockIPC((cmd) => {
-      if (cmd === "fs_read_file") throw new Error("Io error: file not found");
+      if (cmd === "load_projects") return "{}";
     });
 
     const stateBefore = structuredClone(useProjects.getState().projects);
 
     const { loadFromDisk } = useProjects.getState();
-    await expect(loadFromDisk("missing.json")).resolves.toBeUndefined();
+    await expect(loadFromDisk()).resolves.toBeUndefined();
 
+    // "{}" 解析后 projects 为 undefined，走 ?? {} → 空对象
     expect(useProjects.getState().projects).toEqual(stateBefore);
     expect(useProjects.getState().projects).toEqual({});
   });
@@ -452,17 +454,17 @@ describe("projects store", () => {
     });
 
     const { saveToDisk } = useProjects.getState();
-    await saveToDisk("C:\\test\\save.json");
+    await saveToDisk();
 
-    // 验证 fs_write_file 被调用
-    const writeCall = spy.mock.calls.find(([cmd]) => cmd === "fs_write_file");
-    expect(writeCall).toBeDefined();
+    // 验证 save_projects 被调用
+    const call = spy.mock.calls.find(([cmd]) => cmd === "save_projects");
+    expect(call).toBeDefined();
 
-    const [, args] = writeCall as [string, { path: string; content: string }];
-    expect(args.path).toBe("C:\\test\\save.json");
+    const [, args] = call as [string, { data: string }];
+    expect(args.data).toBeDefined();
 
-    // 验证 content 可解析且包含期望字段
-    const parsed = JSON.parse(args.content);
+    // 验证 data 可解析且包含期望字段
+    const parsed = JSON.parse(args.data);
     expect(parsed).toHaveProperty("projects");
     expect(parsed).toHaveProperty("expandedNodes");
     expect(parsed).toHaveProperty("deletionLock");
@@ -471,13 +473,13 @@ describe("projects store", () => {
     expect(parsed.deletionLock).toEqual({ pendingDelete: null, acquiredAt: null });
   });
 
-  it("saveToDisk fs_write_file 失败 → 异常传播", async () => {
+  it("saveToDisk save_projects 失败 → 异常传播", async () => {
     mockIPC((cmd) => {
-      if (cmd === "fs_write_file") throw new Error("disk full");
+      if (cmd === "save_projects") throw new Error("disk full");
     });
 
     const { saveToDisk } = useProjects.getState();
-    await expect(saveToDisk("bad-path.json")).rejects.toThrow("disk full");
+    await expect(saveToDisk()).rejects.toThrow("disk full");
   });
 
   // ═══════════════════════════════════════════════════════════
@@ -501,7 +503,7 @@ describe("projects store", () => {
     };
 
     mockIPC((cmd) => {
-      if (cmd === "fs_read_file") return JSON.stringify(mockData);
+      if (cmd === "load_projects") return JSON.stringify(mockData);
     });
 
     await loadAllProjects();
@@ -511,7 +513,7 @@ describe("projects store", () => {
     expect(projects["proj-loaded"].rootPath).toBe("D:\\repo");
   });
 
-  it("saveAllProjects 调用 saveToDisk → fs_write_file 被调用", async () => {
+  it("saveAllProjects 调用 saveToDisk → save_projects 被调用", async () => {
     const project = makeProject();
     useProjects.getState().addProject(project);
     useProjects.setState({
@@ -526,17 +528,17 @@ describe("projects store", () => {
 
     await saveAllProjects();
 
-    const writeCall = spy.mock.calls.find(([cmd]) => cmd === "fs_write_file");
-    expect(writeCall).toBeDefined();
+    const call = spy.mock.calls.find(([cmd]) => cmd === "save_projects");
+    expect(call).toBeDefined();
 
-    const [, args2] = writeCall as [string, { path: string; content: string }];
-    const parsed2 = JSON.parse(args2.content);
-    expect(parsed2.projects[project.projectId].name).toBe("test-project");
+    const [, args] = call as [string, { data: string }];
+    const parsed = JSON.parse(args.data);
+    expect(parsed.projects[project.projectId].name).toBe("test-project");
   });
 
   it("saveAllProjects 写入失败 → console.error", async () => {
     mockIPC((cmd) => {
-      if (cmd === "fs_write_file") throw new Error("permission denied");
+      if (cmd === "save_projects") throw new Error("permission denied");
     });
 
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -566,8 +568,7 @@ describe("projects store", () => {
     // 推进 3s（远超 2s debounce）
     vi.advanceTimersByTime(3000);
 
-    // saveAllProjects 不应被触发——检查 fs_write_file 未被调用
-    // 由于 subscribe 回调检查 !initialized → return，不会设 timer
+    // saveAllProjects 不应被触发——检查 save_projects 未被调用
     const spy = vi.fn();
     mockIPC((cmd, args) => { spy(cmd, args); });
 
@@ -581,10 +582,9 @@ describe("projects store", () => {
   it("M2.2 markPersistenceReady() 后变更 → 2s debounce → saveAllProjects", () => {
     vi.useFakeTimers();
 
-    // 设置 mockIPC 以处理 saveAllProjects → saveToDisk → fs_write_file
     const writeSpy = vi.fn();
     mockIPC((cmd, args) => {
-      if (cmd === "fs_write_file") writeSpy(cmd, args);
+      if (cmd === "save_projects") writeSpy(cmd, args);
     });
 
     // 标记持久化就绪
@@ -610,7 +610,7 @@ describe("projects store", () => {
 
     const writeSpy = vi.fn();
     mockIPC((cmd, args) => {
-      if (cmd === "fs_write_file") writeSpy(cmd, args);
+      if (cmd === "save_projects") writeSpy(cmd, args);
     });
 
     markPersistenceReady();
@@ -643,7 +643,7 @@ describe("projects store", () => {
 
     const writeSpy = vi.fn();
     mockIPC((cmd, args) => {
-      if (cmd === "fs_write_file") writeSpy(cmd, args);
+      if (cmd === "save_projects") writeSpy(cmd, args);
     });
 
     markPersistenceReady();
@@ -665,5 +665,94 @@ describe("projects store", () => {
     expect(writeSpy).not.toHaveBeenCalled();
 
     vi.useRealTimers();
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // T4: 新增持久化测试（sandbox 绕过 + 便携路径）
+  // ═══════════════════════════════════════════════════════════
+
+  it("T4.13 loadFromDisk 空 JSON 对象 → store 保持空", async () => {
+    // Rust 端首次启动返回 "{}"
+    mockIPC((cmd) => {
+      if (cmd === "load_projects") return "{}";
+    });
+
+    const { loadFromDisk } = useProjects.getState();
+    await loadFromDisk();
+
+    const { projects, expandedNodes, deletionLock } = useProjects.getState();
+    expect(projects).toEqual({});
+    expect(expandedNodes).toEqual({});
+    expect(deletionLock).toEqual({ pendingDelete: null, acquiredAt: null });
+  });
+
+  it("T4.14 saveToDisk 写入完整 JSON 结构（含三个顶层键）", async () => {
+    const project = makeProject();
+    useProjects.getState().addProject(project);
+    useProjects.setState({
+      expandedNodes: { "n1": true, "n2": false },
+      deletionLock: { pendingDelete: "p1", acquiredAt: 999 },
+    });
+
+    const spy = vi.fn();
+    mockIPC((cmd, args) => {
+      spy(cmd, args);
+    });
+
+    const { saveToDisk } = useProjects.getState();
+    await saveToDisk();
+
+    const call = spy.mock.calls.find(([cmd]) => cmd === "save_projects");
+    expect(call).toBeDefined();
+    const [, args] = call as [string, { data: string }];
+    const parsed = JSON.parse(args.data);
+
+    // 验证三个顶层键均存在
+    expect(parsed).toHaveProperty("projects");
+    expect(parsed).toHaveProperty("expandedNodes");
+    expect(parsed).toHaveProperty("deletionLock");
+    expect(parsed.projects[project.projectId]).toBeDefined();
+    expect(parsed.expandedNodes).toEqual({ n1: true, n2: false });
+    expect(parsed.deletionLock).toEqual({ pendingDelete: "p1", acquiredAt: 999 });
+  });
+
+  it("T4.15 loadFromDisk → markPersistenceReady → 变更才触发保存", () => {
+    vi.useFakeTimers();
+
+    const writeSpy = vi.fn();
+    mockIPC((cmd, args) => {
+      if (cmd === "load_projects") return "{}";
+      if (cmd === "save_projects") writeSpy(cmd, args);
+    });
+
+    // 此时 initialized=false，变更不应触发保存
+    const project = makeProject();
+    useProjects.getState().addProject(project);
+    vi.advanceTimersByTime(3000);
+    expect(writeSpy).not.toHaveBeenCalled();
+
+    // markPersistenceReady 后，变更应触发 debounce 保存
+    markPersistenceReady();
+    useProjects.getState().addPage(project.projectId, makePage("p2"));
+    vi.advanceTimersByTime(2100);
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+
+    vi.useRealTimers();
+  });
+
+  it("T4.16 loadFromDisk JSON 缺少字段 → 走默认值", async () => {
+    // 缺少 deletionLock 和 expandedNodes
+    mockIPC((cmd) => {
+      if (cmd === "load_projects") return '{"projects":{"p1":{"name":"only"}}}';
+    });
+
+    const { loadFromDisk } = useProjects.getState();
+    await loadFromDisk();
+
+    const { projects, expandedNodes, deletionLock } = useProjects.getState();
+    expect(projects["p1"].name).toBe("only");
+    // 缺失字段走 ?? {} 默认值
+    expect(expandedNodes).toEqual({});
+    expect(deletionLock).toEqual({ pendingDelete: null, acquiredAt: null });
   });
 });

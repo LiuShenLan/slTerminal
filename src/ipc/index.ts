@@ -4,6 +4,7 @@ export * as pty from "./pty";
 export * as fs from "./fs";
 export * as git from "./git";
 export * as settings from "./settings";
+export * as projects from "./projects";
 export * as notify from "./notify";
 export * as clipboard from "./clipboard";
 export * as dialog from "./dialog";

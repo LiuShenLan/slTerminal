@@ -6,12 +6,17 @@ use std::io::Write as _;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
 
-/// 获取应用数据目录（~/.slterminal）
-fn app_data_dir() -> Result<PathBuf, AppError> {
-    let home =
-        dirs::home_dir()
-        .ok_or_else(|| AppError::IoKind { kind: "home_dir".into(), message: "无法获取用户主目录".into() })?;
-    Ok(home.join(".slterminal"))
+/// 获取应用数据目录（exe 同级目录，适配便携分发）
+pub(crate) fn app_data_dir() -> Result<PathBuf, AppError> {
+    let exe = std::env::current_exe().map_err(|e| AppError::IoKind {
+        kind: "exe_dir".into(),
+        message: format!("无法获取可执行文件路径: {e}"),
+    })?;
+    let exe_dir = exe.parent().ok_or_else(|| AppError::IoKind {
+        kind: "exe_dir".into(),
+        message: "无法获取可执行文件所在目录".into(),
+    })?;
+    Ok(exe_dir.to_path_buf())
 }
 
 /// 浅合并：incoming 的 top-level 键覆盖 existing。
@@ -468,5 +473,26 @@ mod tests {
             merged["keybindings"]["terminal.paste"].is_null(),
             "top-level 浅合并：keybindings 整体替换，子键不保留"
         );
+    }
+
+    // ── T2: app_data_dir() 便携路径测试 ──
+
+    /// T2.1: app_data_dir 返回 current_exe 的父目录
+    #[test]
+    fn app_data_dir_returns_exe_parent() {
+        let app_dir = app_data_dir().expect("app_data_dir 不应失败");
+        let exe = std::env::current_exe().expect("current_exe 不应失败");
+        let exe_dir = exe.parent().expect("exe 应有父目录");
+        assert_eq!(app_dir, exe_dir, "app_data_dir 应返回 exe 所在目录");
+    }
+
+    /// T2.2: app_data_dir + settings.json 路径拼接
+    #[test]
+    fn app_data_dir_joins_settings_path() {
+        let app_dir = app_data_dir().expect("app_data_dir 不应失败");
+        let settings_path = app_dir.join("settings.json");
+        assert!(settings_path.ends_with("settings.json"), "应指向 settings.json");
+        // 验证父目录存在（测试运行时 exe 目录必然存在）
+        assert!(app_dir.exists(), "app_data_dir 返回的目录应存在");
     }
 }

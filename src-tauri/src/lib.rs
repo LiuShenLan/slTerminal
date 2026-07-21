@@ -5,6 +5,7 @@ mod fs;
 mod settings;
 mod notify;
 mod git;
+mod projects;
 
 pub use error::AppError;
 pub use state::AppState;
@@ -79,6 +80,8 @@ pub fn run() {
             fs::fs_rename,
             settings::save_settings,
             settings::load_settings,
+            projects::save_projects,
+            projects::load_projects,
             git::git_status,
             git::git_diff,
             git::git_file_at_head,

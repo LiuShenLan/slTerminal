@@ -43,13 +43,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 二级模型：`Project` → `OperationPage[]`。面板由 Dockview 管理，不在此 store。
 - 所有变更操作（CRUD + rename + switchToPage + updatePageLayout）自动递增 `project.version`。
 - **持久化**：
-  - 启动时调用 `loadAllProjects()` 从 `slterminal-projects.json` 恢复。
+  - 启动时调用 `loadAllProjects()` 从 exe 同级 `slterminal-projects.json` 恢复（路径由 Rust `projects.rs` 解析，绕过路径 sandbox）。
   - 变更通过 Zustand `subscribe` + 2s debounce 自动调用 `saveAllProjects()` 保存。
   - 初始化标记 `markPersistenceReady()` 必须在 `loadFromDisk` 之后调用，防止首次加载触发空写。
   - 关闭钩子中调用 `cancelPendingSave()` 避免竞态。
 - **ID 生成**：`createProjectId()` / `createPageId()` 使用 `nextId()`（组合时间戳+自增计数器），确保单会话内唯一。
 - **展开状态**：`expandedNodes` 跟踪侧栏树的折叠/展开状态，随 Project/Page 增删联动清理。
-- **IP 调用**：通过 `src/ipc/fs` 的 `readFile` / `writeFile` 读写磁盘，符合硬约束 #1（前端不通 OS）。
+- **IP 调用**：通过 `src/ipc/projects` 的 `loadProjects` / `saveProjects` 读写磁盘（专属命令，不经 `fs_read_file`/`fs_write_file` 路径 sandbox）。
 
 ## 消费模式
 

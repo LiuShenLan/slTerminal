@@ -5,8 +5,8 @@
 // 持久化：Zustand subscribe + 2s debounce 变更即保存
 
 import { create } from "zustand";
-import * as fs from "../ipc/fs";
 import { setProjectRoot } from "../ipc/fs";
+import * as projectsIpc from "../ipc/projects";
 
 /** 持久化 debounce 间隔（毫秒），供 fontSize/keybindings 等 store 共用 */
 export const PERSIST_DEBOUNCE_MS = 2000;
@@ -66,10 +66,10 @@ interface ProjectsState {
   ) => void;
   toggleExpand: (nodeId: string) => void;
 
-  /** 从磁盘加载项目数据（供启动时调用） */
-  loadFromDisk: (filePath: string) => Promise<void>;
-  /** 保存项目数据到磁盘（供退出/自动保存时调用） */
-  saveToDisk: (filePath: string) => Promise<void>;
+  /** 从磁盘加载项目数据（供启动时调用，路径由 Rust 端解析） */
+  loadFromDisk: () => Promise<void>;
+  /** 保存项目数据到磁盘（供退出/自动保存时调用，路径由 Rust 端解析） */
+  saveToDisk: () => Promise<void>;
 }
 
 export const useProjects = create<ProjectsState>()((set, get) => ({
@@ -218,9 +218,9 @@ export const useProjects = create<ProjectsState>()((set, get) => ({
 
       // ── 磁盘持久化 ──────────────────────────────────────
 
-      loadFromDisk: async (filePath: string) => {
+      loadFromDisk: async () => {
         try {
-          const raw = await fs.readFile(filePath);
+          const raw = await projectsIpc.loadProjects();
           const data: {
             projects?: Record<string, Project>;
             deletionLock?: DeletionLock;
@@ -239,34 +239,22 @@ export const useProjects = create<ProjectsState>()((set, get) => ({
         }
       },
 
-      saveToDisk: async (filePath: string) => {
+      saveToDisk: async () => {
         const { projects, deletionLock, expandedNodes } = get();
-        // P2-06: JSON.stringify 当前数据量小（数个 Project / 十数个 Page），
-        // 全量序列化开销可忽略。若未来项目数量增长到百级，可考虑增量保存
-        // （仅序列化变更项目）或去掉 pretty-print (null, 2) 减少 IO 体积。
-        //
-        // P2-12 应急恢复：当前直接覆盖写，若写入中途崩溃/磁盘满则文件损坏。
-        // 应急方案：改为原子写入模式（先写 .tmp 再 rename，类 POSIX 原子操作）。
-        //   1. await fs.writeFile(filePath + ".tmp", data)
-        //   2. await fs.rename(filePath + ".tmp", filePath)
-        // 启动时 loadFromDisk 增加恢复逻辑：
-        //   - 若主文件不存在但 .tmp 存在，尝试从 .tmp 恢复
-        //   - 若两者都存在，对比 mtime，取更新的
-        await fs.writeFile(
-          filePath,
+        await projectsIpc.saveProjects(
           JSON.stringify({ projects, deletionLock, expandedNodes }, null, 2),
         );
       },
   }));
 
 // ── 持久化连线（H6 修复） ──
-
-const PERSIST_PATH = "slterminal-projects.json";
+// 项目数据文件路径由 Rust 端解析为 exe 同级目录（便携分发），
+// 详见 src-tauri/src/projects.rs
 
 /** 启动加载：从磁盘恢复项目数据 */
 export async function loadAllProjects(): Promise<void> {
   try {
-    await useProjects.getState().loadFromDisk(PERSIST_PATH);
+    await useProjects.getState().loadFromDisk();
   } catch {
     // 首次启动或文件损坏，保持默认空状态
   }
@@ -275,7 +263,7 @@ export async function loadAllProjects(): Promise<void> {
 /** 保存全部项目数据到磁盘 */
 export async function saveAllProjects(): Promise<void> {
   try {
-    await useProjects.getState().saveToDisk(PERSIST_PATH);
+    await useProjects.getState().saveToDisk();
   } catch (err) {
     console.error("[slTerminal] 保存项目数据失败:", err);
   }

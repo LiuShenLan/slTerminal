@@ -31,6 +31,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import * as pty from '../ipc/pty';
 import * as fs from '../ipc/fs';
 import * as settings from '../ipc/settings';
+import * as projects from '../ipc/projects';
 import * as notify from '../ipc/notify';
 import * as git from '../ipc/git';
 import * as windowIpc from '../ipc/window';
@@ -452,6 +453,65 @@ describe('settings IPC 合约', () => {
     await expect(settings.saveSettings({ theme: 'dark' })).rejects.toThrow(
       'permission denied',
     );
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// Projects IPC
+// ═══════════════════════════════════════════════════════════════════
+
+describe('projects IPC 合约', () => {
+  // ── loadProjects ──────────────────────────────────────────
+
+  it('loadProjects: 应调用 load_projects 命令，无参数', async () => {
+    const spy = vi.fn();
+    mockIPC((cmd, args) => {
+      spy(cmd, args);
+      if (cmd === 'load_projects') return '{"projects":{}}';
+    });
+
+    const result = await projects.loadProjects();
+    expect(result).toBe('{"projects":{}}');
+    expect(spy).toHaveBeenCalledWith('load_projects', {});
+  });
+
+  it('loadProjects: 返回空 JSON 对象表示首次启动', async () => {
+    mockIPC((cmd) => {
+      if (cmd === 'load_projects') return '{}';
+    });
+
+    const result = await projects.loadProjects();
+    expect(result).toBe('{}');
+  });
+
+  it('loadProjects: invoke 失败时异常应传播', async () => {
+    mockIPC((cmd) => {
+      if (cmd === 'load_projects') throw new Error('disk error');
+    });
+
+    await expect(projects.loadProjects()).rejects.toThrow('disk error');
+  });
+
+  // ── saveProjects ──────────────────────────────────────────
+
+  it('saveProjects: 应调用 save_projects 命令，参数包含 data', async () => {
+    const spy = vi.fn();
+    mockIPC((cmd, args) => {
+      spy(cmd, args);
+    });
+
+    await projects.saveProjects('{"projects":{"p1":{"name":"test"}}}');
+    expect(spy).toHaveBeenCalledWith('save_projects', {
+      data: '{"projects":{"p1":{"name":"test"}}}',
+    });
+  });
+
+  it('saveProjects: invoke 失败时异常应传播', async () => {
+    mockIPC((cmd) => {
+      if (cmd === 'save_projects') throw new Error('permission denied');
+    });
+
+    await expect(projects.saveProjects('{}')).rejects.toThrow('permission denied');
   });
 });
 
