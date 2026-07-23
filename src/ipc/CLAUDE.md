@@ -14,7 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 |------|---------|-----------|
 | `pty.ts` | `pty/` | `pty_spawn`, `pty_write`, `pty_resize`, `pty_kill`, `pty_reattach`, `get_windows_build_number`。`write`/`resize`/`kill` 三 wrapper 签名含 `panelId`（归属校验，后端 SEC-08），invoke payload 同步传 `panelId`（JS `panelId` ↔ Rust `panel_id` 由 Tauri 自动转换） |
 | `fs.ts` | `fs/` | `fs_read_file`, `fs_write_file`, `fs_read_dir`, `fs_create_dir`, `fs_delete`, `fs_rename` |
-| `git.ts` | `git/` | `git_status`, `git_diff`, `git_file_at_head` |
+| `git.ts` | `git/` | `git_status`, `git_diff`, `git_file_at_head`, `git_rollback`, `git_unstage` |
 | `settings.ts` | settings | `load_settings`, `save_settings` |
 | `projects.ts` | projects | `load_projects`, `save_projects`（绕过路径 sandbox，exe 同级 `slterminal-projects.json`） |
 | `notify.ts` | `notify/` | `notify_watch`、`onFsEvent`（`listen("fs-event")` 封装） |

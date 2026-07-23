@@ -36,7 +36,30 @@ renamed 条目（`INDEX_RENAMED` / `WT_RENAMED`）从 delta 的 `old_file()` 取
 
 ### 注册
 
-三条命令均在 `src-tauri/src/lib.rs` 的 `generate_handler!` 注册（`git_status`、`git_diff`、`git_file_at_head`）。
+四条命令均在 `src-tauri/src/lib.rs` 的 `generate_handler!` 注册（`git_status`、`git_diff`、`git_file_at_head`、`git_rollback`、`git_unstage`）。
+
+### git_rollback（新增命令）
+
+参数：`(repo_path: String, file_path: String)`。返回 `Result<(), AppError>`。
+
+实现流程：路径沙箱校验 → `get_or_open_repo` → `spawn_blocking` 内：
+1. `repo.head()?.peel_to_tree()` 获取 HEAD tree
+2. `tree.get_path(rel)` → `to_object` → `peel_to_blob()` 读取 HEAD blob
+3. `std::fs::write(&file_path, blob.content())` 写入原始字节到工作区
+4. `repo.index()` → `index.add_path(Path::new(&rel))` → `index.write()` 重建 index 条目（同步 stat/哈希）
+
+**为什么不用 checkout API**：`checkout_head`/`checkout_index`/`reset_default` 在 Windows `core.autocrlf=true` 仓库中对单个文件的 index 持久化和 smudge filter 行为不一致，多次实测均导致 `statuses()` 仍报告 dirty。`std::fs::write` + `index.add_path` 确保 HEAD blob、工作区、index 三方字节完全一致，`statuses()` stat 快速路径必定命中。
+
+### git_unstage（新增命令）
+
+参数：`(repo_path: String, file_path: String)`。返回 `Result<(), AppError>`。
+
+实现流程：路径沙箱校验 → `get_or_open_repo` → `spawn_blocking` 内：
+1. `repo.index()` 获取 index
+2. `index.remove_path(Path::new(&rel))` 从 index 移除条目
+3. `index.write()` 持久化
+
+等价于 `git reset HEAD -- <file>`。对 INDEX_NEW（staged 新文件）有效——仅删除 index 条目，不依赖 HEAD 中存在该文件。仅用于 commit view 右键菜单的 "added 文件删除" 场景。
 
 ## 测试模式
 

@@ -59,21 +59,50 @@ CommitView 有四个渲染态，优先级从高到低：
 
 | 文件 | 职责 |
 |------|------|
-| `index.ts` | barrel export：CommitView、CommitFileList、useCommitStatus、openCommitFile、STATUS_PANEL_MAP |
+| `index.ts` | barrel export：CommitView、CommitFileList、useCommitStatus、openCommitFile、STATUS_PANEL_MAP、getContextMenuItems |
 | `CommitView.tsx` | 主组件：标题栏 "COMMIT"（28px、大写、照 ExplorerPanel 样式）+ 状态机渲染四态 + Changes/Unversioned Files 两个 CommitFileList |
-| `CommitFileList.tsx` | 可折叠文件列表：标题栏（N 计数）+ 展开/折叠 + 文件名+父目录渲染 + 双击分派 |
-| `useCommitStatus.ts` | 数据加载 hook：rootPath 推导 → gitStatus + onFsEvent 200ms debounce + generation 取消 |
+| `CommitFileList.tsx` | 可折叠文件列表：标题栏（N 计数）+ 展开/折叠 + 文件名+父目录渲染 + 双击分派 + **右键菜单**（ContextMenu 纯渲染组件，委托 commitContextMenu 策略函数） |
+| `useCommitStatus.ts` | 数据加载 hook：rootPath 推导 → gitStatus + onFsEvent 200ms debounce + generation 取消 + **暴露 refresh() 手动刷新** |
 | `openCommitFile.ts` | 双击分派：`STATUS_PANEL_MAP` 状态→面板映射表 + `openCommitFile`（照 ExplorerPanel.handleOpenFile 流程：去重聚焦 → addPanel → registerEditor → recomputeTitles） |
+| `commitContextMenu.ts` | **右键菜单策略注册表**（策略模式，照 `STATUS_PANEL_MAP` 先例）：`ROLLBACK_STATES`/`DELETE_STATES` 集合 + `getContextMenuItems()` 返回菜单项闭包 action（ask 确认 → IPC → refresh） |
 
 ## 关键集成点
 
-- **`src/ipc/git.ts`** — `gitStatus` 全量文件状态
+- **`src/ipc/git.ts`** — `gitStatus` 全量文件状态 + `gitRollback`（回滚到 HEAD）+ `gitUnstage`（取消暂存）
+- **`src/ipc/fs.ts`** — `deleteEntry` 永久删除文件
+- **`src/ipc/dialog.ts`** — `ask` 确认弹窗（warning 类型）
 - **`src/ipc/notify.ts`** — `onFsEvent` 文件变更自动刷新
 - **`src/stores/projects.ts` + `src/stores/layout.ts`** — 活跃项目 rootPath 推导
 - **`src/workspace/titleManager.ts`** — 页签标题（含 suffix）+ 去重聚焦
 - **`window.__dockviewApi`** — addPanel/getPanel/focus
 - **`src/features/sideViews/sideViewDefs.ts`** — CommitView 注册为 `commit` 视图（id: "commit", icon: "🔀"）
 - **`src/theme/colors.ts`** — `GIT_FILE_COLORS` 文件名着色（硬约束 #6）
+
+## 右键菜单（commitContextMenu.ts）
+
+策略模式实现，git 状态 → 菜单项映射全部集中在 `commitContextMenu.ts`：
+
+```
+ROLLBACK_STATES = {modified, deleted, renamed, conflict}  → "回滚"
+DELETE_STATES   = {added, untracked}                       → "删除"
+```
+
+- **回滚**：`ask` 确认 → `gitRollback`（后端：读 HEAD blob + `std::fs::write` + `index.add_path` + `index.write`）→ `refresh()`
+- **删除(added)**：`ask` 确认 → `gitUnstage`（后端：`index.remove_path` 取消暂存）→ `deleteEntry` → `refresh()`
+- **删除(untracked)**：`ask` 确认 → `deleteEntry` → `refresh()`
+- **CommitFileList.tsx 不 import 任何 git/fs IPC 模块**——只调用 `getContextMenuItems()` 策略函数
+- ContextMenu 组件为私有纯渲染组件（`position:fixed`、`zIndex:1000`、mousedown 外点击关闭）— 照 FileTree.tsx 模式
+
+### git_rollback 实现演进
+
+四次迭代修复 Windows `core.autocrlf=true` 仓库中回滚后 `statuses()` 仍报告 dirty 的问题：
+1. `std::fs::write(blob)` — 写 LF 到磁盘，index 未更新 → status 不干净
+2. `checkout_head(.path().force())` — git2 checkout API，index 持久化不可靠
+3. `checkout_head + index.write()` — 追加 index 写入，仍不可靠
+4. **`reset_default(HEAD, path) + checkout_index(None, opts)`** — 两步法，各自独立操作磁盘
+5. **最终方案**：`std::fs::write(blob) + index.add_path(path) + index.write()` — 写原始 HEAD blob 字节 + 重建 index 条目（同步 stat/哈希），三方完全一致
+
+核心教训：git2 checkout API 在 Windows autocrlf 仓库中对单个文件的 index 持久化和 smudge filter 行为不一致——直接写字节 + 重建 index 是唯一可靠路径。
 
 ## 测试模式
 
