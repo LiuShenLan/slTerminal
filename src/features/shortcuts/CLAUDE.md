@@ -20,11 +20,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### 命令目录单一真值源（`commandCatalog.ts`）
 
-所有可重绑命令的 `title/category/defaultKey/priority` 集中在 `COMMAND_CATALOG`。各面板工厂经 `commandFromMeta(id, handler)` 合并 handler。新增可重绑命令 = 目录追加一条 + 工厂提供 handler。当前命令：`global.closeTab`、`terminal.copy`、`terminal.paste`、`terminal.newline`、`editor.save`、`editor.toggleWordWrap`。
+所有可重绑命令的 `title/category/defaultKey/priority` 集中在 `COMMAND_CATALOG`。各面板工厂经 `commandFromMeta(id, handler)` 合并 handler。新增可重绑命令 = 目录追加一条 + 工厂提供 handler。当前命令（9 条）：`global.closeTab`、`terminal.copy`、`terminal.paste`、`terminal.newline`、`editor.save`、`editor.toggleWordWrap`、`explorer.delete`、`explorer.open`、`explorer.rename`。
 
 ### 命令注册一次 + active 指针派发到聚焦实例（多实例正确性）
 
-面板命令**在 `App.tsx` 一次性注册**（`register([...global, ...terminal, ...editor])`），**不随面板实例增删**。命令 handler 不闭包捕获特定实例，而是经模块级 **active 指针**（`panels/terminal/activeTerminal.ts`、`panels/editor/activeEditor.ts`）派发到**当前聚焦**实例：
+面板命令**在 `App.tsx` 一次性注册**（`register([...global, ...terminal, ...editor, ...explorer])`），**不随面板实例增删**。命令 handler 不闭包捕获特定实例，而是经模块级 **active 指针**（`panels/terminal/activeTerminal.ts`、`panels/editor/activeEditor.ts`、`features/explorer/activeExplorer.ts`）派发到**当前聚焦**实例：
 
 - 面板 `focusin` → `setActiveTerminal/Editor(自身 actions)`；`focusout`（离开子树）→ `clearActive*(自身 actions)`（仅在仍为 active 时清，防竞态）。
 - 命令 handler：`const t = getActiveTerminal(); if (!t) return false; …`（无聚焦实例则透传）。

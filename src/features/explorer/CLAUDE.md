@@ -28,14 +28,70 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **`handleOpenFile` 面板分派**：不再硬编码 `PANEL_EDITOR`，改为通过 `fileViewerRegistry.resolve(filePath)` 决定面板类型。命中策略（如 `.html` → `"htmlviewer"`）则用对应面板，返回 null 回退 `"editor"`。文件预览类面板（htmlviewer 等）通过 `isAlwaysRenderPanel()` 自动设置 `renderer: "always"` 保持 iframe browsing context 存活，避免页签切换白屏。新增文件预览类型无需修改 ExplorerPanel。
 
+### 选中模型：单击选中 + 双击打开 + 空白取消
+
+`selectedPath` state 由 ExplorerPanel 管理，通过 props 传入 FileTree。行为：
+- **单击文件/文件夹** → `onSelect(path)` + `container.focus()`（建立焦点上下文）
+- **双击文件** → `onOpenFile(path)` 打开编辑器（行为不变）
+- **单击目录** → `onSelect(path)` + `onToggleExpand(path)`（选中 + 展开折叠）
+- **单击空白** → `onSelect(null)` 取消选中
+- **焦点离开** → 选中态保留（视觉高亮不变），但 `usePanelFocus` 的 `popContext("explorer")` 阻止快捷键在失焦时误触发
+
+高亮色：`EXPLORER_SELECTION_BG`（`#094771`，VS Code list activeSelectionBackground 风格），在 `theme/colors.ts` 单点定义。
+`onMouseEnter`/`onMouseLeave` 仅在非选中时动态设置背景——选中态不被 hover 覆盖。
+
+### 焦点管理：tabIndex={-1} + usePanelFocus("explorer")
+
+ExplorerPanel 的文件树容器 `<div ref={containerRef} tabIndex={-1}>` 可编程聚焦（不参与 Tab 序）。`usePanelFocus("explorer", containerRef.current, activate, deactivate)` 监听 focusin/focusout：
+
+- **focusin** → `pushContext("explorer")` + `activate()` → `setActiveExplorer(explorerActions)`
+- **focusout**（离开子树） → `popContext("explorer")` + `deactivate()` → `clearActiveExplorer(explorerActions)`
+- **卸载** → 同上清理
+
+### 快捷键集成：active pointer + 命令工厂
+
+Explorer 的键盘快捷键遵循与 terminal/editor 相同的模式：
+
+1. **`activeExplorer.ts`**（`createActivePointer<ExplorerActions>()`）：模块级指针，`setActiveExplorer`/`clearActiveExplorer`/`getActiveExplorer`
+2. **`keyboard.ts`**（`createExplorerShortcuts()`）：返回 3 条 `commandFromMeta(id, handler)` 命令——`explorer.delete`（Delete）/ `explorer.open`（Enter）/ `explorer.rename`（F2）
+3. 命令在 `App.tsx` 一次性注册：`registry.register([...createExplorerShortcuts()])`
+4. handler 经 `getActiveExplorer()` 派发到聚焦实例
+
+`ExplorerActions` 接口：
+```ts
+{ getSelectedPath(): string | null
+; deleteSelected(): Promise<void>
+; openSelected(): void
+; renameSelected(): void
+; isRenaming(): boolean
+}
+```
+
+**重命名中透传**：当 `isRenaming()=true`（内联 input 活跃），Enter 和 Del 命令 handler 返回 `false` 透传，让 input 处理 Enter 确认。
+
+### ref 模式（actions 闭包过期修复）
+
+`explorerActions` 的 `useMemo` 使用**空依赖**（`[]`），所有数据通过 ref 间接访问——对齐 terminal/editor 的 ref 模式：
+
+- `selectedPathRef` 每次渲染同步 `selectedPathRef.current = selectedPath`
+- `getSelectedPath: () => selectedPathRef.current` 运行时读取最新值
+- `deleteSelected`/`openSelected`/`renameSelected`/`isRenaming` 各自通过 `xxxRef.current` 间接调用
+- `activate`/`deactivate` 闭包捕获同一个 `explorerActions` 对象（引用稳定）
+
+**为何需要 ref 模式**：`selectedPath` 是 React state——直接闭包捕获会导致 `explorerActions` 对象内的回调持有旧值。而 `activeExplorer` 指针仅通过 DOM `focusin` 事件更新（`usePanelFocus`），容器已聚焦后再点击不触发 `focusin`，指针永远指向首次聚焦时的旧对象。ref 绕过此限制——对象永不重建，数据永远读最新值。
+
+> 首次聚焦也存在竞态：`focus()` 同步触发 `focusin` 在 React batch commit 之前，此时 `activateRef.current` 指向旧渲染的 `activate`。ref 模式同样修复此竞态——新旧 `activate` 包裹同一 `explorerActions` 对象。
+
 ## 文件
 
 | 文件 | 职责 |
 |------|------|
-| `ExplorerPanel.tsx` | React 容器组件：活跃项目推导、文件树渲染、CRUD 事件处理、`handleOpenFile` 面板分派（FileViewerRegistry）、`notify_watch` 启动 |
+| `ExplorerPanel.tsx` | React 容器组件：活跃项目推导、文件树渲染、CRUD 事件处理、`handleOpenFile` 面板分派（FileViewerRegistry）、`notify_watch` 启动、**选中模型** + **焦点管理**（tabIndex={-1} + usePanelFocus("explorer")）+ **active pointer 集成** |
 | `useFileTree.ts` | 文件树数据 hook：`loadRoot` / `loadDirectory` / `toggleExpand` / `refreshExpanded`（经 `reloadPreservingExpanded` 递归重载保留展开状态）/ generation 取消 |
-| `FileTree.tsx` | 递归树组件：节点渲染、git 状态着色、右键菜单 |
+| `FileTree.tsx` | 递归树组件：节点渲染、git 状态着色、右键菜单、**单击选中（VS Code 风格高亮）** + **renamingPath 状态上提**（由 ExplorerPanel 管理） |
 | `FileIcon.tsx` | 文件图标映射（扩展名→emoji） |
+| `activeExplorer.ts` | 模块级"聚焦 explorer"指针（createActivePointer 模式，同 activeTerminal/activeEditor） |
+| `keyboard.ts` | 快捷键命令工厂：`createExplorerShortcuts()` → 3 条命令（delete/open/rename），在 App.tsx 一次性注册 |
 
 ## 宿主变更
 
