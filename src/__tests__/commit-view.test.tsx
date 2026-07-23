@@ -9,6 +9,7 @@ import { describe, it, expect, afterEach, vi, beforeEach } from "vitest";
 const {
   mockGitStatus,
   mockOnFsEventCallback,
+  mockGetContextMenuItems,
 } = vi.hoisted(() => {
   let onFsEventCb: (() => void) | null = null;
   return {
@@ -19,6 +20,7 @@ const {
       get cb() { return onFsEventCb; },
       trigger() { onFsEventCb?.(); },
     },
+    mockGetContextMenuItems: vi.fn(),
   };
 });
 
@@ -35,9 +37,16 @@ vi.mock("../ipc/notify", () => ({
   }),
 }));
 
+// mock commitContextMenu —— 右键菜单策略（仅验证 UI，不测业务逻辑）
+vi.mock("../features/commit/commitContextMenu", () => ({
+  getContextMenuItems: mockGetContextMenuItems,
+}));
+
 import React from "react";
-import { render, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { render, cleanup, fireEvent, waitFor, renderHook, act } from "@testing-library/react";
 import { CommitView } from "../features/commit/CommitView";
+import { CommitFileList } from "../features/commit/CommitFileList";
+import { useCommitStatus } from "../features/commit/useCommitStatus";
 import { openCommitFile, STATUS_PANEL_MAP, getPanelDispatch } from "../features/commit/openCommitFile";
 import { titleManager } from "../workspace/titleManager";
 import { useProjects } from "../stores/projects";
@@ -93,6 +102,8 @@ function makeEntry(
 beforeEach(() => {
   mockGitStatus.mockReset();
   mockOnFsEventCallback.cb = null;
+  mockGetContextMenuItems.mockReset();
+  mockGetContextMenuItems.mockReturnValue([]); // 默认无菜单项
   resetStores();
   // 默认 mock dockApi
   window.__dockviewApi = {
@@ -650,5 +661,189 @@ describe("STATUS_PANEL_MAP 映射表", () => {
   it("未知状态返回 null", () => {
     expect(getPanelDispatch("ignored")).toBeNull();
     expect(getPanelDispatch("unknown")).toBeNull();
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+// CommitFileList 右键菜单 UI 测试
+// ═══════════════════════════════════════════════════════
+
+describe("CommitFileList 右键菜单", () => {
+  it("右键文件触发 ContextMenu 显示", async () => {
+    seedProject("C:/repo");
+    mockGitStatus.mockResolvedValue([
+      makeEntry("C:/repo/a.ts", "modified"),
+    ]);
+
+    const mockAction = vi.fn();
+    mockGetContextMenuItems.mockReturnValue([
+      { label: "回滚", action: mockAction },
+    ]);
+
+    const { container } = render(React.createElement(CommitView));
+    await waitFor(() => {
+      const items = container.querySelectorAll('[data-e2e="commit-file-item"]');
+      expect(items.length).toBe(1);
+    });
+
+    const item = container.querySelector('[data-e2e="commit-file-item"]')!;
+    fireEvent.contextMenu(item, { clientX: 100, clientY: 200 });
+
+    // ContextMenu 应在 (100, 200) 显示
+    const menus = document.querySelectorAll('div[style*="position: fixed"]');
+    expect(menus.length).toBeGreaterThan(0);
+    const menuEl = menus[menus.length - 1] as HTMLDivElement;
+    expect(menuEl.style.left).toBe("100px");
+    expect(menuEl.style.top).toBe("200px");
+    expect(menuEl.textContent).toContain("回滚");
+  });
+
+  it("无菜单项不弹 ContextMenu", async () => {
+    seedProject("C:/repo");
+    mockGitStatus.mockResolvedValue([
+      makeEntry("C:/repo/a.ts", "modified"),
+    ]);
+    mockGetContextMenuItems.mockReturnValue([]);
+
+    const { container } = render(React.createElement(CommitView));
+    await waitFor(() => {
+      const items = container.querySelectorAll('[data-e2e="commit-file-item"]');
+      expect(items.length).toBe(1);
+    });
+
+    const item = container.querySelector('[data-e2e="commit-file-item"]')!;
+    fireEvent.contextMenu(item, { clientX: 100, clientY: 200 });
+
+    // ContextMenu 不应出现
+    const menus = document.querySelectorAll('div[style*="position: fixed"]');
+    expect(menus.length).toBe(0);
+  });
+
+  it("菜单外点击关闭 ContextMenu", async () => {
+    seedProject("C:/repo");
+    mockGitStatus.mockResolvedValue([
+      makeEntry("C:/repo/a.ts", "modified"),
+    ]);
+    mockGetContextMenuItems.mockReturnValue([
+      { label: "回滚", action: vi.fn() },
+    ]);
+
+    const { container } = render(React.createElement(CommitView));
+    await waitFor(() => {
+      const items = container.querySelectorAll('[data-e2e="commit-file-item"]');
+      expect(items.length).toBe(1);
+    });
+
+    const item = container.querySelector('[data-e2e="commit-file-item"]')!;
+    fireEvent.contextMenu(item, { clientX: 100, clientY: 200 });
+
+    // 菜单出现
+    const menusBefore = document.querySelectorAll(
+      'div[style*="position: fixed"]',
+    );
+    expect(menusBefore.length).toBeGreaterThan(0);
+
+    // 点击 document 外部
+    fireEvent.mouseDown(document.body);
+
+    // 菜单消失
+    await waitFor(() => {
+      const menusAfter = document.querySelectorAll(
+        'div[style*="position: fixed"]',
+      );
+      expect(menusAfter.length).toBe(0);
+    });
+  });
+
+  it("点击菜单项执行 action + 关闭菜单", async () => {
+    seedProject("C:/repo");
+    mockGitStatus.mockResolvedValue([
+      makeEntry("C:/repo/a.ts", "modified"),
+    ]);
+    const mockAction = vi.fn();
+    mockGetContextMenuItems.mockReturnValue([
+      { label: "回滚", action: mockAction },
+    ]);
+
+    const { container } = render(React.createElement(CommitView));
+    await waitFor(() => {
+      const items = container.querySelectorAll('[data-e2e="commit-file-item"]');
+      expect(items.length).toBe(1);
+    });
+
+    const item = container.querySelector('[data-e2e="commit-file-item"]')!;
+    fireEvent.contextMenu(item, { clientX: 100, clientY: 200 });
+
+    // 点击菜单项
+    const menuItem = document.querySelector(
+      'div[style*="position: fixed"] div',
+    )!;
+    fireEvent.click(menuItem);
+
+    expect(mockAction).toHaveBeenCalledTimes(1);
+
+    // 菜单应关闭
+    await waitFor(() => {
+      const menusAfter = document.querySelectorAll(
+        'div[style*="position: fixed"]',
+      );
+      expect(menusAfter.length).toBe(0);
+    });
+  });
+
+  it("CommitFileList 独立渲染时 onRefresh 可用", () => {
+    const { container } = render(
+      React.createElement(CommitFileList, {
+        title: "Test",
+        entries: [makeEntry("C:/repo/a.ts", "modified")],
+        rootPath: "C:/repo",
+        e2eId: "test-list",
+        onRefresh: vi.fn(),
+      }),
+    );
+
+    const list = container.querySelector('[data-e2e="test-list"]');
+    expect(list).toBeTruthy();
+    expect(list!.textContent).toContain("Test (1)");
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+// useCommitStatus refresh 测试
+// ═══════════════════════════════════════════════════════
+
+describe("useCommitStatus refresh", () => {
+  it("refresh() 立即触发 gitStatus 重载", async () => {
+    seedProject("C:/repo");
+    mockGitStatus.mockResolvedValue([]);
+
+    const { result } = renderHook(() => useCommitStatus());
+    await waitFor(() =>
+      expect(result.current.state.kind).toBe("ready"),
+    );
+
+    mockGitStatus.mockClear();
+    mockGitStatus.mockResolvedValue([
+      makeEntry("C:/repo/new.ts", "modified"),
+    ]);
+
+    act(() => {
+      result.current.refresh();
+    });
+
+    await waitFor(() =>
+      expect(mockGitStatus).toHaveBeenCalledTimes(1),
+    );
+  });
+
+  it("rootPath 为 null 时 refresh 无操作", () => {
+    resetStores();
+    const { result } = renderHook(() => useCommitStatus());
+
+    act(() => {
+      result.current.refresh();
+    });
+
+    expect(mockGitStatus).not.toHaveBeenCalled();
   });
 });

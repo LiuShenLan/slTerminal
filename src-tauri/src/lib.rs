@@ -85,6 +85,8 @@ pub fn run() {
             git::git_status,
             git::git_diff,
             git::git_file_at_head,
+            git::git_rollback,
+            git::git_unstage,
             notify::notify_watch,
         ])
         .run(tauri::generate_context!())

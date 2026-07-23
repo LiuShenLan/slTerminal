@@ -66,6 +66,13 @@ export function useCommitStatus() {
     }
   }, []);
 
+  /** 手动刷新——递增 generation 强制重载，不等 fs-event debounce */
+  const refresh = useCallback(() => {
+    if (!rootPathRef.current) return;
+    const gen = ++genRef.current;
+    loadStatus(gen);
+  }, [loadStatus]);
+
   // rootPath 变化时清空旧数据 + 重载
   useEffect(() => {
     const gen = ++genRef.current;
@@ -100,5 +107,5 @@ export function useCommitStatus() {
     };
   }, [loadStatus]);
 
-  return { state, rootPath };
+  return { state, rootPath, refresh };
 }

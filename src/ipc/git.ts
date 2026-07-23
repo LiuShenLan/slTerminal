@@ -27,3 +27,25 @@ export async function gitFileAtHead(
 ): Promise<string> {
   return invoke<string>("git_file_at_head", { repoPath, filePath });
 }
+
+/**
+ * 将指定文件恢复到 HEAD 版本（git checkout HEAD -- <file>）
+ * 读取 HEAD blob 内容并覆盖写入磁盘，modified/deleted 文件均有效。
+ */
+export async function gitRollback(
+  repoPath: string,
+  filePath: string,
+): Promise<void> {
+  await invoke("git_rollback", { repoPath, filePath });
+}
+
+/**
+ * 将指定文件从 git index 中移除（git reset HEAD -- <file>）
+ * 用于取消暂存——先 unstage 再 fs_delete，使 staged 新文件从 Changes 彻底消失。
+ */
+export async function gitUnstage(
+  repoPath: string,
+  filePath: string,
+): Promise<void> {
+  await invoke("git_unstage", { repoPath, filePath });
+}

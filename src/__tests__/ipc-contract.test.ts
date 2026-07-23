@@ -714,6 +714,80 @@ describe('git IPC 合约', () => {
 
     await expect(git.gitFileAtHead('C:\\repo', 'C:\\repo\\ghost.txt')).rejects.toThrow('文件在 HEAD 中不存在');
   });
+
+  it('gitRollback: 应调用 git_rollback 命令，参数包含 repoPath 和 filePath', async () => {
+    const spy = vi.fn();
+    mockIPC((cmd, args) => {
+      spy(cmd, args);
+    });
+
+    await git.gitRollback('C:\\repo', 'C:\\repo\\src\\a.txt');
+
+    expect(spy).toHaveBeenCalledWith('git_rollback', {
+      repoPath: 'C:\\repo',
+      filePath: 'C:\\repo\\src\\a.txt',
+    });
+  });
+
+  it('gitRollback: 成功时返回 void 不抛异常', async () => {
+    mockIPC((cmd) => {
+      if (cmd === 'git_rollback') return undefined;
+    });
+
+    await expect(git.gitRollback('C:\\repo', 'C:\\repo\\a.txt')).resolves.toBeUndefined();
+  });
+
+  it('gitRollback: invoke 失败时异常应传播', async () => {
+    mockIPC((cmd) => {
+      if (cmd === 'git_rollback') throw new Error('文件在 HEAD 中不存在');
+    });
+
+    await expect(git.gitRollback('C:\\repo', 'C:\\repo\\ghost.txt')).rejects.toThrow('文件在 HEAD 中不存在');
+  });
+
+  it('gitUnstage: 应调用 git_unstage 命令，参数包含 repoPath 和 filePath', async () => {
+    const spy = vi.fn();
+    mockIPC((cmd, args) => {
+      spy(cmd, args);
+    });
+
+    await git.gitUnstage('C:\\repo', 'C:\\repo\\src\\b.txt');
+
+    expect(spy).toHaveBeenCalledWith('git_unstage', {
+      repoPath: 'C:\\repo',
+      filePath: 'C:\\repo\\src\\b.txt',
+    });
+  });
+
+  it('gitUnstage: 成功时返回 void 不抛异常', async () => {
+    mockIPC((cmd) => {
+      if (cmd === 'git_unstage') return undefined;
+    });
+
+    await expect(git.gitUnstage('C:\\repo', 'C:\\repo\\b.txt')).resolves.toBeUndefined();
+  });
+
+  it('gitUnstage: invoke 失败时异常应传播', async () => {
+    mockIPC((cmd) => {
+      if (cmd === 'git_unstage') throw new Error('reset 文件失败');
+    });
+
+    await expect(git.gitUnstage('C:\\repo', 'C:\\repo\\b.txt')).rejects.toThrow('reset 文件失败');
+  });
+
+  it('gitUnstage: 参数 camelCase（repoPath 非 repo_path）', async () => {
+    const spy = vi.fn();
+    mockIPC((cmd, args) => {
+      spy(cmd, args);
+    });
+
+    await git.gitUnstage('C:\\repo', 'C:\\repo\\b.txt');
+
+    const callArgs = spy.mock.calls[0][1] as Record<string, unknown>;
+    expect(callArgs).toHaveProperty('repoPath');
+    expect(callArgs).toHaveProperty('filePath');
+    expect(callArgs).not.toHaveProperty('repo_path');
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════

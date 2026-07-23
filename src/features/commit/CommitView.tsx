@@ -65,7 +65,7 @@ const CHANGES_STATUSES = new Set([
 ]);
 
 export const CommitView: React.FC = () => {
-  const { state, rootPath } = useCommitStatus();
+  const { state, rootPath, refresh } = useCommitStatus();
 
   return (
     <div
@@ -112,6 +112,7 @@ export const CommitView: React.FC = () => {
             )}
             rootPath={rootPath}
             e2eId="commit-changes"
+            onRefresh={refresh}
           />
 
           {/* Unversioned Files 列表：untracked */}
@@ -120,6 +121,7 @@ export const CommitView: React.FC = () => {
             entries={state.entries.filter((e) => e.status === "untracked")}
             rootPath={rootPath}
             e2eId="commit-unversioned"
+            onRefresh={refresh}
           />
         </div>
       )}

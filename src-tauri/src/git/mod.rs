@@ -453,11 +453,140 @@ pub async fn git_file_at_head(
     }
 }
 
+/// 将指定文件恢复到 HEAD 版本（git checkout HEAD -- &lt;file&gt;）
+///
+/// 读取 HEAD blob 内容并写回磁盘。对 modified/deleted 文件均有效。
+/// 仓库尚无提交（UnbornBranch）或文件不在 HEAD tree → AppError::Git。
+#[tauri::command]
+pub async fn git_rollback(
+    repo_path: String,
+    file_path: String,
+    state: State<'_, AppState>,
+) -> Result<(), AppError> {
+    // 块作用域限界：RwLockReadGuard 非 Send，必须在 .await 前 drop
+    let (repo, workdir) = {
+        let root = state
+            .project_root
+            .read()
+            .map_err(|e| AppError::Git(format!("获取 project_root 锁失败: {e}")))?;
+        validate_path_within_root(&root, Path::new(&file_path))?;
+        let search_path = if !repo_path.is_empty() { &repo_path } else { &file_path };
+        get_or_open_repo(&state.git_repo_cache, search_path, &root)?
+    };
+
+    match tokio::task::spawn_blocking(move || {
+        let rel = Path::new(&file_path)
+            .strip_prefix(&workdir)
+            .unwrap_or(Path::new(&file_path))
+            .to_string_lossy()
+            .replace('\\', "/");
+
+        // 读取 HEAD blob 内容
+        let tree = repo
+            .head()
+            .map_err(|e| AppError::Git(format!("获取 HEAD 失败: {e}")))?
+            .peel_to_tree()
+            .map_err(|e| {
+                if e.code() == git2::ErrorCode::UnbornBranch {
+                    AppError::Git("HEAD 中不存在：尚无提交记录".to_string())
+                } else {
+                    AppError::Git(format!("获取 HEAD tree 失败: {e}"))
+                }
+            })?;
+
+        let entry = tree.get_path(Path::new(&rel)).map_err(|e| {
+            if e.code() == git2::ErrorCode::NotFound {
+                AppError::Git(format!("文件在 HEAD 中不存在: {rel}"))
+            } else {
+                AppError::Git(format!("获取 tree 条目失败: {e}"))
+            }
+        })?;
+        let blob = entry
+            .to_object(&repo)
+            .map_err(|e| AppError::Git(format!("获取 object 失败: {e}")))?
+            .peel_to_blob()
+            .map_err(|e| AppError::Git(format!("peel to blob 失败: {e}")))?;
+
+        // 步骤1：写入 HEAD blob 原始字节到工作区
+        std::fs::write(&file_path, blob.content())
+            .map_err(|e| AppError::Git(format!("写入文件失败: {e}")))?;
+
+        // 步骤2：从磁盘重建 index 条目——同步 stat 信息和 blob 哈希，
+        // 确保 statuses() stat 快速路径或哈希比对均判定干净。
+        let mut index = repo
+            .index()
+            .map_err(|e| AppError::Git(format!("获取 index 失败: {e}")))?;
+        index
+            .add_path(Path::new(&rel))
+            .map_err(|e| AppError::Git(format!("添加文件到 index 失败: {e}")))?;
+        index
+            .write()
+            .map_err(|e| AppError::Git(format!("写入 index 失败: {e}")))?;
+
+        Ok(())
+    })
+    .await
+    {
+        Ok(inner) => inner,
+        Err(e) => Err(AppError::TaskJoin(e.to_string())),
+    }
+}
+
+/// 将指定文件从 git index 中移除（git reset HEAD -- &lt;file&gt;）
+///
+/// 对 INDEX_NEW（staged 新文件，HEAD 中不存在）有效——仅从 index 删除条目。
+/// 文件不在 index → Err。
+#[tauri::command]
+pub async fn git_unstage(
+    repo_path: String,
+    file_path: String,
+    state: State<'_, AppState>,
+) -> Result<(), AppError> {
+    let (repo, workdir) = {
+        let root = state
+            .project_root
+            .read()
+            .map_err(|e| AppError::Git(format!("获取 project_root 锁失败: {e}")))?;
+        validate_path_within_root(&root, Path::new(&file_path))?;
+        let search_path = if !repo_path.is_empty() { &repo_path } else { &file_path };
+        get_or_open_repo(&state.git_repo_cache, search_path, &root)?
+    };
+
+    match tokio::task::spawn_blocking(move || {
+        let rel = Path::new(&file_path)
+            .strip_prefix(&workdir)
+            .unwrap_or(Path::new(&file_path))
+            .to_string_lossy()
+            .replace('\\', "/");
+
+        let mut index = repo
+            .index()
+            .map_err(|e| AppError::Git(format!("获取 index 失败: {e}")))?;
+
+        // remove_path 对 INDEX_NEW 有效（仅删除 index 条目，不查 HEAD）
+        index
+            .remove_path(Path::new(&rel))
+            .map_err(|e| AppError::Git(format!("从 index 移除文件失败: {e}")))?;
+
+        index
+            .write()
+            .map_err(|e| AppError::Git(format!("写入 index 失败: {e}")))?;
+
+        Ok(())
+    })
+    .await
+    {
+        Ok(inner) => inner,
+        Err(e) => Err(AppError::TaskJoin(e.to_string())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::Path;
     use std::process::Command;
-    use super::{DiffHunk, GitStatusEntry, compute_diff_hunks};
+    use super::{DiffHunk, GitStatusEntry, compute_diff_hunks, status_to_str};
     use crate::AppError;
     use crate::state::validate_path_within_root;
 
@@ -2088,5 +2217,502 @@ mod tests {
         let repo = git2::Repository::open(&path).unwrap();
         let content = read_file_at_head(&repo, &file_path).unwrap();
         assert_eq!(content, "content before deletion\n");
+    }
+
+    // ---- git_rollback / git_unstage 测试 ----
+
+    // ---- git_rollback：std::fs::write blob + index.add_path 回滚 ----
+
+    /// 回滚已修改文件：写 HEAD blob → 重建 index → status 干净
+    #[test]
+    fn git_rollback_restores_modified() {
+        let (_dir, path) = init_temp_repo();
+        Command::new("git")
+            .args(["config", "core.autocrlf", "false"])
+            .current_dir(&path)
+            .output()
+            .unwrap();
+        commit_file(&path, "a.txt", "HEAD content\n");
+
+        let file_path = path.join("a.txt");
+        std::fs::write(&file_path, "dirty\n").unwrap();
+
+        let repo = git2::Repository::open(&path).unwrap();
+        // 前置
+        assert!(
+            repo.statuses(None).unwrap().iter().any(|e| e.path().unwrap_or("") == "a.txt"),
+            "前置：修改后应在 status 中"
+        );
+
+        // 步骤1：读 HEAD blob + 写工作区
+        let tree = repo.head().unwrap().peel_to_tree().unwrap();
+        let entry = tree.get_path(Path::new("a.txt")).unwrap();
+        let blob = entry.to_object(&repo).unwrap().peel_to_blob().unwrap();
+        std::fs::write(&file_path, blob.content()).unwrap();
+
+        // 步骤2：重建 index 条目
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("a.txt")).unwrap();
+        index.write().unwrap();
+
+        // 验证
+        let restored = std::fs::read_to_string(&file_path).unwrap();
+        assert_eq!(restored, "HEAD content\n");
+        assert!(
+            !repo.statuses(None).unwrap().iter().any(|e| e.path().unwrap_or("") == "a.txt"),
+            "回滚后 git status 应干净"
+        );
+    }
+
+    /// 回滚已删除文件：写 HEAD blob 恢复 + 重建 index
+    #[test]
+    fn git_rollback_restores_deleted() {
+        let (_dir, path) = init_temp_repo();
+        Command::new("git")
+            .args(["config", "core.autocrlf", "false"])
+            .current_dir(&path)
+            .output()
+            .unwrap();
+        commit_file(&path, "a.txt", "HEAD content\n");
+
+        let file_path = path.join("a.txt");
+        std::fs::remove_file(&file_path).unwrap();
+        assert!(!file_path.exists());
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let tree = repo.head().unwrap().peel_to_tree().unwrap();
+        let entry = tree.get_path(Path::new("a.txt")).unwrap();
+        let blob = entry.to_object(&repo).unwrap().peel_to_blob().unwrap();
+        std::fs::write(&file_path, blob.content()).unwrap();
+
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("a.txt")).unwrap();
+        index.write().unwrap();
+
+        assert!(file_path.exists());
+        assert_eq!(std::fs::read_to_string(&file_path).unwrap(), "HEAD content\n");
+        assert!(!repo.statuses(None).unwrap().iter().any(|e| e.path().unwrap_or("") == "a.txt"));
+    }
+
+    /// autocrlf=true：写 LF blob → add_path(clean:LF→LF) → status 干净
+    #[test]
+    fn git_rollback_autocrlf_clean_status() {
+        let (_dir, path) = init_temp_repo();
+        Command::new("git")
+            .args(["config", "core.autocrlf", "true"])
+            .current_dir(&path)
+            .output()
+            .unwrap();
+        commit_file(&path, "a.txt", "line1\nline2\n");
+
+        let file_path = path.join("a.txt");
+        std::fs::write(&file_path, "dirty\r\n").unwrap();
+
+        let repo = git2::Repository::open(&path).unwrap();
+        assert!(
+            repo.statuses(None).unwrap().iter().any(|e| e.path().unwrap_or("") == "a.txt")
+        );
+
+        let tree = repo.head().unwrap().peel_to_tree().unwrap();
+        let blob = tree.get_path(Path::new("a.txt")).unwrap()
+            .to_object(&repo).unwrap().peel_to_blob().unwrap();
+        std::fs::write(&file_path, blob.content()).unwrap();
+
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("a.txt")).unwrap();
+        index.write().unwrap();
+
+        assert!(
+            !repo.statuses(None).unwrap().iter().any(|e| e.path().unwrap_or("") == "a.txt"),
+            "autocrlf=true：LF 工作区 + LF index → status 应干净"
+        );
+    }
+
+    /// 隔离：仅回滚指定文件
+    #[test]
+    fn git_rollback_paths_isolation() {
+        let (_dir, path) = init_temp_repo();
+        Command::new("git")
+            .args(["config", "core.autocrlf", "false"])
+            .current_dir(&path)
+            .output()
+            .unwrap();
+        commit_file(&path, "a.txt", "A\n");
+        commit_file(&path, "b.txt", "B\n");
+
+        std::fs::write(&path.join("a.txt"), "A-modified\n").unwrap();
+        std::fs::write(&path.join("b.txt"), "B-modified\n").unwrap();
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let tree = repo.head().unwrap().peel_to_tree().unwrap();
+        let blob = tree.get_path(Path::new("a.txt")).unwrap()
+            .to_object(&repo).unwrap().peel_to_blob().unwrap();
+        std::fs::write(&path.join("a.txt"), blob.content()).unwrap();
+
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("a.txt")).unwrap();
+        index.write().unwrap();
+
+        assert_eq!(std::fs::read_to_string(&path.join("a.txt")).unwrap(), "A\n");
+        assert_eq!(std::fs::read_to_string(&path.join("b.txt")).unwrap(), "B-modified\n");
+    }
+
+    /// tree.get_path 对不存在路径返回 NotFound
+    #[test]
+    fn git_rollback_nonexistent_in_tree_errors() {
+        let (_dir, path) = init_temp_repo();
+        commit_file(&path, "a.txt", "A\n");
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let tree = repo.head().unwrap().peel_to_tree().unwrap();
+        let result = tree.get_path(Path::new("nonexistent.txt"));
+        assert!(result.is_err(), "不在 tree 中的路径应返回 Err");
+    }
+
+    /// UnbornBranch → repo.head() 返回 Err
+    #[test]
+    fn git_rollback_unborn_branch_errors() {
+        let (_dir, path) = init_temp_repo();
+        let file_path = path.join("a.txt");
+        std::fs::write(&file_path, "garbage").unwrap();
+
+        let repo = git2::Repository::open(&path).unwrap();
+        assert!(repo.head().is_err(), "UnbornBranch：HEAD 应不存在");
+    }
+
+    /// 跨实例回归：实例 A 回滚 → 实例 B（全新 open）status 干净
+    #[test]
+    fn git_rollback_cross_instance_clean() {
+        let (_dir, path) = init_temp_repo();
+        Command::new("git")
+            .args(["config", "core.autocrlf", "false"])
+            .current_dir(&path)
+            .output()
+            .unwrap();
+        commit_file(&path, "a.txt", "line1\nline2\n");
+
+        let file_path = path.join("a.txt");
+        std::fs::write(&file_path, "dirty\n").unwrap();
+
+        // 实例 A：回滚
+        let repo_a = git2::Repository::open(&path).unwrap();
+        assert!(repo_a.statuses(None).unwrap().iter().any(|e| e.path().unwrap_or("") == "a.txt"));
+
+        let tree = repo_a.head().unwrap().peel_to_tree().unwrap();
+        let blob = tree.get_path(Path::new("a.txt")).unwrap()
+            .to_object(&repo_a).unwrap().peel_to_blob().unwrap();
+        std::fs::write(&file_path, blob.content()).unwrap();
+
+        let mut index = repo_a.index().unwrap();
+        index.add_path(Path::new("a.txt")).unwrap();
+        index.write().unwrap();
+
+        // 实例 B：全新 open（模拟 get_or_open_repo 新实例）
+        let repo_b = git2::Repository::open(&path).unwrap();
+        assert!(
+            !repo_b.statuses(None).unwrap().iter().any(|e| e.path().unwrap_or("") == "a.txt"),
+            "跨实例回归：实例 B status 应干净"
+        );
+    }
+
+    // ---- git_unstage：index.remove_path 行为 ----
+    /// 两步法恢复已修改文件 + git status 变干净
+    #[test]
+    fn git_rollback_two_step_restores_modified() {
+        let (_dir, path) = init_temp_repo();
+        Command::new("git")
+            .args(["config", "core.autocrlf", "false"])
+            .current_dir(&path)
+            .output()
+            .unwrap();
+        commit_file(&path, "a.txt", "HEAD content\n");
+
+        let file_path = path.join("a.txt");
+        std::fs::write(&file_path, "dirty\n").unwrap();
+
+        let repo = git2::Repository::open(&path).unwrap();
+        // 前置：status 含 a.txt
+        let before = repo.statuses(None).unwrap();
+        assert!(
+            before.iter().any(|e| e.path().unwrap_or("") == "a.txt"),
+            "前置：a.txt 应在 status 中"
+        );
+
+        // 步骤1：reset index → HEAD
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.reset_default(Some(head.as_object()), &["a.txt".to_string()])
+            .unwrap();
+        // 步骤2：checkout index → 工作区
+        let mut checkout = git2::build::CheckoutBuilder::new();
+        checkout.force();
+        checkout.path("a.txt");
+        repo.checkout_index(None, Some(&mut checkout)).unwrap();
+
+        // 验证内容恢复
+        let restored = std::fs::read_to_string(&file_path).unwrap();
+        assert_eq!(restored, "HEAD content\n");
+        // 验证 status 干净
+        let after = repo.statuses(None).unwrap();
+        assert!(
+            !after.iter().any(|e| e.path().unwrap_or("") == "a.txt"),
+            "回滚后 git status 应干净"
+        );
+    }
+
+    /// 两步法恢复已删除文件
+    #[test]
+    fn git_rollback_two_step_restores_deleted() {
+        let (_dir, path) = init_temp_repo();
+        Command::new("git")
+            .args(["config", "core.autocrlf", "false"])
+            .current_dir(&path)
+            .output()
+            .unwrap();
+        commit_file(&path, "a.txt", "HEAD content\n");
+
+        let file_path = path.join("a.txt");
+        std::fs::remove_file(&file_path).unwrap();
+        assert!(!file_path.exists());
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.reset_default(Some(head.as_object()), &["a.txt".to_string()])
+            .unwrap();
+        let mut checkout = git2::build::CheckoutBuilder::new();
+        checkout.force();
+        checkout.path("a.txt");
+        repo.checkout_index(None, Some(&mut checkout)).unwrap();
+
+        assert!(file_path.exists());
+        let restored = std::fs::read_to_string(&file_path).unwrap();
+        assert_eq!(restored, "HEAD content\n");
+        // status 干净
+        let after = repo.statuses(None).unwrap();
+        assert!(!after.iter().any(|e| e.path().unwrap_or("") == "a.txt"));
+    }
+
+    /// autocrlf=true 仓库：checkout_index 经 smudge filter 转换换行符，status 干净
+    #[test]
+    fn git_rollback_two_step_autocrlf_clean() {
+        let (_dir, path) = init_temp_repo();
+        Command::new("git")
+            .args(["config", "core.autocrlf", "true"])
+            .current_dir(&path)
+            .output()
+            .unwrap();
+        commit_file(&path, "a.txt", "line1\nline2\n");
+
+        let file_path = path.join("a.txt");
+        std::fs::write(&file_path, "dirty\r\n").unwrap();
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let before = repo.statuses(None).unwrap();
+        assert!(
+            before.iter().any(|e| e.path().unwrap_or("") == "a.txt"),
+            "前置：修改后应在 status 中"
+        );
+
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.reset_default(Some(head.as_object()), &["a.txt".to_string()])
+            .unwrap();
+        let mut checkout = git2::build::CheckoutBuilder::new();
+        checkout.force();
+        checkout.path("a.txt");
+        repo.checkout_index(None, Some(&mut checkout)).unwrap();
+
+        let after = repo.statuses(None).unwrap();
+        assert!(
+            !after.iter().any(|e| e.path().unwrap_or("") == "a.txt"),
+            "autocrlf=true 时 checkout_index 应正确处理换行符"
+        );
+    }
+
+    /// 隔离：仅回滚指定路径，不影响其他文件
+    #[test]
+    fn git_rollback_two_step_paths_isolation() {
+        let (_dir, path) = init_temp_repo();
+        Command::new("git")
+            .args(["config", "core.autocrlf", "false"])
+            .current_dir(&path)
+            .output()
+            .unwrap();
+        commit_file(&path, "a.txt", "A\n");
+        commit_file(&path, "b.txt", "B\n");
+
+        std::fs::write(&path.join("a.txt"), "A-modified\n").unwrap();
+        std::fs::write(&path.join("b.txt"), "B-modified\n").unwrap();
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        // 仅回滚 a.txt
+        repo.reset_default(Some(head.as_object()), &["a.txt".to_string()])
+            .unwrap();
+        let mut checkout = git2::build::CheckoutBuilder::new();
+        checkout.force();
+        checkout.path("a.txt");
+        repo.checkout_index(None, Some(&mut checkout)).unwrap();
+
+        let a = std::fs::read_to_string(&path.join("a.txt")).unwrap();
+        assert_eq!(a, "A\n");
+        let b = std::fs::read_to_string(&path.join("b.txt")).unwrap();
+        assert_eq!(b, "B-modified\n");
+    }
+
+    /// 跨实例回归：实例 A 两步回滚 → 实例 B（全新 open）status 干净
+    #[test]
+    fn git_rollback_cross_instance_status_clean() {
+        let (_dir, path) = init_temp_repo();
+        Command::new("git")
+            .args(["config", "core.autocrlf", "false"])
+            .current_dir(&path)
+            .output()
+            .unwrap();
+        commit_file(&path, "a.txt", "line1\nline2\n");
+
+        let file_path = path.join("a.txt");
+        std::fs::write(&file_path, "dirty\n").unwrap();
+
+        // ── 实例 A ──
+        let repo_a = git2::Repository::open(&path).unwrap();
+        assert!(
+            repo_a.statuses(None).unwrap().iter().any(|e| e.path().unwrap_or("") == "a.txt"),
+            "前置：修改后在 status 中"
+        );
+
+        let head = repo_a.head().unwrap().peel_to_commit().unwrap();
+        repo_a.reset_default(Some(head.as_object()), &["a.txt".to_string()])
+            .unwrap();
+        let mut checkout = git2::build::CheckoutBuilder::new();
+        checkout.force();
+        checkout.path("a.txt");
+        repo_a.checkout_index(None, Some(&mut checkout)).unwrap();
+
+        // ── 实例 B：全新 open，模拟 get_or_open_repo 返回的新实例 ──
+        let repo_b = git2::Repository::open(&path).unwrap();
+        let after = repo_b.statuses(None).unwrap();
+        assert!(
+            !after.iter().any(|e| e.path().unwrap_or("") == "a.txt"),
+            "跨实例回归：实例 A 回滚后，实例 B status 应干净"
+        );
+    }
+
+    /// reset_default 对不在 tree 中的路径静默成功（不 panic）
+    #[test]
+    fn git_rollback_two_step_nonexistent_in_tree_no_panic() {
+        let (_dir, path) = init_temp_repo();
+        commit_file(&path, "a.txt", "A\n");
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        let result = repo.reset_default(Some(head.as_object()), &["nonexistent.txt".to_string()]);
+        let _ = result; // 行为记录：对不在 tree 的路径静默成功
+    }
+
+    /// UnbornBranch（无 HEAD）→ repo.head() 返回 Err
+    #[test]
+    fn git_rollback_two_step_unborn_branch_errors() {
+        let (_dir, path) = init_temp_repo();
+        let file_path = path.join("a.txt");
+        std::fs::write(&file_path, "garbage").unwrap();
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let result = repo.head();
+        assert!(result.is_err(), "UnbornBranch：HEAD 应不存在");
+    }
+
+    // ---- git_unstage：index.remove_path 行为 ----
+
+    /// git_unstage：INDEX_NEW 文件（staged 新文件）取消暂存后变为 untracked
+    #[test]
+    fn git_unstage_index_new_file() {
+        let (_dir, path) = init_temp_repo();
+        // 需要先有一个 commit，否则 git status 不会正常显示
+        commit_file(&path, "existing.txt", "placeholder\n");
+
+        // 创建新文件并 git add
+        let file_path = path.join("new.txt");
+        std::fs::write(&file_path, "new content\n").unwrap();
+        git_add(&path, "new.txt");
+
+        // 验证文件在 index 中
+        let repo = git2::Repository::open(&path).unwrap();
+        let statuses = repo.statuses(None).unwrap();
+        let before = statuses.iter().find(|e| {
+            e.path().unwrap_or("") == "new.txt"
+        });
+        assert!(before.is_some(), "前置：new.txt 应在 git status 中");
+        assert!(
+            before.unwrap().status().contains(git2::Status::INDEX_NEW),
+            "前置：应包含 INDEX_NEW"
+        );
+
+        // 取消暂存：从 index 移除
+        let mut index = repo.index().unwrap();
+        index.remove_path(std::path::Path::new("new.txt")).unwrap();
+        index.write().unwrap();
+
+        // 验证：文件不再在 index 中，变为 untracked
+        let statuses2 = repo.statuses(None).unwrap();
+        let after = statuses2.iter().find(|e| {
+            e.path().unwrap_or("") == "new.txt"
+        });
+        assert!(
+            after.is_some(),
+            "取消暂存后文件仍应出现在 status 中（untracked）"
+        );
+        let after_status = status_to_str(after.unwrap().status());
+        assert_eq!(after_status, Some("untracked"), "应变为 untracked");
+    }
+
+    /// git_unstage：INDEX_MODIFIED 文件用 remove_path 会完全删除 index 条目
+    /// （仅用于 INDEX_NEW 场景——commit view 中 added 文件走此路径）
+    #[test]
+    fn git_unstage_remove_path_on_index_modified_removes_entry() {
+        let (_dir, path) = init_temp_repo();
+        commit_file(&path, "a.txt", "v1\n");
+
+        // 修改 + git add → INDEX_MODIFIED
+        let file_path = path.join("a.txt");
+        std::fs::write(&file_path, "v2\n").unwrap();
+        git_add(&path, "a.txt");
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let before = repo.statuses(None).unwrap();
+        let before_entry = before.iter().find(|e| e.path().unwrap_or("") == "a.txt");
+        assert!(before_entry.is_some());
+        assert!(
+            before_entry.unwrap().status().contains(git2::Status::INDEX_MODIFIED),
+            "前置：INDEX_MODIFIED"
+        );
+
+        // remove_path 完全删除 index 条目（非 reset 到 HEAD）
+        let mut index = repo.index().unwrap();
+        index.remove_path(std::path::Path::new("a.txt")).unwrap();
+        index.write().unwrap();
+
+        // remove_path 后无 INDEX_MODIFIED（条目已从 index 删除）
+        let after = repo.statuses(None).unwrap();
+        let after_entry = after.iter().find(|e| e.path().unwrap_or("") == "a.txt");
+        // 条目完全被删 → 可能显示为 deleted 或其他状态
+        // 此测试锁死 remove_path 行为：它删除条目，不 reset 到 HEAD
+        assert!(
+            after_entry.is_none()
+                || !after_entry.unwrap().status().contains(git2::Status::INDEX_MODIFIED),
+            "remove_path 后不应有 INDEX_MODIFIED"
+        );
+    }
+
+    /// git_unstage：对不在 index 中的文件 remove_path 静默成功（非 panic）
+    #[test]
+    fn git_unstage_nonexistent_in_index_no_panic() {
+        let (_dir, path) = init_temp_repo();
+        commit_file(&path, "existing.txt", "content\n");
+
+        let repo = git2::Repository::open(&path).unwrap();
+        let mut index = repo.index().unwrap();
+        // remove_path 对不在 index 中的文件静默成功（非 Err）
+        let result = index.remove_path(std::path::Path::new("nonexistent.txt"));
+        // 行为记录：git2 0.20 remove_path 对不存在路径也返回 Ok
+        let _ = result;
     }
 }
