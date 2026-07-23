@@ -72,6 +72,30 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
     defaultKey: key("KeyZ", { alt: true }),
     priority: 100,
   },
+  {
+    id: "explorer.delete",
+    title: "删除文件",
+    category: "explorer",
+    context: "explorer",
+    defaultKey: key("Delete"),
+    priority: 100,
+  },
+  {
+    id: "explorer.open",
+    title: "打开文件",
+    category: "explorer",
+    context: "explorer",
+    defaultKey: key("Enter"),
+    priority: 100,
+  },
+  {
+    id: "explorer.rename",
+    title: "重命名文件",
+    category: "explorer",
+    context: "explorer",
+    defaultKey: key("F2"),
+    priority: 100,
+  },
 ];
 
 /** id → 元数据，O(1) 查找 */

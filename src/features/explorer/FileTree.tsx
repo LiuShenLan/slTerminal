@@ -2,15 +2,17 @@
 //
 // 职责：
 // - 递归渲染文件/文件夹树
-// - 单击文件夹展开/折叠，双击文件打开编辑器
+// - 单击选中 + 双击打开文件
 // - 右键菜单 CRUD
 // - git 状态色应用于文件名
+// - 键盘快捷键（Del/Enter/F2）经 ExplorerPanel → ShortcutRegistry 派发
 
 import React, { useState, useCallback } from "react";
 import { FileIcon } from "./FileIcon";
 import type { TreeNode } from "./useFileTree";
 import {
   EXPLORER_COLORS,
+  EXPLORER_SELECTION_BG,
   GIT_FILE_COLORS,
   SIDEBAR_BG,
   SIDEBAR_FG,
@@ -128,6 +130,14 @@ interface FileTreeProps {
   onNewFile: (parentPath: string) => void;
   onNewFolder: (parentPath: string) => void;
   rootPath?: string; // 项目根路径，用于根级空白区域右键创建文件/文件夹
+  // 选中模型（由 ExplorerPanel 管理）
+  selectedPath: string | null;
+  onSelect: (path: string | null) => void;
+  // 重命名状态（由 ExplorerPanel 管理，从 FileTree 上提）
+  renamingPath: string | null;
+  renameValue: string;
+  onRenameStart: (path: string, name: string) => void;
+  onRenameCancel: () => void;
 }
 
 // ---- 单行节点 ----
@@ -139,7 +149,9 @@ const TreeNodeRow: React.FC<{
   onToggleExpand: (path: string) => void;
   onOpenFile: (path: string) => void;
   onContextMenu: (e: React.MouseEvent) => void;
-}> = ({ node, depth, gitStatusMap, onToggleExpand, onOpenFile, onContextMenu }) => {
+  isSelected: boolean;
+  onSelect: (path: string) => void;
+}> = ({ node, depth, gitStatusMap, onToggleExpand, onOpenFile, onContextMenu, isSelected, onSelect }) => {
   const { entry, expanded, loading } = node;
   // 渲染时实时查表，避免节点创建时写入 → 闭包陈旧/时序断裂问题
   const gitStatus = gitStatusMap.get(entry.path);
@@ -148,6 +160,7 @@ const TreeNodeRow: React.FC<{
   return (
     <div
       onClick={() => {
+        onSelect(entry.path);
         if (entry.isDir) {
           onToggleExpand(entry.path);
         }
@@ -169,13 +182,18 @@ const TreeNodeRow: React.FC<{
         color: EXPLORER_COLORS.fg,
         height: 24,
         whiteSpace: "nowrap",
+        // 选中态优先于 hover（style 内联优先级高于 onMouseEnter/Leave 动态设置）
+        background: isSelected ? EXPLORER_SELECTION_BG : "transparent",
       }}
       onMouseEnter={(e) => {
-        (e.target as HTMLDivElement).style.background =
-          EXPLORER_COLORS.hover;
+        if (!isSelected) {
+          (e.target as HTMLDivElement).style.background = EXPLORER_COLORS.hover;
+        }
       }}
       onMouseLeave={(e) => {
-        (e.target as HTMLDivElement).style.background = "transparent";
+        if (!isSelected) {
+          (e.target as HTMLDivElement).style.background = "transparent";
+        }
       }}
     >
       {/* 展开/折叠箭头 */}
@@ -236,6 +254,12 @@ export const FileTree: React.FC<FileTreeProps> = ({
   onNewFile,
   onNewFolder,
   rootPath,
+  selectedPath,
+  onSelect,
+  renamingPath,
+  renameValue,
+  onRenameStart,
+  onRenameCancel,
 }) => {
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
     visible: false,
@@ -244,8 +268,7 @@ export const FileTree: React.FC<FileTreeProps> = ({
     items: [],
   });
 
-  const [renamingPath, setRenamingPath] = useState<string | null>(null);
-  const [renameValue, setRenameValue] = useState("");
+  // 新建文件/文件夹的输入框状态（仍由 FileTree 本地管理）
   const [newFileName, setNewFileName] = useState<string | null>(null); // parent path
   const [newFolderName, setNewFolderName] = useState<string | null>(null);
 
@@ -274,8 +297,7 @@ export const FileTree: React.FC<FileTreeProps> = ({
           {
             label: "重命名",
             action: () => {
-              setRenamingPath(node.entry.path);
-              setRenameValue(node.entry.name);
+              onRenameStart(node.entry.path, node.entry.name);
             },
           },
           {
@@ -293,7 +315,7 @@ export const FileTree: React.FC<FileTreeProps> = ({
         ],
       });
     },
-    [onOpenFile, onOpenInTerminal, onDelete],
+    [onOpenFile, onOpenInTerminal, onDelete, onRenameStart],
   );
 
   /** 构建文件夹右键菜单 */
@@ -325,8 +347,7 @@ export const FileTree: React.FC<FileTreeProps> = ({
           {
             label: "重命名",
             action: () => {
-              setRenamingPath(node.entry.path);
-              setRenameValue(node.entry.name);
+              onRenameStart(node.entry.path, node.entry.name);
             },
           },
           {
@@ -344,16 +365,20 @@ export const FileTree: React.FC<FileTreeProps> = ({
         ],
       });
     },
-    [onToggleExpand, onOpenInTerminal, onDelete],
+    [onToggleExpand, onOpenInTerminal, onDelete, onRenameStart],
   );
 
+  // rename input ref——读取用户实际输入值（renameValue prop 仅作 defaultValue，不追踪变化）
+  const renameInputRef = React.useRef<HTMLInputElement>(null);
+
   const confirmRename = useCallback(() => {
-    if (renamingPath && renameValue.trim()) {
-      onRename(renamingPath, renameValue.trim());
+    const newName = renameInputRef.current?.value.trim();
+    if (renamingPath && newName) {
+      onRename(renamingPath, newName);
+    } else {
+      onRenameCancel();
     }
-    setRenamingPath(null);
-    setRenameValue("");
-  }, [renamingPath, renameValue, onRename]);
+  }, [renamingPath, onRename, onRenameCancel]);
 
   const confirmNewFile = useCallback(
     (parentPath: string, name: string) => {
@@ -496,13 +521,13 @@ export const FileTree: React.FC<FileTreeProps> = ({
               }}
             >
               <input
-                value={renameValue}
-                onChange={(e) => setRenameValue(e.target.value)}
+                ref={renameInputRef}
+                defaultValue={renameValue}
                 onBlur={confirmRename}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") confirmRename();
                   if (e.key === "Escape") {
-                    setRenamingPath(null);
+                    onRenameCancel();
                   }
                 }}
                 autoFocus
@@ -533,6 +558,8 @@ export const FileTree: React.FC<FileTreeProps> = ({
                   fileContextMenu(e, node);
                 }
               }}
+              isSelected={selectedPath === node.entry.path}
+              onSelect={onSelect}
             />
           )}
 
@@ -627,6 +654,12 @@ export const FileTree: React.FC<FileTreeProps> = ({
               onDelete={onDelete}
               onNewFile={onNewFile}
               onNewFolder={onNewFolder}
+              selectedPath={selectedPath}
+              onSelect={onSelect}
+              renamingPath={renamingPath}
+              renameValue={renameValue}
+              onRenameStart={onRenameStart}
+              onRenameCancel={onRenameCancel}
             />
           )}
         </React.Fragment>
@@ -637,12 +670,18 @@ export const FileTree: React.FC<FileTreeProps> = ({
     </>
   );
 
-  // 顶层（depth === 0）：wrapper div 捕获空白区域右键
+  // 顶层（depth === 0）：wrapper div 捕获空白区域右键 + 单击空白取消选中
   if (depth === 0) {
     return (
       <div
         style={{ minHeight: "100%" }}
         onContextMenu={rootContextMenu}
+        onClick={(e) => {
+          // 仅在点击 wrapper 自身（非子节点）时取消选中
+          if (e.target === e.currentTarget) {
+            onSelect(null);
+          }
+        }}
       >
         {nodes.length === 0 && rootPath && (
           <div

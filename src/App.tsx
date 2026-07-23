@@ -17,6 +17,7 @@ import { ErrorBoundary } from "./lib";
 import { getShortcutRegistry, createGlobalShortcuts, wireKeybindings } from "./features/shortcuts";
 import { createTerminalShortcuts } from "./panels/terminal/keyboard";
 import { createEditorShortcuts } from "./panels/editor/keyboard";
+import { createExplorerShortcuts } from "./features/explorer/keyboard";
 import { PANEL_BG, INPUT_BORDER, APP_BG } from "./theme";
 import "dockview-react/dist/styles/dockview.css";
 
@@ -164,6 +165,7 @@ function App() {
       ...createGlobalShortcuts(() => window.__dockviewApi),
       ...createTerminalShortcuts(),
       ...createEditorShortcuts(),
+      ...createExplorerShortcuts(),
     ]);
   }, []);
 

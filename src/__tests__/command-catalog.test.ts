@@ -15,6 +15,9 @@ const EXPECTED_IDS = [
   "terminal.newline",
   "editor.save",
   "editor.toggleWordWrap",
+  "explorer.delete",
+  "explorer.open",
+  "explorer.rename",
 ];
 
 describe("COMMAND_CATALOG", () => {
@@ -48,7 +51,7 @@ describe("COMMAND_CATALOG", () => {
     for (const m of COMMAND_CATALOG) {
       expect(typeof m.title).toBe("string");
       expect(m.title.length).toBeGreaterThan(0);
-      expect(["global", "terminal", "editor"]).toContain(m.category);
+      expect(["global", "terminal", "editor", "explorer"]).toContain(m.category);
       expect(typeof m.context).toBe("string");
       expect(typeof m.priority).toBe("number");
     }
@@ -83,6 +86,39 @@ describe("commandFromMeta", () => {
 
   it("未知 id 抛错", () => {
     expect(() => commandFromMeta("does.not.exist", () => true)).toThrow(/未知命令 id/);
+  });
+
+  it("合并 explorer.delete handler 与元数据", () => {
+    const handler = vi.fn(() => true);
+    const cmd = commandFromMeta("explorer.delete", handler);
+    expect(cmd.id).toBe("explorer.delete");
+    expect(cmd.context).toBe("explorer");
+    expect(cmd.defaultKey).toEqual({
+      ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, code: "Delete",
+    });
+    expect(cmd.handler).toBe(handler);
+  });
+
+  it("合并 explorer.open handler 与元数据", () => {
+    const handler = vi.fn(() => true);
+    const cmd = commandFromMeta("explorer.open", handler);
+    expect(cmd.id).toBe("explorer.open");
+    expect(cmd.context).toBe("explorer");
+    expect(cmd.defaultKey).toEqual({
+      ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, code: "Enter",
+    });
+    expect(cmd.handler).toBe(handler);
+  });
+
+  it("合并 explorer.rename handler 与元数据", () => {
+    const handler = vi.fn(() => true);
+    const cmd = commandFromMeta("explorer.rename", handler);
+    expect(cmd.id).toBe("explorer.rename");
+    expect(cmd.context).toBe("explorer");
+    expect(cmd.defaultKey).toEqual({
+      ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, code: "F2",
+    });
+    expect(cmd.handler).toBe(handler);
   });
 
   it("合并 editor.toggleWordWrap handler 与元数据", () => {

@@ -89,6 +89,9 @@ export const ERROR_BANNER_BG = "#5A1D1D";
 export const ERROR_BANNER_BORDER = "#8B0000";
 export const ERROR_BANNER_FG = "#F48771";
 
+// --- Explorer 选中高亮色（文件浏览器选中行背景）---
+export const EXPLORER_SELECTION_BG = "#094771"; // VS Code list activeSelectionBackground
+
 // --- CSS 变量桥接（供 App.css :root 变量从 TS token 取值）---
 // SIDEBAR_CSS 模式：JS 对象映射 CSS 自定义属性名 → colors.ts token 值，
 // 在 main.tsx 注入 document.documentElement，App.css 仅通过 var() 引用。

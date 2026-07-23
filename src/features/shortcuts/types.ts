@@ -26,7 +26,7 @@ export type ShortcutContext = string;
 export type Priority = number;
 
 /** 命令分类（用于未来可视化设置 UI 分组） */
-export type CommandCategory = "global" | "terminal" | "editor";
+export type CommandCategory = "global" | "terminal" | "editor" | "explorer";
 
 /**
  * 命令静态元数据（不含 handler，可在面板未挂载时枚举）。

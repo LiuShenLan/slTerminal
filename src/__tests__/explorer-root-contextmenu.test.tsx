@@ -117,6 +117,12 @@ function renderFileTree(overrides: FileTreeOverrides = {}) {
     onNewFile: overrides.onNewFile ?? vi.fn(),
     onNewFolder: overrides.onNewFolder ?? vi.fn(),
     rootPath: overrides.rootPath,
+    selectedPath: null,
+    onSelect: vi.fn(),
+    renamingPath: null,
+    renameValue: "",
+    onRenameStart: vi.fn(),
+    onRenameCancel: vi.fn(),
   };
   return render(React.createElement(FileTree, defaultProps));
 }

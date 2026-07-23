@@ -62,6 +62,14 @@ describe("isReserved — global (两集并集)", () => {
   });
 });
 
+describe("isReserved — explorer context", () => {
+  it("Delete/Enter/F2 在 explorer context 中为非保留键", () => {
+    expect(isReserved(ks({ code: "Delete" }), "explorer")).toBe(false);
+    expect(isReserved(ks({ code: "Enter" }), "explorer")).toBe(false);
+    expect(isReserved(ks({ code: "F2" }), "explorer")).toBe(false);
+  });
+});
+
 describe("isReserved — 未知 context", () => {
   it("未知 context 一律不保留", () => {
     expect(isReserved(ks({ ctrlKey: true, code: "KeyC" }), "htmlviewer")).toBe(false);

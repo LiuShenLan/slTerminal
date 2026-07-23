@@ -4,8 +4,9 @@
 // - 展示文件树（跟随活跃项目根路径）
 // - 双击文件 → 在焦点操作页面打开编辑器面板
 // - 右键菜单 CRUD 操作
+// - 键盘快捷键（Del/Enter/F2）经 ShortcutRegistry + active pointer 派发
 
-import React, { useEffect, useCallback, useState, useRef } from "react";
+import React, { useEffect, useCallback, useState, useRef, useMemo } from "react";
 import { useFileTree } from "./useFileTree";
 import { FileTree } from "./FileTree";
 import { createDir, deleteEntry, rename, writeFile } from "../../ipc/fs";
@@ -13,9 +14,20 @@ import { startWatch } from "../../ipc/notify";
 import { useProjects } from "../../stores/projects";
 import { useLayout } from "../../stores/layout";
 import { titleManager } from "../../workspace/titleManager";
-import { EXPLORER_COLORS, SEPARATOR_BG, INPUT_BORDER, ERROR_BANNER_BG, ERROR_BANNER_BORDER, ERROR_BANNER_FG } from "../../theme";
+import {
+  EXPLORER_COLORS,
+  SEPARATOR_BG,
+  INPUT_BORDER,
+  ERROR_BANNER_BG,
+  ERROR_BANNER_BORDER,
+  ERROR_BANNER_FG,
+} from "../../theme";
 import { PANEL_TERMINAL, PANEL_EDITOR, isAlwaysRenderPanel } from "../../panelRegistry";
 import { fileViewerRegistry } from "../fileViewers";
+import { usePanelFocus } from "../shortcuts/usePanelFocus";
+import { setActiveExplorer, clearActiveExplorer } from "./activeExplorer";
+import { basename } from "../../lib/path";
+import { ask } from "../../ipc/dialog";
 
 /** 操作失败错误提示自动消失时间（ms） */
 const ERROR_AUTO_DISMISS_MS = 5000;
@@ -42,6 +54,16 @@ export const ExplorerPanel: React.FC = () => {
 
   const { rootNodes, gitStatusMap, toggleExpand, refresh } = useFileTree({ rootPath });
 
+  // --- 选中模型 ---
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+
+  // --- 重命名状态（从 FileTree 上提） ---
+  const [renamingPath, setRenamingPath] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+
+  // --- 焦点管理 ---
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
   // 操作失败内联错误提示
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -59,6 +81,89 @@ export const ExplorerPanel: React.FC = () => {
     };
   }, []);
 
+  // --- Active explorer actions（供快捷键 handler 派发） ---
+  // 对齐 terminal/editor 的 ref 模式：useMemo 空 deps，所有数据通过 ref 间接访问，
+  // 确保 actions 对象引用稳定——active pointer 中永不持有过期闭包。
+
+  const selectedPathRef = useRef<string | null>(null);
+  selectedPathRef.current = selectedPath; // 每次渲染同步最新值
+
+  const isRenamingRef = useRef<() => boolean>(() => false);
+  isRenamingRef.current = () => renamingPath !== null;
+
+  const handleDeleteSelected = useCallback(async () => {
+    const path = selectedPathRef.current;
+    if (!path) return;
+    const name = basename(path);
+    const ok = await ask(`确定删除 "${name}"？此操作不可撤销。`, {
+      title: "确认删除",
+      kind: "warning",
+    });
+    if (!ok) return;
+    try {
+      await deleteEntry(path);
+      setSelectedPath(null);
+      refresh();
+    } catch (err) {
+      console.error("删除失败:", err);
+      showError(`删除失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [refresh, showError]);
+
+  const deleteSelectedRef = useRef(handleDeleteSelected);
+  deleteSelectedRef.current = handleDeleteSelected;
+
+  const handleOpenSelected = useCallback(() => {
+    const path = selectedPathRef.current;
+    if (!path) return;
+    const findNode = (nodes: typeof rootNodes, targetPath: string): boolean | null => {
+      for (const n of nodes) {
+        if (n.entry.path === targetPath) return n.entry.isDir;
+        if (n.children.length > 0) {
+          const found = findNode(n.children, targetPath);
+          if (found !== null) return found;
+        }
+      }
+      return null;
+    };
+    const isDir = findNode(rootNodes, path);
+    if (isDir) {
+      toggleExpand(path);
+      return;
+    }
+    handleOpenFile(path);
+  }, [rootNodes, toggleExpand]);
+
+  const openSelectedRef = useRef(handleOpenSelected);
+  openSelectedRef.current = handleOpenSelected;
+
+  const handleRenameSelected = useCallback(() => {
+    const path = selectedPathRef.current;
+    if (!path) return;
+    setRenamingPath(path);
+    setRenameValue(basename(path));
+  }, []);
+
+  const renameSelectedRef = useRef(handleRenameSelected);
+  renameSelectedRef.current = handleRenameSelected;
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- 空依赖：所有数据通过 ref 访问，对象引用永久稳定
+  const explorerActions = useMemo(
+    () => ({
+      getSelectedPath: () => selectedPathRef.current,
+      deleteSelected: async () => { await deleteSelectedRef.current(); },
+      openSelected: () => { openSelectedRef.current(); },
+      renameSelected: () => { renameSelectedRef.current(); },
+      isRenaming: () => isRenamingRef.current(),
+    }),
+    [],
+  );
+
+  const activate = useCallback(() => setActiveExplorer(explorerActions), [explorerActions]);
+  const deactivate = useCallback(() => clearActiveExplorer(explorerActions), [explorerActions]);
+
+  usePanelFocus("explorer", containerRef.current, activate, deactivate);
+
   // 当项目根路径变化时启动文件监听（后端 emit fs-event → 前端增量刷新）
   useEffect(() => {
     if (projectRootPath) {
@@ -67,6 +172,12 @@ export const ExplorerPanel: React.FC = () => {
       );
     }
   }, [projectRootPath]);
+
+  // rootPath 变化时重置选中和重命名状态
+  useEffect(() => {
+    setSelectedPath(null);
+    setRenamingPath(null);
+  }, [rootPath]);
 
   /** 双击文件 → 打开编辑器面板 */
   const handleOpenFile = useCallback(
@@ -170,6 +281,8 @@ export const ExplorerPanel: React.FC = () => {
       const newPath = parentDir ? `${parentDir}/${newName}` : newName;
       try {
         await rename(oldPath, newPath);
+        setRenamingPath(null);
+        setRenameValue("");
         refresh();
       } catch (err) {
         console.error("重命名失败:", err);
@@ -179,18 +292,25 @@ export const ExplorerPanel: React.FC = () => {
     [refresh, showError],
   );
 
-  /** 删除 */
+  /** 取消重命名 */
+  const handleRenameCancel = useCallback(() => {
+    setRenamingPath(null);
+    setRenameValue("");
+  }, []);
+
+  /** 删除（保留右键菜单使用） */
   const handleDelete = useCallback(
     async (filePath: string) => {
       try {
         await deleteEntry(filePath);
+        if (selectedPath === filePath) setSelectedPath(null);
         refresh();
       } catch (err) {
         console.error("删除失败:", err);
         showError(`删除失败: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
-    [refresh, showError],
+    [refresh, showError, selectedPath],
   );
 
   /** 新建文件 */
@@ -219,6 +339,18 @@ export const ExplorerPanel: React.FC = () => {
       }
     },
     [refresh, showError],
+  );
+
+  /** 单击行 → 选中 + 聚焦容器 */
+  const handleSelect = useCallback(
+    (path: string | null) => {
+      setSelectedPath(path);
+      // 单击即聚焦容器（建立 explorer context）
+      if (containerRef.current) {
+        containerRef.current.focus();
+      }
+    },
+    [],
   );
 
   return (
@@ -289,14 +421,18 @@ export const ExplorerPanel: React.FC = () => {
         </div>
       )}
 
-      {/* 文件树 */}
+      {/* 文件树容器（tabIndex 使容器可聚焦，usePanelFocus 监听 focusin/focusout） */}
       <div
+        ref={containerRef}
+        tabIndex={-1}
         style={{
           flex: 1,
           overflowY: "auto",
           overflowX: "hidden",
           padding: "2px 0",
+          outline: "none",
         }}
+        data-e2e="explorer-tree-container"
       >
         {rootPath ? (
           <FileTree
@@ -311,6 +447,17 @@ export const ExplorerPanel: React.FC = () => {
             onDelete={handleDelete}
             onNewFile={handleNewFile}
             onNewFolder={handleNewFolder}
+            // 新增 props：选中模型
+            selectedPath={selectedPath}
+            onSelect={handleSelect}
+            // 新增 props：重命名状态上提
+            renamingPath={renamingPath}
+            renameValue={renameValue}
+            onRenameStart={(path: string, name: string) => {
+              setRenamingPath(path);
+              setRenameValue(name);
+            }}
+            onRenameCancel={handleRenameCancel}
           />
         ) : (
           <div

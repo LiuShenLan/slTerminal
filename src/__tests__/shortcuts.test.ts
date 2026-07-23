@@ -743,4 +743,80 @@ describe("ShortcutRegistry", () => {
       expect(gBind.keystroke).toBe("Ctrl+KeyW");
     });
   });
+
+  describe("explorer context", () => {
+    let unregs: (() => void)[] = [];
+
+    afterEach(() => {
+      unregs.forEach((fn) => fn());
+      unregs = [];
+      registry._reset();
+    });
+
+    it("pushContext('explorer') → findWinner 匹配 explorer 命令", () => {
+      const handler = vi.fn(() => true);
+      const ec = cmd({
+        id: "explorer.delete",
+        context: "explorer",
+        defaultKey: { ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, code: "Delete" },
+        handler,
+      });
+      const unreg = registry.register([ec]);
+      unregs.push(unreg);
+
+      registry.pushContext("explorer");
+      dispatchKeydown({ code: "Delete" });
+      expect(handler).toHaveBeenCalledOnce();
+    });
+
+    it("'explorer' 与 'terminal' 同在栈时，栈尾优先", () => {
+      const explorerHandler = vi.fn(() => true);
+      const terminalHandler = vi.fn(() => true);
+      const ec = cmd({
+        id: "explorer.delete",
+        context: "explorer",
+        priority: 100,
+        defaultKey: { ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, code: "Delete" },
+        handler: explorerHandler,
+      });
+      const tc = cmd({
+        id: "terminal.test",
+        context: "terminal",
+        priority: 100,
+        defaultKey: { ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, code: "Delete" },
+        handler: terminalHandler,
+      });
+      const unreg = registry.register([ec, tc]);
+      unregs.push(unreg);
+
+      // explorer 最后聚焦，在栈尾 → explorer 优先
+      registry.pushContext("terminal");
+      registry.pushContext("explorer");
+      dispatchKeydown({ code: "Delete" });
+      expect(explorerHandler).toHaveBeenCalledOnce();
+      expect(terminalHandler).not.toHaveBeenCalled();
+    });
+
+    it("resolve(event, 'explorer') forceContext 路径 explorer 命令命中", () => {
+      const handler = vi.fn(() => true);
+      const ec = cmd({
+        id: "explorer.delete",
+        context: "explorer",
+        defaultKey: { ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, code: "Delete" },
+        handler,
+      });
+      const unreg = registry.register([ec]);
+      unregs.push(unreg);
+
+      // 不 pushContext，用 forceContext
+      const event = new KeyboardEvent("keydown", {
+        code: "Delete",
+        bubbles: true,
+        cancelable: true,
+      });
+      const consumed = registry.resolve(event, "explorer");
+      expect(consumed).toBe(true);
+      expect(handler).toHaveBeenCalledOnce();
+    });
+  });
 });
