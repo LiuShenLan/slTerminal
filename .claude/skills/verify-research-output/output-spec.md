@@ -37,6 +37,8 @@
 
 ## Review 文件头部模板
 
+> 由 `scripts/review-template.mjs` 生成：`node <skill目录>/scripts/review-template.mjs <源文件路径> <组名>`
+
 ```markdown
 # {source-file-name} 事实核查报告
 
