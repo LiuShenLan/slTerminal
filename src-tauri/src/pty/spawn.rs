@@ -787,10 +787,12 @@ pub async fn pty_spawn(
     let shell_info = shell::resolve_shell_info(request.shell.as_deref())?;
 
     // 注入终端能力环境变量——Claude Code 依赖此宣告启用 True Color
+    // SLTERM_PANEL_ID：子进程据此识别所属面板，供 hooks 信号文件标记事件来源
     let extra_envs: Vec<(String, String)> = vec![
         ("COLORTERM".into(), "truecolor".into()),
         ("TERM".into(), "xterm-256color".into()),
         ("TERM_PROGRAM".into(), "slTerminal".into()),
+        ("SLTERM_PANEL_ID".into(), panel_id.clone()),
     ];
 
     // BE-01: clone spawn_lock Arc 移送 spawn_blocking 内获取
@@ -854,6 +856,7 @@ pub async fn pty_spawn(
             cmd.env("COLORTERM", "truecolor");
             cmd.env("TERM", "xterm-256color");
             cmd.env("TERM_PROGRAM", "slTerminal");
+            cmd.env("SLTERM_PANEL_ID", &panel_id);
             if let Some(ref cwd) = cwd {
                 cmd.cwd(cwd.replace('/', "\\"));
             }

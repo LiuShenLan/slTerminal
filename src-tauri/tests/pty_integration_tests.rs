@@ -383,3 +383,55 @@ fn pty_session_isolation() {
     drop(reader_a);
     drop(reader_b);
 }
+
+/// pty_env_injects_slterm_panel_id: 验证 spawn 后子进程环境变量含 SLTERM_PANEL_ID
+///
+/// 使用 conpty_custom 直接创建 PTY 对 + spawn cmd.exe，通过 echo 命令展开环境变量，
+/// 验证 SLTERM_PANEL_ID 的值与传入 extra_envs 一致。
+#[cfg(windows)]
+#[test]
+fn pty_env_injects_slterm_panel_id() {
+    let _lock = SPAWN_LOCK.lock().unwrap();
+    use slterminal_lib::pty::{shell, spawn::conpty_custom};
+    use std::io::Write as _;
+
+    let shell_info =
+        shell::resolve_shell_info(Some("cmd.exe")).expect("resolve_shell_info 应成功");
+    let (hpc, master) = conpty_custom::create_conpty_pair(80, 24, 26100)
+        .expect("create_conpty_pair 应成功");
+
+    // CPR 注入（对齐生产代码 pty_spawn）
+    let mut writer = master.take_writer().expect("take_writer 应成功");
+    writer.write_all(b"\x1b[1;1R").unwrap();
+    writer.flush().unwrap();
+
+    let test_panel_id = "test-panel-pty-03";
+    let extra_envs: Vec<(String, String)> = vec![
+        ("SLTERM_PANEL_ID".into(), test_panel_id.into()),
+    ];
+
+    let mut child = conpty_custom::spawn_conpty_child(
+        hpc,
+        &shell_info,
+        &extra_envs,
+        None,
+    )
+    .expect("spawn_conpty_child 应成功");
+
+    let mut reader = master.try_clone_reader().expect("try_clone_reader 应成功");
+
+    // 通过 cmd.exe 的 %VAR% 展开验证环境变量已注入
+    writer.write_all(b"echo %SLTERM_PANEL_ID%\r\n").unwrap();
+    writer.flush().unwrap();
+
+    // 轮询读取输出直到出现 marker（panel_id 值）
+    let output = read_until_marker(&mut *reader, test_panel_id);
+    let text = String::from_utf8_lossy(&output);
+    assert!(
+        text.contains(test_panel_id),
+        "子进程环境应包含 SLTERM_PANEL_ID={test_panel_id}，实际输出: {text}"
+    );
+
+    drop(writer);
+    let _ = child.kill();
+}
