@@ -36,6 +36,18 @@ export async function getInjectionStatus(): Promise<HookInjectionStatus> {
 }
 
 /**
+ * 从 transcript 文件尾部扫描 token 用量
+ *
+ * 读取 transcript JSONL 文件尾部约 64KB，逆行扫描含 usage 的行，
+ * 返回 input/output token 数。无 usage 或文件异常返回 null。
+ */
+export async function getContextUsage(
+  transcriptPath: string,
+): Promise<{ inputTokens: number; outputTokens: number } | null> {
+  return invoke("hooks_context_usage", { transcriptPath });
+}
+
+/**
  * 订阅后端 hook-event 事件（照 onFsEvent 模式）
  *
  * 返回取消监听的清理函数。

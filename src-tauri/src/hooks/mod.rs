@@ -7,6 +7,7 @@
 
 pub mod inject;
 pub mod signal;
+pub mod usage;
 pub mod watcher;
 
 // 三命令由 inject 模块实现，经此 re-export 供外部引用
