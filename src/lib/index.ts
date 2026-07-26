@@ -4,3 +4,4 @@ export { createActivePointer } from "./activePointer";
 export { useFontSizeWheel } from "./useFontSizeWheel";
 export { E2E_ENABLED, computeE2eEnabled } from "./e2eEnabled";
 export { injectScript } from "./injectScript";
+export { type ClaudeStatus, STATUS_EMOJI, eventToStatus } from "./claudeStatus";
