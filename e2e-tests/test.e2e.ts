@@ -1,6 +1,6 @@
 import { expect, browser } from '@wdio/globals';
-import { mkdtempSync, writeFileSync, readFileSync, statSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, statSync, rmSync, renameSync } from 'node:fs';
+import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
 import { makeGitRepo, cleanupGitRepo } from './gitScaffold';
 
@@ -1290,6 +1290,223 @@ describe('commit 视图', () => {
       expect(hasDiffPanel).toBe(true);
     } finally {
       cleanupGitRepo(repoPath);
+    }
+  });
+});
+
+// ── hooks 状态可视化（P1-TE-03） ──
+
+describe('hooks 状态可视化', () => {
+  /**
+   * 用例 1：注入后查询状态为 "injected"。
+   * 调用 __slterm_e2e_injectHooks → getHookInjectionStatus → 断言 status。
+   */
+  it('注入后状态为 injected', async () => {
+    // 0. 等待 Workspace 就绪
+    await browser.waitUntil(
+      async () => await browser.execute(() => (window as any).__slterm_e2e_workspaceReady === true),
+      { timeout: 15000, timeoutMsg: 'Workspace 未就绪' },
+    );
+
+    // 1. 先查询当前状态（可能已经是 injected，因为前序测试可能已注入）
+    let preStatus: any = null;
+    try {
+      preStatus = await browser.execute(() =>
+        (window as any).__slterm_e2e_getHookInjectionStatus?.(),
+      );
+    } catch { /* 首次查询可能因未注入而失败，忽略 */ }
+
+    // 2. 如果尚未注入，则调用注入
+    if (!preStatus || preStatus.status !== 'injected') {
+      await browser.execute(() => (window as any).__slterm_e2e_injectHooks?.());
+    }
+
+    // 3. 轮询查询注入状态（注入是 spawn_blocking 异步的，需要等文件落盘）
+    const status = await browser.waitUntil(
+      async () => {
+        const s = await browser.execute(() =>
+          (window as any).__slterm_e2e_getHookInjectionStatus?.(),
+        );
+        if (s && (s.status === 'injected' || s.status === 'outdated')) return s;
+        return false;
+      },
+      { timeout: 15000, timeoutMsg: 'hooks 注入未在 15s 内完成' },
+    );
+
+    expect(status).toBeDefined();
+    expect(status.status).toBe('injected');
+    expect(status.version).toBeGreaterThan(0);
+  });
+
+  /**
+   * 用例 2：Node 端写信号文件 → 页签 DOM 出现 ⚡ → SessionEnd → ⚡ 消失。
+   *
+   * 查询方式：DOM 中 .dv-tab 元素文本含 "⚡"（DefaultTab 将
+   * emoji 渲染为 <span>⚡</span>，硬约束要求改 tab DOM 文本）。
+   *
+   * 流程：
+   * 1. 确保 hooks 已注入
+   * 2. 创建测试项目 + 终端面板（记录 panelId）
+   * 3. 确保 ~/.slterminal/hooks-events/ 存在
+   * 4. 原子写 UserPromptSubmit 信号文件（.tmp → rename .json）
+   * 5. 轮询 DOM 中 .dv-tab 含 "⚡"
+   * 6. 原子写 SessionEnd 信号文件
+   * 7. 轮询 DOM 中 .dv-tab 不再含 "⚡"
+   * 8. 清理信号文件 + 临时目录
+   */
+  it('信号文件驱动页签图标流转', async () => {
+    const eventsDir = join(homedir(), '.slterminal', 'hooks-events');
+    const tempDir = mkdtempSync(join(tmpdir(), 'slterm-e2e-hooks-'));
+    const signalFiles: string[] = [];
+
+    try {
+      // 0a. 等待 Workspace 就绪
+      await browser.waitUntil(
+        async () => await browser.execute(() => (window as any).__slterm_e2e_workspaceReady === true),
+        { timeout: 15000, timeoutMsg: 'Workspace 未就绪' },
+      );
+
+      // 0b. 确保 hooks 已注入
+      await browser.execute(() => (window as any).__slterm_e2e_injectHooks?.());
+      await browser.waitUntil(
+        async () => {
+          const s = await browser.execute(() =>
+            (window as any).__slterm_e2e_getHookInjectionStatus?.(),
+          );
+          return s?.status === 'injected';
+        },
+        { timeout: 15000, timeoutMsg: 'hooks 未在创建终端前完成注入' },
+      );
+
+      // 0c. 创建测试项目
+      await browser.execute((dir: string) => {
+        (window as any).__slterm_e2e_createProject?.(dir);
+      }, tempDir);
+
+      // 0d. 等待 Dockview API 就绪
+      await browser.waitUntil(
+        async () => await browser.execute(() => typeof window.__dockviewApi !== 'undefined'),
+        { timeout: 20000, timeoutMsg: 'Dockview API 未就绪' },
+      );
+
+      // 1. 创建终端面板（唯一 panelId）
+      const panelId = 'e2e-hooks-term-' + Date.now();
+      await browser.execute((pid: string) => {
+        window.__dockviewApi!.addPanel({
+          id: pid,
+          component: 'terminal',
+          params: { panelId: pid },
+          renderer: 'always' as const,
+        });
+      }, panelId);
+
+      // 2. 等待 PTY session 就绪
+      await browser.waitUntil(
+        async () => {
+          return await browser.execute(() => {
+            const containers = document.querySelectorAll('[data-e2e="terminal-container"]');
+            for (const c of containers) {
+              if ((c as any).__e2e_sessionReady) return true;
+            }
+            return false;
+          });
+        },
+        { timeout: 25000, timeoutMsg: 'PTY session 未就绪' },
+      );
+
+      // 3. 确保信号目录存在
+      mkdirSync(eventsDir, { recursive: true });
+
+      // 4. 写 UserPromptSubmit 信号文件（原子 rename：.tmp → .json）
+      const submitPayload = {
+        panelId,
+        event: 'UserPromptSubmit',
+        timestamp: Date.now(),
+        sessionId: 'e2e',
+        transcriptPath: '',
+        cwd: tempDir,
+        toolName: null,
+        notificationType: null,
+      };
+      const submitFileName = `${panelId}-UserPromptSubmit-${Date.now()}.json`;
+      const submitTmpPath = join(eventsDir, submitFileName + '.tmp');
+      const submitFilePath = join(eventsDir, submitFileName);
+      writeFileSync(submitTmpPath, JSON.stringify(submitPayload), 'utf8');
+      renameSync(submitTmpPath, submitFilePath);
+      signalFiles.push(submitFilePath);
+
+      // 5. 轮询 DOM：.dv-tab 文本含 "⚡"（DefaultTab 将 emoji 渲染为 <span>⚡</span>）
+      await browser.waitUntil(
+        async () => {
+          return await browser.execute(() => {
+            const tabs = document.querySelectorAll('.dv-tab');
+            for (const tab of tabs) {
+              if ((tab as HTMLElement).textContent?.includes('⚡')) return true;
+            }
+            return false;
+          });
+        },
+        { timeout: 15000, timeoutMsg: 'DOM 中 .dv-tab 未在 UserPromptSubmit 信号文件后包含 ⚡' },
+      );
+
+      // 6. 断言 DOM 含 ⚡
+      const hasWorkingIcon = await browser.execute(() => {
+        const tabs = document.querySelectorAll('.dv-tab');
+        for (const tab of tabs) {
+          if ((tab as HTMLElement).textContent?.includes('⚡')) return true;
+        }
+        return false;
+      });
+      expect(hasWorkingIcon).toBe(true);
+
+      // 7. 写 SessionEnd 信号文件
+      const endPayload = {
+        panelId,
+        event: 'SessionEnd',
+        timestamp: Date.now(),
+        sessionId: 'e2e',
+        transcriptPath: '',
+        cwd: tempDir,
+        toolName: null,
+        notificationType: null,
+      };
+      const endFileName = `${panelId}-SessionEnd-${Date.now()}.json`;
+      const endTmpPath = join(eventsDir, endFileName + '.tmp');
+      const endFilePath = join(eventsDir, endFileName);
+      writeFileSync(endTmpPath, JSON.stringify(endPayload), 'utf8');
+      renameSync(endTmpPath, endFilePath);
+      signalFiles.push(endFilePath);
+
+      // 8. 轮询 DOM：.dv-tab 不再含 "⚡"
+      await browser.waitUntil(
+        async () => {
+          return await browser.execute(() => {
+            const tabs = document.querySelectorAll('.dv-tab');
+            for (const tab of tabs) {
+              if ((tab as HTMLElement).textContent?.includes('⚡')) return false;
+            }
+            return true;
+          });
+        },
+        { timeout: 15000, timeoutMsg: 'DOM 中 .dv-tab 在 SessionEnd 后仍含 ⚡' },
+      );
+
+      // 9. 断言 DOM 不再含 ⚡
+      const iconCleared = await browser.execute(() => {
+        const tabs = document.querySelectorAll('.dv-tab');
+        for (const tab of tabs) {
+          if ((tab as HTMLElement).textContent?.includes('⚡')) return false;
+        }
+        return true;
+      });
+      expect(iconCleared).toBe(true);
+    } finally {
+      // 清理信号文件
+      for (const f of signalFiles) {
+        try { rmSync(f, { force: true }); } catch { /* 忽略 */ }
+      }
+      // 清理临时目录
+      try { rmSync(tempDir, { recursive: true, force: true }); } catch { /* 忽略 */ }
     }
   });
 });

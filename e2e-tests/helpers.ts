@@ -8,6 +8,8 @@
  * - __e2e_*       — 终端容器 DOM 元素 helper（随面板挂载/卸载）
  */
 
+import { hooks } from "../src/ipc";
+import type { HookInjectionStatus } from "../src/ipc/hooks";
 import { writeText } from "../src/ipc/clipboard";
 import { setProjectRoot } from "../src/ipc/fs";
 import { getShortcutRegistry } from "../src/features/shortcuts";
@@ -44,6 +46,10 @@ declare global {
     __slterm_e2e_getSideBarState?: () => SideBarSnapshot | null;
     __slterm_e2e_toggleSideView?: (id: string) => void;
     __slterm_e2e_moveSideViewButton?: (id: string, zone: string, index: number) => void;
+    // hooks 注入/卸载/状态（P1-TE-04）
+    __slterm_e2e_injectHooks?: () => Promise<HookInjectionStatus>;
+    __slterm_e2e_uninstallHooks?: () => Promise<void>;
+    __slterm_e2e_getHookInjectionStatus?: () => Promise<HookInjectionStatus>;
   }
 }
 
@@ -65,6 +71,7 @@ export function installAllE2eHelpers(): void {
   installProjectHelpers();
   installTitleHelpers();
   installSideBarHelpers();
+  installHookHelpers();
 
   // 标记 Workspace 就绪（Workspace 组件渲染时同步设置）
   window.__slterm_e2e_workspaceReady = false;
@@ -284,4 +291,11 @@ function installSideBarHelpers(): void {
   window.__slterm_e2e_moveSideViewButton = (id: string, zone: string, index: number) => {
     useSideBar.getState().moveButton(id, zone as "top" | "bottom", index);
   };
+}
+
+/** __slterm_e2e_injectHooks / __slterm_e2e_uninstallHooks / __slterm_e2e_getHookInjectionStatus */
+function installHookHelpers(): void {
+  window.__slterm_e2e_injectHooks = async () => hooks.inject();
+  window.__slterm_e2e_uninstallHooks = async () => hooks.uninstall();
+  window.__slterm_e2e_getHookInjectionStatus = async () => hooks.getInjectionStatus();
 }
