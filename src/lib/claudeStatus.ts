@@ -12,6 +12,15 @@ export const STATUS_EMOJI: Record<Exclude<ClaudeStatus, null>, string> = {
   error: "❌",
 };
 
+/**
+ * 根据 ClaudeStatus 返回对应 emoji 图标。
+ * null 状态返回空字符串（无图标），未识别状态也返回空字符串。
+ */
+export function getStatusIcon(status: ClaudeStatus): string {
+  if (status === null) return "";
+  return STATUS_EMOJI[status] ?? "";
+}
+
 /** Notification 事件中需要用户处理的子类型 */
 const ATTENTION_NOTIFICATION_TYPES = new Set([
   "permission_prompt",

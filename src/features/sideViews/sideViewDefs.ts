@@ -10,6 +10,7 @@ import React from "react";
 import { SidebarTree } from "../sidebar";
 import { ExplorerPanel } from "../explorer";
 import { CommitView } from "../commit";
+import { AgentStatusView } from "../agentStatus/AgentStatusView";
 import { sideViewRegistry } from "./sideViewRegistry";
 
 // 注册项目列表视图（📋）
@@ -35,4 +36,12 @@ sideViewRegistry.register({
   title: "Commit",
   icon: "🔀",
   component: () => React.createElement(CommitView),
+});
+
+// 注册 agent-status 视图（🤖）
+sideViewRegistry.register({
+  id: "agent-status",
+  title: "Agent 状态",
+  icon: "🤖",
+  component: AgentStatusView,
 });

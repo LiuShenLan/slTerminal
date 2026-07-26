@@ -92,6 +92,15 @@ export const ERROR_BANNER_FG = "#F48771";
 // --- Explorer 选中高亮色（文件浏览器选中行背景）---
 export const EXPLORER_SELECTION_BG = "#094771"; // VS Code list activeSelectionBackground
 
+// --- Agent Status 用量条分段色 ---
+// 阈值由组件逻辑决定：<50% low，50-80% medium，>80% high。
+
+export const AGENT_STATUS_USAGE_COLORS = {
+  low: "#629755",
+  medium: "#BBB529",
+  high: "#F44747",
+} as const;
+
 // --- CSS 变量桥接（供 App.css :root 变量从 TS token 取值）---
 // SIDEBAR_CSS 模式：JS 对象映射 CSS 自定义属性名 → colors.ts token 值，
 // 在 main.tsx 注入 document.documentElement，App.css 仅通过 var() 引用。

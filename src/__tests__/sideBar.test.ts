@@ -51,6 +51,12 @@ function registerTestViews(): void {
     icon: "🔀",
     component: () => null,
   });
+  sideViewRegistry.register({
+    id: "agent-status",
+    title: "Agent 状态",
+    icon: "🤖",
+    component: () => null,
+  });
 }
 
 describe("sideBar store", () => {
@@ -170,8 +176,8 @@ describe("sideBar store", () => {
     });
     await useSideBar.getState().loadFromDisk();
     const s = useSideBar.getState();
-    // reconcileZones 补全注册表中缺失的 commit
-    expect(s.zones).toEqual({ top: ["explorer", "projects", "commit"], bottom: [] });
+    // reconcileZones 补全注册表中缺失的 commit、agent-status
+    expect(s.zones).toEqual({ top: ["explorer", "projects", "commit", "agent-status"], bottom: [] });
     expect(s.open).toEqual({ top: "explorer", bottom: null });
     expect(s.width).toBe(320);
     expect(s.splitRatio).toBe(0.7);
@@ -255,8 +261,8 @@ describe("sideBar store", () => {
     });
     await useSideBar.getState().loadFromDisk();
     const s = useSideBar.getState();
-    // "ghost" 被过滤掉，explorer 和 commit 补全到上区末尾
-    expect(s.zones.top).toEqual(["projects", "explorer", "commit"]);
+    // "ghost" 被过滤掉，explorer、commit、agent-status 补全到上区末尾
+    expect(s.zones.top).toEqual(["projects", "explorer", "commit", "agent-status"]);
     expect(s.zones.bottom).toEqual([]);
     // open 指向未注册 id → 清 null
     expect(s.open).toEqual({ top: null, bottom: null });
