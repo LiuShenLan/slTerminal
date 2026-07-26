@@ -91,6 +91,7 @@ fn parse_usage_line(line: &str) -> Option<ContextUsage> {
 mod tests {
     use super::*;
     use std::io::Write;
+    use tempfile::NamedTempFile;
 
     // ── parse_usage_line 单元测试 ──
 
@@ -269,5 +270,122 @@ mod tests {
         let u: ContextUsage = serde_json::from_str(json).unwrap();
         assert_eq!(u.input_tokens, 200);
         assert_eq!(u.output_tokens, 300);
+    }
+
+    // ── hooks_context_usage L1 测试 (P2-TE-05) ──
+
+    /// P2-TE-05 用例 1：多条 message.usage 行，逆向扫描返回最后一条
+    #[test]
+    fn hooks_context_usage_multi_usage_returns_last() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, r#"{{"type":"system","message":"start"}}"#).unwrap();
+        writeln!(
+            file,
+            r#"{{"message":{{"usage":{{"input_tokens":10,"output_tokens":5}}}}}}"#
+        )
+        .unwrap();
+        writeln!(file, r#"{{"type":"assistant","message":"middle"}}"#).unwrap();
+        writeln!(
+            file,
+            r#"{{"message":{{"usage":{{"input_tokens":300,"output_tokens":150}}}}}}"#
+        )
+        .unwrap();
+        writeln!(file, r#"{{"type":"system","message":"end"}}"#).unwrap();
+        file.flush().unwrap();
+
+        let r = scan_transcript_usage(file.path().to_str().unwrap());
+        assert!(r.is_some());
+        let u = r.unwrap();
+        assert_eq!(u.input_tokens, 300);
+        assert_eq!(u.output_tokens, 150);
+    }
+
+    /// P2-TE-05 用例 2：JSONL 末尾无 usage → 返回 None
+    #[test]
+    fn hooks_context_usage_no_usage_returns_none() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, r#"{{"type":"system","message":"hello"}}"#).unwrap();
+        writeln!(file, r#"{{"type":"assistant","message":"world"}}"#).unwrap();
+        writeln!(file, r#"{{"type":"system","message":"done"}}"#).unwrap();
+        file.flush().unwrap();
+
+        let r = scan_transcript_usage(file.path().to_str().unwrap());
+        assert!(r.is_none());
+    }
+
+    /// P2-TE-05 用例 3：某行 JSON 损坏 → 跳过损坏行，继续逆行扫描
+    #[test]
+    fn hooks_context_usage_corrupted_line_skipped() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, r#"{{"type":"system","message":"start"}}"#).unwrap();
+        // 损坏的 JSON 行——应被 parse_usage_line 跳过
+        writeln!(file, r#"{{broken json {{{{"#).unwrap();
+        writeln!(
+            file,
+            r#"{{"message":{{"usage":{{"input_tokens":42,"output_tokens":7}}}}}}"#
+        )
+        .unwrap();
+        writeln!(file, r#"also not valid json"#).unwrap();
+        writeln!(file, r#"{{"type":"system","message":"end"}}"#).unwrap();
+        file.flush().unwrap();
+
+        let r = scan_transcript_usage(file.path().to_str().unwrap());
+        assert!(r.is_some());
+        let u = r.unwrap();
+        assert_eq!(u.input_tokens, 42);
+        assert_eq!(u.output_tokens, 7);
+    }
+
+    /// P2-TE-05 用例 4：空文件 → 返回 None
+    #[test]
+    fn hooks_context_usage_empty_file_returns_none() {
+        let file = NamedTempFile::new().unwrap();
+        // 不写任何内容——空文件
+
+        let r = scan_transcript_usage(file.path().to_str().unwrap());
+        assert!(r.is_none());
+    }
+
+    /// P2-TE-05 用例 5：大文件（>128KB）仅读尾部 64KB
+    ///
+    /// 构造约 200KB 的 JSONL 文件，前 140KB 为无 usage 的填充行
+    /// （超出 TRANSCRIPT_TAIL_BYTES 窗口），usage 行在末尾 1KB 内。
+    /// 若 scan_transcript_usage 能正确返回，间接证明未加载全文件。
+    #[test]
+    fn hooks_context_usage_large_file_tail_scan() {
+        let mut file = NamedTempFile::new().unwrap();
+
+        // 填充约 140KB 的 padding 行（有效 JSON 但无 usage 字段）
+        let padding_line = "{\"type\":\"pad\",\"n\":0}\n";
+        let target_padding: usize = 140 * 1024;
+        let mut written: usize = 0;
+        while written < target_padding {
+            let n = file.write(padding_line.as_bytes()).unwrap();
+            written += n;
+        }
+
+        // 在尾部窗口内写入中间行 + 有效 usage 行
+        writeln!(file, r#"{{"type":"assistant","msg":"nearly done"}}"#).unwrap();
+        writeln!(
+            file,
+            r#"{{"message":{{"usage":{{"input_tokens":99999,"output_tokens":88888}}}}}}"#
+        )
+        .unwrap();
+        writeln!(file, r#"{{"type":"system","msg":"fin"}}"#).unwrap();
+        file.flush().unwrap();
+
+        // 验证文件大小确实 > 128KB
+        let meta = std::fs::metadata(file.path()).unwrap();
+        assert!(
+            meta.len() > 128 * 1024,
+            "文件应大于128KB，实际 {} 字节",
+            meta.len()
+        );
+
+        let r = scan_transcript_usage(file.path().to_str().unwrap());
+        assert!(r.is_some(), "应从尾部 64KB 找到 usage");
+        let u = r.unwrap();
+        assert_eq!(u.input_tokens, 99999);
+        assert_eq!(u.output_tokens, 88888);
     }
 }

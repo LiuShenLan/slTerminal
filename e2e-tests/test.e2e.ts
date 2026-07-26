@@ -1510,3 +1510,243 @@ describe('hooks 状态可视化', () => {
     }
   });
 });
+
+// ── Agent Status 视图与 toast 通知（P2-TE-06） ──
+
+describe('Agent Status 视图与 toast 通知', () => {
+  /**
+   * 用例 1：Agent Status 视图存在性验证。
+   * 通过 __slterm_e2e_toggleSideView("agent-status") 打开视图，
+   * 断言侧栏槽位 sidebar-slot-top-agent-status 可见 + AGENT STATUS 标题栏渲染。
+   */
+  it('Agent Status 视图可通过活动栏按钮打开', async () => {
+    // 0. 等待 Workspace 就绪
+    await browser.waitUntil(
+      async () => await browser.execute(() => (window as any).__slterm_e2e_workspaceReady === true),
+      { timeout: 15000, timeoutMsg: 'Workspace 未就绪' },
+    );
+
+    // 1. 创建测试项目
+    await browser.execute(() => {
+      (window as any).__slterm_e2e_createProject?.('C:\\e2e-agent-status');
+    });
+
+    // 2. 等待活动栏按钮渲染（agent-status 在 DEFAULT_ZONES.top 中，按钮始终存在）
+    await browser.waitUntil(
+      async () => await browser.execute(() => {
+        return !!document.querySelector('[data-e2e="activity-btn-agent-status"]');
+      }),
+      { timeout: 10000, timeoutMsg: 'agent-status 活动栏按钮未渲染' },
+    );
+
+    // 3. 重置侧栏为已知状态（避免持久化残留导致 open.top 已有其他视图）
+    await browser.execute(() => {
+      const toggle = (window as any).__slterm_e2e_toggleSideView;
+      const getState = (window as any).__slterm_e2e_getSideBarState;
+      if (typeof toggle !== 'function' || typeof getState !== 'function') return;
+      const s = getState();
+      // 关闭 top 区非 agent-status 的视图
+      if (s?.open.top && s.open.top !== 'agent-status') toggle(s.open.top);
+      // 若 top 为空则打开 agent-status
+      if (!s?.open.top) toggle('agent-status');
+    });
+
+    // 4. 断言 open.top === "agent-status"（toggle 已生效）
+    const sideBarState = await browser.execute(() => {
+      const fn = (window as any).__slterm_e2e_getSideBarState;
+      return typeof fn === 'function' ? fn() : null;
+    });
+    expect(sideBarState).not.toBeNull();
+    expect(sideBarState!.open.top).toBe('agent-status');
+
+    // 5. 断言侧栏槽位存在且可见（display !== "none"）
+    const slotVisible = await browser.execute(() => {
+      const slot = document.querySelector('[data-e2e="sidebar-slot-top-agent-status"]');
+      if (!slot) return false;
+      const style = window.getComputedStyle(slot);
+      return style.display !== 'none';
+    });
+    expect(slotVisible).toBe(true);
+
+    // 6. 断言 agent-status-view 存在（AgentStatusView 已挂载）
+    const viewExists = await browser.execute(() => {
+      return !!document.querySelector('[data-e2e="agent-status-view"]');
+    });
+    expect(viewExists).toBe(true);
+
+    // 7. 断言 "AGENT STATUS" 标题栏文本存在
+    const headerText = await browser.execute(() => {
+      const view = document.querySelector('[data-e2e="agent-status-view"]');
+      return view?.textContent ?? '';
+    });
+    expect(headerText).toContain('AGENT STATUS');
+
+    // 8. 断言初始态为空态或 no-root 提示（此时无终端面板）
+    const hasHint = await browser.execute(() => {
+      const text = document.querySelector('[data-e2e="agent-status-view"]')?.textContent ?? '';
+      return text.includes('选择一个项目') || text.includes('无运行中的 claude 会话');
+    });
+    expect(hasHint).toBe(true);
+  });
+
+  /**
+   * 用例 2：Agent Status 视图出现行（需真实 claude hook 事件驱动状态流转）。
+   *
+   * 原理：useAgentStatus 在挂载时扫描 TerminalRegistry，为当前项目的终端
+   * 生成初始行（status="attention"）。hook 事件（PreToolUse / PostToolUse /
+   * Stop / SessionEnd 等）驱动行状态变化与用量条更新。
+   *
+   * 完整验证需真实 claude 进程在 PTY 中运行——hook 事件由 Claude Code 的
+   * hooks 子系统发出并经 Rust hooks 模块广播到前端。E2E 环境无 claude，
+   * 仅可验证 TerminalRegistry 初始扫描产生的静态行；动态四态流转需人工。
+   *
+   * 人工验收步骤：
+   *   1. 启动 slTerminal，确保 hooks 已注入。
+   *   2. 打开终端，运行 claude（`claude` 命令）。
+   *   3. 打开 Agent Status 侧栏视图（🤖 按钮）。
+   *   4. 在 claude 中执行工具调用（如 "列出当前目录文件"）→ 行图标变为 ⚡。
+   *   5. 等待工具调用完成 → 图标变为 🟡（命令运行中）。
+   *   6. SessionEnd 或 exit → 行从列表移除。
+   *   7. 执行耗时任务时观察用量条百分比递增。
+   */
+  it.skip('Agent Status 视图出现行（需真实 claude hook 事件）', async () => {
+    // E2E 环境无 claude 进程，hook 事件不可用。用例骨架保留供未来参考：
+
+    const tempDir = mkdtempSync(join(tmpdir(), 'slterm-e2e-agent-row-'));
+    try {
+      // 0a. Workspace 就绪
+      await browser.waitUntil(
+        async () => await browser.execute(() => (window as any).__slterm_e2e_workspaceReady === true),
+        { timeout: 15000 },
+      );
+
+      // 0b. 创建项目 → 获取 pageId
+      const pageId = await browser.execute((dir: string) => {
+        return (window as any).__slterm_e2e_createProject?.(dir);
+      }, tempDir);
+
+      // 0c. Dockview API
+      await browser.waitUntil(
+        async () => await browser.execute(() => typeof window.__dockviewApi !== 'undefined'),
+        { timeout: 20000 },
+      );
+
+      // 1. 创建终端面板（panelId 须为 terminal-{pageId}-{seq} 格式，
+      //    供 useAgentStatus 的 parsePageId 提取 pageId 过滤当前项目）
+      const panelId = `terminal-${pageId}-0`;
+      await browser.execute((pid: string) => {
+        window.__dockviewApi!.addPanel({
+          id: pid,
+          component: 'terminal',
+          params: { panelId: pid },
+          renderer: 'always' as const,
+        });
+      }, panelId);
+
+      // 2. 等待 PTY session 就绪（TerminalRegistry 注册）
+      await browser.waitUntil(
+        async () => await browser.execute(() => {
+          const containers = document.querySelectorAll('[data-e2e="terminal-container"]');
+          for (const c of containers) {
+            if ((c as any).__e2e_sessionReady) return true;
+          }
+          return false;
+        }),
+        { timeout: 25000 },
+      );
+
+      // 3. 打开 agent-status 视图
+      await browser.execute(() => {
+        (window as any).__slterm_e2e_toggleSideView?.('agent-status');
+      });
+
+      // 4. 轮询等待 agent-status-row 出现（useAgentStatus 扫描 TerminalRegistry）
+      await browser.waitUntil(
+        async () => await browser.execute(() => {
+          return !!document.querySelector('[data-e2e="agent-status-row"]');
+        }),
+        { timeout: 10000, timeoutMsg: 'agent-status-row 未在 10s 内渲染' },
+      );
+
+      // 5. 断言行含 panelId 属性
+      const rowPanelId = await browser.execute((pid: string) => {
+        const row = document.querySelector('[data-e2e="agent-status-row"]');
+        return row?.getAttribute('data-panel-id') ?? null;
+      }, panelId);
+      expect(rowPanelId).toBe(panelId);
+
+      // 6. 断言初始状态图标为 attention（🟡）—— 由 getStatusIcon("attention") 渲染
+      const hasAttentionIcon = await browser.execute(() => {
+        const row = document.querySelector('[data-e2e="agent-status-row"]');
+        return row?.textContent?.includes('🟡') ?? false;
+      });
+      expect(hasAttentionIcon).toBe(true);
+
+      // 7. 断言用量条容器存在（100% 宽度灰色背景——usage 未加载时 usageAvailable=false）
+      const usageBarExists = await browser.execute(() => {
+        const row = document.querySelector('[data-e2e="agent-status-row"]');
+        // 用量条是 row 内的第3个子 <div>
+        const children = row?.children ?? [];
+        // 第3个子元素（索引2）是用量条背景容器（width: 80px, height: 6px）
+        return children.length >= 3 && (children[2] as HTMLElement).style.width === '80px';
+      });
+      expect(usageBarExists).toBe(true);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * 用例 3：toast 触发链路（失焦 + 权限请求 / Stop / 错误）。
+   *
+   * 真实验证步骤（人工）：
+   *   1. 启动 slTerminal 并注入 hooks（设置 → 注入 Claude Code hooks）。
+   *   2. 打开终端，运行 claude。
+   *   3. 触发 PermissionRequest：在 claude 中输入需工具调用的 prompt，
+   *      如 "请列出 C:\ 目录下的文件"。
+   *   4. 立即切换到其他窗口（Alt+Tab）使 slTerminal 失焦。
+   *   5. 观察系统通知中心 → 应弹出 slTerminal 通知，含 "🔐 权限请求" 字样。
+   *   6. 点击该通知 → 窗口应聚焦回 slTerminal 并切换到对应终端页签。
+   *   7. 继续在 claude 中等待任务完成（Stop 事件）：
+   *      - 保持 slTerminal 失焦 → 系统通知中心出现 "✅ 任务完成" 通知。
+   *   8. 构造错误场景：在 claude 中执行一个必然失败的工具调用 →
+   *      系统通知中心出现 "❌ 错误" 通知。
+   *   9. 点击停止（Stop）事件通知 → 验证窗口聚焦 + 路由到对应面板。
+   *
+   * E2E 自动化不可行原因：
+   *   - embedded WDIO 驱动无法控制 WebView2 窗口焦点
+   *     （onFocusChanged 事件由 OS 窗口管理器触发，不可合成）。
+   *   - 系统通知中心不可编程访问（无法查询已发送的通知列表，
+   *     无法模拟用户点击通知）。
+   *   - Web Notification API 在 headless/自动化 WebView2 中
+   *     不产生真实的桌面通知弹窗。
+   *   - useClaudeNotifications 的门控条件
+   *     window.__slterm_windowFocused === false 在自动化环境中
+   *     始终为 true（窗口聚焦），通知绝不会触发。
+   *
+   * 未来自动化方向：
+   *   待 @tauri-apps/plugin-notification 支持程序化查询/触发通知后，
+   *   可修改 useClaudeNotifications 暴露 sendNotification 调用的 spy，
+   *   在 E2E 中通过 browser.execute 设置 __slterm_windowFocused = false
+   *   后注入合成 hook-event，再验证 spy 被调用参数。
+   */
+  it.skip('toast 触发链路需人工验证（失焦 + 权限请求 / Stop / 错误）', async () => {
+    // 骨架保留供未来自动化参考。
+    //
+    // 前置：
+    //   1. hooks 已注入 → onHookEvent 正常工作
+    //   2. 终端面板存在 → panelId 已知
+    //   3. window.__slterm_windowFocused = false → 失焦门控通过
+    //
+    // 验证断言（自动化后启用）：
+    //   1. inject PermissionRequest hook-event → sendClickableNotification 被调用
+    //      参数 title="slTerminal"，body 含 "🔐 权限请求"
+    //   2. inject Stop hook-event → sendClickableNotification 被调用
+    //      参数 body 含 "✅ 任务完成"
+    //   3. inject StopFailure hook-event → sendClickableNotification 被调用
+    //      参数 body 含 "❌ 错误"
+    //   4. Notification onclick → setFocus + setActivePage + panel.focus 被调用
+    //   5. 非通知类事件（PreToolUse/PostToolUse/SessionStart/SessionEnd）
+    //      → sendClickableNotification 不被调用
+  });
+});
