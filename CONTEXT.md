@@ -182,6 +182,35 @@ ANSI 转义序列族——A 为提示符前标记、B 为提示符后标记、D 
 
 ---
 
+## Hooks 宿主侧增强
+
+**CC hooks**（Claude Code Hooks）：
+Claude Code CLI 内置的 hooks 机制。settings.json `hooks` 字段的三层嵌套配置（事件 → matcher 组 → handler 数组），30+ 生命周期事件、5 种 handler 类型（command/http/mcp_tool/prompt/agent），经 stdin/stdout JSON 与 exit code 0/2 语义通信。
+_Avoid_: 终端 hooks, slTerminal hooks（后者指未采纳的方向 B）
+
+**宿主侧增强**：
+slTerminal 不改动 Claude Code 本身，为其 hooks 提供状态可视化与配置管理外围能力的功能方向（方向 A）。与"方向 B"（slTerminal 自有终端级 hook 系统，未采纳）相对。
+
+**信号文件通道**：
+slTerminal 感知 CC hook 事件的主通道。注入用户配置的 hook 脚本把事件写为 JSON 信号文件到约定路径，后端监听目录并经 IPC 推送前端。辅以 transcript JSONL 被动解析补充上下文用量。
+
+**SLTERM_PANEL_ID**：
+pty_spawn 时注入子进程环境块的环境变量。经 shell → claude → hook 脚本继承链传递并写入信号文件，实现会话→页签的精确路由（不用 cwd 猜测）。
+
+**四态**：
+页签图标的四种 claude 会话状态——工作⚡、注意🟡、完成✅、错误❌。生命周期为事件驱动覆盖：状态等于最后一个 hook 事件，无定时器、无聚焦清除。
+
+**注入 / 卸载**：
+把 slTerminal 状态上报 hook 配置 merge 写入 user 层 settings.json（注入），或干净移除配置段与脚本文件（卸载）。仅手动按钮触发，不做启动引导。
+
+**三层配置**：
+CC settings.json 的三个编辑层级——user（`~/.claude/settings.json`）、project（`.claude/settings.json`）、local（`.claude/settings.local.json`）。优先级 local > project > user。
+
+**双模式面板**：
+hooks 配置编辑面板的两种编辑模式——GUI 表单（Master-Detail）与 JSON 编辑器（CM6 + Schema 校验），顶部切换、实时同步编辑同一份配置。
+
+---
+
 ## 同义词/废弃术语
 
 | 废弃 | 替代 | 原因 |
