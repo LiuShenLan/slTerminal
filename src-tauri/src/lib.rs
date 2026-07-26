@@ -6,6 +6,7 @@ mod settings;
 mod notify;
 mod git;
 mod projects;
+mod hooks;
 
 pub use error::AppError;
 pub use state::AppState;
@@ -63,6 +64,10 @@ pub fn run() {
                 .build(),
         )
         .manage(AppState::new())
+        .setup(|app| {
+            hooks::start_signal_watcher(app.handle().clone());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             ping,
             get_windows_build_number,
@@ -88,6 +93,9 @@ pub fn run() {
             git::git_rollback,
             git::git_unstage,
             notify::notify_watch,
+            hooks::inject::hooks_inject,
+            hooks::inject::hooks_uninstall,
+            hooks::inject::hooks_injection_status,
         ])
         .run(tauri::generate_context!())
     {
