@@ -9,6 +9,11 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { mockIPC, clearMocks } from "@tauri-apps/api/mocks";
 
+// 覆盖 setup.ts 全局 mock——导入原始 ../ipc/hooks 模块以测试真实 IPC 合约
+vi.mock("../ipc/hooks", async (importOriginal) => {
+  return importOriginal<typeof import("../ipc/hooks")>();
+});
+
 // mock @tauri-apps/api/event — onHookEvent 依赖 listen
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(),

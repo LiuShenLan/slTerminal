@@ -34,6 +34,7 @@ const mocks = vi.hoisted(() => {
 // ─── Module mocks ───
 vi.mock("../ipc/window", () => ({
   registerCloseHandler: vi.fn(() => () => {}),
+  onFocusChanged: vi.fn(() => () => {}),
 }));
 
 vi.mock("../workspace", () => ({

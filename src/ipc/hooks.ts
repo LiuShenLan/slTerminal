@@ -1,6 +1,7 @@
-// Hooks IPC — 注入/卸载/状态查询 + hook-event 事件订阅
+// Hooks IPC — 注入/卸载/状态查询 + hook-event 事件订阅 + token 用量查询
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import type { ContextUsage } from "../types/hooks";
 
 /** Hook 注入状态 DTO（契约 C6） */
 export interface HookInjectionStatus {
@@ -43,7 +44,14 @@ export async function getInjectionStatus(): Promise<HookInjectionStatus> {
  */
 export async function getContextUsage(
   transcriptPath: string,
-): Promise<{ inputTokens: number; outputTokens: number } | null> {
+): Promise<ContextUsage | null> {
+  return invoke("hooks_context_usage", { transcriptPath });
+}
+
+/** 查询 token 用量（便捷别名，等价于 getContextUsage） */
+export async function contextUsage(
+  transcriptPath: string,
+): Promise<ContextUsage | null> {
   return invoke("hooks_context_usage", { transcriptPath });
 }
 
