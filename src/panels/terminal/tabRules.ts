@@ -5,8 +5,6 @@
 // 不需要修改 useXterm.ts、TerminalPanel.tsx、DefaultTab、shell-integration.ps1 任一文件。
 
 import { tabTitleRegistry } from "./TabTitleRegistry";
-// Vite 处理为 hashed 文件名或 data URL
-import claudeLogo from "../../assets/claude-logo.png";
 
-// 注册 claude code CLI 命令规则
-tabTitleRegistry.register({ command: "claude", title: "claude", icon: claudeLogo });
+// 注册 claude code CLI 命令规则（无 icon——icon 由 P1-F3 hook 事件驱动设置）
+tabTitleRegistry.register({ command: "claude", title: "claude" });

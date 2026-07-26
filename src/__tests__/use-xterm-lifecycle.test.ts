@@ -22,8 +22,14 @@ const {
   mockRegistryRegister,
   mockRegistryGet,
   mockRegistryRemove,
+  // Hooks 事件测试：捕获 onHookEvent 回调
+  mockOnHookEvent,
+  mockUnsubscribeHookEvent,
+  capturedHookEventCallbackRef,
 } = vi.hoisted(() => {
   const registry = new Map<string, { sessionId: string }>();
+  const hookCallbackRef: { current: ((_p: Record<string, unknown>) => void) | null } = { current: null };
+  const mockUnsub = vi.fn();
   return {
     mockPushContext: vi.fn(),
     mockPopContext: vi.fn(),
@@ -42,6 +48,13 @@ const {
       registry.delete(panelId);
       return true;
     }),
+    // Hooks 事件 mock
+    mockOnHookEvent: vi.fn((callback: (_p: Record<string, unknown>) => void) => {
+      hookCallbackRef.current = callback;
+      return mockUnsub;
+    }),
+    mockUnsubscribeHookEvent: mockUnsub,
+    capturedHookEventCallbackRef: hookCallbackRef,
   };
 });
 
@@ -126,6 +139,7 @@ vi.mock("../features/shortcuts", () => ({
 }));
 
 // useXterm.ts import { pty } from "../../ipc" → src/ipc
+// 同时 mock hooks.onHookEvent（P1-F3-07）
 vi.mock("../ipc", () => ({
   pty: {
     spawn: vi.fn().mockResolvedValue("test-session-id"),
@@ -133,6 +147,12 @@ vi.mock("../ipc", () => ({
     resize: vi.fn().mockResolvedValue(undefined),
     kill: vi.fn().mockResolvedValue(undefined),
     getWindowsBuildNumber: vi.fn().mockResolvedValue(22621),
+  },
+  hooks: {
+    onHookEvent: mockOnHookEvent,
+    inject: vi.fn(),
+    uninstall: vi.fn(),
+    getInjectionStatus: vi.fn(),
   },
 }));
 
@@ -1640,7 +1660,7 @@ describe("OSC 133 命令边界检测", () => {
     return capturedOsc133Handler!;
   }
 
-  it("OSC133-1: OSC 133 C 序列匹配注册命令 → onTabStateChange 含 title 和 icon", async () => {
+    it("OSC133-1: OSC 133 C 序列匹配注册命令 → onTabStateChange 含 title 和 attention icon", async () => {
     mockTabTitleMatch.mockReturnValue({
       command: "claude",
       title: "claude",
@@ -1657,8 +1677,9 @@ describe("OSC 133 命令边界检测", () => {
     expect(mockOnTabStateChange).toHaveBeenCalledWith({
       active: true,
       title: "claude",
-      icon: "/claude-logo.png",
+      icon: "🟡",
     });
+      // P1-F3-01: OSC 133 C 固定使用 🟡 (attention)，不使用 rule.icon
   });
 
   it("OSC133-2: OSC 133 D 序列 → onTabStateChange({ active: false })", async () => {
@@ -2033,5 +2054,175 @@ describe("setupRetry Enter 重连", () => {
       capturedTerminal!.onData.mock.results[beforeCallCount - 1];
     expect(lastOnDataResult).toBeDefined();
     expect(lastOnDataResult.value.dispose).toHaveBeenCalled();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+// P1-F3-07: Hooks 事件过滤测试
+// ═══════════════════════════════════════════════════════════
+
+describe("Hooks 事件过滤 (panelId + eventToStatus)", () => {
+  let container: HTMLDivElement;
+  let mockOnTabStateChange: ReturnType<typeof vi.fn<(state: TabState) => void>>;
+
+  /** 构造最小合法 HookEventPayload 的模拟对象 */
+  function makeHookPayload(overrides: Partial<Record<string, unknown>> = {}): Record<string, unknown> {
+    return {
+      panelId: "hooks-test",
+      event: "UserPromptSubmit",
+      timestamp: Date.now(),
+      sessionId: "s1",
+      transcriptPath: "/t.json",
+      cwd: "/proj",
+      toolName: null,
+      notificationType: null,
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockProposeDimensions.mockReturnValue({ cols: 80, rows: 24 });
+    capturedTerminal = null;
+    mockOnTabStateChange = vi.fn<(state: TabState) => void>();
+
+    container = document.createElement("div");
+    Object.defineProperty(container, "offsetWidth", { value: 800, configurable: true });
+    Object.defineProperty(container, "offsetHeight", { value: 600, configurable: true });
+  });
+
+  /** 渲染 useXterm 并等待 PTY spawn + hooks.onHookEvent 注册完成 */
+  async function mountAndWaitForHooks() {
+    renderHook(() =>
+      useXterm({
+        container,
+        cols: 80,
+        rows: 24,
+        panelId: "hooks-test",
+        onTabStateChange: mockOnTabStateChange,
+      }),
+    );
+    await vi.waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    }, { timeout: 3000 });
+    // onHookEvent 在 effect 中同步调用，spawn 后应已注册
+    expect(mockOnHookEvent).toHaveBeenCalled();
+    expect(capturedHookEventCallbackRef.current).not.toBeNull();
+  }
+
+  it("HUK1: 匹配 panelId + UserPromptSubmit → onTabStateChange({ active:true, icon:'⚡' })", async () => {
+    await mountAndWaitForHooks();
+    // 清除 spawn 成功时 resetCommandState 产生的 onTabStateChange 调用
+    mockOnTabStateChange.mockClear();
+
+    capturedHookEventCallbackRef.current!(makeHookPayload({
+      event: "UserPromptSubmit",
+    }));
+
+    expect(mockOnTabStateChange).toHaveBeenCalledWith({
+      active: true,
+      icon: "⚡",
+    });
+  });
+
+  it("HUK2: 匹配 panelId + SessionEnd → onTabStateChange({ active: false })", async () => {
+    await mountAndWaitForHooks();
+    mockOnTabStateChange.mockClear();
+
+    capturedHookEventCallbackRef.current!(makeHookPayload({
+      event: "SessionEnd",
+    }));
+
+    expect(mockOnTabStateChange).toHaveBeenCalledWith({ active: false });
+  });
+
+  it("HUK3: 不匹配 panelId → onTabStateChange 不触发", async () => {
+    await mountAndWaitForHooks();
+    mockOnTabStateChange.mockClear();
+
+    capturedHookEventCallbackRef.current!(makeHookPayload({
+      panelId: "other-panel-id",
+      event: "UserPromptSubmit",
+    }));
+
+    expect(mockOnTabStateChange).not.toHaveBeenCalled();
+  });
+
+  it("HUK4: PreToolUse → working → ⚡", async () => {
+    await mountAndWaitForHooks();
+    mockOnTabStateChange.mockClear();
+
+    capturedHookEventCallbackRef.current!(makeHookPayload({
+      event: "PreToolUse",
+    }));
+
+    expect(mockOnTabStateChange).toHaveBeenCalledWith({
+      active: true,
+      icon: "⚡",
+    });
+  });
+
+  it("HUK5: Stop → done → ✅", async () => {
+    await mountAndWaitForHooks();
+    mockOnTabStateChange.mockClear();
+
+    capturedHookEventCallbackRef.current!(makeHookPayload({
+      event: "Stop",
+    }));
+
+    expect(mockOnTabStateChange).toHaveBeenCalledWith({
+      active: true,
+      icon: "✅",
+    });
+  });
+
+  it("HUK6: StopFailure → error → ❌", async () => {
+    await mountAndWaitForHooks();
+    mockOnTabStateChange.mockClear();
+
+    capturedHookEventCallbackRef.current!(makeHookPayload({
+      event: "StopFailure",
+    }));
+
+    expect(mockOnTabStateChange).toHaveBeenCalledWith({
+      active: true,
+      icon: "❌",
+    });
+  });
+
+  it("HUK7: SessionStart → attention → 🟡", async () => {
+    await mountAndWaitForHooks();
+    mockOnTabStateChange.mockClear();
+
+    capturedHookEventCallbackRef.current!(makeHookPayload({
+      event: "SessionStart",
+    }));
+
+    expect(mockOnTabStateChange).toHaveBeenCalledWith({
+      active: true,
+      icon: "🟡",
+    });
+  });
+
+  it("HUK8: 卸载时 unsubscribe 被调用", async () => {
+    const { unmount } = renderHook(() =>
+      useXterm({
+        container,
+        cols: 80,
+        rows: 24,
+        panelId: "hooks-unsub",
+        onTabStateChange: mockOnTabStateChange,
+      }),
+    );
+    await vi.waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    }, { timeout: 3000 });
+
+    expect(mockOnHookEvent).toHaveBeenCalled();
+    mockUnsubscribeHookEvent.mockClear();
+    unmount();
+
+    // 验证 unsubscribe 被调用（清理函数在 effect cleanup 中执行）
+    expect(mockUnsubscribeHookEvent).toHaveBeenCalled();
   });
 });

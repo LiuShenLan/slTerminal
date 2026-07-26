@@ -114,6 +114,7 @@ vi.mock("../ipc", () => ({
     kill: vi.fn().mockResolvedValue(undefined),
     getWindowsBuildNumber: vi.fn().mockResolvedValue(22621),
   },
+  hooks: { onHookEvent: vi.fn(() => vi.fn()), inject: vi.fn(), uninstall: vi.fn(), getInjectionStatus: vi.fn() },
 }));
 
 // OSC 52 测试：mock clipboard（src/ipc/clipboard.ts）
@@ -132,6 +133,7 @@ vi.mock("@xterm/addon-fit", () => ({
     proposeDimensions = mockProposeDimensions;
     dispose = vi.fn();
   },
+  hooks: { onHookEvent: vi.fn(() => vi.fn()), inject: vi.fn(), uninstall: vi.fn(), getInjectionStatus: vi.fn() },
 }));
 
 vi.mock("@xterm/addon-webgl", () => {
@@ -157,6 +159,7 @@ vi.mock("../panels/terminal/TerminalRegistry", () => ({
     get: mockRegistryGet,
     remove: mockRegistryRemove,
   },
+  hooks: { onHookEvent: vi.fn(() => vi.fn()), inject: vi.fn(), uninstall: vi.fn(), getInjectionStatus: vi.fn() },
 }));
 
 // useXterm.ts import { tabTitleRegistry } from "./TabTitleRegistry"
@@ -169,6 +172,7 @@ vi.mock("../panels/terminal/TabTitleRegistry", () => ({
     register: vi.fn(),
     _reset: vi.fn(),
   },
+  hooks: { onHookEvent: vi.fn(() => vi.fn()), inject: vi.fn(), uninstall: vi.fn(), getInjectionStatus: vi.fn() },
 }));
 
 // useXterm.ts 的 side-effect import "./tabRules" — stub 防止实际加载图片资源

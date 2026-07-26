@@ -205,10 +205,22 @@ const DefaultTab: React.FC<IDockviewPanelProps> = (props) => {
       display: "flex", alignItems: "center", height: "100%",
       padding: "0 8px", gap: 6, userSelect: "none",
     }}>
-      {tabIcon && (
-        <img src={tabIcon} width={16} height={16}
-          style={{ flexShrink: 0, display: "block" }} alt="" />
-      )}
+      {tabIcon && (() => {
+        // URL 或文件路径 → <img>；emoji/纯文本 → <span>
+        const isUrl = tabIcon.includes("/") || tabIcon.includes("\\")
+          || tabIcon.startsWith("http:") || tabIcon.startsWith("data:");
+        if (isUrl) {
+          return (
+            <img src={tabIcon} width={16} height={16}
+              style={{ flexShrink: 0, display: "block" }} alt="页签图标" />
+          );
+        }
+        return (
+          <span style={{ fontSize: 14, lineHeight: 1, flexShrink: 0 }}>
+            {tabIcon}
+          </span>
+        );
+      })()}
       <span style={{ fontSize: 13 }}>{title}</span>
       <button
         onClick={(e) => { e.stopPropagation(); api.close(); }}

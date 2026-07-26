@@ -102,6 +102,7 @@ vi.mock("@xterm/addon-webgl", () => ({
 
 vi.mock("../ipc", () => ({
   pty: mocks.pty,
+  hooks: { onHookEvent: vi.fn(() => vi.fn()), inject: vi.fn(), uninstall: vi.fn(), getInjectionStatus: vi.fn() },
 }));
 
 // ─── 导入被测模块（在 mocks 之后，模块解析时自动使用 mock） ───

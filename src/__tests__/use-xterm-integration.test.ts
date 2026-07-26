@@ -213,6 +213,7 @@ vi.mock("../ipc", () => ({
     kill: mockPtyKill,
     getWindowsBuildNumber: mockPtyGetBuildNumber,
   },
+  hooks: { onHookEvent: vi.fn(() => vi.fn()), inject: vi.fn(), uninstall: vi.fn(), getInjectionStatus: vi.fn() },
 }));
 
 vi.mock("../ipc/shell", () => ({

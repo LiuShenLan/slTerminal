@@ -63,6 +63,7 @@ vi.mock("@xterm/addon-webgl", () => ({
 
 vi.mock("../ipc", () => ({
   pty: mocks.pty,
+  hooks: { onHookEvent: vi.fn(() => vi.fn()), inject: vi.fn(), uninstall: vi.fn(), getInjectionStatus: vi.fn() },
 }));
 
 import React from "react";

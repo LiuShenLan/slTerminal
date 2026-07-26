@@ -10,8 +10,8 @@ export interface TabTitleRule {
   command: string;
   /** 命令运行时页签标题 */
   title: string;
-  /** Vite import 的图标资源路径 */
-  icon: string;
+  /** Vite import 的图标资源路径（可选） */
+  icon?: string;
 }
 
 /** 页签状态变化事件 */

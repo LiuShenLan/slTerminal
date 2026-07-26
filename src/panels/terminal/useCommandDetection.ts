@@ -46,7 +46,7 @@ export function useCommandDetection(
         const rule = tabTitleRegistry.match(command);
         if (rule) {
           isCommandRunningRef.current = true;
-          onTabStateChangeRef.current?.({ active: true, title: rule.title, icon: rule.icon });
+          onTabStateChangeRef.current?.({ active: true, title: rule.title, icon: "🟡" });
         }
       } else if (type === "D" && isCommandRunningRef.current) {
         // OSC 133 D — 命令执行完毕

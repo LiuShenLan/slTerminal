@@ -19,18 +19,25 @@ describe("tabRules", () => {
       expect(rule!.title).toBe("claude");
     });
 
-    it("规则 icon 字段为 Vite import 的真实 URL（非空字符串）", () => {
+    it("规则不再携带 icon 字段（已由 P1-F3 hook 事件驱动设置）", () => {
       const rule = tabTitleRegistry.match("claude");
       expect(rule).not.toBeNull();
-      // Vite PNG import 返回 URL 字符串（dev: /src/assets/..., build: /assets/...）
-      expect(typeof rule!.icon).toBe("string");
-      expect(rule!.icon.length).toBeGreaterThan(0);
+      // P1-F3-05: icon 已移除——claude 页签图标由 hook 事件驱动设置
+      expect(rule!.icon).toBeUndefined();
     });
   });
 
   describe("手动注册（_reset 后）", () => {
     afterEach(() => {
       tabTitleRegistry._reset();
+    });
+
+    it("无 icon 注册 → match 返回 icon=undefined", () => {
+      tabTitleRegistry.register({ command: "claude", title: "claude" });
+      const rule = tabTitleRegistry.match("claude");
+      expect(rule).not.toBeNull();
+      expect(rule!.title).toBe("claude");
+      expect(rule!.icon).toBeUndefined();
     });
 
     it('"claude update" 不匹配', () => {

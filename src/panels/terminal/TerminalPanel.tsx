@@ -64,12 +64,13 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ api, params }) => {
   const setTerminalFontSize = useFontSize((s) => s.setTerminalFontSize);
 
   // 命令运行状态变化 → 更新 Dockview 页签标题和图标
+  // originalTitleRef 仅在组件挂载时初始化，active=true 时不覆盖
   const originalTitleRef = useRef(api.title ?? "terminal");
   const handleTabStateChange = useCallback((state: TabState) => {
     if (state.active) {
-      originalTitleRef.current = api.title ?? "terminal";
-      api.setTitle(state.title!);
-      api.updateParameters({ ...params, tabIcon: state.icon ?? null });
+      // 仅当 title/icon 存在时才更新，不覆盖 originalTitleRef
+      if (state.title) api.setTitle(state.title);
+      if (state.icon !== undefined) api.updateParameters({ ...params, tabIcon: state.icon });
     } else {
       api.setTitle(originalTitleRef.current);
       api.updateParameters({ ...params, tabIcon: null });

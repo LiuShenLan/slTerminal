@@ -69,6 +69,7 @@ vi.mock("@xterm/addon-webgl", () => ({
 // Mock ipc——使用 mocks.pty 确保与测试断言中的 spy 是同一实例
 vi.mock("../ipc", () => ({
   pty: mocks.pty,
+  hooks: { onHookEvent: vi.fn(() => vi.fn()), inject: vi.fn(), uninstall: vi.fn(), getInjectionStatus: vi.fn() },
 }));
 
 import { useXterm } from "../panels/terminal/useXterm";
