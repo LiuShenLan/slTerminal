@@ -43,7 +43,7 @@ const parallelAgents = [
 2. "信号文件驱动页签图标流转"：
    - 使用 __slterm_e2e_createProject(path) 创建测试项目。
    - 使用 __dockviewApi.addPanel 创建一个 terminal 面板，记录 panelId。
-   - 在 Node 端用 fs.writeFileSync 写信号文件到 require("os").homedir() + "/.slterminal/hooks-events/" + \`${panelId}-UserPromptSubmit-${Date.now()}.json\`，payload 为 { panelId, event: "UserPromptSubmit", timestamp: Date.now(), sessionId: "e2e", transcriptPath: "", cwd: path, toolName: null, notificationType: null }。
+   - 在 Node 端用 fs.writeFileSync 写信号文件到 require("os").homedir() + "/.slterminal/hooks-events/" + \`\${panelId}-UserPromptSubmit-\${Date.now()}.json\`，payload 为 { panelId, event: "UserPromptSubmit", timestamp: Date.now(), sessionId: "e2e", transcriptPath: "", cwd: path, toolName: null, notificationType: null }。
    - browser.execute 查询该面板对应 tab 的 DOM 文本包含 "⚡"。
    - Node 端再写 SessionEnd 信号文件。
    - browser.execute 查询该面板对应 tab 的 DOM 不再包含 "⚡"。
