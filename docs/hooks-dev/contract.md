@@ -121,7 +121,7 @@ DTO（Rust `snake_case` ↔ JS `camelCase` 双边对应，硬约束 #4）：
 > 2026-07-26 回填修订：经阶段 2 计划期对 Tauri v2 源码一手核实，`sendNotification` 的 `Options` 无 `onClick` 字段、JS 侧无 `flashFrame` API，原表述已更正为下述实现路径。
 
 - **F4 通知**：`@tauri-apps/plugin-notification`（官方插件，`capabilities/` 显式放行，硬约束 #10；thin wrapper 聚合进 `src/ipc/`，照 clipboard/dialog 先例）。toast 点击回调经 **`sendClickableNotification` 工厂**（内部 `new Notification(...) + n.onclick = ...`）。任务栏闪烁经 **`getCurrentWindow().requestUserAttention(UserAttentionType.Critical)`**，聚焦后以 `requestUserAttention(null)` 停止。失焦门控、三类事件、toast 点击跳转照 `feature-plan/phase2-notify-overview.md` F4 节。
-- **F5 上下文用量**：transcript JSONL **在后端解析**——文件可达数百 MB，前端不直接读。hooks 模块新增命令 **`hooks_context_usage`**（参数 transcriptPath，尾部读取 + 逆行扫描最后一条 `message.usage`，失败返回 null 降级；DTO 字段以阶段 2 计划 `stages.md` 写死值为准）。
+- **F5 上下文用量**：transcript JSONL **在后端解析**——文件可达数百 MB，前端不直接读。hooks 模块新增命令 **`hooks_context_usage`**（参数 `{ transcriptPath: string }`，返回 `ContextUsage | null`，其中 `ContextUsage { inputTokens: number, outputTokens: number }`；实现：尾部读取（最后 64KB）+ 逆行扫描最后一条 `message.usage`，失败返回 null 降级）。
 - F5 视图注册：`sideViewDefs.ts` 追加（id `agent-status`、title "Agent 状态"、icon 🤖、默认上区）。
 
 ## C13 阶段 3 专有契约（F6）

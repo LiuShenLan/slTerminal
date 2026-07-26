@@ -18,11 +18,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `settings.ts` | settings | `load_settings`, `save_settings` |
 | `projects.ts` | projects | `load_projects`, `save_projects`（绕过路径 sandbox，exe 同级 `slterminal-projects.json`） |
 | `notify.ts` | `notify/` | `notify_watch`、`onFsEvent`（`listen("fs-event")` 封装） |
+| `notification.ts` | Tauri plugin notification | 封装 `isPermissionGranted` / `requestPermission` / `sendNotification` |
 | `clipboard.ts` | Tauri plugin | 直接 re-export `@tauri-apps/plugin-clipboard-manager`。由 `keyboard.ts`（Ctrl+Shift+C/V）和 `useXterm.ts`（OSC 52 handler）消费 |
 | `dialog.ts` | Tauri plugin | 直接 re-export `@tauri-apps/plugin-dialog` |
 | `window.ts` | Tauri Window API | `registerCloseHandler` — 封装 `onCloseRequested` 关闭生命周期 |
 | `shell.ts` | Tauri plugin | `@tauri-apps/plugin-opener` 的 `openUrl` re-export |
-| `hooks.ts` | `hooks/` | `hooks_inject`, `hooks_uninstall`, `hooks_injection_status`；`onHookEvent`（`listen("hook-event")` 封装） |
+| `hooks.ts` | `hooks/` | `hooks_inject`, `hooks_uninstall`, `hooks_injection_status`, `hooks_context_usage`（参数 `{ transcriptPath: string }`，返回 `ContextUsage \| null`）；`onHookEvent`（`listen("hook-event")` 封装） |
 | `index.ts` | — | barrel export，统一对外暴露；含 `ping()` 健康检查命令 |
 
 ## 编码约定
@@ -31,7 +32,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Channel 模式**：流式数据（如 PTY 输出）通过 `Channel<T>` 推送，调用方传入 `onOutput` 回调。
 - **Event 模式**：`onFsEvent` 封装 Tauri `listen<FsEvent>("fs-event")`，返回 unsubscribe 函数。`registerCloseHandler` 封装 `getCurrentWindow().onCloseRequested` 生命周期。
 - **类型对应**：封装函数的参数/返回值使用 `src/types/` 中的 DTO 类型，与 Rust 端 `snake_case` 字段对应。
-- **thin wrapper**：clipboard、dialog 和 shell 是 Tauri 官方插件的直接 re-export，仅为了聚合到本层，不添加额外逻辑。新增 Tauri 插件导入遵循同一模式。
+- **thin wrapper**：clipboard、dialog、shell 和 notification 是 Tauri 官方插件的直接 re-export，仅为了聚合到本层，不添加额外逻辑。新增 Tauri 插件导入遵循同一模式。
 - **命名**：函数名 camelCase，对应的 Rust 命令为 snake_case（如 `pty_spawn` → `spawn()`）。
 - **参数序列化**：`Uint8Array` 需转 `Array.from(data)` 再传给 `invoke`（`pty.write`）。`write`/`resize`/`kill` 的 invoke payload 均含 `panelId`（后端 SEC-08 归属校验），调用方须传入作用域内现成的 panelId。
 
