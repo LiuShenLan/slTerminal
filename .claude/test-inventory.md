@@ -2,11 +2,11 @@
 
 > **本文档是项目用例数唯一真值源。** 所有 CLAUDE.md、README、CI 配置中引用的用例数均以此文件为准。更新测试后必须同步本文档。
 
-全量 **1769** 用例（Rust 251 + 前端 1387 + L3 116 + E2E 15），2026-07-19 实测更新。
+全量 **1822** 用例（Rust 274 + 前端 1415 + L3 116 + E2E 17），2026-07-26 更新。
 
 > **计数口径**：前端 (L2) 用例数以 `grep -cE '^\s*(it|test)\(' src/__tests__/*.test.ts src/__tests__/*.test.tsx` 展开的 `it`/`test` 块数为准（Vitest 实际运行数）；L3 同理 `test/terminal/*.test.ts`；Rust (L1) 以 `grep -c '#\[test\]'` 统计的 `#[test]` 属性数为准。L3 的 116 用例同时被 L2 (`npm test`) 和独立 L3 (`npm run test:l3`) 执行，但此处各层独立计数，不做去重。
 
-## L1 — Rust 单元/集成测试（11 文件 / 251 用例）
+## L1 — Rust 单元/集成测试（13 文件 / 274 用例）
 
 运行：`cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1`
 
@@ -14,35 +14,38 @@
 |------|------|---------|
 | `src-tauri/src/git/mod.rs` | 70 | status_to_str/git_status/git_diff/git_file_at_head/recurse_untracked_dirs/oldPath/rename_detection/line_callback/dunce/序列化/repository |
 | `src-tauri/src/pty/reader.rs` | 30 | ConPTY 启动序列剥离/DA1 查询检测/apply_startup_strip/should_inject_da1/mirror_da1_query/16KB 边界 |
-| `src-tauri/src/pty/spawn.rs` | 28 | compute_conpty_flags/flag 常量/ConPtyMaster MasterPty trait/AttrList + env 注入/cwd 规范化/ring buffer 回放/session 隔离 |
+| `src-tauri/src/pty/spawn.rs` | 29 | compute_conpty_flags/flag 常量/ConPtyMaster MasterPty trait/AttrList + env 注入（含 SLTERM_PANEL_ID）/cwd 规范化/ring buffer 回放/session 隔离 |
 | `src-tauri/src/fs/mod.rs` | 28 | read_dir/write_file/create_dir/delete/rename + 命令包装单测 |
 | `src-tauri/src/notify/mod.rs` | 24 | FileWatcher 生命周期 + classify_by_kind 事件分类（全 7 种 EventKind） |
 | `src-tauri/src/state.rs` | 15 | ring buffer append+eviction+换行边界/validate_path_within_root 沙箱 |
 | `src-tauri/src/pty/shell.rs` | 15 | pwsh 发现/shell-integration.ps1 嵌入/UTF-16LE Base64 往返/which_full_path/shell 白名单 |
 | `src-tauri/src/settings.rs` | 15 | 读写往返/文件不存在/JSON 损坏回退 .bak/浅合并/shadow 目录 + 命令包装单测 |
 | `src-tauri/src/notify/pool.rs` | 13 | LruWatcherPool: 缓存命中/LRU 淘汰/pause_all_except/replace/remove/stop_all/Drop |
+| `src-tauri/src/hooks/mod.rs` | 10 | DTO serde（camelCase）/parse_signal_file 全分支（合法/缺 panelId/非法 JSON/空串/嵌入正文中）/watcher 生命周期（start/stop/Drop） |
+| `src-tauri/src/hooks/inject.rs` | 12 | 注入幂等（空 settings/已有用户 hooks/已注入升级）/卸载干净/状态检测（injected/outdated/notInjected）/非法 JSON 中止/版本比对 |
 | `src-tauri/tests/pty_integration_tests.rs` | 7 | PTY 往返/OSC cwd 解析/resize 生效/kill 无孤儿/Custom ConPTY spawn/reattach |
 | `src-tauri/src/error.rs` | 4 | 序列化/Display/From<io::Error>/SessionNotFound |
 | `src-tauri/src/lib.rs` | 2 | ping 返回 pong/`get_windows_build_number` 返回数字 |
 
 > `pty/mod.rs`、`pty/win_build.rs`、`main.rs` 不含 `#[test]`，不在此列。
 
-## L2 — 前端单元/集成测试（85 文件 / 1387 用例）
+## L2 — 前端单元/集成测试（87 文件 / 1415 用例）
 
 运行：`npm test`（Vitest + jsdom）
 
-### IPC 层（2 文件 / 54 用例）
+### IPC 层（3 文件 / 62 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
 | `src/__tests__/ipc-contract.test.ts` | 53 | pty/fs/settings/notify/git 全模块 IPC 命令合约验证 + DBG-4 PTY 命令 payload 契约守卫（3 条：键集合精确匹配） |
+| `src/__tests__/ipc-hooks-contract.test.ts` | 8 | hooks_inject/hooks_uninstall/hooks_injection_status 四维验证（命令名/参数结构/返回值/异常传播）+ onHookEvent listen 绑定 |
 | `src/__tests__/ipc-ping.test.ts` | 1 | mockIPC ping/pong 拦截 |
 
-### 终端面板（14 文件 / 182 用例）
+### 终端面板（14 文件 / 188 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
-| `src/__tests__/use-xterm-lifecycle.test.ts` | 71 | PTY spawn/exit/setupRetry/快捷键/rAF 轮询/ResizeObserver/字体/OSC 52/OSC 133/OSC 8/键盘委托 |
+| `src/__tests__/use-xterm-lifecycle.test.ts` | 77 | PTY spawn/exit/setupRetry/快捷键/rAF 轮询/ResizeObserver/字体/OSC 52/OSC 133/OSC 8/键盘委托/hook-event 过滤与状态更新/F3 四态 emoji |
 | `src/__tests__/use-xterm-output.test.ts` | 37 | DEC 2026/直写阈值/交替缓冲/Idle+Max 合帧/Uint8Array/非焦点降频/cancelPendingFlush/visibleRef 门控 |
 | `src/__tests__/can-fit.test.ts` | 15 | 五条件守卫 + null/undefined 参数防护 |
 | `src/__tests__/use-xterm-integration.test.ts` | 12 | 轻 mock（真实 Terminal/FitAddon，仅 mock ipc/pty）；rAF 轮询失败回退/term.onData→pty.write/visible 切换 WebGL 释放重建 |
@@ -154,12 +157,13 @@
 | `src/__tests__/use-panel-focus.test.ts` | 5 | focusin→pushContext+onActivate/focusout→popContext+onDeactivate/卸载清理 |
 | `src/__tests__/wire-keybindings.test.ts` | 3 | 立即应用/store 变更重应用/unsubscribe |
 
-### 主题/配色/基础（5 文件 / 64 用例）
+### 主题/配色/基础（6 文件 / 78 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
 | `src/__tests__/path.test.ts` | 27 | normalizePath/basename/isChildOf/relativePath 边界覆盖 |
 | `src/__tests__/inject-script.test.ts` | 21 | HTML 脚本注入/`</script>` 转义/幂等/大小写不敏感/键盘转发+片段链接拦截 |
+| `src/__tests__/claude-status.test.ts` | 14 | `eventToStatus` 纯函数全分支：10 事件 × notificationType 组合（PreToolUse→⚡/PostToolUse→⚡/Notification 三类→🟡/其他→null/SessionEnd→✅/Error→❌/Stop/Result/Permission/Idle→null）+ OSC 133 C 设 🟡 语义注释说明 |
 | `src/__tests__/colors.test.ts` | 12 | 配色 token 值校验（压缩后，原 61 条冗余断言合并） |
 | `src/__tests__/theme.test.ts` | 12 | terminalOptions: ANSI 16 色/font/cursor/scrollback/kittyKeyboard |
 
@@ -204,7 +208,7 @@
 | `test/terminal/ansi-correctness.test.ts` | 30 | ANSI 颜色正确性——16 色前景/背景、256 色（标准/216 色立方/灰度）、TrueColor 24-bit 前景/背景/混合、SGR 属性（粗体/斜体/下划线/双下划线/慢闪/反显/隐藏/删除线/弱化/上划线）、SGR 组合叠加、SGR 重置/子参数重置、DEC 私有模式（DECTCEM/DECOM/DECAWM）、DECSC/DECRC、RIS、DECSTBM |
 | `test/terminal/osc.test.ts` | 9 | OSC 序列——标题（OSC 0/2 BEL/ST）、调色板（OSC 4 单索引/多索引）、嵌入完整性（OSC 在正常输出中/穿插文本/后紧跟文本不丢失） |
 
-## L4 — E2E 端到端测试（1 文件 / 15 用例）
+## L4 — E2E 端到端测试（1 文件 / 17 用例）
 
 运行：`npm run e2e`（= `npm run build:e2e` + `npm run wdio`）  
 技术栈：WDIO + `@wdio/tauri-service` 1.1.0 + embedded driver（`webview2-com` COM 直连 `ICoreWebView2`）
@@ -227,6 +231,8 @@
 | 拖拽按钮跨区移动（R6/R7） | DataTransfer 合成拖拽事件跨区→zones + open 跟随（R6 跟随替换/R7 未打开仅归属）→store 状态断言 |
 | Commit 视图应显示真实的 Changes 与 Unversioned 文件列表 | git CLI 搭建真实仓库（init+commit+modified+untracked）→toggleSideView("commit")→断言 Changes/Unversioned 条目数与文件名 |
 | 双击 modified 文件应打开 diff 页签 | 双击 modified 文件 → 断言 __dockviewApi 出现 title 含 `(git diff)` 的面板且存在 `data-e2e="diff-left"`/`diff-right` |
+| 注入 hooks 后状态回显应为 injected | `hooks.inject()` → `hooks.getInjectionStatus()` → 断言 `{ status: "injected" }`；`hooks.uninstall()` → 断言 `{ status: "notInjected" }` |
+| Node 写信号文件后终端页签出现 emoji 并随后消失 | Node 子进程写 `~/.slterminal/hooks-events/` 信号文件（PreToolUse→⚡）→ 断言 DefaultTab 渲染对应 emoji；写 SessionEnd→✅ → 短暂显示后恢复无图标 |
 
 ### E2E 键盘输入限制（TE-17）
 
@@ -248,6 +254,7 @@ embedded WDIO 驱动**无法将 OS 级按键（`browser.keys`）投递进 WebVie
 
 ## 历史变更
 
+- 2026-07-26：hooks 宿主侧增强（P1-DOC）——L1 新增「hooks」模块 2 文件 22 用例（mod.rs 10 + inject.rs 12）+ pty/spawn.rs 28→29（+1 env 注入）。L2 新增「hooks」IPC 合约 1 文件 8 用例（ipc-hooks-contract）+「claude-status」纯函数 1 文件 14 用例；终端面板 use-xterm-lifecycle 71→77（+6 hook-event 过滤/F3 四态）。L4 新增 hooks 注入/信号 2 用例，15→17。L1 251→274，L2 1387→1415，L4 15→17，全量 1769→1822。
 - 2026-07-19：commit 视图（CV-DOC）——L1 git/mod.rs 62→70（+8：git_file_at_head/recurse_untracked_dirs/oldPath/rename_detection），L1 243→251。L2 新增「Commit 视图」类目 1 文件 28 用例 +「Diff/GitShow 面板」3 文件 40 用例（diff-alignment 16 + diff-panel 11 + gitshow-panel 13），既有文件增量：ipc-contract 50→53 + git-gutter 20→28 + panel-registry 23→29 + title-manager 36→44 + workspace-file-panel-types 11→13。L2 1207→1387。L4 新增「commit 视图」describe 2 用例，14→15。全量 1580→1769。
 - 2026-07-19（fix）：跨区拖拽修复 + 中线 zone 判定 + splitRatio 重置——activityBar 16→29（+13 跨区/边界/清理），sideBarArea 13→14（+1 splitRatio 重置）。L2 1193→1207，全量 1566→1580。
 - 2026-07-19：侧栏视图系统（SB-26）——新增 L2「侧栏视图」类目 6 文件 118 用例（sideBarState 50 + sideViewRegistry 7 + sideBar 19 + activityBar 16 + sideBarArea 13 + workspace-sideviews 13）；L4 新增「侧栏视图」describe 2 用例（12→14）。L2 1075→1193，全量 1446→1566。

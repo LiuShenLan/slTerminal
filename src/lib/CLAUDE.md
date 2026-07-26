@@ -17,6 +17,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `ErrorBoundary.tsx` | React 错误边界组件 |
 | `e2eEnabled.ts` | E2E helper 注入总开关：`E2E_ENABLED` 常量 + `computeE2eEnabled` 纯函数 |
 | `injectScript.ts` | HTML 脚本注入纯函数：`injectScript(html, script, marker)` 向 HTML 字符串的 `</head>`/`<body` 前插入脚本，幂等（marker 检测），大小写不敏感，供 HtmlPanel 键盘转发 |
+| `claudeStatus.ts` | 四态映射单点：`ClaudeStatus` 类型（`working`/`attention`/`done`/`error`）+ `STATUS_EMOJI` 常量（⚡🟡✅❌）+ `eventToStatus(event, notificationType?)` 纯函数（F3 状态机） |
 
 ## e2eEnabled.ts — E2E 门控单一真值源
 

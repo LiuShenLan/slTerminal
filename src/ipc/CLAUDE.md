@@ -22,6 +22,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `dialog.ts` | Tauri plugin | 直接 re-export `@tauri-apps/plugin-dialog` |
 | `window.ts` | Tauri Window API | `registerCloseHandler` — 封装 `onCloseRequested` 关闭生命周期 |
 | `shell.ts` | Tauri plugin | `@tauri-apps/plugin-opener` 的 `openUrl` re-export |
+| `hooks.ts` | `hooks/` | `hooks_inject`, `hooks_uninstall`, `hooks_injection_status`；`onHookEvent`（`listen("hook-event")` 封装） |
 | `index.ts` | — | barrel export，统一对外暴露；含 `ping()` 健康检查命令 |
 
 ## 编码约定
@@ -36,7 +37,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 测试模式
 
-测试文件：`src/__tests__/ipc-contract.test.ts`（50 用例，含 3 条 DBG-4 契约守卫）+ `ipc-ping.test.ts`（1 用例）。
+测试文件：`src/__tests__/ipc-contract.test.ts`（50 用例，含 3 条 DBG-4 契约守卫）+ `ipc-ping.test.ts`（1 用例）+ `ipc-hooks-contract.test.ts`（8 用例）。
 
 ### IPC 合约测试
 
