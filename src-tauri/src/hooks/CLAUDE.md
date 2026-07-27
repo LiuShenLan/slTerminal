@@ -65,6 +65,17 @@ PTY spawn 时注入 `SLTERM_PANEL_ID` 环境变量（与 `COLORTERM`/`TERM`/`TER
 
 watcher 使用 `static WATCHER: Mutex<Option<HookSignalWatcher>>`（模块级），避免在 `state.rs` 的 `AppState` 中新增字段导致循环依赖。`start_signal_watcher` 幂等：已启动则跳过不报错。watcher 线程名 `hook-signal-watcher`，在 `lib.rs` 的 `.setup()` 中启动。
 
+### 信号文件瞬态特性 + dev 环境注入路径
+
+**目录常态为空是设计行为**：`process_signal_file`（`signal.rs:49-79`）处理后无论 emit 成败均立即 `fs::remove_file` 删除文件，watcher debounce 仅 50ms（`watcher.rs:37`）。信号文件从产生到删除存活亚秒级，任何时刻 `ls` 几乎都看不到文件——目录为空恰是管道正常工作的表现。如需观察信号文件，应使用文件系统监视工具（如 `watchexec`）或临时停 watcher。
+
+**dev 环境注入/卸载/状态查询路径**：前端生产代码无 `inject()` 调用方（F2 入口并入阶段 3），唯一注入入口是 dev/E2E 构建下的 E2E helper（`E2E_ENABLED` 门控，`e2e-tests/helpers.ts:296-300`）：
+- `npm run tauri dev` 启动后，devtools 控制台执行 `await window.__slterm_e2e_injectHooks()`（= `hooks.inject()`）
+- 状态查询：`await window.__slterm_e2e_getHookInjectionStatus()`（= `hooks.getInjectionStatus()`）
+- 卸载：`await window.__slterm_e2e_uninstallHooks()`（= `hooks.uninstall()`）
+
+生产构建（`npx tauri build`）这两 helper 被 tree-shake 排除，注入功能需阶段 3 的 GUI 入口。
+
 ## 文件
 
 | 文件 | 职责 |
@@ -110,14 +121,14 @@ watcher 使用 `static WATCHER: Mutex<Option<HookSignalWatcher>>`（模块级）
 
 ## 测试模式
 
-Rust 测试分布 4 个位置（均为 `#[cfg(test)] mod tests` 嵌入源文件），共 41 用例。
+Rust 测试分布 4 个位置（均为 `#[cfg(test)] mod tests` 嵌入源文件），共 43 用例。
 
 | 位置 | 用例数 | 覆盖范围 |
 |------|--------|---------|
 | `mod.rs` `#[cfg(test)]` | 8 | InjectionStatus/HookInjectionStatus serde（camelCase）、parse_signal_file 快速冒烟（合法/缺 panelId/非法 JSON/空串） |
-| `signal.rs` `#[cfg(test)]` | 10 | parse_signal_file 全分支（合法完整/optionals null/缺 panelId/空 panelId/非法 JSON/空串/仅空白）、camelCase 序列化+反序列化往返 |
-| `watcher.rs` `#[cfg(test)]` | 4 | is_signal_file（.json/.JSON/.tmp/无扩展名）、watcher 生命周期（stop 幂等、Drop join 线程） |
-| `inject.rs` `#[cfg(test)]` | 19 | template_version 正值、HOOK_EVENTS 计数+唯一+关键事件、has_slterm_matchers（空/无 hooks 键/命中/用户 hook 不误检/null hooks 值）、disk_script_version（解析/无版本/缺失/空格分号）、remove_slterm_matchers（清理 slterm 条目+保留用户 hook/清理空事件键/无 slterm 条目）、inject_matchers（10 事件齐全/保留用户 matcher/二次注入幂等）、build_matcher_entry（timeout=5/matcher 空/type=command）、模板内嵌校验（非空/含 SLTERM_PANEL_ID/含 SCRIPT_VERSION） |
+| `signal.rs` `#[cfg(test)]` | 9 | parse_signal_file 全分支（合法完整/optionals null/缺 panelId/空 panelId/非法 JSON/空串/仅空白）、camelCase 序列化+反序列化往返 |
+| `watcher.rs` `#[cfg(test)]` | 6 | is_signal_file（.json/.JSON/.tmp/无扩展名）、watcher 生命周期（stop 幂等、Drop join 线程） |
+| `inject.rs` `#[cfg(test)]` | 20 | template_version 正值、HOOK_EVENTS 计数+唯一+关键事件、has_slterm_matchers（空/无 hooks 键/命中/用户 hook 不误检/null hooks 值）、disk_script_version（解析/无版本/缺失/空格分号）、remove_slterm_matchers（清理 slterm 条目+保留用户 hook/清理空事件键/无 slterm 条目）、inject_matchers（10 事件齐全/保留用户 matcher/二次注入幂等）、build_matcher_entry（timeout=5/matcher 空/type=command）、模板内嵌校验（非空/含 SLTERM_PANEL_ID/含 SCRIPT_VERSION） |
 
 ### 单元测试组织
 

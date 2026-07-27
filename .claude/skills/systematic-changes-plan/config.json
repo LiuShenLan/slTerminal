@@ -51,6 +51,7 @@
     "src/features/shortcuts/CLAUDE.md",
     "src/features/sidebar/CLAUDE.md",
     "src-tauri/src/pty/CLAUDE.md",
+    "src-tauri/src/hooks/CLAUDE.md",
     "src-tauri/src/notify/CLAUDE.md",
     "src-tauri/src/fs/CLAUDE.md",
     "src-tauri/src/git/CLAUDE.md",

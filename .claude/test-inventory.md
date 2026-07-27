@@ -2,34 +2,37 @@
 
 > **本文档是项目用例数唯一真值源。** 所有 CLAUDE.md、README、CI 配置中引用的用例数均以此文件为准。更新测试后必须同步本文档。
 
-全量 **1822** 用例（Rust 274 + 前端 1415 + L3 116 + E2E 17），2026-07-26 更新。
+全量 **1959** 用例（Rust 336 + 前端 1490 + L3 116 + E2E 17），2026-07-28 更新。
 
 > **计数口径**：前端 (L2) 用例数以 `grep -cE '^\s*(it|test)\(' src/__tests__/*.test.ts src/__tests__/*.test.tsx` 展开的 `it`/`test` 块数为准（Vitest 实际运行数）；L3 同理 `test/terminal/*.test.ts`；Rust (L1) 以 `grep -c '#\[test\]'` 统计的 `#[test]` 属性数为准。L3 的 116 用例同时被 L2 (`npm test`) 和独立 L3 (`npm run test:l3`) 执行，但此处各层独立计数，不做去重。
 
-## L1 — Rust 单元/集成测试（13 文件 / 274 用例）
+## L1 — Rust 单元/集成测试（17 文件 / 336 用例）
 
 运行：`cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1`
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
-| `src-tauri/src/git/mod.rs` | 70 | status_to_str/git_status/git_diff/git_file_at_head/recurse_untracked_dirs/oldPath/rename_detection/line_callback/dunce/序列化/repository |
+| `src-tauri/src/git/mod.rs` | 88 | status_to_str/git_status/git_diff/git_file_at_head/recurse_untracked_dirs/oldPath/rename_detection/line_callback/dunce/序列化/repository/rollback/unstage/commit_file |
 | `src-tauri/src/pty/reader.rs` | 30 | ConPTY 启动序列剥离/DA1 查询检测/apply_startup_strip/should_inject_da1/mirror_da1_query/16KB 边界 |
-| `src-tauri/src/pty/spawn.rs` | 29 | compute_conpty_flags/flag 常量/ConPtyMaster MasterPty trait/AttrList + env 注入（含 SLTERM_PANEL_ID）/cwd 规范化/ring buffer 回放/session 隔离 |
+| `src-tauri/src/pty/spawn.rs` | 28 | compute_conpty_flags/flag 常量/ConPtyMaster MasterPty trait/AttrList + env 注入/cwd 规范化/ring buffer 回放/session 隔离 |
 | `src-tauri/src/fs/mod.rs` | 28 | read_dir/write_file/create_dir/delete/rename + 命令包装单测 |
 | `src-tauri/src/notify/mod.rs` | 24 | FileWatcher 生命周期 + classify_by_kind 事件分类（全 7 种 EventKind） |
-| `src-tauri/src/state.rs` | 15 | ring buffer append+eviction+换行边界/validate_path_within_root 沙箱 |
+| `src-tauri/src/state.rs` | 24 | ring buffer append+eviction+换行边界/validate_path_within_root 沙箱/canonicalize_or_ancestor |
 | `src-tauri/src/pty/shell.rs` | 15 | pwsh 发现/shell-integration.ps1 嵌入/UTF-16LE Base64 往返/which_full_path/shell 白名单 |
-| `src-tauri/src/settings.rs` | 15 | 读写往返/文件不存在/JSON 损坏回退 .bak/浅合并/shadow 目录 + 命令包装单测 |
+| `src-tauri/src/settings.rs` | 17 | 读写往返/文件不存在/JSON 损坏回退 .bak/浅合并/shadow 目录 + 命令包装单测 |
 | `src-tauri/src/notify/pool.rs` | 13 | LruWatcherPool: 缓存命中/LRU 淘汰/pause_all_except/replace/remove/stop_all/Drop |
-| `src-tauri/src/hooks/mod.rs` | 10 | DTO serde（camelCase）/parse_signal_file 全分支（合法/缺 panelId/非法 JSON/空串/嵌入正文中）/watcher 生命周期（start/stop/Drop） |
-| `src-tauri/src/hooks/inject.rs` | 12 | 注入幂等（空 settings/已有用户 hooks/已注入升级）/卸载干净/状态检测（injected/outdated/notInjected）/非法 JSON 中止/版本比对 |
-| `src-tauri/tests/pty_integration_tests.rs` | 7 | PTY 往返/OSC cwd 解析/resize 生效/kill 无孤儿/Custom ConPTY spawn/reattach |
+| `src-tauri/src/hooks/mod.rs` | 8 | DTO serde（camelCase）+ parse_signal_file 冒烟（合法/缺 panelId/非法 JSON/空串）。全分支在 signal.rs、watcher 生命周期在 watcher.rs |
+| `src-tauri/src/hooks/inject.rs` | 20 | 注入幂等/卸载干净/状态检测（injected/outdated/notInjected）/非法 JSON 中止/版本比对/matcher 检测/模板内嵌 |
+| `src-tauri/src/hooks/signal.rs` | 9 | parse_signal_file 全分支（合法完整/optionals null/缺 panelId/空 panelId/非法 JSON/空串/仅空白）+ serde camelCase 往返 |
+| `src-tauri/src/hooks/watcher.rs` | 6 | is_signal_file（.json/.JSON/.tmp/无扩展名）+ watcher 生命周期（stop 幂等、Drop join 线程） |
+| `src-tauri/src/projects.rs` | 12 | 序列化往返/ID 生成/路径校验 |
+| `src-tauri/tests/pty_integration_tests.rs` | 8 | PTY 往返/OSC cwd 解析/resize 生效/kill 无孤儿/Custom ConPTY spawn/reattach/env 注入 |
 | `src-tauri/src/error.rs` | 4 | 序列化/Display/From<io::Error>/SessionNotFound |
 | `src-tauri/src/lib.rs` | 2 | ping 返回 pong/`get_windows_build_number` 返回数字 |
 
 > `pty/mod.rs`、`pty/win_build.rs`、`main.rs` 不含 `#[test]`，不在此列。
 
-## L2 — 前端单元/集成测试（87 文件 / 1415 用例）
+## L2 — 前端单元/集成测试（92 文件 / 1490 用例）
 
 运行：`npm test`（Vitest + jsdom）
 
@@ -254,6 +257,7 @@ embedded WDIO 驱动**无法将 OS 级按键（`browser.keys`）投递进 WebVie
 
 ## 历史变更
 
+- 2026-07-28：Phase 1 review 修复——全量实查对账。L1 新增 hooks/signal.rs(9) + hooks/watcher.rs(6) + projects.rs(12)；hooks/mod.rs 10→8、hooks/inject.rs 12→20、pty/spawn.rs 29→28、pty_integration_tests.rs 7→8、state.rs 15→24、settings.rs 15→17、git/mod.rs 70→88。L1 274→336。L2 1415→1490（多文件计数漂移修正：ipc-hooks-contract 8→16、claude-status 14→30、workspace-defaulttab 14→22、use-xterm-lifecycle 77→79 等）。全量 1822→1959。
 - 2026-07-26：hooks 宿主侧增强（P1-DOC）——L1 新增「hooks」模块 2 文件 22 用例（mod.rs 10 + inject.rs 12）+ pty/spawn.rs 28→29（+1 env 注入）。L2 新增「hooks」IPC 合约 1 文件 8 用例（ipc-hooks-contract）+「claude-status」纯函数 1 文件 14 用例；终端面板 use-xterm-lifecycle 71→77（+6 hook-event 过滤/F3 四态）。L4 新增 hooks 注入/信号 2 用例，15→17。L1 251→274，L2 1387→1415，L4 15→17，全量 1769→1822。
 - 2026-07-19：commit 视图（CV-DOC）——L1 git/mod.rs 62→70（+8：git_file_at_head/recurse_untracked_dirs/oldPath/rename_detection），L1 243→251。L2 新增「Commit 视图」类目 1 文件 28 用例 +「Diff/GitShow 面板」3 文件 40 用例（diff-alignment 16 + diff-panel 11 + gitshow-panel 13），既有文件增量：ipc-contract 50→53 + git-gutter 20→28 + panel-registry 23→29 + title-manager 36→44 + workspace-file-panel-types 11→13。L2 1207→1387。L4 新增「commit 视图」describe 2 用例，14→15。全量 1580→1769。
 - 2026-07-19（fix）：跨区拖拽修复 + 中线 zone 判定 + splitRatio 重置——activityBar 16→29（+13 跨区/边界/清理），sideBarArea 13→14（+1 splitRatio 重置）。L2 1193→1207，全量 1566→1580。
