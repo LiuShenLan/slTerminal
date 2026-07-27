@@ -234,6 +234,15 @@ xterm.js 6.0.0 原生支持 OSC 8 解析渲染。`useXterm.ts` 在 `term.open()`
 - **`DefaultTab`**（workspace 层）：`tabIcon` 含 `/` 走 `<img>`，否则走 `<span>` 渲染 emoji
 - **`tabRules.ts`**：claude 规则的 `icon` 字段已移除——emoji 由 F3 四态系统接管，不再硬编码图标
 
+### 中断场景已知行为（Ctrl+C）
+
+Claude Code 在用户主动 Ctrl+C 中断时不发射任何 hook 事件（`Stop` = 主代理完成响应输出，`StopFailure` = 轮次因 API 错误结束；中断既非正常完成也非 API 错误，`docs/hooks/D1/01-hooks-official-docs.md:36-37`）。此设计导致四态状态机 `working`（⚡）无中断出边——中断后页签滞留 ⚡ 直至下一事件覆盖。
+
+行为特征（非 bug，属于阶段 1 规划缺口）：
+1. **滞留自愈**：下一事件（UserPromptSubmit/Stop 等）覆盖旧状态——继续使用后图标自动恢复正常流转
+2. **内置衰减**：中断回提示符约 60s 无操作 → `idle_prompt` Notification（attention 子类型）→ 自动转 🟡（`docs/hooks/D1/01-hooks-official-docs.md:163`），无需超时机制
+3. **已知局限**：`eventToStatus`（`src/lib/claudeStatus.ts:28-62`）无中断类事件映射；`useXterm` hook-event 处理（`src/panels/terminal/useXterm.ts:348-357`）仅在 `SessionEnd` 时清图标
+
 ## 文件
 
 | 文件 | 职责 |

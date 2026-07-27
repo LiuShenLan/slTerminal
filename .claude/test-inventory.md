@@ -2,37 +2,38 @@
 
 > **本文档是项目用例数唯一真值源。** 所有 CLAUDE.md、README、CI 配置中引用的用例数均以此文件为准。更新测试后必须同步本文档。
 
-全量 **1949** 用例（Rust 318 + 前端 1497 + L3 116 + E2E 18），2026-07-27 更新。
+全量 **2045** 用例（Rust 359 + 前端 1552 + L3 116 + E2E 18），2026-07-28 更新。
 
 > **计数口径**：前端 (L2) 用例数以 `grep -cE '^\s*(it|test)\(' src/__tests__/*.test.ts src/__tests__/*.test.tsx` 展开的 `it`/`test` 块数为准（Vitest 实际运行数）；L3 同理 `test/terminal/*.test.ts`；Rust (L1) 以 `grep -c '#\[test\]'` 统计的 `#[test]` 属性数为准。L3 的 116 用例同时被 L2 (`npm test`) 和独立 L3 (`npm run test:l3`) 执行，但此处各层独立计数，不做去重。
 
-## L1 — Rust 单元/集成测试（16 文件 / 318 用例）
+## L1 — Rust 单元/集成测试（18 文件 / 359 用例）
 
 运行：`cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1`
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
-| `src-tauri/src/git/mod.rs` | 70 | status_to_str/git_status/git_diff/git_file_at_head/recurse_untracked_dirs/oldPath/rename_detection/line_callback/dunce/序列化/repository |
+| `src-tauri/src/git/mod.rs` | 88 | status_to_str/git_status/git_diff/git_file_at_head/recurse_untracked_dirs/oldPath/rename_detection/line_callback/dunce/序列化/repository/rollback/unstage/commit_file |
 | `src-tauri/src/pty/reader.rs` | 30 | ConPTY 启动序列剥离/DA1 查询检测/apply_startup_strip/should_inject_da1/mirror_da1_query/16KB 边界 |
-| `src-tauri/src/pty/spawn.rs` | 29 | compute_conpty_flags/flag 常量/ConPtyMaster MasterPty trait/AttrList + env 注入（含 SLTERM_PANEL_ID）/cwd 规范化/ring buffer 回放/session 隔离 |
+| `src-tauri/src/pty/spawn.rs` | 28 | compute_conpty_flags/flag 常量/ConPtyMaster MasterPty trait/AttrList + env 注入/cwd 规范化/ring buffer 回放/session 隔离 |
 | `src-tauri/src/fs/mod.rs` | 28 | read_dir/write_file/create_dir/delete/rename + 命令包装单测 |
 | `src-tauri/src/notify/mod.rs` | 24 | FileWatcher 生命周期 + classify_by_kind 事件分类（全 7 种 EventKind） |
-| `src-tauri/src/state.rs` | 15 | ring buffer append+eviction+换行边界/validate_path_within_root 沙箱 |
+| `src-tauri/src/state.rs` | 24 | ring buffer append+eviction+换行边界/validate_path_within_root 沙箱/canonicalize_or_ancestor |
 | `src-tauri/src/pty/shell.rs` | 15 | pwsh 发现/shell-integration.ps1 嵌入/UTF-16LE Base64 往返/which_full_path/shell 白名单 |
-| `src-tauri/src/settings.rs` | 15 | 读写往返/文件不存在/JSON 损坏回退 .bak/浅合并/shadow 目录 + 命令包装单测 |
+| `src-tauri/src/settings.rs` | 17 | 读写往返/文件不存在/JSON 损坏回退 .bak/浅合并/shadow 目录 + 命令包装单测 |
 | `src-tauri/src/notify/pool.rs` | 13 | LruWatcherPool: 缓存命中/LRU 淘汰/pause_all_except/replace/remove/stop_all/Drop |
 | `src-tauri/src/hooks/mod.rs` | 8 | DTO serde（camelCase）/hook-event payload 序列化/hooks_context_usage 命令 |
 | `src-tauri/src/hooks/inject.rs` | 20 | 注入幂等（空 settings/已有用户 hooks/已注入升级）/卸载干净/状态检测（injected/outdated/notInjected）/非法 JSON 中止/版本比对/notification 权限声明 |
 | `src-tauri/src/hooks/signal.rs` | 9 | parse_signal_file 全分支（合法/缺 panelId/非法 JSON/空串/嵌入正文中）/write_signal_file/信号文件读取 |
 | `src-tauri/src/hooks/watcher.rs` | 6 | hooks 事件 watcher 生命周期（start/stop/Drop/事件发射） |
 | `src-tauri/src/hooks/usage.rs` | 23 | parse_context_usage 全分支（合法 JSON/非法 JSON/空文件/文件不存在/JSON 解析错误/字段缺失/字段类型错误/total_tokens 计算/exit_code 解析/transcript_path 为空）/read_context_usage_file 文件 I/O |
-| `src-tauri/tests/pty_integration_tests.rs` | 7 | PTY 往返/OSC cwd 解析/resize 生效/kill 无孤儿/Custom ConPTY spawn/reattach |
+| `src-tauri/src/projects.rs` | 12 | 序列化往返/ID 生成/路径校验 |
+| `src-tauri/tests/pty_integration_tests.rs` | 8 | PTY 往返/OSC cwd 解析/resize 生效/kill 无孤儿/Custom ConPTY spawn/reattach/env 注入 |
 | `src-tauri/src/error.rs` | 4 | 序列化/Display/From<io::Error>/SessionNotFound |
 | `src-tauri/src/lib.rs` | 2 | ping 返回 pong/`get_windows_build_number` 返回数字 |
 
 > `pty/mod.rs`、`pty/win_build.rs`、`main.rs` 不含 `#[test]`，不在此列。
 
-## L2 — 前端单元/集成测试（90 文件 / 1497 用例）
+## L2 — 前端单元/集成测试（97 文件 / 1552 用例）
 
 运行：`npm test`（Vitest + jsdom）
 
@@ -44,11 +45,11 @@
 | `src/__tests__/ipc-hooks-contract.test.ts` | 16 | hooks_inject/hooks_uninstall/hooks_injection_status/hooks_context_usage 四维验证（命令名/参数结构/返回值/异常传播）+ onHookEvent listen 绑定 |
 | `src/__tests__/ipc-ping.test.ts` | 1 | mockIPC ping/pong 拦截 |
 
-### 终端面板（14 文件 / 188 用例）
+### 终端面板（14 文件 / 198 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
-| `src/__tests__/use-xterm-lifecycle.test.ts` | 77 | PTY spawn/exit/setupRetry/快捷键/rAF 轮询/ResizeObserver/字体/OSC 52/OSC 133/OSC 8/键盘委托/hook-event 过滤与状态更新/F3 四态 emoji |
+| `src/__tests__/use-xterm-lifecycle.test.ts` | 79 | PTY spawn/exit/setupRetry/快捷键/rAF 轮询/ResizeObserver/字体/OSC 52/OSC 133/OSC 8/键盘委托/hook-event 过滤与状态更新/F3 四态 emoji |
 | `src/__tests__/use-xterm-output.test.ts` | 37 | DEC 2026/直写阈值/交替缓冲/Idle+Max 合帧/Uint8Array/非焦点降频/cancelPendingFlush/visibleRef 门控 |
 | `src/__tests__/can-fit.test.ts` | 15 | 五条件守卫 + null/undefined 参数防护 |
 | `src/__tests__/use-xterm-integration.test.ts` | 12 | 轻 mock（真实 Terminal/FitAddon，仅 mock ipc/pty）；rAF 轮询失败回退/term.onData→pty.write/visible 切换 WebGL 释放重建 |
@@ -56,7 +57,7 @@
 | `src/__tests__/tab-title-registry.test.ts` | 8 | register/match、大小写、覆盖、`_reset()`、单例校验 |
 | `src/__tests__/terminal-registry.test.ts` | 7 | register/get/remove/has/幂等/clear |
 | `src/__tests__/e2e-gating-terminal.test.ts` | 5 | E2E helper 终端门控（`__e2e_sessionReady`/`__e2e_writeToPty` 等） |
-| `src/__tests__/tab-rules.test.ts` | 5 | side-effect import + `_reset()` 后手动注册 |
+| `src/__tests__/tab-rules.test.ts` | 6 | side-effect import + `_reset()` 后手动注册 |
 | `src/__tests__/terminal-lifecycle.test.ts` | 4 | 挂载→创建→卸载→dispose 完整链路 |
 | `src/__tests__/terminal.test.tsx` | 4 | TerminalPanel 组件：loading 遮罩/Windows build/spawn |
 | `src/__tests__/active-terminal.test.ts` | 4 | active 指针 set/get/覆盖、clear 仅匹配时生效 |
@@ -76,7 +77,7 @@
 | `src/__tests__/editor-keyboard.test.ts` | 7 | `createEditorShortcuts()` save/toggleWordWrap 经 active 指针派发 |
 | `src/__tests__/active-editor.test.ts` | 5 | active 指针 set/get/覆盖、clear 仅匹配时生效 |
 
-### 工作区/布局/页签（12 文件 / 187 用例）
+### 工作区/布局/页签（12 文件 / 186 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
@@ -85,7 +86,7 @@
 | `src/__tests__/layout-serde.test.ts` | 21 | 旧格式修补/白名单过滤/深拷贝/嵌套 branch/activeGroup 保留 |
 | `src/__tests__/workspace-header-actions.test.tsx` | 16 | RightHeader Watermark 按钮/页签操作 |
 | `src/__tests__/workspace-switch-order.test.tsx` | 14 | DBG-9：`switchToPage` 时序契约——`setProjectRoot` 先于 `setActivePage` 生效/reject 降级/SEC-01 effect 兜底/兼容性排查 |
-| `src/__tests__/workspace-defaulttab.test.tsx` | 14 | DefaultTab 渲染 + `onDidParametersChange` 事件结构回归 |
+| `src/__tests__/workspace-defaulttab.test.tsx` | 22 | DefaultTab 渲染 + `onDidParametersChange` 事件结构回归 |
 | `src/__tests__/workspace-file-panel-types.test.ts` | 13 | FILE_PANEL_TYPES/isAlwaysRenderPanel（5 面板：terminal/editor/htmlviewer/gitshow/diff） |
 | `src/__tests__/default-layout-format.test.ts` | 8 | grid/panels/activeGroup/orientation 格式验证 |
 | `src/__tests__/layout-switch.test.ts` | 7 | 页面切换集成/自切换守卫 |
@@ -93,29 +94,35 @@
 | `src/__tests__/workspace-e2e-ready.test.tsx` | 4 | `__slterm_e2e_workspaceReady` 标记同步性 |
 | `src/__tests__/workspace.test.tsx` | 4 | Dockview 初始化/项目页面关联 |
 
-### Store 状态管理（4 文件 / 77 用例）
+### Store 状态管理（4 文件 / 81 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
-| `src/__tests__/projects.test.ts` | 41 | Project/Page CRUD/持久化/version 递增/ID 生成/expandedNodes |
+| `src/__tests__/projects.test.ts` | 45 | Project/Page CRUD/持久化/version 递增/ID 生成/expandedNodes |
 | `src/__tests__/font-size.test.ts` | 16 | 默认值/clamp/loadFromDisk/debounce 持久化 |
 | `src/__tests__/keybindings.test.ts` | 16 | setBinding/clearBinding/resetAll/sanitize/loaded 守卫/debounce |
 | `src/__tests__/layout.test.ts` | 4 | activePageId 设置/清空/重复 |
 
-### 资源管理器（10 文件 / 156 用例）
+### 资源管理器（16 文件 / 213 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
 | `src/__tests__/explorer-git-status.test.tsx` | 32 | gitStatusMap 查表着色/配色 token/F5 untracked/slterm:file-saved |
+| `src/__tests__/explorer-delete.test.tsx` | 19 | ask 弹窗分支/右键菜单/操作失败 UI 通知 |
 | `src/__tests__/file-icon.test.tsx` | 18 | 扩展名图标 + 目录图标 + git 状态着色 |
 | `src/__tests__/explorer-refresh-preserve.test.tsx` | 17 | reloadPreservingExpanded 递归重建/边界容错/三条触发路径/竞态 |
 | `src/__tests__/explorer-file-viewer.test.tsx` | 16 | handleOpenFile 面板分派/FileViewerRegistry/htmlviewer 回退 |
+| `src/__tests__/explorer-keyboard.test.ts` | 15 | `createExplorerShortcuts()` delete/open/rename 经 active 指针派发 + actions ref 模式闭包不过期 |
 | `src/__tests__/use-file-tree.test.ts` | 15 | loadRoot/loadDirectory/toggleExpand/generation 取消 |
+| `src/__tests__/explorer-selection.test.tsx` | 14 | FileTree 选中模型（单击选中/双击打开/空白取消/hover 不覆盖选中态） |
 | `src/__tests__/explorer-root-contextmenu.test.tsx` | 14 | 根节点右键菜单/新建文件+文件夹 |
-| `src/__tests__/explorer-delete.test.tsx` | 13 | ask 弹窗分支/右键菜单/操作失败 UI 通知 |
-| `src/__tests__/explorer-notify.test.tsx` | 12 | startWatch 调用时机/loadRoot/toggleExpand |
 | `src/__tests__/explorer-sandbox-race.test.tsx` | 13 | DBG-10：路径沙箱竞态回归——deferred `setProjectRoot` 验证 resolve 前 `readDir` 不被调用/resolve 后正常加载/reject 降级 |
+| `src/__tests__/explorer-notify.test.tsx` | 12 | startWatch 调用时机/loadRoot/toggleExpand |
+| `src/__tests__/explorer-rename-state.test.tsx` | 8 | 重命名状态上提（renamingPath 由 ExplorerPanel 管理） |
+| `src/__tests__/activeExplorer.test.ts` | 6 | active 指针 set/get/覆盖、clear 仅匹配时生效（同 activeTerminal/activeEditor 模式） |
 | `src/__tests__/explorer-rootpath-clear.test.tsx` | 6 | rootPath 变化清空/快速切换 gen 丢弃/同值不清空 |
+| `src/__tests__/explorer-rename-keyboard.test.tsx` | 5 | F2 快捷键 → renameSelected 集成 |
+| `src/__tests__/explorer-focus.test.tsx` | 3 | ExplorerPanel 焦点管理（tabIndex/usePanelFocus 集成） |
 
 ### 侧栏（1 文件 / 33 用例）
 
@@ -134,39 +141,40 @@
 | `src/__tests__/sideBarArea.test.tsx` | 14 | 四态布局/Allotment preferredSize splitRatio/display:none-flex 切换/保挂载/跨区卸载重建/props 透传/onChange→setSplitRatio/PANEL_BG token/首次双开 splitRatio 重置 |
 | `src/__tests__/workspace-sideviews.test.tsx` | 13 | 活动栏 pane 40px 固定/侧栏区 pane visible=anyOpen 四态/preferredSize 来自 store/onChange→setWidth/主区 pane/props 透传 |
 
-### Commit 视图（1 文件 / 28 用例）
+### Commit 视图（2 文件 / 48 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
-| `src/__tests__/commit-view.test.tsx` | 28 | 状态机四态/mock gitStatus+onFsEvent/列表渲染（文件名 GIT_FILE_COLORS token/计数/排序/空态）/折叠交互/双击分派 4 类状态（mock dockApi+真实 titleManager）/去重聚焦/fs-event 200ms debounce/rootPath 切换清空重载 |
+| `src/__tests__/commit-view.test.tsx` | 35 | 状态机四态/mock gitStatus+onFsEvent/列表渲染（文件名 GIT_FILE_COLORS token/计数/排序/空态）/折叠交互/双击分派 4 类状态（mock dockApi+真实 titleManager）/去重聚焦/fs-event 200ms debounce/rootPath 切换清空重载 |
+| `src/__tests__/commit-context-menu.test.ts` | 13 | getContextMenuItems 状态→菜单映射（ROLLBACK_STATES/DELETE_STATES）+ action 执行流程（ask 确认→IPC→refresh） |
 
-### Diff/GitShow 面板（3 文件 / 40 用例）
+### Diff/GitShow 面板（3 文件 / 65 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
 | `src/__tests__/diff-alignment.test.ts` | 16 | computeAlignment 纯函数全分支：纯新增/纯删除/等行修改/多删少/多增少/多 hunk 合并/空 hunks |
-| `src/__tests__/diff-panel.test.tsx` | 11 | mock gitFileAtHead+fs.readFile+gitDiff+onFsEvent、双栏渲染、加载态+错误占位、保存后刷新链 |
-| `src/__tests__/gitshow-panel.test.tsx` | 13 | mock gitFileAtHead、三态（loading/content/error）、readOnly 断言、oldPath 优先 |
+| `src/__tests__/diff-panel.test.tsx` | 30 | mock gitFileAtHead+fs.readFile+gitDiff+onFsEvent、双栏渲染、加载态+错误占位、保存后刷新链 |
+| `src/__tests__/gitshow-panel.test.tsx` | 19 | mock gitFileAtHead、三态（loading/content/error）、readOnly 断言、oldPath 优先 |
 
-### 快捷键/命令系统（8 文件 / 116 用例）
+### 快捷键/命令系统（7 文件 / 114 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
-| `src/__tests__/shortcuts.test.ts` | 50 | 注册/注销/引用计数/上下文栈/IME/setOverrides 重绑/解绑/降级/冲突/resolve/forceContext/export/list/监听器 spy |
+| `src/__tests__/shortcuts.test.ts` | 53 | 注册/注销/引用计数/上下文栈/IME/setOverrides 重绑/解绑/降级/冲突/resolve/forceContext/export/list/监听器 spy |
 | `src/__tests__/keystroke.test.ts` | 18 | formatKeystroke/parseKeystroke/isValidKeystrokeString/format∘parse 恒等 |
 | `src/__tests__/global-commands.test.ts` | 13 | `createGlobalShortcuts(getApi)` 延迟求值/Ctrl+W 关闭/无面板透传 |
-| `src/__tests__/command-catalog.test.ts` | 10 | 6 命令齐全/defaultKey 合法/commandFromMeta |
-| `src/__tests__/reserved.test.ts` | 8 | isReserved 各 context/保留键命中/global 两集并集 |
+| `src/__tests__/command-catalog.test.ts` | 13 | 6 命令齐全/defaultKey 合法/commandFromMeta |
+| `src/__tests__/reserved.test.ts` | 9 | isReserved 各 context/保留键命中/global 两集并集 |
 | `src/__tests__/use-panel-focus.test.ts` | 5 | focusin→pushContext+onActivate/focusout→popContext+onDeactivate/卸载清理 |
 | `src/__tests__/wire-keybindings.test.ts` | 3 | 立即应用/store 变更重应用/unsubscribe |
 
-### 主题/配色/基础（6 文件 / 78 用例）
+### 主题/配色/基础（5 文件 / 102 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
 | `src/__tests__/path.test.ts` | 27 | normalizePath/basename/isChildOf/relativePath 边界覆盖 |
 | `src/__tests__/inject-script.test.ts` | 21 | HTML 脚本注入/`</script>` 转义/幂等/大小写不敏感/键盘转发+片段链接拦截 |
-| `src/__tests__/claude-status.test.ts` | 14 | `eventToStatus` 纯函数全分支：10 事件 × notificationType 组合（PreToolUse→⚡/PostToolUse→⚡/Notification 三类→🟡/其他→null/SessionEnd→✅/Error→❌/Stop/Result/Permission/Idle→null）+ OSC 133 C 设 🟡 语义注释说明 |
+| `src/__tests__/claude-status.test.ts` | 30 | `eventToStatus` 纯函数全分支：10 事件 × notificationType 组合（PreToolUse→⚡/PostToolUse→⚡/Notification 三类→🟡/其他→null/SessionEnd→✅/Error→❌/Stop/Result/Permission/Idle→null）+ OSC 133 C 设 🟡 语义注释说明 + getStatusIcon |
 | `src/__tests__/colors.test.ts` | 12 | 配色 token 值校验（压缩后，原 61 条冗余断言合并） |
 | `src/__tests__/theme.test.ts` | 12 | terminalOptions: ANSI 16 色/font/cursor/scrollback/kittyKeyboard |
 
@@ -186,7 +194,7 @@
 | `src/__tests__/startup-restore.test.ts` | 4 | localStorage 恢复/空/异常降级/Loading→ready |
 | `src/__tests__/bootstrap.test.ts` | 3 | `__TAURI_INTERNALS__` 轮询/立即挂载/永不就绪 |
 
-### 文件查看器/HTML（3 文件 / 68 用例）
+### 文件查看器/HTML（3 文件 / 69 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
@@ -194,7 +202,7 @@
 | `src/__tests__/file-viewer-registry.test.ts` | 25 | 扩展名注册/策略链式调用/隐藏文件排除/大小写 |
 | `src/__tests__/csp-config.test.ts` | 4 | tauri.conf.json CSP 不变量：script-src unsafe-inline/dangerousDisableAssetCspModification/default-src 严格 |
 
-### E2E 辅助/门控测试（5 文件 / 21 用例）
+### E2E 辅助/门控测试（7 文件 / 24 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
@@ -266,6 +274,7 @@ embedded WDIO 驱动**无法将 OS 级按键（`browser.keys`）投递进 WebVie
 
 ## 历史变更
 
+- 2026-07-28：Phase 1 review 对账并入 phase2——按 phase2 代码树全量实查修正计数漂移并补登记漏建行。L1：git/mod.rs 70→88、state.rs 15→24、settings.rs 15→17、pty/spawn.rs 29→28（env 注入测试在集成测试）、pty_integration_tests.rs 7→8、补登 projects.rs(12)，318→359（16→18 文件）。L2：claude-status 14→30、workspace-defaulttab 14→22、use-xterm-lifecycle 77→79、tab-rules 5→6、projects 41→45、explorer-delete 13→19、commit-view 28→35、diff-panel 11→30、gitshow-panel 13→19、shortcuts 50→53、command-catalog 10→13、reserved 8→9；补登 7 文件（activeExplorer 6、commit-context-menu 13、explorer-focus 3、explorer-keyboard 15、explorer-rename-keyboard 5、explorer-rename-state 8、explorer-selection 14），90→97 文件；各小节小计按行实算重核（终端面板 188→198、工作区 187→186、Store 77→81、资源管理器 156→213、Commit 28→48、Diff/GitShow 40→65、快捷键 116→114、主题 78→102、HTML 68→69、E2E 辅助 21→24）。L2 1497→1552。全量 1949→2045。
 - 2026-07-27：Stage 2 通知/Agent 状态——L1 hooks 模块拆分为 5 文件（mod.rs 10→8、inject.rs 12→20、新增 signal.rs 9 + watcher.rs 6 + usage.rs 23），L1 274→318。L2 IPC 层 ipc-contract 53→65（+12：notification + hooks_context_usage 合约）、ipc-hooks-contract 8→16（+8：hooks_context_usage）；新增「通知/Agent 状态」类目 3 文件 62 用例（notifications 33 + agent-status-hook 21 + agent-status-view 8），L2 1415→1497。L4 新增 Agent Status 视图 1 用例，17→18。全量 1822→1949。
 - 2026-07-26：hooks 宿主侧增强（P1-DOC）——L1 新增「hooks」模块 2 文件 22 用例（mod.rs 10 + inject.rs 12）+ pty/spawn.rs 28→29（+1 env 注入）。L2 新增「hooks」IPC 合约 1 文件 8 用例（ipc-hooks-contract）+「claude-status」纯函数 1 文件 14 用例；终端面板 use-xterm-lifecycle 71→77（+6 hook-event 过滤/F3 四态）。L4 新增 hooks 注入/信号 2 用例，15→17。L1 251→274，L2 1387→1415，L4 15→17，全量 1769→1822。
 - 2026-07-19：commit 视图（CV-DOC）——L1 git/mod.rs 62→70（+8：git_file_at_head/recurse_untracked_dirs/oldPath/rename_detection），L1 243→251。L2 新增「Commit 视图」类目 1 文件 28 用例 +「Diff/GitShow 面板」3 文件 40 用例（diff-alignment 16 + diff-panel 11 + gitshow-panel 13），既有文件增量：ipc-contract 50→53 + git-gutter 20→28 + panel-registry 23→29 + title-manager 36→44 + workspace-file-panel-types 11→13。L2 1207→1387。L4 新增「commit 视图」describe 2 用例，14→15。全量 1580→1769。

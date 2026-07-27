@@ -1,5 +1,9 @@
 // claudeStatus.ts — 四态类型定义、emoji 常量、事件→状态纯函数
 // 状态机完整表见 docs/hooks-dev/feature-plan/phase1-status-core.md F3 节
+//
+// 已知行为假设（无法自动化验证）：
+// - Ctrl+C 用户主动中断不发射任何 hook 事件（Stop=完成响应、StopFailure=API 错误），
+//   working(⚡) 无中断出边为预期行为，依赖下一事件覆盖或 idle_prompt(~60s) 衰减转 🟡
 
 /** Claude 会话状态 */
 export type ClaudeStatus = "working" | "attention" | "done" | "error" | null;
