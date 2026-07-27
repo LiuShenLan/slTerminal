@@ -18,6 +18,7 @@ import type { OperationPage, Project } from "../src/stores/projects";
 import { useLayout } from "../src/stores/layout";
 import { makeEmptyLayout } from "../src/features/sidebar/SidebarTree";
 import { titleManager } from "../src/workspace/titleManager";
+import { switchToPageShared } from "../src/workspace/pageApis";
 import { useSideBar } from "../src/stores/sideBar";
 
 // ── Window 全局类型扩展 ──
@@ -208,22 +209,9 @@ function installProjectHelpers(): void {
   };
 
   // __slterm_e2e_switchToPage —— 切换活跃页面（H6 跨页面切换验证）
+  // 委托 switchToPageShared 统一处理 setProjectRoot → setActivePage → __dockviewApi 重指向
   window.__slterm_e2e_switchToPage = async (pageId: string) => {
-    // DBG-8: setActivePage 前先同步项目根路径到后端（路径沙箱前置条件）
-    const { projects } = useProjects.getState();
-    for (const [, proj] of Object.entries(projects)) {
-      if (proj.pages.some((p) => p.pageId === pageId)) {
-        if (proj.rootPath) {
-          try {
-            await setProjectRoot(proj.rootPath);
-          } catch (err) {
-            console.error("[slTerminal e2e] 切换页面—设置项目根路径失败:", err);
-          }
-        }
-        break;
-      }
-    }
-    useLayout.getState().setActivePage(pageId);
+    await switchToPageShared(pageId);
   };
 }
 

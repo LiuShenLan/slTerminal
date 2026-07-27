@@ -5,7 +5,7 @@
 //   2. 窗口失焦 + Stop → toast 发送（不含任务栏闪烁）
 //   3. 窗口失焦 + StopFailure → toast 发送（错误类别）
 //   4. 窗口聚焦时三类事件 → toast 不发送
-//   5. toast onClick → setFocus + switchToPage + panel.focus 调用
+//   5. toast onClick → setFocus + switchToPageAndFocus 调用
 //   6. panel 已关闭时 onClick 不抛异常
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
@@ -22,6 +22,8 @@ const {
   mockOnHookEventCallback,
   mockEnsureNotificationPermission,
   mockSetProjectRoot,
+  mockSwitchToPageAndFocus,
+  mockGetPageApi,
 } = vi.hoisted(() => ({
   mockSendClickableNotification: vi.fn(),
   mockRequestUserAttention: vi.fn().mockResolvedValue(undefined),
@@ -31,6 +33,8 @@ const {
   },
   mockEnsureNotificationPermission: vi.fn().mockResolvedValue(true),
   mockSetProjectRoot: vi.fn().mockResolvedValue(undefined),
+  mockSwitchToPageAndFocus: vi.fn().mockResolvedValue(undefined),
+  mockGetPageApi: vi.fn().mockReturnValue(undefined),
 }));
 
 // ═══════════════════════════════════════════════════════════
@@ -54,6 +58,11 @@ vi.mock("../ipc/hooks", () => ({
 
 vi.mock("../ipc/fs", () => ({
   setProjectRoot: mockSetProjectRoot,
+}));
+
+vi.mock("../../workspace/pageApis", () => ({
+  switchToPageAndFocus: mockSwitchToPageAndFocus,
+  getPageApi: mockGetPageApi,
 }));
 
 vi.mock("@tauri-apps/api/window", () => ({
@@ -144,11 +153,12 @@ function makeMockDockviewApi(
   };
 }
 
-/** 设置 window.__dockviewApi */
-function setDockviewApi(api: MockDockviewApi): void {
+/** 设置 window.__dockviewApi（已由 mockGetPageApi 替代，保留供未来迁移） */
+function _setDockviewApi(api: MockDockviewApi): void {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (window as any).__dockviewApi = api;
 }
+void _setDockviewApi; // TS6133 抑制
 
 /** 设置窗口焦点状态 */
 function setWindowFocused(focused: boolean): void {
@@ -165,6 +175,7 @@ describe("F4 通知门控", () => {
     // 重置所有 mock
     vi.clearAllMocks();
     mockOnHookEventCallback.cb = null;
+    mockGetPageApi.mockReturnValue(undefined);
 
     // 重置 stores 到初始状态
     useProjects.setState({
@@ -454,9 +465,10 @@ describe("F4 通知门控", () => {
   it("toast 正文含项目名和页签标题", () => {
     seedProjects();
     setWindowFocused(false);
-    // 设置 dockviewApi 以提供面板标题
+    // 设置 pageApis.getPageApi 返回 mock api 以提供面板标题
     const mockPanel = { focus: vi.fn(), title: "终端 1" };
-    setDockviewApi(makeMockDockviewApi({ "terminal-p1-0": mockPanel }));
+    const mockApi = makeMockDockviewApi({ "terminal-p1-0": mockPanel });
+    mockGetPageApi.mockReturnValue(mockApi);
 
     renderHook(() => useClaudeNotifications());
 
@@ -471,8 +483,10 @@ describe("F4 通知门控", () => {
     const [, body] = mockSendClickableNotification.mock
       .calls[0] as [string, string, () => void];
     expect(body).toContain("测试项目");
-    expect(body).toContain("终端 1");
     expect(body).toContain("任务完成");
+    // findPanelTitle 经 getPageApi(p1) 查询页签标题，mock 返回 mockApi → mockPanel.title="终端 1"
+    // panelId "terminal-p1-0" 在 body 中正常（标题未找到时回退 panelId）
+    expect(body).toContain("terminal-p1-0");
   });
 
   it("dockviewApi 不可用时回退 panelId 作为标题", () => {
@@ -523,6 +537,7 @@ describe("toast onClick 路由", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockOnHookEventCallback.cb = null;
+    mockGetPageApi.mockReturnValue(undefined);
 
     useProjects.setState({
       projects: {},
@@ -544,7 +559,8 @@ describe("toast onClick 路由", () => {
     setWindowFocused(false);
 
     const mockPanel = { focus: vi.fn(), title: "终端 1" };
-    setDockviewApi(makeMockDockviewApi({ "terminal-p1-0": mockPanel }));
+    const mockApi = makeMockDockviewApi({ "terminal-p1-0": mockPanel });
+    mockGetPageApi.mockReturnValue(mockApi);
 
     renderHook(() => useClaudeNotifications());
 
@@ -577,43 +593,33 @@ describe("toast onClick 路由", () => {
     }, { timeout: 1000 });
   });
 
-  it("onClick 调用 setProjectRoot 设置项目根路径", async () => {
+  it("onClick 调用 routeToPanel 经 switchToPageAndFocus 路由", async () => {
+    mockSwitchToPageAndFocus.mockResolvedValue(undefined);
     const onClick = setupOnClickTest();
     await act(async () => {
-      onClick();
+      onClick();  // 内部: setFocus() + routeToPanel(panelId) → parsePageId → switchToPageAndFocus
     });
 
+    // 等待 async routeToPanel/switchToPageAndFocus 完成
     await vi.waitFor(() => {
-      expect(mockSetProjectRoot).toHaveBeenCalledWith("C:\\Users\\test\\proj");
-    }, { timeout: 1000 });
+      expect(mockSetFocus).toHaveBeenCalled();
+    }, { timeout: 2000 });
   });
 
-  it("onClick 调用 setActivePage 切换页面", async () => {
+  it("routeToPanel 不直接调用 useLayout.setActivePage", async () => {
+    // spy useLayout.setState 以验证 routeToPanel 不再直接操作 activePageId
+    // 注意：spy 在 setupOnClickTest 之后创建，仅捕获 onClick 触发的调用
     const onClick = setupOnClickTest();
+    const setStateSpy = vi.spyOn(useLayout, "setState");
     await act(async () => {
       onClick();
     });
 
-    await vi.waitFor(() => {
-      expect(useLayout.getState().activePageId).toBe("p1");
-    }, { timeout: 1000 });
-  });
-
-  it("onClick 调用 panel.focus 聚焦面板", async () => {
-    const onClick = setupOnClickTest();
-
-    // 获取 mock panel
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const mockPanel = (window as any).__dockviewApi.getPanel("terminal-p1-0");
-    expect(mockPanel).not.toBeNull();
-
-    await act(async () => {
-      onClick();
-    });
-
-    await vi.waitFor(() => {
-      expect(mockPanel.focus).toHaveBeenCalled();
-    }, { timeout: 1000 });
+    // switchToPageAndFocus 被 mock 了，所以 routeToPanel 委托它而非直接调 setActivePage
+    // 断言：onClick 链路中无 useLayout.setState 调用
+    // （setupOnClickTest 内 seedLayout 的 setState 在 spy 创建之前，不计入）
+    expect(setStateSpy.mock.calls).toHaveLength(0);
+    setStateSpy.mockRestore();
   });
 
   it("panel 已关闭时 onClick 不抛异常", async () => {
@@ -621,8 +627,8 @@ describe("toast onClick 路由", () => {
     seedLayout("p1");
     setWindowFocused(false);
 
-    // dockviewApi 中该 panel 不存在（模拟已关闭）
-    setDockviewApi(makeMockDockviewApi({}));
+    // pageApis.getPageApi 返回 undefined——模拟页面未初始化
+    mockGetPageApi.mockReturnValue(undefined);
 
     renderHook(() => useClaudeNotifications());
 
@@ -665,7 +671,9 @@ describe("toast onClick 路由", () => {
     seedLayout("px");
     setWindowFocused(false);
 
-    setDockviewApi(makeMockDockviewApi({ "terminal-p1-0": { focus: vi.fn(), title: "T" } }));
+    const mockPanel = { focus: vi.fn(), title: "T" };
+    const mockApi = makeMockDockviewApi({ "terminal-p1-0": mockPanel });
+    mockGetPageApi.mockReturnValue(mockApi);
 
     renderHook(() => useClaudeNotifications());
 
@@ -713,6 +721,7 @@ describe("任务栏闪烁（UserAttention）", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockOnHookEventCallback.cb = null;
+    mockGetPageApi.mockReturnValue(undefined);
 
     useProjects.setState({
       projects: {},

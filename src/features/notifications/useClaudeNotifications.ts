@@ -19,8 +19,7 @@ import {
   UserAttentionType,
 } from "../../ipc/window";
 import { useProjects } from "../../stores/projects";
-import { useLayout } from "../../stores/layout";
-import { setProjectRoot } from "../../ipc/fs";
+import { switchToPageAndFocus, getPageApi } from "../../workspace/pageApis";
 
 /** 通知事件类别 */
 type NotifyCategory = "permission" | "done" | "error";
@@ -96,11 +95,13 @@ function findProjectIdForPage(pageId: string): string | null {
 /**
  * 根据 panelId 查找面板当前页签标题
  *
- * 从 window.__dockviewApi 中查 panel 的 title。
+ * 经 pageApis 跨页面查 panel 的 title——不再依赖 __dockviewApi 恰好指向目标页。
  */
 function findPanelTitle(panelId: string): string {
   try {
-    const api = window.__dockviewApi;
+    const pageId = parsePageId(panelId);
+    if (!pageId) return panelId;
+    const api = getPageApi(pageId);
     if (!api) return panelId;
     const panel = api.getPanel(panelId);
     if (!panel) return panelId;
@@ -111,35 +112,12 @@ function findPanelTitle(panelId: string): string {
 }
 
 /**
- * Toast 点击路由：聚焦窗口 → 切换到目标页面 → 聚焦面板
+ * Toast 点击路由：解析 pageId → 委托共享函数切换页面并聚焦面板
  */
 async function routeToPanel(panelId: string): Promise<void> {
   const pageId = parsePageId(panelId);
   if (!pageId) return;
-
-  const projectId = findProjectIdForPage(pageId);
-  if (!projectId) return;
-
-  // 1. 设置项目根路径（路径沙箱前置条件）
-  const { projects } = useProjects.getState();
-  const project = projects[projectId];
-  if (project?.rootPath) {
-    try {
-      await setProjectRoot(project.rootPath);
-    } catch {
-      // rootPath 无效时静默继续
-    }
-  }
-
-  // 2. 切换到目标页面
-  useLayout.getState().setActivePage(pageId);
-
-  // 3. 聚焦目标面板（panel 可能已被关闭，静默忽略）
-  try {
-    window.__dockviewApi?.getPanel(panelId)?.focus();
-  } catch {
-    // 面板已关闭，忽略
-  }
+  await switchToPageAndFocus(pageId, panelId);
 }
 
 /**
@@ -184,7 +162,7 @@ export function useClaudeNotifications(): void {
       const category = classifyEvent(payload);
       if (!category) return;
 
-      // 去重：60s 内同一 session + event + timestamp 不重复通知
+      // 去重：同一信号文件重复投递去重（sessionId+event+timestamp 键）+ 缓存超 200 条截断保留最近 100 条
       const dedupKey = `${payload.sessionId}|${payload.event}|${payload.timestamp}`;
       if (seenRef.current.has(dedupKey)) return;
       seenRef.current.add(dedupKey);

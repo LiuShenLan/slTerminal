@@ -12,7 +12,7 @@ import React, { useCallback } from "react";
 import type { SideViewComponentProps } from "../sideViews/sideViewRegistry";
 import { useAgentStatus } from "./useAgentStatus";
 import { AgentStatusRow } from "./AgentStatusRow";
-import { useProjects } from "../../stores/projects";
+import { switchToPageAndFocus } from "../../workspace/pageApis";
 import {
   SEPARATOR_BG,
   INPUT_BORDER,
@@ -55,13 +55,13 @@ const listContainerStyle: React.CSSProperties = {
   padding: "2px 0",
 };
 
-export const AgentStatusView: React.FC<SideViewComponentProps> = (props) => {
+export const AgentStatusView: React.FC<SideViewComponentProps> = (_props) => { // eslint-disable-line @typescript-eslint/no-unused-vars -- SideViewComponentProps 必需但 handleFocus 已委托共享函数
   const { state, rows } = useAgentStatus();
 
-  // P2-FE-12：点击行 → 解析 pageId → switchToPage → focus
+  // 点击行 → 解析 pageId → switchToPageAndFocus（共享函数处理切换+聚焦）
   const handleFocus = useCallback(
-    (panelId: string) => {
-      // 解析 pageId：格式 terminal-{pageId}-{seq}
+    async (panelId: string) => {
+      // 解析 pageId：格式 terminal-{pageId}-{seq}（Stage 02 收敛到 src/lib/panelId.ts）
       const withoutPrefix = panelId.startsWith("terminal-")
         ? panelId.slice("terminal-".length)
         : panelId;
@@ -71,21 +71,9 @@ export const AgentStatusView: React.FC<SideViewComponentProps> = (props) => {
           ? withoutPrefix.slice(0, lastDash)
           : withoutPrefix;
 
-      // 查找所属 projectId
-      const projects = Object.values(useProjects.getState().projects);
-      for (const proj of projects) {
-        if (proj.pages.some((pg) => pg.pageId === pageId)) {
-          props.switchToPage(proj.projectId, pageId);
-          break;
-        }
-      }
-
-      // 聚焦对应面板（面板已关闭时静默忽略）
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const dockviewApi = (window as any).__dockviewApi;
-      dockviewApi?.getPanel(panelId)?.focus();
+      await switchToPageAndFocus(pageId, panelId);
     },
-    [props.switchToPage],
+    [],
   );
 
   return (

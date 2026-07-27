@@ -12,7 +12,7 @@ const {
   mockTerminalRegistry,
   mockOnHookEventCallback,
   mockContextUsage,
-  mockDockviewApi,
+  mockSwitchToPageAndFocus,
 } = vi.hoisted(() => {
   let onHookEventCb: ((payload: unknown) => void) | null = null;
   return {
@@ -34,10 +34,7 @@ const {
       },
     },
     mockContextUsage: vi.fn(),
-    mockDockviewApi: {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- 测试 mock 需灵活类型
-      getPanel: vi.fn(() => null) as any,
-    },
+    mockSwitchToPageAndFocus: vi.fn(),
   };
 });
 
@@ -55,6 +52,10 @@ vi.mock("../ipc/hooks", () => ({
     };
   }),
   contextUsage: mockContextUsage,
+}));
+
+vi.mock("../workspace/pageApis", () => ({
+  switchToPageAndFocus: mockSwitchToPageAndFocus,
 }));
 
 vi.mock("../lib/claudeStatus", () => ({
@@ -129,11 +130,9 @@ function resetAll() {
   useLayout.setState({ activePageId: null });
   mockTerminalRegistry.getAll.mockReset();
   mockTerminalRegistry.getAll.mockReturnValue(new Map());
-  mockDockviewApi.getPanel.mockReset();
-  mockDockviewApi.getPanel.mockReturnValue(null);
   mockContextUsage.mockReset();
+  mockSwitchToPageAndFocus.mockReset();
   mockOnHookEventCallback.cb = null;
-  window.__dockviewApi = undefined;
 }
 
 /** 构造 AgentSessionRow */
@@ -158,8 +157,6 @@ const defaultProps = {
 
 beforeEach(() => {
   resetAll();
-  // 默认挂载 __dockviewApi
-  window.__dockviewApi = mockDockviewApi as unknown as typeof window.__dockviewApi;
 });
 
 afterEach(() => {
@@ -225,12 +222,8 @@ describe("AgentStatusView 三态渲染", () => {
 // 行点击
 // ═══════════════════════════════════════════════════════════════
 
-describe("行点击 → switchToPage + focus", () => {
-  it("点击行时调用 switchToPage 与 dockviewApi.getPanel(...).focus", () => {
-    const switchToPage = vi.fn();
-    const mockFocus = vi.fn();
-    mockDockviewApi.getPanel.mockReturnValue({ focus: mockFocus });
-
+describe("行点击 → switchToPageAndFocus", () => {
+  it("点击行时调用 switchToPageAndFocus(pageId, panelId)", async () => {
     seedProject("C:/test", "proj-1", [
       { pageId: "page1", name: "页面 1" },
     ]);
@@ -240,10 +233,7 @@ describe("行点击 → switchToPage + focus", () => {
     );
 
     const { container } = render(
-      React.createElement(AgentStatusView, {
-        ...defaultProps,
-        switchToPage,
-      }),
+      React.createElement(AgentStatusView, defaultProps),
     );
 
     const row = container.querySelector(
@@ -253,12 +243,13 @@ describe("行点击 → switchToPage + focus", () => {
 
     fireEvent.click(row);
 
-    // 验证 switchToPage 被调用：projectId + pageId
-    expect(switchToPage).toHaveBeenCalledWith("proj-1", "page1");
-
-    // 验证 getPanel + focus 被调用
-    expect(mockDockviewApi.getPanel).toHaveBeenCalledWith("terminal-page1-0");
-    expect(mockFocus).toHaveBeenCalled();
+    // 等待 async handleFocus 完成 → 断言 switchToPageAndFocus 被调用
+    await vi.waitFor(() => {
+      expect(mockSwitchToPageAndFocus).toHaveBeenCalledWith(
+        "page1",
+        "terminal-page1-0",
+      );
+    });
   });
 });
 
