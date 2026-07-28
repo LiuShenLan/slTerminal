@@ -77,6 +77,7 @@ import { AgentStatusRow } from "../features/agentStatus/AgentStatusRow";
 import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
 import type { AgentSessionRow } from "../features/agentStatus/useAgentStatus";
+import { AGENT_STATUS_USAGE_COLORS } from "../theme";
 // ── 辅助函数 ──
 
 /** 种子 projects store：创建一个含指定页面列表的项目 */
@@ -315,6 +316,56 @@ describe("用量条", () => {
     const usageText = container.querySelector('[data-e2e="agent-status-row"]')
       ?.children[3] as HTMLElement;
     expect(usageText.textContent).toBe("--");
+  });
+
+  /** 获取用量条内层填充 div 的 backgroundColor（rgb 格式，jsdom 自动规范化 hex→rgb） */
+  function getUsageBarColor(container: HTMLElement): string {
+    const barContainer = container
+      .querySelector('[data-e2e="agent-status-row"]')
+      ?.children[2] as HTMLElement;
+    const innerBar = barContainer?.firstElementChild as HTMLElement;
+    return innerBar.style.backgroundColor.replace(/\s/g, "");  // "rgb(98, 151, 85)"
+  }
+
+  /** hex → rgb 字符串，对齐 jsdom rgb() 规范化 */
+  function hexToRgbStr(hex: string): string {
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    return `rgb(${r},${g},${b})`;
+  }
+
+  it("用量 < 50% → 颜色为 low token (#629755)", () => {
+    // 40% = 80_000 / 200_000
+    const row = makeRow({
+      usage: { inputTokens: 50_000, outputTokens: 30_000 },
+    });
+    const { container } = render(
+      React.createElement(AgentStatusRow, { row, onFocus: vi.fn() }),
+    );
+    expect(getUsageBarColor(container)).toBe(hexToRgbStr(AGENT_STATUS_USAGE_COLORS.low));
+  });
+
+  it("用量 50%~80% → 颜色为 medium token (#BBB529)", () => {
+    // 60% = 120_000 / 200_000
+    const row = makeRow({
+      usage: { inputTokens: 70_000, outputTokens: 50_000 },
+    });
+    const { container } = render(
+      React.createElement(AgentStatusRow, { row, onFocus: vi.fn() }),
+    );
+    expect(getUsageBarColor(container)).toBe(hexToRgbStr(AGENT_STATUS_USAGE_COLORS.medium));
+  });
+
+  it("用量 > 80% → 颜色为 high token (#F44747)", () => {
+    // 90% = 180_000 / 200_000
+    const row = makeRow({
+      usage: { inputTokens: 100_000, outputTokens: 80_000 },
+    });
+    const { container } = render(
+      React.createElement(AgentStatusRow, { row, onFocus: vi.fn() }),
+    );
+    expect(getUsageBarColor(container)).toBe(hexToRgbStr(AGENT_STATUS_USAGE_COLORS.high));
   });
 });
 

@@ -5,7 +5,32 @@
 const { execSync, spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const https = require('https');
+
+// ── settings.json 备份/还原（FIX-TE-04） ──
+// E2E 运行期间侧栏视图状态等持久化到 ~/.slterminal/settings.json，
+// 为免污染用户真实配置：启动时备份，进程退出时同步还原。
+const settingsPath = path.join(os.homedir(), '.slterminal', 'settings.json');
+const settingsBakPath = settingsPath + '.e2e-bak';
+const settingsExisted = fs.existsSync(settingsPath);
+if (settingsExisted) {
+  fs.copyFileSync(settingsPath, settingsBakPath);
+  console.log('[wdio-launcher] 已备份 settings.json → settings.json.e2e-bak');
+} else {
+  console.log('[wdio-launcher] settings.json 不存在，跳过备份');
+}
+
+process.on('exit', () => {
+  if (settingsExisted) {
+    // 原文件存在 → 用备份覆盖 E2E 运行产物
+    try { fs.renameSync(settingsBakPath, settingsPath); } catch { /* 忽略 */ }
+  } else {
+    // 原文件不存在 → 删除 E2E 运行期间产生的 settings.json + 残留 bak
+    try { fs.rmSync(settingsPath, { force: true }); } catch { /* 忽略 */ }
+    try { fs.rmSync(settingsBakPath, { force: true }); } catch { /* 忽略 */ }
+  }
+});
 
 const major = parseInt(process.version.slice(1).split('.')[0], 10);
 const wdioConfig = path.resolve(__dirname, 'wdio.conf.ts');

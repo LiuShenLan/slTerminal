@@ -30,4 +30,5 @@ export {
   ERROR_BANNER_BORDER,
   ERROR_BANNER_FG,
   ROOT_CSS_VARS,
+  AGENT_STATUS_USAGE_COLORS,
 } from "./colors";

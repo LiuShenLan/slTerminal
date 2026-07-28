@@ -915,17 +915,23 @@ describe('侧栏视图', () => {
       { timeout: 10000, timeoutMsg: '活动栏按钮未渲染' },
     );
 
-    // 3. 将侧栏重置为已知状态（持久化残留 / 前序测试副作用可能导致非默认状态）
+    // 3. 将侧栏重置为已知状态（FIX-TE-04：完整 zones+open 重置，覆盖持久化残留 / 前序副作用）
     await browser.execute(() => {
+      const move = (window as any).__slterm_e2e_moveSideViewButton;
       const toggle = (window as any).__slterm_e2e_toggleSideView;
       const getState = (window as any).__slterm_e2e_getSideBarState;
-      if (typeof toggle !== 'function' || typeof getState !== 'function') return;
-      const s = getState();
-      // 关闭 bottom 区已打开视图
+      if (typeof move !== 'function' || typeof toggle !== 'function') return;
+
+      // 所有按钮归位 top 区对应序位：projects(0) / explorer(1) / commit(2) / agent-status(3)
+      move('projects', 'top', 0);
+      move('explorer', 'top', 1);
+      move('commit', 'top', 2);
+      move('agent-status', 'top', 3);
+
+      // open 重置为 projects 打开、bottom 关闭
+      const s = getState?.();
       if (s?.open.bottom) toggle(s.open.bottom);
-      // 关闭 top 区非 projects 视图
       if (s?.open.top && s.open.top !== 'projects') toggle(s.open.top);
-      // 若 top 为空则打开 projects
       if (!s?.open.top) toggle('projects');
     });
 
@@ -1024,14 +1030,24 @@ describe('侧栏视图', () => {
       { timeout: 10000, timeoutMsg: '活动栏按钮未渲染' },
     );
 
-    // 3. 将侧栏重置为已知状态（避免持久化残留影响拖拽前的 open 预期）
+    // 3. 将侧栏重置为已知状态（FIX-TE-04：完整 zones+open 重置，避免持久化残留影响拖拽前的预期）
     await browser.execute(() => {
+      const move = (window as any).__slterm_e2e_moveSideViewButton;
       const toggle = (window as any).__slterm_e2e_toggleSideView;
       const getState = (window as any).__slterm_e2e_getSideBarState;
-      if (typeof toggle !== 'function' || typeof getState !== 'function') return;
-      const s = getState();
+      if (typeof move !== 'function' || typeof toggle !== 'function') return;
+
+      // 所有按钮归位 top 区对应序位：projects(0) / explorer(1) / commit(2) / agent-status(3)
+      move('projects', 'top', 0);
+      move('explorer', 'top', 1);
+      move('commit', 'top', 2);
+      move('agent-status', 'top', 3);
+
+      // open 重置为 explorer 打开、bottom 关闭
+      const s = getState?.();
       if (s?.open.bottom) toggle(s.open.bottom);
-      if (s?.open.top && s.open.top !== 'projects') toggle(s.open.top);
+      if (s?.open.top && s.open.top !== 'explorer') toggle(s.open.top);
+      if (!s?.open.top) toggle('explorer');
     });
 
     // 4. 验证初始 zones：explorer 在上区
@@ -1590,28 +1606,13 @@ describe('Agent Status 视图与 toast 通知', () => {
   });
 
   /**
-   * 用例 2：Agent Status 视图出现行（需真实 claude hook 事件驱动状态流转）。
+   * 用例 2a：Agent Status 静态行渲染——TerminalRegistry 初始扫描生成 attention 行。
    *
    * 原理：useAgentStatus 在挂载时扫描 TerminalRegistry，为当前项目的终端
-   * 生成初始行（status="attention"）。hook 事件（PreToolUse / PostToolUse /
-   * Stop / SessionEnd 等）驱动行状态变化与用量条更新。
-   *
-   * 完整验证需真实 claude 进程在 PTY 中运行——hook 事件由 Claude Code 的
-   * hooks 子系统发出并经 Rust hooks 模块广播到前端。E2E 环境无 claude，
-   * 仅可验证 TerminalRegistry 初始扫描产生的静态行；动态四态流转需人工。
-   *
-   * 人工验收步骤：
-   *   1. 启动 slTerminal，确保 hooks 已注入。
-   *   2. 打开终端，运行 claude（`claude` 命令）。
-   *   3. 打开 Agent Status 侧栏视图（🤖 按钮）。
-   *   4. 在 claude 中执行工具调用（如 "列出当前目录文件"）→ 行图标变为 ⚡。
-   *   5. 等待工具调用完成 → 图标变为 🟡（命令运行中）。
-   *   6. SessionEnd 或 exit → 行从列表移除。
-   *   7. 执行耗时任务时观察用量条百分比递增。
+   * 生成初始行（status="attention", 🟡）。创建终端面板后打开 agent-status 视图
+   * 即可验证静态行出现。
    */
-  it.skip('Agent Status 视图出现行（需真实 claude hook 事件）', async () => {
-    // E2E 环境无 claude 进程，hook 事件不可用。用例骨架保留供未来参考：
-
+  it('Agent Status 静态行渲染（🟡 + 用量条容器）', async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'slterm-e2e-agent-row-'));
     try {
       // 0a. Workspace 就绪
@@ -1685,14 +1686,190 @@ describe('Agent Status 视图与 toast 通知', () => {
       // 7. 断言用量条容器存在（100% 宽度灰色背景——usage 未加载时 usageAvailable=false）
       const usageBarExists = await browser.execute(() => {
         const row = document.querySelector('[data-e2e="agent-status-row"]');
-        // 用量条是 row 内的第3个子 <div>
         const children = row?.children ?? [];
-        // 第3个子元素（索引2）是用量条背景容器（width: 80px, height: 6px）
         return children.length >= 3 && (children[2] as HTMLElement).style.width === '80px';
       });
       expect(usageBarExists).toBe(true);
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * 用例 2b：Agent Status 动态四态——Node 端原子写信号文件驱动状态流转。
+   *
+   * 查询方式：DOM 中 [data-e2e="agent-status-row"] 的 textContent（AgentStatusRow
+   * 将 emoji 渲染为 <span>⚡</span> 等）。
+   *
+   * 流程：
+   * 1. 确保 hooks 已注入
+   * 2. 创建测试项目 + 终端面板（panelId = terminal-{pageId}-0）
+   * 3. 确保 ~/.slterminal/hooks-events/ 存在
+   * 4. 原子写 PreToolUse 信号文件（.tmp → rename .json）→ 轮询行含 ⚡
+   * 5. 原子写 Stop 信号文件 → 轮询行含 ✅
+   * 6. 原子写 SessionEnd 信号文件 → 轮询行消失
+   * 7. 清理信号文件 + 临时目录
+   */
+  it('Agent Status 动态四态（PreToolUse→⚡, Stop→✅, SessionEnd→行消失）', async () => {
+    const eventsDir = join(homedir(), '.slterminal', 'hooks-events');
+    const tempDir = mkdtempSync(join(tmpdir(), 'slterm-e2e-agent-dyn-'));
+    const signalFiles: string[] = [];
+
+    try {
+      // 0a. Workspace 就绪
+      await browser.waitUntil(
+        async () => await browser.execute(() => (window as any).__slterm_e2e_workspaceReady === true),
+        { timeout: 15000, timeoutMsg: 'Workspace 未就绪' },
+      );
+
+      // 0b. 确保 hooks 已注入
+      await browser.execute(() => (window as any).__slterm_e2e_injectHooks?.());
+      await browser.waitUntil(
+        async () => {
+          const s = await browser.execute(() =>
+            (window as any).__slterm_e2e_getHookInjectionStatus?.(),
+          );
+          return s?.status === 'injected';
+        },
+        { timeout: 15000, timeoutMsg: 'hooks 未在创建终端前完成注入' },
+      );
+
+      // 0c. 创建项目 → 获取 pageId
+      const pageId = await browser.execute((dir: string) => {
+        return (window as any).__slterm_e2e_createProject?.(dir);
+      }, tempDir);
+
+      // 0d. Dockview API
+      await browser.waitUntil(
+        async () => await browser.execute(() => typeof window.__dockviewApi !== 'undefined'),
+        { timeout: 20000, timeoutMsg: 'Dockview API 未就绪' },
+      );
+
+      // 1. 创建终端面板
+      const panelId = `terminal-${pageId}-0`;
+      await browser.execute((pid: string) => {
+        window.__dockviewApi!.addPanel({
+          id: pid,
+          component: 'terminal',
+          params: { panelId: pid },
+          renderer: 'always' as const,
+        });
+      }, panelId);
+
+      // 2. 等待 PTY session 就绪
+      await browser.waitUntil(
+        async () => await browser.execute(() => {
+          const containers = document.querySelectorAll('[data-e2e="terminal-container"]');
+          for (const c of containers) {
+            if ((c as any).__e2e_sessionReady) return true;
+          }
+          return false;
+        }),
+        { timeout: 25000, timeoutMsg: 'PTY session 未就绪' },
+      );
+
+      // 3. 打开 agent-status 视图
+      await browser.execute(() => {
+        (window as any).__slterm_e2e_toggleSideView?.('agent-status');
+      });
+
+      // 4. 等待静态行出现（TerminalRegistry 初始扫描）
+      await browser.waitUntil(
+        async () => await browser.execute(() => {
+          return !!document.querySelector('[data-e2e="agent-status-row"]');
+        }),
+        { timeout: 10000, timeoutMsg: 'agent-status-row 未在 10s 内渲染' },
+      );
+
+      // 5. 确保信号目录存在
+      mkdirSync(eventsDir, { recursive: true });
+
+      // 6. 原子写 PreToolUse 信号文件 → 断言行出现 ⚡
+      const preToolPayload = {
+        panelId,
+        event: 'PreToolUse',
+        timestamp: Date.now(),
+        sessionId: 'e2e-agent-dyn',
+        transcriptPath: '',
+        cwd: tempDir,
+        toolName: 'Bash',
+        notificationType: null,
+      };
+      const preToolFileName = `${panelId}-PreToolUse-${Date.now()}.json`;
+      const preToolTmpPath = join(eventsDir, preToolFileName + '.tmp');
+      const preToolFilePath = join(eventsDir, preToolFileName);
+      writeFileSync(preToolTmpPath, JSON.stringify(preToolPayload), 'utf8');
+      renameSync(preToolTmpPath, preToolFilePath);
+      signalFiles.push(preToolFilePath);
+
+      await browser.waitUntil(
+        async () => await browser.execute(() => {
+          const row = document.querySelector('[data-e2e="agent-status-row"]');
+          return row?.textContent?.includes('⚡') ?? false;
+        }),
+        { timeout: 15000, timeoutMsg: 'agent-status-row 未在 PreToolUse 后含 ⚡' },
+      );
+
+      // 7. 原子写 Stop 信号文件 → 断言行出现 ✅
+      const stopPayload = {
+        panelId,
+        event: 'Stop',
+        timestamp: Date.now(),
+        sessionId: 'e2e-agent-dyn',
+        transcriptPath: '',
+        cwd: tempDir,
+        toolName: null,
+        notificationType: null,
+      };
+      const stopFileName = `${panelId}-Stop-${Date.now()}.json`;
+      const stopTmpPath = join(eventsDir, stopFileName + '.tmp');
+      const stopFilePath = join(eventsDir, stopFileName);
+      writeFileSync(stopTmpPath, JSON.stringify(stopPayload), 'utf8');
+      renameSync(stopTmpPath, stopFilePath);
+      signalFiles.push(stopFilePath);
+
+      await browser.waitUntil(
+        async () => await browser.execute(() => {
+          const row = document.querySelector('[data-e2e="agent-status-row"]');
+          return row?.textContent?.includes('✅') ?? false;
+        }),
+        { timeout: 15000, timeoutMsg: 'agent-status-row 未在 Stop 后含 ✅' },
+      );
+
+      // 8. 原子写 SessionEnd 信号文件 → 断言行消失
+      const endPayload = {
+        panelId,
+        event: 'SessionEnd',
+        timestamp: Date.now(),
+        sessionId: 'e2e-agent-dyn',
+        transcriptPath: '',
+        cwd: tempDir,
+        toolName: null,
+        notificationType: null,
+      };
+      const endFileName = `${panelId}-SessionEnd-${Date.now()}.json`;
+      const endTmpPath = join(eventsDir, endFileName + '.tmp');
+      const endFilePath = join(eventsDir, endFileName);
+      writeFileSync(endTmpPath, JSON.stringify(endPayload), 'utf8');
+      renameSync(endTmpPath, endFilePath);
+      signalFiles.push(endFilePath);
+
+      await browser.waitUntil(
+        async () => await browser.execute((pid: string) => {
+          const row = document.querySelector('[data-e2e="agent-status-row"]');
+          // 行消失 或 同 panelId 行不存在
+          if (!row) return true;
+          return row.getAttribute('data-panel-id') !== pid;
+        }, panelId),
+        { timeout: 15000, timeoutMsg: 'agent-status-row 未在 SessionEnd 后消失' },
+      );
+    } finally {
+      // 清理信号文件
+      for (const f of signalFiles) {
+        try { rmSync(f, { force: true }); } catch { /* 忽略 */ }
+      }
+      // 清理临时目录
+      try { rmSync(tempDir, { recursive: true, force: true }); } catch { /* 忽略 */ }
     }
   });
 
