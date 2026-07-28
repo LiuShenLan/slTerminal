@@ -114,11 +114,11 @@ function seedActivePage(pageId: string | null) {
   useLayout.setState({ activePageId: pageId });
 }
 
-/** 构建 TerminalRegistry 模拟 Map（仅 key 有意义，value 用空对象） */
+/** 构建 TerminalRegistry 模拟 Map——entry 含 claudeSession 非 null（行建模改后纯 shell 无行） */
 function makeTerminalMap(panelIds: string[]): Map<string, unknown> {
   const map = new Map<string, unknown>();
   for (const pid of panelIds) {
-    map.set(pid, {});
+    map.set(pid, { claudeSession: { lastEventAt: Date.now() } });
   }
   return map;
 }

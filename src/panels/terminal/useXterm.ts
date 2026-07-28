@@ -202,7 +202,7 @@ export function useXterm({
   useClipboardHandler(termState, visible ?? true);
 
   // OSC 133 命令边界检测 → 页签标题/图标切换
-  const { resetCommandState } = useCommandDetection(termState, onTabStateChange, isCommandRunningRef);
+  const { resetCommandState } = useCommandDetection(termState, panelId, onTabStateChange, isCommandRunningRef);
 
   // ═══════════════════════════════════════════════════════════════
   // 6. 主 useEffect：PTY spawn + onData + OSC 8 + 键盘委托 + E2E
@@ -345,9 +345,19 @@ export function useXterm({
       }
     });
 
-    // ── Hooks 事件订阅（F3 页签四态指示）──
+    // ── Hooks 事件订阅（F3 页签四态指示 + claude 会话状态写入）──
     const unsubscribeHookEvent = hooks.onHookEvent((payload) => {
       if (payload.panelId !== panelId) return;
+
+      // 写入 claude 会话状态（与页签 emoji 正交）
+      if (payload.event === "SessionEnd" || payload.event === "Exit") {
+        TerminalRegistry.setClaudeSession(panelId, null);
+      } else {
+        TerminalRegistry.setClaudeSession(panelId, {
+          transcriptPath: payload.transcriptPath ?? undefined,
+        });
+      }
+
       const status = eventToStatus(payload.event, payload.notificationType);
       if (status === null) {
         if (payload.event === "SessionEnd") onTabStateChange?.({ active: false });

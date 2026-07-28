@@ -52,4 +52,66 @@ describe("TerminalRegistry.subscribe", () => {
 
     expect(listener).not.toHaveBeenCalled();
   });
+
+  it("remove 不存在的 panelId → 不通知", () => {
+    const listener = vi.fn();
+    TerminalRegistry.subscribe(listener);
+
+    TerminalRegistry.remove("nonexistent");
+
+    expect(listener).not.toHaveBeenCalled();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// sessionChange 事件测试（契约 1）
+// ═══════════════════════════════════════════════════════════════
+
+describe("TerminalRegistry.subscribe sessionChange", () => {
+  beforeEach(() => {
+    TerminalRegistry._reset();
+  });
+
+  it("setClaudeSession（非 null）→ 通知 listener 收到 { type:'sessionChange', panelId } 裸结构", () => {
+    TerminalRegistry.register("p1", stubTerminal());
+    const listener = vi.fn();
+    TerminalRegistry.subscribe(listener);
+
+    TerminalRegistry.setClaudeSession("p1", { matchedCommand: "claude" });
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith({
+      type: "sessionChange",
+      panelId: "p1",
+    });
+    // 契约 1：payload 不带 session 数据——listener 经 get() 读现值
+    const callArg = listener.mock.calls[0][0];
+    expect(callArg).not.toHaveProperty("claudeSession");
+    expect(callArg).not.toHaveProperty("session");
+  });
+
+  it("setClaudeSession(null) → 通知 listener（清空也触发）", () => {
+    TerminalRegistry.register("p1", stubTerminal());
+    TerminalRegistry.setClaudeSession("p1", { matchedCommand: "claude" });
+
+    const listener = vi.fn();
+    TerminalRegistry.subscribe(listener);
+
+    TerminalRegistry.setClaudeSession("p1", null);
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith({
+      type: "sessionChange",
+      panelId: "p1",
+    });
+  });
+
+  it("setClaudeSession 对不存在的 panelId → no-op 不通知", () => {
+    const listener = vi.fn();
+    TerminalRegistry.subscribe(listener);
+
+    TerminalRegistry.setClaudeSession("nonexistent", { matchedCommand: "claude" });
+
+    expect(listener).not.toHaveBeenCalled();
+  });
 });

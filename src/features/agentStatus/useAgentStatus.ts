@@ -1,10 +1,11 @@
 // useAgentStatus.ts — Agent 状态 hook
 //
-// 从 useLayout + useProjects 推导当前项目，扫描 TerminalRegistry 获取 panelId 列表，
-// 订阅 onHookEvent 事件驱动更新行状态、过滤非当前项目会话、按 lastEventAt 倒序排列。
-//
-// SessionEnd / Exit → 移除行。
-// 事件含 transcriptPath 时异步调用 contextUsage 更新用量条。
+// 行 = 运行中的 claude 会话（非全部终端）。
+// 建行双通道：sessionChange（session 非 null）∨ hook 事件（非 SessionEnd/Exit 且行不存在）——两通道独立幂等。
+// 删行三通道：sessionChange（session 为 null）∨ SessionEnd/Exit hook 事件 ∨ remove 事件。
+// 初始扫描只建 claudeSession 非 null 的行；携 transcriptPath 时主动拉 contextUsage（修复问题 2b）。
+// #5 竞态双保险：① registry/hook-event 双 listener 经 ref 读最新状态，effect deps [] 订阅永不重建；
+// ② 初始扫描按注册表现值对账（claudeSession 非 null 才建行），兜底任何事件丢失。
 
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useLayout } from "../../stores/layout";
@@ -16,6 +17,7 @@ import { parseTerminalPageId } from "../../lib/panelId";
 import { getPageApi } from "../../workspace/pageApis";
 import type { ClaudeStatus } from "../../lib/claudeStatus";
 import type { HookEventPayload } from "../../ipc/hooks";
+import type { ContextUsage } from "../../types/hooks";
 
 // ---- 类型定义 ----
 
@@ -28,7 +30,7 @@ export interface AgentSessionRow {
   status: ClaudeStatus;
   lastEventAt: number;
   transcriptPath?: string;
-  usage?: { inputTokens: number; outputTokens: number } | null;
+  usage?: ContextUsage | null;
 }
 
 /** 视图状态机 */
@@ -76,51 +78,56 @@ export function useAgentStatus(): AgentStatusResult {
   );
   const currentProjectName = activeProject?.name ?? null;
 
-  // FE-06：useMemo 稳定 projectPageIds，handleHookEvent deps 随之稳定，useEffect 不再每渲染重订阅
   const projectPageIds = useMemo(
     () => new Set(activeProject?.pages.map((pg) => pg.pageId) ?? []),
     [activeProject],
   );
 
-  // 项目无 root——no-root 态
   const projectRoot = activeProject?.rootPath ?? null;
 
-  // 事件处理回调（deps 现由 useMemo 稳定）
+  // ref 副本供稳定订阅（dept []）回调读取最新值，防 R4 竞态（remove 事件丢失）
+  const projectRootRef = useRef(projectRoot);
+  projectRootRef.current = projectRoot;
+  const projectPageIdsRef = useRef(projectPageIds);
+  projectPageIdsRef.current = projectPageIds;
+  const activeProjectRef = useRef(activeProject);
+  activeProjectRef.current = activeProject;
+
+  // ---- hook 事件处理（deps []——所有数据经 ref 读取，回调永不重建） ----
   const handleHookEvent = useCallback(
     (payload: HookEventPayload) => {
-      if (!projectRoot) return;
+      const projRoot = projectRootRef.current;
+      if (!projRoot) return;
 
       const pageId = parseTerminalPageId(payload.panelId);
       if (!pageId) return;
 
-      // 过滤：仅保留属于当前项目的 panelId
-      if (!projectPageIds.has(pageId)) return;
+      const pageIds = projectPageIdsRef.current;
+      if (!pageIds.has(pageId)) return;
 
-      // FE-05：eventToStatus 可能返回 null——null 时不覆盖已有行 status
-      const newStatus = eventToStatus(
-        payload.event,
-        payload.notificationType,
-      );
+      const proj = activeProjectRef.current;
+      if (!proj) return;
+
+      const newStatus = eventToStatus(payload.event, payload.notificationType);
+
+      // SessionEnd / Exit → 删行
+      if (payload.event === "SessionEnd" || payload.event === "Exit") {
+        setRows((prev) => {
+          const idx = prev.findIndex((r) => r.panelId === payload.panelId);
+          if (idx === -1) return prev;
+          const next = [...prev];
+          next.splice(idx, 1);
+          return next;
+        });
+        return;
+      }
+
+      const pageTitle = resolveTitle(payload.panelId, pageId);
 
       setRows((prev) => {
         const existingIdx = prev.findIndex(
           (r) => r.panelId === payload.panelId,
         );
-        const now = payload.timestamp || Date.now();
-
-        // SessionEnd / Exit → 移除
-        if (
-          payload.event === "SessionEnd" ||
-          payload.event === "Exit"
-        ) {
-          if (existingIdx === -1) return prev;
-          const next = [...prev];
-          next.splice(existingIdx, 1);
-          return next;
-        }
-
-        // FE-04：标题查 dockviewApi，事件到达时刷新已有行标题
-        const pageTitle = resolveTitle(payload.panelId, pageId);
 
         if (existingIdx >= 0) {
           // 更新已有行——null 状态不覆盖旧值
@@ -129,7 +136,7 @@ export function useAgentStatus(): AgentStatusResult {
             ...next[existingIdx],
             title: pageTitle,
             ...(newStatus !== null ? { status: newStatus } : {}),
-            lastEventAt: now,
+            lastEventAt: payload.timestamp || Date.now(),
             transcriptPath:
               payload.transcriptPath ?? next[existingIdx].transcriptPath,
           };
@@ -137,14 +144,14 @@ export function useAgentStatus(): AgentStatusResult {
           return next;
         }
 
-        // 新行：eventToStatus 为 null 时兜底 attention
+        // 建新行：hook 事件通道（非 SessionEnd/Exit 且行不存在——与 sessionChange 通道独立幂等）
         const row: AgentSessionRow = {
           panelId: payload.panelId,
           pageId,
-          projectId: activeProject?.projectId ?? "",
+          projectId: proj.projectId,
           title: pageTitle,
           status: newStatus ?? "attention",
-          lastEventAt: now,
+          lastEventAt: payload.timestamp || Date.now(),
           transcriptPath: payload.transcriptPath || undefined,
           usage: undefined,
         };
@@ -160,21 +167,19 @@ export function useAgentStatus(): AgentStatusResult {
           .then((usage) => {
             setRows((prev) =>
               prev.map((r) =>
-                r.panelId === payload.panelId
-                  ? { ...r, usage }
-                  : r,
+                r.panelId === payload.panelId ? { ...r, usage } : r,
               ),
             );
           })
-          .catch(() => {
-            // 解析失败 → usage 保持旧值（null 由 promise resolve 时置）
+          .catch((err) => {
+            console.error("contextUsage 拉取失败:", err);
           });
       }
     },
-    [projectRoot, projectPageIds, activeProject],
+    [], // deps []——所有动态数据经 ref 读取，回调永不重建
   );
 
-  // 订阅 onHookEvent
+  // 订阅 onHookEvent（deps [handleHookEvent]，handleHookEvent deps [] 故永不重建）
   useEffect(() => {
     const unlisten = onHookEvent(handleHookEvent);
     return () => {
@@ -182,31 +187,66 @@ export function useAgentStatus(): AgentStatusResult {
     };
   }, [handleHookEvent]);
 
-  // FE-03：TerminalRegistry 订阅——register 插入行，remove 移除行
+  // ---- TerminalRegistry 订阅：sessionChange 建/删行 + remove 删行 ----
+  // deps []——订阅永不重建，remove 事件永不丢失（根除 R4 根因：同 commit passive destroy
+  // 顺序 SideBarArea 先于主区，旧 deps 重订阅窗口内 remove 丢失）
   useEffect(() => {
-    if (!projectRoot || !activeProject) return;
-
     const unsub = TerminalRegistry.subscribe((event) => {
+      const pageIds = projectPageIdsRef.current;
+      const proj = activeProjectRef.current;
+      if (!proj) return;
+
       const pageId = parseTerminalPageId(event.panelId);
       if (!pageId) return;
-      if (!projectPageIds.has(pageId)) return;
+      if (!pageIds.has(pageId)) return;
 
-      if (event.type === "register") {
-        // 插入 🟡 行（同初始扫描语义）
-        setRows((prev) => {
-          if (prev.some((r) => r.panelId === event.panelId)) return prev;
-          const row: AgentSessionRow = {
-            panelId: event.panelId,
-            pageId,
-            projectId: activeProject.projectId,
-            title: resolveTitle(event.panelId, pageId),
-            status: "attention",
-            lastEventAt: Date.now(),
-            usage: undefined,
-          };
-          return [...prev, row].sort((a, b) => b.lastEventAt - a.lastEventAt);
-        });
+      if (event.type === "sessionChange") {
+        const entry = TerminalRegistry.get(event.panelId);
+        if (!entry) return;
+
+        if (entry.claudeSession && entry.claudeSession !== null) {
+          // session 非 null → 建行（幂等：行已存在则跳过）
+          setRows((prev) => {
+            if (prev.some((r) => r.panelId === event.panelId)) return prev;
+            const row: AgentSessionRow = {
+              panelId: event.panelId,
+              pageId,
+              projectId: proj.projectId,
+              title: resolveTitle(event.panelId, pageId),
+              status: "attention",
+              lastEventAt: entry.claudeSession!.lastEventAt,
+              transcriptPath: entry.claudeSession!.transcriptPath,
+              usage: undefined,
+            };
+            return [...prev, row].sort((a, b) => b.lastEventAt - a.lastEventAt);
+          });
+
+          // 携 transcriptPath 时主动拉取用量
+          if (entry.claudeSession.transcriptPath) {
+            contextUsage(entry.claudeSession.transcriptPath)
+              .then((usage) => {
+                setRows((prev) =>
+                  prev.map((r) =>
+                    r.panelId === event.panelId ? { ...r, usage } : r,
+                  ),
+                );
+              })
+              .catch((err) => {
+                console.error("contextUsage 拉取失败:", err);
+              });
+          }
+        } else {
+          // session 为 null → 删行
+          setRows((prev) => {
+            const idx = prev.findIndex((r) => r.panelId === event.panelId);
+            if (idx === -1) return prev;
+            const next = [...prev];
+            next.splice(idx, 1);
+            return next;
+          });
+        }
       } else if (event.type === "remove") {
+        // remove → 删行
         setRows((prev) => {
           const idx = prev.findIndex((r) => r.panelId === event.panelId);
           if (idx === -1) return prev;
@@ -215,23 +255,26 @@ export function useAgentStatus(): AgentStatusResult {
           return next;
         });
       }
+      // register 事件不建行——建行由 sessionChange（非 null）和 hook 事件双通道负责
     });
 
     return unsub;
-  }, [projectRoot, activeProject?.projectId, projectPageIds]);
+  }, []); // deps []——订阅永不重建
 
-  // 切换项目时清空旧行 + 从 TerminalRegistry 初始扫描
+  // ---- 初始扫描 + 项目切换（只建 claudeSession 非 null 的行；携 transcriptPath 主动拉 usage） ----
   useEffect(() => {
     if (!projectRoot || !activeProject) {
       setRows([]);
       return;
     }
 
-    // 从 TerminalRegistry 获取当前项目下的所有 panelId
+    // 遍历 TerminalRegistry，只建 claudeSession 非 null 的行
     const allTerminals = TerminalRegistry.getAll();
     const initialRows: AgentSessionRow[] = [];
 
-    for (const [panelId] of allTerminals) {
+    for (const [panelId, entry] of allTerminals) {
+      if (!entry.claudeSession) continue; // 纯 shell 终端不建行
+
       const pageId = parseTerminalPageId(panelId);
       if (!pageId) continue;
       if (!projectPageIds.has(pageId)) continue;
@@ -241,10 +284,26 @@ export function useAgentStatus(): AgentStatusResult {
         pageId,
         projectId: activeProject.projectId,
         title: resolveTitle(panelId, pageId),
-        status: "attention", // 初始态：命令运行中
-        lastEventAt: Date.now(),
+        status: "attention",
+        lastEventAt: entry.claudeSession.lastEventAt,
+        transcriptPath: entry.claudeSession.transcriptPath,
         usage: undefined,
       });
+
+      // 携 transcriptPath 时主动拉取一次（修复问题 2b：切项目后 idle 会话用量永远 --）
+      if (entry.claudeSession.transcriptPath) {
+        contextUsage(entry.claudeSession.transcriptPath)
+          .then((usage) => {
+            setRows((prev) =>
+              prev.map((r) =>
+                r.panelId === panelId ? { ...r, usage } : r,
+              ),
+            );
+          })
+          .catch((err) => {
+            console.error("contextUsage 拉取失败:", err);
+          });
+      }
     }
 
     initialRows.sort((a, b) => b.lastEventAt - a.lastEventAt);

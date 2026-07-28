@@ -40,9 +40,11 @@ describe("tabRules", () => {
       expect(rule!.icon).toBeUndefined();
     });
 
-    it('"claude update" 不匹配', () => {
+    it("带参命令行按首 token 命中——claude update → 匹配 claude 规则", () => {
       tabTitleRegistry.register({ command: "claude", title: "claude", icon: "/test.png" });
-      expect(tabTitleRegistry.match("claude update")).toBeNull();
+      const rule = tabTitleRegistry.match("claude update");
+      expect(rule).not.toBeNull();
+      expect(rule!.command).toBe("claude");
     });
 
     it("命令区分大小写", () => {

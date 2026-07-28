@@ -6,7 +6,7 @@
 
 /** 命令→标题/图标映射规则 */
 export interface TabTitleRule {
-  /** trim() 后精确匹配的命令名 */
+  /** 命令行首 token（精确匹配键），如 "claude" */
   command: string;
   /** 命令运行时页签标题 */
   title: string;
@@ -33,9 +33,11 @@ export class TabTitleRegistry {
     this.rules.set(rule.command, rule);
   }
 
-  /** 精确匹配命令名，未匹配返回 null */
+  /** 首 token 匹配命令行：取 command.trim().split(/\s+/)[0] 后精确查表，未匹配返回 null。
+   *  覆盖 claude --resume / claude -p 等带参变体。 */
   match(command: string): TabTitleRule | null {
-    return this.rules.get(command) ?? null;
+    const firstToken = command.trim().split(/\s+/)[0];
+    return this.rules.get(firstToken) ?? null;
   }
 
   /** 清空所有规则（仅测试用） */
