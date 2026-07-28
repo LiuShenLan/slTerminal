@@ -260,8 +260,8 @@ Claude Code 在用户主动 Ctrl+C 中断时不发射任何 hook 事件（`Stop`
 | `terminal/keyboard.ts` | 终端快捷键命令工厂：`createTerminalShortcuts()`（无参）经 `commandFromMeta` 生成 `terminal.copy/paste/newline`，App 一次性注册；handler 经 `getActiveTerminal()` 派发到聚焦终端。Ctrl+C 不注册（透传 SIGINT） |
 | `terminal/activeTerminal.ts` | 模块级"聚焦终端"指针：`setActiveTerminal`/`clearActiveTerminal`（仅匹配时清）/`getActiveTerminal`。终端聚焦时设为 active，命令 handler 据此派发 |
 | `terminal/theme.ts` | xterm.js 暗色主题选项（JetBrains 配色），硬约束 #6 单点。`drawBoldTextInBrightColors` 显式声明为 `true`，消除对 xterm.js 默认值的隐式依赖（仅影响 ANSI 16 色粗体→亮色映射，不影响 True Color）。`vtExtensions: { kittyKeyboard: true }` 启用 Kitty 键盘协议被动支持 |
-| `terminal/TerminalRegistry.ts` | 模块级 `Map<panelId, RegisteredTerminal>`，跨页面切换时供查询/reattach；`subscribe(listener): () => void` 订阅 register/remove 事件（供 useAgentStatus 联动行增删） |
-| `terminal/TabTitleRegistry.ts` | 命令→标题/图标映射注册表单例（Registry Pattern）。`match(command)` 精确匹配，`register(rule)` 注册规则，`_reset()` 测试用 |
+| `terminal/TerminalRegistry.ts` | 模块级 `Map<panelId, RegisteredTerminal>` + `ClaudeSessionInfo`（存在即运行中，二态模型）+ `setClaudeSession(panelId, patch|null)`（merge 语义：null 清空、undefined 键不覆盖、缺 lastEventAt 自动填 Date.now()）+ `subscribe(listener)` 订阅 register/remove/**sessionChange** 事件（sessionChange 仅携 panelId，listener 经 `get()` 读现值防快照不一致）；register 幂等覆盖时 `claudeSession` 缺省保留旧值（StrictMode/重试场景不丢 session）。跨页面切换时供查询/reattach |
+| `terminal/TabTitleRegistry.ts` | 命令→标题/图标映射注册表单例（Registry Pattern）。`match(command)` 首 token 匹配（`command.trim().split(/\s+/)[0]` 后精确查表——覆盖 `claude --resume` / `claude -p` 等带参变体），`register(rule)` 注册规则，`_reset()` 测试用 |
 | `terminal/tabRules.ts` | 规则注册文件——side-effect import 向 `tabTitleRegistry` 注册命令行命令规则（claude 规则的 `icon` 字段已移除，仅保留 `command` + `title`；emoji 表示由 F3 四态系统接管）。后续新增命令在此追加 `register(...)` |
 | `editor/index.ts` | EditorPanel 导出 |
 | `editor/EditorPanel.tsx` | 编辑器面板 React 组件：container `overflow: clip`（裁剪不吸收滚动事件，委托 `.cm-scroller` 管理滚动；`.cm-editor` `height: 100%` 约束 scroller 高度产生溢出）→ useCodeMirror |
@@ -339,7 +339,7 @@ useXterm 是编排层——mock 6 个子 hook 才能隔离测试（`useFontSizeB
 
 | 文件 | 模式 |
 |------|------|
-| `TabTitleRegistry.test.ts` | 直接测试真实 `TabTitleRegistry` 实例（非 mock）：register/match、大小写、覆盖、`_reset()`、单例校验 |
+| `tab-title-registry.test.ts` | 直接测试真实 `TabTitleRegistry` 实例（非 mock）：register/match（首 token 匹配——含带参命中/空命令行/仅空白/首 token 无规则仍 null）、大小写、覆盖、`_reset()`、单例校验 |
 | `tabRules.test.ts` | side-effect import 验证 + `_reset()` 后手动注册行为。不依赖手动 register，直接验证模块加载副作用 |
 | `workspace-defaulttab.test.tsx` | MockDefaultTab 渲染 + `onDidParametersChange` 事件结构回归测试。事件结构测试直接验证 Dockview `Event<Parameters>` 回调行为 |
 

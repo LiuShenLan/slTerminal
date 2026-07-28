@@ -123,30 +123,44 @@ watcher 使用 `static WATCHER: Mutex<Option<HookSignalWatcher>>`（模块级）
 
 ## ContextUsage DTO
 
-`usage.rs` 定义的 token 用量 DTO（C5 契约，camelCase 序列化）：
+`usage.rs` 定义的 token 用量 DTO（C12 契约，camelCase 序列化）：
 
 ```rust
 pub struct ContextUsage {
-    pub input_tokens: u64,   // 输入 token 数，序列化为 "inputTokens"
-    pub output_tokens: u64,  // 输出 token 数，序列化为 "outputTokens"
+    pub input_tokens: u64,             // 输入 token 数，序列化为 "inputTokens"
+    pub output_tokens: u64,            // 输出 token 数，序列化为 "outputTokens"（信息字段，不计占用）
+    #[serde(default)]                  // 兼容旧 transcript 缺失
+    pub cache_read_input_tokens: u64,  // 缓存读取输入 token，序列化为 "cacheReadInputTokens"
+    #[serde(default)]                  // 兼容旧 transcript 缺失
+    pub cache_creation_input_tokens: u64, // 缓存创建输入 token，序列化为 "cacheCreationInputTokens"
 }
 ```
 
-前端对应 `src/types/hooks.ts` 的 `ContextUsage` 接口（`inputTokens` / `outputTokens`：`number`），IPC 封装见 `src/ipc/hooks.ts` 的 `contextUsage(transcriptPath)`。
+**用量口径**：总占用 = `inputTokens + cacheReadInputTokens + cacheCreationInputTokens`，上限 200_000（`CLAUDE_CONTEXT_LIMIT`）；`outputTokens` 不计占用保留为信息字段。缺 cache 字段默认 0（serde `default`，兼容旧 transcript）；`input_tokens` 缺失仍整行 None（沿用现状）。
+
+前端对应 `src/types/hooks.ts` 的 `ContextUsage` 接口（四字段同名，`cacheReadInputTokens` / `cacheCreationInputTokens`），IPC 封装见 `src/ipc/hooks.ts` 的 `contextUsage(transcriptPath)`。
 
 ## 实现要点
 
 ### 尾部读取 + 逆行扫描
 
-`scan_transcript_usage` 从文件尾部读取最多 64KB（`TRANSCRIPT_TAIL_BYTES = 64 * 1024`），不足则全读。从中途起始时跳过首行（可能为截断行，JSON 不完整），其余行自末行逆向扫描，遇含 `message.usage` 的完整 JSON 行即返回。此策略确保仅读最小必要数据量，不加载全文件。
+`scan_transcript_usage` 从文件尾部读取最多 64KB（`TRANSCRIPT_TAIL_BYTES = 64 * 1024`），不足则全读。从中途起始时跳过首行（可能为截断行，JSON 不完整），其余行自末行逆向扫描，遇含 `message.usage` 的完整 JSON 行即解析返回。此策略确保仅读最小必要数据量，不加载全文件。cache 字段（`cache_read_input_tokens`/`cache_creation_input_tokens`）从同一条 `message.usage` 对象中提取，缺失默认 0。
 
 ### parse_usage_line 纯函数
 
-`parse_usage_line(line: &str) -> Option<ContextUsage>` 解析单行 JSON：提取 `message.usage.input_tokens` 与 `message.usage.output_tokens`（均为 `u64`）。JSON 非法、字段缺失、类型不匹配均返回 `None`，不 panic。
+`parse_usage_line(line: &str) -> Option<ContextUsage>` 解析单行 JSON：提取 `message.usage.input_tokens`、`message.usage.output_tokens`、`message.usage.cache_read_input_tokens`、`message.usage.cache_creation_input_tokens`（均为 `u64`，cache 字段缺失默认 0）。JSON 非法、字段缺失（除 cache 外）、类型不匹配均返回 `None`，不 panic。仅 `input_tokens` 缺失时整行 None（沿用现状）。
 
 ### 解析失败返回 None
 
 任何异常路径均返回 `Ok(None)`（非 `Err`）：文件不存在、权限不足、UTF-8 无效字节、JSONL 全无 usage 行——调用方统一按"无 token 数据"处理，不区分具体错误类型。
+
+## 性能实测（问题 5）
+
+hook 脚本性能实测结论（2026-07-29，Win11 build 26200，Node v22）：
+
+- **hook 脚本耗时**：36-44ms/次（5 次测量：44/37/36/37/36ms；裸 node 基线 35ms——`node -e "process.exit(0)"`）。
+- **启动路径 hook 触发**：claude 启动生命周期仅 `SessionStart` 一个 hook 事件触发 → hooks 总贡献 ~0.1s 量级。
+- **结论**：hooks **不是** claude 启动慢 1-3s 的主因——主因 = claude 自身 Windows node 模块加载 + Ink 渲染器初始化。**接受现状，不做 per-event node spawn 优化**（优化收益远低于架构复杂度成本）。
 
 ## 关键约束
 
