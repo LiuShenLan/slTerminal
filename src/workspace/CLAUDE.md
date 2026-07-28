@@ -31,6 +31,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `PageDockviewHost.tsx` | 单页面 Dockview 实例宿主组件（React.memo 包裹）：DefaultTab、Watermark、RightHeader、ContextMenu、布局恢复 |
 | `layoutSerde.ts` | 布局序列化/反序列化：`saveLayout`（`api.toJSON()`）、`loadLayout`（`api.fromJSON()` + 旧格式修补 + 白名单过滤） |
 | `titleManager.ts` | 页签标题集中管理：terminal-N 编号、文件标题冲突检测、handleSaveAs、onDeletePage(pageId)：清理该页面 registry 和 counters 条目 |
+| `pageApis.ts` | 页面 API 注册表 + 共享切换：模块级 `Map<pageId, DockviewApi>` + `registerPageApi`/`unregisterPageApi`/`getPageApi` + `switchToPageShared(pageId)`（setProjectRoot 前置→setActivePage→重指向 `__dockviewApi`）+ `switchToPageAndFocus(pageId, panelId)`（切换后轮询聚焦面板） |
 
 > **panelRegistry.ts 已提取到 `src/panelRegistry.ts`（已提取为共享配置层）**：面板注册表是全局架构组件，被 workspace、explorer、测试等多方引用，不应埋于 workspace 子路径。
 
@@ -57,11 +58,17 @@ SidebarTree.switchToPage(projectId, pageId)
   → 查 useProjects.getState() 获取 pageId 所属项目 rootPath
   → await setProjectRoot(rootPath)  // 路径沙箱前置条件（失败 console.error 降级，仍继续切换）
   → ensurePageInitialized(pageId)   // 首次切换时挂载 PageDockview
+  → 委托 switchToPageShared(pageId) // pageApis.ts 共享切换函数
   → useLayout.setActivePage(pageId)
   → React 重渲染，目标页面 display:block，其余 display:none
-  → window.__dockviewApi 更新指向活跃页面
+  → window.__dockviewApi 重指向活跃页面（handlePageApiReady 兜底未初始化页面）
+
+// toast/Agent Status 行点击等调用方走 switchToPageAndFocus(pageId, panelId)
+// → switchToPageShared → 有限轮询（100ms×50）等待面板挂载 → panel.focus()
 ```
 
+> **`__dockviewApi` 重指三站点不变量**：`window.__dockviewApi` 重指向只允许出现在三个位置——`switchToPageShared`（页面切换时立即重指已初始化页面）、`Workspace.handlePageApiReady`（页面首次初始化时重指）、`Workspace.onDeletePage`（删除页面后重指次页）。其他代码点通过 `getPageApi(pageId)` 访问指定页面的 API，不假设 `__dockviewApi` 恰好指向目标页。
+>
 > **DBG-5**: `switchToPage` 改为 async——`setProjectRoot` 必须在 `setActivePage` 之前完成，确保子组件 effect 中的 `fs_read_dir`/`git_status`/`notify_watch` 等 IPC 调用在后端 `project_root` 就绪后通过路径沙箱校验。
 
 ## 布局架构（三栏 Allotment）

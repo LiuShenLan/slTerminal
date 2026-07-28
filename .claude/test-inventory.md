@@ -2,7 +2,7 @@
 
 > **本文档是项目用例数唯一真值源。** 所有 CLAUDE.md、README、CI 配置中引用的用例数均以此文件为准。更新测试后必须同步本文档。
 
-全量 **2045** 用例（Rust 359 + 前端 1552 + L3 116 + E2E 18），2026-07-28 更新。
+全量 **2075** 用例（Rust 359 + 前端 1578 + L3 116 + E2E 22），2026-07-28 更新。
 
 > **计数口径**：前端 (L2) 用例数以 `grep -cE '^\s*(it|test)\(' src/__tests__/*.test.ts src/__tests__/*.test.tsx` 展开的 `it`/`test` 块数为准（Vitest 实际运行数）；L3 同理 `test/terminal/*.test.ts`；Rust (L1) 以 `grep -c '#\[test\]'` 统计的 `#[test]` 属性数为准。L3 的 116 用例同时被 L2 (`npm test`) 和独立 L3 (`npm run test:l3`) 执行，但此处各层独立计数，不做去重。
 
@@ -18,34 +18,34 @@
 | `src-tauri/src/fs/mod.rs` | 28 | read_dir/write_file/create_dir/delete/rename + 命令包装单测 |
 | `src-tauri/src/notify/mod.rs` | 24 | FileWatcher 生命周期 + classify_by_kind 事件分类（全 7 种 EventKind） |
 | `src-tauri/src/state.rs` | 24 | ring buffer append+eviction+换行边界/validate_path_within_root 沙箱/canonicalize_or_ancestor |
-| `src-tauri/src/pty/shell.rs` | 15 | pwsh 发现/shell-integration.ps1 嵌入/UTF-16LE Base64 往返/which_full_path/shell 白名单 |
-| `src-tauri/src/settings.rs` | 17 | 读写往返/文件不存在/JSON 损坏回退 .bak/浅合并/shadow 目录 + 命令包装单测 |
-| `src-tauri/src/notify/pool.rs` | 13 | LruWatcherPool: 缓存命中/LRU 淘汰/pause_all_except/replace/remove/stop_all/Drop |
-| `src-tauri/src/hooks/mod.rs` | 8 | DTO serde（camelCase）/hook-event payload 序列化/hooks_context_usage 命令 |
+| `src-tauri/src/hooks/usage.rs` | 23 | parse_usage_line 全分支（合法 JSON/缺字段/缺 message/非法 JSON/空串/大值 u64/类型不匹配/额外字段忽略）+ scan_transcript_usage 集成（逆行命中/无 usage 回溯/文件不存在/空文件/损坏行跳过）+ ContextUsage serde camelCase + TRANSCRIPT_TAIL_BYTES 常量 + hooks_context_usage 端到端（多条 usage/空文件/大文件 >128KB 仅读尾部 64KB） |
 | `src-tauri/src/hooks/inject.rs` | 20 | 注入幂等（空 settings/已有用户 hooks/已注入升级）/卸载干净/状态检测（injected/outdated/notInjected）/非法 JSON 中止/版本比对/notification 权限声明 |
-| `src-tauri/src/hooks/signal.rs` | 9 | parse_signal_file 全分支（合法/缺 panelId/非法 JSON/空串/嵌入正文中）/write_signal_file/信号文件读取 |
-| `src-tauri/src/hooks/watcher.rs` | 6 | hooks 事件 watcher 生命周期（start/stop/Drop/事件发射） |
-| `src-tauri/src/hooks/usage.rs` | 23 | parse_context_usage 全分支（合法 JSON/非法 JSON/空文件/文件不存在/JSON 解析错误/字段缺失/字段类型错误/total_tokens 计算/exit_code 解析/transcript_path 为空）/read_context_usage_file 文件 I/O |
+| `src-tauri/src/settings.rs` | 17 | 读写往返/文件不存在/JSON 损坏回退 .bak/浅合并/shadow 目录 + 命令包装单测 |
+| `src-tauri/src/pty/shell.rs` | 15 | pwsh 发现/shell-integration.ps1 嵌入/UTF-16LE Base64 往返/which_full_path/shell 白名单 |
+| `src-tauri/src/notify/pool.rs` | 13 | LruWatcherPool: 缓存命中/LRU 淘汰/pause_all_except/replace/remove/stop_all/Drop |
 | `src-tauri/src/projects.rs` | 12 | 序列化往返/ID 生成/路径校验 |
+| `src-tauri/src/hooks/signal.rs` | 9 | parse_signal_file 全分支（合法/缺 panelId/空 panelId/非法 JSON/空串/仅空白/optionals null）+ camelCase 序列化+反序列化往返 |
+| `src-tauri/src/hooks/mod.rs` | 8 | InjectionStatus/HookInjectionStatus serde（camelCase）+ parse_signal_file 快速冒烟（合法/缺 panelId/非法 JSON/空串） |
 | `src-tauri/tests/pty_integration_tests.rs` | 8 | PTY 往返/OSC cwd 解析/resize 生效/kill 无孤儿/Custom ConPTY spawn/reattach/env 注入 |
+| `src-tauri/src/hooks/watcher.rs` | 6 | HookSignalWatcher 生命周期（stop 幂等/Drop join 线程） |
 | `src-tauri/src/error.rs` | 4 | 序列化/Display/From<io::Error>/SessionNotFound |
 | `src-tauri/src/lib.rs` | 2 | ping 返回 pong/`get_windows_build_number` 返回数字 |
 
 > `pty/mod.rs`、`pty/win_build.rs`、`main.rs` 不含 `#[test]`，不在此列。
 
-## L2 — 前端单元/集成测试（97 文件 / 1552 用例）
+## L2 — 前端单元/集成测试（99 文件 / 1578 用例）
 
 运行：`npm test`（Vitest + jsdom）
 
-### IPC 层（3 文件 / 82 用例）
+### IPC 层（3 文件 / 87 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
-| `src/__tests__/ipc-contract.test.ts` | 65 | pty/fs/settings/notify/git/hooks/notification 全模块 IPC 命令合约验证 + DBG-4 PTY 命令 payload 契约守卫（3 条：键集合精确匹配）+ hooks_context_usage 四维验证 |
-| `src/__tests__/ipc-hooks-contract.test.ts` | 16 | hooks_inject/hooks_uninstall/hooks_injection_status/hooks_context_usage 四维验证（命令名/参数结构/返回值/异常传播）+ onHookEvent listen 绑定 |
+| `src/__tests__/ipc-contract.test.ts` | 65 | pty/fs/settings/notify/git/hooks/notification 全模块 IPC 命令合约验证 + DBG-4 PTY 命令 payload 契约守卫（3 条：键集合精确匹配） |
+| `src/__tests__/ipc-hooks-contract.test.ts` | 21 | hooks_inject/hooks_uninstall/hooks_injection_status/hooks_context_usage 四维验证（命令名/参数结构/返回值/异常传播）+ HookEventPayload 8 字段契约完整性 + onHookEvent listen 绑定 |
 | `src/__tests__/ipc-ping.test.ts` | 1 | mockIPC ping/pong 拦截 |
 
-### 终端面板（14 文件 / 198 用例）
+### 终端面板（15 文件 / 201 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
@@ -56,11 +56,12 @@
 | `src/__tests__/keyboard.test.ts` | 12 | `createTerminalShortcuts()` copy/paste/newline 经 active 指针派发 |
 | `src/__tests__/tab-title-registry.test.ts` | 8 | register/match、大小写、覆盖、`_reset()`、单例校验 |
 | `src/__tests__/terminal-registry.test.ts` | 7 | register/get/remove/has/幂等/clear |
-| `src/__tests__/e2e-gating-terminal.test.ts` | 5 | E2E helper 终端门控（`__e2e_sessionReady`/`__e2e_writeToPty` 等） |
 | `src/__tests__/tab-rules.test.ts` | 6 | side-effect import + `_reset()` 后手动注册 |
+| `src/__tests__/e2e-gating-terminal.test.ts` | 5 | E2E helper 终端门控（`__e2e_sessionReady`/`__e2e_writeToPty` 等） |
 | `src/__tests__/terminal-lifecycle.test.ts` | 4 | 挂载→创建→卸载→dispose 完整链路 |
 | `src/__tests__/terminal.test.tsx` | 4 | TerminalPanel 组件：loading 遮罩/Windows build/spawn |
 | `src/__tests__/active-terminal.test.ts` | 4 | active 指针 set/get/覆盖、clear 仅匹配时生效 |
+| `src/__tests__/terminal-registry-subscribe.test.ts` | 3 | TerminalRegistry.subscribe（register 通知/remove 通知/退订） |
 | `src/__tests__/detect-webgl.test.ts` | 3 | WebGL2 可用/不可用/抛异常 |
 | `src/__tests__/terminal-strictmode.test.ts` | 2 | `smGuardRef` 防双重挂载 |
 
@@ -84,9 +85,9 @@
 | `src/__tests__/title-manager.test.ts` | 44 | terminal-N 递增/编辑器 basename/同名冲突相对路径/handleSaveAs/onDeletePage/suffix 标题生成/冲突重算保留后缀/findExistingEditor 匹配隔离 |
 | `src/__tests__/panel-registry.test.ts` | 29 | 注册表/PANEL_TYPES/isValidPanelType/FILE_PANEL_TYPES（5 面板：terminal/editor/htmlviewer/gitshow/diff） |
 | `src/__tests__/layout-serde.test.ts` | 21 | 旧格式修补/白名单过滤/深拷贝/嵌套 branch/activeGroup 保留 |
+| `src/__tests__/workspace-defaulttab.test.tsx` | 22 | DefaultTab 渲染 + `onDidParametersChange` 事件结构回归 |
 | `src/__tests__/workspace-header-actions.test.tsx` | 16 | RightHeader Watermark 按钮/页签操作 |
 | `src/__tests__/workspace-switch-order.test.tsx` | 14 | DBG-9：`switchToPage` 时序契约——`setProjectRoot` 先于 `setActivePage` 生效/reject 降级/SEC-01 effect 兜底/兼容性排查 |
-| `src/__tests__/workspace-defaulttab.test.tsx` | 22 | DefaultTab 渲染 + `onDidParametersChange` 事件结构回归 |
 | `src/__tests__/workspace-file-panel-types.test.ts` | 13 | FILE_PANEL_TYPES/isAlwaysRenderPanel（5 面板：terminal/editor/htmlviewer/gitshow/diff） |
 | `src/__tests__/default-layout-format.test.ts` | 8 | grid/panels/activeGroup/orientation 格式验证 |
 | `src/__tests__/layout-switch.test.ts` | 7 | 页面切换集成/自切换守卫 |
@@ -168,23 +169,24 @@
 | `src/__tests__/use-panel-focus.test.ts` | 5 | focusin→pushContext+onActivate/focusout→popContext+onDeactivate/卸载清理 |
 | `src/__tests__/wire-keybindings.test.ts` | 3 | 立即应用/store 变更重应用/unsubscribe |
 
-### 主题/配色/基础（5 文件 / 102 用例）
+### 主题/配色/基础（6 文件 / 113 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
+| `src/__tests__/claude-status.test.ts` | 30 | `eventToStatus` 纯函数全分支：10 事件 × notificationType 组合（PreToolUse→⚡/PostToolUse→⚡/Notification 三类→🟡/其他→null/SessionEnd→✅/Error→❌/Stop/Result/Permission/Idle→null）+ OSC 133 C 设 🟡 语义注释说明 + getStatusIcon |
 | `src/__tests__/path.test.ts` | 27 | normalizePath/basename/isChildOf/relativePath 边界覆盖 |
 | `src/__tests__/inject-script.test.ts` | 21 | HTML 脚本注入/`</script>` 转义/幂等/大小写不敏感/键盘转发+片段链接拦截 |
-| `src/__tests__/claude-status.test.ts` | 30 | `eventToStatus` 纯函数全分支：10 事件 × notificationType 组合（PreToolUse→⚡/PostToolUse→⚡/Notification 三类→🟡/其他→null/SessionEnd→✅/Error→❌/Stop/Result/Permission/Idle→null）+ OSC 133 C 设 🟡 语义注释说明 + getStatusIcon |
-| `src/__tests__/colors.test.ts` | 12 | 配色 token 值校验（压缩后，原 61 条冗余断言合并） |
+| `src/__tests__/colors.test.ts` | 13 | 配色 token 值校验 + AGENT_STATUS_USAGE_COLORS 三 token（low #629755 / medium #BBB529 / high #F44747）hex 合法性 |
 | `src/__tests__/theme.test.ts` | 12 | terminalOptions: ANSI 16 色/font/cursor/scrollback/kittyKeyboard |
+| `src/__tests__/panelId.test.ts` | 5 | parseTerminalPageId（正常段/含连字符 pageId/非数字尾段/非 terminal 前缀/两段→null） |
 
-### 通知/Agent 状态（3 文件 / 62 用例）
+### 通知/Agent 状态（3 文件 / 74 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
-| `src/__tests__/notifications.test.ts` | 33 | useClaudeNotifications hook 全分支（hook-event 通知调度/窗口失焦门控/toast 去重/transcript_path 提取/toast 点击路由到对应终端面板/Notification 类型过滤/应用失焦预检/应用重新聚焦后 flush 积压/并发竞态）|
-| `src/__tests__/agent-status-hook.test.ts` | 21 | useAgentStatus hook（context_usage 轮询/状态机四态/数据刷新/错误降级/清空逻辑/hook-event 订阅刷新触发）|
-| `src/__tests__/agent-status-view.test.tsx` | 8 | AgentStatusView 组件渲染（四态 UI/数据展示/tooltip/空态/加载态/错误态）|
+| `src/__tests__/notifications.test.ts` | 32 | useClaudeNotifications hook（hook-event 通知调度/窗口失焦门控/toast 去重/transcript_path 提取/toast 点击路由到对应终端面板/Notification 类型过滤/应用重新聚焦后 flush 积压/并发竞态/sendClickableNotification 回调绑定/onclick 聚焦+路由） |
+| `src/__tests__/agent-status-hook.test.ts` | 31 | useAgentStatus hook 事件驱动全分支：无活跃项目→no-root/空 terminal→empty/TerminalRegistry 初始扫描生成行/PreToolUse→⚡/SessionStart 插入新行/Stop→✅/SessionEnd+Exit 移除行/跨项目过滤/倒序排列/transcriptPath 触发 contextUsage 拉取/null 跳过/错误降级/无 transcriptPath 不触发/FE-05 null 状态不覆盖/FE-03 TerminalRegistry.subscribe 增删/FE-04 dockviewApi 标题查找+回退/FE-06 重渲染无额外订阅 |
+| `src/__tests__/agent-status-view.test.tsx` | 11 | AgentStatusView 组件：no-root 占位/empty 占位/两行渲染/点击行调用 switchToPageAndFocus/用量条填充宽度/usage 为 null 或 undefined 显示 '--'/分段颜色断言（<50% low/#629755、50-80% medium/#BBB529、>80% high/#F44747）/切换项目行清空 |
 
 ### 启动/关闭（3 文件 / 18 用例）
 
@@ -227,32 +229,39 @@
 | `test/terminal/ansi-correctness.test.ts` | 30 | ANSI 颜色正确性——16 色前景/背景、256 色（标准/216 色立方/灰度）、TrueColor 24-bit 前景/背景/混合、SGR 属性（粗体/斜体/下划线/双下划线/慢闪/反显/隐藏/删除线/弱化/上划线）、SGR 组合叠加、SGR 重置/子参数重置、DEC 私有模式（DECTCEM/DECOM/DECAWM）、DECSC/DECRC、RIS、DECSTBM |
 | `test/terminal/osc.test.ts` | 9 | OSC 序列——标题（OSC 0/2 BEL/ST）、调色板（OSC 4 单索引/多索引）、嵌入完整性（OSC 在正常输出中/穿插文本/后紧跟文本不丢失） |
 
-## L4 — E2E 端到端测试（1 文件 / 18 用例）
+## L4 — E2E 端到端测试（1 文件 / 22 用例，20 active + 2 skip）
 
 运行：`npm run e2e`（= `npm run build:e2e` + `npm run wdio`）  
 技术栈：WDIO + `@wdio/tauri-service` 1.1.0 + embedded driver（`webview2-com` COM 直连 `ICoreWebView2`）
 
-| 用例 | 覆盖范围 |
-|------|---------|
-| 应正常启动并显示 slTerminal 标题 | 应用启动 + 窗口标题验证 |
-| 打开终端→写入文本→验证缓冲含 e2e_marker | 完整 PTY 通信链路（createProject→addPanel→spawn→write→read） |
-| 终端面板可通过 E2E helper 写入文本并读取 | 键盘快捷键→剪贴板→终端粘贴 |
-| 终端页签标题为 terminal-N | 页签默认标题 + 动态修改（`api.setTitle`） |
-| 编辑器页签标题为文件名 | 编辑器标题 = basename + registerAndRecompute |
-| 同名文件冲突时显示相对路径 | titleManager 冲突检测（`src/index.ts` vs `lib/index.ts`） |
-| 关闭同名面板后剩余面板切回 basename | 关闭冲突面板后自动重算标题 |
-| 聚焦编辑器后 Ctrl+S → 经 capture 路径真实写盘（mtime 更新） | capture 监听 + context 栈匹配 + 命令 handler + 写盘全链路 |
-| 编辑器 dirty→clean 保存 | 外部写盘→auto-reload→Ctrl+S 保存新内容→磁盘断言 |
-| iframe 内 Ctrl+W → postMessage 转发关闭该 HTML 页签 | postMessage 键盘桥：注入脚本→parent.postMessage→handleMessage 校验 origin→ShortcutRegistry 分发→global.closeTab（forwardGlobalShortcuts 已删除，FE-13） |
-| 内联 `<script>` 与内联事件属性在预览中执行 | CSP 修复：真实 WebView2 强制 CSP 下经 srcdoc opaque origin 验证内联脚本+onclick 执行 |
-| should preserve terminal content after switching to another page and back | H6 终端跨页面存活（多 Dockview 实例 + CSS 显隐） |
-| 点击侧栏按钮切换视图显示/隐藏（R1/R2） | 活动栏按钮真实点击→open 状态变化→侧栏区 visible 联动→store 状态断言 |
-| 拖拽按钮跨区移动（R6/R7） | DataTransfer 合成拖拽事件跨区→zones + open 跟随（R6 跟随替换/R7 未打开仅归属）→store 状态断言 |
-| Commit 视图应显示真实的 Changes 与 Unversioned 文件列表 | git CLI 搭建真实仓库（init+commit+modified+untracked）→toggleSideView("commit")→断言 Changes/Unversioned 条目数与文件名 |
-| 双击 modified 文件应打开 diff 页签 | 双击 modified 文件 → 断言 __dockviewApi 出现 title 含 `(git diff)` 的面板且存在 `data-e2e="diff-left"`/`diff-right` |
-| 注入 hooks 后状态回显应为 injected | `hooks.inject()` → `hooks.getInjectionStatus()` → 断言 `{ status: "injected" }`；`hooks.uninstall()` → 断言 `{ status: "notInjected" }` |
-| Node 写信号文件后终端页签出现 emoji 并随后消失 | Node 子进程写 `~/.slterminal/hooks-events/` 信号文件（PreToolUse→⚡）→ 断言 DefaultTab 渲染对应 emoji；写 SessionEnd→✅ → 短暂显示后恢复无图标 |
-| Agent Status 视图可通过活动栏按钮打开并显示上下文用量 | toggleSideView("agent-status") → 断言视图容器出现 + hooks_context_usage IPC 返回 ContextUsage 数据 |
+| 用例 | 状态 | 覆盖范围 |
+|------|------|---------|
+| 应正常启动并显示 slTerminal 标题 | active | 应用启动 + 窗口标题验证 |
+| 打开终端→写入文本→验证缓冲含 e2e_marker | active | 完整 PTY 通信链路（createProject→addPanel→spawn→write→read） |
+| 终端面板可通过 E2E helper 写入文本并读取 | active | 键盘快捷键→剪贴板→终端粘贴 |
+| 终端页签标题为 terminal-N | active | 页签默认标题 + 动态修改（`api.setTitle`） |
+| 编辑器页签标题为文件名 | active | 编辑器标题 = basename + registerAndRecompute |
+| 同名文件冲突时显示相对路径 | active | titleManager 冲突检测（`src/index.ts` vs `lib/index.ts`） |
+| 关闭同名面板后剩余面板切回 basename | active | 关闭冲突面板后自动重算标题 |
+| 聚焦编辑器后 Ctrl+S → 经 capture 路径真实写盘（mtime 更新） | active | capture 监听 + context 栈匹配 + 命令 handler + 写盘全链路 |
+| 编辑器 dirty→clean 保存 | active | 外部写盘→auto-reload→Ctrl+S 保存新内容→磁盘断言 |
+| iframe 内 Ctrl+W → postMessage 转发关闭该 HTML 页签 | active | postMessage 键盘桥：注入脚本→parent.postMessage→handleMessage 校验 origin→ShortcutRegistry 分发→global.closeTab（forwardGlobalShortcuts 已删除，FE-13） |
+| 内联 `<script>` 与内联事件属性在预览中执行 | skip | CSP 修复：真实 WebView2 强制 CSP 下经 srcdoc opaque origin 验证内联脚本+onclick 执行（skip 原因：执行断言不稳定） |
+| should preserve terminal content after switching to another page and back | active | H6 终端跨页面存活（多 Dockview 实例 + CSS 显隐） |
+| 点击侧栏按钮切换视图显示/隐藏（R1/R2） | active | 活动栏按钮真实点击→open 状态变化→侧栏区 visible 联动→store 状态断言 |
+| 拖拽按钮跨区移动（R6/R7） | active | DataTransfer 合成拖拽事件跨区→zones + open 跟随（R6 跟随替换/R7 未打开仅归属）→store 状态断言 |
+| Commit 视图应显示真实的 Changes 与 Unversioned 文件列表 | active | git CLI 搭建真实仓库（init+commit+modified+untracked）→toggleSideView("commit")→断言 Changes/Unversioned 条目数与文件名 |
+| 双击 modified 文件应打开 diff 页签 | active | 双击 modified 文件 → 断言 __dockviewApi 出现 title 含 `(git diff)` 的面板且存在 `data-e2e="diff-left"`/`diff-right` |
+| 注入 hooks 后状态回显应为 injected | active | `hooks.inject()` → `hooks.getInjectionStatus()` → 断言 `{ status: "injected" }`；`hooks.uninstall()` → 断言 `{ status: "notInjected" }` |
+| Node 写信号文件后终端页签出现 emoji 并随后消失 | active | Node 子进程写 `~/.slterminal/hooks-events/` 信号文件（PreToolUse→⚡）→ 断言 DefaultTab 渲染对应 emoji；写 SessionEnd→✅ → 短暂显示后恢复无图标 |
+| Agent Status 视图可通过活动栏按钮打开 | active | toggleSideView("agent-status") → 断言视图容器出现 + AGENT STATUS 标题栏渲染 |
+| Agent Status 静态行渲染（🟡 + 用量条容器） | active | 创建终端面板 → TerminalRegistry 初始扫描生成 🟡 行 → 断言 `agent-status-row` 渲染 + status emoji + 用量条容器存在 |
+| Agent Status 动态四态（PreToolUse→⚡, Stop→✅, SessionEnd→行消失） | active | 照信号文件驱动先例——Node 原子写 `.tmp→.json` 信号文件驱动 PreToolUse→⚡（断言行含 ⚡）、Stop→✅（断言行含 ✅）、SessionEnd→行消失（断言 `agent-status-row` 移除） |
+| toast 触发链路需人工验证（失焦 + 权限请求 / Stop / 错误） | skip | 通知 toast 全链路验证（skip 原因：权限弹窗需用户交互，自动化不可行） |
+
+### E2E settings.json 隔离机制（FIX-TE-04）
+
+`run-wdio.cjs` 启动时备份 `~/.slterminal/settings.json`（存在时复制为 `settings.json.e2e-bak`），`process.on('exit')` 中同步还原——原文件存在时用备份覆盖 E2E 产物，原文件不存在时删除运行期间产生的 `settings.json`。node22 直跑/下载/fallback 三路径均受 `exit` 钩子覆盖。
 
 ### E2E 键盘输入限制（TE-17）
 
@@ -274,7 +283,7 @@ embedded WDIO 驱动**无法将 OS 级按键（`browser.keys`）投递进 WebVie
 
 ## 历史变更
 
-- 2026-07-28：Phase 1 review 对账并入 phase2——按 phase2 代码树全量实查修正计数漂移并补登记漏建行。L1：git/mod.rs 70→88、state.rs 15→24、settings.rs 15→17、pty/spawn.rs 29→28（env 注入测试在集成测试）、pty_integration_tests.rs 7→8、补登 projects.rs(12)，318→359（16→18 文件）。L2：claude-status 14→30、workspace-defaulttab 14→22、use-xterm-lifecycle 77→79、tab-rules 5→6、projects 41→45、explorer-delete 13→19、commit-view 28→35、diff-panel 11→30、gitshow-panel 13→19、shortcuts 50→53、command-catalog 10→13、reserved 8→9；补登 7 文件（activeExplorer 6、commit-context-menu 13、explorer-focus 3、explorer-keyboard 15、explorer-rename-keyboard 5、explorer-rename-state 8、explorer-selection 14），90→97 文件；各小节小计按行实算重核（终端面板 188→198、工作区 187→186、Store 77→81、资源管理器 156→213、Commit 28→48、Diff/GitShow 40→65、快捷键 116→114、主题 78→102、HTML 68→69、E2E 辅助 21→24）。L2 1497→1552。全量 1949→2045。
+- 2026-07-28（Phase 2 FIX-DOC-01）：按实跑全量重写。L1：mod.rs 剔除 hooks_context_usage（不存在）、usage.rs 改正函数名为 parse_usage_line/scan_transcript_usage。L2：ipc-hooks-contract 16→21（+5 条 contextUsage 合约 + HookEventPayload 字段约束）、notifications 33→32（-1，剔 4 项不存在描述并补 sendClickableNotification 回调绑定/onclick 聚焦路由）、agent-status-hook 21→31（+10，剔"轮询"改事件驱动 + FE-03 TerminalRegistry.subscribe 增删 + FE-04 dockviewApi 标题查找与回退 + FE-05 null 不覆盖 + FE-06 无额外订阅）、agent-status-view 8→11（+3，剔 tooltip/加载态/错误态 + 补用量条分段颜色断言 + 点击路由 switchToPageAndFocus）、colors 12→13（+1 AGENT_STATUS_USAGE_COLORS 三 token）。补登 2 新文件：panelId.test.ts（5）+ terminal-registry-subscribe.test.ts（3）。L2 1552→1578，97→99 文件。L4：Agent Status 原 skip 拆为 3 条 active（视图存在性 + 静态行渲染 + 动态四态信号文件），toast 保持 it.skip，CSP 脚本用例保持 skip；18→22（20 active + 2 skip）。全量 2045→2075。
 - 2026-07-27：Stage 2 通知/Agent 状态——L1 hooks 模块拆分为 5 文件（mod.rs 10→8、inject.rs 12→20、新增 signal.rs 9 + watcher.rs 6 + usage.rs 23），L1 274→318。L2 IPC 层 ipc-contract 53→65（+12：notification + hooks_context_usage 合约）、ipc-hooks-contract 8→16（+8：hooks_context_usage）；新增「通知/Agent 状态」类目 3 文件 62 用例（notifications 33 + agent-status-hook 21 + agent-status-view 8），L2 1415→1497。L4 新增 Agent Status 视图 1 用例，17→18。全量 1822→1949。
 - 2026-07-26：hooks 宿主侧增强（P1-DOC）——L1 新增「hooks」模块 2 文件 22 用例（mod.rs 10 + inject.rs 12）+ pty/spawn.rs 28→29（+1 env 注入）。L2 新增「hooks」IPC 合约 1 文件 8 用例（ipc-hooks-contract）+「claude-status」纯函数 1 文件 14 用例；终端面板 use-xterm-lifecycle 71→77（+6 hook-event 过滤/F3 四态）。L4 新增 hooks 注入/信号 2 用例，15→17。L1 251→274，L2 1387→1415，L4 15→17，全量 1769→1822。
 - 2026-07-19：commit 视图（CV-DOC）——L1 git/mod.rs 62→70（+8：git_file_at_head/recurse_untracked_dirs/oldPath/rename_detection），L1 243→251。L2 新增「Commit 视图」类目 1 文件 28 用例 +「Diff/GitShow 面板」3 文件 40 用例（diff-alignment 16 + diff-panel 11 + gitshow-panel 13），既有文件增量：ipc-contract 50→53 + git-gutter 20→28 + panel-registry 23→29 + title-manager 36→44 + workspace-file-panel-types 11→13。L2 1207→1387。L4 新增「commit 视图」describe 2 用例，14→15。全量 1580→1769。

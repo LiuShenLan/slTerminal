@@ -78,7 +78,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `SideBarArea.tsx` | 侧栏区组件：`<Allotment vertical proportionalLayout>` 两 pane（上/下半区），每 pane `visible={!!open[zone]}`、`preferredSize` 由 splitRatio 控制；半区内按 zones 顺序渲染视图槽（`display: open[zone]===v.id ? "flex" : "none"` 保挂载）；onChange 仅双开时换算 ratio 写回 store |
 | `../agentStatus/AgentStatusView.tsx` | `agent-status` 视图组件：订阅 `useAgentStatus()` hook 渲染 Agent 会话状态列表 |
 | `../agentStatus/AgentStatusRow.tsx` | Agent 会话行组件：渲染单行状态信息（模型、token 用量等） |
-| `../agentStatus/useAgentStatus.ts` | 数据 hook：`useAgentStatus()` 返回 `AgentStatusResult`（`state` 状态 + `rows: AgentSessionRow[]`），消费 `src/ipc/hooks` 的 `onHookEvent` |
+| `../agentStatus/useAgentStatus.ts` | 数据 hook：`useAgentStatus()` 返回 `AgentStatusResult`（`state` 状态 + `rows: AgentSessionRow[]`）。事件驱动——消费 `onHookEvent` + 订阅 `TerminalRegistry.subscribe` 联动行增删；`eventToStatus` 返回 null 时跳过状态覆盖（仅刷新 lastEventAt/transcriptPath）；标题通过 `getPageApi(pageId)` 查页签标题（无 dockviewApi 时回退 `终端 {pageId}`） |
 | `../agentStatus/consts.ts` | 常量定义：`CLAUDE_CONTEXT_LIMIT = 200_000` |
 | `../agentStatus/index.ts` | barrel export：`export { AgentStatusView }` |
 

@@ -18,7 +18,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `settings.ts` | settings | `load_settings`, `save_settings` |
 | `projects.ts` | projects | `load_projects`, `save_projects`（绕过路径 sandbox，exe 同级 `slterminal-projects.json`） |
 | `notify.ts` | `notify/` | `notify_watch`、`onFsEvent`（`listen("fs-event")` 封装） |
-| `notification.ts` | Tauri plugin notification | 封装 `isPermissionGranted` / `requestPermission` / `sendNotification` |
+| `notification.ts` | Tauri plugin notification | re-export `isPermissionGranted` / `requestPermission` / `sendNotification` + `ensureNotificationPermission()` + `sendClickableNotification(title, {body}, onClick): Notification \| null`（Web Notification API 可点击 toast + catch 回退 Tauri sendNotification） |
 | `clipboard.ts` | Tauri plugin | 直接 re-export `@tauri-apps/plugin-clipboard-manager`。由 `keyboard.ts`（Ctrl+Shift+C/V）和 `useXterm.ts`（OSC 52 handler）消费 |
 | `dialog.ts` | Tauri plugin | 直接 re-export `@tauri-apps/plugin-dialog` |
 | `window.ts` | Tauri Window API | `registerCloseHandler` — 封装 `onCloseRequested` 关闭生命周期 |
@@ -32,13 +32,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Channel 模式**：流式数据（如 PTY 输出）通过 `Channel<T>` 推送，调用方传入 `onOutput` 回调。
 - **Event 模式**：`onFsEvent` 封装 Tauri `listen<FsEvent>("fs-event")`，返回 unsubscribe 函数。`registerCloseHandler` 封装 `getCurrentWindow().onCloseRequested` 生命周期。
 - **类型对应**：封装函数的参数/返回值使用 `src/types/` 中的 DTO 类型，与 Rust 端 `snake_case` 字段对应。
-- **thin wrapper**：clipboard、dialog、shell 和 notification 是 Tauri 官方插件的直接 re-export，仅为了聚合到本层，不添加额外逻辑。新增 Tauri 插件导入遵循同一模式。
+- **thin wrapper**：clipboard、dialog、shell 是 Tauri 官方插件的直接 re-export，仅为了聚合到本层，不添加额外逻辑。notification 包含 `sendClickableNotification` 工厂逻辑（Web Notification API 可点击 toast + catch 回退 Tauri sendNotification），非纯 re-export。新增 Tauri 插件导入遵循同一模式。
 - **命名**：函数名 camelCase，对应的 Rust 命令为 snake_case（如 `pty_spawn` → `spawn()`）。
 - **参数序列化**：`Uint8Array` 需转 `Array.from(data)` 再传给 `invoke`（`pty.write`）。`write`/`resize`/`kill` 的 invoke payload 均含 `panelId`（后端 SEC-08 归属校验），调用方须传入作用域内现成的 panelId。
 
 ## 测试模式
 
-测试文件：`src/__tests__/ipc-contract.test.ts`（50 用例，含 3 条 DBG-4 契约守卫）+ `ipc-ping.test.ts`（1 用例）+ `ipc-hooks-contract.test.ts`（8 用例）。
+测试文件：`src/__tests__/ipc-contract.test.ts`（65 用例，含 3 条 DBG-4 契约守卫）+ `ipc-ping.test.ts`（1 用例）+ `ipc-hooks-contract.test.ts`（21 用例）。
 
 ### IPC 合约测试
 

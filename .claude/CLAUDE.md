@@ -108,7 +108,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | src/ipc/shell.ts | openUrl wrapper（封装 @tauri-apps/plugin-opener） | src/ipc/shell.ts | @../src/ipc/CLAUDE.md |
 | src/panels | Dockview 面板系统（terminal + editor + html + gitshow + diff） | src/panels/index.ts | @../src/panels/CLAUDE.md |
 | src/stores | Zustand 状态管理（projects/layout/fontSize/keybindings） | src/stores/index.ts | @../src/stores/CLAUDE.md |
-| src/workspace | 工作区布局管理（Dockview serde + 面板注册 + titleManager） | src/workspace/Workspace.tsx | @../src/workspace/CLAUDE.md |
+| src/workspace | 工作区布局管理（Dockview serde + 面板注册 + titleManager + pageApis） | src/workspace/Workspace.tsx | @../src/workspace/CLAUDE.md |
 | src/lib | 通用工具 + createActivePointer 泛型工厂 + useFontSizeWheel 共享 hook + ErrorBoundary + E2E_ENABLED 门控开关（路径函数 `basename`/`isChildOf`/`relativePath`） | src/lib/index.ts | @../src/lib/CLAUDE.md |
 | src/features/explorer | 文件浏览器（FileTree + 选中模型 + 键盘快捷键 Del/Enter/F2 + useFileTree gen 取消 + FileViewerRegistry 分派） | src/features/explorer/ExplorerPanel.tsx | @../src/features/explorer/CLAUDE.md |
 | src/features/fileViewers | 文件查看器注册表（策略模式，扩展名→面板类型映射） | src/features/fileViewers/index.ts | @../src/features/fileViewers/CLAUDE.md |
