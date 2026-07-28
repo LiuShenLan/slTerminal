@@ -18,6 +18,7 @@ const {
   return {
     mockTerminalRegistry: {
       getAll: vi.fn(() => new Map<string, unknown>()),
+      subscribe: vi.fn(() => () => {}),
       _reset: vi.fn(),
       _size: vi.fn(() => 0),
     },
@@ -56,6 +57,7 @@ vi.mock("../ipc/hooks", () => ({
 
 vi.mock("../workspace/pageApis", () => ({
   switchToPageAndFocus: mockSwitchToPageAndFocus,
+  getPageApi: vi.fn(() => undefined),
 }));
 
 vi.mock("../lib/claudeStatus", () => ({

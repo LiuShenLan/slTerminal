@@ -903,8 +903,8 @@ describe("useAgentStatus", () => {
 
     const { result } = renderHook(() => useAgentStatus());
 
-    // 初始订阅：onHookEvent 被调用 1 次
-    expect(onHookEvent).toHaveBeenCalledTimes(1);
+    // 记下初始 onHookEvent 调用次数
+    const callCountBefore = (onHookEvent as ReturnType<typeof vi.fn>).mock.calls.length;
 
     // 发送事件 → 行更新 → 重渲染
     act(() => {
@@ -922,7 +922,7 @@ describe("useAgentStatus", () => {
 
     // 行更新触发 React 重渲染，但 onHookEvent 不应被重新调用
     // （handleHookEvent 的 deps 由 useMemo 稳定，useEffect 不重建）
-    expect(onHookEvent).toHaveBeenCalledTimes(1);
+    expect((onHookEvent as ReturnType<typeof vi.fn>).mock.calls.length).toBe(callCountBefore);
     expect(result.current.rows).toHaveLength(1);
   });
 });

@@ -95,7 +95,7 @@ vi.mock("../ipc/hooks", () => ({
   inject: () => Promise.resolve({ status: "notInjected", version: null }),
   uninstall: () => Promise.resolve(),
   getInjectionStatus: () => Promise.resolve({ status: "notInjected", version: null }),
-  getContextUsage: () => Promise.resolve(null),
+  contextUsage: () => Promise.resolve(null),
 }));
 
 // 全局 mock：@tauri-apps/api/window（App useEffect 中 getCurrentWindow/onFocusChanged 依赖）

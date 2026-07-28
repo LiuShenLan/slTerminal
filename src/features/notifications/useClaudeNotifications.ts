@@ -190,7 +190,7 @@ export function useClaudeNotifications(): void {
       }
 
       // 发送可点击 toast
-      sendClickableNotification("slTerminal", bodyParts, () => {
+      sendClickableNotification("slTerminal", { body: bodyParts }, () => {
         // 聚焦窗口（也会自动停止任务栏闪烁）
         setFocus().catch(() => {});
         // 路由到对应面板

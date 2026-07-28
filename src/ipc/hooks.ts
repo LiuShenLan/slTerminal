@@ -42,13 +42,6 @@ export async function getInjectionStatus(): Promise<HookInjectionStatus> {
  * 读取 transcript JSONL 文件尾部约 64KB，逆行扫描含 usage 的行，
  * 返回 input/output token 数。无 usage 或文件异常返回 null。
  */
-export async function getContextUsage(
-  transcriptPath: string,
-): Promise<ContextUsage | null> {
-  return invoke("hooks_context_usage", { transcriptPath });
-}
-
-/** 查询 token 用量（便捷别名，等价于 getContextUsage） */
 export async function contextUsage(
   transcriptPath: string,
 ): Promise<ContextUsage | null> {

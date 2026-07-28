@@ -132,7 +132,7 @@ pub struct ContextUsage {
 }
 ```
 
-前端对应 `src/types/hooks.ts` 的 `ContextUsage` 接口（`inputTokens` / `outputTokens`：`number`），IPC 封装见 `src/ipc/hooks.ts` 的 `getContextUsage(transcriptPath)` / `contextUsage(transcriptPath)`。
+前端对应 `src/types/hooks.ts` 的 `ContextUsage` 接口（`inputTokens` / `outputTokens`：`number`），IPC 封装见 `src/ipc/hooks.ts` 的 `contextUsage(transcriptPath)`。
 
 ## 实现要点
 

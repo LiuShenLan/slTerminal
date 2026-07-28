@@ -21,6 +21,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 // eslint-disable-next-line no-restricted-imports
 import { listen } from "@tauri-apps/api/event";
+import type { ContextUsage } from "../types/hooks";
 import * as hooks from "../ipc/hooks";
 
 afterEach(() => {
@@ -264,5 +265,80 @@ describe("onHookEvent 合约", () => {
     expect(payload.toolName).toBe("read");
     // notificationType 可为 null
     expect(payload.notificationType).toBeNull();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// hooks_context_usage（token 用量查询）
+// ═══════════════════════════════════════════════════════════════════
+
+describe("contextUsage 合约", () => {
+  // 维度 1：命令名
+  it("应调用 hooks_context_usage 命令", async () => {
+    const spy = vi.fn();
+    mockIPC((cmd, args) => {
+      spy(cmd, args);
+      if (cmd === "hooks_context_usage") return null;
+    });
+
+    await hooks.contextUsage("/path/to/transcript.jsonl");
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    const [cmd] = spy.mock.calls[0] as [string, Record<string, unknown>];
+    expect(cmd).toBe("hooks_context_usage");
+  });
+
+  // 维度 2：参数结构
+  it("应传递 { transcriptPath } 参数", async () => {
+    const spy = vi.fn();
+    mockIPC((cmd, args) => {
+      spy(cmd, args);
+      if (cmd === "hooks_context_usage") return null;
+    });
+
+    await hooks.contextUsage("/tmp/transcript-abc.jsonl");
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    const [, args] = spy.mock.calls[0] as [string, Record<string, unknown>];
+    expect(args).toEqual({ transcriptPath: "/tmp/transcript-abc.jsonl" });
+    // 仅含 transcriptPath 一个字段
+    expect(Object.keys(args as Record<string, unknown>)).toEqual(["transcriptPath"]);
+  });
+
+  // 维度 3：正常返回透传——ContextUsage 对象
+  it("有 usage 数据时透传 ContextUsage 对象", async () => {
+    const mockUsage: ContextUsage = { inputTokens: 1500, outputTokens: 800 };
+    mockIPC((cmd) => {
+      if (cmd === "hooks_context_usage") return { ...mockUsage };
+    });
+
+    const result = await hooks.contextUsage("/transcript.jsonl");
+
+    expect(result).not.toBeNull();
+    expect(result).toEqual(mockUsage);
+    expect(result!.inputTokens).toBe(1500);
+    expect(result!.outputTokens).toBe(800);
+  });
+
+  // 维度 3：正常返回透传——null（无 usage 数据）
+  it("无 usage 数据时透传 null", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "hooks_context_usage") return null;
+    });
+
+    const result = await hooks.contextUsage("/empty.jsonl");
+
+    expect(result).toBeNull();
+  });
+
+  // 维度 4：异常传播
+  it("invoke 失败时异常应传播给调用方", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "hooks_context_usage") throw new Error("transcript 文件不存在");
+    });
+
+    await expect(
+      hooks.contextUsage("/nonexistent.jsonl"),
+    ).rejects.toThrow("transcript 文件不存在");
   });
 });

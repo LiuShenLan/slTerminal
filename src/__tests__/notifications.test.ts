@@ -232,10 +232,10 @@ describe("F4 通知门控", () => {
 
     // 验证 toast 发送
     expect(mockSendClickableNotification).toHaveBeenCalledTimes(1);
-    const [title, body, onClick] = mockSendClickableNotification.mock
-      .calls[0] as [string, string, () => void];
+    const [title, options, onClick] = mockSendClickableNotification.mock
+      .calls[0] as [string, { body: string }, () => void];
     expect(title).toBe("slTerminal");
-    expect(body).toContain("权限请求");
+    expect(options.body).toContain("权限请求");
     expect(typeof onClick).toBe("function");
 
     // 验证任务栏闪烁
@@ -256,9 +256,9 @@ describe("F4 通知门控", () => {
     });
 
     expect(mockSendClickableNotification).toHaveBeenCalledTimes(1);
-    const [, body] = mockSendClickableNotification.mock
-      .calls[0] as [string, string, () => void];
-    expect(body).toContain("权限请求");
+    const [, options] = mockSendClickableNotification.mock
+      .calls[0] as [string, { body: string }, () => void];
+    expect(options.body).toContain("权限请求");
     expect(mockRequestUserAttention).toHaveBeenCalledWith(1);
   });
 
@@ -274,9 +274,9 @@ describe("F4 通知门控", () => {
     });
 
     expect(mockSendClickableNotification).toHaveBeenCalledTimes(1);
-    const [, body] = mockSendClickableNotification.mock
-      .calls[0] as [string, string, () => void];
-    expect(body).toContain("任务完成");
+    const [, options] = mockSendClickableNotification.mock
+      .calls[0] as [string, { body: string }, () => void];
+    expect(options.body).toContain("任务完成");
 
     // Stop 不是权限事件，不闪烁
     expect(mockRequestUserAttention).not.toHaveBeenCalled();
@@ -294,9 +294,9 @@ describe("F4 通知门控", () => {
     });
 
     expect(mockSendClickableNotification).toHaveBeenCalledTimes(1);
-    const [, body] = mockSendClickableNotification.mock
-      .calls[0] as [string, string, () => void];
-    expect(body).toContain("错误");
+    const [, options] = mockSendClickableNotification.mock
+      .calls[0] as [string, { body: string }, () => void];
+    expect(options.body).toContain("错误");
 
     // 错误不是权限事件，不闪烁
     expect(mockRequestUserAttention).not.toHaveBeenCalled();
@@ -312,9 +312,9 @@ describe("F4 通知门控", () => {
     });
 
     expect(mockSendClickableNotification).toHaveBeenCalledTimes(1);
-    const [, body] = mockSendClickableNotification.mock
-      .calls[0] as [string, string, () => void];
-    expect(body).toContain("错误");
+    const [, options] = mockSendClickableNotification.mock
+      .calls[0] as [string, { body: string }, () => void];
+    expect(options.body).toContain("错误");
   });
 
   // ── 聚焦时门控 ───────────────────────────────────────────
@@ -480,13 +480,13 @@ describe("F4 通知门控", () => {
     });
 
     expect(mockSendClickableNotification).toHaveBeenCalledTimes(1);
-    const [, body] = mockSendClickableNotification.mock
-      .calls[0] as [string, string, () => void];
-    expect(body).toContain("测试项目");
-    expect(body).toContain("任务完成");
+    const [, options] = mockSendClickableNotification.mock
+      .calls[0] as [string, { body: string }, () => void];
+    expect(options.body).toContain("测试项目");
+    expect(options.body).toContain("任务完成");
     // findPanelTitle 经 getPageApi(p1) 查询页签标题，mock 返回 mockApi → mockPanel.title="终端 1"
     // panelId "terminal-p1-0" 在 body 中正常（标题未找到时回退 panelId）
-    expect(body).toContain("terminal-p1-0");
+    expect(options.body).toContain("terminal-p1-0");
   });
 
   it("dockviewApi 不可用时回退 panelId 作为标题", () => {
@@ -504,10 +504,10 @@ describe("F4 通知门控", () => {
     });
 
     expect(mockSendClickableNotification).toHaveBeenCalledTimes(1);
-    const [, body] = mockSendClickableNotification.mock
-      .calls[0] as [string, string, () => void];
+    const [, options] = mockSendClickableNotification.mock
+      .calls[0] as [string, { body: string }, () => void];
     // 回退到 panelId
-    expect(body).toContain("terminal-p1-0");
+    expect(options.body).toContain("terminal-p1-0");
   });
 
   // ── 非终端 panelId 不触发（panelId 解析失败） ─────────────
@@ -574,7 +574,7 @@ describe("toast onClick 路由", () => {
 
     expect(mockSendClickableNotification).toHaveBeenCalledTimes(1);
     const args = mockSendClickableNotification.mock
-      .calls[0] as [string, string, () => void];
+      .calls[0] as [string, { body: string }, () => void];
     const onClick = args[2];
     expect(typeof onClick).toBe("function");
     return onClick;
@@ -639,7 +639,7 @@ describe("toast onClick 路由", () => {
       }));
     });
 
-    const onClick = (mockSendClickableNotification.mock.calls[0] as [string, string, () => void])[2];
+    const onClick = (mockSendClickableNotification.mock.calls[0] as [string, { body: string }, () => void])[2];
 
     // 不应抛异常
     await act(async () => {
@@ -684,7 +684,7 @@ describe("toast onClick 路由", () => {
       }));
     });
 
-    const onClick = (mockSendClickableNotification.mock.calls[0] as [string, string, () => void])[2];
+    const onClick = (mockSendClickableNotification.mock.calls[0] as [string, { body: string }, () => void])[2];
 
     await act(async () => {
       onClick();

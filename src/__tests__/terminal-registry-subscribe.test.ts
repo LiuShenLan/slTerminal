@@ -3,6 +3,13 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { TerminalRegistry } from "../panels/terminal/TerminalRegistry";
+import type { RegisteredTerminal } from "../panels/terminal/TerminalRegistry";
+
+/** 测试用 stub——仅用作 subscribe 通知 payload，不实际调用 */
+function stubTerminal(): RegisteredTerminal {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return { term: {} as any, sessionId: "s1", webglAddon: null, fitAddon: {} as any };
+}
 
 beforeEach(() => {
   TerminalRegistry._reset();
@@ -13,12 +20,7 @@ describe("TerminalRegistry.subscribe", () => {
     const listener = vi.fn();
     TerminalRegistry.subscribe(listener);
 
-    TerminalRegistry.register("terminal-p1-0", {
-      term: {} as any,
-      sessionId: "s1",
-      webglAddon: null,
-      fitAddon: {} as any,
-    });
+    TerminalRegistry.register("terminal-p1-0", stubTerminal());
 
     expect(listener).toHaveBeenCalledTimes(1);
     expect(listener).toHaveBeenCalledWith({ type: "register", panelId: "terminal-p1-0" });
@@ -28,12 +30,7 @@ describe("TerminalRegistry.subscribe", () => {
 
   it("remove 时通知全部 listener（同步，Map 变更之后）", () => {
     const listener = vi.fn();
-    TerminalRegistry.register("terminal-p1-0", {
-      term: {} as any,
-      sessionId: "s1",
-      webglAddon: null,
-      fitAddon: {} as any,
-    });
+    TerminalRegistry.register("terminal-p1-0", stubTerminal());
     TerminalRegistry.subscribe(listener);
 
     const result = TerminalRegistry.remove("terminal-p1-0");
@@ -50,12 +47,7 @@ describe("TerminalRegistry.subscribe", () => {
     const unsubscribe = TerminalRegistry.subscribe(listener);
     unsubscribe();
 
-    TerminalRegistry.register("terminal-p1-0", {
-      term: {} as any,
-      sessionId: "s1",
-      webglAddon: null,
-      fitAddon: {} as any,
-    });
+    TerminalRegistry.register("terminal-p1-0", stubTerminal());
     TerminalRegistry.remove("terminal-p1-0");
 
     expect(listener).not.toHaveBeenCalled();
