@@ -209,6 +209,14 @@ CC settings.json 的三个编辑层级——user（`~/.claude/settings.json`）�
 **双模式面板**：
 hooks 配置编辑面板的两种编辑模式——GUI 表单（Master-Detail）与 JSON 编辑器（CM6 + Schema 校验），顶部切换、实时同步编辑同一份配置。
 
+**Agent Status 视图**：
+侧栏视图（id `agent-status`，图标 🤖），一屏总览当前活跃项目所有运行中的 claude 会话——四态、上下文用量条、最后事件时间，点击行跳转聚焦对应终端页签。会话退出（SessionEnd / OSC 133 D）行即移除，非历史列表。
+_Avoid_: agent 面板, 会话列表
+
+**会话行**：
+Agent Status 视图中的一行，对应一个**运行中的 claude 会话**（非终端面板——纯 shell 终端无行）。经 OSC 133 C（命令检测，未注入 hooks 的会话也有行，四态 🟡、用量条不可用态）或 SessionStart（hook 事件）建立；上下文用量由信号文件 transcriptPath 定位 transcript JSONL 后端解析，事件驱动更新、不轮询。
+_Avoid_: 终端行
+
 ---
 
 ## 同义词/废弃术语
