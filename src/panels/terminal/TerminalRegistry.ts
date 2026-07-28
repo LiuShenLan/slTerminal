@@ -15,12 +15,23 @@ export interface RegisteredTerminal {
   fitAddon: FitAddon;
 }
 
+/** 注册表变更事件 */
+export type RegistryEvent = { type: "register" | "remove"; panelId: string };
+
 const registry = new Map<string, RegisteredTerminal>();
+const listeners = new Set<(e: RegistryEvent) => void>();
+
+function notify(event: RegistryEvent): void {
+  for (const fn of listeners) {
+    fn(event);
+  }
+}
 
 export const TerminalRegistry = {
   register(panelId: string, entry: RegisteredTerminal): void {
     // 幂等：覆盖旧条目（防御重复 mount）
     registry.set(panelId, entry);
+    notify({ type: "register", panelId });
   },
 
   get(panelId: string): RegisteredTerminal | undefined {
@@ -28,7 +39,11 @@ export const TerminalRegistry = {
   },
 
   remove(panelId: string): boolean {
-    return registry.delete(panelId);
+    const existed = registry.delete(panelId);
+    if (existed) {
+      notify({ type: "remove", panelId });
+    }
+    return existed;
   },
 
   has(panelId: string): boolean {
@@ -38,6 +53,14 @@ export const TerminalRegistry = {
   /** 返回所有已注册终端的 panelId → RegisteredTerminal 映射（只读副本，防止外部修改内部 Map） */
   getAll(): ReadonlyMap<string, RegisteredTerminal> {
     return new Map(registry);
+  },
+
+  /** 订阅注册表变更：register 或 remove 后同步通知。返回退订函数 */
+  subscribe(listener: (e: RegistryEvent) => void): () => void {
+    listeners.add(listener);
+    return () => {
+      listeners.delete(listener);
+    };
   },
 
   /** 仅用于调试/测试 */
@@ -53,5 +76,6 @@ export const TerminalRegistry = {
   /** 仅用于调试/测试 */
   _reset(): void {
     registry.clear();
+    listeners.clear();
   },
 };

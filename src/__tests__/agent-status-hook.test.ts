@@ -2,7 +2,9 @@
 //
 // 覆盖：事件到达插入/更新行、Stop 事件状态变 done 且保留、
 // SessionEnd/Exit 移除行、过滤非当前项目事件、按 lastEventAt 倒序、
-// contextUsage 在含 transcriptPath 时被调用。
+// contextUsage 在含 transcriptPath 时被调用、
+// FE-03 TerminalRegistry 订阅增删、FE-04 标题查找、FE-05 null 状态跳过、
+// FE-06 onHookEvent 重订阅次数稳定。
 //
 // mock 模式：vi.hoisted() 共享状态 + 模块级 vi.mock() +
 // 真实 Zustand stores（setState 种子）+ renderHook + act/waitFor。
@@ -14,8 +16,11 @@ const {
   capturedCallback,
   mockContextUsage,
   terminalMap,
+  registryListeners,
+  mockGetPageApi,
 } = vi.hoisted(() => {
   const map = new Map<string, unknown>();
+  const listeners = new Set<(e: { type: string; panelId: string }) => void>();
   return {
     // 保存 onHookEvent 注册的回调引用，供测试手动触发事件
     capturedCallback: {
@@ -23,47 +28,56 @@ const {
     },
     mockContextUsage: vi.fn(),
     terminalMap: map,
+    registryListeners: listeners,
+    mockGetPageApi: vi.fn(),
   };
 });
 
-// ── mock TerminalRegistry（仅 key 有意义，值可为任意对象） ──
+// ── mock TerminalRegistry（含 subscribe + register/remove 通知） ──
 vi.mock("../panels/terminal/TerminalRegistry", () => ({
   TerminalRegistry: {
     register: vi.fn((panelId: string, entry: unknown) => {
       terminalMap.set(panelId, entry);
+      for (const fn of registryListeners) {
+        fn({ type: "register", panelId });
+      }
     }),
     get: vi.fn((panelId: string) => terminalMap.get(panelId)),
-    remove: vi.fn((panelId: string) => terminalMap.delete(panelId)),
+    remove: vi.fn((panelId: string) => {
+      const existed = terminalMap.delete(panelId);
+      if (existed) {
+        for (const fn of registryListeners) {
+          fn({ type: "remove", panelId });
+        }
+      }
+      return existed;
+    }),
     has: vi.fn((panelId: string) => terminalMap.has(panelId)),
     getAll: vi.fn(() => new Map(terminalMap)),
-    _reset: vi.fn(() => terminalMap.clear()),
+    subscribe: vi.fn(
+      (listener: (e: { type: string; panelId: string }) => void) => {
+        registryListeners.add(listener);
+        return () => {
+          registryListeners.delete(listener);
+        };
+      },
+    ),
+    _reset: vi.fn(() => {
+      terminalMap.clear();
+      registryListeners.clear();
+    }),
     _size: vi.fn(() => terminalMap.size),
     _dump: vi.fn(() => Array.from(terminalMap.keys())),
   },
 }));
 
-// ── mock claudeStatus（照 checklist 映射表：Stop→done, StopFailure→error, PermissionRequest→attention） ──
-vi.mock("../lib/claudeStatus", () => ({
-  eventToStatus: vi.fn(
-    (e: string) =>
-      (
-        {
-          Stop: "done",
-          StopFailure: "error",
-          PermissionRequest: "attention",
-        } as Record<string, string | null>
-      )[e] ?? "working",
-  ),
-  getStatusIcon: vi.fn((s: string | null) => {
-    const icons: Record<string, string> = {
-      working: "⚡",
-      attention: "🟡",
-      done: "✅",
-      error: "❌",
-    };
-    return s ? (icons[s] ?? "") : "";
-  }),
-  STATUS_EMOJI: { working: "⚡", attention: "🟡", done: "✅", error: "❌" },
+// ── mock workspace/pageApis（getPageApi 供标题查找） ──
+vi.mock("../workspace/pageApis", () => ({
+  getPageApi: (pageId: string) => mockGetPageApi(pageId),
+  registerPageApi: vi.fn(),
+  unregisterPageApi: vi.fn(),
+  switchToPageShared: vi.fn(),
+  switchToPageAndFocus: vi.fn(),
 }));
 
 // ── mock ipc/hooks（覆盖 setup.ts 全局 mock，捕获回调 + 可控 contextUsage） ──
@@ -76,7 +90,8 @@ vi.mock("../ipc/hooks", () => ({
   }),
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   contextUsage: ((path: string) => mockContextUsage(path)) as any,
-  inject: () => Promise.resolve({ status: "notInjected" as const, version: null }),
+  inject: () =>
+    Promise.resolve({ status: "notInjected" as const, version: null }),
   uninstall: () => Promise.resolve(),
   getInjectionStatus: () =>
     Promise.resolve({ status: "notInjected" as const, version: null }),
@@ -86,6 +101,8 @@ import { renderHook, act, waitFor } from "@testing-library/react";
 import { useLayout } from "../stores/layout";
 import { useProjects } from "../stores/projects";
 import { useAgentStatus } from "../features/agentStatus/useAgentStatus";
+import { TerminalRegistry } from "../panels/terminal/TerminalRegistry";
+import { onHookEvent } from "../ipc/hooks";
 
 // ═══════════════════════════════════════════════════════════════════
 // 辅助函数
@@ -126,7 +143,7 @@ function seedProject(
   return { projectId, pageId };
 }
 
-/** 在 mock TerminalRegistry 中注册一个终端（panelId 格式 terminal-{pageId}-{seq}） */
+/** 在 mock TerminalRegistry 中注册一个终端（直接操作 Map，不触发 subscribe 通知） */
 function registerTerminal(panelId: string) {
   terminalMap.set(panelId, {
     term: {} as unknown,
@@ -175,12 +192,16 @@ describe("useAgentStatus", () => {
       deletionLock: { pendingDelete: null, acquiredAt: null },
       expandedNodes: {},
     });
-    // 重置 terminalMap
+    // 重置 terminalMap + listeners
     terminalMap.clear();
+    registryListeners.clear();
     // 重置 hooks mock
     capturedCallback.current = null;
     mockContextUsage.mockReset();
     mockContextUsage.mockResolvedValue(null);
+    // 重置 pageApis mock（默认无 api）
+    mockGetPageApi.mockReset();
+    mockGetPageApi.mockReturnValue(undefined);
   });
 
   afterEach(() => {
@@ -279,7 +300,7 @@ describe("useAgentStatus", () => {
     expect(result.current.rows[0].status).toBe("working");
   });
 
-  it("SessionStart 事件到达 → 插入新行（TerminalRegistry 中无该 terminal）", () => {
+  it("SessionStart 事件到达 → 插入新行（TerminalRegistry 中无该 terminal），状态为 attention", () => {
     seedProject();
     // 不预先注册 terminal——测试事件驱动插入
 
@@ -296,11 +317,10 @@ describe("useAgentStatus", () => {
       );
     });
 
-    // SessionStart 不在 Stop/SessionEnd/Exit 特判中 → 按 eventToStatus 映射
-    // mock: SessionStart → "working"（?? "working" 兜底）
+    // SessionStart 不在 Stop/SessionEnd/Exit 特判中 → 真实 eventToStatus: SessionStart → "attention"
     expect(result.current.rows).toHaveLength(1);
     expect(result.current.rows[0].panelId).toBe("terminal-page1-0");
-    expect(result.current.rows[0].status).toBe("working");
+    expect(result.current.rows[0].status).toBe("attention");
   });
 
   // ── T3：Stop 置 done 且保留 ──
@@ -319,6 +339,7 @@ describe("useAgentStatus", () => {
     });
 
     expect(result.current.rows).toHaveLength(1);
+    // 真实 eventToStatus: Stop → "done"（不再依赖 Stop 特判）
     expect(result.current.rows[0].status).toBe("done");
     expect(result.current.rows[0].lastEventAt).toBe(4000);
   });
@@ -618,6 +639,7 @@ describe("useAgentStatus", () => {
 
     // 应只有一行（同一 panelId），且状态和时间戳已更新
     expect(result.current.rows).toHaveLength(1);
+    // PostToolUse → "working"（真实映射）
     expect(result.current.rows[0].status).toBe("working");
     expect(result.current.rows[0].lastEventAt).toBe(2000);
   });
@@ -628,7 +650,7 @@ describe("useAgentStatus", () => {
 
     const { result } = renderHook(() => useAgentStatus());
 
-    // Stop → done
+    // Stop → done（真实 eventToStatus）
     act(() => {
       capturedCallback.current?.(
         makePayload({ event: "Stop", timestamp: 1000 }),
@@ -665,6 +687,242 @@ describe("useAgentStatus", () => {
       });
     }).not.toThrow();
 
+    expect(result.current.rows).toHaveLength(1);
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // FE-05: null 状态不覆盖已有行状态
+  // ═══════════════════════════════════════════════════════════════════
+
+  it("FE-05：⚡ 行收到 Notification(auth_success) 后状态仍为 ⚡（null 不覆盖）", () => {
+    seedProject();
+    registerTerminal("terminal-page1-0");
+
+    const { result } = renderHook(() => useAgentStatus());
+
+    // 先发送 PreToolUse → working (⚡)
+    act(() => {
+      capturedCallback.current?.(
+        makePayload({ event: "PreToolUse", timestamp: 1000 }),
+      );
+    });
+    expect(result.current.rows[0].status).toBe("working");
+
+    // 发送 Notification(auth_success) → 真实 eventToStatus 返回 null
+    act(() => {
+      capturedCallback.current?.(
+        makePayload({
+          event: "Notification",
+          notificationType: "auth_success",
+          timestamp: 2000,
+        }),
+      );
+    });
+
+    // 状态应保持 working，不被 null 覆盖
+    expect(result.current.rows[0].status).toBe("working");
+    // 但 lastEventAt 应刷新
+    expect(result.current.rows[0].lastEventAt).toBe(2000);
+  });
+
+  it("FE-05：未知事件（eventToStatus 返回 null）不覆盖状态", () => {
+    seedProject();
+    registerTerminal("terminal-page1-0");
+
+    const { result } = renderHook(() => useAgentStatus());
+
+    // 初始状态 attention
+    expect(result.current.rows[0].status).toBe("attention");
+
+    act(() => {
+      capturedCallback.current?.(
+        makePayload({
+          event: "UnknownEvent",
+          timestamp: 2000,
+        }),
+      );
+    });
+
+    // 状态保持 attention，不被 null 覆盖
+    expect(result.current.rows[0].status).toBe("attention");
+    expect(result.current.rows[0].lastEventAt).toBe(2000);
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // FE-03: TerminalRegistry 订阅——register 插入行、remove 移除行
+  // ═══════════════════════════════════════════════════════════════════
+
+  it("FE-03：TerminalRegistry.register 触发订阅 → 插入 🟡 行", () => {
+    seedProject();
+
+    const { result } = renderHook(() => useAgentStatus());
+    expect(result.current.rows).toHaveLength(0);
+
+    // 通过 TerminalRegistry.register 注册终端（触发 subscribe 通知）
+    act(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (TerminalRegistry as any).register("terminal-page1-0", {
+        term: {},
+        sessionId: "s-new",
+        webglAddon: null,
+        fitAddon: {},
+      });
+    });
+
+    expect(result.current.rows).toHaveLength(1);
+    expect(result.current.rows[0].panelId).toBe("terminal-page1-0");
+    expect(result.current.rows[0].status).toBe("attention");
+    expect(result.current.rows[0].pageId).toBe("page1");
+  });
+
+  it("FE-03：TerminalRegistry.register 另一个项目终端 → 不插入（过滤）", () => {
+    seedProject("proj-1", "page1");
+
+    const { result } = renderHook(() => useAgentStatus());
+    expect(result.current.rows).toHaveLength(0);
+
+    act(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (TerminalRegistry as any).register("terminal-page2-0", {
+        term: {},
+        sessionId: "s-other",
+        webglAddon: null,
+        fitAddon: {},
+      });
+    });
+
+    // page2 不在当前项目 → 不插入
+    expect(result.current.rows).toHaveLength(0);
+  });
+
+  it("FE-03：TerminalRegistry.remove 触发订阅 → 移除对应行", () => {
+    seedProject();
+    registerTerminal("terminal-page1-0");
+    registerTerminal("terminal-page1-1");
+
+    const { result } = renderHook(() => useAgentStatus());
+    expect(result.current.rows).toHaveLength(2);
+
+    act(() => {
+      TerminalRegistry.remove("terminal-page1-0");
+    });
+
+    expect(result.current.rows).toHaveLength(1);
+    expect(result.current.rows[0].panelId).toBe("terminal-page1-1");
+  });
+
+  it("FE-03：TerminalRegistry.register 已存在的 panelId → 不重复插入", () => {
+    seedProject();
+    registerTerminal("terminal-page1-0");
+
+    const { result } = renderHook(() => useAgentStatus());
+    expect(result.current.rows).toHaveLength(1);
+
+    // 再次 register 同一 panelId（幂等覆盖）
+    act(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (TerminalRegistry as any).register("terminal-page1-0", {
+        term: {},
+        sessionId: "s-dup",
+        webglAddon: null,
+        fitAddon: {},
+      });
+    });
+
+    // 不应创建重复行
+    expect(result.current.rows).toHaveLength(1);
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // FE-04: 行标题查 dockviewApi
+  // ═══════════════════════════════════════════════════════════════════
+
+  it("FE-04：getPageApi 返回带 title 面板 → 行标题为页签标题", () => {
+    mockGetPageApi.mockImplementation(() => ({
+      getPanel: (panelId: string) =>
+        panelId === "terminal-page1-0"
+          ? { title: "我的终端", focus: vi.fn() }
+          : undefined,
+    }));
+
+    seedProject();
+    registerTerminal("terminal-page1-0");
+
+    const { result } = renderHook(() => useAgentStatus());
+
+    expect(result.current.rows).toHaveLength(1);
+    expect(result.current.rows[0].title).toBe("我的终端");
+  });
+
+  it("FE-04：getPageApi 返回 undefined → 回退标题 终端 {pageId}", () => {
+    mockGetPageApi.mockReturnValue(undefined);
+
+    seedProject();
+    registerTerminal("terminal-page1-0");
+
+    const { result } = renderHook(() => useAgentStatus());
+
+    expect(result.current.rows).toHaveLength(1);
+    expect(result.current.rows[0].title).toBe("终端 page1");
+  });
+
+  it("FE-04：事件到达时刷新已有行标题", () => {
+    // 初始时 getPageApi 不存在 → 回退标题
+    mockGetPageApi.mockReturnValue(undefined);
+
+    seedProject();
+    registerTerminal("terminal-page1-0");
+
+    const { result } = renderHook(() => useAgentStatus());
+    expect(result.current.rows[0].title).toBe("终端 page1");
+
+    // 后面 getPageApi 就绪 → 事件到达后标题应刷新
+    mockGetPageApi.mockImplementation(() => ({
+      getPanel: (panelId: string) =>
+        panelId === "terminal-page1-0"
+          ? { title: "新标题", focus: vi.fn() }
+          : undefined,
+    }));
+
+    act(() => {
+      capturedCallback.current?.(
+        makePayload({ event: "PreToolUse", timestamp: 3000 }),
+      );
+    });
+
+    expect(result.current.rows[0].title).toBe("新标题");
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // FE-06: onHookEvent 订阅不因渲染重建
+  // ═══════════════════════════════════════════════════════════════════
+
+  it("FE-06：行更新触发重渲染后 onHookEvent 调用次数不增", () => {
+    seedProject();
+    registerTerminal("terminal-page1-0");
+
+    const { result } = renderHook(() => useAgentStatus());
+
+    // 初始订阅：onHookEvent 被调用 1 次
+    expect(onHookEvent).toHaveBeenCalledTimes(1);
+
+    // 发送事件 → 行更新 → 重渲染
+    act(() => {
+      capturedCallback.current?.(
+        makePayload({ event: "PreToolUse", timestamp: 1000 }),
+      );
+    });
+
+    // 发送第二个事件
+    act(() => {
+      capturedCallback.current?.(
+        makePayload({ event: "PostToolUse", timestamp: 2000 }),
+      );
+    });
+
+    // 行更新触发 React 重渲染，但 onHookEvent 不应被重新调用
+    // （handleHookEvent 的 deps 由 useMemo 稳定，useEffect 不重建）
+    expect(onHookEvent).toHaveBeenCalledTimes(1);
     expect(result.current.rows).toHaveLength(1);
   });
 });

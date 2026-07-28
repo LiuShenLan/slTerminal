@@ -13,6 +13,7 @@ import type { SideViewComponentProps } from "../sideViews/sideViewRegistry";
 import { useAgentStatus } from "./useAgentStatus";
 import { AgentStatusRow } from "./AgentStatusRow";
 import { switchToPageAndFocus } from "../../workspace/pageApis";
+import { parseTerminalPageId } from "../../lib/panelId";
 import {
   SEPARATOR_BG,
   INPUT_BORDER,
@@ -61,16 +62,8 @@ export const AgentStatusView: React.FC<SideViewComponentProps> = (_props) => { /
   // 点击行 → 解析 pageId → switchToPageAndFocus（共享函数处理切换+聚焦）
   const handleFocus = useCallback(
     async (panelId: string) => {
-      // 解析 pageId：格式 terminal-{pageId}-{seq}（Stage 02 收敛到 src/lib/panelId.ts）
-      const withoutPrefix = panelId.startsWith("terminal-")
-        ? panelId.slice("terminal-".length)
-        : panelId;
-      const lastDash = withoutPrefix.lastIndexOf("-");
-      const pageId =
-        lastDash > 0 && /^\d+$/.test(withoutPrefix.slice(lastDash + 1))
-          ? withoutPrefix.slice(0, lastDash)
-          : withoutPrefix;
-
+      const pageId = parseTerminalPageId(panelId);
+      if (!pageId) return;
       await switchToPageAndFocus(pageId, panelId);
     },
     [],

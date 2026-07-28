@@ -20,6 +20,7 @@ import {
 } from "../../ipc/window";
 import { useProjects } from "../../stores/projects";
 import { switchToPageAndFocus, getPageApi } from "../../workspace/pageApis";
+import { parseTerminalPageId } from "../../lib/panelId";
 
 /** 通知事件类别 */
 type NotifyCategory = "permission" | "done" | "error";
@@ -68,18 +69,6 @@ function classifyEvent(payload: HookEventPayload): NotifyCategory | null {
 }
 
 /**
- * 从终端 panelId 解析 pageId
- *
- * 格式：terminal-{pageId}-{seq}（如 terminal-p1-0）
- * 按 "-" 分割取中间段，支持 pageId 本身含 "-"
- */
-function parsePageId(panelId: string): string | null {
-  const parts = panelId.split("-");
-  if (parts.length < 3 || parts[0] !== "terminal") return null;
-  return parts.slice(1, -1).join("-");
-}
-
-/**
  * 根据 pageId 查找所属 projectId
  */
 function findProjectIdForPage(pageId: string): string | null {
@@ -99,7 +88,7 @@ function findProjectIdForPage(pageId: string): string | null {
  */
 function findPanelTitle(panelId: string): string {
   try {
-    const pageId = parsePageId(panelId);
+    const pageId = parseTerminalPageId(panelId);
     if (!pageId) return panelId;
     const api = getPageApi(pageId);
     if (!api) return panelId;
@@ -115,7 +104,7 @@ function findPanelTitle(panelId: string): string {
  * Toast 点击路由：解析 pageId → 委托共享函数切换页面并聚焦面板
  */
 async function routeToPanel(panelId: string): Promise<void> {
-  const pageId = parsePageId(panelId);
+  const pageId = parseTerminalPageId(panelId);
   if (!pageId) return;
   await switchToPageAndFocus(pageId, panelId);
 }
@@ -177,7 +166,7 @@ export function useClaudeNotifications(): void {
       const panelTitle = findPanelTitle(payload.panelId);
 
       // 获取项目名：从 panelId 反查
-      const pageId = parsePageId(payload.panelId);
+      const pageId = parseTerminalPageId(payload.panelId);
       let projectName = "";
       if (pageId) {
         const projectId = findProjectIdForPage(pageId);
