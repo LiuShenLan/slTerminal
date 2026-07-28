@@ -1,25 +1,24 @@
 // useClaudeNotifications — F4 通知调度核心
 //
-// 订阅 hook-event 事件流，在窗口失焦时触发桌面 toast 通知。
+// 订阅 hook-event 事件流，在窗口失焦时触发桌面 toast 通知 + 任务栏闪烁。
 // 三类事件映射：权限请求 / 任务完成 / 错误。
-// toast 点击后聚焦窗口并路由到对应终端面板。
+// toast 已失去点击路由能力（sendToastNotification 无 onclick）——
+// 任务栏闪烁是唯一的回窗引导通道，三类事件全覆盖。
 //
 // P2-FE-05: 失焦门控 + 三类事件 toast + 任务栏闪烁
-// P2-FE-06: toast 点击路由（focus → switchToPage → focus panel）
+// P2-FE-09: 去路由化——删 routeToPanel/findPanelTitle/onClick 绑定，三类事件均闪烁
 
 import { useEffect, useRef } from "react";
 import { onHookEvent, type HookEventPayload } from "../../ipc/hooks";
 import {
   ensureNotificationPermission,
-  sendClickableNotification,
+  sendToastNotification,
 } from "../../ipc/notification";
 import {
   requestUserAttention,
-  setFocus,
   UserAttentionType,
 } from "../../ipc/window";
 import { useProjects } from "../../stores/projects";
-import { switchToPageAndFocus, getPageApi } from "../../workspace/pageApis";
 import { parseTerminalPageId } from "../../lib/panelId";
 
 /** 通知事件类别 */
@@ -82,42 +81,14 @@ function findProjectIdForPage(pageId: string): string | null {
 }
 
 /**
- * 根据 panelId 查找面板当前页签标题
- *
- * 经 pageApis 跨页面查 panel 的 title——不再依赖 __dockviewApi 恰好指向目标页。
- */
-function findPanelTitle(panelId: string): string {
-  try {
-    const pageId = parseTerminalPageId(panelId);
-    if (!pageId) return panelId;
-    const api = getPageApi(pageId);
-    if (!api) return panelId;
-    const panel = api.getPanel(panelId);
-    if (!panel) return panelId;
-    return panel.title ?? panelId;
-  } catch {
-    return panelId;
-  }
-}
-
-/**
- * Toast 点击路由：解析 pageId → 委托共享函数切换页面并聚焦面板
- */
-async function routeToPanel(panelId: string): Promise<void> {
-  const pageId = parseTerminalPageId(panelId);
-  if (!pageId) return;
-  await switchToPageAndFocus(pageId, panelId);
-}
-
-/**
  * 发送关注态任务栏闪烁
  *
  * Windows 上 UserAttentionType.Critical = FLASHW_TIMERNOFG，
  * 持续闪烁直到窗口获得焦点。
  */
 function flashTaskbar(): void {
-  requestUserAttention(UserAttentionType.Critical).catch(() => {
-    // 非关键——静默失败
+  requestUserAttention(UserAttentionType.Critical).catch((err) => {
+    console.error("flashTaskbar 失败:", err);
   });
 }
 
@@ -139,7 +110,7 @@ export function useClaudeNotifications(): void {
     if (!permissionEnsured) {
       permissionEnsured = true;
       ensureNotificationPermission().catch(() => {
-        // 权限被拒，后续 sendClickableNotification 会走回退路径
+        // 权限被拒——后续 sendToastNotification 内部 catch 会输出 console.error
       });
     }
 
@@ -162,9 +133,6 @@ export function useClaudeNotifications(): void {
         seenRef.current = new Set(entries.slice(-100));
       }
 
-      // 获取面板标题
-      const panelTitle = findPanelTitle(payload.panelId);
-
       // 获取项目名：从 panelId 反查
       const pageId = parseTerminalPageId(payload.panelId);
       let projectName = "";
@@ -176,26 +144,19 @@ export function useClaudeNotifications(): void {
         }
       }
 
-      // 构建 toast 正文：<项目名> · <页签标题> · <事件类别> · <时间>
+      // 构建 toast 正文：<项目名> · <事件类别> · <时间>
       const timeStr = new Date().toLocaleTimeString();
       const emoji = CATEGORY_EMOJI[category];
       const label = CATEGORY_LABEL[category];
-      const bodyParts = [projectName, panelTitle, `${emoji} ${label}`, timeStr]
+      const bodyParts = [projectName, `${emoji} ${label}`, timeStr]
         .filter(Boolean)
         .join(" · ");
 
-      // 权限请求类：闪烁任务栏
-      if (category === "permission") {
-        flashTaskbar();
-      }
+      // 三类事件均闪烁任务栏（toast 失去点击路由后，闪烁是唯一回窗引导通道）
+      flashTaskbar();
 
-      // 发送可点击 toast
-      sendClickableNotification("slTerminal", { body: bodyParts }, () => {
-        // 聚焦窗口（也会自动停止任务栏闪烁）
-        setFocus().catch(() => {});
-        // 路由到对应面板
-        routeToPanel(payload.panelId).catch(() => {});
-      });
+      // 发送 toast（Tauri 原生通道，无点击路由）
+      sendToastNotification("slTerminal", { body: bodyParts });
     });
 
     return unlisten;

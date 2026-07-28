@@ -1,12 +1,13 @@
-// notifications.test.ts — F4 通知门控与事件映射测试 (P2-TE-01)
+// notifications.test.ts — F4 通知门控与事件映射测试 (P2-TE-04)
 //
 // 覆盖：
 //   1. 窗口失焦 + PermissionRequest → toast 发送 + 任务栏闪烁
-//   2. 窗口失焦 + Stop → toast 发送（不含任务栏闪烁）
-//   3. 窗口失焦 + StopFailure → toast 发送（错误类别）
-//   4. 窗口聚焦时三类事件 → toast 不发送
-//   5. toast onClick → setFocus + switchToPageAndFocus 调用
-//   6. panel 已关闭时 onClick 不抛异常
+//   2. 窗口失焦 + Stop → toast 发送 + 任务栏闪烁
+//   3. 窗口失焦 + StopFailure → toast 发送（错误类别）+ 任务栏闪烁
+//   4. 窗口聚焦时三类事件 → toast 不发送、任务栏不闪烁
+//   5. toast 正文含项目名 + 事件类别（去路由化后不含面板标题）
+//   P2-TE-04: sendClickableNotification → sendToastNotification（两参数无 onClick）
+//             删 onClick 路由 describe 整块；任务栏闪烁三类均触发（原仅 permission）
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { renderHook, act } from "@testing-library/react";
@@ -16,25 +17,17 @@ import { renderHook, act } from "@testing-library/react";
 // ═══════════════════════════════════════════════════════════
 
 const {
-  mockSendClickableNotification,
+  mockSendToastNotification,
   mockRequestUserAttention,
-  mockSetFocus,
   mockOnHookEventCallback,
   mockEnsureNotificationPermission,
-  mockSetProjectRoot,
-  mockSwitchToPageAndFocus,
-  mockGetPageApi,
 } = vi.hoisted(() => ({
-  mockSendClickableNotification: vi.fn(),
+  mockSendToastNotification: vi.fn(),
   mockRequestUserAttention: vi.fn().mockResolvedValue(undefined),
-  mockSetFocus: vi.fn().mockResolvedValue(undefined),
   mockOnHookEventCallback: {
     cb: null as ((payload: import("../ipc/hooks").HookEventPayload) => void) | null,
   },
   mockEnsureNotificationPermission: vi.fn().mockResolvedValue(true),
-  mockSetProjectRoot: vi.fn().mockResolvedValue(undefined),
-  mockSwitchToPageAndFocus: vi.fn().mockResolvedValue(undefined),
-  mockGetPageApi: vi.fn().mockReturnValue(undefined),
 }));
 
 // ═══════════════════════════════════════════════════════════
@@ -42,7 +35,7 @@ const {
 // ═══════════════════════════════════════════════════════════
 
 vi.mock("../ipc/notification", () => ({
-  sendClickableNotification: mockSendClickableNotification,
+  sendToastNotification: mockSendToastNotification,
   ensureNotificationPermission: mockEnsureNotificationPermission,
   requestPermission: vi.fn(),
   isPermissionGranted: vi.fn(() => Promise.resolve(true)),
@@ -56,18 +49,8 @@ vi.mock("../ipc/hooks", () => ({
   contextUsage: vi.fn(),
 }));
 
-vi.mock("../ipc/fs", () => ({
-  setProjectRoot: mockSetProjectRoot,
-}));
-
-vi.mock("../../workspace/pageApis", () => ({
-  switchToPageAndFocus: mockSwitchToPageAndFocus,
-  getPageApi: mockGetPageApi,
-}));
-
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: vi.fn(() => ({
-    setFocus: mockSetFocus,
     requestUserAttention: mockRequestUserAttention,
     onFocusChanged: vi.fn(() => () => {}),
   })),
@@ -80,18 +63,6 @@ vi.mock("@tauri-apps/api/window", () => ({
 
 import { useClaudeNotifications } from "../features/notifications/useClaudeNotifications";
 import { useProjects } from "../stores/projects";
-import { useLayout } from "../stores/layout";
-
-// ── 类型 ───────────────────────────────────────────────────
-
-interface MockPanel {
-  focus: ReturnType<typeof vi.fn>;
-  title: string;
-}
-
-interface MockDockviewApi {
-  getPanel: ReturnType<typeof vi.fn>;
-}
 
 // ── 辅助函数 ───────────────────────────────────────────────
 
@@ -139,27 +110,6 @@ function seedProjects(): void {
   });
 }
 
-/** 在 useLayout 中设置活跃页面 */
-function seedLayout(pageId: string | null = "p1"): void {
-  useLayout.setState({ activePageId: pageId });
-}
-
-/** 构造 mock DockviewApi */
-function makeMockDockviewApi(
-  panels: Record<string, MockPanel>,
-): MockDockviewApi {
-  return {
-    getPanel: vi.fn((id: string) => panels[id] ?? null),
-  };
-}
-
-/** 设置 window.__dockviewApi（已由 mockGetPageApi 替代，保留供未来迁移） */
-function _setDockviewApi(api: MockDockviewApi): void {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (window as any).__dockviewApi = api;
-}
-void _setDockviewApi; // TS6133 抑制
-
 /** 设置窗口焦点状态 */
 function setWindowFocused(focused: boolean): void {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -175,7 +125,6 @@ describe("F4 通知门控", () => {
     // 重置所有 mock
     vi.clearAllMocks();
     mockOnHookEventCallback.cb = null;
-    mockGetPageApi.mockReturnValue(undefined);
 
     // 重置 stores 到初始状态
     useProjects.setState({
@@ -183,18 +132,14 @@ describe("F4 通知门控", () => {
       expandedNodes: {},
       deletionLock: { pendingDelete: null, acquiredAt: null },
     });
-    useLayout.setState({ activePageId: null });
+    // layout 重置（notifications 测试不依赖 activePageId）
 
     // 清除 window 全局
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    delete (window as any).__dockviewApi;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     delete (window as any).__slterm_windowFocused;
   });
 
   afterEach(() => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    delete (window as any).__dockviewApi;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     delete (window as any).__slterm_windowFocused;
   });
@@ -203,7 +148,6 @@ describe("F4 通知门控", () => {
 
   it("挂载时注册 onHookEvent 监听", () => {
     const { unmount } = renderHook(() => useClaudeNotifications());
-    // mockOnHookEventCallback.cb 在 effect 中由 onHookEvent mock 设置
     expect(mockOnHookEventCallback.cb).not.toBeNull();
     unmount();
   });
@@ -212,12 +156,7 @@ describe("F4 通知门控", () => {
     const { unmount } = renderHook(() => useClaudeNotifications());
     expect(mockOnHookEventCallback.cb).not.toBeNull();
     unmount();
-    // 卸载后 cb 仍引用旧函数——验证不抛异常即可（cleanup 已调）
   });
-
-  // 注意：ensureNotificationPermission 由模块级 permissionEnsured 守卫控制仅首次调用；
-  // 该变量在 describe 内多个测试间持久化，无法在 beforeEach 中重置（不修改生产代码），
-  // 故不单独断言调用次数。权限初始化行为由其余通知发送/门控用例间接覆盖。
 
   // ── 失焦 + 权限请求事件 ──────────────────────────────────
 
@@ -230,15 +169,14 @@ describe("F4 通知门控", () => {
       mockOnHookEventCallback.cb!(payload);
     });
 
-    // 验证 toast 发送
-    expect(mockSendClickableNotification).toHaveBeenCalledTimes(1);
-    const [title, options, onClick] = mockSendClickableNotification.mock
-      .calls[0] as [string, { body: string }, () => void];
+    // 验证 toast 发送（两参数，无 onClick）
+    expect(mockSendToastNotification).toHaveBeenCalledTimes(1);
+    const [title, options] = mockSendToastNotification.mock
+      .calls[0] as [string, { body: string }];
     expect(title).toBe("slTerminal");
     expect(options.body).toContain("权限请求");
-    expect(typeof onClick).toBe("function");
 
-    // 验证任务栏闪烁
+    // 验证任务栏闪烁（三类事件均触发）
     expect(mockRequestUserAttention).toHaveBeenCalledTimes(1);
     expect(mockRequestUserAttention).toHaveBeenCalledWith(1); // UserAttentionType.Critical
   });
@@ -255,16 +193,16 @@ describe("F4 通知门控", () => {
       mockOnHookEventCallback.cb!(payload);
     });
 
-    expect(mockSendClickableNotification).toHaveBeenCalledTimes(1);
-    const [, options] = mockSendClickableNotification.mock
-      .calls[0] as [string, { body: string }, () => void];
+    expect(mockSendToastNotification).toHaveBeenCalledTimes(1);
+    const [, options] = mockSendToastNotification.mock
+      .calls[0] as [string, { body: string }];
     expect(options.body).toContain("权限请求");
     expect(mockRequestUserAttention).toHaveBeenCalledWith(1);
   });
 
   // ── 失焦 + Stop 事件（任务完成）──────────────────────────
 
-  it("窗口失焦 + Stop 事件 → 发送 toast（不含任务栏闪烁）", () => {
+  it("窗口失焦 + Stop 事件 → 发送 toast + 任务栏闪烁", () => {
     setWindowFocused(false);
     renderHook(() => useClaudeNotifications());
 
@@ -273,18 +211,18 @@ describe("F4 通知门控", () => {
       mockOnHookEventCallback.cb!(payload);
     });
 
-    expect(mockSendClickableNotification).toHaveBeenCalledTimes(1);
-    const [, options] = mockSendClickableNotification.mock
-      .calls[0] as [string, { body: string }, () => void];
+    expect(mockSendToastNotification).toHaveBeenCalledTimes(1);
+    const [, options] = mockSendToastNotification.mock
+      .calls[0] as [string, { body: string }];
     expect(options.body).toContain("任务完成");
 
-    // Stop 不是权限事件，不闪烁
-    expect(mockRequestUserAttention).not.toHaveBeenCalled();
+    // P2-TE-04: Stop 也触发闪烁（三类全覆盖）
+    expect(mockRequestUserAttention).toHaveBeenCalledWith(1);
   });
 
   // ── 失焦 + StopFailure 事件（错误）───────────────────────
 
-  it("窗口失焦 + StopFailure 事件 → 发送 toast（错误类别）", () => {
+  it("窗口失焦 + StopFailure 事件 → 发送 toast（错误类别）+ 闪烁", () => {
     setWindowFocused(false);
     renderHook(() => useClaudeNotifications());
 
@@ -293,16 +231,16 @@ describe("F4 通知门控", () => {
       mockOnHookEventCallback.cb!(payload);
     });
 
-    expect(mockSendClickableNotification).toHaveBeenCalledTimes(1);
-    const [, options] = mockSendClickableNotification.mock
-      .calls[0] as [string, { body: string }, () => void];
+    expect(mockSendToastNotification).toHaveBeenCalledTimes(1);
+    const [, options] = mockSendToastNotification.mock
+      .calls[0] as [string, { body: string }];
     expect(options.body).toContain("错误");
 
-    // 错误不是权限事件，不闪烁
-    expect(mockRequestUserAttention).not.toHaveBeenCalled();
+    // P2-TE-04: StopFailure 也触发闪烁
+    expect(mockRequestUserAttention).toHaveBeenCalledWith(1);
   });
 
-  it("窗口失焦 + PostToolUseFailure 事件 → 发送 toast（错误类别）", () => {
+  it("窗口失焦 + PostToolUseFailure 事件 → 发送 toast（错误类别）+ 闪烁", () => {
     setWindowFocused(false);
     renderHook(() => useClaudeNotifications());
 
@@ -311,15 +249,18 @@ describe("F4 通知门控", () => {
       mockOnHookEventCallback.cb!(payload);
     });
 
-    expect(mockSendClickableNotification).toHaveBeenCalledTimes(1);
-    const [, options] = mockSendClickableNotification.mock
-      .calls[0] as [string, { body: string }, () => void];
+    expect(mockSendToastNotification).toHaveBeenCalledTimes(1);
+    const [, options] = mockSendToastNotification.mock
+      .calls[0] as [string, { body: string }];
     expect(options.body).toContain("错误");
+
+    // P2-TE-04: PostToolUseFailure 也触发闪烁
+    expect(mockRequestUserAttention).toHaveBeenCalledWith(1);
   });
 
   // ── 聚焦时门控 ───────────────────────────────────────────
 
-  it("窗口聚焦 + PermissionRequest 事件 → 不发送 toast", () => {
+  it("窗口聚焦 + PermissionRequest 事件 → 不发送 toast、不闪烁", () => {
     setWindowFocused(true);
     renderHook(() => useClaudeNotifications());
 
@@ -327,11 +268,11 @@ describe("F4 通知门控", () => {
       mockOnHookEventCallback.cb!(makePayload({ event: "PermissionRequest" }));
     });
 
-    expect(mockSendClickableNotification).not.toHaveBeenCalled();
+    expect(mockSendToastNotification).not.toHaveBeenCalled();
     expect(mockRequestUserAttention).not.toHaveBeenCalled();
   });
 
-  it("窗口聚焦 + Stop 事件 → 不发送 toast", () => {
+  it("窗口聚焦 + Stop 事件 → 不发送 toast、不闪烁", () => {
     setWindowFocused(true);
     renderHook(() => useClaudeNotifications());
 
@@ -339,10 +280,11 @@ describe("F4 通知门控", () => {
       mockOnHookEventCallback.cb!(makePayload({ event: "Stop" }));
     });
 
-    expect(mockSendClickableNotification).not.toHaveBeenCalled();
+    expect(mockSendToastNotification).not.toHaveBeenCalled();
+    expect(mockRequestUserAttention).not.toHaveBeenCalled();
   });
 
-  it("窗口聚焦 + StopFailure 事件 → 不发送 toast", () => {
+  it("窗口聚焦 + StopFailure 事件 → 不发送 toast、不闪烁", () => {
     setWindowFocused(true);
     renderHook(() => useClaudeNotifications());
 
@@ -350,21 +292,20 @@ describe("F4 通知门控", () => {
       mockOnHookEventCallback.cb!(makePayload({ event: "StopFailure" }));
     });
 
-    expect(mockSendClickableNotification).not.toHaveBeenCalled();
+    expect(mockSendToastNotification).not.toHaveBeenCalled();
+    expect(mockRequestUserAttention).not.toHaveBeenCalled();
   });
 
   // ── 窗口聚焦状态缺失时的行为 ────────────────────────────
 
   it("__slterm_windowFocused 未定义时按聚焦处理（不发送通知）", () => {
-    // 不设置 window.__slterm_windowFocused——模拟启动初期焦点状态未初始化
     renderHook(() => useClaudeNotifications());
 
     act(() => {
       mockOnHookEventCallback.cb!(makePayload({ event: "PermissionRequest" }));
     });
 
-    // window.__slterm_windowFocused !== false 条件不满足 → 跳过
-    expect(mockSendClickableNotification).not.toHaveBeenCalled();
+    expect(mockSendToastNotification).not.toHaveBeenCalled();
   });
 
   // ── 非通知事件不触发 ────────────────────────────────────
@@ -377,7 +318,8 @@ describe("F4 通知门控", () => {
       mockOnHookEventCallback.cb!(makePayload({ event: "PreToolUse" }));
     });
 
-    expect(mockSendClickableNotification).not.toHaveBeenCalled();
+    expect(mockSendToastNotification).not.toHaveBeenCalled();
+    expect(mockRequestUserAttention).not.toHaveBeenCalled();
   });
 
   it("失焦 + SessionStart 事件 → 不发送 toast", () => {
@@ -388,7 +330,7 @@ describe("F4 通知门控", () => {
       mockOnHookEventCallback.cb!(makePayload({ event: "SessionStart" }));
     });
 
-    expect(mockSendClickableNotification).not.toHaveBeenCalled();
+    expect(mockSendToastNotification).not.toHaveBeenCalled();
   });
 
   it("失焦 + SessionEnd 事件 → 不发送 toast", () => {
@@ -399,7 +341,7 @@ describe("F4 通知门控", () => {
       mockOnHookEventCallback.cb!(makePayload({ event: "SessionEnd" }));
     });
 
-    expect(mockSendClickableNotification).not.toHaveBeenCalled();
+    expect(mockSendToastNotification).not.toHaveBeenCalled();
   });
 
   it("失焦 + PostToolUse 事件 → 不发送 toast", () => {
@@ -410,7 +352,7 @@ describe("F4 通知门控", () => {
       mockOnHookEventCallback.cb!(makePayload({ event: "PostToolUse" }));
     });
 
-    expect(mockSendClickableNotification).not.toHaveBeenCalled();
+    expect(mockSendToastNotification).not.toHaveBeenCalled();
   });
 
   // ── 60s 内同事件去重 ─────────────────────────────────────
@@ -423,13 +365,13 @@ describe("F4 通知门控", () => {
     act(() => {
       mockOnHookEventCallback.cb!(payload);
     });
-    expect(mockSendClickableNotification).toHaveBeenCalledTimes(1);
+    expect(mockSendToastNotification).toHaveBeenCalledTimes(1);
 
     // 同一事件再次触发 → 去重跳过
     act(() => {
       mockOnHookEventCallback.cb!(payload);
     });
-    expect(mockSendClickableNotification).toHaveBeenCalledTimes(1);
+    expect(mockSendToastNotification).toHaveBeenCalledTimes(1);
   });
 
   it("不同 sessionId 或不同 event 的事件各自发送 toast", () => {
@@ -441,7 +383,7 @@ describe("F4 通知门控", () => {
         event: "Stop", sessionId: "s1", timestamp: 1000,
       }));
     });
-    expect(mockSendClickableNotification).toHaveBeenCalledTimes(1);
+    expect(mockSendToastNotification).toHaveBeenCalledTimes(1);
 
     // 不同的 sessionId
     act(() => {
@@ -449,7 +391,7 @@ describe("F4 通知门控", () => {
         event: "Stop", sessionId: "s2", timestamp: 1000,
       }));
     });
-    expect(mockSendClickableNotification).toHaveBeenCalledTimes(2);
+    expect(mockSendToastNotification).toHaveBeenCalledTimes(2);
 
     // 不同事件
     act(() => {
@@ -457,18 +399,14 @@ describe("F4 通知门控", () => {
         event: "StopFailure", sessionId: "s1", timestamp: 2000,
       }));
     });
-    expect(mockSendClickableNotification).toHaveBeenCalledTimes(3);
+    expect(mockSendToastNotification).toHaveBeenCalledTimes(3);
   });
 
-  // ── toast 正文内容验证 ───────────────────────────────────
+  // ── toast 正文内容验证（去面板标题后）─────────────────────
 
-  it("toast 正文含项目名和页签标题", () => {
+  it("toast 正文含项目名和事件类别（不再含面板标题）", () => {
     seedProjects();
     setWindowFocused(false);
-    // 设置 pageApis.getPageApi 返回 mock api 以提供面板标题
-    const mockPanel = { focus: vi.fn(), title: "终端 1" };
-    const mockApi = makeMockDockviewApi({ "terminal-p1-0": mockPanel });
-    mockGetPageApi.mockReturnValue(mockApi);
 
     renderHook(() => useClaudeNotifications());
 
@@ -479,224 +417,16 @@ describe("F4 通知门控", () => {
       }));
     });
 
-    expect(mockSendClickableNotification).toHaveBeenCalledTimes(1);
-    const [, options] = mockSendClickableNotification.mock
-      .calls[0] as [string, { body: string }, () => void];
+    expect(mockSendToastNotification).toHaveBeenCalledTimes(1);
+    const [, options] = mockSendToastNotification.mock
+      .calls[0] as [string, { body: string }];
     expect(options.body).toContain("测试项目");
     expect(options.body).toContain("任务完成");
-    // findPanelTitle 经 getPageApi(p1) 查询页签标题，mock 返回 mockApi → mockPanel.title="终端 1"
-    // panelId "terminal-p1-0" 在 body 中正常（标题未找到时回退 panelId）
-    expect(options.body).toContain("terminal-p1-0");
+    // 去路由化后 body 不再含 panelId/面板标题
+    expect(options.body).not.toContain("terminal-p1-0");
   });
 
-  it("dockviewApi 不可用时回退 panelId 作为标题", () => {
-    seedProjects();
-    setWindowFocused(false);
-    // 不设 __dockviewApi — 测试回退路径
-
-    renderHook(() => useClaudeNotifications());
-
-    act(() => {
-      mockOnHookEventCallback.cb!(makePayload({
-        event: "StopFailure",
-        panelId: "terminal-p1-0",
-      }));
-    });
-
-    expect(mockSendClickableNotification).toHaveBeenCalledTimes(1);
-    const [, options] = mockSendClickableNotification.mock
-      .calls[0] as [string, { body: string }, () => void];
-    // 回退到 panelId
-    expect(options.body).toContain("terminal-p1-0");
-  });
-
-  // ── 非终端 panelId 不触发（panelId 解析失败） ─────────────
-
-  it("非 terminal- 前缀的 panelId 不发送 toast（不可路由）", () => {
-    setWindowFocused(false);
-    renderHook(() => useClaudeNotifications());
-
-    act(() => {
-      mockOnHookEventCallback.cb!(makePayload({
-        event: "Stop",
-        panelId: "editor-p1-0",
-      }));
-    });
-
-    // toast 仍会发送（事件分类由 event 决定，不依赖 panelId 格式）
-    // 但面板标题回退到 panelId
-    expect(mockSendClickableNotification).toHaveBeenCalledTimes(1);
-  });
-});
-
-// ═══════════════════════════════════════════════════════════
-// toast onClick 路由
-// ═══════════════════════════════════════════════════════════
-
-describe("toast onClick 路由", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockOnHookEventCallback.cb = null;
-    mockGetPageApi.mockReturnValue(undefined);
-
-    useProjects.setState({
-      projects: {},
-      expandedNodes: {},
-      deletionLock: { pendingDelete: null, acquiredAt: null },
-    });
-    useLayout.setState({ activePageId: null });
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    delete (window as any).__dockviewApi;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    delete (window as any).__slterm_windowFocused;
-  });
-
-  /** 准备 onClick 测试环境：种子 stores、聚焦面板、渲染 hook、触发事件 */
-  function setupOnClickTest(): () => void {
-    seedProjects();
-    seedLayout("p1");
-    setWindowFocused(false);
-
-    const mockPanel = { focus: vi.fn(), title: "终端 1" };
-    const mockApi = makeMockDockviewApi({ "terminal-p1-0": mockPanel });
-    mockGetPageApi.mockReturnValue(mockApi);
-
-    renderHook(() => useClaudeNotifications());
-
-    act(() => {
-      mockOnHookEventCallback.cb!(makePayload({
-        event: "PermissionRequest",
-        panelId: "terminal-p1-0",
-        sessionId: "s-onclick",
-      }));
-    });
-
-    expect(mockSendClickableNotification).toHaveBeenCalledTimes(1);
-    const args = mockSendClickableNotification.mock
-      .calls[0] as [string, { body: string }, () => void];
-    const onClick = args[2];
-    expect(typeof onClick).toBe("function");
-    return onClick;
-  }
-
-  it("onClick 调用 setFocus 聚焦窗口", async () => {
-    const onClick = setupOnClickTest();
-    await act(async () => {
-      onClick();
-    });
-
-    // setFocus 由 onClick 内代码调用，经 src/ipc/window.ts → getCurrentWindow() → mockSetFocus
-    // 由于是 async 链，需要等微任务完成
-    await vi.waitFor(() => {
-      expect(mockSetFocus).toHaveBeenCalled();
-    }, { timeout: 1000 });
-  });
-
-  it("onClick 调用 routeToPanel 经 switchToPageAndFocus 路由", async () => {
-    mockSwitchToPageAndFocus.mockResolvedValue(undefined);
-    const onClick = setupOnClickTest();
-    await act(async () => {
-      onClick();  // 内部: setFocus() + routeToPanel(panelId) → parsePageId → switchToPageAndFocus
-    });
-
-    // 等待 async routeToPanel/switchToPageAndFocus 完成
-    await vi.waitFor(() => {
-      expect(mockSetFocus).toHaveBeenCalled();
-    }, { timeout: 2000 });
-  });
-
-  it("routeToPanel 不直接调用 useLayout.setActivePage", async () => {
-    // spy useLayout.setState 以验证 routeToPanel 不再直接操作 activePageId
-    // 注意：spy 在 setupOnClickTest 之后创建，仅捕获 onClick 触发的调用
-    const onClick = setupOnClickTest();
-    const setStateSpy = vi.spyOn(useLayout, "setState");
-    await act(async () => {
-      onClick();
-    });
-
-    // switchToPageAndFocus 被 mock 了，所以 routeToPanel 委托它而非直接调 setActivePage
-    // 断言：onClick 链路中无 useLayout.setState 调用
-    // （setupOnClickTest 内 seedLayout 的 setState 在 spy 创建之前，不计入）
-    expect(setStateSpy.mock.calls).toHaveLength(0);
-    setStateSpy.mockRestore();
-  });
-
-  it("panel 已关闭时 onClick 不抛异常", async () => {
-    seedProjects();
-    seedLayout("p1");
-    setWindowFocused(false);
-
-    // pageApis.getPageApi 返回 undefined——模拟页面未初始化
-    mockGetPageApi.mockReturnValue(undefined);
-
-    renderHook(() => useClaudeNotifications());
-
-    act(() => {
-      mockOnHookEventCallback.cb!(makePayload({
-        event: "PermissionRequest",
-        panelId: "terminal-p1-0",
-      }));
-    });
-
-    const onClick = (mockSendClickableNotification.mock.calls[0] as [string, { body: string }, () => void])[2];
-
-    // 不应抛异常
-    await act(async () => {
-      onClick();
-    });
-
-    // setFocus 仍被调用（窗口聚焦在路由之前）
-    await vi.waitFor(() => {
-      expect(mockSetFocus).toHaveBeenCalled();
-    }, { timeout: 1000 });
-  });
-
-  it("项目不存在时 onClick 不抛异常", async () => {
-    // 种子数据中 panelId 所属 pageId 不在任何项目中
-    useProjects.setState({
-      projects: {
-        "proj-other": {
-          projectId: "proj-other",
-          name: "其他项目",
-          rootPath: "C:\\other",
-          pages: [{ pageId: "px", name: "x", layout: {}, cwd: "C:\\other", createdAt: 1, lastAccessedAt: 1 }],
-          activePageId: "px",
-          version: 1,
-        },
-      },
-      expandedNodes: {},
-      deletionLock: { pendingDelete: null, acquiredAt: null },
-    });
-    seedLayout("px");
-    setWindowFocused(false);
-
-    const mockPanel = { focus: vi.fn(), title: "T" };
-    const mockApi = makeMockDockviewApi({ "terminal-p1-0": mockPanel });
-    mockGetPageApi.mockReturnValue(mockApi);
-
-    renderHook(() => useClaudeNotifications());
-
-    act(() => {
-      mockOnHookEventCallback.cb!(makePayload({
-        event: "PermissionRequest",
-        panelId: "terminal-p1-0",
-      }));
-    });
-
-    const onClick = (mockSendClickableNotification.mock.calls[0] as [string, { body: string }, () => void])[2];
-
-    await act(async () => {
-      onClick();
-    });
-
-    // setFocus 仍被调用（在 routeToPanel 之前）
-    await vi.waitFor(() => {
-      expect(mockSetFocus).toHaveBeenCalled();
-    }, { timeout: 1000 });
-  });
-
-  it("sendClickableNotification onClick 通过工厂绑定，非 sendNotification Options", () => {
+  it("sendToastNotification 仅接收两个参数（无 onClick）", () => {
     setWindowFocused(false);
     renderHook(() => useClaudeNotifications());
 
@@ -704,34 +434,32 @@ describe("toast onClick 路由", () => {
       mockOnHookEventCallback.cb!(makePayload({ event: "Stop" }));
     });
 
-    // 验证 sendClickableNotification 被调用且第三个参数是函数
-    expect(mockSendClickableNotification).toHaveBeenCalledTimes(1);
-    const args = mockSendClickableNotification.mock.calls[0];
-    expect(args).toHaveLength(3);
-    expect(typeof args[2]).toBe("function");
-    // 第三个参数就是 onClick 回调——走 sendClickableNotification 工厂，不是 sendNotification Options
+    expect(mockSendToastNotification).toHaveBeenCalledTimes(1);
+    const args = mockSendToastNotification.mock.calls[0];
+    // 仅两参数：title + options，无 onClick
+    expect(args).toHaveLength(2);
+    expect(typeof args[0]).toBe("string");
+    expect(typeof args[1]).toBe("object");
+    expect(args[1]).toHaveProperty("body");
   });
 });
 
 // ═══════════════════════════════════════════════════════════
-// 任务栏闪烁细分
+// 任务栏闪烁细分（P2-TE-04 反转：三类事件均闪烁）
 // ═══════════════════════════════════════════════════════════
 
 describe("任务栏闪烁（UserAttention）", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockOnHookEventCallback.cb = null;
-    mockGetPageApi.mockReturnValue(undefined);
 
     useProjects.setState({
       projects: {},
       expandedNodes: {},
       deletionLock: { pendingDelete: null, acquiredAt: null },
     });
-    useLayout.setState({ activePageId: null });
+    // layout 重置（notifications 测试不依赖 activePageId）
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    delete (window as any).__dockviewApi;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     delete (window as any).__slterm_windowFocused;
   });
@@ -762,7 +490,7 @@ describe("任务栏闪烁（UserAttention）", () => {
     expect(mockRequestUserAttention).toHaveBeenCalledWith(1);
   });
 
-  it("Stop 事件不触发 requestUserAttention", () => {
+  it("Stop 事件触发 requestUserAttention（P2-TE-04 反转）", () => {
     setWindowFocused(false);
     renderHook(() => useClaudeNotifications());
 
@@ -770,10 +498,10 @@ describe("任务栏闪烁（UserAttention）", () => {
       mockOnHookEventCallback.cb!(makePayload({ event: "Stop" }));
     });
 
-    expect(mockRequestUserAttention).not.toHaveBeenCalled();
+    expect(mockRequestUserAttention).toHaveBeenCalledWith(1);
   });
 
-  it("StopFailure 事件不触发 requestUserAttention", () => {
+  it("StopFailure 事件触发 requestUserAttention（P2-TE-04 反转）", () => {
     setWindowFocused(false);
     renderHook(() => useClaudeNotifications());
 
@@ -781,10 +509,10 @@ describe("任务栏闪烁（UserAttention）", () => {
       mockOnHookEventCallback.cb!(makePayload({ event: "StopFailure" }));
     });
 
-    expect(mockRequestUserAttention).not.toHaveBeenCalled();
+    expect(mockRequestUserAttention).toHaveBeenCalledWith(1);
   });
 
-  it("PostToolUseFailure 事件不触发 requestUserAttention", () => {
+  it("PostToolUseFailure 事件触发 requestUserAttention（P2-TE-04 反转）", () => {
     setWindowFocused(false);
     renderHook(() => useClaudeNotifications());
 
@@ -792,7 +520,7 @@ describe("任务栏闪烁（UserAttention）", () => {
       mockOnHookEventCallback.cb!(makePayload({ event: "PostToolUseFailure" }));
     });
 
-    expect(mockRequestUserAttention).not.toHaveBeenCalled();
+    expect(mockRequestUserAttention).toHaveBeenCalledWith(1);
   });
 
   it("聚焦时不触发 requestUserAttention", () => {
