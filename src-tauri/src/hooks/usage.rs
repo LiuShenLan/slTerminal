@@ -10,13 +10,19 @@ use std::io::{Read, Seek, SeekFrom};
 use tauri::AppHandle;
 
 /// Context usage DTO（C5 契约，camelCase 序列化）
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ContextUsage {
     /// 输入 token 数
     pub input_tokens: u64,
     /// 输出 token 数
     pub output_tokens: u64,
+    /// 缓存读取输入 token 数（serde default 兼容旧 transcript 缺失）
+    #[serde(default)]
+    pub cache_read_input_tokens: u64,
+    /// 缓存创建输入 token 数（serde default 兼容旧 transcript 缺失）
+    #[serde(default)]
+    pub cache_creation_input_tokens: u64,
 }
 
 /// 从 transcript JSONL 文件尾部扫描 token 用量
@@ -81,9 +87,19 @@ fn parse_usage_line(line: &str) -> Option<ContextUsage> {
     let usage = v.get("message")?.get("usage")?;
     let input_tokens = usage.get("input_tokens")?.as_u64()?;
     let output_tokens = usage.get("output_tokens")?.as_u64()?;
+    let cache_read_input_tokens = usage
+        .get("cache_read_input_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let cache_creation_input_tokens = usage
+        .get("cache_creation_input_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
     Some(ContextUsage {
         input_tokens,
         output_tokens,
+        cache_read_input_tokens,
+        cache_creation_input_tokens,
     })
 }
 
@@ -165,6 +181,64 @@ mod tests {
     fn parse_input_tokens_not_number() {
         let json = r#"{"message":{"usage":{"input_tokens":"abc","output_tokens":50}}}"#;
         assert!(parse_usage_line(json).is_none());
+    }
+
+    // ── PF2-TE-06: cache 字段解析 ──
+    //
+    // 注意：mockIPC（L2）只守 JS 侧形状——cache 字段的真实解析（后端反序列化 +
+    // 缺失 → 默认 0）必须由 L1 覆盖。以下用例使用真实 serde+parse_usage_line，
+    // 不依赖前端 mock。
+
+    #[test]
+    fn parse_cache_fields_extracted() {
+        // transcript 含 cache_read_input_tokens / cache_creation_input_tokens 时正确提取
+        let json = r#"{"message":{"usage":{"input_tokens":100,"output_tokens":50,"cache_read_input_tokens":200,"cache_creation_input_tokens":300}}}"#;
+        let r = parse_usage_line(json);
+        assert!(r.is_some());
+        let u = r.unwrap();
+        assert_eq!(u.input_tokens, 100);
+        assert_eq!(u.output_tokens, 50);
+        assert_eq!(u.cache_read_input_tokens, 200);
+        assert_eq!(u.cache_creation_input_tokens, 300);
+    }
+
+    #[test]
+    fn parse_cache_fields_missing_defaults_to_zero() {
+        // 旧 transcript 不含 cache 字段 → 默认 0（兼容旧格式）
+        let json = r#"{"message":{"usage":{"input_tokens":100,"output_tokens":50}}}"#;
+        let r = parse_usage_line(json);
+        assert!(r.is_some());
+        let u = r.unwrap();
+        assert_eq!(u.input_tokens, 100);
+        assert_eq!(u.output_tokens, 50);
+        assert_eq!(u.cache_read_input_tokens, 0);
+        assert_eq!(u.cache_creation_input_tokens, 0);
+    }
+
+    #[test]
+    fn parse_cache_fields_explicit_zero() {
+        // cache 字段显式为 0
+        let json = r#"{"message":{"usage":{"input_tokens":100,"output_tokens":50,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}"#;
+        let r = parse_usage_line(json);
+        assert!(r.is_some());
+        let u = r.unwrap();
+        assert_eq!(u.input_tokens, 100);
+        assert_eq!(u.output_tokens, 50);
+        assert_eq!(u.cache_read_input_tokens, 0);
+        assert_eq!(u.cache_creation_input_tokens, 0);
+    }
+
+    #[test]
+    fn parse_only_one_cache_field_present() {
+        // 仅 cache_read_input_tokens 存在，cache_creation_input_tokens 缺失 → 后者默认 0
+        let json = r#"{"message":{"usage":{"input_tokens":100,"output_tokens":50,"cache_read_input_tokens":200}}}"#;
+        let r = parse_usage_line(json);
+        assert!(r.is_some());
+        let u = r.unwrap();
+        assert_eq!(u.input_tokens, 100);
+        assert_eq!(u.output_tokens, 50);
+        assert_eq!(u.cache_read_input_tokens, 200);
+        assert_eq!(u.cache_creation_input_tokens, 0);
     }
 
     // ── scan_transcript_usage 集成测试（spawn_blocking 不参与测试） ──
@@ -256,20 +330,39 @@ mod tests {
         let u = ContextUsage {
             input_tokens: 100,
             output_tokens: 50,
+            cache_read_input_tokens: 200,
+            cache_creation_input_tokens: 300,
         };
         let json = serde_json::to_string(&u).unwrap();
         assert!(json.contains("\"inputTokens\""));
         assert!(json.contains("\"outputTokens\""));
+        assert!(json.contains("\"cacheReadInputTokens\""));
+        assert!(json.contains("\"cacheCreationInputTokens\""));
         assert!(!json.contains("\"input_tokens\""));
         assert!(!json.contains("\"output_tokens\""));
+        assert!(!json.contains("\"cache_read_input_tokens\""));
+        assert!(!json.contains("\"cache_creation_input_tokens\""));
     }
 
     #[test]
     fn context_usage_deserialize_camelcase() {
+        let json = r#"{"inputTokens":200,"outputTokens":300,"cacheReadInputTokens":400,"cacheCreationInputTokens":500}"#;
+        let u: ContextUsage = serde_json::from_str(json).unwrap();
+        assert_eq!(u.input_tokens, 200);
+        assert_eq!(u.output_tokens, 300);
+        assert_eq!(u.cache_read_input_tokens, 400);
+        assert_eq!(u.cache_creation_input_tokens, 500);
+    }
+
+    #[test]
+    fn context_usage_deserialize_missing_cache_fields() {
+        // 旧 transcript 不含 cache 字段 → #[serde(default)] 兜底为 0
         let json = r#"{"inputTokens":200,"outputTokens":300}"#;
         let u: ContextUsage = serde_json::from_str(json).unwrap();
         assert_eq!(u.input_tokens, 200);
         assert_eq!(u.output_tokens, 300);
+        assert_eq!(u.cache_read_input_tokens, 0);
+        assert_eq!(u.cache_creation_input_tokens, 0);
     }
 
     // ── hooks_context_usage L1 测试 (P2-TE-05) ──

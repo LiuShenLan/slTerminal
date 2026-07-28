@@ -27,10 +27,12 @@ export const AgentStatusRow: React.FC<Props> = ({ row, onFocus }) => {
     onFocus(row.panelId);
   }, [onFocus, row.panelId]);
 
-  // ---- 用量计算 ----
+  // ---- 用量计算（input + cacheRead + cacheCreation；output 不计占用，保留为信息字段） ----
   const total =
     row.usage != null
-      ? row.usage.inputTokens + row.usage.outputTokens
+      ? row.usage.inputTokens +
+        row.usage.cacheReadInputTokens +
+        row.usage.cacheCreationInputTokens
       : 0;
   const percent = Math.min(100, (total / CLAUDE_CONTEXT_LIMIT) * 100);
   const usageAvailable = row.usage != null;

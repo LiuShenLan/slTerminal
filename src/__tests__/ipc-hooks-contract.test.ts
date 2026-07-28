@@ -307,7 +307,12 @@ describe("contextUsage 合约", () => {
 
   // 维度 3：正常返回透传——ContextUsage 对象
   it("有 usage 数据时透传 ContextUsage 对象", async () => {
-    const mockUsage: ContextUsage = { inputTokens: 1500, outputTokens: 800 };
+    const mockUsage: ContextUsage = {
+      inputTokens: 1500,
+      outputTokens: 800,
+      cacheReadInputTokens: 200,
+      cacheCreationInputTokens: 100,
+    };
     mockIPC((cmd) => {
       if (cmd === "hooks_context_usage") return { ...mockUsage };
     });
@@ -318,6 +323,8 @@ describe("contextUsage 合约", () => {
     expect(result).toEqual(mockUsage);
     expect(result!.inputTokens).toBe(1500);
     expect(result!.outputTokens).toBe(800);
+    expect(result!.cacheReadInputTokens).toBe(200);
+    expect(result!.cacheCreationInputTokens).toBe(100);
   });
 
   // 维度 3：正常返回透传——null（无 usage 数据）
@@ -340,5 +347,23 @@ describe("contextUsage 合约", () => {
     await expect(
       hooks.contextUsage("/nonexistent.jsonl"),
     ).rejects.toThrow("transcript 文件不存在");
+  });
+
+  // DBG-4 守卫：ContextUsage 键集合精确匹配（四字段）
+  it("ContextUsage 字段完整性验证（C12 契约 4 字段）", () => {
+    const usage: ContextUsage = {
+      inputTokens: 1000,
+      outputTokens: 500,
+      cacheReadInputTokens: 200,
+      cacheCreationInputTokens: 100,
+    };
+
+    // 验证恰好 4 个字段（C12 契约）
+    expect(Object.keys(usage).sort()).toEqual([
+      "cacheCreationInputTokens",
+      "cacheReadInputTokens",
+      "inputTokens",
+      "outputTokens",
+    ]);
   });
 });

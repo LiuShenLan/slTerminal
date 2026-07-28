@@ -365,6 +365,8 @@ describe("useAgentStatus（行建模新语义）", () => {
     mockContextUsage.mockResolvedValue({
       inputTokens: 5000,
       outputTokens: 2000,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
     });
 
     renderHook(() => useAgentStatus());
@@ -434,6 +436,8 @@ describe("useAgentStatus（行建模新语义）", () => {
     mockContextUsage.mockResolvedValue({
       inputTokens: 8000,
       outputTokens: 3000,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
     });
 
     const { result } = renderHook(() => useAgentStatus());
@@ -725,6 +729,8 @@ describe("useAgentStatus（行建模新语义）", () => {
     mockContextUsage.mockResolvedValue({
       inputTokens: 12000,
       outputTokens: 4500,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
     });
 
     act(() => {
@@ -742,6 +748,8 @@ describe("useAgentStatus（行建模新语义）", () => {
       expect(result.current.rows[0].usage).toEqual({
         inputTokens: 12000,
         outputTokens: 4500,
+        cacheReadInputTokens: 0,
+        cacheCreationInputTokens: 0,
       });
     });
   });

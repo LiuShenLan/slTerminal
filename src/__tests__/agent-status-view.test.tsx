@@ -263,9 +263,14 @@ describe("行点击 → switchToPageAndFocus", () => {
 describe("用量条", () => {
   it("contextUsage 返回正常值 → 用量条填充宽度按 200000 上限计算", () => {
     const row = makeRow({
-      usage: { inputTokens: 100_000, outputTokens: 50_000 },
+      usage: {
+        inputTokens: 100_000,
+        outputTokens: 50_000,
+        cacheReadInputTokens: 30_000,
+        cacheCreationInputTokens: 20_000,
+      },
     });
-    // 总 tokens = 150_000，上限 = 200_000 → percent = 75%
+    // 总 tokens = input + cacheRead + cacheCreation = 150_000，上限 = 200_000 → percent = 75%
 
     const { container } = render(
       React.createElement(AgentStatusRow, {
@@ -336,9 +341,14 @@ describe("用量条", () => {
   }
 
   it("用量 < 50% → 颜色为 low token (#629755)", () => {
-    // 40% = 80_000 / 200_000
+    // 40% = 80_000 / 200_000（input + cacheRead + cacheCreation）
     const row = makeRow({
-      usage: { inputTokens: 50_000, outputTokens: 30_000 },
+      usage: {
+        inputTokens: 50_000,
+        outputTokens: 30_000,
+        cacheReadInputTokens: 20_000,
+        cacheCreationInputTokens: 10_000,
+      },
     });
     const { container } = render(
       React.createElement(AgentStatusRow, { row, onFocus: vi.fn() }),
@@ -347,9 +357,14 @@ describe("用量条", () => {
   });
 
   it("用量 50%~80% → 颜色为 medium token (#BBB529)", () => {
-    // 60% = 120_000 / 200_000
+    // 60% = 120_000 / 200_000（input + cacheRead + cacheCreation）
     const row = makeRow({
-      usage: { inputTokens: 70_000, outputTokens: 50_000 },
+      usage: {
+        inputTokens: 70_000,
+        outputTokens: 50_000,
+        cacheReadInputTokens: 30_000,
+        cacheCreationInputTokens: 20_000,
+      },
     });
     const { container } = render(
       React.createElement(AgentStatusRow, { row, onFocus: vi.fn() }),
@@ -358,9 +373,14 @@ describe("用量条", () => {
   });
 
   it("用量 > 80% → 颜色为 high token (#F44747)", () => {
-    // 90% = 180_000 / 200_000
+    // 90% = 180_000 / 200_000（input + cacheRead + cacheCreation）
     const row = makeRow({
-      usage: { inputTokens: 100_000, outputTokens: 80_000 },
+      usage: {
+        inputTokens: 100_000,
+        outputTokens: 80_000,
+        cacheReadInputTokens: 40_000,
+        cacheCreationInputTokens: 40_000,
+      },
     });
     const { container } = render(
       React.createElement(AgentStatusRow, { row, onFocus: vi.fn() }),
