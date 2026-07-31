@@ -8,6 +8,7 @@
  * - __e2e_*       — 终端容器 DOM 元素 helper（随面板挂载/卸载）
  */
 
+import { EditorView } from "@codemirror/view";
 import { hooks } from "../src/ipc";
 import type { HookInjectionStatus } from "../src/ipc/hooks";
 import { writeText } from "../src/ipc/clipboard";
@@ -51,6 +52,9 @@ declare global {
     __slterm_e2e_injectHooks?: () => Promise<HookInjectionStatus>;
     __slterm_e2e_uninstallHooks?: () => Promise<void>;
     __slterm_e2e_getHookInjectionStatus?: () => Promise<HookInjectionStatus>;
+    // hooks 配置面板 JSON 模式（P3-TE-18）
+    __slterm_e2e_setHooksConfigJson?: (text: string) => boolean;
+    __slterm_e2e_getHooksConfigJson?: () => string | null;
   }
 }
 
@@ -73,6 +77,7 @@ export function installAllE2eHelpers(): void {
   installTitleHelpers();
   installSideBarHelpers();
   installHookHelpers();
+  installHooksConfigHelpers();
 
   // 标记 Workspace 就绪（Workspace 组件渲染时同步设置）
   window.__slterm_e2e_workspaceReady = false;
@@ -286,4 +291,33 @@ function installHookHelpers(): void {
   window.__slterm_e2e_injectHooks = async () => hooks.inject();
   window.__slterm_e2e_uninstallHooks = async () => hooks.uninstall();
   window.__slterm_e2e_getHookInjectionStatus = async () => hooks.getInjectionStatus();
+}
+
+/**
+ * __slterm_e2e_setHooksConfigJson / __slterm_e2e_getHooksConfigJson（P3-TE-18）
+ * hooks 配置面板 JSON 模式 CM6 编辑器读写。
+ *
+ * 定位方式：`EditorView.findFromDOM`（CM6 公共静态 API）从
+ * `data-e2e="hooks-json-editor"` 容器（JsonMode 挂载点）反查 EditorView 实例，
+ * 不经组件私有 ref。写入走 `view.dispatch` 全文档替换——触发真实
+ * updateListener → onChange → dirty + 校验上报，与用户输入同一路径。
+ */
+function installHooksConfigHelpers(): void {
+  /** 整文替换 JSON 模式 CM6 文档。返回是否成功注入（面板未就绪返回 false） */
+  window.__slterm_e2e_setHooksConfigJson = (text: string): boolean => {
+    const container = document.querySelector('[data-e2e="hooks-json-editor"]');
+    if (!container) return false;
+    const view = EditorView.findFromDOM(container as HTMLElement);
+    if (!view) return false;
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
+    return true;
+  };
+
+  /** 读取 JSON 模式 CM6 当前文档（切层/加载后等待内容就绪、断言编辑器内容用）。无编辑器返回 null */
+  window.__slterm_e2e_getHooksConfigJson = (): string | null => {
+    const container = document.querySelector('[data-e2e="hooks-json-editor"]');
+    if (!container) return null;
+    const view = EditorView.findFromDOM(container as HTMLElement);
+    return view ? view.state.doc.toString() : null;
+  };
 }

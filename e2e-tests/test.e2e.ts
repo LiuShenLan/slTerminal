@@ -2391,3 +2391,197 @@ describe('Agent Status 视图与 toast 通知', () => {
     //      → sendClickableNotification 不被调用
   });
 });
+
+// ── hooks 配置面板保存链路（P3-TE-18） ──
+//
+// 场景：tempdir 项目 → 打开 hooksConfig 面板 → 切 project 层 → JSON 模式经
+// __slterm_e2e_setHooksConfigJson 注入合法 hooks 配置 → 点击保存 →
+// 断言 <tempdir>/.claude/settings.json 真实写盘。
+// 断言三件事：① mtime 更新；② hooks 内容正确（写入的事件/handler 存在，且
+// 预置的旧 hooks 被整体替换）；③ merge 保留——预置的 permissions/env/$schema
+// 原样保留（验证后端 read-modify-write，P3-BE-03）。
+// 安全：全程只写 tempdir 项目的 project 层，不碰真实 ~/.claude/settings.json（C13-9）。
+//
+// 按钮交互统一走 browser.execute 程序化 .click()，不用 WebDriver 真实点击——两个根因：
+// 1) 面板根容器 onFocus（React focusin）触发轻量重读 reload() → setLoading(true) →
+//    面板内容整体换成"加载中"占位（DOM 移除）。真实点击的 mousedown 先聚焦按钮 →
+//    focusin → 重读 → 按钮在 mouseup 前被移出 DOM → click 事件丢失 → onClick 永不
+//    触发（实测复现：切层点击后编辑区短暂消失又恢复 user 层内容，project 层从未加载）。
+//    程序化 .click() 不移动焦点 → 无 focusin → 无此竞态（与编辑器 Ctrl+S 用例
+//    合成 focusin + keydown 同属"事件来源合成"的既有先例）。
+// 2) embedded 驱动对 focusCommand（findElement/$/elementClick 等）每次先调
+//    getWindowStates 超时 5s（已知无害噪声）——全部改用 execute 轮询可免除约 30s
+//    固定开销，把用例控制在 mocha 60s 预算内。
+// 时序设计（规避外部 value 同步竞态）：
+// - 面板挂载先读 user 层（初始文档也是 "{}"），无法用 "{}" 判断 project 层已加载——
+//   预置文件 hooks 子树含唯一 marker，等待文档出现 marker 才注入，确保外部 value
+//   同步 effect 不会在注入后覆盖文本并重置 dirty。
+describe('hooks 配置面板保存链路 (P3-TE-18)', () => {
+  it('project 层 JSON 模式写入 hooks 配置 → 保存真实写盘且 merge 保留其他字段', async () => {
+    // 0. Node 侧：tempdir 项目 + 预置 .claude/settings.json
+    //    （hooks 子树含 preseed marker 供"project 层已加载"等待；permissions/env/$schema 供 merge 断言）
+    const tempDir = mkdtempSync(join(tmpdir(), 'slterm-e2e-hookscfg-'));
+    const settingsDir = join(tempDir, '.claude');
+    const settingsPath = join(settingsDir, 'settings.json');
+    mkdirSync(settingsDir, { recursive: true });
+    const preseed = {
+      $schema: 'https://json.schemastore.org/claude-code-settings.json',
+      permissions: { allow: ['Bash', 'Edit'] },
+      env: { FOO: 'bar' },
+      hooks: {
+        PostToolUse: [{ hooks: [{ type: 'command', command: 'echo preseed-marker' }] }],
+      },
+    };
+    writeFileSync(settingsPath, JSON.stringify(preseed, null, 2), 'utf8');
+    const mtimeBefore = statSync(settingsPath).mtimeMs;
+
+    // 注入到 JSON 模式的 hooks 配置（hooks 子 schema 合法：已知事件 + command handler；
+    // 与 preseed 无重叠内容，保存后断言旧 hooks 被整体替换）
+    const hooksJson = JSON.stringify(
+      {
+        PreToolUse: [
+          {
+            matcher: 'Bash',
+            hooks: [{ type: 'command', command: 'node e2e-hook-precheck.js', timeout: 5 }],
+          },
+        ],
+        SessionStart: [{ hooks: [{ type: 'command', command: 'echo e2e-session-start' }] }],
+      },
+      null,
+      2,
+    );
+
+    // 页面内工具：按 data-e2e 选择器取按钮（存在且未禁用时）——execute 轮询 + 程序化点击共用
+    const btnState = (sel: string) =>
+      browser.execute((s: string) => {
+        const btn = document.querySelector(s) as HTMLButtonElement | null;
+        return btn ? { exists: true, disabled: btn.disabled } : { exists: false, disabled: true };
+      }, sel);
+
+    try {
+      // 1. 等待 Workspace 就绪
+      await browser.waitUntil(
+        async () => await browser.execute(() => (window as any).__slterm_e2e_workspaceReady === true),
+        { timeout: 15000, timeoutMsg: 'Workspace 未就绪' },
+      );
+
+      // 2. 程序化创建项目（根 = tempdir；同时设置后端 project_root，路径沙箱通过）
+      await browser.execute((dir: string) => {
+        (window as any).__slterm_e2e_createProject?.(dir);
+      }, tempDir);
+
+      // 3. 等待 Dockview API
+      await browser.waitUntil(
+        async () => await browser.execute(() => typeof window.__dockviewApi !== 'undefined'),
+        { timeout: 20000, timeoutMsg: 'Dockview API 未就绪' },
+      );
+
+      // 4. 打开 hooksConfig 面板（经 __dockviewApi.addPanel；唯一 id 不与同页单例约定冲突）
+      const panelId = 'hooksConfig-e2e-' + Date.now();
+      await browser.execute((pid: string) => {
+        window.__dockviewApi!.addPanel({
+          id: pid,
+          component: 'hooksConfig',
+          title: 'Hooks 配置',
+          params: { panelId: pid },
+        });
+      }, panelId);
+      // 面板容器仅在非 loading/error 态渲染——存在即表示首次加载（user 层）完成
+      await browser.waitUntil(
+        async () =>
+          (await browser.execute(() => !!document.querySelector('[data-e2e="hooks-config-panel"]'))) === true,
+        { timeout: 15000, timeoutMsg: 'hooksConfig 面板未就绪' },
+      );
+
+      // 5. 切到 project 层：rootPath 就绪后按钮才可点（disabled=!rootPath）——execute 轮询
+      //    等待启用，再程序化 .click()（真实 onClick → setLayer → 重读 project 层；
+      //    程序化点击不触发 focusin，规避上面注释 1) 的 click 丢失竞态）
+      await browser.waitUntil(
+        async () => (await btnState('[data-e2e="hooks-layer-project"]')).disabled === false,
+        { timeout: 10000, timeoutMsg: 'project 层按钮未启用（rootPath 未就绪）' },
+      );
+      const layerClicked = await browser.execute(() => {
+        const btn = document.querySelector('[data-e2e="hooks-layer-project"]') as HTMLButtonElement | null;
+        btn?.click();
+        return btn !== null;
+      });
+      expect(layerClicked).toBe(true);
+
+      // 6. 等待 project 层配置加载进 JSON 模式（文档含 preseed marker——只有 project 层
+      //    读取应用后才可能出现，排除 user 层初始内容干扰）
+      await browser.waitUntil(
+        async () => {
+          const doc = await browser.execute(() =>
+            (window as any).__slterm_e2e_getHooksConfigJson?.() ?? null,
+          );
+          return doc !== null && doc.includes('preseed-marker');
+        },
+        { timeout: 10000, timeoutMsg: 'project 层配置未加载进 JSON 模式（文档未出现 preseed marker）' },
+      );
+
+      // 7. JSON 模式注入合法 hooks 配置（CM6 view.dispatch 全文档替换 → 真实
+      //    updateListener → onChange → dirty + schema 校验通过）
+      const injected = await browser.execute((text: string) => {
+        return (window as any).__slterm_e2e_setHooksConfigJson?.(text) === true;
+      }, hooksJson);
+      expect(injected).toBe(true);
+
+      // 8. 等待保存按钮可用（dirty && JSON 合法）
+      await browser.waitUntil(
+        async () => (await btnState('[data-e2e="hooks-save"]')).disabled === false,
+        { timeout: 10000, timeoutMsg: '保存按钮未启用（dirty 或 JSON 非法）' },
+      );
+
+      // 9. 程序化点击保存（真实 onClick → handleSave → schema 校验 → writeHooksConfig 写盘；
+      //    程序化点击不触发 focusin → 不弹 dirty 确认框、无重读覆盖注入内容的风险）
+      const saveClicked = await browser.execute(() => {
+        const btn = document.querySelector('[data-e2e="hooks-save"]') as HTMLButtonElement | null;
+        btn?.click();
+        return btn !== null;
+      });
+      expect(saveClicked).toBe(true);
+
+      // 10. 轮询等待文件 mtime 更新（Node 侧 statSync，不依赖页面交互）
+      await browser.waitUntil(
+        () => {
+          try {
+            return statSync(settingsPath).mtimeMs > mtimeBefore;
+          } catch {
+            return false;
+          }
+        },
+        { timeout: 10000, timeoutMsg: '保存后 <tempdir>/.claude/settings.json mtime 未更新' },
+      );
+      // 11. 应用内确认：保存成功提示条（saved=true 后渲染）
+      await browser.waitUntil(
+        async () =>
+          (await browser.execute(() => !!document.querySelector('[data-e2e="hooks-restart-hint"]'))) === true,
+        { timeout: 8000, timeoutMsg: '保存成功提示条未出现' },
+      );
+
+      // 12. 断言①：mtime 更新
+      expect(statSync(settingsPath).mtimeMs).toBeGreaterThan(mtimeBefore);
+
+      // 13. 断言②：hooks 内容正确——写入的事件/handler 存在，预置的旧 hooks 被整体替换
+      const saved = JSON.parse(readFileSync(settingsPath, 'utf8'));
+      expect(saved.hooks.PreToolUse).toHaveLength(1);
+      expect(saved.hooks.PreToolUse[0].matcher).toBe('Bash');
+      expect(saved.hooks.PreToolUse[0].hooks[0]).toMatchObject({
+        type: 'command',
+        command: 'node e2e-hook-precheck.js',
+        timeout: 5,
+      });
+      expect(saved.hooks.SessionStart[0].hooks[0].command).toBe('echo e2e-session-start');
+      // 替换语义：预置的 PostToolUse 组不应残留
+      expect(saved.hooks.PostToolUse).toBeUndefined();
+      expect(JSON.stringify(saved)).not.toContain('preseed-marker');
+
+      // 14. 断言③：merge 保留——permissions/env/$schema 原样保留（后端 read-modify-write）
+      expect(saved.permissions).toEqual(preseed.permissions);
+      expect(saved.env).toEqual(preseed.env);
+      expect(saved.$schema).toBe(preseed.$schema);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+});
