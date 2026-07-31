@@ -114,9 +114,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 |------|------|------|------|
 | src/ipc | IPC 通信层，前端 invoke 唯一入口 | src/ipc/index.ts | @../src/ipc/CLAUDE.md |
 | src/types | DTO 类型定义，与 Rust 模块双边对应（硬约束 #4） | src/types/ | — |
-| src/stores | Zustand 状态管理（projects/layout/fontSize/keybindings/sideBar） | src/stores/index.ts | @../src/stores/CLAUDE.md |
+| src/stores | Zustand 状态管理（projects/layout/fontSize/keybindings/sideBar/hooksConfig） | src/stores/index.ts | @../src/stores/CLAUDE.md |
 | src/workspace | 工作区布局管理（Dockview serde + 面板注册 + titleManager + pageApis） | src/workspace/Workspace.tsx | @../src/workspace/CLAUDE.md |
-| src/panels | Dockview 面板系统（terminal + editor + html + gitshow + diff） | src/panels/index.ts | @../src/panels/CLAUDE.md |
+| src/panels | Dockview 面板系统（terminal + editor + html + gitshow + diff + hooksConfig） | src/panels/index.ts | @../src/panels/CLAUDE.md |
 | src/lib | 通用工具 + createActivePointer + useFontSizeWheel + ErrorBoundary + E2E_ENABLED 门控 + 路径函数 | src/lib/index.ts | @../src/lib/CLAUDE.md |
 | src/theme | 配色 token 单点（硬约束 #6） | src/theme/colors.ts | — |
 | src/features/explorer | 文件浏览器（FileTree + 选中模型 + 键盘快捷键 + useFileTree + FileViewerRegistry 分派） | src/features/explorer/ExplorerPanel.tsx | @../src/features/explorer/CLAUDE.md |
@@ -127,12 +127,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | src/features/commit | Commit 侧栏视图（git 变更列表 + 状态→面板分派） | src/features/commit/index.ts | @../src/features/commit/CLAUDE.md |
 | src/features/agentStatus | Agent 状态视图（claudeSession 行建模 + 上下文用量） | src/features/agentStatus/index.ts | — |
 | src/features/notifications | toast 通知（Tauri 原生 sendNotification + 任务栏闪烁） | src/features/notifications/index.ts | — |
+| src/features/hooksConfig | hooks 配置面板 schema 内嵌单点（SchemaStore 官方 schema + hooks 子 schema + Draft07 校验） | src/features/hooksConfig/schema/index.ts | — |
 | src/__tests__ | L2 前端测试集中目录 + 共享测试工厂 | — | @../src/__tests__/CLAUDE.md |
 | src-tauri/src/pty | PTY 管理，Windows ConPTY 核心 | src-tauri/src/pty/mod.rs | @../src-tauri/src/pty/CLAUDE.md |
 | src-tauri/src/fs | 文件系统命令（读/写/列目录/建/删/改名） | src-tauri/src/fs/mod.rs | @../src-tauri/src/fs/CLAUDE.md |
 | src-tauri/src/git | Git 状态/diff/HEAD 读取/回滚/取消暂存（git2） | src-tauri/src/git/mod.rs | @../src-tauri/src/git/CLAUDE.md |
 | src-tauri/src/notify | 文件系统监听（LruWatcherPool 缓存 + pause/resume 切换） | src-tauri/src/notify/mod.rs | @../src-tauri/src/notify/CLAUDE.md |
-| src-tauri/src/hooks | Claude Code hooks 注入/卸载/状态 + hook-event 广播 + 上下文用量 | src-tauri/src/hooks/mod.rs | @../src-tauri/src/hooks/CLAUDE.md |
+| src-tauri/src/hooks | Claude Code hooks 注入/卸载/状态 + hook-event 广播 + 上下文用量 + hooks 配置三层读写（hooks_config_read/write） | src-tauri/src/hooks/mod.rs | @../src-tauri/src/hooks/CLAUDE.md |
 | src-tauri settings/projects | 顶层单文件模块：settings.rs（设置持久化浅合并）、projects.rs（项目数据，exe 同级 JSON 绕过沙箱） | src-tauri/src/settings.rs | — |
 | e2e-tests | WDIO E2E 端到端测试 | e2e-tests/wdio.conf.ts | @../e2e-tests/CLAUDE.md |
 
@@ -169,7 +170,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | SEC-08 | 安全 | PTY write/resize/kill 的 panelId 归属校验 |
 | B10 | 缺陷 | 编辑器去重聚焦须匹配 suffix（普通编辑器与 git 页签互不误聚焦） |
 | ADR-0001 | 架构决策 | 侧栏视图换区重建丢失组件内部状态（已确认接受） |
+| ADR-0002 | 架构决策 | 单条 hook 启停——禁用状态存 slTerminal 侧 settings（disabledHooks 段），不出现在 claude 配置文件中 |
 | F3 | 特性 | 终端页签四态 emoji 指示（hook-event + OSC 133 合成） |
 | F5 | 特性 | claudeSession 契约行建模（双通道建行/三通道删行） |
+| F6 | 特性 | hooks 双模式配置面板（JSON/GUI 编辑 hooks 子树，user/project/local 三层，单条启停 + F2 并入） |
 
 > 测试策略概览见上方「测试策略」章节；完整用例清单见 `.claude/test-inventory.md`。
