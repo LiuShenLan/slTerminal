@@ -401,19 +401,20 @@ MCP 工具遵循命名约定：`mcp__<server>__<tool>`
 {
   "type": "command",
   "command": "send-metrics.sh",
-  "async": true,
-  "asyncTimeout": 30000
+  "async": true
 }
 ```
 
 字段：
-- `command`：Shell 命令字符串（通过 shell 执行）
+- `command`：Shell 命令字符串（通过 shell 执行；存在 `args` 时为可执行文件路径）
 - `args`：参数数组（直接 exec，无 shell 解释）
 - `timeout`：超时秒数（默认见下方）
-- `shell`：`"bash"` 或 `"powershell"`
-- `async`：异步后台运行（fire-and-forget）
-- `asyncTimeout`：异步超时毫秒
+- `shell`：`"bash"` 或 `"powershell"`（Windows 无 Git Bash 时回退 powershell；`args` 存在时忽略）
+- `async`：异步后台运行（fire-and-forget，不阻塞触发动作）
+- `asyncRewake`：后台运行且退出码 2 时唤醒 Claude，stderr（为空则 stdout）作为 system reminder 展示；隐含 `async`
 - `statusMessage`：运行期间显示的自定义 spinner 文本
+
+> 2026-07-31 修订：原记载的 `asyncTimeout`（异步超时毫秒）系误记——它是异步执行的**返回值字段**，不是 settings.json 配置字段；原示例同步修正。`allowedEnvVars` 为 `http` handler 专属，不属于 `command`。
 
 ### 6.2 `http` — HTTP Webhook（v2.1.63+）
 
@@ -460,7 +461,8 @@ MCP 工具遵循命名约定：`mcp__<server>__<tool>`
 - 单轮 Claude 评估调用
 - `$ARGUMENTS` 占位符注入 hook 输入 JSON
 - 模型返回结构化 JSON：`{ "ok": true }` 允许，`{ "ok": false, "reason": "..." }` 阻止
-- `model` 默认使用快速模型
+- `model` 默认使用快速模型（Haiku）
+- `continueOnBlock`（可选）：返回 `ok: false` 时把 reason 反馈给 Claude 并继续当前 turn，而非停止【2026-07-31 补】
 
 ### 6.5 `agent` — 子代理验证（多轮子代理，已正式支持）
 
@@ -475,6 +477,7 @@ MCP 工具遵循命名约定：`mcp__<server>__<tool>`
 - 生成**多轮子代理**，拥有工具访问权限（Read、Grep、Glob、Bash）
 - 用于复杂代码验证
 - 已从实验性升级为正式支持的 handler 类型
+- 可选 `model`（默认快速模型）；**无 `description`/`subagent_type` 字段**——后两者是内置 Agent 工具的输入参数，非 hook handler 字段【2026-07-31 官方核实】
 
 ### 6.6 通用字段
 

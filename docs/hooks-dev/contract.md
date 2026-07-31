@@ -119,18 +119,83 @@ DTO（Rust `snake_case` ↔ JS `camelCase` 双边对应，硬约束 #4）：
 ## C12 阶段 2 专有契约（F4/F5）
 
 > 2026-07-26 回填修订：经阶段 2 计划期对 Tauri v2 源码一手核实，`sendNotification` 的 `Options` 无 `onClick` 字段、JS 侧无 `flashFrame` API，原表述已更正为下述实现路径。
+> 2026-07-31 对账修订：阶段 2 fix 后 toast 改走 Tauri 原生 `sendNotification`（无点击路由），原 `sendClickableNotification` / `new Notification()` 路径已废弃——未打包 Win32 WebView2 无 AUMID，Web Notification API 为残缺 shim（`phase2/review-findings.md` 不符合项 #2）。
 
-- **F4 通知**：`@tauri-apps/plugin-notification`（官方插件，`capabilities/` 显式放行，硬约束 #10；thin wrapper 聚合进 `src/ipc/`，照 clipboard/dialog 先例）。toast 点击回调经 **`sendClickableNotification` 工厂**（内部 `new Notification(...) + n.onclick = ...`）。任务栏闪烁经 **`getCurrentWindow().requestUserAttention(UserAttentionType.Critical)`**，聚焦后以 `requestUserAttention(null)` 停止。失焦门控、三类事件、toast 点击跳转照 `feature-plan/phase2-notify-overview.md` F4 节。
+- **F4 通知**：`@tauri-apps/plugin-notification`（官方插件，`capabilities/` 显式放行，硬约束 #10；thin wrapper 聚合进 `src/ipc/`，照 clipboard/dialog 先例）。toast 经 **Tauri 原生 `sendNotification` 通道**（`src/ipc/notification.ts` 的 `sendToastNotification(title, {body})` 工厂）——**无 onClick 点击路由**（banner 可能被系统抑制仅进通知中心；回窗引导由任务栏闪烁承担）。任务栏闪烁经 **`getCurrentWindow().requestUserAttention(UserAttentionType.Critical)`**（三类事件均闪烁），聚焦后以 `requestUserAttention(null)` 停止。失焦门控、三类事件照 `feature-plan/phase2-notify-overview.md` F4 节（toast 点击跳转页签的诉求已放弃）。
 - **F5 上下文用量**：transcript JSONL **在后端解析**——文件可达数百 MB，前端不直接读。hooks 模块新增命令 **`hooks_context_usage`**（参数 `{ transcriptPath: string }`，返回 `ContextUsage | null`，其中 `ContextUsage` 四字段：`inputTokens: number`（输入 token）、`outputTokens: number`（输出 token，信息字段不计占用）、`cacheReadInputTokens: number`（缓存读取输入 token，serde default 兼容旧 transcript 缺失，缺省 0）、`cacheCreationInputTokens: number`（缓存创建输入 token，同上缺省 0）；实现：尾部读取（最后 64KB）+ 逆行扫描最后一条 `message.usage`，失败返回 null 降级）。**用量口径**：总占用 = `inputTokens + cacheReadInputTokens + cacheCreationInputTokens`，上限 200_000（`CLAUDE_CONTEXT_LIMIT`）；`outputTokens` 不计占用保留为信息字段。
 - F5 视图注册：`sideViewDefs.ts` 追加（id `agent-status`、title "Agent 状态"、icon 🤖、默认上区）。
 
 ## C13 阶段 3 专有契约（F6）
 
-- **Schema 内嵌**：SchemaStore `claude-code-settings.json` 随 slTerminal 打包（Vite import JSON），不放运行时下载。建议位置 `src/features/hooksConfig/schema/`（具体路径阶段 3 计划定）。
-- **matcher 语义表**：照 `feature-plan/phase3-config-panel.md` matcher 语义表（窄字符集→精确匹配 OR / 其他→JS 正则非锚定 / `*"`"`省略→全匹配 / 大小写敏感 / FileChanged、StopFailure 窄字符集）。语义引擎为纯函数，单点定义供测试工具与保存校验共用。
-- **面板注册**：走硬约束 #5 全流程（`panels/hooksConfig/`（或计划定名）→ `panelRegistry.ts` → `PANEL_TYPES` 追加）。
-- **单条启停**：禁用状态存 slTerminal 侧 settings（ADR-0002），四元组（层级+事件+matcher+command）标识。
-- **保存安全**：JSON + Schema 双校验不过拒绝保存；原子写（临时文件 + rename，照 `settings.rs` tempfile 先例）；保存后提示"需重启 claude 会话生效"。
+> 2026-07-31 全量修订：Phase 2 完成后对照代码现状 + 官方文档核实（3 路并行检索，证据见 `docs/hooks/D1`/`D2` 与检索报告），8 项决策经用户拍板。本节为阶段 3 唯一契约真值源。
+
+### C13-1 编辑范围与后端命令
+
+- **编辑范围**：面板只编辑 settings.json 的 **`hooks` 子树**（feature-plan「明确不做 hooks 之外字段」）。
+- **后端命令**（`src-tauri/src/hooks/config.rs`，`lib.rs` 注册）：
+
+| 命令 | 参数 | 返回 | 语义 |
+|------|------|------|------|
+| `hooks_config_read` | `layer: String`, `project_path: Option<String>` | `Result<serde_json::Value, AppError>` | 返回该层 `hooks` 子树；文件不存在或无 `hooks` 键 → `Ok(Value::Null)`；**JSON 损坏 → `Err`**（防止后续 merge 丢其他字段，对齐 C9 非法中止先例） |
+| `hooks_config_write` | `layer: String`, `hooks: serde_json::Value`, `project_path: Option<String>` | `Result<(), AppError>` | `hooks` 必须为 Object；后端 **read-modify-write**（读原文件 → 替换/插入 `hooks` 键 → 原子写），原样保留其他字段；原文件损坏 → `Err` 拒绝 |
+
+- `layer` 仅 `"user"` / `"project"` / `"local"`；非法走 `AppError::Validation`。
+- user 层 = `~/.claude/settings.json`（`dirs::home_dir()`，绕过沙箱，照 `settings.rs`/`projects.rs` 先例）；project/local 层 `project_path` 经 `validate_path_within_root` 沙箱校验后拼接 `.claude/settings.json` / `.claude/settings.local.json`。
+- 原子写：`NamedTempFile::new_in()` + `persist`（照 `settings.rs` 先例），不做 `.bak`。
+- 前端 wrapper：`src/ipc/hooksConfig.ts` `readHooksConfig(layer, projectPath?)` / `writeHooksConfig(layer, hooks, projectPath?)`（`layer: "user" | "project" | "local"`）。
+
+### C13-2 事件清单与分组
+
+30 事件 × 10 组，以 `docs/hooks/D2/02-settings-json-schema.md` §4.5 为真值源，全表写死于 `phase3/stages.md` Stage 02（feature-plan 原「九大分组」表述已修订）。事件元数据（分组/matcher 支持/匹配目标/handler 支持矩阵）集中于前端单点 `eventsCatalog.ts`，供 EventTree / HandlerForm / JsonMode 导航 / MatcherTester 共用。
+
+### C13-3 handler 字段矩阵（2026-07-31 官方文档核实，替代 feature-plan 原表）
+
+| 类型 | 字段（\* = 必填） |
+|------|------|
+| `command` | `command`\*、`args[]`、`async`、`asyncRewake`、`shell` + 通用字段 |
+| `http` | `url`\*`、headers{}`、`allowedEnvVars[]` + 通用字段（**无 method/body**——固定 POST，body 恒为事件 JSON） |
+| `mcp_tool` | `server`\*`、tool`\*`、`input{}` + 通用字段（字段名是 **`input`** 非 `args`） |
+| `prompt` | `prompt`\*`、model`、`continueOnBlock` + 通用字段 |
+| `agent` | `prompt`\*`、model` + 通用字段（**无 description/subagent_type**——那是内置 Agent 工具的输入参数，非 hook handler 字段） |
+| 通用 | `if`（仅工具事件求值：PreToolUse/PostToolUse/PostToolUseFailure/PermissionRequest/PermissionDenied）、`timeout`、`statusMessage`、`once`（仅 skill frontmatter 生效，settings.json 中忽略——**GUI 不展示**） |
+
+- `asyncTimeout` 是异步执行的**返回值字段**，不是配置字段（D1 §6.1 原记载已修正）。
+- 官方核实记录：`docs/hooks/D1/01-hooks-official-docs.md` §6 已同步修订。
+
+### C13-4 事件 → handler 支持矩阵（官方核实，与 feature-plan 一致）
+
+- **全 5 种**：`PermissionDenied`、`PermissionRequest`、`PostToolBatch`、`PostToolUse`、`PostToolUseFailure`、`PreToolUse`、`Stop`、`SubagentStop`、`TaskCompleted`、`TaskCreated`、`TeammateIdle`、`UserPromptExpansion`、`UserPromptSubmit`
+- **仅 command/http/mcp_tool**：`ConfigChange`、`CwdChanged`、`Elicitation`、`ElicitationResult`、`FileChanged`、`InstructionsLoaded`、`Notification`、`PostCompact`、`PreCompact`、`SessionEnd`、`StopFailure`、`SubagentStart`、`WorktreeCreate`、`WorktreeRemove`
+- **仅 command/mcp_tool**：`SessionStart`、`Setup`
+
+### C13-5 matcher 语义
+
+照 feature-plan matcher 语义表（官方核实全真：窄字符集→精确匹配 OR / 其他→JS 正则非锚定 / `*`、`""`、省略→全匹配 / 大小写敏感 / FileChanged、StopFailure 窄字符集仅字母/数字/`_`/`|`）。**版本前提**写入 matcherEngine 注释：逗号/空格分隔需 claude v2.1.191+、连字符需 v2.1.195+。语义引擎为纯函数，单点定义供测试工具与保存校验共用。
+
+**不支持 matcher 的事件**（GUI 省略 matcher 输入、保存时省略 `matcher` 键但保留数组包裹）：`UserPromptSubmit`、`PostToolBatch`、`Stop`、`TeammateIdle`、`TaskCreated`、`TaskCompleted`、`WorktreeCreate`、`WorktreeRemove`、`MessageDisplay`、`CwdChanged`。
+
+### C13-6 Schema 与校验栈
+
+- Schema 内嵌：SchemaStore `claude-code-settings.json` 随 slTerminal 打包（Vite import JSON），位置 `src/features/hooksConfig/schema/`；JSON 模式使用其 `properties.hooks` **子 schema**（对齐 C13-1 编辑范围）。**执行期核实 schema 是否自包含**——`codemirror-json-schema` 仅支持本地 `$ref`，若有远程 `$ref` 需预打包。
+- 校验栈：`codemirror-json-schema`（补全 `jsonCompletion` / 悬停 `jsonSchemaHover` / 波浪线 `jsonSchemaLinter`）+ 其底层 `json-schema-library` 做保存前独立校验（`compileSchema(schema).validate(data)`）——**不引 ajv**。新增依赖：`codemirror-json-schema`、`@codemirror/lint`、`@codemirror/autocomplete`（当前 package.json 缺后两者；`@codemirror/lang-json` 已有）。
+
+### C13-7 面板与入口
+
+- 面板注册：硬约束 #5 全流程——`src/panels/hooksConfig/` → `src/panelRegistry.ts` 注册 → `PANEL_TYPES` 追加；常量 `PANEL_HOOKS_CONFIG = "hooksConfig"`；不加入 `FILE_PANEL_TYPES` / `isAlwaysRenderPanel`。
+- **同页单例**：面板 id 规则 `hooksConfig-{pageId}`；入口命令 handler 先 `getPanel(id)` 查重 → 命中则 `focus()`，未命中才 `addPanel`。
+- 入口命令：`global.openHooksConfig`，context `global`，defaultKey `Ctrl+Shift+H`（执行期实测，若被 WebView2 拦截降级 `Ctrl+Alt+H`），priority 10。
+
+### C13-8 注入段保护与外部修改
+
+- **注入段保护**：`command` 含 `slterm-hook-reporter` 子串的条目（识别规则照 C9）在 GUI 标记「slTerminal 托管」并**禁删/禁禁用**；JSON 模式不限制（用户对自己文件有最终权利）；面板内 inject/uninstall 操作后自动重读 user 层。
+- **外部修改（轻量策略）**：切层 / 面板聚焦时重读配置；有未保存修改（dirty）时提示，不做 fs-event 监听（user 层文件不在 `notify_watch` 沙箱内）。
+- **单条启停**：禁用状态存 slTerminal 侧 settings（ADR-0002），四元组（层级+事件+matcher+command）标识；保存时 `filterDisabled` 剔除后写盘；失配记录 UI 标记「失效的禁用记录」。
+- **保存安全**：JSON + Schema 双校验不过拒绝保存；原子写；保存后提示「需重启 claude 会话生效」。
+
+### C13-9 E2E 约束
+
+- 面板保存链路 E2E 走 **project/local 层**（tempdir 项目），不碰真实 `~/.claude/settings.json`。
+- 现有 `__slterm_e2e_injectHooks` / `__slterm_e2e_uninstallHooks` / `__slterm_e2e_getHookInjectionStatus` helpers **保留**（L4 hooks 注入/卸载用例依赖）。
 
 ---
 
@@ -144,8 +209,8 @@ DTO（Rust `snake_case` ↔ JS `camelCase` 双边对应，硬约束 #4）：
 | 阶段 1 L4 关键路径用例选取 | 阶段 1 | 建议页签图标流转 |
 | `hooks_context_usage` 命令名与 DTO 字段 | 阶段 2 | 定后回填 C12 |
 | F4 toast 文案格式 | 阶段 2 | phase2 文件有推导默认 |
-| 面板类型名/目录名 | 阶段 3 | 建议 `hooksConfig` |
-| schema 内嵌具体路径 | 阶段 3 | C13 给建议 |
+| 面板类型名/目录名 | ~~阶段 3~~ | **已定（2026-07-31）**：`hooksConfig` / `src/panels/hooksConfig/`（C13-7） |
+| schema 内嵌具体路径 | ~~阶段 3~~ | **已定（2026-07-31）**：`src/features/hooksConfig/schema/claude-code-settings.json`（C13-6） |
 | 各阶段 Stage 划分与 ID 编号 | 各阶段 | 建议前缀 `P{N}-BE/FE/TE/DOC` |
 
 ## 人工验证点（各阶段 stages 必须含对应段）
