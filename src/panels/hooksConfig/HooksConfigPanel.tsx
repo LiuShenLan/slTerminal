@@ -1,9 +1,11 @@
-// HooksConfigPanel — hooks 配置面板（F6）Stage 04（P3-FE-02 + P3-FE-11 接入）
+// HooksConfigPanel — hooks 配置面板（F6）Stage 05（P3-FE-02 + P3-FE-11 + P3-FE-12 接入）
 //
 // 顶部工具栏：层级切换器（user/project/local，标注优先级 local>project>user）
-// + 模式切换（GUI | JSON）占位 + 注入状态条占位 + 保存按钮。
-// 中部为模式渲染容器，Stage 04 起渲染 JsonMode（JSON 模式编辑器）；
-// GuiMode（表单模式）Stage 05 实现后接入。
+// + 模式切换（GUI | JSON，默认 JSON）+ 注入状态条占位 + 保存按钮。
+// 中部为模式渲染容器：JSON 模式渲染 JsonMode；GUI 模式渲染 GuiMode
+// （Master-Detail 事件树 + 详情区，Stage 05 接入，替换原模式占位文案）。
+// GUI 编辑经 guiToJson → updateConfigJson 同步 configJson（双模式同步
+// 与「非法 JSON 禁切 GUI」由 Stage 06 P3-FE-16 落地）。
 // 三态：loading → content / error（损坏错误态——read 返回 Err，与无配置 null 区分）。
 // 保存按钮：dirty 且 JSON 合法（onValidationChange 上报）才可点。
 // 配色全部引用 theme/colors.ts token（硬约束 #6）。
@@ -11,6 +13,8 @@
 import React, { useCallback, useState } from "react";
 import { useHooksConfig } from "./useHooksConfig";
 import JsonMode from "./JsonMode";
+import GuiMode from "./GuiMode";
+import { guiToJson, type HooksConfigGui as ConfigGui } from "./configModel";
 import type { HooksConfigJson, HooksLayer } from "../../types/hooksConfig";
 import { PANEL_BG, ERROR_FG, HTML_PANEL_LOADING_FG, INPUT_BORDER, SIDEBAR_FG } from "../../theme";
 
@@ -84,10 +88,12 @@ const modeContainerStyle: React.CSSProperties = {
 };
 
 const HooksConfigPanel: React.FC<HooksConfigPanelProps> = () => {
-  const { layer, setLayer, rootPath, configJson, dirty, error, loading, save, reload, updateConfigJson } =
+  const { layer, setLayer, rootPath, configJson, guiModel, dirty, error, loading, save, reload, updateConfigJson } =
     useHooksConfig();
   // JsonMode 校验上报：非法 JSON / schema 违规 → 禁用保存（Stage 06 在此基础上加弹窗提示）
   const [jsonValid, setJsonValid] = useState(true);
+  // 模式切换（GUI | JSON），默认 JSON（Stage 06 在此基础上加「非法 JSON 禁切 GUI」）
+  const [mode, setMode] = useState<"gui" | "json">("json");
 
   /** JsonMode onChange：合法 JSON 才更新 configJson（非法保留最后合法快照，仅校验上报） */
   const handleJsonChange = useCallback(
@@ -97,6 +103,19 @@ const HooksConfigPanel: React.FC<HooksConfigPanelProps> = () => {
       } catch {
         // 非法 JSON：不更新 configJson（保留最后合法快照），onValidationChange 已上报
       }
+    },
+    [updateConfigJson],
+  );
+
+  /** GuiMode 变更回调：GUI 模型 → guiToJson → updateConfigJson（configJson + guiModel 同步重算） */
+  const handleGuiChange = useCallback(
+    (gui: ConfigGui) => {
+      // guiModel 运行时即 jsonToGui 产物（含 group 字段、matcher 恒为 string），
+      // 与 configModel 的 HooksConfigGui 仅静态类型差异（types/hooksConfig 声明的
+      // matcher 为 string|null、缺 group），此处强转对齐 configModel 契约；
+      // guiToJson 产物（configModel.HooksConfigJson，type 为宽 string）同样强转回
+      // types/hooksConfig 的 HooksConfigJson（结构等价，仅 type 收窄差异）
+      updateConfigJson(guiToJson(gui) as unknown as HooksConfigJson);
     },
     [updateConfigJson],
   );
@@ -149,8 +168,25 @@ const HooksConfigPanel: React.FC<HooksConfigPanelProps> = () => {
         ))}
         <span style={hintStyle}>{PRIORITY_HINT}</span>
         <span style={{ flex: 1 }} />
-        {/* 模式切换（GUI | JSON）占位——JsonMode/GuiMode 后续 Stage 实现 */}
-        <span style={hintStyle}>GUI | JSON</span>
+        {/* 模式切换（GUI | JSON）——Stage 05 接入 GuiMode（非法 JSON 禁切 GUI 由 Stage 06 落地） */}
+        <span style={{ display: "flex", gap: 4 }}>
+          <button
+            type="button"
+            data-e2e="hooks-mode-gui"
+            onClick={() => setMode("gui")}
+            style={layerButtonStyle(mode === "gui")}
+          >
+            GUI
+          </button>
+          <button
+            type="button"
+            data-e2e="hooks-mode-json"
+            onClick={() => setMode("json")}
+            style={layerButtonStyle(mode === "json")}
+          >
+            JSON
+          </button>
+        </span>
         {/* 注入状态条占位——Stage 07 并入注入状态 */}
         <span style={hintStyle}>注入状态：--</span>
         {/* 保存按钮（dirty 且 JSON 合法才可点） */}
@@ -168,13 +204,17 @@ const HooksConfigPanel: React.FC<HooksConfigPanelProps> = () => {
           保存
         </button>
       </div>
-      {/* 模式渲染容器（Stage 04 起渲染 JsonMode；GuiMode Stage 05 接入） */}
+      {/* 模式渲染容器（JSON = JsonMode；GUI = GuiMode，Stage 05 接入） */}
       <div style={modeContainerStyle} data-e2e="hooks-mode-container">
-        <JsonMode
-          value={JSON.stringify(configJson, null, 2)}
-          onChange={handleJsonChange}
-          onValidationChange={(isValid) => setJsonValid(isValid)}
-        />
+        {mode === "gui" ? (
+          <GuiMode gui={guiModel as unknown as ConfigGui} onChange={handleGuiChange} />
+        ) : (
+          <JsonMode
+            value={JSON.stringify(configJson, null, 2)}
+            onChange={handleJsonChange}
+            onValidationChange={(isValid) => setJsonValid(isValid)}
+          />
+        )}
       </div>
     </div>
   );
