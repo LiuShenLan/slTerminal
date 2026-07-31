@@ -9,15 +9,16 @@ import {
 } from "../panelRegistry";
 
 describe("panelRegistry", () => {
-  // 1. panelRegistry 包含 terminal、editor、htmlviewer、gitshow、diff 五个键
-  it("包含 terminal、editor、htmlviewer、gitshow、diff 五个键", () => {
+  // 1. panelRegistry 包含 terminal、editor、htmlviewer、gitshow、diff、hooksConfig 六个键
+  it("包含 terminal、editor、htmlviewer、gitshow、diff、hooksConfig 六个键", () => {
     const keys = Object.keys(panelRegistry);
-    expect(keys).toHaveLength(5);
+    expect(keys).toHaveLength(6);
     expect(keys).toContain("terminal");
     expect(keys).toContain("editor");
     expect(keys).toContain("htmlviewer");
     expect(keys).toContain("gitshow");
     expect(keys).toContain("diff");
+    expect(keys).toContain("hooksConfig");
   });
 
   // 2. terminal 注册项的 component 是 TerminalPanel
@@ -49,6 +50,12 @@ describe("panelRegistry", () => {
     const entry = panelRegistry.diff;
     expect(typeof entry).toBe("function");
   });
+
+  // 新增：hooksConfig 注册项为函数组件
+  it("hooksConfig 注册项为函数组件", () => {
+    const entry = panelRegistry.hooksConfig;
+    expect(typeof entry).toBe("function");
+  });
 });
 
 describe("terminalTabConfig", () => {
@@ -68,13 +75,20 @@ describe("terminalTabConfig", () => {
 });
 
 describe("PANEL_TYPES", () => {
-  // 6. PANEL_TYPES 包含 ["terminal", "editor", "htmlviewer", "gitshow", "diff"]
-  it('包含 ["terminal", "editor", "htmlviewer", "gitshow", "diff"]', () => {
-    expect(PANEL_TYPES).toEqual(["terminal", "editor", "htmlviewer", "gitshow", "diff"]);
+  // 6. PANEL_TYPES 包含 ["terminal", "editor", "htmlviewer", "gitshow", "diff", "hooksConfig"]
+  it('包含 ["terminal", "editor", "htmlviewer", "gitshow", "diff", "hooksConfig"]', () => {
+    expect(PANEL_TYPES).toEqual([
+      "terminal",
+      "editor",
+      "htmlviewer",
+      "gitshow",
+      "diff",
+      "hooksConfig",
+    ]);
   });
 
-  it("长度为 5", () => {
-    expect(PANEL_TYPES).toHaveLength(5);
+  it("长度为 6", () => {
+    expect(PANEL_TYPES).toHaveLength(6);
   });
 
   it("as const 只读，元素类型为字面量", () => {
@@ -84,6 +98,7 @@ describe("PANEL_TYPES", () => {
     expect(PANEL_TYPES[2]).toBe("htmlviewer");
     expect(PANEL_TYPES[3]).toBe("gitshow");
     expect(PANEL_TYPES[4]).toBe("diff");
+    expect(PANEL_TYPES[5]).toBe("hooksConfig");
   });
 });
 
@@ -111,6 +126,11 @@ describe("isValidPanelType", () => {
   // 新增：isValidPanelType("diff") → true
   it('"diff" 返回 true', () => {
     expect(isValidPanelType("diff")).toBe(true);
+  });
+
+  // 新增：isValidPanelType("hooksConfig") → true
+  it('"hooksConfig" 返回 true', () => {
+    expect(isValidPanelType("hooksConfig")).toBe(true);
   });
 
   // 9. isValidPanelType("unknown") → false
@@ -160,6 +180,11 @@ describe("FILE_PANEL_TYPES", () => {
 
   it('包含 "diff"', () => {
     expect(FILE_PANEL_TYPES.has("diff")).toBe(true);
+  });
+
+  // 新增：不包含 "hooksConfig"（无 filePath，不参与标题计算）
+  it('不包含 "hooksConfig"', () => {
+    expect(FILE_PANEL_TYPES.has("hooksConfig")).toBe(false);
   });
 
   it('不包含 "terminal"', () => {

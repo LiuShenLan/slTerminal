@@ -8,6 +8,7 @@ import { EditorPanel } from "./panels/editor";
 import { HtmlPanel } from "./panels/html";
 import { GitShowPanel } from "./panels/gitshow";
 import { DiffPanel } from "./panels/diff";
+import { HooksConfigPanel } from "./panels/hooksConfig";
 
 /** 终端面板类型标识 */
 export const PANEL_TERMINAL = "terminal" as const;
@@ -19,6 +20,8 @@ export const PANEL_HTML_VIEWER = "htmlviewer" as const;
 export const PANEL_GIT_SHOW = "gitshow" as const;
 /** Git 双栏 diff 面板类型标识——Stage 04 实现，此处仅注册占位 */
 export const PANEL_DIFF = "diff" as const;
+/** hooks 配置面板类型标识 */
+export const PANEL_HOOKS_CONFIG = "hooksConfig" as const;
 
 /** Dockview 面板组件注册表 */
 export const panelRegistry = {
@@ -37,6 +40,9 @@ export const panelRegistry = {
   diff: DiffPanel as React.FC<{
     params: { panelId: string; filePath: string; oldPath?: string; repoPath: string };
   }>,
+  hooksConfig: HooksConfigPanel as React.FC<{
+    params: { panelId: string };
+  }>,
 };
 
 /** 终端面板渲染策略：始终挂载（保持 PTY 存活） */
@@ -51,6 +57,7 @@ export const PANEL_TYPES = [
   PANEL_HTML_VIEWER,
   PANEL_GIT_SHOW,
   PANEL_DIFF,
+  PANEL_HOOKS_CONFIG,
 ] as const;
 export type PanelType = (typeof PANEL_TYPES)[number];
 

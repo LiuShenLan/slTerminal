@@ -9,6 +9,7 @@ import { useLayout } from "./stores/layout";
 import { useFontSize, cancelPendingSave as cancelFontSizeSave } from "./stores/fontSize";
 import { useKeybindings, cancelPendingSave as cancelKeybindingsSave } from "./stores/keybindings";
 import { useSideBar, cancelPendingSave as cancelSideBarSave } from "./stores/sideBar";
+import { cancelPendingSave as cancelHooksConfigSave } from "./stores/hooksConfig";
 import { saveLayout } from "./workspace/layoutSerde";
 import { pty } from "./ipc";
 import { setProjectRoot } from "./ipc/fs";
@@ -142,6 +143,7 @@ function App() {
         cancelFontSizeSave();
         cancelKeybindingsSave();
         cancelSideBarSave();
+        cancelHooksConfigSave();
         await Promise.race([
           saveAllProjects(),
           new Promise<void>((resolve) => setTimeout(resolve, SHUTDOWN_TIMEOUT_MS)),
