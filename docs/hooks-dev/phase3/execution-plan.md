@@ -110,16 +110,16 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
 
 | Stage | 状态 | commit SHA | 通过测试 | 遗留 failedItems |
 |-------|------|------------|----------|------------------|
-| 01 | 未开始 | — | — | — |
-| 02 | 未开始 | — | — | — |
-| 03 | 未开始 | — | — | — |
-| 04 | 未开始 | — | — | — |
-| 05 | 未开始 | — | — | — |
-| 06 | 未开始 | — | — | — |
-| 07 | 未开始 | — | — | — |
-| 08 | 未开始 | — | — | — |
-| 09 | 未开始 | — | — | — |
-| 10 | 未开始 | — | — | — |
+| 01 | 完成 | d847578 | L1: config 18 条 + clippy | — |
+| 02 | 完成 | 989c991 | L2: 74 条（matcher 25 + model 21 + catalog 16 + contract 12）+ tsc + eslint | — |
+| 03 | 完成 | 7f1a0c0 | L2: 62 条（store 21 + panel 16 + panel-registry 25）+ tsc + eslint | — |
+| 04 | 完成 | 8bbffb1 | L2: 17 条 + 全量 1808 用例 + tsc + eslint + vite build | — |
+| 05 | 完成 | 4954f5f | L2: 59 条（gui 21 + handlerform 38）+ 全量 1867 + tsc + eslint | — |
+| 06 | 完成 | 3877cc6 | L2: 9 条 + hooks-config 全 189 + 全量 1876 + tsc + eslint | — |
+| 07 | 完成 | d0e6efe | L2: 10 条 + hooks-config 全 205 + tsc + eslint | — |
+| 08 | 完成 | 90af351 | L2: 21 条（catalog 14 + entry 7）+ 全量 1900 + tsc + eslint | — |
+| 09 | 完成（fix-loop 1 轮） | cc61783 | L4: 26/26（含 P3-TE-18）+ build:e2e + vite build | — |
+| 10 | 完成（fix-loop 1 轮） | — | —（文档；契约回查结论见 `docs/hooks-dev/phase3/contract-recheck.md`） | — |
 
 ---
 
@@ -161,6 +161,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
 - `docs/hooks-dev/phase3/workflows/verify/stage-08.md`
 - `docs/hooks-dev/phase3/workflows/verify/stage-09.md`
 - `docs/hooks-dev/phase3/workflows/verify/stage-10.md`
+- `docs/hooks-dev/phase3/contract-recheck.md`（Stage 10 P3-DOC-06 契约回查结论落盘：一致项打勾 + C13-6 偏差记录，2026-08-01）
 
 本计划关联修订产物（2026-07-31，契约与需求同步）：
 

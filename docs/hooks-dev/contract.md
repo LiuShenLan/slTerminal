@@ -177,7 +177,7 @@ DTO（Rust `snake_case` ↔ JS `camelCase` 双边对应，硬约束 #4）：
 ### C13-6 Schema 与校验栈
 
 - Schema 内嵌：SchemaStore `claude-code-settings.json` 随 slTerminal 打包（Vite import JSON），位置 `src/features/hooksConfig/schema/`；JSON 模式使用其 `properties.hooks` **子 schema**（对齐 C13-1 编辑范围）。**执行期核实 schema 是否自包含**——`codemirror-json-schema` 仅支持本地 `$ref`，若有远程 `$ref` 需预打包。
-- 校验栈：`codemirror-json-schema`（补全 `jsonCompletion` / 悬停 `jsonSchemaHover` / 波浪线 `jsonSchemaLinter`）+ 其底层 `json-schema-library` 做保存前独立校验（`compileSchema(schema).validate(data)`）——**不引 ajv**。新增依赖：`codemirror-json-schema`、`@codemirror/lint`、`@codemirror/autocomplete`（当前 package.json 缺后两者；`@codemirror/lang-json` 已有）。
+- 校验栈：`codemirror-json-schema`（补全 `jsonCompletion` / 悬停 `jsonSchemaHover` / 波浪线 `jsonSchemaLinter`）+ 其底层 `json-schema-library` 做保存前独立校验（**`new Draft07(schema).validate(data)`**——2026-08-01 执行期确认 `json-schema-library@9.3.5` 无 `compileSchema` 导出，真实 API 为 `Draft07` 类构造 + `.validate`，见 `src/features/hooksConfig/schema/index.ts`）——**不引 ajv**。新增依赖：`codemirror-json-schema`、`@codemirror/lint`、`@codemirror/autocomplete`（当前 package.json 缺后两者；`@codemirror/lang-json` 已有）。
 
 ### C13-7 面板与入口
 

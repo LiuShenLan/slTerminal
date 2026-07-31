@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 模块职责
 
-hooks 模块——Claude Code hook 宿主侧增强：信号文件通道（接收 + 解析 + 广播）、hook 脚本注入/卸载/状态查询、transcript token 用量查询。
+hooks 模块——Claude Code hook 宿主侧增强：信号文件通道（接收 + 解析 + 广播）、hook 脚本注入/卸载/状态查询、transcript token 用量查询、**hooks 配置三层读写**（`config.rs`，P3-BE-01/02/03）。
 
 核心数据流：
 
@@ -65,6 +65,20 @@ PTY spawn 时注入 `SLTERM_PANEL_ID` 环境变量（与 `COLORTERM`/`TERM`/`TER
 
 watcher 使用 `static WATCHER: Mutex<Option<HookSignalWatcher>>`（模块级），避免在 `state.rs` 的 `AppState` 中新增字段导致循环依赖。`start_signal_watcher` 幂等：已启动则跳过不报错。watcher 线程名 `hook-signal-watcher`，在 `lib.rs` 的 `.setup()` 中启动。
 
+### hooks 子树三层读写（config.rs，P3-BE-01/02/03）
+
+配置面板（F6）只编辑 settings.json 的 **hooks 子树**（C13-1 编辑范围），三层路径：
+
+- `user` 层 → `~/.claude/settings.json`（`dirs::home_dir()` 解析，绕过 project_root 沙箱，照 `settings.rs`/`projects.rs` 先例）
+- `project` 层 → `<projectPath>/.claude/settings.json`
+- `local` 层 → `<projectPath>/.claude/settings.local.json`
+
+project/local 层入参经 `validate_path_within_root` 沙箱校验：project_path 缺失返回 `Validation`，校验失败返回 `PathNotAllowed`（P3-BE-06/07）。非法 layer / 非法 hooks / JSON 损坏统一走 `AppError::Validation`，IO 错误走 `AppError::IoKind`（P3-BE-08）。阻塞 I/O 全部在 `spawn_blocking` 内执行（硬约束 #3）。
+
+**read 语义**：文件不存在或无 `hooks` 键 → `Ok(Null)`（面板首次创建场景）；**JSON 损坏 → `Err`**（不返回 Null——防止面板在损坏文件上编辑后 merge 丢其他字段，对齐 C9 注入的非法中止先例）。
+
+**write 语义**：`hooks` 必须为 JSON Object（否则 `Validation`）；后端 **read-modify-write**——读原文件 → 根对象 `hooks` 键替换为入参 → 原子写（`NamedTempFile` + `persist`，明确不做 `.bak`），`permissions`/`env`/`$schema` 等其他字段原样保留（P3-BE-03）。原文件损坏 → `Err` 拒绝覆盖；根元素为数组/标量无法安全 merge → `Err`；文件内容为 `null`（合法 JSON）视作空对象。父目录不存在时自动 `create_dir_all`（仅写入路径）。
+
 ### 信号文件瞬态特性 + dev 环境注入路径
 
 **目录常态为空是设计行为**：`process_signal_file`（`signal.rs:49-79`）处理后无论 emit 成败均立即 `fs::remove_file` 删除文件，watcher debounce 仅 50ms（`watcher.rs:37`）。信号文件从产生到删除存活亚秒级，任何时刻 `ls` 几乎都看不到文件——目录为空恰是管道正常工作的表现。如需观察信号文件，应使用文件系统监视工具（如 `watchexec`）或临时停 watcher。
@@ -85,11 +99,12 @@ watcher 使用 `static WATCHER: Mutex<Option<HookSignalWatcher>>`（模块级）
 | `watcher.rs` | 信号目录监听器 `HookSignalWatcher`：基于 `notify` + `notify-debouncer-full`，NonRecursive，50ms debounce，线程名 `hook-signal-watcher`，`stop()` 幂等 + `Drop` 清理 |
 | `inject.rs` | 注入/卸载/状态三命令：`hooks_inject`、`hooks_uninstall`、`hooks_injection_status`。阻塞 I/O 经 `spawn_blocking` 串行化（硬约束 #3） |
 | `usage.rs` | transcript token 用量查询：`hooks_context_usage` 命令 + `ContextUsage` DTO + `parse_usage_line` / `scan_transcript_usage` 纯 I/O 逻辑 |
+| `config.rs` | hooks 配置三层读写（P3-BE-01/02/03）：`hooks_config_read` / `hooks_config_write` 两条 Tauri 命令 + `parse_layer` / `resolve_config_path` / `read_hooks_subtree` / `write_hooks_subtree` 纯逻辑 |
 | `../../assets/slterm-hook-reporter.js` | Node 单文件 hook 上报脚本（`include_str!` 嵌入），零依赖，C10 契约 |
 
 ## 命令
 
-三个 Tauri 命令均在 `lib.rs` 的 `generate_handler!` 注册，读写 `~/.claude/settings.json`（绕过 project_root 路径沙箱，照 `settings.rs` 先例）。
+六个 Tauri 命令均在 `lib.rs` 的 `generate_handler!` 注册。前四个（注入/卸载/状态/用量）读写 `~/.claude/settings.json`，绕过 project_root 路径沙箱（照 `settings.rs` 先例）；后两条（配置读写，P3-BE）仅 user 层绕过沙箱，project/local 层经 `validate_path_within_root` 校验。
 
 ### hooks_inject
 
@@ -120,6 +135,21 @@ watcher 使用 `static WATCHER: Mutex<Option<HookSignalWatcher>>`（模块级）
 返回：`Option<ContextUsage>`——最后一条含 `message.usage` 的行的 token 数据；无 usage 记录或文件异常返回 `null`（非 error）。
 
 流程：`spawn_blocking` 内打开文件 → 读取尾部最多 64KB（`TRANSCRIPT_TAIL_BYTES`）→ UTF-8 解码 → 按行分割 → 从中途起始则跳过首行（截断行）→ 逆行扫描 → 对每行调用 `parse_usage_line` → 返回首个匹配的 usage。
+
+### hooks_config_read / hooks_config_write（P3-BE-02/03）
+
+签名：
+
+```rust
+async fn hooks_config_read(layer: String, project_path: Option<String>, state: State<'_, AppState>) -> Result<Value, AppError>
+async fn hooks_config_write(layer: String, hooks: Value, project_path: Option<String>, state: State<'_, AppState>) -> Result<(), AppError>
+```
+
+- **layer**：仅 `"user"` / `"project"` / `"local"`，非法 → `AppError::Validation`（P3-BE-02）。
+- **路径解析**：锁内读取 `state.project_root` 后 `resolve_config_path` 解析（作用域块结束时即 drop 锁守卫，避免非 Send 的 `RwLockReadGuard` 跨 await 存活）。user 层不经过沙箱；project/local 层 `project_path` 缺失 → `Validation`、沙箱校验失败 → `PathNotAllowed`（P3-BE-06/07）。
+- **read**：返回该层 `hooks` 子树（非整文件）；文件不存在或无 `hooks` 键 → `Ok(Value::Null)`；JSON 损坏 → `Err(Validation)`。
+- **write**：`hooks` 必须为 JSON Object；read-modify-write merge 原样保留其他字段；原文件损坏 → `Err` 拒绝覆盖；父目录自动创建；`NamedTempFile` + `persist` 原子写，不做 `.bak`。
+- 阻塞 I/O 均在 `spawn_blocking` 内（硬约束 #3）。前端 wrapper 见 `src/ipc/hooksConfig.ts`（C13-1）。
 
 ## ContextUsage DTO
 
@@ -164,7 +194,7 @@ hook 脚本性能实测结论（2026-07-29，Win11 build 26200，Node v22）：
 
 ## 关键约束
 
-- **阻塞 I/O 必须 `spawn_blocking`**：四命令（三注入/卸载命令 + `hooks_context_usage`）均经 `tokio::task::spawn_blocking` 串行化（硬约束 #3）。
+- **阻塞 I/O 必须 `spawn_blocking`**：六命令（三注入/卸载命令 + `hooks_context_usage` + `hooks_config_read`/`hooks_config_write` 两条配置命令）均经 `tokio::task::spawn_blocking` 串行化（硬约束 #3）。
 - **原子写**：settings.json 和脚本文件均使用 `tempfile::NamedTempFile` + `persist()`，确保写盘原子性。
 - **路径规范化**：脚本绝对路径经 `dunce::simplified()` 处理（剥 Windows `\\?\` 前缀），matcher command 中反斜杠统一替换为 `/`。
 - **模板内嵌**：`slterm-hook-reporter.js` 通过 `include_str!` 编译期嵌入，无需运行时读 assets 目录。
@@ -173,7 +203,7 @@ hook 脚本性能实测结论（2026-07-29，Win11 build 26200，Node v22）：
 
 ## 测试模式
 
-Rust 测试分布 5 个位置（均为 `#[cfg(test)] mod tests` 嵌入源文件），共 66 用例。
+Rust 测试分布 6 个位置（均为 `#[cfg(test)] mod tests` 嵌入源文件），共 89 用例。
 
 | 位置 | 用例数 | 覆盖范围 |
 |------|--------|---------|
@@ -181,7 +211,8 @@ Rust 测试分布 5 个位置（均为 `#[cfg(test)] mod tests` 嵌入源文件�
 | `signal.rs` `#[cfg(test)]` | 9 | parse_signal_file 全分支（合法完整/optionals null/缺 panelId/空 panelId/非法 JSON/空串/仅空白）、camelCase 序列化+反序列化往返 |
 | `watcher.rs` `#[cfg(test)]` | 6 | is_signal_file（.json/.JSON/.tmp/无扩展名）、watcher 生命周期（stop 幂等、Drop join 线程） |
 | `inject.rs` `#[cfg(test)]` | 20 | template_version 正值、HOOK_EVENTS 计数+唯一+关键事件、has_slterm_matchers（空/无 hooks 键/命中/用户 hook 不误检/null hooks 值）、disk_script_version（解析/无版本/缺失/空格分号）、remove_slterm_matchers（清理 slterm 条目+保留用户 hook/清理空事件键/无 slterm 条目）、inject_matchers（10 事件齐全/保留用户 matcher/二次注入幂等）、build_matcher_entry（timeout=5/matcher 空/type=command）、模板内嵌校验（非空/含 SLTERM_PANEL_ID/含 SCRIPT_VERSION） |
-| `usage.rs` `#[cfg(test)]` | 23 | parse_usage_line 全分支（合法/缺字段/缺 message/非法 JSON/空串/大值 u64/额外字段忽略/类型不匹配）、scan_transcript_usage 集成（末行命中/中间行回溯/无 usage/文件不存在/空文件/损坏行跳过）、ContextUsage serde camelCase（序列化+反序列化）、TRANSCRIPT_TAIL_BYTES 常量（64KB）、hooks_context_usage 端到端（多条 usage 返最后/无 usage 返 None/损坏行跳过/空文件/大文件 >128KB 仅读尾部 64KB）——P2-TE-05 五用例 |
+| `usage.rs` `#[cfg(test)]` | 28 | parse_usage_line 全分支（合法/缺字段/缺 message/非法 JSON/空串/大值 u64/额外字段忽略/类型不匹配/cache 字段提取/缺失默认 0/显式 0/单 cache 字段）、scan_transcript_usage 集成（末行命中/中间行回溯/无 usage/文件不存在/空文件/损坏行跳过）、ContextUsage serde camelCase（序列化+反序列化+缺 cache 字段反序列化）、TRANSCRIPT_TAIL_BYTES 常量（64KB）、hooks_context_usage 端到端（多条 usage 返最后/无 usage 返 None/损坏行跳过/空文件/大文件 >128KB 仅读尾部 64KB）——P2-TE-05 五用例 |
+| `config.rs` `#[cfg(test)]` | 18 | parse_layer（三层合法/非法拒绝）、resolve_config_path（user 层 home 路径/三层拼接/缺失 project_path Validation/子树外 PathNotAllowed）、read_hooks_subtree（文件不存在 Null/无 hooks 键 Null/子树提取/损坏 Err）、write_hooks_subtree（原子写/父目录自动创建/merge 保留其他字段/损坏拒绝覆盖/非 Object hooks 拒绝无副作用/非 Object 根拒绝/null 根视空对象）——P3-BE 读写命令纯逻辑 |
 
 ### 单元测试组织
 
@@ -268,6 +299,7 @@ cargo test --manifest-path src-tauri/Cargo.toml hooks::inject -- --test-threads=
 cargo test --manifest-path src-tauri/Cargo.toml hooks::signal -- --test-threads=1
 cargo test --manifest-path src-tauri/Cargo.toml hooks::watcher -- --test-threads=1
 cargo test --manifest-path src-tauri/Cargo.toml hooks::usage -- --test-threads=1
+cargo test --manifest-path src-tauri/Cargo.toml hooks::config -- --test-threads=1
 ```
 
 ## 修改注意事项
@@ -279,5 +311,6 @@ cargo test --manifest-path src-tauri/Cargo.toml hooks::usage -- --test-threads=1
 5. 修改 `parse_signal_file` / `process_signal_file` 后跑 `signal.rs` 全部 9 条测试 + `mod.rs` 的 4 条快速冒烟测试。
 6. **绝对不要修改 C10 契约**——`slterm-hook-reporter.js` 任何代码路径必须 `process.exit(0)`。新增 catch 分支时确认静默退出、不写 stderr。
 7. 修改注入命令的 settings.json 读写逻辑后，务必跑 L4 E2E（`npm run e2e`）验证真实 settings.json merge/卸载/非法 JSON 中止行为（P1-TE-03）。
-8. 修改 `parse_usage_line` / `scan_transcript_usage` / `TRANSCRIPT_TAIL_BYTES` 后跑 `usage.rs` 全部 23 条测试，尤其 P2-TE-05 五用例（大文件尾部扫描、损坏行跳过）。
+8. 修改 `parse_usage_line` / `scan_transcript_usage` / `TRANSCRIPT_TAIL_BYTES` 后跑 `usage.rs` 全部 28 条测试，尤其 P2-TE-05 五用例（大文件尾部扫描、损坏行跳过）与 cache 字段用例。
 9. 修改 `ContextUsage` DTO 字段后同步更新 `src/types/hooks.ts`（前端 `ContextUsage` 接口）和 `src/ipc/hooks.ts`（IPC wrapper），跑 `ipc-hooks-contract.test.ts` + `context_usage_serialize_camelcase` / `context_usage_deserialize_camelcase` 测试。
+10. 修改 `config.rs`（`parse_layer` / `resolve_config_path` / `read_hooks_subtree` / `write_hooks_subtree`）后跑 `hooks::config` 全部 18 条测试。改 read 的「损坏 → Err」或 write 的 merge 语义时，同步核对 `src/ipc/hooksConfig.ts` 与契约 C13-1（损坏文件上编辑后 merge 丢字段是设计红线）。新增配置层（如 org 层）需同步更新 `parse_layer`、`layer_file_name` 与 `src/types/hooksConfig.ts` 的 `HooksLayer`。

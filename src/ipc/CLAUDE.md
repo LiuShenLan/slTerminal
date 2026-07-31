@@ -24,6 +24,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `window.ts` | Tauri Window API | `registerCloseHandler` — 封装 `onCloseRequested` 关闭生命周期 |
 | `shell.ts` | Tauri plugin | `@tauri-apps/plugin-opener` 的 `openUrl` re-export |
 | `hooks.ts` | `hooks/` | `hooks_inject`, `hooks_uninstall`, `hooks_injection_status`, `hooks_context_usage`（参数 `{ transcriptPath: string }`，返回 `ContextUsage \| null`）；`onHookEvent`（`listen("hook-event")` 封装） |
+| `hooksConfig.ts` | `hooks/`（config.rs） | `hooks_config_read`, `hooks_config_write`（C13-1 配置编辑命令）：`readHooksConfig(layer, projectPath?)` 返回该层 settings.json 的 **hooks 子树**（文件不存在或无 hooks 键 → `null`，JSON 损坏 → 后端 Err）；`writeHooksConfig(layer, hooks, projectPath?)` 传 hooks 子树，后端 **read-modify-write merge**（替换/插入 hooks 键，原样保留 permissions/env 等其他字段），hooks 必须为 JSON Object。user 层不传 projectPath；project/local 层必须传（后端沙箱校验后拼接 `.claude/settings.json` / `.claude/settings.local.json`）。**与 `hooks.ts` 区分**：后者是 C6 注入/卸载/状态/用量命令 + hook-event 事件订阅，本文件是 C13-1 配置编辑命令的唯一 invoke 位置 |
 | `index.ts` | — | barrel export，统一对外暴露；含 `ping()` 健康检查命令 |
 
 ## 编码约定
@@ -38,7 +39,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 测试模式
 
-测试文件：`src/__tests__/ipc-contract.test.ts`（65 用例，含 3 条 DBG-4 契约守卫）+ `ipc-ping.test.ts`（1 用例）+ `ipc-hooks-contract.test.ts`（21 用例）。
+测试文件：`src/__tests__/ipc-contract.test.ts`（65 用例，含 3 条 DBG-4 契约守卫）+ `ipc-ping.test.ts`（1 用例）+ `ipc-hooks-contract.test.ts`（22 用例）+ `ipc-hooks-config-contract.test.ts`（12 用例，C13-1 配置命令四维验证）。
 
 ### IPC 合约测试
 

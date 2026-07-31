@@ -12,6 +12,7 @@ Dockview 面板系统——所有可托管到 Dockview 布局的面板组件及�
 - **html** — iframe + srcDoc HTML 浏览器式预览，sandbox 沙箱隔离
 - **gitshow** — CM6 只读模式（`EditorState.readOnly + EditorView.editable`），查看 HEAD 中文件内容
 - **diff** — 双栏 CM6 diff 面板：左侧 HEAD 只读 + HEAD gutter + 占位行，右侧工作区可编辑 + workdir gutter + 占位行
+- **hooksConfig** — hooks 配置面板（F6）：双模式编辑（JSON 优先 / GUI 表单）settings.json 的 hooks 子树（user/project/local 三层），单条启停（ADR-0002），F2 注入入口并入
 
 ## 架构决策
 
@@ -137,6 +138,18 @@ DiffPanel 的 DOM 层级为双层 flex 嵌套——外层 `diff-panel`（flex ro
 DiffPanel 的加载/错误/就绪三态中，容器 div 仅在 `"ready"` 态挂载。`useRef` 在 React commit 后才绑定 DOM 元素——首次 `"ready"` 渲染期间 `ref.current` 仍为 null。旧代码的 `useEffect([], [])` bridge（右容器）和直接 `ref.current` 读取（左容器）均无法在条件渲染下获取非 null DOM 元素。
 
 **修复**：`renderKey` state + `bridgedRef` guard + `useEffect([state.kind])`——effect 在 commit 后运行（ref 已绑定），设 `bridgedRef = true` 防重入，`setRenderKey` 触发额外渲染。`state.kind !== "ready"` 时重置 `bridgedRef`，支持 filePath 切换后重新桥接。效果：`useFontSizeWheel` / `usePanelFocus` 在 bridge 重渲染时以非 null 容器执行。
+
+### hooksConfig：双模式编辑（JSON/GUI）+ 单条启停（ADR-0002）
+
+`HooksConfigPanel`（F6，P3-FE-02/11/12/16/17/19/21/22）编辑 settings.json 的 **hooks 子树**（C13-1 编辑范围），三层配置：`user`（`~/.claude/settings.json`）/ `project`（`<projectPath>/.claude/settings.json`）/ `local`（`<projectPath>/.claude/settings.local.json`），优先级 Local > Project > User。
+
+- **双模式编辑**（P3-FE-16）：默认 JSON 模式（CM6 + codemirror-json-schema 补全/悬停/波浪线 + 事件导航侧栏 + MatcherTester 内联试测），GUI 模式为 Master-Detail（EventTree 事件树 + HandlerForm 表单）。`configJson` / `guiModel` / `dirty` 共享于 `useHooksConfig`——JSON 编辑经 `jsonToGui` 重算 GUI，GUI 编辑经 `guiToJson` 回写 JSON。非法 JSON（`onValidationChange` 上报）→ 禁切 GUI + 禁用保存。schema 内嵌于 `src/features/hooksConfig/schema/claude-code-settings.json`（SchemaStore 官方 schema + hooks 子 schema 提取，本地 `$ref` 自包含已核实）。
+- **hooks 子树三层配置**：rootPath 为空（无活跃项目）时 project/local 层禁用（仅 user 可用）；切层 / 面板聚焦（focusin）轻量重读做外部修改检测，dirty 时 `dialog.ask` 确认丢弃；后端 `hooks_config_write` read-modify-write merge 原样保留 permissions/env 等其他字段（P3-BE-03），前端不做 .bak。
+- **保存安全**（P3-FE-17）：JSON.parse + `validateHooksJson`（json-schema-library Draft07，非 ajv）双校验，任一失败弹窗拒绝写盘 → `filterDisabled` 剔除禁用条目 → 写盘；成功后提示「hooks 改动需重启 claude 会话生效」。
+- **单条启停**（ADR-0002，P3-FE-19/20）：禁用状态存 slTerminal 侧 settings（`stores/hooksConfig` 的 `disabledHooks` 段，四元组 layer+event+matcher+command），**不出现在配置文件中**；保存时 `filterDisabled` 剔除（key.command 非空 → 剔该 command 型 handler；空串 → 剔整 matcher 组；组空 → 移除事件键）；失配记录（外部修改/手动改 JSON 致四元组找不到匹配）UI 标记「失效的禁用记录」而非静默丢弃，点击启用即删除记录。
+- **注入段保护**（C13-8）：`command` 含 `slterm-hook-reporter` 子串的条目（`isSltermManaged`，识别规则照 C9）GUI 标记「slTerminal 托管」+ 禁删/禁禁用/表单只读；**JSON 模式不限制**（用户对自己文件有最终权利）。
+- **F2 并入**（P3-FE-21/22）：工具栏「注入 Hooks」/「卸载 Hooks」按钮直接调用 `src/ipc/hooks` 的 `inject()`/`uninstall()`（不改其实现），状态条显示 `getInjectionStatus()` 三态（已注入/未注入/版本过旧）；注入/卸载完成后自动重读 user 层配置（操作改写 `~/.claude/settings.json`，C13-8）——当前层非 user 则切到 user 层。
+- **同页单例**（C13-7）：面板 id = `hooksConfig-{activePageId}`，入口命令 `global.openHooksConfig`（Ctrl+Shift+H，见 shortcuts 模块）命中 `getPanel(id)` 聚焦、未命中 addPanel；面板 props 兼容 Dockview（无需依赖 panelId 的单例语义）。
 
 ### Ctrl+C 保留为中断
 
@@ -275,7 +288,18 @@ Claude Code 在用户主动 Ctrl+C 中断时不发射任何 hook 事件（`Stop`
 | `gitshow/GitShowPanel.tsx` | HEAD 文件只读查看面板：gitFileAtHead 取内容 → CM6 只读（readOnly+editable）+ oneDark + 语言扩展 + 字体主题；三态（loading/content/error）；大文件阈值复用；任意错误 → "该文件在 HEAD 中不存在" |
 | `diff/index.ts` | DiffPanel 导出 + DiffPanelParams 类型 |
 | `diff/DiffPanel.tsx` | Git 双栏 diff 面板：横向均分两栏（flex 50/50 + minWidth:0 防内容撑开）、容器 ref 桥接（renderKey + bridgedRef 支持条件渲染）、占位对齐（Decoration.widget）、垂直滚动同步（syncingRef）、双侧 gutter（headDiffGutter + diffGutter）、右侧 Ctrl+S 保存刷新链、左侧 .git 变更刷新 HEAD、右侧外部修改检测（净重载/脏弹窗） |
-| `diff/alignment.ts` | `computeAlignment(hunks)` 纯函数：DiffHunk[] → `{ left: Map<afterLine, count>, right: Map<afterLine, count> }`。规则：纯新增左侧插占位、纯删除右侧插占位、modified 行数不等少侧插差值。零 DOM 访问
+| `diff/alignment.ts` | `computeAlignment(hunks)` 纯函数：DiffHunk[] → `{ left: Map<afterLine, count>, right: Map<afterLine, count> }`。规则：纯新增左侧插占位、纯删除右侧插占位、modified 行数不等少侧插差值。零 DOM 访问 |
+| `hooksConfig/index.ts` | HooksConfigPanel 导出 |
+| `hooksConfig/HooksConfigPanel.tsx` | 面板根组件：层级切换器（user/project/local + 优先级标注，rootPath 空时 project/local 禁用）+ 模式切换（GUI/JSON，非法 JSON 禁 GUI）+ F2 注入状态条与注入/卸载按钮 + 失效禁用记录条 + 保存按钮（dirty 且合法才可点）+ 重启提示条；三态（loading/content/损坏 error） |
+| `hooksConfig/useHooksConfig.ts` | 数据 hook：rootPath 推导（照 useCommitStatus）、`readHooksConfig` 加载（null 视为 {}，Err 置损坏态）、双模式同步（configJson/guiModel/dirty）、保存（双校验 + filterDisabled + writeHooksConfig）、切层/focusin 轻量重读（dirty `dialog.ask` 守卫 + generation 取消）、启停切换（disabledKeys/staleDisabledKeys/toggleDisable）；挂载时加载禁用状态 store |
+| `hooksConfig/configModel.ts` | 配置模型双向转换纯函数：`jsonToGui`/`guiToJson`（round-trip 不丢数据，未知字段归 extraFields）、`isSltermManaged`（注入段识别，C9）、`isHandlerDisabled`/`isKeyPresentInConfig`/`filterDisabled`（四元组剔除规则，C13-8/ADR-0002） |
+| `hooksConfig/eventsCatalog.ts` | 事件元数据单点（P3-FE-26）：30 事件 × 10 组全表 + handler 支持档（A/B/C）+ 5 种 handler 字段矩阵（C13-3 官方版）+ matcher 窄字符集受限事件（FileChanged/StopFailure）+ 纯查询函数（getEventMeta/isMatcherSupported/getSupportedHandlerTypes 等） |
+| `hooksConfig/matcherEngine.ts` | matcher 语义引擎（C13-5）：`matchHook` 纯函数（exact-or / regex / all + 受限窄字符集），供 MatcherTester 试测与保存校验共用 |
+| `hooksConfig/JsonMode.tsx` | JSON 模式编辑器（P3-FE-11）：CM6 + `codemirror-json-schema`（jsonCompletion/jsonSchemaHover/jsonSchemaLinter，hooks 子 schema）+ jsonParseLinter + 事件导航侧栏（点击跳转选区）+ MatcherTester 内联试测；校验经 onValidationChange 上报 |
+| `hooksConfig/GuiMode.tsx` | GUI 表单模式（P3-FE-12，Master-Detail）：EventTree + 详情区（HandlerForm + matcher 输入）；选中态派生守卫（事件删除/重载回退空态）；注入段禁删（handler/含托管 handler 的 matcher 组/事件三层删除按钮禁用） |
+| `hooksConfig/EventTree.tsx` | 事件树（P3-FE-13）：三级树（分组折叠 → 事件 → matcher 组 → handler 摘要）+ hook 总数 + 仅渲染配置中已存在事件（未知事件归「未知事件」组）+ 「slTerminal 托管」标记 + 启停 checkbox（注入段无 checkbox——C13-8 禁禁用） |
+| `hooksConfig/HandlerForm.tsx` | handler 编辑表单（P3-FE-14）：5 种 type 专用字段（字段矩阵来自 eventsCatalog 单一真值源）+ 通用字段（if/timeout/statusMessage，once 不展示）+ type 切换保留通用字段清除不适用字段 + 注入段只读/禁删/禁禁用 |
+| `hooksConfig/MatcherTester.tsx` | matcher 实时试测工具（P3-FE-11）：输入 matcher + toolName + 事件 → `matchHook` 命中结果与匹配模式（exact-or/regex/all），事件感知窄字符集 |
 
 ## 硬约束
 
@@ -402,6 +426,14 @@ useXterm 是编排层——mock 6 个子 hook 才能隔离测试（`useFontSizeB
 `diff-alignment.test.ts`（16 用例）：
 - `computeAlignment` 纯函数全分支覆盖：纯新增/纯删除/等行修改/多删少/多增少/多 hunk 合并/空 hunks
 - 占位位置正确性：afterLine 索引 + 行数累积
+
+### hooks 配置面板测试
+
+测试文件位于 `src/__tests__/`，命名规则 `hooks-config-*.test.ts(x)` + `ipc-hooks-config-contract.test.ts`（12 文件，用例数见 `.claude/test-inventory.md`）：
+
+- **纯函数层**：`hooks-config-catalog`（eventsCatalog 事件元数据全表）、`hooks-config-matcher`（matchHook 全分支 + 受限窄字符集）、`hooks-config-model`（jsonToGui/guiToJson 双向转换 + isSltermManaged + filterDisabled）、`hooks-config-store`（disabledHooks sanitize/启停/debounce 持久化）
+- **组件层**：`hooks-config-panel`（三态/层级切换器禁用逻辑/保存按钮/focusin 重读）、`hooks-config-jsonmode`（CM6 + schema 扩展注册/校验上报/事件导航/MatcherTester）、`hooks-config-gui`（Master-Detail 渲染/增删事件与 handler/选中守卫）、`hooks-config-handlerform`（5 种 type 字段矩阵断言/type 切换/注入段禁改）、`hooks-config-disable`（禁用→保存过滤/失效记录/事件树 checkbox）、`hooks-config-entry`（入口命令同页单例）、`hooks-config-sync`（双模式同步）
+- **IPC 层**：`ipc-hooks-config-contract`（readHooksConfig/writeHooksConfig 四维验证）
 
 ### L3 终端 headless 测试
 

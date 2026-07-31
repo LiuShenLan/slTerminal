@@ -2,11 +2,11 @@
 
 > **本文档是项目用例数唯一真值源。** 所有 CLAUDE.md、README、CI 配置中引用的用例数均以此文件为准。更新测试后必须同步本文档。
 
-全量 **2217** 用例（Rust 359 + 前端 1717 + L3 116 + E2E 25），2026-08-01 更新。
+全量 **2333** 用例（Rust 382 + 前端 1809 + L3 116 + E2E 26），2026-08-01 更新。
 
 > **计数口径**：前端 (L2) 用例数以 `grep -cE '^\s*(it|test)\(' src/__tests__/*.test.ts src/__tests__/*.test.tsx` 展开的 `it`/`test` 块数为准（Vitest 实际运行数）；L3 同理 `test/terminal/*.test.ts`；Rust (L1) 以 `grep -c '#\[test\]'` 统计的 `#[test]` 属性数为准。L3 的 116 用例同时被 L2 (`npm test`) 和独立 L3 (`npm run test:l3`) 执行，但此处各层独立计数，不做去重。
 
-## L1 — Rust 单元/集成测试（18 文件 / 359 用例）
+## L1 — Rust 单元/集成测试（19 文件 / 382 用例）
 
 运行：`cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1`
 
@@ -18,7 +18,7 @@
 | `src-tauri/src/fs/mod.rs` | 28 | read_dir/write_file/create_dir/delete/rename + 命令包装单测 |
 | `src-tauri/src/notify/mod.rs` | 24 | FileWatcher 生命周期 + classify_by_kind 事件分类（全 7 种 EventKind） |
 | `src-tauri/src/state.rs` | 24 | ring buffer append+eviction+换行边界/validate_path_within_root 沙箱/canonicalize_or_ancestor |
-| `src-tauri/src/hooks/usage.rs` | 23 | parse_usage_line 全分支（合法 JSON/缺字段/缺 message/非法 JSON/空串/大值 u64/类型不匹配/额外字段忽略）+ scan_transcript_usage 集成（逆行命中/无 usage 回溯/文件不存在/空文件/损坏行跳过）+ ContextUsage serde camelCase + TRANSCRIPT_TAIL_BYTES 常量 + hooks_context_usage 端到端（多条 usage/空文件/大文件 >128KB 仅读尾部 64KB） |
+| `src-tauri/src/hooks/usage.rs` | 28 | parse_usage_line 全分支（合法 JSON/缺字段/缺 message/非法 JSON/空串/大值 u64/类型不匹配/额外字段忽略/cache 字段提取/缺失默认 0/显式 0/单 cache 字段）+ scan_transcript_usage 集成（逆行命中/无 usage 回溯/文件不存在/空文件/损坏行跳过）+ ContextUsage serde camelCase（含缺 cache 字段反序列化）+ TRANSCRIPT_TAIL_BYTES 常量 + hooks_context_usage 端到端（多条 usage/空文件/损坏行跳过/大文件 >128KB 仅读尾部 64KB） |
 | `src-tauri/src/hooks/inject.rs` | 20 | 注入幂等（空 settings/已有用户 hooks/已注入升级）/卸载干净/状态检测（injected/outdated/notInjected）/非法 JSON 中止/版本比对/notification 权限声明 |
 | `src-tauri/src/settings.rs` | 17 | 读写往返/文件不存在/JSON 损坏回退 .bak/浅合并/shadow 目录 + 命令包装单测 |
 | `src-tauri/src/pty/shell.rs` | 15 | pwsh 发现/shell-integration.ps1 嵌入/UTF-16LE Base64 往返/which_full_path/shell 白名单 |
@@ -28,12 +28,13 @@
 | `src-tauri/src/hooks/mod.rs` | 8 | InjectionStatus/HookInjectionStatus serde（camelCase）+ parse_signal_file 快速冒烟（合法/缺 panelId/非法 JSON/空串） |
 | `src-tauri/tests/pty_integration_tests.rs` | 8 | PTY 往返/OSC cwd 解析/resize 生效/kill 无孤儿/Custom ConPTY spawn/reattach/env 注入 |
 | `src-tauri/src/hooks/watcher.rs` | 6 | HookSignalWatcher 生命周期（stop 幂等/Drop join 线程） |
+| `src-tauri/src/hooks/config.rs` | 18 | parse_layer（三层合法/非法拒绝）+ resolve_config_path（user→home/.claude/settings.json/project+local 沙箱校验/缺失 project_path Validation/子树外 PathNotAllowed）+ read_hooks_subtree（文件不存在 Null/无 hooks 键 Null/子树提取/损坏 Err）+ write_hooks_subtree（原子写/父目录自动创建/merge 保留其他字段/损坏拒绝覆盖/非 Object hooks 拒绝无副作用/非 Object 根拒绝/null 根视空对象） |
 | `src-tauri/src/error.rs` | 4 | 序列化/Display/From<io::Error>/SessionNotFound |
 | `src-tauri/src/lib.rs` | 2 | ping 返回 pong/`get_windows_build_number` 返回数字 |
 
 > `pty/mod.rs`、`pty/win_build.rs`、`main.rs` 不含 `#[test]`，不在此列。
 
-## L2 — 前端单元/集成测试（106 文件 / 1717 用例）
+## L2 — 前端单元/集成测试（111 文件 / 1809 用例）
 
 运行：`npm test`（Vitest + jsdom）
 
@@ -78,12 +79,12 @@
 | `src/__tests__/editor-keyboard.test.ts` | 7 | `createEditorShortcuts()` save/toggleWordWrap 经 active 指针派发 |
 | `src/__tests__/active-editor.test.ts` | 5 | active 指针 set/get/覆盖、clear 仅匹配时生效 |
 
-### 工作区/布局/页签（12 文件 / 186 用例）
+### 工作区/布局/页签（12 文件 / 189 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
 | `src/__tests__/title-manager.test.ts` | 44 | terminal-N 递增/编辑器 basename/同名冲突相对路径/handleSaveAs/onDeletePage/suffix 标题生成/冲突重算保留后缀/findExistingEditor 匹配隔离 |
-| `src/__tests__/panel-registry.test.ts` | 29 | 注册表/PANEL_TYPES/isValidPanelType/FILE_PANEL_TYPES（5 面板：terminal/editor/htmlviewer/gitshow/diff） |
+| `src/__tests__/panel-registry.test.ts` | 32 | 注册表 6 面板（terminal/editor/htmlviewer/gitshow/diff/hooksConfig 六键 + hooksConfig 注册项为函数组件）/PANEL_TYPES 含 hooksConfig 长度 6/isValidPanelType/FILE_PANEL_TYPES（5 面板，不含 hooksConfig）/isAlwaysRenderPanel |
 | `src/__tests__/layout-serde.test.ts` | 21 | 旧格式修补/白名单过滤/深拷贝/嵌套 branch/activeGroup 保留 |
 | `src/__tests__/workspace-defaulttab.test.tsx` | 22 | DefaultTab 渲染 + `onDidParametersChange` 事件结构回归 |
 | `src/__tests__/workspace-header-actions.test.tsx` | 16 | RightHeader Watermark 按钮/页签操作 |
@@ -149,7 +150,7 @@
 | `src/__tests__/commit-view.test.tsx` | 35 | 状态机四态/mock gitStatus+onFsEvent/列表渲染（文件名 GIT_FILE_COLORS token/计数/排序/空态）/折叠交互/双击分派 4 类状态（mock dockApi+真实 titleManager）/去重聚焦/fs-event 200ms debounce/rootPath 切换清空重载 |
 | `src/__tests__/commit-context-menu.test.ts` | 13 | getContextMenuItems 状态→菜单映射（ROLLBACK_STATES/DELETE_STATES）+ action 执行流程（ask 确认→IPC→refresh） |
 
-### hooks 配置面板（9 文件 / 169 用例）
+### hooks 配置面板（12 文件 / 212 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
@@ -158,8 +159,11 @@
 | `src/__tests__/hooks-config-matcher.test.ts` | 21 | matcherEngine.matchHook 全分支（exact-or/regex/all/受限窄字符集/非法正则防御）（Stage 03 遗留补登） |
 | `src/__tests__/hooks-config-model.test.ts` | 22 | configModel jsonToGui/guiToJson 双向转换/round-trip/容错/isSltermManaged/filterDisabled（Stage 03 遗留补登） |
 | `src/__tests__/hooks-config-store.test.ts` | 21 | hooksConfig store loadFromDisk sanitize/disable/enable/debounce 保存 payload 键集合精确匹配（Stage 03 遗留补登） |
-| `src/__tests__/hooks-config-panel.test.tsx` | 9 | 面板三态（loading/content/损坏错误态）/层级切换器禁用逻辑/保存按钮初始禁用/focusin 轻量重读/JsonMode 接入（value 序列化传递） |
+| `src/__tests__/hooks-config-entry.test.ts` | 7 | 入口命令同页单例：global.openHooksConfig 面板 id 规则（hooksConfig-{pageId}）/命中聚焦/未命中 addPanel/无活跃页面或 api 透传 |
+| `src/__tests__/hooks-config-panel.test.tsx` | 15 | 面板三态（loading/content/损坏错误态）/层级切换器禁用逻辑/保存按钮初始禁用/focusin 轻量重读/JsonMode 接入（value 序列化传递）/注入状态条与注入/卸载按钮/失效禁用记录条渲染 |
 | `src/__tests__/hooks-config-jsonmode.test.tsx` | 17 | TE-09：CM6 EditorView 创建 + schema 扩展注册（jsonCompletion/jsonSchemaHover/jsonSchemaLinter + hooks 子 schema + linter needsRefresh）+ 非法 JSON/schema 违规触发 onValidationChange + 外部 value 同步 + MatcherTester 试测（exact-or/regex/受限字符集）；TE-10：十大分组 + 30 事件按钮渲染 + findEventPosition 纯函数 + 点击跳转选区（setSelection + scrollIntoView）+ 无副作用守卫 |
+| `src/__tests__/hooks-config-gui.test.tsx` | 21 | GUI 模式（P3-FE-12）：Master-Detail 渲染/事件树增删事件与 matcher 组/详情区 handler 增删/选中态派生守卫（事件删除/重载回退空态）/注入段禁删（三层删除按钮禁用）/不支持 matcher 事件省略 matcher 输入 |
+| `src/__tests__/hooks-config-sync.test.tsx` | 9 | 双模式同步（P3-FE-16）：JSON 编辑 → guiModel 重算/GUI 编辑 → configJson 回写/非法 JSON 禁切 GUI + 禁用保存/dirty 与 saved 状态流转 |
 | `src/__tests__/hooks-config-handlerform.test.tsx` | 38 | TE-11：5 种 type 必填字段渲染（官方版字段名断言：mcp_tool 为 input/http 无 method+body/agent 无 description+subagent_type/无 once）+ switchHandlerType 纯函数（保留通用字段清除不适用字段/extraFields）+ 事件支持矩阵过滤（B 档无 prompt/agent、SessionStart/Setup 仅 command/mcp_tool、未知事件兜底、当前 type 不在列表仍显示）+ type 切换交互 + 字段编辑（合法 JSON 上报/非法保留草稿不触发/清空删键）+ 注入段禁改（只读+禁删+不渲染禁用 checkbox+编辑零变更+非托管无锁定行） |
 | `src/__tests__/hooks-config-disable.test.tsx` | 10 | TE-15：禁用→保存过滤（IPC hooks 不含禁用条目/同组其余保留）→ store 持久化（debounce 自动保存 payload 键集合）→ 重载保留 → 重新启用恢复；TE-16：四元组失配→UI「失效的禁用记录」→ 启用/删除后消失 → 重载恢复匹配后失效标记消失；事件树启停 checkbox（注入段无 checkbox/点击携带四元组/禁用置灰+删除线+勾选） |
 
@@ -171,19 +175,19 @@
 | `src/__tests__/diff-panel.test.tsx` | 30 | mock gitFileAtHead+fs.readFile+gitDiff+onFsEvent、双栏渲染、加载态+错误占位、保存后刷新链 |
 | `src/__tests__/gitshow-panel.test.tsx` | 19 | mock gitFileAtHead、三态（loading/content/error）、readOnly 断言、oldPath 优先 |
 
-### 快捷键/命令系统（7 文件 / 114 用例）
+### 快捷键/命令系统（7 文件 / 115 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
 | `src/__tests__/shortcuts.test.ts` | 53 | 注册/注销/引用计数/上下文栈/IME/setOverrides 重绑/解绑/降级/冲突/resolve/forceContext/export/list/监听器 spy |
 | `src/__tests__/keystroke.test.ts` | 18 | formatKeystroke/parseKeystroke/isValidKeystrokeString/format∘parse 恒等 |
-| `src/__tests__/global-commands.test.ts` | 13 | `createGlobalShortcuts(getApi)` 延迟求值/Ctrl+W 关闭/无面板透传 |
-| `src/__tests__/command-catalog.test.ts` | 13 | 6 命令齐全/defaultKey 合法/commandFromMeta |
+| `src/__tests__/global-commands.test.ts` | 13 | `createGlobalShortcuts(getApi)` 延迟求值/Ctrl+W 关闭/openHooksConfig 同页单例（hooksConfig-{pageId} 命中聚焦/未命中 addPanel/无页面或 api 透传）/无面板透传 |
+| `src/__tests__/command-catalog.test.ts` | 14 | 10 命令齐全（含 global.openHooksConfig 入口命令契约）/defaultKey 合法且非自身保留/commandFromMeta |
 | `src/__tests__/reserved.test.ts` | 9 | isReserved 各 context/保留键命中/global 两集并集 |
 | `src/__tests__/use-panel-focus.test.ts` | 5 | focusin→pushContext+onActivate/focusout→popContext+onDeactivate/卸载清理 |
 | `src/__tests__/wire-keybindings.test.ts` | 3 | 立即应用/store 变更重应用/unsubscribe |
 
-### 主题/配色/基础（6 文件 / 113 用例）
+### 主题/配色/基础（6 文件 / 108 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
@@ -243,7 +247,7 @@
 | `test/terminal/ansi-correctness.test.ts` | 30 | ANSI 颜色正确性——16 色前景/背景、256 色（标准/216 色立方/灰度）、TrueColor 24-bit 前景/背景/混合、SGR 属性（粗体/斜体/下划线/双下划线/慢闪/反显/隐藏/删除线/弱化/上划线）、SGR 组合叠加、SGR 重置/子参数重置、DEC 私有模式（DECTCEM/DECOM/DECAWM）、DECSC/DECRC、RIS、DECSTBM |
 | `test/terminal/osc.test.ts` | 9 | OSC 序列——标题（OSC 0/2 BEL/ST）、调色板（OSC 4 单索引/多索引）、嵌入完整性（OSC 在正常输出中/穿插文本/后紧跟文本不丢失） |
 
-## L4 — E2E 端到端测试（1 文件 / 25 用例，23 active + 2 skip）
+## L4 — E2E 端到端测试（1 文件 / 26 用例，24 active + 2 skip）
 
 运行：`npm run e2e`（= `npm run build:e2e` + `npm run wdio`）  
 技术栈：WDIO + `@wdio/tauri-service` 1.1.0 + embedded driver（`webview2-com` COM 直连 `ICoreWebView2`）
@@ -274,6 +278,7 @@
 | R2 变体：切项目往返后用量保持（contextUsage 全链路 + cache 字段） | active | Node 端预写假 transcript JSONL（含 `message.usage` 四字段：input/cache_read/cache_creation/output）→ 信号文件携真实 transcriptPath 建行 → 初始扫描主动拉取 contextUsage（后端真实解析尾行）→ 断言行含百分比数值 → 切项目往返 → 用量数值保持（初始扫描携 transcriptPath 主动拉取） |
 | R3 变体：SessionEnd 删行 + 切项目往返不复活 | active | hook 事件建行 → SessionEnd 信号 → 行消失 → 切项目往返 → 行仍不存在（claudeSession 已 null，初始扫描不建行） |
 | R4 变体：会话终端关页签删行（remove 事件 + ref 稳定订阅） | active | hook 事件建行 → `__dockviewApi.removePanel(panel)` → 行消失（remove 事件 + ref 稳定订阅——R4 原始竞态不重现） |
+| hooks 配置面板保存链路（P3-TE-18） | active | tempdir 项目 → 打开 hooksConfig 面板（`__dockviewApi.addPanel`）→ 切 project 层 → JSON 模式经 `__slterm_e2e_setHooksConfigJson` 注入合法 hooks 配置 → 程序化点击保存 → 真实 IPC `hooks_config_write` 写盘 → 断言 `.claude/settings.json` 含 hooks 子树且 **merge 保留其他字段**（走 project 层，不碰真实 `~/.claude/settings.json`） |
 | toast 触发链路需人工验证（失焦 + 权限请求 / Stop / 错误） | skip | 通知 toast 全链路验证（skip 原因：权限弹窗需用户交互，自动化不可行） |
 
 ### E2E settings.json 隔离机制（FIX-TE-04）
@@ -300,6 +305,7 @@ embedded WDIO 驱动**无法将 OS 级按键（`browser.keys`）投递进 WebVie
 
 ## 历史变更
 
+- 2026-08-01（Phase 3 Stage 10 全量重算）：按计数口径实跑重写。L1：新增 hooks/config.rs（18 用例，P3-BE 读写命令纯逻辑），usage.rs 23→28（+5 cache 字段用例），L1 359→382（18→19 文件）。L2：新增 hooks-config-entry（7）+ hooks-config-gui（21）+ hooks-config-sync（9），hooks-config-panel 9→15（+6 注入状态条/失效记录条）；panel-registry 29→32（+3 hooksConfig 六面板注册）、command-catalog 13→14（+1 openHooksConfig 入口命令契约）；修正「主题/配色/基础」类目标头 113→108（原与文件实际和 108 不符）。L2 1717→1809（106→111 文件）。L4：新增 hooks 配置面板保存链路（P3-TE-18），23→24 active（25→26 总，含 2 skip）。全量 2227→2333。
 - 2026-08-01（Phase 3 Stage 07）：新增 hooks-config-disable.test.tsx（10 用例，P3-TE-15/16——禁用状态往返/失效禁用记录/事件树启停 checkbox）；hooks-config-handlerform.test.tsx 托管断言适配（lockRow 移除禁用 checkbox——C13-8 禁禁用=不渲染，P3-FE-19）。hooks 配置面板 8→9 文件 159→169。L2 1717→1727。全量 2217→2227。
 - 2026-08-01（Phase 3 Stage 04）：新增 hooks-config-jsonmode.test.tsx（17 用例，P3-TE-09/10——CM6 渲染/schema 扩展注册/非法 JSON 校验上报/事件导航跳转/MatcherTester 试测）；hooks-config-panel.test.tsx 9 用例适配 JsonMode 接入（占位文案断言 → JsonMode value 传递断言）。补登 Stage 01-03 遗留 6 文件：ipc-hooks-config-contract（12）+ hooks-config-catalog（19）+ hooks-config-matcher（21）+ hooks-config-model（22）+ hooks-config-store（21）+ hooks-config-panel（9）。vitest.config.ts 新增 `server.deps.inline: ["codemirror-json-schema"]`（0.8.1 ESM dist 无扩展名相对导入，Node ESM 无法解析）。L2 1593→1717（99→106 文件）。全量 2093→2217。
 - 2026-07-29（Phase 2 FIX-DOC-03）：Stage 01-04 完成后按 `npm test` 实跑重写。L2：ipc-hooks-contract 21→22（+1 ContextUsage 四字段键集合守卫）、notifications 32→25（-7 删 toast 路由化 6 用例+首 token/sendToastNotification 适配）、agent-status-hook 31→35（+4 行建模新语义——纯 shell 无行/双通道建行/三通道删行/初始扫描携 transcriptPath 拉 usage/reconcile 对账/cache 字段/contextUsage 静默 catch 可观测）、agent-status-view 11 不变（用量新口径重算）、tab-title-registry 8→13（+5 首 token 匹配——带参命中/空命令行/仅空白/首 token 无规则）、terminal-registry 7→15（+8 setClaudeSession 全分支+sessionChange 事件+幂等保留旧 session）、terminal-registry-subscribe 3→7（+4 sessionChange 通知/setClaudeSession 触发 sessionChange）。L2 1578→1593。L4：Agent Status 静态行反转（纯 shell 无行）+ 动态四态首个信号即建行 + 新增 R2/R3/R4 变体 3 条防复发；22→23（21 active + 2 skip）。全量 2075→2091。
