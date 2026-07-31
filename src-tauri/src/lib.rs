@@ -99,6 +99,8 @@ pub fn run() {
             hooks::inject::hooks_uninstall,
             hooks::inject::hooks_injection_status,
             hooks::usage::hooks_context_usage,
+            hooks::config::hooks_config_read,
+            hooks::config::hooks_config_write,
         ])
         .run(tauri::generate_context!())
     {
