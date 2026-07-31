@@ -1,10 +1,16 @@
-// useHooksConfig — hooks 配置面板数据 hook（P3-FE-15）
+// useHooksConfig — hooks 配置面板数据 hook（P3-FE-15 + P3-FE-16/17）
 //
 // 职责：
 // - 从 useProjects + useLayout 推导当前活跃项目 rootPath（照 useCommitStatus 模式）
 // - rootPath 为空时 project/local 层禁用（仅 user 层可用）
 // - 加载：readHooksConfig(layer, rootPath?)，null 视为 {}；挂载时加载禁用状态 store
-// - 保存：JSON Object 校验占位（Stage 06 补全 JSON+Schema 校验）→ writeHooksConfig
+// - 双模式同步（P3-FE-16）：configJson（hooks 子树）与 guiModel 共享于此；
+//   JsonMode.onChange 经 updateConfigJson（JSON 合法 → jsonToGui 重算 guiModel），
+//   GuiMode.onChange 经 updateGui（guiToJson 更新 configJson）
+// - 保存（P3-FE-17）：JSON 语法校验 → json-schema-library schema 校验（validateHooksJson，
+//   Stage 04 已建）→ 任一失败弹窗提示、拒绝写盘 → filterDisabled 剔除当前层禁用条目
+//   → writeHooksConfig；成功后置 saved（状态条显示重启提示）。不做 .bak，其他字段
+//   保留由后端 merge 保证（P3-BE-03）
 // - 轻量重读（外部修改检测）：切层 / 面板聚焦（focusin）时重新 readHooksConfig；
 //   dirty 时用 dialog.ask 提示（照编辑器外部修改先例，不用 window.confirm），用户确认丢弃才覆盖
 
@@ -15,7 +21,14 @@ import { useProjects } from "../../stores/projects";
 import { useLayout } from "../../stores/layout";
 import { useHooksConfig as useHooksConfigStore } from "../../stores/hooksConfig";
 import type { HooksLayer, HooksConfigJson, HooksConfigGui } from "../../types/hooksConfig";
-import { jsonToGui } from "./configModel";
+import { validateHooksJson } from "../../features/hooksConfig/schema";
+import {
+  jsonToGui,
+  guiToJson,
+  filterDisabled,
+  type HooksConfigJson as ConfigJson,
+  type HooksConfigGui as ConfigGui,
+} from "./configModel";
 
 /** 配置损坏错误文案——read 返回 Err（与无配置返回 null 区分开） */
 export const CONFIG_CORRUPTED_TEXT = "配置文件损坏，请先修复";
@@ -37,9 +50,13 @@ export interface UseHooksConfigResult {
   error: boolean;
   /** 加载中 */
   loading: boolean;
-  /** 更新 hooks 子树（JsonMode/GuiMode 编辑回调）：置 dirty + guiModel 同步重算 */
+  /** 保存成功标志（状态条显示「hooks 改动需重启 claude 会话生效」）；编辑/重载后清除 */
+  saved: boolean;
+  /** 更新 hooks 子树（JsonMode 编辑回调，JSON.parse 已通过）：置 dirty + guiModel 同步重算 */
   updateConfigJson: (json: HooksConfigJson) => void;
-  /** 保存：JSON Object 校验占位 → writeHooksConfig，成功清除 dirty */
+  /** 更新 GUI 模型（GuiMode 编辑回调）：guiToJson 更新 configJson + guiModel 同步重算 */
+  updateGui: (gui: ConfigGui) => void;
+  /** 保存：语法 + schema 双校验（失败弹窗拒绝写盘）→ filterDisabled → writeHooksConfig，成功清除 dirty + 置 saved */
   save: () => Promise<void>;
   /** 轻量重读（面板 focusin 外部修改检测）：dirty 时 ask 确认才覆盖 */
   reload: () => Promise<void>;
@@ -65,6 +82,7 @@ export function useHooksConfig(): UseHooksConfigResult {
   const [configJson, setConfigJson] = useState<HooksConfigJson>({});
   const [guiModel, setGuiModel] = useState<HooksConfigGui>({ events: [] });
   const [dirty, setDirty] = useState(false);
+  const [saved, setSaved] = useState(false);
   const [error, setError] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -91,6 +109,7 @@ export function useHooksConfig(): UseHooksConfigResult {
       setConfigJson(json);
       setGuiModel(jsonToGui(json));
       setDirty(false);
+      setSaved(false);
       setLoading(false);
     } catch {
       if (gen !== genRef.current) return;
@@ -120,23 +139,49 @@ export function useHooksConfig(): UseHooksConfigResult {
     [confirmDiscard, load],
   );
 
-  /** 更新 hooks 子树：置 dirty + guiModel 同步重算（JsonMode/GuiMode 编辑回调共用） */
+  /** 更新 hooks 子树（JsonMode 编辑回调，JSON.parse 已通过）：置 dirty + guiModel 同步重算 */
   const updateConfigJson = useCallback((json: HooksConfigJson) => {
     setConfigJson(json);
     setGuiModel(jsonToGui(json));
     setDirty(true);
+    setSaved(false);
   }, []);
 
-  /** 保存：JSON Object 校验占位（Stage 06 补全 Schema 校验）→ writeHooksConfig，成功清除 dirty */
+  /** 更新 GUI 模型（GuiMode 编辑回调）：guiToJson 更新 configJson + guiModel 同步重算（双模式同步 P3-FE-16） */
+  const updateGui = useCallback((gui: ConfigGui) => {
+    const json = guiToJson(gui) as unknown as HooksConfigJson;
+    setConfigJson(json);
+    setGuiModel(jsonToGui(json));
+    setDirty(true);
+    setSaved(false);
+  }, []);
+
+  /** 保存：语法 + schema 双校验（失败弹窗提示、拒绝写盘）→ filterDisabled 剔除禁用条目 → writeHooksConfig */
   const save = useCallback(async () => {
     const json = configJsonRef.current;
-    // 占位校验：hooks 子树必须是 JSON Object（writeHooksConfig 后端契约）；
-    // 完整 JSON+Schema 校验在 Stage 06 落地
+    // ① JSON.parse 语法校验：configJson 只容纳 parse 合法快照（编辑时已门控），此处防御性确认对象形态
     if (json === null || typeof json !== "object" || Array.isArray(json)) {
-      throw new Error("hooks 配置必须是 JSON 对象");
+      await ask("hooks 配置必须是 JSON 对象", { title: "保存失败", kind: "error" });
+      return;
     }
-    await writeHooksConfig(layerRef.current, json, rootPathRef.current ?? undefined);
+    // ② json-schema-library schema 校验（validateHooksJson = JSON.parse + Draft07(hooksSubSchema).validate，
+    //    Stage 04 已建，禁止 ajv）；任一失败弹窗提示、拒绝调用 writeHooksConfig
+    const result = validateHooksJson(JSON.stringify(json));
+    if (!result.isValid) {
+      await ask(result.diagnostics[0]?.message ?? "hooks 配置不符合 schema", {
+        title: "保存失败",
+        kind: "error",
+      });
+      return;
+    }
+    // ③ filterDisabled 剔除当前层禁用条目（四元组 layer 过滤，C13-8）→ 写盘（后端 merge 保留其他字段，P3-BE-03）
+    // json 经强转对齐 configModel 契约（types/hooksConfig 无索引签名，结构等价）
+    const layer = layerRef.current;
+    const disabled = useHooksConfigStore.getState().disabledHooks.filter((k) => k.layer === layer);
+    const filtered = filterDisabled(json as unknown as ConfigJson, disabled);
+    await writeHooksConfig(layer, filtered, rootPathRef.current ?? undefined);
     setDirty(false);
+    setSaved(true);
   }, []);
 
   /** 轻量重读（外部修改检测）：dirty 时 ask 确认丢弃才覆盖 */
@@ -164,5 +209,19 @@ export function useHooksConfig(): UseHooksConfigResult {
     void load(target, gen);
   }, [rootPath, load]);
 
-  return { layer, setLayer, rootPath, configJson, guiModel, dirty, error, loading, updateConfigJson, save, reload };
+  return {
+    layer,
+    setLayer,
+    rootPath,
+    configJson,
+    guiModel,
+    dirty,
+    saved,
+    error,
+    loading,
+    updateConfigJson,
+    updateGui,
+    save,
+    reload,
+  };
 }

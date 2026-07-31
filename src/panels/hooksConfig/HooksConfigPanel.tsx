@@ -1,11 +1,14 @@
-// HooksConfigPanel — hooks 配置面板（F6）Stage 05（P3-FE-02 + P3-FE-11 + P3-FE-12 接入）
+// HooksConfigPanel — hooks 配置面板（F6）Stage 06（P3-FE-02 + P3-FE-11/12 + P3-FE-16/17 接入）
 //
 // 顶部工具栏：层级切换器（user/project/local，标注优先级 local>project>user）
-// + 模式切换（GUI | JSON，默认 JSON）+ 注入状态条占位 + 保存按钮。
+// + 模式切换（GUI | JSON，默认 JSON）+ 注入状态条占位 + 重启提示条 + 保存按钮。
 // 中部为模式渲染容器：JSON 模式渲染 JsonMode；GUI 模式渲染 GuiMode
-// （Master-Detail 事件树 + 详情区，Stage 05 接入，替换原模式占位文案）。
-// GUI 编辑经 guiToJson → updateConfigJson 同步 configJson（双模式同步
-// 与「非法 JSON 禁切 GUI」由 Stage 06 P3-FE-16 落地）。
+// （Master-Detail 事件树 + 详情区）。
+// 双模式同步（P3-FE-16）：JsonMode.onChange → updateConfigJson（JSON.parse 门控），
+// GuiMode.onChange → updateGui（guiToJson），configJson/guiModel/dirty 共享于 useHooksConfig。
+// JSON 非法（onValidationChange 上报 false）→ GUI 按钮禁用 + 工具栏错误提示。
+// 保存（P3-FE-17）：按钮经 useHooksConfig.save() 走语法 + schema 双校验 → filterDisabled
+// → writeHooksConfig；成功后状态条显示「hooks 改动需重启 claude 会话生效」。
 // 三态：loading → content / error（损坏错误态——read 返回 Err，与无配置 null 区分）。
 // 保存按钮：dirty 且 JSON 合法（onValidationChange 上报）才可点。
 // 配色全部引用 theme/colors.ts token（硬约束 #6）。
@@ -14,7 +17,7 @@ import React, { useCallback, useState } from "react";
 import { useHooksConfig } from "./useHooksConfig";
 import JsonMode from "./JsonMode";
 import GuiMode from "./GuiMode";
-import { guiToJson, type HooksConfigGui as ConfigGui } from "./configModel";
+import type { HooksConfigGui as ConfigGui } from "./configModel";
 import type { HooksConfigJson, HooksLayer } from "../../types/hooksConfig";
 import { PANEL_BG, ERROR_FG, HTML_PANEL_LOADING_FG, INPUT_BORDER, SIDEBAR_FG } from "../../theme";
 
@@ -88,11 +91,25 @@ const modeContainerStyle: React.CSSProperties = {
 };
 
 const HooksConfigPanel: React.FC<HooksConfigPanelProps> = () => {
-  const { layer, setLayer, rootPath, configJson, guiModel, dirty, error, loading, save, reload, updateConfigJson } =
-    useHooksConfig();
-  // JsonMode 校验上报：非法 JSON / schema 违规 → 禁用保存（Stage 06 在此基础上加弹窗提示）
+  const {
+    layer,
+    setLayer,
+    rootPath,
+    configJson,
+    guiModel,
+    dirty,
+    saved,
+    error,
+    loading,
+    save,
+    reload,
+    updateConfigJson,
+    updateGui,
+  } = useHooksConfig();
+  // JsonMode 校验上报：非法 JSON / schema 违规 → 禁用保存 + 禁用切 GUI + 工具栏错误提示（P3-FE-16）
   const [jsonValid, setJsonValid] = useState(true);
-  // 模式切换（GUI | JSON），默认 JSON（Stage 06 在此基础上加「非法 JSON 禁切 GUI」）
+  const [jsonError, setJsonError] = useState<string | null>(null);
+  // 模式切换（GUI | JSON），默认 JSON；JSON 非法时 GUI 按钮禁用（P3-FE-16）
   const [mode, setMode] = useState<"gui" | "json">("json");
 
   /** JsonMode onChange：合法 JSON 才更新 configJson（非法保留最后合法快照，仅校验上报） */
@@ -107,20 +124,7 @@ const HooksConfigPanel: React.FC<HooksConfigPanelProps> = () => {
     [updateConfigJson],
   );
 
-  /** GuiMode 变更回调：GUI 模型 → guiToJson → updateConfigJson（configJson + guiModel 同步重算） */
-  const handleGuiChange = useCallback(
-    (gui: ConfigGui) => {
-      // guiModel 运行时即 jsonToGui 产物（含 group 字段、matcher 恒为 string），
-      // 与 configModel 的 HooksConfigGui 仅静态类型差异（types/hooksConfig 声明的
-      // matcher 为 string|null、缺 group），此处强转对齐 configModel 契约；
-      // guiToJson 产物（configModel.HooksConfigJson，type 为宽 string）同样强转回
-      // types/hooksConfig 的 HooksConfigJson（结构等价，仅 type 收窄差异）
-      updateConfigJson(guiToJson(gui) as unknown as HooksConfigJson);
-    },
-    [updateConfigJson],
-  );
-
-  /** 保存按钮：失败仅 console.error（保留 dirty，不丢用户修改） */
+  /** 保存按钮：失败仅 console.error（保留 dirty，不丢用户修改）；校验失败弹窗由 useHooksConfig.save 内部处理 */
   const handleSave = useCallback(() => {
     void save().catch((err) => {
       console.error("[slTerminal] hooks 配置保存失败:", err);
@@ -168,11 +172,13 @@ const HooksConfigPanel: React.FC<HooksConfigPanelProps> = () => {
         ))}
         <span style={hintStyle}>{PRIORITY_HINT}</span>
         <span style={{ flex: 1 }} />
-        {/* 模式切换（GUI | JSON）——Stage 05 接入 GuiMode（非法 JSON 禁切 GUI 由 Stage 06 落地） */}
+        {/* 模式切换（GUI | JSON）——JSON 非法时 GUI 按钮禁用（P3-FE-16） */}
         <span style={{ display: "flex", gap: 4 }}>
           <button
             type="button"
             data-e2e="hooks-mode-gui"
+            disabled={!jsonValid}
+            title={!jsonValid ? "JSON 存在错误，无法切换到 GUI 模式" : undefined}
             onClick={() => setMode("gui")}
             style={layerButtonStyle(mode === "gui")}
           >
@@ -187,8 +193,20 @@ const HooksConfigPanel: React.FC<HooksConfigPanelProps> = () => {
             JSON
           </button>
         </span>
+        {/* JSON 非法错误提示（P3-FE-16）——显示首条诊断；恢复合法后隐藏 */}
+        {!jsonValid && (
+          <span style={{ ...hintStyle, color: ERROR_FG }} data-e2e="hooks-json-error">
+            JSON 存在错误，无法切换 GUI：{jsonError ?? "配置不符合 schema"}
+          </span>
+        )}
         {/* 注入状态条占位——Stage 07 并入注入状态 */}
         <span style={hintStyle}>注入状态：--</span>
+        {/* 保存成功提示条（P3-FE-17）——hooks 改动需重启 claude 会话生效；下次编辑/重载后隐藏 */}
+        {saved && (
+          <span style={hintStyle} data-e2e="hooks-restart-hint">
+            hooks 改动需重启 claude 会话生效
+          </span>
+        )}
         {/* 保存按钮（dirty 且 JSON 合法才可点） */}
         <button
           type="button"
@@ -204,15 +222,18 @@ const HooksConfigPanel: React.FC<HooksConfigPanelProps> = () => {
           保存
         </button>
       </div>
-      {/* 模式渲染容器（JSON = JsonMode；GUI = GuiMode，Stage 05 接入） */}
+      {/* 模式渲染容器（JSON = JsonMode；GUI = GuiMode）——onChange 均接入 useHooksConfig setter（P3-FE-16） */}
       <div style={modeContainerStyle} data-e2e="hooks-mode-container">
         {mode === "gui" ? (
-          <GuiMode gui={guiModel as unknown as ConfigGui} onChange={handleGuiChange} />
+          <GuiMode gui={guiModel as unknown as ConfigGui} onChange={updateGui} />
         ) : (
           <JsonMode
             value={JSON.stringify(configJson, null, 2)}
             onChange={handleJsonChange}
-            onValidationChange={(isValid) => setJsonValid(isValid)}
+            onValidationChange={(isValid, diagnostics) => {
+              setJsonValid(isValid);
+              setJsonError(isValid ? null : (diagnostics[0]?.message ?? null));
+            }}
           />
         )}
       </div>

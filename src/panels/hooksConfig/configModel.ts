@@ -84,7 +84,7 @@ export interface HookHandlerGui {
 export interface DisabledHookKey {
   layer: string; // "user" | "project" | "local"
   event: string;
-  matcher: string; // 无 matcher 事件为空串
+  matcher: string | null; // 无 matcher 事件为 null（stores/hooksConfig 四元组表示）或空串，均等价全匹配
   command: string; // command 型 handler 的 command 值；非 command 型为空串
 }
 
@@ -215,6 +215,8 @@ export function isSltermManaged(handler: unknown): boolean {
  * - key.command 非空 → 仅剔除 type==="command" 且 command 相等的 handler
  * - key.command 为空串 → 剔除整个 matcher 组（非 command 型 handler 只能整组禁用）
  * - 组内 handler 全部被剔除 → 整组移除；事件下无剩余组 → 事件键移除
+ * matcher 比较：key.matcher 为 null（stores/hooksConfig 无 matcher 事件表示）或空串
+ * 均与省略 matcher 键（group.matcher undefined）等价（全匹配）。
  */
 export function filterDisabled(
   config: HooksConfigJson,
@@ -225,7 +227,7 @@ export function filterDisabled(
     const filteredGroups: MatcherGroupJson[] = [];
     for (const group of groups) {
       const keys = disabledKeys.filter(
-        (k) => k.event === event && k.matcher === (group.matcher ?? ""),
+        (k) => k.event === event && (k.matcher ?? "") === (group.matcher ?? ""),
       );
       if (keys.length === 0) {
         filteredGroups.push(group);
