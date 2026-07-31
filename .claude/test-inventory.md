@@ -2,7 +2,7 @@
 
 > **本文档是项目用例数唯一真值源。** 所有 CLAUDE.md、README、CI 配置中引用的用例数均以此文件为准。更新测试后必须同步本文档。
 
-全量 **2093** 用例（Rust 359 + 前端 1593 + L3 116 + E2E 25），2026-07-29 更新。
+全量 **2217** 用例（Rust 359 + 前端 1717 + L3 116 + E2E 25），2026-08-01 更新。
 
 > **计数口径**：前端 (L2) 用例数以 `grep -cE '^\s*(it|test)\(' src/__tests__/*.test.ts src/__tests__/*.test.tsx` 展开的 `it`/`test` 块数为准（Vitest 实际运行数）；L3 同理 `test/terminal/*.test.ts`；Rust (L1) 以 `grep -c '#\[test\]'` 统计的 `#[test]` 属性数为准。L3 的 116 用例同时被 L2 (`npm test`) 和独立 L3 (`npm run test:l3`) 执行，但此处各层独立计数，不做去重。
 
@@ -33,7 +33,7 @@
 
 > `pty/mod.rs`、`pty/win_build.rs`、`main.rs` 不含 `#[test]`，不在此列。
 
-## L2 — 前端单元/集成测试（99 文件 / 1593 用例）
+## L2 — 前端单元/集成测试（106 文件 / 1717 用例）
 
 运行：`npm test`（Vitest + jsdom）
 
@@ -148,6 +148,18 @@
 |------|------|---------|
 | `src/__tests__/commit-view.test.tsx` | 35 | 状态机四态/mock gitStatus+onFsEvent/列表渲染（文件名 GIT_FILE_COLORS token/计数/排序/空态）/折叠交互/双击分派 4 类状态（mock dockApi+真实 titleManager）/去重聚焦/fs-event 200ms debounce/rootPath 切换清空重载 |
 | `src/__tests__/commit-context-menu.test.ts` | 13 | getContextMenuItems 状态→菜单映射（ROLLBACK_STATES/DELETE_STATES）+ action 执行流程（ask 确认→IPC→refresh） |
+
+### hooks 配置面板（7 文件 / 121 用例）
+
+| 文件 | 用例 | 覆盖范围 |
+|------|------|---------|
+| `src/__tests__/ipc-hooks-config-contract.test.ts` | 12 | hooksConfig IPC 四维验证（readHooksConfig/writeHooksConfig 命令名/参数结构/返回值/异常传播）（Stage 01-02 遗留补登） |
+| `src/__tests__/hooks-config-catalog.test.ts` | 19 | eventsCatalog 事件元数据（30 事件 x 10 组/HANDLER_TYPES/HANDLER_FIELD_MATRIX/纯查询函数）（Stage 03 遗留补登） |
+| `src/__tests__/hooks-config-matcher.test.ts` | 21 | matcherEngine.matchHook 全分支（exact-or/regex/all/受限窄字符集/非法正则防御）（Stage 03 遗留补登） |
+| `src/__tests__/hooks-config-model.test.ts` | 22 | configModel jsonToGui/guiToJson 双向转换/round-trip/容错/isSltermManaged/filterDisabled（Stage 03 遗留补登） |
+| `src/__tests__/hooks-config-store.test.ts` | 21 | hooksConfig store loadFromDisk sanitize/disable/enable/debounce 保存 payload 键集合精确匹配（Stage 03 遗留补登） |
+| `src/__tests__/hooks-config-panel.test.tsx` | 9 | 面板三态（loading/content/损坏错误态）/层级切换器禁用逻辑/保存按钮初始禁用/focusin 轻量重读/JsonMode 接入（value 序列化传递） |
+| `src/__tests__/hooks-config-jsonmode.test.tsx` | 17 | TE-09：CM6 EditorView 创建 + schema 扩展注册（jsonCompletion/jsonSchemaHover/jsonSchemaLinter + hooks 子 schema + linter needsRefresh）+ 非法 JSON/schema 违规触发 onValidationChange + 外部 value 同步 + MatcherTester 试测（exact-or/regex/受限字符集）；TE-10：十大分组 + 30 事件按钮渲染 + findEventPosition 纯函数 + 点击跳转选区（setSelection + scrollIntoView）+ 无副作用守卫 |
 
 ### Diff/GitShow 面板（3 文件 / 65 用例）
 
@@ -286,6 +298,7 @@ embedded WDIO 驱动**无法将 OS 级按键（`browser.keys`）投递进 WebVie
 
 ## 历史变更
 
+- 2026-08-01（Phase 3 Stage 04）：新增 hooks-config-jsonmode.test.tsx（17 用例，P3-TE-09/10——CM6 渲染/schema 扩展注册/非法 JSON 校验上报/事件导航跳转/MatcherTester 试测）；hooks-config-panel.test.tsx 9 用例适配 JsonMode 接入（占位文案断言 → JsonMode value 传递断言）。补登 Stage 01-03 遗留 6 文件：ipc-hooks-config-contract（12）+ hooks-config-catalog（19）+ hooks-config-matcher（21）+ hooks-config-model（22）+ hooks-config-store（21）+ hooks-config-panel（9）。vitest.config.ts 新增 `server.deps.inline: ["codemirror-json-schema"]`（0.8.1 ESM dist 无扩展名相对导入，Node ESM 无法解析）。L2 1593→1717（99→106 文件）。全量 2093→2217。
 - 2026-07-29（Phase 2 FIX-DOC-03）：Stage 01-04 完成后按 `npm test` 实跑重写。L2：ipc-hooks-contract 21→22（+1 ContextUsage 四字段键集合守卫）、notifications 32→25（-7 删 toast 路由化 6 用例+首 token/sendToastNotification 适配）、agent-status-hook 31→35（+4 行建模新语义——纯 shell 无行/双通道建行/三通道删行/初始扫描携 transcriptPath 拉 usage/reconcile 对账/cache 字段/contextUsage 静默 catch 可观测）、agent-status-view 11 不变（用量新口径重算）、tab-title-registry 8→13（+5 首 token 匹配——带参命中/空命令行/仅空白/首 token 无规则）、terminal-registry 7→15（+8 setClaudeSession 全分支+sessionChange 事件+幂等保留旧 session）、terminal-registry-subscribe 3→7（+4 sessionChange 通知/setClaudeSession 触发 sessionChange）。L2 1578→1593。L4：Agent Status 静态行反转（纯 shell 无行）+ 动态四态首个信号即建行 + 新增 R2/R3/R4 变体 3 条防复发；22→23（21 active + 2 skip）。全量 2075→2091。
 - 2026-07-28（Phase 2 FIX-DOC-01）：按实跑全量重写。L1：mod.rs 剔除 hooks_context_usage（不存在）、usage.rs 改正函数名为 parse_usage_line/scan_transcript_usage。L2：ipc-hooks-contract 16→21（+5 条 contextUsage 合约 + HookEventPayload 字段约束）、notifications 33→32（-1，剔 4 项不存在描述并补 sendClickableNotification 回调绑定/onclick 聚焦路由）、agent-status-hook 21→31（+10，剔"轮询"改事件驱动 + FE-03 TerminalRegistry.subscribe 增删 + FE-04 dockviewApi 标题查找与回退 + FE-05 null 不覆盖 + FE-06 无额外订阅）、agent-status-view 8→11（+3，剔 tooltip/加载态/错误态 + 补用量条分段颜色断言 + 点击路由 switchToPageAndFocus）、colors 12→13（+1 AGENT_STATUS_USAGE_COLORS 三 token）。补登 2 新文件：panelId.test.ts（5）+ terminal-registry-subscribe.test.ts（3）。L2 1552→1578，97→99 文件。L4：Agent Status 原 skip 拆为 3 条 active（视图存在性 + 静态行渲染 + 动态四态信号文件），toast 保持 it.skip，CSP 脚本用例保持 skip；18→22（20 active + 2 skip）。全量 2045→2075。
 - 2026-07-27：Stage 2 通知/Agent 状态——L1 hooks 模块拆分为 5 文件（mod.rs 10→8、inject.rs 12→20、新增 signal.rs 9 + watcher.rs 6 + usage.rs 23），L1 274→318。L2 IPC 层 ipc-contract 53→65（+12：notification + hooks_context_usage 合约）、ipc-hooks-contract 8→16（+8：hooks_context_usage）；新增「通知/Agent 状态」类目 3 文件 62 用例（notifications 33 + agent-status-hook 21 + agent-status-view 8），L2 1415→1497。L4 新增 Agent Status 视图 1 用例，17→18。全量 1822→1949。

@@ -1,14 +1,17 @@
-// HooksConfigPanel — hooks 配置面板（F6）Stage 03 骨架（P3-FE-02）
+// HooksConfigPanel — hooks 配置面板（F6）Stage 04（P3-FE-02 + P3-FE-11 接入）
 //
 // 顶部工具栏：层级切换器（user/project/local，标注优先级 local>project>user）
 // + 模式切换（GUI | JSON）占位 + 注入状态条占位 + 保存按钮。
-// 中部为模式渲染容器，Stage 03 显示占位文案（JsonMode/GuiMode 后续 Stage 实现）。
+// 中部为模式渲染容器，Stage 04 起渲染 JsonMode（JSON 模式编辑器）；
+// GuiMode（表单模式）Stage 05 实现后接入。
 // 三态：loading → content / error（损坏错误态——read 返回 Err，与无配置 null 区分）。
+// 保存按钮：dirty 且 JSON 合法（onValidationChange 上报）才可点。
 // 配色全部引用 theme/colors.ts token（硬约束 #6）。
 
-import React, { useCallback } from "react";
+import React, { useCallback, useState } from "react";
 import { useHooksConfig } from "./useHooksConfig";
-import type { HooksLayer } from "../../types/hooksConfig";
+import JsonMode from "./JsonMode";
+import type { HooksConfigJson, HooksLayer } from "../../types/hooksConfig";
 import { PANEL_BG, ERROR_FG, HTML_PANEL_LOADING_FG, INPUT_BORDER, SIDEBAR_FG } from "../../theme";
 
 /** HooksConfigPanel 面板参数——单例面板无需 panelId（Stage 08 同页单例），保留 props 兼容 Dockview */
@@ -25,8 +28,6 @@ const LAYERS: { id: HooksLayer; label: string; hint: string }[] = [
 
 /** 优先级标注文案 */
 const PRIORITY_HINT = "优先级：Local > Project > User";
-/** Stage 03 模式容器占位文案（JsonMode/GuiMode 后续 Stage 实现） */
-const MODE_PLACEHOLDER_TEXT = "配置编辑区将在后续阶段实现（GUI / JSON 模式）";
 
 /** 居中容器样式（loading / error 共用） */
 const centerStyle: React.CSSProperties = {
@@ -75,18 +76,30 @@ const hintStyle: React.CSSProperties = {
   color: HTML_PANEL_LOADING_FG,
 };
 
-/** 模式渲染容器样式 */
+/** 模式渲染容器样式（JsonMode 撑满，flex 列布局） */
 const modeContainerStyle: React.CSSProperties = {
   flex: 1,
   display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  color: HTML_PANEL_LOADING_FG,
-  fontSize: 13,
+  minHeight: 0,
 };
 
 const HooksConfigPanel: React.FC<HooksConfigPanelProps> = () => {
-  const { layer, setLayer, rootPath, dirty, error, loading, save, reload } = useHooksConfig();
+  const { layer, setLayer, rootPath, configJson, dirty, error, loading, save, reload, updateConfigJson } =
+    useHooksConfig();
+  // JsonMode 校验上报：非法 JSON / schema 违规 → 禁用保存（Stage 06 在此基础上加弹窗提示）
+  const [jsonValid, setJsonValid] = useState(true);
+
+  /** JsonMode onChange：合法 JSON 才更新 configJson（非法保留最后合法快照，仅校验上报） */
+  const handleJsonChange = useCallback(
+    (text: string) => {
+      try {
+        updateConfigJson(JSON.parse(text) as HooksConfigJson);
+      } catch {
+        // 非法 JSON：不更新 configJson（保留最后合法快照），onValidationChange 已上报
+      }
+    },
+    [updateConfigJson],
+  );
 
   /** 保存按钮：失败仅 console.error（保留 dirty，不丢用户修改） */
   const handleSave = useCallback(() => {
@@ -140,20 +153,28 @@ const HooksConfigPanel: React.FC<HooksConfigPanelProps> = () => {
         <span style={hintStyle}>GUI | JSON</span>
         {/* 注入状态条占位——Stage 07 并入注入状态 */}
         <span style={hintStyle}>注入状态：--</span>
-        {/* 保存按钮（dirty 才可点） */}
+        {/* 保存按钮（dirty 且 JSON 合法才可点） */}
         <button
           type="button"
           data-e2e="hooks-save"
-          disabled={!dirty}
+          disabled={!dirty || !jsonValid}
           onClick={handleSave}
-          style={{ padding: "3px 12px", fontSize: 12, cursor: dirty ? "pointer" : "default" }}
+          style={{
+            padding: "3px 12px",
+            fontSize: 12,
+            cursor: dirty && jsonValid ? "pointer" : "default",
+          }}
         >
           保存
         </button>
       </div>
-      {/* 模式渲染容器（Stage 03 占位） */}
+      {/* 模式渲染容器（Stage 04 起渲染 JsonMode；GuiMode Stage 05 接入） */}
       <div style={modeContainerStyle} data-e2e="hooks-mode-container">
-        {MODE_PLACEHOLDER_TEXT}
+        <JsonMode
+          value={JSON.stringify(configJson, null, 2)}
+          onChange={handleJsonChange}
+          onValidationChange={(isValid) => setJsonValid(isValid)}
+        />
       </div>
     </div>
   );

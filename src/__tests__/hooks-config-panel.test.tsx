@@ -3,21 +3,28 @@
 // 覆盖：PANEL_TYPES 包含 hooksConfig / isValidPanelType 识别 /
 // HooksConfigPanel 三态渲染（loading / content / 损坏错误态）/
 // 层级切换器存在与禁用逻辑（rootPath 为空 project/local 禁用）/
-// 保存按钮初始禁用 / 面板聚焦（focusin）轻量重读。
+// 保存按钮初始禁用 / 面板聚焦（focusin）轻量重读 / JsonMode 接入（P3-FE-11）。
 
 import { describe, it, expect, afterEach, vi, beforeEach } from "vitest";
 
 // ── vi.hoisted：mock 状态在模块级 vi.mock 执行前就绪 ──
-const { mockReadHooksConfig, mockWriteHooksConfig, mockAsk } = vi.hoisted(() => ({
+const { mockReadHooksConfig, mockWriteHooksConfig, mockAsk, mockJsonMode } = vi.hoisted(() => ({
   mockReadHooksConfig: vi.fn(),
   mockWriteHooksConfig: vi.fn(),
   mockAsk: vi.fn(async () => true),
+  // JsonMode mock 组件：渲染 null，测试经 mockJsonMode.mock.calls 断言 props 传递
+  mockJsonMode: vi.fn(() => null),
 }));
 
 // mock IPC hooksConfig —— 三层 hooks 子树读写
 vi.mock("../ipc/hooksConfig", () => ({
   readHooksConfig: mockReadHooksConfig,
   writeHooksConfig: mockWriteHooksConfig,
+}));
+
+// mock JsonMode —— 隔离 CM6/schema（JsonMode 自身测试见 hooks-config-jsonmode.test.tsx）
+vi.mock("../panels/hooksConfig/JsonMode", () => ({
+  default: mockJsonMode,
 }));
 
 // mock IPC dialog —— dirty 确认弹窗（不弹真实对话框）
@@ -94,6 +101,7 @@ describe("HooksConfigPanel 渲染", () => {
     mockWriteHooksConfig.mockReset();
     mockAsk.mockReset();
     mockAsk.mockResolvedValue(true);
+    mockJsonMode.mockClear();
     resetStores();
   });
 
@@ -129,8 +137,14 @@ describe("HooksConfigPanel 渲染", () => {
     // 保存按钮：初始无未保存修改 → 禁用
     const saveBtn = getByRole("button", { name: "保存" }) as HTMLButtonElement;
     expect(saveBtn.disabled).toBe(true);
-    // 模式容器 Stage 03 占位文案
-    expect(getByText("配置编辑区将在后续阶段实现（GUI / JSON 模式）")).toBeTruthy();
+    // 模式容器：JsonMode 已接入（P3-FE-11）——value 为 hooks 子树序列化 JSON
+    expect(mockJsonMode).toHaveBeenCalled();
+    const lastCall = mockJsonMode.mock.calls[mockJsonMode.mock.calls.length - 1] as unknown as [
+      { value: string },
+    ];
+    expect(JSON.parse(lastCall[0].value)).toEqual({
+      PreToolUse: [{ hooks: [{ type: "command", command: "echo hi" }] }],
+    });
   });
 
   it("损坏错误态：read 返回 Err 显示「配置文件损坏，请先修复」（与无配置 null 区分）", async () => {

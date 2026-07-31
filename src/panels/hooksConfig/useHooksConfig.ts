@@ -37,6 +37,8 @@ export interface UseHooksConfigResult {
   error: boolean;
   /** 加载中 */
   loading: boolean;
+  /** 更新 hooks 子树（JsonMode/GuiMode 编辑回调）：置 dirty + guiModel 同步重算 */
+  updateConfigJson: (json: HooksConfigJson) => void;
   /** 保存：JSON Object 校验占位 → writeHooksConfig，成功清除 dirty */
   save: () => Promise<void>;
   /** 轻量重读（面板 focusin 外部修改检测）：dirty 时 ask 确认才覆盖 */
@@ -118,6 +120,13 @@ export function useHooksConfig(): UseHooksConfigResult {
     [confirmDiscard, load],
   );
 
+  /** 更新 hooks 子树：置 dirty + guiModel 同步重算（JsonMode/GuiMode 编辑回调共用） */
+  const updateConfigJson = useCallback((json: HooksConfigJson) => {
+    setConfigJson(json);
+    setGuiModel(jsonToGui(json));
+    setDirty(true);
+  }, []);
+
   /** 保存：JSON Object 校验占位（Stage 06 补全 Schema 校验）→ writeHooksConfig，成功清除 dirty */
   const save = useCallback(async () => {
     const json = configJsonRef.current;
@@ -155,5 +164,5 @@ export function useHooksConfig(): UseHooksConfigResult {
     void load(target, gen);
   }, [rootPath, load]);
 
-  return { layer, setLayer, rootPath, configJson, guiModel, dirty, error, loading, save, reload };
+  return { layer, setLayer, rootPath, configJson, guiModel, dirty, error, loading, updateConfigJson, save, reload };
 }
