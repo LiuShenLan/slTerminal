@@ -35,8 +35,8 @@ function sanitize(raw: unknown): DisabledHookKey[] {
   return out;
 }
 
-/** 四元组全等比较（isDisabled / enableHook 匹配依据） */
-function sameKey(a: DisabledHookKey, b: DisabledHookKey): boolean {
+/** 四元组全等比较（isDisabled / enableHook 匹配依据；导出供失效记录展示/判定复用） */
+export function isSameDisabledKey(a: DisabledHookKey, b: DisabledHookKey): boolean {
   return (
     a.layer === b.layer &&
     a.event === b.event &&
@@ -67,16 +67,16 @@ export const useHooksConfig = create<HooksConfigState>((set, get) => ({
   loaded: false,
 
   disableHook: (key) => {
-    if (!get().disabledHooks.some((k) => sameKey(k, key))) {
+    if (!get().disabledHooks.some((k) => isSameDisabledKey(k, key))) {
       set({ disabledHooks: [...get().disabledHooks, key] });
     }
   },
 
   enableHook: (key) => {
-    set({ disabledHooks: get().disabledHooks.filter((k) => !sameKey(k, key)) });
+    set({ disabledHooks: get().disabledHooks.filter((k) => !isSameDisabledKey(k, key)) });
   },
 
-  isDisabled: (key) => get().disabledHooks.some((k) => sameKey(k, key)),
+  isDisabled: (key) => get().disabledHooks.some((k) => isSameDisabledKey(k, key)),
 
   loadFromDisk: async () => {
     try {

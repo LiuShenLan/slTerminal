@@ -242,13 +242,6 @@ const lockRowStyle: React.CSSProperties = {
   padding: "4px 0",
 };
 
-const lockLabelStyle: React.CSSProperties = {
-  fontSize: 12,
-  color: DIM_FG,
-  userSelect: "none",
-  cursor: "not-allowed",
-};
-
 const lockButtonStyle: React.CSSProperties = {
   padding: "2px 10px",
   fontSize: 11,
@@ -447,22 +440,10 @@ export const HandlerForm: React.FC<HandlerFormProps> = ({ handler, event, onChan
       {/* 通用字段分隔线 + 通用字段（if/timeout/statusMessage） */}
       <div style={sectionStyle} />
       {HANDLER_COMMON_FIELDS.map(renderField)}
-      {/* 注入段锁定行（C13-8）：托管 handler 禁删 + 禁禁用——删除/禁用动作接线
-          由上层提供（GuiMode 删除回调 / Stage 07 单条启停），本组件渲染锁定态 */}
+      {/* 注入段锁定行（C13-8）：托管 handler 禁删 + 禁禁用——不渲染禁用 checkbox
+          （启停开关在事件树，P3-FE-19），仅渲染锁定态删除按钮；动作接线由 GuiMode 提供 */}
       {managed && (
         <div style={lockRowStyle}>
-          <label style={lockLabelStyle}>
-            <input
-              type="checkbox"
-              data-e2e="handler-disable"
-              checked={false}
-              disabled
-              onChange={() => {
-                // 托管条目禁用输入恒为锁定态（动作接线在 Stage 07）
-              }}
-            />
-            禁用
-          </label>
           <button
             type="button"
             data-e2e="handler-delete"

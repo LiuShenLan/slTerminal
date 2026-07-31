@@ -207,6 +207,47 @@ export function isSltermManaged(handler: unknown): boolean {
   return typeof command === "string" && command.includes("slterm-hook-reporter");
 }
 
+// ===== 禁用状态匹配（P3-FE-19/20：启停 checkbox + 失效记录判定） =====
+
+/**
+ * handler 是否处于禁用状态——匹配语义与 filterDisabled 剔除规则一致：
+ * 命中 (event, matcher) 组的禁用记录，且 key.command 为空串（整组禁用）或
+ * handler 为 command 型且 command 相等。供事件树启停 checkbox 与置灰/删除线判定。
+ */
+export function isHandlerDisabled(
+  disabledKeys: readonly DisabledHookKey[],
+  event: string,
+  matcher: string,
+  handler: HookHandlerGui,
+): boolean {
+  return disabledKeys.some(
+    (k) =>
+      k.event === event &&
+      (k.matcher ?? "") === (matcher ?? "") &&
+      (k.command === "" || (handler.type === "command" && handler.command === k.command)),
+  );
+}
+
+/**
+ * 四元组（layer 已由调用方按层过滤，本函数只查单层 hooks 子树）是否在配置中
+ * 找到匹配——找不到匹配即「失效的禁用记录」（P3-FE-19，ADR-0002 失配不静默丢弃）：
+ * - key.command 非空 → 该事件该 matcher 组内存在 command 相等的 command 型 handler
+ * - key.command 为空串（整组禁用）→ 该事件该 matcher 组存在即匹配
+ */
+export function isKeyPresentInConfig(
+  config: HooksConfigJson,
+  key: DisabledHookKey,
+): boolean {
+  const groups = config[key.event];
+  if (!Array.isArray(groups)) return false;
+  const group = groups.find((g) => (g.matcher ?? "") === (key.matcher ?? ""));
+  if (!group) return false;
+  if (key.command === "") return true;
+  return Array.isArray(group.hooks) && group.hooks.some(
+    (h) => h.type === "command" && h.command === key.command,
+  );
+}
+
 // ===== filterDisabled：保存前剔除禁用条目（C13-8 / ADR-0002） =====
 
 /**

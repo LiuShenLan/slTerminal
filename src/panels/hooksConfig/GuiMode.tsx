@@ -15,6 +15,7 @@ import type { HookEventGui, HookMatcherGroupGui, HooksConfigGui } from "./config
 import { isSltermManaged, UNKNOWN_EVENT_GROUP } from "./configModel";
 import { getEventMeta, getSupportedHandlerTypes, HOOK_EVENTS } from "./eventsCatalog";
 import type { HandlerType } from "./eventsCatalog";
+import type { DisabledHookKey } from "../../types/hooksConfig";
 import {
   PANEL_BG,
   SIDEBAR_FG,
@@ -33,6 +34,10 @@ export interface GuiModeProps {
   gui: HooksConfigGui;
   /** 变更回调（每次编辑构造新模型上抛） */
   onChange: (gui: HooksConfigGui) => void;
+  /** 当前层禁用记录（P3-FE-19，透传 EventTree） */
+  disabledKeys?: readonly DisabledHookKey[];
+  /** 启停切换回调（透传 EventTree，layer 由 useHooksConfig 补全） */
+  onToggleDisabled?: (key: Omit<DisabledHookKey, "layer">) => void;
 }
 
 /** 详情区容器样式（flex:1 撑满，自身滚动） */
@@ -140,7 +145,7 @@ function eventManaged(e: HookEventGui): boolean {
   return e.matcherGroups.some(groupManaged);
 }
 
-const GuiMode: React.FC<GuiModeProps> = ({ gui, onChange }) => {
+const GuiMode: React.FC<GuiModeProps> = ({ gui, onChange, disabledKeys, onToggleDisabled }) => {
   // 选中状态：事件 + matcher 组索引 + handler 索引
   const [selectedEvent, setSelectedEvent] = useState<string | null>(null);
   const [selectedMatcherIndex, setSelectedMatcherIndex] = useState<number | null>(null);
@@ -314,8 +319,14 @@ const GuiMode: React.FC<GuiModeProps> = ({ gui, onChange }) => {
 
   return (
     <div style={{ flex: 1, display: "flex", minHeight: 0 }} data-e2e="hooks-gui-mode">
-      {/* 左侧：事件树 */}
-      <EventTree gui={gui} selectedEvent={selectedEvent} onSelect={handleSelect} />
+      {/* 左侧：事件树（P3-FE-19：启停 checkbox + 禁用条目置灰/删除线） */}
+      <EventTree
+        gui={gui}
+        selectedEvent={selectedEvent}
+        onSelect={handleSelect}
+        disabledKeys={disabledKeys}
+        onToggleDisabled={onToggleDisabled}
+      />
       {/* 右侧：详情区 */}
       <div style={detailStyle} data-e2e="hooks-gui-detail">
         {/* 添加事件条 */}

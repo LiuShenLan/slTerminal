@@ -407,13 +407,13 @@ describe("注入段 handler 禁改（isSltermManaged，C13-8）", () => {
     expect((getField("async") as HTMLInputElement).disabled).toBe(true);
   });
 
-  it("托管 handler 禁删 + 禁禁用：删除按钮与禁用 checkbox 均 disabled", () => {
+  it("托管 handler 禁删 + 禁禁用：删除按钮 disabled，不渲染禁用 checkbox（C13-8 禁禁用，P3-FE-19）", () => {
     renderForm({
       type: "command",
       overrides: { command: MANAGED_HANDLER.command as string },
     });
     expect((document.querySelector('[data-e2e="handler-delete"]') as HTMLButtonElement).disabled).toBe(true);
-    expect((document.querySelector('[data-e2e="handler-disable"]') as HTMLInputElement).disabled).toBe(true);
+    expect(document.querySelector('[data-e2e="handler-disable"]')).toBeNull();
   });
 
   it("托管 handler 编辑不触发 onChange（表单完全锁定）", () => {

@@ -149,7 +149,7 @@
 | `src/__tests__/commit-view.test.tsx` | 35 | 状态机四态/mock gitStatus+onFsEvent/列表渲染（文件名 GIT_FILE_COLORS token/计数/排序/空态）/折叠交互/双击分派 4 类状态（mock dockApi+真实 titleManager）/去重聚焦/fs-event 200ms debounce/rootPath 切换清空重载 |
 | `src/__tests__/commit-context-menu.test.ts` | 13 | getContextMenuItems 状态→菜单映射（ROLLBACK_STATES/DELETE_STATES）+ action 执行流程（ask 确认→IPC→refresh） |
 
-### hooks 配置面板（8 文件 / 159 用例）
+### hooks 配置面板（9 文件 / 169 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
@@ -160,7 +160,8 @@
 | `src/__tests__/hooks-config-store.test.ts` | 21 | hooksConfig store loadFromDisk sanitize/disable/enable/debounce 保存 payload 键集合精确匹配（Stage 03 遗留补登） |
 | `src/__tests__/hooks-config-panel.test.tsx` | 9 | 面板三态（loading/content/损坏错误态）/层级切换器禁用逻辑/保存按钮初始禁用/focusin 轻量重读/JsonMode 接入（value 序列化传递） |
 | `src/__tests__/hooks-config-jsonmode.test.tsx` | 17 | TE-09：CM6 EditorView 创建 + schema 扩展注册（jsonCompletion/jsonSchemaHover/jsonSchemaLinter + hooks 子 schema + linter needsRefresh）+ 非法 JSON/schema 违规触发 onValidationChange + 外部 value 同步 + MatcherTester 试测（exact-or/regex/受限字符集）；TE-10：十大分组 + 30 事件按钮渲染 + findEventPosition 纯函数 + 点击跳转选区（setSelection + scrollIntoView）+ 无副作用守卫 |
-| `src/__tests__/hooks-config-handlerform.test.tsx` | 38 | TE-11：5 种 type 必填字段渲染（官方版字段名断言：mcp_tool 为 input/http 无 method+body/agent 无 description+subagent_type/无 once）+ switchHandlerType 纯函数（保留通用字段清除不适用字段/extraFields）+ 事件支持矩阵过滤（B 档无 prompt/agent、SessionStart/Setup 仅 command/mcp_tool、未知事件兜底、当前 type 不在列表仍显示）+ type 切换交互 + 字段编辑（合法 JSON 上报/非法保留草稿不触发/清空删键）+ 注入段禁改（只读+禁删+禁禁用+编辑零变更+非托管无锁定行） |
+| `src/__tests__/hooks-config-handlerform.test.tsx` | 38 | TE-11：5 种 type 必填字段渲染（官方版字段名断言：mcp_tool 为 input/http 无 method+body/agent 无 description+subagent_type/无 once）+ switchHandlerType 纯函数（保留通用字段清除不适用字段/extraFields）+ 事件支持矩阵过滤（B 档无 prompt/agent、SessionStart/Setup 仅 command/mcp_tool、未知事件兜底、当前 type 不在列表仍显示）+ type 切换交互 + 字段编辑（合法 JSON 上报/非法保留草稿不触发/清空删键）+ 注入段禁改（只读+禁删+不渲染禁用 checkbox+编辑零变更+非托管无锁定行） |
+| `src/__tests__/hooks-config-disable.test.tsx` | 10 | TE-15：禁用→保存过滤（IPC hooks 不含禁用条目/同组其余保留）→ store 持久化（debounce 自动保存 payload 键集合）→ 重载保留 → 重新启用恢复；TE-16：四元组失配→UI「失效的禁用记录」→ 启用/删除后消失 → 重载恢复匹配后失效标记消失；事件树启停 checkbox（注入段无 checkbox/点击携带四元组/禁用置灰+删除线+勾选） |
 
 ### Diff/GitShow 面板（3 文件 / 65 用例）
 
@@ -299,6 +300,7 @@ embedded WDIO 驱动**无法将 OS 级按键（`browser.keys`）投递进 WebVie
 
 ## 历史变更
 
+- 2026-08-01（Phase 3 Stage 07）：新增 hooks-config-disable.test.tsx（10 用例，P3-TE-15/16——禁用状态往返/失效禁用记录/事件树启停 checkbox）；hooks-config-handlerform.test.tsx 托管断言适配（lockRow 移除禁用 checkbox——C13-8 禁禁用=不渲染，P3-FE-19）。hooks 配置面板 8→9 文件 159→169。L2 1717→1727。全量 2217→2227。
 - 2026-08-01（Phase 3 Stage 04）：新增 hooks-config-jsonmode.test.tsx（17 用例，P3-TE-09/10——CM6 渲染/schema 扩展注册/非法 JSON 校验上报/事件导航跳转/MatcherTester 试测）；hooks-config-panel.test.tsx 9 用例适配 JsonMode 接入（占位文案断言 → JsonMode value 传递断言）。补登 Stage 01-03 遗留 6 文件：ipc-hooks-config-contract（12）+ hooks-config-catalog（19）+ hooks-config-matcher（21）+ hooks-config-model（22）+ hooks-config-store（21）+ hooks-config-panel（9）。vitest.config.ts 新增 `server.deps.inline: ["codemirror-json-schema"]`（0.8.1 ESM dist 无扩展名相对导入，Node ESM 无法解析）。L2 1593→1717（99→106 文件）。全量 2093→2217。
 - 2026-07-29（Phase 2 FIX-DOC-03）：Stage 01-04 完成后按 `npm test` 实跑重写。L2：ipc-hooks-contract 21→22（+1 ContextUsage 四字段键集合守卫）、notifications 32→25（-7 删 toast 路由化 6 用例+首 token/sendToastNotification 适配）、agent-status-hook 31→35（+4 行建模新语义——纯 shell 无行/双通道建行/三通道删行/初始扫描携 transcriptPath 拉 usage/reconcile 对账/cache 字段/contextUsage 静默 catch 可观测）、agent-status-view 11 不变（用量新口径重算）、tab-title-registry 8→13（+5 首 token 匹配——带参命中/空命令行/仅空白/首 token 无规则）、terminal-registry 7→15（+8 setClaudeSession 全分支+sessionChange 事件+幂等保留旧 session）、terminal-registry-subscribe 3→7（+4 sessionChange 通知/setClaudeSession 触发 sessionChange）。L2 1578→1593。L4：Agent Status 静态行反转（纯 shell 无行）+ 动态四态首个信号即建行 + 新增 R2/R3/R4 变体 3 条防复发；22→23（21 active + 2 skip）。全量 2075→2091。
 - 2026-07-28（Phase 2 FIX-DOC-01）：按实跑全量重写。L1：mod.rs 剔除 hooks_context_usage（不存在）、usage.rs 改正函数名为 parse_usage_line/scan_transcript_usage。L2：ipc-hooks-contract 16→21（+5 条 contextUsage 合约 + HookEventPayload 字段约束）、notifications 33→32（-1，剔 4 项不存在描述并补 sendClickableNotification 回调绑定/onclick 聚焦路由）、agent-status-hook 21→31（+10，剔"轮询"改事件驱动 + FE-03 TerminalRegistry.subscribe 增删 + FE-04 dockviewApi 标题查找与回退 + FE-05 null 不覆盖 + FE-06 无额外订阅）、agent-status-view 8→11（+3，剔 tooltip/加载态/错误态 + 补用量条分段颜色断言 + 点击路由 switchToPageAndFocus）、colors 12→13（+1 AGENT_STATUS_USAGE_COLORS 三 token）。补登 2 新文件：panelId.test.ts（5）+ terminal-registry-subscribe.test.ts（3）。L2 1552→1578，97→99 文件。L4：Agent Status 原 skip 拆为 3 条 active（视图存在性 + 静态行渲染 + 动态四态信号文件），toast 保持 it.skip，CSP 脚本用例保持 skip；18→22（20 active + 2 skip）。全量 2045→2075。

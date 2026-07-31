@@ -1,9 +1,10 @@
-// hooks-config-panel.test.tsx — hooks 配置面板 L2 测试（P3-TE-08）
+// hooks-config-panel.test.tsx — hooks 配置面板 L2 测试（P3-TE-08 + P3-FE-21/22）
 //
 // 覆盖：PANEL_TYPES 包含 hooksConfig / isValidPanelType 识别 /
 // HooksConfigPanel 三态渲染（loading / content / 损坏错误态）/
 // 层级切换器存在与禁用逻辑（rootPath 为空 project/local 禁用）/
-// 保存按钮初始禁用 / 面板聚焦（focusin）轻量重读 / JsonMode 接入（P3-FE-11）。
+// 保存按钮初始禁用 / 面板聚焦（focusin）轻量重读 / JsonMode 接入（P3-FE-11）/
+// F2 注入/卸载按钮与注入状态条（P3-FE-21/22：三态显示、注入/卸载后刷新状态 + 重读 user 层）。
 
 import { describe, it, expect, afterEach, vi, beforeEach } from "vitest";
 
@@ -16,10 +17,24 @@ const { mockReadHooksConfig, mockWriteHooksConfig, mockAsk, mockJsonMode } = vi.
   mockJsonMode: vi.fn(() => null),
 }));
 
+// mock IPC hooks —— F2 注入/卸载/状态查询（P3-FE-21/22；本地覆盖 setup.ts 全局 mock 以便断言调用）
+const { mockInject, mockUninstall, mockGetInjectionStatus } = vi.hoisted(() => ({
+  mockInject: vi.fn(),
+  mockUninstall: vi.fn(),
+  mockGetInjectionStatus: vi.fn(),
+}));
+
 // mock IPC hooksConfig —— 三层 hooks 子树读写
 vi.mock("../ipc/hooksConfig", () => ({
   readHooksConfig: mockReadHooksConfig,
   writeHooksConfig: mockWriteHooksConfig,
+}));
+
+// mock IPC hooks —— F2 注入/卸载/状态查询（P3-FE-21/22；本地覆盖 setup.ts 全局 mock 以便断言调用）
+vi.mock("../ipc/hooks", () => ({
+  inject: mockInject,
+  uninstall: mockUninstall,
+  getInjectionStatus: mockGetInjectionStatus,
 }));
 
 // mock JsonMode —— 隔离 CM6/schema（JsonMode 自身测试见 hooks-config-jsonmode.test.tsx）
@@ -102,6 +117,11 @@ describe("HooksConfigPanel 渲染", () => {
     mockAsk.mockReset();
     mockAsk.mockResolvedValue(true);
     mockJsonMode.mockClear();
+    // F2 mock 默认值：挂载 effect 会查询注入状态（不设默认则返回 undefined 使状态条显示崩溃）
+    mockInject.mockReset();
+    mockUninstall.mockReset();
+    mockGetInjectionStatus.mockReset();
+    mockGetInjectionStatus.mockResolvedValue({ status: "notInjected", version: null });
     resetStores();
   });
 
@@ -192,5 +212,117 @@ describe("HooksConfigPanel 渲染", () => {
     await waitFor(() => expect(mockReadHooksConfig.mock.calls.length).toBe(1));
     fireEvent.focus(container.firstElementChild as HTMLElement);
     await waitFor(() => expect(mockReadHooksConfig.mock.calls.length).toBeGreaterThanOrEqual(2));
+  });
+});
+
+describe("F2 注入/卸载与注入状态条（P3-FE-21/22）", () => {
+  beforeEach(() => {
+    mockReadHooksConfig.mockReset();
+    mockAsk.mockReset();
+    mockAsk.mockResolvedValue(true);
+    mockInject.mockReset();
+    mockUninstall.mockReset();
+    mockGetInjectionStatus.mockReset();
+    mockGetInjectionStatus.mockResolvedValue({ status: "notInjected", version: null });
+    resetStores();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("挂载后显示注入状态三态（已注入 / 未注入 / 版本过旧）——挂载 effect 查询一次", async () => {
+    mockReadHooksConfig.mockResolvedValue({});
+    // 已注入
+    mockGetInjectionStatus.mockResolvedValue({ status: "injected", version: 1 });
+    const first = render(React.createElement(HooksConfigPanel));
+    await waitFor(() => expect(first.getByText("注入状态：已注入")).toBeTruthy());
+    first.unmount();
+    // 版本过旧（重新挂载触发新查询）
+    mockGetInjectionStatus.mockResolvedValue({ status: "outdated", version: 0 });
+    const second = render(React.createElement(HooksConfigPanel));
+    await waitFor(() => expect(second.getByText("注入状态：版本过旧")).toBeTruthy());
+    second.unmount();
+    // 未注入（重新挂载触发新查询）
+    mockGetInjectionStatus.mockResolvedValue({ status: "notInjected", version: null });
+    const third = render(React.createElement(HooksConfigPanel));
+    await waitFor(() => expect(third.getByText("注入状态：未注入")).toBeTruthy());
+  });
+
+  it("点击「注入 Hooks」→ inject 调用 → 状态刷新为已注入 → 重读 user 层配置", async () => {
+    mockReadHooksConfig.mockResolvedValue({});
+    mockInject.mockResolvedValue({ status: "injected", version: 1 });
+    const { getByRole } = render(React.createElement(HooksConfigPanel));
+    const injectBtn = await waitFor(() => getByRole("button", { name: "注入 Hooks" }));
+    const callsBefore = mockReadHooksConfig.mock.calls.length;
+    fireEvent.click(injectBtn);
+    await waitFor(() => expect(mockInject).toHaveBeenCalled());
+    // 注入后重读 user 层（当前层即 user → reload）
+    await waitFor(() => expect(mockReadHooksConfig.mock.calls.length).toBe(callsBefore + 1));
+    expect(mockReadHooksConfig.mock.calls[mockReadHooksConfig.mock.calls.length - 1][0]).toBe("user");
+  });
+
+  it("project 层点注入 → 自动切到 user 层重读（最后一次 read 为 user 层）", async () => {
+    seedProject("C:/proj");
+    mockReadHooksConfig.mockResolvedValue({});
+    mockInject.mockResolvedValue({ status: "injected", version: 1 });
+    const { getByRole } = render(React.createElement(HooksConfigPanel));
+    const projectBtn = await waitFor(() => getByRole("button", { name: "Project" }));
+    fireEvent.click(projectBtn);
+    await waitFor(() => {
+      const calls = mockReadHooksConfig.mock.calls;
+      expect(calls[calls.length - 1][0]).toBe("project");
+    });
+    fireEvent.click(getByRole("button", { name: "注入 Hooks" }));
+    await waitFor(() => expect(mockInject).toHaveBeenCalled());
+    await waitFor(() => {
+      const calls = mockReadHooksConfig.mock.calls;
+      expect(calls[calls.length - 1][0]).toBe("user");
+    });
+  });
+
+  it("点击「卸载 Hooks」→ uninstall 调用 → 重新查询状态 → 重读 user 层配置", async () => {
+    mockReadHooksConfig.mockResolvedValue({});
+    mockGetInjectionStatus.mockResolvedValue({ status: "notInjected", version: null });
+    const { getByRole } = render(React.createElement(HooksConfigPanel));
+    // 初始挂载查询一次（P3-FE-22 挂载刷新）
+    await waitFor(() => expect(mockGetInjectionStatus.mock.calls.length).toBe(1));
+    const uninstallBtn = await waitFor(() => getByRole("button", { name: "卸载 Hooks" }));
+    const callsBefore = mockReadHooksConfig.mock.calls.length;
+    fireEvent.click(uninstallBtn);
+    await waitFor(() => expect(mockUninstall).toHaveBeenCalled());
+    // 卸载后重新查询状态（uninstall 返回 void，状态由二次查询刷新）
+    await waitFor(() => expect(mockGetInjectionStatus.mock.calls.length).toBe(2));
+    await waitFor(() => expect(mockReadHooksConfig.mock.calls.length).toBe(callsBefore + 1));
+  });
+
+  it("注入失败 → 显示错误提示（不刷新状态、不重读配置）", async () => {
+    mockReadHooksConfig.mockResolvedValue({});
+    mockInject.mockRejectedValue(new Error("settings.json 非法 JSON"));
+    const { getByRole, getByText, queryByText } = render(React.createElement(HooksConfigPanel));
+    const injectBtn = await waitFor(() => getByRole("button", { name: "注入 Hooks" }));
+    const callsBefore = mockReadHooksConfig.mock.calls.length;
+    fireEvent.click(injectBtn);
+    await waitFor(() => expect(getByText("注入失败，请检查 ~/.claude/settings.json")).toBeTruthy());
+    expect(mockReadHooksConfig.mock.calls.length).toBe(callsBefore);
+    expect(queryByText("注入状态：已注入")).toBeNull();
+  });
+
+  it("注入/卸载操作期间按钮禁用（防重复点击）", async () => {
+    mockReadHooksConfig.mockResolvedValue({});
+    let resolveInject!: (v: { status: string }) => void;
+    mockInject.mockReturnValue(
+      new Promise((r) => {
+        resolveInject = r;
+      }),
+    );
+    const { getByRole } = render(React.createElement(HooksConfigPanel));
+    const injectBtn = await waitFor(() => getByRole("button", { name: "注入 Hooks" }));
+    fireEvent.click(injectBtn);
+    await waitFor(() => expect((injectBtn as HTMLButtonElement).disabled).toBe(true));
+    expect((getByRole("button", { name: "卸载 Hooks" }) as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => {
+      resolveInject({ status: "injected" });
+    });
   });
 });
