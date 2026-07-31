@@ -7,6 +7,7 @@
 import type { Command } from "./types";
 import { commandFromMeta } from "./commandCatalog";
 import type { DockviewApi } from "dockview-react";
+import { useLayout } from "../../stores/layout";
 
 /**
  * 创建全局快捷键命令列表。
@@ -25,6 +26,26 @@ export function createGlobalShortcuts(
       }
       // 无活跃面板 → 透传（xterm.js 可接收 \x17 用于 bash readline）
       return false;
+    }),
+    commandFromMeta("global.openHooksConfig", () => {
+      // 同页单例（契约 C13-7）：面板 id = hooksConfig-{activePageId}，命中聚焦、未命中新建
+      const { activePageId } = useLayout.getState();
+      if (!activePageId) return false; // 无活跃页面 → 透传
+      const panelId = `hooksConfig-${activePageId}`;
+      const api = getDockviewApi();
+      if (!api) return false; // 无 DockviewApi → 透传
+      const existing = api.getPanel(panelId);
+      if (existing) {
+        existing.focus();
+        return true;
+      }
+      api.addPanel({
+        id: panelId,
+        component: "hooksConfig",
+        title: "Hooks 配置",
+        params: { panelId },
+      });
+      return true;
     }),
   ];
 }

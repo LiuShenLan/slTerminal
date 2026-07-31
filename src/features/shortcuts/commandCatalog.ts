@@ -33,6 +33,14 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
     priority: 10,
   },
   {
+    id: "global.openHooksConfig",
+    title: "打开 Hooks 配置",
+    category: "global",
+    context: "global",
+    defaultKey: key("KeyH", { ctrl: true, shift: true }),
+    priority: 10,
+  },
+  {
     id: "terminal.copy",
     title: "复制选区",
     category: "terminal",

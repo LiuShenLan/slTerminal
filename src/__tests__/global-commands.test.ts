@@ -27,9 +27,9 @@ describe("createGlobalShortcuts", () => {
   // ---- 1. 命令结构 ----
 
   describe("命令结构", () => {
-    it("返回一条命令", () => {
+    it("返回两条命令（closeTab + openHooksConfig）", () => {
       const cmds = createGlobalShortcuts(() => undefined);
-      expect(cmds).toHaveLength(1);
+      expect(cmds).toHaveLength(2);
     });
 
     it("命令 id 为 global.closeTab", () => {
