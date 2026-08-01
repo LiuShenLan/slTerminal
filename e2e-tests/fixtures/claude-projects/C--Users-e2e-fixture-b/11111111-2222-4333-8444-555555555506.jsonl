@@ -1,0 +1,3 @@
+{"type":"summary","summary":"孤儿会话","leafUuid":"x"}
+{"type":"user","cwd":"C:\\e2e\\deleted\\dir\\gone","message":{"content":"孤儿提问"}}
+// [形态5] cwd 指向不存在的路径 → cwdExists=false，孤儿行 ✗（双击无操作）

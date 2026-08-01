@@ -32,6 +32,60 @@ process.on('exit', () => {
   }
 });
 
+// ── Claude 历史会话 fixture 副本 + env 注入（TE-02，SEC-02 安全红线） ──
+// 后端 claude_history 扫描根支持 SLTERM_CLAUDE_PROJECTS_DIR env 覆盖（SEC-02/BE-06）。
+// 每次运行从 fixtures/claude-projects/ 重建 e2e-tests/.tmp-claude-projects/ 副本
+// （防用例间污染；删除/重命名用例只动副本，不触碰用户真实 ~/.claude/projects/）。
+// 复制时替换占位符 __E2E_PROJECT_DIR__ 为 E2E 临时项目目录真实绝对路径
+// （JSON 字符串内反斜杠须转义为 \\，保证替换后 JSON 合法）。
+const fixturesDir = path.join(__dirname, 'fixtures', 'claude-projects');
+const tmpProjectsDir = path.join(__dirname, '.tmp-claude-projects');
+// E2E 临时项目目录：恢复编排用例的项目根（fixture cwd 占位符指向它，须真实存在 → cwdExists=true）
+const e2eProjectDir = path.join(os.tmpdir(), 'slterm-e2e-history-project');
+
+/** 递归复制 fixture 树到副本目录，占位符替换为真实路径（JSON 转义后） */
+function copyFixtureTree(src, dst, placeholder, realJsonEscaped) {
+  fs.rmSync(dst, { recursive: true, force: true });
+  fs.mkdirSync(dst, { recursive: true });
+  const walk = (from, to) => {
+    fs.mkdirSync(to, { recursive: true });
+    for (const entry of fs.readdirSync(from, { withFileTypes: true })) {
+      const s = path.join(from, entry.name);
+      const d = path.join(to, entry.name);
+      if (entry.isDirectory()) {
+        walk(s, d);
+      } else {
+        const content = fs.readFileSync(s, 'utf8');
+        fs.writeFileSync(d, content.split(placeholder).join(realJsonEscaped), 'utf8');
+      }
+    }
+  };
+  walk(src, dst);
+}
+
+// 重建 E2E 临时项目目录（固定路径，每次运行清空重建——fixture cwd 指向它）
+fs.rmSync(e2eProjectDir, { recursive: true, force: true });
+fs.mkdirSync(e2eProjectDir, { recursive: true });
+process.env.SLTERM_E2E_PROJECT_DIR = e2eProjectDir;
+
+if (fs.existsSync(fixturesDir)) {
+  // 重建 fixture 副本 + 占位符替换（Windows 路径反斜杠 → JSON 转义 \\）
+  copyFixtureTree(
+    fixturesDir,
+    tmpProjectsDir,
+    '__E2E_PROJECT_DIR__',
+    e2eProjectDir.replace(/\\/g, '\\\\'),
+  );
+  process.env.SLTERM_CLAUDE_PROJECTS_DIR = tmpProjectsDir;
+  console.log(`[wdio-launcher] 已重建 claude-projects 副本 → ${tmpProjectsDir}`);
+  console.log(`[wdio-launcher] SLTERM_CLAUDE_PROJECTS_DIR=${tmpProjectsDir}`);
+  console.log(`[wdio-launcher] SLTERM_E2E_PROJECT_DIR=${e2eProjectDir}`);
+} else {
+  // fixtures 缺失（异常路径）：不设 env——后端回落真实 ~/.claude/projects（生产默认）；
+  // 历史会话用例会失败，属显式信号而非静默污染真实数据
+  console.warn('[wdio-launcher] fixtures/claude-projects 不存在，跳过 SLTERM_CLAUDE_PROJECTS_DIR 注入');
+}
+
 const major = parseInt(process.version.slice(1).split('.')[0], 10);
 const wdioConfig = path.resolve(__dirname, 'wdio.conf.ts');
 

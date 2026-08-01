@@ -1,0 +1,2 @@
+{"type":"summary","summary":"子代理会话","leafUuid":"x"}
+// [形态7] <id>/subagents/agent-*.jsonl → 扫描不递归子目录，应被排除

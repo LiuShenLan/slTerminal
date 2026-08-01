@@ -1,0 +1,4 @@
+{"type":"summary","summary":"摘要B","leafUuid":"x"}
+{"type":"ai-title","aiTitle":"E2E自动标题二","sessionId":"11111111-2222-4333-8444-555555555502"}
+{"type":"user","cwd":"__E2E_PROJECT_DIR__","message":{"content":"502 的问题"}}
+// [形态2] 含 ai-title 行 → 标题取 ai-title（尾部扫描 last-wins，赢 summary）

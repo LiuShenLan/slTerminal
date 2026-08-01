@@ -1,0 +1,2 @@
+{"type":"summary","summary":"agent 平铺会话","leafUuid":"x"}
+// [形态6] agent-*.jsonl 平铺文件 → 应被扫描排除（BE-02 排除规则）

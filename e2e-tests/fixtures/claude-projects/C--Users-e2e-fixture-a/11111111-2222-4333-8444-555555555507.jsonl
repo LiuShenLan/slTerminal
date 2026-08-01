@@ -1,0 +1,3 @@
+{"type":"summary","summary":"恢复目标会话","leafUuid":"x"}
+{"type":"user","cwd":"__E2E_PROJECT_DIR__","message":{"content":"恢复编排的目标会话"}}
+// [恢复编排专用] cwd 指向 E2E 临时项目目录（占位符由 run-wdio.cjs 替换）→ 普通行，双击走四步恢复编排

@@ -1,0 +1,8 @@
+{"type":"summary","summary":"","leafUuid":"x"}
+{"type":"system","cwd":null}
+{"type":"user","isMeta":true,"message":{"content":"<command-name>ls</command-name>"}}
+{"type":"user","message":{"content":"<local-command-caveat>注意事项</local-command-caveat>"}}
+{"type":"user","message":{"content":[{"type":"text","text":"数组载体"}]}}
+{"type":"user","message":{"content":"   "}}
+{"type":"user","cwd":"__E2E_PROJECT_DIR__","message":{"content":"帮我看看这个 e2e 问题"}}
+// [形态3] 无标题行 → 回退首条可见 prompt（isMeta/数组 content/< 开头/空白 4 类干扰行验证跳过规则；空 summary 不作为候选）

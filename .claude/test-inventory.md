@@ -2,7 +2,7 @@
 
 > **本文档是项目用例数唯一真值源。** 所有 CLAUDE.md、README、CI 配置中引用的用例数均以此文件为准。更新测试后必须同步本文档。
 
-全量 **2309** 用例（Rust 384 + 前端 1783 + L3 116 + E2E 26），2026-08-01 更新。
+全量 **2317** 用例（Rust 384 + 前端 1783 + L3 116 + E2E 34），2026-08-02 更新。
 
 > **计数口径**：前端 (L2) 用例数以 `grep -cE '^\s*(it|test)\(' src/__tests__/*.test.ts src/__tests__/*.test.tsx` 展开的 `it`/`test` 块数为准（Vitest 实际运行数）；L3 同理 `test/terminal/*.test.ts`；Rust (L1) 以 `grep -c '#\[test\]'` 统计的 `#[test]` 属性数为准。L3 的 116 用例同时被 L2 (`npm test`) 和独立 L3 (`npm run test:l3`) 执行，但此处各层独立计数，不做去重。
 
@@ -245,7 +245,7 @@
 | `test/terminal/ansi-correctness.test.ts` | 30 | ANSI 颜色正确性——16 色前景/背景、256 色（标准/216 色立方/灰度）、TrueColor 24-bit 前景/背景/混合、SGR 属性（粗体/斜体/下划线/双下划线/慢闪/反显/隐藏/删除线/弱化/上划线）、SGR 组合叠加、SGR 重置/子参数重置、DEC 私有模式（DECTCEM/DECOM/DECAWM）、DECSC/DECRC、RIS、DECSTBM |
 | `test/terminal/osc.test.ts` | 9 | OSC 序列——标题（OSC 0/2 BEL/ST）、调色板（OSC 4 单索引/多索引）、嵌入完整性（OSC 在正常输出中/穿插文本/后紧跟文本不丢失） |
 
-## L4 — E2E 端到端测试（1 文件 / 26 用例，24 active + 2 skip）
+## L4 — E2E 端到端测试（1 文件 / 34 用例，32 active + 2 skip）
 
 运行：`npm run e2e`（= `npm run build:e2e` + `npm run wdio`）  
 技术栈：WDIO + `@wdio/tauri-service` 1.1.0 + embedded driver（`webview2-com` COM 直连 `ICoreWebView2`）
@@ -278,6 +278,14 @@
 | R4 变体：会话终端关页签删行（remove 事件 + ref 稳定订阅） | active | hook 事件建行 → `__dockviewApi.removePanel(panel)` → 行消失（remove 事件 + ref 稳定订阅——R4 原始竞态不重现） |
 | hooks 配置面板保存链路（P3-TE-18） | active | tempdir 项目 → 打开 hooksConfig 面板（`__dockviewApi.addPanel`）→ 切 project 层 → JSON 模式经 `__slterm_e2e_setHooksConfigJson` 注入合法 hooks 配置 → 程序化点击保存 → 真实 IPC `hooks_config_write` 写盘 → 断言 `.claude/settings.json` 含 hooks 子树且 **merge 保留其他字段**（走 project 层，不碰真实 `~/.claude/settings.json`） |
 | toast 触发链路需人工验证（失焦 + 权限请求 / Stop / 错误） | skip | 通知 toast 全链路验证（skip 原因：权限弹窗需用户交互，自动化不可行） |
+| 展开「全部项目历史会话」→ fixture 6 条会话行展示，agent-*/非 UUID/subagents 不出现 | active | 展开全部区触发扫描 → 断言 6 行（7 形态中 6 条）→ agent-misc.jsonl（形态6 平铺）/not-a-uuid.jsonl（非 UUID）/subagents（形态7 子目录）不出现（SEC-02：扫描根 = SLTERM_CLAUDE_PROJECTS_DIR 指向 .tmp-claude-projects 副本，fixture 经 run-wdio.cjs 重建） |
+| 标题回退链：custom-title / ai-title / 首条 prompt 三会话行各显示预期标题 | active | 形态1 行显 custom-title（E2E自定义标题一）；形态2 行显 ai-title（赢 summary）；形态3 无标题行回退首条可见 prompt（isMeta/数组/< 开头/空白 4 类干扰行跳过），title 非 null 不显 UUID 前 8 位 |
+| 搜索过滤：关键词仅保留匹配行；无结果显示「无匹配的会话」 | active | 搜索框（agent-history-search）注入关键词 → 仅 501 行保留 → 无结果关键词 →「无匹配的会话」→ 清空恢复 6 行（React 受控 input：原生 setter + input 事件，禁 browser.keys——键盘输入限制） |
+| 复制恢复命令：右键 → 剪贴板内容为 `cd '<cwd>' && claude --resume <id>` | active | 右键 507 行 → 菜单「复制恢复命令」→ 剪贴板断言（clipboard-manager read_text 经 __TAURI_INTERNALS__.invoke；allow-read-text 已放行） |
+| 孤儿行 ✗ 标记展示 + 双击无反应（无新面板/无页面切换） | active | 形态5（cwd 指向不存在路径）行含 ✗、普通行不含；双击孤儿行 → 活跃页面与面板集合不变（分派矩阵：孤儿 → 无操作） |
+| 重命名：右键 → InputDialog 提交 → 行标题更新 + 副本文件尾部追加 custom-title 行 | active | 右键 501 → 「重命名」→ InputDialog 输入新标题 → 确认 → 行标题即时更新（updateLocalTitle 局部刷新）+ Node 侧断言副本 .jsonl 末行 `{"type":"custom-title","customTitle":...,"sessionId":...}`（BE-08 格式） |
+| 删除：ask 确认（invoke 拦截）→ 行消失 + 副本文件删除 | active | 右键孤儿行 → 「删除」→ ask 经 `__TAURI_INTERNALS__.invoke` 拦截（plugin:dialog|ask 恒 true，stages.md Stage 06 降级方案——embedded WDIO 无法操作原生对话框）→ 行消失 + Node 侧断言副本 .jsonl 不存在（SEC-02：只动副本） |
+| 恢复编排：双击普通行 → 项目入列 + 页面切换 + 终端注入 claude --resume（不断言真实进入会话） | active | 双击 507 行（cwd = run-wdio.cjs 创建的 E2E 临时项目目录）→ 断言 activePage rootPath = 该目录（addProject + switchToPageShared）+ 终端 PTY 就绪 + `__e2e_getTerminalText` 含 `claude --resume <id>`（pty.write 注入）；不断言 claude 成功进入会话（fixture id 非真实，真实成功属人工验证） |
 
 ### E2E settings.json 隔离机制（FIX-TE-04）
 
@@ -303,6 +311,7 @@ embedded WDIO 驱动**无法将 OS 级按键（`browser.keys`）投递进 WebVie
 
 ## 历史变更
 
+- 2026-08-02（Claude 历史会话视图 E2E，TE-01..04）：新增 describe「Claude 历史会话视图」8 用例——fixture 7 形态（custom-title/ai-title/prompt 回退/无 cwd/孤儿/agent-* 平铺/subagents 子目录）+ 搜索过滤 + 复制恢复命令（剪贴板 read_text 断言）+ 孤儿行 ✗ 双击无反应 + 重命名（副本尾部 custom-title 行 Node 断言）+ 删除（ask invoke 拦截降级方案 + 副本文件删除 Node 断言）+ 恢复编排（项目入列/页面切换/终端缓冲含 claude --resume）。新增 fixtures/claude-projects/（9 文件）+ run-wdio.cjs 副本重建与占位符替换 + SLTERM_CLAUDE_PROJECTS_DIR/SLTERM_E2E_PROJECT_DIR env 注入（SEC-02：只动 .tmp-claude-projects 副本）+ .gitignore 条目。L4 26→34（32 active + 2 skip），全量 2309→2317。
 - 2026-08-01（Hooks 配置入口迁移）：删 global.openHooksConfig 快捷键命令（Ctrl+Shift+H）——hooks-config-entry.test.ts 整文件删除（7）、command-catalog 14→13（-1 入口契约）、global-commands 13（断言改 1）；新增侧栏右键菜单入口——sidebar-actions 33→38（+5 菜单入口）、新建 open-hooks-config-panel.test.ts（+5 同页单例/轮询/超时）。L2 1781→1783，全量 2307→2309。
 - 2026-08-01（外部修改检测改 visibilitychange）：hooks-config-panel 19→20（+1 visibilityState=hidden 不触发；改 3 个 window focus 用例为 visibilitychange 派发——jsdom 需 defineProperty 设 visibilityState 再 dispatch，afterEach Reflect.deleteProperty 还原）。L2 1780→1781，全量 2306→2307。
 - 2026-08-01（验收修复 5：卸载改 handler 级剔除）：inject.rs remove_slterm_matchers 组级→handler 级（混组保用户 handler，组空才删组）；20→22 用例（+2：混组保用户 handler/全 slterm 组删除）。L1 382→384，全量 2304→2306。

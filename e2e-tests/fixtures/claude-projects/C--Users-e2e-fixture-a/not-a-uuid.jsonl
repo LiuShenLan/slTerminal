@@ -1,0 +1,2 @@
+{"type":"summary","summary":"非 UUID 文件名","leafUuid":"x"}
+// [补充] 文件名主干非 UUID 形态 → 应被扫描排除（BE-02 排除规则）

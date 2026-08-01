@@ -1,0 +1,5 @@
+{"type":"summary","summary":"旧摘要","leafUuid":"x"}
+{"type":"custom-title","customTitle":"E2E自定义标题一","sessionId":"11111111-2222-4333-8444-555555555501"}
+{"type":"user","cwd":"__E2E_PROJECT_DIR__","message":{"content":"这是 501 的提问"}}
+{"type":"assistant","message":{"content":"回复内容"}}
+// [形态1] 含 custom-title 行 → 标题取 custom-title（头部收集；cwd 占位符由 run-wdio.cjs 复制时替换为 E2E 临时项目真实路径）

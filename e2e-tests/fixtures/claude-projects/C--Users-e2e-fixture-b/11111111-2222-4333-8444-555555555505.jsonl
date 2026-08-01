@@ -1,0 +1,3 @@
+{"type":"summary","summary":"无目录会话","leafUuid":"x"}
+{"type":"user","message":{"content":"无 cwd 的提问"}}
+// [形态4] 无 cwd 字段 → cwd=null，归「(未知目录)」组，不显示 ✗（恢复类操作禁用）

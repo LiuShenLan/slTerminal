@@ -31,6 +31,9 @@ tmp/
 debug/
 doc/
 
+# E2E Claude 历史会话工作副本（run-wdio.cjs 每次运行重建，不入 git）
+e2e-tests/.tmp-claude-projects/
+
 # Rust
 src-tauri/target/
 datalearncodeterax-ai-temp/
