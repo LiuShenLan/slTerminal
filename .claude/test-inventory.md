@@ -2,7 +2,7 @@
 
 > **本文档是项目用例数唯一真值源。** 所有 CLAUDE.md、README、CI 配置中引用的用例数均以此文件为准。更新测试后必须同步本文档。
 
-全量 **2307** 用例（Rust 384 + 前端 1781 + L3 116 + E2E 26），2026-08-01 更新。
+全量 **2309** 用例（Rust 384 + 前端 1783 + L3 116 + E2E 26），2026-08-01 更新。
 
 > **计数口径**：前端 (L2) 用例数以 `grep -cE '^\s*(it|test)\(' src/__tests__/*.test.ts src/__tests__/*.test.tsx` 展开的 `it`/`test` 块数为准（Vitest 实际运行数）；L3 同理 `test/terminal/*.test.ts`；Rust (L1) 以 `grep -c '#\[test\]'` 统计的 `#[test]` 属性数为准。L3 的 116 用例同时被 L2 (`npm test`) 和独立 L3 (`npm run test:l3`) 执行，但此处各层独立计数，不做去重。
 
@@ -34,7 +34,7 @@
 
 > `pty/mod.rs`、`pty/win_build.rs`、`main.rs` 不含 `#[test]`，不在此列。
 
-## L2 — 前端单元/集成测试（109 文件 / 1781 用例）
+## L2 — 前端单元/集成测试（109 文件 / 1783 用例）
 
 运行：`npm test`（Vitest + jsdom）
 
@@ -79,10 +79,11 @@
 | `src/__tests__/editor-keyboard.test.ts` | 7 | `createEditorShortcuts()` save/toggleWordWrap 经 active 指针派发 |
 | `src/__tests__/active-editor.test.ts` | 5 | active 指针 set/get/覆盖、clear 仅匹配时生效 |
 
-### 工作区/布局/页签（12 文件 / 189 用例）
+### 工作区/布局/页签（13 文件 / 194 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
+| `src/__tests__/open-hooks-config-panel.test.ts` | 5 | openHooksConfigPanel：API 就绪立即 addPanel 参数精确（hooksConfig-{pageId} 规则）/面板已存在 focus 不新建（同页单例）/API 延迟注册轮询命中/永不注册 5s 超时降级/pageId 变化 panelId 跟随 |
 | `src/__tests__/title-manager.test.ts` | 44 | terminal-N 递增/编辑器 basename/同名冲突相对路径/handleSaveAs/onDeletePage/suffix 标题生成/冲突重算保留后缀/findExistingEditor 匹配隔离 |
 | `src/__tests__/panel-registry.test.ts` | 32 | 注册表 6 面板（terminal/editor/htmlviewer/gitshow/diff/hooksConfig 六键 + hooksConfig 注册项为函数组件）/PANEL_TYPES 含 hooksConfig 长度 6/isValidPanelType/FILE_PANEL_TYPES（5 面板，不含 hooksConfig）/isAlwaysRenderPanel |
 | `src/__tests__/layout-serde.test.ts` | 21 | 旧格式修补/白名单过滤/深拷贝/嵌套 branch/activeGroup 保留 |
@@ -126,11 +127,11 @@
 | `src/__tests__/explorer-rename-keyboard.test.tsx` | 5 | F2 快捷键 → renameSelected 集成 |
 | `src/__tests__/explorer-focus.test.tsx` | 3 | ExplorerPanel 焦点管理（tabIndex/usePanelFocus 集成） |
 
-### 侧栏（1 文件 / 33 用例）
+### 侧栏（1 文件 / 38 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
-| `src/__tests__/sidebar-actions.test.ts` | 33 | 树结构/右键菜单/内联重命名/项目删除确认/布局 CSS/添加项目 |
+| `src/__tests__/sidebar-actions.test.ts` | 38 | 树结构/右键菜单/内联重命名/项目删除确认/布局 CSS/添加项目/**打开 Hooks 配置菜单入口（页面行含项/先切页后开面板顺序/项目行含项/有页切 pages[0]/无页新建后切换）** |
 
 ### 侧栏视图（6 文件 / 132 用例）
 
@@ -150,7 +151,7 @@
 | `src/__tests__/commit-view.test.tsx` | 35 | 状态机四态/mock gitStatus+onFsEvent/列表渲染（文件名 GIT_FILE_COLORS token/计数/排序/空态）/折叠交互/双击分派 4 类状态（mock dockApi+真实 titleManager）/去重聚焦/fs-event 200ms debounce/rootPath 切换清空重载 |
 | `src/__tests__/commit-context-menu.test.ts` | 13 | getContextMenuItems 状态→菜单映射（ROLLBACK_STATES/DELETE_STATES）+ action 执行流程（ask 确认→IPC→refresh） |
 
-### hooks 配置面板（12 文件 / 212 用例）
+### hooks 配置面板（11 文件 / 205 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
@@ -158,7 +159,6 @@
 | `src/__tests__/hooks-config-catalog.test.ts` | 19 | eventsCatalog 事件元数据（30 事件 x 10 组/HANDLER_TYPES/HANDLER_FIELD_MATRIX/纯查询函数）（Stage 03 遗留补登） |
 | `src/__tests__/hooks-config-matcher.test.ts` | 21 | matcherEngine.matchHook 全分支（exact-or/regex/all/受限窄字符集/非法正则防御）（Stage 03 遗留补登） |
 | `src/__tests__/hooks-config-model.test.ts` | 17 | configModel jsonToGui/guiToJson 双向转换/round-trip/容错/isSltermManaged（Stage 03 遗留补登） |
-| `src/__tests__/hooks-config-entry.test.ts` | 7 | 入口命令同页单例：global.openHooksConfig 面板 id 规则（hooksConfig-{pageId}）/命中聚焦/未命中 addPanel/无活跃页面或 api 透传 |
 | `src/__tests__/hooks-config-panel.test.tsx` | 20 | 面板三态（loading/content/损坏错误态）/层级切换器禁用逻辑/保存按钮初始禁用/visibilitychange 轻量重读（可见触发/hidden 态不触发/不可见跳过/面板内点击不触发/ask 弹窗打开期间回归不二次弹窗，验收 #1/#2.1 防回归）/JSON 错误提示单行截断（nowrap+ellipsis+title，验收 1.2）/JsonMode 接入（value 序列化传递）/注入状态条与注入/卸载按钮 |
 | `src/__tests__/hooks-config-jsonmode.test.tsx` | 17 | TE-09：CM6 EditorView 创建 + schema 扩展注册（jsonSchemaHover/jsonSchemaLinter + hooks 子 schema + height theme + linter needsRefresh，无自动补全）+ 非法 JSON/schema 违规触发 onValidationChange + 外部 value 同步 + MatcherTester 试测（exact-or/regex/受限字符集）；TE-10：十大分组 + 30 事件按钮渲染 + findEventPosition 纯函数 + 点击跳转选区（setSelection + scrollIntoView）+ 无副作用守卫 |
 | `src/__tests__/hooks-config-gui.test.tsx` | 25 | GUI 模式（P3-FE-12）：Master-Detail 渲染/事件树增删事件与 matcher 组/详情区 handler 增删/选中态派生守卫（事件删除/重载回退空态）/注入段禁删（三层删除按钮禁用）/不支持 matcher 事件省略 matcher 输入；P3-FE-14：HandlerForm 接入（选中渲染表单/字段编辑上抛新模型/切换跟随/托管只读） |
@@ -173,14 +173,14 @@
 | `src/__tests__/diff-panel.test.tsx` | 30 | mock gitFileAtHead+fs.readFile+gitDiff+onFsEvent、双栏渲染、加载态+错误占位、保存后刷新链 |
 | `src/__tests__/gitshow-panel.test.tsx` | 19 | mock gitFileAtHead、三态（loading/content/error）、readOnly 断言、oldPath 优先 |
 
-### 快捷键/命令系统（7 文件 / 115 用例）
+### 快捷键/命令系统（7 文件 / 114 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
 | `src/__tests__/shortcuts.test.ts` | 53 | 注册/注销/引用计数/上下文栈/IME/setOverrides 重绑/解绑/降级/冲突/resolve/forceContext/export/list/监听器 spy |
 | `src/__tests__/keystroke.test.ts` | 18 | formatKeystroke/parseKeystroke/isValidKeystrokeString/format∘parse 恒等 |
-| `src/__tests__/global-commands.test.ts` | 13 | `createGlobalShortcuts(getApi)` 延迟求值/Ctrl+W 关闭/openHooksConfig 同页单例（hooksConfig-{pageId} 命中聚焦/未命中 addPanel/无页面或 api 透传）/无面板透传 |
-| `src/__tests__/command-catalog.test.ts` | 14 | 10 命令齐全（含 global.openHooksConfig 入口命令契约）/defaultKey 合法且非自身保留/commandFromMeta |
+| `src/__tests__/global-commands.test.ts` | 13 | `createGlobalShortcuts(getApi)` 延迟求值/Ctrl+W 关闭/返回一条命令（Hooks 配置入口已迁移侧栏菜单）/无面板透传 |
+| `src/__tests__/command-catalog.test.ts` | 13 | 9 命令齐全/defaultKey 合法且非自身保留/commandFromMeta |
 | `src/__tests__/reserved.test.ts` | 9 | isReserved 各 context/保留键命中/global 两集并集 |
 | `src/__tests__/use-panel-focus.test.ts` | 5 | focusin→pushContext+onActivate/focusout→popContext+onDeactivate/卸载清理 |
 | `src/__tests__/wire-keybindings.test.ts` | 3 | 立即应用/store 变更重应用/unsubscribe |
@@ -303,6 +303,7 @@ embedded WDIO 驱动**无法将 OS 级按键（`browser.keys`）投递进 WebVie
 
 ## 历史变更
 
+- 2026-08-01（Hooks 配置入口迁移）：删 global.openHooksConfig 快捷键命令（Ctrl+Shift+H）——hooks-config-entry.test.ts 整文件删除（7）、command-catalog 14→13（-1 入口契约）、global-commands 13（断言改 1）；新增侧栏右键菜单入口——sidebar-actions 33→38（+5 菜单入口）、新建 open-hooks-config-panel.test.ts（+5 同页单例/轮询/超时）。L2 1781→1783，全量 2307→2309。
 - 2026-08-01（外部修改检测改 visibilitychange）：hooks-config-panel 19→20（+1 visibilityState=hidden 不触发；改 3 个 window focus 用例为 visibilitychange 派发——jsdom 需 defineProperty 设 visibilityState 再 dispatch，afterEach Reflect.deleteProperty 还原）。L2 1780→1781，全量 2306→2307。
 - 2026-08-01（验收修复 5：卸载改 handler 级剔除）：inject.rs remove_slterm_matchers 组级→handler 级（混组保用户 handler，组空才删组）；20→22 用例（+2：混组保用户 handler/全 slterm 组删除）。L1 382→384，全量 2304→2306。
 - 2026-08-01（验收修复 4：JSON 模式三修）：删自动补全（jsonCompletion + jsonLanguage.data.of + @codemirror/autocomplete 直接依赖移除，传递依赖仍在）；加 EditorView.theme height:100% + overflow:clip（竖向滚动条，验收 1.3）；hooks-config-panel 18→19（+1 错误提示单行截断断言，验收 1.2）；jsonmode 17（断言改 height theme，用例数不变）。L2 1779→1780，全量 2303→2304。

@@ -13,8 +13,8 @@ import { PANEL_BG } from "../../theme/colors";
 
 /** SideBarArea 外部注入 props——与 SidebarTree props 精确匹配 */
 export interface SideBarAreaProps {
-  /** 切换操作页面 */
-  switchToPage: (projectId: string, pageId: string) => void;
+  /** 切换操作页面（async——切换完成后再开面板） */
+  switchToPage: (projectId: string, pageId: string) => Promise<void>;
   /** 删除操作页面 */
   onDeletePage: (projectId: string, pageId: string) => void;
 }

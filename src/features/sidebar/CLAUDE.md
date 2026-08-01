@@ -15,6 +15,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **涉及路径**：
 - `handleAddProject` — 新建项目时 page.layout 为空
 - `handleNewPage` — 新建操作页面时 page.layout 为空
+- **右键菜单「打开 Hooks 配置」入口**：页面行菜单——先 `switchToPage` 切到目标页再 `openHooksConfigPanel(pageId)`（workspace/pageApis，同页单例 C13-7）；项目行菜单——已有操作页面（无论几个）切到 `pages[0]`、无页面则复用 `handleNewPage` 新建后切换，再开面板。面板只能在活跃页面打开（rootPath 推导依赖 activePageId），故切页先行；`switchToPage` prop 为 async
 - `__slterm_e2e_createProject` — E2E 辅助，同上
 
 **旧 `makeDefaultLayout` 已删除**——早期版本硬编码 `contentComponent: "terminal"` 到新建页面布局中。`layoutSerde.patchLegacyLayout` 仍保留对旧格式的兼容修补（不影响新页面创建）。
@@ -43,7 +44,7 @@ SidebarTree 组件本体不变。宿主从 Allotment 常驻栏（Workspace 四�
 
 ## 测试模式
 
-测试文件：`src/__tests__/sidebar-actions.test.ts`（25 用例 → 33 用例）。
+测试文件：`src/__tests__/sidebar-actions.test.ts`（25 用例 → 33 用例 → 38 用例，含「打开 Hooks 配置」菜单入口 5 用例：页面菜单含项/先切页后开面板顺序/项目菜单含项/有页切 pages[0]/无页新建后切换）。
 
 - 使用真实 Zustand stores（`setState` 种子数据），mock IPC dialog
 - `handleAddProject` 测试：mock dialog.open → fireEvent.click → waitFor store 更新 → 验证 project/pages/layout

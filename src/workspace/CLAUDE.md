@@ -31,7 +31,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `PageDockviewHost.tsx` | 单页面 Dockview 实例宿主组件（React.memo 包裹）：DefaultTab、Watermark、RightHeader、ContextMenu、布局恢复 |
 | `layoutSerde.ts` | 布局序列化/反序列化：`saveLayout`（`api.toJSON()`）、`loadLayout`（`api.fromJSON()` + 旧格式修补 + 白名单过滤） |
 | `titleManager.ts` | 页签标题集中管理：terminal-N 编号、文件标题冲突检测、handleSaveAs、onDeletePage(pageId)：清理该页面 registry 和 counters 条目 |
-| `pageApis.ts` | 页面 API 注册表 + 共享切换：模块级 `Map<pageId, DockviewApi>` + `registerPageApi`/`unregisterPageApi`/`getPageApi` + `switchToPageShared(pageId)`（setProjectRoot 前置→setActivePage→重指向 `__dockviewApi`）+ `switchToPageAndFocus(pageId, panelId)`（切换后轮询聚焦面板） |
+| `pageApis.ts` | 页面 API 注册表 + 共享切换：模块级 `Map<pageId, DockviewApi>` + `registerPageApi`/`unregisterPageApi`/`getPageApi` + `switchToPageShared(pageId)`（setProjectRoot 前置→setActivePage→重指向 `__dockviewApi`）+ `switchToPageAndFocus(pageId, panelId)`（切换后轮询聚焦面板）+ `openHooksConfigPanel(pageId)`（轮询 API 就绪 → 同页单例 addPanel，C13-7；侧栏「打开 Hooks 配置」入口消费，先切页后调用） |
 
 > **panelRegistry.ts 已提取到 `src/panelRegistry.ts`（已提取为共享配置层）**：面板注册表是全局架构组件，被 workspace、explorer、测试等多方引用，不应埋于 workspace 子路径。
 
@@ -65,6 +65,8 @@ SidebarTree.switchToPage(projectId, pageId)
 
 // toast/Agent Status 行点击等调用方走 switchToPageAndFocus(pageId, panelId)
 // → switchToPageShared → 有限轮询（100ms×50）等待面板挂载 → panel.focus()
+// 侧栏「打开 Hooks 配置」菜单 → switchToPage → openHooksConfigPanel(pageId)
+// → 轮询 getPageApi 就绪 → getPanel 查重 focus / addPanel（C13-7 同页单例）
 ```
 
 > **`__dockviewApi` 重指三站点不变量**：`window.__dockviewApi` 重指向只允许出现在三个位置——`switchToPageShared`（页面切换时立即重指已初始化页面）、`Workspace.handlePageApiReady`（页面首次初始化时重指）、`Workspace.onDeletePage`（删除页面后重指次页）。其他代码点通过 `getPageApi(pageId)` 访问指定页面的 API，不假设 `__dockviewApi` 恰好指向目标页。
