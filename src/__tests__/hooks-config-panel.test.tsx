@@ -213,6 +213,30 @@ describe("HooksConfigPanel 渲染", () => {
     fireEvent.focus(container.firstElementChild as HTMLElement);
     await waitFor(() => expect(mockReadHooksConfig.mock.calls.length).toBeGreaterThanOrEqual(2));
   });
+
+  it("面板内部焦点转移不触发重读（relatedTarget 在面板内，验收 #1 防回归）", async () => {
+    seedProject("C:/proj");
+    mockReadHooksConfig.mockResolvedValue({});
+    const { container } = render(React.createElement(HooksConfigPanel));
+    await waitFor(() => expect(mockReadHooksConfig.mock.calls.length).toBe(1));
+    // content 态渲染后取面板内真实按钮——模拟点击按钮的焦点转移（mousedown 聚焦 → focusin 冒泡到容器）
+    const innerButton = await waitFor(
+      () => container.querySelector('[data-e2e="hooks-layer-user"]') as HTMLElement,
+    );
+    fireEvent.focus(container.firstElementChild as HTMLElement, { relatedTarget: innerButton });
+    // 内部转移跳过重读——调用数不增（等待微任务让可能的 reload 暴露）
+    await new Promise((r) => setTimeout(r, 20));
+    expect(mockReadHooksConfig.mock.calls.length).toBe(1);
+  });
+
+  it("面板外元素聚焦进入面板触发重读（relatedTarget 为外部元素）", async () => {
+    seedProject("C:/proj");
+    mockReadHooksConfig.mockResolvedValue({});
+    const { container } = render(React.createElement(HooksConfigPanel));
+    await waitFor(() => expect(mockReadHooksConfig.mock.calls.length).toBe(1));
+    fireEvent.focus(container.firstElementChild as HTMLElement, { relatedTarget: document.body });
+    await waitFor(() => expect(mockReadHooksConfig.mock.calls.length).toBeGreaterThanOrEqual(2));
+  });
 });
 
 describe("F2 注入/卸载与注入状态条（P3-FE-21/22）", () => {

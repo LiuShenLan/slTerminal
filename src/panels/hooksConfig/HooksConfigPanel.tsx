@@ -17,7 +17,7 @@
 // （操作改写 ~/.claude/settings.json，C13-8——当前层为 user 直接 reload，非 user 切到 user 层）。
 // 配色全部引用 theme/colors.ts token（硬约束 #6）。
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useHooksConfig } from "./useHooksConfig";
 import JsonMode from "./JsonMode";
 import GuiMode from "./GuiMode";
@@ -164,10 +164,20 @@ const HooksConfigPanel: React.FC<HooksConfigPanelProps> = () => {
     });
   }, [save]);
 
-  /** 面板聚焦（focusin）轻量重读——外部修改检测，dirty 时 ask 确认（useHooksConfig 内部处理） */
-  const handleFocus = useCallback(() => {
-    void reload();
-  }, [reload]);
+  /** 面板根容器 ref——relatedTarget 归属判断（内部焦点转移不重读，验收 #1） */
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  /** 面板聚焦（focusin）轻量重读——外部修改检测，dirty 时 ask 确认（useHooksConfig 内部处理）
+      仅"焦点从面板外进入"触发重读；面板内部焦点转移（点击按钮等元素间转移）跳过——
+      否则每次点击都 reload + loading 占位替换 DOM 吞掉 click（验收 #1 根因） */
+  const handleFocus = useCallback(
+    (e: React.FocusEvent<HTMLDivElement>) => {
+      const related = e.relatedTarget as HTMLElement | null;
+      if (related && containerRef.current?.contains(related)) return; // 内部转移，跳过
+      void reload();
+    },
+    [reload],
+  );
 
   // F2 注入状态（P3-FE-22）：挂载查询一次 + 注入/卸载后刷新；null = 查询中/未查询
   const [injectionStatus, setInjectionStatus] = useState<HookInjectionStatus | null>(null);
@@ -249,7 +259,7 @@ const HooksConfigPanel: React.FC<HooksConfigPanelProps> = () => {
   }
 
   return (
-    <div style={containerStyle} onFocus={handleFocus} data-e2e="hooks-config-panel">
+    <div ref={containerRef} style={containerStyle} onFocus={handleFocus} data-e2e="hooks-config-panel">
       {/* 顶部工具栏 */}
       <div style={toolbarStyle}>
         {/* 层级切换器（rootPath 为空时 project/local 禁用，仅 user 层可用） */}

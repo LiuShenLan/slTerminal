@@ -105,10 +105,14 @@ export function useHooksConfig(): UseHooksConfigResult {
   // generation 取消：切层/切项目/重读竞态下丢弃过期回调结果
   const genRef = useRef(0);
 
-  /** 加载指定层配置（generation 取消竞态；null 视为 {}，Err 置损坏错误态） */
-  const load = useCallback(async (target: HooksLayer, gen: number) => {
-    setLoading(true);
-    setError(false);
+  /** 加载指定层配置（generation 取消竞态；null 视为 {}，Err 置损坏错误态）
+      showLoading=true 时显示 loading 遮罩（首次加载/切层/切项目）；
+      false（默认，reload 路径）保留旧内容渲染，数据到达后替换——避免重读 blank 面板吞点击（验收 #1） */
+  const load = useCallback(async (target: HooksLayer, gen: number, showLoading = false) => {
+    if (showLoading) {
+      setLoading(true);
+      setError(false);
+    }
     try {
       const raw = await readHooksConfig(target, rootPathRef.current ?? undefined);
       if (gen !== genRef.current) return; // 过期结果丢弃
@@ -140,7 +144,7 @@ export function useHooksConfig(): UseHooksConfigResult {
         if (!ok) return;
         const gen = ++genRef.current;
         setLayerState(l);
-        await load(l, gen);
+        await load(l, gen, true); // 切层显示 loading 遮罩（内容替换有清晰反馈）
       })();
     },
     [confirmDiscard, load],
@@ -237,7 +241,7 @@ export function useHooksConfig(): UseHooksConfigResult {
       setLayerState("user");
     }
     const gen = ++genRef.current;
-    void load(target, gen);
+    void load(target, gen, true); // 首次挂载/切项目显示 loading 遮罩
   }, [rootPath, load]);
 
   return {
