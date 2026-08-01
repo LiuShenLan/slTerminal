@@ -6,5 +6,3 @@ export { useKeybindings } from "./keybindings";
 export type { KeybindingsState } from "./keybindings";
 export { useSideBar } from "./sideBar";
 export type { SideBarState } from "./sideBar";
-export { useHooksConfig } from "./hooksConfig";
-export type { HooksConfigState } from "./hooksConfig";

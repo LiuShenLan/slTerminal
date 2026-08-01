@@ -97,18 +97,3 @@ export interface HookHandlerGui {
   statusMessage?: string;
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// 禁用记录（ADR-0002 单条启停）
-// ═══════════════════════════════════════════════════════════════════
-
-/**
- * 单条启停禁用记录标识（C13-8 四元组：层级 + 事件 + matcher + command）
- *
- * matcher 为 null 表示该事件省略 matcher 键（不支持 matcher 的事件）。
- */
-export interface DisabledHookKey {
-  layer: HooksLayer;
-  event: string;
-  matcher: string | null;
-  command: string;
-}

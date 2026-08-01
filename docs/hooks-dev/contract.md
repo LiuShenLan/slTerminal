@@ -101,7 +101,7 @@ DTO（Rust `snake_case` ↔ JS `camelCase` 双边对应，硬约束 #4）：
 - **版本过旧判定**：比对磁盘脚本与内嵌模板（内容 hash 或版本常量比对，实现留阶段 1 定），不一致 → `outdated`。
 - **非法中止**：settings.json 本身非法（JSON 语法错误）时注入中止并报错提示，不强行改写。
 - **卸载**：移除全部含标记的 matcher 组（空数组事件键清理）+ 删 `~/.slterminal/hooks/` + 清空 `~/.slterminal/hooks-events/`。
-- **不写非标准字段**进 settings.json（ADR-0002 理由：schema 校验/污染）。
+- **不写非标准字段**进 settings.json（schema 校验/污染）。
 
 ## C10 Node hook 脚本契约（F1）
 
@@ -187,9 +187,8 @@ DTO（Rust `snake_case` ↔ JS `camelCase` 双边对应，硬约束 #4）：
 
 ### C13-8 注入段保护与外部修改
 
-- **注入段保护**：`command` 含 `slterm-hook-reporter` 子串的条目（识别规则照 C9）在 GUI 标记「slTerminal 托管」并**禁删/禁禁用**；JSON 模式不限制（用户对自己文件有最终权利）；面板内 inject/uninstall 操作后自动重读 user 层。
-- **外部修改（轻量策略）**：切层 / 面板聚焦时重读配置；有未保存修改（dirty）时提示，不做 fs-event 监听（user 层文件不在 `notify_watch` 沙箱内）。
-- **单条启停**：禁用状态存 slTerminal 侧 settings（ADR-0002），四元组（层级+事件+matcher+command）标识；保存时 `filterDisabled` 剔除后写盘；失配记录 UI 标记「失效的禁用记录」。
+- **注入段保护**：`command` 含 `slterm-hook-reporter` 子串的条目（识别规则照 C9）在 GUI 标记「slTerminal 托管」并**禁删**；JSON 模式不限制（用户对自己文件有最终权利）；面板内 inject/uninstall 操作后自动重读 user 层。
+- **外部修改（轻量策略）**：切层 / 窗口获得焦点（window focus，面板可见时）重读配置；有未保存修改（dirty）时提示，不做 fs-event 监听（user 层文件不在 `notify_watch` 沙箱内）。
 - **保存安全**：JSON + Schema 双校验不过拒绝保存；原子写；保存后提示「需重启 claude 会话生效」。
 
 ### C13-9 E2E 约束

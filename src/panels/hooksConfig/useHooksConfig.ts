@@ -8,9 +8,8 @@
 //   JsonMode.onChange 经 updateConfigJson（JSON 合法 → jsonToGui 重算 guiModel），
 //   GuiMode.onChange 经 updateGui（guiToJson 更新 configJson）
 // - 保存（P3-FE-17）：JSON 语法校验 → json-schema-library schema 校验（validateHooksJson，
-//   Stage 04 已建）→ 任一失败弹窗提示、拒绝写盘 → filterDisabled 剔除当前层禁用条目
-//   → writeHooksConfig；成功后置 saved（状态条显示重启提示）。不做 .bak，其他字段
-//   保留由后端 merge 保证（P3-BE-03）
+//   Stage 04 已建）→ 任一失败弹窗提示、拒绝写盘 → writeHooksConfig；成功后置 saved
+//   （状态条显示重启提示）。不做 .bak，其他字段保留由后端 merge 保证（P3-BE-03）
 // - 轻量重读（外部修改检测）：切层 / 面板聚焦（focusin）时重新 readHooksConfig；
 //   dirty 时用 dialog.ask 提示（照编辑器外部修改先例，不用 window.confirm），用户确认丢弃才覆盖
 
@@ -19,14 +18,11 @@ import { readHooksConfig, writeHooksConfig } from "../../ipc/hooksConfig";
 import { ask } from "../../ipc/dialog";
 import { useProjects } from "../../stores/projects";
 import { useLayout } from "../../stores/layout";
-import { useHooksConfig as useHooksConfigStore } from "../../stores/hooksConfig";
-import type { HooksLayer, HooksConfigJson, HooksConfigGui, DisabledHookKey } from "../../types/hooksConfig";
+import type { HooksLayer, HooksConfigJson, HooksConfigGui } from "../../types/hooksConfig";
 import { validateHooksJson } from "../../features/hooksConfig/schema";
 import {
   jsonToGui,
   guiToJson,
-  filterDisabled,
-  isKeyPresentInConfig,
   type HooksConfigJson as ConfigJson,
   type HooksConfigGui as ConfigGui,
 } from "./configModel";
@@ -57,16 +53,10 @@ export interface UseHooksConfigResult {
   updateConfigJson: (json: HooksConfigJson) => void;
   /** 更新 GUI 模型（GuiMode 编辑回调）：guiToJson 更新 configJson + guiModel 同步重算 */
   updateGui: (gui: ConfigGui) => void;
-  /** 保存：语法 + schema 双校验（失败弹窗拒绝写盘）→ filterDisabled → writeHooksConfig，成功清除 dirty + 置 saved */
+  /** 保存：语法 + schema 双校验（失败弹窗拒绝写盘）→ writeHooksConfig，成功清除 dirty + 置 saved */
   save: () => Promise<void>;
-  /** 轻量重读（面板 focusin 外部修改检测）：dirty 时 ask 确认才覆盖 */
+  /** 轻量重读（外部修改检测）：dirty 时 ask 确认才覆盖 */
   reload: () => Promise<void>;
-  /** 当前层禁用记录（P3-FE-19，store 按层过滤派生）——启停 checkbox / 视觉区分数据源 */
-  disabledKeys: DisabledHookKey[];
-  /** 失效禁用记录（P3-FE-19）：四元组在当前层配置中找不到匹配 */
-  staleDisabledKeys: DisabledHookKey[];
-  /** 启停切换（layer 自动补全为当前编辑层）；置 dirty（保存时 filterDisabled 剔除生效） */
-  toggleDisable: (key: Omit<DisabledHookKey, "layer">) => void;
 }
 
 export function useHooksConfig(): UseHooksConfigResult {
@@ -167,31 +157,7 @@ export function useHooksConfig(): UseHooksConfigResult {
     setSaved(false);
   }, []);
 
-  /** 启停切换（P3-FE-19）：key 不含 layer——layer 取当前编辑层补全；置 dirty（保存时 filterDisabled 剔除才生效到 claude 配置） */
-  const toggleDisable = useCallback((key: Omit<DisabledHookKey, "layer">) => {
-    const full: DisabledHookKey = { layer: layerRef.current, ...key };
-    const s = useHooksConfigStore.getState();
-    if (s.isDisabled(full)) {
-      s.enableHook(full);
-    } else {
-      s.disableHook(full);
-    }
-    setDirty(true);
-    setSaved(false);
-  }, []);
-
-  // 禁用状态（P3-FE-19/20）：store 订阅（挂载时 loadFromDisk，见下方 effect）
-  const allDisabledHooks = useHooksConfigStore((s) => s.disabledHooks);
-  // 当前层禁用记录（按层过滤，供启停 checkbox / 保存过滤 / 失效判定）
-  const disabledKeys = allDisabledHooks.filter((k) => k.layer === layer);
-  // 失效记录（P3-FE-19）：四元组在当前层配置中找不到匹配（外部修改 / 手动改 JSON 失配）——
-  // 派生自 configJson，不持久化，UI 标记「失效的禁用记录」而非静默丢弃（ADR-0002）
-  // configJson 强转对齐 configModel 契约（types/hooksConfig 无索引签名，结构等价，照 filterDisabled 先例）
-  const staleDisabledKeys = disabledKeys.filter(
-    (k) => !isKeyPresentInConfig(configJson as unknown as ConfigJson, k),
-  );
-
-  /** 保存：语法 + schema 双校验（失败弹窗提示、拒绝写盘）→ filterDisabled 剔除禁用条目 → writeHooksConfig */
+  /** 保存：语法 + schema 双校验（失败弹窗提示、拒绝写盘）→ writeHooksConfig */
   const save = useCallback(async () => {
     const json = configJsonRef.current;
     // ① JSON.parse 语法校验：configJson 只容纳 parse 合法快照（编辑时已门控），此处防御性确认对象形态
@@ -209,12 +175,9 @@ export function useHooksConfig(): UseHooksConfigResult {
       });
       return;
     }
-    // ③ filterDisabled 剔除当前层禁用条目（四元组 layer 过滤，C13-8）→ 写盘（后端 merge 保留其他字段，P3-BE-03）
-    // json 经强转对齐 configModel 契约（types/hooksConfig 无索引签名，结构等价）
+    // ③ 写盘（后端 read-modify-write merge 保留其他字段，P3-BE-03）
     const layer = layerRef.current;
-    const disabled = useHooksConfigStore.getState().disabledHooks.filter((k) => k.layer === layer);
-    const filtered = filterDisabled(json as unknown as ConfigJson, disabled);
-    await writeHooksConfig(layer, filtered, rootPathRef.current ?? undefined);
+    await writeHooksConfig(layer, json as unknown as ConfigJson, rootPathRef.current ?? undefined);
     setDirty(false);
     setSaved(true);
   }, []);
@@ -226,11 +189,6 @@ export function useHooksConfig(): UseHooksConfigResult {
     const gen = ++genRef.current;
     await load(layerRef.current, gen);
   }, [confirmDiscard, load]);
-
-  // 挂载：加载禁用状态 store（store 不在 App init 中加载，见 store 头注释）
-  useEffect(() => {
-    void useHooksConfigStore.getState().loadFromDisk();
-  }, []);
 
   // 加载/重载：挂载首次加载 + rootPath 变化时重读当前层
   // rootPath 为空时 project/local 层禁用：当前层非 user 则回退 user 层
@@ -258,8 +216,5 @@ export function useHooksConfig(): UseHooksConfigResult {
     updateGui,
     save,
     reload,
-    disabledKeys,
-    staleDisabledKeys,
-    toggleDisable,
   };
 }

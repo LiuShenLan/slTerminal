@@ -3,7 +3,7 @@
 // 覆盖：5 种 type 必填字段渲染（官方版字段名断言：mcp_tool 为 input、http 无
 // method/body、agent 无 description/subagent_type）、事件支持矩阵过滤（eventsCatalog
 // 驱动：B 档无 prompt/agent、SessionStart/Setup 仅 command/mcp_tool）、type 切换
-// 清理字段（保留通用字段）、注入段禁改（只读+禁删+禁禁用，C13-8）。
+// 清理字段（保留通用字段）、注入段禁改（只读+禁删，C13-8）。
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 import React from "react";
@@ -407,13 +407,12 @@ describe("注入段 handler 禁改（isSltermManaged，C13-8）", () => {
     expect((getField("async") as HTMLInputElement).disabled).toBe(true);
   });
 
-  it("托管 handler 禁删 + 禁禁用：删除按钮 disabled，不渲染禁用 checkbox（C13-8 禁禁用，P3-FE-19）", () => {
+  it("托管 handler 禁删：删除按钮 disabled（C13-8）", () => {
     renderForm({
       type: "command",
       overrides: { command: MANAGED_HANDLER.command as string },
     });
     expect((document.querySelector('[data-e2e="handler-delete"]') as HTMLButtonElement).disabled).toBe(true);
-    expect(document.querySelector('[data-e2e="handler-disable"]')).toBeNull();
   });
 
   it("托管 handler 编辑不触发 onChange（表单完全锁定）", () => {
@@ -430,6 +429,5 @@ describe("注入段 handler 禁改（isSltermManaged，C13-8）", () => {
     expect(document.querySelector('[data-e2e="handler-managed-badge"]')).toBeNull();
     expect((getField("command") as HTMLInputElement).disabled).toBe(false);
     expect(document.querySelector('[data-e2e="handler-delete"]')).toBeNull();
-    expect(document.querySelector('[data-e2e="handler-disable"]')).toBeNull();
   });
 });

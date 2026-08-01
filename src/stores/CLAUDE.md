@@ -30,14 +30,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - overrides 经 `App.tsx` 的 `wireKeybindings(getShortcutRegistry(), useKeybindings)` 注入 `ShortcutRegistry.setOverrides` 构建绑定表。
 - 与 `src/features/shortcuts` 的关系：本 store 只存覆盖数据，校验/降级/绑定表构建在注册表侧（`isReserved` + `effectiveKeystroke`）。
 
-### `hooksConfig.ts` — hooks 配置禁用状态（单条启停，ADR-0002）
-
-- `disabledHooks: DisabledHookKey[]`——禁用记录四元组数组（`layer + event + matcher + command`；matcher 为 `null` = 全匹配，command 空串 = 整组禁用），空数组 = 全部启用。**禁用条目由 slTerminal 托管，不出现在 claude 配置文件中**（保存时 `filterDisabled` 剔除）。持久化于 `~/.slterminal/settings.json` 的 `disabledHooks` 段。
-- 操作：`disableHook` / `enableHook` / `isDisabled`，匹配依据为导出的 `isSameDisabledKey` 四元组全等比较（供失效记录展示/判定复用）。
-- `loadFromDisk` 读 `saved.disabledHooks` 并 **sanitize**（只保留四元组结构合法元素，matcher 缺失归 null）；`loaded` 守卫防启动空写；变更后 2s debounce → `saveSettings({disabledHooks})`（后端浅合并，不擦 fontSize 等其他段）。
-- **不在 App init 中加载**：由 `useHooksConfig`（`panels/hooksConfig` 数据 hook）在面板挂载时调用 `loadFromDisk`。
-- 导出 `cancelPendingSave()` 供 App 关窗冲刷。
-
 ### `sideBar.ts` — 侧栏视图状态
 
 - 状态形状：`zones: Zones`（按钮归属——`{top: string[], bottom: string[]}`）、`open: OpenState`（各半区打开的视图 id——`{top: string|null, bottom: string|null}`）、`width: number`（侧栏区宽度，默认 250，范围 [160, 500]）、`splitRatio: number`（上下分割比例，默认 0.5，范围 [0.1, 0.9]）。
@@ -76,7 +68,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `layout` | `layout.test.ts` | 4 | activePageId 设置/清空/重复 |
 | `fontSize` | `fontSize.test.ts` | 16 | 默认值、clamp、loadFromDisk（多种分支）、debounce 持久化 |
 | `keybindings` | `keybindings.test.ts` | 16 | 默认空、setBinding/clearBinding/resetAll、loadFromDisk（合法/sanitize 脏值/缺失/非对象/异常）、loaded 守卫、debounce → saveSettings({keybindings}) |
-| `hooksConfig` | `hooks-config-store.test.ts` | 21 | 默认空数组、disableHook/enableHook/isDisabled（四元组匹配）、sanitize 脏数据（结构非法丢弃/matcher 缺失归 null）、loadFromDisk（合法/缺失/异常降级）、loaded 守卫、debounce → saveSettings({disabledHooks}) payload 键集合精确匹配、isSameDisabledKey 全等比较 |
 
 ### 测试模式
 

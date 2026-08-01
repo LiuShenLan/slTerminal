@@ -3,7 +3,7 @@
 // 输入/输出为 settings.json 的 hooks 子树（Record<事件名, MatcherGroupJson[]>），
 // 与 src/types/hooksConfig.ts（P3-FE-06）定义的 HooksConfigJson / MatcherGroupJson /
 // HookHandlerJson / HooksConfigGui / HookEventGroup / HookMatcherGroup /
-// HookHandlerGui / DisabledHookKey 契约同名镜像，结构兼容。
+// HookHandlerGui 契约同名镜像，结构兼容。
 // 纯函数零 DOM/React，供 useHooksConfig / GuiMode / JsonMode / HandlerForm 共用。
 
 import {
@@ -77,15 +77,6 @@ export interface HookHandlerGui {
   statusMessage?: string;
   /** jsonToGui 保留的未知字段（多余字段容错，round-trip 不丢数据） */
   extraFields?: Record<string, unknown>;
-}
-
-// 禁用记录四元组（ADR-0002）：层级+事件+matcher+command 标识一条 handler。
-// 非 command 型 handler 的 command 字段为空串（标识整个 matcher 组）。
-export interface DisabledHookKey {
-  layer: string; // "user" | "project" | "local"
-  event: string;
-  matcher: string | null; // 无 matcher 事件为 null（stores/hooksConfig 四元组表示）或空串，均等价全匹配
-  command: string; // command 型 handler 的 command 值；非 command 型为空串
 }
 
 /** 未知事件归组（jsonToGui 容错，round-trip 不丢事件） */
@@ -207,89 +198,3 @@ export function isSltermManaged(handler: unknown): boolean {
   return typeof command === "string" && command.includes("slterm-hook-reporter");
 }
 
-// ===== 禁用状态匹配（P3-FE-19/20：启停 checkbox + 失效记录判定） =====
-
-/**
- * handler 是否处于禁用状态——匹配语义与 filterDisabled 剔除规则一致：
- * 命中 (event, matcher) 组的禁用记录，且 key.command 为空串（整组禁用）或
- * handler 为 command 型且 command 相等。供事件树启停 checkbox 与置灰/删除线判定。
- */
-export function isHandlerDisabled(
-  disabledKeys: readonly DisabledHookKey[],
-  event: string,
-  matcher: string,
-  handler: HookHandlerGui,
-): boolean {
-  return disabledKeys.some(
-    (k) =>
-      k.event === event &&
-      (k.matcher ?? "") === (matcher ?? "") &&
-      (k.command === "" || (handler.type === "command" && handler.command === k.command)),
-  );
-}
-
-/**
- * 四元组（layer 已由调用方按层过滤，本函数只查单层 hooks 子树）是否在配置中
- * 找到匹配——找不到匹配即「失效的禁用记录」（P3-FE-19，ADR-0002 失配不静默丢弃）：
- * - key.command 非空 → 该事件该 matcher 组内存在 command 相等的 command 型 handler
- * - key.command 为空串（整组禁用）→ 该事件该 matcher 组存在即匹配
- */
-export function isKeyPresentInConfig(
-  config: HooksConfigJson,
-  key: DisabledHookKey,
-): boolean {
-  const groups = config[key.event];
-  if (!Array.isArray(groups)) return false;
-  const group = groups.find((g) => (g.matcher ?? "") === (key.matcher ?? ""));
-  if (!group) return false;
-  if (key.command === "") return true;
-  return Array.isArray(group.hooks) && group.hooks.some(
-    (h) => h.type === "command" && h.command === key.command,
-  );
-}
-
-// ===== filterDisabled：保存前剔除禁用条目（C13-8 / ADR-0002） =====
-
-/**
- * 从配置中剔除被禁用条目后写盘。匹配规则（四元组，layer 由调用方按层过滤——
- * 本函数只接收单层 hooks 子树）：
- * - key.command 非空 → 仅剔除 type==="command" 且 command 相等的 handler
- * - key.command 为空串 → 剔除整个 matcher 组（非 command 型 handler 只能整组禁用）
- * - 组内 handler 全部被剔除 → 整组移除；事件下无剩余组 → 事件键移除
- * matcher 比较：key.matcher 为 null（stores/hooksConfig 无 matcher 事件表示）或空串
- * 均与省略 matcher 键（group.matcher undefined）等价（全匹配）。
- */
-export function filterDisabled(
-  config: HooksConfigJson,
-  disabledKeys: readonly DisabledHookKey[],
-): HooksConfigJson {
-  const out: HooksConfigJson = {};
-  for (const [event, groups] of Object.entries(config)) {
-    const filteredGroups: MatcherGroupJson[] = [];
-    for (const group of groups) {
-      const keys = disabledKeys.filter(
-        (k) => k.event === event && (k.matcher ?? "") === (group.matcher ?? ""),
-      );
-      if (keys.length === 0) {
-        filteredGroups.push(group);
-        continue;
-      }
-      const handlers = group.hooks.filter(
-        (h) =>
-          !keys.some(
-            (k) =>
-              k.command === "" ||
-              (h.type === "command" && h.command === k.command),
-          ),
-      );
-      if (handlers.length > 0) {
-        filteredGroups.push({ ...group, hooks: handlers });
-      }
-      // handlers 全被剔除 → 整组移除
-    }
-    if (filteredGroups.length > 0) {
-      out[event] = filteredGroups;
-    }
-  }
-  return out;
-}

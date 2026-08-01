@@ -12,5 +12,4 @@ export type {
   HookEventGroup,
   HookMatcherGroup,
   HookHandlerGui,
-  DisabledHookKey,
 } from "./hooksConfig";

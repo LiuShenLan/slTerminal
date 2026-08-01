@@ -1,14 +1,12 @@
 // hooks-config-model.test.ts — configModel 双向转换（P3-TE-06）
 //
 // 覆盖：空配置、单事件单 matcher 单 handler、多事件多 handler、
-// 字段缺失/多余容错、不支持 matcher 事件省略 matcher 键、
-// isSltermManaged 判定、filterDisabled 剔除。
+// 字段缺失/多余容错、不支持 matcher 事件省略 matcher 键、isSltermManaged 判定。
 
 import { describe, it, expect } from "vitest";
 import {
   jsonToGui,
   guiToJson,
-  filterDisabled,
   isSltermManaged,
   type HooksConfigGui,
 } from "../panels/hooksConfig/configModel";
@@ -228,62 +226,3 @@ describe("isSltermManaged", () => {
   });
 });
 
-describe("filterDisabled", () => {
-  const config = {
-    PreToolUse: [
-      { matcher: "Bash", hooks: [{ type: "command", command: "a" }, { type: "command", command: "b" }] },
-      { matcher: "Read", hooks: [{ type: "command", command: "c" }] },
-    ],
-    Notification: [
-      { hooks: [{ type: "http", url: "http://x" }] },
-    ],
-  };
-
-  it("command 四元组只剔除匹配的 command handler，保留组内其他", () => {
-    const out = filterDisabled(config, [
-      { layer: "user", event: "PreToolUse", matcher: "Bash", command: "a" },
-    ]);
-    expect(out.PreToolUse[0].hooks).toEqual([{ type: "command", command: "b" }]);
-    expect(out.PreToolUse[1].hooks).toEqual([{ type: "command", command: "c" }]);
-    expect(out.Notification).toEqual([{ hooks: [{ type: "http", url: "http://x" }] }]);
-  });
-
-  it("command 为空串 → 剔除整个 matcher 组；全空组移除、空事件移除", () => {
-    const out = filterDisabled(config, [
-      { layer: "user", event: "PreToolUse", matcher: "Bash", command: "" },
-      { layer: "user", event: "Notification", matcher: "", command: "" },
-    ]);
-    expect(out.PreToolUse).toEqual([
-      { matcher: "Read", hooks: [{ type: "command", command: "c" }] },
-    ]);
-    // Notification 事件组全被剔除 → 事件键移除
-    expect(out.Notification).toBeUndefined();
-  });
-
-  it("matcher 不匹配的禁用记录不生效", () => {
-    const out = filterDisabled(config, [
-      { layer: "user", event: "PreToolUse", matcher: "Write", command: "a" },
-      { layer: "user", event: "PostToolUse", matcher: "Bash", command: "a" },
-    ]);
-    expect(out).toEqual(config);
-  });
-
-  it("非 command 型 handler 不被 command 四元组误伤", () => {
-    const cfg = {
-      PreToolUse: [
-        { matcher: "Bash", hooks: [{ type: "command", command: "a" }, { type: "mcp_tool", server: "s", tool: "t" }] },
-      ],
-    };
-    const out = filterDisabled(cfg, [
-      { layer: "user", event: "PreToolUse", matcher: "Bash", command: "a" },
-    ]);
-    expect(out.PreToolUse[0].hooks).toEqual([
-      { type: "mcp_tool", server: "s", tool: "t" },
-    ]);
-  });
-
-  it("无禁用记录 → 原样返回", () => {
-    expect(filterDisabled(config, [])).toEqual(config);
-    expect(filterDisabled({}, [{ layer: "user", event: "X", matcher: "", command: "" }])).toEqual({});
-  });
-});

@@ -61,6 +61,6 @@
 | 2 | Stage 04：真实 WebView2 中 schema 补全/悬停/错误波浪线效果 | 待实测 |
 | 3 | Stage 05：高分辨率/窄窗口 Master-Detail 布局、表单滚动体验 | 待实测 |
 | 4 | Stage 06：大配置（数百行 JSON）双模式同步性能、保存拒绝弹窗文案 | 待实测 |
-| 5 | Stage 07：slTerminal 外修改 settings.json 后聚焦重读、失效禁用记录准确性 | 待实测 |
+| 5 | ~~Stage 07：slTerminal 外修改 settings.json 后聚焦重读、失效禁用记录准确性~~——**单条启停功能已删除**（验收后决策，ADR-0002 作废） | 已删除 |
 | 6 | Stage 08：Ctrl+Shift+H 真实 WebView2 是否被拦截（发现项 #3） | 待实测 |
 | 7 | Stage 03：面板占位 UI 视觉比例、层级切换器禁用态样式 | 待实测 |

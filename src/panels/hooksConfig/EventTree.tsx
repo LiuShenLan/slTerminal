@@ -10,16 +10,14 @@
 
 import React, { useState } from "react";
 import type { HookEventGui, HookHandlerGui, HooksConfigGui } from "./configModel";
-import { isSltermManaged, isHandlerDisabled, UNKNOWN_EVENT_GROUP } from "./configModel";
+import { isSltermManaged, UNKNOWN_EVENT_GROUP } from "./configModel";
 import { EVENT_GROUPS } from "./eventsCatalog";
-import type { DisabledHookKey } from "../../types/hooksConfig";
 import {
   PANEL_BG,
   SIDEBAR_FG,
   HTML_PANEL_LOADING_FG,
   ACTIVE_SELECTION_BG,
   ERROR_FG,
-  DIM_FG,
   INPUT_BORDER,
 } from "../../theme";
 
@@ -31,10 +29,6 @@ export interface EventTreeProps {
   selectedEvent: string | null;
   /** 事件选中回调 */
   onSelect: (event: string) => void;
-  /** 当前层禁用记录（P3-FE-19，useHooksConfig 已按层过滤）——启停 checkbox + 置灰/删除线 */
-  disabledKeys?: readonly DisabledHookKey[];
-  /** 启停切换回调（key 不含 layer，由 useHooksConfig 补全当前层） */
-  onToggleDisabled?: (key: Omit<DisabledHookKey, "layer">) => void;
 }
 
 /** 摘要文本最长长度（超出截断加省略号） */
@@ -111,19 +105,6 @@ const handlerRowStyle: React.CSSProperties = {
   userSelect: "none",
 };
 
-/** 禁用条目行样式（P3-FE-19 视觉区分：置灰 + 文字删除线） */
-const disabledHandlerRowStyle: React.CSSProperties = {
-  ...handlerRowStyle,
-  color: DIM_FG,
-};
-
-/** 启停 checkbox 样式（flexShrink:0 防摘要截断挤压） */
-const toggleStyle: React.CSSProperties = {
-  flexShrink: 0,
-  cursor: "pointer",
-  margin: 0,
-};
-
 /** 「slTerminal 托管」标记样式（C13-8 注入段标识） */
 const managedBadgeStyle: React.CSSProperties = {
   fontSize: 10,
@@ -139,13 +120,7 @@ function eventHookCount(ev: HookEventGui): number {
   return ev.matcherGroups.reduce((n, g) => n + g.handlers.length, 0);
 }
 
-const EventTree: React.FC<EventTreeProps> = ({
-  gui,
-  selectedEvent,
-  onSelect,
-  disabledKeys = [],
-  onToggleDisabled = () => {},
-}) => {
+const EventTree: React.FC<EventTreeProps> = ({ gui, selectedEvent, onSelect }) => {
   // 折叠分组集合（默认全部展开；key = 分组名）
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const toggleGroup = (group: string) => {
@@ -216,47 +191,24 @@ const EventTree: React.FC<EventTreeProps> = ({
                         <div style={matcherRowStyle}>
                           {groupGui.matcher === "" ? "全匹配" : `matcher: ${groupGui.matcher}`}
                         </div>
-                        {groupGui.handlers.map((h, hi) => {
-                          const disabled = isHandlerDisabled(disabledKeys, ev.event, groupGui.matcher, h);
-                          const managed = isSltermManaged(h);
-                          return (
-                            <div
-                              key={hi}
-                              style={disabled ? disabledHandlerRowStyle : handlerRowStyle}
-                              data-e2e={`gui-tree-handler-${ev.event}-${gi}-${hi}`}
+                        {groupGui.handlers.map((h, hi) => (
+                          <div
+                            key={hi}
+                            style={handlerRowStyle}
+                            data-e2e={`gui-tree-handler-${ev.event}-${gi}-${hi}`}
+                          >
+                            <span
+                              style={{
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                whiteSpace: "nowrap",
+                              }}
                             >
-                              <span
-                                style={{
-                                  overflow: "hidden",
-                                  textOverflow: "ellipsis",
-                                  whiteSpace: "nowrap",
-                                  textDecoration: disabled ? "line-through" : undefined,
-                                }}
-                              >
-                                {formatHandlerSummary(h)}
-                              </span>
-                              {managed ? (
-                                <span style={managedBadgeStyle}>slTerminal 托管</span>
-                              ) : (
-                                // 启停 checkbox（P3-FE-19）：注入段条目（isSltermManaged 命中）不渲染（C13-8 禁禁用）
-                                <input
-                                  type="checkbox"
-                                  data-e2e={`gui-tree-disable-${ev.event}-${gi}-${hi}`}
-                                  checked={disabled}
-                                  style={toggleStyle}
-                                  title={disabled ? "点击启用该 handler" : "点击禁用该 handler"}
-                                  onChange={() =>
-                                    onToggleDisabled({
-                                      event: ev.event,
-                                      matcher: groupGui.matcher === "" ? null : groupGui.matcher,
-                                      command: h.type === "command" ? h.command ?? "" : "",
-                                    })
-                                  }
-                                />
-                              )}
-                            </div>
-                          );
-                        })}
+                              {formatHandlerSummary(h)}
+                            </span>
+                            {isSltermManaged(h) && <span style={managedBadgeStyle}>slTerminal 托管</span>}
+                          </div>
+                        ))}
                       </div>
                     ))}
                   </div>

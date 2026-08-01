@@ -59,7 +59,6 @@ import { HooksConfigPanel } from "../panels/hooksConfig";
 import { PANEL_TYPES, isValidPanelType } from "../panelRegistry";
 import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
-import { useHooksConfig as useHooksConfigStore } from "../stores/hooksConfig";
 
 // ── 辅助函数：种子 stores（照 commit-view 模式）──
 function seedProject(rootPath: string) {
@@ -96,7 +95,6 @@ function resetStores() {
     expandedNodes: {},
   });
   useLayout.setState({ activePageId: null });
-  useHooksConfigStore.setState({ disabledHooks: [], loaded: false });
 }
 
 describe("PANEL_TYPES / isValidPanelType", () => {

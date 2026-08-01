@@ -7,7 +7,7 @@
 // 双模式同步（P3-FE-16）：JsonMode.onChange → updateConfigJson（JSON.parse 门控），
 // GuiMode.onChange → updateGui（guiToJson），configJson/guiModel/dirty 共享于 useHooksConfig。
 // JSON 非法（onValidationChange 上报 false）→ GUI 按钮禁用 + 工具栏错误提示。
-// 保存（P3-FE-17）：按钮经 useHooksConfig.save() 走语法 + schema 双校验 → filterDisabled
+// 保存（P3-FE-17）：按钮经 useHooksConfig.save() 走语法 + schema 双校验
 // → writeHooksConfig；成功后状态条显示「hooks 改动需重启 claude 会话生效」。
 // 三态：loading → content / error（损坏错误态——read 返回 Err，与无配置 null 区分）。
 // 保存按钮：dirty 且 JSON 合法（onValidationChange 上报）才可点。
@@ -135,9 +135,6 @@ const HooksConfigPanel: React.FC<HooksConfigPanelProps> = () => {
     reload,
     updateConfigJson,
     updateGui,
-    disabledKeys,
-    staleDisabledKeys,
-    toggleDisable,
   } = useHooksConfig();
   // JsonMode 校验上报：非法 JSON / schema 违规 → 禁用保存 + 禁用切 GUI + 工具栏错误提示（P3-FE-16）
   const [jsonValid, setJsonValid] = useState(true);
@@ -305,10 +302,6 @@ const HooksConfigPanel: React.FC<HooksConfigPanelProps> = () => {
             JSON 存在错误，无法切换 GUI：{jsonError ?? "配置不符合 schema"}
           </span>
         )}
-        {/* 常驻提示（P3-FE-19/ADR-0002）：禁用条目由 slTerminal 托管，不出现在配置文件中 */}
-        <span style={hintStyle} data-e2e="hooks-disabled-hint">
-          禁用条目由 slTerminal 托管，不出现在配置文件中
-        </span>
         {/* F2 注入状态条（P3-FE-22）：已注入 / 未注入 / 版本过旧；注入/卸载按钮（P3-FE-21）——
             busy 期间禁用防重复点击 */}
         <span
@@ -369,54 +362,10 @@ const HooksConfigPanel: React.FC<HooksConfigPanelProps> = () => {
           保存
         </button>
       </div>
-      {/* 失效禁用记录条（P3-FE-19）：四元组在当前层配置中找不到匹配（外部修改/手动改 JSON 失配）——
-          标记而非静默丢弃（ADR-0002）；点击「启用」移除记录（= 删除失效记录，记录从禁用列表删除） */}
-      {staleDisabledKeys.length > 0 && (
-        <div
-          style={{
-            display: "flex",
-            flexWrap: "wrap",
-            alignItems: "center",
-            gap: 6,
-            padding: "4px 10px",
-            borderBottom: `1px solid ${INPUT_BORDER}`,
-          }}
-          data-e2e="hooks-stale-disabled"
-        >
-          <span style={{ ...hintStyle, color: ERROR_FG }}>失效的禁用记录：</span>
-          {staleDisabledKeys.map((k, i) => (
-            <span key={i} style={hintStyle} data-e2e={`hooks-stale-key-${i}`}>
-              {k.event} / {k.matcher ?? "全匹配"} / {k.command === "" ? "整组" : k.command}
-              <button
-                type="button"
-                data-e2e={`hooks-stale-enable-${i}`}
-                onClick={() => toggleDisable({ event: k.event, matcher: k.matcher, command: k.command })}
-                style={{
-                  marginLeft: 4,
-                  padding: "0 6px",
-                  fontSize: 11,
-                  cursor: "pointer",
-                  color: SIDEBAR_FG,
-                  background: "transparent",
-                  border: `1px solid ${INPUT_BORDER}`,
-                  borderRadius: 3,
-                }}
-              >
-                启用
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
       {/* 模式渲染容器（JSON = JsonMode；GUI = GuiMode）——onChange 均接入 useHooksConfig setter（P3-FE-16） */}
       <div style={modeContainerStyle} data-e2e="hooks-mode-container">
         {mode === "gui" ? (
-          <GuiMode
-            gui={guiModel as unknown as ConfigGui}
-            onChange={updateGui}
-            disabledKeys={disabledKeys}
-            onToggleDisabled={toggleDisable}
-          />
+          <GuiMode gui={guiModel as unknown as ConfigGui} onChange={updateGui} />
         ) : (
           <JsonMode
             value={JSON.stringify(configJson, null, 2)}

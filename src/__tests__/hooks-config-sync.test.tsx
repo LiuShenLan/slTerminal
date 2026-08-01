@@ -5,8 +5,7 @@
 // TE-14（保存拒绝与提示）：语法错误保存被拒（对象形态校验弹窗 + UI 禁用门控）、
 //                         schema 错误保存被拒（json-schema-library 校验弹窗）、
 //                         合法保存成功显示重启提示、writeHooksConfig 调用 payload 为
-//                         hooks 子树（键集合精确匹配 { layer, hooks, projectPath? }）
-//                         且保存链路含 filterDisabled 剔除禁用条目。
+//                         hooks 子树（键集合精确匹配 { layer, hooks, projectPath? }）。
 //
 // 测试模式照 hooks-config-panel.test.tsx：mock JsonMode/GuiMode 捕获 props 驱动双向同步；
 // useHooksConfig 保存路径用 renderHook 直测（绕过 UI 禁用门控，直达校验拒绝逻辑）。
@@ -52,12 +51,6 @@ vi.mock("../ipc/dialog", () => ({
   ask: mockAsk,
 }));
 
-// mock IPC settings —— hooksConfig store loadFromDisk 的后端读
-vi.mock("../ipc/settings", () => ({
-  loadSettings: vi.fn(async () => null),
-  saveSettings: vi.fn(async () => {}),
-}));
-
 // mock JsonMode/GuiMode —— 隔离 CM6/schema 与表单树（各自测试见对应文件）
 vi.mock("../panels/hooksConfig/JsonMode", () => ({ default: mockJsonMode }));
 vi.mock("../panels/hooksConfig/GuiMode", () => ({ default: mockGuiMode }));
@@ -68,7 +61,6 @@ import { HooksConfigPanel } from "../panels/hooksConfig";
 import { useHooksConfig } from "../panels/hooksConfig/useHooksConfig";
 import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
-import { useHooksConfig as useHooksConfigStore, cancelPendingSave } from "../stores/hooksConfig";
 import type { HooksConfigJson } from "../types/hooksConfig";
 
 /** 基线合法 hooks 子树（通过 schema 校验） */
@@ -111,7 +103,6 @@ function resetStores() {
     expandedNodes: {},
   });
   useLayout.setState({ activePageId: null });
-  useHooksConfigStore.setState({ disabledHooks: [], loaded: false });
 }
 
 // ── props 捕获：末次调用 = 当前 props（mock 无参签名，calls 整体强转） ──
@@ -148,7 +139,6 @@ describe("P3-TE-13 双模式同步", () => {
   });
 
   afterEach(() => {
-    cancelPendingSave(); // 清理 store 模块级 debounce timer
     cleanup();
   });
 
@@ -256,7 +246,6 @@ describe("P3-TE-14 保存拒绝与提示", () => {
   });
 
   afterEach(() => {
-    cancelPendingSave();
     cleanup();
   });
 
@@ -363,29 +352,6 @@ describe("P3-TE-14 保存拒绝与提示", () => {
     });
     expect(callArgs[2]).toBe("C:/proj");
     expect(result.current.saved).toBe(true);
-  });
-
-  it("保存链路含 filterDisabled：禁用条目剔除后写盘（matcher null 四元组命中省略 matcher 组）", async () => {
-    mockReadHooksConfig.mockResolvedValue(VALID_BASE);
-    // 种子禁用记录：PreToolUse 组禁用 command "echo hi"（matcher null = 无 matcher 事件表示）
-    useHooksConfigStore.setState({
-      disabledHooks: [{ layer: "user", event: "PreToolUse", matcher: null, command: "echo hi" }],
-      loaded: true,
-    });
-    const { result } = renderHook(() => useHooksConfig());
-    await waitFor(() => expect(result.current.loading).toBe(false));
-
-    act(() => {
-      result.current.updateConfigJson(VALID_BASE);
-    });
-    await act(async () => {
-      await result.current.save();
-    });
-
-    expect(mockWriteHooksConfig).toHaveBeenCalledTimes(1);
-    // 唯一 handler 被剔除 → 整组移除 → 事件键移除 → 空对象写盘（校验通过无弹窗）
-    expect(mockWriteHooksConfig.mock.calls[0][1]).toEqual({});
-    expect(mockAsk).not.toHaveBeenCalled();
   });
 
   it("合法保存成功 → 面板状态条显示「hooks 改动需重启 claude 会话生效」；再次编辑后隐藏", async () => {
