@@ -237,6 +237,28 @@ describe("HooksConfigPanel 渲染", () => {
     expect(mockReadHooksConfig.mock.calls.length).toBe(1);
   });
 
+  it("JSON 错误提示单行截断（长消息不换行撑高工具栏，验收 1.2）", async () => {
+    seedProject("C:/proj");
+    mockReadHooksConfig.mockResolvedValue({});
+    const { container } = render(React.createElement(HooksConfigPanel));
+    await waitFor(() => expect(mockReadHooksConfig.mock.calls.length).toBe(1));
+    const longMsg =
+      "JSON 语法错误：Expected ',' or '}' after property value in JSON at position 123 (line 4 column 7) #/PreToolUse/0/hooks/0";
+    act(() => {
+      const props = mockJsonMode.mock.calls[
+        mockJsonMode.mock.calls.length - 1
+      ] as unknown as [{ onValidationChange: (v: boolean, d: { message: string }[]) => void }];
+      props[0].onValidationChange(false, [{ message: longMsg }]);
+    });
+    const err = container.querySelector('[data-e2e="hooks-json-error"]') as HTMLElement;
+    expect(err).toBeTruthy();
+    // 单行截断：nowrap + ellipsis + 宽度上限；完整消息挂 title
+    expect(err.style.whiteSpace).toBe("nowrap");
+    expect(err.style.textOverflow).toBe("ellipsis");
+    expect(err.style.maxWidth).toBe("240px");
+    expect(err.title).toBe(longMsg);
+  });
+
   it("ask 弹窗打开期间 window focus 回归不二次弹窗（验收 2.1 防循环）", async () => {
     seedProject("C:/proj");
     mockReadHooksConfig.mockResolvedValue({});

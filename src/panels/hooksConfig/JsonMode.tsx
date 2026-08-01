@@ -3,8 +3,9 @@
 // 布局：左 = 事件导航侧栏（30 事件按 eventsCatalog 十组渲染），
 //       右 = CM6 编辑器（上）+ MatcherTester 内联试测工具（下）。
 // CM6 扩展：@codemirror/lang-json 语言 + codemirror-json-schema
-// （jsonCompletion 补全 + jsonSchemaHover 悬停 + jsonSchemaLinter 波浪线，
+// （jsonSchemaHover 悬停 + jsonSchemaLinter 波浪线，
 //  schema 用 hooks 子 schema——src/features/hooksConfig/schema）+ jsonParseLinter 语法波浪线。
+// 无自动补全（Ctrl+Space）——验收后决策删除（2026-08-01）。
 // 校验：非法 JSON / schema 违规经 onValidationChange(isValid, diagnostics) 通知父组件
 // （与 Stage 06 保存校验共用 validateHooksJson）。
 // 事件导航：点击事件名 → 简单文本搜索 `"EventName"` 定位 → setSelection + scrollIntoView。
@@ -13,10 +14,9 @@ import React, { useCallback, useEffect, useRef } from "react";
 import { EditorView, hoverTooltip } from "@codemirror/view";
 import { EditorState } from "@codemirror/state";
 import { basicSetup } from "codemirror";
-import { json, jsonParseLinter, jsonLanguage } from "@codemirror/lang-json";
+import { json, jsonParseLinter } from "@codemirror/lang-json";
 import { linter } from "@codemirror/lint";
 import {
-  jsonCompletion,
   jsonSchemaHover,
   jsonSchemaLinter,
   stateExtensions,
@@ -94,19 +94,21 @@ function eventButtonStyle(): React.CSSProperties {
   };
 }
 
-/** 主区样式（编辑器 + MatcherTester 纵向排布） */
+/** 主区样式（编辑器 + MatcherTester 纵向排布；minHeight:0 防 flex 链内容撑开塌陷） */
 const mainStyle: React.CSSProperties = {
   flex: 1,
   display: "flex",
   flexDirection: "column",
   minWidth: 0,
+  minHeight: 0,
   background: EDITOR_BG,
 };
 
-/** 编辑器容器样式（CM6 自身滚动） */
+/** 编辑器容器样式（CM6 自身滚动）——overflow:clip 裁剪但不创建滚动容器，
+    滚轮穿透到 .cm-scroller（hidden 是 CSS 滚动容器会吸收滚轮，照编辑器滚动委托决策） */
 const editorContainerStyle: React.CSSProperties = {
   flex: 1,
-  overflow: "hidden",
+  overflow: "clip",
   minHeight: 0,
 };
 
@@ -138,8 +140,9 @@ const JsonMode: React.FC<JsonModeProps> = ({ value, onChange, onValidationChange
   );
 
   // 挂载：创建 EditorView（StrictMode 双挂载由 effect cleanup destroy 正确兜底）
-  // 扩展：语言 + jsonCompletion 补全 + jsonSchemaHover 悬停 + jsonSchemaLinter 波浪线
-  //（hooks 子 schema）+ jsonParseLinter 语法波浪线 + oneDark 暗色主题
+  // 扩展：语言 + jsonSchemaHover 悬停 + jsonSchemaLinter 波浪线（hooks 子 schema）
+  // + jsonParseLinter 语法波浪线 + oneDark 暗色主题 + height:100% theme
+  //（.cm-editor 确定高度 → .cm-scroller 内容溢出 → 竖向滚动条出现，照编辑器滚动委托决策）
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -151,9 +154,9 @@ const JsonMode: React.FC<JsonModeProps> = ({ value, onChange, onValidationChange
           json(),
           linter(jsonParseLinter(), { delay: 300 }),
           linter(jsonSchemaLinter(), { needsRefresh: handleRefresh }),
-          jsonLanguage.data.of({ autocomplete: jsonCompletion() }),
           hoverTooltip(jsonSchemaHover()),
           stateExtensions(hooksSubSchema as unknown as JSONSchema7),
+          EditorView.theme({ "&": { height: "100%" } }),
           oneDark,
           EditorView.updateListener.of(handleDocChanged),
         ],

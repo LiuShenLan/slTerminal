@@ -305,9 +305,23 @@ const HooksConfigPanel: React.FC<HooksConfigPanelProps> = () => {
             JSON
           </button>
         </span>
-        {/* JSON 非法错误提示（P3-FE-16）——显示首条诊断；恢复合法后隐藏 */}
+        {/* JSON 非法错误提示（P3-FE-16）——显示首条诊断；恢复合法后隐藏。
+            单行截断（nowrap + ellipsis + maxWidth）：长诊断消息不换行撑高工具栏
+            挤压编辑器（验收 1.2）；完整消息挂 title 悬浮 */}
         {!jsonValid && (
-          <span style={{ ...hintStyle, color: ERROR_FG }} data-e2e="hooks-json-error">
+          <span
+            style={{
+              ...hintStyle,
+              color: ERROR_FG,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              minWidth: 0,
+              maxWidth: 240,
+            }}
+            title={jsonError ?? "配置不符合 schema"}
+            data-e2e="hooks-json-error"
+          >
             JSON 存在错误，无法切换 GUI：{jsonError ?? "配置不符合 schema"}
           </span>
         )}

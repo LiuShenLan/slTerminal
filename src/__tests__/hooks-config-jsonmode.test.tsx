@@ -1,7 +1,7 @@
 // hooks-config-jsonmode.test.tsx — JsonMode / MatcherTester L2 测试（P3-TE-09 / P3-TE-10）
 //
 // TE-09（JSON 模式渲染与 Schema 校验）：CM6 EditorView 创建、schema 扩展注册
-// （jsonCompletion/jsonSchemaHover/jsonSchemaLinter + hooks 子 schema）、
+// （jsonSchemaHover/jsonSchemaLinter + hooks 子 schema + height theme）、
 // 非法 JSON 触发 onValidationChange(false)、外部 value 同步、MatcherTester 试测。
 // TE-10（事件导航）：十大分组事件名渲染、点击后选区跳到对应事件键位置。
 //
@@ -16,12 +16,11 @@ const {
   mockEditorViewDestroy,
   mockScrollIntoView,
   mockUpdateListenerOf,
-  mockJsonCompletion,
+  mockEditorViewTheme,
   mockJsonSchemaHover,
   mockJsonSchemaLinter,
   mockStateExtensions,
   mockHandleRefresh,
-  mockJsonLanguageDataOf,
   mockLinter,
   mockHoverTooltip,
   mockJsonParseLinter,
@@ -34,12 +33,11 @@ const {
     mockEditorViewDestroy: vi.fn(),
     mockScrollIntoView,
     mockUpdateListenerOf: vi.fn((cb: unknown) => ({ __listener: cb })),
-    mockJsonCompletion: vi.fn(() => [{ __completion: true }]),
+    mockEditorViewTheme: vi.fn(() => []),
     mockJsonSchemaHover: vi.fn(() => [{ __schemaHover: true }]),
     mockJsonSchemaLinter: vi.fn((opts: unknown) => [{ __schemaLinter: opts }]),
     mockStateExtensions: vi.fn((schema: unknown) => [{ __stateExt: schema }]),
     mockHandleRefresh: vi.fn(),
-    mockJsonLanguageDataOf: vi.fn((x: unknown) => x),
     mockLinter: vi.fn((x: unknown) => x),
     mockHoverTooltip: vi.fn((x: unknown) => x),
     mockJsonParseLinter: vi.fn(() => ({ __parseLinter: true })),
@@ -51,7 +49,7 @@ const {
 // @codemirror/view mock —— EditorView 无法在 jsdom 真实工作（无布局引擎）
 vi.mock("@codemirror/view", () => {
   const MockEditorView = class {
-    static theme = vi.fn(() => []);
+    static theme = mockEditorViewTheme;
     static scrollIntoView = mockScrollIntoView;
     static updateListener = { of: mockUpdateListenerOf };
     state: { doc: string };
@@ -89,7 +87,6 @@ vi.mock("@codemirror/theme-one-dark", () => ({ oneDark: [] }));
 vi.mock("@codemirror/lang-json", () => ({
   json: mockJson,
   jsonParseLinter: mockJsonParseLinter,
-  jsonLanguage: { data: { of: mockJsonLanguageDataOf } },
 }));
 
 // @codemirror/lint mock
@@ -97,7 +94,6 @@ vi.mock("@codemirror/lint", () => ({ linter: mockLinter }));
 
 // codemirror-json-schema mock —— schema 扩展注册 spy（schema 参数 = hooks 子 schema）
 vi.mock("codemirror-json-schema", () => ({
-  jsonCompletion: mockJsonCompletion,
   jsonSchemaHover: mockJsonSchemaHover,
   jsonSchemaLinter: mockJsonSchemaLinter,
   stateExtensions: mockStateExtensions,
@@ -135,16 +131,15 @@ function renderJsonMode(value: string, onChange = vi.fn(), onValidationChange = 
 describe("P3-TE-09 JSON 模式渲染与 Schema 校验", () => {
   beforeEach(() => {
     capturedEditorStateConfig.length = 0;
-    mockJsonCompletion.mockClear();
     mockJsonSchemaHover.mockClear();
     mockJsonSchemaLinter.mockClear();
     mockStateExtensions.mockClear();
-    mockJsonLanguageDataOf.mockClear();
     mockLinter.mockClear();
     mockHoverTooltip.mockClear();
     mockJsonParseLinter.mockClear();
     mockJson.mockClear();
     mockUpdateListenerOf.mockClear();
+    mockEditorViewTheme.mockClear();
     mockScrollIntoView.mockClear();
     mockEditorViewDestroy.mockClear();
   });
@@ -160,10 +155,9 @@ describe("P3-TE-09 JSON 模式渲染与 Schema 校验", () => {
     expect(capturedEditorStateConfig[0].doc).toBe('{"PreToolUse": []}');
   });
 
-  it("schema 扩展注册：jsonCompletion / jsonSchemaHover / jsonSchemaLinter + hooks 子 schema", () => {
+  it("schema 扩展注册：jsonSchemaHover / jsonSchemaLinter + hooks 子 schema + height theme", () => {
     renderJsonMode("{}");
-    // 三条 schema 扩展均被调用
-    expect(mockJsonCompletion).toHaveBeenCalledTimes(1);
+    // schema 扩展均被调用
     expect(mockJsonSchemaHover).toHaveBeenCalledTimes(1);
     expect(mockJsonSchemaLinter).toHaveBeenCalledTimes(1);
     // stateExtensions 收到 hooks 子 schema（对齐 hooks 子树编辑范围）
@@ -181,12 +175,9 @@ describe("P3-TE-09 JSON 模式渲染与 Schema 校验", () => {
     // 语言 + 语法 linter 注册
     expect(mockJson).toHaveBeenCalledTimes(1);
     expect(mockJsonParseLinter).toHaveBeenCalledTimes(1);
-    expect(mockJsonLanguageDataOf).toHaveBeenCalledTimes(1);
-    const dataArg = (mockJsonLanguageDataOf.mock.calls[0] as [unknown])[0] as {
-      autocomplete: unknown;
-    };
-    expect(dataArg.autocomplete).toEqual([{ __completion: true }]);
     expect(mockHoverTooltip).toHaveBeenCalled();
+    // height:100% theme（.cm-editor 确定高度 → 竖向滚动条，验收 1.3）
+    expect(mockEditorViewTheme).toHaveBeenCalledWith({ "&": { height: "100%" } });
   });
 
   it("非法 JSON 触发 onValidationChange(false) + onChange 透传", () => {

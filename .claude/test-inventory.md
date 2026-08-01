@@ -2,7 +2,7 @@
 
 > **本文档是项目用例数唯一真值源。** 所有 CLAUDE.md、README、CI 配置中引用的用例数均以此文件为准。更新测试后必须同步本文档。
 
-全量 **2303** 用例（Rust 382 + 前端 1779 + L3 116 + E2E 26），2026-08-01 更新。
+全量 **2304** 用例（Rust 382 + 前端 1780 + L3 116 + E2E 26），2026-08-01 更新。
 
 > **计数口径**：前端 (L2) 用例数以 `grep -cE '^\s*(it|test)\(' src/__tests__/*.test.ts src/__tests__/*.test.tsx` 展开的 `it`/`test` 块数为准（Vitest 实际运行数）；L3 同理 `test/terminal/*.test.ts`；Rust (L1) 以 `grep -c '#\[test\]'` 统计的 `#[test]` 属性数为准。L3 的 116 用例同时被 L2 (`npm test`) 和独立 L3 (`npm run test:l3`) 执行，但此处各层独立计数，不做去重。
 
@@ -34,7 +34,7 @@
 
 > `pty/mod.rs`、`pty/win_build.rs`、`main.rs` 不含 `#[test]`，不在此列。
 
-## L2 — 前端单元/集成测试（109 文件 / 1779 用例）
+## L2 — 前端单元/集成测试（109 文件 / 1780 用例）
 
 运行：`npm test`（Vitest + jsdom）
 
@@ -159,8 +159,8 @@
 | `src/__tests__/hooks-config-matcher.test.ts` | 21 | matcherEngine.matchHook 全分支（exact-or/regex/all/受限窄字符集/非法正则防御）（Stage 03 遗留补登） |
 | `src/__tests__/hooks-config-model.test.ts` | 17 | configModel jsonToGui/guiToJson 双向转换/round-trip/容错/isSltermManaged（Stage 03 遗留补登） |
 | `src/__tests__/hooks-config-entry.test.ts` | 7 | 入口命令同页单例：global.openHooksConfig 面板 id 规则（hooksConfig-{pageId}）/命中聚焦/未命中 addPanel/无活跃页面或 api 透传 |
-| `src/__tests__/hooks-config-panel.test.tsx` | 18 | 面板三态（loading/content/损坏错误态）/层级切换器禁用逻辑/保存按钮初始禁用/window focus 轻量重读（可见触发/不可见跳过/面板内点击不触发/ask 弹窗打开期间回归不二次弹窗，验收 #1/#2.1 防回归）/JsonMode 接入（value 序列化传递）/注入状态条与注入/卸载按钮 |
-| `src/__tests__/hooks-config-jsonmode.test.tsx` | 17 | TE-09：CM6 EditorView 创建 + schema 扩展注册（jsonCompletion/jsonSchemaHover/jsonSchemaLinter + hooks 子 schema + linter needsRefresh）+ 非法 JSON/schema 违规触发 onValidationChange + 外部 value 同步 + MatcherTester 试测（exact-or/regex/受限字符集）；TE-10：十大分组 + 30 事件按钮渲染 + findEventPosition 纯函数 + 点击跳转选区（setSelection + scrollIntoView）+ 无副作用守卫 |
+| `src/__tests__/hooks-config-panel.test.tsx` | 19 | 面板三态（loading/content/损坏错误态）/层级切换器禁用逻辑/保存按钮初始禁用/window focus 轻量重读（可见触发/不可见跳过/面板内点击不触发/ask 弹窗打开期间回归不二次弹窗，验收 #1/#2.1 防回归）/JSON 错误提示单行截断（nowrap+ellipsis+title，验收 1.2）/JsonMode 接入（value 序列化传递）/注入状态条与注入/卸载按钮 |
+| `src/__tests__/hooks-config-jsonmode.test.tsx` | 17 | TE-09：CM6 EditorView 创建 + schema 扩展注册（jsonSchemaHover/jsonSchemaLinter + hooks 子 schema + height theme + linter needsRefresh，无自动补全）+ 非法 JSON/schema 违规触发 onValidationChange + 外部 value 同步 + MatcherTester 试测（exact-or/regex/受限字符集）；TE-10：十大分组 + 30 事件按钮渲染 + findEventPosition 纯函数 + 点击跳转选区（setSelection + scrollIntoView）+ 无副作用守卫 |
 | `src/__tests__/hooks-config-gui.test.tsx` | 25 | GUI 模式（P3-FE-12）：Master-Detail 渲染/事件树增删事件与 matcher 组/详情区 handler 增删/选中态派生守卫（事件删除/重载回退空态）/注入段禁删（三层删除按钮禁用）/不支持 matcher 事件省略 matcher 输入；P3-FE-14：HandlerForm 接入（选中渲染表单/字段编辑上抛新模型/切换跟随/托管只读） |
 | `src/__tests__/hooks-config-sync.test.tsx` | 8 | 双模式同步（P3-FE-16）：JSON 编辑 → guiModel 重算/GUI 编辑 → configJson 回写/非法 JSON 禁切 GUI + 禁用保存/dirty 与 saved 状态流转 |
 | `src/__tests__/hooks-config-handlerform.test.tsx` | 38 | TE-11：5 种 type 必填字段渲染（官方版字段名断言：mcp_tool 为 input/http 无 method+body/agent 无 description+subagent_type/无 once）+ switchHandlerType 纯函数（保留通用字段清除不适用字段/extraFields）+ 事件支持矩阵过滤（B 档无 prompt/agent、SessionStart/Setup 仅 command/mcp_tool、未知事件兜底、当前 type 不在列表仍显示）+ type 切换交互 + 字段编辑（合法 JSON 上报/非法保留草稿不触发/清空删键）+ 注入段禁改（只读+禁删+不渲染禁用 checkbox+编辑零变更+非托管无锁定行） |
@@ -303,6 +303,7 @@ embedded WDIO 驱动**无法将 OS 级按键（`browser.keys`）投递进 WebVie
 
 ## 历史变更
 
+- 2026-08-01（验收修复 4：JSON 模式三修）：删自动补全（jsonCompletion + jsonLanguage.data.of + @codemirror/autocomplete 直接依赖移除，传递依赖仍在）；加 EditorView.theme height:100% + overflow:clip（竖向滚动条，验收 1.3）；hooks-config-panel 18→19（+1 错误提示单行截断断言，验收 1.2）；jsonmode 17（断言改 height theme，用例数不变）。L2 1779→1780，全量 2303→2304。
 - 2026-08-01（验收修复 3：GUI 接入 HandlerForm）：hooks-config-gui 21→25（+4：选中渲染表单/字段编辑上抛新模型/切换选中表单跟随/托管 handler 表单只读）。L2 1775→1779，全量 2299→2303。
 - 2026-08-01（验收修复 2：外部修改检测改 window focus）：hooks-config-panel 17→18（删 3 个 focusin relatedTarget 用例——机制移除；改/增 4 个 window focus 用例——可见触发/不可见跳过/面板内点击不触发/ask 弹窗期间回归不二次弹窗）。L2 1774→1775，全量 2298→2299。
 - 2026-08-01（验收修复 1：删除单条启停）：删除 hooks-config-store.test.ts（21 用例）+ hooks-config-disable.test.tsx（10 用例）；model 22→17（删 filterDisabled describe 5 条）；sync 9→8（删 filterDisabled 保存链路用例）；panel 17（去失效记录条描述，用例数不变）。L2 1811→1774，全量 2335→2298。

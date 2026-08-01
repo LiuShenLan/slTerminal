@@ -294,7 +294,7 @@ Claude Code 在用户主动 Ctrl+C 中断时不发射任何 hook 事件（`Stop`
 | `hooksConfig/configModel.ts` | 配置模型双向转换纯函数：`jsonToGui`/`guiToJson`（round-trip 不丢数据，未知字段归 extraFields）、`isSltermManaged`（注入段识别，C9） |
 | `hooksConfig/eventsCatalog.ts` | 事件元数据单点（P3-FE-26）：30 事件 × 10 组全表 + handler 支持档（A/B/C）+ 5 种 handler 字段矩阵（C13-3 官方版）+ matcher 窄字符集受限事件（FileChanged/StopFailure）+ 纯查询函数（getEventMeta/isMatcherSupported/getSupportedHandlerTypes 等） |
 | `hooksConfig/matcherEngine.ts` | matcher 语义引擎（C13-5）：`matchHook` 纯函数（exact-or / regex / all + 受限窄字符集），供 MatcherTester 试测与保存校验共用 |
-| `hooksConfig/JsonMode.tsx` | JSON 模式编辑器（P3-FE-11）：CM6 + `codemirror-json-schema`（jsonCompletion/jsonSchemaHover/jsonSchemaLinter，hooks 子 schema）+ jsonParseLinter + 事件导航侧栏（点击跳转选区）+ MatcherTester 内联试测；校验经 onValidationChange 上报 |
+| `hooksConfig/JsonMode.tsx` | JSON 模式编辑器（P3-FE-11）：CM6 + `codemirror-json-schema`（jsonSchemaHover/jsonSchemaLinter，hooks 子 schema；**无自动补全**——验收后决策删除）+ jsonParseLinter + `EditorView.theme` height:100% + 容器 `overflow:clip`（竖向滚动条委托 `.cm-scroller`，照编辑器滚动委托决策）+ 事件导航侧栏（点击跳转选区）+ MatcherTester 内联试测；校验经 onValidationChange 上报 |
 | `hooksConfig/GuiMode.tsx` | GUI 表单模式（P3-FE-12，Master-Detail）：EventTree + 详情区（HandlerForm + matcher 输入）；选中态派生守卫（事件删除/重载回退空态）；注入段禁删（handler/含托管 handler 的 matcher 组/事件三层删除按钮禁用） |
 | `hooksConfig/EventTree.tsx` | 事件树（P3-FE-13）：三级树（分组折叠 → 事件 → matcher 组 → handler 摘要）+ hook 总数 + 仅渲染配置中已存在事件（未知事件归「未知事件」组）+ 「slTerminal 托管」标记 |
 | `hooksConfig/HandlerForm.tsx` | handler 编辑表单（P3-FE-14）：5 种 type 专用字段（字段矩阵来自 eventsCatalog 单一真值源）+ 通用字段（if/timeout/statusMessage，once 不展示）+ type 切换保留通用字段清除不适用字段 + 注入段只读/禁删 |
