@@ -1,0 +1,114 @@
+// HistorySessionRow.tsx — 历史会话行组件（FE-07，双行式）
+//
+// 行1 = 粗体标题（title 为 null 时显示 sessionId 前 8 位）+ 右上角相对时间（formatRelativeTime）；
+// 行2 = 首条 prompt 预览（单行截断省略）。
+// 状态标记：active → ⚡（运行中）；orphan → ✗（cwd 目录已删除，不可恢复）；noCwd（无 cwd，
+// 调用方跳过孤儿判定，orphan 恒 false）不显示 ✗。
+// 交互：单击选中 / 双击恢复分派 / 右键菜单，均回调 props 委托（纯受控展示组件，不碰 IPC）。
+// 契约见 docs/claude-history-view/stages.md「跨 Stage 契约」。
+
+import React from "react";
+import type { HistorySession } from "../../types/claudeHistory";
+import { formatRelativeTime } from "./historyModel";
+import { EXPLORER_SELECTION_BG, SIDEBAR_COLORS, DIM_FG } from "../../theme";
+
+/** 行组件契约（写死，见 stages.md 跨 Stage 契约——agent B 照此消费） */
+export interface HistorySessionRowProps {
+  session: HistorySession;
+  /** 运行中会话（⚡ 标记） */
+  active: boolean;
+  /** 孤儿会话（cwd≠null 且 cwd 目录已删除，✗ 标记） */
+  orphan: boolean;
+  /** 无 cwd 会话（cwd===null，不显示 ✗，恢复类操作禁用） */
+  noCwd: boolean;
+  /** 选中态（背景高亮 EXPLORER_SELECTION_BG） */
+  selected: boolean;
+  /** 单击选中 */
+  onSelect(id: string): void;
+  /** 双击恢复分派 */
+  onDoubleClick(session: HistorySession): void;
+  /** 右键菜单（坐标 clientX/clientY） */
+  onContextMenu(session: HistorySession, pos: { x: number; y: number }): void;
+}
+
+export const HistorySessionRow: React.FC<HistorySessionRowProps> = ({
+  session,
+  active,
+  orphan,
+  selected,
+  onSelect,
+  onDoubleClick,
+  onContextMenu,
+}) => {
+  // title 为 null（降级/无标题条目）→ 显示 sessionId 前 8 位
+  const title = session.title ?? session.sessionId.slice(0, 8);
+  const timeStr = formatRelativeTime(session.mtimeMs, Date.now());
+
+  return (
+    <div
+      data-e2e="agent-history-row"
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        padding: "4px 8px",
+        cursor: "pointer",
+        userSelect: "none",
+        backgroundColor: selected ? EXPLORER_SELECTION_BG : "transparent",
+      }}
+      onClick={() => onSelect(session.sessionId)}
+      onDoubleClick={() => onDoubleClick(session)}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        onContextMenu(session, { x: e.clientX, y: e.clientY });
+      }}
+    >
+      {/* 行1：状态标记 + 粗体标题 + 右上角相对时间 */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "4px",
+          fontSize: "13px",
+          color: SIDEBAR_COLORS.fg,
+        }}
+      >
+        {active && <span style={{ flexShrink: 0 }}>⚡</span>}
+        <span
+          style={{
+            flex: 1,
+            fontWeight: "bold",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {title}
+        </span>
+        {/* ✗ 仅按 orphan prop 渲染；noCwd 时调用方不传 orphan=true（无 cwd 跳过孤儿判定） */}
+        {orphan && (
+          <span style={{ flexShrink: 0, fontSize: "11px", color: DIM_FG }}>
+            ✗
+          </span>
+        )}
+        <span style={{ flexShrink: 0, fontSize: "11px", color: DIM_FG }}>
+          {timeStr}
+        </span>
+      </div>
+
+      {/* 行2：首条 prompt 预览（单行截断省略；null 时不渲染） */}
+      {session.firstPrompt != null && (
+        <div
+          style={{
+            fontSize: "11px",
+            color: DIM_FG,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {session.firstPrompt}
+        </div>
+      )}
+    </div>
+  );
+};

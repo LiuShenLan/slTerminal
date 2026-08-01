@@ -70,6 +70,38 @@ vi.mock("../lib/claudeStatus", () => ({
   eventToStatus: vi.fn(() => "attention"),
 }));
 
+// ── 历史区 mock（FE-08：本文件聚焦 AgentStatusView 三区结构；
+//    历史区内部行为——搜索/菜单/双击分派——由 claude-history-view.test.tsx 覆盖）──
+const historyMock = vi.hoisted(() => ({
+  shape: {
+    state: "ready",
+    sessions: [] as unknown[],
+    activeIds: new Set<string>(),
+    rootPath: "C:/test",
+  },
+  scan: vi.fn(() => Promise.resolve()),
+  removeLocal: vi.fn(),
+  updateLocalTitle: vi.fn(),
+}));
+
+vi.mock("../features/claudeHistory/useClaudeHistory", () => ({
+  useClaudeHistory: () => ({
+    state: historyMock.shape.state,
+    sessions: historyMock.shape.sessions,
+    activeIds: historyMock.shape.activeIds,
+    rootPath: historyMock.shape.rootPath,
+    scan: historyMock.scan,
+    removeLocal: historyMock.removeLocal,
+    updateLocalTitle: historyMock.updateLocalTitle,
+  }),
+}));
+
+// restoreSession 依赖 pageApis.switchToPageShared（本文件 mock 不含），
+// 历史区交互不在本文件测试范围——整模块 mock 防 import 解析失败
+vi.mock("../features/claudeHistory/restoreSession", () => ({
+  restoreHistorySession: vi.fn(() => Promise.resolve()),
+}));
+
 import React from "react";
 import { render, cleanup, fireEvent } from "@testing-library/react";
 import { AgentStatusView } from "../features/agentStatus/AgentStatusView";
@@ -136,6 +168,7 @@ function resetAll() {
   mockContextUsage.mockReset();
   mockSwitchToPageAndFocus.mockReset();
   mockOnHookEventCallback.cb = null;
+  historyMock.scan.mockClear();
 }
 
 /** 构造 AgentSessionRow */
@@ -426,5 +459,117 @@ describe("切换 activePageId 清空行", () => {
     expect(
       container.querySelectorAll('[data-e2e="agent-status-row"]').length,
     ).toBe(0);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// 三下拉框结构（FE-08）
+// ═══════════════════════════════════════════════════════════════
+
+describe("三下拉框结构（FE-08）", () => {
+  it("三个区块头存在：活跃会话 + 当前项目历史会话 + 全部项目历史会话", () => {
+    seedProject("C:/test", "proj-1", [
+      { pageId: "page1", name: "页面 1" },
+    ]);
+    seedActivePage("page1");
+
+    const { getByText, container } = render(
+      React.createElement(AgentStatusView, defaultProps),
+    );
+
+    expect(getByText("活跃会话")).toBeTruthy();
+    expect(getByText("当前项目历史会话")).toBeTruthy();
+    expect(getByText("全部项目历史会话")).toBeTruthy();
+
+    // 两个历史区块容器（FE-12）
+    expect(
+      container.querySelector('[data-e2e="agent-history-section-current"]'),
+    ).toBeTruthy();
+    expect(
+      container.querySelector('[data-e2e="agent-history-section-all"]'),
+    ).toBeTruthy();
+  });
+
+  it("默认态：活跃展开、两历史区收起——活跃行可见、无历史行、scan 未触发", () => {
+    seedProject("C:/test", "proj-1", [
+      { pageId: "page1", name: "页面 1" },
+    ]);
+    seedActivePage("page1");
+    mockTerminalRegistry.getAll.mockReturnValue(
+      makeTerminalMap(["terminal-page1-0"]),
+    );
+
+    const { container } = render(
+      React.createElement(AgentStatusView, defaultProps),
+    );
+
+    // 活跃区展开：行可见
+    expect(
+      container.querySelectorAll('[data-e2e="agent-status-row"]').length,
+    ).toBe(1);
+    // 历史区收起：无历史行、scan 未触发
+    expect(
+      container.querySelectorAll('[data-e2e="agent-history-row"]').length,
+    ).toBe(0);
+    expect(historyMock.scan).not.toHaveBeenCalled();
+  });
+
+  it("点击历史区标题展开 → 触发 scan()（经 ClaudeHistorySections 首次展开 effect）", () => {
+    seedProject("C:/test", "proj-1", [
+      { pageId: "page1", name: "页面 1" },
+    ]);
+    seedActivePage("page1");
+
+    const { getByText } = render(
+      React.createElement(AgentStatusView, defaultProps),
+    );
+
+    // 初始收起 → 未触发
+    expect(historyMock.scan).not.toHaveBeenCalled();
+
+    // 展开当前项目历史会话 → scan 一次
+    fireEvent.click(getByText("当前项目历史会话"));
+    expect(historyMock.scan).toHaveBeenCalledTimes(1);
+
+    // 收起再展开 → 仅首次触发（scanTriggeredRef）
+    fireEvent.click(getByText("当前项目历史会话"));
+    fireEvent.click(getByText("全部项目历史会话"));
+    expect(historyMock.scan).toHaveBeenCalledTimes(1);
+  });
+
+  it("E2E 兼容红线四件：agent-status-view / agent-status-row / AGENT STATUS / 两条空态文案", () => {
+    // 红线 1+2+3：根容器 + 标题栏文本（no-root 态）
+    seedActivePage(null);
+    const first = render(React.createElement(AgentStatusView, defaultProps));
+    expect(
+      first.container.querySelector('[data-e2e="agent-status-view"]'),
+    ).toBeTruthy();
+    expect(first.getByText("AGENT STATUS")).toBeTruthy();
+    // 红线 4a：空态文案「选择一个项目」
+    expect(
+      first.getByText("选择一个项目以查看 Agent 状态"),
+    ).toBeTruthy();
+    first.unmount();
+
+    // 红线 4b：空态文案「无运行中的 claude 会话」+ 活跃行选择器（ready 态）
+    seedProject("C:/test", "proj-1", [
+      { pageId: "page1", name: "页面 1" },
+    ]);
+    seedActivePage("page1");
+    mockTerminalRegistry.getAll.mockReturnValue(new Map());
+    const second = render(React.createElement(AgentStatusView, defaultProps));
+    expect(
+      second.getByText("当前项目无运行中的 claude 会话"),
+    ).toBeTruthy();
+    second.unmount();
+
+    // 红线：活跃行 data-e2e="agent-status-row"（ready 态）
+    mockTerminalRegistry.getAll.mockReturnValue(
+      makeTerminalMap(["terminal-page1-0"]),
+    );
+    const third = render(React.createElement(AgentStatusView, defaultProps));
+    expect(
+      third.container.querySelector('[data-e2e="agent-status-row"]'),
+    ).toBeTruthy();
   });
 });

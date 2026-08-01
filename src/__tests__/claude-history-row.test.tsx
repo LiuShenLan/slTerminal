@@ -1,0 +1,168 @@
+// claude-history-row.test.tsx — HistorySessionRow L2 测试（FE-07 / FE-10）
+//
+// 覆盖：双行渲染（标题/相对时间/prompt 预览）、title null → sessionId 前 8 位、
+// ⚡/✗ 标记三分支（active/orphan/noCwd）、单击/双击/右键回调参数、选中态高亮。
+
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { render, cleanup, fireEvent } from "@testing-library/react";
+import { HistorySessionRow } from "../features/claudeHistory/HistorySessionRow";
+import { formatRelativeTime } from "../features/claudeHistory/historyModel";
+import { EXPLORER_SELECTION_BG } from "../theme";
+import type { HistorySession } from "../types/claudeHistory";
+
+afterEach(cleanup);
+
+/** hex → "rgb(r, g, b)"（jsdom 会把 inline 色值规范化为 rgb 形式，照 activityBar.test.tsx 模式） */
+function hexToRgb(hex: string): string {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgb(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255})`;
+}
+
+/** 构造测试会话（默认值：5 分钟前、有标题、cwd 存在） */
+function makeSession(overrides: Partial<HistorySession> = {}): HistorySession {
+  return {
+    sessionId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    cwd: "D:\\data\\learn\\code\\slTerminal",
+    title: "修复登录 bug 的会话",
+    titleSource: "aiTitle",
+    firstPrompt: "修复了 token 过期问题导致的重…",
+    mtimeMs: Date.now() - 60_000 * 5,
+    cwdExists: true,
+    ...overrides,
+  };
+}
+
+/** 渲染行组件，返回根元素与 mock 回调 */
+function renderRow(
+  session: HistorySession,
+  props: Partial<
+    Pick<
+      Parameters<typeof HistorySessionRow>[0],
+      "active" | "orphan" | "noCwd" | "selected"
+    >
+  > = {},
+) {
+  const onSelect = vi.fn();
+  const onDoubleClick = vi.fn();
+  const onContextMenu = vi.fn();
+  const utils = render(
+    <HistorySessionRow
+      session={session}
+      active={props.active ?? false}
+      orphan={props.orphan ?? false}
+      noCwd={props.noCwd ?? false}
+      selected={props.selected ?? false}
+      onSelect={onSelect}
+      onDoubleClick={onDoubleClick}
+      onContextMenu={onContextMenu}
+    />,
+  );
+  const row = utils.container.querySelector(
+    '[data-e2e="agent-history-row"]',
+  ) as HTMLElement;
+  return { ...utils, row, onSelect, onDoubleClick, onContextMenu };
+}
+
+describe("HistorySessionRow 渲染", () => {
+  it("双行式：行1 粗体标题 + 右上角相对时间，行2 prompt 预览", () => {
+    const session = makeSession();
+    const { getByText } = renderRow(session);
+
+    const titleEl = getByText("修复登录 bug 的会话");
+    // 行1 标题粗体
+    expect(titleEl.style.fontWeight).toBe("bold");
+    // 相对时间（与 historyModel 同源函数计算期望值）
+    expect(
+      getByText(formatRelativeTime(session.mtimeMs, Date.now())),
+    ).toBeTruthy();
+    // 行2 prompt 预览
+    expect(getByText("修复了 token 过期问题导致的重…")).toBeTruthy();
+  });
+
+  it("title 为 null 时显示 sessionId 前 8 位", () => {
+    const session = makeSession({ title: null, titleSource: "none" });
+    const { getByText, queryByText } = renderRow(session);
+
+    expect(getByText("a1b2c3d4")).toBeTruthy();
+    // 不显示 sessionId 全串
+    expect(queryByText(session.sessionId)).toBeNull();
+  });
+
+  it("firstPrompt 为 null 时不渲染行2", () => {
+    const session = makeSession({ firstPrompt: null });
+    const { row } = renderRow(session);
+    // 行2 不存在（行根下仅一个文本行容器）
+    expect(row.querySelectorAll("div").length).toBe(1);
+  });
+});
+
+describe("HistorySessionRow 状态标记", () => {
+  it("active=true → 标题前 ⚡，无 ✗", () => {
+    const session = makeSession();
+    const { getByText, queryByText } = renderRow(session, { active: true });
+
+    expect(getByText("⚡")).toBeTruthy();
+    expect(queryByText("✗")).toBeNull();
+  });
+
+  it("orphan=true → ✗ 标记", () => {
+    const session = makeSession({ cwdExists: false });
+    const { getByText, queryByText } = renderRow(session, { orphan: true });
+
+    expect(getByText("✗")).toBeTruthy();
+    expect(queryByText("⚡")).toBeNull();
+  });
+
+  it("noCwd=true（无 cwd 跳过孤儿判定）→ 不显示 ✗ 与 ⚡", () => {
+    const session = makeSession({ cwd: null, cwdExists: false });
+    const { queryByText } = renderRow(session, { noCwd: true });
+
+    expect(queryByText("✗")).toBeNull();
+    expect(queryByText("⚡")).toBeNull();
+  });
+});
+
+describe("HistorySessionRow 交互回调", () => {
+  it("单击 → onSelect(sessionId)", () => {
+    const session = makeSession();
+    const { row, onSelect } = renderRow(session);
+
+    fireEvent.click(row);
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(onSelect).toHaveBeenCalledWith(session.sessionId);
+  });
+
+  it("双击 → onDoubleClick(session)", () => {
+    const session = makeSession();
+    const { row, onDoubleClick } = renderRow(session);
+
+    fireEvent.doubleClick(row);
+    expect(onDoubleClick).toHaveBeenCalledTimes(1);
+    expect(onDoubleClick).toHaveBeenCalledWith(session);
+  });
+
+  it("右键 → onContextMenu(session, { x, y }) 带点击坐标", () => {
+    const session = makeSession();
+    const { row, onContextMenu } = renderRow(session);
+
+    fireEvent.contextMenu(row, { clientX: 123, clientY: 45 });
+    expect(onContextMenu).toHaveBeenCalledTimes(1);
+    expect(onContextMenu).toHaveBeenCalledWith(session, { x: 123, y: 45 });
+  });
+});
+
+describe("HistorySessionRow 选中态", () => {
+  it("selected=true → 背景 EXPLORER_SELECTION_BG", () => {
+    const session = makeSession();
+    const { row } = renderRow(session, { selected: true });
+
+    expect(row.style.backgroundColor).toBe(hexToRgb(EXPLORER_SELECTION_BG));
+  });
+
+  it("selected=false → 背景透明", () => {
+    const session = makeSession();
+    const { row } = renderRow(session, { selected: false });
+
+    expect(row.style.backgroundColor).not.toBe(EXPLORER_SELECTION_BG);
+  });
+});
