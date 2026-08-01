@@ -24,8 +24,6 @@ claude 子进程 hook 触发
 
 对比备选 B（JSONL 追加）：JSONL 在 Windows 上多进程并发 `appendFile` 无法保证行级原子性，需额外加锁或合并逻辑，Phase 1 复杂度无显著收益。
 
-详见 `docs/hooks-dev/phase1/checklist.md`「开放项决策」章节。
-
 ### SLTERM_PANEL_ID 环境变量路由
 
 PTY spawn 时注入 `SLTERM_PANEL_ID` 环境变量（与 `COLORTERM`/`TERM`/`TERM_PROGRAM` 同一时机），值等于 `request.panel_id`。hook 脚本通过 `process.env.SLTERM_PANEL_ID` 读取，写入信号文件 `panelId` 字段。无此环境变量（非 slTerminal 启动的 claude）→ 脚本直接 `process.exit(0)`。
