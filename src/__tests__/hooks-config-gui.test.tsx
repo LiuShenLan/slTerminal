@@ -364,3 +364,66 @@ describe("P3-TE-12 handler 增删与支持矩阵", () => {
     expect(container.textContent).toContain("暂无 handler");
   });
 });
+
+describe("P3-FE-14 HandlerForm 接入 GuiMode", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  /** 选中 PreToolUse 组 0 的 handler index（事件 → matcher 组头 → handler 行） */
+  function selectHandler(container: HTMLElement, hi: number) {
+    fireEvent.click(container.querySelector('[data-e2e="gui-event-PreToolUse"]') as HTMLElement);
+    fireEvent.click(
+      container.querySelector('[data-e2e="gui-matcher-PreToolUse-0"]')?.parentElement as HTMLElement,
+    );
+    fireEvent.click(
+      container.querySelector(`[data-e2e="gui-handler-PreToolUse-0-${hi}"]`) as HTMLElement,
+    );
+  }
+
+  it("选中 handler 渲染 HandlerForm（type 选择器 + 字段表单）", () => {
+    const { container } = renderGui(makeDefaultGui());
+    // 未选中时无表单
+    expect(container.querySelector('[data-e2e="handler-form"]')).toBeNull();
+    selectHandler(container, 0);
+    // 选中后表单展开：type 选择器值 = 该 handler type；command 字段值为既有字段
+    expect(container.querySelector('[data-e2e="handler-form"]')).toBeTruthy();
+    expect((container.querySelector('[data-e2e="handler-type-select"]') as HTMLSelectElement).value).toBe("command");
+    expect((container.querySelector('[data-e2e="handler-field-command"]') as HTMLInputElement).value).toBe("echo hi");
+  });
+
+  it("HandlerForm 编辑字段 → updateHandler 上抛新模型（双模式同步入口）", () => {
+    const onChange = vi.fn();
+    const { container } = renderGui(makeDefaultGui(), onChange);
+    selectHandler(container, 0);
+    const field = container.querySelector('[data-e2e="handler-field-command"]') as HTMLInputElement;
+    fireEvent.change(field, { target: { value: "echo updated" } });
+    const last = onChange.mock.calls[onChange.mock.calls.length - 1][0] as HooksConfigGui;
+    expect(last.events[0].matcherGroups[0].handlers[0].command).toBe("echo updated");
+    // 同组其他 handler 不受影响
+    expect(last.events[0].matcherGroups[0].handlers[1].type).toBe("http");
+  });
+
+  it("切换选中另一个 handler → 表单跟随（值替换）", () => {
+    const { container } = renderGui(makeDefaultGui());
+    selectHandler(container, 0);
+    expect((container.querySelector('[data-e2e="handler-type-select"]') as HTMLSelectElement).value).toBe("command");
+    selectHandler(container, 1);
+    // http handler：type 选择器切为 http，url 字段出现
+    expect((container.querySelector('[data-e2e="handler-type-select"]') as HTMLSelectElement).value).toBe("http");
+    expect(container.querySelector('[data-e2e="handler-field-url"]')).toBeTruthy();
+  });
+
+  it("托管 handler 表单只读（C13-8：badge + 字段 disabled + type disabled）", () => {
+    const gui: HooksConfigGui = {
+      events: [
+        makeEvent("PreToolUse", [{ matcher: "Bash", handlers: [managedHandler] }]),
+      ],
+    };
+    const { container } = renderGui(gui);
+    selectHandler(container, 0);
+    expect(container.querySelector('[data-e2e="handler-managed-badge"]')).toBeTruthy();
+    expect((container.querySelector('[data-e2e="handler-type-select"]') as HTMLSelectElement).disabled).toBe(true);
+    expect((container.querySelector('[data-e2e="handler-field-command"]') as HTMLInputElement).disabled).toBe(true);
+  });
+});

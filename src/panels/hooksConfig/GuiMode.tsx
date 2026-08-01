@@ -11,7 +11,8 @@
 
 import React, { useCallback, useState } from "react";
 import EventTree from "./EventTree";
-import type { HookEventGui, HookMatcherGroupGui, HooksConfigGui } from "./configModel";
+import { HandlerForm } from "./HandlerForm";
+import type { HookEventGui, HookHandlerGui, HookMatcherGroupGui, HooksConfigGui } from "./configModel";
 import { isSltermManaged, UNKNOWN_EVENT_GROUP } from "./configModel";
 import { getEventMeta, getSupportedHandlerTypes, HOOK_EVENTS } from "./eventsCatalog";
 import type { HandlerType } from "./eventsCatalog";
@@ -291,6 +292,27 @@ const GuiMode: React.FC<GuiModeProps> = ({ gui, onChange }) => {
     [gui.events, onChange, selectedEvent, selectedMatcherIndex, selectedHandlerIndex],
   );
 
+  /** 更新 handler 字段（HandlerForm onChange 上抛完整新 handler，P3-FE-14 接入） */
+  const updateHandler = useCallback(
+    (event: string, groupIndex: number, handlerIndex: number, next: HookHandlerGui) => {
+      onChange({
+        events: gui.events.map((e) =>
+          e.event === event
+            ? {
+                ...e,
+                matcherGroups: e.matcherGroups.map((g, gi) =>
+                  gi === groupIndex
+                    ? { ...g, handlers: g.handlers.map((h, hi) => (hi === handlerIndex ? next : h)) }
+                    : g,
+                ),
+              }
+            : e,
+        ),
+      });
+    },
+    [gui.events, onChange],
+  );
+
   /** matcher 值更新（受控输入，逐键上抛） */
   const updateMatcher = useCallback(
     (event: string, groupIndex: number, value: string) => {
@@ -427,38 +449,48 @@ const GuiMode: React.FC<GuiModeProps> = ({ gui, onChange }) => {
                     删除组
                   </button>
                 </div>
-                {/* handler 列表 */}
+                {/* handler 列表（P3-FE-14：选中 handler 时行下方展开 HandlerForm 完整字段表单） */}
                 {g.handlers.length === 0 && <div style={hintStyle}>暂无 handler</div>}
                 {g.handlers.map((h, hi) => (
-                  <div
-                    key={hi}
-                    style={handlerRowStyle(matcherIndex === gi && handlerIndex === hi)}
-                    data-e2e={`gui-handler-${selected.event}-${gi}-${hi}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setSelectedMatcherIndex(gi);
-                      setSelectedHandlerIndex(hi);
-                    }}
-                  >
-                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {h.type}
-                    </span>
-                    {isSltermManaged(h) && <span style={managedBadgeStyle}>slTerminal 托管</span>}
-                    <span style={{ flex: 1 }} />
-                    <button
-                      type="button"
-                      data-e2e={`gui-handler-del-${selected.event}-${gi}-${hi}`}
-                      disabled={isSltermManaged(h)}
+                  <React.Fragment key={hi}>
+                    <div
+                      style={handlerRowStyle(matcherIndex === gi && handlerIndex === hi)}
+                      data-e2e={`gui-handler-${selected.event}-${gi}-${hi}`}
                       onClick={(e) => {
                         e.stopPropagation();
-                        deleteHandler(selected.event, gi, hi);
+                        setSelectedMatcherIndex(gi);
+                        setSelectedHandlerIndex(hi);
                       }}
-                      style={smallButtonStyle(isSltermManaged(h))}
-                      title={isSltermManaged(h) ? "slTerminal 托管条目，不可删除" : "删除该 handler"}
                     >
-                      删除
-                    </button>
-                  </div>
+                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {h.type}
+                      </span>
+                      {isSltermManaged(h) && <span style={managedBadgeStyle}>slTerminal 托管</span>}
+                      <span style={{ flex: 1 }} />
+                      <button
+                        type="button"
+                        data-e2e={`gui-handler-del-${selected.event}-${gi}-${hi}`}
+                        disabled={isSltermManaged(h)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          deleteHandler(selected.event, gi, hi);
+                        }}
+                        style={smallButtonStyle(isSltermManaged(h))}
+                        title={isSltermManaged(h) ? "slTerminal 托管条目，不可删除" : "删除该 handler"}
+                      >
+                        删除
+                      </button>
+                    </div>
+                    {matcherIndex === gi && handlerIndex === hi && (
+                      <div style={{ padding: "4px 6px 6px" }}>
+                        <HandlerForm
+                          handler={h}
+                          event={selected.event}
+                          onChange={(next) => updateHandler(selected.event, gi, hi, next)}
+                        />
+                      </div>
+                    )}
+                  </React.Fragment>
                 ))}
                 {/* 添加 handler 入口（type 支持矩阵经 eventsCatalog 过滤） */}
                 <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 6 }}>
