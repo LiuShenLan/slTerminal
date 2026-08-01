@@ -1,6 +1,6 @@
 // commandCatalog.test.ts — 命令目录单元测试
 //
-// 覆盖：10 条命令齐全 + 元数据正确、id 唯一、defaultKey 合法且对自身 context 非保留、
+// 覆盖：9 条命令齐全 + 元数据正确、id 唯一、defaultKey 合法且对自身 context 非保留、
 //       COMMAND_META_BY_ID 查找、commandFromMeta 合并 handler + 未知 id 抛错。
 
 import { describe, it, expect, vi } from "vitest";
@@ -10,7 +10,6 @@ import { isReserved } from "../features/shortcuts/reserved";
 
 const EXPECTED_IDS = [
   "global.closeTab",
-  "global.openHooksConfig",
   "terminal.copy",
   "terminal.paste",
   "terminal.newline",
@@ -58,20 +57,6 @@ describe("COMMAND_CATALOG", () => {
     }
   });
 
-  it("global.openHooksConfig 元数据完整（入口命令契约）", () => {
-    const meta = COMMAND_META_BY_ID.get("global.openHooksConfig");
-    expect(meta).toBeDefined();
-    expect(meta!.id).toBe("global.openHooksConfig");
-    expect(meta!.title).toBe("打开 Hooks 配置");
-    expect(meta!.category).toBe("global");
-    expect(meta!.context).toBe("global");
-    expect(meta!.defaultKey).toEqual({
-      ctrlKey: true, shiftKey: true, altKey: false, metaKey: false, code: "KeyH",
-    });
-    expect(meta!.priority).toBe(10);
-    // 默认键 Ctrl+Shift+H 非保留（不在终端控制字符/CM 内部键两套保留集）
-    expect(isReserved(meta!.defaultKey!, meta!.context)).toBe(false);
-  });
 });
 
 describe("COMMAND_META_BY_ID", () => {

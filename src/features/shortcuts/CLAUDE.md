@@ -20,7 +20,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### 命令目录单一真值源（`commandCatalog.ts`）
 
-所有可重绑命令的 `title/category/defaultKey/priority` 集中在 `COMMAND_CATALOG`。各面板工厂经 `commandFromMeta(id, handler)` 合并 handler。新增可重绑命令 = 目录追加一条 + 工厂提供 handler。当前命令（10 条）：`global.closeTab`、`global.openHooksConfig`、`terminal.copy`、`terminal.paste`、`terminal.newline`、`editor.save`、`editor.toggleWordWrap`、`explorer.delete`、`explorer.open`、`explorer.rename`。
+所有可重绑命令的 `title/category/defaultKey/priority` 集中在 `COMMAND_CATALOG`。各面板工厂经 `commandFromMeta(id, handler)` 合并 handler。新增可重绑命令 = 目录追加一条 + 工厂提供 handler。当前命令（9 条）：`global.closeTab`、`terminal.copy`、`terminal.paste`、`terminal.newline`、`editor.save`、`editor.toggleWordWrap`、`explorer.delete`、`explorer.open`、`explorer.rename`。
 
 ### 命令注册一次 + active 指针派发到聚焦实例（多实例正确性）
 
@@ -123,7 +123,7 @@ usePanelFocus("terminal", container, activate, deactivate);
 
 `context: "global"`，`App.tsx` 中 `registry.register([...createGlobalShortcuts(), ...createTerminalShortcuts(), ...createEditorShortcuts()])` 一次性注册；overrides 经 `wireKeybindings(getShortcutRegistry(), useKeybindings)` 持续同步。优先级 0-99，面板级可覆盖。
 
-**`global.openHooksConfig`（Ctrl+Shift+H，C13-7 同页单例）**：handler 经 `createGlobalShortcuts(getDockviewApi)` 延迟求值 + `useLayout.getState()` 取 activePageId——面板 id 规则 `hooksConfig-{activePageId}`，`getPanel(id)` 命中则 `focus()`，未命中才 `addPanel({ component: "hooksConfig" })`；无活跃页面或无 DockviewApi → 返回 false 透传。单例语义保证每页至多一个 hooks 配置面板，重复按键只聚焦不新建。
+**Hooks 配置入口已迁移到侧栏右键菜单**（原 `global.openHooksConfig` Ctrl+Shift+H 命令已删除）：SidebarTree「打开 Hooks 配置」菜单项 → 先 `switchToPage`（面板须活跃页打开）→ `openHooksConfigPanel(pageId)`（`workspace/pageApis`，轮询 `getPageApi` 就绪 → `getPanel(id)` 命中 `focus()`、未命中 `addPanel`——同页单例语义 C13-7 不变）。
 
 ## 用户自定义重绑定
 
@@ -177,11 +177,11 @@ HTML 面板内容在 `<iframe sandbox="allow-scripts" srcDoc={...}>` 中（不�
 |------|----------|
 | `keystroke.test.ts` | formatKeystroke 各组合（含 Meta 修饰键）+ 固定序、parseKeystroke 合法往返/各类非法、isValidKeystrokeString、format∘parse 恒等 |
 | `reserved.test.ts` | isReserved 各 context、每个保留键命中、非保留键放行、global 两集并集 |
-| `commandCatalog.test.ts` | 10 命令齐全 + 元数据、id 唯一、defaultKey 合法且非自身保留、global.openHooksConfig 入口命令契约、commandFromMeta 合并/抛错 |
+| `commandCatalog.test.ts` | 9 命令齐全 + 元数据、id 唯一、defaultKey 合法且非自身保留、commandFromMeta 合并/抛错 |
 | `shortcuts.test.ts` | 注册/注销、引用计数、上下文栈竞态、匹配排序（含 metaKey 修饰键）、IME 透传、global、handler 返回值+stopPropagation、**setOverrides 重绑/解绑/降级/冲突、resolve/forceContext、exportContextBindings、listCommands、_reset 清 overrides** |
 | `wireKeybindings.test.ts` | 立即应用、store 变更重应用、unsubscribe |
 | `usePanelFocus.test.ts` | focusin→pushContext+onActivate、focusout(离子树)→popContext+onDeactivate、内部焦点转移不触发、卸载清理 |
-| `globalCommands.test.ts` | createGlobalShortcuts 命令结构（defaultKey/title/category）、Ctrl+W 关闭、**openHooksConfig 同页单例**（`hooksConfig-{pageId}` 命中聚焦/未命中 addPanel/无页面或 api 透传）、getDockviewApi 延迟求值 |
+| `globalCommands.test.ts` | createGlobalShortcuts 命令结构（defaultKey/title/category）、Ctrl+W 关闭、getDockviewApi 延迟求值 |
 | `keyboard.test.ts` | createTerminalShortcuts()（无参）copy/paste/newline 经 getActiveTerminal 派发、无 active 透传、Ctrl+C 不注册 |
 | `editor-keyboard.test.ts` | createEditorShortcuts()（无参）save/toggleWordWrap 经 getActiveEditor 派发、无 active 透传、聚焦覆盖 |
 | `activeTerminal.test.ts` / `activeEditor.test.ts` | active 指针 set/get/覆盖、clear 仅在匹配时生效 |

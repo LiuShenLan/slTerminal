@@ -27,9 +27,9 @@ describe("createGlobalShortcuts", () => {
   // ---- 1. 命令结构 ----
 
   describe("命令结构", () => {
-    it("返回两条命令（closeTab + openHooksConfig）", () => {
+    it("返回一条命令（closeTab——Hooks 配置入口已迁移侧栏右键菜单）", () => {
       const cmds = createGlobalShortcuts(() => undefined);
-      expect(cmds).toHaveLength(2);
+      expect(cmds).toHaveLength(1);
     });
 
     it("命令 id 为 global.closeTab", () => {

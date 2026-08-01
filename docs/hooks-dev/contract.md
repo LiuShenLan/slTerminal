@@ -182,8 +182,8 @@ DTO（Rust `snake_case` ↔ JS `camelCase` 双边对应，硬约束 #4）：
 ### C13-7 面板与入口
 
 - 面板注册：硬约束 #5 全流程——`src/panels/hooksConfig/` → `src/panelRegistry.ts` 注册 → `PANEL_TYPES` 追加；常量 `PANEL_HOOKS_CONFIG = "hooksConfig"`；不加入 `FILE_PANEL_TYPES` / `isAlwaysRenderPanel`。
-- **同页单例**：面板 id 规则 `hooksConfig-{pageId}`；入口命令 handler 先 `getPanel(id)` 查重 → 命中则 `focus()`，未命中才 `addPanel`。
-- 入口命令：`global.openHooksConfig`，context `global`，defaultKey `Ctrl+Shift+H`（执行期实测，若被 WebView2 拦截降级 `Ctrl+Alt+H`），priority 10。
+- **同页单例**：面板 id 规则 `hooksConfig-{pageId}`；入口（侧栏右键菜单「打开 Hooks 配置」）调 `openHooksConfigPanel(pageId)`（workspace/pageApis）：先切页 → 轮询 `getPageApi` 就绪（100ms×50=5s 超时降级）→ `getPanel(id)` 查重 → 命中则 `focus()`，未命中才 `addPanel`。
+- 入口：~~`global.openHooksConfig`（Ctrl+Shift+H）已删除~~——Hooks 配置入口迁移到侧栏右键菜单（项目行：有页面切 `pages[0]`/无页面新建后切；页面行：先切到目标页再打开），不再经快捷键。
 
 ### C13-8 注入段保护与外部修改
 

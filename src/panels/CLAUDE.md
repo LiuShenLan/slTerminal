@@ -148,7 +148,7 @@ DiffPanel 的加载/错误/就绪三态中，容器 div 仅在 `"ready"` 态挂�
 - **保存安全**（P3-FE-17）：JSON.parse + `validateHooksJson`（json-schema-library Draft07，非 ajv）双校验，任一失败弹窗拒绝写盘 → 写盘；成功后提示「hooks 改动需重启 claude 会话生效」。
 - **注入段保护**（C13-8）：`command` 含 `slterm-hook-reporter` 子串的条目（`isSltermManaged`，识别规则照 C9）GUI 标记「slTerminal 托管」+ 禁删/表单只读；**JSON 模式不限制**（用户对自己文件有最终权利）。
 - **F2 并入**（P3-FE-21/22）：工具栏「注入 Hooks」/「卸载 Hooks」按钮直接调用 `src/ipc/hooks` 的 `inject()`/`uninstall()`（不改其实现），状态条显示 `getInjectionStatus()` 三态（已注入/未注入/版本过旧）；注入/卸载完成后自动重读 user 层配置（操作改写 `~/.claude/settings.json`，C13-8）——当前层非 user 则切到 user 层。
-- **同页单例**（C13-7）：面板 id = `hooksConfig-{activePageId}`，入口命令 `global.openHooksConfig`（Ctrl+Shift+H，见 shortcuts 模块）命中 `getPanel(id)` 聚焦、未命中 addPanel；面板 props 兼容 Dockview（无需依赖 panelId 的单例语义）。
+- **同页单例**（C13-7）：面板 id = `hooksConfig-{activePageId}`，入口为侧栏右键菜单「打开 Hooks 配置」（SidebarTree：先切到目标页 → `openHooksConfigPanel(pageId)`，见 workspace/pageApis）命中 `getPanel(id)` 聚焦、未命中 addPanel；面板 props 兼容 Dockview（无需依赖 panelId 的单例语义）。
 
 ### Ctrl+C 保留为中断
 
