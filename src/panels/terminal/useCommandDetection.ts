@@ -9,6 +9,7 @@ import type { MutableRefObject } from "react";
 import type { Terminal } from "@xterm/xterm";
 import { tabTitleRegistry } from "./TabTitleRegistry";
 import type { TabState } from "./TabTitleRegistry";
+import { TerminalRegistry } from "./TerminalRegistry";
 
 /** OSC 133 命令边界检测 hook
  *
@@ -18,6 +19,7 @@ import type { TabState } from "./TabTitleRegistry";
  */
 export function useCommandDetection(
   terminal: Terminal | null,
+  panelId: string,
   onTabStateChange?: (state: TabState) => void,
   sharedCmdRunningRef?: MutableRefObject<boolean>,
 ): {
@@ -47,11 +49,15 @@ export function useCommandDetection(
         if (rule) {
           isCommandRunningRef.current = true;
           onTabStateChangeRef.current?.({ active: true, title: rule.title, icon: "🟡" });
+          // 写入 claude 会话状态（未注入 hooks 时无 transcriptPath，用量条不可用）
+          TerminalRegistry.setClaudeSession(panelId, { matchedCommand: rule.command });
         }
       } else if (type === "D" && isCommandRunningRef.current) {
         // OSC 133 D — 命令执行完毕
         isCommandRunningRef.current = false;
         onTabStateChangeRef.current?.({ active: false });
+        // 注册命令退出 → 清除 claude 会话行
+        TerminalRegistry.setClaudeSession(panelId, null);
       }
 
       // 返回 false 不消费序列，xterm.js 仍渲染提示符

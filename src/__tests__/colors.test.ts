@@ -37,6 +37,7 @@ import {
   ERROR_BANNER_BORDER,
   ERROR_BANNER_FG,
   ROOT_CSS_VARS,
+  AGENT_STATUS_USAGE_COLORS,
 } from "../theme";
 
 const HEX6_RE = /^#[0-9A-Fa-f]{6}$/;
@@ -194,6 +195,36 @@ describe("theme/colors.ts 配色 token", () => {
       expect(typeof SHADOW_MENU).toBe("string");
       expect(SHADOW_MENU.length).toBeGreaterThan(0);
     });
+  });
+
+  describe("AGENT_STATUS_USAGE_COLORS（Agent 用量条分段色）", () => {
+    it("包含 low / medium / high 三个 token", () => {
+      const keys = Object.keys(AGENT_STATUS_USAGE_COLORS);
+      expect(keys).toHaveLength(3);
+      expect(keys).toContain("low");
+      expect(keys).toContain("medium");
+      expect(keys).toContain("high");
+    });
+
+    const usageCases = [
+      { key: "low", expected: "#629755" },
+      { key: "medium", expected: "#BBB529" },
+      { key: "high", expected: "#F44747" },
+    ];
+
+    it.each(usageCases)(
+      "$key 值为合法 6 位 hex ($expected)",
+      ({ expected }: { expected: string }) => {
+        expect(expected).toMatch(HEX6_RE);
+      },
+    );
+
+    it.each(usageCases)(
+      "$key 值与预期一致",
+      ({ key, expected }: { key: string; expected: string }) => {
+        expect((AGENT_STATUS_USAGE_COLORS as Record<string, string>)[key]).toBe(expected);
+      },
+    );
   });
 
   describe("ROOT_CSS_VARS（CSS 变量桥接，FE-24）", () => {

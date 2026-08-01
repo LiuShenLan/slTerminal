@@ -31,6 +31,7 @@ vi.mock("../ipc/dialog", () => ({
 
 // 提供 dockview API
 beforeEach(() => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- 测试中 mock window 全局对象
   (window as any).__dockviewApi = {
     addPanel: vi.fn(),
     getPanel: vi.fn(),

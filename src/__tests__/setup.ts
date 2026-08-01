@@ -89,6 +89,35 @@ vi.mock("../ipc/notify", () => ({
   startWatch: () => Promise.resolve(),
 }));
 
+// 全局 mock：ipc/hooks（NotificationListener / useClaudeNotifications 依赖 onHookEvent）
+vi.mock("../ipc/hooks", () => ({
+  onHookEvent: () => () => {},
+  inject: () => Promise.resolve({ status: "notInjected", version: null }),
+  uninstall: () => Promise.resolve(),
+  getInjectionStatus: () => Promise.resolve({ status: "notInjected", version: null }),
+  contextUsage: () => Promise.resolve(null),
+}));
+
+// 全局 mock：@tauri-apps/api/window（App useEffect 中 getCurrentWindow/onFocusChanged 依赖）
+vi.mock("@tauri-apps/api/window", () => {
+  const UserAttentionType = { Critical: 1, Informational: 2 } as const;
+  const createMockWindow = () => ({
+    onFocusChanged: vi.fn().mockResolvedValue(() => {}),
+    requestUserAttention: vi.fn().mockResolvedValue(undefined),
+    setFocus: vi.fn().mockResolvedValue(undefined),
+  });
+  let mockWin: ReturnType<typeof createMockWindow> | null = null;
+  return {
+    UserAttentionType,
+    getCurrentWindow: vi.fn(() => {
+      if (!mockWin) mockWin = createMockWindow();
+      return mockWin;
+    }),
+    // 暴露测试辅助：重置 mock 窗口状态
+    __testResetWindow: () => { mockWin = null; },
+  };
+});
+
 // jsdom 缺少 crypto.getRandomValues（xterm.js 等库依赖）
 Object.defineProperty(window, 'crypto', {
   value: {

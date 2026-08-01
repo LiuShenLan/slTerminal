@@ -30,6 +30,37 @@ describe("TabTitleRegistry", () => {
       expect(registry.match("")).toBeNull();
     });
 
+    it("match 仅空白字符串返回 null", () => {
+      registry.register({ command: "claude", title: "claude", icon: "/icon.png" });
+      expect(registry.match("   ")).toBeNull();
+    });
+
+    it("首 token 匹配——claude --resume xxx 命中 claude 规则", () => {
+      registry.register({ command: "claude", title: "claude", icon: "/icon.png" });
+      const rule = registry.match("claude --resume abc123");
+      expect(rule).not.toBeNull();
+      expect(rule!.command).toBe("claude");
+    });
+
+    it("首 token 匹配——claude -p 'hello' 命中 claude 规则", () => {
+      registry.register({ command: "claude", title: "claude", icon: "/icon.png" });
+      const rule = registry.match("claude -p 'hello'");
+      expect(rule).not.toBeNull();
+      expect(rule!.command).toBe("claude");
+    });
+
+    it("首 token 匹配——前导空白 + 参数仍命中", () => {
+      registry.register({ command: "claude", title: "claude", icon: "/icon.png" });
+      const rule = registry.match("  claude --model opus");
+      expect(rule).not.toBeNull();
+      expect(rule!.command).toBe("claude");
+    });
+
+    it("首 token 无对应规则仍返回 null", () => {
+      registry.register({ command: "claude", title: "claude", icon: "/icon.png" });
+      expect(registry.match("npm install")).toBeNull();
+    });
+
     it("命令区分大小写（Claude !== claude）", () => {
       registry.register({ command: "claude", title: "claude", icon: "/icon.png" });
       expect(registry.match("Claude")).toBeNull();

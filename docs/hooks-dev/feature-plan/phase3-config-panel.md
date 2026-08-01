@@ -22,9 +22,12 @@
 
 **双模式同步规则**【推导默认】：
 
+- 两模式编辑对象均为 settings.json 的 **`hooks` 子树**（2026-07-31 拍板：后端 read-modify-write 合并写回，原样保留 `permissions`/`env` 等其他字段；其他字段用户用普通编辑器，见「明确不做」）
 - 任一模式的合法编辑立即反映到另一模式
 - JSON 模式内容**非法时禁止切换**到 GUI 模式并提示先修复——防止表单视图以残缺理解覆盖用户数据
 - 两模式共享同一份打开中的文件与脏状态，保存动作唯一
+- 配置文件损坏（JSON 语法错误）时面板显示错误态并拒绝加载——不在损坏文件上做合并（对齐 F2 注入的非法中止先例）
+- 外部修改轻量检测【2026-07-31 拍板】：切层 / 面板聚焦时重读，有未保存修改时提示；不做 fs-event 监听
 
 ### 编辑对象：三层配置【已确认 Q12】
 
@@ -43,7 +46,7 @@
 
 - CM6 编辑器 + JSON Schema 补全/校验（悬停文档、错误波浪线、属性自动补全）
 - Schema 来源：SchemaStore 官方 schema **内嵌打包**进 slTerminal【推导默认：离线可用；版本随 slTerminal 发布更新；D2 §9.5 已知 schema 同步滞后问题可接受】
-- 事件类型导航侧栏：30+ 事件按九大分组（会话生命周期/用户交互/工具调用/权限系统/通知/Agent 子代理/上下文压缩/环境变更/MCP 交互，D1 §1.1），点击跳转到对应 JSON 段落
+- 事件类型导航侧栏：30 事件按十大分组（以 `docs/hooks/D2/02-settings-json-schema.md` §4.5 为真值源；本文原「九大分组」表述 2026-07-31 修订——D1 为 7 组、D2 为 10 组，拍板采用 D2 十组完整映射），点击跳转到对应 JSON 段落
 - **matcher 实时测试工具**：输入 matcher 模式 + 工具名，即时显示命中/不命中及走了哪条匹配路径
 
 **matcher 语义**（测试工具必须严格按此实现，D2 §4.1）：
@@ -56,27 +59,32 @@
 | 大小写 | **敏感**——`"bash"` 不匹配 `Bash` | — |
 | FileChanged / StopFailure | 窄字符集（仅字母/数字/`_`/`\|`），其他字符强制走正则 | — |
 
+> 版本前提（2026-07-31 官方核实）：精确匹配中逗号/空格分隔需 claude v2.1.191+、连字符需 v2.1.195+；语义引擎注释中写明。
+
 ### GUI 表单模式
 
 **布局**：Master-Detail（JetBrains External Tools 模式）——左 = 事件分组列表（事件 → matcher 组 → handler 三级树），右 = 选中 handler 的专用表单 + 启停 checkbox。
 
-**5 种 handler 字段表单**（D2 §3，必填项标 \*）：
+**5 种 handler 字段表单**（2026-07-31 经官方文档核实修订——原表多处失实：command 不含 allowedEnvVars、http 无 method/body、mcp_tool 字段名是 `input` 非 `args`、agent 无 description/subagent_type；必填项标 \*）：
 
 | 类型 | 字段 |
 |------|------|
-| `command` | `command`\*、`args[]`、`async`、`asyncRewake`、`shell`、`timeout`、`if`、`allowedEnvVars[]` |
-| `http` | `url`\*、`method`、`headers{}`、`body`、`timeout`、`allowedEnvVars[]` |
-| `mcp_tool` | `server`\*、`tool`\*、`args{}`、`timeout` |
-| `prompt` | `prompt`\*、`timeout` |
-| `agent` | `prompt`\*、`description`、`subagent_type`、`model`（sonnet/opus/haiku/fable）、`timeout` |
+| `command` | `command`\*、`args[]`、`async`、`asyncRewake`、`shell` + 通用字段 |
+| `http` | `url`\*`、headers{}`、`allowedEnvVars[]` + 通用字段（固定 POST，body 恒为事件 JSON，无 method/body 字段） |
+| `mcp_tool` | `server`\*`、tool`\*`、`input{}` + 通用字段 |
+| `prompt` | `prompt`\*`、model`、`continueOnBlock` + 通用字段 |
+| `agent` | `prompt`\*`、model` + 通用字段 |
+| 通用字段 | `if`（仅工具事件求值）、`timeout`、`statusMessage`、`once`（仅 skill frontmatter 生效，settings.json 中忽略，GUI 不展示） |
 
-**事件 → handler 支持矩阵**（D1 §1.2，表单必须约束可选类型）：
+**事件 → handler 支持矩阵**（2026-07-31 经官方文档核实为真，表单必须约束可选类型）：
 
 | 事件 | 支持的 handler 类型 |
 |------|--------------------|
-| Notification、SessionEnd、PreCompact、PostCompact | command、http、mcp_tool |
+| Notification、SessionEnd、PreCompact、PostCompact、ConfigChange、CwdChanged、Elicitation、ElicitationResult、FileChanged、InstructionsLoaded、StopFailure、SubagentStart、WorktreeCreate、WorktreeRemove | command、http、mcp_tool |
 | SessionStart、Setup | command、mcp_tool |
-| 其余全部 | 5 种全支持 |
+| 其余 13 事件（PreToolUse、PostToolUse、PostToolUseFailure、PostToolBatch、PermissionRequest、PermissionDenied、UserPromptSubmit、UserPromptExpansion、Stop、SubagentStop、TaskCreated、TaskCompleted、TeammateIdle） | 5 种全支持 |
+
+另：**不支持 matcher 的事件**（GUI 省略 matcher 输入、保存时省略 `matcher` 键但保留数组包裹）：UserPromptSubmit、PostToolBatch、Stop、TeammateIdle、TaskCreated、TaskCompleted、WorktreeCreate、WorktreeRemove、MessageDisplay、CwdChanged。
 
 **单条启停开关**【已确认 Q13，详见 ADR-0002】：
 
@@ -96,6 +104,8 @@
 
 一键注入/卸载按钮**并入本面板**（阶段 1 的临时入口迁移至此；面板内同时显示当前注入状态：已注入/未注入/版本过旧）【推导默认】。
 
+**注入段保护**【2026-07-31 拍板】：slTerminal 自己注入的 hook 条目（`command` 含 `slterm-hook-reporter`）在 GUI 中标记「slTerminal 托管」并**禁删/禁禁用**，防止用户误操作静默破坏 F2 注入；JSON 模式不限制（用户对自己的配置文件有最终权利）；面板内执行注入/卸载后自动重读 user 层配置。E2E 注入 helpers（`__slterm_e2e_injectHooks` 等）保留，供 L4 注入用例使用。
+
 ### 明确不做
 
 - 社区模板库（一键插入预设 hook）【已确认排除】
@@ -111,8 +121,8 @@
 3. 双模式：GUI 新增一条 → 切 JSON 可见对应段落；JSON 改非法 → 禁止切回 GUI
 4. 三层切换：user 层写入的配置与 project 层互不干扰，优先级标注可见
 5. 启停：禁用一条 hook → settings.json 中该条目消失 + slTerminal 侧记录存在 + UI 提示可见；重新启用 → 条目回到原位置
-6. 保存安全：改坏 JSON 保存被拒；保存成功出现"需重启 claude 会话生效"提示
-7. F2 并入：面板内可完成注入/卸载，注入状态可见
+6. 保存安全：改坏 JSON 保存被拒；保存成功出现"需重启 claude 会话生效"提示；保存后 `hooks` 之外字段（permissions/env 等）原样保留
+7. F2 并入：面板内可完成注入/卸载，注入状态可见；slterm 注入条目在 GUI 标记「slTerminal 托管」且禁删/禁禁用
 
 ## 阶段 3 验收（端到端）
 

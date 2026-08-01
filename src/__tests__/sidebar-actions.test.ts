@@ -12,21 +12,29 @@ const mocks = vi.hoisted(() => {
   const mockSwitchToPage = vi.fn();
   const mockOnDeletePage = vi.fn();
   const mockOpenDialog = vi.fn();
+  const mockOpenHooksConfigPanel = vi.fn();
 
   return {
     mockSwitchToPage,
     mockOnDeletePage,
     mockOpenDialog,
+    mockOpenHooksConfigPanel,
     resetAll() {
       mockSwitchToPage.mockClear();
       mockOnDeletePage.mockClear();
       mockOpenDialog.mockClear();
+      mockOpenHooksConfigPanel.mockClear();
     },
   };
 });
 
 vi.mock("../ipc/dialog", () => ({
   open: mocks.mockOpenDialog,
+}));
+
+// mock workspace/pageApis——SidebarTree 新增「打开 Hooks 配置」菜单 action 依赖 openHooksConfigPanel
+vi.mock("../workspace/pageApis", () => ({
+  openHooksConfigPanel: mocks.mockOpenHooksConfigPanel,
 }));
 
 // 导入真实 stores + SidebarTree（在 IPC mock 之后）
@@ -563,6 +571,81 @@ describe("侧栏交互", () => {
       const project = useProjects.getState().projects["proj-1"];
       const newPage = project.pages[2];
       expect(newPage.name).toMatch(/^页面-\d+$/);
+    });
+  });
+
+  describe("打开 Hooks 配置（侧栏右键菜单入口）", () => {
+    it("T17: 操作页面右键菜单含'打开 Hooks 配置'", () => {
+      populateStore();
+      const { getAllByText } = renderSidebar();
+      fireEvent.contextMenu(getAllByText("操作页面 1")[0]);
+      expect(getAllByText("打开 Hooks 配置").length).toBeGreaterThan(0);
+    });
+
+    it("T18: 点击页面行'打开 Hooks 配置'→ 先 switchToPage 再 openHooksConfigPanel", async () => {
+      populateStore();
+      const { getAllByText } = renderSidebar();
+      fireEvent.contextMenu(getAllByText("操作页面 1")[0]);
+      fireEvent.click(getAllByText("打开 Hooks 配置")[0]);
+      // action 为 fire-and-forget 异步——等待两个 mock 都被调用
+      await waitFor(() => expect(mocks.mockOpenHooksConfigPanel).toHaveBeenCalled());
+      expect(mocks.mockSwitchToPage).toHaveBeenCalledWith("proj-1", "page-1");
+      expect(mocks.mockOpenHooksConfigPanel).toHaveBeenCalledWith("page-1");
+      // 顺序契约：先切页后开面板（面板须活跃页打开，rootPath 推导依赖 activePageId）
+      expect(mocks.mockSwitchToPage.mock.invocationCallOrder[0]).toBeLessThan(
+        mocks.mockOpenHooksConfigPanel.mock.invocationCallOrder[0],
+      );
+    });
+
+    it("T19: 项目右键菜单含'打开 Hooks 配置'", () => {
+      populateStore();
+      const { getAllByText } = renderSidebar();
+      fireEvent.contextMenu(getAllByText("测试项目")[0]);
+      expect(getAllByText("打开 Hooks 配置").length).toBeGreaterThan(0);
+    });
+
+    it("T20: 项目有页面→点击'打开 Hooks 配置'→切到 pages[0]（page-1）后开面板", async () => {
+      populateStore();
+      const { getAllByText } = renderSidebar();
+      fireEvent.contextMenu(getAllByText("测试项目")[0]);
+      fireEvent.click(getAllByText("打开 Hooks 配置")[0]);
+      await waitFor(() => expect(mocks.mockOpenHooksConfigPanel).toHaveBeenCalled());
+      // pages[0] 约定：切 page-1 而非 page-2
+      expect(mocks.mockSwitchToPage).toHaveBeenCalledWith("proj-1", "page-1");
+      expect(mocks.mockOpenHooksConfigPanel).toHaveBeenCalledWith("page-1");
+    });
+
+    it("T21: 项目无页面→点击'打开 Hooks 配置'→新建页+切新页+开面板", async () => {
+      // 种子：项目无操作页面
+      useProjects.setState({
+        projects: {
+          "proj-1": {
+            projectId: "proj-1",
+            name: "测试项目",
+            rootPath: "C:\\test",
+            pages: [],
+            activePageId: null,
+            version: 1,
+          },
+        },
+        expandedNodes: { "proj-1": true },
+        deletionLock: { pendingDelete: null, acquiredAt: null },
+      });
+      useLayout.setState({ activePageId: null });
+      const { getAllByText } = renderSidebar();
+      fireEvent.contextMenu(getAllByText("测试项目")[0]);
+      fireEvent.click(getAllByText("打开 Hooks 配置")[0]);
+      await waitFor(() => expect(mocks.mockOpenHooksConfigPanel).toHaveBeenCalled());
+      // 新建页：pages 1、默认名、空布局、cwd 继承 rootPath
+      const proj = useProjects.getState().projects["proj-1"];
+      expect(proj.pages.length).toBe(1);
+      const newPage = proj.pages[0];
+      expect(newPage.name).toMatch(/^页面-\d+$/);
+      expect(newPage.layout).toEqual({});
+      expect(newPage.cwd).toBe("C:\\test");
+      // 切到新建页 → 开面板
+      expect(mocks.mockSwitchToPage).toHaveBeenCalledWith("proj-1", newPage.pageId);
+      expect(mocks.mockOpenHooksConfigPanel).toHaveBeenCalledWith(newPage.pageId);
     });
   });
 });

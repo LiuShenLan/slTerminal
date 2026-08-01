@@ -1,5 +1,9 @@
 // claudeStatus.ts — 四态类型定义、emoji 常量、事件→状态纯函数
 // 状态机完整表见 docs/hooks-dev/feature-plan/phase1-status-core.md F3 节
+//
+// 已知行为假设（无法自动化验证）：
+// - Ctrl+C 用户主动中断不发射任何 hook 事件（Stop=完成响应、StopFailure=API 错误），
+//   working(⚡) 无中断出边为预期行为，依赖下一事件覆盖或 idle_prompt(~60s) 衰减转 🟡
 
 /** Claude 会话状态 */
 export type ClaudeStatus = "working" | "attention" | "done" | "error" | null;
@@ -11,6 +15,15 @@ export const STATUS_EMOJI: Record<Exclude<ClaudeStatus, null>, string> = {
   done: "✅",
   error: "❌",
 };
+
+/**
+ * 根据 ClaudeStatus 返回对应 emoji 图标。
+ * null 状态返回空字符串（无图标），未识别状态也返回空字符串。
+ */
+export function getStatusIcon(status: ClaudeStatus): string {
+  if (status === null) return "";
+  return STATUS_EMOJI[status] ?? "";
+}
 
 /** Notification 事件中需要用户处理的子类型 */
 const ATTENTION_NOTIFICATION_TYPES = new Set([

@@ -18,6 +18,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `e2eEnabled.ts` | E2E helper 注入总开关：`E2E_ENABLED` 常量 + `computeE2eEnabled` 纯函数 |
 | `injectScript.ts` | HTML 脚本注入纯函数：`injectScript(html, script, marker)` 向 HTML 字符串的 `</head>`/`<body` 前插入脚本，幂等（marker 检测），大小写不敏感，供 HtmlPanel 键盘转发 |
 | `claudeStatus.ts` | 四态映射单点：`ClaudeStatus` 类型（`working`/`attention`/`done`/`error`）+ `STATUS_EMOJI` 常量（⚡🟡✅❌）+ `eventToStatus(event, notificationType?)` 纯函数（F3 状态机） |
+| `panelId.ts` | 终端 panelId 解析单点：`parseTerminalPageId(panelId)` → pageId \| null（≥3 段 + 首段 `terminal` + 末段全数字） |
 
 ## e2eEnabled.ts — E2E 门控单一真值源
 
@@ -48,14 +49,18 @@ export const E2E_ENABLED =
 
 ## 测试模式
 
-测试文件：`src/__tests__/path.test.ts`（27 用例）。
+测试文件：`src/__tests__/path.test.ts`（27 用例）、`src/__tests__/panelId.test.ts`（5 用例）。
 
-### 纯函数测试
+### path.test.ts
 
 - **无 mock、无 jsdom、无 React**：纯数据转换，直接调用断言
 - **每函数独立 describe**：`normalizePath`/`basename`/`isChildOf`/`relativePath` 各一个 `describe` 块
 - **边界覆盖**：空字符串、`null`/`undefined`、正斜杠 vs 反斜杠、不同盘符、同名前缀、结尾斜杠
 - **对应关系**：测试用例参照 `path.ts` 路径规范表格中的示例编写
+
+### panelId.test.ts
+
+纯函数测试：`parseTerminalPageId` 全分支——正常解析（`terminal-page1-0`→`"page1"`）、含连字符 pageId（`terminal-my-page-2`→`"my-page"`）、尾段非数字→null、非 terminal 前缀→null、两段→null。
 
 ### 通用模式
 

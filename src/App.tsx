@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { registerCloseHandler } from "./ipc/window";
+import { registerCloseHandler, onFocusChanged, requestUserAttention } from "./ipc/window";
 import { Workspace } from "./workspace";
 import {
   loadAllProjects, markPersistenceReady, saveAllProjects, cancelPendingSave,
@@ -18,6 +18,7 @@ import { getShortcutRegistry, createGlobalShortcuts, wireKeybindings } from "./f
 import { createTerminalShortcuts } from "./panels/terminal/keyboard";
 import { createEditorShortcuts } from "./panels/editor/keyboard";
 import { createExplorerShortcuts } from "./features/explorer/keyboard";
+import { NotificationListener } from "./features/notifications";
 import { PANEL_BG, INPUT_BORDER, APP_BG } from "./theme";
 import "dockview-react/dist/styles/dockview.css";
 
@@ -174,6 +175,19 @@ function App() {
     return wireKeybindings(getShortcutRegistry(), useKeybindings);
   }, []);
 
+  // P2-FE-04：窗口焦点监听——供通知调度门控使用
+  useEffect(() => {
+    // 初始状态：窗口刚启动时认为有焦点
+    window.__slterm_windowFocused = true;
+    return onFocusChanged((focused) => {
+      window.__slterm_windowFocused = focused;
+      // P2-FE-05：窗口恢复焦点时停止任务栏闪烁
+      if (focused) {
+        requestUserAttention(null).catch(() => {});
+      }
+    });
+  }, []);
+
   if (!ready) {
     return (
       <ErrorBoundary>
@@ -200,6 +214,7 @@ function App() {
     <ErrorBoundary>
       <div style={{ width: "100vw", height: "100vh", background: APP_BG }}>
         <Workspace />
+        <NotificationListener />
       </div>
     </ErrorBoundary>
   );

@@ -915,17 +915,23 @@ describe('侧栏视图', () => {
       { timeout: 10000, timeoutMsg: '活动栏按钮未渲染' },
     );
 
-    // 3. 将侧栏重置为已知状态（持久化残留 / 前序测试副作用可能导致非默认状态）
+    // 3. 将侧栏重置为已知状态（FIX-TE-04：完整 zones+open 重置，覆盖持久化残留 / 前序副作用）
     await browser.execute(() => {
+      const move = (window as any).__slterm_e2e_moveSideViewButton;
       const toggle = (window as any).__slterm_e2e_toggleSideView;
       const getState = (window as any).__slterm_e2e_getSideBarState;
-      if (typeof toggle !== 'function' || typeof getState !== 'function') return;
-      const s = getState();
-      // 关闭 bottom 区已打开视图
+      if (typeof move !== 'function' || typeof toggle !== 'function') return;
+
+      // 所有按钮归位 top 区对应序位：projects(0) / explorer(1) / commit(2) / agent-status(3)
+      move('projects', 'top', 0);
+      move('explorer', 'top', 1);
+      move('commit', 'top', 2);
+      move('agent-status', 'top', 3);
+
+      // open 重置为 projects 打开、bottom 关闭
+      const s = getState?.();
       if (s?.open.bottom) toggle(s.open.bottom);
-      // 关闭 top 区非 projects 视图
       if (s?.open.top && s.open.top !== 'projects') toggle(s.open.top);
-      // 若 top 为空则打开 projects
       if (!s?.open.top) toggle('projects');
     });
 
@@ -1024,14 +1030,24 @@ describe('侧栏视图', () => {
       { timeout: 10000, timeoutMsg: '活动栏按钮未渲染' },
     );
 
-    // 3. 将侧栏重置为已知状态（避免持久化残留影响拖拽前的 open 预期）
+    // 3. 将侧栏重置为已知状态（FIX-TE-04：完整 zones+open 重置，避免持久化残留影响拖拽前的预期）
     await browser.execute(() => {
+      const move = (window as any).__slterm_e2e_moveSideViewButton;
       const toggle = (window as any).__slterm_e2e_toggleSideView;
       const getState = (window as any).__slterm_e2e_getSideBarState;
-      if (typeof toggle !== 'function' || typeof getState !== 'function') return;
-      const s = getState();
+      if (typeof move !== 'function' || typeof toggle !== 'function') return;
+
+      // 所有按钮归位 top 区对应序位：projects(0) / explorer(1) / commit(2) / agent-status(3)
+      move('projects', 'top', 0);
+      move('explorer', 'top', 1);
+      move('commit', 'top', 2);
+      move('agent-status', 'top', 3);
+
+      // open 重置为 explorer 打开、bottom 关闭
+      const s = getState?.();
       if (s?.open.bottom) toggle(s.open.bottom);
-      if (s?.open.top && s.open.top !== 'projects') toggle(s.open.top);
+      if (s?.open.top && s.open.top !== 'explorer') toggle(s.open.top);
+      if (!s?.open.top) toggle('explorer');
     });
 
     // 4. 验证初始 zones：explorer 在上区
@@ -1507,6 +1523,1065 @@ describe('hooks 状态可视化', () => {
       }
       // 清理临时目录
       try { rmSync(tempDir, { recursive: true, force: true }); } catch { /* 忽略 */ }
+    }
+  });
+});
+
+// ── Agent Status 视图与 toast 通知（P2-TE-06） ──
+
+describe('Agent Status 视图与 toast 通知', () => {
+  /**
+   * 用例 1：Agent Status 视图存在性验证。
+   * 通过 __slterm_e2e_toggleSideView("agent-status") 打开视图，
+   * 断言侧栏槽位 sidebar-slot-top-agent-status 可见 + AGENT STATUS 标题栏渲染。
+   */
+  it('Agent Status 视图可通过活动栏按钮打开', async () => {
+    // 0. 等待 Workspace 就绪
+    await browser.waitUntil(
+      async () => await browser.execute(() => (window as any).__slterm_e2e_workspaceReady === true),
+      { timeout: 15000, timeoutMsg: 'Workspace 未就绪' },
+    );
+
+    // 1. 创建测试项目
+    await browser.execute(() => {
+      (window as any).__slterm_e2e_createProject?.('C:\\e2e-agent-status');
+    });
+
+    // 2. 等待活动栏按钮渲染（agent-status 在 DEFAULT_ZONES.top 中，按钮始终存在）
+    await browser.waitUntil(
+      async () => await browser.execute(() => {
+        return !!document.querySelector('[data-e2e="activity-btn-agent-status"]');
+      }),
+      { timeout: 10000, timeoutMsg: 'agent-status 活动栏按钮未渲染' },
+    );
+
+    // 3. 重置侧栏为已知状态（避免持久化残留导致 open.top 已有其他视图）
+    await browser.execute(() => {
+      const toggle = (window as any).__slterm_e2e_toggleSideView;
+      const getState = (window as any).__slterm_e2e_getSideBarState;
+      if (typeof toggle !== 'function' || typeof getState !== 'function') return;
+      const s = getState();
+      // 关闭 top 区非 agent-status 的视图
+      if (s?.open.top && s.open.top !== 'agent-status') toggle(s.open.top);
+      // 若 top 为空则打开 agent-status
+      if (!s?.open.top) toggle('agent-status');
+    });
+
+    // 4. 断言 open.top === "agent-status"（toggle 已生效）
+    const sideBarState = await browser.execute(() => {
+      const fn = (window as any).__slterm_e2e_getSideBarState;
+      return typeof fn === 'function' ? fn() : null;
+    });
+    expect(sideBarState).not.toBeNull();
+    expect(sideBarState!.open.top).toBe('agent-status');
+
+    // 5. 断言侧栏槽位存在且可见（display !== "none"）
+    const slotVisible = await browser.execute(() => {
+      const slot = document.querySelector('[data-e2e="sidebar-slot-top-agent-status"]');
+      if (!slot) return false;
+      const style = window.getComputedStyle(slot);
+      return style.display !== 'none';
+    });
+    expect(slotVisible).toBe(true);
+
+    // 6. 断言 agent-status-view 存在（AgentStatusView 已挂载）
+    const viewExists = await browser.execute(() => {
+      return !!document.querySelector('[data-e2e="agent-status-view"]');
+    });
+    expect(viewExists).toBe(true);
+
+    // 7. 断言 "AGENT STATUS" 标题栏文本存在
+    const headerText = await browser.execute(() => {
+      const view = document.querySelector('[data-e2e="agent-status-view"]');
+      return view?.textContent ?? '';
+    });
+    expect(headerText).toContain('AGENT STATUS');
+
+    // 8. 断言初始态为空态或 no-root 提示（此时无终端面板）
+    const hasHint = await browser.execute(() => {
+      const text = document.querySelector('[data-e2e="agent-status-view"]')?.textContent ?? '';
+      return text.includes('选择一个项目') || text.includes('无运行中的 claude 会话');
+    });
+    expect(hasHint).toBe(true);
+  });
+
+  /**
+   * 用例 2a：Agent Status 纯 shell 终端无行（行建模改后语义——仅 claudeSession 非 null 才建行）。
+   *
+   * 原理：useAgentStatus 初始扫描只建 claudeSession 非 null 的行。
+   * 纯 shell 终端（未运行 claude、未注入 hooks）的 claudeSession 为 null，
+   * 因此 agent-status-row 不出现。用例 1 空态文案断言保留作回归。
+   */
+  it('Agent Status 纯 shell 终端无行（行建模新语义——不自动建行）', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'slterm-e2e-agent-pureshell-'));
+    try {
+      // 0a. Workspace 就绪
+      await browser.waitUntil(
+        async () => await browser.execute(() => (window as any).__slterm_e2e_workspaceReady === true),
+        { timeout: 15000 },
+      );
+
+      // 0b. 创建项目 → 获取 pageId
+      const pageId = await browser.execute((dir: string) => {
+        return (window as any).__slterm_e2e_createProject?.(dir);
+      }, tempDir);
+
+      // 0c. Dockview API
+      await browser.waitUntil(
+        async () => await browser.execute(() => typeof window.__dockviewApi !== 'undefined'),
+        { timeout: 20000 },
+      );
+
+      // 1. 创建终端面板（纯 shell——不注入 hooks、不运行 claude，claudeSession 为 null）
+      const panelId = `terminal-${pageId}-0`;
+      await browser.execute((pid: string) => {
+        window.__dockviewApi!.addPanel({
+          id: pid,
+          component: 'terminal',
+          params: { panelId: pid },
+          renderer: 'always' as const,
+        });
+      }, panelId);
+
+      // 2. 等待 PTY session 就绪（TerminalRegistry 注册）
+      await browser.waitUntil(
+        async () => await browser.execute(() => {
+          const containers = document.querySelectorAll('[data-e2e="terminal-container"]');
+          for (const c of containers) {
+            if ((c as any).__e2e_sessionReady) return true;
+          }
+          return false;
+        }),
+        { timeout: 25000 },
+      );
+
+      // 3. 打开 agent-status 视图
+      await browser.execute(() => {
+        (window as any).__slterm_e2e_toggleSideView?.('agent-status');
+      });
+
+      // 4. 短暂等待以确保 useAgentStatus 初始扫描完成（约 500ms 足够）
+      await browser.pause(500);
+
+      // 5. 断言 agent-status-row 不存在——纯 shell 终端的 claudeSession 为 null，不建行
+      const rowExists = await browser.execute(() => {
+        return !!document.querySelector('[data-e2e="agent-status-row"]');
+      });
+      expect(rowExists).toBe(false);
+
+      // 6. 断言空态或 no-root 提示文案存在（用例 1 回归——纯 shell 项目应显示空态）
+      const hasHint = await browser.execute(() => {
+        const text = document.querySelector('[data-e2e="agent-status-view"]')?.textContent ?? '';
+        return text.includes('选择一个项目') || text.includes('无运行中的 claude 会话');
+      });
+      expect(hasHint).toBe(true);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * 用例 2b：Agent Status 动态四态——Node 端原子写信号文件驱动状态流转。
+   *
+   * 查询方式：DOM 中 [data-e2e="agent-status-row"] 的 textContent（AgentStatusRow
+   * 将 emoji 渲染为 <span>⚡</span> 等）。
+   *
+   * 流程：
+   * 1. 确保 hooks 已注入
+   * 2. 创建测试项目 + 终端面板（panelId = terminal-{pageId}-0）
+   * 3. 确保 ~/.slterminal/hooks-events/ 存在
+   * 4. 原子写 PreToolUse 信号文件（.tmp → rename .json）→ 轮询行含 ⚡
+   * 5. 原子写 Stop 信号文件 → 轮询行含 ✅
+   * 6. 原子写 SessionEnd 信号文件 → 轮询行消失
+   * 7. 清理信号文件 + 临时目录
+   */
+  it('Agent Status 动态四态（PreToolUse→⚡, Stop→✅, SessionEnd→行消失）', async () => {
+    const eventsDir = join(homedir(), '.slterminal', 'hooks-events');
+    const tempDir = mkdtempSync(join(tmpdir(), 'slterm-e2e-agent-dyn-'));
+    const signalFiles: string[] = [];
+
+    try {
+      // 0a. Workspace 就绪
+      await browser.waitUntil(
+        async () => await browser.execute(() => (window as any).__slterm_e2e_workspaceReady === true),
+        { timeout: 15000, timeoutMsg: 'Workspace 未就绪' },
+      );
+
+      // 0b. 确保 hooks 已注入
+      await browser.execute(() => (window as any).__slterm_e2e_injectHooks?.());
+      await browser.waitUntil(
+        async () => {
+          const s = await browser.execute(() =>
+            (window as any).__slterm_e2e_getHookInjectionStatus?.(),
+          );
+          return s?.status === 'injected';
+        },
+        { timeout: 15000, timeoutMsg: 'hooks 未在创建终端前完成注入' },
+      );
+
+      // 0c. 创建项目 → 获取 pageId
+      const pageId = await browser.execute((dir: string) => {
+        return (window as any).__slterm_e2e_createProject?.(dir);
+      }, tempDir);
+
+      // 0d. Dockview API
+      await browser.waitUntil(
+        async () => await browser.execute(() => typeof window.__dockviewApi !== 'undefined'),
+        { timeout: 20000, timeoutMsg: 'Dockview API 未就绪' },
+      );
+
+      // 1. 创建终端面板
+      const panelId = `terminal-${pageId}-0`;
+      await browser.execute((pid: string) => {
+        window.__dockviewApi!.addPanel({
+          id: pid,
+          component: 'terminal',
+          params: { panelId: pid },
+          renderer: 'always' as const,
+        });
+      }, panelId);
+
+      // 2. 等待 PTY session 就绪
+      await browser.waitUntil(
+        async () => await browser.execute(() => {
+          const containers = document.querySelectorAll('[data-e2e="terminal-container"]');
+          for (const c of containers) {
+            if ((c as any).__e2e_sessionReady) return true;
+          }
+          return false;
+        }),
+        { timeout: 25000, timeoutMsg: 'PTY session 未就绪' },
+      );
+
+      // 3. 打开 agent-status 视图
+      await browser.execute(() => {
+        (window as any).__slterm_e2e_toggleSideView?.('agent-status');
+      });
+
+      // 4. 确保信号目录存在
+      mkdirSync(eventsDir, { recursive: true });
+
+      // 5. 原子写 PreToolUse 信号文件 → 断言行出现 ⚡（行建模改后首个 hook 事件即建行）
+      const preToolPayload = {
+        panelId,
+        event: 'PreToolUse',
+        timestamp: Date.now(),
+        sessionId: 'e2e-agent-dyn',
+        transcriptPath: '',
+        cwd: tempDir,
+        toolName: 'Bash',
+        notificationType: null,
+      };
+      const preToolFileName = `${panelId}-PreToolUse-${Date.now()}.json`;
+      const preToolTmpPath = join(eventsDir, preToolFileName + '.tmp');
+      const preToolFilePath = join(eventsDir, preToolFileName);
+      writeFileSync(preToolTmpPath, JSON.stringify(preToolPayload), 'utf8');
+      renameSync(preToolTmpPath, preToolFilePath);
+      signalFiles.push(preToolFilePath);
+
+      await browser.waitUntil(
+        async () => await browser.execute(() => {
+          const row = document.querySelector('[data-e2e="agent-status-row"]');
+          return row?.textContent?.includes('⚡') ?? false;
+        }),
+        { timeout: 15000, timeoutMsg: 'agent-status-row 未在 PreToolUse 后含 ⚡' },
+      );
+
+      // 6. 原子写 Stop 信号文件 → 断言行出现 ✅
+      const stopPayload = {
+        panelId,
+        event: 'Stop',
+        timestamp: Date.now(),
+        sessionId: 'e2e-agent-dyn',
+        transcriptPath: '',
+        cwd: tempDir,
+        toolName: null,
+        notificationType: null,
+      };
+      const stopFileName = `${panelId}-Stop-${Date.now()}.json`;
+      const stopTmpPath = join(eventsDir, stopFileName + '.tmp');
+      const stopFilePath = join(eventsDir, stopFileName);
+      writeFileSync(stopTmpPath, JSON.stringify(stopPayload), 'utf8');
+      renameSync(stopTmpPath, stopFilePath);
+      signalFiles.push(stopFilePath);
+
+      await browser.waitUntil(
+        async () => await browser.execute(() => {
+          const row = document.querySelector('[data-e2e="agent-status-row"]');
+          return row?.textContent?.includes('✅') ?? false;
+        }),
+        { timeout: 15000, timeoutMsg: 'agent-status-row 未在 Stop 后含 ✅' },
+      );
+
+      // 7. 原子写 SessionEnd 信号文件 → 断言行消失
+      const endPayload = {
+        panelId,
+        event: 'SessionEnd',
+        timestamp: Date.now(),
+        sessionId: 'e2e-agent-dyn',
+        transcriptPath: '',
+        cwd: tempDir,
+        toolName: null,
+        notificationType: null,
+      };
+      const endFileName = `${panelId}-SessionEnd-${Date.now()}.json`;
+      const endTmpPath = join(eventsDir, endFileName + '.tmp');
+      const endFilePath = join(eventsDir, endFileName);
+      writeFileSync(endTmpPath, JSON.stringify(endPayload), 'utf8');
+      renameSync(endTmpPath, endFilePath);
+      signalFiles.push(endFilePath);
+
+      await browser.waitUntil(
+        async () => await browser.execute((pid: string) => {
+          const row = document.querySelector('[data-e2e="agent-status-row"]');
+          // 行消失 或 同 panelId 行不存在
+          if (!row) return true;
+          return row.getAttribute('data-panel-id') !== pid;
+        }, panelId),
+        { timeout: 15000, timeoutMsg: 'agent-status-row 未在 SessionEnd 后消失' },
+      );
+    } finally {
+      // 清理信号文件
+      for (const f of signalFiles) {
+        try { rmSync(f, { force: true }); } catch { /* 忽略 */ }
+      }
+      // 清理临时目录
+      try { rmSync(tempDir, { recursive: true, force: true }); } catch { /* 忽略 */ }
+    }
+  });
+
+  /**
+   * 用例 2c（R2 变体）：切项目往返后用量保持。
+   *
+   * 验证：假 transcript JSONL（含 message.usage 四字段）→ 信号文件携真实
+   * transcriptPath 建行 → contextUsage 后端真实解析 → 行含量化百分比 →
+   * 切项目往返（addPage → switchToPage → switchToPage 回）→ 用量数值保持。
+   * L4 级覆盖：cache 口径全链路（后端 hooks_context_usage 真实解析，非 mock）。
+   */
+  it('R2 变体：切项目往返后用量保持（contextUsage 全链路 + cache 字段）', async () => {
+    const eventsDir = join(homedir(), '.slterminal', 'hooks-events');
+    const tempDir = mkdtempSync(join(tmpdir(), 'slterm-e2e-agent-r2-'));
+    const signalFiles: string[] = [];
+
+    try {
+      // 0a. Workspace 就绪
+      await browser.waitUntil(
+        async () => await browser.execute(() => (window as any).__slterm_e2e_workspaceReady === true),
+        { timeout: 15000, timeoutMsg: 'Workspace 未就绪' },
+      );
+
+      // 0b. 确保 hooks 已注入
+      await browser.execute(() => (window as any).__slterm_e2e_injectHooks?.());
+      await browser.waitUntil(
+        async () => {
+          const s = await browser.execute(() =>
+            (window as any).__slterm_e2e_getHookInjectionStatus?.(),
+          );
+          return s?.status === 'injected';
+        },
+        { timeout: 15000, timeoutMsg: 'hooks 未在创建终端前完成注入' },
+      );
+
+      // 0c. 写假 transcript JSONL——含 message.usage 四字段
+      //     input=30000 + cacheRead=50000 + cacheCreation=20000 = 100000 / 200000 = 50%
+      const transcriptDir = join(tempDir, '.claude', 'transcripts');
+      mkdirSync(transcriptDir, { recursive: true });
+      const transcriptPath = join(transcriptDir, 'e2e-r2-transcript.jsonl');
+      const usageLine = JSON.stringify({
+        message: {
+          usage: {
+            input_tokens: 30000,
+            output_tokens: 1000,
+            cache_read_input_tokens: 50000,
+            cache_creation_input_tokens: 20000,
+          },
+        },
+      });
+      writeFileSync(transcriptPath, usageLine + '\n', 'utf8');
+
+      // 0d. 创建项目 → 获取 pageId
+      const page1Id = await browser.execute((dir: string) => {
+        return (window as any).__slterm_e2e_createProject?.(dir);
+      }, tempDir);
+
+      // 0e. Dockview API
+      await browser.waitUntil(
+        async () => await browser.execute(() => typeof window.__dockviewApi !== 'undefined'),
+        { timeout: 20000, timeoutMsg: 'Dockview API 未就绪' },
+      );
+
+      // 1. 创建终端面板
+      const panelId = `terminal-${page1Id}-0`;
+      await browser.execute((pid: string) => {
+        window.__dockviewApi!.addPanel({
+          id: pid,
+          component: 'terminal',
+          params: { panelId: pid },
+          renderer: 'always' as const,
+        });
+      }, panelId);
+
+      // 2. 等待 PTY session 就绪
+      await browser.waitUntil(
+        async () => await browser.execute(() => {
+          const containers = document.querySelectorAll('[data-e2e="terminal-container"]');
+          for (const c of containers) {
+            if ((c as any).__e2e_sessionReady) return true;
+          }
+          return false;
+        }),
+        { timeout: 25000, timeoutMsg: 'PTY session 未就绪' },
+      );
+
+      // 3. 打开 agent-status 视图
+      await browser.execute(() => {
+        (window as any).__slterm_e2e_toggleSideView?.('agent-status');
+      });
+
+      // 4. 断言纯 shell 无行
+      await browser.pause(500);
+      let rowExists = await browser.execute(() => {
+        return !!document.querySelector('[data-e2e="agent-status-row"]');
+      });
+      expect(rowExists).toBe(false);
+
+      // 5. 确保信号目录存在
+      mkdirSync(eventsDir, { recursive: true });
+
+      // 6. 原子写 PreToolUse 信号文件——携真实 transcriptPath 建行 + usage 拉取
+      const preToolPayload = {
+        panelId,
+        event: 'PreToolUse',
+        timestamp: Date.now(),
+        sessionId: 'e2e-agent-r2',
+        transcriptPath, // 真实 transcript 路径 → contextUsage 后端解析
+        cwd: tempDir,
+        toolName: 'Bash',
+        notificationType: null,
+      };
+      const preToolFileName = `${panelId}-PreToolUse-${Date.now()}.json`;
+      const preToolTmpPath = join(eventsDir, preToolFileName + '.tmp');
+      const preToolFilePath = join(eventsDir, preToolFileName);
+      writeFileSync(preToolTmpPath, JSON.stringify(preToolPayload), 'utf8');
+      renameSync(preToolTmpPath, preToolFilePath);
+      signalFiles.push(preToolFilePath);
+
+      // 7. 轮询行出现且含 ⚡
+      await browser.waitUntil(
+        async () => await browser.execute(() => {
+          const row = document.querySelector('[data-e2e="agent-status-row"]');
+          return row?.textContent?.includes('⚡') ?? false;
+        }),
+        { timeout: 15000, timeoutMsg: 'agent-status-row 未在 PreToolUse 后含 ⚡' },
+      );
+
+      // 8. 等待用量异步拉取完成（contextUsage 是异步的，轮询直到不是 "--"）
+      await browser.waitUntil(
+        async () => await browser.execute(() => {
+          const row = document.querySelector('[data-e2e="agent-status-row"]');
+          const text = row?.textContent ?? '';
+          // 用量文本应为 "50%"（不含 "--"）
+          return text.includes('50%') && !text.includes('--');
+        }),
+        { timeout: 10000, timeoutMsg: '用量百分比未在 contextUsage 拉取后出现 50%' },
+      );
+
+      // 9. 获取 projectId，创建 page2
+      const projectId = await browser.execute((pid: string) => {
+        return (window as any).__slterm_e2e_getProjectIdForPage?.(pid) ?? null;
+      }, page1Id);
+      if (!projectId) throw new Error('无法获取 projectId');
+
+      const page2Id = await browser.execute(
+        (args: { projId: string; rootPath: string }) => {
+          return (window as any).__slterm_e2e_addPage?.(args.projId, 'page2', args.rootPath) ?? null;
+        },
+        { projId: projectId, rootPath: tempDir },
+      );
+      if (!page2Id) throw new Error('无法创建 page2');
+
+      // 10. 切换到 page2
+      await browser.execute((pid: string) => {
+        (window as any).__slterm_e2e_switchToPage?.(pid);
+      }, page2Id);
+      await browser.pause(500);
+
+      // 11. 切回 page1
+      await browser.execute((pid: string) => {
+        (window as any).__slterm_e2e_switchToPage?.(pid);
+      }, page1Id);
+      await browser.pause(500);
+
+      // 12. 断言行仍存在且用量保持（50%——初始扫描携 transcriptPath 主动拉取）
+      const usageAfterSwitch = await browser.execute(() => {
+        const row = document.querySelector('[data-e2e="agent-status-row"]');
+        if (!row) return null;
+        return row.textContent ?? '';
+      });
+      expect(usageAfterSwitch).not.toBeNull();
+      expect(usageAfterSwitch).toContain('50%');
+      // 50% = (30000 + 50000 + 20000) / 200000 —— 四字段完整口径（input + cacheRead + cacheCreation）
+    } finally {
+      // 清理信号文件
+      for (const f of signalFiles) {
+        try { rmSync(f, { force: true }); } catch { /* 忽略 */ }
+      }
+      // 清理临时目录
+      try { rmSync(tempDir, { recursive: true, force: true }); } catch { /* 忽略 */ }
+    }
+  });
+
+  /**
+   * 用例 2d（R3 变体）：SessionEnd 删行 + 切项目往返不复活。
+   *
+   * 验证：hook 事件建行 → SessionEnd 信号 → 行消失 → 切项目往返 →
+   * 行仍不存在（claudeSession 已 null，初始扫描不建行）。
+   */
+  it('R3 变体：SessionEnd 删行 + 切项目往返不复活', async () => {
+    const eventsDir = join(homedir(), '.slterminal', 'hooks-events');
+    const tempDir = mkdtempSync(join(tmpdir(), 'slterm-e2e-agent-r3-'));
+    const signalFiles: string[] = [];
+
+    try {
+      // 0a. Workspace 就绪
+      await browser.waitUntil(
+        async () => await browser.execute(() => (window as any).__slterm_e2e_workspaceReady === true),
+        { timeout: 15000, timeoutMsg: 'Workspace 未就绪' },
+      );
+
+      // 0b. 确保 hooks 已注入
+      await browser.execute(() => (window as any).__slterm_e2e_injectHooks?.());
+      await browser.waitUntil(
+        async () => {
+          const s = await browser.execute(() =>
+            (window as any).__slterm_e2e_getHookInjectionStatus?.(),
+          );
+          return s?.status === 'injected';
+        },
+        { timeout: 15000, timeoutMsg: 'hooks 未在创建终端前完成注入' },
+      );
+
+      // 0c. 创建项目 → pageId
+      const page1Id = await browser.execute((dir: string) => {
+        return (window as any).__slterm_e2e_createProject?.(dir);
+      }, tempDir);
+
+      // 0d. Dockview API
+      await browser.waitUntil(
+        async () => await browser.execute(() => typeof window.__dockviewApi !== 'undefined'),
+        { timeout: 20000, timeoutMsg: 'Dockview API 未就绪' },
+      );
+
+      // 1. 创建终端面板
+      const panelId = `terminal-${page1Id}-0`;
+      await browser.execute((pid: string) => {
+        window.__dockviewApi!.addPanel({
+          id: pid,
+          component: 'terminal',
+          params: { panelId: pid },
+          renderer: 'always' as const,
+        });
+      }, panelId);
+
+      // 2. 等待 PTY session 就绪
+      await browser.waitUntil(
+        async () => await browser.execute(() => {
+          const containers = document.querySelectorAll('[data-e2e="terminal-container"]');
+          for (const c of containers) {
+            if ((c as any).__e2e_sessionReady) return true;
+          }
+          return false;
+        }),
+        { timeout: 25000, timeoutMsg: 'PTY session 未就绪' },
+      );
+
+      // 3. 打开 agent-status 视图
+      await browser.execute(() => {
+        (window as any).__slterm_e2e_toggleSideView?.('agent-status');
+      });
+
+      // 4. 确保信号目录存在
+      mkdirSync(eventsDir, { recursive: true });
+
+      // 5. 原子写 PreToolUse 信号文件 → 建行（含 ⚡）
+      const preToolPayload = {
+        panelId,
+        event: 'PreToolUse',
+        timestamp: Date.now(),
+        sessionId: 'e2e-agent-r3',
+        transcriptPath: '',
+        cwd: tempDir,
+        toolName: 'Bash',
+        notificationType: null,
+      };
+      const preToolFileName = `${panelId}-PreToolUse-${Date.now()}.json`;
+      const preToolTmpPath = join(eventsDir, preToolFileName + '.tmp');
+      const preToolFilePath = join(eventsDir, preToolFileName);
+      writeFileSync(preToolTmpPath, JSON.stringify(preToolPayload), 'utf8');
+      renameSync(preToolTmpPath, preToolFilePath);
+      signalFiles.push(preToolFilePath);
+
+      // 6. 等待行出现含 ⚡
+      await browser.waitUntil(
+        async () => await browser.execute(() => {
+          const row = document.querySelector('[data-e2e="agent-status-row"]');
+          return row?.textContent?.includes('⚡') ?? false;
+        }),
+        { timeout: 15000, timeoutMsg: 'agent-status-row 未在 PreToolUse 后含 ⚡' },
+      );
+
+      // 7. 原子写 SessionEnd 信号文件 → 删行
+      const endPayload = {
+        panelId,
+        event: 'SessionEnd',
+        timestamp: Date.now(),
+        sessionId: 'e2e-agent-r3',
+        transcriptPath: '',
+        cwd: tempDir,
+        toolName: null,
+        notificationType: null,
+      };
+      const endFileName = `${panelId}-SessionEnd-${Date.now()}.json`;
+      const endTmpPath = join(eventsDir, endFileName + '.tmp');
+      const endFilePath = join(eventsDir, endFileName);
+      writeFileSync(endTmpPath, JSON.stringify(endPayload), 'utf8');
+      renameSync(endTmpPath, endFilePath);
+      signalFiles.push(endFilePath);
+
+      // 8. 等待行消失
+      await browser.waitUntil(
+        async () => await browser.execute((pid: string) => {
+          const row = document.querySelector('[data-e2e="agent-status-row"]');
+          if (!row) return true;
+          return row.getAttribute('data-panel-id') !== pid;
+        }, panelId),
+        { timeout: 15000, timeoutMsg: 'agent-status-row 未在 SessionEnd 后消失' },
+      );
+
+      // 9. 获取 projectId，创建 page2
+      const projectId = await browser.execute((pid: string) => {
+        return (window as any).__slterm_e2e_getProjectIdForPage?.(pid) ?? null;
+      }, page1Id);
+      if (!projectId) throw new Error('无法获取 projectId');
+
+      const page2Id = await browser.execute(
+        (args: { projId: string; rootPath: string }) => {
+          return (window as any).__slterm_e2e_addPage?.(args.projId, 'page2', args.rootPath) ?? null;
+        },
+        { projId: projectId, rootPath: tempDir },
+      );
+      if (!page2Id) throw new Error('无法创建 page2');
+
+      // 10. 切换到 page2
+      await browser.execute((pid: string) => {
+        (window as any).__slterm_e2e_switchToPage?.(pid);
+      }, page2Id);
+      await browser.pause(500);
+
+      // 11. 切回 page1
+      await browser.execute((pid: string) => {
+        (window as any).__slterm_e2e_switchToPage?.(pid);
+      }, page1Id);
+      await browser.pause(500);
+
+      // 12. 断言行仍不存在——claudeSession 已 null，初始扫描不建行
+      const rowStillGone = await browser.execute(() => {
+        return !document.querySelector('[data-e2e="agent-status-row"]');
+      });
+      expect(rowStillGone).toBe(true);
+    } finally {
+      for (const f of signalFiles) {
+        try { rmSync(f, { force: true }); } catch { /* 忽略 */ }
+      }
+      try { rmSync(tempDir, { recursive: true, force: true }); } catch { /* 忽略 */ }
+    }
+  });
+
+  /**
+   * 用例 2e（R4 变体）：会话终端关页签删行（panel.api.close() 路径）。
+   *
+   * 验证：hook 事件建行 → panel.api.close()（照 globalCommands.ts closeTab 先例）→ 行消失。
+   * R4 原始探针教训：panel?.close is not a function——close() 在 panel.api 上，不在 panel 上。
+   * R4 原始竞态（remove 事件丢失）由 deps [] 稳定订阅 + reconcile 对账根治——本用例守卫不复现。
+   */
+  it('R4 变体：会话终端关页签删行（closePanel）', async () => {
+    const eventsDir = join(homedir(), '.slterminal', 'hooks-events');
+    const tempDir = mkdtempSync(join(tmpdir(), 'slterm-e2e-agent-r4-'));
+    const signalFiles: string[] = [];
+
+    try {
+      // 0a. Workspace 就绪
+      await browser.waitUntil(
+        async () => await browser.execute(() => (window as any).__slterm_e2e_workspaceReady === true),
+        { timeout: 15000, timeoutMsg: 'Workspace 未就绪' },
+      );
+
+      // 0b. 确保 hooks 已注入
+      await browser.execute(() => (window as any).__slterm_e2e_injectHooks?.());
+      await browser.waitUntil(
+        async () => {
+          const s = await browser.execute(() =>
+            (window as any).__slterm_e2e_getHookInjectionStatus?.(),
+          );
+          return s?.status === 'injected';
+        },
+        { timeout: 15000, timeoutMsg: 'hooks 未在创建终端前完成注入' },
+      );
+
+      // 0c. 创建项目 → pageId
+      const pageId = await browser.execute((dir: string) => {
+        return (window as any).__slterm_e2e_createProject?.(dir);
+      }, tempDir);
+
+      // 0d. Dockview API
+      await browser.waitUntil(
+        async () => await browser.execute(() => typeof window.__dockviewApi !== 'undefined'),
+        { timeout: 20000, timeoutMsg: 'Dockview API 未就绪' },
+      );
+
+      // 1. 创建终端面板
+      const panelId = `terminal-${pageId}-0`;
+      await browser.execute((pid: string) => {
+        window.__dockviewApi!.addPanel({
+          id: pid,
+          component: 'terminal',
+          params: { panelId: pid },
+          renderer: 'always' as const,
+        });
+      }, panelId);
+
+      // 2. 等待 PTY session 就绪
+      await browser.waitUntil(
+        async () => await browser.execute(() => {
+          const containers = document.querySelectorAll('[data-e2e="terminal-container"]');
+          for (const c of containers) {
+            if ((c as any).__e2e_sessionReady) return true;
+          }
+          return false;
+        }),
+        { timeout: 25000, timeoutMsg: 'PTY session 未就绪' },
+      );
+
+      // 3. 打开 agent-status 视图
+      await browser.execute(() => {
+        (window as any).__slterm_e2e_toggleSideView?.('agent-status');
+      });
+
+      // 4. 确保信号目录存在
+      mkdirSync(eventsDir, { recursive: true });
+
+      // 5. 原子写 PreToolUse 信号文件 → 建行（含 ⚡）
+      const preToolPayload = {
+        panelId,
+        event: 'PreToolUse',
+        timestamp: Date.now(),
+        sessionId: 'e2e-agent-r4',
+        transcriptPath: '',
+        cwd: tempDir,
+        toolName: 'Bash',
+        notificationType: null,
+      };
+      const preToolFileName = `${panelId}-PreToolUse-${Date.now()}.json`;
+      const preToolTmpPath = join(eventsDir, preToolFileName + '.tmp');
+      const preToolFilePath = join(eventsDir, preToolFileName);
+      writeFileSync(preToolTmpPath, JSON.stringify(preToolPayload), 'utf8');
+      renameSync(preToolTmpPath, preToolFilePath);
+      signalFiles.push(preToolFilePath);
+
+      // 6. 等待行出现含 ⚡
+      await browser.waitUntil(
+        async () => await browser.execute(() => {
+          const row = document.querySelector('[data-e2e="agent-status-row"]');
+          return row?.textContent?.includes('⚡') ?? false;
+        }),
+        { timeout: 15000, timeoutMsg: 'agent-status-row 未在 PreToolUse 后含 ⚡' },
+      );
+
+      // 7. 断言行存在
+      let rowExists = await browser.execute((pid: string) => {
+        const row = document.querySelector('[data-e2e="agent-status-row"]');
+        return row?.getAttribute('data-panel-id') === pid;
+      }, panelId);
+      expect(rowExists).toBe(true);
+
+      // 8. 关闭终端面板页签——panel.api.close()（照 globalCommands.ts closeTab 先例）
+      await browser.execute((pid: string) => {
+        const panel = window.__dockviewApi?.getPanel(pid);
+        if (panel) {
+          // panel.api.close() = dockview-react PanelApi 的 close 方法
+          // R4 原始探针教训：panel.close() 不存在——close() 在 panel.api 上
+          panel.api.close();
+        }
+      }, panelId);
+
+      // 9. 等待行消失（remove 事件 → useAgentStatus 删行，deps [] 稳定订阅不丢事件）
+      await browser.waitUntil(
+        async () => await browser.execute((pid: string) => {
+          const row = document.querySelector('[data-e2e="agent-status-row"]');
+          if (!row) return true;
+          return row.getAttribute('data-panel-id') !== pid;
+        }, panelId),
+        { timeout: 15000, timeoutMsg: 'agent-status-row 未在 closePanel 后消失' },
+      );
+
+      // 10. 断言行不存在（R4 原始竞态不复现——deps [] 稳定订阅 + reconcile 兜底）
+      const rowGone = await browser.execute(() => {
+        return !document.querySelector('[data-e2e="agent-status-row"]');
+      });
+      expect(rowGone).toBe(true);
+    } finally {
+      for (const f of signalFiles) {
+        try { rmSync(f, { force: true }); } catch { /* 忽略 */ }
+      }
+      try { rmSync(tempDir, { recursive: true, force: true }); } catch { /* 忽略 */ }
+    }
+  });
+
+  /**
+   * 用例 3：toast 触发链路（失焦 + 权限请求 / Stop / 错误）。
+   *
+   * 真实验证步骤（人工）：
+   *   1. 启动 slTerminal 并注入 hooks（设置 → 注入 Claude Code hooks）。
+   *   2. 打开终端，运行 claude。
+   *   3. 触发 PermissionRequest：在 claude 中输入需工具调用的 prompt，
+   *      如 "请列出 C:\ 目录下的文件"。
+   *   4. 立即切换到其他窗口（Alt+Tab）使 slTerminal 失焦。
+   *   5. 观察系统通知中心 → 应弹出 slTerminal 通知，含 "🔐 权限请求" 字样。
+   *   6. 点击该通知 → 窗口应聚焦回 slTerminal 并切换到对应终端页签。
+   *   7. 继续在 claude 中等待任务完成（Stop 事件）：
+   *      - 保持 slTerminal 失焦 → 系统通知中心出现 "✅ 任务完成" 通知。
+   *   8. 构造错误场景：在 claude 中执行一个必然失败的工具调用 →
+   *      系统通知中心出现 "❌ 错误" 通知。
+   *   9. 点击停止（Stop）事件通知 → 验证窗口聚焦 + 路由到对应面板。
+   *
+   * E2E 自动化不可行原因：
+   *   - embedded WDIO 驱动无法控制 WebView2 窗口焦点
+   *     （onFocusChanged 事件由 OS 窗口管理器触发，不可合成）。
+   *   - 系统通知中心不可编程访问（无法查询已发送的通知列表，
+   *     无法模拟用户点击通知）。
+   *   - Web Notification API 在 headless/自动化 WebView2 中
+   *     不产生真实的桌面通知弹窗。
+   *   - useClaudeNotifications 的门控条件
+   *     window.__slterm_windowFocused === false 在自动化环境中
+   *     始终为 true（窗口聚焦），通知绝不会触发。
+   *
+   * 未来自动化方向：
+   *   待 @tauri-apps/plugin-notification 支持程序化查询/触发通知后，
+   *   可修改 useClaudeNotifications 暴露 sendNotification 调用的 spy，
+   *   在 E2E 中通过 browser.execute 设置 __slterm_windowFocused = false
+   *   后注入合成 hook-event，再验证 spy 被调用参数。
+   */
+  it.skip('toast 触发链路需人工验证（失焦 + 权限请求 / Stop / 错误）', async () => {
+    // 骨架保留供未来自动化参考。
+    //
+    // 前置：
+    //   1. hooks 已注入 → onHookEvent 正常工作
+    //   2. 终端面板存在 → panelId 已知
+    //   3. window.__slterm_windowFocused = false → 失焦门控通过
+    //
+    // 验证断言（自动化后启用）：
+    //   1. inject PermissionRequest hook-event → sendClickableNotification 被调用
+    //      参数 title="slTerminal"，body 含 "🔐 权限请求"
+    //   2. inject Stop hook-event → sendClickableNotification 被调用
+    //      参数 body 含 "✅ 任务完成"
+    //   3. inject StopFailure hook-event → sendClickableNotification 被调用
+    //      参数 body 含 "❌ 错误"
+    //   4. Notification onclick → setFocus + setActivePage + panel.focus 被调用
+    //   5. 非通知类事件（PreToolUse/PostToolUse/SessionStart/SessionEnd）
+    //      → sendClickableNotification 不被调用
+  });
+});
+
+// ── hooks 配置面板保存链路（P3-TE-18） ──
+//
+// 场景：tempdir 项目 → 打开 hooksConfig 面板 → 切 project 层 → JSON 模式经
+// __slterm_e2e_setHooksConfigJson 注入合法 hooks 配置 → 点击保存 →
+// 断言 <tempdir>/.claude/settings.json 真实写盘。
+// 断言三件事：① mtime 更新；② hooks 内容正确（写入的事件/handler 存在，且
+// 预置的旧 hooks 被整体替换）；③ merge 保留——预置的 permissions/env/$schema
+// 原样保留（验证后端 read-modify-write，P3-BE-03）。
+// 安全：全程只写 tempdir 项目的 project 层，不碰真实 ~/.claude/settings.json（C13-9）。
+//
+// 按钮交互统一走 browser.execute 程序化 .click()，不用 WebDriver 真实点击——两个根因：
+// 1) 面板根容器 onFocus（React focusin）触发轻量重读 reload() → setLoading(true) →
+//    面板内容整体换成"加载中"占位（DOM 移除）。真实点击的 mousedown 先聚焦按钮 →
+//    focusin → 重读 → 按钮在 mouseup 前被移出 DOM → click 事件丢失 → onClick 永不
+//    触发（实测复现：切层点击后编辑区短暂消失又恢复 user 层内容，project 层从未加载）。
+//    程序化 .click() 不移动焦点 → 无 focusin → 无此竞态（与编辑器 Ctrl+S 用例
+//    合成 focusin + keydown 同属"事件来源合成"的既有先例）。
+// 2) embedded 驱动对 focusCommand（findElement/$/elementClick 等）每次先调
+//    getWindowStates 超时 5s（已知无害噪声）——全部改用 execute 轮询可免除约 30s
+//    固定开销，把用例控制在 mocha 60s 预算内。
+// 时序设计（规避外部 value 同步竞态）：
+// - 面板挂载先读 user 层（初始文档也是 "{}"），无法用 "{}" 判断 project 层已加载——
+//   预置文件 hooks 子树含唯一 marker，等待文档出现 marker 才注入，确保外部 value
+//   同步 effect 不会在注入后覆盖文本并重置 dirty。
+describe('hooks 配置面板保存链路 (P3-TE-18)', () => {
+  it('project 层 JSON 模式写入 hooks 配置 → 保存真实写盘且 merge 保留其他字段', async () => {
+    // 0. Node 侧：tempdir 项目 + 预置 .claude/settings.json
+    //    （hooks 子树含 preseed marker 供"project 层已加载"等待；permissions/env/$schema 供 merge 断言）
+    const tempDir = mkdtempSync(join(tmpdir(), 'slterm-e2e-hookscfg-'));
+    const settingsDir = join(tempDir, '.claude');
+    const settingsPath = join(settingsDir, 'settings.json');
+    mkdirSync(settingsDir, { recursive: true });
+    const preseed = {
+      $schema: 'https://json.schemastore.org/claude-code-settings.json',
+      permissions: { allow: ['Bash', 'Edit'] },
+      env: { FOO: 'bar' },
+      hooks: {
+        PostToolUse: [{ hooks: [{ type: 'command', command: 'echo preseed-marker' }] }],
+      },
+    };
+    writeFileSync(settingsPath, JSON.stringify(preseed, null, 2), 'utf8');
+    const mtimeBefore = statSync(settingsPath).mtimeMs;
+
+    // 注入到 JSON 模式的 hooks 配置（hooks 子 schema 合法：已知事件 + command handler；
+    // 与 preseed 无重叠内容，保存后断言旧 hooks 被整体替换）
+    const hooksJson = JSON.stringify(
+      {
+        PreToolUse: [
+          {
+            matcher: 'Bash',
+            hooks: [{ type: 'command', command: 'node e2e-hook-precheck.js', timeout: 5 }],
+          },
+        ],
+        SessionStart: [{ hooks: [{ type: 'command', command: 'echo e2e-session-start' }] }],
+      },
+      null,
+      2,
+    );
+
+    // 页面内工具：按 data-e2e 选择器取按钮（存在且未禁用时）——execute 轮询 + 程序化点击共用
+    const btnState = (sel: string) =>
+      browser.execute((s: string) => {
+        const btn = document.querySelector(s) as HTMLButtonElement | null;
+        return btn ? { exists: true, disabled: btn.disabled } : { exists: false, disabled: true };
+      }, sel);
+
+    try {
+      // 1. 等待 Workspace 就绪
+      await browser.waitUntil(
+        async () => await browser.execute(() => (window as any).__slterm_e2e_workspaceReady === true),
+        { timeout: 15000, timeoutMsg: 'Workspace 未就绪' },
+      );
+
+      // 2. 程序化创建项目（根 = tempdir；同时设置后端 project_root，路径沙箱通过）
+      await browser.execute((dir: string) => {
+        (window as any).__slterm_e2e_createProject?.(dir);
+      }, tempDir);
+
+      // 3. 等待 Dockview API
+      await browser.waitUntil(
+        async () => await browser.execute(() => typeof window.__dockviewApi !== 'undefined'),
+        { timeout: 20000, timeoutMsg: 'Dockview API 未就绪' },
+      );
+
+      // 4. 打开 hooksConfig 面板（经 __dockviewApi.addPanel；唯一 id 不与同页单例约定冲突）
+      const panelId = 'hooksConfig-e2e-' + Date.now();
+      await browser.execute((pid: string) => {
+        window.__dockviewApi!.addPanel({
+          id: pid,
+          component: 'hooksConfig',
+          title: 'Hooks 配置',
+          params: { panelId: pid },
+        });
+      }, panelId);
+      // 面板容器仅在非 loading/error 态渲染——存在即表示首次加载（user 层）完成
+      await browser.waitUntil(
+        async () =>
+          (await browser.execute(() => !!document.querySelector('[data-e2e="hooks-config-panel"]'))) === true,
+        { timeout: 15000, timeoutMsg: 'hooksConfig 面板未就绪' },
+      );
+
+      // 5. 切到 project 层：rootPath 就绪后按钮才可点（disabled=!rootPath）——execute 轮询
+      //    等待启用，再程序化 .click()（真实 onClick → setLayer → 重读 project 层；
+      //    程序化点击不触发 focusin，规避上面注释 1) 的 click 丢失竞态）
+      await browser.waitUntil(
+        async () => (await btnState('[data-e2e="hooks-layer-project"]')).disabled === false,
+        { timeout: 10000, timeoutMsg: 'project 层按钮未启用（rootPath 未就绪）' },
+      );
+      const layerClicked = await browser.execute(() => {
+        const btn = document.querySelector('[data-e2e="hooks-layer-project"]') as HTMLButtonElement | null;
+        btn?.click();
+        return btn !== null;
+      });
+      expect(layerClicked).toBe(true);
+
+      // 6. 等待 project 层配置加载进 JSON 模式（文档含 preseed marker——只有 project 层
+      //    读取应用后才可能出现，排除 user 层初始内容干扰）
+      await browser.waitUntil(
+        async () => {
+          const doc = await browser.execute(() =>
+            (window as any).__slterm_e2e_getHooksConfigJson?.() ?? null,
+          );
+          return doc !== null && doc.includes('preseed-marker');
+        },
+        { timeout: 10000, timeoutMsg: 'project 层配置未加载进 JSON 模式（文档未出现 preseed marker）' },
+      );
+
+      // 7. JSON 模式注入合法 hooks 配置（CM6 view.dispatch 全文档替换 → 真实
+      //    updateListener → onChange → dirty + schema 校验通过）
+      const injected = await browser.execute((text: string) => {
+        return (window as any).__slterm_e2e_setHooksConfigJson?.(text) === true;
+      }, hooksJson);
+      expect(injected).toBe(true);
+
+      // 8. 等待保存按钮可用（dirty && JSON 合法）
+      await browser.waitUntil(
+        async () => (await btnState('[data-e2e="hooks-save"]')).disabled === false,
+        { timeout: 10000, timeoutMsg: '保存按钮未启用（dirty 或 JSON 非法）' },
+      );
+
+      // 9. 程序化点击保存（真实 onClick → handleSave → schema 校验 → writeHooksConfig 写盘；
+      //    程序化点击不触发 focusin → 不弹 dirty 确认框、无重读覆盖注入内容的风险）
+      const saveClicked = await browser.execute(() => {
+        const btn = document.querySelector('[data-e2e="hooks-save"]') as HTMLButtonElement | null;
+        btn?.click();
+        return btn !== null;
+      });
+      expect(saveClicked).toBe(true);
+
+      // 10. 轮询等待文件 mtime 更新（Node 侧 statSync，不依赖页面交互）
+      await browser.waitUntil(
+        () => {
+          try {
+            return statSync(settingsPath).mtimeMs > mtimeBefore;
+          } catch {
+            return false;
+          }
+        },
+        { timeout: 10000, timeoutMsg: '保存后 <tempdir>/.claude/settings.json mtime 未更新' },
+      );
+      // 11. 应用内确认：保存成功提示条（saved=true 后渲染）
+      await browser.waitUntil(
+        async () =>
+          (await browser.execute(() => !!document.querySelector('[data-e2e="hooks-restart-hint"]'))) === true,
+        { timeout: 8000, timeoutMsg: '保存成功提示条未出现' },
+      );
+
+      // 12. 断言①：mtime 更新
+      expect(statSync(settingsPath).mtimeMs).toBeGreaterThan(mtimeBefore);
+
+      // 13. 断言②：hooks 内容正确——写入的事件/handler 存在，预置的旧 hooks 被整体替换
+      const saved = JSON.parse(readFileSync(settingsPath, 'utf8'));
+      expect(saved.hooks.PreToolUse).toHaveLength(1);
+      expect(saved.hooks.PreToolUse[0].matcher).toBe('Bash');
+      expect(saved.hooks.PreToolUse[0].hooks[0]).toMatchObject({
+        type: 'command',
+        command: 'node e2e-hook-precheck.js',
+        timeout: 5,
+      });
+      expect(saved.hooks.SessionStart[0].hooks[0].command).toBe('echo e2e-session-start');
+      // 替换语义：预置的 PostToolUse 组不应残留
+      expect(saved.hooks.PostToolUse).toBeUndefined();
+      expect(JSON.stringify(saved)).not.toContain('preseed-marker');
+
+      // 14. 断言③：merge 保留——permissions/env/$schema 原样保留（后端 read-modify-write）
+      expect(saved.permissions).toEqual(preseed.permissions);
+      expect(saved.env).toEqual(preseed.env);
+      expect(saved.$schema).toBe(preseed.$schema);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
     }
   });
 });

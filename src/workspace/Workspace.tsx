@@ -18,6 +18,12 @@ import { Allotment } from "allotment";
 import "allotment/dist/style.css";
 import PageDockview from "./PageDockviewHost";
 import { titleManager } from "./titleManager";
+import {
+  registerPageApi,
+  unregisterPageApi,
+  getPageApi,
+  switchToPageShared,
+} from "./pageApis";
 // 侧栏视图：side-effect 注册（类比 tabRules.ts，静态 import 链保证 App init 的 loadFromDisk 运行时注册已完成）
 import "../features/sideViews/sideViewDefs";
 import {
@@ -52,7 +58,6 @@ const Workspace: React.FC = () => {
     markWorkspaceReady();
   }
 
-  const pageApiMapRef = useRef<Map<string, DockviewApi>>(new Map());
   const [initializedPages, setInitializedPages] = useState<Set<string>>(new Set());
 
   const activePageId = useLayout((s) => s.activePageId);
@@ -89,34 +94,11 @@ const Workspace: React.FC = () => {
 
   /** 操作页面切换（仅更新 activePageId + CSS 显隐，projectId 保留兼容 SidebarTree 接口）
    *
-   * DBG-5: 切换页面时先 await setProjectRoot（失败 console.error 降级继续），
-   *        再 setActivePage，确保子组件 effect 中的 fs_read_dir 等 IPC 调用
-   *        能在后端 project_root 就绪后通过路径沙箱校验。 */
+   * ensurePageInitialized 依赖组件 setState，不下放 pageApis。
+   * 其余逻辑（setProjectRoot → setActivePage → __dockviewApi 重指向）委托 switchToPageShared。 */
   const switchToPage = useCallback(async (_projectId: string, pageId: string) => {
-    const layoutStore = useLayout.getState();
-    if (layoutStore.activePageId === pageId) return;
-
-    // 查找 pageId 所属项目的 rootPath 并同步到后端（必须在 setActivePage 之前）
-    const { projects: currentProjects } = useProjects.getState();
-    for (const [, proj] of Object.entries(currentProjects)) {
-      if (proj.pages.some((p) => p.pageId === pageId)) {
-        if (proj.rootPath) {
-          try {
-            await setProjectRoot(proj.rootPath);
-          } catch (err) {
-            console.error("[slTerminal] 设置项目根路径失败:", err);
-          }
-        }
-        break;
-      }
-    }
-
     ensurePageInitialized(pageId);
-    layoutStore.setActivePage(pageId);
-
-    // 更新 E2E 全局 API 指向活跃页面
-    const api = pageApiMapRef.current.get(pageId);
-    if (api) window.__dockviewApi = api;
+    await switchToPageShared(pageId);
   }, [ensurePageInitialized]);
 
   /** 删除操作页面 */
@@ -126,11 +108,11 @@ const Workspace: React.FC = () => {
 
     // 销毁该页面的 Dockview（触发面板卸载 → useXterm cleanup → PTY kill）
     // P2-49: dockview-react api.dispose() 内部自动清理所有事件监听器
-    const api = pageApiMapRef.current.get(pageId);
+    const api = getPageApi(pageId);
     if (api) {
       api.clear();
       api.dispose();
-      pageApiMapRef.current.delete(pageId);
+      unregisterPageApi(pageId);
     }
 
     // 清理标题管理器状态（registry + counters）
@@ -152,7 +134,7 @@ const Workspace: React.FC = () => {
       if (nextPageId) {
         ensurePageInitialized(nextPageId);
         layoutStore.setActivePage(nextPageId);
-        const nextApi = pageApiMapRef.current.get(nextPageId);
+        const nextApi = getPageApi(nextPageId);
         if (nextApi) window.__dockviewApi = nextApi;
       }
     }
@@ -160,7 +142,7 @@ const Workspace: React.FC = () => {
 
   /** PageDockview onReady: 注册 API（稳定引用，deps=[]） */
   const handlePageApiReady = useCallback((pageId: string, api: DockviewApi) => {
-    pageApiMapRef.current.set(pageId, api);
+    registerPageApi(pageId, api);
     if (pageId === useLayout.getState().activePageId) {
       window.__dockviewApi = api;
     }

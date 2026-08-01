@@ -166,11 +166,13 @@ VS Code 市场中的专用扩展：**[Claude Code Settings Helper](https://marke
 
 | 类型 | 说明 | 适用事件 |
 |------|------|---------|
-| `command` | 执行 shell 命令，stdin 接收 JSON 输入 | 全部 |
-| `http` | POST 请求，body 为 JSON | 全部 |
-| `mcp_tool` | 调用 MCP 工具 | 全部 |
-| `prompt` | LLM 评估条件 | PreToolUse, PostToolUse, PermissionRequest |
-| `agent` | 运行带工具的 agent | PreToolUse, PostToolUse, PermissionRequest |
+| `command` | 执行 shell 命令，stdin 接收 JSON 输入 | 全部 30 事件 |
+| `http` | POST 请求，body 为 JSON | 除 SessionStart/Setup 外的 28 事件 |
+| `mcp_tool` | 调用 MCP 工具 | 全部 30 事件 |
+| `prompt` | LLM 评估条件 | 13 事件：PreToolUse、PostToolUse、PostToolUseFailure、PostToolBatch、PermissionRequest、PermissionDenied、UserPromptSubmit、UserPromptExpansion、Stop、SubagentStop、TaskCreated、TaskCompleted、TeammateIdle |
+| `agent` | 运行带工具的 agent | 同 prompt 的 13 事件 |
+
+> 2026-07-31 官方文档核实修订：原表称 prompt/agent 仅适用 PreToolUse/PostToolUse/PermissionRequest，失实——官方为上述 13 事件。
 
 ### 4.4 Exit Code 语义
 

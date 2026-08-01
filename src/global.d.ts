@@ -45,6 +45,11 @@ declare global {
     ) => void;
     /** 获取活跃页面信息 */
     __slterm_e2e_getActivePageInfo?: () => { pageId: string; rootPath: string } | null;
+
+    // ── F4 通知调度 ──
+
+    /** 窗口是否拥有焦点（onFocusChanged 写入，通知调度门控） */
+    __slterm_windowFocused?: boolean;
   }
 }
 

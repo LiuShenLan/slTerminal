@@ -11,8 +11,8 @@ import type React from "react";
 
 /** 侧栏视图组件的 props——与 SidebarTree props 精确匹配 */
 export interface SideViewComponentProps {
-  /** 切换到指定操作页面 */
-  switchToPage: (projectId: string, pageId: string) => void;
+  /** 切换到指定操作页面（async——切换完成后再开面板） */
+  switchToPage: (projectId: string, pageId: string) => Promise<void>;
   /** 删除指定操作页面 */
   onDeletePage: (projectId: string, pageId: string) => void;
 }

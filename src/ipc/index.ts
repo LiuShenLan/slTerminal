@@ -11,6 +11,8 @@ export * as dialog from "./dialog";
 export * as shell from "./shell";
 export * as window from "./window";
 export * as hooks from "./hooks";
+export * as hooksConfig from "./hooksConfig";
+export * as notification from "./notification";
 
 /** 验证 IPC 链路和测试基建 — 占位命令 */
 export async function ping(): Promise<string> {

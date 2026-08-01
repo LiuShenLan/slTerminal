@@ -1,6 +1,6 @@
 // commandCatalog.test.ts — 命令目录单元测试
 //
-// 覆盖：5 条命令齐全 + 元数据正确、id 唯一、defaultKey 合法且对自身 context 非保留、
+// 覆盖：9 条命令齐全 + 元数据正确、id 唯一、defaultKey 合法且对自身 context 非保留、
 //       COMMAND_META_BY_ID 查找、commandFromMeta 合并 handler + 未知 id 抛错。
 
 import { describe, it, expect, vi } from "vitest";
@@ -56,6 +56,7 @@ describe("COMMAND_CATALOG", () => {
       expect(typeof m.priority).toBe("number");
     }
   });
+
 });
 
 describe("COMMAND_META_BY_ID", () => {

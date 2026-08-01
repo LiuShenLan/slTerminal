@@ -9,6 +9,7 @@ import { useProjects, createProjectId, createPageId } from "../../stores/project
 import type { Project, OperationPage } from "../../stores/projects";
 import { useLayout } from "../../stores/layout";
 import { open } from "../../ipc/dialog";
+import { openHooksConfigPanel } from "../../workspace/pageApis";
 import {
   PANEL_BG,
   SIDEBAR_COLORS,
@@ -291,8 +292,8 @@ const PageRow: React.FC<{
 // ---- Props ----
 
 interface SidebarTreeProps {
-  /** 切换操作页面（由 Workspace 注入，持有 dockview API） */
-  switchToPage: (projectId: string, pageId: string) => void;
+  /** 切换操作页面（由 Workspace 注入，持有 dockview API；async——切换完成后再开面板） */
+  switchToPage: (projectId: string, pageId: string) => Promise<void>;
   /** 删除操作页面（由 Workspace 层编排，区分当前/非当前页面） */
   onDeletePage: (projectId: string, pageId: string) => void;
 }
@@ -369,9 +370,10 @@ const SidebarTree: React.FC<SidebarTreeProps> = ({ switchToPage, onDeletePage })
     }
   }, [addProject]);
 
-  // 新建操作页面（绑定到项目根目录）
+  // 新建操作页面（绑定到项目根目录）；返回新建 pageId——供「打开 Hooks 配置」
+  // 项目菜单无页面分支复用（新建后切到新页再开面板）
   const handleNewPage = useCallback(
-    (projectId: string, cwd: string) => {
+    (projectId: string, cwd: string): string => {
       const pageId = createPageId();
       const page: OperationPage = {
         pageId,
@@ -382,6 +384,7 @@ const SidebarTree: React.FC<SidebarTreeProps> = ({ switchToPage, onDeletePage })
         lastAccessedAt: Date.now(),
       };
       addPage(projectId, page);
+      return pageId;
     },
     [addPage],
   );
@@ -397,6 +400,19 @@ const SidebarTree: React.FC<SidebarTreeProps> = ({ switchToPage, onDeletePage })
   const closeContextMenu = useCallback(() => {
     setContextMenu((prev) => ({ ...prev, visible: false }));
   }, []);
+
+  /** 打开 hooks 配置面板：先切到目标页（幂等），再轮询 API 就绪后打开（同页单例 C13-7）。
+      面板只能在活跃页面打开（useHooksConfig 经 activePageId 推导 rootPath）——必须切页先行。
+      菜单 action 为同步调用 → fire-and-forget（openHooksConfigPanel 内部超时降级不抛异常） */
+  const openHooksConfigForPage = useCallback(
+    (projId: string, pageId: string) => {
+      void (async () => {
+        await switchToPage(projId, pageId);
+        await openHooksConfigPanel(pageId);
+      })();
+    },
+    [switchToPage],
+  );
 
   const isExpanded = useCallback(
     (nodeId: string) => expandedNodes[nodeId] === true,
@@ -459,6 +475,23 @@ const SidebarTree: React.FC<SidebarTreeProps> = ({ switchToPage, onDeletePage })
                         action: () => handleNewPage(projId, project.rootPath),
                       },
                       {
+                        label: "打开 Hooks 配置",
+                        action: () => {
+                          // 已有操作页面（无论几个）→ 切到第一个（pages[0]）；
+                          // 无 → 复用新建页面逻辑 → 切到新建页再开面板
+                          void (async () => {
+                            const proj = useProjects.getState().projects[projId];
+                            if (!proj) return; // 防御：项目已被删除
+                            const targetPageId =
+                              proj.pages.length > 0
+                                ? proj.pages[0].pageId
+                                : handleNewPage(projId, proj.rootPath);
+                            await switchToPage(projId, targetPageId);
+                            await openHooksConfigPanel(targetPageId);
+                          })();
+                        },
+                      },
+                      {
                         label: "删除项目",
                         action: () => {
                           if (window.confirm(`确定删除项目 "${project.name}"？`)) {
@@ -494,6 +527,10 @@ const SidebarTree: React.FC<SidebarTreeProps> = ({ switchToPage, onDeletePage })
                           x: e.clientX,
                           y: e.clientY,
                           items: [
+                            {
+                              label: "打开 Hooks 配置",
+                              action: () => openHooksConfigForPage(projId, page.pageId),
+                            },
                             {
                               label: "重命名操作页面",
                               action: () => setRenamingPageId(page.pageId),

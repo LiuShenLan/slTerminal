@@ -2,8 +2,10 @@
 // Stage 06 Workflow — 双模式同步与保存安全
 // =====================================================================
 // 跨边界契约：
-//   - 共享状态: configJson / guiModel / dirty
-//   - 保存前: JSON.parse 语法校验 + ajv schema 校验
+//   - 共享状态: configJson（hooks 子树）/ guiModel / dirty
+//   - 保存前: JSON.parse 语法校验 + json-schema-library schema 校验（hooks 子 schema）
+//     禁止 ajv——用 compileSchema(schema).validate(data)
+//   - 保存链路: 校验通过 → filterDisabled 剔除禁用条目 → writeHooksConfig(layer, filtered, projectPath?)
 //   - 保存后提示: "hooks 改动需重启 claude 会话生效"
 // =====================================================================
 
@@ -20,7 +22,8 @@ export const meta = {
 const PREAMBLE = `项目根目录 D:\\data\\learn\\code\\slTerminal。
 纪律：只修改分配给你的文件/项，不顺手改无关代码（surgical changes）；代码注释用中文；完成后报告修改的文件清单与每项改动摘要。
 禁区：compute_conpty_flags 固定 0x7，任何 agent 不得修改 ConPTY flags（含其 4 条守卫测试）——PASSTHROUGH_MODE (0x8) 吞 claude TUI 鼠标滚轮输入
-背景：修复要点详见 checklist 对应 ID 条目（先读再动手）。`
+背景：修复要点详见 docs/hooks-dev/phase3/checklist.md 对应 ID 条目（先读再动手）。
+本 Stage 特殊纪律：schema 校验禁止 ajv——用 Stage 04 已引入的 json-schema-library（codemirror-json-schema 底层依赖）：compileSchema(hooksSubSchema).validate(data)。`
 
 // === Phase 1: 并行重构 ===
 phase('并行重构')
@@ -30,41 +33,41 @@ const parallelAgents = [
     prompt: `你负责 P3-FE-16/17 与 P3-TE-13/14。
 
 【P3-FE-16】实现双模式同步：
-- 在 useHooksConfig.ts 中维护 configJson 与 guiModel。
-- JSON 合法变更后调用 jsonToGui 更新 guiModel。
+- 在 useHooksConfig.ts 中维护 configJson（hooks 子树）与 guiModel。
+- JSON 合法变更后调用 jsonToGui（configModel.ts 已建）更新 guiModel。
 - GUI 变更后调用 guiToJson 更新 configJson。
-- 将 JsonMode 的 onChange 与 GuiMode 的 onChange 都接入到 useHooksConfig 的 setter。
+- 将 JsonMode 的 onChange 与 GuiMode 的 onChange 都接入 useHooksConfig 的 setter。
 - JSON 非法时（JsonMode onValidationChange 返回 false）：禁止切换到 GUI 模式，工具栏显示错误提示。
 - 两模式共享 dirty 状态。
 
 【P3-FE-17】实现保存安全：
-- 保存按钮触发流程：JSON.parse 语法校验 -> ajv schema 校验 -> writeHooksConfig。
-- 任一校验失败则 window.alert 提示并拒绝保存。
-- 保存成功后通过状态条/Toast 显示：「hooks 改动需重启 claude 会话生效」。
-- 不做 .bak（Phase 3 决策）。
+- 保存按钮触发流程：JSON.parse 语法校验 → json-schema-library schema 校验（compileSchema(hooksSubSchema).validate(data)，hooks 子 schema 由 Stage 04 导出）→ 任一失败则弹窗提示、拒绝调用 writeHooksConfig。
+- 校验通过 → filterDisabled(config, disabledHooks) 剔除禁用条目 → writeHooksConfig(layer, filtered, projectPath?)。
+- 保存成功后通过状态条显示：「hooks 改动需重启 claude 会话生效」。
+- 不做 .bak；其他字段保留由后端 merge 保证（P3-BE-03，本 Stage 不重复实现）。
 
 【收尾】更新 HooksConfigPanel.tsx 的工具栏：模式切换按钮在 JSON 非法时禁用；保存按钮调用 useHooksConfig.save()。
 
-【P3-TE-13/14】新建测试：
-- src/__tests__/hooks-config-sync.test.tsx：GUI 新增事件 → JSON 同步；JSON 合法修改 → GUI 同步；JSON 非法 → 切 GUI 被阻止。
-- src/__tests__/hooks-config-save-safety.test.tsx：语法错误保存被拒、schema 错误保存被拒、合法保存显示重启提示。`
+【P3-TE-13/14】新建 src/__tests__/hooks-config-sync.test.tsx（两 ID 同文件分 describe）：
+- TE-13：GUI 新增事件 → JSON 文本含该事件；JSON 合法修改 → GUI 树更新；JSON 非法 → 切 GUI 被阻止。
+- TE-14：语法错误保存被拒、schema 错误保存被拒、合法保存成功显示重启提示、writeHooksConfig 调用 payload 为 hooks 子树（invoke 参数键集合精确匹配 { layer, hooks, projectPath? }）。`
   }
 ];
 const refactorResults = await parallel(
   parallelAgents.map(a => () => agent(`${PREAMBLE}\n\n${a.prompt}`, { label: a.label }))
 )
 
-// === Phase 3: 全量测试 ===
+// === Phase 2: 全量测试 ===
 phase('全量测试')
 const testResult = await agent(`
 在项目根目录 D:\\data\\learn\\code\\slTerminal 执行全量验证。以下命令相互独立，并行启动执行，收集全部结果：
 1. npx tsc --noEmit
 2. npx eslint src/
-3. npm test -- hooks-config-sync hooks-config-save-safety
+3. npm test -- hooks-config-sync
 逐条报告：每命令一行 exit code + 通过/失败；失败时附前 50 行错误摘要，勿贴完整输出。
 `, { label: 'full test suite' })
 
-// === Phase 4: 逐项验证 ===
+// === Phase 3: 逐项验证 ===
 phase('逐项验证')
 const rawVerify = await agent(`
 逐项检查 Stage 06 的改动是否实际生效（项目根 D:\\data\\learn\\code\\slTerminal）。

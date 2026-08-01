@@ -123,6 +123,8 @@ usePanelFocus("terminal", container, activate, deactivate);
 
 `context: "global"`，`App.tsx` 中 `registry.register([...createGlobalShortcuts(), ...createTerminalShortcuts(), ...createEditorShortcuts()])` 一次性注册；overrides 经 `wireKeybindings(getShortcutRegistry(), useKeybindings)` 持续同步。优先级 0-99，面板级可覆盖。
 
+**Hooks 配置入口已迁移到侧栏右键菜单**（原 `global.openHooksConfig` Ctrl+Shift+H 命令已删除）：SidebarTree「打开 Hooks 配置」菜单项 → 先 `switchToPage`（面板须活跃页打开）→ `openHooksConfigPanel(pageId)`（`workspace/pageApis`，轮询 `getPageApi` 就绪 → `getPanel(id)` 命中 `focus()`、未命中 `addPanel`——同页单例语义 C13-7 不变）。
+
 ## 用户自定义重绑定
 
 - 覆盖层存 `~/.slterminal/settings.json` 的 `keybindings` 段（`{ commandId: "Ctrl+Alt+KeyC" | null }`），由 `stores/keybindings.ts` 管理（sanitize + loaded 守卫 + debounce）。后端 `save_settings` 浅合并，不擦其他段。
@@ -175,11 +177,11 @@ HTML 面板内容在 `<iframe sandbox="allow-scripts" srcDoc={...}>` 中（不�
 |------|----------|
 | `keystroke.test.ts` | formatKeystroke 各组合（含 Meta 修饰键）+ 固定序、parseKeystroke 合法往返/各类非法、isValidKeystrokeString、format∘parse 恒等 |
 | `reserved.test.ts` | isReserved 各 context、每个保留键命中、非保留键放行、global 两集并集 |
-| `commandCatalog.test.ts` | 6 命令齐全 + 元数据、id 唯一、defaultKey 合法且非自身保留、commandFromMeta 合并/抛错 |
+| `commandCatalog.test.ts` | 9 命令齐全 + 元数据、id 唯一、defaultKey 合法且非自身保留、commandFromMeta 合并/抛错 |
 | `shortcuts.test.ts` | 注册/注销、引用计数、上下文栈竞态、匹配排序（含 metaKey 修饰键）、IME 透传、global、handler 返回值+stopPropagation、**setOverrides 重绑/解绑/降级/冲突、resolve/forceContext、exportContextBindings、listCommands、_reset 清 overrides** |
 | `wireKeybindings.test.ts` | 立即应用、store 变更重应用、unsubscribe |
 | `usePanelFocus.test.ts` | focusin→pushContext+onActivate、focusout(离子树)→popContext+onDeactivate、内部焦点转移不触发、卸载清理 |
-| `globalCommands.test.ts` | createGlobalShortcuts 命令结构（defaultKey/title/category）、Ctrl+W 关闭、无面板透传、延迟求值 |
+| `globalCommands.test.ts` | createGlobalShortcuts 命令结构（defaultKey/title/category）、Ctrl+W 关闭、getDockviewApi 延迟求值 |
 | `keyboard.test.ts` | createTerminalShortcuts()（无参）copy/paste/newline 经 getActiveTerminal 派发、无 active 透传、Ctrl+C 不注册 |
 | `editor-keyboard.test.ts` | createEditorShortcuts()（无参）save/toggleWordWrap 经 getActiveEditor 派发、无 active 透传、聚焦覆盖 |
 | `activeTerminal.test.ts` / `activeEditor.test.ts` | active 指针 set/get/覆盖、clear 仅在匹配时生效 |

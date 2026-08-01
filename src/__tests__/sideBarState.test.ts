@@ -476,9 +476,9 @@ describe("场景序列（S1–S6）", () => {
 // ── 常量验证 ──
 
 describe("常量", () => {
-  it("DEFAULT_ZONES 上区含 projects、explorer 和 commit", () => {
+  it("DEFAULT_ZONES 上区含 projects、explorer、commit 和 agent-status", () => {
     expect(DEFAULT_ZONES).toEqual({
-      top: ["projects", "explorer", "commit"],
+      top: ["projects", "explorer", "commit", "agent-status"],
       bottom: [],
     });
   });

@@ -58,6 +58,7 @@ vi.mock("../ipc/window", () => ({
     mocks.capturedHandler = cb;
     return () => {};
   }),
+  onFocusChanged: vi.fn(() => () => {}),
 }));
 
 vi.mock("../workspace", () => ({

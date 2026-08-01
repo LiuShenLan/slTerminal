@@ -24,7 +24,7 @@ npm run wdio          # → node ./e2e-tests/run-wdio.cjs
 | 文件 | 用途 |
 |------|------|
 | `wdio.conf.ts` | WDIO 配置：local runner、mocha BDD、embedded driverProvider、单实例端口 4445、60s 超时 |
-| `test.e2e.ts` | 测试用例（14 条，3 describe 块，用例数见 `.claude/test-inventory.md`）：启动标题、终端 PTY 通信+缓冲断言、终端写入读取（E2E helper）、**H6 终端跨页面存活**、页签标题+冲突、**编辑器 dirty→clean 保存**、HTML iframe Ctrl+W postMessage 转发关闭、**HTML 内联脚本/事件 CSP 执行验证**、**侧栏视图 点击开关（R1/R2 验证）**、**侧栏视图 拖拽跨区（R6/R7 验证）** |
+| `test.e2e.ts` | 测试用例（25 条，23 active + 2 skip，4 describe 块，用例数见 `.claude/test-inventory.md`）：启动标题、终端 PTY 通信+缓冲断言、终端写入读取（E2E helper）、**H6 终端跨页面存活**、页签标题+冲突、**编辑器 dirty→clean 保存**、HTML iframe Ctrl+W postMessage 转发关闭、**HTML 内联脚本/事件 CSP 执行验证**（skip）、**侧栏视图 点击开关（R1/R2 验证）**、**侧栏视图 拖拽跨区（R6/R7 验证）**、**Commit 视图 Changes/Unversioned + 双击 diff 页签**、hooks 注入/卸载/状态、**信号文件驱动页签 emoji**、Agent Status 视图存在性验证、**Agent Status 纯 shell 终端无行（行建模新语义）**、**Agent Status 动态四态（首个信号即建行→PreToolUse⚡→Stop✅→SessionEnd 行消失）**、**R2 变体（切项目往返用量保持——contextUsage 全链路 + cache 字段）**、**R3 变体（SessionEnd 删行+切项目不复活）**、**R4 变体（关页签删行——remove 事件+ref 稳定订阅）**、toast 触发链路（skip） |
 | `run-wdio.cjs` | Node 版本兼容启动器 |
 | `helpers.ts` | E2E 辅助函数（`installAllE2eHelpers()` 统一注入全局对象） |
 
@@ -69,6 +69,14 @@ E2E helpers 通过 `main.tsx` 中 `E2E_ENABLED`（`src/lib/e2eEnabled.ts`）条�
 | `__e2e_getTerminalText()` | 读取 xterm 终端缓冲内容（挂载在终端容器 DOM 元素上） |
 
 > **命名约定说明**：`__slterm_e2e_*` 前缀的对象挂载在 `window` 上（全局）；`__e2e_*` 前缀的对象挂载在终端容器 DOM 元素上（局部）。两套命名反映挂载位置不同——`__e2e_*` 对象随面板销毁而消失，不能作为 `window` 全局。未来可统一为 `__slterm_e2e_*` 前缀。
+
+## settings.json 隔离机制（FIX-TE-04）
+
+`run-wdio.cjs` 在启动时备份 `~/.slterminal/settings.json`（存在时复制为 `settings.json.e2e-bak`），并在 `process.on('exit')` 中同步还原：
+
+- **原文件存在**：用备份覆盖 E2E 运行期间产生的 `settings.json`
+- **原文件不存在**：删除 E2E 产物 + 残留 bak 文件
+- node22 直跑 / 便携下载 / fallback 三路径均受 `exit` 钩子覆盖
 
 ## 已知无害噪声
 

@@ -353,10 +353,16 @@ describe("DiffPanel", () => {
     await waitFor(() => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
     });
+    // 等待 CM6 挂载完成——.cm-content 存在后再取元素，避免 flaky
+    await waitFor(() => {
+      const el = container
+        .querySelector('[data-e2e="diff-left"]')
+        ?.querySelector(".cm-content");
+      expect(el).toBeTruthy();
+    });
     const leftContent = container
       .querySelector('[data-e2e="diff-left"]')!
       .querySelector(".cm-content") as HTMLElement;
-    expect(leftContent).toBeTruthy();
     // editable.of(false) 会设 contentEditable="false"；
     // 修复后应为 "true"（CM6 默认）或 "inherit"
     expect(leftContent.contentEditable).not.toBe("false");
@@ -370,11 +376,17 @@ describe("DiffPanel", () => {
     await waitFor(() => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
     });
+    // 等待 CM6 挂载完成——.cm-content 存在后再交互，避免 flaky
+    await waitFor(() => {
+      const el = container
+        .querySelector('[data-e2e="diff-left"]')
+        ?.querySelector(".cm-content");
+      expect(el).toBeTruthy();
+    });
     // 搜索面板初始隐藏，需 Ctrl+F 触发
     const leftContent = container
       .querySelector('[data-e2e="diff-left"]')!
       .querySelector(".cm-content") as HTMLElement;
-    expect(leftContent).toBeTruthy();
     // 聚焦左栏内容区
     leftContent.focus();
     // 模拟 Ctrl+F

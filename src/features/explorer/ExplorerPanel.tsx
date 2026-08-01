@@ -147,7 +147,7 @@ export const ExplorerPanel: React.FC = () => {
   const renameSelectedRef = useRef(handleRenameSelected);
   renameSelectedRef.current = handleRenameSelected;
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- 空依赖：所有数据通过 ref 访问，对象引用永久稳定
+  // 空依赖：所有数据通过 ref 访问，对象引用永久稳定
   const explorerActions = useMemo(
     () => ({
       getSelectedPath: () => selectedPathRef.current,

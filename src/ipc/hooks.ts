@@ -1,6 +1,7 @@
-// Hooks IPC — 注入/卸载/状态查询 + hook-event 事件订阅
+// Hooks IPC — 注入/卸载/状态查询 + hook-event 事件订阅 + token 用量查询
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import type { ContextUsage } from "../types/hooks";
 
 /** Hook 注入状态 DTO（契约 C6） */
 export interface HookInjectionStatus {
@@ -33,6 +34,18 @@ export async function uninstall(): Promise<void> {
 /** 查询当前注入状态（面板/入口显示用） */
 export async function getInjectionStatus(): Promise<HookInjectionStatus> {
   return invoke("hooks_injection_status");
+}
+
+/**
+ * 从 transcript 文件尾部扫描 token 用量
+ *
+ * 读取 transcript JSONL 文件尾部约 64KB，逆行扫描含 usage 的行，
+ * 返回 input/output token 数。无 usage 或文件异常返回 null。
+ */
+export async function contextUsage(
+  transcriptPath: string,
+): Promise<ContextUsage | null> {
+  return invoke("hooks_context_usage", { transcriptPath });
 }
 
 /**

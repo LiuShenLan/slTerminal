@@ -28,10 +28,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 `SideViewRegistry` 是模块级单例（同 TabTitleRegistry 模式），管理侧栏视图定义（`SideViewDef` = id + title + icon + React 组件）。ActivityBar 通过此注册表渲染按钮，SideBarArea 通过它渲染视图槽。
 
 **新增侧栏视图只需两步**：
-1. 实现 ViewComponent（接受 `SideViewComponentProps = { switchToPage, onDeletePage }`）
-2. 在 `sideViewDefs.ts` 加一行 `sideViewRegistry.register({ id, title, icon, component })`
+1. 实现 ViewComponent（接受 `SideViewComponentProps = { switchToPage, onDeletePage }`）。例如 `agent-status` 视图——`AgentStatusView` 组件位于 `../agentStatus/AgentStatusView.tsx`
+2. 在 `sideViewDefs.ts` 加一行 `sideViewRegistry.register({ id, title, icon, component })`。例如 `agent-status` 注册：
+   ```typescript
+   sideViewRegistry.register({
+     id: "agent-status",
+     title: "Agent 状态",
+     icon: "🤖",
+     component: AgentStatusView,
+   });
+   ```
 
 框架自动处理：活动栏按钮渲染与开关、上区/下区拖拽归属、槽位 display:none/flex 切换、持久化。
+
+默认按钮归属（`DEFAULT_ZONES.top`）：`projects` / `explorer` / `commit` / `agent-status`（`sideBarState.ts`）。
 
 与项目现有注册表对比：同 `TabTitleRegistry`（`panels/terminal/`）的 `register/getAll/_reset` 模式；同 `ShortcutRegistry` 的模块级单例模式；同 `FileViewerRegistry` 的注册即用零额外配置模式。
 
@@ -63,9 +73,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `sideBarState.ts` | 类型定义（Zone/Zones/OpenState/LayoutKind/SideBarSlice）+ 默认值常量（DEFAULT_ZONES/DEFAULT_OPEN/ACTIVITY_BAR_SIZE/WIDTH_* /SPLIT_*）+ 纯函数（toggleViewPure/moveButtonPure/deriveLayout/reconcileZones/sanitizeSideBar） |
 | `sideViewRegistry.ts` | `SideViewRegistry` 模块级单例：`register(def)`（同 id 覆盖）/`getAll()`（注册序）/`get(id)`/`_reset()`（仅测试） |
 | `dropTarget.ts` | `computeDropTarget` 纯函数——零 DOM 访问，根据 clientY + 按钮矩形列表计算落点 zone + index |
-| `sideViewDefs.ts` | side-effect 注册文件：注册 `projects`（📋 项目列表）+ `explorer`（📁 文件浏览器）+ `commit`（🔀 Commit）三条视图。新增视图在此追加 `sideViewRegistry.register(...)` |
+| `sideViewDefs.ts` | side-effect 注册文件：注册 `projects`（📋 项目列表）+ `explorer`（📁 文件浏览器）+ `commit`（🔀 Commit）+ `agent-status`（🤖 Agent 状态）四条视图。新增视图在此追加 `sideViewRegistry.register(...)` |
 | `ActivityBar.tsx` | 活动栏组件：40px 宽 flex 列（上区按钮组 + flex:1 间隔 + 下区按钮组）、点击开关（R1/R2）、HTML5 拖拽换区/排序、VS Code 风格 active 态指示条（左侧 2px FOCUS_BORDER）、`data-e2e` 选择器。配色全部 `theme/colors.ts` token（硬约束 #6） |
 | `SideBarArea.tsx` | 侧栏区组件：`<Allotment vertical proportionalLayout>` 两 pane（上/下半区），每 pane `visible={!!open[zone]}`、`preferredSize` 由 splitRatio 控制；半区内按 zones 顺序渲染视图槽（`display: open[zone]===v.id ? "flex" : "none"` 保挂载）；onChange 仅双开时换算 ratio 写回 store |
+| `../agentStatus/AgentStatusView.tsx` | `agent-status` 视图组件：订阅 `useAgentStatus()` hook 渲染 Agent 会话状态列表 |
+| `../agentStatus/AgentStatusRow.tsx` | Agent 会话行组件：渲染单行状态信息（四态图标 + 标题 + 上下文用量条）。用量口径 = `(inputTokens + cacheReadInputTokens + cacheCreationInputTokens) / 200_000`（outputTokens 不计占用保留为信息字段） |
+| `../agentStatus/useAgentStatus.ts` | 数据 hook：`useAgentStatus()` 返回 `AgentStatusResult`（`state` 状态 + `rows: AgentSessionRow[]`）。行 = 运行中的 claude 会话（非全部终端——`claudeSession` 为 null/undefined 的纯 shell 终端不建行）。建行双通道幂等（`sessionChange` session 非 null ∨ hook 事件非 SessionEnd/Exit 且行不存在）；删行三通道（`sessionChange` session 为 null ∨ SessionEnd/Exit ∨ `remove`）。初始扫描只建 `claudeSession` 非 null 的行并携 `transcriptPath` 主动拉 `contextUsage`（修复切项目后 idle 会话用量永远 --）。#5 竞态双保险：双 listener 经 ref 读最新状态 + deps `[]` 订阅永不重建 + reconcile 对账兜底 |
+| `../agentStatus/consts.ts` | 常量定义：`CLAUDE_CONTEXT_LIMIT = 200_000` |
+| `../agentStatus/index.ts` | barrel export：`export { AgentStatusView }` |
 
 ## 硬约束
 

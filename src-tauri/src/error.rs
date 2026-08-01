@@ -28,6 +28,12 @@ pub enum AppError {
 
     #[error("文件监听错误: {0}")]
     Notify(String),
+
+    #[error("参数校验错误: {0}")]
+    Validation(String),
+
+    #[error("路径不在允许范围内: {0}")]
+    PathNotAllowed(String),
 }
 
 impl From<std::io::Error> for AppError {
@@ -63,7 +69,10 @@ mod tests {
 
     #[test]
     fn test_app_error_serialization() {
-        let err = AppError::IoKind { kind: "NotFound".into(), message: "测试错误".into() };
+        let err = AppError::IoKind {
+            kind: "NotFound".into(),
+            message: "测试错误".into(),
+        };
         let json = serde_json::to_string(&err).unwrap();
         assert!(json.contains("测试错误"));
         assert!(json.contains("ioKind"));
@@ -73,7 +82,10 @@ mod tests {
     #[test]
     fn test_all_error_variants_display() {
         let errors: Vec<AppError> = vec![
-            AppError::IoKind { kind: "Other".into(), message: "磁盘已满".to_string() },
+            AppError::IoKind {
+                kind: "Other".into(),
+                message: "磁盘已满".to_string(),
+            },
             AppError::Pty("PTY 进程崩溃".to_string()),
             AppError::Git("rebase 冲突".to_string()),
             AppError::Serde("JSON 键缺失".to_string()),
@@ -81,6 +93,8 @@ mod tests {
             AppError::SessionNotFound("uuid-12345".to_string()),
             AppError::TaskJoin("join error".to_string()),
             AppError::Notify("watcher 启动失败".to_string()),
+            AppError::Validation("非法 layer".to_string()),
+            AppError::PathNotAllowed("C:\\outside\\project".to_string()),
         ];
         for err in &errors {
             let display = format!("{err}");
@@ -95,7 +109,10 @@ mod tests {
         let app_err: AppError = io_err.into();
         match app_err {
             AppError::IoKind { kind, message } => {
-                assert!(kind.contains("NotFound"), "kind 应保留 ErrorKind::NotFound，实际: {kind}");
+                assert!(
+                    kind.contains("NotFound"),
+                    "kind 应保留 ErrorKind::NotFound，实际: {kind}"
+                );
                 assert!(
                     message.contains("文件不存在"),
                     "消息应包含原始错误信息，实际: {message}"

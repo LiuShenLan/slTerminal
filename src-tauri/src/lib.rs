@@ -40,12 +40,14 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_wdio_webdriver::init());
 
     #[cfg(not(debug_assertions))]
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_dialog::init());
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init());
 
     match builder
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -96,6 +98,9 @@ pub fn run() {
             hooks::inject::hooks_inject,
             hooks::inject::hooks_uninstall,
             hooks::inject::hooks_injection_status,
+            hooks::usage::hooks_context_usage,
+            hooks::config::hooks_config_read,
+            hooks::config::hooks_config_write,
         ])
         .run(tauri::generate_context!())
     {
