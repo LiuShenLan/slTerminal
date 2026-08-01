@@ -22,11 +22,11 @@
 
 ## 发现项（未纳入 Stage 范围，待决策）
 
-### 1. hooksConfig 面板首次点击被吞（UX 瑕疵，建议修复）
+### 1. hooksConfig 面板点击被吞（UX 瑕疵，**已修复** `db51a67`）
 
-`useHooksConfig.load()` 无条件 `setLoading(true)` + 面板根容器 `onFocus={reload}` 的组合：真实用户**首次点击面板内任意按钮**时，mousedown 先聚焦 → focusin 触发 reload → 面板整体换成"加载中"占位 → 按钮在 mouseup 前被移出 DOM → click 丢失（二次点击生效）。Stage 09 fix-loop 实测定位（WebDriver elementClick 后 11ms 编辑区瞬时 null=loading，130ms 恢复）。
+用户验收实测为**每次点击都失效**（比 fix-loop 估判的"首次点击"更严重——每次点击的是不同元素，焦点持续转移）。根因：`onFocus` 绑定根容器 → 元素间焦点转移的 focusin 也冒泡触发 reload；`load()` 无条件 `setLoading(true)` 将内容替换为 loading 占位 → 被点击按钮在 mouseup 前卸载 → click 丢失。
 
-**建议修复方向**：reload 重读期间保留旧内容不 blank 面板（照编辑器外部重载语义），或首次 focusin 跳过重读。修复须附 L2 防回归测试。
+**修复（2026-08-01）**：① `handleFocus` 经 `relatedTarget` 判定——面板内焦点转移跳过重读，仅焦点从外部进入触发（保留 C13-8 聚焦重读语义）；② `load()` 增 `showLoading` 参数，reload 路径保留旧内容不 blank。L2 防回归 2 用例（内部转移不重读/外部进入重读），L4 26/26 无回归。
 
 ### 2. MessageDisplay handler 支持档为保守推断
 
