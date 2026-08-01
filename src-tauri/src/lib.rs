@@ -7,6 +7,7 @@ mod notify;
 mod git;
 mod projects;
 mod hooks;
+pub mod claude_history;
 
 pub use error::AppError;
 pub use state::AppState;
@@ -101,6 +102,7 @@ pub fn run() {
             hooks::usage::hooks_context_usage,
             hooks::config::hooks_config_read,
             hooks::config::hooks_config_write,
+            claude_history::scan::claude_history_scan,
         ])
         .run(tauri::generate_context!())
     {
