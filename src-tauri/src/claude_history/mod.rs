@@ -4,11 +4,13 @@
 //! - DTO 定义：`HistorySession`（IPC 契约七字段）+ `TitleSource`（五变体）
 //! - `scan.rs`：扫描根单点（SEC-02/BE-06）+ `claude_history_scan` 命令（BE-02/BE-05）
 //! - `jsonl.rs`：JSONL 轻量解析纯函数（BE-03/BE-04）
+//! - `ops.rs`：写操作（SEC-01 sessionId 校验 + BE-07 删除 / BE-08 重命名）
 //!
 //! 数据源事实约束（规格 3.1）：存储根 `~/.claude/projects/`，一级目录名 = cwd 的
 //! 有损编码（禁止反解码），会话文件 = `<uuidv4>.jsonl`（文件名主干即 sessionId）。
 
 pub mod jsonl;
+pub mod ops;
 pub mod scan;
 
 use serde::{Deserialize, Serialize};
