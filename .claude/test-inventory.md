@@ -2,11 +2,11 @@
 
 > **本文档是项目用例数唯一真值源。** 所有 CLAUDE.md、README、CI 配置中引用的用例数均以此文件为准。更新测试后必须同步本文档。
 
-全量 **2304** 用例（Rust 382 + 前端 1780 + L3 116 + E2E 26），2026-08-01 更新。
+全量 **2306** 用例（Rust 384 + 前端 1780 + L3 116 + E2E 26），2026-08-01 更新。
 
 > **计数口径**：前端 (L2) 用例数以 `grep -cE '^\s*(it|test)\(' src/__tests__/*.test.ts src/__tests__/*.test.tsx` 展开的 `it`/`test` 块数为准（Vitest 实际运行数）；L3 同理 `test/terminal/*.test.ts`；Rust (L1) 以 `grep -c '#\[test\]'` 统计的 `#[test]` 属性数为准。L3 的 116 用例同时被 L2 (`npm test`) 和独立 L3 (`npm run test:l3`) 执行，但此处各层独立计数，不做去重。
 
-## L1 — Rust 单元/集成测试（19 文件 / 382 用例）
+## L1 — Rust 单元/集成测试（19 文件 / 384 用例）
 
 运行：`cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1`
 
@@ -19,7 +19,7 @@
 | `src-tauri/src/notify/mod.rs` | 24 | FileWatcher 生命周期 + classify_by_kind 事件分类（全 7 种 EventKind） |
 | `src-tauri/src/state.rs` | 24 | ring buffer append+eviction+换行边界/validate_path_within_root 沙箱/canonicalize_or_ancestor |
 | `src-tauri/src/hooks/usage.rs` | 28 | parse_usage_line 全分支（合法 JSON/缺字段/缺 message/非法 JSON/空串/大值 u64/类型不匹配/额外字段忽略/cache 字段提取/缺失默认 0/显式 0/单 cache 字段）+ scan_transcript_usage 集成（逆行命中/无 usage 回溯/文件不存在/空文件/损坏行跳过）+ ContextUsage serde camelCase（含缺 cache 字段反序列化）+ TRANSCRIPT_TAIL_BYTES 常量 + hooks_context_usage 端到端（多条 usage/空文件/损坏行跳过/大文件 >128KB 仅读尾部 64KB） |
-| `src-tauri/src/hooks/inject.rs` | 20 | 注入幂等（空 settings/已有用户 hooks/已注入升级）/卸载干净/状态检测（injected/outdated/notInjected）/非法 JSON 中止/版本比对/notification 权限声明 |
+| `src-tauri/src/hooks/inject.rs` | 22 | 注入幂等（空 settings/已有用户 hooks/已注入升级）/卸载干净（handler 级剔除：独立组/混组保用户 handler/全 slterm 组删除/无 slterm 零写盘）/状态检测（injected/outdated/notInjected）/非法 JSON 中止/版本比对/notification 权限声明 |
 | `src-tauri/src/settings.rs` | 17 | 读写往返/文件不存在/JSON 损坏回退 .bak/浅合并/shadow 目录 + 命令包装单测 |
 | `src-tauri/src/pty/shell.rs` | 15 | pwsh 发现/shell-integration.ps1 嵌入/UTF-16LE Base64 往返/which_full_path/shell 白名单 |
 | `src-tauri/src/notify/pool.rs` | 13 | LruWatcherPool: 缓存命中/LRU 淘汰/pause_all_except/replace/remove/stop_all/Drop |
@@ -303,6 +303,7 @@ embedded WDIO 驱动**无法将 OS 级按键（`browser.keys`）投递进 WebVie
 
 ## 历史变更
 
+- 2026-08-01（验收修复 5：卸载改 handler 级剔除）：inject.rs remove_slterm_matchers 组级→handler 级（混组保用户 handler，组空才删组）；20→22 用例（+2：混组保用户 handler/全 slterm 组删除）。L1 382→384，全量 2304→2306。
 - 2026-08-01（验收修复 4：JSON 模式三修）：删自动补全（jsonCompletion + jsonLanguage.data.of + @codemirror/autocomplete 直接依赖移除，传递依赖仍在）；加 EditorView.theme height:100% + overflow:clip（竖向滚动条，验收 1.3）；hooks-config-panel 18→19（+1 错误提示单行截断断言，验收 1.2）；jsonmode 17（断言改 height theme，用例数不变）。L2 1779→1780，全量 2303→2304。
 - 2026-08-01（验收修复 3：GUI 接入 HandlerForm）：hooks-config-gui 21→25（+4：选中渲染表单/字段编辑上抛新模型/切换选中表单跟随/托管 handler 表单只读）。L2 1775→1779，全量 2299→2303。
 - 2026-08-01（验收修复 2：外部修改检测改 window focus）：hooks-config-panel 17→18（删 3 个 focusin relatedTarget 用例——机制移除；改/增 4 个 window focus 用例——可见触发/不可见跳过/面板内点击不触发/ask 弹窗期间回归不二次弹窗）。L2 1774→1775，全量 2298→2299。

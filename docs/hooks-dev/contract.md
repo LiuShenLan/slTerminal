@@ -100,7 +100,7 @@ DTO（Rust `snake_case` ↔ JS `camelCase` 双边对应，硬约束 #4）：
 - **识别与幂等**：slTerminal 配置段按 `command` 含脚本文件名（`slterm-hook-reporter`）子串精确识别；注入幂等（已存在则替换为当前版本，不重复追加）；用户既有任何配置段原样保留。
 - **版本过旧判定**：比对磁盘脚本与内嵌模板（内容 hash 或版本常量比对，实现留阶段 1 定），不一致 → `outdated`。
 - **非法中止**：settings.json 本身非法（JSON 语法错误）时注入中止并报错提示，不强行改写。
-- **卸载**：移除全部含标记的 matcher 组（空数组事件键清理）+ 删 `~/.slterminal/hooks/` + 清空 `~/.slterminal/hooks-events/`。
+- **卸载（handler 级剔除）**：组内 `hooks` 数组剔除全部含标记的 handler（组内保留用户条目，组空才删组）+ 空数组事件键清理 + 删 `~/.slterminal/hooks/` + 清空 `~/.slterminal/hooks-events/`。
 - **不写非标准字段**进 settings.json（schema 校验/污染）。
 
 ## C10 Node hook 脚本契约（F1）

@@ -93,31 +93,51 @@ fn has_slterm_matchers(settings: &Value) -> bool {
         })
 }
 
-/// 单个 matcher 组是否引用了 slterm-hook-reporter
+/// 单个 handler 是否引用了 slterm-hook-reporter（C9 识别规则，handler 级判定——
+/// 与前端 isSltermManaged 粒度一致）
+fn handler_contains_slterm(hook: &Value) -> bool {
+    hook.get("command")
+        .and_then(|c| c.as_str())
+        .is_some_and(|cmd| cmd.contains("slterm-hook-reporter"))
+}
+
+/// 单个 matcher 组是否引用了 slterm-hook-reporter（组内任一 handler 命中）
 fn matcher_contains_slterm(matcher: &Value) -> bool {
     matcher
         .get("hooks")
         .and_then(|hooks| hooks.as_array())
-        .is_some_and(|hooks_arr| {
-            hooks_arr.iter().any(|hook| {
-                hook.get("command")
-                    .and_then(|c| c.as_str())
-                    .is_some_and(|cmd| cmd.contains("slterm-hook-reporter"))
-            })
-        })
+        .is_some_and(|hooks_arr| hooks_arr.iter().any(handler_contains_slterm))
 }
 
-/// 从 hooks 对象中移除所有含 slterm-hook-reporter 的 matcher，清理空事件键
-/// 返回 true 表示有实际移除
+/// 从 hooks 对象中移除所有 slterm-hook-reporter 条目（**handler 级剔除**）：
+/// - 组内 hooks 数组剔除命中的 handler——用户自定义 handler 与注入 handler 混入
+///   同一 matcher 组时仅删 slterm handler、保留用户条目（与前端 isSltermManaged
+///   粒度对齐，验收修复：旧实现按 matcher 组级删除会连带删除组内用户 handler）
+/// - 组内 hooks 全空 → 删除整组；无 hooks 数组的组原样保留（非标准形态不碰用户数据）
+/// - 事件键下无剩余组 → 清理空数组事件键
+///   返回 true 表示有实际移除（含组内 handler 剔除——changed 决定是否写盘）
 fn remove_slterm_matchers(hooks: &mut serde_json::Map<String, Value>) -> bool {
     let mut removed = false;
     for (_event, matchers_val) in hooks.iter_mut() {
         if let Some(matchers) = matchers_val.as_array_mut() {
-            let before = matchers.len();
-            matchers.retain(|m| !matcher_contains_slterm(m));
-            if matchers.len() < before {
-                removed = true;
+            let mut filtered: Vec<Value> = Vec::with_capacity(matchers.len());
+            for mut m in matchers.drain(..) {
+                let mut keep_group = true;
+                if let Some(hooks_arr) = m.get_mut("hooks").and_then(|h| h.as_array_mut()) {
+                    let before_len = hooks_arr.len();
+                    hooks_arr.retain(|h| !handler_contains_slterm(h));
+                    if hooks_arr.len() < before_len {
+                        removed = true; // 组内 handler 被剔除
+                    }
+                    keep_group = !hooks_arr.is_empty();
+                }
+                if keep_group {
+                    filtered.push(m);
+                } else {
+                    removed = true; // 整组被删
+                }
             }
+            *matchers = filtered;
         }
     }
     // 清理空数组的事件键
@@ -571,6 +591,58 @@ mod tests {
         let removed = remove_slterm_matchers(&mut hooks);
         assert!(!removed);
         assert!(hooks.contains_key("PreToolUse"));
+    }
+
+    #[test]
+    fn remove_matchers_keeps_user_handler_in_same_group() {
+        // 验收修复：用户自定义 handler 与注入 handler 混入同一 matcher 组时，
+        // 仅剔除 slterm handler，用户 handler 与组保留（handler 级剔除，对齐前端粒度）
+        let mut hooks = serde_json::json!({
+            "SessionStart": [
+                {
+                    "matcher": "",
+                    "hooks": [
+                        {"type": "command", "command": "node \"slterm-hook-reporter.js\"", "timeout": 5},
+                        {"type": "command", "command": "echo user-hook", "timeout": 10}
+                    ]
+                }
+            ]
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        let removed = remove_slterm_matchers(&mut hooks);
+        assert!(removed, "组内 handler 剔除应标记 removed（触发写盘）");
+        let arr = hooks["SessionStart"].as_array().unwrap();
+        assert_eq!(arr.len(), 1, "混组场景组应保留");
+        let handlers = arr[0]["hooks"].as_array().unwrap();
+        assert_eq!(handlers.len(), 1, "仅 slterm handler 被剔除");
+        assert_eq!(handlers[0]["command"], "echo user-hook");
+    }
+
+    #[test]
+    fn remove_matchers_drops_group_when_all_handlers_slterm() {
+        // 同组全部 handler 均为 slterm → 组空 → 整组删除
+        let mut hooks = serde_json::json!({
+            "SessionStart": [
+                {
+                    "matcher": "",
+                    "hooks": [
+                        {"type": "command", "command": "node \"slterm-hook-reporter.js\"", "timeout": 5},
+                        {"type": "command", "command": "node \"other/slterm-hook-reporter.js\"", "timeout": 5}
+                    ]
+                }
+            ]
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        let removed = remove_slterm_matchers(&mut hooks);
+        assert!(removed);
+        assert!(
+            !hooks.contains_key("SessionStart"),
+            "全 slterm 组删除后空事件键应被清理"
+        );
     }
 
     // ── inject_matchers ──
