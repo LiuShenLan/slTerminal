@@ -1,10 +1,11 @@
 # Claude Code 历史会话查询与恢复 — 需求规格
 
-> 版本：v1.0（需求冻结版）
-> 日期：2026-08-01
-> 状态：需求澄清完成（grill-with-docs 17 轮决策 + review 补遗 4 轮），可进入开发排期
+> 版本：v1.1（2026-08-02，决策 22–26 回写）
+> 日期：2026-08-01（v1.0 冻结）；2026-08-02（v1.1 修订）
+> 状态：需求澄清完成（grill-with-docs 17 轮决策 + review 补遗 4 轮）+ 实现期决策 22–26（本机真实数据复核后敲定），已开发完毕
 > 信息依据：`docs/claude-his/`（D1–D8 检索报告，已核验）
 > 本文为**需求规格**：描述做什么、边界是什么、为什么这样做。不含实现方式与开发计划。
+> v1.1 变更来源：决策 22–26 回写（见 `docs/claude-history-view/checklist.md` 决策 22–26——grill 敲定 + 实现收尾统一回写本文件）。核心变化：重命名写 custom-title（推翻决策 10，标题回退链四路）、E2E 数据隔离 env、当前项目匹配口径、恢复命令 pty.write 注入（零后端改动）、时间口径 = 文件 mtime。
 
 ---
 
@@ -42,7 +43,7 @@ slTerminal 已有 **agent 侧栏视图**（agent-status）展示**活跃**的 Cl
 | **历史会话** | 磁盘上存在的全部会话 transcript（含运行中的——两区重叠） |
 | **Transcript** | 会话的 JSONL 记录文件，路径 `~/.claude/projects/<编码路径>/<sessionId>.jsonl` |
 | **会话 ID** | UUIDv4，与 transcript 文件名主干一致，恢复命令 `claude --resume <id>` 的凭据 |
-| **ai-title** | JSONL 中的自动/自定义标题条目（覆写式 last wins，写入文件尾部），列表标题的第一优先级来源 |
+| **ai-title** | JSONL 中的自动标题条目（覆写式 last wins，写入文件尾部），列表标题的第二优先级来源（第一优先级为 custom-title，决策 22） |
 | **summary** | JSONL 首行条目，含人类可读摘要 + leafUuid |
 | **首条 prompt** | 会话中第一条"人类可见"的用户输入（跳过工具结果/元消息/本地命令输出） |
 | **孤儿会话** | 会话起始目录已被删除/重命名/移动，无法再恢复的会话（磁盘文件仍在但不可达） |
@@ -139,7 +140,7 @@ slTerminal 已有 **agent 侧栏视图**（agent-status）展示**活跃**的 Cl
 
 | 字段 | 来源 | 说明 |
 |------|------|------|
-| 标题 | ai-title → summary 首行 → 首条 prompt，三路回退 | 第一优先级 ai-title（覆写式，读文件尾部）；其次 summary 摘要；最后用首条 prompt 前 N 字 |
+| 标题 | custom-title → ai-title → summary 首行 → 首条 prompt，四路回退 | 第一优先级 custom-title（用户重命名，读文件尾部，决策 22）；其次 ai-title（覆写式，读文件尾部）；再其次 summary 摘要；最后用首条 prompt 前 N 字（≤200 字符） |
 | 首条 prompt 预览 | 首条"人类可见" user 字符串消息 | 跳过 `tool_result` 载体、`isMeta` 元消息、含 `<local-command-stdout>` 的本地命令输出 |
 | 相对时间 | 最后活动时间 = 文件 mtime（或最后一条记录 timestamp，以实现为准但二者口径须统一） | 见时间粒度 |
 
@@ -180,7 +181,7 @@ slTerminal 已有 **agent 侧栏视图**（agent-status）展示**活跃**的 Cl
 1. **项目入列**：解析会话起始目录（JSONL `cwd` 字段），判断该项目是否已在项目列表打开；未打开则加入项目列表（项目名 = 路径 basename，rootPath = 会话 cwd）
 2. **页面保障**：判断该项目是否有操作页面；无则新建操作页面
 3. **页面切换**：切换到该项目的第一个操作页面（走既有页面切换语义）
-4. **终端恢复**：新建终端页签，spawn `claude --resume <sessionId>`，**cwd = 会话起始目录**
+4. **终端恢复**：前端 addPanel 新建终端页签（**cwd = 会话起始目录**）→ 轮询 TerminalRegistry 拿到 sessionId → `pty.write` 注入 `claude --resume <sessionId>\r`（fork 时追加 ` --fork-session`）。**零后端改动**——OSC 133 命令边界检测 / hooks 事件链路随终端自然生效（决策 25）
 
 > 目的：规避官方"session ID 查找限定会话起始目录 + git worktrees"硬限制——cwd 正确则恢复必然成功。
 
@@ -213,7 +214,7 @@ slTerminal 已有 **agent 侧栏视图**（agent-status）展示**活跃**的 Cl
 | **复制恢复命令** | `cd '<dir>' && claude --resume <id>`（带单引号路径）复制到剪贴板 | 所有行可用（含孤儿/运行中） |
 | **分支恢复** | 走 4.3.2 四步流程，spawn 追加 `--fork-session`（复制历史到新 sessionId，原会话不动） | 孤儿行禁用；运行中行可用（fork 是安全路径） |
 | **删除** | `dialog.ask` 确认弹窗 → 删除该会话 `<uuid>.jsonl`（含同名子代理/工具结果子目录）→ 列表立即刷新 | **⚡ 运行中行禁用**（Windows 文件句柄占用删除失败 + 外部进程续写幽灵文件）；孤儿行可用（清理孤儿文件是主要用途之一） |
-| **重命名** | 自定义输入弹窗（Tauri 原生 dialog 无输入框，须自绘）→ 写入 transcript `ai-title` 条目（覆写式 last wins）→ 列表即时刷新 | ⚡ 行**允许**重命名（ai-title 追加写与运行中写入无冲突）；写 ai-title 后官方 picker / `claude --resume <name>` 可见新标题（与官方 `/rename` 语义对齐） |
+| **重命名** | 自定义输入弹窗（Tauri 原生 dialog 无输入框，须自绘）→ 追加写入 transcript `custom-title` 条目（覆写式 last wins）→ 列表即时刷新 | ⚡ 行**允许**重命名（追加写与运行中写入无冲突）；写 custom-title 后官方 picker / `claude --resume <name>` 可见新标题（与官方 `/rename` 语义对齐——本机真实数据证实官方 /rename 写 custom-title，决策 22） |
 
 ### 4.5 状态与数据流
 
@@ -255,7 +256,7 @@ TerminalRegistry subscribe ──► ⚡ 运行中标记实时更新（不重扫
 
 ---
 
-## 6. 决策记录（grill-with-docs 21 轮）
+## 6. 决策记录（grill-with-docs 21 轮 + 实现期决策 22–26）
 
 | # | 决策点 | 结论 | 理由摘要 |
 |---|--------|------|---------|
@@ -268,7 +269,7 @@ TerminalRegistry subscribe ──► ⚡ 运行中标记实时更新（不重扫
 | 7 | 搜索 | 元数据级（标题 + prompt） | 覆盖主要找回场景，零额外成本；全文后续评估 |
 | 8 | 右键菜单 | 复制命令 + fork + 删除 + 重命名 | 完整管理能力 |
 | 9 | 删除边界 | ask 确认 → 删 transcript（含子代理目录）→ 即时刷新 | 破坏性操作须确认；范围限定该会话 |
-| 10 | 重命名存储 | 写 ai-title 条目 | 官方 picker / resume-by-name 可见，生态一致 |
+| 10 | 重命名存储 | 写 ai-title 条目 | ~~官方 picker / resume-by-name 可见，生态一致~~ **已被决策 22 推翻**（本机真实数据证实官方 `/rename` 实际写 custom-title；决策 22 起重命名写 custom-title，本行仅存留档） |
 | 11 | 详情查看 | 不纳入 | 恢复后终端即完整上下文；阅读器是独立品类 |
 | 12 | 两区关系 | 重叠 + ⚡ 运行中标记 | 忠实反映磁盘；过滤致列表跳动 |
 | 13 | 刷新时机 | 展开时全量扫描 + 手动刷新 + 局部即时刷新 | 低频主动查看场景；避免常驻监听用户目录 |
@@ -280,6 +281,11 @@ TerminalRegistry subscribe ──► ⚡ 运行中标记实时更新（不重扫
 | 19 | 分组标题 | basename + 悬停完整路径 | 侧栏宽度约束（250–500px） |
 | 20 | ⚡ 行删除/重命名 | 禁删允重命名 | Windows 句柄占用 + 幽灵文件；ai-title 追加写无冲突 |
 | 21 | 扫描目录 | 仅默认 ~/.claude/projects/，不支持 CLAUDE_CONFIG_DIR | 首期范围控制，后续增强 |
+| 22 | 重命名存储（v1.1） | 写 custom-title 条目，标题回退链四路 | 本机真实数据证实官方 `/rename` 写 custom-title（非 ai-title），对齐官方语义；**推翻决策 10**。回退链：custom-title > ai-title > summary > 首条 prompt |
+| 23 | E2E 数据隔离（v1.1） | 后端扫描根支持 `SLTERM_CLAUDE_PROJECTS_DIR` env 覆盖（仅测试用途） | E2E 用 fixture 副本目录，任何用例不得触碰用户真实 `~/.claude/projects/` |
+| 24 | 当前项目匹配（v1.1） | `normalizePath`（反斜杠统一 `/`）+ 忽略大小写后**精确相等** | 与恢复编排「项目入列」判定同款规范化，两处口径一致 |
+| 25 | 恢复命令注入（v1.1） | 前端 addPanel 建终端 → 轮询 TerminalRegistry → `pty.write` 注入 `claude --resume <id>` | **零后端改动**；OSC 133 / hooks 链路随终端自然生效 |
+| 26 | 时间口径（v1.1） | 最后活动时间 = 文件 mtime（两区统一） | 文件 `modified()` 转毫秒；metadata 失败 → 0 |
 
 ---
 
@@ -307,7 +313,7 @@ TerminalRegistry subscribe ──► ⚡ 运行中标记实时更新（不重扫
 ### 8.2 列表
 
 - [ ] 行 = 双行式：标题（粗体）+ 右上相对时间；第二行 prompt 预览单行截断
-- [ ] 标题三路回退正确（有 ai-title 用 ai-title；无则 summary；再无则首条 prompt）
+- [ ] 标题四路回退正确（有 custom-title 用 custom-title；无则 ai-title；无则 summary；再无则首条 prompt，决策 22）
 - [ ] 首条 prompt 跳过工具结果/元消息/本地命令输出
 - [ ] 排序按最后活动时间降序；时间粒度正确
 - [ ] 运行中会话 ⚡ 标记且实时更新（TerminalRegistry 联动）
@@ -326,7 +332,7 @@ TerminalRegistry subscribe ──► ⚡ 运行中标记实时更新（不重扫
 
 - [ ] 复制恢复命令 = `cd '<dir>' && claude --resume <id>` 正确入剪贴板
 - [ ] 删除：确认弹窗 → 文件删除（含子代理目录）→ 列表即时刷新；⚡ 行删除禁用
-- [ ] 重命名：输入弹窗 → ai-title 写入 → 列表即时刷新 → 官方 picker 显示新标题
+- [ ] 重命名：输入弹窗 → custom-title 追加写入 → 列表即时刷新 → 官方 picker 显示新标题（决策 22）
 
 ### 8.5 搜索与容错
 

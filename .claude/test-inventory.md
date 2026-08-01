@@ -2,11 +2,11 @@
 
 > **本文档是项目用例数唯一真值源。** 所有 CLAUDE.md、README、CI 配置中引用的用例数均以此文件为准。更新测试后必须同步本文档。
 
-全量 **2317** 用例（Rust 384 + 前端 1783 + L3 116 + E2E 34），2026-08-02 更新。
+全量 **2507** 用例（Rust 446 + 前端 1911 + L3 116 + E2E 34），2026-08-02 更新。
 
 > **计数口径**：前端 (L2) 用例数以 `grep -cE '^\s*(it|test)\(' src/__tests__/*.test.ts src/__tests__/*.test.tsx` 展开的 `it`/`test` 块数为准（Vitest 实际运行数）；L3 同理 `test/terminal/*.test.ts`；Rust (L1) 以 `grep -c '#\[test\]'` 统计的 `#[test]` 属性数为准。L3 的 116 用例同时被 L2 (`npm test`) 和独立 L3 (`npm run test:l3`) 执行，但此处各层独立计数，不做去重。
 
-## L1 — Rust 单元/集成测试（19 文件 / 384 用例）
+## L1 — Rust 单元/集成测试（23 文件 / 446 用例）
 
 运行：`cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1`
 
@@ -31,20 +31,26 @@
 | `src-tauri/src/hooks/config.rs` | 18 | parse_layer（三层合法/非法拒绝）+ resolve_config_path（user→home/.claude/settings.json/project+local 沙箱校验/缺失 project_path Validation/子树外 PathNotAllowed）+ read_hooks_subtree（文件不存在 Null/无 hooks 键 Null/子树提取/损坏 Err）+ write_hooks_subtree（原子写/父目录自动创建/merge 保留其他字段/损坏拒绝覆盖/非 Object hooks 拒绝无副作用/非 Object 根拒绝/null 根视空对象） |
 | `src-tauri/src/error.rs` | 4 | 序列化/Display/From<io::Error>/SessionNotFound |
 | `src-tauri/src/lib.rs` | 2 | ping 返回 pong/`get_windows_build_number` 返回数字 |
+| `src-tauri/src/claude_history/jsonl.rs` | 28 | parse_head（cwd 收集/首条可见 prompt 跳过 4 类/未知 type/EOF 截断/200 字符截断/头部标题 last-wins）+ 大文件头尾窗口协同（>512KB 中部标题收不到/尾部 64KB 命中）+ parse_tail_title（custom 恒优先/ai 兜底/截断行/空文件）+ resolve_title 回退链 5 态 + tail 优先（F7，决策 22） |
+| `src-tauri/src/claude_history/scan.rs` | 14 | resolve_projects_root（env 覆盖/空 env 回退 home/默认）+ 排除 3 类（agent-*/非 UUID/subagents）+ 多目录收集 + 扫描根缺失空数组 + 损坏/空文件降级条目 + 完整字段回退 + cwdExists（真/假）+ env 端到端 + mtime（存在/缺失）+ 尾部 custom-title 覆盖头部 summary（F7，SEC-02/BE-06，决策 23/26） |
+| `src-tauri/src/claude_history/ops.rs` | 13 | validate_session_id（UUID 双形态接受/5 类非法拒绝）+ delete（jsonl+同名目录范围/仅 jsonl/不存在 Err/非法 id）+ rename（追加行三字段逐字断言/补换行/空与超 200 拒绝且不改文件/200 边界/不存在 Err/非法 id）+ 越界防护（扫描根外哨兵文件不触碰）（F7，SEC-01） |
+| `src-tauri/src/claude_history/mod.rs` | 7 | HistorySession serde camelCase 七键集合精确匹配 + 反序列化 + roundtrip + TitleSource 五变体序列化/反序列化 + is_uuid_filename（合法/非法/agent 形态）（F7） |
 
 > `pty/mod.rs`、`pty/win_build.rs`、`main.rs` 不含 `#[test]`，不在此列。
+> claude_history 模块 62 用例为 grep `#[test]` 计数（jsonl 28 + scan 14 + ops 13 + mod 7），env 测试依赖 L1 `--test-threads=1` 门禁（`std::env::set_var` 全局可变）。
 
-## L2 — 前端单元/集成测试（109 文件 / 1783 用例）
+## L2 — 前端单元/集成测试（117 文件 / 1911 用例）
 
 运行：`npm test`（Vitest + jsdom）
 
-### IPC 层（3 文件 / 88 用例）
+### IPC 层（4 文件 / 100 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
 | `src/__tests__/ipc-contract.test.ts` | 65 | pty/fs/settings/notify/git/hooks/notification 全模块 IPC 命令合约验证 + DBG-4 PTY 命令 payload 契约守卫（3 条：键集合精确匹配） |
 | `src/__tests__/ipc-hooks-contract.test.ts` | 22 | hooks_inject/hooks_uninstall/hooks_injection_status/hooks_context_usage 四维验证（命令名/参数结构/返回值/异常传播）+ ContextUsage 四字段键集合精确匹配守卫（DBG-4 模式）+ HookEventPayload 8 字段契约完整性 + onHookEvent listen 绑定 |
 | `src/__tests__/ipc-ping.test.ts` | 1 | mockIPC ping/pong 拦截 |
+| `src/__tests__/ipc-claude-history-contract.test.ts` | 12 | claude_history_scan/delete/rename 三命令四维验证（命令名/参数结构 camelCase sessionId+newTitle/正常返回/异常传播），照 ipc-hooks-config-contract 模式（F7） |
 
 ### 终端面板（15 文件 / 218 用例）
 
@@ -196,13 +202,24 @@
 | `src/__tests__/theme.test.ts` | 12 | terminalOptions: ANSI 16 色/font/cursor/scrollback/kittyKeyboard |
 | `src/__tests__/panelId.test.ts` | 5 | parseTerminalPageId（正常段/含连字符 pageId/非数字尾段/非 terminal 前缀/两段→null） |
 
-### 通知/Agent 状态（3 文件 / 71 用例）
+### 通知/Agent 状态（3 文件 / 75 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
 | `src/__tests__/notifications.test.ts` | 25 | useClaudeNotifications hook（sendToastNotification 两参数无 onClick/hook-event 通知调度/窗口失焦门控/toast 去重/transcript_path 提取/任务栏闪烁三分类全覆盖/Notification 类型过滤/应用重新聚焦后 flush 积压/并发竞态） |
 | `src/__tests__/agent-status-hook.test.ts` | 35 | useAgentStatus hook 行建模新语义全分支：纯 shell 无行（claudeSession null）→empty/无活跃项目→no-root/sessionChange（非 null）建行+携 transcriptPath 拉 usage/OSC 133 C 通道建行（sessionChange 携 matchedCommand）/hook 事件建行（行不存在时）/SessionEnd 删行/sessionChange(null) 删行/remove 删行（deps [] 稳定订阅——remove 不丢失）/切项目初始扫描只建活会话+主动拉 usage/reconcile 对账兜底/四态 emoji 映射/transcriptPath null 跳过/跨项目过滤/倒序排列/错误降级/cache 字段包含/contextUsage 静默 catch+可观测 console.error |
-| `src/__tests__/agent-status-view.test.tsx` | 11 | AgentStatusView 组件：no-root 占位/empty 占位（纯 shell 无行——"当前项目无运行中的 claude 会话"）/两行渲染/点击行调用 switchToPageAndFocus/用量条新口径（input+cacheRead+cacheCreation）/usage 为 null 或 undefined 显示 '--'/分段颜色断言（<50% low/#629755、50-80% medium/#BBB529、>80% high/#F44747）/切换项目行清空 |
+| `src/__tests__/agent-status-view.test.tsx` | 15 | AgentStatusView 组件（F7 三下拉框适配）：no-root 占位/empty 占位（纯 shell 无行——"当前项目无运行中的 claude 会话"）/活跃区两行渲染/点击行调用 switchToPageAndFocus/用量条新口径（input+cacheRead+cacheCreation）/usage 为 null 或 undefined 显示 '--'/分段颜色断言（<50% low/#629755、50-80% medium/#BBB529、>80% high/#F44747）/切换项目行清空 + 三下拉框结构（活跃展开/历史区收起/受控切换/历史区挂载 ClaudeHistorySections） |
+
+### Claude 历史会话（6 文件 / 109 用例，F7）
+
+| 文件 | 用例 | 覆盖范围 |
+|------|------|---------|
+| `src/__tests__/claude-history-model.test.ts` | 37 | 纯函数全分支：isCurrentProject（大小写/斜杠/null/空串/前缀不匹配——决策 24）/groupByCwd（组内+组间排序/未知目录组/空数组）/matchesSearch（标题+prompt/大小写/空白）/formatRelativeTime（六档边界+跨年+mtime=0——决策 26）/deriveActiveSessionIds（有/无 transcriptPath/空注册表） |
+| `src/__tests__/claude-history-view.test.tsx` | 28 | 三区结构/默认展开态（活跃展开历史区收起）/展开触发 scan/搜索过滤+无结果提示/空态文案/菜单可用性矩阵（普通/孤儿/⚡/无 cwd × 4 操作）/双击分派（普通恢复/⚡ ask 引导 fork/孤儿无操作）/删除 ask 确认流程/重命名 InputDialog 流程 |
+| `src/__tests__/claude-history-hook.test.tsx` | 14 | 状态机流转（idle/loading/ready/error）/scan 成功与失败/removeLocal/updateLocalTitle 不触发重扫/subscribe 驱动 ⚡ 实时更新/卸载清理订阅 |
+| `src/__tests__/claude-history-input-dialog.test.tsx` | 12 | 受控 input/Enter 提交/Esc 取消/空输入禁确认 |
+| `src/__tests__/claude-history-row.test.tsx` | 11 | 双行渲染（粗体标题+相对时间/prompt 预览）/⚡/✗ 标记/单击选中高亮/双击三分派/右键回调委托 |
+| `src/__tests__/claude-history-restore.test.ts` | 7 | 四步编排（mock stores/projects、workspace/pageApis、ipc/pty、TerminalRegistry、ipc/notification）：已开项目跳过入列/无页建页/切页/addPanel 参数（cwd/id 格式）/pty.write 内容（普通/fork/`\r` 结尾——决策 25）/防重入/失败 toast/无 cwd 防御性 throw |
 
 ### 启动/关闭（3 文件 / 18 用例）
 
@@ -220,7 +237,7 @@
 | `src/__tests__/file-viewer-registry.test.ts` | 25 | 扩展名注册/策略链式调用/隐藏文件排除/大小写 |
 | `src/__tests__/csp-config.test.ts` | 4 | tauri.conf.json CSP 不变量：script-src unsafe-inline/dangerousDisableAssetCspModification/default-src 严格 |
 
-### E2E 辅助/门控测试（7 文件 / 24 用例）
+### E2E 辅助/门控测试（8 文件 / 27 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
@@ -228,6 +245,7 @@
 | `src/__tests__/app.test.tsx` | 5 | `__slterm_e2e_createProject` 行为/E2E pending 标记 |
 | `src/__tests__/e2e-clipboard-helper.test.ts` | 3 | writeClipboard/createProject 函数可用性 |
 | `src/__tests__/e2e-create-project.test.ts` | 3 | pending 标记→localStorage 恢复交互 |
+| `src/__tests__/dialog-e2e-hook.test.ts` | 3 | E2E ask 钩子守卫（claude-history Stage 06）：未设置钩子走真实 ask 不改默认行为/设 true 直接返回不调真实 ask/设 false 直接返回 false |
 | `src/__tests__/e2e-enabled.test.ts` | 2 | E2E_ENABLED 真值表 + 常量与纯函数一致性 |
 | `src/__tests__/e2e-gating-workspace.test.tsx` | 2 | `__slterm_e2e_workspaceReady` 存在性 |
 | `src/__tests__/error-boundary.test.tsx` | 3 | 正常透传/抛错 UI/`__sltermError` 赋值 |
@@ -311,6 +329,7 @@ embedded WDIO 驱动**无法将 OS 级按键（`browser.keys`）投递进 WebVie
 
 ## 历史变更
 
+- 2026-08-02（Claude 历史会话 Stage 07 文档同步补登，F7）：L1 新增 claude_history 模块 4 文件 62 用例（jsonl 28 + scan 14 + ops 13 + mod 7——扫描/降级/env 覆盖/回退链/SEC-01 校验/追加写，计数为 grep `#[test]`）。L2 新增「Claude 历史会话」类目 6 文件 109 用例（model 37 + view 28 + hook 14 + input-dialog 12 + row 11 + restore 7）+ IPC 层 ipc-claude-history-contract 12（88→100，三命令四维验证）+ E2E 辅助 dialog-e2e-hook 3（Stage 06 漏登补登，24→27，ask 钩子守卫）+ agent-status-view 11→15（+4 三下拉框适配，Stage 05 产物补登）。L1 384→446（19→23 文件），L2 1783→1911（109→117 文件）。全量 2317→2507。
 - 2026-08-02（Claude 历史会话视图 E2E，TE-01..04）：新增 describe「Claude 历史会话视图」8 用例——fixture 7 形态（custom-title/ai-title/prompt 回退/无 cwd/孤儿/agent-* 平铺/subagents 子目录）+ 搜索过滤 + 复制恢复命令（剪贴板 read_text 断言）+ 孤儿行 ✗ 双击无反应 + 重命名（副本尾部 custom-title 行 Node 断言）+ 删除（ask invoke 拦截降级方案 + 副本文件删除 Node 断言）+ 恢复编排（项目入列/页面切换/终端缓冲含 claude --resume）。新增 fixtures/claude-projects/（9 文件）+ run-wdio.cjs 副本重建与占位符替换 + SLTERM_CLAUDE_PROJECTS_DIR/SLTERM_E2E_PROJECT_DIR env 注入（SEC-02：只动 .tmp-claude-projects 副本）+ .gitignore 条目。L4 26→34（32 active + 2 skip），全量 2309→2317。
 - 2026-08-01（Hooks 配置入口迁移）：删 global.openHooksConfig 快捷键命令（Ctrl+Shift+H）——hooks-config-entry.test.ts 整文件删除（7）、command-catalog 14→13（-1 入口契约）、global-commands 13（断言改 1）；新增侧栏右键菜单入口——sidebar-actions 33→38（+5 菜单入口）、新建 open-hooks-config-panel.test.ts（+5 同页单例/轮询/超时）。L2 1781→1783，全量 2307→2309。
 - 2026-08-01（外部修改检测改 visibilitychange）：hooks-config-panel 19→20（+1 visibilityState=hidden 不触发；改 3 个 window focus 用例为 visibilitychange 派发——jsdom 需 defineProperty 设 visibilityState 再 dispatch，afterEach Reflect.deleteProperty 还原）。L2 1780→1781，全量 2306→2307。

@@ -128,12 +128,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | src/features/agentStatus | Agent 状态视图（claudeSession 行建模 + 上下文用量） | src/features/agentStatus/index.ts | — |
 | src/features/notifications | toast 通知（Tauri 原生 sendNotification + 任务栏闪烁） | src/features/notifications/index.ts | — |
 | src/features/hooksConfig | hooks 配置面板 schema 内嵌单点（SchemaStore 官方 schema + hooks 子 schema + Draft07 校验） | src/features/hooksConfig/schema/index.ts | — |
+| src/features/claudeHistory | 历史会话查询与恢复 UI（三下拉框历史区 + 双行式行 + 四步恢复编排 + 操作矩阵） | src/features/claudeHistory/index.ts | @../src/features/claudeHistory/CLAUDE.md |
 | src/__tests__ | L2 前端测试集中目录 + 共享测试工厂 | — | @../src/__tests__/CLAUDE.md |
 | src-tauri/src/pty | PTY 管理，Windows ConPTY 核心 | src-tauri/src/pty/mod.rs | @../src-tauri/src/pty/CLAUDE.md |
 | src-tauri/src/fs | 文件系统命令（读/写/列目录/建/删/改名） | src-tauri/src/fs/mod.rs | @../src-tauri/src/fs/CLAUDE.md |
 | src-tauri/src/git | Git 状态/diff/HEAD 读取/回滚/取消暂存（git2） | src-tauri/src/git/mod.rs | @../src-tauri/src/git/CLAUDE.md |
 | src-tauri/src/notify | 文件系统监听（LruWatcherPool 缓存 + pause/resume 切换） | src-tauri/src/notify/mod.rs | @../src-tauri/src/notify/CLAUDE.md |
 | src-tauri/src/hooks | Claude Code hooks 注入/卸载/状态 + hook-event 广播 + 上下文用量 + hooks 配置三层读写（hooks_config_read/write） | src-tauri/src/hooks/mod.rs | @../src-tauri/src/hooks/CLAUDE.md |
+| src-tauri/src/claude_history | Claude 历史会话查询（scan/delete/rename 三命令 + 头部 512KB/尾部 64KB 轻量解析 + SEC-01 sessionId 校验） | src-tauri/src/claude_history/mod.rs | @../src-tauri/src/claude_history/CLAUDE.md |
 | src-tauri settings/projects | 顶层单文件模块：settings.rs（设置持久化浅合并）、projects.rs（项目数据，exe 同级 JSON 绕过沙箱） | src-tauri/src/settings.rs | — |
 | e2e-tests | WDIO E2E 端到端测试 | e2e-tests/wdio.conf.ts | @../e2e-tests/CLAUDE.md |
 
@@ -173,5 +175,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | F3 | 特性 | 终端页签四态 emoji 指示（hook-event + OSC 133 合成） |
 | F5 | 特性 | claudeSession 契约行建模（双通道建行/三通道删行） |
 | F6 | 特性 | hooks 双模式配置面板（JSON/GUI 编辑 hooks 子树，user/project/local 三层，F2 注入入口并入） |
+| F7 | 特性 | claude 历史会话查询与恢复（历史区三下拉框 + 扫描/恢复/删除/重命名） |
 
 > 测试策略概览见上方「测试策略」章节；完整用例清单见 `.claude/test-inventory.md`。
