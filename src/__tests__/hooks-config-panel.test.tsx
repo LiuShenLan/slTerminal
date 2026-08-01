@@ -3,7 +3,7 @@
 // 覆盖：PANEL_TYPES 包含 hooksConfig / isValidPanelType 识别 /
 // HooksConfigPanel 三态渲染（loading / content / 损坏错误态）/
 // 层级切换器存在与禁用逻辑（rootPath 为空 project/local 禁用）/
-// 保存按钮初始禁用 / 面板聚焦（focusin）轻量重读 / JsonMode 接入（P3-FE-11）/
+// 保存按钮初始禁用 / 页面重新可见（visibilitychange）轻量重读 / JsonMode 接入（P3-FE-11）/
 // F2 注入/卸载按钮与注入状态条（P3-FE-21/22：三态显示、注入/卸载后刷新状态 + 重读 user 层）。
 
 import { describe, it, expect, afterEach, vi, beforeEach } from "vitest";
@@ -97,6 +97,17 @@ function resetStores() {
   useLayout.setState({ activePageId: null });
 }
 
+// ── visibilitychange 辅助：jsdom 中派发事件不会自动改 visibilityState，
+//    需先 defineProperty 覆盖（configurable 允许 afterEach 还原）；默认 "visible"。
+function setVisibilityState(state: "visible" | "hidden") {
+  Object.defineProperty(document, "visibilityState", { value: state, configurable: true });
+}
+
+/** 派发 visibilitychange（调用前按需 setVisibilityState） */
+function dispatchVisibilityChange() {
+  fireEvent(document, new Event("visibilitychange"));
+}
+
 describe("PANEL_TYPES / isValidPanelType", () => {
   it('PANEL_TYPES 包含 "hooksConfig"（末尾追加）', () => {
     expect(PANEL_TYPES).toContain("hooksConfig");
@@ -125,6 +136,7 @@ describe("HooksConfigPanel 渲染", () => {
 
   afterEach(() => {
     cleanup();
+    Reflect.deleteProperty(document, "visibilityState"); // 还原 jsdom 默认可见（无自有属性时 no-op）
   });
 
   it("loading 态：显示加载中...", async () => {
@@ -203,28 +215,46 @@ describe("HooksConfigPanel 渲染", () => {
     });
   });
 
-  it("window focus 触发轻量重读（外部修改检测）", async () => {
+  it("页面重新可见（visibilitychange）触发轻量重读（外部修改检测）", async () => {
     seedProject("C:/proj");
     mockReadHooksConfig.mockResolvedValue({});
     render(React.createElement(HooksConfigPanel));
     await waitFor(() => expect(mockReadHooksConfig.mock.calls.length).toBe(1));
-    fireEvent(window, new Event("focus"));
+    // 模拟切回前台：置可见态再派发 visibilitychange（jsdom 不会自动翻状态）
+    setVisibilityState("visible");
+    dispatchVisibilityChange();
     await waitFor(() => expect(mockReadHooksConfig.mock.calls.length).toBeGreaterThanOrEqual(2));
   });
 
-  it("window focus 时面板不可见（display:none）不触发重读", async () => {
+  it("visibilitychange 时面板不可见（display:none）不触发重读", async () => {
     seedProject("C:/proj");
     mockReadHooksConfig.mockResolvedValue({});
     const { container } = render(React.createElement(HooksConfigPanel));
     await waitFor(() => expect(mockReadHooksConfig.mock.calls.length).toBe(1));
     // Dockview 页面显隐为 CSS display:none——祖先或自身不可见时跳过（后台页面不重读）
     (container.firstElementChild as HTMLElement).style.display = "none";
-    fireEvent(window, new Event("focus"));
+    dispatchVisibilityChange();
     await new Promise((r) => setTimeout(r, 20));
     expect(mockReadHooksConfig.mock.calls.length).toBe(1);
   });
 
-  it("面板内点击不触发重读（无 window focus，验收 #1 语义延续）", async () => {
+  it("visibilityState 为 hidden（切到后台）时不触发重读", async () => {
+    seedProject("C:/proj");
+    mockReadHooksConfig.mockResolvedValue({});
+    render(React.createElement(HooksConfigPanel));
+    await waitFor(() => expect(mockReadHooksConfig.mock.calls.length).toBe(1));
+    // 切后台的 visibilitychange：先置 hidden 再派发——handler 开头状态过滤，不重读
+    setVisibilityState("hidden");
+    dispatchVisibilityChange();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(mockReadHooksConfig.mock.calls.length).toBe(1);
+    // 恢复可见后再派发 → 正常触发（证明过滤的是状态而非监听器缺失）
+    setVisibilityState("visible");
+    dispatchVisibilityChange();
+    await waitFor(() => expect(mockReadHooksConfig.mock.calls.length).toBeGreaterThanOrEqual(2));
+  });
+
+  it("面板内点击不触发重读（无 visibilitychange，验收 #1 语义延续）", async () => {
     seedProject("C:/proj");
     mockReadHooksConfig.mockResolvedValue({});
     const { container } = render(React.createElement(HooksConfigPanel));
@@ -259,7 +289,7 @@ describe("HooksConfigPanel 渲染", () => {
     expect(err.title).toBe(longMsg);
   });
 
-  it("ask 弹窗打开期间 window focus 回归不二次弹窗（验收 2.1 防循环）", async () => {
+  it("ask 弹窗打开期间 visibilitychange 回归不二次弹窗（验收 2.1 防循环）", async () => {
     seedProject("C:/proj");
     mockReadHooksConfig.mockResolvedValue({});
     mockAsk.mockReturnValue(new Promise(() => {})); // 弹窗挂起（模拟确认框打开中）
@@ -275,12 +305,12 @@ describe("HooksConfigPanel 渲染", () => {
         JSON.stringify({ PreToolUse: [{ hooks: [{ type: "command", command: "x" }] }] }),
       );
     });
-    // 第一次 window focus（外部进入）→ reload → confirmDiscard → ask（挂起）
-    fireEvent(window, new Event("focus"));
+    // 第一次 visibilitychange（切回前台）→ reload → confirmDiscard → ask（挂起）
+    dispatchVisibilityChange();
     await new Promise((r) => setTimeout(r, 0));
     expect(mockAsk).toHaveBeenCalledTimes(1);
-    // 弹窗关闭的焦点回归（window focus）→ askGuard 抑制，不二次弹窗（点否循环根治）
-    fireEvent(window, new Event("focus"));
+    // 弹窗关闭的回归（visibilitychange）→ askGuard 抑制，不二次弹窗（点否循环根治）
+    dispatchVisibilityChange();
     await new Promise((r) => setTimeout(r, 20));
     expect(mockAsk).toHaveBeenCalledTimes(1);
     expect(container.firstElementChild).toBeTruthy();

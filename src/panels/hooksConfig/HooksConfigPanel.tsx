@@ -161,15 +161,18 @@ const HooksConfigPanel: React.FC<HooksConfigPanelProps> = () => {
     });
   }, [save]);
 
-  /** 面板根容器 ref——window focus 重读的可见性判断（面板不可见时不重读） */
+  /** 面板根容器 ref——visibilitychange 重读的可见性判断（面板不可见时不重读） */
   const containerRef = useRef<HTMLDivElement>(null);
 
-  /** window focus 轻量重读——外部修改检测，dirty 时 ask 确认（useHooksConfig 内部处理）。
-      仅 WebView2 整体获得 OS 焦点时触发（select 下拉/元素间焦点转移是页面内焦点变化，
-      不触发 window focus——验收 2.1 误弹根因）；原生 ask 弹窗关闭的焦点回归由
-      useHooksConfig 的 askGuard 抑制（防循环）。面板不可见（Dockview 页面 display:none
-      显隐，或 loading/error 态无容器）时跳过 */
-  const handleWindowFocus = useCallback(() => {
+  /** visibilitychange 轻量重读——外部修改检测，dirty 时 ask 确认（useHooksConfig 内部处理）。
+      仅页面重新可见时（document.visibilityState === "visible"，如最小化恢复 / Alt+Tab
+      切回）重读；窗口移动/缩放边框全程可见，不触发 visibilitychange——不误弹
+      （window focus 方案下拖动窗口标题框致 WebView2 焦点暂失再回归会误触发）。
+      页面内焦点转移（select 下拉/元素点击）也不触发 visibilitychange。
+      原生 ask 弹窗打开/关闭的回归触发由 useHooksConfig 的 askGuard 抑制（防循环）。
+      面板不可见（Dockview 页面 display:none 显隐，或 loading/error 态无容器）时跳过 */
+  const handleVisibilityChange = useCallback(() => {
+    if (document.visibilityState !== "visible") return;
     if (!containerRef.current) return;
     let el: HTMLElement | null = containerRef.current;
     while (el) {
@@ -179,11 +182,11 @@ const HooksConfigPanel: React.FC<HooksConfigPanelProps> = () => {
     void reload();
   }, [reload]);
 
-  // window focus 监听（cleanup 移除）
+  // visibilitychange 监听（cleanup 移除）
   useEffect(() => {
-    window.addEventListener("focus", handleWindowFocus);
-    return () => window.removeEventListener("focus", handleWindowFocus);
-  }, [handleWindowFocus]);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, [handleVisibilityChange]);
 
   // F2 注入状态（P3-FE-22）：挂载查询一次 + 注入/卸载后刷新；null = 查询中/未查询
   const [injectionStatus, setInjectionStatus] = useState<HookInjectionStatus | null>(null);

@@ -188,7 +188,7 @@ DTO（Rust `snake_case` ↔ JS `camelCase` 双边对应，硬约束 #4）：
 ### C13-8 注入段保护与外部修改
 
 - **注入段保护**：`command` 含 `slterm-hook-reporter` 子串的条目（识别规则照 C9）在 GUI 标记「slTerminal 托管」并**禁删**；JSON 模式不限制（用户对自己文件有最终权利）；面板内 inject/uninstall 操作后自动重读 user 层。
-- **外部修改（轻量策略）**：切层 / 窗口获得焦点（window focus，面板可见时）重读配置；有未保存修改（dirty）时提示，不做 fs-event 监听（user 层文件不在 `notify_watch` 沙箱内）。
+- **外部修改（轻量策略）**：切层 / 页面重新可见（document.visibilitychange，visibilityState === "visible"）重读配置；有未保存修改（dirty）时提示，不做 fs-event 监听（user 层文件不在 `notify_watch` 沙箱内）。窗口移动/缩放全程可见不触发 visibilitychange——拖动窗口标题框不误弹（window focus 方案遗留缺陷修复）。
 - **保存安全**：JSON + Schema 双校验不过拒绝保存；原子写；保存后提示「需重启 claude 会话生效」。
 
 ### C13-9 E2E 约束
