@@ -27,7 +27,7 @@
 
 ### 步骤
 
-1. **AI**：从主题提取核心概念（1-N 个），每个概念标注特殊关注面（facets，可为空）
+1. **AI**：从主题提取核心概念（1-N 个），每个概念标注特殊关注面（facets，可为空）。**输出文件名偏好英文**：可为概念附 `facetSlugs`（与 facets 一一对应的英文 kebab-case 数组），decompose.mjs 将优先使用；不提供则回退自动生成（中文概念名会产生中文 slug，需主代理手动替换）
 2. **确定性**：concepts JSON 经 stdin 传给 `decompose.mjs`：
 
    ```bash
@@ -76,6 +76,7 @@
 - **单层级**：只有主代理 spawn 子代理；子代理不得再 spawn 孙代理（harness 不支持）
 - 并行上限：min(方向数, 5)。超过 5 个方向时分批
 - 每个子代理必须写入一个汇总 md 文件到指定路径
+- **GitHub issue 引用**：子代理须核查正文 + 关键评论（collaborator 修复声明、他人补充数值常藏在评论中且早于检索日），优先 GitHub API（见 agent-prompt-template.md 检索步骤 4）
 
 ### 等待纪律（防止 fallback 污染）
 

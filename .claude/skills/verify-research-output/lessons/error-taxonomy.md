@@ -18,6 +18,9 @@
 **示例（来自历史检索任务）**:
 - 声称某终端模拟器支持 `SourcedRcFileForWarp` 函数 → 该仓库是 issues-only，源码未开源，术语在所有引用来源中不存在（虚构）
 - 声称 `permission_mode` 取值为 "ask"/"allow" → 实际那是 `permissionDecision` 字段的取值空间；`permission_mode` 的取值是 "default"/"plan"/"acceptEdits"/"bypassPermissions"（混淆）
+- **标题虚构前缀**：引用 issue #46865 标题为 `[FEATURE] Add setting to ...` → 实际标题无 `[FEATURE]` 前缀，系检索代理顺手修饰（同文档另一条 `[FEATURE]` 前缀逐字正确，排除抓取器剥前缀可能）
+- **数字归因错误**：声称 issue 报告者"建议用大正数（如 3650）" → "3650" 在正文与全部评论中不存在；报告者建议的是代码修复，99999 出自其他用户评论——数字本身可能真实但被归错来源
+- **来源转述不完整**：声称目录编码规则为"`/` 与 `_` 替换为 `-`" → 官方规则是"非字母数字字符全部替换"（含冒号等），转述枚举字符时遗漏其他字符产生误导（Windows 路径尤其明显）
 
 **根因**: 检索 agent 凭记忆或推测补充了未实际读取的信息；或读取了过时/非权威的第三方总结而非一手文档；或汇总时合并了相似名称但不同上下文的字段。
 
@@ -39,6 +42,7 @@
 **示例（来自历史检索任务）**:
 - 引用 3 个 VS Code Marketplace 扩展作为参考，全部返回 404
 - 声称某 GitHub issue 是 bug，实际标签为 "Feature Request"
+- **引文出自 fork 项目**：声称某工具动机是 "technically readable, but practically useless for humans" → 该句在原项目全部来源（PyPI/README/作者文章）中均不存在，实际出自其 fork 项目——引文真实存在但被归错项目（与数字归因同源：检索代理以搜索摘要记忆代替原文核验）
 
 **根因**: 检索 agent 未实际访问引用的 URL；或 URL 来自搜索引擎摘要而非直接抓取。
 

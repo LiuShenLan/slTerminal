@@ -5,6 +5,8 @@
  * 输入：stdin 读 concepts JSON，如 [{"name":"Claude Code hooks","facets":["配置","集成"]}]
  *   - name: 概念名
  *   - facets: 该概念的特殊关注面（可为空数组）
+ *   - facetSlugs（可选）: 与 facets 一一对应的英文 kebab-case slug 数组
+ *     存在且长度匹配时覆盖自动生成的中文 slug；否则回退现有规则
  * 输出：stdout JSON Direction[]，每个方向 { title, nestable, outputSlug }
  *
  * 确定性规则：
@@ -14,7 +16,7 @@
  *
  * 搜索关键词不在此生成——由主代理对输出方向逐个生成（语义工作）。
  *
- * 用法：echo '[{"name":"X","facets":[]}]' | node decompose.mjs
+ * 用法：echo '[{"name":"X","facets":[],"facetSlugs":[]}]' | node decompose.mjs
  */
 
 /** 维度矩阵——确定性，对所有主题不变 */
@@ -38,11 +40,17 @@ function decompose(concepts) {
   for (const concept of concepts) {
     if (Array.isArray(concept.facets) && concept.facets.length > 0) {
       // 有关注面：每 facet 独立方向，可深入
-      for (const facet of concept.facets) {
+      // facetSlugs 与 facets 一一对应时优先使用（英文 kebab-case），否则回退自动生成
+      const slugs =
+        Array.isArray(concept.facetSlugs) && concept.facetSlugs.length === concept.facets.length
+          ? concept.facetSlugs
+          : null;
+      for (let i = 0; i < concept.facets.length; i++) {
+        const facet = concept.facets[i];
         directions.push({
           title: `${concept.name} — ${facet}`,
           nestable: true,
-          outputSlug: slugify(`${concept.name}-${facet}`),
+          outputSlug: slugs ? slugs[i] : slugify(`${concept.name}-${facet}`),
         });
       }
     } else {

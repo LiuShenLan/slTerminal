@@ -6,7 +6,7 @@
 |------|---------|------|
 | WebSearch | 确认通用事实、找官方文档入口 | 不返回具体页面内容 |
 | WebFetch | 抓取页面全文、核实话语是否在页面中 | 被某些站点拦截（Cloudflare、企业网络） |
-| GitHub API | 获取 issue 状态/标签/关闭日期（结构化数据） | 限速，不返回页面渲染内容 |
+| GitHub API | 获取 issue 状态/标签/关闭日期（结构化数据）；**正文与评论经 `/issues/{n}` 与 `/issues/{n}/comments` 分别核查**——collaborator 的修复声明（"fixed in vX.Y.Z"）常藏在评论中且早于检索日；其他用户补充的数值/建议也与报告者建议区分 | 限速，不返回页面渲染内容 |
 | HN Firebase API | 获取帖子时间戳/分数/评论数 | 仅 Hacker News |
 | npm Registry API | 确认包存在、版本号、发布时间 | 不返回 README 全文（需 raw.githubusercontent） |
 | chrome-devtools MCP | 完整浏览器环境——快照、执行 JS、网络请求 | 需要真实浏览器进程 |

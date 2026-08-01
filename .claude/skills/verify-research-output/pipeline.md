@@ -74,6 +74,7 @@
    ```json
    [{"direction":"D1","file":"a.md","line":12,"field":"事件总数","value":"30 个事件","source":"https://..."}]
    ```
+   **提取纪律（防伪冲突）**：每一条 claim 必须基于**实际读取文件内容**（行号 + 原文核对），禁止凭记忆/摘要提取；提取后对 value 做规范化——先区分**记号差异**（`<project>` vs `[project-path]`、`~` vs 完整 home 路径等同一事实的不同写法，不构成冲突）与**事实差异**（数值/状态/布尔相反才进冲突检测）。检测到疑似冲突时，先回读两处原文确认提取无误，再提交给脚本。
 2. **确定性检测**：`cat claims.json | node <skill目录>/scripts/detect-conflicts.mjs` → 冲突矩阵（boolean_inversion / count_discrepancy / value_mismatch）
 3. **AI 裁决**：对每个冲突，按 [lessons/verification-methods.md](lessons/verification-methods.md) 的证据层级查证:
    - 第 1 优先: 官方文档/API 响应
