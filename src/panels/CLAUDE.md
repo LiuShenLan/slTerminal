@@ -144,7 +144,7 @@ DiffPanel 的加载/错误/就绪三态中，容器 div 仅在 `"ready"` 态挂�
 `HooksConfigPanel`（F6，P3-FE-02/11/12/16/17/19/21/22）编辑 settings.json 的 **hooks 子树**（C13-1 编辑范围），三层配置：`user`（`~/.claude/settings.json`）/ `project`（`<projectPath>/.claude/settings.json`）/ `local`（`<projectPath>/.claude/settings.local.json`），优先级 Local > Project > User。
 
 - **双模式编辑**（P3-FE-16）：默认 JSON 模式（CM6 + codemirror-json-schema 补全/悬停/波浪线 + 事件导航侧栏 + MatcherTester 内联试测），GUI 模式为 Master-Detail（EventTree 事件树 + HandlerForm 表单）。`configJson` / `guiModel` / `dirty` 共享于 `useHooksConfig`——JSON 编辑经 `jsonToGui` 重算 GUI，GUI 编辑经 `guiToJson` 回写 JSON。非法 JSON（`onValidationChange` 上报）→ 禁切 GUI + 禁用保存。schema 内嵌于 `src/features/hooksConfig/schema/claude-code-settings.json`（SchemaStore 官方 schema + hooks 子 schema 提取，本地 `$ref` 自包含已核实）。
-- **hooks 子树三层配置**：rootPath 为空（无活跃项目）时 project/local 层禁用（仅 user 可用）；切层 / 面板聚焦（focusin）轻量重读做外部修改检测，dirty 时 `dialog.ask` 确认丢弃；后端 `hooks_config_write` read-modify-write merge 原样保留 permissions/env 等其他字段（P3-BE-03），前端不做 .bak。
+- **hooks 子树三层配置**：rootPath 为空（无活跃项目）时 project/local 层禁用（仅 user 可用）；切层 / 窗口获得焦点（window focus，面板可见时）轻量重读做外部修改检测，dirty 时 `dialog.ask` 确认丢弃（ask 弹窗关闭的焦点回归由 askGuard 抑制——验收 2.1 弹窗循环根因：select 下拉与原生对话框的焦点回归 relatedTarget=null 无法与真实外部进入区分，window focus 只响应窗口级焦点变化，select 下拉纯页面内转移不触发）；后端 `hooks_config_write` read-modify-write merge 原样保留 permissions/env 等其他字段（P3-BE-03），前端不做 .bak。
 - **保存安全**（P3-FE-17）：JSON.parse + `validateHooksJson`（json-schema-library Draft07，非 ajv）双校验，任一失败弹窗拒绝写盘 → 写盘；成功后提示「hooks 改动需重启 claude 会话生效」。
 - **注入段保护**（C13-8）：`command` 含 `slterm-hook-reporter` 子串的条目（`isSltermManaged`，识别规则照 C9）GUI 标记「slTerminal 托管」+ 禁删/表单只读；**JSON 模式不限制**（用户对自己文件有最终权利）。
 - **F2 并入**（P3-FE-21/22）：工具栏「注入 Hooks」/「卸载 Hooks」按钮直接调用 `src/ipc/hooks` 的 `inject()`/`uninstall()`（不改其实现），状态条显示 `getInjectionStatus()` 三态（已注入/未注入/版本过旧）；注入/卸载完成后自动重读 user 层配置（操作改写 `~/.claude/settings.json`，C13-8）——当前层非 user 则切到 user 层。
@@ -290,7 +290,7 @@ Claude Code 在用户主动 Ctrl+C 中断时不发射任何 hook 事件（`Stop`
 | `diff/alignment.ts` | `computeAlignment(hunks)` 纯函数：DiffHunk[] → `{ left: Map<afterLine, count>, right: Map<afterLine, count> }`。规则：纯新增左侧插占位、纯删除右侧插占位、modified 行数不等少侧插差值。零 DOM 访问 |
 | `hooksConfig/index.ts` | HooksConfigPanel 导出 |
 | `hooksConfig/HooksConfigPanel.tsx` | 面板根组件：层级切换器（user/project/local + 优先级标注，rootPath 空时 project/local 禁用）+ 模式切换（GUI/JSON，非法 JSON 禁 GUI）+ F2 注入状态条与注入/卸载按钮 + 保存按钮（dirty 且合法才可点）+ 重启提示条；三态（loading/content/损坏 error） |
-| `hooksConfig/useHooksConfig.ts` | 数据 hook：rootPath 推导（照 useCommitStatus）、`readHooksConfig` 加载（null 视为 {}，Err 置损坏态）、双模式同步（configJson/guiModel/dirty）、保存（双校验 + writeHooksConfig）、切层/focusin 轻量重读（dirty `dialog.ask` 守卫 + generation 取消） |
+| `hooksConfig/useHooksConfig.ts` | 数据 hook：rootPath 推导（照 useCommitStatus）、`readHooksConfig` 加载（null 视为 {}，Err 置损坏态）、双模式同步（configJson/guiModel/dirty）、保存（双校验 + writeHooksConfig）、切层/window focus 轻量重读（dirty `dialog.ask` 守卫 + askGuard 防循环 + generation 取消） |
 | `hooksConfig/configModel.ts` | 配置模型双向转换纯函数：`jsonToGui`/`guiToJson`（round-trip 不丢数据，未知字段归 extraFields）、`isSltermManaged`（注入段识别，C9） |
 | `hooksConfig/eventsCatalog.ts` | 事件元数据单点（P3-FE-26）：30 事件 × 10 组全表 + handler 支持档（A/B/C）+ 5 种 handler 字段矩阵（C13-3 官方版）+ matcher 窄字符集受限事件（FileChanged/StopFailure）+ 纯查询函数（getEventMeta/isMatcherSupported/getSupportedHandlerTypes 等） |
 | `hooksConfig/matcherEngine.ts` | matcher 语义引擎（C13-5）：`matchHook` 纯函数（exact-or / regex / all + 受限窄字符集），供 MatcherTester 试测与保存校验共用 |

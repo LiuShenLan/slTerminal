@@ -203,37 +203,65 @@ describe("HooksConfigPanel 渲染", () => {
     });
   });
 
-  it("面板聚焦（focusin）触发轻量重读（外部修改检测）", async () => {
+  it("window focus 触发轻量重读（外部修改检测）", async () => {
     seedProject("C:/proj");
     mockReadHooksConfig.mockResolvedValue({});
-    const { container } = render(React.createElement(HooksConfigPanel));
+    render(React.createElement(HooksConfigPanel));
     await waitFor(() => expect(mockReadHooksConfig.mock.calls.length).toBe(1));
-    fireEvent.focus(container.firstElementChild as HTMLElement);
+    fireEvent(window, new Event("focus"));
     await waitFor(() => expect(mockReadHooksConfig.mock.calls.length).toBeGreaterThanOrEqual(2));
   });
 
-  it("面板内部焦点转移不触发重读（relatedTarget 在面板内，验收 #1 防回归）", async () => {
+  it("window focus 时面板不可见（display:none）不触发重读", async () => {
     seedProject("C:/proj");
     mockReadHooksConfig.mockResolvedValue({});
     const { container } = render(React.createElement(HooksConfigPanel));
     await waitFor(() => expect(mockReadHooksConfig.mock.calls.length).toBe(1));
-    // content 态渲染后取面板内真实按钮——模拟点击按钮的焦点转移（mousedown 聚焦 → focusin 冒泡到容器）
-    const innerButton = await waitFor(
-      () => container.querySelector('[data-e2e="hooks-layer-user"]') as HTMLElement,
-    );
-    fireEvent.focus(container.firstElementChild as HTMLElement, { relatedTarget: innerButton });
-    // 内部转移跳过重读——调用数不增（等待微任务让可能的 reload 暴露）
+    // Dockview 页面显隐为 CSS display:none——祖先或自身不可见时跳过（后台页面不重读）
+    (container.firstElementChild as HTMLElement).style.display = "none";
+    fireEvent(window, new Event("focus"));
     await new Promise((r) => setTimeout(r, 20));
     expect(mockReadHooksConfig.mock.calls.length).toBe(1);
   });
 
-  it("面板外元素聚焦进入面板触发重读（relatedTarget 为外部元素）", async () => {
+  it("面板内点击不触发重读（无 window focus，验收 #1 语义延续）", async () => {
     seedProject("C:/proj");
     mockReadHooksConfig.mockResolvedValue({});
     const { container } = render(React.createElement(HooksConfigPanel));
     await waitFor(() => expect(mockReadHooksConfig.mock.calls.length).toBe(1));
-    fireEvent.focus(container.firstElementChild as HTMLElement, { relatedTarget: document.body });
-    await waitFor(() => expect(mockReadHooksConfig.mock.calls.length).toBeGreaterThanOrEqual(2));
+    const innerButton = await waitFor(
+      () => container.querySelector('[data-e2e="hooks-layer-user"]') as HTMLElement,
+    );
+    fireEvent.click(innerButton);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(mockReadHooksConfig.mock.calls.length).toBe(1);
+  });
+
+  it("ask 弹窗打开期间 window focus 回归不二次弹窗（验收 2.1 防循环）", async () => {
+    seedProject("C:/proj");
+    mockReadHooksConfig.mockResolvedValue({});
+    mockAsk.mockReturnValue(new Promise(() => {})); // 弹窗挂起（模拟确认框打开中）
+    const { container } = render(React.createElement(HooksConfigPanel));
+    await waitFor(() => expect(mockReadHooksConfig.mock.calls.length).toBe(1));
+    // 置 dirty（合法 JSON 编辑 → updateConfigJson）
+    act(() => {
+      // calls[i] 为参数数组，props 在 calls[i][0]（照「content 态」用例 lastCall[0] 模式）
+      const props = mockJsonMode.mock.calls[
+        mockJsonMode.mock.calls.length - 1
+      ] as unknown as [{ onChange: (t: string) => void }];
+      props[0].onChange(
+        JSON.stringify({ PreToolUse: [{ hooks: [{ type: "command", command: "x" }] }] }),
+      );
+    });
+    // 第一次 window focus（外部进入）→ reload → confirmDiscard → ask（挂起）
+    fireEvent(window, new Event("focus"));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mockAsk).toHaveBeenCalledTimes(1);
+    // 弹窗关闭的焦点回归（window focus）→ askGuard 抑制，不二次弹窗（点否循环根治）
+    fireEvent(window, new Event("focus"));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(mockAsk).toHaveBeenCalledTimes(1);
+    expect(container.firstElementChild).toBeTruthy();
   });
 });
 

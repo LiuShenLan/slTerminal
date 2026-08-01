@@ -10,8 +10,9 @@
 // - 保存（P3-FE-17）：JSON 语法校验 → json-schema-library schema 校验（validateHooksJson，
 //   Stage 04 已建）→ 任一失败弹窗提示、拒绝写盘 → writeHooksConfig；成功后置 saved
 //   （状态条显示重启提示）。不做 .bak，其他字段保留由后端 merge 保证（P3-BE-03）
-// - 轻量重读（外部修改检测）：切层 / 面板聚焦（focusin）时重新 readHooksConfig；
-//   dirty 时用 dialog.ask 提示（照编辑器外部修改先例，不用 window.confirm），用户确认丢弃才覆盖
+// - 轻量重读（外部修改检测）：切层 / 窗口获得焦点（window focus，面板可见时）重新
+//   readHooksConfig；dirty 时用 dialog.ask 提示（照编辑器外部修改先例，不用
+//   window.confirm），用户确认丢弃才覆盖；ask 弹窗关闭的焦点回归由 askGuard 抑制（防循环）
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { readHooksConfig, writeHooksConfig } from "../../ipc/hooksConfig";
@@ -29,6 +30,9 @@ import {
 
 /** 配置损坏错误文案——read 返回 Err（与无配置返回 null 区分开） */
 export const CONFIG_CORRUPTED_TEXT = "配置文件损坏，请先修复";
+
+/** ask 弹窗关闭后守卫窗口（ms）——期间内的 window focus 回归不触发重读 */
+const ASK_GUARD_MS = 500;
 
 export interface UseHooksConfigResult {
   /** 当前编辑层级 */
@@ -94,6 +98,10 @@ export function useHooksConfig(): UseHooksConfigResult {
   configJsonRef.current = configJson;
   // generation 取消：切层/切项目/重读竞态下丢弃过期回调结果
   const genRef = useRef(0);
+  // ask 弹窗守卫：confirmDiscard 弹窗打开期间 + 关闭后短暂窗口内抑制 window focus
+  // 回归重读——原生对话框关闭的焦点回归触发 window focus，若无守卫将再次弹窗
+  // （验收 2.1「点否无限循环 / 点是重弹」根因）
+  const askGuardRef = useRef(false);
 
   /** 加载指定层配置（generation 取消竞态；null 视为 {}，Err 置损坏错误态）
       showLoading=true 时显示 loading 遮罩（首次加载/切层/切项目）；
@@ -119,10 +127,18 @@ export function useHooksConfig(): UseHooksConfigResult {
     }
   }, []);
 
-  /** dirty 守卫：有未保存修改时 ask 确认（用户确认丢弃才放行），无 dirty 直接放行 */
+  /** dirty 守卫：有未保存修改时 ask 确认（用户确认丢弃才放行），无 dirty 直接放行。
+      ask 打开前置 askGuardRef（弹窗关闭后 500ms 内 window focus 回归不重读——防循环） */
   const confirmDiscard = useCallback(async (message: string): Promise<boolean> => {
     if (!dirtyRef.current) return true;
-    return ask(message, { title: "未保存的修改", kind: "warning" });
+    askGuardRef.current = true;
+    try {
+      return await ask(message, { title: "未保存的修改", kind: "warning" });
+    } finally {
+      setTimeout(() => {
+        askGuardRef.current = false;
+      }, ASK_GUARD_MS);
+    }
   }, []);
 
   /** 切层：dirty 时 ask 确认丢弃，确认后重读目标层 */
@@ -182,8 +198,10 @@ export function useHooksConfig(): UseHooksConfigResult {
     setSaved(true);
   }, []);
 
-  /** 轻量重读（外部修改检测）：dirty 时 ask 确认丢弃才覆盖 */
+  /** 轻量重读（外部修改检测）：dirty 时 ask 确认丢弃才覆盖。
+      开头检查 askGuard——自身弹窗关闭的 window focus 回归在此拦截（防无限循环） */
   const reload = useCallback(async () => {
+    if (askGuardRef.current) return;
     const ok = await confirmDiscard("配置文件可能已被外部修改。重载将丢弃当前未保存的修改。");
     if (!ok) return;
     const gen = ++genRef.current;

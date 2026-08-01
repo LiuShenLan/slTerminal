@@ -161,20 +161,29 @@ const HooksConfigPanel: React.FC<HooksConfigPanelProps> = () => {
     });
   }, [save]);
 
-  /** 面板根容器 ref——relatedTarget 归属判断（内部焦点转移不重读，验收 #1） */
+  /** 面板根容器 ref——window focus 重读的可见性判断（面板不可见时不重读） */
   const containerRef = useRef<HTMLDivElement>(null);
 
-  /** 面板聚焦（focusin）轻量重读——外部修改检测，dirty 时 ask 确认（useHooksConfig 内部处理）
-      仅"焦点从面板外进入"触发重读；面板内部焦点转移（点击按钮等元素间转移）跳过——
-      否则每次点击都 reload + loading 占位替换 DOM 吞掉 click（验收 #1 根因） */
-  const handleFocus = useCallback(
-    (e: React.FocusEvent<HTMLDivElement>) => {
-      const related = e.relatedTarget as HTMLElement | null;
-      if (related && containerRef.current?.contains(related)) return; // 内部转移，跳过
-      void reload();
-    },
-    [reload],
-  );
+  /** window focus 轻量重读——外部修改检测，dirty 时 ask 确认（useHooksConfig 内部处理）。
+      仅 WebView2 整体获得 OS 焦点时触发（select 下拉/元素间焦点转移是页面内焦点变化，
+      不触发 window focus——验收 2.1 误弹根因）；原生 ask 弹窗关闭的焦点回归由
+      useHooksConfig 的 askGuard 抑制（防循环）。面板不可见（Dockview 页面 display:none
+      显隐，或 loading/error 态无容器）时跳过 */
+  const handleWindowFocus = useCallback(() => {
+    if (!containerRef.current) return;
+    let el: HTMLElement | null = containerRef.current;
+    while (el) {
+      if (getComputedStyle(el).display === "none") return;
+      el = el.parentElement;
+    }
+    void reload();
+  }, [reload]);
+
+  // window focus 监听（cleanup 移除）
+  useEffect(() => {
+    window.addEventListener("focus", handleWindowFocus);
+    return () => window.removeEventListener("focus", handleWindowFocus);
+  }, [handleWindowFocus]);
 
   // F2 注入状态（P3-FE-22）：挂载查询一次 + 注入/卸载后刷新；null = 查询中/未查询
   const [injectionStatus, setInjectionStatus] = useState<HookInjectionStatus | null>(null);
@@ -256,7 +265,7 @@ const HooksConfigPanel: React.FC<HooksConfigPanelProps> = () => {
   }
 
   return (
-    <div ref={containerRef} style={containerStyle} onFocus={handleFocus} data-e2e="hooks-config-panel">
+    <div ref={containerRef} style={containerStyle} data-e2e="hooks-config-panel">
       {/* 顶部工具栏 */}
       <div style={toolbarStyle}>
         {/* 层级切换器（rootPath 为空时 project/local 禁用，仅 user 层可用） */}
