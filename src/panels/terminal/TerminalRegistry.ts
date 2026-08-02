@@ -7,11 +7,16 @@
 import { Terminal } from "@xterm/xterm";
 import type { FitAddon } from "@xterm/addon-fit";
 import type { WebglAddon } from "@xterm/addon-webgl";
+import type { ClaudeStatus } from "../../lib/claudeStatus";
 
 /** claude 会话信息——存在即运行中（二态模型，无 running 布尔） */
 export interface ClaudeSessionInfo {
+  /** 会话 UUID（hook 事件 payload.sessionId；matchedCommand-only 会话无此字段） */
+  sessionId?: string;
   transcriptPath?: string;
   matchedCommand?: string;
+  /** 四态（eventToStatus 结果；null 状态不存储——undefined 保留旧值） */
+  status?: ClaudeStatus;
   lastEventAt: number;
 }
 
@@ -81,8 +86,10 @@ export const TerminalRegistry = {
     } else {
       const prev = entry.claudeSession;
       entry.claudeSession = {
+        sessionId: patch.sessionId !== undefined ? patch.sessionId : prev?.sessionId,
         transcriptPath: patch.transcriptPath !== undefined ? patch.transcriptPath : prev?.transcriptPath,
         matchedCommand: patch.matchedCommand !== undefined ? patch.matchedCommand : prev?.matchedCommand,
+        status: patch.status !== undefined ? patch.status : prev?.status,
         lastEventAt: patch.lastEventAt ?? Date.now(),
       };
     }

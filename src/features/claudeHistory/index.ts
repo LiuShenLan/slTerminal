@@ -11,8 +11,8 @@ export type { ClaudeHistoryState } from "./useClaudeHistory";
 export { restoreHistorySession } from "./restoreSession";
 export { HistorySessionRow } from "./HistorySessionRow";
 export type { HistorySessionRowProps } from "./HistorySessionRow";
-export { InputDialog } from "./InputDialog";
-export type { InputDialogProps } from "./InputDialog";
+export { SessionActionDialog } from "./SessionActionDialog";
+export type { SessionActionDialogProps } from "./SessionActionDialog";
 export { getHistoryContextMenuItems, buildResumeCommand } from "./historyContextMenu";
 export type { HistoryMenuItem, HistoryContextMenuOpts } from "./historyContextMenu";
 export {
@@ -21,6 +21,6 @@ export {
   groupByCwd,
   matchesSearch,
   formatRelativeTime,
-  deriveActiveSessionIds,
+  deriveActiveSessionStatuses,
 } from "./historyModel";
 export type { CwdGroup } from "./historyModel";

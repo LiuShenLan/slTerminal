@@ -1,9 +1,9 @@
 // claude-history-model.test.ts — FE-05 纯函数全分支测试
 //
-// 纯函数零依赖（仅 mock TerminalRegistry 供 deriveActiveSessionIds 读注册表）：
+// 纯函数零依赖（仅 mock TerminalRegistry 供 deriveActiveSessionStatuses 读注册表）：
 // isCurrentProject（决策 24 匹配）/ groupByCwd（组内+组间排序/未知目录组）/
 // matchesSearch（标题+prompt/大小写/空白）/ formatRelativeTime（六档边界+mtime=0）/
-// deriveActiveSessionIds（有/无 transcriptPath/空注册表）。
+// deriveActiveSessionStatuses（sessionId 优先/basename 回退/双无跳过/空注册表/status 透传）。
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
@@ -11,7 +11,7 @@ import {
   groupByCwd,
   matchesSearch,
   formatRelativeTime,
-  deriveActiveSessionIds,
+  deriveActiveSessionStatuses,
 } from "../features/claudeHistory/historyModel";
 import type { HistorySession } from "../types/claudeHistory";
 
@@ -235,46 +235,68 @@ describe("formatRelativeTime", () => {
   });
 });
 
-describe("deriveActiveSessionIds", () => {
+describe("deriveActiveSessionStatuses", () => {
   beforeEach(() => {
     h.all.clear();
   });
 
-  it("有 transcriptPath → 产出 basename 去 .jsonl 后缀的 id", () => {
+  /** claudeSession 工厂（默认带 sessionId + status） */
+  function makeClaudeSession(overrides: Record<string, unknown> = {}) {
+    return {
+      sessionId: "abc-123",
+      transcriptPath: "C:\\Users\\x\\.claude\\projects\\proj-dir\\abc-123.jsonl",
+      status: "attention",
+      lastEventAt: 1,
+      ...overrides,
+    };
+  }
+
+  it("sessionId 优先 → Map 键 = sessionId，值为 status", () => {
     h.all.set("panel-1", {
-      term: {},
-      sessionId: "p1",
-      webglAddon: null,
-      fitAddon: {},
+      term: {}, sessionId: "p1", webglAddon: null, fitAddon: {},
+      claudeSession: makeClaudeSession({ status: "working" }),
+    });
+    expect(deriveActiveSessionStatuses()).toEqual(
+      new Map([["abc-123", "working"]]),
+    );
+  });
+
+  it("无 sessionId 有 transcriptPath → basename 去 .jsonl 回退（旧数据兼容）", () => {
+    h.all.set("panel-1", {
+      term: {}, sessionId: "p1", webglAddon: null, fitAddon: {},
+      claudeSession: makeClaudeSession({
+        sessionId: undefined,
+        status: "done",
+      }),
+    });
+    expect(deriveActiveSessionStatuses()).toEqual(new Map([["abc-123", "done"]]));
+  });
+
+  it("sessionId 与 transcriptPath 均无（matchedCommand-only）→ 跳过不产出", () => {
+    h.all.set("panel-1", {
+      term: {}, sessionId: "p1", webglAddon: null, fitAddon: {},
       claudeSession: {
-        transcriptPath: "C:\\Users\\x\\.claude\\projects\\proj-dir\\abc-123.jsonl",
+        matchedCommand: "claude",
+        status: "attention",
         lastEventAt: 1,
       },
     });
-    expect(deriveActiveSessionIds()).toEqual(new Set(["abc-123"]));
+    expect(deriveActiveSessionStatuses().size).toBe(0);
   });
 
-  it("多条 → 集合含全部 id", () => {
+  it("status 为 null / undefined → 不产出键（历史区无标记，与活跃区 null 无图标一致）", () => {
     h.all.set("panel-1", {
       term: {}, sessionId: "p1", webglAddon: null, fitAddon: {},
-      claudeSession: { transcriptPath: "D:/proj/aaa.jsonl", lastEventAt: 1 },
+      claudeSession: makeClaudeSession({ status: null }),
     });
     h.all.set("panel-2", {
       term: {}, sessionId: "p2", webglAddon: null, fitAddon: {},
-      claudeSession: { transcriptPath: "D:/proj/bbb.jsonl", lastEventAt: 1 },
+      claudeSession: makeClaudeSession({ sessionId: "def-456", status: undefined }),
     });
-    expect(deriveActiveSessionIds()).toEqual(new Set(["aaa", "bbb"]));
+    expect(deriveActiveSessionStatuses().size).toBe(0);
   });
 
-  it("无 transcriptPath（matchedCommand-only）→ 不产出 id", () => {
-    h.all.set("panel-1", {
-      term: {}, sessionId: "p1", webglAddon: null, fitAddon: {},
-      claudeSession: { matchedCommand: "claude", lastEventAt: 1 },
-    });
-    expect(deriveActiveSessionIds().size).toBe(0);
-  });
-
-  it("claudeSession 为 null / 未设置 → 不产出 id", () => {
+  it("claudeSession 为 null / 未设置 → 不产出", () => {
     h.all.set("panel-1", {
       term: {}, sessionId: "p1", webglAddon: null, fitAddon: {},
       claudeSession: null,
@@ -282,10 +304,44 @@ describe("deriveActiveSessionIds", () => {
     h.all.set("panel-2", {
       term: {}, sessionId: "p2", webglAddon: null, fitAddon: {},
     });
-    expect(deriveActiveSessionIds().size).toBe(0);
+    expect(deriveActiveSessionStatuses().size).toBe(0);
   });
 
-  it("空注册表 → 空 Set", () => {
-    expect(deriveActiveSessionIds().size).toBe(0);
+  it("四态透传（working/attention/done/error）", () => {
+    const statuses = ["working", "attention", "done", "error"] as const;
+    statuses.forEach((status, i) => {
+      h.all.set(`panel-${i}`, {
+        term: {}, sessionId: `p${i}`, webglAddon: null, fitAddon: {},
+        claudeSession: makeClaudeSession({
+          sessionId: `id-${i}`,
+          status,
+        }),
+      });
+    });
+    const map = deriveActiveSessionStatuses();
+    statuses.forEach((status, i) => {
+      expect(map.get(`id-${i}`)).toBe(status);
+    });
+  });
+
+  it("多条 → Map 含全部 sessionId → status", () => {
+    h.all.set("panel-1", {
+      term: {}, sessionId: "p1", webglAddon: null, fitAddon: {},
+      claudeSession: makeClaudeSession({ sessionId: "aaa", status: "working" }),
+    });
+    h.all.set("panel-2", {
+      term: {}, sessionId: "p2", webglAddon: null, fitAddon: {},
+      claudeSession: makeClaudeSession({ sessionId: "bbb", status: "error" }),
+    });
+    expect(deriveActiveSessionStatuses()).toEqual(
+      new Map([
+        ["aaa", "working"],
+        ["bbb", "error"],
+      ]),
+    );
+  });
+
+  it("空注册表 → 空 Map", () => {
+    expect(deriveActiveSessionStatuses().size).toBe(0);
   });
 });

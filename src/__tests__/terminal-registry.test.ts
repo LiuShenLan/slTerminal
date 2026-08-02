@@ -161,6 +161,47 @@ describe("TerminalRegistry.setClaudeSession", () => {
     expect(got.matchedCommand).toBe("claude");    // 保留旧值
     expect(got.transcriptPath).toBe("/orig.json"); // 保留旧值
   });
+
+  it("sessionId/status 存储与透传（hook 事件写入）", () => {
+    const entry = makeEntry();
+    TerminalRegistry.register("p1", entry);
+    TerminalRegistry.setClaudeSession("p1", {
+      sessionId: "abc-123",
+      status: "working",
+    });
+
+    const got = TerminalRegistry.get("p1")!.claudeSession!;
+    expect(got.sessionId).toBe("abc-123");
+    expect(got.status).toBe("working");
+  });
+
+  it("sessionId/status undefined 不覆盖旧值（merge 语义）", () => {
+    const entry = makeEntry();
+    TerminalRegistry.register("p1", entry);
+    TerminalRegistry.setClaudeSession("p1", {
+      sessionId: "abc-123",
+      status: "working",
+    });
+
+    // matchedCommand-only 更新（sessionId/status undefined）→ 旧值保留
+    TerminalRegistry.setClaudeSession("p1", { matchedCommand: "claude" });
+
+    const got = TerminalRegistry.get("p1")!.claudeSession!;
+    expect(got.sessionId).toBe("abc-123");
+    expect(got.status).toBe("working");
+    expect(got.matchedCommand).toBe("claude");
+  });
+
+  it("status 显式 null 清空（Notification 普通类型 → 无有效状态）", () => {
+    const entry = makeEntry();
+    TerminalRegistry.register("p1", entry);
+    TerminalRegistry.setClaudeSession("p1", { status: "working" });
+
+    TerminalRegistry.setClaudeSession("p1", { status: null });
+
+    const got = TerminalRegistry.get("p1")!.claudeSession!;
+    expect(got.status).toBeNull();
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════

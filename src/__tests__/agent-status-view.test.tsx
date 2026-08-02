@@ -76,23 +76,21 @@ const historyMock = vi.hoisted(() => ({
   shape: {
     state: "ready",
     sessions: [] as unknown[],
-    activeIds: new Set<string>(),
+    activeStatuses: new Map<string, string>(),
     rootPath: "C:/test",
   },
   scan: vi.fn(() => Promise.resolve()),
   removeLocal: vi.fn(),
-  updateLocalTitle: vi.fn(),
 }));
 
 vi.mock("../features/claudeHistory/useClaudeHistory", () => ({
   useClaudeHistory: () => ({
     state: historyMock.shape.state,
     sessions: historyMock.shape.sessions,
-    activeIds: historyMock.shape.activeIds,
+    activeStatuses: historyMock.shape.activeStatuses,
     rootPath: historyMock.shape.rootPath,
     scan: historyMock.scan,
     removeLocal: historyMock.removeLocal,
-    updateLocalTitle: historyMock.updateLocalTitle,
   }),
 }));
 
@@ -293,6 +291,80 @@ describe("行点击 → switchToPageAndFocus", () => {
 // 用量条
 // ═══════════════════════════════════════════════════════════════
 
+/** 双行布局：row.children[0]=行1（图标+标题），row.children[1]=行2（用量条+百分比+时间） */
+function rowChildren(container: HTMLElement) {
+  const row = container.querySelector(
+    '[data-e2e="agent-status-row"]',
+  ) as HTMLElement;
+  return { row, line1: row.children[0] as HTMLElement, line2: row.children[1] as HTMLElement };
+}
+
+describe("AgentStatusRow 双行布局（问题 1 修复）", () => {
+  it("结构断言：标题与用量条不在同一 flex 行（行1 = 图标+标题，行2 = 用量+时间）", () => {
+    const row = makeRow({
+      title: "修复 context 用量计算",
+      usage: {
+        inputTokens: 100_000,
+        outputTokens: 0,
+        cacheReadInputTokens: 0,
+        cacheCreationInputTokens: 0,
+      },
+    });
+    const { container } = render(
+      React.createElement(AgentStatusRow, { row, onFocus: vi.fn() }),
+    );
+
+    const { row: root, line1, line2 } = rowChildren(container);
+    // 根容器 column 布局
+    expect(root.style.flexDirection).toBe("column");
+    // 行1 = 图标 + 标题
+    expect(line1.textContent).toContain("修复 context 用量计算");
+    expect(line1.textContent).not.toContain("%");
+    // 行2 = 用量条 + 百分比 + 时间（不含标题）
+    expect(line2.textContent).toContain("%");
+    expect(line2.textContent).not.toContain("修复 context 用量计算");
+  });
+
+  it("行1 标题 12px 粗体；行2 11px（问题 4 三级字号层级）", () => {
+    const row = makeRow({ title: "标题" });
+    const { container } = render(
+      React.createElement(AgentStatusRow, { row, onFocus: vi.fn() }),
+    );
+
+    const { line1, line2 } = rowChildren(container);
+    const titleEl = Array.from(line1.querySelectorAll("span")).find(
+      (s) => s.textContent === "标题",
+    ) as HTMLElement;
+    expect(titleEl.style.fontSize).toBe("12px");
+    expect(titleEl.style.fontWeight).toBe("bold");
+    // 行2 字号 11px
+    expect(line2.querySelector("span")!.style.fontSize).toBe("11px");
+  });
+
+  it("时间 = formatRelativeTime(lastEventAt, now)（与历史区口径统一，mock Date.now 固定）", () => {
+    const now = Date.now();
+    const lastEventAt = now - 5 * 60_000; // 5 分钟前
+    const row = makeRow({ lastEventAt });
+    const { container } = render(
+      React.createElement(AgentStatusRow, { row, onFocus: vi.fn() }),
+    );
+
+    const { line2 } = rowChildren(container);
+    // 相对时间格式（5 分钟前）；不含 HH:MM:SS 冒号形态
+    expect(line2.textContent).toContain("5 分钟前");
+  });
+
+  it("状态图标仍在行1（E2E 兼容：emoji 文本断言）", () => {
+    const row = makeRow({ status: "working" });
+    const { container } = render(
+      React.createElement(AgentStatusRow, { row, onFocus: vi.fn() }),
+    );
+
+    const { line1 } = rowChildren(container);
+    expect(line1.textContent).toContain("⚡");
+  });
+});
+
 describe("用量条", () => {
   it("contextUsage 返回正常值 → 用量条填充宽度按 200000 上限计算", () => {
     const row = makeRow({
@@ -312,17 +384,13 @@ describe("用量条", () => {
       }),
     );
 
-    // 取用量条内层填充 div（外层容器下的第一个子 div）
-    const barContainer = container.querySelector('[data-e2e="agent-status-row"]')
-      ?.children[2] as HTMLElement;
-    const innerBar = barContainer?.firstElementChild as HTMLElement;
+    // 行2 内：children[0]=用量条容器，children[1]=百分比文本，children[2]=时间
+    const { line2 } = rowChildren(container);
+    const barContainer = line2.children[0] as HTMLElement;
+    const innerBar = barContainer.firstElementChild as HTMLElement;
 
     expect(innerBar.style.width).toBe("75%");
-
-    // 文本显示 "75%"
-    const usageText = container.querySelector('[data-e2e="agent-status-row"]')
-      ?.children[3] as HTMLElement;
-    expect(usageText.textContent).toBe("75%");
+    expect(line2.children[1].textContent).toBe("75%");
   });
 
   it("contextUsage 返回 null → 用量条显示不可用态 '--'", () => {
@@ -335,10 +403,8 @@ describe("用量条", () => {
       }),
     );
 
-    // 用量文本显示 "--"
-    const usageText = container.querySelector('[data-e2e="agent-status-row"]')
-      ?.children[3] as HTMLElement;
-    expect(usageText.textContent).toBe("--");
+    const { line2 } = rowChildren(container);
+    expect(line2.children[1].textContent).toBe("--");
   });
 
   it("usage 为 undefined 时同样显示 '--'", () => {
@@ -351,17 +417,15 @@ describe("用量条", () => {
       }),
     );
 
-    const usageText = container.querySelector('[data-e2e="agent-status-row"]')
-      ?.children[3] as HTMLElement;
-    expect(usageText.textContent).toBe("--");
+    const { line2 } = rowChildren(container);
+    expect(line2.children[1].textContent).toBe("--");
   });
 
   /** 获取用量条内层填充 div 的 backgroundColor（rgb 格式，jsdom 自动规范化 hex→rgb） */
   function getUsageBarColor(container: HTMLElement): string {
-    const barContainer = container
-      .querySelector('[data-e2e="agent-status-row"]')
-      ?.children[2] as HTMLElement;
-    const innerBar = barContainer?.firstElementChild as HTMLElement;
+    const { line2 } = rowChildren(container);
+    const barContainer = line2.children[0] as HTMLElement;
+    const innerBar = barContainer.firstElementChild as HTMLElement;
     return innerBar.style.backgroundColor.replace(/\s/g, "");  // "rgb(98, 151, 85)"
   }
 

@@ -2657,8 +2657,44 @@ describe('Claude 历史会话视图', () => {
   }
 
   /**
+   * 展开全部项目区所有组（问题 3 修复：组默认收起——行操作用例需组内行可见）。
+   * 组标题箭头 ▼ 表示展开态；收起组点击展开。
+   * 时序：展开 all 区后 React 异步渲染组（dispatchEvent 非 React 事件系统，
+   * setState 为异步批处理）——先轮询组渲染，再点击展开，再等行出现（展开生效）。
+   */
+  async function ensureAllGroupsExpanded(): Promise<void> {
+    await browser.waitUntil(
+      async () =>
+        await browser.execute(
+          () =>
+            document.querySelectorAll('[data-e2e="agent-history-group"]').length >
+            0,
+        ),
+      { timeout: 10000, timeoutMsg: '历史分组未渲染' },
+    );
+    await browser.execute(() => {
+      const groups = document.querySelectorAll('[data-e2e="agent-history-group"]');
+      for (const g of groups) {
+        if (!(g.textContent ?? '').includes('▼')) {
+          g.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        }
+      }
+    });
+    // 等待展开生效（React 异步渲染组内行）
+    await browser.waitUntil(
+      async () =>
+        await browser.execute(
+          () =>
+            document.querySelectorAll('[data-e2e="agent-history-row"]').length >
+            0,
+        ),
+      { timeout: 10000, timeoutMsg: '历史组展开后行未出现' },
+    );
+  }
+
+  /**
    * 点击刷新触发重扫（ClaudeHistorySections 的 scanTriggeredRef 仅首次展开自动 scan，
-   * 之后靠刷新按钮——每个用例点刷新保证读到副本磁盘最新，跨用例删除/重命名不残留旧列表）
+   * 之后靠刷新按钮——每个用例点刷新保证读到副本磁盘最新，跨用例删除不残留旧列表）
    */
   async function refreshHistory(): Promise<void> {
     await browser.execute(() => {
@@ -2667,20 +2703,41 @@ describe('Claude 历史会话视图', () => {
     });
   }
 
-  /** 等待历史行出现（刷新后重扫完成） */
+  /** 等待历史行出现（刷新后重扫完成）；超时附带 DOM 诊断 */
   async function waitRows(timeout = 15000): Promise<void> {
-    await browser.waitUntil(
-      async () =>
-        await browser.execute(() => document.querySelectorAll('[data-e2e="agent-history-row"]').length > 0),
-      { timeout, timeoutMsg: '历史会话行未出现（扫描未完成或副本未就绪）' },
-    );
+    try {
+      await browser.waitUntil(
+        async () =>
+          await browser.execute(() => document.querySelectorAll('[data-e2e="agent-history-row"]').length > 0),
+        { timeout, timeoutMsg: '历史会话行未出现（扫描未完成或副本未就绪）' },
+      );
+    } catch (e) {
+      const diag = await browser.execute(() => {
+        const all = document.querySelector('[data-e2e="agent-history-section-all"]');
+        const current = document.querySelector('[data-e2e="agent-history-section-current"]');
+        return JSON.stringify({
+          all: all?.textContent ?? null,
+          current: current?.textContent ?? null,
+          groups: document.querySelectorAll('[data-e2e="agent-history-group"]').length,
+          rows: document.querySelectorAll('[data-e2e="agent-history-row"]').length,
+        });
+      });
+      console.log('DIAG waitRows:', diag);
+      throw e;
+    }
   }
 
-  /** 通用前置：打开视图 → 展开全部区 → 刷新 → 等行 */
+  /**
+   * 通用前置：打开视图 → 展开全部区 → 刷新 → 展开所有组 → 等行。
+   * 顺序约束：组展开必须在 refreshHistory（重扫）之后——scan 的 loading 分支会卸载重挂
+   * HistorySessionList（expandedGroups 为组件内 state，重挂后重置为默认收起），
+   * 先展开再刷新会导致行随重挂消失。
+   */
   async function openAllSectionWithFreshScan(): Promise<void> {
     await openAgentStatusView();
     await ensureAllSectionExpanded();
     await refreshHistory();
+    await ensureAllGroupsExpanded();
     await waitRows();
   }
 
@@ -2921,66 +2978,7 @@ describe('Claude 历史会话视图', () => {
     expect(after.panels).toBe(before.panels);
   });
 
-  // ── 用例 6：重命名 ──
-
-  it('重命名：右键 → InputDialog 提交 → 行标题更新 + 副本文件尾部追加 custom-title 行', async () => {
-    await openAllSectionWithFreshScan();
-    const newTitle = 'E2E重命名后标题';
-
-    // 右键 501 行 → 「重命名」→ InputDialog 打开（挂载自动 focus + 全选）
-    expect(await contextMenuOnRow('E2E自定义标题一')).toBe(true);
-    await waitContextMenu();
-    expect(await clickMenuByLabel('重命名')).toBe(true);
-    await browser.waitUntil(
-      async () =>
-        await browser.execute(() => !!document.querySelector('[data-e2e="agent-history-input-dialog"]')),
-      { timeout: 5000, timeoutMsg: 'InputDialog 未出现' },
-    );
-
-    // 输入新标题（React 受控 input：原生 setter + input 事件，见 setInputValue 注释）
-    expect(await setInputValue('[data-e2e="agent-history-input-dialog"] input', newTitle)).toBe(true);
-
-    // 等待确认按钮启用（trim 后非空）→ 点击确认
-    await browser.waitUntil(
-      async () =>
-        await browser.execute(() => {
-          const dialog = document.querySelector('[data-e2e="agent-history-input-dialog"]');
-          const btns = dialog?.querySelectorAll('button') ?? [];
-          for (const b of btns) {
-            if ((b.textContent ?? '').includes('确认') && !(b as HTMLButtonElement).disabled) return true;
-          }
-          return false;
-        }),
-      { timeout: 5000, timeoutMsg: 'InputDialog 确认按钮未启用' },
-    );
-    await browser.execute(() => {
-      const dialog = document.querySelector('[data-e2e="agent-history-input-dialog"]');
-      const btns = dialog?.querySelectorAll('button') ?? [];
-      for (const b of btns) {
-        if ((b.textContent ?? '').includes('确认')) (b as HTMLButtonElement).click();
-      }
-    });
-
-    // 列表行标题即时更新（updateLocalTitle 局部刷新，不重扫）
-    await browser.waitUntil(
-      async () => (await findRowByText(newTitle)) !== null,
-      { timeout: 8000, timeoutMsg: '重命名后行标题未更新' },
-    );
-
-    // Node 侧断言：副本文件尾部追加 custom-title 行（BE-08 格式：
-    // {"type":"custom-title","customTitle":<名>,"sessionId":<id>}；serde_json 序列化键序）
-    const renamedPath = join(projectsDir, fixtureDirA, `${UUID_CUSTOM}.jsonl`);
-    const content = readFileSync(renamedPath, 'utf8');
-    const lines = content.split(/\r?\n/).filter((l) => l.trim().length > 0);
-    const last = JSON.parse(lines[lines.length - 1]);
-    expect(last).toMatchObject({
-      type: 'custom-title',
-      customTitle: newTitle,
-      sessionId: UUID_CUSTOM,
-    });
-  });
-
-  // ── 用例 7：删除 ──
+  // ── 用例 6：删除（重命名功能已整体移除——问题 7 修复，原用例 6/7 顺延） ──
 
   it('删除：ask 确认（E2E 钩子）→ 行消失 + 副本文件删除', async () => {
     // ask 弹窗处理（执行期决策点）：embedded WDIO 无法操作原生对话框；JS 侧 patch
@@ -3014,6 +3012,145 @@ describe('Claude 历史会话视图', () => {
     await browser.execute(() => {
       delete (window as any).__slterm_e2e_dialogAsk;
     });
+  });
+
+  // ── 用例 7：历史区四态（问题 2 修复——信号文件驱动，历史区与活跃区同源一致） ──
+
+  it('历史区四态：信号文件驱动 → 历史区行显示与活跃区一致的四态 emoji（⚡→✅→消失）', async () => {
+    const eventsDir = join(homedir(), '.slterminal', 'hooks-events');
+    const tempDir = mkdtempSync(join(tmpdir(), 'slterm-e2e-agent-history-status-'));
+    const signalFiles: string[] = [];
+
+    try {
+      // 0. Workspace 就绪 + hooks 注入（照 R4 变体先例）
+      await browser.waitUntil(
+        async () => await browser.execute(() => (window as any).__slterm_e2e_workspaceReady === true),
+        { timeout: 15000, timeoutMsg: 'Workspace 未就绪' },
+      );
+      await browser.execute(() => (window as any).__slterm_e2e_injectHooks?.());
+      await browser.waitUntil(
+        async () => {
+          const s = await browser.execute(() =>
+            (window as any).__slterm_e2e_getHookInjectionStatus?.(),
+          );
+          return s?.status === 'injected';
+        },
+        { timeout: 15000, timeoutMsg: 'hooks 未在创建终端前完成注入' },
+      );
+
+      // 1. 创建项目 + 终端面板（PTY session 就绪后 hook 事件才会路由到面板）
+      const pageId = await browser.execute((dir: string) => {
+        return (window as any).__slterm_e2e_createProject?.(dir);
+      }, tempDir);
+      await browser.waitUntil(
+        async () => await browser.execute(() => typeof window.__dockviewApi !== 'undefined'),
+        { timeout: 20000, timeoutMsg: 'Dockview API 未就绪' },
+      );
+      const panelId = `terminal-${pageId}-0`;
+      await browser.execute((pid: string) => {
+        window.__dockviewApi!.addPanel({
+          id: pid,
+          component: 'terminal',
+          params: { panelId: pid },
+          renderer: 'always' as const,
+        });
+      }, panelId);
+      await browser.waitUntil(
+        async () => await browser.execute(() => {
+          const containers = document.querySelectorAll('[data-e2e="terminal-container"]');
+          for (const c of containers) {
+            if ((c as any).__e2e_sessionReady) return true;
+          }
+          return false;
+        }),
+        { timeout: 25000, timeoutMsg: 'PTY session 未就绪' },
+      );
+
+      // 2. 打开 agent-status 视图 + 展开全部项目历史会话（行 = fixture 501「E2E自定义标题一」）
+      await browser.execute(() => {
+        (window as any).__slterm_e2e_toggleSideView?.('agent-status');
+      });
+      await openAllSectionWithFreshScan();
+      expect(await findRowByText('E2E自定义标题一')).not.toBeNull();
+
+      // 3. 原子写 PreToolUse 信号文件（sessionId = fixture 501 UUID；transcriptPath 指向副本）
+      //    → 活跃区建行 ⚡；历史区 501 行 ⚡（两区同源 TerminalRegistry，问题 2）
+      mkdirSync(eventsDir, { recursive: true });
+      const writeSignal = (event: string, toolName: string | null, notificationType: string | null) => {
+        const payload = {
+          panelId,
+          event,
+          timestamp: Date.now(),
+          sessionId: UUID_CUSTOM,
+          transcriptPath: join(projectsDir, fixtureDirA, `${UUID_CUSTOM}.jsonl`),
+          cwd: tempDir,
+          toolName,
+          notificationType,
+        };
+        const fileName = `${panelId}-${event}-${Date.now()}.json`;
+        const tmpPath = join(eventsDir, fileName + '.tmp');
+        const filePath = join(eventsDir, fileName);
+        writeFileSync(tmpPath, JSON.stringify(payload), 'utf8');
+        renameSync(tmpPath, filePath);
+        signalFiles.push(filePath);
+      };
+
+      writeSignal('PreToolUse', 'Bash', null);
+      // 两区均出现 ⚡（working）
+      await browser.waitUntil(
+        async () => await browser.execute(() => {
+          const active = document.querySelector('[data-e2e="agent-status-row"]');
+          return active?.textContent?.includes('⚡') ?? false;
+        }),
+        { timeout: 15000, timeoutMsg: 'agent-status-row 未在 PreToolUse 后含 ⚡' },
+      );
+      await browser.waitUntil(
+        async () => (await findRowByText('E2E自定义标题一'))?.includes('⚡') ?? false,
+        { timeout: 15000, timeoutMsg: '历史区 501 行未在 PreToolUse 后含 ⚡（四态未同步）' },
+      );
+
+      // 4. Stop 信号 → 两区均变 ✅（done），一致
+      writeSignal('Stop', null, null);
+      await browser.waitUntil(
+        async () => await browser.execute(() => {
+          const active = document.querySelector('[data-e2e="agent-status-row"]');
+          return active?.textContent?.includes('✅') ?? false;
+        }),
+        { timeout: 15000, timeoutMsg: 'agent-status-row 未在 Stop 后含 ✅' },
+      );
+      await browser.waitUntil(
+        async () => (await findRowByText('E2E自定义标题一'))?.includes('✅') ?? false,
+        { timeout: 15000, timeoutMsg: '历史区 501 行未在 Stop 后含 ✅（四态未同步）' },
+      );
+
+      // 5. SessionEnd 信号 → 活跃区行消失 + 历史区 501 行标记消失（⚡ 集合重算）
+      writeSignal('SessionEnd', null, null);
+      await browser.waitUntil(
+        async () => await browser.execute(() => !document.querySelector('[data-e2e="agent-status-row"]')),
+        { timeout: 15000, timeoutMsg: 'agent-status-row 未在 SessionEnd 后消失' },
+      );
+      await browser.waitUntil(
+        async () => {
+          const row = await findRowByText('E2E自定义标题一');
+          return row !== null && !row.includes('⚡') && !row.includes('✅');
+        },
+        { timeout: 15000, timeoutMsg: '历史区 501 行标记未在 SessionEnd 后清除' },
+      );
+    } finally {
+      // 清理：信号文件（watcher 处理正常会自删，此处兜底）+ 临时目录
+      for (const f of signalFiles) {
+        try {
+          rmSync(f, { force: true });
+        } catch {
+          // 已删除则忽略
+        }
+      }
+      try {
+        rmSync(tempDir, { recursive: true, force: true });
+      } catch {
+        // 忽略
+      }
+    }
   });
 
   // ── 用例 8：恢复编排（最后——finally 删除 E2E 临时项目目录） ──

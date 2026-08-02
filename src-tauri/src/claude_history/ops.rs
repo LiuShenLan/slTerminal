@@ -1,22 +1,17 @@
-//! 历史会话写操作 —— SEC-01 sessionId 校验 + 删除/重命名命令（BE-07/BE-08）
+//! 历史会话写操作 —— SEC-01 sessionId 校验 + 删除命令（BE-07）
 //!
 //! 职责：
 //! - `validate_session_id()`：SEC-01 严格校验（仅 UUID 形态，非法 → Validation）
 //! - `claude_history_delete`：删除 `<id>.jsonl` + 同名 `<id>/` 附属目录（BE-07）
-//! - `claude_history_rename`：追加 custom-title 行（BE-08，决策 20/22）
 //!
 //! 安全模型（SEC-01）：定位只接受 sessionId（不信托前端任何路径参数），
 //! 文件路径全部由「扫描根 + 一级子目录名 + 校验过的 sessionId」拼接派生。
-//! 两命令写用户 home 目录文件、绕过 project_root 沙箱（照 hooks/config.rs user 层先例），
+//! 命令写用户 home 目录文件、绕过 project_root 沙箱（照 hooks/config.rs user 层先例），
 //! 入参即攻击面——sessionId 严格校验是唯一防线。
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::claude_history::{is_uuid_filename, scan::resolve_projects_root};
-
-/// 重命名标题最大字符数（BE-08：trim 后 ≤200，按字符计）
-const TITLE_MAX_CHARS: usize = 200;
 
 /// SEC-01 sessionId 严格校验
 ///
@@ -33,7 +28,7 @@ fn validate_session_id(session_id: &str) -> Result<(), crate::AppError> {
     Ok(())
 }
 
-/// 「会话不存在」错误（BE-07/BE-08：jsonl 找不到 → Err 且消息含「不存在」语义）
+/// 「会话不存在」错误（BE-07：jsonl 找不到 → Err 且消息含「不存在」语义）
 fn session_not_found(session_id: &str) -> crate::AppError {
     crate::AppError::Validation(format!("会话不存在: {session_id}"))
 }
@@ -87,74 +82,6 @@ fn delete_session(session_id: &str) -> Result<(), crate::AppError> {
         if session_dir.is_dir() {
             std::fs::remove_dir_all(&session_dir)?;
         }
-    }
-    Ok(())
-}
-
-/// claude_history_rename 命令（BE-08）
-///
-/// SEC-01 校验 + new_title trim 后非空且 ≤200 字符 → spawn_blocking 内定位 →
-/// append 追加一行 custom-title（serde_json 序列化，禁手拼字符串防注入）。
-#[tauri::command]
-pub async fn claude_history_rename(
-    session_id: String,
-    new_title: String,
-) -> Result<(), crate::AppError> {
-    tokio::task::spawn_blocking(move || rename_session(&session_id, &new_title))
-        .await
-        .map_err(crate::AppError::from)?
-}
-
-/// 重命名会话纯逻辑（阻塞 I/O，供命令 spawn_blocking 包装 + 单元测试直测）
-///
-/// 追加写与运行中会话写入无冲突（决策 20/22），不做原子重写。
-/// 追加行格式：`{"type":"custom-title","customTitle":<名>,"sessionId":<id>}`。
-fn rename_session(session_id: &str, new_title: &str) -> Result<(), crate::AppError> {
-    validate_session_id(session_id)?;
-    let title = new_title.trim();
-    if title.is_empty() {
-        return Err(crate::AppError::Validation(
-            "重命名标题不能为空".to_string(),
-        ));
-    }
-    if title.chars().count() > TITLE_MAX_CHARS {
-        return Err(crate::AppError::Validation(format!(
-            "重命名标题超过 {TITLE_MAX_CHARS} 字符上限"
-        )));
-    }
-    let Some(root) = resolve_projects_root() else {
-        return Err(session_not_found(session_id));
-    };
-    let Some(jsonl) = locate_session_jsonl(&root, session_id) else {
-        return Err(session_not_found(session_id));
-    };
-    let mut f = std::fs::OpenOptions::new().append(true).open(&jsonl)?;
-    ensure_trailing_newline(&mut f, &jsonl)?;
-    // serde_json 序列化构造（禁手拼字符串防注入；Value Display 为紧凑 JSON）
-    let line = serde_json::json!({
-        "type": "custom-title",
-        "customTitle": title,
-        "sessionId": session_id,
-    });
-    writeln!(f, "{line}")?;
-    Ok(())
-}
-
-/// 追加前保证文件以换行结尾（JSONL 行完整）；文件为空则无需处理
-///
-/// append 句柄的 seek 无效（恒写末尾），故用独立只读句柄探测末字节。
-fn ensure_trailing_newline(f: &mut std::fs::File, path: &Path) -> Result<(), crate::AppError> {
-    use std::io::{Read, Seek, SeekFrom};
-    let len = f.metadata()?.len();
-    if len == 0 {
-        return Ok(());
-    }
-    let mut probe = std::fs::File::open(path)?;
-    probe.seek(SeekFrom::End(-1))?;
-    let mut last = [0u8; 1];
-    probe.read_exact(&mut last)?;
-    if last[0] != b'\n' {
-        f.write_all(b"\n")?;
     }
     Ok(())
 }
@@ -288,127 +215,11 @@ mod tests {
         assert!(!proj.join("..").join("evil.jsonl").exists());
     }
 
-    // ── BE-08：rename ──
-
-    #[test]
-    fn rename_appends_custom_title_line_preserving_content() {
-        // 追加行三字段逐字断言 + 原文件内容不变
-        let (_dir, root, proj) = make_scan_root();
-        let path = proj.join(format!("{UUID}.jsonl"));
-        let orig1 = serde_json::json!({"type": "summary", "summary": "旧标题"}).to_string();
-        let orig2 = serde_json::json!({
-            "type": "user",
-            "message": { "content": "你好" },
-        })
-        .to_string();
-        std::fs::write(&path, format!("{orig1}\n{orig2}\n")).unwrap();
-
-        set_scan_root(&root);
-        rename_session(UUID, "重命名后的标题").unwrap();
-        unset_scan_root();
-
-        let content = std::fs::read_to_string(&path).unwrap();
-        let mut lines = content.lines();
-        // 原两行内容不变
-        assert_eq!(lines.next(), Some(orig1.as_str()));
-        assert_eq!(lines.next(), Some(orig2.as_str()));
-        // 追加行：JSON 反序列化后三字段逐字断言
-        let last = lines.next().expect("应追加一行 custom-title");
-        assert!(lines.next().is_none(), "不应有多余行");
-        let v: serde_json::Value = serde_json::from_str(last).unwrap();
-        assert_eq!(v["type"], "custom-title");
-        assert_eq!(v["customTitle"], "重命名后的标题");
-        assert_eq!(v["sessionId"], UUID);
-    }
-
-    #[test]
-    fn rename_repairs_missing_trailing_newline() {
-        // 文件非空且末字节非 \n → 先补 \n 再写行（保证 JSONL 行完整）
-        let (_dir, root, proj) = make_scan_root();
-        let path = proj.join(format!("{UUID}.jsonl"));
-        std::fs::write(&path, r#"{"type":"summary","summary":"s"}"#).unwrap(); // 无尾 \n
-
-        set_scan_root(&root);
-        rename_session(UUID, "标题").unwrap();
-        unset_scan_root();
-
-        let content = std::fs::read_to_string(&path).unwrap();
-        let lines: Vec<&str> = content.lines().collect();
-        assert_eq!(lines.len(), 2, "补 \n 后应恰好两行");
-        // 两行均为合法 JSON（原行未被续写破坏）
-        for l in &lines {
-            assert!(
-                serde_json::from_str::<serde_json::Value>(l).is_ok(),
-                "行应为完整 JSON，实际: {l}"
-            );
-        }
-    }
-
-    #[test]
-    fn rename_rejects_empty_or_oversized_title() {
-        // 空串 / 纯空白 / >200 字符 → Validation 拒绝，且文件未被改动（校验先于写）
-        let (_dir, root, proj) = make_scan_root();
-        let path = proj.join(format!("{UUID}.jsonl"));
-        std::fs::write(&path, "line1\n").unwrap();
-
-        let long_title = "长".repeat(TITLE_MAX_CHARS + 1);
-        set_scan_root(&root);
-        for bad in ["", "   ", long_title.as_str()] {
-            let msg = assert_validation(rename_session(UUID, bad).unwrap_err());
-            assert!(!msg.is_empty());
-        }
-        unset_scan_root();
-
-        assert_eq!(
-            std::fs::read_to_string(&path).unwrap(),
-            "line1\n",
-            "非法标题不应改动文件"
-        );
-    }
-
-    #[test]
-    fn rename_accepts_200_char_title() {
-        // 边界：trim 后恰 200 字符合法
-        let (_dir, root, proj) = make_scan_root();
-        let path = proj.join(format!("{UUID}.jsonl"));
-        std::fs::write(&path, "line1\n").unwrap();
-        let title_200 = "题".repeat(TITLE_MAX_CHARS);
-
-        set_scan_root(&root);
-        rename_session(UUID, &title_200).unwrap();
-        unset_scan_root();
-
-        let content = std::fs::read_to_string(&path).unwrap();
-        let v: serde_json::Value = serde_json::from_str(content.lines().last().unwrap()).unwrap();
-        assert_eq!(v["customTitle"], title_200);
-    }
-
-    #[test]
-    fn rename_missing_session_returns_not_found() {
-        let (_dir, root, _proj) = make_scan_root();
-        set_scan_root(&root);
-        let msg = assert_validation(rename_session(UUID, "标题").unwrap_err());
-        unset_scan_root();
-        assert!(
-            msg.contains("不存在"),
-            "消息应含「不存在」语义，实际: {msg}"
-        );
-    }
-
-    #[test]
-    fn rename_rejects_invalid_session_id() {
-        let (_dir, root, _proj) = make_scan_root();
-        set_scan_root(&root);
-        let msg = assert_validation(rename_session("a/b", "标题").unwrap_err());
-        unset_scan_root();
-        assert!(msg.contains("非法"), "消息应说明非法，实际: {msg}");
-    }
-
     // ── 越界防护（BE-10：扫描根外无写入） ──
 
     #[test]
-    fn delete_and_rename_stay_within_scan_root() {
-        // 扫描根外放哨兵文件：rename/delete 全程不触碰（路径均由扫描根+校验 id 派生）
+    fn delete_stays_within_scan_root() {
+        // 扫描根外放哨兵文件：delete 全程不触碰（路径均由扫描根+校验 id 派生）
         let outer = tempfile::tempdir().unwrap();
         let outer_canon = dunce::canonicalize(outer.path()).unwrap();
         let root = outer_canon.join("projects");
@@ -420,7 +231,6 @@ mod tests {
         std::fs::write(&canary, "keep").unwrap();
 
         set_scan_root(&root);
-        rename_session(UUID, "新标题").unwrap();
         delete_session(UUID).unwrap();
         unset_scan_root();
 

@@ -1,8 +1,8 @@
 // claude-history-hook.test.tsx — FE-04 useClaudeHistory 数据 hook 测试
 //
 // 覆盖：初始 idle / scan 成功 ready+sessions / scan 失败 error /
-// removeLocal / updateLocalTitle（均不触发 scan）/
-// TerminalRegistry.subscribe 事件驱动 activeIds 更新 / 卸载取消订阅 /
+// removeLocal（不触发 scan）/
+// TerminalRegistry.subscribe 事件驱动 activeStatuses 更新 / 卸载取消订阅 /
 // generation 防竞（旧结果丢弃）/ rootPath 推导与切换不自动重扫。
 //
 // mock 模式：vi.hoisted() 共享状态 + 模块级 vi.mock（照 agent-status-hook.test.ts 先例）+
@@ -83,11 +83,11 @@ afterEach(() => {
 });
 
 describe("useClaudeHistory 初始态", () => {
-  it("初始 idle + 空 sessions + 空 activeIds，rootPath 推导自活跃页面 cwd", () => {
+  it("初始 idle + 空 sessions + 空 activeStatuses，rootPath 推导自活跃页面 cwd", () => {
     const { result } = renderHook(() => useClaudeHistory());
     expect(result.current.state).toBe("idle");
     expect(result.current.sessions).toEqual([]);
-    expect(result.current.activeIds.size).toBe(0);
+    expect(result.current.activeStatuses.size).toBe(0);
     expect(result.current.rootPath).toBe("C:\\project\\src");
     expect(h.mockScanHistory).not.toHaveBeenCalled();
   });
@@ -118,13 +118,20 @@ describe("useClaudeHistory 初始态", () => {
     expect(result.current.rootPath).toBe("D:/root");
   });
 
-  it("activeIds 初值 = 挂载时注册表派生结果", () => {
+  it("activeStatuses 初值 = 挂载时注册表派生结果（Map<sessionId, status>）", () => {
     h.all.set("panel-1", {
       term: {}, sessionId: "p1", webglAddon: null, fitAddon: {},
-      claudeSession: { transcriptPath: "D:/proj/abc.jsonl", lastEventAt: 1 },
+      claudeSession: {
+        sessionId: "abc",
+        transcriptPath: "D:/proj/abc.jsonl",
+        status: "working",
+        lastEventAt: 1,
+      },
     });
     const { result } = renderHook(() => useClaudeHistory());
-    expect(result.current.activeIds).toEqual(new Set(["abc"]));
+    expect(result.current.activeStatuses).toEqual(
+      new Map([["abc", "working"]]),
+    );
   });
 });
 
@@ -243,36 +250,27 @@ describe("useClaudeHistory 局部更新", () => {
     });
     expect(result.current.sessions).toHaveLength(2);
   });
-
-  it("updateLocalTitle 更新标题 + titleSource=customTitle 且不触发 scan", async () => {
-    const result = await seedSessions();
-    act(() => {
-      result.current.updateLocalTitle("s1", "新标题");
-    });
-    const s1 = result.current.sessions.find((s) => s.sessionId === "s1");
-    expect(s1?.title).toBe("新标题");
-    expect(s1?.titleSource).toBe("customTitle");
-    // 其他会话不受影响
-    const s2 = result.current.sessions.find((s) => s.sessionId === "s2");
-    expect(s2?.title).toBe("标题二");
-    expect(s2?.titleSource).toBe("none");
-    expect(h.mockScanHistory).toHaveBeenCalledTimes(1);
-  });
 });
 
 describe("useClaudeHistory 订阅", () => {
-  it("注册表事件后 activeIds 重算（sessionChange 加/删）", () => {
+  it("注册表事件后 activeStatuses 重算（sessionChange 加/删）", () => {
     const { result } = renderHook(() => useClaudeHistory());
-    // sessionChange：claude 会话建立（transcriptPath 出现）
+    // sessionChange：claude 会话建立（sessionId + status 出现）
     h.all.set("panel-1", {
       term: {}, sessionId: "p1", webglAddon: null, fitAddon: {},
-      claudeSession: { transcriptPath: "D:/proj/aaa.jsonl", lastEventAt: 1 },
+      claudeSession: {
+        sessionId: "aaa",
+        status: "attention",
+        lastEventAt: 1,
+      },
     });
     act(() => {
       notifyListeners({ type: "sessionChange", panelId: "panel-1" });
     });
-    expect(result.current.activeIds).toEqual(new Set(["aaa"]));
-    // sessionChange：会话结束（transcriptPath 清除）
+    expect(result.current.activeStatuses).toEqual(
+      new Map([["aaa", "attention"]]),
+    );
+    // sessionChange：会话结束（claudeSession 清空）
     h.all.set("panel-1", {
       term: {}, sessionId: "p1", webglAddon: null, fitAddon: {},
       claudeSession: null,
@@ -280,7 +278,7 @@ describe("useClaudeHistory 订阅", () => {
     act(() => {
       notifyListeners({ type: "sessionChange", panelId: "panel-1" });
     });
-    expect(result.current.activeIds.size).toBe(0);
+    expect(result.current.activeStatuses.size).toBe(0);
   });
 
   it("订阅不触发 scan（规格 4.5：不重扫）", () => {

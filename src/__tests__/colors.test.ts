@@ -109,8 +109,8 @@ describe("theme/colors.ts 配色 token", () => {
   });
 
   describe("SIDEBAR_COLORS（侧栏树专用色，FE-24 提取）", () => {
-    it("包含 7 个 token", () => {
-      expect(Object.keys(SIDEBAR_COLORS)).toHaveLength(7);
+    it("包含 8 个 token（含 treeGuide 树形引导线——问题 4 修复新增）", () => {
+      expect(Object.keys(SIDEBAR_COLORS)).toHaveLength(8);
     });
 
     const sidebarCases = [

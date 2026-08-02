@@ -2,29 +2,29 @@
 //
 // 两种展示模式（props.mode）：
 //   current —— 当前项目区：平铺 HistorySessionRow（isCurrentProject 按 rootPath 过滤，mtime 降序）
-//   all     —— 全部项目区：groupByCwd 二级折叠（组标题 = basename + title 悬停完整路径，空组不显示）
+//   all     —— 全部项目区：groupByCwd 二级折叠（组标题 = basename + (N) 计数 + 悬停完整路径，
+//              组默认收起——问题 3 修复：expandedGroups 白名单模型；组内容再缩进 + 二级引导线）
 // 搜索过滤经 matchesSearch（Stage 04）作用于两区（README 4.3.4）。
 //
 // 交互分派：
-//   双击（行 onDoubleClick 消费方）三分支（README 4.3.2/4.3.3）：
+//   双击（行 onDoubleClick 消费方）三分支（README 4.3.2/4.3.3，问题 5 修复）：
 //     普通行 → restoreHistorySession(session)；孤儿/无 cwd 行 → 无操作；
-//     ⚡ 运行中行 → dialog.ask「该会话已在运行中」→ 确认走 fork 恢复
-//   右键菜单 → getHistoryContextMenuItems 策略查询；删除/重命名完成回调
-//   （removeLocal/updateLocalTitle 来自 useClaudeHistory）经 props 注入。
-// 重命名经 InputDialog（调用方打开，提交后 renameHistorySession → updateLocalTitle）。
+//     运行中行（status 非 null）→ SessionActionDialog 弹窗（「切换到该会话操作页面」/取消，
+//     分支恢复仅保留在右键菜单）——切换 = 反查 TerminalRegistry 定位 panelId → 切页 + 聚焦
+//   右键菜单 → getHistoryContextMenuItems 策略查询（复制/分支恢复/删除）；删除完成回调
+//   （removeLocal 来自 useClaudeHistory）经 props 注入。
+// 状态标记：行 status 四态来自 useClaudeHistory.activeStatuses（与活跃区同源，问题 2 修复）。
 //
 // 配色全部 theme/colors.ts token（硬约束 #6），零硬编码色值。
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ask } from "../../ipc/dialog";
 import { writeText } from "../../ipc/clipboard";
-import {
-  deleteHistorySession,
-  renameHistorySession,
-} from "../../ipc/claudeHistory";
+import { deleteHistorySession } from "../../ipc/claudeHistory";
+import { sendToastNotification } from "../../ipc/notification";
 import { restoreHistorySession } from "./restoreSession";
 import { HistorySessionRow } from "./HistorySessionRow";
-import { InputDialog } from "./InputDialog";
+import { SessionActionDialog } from "./SessionActionDialog";
 import {
   buildResumeCommand,
   getHistoryContextMenuItems,
@@ -32,7 +32,11 @@ import {
 import type { HistoryMenuItem } from "./historyContextMenu";
 import { basename } from "../../lib/path";
 import { groupByCwd, isCurrentProject, matchesSearch } from "./historyModel";
+import { TerminalRegistry } from "../../panels/terminal/TerminalRegistry";
+import { parseTerminalPageId } from "../../lib/panelId";
+import { switchToPageAndFocus } from "../../workspace/pageApis";
 import type { HistorySession } from "../../types/claudeHistory";
+import type { ClaudeStatus } from "../../lib/claudeStatus";
 import {
   EXPLORER_COLORS,
   INPUT_BORDER,
@@ -56,7 +60,7 @@ const arrowStyle: React.CSSProperties = {
   flexShrink: 0,
 };
 
-/** 组标题栏样式（全部项目区二级折叠头） */
+/** 组标题栏样式（全部项目区二级折叠头，12px 粗体——问题 4 三级字号层级） */
 const groupHeaderStyle: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
@@ -65,10 +69,19 @@ const groupHeaderStyle: React.CSSProperties = {
   cursor: "pointer",
   userSelect: "none",
   fontSize: 12,
+  fontWeight: "bold",
   color: EXPLORER_COLORS.fg,
   whiteSpace: "nowrap",
   overflow: "hidden",
   textOverflow: "ellipsis",
+};
+
+/** 组内会话数（灰色小字） */
+const groupCountStyle: React.CSSProperties = {
+  color: INPUT_BORDER,
+  fontSize: 11,
+  fontWeight: "normal",
+  marginLeft: 4,
 };
 
 /** 空态/提示文案样式 */
@@ -170,6 +183,26 @@ const ContextMenu: React.FC<{
   );
 };
 
+// ── 反查 TerminalRegistry：sessionId → panelId（双击弹窗「切换到该会话操作页面」用） ──
+
+/**
+ * 反查运行中会话所在终端面板：claudeSession.sessionId 精确匹配，
+ * 回退 transcriptPath basename 去 .jsonl（旧数据兼容）；未命中 → undefined。
+ */
+function findPanelForSession(sessionId: string): string | undefined {
+  for (const [panelId, entry] of TerminalRegistry.getAll()) {
+    const cs = entry.claudeSession;
+    if (!cs) continue;
+    if (cs.sessionId === sessionId) return panelId;
+    if (!cs.sessionId && cs.transcriptPath) {
+      const base = basename(cs.transcriptPath);
+      const id = base.endsWith(".jsonl") ? base.slice(0, -".jsonl".length) : base;
+      if (id === sessionId) return panelId;
+    }
+  }
+  return undefined;
+}
+
 // ── 历史会话列表 ──
 
 export interface HistorySessionListProps {
@@ -181,16 +214,14 @@ export interface HistorySessionListProps {
   rootPath: string | null;
   /** 搜索词（matchesSearch 过滤，作用于两区） */
   search: string;
-  /** ⚡ 运行中会话 id 集合 */
-  activeIds: Set<string>;
+  /** 运行中会话四态映射（Map<sessionId, status>，与活跃区同源——问题 2 修复） */
+  activeStatuses: Map<string, ClaudeStatus>;
   /** 选中会话 id（受控，ClaudeHistorySections 持有） */
   selectedId: string | null;
   /** 单击选中回调 */
   onSelect(id: string): void;
   /** 删除成功后的即时局部刷新（useClaudeHistory.removeLocal，不重扫） */
   removeLocal(id: string): void;
-  /** 重命名成功后的即时局部刷新（useClaudeHistory.updateLocalTitle，不重扫） */
-  updateLocalTitle(id: string, title: string): void;
 }
 
 export const HistorySessionList: React.FC<HistorySessionListProps> = ({
@@ -198,11 +229,10 @@ export const HistorySessionList: React.FC<HistorySessionListProps> = ({
   sessions,
   rootPath,
   search,
-  activeIds,
+  activeStatuses,
   selectedId,
   onSelect,
   removeLocal,
-  updateLocalTitle,
 }) => {
   const [menu, setMenu] = useState<MenuState>({
     visible: false,
@@ -211,20 +241,22 @@ export const HistorySessionList: React.FC<HistorySessionListProps> = ({
     items: [],
   });
 
+  /** 双击运行中会话的动作弹窗目标（null = 关闭） */
+  const [dialogSession, setDialogSession] = useState<HistorySession | null>(
+    null,
+  );
+
   const closeMenu = useCallback(() => {
     setMenu((prev) => ({ ...prev, visible: false }));
   }, []);
 
-  /** 重命名弹窗目标会话（null = 关闭） */
-  const [renameTarget, setRenameTarget] = useState<HistorySession | null>(null);
-
-  /** 全部项目区折叠的组集合（键 = 规范化 cwd；cwd 为 null 的未知目录组键 = ""） */
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(
+  /** 全部项目区展开的组集合（白名单模型——初始空 = 默认收起，问题 3 修复） */
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(
     () => new Set(),
   );
 
   const toggleGroup = (key: string) => {
-    setCollapsedGroups((prev) => {
+    setExpandedGroups((prev) => {
       const next = new Set(prev);
       if (next.has(key)) {
         next.delete(key);
@@ -235,30 +267,43 @@ export const HistorySessionList: React.FC<HistorySessionListProps> = ({
     });
   };
 
-  /** 行状态标记派生（⚡ / ✗ / 无 cwd——Row 的 active/orphan/noCwd 三 props） */
+  /** 行状态标记派生（四态 status / ✗ / 无 cwd——Row 的 status/orphan/noCwd 三 props） */
   const rowFlags = useCallback(
     (session: HistorySession) => ({
-      active: activeIds.has(session.sessionId),
+      status: activeStatuses.get(session.sessionId),
       orphan: session.cwd !== null && !session.cwdExists,
       noCwd: session.cwd === null,
     }),
-    [activeIds],
+    [activeStatuses],
   );
 
-  /** 双击分派三分支（README 4.3.2/4.3.3）：普通 → 恢复；孤儿/无 cwd → 无操作；⚡ → ask 引导分支恢复 */
+  /** 切换到该会话所在操作页面并聚焦终端页签（问题 5 修复） */
+  const handleSwitchToSession = useCallback(
+    async (session: HistorySession) => {
+      const panelId = findPanelForSession(session.sessionId);
+      if (!panelId) {
+        sendToastNotification("未找到运行中的会话", {
+          body: "该会话已结束或无法定位其终端页签",
+        });
+        return;
+      }
+      const pageId = parseTerminalPageId(panelId);
+      if (!pageId) return;
+      // switchToPageAndFocus 内部：activePageId 相同则直接聚焦，不同则先切页（setProjectRoot 前置）
+      await switchToPageAndFocus(pageId, panelId);
+    },
+    [],
+  );
+
+  /** 双击分派三分支（README 4.3.2/4.3.3，问题 5 修复）：
+   *  普通行 → 恢复；孤儿/无 cwd → 无操作；运行中（status 非 null）→ 动作弹窗
+   * （分支恢复仅保留在右键菜单——双击弹窗不再提供） */
   const handleDoubleClick = useCallback(
     (session: HistorySession) => {
-      const { active, orphan, noCwd } = rowFlags(session);
-      if (active) {
-        // ⚡ 运行中：同一会话两终端不 fork 同时恢复会交错写入 transcript（破坏性行为），
-        // 弹窗提示引导分支恢复（README 4.3.3）
-        void ask("该会话已在运行中", {
-          title: "会话运行中",
-          kind: "warning",
-          okLabel: "分支恢复",
-        }).then((ok) => {
-          if (ok) void restoreHistorySession(session, { fork: true });
-        });
+      const { status, orphan, noCwd } = rowFlags(session);
+      if (status != null) {
+        // 运行中：动作弹窗（切换到该会话操作页面 / 取消）
+        setDialogSession(session);
       } else if (orphan || noCwd) {
         // 孤儿（起始目录已删除）/ 无 cwd 行：恢复失败概率高，禁用优于报错（README 4.2）——无操作
       } else {
@@ -268,13 +313,15 @@ export const HistorySessionList: React.FC<HistorySessionListProps> = ({
     [rowFlags],
   );
 
-  /** 右键菜单——委托策略注册表；操作回调在本层实现（剪贴板/fork/删除/重命名） */
+  /** 右键菜单——委托策略注册表；操作回调在本层实现（剪贴板/fork/删除） */
   const handleContextMenu = useCallback(
     (session: HistorySession, pos: { x: number; y: number }) => {
-      const flags = rowFlags(session);
+      const { status, orphan, noCwd } = rowFlags(session);
       const title = session.title ?? session.sessionId.slice(0, 8);
       const items = getHistoryContextMenuItems(session, {
-        ...flags,
+        active: status != null, // 运行中（删除禁用判定）
+        orphan,
+        noCwd,
         // 复制恢复命令：命令构造见 buildResumeCommand（README 4.4，带单引号路径）
         onCopy: () => {
           void writeText(buildResumeCommand(session));
@@ -302,33 +349,10 @@ export const HistorySessionList: React.FC<HistorySessionListProps> = ({
             }
           });
         },
-        // 重命名：由本组件打开 InputDialog；提交后重命名 IPC → updateLocalTitle 即时刷新
-        onRename: () => {
-          setRenameTarget(session);
-        },
       });
       setMenu({ visible: true, x: pos.x, y: pos.y, items });
     },
     [rowFlags, removeLocal],
-  );
-
-  /** 重命名提交：IPC 成功后 updateLocalTitle 即时刷新，关闭弹窗 */
-  const handleRenameSubmit = useCallback(
-    (session: HistorySession, value: string) => {
-      void renameHistorySession(session.sessionId, value)
-        .then(() => {
-          updateLocalTitle(session.sessionId, value);
-          setRenameTarget(null);
-        })
-        .catch((err) => {
-          console.error(
-            "[slTerminal] 重命名历史会话失败:",
-            session.sessionId,
-            err,
-          );
-        });
-    },
-    [updateLocalTitle],
   );
 
   // 搜索过滤（matchesSearch 作用于两区；空词恒匹配）
@@ -376,20 +400,32 @@ export const HistorySessionList: React.FC<HistorySessionListProps> = ({
         groups.map((group) => {
           // 组键：规范化 cwd；无 cwd 的未知目录组键 = ""（组标题「(未知目录)」）
           const key = group.cwd ?? "";
-          const collapsed = collapsedGroups.has(key);
+          const expanded = expandedGroups.has(key);
           return (
             <div key={key}>
-              {/* 组标题 = basename；title 悬停完整路径；未知目录组无 title */}
+              {/* 组标题 = basename + (N) 计数；title 悬停完整路径；未知目录组无 title */}
               <div
                 data-e2e="agent-history-group"
                 style={groupHeaderStyle}
                 onClick={() => toggleGroup(key)}
                 title={group.cwd ?? undefined}
               >
-                <span style={arrowStyle}>{collapsed ? "▶" : "▼"}</span>
+                <span style={arrowStyle}>{expanded ? "▼" : "▶"}</span>
                 <span>{group.cwd ? basename(group.cwd) : "(未知目录)"}</span>
+                <span style={groupCountStyle}>({group.sessions.length})</span>
               </div>
-              {!collapsed && renderRows(group.sessions)}
+              {expanded && (
+                // 组内容：再缩进 12px + 二级引导线（问题 4 树形层级）
+                <div
+                  style={{
+                    paddingLeft: 12,
+                    borderLeft: `1px solid ${SIDEBAR_COLORS.treeGuide}`,
+                    marginLeft: 7, // 对齐组标题箭头右侧内容
+                  }}
+                >
+                  {renderRows(group.sessions)}
+                </div>
+              )}
             </div>
           );
         })
@@ -397,12 +433,21 @@ export const HistorySessionList: React.FC<HistorySessionListProps> = ({
 
       <ContextMenu state={menu} onClose={closeMenu} />
 
-      {renameTarget && (
-        <InputDialog
-          title="重命名会话"
-          initialValue={renameTarget.title ?? renameTarget.sessionId.slice(0, 8)}
-          onSubmit={(value) => handleRenameSubmit(renameTarget, value)}
-          onCancel={() => setRenameTarget(null)}
+      {dialogSession && (
+        <SessionActionDialog
+          title="会话运行中"
+          message="该会话已在运行中，恢复会与现有会话冲突。"
+          actions={[
+            {
+              label: "切换到该会话操作页面",
+              action: () => {
+                const target = dialogSession;
+                setDialogSession(null);
+                void handleSwitchToSession(target);
+              },
+            },
+          ]}
+          onCancel={() => setDialogSession(null)}
         />
       )}
     </div>

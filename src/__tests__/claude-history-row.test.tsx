@@ -1,7 +1,8 @@
 // claude-history-row.test.tsx — HistorySessionRow L2 测试（FE-07 / FE-10）
 //
 // 覆盖：双行渲染（标题/相对时间/prompt 预览）、title null → sessionId 前 8 位、
-// ⚡/✗ 标记三分支（active/orphan/noCwd）、单击/双击/右键回调参数、选中态高亮。
+// 四态标记（status：working/attention/done/error/null——问题 2）、✗ 孤儿标记、
+// 字号层级（行1 标题 12px 粗体/行2 11px——问题 4）、单击/双击/右键回调、选中态高亮。
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, cleanup, fireEvent } from "@testing-library/react";
@@ -38,7 +39,7 @@ function renderRow(
   props: Partial<
     Pick<
       Parameters<typeof HistorySessionRow>[0],
-      "active" | "orphan" | "noCwd" | "selected"
+      "status" | "orphan" | "noCwd" | "selected"
     >
   > = {},
 ) {
@@ -48,7 +49,7 @@ function renderRow(
   const utils = render(
     <HistorySessionRow
       session={session}
-      active={props.active ?? false}
+      status={props.status}
       orphan={props.orphan ?? false}
       noCwd={props.noCwd ?? false}
       selected={props.selected ?? false}
@@ -64,19 +65,24 @@ function renderRow(
 }
 
 describe("HistorySessionRow 渲染", () => {
-  it("双行式：行1 粗体标题 + 右上角相对时间，行2 prompt 预览", () => {
+  it("双行式：行1 粗体标题（12px）+ 右上角相对时间，行2 prompt 预览（11px）", () => {
     const session = makeSession();
-    const { getByText } = renderRow(session);
+    const { getByText, container } = renderRow(session);
 
     const titleEl = getByText("修复登录 bug 的会话");
     // 行1 标题粗体
     expect(titleEl.style.fontWeight).toBe("bold");
+    // 行1 容器 12px（问题 4：行标题层级）
+    expect(titleEl.parentElement!.style.fontSize).toBe("12px");
     // 相对时间（与 historyModel 同源函数计算期望值）
     expect(
       getByText(formatRelativeTime(session.mtimeMs, Date.now())),
     ).toBeTruthy();
-    // 行2 prompt 预览
-    expect(getByText("修复了 token 过期问题导致的重…")).toBeTruthy();
+    // 行2 prompt 预览（11px）
+    const promptEl = getByText("修复了 token 过期问题导致的重…");
+    expect(promptEl.style.fontSize).toBe("11px");
+    // 行1 与行2 为独立容器（双行结构）
+    expect(container.querySelectorAll('[data-e2e="agent-history-row"] > div').length).toBe(2);
   });
 
   it("title 为 null 时显示 sessionId 前 8 位", () => {
@@ -91,29 +97,57 @@ describe("HistorySessionRow 渲染", () => {
   it("firstPrompt 为 null 时不渲染行2", () => {
     const session = makeSession({ firstPrompt: null });
     const { row } = renderRow(session);
-    // 行2 不存在（行根下仅一个文本行容器）
+    // 行2 不存在（行根下仅一个文本行容器 = 行1）
     expect(row.querySelectorAll("div").length).toBe(1);
   });
 });
 
-describe("HistorySessionRow 状态标记", () => {
-  it("active=true → 标题前 ⚡，无 ✗", () => {
+describe("HistorySessionRow 状态标记（问题 2：四态同源）", () => {
+  it("status=working → ⚡", () => {
     const session = makeSession();
-    const { getByText, queryByText } = renderRow(session, { active: true });
+    const { getByText, queryByText } = renderRow(session, {
+      status: "working",
+    });
 
     expect(getByText("⚡")).toBeTruthy();
     expect(queryByText("✗")).toBeNull();
   });
 
-  it("orphan=true → ✗ 标记", () => {
-    const session = makeSession({ cwdExists: false });
-    const { getByText, queryByText } = renderRow(session, { orphan: true });
-
-    expect(getByText("✗")).toBeTruthy();
-    expect(queryByText("⚡")).toBeNull();
+  it("status=attention → 🟡", () => {
+    const { getByText } = renderRow(makeSession(), { status: "attention" });
+    expect(getByText("🟡")).toBeTruthy();
   });
 
-  it("noCwd=true（无 cwd 跳过孤儿判定）→ 不显示 ✗ 与 ⚡", () => {
+  it("status=done → ✅", () => {
+    const { getByText } = renderRow(makeSession(), { status: "done" });
+    expect(getByText("✅")).toBeTruthy();
+  });
+
+  it("status=error → ❌", () => {
+    const { getByText } = renderRow(makeSession(), { status: "error" });
+    expect(getByText("❌")).toBeTruthy();
+  });
+
+  it("status=null / undefined → 无状态标记（与活跃区 null 无图标一致）", () => {
+    const { queryByText } = renderRow(makeSession(), { status: null });
+    expect(queryByText("⚡")).toBeNull();
+    expect(queryByText("🟡")).toBeNull();
+    expect(queryByText("✅")).toBeNull();
+    expect(queryByText("❌")).toBeNull();
+  });
+
+  it("orphan=true → ✗ 标记（与四态并存渲染）", () => {
+    const session = makeSession({ cwdExists: false });
+    const { getByText } = renderRow(session, {
+      status: "attention",
+      orphan: true,
+    });
+
+    expect(getByText("🟡")).toBeTruthy();
+    expect(getByText("✗")).toBeTruthy();
+  });
+
+  it("noCwd=true（无 cwd 跳过孤儿判定）→ 不显示 ✗，无状态时不显示标记", () => {
     const session = makeSession({ cwd: null, cwdExists: false });
     const { queryByText } = renderRow(session, { noCwd: true });
 

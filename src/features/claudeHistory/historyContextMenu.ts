@@ -4,20 +4,18 @@
 //   getHistoryContextMenuItems(
 //     session: HistorySession,
 //     opts: { active: boolean; orphan: boolean; noCwd: boolean;
-//             onCopy(): void; onFork(): void; onDelete(): void; onRename(): void }
+//             onCopy(): void; onFork(): void; onDelete(): void }
 //   ): { label: string; disabled?: boolean; action(): void }[]
 //
-// 与 commitContextMenu 的差异：本策略不直接做 IPC——四项操作的 action 由调用方
-// （HistorySessionList）经 opts 回调注入（onCopy/onFork/onDelete/onRename），
+// 与 commitContextMenu 的差异：本策略不直接做 IPC——三项操作的 action 由调用方
+// （HistorySessionList）经 opts 回调注入（onCopy/onFork/onDelete），
 // 策略层只负责禁用态判定与菜单项构造。调用方回调内的流程（写剪贴板 / fork 恢复 /
-// ask 确认后删除 + removeLocal / InputDialog 提交后重命名 + updateLocalTitle）见
-// HistorySessionList.tsx 与 README 4.4 操作矩阵。
+// ask 确认后删除 + removeLocal）见 HistorySessionList.tsx 与 README 4.4 操作矩阵。
 //
-// 操作矩阵（README 4.4）：
+// 操作矩阵（README 4.4，重命名功能已整体移除——问题 7 修复）：
 //   复制恢复命令 —— 全行可用（含孤儿/运行中）
 //   分支恢复     —— orphan / noCwd 禁用（孤儿目录已删除、无 cwd 无法编排）
 //   删除         —— active 禁用（运行中文件句柄占用删除失败 + 外部进程续写幽灵文件）
-//   重命名       —— 全行可用（ai-title 追加写与运行中写入无冲突）
 
 import type { HistorySession } from "../../types/claudeHistory";
 
@@ -29,7 +27,7 @@ export interface HistoryMenuItem {
   action(): void;
 }
 
-/** 策略入参（契约逐字：active/orphan/noCwd + 四个操作回调） */
+/** 策略入参（契约逐字：active/orphan/noCwd + 三个操作回调） */
 export interface HistoryContextMenuOpts {
   /** ⚡ 运行中会话标记 */
   active: boolean;
@@ -43,8 +41,6 @@ export interface HistoryContextMenuOpts {
   onFork(): void;
   /** 删除（ask 确认 → IPC → 局部刷新） */
   onDelete(): void;
-  /** 重命名（开 InputDialog → IPC → 局部刷新） */
-  onRename(): void;
 }
 
 /**
@@ -78,6 +74,5 @@ export function getHistoryContextMenuItems(
       action: opts.onFork,
     },
     { label: "删除", disabled: opts.active, action: opts.onDelete },
-    { label: "重命名", action: opts.onRename },
   ];
 }

@@ -1,9 +1,10 @@
 // ipc-claude-history-contract.test.ts — claude 历史会话 IPC wrapper 合约测试（FE-03）
 //
 // 使用 mockIPC 拦截真实的 invoke 调用，照 ipc-hooks-config-contract.test.ts 模式验证
-// 三命令 × 四维（命令名 / 参数结构 / 正常返回 / 异常传播）= 12 条用例：
+// 两命令 × 四维（命令名 / 参数结构 / 正常返回 / 异常传播）= 8 条用例
+// （重命名命令已随功能整体移除——问题 7 修复）：
 // 1. 命令名 snake_case 逐字（claude_history_scan 等，非驼峰）
-// 2. 参数结构键集合精确匹配（{ sessionId } / { sessionId, newTitle }，防字段漂移）
+// 2. 参数结构键集合精确匹配（{ sessionId }，防字段漂移）
 // 3. 返回透传（scan 返回 HistorySession[] 全形态样例）
 // 4. 异常传播不吞异常
 
@@ -167,75 +168,6 @@ describe("deleteHistorySession 合约", () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════
-// renameHistorySession — claude_history_rename
+// （renameHistorySession 已随重命名功能整体移除——问题 7 修复，
+//   前端 wrapper、后端命令、相关测试全链路删除）
 // ═══════════════════════════════════════════════════════════════════
-
-describe("renameHistorySession 合约", () => {
-  // 维度 1：命令名（snake_case 逐字）
-  it("应调用 claude_history_rename 命令（非驼峰）", async () => {
-    const spy = vi.fn();
-    mockIPC((cmd, args) => {
-      spy(cmd, args);
-      if (cmd === "claude_history_rename") return;
-    });
-
-    await claudeHistory.renameHistorySession(
-      "123e4567-e89b-12d3-a456-426614174000",
-      "新标题",
-    );
-
-    expect(spy).toHaveBeenCalledTimes(1);
-    const [cmd] = spy.mock.calls[0] as [string, Record<string, unknown>];
-    expect(cmd).toBe("claude_history_rename");
-  });
-
-  // 维度 2：参数结构——键集合精确匹配 { sessionId, newTitle }（防字段漂移）
-  it("payload 键集合精确为 { sessionId, newTitle }", async () => {
-    const spy = vi.fn();
-    mockIPC((cmd, args) => {
-      spy(cmd, args);
-      if (cmd === "claude_history_rename") return;
-    });
-
-    await claudeHistory.renameHistorySession(
-      "123e4567-e89b-12d3-a456-426614174000",
-      "新标题",
-    );
-
-    const [, args] = spy.mock.calls[0] as [string, Record<string, unknown>];
-    expect(Object.keys(args as Record<string, unknown>).sort()).toEqual([
-      "newTitle",
-      "sessionId",
-    ]);
-    expect(args.sessionId).toBe("123e4567-e89b-12d3-a456-426614174000");
-    expect(args.newTitle).toBe("新标题");
-  });
-
-  // 维度 3：正常返回 void
-  it("正常返回 void", async () => {
-    mockIPC((cmd) => {
-      if (cmd === "claude_history_rename") return;
-    });
-
-    const result = await claudeHistory.renameHistorySession(
-      "123e4567-e89b-12d3-a456-426614174000",
-      "新标题",
-    );
-    expect(result).toBeUndefined();
-  });
-
-  // 维度 4：异常传播
-  it("invoke 失败（标题非法等）时异常应传播", async () => {
-    mockIPC((cmd) => {
-      if (cmd === "claude_history_rename")
-        throw new Error("标题不能为空");
-    });
-
-    await expect(
-      claudeHistory.renameHistorySession(
-        "123e4567-e89b-12d3-a456-426614174000",
-        "   ",
-      ),
-    ).rejects.toThrow("标题不能为空");
-  });
-});

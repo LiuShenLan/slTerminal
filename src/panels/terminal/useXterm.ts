@@ -350,15 +350,19 @@ export function useXterm({
       if (payload.panelId !== panelId) return;
 
       // 写入 claude 会话状态（与页签 emoji 正交）
+      const status = eventToStatus(payload.event, payload.notificationType);
       if (payload.event === "SessionEnd" || payload.event === "Exit") {
         TerminalRegistry.setClaudeSession(panelId, null);
       } else {
         TerminalRegistry.setClaudeSession(panelId, {
+          // sessionId/status 供历史区四态派生（问题 2 修复：两区同源 TerminalRegistry）
+          sessionId: payload.sessionId,
           transcriptPath: payload.transcriptPath ?? undefined,
+          // null 状态不传（undefined 保留旧值）——与活跃区行状态保留语义一致
+          status: status ?? undefined,
         });
       }
 
-      const status = eventToStatus(payload.event, payload.notificationType);
       if (status === null) {
         if (payload.event === "SessionEnd") onTabStateChange?.({ active: false });
         return;

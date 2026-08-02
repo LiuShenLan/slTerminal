@@ -1,11 +1,14 @@
-// AgentStatusRow.tsx — Agent 状态行组件
-// 显示单个 Agent 会话的状态图标、标题、上下文用量条、最后事件时间。
-// 点击行可通过 onFocus 跳转到对应终端面板。
+// AgentStatusRow.tsx — Agent 状态行组件（双行式）
+// 行1 = 状态图标 + 标题（12px 粗体，截断）；行2 = 上下文用量条 + 百分比 + 相对时间
+// （11px 灰，缩进对齐图标列）。点击行可通过 onFocus 跳转到对应终端面板。
+// 时间口径与历史区统一（formatRelativeTime 相对时间，问题 1 修复——旧为
+// toLocaleTimeString 同行挤压导致窄侧栏遮挡）。
 
 import React, { useState, useCallback } from "react";
 import type { AgentSessionRow } from "./useAgentStatus";
 import { CLAUDE_CONTEXT_LIMIT } from "./consts";
 import { getStatusIcon } from "../../lib/claudeStatus";
+import { formatRelativeTime } from "../claudeHistory/historyModel";
 import { AGENT_STATUS_USAGE_COLORS, SIDEBAR_COLORS, DIM_FG } from "../../theme/colors";
 
 interface Props {
@@ -37,9 +40,9 @@ export const AgentStatusRow: React.FC<Props> = ({ row, onFocus }) => {
   const percent = Math.min(100, (total / CLAUDE_CONTEXT_LIMIT) * 100);
   const usageAvailable = row.usage != null;
 
-  // ---- 图标与时间 ----
+  // ---- 图标与时间（相对时间，与历史区口径统一） ----
   const icon = getStatusIcon(row.status);
-  const timeStr = new Date(row.lastEventAt).toLocaleTimeString();
+  const timeStr = formatRelativeTime(row.lastEventAt, Date.now());
 
   // ---- 容器样式 ----
   const bgColor = hovered ? SIDEBAR_COLORS.hover : "transparent";
@@ -50,10 +53,9 @@ export const AgentStatusRow: React.FC<Props> = ({ row, onFocus }) => {
       data-panel-id={row.panelId}
       style={{
         display: "flex",
-        flexDirection: "row",
-        alignItems: "center",
+        flexDirection: "column",
         padding: "4px 8px",
-        gap: "8px",
+        gap: "2px",
         cursor: "pointer",
         backgroundColor: bgColor,
         userSelect: "none",
@@ -62,81 +64,85 @@ export const AgentStatusRow: React.FC<Props> = ({ row, onFocus }) => {
       onMouseLeave={() => setHovered(false)}
       onClick={handleClick}
     >
-      {/* 四态图标 */}
-      <span
-        style={{
-          width: "20px",
-          textAlign: "center",
-          flexShrink: 0,
-          fontSize: "14px",
-        }}
-      >
-        {icon}
-      </span>
+      {/* 行1：四态图标 + 标题（12px 粗体，超出截断） */}
+      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+        <span
+          style={{
+            width: "20px",
+            textAlign: "center",
+            flexShrink: 0,
+            fontSize: "14px",
+          }}
+        >
+          {icon}
+        </span>
+        <span
+          style={{
+            flex: 1,
+            fontWeight: "bold",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            color: SIDEBAR_COLORS.fg,
+            fontSize: "12px",
+          }}
+        >
+          {row.title}
+        </span>
+      </div>
 
-      {/* 标题（超出截断） */}
-      <span
-        style={{
-          flex: 1,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-          color: SIDEBAR_COLORS.fg,
-          fontSize: "13px",
-        }}
-      >
-        {row.title}
-      </span>
-
-      {/* 上下文用量条 */}
+      {/* 行2：上下文用量条 + 百分比 + 相对时间（11px 灰，缩进对齐图标列） */}
       <div
         style={{
-          width: "80px",
-          height: "6px",
-          borderRadius: "3px",
-          backgroundColor: SIDEBAR_COLORS.border,
-          flexShrink: 0,
-          overflow: "hidden",
+          display: "flex",
+          alignItems: "center",
+          gap: "8px",
+          paddingLeft: "28px", // 对齐行1图标列（icon 20 + gap 8）
         }}
       >
         <div
           style={{
-            width: usageAvailable ? `${percent}%` : "100%",
-            height: "100%",
+            width: "80px",
+            height: "6px",
             borderRadius: "3px",
-            backgroundColor: usageAvailable
-              ? usageBarColor(percent)
-              : DIM_FG,
-            transition: "width 0.3s ease",
+            backgroundColor: SIDEBAR_COLORS.border,
+            flexShrink: 0,
+            overflow: "hidden",
           }}
-        />
+        >
+          <div
+            style={{
+              width: usageAvailable ? `${percent}%` : "100%",
+              height: "100%",
+              borderRadius: "3px",
+              backgroundColor: usageAvailable
+                ? usageBarColor(percent)
+                : DIM_FG,
+              transition: "width 0.3s ease",
+            }}
+          />
+        </div>
+        <span
+          style={{
+            width: "36px",
+            textAlign: "right",
+            fontSize: "11px",
+            color: usageAvailable ? SIDEBAR_COLORS.fg : DIM_FG,
+            flexShrink: 0,
+          }}
+        >
+          {usageAvailable ? `${Math.round(percent)}%` : "--"}
+        </span>
+        <span
+          style={{
+            fontSize: "11px",
+            color: DIM_FG,
+            flexShrink: 0,
+          }}
+        >
+          {timeStr}
+        </span>
       </div>
-
-      {/* 用量文本 */}
-      <span
-        style={{
-          width: "36px",
-          textAlign: "right",
-          fontSize: "11px",
-          color: usageAvailable ? SIDEBAR_COLORS.fg : DIM_FG,
-          flexShrink: 0,
-        }}
-      >
-        {usageAvailable ? `${Math.round(percent)}%` : "--"}
-      </span>
-
-      {/* 最后事件时间 */}
-      <span
-        style={{
-          fontSize: "11px",
-          color: SIDEBAR_COLORS.fg,
-          opacity: 0.6,
-          flexShrink: 0,
-          marginLeft: "4px",
-        }}
-      >
-        {timeStr}
-      </span>
     </div>
   );
 };

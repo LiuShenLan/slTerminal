@@ -72,6 +72,10 @@ vi.mock("../panels/terminal/TerminalRegistry", () => ({
         } else {
           const prev = entry.claudeSession as Record<string, unknown> | null | undefined;
           entry.claudeSession = {
+            sessionId:
+              patch.sessionId !== undefined
+                ? patch.sessionId
+                : prev?.sessionId,
             transcriptPath:
               patch.transcriptPath !== undefined
                 ? patch.transcriptPath
@@ -80,6 +84,8 @@ vi.mock("../panels/terminal/TerminalRegistry", () => ({
               patch.matchedCommand !== undefined
                 ? patch.matchedCommand
                 : prev?.matchedCommand,
+            status:
+              patch.status !== undefined ? patch.status : prev?.status,
             lastEventAt: patch.lastEventAt ?? Date.now(),
           };
         }
@@ -241,16 +247,20 @@ function makePayload(
   };
 }
 
-/** 构造 claudeSession 对象 */
+/** 构造 claudeSession 对象（sessionId/status 缺省 undefined——matchedCommand-only 形态） */
 function makeSession(overrides: {
   lastEventAt?: number;
   matchedCommand?: string;
   transcriptPath?: string;
+  sessionId?: string;
+  status?: string;
 } = {}): Record<string, unknown> {
   return {
     lastEventAt: overrides.lastEventAt ?? Date.now(),
     matchedCommand: overrides.matchedCommand ?? "claude",
     transcriptPath: overrides.transcriptPath,
+    sessionId: overrides.sessionId,
+    status: overrides.status,
   };
 }
 
@@ -317,9 +327,12 @@ describe("useAgentStatus（行建模新语义）", () => {
   // 初始扫描——只建 claudeSession 非 null 的行
   // ──────────────────────────────────────────────────
 
-  it("初始扫描：claudeSession 非 null → 建行", () => {
+  it("初始扫描：claudeSession 非 null → 建行（携 sessionId）", () => {
     const { pageId } = seedProject();
-    registerTerminal("terminal-page1-0", makeSession({ lastEventAt: 1000 }));
+    registerTerminal(
+      "terminal-page1-0",
+      makeSession({ lastEventAt: 1000, sessionId: "s1", status: "working" }),
+    );
 
     const { result } = renderHook(() => useAgentStatus());
 
@@ -328,8 +341,19 @@ describe("useAgentStatus（行建模新语义）", () => {
     expect(result.current.rows[0].pageId).toBe(pageId);
     expect(result.current.rows[0].projectId).toBe("proj-1");
     expect(result.current.rows[0].status).toBe("attention");
+    expect(result.current.rows[0].sessionId).toBe("s1");
     expect(result.current.rows[0].lastEventAt).toBe(1000);
     expect(result.current.state).toEqual({ kind: "ready" });
+  });
+
+  it("初始扫描：matchedCommand-only（无 sessionId）→ 行 sessionId 缺省不报错", () => {
+    seedProject();
+    registerTerminal("terminal-page1-0", makeSession({ lastEventAt: 1000 }));
+
+    const { result } = renderHook(() => useAgentStatus());
+
+    expect(result.current.rows).toHaveLength(1);
+    expect(result.current.rows[0].sessionId).toBeUndefined();
   });
 
   it("初始扫描：混合终端——纯 shell 不建行，活会话建行", () => {
@@ -391,7 +415,7 @@ describe("useAgentStatus（行建模新语义）", () => {
   // sessionChange 建行（双通道之一）
   // ──────────────────────────────────────────────────
 
-  it("sessionChange（非 null）→ 建行（带 matchedCommand）", () => {
+  it("sessionChange（非 null）→ 建行（带 matchedCommand + sessionId）", () => {
     seedProject();
     registerTerminal("terminal-page1-0", null); // 先注册为纯 shell
 
@@ -403,12 +427,15 @@ describe("useAgentStatus（行建模新语义）", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (TerminalRegistry as any).setClaudeSession("terminal-page1-0", {
         matchedCommand: "claude",
+        sessionId: "s1",
+        status: "working",
       });
     });
 
     expect(result.current.rows).toHaveLength(1);
     expect(result.current.rows[0].panelId).toBe("terminal-page1-0");
     expect(result.current.rows[0].status).toBe("attention");
+    expect(result.current.rows[0].sessionId).toBe("s1");
   });
 
   it("sessionChange 建行幂等——行已存在时跳过不建重复行", () => {
@@ -477,7 +504,7 @@ describe("useAgentStatus（行建模新语义）", () => {
   // hook 事件建行（双通道之二——行不存在时）
   // ──────────────────────────────────────────────────
 
-  it("hook 事件（非 SessionEnd/Exit）且行不存在 → 建行", () => {
+  it("hook 事件（非 SessionEnd/Exit）且行不存在 → 建行（携 payload.sessionId）", () => {
     seedProject();
     // 不预注册 terminal——hook 事件独立建行
 
@@ -490,6 +517,7 @@ describe("useAgentStatus（行建模新语义）", () => {
           panelId: "terminal-page1-0",
           event: "SessionStart",
           timestamp: 1000,
+          sessionId: "hook-s1",
         }),
       );
     });
@@ -497,6 +525,7 @@ describe("useAgentStatus（行建模新语义）", () => {
     expect(result.current.rows).toHaveLength(1);
     expect(result.current.rows[0].panelId).toBe("terminal-page1-0");
     expect(result.current.rows[0].status).toBe("attention");
+    expect(result.current.rows[0].sessionId).toBe("hook-s1");
   });
 
   it("hook 事件且行已存在 → 更新不建新行（幂等）", () => {

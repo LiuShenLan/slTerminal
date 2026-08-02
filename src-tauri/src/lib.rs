@@ -104,7 +104,6 @@ pub fn run() {
             hooks::config::hooks_config_write,
             claude_history::scan::claude_history_scan,
             claude_history::ops::claude_history_delete,
-            claude_history::ops::claude_history_rename,
         ])
         .run(tauri::generate_context!())
     {

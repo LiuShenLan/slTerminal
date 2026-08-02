@@ -2135,9 +2135,11 @@ describe("Hooks 事件过滤 (panelId + eventToStatus)", () => {
       active: true,
       icon: "⚡",
     });
-    // PF2-FE-04: 非 SessionEnd 事件 → setClaudeSession 携 transcriptPath
+    // PF2-FE-04: 非 SessionEnd 事件 → setClaudeSession 携 sessionId/transcriptPath/status（问题 2 四态同源）
     expect(mockSetClaudeSession).toHaveBeenCalledWith("hooks-test", {
+      sessionId: "s1",
       transcriptPath: "/t.json",
+      status: "working",
     });
   });
 
@@ -2183,7 +2185,9 @@ describe("Hooks 事件过滤 (panelId + eventToStatus)", () => {
       icon: "⚡",
     });
     expect(mockSetClaudeSession).toHaveBeenCalledWith("hooks-test", {
+      sessionId: "s1",
       transcriptPath: "/t.json",
+      status: "working",
     });
   });
 
@@ -2201,7 +2205,9 @@ describe("Hooks 事件过滤 (panelId + eventToStatus)", () => {
       icon: "✅",
     });
     expect(mockSetClaudeSession).toHaveBeenCalledWith("hooks-test", {
+      sessionId: "s1",
       transcriptPath: "/t.json",
+      status: "done",
     });
   });
 
@@ -2219,7 +2225,9 @@ describe("Hooks 事件过滤 (panelId + eventToStatus)", () => {
       icon: "❌",
     });
     expect(mockSetClaudeSession).toHaveBeenCalledWith("hooks-test", {
+      sessionId: "s1",
       transcriptPath: "/t.json",
+      status: "error",
     });
   });
 
@@ -2237,8 +2245,29 @@ describe("Hooks 事件过滤 (panelId + eventToStatus)", () => {
       icon: "🟡",
     });
     expect(mockSetClaudeSession).toHaveBeenCalledWith("hooks-test", {
+      sessionId: "s1",
       transcriptPath: "/t.json",
+      status: "attention",
     });
+  });
+
+  it("HUK9: Notification 非 attention 子类型 → setClaudeSession 携 status: undefined（不覆盖旧值）", async () => {
+    await mountAndWaitForHooks();
+    mockOnTabStateChange.mockClear();
+    mockSetClaudeSession.mockClear();
+
+    capturedHookEventCallbackRef.current!(makeHookPayload({
+      event: "Notification",
+      notificationType: "general",
+    }));
+
+    expect(mockSetClaudeSession).toHaveBeenCalledWith("hooks-test", {
+      sessionId: "s1",
+      transcriptPath: "/t.json",
+      status: undefined,
+    });
+    // 页签状态不改变（eventToStatus 返回 null）
+    expect(mockOnTabStateChange).not.toHaveBeenCalled();
   });
 
   it("HUK8: 卸载时 unsubscribe 被调用", async () => {

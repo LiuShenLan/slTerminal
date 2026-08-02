@@ -82,6 +82,8 @@ export const SIDEBAR_COLORS = {
   border: "#444",
   contextMenuBorder: "#454545",
   contextMenuShadow: "0 4px 12px rgba(0,0,0,0.5)",
+  /** 树形引导线（agent 侧栏层级缩进竖线） */
+  treeGuide: "#3C3C3C",
 } as const;
 
 // 错误提示色

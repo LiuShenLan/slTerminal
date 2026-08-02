@@ -26,6 +26,8 @@ export interface AgentSessionRow {
   panelId: string;
   pageId: string;
   projectId: string;
+  /** 会话 UUID（hook 事件 payload.sessionId；matchedCommand-only 会话缺省）——供视图层标题覆盖匹配 */
+  sessionId?: string;
   title: string;
   status: ClaudeStatus;
   lastEventAt: number;
@@ -139,6 +141,7 @@ export function useAgentStatus(): AgentStatusResult {
             lastEventAt: payload.timestamp || Date.now(),
             transcriptPath:
               payload.transcriptPath ?? next[existingIdx].transcriptPath,
+            sessionId: payload.sessionId ?? next[existingIdx].sessionId,
           };
           next.sort((a, b) => b.lastEventAt - a.lastEventAt);
           return next;
@@ -153,6 +156,7 @@ export function useAgentStatus(): AgentStatusResult {
           status: newStatus ?? "attention",
           lastEventAt: payload.timestamp || Date.now(),
           transcriptPath: payload.transcriptPath || undefined,
+          sessionId: payload.sessionId || undefined,
           usage: undefined,
         };
 
@@ -216,6 +220,7 @@ export function useAgentStatus(): AgentStatusResult {
               status: "attention",
               lastEventAt: entry.claudeSession!.lastEventAt,
               transcriptPath: entry.claudeSession!.transcriptPath,
+              sessionId: entry.claudeSession!.sessionId,
               usage: undefined,
             };
             return [...prev, row].sort((a, b) => b.lastEventAt - a.lastEventAt);
@@ -287,6 +292,7 @@ export function useAgentStatus(): AgentStatusResult {
         status: "attention",
         lastEventAt: entry.claudeSession.lastEventAt,
         transcriptPath: entry.claudeSession.transcriptPath,
+        sessionId: entry.claudeSession.sessionId,
         usage: undefined,
       });
 
