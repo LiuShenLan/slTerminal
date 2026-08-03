@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 模块职责
 
-Claude Code 历史会话查询——扫描 `~/.claude/projects/` 下全部会话 transcript（JSONL）并暴露两命令：`claude_history_scan`（元数据扫描）、`claude_history_delete`（删除会话）。**`claude_history_rename` 已随前端重命名功能整体移除**（用户决策，问题 7 修复——前端不再提供重命名入口，后端命令与测试全链路删除；官方 `/rename` 仍是 custom-title 的唯一写入方）。需求规格见 `docs/claude-history-view/README.md`（v1.2，决策 22–28）。
+Claude Code 历史会话查询——扫描 `~/.claude/projects/` 下全部会话 transcript（JSONL）并暴露两命令：`claude_history_scan`（元数据扫描）、`claude_history_delete`（删除会话）。**`claude_history_rename` 已随前端重命名功能整体移除**（用户决策，问题 7 修复——前端不再提供重命名入口，后端命令与测试全链路删除；官方 `/rename` 仍是 custom-title 的唯一写入方）。需求规格文档已随 `docs/` 清理删除，规格要点由本文件架构决策（SEC-01/02、BE-02~07、决策 22–28 已回写）承载。
 
 数据源事实约束（规格 3.1）：存储根 `~/.claude/projects/`，一级目录名 = cwd 的有损编码（**禁止反解码**），会话文件 = `<uuidv4>.jsonl`（文件名主干即 sessionId），子代理 transcript 为 `agent-*.jsonl` 平铺或 `<id>/subagents/` 子目录形态（均须排除）。
 
