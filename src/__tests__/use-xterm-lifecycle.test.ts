@@ -2270,6 +2270,25 @@ describe("Hooks 事件过滤 (panelId + eventToStatus)", () => {
     expect(mockOnTabStateChange).not.toHaveBeenCalled();
   });
 
+  it("HUK10: payload sessionId/transcriptPath 空串 → setClaudeSession 携 undefined（空串防御归一）", async () => {
+    await mountAndWaitForHooks();
+    mockOnTabStateChange.mockClear();
+    mockSetClaudeSession.mockClear();
+
+    capturedHookEventCallbackRef.current!(makeHookPayload({
+      event: "UserPromptSubmit",
+      sessionId: "",
+      transcriptPath: "",
+    }));
+
+    // 空串必须归一为 undefined——否则 derive 定位/标题覆盖/usage 拉取全部静默失效
+    expect(mockSetClaudeSession).toHaveBeenCalledWith("hooks-test", {
+      sessionId: undefined,
+      transcriptPath: undefined,
+      status: "working",
+    });
+  });
+
   it("HUK8: 卸载时 unsubscribe 被调用", async () => {
     const { unmount } = renderHook(() =>
       useXterm({

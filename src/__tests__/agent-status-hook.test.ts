@@ -324,6 +324,60 @@ describe("useAgentStatus（行建模新语义）", () => {
   });
 
   // ──────────────────────────────────────────────────
+  // now ticker（问题 1b 修复：idle 会话无 hook 事件时时间文本冻结，60s 定时重算）
+  // ──────────────────────────────────────────────────
+
+  it("now：初始存在且返回形状含 now 字段（契约）", () => {
+    seedProject();
+
+    const { result } = renderHook(() => useAgentStatus());
+
+    expect(typeof result.current.now).toBe("number");
+    expect(result.current.now).toBeGreaterThan(0);
+    expect(Math.abs(result.current.now - Date.now())).toBeLessThan(100);
+  });
+
+  it("now ticker：推进 <60s 不变，推进到 60s 更新 +60000", () => {
+    vi.useFakeTimers();
+    try {
+      seedProject();
+      const { result } = renderHook(() => useAgentStatus());
+      const initial = result.current.now;
+
+      // 59s → 未到 tick，不变
+      act(() => {
+        vi.advanceTimersByTime(59_000);
+      });
+      expect(result.current.now).toBe(initial);
+
+      // 再 1s（累计 60s）→ interval 触发，now 推进
+      act(() => {
+        vi.advanceTimersByTime(1_000);
+      });
+      expect(result.current.now).toBe(initial + 60_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("now ticker：unmount 后 interval 清理（advance 不再更新）", () => {
+    vi.useFakeTimers();
+    try {
+      seedProject();
+      const { result, unmount } = renderHook(() => useAgentStatus());
+      const initial = result.current.now;
+
+      unmount();
+      act(() => {
+        vi.advanceTimersByTime(120_000);
+      });
+      expect(result.current.now).toBe(initial);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // ──────────────────────────────────────────────────
   // 初始扫描——只建 claudeSession 非 null 的行
   // ──────────────────────────────────────────────────
 

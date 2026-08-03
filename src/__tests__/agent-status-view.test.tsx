@@ -101,7 +101,7 @@ vi.mock("../features/claudeHistory/restoreSession", () => ({
 }));
 
 import React from "react";
-import { render, cleanup, fireEvent } from "@testing-library/react";
+import { render, cleanup, fireEvent, act } from "@testing-library/react";
 import { AgentStatusView } from "../features/agentStatus/AgentStatusView";
 import { AgentStatusRow } from "../features/agentStatus/AgentStatusRow";
 import { useProjects } from "../stores/projects";
@@ -363,6 +363,36 @@ describe("AgentStatusRow 双行布局（问题 1 修复）", () => {
     const { line1 } = rowChildren(container);
     expect(line1.textContent).toContain("⚡");
   });
+
+  it("now prop：lastEventAt 固定，now 推进 → 时间文本重算（问题 1b 定时刷新）", () => {
+    const lastEventAt = 1_000_000_000_000;
+    const row = makeRow({ lastEventAt });
+    const { container, rerender } = render(
+      React.createElement(AgentStatusRow, {
+        row,
+        onFocus: vi.fn(),
+        now: 1_000_000_060_000, // +60s → 1 分钟前
+      }),
+    );
+    expect(rowChildren(container).line2.textContent).toContain("1 分钟前");
+
+    rerender(
+      React.createElement(AgentStatusRow, {
+        row,
+        onFocus: vi.fn(),
+        now: 1_000_000_900_000, // +15min → 15 分钟前
+      }),
+    );
+    expect(rowChildren(container).line2.textContent).toContain("15 分钟前");
+  });
+
+  it("now 缺省（undefined）→ 回退 Date.now()（向后兼容，可正常渲染）", () => {
+    const row = makeRow({ lastEventAt: Date.now() });
+    const { container } = render(
+      React.createElement(AgentStatusRow, { row, onFocus: vi.fn() }),
+    );
+    expect(rowChildren(container).line2.textContent).toContain("刚刚");
+  });
 });
 
 describe("用量条", () => {
@@ -489,6 +519,35 @@ describe("用量条", () => {
 // ═══════════════════════════════════════════════════════════════
 // 切换项目清空行
 // ═══════════════════════════════════════════════════════════════
+
+describe("now ticker 透传（问题 1b：idle 会话时间自动推进）", () => {
+  it("AgentStatusView 行时间随 60s ticker 推进（useAgentStatus now → AgentStatusRow now 全链路）", () => {
+    vi.useFakeTimers();
+    try {
+      seedProject("C:/test", "proj-1", [
+        { pageId: "page1", name: "页面 1" },
+      ]);
+      seedActivePage("page1");
+      mockTerminalRegistry.getAll.mockReturnValue(
+        makeTerminalMap(["terminal-page1-0"]),
+      );
+
+      const { container } = render(
+        React.createElement(AgentStatusView, defaultProps),
+      );
+      // lastEventAt = 建行时刻（= fake now）→ 初始「刚刚」
+      expect(rowChildren(container).line2.textContent).toContain("刚刚");
+
+      // 推进 65s → now ticker 触发重渲染 → 行时间变「1 分钟前」（无需任何 hook 事件）
+      act(() => {
+        vi.advanceTimersByTime(65_000);
+      });
+      expect(rowChildren(container).line2.textContent).toContain("1 分钟前");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
 
 describe("切换 activePageId 清空行", () => {
   it("切换 activePageId 到另一项目 → 行列表清空", () => {

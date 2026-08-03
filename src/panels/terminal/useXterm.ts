@@ -356,8 +356,10 @@ export function useXterm({
       } else {
         TerminalRegistry.setClaudeSession(panelId, {
           // sessionId/status 供历史区四态派生（问题 2 修复：两区同源 TerminalRegistry）
-          sessionId: payload.sessionId,
-          transcriptPath: payload.transcriptPath ?? undefined,
+          // || undefined 空串防御：claude hook 输入缺字段时兜底成空串，
+          // 空串会使下游（derive/标题覆盖/usage 拉取）全部失效——统一归一为 undefined
+          sessionId: payload.sessionId || undefined,
+          transcriptPath: payload.transcriptPath || undefined,
           // null 状态不传（undefined 保留旧值）——与活跃区行状态保留语义一致
           status: status ?? undefined,
         });

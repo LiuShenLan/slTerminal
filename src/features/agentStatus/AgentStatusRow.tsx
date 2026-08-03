@@ -14,6 +14,8 @@ import { AGENT_STATUS_USAGE_COLORS, SIDEBAR_COLORS, DIM_FG } from "../../theme/c
 interface Props {
   row: AgentSessionRow;
   onFocus: (panelId: string) => void;
+  /** 相对时间基准（60s ticker 驱动重算；缺省回退 Date.now()，向后兼容） */
+  now?: number;
 }
 
 /** 根据用量百分比返回对应分段颜色 */
@@ -23,7 +25,7 @@ function usageBarColor(percent: number): string {
   return AGENT_STATUS_USAGE_COLORS.high;
 }
 
-export const AgentStatusRow: React.FC<Props> = ({ row, onFocus }) => {
+export const AgentStatusRow: React.FC<Props> = ({ row, onFocus, now }) => {
   const [hovered, setHovered] = useState(false);
 
   const handleClick = useCallback(() => {
@@ -40,9 +42,9 @@ export const AgentStatusRow: React.FC<Props> = ({ row, onFocus }) => {
   const percent = Math.min(100, (total / CLAUDE_CONTEXT_LIMIT) * 100);
   const usageAvailable = row.usage != null;
 
-  // ---- 图标与时间（相对时间，与历史区口径统一） ----
+  // ---- 图标与时间（相对时间，与历史区口径统一；now 由 60s ticker 驱动重算） ----
   const icon = getStatusIcon(row.status);
-  const timeStr = formatRelativeTime(row.lastEventAt, Date.now());
+  const timeStr = formatRelativeTime(row.lastEventAt, now ?? Date.now());
 
   // ---- 容器样式 ----
   const bgColor = hovered ? SIDEBAR_COLORS.hover : "transparent";

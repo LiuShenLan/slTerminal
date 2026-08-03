@@ -46,6 +46,8 @@ export interface AgentStatusResult {
   state: AgentStatusState;
   rows: AgentSessionRow[];
   currentProjectName: string | null;
+  /** 相对时间基准（60s ticker 驱动重算——idle 会话无 hook 事件时时间文本冻结，问题 1b 修复） */
+  now: number;
 }
 
 // ---- 辅助函数 ----
@@ -68,6 +70,14 @@ export function useAgentStatus(): AgentStatusResult {
   const activePageId = useLayout((s) => s.activePageId);
   const projects = useProjects((s) => s.projects);
   const [rows, setRows] = useState<AgentSessionRow[]>([]);
+  const [now, setNow] = useState(() => Date.now());
+
+  // 相对时间定时刷新（问题 1b 修复）：formatRelativeTime 渲染时计算，
+  // 无 hook 事件时组件不重渲染 → 时间文本永久冻结；60s ticker 强制重算
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, []);
 
   // 跟踪事件回调引用（避免 onHookEvent 重建订阅）
   const rowsRef = useRef(rows);
@@ -326,5 +336,5 @@ export function useAgentStatus(): AgentStatusResult {
     state = { kind: "ready" };
   }
 
-  return { state, rows, currentProjectName };
+  return { state, rows, currentProjectName, now };
 }

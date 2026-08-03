@@ -66,6 +66,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - 开发运行：`npm run tauri dev`
 - 构建：`npx tauri build --debug --no-bundle`
+- **测试/使用流程（用户固定习惯）**：永远用 `npx tauri build --debug --no-bundle` 构建产物测试与使用，**不使用 dev 模式**（`npm run tauri dev` 仅保留为开发兜底）。产出 exe + dll（debug 模式），部署到本机或 win10 另一台 PC 使用
 
 ## 测试策略
 

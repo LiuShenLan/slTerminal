@@ -3096,6 +3096,12 @@ describe('Claude 历史会话视图', () => {
       };
 
       writeSignal('PreToolUse', 'Bash', null);
+      // 信号文件被 watcher 消费（notify 实时 + 3s 轮询兜底双路径——防「残留不消费」回归，
+      // win10 实证 33 残留根因）
+      await browser.waitUntil(
+        async () => !existsSync(signalFiles[0]),
+        { timeout: 8000, timeoutMsg: 'PreToolUse 信号文件未被 watcher 消费（残留）' },
+      );
       // 两区均出现 ⚡（working）
       await browser.waitUntil(
         async () => await browser.execute(() => {
@@ -3111,6 +3117,11 @@ describe('Claude 历史会话视图', () => {
 
       // 4. Stop 信号 → 两区均变 ✅（done），一致
       writeSignal('Stop', null, null);
+      // 第二个信号文件同样被消费（轮询兜底连续生效）
+      await browser.waitUntil(
+        async () => !existsSync(signalFiles[1]),
+        { timeout: 8000, timeoutMsg: 'Stop 信号文件未被 watcher 消费（残留）' },
+      );
       await browser.waitUntil(
         async () => await browser.execute(() => {
           const active = document.querySelector('[data-e2e="agent-status-row"]');

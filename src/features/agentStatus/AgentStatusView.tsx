@@ -101,7 +101,7 @@ const listContainerStyle: React.CSSProperties = {
 };
 
 export const AgentStatusView: React.FC<SideViewComponentProps> = (_props) => { // eslint-disable-line @typescript-eslint/no-unused-vars -- SideViewComponentProps 必需但 handleFocus 已委托共享函数
-  const { state, rows } = useAgentStatus();
+  const { state, rows, now } = useAgentStatus();
 
   // useClaudeHistory 单实例（问题 6 修复：数据上提，历史区与活跃区标题同源）
   const history = useClaudeHistory();
@@ -183,6 +183,7 @@ export const AgentStatusView: React.FC<SideViewComponentProps> = (_props) => { /
                     key={row.panelId}
                     row={row}
                     onFocus={handleFocus}
+                    now={now}
                   />
                 ))}
               </div>

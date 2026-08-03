@@ -2,11 +2,11 @@
 
 > **本文档是项目用例数唯一真值源。** 所有 CLAUDE.md、README、CI 配置中引用的用例数均以此文件为准。更新测试后必须同步本文档。
 
-全量 **2507** 用例（Rust 446 + 前端 1911 + L3 116 + E2E 34），2026-08-02 更新。
+全量 **2619** 用例（Rust 449 + 前端 2020 + L3 116 + E2E 34），2026-08-03 更新。
 
 > **计数口径**：前端 (L2) 用例数以 `grep -cE '^\s*(it|test)\(' src/__tests__/*.test.ts src/__tests__/*.test.tsx` 展开的 `it`/`test` 块数为准（Vitest 实际运行数）；L3 同理 `test/terminal/*.test.ts`；Rust (L1) 以 `grep -c '#\[test\]'` 统计的 `#[test]` 属性数为准。L3 的 116 用例同时被 L2 (`npm test`) 和独立 L3 (`npm run test:l3`) 执行，但此处各层独立计数，不做去重。
 
-## L1 — Rust 单元/集成测试（23 文件 / 446 用例）
+## L1 — Rust 单元/集成测试（23 文件 / 449 用例）
 
 运行：`cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1`
 
@@ -27,7 +27,7 @@
 | `src-tauri/src/hooks/signal.rs` | 9 | parse_signal_file 全分支（合法/缺 panelId/空 panelId/非法 JSON/空串/仅空白/optionals null）+ camelCase 序列化+反序列化往返 |
 | `src-tauri/src/hooks/mod.rs` | 8 | InjectionStatus/HookInjectionStatus serde（camelCase）+ parse_signal_file 快速冒烟（合法/缺 panelId/非法 JSON/空串） |
 | `src-tauri/tests/pty_integration_tests.rs` | 8 | PTY 往返/OSC cwd 解析/resize 生效/kill 无孤儿/Custom ConPTY spawn/reattach/env 注入 |
-| `src-tauri/src/hooks/watcher.rs` | 6 | HookSignalWatcher 生命周期（stop 幂等/Drop join 线程） |
+| `src-tauri/src/hooks/watcher.rs` | 15 | is_signal_file（.json/.JSON/.tmp/无扩展名）+ collect_signal_files（多文件收集/.tmp 与无扩展名排除/空目录/目录不存在→空）+ poll_once 轮询补漏（逐个处理注入闭包/幂等二次不处理/目录删除重建后恢复/非 json 忽略/无文件零调用——win10 实证修复）+ HookSignalWatcher 生命周期（stop 幂等/Drop join 线程） |
 | `src-tauri/src/hooks/config.rs` | 18 | parse_layer（三层合法/非法拒绝）+ resolve_config_path（user→home/.claude/settings.json/project+local 沙箱校验/缺失 project_path Validation/子树外 PathNotAllowed）+ read_hooks_subtree（文件不存在 Null/无 hooks 键 Null/子树提取/损坏 Err）+ write_hooks_subtree（原子写/父目录自动创建/merge 保留其他字段/损坏拒绝覆盖/非 Object hooks 拒绝无副作用/非 Object 根拒绝/null 根视空对象） |
 | `src-tauri/src/error.rs` | 4 | 序列化/Display/From<io::Error>/SessionNotFound |
 | `src-tauri/src/lib.rs` | 2 | ping 返回 pong/`get_windows_build_number` 返回数字 |
@@ -39,7 +39,7 @@
 > `pty/mod.rs`、`pty/win_build.rs`、`main.rs` 不含 `#[test]`，不在此列。
 > claude_history 模块 56 用例为 grep `#[test]` 计数（jsonl 28 + scan 14 + ops 7 + mod 7），env 测试依赖 L1 `--test-threads=1` 门禁（`std::env::set_var` 全局可变）。
 
-## L2 — 前端单元/集成测试（117 文件 / 2013 用例）
+## L2 — 前端单元/集成测试（117 文件 / 2020 用例）
 
 运行：`npm test`（Vitest + jsdom）
 
@@ -56,7 +56,7 @@
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
-| `src/__tests__/use-xterm-lifecycle.test.ts` | 80 | PTY spawn/exit/setupRetry/快捷键/rAF 轮询/ResizeObserver/字体/OSC 52/OSC 133（C/D 匹配注册命令 + setClaudeSession 写入）/OSC 8/键盘委托/hook-event 过滤与状态更新（setClaudeSession 携 sessionId+transcriptPath+status——问题 2 四态同源/SessionEnd→null/Notification 非 attention status undefined）/F3 四态 emoji |
+| `src/__tests__/use-xterm-lifecycle.test.ts` | 81 | PTY spawn/exit/setupRetry/快捷键/rAF 轮询/ResizeObserver/字体/OSC 52/OSC 133（C/D 匹配注册命令 + setClaudeSession 写入）/OSC 8/键盘委托/hook-event 过滤与状态更新（setClaudeSession 携 sessionId+transcriptPath+status——问题 2 四态同源/SessionEnd→null/Notification 非 attention status undefined/**payload sessionId/transcriptPath 空串 → 携 undefined 归一——空串防御**）/F3 四态 emoji |
 | `src/__tests__/use-xterm-output.test.ts` | 37 | DEC 2026/直写阈值/交替缓冲/Idle+Max 合帧/Uint8Array/非焦点降频/cancelPendingFlush/visibleRef 门控 |
 | `src/__tests__/can-fit.test.ts` | 15 | 五条件守卫 + null/undefined 参数防护 |
 | `src/__tests__/terminal-registry.test.ts` | 18 | register/get/remove/has/幂等/claudeSession 缺省保留旧值/setClaudeSession 全分支（merge/null 清空/no-op/缺 lastEventAt 自动填/undefined 不覆盖/**sessionId/status 存储与 merge 保留/status 显式 null 清空**——问题 2）/sessionChange 事件裸 panelId 结构/`_reset` |
@@ -207,8 +207,8 @@
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
 | `src/__tests__/notifications.test.ts` | 25 | useClaudeNotifications hook（sendToastNotification 两参数无 onClick/hook-event 通知调度/窗口失焦门控/toast 去重/transcript_path 提取/任务栏闪烁三分类全覆盖/Notification 类型过滤/应用重新聚焦后 flush 积压/并发竞态） |
-| `src/__tests__/agent-status-hook.test.ts` | 36 | useAgentStatus hook 行建模新语义全分支：纯 shell 无行（claudeSession null）→empty/无活跃项目→no-root/sessionChange（非 null）建行+携 transcriptPath 拉 usage/OSC 133 C 通道建行（sessionChange 携 matchedCommand）/hook 事件建行（行不存在时，**携 payload.sessionId**——问题 6 标题覆盖前置）/SessionEnd 删行/sessionChange(null) 删行/remove 删行（deps [] 稳定订阅——remove 不丢失）/切项目初始扫描只建活会话+主动拉 usage（**携 sessionId**）/matchedCommand-only 行 sessionId 缺省不报错/reconcile 对账兜底/四态 emoji 映射/transcriptPath null 跳过/跨项目过滤/倒序排列/错误降级/cache 字段包含/contextUsage 静默 catch+可观测 console.error |
-| `src/__tests__/agent-status-view.test.tsx` | 19 | AgentStatusView 组件（F7 三下拉框适配 + 问题 1/4 修复）：no-root 占位/empty 占位（纯 shell 无行——"当前项目无运行中的 claude 会话"）/活跃区两行渲染/点击行调用 switchToPageAndFocus/**双行布局结构断言（标题与用量条不在同一 flex 行——问题 1）**/行1 标题 12px 粗体+行2 11px（问题 4 三级字号）/**相对时间格式（formatRelativeTime，问题 1）**/状态图标仍在行1（E2E 兼容）/用量条新口径（input+cacheRead+cacheCreation）/usage 为 null 或 undefined 显示 '--'/分段颜色断言（<50% low/#629755、50-80% medium/#BBB529、>80% high/#F44747）/切换项目行清空 + 三下拉框结构（活跃展开/历史区收起/受控切换/历史区挂载 ClaudeHistorySections） |
+| `src/__tests__/agent-status-hook.test.ts` | 39 | useAgentStatus hook 行建模新语义全分支：纯 shell 无行（claudeSession null）→empty/无活跃项目→no-root/sessionChange（非 null）建行+携 transcriptPath 拉 usage/OSC 133 C 通道建行（sessionChange 携 matchedCommand）/hook 事件建行（行不存在时，**携 payload.sessionId**——问题 6 标题覆盖前置）/SessionEnd 删行/sessionChange(null) 删行/remove 删行（deps [] 稳定订阅——remove 不丢失）/切项目初始扫描只建活会话+主动拉 usage（**携 sessionId**）/matchedCommand-only 行 sessionId 缺省不报错/reconcile 对账兜底/四态 emoji 映射/transcriptPath null 跳过/跨项目过滤/倒序排列/错误降级/cache 字段包含/contextUsage 静默 catch+可观测 console.error/**now ticker（初始≈Date.now/推进 59s 不变/60s 更新 +60000/unmount 后清理——问题 1b 定时刷新）** |
+| `src/__tests__/agent-status-view.test.tsx` | 22 | AgentStatusView 组件（F7 三下拉框适配 + 问题 1/4 修复）：no-root 占位/empty 占位（纯 shell 无行——"当前项目无运行中的 claude 会话"）/活跃区两行渲染/点击行调用 switchToPageAndFocus/**双行布局结构断言（标题与用量条不在同一 flex 行——问题 1）**/行1 标题 12px 粗体+行2 11px（问题 4 三级字号）/**相对时间格式（formatRelativeTime，问题 1）**/状态图标仍在行1（E2E 兼容）/用量条新口径（input+cacheRead+cacheCreation）/usage 为 null 或 undefined 显示 '--'/分段颜色断言（<50% low/#629755、50-80% medium/#BBB529、>80% high/#F44747）/切换项目行清空 + 三下拉框结构（活跃展开/历史区收起/受控切换/历史区挂载 ClaudeHistorySections）/**now prop 驱动时间重算（固定 lastEventAt + now 推进 → 1 分钟前→15 分钟前——问题 1b）/now 缺省回退 Date.now()/AgentStatusView 行时间随 60s ticker 推进（fake timers 全链路）** |
 
 ### Claude 历史会话（6 文件 / 115 用例，F7；问题 2-7 修复后重计）
 
