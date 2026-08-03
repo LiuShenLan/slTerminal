@@ -2,7 +2,7 @@
 //
 // 纯函数模块：禁 import react / 任何 hook，零副作用。
 // 所有展示派生逻辑（当前项目匹配 / 分组 / 搜索 / 相对时间 / ⚡ 派生）集中于此，
-// 供 UI 层（Stage 05）与 L2 测试共用。契约见 docs/claude-history-view/checklist.md FE-05。
+// 供 UI 层与 L2 测试共用。契约要点见 src/features/claudeHistory/CLAUDE.md 架构决策。
 
 import { normalizePath, basename } from "../../lib/path";
 import { TerminalRegistry } from "../../panels/terminal/TerminalRegistry";

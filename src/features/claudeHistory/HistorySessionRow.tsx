@@ -7,7 +7,7 @@
 // 孤儿判定，orphan 恒 false）不显示 ✗。
 // 交互：单击选中 / 双击恢复分派 / 右键菜单，均回调 props 委托（纯受控展示组件，不碰 IPC）。
 // 字号层级（问题 4）：行1 标题 12px 粗体 > 行2 11px 灰。
-// 契约见 docs/claude-history-view/stages.md「跨 Stage 契约」。
+// 契约要点见 src/features/claudeHistory/CLAUDE.md。
 
 import React from "react";
 import type { HistorySession } from "../../types/claudeHistory";
@@ -16,7 +16,7 @@ import { STATUS_EMOJI } from "../../lib/claudeStatus";
 import { formatRelativeTime } from "./historyModel";
 import { EXPLORER_SELECTION_BG, SIDEBAR_COLORS, DIM_FG } from "../../theme";
 
-/** 行组件契约（写死，见 stages.md 跨 Stage 契约——agent B 照此消费） */
+/** 行组件契约（写死，见 src/features/claudeHistory/CLAUDE.md 测试模式——agent B 照此消费） */
 export interface HistorySessionRowProps {
   session: HistorySession;
   /** 运行中会话四态（⚡🟡✅❌；null/undefined → 无标记） */

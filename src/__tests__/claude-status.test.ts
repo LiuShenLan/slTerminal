@@ -1,8 +1,8 @@
 // claude-status.test.ts — 四态映射纯函数测试
 //
 // 覆盖 eventToStatus 全分支（10 事件 × notificationType 组合）
-// 状态机完整表见 docs/hooks-dev/feature-plan/phase1-status-core.md F3 节
-// 契约依据: docs/hooks-dev/contract.md C7
+// 状态机完整表见 src/lib/claudeStatus.ts eventToStatus（F3 事件→状态映射单点）
+// 契约依据: src/lib/claudeStatus.ts eventToStatus（C7）
 
 import { describe, it, expect } from "vitest";
 import {

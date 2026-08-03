@@ -1,7 +1,6 @@
 // claude 历史会话 DTO 类型定义（硬约束 #4：与后端 claude_history/mod.rs 双边对应）
 //
-// 契约见 docs/claude-history-view/checklist.md「跨边界契约」——TS camelCase ↔ Rust snake_case，
-// 七键与后端 serde 输出逐字一致，防字段漂移。
+// 跨边界契约——TS camelCase ↔ Rust snake_case，七键与后端 serde 输出逐字一致，防字段漂移。
 
 /** 标题来源（后端 TitleSource serde camelCase 五变体） */
 export type TitleSource =

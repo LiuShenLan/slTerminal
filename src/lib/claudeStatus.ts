@@ -1,5 +1,5 @@
 // claudeStatus.ts — 四态类型定义、emoji 常量、事件→状态纯函数
-// 状态机完整表见 docs/hooks-dev/feature-plan/phase1-status-core.md F3 节
+// 状态机完整表见本文件 eventToStatus（F3 事件→状态映射单点）
 //
 // 已知行为假设（无法自动化验证）：
 // - Ctrl+C 用户主动中断不发射任何 hook 事件（Stop=完成响应、StopFailure=API 错误），

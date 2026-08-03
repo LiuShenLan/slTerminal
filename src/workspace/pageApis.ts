@@ -7,7 +7,7 @@
 // 不变量：window.__dockviewApi 重指向只允许出现在三站点——
 //   switchToPageShared（本文件）、Workspace.onDeletePage、Workspace.handlePageApiReady
 //
-// 契约 C1：详见 docs/hooks-dev/phase2-fix/stages.md
+// 契约要点见 src/features/hooksConfig/CLAUDE.md（openHooksConfigPanel 同页单例 C13-7）
 
 import type { DockviewApi } from "dockview-react";
 import { useLayout } from "../stores/layout";

@@ -1,7 +1,7 @@
 // eventsCatalog.ts — 事件元数据单点（P3-FE-26）
 //
-// 真值源：docs/hooks-dev/phase3/stages.md 头部「事件元数据目录」全表
-//（30 事件 x 10 组，对应 docs/hooks/D2/02-settings-json-schema.md §4.5）。
+// 真值源：本文件事件元数据全表（30 事件 x 10 组，自官方 schema 提取，
+// 见 src/features/hooksConfig/CLAUDE.md 文件表）。
 // 本文件为纯数据 + 纯查询函数，零 DOM/React 依赖，供 EventTree / HandlerForm /
 // JsonMode 导航 / MatcherTester 共用。
 
@@ -62,7 +62,7 @@ export const EVENT_GROUPS: readonly string[] = [
   "启发式交互",
 ];
 
-// 30 事件 x 10 组完整映射（逐行对应 stages.md 头部「事件元数据目录」全表，禁省略）
+// 30 事件 x 10 组完整映射（本文件为单一真值源，禁省略）
 export const HOOK_EVENTS: readonly HookEventMeta[] = [
   // 会话生命周期（3）
   { event: "SessionStart", group: "会话生命周期", supportsMatcher: true, matcherTarget: "source（startup/resume/clear/compact）", handlerLevel: "C" },
