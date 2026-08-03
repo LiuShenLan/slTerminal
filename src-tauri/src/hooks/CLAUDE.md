@@ -87,7 +87,9 @@ project/local 层入参经 `validate_path_within_root` 沙箱校验：project_pa
 
 ### 信号文件瞬态特性 + dev 环境注入路径
 
-**目录常态为空是设计行为**：`process_signal_file`（`signal.rs:49-79`）处理后无论 emit 成败均立即 `fs::remove_file` 删除文件，watcher debounce 仅 50ms（`watcher.rs:37`）。信号文件从产生到删除存活亚秒级，任何时刻 `ls` 几乎都看不到文件——目录为空恰是管道正常工作的表现。如需观察信号文件，应使用文件系统监视工具（如 `watchexec`）或临时停 watcher。
+**目录常态为空是设计行为**：`process_signal_file`（`signal.rs:49-79`）处理后无论 emit 成败均立即 `fs::remove_file` 删除文件，watcher 实时通道 debounce 仅 50ms（`watcher.rs`）。信号文件从产生到删除存活亚秒级（实时通道）或 ≤3s（轮询补漏兜底），任何时刻 `ls` 几乎都看不到文件——目录为空恰是管道正常工作的表现。如需观察信号文件，应使用文件系统监视工具（如 `watchexec`）或临时停 watcher。
+
+**残留文件 = watcher 失效的诊断信号**：若目录持续堆积 `.json` 残留（win10 实证 33 个），说明 notify 实时通道事件丢失/目录重建后句柄失效——轮询补漏（3s）会自动清理并补送积压事件恢复前端状态；**残留持续不消则 watcher 未启动或目录重建后未恢复**，需排查 `start_signal_watcher` 启动日志与目录句柄。
 
 **dev 环境注入/卸载/状态查询路径**：前端生产代码无 `inject()` 调用方（F2 入口并入阶段 3），唯一注入入口是 dev/E2E 构建下的 E2E helper（`E2E_ENABLED` 门控，`e2e-tests/helpers.ts:296-300`）：
 - `npm run tauri dev` 启动后，devtools 控制台执行 `await window.__slterm_e2e_injectHooks()`（= `hooks.inject()`）
@@ -320,3 +322,4 @@ cargo test --manifest-path src-tauri/Cargo.toml hooks::config -- --test-threads=
 8. 修改 `parse_usage_line` / `scan_transcript_usage` / `TRANSCRIPT_TAIL_BYTES` 后跑 `usage.rs` 全部 28 条测试，尤其 P2-TE-05 五用例（大文件尾部扫描、损坏行跳过）与 cache 字段用例。
 9. 修改 `ContextUsage` DTO 字段后同步更新 `src/types/hooks.ts`（前端 `ContextUsage` 接口）和 `src/ipc/hooks.ts`（IPC wrapper），跑 `ipc-hooks-contract.test.ts` + `context_usage_serialize_camelcase` / `context_usage_deserialize_camelcase` 测试。
 10. 修改 `config.rs`（`parse_layer` / `resolve_config_path` / `read_hooks_subtree` / `write_hooks_subtree`）后跑 `hooks::config` 全部 18 条测试。改 read 的「损坏 → Err」或 write 的 merge 语义时，同步核对 `src/ipc/hooksConfig.ts` 与契约 C13-1（损坏文件上编辑后 merge 丢字段是设计红线）。新增配置层（如 org 层）需同步更新 `parse_layer`、`layer_file_name` 与 `src/types/hooksConfig.ts` 的 `HooksLayer`。
+11. 修改 `watcher.rs`（`POLL_INTERVAL` / `LOOP_TICK` / `collect_signal_files` / `poll_once` / notify 降级逻辑）后跑 `hooks::watcher` 全部 15 条测试（collect 4 条 + poll_once 5 条含目录重建恢复/幂等 + is_signal_file 4 条 + 生命周期 2 条）。**勿削弱轮询补漏**——它是 win10 实证 watcher 静默失效的兜底（notify 事件丢失/目录重建句柄失效）。

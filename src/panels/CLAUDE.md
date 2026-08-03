@@ -268,7 +268,7 @@ Claude Code 在用户主动 Ctrl+C 中断时不发射任何 hook 事件（`Stop`
 | `terminal/useClipboardHandler.ts` | OSC 52 剪贴板拦截 + CJK 解码 + 焦点门控 |
 | `terminal/useCommandDetection.ts` | OSC 133 命令边界检测 + TabTitleRegistry 匹配 + 🟡 attention 指示（OSC 133 C 触发 `onTabStateChange({ active: true, icon: "🟡" })`） |
 | `terminal/webgl.ts` | `detectWebgl()` + `setupWebglWithRetry()` 纯函数 |
-| `terminal/useXterm.ts` | 编排层（~420 行），组合上述 6 个 hook + `src/lib/useFontSizeWheel`（Ctrl+Wheel 字体缩放）+ `onHookEvent` 订阅（按 panelId 过滤 → `eventToStatus` → F3 四态 emoji），对外接口兼容 TerminalPanel |
+| `terminal/useXterm.ts` | 编排层（~420 行），组合上述 6 个 hook + `src/lib/useFontSizeWheel`（Ctrl+Wheel 字体缩放）+ `onHookEvent` 订阅（按 panelId 过滤 → `eventToStatus` → F3 四态 emoji；非 SessionEnd/Exit 时 `setClaudeSession` 携 `sessionId`/`transcriptPath`/`status`——两区四态同源，**payload 空串归一 `|| undefined`** 防 claude hook 输入缺字段时下游静默失效），对外接口兼容 TerminalPanel |
 | `terminal/keyboard.ts` | 终端快捷键命令工厂：`createTerminalShortcuts()`（无参）经 `commandFromMeta` 生成 `terminal.copy/paste/newline`，App 一次性注册；handler 经 `getActiveTerminal()` 派发到聚焦终端。Ctrl+C 不注册（透传 SIGINT） |
 | `terminal/activeTerminal.ts` | 模块级"聚焦终端"指针：`setActiveTerminal`/`clearActiveTerminal`（仅匹配时清）/`getActiveTerminal`。终端聚焦时设为 active，命令 handler 据此派发 |
 | `terminal/theme.ts` | xterm.js 暗色主题选项（JetBrains 配色），硬约束 #6 单点。`drawBoldTextInBrightColors` 显式声明为 `true`，消除对 xterm.js 默认值的隐式依赖（仅影响 ANSI 16 色粗体→亮色映射，不影响 True Color）。`vtExtensions: { kittyKeyboard: true }` 启用 Kitty 键盘协议被动支持 |
