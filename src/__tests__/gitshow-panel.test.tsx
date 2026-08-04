@@ -34,10 +34,30 @@ vi.mock("../ipc/git", () => ({
 }));
 
 // mock CM6——jsdom 无布局引擎，EditorView 无法真实工作
-const { mockEditorViewDestroy, capturedEditorStateConfig } = vi.hoisted(() => {
+const {
+  mockEditorViewDestroy,
+  capturedEditorStateConfig,
+  capturedEditorViews,
+  mockGitshowDispatch,
+  mockCompartmentReconfigure,
+  mockFontSizeState,
+} = vi.hoisted(() => {
   const mockEditorViewDestroy = vi.fn();
   const capturedEditorStateConfig: { extensions?: unknown[]; doc?: string }[] = [];
-  return { mockEditorViewDestroy, capturedEditorStateConfig };
+  // EDF-04: 收集每次创建的 EditorView 实例，供 identity 变化断言
+  const capturedEditorViews: unknown[] = [];
+  // EDF-09: 捕获字号热切换的 dispatch 与 Compartment.reconfigure
+  const mockGitshowDispatch = vi.fn();
+  const mockCompartmentReconfigure = vi.fn(() => []);
+  const mockFontSizeState = { editorFontSize: 14 };
+  return {
+    mockEditorViewDestroy,
+    capturedEditorStateConfig,
+    capturedEditorViews,
+    mockGitshowDispatch,
+    mockCompartmentReconfigure,
+    mockFontSizeState,
+  };
 });
 
 // @codemirror/view mock——需要 mock EditorView + EditorView.theme + EditorView.editable
@@ -47,10 +67,12 @@ vi.mock("@codemirror/view", () => {
     static theme = vi.fn(() => []);
     static editable = { of: vi.fn((val: boolean) => ({ __editable: val })) };
     state: unknown;
+    dispatch = mockGitshowDispatch;
     constructor(config: { state: unknown; parent: HTMLElement }) {
       this.state = config.state;
       // 挂载到 parent 上供测试断言
       (config.parent as HTMLElement & Record<string, unknown>)._cmView = this;
+      capturedEditorViews.push(this);
     }
     destroy() {
       mockEditorViewDestroy();
@@ -72,6 +94,8 @@ vi.mock("@codemirror/state", () => ({
   },
   Compartment: class {
     of = vi.fn(() => []);
+    // EDF-09: 字号热切换走 reconfigure，共享 mock 供断言
+    reconfigure = mockCompartmentReconfigure;
   },
 }));
 
@@ -120,10 +144,13 @@ vi.mock("../panels/editor/useCodeMirror", () => ({
   createEditorFontExtension: vi.fn(() => []),
 }));
 
-// mock stores/fontSize——select 解构需含 setEditorFontSize
+// mock stores/fontSize——select 解构需含 setEditorFontSize；editorFontSize 动态（EDF-09 字号热切换）
 vi.mock("../stores", () => ({
   useFontSize: vi.fn((selector: (s: Record<string, unknown>) => unknown) => {
-    const state = { editorFontSize: 14, setEditorFontSize: mockSetEditorFontSize };
+    const state = {
+      editorFontSize: mockFontSizeState.editorFontSize,
+      setEditorFontSize: mockSetEditorFontSize,
+    };
     return typeof selector === "function" ? selector(state) : undefined;
   }),
 }));
@@ -144,6 +171,10 @@ beforeEach(() => {
   mockGitFileAtHead.mockReset();
   mockEditorViewDestroy.mockReset();
   capturedEditorStateConfig.length = 0;
+  capturedEditorViews.length = 0;
+  mockGitshowDispatch.mockReset();
+  mockCompartmentReconfigure.mockReset();
+  mockFontSizeState.editorFontSize = 14;
   mockUseFontSizeWheel.mockReset();
   mockUsePanelFocus.mockReset();
   mockSetActiveEditor.mockReset();
@@ -264,9 +295,9 @@ describe("GitShowPanel", () => {
     });
   });
 
-  // ── 大文件拒绝 ──
+  // ── 大文件拒绝 / 警告（EDF-04：精确断言 doc 文案）──
 
-  it("内容超过 MAX_FILE_SIZE_BYTES 时渲染容器", async () => {
+  it("内容超过 MAX_FILE_SIZE_BYTES 时渲染拒绝文案（全文被替换）", async () => {
     const hugeContent = "x".repeat(10_000_001);
     mockGitFileAtHead.mockResolvedValue(hugeContent);
     const { container } = render(
@@ -276,6 +307,28 @@ describe("GitShowPanel", () => {
       const cmContainer = container.querySelector('div[style*="overflow: clip"]');
       expect(cmContainer).toBeTruthy();
     });
+    // 拒绝文案精确出现，原文被整体替换
+    const lastConfig = capturedEditorStateConfig[capturedEditorStateConfig.length - 1];
+    expect(lastConfig.doc).toContain("文件过大");
+    expect(lastConfig.doc).toContain("已拒绝打开以保护内存");
+    expect(lastConfig.doc).not.toContain(hugeContent.slice(0, 100));
+  });
+
+  it("内容超过 LARGE_FILE_WARN_BYTES（未超上限）时顶部插入警告 header，原文保留", async () => {
+    const bigContent = "line1\n" + "y".repeat(1_100_000);
+    mockGitFileAtHead.mockResolvedValue(bigContent);
+    render(
+      React.createElement(GitShowPanel, { params: DEFAULT_PARAMS }),
+    );
+    await vi.waitFor(() => {
+      expect(capturedEditorStateConfig.length).toBeGreaterThan(0);
+    });
+    const lastConfig = capturedEditorStateConfig[capturedEditorStateConfig.length - 1];
+    // 警告 header 精确文案
+    expect(lastConfig.doc).toContain("⚠ 大文件");
+    expect(lastConfig.doc).toContain("只读查看");
+    // 原文保留（header 前置而非替换）
+    expect(lastConfig.doc).toContain("line1");
   });
 
   // ── readOnly 配置 ──
@@ -384,6 +437,13 @@ describe("GitShowPanel", () => {
 	    const cmContainer = container.querySelector('div[style*="overflow: clip"]');
 	    expect(cmContainer).toBeTruthy();
 	  });
+
+	  // EDF-04：切换后新 view 与旧 view 非同一实例，旧 view 已销毁——实例 identity 断言（非仅"容器存在"）。
+	  // 注：切换 flush 中加载 effect 与 CM6 effect 同批执行，中间态可能重建 view，故用
+	  // 首/末实例 identity + 销毁计数断言"切换必然销毁重建"，不锁死中间创建次数。
+	  expect(capturedEditorViews.length).toBeGreaterThanOrEqual(2);
+	  expect(capturedEditorViews[0]).not.toBe(capturedEditorViews[capturedEditorViews.length - 1]);
+	  expect(mockEditorViewDestroy).toHaveBeenCalled();
 	});
 
 // ── 新增功能测试（14-18）──
@@ -477,5 +537,32 @@ it("does NOT disable editability via editable.of(false)", async () => {
     (e) => (e as Record<string, unknown>).__editable === false,
   );
   expect(hasEditableFalse).toBe(false);
+});
+
+// EDF-09: 字号热切换——editorFontSize 变化走 fontCompartment.reconfigure（非重建 view）
+it("editorFontSize 变化触发 fontCompartment.reconfigure（dispatch + reconfigure）", async () => {
+  mockGitFileAtHead.mockResolvedValue("content");
+  const { rerender } = render(
+    React.createElement(GitShowPanel, { params: DEFAULT_PARAMS }),
+  );
+  await vi.waitFor(() => {
+    expect(capturedEditorStateConfig.length).toBeGreaterThan(0);
+  });
+
+  mockGitshowDispatch.mockClear();
+  mockCompartmentReconfigure.mockClear();
+
+  // 字号 14 → 20（rerender 触发 fontSize effect）
+  mockFontSizeState.editorFontSize = 20;
+  rerender(React.createElement(GitShowPanel, { params: DEFAULT_PARAMS }));
+
+  await vi.waitFor(() => {
+    expect(mockGitshowDispatch).toHaveBeenCalled();
+  }, { timeout: 3000 });
+  // reconfigure 被调用（非仅 createEditorFontExtension 被调），且收到新字号生成的扩展
+  expect(mockCompartmentReconfigure).toHaveBeenCalled();
+  expect(createEditorFontExtension).toHaveBeenCalledWith(20);
+  // 不重建 view——仍为同一实例
+  expect(capturedEditorViews.length).toBe(1);
 });
 });

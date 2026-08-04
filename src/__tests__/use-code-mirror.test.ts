@@ -6,7 +6,8 @@
 // - 纯函数 createEditorFontExtension 测试在 editor-font.test.ts 中覆盖
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
+import { EditorState } from "@codemirror/state";
 
 // ─── Hoisted mocks ───
 const { mockDispatch, mockDestroy, mockOnFontSizeChange, mockReconfigure, mockDialogSave } = vi.hoisted(() => ({
@@ -102,7 +103,11 @@ vi.mock("../features/shortcuts", async (importOriginal) => {
   return { ...actual, usePanelFocus: mockUsePanelFocus };
 });
 
-import { useCodeMirror } from "../panels/editor/useCodeMirror";
+import {
+  useCodeMirror,
+  MAX_FILE_SIZE_BYTES,
+  LARGE_FILE_WARN_BYTES,
+} from "../panels/editor/useCodeMirror";
 import { getActiveEditor } from "../panels/editor/activeEditor";
 // 导入 mocked 模块，供 handleSave 测试验证 IPC 调用
 import { fs } from "../ipc";
@@ -936,5 +941,215 @@ describe("FE-19 handleSave repoDir 计算", () => {
       (call) => call[1] === "README.md",
     );
     expect(savePhaseCalls.length).toBe(0);
+  });
+});
+
+// ─── EDF-03: 大文件拒绝/警告 + 保存失败不派发保存事件 ───
+
+describe("EDF-03 大文件分支与保存失败", () => {
+  let container: HTMLDivElement;
+
+  /** 渲染 hook、等待 initEditor 完成、激活编辑器，返回 hook result */
+  async function renderAndActivate(overrides?: Partial<Parameters<typeof useCodeMirror>[0]>) {
+    const result = renderHook(() =>
+      useCodeMirror({
+        container,
+        filePath: "/test/huge.js",
+        panelId: "edf03",
+        ...overrides,
+      }),
+    );
+
+    await waitFor(() => expect(capturedStateExtensions).toBeDefined(), { timeout: 3000 });
+
+    const activateCall = mockUsePanelFocus.mock.calls[mockUsePanelFocus.mock.calls.length - 1];
+    const activateFn = activateCall?.[2] as (() => void) | undefined;
+    if (activateFn) activateFn();
+
+    return result;
+  }
+
+  /** 取最近一次 EditorState.create 的 doc 参数（大文件分支下 doc 即被替换后的显示文案） */
+  function lastCreatedDoc(): string {
+    const createMock = EditorState.create as ReturnType<typeof vi.fn>;
+    const calls = createMock.mock.calls;
+    const last = calls[calls.length - 1];
+    return (last?.[0] as { doc?: string })?.doc ?? "";
+  }
+
+  beforeEach(() => {
+    container = createContainer();
+    capturedStateExtensions = null;
+    vi.clearAllMocks();
+    mockDialogSave.mockResolvedValue(null);
+    (fs.writeFile as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    (gitDiff as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    // 关键：readFile 的 mockResolvedValue 是 default implementation，clearAllMocks 不清除。
+    // 不在此显式重置会泄漏上一用例的大文件内容到本用例（大文件分支先于 writeFile 检查触发）。
+    (fs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue("// normal content");
+  });
+
+  afterEach(() => {
+    container.innerHTML = "";
+  });
+
+  it("1. 打开 >10MB 文档 → 拒绝文案替换全文 + filePathRef 清空（保存弹另存为而非覆盖原文件）", async () => {
+    (fs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue("x".repeat(MAX_FILE_SIZE_BYTES + 1));
+
+    await renderAndActivate();
+
+    // 文档被替换为拒绝文案
+    expect(lastCreatedDoc()).toContain("文件过大");
+
+    // filePathRef 被清空（undefined）→ save 不直接写原文件，而是弹另存为对话框
+    const editor = getActiveEditor()!;
+    editor.save();
+
+    await waitFor(() => {
+      expect(mockDialogSave).toHaveBeenCalled();
+    }, { timeout: 3000 });
+    expect(fs.writeFile).not.toHaveBeenCalled();
+  });
+
+  it("2. 打开 >1MB 文档 + confirm 返回 false → 取消文案替换全文 + filePathRef 清空", async () => {
+    (fs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue("y".repeat(LARGE_FILE_WARN_BYTES + 1));
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    await renderAndActivate();
+
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(lastCreatedDoc()).toContain("用户取消打开大文件");
+
+    // filePathRef 被清空 → save 弹另存为，不覆盖原文件
+    const editor = getActiveEditor()!;
+    editor.save();
+    await waitFor(() => {
+      expect(mockDialogSave).toHaveBeenCalled();
+    }, { timeout: 3000 });
+    expect(fs.writeFile).not.toHaveBeenCalled();
+
+    confirmSpy.mockRestore();
+  });
+
+  it("3. fs.writeFile reject → alert 且不派发 slterm:file-saved/file-saved-as 保存事件", async () => {
+    (fs.writeFile as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("磁盘已满"));
+    const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => {});
+    const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+
+    await renderAndActivate();
+    getActiveEditor()!.save();
+
+    await waitFor(() => {
+      expect(alertSpy).toHaveBeenCalled();
+    }, { timeout: 3000 });
+
+    // 失败路径（catch 后 return）不派发任何 slterm: 保存事件
+    const savedEvents = dispatchSpy.mock.calls.filter(
+      ([e]) =>
+        e instanceof CustomEvent &&
+        ((e as CustomEvent).type === "slterm:file-saved" ||
+          (e as CustomEvent).type === "slterm:file-saved-as"),
+    );
+    expect(savedEvents).toHaveLength(0);
+
+    alertSpy.mockRestore();
+    dispatchSpy.mockRestore();
+  });
+});
+
+// ─── EDF-08: justSavedRef Set 多实例语义 ───
+
+describe("EDF-08 justSavedRef 多实例语义", () => {
+  let containerA: HTMLDivElement;
+  let containerB: HTMLDivElement;
+
+  beforeEach(() => {
+    containerA = createContainer();
+    containerB = createContainer();
+    capturedStateExtensions = null;
+    vi.clearAllMocks();
+    mockDialogSave.mockResolvedValue(null);
+    (fs.writeFile as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    (fs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue("// content a.ts");
+    (gitDiff as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    containerA.innerHTML = "";
+    containerB.innerHTML = "";
+  });
+
+  it("1. 双实例同文件：A 保存后跳过自身事件，B 未保存仍执行自动重载", async () => {
+    const { onFsEvent } = await import("../ipc/notify");
+    const onFsEventMock = onFsEvent as unknown as ReturnType<typeof vi.fn>;
+    const readFileMock = fs.readFile as ReturnType<typeof vi.fn>;
+
+    // 实例 A 先挂载 → onFsEvent 第一次调用（A 的回调）；B 后挂载 → 第二次（B 的回调）
+    renderHook(() => useCodeMirror({ container: containerA, filePath: "/test/a.ts", panelId: "A" }));
+    renderHook(() => useCodeMirror({ container: containerB, filePath: "/test/a.ts", panelId: "B" }));
+
+    await waitFor(() => expect(readFileMock).toHaveBeenCalledTimes(2), { timeout: 3000 });
+
+    expect(onFsEventMock).toHaveBeenCalledTimes(2);
+    const cbA = onFsEventMock.mock.calls[0][0] as (event: { paths: string[]; kind: string }) => void;
+    const cbB = onFsEventMock.mock.calls[1][0] as (event: { paths: string[]; kind: string }) => void;
+
+    // 激活 A 并保存（A 的 justSavedRef 加入 "/test/a.ts"）
+    const activateA = mockUsePanelFocus.mock.calls[0]?.[2] as (() => void) | undefined;
+    activateA?.();
+    getActiveEditor()!.save();
+
+    await waitFor(() => {
+      expect(fs.writeFile).toHaveBeenCalledWith("/test/a.ts", expect.any(String));
+    }, { timeout: 3000 });
+
+    const readCountAfterSave = readFileMock.mock.calls.length; // 2（A、B 各一次 initEditor 读取）
+
+    // A 收到自己保存触发的 Modify 事件 → justSaved 命中 → 跳过（不重载）
+    await act(async () => {
+      cbA({ paths: ["/test/a.ts"], kind: "Modify" });
+    });
+    expect(readFileMock.mock.calls.length).toBe(readCountAfterSave);
+
+    // B 收到同一 Modify 事件 → B 未保存过（Set 隔离）→ 自动重载
+    await act(async () => {
+      cbB({ paths: ["/test/a.ts"], kind: "Modify" });
+    });
+    await waitFor(() => {
+      expect(readFileMock.mock.calls.length).toBe(readCountAfterSave + 1);
+    }, { timeout: 3000 });
+    // 重载内容已 dispatch 到 B 的 view（此前保存路径不 dispatch，此次为唯一一次）
+    expect(mockDispatch).toHaveBeenCalled();
+  });
+
+  it("2. justSaved 一次性消费：A 第二次收到同一路径事件恢复自动重载", async () => {
+    const { onFsEvent } = await import("../ipc/notify");
+    const onFsEventMock = onFsEvent as unknown as ReturnType<typeof vi.fn>;
+    const readFileMock = fs.readFile as ReturnType<typeof vi.fn>;
+
+    renderHook(() => useCodeMirror({ container: containerA, filePath: "/test/a.ts", panelId: "A" }));
+    renderHook(() => useCodeMirror({ container: containerB, filePath: "/test/a.ts", panelId: "B" }));
+    await waitFor(() => expect(readFileMock).toHaveBeenCalledTimes(2), { timeout: 3000 });
+
+    const cbA = onFsEventMock.mock.calls[0][0] as (event: { paths: string[]; kind: string }) => void;
+
+    const activateA = mockUsePanelFocus.mock.calls[0]?.[2] as (() => void) | undefined;
+    activateA?.();
+    getActiveEditor()!.save();
+    await waitFor(() => expect(fs.writeFile).toHaveBeenCalled(), { timeout: 3000 });
+
+    // 第一次事件：Set 命中 → 跳过并删除路径
+    await act(async () => {
+      cbA({ paths: ["/test/a.ts"], kind: "Modify" });
+    });
+    expect(readFileMock.mock.calls.length).toBe(2);
+
+    // 第二次事件：Set 已消费删除 → A 恢复自动重载
+    await act(async () => {
+      cbA({ paths: ["/test/a.ts"], kind: "Modify" });
+    });
+    await waitFor(() => {
+      expect(readFileMock.mock.calls.length).toBe(3);
+    }, { timeout: 3000 });
   });
 });

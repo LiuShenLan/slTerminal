@@ -155,6 +155,19 @@ describe("computeAlignment", () => {
     expect(sorted(result.right)).toEqual([[0, 3]]);
   });
 
+  it("纯新增 newStart=0（key=-1 <0）——left Map 不产生键（防御过滤）", () => {
+    // key = newStart - 1 = -1，key >= 0 守卫拒绝（newStart 契约为 1-based）
+    const result = computeAlignment([h(1, 0, 0, 2)]);
+    expect(result.left.size).toBe(0);
+    expect(result.right.size).toBe(0);
+  });
+
+  it("纯删除 newStart=0（key=-1 <0）——right Map 不产生键（防御过滤）", () => {
+    const result = computeAlignment([h(1, 3, 0, 0)]);
+    expect(result.left.size).toBe(0);
+    expect(result.right.size).toBe(0);
+  });
+
   it("同位置 left 和 right 各有占位——独立不混淆", () => {
     // 同一个 newStart=3: left 新增 + right 删除
     const hunks = [

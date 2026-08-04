@@ -5,13 +5,14 @@
 // 保存后重新调 gitDiff + writeFile、外部修改重载
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, waitFor } from "@testing-library/react";
+import { render, waitFor, cleanup } from "@testing-library/react";
 import React from "react";
 
 // ── mock 状态（vi.hoisted 确保模块级 mock 前就绪） ─────────
 
 const { mockGitFileAtHead, mockGitDiff, mockReadFile, mockWriteFile, mockOnFsEvent,
-  mockUseFontSizeWheel, mockSetEditorFontSize, mockUsePanelFocus } = vi.hoisted(
+  mockUseFontSizeWheel, mockSetEditorFontSize, mockUsePanelFocus,
+  mockSetActiveEditor, mockClearActiveEditor } = vi.hoisted(
   () => ({
     mockGitFileAtHead: vi.fn(),
     mockGitDiff: vi.fn(),
@@ -21,6 +22,8 @@ const { mockGitFileAtHead, mockGitDiff, mockReadFile, mockWriteFile, mockOnFsEve
     mockUseFontSizeWheel: vi.fn(),
     mockSetEditorFontSize: vi.fn(),
     mockUsePanelFocus: vi.fn(),
+    mockSetActiveEditor: vi.fn(),
+    mockClearActiveEditor: vi.fn(),
   }),
 );
 
@@ -62,14 +65,19 @@ vi.mock("../features/shortcuts", () => ({
   usePanelFocus: mockUsePanelFocus,
 }));
 
-vi.mock("../editor/activeEditor", () => ({
-  setActiveEditor: vi.fn(),
-  clearActiveEditor: vi.fn(),
+// 注意路径：src/panels/editor/activeEditor（测试文件在 src/__tests__/，须补 panels 段）
+vi.mock("../panels/editor/activeEditor", () => ({
+  setActiveEditor: mockSetActiveEditor,
+  clearActiveEditor: mockClearActiveEditor,
 }));
 
 // ── 导入 ──────────────────────────────────────────────────────
 
 import DiffPanel from "../panels/diff/DiffPanel";
+import { act } from "@testing-library/react";
+import { EditorView } from "@codemirror/view";
+import { diffMarkersField, headDiffMarkersField } from "../panels/editor/gitGutter";
+import { MAX_FILE_SIZE_BYTES, LARGE_FILE_WARN_BYTES } from "../panels/editor/useCodeMirror";
 
 /** 构造测试参数 */
 function makeParams(overrides: Partial<{
@@ -87,6 +95,23 @@ function makeParams(overrides: Partial<{
   };
 }
 
+/** 经 .cm-editor DOM 反查 EditorView 实例（CM6 公开 API findFromDOM） */
+function getDiffView(
+  container: HTMLElement,
+  side: "diff-left" | "diff-right",
+): EditorView | null {
+  const el = container.querySelector(`[data-e2e="${side}"] .cm-editor`);
+  return el ? EditorView.findFromDOM(el as HTMLElement) : null;
+}
+
+/** 占位 Decoration 数量——placeholderField 经 EditorView.decorations facet 提供 */
+function placeholderCount(view: EditorView | null): number {
+  if (!view) return -1;
+  return view.state
+    .facet(EditorView.decorations)
+    .reduce((n, d) => n + (d && typeof d !== "function" ? d.size : 0), 0);
+}
+
 describe("DiffPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -97,6 +122,9 @@ describe("DiffPanel", () => {
   });
 
   afterEach(() => {
+    // 项目未启用 RTL auto-cleanup（vitest 无 globals）——必须显式卸载，
+    // 否则组件跨用例残留（旧组件重渲染仍产生 mock 调用，污染 find/次数断言）
+    cleanup();
     vi.restoreAllMocks();
   });
 
@@ -168,9 +196,7 @@ describe("DiffPanel", () => {
 
   // ── 保存链验证 ──────────────────────────────────────
 
-  it("保存→ writeFile 写盘 + gitDiff 重新调用", async () => {
-    mockGitDiff.mockResolvedValue([]);
-
+  it("保存→ writeFile 写盘 + gitDiff 重调 + 双侧 gutter/占位刷新全链", async () => {
     const params = makeParams();
     const { container } = render(
       React.createElement(DiffPanel, { params }),
@@ -182,117 +208,203 @@ describe("DiffPanel", () => {
     // 初始 gitDiff 被调用一次
     expect(mockGitDiff).toHaveBeenCalledTimes(1);
 
-    // 通过事件模拟 Ctrl+S 触发（实际走 ShortcutRegistry → activeEditor.save）
-    // 直接调用 handleSave 的内部路径：
-    // writeFile → gitDiff → updateDiffGutter
-    // 这里只验证 IPC 调用链：writeFile 成功后 gitDiff 再次被调
-    // handleSave 由 usePanelFocus mock 捕获不到——改为验证组件挂载时 IPC 调用
+    // 真实触发保存：经 usePanelFocus 的 activate 回调 → setActiveEditor → 取 editorActions.save()
+    // 注意：非 null 容器调用发生在 renderKey bridge 重渲染后——须 waitFor 轮询
+    let activate: (() => void) | undefined;
+    await waitFor(() => {
+      activate = mockUsePanelFocus.mock.calls.find((c) => c[1] !== null)?.[2];
+      expect(activate).toBeTypeOf("function");
+    });
+    activate?.();
+    const calls = mockSetActiveEditor.mock.calls;
+    const actions = (calls[calls.length - 1]?.[0] ?? undefined) as
+      | { save: () => void; toggleWordWrap: () => void }
+      | undefined;
+    expect(actions?.save).toBeTypeOf("function");
 
-    // 验证 writeFile + gitDiff 在 import 中的存在（编译期保证）
-    expect(mockWriteFile).toBeDefined();
-    expect(mockGitDiff).toBeDefined();
+    // 保存路径：gitDiff 第二次返回非空 hunks（纯增 2 + 纯删 1，行号须落在 3 行文档内
+    // → 双侧均有 gutter marker 与占位 Decoration）
+    mockGitDiff.mockResolvedValue([
+      { oldStart: 1, oldLines: 0, newStart: 2, newLines: 2 },
+      { oldStart: 3, oldLines: 1, newStart: 3, newLines: 0 },
+    ]);
+
+    actions!.save();
+
+    // 1) writeFile 写盘（内容 = 右栏文档全文）
+    await waitFor(() => {
+      expect(mockWriteFile).toHaveBeenCalledWith(
+        params.filePath,
+        "// workdir\nline1\nline2\n",
+      );
+    });
+
+    // 2) gitDiff 重调（第二次，参数为 repoPath + filePath）
+    await waitFor(() => {
+      expect(mockGitDiff).toHaveBeenCalledTimes(2);
+      expect(mockGitDiff).toHaveBeenLastCalledWith(params.repoPath, params.filePath);
+    });
+
+    // 3) 双侧 gutter 刷新（marker 从无到有——保存前初始 hunks 为空）
+    await waitFor(() => {
+      const leftView = getDiffView(container, "diff-left");
+      const rightView = getDiffView(container, "diff-right");
+      expect(leftView).toBeTruthy();
+      expect(rightView).toBeTruthy();
+      expect(leftView!.state.field(headDiffMarkersField).size).toBeGreaterThan(0);
+      expect(rightView!.state.field(diffMarkersField).size).toBeGreaterThan(0);
+    });
+
+    // 4) 双侧占位刷新（纯增 → 左侧占位，纯删 → 右侧占位）
+    await waitFor(() => {
+      expect(placeholderCount(getDiffView(container, "diff-left"))).toBeGreaterThan(0);
+      expect(placeholderCount(getDiffView(container, "diff-right"))).toBeGreaterThan(0);
+    });
   });
 
-  // ── 滚动同步 ────────────────────────────────────────
+  // ── 滚动同步（fake timers，消除固定等待） ──────────────
 
-  it("左侧 .cm-scroller scroll → 右侧 scrollTop 跟随", async () => {
-    const { container } = render(
-      React.createElement(DiffPanel, { params: makeParams() }),
-    );
-
-    await waitFor(() => {
-      expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
+  describe("滚动同步（fake timers）", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
     });
-    // 等待 CM6 挂载 + scroll 监听绑定（setTimeout 100ms）
-    await new Promise((r) => setTimeout(r, 200));
 
-    const leftScroller = container
-      .querySelector('[data-e2e="diff-left"]')!
-      .querySelector(".cm-scroller") as HTMLElement;
-    const rightScroller = container
-      .querySelector('[data-e2e="diff-right"]')!
-      .querySelector(".cm-scroller") as HTMLElement;
-    expect(leftScroller).toBeTruthy();
-    expect(rightScroller).toBeTruthy();
+    afterEach(() => {
+      vi.useRealTimers();
+    });
 
-    leftScroller.scrollTop = 150;
-    leftScroller.dispatchEvent(new Event("scroll", { bubbles: true }));
+    /**
+     * 推进 fake timers 并 flush 微任务。
+     * 注意：sinon tickAsync 在定时器队列为空时不 yield microtask——loading 的
+     * promise 链（setState ready → 注册 100ms 滚动绑定/50ms 占位 timer）须分两段：
+     * 第一段借 act flush 让 ready 渲染注册 timers，第二段触发它们。
+     */
+    async function flushAsync() {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+    }
 
-    await waitFor(() => {
+    /** 渲染并推进全部初始异步 */
+    async function renderReady() {
+      const utils = render(
+        React.createElement(DiffPanel, { params: makeParams() }),
+      );
+      await flushAsync();
+      return utils;
+    }
+
+    it("左侧 .cm-scroller scroll → 右侧 scrollTop 跟随", async () => {
+      const { container } = await renderReady();
+
+      const leftScroller = container
+        .querySelector('[data-e2e="diff-left"]')!
+        .querySelector(".cm-scroller") as HTMLElement;
+      const rightScroller = container
+        .querySelector('[data-e2e="diff-right"]')!
+        .querySelector(".cm-scroller") as HTMLElement;
+      expect(leftScroller).toBeTruthy();
+      expect(rightScroller).toBeTruthy();
+
+      leftScroller.scrollTop = 150;
+      leftScroller.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+      // scroll handler 为同步执行——推进 timer 后无需再等待
       expect(rightScroller.scrollTop).toBe(150);
     });
-  });
 
-  it("右侧 .cm-scroller scroll → 左侧 scrollTop 跟随", async () => {
-    const { container } = render(
-      React.createElement(DiffPanel, { params: makeParams() }),
-    );
+    it("右侧 .cm-scroller scroll → 左侧 scrollTop 跟随", async () => {
+      const { container } = await renderReady();
 
-    await waitFor(() => {
-      expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
-    });
-    await new Promise((r) => setTimeout(r, 200));
+      const leftScroller = container
+        .querySelector('[data-e2e="diff-left"]')!
+        .querySelector(".cm-scroller") as HTMLElement;
+      const rightScroller = container
+        .querySelector('[data-e2e="diff-right"]')!
+        .querySelector(".cm-scroller") as HTMLElement;
 
-    const leftScroller = container
-      .querySelector('[data-e2e="diff-left"]')!
-      .querySelector(".cm-scroller") as HTMLElement;
-    const rightScroller = container
-      .querySelector('[data-e2e="diff-right"]')!
-      .querySelector(".cm-scroller") as HTMLElement;
+      rightScroller.scrollTop = 250;
+      rightScroller.dispatchEvent(new Event("scroll", { bubbles: true }));
 
-    rightScroller.scrollTop = 250;
-    rightScroller.dispatchEvent(new Event("scroll", { bubbles: true }));
-
-    await waitFor(() => {
       expect(leftScroller.scrollTop).toBe(250);
     });
-  });
 
-  it("syncingRef 防循环——同向滚动不产生回弹", async () => {
-    const { container } = render(
-      React.createElement(DiffPanel, { params: makeParams() }),
-    );
+    it("syncingRef 防循环——同向滚动不产生回弹", async () => {
+      const { container } = await renderReady();
 
-    await waitFor(() => {
-      expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
-    });
-    await new Promise((r) => setTimeout(r, 200));
+      const leftScroller = container
+        .querySelector('[data-e2e="diff-left"]')!
+        .querySelector(".cm-scroller") as HTMLElement;
+      const rightScroller = container
+        .querySelector('[data-e2e="diff-right"]')!
+        .querySelector(".cm-scroller") as HTMLElement;
 
-    const leftScroller = container
-      .querySelector('[data-e2e="diff-left"]')!
-      .querySelector(".cm-scroller") as HTMLElement;
-    const rightScroller = container
-      .querySelector('[data-e2e="diff-right"]')!
-      .querySelector(".cm-scroller") as HTMLElement;
+      // 设置初始滚动位置
+      leftScroller.scrollTop = 300;
+      rightScroller.scrollTop = 300;
 
-    // 设置右侧初始滚动位置
-    leftScroller.scrollTop = 300;
-    rightScroller.scrollTop = 300;
+      // 左侧滚动触发同步
+      leftScroller.scrollTop = 500;
+      leftScroller.dispatchEvent(new Event("scroll", { bubbles: true }));
 
-    // 左侧滚动触发同步
-    leftScroller.scrollTop = 500;
-    leftScroller.dispatchEvent(new Event("scroll", { bubbles: true }));
-
-    await waitFor(() => {
       expect(rightScroller.scrollTop).toBe(500);
+      // 左侧 scrollTop 保持在 500（未被右侧回写改变）——syncingRef 防循环
+      expect(leftScroller.scrollTop).toBe(500);
+
+      // 右侧再次滚动——左侧仍应同步而不会无限循环
+      rightScroller.scrollTop = 800;
+      rightScroller.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+      expect(leftScroller.scrollTop).toBe(800);
     });
 
-    // 左侧 scrollTop 保持在 500（未被右侧回写改变）
-    // syncingRef 防止右侧 scroll→左侧→右侧的循环
-    expect(leftScroller.scrollTop).toBe(500);
+    it("filePath 切换重载后滚动同步重绑定仍生效", async () => {
+      const { container, rerender } = await renderReady();
 
-    // 右侧再次滚动——左侧仍应同步而不会无限循环
-    rightScroller.scrollTop = 800;
-    rightScroller.dispatchEvent(new Event("scroll", { bubbles: true }));
+      // 首次滚动同步生效
+      let leftScroller = container
+        .querySelector('[data-e2e="diff-left"]')!
+        .querySelector(".cm-scroller") as HTMLElement;
+      let rightScroller = container
+        .querySelector('[data-e2e="diff-right"]')!
+        .querySelector(".cm-scroller") as HTMLElement;
+      leftScroller.scrollTop = 150;
+      leftScroller.dispatchEvent(new Event("scroll", { bubbles: true }));
+      expect(rightScroller.scrollTop).toBe(150);
 
-    await waitFor(() => {
-      expect(leftScroller.scrollTop).toBe(800);
+      // 切换 filePath → 重新 loading → ready → view 重建 + 滚动 effect 重绑
+      mockGitFileAtHead.mockResolvedValue("// HEAD v2\n");
+      mockReadFile.mockResolvedValue("// workdir v2\n");
+      rerender(
+        React.createElement(DiffPanel, {
+          params: makeParams({ filePath: "D:/repo/src/test2.ts" }),
+        }),
+      );
+      // 两段推进：先让 reload 的 promise 链完成注册新 view，再触发新 100ms 滚动绑定 timer
+      await flushAsync();
+
+      // 新 scroller 重新绑定后滚动同步仍生效（state.kind 变化触发 effect 重跑）
+      leftScroller = container
+        .querySelector('[data-e2e="diff-left"]')!
+        .querySelector(".cm-scroller") as HTMLElement;
+      rightScroller = container
+        .querySelector('[data-e2e="diff-right"]')!
+        .querySelector(".cm-scroller") as HTMLElement;
+      expect(leftScroller).toBeTruthy();
+      expect(rightScroller).toBeTruthy();
+
+      leftScroller.scrollTop = 300;
+      leftScroller.dispatchEvent(new Event("scroll", { bubbles: true }));
+      expect(rightScroller.scrollTop).toBe(300);
     });
   });
 
   // ── 外部修改重载 ────────────────────────────────────
 
-  it("净态外部 Modify → 自动重载 readFile", async () => {
+  it("净态外部 Modify → 自动重载 readFile 并替换右侧内容", async () => {
     const { container } = render(
       React.createElement(DiffPanel, { params: makeParams() }),
     );
@@ -300,9 +412,8 @@ describe("DiffPanel", () => {
     await waitFor(() => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
     });
-    await new Promise((r) => setTimeout(r, 200));
 
-    // 捕获 onFsEvent 回调
+    // 捕获 onFsEvent 回调（第一个注册 = 外部修改监听）
     const fsEventCb = mockOnFsEvent.mock.calls[0]?.[0];
     expect(fsEventCb).toBeTypeOf("function");
 
@@ -317,6 +428,12 @@ describe("DiffPanel", () => {
     await waitFor(() => {
       expect(mockReadFile).toHaveBeenCalledTimes(2);
     });
+
+    // 净态自动重载：右栏文档被替换为磁盘新内容
+    await waitFor(() => {
+      const rightView = getDiffView(container, "diff-right");
+      expect(rightView?.state.doc.toString()).toBe("外部修改后的内容");
+    });
   });
 
   it("非目标文件 Modify → 不触发重载", async () => {
@@ -327,7 +444,11 @@ describe("DiffPanel", () => {
     await waitFor(() => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
     });
-    await new Promise((r) => setTimeout(r, 200));
+
+    // 初始加载基线：ready 态依赖 Promise.all 中的 readFile——轮询等待恰 1 次（替代固定 200ms 等待）
+    await waitFor(() => {
+      expect(mockReadFile).toHaveBeenCalledTimes(1);
+    });
 
     const fsEventCb = mockOnFsEvent.mock.calls[0]?.[0];
 
@@ -337,10 +458,196 @@ describe("DiffPanel", () => {
       kind: "Modify",
     });
 
-    await new Promise((r) => setTimeout(r, 50));
-
-    // readFile 仅初始调用 1 次
+    // 路径匹配判定在 handler 内同步执行（无 debounce）——不命中即同步 return，
+    // 无任何挂起的重载调用，调用数立即可断言（替代固定 50ms 等待）
     expect(mockReadFile).toHaveBeenCalledTimes(1);
+  });
+
+  // ── 占位刷新同步（EDF-02） ────────────────────────────────
+
+  it("初始 gitDiff 非空 → 双侧创建占位 Decoration（50ms 刷新 timer 路径）", async () => {
+    mockGitDiff.mockResolvedValue([
+      { oldStart: 1, oldLines: 0, newStart: 2, newLines: 2 }, // 纯增 → 左侧占位
+      { oldStart: 3, oldLines: 1, newStart: 3, newLines: 0 }, // 纯删 → 右侧占位
+    ]);
+    const { container } = render(
+      React.createElement(DiffPanel, { params: makeParams() }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
+    });
+    // 右侧挂载 effect 的 50ms timer 触发 refreshPlaceholders
+    await waitFor(() => {
+      expect(placeholderCount(getDiffView(container, "diff-left"))).toBeGreaterThan(0);
+      expect(placeholderCount(getDiffView(container, "diff-right"))).toBeGreaterThan(0);
+    });
+  });
+
+  it("保存后 gitDiff 返回空 hunks → 双侧占位与 gutter 清空", async () => {
+    mockGitDiff.mockResolvedValue([
+      { oldStart: 3, oldLines: 0, newStart: 3, newLines: 2 },
+    ]);
+    const params = makeParams();
+    const { container } = render(
+      React.createElement(DiffPanel, { params }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
+    });
+    // 初始有占位（纯增 → 左侧）
+    await waitFor(() => {
+      expect(placeholderCount(getDiffView(container, "diff-left"))).toBeGreaterThan(0);
+    });
+
+    // 经 usePanelFocus activate 回调触发保存（非 null 容器调用在 bridge 重渲染后——waitFor 轮询）
+    let activate: (() => void) | undefined;
+    await waitFor(() => {
+      activate = mockUsePanelFocus.mock.calls.find((c) => c[1] !== null)?.[2];
+      expect(activate).toBeTypeOf("function");
+    });
+    activate?.();
+    const calls = mockSetActiveEditor.mock.calls;
+    const actions = (calls[calls.length - 1]?.[0] ?? undefined) as
+      | { save: () => void }
+      | undefined;
+
+    // 保存时 gitDiff 返回空 → 走 clear 分支
+    mockGitDiff.mockResolvedValue([]);
+    actions!.save();
+
+    await waitFor(() => {
+      expect(mockGitDiff).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      const leftView = getDiffView(container, "diff-left");
+      const rightView = getDiffView(container, "diff-right");
+      expect(leftView!.state.field(headDiffMarkersField).size).toBe(0);
+      expect(rightView!.state.field(diffMarkersField).size).toBe(0);
+      expect(placeholderCount(leftView)).toBe(0);
+      expect(placeholderCount(rightView)).toBe(0);
+    });
+  });
+
+  // ── 左侧 .git 变更刷新 HEAD（EDF-02） ────────────────────
+
+  it("左侧 .git 路径变更 → gitFileAtHead 重取并刷新左侧内容", async () => {
+    const { container } = render(
+      React.createElement(DiffPanel, { params: makeParams() }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
+    });
+    expect(mockGitFileAtHead).toHaveBeenCalledTimes(1);
+
+    // 第二个 onFsEvent 注册 = 左侧 .git 监听（第一个为外部修改监听）
+    const gitCb = mockOnFsEvent.mock.calls[1]?.[0];
+    expect(gitCb).toBeTypeOf("function");
+
+    mockGitFileAtHead.mockResolvedValue("// HEAD v2\nline1\nline2\n");
+    gitCb({ paths: ["D:/repo/.git/index"], kind: "Modify" });
+
+    await waitFor(() => {
+      const leftView = getDiffView(container, "diff-left");
+      expect(leftView?.state.doc.toString()).toContain("HEAD v2");
+    });
+  });
+
+  it("左侧非 .git 路径变更 → 不重取 HEAD", async () => {
+    const { container } = render(
+      React.createElement(DiffPanel, { params: makeParams() }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
+    });
+    const gitCb = mockOnFsEvent.mock.calls[1]?.[0];
+
+    // 非 .git 路径（如普通源文件）→ .git 监听不匹配，gitFileAtHead 不重调
+    gitCb({ paths: ["D:/repo/src/other.ts"], kind: "Modify" });
+
+    expect(mockGitFileAtHead).toHaveBeenCalledTimes(1); // 仅初始调用
+  });
+
+  // ── 外部修改：脏态弹窗（EDF-02） ─────────────────────────
+
+  it("脏态外部 Modify → confirm 弹窗；取消保留本地修改", async () => {
+    const { container } = render(
+      React.createElement(DiffPanel, { params: makeParams() }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
+    });
+    const rightView = getDiffView(container, "diff-right")!;
+
+    // 制造脏：dispatch 文档变更（updateListener → dirtyRef=true）
+    rightView.dispatch({ changes: { from: 0, insert: "dirty" } });
+
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    mockReadFile.mockResolvedValue("外部新内容");
+
+    const fsCb = mockOnFsEvent.mock.calls[0]?.[0];
+    fsCb({ paths: ["D:/repo/src/test.ts"], kind: "Modify" });
+
+    // 脏态必弹窗，文案含路径与语义
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(confirmSpy.mock.calls[0][0]).toContain("已被外部修改");
+
+    // 取消 → 不重载，本地修改保留（readFile 仍仅初始 1 次）
+    expect(mockReadFile).toHaveBeenCalledTimes(1);
+    expect(rightView.state.doc.toString()).toContain("dirty");
+
+    confirmSpy.mockRestore();
+  });
+
+  it("脏态外部 Modify 确认 → 重载磁盘内容", async () => {
+    const { container } = render(
+      React.createElement(DiffPanel, { params: makeParams() }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
+    });
+    const rightView = getDiffView(container, "diff-right")!;
+    rightView.dispatch({ changes: { from: 0, insert: "dirty" } });
+
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    mockReadFile.mockResolvedValue("外部新内容");
+
+    const fsCb = mockOnFsEvent.mock.calls[0]?.[0];
+    fsCb({ paths: ["D:/repo/src/test.ts"], kind: "Modify" });
+
+    await waitFor(() => {
+      expect(rightView.state.doc.toString()).toBe("外部新内容");
+    });
+
+    confirmSpy.mockRestore();
+  });
+
+  // ── 大文件阈值（EDF-02） ────────────────────────────────
+
+  it("workdir 超过 MAX_FILE_SIZE_BYTES → 拒绝打开提示", async () => {
+    mockReadFile.mockResolvedValue("x".repeat(MAX_FILE_SIZE_BYTES + 1));
+    const { container } = render(
+      React.createElement(DiffPanel, { params: makeParams() }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
+    });
+    const rightView = getDiffView(container, "diff-right");
+    expect(rightView?.state.doc.toString()).toContain("已拒绝打开以保护内存");
+  });
+
+  it("head 超过 LARGE_FILE_WARN_BYTES → 大文件只读警告", async () => {
+    mockGitFileAtHead.mockResolvedValue(
+      "// HEAD\n" + "y".repeat(LARGE_FILE_WARN_BYTES + 100),
+    );
+    const { container } = render(
+      React.createElement(DiffPanel, { params: makeParams() }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
+    });
+    const leftView = getDiffView(container, "diff-left");
+    expect(leftView?.state.doc.toString()).toContain("大文件");
+    expect(leftView?.state.doc.toString()).toContain("只读查看");
   });
 
   // ── 新增：快捷键支持测试（12-15）────────────────────────────

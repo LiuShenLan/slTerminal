@@ -2,8 +2,9 @@
 //
 // 验证：DiffHunk → RangeSet<GutterMarker> 映射 + GutterMarker DOM 颜色
 
-import { describe, it, expect } from "vitest";
-import { EditorState } from "@codemirror/state";
+import { describe, it, expect, afterEach } from "vitest";
+import { EditorState, StateEffect } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
 import type { DiffHunk } from "../types/git";
 import { GIT_GUTTER_COLORS } from "../theme/colors";
 import {
@@ -14,6 +15,13 @@ import {
   ModifiedMarker,
   diffGutter,
   buildHeadRangeSet,
+  updateDiffGutter,
+  clearDiffGutter,
+  updateHeadDiffGutter,
+  clearHeadDiffGutter,
+  setHeadDiffMarkers,
+  headDiffMarkersField,
+  headDiffGutter,
 } from "../panels/editor/gitGutter";
 
 // ── Helpers ──
@@ -381,5 +389,102 @@ describe("gitGutter", () => {
       }
       expect(count).toBe(0);
     });
+  });
+});
+
+// ─── EDF-05: 四个 dispatch wrapper 直接调用 ───
+
+describe("四个 dispatch wrapper 直接调用（EDF-05）", () => {
+  const views: EditorView[] = [];
+
+  /** 创建真实 EditorView（gutter 扩展 + updateListener 捕获 dispatch 的 effects），afterEach 统一销毁 */
+  function makeView(
+    doc: string,
+    headSide: boolean,
+  ): { view: EditorView; effects: StateEffect<unknown>[] } {
+    const effects: StateEffect<unknown>[] = [];
+    const view = new EditorView({
+      state: EditorState.create({
+        doc,
+        extensions: [
+          headSide ? headDiffGutter() : diffGutter(),
+          EditorView.updateListener.of((u) => {
+            for (const tr of u.transactions) effects.push(...tr.effects);
+          }),
+        ],
+      }),
+      parent: document.createElement("div"),
+    });
+    views.push(view);
+    return { view, effects };
+  }
+
+  /** HEAD 侧 marker 计数 */
+  function headMarkerCountFromState(state: EditorState): number {
+    const set = state.field(headDiffMarkersField);
+    let count = 0;
+    const cursor = set.iter();
+    while (cursor.value !== null) {
+      count++;
+      cursor.next();
+    }
+    return count;
+  }
+
+  afterEach(() => {
+    while (views.length > 0) views.pop()!.destroy();
+  });
+
+  it("W1: updateDiffGutter → dispatch setDiffMarkers + StateField 标记生效", () => {
+    const { view, effects } = makeView("a\nb\nc\n", false);
+    const hunks: DiffHunk[] = [{ oldStart: 2, oldLines: 1, newStart: 2, newLines: 1 }];
+
+    updateDiffGutter(view, hunks);
+
+    // StateField 值变化：1 个 ModifiedMarker
+    expect(markerCount(view.state)).toBe(1);
+    // dispatch 的 StateEffect 类型正确（setDiffMarkers），payload 为原 hunks
+    expect(effects.length).toBe(1);
+    expect(effects[0].is(setDiffMarkers)).toBe(true);
+    expect(effects[0].value).toEqual(hunks);
+  });
+
+  it("W2: clearDiffGutter → dispatch setDiffMarkers.of([]) + 标记清空", () => {
+    const { view, effects } = makeView("a\nb\nc\n", false);
+    updateDiffGutter(view, [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 1 }]);
+    expect(markerCount(view.state)).toBe(1);
+
+    clearDiffGutter(view);
+
+    expect(markerCount(view.state)).toBe(0);
+    expect(effects.length).toBe(2);
+    expect(effects[1].is(setDiffMarkers)).toBe(true);
+    expect(effects[1].value).toEqual([]);
+  });
+
+  it("W3: updateHeadDiffGutter → dispatch setHeadDiffMarkers + HEAD 侧标记生效", () => {
+    const { view, effects } = makeView("L1\nL2\nL3\n", true);
+    const hunks: DiffHunk[] = [{ oldStart: 2, oldLines: 1, newStart: 2, newLines: 1 }];
+
+    updateHeadDiffGutter(view, hunks);
+
+    // HEAD 侧 StateField 值变化：1 个 ModifiedMarker（old 行号映射）
+    expect(headMarkerCountFromState(view.state)).toBe(1);
+    expect(effects.length).toBe(1);
+    expect(effects[0].is(setHeadDiffMarkers)).toBe(true);
+    expect(effects[0].value).toEqual(hunks);
+  });
+
+  it("W4: clearHeadDiffGutter → dispatch setHeadDiffMarkers.of([]) + HEAD 侧标记清空", () => {
+    const { view, effects } = makeView("L1\nL2\nL3\n", true);
+    updateHeadDiffGutter(view, [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 1 }]);
+    expect(headMarkerCountFromState(view.state)).toBe(1);
+
+    clearHeadDiffGutter(view);
+
+    expect(headMarkerCountFromState(view.state)).toBe(0);
+    expect(effects.length).toBe(2);
+    expect(effects[1].is(setHeadDiffMarkers)).toBe(true);
+    expect(effects[1].value).toEqual([]);
   });
 });
