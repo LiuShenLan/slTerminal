@@ -165,6 +165,32 @@ function getPane(index: number): Record<string, unknown> | undefined {
   return allotmentMocks.paneProps[index];
 }
 
+/** 在种子项目上追加第二页面（page-a，非 active）——供切换/删除行为验证 */
+function addSecondPage() {
+  useProjects.setState((state) => {
+    const proj = state.projects["proj-sv"];
+    return {
+      ...state,
+      projects: {
+        "proj-sv": {
+          ...proj,
+          pages: [
+            ...proj.pages,
+            {
+              pageId: "page-a",
+              name: "页面A",
+              layout: {},
+              cwd: proj.rootPath,
+              createdAt: Date.now(),
+              lastAccessedAt: Date.now(),
+            },
+          ],
+        },
+      },
+    };
+  });
+}
+
 // ─── Tests ───
 
 describe("Workspace 侧栏视图集成", () => {
@@ -281,21 +307,44 @@ describe("Workspace 侧栏视图集成", () => {
     });
   });
 
-  describe("SB-24.5: SideBarArea props 透传", () => {
-    it("switchToPage 作为函数传入 SideBarArea", () => {
+  describe("SB-24.5: SideBarArea props 透传（引用断言，SVC-10）", () => {
+    it("switchToPage 引用正确——SideBarArea 收到 Workspace 的真实切换函数", async () => {
       seedProjectAndPage();
+      addSecondPage();
       render(React.createElement(Workspace));
       const props = sideBarAreaCapture.current;
       expect(props).toBeTruthy();
-      expect(typeof props!.switchToPage).toBe("function");
+      // 引用级：switchToPage 与 onDeletePage 是 Workspace 中两个独立 useCallback，非同引用
+      expect(props!.switchToPage).not.toBe(props!.onDeletePage);
+      // 行为级：调用该引用真实执行页面切换（typeof 弱断言无法验证的绑定正确性）
+      await act(async () => {
+        await (props!.switchToPage as (p: string, pg: string) => Promise<void>)(
+          "proj-sv",
+          "page-a",
+        );
+      });
+      expect(useLayout.getState().activePageId).toBe("page-a");
     });
 
-    it("onDeletePage 作为函数传入 SideBarArea", () => {
+    it("onDeletePage 引用正确——调用后真实删除页面", () => {
       seedProjectAndPage();
+      addSecondPage();
       render(React.createElement(Workspace));
       const props = sideBarAreaCapture.current;
       expect(props).toBeTruthy();
-      expect(typeof props!.onDeletePage).toBe("function");
+      // 引用级：onDeletePage 与 switchToPage 非同一引用
+      expect(props!.onDeletePage).not.toBe(props!.switchToPage);
+      // 行为级：调用该引用真实执行页面删除（删除非 active 的 page-a）
+      act(() => {
+        (props!.onDeletePage as (p: string, pg: string) => void)(
+          "proj-sv",
+          "page-a",
+        );
+      });
+      const proj = useProjects.getState().projects["proj-sv"];
+      expect(proj.pages.some((p) => p.pageId === "page-a")).toBe(false);
+      // 活跃页面不受影响
+      expect(useLayout.getState().activePageId).toBe("page-sv");
     });
   });
 });

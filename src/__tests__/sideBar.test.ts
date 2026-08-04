@@ -18,7 +18,7 @@ vi.mock("../ipc/settings", () => ({
   loadSettings: mockLoadSettings,
 }));
 
-import { useSideBar } from "../stores/sideBar";
+import { useSideBar, cancelPendingSave } from "../stores/sideBar";
 import { sideViewRegistry } from "../features/sideViews/sideViewRegistry";
 import {
   DEFAULT_ZONES,
@@ -150,6 +150,22 @@ describe("sideBar store", () => {
     expect(useSideBar.getState().splitRatio).toBe(SPLIT_MAX);
     s.setSplitRatio(0.6);
     expect(useSideBar.getState().splitRatio).toBe(0.6);
+  });
+
+  it("7b. setWidth/setSplitRatio 非有限数 NaN/±Infinity → clamp 回退 MIN", () => {
+    const s = useSideBar.getState();
+    s.setWidth(NaN);
+    expect(useSideBar.getState().width).toBe(WIDTH_MIN);
+    s.setWidth(Infinity);
+    expect(useSideBar.getState().width).toBe(WIDTH_MIN);
+    s.setWidth(-Infinity);
+    expect(useSideBar.getState().width).toBe(WIDTH_MIN);
+    s.setSplitRatio(NaN);
+    expect(useSideBar.getState().splitRatio).toBe(SPLIT_MIN);
+    s.setSplitRatio(Infinity);
+    expect(useSideBar.getState().splitRatio).toBe(SPLIT_MIN);
+    s.setSplitRatio(-Infinity);
+    expect(useSideBar.getState().splitRatio).toBe(SPLIT_MIN);
   });
 
   // ── loadFromDisk ──
@@ -322,5 +338,14 @@ describe("sideBar store", () => {
       vi.advanceTimersByTime(2000);
     }).not.toThrow();
     expect(useSideBar.getState().width).toBe(300);
+  });
+
+  it("20. cancelPendingSave 取消活跃 timer——推进 2s 不再写盘", () => {
+    useSideBar.setState({ loaded: true });
+    useSideBar.getState().setWidth(300); // 产生 debounce timer
+    vi.advanceTimersByTime(1500);        // 未到 2s，timer 仍活跃
+    cancelPendingSave();                 // 关窗冲刷：取消待执行保存
+    vi.advanceTimersByTime(2000);        // 越过原定触发点
+    expect(mockSaveSettings).not.toHaveBeenCalled();
   });
 });

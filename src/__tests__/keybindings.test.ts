@@ -15,7 +15,7 @@ vi.mock("../ipc/settings", () => ({
   loadSettings: mockLoadSettings,
 }));
 
-import { useKeybindings } from "../stores/keybindings";
+import { useKeybindings, cancelPendingSave } from "../stores/keybindings";
 
 describe("keybindings store", () => {
   beforeEach(() => {
@@ -166,5 +166,14 @@ describe("keybindings store", () => {
       vi.advanceTimersByTime(2000);
     }).not.toThrow();
     expect(useKeybindings.getState().overrides).toEqual({ "terminal.copy": "Ctrl+Alt+KeyC" });
+  });
+
+  it("17. cancelPendingSave 取消活跃 timer——推进 2s 不再写盘", () => {
+    useKeybindings.setState({ loaded: true });
+    useKeybindings.getState().setBinding("terminal.copy", "Ctrl+Alt+KeyC"); // 产生 debounce timer
+    vi.advanceTimersByTime(1500);                                          // 未到 2s，timer 仍活跃
+    cancelPendingSave();                                                   // 关窗冲刷：取消待执行保存
+    vi.advanceTimersByTime(2000);                                          // 越过原定触发点
+    expect(mockSaveSettings).not.toHaveBeenCalled();
   });
 });

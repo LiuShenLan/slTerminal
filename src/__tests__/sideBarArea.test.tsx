@@ -419,6 +419,36 @@ describe("SideBarArea", () => {
     expect(setSplitRatioSpy).not.toHaveBeenCalled();
   });
 
+  // ─── SVC-07: onChange 双开但 total<=0 除零守卫 ───
+  it("onChange 双开但 total=0 时不写回 splitRatio（total 除零守卫）", () => {
+    const setSplitRatioSpy = vi.spyOn(
+      useSideBar.getState(),
+      "setSplitRatio",
+    );
+
+    // 先单开渲染（bothOpen 过渡 effect 不触发）
+    useSideBar.setState({
+      zones: { top: ["projects"], bottom: ["explorer"] },
+      open: { top: "projects", bottom: null },
+      splitRatio: 0.5,
+    });
+    const { rerender } = render(
+      React.createElement(SideBarArea, defaultProps),
+    );
+
+    // 切双开 → bothOpen false→true 过渡 effect 写回 0.5 一次 → 清掉后再测 onChange
+    useSideBar.setState({ open: { top: "projects", bottom: "explorer" } });
+    rerender(React.createElement(SideBarArea, defaultProps));
+    setSplitRatioSpy.mockClear();
+
+    const onChange = mocks.getOnChange();
+    expect(onChange).not.toBeNull();
+
+    // 双开但两 pane 尺寸均为 0 → total=0 → 除零守卫直接 return，不产生 NaN 写回
+    expect(() => onChange!([0, 0])).not.toThrow();
+    expect(setSplitRatioSpy).not.toHaveBeenCalled();
+  });
+
   // ─── SB-20: 背景色使用 PANEL_BG token ───
   it("外层容器背景色为 PANEL_BG token（非硬编码色值）", () => {
     const { container } = render(

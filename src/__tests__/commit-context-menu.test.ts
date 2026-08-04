@@ -185,4 +185,31 @@ describe("getContextMenuItems action 执行流程", () => {
     expect(spy).toHaveBeenCalled();
     spy.mockRestore();
   });
+
+  it("删除(added) gitUnstage 失败: console.error 不抛异常，不调 refresh 与 deleteEntry", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    mockGitUnstage.mockRejectedValue(new Error("index locked"));
+
+    const action = getFirstAction(makeEntry("C:/repo/b.txt", "added"));
+    // 不应 throw（菜单 action 契约：失败静默降级）
+    await expect(action!()).resolves.toBeUndefined();
+
+    expect(mockDeleteEntry).not.toHaveBeenCalled();
+    expect(mockRefresh).not.toHaveBeenCalled();
+    expect(spy).toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("删除(untracked) deleteEntry 失败: console.error 不抛异常，不调 refresh", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    mockDeleteEntry.mockRejectedValue(new Error("file locked"));
+
+    const action = getFirstAction(makeEntry("C:/repo/c.txt", "untracked"));
+    // 不应 throw（菜单 action 契约：失败静默降级）
+    await expect(action!()).resolves.toBeUndefined();
+
+    expect(mockRefresh).not.toHaveBeenCalled();
+    expect(spy).toHaveBeenCalled();
+    spy.mockRestore();
+  });
 });

@@ -95,6 +95,20 @@ describe("moveButtonPure", () => {
     expect(result.open).toEqual({ top: null, bottom: null });
   });
 
+  it("跨区 + 视图未打开 + 目标区已有打开视图：仅归属变化，目标区视图不被替换（R7）", () => {
+    // E 未打开在上区，search 在下区打开（SVC-06：R7 目标区非空场景）
+    const zones: Zones = { top: ["projects", "explorer"], bottom: ["search"] };
+    const open: OpenState = { top: null, bottom: "search" };
+    const result = moveButtonPure(zones, open, "explorer", "bottom", 0);
+    // 仅归属变化：explorer 移入下区前部
+    expect(result.zones).toEqual({
+      top: ["projects"],
+      bottom: ["explorer", "search"],
+    });
+    // open 不动：search 仍在下区打开，未被 R6 替换
+    expect(result.open).toEqual({ top: null, bottom: "search" });
+  });
+
   it("同区内向前移动（更小 index）：仅调顺序不动 open", () => {
     const zones: Zones = {
       top: ["projects", "explorer", "search"],
@@ -307,6 +321,30 @@ describe("sanitizeSideBar", () => {
     const raw = { zones: DEFAULT_ZONES, open: DEFAULT_OPEN, width: 250, splitRatio: -0.3 };
     const result = sanitizeSideBar(raw);
     expect(result.splitRatio).toBe(SPLIT_MIN);
+  });
+
+  it("width 为 NaN/±Infinity → clamp 回退 min（Number.isFinite 守卫，SVC-13）", () => {
+    for (const v of [NaN, Infinity, -Infinity]) {
+      const result = sanitizeSideBar({
+        zones: DEFAULT_ZONES,
+        open: DEFAULT_OPEN,
+        width: v,
+        splitRatio: 0.5,
+      });
+      expect(result.width).toBe(WIDTH_MIN);
+    }
+  });
+
+  it("splitRatio 为 NaN/±Infinity → clamp 回退 min（Number.isFinite 守卫，SVC-13）", () => {
+    for (const v of [NaN, Infinity, -Infinity]) {
+      const result = sanitizeSideBar({
+        zones: DEFAULT_ZONES,
+        open: DEFAULT_OPEN,
+        width: 250,
+        splitRatio: v,
+      });
+      expect(result.splitRatio).toBe(SPLIT_MIN);
+    }
   });
 
   it("返回完整 SideBarSlice（含所有字段）", () => {

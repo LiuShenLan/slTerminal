@@ -268,6 +268,7 @@ describe("ActivityBar", () => {
     expect(moveSpy).toHaveBeenCalled();
     expect(moveSpy.mock.calls[0][0]).toBe("explorer");
     expect(moveSpy.mock.calls[0][1]).toBe("top");
+    expect(moveSpy.mock.calls[0][2]).toBe(0); // 落点 25 < projects mid=30 → 插 projects 前方（index 0）
     moveSpy.mockRestore();
     spy.mockRestore();
   });
@@ -327,6 +328,7 @@ describe("ActivityBar", () => {
     expect(moveSpy).toHaveBeenCalled();
     expect(moveSpy.mock.calls[0][0]).toBe("explorer");
     expect(moveSpy.mock.calls[0][1]).toBe("bottom");
+    expect(moveSpy.mock.calls[0][2]).toBe(0); // bottom 空 → 末尾 index 0
     moveSpy.mockRestore();
     spy.mockRestore();
   });
@@ -344,6 +346,7 @@ describe("ActivityBar", () => {
     expect(moveSpy).toHaveBeenCalled();
     expect(moveSpy.mock.calls[0][0]).toBe("projects");
     expect(moveSpy.mock.calls[0][1]).toBe("top");
+    expect(moveSpy.mock.calls[0][2]).toBe(0); // top 空 → 末尾 index 0
     moveSpy.mockRestore();
     spy.mockRestore();
   });
@@ -361,6 +364,7 @@ describe("ActivityBar", () => {
     dispatchDragEvent(bar, "drop", dt);
     expect(moveSpy.mock.calls[0][0]).toBe("explorer");
     expect(moveSpy.mock.calls[0][1]).toBe("bottom");
+    expect(moveSpy.mock.calls[0][2]).toBe(2); // 落点 400 >= search mid=150 → 末尾 index 2
     moveSpy.mockRestore();
     spy.mockRestore();
   });
@@ -375,6 +379,7 @@ describe("ActivityBar", () => {
     dispatchDragEvent(bar, "dragover", dt, 70);
     dispatchDragEvent(bar, "drop", dt);
     expect(moveSpy.mock.calls[0][1]).toBe("top");
+    expect(moveSpy.mock.calls[0][2]).toBe(2); // 70 >= explorer mid=70 → 末尾 index 2
     moveSpy.mockRestore();
     spy.mockRestore();
   });
@@ -390,6 +395,7 @@ describe("ActivityBar", () => {
     dispatchDragEvent(bar, "dragover", dt, 400);
     dispatchDragEvent(bar, "drop", dt);
     expect(moveSpy.mock.calls[0][1]).toBe("bottom");
+    expect(moveSpy.mock.calls[0][2]).toBe(3); // 400 >= search mid=190 → 末尾 index 3
     moveSpy.mockRestore();
     spy.mockRestore();
   });
@@ -408,6 +414,7 @@ describe("ActivityBar", () => {
     dispatchDragEvent(bar, "dragover", dt, 30);
     dispatchDragEvent(bar, "drop", dt);
     expect(moveSpy.mock.calls[0][1]).toBe("top");
+    expect(moveSpy.mock.calls[0][2]).toBe(1); // 30 >= projects mid=30 → 插 projects 后（index 1）
     moveSpy.mockRestore();
     spy.mockRestore();
   });
@@ -424,6 +431,7 @@ describe("ActivityBar", () => {
     dispatchDragEvent(bar, "dragover", dt, 350);
     dispatchDragEvent(bar, "drop", dt);
     expect(moveSpy.mock.calls[0][1]).toBe("bottom");
+    expect(moveSpy.mock.calls[0][2]).toBe(1); // 350 >= explorer mid=110 → 末尾 index 1
     moveSpy.mockRestore();
     spy.mockRestore();
   });
@@ -441,6 +449,7 @@ describe("ActivityBar", () => {
     dispatchDragEvent(bar, "dragover", dt, 350);
     dispatchDragEvent(bar, "drop", dt);
     expect(moveSpy.mock.calls[0][1]).toBe("bottom");
+    expect(moveSpy.mock.calls[0][2]).toBe(2); // 350 >= explorer mid=150 → 末尾 index 2
     moveSpy.mockRestore();
     spy.mockRestore();
   });
@@ -478,6 +487,7 @@ describe("ActivityBar", () => {
     useSideBar.setState({ zones: { top: ["projects"], bottom: ["explorer"] }, open: { top: null, bottom: null } });
     render(<ActivityBar />);
     const spy = installRectSpy({ projects: { top: 10, height: 40 }, explorer: { top: 90, height: 40 } }, 90);
+    const moveSpy = vi.spyOn(useSideBar.getState(), "moveButton");
     const dt = createMockDataTransfer({ "application/x-side-view-id": "projects" });
     const bar = getActivityBar();
     const btn = getButton("projects") as HTMLElement;
@@ -486,11 +496,14 @@ describe("ActivityBar", () => {
     // clientY=400 > midpoint=300 → "bottom" (cross-zone)
     dispatchDragEvent(bar, "dragover", dt, 400);
     dispatchDragEvent(bar, "drop", dt);
+    expect(moveSpy.mock.calls[0][1]).toBe("bottom");
+    expect(moveSpy.mock.calls[0][2]).toBe(1); // 400 >= explorer mid=110 → 末尾 index 1
     // drop 中 clearDragState → React 重渲染 → re-query
     const after = getButton("projects") as HTMLElement;
     expect(after.style.opacity).toBe("1");
     dispatchDragEvent(after, "dragend", createMockDataTransfer());
     expect(after.style.opacity).toBe("1");
+    moveSpy.mockRestore();
     spy.mockRestore();
   });
 
@@ -507,6 +520,71 @@ describe("ActivityBar", () => {
       getButton("explorer").dispatchEvent(ev);
     });
     // 不抛异常
+    spy.mockRestore();
+  });
+
+  // ═══ 新增：同按钮上/下半区插入位置差异（SVC-01） ═══
+
+  it("SB-19.29 落点在按钮上半 → moveButton index 为该按钮前方（0）", () => {
+    render(<ActivityBar />);
+    const spy = installRectSpy({ projects: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } }, 800);
+    const moveSpy = vi.spyOn(useSideBar.getState(), "moveButton");
+    const dt = createMockDataTransfer({ "application/x-side-view-id": "explorer" });
+    const bar = getActivityBar();
+    // projects mid=30，clientY=20 < 30 → 插 projects 前方（index 0）
+    dispatchDragEvent(bar, "dragover", dt, 20);
+    dispatchDragEvent(bar, "drop", dt);
+    expect(moveSpy.mock.calls[0][0]).toBe("explorer");
+    expect(moveSpy.mock.calls[0][1]).toBe("top");
+    expect(moveSpy.mock.calls[0][2]).toBe(0);
+    moveSpy.mockRestore();
+    spy.mockRestore();
+  });
+
+  it("SB-19.30 落点在按钮下半 → moveButton index 为该按钮后方（1）", () => {
+    render(<ActivityBar />);
+    const spy = installRectSpy({ projects: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } }, 800);
+    const moveSpy = vi.spyOn(useSideBar.getState(), "moveButton");
+    const dt = createMockDataTransfer({ "application/x-side-view-id": "explorer" });
+    const bar = getActivityBar();
+    // projects mid=30，clientY=40 >= 30 → 插 projects 后；explorer mid=70，40 < 70 → index 1
+    dispatchDragEvent(bar, "dragover", dt, 40);
+    dispatchDragEvent(bar, "drop", dt);
+    expect(moveSpy.mock.calls[0][1]).toBe("top");
+    expect(moveSpy.mock.calls[0][2]).toBe(1);
+    moveSpy.mockRestore();
+    spy.mockRestore();
+  });
+
+  // ═══ 新增：resolveTargetZone 中点边界（SVC-05） ═══
+
+  it("SB-19.31 clientY 恰好等于容器中点（300）→ zone='bottom'（>= 边界）", () => {
+    render(<ActivityBar />);
+    const spy = installRectSpy({ projects: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } }, 800);
+    const moveSpy = vi.spyOn(useSideBar.getState(), "moveButton");
+    const dt = createMockDataTransfer({ "application/x-side-view-id": "explorer" });
+    const bar = getActivityBar();
+    // boundary = rect.top + rect.height/2 = 0 + 300 = 300；300 >= 300 → "bottom"
+    dispatchDragEvent(bar, "dragover", dt, 300);
+    dispatchDragEvent(bar, "drop", dt);
+    expect(moveSpy.mock.calls[0][1]).toBe("bottom");
+    expect(moveSpy.mock.calls[0][2]).toBe(0); // bottom 空 → index 0
+    moveSpy.mockRestore();
+    spy.mockRestore();
+  });
+
+  it("SB-19.32 clientY 为中点 -1（299）→ zone='top'（< 边界）", () => {
+    render(<ActivityBar />);
+    const spy = installRectSpy({ projects: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } }, 800);
+    const moveSpy = vi.spyOn(useSideBar.getState(), "moveButton");
+    const dt = createMockDataTransfer({ "application/x-side-view-id": "explorer" });
+    const bar = getActivityBar();
+    // 299 < 300 → "top"
+    dispatchDragEvent(bar, "dragover", dt, 299);
+    dispatchDragEvent(bar, "drop", dt);
+    expect(moveSpy.mock.calls[0][1]).toBe("top");
+    expect(moveSpy.mock.calls[0][2]).toBe(2); // 299 >= explorer mid=70 → 末尾 index 2
+    moveSpy.mockRestore();
     spy.mockRestore();
   });
 });

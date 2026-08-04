@@ -16,7 +16,13 @@ vi.mock("../ipc/settings", () => ({
   loadSettings: mockLoadSettings,
 }));
 
-import { useFontSize, FONT_SIZE_MIN, FONT_SIZE_MAX, FONT_SIZE_DEFAULT } from "../stores/fontSize";
+import {
+  useFontSize,
+  cancelPendingSave,
+  FONT_SIZE_MIN,
+  FONT_SIZE_MAX,
+  FONT_SIZE_DEFAULT,
+} from "../stores/fontSize";
 
 describe("fontSize store", () => {
   beforeEach(() => {
@@ -215,5 +221,14 @@ describe("fontSize store", () => {
 
     // store 状态仍正常
     expect(useFontSize.getState().terminalFontSize).toBe(16);
+  });
+
+  it("17. cancelPendingSave 取消活跃 timer——推进 2s 不再写盘", () => {
+    useFontSize.setState({ loaded: true });
+    useFontSize.getState().setTerminalFontSize(16); // 产生 debounce timer
+    vi.advanceTimersByTime(1500);                   // 未到 2s，timer 仍活跃
+    cancelPendingSave();                            // 关窗冲刷：取消待执行保存
+    vi.advanceTimersByTime(2000);                   // 越过原定触发点
+    expect(mockSaveSettings).not.toHaveBeenCalled();
   });
 });
