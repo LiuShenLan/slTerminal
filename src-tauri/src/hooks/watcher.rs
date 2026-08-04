@@ -18,7 +18,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use notify::RecursiveMode;
-use notify_debouncer_full::{new_debouncer, DebounceEventResult};
+use notify_debouncer_full::{new_debouncer, DebounceEventResult, DebouncedEvent};
 use tauri::AppHandle;
 
 use super::signal::process_signal_file;
@@ -85,13 +85,9 @@ impl HookSignalWatcher {
                     if has_notify {
                         match event_rx.recv_timeout(LOOP_TICK) {
                             Ok(Ok(events)) => {
-                                for event in &events {
-                                    for path in &event.paths {
-                                        if is_signal_file(path) {
-                                            process_signal_file(&app_handle, path);
-                                        }
-                                    }
-                                }
+                                handle_notify_events(&events, |path| {
+                                    process_signal_file(&app_handle, path);
+                                });
                             }
                             Ok(Err(errors)) => {
                                 for e in errors {
@@ -110,20 +106,17 @@ impl HookSignalWatcher {
                         std::thread::sleep(LOOP_TICK);
                     }
 
-                    // 2. 轮询补漏（每 POLL_INTERVAL）：免疫 notify 事件丢失/目录删除重建
+                    // 2. 轮询补漏（每 POLL_INTERVAL）+ 停止信号检查：
+                    //    run_one_tick = 目录重建 → 消费残留 → 停止则退出（返回 true）
                     if last_poll.elapsed() >= POLL_INTERVAL {
-                        // 目录被删除（卸载 hooks 的 remove_dir_all 等）后自动重建
-                        if let Err(e) = std::fs::create_dir_all(&signal_dir) {
-                            tracing::warn!("重建信号目录失败 {}: {e}", signal_dir.display());
-                        }
-                        poll_once(&signal_dir, |path| {
+                        if run_one_tick(&signal_dir, &stop_rx, |path| {
                             process_signal_file(&app_handle, path);
-                        });
+                        }) {
+                            break;
+                        }
                         last_poll = Instant::now();
-                    }
-
-                    // 3. 检查停止信号（非阻塞）
-                    if stop_rx.try_recv().is_ok() {
+                    } else if stop_rx.try_recv().is_ok() {
+                        // 3. 检查停止信号（非阻塞）
                         break;
                     }
                 }
@@ -186,6 +179,35 @@ pub fn poll_once(dir: &Path, process: impl Fn(&Path)) {
     for path in collect_signal_files(dir) {
         process(&path);
     }
+}
+
+/// 消费单批 notify 实时事件：仅 .json 信号文件交给 process。
+/// 与事件循环的 notify 分支对齐（D6 抽取，供测试复用）。
+fn handle_notify_events(events: &[DebouncedEvent], process: impl Fn(&Path)) {
+    for event in events {
+        for path in &event.paths {
+            if is_signal_file(path) {
+                process(path);
+            }
+        }
+    }
+}
+
+/// 单次轮询补漏 tick（事件循环第 2 段，D6 抽取）：
+/// 目录被删除（卸载 hooks 的 remove_dir_all 等）后自动重建 → poll_once 消费残留 →
+/// 检查停止信号。返回 true 表示收到停止信号、应退出循环。
+fn run_one_tick(
+    signal_dir: &Path,
+    stop_rx: &mpsc::Receiver<()>,
+    process: impl Fn(&Path),
+) -> bool {
+    // 目录被删除后自动重建——免疫 notify 事件丢失/目录删除重建（win10 实证兜底）
+    if let Err(e) = std::fs::create_dir_all(signal_dir) {
+        tracing::warn!("重建信号目录失败 {}: {e}", signal_dir.display());
+    }
+    poll_once(signal_dir, process);
+    // 检查停止信号（非阻塞）
+    stop_rx.try_recv().is_ok()
 }
 
 #[cfg(test)]
@@ -343,8 +365,32 @@ mod tests {
             stop_tx: Some(stop_tx),
             thread_handle: Some(handle),
         };
-        w.stop(); // 第一次停止
-        w.stop(); // 第二次应不 panic
+        w.stop(); // 第一次停止：发送停止信号并 join 线程
+        assert!(
+            w.thread_handle.is_none(),
+            "stop 后线程句柄应被取走（线程已 join）"
+        );
+        w.stop(); // 第二次应不 panic（幂等）
+    }
+
+    #[test]
+    fn watcher_stop_signal_terminates_thread() {
+        // 停止信号 → 线程应真实结束（thread.is_finished 断言，防 stop 假象）
+        let (stop_tx, stop_rx) = mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            let _ = stop_rx.recv();
+        });
+        assert!(!handle.is_finished(), "线程运行中不应已结束");
+        let _ = stop_tx.send(());
+        // 轮询等待线程结束（带上限，防 CI 挂死）
+        for _ in 0..100 {
+            if handle.is_finished() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(handle.is_finished(), "发送停止信号后线程应结束");
+        let _ = handle.join();
     }
 
     #[test]
@@ -358,5 +404,96 @@ mod tests {
             thread_handle: Some(handle),
         };
         drop(w); // Drop 应 join 线程
+    }
+
+    // ── run_one_tick（轮询补漏 tick——HUK-03） ──
+
+    #[test]
+    fn run_one_tick_polls_residual_files() {
+        // 轮询补漏消费残留文件：目录存在 + 残留 .json → 全部交给 process
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.json"), "{}").unwrap();
+        std::fs::write(dir.path().join("b.json"), "{}").unwrap();
+        let (_stop_tx, stop_rx) = mpsc::channel();
+        let processed = std::sync::Mutex::new(Vec::new());
+        let stopped = run_one_tick(dir.path(), &stop_rx, |p| {
+            processed
+                .lock()
+                .unwrap()
+                .push(p.file_name().unwrap().to_string_lossy().to_string());
+        });
+        assert!(!stopped, "无停止信号时不应退出");
+        let got = processed.lock().unwrap();
+        assert_eq!(got.len(), 2, "残留 .json 应全部被消费");
+        assert!(got.contains(&"a.json".to_string()));
+        assert!(got.contains(&"b.json".to_string()));
+    }
+
+    #[test]
+    fn run_one_tick_rebuilds_deleted_dir() {
+        // 目录被删除（卸载 hooks 的 remove_dir_all 等）后：tick 自动重建 + 消费残留
+        let base = tempfile::tempdir().unwrap();
+        let dir = base.path().join("signals");
+        let (_stop_tx, stop_rx) = mpsc::channel();
+        // 目录不存在 → tick 重建（collect 空、零处理、不 panic）
+        let stopped = run_one_tick(&dir, &stop_rx, |_| {});
+        assert!(!stopped);
+        assert!(dir.exists(), "tick 应自动重建被删除的目录");
+        // 重建后写入残留 → 下一次 tick 消费
+        std::fs::write(dir.join("residual.json"), "{}").unwrap();
+        let count = std::sync::atomic::AtomicUsize::new(0);
+        run_one_tick(&dir, &stop_rx, |_| {
+            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        });
+        assert_eq!(
+            count.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "重建后的残留应被消费"
+        );
+    }
+
+    #[test]
+    fn run_one_tick_stop_signal_returns_true() {
+        // 收到停止信号 → tick 返回 true（事件循环据此退出）
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.json"), "{}").unwrap();
+        let (stop_tx, stop_rx) = mpsc::channel();
+        let _ = stop_tx.send(());
+        let count = std::sync::atomic::AtomicUsize::new(0);
+        let stopped = run_one_tick(dir.path(), &stop_rx, |_| {
+            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        });
+        assert!(stopped, "收到停止信号后 tick 应返回 true");
+        // 与事件循环顺序一致：先消费残留再查停止信号
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    // ── handle_notify_events（notify 实时通道过滤——HUK-03） ──
+
+    #[test]
+    fn handle_notify_events_filters_json_only() {
+        // notify 事件中仅 .json 信号文件交给 process（.tmp/无扩展名不处理）
+        use notify::EventKind;
+        let json_path = std::path::PathBuf::from("/tmp/hooks-events/evt.json");
+        let tmp_path = std::path::PathBuf::from("/tmp/hooks-events/evt.tmp");
+        let events = vec![
+            DebouncedEvent::new(
+                notify::Event::new(EventKind::Create(notify::event::CreateKind::File))
+                    .add_path(json_path.clone()),
+                Instant::now(),
+            ),
+            DebouncedEvent::new(
+                notify::Event::new(EventKind::Create(notify::event::CreateKind::File))
+                    .add_path(tmp_path.clone()),
+                Instant::now(),
+            ),
+        ];
+        let processed = std::sync::Mutex::new(Vec::new());
+        handle_notify_events(&events, |p| {
+            processed.lock().unwrap().push(p.to_path_buf());
+        });
+        let got = processed.lock().unwrap();
+        assert_eq!(got.len(), 1, "仅 .json 信号文件应交给 process");
+        assert_eq!(got[0], json_path);
     }
 }

@@ -36,6 +36,16 @@ pub async fn hooks_context_usage(
     _app: AppHandle,
     transcript_path: String,
 ) -> Result<Option<ContextUsage>, crate::AppError> {
+    run_context_usage(transcript_path).await
+}
+
+/// hooks_context_usage 命令核心逻辑（不含 Tauri AppHandle 注入参数，供 L1 测试直接调用）
+///
+/// 参数透传 transcript_path → spawn_blocking → scan_transcript_usage；
+/// 返回 None（无 usage 或文件异常）或 Some(usage)，映射到 Ok。
+async fn run_context_usage(
+    transcript_path: String,
+) -> Result<Option<ContextUsage>, crate::AppError> {
     tokio::task::spawn_blocking(move || scan_transcript_usage(&transcript_path))
         .await
         .map_err(crate::AppError::from)
@@ -365,85 +375,56 @@ mod tests {
         assert_eq!(u.cache_creation_input_tokens, 0);
     }
 
-    // ── hooks_context_usage L1 测试 (P2-TE-05) ──
+    // ── hooks_context_usage 命令包装层（HUK-05：参数透传 + None/Some 返回映射） ──
+    //
+    // 纯函数扫描路径由上方 scan_transcript_usage 组直接覆盖（HUK-10 去重，仅存一组）；
+    // 本组经 run_context_usage（命令核心逻辑 = spawn_blocking 包装）调用，
+    // 覆盖包装层参数透传与返回值映射，同时保留大文件尾部扫描用例（原 P2-TE-05）。
 
-    /// P2-TE-05 用例 1：多条 message.usage 行，逆向扫描返回最后一条
-    #[test]
-    fn hooks_context_usage_multi_usage_returns_last() {
-        let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, r#"{{"type":"system","message":"start"}}"#).unwrap();
-        writeln!(
-            file,
-            r#"{{"message":{{"usage":{{"input_tokens":10,"output_tokens":5}}}}}}"#
-        )
-        .unwrap();
-        writeln!(file, r#"{{"type":"assistant","message":"middle"}}"#).unwrap();
-        writeln!(
-            file,
-            r#"{{"message":{{"usage":{{"input_tokens":300,"output_tokens":150}}}}}}"#
-        )
-        .unwrap();
-        writeln!(file, r#"{{"type":"system","message":"end"}}"#).unwrap();
-        file.flush().unwrap();
-
-        let r = scan_transcript_usage(file.path().to_str().unwrap());
-        assert!(r.is_some());
-        let u = r.unwrap();
-        assert_eq!(u.input_tokens, 300);
-        assert_eq!(u.output_tokens, 150);
+    /// 手动 current_thread runtime 驱动 async 核心逻辑（tokio 未启用 #[tokio::test]）
+    fn block_on<F: std::future::Future>(future: F) -> F::Output {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(future)
     }
 
-    /// P2-TE-05 用例 2：JSONL 末尾无 usage → 返回 None
+    /// 参数透传 transcriptPath：不同文件 → 各自扫描结果（Some 返回映射）
     #[test]
-    fn hooks_context_usage_no_usage_returns_none() {
-        let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, r#"{{"type":"system","message":"hello"}}"#).unwrap();
-        writeln!(file, r#"{{"type":"assistant","message":"world"}}"#).unwrap();
-        writeln!(file, r#"{{"type":"system","message":"done"}}"#).unwrap();
-        file.flush().unwrap();
+    fn hooks_context_usage_passes_transcript_path() {
+        let (_dir_a, path_a) = make_temp_transcript(&[
+            r#"{"message":{"usage":{"input_tokens":10,"output_tokens":5}}}"#,
+        ]);
+        let (_dir_b, path_b) = make_temp_transcript(&[
+            r#"{"message":{"usage":{"input_tokens":20,"output_tokens":6}}}"#,
+        ]);
 
-        let r = scan_transcript_usage(file.path().to_str().unwrap());
-        assert!(r.is_none());
+        let a = block_on(run_context_usage(path_a.to_str().unwrap().to_string()))
+            .unwrap()
+            .unwrap();
+        let b = block_on(run_context_usage(path_b.to_str().unwrap().to_string()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(a.input_tokens, 10, "transcript_path 应透传到扫描逻辑");
+        assert_eq!(b.input_tokens, 20);
     }
 
-    /// P2-TE-05 用例 3：某行 JSON 损坏 → 跳过损坏行，继续逆行扫描
+    /// None 返回映射：文件无 usage → Ok(None)
     #[test]
-    fn hooks_context_usage_corrupted_line_skipped() {
-        let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, r#"{{"type":"system","message":"start"}}"#).unwrap();
-        // 损坏的 JSON 行——应被 parse_usage_line 跳过
-        writeln!(file, r#"{{broken json {{{{"#).unwrap();
-        writeln!(
-            file,
-            r#"{{"message":{{"usage":{{"input_tokens":42,"output_tokens":7}}}}}}"#
-        )
-        .unwrap();
-        writeln!(file, r#"also not valid json"#).unwrap();
-        writeln!(file, r#"{{"type":"system","message":"end"}}"#).unwrap();
-        file.flush().unwrap();
+    fn hooks_context_usage_none_mapping() {
+        let (_dir, path) = make_temp_transcript(&[
+            r#"{"type":"system","message":"no usage"}"#,
+        ]);
 
-        let r = scan_transcript_usage(file.path().to_str().unwrap());
-        assert!(r.is_some());
-        let u = r.unwrap();
-        assert_eq!(u.input_tokens, 42);
-        assert_eq!(u.output_tokens, 7);
+        let r = block_on(run_context_usage(path.to_str().unwrap().to_string())).unwrap();
+        assert!(r.is_none(), "无 usage 应映射为 Ok(None)");
     }
 
-    /// P2-TE-05 用例 4：空文件 → 返回 None
-    #[test]
-    fn hooks_context_usage_empty_file_returns_none() {
-        let file = NamedTempFile::new().unwrap();
-        // 不写任何内容——空文件
-
-        let r = scan_transcript_usage(file.path().to_str().unwrap());
-        assert!(r.is_none());
-    }
-
-    /// P2-TE-05 用例 5：大文件（>128KB）仅读尾部 64KB
+    /// 大文件（>128KB）仅读尾部 64KB（原 P2-TE-05 用例 5，HUK-10 迁移至命令包装层）
     ///
     /// 构造约 200KB 的 JSONL 文件，前 140KB 为无 usage 的填充行
     /// （超出 TRANSCRIPT_TAIL_BYTES 窗口），usage 行在末尾 1KB 内。
-    /// 若 scan_transcript_usage 能正确返回，间接证明未加载全文件。
+    /// 经命令包装层调用，验证 spawn_blocking 全链路仍只加载尾部窗口。
     #[test]
     fn hooks_context_usage_large_file_tail_scan() {
         let mut file = NamedTempFile::new().unwrap();
@@ -475,7 +456,7 @@ mod tests {
             meta.len()
         );
 
-        let r = scan_transcript_usage(file.path().to_str().unwrap());
+        let r = block_on(run_context_usage(file.path().to_str().unwrap().to_string())).unwrap();
         assert!(r.is_some(), "应从尾部 64KB 找到 usage");
         let u = r.unwrap();
         assert_eq!(u.input_tokens, 99999);
