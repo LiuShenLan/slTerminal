@@ -40,7 +40,7 @@ description: 当需要对代码仓做系统性审查并制定分阶段变更计�
 3. **报告只写存在的问题，不写优点**；每条带严重级别 + `file:line` + 修复建议
 4. **用内置 Write 工具写中文 markdown**（filesystem MCP 写中文有乱码风险）
 
-**产出命名**：`docs/review-NN-<dimension>.md`（NN 从 01 开始），不用 00-summary 式命名。
+**产出命名**：分维度报告 `docs/review-NN-<dimension>.md`（NN 从 01 开始）；汇总文件例外用 `docs/review-00-summary.md`（见 Step 2）。
 
 **进度跟踪（强制）**：
 - spawn 时记录总数，每个 subagent 返回时汇报"已完成 N/总数"进度表
