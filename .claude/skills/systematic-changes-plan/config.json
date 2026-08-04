@@ -55,6 +55,7 @@
     "src-tauri/src/notify/CLAUDE.md",
     "src-tauri/src/fs/CLAUDE.md",
     "src-tauri/src/git/CLAUDE.md",
+    "src-tauri/src/claude_history/CLAUDE.md",
     "e2e-tests/CLAUDE.md"
   ],
   "testLevels": {
