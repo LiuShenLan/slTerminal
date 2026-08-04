@@ -1,7 +1,9 @@
 // agent-status-view.test.tsx — AgentStatusView L2 测试
 //
 // 覆盖：三态渲染（no-root / empty / ready）、多行渲染、
-// 行点击 switchToPage + focus、用量条正常/降级、切换项目清空行。
+// 行点击 switchToPage + focus、用量条正常/降级、切换项目清空行、
+// 完整 usage 行行 2 断言（NAH-05）、活跃区标题覆盖集成（NAH-06——
+// 真实 useClaudeHistory，非 mock history）。
 //
 // P2-TE-02 + P2-TE-04
 
@@ -13,6 +15,7 @@ const {
   mockOnHookEventCallback,
   mockContextUsage,
   mockSwitchToPageAndFocus,
+  mockScanHistory,
 } = vi.hoisted(() => {
   let onHookEventCb: ((payload: unknown) => void) | null = null;
   return {
@@ -36,6 +39,8 @@ const {
     },
     mockContextUsage: vi.fn(),
     mockSwitchToPageAndFocus: vi.fn(),
+    // NAH-06：scanHistory 是真实 useClaudeHistory 唯一的外部数据源（IPC mock）
+    mockScanHistory: vi.fn(),
   };
 });
 
@@ -68,30 +73,17 @@ vi.mock("../lib/claudeStatus", () => ({
   // eventToStatus 不在 mock 中（测试不触发 hook 事件回调），
   // 设为 stub 防 import 时 undefined
   eventToStatus: vi.fn(() => "attention"),
+  // STATUS_EMOJI 必须保留真实值——HistorySessionRow 直接访问
+  // STATUS_EMOJI[status]（历史区与活跃区四态同源），缺失会抛 TypeError
+  STATUS_EMOJI: { working: "⚡", attention: "🟡", done: "✅", error: "❌" },
 }));
 
-// ── 历史区 mock（FE-08：本文件聚焦 AgentStatusView 三区结构；
-//    历史区内部行为——搜索/菜单/双击分派——由 claude-history-view.test.tsx 覆盖）──
-const historyMock = vi.hoisted(() => ({
-  shape: {
-    state: "ready",
-    sessions: [] as unknown[],
-    activeStatuses: new Map<string, string>(),
-    rootPath: "C:/test",
-  },
-  scan: vi.fn(() => Promise.resolve()),
-  removeLocal: vi.fn(),
-}));
-
-vi.mock("../features/claudeHistory/useClaudeHistory", () => ({
-  useClaudeHistory: () => ({
-    state: historyMock.shape.state,
-    sessions: historyMock.shape.sessions,
-    activeStatuses: historyMock.shape.activeStatuses,
-    rootPath: historyMock.shape.rootPath,
-    scan: historyMock.scan,
-    removeLocal: historyMock.removeLocal,
-  }),
+// ── 历史区数据源 mock（NAH-06：useClaudeHistory 保持真实——标题覆盖集成测试
+//    须走真实 scan → sessions → titleBySessionId 派生链，仅 mock IPC 层 scanHistory；
+//    历史区列表交互由 claude-history-view.test.tsx 覆盖）──
+vi.mock("../ipc/claudeHistory", () => ({
+  scanHistory: mockScanHistory,
+  deleteHistorySession: vi.fn(),
 }));
 
 // restoreSession 依赖 pageApis.switchToPageShared（本文件 mock 不含），
@@ -101,12 +93,19 @@ vi.mock("../features/claudeHistory/restoreSession", () => ({
 }));
 
 import React from "react";
-import { render, cleanup, fireEvent, act } from "@testing-library/react";
+import {
+  render,
+  cleanup,
+  fireEvent,
+  act,
+  waitFor,
+} from "@testing-library/react";
 import { AgentStatusView } from "../features/agentStatus/AgentStatusView";
 import { AgentStatusRow } from "../features/agentStatus/AgentStatusRow";
 import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
 import type { AgentSessionRow } from "../features/agentStatus/useAgentStatus";
+import type { HistorySession } from "../types/claudeHistory";
 import { AGENT_STATUS_USAGE_COLORS } from "../theme";
 // ── 辅助函数 ──
 
@@ -166,7 +165,9 @@ function resetAll() {
   mockContextUsage.mockReset();
   mockSwitchToPageAndFocus.mockReset();
   mockOnHookEventCallback.cb = null;
-  historyMock.scan.mockClear();
+  // 真实 useClaudeHistory 的 scan 默认解析为空数组——未显式配置的测试展开历史区也不会崩
+  mockScanHistory.mockReset();
+  mockScanHistory.mockResolvedValue([]);
 }
 
 /** 构造 AgentSessionRow */
@@ -423,6 +424,33 @@ describe("用量条", () => {
     expect(line2.children[1].textContent).toBe("75%");
   });
 
+  it("完整 usage 行（含 outputTokens）：百分比排除 outputTokens 不计占用 + 相对时间出现（NAH-05）", () => {
+    const now = Date.now();
+    const row = makeRow({
+      title: "完整 usage 会话",
+      lastEventAt: now - 10 * 60_000, // 10 分钟前
+      usage: {
+        inputTokens: 100_000,
+        outputTokens: 999_999, // 信息字段——不计占用、不展示（组件设计，见 claudeHistory/CLAUDE.md）
+        cacheReadInputTokens: 30_000,
+        cacheCreationInputTokens: 20_000,
+      },
+    });
+    const { container } = render(
+      React.createElement(AgentStatusRow, { row, onFocus: vi.fn(), now }),
+    );
+
+    const { line2 } = rowChildren(container);
+    // formatRelativeTime 相对时间出现（与历史区口径统一）
+    expect(line2.textContent).toContain("10 分钟前");
+    // 总占用 = input + cacheRead + cacheCreation = 150_000 / 200_000 → 75%
+    // ——outputTokens 不计入占用（守卫用量口径）
+    expect(line2.children[1].textContent).toBe("75%");
+    // outputTokens 为信息字段不渲染进行 2（行 2 仅用量条 + 百分比 + 相对时间）
+    expect(line2.textContent).not.toContain("999999");
+    expect(line2.textContent).not.toContain("out");
+  });
+
   it("contextUsage 返回 null → 用量条显示不可用态 '--'", () => {
     const row = makeRow({ usage: null });
 
@@ -634,10 +662,10 @@ describe("三下拉框结构（FE-08）", () => {
     expect(
       container.querySelectorAll('[data-e2e="agent-history-row"]').length,
     ).toBe(0);
-    expect(historyMock.scan).not.toHaveBeenCalled();
+    expect(mockScanHistory).not.toHaveBeenCalled();
   });
 
-  it("点击历史区标题展开 → 触发 scan()（经 ClaudeHistorySections 首次展开 effect）", () => {
+  it("点击历史区标题展开 → 触发真实 scan()（经 ClaudeHistorySections 首次展开 effect）", async () => {
     seedProject("C:/test", "proj-1", [
       { pageId: "page1", name: "页面 1" },
     ]);
@@ -648,16 +676,18 @@ describe("三下拉框结构（FE-08）", () => {
     );
 
     // 初始收起 → 未触发
-    expect(historyMock.scan).not.toHaveBeenCalled();
+    expect(mockScanHistory).not.toHaveBeenCalled();
 
-    // 展开当前项目历史会话 → scan 一次
+    // 展开当前项目历史会话 → 真实 useClaudeHistory.scan → scanHistory IPC 一次
     fireEvent.click(getByText("当前项目历史会话"));
-    expect(historyMock.scan).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(mockScanHistory).toHaveBeenCalledTimes(1);
+    });
 
     // 收起再展开 → 仅首次触发（scanTriggeredRef）
     fireEvent.click(getByText("当前项目历史会话"));
     fireEvent.click(getByText("全部项目历史会话"));
-    expect(historyMock.scan).toHaveBeenCalledTimes(1);
+    expect(mockScanHistory).toHaveBeenCalledTimes(1);
   });
 
   it("E2E 兼容红线四件：agent-status-view / agent-status-row / AGENT STATUS / 两条空态文案", () => {
@@ -694,5 +724,93 @@ describe("三下拉框结构（FE-08）", () => {
     expect(
       third.container.querySelector('[data-e2e="agent-status-row"]'),
     ).toBeTruthy();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// 活跃区标题覆盖（NAH-06：真实 useClaudeHistory 集成——非 mock history）
+// ═══════════════════════════════════════════════════════════════
+// 全链路真实执行：TerminalRegistry 注册表 → useAgentStatus 建行（携 sessionId）→
+// 展开历史区触发真实 scan() → scanHistory IPC mock 返回 rename 后 title →
+// useClaudeHistory.sessions 落地 → AgentStatusView.titleBySessionId 覆盖行标题。
+// （旧实现 mock useClaudeHistory，titleBySessionId 派生链未被端到端验证——NAH-06）
+
+describe("活跃区标题覆盖（问题 6：真实 useClaudeHistory 集成）", () => {
+  /** 构造带 sessionId 的注册表条目（活跃行 sessionId = 传入值） */
+  function seedActiveRowWithSession(sessionId: string | undefined) {
+    seedProject("C:/test", "proj-1", [{ pageId: "page1", name: "页面 1" }]);
+    seedActivePage("page1");
+    const map = new Map<string, unknown>();
+    map.set("terminal-page1-0", {
+      claudeSession: {
+        sessionId,
+        lastEventAt: Date.now(),
+        status: "attention",
+      },
+    });
+    mockTerminalRegistry.getAll.mockReturnValue(map);
+  }
+
+  /** 构造 scanHistory 返回的历史会话 */
+  function makeHistorySession(
+    sessionId: string,
+    title: string | null,
+  ): HistorySession {
+    return {
+      sessionId,
+      cwd: "C:/test",
+      title,
+      titleSource: title != null ? "customTitle" : "none",
+      firstPrompt: null,
+      mtimeMs: 1000,
+      cwdExists: true,
+    };
+  }
+
+  /** 渲染视图并展开历史区触发真实 scan */
+  async function renderAndTriggerScan() {
+    const utils = render(
+      React.createElement(AgentStatusView, defaultProps),
+    );
+    fireEvent.click(utils.getByText("当前项目历史会话"));
+    await waitFor(() => {
+      expect(mockScanHistory).toHaveBeenCalledTimes(1);
+    });
+    return utils;
+  }
+
+  it("scan 结果同 sessionId 且 title 非 null → 活跃区行标题被覆盖（/rename 后刷新同步）", async () => {
+    seedActiveRowWithSession("s-rename-1");
+    mockScanHistory.mockResolvedValue([
+      makeHistorySession("s-rename-1", "rename 后的新标题"),
+    ]);
+
+    const { container } = await renderAndTriggerScan();
+
+    // scan 落地 → titleBySessionId 覆盖活跃区行标题
+    const row = container.querySelector(
+      '[data-e2e="agent-status-row"]',
+    ) as HTMLElement;
+    await waitFor(() => {
+      expect(row.textContent).toContain("rename 后的新标题");
+    });
+    // 原行标题（dockview 面板标题回退值）被覆盖
+    expect(row.textContent).not.toContain("终端 page1");
+  });
+
+  it("scan 无匹配 sessionId → 回退原标题（不覆盖）", async () => {
+    seedActiveRowWithSession("s-row-1");
+    mockScanHistory.mockResolvedValue([
+      makeHistorySession("s-other", "别的会话标题"),
+    ]);
+
+    const { container } = await renderAndTriggerScan();
+
+    const row = container.querySelector(
+      '[data-e2e="agent-status-row"]',
+    ) as HTMLElement;
+    // 行 sessionId（s-row-1）不在 scan 结果中 → 保留 resolveTitle 回退原标题
+    expect(row.textContent).toContain("终端 page1");
+    expect(row.textContent).not.toContain("别的会话标题");
   });
 });

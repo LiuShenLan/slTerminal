@@ -22,7 +22,7 @@ import { useProjects } from "../../stores/projects";
 import { parseTerminalPageId } from "../../lib/panelId";
 
 /** 通知事件类别 */
-type NotifyCategory = "permission" | "done" | "error";
+export type NotifyCategory = "permission" | "done" | "error";
 
 /** 类别 → emoji 映射 */
 const CATEGORY_EMOJI: Record<NotifyCategory, string> = {
@@ -47,7 +47,7 @@ const CATEGORY_LABEL: Record<NotifyCategory, string> = {
  *   - 任务完成：event === "Stop"
  *   - 其他：不触发通知
  */
-function classifyEvent(payload: HookEventPayload): NotifyCategory | null {
+export function classifyEvent(payload: HookEventPayload): NotifyCategory | null {
   // 权限请求
   if (payload.event === "PermissionRequest") return "permission";
   if (

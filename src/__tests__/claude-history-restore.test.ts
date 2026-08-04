@@ -290,12 +290,18 @@ describe("restoreHistorySession 四步恢复编排", () => {
     expect(h.mockPtyWrite).not.toHaveBeenCalled();
   });
 
-  it("防御：cwd 为 null 直接失败（toast），不触发任何编排步骤", async () => {
+  it("防御：cwd 为 null 直接失败（toast 携 cwd 错误消息），不触发任何编排步骤", async () => {
     await expect(
       restoreHistorySession(makeSession({ cwd: null, cwdExists: false })),
     ).resolves.toBeUndefined();
 
+    // 守卫经 doRestore 抛错（「会话缺少工作目录（cwd），无法恢复」）→ 外层 toast 上报
+    // （NAH-07②：cwd null 守卫的失败以 toast 形式暴露，不 rethrow——封装契约）
     expect(h.mockSendToastNotification).toHaveBeenCalledTimes(1);
+    expect(h.mockSendToastNotification).toHaveBeenCalledWith(
+      "恢复会话失败",
+      expect.objectContaining({ body: expect.stringContaining("cwd") }),
+    );
     expect(h.mockAddProject).not.toHaveBeenCalled();
     expect(h.mockAddPage).not.toHaveBeenCalled();
     expect(h.mockSwitchToPageShared).not.toHaveBeenCalled();

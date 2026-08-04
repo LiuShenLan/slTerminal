@@ -272,6 +272,18 @@ describe("deriveActiveSessionStatuses", () => {
     expect(deriveActiveSessionStatuses()).toEqual(new Map([["abc-123", "done"]]));
   });
 
+  it("sessionId 为 null → basename 去 .jsonl 回退（NAH-01）", () => {
+    h.all.set("panel-1", {
+      term: {}, sessionId: "p1", webglAddon: null, fitAddon: {},
+      claudeSession: {
+        sessionId: null,
+        transcriptPath: "C:/x/abc.jsonl",
+        status: "working",
+      },
+    });
+    expect(deriveActiveSessionStatuses().get("abc")).toBe("working");
+  });
+
   it("sessionId 与 transcriptPath 均无（matchedCommand-only）→ 跳过不产出", () => {
     h.all.set("panel-1", {
       term: {}, sessionId: "p1", webglAddon: null, fitAddon: {},

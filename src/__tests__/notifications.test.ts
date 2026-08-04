@@ -61,7 +61,11 @@ vi.mock("@tauri-apps/api/window", () => ({
 // 导入 — mock 之后才能 import 被测模块与 stores
 // ═══════════════════════════════════════════════════════════
 
-import { useClaudeNotifications } from "../features/notifications/useClaudeNotifications";
+import {
+  useClaudeNotifications,
+  classifyEvent,
+  type NotifyCategory,
+} from "../features/notifications/useClaudeNotifications";
 import { useProjects } from "../stores/projects";
 
 // ── 辅助函数 ───────────────────────────────────────────────
@@ -115,6 +119,88 @@ function setWindowFocused(focused: boolean): void {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (window as any).__slterm_windowFocused = focused;
 }
+
+// ═══════════════════════════════════════════════════════════
+// classifyEvent 表驱动（NAH-03，D2 导出纯函数）
+// ═══════════════════════════════════════════════════════════
+
+describe("classifyEvent 分类表驱动（NAH-03）", () => {
+  beforeEach(() => {
+    // 重置所有 mock
+    vi.clearAllMocks();
+    mockOnHookEventCallback.cb = null;
+
+    // 重置 stores 到初始状态
+    useProjects.setState({
+      projects: {},
+      expandedNodes: {},
+      deletionLock: { pendingDelete: null, acquiredAt: null },
+    });
+
+    // 清除 window 全局
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (window as any).__slterm_windowFocused;
+  });
+
+  // ── 纯函数层：事件 × notificationType → 类别映射 ──────────
+
+  const classifyTable: Array<{
+    name: string;
+    payload: Partial<import("../ipc/hooks").HookEventPayload>;
+    expected: NotifyCategory | null;
+  }> = [
+    { name: "PermissionRequest → permission", payload: { event: "PermissionRequest" }, expected: "permission" },
+    { name: "Notification + permission_prompt → permission", payload: { event: "Notification", notificationType: "permission_prompt" }, expected: "permission" },
+    { name: "Notification + idle_prompt → null（其他子类型不通知）", payload: { event: "Notification", notificationType: "idle_prompt" }, expected: null },
+    { name: "Notification + 无 notificationType → null", payload: { event: "Notification", notificationType: null }, expected: null },
+    { name: "Stop → done", payload: { event: "Stop" }, expected: "done" },
+    { name: "StopFailure → error", payload: { event: "StopFailure" }, expected: "error" },
+    { name: "PostToolUseFailure → error", payload: { event: "PostToolUseFailure" }, expected: "error" },
+    { name: "未识别事件（PreToolUse）→ null", payload: { event: "PreToolUse" }, expected: null },
+    { name: "未识别事件（SessionStart）→ null", payload: { event: "SessionStart" }, expected: null },
+  ];
+
+  it.each(classifyTable)("$name", ({ payload, expected }) => {
+    expect(classifyEvent(makePayload(payload))).toBe(expected);
+  });
+
+  // ── hook 链路层：toast 触发与否 + 标题/正文 ──────────────
+
+  const hookTable: Array<{
+    name: string;
+    payload: Partial<import("../ipc/hooks").HookEventPayload>;
+    label: string | null; // null = 不触发 toast
+  }> = [
+    { name: "失焦 + PermissionRequest → toast「权限请求」", payload: { event: "PermissionRequest" }, label: "权限请求" },
+    { name: "失焦 + Notification(permission_prompt) → toast「权限请求」", payload: { event: "Notification", notificationType: "permission_prompt" }, label: "权限请求" },
+    { name: "失焦 + Notification(idle_prompt) → 不 toast", payload: { event: "Notification", notificationType: "idle_prompt" }, label: null },
+    { name: "失焦 + Stop → toast「任务完成」", payload: { event: "Stop" }, label: "任务完成" },
+    { name: "失焦 + StopFailure → toast「错误」", payload: { event: "StopFailure" }, label: "错误" },
+    { name: "失焦 + PostToolUseFailure → toast「错误」", payload: { event: "PostToolUseFailure" }, label: "错误" },
+    { name: "失焦 + 未识别事件（PreToolUse）→ 不 toast", payload: { event: "PreToolUse" }, label: null },
+  ];
+
+  it.each(hookTable)("$name", ({ payload, label }) => {
+    setWindowFocused(false);
+    renderHook(() => useClaudeNotifications());
+
+    act(() => {
+      mockOnHookEventCallback.cb!(makePayload(payload));
+    });
+
+    if (label === null) {
+      expect(mockSendToastNotification).not.toHaveBeenCalled();
+      expect(mockRequestUserAttention).not.toHaveBeenCalled();
+    } else {
+      expect(mockSendToastNotification).toHaveBeenCalledTimes(1);
+      const [title, options] = mockSendToastNotification.mock
+        .calls[0] as [string, { body: string }];
+      expect(title).toBe("slTerminal");
+      expect(options.body).toContain(label);
+      expect(mockRequestUserAttention).toHaveBeenCalledWith(1);
+    }
+  });
+});
 
 // ═══════════════════════════════════════════════════════════
 // 测试
@@ -400,6 +486,51 @@ describe("F4 通知门控", () => {
       }));
     });
     expect(mockSendToastNotification).toHaveBeenCalledTimes(3);
+  });
+
+  it("去重缓存超 200 截断保留最近 100 条，最旧事件重新触发再弹 toast（NAH-04）", () => {
+    setWindowFocused(false);
+    renderHook(() => useClaudeNotifications());
+
+    // 构造 250 个不同事件（timestamp 递增推进）→ 各自 toast
+    for (let i = 1; i <= 250; i++) {
+      act(() => {
+        mockOnHookEventCallback.cb!(makePayload({
+          event: "Stop", sessionId: "s1", timestamp: i,
+        }));
+      });
+    }
+    expect(mockSendToastNotification).toHaveBeenCalledTimes(250);
+
+    // 第 201 个事件触发时缓存超 200 → slice(-100) 截断，
+    // 第 101 个（被截断移除的边界）重新触发 → 再弹 toast
+    act(() => {
+      mockOnHookEventCallback.cb!(makePayload({
+        event: "Stop", sessionId: "s1", timestamp: 101,
+      }));
+    });
+    expect(mockSendToastNotification).toHaveBeenCalledTimes(251);
+
+    // 最旧事件（第 1 个）已被截断移除 → 重新触发再弹 toast（核心断言）
+    act(() => {
+      mockOnHookEventCallback.cb!(makePayload({
+        event: "Stop", sessionId: "s1", timestamp: 1,
+      }));
+    });
+    expect(mockSendToastNotification).toHaveBeenCalledTimes(252);
+
+    // 截断保留的第 102 个与最新第 250 个仍被去重 → 不再弹 toast
+    act(() => {
+      mockOnHookEventCallback.cb!(makePayload({
+        event: "Stop", sessionId: "s1", timestamp: 102,
+      }));
+    });
+    act(() => {
+      mockOnHookEventCallback.cb!(makePayload({
+        event: "Stop", sessionId: "s1", timestamp: 250,
+      }));
+    });
+    expect(mockSendToastNotification).toHaveBeenCalledTimes(252);
   });
 
   // ── toast 正文内容验证（去面板标题后）─────────────────────

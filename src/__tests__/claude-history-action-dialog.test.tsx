@@ -51,10 +51,14 @@ describe("SessionActionDialog 渲染", () => {
     expect(queryByText("该会话已在运行中。")).toBeNull();
   });
 
-  it("空 actions → 仅渲染标题与取消按钮（不抛错）", () => {
-    const { getByText, queryByText } = renderDialog({ actions: [] });
-    expect(getByText("取消")).toBeTruthy();
+  it("空 actions 防御（NAH-11）：不渲染任何动作按钮，仅标题 + 取消，不抛错", () => {
+    const { getByText, queryByText, container } = renderDialog({ actions: [] });
+    // 动作按钮区为空：全部动作 label 均不渲染
     expect(queryByText("切换到该会话操作页面")).toBeNull();
+    expect(queryByText("分支恢复")).toBeNull();
+    // 弹窗主体仍可用（标题 + 取消按钮）——组件对空 actions 零崩溃
+    expect(getByText("取消")).toBeTruthy();
+    expect(container.querySelectorAll("button").length).toBe(1);
   });
 });
 

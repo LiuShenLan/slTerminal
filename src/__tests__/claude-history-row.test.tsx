@@ -147,6 +147,19 @@ describe("HistorySessionRow 状态标记（问题 2：四态同源）", () => {
     expect(getByText("✗")).toBeTruthy();
   });
 
+  it("status=working 且 orphan=true → ⚡ 渲染（四态标记不被孤儿标记掩盖，NAH-10）", () => {
+    const session = makeSession({ cwdExists: false });
+    const { getByText } = renderRow(session, {
+      status: "working",
+      orphan: true,
+    });
+
+    // 四态 emoji 优先展示（运行中会话即使 cwd 目录已删，行标记仍为 ⚡）
+    expect(getByText("⚡")).toBeTruthy();
+    // ✗ 按 orphan 语义独立渲染（两标记非互斥——现状设计，与上方并存用例一致）
+    expect(getByText("✗")).toBeTruthy();
+  });
+
   it("noCwd=true（无 cwd 跳过孤儿判定）→ 不显示 ✗，无状态时不显示标记", () => {
     const session = makeSession({ cwd: null, cwdExists: false });
     const { queryByText } = renderRow(session, { noCwd: true });
