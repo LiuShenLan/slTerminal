@@ -19,6 +19,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **子文件创建**：新建模块目录时同步创建该路径的 `CLAUDE.md`，并登记下方模块索引
 - **子文件模板**：职责 → 架构决策（关键约束）→ 文件表 → 测试模式（可选）
 - 修改或新增代码时，同步更新所属子路径的 CLAUDE.md，不在根文件展开细节
+- 配套文档：领域术语表见根目录 `@../CONTEXT.md`；架构决策记录见 `@.claude/adr.md`；测试用例清单见 `@.claude/test-inventory.md`
 
 ## 架构（两进程模型）
 
@@ -42,10 +43,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 3. **命令统一注册**于 `lib.rs` 的 `generate_handler!`；一律返回 `Result<_, AppError>`；阻塞 I/O 用 `spawn_blocking`。
 4. **DTO 双边对应**：`src/types/` ↔ Rust 模块 DTO 一一对应；Rust `snake_case` ↔ JS `camelCase`，改一边必须改另一边。
 5. **面板封闭**：Dockview 面板只能是 `panels/` 下注册过的类型；新增类型 = 加目录 + 在 `panelRegistry.ts` 注册。
-6. **配色单点**：所有颜色只在 `theme/colors.ts` 定义为 token；组件引用 token，禁止硬编码颜色（既定例外：xterm.js 终端主题在 `panels/terminal/theme.ts`）。
+6. **配色单点**：所有颜色只在 `theme/colors.ts` 定义为 token；组件引用 token，禁止硬编码颜色（既定例外见 @../src/panels/CLAUDE.md）。
 7. **布局单点**：操作页面布局只经 `workspace/layoutSerde.ts` 用 Dockview `toJSON/fromJSON` 存取。
 8. **会话元数据单点**：PTY 进程映射仅在 `panels/terminal/TerminalRegistry`（模块级 Map）管理，前端会话元数据已合并。面板只订阅，不自存。
-9. **平台分支收敛**：`#[cfg(windows)]` 只允许出现在 `pty/spawn.rs`、`pty/shell.rs` 等明确处，业务逻辑不撒 cfg。
+9. **平台分支收敛**：`#[cfg(windows)]` 只允许出现在 pty 模块等明确处，业务逻辑不撒 cfg（详见 @../src-tauri/src/pty/CLAUDE.md）。
 10. **权限最小化**：Tauri 2 自定义命令默认放行，`capabilities/` 只管插件权限；不追加通配 `*`。
 
 ## Windows 关键坑
@@ -55,12 +56,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **spawn 串行化**：并发 spawn 会卡死 ConPTY 输出管道——`pty_spawn` 必须握 `SPAWN_LOCK`。详见 @../src-tauri/src/pty/CLAUDE.md
 - **ConPTY flags 固定 0x7**：PASSTHROUGH_MODE (0x8) 吞全屏 TUI 鼠标滚轮输入；自动化测试无法守卫（假阴性），改 flags 必须实测真实 claude 滚轮。详见 @../src-tauri/src/pty/CLAUDE.md
 - **cwd 反斜杠**：传给 ConPTY 前把 cwd 规范化成 `\`（`CreateProcessW` 对 `/` 行为异常）。详见 @../src-tauri/src/pty/CLAUDE.md
-- **cwd / 命令边界跟踪**：portable-pty 在 Windows 不返回 cwd——注入 PowerShell 集成脚本发 OSC 7 + OSC 133，宿主据此跟踪，不解析提示符。详见 @../src-tauri/src/pty/CLAUDE.md
+- **cwd / 命令边界跟踪**：portable-pty 在 Windows 不返回 cwd——靠集成脚本注入的 OSC 序列跟踪，禁止解析提示符。详见 @../src-tauri/src/pty/CLAUDE.md
 - **键盘 / IME**：Shift+Tab、Ctrl 组合键用 xterm.js `attachCustomKeyEventHandler` 接管；中文 IME 合成要尽早实测。详见 @../src/panels/CLAUDE.md
-- **E2E 用不了 Playwright**（Tauri 非 Chromium）：用 embedded driver（`@wdio/tauri-service` + `tauri-plugin-wdio-webdriver`），零 msedgedriver 依赖。详见 @../e2e-tests/CLAUDE.md
-- **watcher 不频繁重建**：`notify` 递归注册大目录（如 `target/`）耗时约 2s——用 `LruWatcherPool` 缓存 + pause/resume 切换，禁止 stop/start 轮换。详见 @../src-tauri/src/notify/CLAUDE.md
+- **E2E 用不了 Playwright**（Tauri 非 Chromium）：用 embedded driver，零 msedgedriver 依赖。详见 @../e2e-tests/CLAUDE.md
+- **watcher 不频繁重建**：`notify` 递归注册大目录耗时——用 watcher 池缓存 + pause/resume 切换，禁止 stop/start 轮换。详见 @../src-tauri/src/notify/CLAUDE.md
 - **HTML 预览 iframe sandbox**：sandboxed iframe 中 `#fragment`/`:target` 彻底失效，`allow-same-origin` 会致 Tauri 向 iframe 注入 App JS——固定 `sandbox="allow-scripts"` + 注入脚本拦截锚点点击。详见 @../src/panels/CLAUDE.md
-- **测试 tempdir 8.3 短名**：CI runner 的 `%TEMP%` 是 8.3 短名——Rust 测试路径比较前用 `dunce::canonicalize` 统一长名（`dunce::simplified` 不解短名），否则 CI 失败而本地不复现。详见 @../src-tauri/src/git/CLAUDE.md
+- **测试 tempdir 8.3 短名**：CI runner 的 `%TEMP%` 是 8.3 短名——Rust 测试路径比较前用 `dunce::canonicalize` 统一长名，否则 CI 失败而本地不复现。详见 @../src-tauri/src/git/CLAUDE.md
 
 ## 命令
 
@@ -99,13 +100,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **一键打包**：`.\.claude\package.ps1 -Version "0.1.0"`（release 模式，单文件 exe → zip）
 加 `-Debug` 用 debug 模式（exe + dll 两个文件）。
 
-手动步骤：
-1. `npx tauri build --no-bundle` → `src-tauri/target/release/slterminal.exe`（单文件自包含）
-2. `Compress-Archive src-tauri/target/release/slterminal.exe slterminal-v0.1.0-x64.zip`
-3. GitHub Releases → 创建 Tag `v0.1.0` → 上传 zip
-
-> **给他人分享**：zip 解压到任意目录，双击 `slterminal.exe` 即可运行。不写注册表、不写 C 盘。
-> 首次运行 Windows SmartScreen 会提示"Windows protected your PC"→ 点"更多信息"→"仍要运行"。
+手动步骤与分享说明见 @../docs/release.md
 
 ## 模块索引
 
@@ -176,7 +171,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | DBG-5 | 调试调查 | switchToPage 改 async——setProjectRoot 必须在 setActivePage 之前完成（React effect 时序坑） |
 | DBG-6 | 调试调查 | 启动恢复 lastPage 先 await setProjectRoot 再 setActivePage |
 | B10 | 缺陷 | 编辑器去重聚焦须匹配 suffix（普通编辑器与 git 页签互不误聚焦） |
-| ADR-0001 | 架构决策 | 侧栏视图换区重建丢失组件内部状态（已确认接受） |
+| ADR-0001 | 架构决策 | 侧栏视图换区重建丢失组件内部状态（已确认接受）（详见 @.claude/adr.md） |
 | F2 | 特性 | hooks 注入入口（F6 面板工具栏并入；与功能键 F2 区分） |
 | F3 | 特性 | 终端页签四态 emoji 指示（hook-event + OSC 133 合成） |
 | F5 | 特性 | claudeSession 契约行建模（双通道建行/三通道删行） |

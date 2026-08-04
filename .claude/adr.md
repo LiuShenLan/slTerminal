@@ -37,3 +37,4 @@
 - 新增 `SideViewRegistry` 模块级单例（同项目现有 panelRegistry / TabTitleRegistry / FileViewerRegistry / ShortcutRegistry 模式）：新增侧栏视图 = 实现组件 + `register({ id, title, icon, component })`，活动栏按钮、侧栏区展示、持久化全部自动生效，无需改动框架代码。
 - 状态最少（按钮归属 + 每区打开的视图 id），所有展示由状态纯推导，无 UI 临时态。
 - 原 `SidebarTree`、`ExplorerPanel` 组件本体不变，仅宿主从 Allotment 常驻栏变为侧栏区视图槽。
+- **换区重建（已确认接受）**：拖拽按钮跨区（上↔下）时，视图组件从上区 pane 移入下区 pane——React 视为不同父节点，触发卸载+重建，组件内部状态（如 explorer 展开状态、rootNodes）丢失。权衡：换区为低频操作（用户通常设定一次后不改），重建成本低于跨父节点保持实例的架构复杂度。
