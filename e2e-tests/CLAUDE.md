@@ -97,7 +97,7 @@ E2E helpers 通过 `main.tsx` 中 `E2E_ENABLED`（`src/lib/e2eEnabled.ts`）条�
 
 `Tauri core.invoke not available after 5s timeout` — embedded 模式下降级到 WebDriver HTTP 协议时的日志，不影响测试结果。
 
-## 定位声明：L4 = 半端到端 / 部分端到端（DOC-02）
+## 定位声明：L4 = 半端到端 / 部分端到端（DOC-02，E2E-11 收编）
 
 > 键盘、拖拽、恢复编排三类用例不是完整 OS 级端到端，统一定位为**半端到端**（应用内监听/匹配/命令 handler/真实 IPC/写盘全链路在真实二进制执行，唯一"不真实"处是事件来源或前置动作）。标注以下逐项边界，勿把这类用例视为真实用户操作路径的完整验证：
 

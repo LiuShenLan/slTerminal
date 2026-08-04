@@ -60,7 +60,7 @@ CommitView 有四个渲染态，优先级从高到低：
 | 文件 | 职责 |
 |------|------|
 | `index.ts` | barrel export：CommitView、CommitFileList、useCommitStatus、openCommitFile、STATUS_PANEL_MAP、getContextMenuItems |
-| `CommitView.tsx` | 主组件：标题栏 "COMMIT"（28px、大写、照 ExplorerPanel 样式）+ 状态机渲染四态 + Changes/Unversioned Files 两个 CommitFileList |
+| `CommitView.tsx` | 主组件：标题栏 "COMMIT"（28px、大写、照 ExplorerPanel 样式）+ 状态机四渲染态 + Changes/Unversioned Files 两个 CommitFileList |
 | `CommitFileList.tsx` | 可折叠文件列表：标题栏（N 计数）+ 展开/折叠 + 文件名+父目录渲染 + 双击分派 + **右键菜单**（ContextMenu 纯渲染组件，委托 commitContextMenu 策略函数） |
 | `useCommitStatus.ts` | 数据加载 hook：rootPath 推导 → gitStatus + onFsEvent 200ms debounce + generation 取消 + **暴露 refresh() 手动刷新** |
 | `openCommitFile.ts` | 双击分派：`STATUS_PANEL_MAP` 状态→面板映射表 + `openCommitFile`（照 ExplorerPanel.handleOpenFile 流程：去重聚焦 → addPanel → registerEditor → recomputeTitles） |
@@ -110,7 +110,7 @@ DELETE_STATES   = {added, untracked}                       → "删除"
 
 | 文件 | 用例数 | 覆盖范围 |
 |------|--------|---------|
-| `commit-view-status.test.ts` | 7 | 状态机四态（no-root / loading / error / ready） |
+| `commit-view-status.test.ts` | 7 | 状态机四渲染态（no-root / loading / error / ready） |
 | `commit-view-list.test.tsx` | 9 | 列表渲染（文件名着色 token、计数、字母序排序、空态"无变更文件"）、折叠交互、fs-event 200ms debounce 刷新、rootPath 切换清空 + generation 丢弃（SVC-12 计时统一） |
 | `commit-context-menu.test.ts` | 15 | 右键菜单策略（`commitContextMenu.ts`）：ROLLBACK/DELETE 状态集、菜单项构造、删除 catch（SVC-08/09） |
 | `commit-context-menu-ui.test.tsx` | 8 | 菜单 UI 交互（外点关闭、菜单项点击 → ask 确认 → IPC → refresh） |

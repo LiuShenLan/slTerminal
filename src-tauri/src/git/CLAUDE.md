@@ -36,7 +36,7 @@ renamed 条目（`INDEX_RENAMED` / `WT_RENAMED`）从 delta 的 `old_file()` 取
 
 ### 注册
 
-四条命令均在 `src-tauri/src/lib.rs` 的 `generate_handler!` 注册（`git_status`、`git_diff`、`git_file_at_head`、`git_rollback`、`git_unstage`）。
+五条命令均在 `src-tauri/src/lib.rs` 的 `generate_handler!` 注册（`git_status`、`git_diff`、`git_file_at_head`、`git_rollback`、`git_unstage`）。
 
 ### git_rollback（新增命令）
 

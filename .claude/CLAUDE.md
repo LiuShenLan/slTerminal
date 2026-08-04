@@ -136,7 +136,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | src-tauri/src/git | Git 状态/diff/HEAD 读取/回滚/取消暂存（git2） | src-tauri/src/git/mod.rs | @../src-tauri/src/git/CLAUDE.md |
 | src-tauri/src/notify | 文件系统监听（LruWatcherPool 缓存 + pause/resume 切换） | src-tauri/src/notify/mod.rs | @../src-tauri/src/notify/CLAUDE.md |
 | src-tauri/src/hooks | Claude Code hooks 注入/卸载/状态 + hook-event 广播 + 上下文用量 + hooks 配置三层读写（hooks_config_read/write） | src-tauri/src/hooks/mod.rs | @../src-tauri/src/hooks/CLAUDE.md |
-| src-tauri/src/claude_history | Claude 历史会话查询（scan/delete 两命令 + 头部 512KB/尾部 64KB 轻量解析 + SEC-01 sessionId 校验） | src-tauri/src/claude_history/mod.rs | @../src-tauri/src/claude_history/CLAUDE.md |
+| src-tauri/src/claude_history | Claude 历史会话查询（scan/delete 两命令 + 头部 512KB/尾部 64KB 轻量解析 + SEC-05 sessionId 校验） | src-tauri/src/claude_history/mod.rs | @../src-tauri/src/claude_history/CLAUDE.md |
 | src-tauri settings/projects | 顶层单文件模块：settings.rs（设置持久化浅合并）、projects.rs（项目数据，exe 同级 JSON 绕过沙箱） | src-tauri/src/settings.rs | — |
 | e2e-tests | WDIO E2E 端到端测试 | e2e-tests/wdio.conf.ts | @../e2e-tests/CLAUDE.md |
 
@@ -162,17 +162,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **登记规则**：跨模块引用的标识符首次使用时登记到下表；仅模块内部使用的就近定义，不登记。
 
+**未列入的编号家族免登记**：阶段项目代号（如 C13-*、DOC-*、E2E-*、HFN-*、HUK-*、IHE-*、SVC-*、WRK-*、TE-* 等）登记于所属模块文档与 `.claude/test-inventory.md`，免入根表。
+
 | 标识符 | 类型 | 含义 |
 |--------|------|------|
 | H6 | 需求 | 终端跨页面存活——页面切换不杀 PTY 进程 |
 | E1 | 需求 | Channel 可替换 + ring buffer 回放——PTY 重连机制 |
-| P1-19 | 问题 | 窗口关闭前杀子进程——Tauri on_window_event 清理 PTY |
-| P2-49 | 问题 | dockview-react dispose 内部自动清理——无需手动清 |
+| P1-19 | 问题 | 窗口关闭前杀子进程——前端 registerCloseHandler（onCloseRequested → 遍历 TerminalRegistry pty.kill，SHUTDOWN_TIMEOUT_MS=3000）+ 后端 Job Object KILL_ON_JOB_CLOSE 兜底 |
 | SEC-01 | 安全 | project_root 是页面切换前置条件（路径沙箱） |
 | SEC-03 | 安全 | HTML postMessage origin/source/信任标记三层校验 |
+| SEC-05 | 安全 | claude_history_delete 的 sessionId 校验 + 定位不信托前端（原 SEC-01 拆号） |
 | SEC-08 | 安全 | PTY write/resize/kill 的 panelId 归属校验 |
+| DBG-5 | 调试调查 | switchToPage 改 async——setProjectRoot 必须在 setActivePage 之前完成（React effect 时序坑） |
+| DBG-6 | 调试调查 | 启动恢复 lastPage 先 await setProjectRoot 再 setActivePage |
 | B10 | 缺陷 | 编辑器去重聚焦须匹配 suffix（普通编辑器与 git 页签互不误聚焦） |
 | ADR-0001 | 架构决策 | 侧栏视图换区重建丢失组件内部状态（已确认接受） |
+| F2 | 特性 | hooks 注入入口（F6 面板工具栏并入；与功能键 F2 区分） |
 | F3 | 特性 | 终端页签四态 emoji 指示（hook-event + OSC 133 合成） |
 | F5 | 特性 | claudeSession 契约行建模（双通道建行/三通道删行） |
 | F6 | 特性 | hooks 双模式配置面板（JSON/GUI 编辑 hooks 子树，user/project/local 三层，F2 注入入口并入） |

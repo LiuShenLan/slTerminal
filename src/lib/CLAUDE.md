@@ -49,7 +49,7 @@ export const E2E_ENABLED =
 
 ## 测试模式
 
-测试文件：`src/__tests__/path.test.ts`（27 用例）、`panelId.test.ts`（5 用例）、`inject-script.test.ts`（22 用例）、`claude-status.test.ts`（32 用例）、`e2e-enabled.test.ts`（2 用例）、`e2e-build-config.test.ts`（8 用例，IHE-04）、`error-boundary.test.tsx`（5 用例，含 IHE-05 `variant="inline"` 分支）。
+测试文件：`src/__tests__/path.test.ts`（27 用例）、`panelId.test.ts`（5 用例）、`inject-script.test.ts`（21 用例）、`claude-status.test.ts`（32 用例）、`e2e-enabled.test.ts`（9 用例，含 it.each 展开口径，见 `.claude/test-inventory.md`）、`e2e-build-config.test.ts`（8 用例，IHE-04）、`error-boundary.test.tsx`（5 用例，含 IHE-05 `variant="inline"` 分支）。
 
 ### path.test.ts
 

@@ -116,17 +116,19 @@ ExplorerPanel 组件本体不变。宿主从 Allotment 常驻栏（Workspace 四
 
 ## 测试模式
 
-测试文件位于 `src/__tests__/`，命名规则 `explorer-*.test.tsx`（18 文件，共 230 用例，用例数见 `.claude/test-inventory.md`）：
+测试文件位于 `src/__tests__/`，命名规则 `explorer-*.test.ts(x)`（20 文件，共 272 用例，用例数见 `.claude/test-inventory.md`）：
 
 | 文件 | 用例数 | 覆盖范围 |
 |------|--------|---------|
 | `explorer-crud-success.test.tsx` | 4 | CRUD 成功路径 |
 | `explorer-delete.test.tsx` | 22 | 删除（文件/递归目录/确认弹窗） |
 | `explorer-file-viewer.test.tsx` | 21 | handleOpenFile 面板分派（FileViewerRegistry 命中/回退） |
+| `file-icon.test.tsx` | 36 | 文件图标映射（扩展名→emoji 全表） |
 | `explorer-focus.test.tsx` | 6 | 焦点管理（tabIndex/usePanelFocus） |
 | `explorer-git-status.test.tsx` | 32 | git 状态着色 |
 | `explorer-input-boundary.test.tsx` | 10 | 重命名输入边界 |
 | `explorer-keyboard.test.ts` | 15 | 快捷键（delete/open/rename）经 active 指针派发 |
+| `activeExplorer.test.ts` | 6 | active 指针 set/get/覆盖、clear 仅匹配时生效 |
 | `explorer-notify.test.tsx` | 12 | fs-event 增量刷新（200ms 去抖） |
 | `explorer-open-in-terminal.test.tsx` | 7 | 在终端打开 |
 | `explorer-race-cleanup.test.tsx` | 6 | 竞态清理 |

@@ -33,7 +33,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### `sideBar.ts` — 侧栏视图状态
 
 - 状态形状：`zones: Zones`（按钮归属——`{top: string[], bottom: string[]}`）、`open: OpenState`（各半区打开的视图 id——`{top: string|null, bottom: string|null}`）、`width: number`（侧栏区宽度，默认 250，范围 [160, 500]）、`splitRatio: number`（上下分割比例，默认 0.5，范围 [0.1, 0.9]）。
-- 默认态：`DEFAULT_ZONES = {top:["projects","explorer","commit"], bottom:[]}`、`DEFAULT_OPEN = {top:"projects", bottom:null}`。
+- 默认态：`DEFAULT_ZONES = {top:["projects","explorer","commit","agent-status"], bottom:[]}`、`DEFAULT_OPEN = {top:"projects", bottom:null}`。
 - 操作方法：`toggleView(id)` / `moveButton(id, zone, index)` 委托 `sideBarState` 纯函数；`setWidth` / `setSplitRatio` 内部 clamp。
 - 持久化照 `fontSize.ts` 模式：`loadFromDisk` 读 `~/.slterminal/settings.json` 的 `sideBar` 段 → `sanitizeSideBar`（校验+clamp）→ `reconcileZones`（对齐注册表）→ 置 `loaded:true`；变更后 2s debounce → `saveSettings({sideBar})`（后端浅合并，不擦 fontSize/keybindings 段）。
 - 导出 `cancelPendingSave()` 供 App 关窗冲刷。
@@ -47,7 +47,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   - 变更通过 Zustand `subscribe` + 2s debounce 自动调用 `saveAllProjects()` 保存。
   - 初始化标记 `markPersistenceReady()` 必须在 `loadFromDisk` 之后调用，防止首次加载触发空写。
   - 关闭钩子中调用 `cancelPendingSave()` 避免竞态。
-- **ID 生成**：`createProjectId()` / `createPageId()` 使用 `nextId()`（组合时间戳+自增计数器），确保单会话内唯一。
+- **ID 生成**：`createProjectId()` / `createPageId()` 使用 `nextId()`（组合时间戳+自增计数器），确保单运行期内唯一。
 - **展开状态**：`expandedNodes` 跟踪侧栏树的折叠/展开状态，随 Project/Page 增删联动清理。
 - **IP 调用**：通过 `src/ipc/projects` 的 `loadProjects` / `saveProjects` 读写磁盘（专属命令，不经 `fs_read_file`/`fs_write_file` 路径 sandbox）。
 

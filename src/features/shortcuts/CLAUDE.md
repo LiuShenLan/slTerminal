@@ -175,9 +175,9 @@ HTML 面板内容在 `<iframe sandbox="allow-scripts" srcDoc={...}>` 中（不�
 
 | 文件 | 覆盖范围 |
 |------|----------|
-| `keystroke.test.ts`（18 用例） | formatKeystroke 各组合（含 Meta 修饰键）+ 固定序、parseKeystroke 合法往返/各类非法、isValidKeystrokeString、format∘parse 恒等 |
+| `keystroke.test.ts`（26 用例） | formatKeystroke 各组合（含 Meta 修饰键）+ 固定序、parseKeystroke 合法往返/各类非法、isValidKeystrokeString、format∘parse 恒等 |
 | `reserved.test.ts`（9 用例） | isReserved 各 context、每个保留键命中、非保留键放行、global 两集并集 |
-| `command-catalog.test.ts`（8 用例） | 9 命令齐全 + 元数据、id 唯一、defaultKey 合法且非自身保留、commandFromMeta 合并/抛错 |
+| `command-catalog.test.ts`（17 用例） | 9 命令齐全 + 元数据、id 唯一、defaultKey 合法且非自身保留、commandFromMeta 合并/抛错 |
 | `shortcuts.test.ts`（54 用例） | 注册/注销、引用计数、上下文栈竞态、匹配排序（含 metaKey 修饰键）、IME 透传、global、handler 返回值+stopPropagation、**setOverrides 重绑/解绑/降级/冲突、resolve/forceContext、exportContextBindings、listCommands、_reset 清 overrides** |
 | `wire-keybindings.test.ts`（3 用例） | 立即应用、store 变更重应用、unsubscribe |
 | `use-panel-focus.test.ts`（5 用例） | focusin→pushContext+onActivate、focusout(离子树)→popContext+onDeactivate、内部焦点转移不触发、卸载清理 |

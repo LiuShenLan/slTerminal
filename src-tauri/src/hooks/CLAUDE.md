@@ -11,12 +11,12 @@ hooks 模块——Claude Code hook 宿主侧增强：信号文件通道（接收
 ```
 claude 子进程 hook 触发
   → Node 脚本读 stdin → 组装 JSON → 原子写 .tmp → rename .json
-  → HookSignalWatcher（双通道：notify NonRecursive 50ms debounce 实时 + 3s 轮询补漏）
+  → HookSignalWatcher（notify+轮询双通道：notify NonRecursive 50ms debounce 实时 + 3s 轮询补漏）
   → process_signal_file（读 → parse → emit("hook-event") → 删文件）
   → 前端 onHookEvent 回调 → eventToStatus → 页签 emoji 更新
 ```
 
-### 双通道消费架构（win10 实证修复）
+### notify+轮询双通道（win10 实证修复）
 
 notify 实时通道存在静默失效风险（win10 另一台 PC 实证：33 个信号文件残留——notify 事件丢失/目录删除重建后句柄失效），故 watcher 采用 **notify 实时 + 轮询补漏** 双通道：
 
@@ -91,12 +91,12 @@ project/local 层入参经 `validate_path_within_root` 沙箱校验：project_pa
 
 **残留文件 = watcher 失效的诊断信号**：若目录持续堆积 `.json` 残留（win10 实证 33 个），说明 notify 实时通道事件丢失/目录重建后句柄失效——轮询补漏（3s）会自动清理并补送积压事件恢复前端状态；**残留持续不消则 watcher 未启动或目录重建后未恢复**，需排查 `start_signal_watcher` 启动日志与目录句柄。
 
-**dev 环境注入/卸载/状态查询路径**：前端生产代码无 `inject()` 调用方（F2 入口并入阶段 3），唯一注入入口是 dev/E2E 构建下的 E2E helper（`E2E_ENABLED` 门控，`e2e-tests/helpers.ts:296-300`）：
+**注入入口（面板 GUI 为主 + dev/E2E helper 补充）**：生产环境主入口为 hooksConfig 面板工具栏的「注入 Hooks」/「卸载 Hooks」按钮（F2 并入，见 `src/panels/CLAUDE.md` hooksConfig 节）；dev/E2E 构建下另有 E2E helper 可用（`E2E_ENABLED` 门控，`e2e-tests/helpers.ts:289-293`）：
 - `npm run tauri dev` 启动后，devtools 控制台执行 `await window.__slterm_e2e_injectHooks()`（= `hooks.inject()`）
 - 状态查询：`await window.__slterm_e2e_getHookInjectionStatus()`（= `hooks.getInjectionStatus()`）
 - 卸载：`await window.__slterm_e2e_uninstallHooks()`（= `hooks.uninstall()`）
 
-生产构建（`npx tauri build`）这些 helper 被 tree-shake 排除，注入功能需阶段 3 的 GUI 入口。
+生产构建（`npx tauri build`）这些 helper 被 tree-shake 排除，注入功能仍经面板 GUI 可用。
 
 ## 文件
 
@@ -104,7 +104,7 @@ project/local 层入参经 `validate_path_within_root` 沙箱校验：project_pa
 |------|------|
 | `mod.rs` | 模块入口：`InjectionStatus` 枚举 + `HookInjectionStatus` DTO + `start_signal_watcher()` + 静态 `WATCHER` |
 | `signal.rs` | 信号文件解析与处理：`HookEventPayload` DTO（8 字段 camelCase）、`parse_signal_file()` 纯函数、`process_signal_file()` 文件处理流程 |
-| `watcher.rs` | 信号目录监听器 `HookSignalWatcher`：**双通道**——notify（NonRecursive，50ms debounce，失败降级 warn）+ **3s 轮询补漏**（`collect_signal_files`/`poll_once` 纯函数，目录删除自动重建，免疫事件丢失/句柄失效），线程名 `hook-signal-watcher`，`stop()` 幂等 + `Drop` 清理 |
+| `watcher.rs` | 信号目录监听器 `HookSignalWatcher`：**notify+轮询双通道**——notify（NonRecursive，50ms debounce，失败降级 warn）+ **3s 轮询补漏**（`collect_signal_files`/`poll_once` 纯函数，目录删除自动重建，免疫事件丢失/句柄失效），线程名 `hook-signal-watcher`，`stop()` 幂等 + `Drop` 清理 |
 | `inject.rs` | 注入/卸载/状态三命令：`hooks_inject`、`hooks_uninstall`、`hooks_injection_status`。阻塞 I/O 经 `spawn_blocking` 串行化（硬约束 #3） |
 | `usage.rs` | transcript token 用量查询：`hooks_context_usage` 命令 + `ContextUsage` DTO + `parse_usage_line` / `scan_transcript_usage` 纯 I/O 逻辑 |
 | `config.rs` | hooks 配置三层读写（P3-BE-01/02/03）：`hooks_config_read` / `hooks_config_write` 两条 Tauri 命令 + `parse_layer` / `resolve_config_path` / `read_hooks_subtree` / `write_hooks_subtree` 纯逻辑 |

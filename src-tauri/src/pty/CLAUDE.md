@@ -146,7 +146,7 @@ JobHandle 在 `#[cfg(windows)]` 下为 HANDLE RAII 包装；`#[cfg(not(windows))
 
 Claude Code 的 Ink 渲染器启动时发送 DA1 查询（`ESC[c`）作为同步哨兵。ConPTY 拦截 DA1 查询后内部处理，不向子进程 stdout 返回响应。Ink 的 `waitFor` Promise 永不 resolve，阻塞约 60s。
 
-`reader_loop` 在 startup_drained 后扫描输出中的 DA1 查询（`ESC[c` / `ESC[0c`），通过 `mirror_da1_query()` 检测。检测到后向子进程 stdin 注入 `ESC[?64;22c`（VT420 + ANSI 颜色），模拟 ConPTY + conhost 的一致行为。`std::sync::atomic::AtomicBool` 防重复注入（每会话一次）。
+`reader_loop` 在 startup_drained 后扫描输出中的 DA1 查询（`ESC[c` / `ESC[0c`），通过 `mirror_da1_query()` 检测。检测到后向子进程 stdin 注入 `ESC[?64;22c`（VT420 + ANSI 颜色），模拟 ConPTY + conhost 的一致行为。`std::sync::atomic::AtomicBool` 防重复注入（每 PTY 会话一次）。
 
 涉及的变更：
 - `reader.rs`：`mirror_da1_query()` 扫描函数 + reader_loop 中注入逻辑；`reader_loop` 签名新增 `writer: Arc<Mutex<Box<dyn Write + Send>>>` + `da1_injected: Arc<AtomicBool>` 参数

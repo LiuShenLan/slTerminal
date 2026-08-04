@@ -234,9 +234,9 @@ xterm.js 6.0.0 原生支持 OSC 8 解析渲染。`useXterm.ts` 在 `term.open()`
 | 状态 | emoji | 触发源 | 说明 |
 |------|-------|--------|------|
 | `working` | ⚡ | hook-event `PreToolUse`/`PostToolUse` | Claude Code 正在执行工具调用 |
-| `attention` | 🟡 | OSC 133 C（命令开始）或 hook-event Notification | 用户命令运行中或需要关注（notificationType 为 `permission_prompt`/`idle_prompt`/`auth_success`） |
-| `done` | ✅ | hook-event `SessionEnd` 或 OSC 133 D（命令退出） | 操作完成（短暂显示后恢复无图标） |
-| `error` | ❌ | hook-event `Error` | 工具调用出错 |
+| `attention` | 🟡 | OSC 133 C（命令开始）或 hook-event Notification | 用户命令运行中或需要关注（notificationType 为 `permission_prompt`/`idle_prompt`/`agent_needs_input`） |
+| `done` | ✅ | hook-event `Stop` | 主代理完成响应输出（`SessionEnd`/OSC 133 D 由 hook/命令层清图标，不产生 ✅） |
+| `error` | ❌ | hook-event `PostToolUseFailure`/`StopFailure` | 工具调用失败或轮次因 API 错误结束 |
 
 实现：
 
@@ -321,7 +321,7 @@ Claude Code 在用户主动 Ctrl+C 中断时不发射任何 hook 事件（`Stop`
 
 ### useXterm 测试模式
 
-> 用例数见 `.claude/test-inventory.md`（终端面板类目，`use-xterm-output.test.ts`（46 用例）+ `use-xterm-lifecycle.test.ts`（76 用例）+ `use-xterm-integration.test.ts`（14 用例））。
+> 用例数见 `.claude/test-inventory.md`（终端面板类目，`use-xterm-output.test.ts`（35 用例）+ `use-xterm-lifecycle.test.ts`（70 用例）+ `use-xterm-integration.test.ts`（12 用例））。
 
 useXterm 是编排层——mock 6 个子 hook 才能隔离测试（`useFontSizeBridge` 已删除，字体缩放委托 `src/lib/useFontSizeWheel`）：
 
@@ -356,7 +356,7 @@ useXterm 是编排层——mock 6 个子 hook 才能隔离测试（`useFontSizeB
 | `terminal-instance.test.ts`（7 用例） | `useTerminalInstance` 生命周期分支（TRM-07）：fit 抛异常吞掉/`fontSize` undefined 跳过/prevFontSize 相同跳过重复写入/tryLoadWebgl 幂等（含 term 为 null 短路） |
 | `terminal-strictmode.test.ts`（2 用例） | `<React.StrictMode>` 包裹验证 `smGuardRef` 防双重挂载：Terminal 实例数=1、PTY spawn 仅一次、dispose 仅在最终卸载时调 |
 | `terminal.test.tsx`（8 用例） | TerminalPanel 组件：mock `useXterm` 返回 stub，验证 loading 遮罩/Windows build/spawn |
-| `can-fit.test.ts`（31 用例） | 纯函数边界测试：五条件守卫（null/undefined/0/isDisposed/no element） |
+| `can-fit.test.ts`（15 用例） | 纯函数边界测试：五条件守卫（null/undefined/0/isDisposed/no element） |
 | `detect-webgl.test.ts`（3 用例） | `vi.spyOn(HTMLCanvasElement.prototype, 'getContext')` 模拟三种分支 |
 | `webgl-setup.test.ts`（7 用例） | `setupWebglWithRetry` 指数退避（TRM-06）：不可用即回退/成功加载/context loss 重建（1000/2000ms 序列）/重试耗尽回退/cancel 清理/loadAddon 异常退避 |
 
@@ -385,7 +385,7 @@ useXterm 是编排层——mock 6 个子 hook 才能隔离测试（`useFontSizeB
 |------|------|
 | `use-code-mirror.test.ts`（39 用例） | `EditorState.create` 验证字体扩展；Compartment reconfigure 不重复 dispatch；handleSave（有/无 filePath、另存为、gitDiff 刷新、失败 alert、slterm:file-saved/file-saved-as 事件） |
 | `editor.test.tsx`（9 用例） | EditorPanel 组件：mock `useCodeMirror` 返回 stub，验证 panelId/filePath 传递 + 容器 `overflow: clip` 样式 |
-| `editor-confirm.test.ts`（22 用例） | `renderHook(useCodeMirror)` 真实驱动；mock `onFsEvent` 保留回调引用手动触发 fs-event；覆盖订阅/取消、kind 过滤、路径匹配、脏/净状态分支 |
+| `editor-confirm.test.ts`（11 用例） | `renderHook(useCodeMirror)` 真实驱动；mock `onFsEvent` 保留回调引用手动触发 fs-event；覆盖订阅/取消、kind 过滤、路径匹配、脏/净状态分支 |
 | `editor-font.test.ts`（8 用例） | 字体 CSS 选择器断言（`.cm-scroller` vs `.cm-editor`） |
 | `git-gutter.test.ts`（32 用例） | StateEffect → RangeSet 映射验证；GutterMarker DOM 颜色断言；SpacerMarker 宽度一致性 |
 | `language-mapping.test.ts`（23 用例） | 扩展名→语言扩展全表验证（`.js`/`.ts`/`.py`/`.rs`/`.json` 等） |

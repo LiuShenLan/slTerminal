@@ -78,7 +78,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `SideBarArea.tsx` | 侧栏区组件：`<Allotment vertical proportionalLayout>` 两 pane（上/下半区），每 pane `visible={!!open[zone]}`、`preferredSize` 由 splitRatio 控制；半区内按 zones 顺序渲染视图槽（`display: open[zone]===v.id ? "flex" : "none"` 保挂载）；onChange 仅双开时换算 ratio 写回 store |
 | `../agentStatus/AgentStatusView.tsx` | `agent-status` 视图组件（F7 三下拉框结构）：活跃会话（`useAgentStatus` + `AgentStatusRow`，行标题经历史区 scan 数据覆盖——问题 6 修复，/rename 后刷新即同步）+ 当前项目历史会话 + 全部项目历史会话（挂载 `ClaudeHistorySections` 受控区，`useClaudeHistory` 上提本组件单实例）；默认活跃展开、两历史区收起；区块标题 13px 粗体 + 内容缩进引导线（问题 4 三级字号）；E2E 兼容红线（`agent-status-view`/`agent-status-row`/"AGENT STATUS"/空态文案）逐字保留 |
 | `../agentStatus/AgentStatusRow.tsx` | Agent 会话行组件：**双行式**（问题 1 修复——行1 = 四态图标 + 标题 12px 粗体；行2 = 用量条 + 百分比 + 相对时间 11px 灰）。用量口径 = `(inputTokens + cacheReadInputTokens + cacheCreationInputTokens) / 200_000`（outputTokens 不计占用保留为信息字段）；时间口径与历史区统一（`formatRelativeTime`） |
-| `../agentStatus/useAgentStatus.ts` | 数据 hook：`useAgentStatus()` 返回 `AgentStatusResult`（`state` 状态 + `rows: AgentSessionRow[]` + **`now` 相对时间基准**——60s ticker 驱动 `formatRelativeTime` 重算，idle 会话无 hook 事件时时间文本冻结的修复）。行 = 运行中的 claude 会话（非全部终端——`claudeSession` 为 null/undefined 的纯 shell 终端不建行）。建行双通道幂等（`sessionChange` session 非 null ∨ hook 事件非 SessionEnd/Exit 且行不存在）；删行三通道（`sessionChange` session 为 null ∨ SessionEnd/Exit ∨ `remove`）。初始扫描只建 `claudeSession` 非 null 的行并携 `transcriptPath` 主动拉 `contextUsage`（修复切项目后 idle 会话用量永远 --）。#5 竞态双保险：双 listener 经 ref 读最新状态 + deps `[]` 订阅永不重建 + reconcile 对账兜底 |
+| `../agentStatus/useAgentStatus.ts` | 数据 hook：`useAgentStatus()` 返回 `AgentStatusResult`（`state` 状态 + `rows: AgentSessionRow[]` + **`now` 相对时间基准**——60s ticker 驱动 `formatRelativeTime` 重算，idle 会话无 hook 事件时时间文本冻结的修复）。行 = 运行中的 claude 会话（非全部终端——`claudeSession` 为 null/undefined 的纯 shell 终端不建行）。建行双通道幂等（F5：`sessionChange` session 非 null ∨ hook 事件非 SessionEnd/Exit 且行不存在）；删行三通道（`sessionChange` session 为 null ∨ SessionEnd/Exit ∨ `remove`）。初始扫描只建 `claudeSession` 非 null 的行并携 `transcriptPath` 主动拉 `contextUsage`（修复切项目后 idle 会话用量永远 --）。#5 竞态双保险：双 listener 经 ref 读最新状态 + deps `[]` 订阅永不重建 + reconcile 对账兜底 |
 | `../agentStatus/consts.ts` | 常量定义：`CLAUDE_CONTEXT_LIMIT = 200_000` |
 | `../agentStatus/index.ts` | barrel export：`export { AgentStatusView }` |
 
@@ -151,7 +151,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 种子 sideBar store（真实）+ 手动注册测试视图（`_reset` 后 register stub 组件）；mock dataTransfer
 
 `sideBarArea.test.tsx`（15 用例）：
-- 四态渲染：单开上（下 pane hidden）、单开下（上 pane hidden）、双开（两 pane visible）、全关无用例（Workspace 层 whole sidebar hidden 不挂载）
+- 四布局态渲染：单开上（下 pane hidden）、单开下（上 pane hidden）、双开（两 pane visible）、全关无用例（Workspace 层 whole sidebar hidden 不挂载）
 - Allotment preferredSize = splitRatio×100 / (1-splitRatio)×100
 - 视图槽 display:none/flex 切换 + display:none 保挂载
 - 换区后视图移槽——旧区组件卸载、新区组件挂载（重建行为验证）
@@ -162,7 +162,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `workspace-sideviews.test.tsx`（13 用例）：
 - 活动栏 pane 40px 固定（preferred/min/max）
-- 侧栏区 pane visible=anyOpen 四态（hidden→false、三种开→true）
+- 侧栏区 pane visible=anyOpen 四布局态（hidden→false、三种开→true）
 - preferredSize 来自 store width、onChange→setWidth
 - 主区 pane minSize=200 保持、SideBarArea props 透传
 - 真实 sideBar store 种子 + mock Allotment

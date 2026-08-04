@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 模块职责
 
-Claude Code 历史会话查询——扫描 `~/.claude/projects/` 下全部会话 transcript（JSONL）并暴露两命令：`claude_history_scan`（元数据扫描）、`claude_history_delete`（删除会话）。**`claude_history_rename` 已随前端重命名功能整体移除**（用户决策，问题 7 修复——前端不再提供重命名入口，后端命令与测试全链路删除；官方 `/rename` 仍是 custom-title 的唯一写入方）。需求规格文档已随 `docs/` 清理删除，规格要点由本文件架构决策（SEC-01/02、BE-02~07、决策 22–28 已回写）承载。
+Claude Code 历史会话查询——扫描 `~/.claude/projects/` 下全部会话 transcript（JSONL）并暴露两命令：`claude_history_scan`（元数据扫描）、`claude_history_delete`（删除会话）。**`claude_history_rename` 已随前端重命名功能整体移除**（用户决策，问题 7 修复——前端不再提供重命名入口，后端命令与测试全链路删除；官方 `/rename` 仍是 custom-title 的唯一写入方）。需求规格文档已随历史清理删除，规格要点由本文件架构决策（SEC-02/05、BE-02~07、决策 22–28 已回写）承载。
 
 数据源事实约束（规格 3.1）：存储根 `~/.claude/projects/`，一级目录名 = cwd 的有损编码（**禁止反解码**），会话文件 = `<uuidv4>.jsonl`（文件名主干即 sessionId），子代理 transcript 为 `agent-*.jsonl` 平铺或 `<id>/subagents/` 子目录形态（均须排除）。
 
@@ -27,7 +27,7 @@ Claude Code 历史会话查询——扫描 `~/.claude/projects/` 下全部会话
 
 合成顺序：**custom-title > ai-title > summary > 首条 prompt**；四路皆空 → `title=null` / `titleSource="none"`。尾部扫描结果（物理最新）优先于头部候选（`resolve_title`）。重命名写 custom-title 是对齐官方 `/rename`（本机真实数据证实官方写 custom-title，推翻早期 ai-title 决策）。
 
-### SEC-01：sessionId 校验 + 定位不信托前端
+### SEC-05：sessionId 校验 + 定位不信托前端
 
 `claude_history_delete` 入参 `session_id` 严格校验 UUID 形态（复用 `is_uuid_filename`：36 长度 + 连字符位置 + ascii hex 全检，天然拒绝含 `..`、路径分隔符、空串的一切输入）→ `AppError::Validation`。文件定位 = 遍历扫描根一级子目录找 `<session_id>.jsonl`（`locate_session_jsonl`），**前端不传任何路径**。命令写用户 home 目录文件、绕过 project_root 沙箱（照 `hooks/config.rs` user 层先例），入参即攻击面。
 
@@ -53,7 +53,7 @@ Claude Code 历史会话查询——扫描 `~/.claude/projects/` 下全部会话
 | `mod.rs` | 模块入口：DTO 定义（`HistorySession` 七字段 + `TitleSource` 五变体，serde camelCase）+ `is_uuid_filename()` 纯函数（scan 排除 + ops 校验复用） |
 | `scan.rs` | 扫描根单点 `resolve_projects_root()`（SEC-02/BE-06）+ `claude_history_scan` 命令（BE-02）+ 遍历/降级/mtime/cwdExists（BE-05） |
 | `jsonl.rs` | JSONL 轻量解析纯函数：`parse_head()`（BE-03，头部 512KB）、`parse_tail_title()`（BE-04，尾部 64KB 逆行）、`resolve_title()`（回退链合成，决策 22）。常量 `HEAD_SCAN_LIMIT_BYTES` / `TAIL_SCAN_BYTES` |
-| `ops.rs` | 写操作：`validate_session_id()`（SEC-01）+ `claude_history_delete`（BE-07） |
+| `ops.rs` | 写操作：`validate_session_id()`（SEC-05）+ `claude_history_delete`（BE-07） |
 
 ## 测试模式
 
@@ -91,6 +91,6 @@ cargo test --manifest-path src-tauri/Cargo.toml claude_history::ops -- --test-th
 1. 修改 DTO 字段（`HistorySession` / `TitleSource`）后同步更新 `src/types/claudeHistory.ts`（前端接口）与 `src/ipc/claudeHistory.ts`（IPC wrapper），跑 mod.rs serde 测试 + `src/__tests__/ipc-claude-history-contract.test.ts`
 2. 修改 `resolve_projects_root` / 排除规则 / 降级逻辑 / `ScanRootGuard` 后跑 `scan.rs` 全部 19 条测试
 3. 修改 `parse_head` / `parse_tail_title` / `resolve_title` / 两个窗口常量后跑 `jsonl.rs` 全部 28 条测试（尤其大文件头尾协同两用例）
-4. 修改 `validate_session_id` / delete 后跑 `ops.rs` 全部 9 条测试；**勿削弱 SEC-01 校验**（定位只接受 sessionId，前端不传路径）
+4. 修改 `validate_session_id` / delete 后跑 `ops.rs` 全部 9 条测试；**勿削弱 SEC-05 校验**（定位只接受 sessionId，前端不传路径）
 5. env 测试依赖 `--test-threads=1` 门禁——勿在测试中引入并行 env 操作
 6. 新增 Tauri 命令后在 `lib.rs` 的 `generate_handler!` 注册（本模块两命令已注册）

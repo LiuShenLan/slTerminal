@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 模块职责
 
-Claude Code 历史会话查询与恢复——历史区 UI 与数据层。宿主为 agent 侧栏视图（`AgentStatusView` 三下拉框：活跃会话 + 当前项目历史会话 + 全部项目历史会话），数据经 `src/ipc/claudeHistory` 的两命令（`claude_history_scan` / `claude_history_delete`）与后端 `src-tauri/src/claude_history` 交互。**重命名功能已整体移除**（问题 7 修复：前端 UI/菜单、IPC wrapper、后端命令全链路删除，官方 `/rename` 是 custom-title 唯一写入方）。需求规格文档已随 `docs/` 清理删除，规格要点由本文件架构决策与 `src-tauri/src/claude_history/CLAUDE.md` 承载。
+Claude Code 历史会话查询与恢复——历史区 UI 与数据层。宿主为 agent 侧栏视图（`AgentStatusView` 三下拉框：活跃会话 + 当前项目历史会话 + 全部项目历史会话），数据经 `src/ipc/claudeHistory` 的两命令（`claude_history_scan` / `claude_history_delete`）与后端 `src-tauri/src/claude_history` 交互。**重命名功能已整体移除**（问题 7 修复：前端 UI/菜单、IPC wrapper、后端命令全链路删除，官方 `/rename` 是 custom-title 唯一写入方）。需求规格文档已随历史清理删除，规格要点由本文件架构决策与 `src-tauri/src/claude_history/CLAUDE.md` 承载。
 
 ## 架构决策
 
