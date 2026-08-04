@@ -35,11 +35,13 @@ vi.mock("react-dom/client", () => ({
   default: { createRoot: mockCreateRoot },
 }));
 
-// mock App 组件（避免导入整棵依赖树）
-vi.mock("./App", () => ({ default: () => null }));
+// mock App 组件（避免导入整棵依赖树）——vi.mock 相对路径按测试文件解析，
+// 须写 ../App（= src/App）；旧 ./App 解析到不存在的 src/__tests__/App 是悬空 mock，
+// 导致 main.tsx 真实加载整棵 App 依赖树，全量测试高负载下 import 超时/跨用例串扰（门禁 flaky 根因）
+vi.mock("../App", () => ({ default: () => null }));
 
-// mock App.css（空模块）
-vi.mock("./App.css", () => ({}));
+// mock App.css（空模块）——同上路径修正
+vi.mock("../App.css", () => ({}));
 
 // ─── 全局 mock ───
 

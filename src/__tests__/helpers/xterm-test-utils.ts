@@ -1,7 +1,7 @@
 // xterm-test-utils.ts — useXterm 测试共享工厂函数
 //
 // 消除 use-xterm-*.test.ts 中 5 类重复模式：
-//   rAF mock、容器创建、PTY output spy、ResizeObserver mock、setBufferType
+//   rAF mock、容器创建、PTY output spy、ResizeObserver mock、微任务 flush
 
 import { vi } from "vitest";
 import { pty } from "../../ipc";
@@ -116,17 +116,17 @@ export function mockResizeObserver(): ResizeObserverMock {
   };
 }
 
-// ─── setBufferType helper ───
+// ─── 微任务 flush helper ───
 
 /**
- * 在 capturedTerminal 上挂载 buffer.type 属性。
- * used by AB / CPF 交替缓冲测试。
+ * 显式排空微任务队列（多个 tick），替代裸 `await Promise.resolve()`。
+ * 用途：等待 pty.spawn 的 .then() 续体（TerminalRegistry.register 等）执行完成。
+ * 裸单次 await 依赖"仅一层 .then"的实现细节，改调度即 flaky——本 helper 多排空几轮更稳。
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function setBufferType(terminal: any, type: string) {
-  if (terminal) {
-    terminal.buffer = { active: { type } };
-  }
+export async function flushMicrotasks(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
 }
 
 // ─── makeKeyEvent helper ───

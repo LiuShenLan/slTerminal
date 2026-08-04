@@ -4,6 +4,11 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 
 // ─── Hoisted mocks（复用 terminal-lifecycle 模式） ───
 const mocks = vi.hoisted(() => {
+  // OSC 133 handler 注册捕获（useCommandDetection 经 parser.registerOscHandler(133, cb) 注册）
+  const oscHandlers: Record<number, (data: string) => void> = {};
+  // hooks.onHookEvent 回调捕获（useXterm 订阅 hook-event）
+  let hookEventCb: ((payload: unknown) => void) | null = null;
+
   const terminal = {
     open: vi.fn(),
     dispose: vi.fn(),
@@ -16,7 +21,10 @@ const mocks = vi.hoisted(() => {
     element: document.createElement("div"),
     options: {} as Record<string, unknown>,
     parser: {
-      registerOscHandler: vi.fn(() => ({ dispose: vi.fn() })),
+      registerOscHandler: vi.fn((id: number, cb: (data: string) => void) => {
+        oscHandlers[id] = cb;
+        return { dispose: vi.fn() };
+      }),
     },
   };
   const fitAddon = {
@@ -26,7 +34,8 @@ const mocks = vi.hoisted(() => {
   };
   const pty = {
     spawn: vi.fn().mockResolvedValue("mock-session-001"),
-    kill: vi.fn(),
+    // 必须返回 Promise——useXterm 卸载清理执行 pty.kill(...).catch(...)，undefined 会抛 TypeError
+    kill: vi.fn().mockResolvedValue(undefined),
     write: vi.fn(),
     resize: vi.fn(),
     getWindowsBuildNumber: vi.fn().mockResolvedValue(26100),
@@ -40,7 +49,24 @@ const mocks = vi.hoisted(() => {
     onDidParametersChange: vi.fn(() => ({ dispose: vi.fn() })),
     close: vi.fn(),
   };
-  return { terminal, fitAddon, pty, mockApi };
+  const hooks = {
+    onHookEvent: vi.fn((cb: (payload: unknown) => void) => {
+      hookEventCb = cb;
+      return vi.fn();
+    }),
+    inject: vi.fn(),
+    uninstall: vi.fn(),
+    getInjectionStatus: vi.fn(),
+  };
+  return {
+    terminal,
+    fitAddon,
+    pty,
+    mockApi,
+    hooks,
+    getOscHandler: (id: number) => oscHandlers[id] ?? null,
+    getHookEventCb: () => hookEventCb,
+  };
 });
 
 vi.mock("@xterm/xterm", () => ({
@@ -63,14 +89,18 @@ vi.mock("@xterm/addon-webgl", () => ({
 
 vi.mock("../ipc", () => ({
   pty: mocks.pty,
-  hooks: { onHookEvent: vi.fn(() => vi.fn()), inject: vi.fn(), uninstall: vi.fn(), getInjectionStatus: vi.fn() },
+  hooks: mocks.hooks,
 }));
 
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, act, cleanup } from "@testing-library/react";
 import TerminalPanel from "../panels/terminal/TerminalPanel";
 
 afterEach(() => {
+  // RTL 无全局 cleanup（vitest.config.ts 未开 globals）——必须显式卸载，否则遮罩 DOM 跨用例累积
+  cleanup();
+  // 防用例抛错后 fake timers 泄漏到后续用例
+  vi.useRealTimers();
   vi.clearAllMocks();
 });
 
@@ -105,5 +135,82 @@ describe("TerminalPanel", () => {
     // Terminal.open(container) 被调用——验证 xterm 挂载
     expect(mocks.terminal.open).toHaveBeenCalled();
     vi.useRealTimers();
+  });
+
+  it("1.5s 兜底超时后加载遮罩自动隐藏", () => {
+    vi.useFakeTimers();
+    render(React.createElement(TerminalPanel, { api: mocks.mockApi, params: { panelId: "test-p4" } }));
+    expect(screen.getByText("正在连接...")).toBeTruthy();
+    // 1.5s 未到 → 遮罩仍在
+    vi.advanceTimersByTime(1499);
+    expect(screen.getByText("正在连接...")).toBeTruthy();
+    // 到达 LOADING_MASK_TIMEOUT_MS(1500) → 遮罩消失
+    // act 包裹：setTimeout 回调中的 setLoading(false) 在 React 18 并发根下默认异步 flush，
+    // 不包 act 则同步断言读到的是未更新的 DOM
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(screen.queryByText("正在连接...")).toBeNull();
+    vi.useRealTimers();
+  });
+
+  it("Windows build 号到达后写入 term.options.windowsPty（F3 动态设置 ConPTY 阈值）", async () => {
+    render(React.createElement(TerminalPanel, { api: mocks.mockApi, params: { panelId: "test-p5" } }));
+    // buildNumber 初始 undefined 不写，异步 resolve 后经独立 effect 写入
+    await waitFor(() => {
+      expect(mocks.terminal.options.windowsPty).toEqual({
+        backend: "conpty",
+        buildNumber: 26100,
+      });
+    }, { timeout: 3000 });
+  });
+
+  it("OSC 133 C/D → handleTabStateChange：active=true 更新标题图标，active=false 恢复原标题", async () => {
+    render(React.createElement(TerminalPanel, { api: mocks.mockApi, params: { panelId: "test-p6" } }));
+    // 等待 useCommandDetection 注册 OSC 133 handler
+    await waitFor(() => expect(mocks.getOscHandler(133)).toBeDefined());
+    const oscHandler = mocks.getOscHandler(133)!;
+
+    // OSC 133 C：命令启动 → 标题更新为规则标题 + 🟡 图标
+    await act(async () => {
+      oscHandler("C;claude");
+    });
+    expect(mocks.mockApi.setTitle).toHaveBeenCalledWith("claude");
+    expect(mocks.mockApi.updateParameters).toHaveBeenCalledWith(
+      expect.objectContaining({ tabIcon: "🟡" }),
+    );
+
+    // OSC 133 D：命令退出 → active=false 恢复原标题并清图标
+    await act(async () => {
+      oscHandler("D;0");
+    });
+    expect(mocks.mockApi.setTitle).toHaveBeenLastCalledWith("terminal-0");
+    expect(mocks.mockApi.updateParameters).toHaveBeenLastCalledWith(
+      expect.objectContaining({ tabIcon: null }),
+    );
+  });
+
+  it("hook-event SessionEnd → handleTabStateChange active=false 恢复原标题", async () => {
+    render(React.createElement(TerminalPanel, { api: mocks.mockApi, params: { panelId: "test-p7" } }));
+    await waitFor(() => expect(mocks.getHookEventCb()).toBeDefined());
+    const hookCb = mocks.getHookEventCb()!;
+
+    // SessionStart → attention → 设置 🟡 图标（无 title 不更新标题）
+    await act(async () => {
+      hookCb({ panelId: "test-p7", event: "SessionStart" });
+    });
+    expect(mocks.mockApi.setTitle).not.toHaveBeenCalled();
+    expect(mocks.mockApi.updateParameters).toHaveBeenCalledWith(
+      expect.objectContaining({ tabIcon: "🟡" }),
+    );
+
+    // SessionEnd → active=false → 恢复原标题 + 清图标
+    await act(async () => {
+      hookCb({ panelId: "test-p7", event: "SessionEnd" });
+    });
+    expect(mocks.mockApi.setTitle).toHaveBeenLastCalledWith("terminal-0");
+    expect(mocks.mockApi.updateParameters).toHaveBeenLastCalledWith(
+      expect.objectContaining({ tabIcon: null }),
+    );
   });
 });

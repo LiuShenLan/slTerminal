@@ -17,7 +17,6 @@ vi.mock("../lib/e2eEnabled", () => ({
   get E2E_ENABLED() {
     return gate.enabled;
   },
-  hooks: { onHookEvent: vi.fn(() => vi.fn()), inject: vi.fn(), uninstall: vi.fn(), getInjectionStatus: vi.fn() },
   computeE2eEnabled: (dev: boolean, viteE2e: string | undefined) =>
     dev || viteE2e === "1",
 }));
@@ -110,7 +109,6 @@ vi.mock("@xterm/addon-fit", () => ({
     proposeDimensions = mockProposeDimensions;
     dispose = vi.fn();
   },
-  hooks: { onHookEvent: vi.fn(() => vi.fn()), inject: vi.fn(), uninstall: vi.fn(), getInjectionStatus: vi.fn() },
 }));
 
 vi.mock("@xterm/addon-webgl", () => ({
@@ -118,7 +116,6 @@ vi.mock("@xterm/addon-webgl", () => ({
     dispose = vi.fn();
     onContextLoss = vi.fn();
   },
-  hooks: { onHookEvent: vi.fn(() => vi.fn()), inject: vi.fn(), uninstall: vi.fn(), getInjectionStatus: vi.fn() },
 }));
 
 vi.mock("@tauri-apps/plugin-opener", () => ({
@@ -131,7 +128,6 @@ vi.mock("../panels/terminal/TerminalRegistry", () => ({
     get: vi.fn(),
     remove: vi.fn(),
   },
-  hooks: { onHookEvent: vi.fn(() => vi.fn()), inject: vi.fn(), uninstall: vi.fn(), getInjectionStatus: vi.fn() },
 }));
 
 vi.mock("../panels/terminal/TabTitleRegistry", () => ({

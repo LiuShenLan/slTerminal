@@ -241,3 +241,104 @@ describe("TerminalRegistry.register 幂等覆盖保留旧 claudeSession", () => 
     expect(got.claudeSession).toBeNull();
   });
 });
+
+// ═══════════════════════════════════════════════════════════════
+// getAll / _size / _dump（调试/测试接口，TRM-08）
+// ═══════════════════════════════════════════════════════════════
+
+describe("TerminalRegistry.getAll/_size/_dump", () => {
+  beforeEach(() => {
+    TerminalRegistry._reset();
+  });
+
+  it("getAll 返回已注册条目的只读副本（修改副本不影响内部注册表）", () => {
+    TerminalRegistry.register("a", makeEntry({ sessionId: "sid-a" }));
+    TerminalRegistry.register("b", makeEntry({ sessionId: "sid-b" }));
+    const all = TerminalRegistry.getAll();
+    expect(all.size).toBe(2);
+    expect(all.get("a")!.sessionId).toBe("sid-a");
+    expect(all.get("b")!.sessionId).toBe("sid-b");
+    // 只读视图：清空副本后内部注册表不受影响
+    (all as Map<string, RegisteredTerminal>).clear();
+    expect(TerminalRegistry.get("a")).toBeDefined();
+    expect(TerminalRegistry.get("b")).toBeDefined();
+    expect(TerminalRegistry._size()).toBe(2);
+  });
+
+  it("getAll 空注册表返回空副本", () => {
+    expect(TerminalRegistry.getAll().size).toBe(0);
+  });
+
+  it("_size 反映当前注册条目数（register/remove 联动）", () => {
+    expect(TerminalRegistry._size()).toBe(0);
+    TerminalRegistry.register("a", makeEntry());
+    TerminalRegistry.register("b", makeEntry());
+    expect(TerminalRegistry._size()).toBe(2);
+    TerminalRegistry.remove("a");
+    expect(TerminalRegistry._size()).toBe(1);
+  });
+
+  it("_dump 返回全部注册 panelId 数组", () => {
+    TerminalRegistry.register("a", makeEntry());
+    TerminalRegistry.register("b", makeEntry());
+    const keys = TerminalRegistry._dump();
+    expect(keys).toEqual(expect.arrayContaining(["a", "b"]));
+    expect(keys).toHaveLength(2);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// setClaudeSession merge 语义补充（NAH-02）
+// ═══════════════════════════════════════════════════════════════
+
+describe("TerminalRegistry.setClaudeSession merge 语义（NAH-02）", () => {
+  beforeEach(() => {
+    TerminalRegistry._reset();
+  });
+
+  it("全量 set 后增量 { status: 'working' } → 其余字段保留 + lastEventAt 更新", () => {
+    const entry = makeEntry();
+    TerminalRegistry.register("p1", entry);
+    // 全量设置（含显式 lastEventAt）
+    TerminalRegistry.setClaudeSession("p1", {
+      sessionId: "abc-123",
+      transcriptPath: "/t.json",
+      matchedCommand: "claude",
+      status: "done",
+      lastEventAt: 1111,
+    });
+    // 增量仅更新 status——其余字段 merge 保留
+    const before = Date.now();
+    TerminalRegistry.setClaudeSession("p1", { status: "working" });
+    const after = Date.now();
+
+    const got = TerminalRegistry.get("p1")!.claudeSession!;
+    expect(got.sessionId).toBe("abc-123");
+    expect(got.transcriptPath).toBe("/t.json");
+    expect(got.matchedCommand).toBe("claude");
+    expect(got.status).toBe("working");
+    // 缺 lastEventAt → 自动填新 Date.now()，替换旧显式值
+    expect(got.lastEventAt).not.toBe(1111);
+    expect(got.lastEventAt).toBeGreaterThanOrEqual(before);
+    expect(got.lastEventAt).toBeLessThanOrEqual(after);
+  });
+
+  it("null 清空后增量 patch 不复活旧值（prev=null → undefined 键不回填）", () => {
+    const entry = makeEntry();
+    TerminalRegistry.register("p1", entry);
+    TerminalRegistry.setClaudeSession("p1", {
+      sessionId: "abc-123",
+      transcriptPath: "/t.json",
+    });
+    TerminalRegistry.setClaudeSession("p1", null);
+    expect(TerminalRegistry.get("p1")!.claudeSession).toBeNull();
+
+    // null 清空后再增量 patch——prev 为 null，旧 sessionId/transcriptPath 不回填
+    TerminalRegistry.setClaudeSession("p1", { status: "working" });
+    const got = TerminalRegistry.get("p1")!.claudeSession!;
+    expect(got.status).toBe("working");
+    expect(got.sessionId).toBeUndefined();
+    expect(got.transcriptPath).toBeUndefined();
+    expect(got.matchedCommand).toBeUndefined();
+  });
+});

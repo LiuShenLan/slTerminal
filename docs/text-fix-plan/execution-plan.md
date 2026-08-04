@@ -85,7 +85,8 @@ args 契约（强制校验，缺 failedItems/verifyFile 即抛错）：
 | 02 | 完成 | 1 | 2ed8ed8；首轮即全绿（allFixed=true）；488 passed；Cargo.toml 行尾差异还原 |
 | 03 | 完成 | 2（fix-loop 1 轮） | c8e3604；verify 首轮 GIT-01 失败（rollback UnbornBranch 错误消息缺"HEAD 中不存在"）→ fix-loop 修复 + renamed.path 断言对齐 git2-rs 语义；498 passed |
 | 04 | 完成 | 1 | 7e75486；首轮全绿；531 passed；C10 脚本零改动 |
-| 05-17 | 未开始 | - | - |
+| 05 | 完成 | 3（fix-loop 2 轮） | 8093c9d；轮1 SPE-03 runtime 求值顺序修复；轮2 concurrent_saves_never_torn flaky 修复（persist 重试+守卫上提）；571 passed；还原 agents 越界 cargo fmt 污染 17 文件 |
+| 06-17 | 未开始 | - | - |
 
 ## 人工验证点（收尾逐项实测，与 stages.md 一致）
 

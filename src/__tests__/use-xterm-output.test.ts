@@ -1,7 +1,8 @@
 // use-xterm-output.test.ts — useXterm 输出合帧测试
 //
-// 覆盖 PTY 输出处理全链路：DEC 2026 同步更新、直写阈值路由、交替缓冲检查、
-// Idle+Max 双定时器合帧、Uint8Array 缓冲、非焦点终端降频、cancelPendingFlush。
+// 覆盖 PTY 输出处理全链路：DEC 2026 同步更新、直写阈值路由、
+// Idle+Max 双定时器合帧、Uint8Array 缓冲、非焦点终端降频、cancelPendingFlush、
+// 缓冲上限淘汰 / 退出码透传 / E2E 缓冲截断（TRM-04，usePtyOutput 直接驱动）。
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook } from "@testing-library/react";
@@ -133,7 +134,6 @@ vi.mock("@xterm/addon-fit", () => ({
     proposeDimensions = mockProposeDimensions;
     dispose = vi.fn();
   },
-  hooks: { onHookEvent: vi.fn(() => vi.fn()), inject: vi.fn(), uninstall: vi.fn(), getInjectionStatus: vi.fn() },
 }));
 
 vi.mock("@xterm/addon-webgl", () => {
@@ -159,7 +159,6 @@ vi.mock("../panels/terminal/TerminalRegistry", () => ({
     get: mockRegistryGet,
     remove: mockRegistryRemove,
   },
-  hooks: { onHookEvent: vi.fn(() => vi.fn()), inject: vi.fn(), uninstall: vi.fn(), getInjectionStatus: vi.fn() },
 }));
 
 // useXterm.ts import { tabTitleRegistry } from "./TabTitleRegistry"
@@ -172,7 +171,6 @@ vi.mock("../panels/terminal/TabTitleRegistry", () => ({
     register: vi.fn(),
     _reset: vi.fn(),
   },
-  hooks: { onHookEvent: vi.fn(() => vi.fn()), inject: vi.fn(), uninstall: vi.fn(), getInjectionStatus: vi.fn() },
 }));
 
 // useXterm.ts 的 side-effect import "./tabRules" — stub 防止实际加载图片资源
@@ -180,13 +178,14 @@ vi.mock("../panels/terminal/tabRules", () => ({}));
 
 // 导入被测模块（mocks 就绪后）
 import { useXterm } from "../panels/terminal/useXterm";
+import { usePtyOutput } from "../panels/terminal/usePtyOutput";
 import { pty } from "../ipc";
 import {
   createContainer,
   mockRaf,
   ptyOutputSpy,
   mockResizeObserver,
-  setBufferType,
+  flushMicrotasks,
 } from "./helpers/xterm-test-utils";
 
 // ─── 全局 beforeEach：清空 mock Registry 状态（约束 #8：仅 register 后 get 才返回 entry） ───
@@ -229,7 +228,7 @@ describe("DEC 2026 同步更新包裹 flushBuffer", () => {
     // 等待 pollFitAndSpawn 首帧完成 → spawn
     raf.flush();
     // 等待 microtask 清空（TerminalRegistry.register 在 spawn .then() 中执行）
-    await Promise.resolve();
+    await flushMicrotasks();
     expect(pty.spawn).toHaveBeenCalled();
 
     // 清空 spawn 过程中的 write 调用
@@ -259,7 +258,7 @@ describe("DEC 2026 同步更新包裹 flushBuffer", () => {
     );
 
     raf.flush();
-    await Promise.resolve();
+    await flushMicrotasks();
     expect(pty.spawn).toHaveBeenCalled();
 
     capturedTerminal!.write.mockClear();
@@ -281,7 +280,7 @@ describe("DEC 2026 同步更新包裹 flushBuffer", () => {
     );
 
     raf.flush();
-    await Promise.resolve();
+    await flushMicrotasks();
     expect(pty.spawn).toHaveBeenCalled();
 
     capturedTerminal!.write.mockClear();
@@ -315,7 +314,7 @@ describe("DEC 2026 同步更新包裹 flushBuffer", () => {
     );
 
     raf.flush();
-    await Promise.resolve();
+    await flushMicrotasks();
     expect(pty.spawn).toHaveBeenCalled();
 
     capturedTerminal!.write.mockClear();
@@ -364,7 +363,7 @@ describe("直写阈值 64 字节路由", () => {
     );
 
     raf.flush();
-    await Promise.resolve();
+    await flushMicrotasks();
     expect(pty.spawn).toHaveBeenCalled();
 
     capturedTerminal!.write.mockClear();
@@ -381,7 +380,7 @@ describe("直写阈值 64 字节路由", () => {
     );
 
     raf.flush();
-    await Promise.resolve();
+    await flushMicrotasks();
     expect(pty.spawn).toHaveBeenCalled();
 
     capturedTerminal!.write.mockClear();
@@ -403,7 +402,7 @@ describe("直写阈值 64 字节路由", () => {
     );
 
     raf.flush();
-    await Promise.resolve();
+    await flushMicrotasks();
     expect(pty.spawn).toHaveBeenCalled();
 
     capturedTerminal!.write.mockClear();
@@ -423,7 +422,7 @@ describe("直写阈值 64 字节路由", () => {
     );
 
     raf.flush();
-    await Promise.resolve();
+    await flushMicrotasks();
     expect(pty.spawn).toHaveBeenCalled();
 
     capturedTerminal!.write.mockClear();
@@ -441,117 +440,6 @@ describe("直写阈值 64 字节路由", () => {
     vi.advanceTimersByTime(5);
     // 合帧后 write 被调用第二次
     expect(capturedTerminal!.write).toHaveBeenCalledTimes(2);
-  });
-});
-
-// ═══════════════════════════════════════════════════════════
-// Step 1.3: ResizeObserver 交替缓冲检查测试
-// ═══════════════════════════════════════════════════════════
-
-describe("ResizeObserver 交替缓冲检查", () => {
-  let container: HTMLDivElement;
-  let ro: ReturnType<typeof mockResizeObserver>;
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockProposeDimensions.mockReturnValue({ cols: 100, rows: 40 });
-    capturedTerminal = null;
-    container = createContainer();
-    ro = mockResizeObserver();
-  });
-
-  afterEach(() => {
-    ro.cleanup();
-    vi.restoreAllMocks();
-  });
-
-  it("AB1: 交替缓冲中 resize → fit + pty.resize 正常调用", async () => {
-    renderHook(() =>
-      useXterm({ container, cols: 80, rows: 24, panelId: "ab-1" }),
-    );
-
-    await vi.waitFor(() => {
-      expect(pty.spawn).toHaveBeenCalled();
-    }, { timeout: 3000 });
-
-    setBufferType(capturedTerminal, "alternate");
-
-    mockFit.mockClear();
-    mockProposeDimensions.mockClear();
-    (pty.resize as ReturnType<typeof vi.fn>).mockClear();
-
-    // TE-11: AB 块无 mockRaf，spawn 后切换到假定时器
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
-
-    ro.trigger();
-    vi.advanceTimersByTime(150);
-
-    // 交替缓冲中 fit 被调用（同步 xterm.js 网格尺寸与 PTY 新尺寸）
-    expect(mockFit).toHaveBeenCalled();
-    // SIGWINCH 仍然透传（含 panelId）
-    expect(pty.resize).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.any(String),
-      100,
-      40,
-    );
-
-    vi.useRealTimers();
-  });
-
-  it("AB3: 普通缓冲中 resize → fit + pty.resize 正常调用", async () => {
-    renderHook(() =>
-      useXterm({ container, cols: 80, rows: 24, panelId: "ab-3" }),
-    );
-
-    await vi.waitFor(() => {
-      expect(pty.spawn).toHaveBeenCalled();
-    }, { timeout: 3000 });
-
-    setBufferType(capturedTerminal, "normal");
-
-    mockFit.mockClear();
-    mockProposeDimensions.mockClear();
-    (pty.resize as ReturnType<typeof vi.fn>).mockClear();
-
-    // TE-11: 切换到假定时器
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
-
-    ro.trigger();
-    vi.advanceTimersByTime(150);
-
-    // 普通缓冲中 fit 正常调用
-    expect(mockFit).toHaveBeenCalledTimes(1);
-    expect(pty.resize).toHaveBeenCalledTimes(1);
-
-    vi.useRealTimers();
-  });
-
-  it("AB5: 交替缓冲中 resize → 传入正确的 cols/rows", async () => {
-    mockProposeDimensions.mockReturnValue({ cols: 120, rows: 50 });
-
-    renderHook(() =>
-      useXterm({ container, cols: 80, rows: 24, panelId: "ab-5" }),
-    );
-
-    await vi.waitFor(() => {
-      expect(pty.spawn).toHaveBeenCalled();
-    }, { timeout: 3000 });
-
-    setBufferType(capturedTerminal, "alternate");
-
-    (pty.resize as ReturnType<typeof vi.fn>).mockClear();
-
-    // TE-11: 切换到假定时器
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
-
-    ro.trigger();
-    vi.advanceTimersByTime(150);
-
-    // 交替缓冲中尺寸参数正确透传（含 panelId）
-    expect(pty.resize).toHaveBeenCalledWith("test-session-id", "ab-5", 120, 50);
-
-    vi.useRealTimers();
   });
 });
 
@@ -585,7 +473,7 @@ describe("Idle+Max 双定时器合帧", () => {
       useXterm({ container, cols: 80, rows: 24, panelId: "it-2" }),
     );
     raf.flush();
-    await Promise.resolve();
+    await flushMicrotasks();
     expect(pty.spawn).toHaveBeenCalled();
     capturedTerminal!.write.mockClear();
 
@@ -607,7 +495,7 @@ describe("Idle+Max 双定时器合帧", () => {
       useXterm({ container, cols: 80, rows: 24, panelId: "it-3" }),
     );
     raf.flush();
-    await Promise.resolve();
+    await flushMicrotasks();
     expect(pty.spawn).toHaveBeenCalled();
     capturedTerminal!.write.mockClear();
 
@@ -634,7 +522,7 @@ describe("Idle+Max 双定时器合帧", () => {
       useXterm({ container, cols: 80, rows: 24, panelId: "it-4" }),
     );
     raf.flush();
-    await Promise.resolve();
+    await flushMicrotasks();
     expect(pty.spawn).toHaveBeenCalled();
     capturedTerminal!.write.mockClear();
 
@@ -661,7 +549,7 @@ describe("Idle+Max 双定时器合帧", () => {
       useXterm({ container, cols: 80, rows: 24, panelId: "it-5" }),
     );
     raf.flush();
-    await Promise.resolve();
+    await flushMicrotasks();
     expect(pty.spawn).toHaveBeenCalled();
     capturedTerminal!.write.mockClear();
 
@@ -710,7 +598,7 @@ describe("Uint8Array 合帧缓冲", () => {
       useXterm({ container, cols: 80, rows: 24, panelId: "ua-1" }),
     );
     raf.flush();
-    await Promise.resolve();
+    await flushMicrotasks();
     expect(pty.spawn).toHaveBeenCalled();
     capturedTerminal!.write.mockClear();
 
@@ -739,7 +627,7 @@ describe("Uint8Array 合帧缓冲", () => {
       useXterm({ container, cols: 80, rows: 24, panelId: "ua-2" }),
     );
     raf.flush();
-    await Promise.resolve();
+    await flushMicrotasks();
     expect(pty.spawn).toHaveBeenCalled();
     capturedTerminal!.write.mockClear();
 
@@ -761,7 +649,7 @@ describe("Uint8Array 合帧缓冲", () => {
       useXterm({ container, cols: 80, rows: 24, panelId: "ua-4" }),
     );
     raf.flush();
-    await Promise.resolve();
+    await flushMicrotasks();
     expect(pty.spawn).toHaveBeenCalled();
     capturedTerminal!.write.mockClear();
 
@@ -810,7 +698,7 @@ describe("非焦点终端降频", () => {
       { initialProps: { visible: true as boolean | undefined } },
     );
     raf.flush();
-    await Promise.resolve();
+    await flushMicrotasks();
     expect(pty.spawn).toHaveBeenCalled();
 
     // 切换到隐藏
@@ -832,7 +720,7 @@ describe("非焦点终端降频", () => {
       { initialProps: { visible: true as boolean | undefined } },
     );
     raf.flush();
-    await Promise.resolve();
+    await flushMicrotasks();
     expect(pty.spawn).toHaveBeenCalled();
 
     // 切换到隐藏
@@ -849,7 +737,7 @@ describe("非焦点终端降频", () => {
     rerender({ visible: true });
 
     // TE-11: 推进微任务让 effect 执行
-    await Promise.resolve();
+    await flushMicrotasks();
     expect(capturedTerminal!.write).toHaveBeenCalled();
   });
 
@@ -860,7 +748,7 @@ describe("非焦点终端降频", () => {
       { initialProps: { visible: true as boolean | undefined } },
     );
     raf.flush();
-    await Promise.resolve();
+    await flushMicrotasks();
     expect(pty.spawn).toHaveBeenCalled();
 
     // 切换到隐藏
@@ -879,7 +767,7 @@ describe("非焦点终端降频", () => {
       { initialProps: { visible: true as boolean | undefined } },
     );
     raf.flush();
-    await Promise.resolve();
+    await flushMicrotasks();
     expect(pty.spawn).toHaveBeenCalled();
 
     // 切换到隐藏
@@ -899,7 +787,7 @@ describe("非焦点终端降频", () => {
       useXterm({ container, cols: 80, rows: 24, panelId: "nf-5" }),
     );
     raf.flush();
-    await Promise.resolve();
+    await flushMicrotasks();
     expect(pty.spawn).toHaveBeenCalled();
     capturedTerminal!.write.mockClear();
 
@@ -948,7 +836,7 @@ describe("cancelPendingFlush", () => {
     );
     raf.flush();
     // 等待 microtask 清空（TerminalRegistry.register 在 spawn .then() 中执行）
-    await Promise.resolve();
+    await flushMicrotasks();
     expect(pty.spawn).toHaveBeenCalled();
     return result;
   }
@@ -1130,65 +1018,12 @@ describe("cancelPendingFlush", () => {
     );
   });
 
-  // ─── 第二轮修复：交替缓冲中始终调用 fit() ───
+  // ─── 真实读取路径断言（TRM-02：删除 setBufferType 虚假前提，保留 distinct 断言）───
 
-  it("CPF11: 交替缓冲 + 行变化 → fit 被调用更新网格", async () => {
+  it("CPF13: 行变化 → fit 先于 pty.resize（网格先更新再发 SIGWINCH）", async () => {
     await mountAndWait();
     mockFit.mockClear();
     (pty.resize as ReturnType<typeof vi.fn>).mockClear();
-
-    setBufferType(capturedTerminal, "alternate");
-
-    // 初始化 prevDimsRef
-    ro.trigger();
-    vi.advanceTimersByTime(150);
-
-    mockFit.mockClear();
-    (pty.resize as ReturnType<typeof vi.fn>).mockClear();
-
-    // 仅行变化（列不变）
-    mockProposeDimensions.mockReturnValue({ cols: 80, rows: 30 });
-    ro.trigger();
-
-    // TE-11: 仅行变化立即执行
-    vi.advanceTimersByTime(10);
-
-    // 交替缓冲也必须调 fit（更新 xterm.js 网格与 PTY 新尺寸同步）
-    expect(mockFit).toHaveBeenCalled();
-    expect(pty.resize).toHaveBeenCalledWith("test-session-id", "cpf-test", 80, 30);
-  });
-
-  it("CPF12: 交替缓冲 + 列变化 debounce → fit 被调用", async () => {
-    await mountAndWait();
-    mockFit.mockClear();
-    (pty.resize as ReturnType<typeof vi.fn>).mockClear();
-
-    setBufferType(capturedTerminal, "alternate");
-
-    ro.trigger();
-    vi.advanceTimersByTime(150);
-
-    mockFit.mockClear();
-    (pty.resize as ReturnType<typeof vi.fn>).mockClear();
-
-    // 列变化 → 进入 debounce 分支
-    mockProposeDimensions.mockReturnValue({ cols: 60, rows: 40 });
-    ro.trigger();
-
-    // TE-11: 推进假定时器 → debounce 后 fit 被调用
-    vi.advanceTimersByTime(150);
-
-    // debounce 后 fit 被调用（含 panelId）
-    expect(mockFit).toHaveBeenCalledTimes(1);
-    expect(pty.resize).toHaveBeenCalledWith("test-session-id", "cpf-test", 60, 40);
-  });
-
-  it("CPF13: 交替缓冲 + 行变化 → fit 先于 pty.resize", async () => {
-    await mountAndWait();
-    mockFit.mockClear();
-    (pty.resize as ReturnType<typeof vi.fn>).mockClear();
-
-    setBufferType(capturedTerminal, "alternate");
 
     ro.trigger();
     vi.advanceTimersByTime(150);
@@ -1200,39 +1035,16 @@ describe("cancelPendingFlush", () => {
     // TE-11: 仅行变化立即执行
     vi.advanceTimersByTime(10);
 
-    // 验证调用顺序：fit 在 resize 之前
+    // 验证调用顺序：fit 在 resize 之前（resize/fit 链路真实读取路径，无 buffer.type 依赖）
     const fitOrder = mockFit.mock.invocationCallOrder[0];
     const resizeOrder = (pty.resize as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0];
     expect(fitOrder).toBeLessThan(resizeOrder);
   });
 
-  it("CPF14: 普通缓冲 + 行变化 → fit 被调用（未受影响）", async () => {
+  it("CPF15: 尺寸无变化 → 跳过 fit/resize（无变化守卫）", async () => {
     await mountAndWait();
     mockFit.mockClear();
     (pty.resize as ReturnType<typeof vi.fn>).mockClear();
-
-    setBufferType(capturedTerminal, "normal");
-
-    ro.trigger();
-    vi.advanceTimersByTime(150);
-    mockFit.mockClear();
-    (pty.resize as ReturnType<typeof vi.fn>).mockClear();
-
-    mockProposeDimensions.mockReturnValue({ cols: 80, rows: 30 });
-    ro.trigger();
-    // TE-11: 仅行变化立即执行
-    vi.advanceTimersByTime(10);
-
-    expect(mockFit).toHaveBeenCalled();
-    expect(pty.resize).toHaveBeenCalledWith("test-session-id", "cpf-test", 80, 30);
-  });
-
-  it("CPF15: 交替缓冲 + 尺寸无变化 → 不调用 fit/resize", async () => {
-    await mountAndWait();
-    mockFit.mockClear();
-    (pty.resize as ReturnType<typeof vi.fn>).mockClear();
-
-    setBufferType(capturedTerminal, "alternate");
 
     // 设置 prevDimsRef
     mockProposeDimensions.mockReturnValue({ cols: 80, rows: 24 });
@@ -1251,45 +1063,118 @@ describe("cancelPendingFlush", () => {
     expect(mockFit).not.toHaveBeenCalled();
     expect(pty.resize).not.toHaveBeenCalled();
   });
+});
 
-  it("CPF16: cancelPendingFlush 在 fit 更新网格之前", async () => {
-    const { result } = await mountAndWait();
-    capturedTerminal!.write.mockClear();
-    mockFit.mockClear();
-    (pty.resize as ReturnType<typeof vi.fn>).mockClear();
+// ═══════════════════════════════════════════════════════════
+// TRM-04: usePtyOutput 直接驱动——64KB 上限淘汰 / 退出码 / E2E 缓冲截断
+// ═══════════════════════════════════════════════════════════
 
-    setBufferType(capturedTerminal, "alternate");
+describe("usePtyOutput 缓冲上限与退出码（直接驱动）", () => {
+  // usePtyOutput 零运行时依赖（仅类型导入），直接 renderHook 驱动即可，
+  // 不经过 useXterm 编排层——专注测试 64KB 淘汰 / 退出码透传 / E2E 缓冲截断逻辑。
+  const MAX_PENDING_BYTES = 65536;
 
-    // 发送旧尺寸数据到缓冲
-    ptyOut.sendPtyOutput(new Array(200).fill(65));
-    expect(result.current._test!.getPendingBuffer()).toHaveLength(1);
+  beforeEach(() => {
+    // 假定时器：防止 idle/max 定时器在测试期间真实触发 flush 干扰缓冲断言
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+  });
 
-    // 首次 resize → cancelPendingFlush 丢弃旧数据
-    ro.trigger();
-    vi.advanceTimersByTime(150);
-    mockFit.mockClear();
-    (pty.resize as ReturnType<typeof vi.fn>).mockClear();
-    capturedTerminal!.write.mockClear();
+  afterEach(() => {
+    vi.useRealTimers();
+  });
 
-    // 再次发送数据 + 触发 resize
-    mockProposeDimensions.mockReturnValue({ cols: 60, rows: 30 });
-    ptyOut.sendPtyOutput(new Array(200).fill(66));
-    ro.trigger();
-    vi.advanceTimersByTime(150);
+  /** 渲染 usePtyOutput，返回 result 与 mock terminal（供 writeln/write 断言） */
+  function renderPtyOutput(visible = true, e2eBuffer?: { current: string[] }) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const terminalRef: any = {
+      current: {
+        write: vi.fn(),
+        writeln: vi.fn(),
+        onData: vi.fn(() => ({ dispose: vi.fn() })),
+      },
+    };
+    const terminal = terminalRef.current;
+    const { result } = renderHook(() =>
+      usePtyOutput(terminalRef, "trm4", visible, undefined, undefined, e2eBuffer),
+    );
+    return { result, terminal };
+  }
 
-    // TE-09: cancelPendingFlush 后发新数据，验证旧数据被丢弃 + 新数据可写入
-    capturedTerminal!.write.mockClear();
-    ptyOut.sendPtyOutput(new Array(200).fill(88)); // 'X'
-    vi.advanceTimersByTime(5);
+  /** 解码缓冲块内容（UTF-8） */
+  function decodeChunk(chunk: Uint8Array): string {
+    return new TextDecoder().decode(chunk);
+  }
 
-    const writeCalls = (capturedTerminal!.write as ReturnType<typeof vi.fn>).mock.calls;
-    // TE-09: 先显式断言有写入，再检查内容——消除 if-guard 假阳性
-    expect(writeCalls.length).toBeGreaterThan(0);
-    for (const call of writeCalls) {
-      const decoded = new TextDecoder().decode(call[0] as Uint8Array);
-      expect(decoded).not.toContain("A".repeat(200));
+  it("TRM4-1: 缓冲恰好 64KB（2×32KB）→ 不淘汰", () => {
+    const { result } = renderPtyOutput();
+    const half = new Array(MAX_PENDING_BYTES / 2).fill(65); // 'A' × 32KB
+
+    result.current.handlePtyOutput({ type: "output", data: { bytes: half } });
+    result.current.handlePtyOutput({ type: "output", data: { bytes: half } });
+
+    // 32768+32768 = 65536，未超过上限 → 两块全保留
+    expect(result.current.getPendingBuffer()).toHaveLength(2);
+  });
+
+  it("TRM4-2: 缓冲超过 64KB（40KB+40KB）→ 丢弃最旧块", () => {
+    const { result } = renderPtyOutput();
+    const chunkA = new Array(40960).fill(65); // 'A' × 40KB
+    const chunkB = new Array(40960).fill(66); // 'B' × 40KB
+
+    result.current.handlePtyOutput({ type: "output", data: { bytes: chunkA } });
+    result.current.handlePtyOutput({ type: "output", data: { bytes: chunkB } });
+
+    // 40960+40960 > 65536 → 淘汰最旧 40KB，仅剩新块
+    const buffer = result.current.getPendingBuffer();
+    expect(buffer).toHaveLength(1);
+    expect(decodeChunk(buffer[0])).toBe("B".repeat(40960));
+  });
+
+  it("TRM4-3: 多块超限（3×20KB+30KB）→ 循环淘汰直到放得下", () => {
+    const { result } = renderPtyOutput();
+    const chunk20k = () => new Array(20480).fill(68); // 'D' × 20KB
+    const chunkG = new Array(30720).fill(71); // 'G' × 30KB
+
+    result.current.handlePtyOutput({ type: "output", data: { bytes: chunk20k() } });
+    result.current.handlePtyOutput({ type: "output", data: { bytes: chunk20k() } });
+    result.current.handlePtyOutput({ type: "output", data: { bytes: chunk20k() } });
+    // 61440+30720 > 65536 → 先淘汰 2 块旧数据（20480×2），剩余 20480+30720=51200 ≤ 65536
+    result.current.handlePtyOutput({ type: "output", data: { bytes: chunkG } });
+
+    const buffer = result.current.getPendingBuffer();
+    expect(buffer).toHaveLength(2);
+    expect(decodeChunk(buffer[0])).toBe("D".repeat(20480));
+    expect(decodeChunk(buffer[1])).toBe("G".repeat(30720));
+  });
+
+  it("TRM4-4: 退出码 0 与非空数字透传到退出提示", () => {
+    const { result, terminal } = renderPtyOutput();
+
+    result.current.handlePtyOutput({ type: "exit", data: { code: 0 } });
+    expect(terminal.writeln).toHaveBeenCalledWith(expect.stringContaining("退出码: 0"));
+
+    terminal.writeln.mockClear();
+    result.current.handlePtyOutput({ type: "exit", data: { code: 7 } });
+    expect(terminal.writeln).toHaveBeenCalledWith(expect.stringContaining("退出码: 7"));
+  });
+
+  it("TRM4-5: E2E 文本缓冲超 1000 行 → 截断最旧行（保持 1000）", () => {
+    const e2eBuffer = { current: [] as string[] };
+    const { result } = renderPtyOutput(true, e2eBuffer);
+
+    // 推送 1005 行（每行 1 字节、内容按序变化，便于区分哪行被丢弃）
+    for (let i = 1; i <= 1005; i++) {
+      result.current.handlePtyOutput({
+        type: "output",
+        data: { bytes: [(i % 26) + 65] },
+      });
     }
-    // fit 被调用（更新网格）
-    expect(mockFit).toHaveBeenCalled();
+
+    // 截断无条件生效（每事件累积后超限即删最旧）——测试对齐当前实现
+    expect(e2eBuffer.current.length).toBe(1000);
+    // 最旧 5 行被丢弃：buffer[0] 为第 6 行（i=6 → 'G'）
+    expect(e2eBuffer.current[0]).toBe("G");
+    // 末尾保持最新行（i=1005 → 'R'）
+    expect(e2eBuffer.current[999]).toBe("R");
   });
 });
