@@ -18,7 +18,7 @@
 
 - **PTY-01**：`spawn.rs` 存在 Job Object 纯逻辑（job_name 构造 / limit flags 计算，函数名不限）且有 L1 用例；`JobHandle::drop` 相关路径在 pty 域测试可触及（Read 确认）
 - **PTY-02**：`spawn.rs` 存在 `validate_spawn_request` 纯函数（尺寸超限 / shell 白名单 / cwd 沙箱三校验）且被 `pty_spawn` 调用（Read 确认调用点，不限签名细节）；尺寸超限拒绝、shell 白名单拒绝、cwd 沙箱拒绝各有用例（用例经该纯函数或命令层）
-- **PTY-03**：`spawn.rs` 存在 `validate_session_ownership` 纯函数（SEC-08 panelId 归属校验）且被 `pty_write`/`pty_resize`/`pty_kill`/`pty_reattach` 调用（Read 确认）；归属放行与归属拒绝各有用例
+- **PTY-03**：`spawn.rs` 存在 `validate_session_ownership` 纯函数（SEC-08 panelId 归属校验）且被 `pty_write`/`pty_resize`/`pty_kill` 调用（Read 确认）；归属放行与归属拒绝各有用例。注：`pty_reattach` 签名无 panel_id 参数（SEC-08 契约仅 write/resize/kill 三命令，根 CLAUDE.md 原文；git show HEAD 证实改动前后 reattach 均无归属校验），断言不要求 reattach 调用
 - **PTY-07**：`build_cmdline` 引号处理用例存在（含空格路径、含空格参数、无空格不加引号三场景，函数名不变）
 - **PTY-08**：`spawn_conpty_child` 可纯化部分（命令行/环境块构造）有用例，或标注"由 pty_spawn_custom_conpty 集成测试 + CI 守卫"（二选一，Read 确认）；纯 Win32 调用部分无 L1 用例属预期
 - **PTY-09**：`ConPtyMaster::resize` HPCON invalid 分支有用例（drop/关闭后 resize 静默成功且 size 更新）

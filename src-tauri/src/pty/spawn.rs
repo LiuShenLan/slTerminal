@@ -14,7 +14,7 @@ use portable_pty::native_pty_system;
 use portable_pty::PtySize;
 use std::collections::VecDeque;
 use std::io::Write as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, RwLock};
 use tauri::ipc::Channel;
@@ -121,6 +121,12 @@ pub mod conpty_custom {
         }
         buf.push(0);
         buf
+    }
+
+    /// 构造 CreateProcessW 的 cwd 宽字符串（纯函数）
+    /// Windows 坑：CreateProcessW 对 `/` 行为异常——先将 `/` 规范化成 `\` 再编码 UTF-16LE
+    fn build_cwd_wide(cwd: &str) -> Vec<u16> {
+        to_wide_null(&cwd.replace('/', "\\"))
     }
 
     /// 轻量 STARTUPINFOEXW 属性列表 wrapper
@@ -395,6 +401,11 @@ pub mod conpty_custom {
     /// shell_info: 从 shell::resolve_shell_info() 获取的 shell 程序信息
     /// extra_envs: 额外环境变量（COLORTERM, TERM, TERM_PROGRAM 等）
     /// cwd: 工作目录（可选）
+    ///
+    /// 可纯化部分（命令行/环境块/cwd 宽字符串构造）已抽为独立纯函数
+    /// （build_cmdline / build_env_block / build_cwd_wide），由单元测试覆盖；
+    /// 纯 Win32 调用部分（AttrList::set_pty → CreateProcessW 组合）由
+    /// pty_spawn_custom_conpty 集成测试（tests/pty_integration_tests.rs）+ CI 守卫（Windows runner）验证。
     pub fn spawn_conpty_child(
         hpc: HPCON,
         shell_info: &super::super::shell::ShellInfo,
@@ -416,7 +427,7 @@ pub mod conpty_custom {
         attrs.set_pty(hpc)?;
         si.lpAttributeList = attrs.as_mut_ptr();
 
-        let cwd_wide: Option<Vec<u16>> = cwd.map(|c| to_wide_null(&c.replace('/', "\\")));
+        let cwd_wide: Option<Vec<u16>> = cwd.map(build_cwd_wide);
 
         // SAFETY: CreateProcessW 是 Win32 进程创建 API；app_name/cmd_line/cwd/env_block 均在栈上保持存活；
         // lpAttributeList 由 AttrList 管理生命周期；pi 是未初始化的 PROCESS_INFORMATION 输出参数
@@ -627,12 +638,9 @@ pub mod conpty_custom {
 
         #[test]
         fn test_cwd_forward_slash_to_backslash_encoding() {
-            // 模拟 spawn_conpty_child 中对 cwd 的处理：正斜杠→反斜杠
-            let cwd_raw = "C:/Users/test/project";
-            let normalized = cwd_raw.replace('/', "\\");
-            assert_eq!(normalized, "C:\\Users\\test\\project",
-                "cwd 正斜杠应转换为反斜杠");
-            let wide = to_wide_null(&normalized);
+            // 调用真实 build_cwd_wide（PTY-08 抽取的 cwd 宽字符串构造纯函数）：
+            // 正斜杠→反斜杠 + UTF-16LE 编码 + null 终止
+            let wide = build_cwd_wide("C:/Users/test/project");
             // 验证 null 终止
             assert!(wide.ends_with(&[0]), "应以 null 结尾");
             // 去掉尾部 null 后解码验证
@@ -643,22 +651,19 @@ pub mod conpty_custom {
 
         #[test]
         fn test_cwd_no_trailing_slash_unchanged() {
-            // 不含正斜杠的路径无需转换
-            let cwd = "C:\\Users\\test";
-            let normalized = cwd.replace('/', "\\");
-            assert_eq!(normalized, "C:\\Users\\test",
-                "纯反斜杠路径应保持不变");
-            let wide = to_wide_null(&normalized);
+            // 不含正斜杠的路径无需转换（build_cwd_wide 原样编码）
+            let wide = build_cwd_wide("C:\\Users\\test");
             let text = String::from_utf16_lossy(&wide[..wide.len() - 1]);
-            assert_eq!(text, "C:\\Users\\test");
+            assert_eq!(text, "C:\\Users\\test",
+                "纯反斜杠路径应保持不变");
         }
 
         #[test]
         fn test_cwd_mixed_slashes_normalized() {
-            // 混合斜杠：只有 / 转为 \
-            let cwd = "C:/Users\\test/project\\sub";
-            let normalized = cwd.replace('/', "\\");
-            assert_eq!(normalized, "C:\\Users\\test\\project\\sub",
+            // 混合斜杠：只有 / 转为 \（build_cwd_wide 内部规范化）
+            let wide = build_cwd_wide("C:/Users\\test/project\\sub");
+            let text = String::from_utf16_lossy(&wide[..wide.len() - 1]);
+            assert_eq!(text, "C:\\Users\\test\\project\\sub",
                 "混合斜杠应将 / 统一为 \\");
         }
 
@@ -675,6 +680,122 @@ pub mod conpty_custom {
             assert_eq!(wide[0], b'h' as u16);
             assert_eq!(wide[4], b'o' as u16);
             assert_eq!(wide[5], 0, "应以 null 结尾");
+        }
+
+        // ─── T7: build_cmdline 引号处理测试（PTY-07）───
+        // 程序路径/参数含空格或制表符时须加引号，否则 CreateProcessW 会错误拆分参数
+
+        /// 程序路径含空格 → 路径整体加引号
+        #[test]
+        fn build_cmdline_quotes_program_with_space() {
+            let wide = build_cmdline("C:\\Program Files\\PowerShell\\7\\pwsh.exe", &[]);
+            let text = String::from_utf16_lossy(&wide[..wide.len() - 1]);
+            assert_eq!(
+                text,
+                "\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\"",
+                "含空格程序路径应整体加引号"
+            );
+        }
+
+        /// 参数含空格 → 该参数加引号，无空格程序路径不加
+        #[test]
+        fn build_cmdline_quotes_arg_with_space() {
+            let wide = build_cmdline(
+                "pwsh.exe",
+                &["-Command".into(), "echo hello world".into()],
+            );
+            let text = String::from_utf16_lossy(&wide[..wide.len() - 1]);
+            assert_eq!(
+                text,
+                "pwsh.exe -Command \"echo hello world\"",
+                "含空格参数应加引号，无空格参数不加"
+            );
+        }
+
+        /// 参数含制表符 → 该参数加引号（tab 同为参数分隔符）
+        #[test]
+        fn build_cmdline_quotes_arg_with_tab() {
+            let wide = build_cmdline("cmd.exe", &["echo\thello".into()]);
+            let text = String::from_utf16_lossy(&wide[..wide.len() - 1]);
+            assert_eq!(
+                text,
+                "cmd.exe \"echo\thello\"",
+                "含制表符参数应加引号"
+            );
+        }
+
+        /// 无空格路径与参数 → 全部不加引号
+        #[test]
+        fn build_cmdline_no_quotes_without_space() {
+            let wide = build_cmdline(
+                "C:\\Windows\\System32\\cmd.exe",
+                &["/c".into(), "echo".into()],
+            );
+            let text = String::from_utf16_lossy(&wide[..wide.len() - 1]);
+            assert_eq!(
+                text,
+                "C:\\Windows\\System32\\cmd.exe /c echo",
+                "无空格时不应加任何引号"
+            );
+        }
+
+        /// 空 args → 仅程序路径（无尾随空格）
+        #[test]
+        fn build_cmdline_empty_args() {
+            let wide = build_cmdline("cmd.exe", &[]);
+            let text = String::from_utf16_lossy(&wide[..wide.len() - 1]);
+            assert_eq!(text, "cmd.exe", "空 args 时应仅含程序路径");
+        }
+
+        // ─── T8: ConPtyMaster::resize HPCON invalid 分支测试（PTY-09）───
+        // HPCON 已关闭（invalid）后 resize 应静默更新 size，不调 Win32 API（不 panic/不报错）
+
+        /// 构造 invalid HPCON 状态 → resize 静默成功且 size 更新
+        #[test]
+        fn master_resize_invalid_hpc_silently_updates_size() {
+            let pipe = Pipe::new().unwrap();
+            let master = ConPtyMaster {
+                inner: Arc::new(Mutex::new(ConPtyInner {
+                    // windows 0.61 的 HPCON 为 isize 包装（非指针），invalid = -1（INVALID_HANDLE_VALUE 低位）
+                    hpc: HPCON(INVALID_HANDLE_VALUE.0 as isize),
+                    readable: pipe.read,
+                    writable: Some(pipe.write),
+                    size: PtySize {
+                        rows: 24,
+                        cols: 80,
+                        pixel_width: 0,
+                        pixel_height: 0,
+                    },
+                })),
+            };
+
+            // resize 静默成功（不调 ResizePseudoConsole）
+            master
+                .resize(PtySize {
+                    rows: 30,
+                    cols: 100,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                })
+                .unwrap();
+
+            // size 已更新
+            let size = master.get_size().unwrap();
+            assert_eq!(size.rows, 30, "resize 后 rows 应更新");
+            assert_eq!(size.cols, 100, "resize 后 cols 应更新");
+
+            // 多次 resize 仍静默成功，且 size 持续更新
+            master
+                .resize(PtySize {
+                    rows: 40,
+                    cols: 120,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                })
+                .unwrap();
+            let size = master.get_size().unwrap();
+            assert_eq!(size.rows, 40, "多次 resize 后 rows 应持续更新");
+            assert_eq!(size.cols, 120, "多次 resize 后 cols 应持续更新");
         }
     }
 }
@@ -746,18 +867,14 @@ pub struct SpawnRequest {
     pub shell: Option<String>,
 }
 
-/// 创建 PTY 并启动 shell，返回 session_id
+/// spawn 请求三校验（BE-14 尺寸超限 / SEC-02 shell 白名单 / SEC-02 cwd 沙箱）
 ///
-/// 输出通过 on_output Channel 持续推送到前端。
-/// BE-01: async + spawn_blocking，阻塞 I/O 不占 IPC worker。
-/// BE-12: SPAWN_LOCK 仅保护 create_conpty_pair + spawn_conpty_child（锁内），
-/// take_writer、CPR 注入、add_to_job_object 在锁外。
-#[tauri::command]
-pub async fn pty_spawn(
-    state: tauri::State<'_, AppState>,
-    on_output: Channel<PtyEvent>,
-    request: SpawnRequest,
-) -> Result<String, AppError> {
+/// D2 可测性重构：从 pty_spawn 命令体抽取为纯函数——不依赖 AppState，
+/// project_root 以引用传入，便于 L1 单测边界用例。行为与抽取前完全一致。
+fn validate_spawn_request(
+    request: &SpawnRequest,
+    project_root: &Option<PathBuf>,
+) -> Result<(), AppError> {
     // BE-14: COORD 尺寸校验——cols/rows 不能超过 i16::MAX，防止 as i16 回绕
     if request.cols > i16::MAX as u16 || request.rows > i16::MAX as u16 {
         return Err(AppError::Pty(format!(
@@ -773,12 +890,35 @@ pub async fn pty_spawn(
 
     // SEC-02: cwd 路径沙箱校验
     if let Some(ref cwd) = request.cwd {
-        let root = state
+        app_state::validate_path_within_root(project_root, Path::new(cwd))?;
+    }
+
+    Ok(())
+}
+
+/// 创建 PTY 并启动 shell，返回 session_id
+///
+/// 输出通过 on_output Channel 持续推送到前端。
+/// BE-01: async + spawn_blocking，阻塞 I/O 不占 IPC worker。
+/// BE-12: SPAWN_LOCK 仅保护 create_conpty_pair + spawn_conpty_child（锁内），
+/// take_writer、CPR 注入、add_to_job_object 在锁外。
+#[tauri::command]
+pub async fn pty_spawn(
+    state: tauri::State<'_, AppState>,
+    on_output: Channel<PtyEvent>,
+    request: SpawnRequest,
+) -> Result<String, AppError> {
+    // BE-14/SEC-02: 三校验（尺寸超限 / shell 白名单 / cwd 沙箱）委托纯函数 validate_spawn_request
+    // 注意：RwLockReadGuard 非 Send——须在块内 clone 出 Option<PathBuf> 后立即释放读锁，
+    // 否则 guard 跨 await 存活导致 pty_spawn future 不满足 Send
+    let project_root = {
+        let guard = state
             .project_root
             .read()
             .map_err(|e| AppError::Pty(format!("获取 project_root 锁失败: {}", e)))?;
-        app_state::validate_path_within_root(&root, Path::new(cwd))?;
-    }
+        (*guard).clone()
+    };
+    validate_spawn_request(&request, &project_root)?;
 
     let session_id = Uuid::new_v4().to_string();
     let panel_id = request.panel_id.clone();
@@ -969,6 +1109,20 @@ pub async fn pty_spawn(
     Ok(session_id)
 }
 
+/// SEC-08: 校验 panel_id 与 session 归属一致（纯函数）
+///
+/// D2 可测性重构：从 pty_write/resize/kill 三命令体抽取——仅读 session.panel_id，
+/// 不依赖锁与状态，便于 L1 单测归属放行/拒绝。行为与抽取前完全一致。
+fn validate_session_ownership(session: &PtySession, panel_id: &str) -> Result<(), AppError> {
+    if session.panel_id != panel_id {
+        return Err(AppError::Pty(format!(
+            "会话归属不匹配: 请求 panel_id={}, session panel_id={}",
+            panel_id, session.panel_id
+        )));
+    }
+    Ok(())
+}
+
 /// 向 PTY 写入数据（来自前端键盘输入）
 ///
 /// BE-01: async + spawn_blocking，write_all/flush 不阻塞 IPC worker。
@@ -990,12 +1144,7 @@ pub async fn pty_write(
             .get(&session_id)
             .ok_or_else(|| AppError::SessionNotFound(session_id.clone()))?;
         // SEC-08: 校验 session 归属
-        if session.panel_id != panel_id {
-            return Err(AppError::Pty(format!(
-                "会话归属不匹配: 请求 panel_id={}, session panel_id={}",
-                panel_id, session.panel_id
-            )));
-        }
+        validate_session_ownership(session, &panel_id)?;
         session.writer.clone()
     };
 
@@ -1036,12 +1185,7 @@ pub async fn pty_resize(
             .get(&session_id)
             .ok_or_else(|| AppError::SessionNotFound(session_id.clone()))?;
         // SEC-08: 校验 session 归属
-        if session.panel_id != panel_id {
-            return Err(AppError::Pty(format!(
-                "会话归属不匹配: 请求 panel_id={}, session panel_id={}",
-                panel_id, session.panel_id
-            )));
-        }
+        validate_session_ownership(session, &panel_id)?;
         session.master.clone()
     };
 
@@ -1085,12 +1229,7 @@ pub async fn pty_kill(
         let stored = sessions
             .get(&session_id)
             .ok_or_else(|| AppError::SessionNotFound(session_id.clone()))?;
-        if stored.panel_id != panel_id {
-            return Err(AppError::Pty(format!(
-                "会话归属不匹配: 请求 panel_id={}, session panel_id={}",
-                panel_id, stored.panel_id
-            )));
-        }
+        validate_session_ownership(stored, &panel_id)?;
         sessions
             .remove(&session_id)
             .ok_or_else(|| AppError::SessionNotFound(session_id.clone()))?
@@ -1186,11 +1325,15 @@ pub async fn pty_reattach(
 ///
 /// 构建 Job Object 名称字符串并委托给 `create_and_assign_job` 执行 Win32 调用。
 /// 返回 `JobHandle` 以在整个 PTY 会话期间持有 job handle，防止 `KILL_ON_JOB_CLOSE` 过早触发。
+///
+/// D2 可测性重构：job_name 构造与 limit flags 计算已抽为纯函数（job_name / job_limits），
+/// 由 L1 单测覆盖；Win32 调用本身（CreateJobObjectW/SetInformationJobObject/
+/// AssignProcessToJobObject）由本函数内联执行。
 #[cfg(windows)]
 fn add_to_job_object(pid: u32) -> Result<JobHandle, AppError> {
     use std::os::windows::ffi::OsStrExt;
 
-    let job_name = format!("slTerminal_pty_{pid}");
+    let job_name = job_name(pid);
     let job_name_wide: Vec<u16> = std::ffi::OsStr::new(&job_name)
         .encode_wide()
         .chain(std::iter::once(0))
@@ -1202,6 +1345,26 @@ fn add_to_job_object(pid: u32) -> Result<JobHandle, AppError> {
     // - 该调用紧跟在 `slave.spawn_command()` 之后，在任何可能触发 panic 的 `?` 之前完成
     // - 返回的 JobHandle 在 PtySession 存活期间持有 job handle，由 RAII Drop 负责 CloseHandle
     unsafe { create_and_assign_job(pid, &job_name_wide) }
+}
+
+/// 构造 Job Object 名称（纯函数）——`slTerminal_pty_{pid}`，保证 job 名称按子进程 PID 唯一
+#[cfg(windows)]
+fn job_name(pid: u32) -> String {
+    format!("slTerminal_pty_{pid}")
+}
+
+/// 构造带 KILL_ON_JOB_CLOSE 的扩展限制信息（纯函数，D2 抽取）
+///
+/// 锁死项：`LimitFlags` 必须包含 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`（父进程退出时
+/// OS 自动杀所有子进程——孤儿防护核心）。测试断言具体值 0x2000 防未来误删。
+#[cfg(windows)]
+fn job_limits() -> windows::Win32::System::JobObjects::JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
+    use windows::Win32::System::JobObjects::{
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+    let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    limits
 }
 
 /// 创建 Job Object 并设置 KILL_ON_JOB_CLOSE，将子进程分配进去
@@ -1222,7 +1385,6 @@ unsafe fn create_and_assign_job(pid: u32, job_name_wide: &[u16]) -> Result<JobHa
     use windows::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, SetInformationJobObject,
         JobObjectExtendedLimitInformation, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     };
     use windows::Win32::System::Threading::{
         OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
@@ -1235,8 +1397,8 @@ unsafe fn create_and_assign_job(pid: u32, job_name_wide: &[u16]) -> Result<JobHa
         .map_err(|e| AppError::Pty(format!("CreateJobObject failed: {e}")))?;
 
     // 设置 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE（父进程退出时 OS 杀所有子进程）
-    let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    // limits 构造委托 job_limits 纯函数（D2 抽取，KILL_ON_JOB_CLOSE 设置由 L1 单测锁死）
+    let limits = job_limits();
     SetInformationJobObject(
         job,
         JobObjectExtendedLimitInformation,
@@ -1362,12 +1524,8 @@ mod tests {
         }
 
         // 清理：杀子进程防止残留
-        for sid in &["sid-a", "sid-c"] {
-            if let Some(s) = pty_state.sessions.write().unwrap().remove(*sid) {
-                if let Ok(mut c) = s.child.lock() {
-                    let _ = c.kill();
-                }
-            };
+        for sid in ["sid-a", "sid-c"] {
+            cleanup_session(&pty_state, sid);
         }
     }
 
@@ -1396,11 +1554,7 @@ mod tests {
         drop(sessions);
 
         // 清理
-        if let Some(s) = pty_state.sessions.write().unwrap().remove("sid-2") {
-            if let Ok(mut c) = s.child.lock() {
-                let _ = c.kill();
-            }
-        };
+        cleanup_session(&pty_state, "sid-2");
     }
 
     /// 移除不存在的 session 返回 None，不影响已有 session
@@ -1423,14 +1577,206 @@ mod tests {
         drop(sessions);
 
         // 清理
-        if let Some(s) = pty_state.sessions.write().unwrap().remove("sid-y") {
+        cleanup_session(&pty_state, "sid-y");
+    }
+
+    // ─── PTY-01: Job Object 纯函数测试 ───
+
+    /// job_name 纯函数——名称 = `slTerminal_pty_{pid}`，按子进程 PID 唯一
+    #[cfg(windows)]
+    #[test]
+    fn job_name_format_contains_pid() {
+        assert_eq!(job_name(1234), "slTerminal_pty_1234");
+        assert_eq!(job_name(0), "slTerminal_pty_0");
+    }
+
+    /// job_limits 纯函数——LimitFlags 必须含 KILL_ON_JOB_CLOSE（孤儿防护核心）
+    /// 锁死具体值 0x2000（Windows SDK 定义），防未来误删该标志
+    #[cfg(windows)]
+    #[test]
+    fn job_limits_contains_kill_on_job_close() {
+        use windows::Win32::System::JobObjects::{JOB_OBJECT_LIMIT, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE};
+        let limits = job_limits();
+        assert_eq!(
+            limits.BasicLimitInformation.LimitFlags,
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            "LimitFlags 应包含 KILL_ON_JOB_CLOSE"
+        );
+        assert_eq!(
+            limits.BasicLimitInformation.LimitFlags, JOB_OBJECT_LIMIT(0x2000),
+            "KILL_ON_JOB_CLOSE 值应锁死为 0x2000（防误删孤儿防护）"
+        );
+    }
+
+    /// JobHandle Drop 关闭句柄——drop 后原句柄应失效（CloseHandle 已调用）
+    #[cfg(windows)]
+    #[test]
+    fn job_handle_drop_closes_handle() {
+        use windows::Win32::Foundation::GetHandleInformation;
+        use windows::Win32::System::JobObjects::CreateJobObjectW;
+
+        // SAFETY: CreateJobObjectW 是 Win32 API；句柄由 JobHandle RAII 管理
+        let job = unsafe { CreateJobObjectW(None, None) }.expect("CreateJobObjectW 应成功");
+        {
+            let _jh = JobHandle::new(job);
+        } // 此处 drop → CloseHandle
+        let mut flags: u32 = 0;
+        let res = unsafe { GetHandleInformation(job, &mut flags) };
+        assert!(
+            res.is_err(),
+            "drop 后句柄应已关闭（GetHandleInformation 应失败）"
+        );
+    }
+
+    /// JobHandle 持无效句柄 drop 不 panic（CloseHandle 对无效句柄返回 FALSE，不 panic）
+    #[cfg(windows)]
+    #[test]
+    fn job_handle_invalid_handle_drop_no_panic() {
+        let jh = JobHandle::new(windows::Win32::Foundation::INVALID_HANDLE_VALUE);
+        drop(jh);
+    }
+
+    // ─── PTY-02: validate_spawn_request 三校验测试 ───
+
+    /// 构造最小 SpawnRequest（shell/cwd 可选）
+    fn make_request(cols: u16, rows: u16, shell: Option<&str>, cwd: Option<&str>) -> SpawnRequest {
+        SpawnRequest {
+            panel_id: "p1".into(),
+            cols,
+            rows,
+            cwd: cwd.map(String::from),
+            shell: shell.map(String::from),
+        }
+    }
+
+    /// 尺寸超限（cols > i16::MAX）→ 拒绝（BE-14）
+    #[test]
+    fn validate_spawn_request_rejects_oversize_cols() {
+        let req = make_request(i16::MAX as u16 + 1, 24, None, None);
+        let err = validate_spawn_request(&req, &None).unwrap_err();
+        assert!(
+            err.to_string().contains("终端尺寸超限"),
+            "错误消息应含'终端尺寸超限'，实际: {err}"
+        );
+    }
+
+    /// 尺寸超限（rows > i16::MAX）→ 拒绝（BE-14）
+    #[test]
+    fn validate_spawn_request_rejects_oversize_rows() {
+        let req = make_request(80, i16::MAX as u16 + 1, None, None);
+        assert!(validate_spawn_request(&req, &None).is_err());
+    }
+
+    /// 最大合法尺寸 → 放行
+    #[test]
+    fn validate_spawn_request_accepts_max_valid_size() {
+        let req = make_request(i16::MAX as u16, i16::MAX as u16, None, None);
+        assert!(
+            validate_spawn_request(&req, &None).is_ok(),
+            "i16::MAX 尺寸应放行"
+        );
+    }
+
+    /// 非法 shell（白名单外）→ 拒绝（SEC-02）
+    #[test]
+    fn validate_spawn_request_rejects_disallowed_shell() {
+        let req = make_request(80, 24, Some("definitely_not_a_shell.exe"), None);
+        let err = validate_spawn_request(&req, &None).unwrap_err();
+        assert!(
+            err.to_string().contains("不允许的 shell"),
+            "错误消息应含'不允许的 shell'，实际: {err}"
+        );
+    }
+
+    /// 合法 shell（pwsh.exe 文件名）→ 放行
+    #[test]
+    fn validate_spawn_request_accepts_allowed_shell() {
+        let req = make_request(80, 24, Some("pwsh.exe"), None);
+        assert!(validate_spawn_request(&req, &None).is_ok());
+    }
+
+    /// cwd 越界（root 外）→ 拒绝（SEC-02 沙箱）
+    #[test]
+    fn validate_spawn_request_rejects_cwd_outside_root() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let outside_file = outside.path().join("proj.txt");
+        std::fs::write(&outside_file, "x").unwrap();
+        let req = make_request(80, 24, None, Some(outside_file.to_str().unwrap()));
+        let err = validate_spawn_request(&req, &Some(root.path().to_path_buf())).unwrap_err();
+        assert!(
+            err.to_string().contains("超出项目范围"),
+            "错误消息应含'超出项目范围'，实际: {err}"
+        );
+    }
+
+    /// cwd 在根内 → 放行
+    #[test]
+    fn validate_spawn_request_accepts_cwd_inside_root() {
+        let root = tempfile::tempdir().unwrap();
+        let sub = root.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        let req = make_request(80, 24, None, Some(sub.to_str().unwrap()));
+        assert!(
+            validate_spawn_request(&req, &Some(root.path().to_path_buf())).is_ok(),
+            "根内 cwd 应放行"
+        );
+    }
+
+    /// cwd 存在但 project_root 未设置 → 测试模式豁免放行（validate_path_within_root cfg!(test) 分支）
+    #[test]
+    fn validate_spawn_request_cwd_without_root_allowed_in_test() {
+        let req = make_request(80, 24, None, Some("C:\\any\\path"));
+        assert!(validate_spawn_request(&req, &None).is_ok());
+    }
+
+    // ─── PTY-03: SEC-08 归属校验测试 ───
+
+    /// 归属校验——panel_id 匹配 → 放行
+    #[cfg(windows)]
+    #[test]
+    fn validate_session_ownership_allows_matching_panel() {
+        let session = make_test_session("panel-owner");
+        assert!(
+            validate_session_ownership(&session, "panel-owner").is_ok(),
+            "归属匹配应放行"
+        );
+        // 清理：杀子进程防残留（session 未入 pty_state，需手动 kill）
+        // 显式 let + drop 释放 MutexGuard，避免借用跨 session drop（E0713）
+        let mut child_guard = session.child.lock().unwrap();
+        let _ = child_guard.kill();
+        drop(child_guard);
+    }
+
+    /// 归属校验——panel_id 不匹配 → 拒绝（含错误消息，D7 防复发）
+    #[cfg(windows)]
+    #[test]
+    fn validate_session_ownership_rejects_mismatched_panel() {
+        let session = make_test_session("panel-owner");
+        let err = validate_session_ownership(&session, "intruder").unwrap_err();
+        assert!(
+            err.to_string().contains("会话归属不匹配"),
+            "错误消息应含'会话归属不匹配'，实际: {err}"
+        );
+        // 清理：杀子进程防残留
+        // 显式 let + drop 释放 MutexGuard，避免借用跨 session drop（E0713）
+        let mut child_guard = session.child.lock().unwrap();
+        let _ = child_guard.kill();
+        drop(child_guard);
+    }
+
+    // ─── 辅助函数 ───
+
+    /// 测试辅助：从 PtyState 移除 session 并杀子进程（防残留）
+    /// PTY-13①: 抽取自三处重复清理块
+    #[cfg(windows)]
+    fn cleanup_session(pty_state: &PtyState, sid: &str) {
+        if let Some(s) = pty_state.sessions.write().unwrap().remove(sid) {
             if let Ok(mut c) = s.child.lock() {
                 let _ = c.kill();
             }
         };
     }
-
-    // ─── 辅助函数 ───
 
     /// 创建最小 PtySession 供 session 隔离测试使用
     /// 使用 conpty_custom 创建真实 ConPTY 对 + 启动 cmd.exe 子进程
