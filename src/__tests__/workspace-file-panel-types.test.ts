@@ -36,6 +36,11 @@ describe("FILE_PANEL_TYPES", () => {
     expect(FILE_PANEL_TYPES.has("terminal")).toBe(false);
   });
 
+  // hooksConfig 不参与标题计算（无 filePath）——WRK-11③：FILE_PANEL_TYPES 断言单点收敛至此文件
+  it("hooksConfig 不在集合中", () => {
+    expect(FILE_PANEL_TYPES.has("hooksConfig")).toBe(false);
+  });
+
   // 补充：size 正确
   it("集合大小为 4", () => {
     expect(FILE_PANEL_TYPES.size).toBe(4);

@@ -4,7 +4,6 @@ import {
   terminalTabConfig,
   PANEL_TYPES,
   PANEL_HTML_VIEWER,
-  FILE_PANEL_TYPES,
   isValidPanelType,
 } from "../panelRegistry";
 
@@ -162,37 +161,6 @@ describe("isValidPanelType", () => {
       // 不应进入此分支
       expect.unreachable("合法类型应通过校验");
     }
-  });
-});
-
-describe("FILE_PANEL_TYPES", () => {
-  it('包含 "editor"', () => {
-    expect(FILE_PANEL_TYPES.has("editor")).toBe(true);
-  });
-
-  it('包含 "htmlviewer"', () => {
-    expect(FILE_PANEL_TYPES.has("htmlviewer")).toBe(true);
-  });
-
-  it('包含 "gitshow"', () => {
-    expect(FILE_PANEL_TYPES.has("gitshow")).toBe(true);
-  });
-
-  it('包含 "diff"', () => {
-    expect(FILE_PANEL_TYPES.has("diff")).toBe(true);
-  });
-
-  // 新增：不包含 "hooksConfig"（无 filePath，不参与标题计算）
-  it('不包含 "hooksConfig"', () => {
-    expect(FILE_PANEL_TYPES.has("hooksConfig")).toBe(false);
-  });
-
-  it('不包含 "terminal"', () => {
-    expect(FILE_PANEL_TYPES.has("terminal")).toBe(false);
-  });
-
-  it("size 为 4", () => {
-    expect(FILE_PANEL_TYPES.size).toBe(4);
   });
 });
 

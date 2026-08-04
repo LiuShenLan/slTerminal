@@ -98,6 +98,17 @@ describe("createTitleManager", () => {
       const title = tm.getFileEditorTitle("empty-page", ROOT, "/some/path/README.md");
       expect(title).toBe("README.md");
     });
+
+    it("空白编辑器（无 filePath）不参与冲突检测（循环跳过分支）", () => {
+      tm.registerEditor("page1", "editor-0"); // 无 filePath
+      const title = tm.getFileEditorTitle(
+        "page1",
+        ROOT,
+        "D:/project/src/index.ts",
+      );
+      // 空白条目被跳过，无冲突 → basename
+      expect(title).toBe("index.ts");
+    });
   });
 
   // ---- 注册/注销 ----
@@ -126,6 +137,10 @@ describe("createTitleManager", () => {
       // 空白编辑器没有 filePath，findExistingEditor 不匹配
       const found = tm.findExistingEditor("page1", "");
       expect(found).toBeNull();
+    });
+
+    it("注销不存在的页面不抛异常（page 缺失分支）", () => {
+      expect(() => tm.unregisterEditor("no-page", "no-panel")).not.toThrow();
     });
   });
 
@@ -455,6 +470,23 @@ describe("createTitleManager", () => {
 
       const updates = tm.recomputeTitles("page1", "D:/project");
       expect(updates).toEqual([]);
+    });
+  });
+
+  // ---- reset（仅测试用）----
+
+  describe("reset", () => {
+    it("重置后 registry 与 counters 全部清空", () => {
+      tm.registerEditor("page1", "editor-1", "D:/project/src/index.ts");
+      tm.getTerminalTitle("page1"); // 消费编号到 terminal-0
+      tm.getTerminalTitle("page1"); // terminal-1
+
+      tm.reset();
+
+      // registry 清空：已注册编辑器不可查找
+      expect(tm.findExistingEditor("page1", "D:/project/src/index.ts")).toBeNull();
+      // counters 清空：终端编号从 terminal-0 重新开始
+      expect(tm.getTerminalTitle("page1")).toBe("terminal-0");
     });
   });
 });

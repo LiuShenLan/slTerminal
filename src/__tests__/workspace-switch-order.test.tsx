@@ -8,7 +8,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mockIPC, clearMocks } from "@tauri-apps/api/mocks";
-import { render, waitFor, cleanup, act } from "@testing-library/react";
+import { render, waitFor, cleanup, act, fireEvent } from "@testing-library/react";
 
 // ─── Mock @xterm/xterm（同 workspace.test.tsx） ───
 vi.mock("@xterm/xterm", () => ({
@@ -240,7 +240,7 @@ describe("DBG-9: switchToPage 时序", () => {
 
       await waitFor(() => {
         expect(mocks.mockSetProjectRoot).toHaveBeenCalledWith(rootPath);
-      }, { timeout: 3000 });
+      });
     });
 
     it("setProjectRoot 接收正确的项目 rootPath", async () => {
@@ -252,7 +252,7 @@ describe("DBG-9: switchToPage 时序", () => {
 
       await waitFor(() => {
         expect(mocks.mockSetProjectRoot).toHaveBeenCalledWith(rootPath);
-      }, { timeout: 3000 });
+      });
     });
   });
 
@@ -269,7 +269,7 @@ describe("DBG-9: switchToPage 时序", () => {
       // 等待 SEC-01 effect 触发 setProjectRoot
       await waitFor(() => {
         expect(mocks.mockSetProjectRoot).toHaveBeenCalled();
-      }, { timeout: 3000 });
+      });
 
       // reject
       mocks.rejectSetProjectRoot(new Error("路径不存在"));
@@ -294,7 +294,7 @@ describe("DBG-9: switchToPage 时序", () => {
 
       await waitFor(() => {
         expect(mocks.mockSetProjectRoot).toHaveBeenCalled();
-      }, { timeout: 3000 });
+      });
 
       mocks.rejectSetProjectRoot(new Error("路径不存在"));
       await act(() => Promise.resolve());
@@ -304,37 +304,74 @@ describe("DBG-9: switchToPage 时序", () => {
     });
   });
 
-  describe("时序契约（手动验证）", () => {
-    it("先 await setProjectRoot 再 setActivePage —— 顺序正确", async () => {
+  describe("真实驱动：页面行点击触发 switchToPage（DBG-5/9 时序）", () => {
+    // 渲染真实 Workspace → 点击侧栏 Beta 页面行 → SidebarTree 回调
+    // Workspace.switchToPage（真实 useCallback）→ switchToPageShared。
+    // setProjectRoot 用 deferred mock 手动控制挂起/完成，断言时序契约。
+    // 挂载时 SEC-01 effect 也会调一次 setProjectRoot——mockClear 隔离切换调用。
+
+    it("点击页面行：setProjectRoot 先 await 完成再 setActivePage", async () => {
+      mockIPC(() => null);
       mocks.resetDeferred();
       const { pageA, pageB, rootPath } = seedTwoPageProject();
+      const setActivePageSpy = vi.spyOn(useLayout.getState(), "setActivePage");
 
-      // 模拟 DBG-5 修复后的正确时序
-      const sprPromise = mocks.mockSetProjectRoot(rootPath);
+      const { getByText } = render(<Workspace />);
 
-      // 还未 resolve，activePageId 保持原值
+      // 等 SEC-01 effect 挂载时的一次 setProjectRoot 完成，再隔离切换调用
+      await waitFor(() => {
+        expect(mocks.mockSetProjectRoot).toHaveBeenCalled();
+      });
+      mocks.mockSetProjectRoot.mockClear();
+
+      // 点击 Beta 页面行（真实 UI 路径）
+      fireEvent.click(getByText("Beta"));
+      // 让 switchToPageShared 运行到 await setProjectRoot 挂起点
+      await act(() => Promise.resolve());
+
+      // setProjectRoot 已调用但 setActivePage 未执行（activePageId 保持 pageA）
+      expect(mocks.mockSetProjectRoot).toHaveBeenCalledWith(rootPath);
       expect(useLayout.getState().activePageId).toBe(pageA);
+      expect(setActivePageSpy).not.toHaveBeenCalled();
 
-      // resolve setProjectRoot
+      // resolve 后 setActivePage 执行，activePageId 变为 pageB
       mocks.resolveSetProjectRoot();
-      await sprPromise;
+      await waitFor(() => {
+        expect(useLayout.getState().activePageId).toBe(pageB);
+      });
 
-      // 然后设置 activePageId
-      useLayout.getState().setActivePage(pageB);
-      expect(useLayout.getState().activePageId).toBe(pageB);
+      // invocationCallOrder：setProjectRoot 调用先于 setActivePage
+      const sprOrder = mocks.mockSetProjectRoot.mock.invocationCallOrder[0];
+      const setPageOrder = setActivePageSpy.mock.invocationCallOrder[0];
+      expect(sprOrder).toBeLessThan(setPageOrder);
+      setActivePageSpy.mockRestore();
     });
 
-    it("setProjectRoot reject 后仍可切换页面（降级链路）", async () => {
+    it("点击页面行：setProjectRoot reject → console.error 降级 + 仍完成切换", async () => {
+      mockIPC(() => null);
       mocks.resetDeferred();
-      const { pageB, rootPath } = seedTwoPageProject();
+      const { pageB } = seedTwoPageProject();
+      const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-      const sprPromise = mocks.mockSetProjectRoot(rootPath);
-      mocks.rejectSetProjectRoot(new Error("模拟失败"));
+      const { getByText } = render(<Workspace />);
 
-      // reject 后仍可切换
-      try { await sprPromise; } catch { /* 预期 */ }
-      useLayout.getState().setActivePage(pageB);
-      expect(useLayout.getState().activePageId).toBe(pageB);
+      await waitFor(() => {
+        expect(mocks.mockSetProjectRoot).toHaveBeenCalled();
+      });
+      mocks.mockSetProjectRoot.mockClear();
+
+      fireEvent.click(getByText("Beta"));
+      await act(() => Promise.resolve());
+      mocks.rejectSetProjectRoot(new Error("路径不存在"));
+
+      await waitFor(() => {
+        expect(useLayout.getState().activePageId).toBe(pageB);
+      });
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        "[slTerminal] 设置项目根路径失败:",
+        expect.any(Error),
+      );
+      consoleErrorSpy.mockRestore();
     });
   });
 });

@@ -85,7 +85,7 @@
 | `src/__tests__/editor-keyboard.test.ts` | 7 | `createEditorShortcuts()` save/toggleWordWrap 经 active 指针派发 |
 | `src/__tests__/active-editor.test.ts` | 5 | active 指针 set/get/覆盖、clear 仅匹配时生效 |
 
-### 工作区/布局/页签（13 文件 / 194 用例）
+### 工作区/布局/页签（15 文件 / 213 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
@@ -93,13 +93,15 @@
 | `src/__tests__/title-manager.test.ts` | 44 | terminal-N 递增/编辑器 basename/同名冲突相对路径/handleSaveAs/onDeletePage/suffix 标题生成/冲突重算保留后缀/findExistingEditor 匹配隔离 |
 | `src/__tests__/panel-registry.test.ts` | 32 | 注册表 6 面板（terminal/editor/htmlviewer/gitshow/diff/hooksConfig 六键 + hooksConfig 注册项为函数组件）/PANEL_TYPES 含 hooksConfig 长度 6/isValidPanelType/FILE_PANEL_TYPES（5 面板，不含 hooksConfig）/isAlwaysRenderPanel |
 | `src/__tests__/layout-serde.test.ts` | 21 | 旧格式修补/白名单过滤/深拷贝/嵌套 branch/activeGroup 保留 |
-| `src/__tests__/workspace-defaulttab.test.tsx` | 22 | DefaultTab 渲染 + `onDidParametersChange` 事件结构回归 |
+| `src/__tests__/workspace-defaulttab.test.tsx` | 21 | 生产 DefaultTab 渲染（WRK-05：非手写 Mock）——tabIcon emoji/img 分支/onDidParametersChange 扁平事件结构回归（event.tabIcon 非 event.params.tabIcon）/标题更新/关闭按钮 |
+| `src/__tests__/workspace-page-dockview.test.tsx` | 7 | PageDockview 真实组件（WRK-01）——handleReady 空布局不兜底创建终端/保存布局恢复+标题重算/损坏布局回退 Watermark/Watermark 按钮 addPanel/RightHeader「+」addPanel/onSaveAs 重算标题/rootPath 空忽略事件 |
+| `src/__tests__/pageapis.test.ts` | 11 | pageApis（WRK-02）——switchToPageShared：DBG-5/9 await 时序（invocationCallOrder）/幂等/reject 降级/__dockviewApi 重指（D7）/rootPath 空与幽灵页面跳过；switchToPageAndFocus：立即命中/延迟命中/5s 超时降级（100ms×50） |
 | `src/__tests__/workspace-header-actions.test.tsx` | 16 | RightHeader Watermark 按钮/页签操作 |
-| `src/__tests__/workspace-switch-order.test.tsx` | 14 | DBG-9：`switchToPage` 时序契约——`setProjectRoot` 先于 `setActivePage` 生效/reject 降级/SEC-01 effect 兜底/兼容性排查 |
+| `src/__tests__/workspace-switch-order.test.tsx` | 14 | DBG-9：真实驱动（WRK-06——点击页面行触发 switchToPage/switchToPageShared 断言 setProjectRoot 先于 setActivePage）reject 降级/SEC-01 effect 兜底/兼容性排查 |
 | `src/__tests__/workspace-file-panel-types.test.ts` | 13 | FILE_PANEL_TYPES/isAlwaysRenderPanel（5 面板：terminal/editor/htmlviewer/gitshow/diff） |
 | `src/__tests__/default-layout-format.test.ts` | 8 | grid/panels/activeGroup/orientation 格式验证 |
 | `src/__tests__/layout-switch.test.ts` | 7 | 页面切换集成/自切换守卫 |
-| `src/__tests__/workspace-multi-instance.test.tsx` | 4 | 多 Dockview 实例惰性初始化/删除活跃页面 |
+| `src/__tests__/workspace-multi-instance.test.tsx` | 6 | 多 Dockview 实例惰性初始化/删除活跃页面/H6 实例 identity（WRK-09：同一 api 对象跨切换不销毁重建 + 终端面板不 dispose + __dockviewApi 重指） |
 | `src/__tests__/workspace-e2e-ready.test.tsx` | 4 | `__slterm_e2e_workspaceReady` 标记同步性 |
 | `src/__tests__/workspace.test.tsx` | 4 | Dockview 初始化/项目页面关联 |
 

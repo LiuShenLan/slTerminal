@@ -1,13 +1,12 @@
 // layoutSerde.test.ts — patchLegacyLayout + loadLayout + saveLayout 单元测试
+//
+// WRK-07：不 mock ../panelRegistry——直接使用真实 PANEL_TYPES（6 种），
+// 白名单过滤与真实注册表同步，杜绝 mock 白名单漂移。
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { DockviewApi } from "dockview-react";
 
-// mock isValidPanelType（与真实 PANEL_TYPES 对齐：terminal / editor / htmlviewer）
-vi.mock("../panelRegistry", () => ({
-  isValidPanelType: (id: string) => ["terminal", "editor", "htmlviewer"].includes(id),
-}));
-
+import { PANEL_TYPES } from "../panelRegistry";
 import { loadLayout, saveLayout } from "../workspace/layoutSerde";
 
 /** 构造 mock DockviewApi */
@@ -287,6 +286,78 @@ describe("loadLayout — 返回值 + 白名单校验", () => {
     expect(callArg.panels.invalid).toBeUndefined();
   });
 
+  it("9a. WRK-07: 白名单使用真实 PANEL_TYPES——全部 6 种面板类型不被过滤", () => {
+    const layout = {
+      grid: {
+        root: {
+          type: "branch",
+          data: [{
+            type: "leaf",
+            data: {
+              views: ["t1", "e1", "h1", "g1", "d1", "c1"],
+              activeView: "t1",
+              id: "g3",
+            },
+            size: 100,
+          }],
+          size: 100,
+        },
+      },
+      panels: {
+        t1: { id: "t1", contentComponent: "terminal" },
+        e1: { id: "e1", contentComponent: "editor" },
+        h1: { id: "h1", contentComponent: "htmlviewer" },
+        g1: { id: "g1", contentComponent: "gitshow" },
+        d1: { id: "d1", contentComponent: "diff" },
+        c1: { id: "c1", contentComponent: "hooksConfig" },
+      },
+      activeGroup: "g3",
+    };
+
+    loadLayout(api, layout);
+
+    const callArg = (api.fromJSON as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(callArg.panels).toMatchObject({
+      t1: { contentComponent: "terminal" },
+      e1: { contentComponent: "editor" },
+      h1: { contentComponent: "htmlviewer" },
+      g1: { contentComponent: "gitshow" },
+      d1: { contentComponent: "diff" },
+      c1: { contentComponent: "hooksConfig" },
+    });
+    // 6 种面板类型恰好与真实注册表一致（mock 漂移守卫）
+    expect(PANEL_TYPES).toHaveLength(6);
+  });
+
+  it("9b. WRK-07: gitshow/diff/hooksConfig 单独验证白名单放行", () => {
+    const layout = {
+      grid: {
+        root: {
+          type: "branch",
+          data: [{
+            type: "leaf",
+            data: { views: ["g1", "d1", "c1"], activeView: "g1", id: "g4" },
+            size: 100,
+          }],
+          size: 100,
+        },
+      },
+      panels: {
+        g1: { id: "g1", contentComponent: "gitshow" },
+        d1: { id: "d1", contentComponent: "diff" },
+        c1: { id: "c1", contentComponent: "hooksConfig" },
+      },
+      activeGroup: "g4",
+    };
+
+    loadLayout(api, layout);
+
+    const callArg = (api.fromJSON as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(callArg.panels.g1).toBeDefined();
+    expect(callArg.panels.d1).toBeDefined();
+    expect(callArg.panels.c1).toBeDefined();
+  });
+
   it("10. fromJSON 抛异常 → 返回 false", () => {
     (api.fromJSON as ReturnType<typeof vi.fn>).mockImplementation(() => {
       throw new Error("dockview: grid error");
@@ -353,6 +424,61 @@ describe("loadLayout — 返回值 + 白名单校验", () => {
     };
     const result = loadLayout(api, layout);
     expect(result).toBe(true);
+  });
+
+  it("13a. WRK-11: grid 存在但 root 缺失 → 不崩溃（patch 提前返回）", () => {
+    const layout = {
+      grid: { orientation: "HORIZONTAL" },
+      panels: {},
+    };
+
+    const result = loadLayout(api, layout);
+    expect(result).toBe(true);
+    expect(api.fromJSON).toHaveBeenCalledTimes(1);
+  });
+
+  it("13b. WRK-11: grid.root.data 含异常条目（null）→ patch 内部 catch 兜底，不崩溃", () => {
+    // patchLegacyLayout 遍历 leaf 时 `leaf.type` 访问 null 抛错 → 被函数内 try-catch 吞掉
+    const layout = {
+      grid: {
+        root: {
+          type: "branch",
+          data: [null, { type: "leaf", data: { views: ["ok"], activeView: "ok" }, size: 50 }],
+          size: 100,
+        },
+      },
+      panels: { ok: { id: "ok", component: "terminal" } },
+    };
+
+    const result = loadLayout(api, layout);
+    expect(result).toBe(true);
+    // 异常条目不阻断其余 leaf 的修补
+    const callArg = (api.fromJSON as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(callArg.grid.root.data[1].data.id).toBe("group-ok");
+  });
+
+  it("13c. WRK-11: leaf.data 缺失 → 跳过不修补（leafData continue 分支）", () => {
+    const layout = {
+      grid: {
+        root: {
+          type: "branch",
+          data: [
+            { type: "leaf", data: null, size: 50 },
+            { type: "leaf", data: { views: ["p2"], activeView: "p2" }, size: 50 },
+          ],
+          size: 100,
+        },
+      },
+      panels: { p2: { id: "p2", component: "terminal" } },
+    };
+
+    loadLayout(api, layout);
+
+    const callArg = (api.fromJSON as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    // 无 data 的 leaf 跳过；有 data 的 leaf 正常生成 id 并承接 activeGroup
+    expect(callArg.grid.root.data[0].data).toBeNull();
+    expect(callArg.grid.root.data[1].data.id).toBe("group-p2");
+    expect(callArg.activeGroup).toBe("group-p2");
   });
 });
 

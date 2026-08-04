@@ -178,7 +178,8 @@ function rebuildAndRecomputeTitles(
 
 // ---- DefaultTab ----
 
-const DefaultTab: React.FC<IDockviewPanelProps> = (props) => {
+/** 默认页签组件（导出供 L2 测试直接渲染——D2 最小可测性重构，零行为变更） */
+export const DefaultTab: React.FC<IDockviewPanelProps> = (props) => {
   const { api, params } = props;
   const tabParams = params as TabParams;
   const [title, setTitle] = useState(api.title || api.component || "");

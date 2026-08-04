@@ -46,7 +46,8 @@ function patchLegacyLayout(layout: Record<string, unknown>): void {
 
     const leaves = root.data as Record<string, unknown>[];
     for (const leaf of leaves) {
-      if (leaf.type !== "leaf") continue;
+      // 条目级容错（WRK-11）：异常条目（如 null）跳过，不阻断其余 leaf 修补
+      if (!leaf || leaf.type !== "leaf") continue;
       const leafData = leaf.data as Record<string, unknown> | undefined;
       if (!leafData) continue;
 
