@@ -32,6 +32,17 @@ import { ask } from "../../ipc/dialog";
 /** 操作失败错误提示自动消失时间（ms） */
 const ERROR_AUTO_DISMISS_MS = 5000;
 
+/**
+ * handleOpenFile 前置守卫：无活跃操作页或无 Dockview API 时禁止打开面板。
+ * 导出供单测直测——UI 路径上 activePageId 为 null 时 rootPath 亦为 null、
+ * FileTree 不渲染，双击路径不可达（防御性代码仍需锁定行为）。
+ * type predicate 使调用处 activePageId 自动收窄为非 null。
+ */
+export const canOpenFile = (
+  activePageId: string | null,
+  dockviewApi: unknown,
+): activePageId is string => !!activePageId && !!dockviewApi;
+
 export const ExplorerPanel: React.FC = () => {
   const projects = useProjects((s) => s.projects);
   const activePageId = useLayout((s) => s.activePageId);
@@ -182,9 +193,11 @@ export const ExplorerPanel: React.FC = () => {
   /** 双击文件 → 打开编辑器面板 */
   const handleOpenFile = useCallback(
     (filePath: string) => {
-      if (!activePageId) return;
       const dockApi = window.__dockviewApi;
+      // 前置守卫：无活跃操作页或无 Dockview API 时直接返回
+      //（canOpenFile 导出供单测直测，predicate 收窄 activePageId 非 null）
       if (!dockApi) return;
+      if (!canOpenFile(activePageId, dockApi)) return;
 
       // 去重：相同文件路径不重复打开，聚焦已有面板
       const existingPanelId = titleManager.findExistingEditor(

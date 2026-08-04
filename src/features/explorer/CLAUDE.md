@@ -23,7 +23,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - 已展开目录被磁盘删除 → 父层 `readDir` 不再返回该项，节点连子树自然消失（复用 `loadDirectory` 容错，无需特判）。
 - 已展开子目录 `readDir` 抛错 → `loadDirectory` catch 返回 `[]`，该目录 children 为空、不冒泡。
-- `reloadPreservingExpanded` **不传 gen**（操作当前页数据），不碰 `loadRoot` 的 generation 取消机制。`loadRoot`/`fullRefresh` 保持整树替换语义不变。
+- `reloadPreservingExpanded` **不传 gen**（操作当前页数据），不碰 `loadRoot` 的 generation 取消机制。`loadRoot` 保持整树替换语义不变（`fullRefresh` 已删除——无调用方的死代码，刷新路径统一走 `refreshExpanded`）。
 - 权衡：深层多展开分支会并发多次 `readDir`（每展开层一次），fs-event 路径有 200ms 去抖限流，file-saved 路径无去抖。
 
 **`handleOpenFile` 面板分派**：不再硬编码 `PANEL_EDITOR`，改为通过 `fileViewerRegistry.resolve(filePath)` 决定面板类型。命中策略（如 `.html` → `"htmlviewer"`）则用对应面板，返回 null 回退 `"editor"`。文件预览类面板（htmlviewer 等）通过 `isAlwaysRenderPanel()` 自动设置 `renderer: "always"` 保持 iframe browsing context 存活，避免页签切换白屏。新增文件预览类型无需修改 ExplorerPanel。

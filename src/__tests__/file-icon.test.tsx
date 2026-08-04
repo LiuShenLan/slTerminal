@@ -106,6 +106,39 @@ describe("FileIcon 组件渲染", () => {
   });
 });
 
+// ─── A2 组: 扩展名 → emoji 映射表驱动（EXP-05 分支补全）───
+
+describe("FileIcon 扩展名 → emoji 映射（表驱动）", () => {
+  // 现有单测仅覆盖 .ts/.rs/.js/.json/.md/.toml 且只断言文本非空；
+  // 此处表驱动补齐全部未覆盖分支（.pyw/.markdown/.less/.scss/.gitattributes 等），
+  // 断言精确图标，防止映射漂移。
+  it.each([
+    ["app.tsx", "\u{1F596}"], // TS 蓝
+    ["app.jsx", "\u{1F4DC}"], // JS 黄
+    ["app.mjs", "\u{1F4DC}"],
+    ["app.cjs", "\u{1F4DC}"],
+    ["main.py", "\u{1F40D}"], // Python
+    ["main.pyw", "\u{1F40D}"],
+    ["tsconfig.jsonc", "\u{1F4CB}"], // JSON
+    ["README.markdown", "\u{1F4DD}"], // Markdown
+    ["index.htm", "\u{1F310}"], // HTML
+    ["style.css", "\u{1F3A8}"], // CSS
+    ["style.scss", "\u{1F3A8}"],
+    ["style.less", "\u{1F3A8}"],
+    ["config.xml", "\u{1F4C4}"], // XML
+    ["icon.svg", "\u{1F4C4}"],
+    ["config.yaml", "\u{2699}\u{FE0F}"], // 配置
+    ["config.yml", "\u{2699}\u{FE0F}"],
+    [".gitignore", "\u{1F4E6}"], // Git
+    [".gitattributes", "\u{1F4E6}"],
+  ])("扩展名分支 %s → 返回对应图标", (name, expected) => {
+    const { container } = render(<FileIcon name={name} isDir={false} />);
+    const span = container.querySelector("span");
+    expect(span).not.toBeNull();
+    expect(span!.textContent).toBe(expected);
+  });
+});
+
 // ─── B 组: git 状态着色 ───
 
 describe("FileIcon git 状态着色", () => {

@@ -7,6 +7,10 @@ import { render, fireEvent, cleanup } from "@testing-library/react";
 import React from "react";
 import { FileTree } from "../features/explorer/FileTree";
 import type { TreeNode } from "../features/explorer/useFileTree";
+import { EXPLORER_COLORS } from "../theme";
+
+// jsdom 将 #2A2D2E 转为 rgb(42, 45, 46)
+const HOVER_BG_RGB = "rgb(42, 45, 46)";
 
 function makeFileNode(path: string, name: string, isDir = false): TreeNode {
   return {
@@ -138,6 +142,30 @@ describe("FileTree 选中模型", () => {
     fireEvent.mouseEnter(row);
     // 选中态背景保持（不变成 hover 色）
     expect(row.style.background).toBe("rgb(9, 71, 113)");
+  });
+
+  it("非选中行 mouseEnter → 背景切换为 hover 色", () => {
+    const nodes = [makeFileNode("/a/test.ts", "test.ts")];
+    const { getByText } = renderFileTree(nodes, { selectedPath: "/a/other.ts" });
+    const row = getByText("test.ts").closest("div")!;
+    // 初始非选中 → transparent（jsdom 序列化 React 内联 transparent）
+    expect(row.style.background).toBe("transparent");
+    fireEvent.mouseEnter(row);
+    expect(row.style.background).toBe(HOVER_BG_RGB);
+  });
+
+  it("非选中行 mouseLeave → 背景恢复透明", () => {
+    const nodes = [makeFileNode("/a/test.ts", "test.ts")];
+    const { getByText } = renderFileTree(nodes);
+    const row = getByText("test.ts").closest("div")!;
+    fireEvent.mouseEnter(row);
+    expect(row.style.background).toBe(HOVER_BG_RGB);
+    fireEvent.mouseLeave(row);
+    expect(row.style.background).toBe("transparent");
+  });
+
+  it("hover 色与 EXPLORER_COLORS.hover token 一致（配色单点）", () => {
+    expect(EXPLORER_COLORS.hover).toBe("#2A2D2E");
   });
 
   it("selectedPath prop 变化 → 高亮跟随变化", () => {

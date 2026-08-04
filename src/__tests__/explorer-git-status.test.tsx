@@ -266,14 +266,17 @@ describe("explorer git 状态 — A 组：useFileTree hook", () => {
     }
   });
 
-  it("F8: fullRefresh 调用 gitStatus 加载状态", async () => {
+  it("F8: 初始加载（mount）readDir 与 gitStatus 各调用一次（无重复 effect）", async () => {
+    // 回归守卫：useFileTree 的 rootPath effect 曾有过重复加载历史，
+    // mount 后 readDir/gitStatus 应恰好各一次（重复 effect 会各调用两次）
     populateStore("C:\\project");
     render(React.createElement(ExplorerPanel));
 
     await waitFor(() => {
-      // useFileTree 接收 cwd 作为 rootPath
       expect(mocks.mockGitStatus).toHaveBeenCalledWith("C:\\project\\src");
     }, { timeout: 3000 });
+    expect(mocks.mockReadDir).toHaveBeenCalledTimes(1);
+    expect(mocks.mockGitStatus).toHaveBeenCalledTimes(1);
   });
 });
 

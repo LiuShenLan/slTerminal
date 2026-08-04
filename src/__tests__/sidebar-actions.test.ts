@@ -648,4 +648,128 @@ describe("侧栏交互", () => {
       expect(mocks.mockOpenHooksConfigPanel).toHaveBeenCalledWith(newPage.pageId);
     });
   });
+
+  describe("错误降级（EXP-08）", () => {
+    it("dialog.open reject → console.error + store 不变、不抛错", async () => {
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      mocks.mockOpenDialog.mockRejectedValueOnce(new Error("IPC 失败"));
+      const { getAllByTitle } = renderSidebar();
+      expect(() => fireEvent.click(getAllByTitle("添加项目")[0])).not.toThrow();
+      // 等待 catch 分支执行
+      await waitFor(() => expect(consoleSpy).toHaveBeenCalled(), { timeout: 3000 });
+      expect(consoleSpy).toHaveBeenCalledWith(
+        "[slTerminal] 添加项目失败:",
+        expect.any(Error),
+      );
+      // 状态不变——不创建项目
+      expect(Object.values(useProjects.getState().projects)).toHaveLength(0);
+      consoleSpy.mockRestore();
+    });
+
+    it("dialog.open 返回数组 → 取第一个元素创建项目", async () => {
+      mocks.mockOpenDialog.mockResolvedValueOnce(["C:\\arr-project"]);
+      const { getAllByTitle } = renderSidebar();
+      fireEvent.click(getAllByTitle("添加项目")[0]);
+      await waitFor(() => {
+        expect(Object.values(useProjects.getState().projects)).toHaveLength(1);
+      }, { timeout: 3000 });
+      const project = Object.values(useProjects.getState().projects)[0];
+      expect(project.rootPath).toBe("C:\\arr-project");
+      expect(project.pages[0].cwd).toBe("C:\\arr-project");
+    });
+
+    it("dialog.open 返回空数组 → store 不变、不抛错", async () => {
+      mocks.mockOpenDialog.mockResolvedValueOnce([]);
+      const { getAllByTitle } = renderSidebar();
+      expect(() => fireEvent.click(getAllByTitle("添加项目")[0])).not.toThrow();
+      await waitFor(() => expect(mocks.mockOpenDialog).toHaveBeenCalled(), { timeout: 3000 });
+      // dirPath 为 undefined → handleAddProject 提前 return，不创建项目
+      expect(Object.values(useProjects.getState().projects)).toHaveLength(0);
+    });
+
+    it("项目不存在时点击项目行'打开 Hooks 配置' → 防御分支返回、不抛错", () => {
+      populateStore();
+      const { getAllByText } = renderSidebar();
+      fireEvent.contextMenu(getAllByText("测试项目")[0]);
+      // 模拟菜单打开期间项目被删除：真实 removeProject（SidebarTree.tsx:484 防御分支 if (!proj) return）
+      useProjects.getState().removeProject("proj-1");
+      // React 重渲染在微任务中冲刷——此处 DOM 同步未变，用原生 click 触发菜单 action
+      expect(() => {
+        (getAllByText("打开 Hooks 配置")[0] as HTMLElement).click();
+      }).not.toThrow();
+      // 防御分支 return——不切页、不开面板
+      expect(mocks.mockSwitchToPage).not.toHaveBeenCalled();
+      expect(mocks.mockOpenHooksConfigPanel).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("hover 样式与按钮 stopPropagation（EXP-09）", () => {
+    it("项目行 mouseEnter → hover 背景；mouseLeave → 恢复透明", () => {
+      populateStore();
+      const { getAllByText } = renderSidebar();
+      const row = getAllByText("测试项目")[0].closest("div")!;
+      // 项目行初始无内联背景
+      expect(row.style.background).toBe("");
+      fireEvent.mouseEnter(row);
+      expect(row.style.background).toBe("var(--sb-hover)");
+      fireEvent.mouseLeave(row);
+      expect(row.style.background).toBe("transparent");
+    });
+
+    it("非选中页面行 hover → hover 背景；离开恢复透明", () => {
+      populateStore();
+      const { getAllByText } = renderSidebar();
+      // 操作页面 2 非选中（activePageId=page-1）
+      const row = getAllByText("操作页面 2")[0].closest("div")!;
+      expect(row.style.background).toBe("transparent");
+      fireEvent.mouseEnter(row);
+      expect(row.style.background).toBe("var(--sb-hover)");
+      fireEvent.mouseLeave(row);
+      expect(row.style.background).toBe("transparent");
+    });
+
+    it("选中页面行 hover 不覆盖选中背景", () => {
+      populateStore();
+      const { getAllByText } = renderSidebar();
+      // 操作页面 1 选中（activePageId=page-1）
+      const row = getAllByText("操作页面 1")[0].closest("div")!;
+      expect(row.style.background).toBe("var(--sb-selected)");
+      fireEvent.mouseEnter(row);
+      expect(row.style.background).toBe("var(--sb-selected)");
+      fireEvent.mouseLeave(row);
+      expect(row.style.background).toBe("var(--sb-selected)");
+    });
+
+    it("重命名中点击 input → stopPropagation，不触发 switchToPage", async () => {
+      populateStore();
+      const { getAllByText } = renderSidebar();
+      fireEvent.contextMenu(getAllByText("操作页面 1")[0]);
+      const renameItems = getAllByText("重命名操作页面");
+      expect(renameItems.length).toBeGreaterThan(0);
+      (renameItems[0] as HTMLElement).click();
+      await waitFor(() => {
+        expect(document.querySelector("input")).toBeTruthy();
+      }, { timeout: 3000 });
+      // input 的 onClick 带 stopPropagation——点击不冒泡触发行逻辑
+      fireEvent.click(document.querySelector("input")!);
+      expect(mocks.mockSwitchToPage).not.toHaveBeenCalled();
+    });
+
+    it("重命名中点击行本体 → 不触发 switchToPage（行 onClick 置空）", async () => {
+      populateStore();
+      const { getAllByText } = renderSidebar();
+      fireEvent.contextMenu(getAllByText("操作页面 1")[0]);
+      const renameItems = getAllByText("重命名操作页面");
+      (renameItems[0] as HTMLElement).click();
+      await waitFor(() => {
+        expect(document.querySelector("input")).toBeTruthy();
+      }, { timeout: 3000 });
+      // 重命名期间行 div 的 onClick 为 undefined——点击行本体不切页
+      const row = document.querySelector("input")!.closest("div")!;
+      fireEvent.click(row);
+      expect(mocks.mockSwitchToPage).not.toHaveBeenCalled();
+      // 重命名态保持（点击行未失焦关闭 input）
+      expect(document.querySelector("input")).toBeTruthy();
+    });
+  });
 });

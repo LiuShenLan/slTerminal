@@ -2,7 +2,7 @@
 
 > **本文档是项目用例数唯一真值源。** 所有 CLAUDE.md、README、CI 配置中引用的用例数均以此文件为准。更新测试后必须同步本文档。
 
-全量 **2619** 用例（Rust 449 + 前端 2020 + L3 116 + E2E 34），2026-08-03 更新。
+全量 **2658** 用例（Rust 449 + 前端 2059 + L3 116 + E2E 34），2026-08-05 更新。
 
 > **计数口径**：前端 (L2) 用例数以 `grep -cE '^\s*(it|test)\(' src/__tests__/*.test.ts src/__tests__/*.test.tsx` 展开的 `it`/`test` 块数为准（Vitest 实际运行数）；L3 同理 `test/terminal/*.test.ts`；Rust (L1) 以 `grep -c '#\[test\]'` 统计的 `#[test]` 属性数为准。L3 的 116 用例同时被 L2 (`npm test`) 和独立 L3 (`npm run test:l3`) 执行，但此处各层独立计数，不做去重。
 
@@ -39,7 +39,7 @@
 > `pty/mod.rs`、`pty/win_build.rs`、`main.rs` 不含 `#[test]`，不在此列。
 > claude_history 模块 56 用例为 grep `#[test]` 计数（jsonl 28 + scan 14 + ops 7 + mod 7），env 测试依赖 L1 `--test-threads=1` 门禁（`std::env::set_var` 全局可变）。
 
-## L2 — 前端单元/集成测试（117 文件 / 2020 用例）
+## L2 — 前端单元/集成测试（121 文件 / 2059 用例）
 
 运行：`npm test`（Vitest + jsdom）
 
@@ -114,26 +114,30 @@
 | `src/__tests__/keybindings.test.ts` | 16 | setBinding/clearBinding/resetAll/sanitize/loaded 守卫/debounce |
 | `src/__tests__/layout.test.ts` | 4 | activePageId 设置/清空/重复 |
 
-### 资源管理器（16 文件 / 213 用例）
+### 资源管理器（20 文件 / 252 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
-| `src/__tests__/explorer-git-status.test.tsx` | 32 | gitStatusMap 查表着色/配色 token/F5 untracked/slterm:file-saved |
-| `src/__tests__/explorer-delete.test.tsx` | 19 | ask 弹窗分支/右键菜单/操作失败 UI 通知 |
+| `src/__tests__/explorer-git-status.test.tsx` | 32 | gitStatusMap 查表着色/配色 token/F5 untracked/slterm:file-saved/F8 mount 单次加载 |
+| `src/__tests__/explorer-delete.test.tsx` | 22 | ask 弹窗分支/右键菜单/操作失败 UI 通知/横幅 dismiss+5s 自动消失+卸载清理（EXP-04）/E6 编号 17-22 统一（EXP-11） |
 | `src/__tests__/file-icon.test.tsx` | 18 | 扩展名图标 + 目录图标 + git 状态着色 |
 | `src/__tests__/explorer-refresh-preserve.test.tsx` | 17 | reloadPreservingExpanded 递归重建/边界容错/三条触发路径/竞态 |
-| `src/__tests__/explorer-file-viewer.test.tsx` | 16 | handleOpenFile 面板分派/FileViewerRegistry/htmlviewer 回退 |
+| `src/__tests__/explorer-file-viewer.test.tsx` | 19 | handleOpenFile 面板分派/FileViewerRegistry/htmlviewer 回退/防御分支（无 dockviewApi/addPanel 抛错/getPanel undefined 回退新建，EXP-10） |
 | `src/__tests__/explorer-keyboard.test.ts` | 15 | `createExplorerShortcuts()` delete/open/rename 经 active 指针派发 + actions ref 模式闭包不过期 |
 | `src/__tests__/use-file-tree.test.ts` | 15 | loadRoot/loadDirectory/toggleExpand/generation 取消 |
-| `src/__tests__/explorer-selection.test.tsx` | 14 | FileTree 选中模型（单击选中/双击打开/空白取消/hover 不覆盖选中态） |
+| `src/__tests__/explorer-selection.test.tsx` | 17 | FileTree 选中模型（单击选中/双击打开/空白取消/hover 不覆盖选中态）+ 非选中行 hover enter/leave 高亮（EXP-04） |
 | `src/__tests__/explorer-root-contextmenu.test.tsx` | 14 | 根节点右键菜单/新建文件+文件夹 |
 | `src/__tests__/explorer-sandbox-race.test.tsx` | 13 | DBG-10：路径沙箱竞态回归——deferred `setProjectRoot` 验证 resolve 前 `readDir` 不被调用/resolve 后正常加载/reject 降级 |
 | `src/__tests__/explorer-notify.test.tsx` | 12 | startWatch 调用时机/loadRoot/toggleExpand |
+| `src/__tests__/explorer-input-boundary.test.tsx` | 10 | 内联输入框边界（EXP-06）：重命名 Enter 空名/失焦提交/失焦空值/重名提交/Escape + 文件夹级新建文件/文件夹 Escape/blur 空值/Enter |
 | `src/__tests__/explorer-rename-state.test.tsx` | 8 | 重命名状态上提（renamingPath 由 ExplorerPanel 管理） |
+| `src/__tests__/explorer-open-in-terminal.test.tsx` | 7 | 「在终端中打开」（EXP-01）：菜单入口 + addPanel 参数（component=cwd=panelId=renderer）+ 无去重 |
+| `src/__tests__/explorer-race-cleanup.test.tsx` | 6 | useFileTree 竞态清理（EXP-07）：旧 loadRoot 延迟 resolve 丢弃/refresh null 分支/fs-event 去抖卸载清理/file-saved 缺 path 仍刷新/卸载清理/gitStatus 过期丢弃 |
 | `src/__tests__/activeExplorer.test.ts` | 6 | active 指针 set/get/覆盖、clear 仅匹配时生效（同 activeTerminal/activeEditor 模式） |
 | `src/__tests__/explorer-rootpath-clear.test.tsx` | 6 | rootPath 变化清空/快速切换 gen 丢弃/同值不清空 |
 | `src/__tests__/explorer-rename-keyboard.test.tsx` | 5 | F2 快捷键 → renameSelected 集成 |
-| `src/__tests__/explorer-focus.test.tsx` | 3 | ExplorerPanel 焦点管理（tabIndex/usePanelFocus 集成） |
+| `src/__tests__/explorer-focus.test.tsx` | 6 | ExplorerPanel 焦点管理（tabIndex/usePanelFocus 集成）+ focusin/focusout 上下文栈链路（EXP-04） |
+| `src/__tests__/explorer-crud-success.test.tsx` | 4 | CRUD 成功路径（EXP-02）：删除/重命名/新建文件/新建文件夹 → IPC + refresh（readDir 二次）+ 状态重置 |
 
 ### 侧栏（1 文件 / 38 用例）
 
@@ -333,6 +337,7 @@ embedded WDIO 驱动**无法将 OS 级按键（`browser.keys`）投递进 WebVie
 
 ## 历史变更
 
+- 2026-08-05（text-fix-plan Stage 09 EXP-01~11 explorer 测试补全）：资源管理器 16→20 文件 213→252 用例（+39）。新增 4 文件——explorer-open-in-terminal 7（EXP-01 在终端中打开 addPanel 参数/无去重）、explorer-crud-success 4（EXP-02 删除/重命名/新建文件/新建文件夹成功路径——IPC+refresh+状态重置）、explorer-input-boundary 10（EXP-06 重命名/文件夹级新建输入框 Escape/空名/重名/失焦边界）、explorer-race-cleanup 6（EXP-07 旧请求延迟 resolve 丢弃/rootPath null 回调/fs-event 去抖卸载清理/file-saved 缺 path/卸载清理/gitStatus 过期丢弃）。扩展现有 4 文件——explorer-focus 3→6（EXP-04 focusin/focusout 上下文栈 spy）、explorer-selection 14→17（EXP-04 非选中行 hover enter/leave）、explorer-delete 19→22（EXP-04 横幅 dismiss/5s 自动消失/卸载清理；E6 编号 17-22 统一 + 标题与断言对齐 EXP-11）、explorer-file-viewer 16→19（EXP-10 无 dockviewApi/addPanel 抛错无孤记录/getPanel undefined 回退新建）。EXP-03：删除 useFileTree.fullRefresh 死代码（无调用方），F8 改名「mount 单次加载」+ 断言 readDir/gitStatus 各一次。L2 2020→2059（117→121 文件）。全量 2619→2658。
 - 2026-08-02（Claude 历史会话 Stage 07 文档同步补登，F7）：L1 新增 claude_history 模块 4 文件 62 用例（jsonl 28 + scan 14 + ops 13 + mod 7——扫描/降级/env 覆盖/回退链/SEC-01 校验/追加写，计数为 grep `#[test]`）。L2 新增「Claude 历史会话」类目 6 文件 109 用例（model 37 + view 28 + hook 14 + input-dialog 12 + row 11 + restore 7）+ IPC 层 ipc-claude-history-contract 12（88→100，三命令四维验证）+ E2E 辅助 dialog-e2e-hook 3（Stage 06 漏登补登，24→27，ask 钩子守卫）+ agent-status-view 11→15（+4 三下拉框适配，Stage 05 产物补登）。L1 384→446（19→23 文件），L2 1783→1911（109→117 文件）。全量 2317→2507。
 - 2026-08-02（Claude 历史会话视图 E2E，TE-01..04）：新增 describe「Claude 历史会话视图」8 用例——fixture 7 形态（custom-title/ai-title/prompt 回退/无 cwd/孤儿/agent-* 平铺/subagents 子目录）+ 搜索过滤 + 复制恢复命令（剪贴板 read_text 断言）+ 孤儿行 ✗ 双击无反应 + 重命名（副本尾部 custom-title 行 Node 断言）+ 删除（ask invoke 拦截降级方案 + 副本文件删除 Node 断言）+ 恢复编排（项目入列/页面切换/终端缓冲含 claude --resume）。新增 fixtures/claude-projects/（9 文件）+ run-wdio.cjs 副本重建与占位符替换 + SLTERM_CLAUDE_PROJECTS_DIR/SLTERM_E2E_PROJECT_DIR env 注入（SEC-02：只动 .tmp-claude-projects 副本）+ .gitignore 条目。L4 26→34（32 active + 2 skip），全量 2309→2317。
 - 2026-08-01（Hooks 配置入口迁移）：删 global.openHooksConfig 快捷键命令（Ctrl+Shift+H）——hooks-config-entry.test.ts 整文件删除（7）、command-catalog 14→13（-1 入口契约）、global-commands 13（断言改 1）；新增侧栏右键菜单入口——sidebar-actions 33→38（+5 菜单入口）、新建 open-hooks-config-panel.test.ts（+5 同页单例/轮询/超时）。L2 1781→1783，全量 2307→2309。

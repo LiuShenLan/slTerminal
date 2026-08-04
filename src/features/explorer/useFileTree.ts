@@ -187,24 +187,6 @@ export function useFileTree({ rootPath }: UseFileTreeOptions) {
     }
   }, [reloadPreservingExpanded]);
 
-  /** 全量刷新（need_rescan 触发） */
-  const fullRefresh = useCallback(async () => {
-    await loadRoot();
-    const rp = rootPathRef.current;
-    if (rp) {
-      try {
-        const statuses = await gitStatus(rp);
-        const map = new Map<string, string>();
-        for (const s of statuses) {
-          map.set(s.path, s.status);
-        }
-        setGitStatusMap(map);
-      } catch {
-        setGitStatusMap(new Map());
-      }
-    }
-  }, [loadRoot]);
-
   // 根路径变更时重新加载
   useEffect(() => {
     const gen = ++genRef.current;
@@ -278,6 +260,5 @@ export function useFileTree({ rootPath }: UseFileTreeOptions) {
     gitStatusMap,
     toggleExpand,
     refresh: refreshExpanded,
-    fullRefresh,
   };
 }

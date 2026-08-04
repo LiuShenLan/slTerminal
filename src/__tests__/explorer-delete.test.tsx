@@ -5,11 +5,12 @@
 //   E2 组：ask 参数验证 — 消息/title/kind
 //   E3 组：ExplorerPanel 集成 — deleteEntry → refresh 链路
 //   E4 组：边界条件 — 右键菜单包含"删除"项
-//   E5 组：操作失败 UI 通知 — 删除/重命名/新建文件/新建文件夹失败 → 内联错误横幅
+//   E5 组：操作失败 UI 通知 — 失败 → 内联错误横幅 + 横幅 dismiss/自动消失/卸载清理（EXP-04）
+//   E6 组：键盘 Del 删除 — ShortcutRegistry 路径（编号 17-22 与全文连续，EXP-11）
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import React from "react";
-import { render, fireEvent, waitFor, cleanup } from "@testing-library/react";
+import { render, fireEvent, waitFor, cleanup, act } from "@testing-library/react";
 
 // ─── Hoisted mocks ───
 const mocks = vi.hoisted(() => {
@@ -476,6 +477,117 @@ describe("ExplorerPanel 操作失败 UI 通知", () => {
       expect(banner.textContent).toContain("权限不足");
     }, { timeout: 3000 });
   });
+
+  it("14. 错误横幅 × 按钮点击 → 横幅立即消失", async () => {
+    mocks.mockAsk.mockResolvedValue(true);
+    mocks.mockDeleteEntry.mockRejectedValue(new Error("权限不足"));
+    mocks.mockReadDir.mockResolvedValue([
+      { name: "readonly.txt", path: "C:/test-project/readonly.txt", isDir: false, size: 32, modified: 1 },
+    ]);
+
+    seedProject();
+
+    const { getAllByText, getByTestId, queryByTestId, container } = renderExplorerPanel();
+
+    await waitFor(() => {
+      expect(getAllByText("readonly.txt").length).toBeGreaterThan(0);
+    }, { timeout: 3000 });
+
+    fireEvent.contextMenu(getAllByText("readonly.txt")[0]);
+    fireEvent.click(getAllByText("删除")[0]);
+
+    // 错误横幅出现
+    await waitFor(() => {
+      expect(getByTestId("explorer-error-banner")).toBeTruthy();
+    }, { timeout: 3000 });
+
+    // 点击 × 关闭按钮（aria-label="关闭错误提示"）
+    const closeBtn = container.querySelector('[aria-label="关闭错误提示"]')!;
+    fireEvent.click(closeBtn);
+
+    expect(queryByTestId("explorer-error-banner")).toBeNull();
+  });
+
+  it("15. 错误横幅 5 秒后自动消失（fake timers）", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.mockAsk.mockResolvedValue(true);
+      mocks.mockDeleteEntry.mockRejectedValue(new Error("权限不足"));
+      mocks.mockReadDir.mockResolvedValue([
+        { name: "readonly.txt", path: "C:/test-project/readonly.txt", isDir: false, size: 32, modified: 1 },
+      ]);
+
+      seedProject();
+      const { getAllByText, getByTestId, queryByTestId } = renderExplorerPanel();
+
+      // 冲刷初始加载微任务（readDir/gitStatus）
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(getAllByText("readonly.txt").length).toBeGreaterThan(0);
+
+      fireEvent.contextMenu(getAllByText("readonly.txt")[0]);
+      fireEvent.click(getAllByText("删除")[0]);
+
+      // 冲刷 ask → deleteEntry reject → showError 微任务链
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(getByTestId("explorer-error-banner")).toBeTruthy();
+
+      // 4.999s 未到边界 → 横幅仍在
+      act(() => {
+        vi.advanceTimersByTime(4999);
+      });
+      expect(queryByTestId("explorer-error-banner")).toBeTruthy();
+
+      // 跨过 5s 边界（ERROR_AUTO_DISMISS_MS=5000）→ 横幅消失
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(queryByTestId("explorer-error-banner")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("16. 错误横幅卸载 → 自动消失定时器被清理（无残留 timer）", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.mockAsk.mockResolvedValue(true);
+      mocks.mockDeleteEntry.mockRejectedValue(new Error("权限不足"));
+      mocks.mockReadDir.mockResolvedValue([
+        { name: "readonly.txt", path: "C:/test-project/readonly.txt", isDir: false, size: 32, modified: 1 },
+      ]);
+
+      seedProject();
+      const { getAllByText, getByTestId, unmount } = renderExplorerPanel();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(getAllByText("readonly.txt").length).toBeGreaterThan(0);
+
+      fireEvent.contextMenu(getAllByText("readonly.txt")[0]);
+      fireEvent.click(getAllByText("删除")[0]);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(getByTestId("explorer-error-banner")).toBeTruthy();
+      // 自动消失定时器已注册
+      expect(vi.getTimerCount()).toBe(1);
+
+      unmount();
+      // 卸载清理应清掉定时器（useEffect cleanup → clearTimeout）
+      expect(vi.getTimerCount()).toBe(0);
+
+      // 推进时间不抛错（定时器已清理，无卸载后 setState）
+      expect(() => act(() => vi.advanceTimersByTime(6000))).not.toThrow();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 // =====================================================================
@@ -516,13 +628,13 @@ describe("键盘 Del 删除 (ShortcutRegistry)", () => {
     if (a) clearActiveExplorer(a);
   });
 
-  it("ShortcutRegistry 含 explorer.delete 命令", () => {
+  it("17. ShortcutRegistry 含 explorer.delete 命令", () => {
     const cmds = getShortcutRegistry().listCommands();
     const ids = cmds.map((c: { id: string }) => c.id);
     expect(ids).toContain("explorer.delete");
   });
 
-  it("Del 键盘事件 + explorer context → deleteSelected 调用", () => {
+  it("18. Del 键盘事件 + explorer context → deleteSelected 调用", () => {
     const actions = makeExplorerActions();
     setActiveExplorer(actions);
     getShortcutRegistry().pushContext("explorer");
@@ -533,7 +645,10 @@ describe("键盘 Del 删除 (ShortcutRegistry)", () => {
     expect(actions.deleteSelected).toHaveBeenCalledOnce();
   });
 
-  it("无选中 + Del → handler 返回 false（deleteSelected 不调用）", () => {
+  it("19. 无选中 + Del → handler 仍派发 deleteSelected（空选中判空在 action 实现内）", () => {
+    // 标题与断言对齐（EXP-11）：keyboard.ts 的 handler 不做选中判空——
+    // 总是调用 e.deleteSelected()，判空发生在 ExplorerPanel.handleDeleteSelected 内部
+    // （selectedPathRef.current 为 null 时直接 return）。此处锁死「handler 派发」语义。
     const actions = makeExplorerActions({ getSelectedPath: () => null, deleteSelected: vi.fn().mockResolvedValue(undefined) });
     setActiveExplorer(actions);
     getShortcutRegistry().pushContext("explorer");
@@ -541,12 +656,10 @@ describe("键盘 Del 删除 (ShortcutRegistry)", () => {
     const event = makeKeyboardEvent("Delete");
     window.dispatchEvent(event);
 
-    // handler 调了 deleteSelected，但内部检查 selectedPath 为 null
-    // 这里是短路径测试：handler 仍调用了 deleteSelected
     expect(actions.deleteSelected).toHaveBeenCalledOnce();
   });
 
-  it("explorer 无焦点 + Del → 不匹配（context 不在栈中）", () => {
+  it("20. explorer 无焦点 + Del → 不匹配（context 不在栈中）", () => {
     const actions = makeExplorerActions();
     setActiveExplorer(actions);
     // 不 pushContext("explorer")
@@ -557,7 +670,7 @@ describe("键盘 Del 删除 (ShortcutRegistry)", () => {
     expect(actions.deleteSelected).not.toHaveBeenCalled();
   });
 
-  it("isRenaming=true + Del → handler 返回 false（透传）", () => {
+  it("21. isRenaming=true + Del → handler 返回 false（透传）", () => {
     const actions = makeExplorerActions({ isRenaming: () => true });
     setActiveExplorer(actions);
     getShortcutRegistry().pushContext("explorer");
@@ -568,7 +681,7 @@ describe("键盘 Del 删除 (ShortcutRegistry)", () => {
     expect(actions.deleteSelected).not.toHaveBeenCalled();
   });
 
-  it("非 Del 键 → deleteSelected 不调用", () => {
+  it("22. 非 Del 键 → deleteSelected 不调用", () => {
     const actions = makeExplorerActions();
     setActiveExplorer(actions);
     getShortcutRegistry().pushContext("explorer");

@@ -3,7 +3,7 @@
 // 覆盖路径：
 //   1. ExtensionBasedViewerStrategy — 注册/解析/大小写/边界/多次注册覆盖
 //   2. FileViewerRegistry — 空策略/单策略/多策略/短路/优先级/顺序语义
-//   3. 单例初始化 — html + htm → htmlviewer
+//   3. 单例初始化 — html + htm → htmlviewer；_reset 清空/恢复（EXP-12）+ 隐藏文件/空扩展名边界
 
 import { describe, it, expect, afterEach, beforeEach } from "vitest";
 import {
@@ -113,6 +113,12 @@ describe("ExtensionBasedViewerStrategy", () => {
     strategy.register("gz", "archive");
     expect(strategy.resolve("a.tar.gz")).toBe("archive");
   });
+
+  // 边界（EXP-12）：结尾点号空扩展名不匹配
+  it("空扩展名 file. 返回 null", () => {
+    strategy.register("html", "hv");
+    expect(strategy.resolve("file.")).toBeNull();
+  });
 });
 
 // ============================================================================
@@ -196,13 +202,20 @@ describe("FileViewerRegistry", () => {
 // ============================================================================
 
 describe("fileViewerRegistry 单例", () => {
-  afterEach(() => {
-    // 恢复单例状态
-    fileViewerRegistry._reset();
+  /** 恢复单例预注册（html/htm → htmlviewer）。
+   *  `_reset()` 会清空全部策略，预注册随之丢失——测试后必须还原，
+   *  否则同文件后续用例（及依赖单例语义的断言）读到空注册表（EXP-12）。 */
+  function restoreDefaultRegistry() {
     const es = new ExtensionBasedViewerStrategy();
     es.register("html", "htmlviewer");
     es.register("htm", "htmlviewer");
     fileViewerRegistry.addStrategy(es);
+  }
+
+  afterEach(() => {
+    // 恢复单例状态
+    fileViewerRegistry._reset();
+    restoreDefaultRegistry();
   });
 
   // 21. 导出为 FileViewerRegistry 实例
@@ -223,5 +236,35 @@ describe("fileViewerRegistry 单例", () => {
   // 补充：单例对未知扩展名返回 null
   it("单例对未知扩展名返回 null", () => {
     expect(fileViewerRegistry.resolve("a.ts")).toBeNull();
+  });
+
+  // EXP-12 边界：隐藏文件与空扩展名（隐藏文件不参与扩展名匹配）
+  it("单例对隐藏文件 .gitignore 返回 null", () => {
+    expect(fileViewerRegistry.resolve(".gitignore")).toBeNull();
+  });
+
+  it("单例对空扩展名 file. 返回 null", () => {
+    expect(fileViewerRegistry.resolve("file.")).toBeNull();
+  });
+
+  // EXP-12 _reset 用例：清空 + 恢复预注册
+  it("_reset() 清空全部策略 → resolve 返回 null", () => {
+    fileViewerRegistry._reset();
+    expect(fileViewerRegistry.resolve("a.html")).toBeNull();
+    expect(fileViewerRegistry.resolve("a.htm")).toBeNull();
+  });
+
+  it("_reset() 后恢复预注册 → html/htm 重新可用（afterEach 恢复路径）", () => {
+    fileViewerRegistry._reset();
+    restoreDefaultRegistry();
+    expect(fileViewerRegistry.resolve("a.html")).toBe("htmlviewer");
+    expect(fileViewerRegistry.resolve("a.htm")).toBe("htmlviewer");
+  });
+
+  it("ExtensionBasedViewerStrategy._reset() 清空映射", () => {
+    const s = new ExtensionBasedViewerStrategy();
+    s.register("html", "htmlviewer");
+    s._reset();
+    expect(s.resolve("a.html")).toBeNull();
   });
 });

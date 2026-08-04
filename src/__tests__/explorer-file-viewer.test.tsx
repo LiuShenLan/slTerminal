@@ -79,10 +79,10 @@ vi.mock("../ipc/dialog", () => ({
 import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
 import { titleManager } from "../workspace/titleManager";
-import { ExplorerPanel } from "../features/explorer";
+import { ExplorerPanel, canOpenFile } from "../features/explorer";
 import { fireEvent, render, waitFor } from "@testing-library/react";
 
-function populateStore(rootPath = "C:\\project") {
+function populateStore(rootPath = "C:\\project", activePageId: string | null = "page-1") {
   useProjects.setState({
     projects: {
       "proj-1": {
@@ -108,7 +108,7 @@ function populateStore(rootPath = "C:\\project") {
   } as never);
 
   useLayout.setState({
-    activePageId: "page-1",
+    activePageId,
   });
 }
 
@@ -454,5 +454,108 @@ describe("ExplorerPanel + FileViewerRegistry 集成", () => {
     // addPanel 被调用（新文件无去重）
     expect(mocks.mockAddPanel).toHaveBeenCalledTimes(1);
     // focus 未因去重调用（是全新打开）
+  });
+
+  // ========================================================================
+  // EXP-10: handleOpenFile 防御分支
+  // ========================================================================
+
+  // 67. 无 __dockviewApi → 双击文件不抛错（前置守卫 return）
+  it("无 __dockviewApi 时双击文件不抛错", async () => {
+    populateStore();
+    const { findAllByText } = render(React.createElement(ExplorerPanel));
+
+    const htmlItems = await findAllByText("index.html");
+    const htmlItem = htmlItems.find((el) => el.tagName === "SPAN");
+
+    // 移除 dockviewApi（模拟布局未就绪）
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (window as any).__dockviewApi;
+
+    expect(() => {
+      fireEvent.doubleClick(htmlItem!);
+    }).not.toThrow();
+  });
+
+  // 68. addPanel 抛异常 → 不崩溃 + titleManager 无孤记录（后续重开仍走 addPanel）
+  it("addPanel 抛异常时双击文件不崩溃且不注册标题（无孤记录）", async () => {
+    mocks.mockAddPanel.mockImplementation(() => {
+      throw new Error("布局状态不一致");
+    });
+    populateStore();
+    const { findAllByText } = render(React.createElement(ExplorerPanel));
+
+    const htmlItems = await findAllByText("index.html");
+    const htmlItem = htmlItems.find((el) => el.tagName === "SPAN");
+
+    // 第一次双击：addPanel 抛错被 catch → 不崩溃
+    expect(() => {
+      fireEvent.doubleClick(htmlItem!);
+    }).not.toThrow();
+
+    // 第二次双击：registerEditor 未执行（无孤记录）→ findExistingEditor 不命中
+    // → 仍走 addPanel 新开路径（而非去重聚焦），addPanel 再次被调用
+    expect(() => {
+      fireEvent.doubleClick(htmlItem!);
+    }).not.toThrow();
+
+    expect(mocks.mockAddPanel).toHaveBeenCalledTimes(2);
+    // 无去重聚焦（getPanel/focus 均未被调用）
+    expect(mocks.mockGetPanel).not.toHaveBeenCalled();
+    expect(mocks.mockFocus).not.toHaveBeenCalled();
+  });
+
+  // 69. findExistingEditor 命中但 getPanel 返回 undefined → 回退 addPanel 新建（不崩溃）
+  it("去重命中但面板已不存在（getPanel 返回 undefined）→ 回退新建", async () => {
+    mocks.mockGetPanel.mockReturnValue(undefined);
+    populateStore();
+    const { findAllByText } = render(React.createElement(ExplorerPanel));
+
+    const htmlItems = await findAllByText("index.html");
+    const htmlItem = htmlItems.find((el) => el.tagName === "SPAN");
+
+    // 第一次打开：addPanel + registerEditor
+    fireEvent.doubleClick(htmlItem!);
+    await waitFor(() => {
+      expect(mocks.mockAddPanel).toHaveBeenCalledTimes(1);
+    }, { timeout: 3000 });
+
+    // 第二次打开：findExistingEditor 命中（首次已注册）但 getPanel 返回 undefined
+    // → 防御分支回退到 addPanel 新建，不崩溃
+    expect(() => {
+      fireEvent.doubleClick(htmlItem!);
+    }).not.toThrow();
+
+    await waitFor(() => {
+      expect(mocks.mockAddPanel).toHaveBeenCalledTimes(2);
+    }, { timeout: 3000 });
+  });
+
+  // 70. 无活跃操作页 → canOpenFile 守卫返回 false（handleOpenFile 直接 return 不调 addPanel）。
+  // 注意：该分支在 UI 路径不可达（activePageId 为 null 时 rootPath 亦为 null、
+  // FileTree 不渲染），经 D2 最小可测性重构抽出守卫纯函数后直测
+  it("无 activePageId 时 canOpenFile 守卫返回 false（不调 addPanel）", () => {
+    // 无活跃页（无论 dockviewApi 是否存在）→ false
+    expect(canOpenFile(null, {})).toBe(false);
+    expect(canOpenFile(null, undefined)).toBe(false);
+    // 有活跃页但无 dockviewApi → false（等价现有"无 __dockviewApi"用例的守卫层）
+    expect(canOpenFile("page-1", undefined)).toBe(false);
+    // 两者齐备 → true
+    expect(canOpenFile("page-1", {})).toBe(true);
+  });
+
+  // 71. activePageId 为 null（无活跃操作页）→ 文件树不渲染、addPanel 零调用（行为级兜底）
+  it("无活跃操作页时不调用 addPanel", () => {
+    populateStore("C:\\project", null);
+    // 用 container 限定本次渲染断言——测试文件的 beforeEach 会重置 store，
+    // 导致此前测试残留的 ExplorerPanel 实例因 Zustand 订阅重渲染为空态
+    //（DOM 多容器残留，既有测试均用 findAllByText 容忍此现象）
+    const { container } = render(React.createElement(ExplorerPanel));
+
+    // 无活跃页 → 空态提示（FileTree 不渲染，双击路径不可达）
+    expect(container.textContent).toContain("选择一个项目以浏览文件");
+    expect(container.textContent).not.toContain("index.html");
+    // 无任何打开面板动作
+    expect(mocks.mockAddPanel).not.toHaveBeenCalled();
   });
 });
