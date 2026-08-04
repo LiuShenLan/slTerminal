@@ -106,23 +106,22 @@ DELETE_STATES   = {added, untracked}                       → "删除"
 
 ## 测试模式
 
-测试文件：`src/__tests__/commit-view.test.tsx`（28 用例）。
+测试文件位于 `src/__tests__/`。SVC-14 将原 850+ 行单文件 `commit-view.test.tsx` 按领域拆分为六文件（共 60 用例）：
+
+| 文件 | 用例数 | 覆盖范围 |
+|------|--------|---------|
+| `commit-view-status.test.ts` | 7 | 状态机四态（no-root / loading / error / ready） |
+| `commit-view-list.test.tsx` | 9 | 列表渲染（文件名着色 token、计数、字母序排序、空态"无变更文件"）、折叠交互、fs-event 200ms debounce 刷新、rootPath 切换清空 + generation 丢弃（SVC-12 计时统一） |
+| `commit-context-menu.test.ts` | 15 | 右键菜单策略（`commitContextMenu.ts`）：ROLLBACK/DELETE 状态集、菜单项构造、删除 catch（SVC-08/09） |
+| `commit-context-menu-ui.test.tsx` | 8 | 菜单 UI 交互（外点关闭、菜单项点击 → ask 确认 → IPC → refresh） |
+| `commit-open-file.test.ts` | 17 | 双击分派（SVC-04/11）：四种状态 addPanel 的 component/title/params、去重聚焦（B10 反向用例改经 `openCommitFile` 驱动——同文件不同 suffix 不误匹配）、守卫路径 |
+| `commit-view.test.tsx` | 4 | 残余主干用例 |
 
 ### 技术栈
 
 - Vitest（jsdom 环境）+ React Testing Library（`render` / `fireEvent` / `waitFor`）
 - mock `../ipc/git`（`gitStatus`）+ `../ipc/notify`（`onFsEvent`）
 - mock `dockview-react` + `titleManager` stub
-
-### 测试覆盖
-
-- **状态机四态**：no-root / loading / error / ready 各自渲染验证
-- **列表渲染**：文件名着色 token、计数显示、按相对路径字母序排序、空态"无变更文件"
-- **折叠交互**：点击标题栏折叠/展开，条目数不变
-- **双击分派**：四种状态（added/untracked/deleted/modified）分别验证 addPanel 调用的 component/title/params
-- **去重聚焦**：已有同文件+同 suffix 面板时 focus 不新建；同文件不同 suffix 不误匹配
-- **fs-event 刷新**：fake timers 验证 200ms debounce 后 gitStatus 重调
-- **rootPath 切换**：切换项目清空旧数据 + generation 丢弃旧结果
 
 ### 运行
 

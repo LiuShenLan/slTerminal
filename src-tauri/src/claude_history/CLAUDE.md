@@ -57,21 +57,22 @@ Claude Code 历史会话查询——扫描 `~/.claude/projects/` 下全部会话
 
 ## 测试模式
 
-Rust 测试 4 个位置（均为 `#[cfg(test)] mod tests` 嵌入源文件底部），共 56 用例（grep `#[test]` 口径，与 `.claude/test-inventory.md` 一致）：
+Rust 测试 4 个位置（均为 `#[cfg(test)] mod tests` 嵌入源文件底部），共 63 用例（grep `#[test]` 口径，与 `.claude/test-inventory.md` 一致）：
 
 | 位置 | 用例数 | 覆盖范围 |
 |------|--------|---------|
 | `jsonl.rs` | 28 | parse_head（cwd 收集/首条可见 prompt 跳过 4 类/未知 type/EOF 截断/200 字符截断/头部标题 last-wins）、大文件头尾窗口协同（>512KB 中部标题收不到/尾部 64KB 命中）、parse_tail_title（custom 恒优先/ai 兜底/截断行/空文件）、resolve_title 回退链 5 态 + tail 优先 |
-| `scan.rs` | 14 | resolve_projects_root（env 覆盖/空 env 回退/默认）、排除 3 类（agent-*/非 UUID/subagents）、多目录多会话收集、扫描根缺失空数组、损坏/空文件降级条目、完整字段（回退链落位 summary）、cwd_exists（真/假）、env 端到端、mtime（存在/缺失）、尾部 custom-title 覆盖头部 summary |
-| `ops.rs` | 7 | validate_session_id（UUID 双形态接受/5 类非法拒绝）、delete（jsonl+同名目录范围/仅 jsonl/不存在 Err/非法 id 端到端）、越界防护（扫描根外哨兵文件不被触碰） |
+| `scan.rs` | 19 | resolve_projects_root（env 覆盖/空 env 回退/默认）、排除 3 类（agent-*/非 UUID/subagents）、多目录多会话收集、扫描根缺失空数组、损坏/空文件降级条目、完整字段（回退链落位 summary）、cwd_exists（真/假）、env 端到端（**ScanRootGuard RAII**，HFN-06）、mtime（存在/缺失）、尾部 custom-title 覆盖头部 summary、**命令包装层（HFN-05：`block_on(claude_history_scan())` 直测——env 生效/根缺失空数组非 Err）** |
+| `ops.rs` | 9 | validate_session_id（UUID 双形态接受/5 类非法拒绝，HFN-09③ 空串断言改 `msg.contains(bad)` 具体校验文案）、delete（jsonl+同名目录范围/仅 jsonl/不存在 Err/非法 id 端到端）、越界防护（扫描根外哨兵文件不被触碰）、**命令包装层（HFN-05：`block_on(claude_history_delete(..))`——合法删除成功/非法 id Validation 错误）** |
 | `mod.rs` | 7 | HistorySession serde camelCase 七键集合精确匹配/反序列化/roundtrip、TitleSource 五变体序列化+反序列化、is_uuid_filename（合法/非法/agent 形态） |
 
 ### 测试模式要点
 
-- **env 测试必须 `--test-threads=1`**：`std::env::set_var("SLTERM_CLAUDE_PROJECTS_DIR", ...)` 全局可变，并行测试互相污染——测试内设/测毕恢复（`set_scan_root`/`unset_scan_root` helper），依赖 L1 的 `--test-threads=1` 门禁
+- **env 测试必须 `--test-threads=1`**：`SLTERM_CLAUDE_PROJECTS_DIR` 全局可变，并行测试互相污染，依赖 L1 的 `--test-threads=1` 门禁
+- **ScanRootGuard RAII（HFN-06）**：`struct ScanRootGuard(Option<OsString>)`，`ScanRootGuard::set("...")` 保存旧值并 set env，`Drop` 时恢复（`None` 则 unset）——panic 也不会残留污染后续用例。替代早期手动 `set_scan_root`/`unset_scan_root` helper
 - **tempdir 隔离**：`make_scan_root()` 创建扫描根 + 编码目录（`C--Users-test-app`），路径经 `dunce::canonicalize` 统一长名（8.3 短名坑，照 `git/CLAUDE.md` 先例）
 - **JSON 构造用 serde_json**：测试写入的 transcript 行经 `serde_json::json!` 序列化（Windows 路径含反斜杠，手拼字符串转义易错）
-- **纯逻辑函数直测**：命令包装（async + spawn_blocking）不直测，直接调纯 I/O 逻辑（`scan_sessions` / `delete_session` / `parse_head` / `parse_tail_title` / `resolve_title`）；命令注册与端到端由 L4 E2E 验收
+- **命令包装层 block_on 直测（HFN-05）**：命令为 async fn，测试内 `block_on`（`tokio Runtime`，照 `hooks/usage.rs` 先例）直接 await `claude_history_scan` / `claude_history_delete` 命令本身，覆盖参数透传与错误映射；纯 I/O 逻辑（`scan_sessions` / `delete_session` / `parse_head` / `parse_tail_title` / `resolve_title`）仍直测；命令注册与真实端到端由 L4 E2E 验收
 
 ### 运行
 
@@ -88,8 +89,8 @@ cargo test --manifest-path src-tauri/Cargo.toml claude_history::ops -- --test-th
 ## 修改注意事项
 
 1. 修改 DTO 字段（`HistorySession` / `TitleSource`）后同步更新 `src/types/claudeHistory.ts`（前端接口）与 `src/ipc/claudeHistory.ts`（IPC wrapper），跑 mod.rs serde 测试 + `src/__tests__/ipc-claude-history-contract.test.ts`
-2. 修改 `resolve_projects_root` / 排除规则 / 降级逻辑后跑 `scan.rs` 全部 14 条测试
+2. 修改 `resolve_projects_root` / 排除规则 / 降级逻辑 / `ScanRootGuard` 后跑 `scan.rs` 全部 19 条测试
 3. 修改 `parse_head` / `parse_tail_title` / `resolve_title` / 两个窗口常量后跑 `jsonl.rs` 全部 28 条测试（尤其大文件头尾协同两用例）
-4. 修改 `validate_session_id` / delete 后跑 `ops.rs` 全部 7 条测试；**勿削弱 SEC-01 校验**（定位只接受 sessionId，前端不传路径）
+4. 修改 `validate_session_id` / delete 后跑 `ops.rs` 全部 9 条测试；**勿削弱 SEC-01 校验**（定位只接受 sessionId，前端不传路径）
 5. env 测试依赖 `--test-threads=1` 门禁——勿在测试中引入并行 env 操作
 6. 新增 Tauri 命令后在 `lib.rs` 的 `generate_handler!` 注册（本模块两命令已注册）

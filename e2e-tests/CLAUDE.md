@@ -23,10 +23,20 @@ npm run wdio          # → node ./e2e-tests/run-wdio.cjs
 
 | 文件 | 用途 |
 |------|------|
-| `wdio.conf.ts` | WDIO 配置：local runner、mocha BDD、embedded driverProvider、单实例端口 4445、60s 超时 |
-| `test.e2e.ts` | 测试用例（34 条，32 active + 2 skip，用例数见 `.claude/test-inventory.md`）：启动标题、终端 PTY 通信+缓冲断言、终端写入读取（E2E helper）、**H6 终端跨页面存活**、页签标题+冲突、**编辑器 dirty→clean 保存**、HTML iframe Ctrl+W postMessage 转发关闭、**HTML 内联脚本/事件 CSP 执行验证**（skip）、**侧栏视图 点击开关（R1/R2 验证）**、**侧栏视图 拖拽跨区（R6/R7 验证）**、**Commit 视图 Changes/Unversioned + 双击 diff 页签**、hooks 注入/卸载/状态、**信号文件驱动页签 emoji**、Agent Status 视图存在性验证、**Agent Status 纯 shell 终端无行（行建模新语义）**、**Agent Status 动态四态（首个信号即建行→PreToolUse⚡→Stop✅→SessionEnd 行消失）**、**R2 变体（切项目往返用量保持——contextUsage 全链路 + cache 字段）**、**R3 变体（SessionEnd 删行+切项目不复活）**、**R4 变体（关页签删行——remove 事件+ref 稳定订阅）**、**历史区四态（信号文件驱动 → 历史区与活跃区同源 emoji 一致，含「信号文件被消费」断言——防 watcher 残留回归，win10 实证）**、**恢复编排（双击普通行 → 项目入列 + 切页 + 终端注入 claude --resume，不断言真实进入会话）**、toast 触发链路（skip） |
-| `run-wdio.cjs` | Node 版本兼容启动器 |
-| `helpers.ts` | E2E 辅助函数（`installAllE2eHelpers()` 统一注入全局对象） |
+| `wdio.conf.ts` | WDIO 配置：local runner、mocha BDD、embedded driverProvider、单实例端口 4445、60s 超时、**用例级重试（E2E-15，mocha `retries: 1`；E2E-12 杀 app 用例在用例内 `this.retries(0)` 显式关闭）**。specs 通配 `./*.e2e.ts`（E2E-09 拆分后自动纳入），同一 worker 顺序执行（maxInstances=1，字母序即执行序——terminal.e2e.ts 末位承载 E2E-12 杀 app 用例） |
+| `terminal.e2e.ts` | 终端 spec（7 条 active）：启动标题、PTY 通信+缓冲断言、E2E helper 写入读取、terminal-N 标题、**H6 跨页面存活**、**全屏 TUI 大负载 + 切页签往返（E2E-04 视觉回归——M2 人工验证点）**、**强杀 slterminal.exe → 子进程树无残留（E2E-12，KILL_ON_JOB_CLOSE 真实验证）** |
+| `editor.e2e.ts` | 编辑器 spec（5 条 active）：编辑器标题 basename/同名冲突相对路径/关闭后重算、Ctrl+S 真实写盘（mtime 断言）、外部修改触发 reload 后保存（dirty→clean） |
+| `html.e2e.ts` | HTML 面板 spec（1 active + 1 skip）：iframe Ctrl+W postMessage 转发关闭（真实二进制全链路）、**内联脚本/事件 CSP 执行验证**（skip，执行断言不稳定） |
+| `sidebar.e2e.ts` | 侧栏视图 spec（2 条 active）：点击开关（R1/R2）、**跨区移动状态机（R6/R7——经 store helper，非真实 DnD，见定位声明）** |
+| `commit.e2e.ts` | Commit 视图 spec（2 条 active）：真实 git 仓库（`gitScaffold.ts` 脚手架）变更列表渲染、双击 modified 打开 diff 页签 |
+| `hooks.e2e.ts` | hooks spec（4 条 active）：注入/卸载/状态三态、信号文件驱动页签 emoji、**真实 hook reporter 链路（E2E-06：node 执行脚本 + stdin JSON + SLTERM_PANEL_ID → 信号文件产生/消费 + 非法 JSON exit 0 的 C10 守卫）**、hooksConfig project 层保存写盘 + merge 保留其他字段 |
+| `agent.e2e.ts` | Agent 状态 spec（6 active + 1 skip）：视图存在性、纯 shell 终端无行、动态四态（首个信号即建行→⚡→✅→行消失）、R2/R3/R4 变体、toast 触发链路（skip，权限弹窗需用户交互） |
+| `history.e2e.ts` | 历史会话 spec（8 条 active）：fixture 6 行展示 + 排除规则、标题回退链、搜索过滤、复制恢复命令（剪贴板断言）、孤儿行 ✗、删除（ask 钩子 + 副本删除）、历史区四态同源、**恢复编排（部分端到端：断言到 pty.write 注入，不含真实进入会话）** |
+| `specUtils.ts` | spec 共享工具（Node 侧，E2E-09）：Workspace/Dockview 就绪等待、项目/终端创建、PTY session 等待、hooks 注入、信号文件原子写与消费等待、页面切换等待（waitUntil 替代 pause，E2E-10）、共享 setup `withProjectAndTerminal`。**与应用侧 `helpers.ts` 相互独立，二者禁止互相 import** |
+| `gitScaffold.ts` | git 仓库脚手架（Node 侧）：`makeGitRepo` 按场景描述初始化真实 git 仓库（init/commit/modified/untracked），tempdir 隔离，execSync 调系统 git CLI |
+| `fixtures/claude-projects/` | claude_history 扫描 fixture（`SLTERM_CLAUDE_PROJECTS_DIR` 指向的副本）：7 形态会话文件（custom-title/ai-title/prompt 回退/无 cwd/孤儿/agent-* 平铺/subagents 子目录）+ **README.md（E2E-13③）说明编码目录名/UUID 与 claude_history 排除规则的同步关系** |
+| `run-wdio.cjs` | Node 版本兼容启动器 + 用户目录隔离备份/还原（见下节） |
+| `helpers.ts` | 应用侧 E2E 辅助（`installAllE2eHelpers()` 统一注入 window 全局对象，见通信方式表） |
 
 ## 配置要点
 
@@ -70,17 +80,35 @@ E2E helpers 通过 `main.tsx` 中 `E2E_ENABLED`（`src/lib/e2eEnabled.ts`）条�
 
 > **命名约定说明**：`__slterm_e2e_*` 前缀的对象挂载在 `window` 上（全局）；`__e2e_*` 前缀的对象挂载在终端容器 DOM 元素上（局部）。两套命名反映挂载位置不同——`__e2e_*` 对象随面板销毁而消失，不能作为 `window` 全局。未来可统一为 `__slterm_e2e_*` 前缀。
 
-## settings.json 隔离机制（FIX-TE-04）
+## 用户目录隔离机制（FIX-TE-04 + E2E-05 扩展）
 
-`run-wdio.cjs` 在启动时备份 `~/.slterminal/settings.json`（存在时复制为 `settings.json.e2e-bak`），并在 `process.on('exit')` 中同步还原：
+`run-wdio.cjs` 启动时备份以下用户目录内容，`process.on('exit')` 中同步还原（还原前先 `rmSync` 删产物再 rename 备份，防残留 bak 致还原失败；node22 直跑 / 便携下载 / fallback 三路径均受 `exit` 钩子覆盖）：
 
-- **原文件存在**：用备份覆盖 E2E 运行期间产生的 `settings.json`
-- **原文件不存在**：删除 E2E 产物 + 残留 bak 文件
-- node22 直跑 / 便携下载 / fallback 三路径均受 `exit` 钩子覆盖
+| 目标 | 备份方式 | 说明 |
+|------|----------|------|
+| `~/.slterminal/settings.json` | 复制为 `.e2e-bak` | FIX-TE-04 原有——侧栏视图状态等 |
+| `~/.claude/settings.json` | 复制为 `.e2e-bak` | E2E-05 新增——`hooks_inject` 会写入 slterm matcher，异常退出残留会污染用户配置 |
+| `~/.slterminal/hooks/` | 整目录复制为 `.e2e-bak` | E2E-05 新增——注入的 reporter 脚本目录；备份失败（目录占用）降级为 exit 时跳过还原 |
+| `~/.slterminal/hooks-events/` | exit 时清理 | 信号文件目录，运行产物直接删除 |
+
+还原语义：原文件存在 → 删 E2E 产物后 rename 备份回来；原文件不存在 → 删产物 + 残留 bak。
 
 ## 已知无害噪声
 
 `Tauri core.invoke not available after 5s timeout` — embedded 模式下降级到 WebDriver HTTP 协议时的日志，不影响测试结果。
+
+## 定位声明：L4 = 半端到端 / 部分端到端（DOC-02）
+
+> 键盘、拖拽、恢复编排三类用例不是完整 OS 级端到端，统一定位为**半端到端**（应用内监听/匹配/命令 handler/真实 IPC/写盘全链路在真实二进制执行，唯一"不真实"处是事件来源或前置动作）。标注以下逐项边界，勿把这类用例视为真实用户操作路径的完整验证：
+
+| 用例类别 | 实际路径 | 不真实处 | 兜底 |
+|----------|----------|----------|------|
+| 键盘（Ctrl+S / Ctrl+W / 终端按键） | 页面内 dispatch 合成 `keydown` → ShortcutRegistry window capture 真实捕获 → 命令 handler → 真实 IPC | 事件来源是 JS dispatch 而非 OS 键盘（embedded WDIO 无法投递 `browser.keys`，见下节） | L2 keyboard 系测试 + 真实 OS 按键豁免（见豁免表） |
+| 侧栏视图拖拽跨区（R6/R7） | `__slterm_e2e_moveSideViewButton` 走 store 纯函数（`moveButtonPure`），等价拖拽落点 | 未触发真实 HTML5 DnD 事件链（jsdom/驱动能力所限） | `activityBar.test.tsx` L2 拖拽用例（含 drop index 断言） |
+| 历史会话恢复编排 | 双击普通行 → 项目入列 + 页面切换 + 终端注入 `claude --resume <id>`（断言到 `pty.write` 注入） | 不断言 claude 真实进入会话（fixture id 非真实） | 真实进入会话属人工验证（M 系列人工验证点） |
+| E2E helper 类用例（`__slterm_e2e_createProject` 等） | 页面内直接调 store/workspace 层函数 | 绕过用户真实交互（对话框/拖拽/点击） | 对应组件 L2 测试覆盖交互路径 |
+
+**应用侧 helpers 是测试后门而非用户路径**：`app.test.tsx` / `e2e-create-project.test.ts` 等 L2 用例验证的是 **E2E helper 行为契约**（pending 标记、localStorage 恢复交互），不是应用用户路径——它们守护的是 E2E 基建本身不漂移。
 
 ## 键盘输入限制（重要）
 
@@ -91,3 +119,16 @@ embedded WDIO 驱动**无法把 OS 级按键（`browser.keys`）投递进 WebVie
 - HTML `Ctrl+W` 用例：iframe sandbox 为 `allow-scripts`（不含 `allow-same-origin`），键盘转发经注入脚本 `postMessage({type:"slterm_key",...})` 到父 window。E2E 测试通过 `window.postMessage(...)` 模拟此路径（不访问 `iframe.contentDocument`）→ 父窗口 message handler → `exportContextBindings("global")` 比对 → `dispatchEvent(合成 KeyboardEvent)` → `ShortcutRegistry` window capture 真实捕获 → `global.closeTab` 关活跃面板，断言 `__dockviewApi.getPanel(id)` 变 `undefined`。`forwardGlobalShortcuts.ts` 已随 FE-13 删除。
 - 唯一"不真实"处是事件来源为 JS dispatch 而非 OS 键盘（驱动能力所限）；监听/上下文匹配/命令 handler/写盘/转发全链路均在真实二进制中执行。
 - 相关诊断 helper：`window.__slterm_e2e_shortcutDebug()` 返回 `{ stack, commands }`（上下文栈 + 已注册命令 id），用于断言快捷键设置正确。
+
+## 豁免登记（DOC-01，L4 相关项）
+
+> 完整豁免表见 `.claude/test-inventory.md`「既定豁免清单」——此处为 L4 侧相关项的模块级补充，三列（项目/豁免原因/当前兜底层级）以 test-inventory 为唯一真值源。
+
+| 项目 | 豁免原因 | 当前兜底层级 |
+|------|----------|--------------|
+| L4 真实 OS 级按键 | embedded WDIO 无法投递 `browser.keys` 到 WebView2 页面（驱动能力所限） | 合成事件 + 页面内 dispatch 全链路（监听/上下文匹配/命令 handler/写盘真实执行）；未来 WDIO 支持真实输入时替换 |
+| HTML postMessage 真实 WebView2 行为 | jsdom 无法模拟 opaque origin 序列化与 WebView2 CSP 强制（L2 只守 JS 侧形状） | `html.e2e.ts` Ctrl+W postMessage 往返（真实二进制）+ L2 四负面用例 |
+| L3 生产 WebGL renderer / mouse tracking | headless 不跑 GPU；PASSTHROUGH_MODE 滚轮回归无法自动化（行为级测试假阴性） | `terminal.e2e.ts` 全屏 TUI 视觉回归（M2 人工确认）+ `compute_conpty_flags` 4 条守卫锁 0x7 |
+| `E2E_ENABLED=false` 生产分支 | L2 恒 true，编译期字面量 DCE 结构性缺口 | CI 生产 dist grep 守卫 + `e2e-build-config.test.ts` 字面量断言（IHE-04） |
+
+**视觉回归基线（E2E-04，M2 人工验证点）**：`terminal.e2e.ts` 全屏 TUI 大负载 + 切页签往返用例断言内容完整性与渲染器存活，但"WebGL→DOM 回退不白屏"属视觉判定——Stage 16 收尾时人工确认截图/渲染基线，此后回归由该用例持续守卫。

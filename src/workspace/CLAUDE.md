@@ -134,7 +134,7 @@ Workspace 使用 Allotment 实现三栏布局（旧为常驻四栏，侧栏视�
 
 ## 测试模式
 
-测试文件位于 `src/__tests__/`：`layoutSerde.test.ts`、`default-layout-format.test.ts`、`panelRegistry.test.ts`、`titleManager.test.ts`、`workspace*.test.tsx`。
+测试文件位于 `src/__tests__/`：`layout-serde.test.ts`、`default-layout-format.test.ts`、`panel-registry.test.ts`、`title-manager.test.ts`、`pageapis.test.ts`、`workspace-page-dockview.test.tsx`、`workspace-defaulttab.test.tsx`、`workspace-header-actions.test.tsx`、`workspace-file-panel-types.test.ts`、`layout-switch.test.ts`、`startup-restore.test.ts`、`workspace*.test.tsx`。
 
 ### 技术栈
 
@@ -145,32 +145,49 @@ Workspace 使用 Allotment 实现三栏布局（旧为常驻四栏，侧栏视�
 
 ### 布局序列化测试
 
-`layoutSerde.test.ts`（16 用例）：
+`layout-serde.test.ts`（26 用例）：
 - **旧格式修补**：`patchLegacyLayout` 处理 `component`→`contentComponent` 迁移、缺失 `grid.orientation` 默认值、`leaf.data.id` 缺失生成、`activeGroup` 缺失填充
-- **白名单过滤**：`PANEL_TYPES` 外类型的面板不被恢复（mock `isValidPanelType` 对齐真实 `PANEL_TYPES = ["terminal", "editor", "htmlviewer"]`）
+- **白名单过滤**：`PANEL_TYPES` 外类型的面板不被恢复（mock `isValidPanelType` 对齐真实 `PANEL_TYPES`）
 - **深拷贝验证**：`toJSON` 输出不与输入共享引用
 - 纯函数测试，无需 React 渲染环境
 
-`default-layout-format.test.ts`（8 用例）：
+`default-layout-format.test.ts`（10 用例）：
 - `makeEmptyLayout` 空布局验证：返回 `{}`、独立对象、JSON 往返一致性、纯对象检查
 
 ### 面板注册表测试
 
-`panelRegistry.test.ts`（23 用例）：
+`panel-registry.test.ts`（25 用例）：
 - 三个面板注册验证（terminal/editor/htmlviewer）
 - `PANEL_TYPES` 常量完整性 + `isValidPanelType` type predicate（大小写敏感）
 - `FILE_PANEL_TYPES` Set 语义（编辑器 + 文件预览面板）
 
 ### 页签标题测试
 
-`titleManager.test.ts`（29 用例）：
+`title-manager.test.ts`（47 用例）：
 - `createTitleManager` 工厂，验证终端 `terminal-N` 递增、编辑器 basename/同名冲突相对路径
 - `findExistingEditor` 查重、`registerAndRecompute` 重算、`handleSaveAs` 路径变更
 
+### 页面 API 与 PageDockviewHost 测试（WRK-01/02）
+
+`pageapis.test.ts`（11 用例）：
+- `registerPageApi`/`unregisterPageApi`/`getPageApi` 注册表 + `switchToPageShared`（setProjectRoot 前置）重指向不变量 + `switchToPageAndFocus` 轮询聚焦
+
+`workspace-page-dockview.test.tsx`（7 用例，WRK-01）：
+- 渲染真实 `PageDockviewHost`（非 stub）：`handleReady` 布局恢复、restoreGuardRef 写回抑制、onDidRemovePanel 清理
+
+`workspace-file-panel-types.test.ts`（14 用例）：
+- `FILE_PANEL_TYPES` 与 `isAlwaysRenderPanel` 分派矩阵（htmlviewer 等预览面板 renderer="always"）
+
+`workspace-header-actions.test.tsx`（16 用例）：
+- 分屏 + 按钮 & 右键菜单 addPanel 行为：非聚焦分屏点击 + 按钮或右键"新建终端"时，新面板创建在点击的分屏而非聚焦分屏。直测 `createRightHeader`/`createGetContextMenu` 工厂函数，不渲染完整 Dockview 树
+
+`layout-switch.test.ts`（7 用例）+ `startup-restore.test.ts`（7 用例）：
+- 页面切换/启动恢复流程（`App.tsx` 启动恢复 lastPage：先 `await setProjectRoot` 再 `setActivePage`，DBG-6）
+
 ### 多实例与 E2E 标记测试
 
-`workspace-multi-instance.test.tsx`（4 用例）：
-- 多页面切换时 Dockview 实例各自存活（不销毁重建）
+`workspace-multi-instance.test.tsx`（6 用例，WRK-09）：
+- 多页面切换时 Dockview 实例各自存活（不销毁重建，实例 identity 断言）
 - CSS 显隐控制 + `initializedPages` 惰性初始化
 - 断言使用 `not.toMatch(/terminal-/)`（面板 ID 格式 `terminal-{pageId}-{seq}`，pageId 以字母开头——早期 `/terminal-\d/` 要求数字紧跟在 terminal- 后，永不匹配）
 - 需种子 `useProjects`（多个页面）+ `useLayout`（活跃页面 ID）
@@ -183,6 +200,9 @@ Workspace 使用 Allotment 实现三栏布局（旧为常驻四栏，侧栏视�
 - `switchToPage` 时序契约：`setProjectRoot` 先于 `setActivePage` 生效
 - `setProjectRoot` 失败时降级（`console.error` + 仍完成切换）
 - SEC-01 effect 兜底验证 + 现有测试兼容性排查
+
+`workspace.test.tsx`（4 用例）：
+- Workspace 根组件三栏布局渲染（Allotment 结构 + pane 尺寸约束）
 
 ## 旧格式兼容
 

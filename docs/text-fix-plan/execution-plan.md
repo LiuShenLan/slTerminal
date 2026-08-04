@@ -96,7 +96,8 @@ args 契约（强制校验，缺 failedItems/verifyFile 即抛错）：
 | 13 | 完成 | 1 | 9d8ce27；首轮全绿；2236 passed；IPC 契约工厂化 + mockIPC 盲区文档化 |
 | 14 | 完成 | 2（fix-loop 1 轮） | 579d0a7；轮1：claudeStatus mock 补 STATUS_EMOJI；2258 passed；classifyEvent D2 导出 |
 | 15 | 完成 | 1 | b25e766；首轮全绿；L3 138 用例；生产 theme/OSC 覆盖新增 3 文件 |
-| 16-17 | 未开始 | - | - |
+| 16 | 完成 | 2（fix-loop 1 轮） | 70a2de6；轮1：pause 残留清理 + 拆分后 4 根因修复（execute 序列化/tabIcon 污染/标题项目缺失/hasRenderer 双条件 + Proxy sessionId）；wdio 8/8 spec PASSED；用户环境已还原 |
+| 17 | 未开始 | - | - |
 
 ## 人工验证点（收尾逐项实测，与 stages.md 一致）
 

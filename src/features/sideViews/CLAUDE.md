@@ -98,7 +98,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 测试模式
 
-测试文件位于 `src/__tests__/`：`sideBarState.test.ts`（50 用例）、`sideViewRegistry.test.ts`（7 用例）、`sideBar.test.ts`（19 用例）、`activityBar.test.tsx`（29 用例）、`sideBarArea.test.tsx`（14 用例）、`workspace-sideviews.test.tsx`（13 用例）。共 132 用例。
+测试文件位于 `src/__tests__/`：`sideBarState.test.ts`（53 用例）、`sideViewRegistry.test.ts`（7 用例）、`sideBar.test.ts`（21 用例）、`activityBar.test.tsx`（33 用例）、`sideBarArea.test.tsx`（15 用例）、`workspace-sideviews.test.tsx`（13 用例）。共 142 用例。
 
 ### activityBar 拖拽测试要点
 
@@ -115,7 +115,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### 纯函数测试（sideBarState + dropTarget）
 
-`sideBarState.test.ts`（50 用例）：
+`sideBarState.test.ts`（53 用例）：
 - `toggleViewPure` 4 分支（R1 打开/替换、R2 关闭、未在 zones 防御）
 - `moveButtonPure` 8 分支（跨区跟随替换 R6、跟随空区、未打开仅归属 R7、区内前移/后移/同位、index clamp）
 - `deriveLayout` 4 态（hidden/single-top/single-bottom/split = R3/R4/R5）
@@ -139,7 +139,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### UI 组件测试
 
-`activityBar.test.tsx`（16 用例）：
+`activityBar.test.tsx`（33 用例）：
 - 两组按钮渲染（上/下分组+按 zones 顺序）、active class+指示条（VS Code 风格）
 - 点击→toggleView 调用、再次点击关闭（R1/R2）
 - tooltip/title + `data-e2e` 属性
@@ -150,7 +150,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - hover 态背景色（非 active 时）vs active 态不覆盖
 - 种子 sideBar store（真实）+ 手动注册测试视图（`_reset` 后 register stub 组件）；mock dataTransfer
 
-`sideBarArea.test.tsx`（13 用例）：
+`sideBarArea.test.tsx`（15 用例）：
 - 四态渲染：单开上（下 pane hidden）、单开下（上 pane hidden）、双开（两 pane visible）、全关无用例（Workspace 层 whole sidebar hidden 不挂载）
 - Allotment preferredSize = splitRatio×100 / (1-splitRatio)×100
 - 视图槽 display:none/flex 切换 + display:none 保挂载

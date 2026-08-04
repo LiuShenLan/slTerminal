@@ -23,7 +23,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 测试模式
 
-测试位于 `fs/mod.rs` 的两个 `#[cfg(test)]` 模块：`read_dir_tests` + `write_file_tests`（共 16 用例）。sandbox 测试现位于 `state.rs`（15 条 `#[test]`）。
+测试位于 `fs/mod.rs` 的三个 `#[cfg(test)]` 模块：`read_dir_tests` + `write_file_tests` + `command_wrapper_tests`（共 31 用例）。sandbox 测试位于 `state.rs`（15 条 `#[test]`）。
 
 ### tempfile 隔离
 
@@ -41,6 +41,7 @@ std::fs::write(&file, "hello").unwrap();
 
 - `read_dir_tests`：列出子项、过滤 `.git`（仅此一个硬编码过滤，`node_modules`/`target` 等依赖懒加载控制性能）、创建目录（单层/嵌套）、删除（文件/递归目录）、重命名、空目录边界、构建产物目录可见
 - `write_file_tests`：CRLF 行尾保留（CRLF→CRLF、LF→LF）、新文件平台默认行尾（Windows CRLF / Unix LF）、混合行尾归一化
+- `command_wrapper_tests`（TE-14/HFN-04/HFN-08）：**命令内核层**——直接调 `fs_*_impl`（root 传 `Option<PathBuf>`），`run()` 用 `tokio Runtime::block_on` await，无需构造 `tauri::State`（State 仅为命令包装层提取 root 的通道）。覆盖参数透传、错误映射（`spawn_blocking` panic → `AppError`）、sandbox 校验分支（root 外拒绝、HFN-04 删除不存在路径）、SEC-04 `fs_rename` 覆盖已有文件/拒绝已有目录
 
 ### CRLF 行尾保留测试
 

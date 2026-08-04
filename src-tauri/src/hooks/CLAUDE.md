@@ -211,16 +211,16 @@ hook 脚本性能实测结论（2026-07-29，Win11 build 26200，Node v22）：
 
 ## 测试模式
 
-Rust 测试分布 6 个位置（均为 `#[cfg(test)] mod tests` 嵌入源文件），共 89 用例。
+Rust 测试分布 6 个位置（均为 `#[cfg(test)] mod tests` 嵌入源文件），共 133 用例。
 
 | 位置 | 用例数 | 覆盖范围 |
 |------|--------|---------|
-| `mod.rs` `#[cfg(test)]` | 8 | InjectionStatus/HookInjectionStatus serde（camelCase）、parse_signal_file 快速冒烟（合法/缺 panelId/非法 JSON/空串） |
-| `signal.rs` `#[cfg(test)]` | 9 | parse_signal_file 全分支（合法完整/optionals null/缺 panelId/空 panelId/非法 JSON/空串/仅空白）、camelCase 序列化+反序列化往返 |
-| `watcher.rs` `#[cfg(test)]` | 15 | is_signal_file（.json/.JSON/.tmp/无扩展名）、collect_signal_files（多文件收集/.tmp 与无扩展名排除/空目录/目录不存在→空）、poll_once（逐个处理注入闭包/幂等二次不处理/目录删除重建后恢复/非 json 忽略/无文件零调用）、watcher 生命周期（stop 幂等、Drop join 线程） |
-| `inject.rs` `#[cfg(test)]` | 22 | template_version 正值、HOOK_EVENTS 计数+唯一+关键事件、has_slterm_matchers（空/无 hooks 键/命中/用户 hook 不误检/null hooks 值）、disk_script_version（解析/无版本/缺失/空格分号）、remove_slterm_matchers（清理 slterm 条目+保留用户 hook/清理空事件键/无 slterm 条目/**混组保用户 handler/全 slterm 组删除**——handler 级剔除）、inject_matchers（10 事件齐全/保留用户 matcher/二次注入幂等）、build_matcher_entry（timeout=5/matcher 空/type=command）、模板内嵌校验（非空/含 SLTERM_PANEL_ID/含 SCRIPT_VERSION） |
-| `usage.rs` `#[cfg(test)]` | 28 | parse_usage_line 全分支（合法/缺字段/缺 message/非法 JSON/空串/大值 u64/额外字段忽略/类型不匹配/cache 字段提取/缺失默认 0/显式 0/单 cache 字段）、scan_transcript_usage 集成（末行命中/中间行回溯/无 usage/文件不存在/空文件/损坏行跳过）、ContextUsage serde camelCase（序列化+反序列化+缺 cache 字段反序列化）、TRANSCRIPT_TAIL_BYTES 常量（64KB）、hooks_context_usage 端到端（多条 usage 返最后/无 usage 返 None/损坏行跳过/空文件/大文件 >128KB 仅读尾部 64KB）——P2-TE-05 五用例 |
-| `config.rs` `#[cfg(test)]` | 18 | parse_layer（三层合法/非法拒绝）、resolve_config_path（user 层 home 路径/三层拼接/缺失 project_path Validation/子树外 PathNotAllowed）、read_hooks_subtree（文件不存在 Null/无 hooks 键 Null/子树提取/损坏 Err）、write_hooks_subtree（原子写/父目录自动创建/merge 保留其他字段/损坏拒绝覆盖/非 Object hooks 拒绝无副作用/非 Object 根拒绝/null 根视空对象）——P3-BE 读写命令纯逻辑 |
+| `mod.rs` `#[cfg(test)]` | 12 | InjectionStatus/HookInjectionStatus serde（camelCase）、parse_signal_file 快速冒烟（合法/缺 panelId/非法 JSON/空串）、**start_signal_watcher 全局启动（HUK-04：首次启动存实例/重复启动幂等跳过/启动失败不存/`reset_watcher_for_test` 重置钩子后重启）** |
+| `signal.rs` `#[cfg(test)]` | 14 | parse_signal_file 全分支（合法完整/optionals null/缺 panelId/空 panelId/非法 JSON/空串/仅空白）、camelCase 序列化+反序列化往返、**process_signal_file_with（HUK-01：注入 emit 闭包——读→emit→删全流程/emit 失败仍删/非法 JSON 降级）** |
+| `watcher.rs` `#[cfg(test)]` | 20 | is_signal_file（.json/.JSON/.tmp/无扩展名）、collect_signal_files（多文件收集/.tmp 与无扩展名排除/空目录/目录不存在→空）、poll_once（逐个处理注入闭包/幂等二次不处理/目录删除重建后恢复/非 json 忽略/无文件零调用）、**run_one_tick（HUK-03：轮询补漏消费残留/目录重建恢复/stop 信号返回 true）**、watcher 生命周期（stop 幂等、Drop join 线程） |
+| `inject.rs` `#[cfg(test)]` | 34 | template_version 正值、HOOK_EVENTS 计数+唯一+关键事件、has_slterm_matchers（空/无 hooks 键/命中/用户 hook 不误检/null hooks 值）、disk_script_version（解析/无版本/缺失/空格分号）、remove_slterm_matchers（清理 slterm 条目+保留用户 hook/清理空事件键/无 slterm 条目/**混组保用户 handler/全 slterm 组删除**——handler 级剔除）、inject_matchers（10 事件齐全/保留用户 matcher/二次注入幂等）、build_matcher_entry（timeout=5/matcher 空/type=command）、模板内嵌校验（非空/含 SLTERM_PANEL_ID/含 SCRIPT_VERSION）、**三命令 impl 层（HUK-02：`inject_impl`/`uninstall_impl`/`injection_status_impl` tempdir 驱动——注入/幂等/非法 JSON 中止/保留其他字段/非 Object 根与 hooks 拒绝/卸载混组保用户 handler/状态三态）** |
+| `usage.rs` `#[cfg(test)]` | 26 | parse_usage_line 全分支（合法/缺字段/缺 message/非法 JSON/空串/大值 u64/额外字段忽略/类型不匹配/cache 字段提取/缺失默认 0/显式 0/单 cache 字段）、scan_transcript_usage 集成（末行命中/中间行回溯/无 usage/文件不存在/空文件/损坏行跳过）、ContextUsage serde camelCase（序列化+反序列化+缺 cache 字段反序列化）、**命令层（HUK-05：`run_context_usage` + `block_on`——参数透传 transcriptPath/None 与 Some 返回映射/大文件 >128KB 仅读尾部 64KB）** |
+| `config.rs` `#[cfg(test)]` | 27 | parse_layer（三层合法/非法拒绝）、resolve_config_path（user 层 home 路径/三层拼接/缺失 project_path Validation/子树外 PathNotAllowed）、read_hooks_subtree（文件不存在 Null/无 hooks 键 Null/子树提取/损坏 Err）、write_hooks_subtree（原子写/父目录自动创建/merge 保留其他字段/损坏拒绝覆盖/非 Object hooks 拒绝无副作用/非 Object 根拒绝/null 根视空对象）——P3-BE 读写命令纯逻辑、**命令层（`run_config_read`/`run_config_write` + `block_on`——参数透传/非法 layer/路径校验）** |
 
 ### 单元测试组织
 
@@ -253,7 +253,7 @@ assert!(parse_signal_file("not json").is_none());
 - **remove_slterm_matchers / inject_matchers**：直接操作 `serde_json::Map`，验证清理/追加/幂等行为。
 - **模板内嵌校验**：`HOOK_SCRIPT_TEMPLATE` 是编译期常量，直接断言其长度和关键字符串。
 
-三命令本身（`hooks_inject`/`hooks_uninstall`/`hooks_injection_status`）为 async fn 且依赖 `spawn_blocking`，单元测试未直接覆盖——由 L4 E2E 关键路径（P1-TE-03）验收真实 settings.json 读写。
+三命令内核（`inject_impl`/`uninstall_impl`/`injection_status_impl`）已抽为路径可注入的同步函数，tempdir 驱动 L1 全覆盖（HUK-02）；async 命令包装层（`spawn_blocking` 编排）仍由 L4 E2E 关键路径（P1-TE-03）验收真实 settings.json 读写。
 
 ### watcher 生命周期测试模式
 
@@ -274,7 +274,7 @@ w.stop();  // 第二次应不 panic（幂等）
 
 `usage.rs` 测试分三层：
 
-**parse_usage_line 纯函数测试**（9 条）：无依赖，直接构造 JSON 字符串断言：
+**parse_usage_line 纯函数测试**（13 条）：无依赖，直接构造 JSON 字符串断言：
 ```rust
 assert_eq!(parse_usage_line(r#"{"message":{"usage":{"input_tokens":100,"output_tokens":50}}}"#).unwrap(),
            ContextUsage { input_tokens: 100, output_tokens: 50 });
@@ -292,9 +292,9 @@ let r = scan_transcript_usage(path.to_str().unwrap()).unwrap();
 assert_eq!(r.input_tokens, 100);  // 末行优先
 ```
 
-**hooks_context_usage L1 端到端**（5 条，P2-TE-05）：验证多条 usage（逆行返最后）、末尾无 usage（返 None）、损坏行跳过、空文件、大文件（>128KB padding + usage 在最后 1KB → 仅加载尾部 64KB 仍命中）。
+**命令层测试**（3 条，HUK-05）：`run_context_usage`（命令内核）经 `block_on` await——参数透传 transcriptPath（两条不同路径各取各自 usage）、None 与 Some 返回映射、大文件（>128KB padding + usage 在最后 1KB → 仅加载尾部 64KB 仍命中，P2-TE-05 兜底）。
 
-`scan_transcript_usage` 是纯 I/O 逻辑函数（非 async），测试直接调用不依赖 `spawn_blocking`。`hooks_context_usage` 命令本身为 async fn 由 L4 E2E 验收。
+`scan_transcript_usage` 是纯 I/O 逻辑函数（非 async），测试直接调用不依赖 `spawn_blocking`。命令层经 `block_on` 直测 `run_context_usage`；真实 L4 E2E 仍验收完整命令链路。
 
 ### 运行
 
@@ -315,11 +315,11 @@ cargo test --manifest-path src-tauri/Cargo.toml hooks::config -- --test-threads=
 1. 新增 Tauri 命令后在 `lib.rs` 的 `generate_handler!` 注册。
 2. 修改 `HOOK_EVENTS` 常量后跑 `hook_events_count_and_unique` + `hook_events_contains_key_events` 测试。
 3. 修改 `slterm-hook-reporter.js` 后：确保 `SCRIPT_VERSION` 递增 + 跑 `template_version_positive` / `template_is_non_empty` 测试确认内嵌内容正确。
-4. 修改注入逻辑（`remove_slterm_matchers`/`inject_matchers`/`build_matcher_entry`）后跑 `inject.rs` 全部 20 条测试，尤其幂等测试（`inject_idempotent`）。
-5. 修改 `parse_signal_file` / `process_signal_file` 后跑 `signal.rs` 全部 9 条测试 + `mod.rs` 的 4 条快速冒烟测试。
+4. 修改注入逻辑（`remove_slterm_matchers`/`inject_matchers`/`build_matcher_entry`）或三命令 impl 层（`inject_impl`/`uninstall_impl`/`injection_status_impl`）后跑 `inject.rs` 全部 34 条测试，尤其幂等测试（`inject_impl_idempotent`）与混组保用户 handler 用例。
+5. 修改 `parse_signal_file` / `process_signal_file` / `process_signal_file_with` 后跑 `signal.rs` 全部 14 条测试 + `mod.rs` 的 4 条快速冒烟测试。
 6. **绝对不要修改 C10 契约**——`slterm-hook-reporter.js` 任何代码路径必须 `process.exit(0)`。新增 catch 分支时确认静默退出、不写 stderr。
 7. 修改注入命令的 settings.json 读写逻辑后，务必跑 L4 E2E（`npm run e2e`）验证真实 settings.json merge/卸载/非法 JSON 中止行为（P1-TE-03）。
-8. 修改 `parse_usage_line` / `scan_transcript_usage` / `TRANSCRIPT_TAIL_BYTES` 后跑 `usage.rs` 全部 28 条测试，尤其 P2-TE-05 五用例（大文件尾部扫描、损坏行跳过）与 cache 字段用例。
+8. 修改 `parse_usage_line` / `scan_transcript_usage` / `TRANSCRIPT_TAIL_BYTES` / `run_context_usage` 后跑 `usage.rs` 全部 26 条测试，尤其命令层三用例（参数透传/None 与 Some 映射/大文件尾部扫描）与 cache 字段用例。
 9. 修改 `ContextUsage` DTO 字段后同步更新 `src/types/hooks.ts`（前端 `ContextUsage` 接口）和 `src/ipc/hooks.ts`（IPC wrapper），跑 `ipc-hooks-contract.test.ts` + `context_usage_serialize_camelcase` / `context_usage_deserialize_camelcase` 测试。
-10. 修改 `config.rs`（`parse_layer` / `resolve_config_path` / `read_hooks_subtree` / `write_hooks_subtree`）后跑 `hooks::config` 全部 18 条测试。改 read 的「损坏 → Err」或 write 的 merge 语义时，同步核对 `src/ipc/hooksConfig.ts` 与契约 C13-1（损坏文件上编辑后 merge 丢字段是设计红线）。新增配置层（如 org 层）需同步更新 `parse_layer`、`layer_file_name` 与 `src/types/hooksConfig.ts` 的 `HooksLayer`。
-11. 修改 `watcher.rs`（`POLL_INTERVAL` / `LOOP_TICK` / `collect_signal_files` / `poll_once` / notify 降级逻辑）后跑 `hooks::watcher` 全部 15 条测试（collect 4 条 + poll_once 5 条含目录重建恢复/幂等 + is_signal_file 4 条 + 生命周期 2 条）。**勿削弱轮询补漏**——它是 win10 实证 watcher 静默失效的兜底（notify 事件丢失/目录重建句柄失效）。
+10. 修改 `config.rs`（`parse_layer` / `resolve_config_path` / `read_hooks_subtree` / `write_hooks_subtree` / `run_config_read` / `run_config_write`）后跑 `hooks::config` 全部 27 条测试。改 read 的「损坏 → Err」或 write 的 merge 语义时，同步核对 `src/ipc/hooksConfig.ts` 与契约 C13-1（损坏文件上编辑后 merge 丢字段是设计红线）。新增配置层（如 org 层）需同步更新 `parse_layer`、`layer_file_name` 与 `src/types/hooksConfig.ts` 的 `HooksLayer`。
+11. 修改 `watcher.rs`（`POLL_INTERVAL` / `LOOP_TICK` / `collect_signal_files` / `poll_once` / `run_one_tick` / notify 降级逻辑）后跑 `hooks::watcher` 全部 20 条测试（collect 4 条 + poll_once 5 条含目录重建恢复/幂等 + run_one_tick 3 条 + is_signal_file 4 条 + 生命周期 2 条 + 其余 2 条）。**勿削弱轮询补漏**——它是 win10 实证 watcher 静默失效的兜底（notify 事件丢失/目录重建句柄失效）。

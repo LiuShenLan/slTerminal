@@ -63,11 +63,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 | Store | 测试文件 | 用例数 | 覆盖范围 |
 |-------|---------|--------|---------|
-| `projects` | `projects.test.ts` | 41 | Project/Page CRUD、持久化（loadFromDisk/saveToDisk）、version 递增、ID 生成、subscribe+debounce 持久化链（`_resetPersistence()` 测试辅助） |
-| `sideBar` | `sideBar.test.ts` | 19 | 默认值/toggle/move 经 store 委托纯函数、setWidth/setSplitRatio clamp、loadFromDisk 5 分支（合法/脏数据/缺失/异常/reconcileZones）、loaded 守卫、2s debounce saveSettings({sideBar}) payload 键集合精确匹配、saveSettings 失败静默吞错 |
+| `projects` | `projects.test.ts` | 46 | Project/Page CRUD、持久化（loadFromDisk/saveToDisk）、version 递增、ID 生成、subscribe+debounce 持久化链（`_resetPersistence()` 测试辅助） |
+| `sideBar` | `sideBar.test.ts` | 21 | 默认值/toggle/move 经 store 委托纯函数、setWidth/setSplitRatio clamp（含 NaN/Infinity 回退，SVC-13）、loadFromDisk 5 分支（合法/脏数据/缺失/异常/reconcileZones）、loaded 守卫、2s debounce saveSettings({sideBar}) payload 键集合精确匹配、saveSettings 失败静默吞错 |
 | `layout` | `layout.test.ts` | 4 | activePageId 设置/清空/重复 |
-| `fontSize` | `fontSize.test.ts` | 16 | 默认值、clamp、loadFromDisk（多种分支）、debounce 持久化 |
-| `keybindings` | `keybindings.test.ts` | 16 | 默认空、setBinding/clearBinding/resetAll、loadFromDisk（合法/sanitize 脏值/缺失/非对象/异常）、loaded 守卫、debounce → saveSettings({keybindings}) |
+| `fontSize` | `fontSize.test.ts` | 17 | 默认值、clamp、loadFromDisk（多种分支）、debounce 持久化 |
+| `keybindings` | `keybindings.test.ts` | 17 | 默认空、setBinding/clearBinding/resetAll、loadFromDisk（合法/sanitize 脏值/缺失/非对象/异常）、loaded 守卫、debounce → saveSettings({keybindings}) |
 
 ### 测试模式
 

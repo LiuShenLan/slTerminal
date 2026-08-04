@@ -49,7 +49,7 @@ export const E2E_ENABLED =
 
 ## 测试模式
 
-测试文件：`src/__tests__/path.test.ts`（27 用例）、`src/__tests__/panelId.test.ts`（5 用例）。
+测试文件：`src/__tests__/path.test.ts`（27 用例）、`panelId.test.ts`（5 用例）、`inject-script.test.ts`（22 用例）、`claude-status.test.ts`（32 用例）、`e2e-enabled.test.ts`（2 用例）、`e2e-build-config.test.ts`（8 用例，IHE-04）、`error-boundary.test.tsx`（5 用例，含 IHE-05 `variant="inline"` 分支）。
 
 ### path.test.ts
 
@@ -61,6 +61,11 @@ export const E2E_ENABLED =
 ### panelId.test.ts
 
 纯函数测试：`parseTerminalPageId` 全分支——正常解析（`terminal-page1-0`→`"page1"`）、含连字符 pageId（`terminal-my-page-2`→`"my-page"`）、尾段非数字→null、非 terminal 前缀→null、两段→null。
+
+### E2E 门控测试（e2e-enabled.test.ts + e2e-build-config.test.ts）
+
+- `e2e-enabled.test.ts`：`computeE2eEnabled` 真值表 + 常量与纯函数一致性
+- `e2e-build-config.test.ts`（IHE-04）：AST/正则断言 `E2E_ENABLED` 定义为内联 `import.meta.env` 字面量表达式（不得调用 `computeE2eEnabled`）——若被包成函数调用，Rollup 无法 DCE，生产误带测试后门且 L2 不报警
 
 ### 通用模式
 

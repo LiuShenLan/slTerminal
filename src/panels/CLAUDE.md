@@ -321,7 +321,7 @@ Claude Code 在用户主动 Ctrl+C 中断时不发射任何 hook 事件（`Stop`
 
 ### useXterm 测试模式
 
-> 用例数见 `.claude/test-inventory.md`（终端面板类目，`use-xterm-output.test.ts` + `use-xterm-lifecycle.test.ts`）。
+> 用例数见 `.claude/test-inventory.md`（终端面板类目，`use-xterm-output.test.ts`（46 用例）+ `use-xterm-lifecycle.test.ts`（76 用例）+ `use-xterm-integration.test.ts`（14 用例））。
 
 useXterm 是编排层——mock 6 个子 hook 才能隔离测试（`useFontSizeBridge` 已删除，字体缩放委托 `src/lib/useFontSizeWheel`）：
 
@@ -352,41 +352,43 @@ useXterm 是编排层——mock 6 个子 hook 才能隔离测试（`useFontSizeB
 
 | 文件 | 模式 |
 |------|------|
-| `terminal-lifecycle.test.ts` | 挂载→创建→卸载→dispose 完整链路；mock `pty.spawn` 验证调用参数 |
-| `terminal-strictmode.test.ts` | `<React.StrictMode>` 包裹验证 `smGuardRef` 防双重挂载：Terminal 实例数=1、PTY spawn 仅一次、dispose 仅在最终卸载时调 |
-| `terminal.test.tsx` | TerminalPanel 组件：mock `useXterm` 返回 stub，验证 loading 遮罩/Windows build/spawn |
-| `canFit.test.ts` | 纯函数边界测试：五条件守卫（null/undefined/0/isDisposed/no element） |
-| `detectWebgl.test.ts` | `vi.spyOn(HTMLCanvasElement.prototype, 'getContext')` 模拟三种分支 |
+| `terminal-lifecycle.test.ts`（4 用例） | 挂载→创建→卸载→dispose 完整链路；mock `pty.spawn` 验证调用参数 |
+| `terminal-instance.test.ts`（7 用例） | `useTerminalInstance` 生命周期分支（TRM-07）：fit 抛异常吞掉/`fontSize` undefined 跳过/prevFontSize 相同跳过重复写入/tryLoadWebgl 幂等（含 term 为 null 短路） |
+| `terminal-strictmode.test.ts`（2 用例） | `<React.StrictMode>` 包裹验证 `smGuardRef` 防双重挂载：Terminal 实例数=1、PTY spawn 仅一次、dispose 仅在最终卸载时调 |
+| `terminal.test.tsx`（8 用例） | TerminalPanel 组件：mock `useXterm` 返回 stub，验证 loading 遮罩/Windows build/spawn |
+| `can-fit.test.ts`（31 用例） | 纯函数边界测试：五条件守卫（null/undefined/0/isDisposed/no element） |
+| `detect-webgl.test.ts`（3 用例） | `vi.spyOn(HTMLCanvasElement.prototype, 'getContext')` 模拟三种分支 |
+| `webgl-setup.test.ts`（7 用例） | `setupWebglWithRetry` 指数退避（TRM-06）：不可用即回退/成功加载/context loss 重建（1000/2000ms 序列）/重试耗尽回退/cancel 清理/loadAddon 异常退避 |
 
 ### 页签标题/图标测试
 
 | 文件 | 模式 |
 |------|------|
-| `tab-title-registry.test.ts` | 直接测试真实 `TabTitleRegistry` 实例（非 mock）：register/match（首 token 匹配——含带参命中/空命令行/仅空白/首 token 无规则仍 null）、大小写、覆盖、`_reset()`、单例校验 |
-| `tabRules.test.ts` | side-effect import 验证 + `_reset()` 后手动注册行为。不依赖手动 register，直接验证模块加载副作用 |
-| `workspace-defaulttab.test.tsx` | MockDefaultTab 渲染 + `onDidParametersChange` 事件结构回归测试。事件结构测试直接验证 Dockview `Event<Parameters>` 回调行为 |
+| `tab-title-registry.test.ts`（13 用例） | 直接测试真实 `TabTitleRegistry` 实例（非 mock）：register/match（首 token 匹配——含带参命中/空命令行/仅空白/首 token 无规则仍 null）、大小写、覆盖、`_reset()`、单例校验 |
+| `tab-rules.test.ts`（6 用例） | side-effect import 验证 + `_reset()` 后手动注册行为。不依赖手动 register，直接验证模块加载副作用 |
+| `workspace-defaulttab.test.tsx`（21 用例，WRK-05） | 渲染**生产 `DefaultTab`**（非手写 Mock，经 `PageDockviewHost.tsx` 导出）：tabIcon emoji/img 分支（含 `/` `\` http: data: → img）、`onDidParametersChange` 事件结构回归（回调直接接收扁平 `Parameters`，`event.tabIcon` 而非 `event.params.tabIcon`——漂移即失败）、`onDidTitleChange` 标题更新、关闭按钮 `api.close` |
 
 ### 键盘与快捷键测试
 
 | 文件 | 模式 |
 |------|------|
-| `keyboard.test.ts` | `createTerminalShortcuts()`（无参）handler 经 `getActiveTerminal()` 派发：设 active stub 后调 handler 验证 copy/paste/newline；无 active 返回 false 透传；Ctrl+C 不注册 |
-| `editor-keyboard.test.ts` | `createEditorShortcuts()` save 经 `getActiveEditor()` 派发；后设置的 active 覆盖先前的；无 active 返回 false |
-| `activeTerminal.test.ts` / `activeEditor.test.ts` | active 指针 set/get/覆盖、clear 仅匹配时生效（防竞态） |
-| `usePanelFocus.test.ts` | focusin→pushContext+onActivate、focusout(离子树)→popContext+onDeactivate、内部焦点转移不触发、卸载清理 |
-| `shortcuts.test.ts` | `_reset()` 隔离；指纹 O(1) 匹配；上下文栈竞态；setOverrides 重绑/解绑/降级/冲突、resolve/forceContext、export/list |
-| `globalCommands.test.ts` | `createGlobalShortcuts(getApi)` 延迟求值 DockviewApi |
+| `keyboard.test.ts`（12 用例） | `createTerminalShortcuts()`（无参）handler 经 `getActiveTerminal()` 派发：设 active stub 后调 handler 验证 copy/paste/newline；无 active 返回 false 透传；Ctrl+C 不注册。jsdom 局限标注（真实按键投递由 L4 E2E 验收，E2E-01） |
+| `editor-keyboard.test.ts`（7 用例） | `createEditorShortcuts()` save 经 `getActiveEditor()` 派发；后设置的 active 覆盖先前的；无 active 返回 false |
+| `active-terminal.test.ts`（4 用例）/ `active-editor.test.ts`（5 用例） | active 指针 set/get/覆盖、clear 仅匹配时生效（防竞态） |
+| `use-panel-focus.test.ts`（5 用例） | focusin→pushContext+onActivate、focusout(离子树)→popContext+onDeactivate、内部焦点转移不触发、卸载清理 |
+| `shortcuts.test.ts`（54 用例） | `_reset()` 隔离；指纹 O(1) 匹配；上下文栈竞态；setOverrides 重绑/解绑/降级/冲突、resolve/forceContext、export/list |
+| `global-commands.test.ts`（13 用例） | `createGlobalShortcuts(getApi)` 延迟求值 DockviewApi |
 
 ### 编辑器测试
 
 | 文件 | 模式 |
 |------|------|
-| `useCodeMirror.test.ts` | `EditorState.create` 验证字体扩展；Compartment reconfigure 不重复 dispatch；handleSave（有/无 filePath、另存为、gitDiff 刷新、失败 alert、slterm:file-saved/file-saved-as 事件） |
-| `editor.test.tsx` | EditorPanel 组件：mock `useCodeMirror` 返回 stub，验证 panelId/filePath 传递 + 容器 `overflow: clip` 样式 |
-| `editor-confirm.test.ts` | `renderHook(useCodeMirror)` 真实驱动；mock `onFsEvent` 保留回调引用手动触发 fs-event；覆盖订阅/取消、kind 过滤、路径匹配、脏/净状态分支 |
-| `editor-font.test.ts` | 字体 CSS 选择器断言（`.cm-scroller` vs `.cm-editor`） |
-| `gitGutter.test.ts` | StateEffect → RangeSet 映射验证；GutterMarker DOM 颜色断言；SpacerMarker 宽度一致性 |
-| `language-mapping.test.ts` | 扩展名→语言扩展全表验证（`.js`/`.ts`/`.py`/`.rs`/`.json` 等） |
+| `use-code-mirror.test.ts`（39 用例） | `EditorState.create` 验证字体扩展；Compartment reconfigure 不重复 dispatch；handleSave（有/无 filePath、另存为、gitDiff 刷新、失败 alert、slterm:file-saved/file-saved-as 事件） |
+| `editor.test.tsx`（9 用例） | EditorPanel 组件：mock `useCodeMirror` 返回 stub，验证 panelId/filePath 传递 + 容器 `overflow: clip` 样式 |
+| `editor-confirm.test.ts`（22 用例） | `renderHook(useCodeMirror)` 真实驱动；mock `onFsEvent` 保留回调引用手动触发 fs-event；覆盖订阅/取消、kind 过滤、路径匹配、脏/净状态分支 |
+| `editor-font.test.ts`（8 用例） | 字体 CSS 选择器断言（`.cm-scroller` vs `.cm-editor`） |
+| `git-gutter.test.ts`（32 用例） | StateEffect → RangeSet 映射验证；GutterMarker DOM 颜色断言；SpacerMarker 宽度一致性 |
+| `language-mapping.test.ts`（23 用例） | 扩展名→语言扩展全表验证（`.js`/`.ts`/`.py`/`.rs`/`.json` 等） |
 
 ### HTML 面板测试
 
@@ -400,7 +402,7 @@ useXterm 是编排层——mock 6 个子 hook 才能隔离测试（`useFontSizeB
 
 ### gitshow 面板测试
 
-`gitshow-panel.test.tsx`（19 用例）：
+`gitshow-panel.test.tsx`（21 用例）：
 - mock `../ipc/git` `gitFileAtHead`、`@codemirror/search`、`useFontSizeWheel`、`usePanelFocus`、`activeEditor`
 - 三态渲染：loading → content（CM6 只读编辑器）→ error 占位文案"该文件在 HEAD 中不存在"
 - `EditorState.readOnly` 断言只读；`editable.of(false)` 断言不存在（编辑器可聚焦）
@@ -412,7 +414,7 @@ useXterm 是编排层——mock 6 个子 hook 才能隔离测试（`useFontSizeB
 
 ### diff 面板测试
 
-`diff-panel.test.tsx`（15 用例）：
+`diff-panel.test.tsx`（39 用例）：
 - mock `gitFileAtHead` + `fs.readFile` + `gitDiff` + `onFsEvent` + `useFontSizeWheel` + `usePanelFocus`
 - 双栏渲染验证（`data-e2e="diff-left"` / `diff-right`）
 - 加载态 + 错误占位文案
@@ -422,27 +424,30 @@ useXterm 是编排层——mock 6 个子 hook 才能隔离测试（`useFontSizeB
 - `useFontSizeWheel` 左右各调用一次
 - `usePanelFocus` 左右栏各注册一次
 
-`diff-alignment.test.ts`（16 用例）：
+`diff-alignment.test.ts`（18 用例）：
 - `computeAlignment` 纯函数全分支覆盖：纯新增/纯删除/等行修改/多删少/多增少/多 hunk 合并/空 hunks
 - 占位位置正确性：afterLine 索引 + 行数累积
 
 ### hooks 配置面板测试
 
-测试文件位于 `src/__tests__/`，命名规则 `hooks-config-*.test.ts(x)` + `ipc-hooks-config-contract.test.ts`（12 文件，用例数见 `.claude/test-inventory.md`）：
+测试文件位于 `src/__tests__/`，命名规则 `hooks-config-*.test.ts(x)` + `ipc-hooks-config-contract.test.ts`（11 文件，用例数见 `.claude/test-inventory.md`）：
 
-- **纯函数层**：`hooks-config-catalog`（eventsCatalog 事件元数据全表）、`hooks-config-matcher`（matchHook 全分支 + 受限窄字符集）、`hooks-config-model`（jsonToGui/guiToJson 双向转换 + isSltermManaged）
-- **组件层**：`hooks-config-panel`（三态/层级切换器禁用逻辑/保存按钮/visibilitychange 重读）、`hooks-config-jsonmode`（CM6 + schema 扩展注册/校验上报/事件导航/MatcherTester）、`hooks-config-gui`（Master-Detail 渲染/增删事件与 handler/选中守卫）、`hooks-config-handlerform`（5 种 type 字段矩阵断言/type 切换/注入段禁改）、`hooks-config-entry`（入口命令同页单例）、`hooks-config-sync`（双模式同步）
-- **IPC 层**：`ipc-hooks-config-contract`（readHooksConfig/writeHooksConfig 四维验证）
+- **纯函数层**：`hooks-config-catalog`（eventsCatalog 事件元数据全表）、`hooks-config-matcher`（matchHook 全分支 + 受限窄字符集）、`hooks-config-model`（jsonToGui/guiToJson 双向转换 + isSltermManaged）、`hooks-config-schema`（HKC-08 新建——直测 `validateHooksJson` 边界：合法/缺 hooks 键/非法 matcher/未知事件告警）
+- **组件层**：`hooks-config-panel`（三态/层级切换器禁用逻辑/保存按钮/visibilitychange 重读）、`hooks-config-jsonmode`（CM6 + schema 扩展注册/校验上报/事件导航/MatcherTester）、`hooks-config-gui`（Master-Detail 渲染/增删事件与 handler/选中守卫）、`hooks-config-handlerform`（5 种 type 字段矩阵断言/type 切换/注入段禁改）、`open-hooks-config-panel`（入口命令同页单例，原 `hooks-config-entry` 更名）、`hooks-config-sync`（双模式同步）
+- **IPC 层**：`ipc-hooks-config-contract`（readHooksConfig/writeHooksConfig 四维验证，经共享工厂 `helpers/ipc-contract.ts` 声明式驱动，IHE-06）
 
 ### L3 终端 headless 测试
 
 L3 测试位于 `test/terminal/`，使用 `@xterm/headless`（零 DOM 依赖）+ `@xterm/addon-serialize`：
 
 - 运行环境：`vitest.l3.config.ts`（`environment: 'node'`，非 jsdom），仅包含 `test/terminal/**/*.test.ts`
-- `terminal-serialize.test.ts`：基本文本序列化、多行输出、ANSI 颜色保留、大块数据、光标定位、scrollback、resize reflow、SGR 属性叠加、多语言字符、交替屏幕、所有 ED/EL/IL/DL 擦除操作、DECSC/DECRC
-- `ansi-correctness.test.ts`：ANSI 颜色正确性——16 色前景/背景、256 色（标准/216 色立方/灰度）、TrueColor 24-bit 前景/背景/混合、SGR 属性（粗体/斜体/下划线/双下划线/慢闪/反显/隐藏/删除线/弱化/上划线）、SGR 组合叠加、SGR 重置/子参数重置、DEC 私有模式（DECTCEM/DECOM/DECAWM）、DECSC/DECRC、RIS、DECSTBM
-- `osc.test.ts`：OSC 序列——标题（OSC 0/2 BEL/ST）、调色板（OSC 4 单索引/多索引）、嵌入完整性（OSC 在正常输出中/穿插文本/后紧跟文本不丢失）
-- `keyboard.test.ts`：Ctrl 组合键（A-Z 全表 + Backslash/Slash）、Alt+字母/Enter、功能键 F1-F12、Home/End/PgUp/PgDn/Insert/Delete、方向键 + Ctrl+方向键、CSI u 协议（基本键/Shift/Ctrl/Ctrl+Shift/Alt 修饰）、退格/回车/制表符渲染
+- `terminal-serialize.test.ts`（41 用例）：基本文本序列化、多行输出、ANSI 颜色保留、大块数据、光标定位、scrollback、resize reflow、SGR 属性叠加、多语言字符、交替屏幕、所有 ED/EL/IL/DL 擦除操作、DECSC/DECRC。E2E-07 后断言精确化——CUP/reflow/SGR 用例按 `getLine(y).translateToString()` 行断言 + `getCell(x,y).getFgColorMode()` 单元格属性断言
+- `ansi-correctness.test.ts`（30 用例）：ANSI 颜色正确性——16 色前景/背景、256 色（标准/216 色立方/灰度）、TrueColor 24-bit 前景/背景/混合、SGR 属性（粗体/斜体/下划线/双下划线/慢闪/反显/隐藏/删除线/弱化/上划线）、SGR 组合叠加、SGR 重置/子参数重置、DEC 私有模式（DECTCEM/DECOM/DECAWM）、DECSC/DECRC、RIS、DECSTBM。E2E-08 补 256 色 palette 0-15 优化断言（SerializeAddon 将 0-15 优化为基本 SGR：`30+(c&7)`/`90+(c&7)`，断言 `\x1b[30m`/`\x1b[97m` 等优化后序列）
+- `osc.test.ts`（9 用例）：OSC 序列——标题（OSC 0/2 BEL/ST）、调色板（OSC 4 单索引/多索引）、嵌入完整性（OSC 在正常输出中/穿插文本/后紧跟文本不丢失）
+- `keyboard.test.ts`（36 用例）：Ctrl 组合键（A-Z 全表 + Backslash/Slash）、Alt+字母/Enter、功能键 F1-F12、Home/End/PgUp/PgDn/Insert/Delete、方向键 + Ctrl+方向键、CSI u 协议（基本键/Shift/Ctrl/Ctrl+Shift/Alt 修饰）、退格/回车/制表符渲染
+- `theme-options.test.ts`（5 用例，E2E-02）：生产 `terminalOptions`（`src/panels/terminal/theme.ts`）——16 色与主题色板一致、`CSI>1u` 可激活 Kitty、scrollback 容量生效、`drawBoldTextInBrightColors` 亮色映射。**定位声明**：L3 = 网格状态正确性，Kitty 编码/亮色渲染依赖 DOM/渲染器层，由 L4 真实 WebView2 视觉回归验收
+- `production-osc.test.ts`（8 用例，E2E-03）：生产 OSC 52/133/8 handler 语义——按生产实现原样复刻注册代码（逐段标注来源文件行号，防生产与测试漂移）：OSC 52 → mock `ipc/clipboard.writeText` + CJK 解码、OSC 133 → `onTabStateChange` 参数、OSC 8 → mock `ipc/shell.openUrl`。hook 包装层（React 侧）由 L2 use-xterm 测试覆盖
+- `negative-ansi.test.ts`（9 用例，E2E-14）：反向/异常 ANSI 输入——非法 ANSI、截断多字节序列、嵌套/未终止 OSC、异常 resize、非法 SGR 参数、超长 CSI 参数——headless 不崩溃且网格状态可恢复
 - `writeSync(term, data)`：`term.write(data, callback)` 的 Promise 化辅助，必须等 callback 完成后才能 serialize
 
 > L3 各文件用例数见 `.claude/test-inventory.md`。

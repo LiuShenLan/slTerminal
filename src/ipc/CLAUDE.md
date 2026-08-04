@@ -40,7 +40,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 测试模式
 
-测试文件：`src/__tests__/ipc-contract.test.ts`（65 用例，含 3 条 DBG-4 契约守卫）+ `ipc-ping.test.ts`（2 用例，IHE-07① 改调 `ping()` wrapper）+ `ipc-hooks-contract.test.ts`（22 用例）+ `ipc-hooks-config-contract.test.ts`（12 用例，C13-1 配置命令四维验证）+ `ipc-claude-history-contract.test.ts`（8 用例）+ `notification.test.ts`（9 用例，IHE-02 分支覆盖）。共享工厂位于 `src/__tests__/helpers/ipc-contract.ts`（IHE-06）。
+测试文件：`src/__tests__/ipc-contract.test.ts`（65 用例，含 3 条 DBG-4 契约守卫）+ `ipc-ping.test.ts`（2 用例，IHE-07① 改调 `ping()` wrapper）+ `ipc-hooks-contract.test.ts`（22 用例）+ `ipc-hooks-config-contract.test.ts`（12 用例，C13-1 配置命令四维验证）+ `ipc-claude-history-contract.test.ts`（8 用例）+ `ipc-window-contract.test.ts`（10 用例，`registerCloseHandler` 关闭生命周期契约）+ `notification.test.ts`（9 用例，IHE-02 分支覆盖）。共享工厂位于 `src/__tests__/helpers/ipc-contract.ts`（IHE-06）。
 
 ### mockIPC 盲区声明（IHE-01）
 

@@ -99,7 +99,7 @@ L2 测试位于 `src/__tests__/`，命名规则 `claude-history-*.test.ts(x)` + 
 | `claude-history-row.test.tsx` | 双行渲染、**四态标记**（working→⚡/attention→🟡/done→✅/error→❌/null 无标记）、✗ 孤儿标记、**字号断言**（行1 12px 粗体/行2 11px）、单击选中、双击/右键回调 |
 | `claude-history-view.test.tsx` | **受控 props 注入**（sections 不再内部调 useClaudeHistory）、搜索过滤、**组默认收起+计数**、**双击运行中 → SessionActionDialog（切换反查 → switchToPageAndFocus 参数/反查不到 toast/取消关闭，无分支恢复）**、菜单矩阵（3 项，无重命名）、AgentStatusView 集成（**标题覆盖**：同 sessionId 磁盘标题覆盖 row.title/无匹配回退/标题 null 不覆盖；区块标题 13px 粗体 + 引导线样式）、空态文案、E2E 红线 |
 | `claude-history-action-dialog.test.tsx` | SessionActionDialog：标题/消息/动作按钮渲染、action 回调、取消（按钮/Esc/遮罩）、空 actions 防御 |
-| `ipc-claude-history-contract.test.ts` | 两命令 × 四维验证（命令名 / 参数结构 camelCase / 正常返回 / 异常传播），照 `ipc-hooks-config-contract.test.ts` 模式 |
+| `ipc-claude-history-contract.test.ts` | 两命令 × 四维验证（命令名 / 参数结构 camelCase / 正常返回 / 异常传播），经共享工厂 `describeIpcContract`（`helpers/ipc-contract.ts`，IHE-06）声明式驱动——8 条用例，mockIPC 盲区声明见 `src/ipc/CLAUDE.md` |
 
 > 另有 `agent-status-view.test.tsx`（agentStatus 侧）覆盖 AgentStatusRow 双行布局与 AgentStatusView 三区结构；`agent-status-hook.test.ts` 覆盖 useAgentStatus sessionId 字段；`terminal-registry.test.ts` / `use-xterm-lifecycle.test.ts` 覆盖 claudeSession sessionId/status 存储与 hook 事件写入（HUK1-9）。
 

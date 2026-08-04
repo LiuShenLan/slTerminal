@@ -44,7 +44,7 @@ SidebarTree 组件本体不变。宿主从 Allotment 常驻栏（Workspace 四�
 
 ## 测试模式
 
-测试文件：`src/__tests__/sidebar-actions.test.ts`（25 用例 → 33 用例 → 38 用例，含「打开 Hooks 配置」菜单入口 5 用例：页面菜单含项/先切页后开面板顺序/项目菜单含项/有页切 pages[0]/无页新建后切换）。
+测试文件：`src/__tests__/sidebar-actions.test.ts`（47 用例，含「打开 Hooks 配置」菜单入口 5 用例：页面菜单含项/先切页后开面板顺序/项目菜单含项/有页切 pages[0]/无页新建后切换）。
 
 - 使用真实 Zustand stores（`setState` 种子数据），mock IPC dialog
 - `handleAddProject` 测试：mock dialog.open → fireEvent.click → waitFor store 更新 → 验证 project/pages/layout

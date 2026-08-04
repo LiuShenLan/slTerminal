@@ -124,11 +124,11 @@ JobHandle 在 `#[cfg(windows)]` 下为 HANDLE RAII 包装；`#[cfg(not(windows))
 - **`should_inject_da1(already_injected, data) -> bool`** — 检测输出中的 DA1 查询（`ESC[c`/`ESC[0c]`），纯布尔参数替代 AtomicBool。4 条测试覆盖：已注入跳过、含 DA1 需注入、不含 DA1 不注入、DA1 嵌入数据中
 - **`eof_exit_code(wait_outcome: Result<Result<i32, ()>, ()>) -> Option<i32>`**（PTY-12）— EOF 退出码降级决策（P2-11/P2-42）：child 锁获取失败 / `child.wait()` 失败 → `None`（不硬编码 0），两级均 Ok → 真实退出码。3 条测试覆盖：成功返真实码（含 0）、wait 失败 None、锁失败 None
 
-剩余 I/O 编排残余分支因依赖 Mutex/RwLock/系统调用无法纯函数化——已逐分支在测试注释中标明依赖类型（M11 分析块），明细与豁免理由见下方「reader_loop I/O 编排残余豁免（草稿）」。
+剩余 I/O 编排残余分支因依赖 Mutex/RwLock/系统调用无法纯函数化——已逐分支在测试注释中标明依赖类型（M11 分析块），明细与豁免理由见下方「reader_loop I/O 编排残余豁免」段（已收编进 `.claude/test-inventory.md` 既定豁免清单，DOC-01）。
 
-### reader_loop I/O 编排残余豁免（草稿，PTY-12）
+### reader_loop I/O 编排残余豁免（PTY-12，DOC-01 收编）
 
-> **本段为豁免标注草稿**：Stage 17 统一收编为豁免表（→ DOC-01 引用），本 Stage 仅留草稿。逐分支分析原文见 reader.rs 测试注释 M11 块。
+> **本段为豁免表登记项 1（`reader_loop` 残余 I/O 编排分支）的模块级明细**，与 `.claude/test-inventory.md`「既定豁免清单」登记一致（DOC-01 收编，Stage 02 草稿转正）；豁免原因/当前兜底层级两列以 test-inventory 为唯一真值源。逐分支分析原文见 reader.rs 测试注释 M11 块。
 
 `reader_loop`（reader.rs）经 PTY-12 评估：除 `apply_startup_strip` / `should_inject_da1` / `eof_exit_code` 已纯函数化外，残余分支全部依赖同步原语或系统调用，判定不可抽：
 
@@ -186,8 +186,8 @@ cargo test --manifest-path src-tauri/Cargo.toml <test_name> -- --test-threads=1
 4. 修改 `shell-integration.ps1` 后要跑 `test_shell_integration_script_embedded` 测试确认嵌入内容正确
 5. `reader.rs` 的 `strip_conpty_startup` 修改后务必跑全部 strip 相关测试，确认不误杀正常输出
 6. 修改 `READER_BUF_SIZE` 后跑 `reader_buf_size_is_16k` + `strip_startup_with_16k_boundary` + `strip_startup_with_large_payload` 测试
-7. 修改 `conpty_custom` 模块（flags 计算、AttrList、ConPtyMaster、RawChild、spawn 逻辑）后跑 `conpty_custom::tests` 全部 13 条测试 + `pty_integration_tests` 的 `pty_spawn_custom_conpty` 端到端测试。**改 `compute_conpty_flags` 前必读其注释**——启用 PASSTHROUGH_MODE 会静默破坏 claude 全屏 TUI 滚轮（mouse input 不转发），改后须实测 claude 滚轮不回归
-8. 修改 `resolve_shell_info()` / `which_full_path()` 后跑 `shell::tests` 全部 7 条测试
+7. 修改 `conpty_custom` 模块（flags 计算、AttrList、ConPtyMaster、RawChild、spawn 逻辑）后跑 `conpty_custom::tests` 全部 28 条测试（另：spawn.rs 顶层 `mod tests` 20 条覆盖 validate_spawn_request/validate_session_ownership/Job Object 纯逻辑/build_cmdline 引号）+ `pty_integration_tests` 的 `pty_spawn_custom_conpty` 端到端测试。**改 `compute_conpty_flags` 前必读其注释**——启用 PASSTHROUGH_MODE 会静默破坏 claude 全屏 TUI 滚轮（mouse input 不转发），改后须实测 claude 滚轮不回归
+8. 修改 `resolve_shell_info()` / `which_full_path()` 后跑 `shell::tests` 全部 20 条测试
 9. `resolve_shell_info()` 返回的 `ShellInfo.program` **必须是完整路径**（非短名）——否则 `CreateProcessW(lpApplicationName=..., lpCommandLine=...)` 找不到可执行文件
 10. ConPTY 指针 cast：`as_raw_handle()` 已返回 `*mut c_void`，无需再 `as *mut std::ffi::c_void`——Clippy `unnecessary-cast` 会报错。同理 `std::io::Error::new(std::io::ErrorKind::Other, e)` 简化为 `std::io::Error::other(e)`（Rust 1.74+），`.map_err(|e| std::io::Error::other(e))` 进一步简化为 `.map_err(std::io::Error::other)`
 
@@ -197,11 +197,11 @@ Rust 测试分布在 5 个位置：
 
 | 位置 | 类型 | 用例数 | 访问级别 |
 |------|------|--------|---------|
-| `pty/reader.rs` `#[cfg(test)]` | 单元测试 | 28 | `use super::*` 访问 `pub(crate)` 和私有项 |
-| `pty/spawn.rs` `#[cfg(test)]` | 单元测试 | 13 | 在 `conpty_custom` 子模块内 |
-| `pty/shell.rs` `#[cfg(test)]` | 单元测试 | 7 | `use super::*` |
-| `tests/pty_integration_tests.rs` | 集成测试 | 5 | 仅能访问 `pub` API |
-| `state.rs` `#[cfg(test)]` | 单元测试 | 15 | sandbox 路径校验纯函数测试 |
+| `pty/reader.rs` `#[cfg(test)]` | 单元测试 | 36 | `use super::*` 访问 `pub(crate)` 和私有项 |
+| `pty/spawn.rs` `#[cfg(test)]` | 单元测试 | 48（`conpty_custom` 内 28 + 顶层 20） | `conpty_custom` 子模块 + 顶层 `mod tests`（validate_spawn_request/SEC-08/Job Object 纯逻辑） |
+| `pty/shell.rs` `#[cfg(test)]` | 单元测试 | 20 | `use super::*` |
+| `tests/pty_integration_tests.rs` | 集成测试 | 8 | 仅能访问 `pub` API |
+| `state.rs` `#[cfg(test)]` | 单元测试 | 32 | sandbox 路径校验 + ring buffer 纯函数测试 |
 
 ### 单元测试组织
 
@@ -221,7 +221,7 @@ assert!(master.take_writer().is_ok());
 assert!(master.take_writer().is_err()); // 第二次失败
 ```
 
-测试覆盖：`compute_conpty_flags`（4 条——全部 build 均返回 0x7，锁死 PASSTHROUGH_MODE 不启用）、flag 常量值验证（3 条）、`ConPtyMaster` MasterPty trait（4 条）、`AttrList` 生命周期（2 条）。
+测试覆盖（`conpty_custom` 内 28 条）：`compute_conpty_flags`（4 条——全部 build 均返回 0x7，锁死 PASSTHROUGH_MODE 不启用）、flag 常量值验证（3 条）、`ConPtyMaster` MasterPty trait（4 条）、`AttrList` 生命周期（2 条）、`create_conpty_pair` 尺寸/尺寸修改/take_writer 单次、`build_env_block`/`build_cmdline` 引号处理、`spawn_conpty_child` 可纯化部分等。spawn.rs 顶层 `mod tests`（20 条）覆盖 `validate_spawn_request`（尺寸超限/白名单/cwd 沙箱拒绝）、`validate_session_ownership`（SEC-08 放行/拒绝）、Job Object 纯逻辑（job_name/limit flags）与测试清理 helper。
 
 ### 启动序列剥离测试（reader.rs）
 
@@ -259,7 +259,7 @@ fn spawn_cmd() -> (Box<dyn MasterPty>, Box<dyn Child>, Box<dyn Read>, Box<dyn Wr
 }
 ```
 
-测试覆盖：echo roundtrip（写入 `echo marker` → 读取验证 marker 出现）、resize 应用（spawn → resize 30×100 → `get_size()` 验证）、kill 无孤儿（spawn → kill → `try_wait()` 验证子进程退出）、自定义 ConPTY spawn（仅 Windows CI runner）、shell 集成脚本 OSC 序列验证。
+测试覆盖（8 条）：echo roundtrip（写入 `echo marker` → 读取验证 marker 出现）、resize 应用（spawn → resize 30×100 → `get_size()` 验证）、kill 无孤儿（spawn → kill → `try_wait()` 验证子进程退出）、自定义 ConPTY spawn（仅 Windows CI runner）、shell 集成脚本 OSC 序列验证、reattach 回放（E1）、env 注入（COLORTERM/TERM/TERM_PROGRAM）等。
 
 ### 运行约束
 
