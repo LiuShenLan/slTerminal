@@ -122,8 +122,25 @@ JobHandle 在 `#[cfg(windows)]` 下为 HANDLE RAII 包装；`#[cfg(not(windows))
 
 - **`apply_startup_strip(startup_drained, data) -> Option<Vec<u8>>`** — 首轮读取时剥离 ConPTY 启动序列（OSC 标题/BEL/清屏/光标归位/DSR），返回 None 表示全部剥离（跳过），Some 返回剥离后数据。`startup_drained=true` 时原样返回。6 条测试覆盖：已排空透传、全剥离跳空、部分剥离保留正文、无启动序列原样返回
 - **`should_inject_da1(already_injected, data) -> bool`** — 检测输出中的 DA1 查询（`ESC[c`/`ESC[0c]`），纯布尔参数替代 AtomicBool。4 条测试覆盖：已注入跳过、含 DA1 需注入、不含 DA1 不注入、DA1 嵌入数据中
+- **`eof_exit_code(wait_outcome: Result<Result<i32, ()>, ()>) -> Option<i32>`**（PTY-12）— EOF 退出码降级决策（P2-11/P2-42）：child 锁获取失败 / `child.wait()` 失败 → `None`（不硬编码 0），两级均 Ok → 真实退出码。3 条测试覆盖：成功返真实码（含 0）、wait 失败 None、锁失败 None
 
-剩余 I/O 编排（channel send vs ring buffer 回退、EOF `child.wait()`、`tracing::warn!`）因依赖 Mutex/RwLock/系统调用无法纯函数化——已逐分支在测试注释中标明依赖类型，标记为"已尽力"。
+剩余 I/O 编排残余分支因依赖 Mutex/RwLock/系统调用无法纯函数化——已逐分支在测试注释中标明依赖类型（M11 分析块），明细与豁免理由见下方「reader_loop I/O 编排残余豁免（草稿）」。
+
+### reader_loop I/O 编排残余豁免（草稿，PTY-12）
+
+> **本段为豁免标注草稿**：Stage 17 统一收编为豁免表（→ DOC-01 引用），本 Stage 仅留草稿。逐分支分析原文见 reader.rs 测试注释 M11 块。
+
+`reader_loop`（reader.rs）经 PTY-12 评估：除 `apply_startup_strip` / `should_inject_da1` / `eof_exit_code` 已纯函数化外，残余分支全部依赖同步原语或系统调用，判定不可抽：
+
+| 残余分支 | 依赖 | 不可抽原因 |
+|----------|------|-----------|
+| channel 锁获取失败 → break（三分支） | `RwLock<Option<Channel>>` | break 语义依赖循环控制流；`tauri::ipc::Channel` 无法在 L1 构造（无 webview 运行时上下文） |
+| send Output/Exit 失败 → debug 日志 | `Channel::send`（Tauri IPC） | send 依赖运行时 webview 上下文，无法注入 |
+| EOF `child.wait()` | portable-pty `Child::wait()` | Windows `WaitForSingleObject` 系统调用（退出码降级决策已抽为 `eof_exit_code`，调用本身不可抽） |
+| DA1 响应注入 | `writer.lock()` + 管道 I/O | Mutex + 管道系统调用（检测决策已抽为 `should_inject_da1`，注入动作不可抽） |
+| ring buffer 写入 | `ring_buffer_append`（state.rs） | 函数本体已抽取（state.rs 测试覆盖）；**不存在"channel 断开→写 ring"分流决策**——P2-46 设计为无条件缓存（先缓存再 send，成功路径零 clone），channel 为 None 时仅 Option 判空跳过 send，无分支逻辑可测 |
+| `tracing::warn!`/`error!` 告警 | 日志宏 | I/O 副作用 |
+| 读错误 → 退出码 -1 | 常量赋值 | 无分支逻辑（`Some(-1)` 字面量） |
 
 ### DA1 查询模拟响应
 

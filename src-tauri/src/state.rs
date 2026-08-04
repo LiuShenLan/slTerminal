@@ -290,6 +290,73 @@ mod tests {
         // 淘汰后第一个字节应是完整行起始 'X'（非截断的中间字节）
         assert_eq!(buf[0], b'X', "淘汰后应以完整行起始，避免截断");
     }
+
+    /// PTY-05: 无换行长行淘汰边界①——淘汰量恰好 1024（map_or 的 or 分支原量淘汰）
+    #[test]
+    fn test_ring_buffer_eviction_long_line_exact_1024() {
+        let ring = Mutex::new(VecDeque::new());
+        // 单条无换行超长行：容量 + 恰好 1024 字节
+        // 1024 字节窗口内无换行 → drain_len = drain_target = 1024，一轮淘汰后恰好回落到容量
+        let data = vec![b'A'; RING_BUFFER_CAPACITY + 1024];
+        ring_buffer_append(&ring, &data).unwrap();
+        let buf = ring.lock().unwrap();
+        assert_eq!(
+            buf.len(),
+            RING_BUFFER_CAPACITY,
+            "淘汰量恰好 1024 时应恰好回落到容量"
+        );
+        assert_eq!(buf[buf.len() - 1], b'A', "剩余尾部应为最新写入字节");
+    }
+
+    /// PTY-05: 无换行长行淘汰边界②——超 1024 且不能整除（多轮原量淘汰）
+    #[test]
+    fn test_ring_buffer_eviction_long_line_exceed_1024() {
+        let ring = Mutex::new(VecDeque::new());
+        // 单条无换行超长行：容量 + 5000 字节（5000 = 4×1024 + 904）
+        // 无换行时每轮按 1024 原量淘汰：4 轮后剩 904 仍超容量 → 第 5 轮再淘汰 1024，回落至容量 - 120
+        let data = vec![b'B'; RING_BUFFER_CAPACITY + 5000];
+        ring_buffer_append(&ring, &data).unwrap();
+        let buf = ring.lock().unwrap();
+        assert!(
+            buf.len() <= RING_BUFFER_CAPACITY,
+            "淘汰后长度不应超过容量，实际 {}",
+            buf.len()
+        );
+        assert_eq!(
+            buf.len(),
+            RING_BUFFER_CAPACITY - 120,
+            "无换行超长行应按 1024 原量多轮淘汰"
+        );
+        assert_eq!(buf[buf.len() - 1], b'B', "剩余尾部应为最新写入字节");
+    }
+
+    /// PTY-05: 无换行长行淘汰边界③——数据中含换行（rposition 分支按行对齐，超长行不截断）
+    #[test]
+    fn test_ring_buffer_eviction_long_line_with_newline() {
+        let ring = Mutex::new(VecDeque::new());
+        // 先铺满短行（101 字节/行：100 字节 X + 换行），再追加一条 3000 字节无换行超长行
+        // 淘汰窗口（1024 字节）内存在换行 → drain_len = 最后一个 \n 位置 + 1（10 整行 1010 字节）
+        // 超长行整体保留在尾部，不被截断
+        let line = [b'X'; 100];
+        let mut total = 0usize;
+        while total + 101 <= RING_BUFFER_CAPACITY {
+            ring_buffer_append(&ring, &line).unwrap();
+            ring_buffer_append(&ring, b"\n").unwrap();
+            total += 101;
+        }
+        let long_line = vec![b'Y'; 3000];
+        ring_buffer_append(&ring, &long_line).unwrap();
+        let buf = ring.lock().unwrap();
+        assert!(
+            buf.len() <= RING_BUFFER_CAPACITY,
+            "淘汰后长度不应超过容量，实际 {}",
+            buf.len()
+        );
+        assert_eq!(buf[0], b'X', "淘汰后应以完整行起始（行边界对齐）");
+        // 尾部无换行超长行应完整保留（未被截断）
+        let mut tail = buf.iter().skip(buf.len() - 3000);
+        assert!(tail.all(|&b| b == b'Y'), "尾部无换行超长行应完整保留");
+    }
 }
 
 /// validate_path_within_root 路径沙箱测试
@@ -396,6 +463,36 @@ mod sandbox_tests {
         );
         // ../ 逃逸经 canonicalize 后应解析到根外路径
         assert!(result.is_err(), "路径穿越应拒绝");
+    }
+
+    /// PTY-11: 相对路径含 .. 穿越沙箱根 → 应以根为基准 join 后拒绝（SEC-01 防线）
+    #[test]
+    fn validate_relative_path_traversal_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        // 相对路径 ".." 以 canonical_root 为基准 join → canonicalize 后解析到根外
+        let traversal = std::path::Path::new("..").join("sltest_escape_pty11.txt");
+
+        let result = validate_path_within_root(
+            &Some(root.path().to_path_buf()),
+            &traversal,
+        );
+        assert!(result.is_err(), "相对路径 .. 穿越应拒绝");
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("超出项目范围"), "错误消息应含'超出项目范围'");
+    }
+
+    /// PTY-11: 相对路径正常放行 → 以根为基准 join 后放行
+    #[test]
+    fn validate_relative_path_accepted() {
+        let root = tempfile::tempdir().unwrap();
+        // 相对路径（含不存在的中层目录）以 canonical_root 为基准 join → 上溯到根后放行
+        let relative = std::path::Path::new("sub_dir").join("rel.txt");
+
+        let result = validate_path_within_root(
+            &Some(root.path().to_path_buf()),
+            &relative,
+        );
+        assert!(result.is_ok(), "根内相对路径应放行");
     }
 
     /// 符号链接指向根外 → 应拒绝
@@ -573,6 +670,51 @@ mod sandbox_tests {
         let nonexistent = std::path::Path::new("Z:\\not_a_real_drive\\a\\b\\c.txt");
         let result = canonicalize_or_ancestor(nonexistent);
         assert!(result.is_err(), "无存在祖先时应返回 Err");
+    }
+
+    // ---- canonicalize_or_ancestor 相对路径分支（PTY-13②）----
+    // 相对路径以进程 cwd 为基准解析；测试内 chdir 到 tempdir 构造场景，测毕恢复原 cwd
+
+    /// 直接传相对路径（文件存在）→ 以 cwd 为基准 canonicalize
+    #[test]
+    fn canonicalize_or_ancestor_relative_existing() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("rel.txt"), "data").unwrap();
+        let original = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+        let result = canonicalize_or_ancestor(std::path::Path::new("rel.txt"));
+        std::env::set_current_dir(original).unwrap();
+
+        let result = result.unwrap();
+        let expected = dunce::canonicalize(dir.path().join("rel.txt")).unwrap();
+        assert_eq!(result, expected, "相对路径存在时应解析为 cwd 基准下的真实路径");
+    }
+
+    /// 直接传相对路径（叶子缺失、最近存在祖先为 cwd 下的子目录）→ 上溯到子目录后拼接
+    #[test]
+    fn canonicalize_or_ancestor_relative_missing_leaf_with_existing_parent() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        let original = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+        let result = canonicalize_or_ancestor(&std::path::Path::new("sub").join("ghost.txt"));
+        std::env::set_current_dir(original).unwrap();
+
+        let result = result.unwrap();
+        let expected = dunce::canonicalize(dir.path().join("sub")).unwrap().join("ghost.txt");
+        assert_eq!(result, expected, "应上溯到存在的子目录后拼接缺失叶子");
+    }
+
+    /// 直接传相对路径（叶子缺失且无存在祖先——上溯到空路径后终止）→ 返回 Err，不 panic
+    #[test]
+    fn canonicalize_or_ancestor_relative_no_ancestor_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let original = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+        let result = canonicalize_or_ancestor(std::path::Path::new("ghost_only.txt"));
+        std::env::set_current_dir(original).unwrap();
+
+        assert!(result.is_err(), "相对路径叶子缺失且无存在祖先时应返回 Err");
     }
 
     // ---- validate_path_within_root 新语义测试 ----

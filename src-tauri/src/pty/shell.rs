@@ -330,4 +330,185 @@ mod tests {
                 .expect("通过 PATH 解析的 cmd.exe 应通过白名单校验");
         }
     }
+
+    // ── PATH 可控测试辅助（PTY-06/PTY-10/PTY-13③）──
+    //
+    // 三个用例组通过整体替换 PATH 环境变量驱动回退顺序与解析行为。
+    // 环境变量全局可变，依赖 L1 全量 `--test-threads=1` 门禁（串行执行无污染）。
+
+    /// PATH 恢复守卫——测试结束时（含 panic）还原原 PATH，避免污染后续用例
+    struct PathGuard(Option<std::ffi::OsString>);
+
+    impl Drop for PathGuard {
+        fn drop(&mut self) {
+            match &self.0 {
+                Some(v) => std::env::set_var("PATH", v),
+                None => std::env::remove_var("PATH"),
+            }
+        }
+    }
+
+    /// 用给定目录列表整体替换 PATH（平台正确分隔符），返回恢复守卫
+    fn set_test_path(paths: &[&std::path::Path]) -> PathGuard {
+        let old = std::env::var_os("PATH");
+        let joined = std::env::join_paths(paths.iter()).expect("构造 PATH 失败");
+        std::env::set_var("PATH", joined);
+        PathGuard(old)
+    }
+
+    /// 在目录中创建假可执行文件——空文件即可（which_full_path 只查 exists）
+    fn fake_exe(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, b"").expect("写假 exe 失败");
+        path
+    }
+
+    // ── PTY-06：resolve_shell_info 自动检测回退顺序 ──
+
+    #[test]
+    fn test_resolve_shell_info_fallback_order() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // 场景 1：只有 pwsh → 命中 pwsh（完整路径 + 集成脚本参数）
+        fake_exe(dir.path(), "pwsh.exe");
+        {
+            let _guard = set_test_path(&[dir.path()]);
+            let info = resolve_shell_info(None).expect("应命中 pwsh");
+            let expect = dir.path().join("pwsh.exe");
+            assert_eq!(info.program, expect.to_string_lossy().as_ref());
+            assert!(
+                info.args.contains(&"-EncodedCommand".to_string()),
+                "pwsh 应携带集成脚本参数"
+            );
+        }
+
+        // 场景 2：只有 powershell → 命中 powershell
+        std::fs::remove_file(dir.path().join("pwsh.exe")).unwrap();
+        fake_exe(dir.path(), "powershell.exe");
+        {
+            let _guard = set_test_path(&[dir.path()]);
+            let info = resolve_shell_info(None).expect("应命中 powershell");
+            let expect = dir.path().join("powershell.exe");
+            assert_eq!(info.program, expect.to_string_lossy().as_ref());
+        }
+
+        // 场景 3：都没有 → 回退 cmd（PATH 不含 System32 → 硬编码兜底路径，不带参数）
+        std::fs::remove_file(dir.path().join("powershell.exe")).unwrap();
+        {
+            let _guard = set_test_path(&[dir.path()]);
+            let info = resolve_shell_info(None).expect("应回退 cmd");
+            assert!(
+                info.program.ends_with("cmd.exe"),
+                "应回退 cmd.exe，实际: {}",
+                info.program
+            );
+            assert!(info.args.is_empty(), "cmd 回退不带参数");
+        }
+
+        // 场景 4：pwsh 与 powershell 并存 → pwsh 优先（回退顺序首档）
+        fake_exe(dir.path(), "pwsh.exe");
+        fake_exe(dir.path(), "powershell.exe");
+        {
+            let _guard = set_test_path(&[dir.path()]);
+            let info = resolve_shell_info(None).expect("应命中 pwsh");
+            let expect = dir.path().join("pwsh.exe");
+            assert_eq!(info.program, expect.to_string_lossy().as_ref());
+        }
+    }
+
+    // ── PTY-10：resolve_shell 回退顺序 + 白名单 PATH 解析后仍拒绝 ──
+
+    #[test]
+    fn test_resolve_shell_fallback_order() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // 场景 1：只有 pwsh → 命中 pwsh（argv[0] + 集成脚本参数）
+        fake_exe(dir.path(), "pwsh.exe");
+        {
+            let _guard = set_test_path(&[dir.path()]);
+            let cmd = resolve_shell(None).expect("应命中 pwsh");
+            assert_eq!(cmd.get_argv()[0], "pwsh.exe");
+            assert!(cmd.get_argv().len() > 1, "pwsh 应带集成脚本参数");
+        }
+
+        // 场景 2：只有 powershell → 命中 powershell
+        std::fs::remove_file(dir.path().join("pwsh.exe")).unwrap();
+        fake_exe(dir.path(), "powershell.exe");
+        {
+            let _guard = set_test_path(&[dir.path()]);
+            let cmd = resolve_shell(None).expect("应命中 powershell");
+            assert_eq!(cmd.get_argv()[0], "powershell.exe");
+        }
+
+        // 场景 3：都没有 → 回退 cmd（argv 仅 program，无参数）
+        std::fs::remove_file(dir.path().join("powershell.exe")).unwrap();
+        {
+            let _guard = set_test_path(&[dir.path()]);
+            let cmd = resolve_shell(None).expect("应回退 cmd");
+            assert_eq!(cmd.get_argv()[0], "cmd.exe");
+            assert_eq!(cmd.get_argv().len(), 1, "cmd 回退不带参数");
+        }
+    }
+
+    #[test]
+    fn test_allowlist_rejects_path_resolved_non_allowlisted() {
+        // 用户指定 shell 经 PATH 解析成功（文件真实存在）但非白名单 → 仍拒绝
+        let dir = tempfile::tempdir().unwrap();
+        fake_exe(dir.path(), "fake-shell.exe");
+        let _guard = set_test_path(&[dir.path()]);
+
+        // 直接校验：文件名不在白名单，PATH 解析成功仍拒绝
+        let result = validate_shell_allowlist("fake-shell.exe");
+        assert!(result.is_err(), "PATH 解析成功但非白名单应拒绝");
+
+        // resolve_shell 用户指定路径同语义
+        assert!(
+            resolve_shell(Some("fake-shell.exe")).is_err(),
+            "resolve_shell 用户指定非白名单应拒绝"
+        );
+
+        // resolve_shell_info 用户指定路径同语义（短名 → PATH 解析 → 白名单拒绝）
+        assert!(
+            resolve_shell_info(Some("fake-shell.exe")).is_err(),
+            "resolve_shell_info 用户指定非白名单应拒绝"
+        );
+    }
+
+    // ── PTY-13③：which_full_path PATH 顺序与大小写边界 ──
+
+    #[test]
+    fn test_which_full_path_first_match_in_path_order() {
+        // PATH 多目录时返回第一个匹配目录的完整路径（目录顺序优先）
+        let dir1 = tempfile::tempdir().unwrap();
+        let dir2 = tempfile::tempdir().unwrap();
+        fake_exe(dir1.path(), "pwsh.exe");
+        fake_exe(dir2.path(), "pwsh.exe");
+        let _guard = set_test_path(&[dir1.path(), dir2.path()]);
+
+        let found = which_full_path("pwsh.exe").expect("应命中第一个目录");
+        assert_eq!(
+            found,
+            dir1.path().join("pwsh.exe").to_string_lossy().as_ref()
+        );
+    }
+
+    #[test]
+    fn test_which_full_path_case_sensitivity() {
+        // 大小写边界：目录中文件名大小写与查询名不同
+        let dir = tempfile::tempdir().unwrap();
+        fake_exe(dir.path(), "PwSh.ExE");
+        let _guard = set_test_path(&[dir.path()]);
+
+        let found = which_full_path("pwsh.exe");
+        #[cfg(windows)]
+        {
+            // Windows 文件系统大小写不敏感 → 命中
+            assert!(found.is_some(), "Windows 应命中 PwSh.ExE");
+        }
+        #[cfg(not(windows))]
+        {
+            // Unix 文件系统大小写敏感 → 不命中
+            assert!(found.is_none(), "Unix 不应命中 PwSh.ExE");
+        }
+    }
 }

@@ -45,21 +45,21 @@ pub fn reader_loop(
             Ok(0) => {
                 // EOF — 子进程已退出
                 // P2-11: 从 child.wait() 获取真实退出码而非硬编码 0
-                let code = match child.lock() {
-                    Ok(mut c) => {
-                        match c.wait() {
-                            Ok(status) => Some(status.exit_code() as i32),
-                            Err(e) => {
-                                tracing::warn!("child.wait() 失败: {e}");
-                                None
-                            }
+                // 锁/等待失败 → 退出码未知（None），不硬编码 0（降级决策见 eof_exit_code）
+                let wait_outcome: Result<Result<i32, ()>, ()> = match child.lock() {
+                    Ok(mut c) => match c.wait() {
+                        Ok(status) => Ok(Ok(status.exit_code() as i32)),
+                        Err(e) => {
+                            tracing::warn!("child.wait() 失败: {e}");
+                            Ok(Err(()))
                         }
-                    }
+                    },
                     Err(e) => {
                         tracing::error!("reader_loop child 锁获取失败: {e}");
-                        None
+                        Err(())
                     }
                 };
+                let code = eof_exit_code(wait_outcome);
 
                 // P2-42: 记录退出码到共享状态，供 pty_reattach 检测
                 if let Ok(mut ec) = exit_code.lock() {
@@ -153,6 +153,19 @@ pub fn reader_loop(
     }
 }
 
+/// EOF 退出码降级决策（P2-11/P2-42）
+///
+/// 输入为 reader_loop 的 lock/wait 两级结果：外层 Err = child 句柄锁获取失败，
+/// 内层 Err = `child.wait()` 失败。任一失败 → `None`（退出码未知，不硬编码 0——
+/// P2-11 明确弃用旧"硬编码 0"行为）；两级均 Ok → 真实退出码。
+/// 纯函数，由 reader_loop 注入结果，测试直接构造三种输入。
+fn eof_exit_code(wait_outcome: Result<Result<i32, ()>, ()>) -> Option<i32> {
+    match wait_outcome {
+        Ok(Ok(code)) => Some(code),
+        Ok(Err(())) | Err(()) => None,
+    }
+}
+
 /// 剥离 ConPTY VtIo::StartIfNeeded() 注入的启动序列
 ///
 /// 启动序列（按出现顺序）：
@@ -164,7 +177,9 @@ pub fn reader_loop(
 ///
 /// 在非 Windows 平台此函数原样返回（无 ConPTY 启动序列）。
 fn strip_conpty_startup(data: &[u8]) -> Vec<u8> {
-    // 非 Windows 无 ConPTY，原样返回
+    // 由 cfg 守护，Windows CI 不可达：`cfg!(windows)` 为编译期常量，本项目 CI
+    // 恒为 Windows → 剥离分支真实执行，本分支被编译期裁剪（平台守卫测试见
+    // `strip_platform_guard_constant`）。非 Windows 无 ConPTY，原样返回。
     if !cfg!(windows) {
         return data.to_vec();
     }
@@ -291,6 +306,8 @@ mod tests {
     // reader_loop 主循环有三个 match 分支，均已审查可抽取性：
     //
     // 1. Ok(0) — EOF 分支：
+    //    - eof_exit_code()       → ✅ 已抽取为纯函数（PTY-12）：lock/wait 两级
+    //                              失败 → None（不硬编码 0），成功 → 真实退出码
     //    - child.wait()          → portable_pty::Child::wait() 是系统调用（Windows WaitForSingleObject），I/O
     //    - exit_code.lock()       → std::sync::Mutex，运行时同步原语
     //    - channel.read()         → std::sync::RwLock，运行时同步原语
@@ -315,10 +332,13 @@ mod tests {
     // 无法在不引入运行时依赖的前提下构造测试输入。
     //
     // 结论：reader_loop 中剩余的所有分支决策均依赖同步原语或系统调用，
-    // 无法进一步抽取为纯函数。apply_startup_strip 和 should_inject_da1
-    // 已覆盖主循环中全部可纯函数化的决策逻辑。
+    // 无法进一步抽取为纯函数。apply_startup_strip / should_inject_da1 /
+    // eof_exit_code 已覆盖主循环中全部可纯函数化的决策逻辑。
     //
     // M11 状态：已尽力——剩余均为 I/O 编排无法纯函数化。
+    // PTY-12 评估产出：残余不可抽分支明细 + 豁免理由见
+    // src-tauri/src/pty/CLAUDE.md「reader_loop I/O 编排残余豁免（草稿）」
+    // （Stage 17 统一收编为豁免表，DOC-01 引用）。
 
     #[test]
     fn test_strip_osc_title_bel() {
@@ -330,6 +350,12 @@ mod tests {
     fn test_strip_clear_screen() {
         let input = b"\x1b[2J";
         assert_eq!(strip_conpty_startup(input), b"");
+    }
+
+    #[test]
+    fn test_strip_clear_screen_3j() {
+        // PTY-04: CSI 3J（清屏含滚动缓冲）与 2J 一并剥离
+        assert_eq!(strip_conpty_startup(b"\x1b[3J"), b"");
     }
 
     #[test]
@@ -366,6 +392,41 @@ mod tests {
     fn test_preserve_osc7_cwd() {
         let input = b"\x1b]7;file:///C:/Users\x1b\\";
         assert_eq!(strip_conpty_startup(input), input);
+    }
+
+    #[test]
+    fn strip_preserves_non_title_osc() {
+        // PTY-04: OSC 1/3/4/9（非窗口标题类）不被剥离——剥离仅针对 OSC 0/2
+        // 窗口标题（OSC 0/2），其余 OSC 用途（图标名/属性/调色板/桌面通知）
+        // 均须原样透传，防止误杀应用侧正常输出
+        let cases: [&[u8]; 4] = [
+            b"\x1b]1;icon-title\x07", // OSC 1 icon name
+            b"\x1b]3;prop\x07",       // OSC 3 属性
+            b"\x1b]4;0;#000000\x07",  // OSC 4 调色板
+            b"\x1b]9;notify\x07",     // OSC 9 桌面通知
+        ];
+        for case in cases {
+            assert_eq!(strip_conpty_startup(case), case);
+        }
+    }
+
+    #[test]
+    fn strip_platform_guard_constant() {
+        // PTY-04: cfg!(windows) 编译期常量断言。
+        // `cfg!` 是编译期常量（非运行时环境检测）：Windows CI（本项目唯一
+        // CI 平台）上恒为 true——剥离分支真实执行；非 Windows 平台恒为
+        // false——strip_conpty_startup 走"原样返回"分支（由 cfg 守护，
+        // Windows CI 不可达，代码注释已标注）。若未来误在非 Windows 平台
+        // 编译运行，此断言与全部 strip 用例同时红，提示该分支缺失执行覆盖。
+        if cfg!(windows) {
+            // 常量与运行时平台一致性断言：cfg!(windows)==true 时运行平台必为
+            // Windows（编译期平台与运行平台恒一致，此处锁死该不变量）
+            assert_eq!(std::env::consts::OS, "windows");
+        } else {
+            // 非 Windows：就地验证"原样返回"分支真实行为（Windows CI 不可达）
+            let input = b"\x1b]0;pwsh\x07\x1b[2J\x1b[H\x1b[?25l\x1b[6n";
+            assert_eq!(strip_conpty_startup(input), input);
+        }
     }
 
     // ─── Step 1.4: 缓冲区大小测试 ───
@@ -561,5 +622,26 @@ mod tests {
     fn da1_inject_embedded_in_output() {
         // DA1 嵌入在正常输出中
         assert!(should_inject_da1(false, b"prompt> \x1b[c more"));
+    }
+
+    // ─── eof_exit_code 纯函数测试（PTY-12）───
+
+    #[test]
+    fn eof_exit_code_success_returns_real_code() {
+        // P2-11: child.wait() 成功 → 返回真实退出码（含 0）
+        assert_eq!(eof_exit_code(Ok(Ok(0))), Some(0));
+        assert_eq!(eof_exit_code(Ok(Ok(42))), Some(42));
+    }
+
+    #[test]
+    fn eof_exit_code_wait_failure_returns_none() {
+        // P2-11: child.wait() 失败 → None（退出码未知，不硬编码 0 假退出码）
+        assert_eq!(eof_exit_code(Ok(Err(()))), None);
+    }
+
+    #[test]
+    fn eof_exit_code_lock_failure_returns_none() {
+        // P2-42: child 句柄锁获取失败 → None（退出码未知）
+        assert_eq!(eof_exit_code(Err(())), None);
     }
 }

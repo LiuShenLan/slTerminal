@@ -13,7 +13,7 @@
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
 | `src-tauri/src/git/mod.rs` | 88 | status_to_str/git_status/git_diff/git_file_at_head/recurse_untracked_dirs/oldPath/rename_detection/line_callback/dunce/序列化/repository/rollback/unstage/commit_file |
-| `src-tauri/src/pty/reader.rs` | 30 | ConPTY 启动序列剥离/DA1 查询检测/apply_startup_strip/should_inject_da1/mirror_da1_query/16KB 边界 |
+| `src-tauri/src/pty/reader.rs` | 36 | ConPTY 启动序列剥离（含 OSC 1/3/4/9 保留/CSI 3J/平台守卫）/DA1 查询检测/apply_startup_strip/should_inject_da1/mirror_da1_query/eof_exit_code/16KB 边界 |
 | `src-tauri/src/pty/spawn.rs` | 28 | compute_conpty_flags/flag 常量/ConPtyMaster MasterPty trait/AttrList + env 注入/cwd 规范化/ring buffer 回放/session 隔离 |
 | `src-tauri/src/fs/mod.rs` | 28 | read_dir/write_file/create_dir/delete/rename + 命令包装单测 |
 | `src-tauri/src/notify/mod.rs` | 24 | FileWatcher 生命周期 + classify_by_kind 事件分类（全 7 种 EventKind） |
