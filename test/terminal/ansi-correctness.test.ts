@@ -67,16 +67,21 @@ describe('L3 终端渲染 — ANSI 正确性', () => {
 
   // ============ 256 色 ============
 
-  it('256 色前景 — 标准色 0-15 会被优化为基本色', async () => {
+  it('256 色前景 — 标准色 0-15 被 serialize 优化为基本 SGR', async () => {
     const { term, serialize } = createTerminal(120, 30);
-    // 256 色索引 0-7 映射到基本前景色 30-37，8-15 映射到 90-97
+    // 一手证据 node_modules/@xterm/addon-serialize/src/SerializeAddon.ts:259-262（E2E-08 核验更正）：
+    // palette 0-15 前景优化为 30+(c&7)（0-7）/ 90+(c&7)（8-15），不再输出 38;5;n 序列
     for (let i = 0; i < 16; i++) {
       await writeSync(term, `\x1b[38;5;${i}mC256_${i}\x1b[0m `);
     }
     const result = serialize.serialize();
-    // serialize addon 会将 38;5;0 优化为 30，38;5;1→31 等
-    expect(result).toContain('C256_0');
-    expect(result).toContain('C256_15');
+    for (let i = 0; i < 16; i++) {
+      expect(result).toContain(`C256_${i}`);
+      // 优化后序列：38;5;0→\x1b[30m、38;5;1→\x1b[31m、38;5;8→\x1b[90m、38;5;15→\x1b[97m 等
+      expect(result).toContain(`\x1b[${i & 8 ? 90 + (i & 7) : 30 + (i & 7)}m`);
+      // 原 256 色序列被优化，不再输出
+      expect(result).not.toContain(`\x1b[38;5;${i}m`);
+    }
     expect(result).toContain('\x1b[0m');
   });
 
@@ -106,16 +111,19 @@ describe('L3 终端渲染 — ANSI 正确性', () => {
     }
   });
 
-  it('256 色背景 — 标准色 0-7 会被优化为基本色', async () => {
+  it('256 色背景 — 标准色 0-15 被 serialize 优化为基本 SGR', async () => {
     const { term, serialize } = createTerminal(120, 30);
-    // 256 色背景索引 0-7 映射到基本背景色 40-47
-    for (let i = 0; i < 8; i++) {
+    // 一手证据 SerializeAddon.ts:268-271（E2E-08）：palette 0-15 背景优化为
+    // 40+(c&7)（0-7）/ 100+(c&7)（8-15），不再输出 48;5;n 序列
+    for (let i = 0; i < 16; i++) {
       await writeSync(term, `\x1b[48;5;${i}mBG256_${i}\x1b[0m `);
     }
     const result = serialize.serialize();
-    // serialize addon 会将 48;5;0 优化为 40，48;5;1→41 等
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < 16; i++) {
       expect(result).toContain(`BG256_${i}`);
+      // 优化后序列：48;5;0→\x1b[40m、48;5;7→\x1b[47m、48;5;8→\x1b[100m、48;5;15→\x1b[107m 等
+      expect(result).toContain(`\x1b[${i & 8 ? 100 + (i & 7) : 40 + (i & 7)}m`);
+      expect(result).not.toContain(`\x1b[48;5;${i}m`);
     }
   });
 

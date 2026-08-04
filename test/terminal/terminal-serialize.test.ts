@@ -7,6 +7,10 @@ import { describe, it, expect } from 'vitest';
 import { Terminal } from '@xterm/headless';
 import { SerializeAddon } from '@xterm/addon-serialize';
 
+// xterm 内部 ColorMode 常量（node_modules/@xterm/xterm/src/common/buffer/Constants.ts:100-104，
+// headless 6.0 同源）：getFgColorMode()/getBgColorMode() 返回值（E2E-07 单元格属性断言）
+const CM_P16 = 0x1000000; // 16 色 palette 模式
+
 /** 等待 write 完成的辅助函数 */
 function writeSync(term: Terminal, data: string): Promise<void> {
   return new Promise<void>((resolve) => {
@@ -88,9 +92,12 @@ describe('L3 终端渲染 — 序列化', () => {
     await writeSync(term, 'CURSOR_HERE');
     await writeSync(term, '\x1b[2;3H');
     await writeSync(term, 'POS2');
+    // 行级精确断言（E2E-07）：CURSOR_HERE 位于第 5 行（y=4）第 10 列（x=9），POS2 位于第 2 行（y=1）第 3 列（x=2）
+    const line4 = term.buffer.active.getLine(4)!.translateToString();
+    expect(line4.slice(9, 9 + 11)).toBe('CURSOR_HERE');
+    const line1 = term.buffer.active.getLine(1)!.translateToString();
+    expect(line1.slice(2, 2 + 4)).toBe('POS2');
     const result = serialize.serialize();
-    expect(result).toContain('CURSOR_HERE');
-    expect(result).toContain('POS2');
     expect(result).toContain('row1_filler_text');
   });
 
@@ -144,7 +151,7 @@ describe('L3 终端渲染 — 序列化', () => {
   // ============ Reflow（文本重排） ============
 
   it('resize 变窄后文本应 reflow 保留', async () => {
-    const { term, serialize } = createTerminal(80, 24);
+    const { term } = createTerminal(80, 24);
     // 先写满宽度为 80 的内容
     await writeSync(term, 'A'.repeat(78) + '\r\n');
     await writeSync(term, 'B'.repeat(78) + '\r\n');
@@ -153,24 +160,35 @@ describe('L3 终端渲染 — 序列化', () => {
     term.resize(40, 24);
     // 等待 reflow 完成后再写入一个标记
     await writeSync(term, '\r\nREFLOW_DONE');
-    const result = serialize.serialize();
-    // A/B/C 行内容应保留
-    expect(result).toContain('AAAA');
-    expect(result).toContain('BBBB');
-    expect(result).toContain('CCCC');
-    expect(result).toContain('REFLOW_DONE');
+    // 行级精确断言（E2E-07）：A×78 重排为 40+38 两行，首行为满 40 个 A
+    const buffer = term.buffer.active;
+    expect(buffer.getLine(0)!.translateToString()).toBe('A'.repeat(40));
+    // 内容总量精确统计：拼接全部行统计 A/B/C 字符数
+    let all = '';
+    for (let y = 0; y < buffer.length; y++) {
+      all += buffer.getLine(y)!.translateToString();
+    }
+    // A/B 为已完成行（\r\n 结尾），reflow 完整保留 78 字符
+    expect((all.match(/A/g) ?? []).length).toBe(78);
+    expect((all.match(/B/g) ?? []).length).toBe(78);
+    // C 为光标所在未完成行（无 \r\n）：变窄 reflow 时超宽部分被截断，仅保留 40 字符
+    // ——xterm 已知行为（reflow 只重排已完成行，进行中行按新列宽截断），D3 测试对齐实现
+    expect((all.match(/C/g) ?? []).length).toBe(40);
+    expect(all).toContain('REFLOW_DONE');
   });
 
   it('resize 变宽后不应丢失内容', async () => {
-    const { term, serialize } = createTerminal(40, 24);
+    const { term } = createTerminal(40, 24);
     await writeSync(term, 'SHORT_LINE_ONE\r\n');
     await writeSync(term, 'SHORT_LINE_TWO\r\n');
     term.resize(120, 24);
     await writeSync(term, 'AFTER_WIDEN');
-    const result = serialize.serialize();
-    expect(result).toContain('SHORT_LINE_ONE');
-    expect(result).toContain('SHORT_LINE_TWO');
-    expect(result).toContain('AFTER_WIDEN');
+    // 行级精确断言（E2E-07）：40 列下写入的行在 120 列下保持单行原文
+    // （translateToString 保留尾部空格填充，行首内容用 trim 比对）
+    const buffer = term.buffer.active;
+    expect(buffer.getLine(0)!.translateToString().trim()).toBe('SHORT_LINE_ONE');
+    expect(buffer.getLine(1)!.translateToString().trim()).toBe('SHORT_LINE_TWO');
+    expect(buffer.getLine(2)!.translateToString().trim()).toBe('AFTER_WIDEN');
   });
 
   it('多次 resize 后内容应保持完整', async () => {
@@ -198,6 +216,12 @@ describe('L3 终端渲染 — 序列化', () => {
     expect(result).toMatch(/\x1b\[[0-9;]*1(?=[;m])/);
     expect(result).toMatch(/\x1b\[[0-9;]*4(?=[;m])/);
     expect(result).toContain('BOLD_UNDERLINE_RED');
+    // 单元格属性断言（E2E-07）：粗体 + 下划线 + 红色前景（palette 索引 1）
+    const cell0 = term.buffer.active.getLine(0)!.getCell(0)!;
+    expect(cell0.isBold()).toBeTruthy();
+    expect(cell0.isUnderline()).toBeTruthy();
+    expect(cell0.getFgColorMode()).toBe(CM_P16);
+    expect(cell0.getFgColor()).toBe(1);
   });
 
   it('斜体+删除线+蓝色前景叠加应保留', async () => {
@@ -208,6 +232,12 @@ describe('L3 终端渲染 — 序列化', () => {
     expect(result).toMatch(/\x1b\[[0-9;]*3(?=[;m])/);
     expect(result).toMatch(/\x1b\[[0-9;]*9(?=[;m])/);
     expect(result).toContain('ITALIC_STRIKE_BLUE');
+    // 单元格属性断言（E2E-07）：斜体 + 删除线 + 蓝色前景（palette 索引 4）
+    const cell0 = term.buffer.active.getLine(0)!.getCell(0)!;
+    expect(cell0.isItalic()).toBeTruthy();
+    expect(cell0.isStrikethrough()).toBeTruthy();
+    expect(cell0.getFgColorMode()).toBe(CM_P16);
+    expect(cell0.getFgColor()).toBe(4);
   });
 
   it('反显+闪烁+背景色叠加应保留', async () => {
@@ -219,6 +249,12 @@ describe('L3 终端渲染 — 序列化', () => {
     expect(result).toMatch(/\x1b\[[0-9;]*7(?=[;m])/);
     expect(result).toMatch(/\x1b\[[0-9;]*5(?=[;m])/);
     expect(result).toContain('REVERSE_BLINK_CYAN_BG');
+    // 单元格属性断言（E2E-07）：反显 + 慢闪 + 青色背景（palette 索引 6）
+    const cell0 = term.buffer.active.getLine(0)!.getCell(0)!;
+    expect(cell0.isInverse()).toBeTruthy();
+    expect(cell0.isBlink()).toBeTruthy();
+    expect(cell0.getBgColorMode()).toBe(CM_P16);
+    expect(cell0.getBgColor()).toBe(6);
   });
 
   // ============ CJK / Emoji / 宽字符 ============
@@ -300,6 +336,13 @@ describe('L3 终端渲染 — 序列化', () => {
     await writeSync(term, '\x1b[3;20HCUP_MARK');
     // 第 7 行第 5 列写标记
     await writeSync(term, '\x1b[7;5HSECOND');
+    // 行级精确断言（E2E-07）：CUP_MARK（8 字符）位于第 3 行（y=2）第 20 列（x=19），
+    // SECOND（6 字符）位于第 7 行（y=6）第 5 列（x=4）
+    const line2 = term.buffer.active.getLine(2)!.translateToString();
+    expect(line2.slice(19, 19 + 8)).toBe('CUP_MARK');
+    const line6 = term.buffer.active.getLine(6)!.translateToString();
+    expect(line6.slice(4, 4 + 6)).toBe('SECOND');
+    // serialize 断言保留（内容整体存在性）
     const result = serialize.serialize();
     expect(result).toContain('CUP_MARK');
     expect(result).toContain('SECOND');

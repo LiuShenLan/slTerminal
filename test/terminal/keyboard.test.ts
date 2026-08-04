@@ -1,6 +1,14 @@
 // L3 终端渲染测试 — 键盘编码 + 提示符渲染
 // 使用 @xterm/headless + @xterm/addon-serialize
 // 覆盖：修饰键组合、功能键、特殊键、方向键+修饰键、Kitty CSI u 协议
+//
+// 【降级标注 D4/E2E-01】本文件 describe 内「Ctrl 修饰键」至「CSI u 协议」段（约 72-317 行）
+// 的 term.input(...) → onData 断言为「xterm.js 基础行为回归（非 slTerminal 键盘链路）」：
+// 一手证据 node_modules/@xterm/xterm/src/common/CoreTerminal.ts:183-185——xterm input() 即
+// coreService.triggerDataEvent 纯透传，「输入=输出」恒等断言不经生产 attachCustomKeyEventHandler
+// → ShortcutRegistry 链路。用例按 D4 决策保留不删，用于锁定 xterm.js 键盘编码基础行为；
+// 生产键盘链路（命令注册/上下文匹配/active 指针派发）由 L2 已覆盖（keyboard.test.ts /
+// shortcuts.test.ts），本文件不重复承担。L3 定位声明见 DOC-02（网格状态正确性，非渲染正确性）。
 
 import { describe, it, expect } from 'vitest';
 import { Terminal } from '@xterm/headless';
@@ -24,6 +32,9 @@ function writeSync(term: Terminal, data: string): Promise<void> {
   });
 }
 
+// 【降级标注 D4/E2E-01】本 describe 中「Ctrl 修饰键」~「CSI u 协议」分组（约 72-317 行）
+// 为降级用例：term.input() = triggerDataEvent 纯透传（CoreTerminal.ts:183-185），断言等价
+// "输入=输出"，定位为 xterm.js 基础行为回归，不验证 slTerminal 生产键盘链路（生产链路归 L2）。
 describe('L3 终端渲染 — 键盘编码', () => {
   // ============ 原有 4 条 ============
 
