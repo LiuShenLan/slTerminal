@@ -399,7 +399,7 @@ describe("computeDropTarget", () => {
   });
 });
 
-// ── 场景序列 S1–S6（直译 docs/sidebar-requirements.md §5）──
+// ── 场景序列 S1–S6（直译侧栏需求规格 §5 验收用例：开关/替换/关闭/拖拽跨区状态机）──
 
 describe("场景序列（S1–S6）", () => {
   // 初始：P、E 均在上区，均关闭

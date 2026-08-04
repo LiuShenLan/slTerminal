@@ -19,7 +19,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | E2E helper 创建项目/切换页面 | `__slterm_e2e_createProject`/`__slterm_e2e_switchToPage` 内部先 `await setProjectRoot`（DBG-8） |
 | SEC-01 effect 兜底 | `Workspace.tsx` effect 中 fire-and-forget `setProjectRoot`（保留服务 `pty_spawn` 等非 Explorer 链路） |
 
-> **React effect 时序坑**：同一 commit 的 passive effect 子组件先于父组件执行。若 `setProjectRoot` 仅在父 effect 中 fire-and-forget，子组件（如 `ExplorerPanel` → `useFileTree` → `readDir`）必在 `set_project_root` 到达后端前被 sandbox 拒绝——这不是概率竞态，是确定性失败。详见 `docs/debug/refactor-regressions.md` 故障A。
+> **React effect 时序坑**：同一 commit 的 passive effect 子组件先于父组件执行。若 `setProjectRoot` 仅在父 effect 中 fire-and-forget，子组件（如 `ExplorerPanel` → `useFileTree` → `readDir`）必在 `set_project_root` 到达后端前被 sandbox 拒绝——这不是概率竞态，是确定性失败（`loadDirectory` catch 静默吞错 → 文件树恒"空目录"）。
 
 ## 测试模式
 

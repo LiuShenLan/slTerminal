@@ -13,7 +13,7 @@
 
 ## 既定豁免清单（DOC-01）
 
-> 与 `docs/test-review-problem/00-summary.md` 5.3 表对齐，按 checklist DOC-01 范围 + 各 Stage 产出收编（D6 分类处理后残余不可自动化项）。对应模块 CLAUDE.md（pty/e2e-tests）保留逐项明细，三列（项目/豁免原因/当前兜底层级）以本表为唯一真值源。
+> 按 D6 分类处理后残余不可自动化项 + 各 Stage 产出收编（原 review 报告 00-summary 5.3 表与 checklist DOC-01 已随 `docs/` 清理，本表为唯一真值源）。对应模块 CLAUDE.md（pty/e2e-tests）保留逐项明细，三列（项目/豁免原因/当前兜底层级）以本表为唯一真值源。
 
 | 项目 | 豁免原因 | 当前兜底层级 | 来源 |
 |------|----------|--------------|------|
@@ -26,7 +26,7 @@
 | L4 真实 OS 级按键 | embedded WDIO 无法投递 `browser.keys` 到 WebView2 页面 | 合成事件 + 页面内 dispatch 全链路（监听/匹配/命令 handler/写盘真实执行）；未来 WDIO 支持真实输入时替换 | 13 P-15 |
 | HTML postMessage 真实 WebView2 行为（opaque origin 序列化 / CSP 强制） | jsdom 无法模拟 opaque origin 与 WebView2 CSP；`e.origin === "null"` 为 WHATWG 规范推断 | L4 `html.e2e.ts` Ctrl+W postMessage 往返（真实二进制）+ L2 四负面用例（IHE-03） | 13 P-5 |
 
-> 00-summary 5.3 原表中 `FileWatcher::start`/`notify_watch` 与 `claude_history` 命令包装两项已按 D6 **从豁免重分类为补测**（Stage 05：notify 抽 `EventEmitter` trait 注入 mock emitter 驱动事件循环；history 补命令包装层 `block_on` 用例），不再列入豁免表。
+> 原豁免表中 `FileWatcher::start`/`notify_watch` 与 `claude_history` 命令包装两项已按 D6 **从豁免重分类为补测**（Stage 05：notify 抽 `EventEmitter` trait 注入 mock emitter 驱动事件循环；history 补命令包装层 `block_on` 用例），不再列入豁免表。
 
 ## 定位声明（DOC-02）
 
