@@ -92,7 +92,8 @@ args 契约（强制校验，缺 failedItems/verifyFile 即抛错）：
 | 09 | 完成 | 2（fix-loop 1 轮） | 61c0296；轮1：canOpenFile 守卫导出 + 无 activePageId 分支直测；2160 passed；fullRefresh 死代码删除 |
 | 10 | 完成 | 2（fix-loop 1 轮） | e5b3abe；轮1：typeof 弱断言清理 + commit-view 再拆（132 行）+ commit-open-file mock 缺陷修复；2184 passed |
 | 11 | 完成 | 2（fix-loop 1 轮） | 0569453；轮1：注入状态条初始 '--' 用例；2205 passed；pageApis focus?.() 防御 |
-| 12-17 | 未开始 | - | - |
+| 12 | 完成 | 1 | bc9ce8f；首轮全绿；2217 passed；HEX6_RE 自断言清零 |
+| 13-17 | 未开始 | - | - |
 
 ## 人工验证点（收尾逐项实测，与 stages.md 一致）
 

@@ -58,11 +58,38 @@ describe("tauri.conf.json CSP 不变量", () => {
   });
 
   it("放宽范围仅限内联，未开外部资源（决策边界守卫）", () => {
-    // script-src / default-src 不得含 https: 或通配 *，锁死「仅内联脚本/事件」决策
-    for (const dir of ["default-src", "script-src"]) {
+    // script-src / default-src / style-src 不得含 https: 或通配 *，锁死「仅内联脚本/事件」决策
+    for (const dir of ["default-src", "script-src", "style-src"]) {
       const sources = directives[dir] ?? [];
       expect(sources).not.toContain("*");
       expect(sources.some((s) => s.includes("https:"))).toBe(false);
     }
+  });
+
+  // ═══════════════════════════════════════════════════════════════
+  // IHE-07④：style-src / connect-src / img-src 关键字段快照
+  // ═══════════════════════════════════════════════════════════════
+
+  it("style-src 放行同源 + 内联样式（React inline style / CM6 注入样式）", () => {
+    expect(directives["style-src"]).toBeDefined();
+    expect(directives["style-src"]).toContain("'self'");
+    expect(directives["style-src"]).toContain("'unsafe-inline'");
+    // 正则冗余断言（容忍空格/顺序）
+    expect(csp).toMatch(/style-src[^;]*'unsafe-inline'/);
+  });
+
+  it("img-src 放行同源 + Tauri 资产协议（asset: + asset.localhost）", () => {
+    // 打包资源（图标/内置文件）走 asset 协议——收紧会静默断图片
+    expect(directives["img-src"]).toBeDefined();
+    expect(directives["img-src"]).toContain("'self'");
+    expect(directives["img-src"]).toContain("asset:");
+    expect(directives["img-src"]).toContain("https://asset.localhost");
+  });
+
+  it("connect-src 未显式声明——回退 default-src 'self'（快照）", () => {
+    // Tauri 2 IPC 走自定义协议（ipc:），不经过 CSP connect-src 约束；
+    // 无显式 connect-src = 回退 default-src 'self' = 禁外部网络连出。
+    // 若未来显式添加，此处断言该快照变化。
+    expect(directives["connect-src"]).toBeUndefined();
   });
 });

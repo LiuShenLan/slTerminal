@@ -20,6 +20,11 @@ const ci = readFileSync(
   resolve(here, "../../.github/workflows/ci.yml"),
   "utf8",
 );
+// IHE-04：E2E_ENABLED 必须为编译期内联字面量——读源文件做正则断言
+const e2eEnabledSrc = readFileSync(
+  resolve(here, "../lib/e2eEnabled.ts"),
+  "utf8",
+);
 
 describe("package.json — E2E 构建脚本不变量", () => {
   it("build:e2e 用 cross-env 设 VITE_E2E=1 且走 tauri build", () => {
@@ -43,6 +48,21 @@ describe("package.json — E2E 构建脚本不变量", () => {
 
   it("生产 build 脚本不含 VITE_E2E（安全属性：生产不启用 helper）", () => {
     expect(pkg.scripts.build).not.toContain("VITE_E2E");
+  });
+});
+
+describe("src/lib/e2eEnabled.ts — E2E_ENABLED 编译期字面量守卫（IHE-04）", () => {
+  it("E2E_ENABLED 直接内联 import.meta.env 字面量表达式（编译期常量 → Rollup DCE）", () => {
+    // 若被包成函数调用/间接引用，Rollup 无法常量折叠 → 生产误带 helper
+    expect(e2eEnabledSrc).toMatch(
+      /export const E2E_ENABLED\s*=\s*import\.meta\.env\.DEV\s*\|\|\s*import\.meta\.env\.VITE_E2E\s*===\s*"1"/,
+    );
+  });
+
+  it("E2E_ENABLED 不得经 computeE2eEnabled 函数调用定义（函数调用阻碍跨模块 DCE）", () => {
+    expect(e2eEnabledSrc).not.toMatch(
+      /E2E_ENABLED\s*=\s*(?:\(0,\s*)?computeE2eEnabled\(/,
+    );
   });
 });
 

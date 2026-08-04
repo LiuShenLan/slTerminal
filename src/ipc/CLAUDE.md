@@ -40,11 +40,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 测试模式
 
-测试文件：`src/__tests__/ipc-contract.test.ts`（65 用例，含 3 条 DBG-4 契约守卫）+ `ipc-ping.test.ts`（1 用例）+ `ipc-hooks-contract.test.ts`（22 用例）+ `ipc-hooks-config-contract.test.ts`（12 用例，C13-1 配置命令四维验证）。
+测试文件：`src/__tests__/ipc-contract.test.ts`（65 用例，含 3 条 DBG-4 契约守卫）+ `ipc-ping.test.ts`（2 用例，IHE-07① 改调 `ping()` wrapper）+ `ipc-hooks-contract.test.ts`（22 用例）+ `ipc-hooks-config-contract.test.ts`（12 用例，C13-1 配置命令四维验证）+ `ipc-claude-history-contract.test.ts`（8 用例）+ `notification.test.ts`（9 用例，IHE-02 分支覆盖）。共享工厂位于 `src/__tests__/helpers/ipc-contract.ts`（IHE-06）。
 
-### IPC 合约测试
+### mockIPC 盲区声明（IHE-01）
 
-核心思想：**用 `mockIPC` 拦截真实的 `invoke` 调用，验证每条封装函数的命令名、参数结构、返回类型和异常传播**。
+契约测试用 `mockIPC` 只守 **JS 侧形状**——命令名、payload 字段名/类型、返回透传、异常传播。以下行为**不在 mock 层验证**，由 L4 E2E（真实 WebView2 + 真实后端）守卫：
+
+- camelCase ↔ snake_case 真实字段转换（Tauri invoke 序列化）
+- Channel 序列化（PTY 输出流）
+- Uint8Array ↔ number[] 实际序列化
+- listen 回调运行时解包（`event.payload`）
+
+即：**契约测试只防 wrapper 写错命令名/参数结构，真实序列化由 L4 守卫**。后端必填参数缺失时 invoke 必 reject 且被调用方 catch 吞 = 契约全绿但运行时静默失败——此场景由 L4 兜底（引用 DOC-01/02：L4 为半端到端定位声明）。四个契约文件（ipc-contract / ipc-hooks-contract / ipc-hooks-config-contract / ipc-claude-history-contract）文件头均含此盲区注释。
+
+### IPC 合约测试（IHE-06 工厂化）
+
+核心思想：**用 `mockIPC` 拦截真实的 `invoke` 调用，验证每条封装函数的命令名、参数结构、返回类型和异常传播**。四文件经共享工厂 `describeIpcContract(scope, cases)`（`helpers/ipc-contract.ts`）以声明式 schema 驱动——每条用例为 `{ cmd, call, respond?, mockThrow?, expectArgs?, expectExactKeys?, expectResult?, expectUndefined?, expectReject?, assertArgs? }`。**四维断言不丢**：命令名逐字、payload 精确匹配/键集合/自定义、返回透传/void/fallback、异常传播。
 
 ### 四维验证
 
@@ -53,46 +64,50 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | 维度 | 验证内容 | 示例 |
 |------|---------|------|
 | 命令名 | `invoke` 调用的 Tauri 命令名（snake_case） | `pty_spawn` 而非 `ptySpawn` |
-| 参数结构 | 字段名、类型、值正确 | `args.request.panelId` 存在且为 `"p1"` |
-| 正常返回 | mockIPC 返回模拟数据 → wrapper 正确透传 | `spawn()` 返回 `"session-01"` |
-| 异常传播 | mockIPC throw → wrapper 不吞异常 | `expect(...).rejects.toThrow("conpty init failed")` |
+| 参数结构 | 字段名、类型、值正确 | `expectArgs: { request: SPAWN_REQUEST, onOutput: expect.any(Channel) }` |
+| 正常返回 | mockIPC 返回模拟数据 → wrapper 正确透传 | `expectResult: "mock-session-01"` |
+| 异常传播 | mockIPC throw → wrapper 不吞异常 | `mockThrow + expectReject` |
 
 ### 关键模式
 
 ```typescript
-import { mockIPC, clearMocks } from "@tauri-apps/api/mocks";
+// helpers/ipc-contract.ts 工厂内部等价实现（用例声明式驱动）
+import { mockIPC } from "@tauri-apps/api/mocks";
 
-// 1. 注册命令处理器 + spy
+// 1. 声明用例（命令名 + 参数 + 返回 + 异常四维）
+{
+  cmd: "pty_spawn",
+  call: () => pty.spawn(request, onOutput),
+  respond: "mock-session-01",
+  expectArgs: { request, onOutput: expect.any(Channel) },
+  expectResult: "mock-session-01",
+  assertArgs: (args) => {
+    expect((args.onOutput as Channel<unknown>).onmessage).toBe(onOutput);
+  },
+}
+
+// 2. 工厂内部注册 mockIPC + spy
 const commandSpy = vi.fn();
 mockIPC((cmd, args) => {
   commandSpy(cmd, args);
-  if (cmd === "pty_spawn") return "mock-session-01";
-  if (cmd === "fs_read_file") return "file content";
-  throw new Error("unknown command");
+  if (cmd === case.cmd && case.mockThrow !== undefined) throw new Error(case.mockThrow);
+  return case.respond;
 });
 
-// 2. 调用 IPC wrapper
-const sessionId = await pty.spawn(request, onOutput);
-
-// 3. 验证命令名 + 参数
-expect(commandSpy).toHaveBeenCalledWith("pty_spawn", {
-  request: { panelId: "p1", cwd: "C:\\test", cols: 120, rows: 40 },
-  onOutput: expect.any(Channel),
-});
-
-// 4. 验证返回值
-expect(sessionId).toBe("mock-session-01");
+// 3. 验证命令名 + 参数 + 返回值（工厂统一断言）
+expect(commandSpy).toHaveBeenCalledTimes(1);
+expect(commandSpy.mock.calls[0][0]).toBe("pty_spawn");
+expect(commandSpy.mock.calls[0][1]).toEqual({ request, onOutput: expect.any(Channel) });
 ```
 
 ### Channel 绑定验证
 
-PTY spawn 的 `onOutput` 回调必须绑定到 `Channel.onmessage`：
+PTY spawn / reattach 的 `onOutput` 回调必须绑定到 `Channel.onmessage`——工厂 `assertArgs` 内断言：
 
 ```typescript
-const onOutput = vi.fn();
-await pty.spawn(request, onOutput);
-const channelArg = commandSpy.mock.calls[0][1].onOutput;
-expect(channelArg.onmessage).toBe(onOutput);
+assertArgs: (args) => {
+  expect((args.onOutput as Channel<unknown>).onmessage).toBe(onOutput);
+}
 ```
 
 ### Uint8Array 序列化验证
@@ -100,13 +115,18 @@ expect(channelArg.onmessage).toBe(onOutput);
 `pty.write()` 必须将 `Uint8Array` 转为 `number[]`（Tauri IPC 不支持 TypedArray）：
 
 ```typescript
-await pty.write("session-01", new Uint8Array([0x48, 0x69]));
-expect(commandSpy).toHaveBeenCalledWith("pty_write", {
+// 用例声明：expectArgs 断言转换结果
+expectArgs: {
   sessionId: "session-01",
-  data: [0x48, 0x69],  // number[]，非 Uint8Array
-});
+  panelId: "panel-1",
+  data: [72, 101, 108, 108, 111],  // number[]，非 Uint8Array
+}
 ```
+
+### wrapper 行为契约（IHE-01②）
+
+listen 事件封装（`onFsEvent` / `onHookEvent`）**不走 invoke 工厂**——手写模拟驱动断言：捕获 `listen(event, handler)` 注册的 handler，构造 `{ payload }` 事件对象 → 断言 callback 收到**解包后** payload。Tauri `listen` 的运行时解包本身由 L4 E2E 守卫（mockIPC 层不验证）。
 
 ### notify mock 覆盖
 
-`setup.ts` 全局 mock 了 `../ipc/notify`（防所有测试 import 时触发实际 listen）。ipc-contract 测试需要真实 `startWatch` → 在测试文件顶部用 `vi.mock` 覆盖全局 mock，`importOriginal` 获取原始实现。
+`setup.ts` 全局 mock 了 `../ipc/notify`（防所有测试 import 时触发实际 listen）。ipc-contract 测试需要真实 `startWatch` → 在测试文件顶部用 `vi.mock` 覆盖全局 mock，`importOriginal` 获取原始实现。`notification.test.ts` 直接 `vi.mock("@tauri-apps/plugin-notification")` 覆盖插件三函数。

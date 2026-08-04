@@ -85,4 +85,34 @@ describe("ErrorBoundary", () => {
     expect((window as unknown as Record<string, unknown>).__sltermError).toBeDefined();
     expect(console.error).toHaveBeenCalled();
   });
+
+  it("4. variant=inline 子组件抛错 → 页面级占位 UI（不渲染全屏标题）", () => {
+    const { container } = render(
+      <ErrorBoundary variant="inline">
+        <ThrowError />
+      </ErrorBoundary>,
+    );
+    // inline 模式标题 + 说明文案（对应 ErrorBoundary.tsx inline 分支）
+    expect(container.textContent).toContain("页面渲染出错");
+    expect(container.textContent).toContain("该操作页面因渲染错误无法显示，其他页面不受影响。");
+    // 不渲染 fullscreen 分支标题
+    expect(container.textContent).not.toContain("应用渲染错误");
+    // componentDidCatch 不受 variant 影响——window.__sltermError 仍被赋值
+    expect((window as unknown as Record<string, unknown>).__sltermError).toBeDefined();
+    // 错误详情 <pre> 含 message + stack（details 折叠不影响 DOM 存在）
+    const pres = container.querySelectorAll("pre");
+    expect(pres.length).toBe(1);
+    expect(pres[0].textContent).toContain("模拟渲染错误");
+    expect(pres[0].textContent).toContain("Error: 模拟渲染错误");
+  });
+
+  it("5. variant=inline 无错误时正常透传 children", () => {
+    const { container } = render(
+      <ErrorBoundary variant="inline">
+        <div>内联正常内容</div>
+      </ErrorBoundary>,
+    );
+    expect(container.textContent).toContain("内联正常内容");
+    expect(container.textContent).not.toContain("页面渲染出错");
+  });
 });
