@@ -39,7 +39,7 @@
 > `pty/mod.rs`、`pty/win_build.rs`、`main.rs` 不含 `#[test]`，不在此列。
 > claude_history 模块 56 用例为 grep `#[test]` 计数（jsonl 28 + scan 14 + ops 7 + mod 7），env 测试依赖 L1 `--test-threads=1` 门禁（`std::env::set_var` 全局可变）。
 
-## L2 — 前端单元/集成测试（121 文件 / 2059 用例）
+## L2 — 前端单元/集成测试（121 文件 / 2060 用例）
 
 运行：`npm test`（Vitest + jsdom）
 
@@ -171,7 +171,7 @@
 | `src/__tests__/hooks-config-catalog.test.ts` | 19 | eventsCatalog 事件元数据（30 事件 x 10 组/HANDLER_TYPES/HANDLER_FIELD_MATRIX/纯查询函数）（Stage 03 遗留补登） |
 | `src/__tests__/hooks-config-matcher.test.ts` | 21 | matcherEngine.matchHook 全分支（exact-or/regex/all/受限窄字符集/非法正则防御）（Stage 03 遗留补登） |
 | `src/__tests__/hooks-config-model.test.ts` | 17 | configModel jsonToGui/guiToJson 双向转换/round-trip/容错/isSltermManaged（Stage 03 遗留补登） |
-| `src/__tests__/hooks-config-panel.test.tsx` | 20 | 面板三态（loading/content/损坏错误态）/层级切换器禁用逻辑/保存按钮初始禁用/visibilitychange 轻量重读（可见触发/hidden 态不触发/不可见跳过/面板内点击不触发/ask 弹窗打开期间回归不二次弹窗，验收 #1/#2.1 防回归）/JSON 错误提示单行截断（nowrap+ellipsis+title，验收 1.2）/JsonMode 接入（value 序列化传递）/注入状态条与注入/卸载按钮 |
+| `src/__tests__/hooks-config-panel.test.tsx` | 21 | 面板三态（loading/content/损坏错误态）/层级切换器禁用逻辑/保存按钮初始禁用/visibilitychange 轻量重读（可见触发/hidden 态不触发/不可见跳过/面板内点击不触发/ask 弹窗打开期间回归不二次弹窗，验收 #1/#2.1 防回归）/JSON 错误提示单行截断（nowrap+ellipsis+title，验收 1.2）/JsonMode 接入（value 序列化传递）/注入状态条与注入/卸载按钮（含查询完成前初始 "--" 帧，HKC-10） |
 | `src/__tests__/hooks-config-jsonmode.test.tsx` | 17 | TE-09：CM6 EditorView 创建 + schema 扩展注册（jsonSchemaHover/jsonSchemaLinter + hooks 子 schema + height theme + linter needsRefresh，无自动补全）+ 非法 JSON/schema 违规触发 onValidationChange + 外部 value 同步 + MatcherTester 试测（exact-or/regex/受限字符集）；TE-10：十大分组 + 30 事件按钮渲染 + findEventPosition 纯函数 + 点击跳转选区（setSelection + scrollIntoView）+ 无副作用守卫 |
 | `src/__tests__/hooks-config-gui.test.tsx` | 25 | GUI 模式（P3-FE-12）：Master-Detail 渲染/事件树增删事件与 matcher 组/详情区 handler 增删/选中态派生守卫（事件删除/重载回退空态）/注入段禁删（三层删除按钮禁用）/不支持 matcher 事件省略 matcher 输入；P3-FE-14：HandlerForm 接入（选中渲染表单/字段编辑上抛新模型/切换跟随/托管只读） |
 | `src/__tests__/hooks-config-sync.test.tsx` | 8 | 双模式同步（P3-FE-16）：JSON 编辑 → guiModel 重算/GUI 编辑 → configJson 回写/非法 JSON 禁切 GUI + 禁用保存/dirty 与 saved 状态流转 |
@@ -337,6 +337,7 @@ embedded WDIO 驱动**无法将 OS 级按键（`browser.keys`）投递进 WebVie
 
 ## 历史变更
 
+- 2026-08-05（text-fix-plan Stage 11 HKC-10 展示分支补断言）：hooks-config-panel 20→21（+1 注入状态条查询完成前初始 "--" 帧断言——getInjectionStatus 挂起 Promise → data-e2e hooks-injection-status 文本「注入状态：--」+ 三态文案不出现）。L2 2059→2060，全量 2658→2659。
 - 2026-08-05（text-fix-plan Stage 09 EXP-01~11 explorer 测试补全）：资源管理器 16→20 文件 213→252 用例（+39）。新增 4 文件——explorer-open-in-terminal 7（EXP-01 在终端中打开 addPanel 参数/无去重）、explorer-crud-success 4（EXP-02 删除/重命名/新建文件/新建文件夹成功路径——IPC+refresh+状态重置）、explorer-input-boundary 10（EXP-06 重命名/文件夹级新建输入框 Escape/空名/重名/失焦边界）、explorer-race-cleanup 6（EXP-07 旧请求延迟 resolve 丢弃/rootPath null 回调/fs-event 去抖卸载清理/file-saved 缺 path/卸载清理/gitStatus 过期丢弃）。扩展现有 4 文件——explorer-focus 3→6（EXP-04 focusin/focusout 上下文栈 spy）、explorer-selection 14→17（EXP-04 非选中行 hover enter/leave）、explorer-delete 19→22（EXP-04 横幅 dismiss/5s 自动消失/卸载清理；E6 编号 17-22 统一 + 标题与断言对齐 EXP-11）、explorer-file-viewer 16→19（EXP-10 无 dockviewApi/addPanel 抛错无孤记录/getPanel undefined 回退新建）。EXP-03：删除 useFileTree.fullRefresh 死代码（无调用方），F8 改名「mount 单次加载」+ 断言 readDir/gitStatus 各一次。L2 2020→2059（117→121 文件）。全量 2619→2658。
 - 2026-08-02（Claude 历史会话 Stage 07 文档同步补登，F7）：L1 新增 claude_history 模块 4 文件 62 用例（jsonl 28 + scan 14 + ops 13 + mod 7——扫描/降级/env 覆盖/回退链/SEC-01 校验/追加写，计数为 grep `#[test]`）。L2 新增「Claude 历史会话」类目 6 文件 109 用例（model 37 + view 28 + hook 14 + input-dialog 12 + row 11 + restore 7）+ IPC 层 ipc-claude-history-contract 12（88→100，三命令四维验证）+ E2E 辅助 dialog-e2e-hook 3（Stage 06 漏登补登，24→27，ask 钩子守卫）+ agent-status-view 11→15（+4 三下拉框适配，Stage 05 产物补登）。L1 384→446（19→23 文件），L2 1783→1911（109→117 文件）。全量 2317→2507。
 - 2026-08-02（Claude 历史会话视图 E2E，TE-01..04）：新增 describe「Claude 历史会话视图」8 用例——fixture 7 形态（custom-title/ai-title/prompt 回退/无 cwd/孤儿/agent-* 平铺/subagents 子目录）+ 搜索过滤 + 复制恢复命令（剪贴板 read_text 断言）+ 孤儿行 ✗ 双击无反应 + 重命名（副本尾部 custom-title 行 Node 断言）+ 删除（ask invoke 拦截降级方案 + 副本文件删除 Node 断言）+ 恢复编排（项目入列/页面切换/终端缓冲含 claude --resume）。新增 fixtures/claude-projects/（9 文件）+ run-wdio.cjs 副本重建与占位符替换 + SLTERM_CLAUDE_PROJECTS_DIR/SLTERM_E2E_PROJECT_DIR env 注入（SEC-02：只动 .tmp-claude-projects 副本）+ .gitignore 条目。L4 26→34（32 active + 2 skip），全量 2309→2317。

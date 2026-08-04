@@ -172,10 +172,16 @@ describe("P3-TE-09 JSON 模式渲染与 Schema 校验", () => {
     ];
     expect(linterCalls[0][1]).toEqual({ delay: 300 });
     expect(linterCalls[1][1]).toEqual({ needsRefresh: mockHandleRefresh });
+    // 包装顺序锁定（HKC-01）：[0] = jsonParseLinter（语法波浪线）、[1] = jsonSchemaLinter
+    //（schema 波浪线）。身份断言防交换——若交换，语法错误会先经 schema linter 误报误导。
+    expect(linterCalls[0][0]).toBe(mockJsonParseLinter.mock.results[0].value);
+    expect(linterCalls[1][0]).toBe(mockJsonSchemaLinter.mock.results[0].value);
     // 语言 + 语法 linter 注册
     expect(mockJson).toHaveBeenCalledTimes(1);
     expect(mockJsonParseLinter).toHaveBeenCalledTimes(1);
-    expect(mockHoverTooltip).toHaveBeenCalled();
+    // schema hover 触发（HKC-10）：jsonSchemaHover 的返回值被 hoverTooltip 包装（身份锁定）
+    expect(mockHoverTooltip).toHaveBeenCalledTimes(1);
+    expect(mockHoverTooltip.mock.calls[0][0]).toBe(mockJsonSchemaHover.mock.results[0].value);
     // height:100% theme（.cm-editor 确定高度 → 竖向滚动条，验收 1.3）
     expect(mockEditorViewTheme).toHaveBeenCalledWith({ "&": { height: "100%" } });
   });
@@ -332,6 +338,23 @@ describe("P3-TE-09 MatcherTester 试测", () => {
       { target: { value: "*.ts" } },
     );
     expect(container.textContent).toContain("JS 正则（非锚定）");
+  });
+
+  it("toolName placeholder 随事件变化（matcherTarget 驱动，HKC-10）", () => {
+    const { container } = render(React.createElement(MatcherTester));
+    const tool = () => container.querySelector('[data-e2e="matcher-tool"]') as HTMLInputElement;
+    // 默认 PreToolUse → matcher 目标 = 工具名
+    expect(tool().placeholder).toBe("目标值（工具名）");
+    // 切到 SessionEnd → 目标 = reason
+    fireEvent.change(container.querySelector('[data-e2e="matcher-event"]') as HTMLSelectElement, {
+      target: { value: "SessionEnd" },
+    });
+    expect(tool().placeholder).toBe("目标值（reason）");
+    // 切到 FileChanged → 目标 = 文件名模式（basename）
+    fireEvent.change(container.querySelector('[data-e2e="matcher-event"]') as HTMLSelectElement, {
+      target: { value: "FileChanged" },
+    });
+    expect(tool().placeholder).toBe("目标值（文件名模式（basename））");
   });
 });
 

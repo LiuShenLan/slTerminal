@@ -113,7 +113,9 @@ export async function openHooksConfigPanel(pageId: string): Promise<boolean> {
     if (api) {
       const existing = api.getPanel(panelId);
       if (existing) {
-        existing.focus();
+        // 面板对象可能缺失 focus（Dockview 边界场景）——`?.()` 降级静默跳过，
+        // 视为已打开（不新建面板、不抛错）。HKC-09 守卫此降级行为
+        existing.focus?.();
         return true;
       }
       api.addPanel({

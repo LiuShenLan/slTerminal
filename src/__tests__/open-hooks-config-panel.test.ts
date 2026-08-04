@@ -95,4 +95,17 @@ describe("openHooksConfigPanel", () => {
     expect(calls[0][0].id).toBe("hooksConfig-page-a");
     expect(calls[1][0].id).toBe("hooksConfig-page-b");
   });
+
+  it("getPanel 命中但面板对象无 focus 方法 → 降级不抛错、addPanel 不再调用（HKC-09）", async () => {
+    registerPageApi("page-a", api);
+    // 模拟 Dockview 边界：getPanel 返回无 focus 方法的面板对象（只有 id）
+    (api.getPanel as ReturnType<typeof vi.fn>).mockReturnValue({
+      id: "hooksConfig-page-a",
+    } as unknown as { focus: ReturnType<typeof vi.fn> });
+    const addSpy = api.addPanel as ReturnType<typeof vi.fn>;
+    // 不抛错：视作已打开，返回 true
+    await expect(openHooksConfigPanel("page-a")).resolves.toBe(true);
+    // 不新建面板（同页单例语义保持）
+    expect(addSpy).not.toHaveBeenCalled();
+  });
 });

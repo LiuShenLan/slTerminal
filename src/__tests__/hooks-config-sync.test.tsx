@@ -390,3 +390,53 @@ describe("P3-TE-14 保存拒绝与提示", () => {
     expect(container.querySelector('[data-e2e="hooks-restart-hint"]')).toBeNull();
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════
+// HKC-02 load() generation 竞态取消
+// ═══════════════════════════════════════════════════════════════════
+describe("HKC-02 load() generation 竞态取消", () => {
+  beforeEach(() => {
+    mockReadHooksConfig.mockReset();
+    mockAsk.mockReset();
+    mockAsk.mockResolvedValue(true);
+    resetStores();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("切层竞态：旧层 read 延迟 resolve 被丢弃，最终 configJson 为目标层数据", async () => {
+    seedProject("C:/proj");
+    const USER_CONFIG: HooksConfigJson = {
+      PreToolUse: [{ hooks: [{ type: "command", command: "echo user" }] }],
+    };
+    const PROJECT_CONFIG: HooksConfigJson = {
+      PostToolUse: [{ hooks: [{ type: "command", command: "echo project" }] }],
+    };
+    // 第一次 read（挂载 user 层）挂起——模拟慢请求
+    let resolveUser!: (v: unknown) => void;
+    mockReadHooksConfig.mockReturnValueOnce(
+      new Promise((r) => {
+        resolveUser = r;
+      }),
+    );
+    // 第二次 read（project 层）直接 resolve
+    mockReadHooksConfig.mockResolvedValueOnce(PROJECT_CONFIG);
+    const { result } = renderHook(() => useHooksConfig());
+    await waitFor(() => expect(mockReadHooksConfig.mock.calls.length).toBe(1));
+    // 切到 project 层（dirty=false 无需确认弹窗）→ 新请求发出
+    act(() => {
+      result.current.setLayer("project");
+    });
+    await waitFor(() => expect(mockReadHooksConfig.mock.calls.length).toBe(2));
+    // 新层 resolve → configJson 为目标层数据
+    await waitFor(() => expect(result.current.configJson).toEqual(PROJECT_CONFIG));
+    expect(result.current.layer).toBe("project");
+    // 旧层延迟 resolve → generation 检查丢弃，configJson 不被覆盖
+    await act(async () => {
+      resolveUser(USER_CONFIG);
+    });
+    expect(result.current.configJson).toEqual(PROJECT_CONFIG);
+  });
+});

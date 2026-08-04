@@ -139,6 +139,24 @@ describe("P3-TE-12 事件树结构（EventTree）", () => {
     fireEvent.click(head);
     expect(container.querySelector('[data-e2e="gui-event-PreToolUse"]')).toBeTruthy();
   });
+
+  it("未知事件归「未知事件」组渲染（round-trip 不丢事件，HKC-06）", () => {
+    const { container } = renderGui({
+      events: [makeEvent("SomeCustomEvent", [{ handlers: [{ type: "command", command: "x" }] }])],
+    });
+    // 未知事件不落入目录十组——附加「未知事件」组渲染
+    expect(container.querySelector('[data-e2e="gui-group-head-未知事件"]')).toBeTruthy();
+    // 事件行在该组下，含事件名 + hook 计数
+    expect(container.querySelector('[data-e2e="gui-event-SomeCustomEvent"]')).toBeTruthy();
+    expect(eventRowText(container, "SomeCustomEvent")).toContain("SomeCustomEvent");
+    expect(eventRowText(container, "SomeCustomEvent")).toContain("(1)");
+    // 已知事件组不出现该未知事件
+    for (const group of EVENT_GROUPS) {
+      const head = container.querySelector(`[data-e2e="gui-group-head-${group}"]`) as HTMLElement;
+      const groupText = head?.parentElement?.textContent ?? "";
+      expect(groupText).not.toContain("SomeCustomEvent");
+    }
+  });
 });
 
 describe("P3-TE-12 选中回调与详情联动", () => {
@@ -323,6 +341,27 @@ describe("P3-TE-12 matcher 输入与 matcher 组操作", () => {
     expect(last.events[0].matcherGroups).toHaveLength(1);
     expect(last.events[0].matcherGroups[0].matcher).toBe("");
   });
+
+  it("删除当前选中的 matcher 组 → 选中态回退（组框高亮消失 + HandlerForm 关闭，HKC-05）", () => {
+    const onChange = vi.fn();
+    const { container } = renderGui(makeDefaultGui(), onChange);
+    fireEvent.click(container.querySelector('[data-e2e="gui-event-PreToolUse"]') as HTMLElement);
+    // 选中组 0 的 handler 0（HandlerForm 展开 + 组框高亮）
+    fireEvent.click(container.querySelector('[data-e2e="gui-matcher-PreToolUse-0"]')?.parentElement as HTMLElement);
+    fireEvent.click(container.querySelector('[data-e2e="gui-handler-PreToolUse-0-0"]') as HTMLElement);
+    expect(container.querySelector('[data-e2e="handler-form"]')).toBeTruthy();
+    expect(
+      (container.querySelector('[data-e2e="gui-group-PreToolUse-0"]') as HTMLElement).style.borderColor,
+    ).toBe(hexToRgb(FOCUS_BORDER));
+    // 删除当前选中的组（index 0）
+    fireEvent.click(container.querySelector('[data-e2e="gui-group-del-PreToolUse-0"]') as HTMLElement);
+    // 剩余组（原组 1，matcher 空）成为新 index 0——选中态已回退：HandlerForm 关闭、组框非高亮
+    const rest = container.querySelector('[data-e2e="gui-group-PreToolUse-0"]') as HTMLElement;
+    expect(rest).toBeTruthy();
+    expect((container.querySelector('[data-e2e="gui-matcher-PreToolUse-0"]') as HTMLInputElement).value).toBe("");
+    expect(container.querySelector('[data-e2e="handler-form"]')).toBeNull();
+    expect(rest.style.borderColor).toBe(hexToRgb(INPUT_BORDER));
+  });
 });
 
 describe("P3-TE-12 handler 增删与支持矩阵", () => {
@@ -361,6 +400,23 @@ describe("P3-TE-12 handler 增删与支持矩阵", () => {
     fireEvent.click(container.querySelector('[data-e2e="gui-handler-del-SessionStart-0-0"]') as HTMLElement);
     const last = onChange.mock.calls[onChange.mock.calls.length - 1][0] as HooksConfigGui;
     expect(last.events[1].matcherGroups[0].handlers).toEqual([]);
+    expect(container.textContent).toContain("暂无 handler");
+  });
+
+  it("删除当前选中的 handler → 选中态回退空态（HandlerForm 关闭 + 行高亮消失，HKC-05）", () => {
+    const onChange = vi.fn();
+    const { container } = renderGui(makeDefaultGui(), onChange);
+    fireEvent.click(container.querySelector('[data-e2e="gui-event-SessionStart"]') as HTMLElement);
+    // 选中 handler 0：行高亮 + HandlerForm 展开
+    fireEvent.click(container.querySelector('[data-e2e="gui-handler-SessionStart-0-0"]') as HTMLElement);
+    const row = container.querySelector('[data-e2e="gui-handler-SessionStart-0-0"]') as HTMLElement;
+    expect(row.style.background).toBe(hexToRgb(ACTIVE_SELECTION_BG));
+    expect(container.querySelector('[data-e2e="handler-form"]')).toBeTruthy();
+    // 删除当前选中的 handler
+    fireEvent.click(container.querySelector('[data-e2e="gui-handler-del-SessionStart-0-0"]') as HTMLElement);
+    // 选中态回退空态：行消失、HandlerForm 关闭、空组提示出现
+    expect(container.querySelector('[data-e2e="gui-handler-SessionStart-0-0"]')).toBeNull();
+    expect(container.querySelector('[data-e2e="handler-form"]')).toBeNull();
     expect(container.textContent).toContain("暂无 handler");
   });
 });

@@ -90,7 +90,8 @@ args 契约（强制校验，缺 failedItems/verifyFile 即抛错）：
 | 07 | 完成 | 2（fix-loop 1 轮） | 213b539；轮1：EDF-07 残留固定延时改 waitFor/同步断言；2049 passed |
 | 08 | 完成 | 2（fix-loop 1 轮） | 2ebe7eb；轮1：layoutSerde 条目级容错修复（null 条目跳过）+ T9/T10 改行为断言；2086 passed |
 | 09 | 完成 | 2（fix-loop 1 轮） | 61c0296；轮1：canOpenFile 守卫导出 + 无 activePageId 分支直测；2160 passed；fullRefresh 死代码删除 |
-| 10-17 | 未开始 | - | - |
+| 10 | 完成 | 2（fix-loop 1 轮） | e5b3abe；轮1：typeof 弱断言清理 + commit-view 再拆（132 行）+ commit-open-file mock 缺陷修复；2184 passed |
+| 11-17 | 未开始 | - | - |
 
 ## 人工验证点（收尾逐项实测，与 stages.md 一致）
 

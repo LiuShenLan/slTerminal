@@ -342,6 +342,17 @@ describe("字段编辑", () => {
     expect(next.args).toEqual(["-p", "hello"]);
   });
 
+  it("args 清空 → 键被删除（非置空，HKC-04）", () => {
+    const { onChange } = renderForm({
+      type: "command",
+      overrides: { args: ["-p", "hello"] },
+    });
+    fireEvent.change(getField("args"), { target: { value: "" } });
+    expect(onChange).toHaveBeenCalledTimes(1);
+    const next = onChange.mock.calls[0][0] as HookHandlerGui;
+    expect("args" in next).toBe(false);
+  });
+
   it("args 非法 JSON → 不触发 onChange（草稿保留待修，无回弹）", () => {
     const { onChange } = renderForm({ type: "command" });
     fireEvent.change(getField("args"), { target: { value: '["-p", ' } });
@@ -356,6 +367,17 @@ describe("字段编辑", () => {
     });
     const next = onChange.mock.calls[0][0] as HookHandlerGui;
     expect(next.headers).toEqual({ Authorization: "Bearer x" });
+  });
+
+  it("headers 清空 → 键被删除（非置空，HKC-04）", () => {
+    const { onChange } = renderForm({
+      type: "http",
+      overrides: { headers: { Authorization: "Bearer x" } },
+    });
+    fireEvent.change(getField("headers"), { target: { value: "" } });
+    expect(onChange).toHaveBeenCalledTimes(1);
+    const next = onChange.mock.calls[0][0] as HookHandlerGui;
+    expect("headers" in next).toBe(false);
   });
 
   it("timeout 数字输入 → onChange 收到 number", () => {

@@ -289,6 +289,40 @@ describe("HooksConfigPanel 渲染", () => {
     expect(err.title).toBe(longMsg);
   });
 
+  it("非法 JSON onChange → configJson 保持原快照 + 保存按钮禁用 + 不崩溃（HKC-03）", async () => {
+    seedProject("C:/proj");
+    const INITIAL = { PreToolUse: [{ hooks: [{ type: "command", command: "echo hi" }] }] };
+    mockReadHooksConfig.mockResolvedValueOnce(INITIAL);
+    const { container } = render(React.createElement(HooksConfigPanel));
+    await waitFor(() => expect(mockReadHooksConfig.mock.calls.length).toBe(1));
+    // 非法 JSON 进入 handleJsonChange：JSON.parse 抛错被 catch——configJson 保留最后合法快照
+    act(() => {
+      // calls[i] 为参数数组，props 在 calls[i][0]
+      const props = mockJsonMode.mock.calls[
+        mockJsonMode.mock.calls.length - 1
+      ] as unknown as [
+        {
+          onChange: (t: string) => void;
+          onValidationChange: (v: boolean, d: { message: string }[]) => void;
+        },
+      ];
+      props[0].onChange('{ "PreToolUse": ');
+      // 校验上报非法 → jsonValid=false（真实 JsonMode 中与 onChange 同批触发）
+      props[0].onValidationChange(false, [{ message: "JSON 语法错误：Unexpected token" }]);
+    });
+    // 快照保持：JsonMode value 仍为初始合法配置（onChange 非法文本未覆盖 configJson）
+    const lastCall = mockJsonMode.mock.calls[
+      mockJsonMode.mock.calls.length - 1
+    ] as unknown as [{ value: string }];
+    expect(JSON.parse(lastCall[0].value)).toEqual(INITIAL);
+    // 保存按钮禁用（jsonValid=false 门控）
+    const saveBtn = container.querySelector('[data-e2e="hooks-save"]') as HTMLButtonElement;
+    expect(saveBtn.disabled).toBe(true);
+    // 不崩溃：面板仍在渲染（工具栏 + 模式容器存在）
+    expect(container.querySelector('[data-e2e="hooks-config-panel"]')).toBeTruthy();
+    expect(container.querySelector('[data-e2e="hooks-mode-container"]')).toBeTruthy();
+  });
+
   it("ask 弹窗打开期间 visibilitychange 回归不二次弹窗（验收 2.1 防循环）", async () => {
     seedProject("C:/proj");
     mockReadHooksConfig.mockResolvedValue({});
@@ -351,6 +385,24 @@ describe("F2 注入/卸载与注入状态条（P3-FE-21/22）", () => {
     await waitFor(() => expect(third.getByText("注入状态：未注入")).toBeTruthy());
   });
 
+  it("查询完成前注入状态条显示初始 '--'（HKC-10：初始 null 帧展示）", async () => {
+    mockReadHooksConfig.mockResolvedValue({});
+    // getInjectionStatus 挂起（IPC 查询未返回）——content 态首帧 injectionStatus=null
+    mockGetInjectionStatus.mockReturnValue(new Promise(() => {}));
+    const { container } = render(React.createElement(HooksConfigPanel));
+    await waitFor(() => expect(mockReadHooksConfig.mock.calls.length).toBe(1));
+    // 状态条（data-e2e hooks-injection-status）初始帧显示「注入状态：--」
+    const statusEl = container.querySelector(
+      '[data-e2e="hooks-injection-status"]',
+    ) as HTMLElement;
+    expect(statusEl).toBeTruthy();
+    expect(statusEl.textContent).toBe("注入状态：--");
+    // 查询未完成时状态条恒为 '--'，不出现三态文案
+    expect(container.textContent).not.toContain("注入状态：已注入");
+    expect(container.textContent).not.toContain("注入状态：未注入");
+    expect(container.textContent).not.toContain("注入状态：版本过旧");
+  });
+
   it("点击「注入 Hooks」→ inject 调用 → 状态刷新为已注入 → 重读 user 层配置", async () => {
     mockReadHooksConfig.mockResolvedValue({});
     mockInject.mockResolvedValue({ status: "injected", version: 1 });
@@ -408,6 +460,30 @@ describe("F2 注入/卸载与注入状态条（P3-FE-21/22）", () => {
     await waitFor(() => expect(getByText("注入失败，请检查 ~/.claude/settings.json")).toBeTruthy());
     expect(mockReadHooksConfig.mock.calls.length).toBe(callsBefore);
     expect(queryByText("注入状态：已注入")).toBeNull();
+  });
+
+  it("卸载失败 → hooks-injection-error 出现「卸载失败」文案 + 状态条不变（HKC-07）", async () => {
+    mockReadHooksConfig.mockResolvedValue({});
+    // 挂载时查询返回「已注入」——失败后状态条应保持该值（不重新查询）
+    mockGetInjectionStatus.mockResolvedValue({ status: "injected", version: 1 });
+    mockUninstall.mockRejectedValue(new Error("settings.json 非法 JSON"));
+    const { container, getByRole, getByText } = render(React.createElement(HooksConfigPanel));
+    await waitFor(() => expect(getByText("注入状态：已注入")).toBeTruthy());
+    const statusCallsBefore = mockGetInjectionStatus.mock.calls.length;
+    const readCallsBefore = mockReadHooksConfig.mock.calls.length;
+    fireEvent.click(getByRole("button", { name: "卸载 Hooks" }));
+    // 错误提示出现（data-e2e hooks-injection-error + 「卸载失败」文案）
+    // 注意：waitFor 回调须抛错重试（v10 对返回 null 直接 resolve，不会轮询）
+    await waitFor(() =>
+      expect(container.querySelector('[data-e2e="hooks-injection-error"]')).toBeTruthy(),
+    );
+    const errEl = container.querySelector('[data-e2e="hooks-injection-error"]') as HTMLElement;
+    expect(errEl.textContent).toContain("卸载失败");
+    // 状态条不变：仍显示上次查询的「已注入」，不触发重新查询
+    expect(getByText("注入状态：已注入")).toBeTruthy();
+    expect(mockGetInjectionStatus.mock.calls.length).toBe(statusCallsBefore);
+    // 不重读配置（失败路径跳过 reloadUserConfig）
+    expect(mockReadHooksConfig.mock.calls.length).toBe(readCallsBefore);
   });
 
   it("注入/卸载操作期间按钮禁用（防重复点击）", async () => {
