@@ -4,7 +4,7 @@ pub mod pty;
 mod fs;
 mod settings;
 mod notify;
-mod git;
+pub mod git;
 mod projects;
 mod hooks;
 pub mod claude_history;
@@ -12,6 +12,7 @@ pub mod claude_history;
 pub use error::AppError;
 pub use state::AppState;
 pub use state::PtyState;
+pub use state::validate_path_within_root;
 use crate::pty::win_build::get_windows_build_number;
 use tauri_plugin_prevent_default::{Builder as PreventDefaultBuilder, Flags, PlatformOptions};
 

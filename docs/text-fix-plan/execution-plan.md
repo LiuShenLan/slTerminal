@@ -82,7 +82,8 @@ args 契约（强制校验，缺 failedItems/verifyFile 即抛错）：
 | Stage | 状态 | 验证轮次 | 备注 |
 |-------|------|---------|------|
 | 01 | 完成 | 1 | c0dda4e；PTY-03 断言修正（reattach 无 panel_id，SEC-08 仅三命令）；门禁重跑全绿（461+8 passed） |
-| 02-17 | 未开始 | - | - |
+| 02 | 完成 | 1 | 2ed8ed8；首轮即全绿（allFixed=true）；488 passed；Cargo.toml 行尾差异还原 |
+| 03-17 | 未开始 | - | - |
 
 ## 人工验证点（收尾逐项实测，与 stages.md 一致）
 
