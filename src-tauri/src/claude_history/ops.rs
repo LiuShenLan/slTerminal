@@ -140,12 +140,17 @@ mod tests {
             "..",
             "abc/def",
             "abc\\def",
-            "",
             "123e4567-e89b-12d3-a456", // 非 UUID（长度不足）
         ] {
             let msg = assert_validation(validate_session_id(bad).unwrap_err());
             assert!(msg.contains(bad), "错误消息应含非法输入，实际: {msg}");
         }
+        // 空串特判（HFN-09③）：contains("") 恒真、无法验证消息内容——改断言具体校验文案
+        let msg = assert_validation(validate_session_id("").unwrap_err());
+        assert!(
+            msg.contains("非法 sessionId"),
+            "错误消息应含校验文案，实际: {msg}"
+        );
     }
 
     // ── BE-07：delete ──
@@ -213,6 +218,42 @@ mod tests {
         assert!(msg.contains("非法"), "消息应说明非法，实际: {msg}");
         // 越界文件未被触碰
         assert!(!proj.join("..").join("evil.jsonl").exists());
+    }
+
+    // ── 命令包装层（HFN-05/D6 最小用例：直接 await #[tauri::command] fn） ──
+
+    /// 手动 current_thread runtime 驱动 async 命令包装（tokio 未启用 #[tokio::test]，
+    /// 照 hooks/usage.rs block_on 先例）
+    fn block_on<F: std::future::Future>(future: F) -> F::Output {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(future)
+    }
+
+    #[test]
+    fn command_delete_wraps_spawn_blocking_and_passes_params() {
+        // 包装层最小用例（HFN-05/D6）：sessionId 透传 spawn_blocking → 文件真实删除
+        let (_dir, root, proj) = make_scan_root();
+        std::fs::write(proj.join(format!("{UUID}.jsonl")), "{}").unwrap();
+
+        set_scan_root(&root);
+        block_on(claude_history_delete(UUID.to_string())).unwrap();
+        unset_scan_root();
+
+        assert!(!proj.join(format!("{UUID}.jsonl")).exists());
+    }
+
+    #[test]
+    fn command_delete_invalid_id_returns_validation() {
+        // 包装层 + 错误映射（HFN-05/D6）：非法 id 经 spawn_blocking 校验失败 → Err(Validation)
+        // 透传；env 指向 tempdir——即使校验回归（越界）也只触碰隔离目录
+        let (_dir, root, _proj) = make_scan_root();
+        set_scan_root(&root);
+        let err = block_on(claude_history_delete("../evil".to_string())).unwrap_err();
+        unset_scan_root();
+        let msg = assert_validation(err);
+        assert!(msg.contains("非法"), "消息应说明非法，实际: {msg}");
     }
 
     // ── 越界防护（BE-10：扫描根外无写入） ──

@@ -86,6 +86,11 @@ pub async fn load_projects() -> Result<String, AppError> {
 mod tests {
     use super::*;
 
+    /// 创建 tokio runtime 并 block_on 调真实 Tauri 命令（与 fs/settings 模块命令层测试同模式）
+    fn run<F: std::future::Future>(f: F) -> F::Output {
+        tokio::runtime::Runtime::new().unwrap().block_on(f)
+    }
+
     /// T1.1: save 后 load 往返一致
     #[test]
     fn save_then_load_roundtrip() {
@@ -140,7 +145,10 @@ mod tests {
         let sub_dir = dir.path().join("config").join("slterminal");
         let data = r#"{"projects":{}}"#;
         save_to_dir(&sub_dir, data).unwrap();
-        assert!(sub_dir.join(PROJECTS_FILENAME).exists(), "应自动创建目录并写入文件");
+        assert!(
+            sub_dir.join(PROJECTS_FILENAME).exists(),
+            "应自动创建目录并写入文件"
+        );
     }
 
     /// T1.6: 覆盖已有文件
@@ -233,5 +241,84 @@ mod tests {
         save_to_dir(dir.path(), &data).unwrap();
         let loaded = load_from_dir(dir.path()).unwrap();
         assert_eq!(loaded, data);
+    }
+
+    // ── SPE-02: 命令包装层测试（block_on 调真实 save_projects/load_projects，app_data_dir 注入 tempdir） ──
+    // 旧测试只调 I/O 核心 save_to_dir/load_from_dir，命令包装层（app_data_dir → spawn_blocking → TaskJoin）从未被调用。
+    // 现经 crate::settings::AppDataDirGuard 注入 tempdir，block_on 走真实命令路径。
+    // 注：TaskJoin 分支（spawn_blocking panic）无法经命令注入构造，由 error.rs 的 From<JoinError> 用例（SPE-03）覆盖。
+
+    /// 命令层：save → load 往返一致
+    #[test]
+    fn command_save_load_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::settings::AppDataDirGuard::set(dir.path());
+        let data = r#"{"projects":{"p1":{"name":"test"}}}"#;
+        run(save_projects(data.to_string())).unwrap();
+        let loaded = run(load_projects()).unwrap();
+        assert_eq!(loaded, data);
+    }
+
+    /// 命令层：文件不存在 → "{}"
+    #[test]
+    fn command_load_file_not_found_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::settings::AppDataDirGuard::set(dir.path());
+        let result = run(load_projects()).unwrap();
+        assert_eq!(result, "{}");
+    }
+
+    /// 命令层：主文件损坏 → .bak 恢复（返回 .bak 内容且主文件被修复）
+    #[test]
+    fn command_load_corrupt_fallback_to_bak() {
+        let dir = tempfile::tempdir().unwrap();
+        let valid = r#"{"projects":{"p1":{"name":"recovered"}}}"#;
+        let projects_path = dir.path().join(PROJECTS_FILENAME);
+        std::fs::write(dir.path().join("slterminal-projects.json.bak"), valid).unwrap();
+        std::fs::write(&projects_path, "not valid json {{{broken").unwrap();
+
+        let _guard = crate::settings::AppDataDirGuard::set(dir.path());
+        let loaded = run(load_projects()).unwrap();
+        assert_eq!(loaded, valid, "应从 .bak 恢复");
+        assert_eq!(
+            std::fs::read_to_string(&projects_path).unwrap(),
+            valid,
+            "主文件应被修复为 .bak 内容"
+        );
+    }
+
+    /// 命令层：目录不存在时 save 自动创建（经 spawn_blocking 执行）
+    #[test]
+    fn command_save_creates_missing_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub_dir = dir.path().join("config").join("slterminal");
+        let _guard = crate::settings::AppDataDirGuard::set(&sub_dir);
+        run(save_projects(r#"{"projects":{}}"#.to_string())).unwrap();
+        assert!(
+            sub_dir.join(PROJECTS_FILENAME).exists(),
+            "应自动创建目录并写入文件"
+        );
+    }
+
+    // ── SPE-05: persist 失败映射 ──
+
+    /// persist 目标为已存在目录（冲突构造）→ 映射为 AppError::IoKind（消息含 "persist 失败"）
+    #[test]
+    fn save_to_dir_persist_failure_maps_to_io_error() {
+        let dir = tempfile::tempdir().unwrap();
+        // 目标路径 slterminal-projects.json 为已存在目录 → rename 替换必然失败
+        std::fs::create_dir(dir.path().join(PROJECTS_FILENAME)).unwrap();
+
+        let err = save_to_dir(dir.path(), r#"{"projects":{}}"#).unwrap_err();
+        match err {
+            AppError::IoKind { kind, message } => {
+                assert!(!kind.is_empty(), "kind 不应为空");
+                assert!(
+                    message.contains("persist 失败"),
+                    "消息应含 'persist 失败'，实际: {message}"
+                );
+            }
+            other => panic!("persist 失败应映射为 AppError::IoKind，实际: {other:?}"),
+        }
     }
 }

@@ -159,45 +159,83 @@ mod tests {
         std::fs::write(proj.join(format!("{uuid}.jsonl")), content).unwrap();
     }
 
-    /// 设置扫描根 env（依赖 --test-threads=1 门禁：env 全局可变，并行测试会互相污染）
-    fn set_scan_root(path: &Path) {
-        std::env::set_var("SLTERM_CLAUDE_PROJECTS_DIR", path);
+    /// `SLTERM_CLAUDE_PROJECTS_DIR` 环境变量守卫（HFN-06）
+    ///
+    /// set/unset 后无论测试成功或 panic，Drop 时均恢复原 env 值（原无 → 移除），
+    /// 不残留污染后续用例。替代手动 set/unset 成对调用（依赖 --test-threads=1 门禁：
+    /// env 全局可变，并行测试会互相污染）。
+    struct ScanRootGuard(Option<std::ffi::OsString>);
+
+    impl ScanRootGuard {
+        /// 设置 env 为给定值（路径 / 空串均可），Drop 时恢复原值
+        fn set(value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let prev = std::env::var_os("SLTERM_CLAUDE_PROJECTS_DIR");
+            std::env::set_var("SLTERM_CLAUDE_PROJECTS_DIR", value);
+            ScanRootGuard(prev)
+        }
+
+        /// 移除 env（等价未设），Drop 时恢复原值
+        fn unset() -> Self {
+            let prev = std::env::var_os("SLTERM_CLAUDE_PROJECTS_DIR");
+            std::env::remove_var("SLTERM_CLAUDE_PROJECTS_DIR");
+            ScanRootGuard(prev)
+        }
     }
 
-    /// 恢复扫描根 env
-    fn unset_scan_root() {
-        std::env::remove_var("SLTERM_CLAUDE_PROJECTS_DIR");
+    impl Drop for ScanRootGuard {
+        fn drop(&mut self) {
+            match &self.0 {
+                Some(v) => std::env::set_var("SLTERM_CLAUDE_PROJECTS_DIR", v),
+                None => std::env::remove_var("SLTERM_CLAUDE_PROJECTS_DIR"),
+            }
+        }
+    }
+
+    #[test]
+    fn scan_root_guard_restores_previous_env_on_drop() {
+        // 守卫 Drop 恢复原 env（HFN-06：set 后 panic 不残留）；外层 guard 保护本测试自身
+        let _outer = ScanRootGuard::set("C:\\guard-prev");
+        {
+            let _g = ScanRootGuard::set("C:\\guard-new");
+            assert_eq!(
+                std::env::var_os("SLTERM_CLAUDE_PROJECTS_DIR"),
+                Some(std::ffi::OsString::from("C:\\guard-new"))
+            );
+        }
+        assert_eq!(
+            std::env::var_os("SLTERM_CLAUDE_PROJECTS_DIR"),
+            Some(std::ffi::OsString::from("C:\\guard-prev")),
+            "Drop 后应恢复原 env 值"
+        );
     }
 
     // ── resolve_projects_root（SEC-02/BE-06） ──
 
     #[test]
     fn resolve_root_env_override() {
-        // env 指向 tempdir → 用之；测毕恢复（依赖 --test-threads=1 门禁）
+        // env 指向 tempdir → 用之（依赖 --test-threads=1 门禁；guard 测毕自动恢复）
         let dir = tempfile::tempdir().unwrap();
         let canon = dunce::canonicalize(dir.path()).unwrap();
-        set_scan_root(&canon);
+        let _guard = ScanRootGuard::set(&canon);
         let root = resolve_projects_root().unwrap();
         assert_eq!(root, canon);
-        unset_scan_root();
     }
 
     #[test]
     fn resolve_root_empty_env_falls_back_to_home() {
         // env 为空串 → 回退 home/.claude/projects（依赖 --test-threads=1 门禁）
-        std::env::set_var("SLTERM_CLAUDE_PROJECTS_DIR", "");
+        let _guard = ScanRootGuard::set("");
         let expected = dirs::home_dir()
             .map(|h| h.join(".claude").join("projects"))
             .unwrap();
         let root = resolve_projects_root().unwrap();
         assert_eq!(root, expected);
-        unset_scan_root();
     }
 
     #[test]
     fn resolve_root_default_without_env() {
-        // 未设 env → home/.claude/projects（依赖 --test-threads=1 门禁：先确保无残留）
-        unset_scan_root();
+        // 未设 env → home/.claude/projects（guard 移除 env 并保证测毕恢复）
+        let _guard = ScanRootGuard::unset();
         let expected = dirs::home_dir()
             .map(|h| h.join(".claude").join("projects"))
             .unwrap();
@@ -223,9 +261,8 @@ mod tests {
         // 非 jsonl 扩展名
         std::fs::write(proj.join(format!("{uuid}.txt")), "{}").unwrap();
 
-        set_scan_root(&root);
+        let _guard = ScanRootGuard::set(&root);
         let sessions = scan_sessions();
-        unset_scan_root();
 
         assert_eq!(
             sessions.len(),
@@ -237,8 +274,9 @@ mod tests {
     }
 
     #[test]
-    fn scan_multiple_sessions_sorted_input_order() {
-        // 多个编码目录 + 多个会话 → 全部收集（顺序无契约，只断言集合）
+    fn scan_collects_all_sessions_across_dirs() {
+        // 多个编码目录 + 多个会话 → 全部收集（HFN-09②：原名暗示测顺序——扫描顺序无契约，
+        // 排序是前端职责，仅断言集合）
         let (_dir, root, proj) = make_scan_root();
         let uuid1 = "123e4567-e89b-12d3-a456-426614174001";
         let uuid2 = "123e4567-e89b-12d3-a456-426614174002";
@@ -250,9 +288,8 @@ mod tests {
         let uuid3 = "123e4567-e89b-12d3-a456-426614174003";
         write_valid_session(&proj2, uuid3);
 
-        set_scan_root(&root);
+        let _guard = ScanRootGuard::set(&root);
         let sessions = scan_sessions();
-        unset_scan_root();
 
         let mut ids: Vec<&str> = sessions.iter().map(|s| s.session_id.as_str()).collect();
         ids.sort();
@@ -264,9 +301,8 @@ mod tests {
         // 扫描根不存在 → 空 Vec（非 Err）
         let dir = tempfile::tempdir().unwrap();
         let missing = dir.path().join("不存在");
-        set_scan_root(&missing);
+        let _guard = ScanRootGuard::set(&missing);
         let sessions = scan_sessions();
-        unset_scan_root();
         assert!(sessions.is_empty());
     }
 
@@ -279,9 +315,8 @@ mod tests {
         let uuid = "123e4567-e89b-12d3-a456-426614174000";
         std::fs::write(proj.join(format!("{uuid}.jsonl")), "{broken json 没有换行").unwrap();
 
-        set_scan_root(&root);
+        let _guard = ScanRootGuard::set(&root);
         let sessions = scan_sessions();
-        unset_scan_root();
 
         assert_eq!(sessions.len(), 1);
         let s = &sessions[0];
@@ -301,13 +336,46 @@ mod tests {
         let uuid = "123e4567-e89b-12d3-a456-426614174000";
         std::fs::write(proj.join(format!("{uuid}.jsonl")), "").unwrap();
 
-        set_scan_root(&root);
+        let _guard = ScanRootGuard::set(&root);
         let sessions = scan_sessions();
-        unset_scan_root();
 
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].session_id, uuid);
         assert!(sessions[0].title.is_none());
+    }
+
+    #[test]
+    fn scan_unreadable_session_file_produces_degraded_entry() {
+        // IO 降级（HFN-05）：<uuid>.jsonl 路径是目录——条目存在但无法按文件读取
+        // （File::open 失败）→ 降级条目，不 panic、不跳过
+        let (_dir, root, proj) = make_scan_root();
+        let uuid = "123e4567-e89b-12d3-a456-426614174000";
+        std::fs::create_dir_all(proj.join(format!("{uuid}.jsonl"))).unwrap();
+
+        let _guard = ScanRootGuard::set(&root);
+        let sessions = scan_sessions();
+
+        assert_eq!(sessions.len(), 1, "不可读条目应降级而非崩溃/被跳过");
+        let s = &sessions[0];
+        assert_eq!(s.session_id, uuid);
+        assert!(s.title.is_none());
+        assert!(s.cwd.is_none());
+        assert_eq!(s.title_source, TitleSource::None);
+        assert!(!s.cwd_exists);
+    }
+
+    #[test]
+    fn parse_session_file_missing_file_degraded_zero_mtime() {
+        // IO 降级（HFN-05）：metadata 失败（文件不存在）→ mtime_ms=0 + 全字段降级
+        let dir = tempfile::tempdir().unwrap();
+        let uuid = "123e4567-e89b-12d3-a456-426614174000";
+        let missing = dir.path().join(format!("{uuid}.jsonl"));
+        let s = parse_session_file(&missing);
+        assert_eq!(s.session_id, uuid);
+        assert_eq!(s.mtime_ms, 0, "metadata 失败 → mtime_ms=0");
+        assert!(s.title.is_none());
+        assert!(s.cwd.is_none());
+        assert!(!s.cwd_exists);
     }
 
     // ── parse_session_file：完整字段 ──
@@ -334,9 +402,8 @@ mod tests {
         let path = proj.join(format!("{uuid}.jsonl"));
         std::fs::write(&path, content).unwrap();
 
-        set_scan_root(&root);
+        let _guard = ScanRootGuard::set(&root);
         let sessions = scan_sessions();
-        unset_scan_root();
 
         let s = &sessions[0];
         assert_eq!(s.session_id, uuid);
@@ -370,9 +437,8 @@ mod tests {
             .to_string();
         std::fs::write(proj.join(format!("{uuid}.jsonl")), content).unwrap();
 
-        set_scan_root(&root);
+        let _guard = ScanRootGuard::set(&root);
         let sessions = scan_sessions();
-        unset_scan_root();
 
         assert!(!sessions[0].cwd_exists, "cwd 目录不存在 → cwd_exists=false");
         assert!(sessions[0].cwd.is_some());
@@ -387,12 +453,46 @@ mod tests {
         let uuid = "123e4567-e89b-12d3-a456-426614174000";
         write_valid_session(&proj, uuid);
 
-        set_scan_root(&root);
+        let _guard = ScanRootGuard::set(&root);
         let sessions = scan_sessions();
-        unset_scan_root();
 
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].session_id, uuid);
+    }
+
+    // ── 命令包装层（HFN-05/D6 最小用例：直接 await #[tauri::command] fn） ──
+
+    /// 手动 current_thread runtime 驱动 async 命令包装（tokio 未启用 #[tokio::test]，
+    /// 照 hooks/usage.rs block_on 先例）
+    fn block_on<F: std::future::Future>(future: F) -> F::Output {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(future)
+    }
+
+    #[test]
+    fn command_scan_wraps_spawn_blocking_and_returns_sessions() {
+        // 包装层最小用例（HFN-05/D6）：spawn_blocking + await + map_err 全链路，内容透传
+        let (_dir, root, proj) = make_scan_root();
+        let uuid = "123e4567-e89b-12d3-a456-426614174000";
+        write_valid_session(&proj, uuid);
+
+        let _guard = ScanRootGuard::set(&root);
+        let sessions = block_on(claude_history_scan()).unwrap();
+
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].session_id, uuid);
+    }
+
+    #[test]
+    fn command_scan_degraded_root_returns_empty_ok() {
+        // 包装层 + IO 降级（HFN-05）：扫描根不存在 → 命令仍 Ok(空)，不把降级变 Err
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("不存在");
+        let _guard = ScanRootGuard::set(&missing);
+        let sessions = block_on(claude_history_scan()).unwrap();
+        assert!(sessions.is_empty());
     }
 
     // ── file_mtime_ms ──
@@ -440,9 +540,8 @@ mod tests {
         .unwrap();
         f.flush().unwrap();
 
-        set_scan_root(&root);
+        let _guard = ScanRootGuard::set(&root);
         let sessions = scan_sessions();
-        unset_scan_root();
 
         let s = &sessions[0];
         assert_eq!(s.title.as_deref(), Some("重命名后的标题"));

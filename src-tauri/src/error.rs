@@ -136,4 +136,67 @@ mod tests {
             "camelCase 序列化应包含 sessionNotFound 键，实际: {json}"
         );
     }
+
+    // ── SPE-03: 三个 From 实现（变体 + 消息契约） ──
+
+    /// serde_json::Error → AppError::Serde 转换（变体 + 消息原样保留）
+    #[test]
+    fn test_from_serde_json_error() {
+        let serde_err = serde_json::from_str::<serde_json::Value>("not json").unwrap_err();
+        let expected = serde_err.to_string();
+        let app_err: AppError = serde_err.into();
+        match app_err {
+            AppError::Serde(msg) => {
+                assert_eq!(msg, expected, "消息应原样保留 serde_json 错误文本");
+                assert!(
+                    msg.contains("expected"),
+                    "serde 错误消息应含具体原因，实际: {msg}"
+                );
+            }
+            other => panic!("serde_json::Error 应转为 AppError::Serde，实际: {other:?}"),
+        }
+    }
+
+    /// git2::Error → AppError::Git 转换（变体 + 消息原样保留）
+    #[test]
+    fn test_from_git2_error() {
+        let git_err = git2::Error::from_str("模拟 git 错误");
+        let expected = git_err.to_string();
+        let app_err: AppError = git_err.into();
+        match app_err {
+            AppError::Git(msg) => {
+                assert_eq!(msg, expected, "消息应原样保留 git2 错误文本");
+                assert!(
+                    msg.contains("模拟 git 错误"),
+                    "git 错误消息应保留原文，实际: {msg}"
+                );
+            }
+            other => panic!("git2::Error 应转为 AppError::Git，实际: {other:?}"),
+        }
+    }
+
+    /// tokio::task::JoinError → AppError::TaskJoin 转换（变体 + 消息原样保留）
+    #[test]
+    fn test_from_join_error() {
+        // 用 spawn_blocking 内 panic 构造真实 JoinError（panic 被 JoinError 捕获，不扩散到测试线程）
+        // 注意：spawn_blocking 必须先在 runtime 上下文内执行——Rust 求值顺序是
+        // 先求值 block_on 的参数表达式，若参数直接写 spawn_blocking(...)，
+        // 则在无 runtime 的测试线程上调用会 panic 'there is no reactor running'。
+        // 故把 spawn_blocking 放入 block_on 的 async 块内，await 拿到 JoinError。
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let join_err = rt.block_on(async {
+            tokio::task::spawn_blocking(|| panic!("模拟阻塞任务 panic"))
+                .await
+                .unwrap_err()
+        });
+        let expected = join_err.to_string();
+        let app_err: AppError = join_err.into();
+        match app_err {
+            AppError::TaskJoin(msg) => {
+                assert_eq!(msg, expected, "消息应原样保留 JoinError 文本");
+                assert!(!msg.is_empty());
+            }
+            other => panic!("JoinError 应转为 AppError::TaskJoin，实际: {other:?}"),
+        }
+    }
 }

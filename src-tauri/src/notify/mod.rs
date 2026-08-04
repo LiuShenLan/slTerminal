@@ -7,7 +7,7 @@
 //!
 //! 技术栈：notify = "9.0.0-rc.4" + notify-debouncer-full = "0.8.0-rc.2"
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -32,6 +32,23 @@ pub struct FsEventPayload {
     pub kind: String,
     /// 子类型：File | Folder | Content | Name(From/To/Both) | Metadata | Any
     pub detail: String,
+}
+
+/// 文件系统事件发射抽象（D6 抽离：隔离 AppHandle，使事件循环可 L1 测试）
+pub trait EventEmitter: Send + Sync + 'static {
+    /// 向前端广播文件系统事件载荷
+    fn emit_fs_event(&self, payload: FsEventPayload);
+}
+
+/// 生产 EventEmitter：包装 Tauri AppHandle 的 emit（发送失败静默忽略）
+pub struct AppHandleEmitter {
+    app_handle: AppHandle,
+}
+
+impl EventEmitter for AppHandleEmitter {
+    fn emit_fs_event(&self, payload: FsEventPayload) {
+        let _ = self.app_handle.emit("fs-event", payload);
+    }
 }
 
 /// 可运行时控制的文件系统监听器
@@ -64,6 +81,19 @@ impl FileWatcher {
         watch_paths: Vec<PathBuf>,
         debounce_ms: u64,
     ) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::start_with_emitter(
+            Box::new(AppHandleEmitter { app_handle }),
+            watch_paths,
+            debounce_ms,
+        )
+    }
+
+    /// 注入 EventEmitter 的启动入口（D2 参数注入：L1 用 mock emitter 驱动，无需 AppHandle）
+    pub fn start_with_emitter(
+        emitter: Box<dyn EventEmitter>,
+        watch_paths: Vec<PathBuf>,
+        debounce_ms: u64,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let timeout = Duration::from_millis(debounce_ms);
 
         // debouncer 内置支持 mpsc::Sender 作为 event handler
@@ -86,65 +116,13 @@ impl FileWatcher {
         let thread_handle = std::thread::Builder::new()
             .name("fs-watcher".into())
             .spawn({
-                let app_handle = app_handle.clone();
                 let wps = watch_paths_arc.clone();
                 let paused_clone = paused.clone();
 
                 move || {
                     // debouncer 存活于本线程，退出时自动 Drop
                     let _debouncer_guard = debouncer;
-
-                    loop {
-                        match event_rx.recv_timeout(Duration::from_millis(100)) {
-                            Ok(Ok(events)) => {
-                                // 暂停状态：跳过事件上报（watcher 仍运行，OS 句柄保留）
-                                if paused_clone.load(Ordering::Relaxed) {
-                                    continue;
-                                }
-                                for event in &events {
-                                    // need_rescan — 通知前端全量刷新
-                                    if event.need_rescan() {
-                                        let wps_lock = match wps.lock() {
-                                            Ok(g) => g,
-                                            Err(e) => {
-                                                tracing::error!("fs-watcher 锁获取失败: {e}");
-                                                continue;
-                                            }
-                                        };
-                                        let _ = app_handle.emit(
-                                            "fs-event",
-                                            FsEventPayload {
-                                                paths: wps_lock
-                                                    .iter()
-                                                    .map(|p| p.display().to_string())
-                                                    .collect(),
-                                                kind: "Rescan".to_string(),
-                                                detail: "Overflow".to_string(),
-                                            },
-                                        );
-                                        continue;
-                                    }
-
-                                    let payload = classify_event(event);
-                                    let _ = app_handle.emit("fs-event", payload);
-                                }
-                            }
-                            Ok(Err(errors)) => {
-                                for err in &errors {
-                                    tracing::error!("文件系统监听错误: {err}");
-                                }
-                            }
-                            Err(mpsc::RecvTimeoutError::Timeout) => {
-                                // 正常超时，检查是否应退出
-                                if stop_rx.try_recv().is_ok() {
-                                    break;
-                                }
-                            }
-                            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                                break;
-                            }
-                        }
-                    }
+                    event_loop(&event_rx, &stop_rx, &paused_clone, &wps, emitter.as_ref());
                 }
             })?;
 
@@ -190,6 +168,62 @@ impl FileWatcher {
     }
 }
 
+/// watcher 事件循环（D6 抽离为独立函数：事件/暂停/停止全部经参数驱动，emit 经 trait 注入，
+/// 使 L1 可用 mock emitter + channel 直接驱动，无需 AppHandle）
+fn event_loop(
+    event_rx: &mpsc::Receiver<DebounceEventResult>,
+    stop_rx: &mpsc::Receiver<()>,
+    paused: &AtomicBool,
+    wps: &Mutex<Vec<PathBuf>>,
+    emitter: &dyn EventEmitter,
+) {
+    loop {
+        match event_rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(Ok(events)) => {
+                // 暂停状态：跳过事件上报（watcher 仍运行，OS 句柄保留）
+                if paused.load(Ordering::Relaxed) {
+                    continue;
+                }
+                for event in &events {
+                    // need_rescan — 通知前端全量刷新
+                    if event.need_rescan() {
+                        let wps_lock = match wps.lock() {
+                            Ok(g) => g,
+                            Err(e) => {
+                                tracing::error!("fs-watcher 锁获取失败: {e}");
+                                continue;
+                            }
+                        };
+                        emitter.emit_fs_event(FsEventPayload {
+                            paths: wps_lock.iter().map(|p| p.display().to_string()).collect(),
+                            kind: "Rescan".to_string(),
+                            detail: "Overflow".to_string(),
+                        });
+                        continue;
+                    }
+
+                    let payload = classify_event(event);
+                    emitter.emit_fs_event(payload);
+                }
+            }
+            Ok(Err(errors)) => {
+                for err in &errors {
+                    tracing::error!("文件系统监听错误: {err}");
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // 正常超时，检查是否应退出
+                if stop_rx.try_recv().is_ok() {
+                    break;
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                break;
+            }
+        }
+    }
+}
+
 impl Drop for FileWatcher {
     fn drop(&mut self) {
         // 发送停止信号并等待线程退出（确保 OS 句柄释放）
@@ -210,6 +244,45 @@ impl Drop for FileWatcher {
 ///
 /// 此模式避免每次切换都 `stop()` + `start()`（Windows 上 `ReadDirectoryChangesW`
 /// 递归注册 26K 文件的 target/ 目录需约 2 秒）。
+/// notify_watch 路径前置校验（D2 抽离，供命令与 L1 共用）：存在性 + 路径沙箱（P1-28）
+fn validate_watch_path(watch_path: &Path, project_root: &Option<PathBuf>) -> Result<(), AppError> {
+    if !watch_path.exists() {
+        return Err(AppError::Notify(format!(
+            "路径不存在: {}",
+            watch_path.display()
+        )));
+    }
+    crate::state::validate_path_within_root(project_root, watch_path)
+}
+
+/// notify_watch 阶段 1（持池锁调用）：暂停其他 watcher、恢复/激活目标，返回是否命中缓存
+fn notify_watch_phase1(pool: &mut pool::LruWatcherPool, watch_path: &Path) -> bool {
+    // 暂停其他 watcher，恢复/激活目标
+    pool.pause_all_except(watch_path);
+
+    // 命中缓存：直接返回
+    pool.get(watch_path).is_some()
+}
+
+/// notify_watch 阶段 3（持池锁调用）：竞态检查 + 插入。
+/// 竞态命中（另一线程已在阶段 2 期间插入同路径 watcher）时丢弃传入 watcher
+/// （drop → FileWatcher::drop 发送停止信号并 join 线程），返回 Ok。
+fn notify_watch_phase3(
+    pool: &mut pool::LruWatcherPool,
+    watch_path: &Path,
+    watcher: FileWatcher,
+) -> Result<(), AppError> {
+    // 竞态检查：若另一线程已在阶段 2 期间插入同路径 watcher，丢弃当前 watcher
+    if pool.get(watch_path).is_some() {
+        drop(watcher);
+        return Ok(());
+    }
+
+    // 未命中：插入新 watcher（超限时自动淘汰 LRU）
+    pool.insert(watch_path.to_path_buf(), watcher);
+    Ok(())
+}
+
 #[tauri::command]
 pub fn notify_watch(
     path: String,
@@ -217,17 +290,14 @@ pub fn notify_watch(
     app_handle: AppHandle,
 ) -> Result<(), AppError> {
     let watch_path = dunce::simplified(std::path::Path::new(&path)).to_path_buf();
-    if !watch_path.exists() {
-        return Err(AppError::Notify(format!("路径不存在: {path}")));
-    }
 
-    // 路径 sandbox 校验（P1-28）
+    // 路径前置校验（存在性 + 沙箱），短暂持有 project_root 锁
     {
         let root = state
             .project_root
             .read()
             .map_err(|e| AppError::Notify(format!("获取 project_root 锁失败: {e}")))?;
-        crate::state::validate_path_within_root(&root, &watch_path)?;
+        validate_watch_path(&watch_path, &root)?;
     }
 
     // 阶段 1：持池锁 → pause_all_except + 缓存检查
@@ -236,19 +306,18 @@ pub fn notify_watch(
             .file_watchers
             .lock()
             .map_err(|e| AppError::Notify(format!("获取 file_watchers 锁失败: {e}")))?;
-
-        // 暂停其他 watcher，恢复/激活目标
-        pool.pause_all_except(&watch_path);
-
-        // 命中缓存：直接返回
-        if pool.get(&watch_path).is_some() {
+        if notify_watch_phase1(&mut pool, &watch_path) {
             return Ok(());
         }
     } // 池锁在此释放
 
     // 阶段 2：锁外创建 watcher（含 debouncer.watch 阻塞调用，避免持锁阻塞其他线程）
-    let watcher = FileWatcher::start(app_handle, vec![watch_path.clone()], 300)
-        .map_err(|e| AppError::Notify(format!("启动文件监听失败: {e}")))?;
+    let watcher = FileWatcher::start_with_emitter(
+        Box::new(AppHandleEmitter { app_handle }),
+        vec![watch_path.clone()],
+        300,
+    )
+    .map_err(|e| AppError::Notify(format!("启动文件监听失败: {e}")))?;
 
     // 阶段 3：短暂持锁插入池（处理可能的竞态——另一线程可能已为同一路径创建 watcher）
     {
@@ -256,15 +325,7 @@ pub fn notify_watch(
             .file_watchers
             .lock()
             .map_err(|e| AppError::Notify(format!("获取 file_watchers 锁失败: {e}")))?;
-
-        // 竞态检查：若另一线程已在阶段 2 期间插入同路径 watcher，丢弃当前 watcher
-        if pool.get(&watch_path).is_some() {
-            // watcher 在此作用域结束时 drop → FileWatcher::drop 发送停止信号并 join 线程
-            return Ok(());
-        }
-
-        // 未命中：插入新 watcher（超限时自动淘汰 LRU）
-        pool.insert(watch_path, watcher);
+        notify_watch_phase3(&mut pool, &watch_path, watcher)?;
     }
     Ok(())
 }
@@ -324,8 +385,10 @@ fn classify_by_kind(kind: &notify::EventKind, paths: Vec<String>) -> FsEventPayl
 #[cfg(test)]
 mod tests {
     use super::*;
+    use notify::event::{
+        AccessKind, AccessMode, CreateKind, DataChange, ModifyKind, RemoveKind, RenameMode,
+    };
     use notify::EventKind;
-    use notify::event::{CreateKind, ModifyKind, RemoveKind, AccessKind, RenameMode, DataChange, AccessMode};
 
     // ─── classify_by_kind 测试（覆盖全部 7 种 EventKind 变体） ───
 
@@ -416,7 +479,10 @@ mod tests {
             paths(),
         );
         assert_eq!(p.kind, "Modify");
-        assert!(p.detail.contains("Name"), "Name 变体 detail 应包含 Name 前缀");
+        assert!(
+            p.detail.contains("Name"),
+            "Name 变体 detail 应包含 Name 前缀"
+        );
         assert!(p.detail.contains("From"), "应包含 RenameMode::From");
     }
 
@@ -443,17 +509,17 @@ mod tests {
     #[test]
     fn classify_modify_other() {
         // ModifyKind::Other 变体 hit 通配 _ 分支
-        let p = classify_by_kind(
-            &EventKind::Modify(ModifyKind::Other),
-            paths(),
-        );
+        let p = classify_by_kind(&EventKind::Modify(ModifyKind::Other), paths());
         assert_eq!(p.kind, "Modify");
         assert_eq!(p.detail, "Other");
     }
 
     #[test]
     fn classify_access() {
-        let p = classify_by_kind(&EventKind::Access(AccessKind::Close(AccessMode::Any)), paths());
+        let p = classify_by_kind(
+            &EventKind::Access(AccessKind::Close(AccessMode::Any)),
+            paths(),
+        );
         assert_eq!(p.kind, "Access");
         assert_eq!(p.detail, "Any");
     }
@@ -526,10 +592,7 @@ mod tests {
 
         watcher.stop();
         assert!(watcher.stop_tx.is_none(), "stop 后 stop_tx 应被 take");
-        assert!(
-            !watcher.is_running(),
-            "stop 后 is_running 应返回 false"
-        );
+        assert!(!watcher.is_running(), "stop 后 is_running 应返回 false");
     }
 
     #[test]
@@ -563,12 +626,18 @@ mod tests {
         };
 
         drop(watcher);
-        // 给线程一些时间退出
-        std::thread::sleep(Duration::from_millis(100));
-        assert!(
-            !*running.lock().unwrap(),
-            "Drop 后线程应已退出"
-        );
+        // Drop 内部已 join 线程；此处轮询线程退出标志（2s 超时）兜底断言，替代固定 sleep 消除慢 CI 抖动（HFN-07）
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            if !*running.lock().unwrap() {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "Drop 后线程应在 2s 内退出"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 
     /// 验证 FileWatcher 结构创建（不启动实际监听——单元测试无 AppHandle）
@@ -577,12 +646,10 @@ mod tests {
         let (stop_tx, _stop_rx) = mpsc::channel::<()>();
         let (_event_tx, event_rx) = mpsc::channel::<DebounceEventResult>();
 
-        let handle = std::thread::spawn(move || {
-            loop {
-                match event_rx.recv_timeout(Duration::from_millis(50)) {
-                    Ok(_) => {}
-                    Err(_) => break,
-                }
+        let handle = std::thread::spawn(move || loop {
+            match event_rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(_) => {}
+                Err(_) => break,
             }
         });
 
@@ -604,12 +671,10 @@ mod tests {
         // 创建旧 watcher
         let (old_stop_tx, _old_stop_rx) = mpsc::channel::<()>();
         let (_old_event_tx, old_event_rx) = mpsc::channel::<DebounceEventResult>();
-        let old_handle = std::thread::spawn(move || {
-            loop {
-                match old_event_rx.recv_timeout(Duration::from_millis(50)) {
-                    Ok(_) => {}
-                    Err(_) => break,
-                }
+        let old_handle = std::thread::spawn(move || loop {
+            match old_event_rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(_) => {}
+                Err(_) => break,
             }
         });
 
@@ -628,12 +693,10 @@ mod tests {
         // 创建新 watcher（模拟切换项目根路径）
         let (new_stop_tx, _new_stop_rx) = mpsc::channel::<()>();
         let (_new_event_tx, new_event_rx) = mpsc::channel::<DebounceEventResult>();
-        let new_handle = std::thread::spawn(move || {
-            loop {
-                match new_event_rx.recv_timeout(Duration::from_millis(50)) {
-                    Ok(_) => {}
-                    Err(_) => break,
-                }
+        let new_handle = std::thread::spawn(move || loop {
+            match new_event_rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(_) => {}
+                Err(_) => break,
             }
         });
 
@@ -651,12 +714,10 @@ mod tests {
     fn file_watcher_stop_is_idempotent() {
         let (stop_tx, _stop_rx) = mpsc::channel::<()>();
         let (_event_tx, event_rx) = mpsc::channel::<DebounceEventResult>();
-        let handle = std::thread::spawn(move || {
-            loop {
-                match event_rx.recv_timeout(Duration::from_millis(50)) {
-                    Ok(_) => {}
-                    Err(_) => break,
-                }
+        let handle = std::thread::spawn(move || loop {
+            match event_rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(_) => {}
+                Err(_) => break,
             }
         });
 
@@ -671,5 +732,404 @@ mod tests {
         // 第二次 stop 不应 panic（stop_tx 已被 take）
         watcher.stop();
         assert!(!watcher.is_running());
+    }
+
+    // ─── 事件循环测试（HFN-03：mock emitter 驱动，无需 AppHandle） ───
+
+    /// 记录全部 emit 载荷的 mock emitter
+    #[derive(Default)]
+    struct MockEmitter {
+        emitted: Mutex<Vec<FsEventPayload>>,
+    }
+
+    impl EventEmitter for MockEmitter {
+        fn emit_fs_event(&self, payload: FsEventPayload) {
+            self.emitted.lock().unwrap().push(payload);
+        }
+    }
+
+    /// Arc 包装也实现 trait，便于 Box<Arc<MockEmitter>> 传入 start_with_emitter
+    impl EventEmitter for Arc<MockEmitter> {
+        fn emit_fs_event(&self, payload: FsEventPayload) {
+            self.emitted.lock().unwrap().push(payload);
+        }
+    }
+
+    impl MockEmitter {
+        fn count(&self) -> usize {
+            self.emitted.lock().unwrap().len()
+        }
+
+        fn last(&self) -> Option<FsEventPayload> {
+            self.emitted.lock().unwrap().last().cloned()
+        }
+    }
+
+    /// 构造 DebouncedEvent（notify::Event → DebouncedEvent::new）
+    fn make_debounced(
+        kind: EventKind,
+        paths: Vec<PathBuf>,
+    ) -> notify_debouncer_full::DebouncedEvent {
+        notify_debouncer_full::DebouncedEvent::new(
+            notify::Event {
+                kind,
+                paths,
+                attrs: notify::event::EventAttributes::new(),
+            },
+            std::time::Instant::now(),
+        )
+    }
+
+    /// 构造 need_rescan 事件（Flag::Rescan）
+    fn make_rescan_debounced() -> notify_debouncer_full::DebouncedEvent {
+        let mut attrs = notify::event::EventAttributes::new();
+        attrs.set_flag(notify::event::Flag::Rescan);
+        notify_debouncer_full::DebouncedEvent::new(
+            notify::Event {
+                kind: EventKind::Other,
+                paths: vec![],
+                attrs,
+            },
+            std::time::Instant::now(),
+        )
+    }
+
+    /// 事件循环测试句柄：真实线程跑 event_loop，测试经 channel 驱动
+    struct LoopHarness {
+        event_tx: mpsc::Sender<DebounceEventResult>,
+        stop_tx: mpsc::Sender<()>,
+        paused: Arc<AtomicBool>,
+        wps: Arc<Mutex<Vec<PathBuf>>>,
+        handle: std::thread::JoinHandle<()>,
+    }
+
+    impl LoopHarness {
+        fn start(emitter: Arc<MockEmitter>) -> Self {
+            let (event_tx, event_rx) = mpsc::channel::<DebounceEventResult>();
+            let (stop_tx, stop_rx) = mpsc::channel::<()>();
+            let paused = Arc::new(AtomicBool::new(false));
+            let wps = Arc::new(Mutex::new(Vec::<PathBuf>::new()));
+            let handle = std::thread::spawn({
+                let paused_clone = paused.clone();
+                let wps_clone = wps.clone();
+                move || {
+                    event_loop(
+                        &event_rx,
+                        &stop_rx,
+                        &paused_clone,
+                        &wps_clone,
+                        emitter.as_ref(),
+                    );
+                }
+            });
+            Self {
+                event_tx,
+                stop_tx,
+                paused,
+                wps,
+                handle,
+            }
+        }
+
+        /// 关闭发送端并等待循环退出（循环因 Disconnected 分支退出）
+        fn shutdown(self) {
+            drop(self.event_tx);
+            self.handle.join().unwrap();
+        }
+    }
+
+    /// 轮询等待条件成立（2s 超时），消除固定 sleep 抖动
+    fn wait_until(cond: impl Fn() -> bool, msg: &str) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while std::time::Instant::now() < deadline {
+            if cond() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(cond(), "{msg}");
+    }
+
+    #[test]
+    fn event_loop_emits_classified_payload() {
+        let emitter = Arc::new(MockEmitter::default());
+        let harness = LoopHarness::start(emitter.clone());
+
+        harness
+            .event_tx
+            .send(Ok(vec![make_debounced(
+                EventKind::Create(CreateKind::File),
+                vec![PathBuf::from("/tmp/a.txt")],
+            )]))
+            .unwrap();
+
+        wait_until(|| emitter.count() == 1, "事件循环应 emit 分类后的载荷");
+        let p = emitter.last().unwrap();
+        assert_eq!(p.kind, "Create");
+        assert_eq!(p.detail, "File");
+        assert_eq!(p.paths, vec!["/tmp/a.txt".to_string()]);
+
+        harness.shutdown();
+    }
+
+    #[test]
+    fn event_loop_rescan_emits_overflow_payload_with_watch_paths() {
+        let emitter = Arc::new(MockEmitter::default());
+        let harness = LoopHarness::start(emitter.clone());
+        harness
+            .wps
+            .lock()
+            .unwrap()
+            .push(PathBuf::from("/project/root"));
+
+        harness
+            .event_tx
+            .send(Ok(vec![make_rescan_debounced()]))
+            .unwrap();
+
+        wait_until(
+            || emitter.count() == 1,
+            "need_rescan 事件应触发 Rescan 载荷",
+        );
+        let p = emitter.last().unwrap();
+        assert_eq!(p.kind, "Rescan");
+        assert_eq!(p.detail, "Overflow");
+        assert_eq!(
+            p.paths,
+            vec!["/project/root".to_string()],
+            "Rescan 载荷应携带监听根路径"
+        );
+
+        harness.shutdown();
+    }
+
+    #[test]
+    fn event_loop_paused_skips_emit_resume_recovers() {
+        let emitter = Arc::new(MockEmitter::default());
+        let harness = LoopHarness::start(emitter.clone());
+
+        // 暂停期间：事件被丢弃，零 emit（负向断言窗口 300ms）
+        harness.paused.store(true, Ordering::SeqCst);
+        harness
+            .event_tx
+            .send(Ok(vec![make_debounced(
+                EventKind::Create(CreateKind::File),
+                vec![PathBuf::from("/tmp/a.txt")],
+            )]))
+            .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_millis(300);
+        while std::time::Instant::now() < deadline {
+            assert_eq!(emitter.count(), 0, "暂停期间不应上报事件");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        // 恢复后：后续事件正常上报
+        harness.paused.store(false, Ordering::SeqCst);
+        harness
+            .event_tx
+            .send(Ok(vec![make_debounced(
+                EventKind::Create(CreateKind::File),
+                vec![PathBuf::from("/tmp/b.txt")],
+            )]))
+            .unwrap();
+        wait_until(|| emitter.count() == 1, "恢复后应上报事件");
+        assert_eq!(
+            emitter.last().unwrap().paths,
+            vec!["/tmp/b.txt".to_string()]
+        );
+
+        harness.shutdown();
+    }
+
+    #[test]
+    fn event_loop_errors_logged_loop_continues() {
+        let emitter = Arc::new(MockEmitter::default());
+        let harness = LoopHarness::start(emitter.clone());
+
+        // 错误只记日志不中断循环：后续正常事件仍 emit
+        harness
+            .event_tx
+            .send(Err(vec![notify::Error::generic("test error")]))
+            .unwrap();
+        harness
+            .event_tx
+            .send(Ok(vec![make_debounced(
+                EventKind::Modify(ModifyKind::Data(DataChange::Any)),
+                vec![PathBuf::from("/tmp/c.txt")],
+            )]))
+            .unwrap();
+        wait_until(|| emitter.count() == 1, "错误事件后循环应继续处理正常事件");
+
+        harness.shutdown();
+    }
+
+    #[test]
+    fn event_loop_stop_signal_exits() {
+        let emitter = Arc::new(MockEmitter::default());
+        let harness = LoopHarness::start(emitter.clone());
+
+        harness.stop_tx.send(()).unwrap();
+        wait_until(
+            || harness.handle.is_finished(),
+            "收到停止信号后循环线程应退出",
+        );
+        harness.shutdown();
+    }
+
+    #[test]
+    fn event_loop_sender_disconnected_exits() {
+        let emitter = Arc::new(MockEmitter::default());
+        let harness = LoopHarness::start(emitter.clone());
+        // 仅关闭发送端（不发送停止信号）：循环应因 Disconnected 分支退出
+        harness.shutdown();
+    }
+
+    /// 真实 debouncer + 真实目录（仅 mock emitter）：覆盖 debouncer 创建、watch 注册、事件循环全链路
+    #[test]
+    fn start_with_emitter_real_dir_emits_on_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let emitter = Arc::new(MockEmitter::default());
+
+        let mut watcher = FileWatcher::start_with_emitter(
+            Box::new(emitter.clone()),
+            vec![dir.path().to_path_buf()],
+            50,
+        )
+        .expect("start_with_emitter 应成功（真实 debouncer + 空目录）");
+
+        // 写文件触发 notify → 去抖 50ms → 事件循环 emit
+        std::fs::write(dir.path().join("a.txt"), "hello").unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while emitter.count() == 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "真实目录变更应在 5s 内触发 fs-event"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(watcher.is_running(), "watcher 应保持运行");
+
+        watcher.stop();
+        assert!(!watcher.is_running(), "stop 后 watcher 线程应退出");
+    }
+
+    // ─── notify_watch 路径校验与池交互（HFN-03 补测） ───
+
+    /// 创建测试用 FileWatcher（线程真实监听 stop_rx，退出时置 exit 标志）
+    fn make_test_watcher_with_exit(name: &str, exit: Option<Arc<AtomicBool>>) -> FileWatcher {
+        let (stop_tx, stop_rx) = mpsc::channel::<()>();
+        let handle = std::thread::Builder::new()
+            .name(format!("test-watcher-{name}"))
+            .spawn(move || {
+                loop {
+                    match stop_rx.recv_timeout(Duration::from_millis(50)) {
+                        Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                        Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    }
+                }
+                if let Some(flag) = exit {
+                    flag.store(true, Ordering::SeqCst);
+                }
+            })
+            .unwrap();
+        FileWatcher {
+            stop_tx: Some(stop_tx),
+            thread_handle: Some(handle),
+            watch_paths: Arc::new(Mutex::new(vec![])),
+            paused: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    #[test]
+    fn validate_watch_path_nonexistent_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("not-exist");
+        let err = validate_watch_path(&missing, &Some(dir.path().to_path_buf())).unwrap_err();
+        assert!(
+            format!("{err}").contains("路径不存在"),
+            "不存在路径应报错，实际: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_watch_path_outside_root_rejected() {
+        let root_dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let err =
+            validate_watch_path(outside.path(), &Some(root_dir.path().to_path_buf())).unwrap_err();
+        assert!(
+            format!("{err}").contains("超出项目范围"),
+            "根外路径应被沙箱拒绝，实际: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_watch_path_inside_root_ok() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        validate_watch_path(&sub, &Some(dir.path().to_path_buf())).unwrap();
+    }
+
+    #[test]
+    fn notify_watch_phase1_hit_resumes_target_pauses_others() {
+        let mut pool = pool::LruWatcherPool::new(5);
+        let a = PathBuf::from("/test/a");
+        let b = PathBuf::from("/test/b");
+        pool.insert(a.clone(), make_test_watcher_with_exit("a", None));
+        pool.insert(b.clone(), make_test_watcher_with_exit("b", None));
+        pool.pause_all_except(&b);
+        assert!(pool.get(&a).unwrap().is_paused(), "前置：a 应已暂停");
+
+        assert!(notify_watch_phase1(&mut pool, &a), "命中缓存应返回 true");
+        assert!(!pool.get(&a).unwrap().is_paused(), "命中目标应被 resume");
+        assert!(pool.get(&b).unwrap().is_paused(), "其他 watcher 应被 pause");
+    }
+
+    #[test]
+    fn notify_watch_phase1_miss_returns_false() {
+        let mut pool = pool::LruWatcherPool::new(5);
+        pool.insert(
+            PathBuf::from("/test/a"),
+            make_test_watcher_with_exit("a", None),
+        );
+        assert!(
+            !notify_watch_phase1(&mut pool, &PathBuf::from("/test/other")),
+            "未命中应返回 false"
+        );
+    }
+
+    #[test]
+    fn notify_watch_phase3_inserts_watcher() {
+        let mut pool = pool::LruWatcherPool::new(5);
+        let path = PathBuf::from("/test/a");
+        notify_watch_phase3(&mut pool, &path, make_test_watcher_with_exit("a", None)).unwrap();
+        assert!(pool.contains(&path), "新 watcher 应插入池");
+        assert_eq!(pool.len(), 1);
+    }
+
+    #[test]
+    fn notify_watch_phase3_race_drops_incoming_watcher() {
+        let mut pool = pool::LruWatcherPool::new(5);
+        let path = PathBuf::from("/test/a");
+        pool.insert(path.clone(), make_test_watcher_with_exit("existing", None));
+
+        // 竞态：池中已存在同路径 watcher，传入 watcher 应被丢弃（drop 自动 stop）
+        let incoming_exited = Arc::new(AtomicBool::new(false));
+        notify_watch_phase3(
+            &mut pool,
+            &path,
+            make_test_watcher_with_exit("incoming", Some(incoming_exited.clone())),
+        )
+        .unwrap();
+        assert_eq!(pool.len(), 1, "竞态时不应新增条目");
+        assert!(
+            pool.get(&path).unwrap().is_running(),
+            "池中原 watcher 保持运行"
+        );
+        assert!(
+            incoming_exited.load(Ordering::SeqCst),
+            "竞态丢弃的 watcher 线程应已退出"
+        );
     }
 }

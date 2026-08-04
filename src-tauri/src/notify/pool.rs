@@ -132,7 +132,7 @@ impl Drop for LruWatcherPool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{mpsc, Arc, Mutex};
     use std::time::Duration;
 
@@ -141,6 +141,12 @@ mod tests {
     /// 线程在 stop_rx 收到信号或通道断开时立即退出，不再空转。
     /// 通过 FileWatcher::stop() → stop_tx.send(()) → 线程退出 → is_running() 变为 false。
     fn make_test_watcher(name: &str) -> FileWatcher {
+        make_test_watcher_with_exit(name, None)
+    }
+
+    /// 带线程退出标志的测试 watcher：线程退出时置位 `exit` 标志，
+    /// 供 p9/p10 断言「watcher 已被 stop / 已被 drop」的真实线程退出。
+    fn make_test_watcher_with_exit(name: &str, exit: Option<Arc<AtomicBool>>) -> FileWatcher {
         let (stop_tx, stop_rx) = mpsc::channel::<()>();
 
         let paused = Arc::new(AtomicBool::new(false));
@@ -156,6 +162,9 @@ mod tests {
                             // 空转，等待停止信号
                         }
                     }
+                }
+                if let Some(flag) = exit {
+                    flag.store(true, Ordering::SeqCst);
                 }
             })
             .unwrap();
@@ -201,7 +210,10 @@ mod tests {
 
         // 插入 c、d、e、f → 容量为 5 → 应淘汰 b（最久未使用）
         for name in &["c", "d", "e", "f"] {
-            pool.insert(PathBuf::from(format!("/test/{name}")), make_test_watcher(name));
+            pool.insert(
+                PathBuf::from(format!("/test/{name}")),
+                make_test_watcher(name),
+            );
         }
 
         assert_eq!(pool.len(), 5);
@@ -224,7 +236,10 @@ mod tests {
     fn p4_insert_at_capacity_evicts_lru() {
         let mut pool = LruWatcherPool::new(5);
         for name in &["a", "b", "c", "d", "e"] {
-            pool.insert(PathBuf::from(format!("/test/{name}")), make_test_watcher(name));
+            pool.insert(
+                PathBuf::from(format!("/test/{name}")),
+                make_test_watcher(name),
+            );
         }
         assert_eq!(pool.len(), 5);
 
@@ -281,7 +296,10 @@ mod tests {
         assert_eq!(pool.len(), 1);
 
         let watcher = pool.remove(&path).unwrap();
-        assert!(!watcher.is_running(), "remove 后 watcher 应已停止（内部调 stop）");
+        assert!(
+            !watcher.is_running(),
+            "remove 后 watcher 应已停止（内部调 stop）"
+        );
         assert_eq!(pool.len(), 0);
         assert!(!pool.contains(&path));
     }
@@ -290,7 +308,10 @@ mod tests {
     fn p8_stop_all_clears_pool() {
         let mut pool = LruWatcherPool::new(5);
         for name in &["a", "b", "c"] {
-            pool.insert(PathBuf::from(format!("/test/{name}")), make_test_watcher(name));
+            pool.insert(
+                PathBuf::from(format!("/test/{name}")),
+                make_test_watcher(name),
+            );
         }
         assert_eq!(pool.len(), 3);
 
@@ -301,9 +322,26 @@ mod tests {
 
     #[test]
     fn p9_drop_stops_all_watchers() {
-        let pool = LruWatcherPool::new(5);
-        // 不做额外断言：Drop 后不 panic 即验证通过
+        let mut pool = LruWatcherPool::new(5);
+        let mut exit_flags = Vec::new();
+        for i in 0..3 {
+            let flag = Arc::new(AtomicBool::new(false));
+            pool.insert(
+                PathBuf::from(format!("/test/w{i}")),
+                make_test_watcher_with_exit(&format!("w{i}"), Some(flag.clone())),
+            );
+            exit_flags.push(flag);
+        }
+        assert_eq!(pool.len(), 3);
+
         drop(pool);
+        // Drop → stop_all → 各 watcher 线程应已退出（HFN-09①：补真实线程退出断言）
+        for (i, flag) in exit_flags.iter().enumerate() {
+            assert!(
+                flag.load(Ordering::SeqCst),
+                "watcher w{i} 线程应在池 Drop 后退出"
+            );
+        }
     }
 
     #[test]
@@ -311,19 +349,24 @@ mod tests {
         let mut pool = LruWatcherPool::new(5);
         let path = PathBuf::from("/test/a");
 
-        pool.insert(path.clone(), make_test_watcher("old"));
+        // 旧 watcher 带退出标志：验证 insert 内部替换分支 stop 了它（HFN-02：不再手动 remove）
+        let old_exited = Arc::new(AtomicBool::new(false));
+        pool.insert(
+            path.clone(),
+            make_test_watcher_with_exit("old", Some(old_exited.clone())),
+        );
         assert_eq!(pool.len(), 1);
         assert!(pool.get(&path).unwrap().is_running(), "旧 watcher 应运行中");
 
-        // 先取出旧 watcher 以验证其被停止（模拟 insert 内部替换的 remove+stop 行为）
-        let old = pool.remove(&path).unwrap();
-        assert!(!old.is_running(), "替换时旧 watcher 应被 stop");
-
-        // 插入新 watcher
+        // 同 path 直接二次 insert：真实执行 insert 内部"已存在→stop 旧 watcher"替换分支
         pool.insert(path.clone(), make_test_watcher("new"));
         assert_eq!(pool.len(), 1, "同一 path 不应增加计数");
         assert!(pool.contains(&path));
         assert!(pool.get(&path).unwrap().is_running(), "新 watcher 应运行中");
+        assert!(
+            old_exited.load(Ordering::SeqCst),
+            "旧 watcher 线程应已被 insert 替换分支 stop"
+        );
     }
 
     #[test]
@@ -355,6 +398,9 @@ mod tests {
         let mut w = make_test_watcher("stop-test");
         assert!(w.is_running(), "创建后应运行中");
         w.stop();
-        assert!(!w.is_running(), "stop 后应不再运行（thread_handle 被 take + join）");
+        assert!(
+            !w.is_running(),
+            "stop 后应不再运行（thread_handle 被 take + join）"
+        );
     }
 }
