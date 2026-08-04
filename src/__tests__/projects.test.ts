@@ -54,6 +54,8 @@ describe("projects store", () => {
 
   afterEach(() => {
     clearMocks();
+    // STS-06：清活跃 debounce timer，防止上一用例残留 timer 泄漏到下一用例
+    cancelPendingSave();
   });
 
   // ── 已有的 Project CRUD 测试 ──────────────────────────────
@@ -170,13 +172,15 @@ describe("projects store", () => {
     const project = makeProject({ pages: [page] });
     useProjects.getState().addProject(project);
 
-    const stateBefore = useProjects.getState().projects;
+    // STS-11②：structuredClone 深拷贝快照——同引用 toEqual 无法验证不可变性（原地 mutate 会同时改快照）
+    const stateBefore = structuredClone(useProjects.getState().projects);
     useProjects.getState().updatePageLayout("nonexistent-proj", page.pageId, { x: 1 });
 
     expect(useProjects.getState().projects).toEqual(stateBefore);
   });
 
   it("updatePageLayout 不存在的 pageId → 页面不变但 version 仍递增（守卫仅检查 projectId）", () => {
+    // 已知当前行为（无影响操作仍 bump version），非强契约（D3 锁定现状，勿据此阻塞未来守卫优化）
     const page = makePage("test-page");
     const project = makeProject({ pages: [page], version: 5 });
     useProjects.getState().addProject(project);
@@ -287,22 +291,37 @@ describe("projects store", () => {
   // ── 不存在 projectId 的守卫 ──────────────────────────────
 
   it("addPage 不存在的 projectId → 状态不变", () => {
-    const stateBefore = useProjects.getState().projects;
+    // STS-11②：structuredClone 深拷贝快照——同引用 toEqual 无法验证不可变性（原地 mutate 会同时改快照）
+    const stateBefore = structuredClone(useProjects.getState().projects);
     useProjects.getState().addPage("nonexistent", makePage("p"));
 
     expect(useProjects.getState().projects).toEqual(stateBefore);
   });
 
   it("removePage 不存在的 projectId → 状态不变", () => {
-    const stateBefore = useProjects.getState().projects;
+    // STS-11②：structuredClone 深拷贝快照——同引用 toEqual 无法验证不可变性（原地 mutate 会同时改快照）
+    const stateBefore = structuredClone(useProjects.getState().projects);
     useProjects.getState().removePage("nonexistent", "any-page");
 
     expect(useProjects.getState().projects).toEqual(stateBefore);
   });
 
   it("switchToPage 不存在的 projectId → 状态不变", () => {
-    const stateBefore = useProjects.getState().projects;
+    // STS-11②：structuredClone 深拷贝快照——同引用 toEqual 无法验证不可变性（原地 mutate 会同时改快照）
+    const stateBefore = structuredClone(useProjects.getState().projects);
     useProjects.getState().switchToPage("nonexistent", "any-page");
+
+    expect(useProjects.getState().projects).toEqual(stateBefore);
+  });
+
+  it("renamePage 不存在的 projectId → 状态不变", () => {
+    // STS-10：renamePage 守卫缺失补测——不存在的 projectId 时 projects/version 均不变
+    const page = makePage("保持");
+    const project = makeProject({ pages: [page] });
+    useProjects.getState().addProject(project);
+
+    const stateBefore = structuredClone(useProjects.getState().projects);
+    useProjects.getState().renamePage("nonexistent-proj", page.pageId, "新");
 
     expect(useProjects.getState().projects).toEqual(stateBefore);
   });
@@ -336,9 +355,27 @@ describe("projects store", () => {
 
   // ── markPersistenceReady + subscribe ──────────────────────
 
-  it("markPersistenceReady 应允许后续 save 操作", async () => {
-    // 首次调用不抛错
-    expect(() => markPersistenceReady()).not.toThrow();
+  it("markPersistenceReady 应允许后续 save 操作", () => {
+    // STS-10②：原用例仅断言"不抛错"，名实不符——补实际 save 断言：
+    // markPersistenceReady 后变更应在 2s debounce 后触发 save_projects
+    vi.useFakeTimers();
+
+    const writeSpy = vi.fn();
+    mockIPC((cmd, args) => {
+      if (cmd === "save_projects") writeSpy(cmd, args);
+    });
+
+    // 标记持久化就绪（beforeEach 已 _resetPersistence 重置 initialized=false）
+    markPersistenceReady();
+
+    // 触发变更 → 2s debounce 后应触发保存
+    const project = makeProject();
+    useProjects.getState().addProject(project);
+    vi.advanceTimersByTime(2100);
+
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+
+    vi.useRealTimers();
   });
 
   // ── removeProject 清理 expandedNodes ──────────────────────
@@ -356,6 +393,7 @@ describe("projects store", () => {
   // ── removePage 不存在 pageId ────────────────────────────
 
   it("removePage 不存在的 pageId → version 递增但页面列表不变", () => {
+    // 已知当前行为（无影响操作仍 bump version），非强契约（D3 锁定现状，勿据此阻塞未来守卫优化）
     const page = makePage("keep");
     const project = makeProject({ pages: [page], activePageId: page.pageId, version: 3 });
     useProjects.getState().addProject(project);

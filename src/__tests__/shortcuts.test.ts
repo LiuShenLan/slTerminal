@@ -660,6 +660,18 @@ describe("ShortcutRegistry", () => {
       expect(calls).toEqual(["terminal"]);
     });
 
+    it("forceContext 平手反向注册顺序（terminal 在前、global 在后）仍优先于 global", () => {
+      // 覆盖 findWinner sort 中 aForced=1, bForced=0 方向（tie-breaker 比较的另一个分支）
+      const calls: string[] = [];
+      const unreg = registry.register([
+        cmd({ id: "t", context: "terminal", priority: 100, defaultKey: ctrlG, handler: () => { calls.push("terminal"); return true; } }),
+        cmd({ id: "g", context: "global", priority: 100, defaultKey: ctrlG, handler: () => { calls.push("global"); return true; } }),
+      ]);
+      handlers.push(unreg);
+      registry.resolve(ev(), "terminal");
+      expect(calls).toEqual(["terminal"]);
+    });
+
     it("未命中返回 false", () => {
       expect(registry.resolve(ev(), "terminal")).toBe(false);
     });

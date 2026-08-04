@@ -71,4 +71,8 @@ describe("terminalOptions 配色验证", () => {
   it("12. drawBoldTextInBrightColors 显式为 true", () => {
     expect(terminalOptions.drawBoldTextInBrightColors).toBe(true);
   });
+
+  it("13. vtExtensions.kittyKeyboard 为 true（Kitty 键盘协议 CSI u 被动启用）", () => {
+    expect(terminalOptions.vtExtensions?.kittyKeyboard).toBe(true);
+  });
 });

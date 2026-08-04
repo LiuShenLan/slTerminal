@@ -74,62 +74,19 @@ describe("COMMAND_META_BY_ID", () => {
 });
 
 describe("commandFromMeta", () => {
-  it("合并 handler 与元数据", () => {
+  it.each(EXPECTED_IDS)("合并 handler 与元数据：%s", (id) => {
     const handler = vi.fn(() => true);
-    const cmd = commandFromMeta("editor.save", handler);
-    expect(cmd.id).toBe("editor.save");
-    expect(cmd.context).toBe("editor");
-    expect(cmd.defaultKey).toEqual({
-      ctrlKey: true, shiftKey: false, altKey: false, metaKey: false, code: "KeyS",
-    });
+    const meta = COMMAND_META_BY_ID.get(id);
+    expect(meta).toBeDefined();
+    const cmd = commandFromMeta(id, handler);
+    // 统一断言 id/context/defaultKey/handler 四要素（STS-08：全 9 条参数化遍历）
+    expect(cmd.id).toBe(id);
+    expect(cmd.context).toBe(meta!.context);
+    expect(cmd.defaultKey).toEqual(meta!.defaultKey);
     expect(cmd.handler).toBe(handler);
   });
 
   it("未知 id 抛错", () => {
     expect(() => commandFromMeta("does.not.exist", () => true)).toThrow(/未知命令 id/);
-  });
-
-  it("合并 explorer.delete handler 与元数据", () => {
-    const handler = vi.fn(() => true);
-    const cmd = commandFromMeta("explorer.delete", handler);
-    expect(cmd.id).toBe("explorer.delete");
-    expect(cmd.context).toBe("explorer");
-    expect(cmd.defaultKey).toEqual({
-      ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, code: "Delete",
-    });
-    expect(cmd.handler).toBe(handler);
-  });
-
-  it("合并 explorer.open handler 与元数据", () => {
-    const handler = vi.fn(() => true);
-    const cmd = commandFromMeta("explorer.open", handler);
-    expect(cmd.id).toBe("explorer.open");
-    expect(cmd.context).toBe("explorer");
-    expect(cmd.defaultKey).toEqual({
-      ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, code: "Enter",
-    });
-    expect(cmd.handler).toBe(handler);
-  });
-
-  it("合并 explorer.rename handler 与元数据", () => {
-    const handler = vi.fn(() => true);
-    const cmd = commandFromMeta("explorer.rename", handler);
-    expect(cmd.id).toBe("explorer.rename");
-    expect(cmd.context).toBe("explorer");
-    expect(cmd.defaultKey).toEqual({
-      ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, code: "F2",
-    });
-    expect(cmd.handler).toBe(handler);
-  });
-
-  it("合并 editor.toggleWordWrap handler 与元数据", () => {
-    const handler = vi.fn(() => true);
-    const cmd = commandFromMeta("editor.toggleWordWrap", handler);
-    expect(cmd.id).toBe("editor.toggleWordWrap");
-    expect(cmd.context).toBe("editor");
-    expect(cmd.defaultKey).toEqual({
-      ctrlKey: false, shiftKey: false, altKey: true, metaKey: false, code: "KeyZ",
-    });
-    expect(cmd.handler).toBe(handler);
   });
 });

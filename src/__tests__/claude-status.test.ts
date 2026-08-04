@@ -8,6 +8,7 @@ import { describe, it, expect } from "vitest";
 import {
   eventToStatus,
   STATUS_EMOJI,
+  getStatusIcon,
   type ClaudeStatus,
 } from "../lib/claudeStatus";
 
@@ -240,6 +241,20 @@ describe("STATUS_EMOJI", () => {
     for (const [event, notifType] of nullCases) {
       expect(eventToStatus(event, notifType)).toBeNull();
     }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// getStatusIcon — 状态 → emoji 映射
+// ═══════════════════════════════════════════════════════════════════
+
+describe("getStatusIcon", () => {
+  it("null 状态返回空字符串（无图标）", () => {
+    expect(getStatusIcon(null)).toBe("");
+  });
+
+  it("working 状态返回 ⚡", () => {
+    expect(getStatusIcon("working")).toBe("⚡");
   });
 });
 

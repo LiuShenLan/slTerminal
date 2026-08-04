@@ -163,14 +163,18 @@ describe("createGlobalShortcuts", () => {
       }).not.toThrow();
     });
 
-    it("getDockviewApi 抛异常时 handler 不传播（由 ShortcutRegistry 调用链吞错）", () => {
+    it("getDockviewApi 抛异常时 handler 不吞错（异常向上传播，由 ShortcutRegistry 调用链处理）", () => {
       const cmds = createGlobalShortcuts(() => {
         throw new Error("unexpected");
       });
 
-      // handler 本身不吞错——如果 getDockviewApi 抛异常，应由 ShortcutRegistry 调用链处理。
-      // 此测试仅验证命令对象可正常创建。
+      // 工厂创建命令对象时不调用 getter，不抛异常
       expect(cmds[0]).toBeDefined();
+
+      // 真调 handler：getDockviewApi 在 handler 内被调用（非注册时缓存），
+      // 源码无 try/catch——异常向上传播给调用方（ShortcutRegistry.handleKeyDown），由调用链处理
+      const event = new KeyboardEvent("keydown", { ctrlKey: true, code: "KeyW" });
+      expect(() => cmds[0].handler(event)).toThrow("unexpected");
     });
   });
 });

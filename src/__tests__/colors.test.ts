@@ -30,17 +30,18 @@ import {
   INPUT_BORDER,
   FOCUS_BORDER,
   ACTIVE_SELECTION_BG,
+  EXPLORER_SELECTION_BG,
   SEPARATOR_BG,
   CONTEXT_MENU_BORDER,
   SHADOW_MENU,
+  HTML_PANEL_LOADING_FG,
+  HTML_PANEL_IFRAME_BG,
   ERROR_BANNER_BG,
   ERROR_BANNER_BORDER,
   ERROR_BANNER_FG,
   ROOT_CSS_VARS,
   AGENT_STATUS_USAGE_COLORS,
 } from "../theme";
-
-const HEX6_RE = /^#[0-9A-Fa-f]{6}$/;
 
 describe("theme/colors.ts 配色 token", () => {
   describe("GIT_FILE_COLORS（文件名 git 状态色）", () => {
@@ -59,9 +60,10 @@ describe("theme/colors.ts 配色 token", () => {
     ];
 
     it.each(cases)(
-      "$key 值为合法 6 位 hex ($expected)",
-      ({ expected }: { expected: string }) => {
-        expect(expected).toMatch(HEX6_RE);
+      "$key 值与预期一致 ($expected)",
+      ({ key, expected }: { key: string; expected: string }) => {
+        // 断言真实导出值（STS-01）：token 漂移/拼错即红，而非仅验证测试内字面量自身
+        expect(GIT_FILE_COLORS[key as keyof typeof GIT_FILE_COLORS]).toBe(expected);
       },
     );
   });
@@ -79,9 +81,9 @@ describe("theme/colors.ts 配色 token", () => {
     ];
 
     it.each(gutterCases)(
-      "$key 值为合法 6 位 hex ($expected)",
-      ({ expected }: { expected: string }) => {
-        expect(expected).toMatch(HEX6_RE);
+      "$key 值与预期一致 ($expected)",
+      ({ key, expected }: { key: string; expected: string }) => {
+        expect(GIT_GUTTER_COLORS[key as keyof typeof GIT_GUTTER_COLORS]).toBe(expected);
       },
     );
   });
@@ -101,9 +103,9 @@ describe("theme/colors.ts 配色 token", () => {
     ];
 
     it.each(explorerCases)(
-      "$key 值为合法 6 位 hex ($expected)",
-      ({ expected }: { expected: string }) => {
-        expect(expected).toMatch(HEX6_RE);
+      "$key 值与预期一致 ($expected)",
+      ({ key, expected }: { key: string; expected: string }) => {
+        expect(EXPLORER_COLORS[key as keyof typeof EXPLORER_COLORS]).toBe(expected);
       },
     );
   });
@@ -123,9 +125,9 @@ describe("theme/colors.ts 配色 token", () => {
     ];
 
     it.each(sidebarCases)(
-      "$key 值为合法 hex ($expected)",
-      ({ expected }: { expected: string }) => {
-        expect(expected).toMatch(/^#[0-9A-Fa-f]{3,6}$/);
+      "$key 值与预期一致 ($expected)",
+      ({ key, expected }: { key: string; expected: string }) => {
+        expect(SIDEBAR_COLORS[key as keyof typeof SIDEBAR_COLORS]).toBe(expected);
       },
     );
 
@@ -158,16 +160,20 @@ describe("theme/colors.ts 配色 token", () => {
       { name: "INPUT_BORDER", value: INPUT_BORDER, expected: "#6C6C6C" },
       { name: "FOCUS_BORDER", value: FOCUS_BORDER, expected: "#007ACC" },
       { name: "ACTIVE_SELECTION_BG", value: ACTIVE_SELECTION_BG, expected: "#094771" },
+      { name: "EXPLORER_SELECTION_BG", value: EXPLORER_SELECTION_BG, expected: "#094771" },
       { name: "SEPARATOR_BG", value: SEPARATOR_BG, expected: "#444" },
       { name: "CONTEXT_MENU_BORDER", value: CONTEXT_MENU_BORDER, expected: "#454545" },
+      // HTML 面板色
+      { name: "HTML_PANEL_LOADING_FG", value: HTML_PANEL_LOADING_FG, expected: "#6C6C6C" },
+      { name: "HTML_PANEL_IFRAME_BG", value: HTML_PANEL_IFRAME_BG, expected: "#FFFFFF" },
       // 错误提示色
       { name: "ERROR_BANNER_BG", value: ERROR_BANNER_BG, expected: "#5A1D1D" },
       { name: "ERROR_BANNER_BORDER", value: ERROR_BANNER_BORDER, expected: "#8B0000" },
       { name: "ERROR_BANNER_FG", value: ERROR_BANNER_FG, expected: "#F48771" },
     ];
 
-    it("共 22 个 UI token", () => {
-      expect(uiTokenCases).toHaveLength(22);
+    it("共 25 个 UI token", () => {
+      expect(uiTokenCases).toHaveLength(25);
     });
 
     it.each(uiTokenCases)(
@@ -213,16 +219,9 @@ describe("theme/colors.ts 配色 token", () => {
     ];
 
     it.each(usageCases)(
-      "$key 值为合法 6 位 hex ($expected)",
-      ({ expected }: { expected: string }) => {
-        expect(expected).toMatch(HEX6_RE);
-      },
-    );
-
-    it.each(usageCases)(
-      "$key 值与预期一致",
+      "$key 值与预期一致 ($expected)",
       ({ key, expected }: { key: string; expected: string }) => {
-        expect((AGENT_STATUS_USAGE_COLORS as Record<string, string>)[key]).toBe(expected);
+        expect(AGENT_STATUS_USAGE_COLORS[key as keyof typeof AGENT_STATUS_USAGE_COLORS]).toBe(expected);
       },
     );
   });

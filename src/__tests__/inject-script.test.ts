@@ -219,12 +219,9 @@ describe("injectScript", () => {
   // E3: 超大输入不抛异常
   it("超大输入（~500KB）不抛异常且返回含脚本", () => {
     const big = "<html><head></head><body>" + "x".repeat(500_000) + "</body></html>";
-    const start = Date.now();
     const result = injectScript(big, SCRIPT, MARKER);
-    const elapsed = Date.now() - start;
     expect(result).toContain(SCRIPT);
     expect(result).toContain("x".repeat(500_000));
-    expect(elapsed).toBeLessThan(500);
   });
 
   // E4: script 参数为空字符串

@@ -27,6 +27,8 @@ describe("keybindings store", () => {
   });
 
   afterEach(() => {
+    // STS-06：先取消活跃 debounce timer（fake timers 下仍有效），再切回真实 timer
+    cancelPendingSave();
     vi.useRealTimers();
   });
 
