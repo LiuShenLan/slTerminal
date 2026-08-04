@@ -109,30 +109,32 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | 模块 | 职责 | 入口 | 详情 |
 |------|------|------|------|
 | src/ipc | IPC 通信层，前端 invoke 唯一入口 | src/ipc/index.ts | @../src/ipc/CLAUDE.md |
-| src/types | DTO 类型定义，与 Rust 模块双边对应（硬约束 #4） | src/types/ | — |
+| src/types | DTO 类型定义，与 Rust 模块双边对应（硬约束 #4） | src/types/ | @../src/types/CLAUDE.md |
 | src/stores | Zustand 状态管理（projects/layout/fontSize/keybindings/sideBar） | src/stores/index.ts | @../src/stores/CLAUDE.md |
 | src/workspace | 工作区布局管理（Dockview serde + 面板注册 + titleManager + pageApis） | src/workspace/Workspace.tsx | @../src/workspace/CLAUDE.md |
 | src/panels | Dockview 面板系统（terminal + editor + html + gitshow + diff + hooksConfig） | src/panels/index.ts | @../src/panels/CLAUDE.md |
 | src/lib | 通用工具 + createActivePointer + useFontSizeWheel + ErrorBoundary + E2E_ENABLED 门控 + 路径函数 | src/lib/index.ts | @../src/lib/CLAUDE.md |
-| src/theme | 配色 token 单点（硬约束 #6） | src/theme/colors.ts | — |
+| src/theme | 配色 token 单点（硬约束 #6） | src/theme/colors.ts | @../src/theme/CLAUDE.md |
 | src/features/explorer | 文件浏览器（FileTree + 选中模型 + 键盘快捷键 + useFileTree + FileViewerRegistry 分派） | src/features/explorer/ExplorerPanel.tsx | @../src/features/explorer/CLAUDE.md |
 | src/features/fileViewers | 文件查看器注册表（策略模式，扩展名→面板类型映射） | src/features/fileViewers/index.ts | @../src/features/fileViewers/CLAUDE.md |
 | src/features/shortcuts | 快捷键模块（ShortcutRegistry 单例 + usePanelFocus + Command/Keybinding 分离 + 用户重绑定） | src/features/shortcuts/index.ts | @../src/features/shortcuts/CLAUDE.md |
 | src/features/sidebar | 侧栏项目/页面二级树（项目/页面 CRUD + 页面切换导航） | src/features/sidebar/index.ts | @../src/features/sidebar/CLAUDE.md |
 | src/features/sideViews | 侧栏视图系统——活动栏+共享侧栏区+单槽位状态机 | src/features/sideViews/index.ts | @../src/features/sideViews/CLAUDE.md |
 | src/features/commit | Commit 侧栏视图（git 变更列表 + 状态→面板分派） | src/features/commit/index.ts | @../src/features/commit/CLAUDE.md |
-| src/features/agentStatus | Agent 状态视图（claudeSession 行建模 + 上下文用量） | src/features/agentStatus/index.ts | — |
-| src/features/notifications | toast 通知（Tauri 原生 sendNotification + 任务栏闪烁） | src/features/notifications/index.ts | — |
-| src/features/hooksConfig | hooks 配置面板 schema 内嵌单点（SchemaStore 官方 schema + hooks 子 schema + Draft07 校验） | src/features/hooksConfig/schema/index.ts | — |
+| src/features/agentStatus | Agent 状态视图（claudeSession 行建模 + 上下文用量） | src/features/agentStatus/index.ts | @../src/features/agentStatus/CLAUDE.md |
+| src/features/notifications | toast 通知（Tauri 原生 sendNotification + 任务栏闪烁） | src/features/notifications/index.ts | @../src/features/notifications/CLAUDE.md |
+| src/features/hooksConfig | hooks 配置面板 schema 内嵌单点（SchemaStore 官方 schema + hooks 子 schema + Draft07 校验） | src/features/hooksConfig/schema/index.ts | @../src/features/hooksConfig/CLAUDE.md |
 | src/features/claudeHistory | 历史会话查询与恢复 UI（三下拉框历史区 + 双行式行 + 四态同源 + 四步恢复编排 + 操作矩阵） | src/features/claudeHistory/index.ts | @../src/features/claudeHistory/CLAUDE.md |
 | src/__tests__ | L2 前端测试集中目录 + 共享测试工厂 | — | @../src/__tests__/CLAUDE.md |
+| src/panelRegistry.ts | 面板注册表共享配置层（workspace/explorer/测试多方引用，硬约束 #5） | src/panelRegistry.ts | — |
+| test/ | L3 终端 headless 测试（@xterm/headless + @xterm/addon-serialize） | vitest.l3.config.ts | — |
 | src-tauri/src/pty | PTY 管理，Windows ConPTY 核心 | src-tauri/src/pty/mod.rs | @../src-tauri/src/pty/CLAUDE.md |
 | src-tauri/src/fs | 文件系统命令（读/写/列目录/建/删/改名） | src-tauri/src/fs/mod.rs | @../src-tauri/src/fs/CLAUDE.md |
 | src-tauri/src/git | Git 状态/diff/HEAD 读取/回滚/取消暂存（git2） | src-tauri/src/git/mod.rs | @../src-tauri/src/git/CLAUDE.md |
 | src-tauri/src/notify | 文件系统监听（LruWatcherPool 缓存 + pause/resume 切换） | src-tauri/src/notify/mod.rs | @../src-tauri/src/notify/CLAUDE.md |
 | src-tauri/src/hooks | Claude Code hooks 注入/卸载/状态 + hook-event 广播 + 上下文用量 + hooks 配置三层读写（hooks_config_read/write） | src-tauri/src/hooks/mod.rs | @../src-tauri/src/hooks/CLAUDE.md |
 | src-tauri/src/claude_history | Claude 历史会话查询（scan/delete 两命令 + 头部 512KB/尾部 64KB 轻量解析 + SEC-05 sessionId 校验） | src-tauri/src/claude_history/mod.rs | @../src-tauri/src/claude_history/CLAUDE.md |
-| src-tauri settings/projects | 顶层单文件模块：settings.rs（设置持久化浅合并）、projects.rs（项目数据，exe 同级 JSON 绕过沙箱） | src-tauri/src/settings.rs | — |
+| src-tauri/src 顶层 | 单文件模块：lib.rs（命令注册/State/setup）、settings.rs（浅合并）、projects.rs（exe 同级 JSON 绕过沙箱）、state.rs（AppState/PtySession/路径沙箱）、error.rs（AppError） | src-tauri/src/lib.rs | @../src-tauri/src/CLAUDE.md |
 | e2e-tests | WDIO E2E 端到端测试 | e2e-tests/wdio.conf.ts | @../e2e-tests/CLAUDE.md |
 
 ## 需求编号索引

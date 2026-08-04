@@ -39,3 +39,11 @@ extensionStrategy.register("md", "markdownviewer");
 - **隐藏文件排除**：`.` 开头的文件名（如 `.gitignore`）不参与扩展名匹配
 - **路径分隔符处理**：支持 `/` 和 `\`，取最后一个分隔符之后的文件名部分
 - **_reset() 测试隔离**：`ExtensionBasedViewerStrategy._reset()` 和 `FileViewerRegistry._reset()` 仅测试用，清空内部状态
+
+## 测试模式
+
+测试位于 `src/__tests__/file-viewer-registry.test.ts`（31 用例）+ `explorer-file-viewer.test.tsx`（21 用例，用例数见 `.claude/test-inventory.md`）：
+
+- `_reset()` 隔离：重置后重新注册再断言
+- 注册/解析全分支：扩展名注册、链式短路（首个非 null 结果返回）、隐藏文件排除（`.gitignore`）、大小写不敏感、无扩展名边界（`file.`）、`_reset` 后预注册恢复（EXP-12）
+- explorer 分派集成：`handleOpenFile` 命中策略面板 / 回退 `"editor"`

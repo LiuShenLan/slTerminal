@@ -6,6 +6,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 文件系统操作模块——封装 `fs_read_dir`、`fs_read_file`、`fs_write_file`、`fs_create_dir`、`fs_delete`、`fs_rename` Tauri 命令，适配 Windows 行尾和路径沙箱。路径沙箱核心函数 `validate_path_within_root` 已迁移至 `state.rs`，本模块通过 `use crate::state::validate_path_within_root` 导入。
 
+## 文件
+
+| 文件 | 职责 |
+|------|------|
+| `mod.rs` | 6 条 Tauri 命令（`fs_read_dir`/`fs_read_file`/`fs_write_file`/`fs_create_dir`/`fs_delete`/`fs_rename`）+ 命令内核 `fs_*_impl` + CRLF 行尾适配（读保留原格式、新文件平台默认行尾） |
+
 ## 路径沙箱对前端加载时序的要求
 
 `validate_path_within_root`（`state.rs`）对 `project_root=None` 一律拒绝访问（非 `cfg!(test)` 路径）。覆盖全部 10 个命令：`fs_read_file`/`fs_write`/`fs_read_dir`/`fs_create_dir`/`fs_delete`/`fs_rename`（本模块）、`notify_watch`（`notify/mod.rs`）、`git_status`/`git_diff`（`git/mod.rs`）、`pty_spawn` 的 cwd（`pty/spawn.rs`）。

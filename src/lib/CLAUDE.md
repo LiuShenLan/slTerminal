@@ -47,6 +47,13 @@ export const E2E_ENABLED =
 
 所有函数不访问文件系统，不抛异常，空输入安全。
 
+## 关键约束
+
+- **E2E_ENABLED 必须内联**：`import.meta.env` 字面量表达式（编译期折叠），禁止常量调用 `computeE2eEnabled`——函数调用阻碍 Rollup DCE，生产会误带 helper（守卫：`e2e-build-config.test.ts`）
+- **四态映射单点**：`claudeStatus.ts` 是 F3 四态唯一映射（`eventToStatus`），组件不得另建映射
+- **panelId 解析单点**：`parseTerminalPageId` 是终端 panelId 唯一解析入口
+- **路径函数纯性**：`path.ts` 四函数不访问文件系统、不抛异常、空输入安全（消费方依赖此契约）
+
 ## 测试模式
 
 测试文件：`src/__tests__/path.test.ts`（27 用例）、`panelId.test.ts`（5 用例）、`inject-script.test.ts`（21 用例）、`claude-status.test.ts`（32 用例）、`e2e-enabled.test.ts`（9 用例，含 it.each 展开口径，见 `.claude/test-inventory.md`）、`e2e-build-config.test.ts`（8 用例，IHE-04）、`error-boundary.test.tsx`（5 用例，含 IHE-05 `variant="inline"` 分支）。

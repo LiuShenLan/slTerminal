@@ -6,6 +6,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Git 版本控制模块——基于 `git2` crate，封装 `git_status`（文件状态着色）、`git_diff`（行级差异）和 `git_file_at_head`（HEAD 文件内容），通过 Tauri 命令向前端暴露 CamelCase DTO。
 
+## 文件
+
+| 文件 | 职责 |
+|------|------|
+| `mod.rs` | 5 条 Tauri 命令内核（`git_status_impl`/`git_diff_impl`/`git_file_at_head_impl`/`git_rollback_impl`/`git_unstage_impl`）+ `status_to_str` 状态映射 + `get_or_open_repo` 仓库缓存 |
+| `tests/git_status_tests.rs` | git_status 集成测试（41 用例，见测试模式） |
+| `tests/git_diff_tests.rs` | git_diff hunk 测试（32 用例） |
+| `tests/git_file_at_head_tests.rs` | HEAD 内容 + 错误契约（8 用例） |
+| `tests/git_rollback_tests.rs` | 回滚 + autocrlf 三方一致（10 用例） |
+| `tests/git_unstage_tests.rs` | 取消暂存（6 用例） |
+| `tests/ci_config_tests.rs` | CI L1 单线程锁死（1 用例） |
+| `tests/common/mod.rs` | 共享测试工厂（init_temp_repo/commit_file/git_add/make_app_state/block_on） |
+
 ## 命令
 
 ### git_status
