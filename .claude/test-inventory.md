@@ -2,10 +2,10 @@
 
 > **本文档是项目用例数唯一真值源。** 所有 CLAUDE.md、README、CI 配置中引用的用例数均以此文件为准。更新测试后必须同步本文档。
 
-全量 **3004** 用例（Rust 571 + 前端 2258 + L3 138 + E2E 37），2026-08-05 更新。
+全量 **3024** 用例（Rust 571 + 前端 2278 + L3 138 + E2E 37），2026-08-08 更新。
 
 > **计数口径**：
-> - L2 以 `npm test` 实跑（Vitest 报告）为准——`it.each(...)` 参数化与 `describeIpcContract` 工厂（`helpers/ipc-contract.ts`，IHE-06）等按**展开后用例数**计入（133 文件 2258 用例全绿实测）；纯 grep `it(/test(` 块数会少计 it.each 展开（如 colors 89 = 13 块 + 7 组 each 展开 76）。
+> - L2 以 `npm test` 实跑（Vitest 报告）为准——`it.each(...)` 参数化与 `describeIpcContract` 工厂（`helpers/ipc-contract.ts`，IHE-06）等按**展开后用例数**计入（135 文件 2278 用例全绿实测）；纯 grep `it(/test(` 块数会少计 it.each 展开（如 colors 85 = 13 块 + 7 组 each 展开 72）。
 > - L1 以 `grep -c '#\[test\]'` 统计的 `#[test]` 属性数为准（28 文件 571）。
 > - L3 以 `npm run test:l3` 实跑为准（7 文件 138，`test/terminal/**/*.test.ts`）。
 > - L4 以 spec 内 `it(`/`it.skip(` 计数为准（8 spec，35 active + 2 skip）。
@@ -76,9 +76,9 @@
 
 > `pty/mod.rs`、`pty/win_build.rs`、`main.rs` 不含 `#[test]`，不在此列。git/mod.rs 测试已按 GIT-12 全量拆出至 `tests/`（`#[test]` 零残留）。claude_history 模块 grep 口径：jsonl 28 + scan 19 + ops 9 + mod 7 = 63；env 测试依赖 L1 `--test-threads=1` 门禁（`std::env::set_var` 全局可变）。
 
-## L2 — 前端单元/集成测试（133 文件 / 2258 用例）
+## L2 — 前端单元/集成测试（135 文件 / 2278 用例）
 
-运行：`npm test`（Vitest + jsdom，实跑全绿 2258）
+运行：`npm test`（Vitest + jsdom，实跑全绿 2278）
 
 ### IPC 层（6 文件 / 116 用例）
 
@@ -243,11 +243,13 @@
 | `src/__tests__/use-panel-focus.test.ts` | 5 | focusin→pushContext+onActivate/focusout→popContext+onDeactivate/卸载清理 |
 | `src/__tests__/wire-keybindings.test.ts` | 3 | 立即应用/store 变更重应用/unsubscribe |
 
-### 主题/配色/基础（6 文件 / 187 用例）
+### 主题/配色/基础（8 文件 / 207 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
-| `src/__tests__/colors.test.ts` | 89 | **配色 token 真实导出值断言（STS-01：GIT_FILE/GIT_GUTTER/EXPLORER/SIDEBAR/AGENT_STATUS_USAGE 五组 + uiTokenCases 补 EXPLORER_SELECTION_BG 等，STS-09）**——it.each 表驱动展开 |
+| `src/__tests__/colors.test.ts` | 85 | **配色 token 真实导出值断言（STS-01：GIT_FILE/GIT_GUTTER/EXPLORER/SIDEBAR/AGENT_STATUS_USAGE 五组 + uiTokenCases 补 EXPLORER_SELECTION_BG 等，STS-09）**——it.each 表驱动展开；facade 化后 89→85（死配置清理移除 4 条断言） |
+| `src/__tests__/scheme-registry.test.ts` | 18 | 方案注册表单测（TST-02）：register/get/getAll/getDefaultId、setActive 已知/未知 id 回退 darcula + console.warn、getActive 默认 darcula、重复注册覆盖、`_reset` 隔离、darcula 四段完整性（ui 6 组键数 7/3/5/8/3/3 + 23 标量、terminal 25 键、editor oneDark 透出非 undefined、libraries dockview 20 条 + allotment 2 键） |
+| `src/__tests__/overrides.test.ts` | 6 | 主题 overrides 导出单测（TST-03）：dockviewVarStyle 键集合 20 条且值为 active 方案色、allotmentVarStyle 2 键、editorTheme === active 方案 editor 段、editorColorOverrides 返回 CM6 扩展（lint/searchMatch/background 键生效）、setActive 后输出跟随切换 |
 | `src/__tests__/claude-status.test.ts` | 32 | eventToStatus 纯函数全分支（10 事件 × notificationType）+ getStatusIcon（**null 分支，STS-04**） |
 | `src/__tests__/path.test.ts` | 27 | normalizePath/basename/isChildOf/relativePath 边界覆盖 |
 | `src/__tests__/inject-script.test.ts` | 21 | HTML 脚本注入/`</script>` 转义/幂等/大小写不敏感/键盘转发+片段链接拦截（STS-11① 性能断言已删） |
@@ -355,6 +357,7 @@ embedded WDIO 驱动**无法将 OS 级按键（`browser.keys`）投递进 WebVie
 
 ## 历史变更
 
+- 2026-08-08（color-plan Stage 05 TST-04/05 测试补全与同步）：新增「主题/配色/基础」类目 2 文件——scheme-registry 18（TST-02 方案注册表单测：register/get/getAll/getDefaultId、setActive 已知/未知 id 回退 darcula + console.warn、getActive 默认、重复注册覆盖、`_reset` 隔离、darcula 四段完整性）、overrides 6（TST-03 dockviewVarStyle 20 键 + allotmentVarStyle 2 键 + editorTheme/editorColorOverrides + setActive 跟随）。colors 89→85（facade 化死配置清理移除 4 条 it.each 展开断言——13 块 + 7 组 each 展开 72，实跑口径）。L2 133→135 文件 2258→2278 用例（-4 +18 +6）。全量 3004→3024。TST-04 四文件（theme 13/main-bootstrap 1/gitshow-panel 21+hooks-config-jsonmode oneDark mock/L3 theme-options 5）git diff 零改动 + 逐文件跑绿验证通过。
 - 2026-08-05（text-fix-plan Stage 17 DOC-01/02/03 全量校正）：①L1 按 GIT-12 拆分后重列（git/mod.rs `#[test]` 零残留 → tests/ 5 文件 97 + ci_config 1；各模块按 grep `#[test]` 实际计数更新：reader 36/spawn 48（conpty_custom 28 + 顶层 20）/shell 20/state 32/fs 31/notify 38/hooks 各文件/inject 34 等）——L1 449→571（23→28 文件）；②L2 改为 **npm test 实跑口径**（it.each/describeIpcContract 工厂展开计入），133 文件 2258 用例全绿实测（原 grep 块数口径 2060 少计 it.each 展开）；类目文件全面更新（新增 terminal-instance/webgl-setup/notification/ipc-window-contract/hooks-config-schema/commit 拆分 5 文件/main-bootstrap；删除 hooks-config-entry 已随菜单迁移删除）；③L3 116→138（新增 theme-options 5/production-osc 8/negative-ansi 9）；④L4 34→37（E2E-04 全屏 TUI 视觉回归 + E2E-06 真实 reporter 链路 + E2E-12 强杀 Job Object 各 +1 active，35 active + 2 skip）；⑤stale 清理（inject.rs 覆盖范围描述中随功能移除的陈旧条目删除；旧"L3 同时被 npm test 包含执行"口径注释修正为 L2/L3 独立运行）；⑥登记 DOC-01 既定豁免清单（8 项）+ DOC-02 定位声明（6 项）。全量 2658→3004。
 - 2026-08-05（text-fix-plan Stage 11 HKC-10 展示分支补断言）：hooks-config-panel 20→21（+1 注入状态条查询完成前初始 "--" 帧断言——getInjectionStatus 挂起 Promise → data-e2e hooks-injection-status 文本「注入状态：--」+ 三态文案不出现）。L2 2059→2060，全量 2658→2659。
 - 2026-08-05（text-fix-plan Stage 09 EXP-01~11 explorer 测试补全）：资源管理器 16→20 文件 213→252 用例（+39）。新增 4 文件——explorer-open-in-terminal 7（EXP-01 在终端中打开 addPanel 参数/无去重）、explorer-crud-success 4（EXP-02 删除/重命名/新建文件/新建文件夹成功路径——IPC+refresh+状态重置）、explorer-input-boundary 10（EXP-06 重命名/文件夹级新建输入框 Escape/空名/重名/失焦边界）、explorer-race-cleanup 6（EXP-07 旧请求延迟 resolve 丢弃/rootPath null 回调/fs-event 去抖卸载清理/file-saved 缺 path/卸载清理/gitStatus 过期丢弃）。扩展现有 4 文件——explorer-focus 3→6（EXP-04 focusin/focusout 上下文栈 spy）、explorer-selection 14→17（EXP-04 非选中行 hover enter/leave）、explorer-delete 19→22（EXP-04 横幅 dismiss/5s 自动消失/卸载清理；E6 编号 17-22 统一 + 标题与断言对齐 EXP-11）、explorer-file-viewer 16→19（EXP-10 无 dockviewApi/addPanel 抛错无孤记录/getPanel undefined 回退新建）。EXP-03：删除 useFileTree.fullRefresh 死代码（无调用方），F8 改名「mount 单次加载」+ 断言 readDir/gitStatus 各一次。L2 2020→2059（117→121 文件）。全量 2619→2658。

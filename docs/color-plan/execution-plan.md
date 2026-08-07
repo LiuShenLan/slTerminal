@@ -52,7 +52,7 @@
 | 01 | ✅ | allFixed=true（15 项） | 0 | 1bfd1c8 | |
 | 02 | ✅ | allFixed=true（2 轮 fix-loop：App.css 注释 + theme/CLAUDE.md 残留） | 2 | e66e609 | 断言 3/10 标尺矛盾已修 verify 文件 |
 | 03 | ✅ | allFixed=true（10 项） | 0 | a9863b6 | |
-| 04 | ☐ | — | 0 | — | 人工验证点 ×2 |
+| 04 | ✅ | allFixed=true（标尺修正：断言 1/8 目标态改 2 静态 import + 门控内联） | 0 | ad8918d | 人工验证点 ×2 用户已实测签字（2026-08-08） |
 | 05 | ☐ | — | 0 | — | |
 | 06 | ☐ | — | 0 | — | |
 | 07 | ☐ | — | 0 | — | 人工验证点 ×3，无 commit |
