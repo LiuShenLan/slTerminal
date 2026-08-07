@@ -13,9 +13,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | 分组 | token 示例 | 消费方 |
 |------|-----------|--------|
 | 文件名 git 状态色 | `GIT_FILE_COLORS`（modified/added/untracked/deleted/renamed/conflict/ignored） | 文件浏览器、Commit 视图文件名着色 |
-| 行内 diff 边栏色 | `GIT_GUTTER_COLORS`（modified/added/deleted/whitespaceOnly） | 编辑器 git diff gutter |
+| 行内 diff 边栏色 | `GIT_GUTTER_COLORS`（modified/added/deleted） | 编辑器 git diff gutter |
 | 文件浏览器通用色 | `EXPLORER_COLORS`（bg/fg/hover/selected/arrowClosed/arrowOpen） | 文件树 |
-| 通用 UI 色（背景/前景/边框/交互） | `PANEL_BG`/`SIDEBAR_BG`/`SIDEBAR_FG`/`ERROR_FG`/`FOCUS_BORDER`/`INPUT_BORDER`/`DROPDOWN_BG`/`BUTTON_FG`/`DIM_FG`/`PLACEHOLDER_FG` 等 | 全应用组件 |
+| 通用 UI 色（背景/前景/边框/交互） | `PANEL_BG`/`SIDEBAR_BG`/`SIDEBAR_FG`/`ERROR_FG`/`FOCUS_BORDER`/`INPUT_BORDER`/`BUTTON_FG`/`DIM_FG`/`PLACEHOLDER_FG` 等 | 全应用组件 |
 
 ### 新增 token 规则
 

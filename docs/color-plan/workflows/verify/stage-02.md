@@ -1,6 +1,7 @@
 # Stage 02 逐项验证断言（唯一真值源）
 
 > 中间态口径：本 Stage 后 `colors.ts`/`index.ts`/`colors.test.ts` 已切 facade；**消费点未迁移**（四文件 oneDark 仍在，Stage 03 才做）；`main.tsx` 未动（Stage 04 才做）。
+> 修正记录（执行期，fix-loop 第 2 轮）：断言 3 与断言 10 自相矛盾——断言 3 全仓零命中逼修 App.css:5 过期注释（`--sl-bg-secondary` 文本），断言 10 又禁止 diff 超出三文件。执行期裁决：保留修复产物（App.css 注释、src/theme/CLAUDE.md 文档同步），断言 10 允许清单扩展为「三文件 + fix-loop 产物」。
 
 ## 断言清单
 
@@ -15,7 +16,7 @@
 | 7 | FAC-02 | `src/theme/index.ts` 含 C1 的 31 个 re-export + 追加 `schemeRegistry`、`./schemes`、`./overrides` 导出 | Read |
 | 8 | TST-01 | `src/__tests__/colors.test.ts` 六处同步完成：import 无 DROPDOWN_BG/APP_BG_SECONDARY 且有 ON_ACCENT_FG；GIT_GUTTER 3 键断言；EXPLORER 5 键断言；通用 UI 标量计数 24；ROOT_CSS_VARS describe 键集合断言恰 2 且含 `--sl-fg-primary` 值 `#cdd6f4` 断言、无 `--sl-bg-secondary` 断言 | Read 六处 |
 | 9 | 中间态 | `src/main.tsx` 零改动（BOOT 在 Stage 04）；四 oneDark 消费文件零改动（CON 在 Stage 03） | git diff --name-only HEAD 比对 |
-| 10 | 中间态 | 本 Stage diff 仅含：`src/theme/colors.ts`、`src/theme/index.ts`、`src/__tests__/colors.test.ts` | git diff |
+| 10 | 中间态 | 本 Stage diff 仅含：`src/theme/colors.ts`、`src/theme/index.ts`、`src/__tests__/colors.test.ts` + fix-loop 产物（`src/App.css` 注释同步、`src/theme/CLAUDE.md` 文档同步、`docs/color-plan/execution-plan.md` 进度登记） | git diff |
 
 ## 全量测试（全部通过为门禁）
 

@@ -1,113 +1,89 @@
-// colors.ts —— 全局配色 token 中心
+// colors.ts —— 配色 token facade（代理 active 配色方案）
 //
-// 架构约束第 6 条：组件引用 token，禁止硬编码颜色。
-// 所有配色来自 JetBrains IDEA 暗色主题 (Darcula)。
+// 本文件不定义任何颜色值——颜色定义于 schemes/<scheme>.ts 的 ColorScheme.ui 段，
+// 本文件在 import 时取 schemeRegistry.getActive() 的 ui 段并逐 token 代理导出。
+// 组件只引用本文件 token（硬约束 #6）；方案切换（D2）后本文件导出值随 active 方案变化。
+//
+// 求值时机保证（spec §4.7）：本文件首次求值发生在 setActive 之后——
+// main.tsx 启动序列先注册内置方案 + setActive，再 import 本文件；
+// 测试环境无启动序列，getActive() 默认 darcula，值正确。
 
-// --- 文件名 git 状态色 (JetBrains 暗色) ---
+import { schemeRegistry } from "./schemeRegistry";
+import "./schemes"; // side-effect：注册内置方案（darcula），保证 getActive() 恒有值（测试环境无 main.tsx）
+
+// 取当前 active 方案的 ui 段（模块加载时求值一次，方案切换后重新 import 生效）
+const { ui } = schemeRegistry.getActive();
+
+// --- 文件名 git 状态色（ui.gitFile）---
 // 用于文件浏览器文件名着色
 
-export const GIT_FILE_COLORS = {
-  modified: "#6897BB",
-  added: "#629755",
-  untracked: "#D1675A",
-  deleted: "#6C6C6C",
-  renamed: "#3A8484",
-  conflict: "#D5756C",
-  ignored: "#848504",
-} as const;
+export const GIT_FILE_COLORS = ui.gitFile;
 
-// --- 行内 diff 边栏色 (JetBrains 暗色) ---
+// --- 行内 diff 边栏色（ui.gitGutter）---
 // 用于编辑器 git diff 行标记
 
-export const GIT_GUTTER_COLORS = {
-  modified: "#374752",
-  added: "#384C38",
-  deleted: "#656E76",
-  whitespaceOnly: "#4C4638",
-} as const;
+export const GIT_GUTTER_COLORS = ui.gitGutter;
 
-// --- 文件浏览器通用色 ---
+// --- 文件浏览器通用色（ui.explorer）---
 
-export const EXPLORER_COLORS = {
-  bg: "#1E1E1E",
-  fg: "#D4D4D4",
-  hover: "#2A2D2E",
-  selected: "#37373D",
-  arrowClosed: "#6C6C6C",
-  arrowOpen: "#D4D4D4",
-} as const;
+export const EXPLORER_COLORS = ui.explorer;
 
-// --- 通用 UI 色（暗色主题全局 token）---
+// --- 通用 UI 色（ui 标量段）---
 // 架构约束第 6 条：组件引用 token，禁止硬编码颜色。
-// 新增 token 按语义域分组，覆盖所有 UI 层面颜色需求。
 
 // 背景色
-export const PANEL_BG = "#1E1E1E";
-export const SIDEBAR_BG = "#252526";
-export const SECONDARY_BG = "#2D2D2D";
-export const DROPDOWN_BG = "#2A2D2E";
-export const APP_BG = "#1e1e2e";
-export const APP_BG_PRIMARY = "#1e1e2e";
-export const APP_BG_SECONDARY = "#2b2b3c";
-export const EDITOR_BG = "#282C34";
+export const PANEL_BG = ui.panelBg;
+export const SIDEBAR_BG = ui.sidebarBg;
+export const SECONDARY_BG = ui.secondaryBg;
+export const APP_BG = ui.appBg;
+export const APP_BG_PRIMARY = ui.appBgPrimary;
+export const EDITOR_BG = ui.editorBg;
 
 // 前景/文字色
-export const SIDEBAR_FG = "#D4D4D4";
-export const ERROR_FG = "#F44747";
-export const PLACEHOLDER_FG = "#808080";
-export const BUTTON_FG = "#CCCCCC";
-export const DIM_FG = "#999999";
+export const SIDEBAR_FG = ui.sidebarFg;
+export const ERROR_FG = ui.errorFg;
+export const PLACEHOLDER_FG = ui.placeholderFg;
+export const BUTTON_FG = ui.buttonFg;
+export const DIM_FG = ui.dimFg;
 
 // 交互控件色
-export const INPUT_BG = "#3C3C3C";
-export const INPUT_BORDER = "#6C6C6C";
-export const FOCUS_BORDER = "#007ACC";
-export const ACTIVE_SELECTION_BG = "#094771";
-export const SEPARATOR_BG = "#444";
-export const CONTEXT_MENU_BORDER = "#454545";
+export const INPUT_BG = ui.inputBg;
+export const INPUT_BORDER = ui.inputBorder;
+export const FOCUS_BORDER = ui.focusBorder;
+export const ACTIVE_SELECTION_BG = ui.activeSelectionBg;
+export const SEPARATOR_BG = ui.separatorBg;
+export const CONTEXT_MENU_BORDER = ui.contextMenuBorder;
 
 // 阴影
-export const SHADOW_MENU = "rgba(0,0,0,0.5)";
+export const SHADOW_MENU = ui.shadowMenu;
 
 // HTML 面板色
-export const HTML_PANEL_LOADING_FG = "#6C6C6C";
-export const HTML_PANEL_IFRAME_BG = "#FFFFFF";
+export const HTML_PANEL_LOADING_FG = ui.htmlPanelLoadingFg;
+export const HTML_PANEL_IFRAME_BG = ui.htmlPanelIframeBg;
 
-// 侧栏配色 token 组（约束 #6 单点）
-export const SIDEBAR_COLORS = {
-  bg: "#252526",
-  fg: "#D4D4D4",
-  hover: "#2A2D2E",
-  selected: "#37373D",
-  border: "#444",
-  contextMenuBorder: "#454545",
-  contextMenuShadow: "0 4px 12px rgba(0,0,0,0.5)",
-  /** 树形引导线（agent 侧栏层级缩进竖线） */
-  treeGuide: "#3C3C3C",
-} as const;
+// 强调底色上的前景色（收编 JsonMode 事件导航 hover 硬编码）
+export const ON_ACCENT_FG = ui.onAccentFg;
 
-// 错误提示色
-export const ERROR_BANNER_BG = "#5A1D1D";
-export const ERROR_BANNER_BORDER = "#8B0000";
-export const ERROR_BANNER_FG = "#F48771";
+// 侧栏配色 token 组（ui.sidebar）
+export const SIDEBAR_COLORS = ui.sidebar;
 
-// --- Explorer 选中高亮色（文件浏览器选中行背景）---
-export const EXPLORER_SELECTION_BG = "#094771"; // VS Code list activeSelectionBackground
+// 错误提示色（ui.errorBanner）
+export const ERROR_BANNER_BG = ui.errorBanner.bg;
+export const ERROR_BANNER_BORDER = ui.errorBanner.border;
+export const ERROR_BANNER_FG = ui.errorBanner.fg;
 
-// --- Agent Status 用量条分段色 ---
+// --- Explorer 选中高亮色（ui.explorerSelectionBg）---
+export const EXPLORER_SELECTION_BG = ui.explorerSelectionBg;
+
+// --- Agent Status 用量条分段色（ui.agentStatusUsage）---
 // 阈值由组件逻辑决定：<50% low，50-80% medium，>80% high。
 
-export const AGENT_STATUS_USAGE_COLORS = {
-  low: "#629755",
-  medium: "#BBB529",
-  high: "#F44747",
-} as const;
+export const AGENT_STATUS_USAGE_COLORS = ui.agentStatusUsage;
 
-// --- CSS 变量桥接（供 App.css :root 变量从 TS token 取值）---
-// SIDEBAR_CSS 模式：JS 对象映射 CSS 自定义属性名 → colors.ts token 值，
-// 在 main.tsx 注入 document.documentElement，App.css 仅通过 var() 引用。
+// --- CSS 变量桥接（供 App.css :root 变量从 token 取值）---
+// main.tsx 将本对象注入 document.documentElement，App.css 仅通过 var() 引用。
 
 export const ROOT_CSS_VARS = {
-  "--sl-bg-primary": APP_BG_PRIMARY,
-  "--sl-bg-secondary": APP_BG_SECONDARY,
+  "--sl-bg-primary": ui.appBgPrimary,
+  "--sl-fg-primary": ui.appFg,
 } as const;

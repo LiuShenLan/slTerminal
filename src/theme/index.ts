@@ -1,3 +1,8 @@
+// theme barrel —— 配色 token facade（colors.ts）+ 方案注册表 + 方案定义 + 库覆盖
+//
+// colors.ts 段导出随 C1 清单：31 个（5 组 + 3 ERROR_BANNER 标量 + 22 其他标量 + ROOT_CSS_VARS）；
+// 方案系统段：schemeRegistry（注册表单例）+ schemes 类型与 darcula + overrides 四导出。
+
 export {
   GIT_FILE_COLORS,
   GIT_GUTTER_COLORS,
@@ -6,10 +11,8 @@ export {
   PANEL_BG,
   SIDEBAR_BG,
   SECONDARY_BG,
-  DROPDOWN_BG,
   APP_BG,
   APP_BG_PRIMARY,
-  APP_BG_SECONDARY,
   EDITOR_BG,
   SIDEBAR_FG,
   ERROR_FG,
@@ -26,9 +29,31 @@ export {
   SHADOW_MENU,
   HTML_PANEL_LOADING_FG,
   HTML_PANEL_IFRAME_BG,
+  ON_ACCENT_FG,
   ERROR_BANNER_BG,
   ERROR_BANNER_BORDER,
   ERROR_BANNER_FG,
   ROOT_CSS_VARS,
   AGENT_STATUS_USAGE_COLORS,
 } from "./colors";
+
+// 方案注册表（单例 + 类型）
+export { schemeRegistry, SchemeRegistry } from "./schemeRegistry";
+
+// 方案定义（darcula 值 + ColorScheme 等类型）
+export { darcula } from "./schemes/darcula";
+export type {
+  ColorScheme,
+  UiTokens,
+  TerminalPalette,
+  EditorScheme,
+  LibraryOverrides,
+} from "./schemes/types";
+
+// 组件库配色注入（dockview / allotment / CM6）
+export {
+  dockviewVarStyle,
+  allotmentVarStyle,
+  editorTheme,
+  editorColorOverrides,
+} from "./overrides";

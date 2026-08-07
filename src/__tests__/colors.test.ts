@@ -1,11 +1,15 @@
 // colors.test.ts — theme/colors.ts 配色 token 单元测试
 //
+// colors.ts 为 facade：值代理 schemeRegistry.getActive()（默认 darcula），
+// 测试断言值即 darcula 方案值（删除死配置与新增 ON_ACCENT_FG 见 C1 清单）。
+//
 // 覆盖路径：
 //   1. GIT_FILE_COLORS 7 个 token 均为合法 hex
-//   2. GIT_GUTTER_COLORS 4 个 token 均为合法 hex
-//   3. EXPLORER_COLORS 6 个 token
-//   4. 通用 UI 色 20 个独立 token
-//   5. theme/index.ts 重导出所有 token
+//   2. GIT_GUTTER_COLORS 3 个 token 均为合法 hex
+//   3. EXPLORER_COLORS 5 个 token
+//   4. 通用 UI 色 24 个独立 token
+//   5. ROOT_CSS_VARS 键集合 --sl-bg-primary / --sl-fg-primary
+//   6. theme/index.ts 重导出所有 token
 
 import { describe, it, expect } from "vitest";
 import {
@@ -16,10 +20,8 @@ import {
   PANEL_BG,
   SIDEBAR_BG,
   SECONDARY_BG,
-  DROPDOWN_BG,
   APP_BG,
   APP_BG_PRIMARY,
-  APP_BG_SECONDARY,
   EDITOR_BG,
   SIDEBAR_FG,
   ERROR_FG,
@@ -36,6 +38,7 @@ import {
   SHADOW_MENU,
   HTML_PANEL_LOADING_FG,
   HTML_PANEL_IFRAME_BG,
+  ON_ACCENT_FG,
   ERROR_BANNER_BG,
   ERROR_BANNER_BORDER,
   ERROR_BANNER_FG,
@@ -69,15 +72,14 @@ describe("theme/colors.ts 配色 token", () => {
   });
 
   describe("GIT_GUTTER_COLORS（行内 diff 边栏色）", () => {
-    it("包含 4 个 token", () => {
-      expect(Object.keys(GIT_GUTTER_COLORS)).toHaveLength(4);
+    it("包含 3 个 token", () => {
+      expect(Object.keys(GIT_GUTTER_COLORS)).toHaveLength(3);
     });
 
     const gutterCases = [
       { key: "modified", expected: "#374752" },
       { key: "added", expected: "#384C38" },
       { key: "deleted", expected: "#656E76" },
-      { key: "whitespaceOnly", expected: "#4C4638" },
     ];
 
     it.each(gutterCases)(
@@ -89,15 +91,14 @@ describe("theme/colors.ts 配色 token", () => {
   });
 
   describe("EXPLORER_COLORS（文件浏览器通用色）", () => {
-    it("包含 6 个 token", () => {
-      expect(Object.keys(EXPLORER_COLORS)).toHaveLength(6);
+    it("包含 5 个 token", () => {
+      expect(Object.keys(EXPLORER_COLORS)).toHaveLength(5);
     });
 
     const explorerCases = [
       { key: "bg", expected: "#1E1E1E" },
       { key: "fg", expected: "#D4D4D4" },
       { key: "hover", expected: "#2A2D2E" },
-      { key: "selected", expected: "#37373D" },
       { key: "arrowClosed", expected: "#6C6C6C" },
       { key: "arrowOpen", expected: "#D4D4D4" },
     ];
@@ -144,10 +145,8 @@ describe("theme/colors.ts 配色 token", () => {
       { name: "PANEL_BG", value: PANEL_BG, expected: "#1E1E1E" },
       { name: "SIDEBAR_BG", value: SIDEBAR_BG, expected: "#252526" },
       { name: "SECONDARY_BG", value: SECONDARY_BG, expected: "#2D2D2D" },
-      { name: "DROPDOWN_BG", value: DROPDOWN_BG, expected: "#2A2D2E" },
       { name: "APP_BG", value: APP_BG, expected: "#1e1e2e" },
       { name: "APP_BG_PRIMARY", value: APP_BG_PRIMARY, expected: "#1e1e2e" },
-      { name: "APP_BG_SECONDARY", value: APP_BG_SECONDARY, expected: "#2b2b3c" },
       { name: "EDITOR_BG", value: EDITOR_BG, expected: "#282C34" },
       // 前景/文字色
       { name: "SIDEBAR_FG", value: SIDEBAR_FG, expected: "#D4D4D4" },
@@ -166,14 +165,16 @@ describe("theme/colors.ts 配色 token", () => {
       // HTML 面板色
       { name: "HTML_PANEL_LOADING_FG", value: HTML_PANEL_LOADING_FG, expected: "#6C6C6C" },
       { name: "HTML_PANEL_IFRAME_BG", value: HTML_PANEL_IFRAME_BG, expected: "#FFFFFF" },
+      // 强调底色前景
+      { name: "ON_ACCENT_FG", value: ON_ACCENT_FG, expected: "#FFFFFF" },
       // 错误提示色
       { name: "ERROR_BANNER_BG", value: ERROR_BANNER_BG, expected: "#5A1D1D" },
       { name: "ERROR_BANNER_BORDER", value: ERROR_BANNER_BORDER, expected: "#8B0000" },
       { name: "ERROR_BANNER_FG", value: ERROR_BANNER_FG, expected: "#F48771" },
     ];
 
-    it("共 25 个 UI token", () => {
-      expect(uiTokenCases).toHaveLength(25);
+    it("共 24 个 UI token", () => {
+      expect(uiTokenCases).toHaveLength(24);
     });
 
     it.each(uiTokenCases)(
@@ -227,10 +228,10 @@ describe("theme/colors.ts 配色 token", () => {
   });
 
   describe("ROOT_CSS_VARS（CSS 变量桥接，FE-24）", () => {
-    it("包含 --sl-bg-primary 和 --sl-bg-secondary", () => {
+    it("包含 --sl-bg-primary 和 --sl-fg-primary", () => {
       const keys = Object.keys(ROOT_CSS_VARS);
       expect(keys).toContain("--sl-bg-primary");
-      expect(keys).toContain("--sl-bg-secondary");
+      expect(keys).toContain("--sl-fg-primary");
       expect(keys).toHaveLength(2);
     });
 
@@ -238,8 +239,8 @@ describe("theme/colors.ts 配色 token", () => {
       expect(ROOT_CSS_VARS["--sl-bg-primary"]).toBe(APP_BG_PRIMARY);
     });
 
-    it("--sl-bg-secondary 引用 APP_BG_SECONDARY", () => {
-      expect(ROOT_CSS_VARS["--sl-bg-secondary"]).toBe(APP_BG_SECONDARY);
+    it("--sl-fg-primary 值为 #cdd6f4", () => {
+      expect(ROOT_CSS_VARS["--sl-fg-primary"]).toBe("#cdd6f4");
     });
 
     it("所有值均为非空字符串", () => {
