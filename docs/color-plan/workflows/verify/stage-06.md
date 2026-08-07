@@ -2,6 +2,7 @@
 
 > 中间态口径：本 Stage 仅改文档；任何代码文件（src/、src-tauri/、e2e-tests/、test/）零改动。
 > 取数口径：本 Stage 无编译门禁，断言全部由 Grep/Read 静态核实 + markdown 语法抽查承担。
+> 修正记录（执行期，Stage 06 首验）：断言 9 允许清单扩展 3 项——`src/lib/CLAUDE.md`（checklist 修正记录 4 连带：E2E_ENABLED 六站点→五站点 + main.tsx 内联门控说明，execution-plan.md Stage 06 清单已登记含此文件）、`docs/color-plan/execution-plan.md`（进度簿记）、`docs/color-plan/workflows/stage-06-docs.js`（A2 任务追加，修正记录 4 正当扩展，同 CONTEXT.md/adr.md 先例）。
 
 ## 断言清单
 
@@ -15,7 +16,7 @@
 | 6 | DOC-05 | `src/panels/CLAUDE.md` 硬约束 #6 例外句改为 adapter 表述（含「adapter」或「映射 active 方案」语义）；其余内容无 diff | Grep + git diff 行数核对 |
 | 7 | DOC-06 | `docs/color-implementation.md` 与 `docs/color-inventory.md` 无「临时摸底」注记；含新架构现状描述（schemes/facade） | Grep + Read |
 | 8 | 诚实性 | 文档描述与当前代码一致——语义式：抽查 theme/CLAUDE.md 文件表所列文件（schemes/3 文件 + schemeRegistry.ts + overrides.ts）全部真实存在；抽查根 CLAUDE.md 新 #6 措辞与 colors.ts 现状（facade）不矛盾 | Glob + Read 抽查 |
-| 9 | 中间态 | 本 Stage diff 仅含七文档：CONTEXT.md、.claude/adr.md、.claude/CLAUDE.md、src/theme/CLAUDE.md、src/panels/CLAUDE.md、docs/color-implementation.md、docs/color-inventory.md | git diff --name-only HEAD |
+| 9 | 中间态 | 本 Stage diff 仅含七文档 + 修正记录 4 扩展三项：CONTEXT.md、.claude/adr.md、.claude/CLAUDE.md、src/theme/CLAUDE.md、src/panels/CLAUDE.md、src/lib/CLAUDE.md、docs/color-implementation.md、docs/color-inventory.md、docs/color-plan/execution-plan.md、docs/color-plan/workflows/stage-06-docs.js；任何代码文件零改动 | git diff --name-only HEAD |
 | 10 | 语法 | 改动文档 markdown 语法抽查：标题层级连续、表格行列闭合、无未闭合代码围栏 | Read 抽查 |
 
 ## 全量测试（全部通过为门禁）

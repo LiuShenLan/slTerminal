@@ -50,7 +50,9 @@ const parallelAgents = [
 
 【DOC-05】src/panels/CLAUDE.md 硬约束 #6 例外句仅改一处（surgical）：「终端配色是历史遗留的独立主题定义」→「终端配色经 panels/terminal/theme.ts adapter 映射 active 方案 terminal 段」。其余内容不动。
 
-完成后报告：三文件改动摘要。`,
+【DOC-03 附带（checklist 修正记录 4 连带）】src/lib/CLAUDE.md 的「e2eEnabled.ts — E2E 门控单一真值源」节：main.tsx 已不再引用 E2E_ENABLED 常量（BOOT-01 执行期修正——rolldown 不折叠跨模块常量，main.tsx 门控改为与 e2eEnabled.ts 定义逐字一致的内联字面量 import.meta.env.DEV || import.meta.env.VITE_E2E === "1"），「六个站点统一引用」表述须同步（改为五个站点 + 注明 main.tsx 内联等价表达式、语义单点不变）。此文件本不在分工表，系修正记录 4 的正当扩展（同 CONTEXT.md/adr.md 先例），可改。
+
+完成后报告：三文件 + src/lib/CLAUDE.md 共四文件改动摘要。`,
   },
   {
     label: 'A3-colordocs',

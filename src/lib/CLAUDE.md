@@ -22,7 +22,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## e2eEnabled.ts — E2E 门控单一真值源
 
-E2E 测试 helper（`__slterm_e2e_*` / `__e2e_*`）是否注入，由 `E2E_ENABLED` 单点门控，六个站点（`main.tsx`、`workspace/Workspace.tsx`、`panels/terminal/useTerminalInstance.ts`、`useXterm.ts` ×3）统一引用。
+E2E 测试 helper（`__slterm_e2e_*` / `__e2e_*`）是否注入，由 `E2E_ENABLED` 单点门控，五个站点（`workspace/Workspace.tsx`、`panels/terminal/useTerminalInstance.ts`、`useXterm.ts` ×3）统一引用。`main.tsx` 不引用常量（BOOT-01 执行期修正，修正记录 4——rolldown 不折叠跨模块常量，引用 `E2E_ENABLED` 会使 helpers chunk 残留生产 dist、CI 生产剥离守卫必 fail），其门控改为与 `e2eEnabled.ts` 定义**逐字一致**的内联字面量 `import.meta.env.DEV || import.meta.env.VITE_E2E === "1"`，门控语义单点不变。
 
 ```ts
 export const E2E_ENABLED =

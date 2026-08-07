@@ -38,3 +38,26 @@
 - 状态最少（按钮归属 + 每区打开的视图 id），所有展示由状态纯推导，无 UI 临时态。
 - 原 `SidebarTree`、`ExplorerPanel` 组件本体不变，仅宿主从 Allotment 常驻栏变为侧栏区视图槽。
 - **换区重建（已确认接受）**：拖拽按钮跨区（上↔下）时，视图组件从上区 pane 移入下区 pane——React 视为不同父节点，触发卸载+重建，组件内部状态（如 explorer 展开状态、rootNodes）丢失。权衡：换区为低频操作（用户通常设定一次后不改），重建成本低于跨父节点保持实例的架构复杂度。
+
+## 0002 配色方案单点（schemes/ + 注册表 + facade + 重载切换）
+
+**Status**: accepted（2026-08-07）
+
+**上下文**：颜色散落在 6+ 条独立色源（colors.ts 32 token、xterm 22 色、oneDark、dockview --dv-*、Allotment、App.css --sl-fg-*、库默认色），改色多点人工同步且有漏网点（数值重复不联动、死 token、1 处真违规硬编码）。需求：全部应用可控色源收拢单点 + 每色注释消费位置 + 为新增方案与一键切换留扩展接口。
+
+**决策**：
+- src/theme/ 下设 schemes/（ColorScheme 四段：ui/terminal/editor/libraries + darcula 内置方案）+ SchemeRegistry 模块级单例（项目注册表惯例第 6 例）。
+- colors.ts 改 facade：31 个同名导出值代理 active 方案，369 处消费点零改动。
+- 方案切换 = settings.json `colorScheme` 段手编 + 重载窗口生效；main.tsx 启动时 React 挂载前解析（App 改动态 import 保证 facade 求值晚于 setActive）。
+- 三方库色经 overrides 通道：dockview --dv-* 与 Allotment 变量内联注入挂载点；oneDark 作 editor.theme 引用 + lint/search/背景 token 化覆盖。
+- 零视觉变化：所有覆盖值取现行有效值；死配置全清（3 死 token + 2 零消费 CSS 变量 + 1 违规收敛）。
+
+**被否决的备选**：
+- 运行期即时切换（token 全面响应式）：369 处常量消费 + xterm/CM 创建期消费需全量改造，代价 vs 暗色系低频切换收益不成比例。
+- oneDark 完全 token 化自绘语法色板：每方案需 10+ 语法色定义，工作量与审美风险大；editor 段引用已预留未来自定义。
+- 启动链 fail-safe 收编：index.html/tauri.conf.json 为静态层无法用 TS token，保持硬编码 + 注释交叉引用。
+
+**后果**：
+- 新增方案 = schemes/ 新文件 + register 一行，消费方/测试守卫零改动。
+- 注释单点在 types.ts 接口槽位（消费位置与方案无关），新方案零注释负担。
+- main.tsx 静态 import 图收敛为 react/react-dom/lib/e2eEnabled；E2E helpers 与 ROOT_CSS_VARS 注入保持原相对顺序。

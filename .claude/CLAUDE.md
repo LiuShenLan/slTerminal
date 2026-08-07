@@ -43,7 +43,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 3. **命令统一注册**于 `lib.rs` 的 `generate_handler!`；一律返回 `Result<_, AppError>`；阻塞 I/O 用 `spawn_blocking`。
 4. **DTO 双边对应**：`src/types/` ↔ Rust 模块 DTO 一一对应；Rust `snake_case` ↔ JS `camelCase`，改一边必须改另一边。
 5. **面板封闭**：Dockview 面板只能是 `panels/` 下注册过的类型；新增类型 = 加目录 + 在 `panelRegistry.ts` 注册。
-6. **配色单点**：所有颜色只在 `theme/colors.ts` 定义为 token；组件引用 token，禁止硬编码颜色（既定例外见 @../src/panels/CLAUDE.md）。
+6. **配色单点**：颜色定义于 `theme/schemes/<scheme>.ts`（配色方案值文件），组件经 `theme/colors.ts` facade token 引用，禁止硬编码颜色（既定例外见 @../src/panels/CLAUDE.md）。
 7. **布局单点**：操作页面布局只经 `workspace/layoutSerde.ts` 用 Dockview `toJSON/fromJSON` 存取。
 8. **会话元数据单点**：PTY 进程映射仅在 `panels/terminal/TerminalRegistry`（模块级 Map）管理，前端会话元数据已合并。面板只订阅，不自存。
 9. **平台分支收敛**：`#[cfg(windows)]` 只允许出现在 pty 模块等明确处，业务逻辑不撒 cfg（详见 @../src-tauri/src/pty/CLAUDE.md）。
@@ -114,7 +114,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | src/workspace | 工作区布局管理（Dockview serde + 面板注册 + titleManager + pageApis） | src/workspace/Workspace.tsx | @../src/workspace/CLAUDE.md |
 | src/panels | Dockview 面板系统（terminal + editor + html + gitshow + diff + hooksConfig） | src/panels/index.ts | @../src/panels/CLAUDE.md |
 | src/lib | 通用工具 + createActivePointer + useFontSizeWheel + ErrorBoundary + E2E_ENABLED 门控 + 路径函数 | src/lib/index.ts | @../src/lib/CLAUDE.md |
-| src/theme | 配色 token 单点（硬约束 #6） | src/theme/colors.ts | @../src/theme/CLAUDE.md |
+| src/theme | 配色方案单点（schemes/ 值文件 + SchemeRegistry + colors.ts facade，硬约束 #6） | src/theme/colors.ts | @../src/theme/CLAUDE.md |
 | src/features/explorer | 文件浏览器（FileTree + 选中模型 + 键盘快捷键 + useFileTree + FileViewerRegistry 分派） | src/features/explorer/ExplorerPanel.tsx | @../src/features/explorer/CLAUDE.md |
 | src/features/fileViewers | 文件查看器注册表（策略模式，扩展名→面板类型映射） | src/features/fileViewers/index.ts | @../src/features/fileViewers/CLAUDE.md |
 | src/features/shortcuts | 快捷键模块（ShortcutRegistry 单例 + usePanelFocus + Command/Keybinding 分离 + 用户重绑定） | src/features/shortcuts/index.ts | @../src/features/shortcuts/CLAUDE.md |

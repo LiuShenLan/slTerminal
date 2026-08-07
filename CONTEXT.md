@@ -225,6 +225,22 @@ _Avoid_: 终端行
 
 ---
 
+## 配色
+
+**配色 token**（Color Token）：
+UI 颜色的语义命名槽位（如 panelBg/focusBorder）。组件只引用 token，禁止硬编码颜色（硬约束 #6）。token 定义在配色方案的 ui 段，经 colors.ts facade 导出供组件消费。
+
+**配色方案**（Color Scheme）：
+一套完整配色定义的注册单元——ui token 取值 + 终端调色板 + 编辑器主题引用与覆盖 + 三方库变量覆盖四段。仅暗色系（定位约束）。当前内置 darcula 一套。
+
+**方案注册表**（SchemeRegistry）：
+配色方案的模块级单例注册表。方案经 register 注册、setActive 激活；激活方案在启动时（React 挂载前）解析，切换方案需重载窗口生效。
+
+**启动链 fail-safe 色**：
+React 挂载前防白闪的硬编码色（index.html body 底色、tauri.conf.json 窗口底色、main.tsx 超时错误页）。不在配色方案系统内，与方案色值手动同步。
+
+---
+
 ## 同义词/废弃术语
 
 | 废弃 | 替代 | 原因 |
