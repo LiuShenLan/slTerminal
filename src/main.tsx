@@ -1,12 +1,9 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import App from "./App";
-import "./App.css";
-import { E2E_ENABLED } from "./lib";
-import { ROOT_CSS_VARS } from "./theme";
 
 // 等待 Tauri IPC 就绪后再挂载 React（WebView2 注入 window.__TAURI_INTERNALS__ 是异步的）
 async function bootstrap() {
+  // ① IPC 就绪等待 + fail-safe
   if (!window.__TAURI_INTERNALS__) {
     try {
       await new Promise<void>((resolve, reject) => {
@@ -34,15 +31,34 @@ async function bootstrap() {
     }
   }
 
-  // 将 colors.ts ROOT_CSS_VARS 注入 document.documentElement，替代 App.css :root 硬编码 hex
+  // ② 配色方案解析——必须在 App 模块图求值前完成（colors.ts facade 求值时取 active 方案）
+  const { loadSettings } = await import("./ipc/settings");
+  const settings = await loadSettings().catch(() => null); // 失败降级 null → darcula，不阻塞启动
+  const { schemeRegistry } = await import("./theme/schemeRegistry");
+  await import("./theme/schemes"); // side-effect：注册内置方案（darcula）
+  // 未知 id 回退 darcula 由注册表内部保证；非字符串（脏数据）同样回退
+  const schemeId = typeof settings?.colorScheme === "string" ? settings.colorScheme : "darcula";
+  schemeRegistry.setActive(schemeId);
+
+  // ③ 将 ROOT_CSS_VARS 注入 document.documentElement，替代 App.css :root 硬编码 hex
+  const { ROOT_CSS_VARS } = await import("./theme");
   for (const [prop, value] of Object.entries(ROOT_CSS_VARS)) {
     document.documentElement.style.setProperty(prop, value as string);
   }
 
-  // E2E 辅助仅在 E2E_ENABLED 时动态导入（dev serve 或 VITE_E2E=1 构建）——生产构建 tree-shake 排除
-  if (E2E_ENABLED) {
+  // ④ E2E 辅助仅在 dev serve 或 VITE_E2E=1 构建时动态导入——生产构建条件编译为 false，整块 DCE
+  //    时序不变量：helpers 注入在 setActive 之后（E2E 测试依赖已激活的配色方案）
+  //    门控须内联 import.meta.env 表达式而非引用 ./lib/e2eEnabled 的 E2E_ENABLED 常量：
+  //    rolldown 不做跨模块常量折叠，动态 import 站点靠字面量折叠方可 DCE——实测
+  //    `if (E2E_ENABLED)` 会使 helpers chunk 残留生产 dist（CI 生产剥离守卫 fail）；
+  //    静态 import 站点（Workspace/useTerminalInstance/useXterm）无此问题（模块级 tree-shake）。
+  //    表达式与 e2eEnabled.ts 的 E2E_ENABLED 定义逐字一致。
+  if (import.meta.env.DEV || import.meta.env.VITE_E2E === "1") {
     import("../e2e-tests/helpers").then((m) => m.installAllE2eHelpers());
   }
+
+  // ⑤ App 动态导入——App.tsx 模块图内静态引用 theme token，须在 ② setActive 之后求值
+  const { default: App } = await import("./App");
 
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <React.StrictMode>

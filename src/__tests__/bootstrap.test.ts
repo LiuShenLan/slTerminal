@@ -43,6 +43,12 @@ vi.mock("../App", () => ({ default: () => null }));
 // mock App.css（空模块）——同上路径修正
 vi.mock("../App.css", () => ({}));
 
+// mock ipc/settings——BOOT-01 后 main.tsx 启动链动态 import 调 loadSettings，
+// 测试环境无 Tauri 运行时须 mock；resolve null = 首次启动（无配色配置 → darcula）
+vi.mock("../ipc/settings", () => ({
+  loadSettings: async () => null,
+}));
+
 // ─── 全局 mock ───
 
 // 存储原始值供 afterEach 恢复
@@ -100,9 +106,12 @@ describe("main.tsx bootstrap", () => {
     // 验证：未启动任何轮询（setInterval 未调用）
     expect(mockSetInterval).not.toHaveBeenCalled();
 
-    // 验证：ReactDOM.createRoot 被调用
-    expect(mockCreateRoot).toHaveBeenCalledWith(rootDiv);
-    expect(mockCreateRoot).toHaveBeenCalledTimes(1);
+    // 等待动态 import 启动链完成（loadSettings → schemeRegistry/schemes → theme → App）
+    // BOOT-01 后 render 前的阶段均为异步，须等待后断言
+    await vi.waitFor(() => {
+      expect(mockCreateRoot).toHaveBeenCalledWith(rootDiv);
+      expect(mockCreateRoot).toHaveBeenCalledTimes(1);
+    });
 
     // 验证：render 被调用（React.StrictMode 包裹 App）
     expect(mockRender).toHaveBeenCalledTimes(1);
@@ -133,12 +142,11 @@ describe("main.tsx bootstrap", () => {
     expect(capturedSetIntervalCallbacks.length).toBe(1);
     capturedSetIntervalCallbacks[0]();
 
-    // 等待 Promise resolve 后 ReactDOM 挂载
-    await new Promise((r) => setTimeout(r, 10));
-
-    // 验证：ReactDOM.createRoot 被调用
-    expect(mockCreateRoot).toHaveBeenCalledWith(rootDiv);
-    expect(mockCreateRoot).toHaveBeenCalledTimes(1);
+    // 等待动态 import 启动链完成后 ReactDOM 挂载（BOOT-01 新链 render 前全异步）
+    await vi.waitFor(() => {
+      expect(mockCreateRoot).toHaveBeenCalledWith(rootDiv);
+      expect(mockCreateRoot).toHaveBeenCalledTimes(1);
+    });
     expect(mockRender).toHaveBeenCalledTimes(1);
 
     // 验证：setInterval 被清理（clearInterval called）

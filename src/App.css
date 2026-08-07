@@ -3,8 +3,6 @@
 :root {
   /* JetBrains 暗色配色基础色 */
   /* --sl-bg-primary / --sl-fg-primary 由 ROOT_CSS_VARS（colors.ts）经 main.tsx 注入 */
-  --sl-fg-primary: #cdd6f4;
-  --sl-fg-secondary: #a6adc8;
 
   color-scheme: dark;
   font-family: "Cascadia Code", "JetBrains Mono", "Fira Code", "Consolas", monospace;

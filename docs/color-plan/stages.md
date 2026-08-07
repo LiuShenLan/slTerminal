@@ -116,7 +116,7 @@ interface ColorScheme {
 | A1-boot | BOOT-01/02/03 | `src/main.tsx`、`src/App.tsx`、`src/App.css`、`src/__tests__/bootstrap.test.ts` |
 
 **实现要点**：
-- main.tsx 目标态（修正项 2）：静态 import 恰 3 个（react、react-dom/client、`./lib/e2eEnabled` 深导入）；序列 ①IPC wait+fail-safe 不变 → ②loadSettings().catch(()=>null) + 动态 import schemeRegistry/schemes + setActive → ③动态 import theme + ROOT_CSS_VARS 注入 → ④E2E helpers 逻辑原位（仅随链）→ ⑤await import("./App") + render。**E2E 时序不变量：helpers 注入在 setActive 之后**。
+- main.tsx 目标态（修正项 2，执行期再修正见 checklist 修正记录 4）：静态 import 恰 2 个（react、react-dom/client）+ E2E 门控内联字面量（`import.meta.env.DEV || import.meta.env.VITE_E2E === "1"`，rolldown 不折叠跨模块常量，引用 E2E_ENABLED 常量会残留 helpers chunk 生产 dist——A/B 实证）；序列 ①IPC wait+fail-safe 不变 → ②loadSettings().catch(()=>null) + 动态 import schemeRegistry/schemes + setActive → ③动态 import theme + ROOT_CSS_VARS 注入 → ④E2E helpers 逻辑原位（仅随链）→ ⑤await import("./App") + render。**E2E 时序不变量：helpers 注入在 setActive 之后**。
 - bootstrap.test.ts 适配（修正项 1）：补 `../ipc/settings` mock（loadSettings resolve null），防真实 invoke；`../App`/`../App.css` mock 保留。
 - App.tsx:23 dockview.css import 后追加 `import "./App.css"`（CSS 顺序：dockview.css 先）。
 - App.css 删 :5-7，var() 引用不动。

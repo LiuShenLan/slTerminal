@@ -21,6 +21,8 @@ import { createExplorerShortcuts } from "./features/explorer/keyboard";
 import { NotificationListener } from "./features/notifications";
 import { PANEL_BG, INPUT_BORDER, APP_BG } from "./theme";
 import "dockview-react/dist/styles/dockview.css";
+// App.css 从 main.tsx 移此（BOOT-02）：dockview.css 先、App.css 后，CSS 变量覆盖语义正确（spec §5）
+import "./App.css";
 
 /** 关闭等待超时（ms）——kill PTY / flush 持久化的最大等待时间 */
 const SHUTDOWN_TIMEOUT_MS = 3000;
