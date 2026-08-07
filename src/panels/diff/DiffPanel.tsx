@@ -22,7 +22,6 @@ import {
   Compartment,
 } from "@codemirror/state";
 import { basicSetup } from "codemirror";
-import { oneDark } from "@codemirror/theme-one-dark";
 import { search, searchKeymap, highlightSelectionMatches } from "@codemirror/search";
 import { indentWithTab } from "@codemirror/commands";
 import type { DiffHunk } from "../../types/git";
@@ -49,7 +48,7 @@ import { useFontSize } from "../../stores";
 import { useFontSizeWheel } from "../../lib/useFontSizeWheel";
 import { FONT_SIZE_MIN, FONT_SIZE_MAX } from "../../stores/fontSize";
 import { computeAlignment } from "./alignment";
-import { EDITOR_BG, ERROR_FG, HTML_PANEL_LOADING_FG, PANEL_BG, SEPARATOR_BG } from "../../theme";
+import { EDITOR_BG, ERROR_FG, HTML_PANEL_LOADING_FG, PANEL_BG, SEPARATOR_BG, editorTheme, editorColorOverrides } from "../../theme";
 
 // ── 占位行 Widget ─────────────────────────────────────────────
 
@@ -518,7 +517,8 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ params }) => {
         doc: headContent,
         extensions: [
           basicSetup,
-          oneDark,
+          editorTheme,
+          editorColorOverrides(),
           EditorView.theme({ "&": { height: "100%" } }),
           leftFontCompartment.current.of(createEditorFontExtension(editorFontSize)),
           leftWrapCompartment.current.of([]),
@@ -563,7 +563,8 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ params }) => {
         doc: workdirContent,
         extensions: [
           basicSetup,
-          oneDark,
+          editorTheme,
+          editorColorOverrides(),
           EditorView.theme({ "&": { height: "100%" } }),
           rightFontCompartment.current.of(createEditorFontExtension(editorFontSize)),
           rightWrapCompartment.current.of([]),

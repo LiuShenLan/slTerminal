@@ -22,7 +22,6 @@ import {
   stateExtensions,
   handleRefresh,
 } from "codemirror-json-schema";
-import { oneDark } from "@codemirror/theme-one-dark";
 import type { JSONSchema7 } from "json-schema";
 import {
   hooksSubSchema,
@@ -38,6 +37,9 @@ import {
   SIDEBAR_FG,
   FOCUS_BORDER,
   HTML_PANEL_LOADING_FG,
+  ON_ACCENT_FG,
+  editorTheme,
+  editorColorOverrides,
 } from "../../theme";
 
 /** JsonMode props：value/onChange/onValidationChange（外部驱动 + 校验上报） */
@@ -141,7 +143,7 @@ const JsonMode: React.FC<JsonModeProps> = ({ value, onChange, onValidationChange
 
   // 挂载：创建 EditorView（StrictMode 双挂载由 effect cleanup destroy 正确兜底）
   // 扩展：语言 + jsonSchemaHover 悬停 + jsonSchemaLinter 波浪线（hooks 子 schema）
-  // + jsonParseLinter 语法波浪线 + oneDark 暗色主题 + height:100% theme
+  // + jsonParseLinter 语法波浪线 + 暗色主题扩展 + height:100% theme
   //（.cm-editor 确定高度 → .cm-scroller 内容溢出 → 竖向滚动条出现，照编辑器滚动委托决策）
   useEffect(() => {
     const container = containerRef.current;
@@ -157,7 +159,8 @@ const JsonMode: React.FC<JsonModeProps> = ({ value, onChange, onValidationChange
           hoverTooltip(jsonSchemaHover()),
           stateExtensions(hooksSubSchema as unknown as JSONSchema7),
           EditorView.theme({ "&": { height: "100%" } }),
-          oneDark,
+          editorTheme,
+          editorColorOverrides(),
           EditorView.updateListener.of(handleDocChanged),
         ],
       }),
@@ -210,7 +213,7 @@ const JsonMode: React.FC<JsonModeProps> = ({ value, onChange, onValidationChange
                 title={meta.supportsMatcher ? `matcher 目标：${meta.matcherTarget}` : "不支持 matcher"}
                 onMouseEnter={(e) => {
                   e.currentTarget.style.background = FOCUS_BORDER;
-                  e.currentTarget.style.color = "#FFFFFF";
+                  e.currentTarget.style.color = ON_ACCENT_FG;
                 }}
                 onMouseLeave={(e) => {
                   e.currentTarget.style.background = "transparent";

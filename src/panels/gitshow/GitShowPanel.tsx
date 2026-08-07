@@ -9,7 +9,6 @@ import React, { useRef, useState, useEffect, useCallback, useMemo } from "react"
 import { EditorView, keymap } from "@codemirror/view";
 import { EditorState, Compartment } from "@codemirror/state";
 import { basicSetup } from "codemirror";
-import { oneDark } from "@codemirror/theme-one-dark";
 import { search, searchKeymap, highlightSelectionMatches } from "@codemirror/search";
 import { gitFileAtHead } from "../../ipc/git";
 import { getLanguageExtension } from "../editor/useCodeMirror";
@@ -23,7 +22,7 @@ import { useFontSizeWheel } from "../../lib/useFontSizeWheel";
 import { FONT_SIZE_MIN, FONT_SIZE_MAX } from "../../stores/fontSize";
 import { usePanelFocus } from "../../features/shortcuts";
 import { setActiveEditor, clearActiveEditor, type EditorActions } from "../editor/activeEditor";
-import { EDITOR_BG, ERROR_FG, HTML_PANEL_LOADING_FG, PANEL_BG } from "../../theme";
+import { EDITOR_BG, ERROR_FG, HTML_PANEL_LOADING_FG, PANEL_BG, editorTheme, editorColorOverrides } from "../../theme";
 
 /** GitShowPanel 接收的面板参数 */
 interface GitShowPanelProps {
@@ -140,7 +139,8 @@ const GitShowPanel: React.FC<GitShowPanelProps> = ({ params }) => {
         doc: displayText,
         extensions: [
           basicSetup,
-          oneDark,
+          editorTheme,
+          editorColorOverrides(),
           // .cm-editor 高度→.cm-scroller height:100%约束→溢出→滚动条（同 editor）
           EditorView.theme({ "&": { height: "100%" } }),
           // 字体/自动换行用 Compartment 热切换，不销毁重建 EditorView

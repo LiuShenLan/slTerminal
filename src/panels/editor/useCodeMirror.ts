@@ -1,7 +1,7 @@
 // useCodeMirror — CodeMirror 6 生命周期管理 hook
 //
 // 职责：
-// - 创建 EditorView（暗色 oneDark 主题 + basicSetup + search）
+// - 创建 EditorView（暗色主题扩展 + basicSetup + search）
 // - 打开文件时 ipc.fs.readFile → 填充内容 + 加载 diff 边栏
 // - Ctrl+S → 有 filePath 直接保存，无 filePath 弹出"另存为"对话框（G3）
 // - Ctrl+F 查找（@codemirror/search）
@@ -17,7 +17,6 @@ import {
 } from "@codemirror/state";
 import { indentWithTab } from "@codemirror/commands";
 import { basicSetup } from "codemirror";
-import { oneDark } from "@codemirror/theme-one-dark";
 import { search, searchKeymap, highlightSelectionMatches } from "@codemirror/search";
 import { javascript } from "@codemirror/lang-javascript";
 import { python } from "@codemirror/lang-python";
@@ -37,6 +36,7 @@ import { usePanelFocus } from "../../features/shortcuts";
 import { setActiveEditor, clearActiveEditor, type EditorActions } from "./activeEditor";
 import { useFontSizeWheel } from "../../lib/useFontSizeWheel";
 import { FONT_SIZE_MIN, FONT_SIZE_MAX } from "../../stores/fontSize";
+import { editorTheme, editorColorOverrides } from "../../theme";
 
 /** 文件大小上限（字节）——超过此值拒绝打开，保护内存 */
 export const MAX_FILE_SIZE_BYTES = 10_000_000;
@@ -286,7 +286,8 @@ export function useCodeMirror({ container, filePath, panelId, fontSize, onFontSi
           doc,
           extensions: [
             basicSetup,
-            oneDark,
+            editorTheme,
+            editorColorOverrides(),
             // .cm-editor 高度→.cm-scroller height:100%约束→溢出→滚动条。
             // 如缺失，.cm-editor height:auto(=内容高)→scroller=内容高→无溢出→无滚动条。
             EditorView.theme({ "&": { height: "100%" } }),

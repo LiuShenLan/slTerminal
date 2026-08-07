@@ -37,6 +37,7 @@ import {
 import { useSideBar } from "../stores/sideBar";
 import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
+import { allotmentVarStyle } from "../theme";
 import { ErrorBoundary, E2E_ENABLED } from "../lib";
 import { setProjectRoot } from "../ipc/fs";
 import { markWorkspaceReady } from "../../e2e-tests/helpers";
@@ -220,7 +221,13 @@ const Workspace: React.FC = () => {
   }, [activePageId]);
 
   return (
-    <div style={{ width: "100%", height: "100%" }}>
+    <div style={{
+      // allotment CSS 变量（--separator-border / --focus-border，active 方案
+      // libraries.allotment）——根容器注入，CSS 变量继承天然覆盖外层与本文件
+      // 内层 SideBarArea 两处 Allotment（SideBarArea 不改）
+      ...allotmentVarStyle(),
+      width: "100%", height: "100%",
+    }}>
       <Allotment onChange={(sizes) => {
         // 侧栏区可见时同步宽度到 store（setWidth 内部 clamp，无需重复校验）
         if (anyOpen && sizes.length >= 2) {

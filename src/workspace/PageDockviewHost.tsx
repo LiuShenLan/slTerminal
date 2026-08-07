@@ -27,6 +27,7 @@ import {
   BUTTON_FG,
   PLACEHOLDER_FG,
   SEPARATOR_BG,
+  dockviewVarStyle,
 } from "../theme";
 
 const WATERMARK_TEXT = "打开终端或编辑器开始工作";
@@ -362,6 +363,9 @@ const PageDockview: React.FC<PageDockviewProps> = React.memo(({
 
   return (
     <div style={{
+      // dockview CSS 变量（20 条，active 方案 libraries.dockview）内联注入，
+      // 替代主题类暗色常量；className="dockview-theme-dark" 保留供布局样式
+      ...dockviewVarStyle(),
       display: visible ? "block" : "none",
       width: "100%", height: "100%",
     }}>
