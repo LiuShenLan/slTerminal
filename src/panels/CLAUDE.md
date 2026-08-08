@@ -44,6 +44,10 @@ xterm.js 不支持 `term.open()` 二次调用（GitHub Issue #4978）。因此�
 - **容器** `overflow: clip`（非 `hidden`）：`hidden` 是 CSS 滚动容器→吸收鼠标滚轮事件不传递。`clip` 裁剪但不创建滚动容器→滚轮穿透到 `.cm-scroller`
 - **`.cm-editor` 高度**：`EditorView.theme({ "&": { height: "100%" } })` 给予明确高度 → `.cm-scroller` `height: 100%` 约束为视口高度 → 内容溢出 → 滚动条出现。CM6 base theme 已设 `.cm-scroller { overflowX: auto }`，CSS 规范强制 `overflowY: auto`
 
+### 编辑器：CM6 主题扩展与层叠
+
+CM6 编辑器主题来源 = **`editorTheme`**（active 方案 `editor.theme`，darcula 为 oneDark 透出）+ **`editorColorOverrides()`**（active 方案 `editor.overrides`，lint/searchMatch/background 覆盖），经 `../../theme` barrel 引用，四处消费点：useCodeMirror / GitShowPanel / DiffPanel ×2 / JsonMode。**层叠规则与特异性守卫（ACC-05 实证）见 @../theme/CLAUDE.md「editorColorOverrides 的 CM6 层叠」**——改动覆盖规则前必读：`@codemirror/view` `mountStyles()` reverse 注入使先声明主题恒胜，竞争选择器必须保持 `.cm-editor` 前缀形态。
+
 ### 编辑器 Ctrl+S 迁入 ShortcutRegistry
 
 `editor.save`（Ctrl+S）不再走 CodeMirror keymap。命令在 `App.tsx` 一次性注册（`createEditorShortcuts()`），handler 经 `getActiveEditor().save()` 派发到聚焦编辑器；`useCodeMirror` 经 `usePanelFocus("editor", container, activate, deactivate)` 在聚焦时 `setActiveEditor`。window capture 命中 → `stopPropagation` 屏蔽 CM；`Ctrl+F`/撤销/重做未注册 → 冒泡回 CM 内部 keymap（capture/bubble 分阶段共存）。`save` 动作用 `handleSaveRef` 保持最新引用（`handleSave` 依赖 panelId 会变）。
@@ -284,7 +288,7 @@ Claude Code 在用户主动 Ctrl+C 中断时不发射任何 hook 事件（`Stop`
 | `html/index.ts` | HtmlPanel 导出 |
 | `html/HtmlPanel.tsx` | HTML 预览面板：fs.readFile → injectScript 注入脚本（键盘转发 postMessage + 片段链接 click拦截 + scrollIntoView）→ iframe srcDoc 渲染（sandbox="allow-scripts"，不含 allow-same-origin），三态（loading/loaded/error），cancelled 防竞态；postMessage 接收键盘事件 → ShortcutRegistry 分发 |
 | `gitshow/index.ts` | GitShowPanel 导出 |
-| `gitshow/GitShowPanel.tsx` | HEAD 文件只读查看面板：gitFileAtHead 取内容 → CM6 只读（readOnly+editable）+ oneDark + 语言扩展 + 字体主题；三态（loading/content/error）；大文件阈值复用；任意错误 → "该文件在 HEAD 中不存在" |
+| `gitshow/GitShowPanel.tsx` | HEAD 文件只读查看面板：gitFileAtHead 取内容 → CM6 只读（readOnly+editable）+ editorTheme/editorColorOverrides（经 `../../theme`）+ 语言扩展 + 字体主题；三态（loading/content/error）；大文件阈值复用；任意错误 → "该文件在 HEAD 中不存在" |
 | `diff/index.ts` | DiffPanel 导出 + DiffPanelParams 类型 |
 | `diff/DiffPanel.tsx` | Git 双栏 diff 面板：横向均分两栏（flex 50/50 + minWidth:0 防内容撑开）、容器 ref 桥接（renderKey + bridgedRef 支持条件渲染）、占位对齐（Decoration.widget）、垂直滚动同步（syncingRef）、双侧 gutter（headDiffGutter + diffGutter）、右侧 Ctrl+S 保存刷新链、左侧 .git 变更刷新 HEAD、右侧外部修改检测（净重载/脏弹窗） |
 | `diff/alignment.ts` | `computeAlignment(hunks)` 纯函数：DiffHunk[] → `{ left: Map<afterLine, count>, right: Map<afterLine, count> }`。规则：纯新增左侧插占位、纯删除右侧插占位、modified 行数不等少侧插差值。零 DOM 访问 |

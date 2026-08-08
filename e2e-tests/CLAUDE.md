@@ -15,6 +15,8 @@ npm run wdio          # → node ./e2e-tests/run-wdio.cjs
 # 或一步：npm run e2e（= build:e2e && wdio）
 ```
 
+> **build:e2e 与 wdio 必须串行**：`npm run e2e` 的 `&&` 已保证；手动或自动化并行（如 workflow 测试 agent 并行跑多命令）时，cargo 无法覆写被 wdio 占用的 `slterminal.exe`——报 `failed to remove file ... slterminal.exe`（os error 5 拒绝访问），wdio 实际运行在旧二进制上结果不可靠（2026-08-08 ACC-05 fix-loop 实证）。多命令并行执行时排除此两命令或显式串行。
+
 `npm run wdio` 由 `run-wdio.cjs` 启动：Node >= 26 时自动下载便携 Node 22（undici 8 与 webdriverio 不兼容），Node 22 直接运行。
 
 > **必须 `VITE_E2E=1` 构建**：E2E helper 由 `E2E_ENABLED`（`src/lib/e2eEnabled.ts`）门控。`tauri build` 的前端恒走 `vite build`（production，`import.meta.env.DEV=false`，与 `--debug`/`--mode` 无关——`--debug` 只管 Rust 壳），故必须经 `VITE_E2E=1` 才能保留 helper。直接 `tauri build --debug` 会 tree-shake 掉 helper，wdio 全部卡在"Workspace 未就绪"。

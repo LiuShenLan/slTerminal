@@ -31,6 +31,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 函数形导出每次调用取当前 active 方案（支持 D2 热切换）；`editorTheme` 为常量（新窗口重载生效）。
 
+### editorColorOverrides 的 CM6 层叠（ACC-05 实证，改覆盖前必读）
+
+`@codemirror/view` 的 `mountStyles()` 将 styleModule facet 数组 `concat(baseTheme)` 后 **`reverse()`** 再注入 `<style>` 标签——**扩展数组中先声明的主题（`editorTheme`/oneDark）规则排最后，同特异性下恒胜**，"后声明应胜出"的直觉在此失效。overrides 覆盖与 oneDark 同值时不暴露、改值即暴露（D1 零视觉变化下的隐性失效；ACC-05 五通道冒烟实证，守卫测试见下）。
+
+**现行修复形态（特异性方案，不依赖扩展数组顺序，四处消费点零改动）**：与 oneDark 竞争的规则提升选择器特异性——
+
+- background 键 `"&"` → `"&.cm-editor"`（编译为 `.ͼx.cm-editor`，0,2,0 > oneDark 的 `&` 0,1,0）
+- searchMatch 三键（`.cm-searchMatch` / `.cm-searchMatch.cm-searchMatch-selected` / `.cm-selectionMatch`）前缀 `"&.cm-editor "`（0,3,0/0,4,0 > oneDark 对应 0,2,0/0,3,0）
+- lint 规则（oneDark 无 lint 规则，无竞争）与 lint tooltip（`.cm-tooltip.cm-tooltip-lint` 0,3,0 已赢 oneDark `.cm-tooltip` 0,1,0）不动
+
+**新增/修改 overrides 覆盖时**：与 oneDark 竞争的选择器必须保持 `.cm-editor` 前缀形态（平级选择器会因 reverse 层叠恒输，且与 oneDark 同值时不报错——测试无法发现，只能实测改值验证）。
+
 ### 启动链时序（main.tsx，spec §5）
 
 静态 import 面最小化（仅 react、react-dom/client）——`./lib` barrel → ErrorBoundary → theme 会在 `setActive` 前求值 facade，故**必须绕开 barrel，全部经动态 import**。序列：
@@ -74,8 +86,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 > 用例数为快照，最新计数以 `.claude/test-inventory.md` 为准。
 
-- **`scheme-registry.test.ts`**（~15 用例）：register/get/getAll/getDefaultId、setActive 已知 id、setActive 未知 id 回退 darcula + console.warn、getActive 默认 darcula、重复注册覆盖、`_reset` 隔离、darcula 四段完整性（ui 6 组键数 7/3/5/8/3/3 + 23 标量、terminal 25 键、editor oneDark 透出非 undefined、libraries dockview 20 条 + allotment 2 键）
-- **`overrides.test.ts`**（~6 用例）：dockviewVarStyle 键集合 20 条且值为 active 方案色、allotmentVarStyle 2 键、editorTheme === active 方案 editor 段、editorColorOverrides 返回 CM6 扩展（lint/searchMatch/background 键生效）、setActive 后输出跟随切换
+- **`scheme-registry.test.ts`**（18 用例）：register/get/getAll/getDefaultId、setActive 已知 id、setActive 未知 id 回退 darcula + console.warn、getActive 默认 darcula、重复注册覆盖、`_reset` 隔离、darcula 四段完整性（ui 6 组键数 7/3/5/8/3/3 + 23 标量、terminal 25 键、editor oneDark 透出非 undefined、libraries dockview 20 条 + allotment 2 键）
+- **`overrides.test.ts`**（7 用例）：dockviewVarStyle 键集合 20 条且值为 active 方案色、allotmentVarStyle 2 键、editorTheme === active 方案 editor 段、editorColorOverrides 返回 CM6 扩展（lint/searchMatch/background 键生效）、setActive 后输出跟随切换、**「层叠胜出（ACC-05 修复守卫）」——断言 background 规则选择器为 `/^\.ͼ[0-9a-z]+\.cm-editor$/` 形态、searchMatch 选择器带 `.cm-editor ` 前缀 + 负断言无裸平级选择器（防回归写回）。注意：jsdom 的 `getComputedStyle` 不支持 `<style>` 规则层叠，守卫用规则文本/选择器形态断言而非 computed**
 - **facade/消费方断言**：`colors.test.ts` 守 token 集合与 ROOT_CSS_VARS 键集合；token 值正确性由消费方测试断言（如 `git-gutter.test.ts` 的 GutterMarker DOM 颜色断言、`explorer-git-status.test.tsx` 着色断言）。新增 token 时同步更新消费方断言
 
 ### 运行
