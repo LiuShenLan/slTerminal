@@ -1,9 +1,11 @@
-// schemes/types — 配色方案接口定义（唯一含消费注释的文件，决策 D8）
+// schemes/types — 配色方案接口定义（权威消费注释所在，决策 D8）
 //
 // 消费注释粒度：区域级（语义 + 消费区域/组件），行号不入注释（决策 D8）；
 // 高频 token 标引用计数 +「以 grep 为准」。
 // darcula.ts 等值文件的对象字面量标注 : ColorScheme 后，
 // 编辑器 hover 槽位即显示本文件的 JSDoc——注释单点不漂移，新方案零注释负担。
+// 注释双处并存（2026-08-08 用户需求）：内置默认方案 darcula.ts 另含 UI 区域速查
+// （逐值标注影响的前端区域），本文件为权威，两者保持一致。
 
 import type { Extension } from "@codemirror/state";
 
