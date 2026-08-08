@@ -55,7 +55,7 @@
 | 04 | ✅ | allFixed=true（标尺修正：断言 1/8 目标态改 2 静态 import + 门控内联） | 0 | ad8918d | 人工验证点 ×2 用户已实测签字（2026-08-08） |
 | 05 | ✅ | allFixed=true（6 项，L2 2278 用例） | 0 | 186e21c | |
 | 06 | ✅ | allFixed=true（标尺修正：断言 9 扩展修正记录 4 三项） | 0 | 19ad419 | |
-| 07 | ☐ | — | 0 | — | 人工验证点 ×3，无 commit |
+| 07 | ✅ | allFixed=true（ACC-05 修复后人工复测通过；ACC-03/04/05 三项人工验证点用户已签字 2026-08-08） | 1（ACC-05 fix-loop） | 311fa8d（修复 commit） | 无 Stage commit；ACC-05 根因：CM6 mountStyles reverse 层叠 |
 
 ## 人工验证点（执行到对应 Stage 时向用户出示）
 
