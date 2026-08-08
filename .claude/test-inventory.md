@@ -249,7 +249,7 @@
 |------|------|---------|
 | `src/__tests__/colors.test.ts` | 85 | **配色 token 真实导出值断言（STS-01：GIT_FILE/GIT_GUTTER/EXPLORER/SIDEBAR/AGENT_STATUS_USAGE 五组 + uiTokenCases 补 EXPLORER_SELECTION_BG 等，STS-09）**——it.each 表驱动展开；facade 化后 89→85（死配置清理移除 4 条断言） |
 | `src/__tests__/scheme-registry.test.ts` | 18 | 方案注册表单测（TST-02）：register/get/getAll/getDefaultId、setActive 已知/未知 id 回退 darcula + console.warn、getActive 默认 darcula、重复注册覆盖、`_reset` 隔离、darcula 四段完整性（ui 6 组键数 7/3/5/8/3/3 + 23 标量、terminal 25 键、editor oneDark 透出非 undefined、libraries dockview 20 条 + allotment 2 键） |
-| `src/__tests__/overrides.test.ts` | 6 | 主题 overrides 导出单测（TST-03）：dockviewVarStyle 键集合 20 条且值为 active 方案色、allotmentVarStyle 2 键、editorTheme === active 方案 editor 段、editorColorOverrides 返回 CM6 扩展（lint/searchMatch/background 键生效）、setActive 后输出跟随切换 |
+| `src/__tests__/overrides.test.ts` | 7 | 主题 overrides 导出单测（TST-03）：dockviewVarStyle 键集合 20 条且值为 active 方案色、allotmentVarStyle 2 键、editorTheme === active 方案 editor 段、editorColorOverrides 返回 CM6 扩展（lint/searchMatch/background 键生效）、层叠胜出守卫（ACC-05：竞争规则选择器带 .cm-editor 前缀）、setActive 后输出跟随切换 |
 | `src/__tests__/claude-status.test.ts` | 32 | eventToStatus 纯函数全分支（10 事件 × notificationType）+ getStatusIcon（**null 分支，STS-04**） |
 | `src/__tests__/path.test.ts` | 27 | normalizePath/basename/isChildOf/relativePath 边界覆盖 |
 | `src/__tests__/inject-script.test.ts` | 21 | HTML 脚本注入/`</script>` 转义/幂等/大小写不敏感/键盘转发+片段链接拦截（STS-11① 性能断言已删） |

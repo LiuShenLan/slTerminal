@@ -54,19 +54,26 @@ export function editorColorOverrides(): Extension {
         backgroundColor: overrides.lint.tooltipBackground,
         border: `1px solid ${overrides.lint.tooltipBorder}`,
       },
-      // 搜索匹配高亮——与 oneDark 同选择器同属性形态（match + outline 两键）
-      ".cm-searchMatch": {
+      // 搜索匹配高亮——与 oneDark 同选择器同属性形态（match + outline 两键）。
+      // 选择器带 "&.cm-editor " 前缀提升特异性（ACC-05 修复）：@codemirror/view 的
+      // mountStyles 把 styleModule facet 数组 reverse() 后挂载，扩展数组
+      // [editorTheme(oneDark), editorColorOverrides()] 编译后 oneDark 规则在 <style>
+      // 标签内排在 overrides 之后（同特异性下后声明者胜）→ oneDark 恒赢，覆盖全失效。
+      // 前缀使 .ͼx.cm-editor .cm-searchMatch（0,3,0）> oneDark .ͼo .cm-searchMatch
+      // （0,2,0），胜负与扩展数组顺序无关。
+      "&.cm-editor .cm-searchMatch": {
         backgroundColor: overrides.searchMatch.match,
         outline: `1px solid ${overrides.searchMatch.matchOutline}`,
       },
-      ".cm-searchMatch.cm-searchMatch-selected": {
+      "&.cm-editor .cm-searchMatch.cm-searchMatch-selected": {
         backgroundColor: overrides.searchMatch.selected,
       },
-      ".cm-selectionMatch": {
+      "&.cm-editor .cm-selectionMatch": {
         backgroundColor: overrides.searchMatch.selectionMatch,
       },
-      // 编辑器背景——对齐 ui.editorBg
-      "&": { backgroundColor: overrides.background },
+      // 编辑器背景——对齐 ui.editorBg；"&.cm-editor" 编译为 .ͼx.cm-editor（0,2,0）>
+      // oneDark 的 "&" 编译 .ͼo（0,1,0），原因同上（mountStyles 反转顺序，ACC-05 修复）
+      "&.cm-editor": { backgroundColor: overrides.background },
     },
     { dark: true },
   );

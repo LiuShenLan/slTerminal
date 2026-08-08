@@ -9,6 +9,10 @@
 // - editorColorOverrides 用真实 @codemirror/view：EditorState.create 消费扩展后经
 //   EditorView.styleModule facet 取 StyleModule，getRules() 断言规则值来自 active 方案
 //   （style-mod 编译后值原样保留，实测验证；选择器前缀每次调用随机生成，故只按值断言）
+// - ACC-05 层叠守卫：与 oneDark 竞争的规则另断言选择器带 .cm-editor 前缀（特异性形态
+//   .ͼx.cm-editor / .ͼx.cm-editor .cm-searchMatch）——mountStyles 反转扩展数组后
+//   同特异性下 oneDark 恒赢，升特异性是修复方向；jsdom 的 getComputedStyle 不支持
+//   <style> 规则层叠，computed 断言不可靠，故用规则文本断言
 
 import { describe, it, expect, beforeEach } from "vitest";
 import { EditorState, type Extension } from "@codemirror/state";
@@ -33,6 +37,20 @@ function themeRules(ext: Extension): string {
     .facet(EditorView.styleModule)
     .map((m) => m.getRules())
     .join("\n");
+}
+
+/** 从编译后规则文本中定位含指定值的规则，返回 { selector, props }（未命中 null） */
+function ruleForValue(
+  rules: string,
+  value: string,
+): { selector: string; props: string } | null {
+  for (const line of rules.split("\n")) {
+    if (line.includes(value)) {
+      const brace = line.indexOf("{");
+      return { selector: line.slice(0, brace).trim(), props: line.slice(brace + 1) };
+    }
+  }
+  return null;
 }
 
 describe("overrides", () => {
@@ -92,6 +110,42 @@ describe("overrides", () => {
       expect(rules).toContain(darcula.editor.overrides.searchMatch.matchOutline);
       // lint 键：波浪线 SVG 内色值经 encodeURIComponent 编码（# → %23）
       expect(rules).toContain(encodeURIComponent(darcula.editor.overrides.lint.error));
+    });
+
+    it("层叠胜出（ACC-05 修复守卫）：与 oneDark 竞争的规则选择器带 .cm-editor 前缀", () => {
+      // mountStyles 将扩展数组 reverse() 后挂载：扩展 [editorTheme(oneDark),
+      // editorColorOverrides()] 编译后 oneDark 规则在 <style> 标签内排在后，同特异性下
+      // 后声明者胜 → oneDark 恒赢。故竞争规则必须升特异性——background 用 .ͼx.cm-editor
+      // （0,2,0 > oneDark .ͼo 0,1,0），searchMatch 三键用 .ͼx.cm-editor .cm-searchMatch
+      // （0,3,0 > oneDark .ͼo .cm-searchMatch 0,2,0），胜负与扩展数组顺序无关。
+      const rules = themeRules(editorColorOverrides());
+      const { overrides } = darcula.editor;
+
+      // background：选择器 = .ͼx.cm-editor
+      const bgRule = ruleForValue(rules, overrides.background);
+      expect(bgRule).not.toBeNull();
+      expect(bgRule!.selector).toMatch(/^\.ͼ[0-9a-z]+\.cm-editor$/);
+
+      // searchMatch match：选择器 = .ͼx.cm-editor .cm-searchMatch
+      const matchRule = ruleForValue(rules, overrides.searchMatch.match);
+      expect(matchRule).not.toBeNull();
+      expect(matchRule!.selector).toMatch(/^\.ͼ[0-9a-z]+\.cm-editor \.cm-searchMatch$/);
+
+      // selected：选择器 = .ͼx.cm-editor .cm-searchMatch.cm-searchMatch-selected
+      const selectedRule = ruleForValue(rules, overrides.searchMatch.selected);
+      expect(selectedRule).not.toBeNull();
+      expect(selectedRule!.selector).toMatch(
+        /^\.ͼ[0-9a-z]+\.cm-editor \.cm-searchMatch\.cm-searchMatch-selected$/,
+      );
+
+      // selectionMatch：选择器 = .ͼx.cm-editor .cm-selectionMatch
+      const selectionMatchRule = ruleForValue(rules, overrides.searchMatch.selectionMatch);
+      expect(selectionMatchRule).not.toBeNull();
+      expect(selectionMatchRule!.selector).toMatch(/^\.ͼ[0-9a-z]+\.cm-editor \.cm-selectionMatch$/);
+
+      // 无前缀裸规则不存在（防回归：若又写回与 oneDark 平级的 .cm-searchMatch 选择器，
+      // 层叠胜负回到 by-order，此断言失败）
+      expect(rules).not.toMatch(/^\.ͼ[0-9a-z]+ \.cm-searchMatch\b/m);
     });
 
     it("两连调用规则值同源——均来自 active 方案 editor.overrides 全 12 值", () => {
