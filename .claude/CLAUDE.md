@@ -100,8 +100,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **一键打包**：`.\.claude\package.ps1 -Version "0.1.0"`（release 模式，单文件 exe → zip）
 加 `-Debug` 用 debug 模式（exe + dll 两个文件）。
 
-手动步骤与分享说明见 @../docs/release.md
-
 ## 模块索引
 
 登记规则：增删模块时同步增删行；模块新建子路径 CLAUDE.md 后在「详情」列补链接。
