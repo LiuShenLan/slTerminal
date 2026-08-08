@@ -22,6 +22,9 @@ export interface TabState {
   title?: string;
   /** 命令运行时图标（active=true 时有效，null=无图标） */
   icon?: string | null;
+  /** 当前 CLI 品牌 logo 根绝对路径（OSC 133 C 时经 CliIconRegistry.match 携带；
+   *  hook 事件路径无 command 不传；null=该 CLI 未注册 logo） */
+  logo?: string | null;
 }
 
 /** 命令→页签标题/图标注册表（模块级单例） */

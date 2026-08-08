@@ -129,11 +129,36 @@ describe("HistorySessionRow 状态标记（问题 2：四态同源）", () => {
   });
 
   it("status=null / undefined → 无状态标记（与活跃区 null 无图标一致）", () => {
-    const { queryByText } = renderRow(makeSession(), { status: null });
+    const { queryByText, row } = renderRow(makeSession(), { status: null });
     expect(queryByText("⚡")).toBeNull();
     expect(queryByText("🟡")).toBeNull();
     expect(queryByText("✅")).toBeNull();
     expect(queryByText("❌")).toBeNull();
+    // CLI logo 仅随 status emoji → status null 无 logo img
+    expect(row.querySelector('img[alt="CLI 图标"]')).toBeNull();
+  });
+
+  it("status=working → emoji 后渲染 CLI logo（src=claude 条目/16×16/位于 emoji 与标题间）", () => {
+    const { row } = renderRow(makeSession(), { status: "working" });
+    const line1 = row.children[0] as HTMLElement;
+    const logoImg = row.querySelector('img[alt="CLI 图标"]');
+    // logo 存在：src = CliIconRegistry claude 条目、16×16
+    expect(logoImg).toBeTruthy();
+    expect(logoImg?.getAttribute("src")).toBe("/cli-icons/claude.png");
+    expect(logoImg?.getAttribute("width")).toBe("16");
+    expect(logoImg?.getAttribute("height")).toBe("16");
+    // 行1 子元素序：emoji span(⚡) → logo img → 标题 → 时间
+    const children = Array.from(line1.children);
+    expect(children[0].tagName).toBe("SPAN");
+    expect(children[0].textContent).toBe("⚡");
+    expect(children[1]).toBe(logoImg);
+  });
+
+  it("orphan ✗ 行（status null）→ 不渲染 logo（✗ 后不加图）", () => {
+    const session = makeSession({ cwdExists: false });
+    const { getByText, row } = renderRow(session, { orphan: true });
+    expect(getByText("✗")).toBeTruthy();
+    expect(row.querySelector('img[alt="CLI 图标"]')).toBeNull();
   });
 
   it("orphan=true → ✗ 标记（与四态并存渲染）", () => {

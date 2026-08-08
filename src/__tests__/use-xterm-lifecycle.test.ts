@@ -1297,6 +1297,8 @@ describe("OSC 133 命令边界检测", () => {
       active: true,
       title: "claude",
       icon: "🟡",
+      // CLI 品牌 logo：CliIconRegistry.match("claude") 命中默认注册 → claude.png
+      logo: "/cli-icons/claude.png",
     });
       // P1-F3-01: OSC 133 C 固定使用 🟡 (attention)，不使用 rule.icon
     // PF2-FE-03: OSC 133 C 命中注册命令 → 写入 claude 会话状态
@@ -1327,6 +1329,28 @@ describe("OSC 133 命令边界检测", () => {
     expect(mockOnTabStateChange).toHaveBeenCalledWith({ active: false });
     // PF2-FE-03: OSC 133 D → 清除 claude 会话行
     expect(mockSetClaudeSession).toHaveBeenCalledWith("osc133-test", null);
+  });
+
+  it("OSC133-2b: OSC 133 C 匹配标题规则但 CLI 未注册 logo → logo: null（清旧 logo）", async () => {
+    mockTabTitleMatch.mockReturnValue({
+      command: "codex",
+      title: "codex",
+      icon: "/codex-logo.png",
+    });
+
+    const handler = await mountAndWaitForOsc133();
+    mockOnTabStateChange.mockClear();
+    mockSetClaudeSession.mockClear();
+
+    handler("C;codex");
+
+    // cliIconRegistry 仅注册 claude → match("codex") 返回 null
+    expect(mockOnTabStateChange).toHaveBeenCalledWith({
+      active: true,
+      title: "codex",
+      icon: "🟡",
+      logo: null,
+    });
   });
 
   it("OSC133-3: 空命令名不触发 onTabStateChange", async () => {

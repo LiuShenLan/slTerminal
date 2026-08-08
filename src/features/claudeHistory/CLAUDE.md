@@ -14,7 +14,7 @@ Claude Code 历史会话查询与恢复——历史区 UI 与数据层。宿主�
 
 ### 双行式行（FE-07）与三级字号层级（问题 1/4 修复）
 
-- `HistorySessionRow`：行1 = 四态标记 + 粗体标题（12px）+ 右上角相对时间（`formatRelativeTime` 灰字）；行2 = 首条 prompt 预览单行截断（11px）。状态标记：`status` 非 null → 对应 emoji；`orphan` → ✗（cwd 非 null 且 `cwdExists=false`）；`noCwd` → 不显示 ✗（恢复类操作禁用）。配色全部 `theme/colors.ts` token（硬约束 #6）。
+- `HistorySessionRow`：行1 = 四态标记 + **CLI 品牌 logo（F9）** + 粗体标题（12px）+ 右上角相对时间（`formatRelativeTime` 灰字）；行2 = 首条 prompt 预览单行截断（11px）。状态标记：`status` 非 null → 对应 emoji 后渲染 logo（16×16，`cliIconRegistry.getSrc("claude")`——当前会话恒为 claude，未来按行 CLI 标识扩展；**仅随 status emoji**，孤儿 ✗ 后不加图）；`orphan` → ✗（cwd 非 null 且 `cwdExists=false`）；`noCwd` → 不显示 ✗（恢复类操作禁用）。配色全部 `theme/colors.ts` token（硬约束 #6）。
 - `AgentStatusRow`（活跃区）：行1 = 四态图标 + 标题（12px 粗体）；行2 = 用量条 + 百分比 + 相对时间（11px 灰，缩进对齐图标列）。时间口径与历史区统一（`formatRelativeTime`，问题 1 修复——旧为 toLocaleTimeString 同行挤压导致窄侧栏遮挡）。
 - **三级字号递减**（问题 4）：折叠框名（区块标题）13px 粗体 > 会话标题 12px 粗体 > 第二行 11px 灰。树形引导线：区块内容 `paddingLeft: 12px` + 左侧 1px 竖线（`SIDEBAR_COLORS.treeGuide`）；全部区组内容再缩进 12px + 二级竖线。
 

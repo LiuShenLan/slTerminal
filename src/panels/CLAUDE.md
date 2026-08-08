@@ -222,10 +222,10 @@ xterm.js 6.0.0 原生支持 OSC 8 解析渲染。`useXterm.ts` 在 `term.open()`
 
 `shell-integration.ps1` 的 Enter hook 在命令执行前发射 OSC 133 C（`ESC ] 133;C;<命令行> ST`），`prompt()` 在命令退出后发射 OSC 133;D（退出码）。`useXterm.ts` 注册 `term.parser.registerOscHandler(133, ...)` 解析 C/D 序列：
 
-- **OSC 133 C**：提取命令行文本 → 调用 `onTabStateChange({ active: true, title, icon: "🟡" })` 设置 attention 态；同时 `TabTitleRegistry.match(command)` 查找规则 → 匹配时覆盖 `title`
-- **OSC 133 D**：命令退出 → `onTabStateChange({ active: false })` → `TerminalPanel` 恢复原标题并清除图标（F8 后原标题 = `customTitle` 优先，用户重命名过的终端恢复自定义名）
+- **OSC 133 C**：提取命令行文本 → 调用 `onTabStateChange({ active: true, title, icon: "🟡", logo })` 设置 attention 态；同时 `TabTitleRegistry.match(command)` 查找规则 → 匹配时覆盖 `title`；`logo` = `CliIconRegistry.match(command)`（F9：按命令行首 token 匹配 CLI 品牌 logo，未注册 → null 清旧 logo）
+- **OSC 133 D**：命令退出 → `onTabStateChange({ active: false })` → `TerminalPanel` 恢复原标题并清除图标与 logo（F8 后原标题 = `customTitle` 优先，用户重命名过的终端恢复自定义名）
 
-**`TabTitleRegistry`**（Registry Pattern 单例）：管理 `command → { title, icon }` 映射。新增命令只需在 `tabRules.ts` 追加 `tabTitleRegistry.register(...)`，不修改核心逻辑。
+**`TabTitleRegistry`**（Registry Pattern 单例）：管理 `command → { title, icon }` 映射。新增命令只需在 `tabRules.ts` 追加 `tabTitleRegistry.register(...)`，不修改核心逻辑。CLI 品牌 logo 独立于标题规则，由 `src/lib/cliIcons.ts` 的 `CliIconRegistry` 管理（F9，见 @../lib/CLAUDE.md）。
 
 **初始化重置**：PTY spawn 成功后调 `onTabStateChange({ active: false })`，覆盖持久化残留。`PtyEvent::Exit` 时若 `isCommandRunningRef` 为 true 同样重置。
 
@@ -244,10 +244,10 @@ xterm.js 6.0.0 原生支持 OSC 8 解析渲染。`useXterm.ts` 在 `term.open()`
 
 实现：
 
-- **`useCommandDetection`**：OSC 133 C 触发时调用 `onTabStateChange({ active: true, title, icon: "🟡" })`；OSC 133 D 重置
-- **`useXterm`**：新增 `onHookEvent` 订阅 → 按 `panelId` 过滤 → `eventToStatus(event, notificationType?)` 纯函数（`src/lib/claudeStatus.ts`）→ `onTabStateChange({ active: true, icon: emoji })`；`SessionEnd` 调 `{ active: false }`
-- **`TerminalPanel.handleTabStateChange`**：`active=true` 时只有 `title` 存在才 `setTitle`，只有 `icon !== undefined` 才 `updateParameters`；`active=false` 恢复原标题并清 icon
-- **`DefaultTab`**（workspace 层）：`tabIcon` 含 `/` 走 `<img>`，否则走 `<span>` 渲染 emoji
+- **`useCommandDetection`**：OSC 133 C 触发时调用 `onTabStateChange({ active: true, title, icon: "🟡", logo: cliIconRegistry.match(command) })`（F9）；OSC 133 D 重置
+- **`useXterm`**：新增 `onHookEvent` 订阅 → 按 `panelId` 过滤 → `eventToStatus(event, notificationType?)` 纯函数（`src/lib/claudeStatus.ts`）→ `onTabStateChange({ active: true, icon: emoji })`（hook 路径无 command，**不传 logo**——TerminalPanel 层保持前值）；`SessionEnd` 调 `{ active: false }`
+- **`TerminalPanel.handleTabStateChange`**：`active=true` 时只有 `title` 存在才 `setTitle`，只有 `icon !== undefined` 才 `updateParameters`；`logoRef` 照 `originalTitleRef` 模式保持当前 CLI logo——`state.logo !== undefined` 时更新（OSC 133 C），hook 事件路径不清，`updateParameters({ ...params, tabIcon, tabLogo: logoRef.current })`；`active=false` 恢复原标题并**双清** icon + logo
+- **`DefaultTab`**（workspace 层）：`tabIcon` 含 `/` 走 `<img>`，否则走 `<span>` 渲染 emoji；`tabLogo`（`params.tabLogo`）在 emoji 后渲染 16×16 CLI logo（F9：仅随 emoji——`tabIcon && tabLogo` 双条件）
 - **`tabRules.ts`**：claude 规则的 `icon` 字段已移除——emoji 由 F3 四态系统接管，不再硬编码图标
 
 ### 中断场景已知行为（Ctrl+C）
@@ -265,19 +265,19 @@ Claude Code 在用户主动 Ctrl+C 中断时不发射任何 hook 事件（`Stop`
 |------|------|
 | `index.ts` | 公共 API 出口：导出 TerminalPanel、EditorPanel、HtmlPanel、GitShowPanel、DiffPanel |
 | `terminal/index.ts` | TerminalPanel 及 terminalOptions 导出 |
-| `terminal/TerminalPanel.tsx` | 终端面板 React 组件：获取 Windows build 号 → useXterm → 加载遮罩；`originalTitleRef` 挂载时取 `params.customTitle ?? api.title ?? "terminal"`（F8 自定义标题优先）并订阅 `onDidParametersChange` 在 `customTitle !== undefined` 时同步 ref——OSC 133 D 恢复标题用自定义名 |
+| `terminal/TerminalPanel.tsx` | 终端面板 React 组件：获取 Windows build 号 → useXterm → 加载遮罩；`originalTitleRef` 挂载时取 `params.customTitle ?? api.title ?? "terminal"`（F8 自定义标题优先）并订阅 `onDidParametersChange` 在 `customTitle !== undefined` 时同步 ref——OSC 133 D 恢复标题用自定义名；`logoRef` 照同模式保持 CLI logo（F9，active 时 `state.logo !== undefined` 更新、inactive 双清 tabIcon + tabLogo） |
 | `terminal/useTerminalInstance.ts` | Terminal 实例 + WebGL/FitAddon 生命周期 + StrictMode 守卫 |
 | `terminal/usePtyOutput.ts` | PTY 输出合帧（Idle+Max 双定时器 + DEC 2026）+ 非焦点降频 |
 | `terminal/usePtyResize.ts` | ResizeObserver X/Y 分离 debounce + NaN 守卫 |
 | `terminal/useClipboardHandler.ts` | OSC 52 剪贴板拦截 + CJK 解码 + 焦点门控 |
-| `terminal/useCommandDetection.ts` | OSC 133 命令边界检测 + TabTitleRegistry 匹配 + 🟡 attention 指示（OSC 133 C 触发 `onTabStateChange({ active: true, icon: "🟡" })`） |
+| `terminal/useCommandDetection.ts` | OSC 133 命令边界检测 + TabTitleRegistry 匹配 + 🟡 attention 指示（OSC 133 C 触发 `onTabStateChange({ active: true, icon: "🟡", logo: cliIconRegistry.match(command) })`，F9 CLI logo） |
 | `terminal/webgl.ts` | `detectWebgl()` + `setupWebglWithRetry()` 纯函数 |
 | `terminal/useXterm.ts` | 编排层（~420 行），组合上述 6 个 hook + `src/lib/useFontSizeWheel`（Ctrl+Wheel 字体缩放）+ `onHookEvent` 订阅（按 panelId 过滤 → `eventToStatus` → F3 四态 emoji；非 SessionEnd/Exit 时 `setClaudeSession` 携 `sessionId`/`transcriptPath`/`status`——两区四态同源，**payload 空串归一 `|| undefined`** 防 claude hook 输入缺字段时下游静默失效），对外接口兼容 TerminalPanel |
 | `terminal/keyboard.ts` | 终端快捷键命令工厂：`createTerminalShortcuts()`（无参）经 `commandFromMeta` 生成 `terminal.copy/paste/newline`，App 一次性注册；handler 经 `getActiveTerminal()` 派发到聚焦终端。Ctrl+C 不注册（透传 SIGINT） |
 | `terminal/activeTerminal.ts` | 模块级"聚焦终端"指针：`setActiveTerminal`/`clearActiveTerminal`（仅匹配时清）/`getActiveTerminal`。终端聚焦时设为 active，命令 handler 据此派发 |
 | `terminal/theme.ts` | xterm.js 暗色主题选项（JetBrains 配色），硬约束 #6 单点。`drawBoldTextInBrightColors` 显式声明为 `true`，消除对 xterm.js 默认值的隐式依赖（仅影响 ANSI 16 色粗体→亮色映射，不影响 True Color）。`vtExtensions: { kittyKeyboard: true }` 启用 Kitty 键盘协议被动支持 |
 | `terminal/TerminalRegistry.ts` | 模块级 `Map<panelId, RegisteredTerminal>` + `ClaudeSessionInfo`（存在即运行中，二态模型）+ `setClaudeSession(panelId, patch|null)`（merge 语义：null 清空、undefined 键不覆盖、缺 lastEventAt 自动填 Date.now()）+ `subscribe(listener)` 订阅 register/remove/**sessionChange** 事件（sessionChange 仅携 panelId，listener 经 `get()` 读现值防快照不一致）；register 幂等覆盖时 `claudeSession` 缺省保留旧值（StrictMode/重试场景不丢 session）。跨页面切换时供查询/reattach |
-| `terminal/TabTitleRegistry.ts` | 命令→标题/图标映射注册表单例（Registry Pattern）。`match(command)` 首 token 匹配（`command.trim().split(/\s+/)[0]` 后精确查表——覆盖 `claude --resume` / `claude -p` 等带参变体），`register(rule)` 注册规则，`_reset()` 测试用 |
+| `terminal/TabTitleRegistry.ts` | 命令→标题/图标映射注册表单例（Registry Pattern）。`match(command)` 首 token 匹配（`command.trim().split(/\s+/)[0]` 后精确查表——覆盖 `claude --resume` / `claude -p` 等带参变体），`register(rule)` 注册规则，`_reset()` 测试用；`TabState` 含可选 `logo` 字段（F9：OSC 133 C 携带的 CLI 品牌 logo，hook 事件路径不传） |
 | `terminal/tabRules.ts` | 规则注册文件——side-effect import 向 `tabTitleRegistry` 注册命令行命令规则（claude 规则的 `icon` 字段已移除，仅保留 `command` + `title`；emoji 表示由 F3 四态系统接管）。后续新增命令在此追加 `register(...)` |
 | `editor/index.ts` | EditorPanel 导出 |
 | `editor/EditorPanel.tsx` | 编辑器面板 React 组件：container `overflow: clip`（裁剪不吸收滚动事件，委托 `.cm-scroller` 管理滚动；`.cm-editor` `height: 100%` 约束 scroller 高度产生溢出）→ useCodeMirror |

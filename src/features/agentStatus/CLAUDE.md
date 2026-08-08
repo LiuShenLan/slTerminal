@@ -12,7 +12,10 @@ Agent 状态视图（`agent-status` 侧栏视图，图标 🤖）——一屏总
 
 ### 双行式行（AgentStatusRow）
 
-行1 = 四态图标 + 标题（12px 粗体）；行2 = 用量条 + 百分比 + 相对时间（11px 灰，缩进对齐图标列）。
+行1 = 四态图标 + **CLI 品牌 logo（F9）** + 标题（12px 粗体）；行2 = 用量条 + 百分比 + 相对时间（11px 灰，缩进对齐图标列）。
+
+- **图标列 40px flex 簇**：emoji 与 CLI logo（16×16，`cliIconRegistry.getSrc("claude")`——当前会话恒为 claude，未来按行 CLI 标识扩展）列内居中成组（列内 gap 4px）；`{icon}` 为空仍渲染空列占位（行1 标题起点恒定不漂移）；logo 仅随 emoji 显示（icon 为空 → 无 logo）
+- **行2 缩进 48px**（= 图标列 40 + gap 8），用量条与行1 标题起点对齐
 
 **用量口径** = `(inputTokens + cacheReadInputTokens + cacheCreationInputTokens) / 200_000`（`CLAUDE_CONTEXT_LIMIT`，`consts.ts`；outputTokens 不计占用保留为信息字段）。时间口径与历史区统一（`formatRelativeTime`，见 @../claudeHistory/CLAUDE.md）。
 

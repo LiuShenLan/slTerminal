@@ -66,9 +66,11 @@ vi.mock("../workspace/pageApis", () => ({
 }));
 
 vi.mock("../lib/claudeStatus", () => ({
+  // null/未识别状态 → ""（与真实实现一致：真实 getStatusIcon 对 null 返回 ""，
+  // 否则 status null 行会误渲染 emoji 与 CLI logo）
   getStatusIcon: vi.fn(
-    (s: string) =>
-      ({ working: "⚡", attention: "🟡", done: "✅", error: "❌" })[s] ?? "🟡",
+    (s: string | null) =>
+      s != null ? ({ working: "⚡", attention: "🟡", done: "✅", error: "❌" })[s] ?? "" : "",
   ),
   // eventToStatus 不在 mock 中（测试不触发 hook 事件回调），
   // 设为 stub 防 import 时 undefined
@@ -363,6 +365,61 @@ describe("AgentStatusRow 双行布局（问题 1 修复）", () => {
 
     const { line1 } = rowChildren(container);
     expect(line1.textContent).toContain("⚡");
+  });
+
+  it("status 非 null → 行1 渲染 CLI logo（src=claude 条目/16×16/位于图标列内）", () => {
+    const row = makeRow({ status: "working" });
+    const { container } = render(
+      React.createElement(AgentStatusRow, { row, onFocus: vi.fn() }),
+    );
+
+    const { line1 } = rowChildren(container);
+    const logoImg = line1.querySelector('img[alt="CLI 图标"]');
+    expect(logoImg).toBeTruthy();
+    expect(logoImg?.getAttribute("src")).toBe("/cli-icons/claude.png");
+    expect(logoImg?.getAttribute("width")).toBe("16");
+    expect(logoImg?.getAttribute("height")).toBe("16");
+  });
+
+  it("status null → 行1 无 CLI logo（仅随 emoji 显示）", () => {
+    const row = makeRow({ status: null });
+    const { container } = render(
+      React.createElement(AgentStatusRow, { row, onFocus: vi.fn() }),
+    );
+
+    const { line1 } = rowChildren(container);
+    expect(line1.textContent).not.toContain("⚡");
+    expect(line1.querySelector('img[alt="CLI 图标"]')).toBeNull();
+  });
+
+  it("图标列 = 40px flex 簇（emoji 与 logo 列内居中成组）", () => {
+    const row = makeRow({ status: "working" });
+    const { container } = render(
+      React.createElement(AgentStatusRow, { row, onFocus: vi.fn() }),
+    );
+
+    const { line1 } = rowChildren(container);
+    const iconCol = line1.children[0] as HTMLElement;
+    expect(iconCol.style.width).toBe("40px");
+    expect(iconCol.style.display).toBe("flex");
+    expect(iconCol.style.alignItems).toBe("center");
+    expect(iconCol.style.justifyContent).toBe("center");
+    // 列内：emoji 文本节点（不入 children）+ logo img（children[0]）
+    expect(iconCol.firstChild?.textContent).toBe("⚡");
+    expect(iconCol.children[0]?.getAttribute("alt")).toBe("CLI 图标");
+  });
+
+  it("行2 paddingLeft = 48px（对齐行1图标列 40 + gap 8，用量条与标题起点对齐）", () => {
+    const row = makeRow({ title: "对齐守卫" });
+    const { container } = render(
+      React.createElement(AgentStatusRow, { row, onFocus: vi.fn() }),
+    );
+
+    const { line2 } = rowChildren(container);
+    // 行1 标题起点 = 40px 列 + 8px gap
+    expect(line2.style.paddingLeft).toBe("48px");
+    // 行2 无 logo（logo 只在行1 图标列内）
+    expect(line2.querySelector('img[alt="CLI 图标"]')).toBeNull();
   });
 
   it("now prop：lastEventAt 固定，now 推进 → 时间文本重算（问题 1b 定时刷新）", () => {

@@ -8,6 +8,7 @@ import React, { useState, useCallback } from "react";
 import type { AgentSessionRow } from "./useAgentStatus";
 import { CLAUDE_CONTEXT_LIMIT } from "./consts";
 import { getStatusIcon } from "../../lib/claudeStatus";
+import { cliIconRegistry } from "../../lib/cliIcons";
 import { formatRelativeTime } from "../claudeHistory/historyModel";
 import { AGENT_STATUS_USAGE_COLORS, SIDEBAR_COLORS, DIM_FG } from "../../theme/colors";
 
@@ -44,6 +45,9 @@ export const AgentStatusRow: React.FC<Props> = ({ row, onFocus, now }) => {
 
   // ---- 图标与时间（相对时间，与历史区口径统一；now 由 60s ticker 驱动重算） ----
   const icon = getStatusIcon(row.status);
+  // 当前侧栏会话均为 claude（AgentSessionRow 无 CLI 字段），直接取注册表 claude 条目；
+  // 未来新增编码 CLI 时按行 CLI 标识扩展
+  const logoSrc = cliIconRegistry.getSrc("claude");
   const timeStr = formatRelativeTime(row.lastEventAt, now ?? Date.now());
 
   // ---- 容器样式 ----
@@ -66,17 +70,25 @@ export const AgentStatusRow: React.FC<Props> = ({ row, onFocus, now }) => {
       onMouseLeave={() => setHovered(false)}
       onClick={handleClick}
     >
-      {/* 行1：四态图标 + 标题（12px 粗体，超出截断） */}
+      {/* 行1：四态图标 + CLI logo + 标题（12px 粗体，超出截断） */}
       <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
         <span
           style={{
-            width: "20px",
-            textAlign: "center",
+            width: "40px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: "4px", // 列内收紧：emoji 与 logo 读作一个图标簇
             flexShrink: 0,
             fontSize: "14px",
           }}
         >
           {icon}
+          {/* CLI 品牌 logo：仅随 emoji 显示；icon 为空时渲染空列占位（对齐恒定不漂移） */}
+          {icon && logoSrc && (
+            <img src={logoSrc} width={16} height={16}
+              style={{ flexShrink: 0, display: "block" }} alt="CLI 图标" />
+          )}
         </span>
         <span
           style={{
@@ -99,7 +111,7 @@ export const AgentStatusRow: React.FC<Props> = ({ row, onFocus, now }) => {
           display: "flex",
           alignItems: "center",
           gap: "8px",
-          paddingLeft: "28px", // 对齐行1图标列（icon 20 + gap 8）
+          paddingLeft: "48px", // 对齐行1图标列（icon 40 + gap 8）
         }}
       >
         <div

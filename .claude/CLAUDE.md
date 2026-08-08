@@ -49,7 +49,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 8. **会话元数据单点**：PTY 进程映射仅在 `panels/terminal/TerminalRegistry`（模块级 Map）管理，前端会话元数据已合并。面板只订阅，不自存。
 9. **平台分支收敛**：`#[cfg(windows)]` 只允许出现在 pty 模块等明确处，业务逻辑不撒 cfg（详见 @../src-tauri/src/pty/CLAUDE.md）。
 10. **权限最小化**：Tauri 2 自定义命令默认放行，`capabilities/` 只管插件权限；不追加通配 `*`。
-11. **测试覆盖**: 所有改动的代码都需要添加全量测试用例覆盖
+11. **测试覆盖**: 所有改动的代码都需要添加全量自动化测试用例覆盖
 
 ## Windows 关键坑
 

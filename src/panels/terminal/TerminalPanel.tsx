@@ -25,6 +25,8 @@ interface TerminalPanelProps {
     cwd?: string;
     /** 用户自定义页签标题（右键菜单重命名，随布局持久化） */
     customTitle?: string;
+    /** CLI 品牌 logo 根绝对路径（随布局持久化，spawn 成功重置清除残留） */
+    tabLogo?: string | null;
   };
 }
 
@@ -70,14 +72,21 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ api, params }) => {
   // 挂载时优先取 params.customTitle（重命名后的自定义标题）——重启恢复时布局 JSON
   // 的 title 字段可能是瞬态值（如 claude 运行中退出），customTitle 才是真名
   const originalTitleRef = useRef(params.customTitle ?? api.title ?? "terminal");
+  // 当前 CLI logo 根绝对路径：仅 OSC 133 C（有 command）更新；hook 事件路径
+  // （无 command）不传 logo 保持前值；null 清除（该 CLI 未注册 logo）
+  const logoRef = useRef<string | null>(params.tabLogo ?? null);
   const handleTabStateChange = useCallback((state: TabState) => {
     if (state.active) {
       // 仅当 title/icon 存在时才更新，不覆盖 originalTitleRef
       if (state.title) api.setTitle(state.title);
-      if (state.icon !== undefined) api.updateParameters({ ...params, tabIcon: state.icon });
+      if (state.logo !== undefined) logoRef.current = state.logo;
+      if (state.icon !== undefined) {
+        api.updateParameters({ ...params, tabIcon: state.icon, tabLogo: logoRef.current });
+      }
     } else {
       api.setTitle(originalTitleRef.current);
-      api.updateParameters({ ...params, tabIcon: null });
+      // 双清 icon + logo（覆盖布局 JSON 持久化残留，spawn 成功后 resetCommandState 触发）
+      api.updateParameters({ ...params, tabIcon: null, tabLogo: null });
     }
   }, [api, params]);
 

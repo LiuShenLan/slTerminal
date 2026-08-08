@@ -10,6 +10,7 @@ import type { Terminal } from "@xterm/xterm";
 import { tabTitleRegistry } from "./TabTitleRegistry";
 import type { TabState } from "./TabTitleRegistry";
 import { TerminalRegistry } from "./TerminalRegistry";
+import { cliIconRegistry } from "../../lib/cliIcons";
 
 /** OSC 133 命令边界检测 hook
  *
@@ -48,7 +49,13 @@ export function useCommandDetection(
         const rule = tabTitleRegistry.match(command);
         if (rule) {
           isCommandRunningRef.current = true;
-          onTabStateChangeRef.current?.({ active: true, title: rule.title, icon: "🟡" });
+          // logo = CliIconRegistry 按命令行首 token 匹配的 CLI 品牌图（未注册 → null，清旧 logo）
+          onTabStateChangeRef.current?.({
+            active: true,
+            title: rule.title,
+            icon: "🟡",
+            logo: cliIconRegistry.match(command),
+          });
           // 写入 claude 会话状态（未注入 hooks 时无 transcriptPath，用量条不可用）
           TerminalRegistry.setClaudeSession(panelId, { matchedCommand: rule.command });
         }

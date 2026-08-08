@@ -13,6 +13,7 @@ import React from "react";
 import type { HistorySession } from "../../types/claudeHistory";
 import type { ClaudeStatus } from "../../lib/claudeStatus";
 import { STATUS_EMOJI } from "../../lib/claudeStatus";
+import { cliIconRegistry } from "../../lib/cliIcons";
 import { formatRelativeTime } from "./historyModel";
 import { EXPLORER_SELECTION_BG, SIDEBAR_COLORS, DIM_FG } from "../../theme";
 
@@ -48,6 +49,9 @@ export const HistorySessionRow: React.FC<HistorySessionRowProps> = ({
   const title = session.title ?? session.sessionId.slice(0, 8);
   const timeStr = formatRelativeTime(session.mtimeMs, Date.now());
   const statusIcon = status != null ? (STATUS_EMOJI[status] ?? "") : "";
+  // 当前历史区会话均为 claude（HistorySession 无 CLI 字段），直接取注册表 claude 条目；
+  // 未来新增编码 CLI 时按行 CLI 标识扩展
+  const logoSrc = cliIconRegistry.getSrc("claude");
 
   return (
     <div
@@ -77,7 +81,16 @@ export const HistorySessionRow: React.FC<HistorySessionRowProps> = ({
           color: SIDEBAR_COLORS.fg,
         }}
       >
-        {statusIcon && <span style={{ flexShrink: 0 }}>{statusIcon}</span>}
+        {/* CLI 品牌 logo 仅随 status emoji 渲染（status 为 null / 孤儿 ✗ 行不加图） */}
+        {statusIcon && (
+          <>
+            <span style={{ flexShrink: 0 }}>{statusIcon}</span>
+            {logoSrc && (
+              <img src={logoSrc} width={16} height={16}
+                style={{ flexShrink: 0, display: "block" }} alt="CLI 图标" />
+            )}
+          </>
+        )}
         <span
           style={{
             flex: 1,

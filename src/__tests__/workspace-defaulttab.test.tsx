@@ -29,7 +29,7 @@ interface TabListeners {
 }
 
 /** 构造 fake PanelApi 并渲染生产 DefaultTab（StrictMode 双渲染：取最后实例） */
-function renderTab(init: { title?: string; tabIcon?: string | null }) {
+function renderTab(init: { title?: string; tabIcon?: string | null; tabLogo?: string | null }) {
   const listeners: TabListeners = { title: [], params: [] };
   const api = {
     title: init.title ?? "terminal-0",
@@ -46,19 +46,22 @@ function renderTab(init: { title?: string; tabIcon?: string | null }) {
   };
   const params: Record<string, unknown> = {};
   if (init.tabIcon !== undefined) params.tabIcon = init.tabIcon;
+  if (init.tabLogo !== undefined) params.tabLogo = init.tabLogo;
 
   const result = render(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     React.createElement(DefaultTab, { api, containerApi: {}, params } as any),
   );
 
-  // 取 DefaultTab 根 div（DOM 顺序：图标 → 标题 → 关闭按钮）
+  // 取 DefaultTab 根 div（DOM 顺序：图标 → logo → 标题 → 关闭按钮）
   const root = result.container.firstChild as HTMLElement | null;
 
   // 每次现取（React 更新后 DOM 结构变化，快照数组会失效）
   const getChildren = () => (root ? Array.from(root.children) : []);
 
   const iconImg = () => root?.querySelector("img") ?? null;
+  /** CLI 品牌 logo img（alt="CLI 图标"，与 URL tabIcon 的 alt="页签图标" 区分） */
+  const statusImg = () => root?.querySelector('img[alt="CLI 图标"]') ?? null;
   // 标题 span 恒为最后一个 span（图标 span 在它前面）
   const titleSpan = () => {
     const spans = root?.querySelectorAll("span") ?? [];
@@ -66,7 +69,7 @@ function renderTab(init: { title?: string; tabIcon?: string | null }) {
   };
   const closeBtn = () => root?.querySelector("button") ?? null;
 
-  return { ...result, api, listeners, root, getChildren, iconImg, titleSpan, closeBtn };
+  return { ...result, api, listeners, root, getChildren, iconImg, statusImg, titleSpan, closeBtn };
 }
 
 /** 模拟 Dockview 真实行为：updateParameters 后发射扁平 Parameters 对象 */
@@ -239,6 +242,67 @@ describe("DefaultTab（生产组件）", () => {
     it("tabIcon 为空字符串 → 不渲染图标（falsy）", () => {
       const { iconImg } = renderTab({ tabIcon: "" });
       expect(iconImg()).toBeNull();
+    });
+  });
+
+  describe("CLI logo（tabLogo，仅随 emoji 显示）", () => {
+    it("emoji + tabLogo → img[alt='CLI 图标'] 存在（src/16×16/flexShrink）", () => {
+      const { statusImg } = renderTab({ tabIcon: "⚡", tabLogo: "/cli-icons/claude.png" });
+      expect(statusImg()).toBeTruthy();
+      expect(statusImg()?.getAttribute("src")).toBe("/cli-icons/claude.png");
+      expect(statusImg()?.getAttribute("width")).toBe("16");
+      expect(statusImg()?.getAttribute("height")).toBe("16");
+      expect((statusImg() as HTMLElement).style.flexShrink).toBe("0");
+    });
+
+    it("DOM 顺序：emoji span → logo img → 标题 → 关闭按钮", () => {
+      const { getChildren, statusImg, titleSpan, closeBtn } = renderTab({
+        tabIcon: "⚡",
+        tabLogo: "/cli-icons/claude.png",
+      });
+      const icon = getChildren()[0] as HTMLElement;
+      expect(icon.tagName).toBe("SPAN");
+      expect(icon.textContent).toBe("⚡");
+      expect(getChildren()[1]).toBe(statusImg());
+      expect(titleSpan()?.textContent).toBe("terminal-0");
+      expect(closeBtn()?.getAttribute("title")).toBe("关闭");
+    });
+
+    it("tabIcon 为 null + tabLogo → 无 img（仅随 emoji，双清双保险）", () => {
+      const { statusImg, iconImg } = renderTab({
+        tabIcon: null,
+        tabLogo: "/cli-icons/claude.png",
+      });
+      expect(statusImg()).toBeNull();
+      expect(iconImg()).toBeNull();
+    });
+
+    it("动态更新：emitParamsChange 携 tabLogo → logo img 出现（扁平参数回归）", () => {
+      const { listeners, statusImg } = renderTab({ tabIcon: null });
+      expect(statusImg()).toBeNull();
+      emitParamsChange(listeners, { tabIcon: "⚡", tabLogo: "/cli-icons/claude.png" });
+      expect(statusImg()?.getAttribute("src")).toBe("/cli-icons/claude.png");
+    });
+
+    it("动态更新：tabLogo 移除 → logo img 消失（emoji 保留）", () => {
+      const { listeners, statusImg, getChildren } = renderTab({
+        tabIcon: "⚡",
+        tabLogo: "/cli-icons/claude.png",
+      });
+      expect(statusImg()).toBeTruthy();
+      emitParamsChange(listeners, { tabIcon: "⚡", tabLogo: null });
+      expect(statusImg()).toBeNull();
+      // emoji span 仍保留
+      expect((getChildren()[0] as HTMLElement).textContent).toBe("⚡");
+    });
+
+    it("URL tabIcon（img 分支）与 tabLogo 并存 → 两个 img 互不干扰", () => {
+      const { iconImg, statusImg } = renderTab({
+        tabIcon: "/claude.png",
+        tabLogo: "/cli-icons/claude.png",
+      });
+      expect(iconImg()?.getAttribute("src")).toBe("/claude.png");
+      expect(statusImg()?.getAttribute("src")).toBe("/cli-icons/claude.png");
     });
   });
 });

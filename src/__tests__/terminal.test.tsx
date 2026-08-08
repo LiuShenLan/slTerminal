@@ -101,6 +101,7 @@ vi.mock("../ipc", () => ({
 import React from "react";
 import { render, screen, waitFor, act, cleanup } from "@testing-library/react";
 import TerminalPanel from "../panels/terminal/TerminalPanel";
+import { cliIconRegistry } from "../lib/cliIcons";
 
 afterEach(() => {
   // RTL 无全局 cleanup（vitest.config.ts 未开 globals）——必须显式卸载，否则遮罩 DOM 跨用例累积
@@ -108,6 +109,9 @@ afterEach(() => {
   // 防用例抛错后 fake timers 泄漏到后续用例
   vi.useRealTimers();
   vi.clearAllMocks();
+  // 恢复 CliIconRegistry 默认 claude 注册（_reset 用例污染隔离）
+  cliIconRegistry._reset();
+  cliIconRegistry.register({ command: "claude", src: "/cli-icons/claude.png" });
 });
 
 describe("TerminalPanel", () => {
@@ -186,13 +190,13 @@ describe("TerminalPanel", () => {
       expect.objectContaining({ tabIcon: "🟡" }),
     );
 
-    // OSC 133 D：命令退出 → active=false 恢复原标题并清图标
+    // OSC 133 D：命令退出 → active=false 恢复原标题并清图标（icon + logo 双清）
     await act(async () => {
       oscHandler("D;0");
     });
     expect(mocks.mockApi.setTitle).toHaveBeenLastCalledWith("terminal-0");
     expect(mocks.mockApi.updateParameters).toHaveBeenLastCalledWith(
-      expect.objectContaining({ tabIcon: null }),
+      expect.objectContaining({ tabIcon: null, tabLogo: null }),
     );
   });
 
@@ -210,13 +214,13 @@ describe("TerminalPanel", () => {
       expect.objectContaining({ tabIcon: "🟡" }),
     );
 
-    // SessionEnd → active=false → 恢复原标题 + 清图标
+    // SessionEnd → active=false → 恢复原标题 + 清图标（icon + logo 双清）
     await act(async () => {
       hookCb({ panelId: "test-p7", event: "SessionEnd" });
     });
     expect(mocks.mockApi.setTitle).toHaveBeenLastCalledWith("terminal-0");
     expect(mocks.mockApi.updateParameters).toHaveBeenLastCalledWith(
-      expect.objectContaining({ tabIcon: null }),
+      expect.objectContaining({ tabIcon: null, tabLogo: null }),
     );
   });
 
@@ -263,5 +267,67 @@ describe("TerminalPanel", () => {
       oscHandler("D;0");
     });
     expect(mocks.mockApi.setTitle).toHaveBeenLastCalledWith("改名");
+  });
+
+  it("OSC 133 C 命中 claude → updateParameters 携 tabIcon 🟡 + tabLogo claude logo", async () => {
+    render(React.createElement(TerminalPanel, { api: mocks.mockApi, params: { panelId: "test-logo1" } }));
+    await waitFor(() => expect(mocks.getOscHandler(133)).toBeDefined());
+    const oscHandler = mocks.getOscHandler(133)!;
+
+    await act(async () => {
+      oscHandler("C;claude");
+    });
+    // CliIconRegistry.match("claude") 命中默认注册 → tabLogo = claude.png
+    expect(mocks.mockApi.updateParameters).toHaveBeenLastCalledWith(
+      expect.objectContaining({ tabIcon: "🟡", tabLogo: "/cli-icons/claude.png" }),
+    );
+  });
+
+  it("hook 事件（无 logo 字段）→ tabLogo 保持前值（logoRef 不清）", async () => {
+    render(React.createElement(TerminalPanel, { api: mocks.mockApi, params: { panelId: "test-logo2" } }));
+    await waitFor(() => expect(mocks.getOscHandler(133)).toBeDefined());
+    await waitFor(() => expect(mocks.getHookEventCb()).toBeDefined());
+    const oscHandler = mocks.getOscHandler(133)!;
+    const hookCb = mocks.getHookEventCb()!;
+
+    // 先 OSC 133 C：logo 建立
+    await act(async () => {
+      oscHandler("C;claude");
+    });
+    // 再 hook 事件（Stop → ✅）：无 logo 字段 → logoRef 保持前值
+    await act(async () => {
+      hookCb({ panelId: "test-logo2", event: "Stop" });
+    });
+    expect(mocks.mockApi.updateParameters).toHaveBeenLastCalledWith(
+      expect.objectContaining({ tabIcon: "✅", tabLogo: "/cli-icons/claude.png" }),
+    );
+  });
+
+  it("OSC 133 C 时 CLI 未注册 logo（注册表清空）→ tabLogo null（清旧 logo）", async () => {
+    cliIconRegistry._reset(); // 清空默认 claude 注册 → match("claude") 返回 null
+    render(React.createElement(TerminalPanel, { api: mocks.mockApi, params: { panelId: "test-logo3" } }));
+    await waitFor(() => expect(mocks.getOscHandler(133)).toBeDefined());
+    const oscHandler = mocks.getOscHandler(133)!;
+
+    await act(async () => {
+      oscHandler("C;claude");
+    });
+    expect(mocks.mockApi.updateParameters).toHaveBeenLastCalledWith(
+      expect.objectContaining({ tabIcon: "🟡", tabLogo: null }),
+    );
+  });
+
+  it("hook 事件路径无 logo 历史 → tabLogo null", async () => {
+    render(React.createElement(TerminalPanel, { api: mocks.mockApi, params: { panelId: "test-logo4" } }));
+    await waitFor(() => expect(mocks.getHookEventCb()).toBeDefined());
+    const hookCb = mocks.getHookEventCb()!;
+
+    // SessionStart → 🟡：logoRef 初始 null（无 params.tabLogo 残留）→ tabLogo null
+    await act(async () => {
+      hookCb({ panelId: "test-logo4", event: "SessionStart" });
+    });
+    expect(mocks.mockApi.updateParameters).toHaveBeenLastCalledWith(
+      expect.objectContaining({ tabIcon: "🟡", tabLogo: null }),
+    );
   });
 });

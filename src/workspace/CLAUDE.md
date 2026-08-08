@@ -16,7 +16,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **不自动创建默认终端**：`handleReady` 在布局恢复失败（空布局 `{}` 或损坏数据）时不再兜底创建终端面板。空白页面由 Watermark 组件接管显示（"打开终端或编辑器开始工作"），用户通过 Watermark 按钮或页签 "+" 按钮手动创建终端。新建页面的空布局由 `SidebarTree.makeEmptyLayout()` 提供。已有页面布局恢复路径不变。
 
-**DefaultTab 页签图标渲染**：`DefaultTab` 通过 `params.tabIcon` 控制图标显示。终端面板在检测到注册命令运行时通过 `api.updateParameters({ tabIcon: "..." })` 设置图标，退出时设为 `null`。`DefaultTab` 订阅 `api.onDidParametersChange` 动态切换。
+**DefaultTab 页签图标渲染**：`DefaultTab` 通过 `params.tabIcon` 控制图标显示。终端面板在检测到注册命令运行时通过 `api.updateParameters({ tabIcon: "..." })` 设置图标，退出时设为 `null`。`DefaultTab` 订阅 `api.onDidParametersChange` 动态切换。**CLI 品牌 logo（F9）**：`params.tabLogo` 在 emoji 后渲染 16×16 logo img（`alt="CLI 图标"`，与 URL tabIcon 的 `alt="页签图标"` 区分）；渲染条件 `tabIcon && tabLogo`（仅随 emoji，双清双保险）；TerminalPanel inactive 时双清 tabIcon + tabLogo。
 
 > **关键坑**：Dockview `PanelApi.onDidParametersChange` 类型为 `Event<Parameters>`，回调直接接收 `Parameters` 对象（扁平 key-value），不是 `{ params: Parameters }` 包裹结构。错误写成 `event.params.tabIcon` 会导致始终读到 `undefined`。
 
@@ -132,7 +132,7 @@ Workspace 使用 Allotment 实现三栏布局（旧为常驻四栏，侧栏视�
 - 重复文件打开：`findExistingEditor` 查重 → 聚焦已有面板（不改布局）
 - `onDidRemovePanel` 监听面板关闭 → 注销 + 重算剩余面板标题
 - `onDeletePage` 在页面删除时清理该页所有标题注册和计数器
-- **页签图标**：`DefaultTab` 通过 `params.tabIcon`（由 `TerminalPanel` 通过 `api.updateParameters` 设置）控制终端图标渲染。非终端面板不设置此字段，无图标
+- **页签图标**：`DefaultTab` 通过 `params.tabIcon`（由 `TerminalPanel` 通过 `api.updateParameters` 设置）控制终端图标渲染；`params.tabLogo`（F9）在 emoji 后渲染 CLI 品牌 logo（仅随 emoji）。非终端面板不设置此字段，无图标
 - **页签后缀（suffix）**：`EditorEntry` 含 `suffix?: string` 字段。`registerEditor(pageId, panelId, filePath?, suffix?)` 注册时传入后缀（如 `(git diff)`），`getFileEditorTitle` 和 `recomputeTitles` 在标题末尾拼接 suffix（拼接格式 `basename{suffix}`，无空格）。**suffix 保留**：冲突重算只改变 basename→相对路径，后缀保持不变（如 `index.ts(git diff)` → `src/index.ts(git diff)`）。**去重语义**：`findExistingEditor(pageId, filePath, suffix?)`——suffix 传入时仅匹配同 suffix 条目，不传时仅匹配无 suffix 条目（保证普通编辑器与 git 页签互不误聚焦，B10）
 
 ## Dockview 事件结构注意事项

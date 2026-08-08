@@ -14,6 +14,7 @@ import type { TabState } from '../../src/panels/terminal/TabTitleRegistry';
 import { tabTitleRegistry } from '../../src/panels/terminal/TabTitleRegistry';
 import '../../src/panels/terminal/tabRules'; // side-effect：注册 claude 首 token 规则
 import { TerminalRegistry } from '../../src/panels/terminal/TerminalRegistry';
+import { cliIconRegistry } from '../../src/lib/cliIcons'; // 真实注册表（import 即注册 claude）
 import type { Terminal as XtermTerminal } from '@xterm/xterm';
 
 vi.mock('../../src/ipc/clipboard', () => ({
@@ -95,7 +96,13 @@ function registerOsc133(
       const rule = tabTitleRegistry.match(command);
       if (rule) {
         isCommandRunningRef.current = true;
-        onTabStateChangeRef.current?.({ active: true, title: rule.title, icon: '🟡' });
+        // logo = CliIconRegistry 按命令行首 token 匹配的 CLI 品牌图（未注册 → null，清旧 logo）
+        onTabStateChangeRef.current?.({
+          active: true,
+          title: rule.title,
+          icon: '🟡',
+          logo: cliIconRegistry.match(command),
+        });
         // 写入 claude 会话状态（未注入 hooks 时无 transcriptPath）
         TerminalRegistry.setClaudeSession(panelId, { matchedCommand: rule.command });
       }
@@ -176,8 +183,11 @@ describe('L3 终端渲染 — 生产 OSC handler（E2E-03）', () => {
     registerOsc133(term, 'p1', (state) => states.push(state));
     // shell-integration.ps1 Enter hook 发射：OSC 133 C;<命令行> ST
     await writeSync(term, '\x1b]133;C;claude --resume abc\x1b\\');
-    // 首 token "claude" 命中 tabRules 注册规则（title: "claude"），attention 态 🟡
-    expect(states).toEqual([{ active: true, title: 'claude', icon: '🟡' }]);
+    // 首 token "claude" 命中 tabRules 注册规则（title: "claude"），attention 态 🟡 +
+    // CLI 品牌 logo（CliIconRegistry 默认注册 claude）
+    expect(states).toEqual([
+      { active: true, title: 'claude', icon: '🟡', logo: '/cli-icons/claude.png' },
+    ]);
     expect(TerminalRegistry.get('p1')?.claudeSession?.matchedCommand).toBe('claude');
   });
 
@@ -189,7 +199,7 @@ describe('L3 终端渲染 — 生产 OSC handler（E2E-03）', () => {
     // prompt() 发射 OSC 133;D;<退出码> ST
     await writeSync(term, '\x1b]133;D;0\x1b\\');
     expect(states).toEqual([
-      { active: true, title: 'claude', icon: '🟡' },
+      { active: true, title: 'claude', icon: '🟡', logo: '/cli-icons/claude.png' },
       { active: false },
     ]);
     expect(TerminalRegistry.get('p1')?.claudeSession).toBeNull();

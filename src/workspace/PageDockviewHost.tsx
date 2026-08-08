@@ -36,12 +36,14 @@ const WATERMARK_TEXT = "打开终端或编辑器开始工作";
 
 // ---- 类型 ----
 
-/** 扩展的 params 类型（终端面板通过 updateParameters 设置 tabIcon / customTitle） */
+/** 扩展的 params 类型（终端面板通过 updateParameters 设置 tabIcon / tabLogo / customTitle） */
 export interface TabParams {
   panelId?: string;
   filePath?: string;
   cwd?: string;
   tabIcon?: string | null;
+  /** CLI 品牌 logo 根绝对路径（仅随 emoji 显示；随布局 JSON 持久化，spawn 成功重置清除残留） */
+  tabLogo?: string | null;
   /** 用户自定义页签标题（右键菜单重命名，随布局 JSON 持久化） */
   customTitle?: string;
 }
@@ -228,6 +230,9 @@ export const DefaultTab: React.FC<IDockviewPanelProps> = (props) => {
   const [tabIcon, setTabIcon] = useState<string | null>(
     tabParams?.tabIcon ?? null,
   );
+  const [tabLogo, setTabLogo] = useState<string | null>(
+    tabParams?.tabLogo ?? null,
+  );
   useEffect(() => {
     const d1 = api.onDidTitleChange((event) => {
       setTitle(event.title);
@@ -237,6 +242,7 @@ export const DefaultTab: React.FC<IDockviewPanelProps> = (props) => {
       // 类型签名为 Event<Parameters>，回调直接接收 Parameters 对象）
       const p = event as TabParams;
       setTabIcon(p?.tabIcon ?? null);
+      setTabLogo(p?.tabLogo ?? null);
     });
     return () => {
       d1.dispose();
@@ -264,6 +270,11 @@ export const DefaultTab: React.FC<IDockviewPanelProps> = (props) => {
           </span>
         );
       })()}
+      {/* CLI 品牌 logo：仅随 emoji 显示（tabIcon 为 null 时无 logo，双清双保险） */}
+      {tabIcon && tabLogo && (
+        <img src={tabLogo} width={16} height={16}
+          style={{ flexShrink: 0, display: "block" }} alt="CLI 图标" />
+      )}
       <span style={{ fontSize: 13 }}>{title}</span>
       <button
         onClick={(e) => { e.stopPropagation(); api.close(); }}
