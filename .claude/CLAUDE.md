@@ -20,6 +20,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **子文件模板**：职责 → 架构决策（关键约束）→ 文件表 → 测试模式（可选）
 - 修改或新增代码时，同步更新所属子路径的 CLAUDE.md，不在根文件展开细节
 - 配套文档：领域术语表见根目录 `@../CONTEXT.md`；架构决策记录见 `@.claude/adr.md`；测试用例清单见 `@.claude/test-inventory.md`
+- 及时同步: 当代码开发、测试用例修改等完成后，需要遵循渐进式披露的原则，将变动记录到合适的 CLAUDE.md 文件中
 
 ## 架构（两进程模型）
 
@@ -48,6 +49,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 8. **会话元数据单点**：PTY 进程映射仅在 `panels/terminal/TerminalRegistry`（模块级 Map）管理，前端会话元数据已合并。面板只订阅，不自存。
 9. **平台分支收敛**：`#[cfg(windows)]` 只允许出现在 pty 模块等明确处，业务逻辑不撒 cfg（详见 @../src-tauri/src/pty/CLAUDE.md）。
 10. **权限最小化**：Tauri 2 自定义命令默认放行，`capabilities/` 只管插件权限；不追加通配 `*`。
+11. **测试覆盖**: 所有改动的代码都需要添加全量测试用例覆盖
 
 ## Windows 关键坑
 
@@ -177,5 +179,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | F5 | 特性 | claudeSession 契约行建模（双通道建行/三通道删行） |
 | F6 | 特性 | hooks 双模式配置面板（JSON/GUI 编辑 hooks 子树，user/project/local 三层，F2 注入入口并入） |
 | F7 | 特性 | claude 历史会话查询与恢复（历史区三下拉框 + 扫描/恢复/删除；重命名已移除） |
+| F8 | 特性 | 终端页签自定义重命名（右键菜单「重命名」+ 自绘弹窗；customTitle 随布局持久化；claude 运行中禁用；不影响 terminal-N 递增） |
 
 > 测试策略概览见上方「测试策略」章节；完整用例清单见 `.claude/test-inventory.md`。

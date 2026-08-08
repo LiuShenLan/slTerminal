@@ -2,7 +2,7 @@
 
 > **本文档是项目用例数唯一真值源。** 所有 CLAUDE.md、README、CI 配置中引用的用例数均以此文件为准。更新测试后必须同步本文档。
 
-全量 **3024** 用例（Rust 571 + 前端 2278 + L3 138 + E2E 37），2026-08-08 更新。
+全量 **3050** 用例（Rust 571 + 前端 2304 + L3 138 + E2E 37），2026-08-08 更新。
 
 > **计数口径**：
 > - L2 以 `npm test` 实跑（Vitest 报告）为准——`it.each(...)` 参数化与 `describeIpcContract` 工厂（`helpers/ipc-contract.ts`，IHE-06）等按**展开后用例数**计入（135 文件 2278 用例全绿实测）；纯 grep `it(/test(` 块数会少计 it.each 展开（如 colors 85 = 13 块 + 7 组 each 展开 72）。
@@ -106,7 +106,7 @@
 | `src/__tests__/tab-rules.test.ts` | 6 | side-effect import + `_reset()` 后手动注册 |
 | `src/__tests__/webgl-setup.test.ts` | 7 | `setupWebglWithRetry` 指数退避/重试耗尽回退 DOM/cancel 清理（TRM-06 新建） |
 | `src/__tests__/terminal-instance.test.ts` | 6 | `useTerminalInstance` 四分支：fit 异常/fontSize undefined/prevFontSize 相同跳过/tryLoadWebgl 幂等（TRM-07 新建） |
-| `src/__tests__/terminal.test.tsx` | 8 | TerminalPanel：loading 遮罩 1.5s 超时（TRM-05）/Windows build/spawn/active=false 标题恢复 |
+| `src/__tests__/terminal.test.tsx` | 10 | TerminalPanel：loading 遮罩 1.5s 超时（TRM-05）/Windows build/spawn/active=false 标题恢复/customTitle 挂载恢复 + onDidParametersChange 同步（F8） |
 | `src/__tests__/e2e-gating-terminal.test.ts` | 5 | E2E helper 终端门控（`__e2e_sessionReady` 等） |
 | `src/__tests__/terminal-lifecycle.test.ts` | 4 | 挂载→创建→卸载→dispose 完整链路 |
 | `src/__tests__/active-terminal.test.ts` | 4 | active 指针 set/get/覆盖、clear 仅匹配时生效 |
@@ -136,7 +136,9 @@
 | `src/__tests__/workspace-defaulttab.test.tsx` | 21 | **生产 DefaultTab 渲染（WRK-05 非手写 Mock）**：tabIcon emoji/img 分支/onDidParametersChange 扁平事件结构回归（event.tabIcon 非 event.params.tabIcon） |
 | `src/__tests__/workspace-page-dockview.test.tsx` | 7 | PageDockview 真实组件（WRK-01）：handleReady 空布局不兜底/Watermark 按钮 addPanel/RightHeader「+」/onSaveAs 重算标题 |
 | `src/__tests__/pageapis.test.ts` | 11 | pageApis（WRK-02）：switchToPageShared 时序（invocationCallOrder，DBG-5/9）/reject 降级/`__dockviewApi` 重指；switchToPageAndFocus 轮询命中/5s 超时降级 |
-| `src/__tests__/workspace-header-actions.test.tsx` | 16 | RightHeader Watermark 按钮/页签操作 |
+| `src/__tests__/workspace-header-actions.test.tsx` | 21 | RightHeader Watermark 按钮/页签操作/右键菜单重命名项（F8：终端 7 项结构/非终端 5 项/action 派发/claudeSession 存在禁用） |
+| `src/__tests__/terminal-rename-dialog.test.tsx` | 13 | 重命名弹窗（F8）：预填/受控输入/Enter 提交 trim/空名拒绝行内错误/取消（按钮/Esc/遮罩）/错误清除/initialTitle 跟随 |
+| `src/__tests__/terminal-rename-apply.test.ts` | 5 | `applyRename` 纯函数（F8）：updateParameters 展开保留原键 + customTitle/params undefined 分支/setTitle/onLayoutChange 收到 toJSON 值/原对象不被修改 |
 | `src/__tests__/workspace-switch-order.test.tsx` | 14 | **真实驱动（WRK-06）**：点击页面行触发 switchToPage 断言 setProjectRoot 先于 setActivePage/reject 降级/SEC-01 effect 兜底 |
 | `src/__tests__/workspace-file-panel-types.test.ts` | 14 | FILE_PANEL_TYPES/isAlwaysRenderPanel（5 面板） |
 | `src/__tests__/default-layout-format.test.ts` | 10 | makeEmptyLayout 空布局验证 + SidebarTree 实际使用断言（WRK-11②） |
@@ -357,6 +359,7 @@ embedded WDIO 驱动**无法将 OS 级按键（`browser.keys`）投递进 WebVie
 
 ## 历史变更
 
+- 2026-08-08（终端页签右键菜单重命名，F8）：新增 2 文件——terminal-rename-dialog 13（弹窗交互全分支）、terminal-rename-apply 5（applyRename 纯函数）；terminal.test.tsx 8→10（+2 customTitle 挂载恢复/参数同步）、workspace-header-actions 16→21（+5 C6-C10 重命名项结构/派发/禁用矩阵，C5 改 7 项结构）。L2 2279→2304（+25 实跑口径），全量 →3050。
 - 2026-08-08（color-plan Stage 05 TST-04/05 测试补全与同步）：新增「主题/配色/基础」类目 2 文件——scheme-registry 18（TST-02 方案注册表单测：register/get/getAll/getDefaultId、setActive 已知/未知 id 回退 darcula + console.warn、getActive 默认、重复注册覆盖、`_reset` 隔离、darcula 四段完整性）、overrides 6（TST-03 dockviewVarStyle 20 键 + allotmentVarStyle 2 键 + editorTheme/editorColorOverrides + setActive 跟随）。colors 89→85（facade 化死配置清理移除 4 条 it.each 展开断言——13 块 + 7 组 each 展开 72，实跑口径）。L2 133→135 文件 2258→2278 用例（-4 +18 +6）。全量 3004→3024。TST-04 四文件（theme 13/main-bootstrap 1/gitshow-panel 21+hooks-config-jsonmode oneDark mock/L3 theme-options 5）git diff 零改动 + 逐文件跑绿验证通过。
 - 2026-08-05（text-fix-plan Stage 17 DOC-01/02/03 全量校正）：①L1 按 GIT-12 拆分后重列（git/mod.rs `#[test]` 零残留 → tests/ 5 文件 97 + ci_config 1；各模块按 grep `#[test]` 实际计数更新：reader 36/spawn 48（conpty_custom 28 + 顶层 20）/shell 20/state 32/fs 31/notify 38/hooks 各文件/inject 34 等）——L1 449→571（23→28 文件）；②L2 改为 **npm test 实跑口径**（it.each/describeIpcContract 工厂展开计入），133 文件 2258 用例全绿实测（原 grep 块数口径 2060 少计 it.each 展开）；类目文件全面更新（新增 terminal-instance/webgl-setup/notification/ipc-window-contract/hooks-config-schema/commit 拆分 5 文件/main-bootstrap；删除 hooks-config-entry 已随菜单迁移删除）；③L3 116→138（新增 theme-options 5/production-osc 8/negative-ansi 9）；④L4 34→37（E2E-04 全屏 TUI 视觉回归 + E2E-06 真实 reporter 链路 + E2E-12 强杀 Job Object 各 +1 active，35 active + 2 skip）；⑤stale 清理（inject.rs 覆盖范围描述中随功能移除的陈旧条目删除；旧"L3 同时被 npm test 包含执行"口径注释修正为 L2/L3 独立运行）；⑥登记 DOC-01 既定豁免清单（8 项）+ DOC-02 定位声明（6 项）。全量 2658→3004。
 - 2026-08-05（text-fix-plan Stage 11 HKC-10 展示分支补断言）：hooks-config-panel 20→21（+1 注入状态条查询完成前初始 "--" 帧断言——getInjectionStatus 挂起 Promise → data-e2e hooks-injection-status 文本「注入状态：--」+ 三态文案不出现）。L2 2059→2060，全量 2658→2659。

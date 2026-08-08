@@ -23,6 +23,8 @@ interface TerminalPanelProps {
     panelId: string;
     /** 终端工作目录（可选） */
     cwd?: string;
+    /** 用户自定义页签标题（右键菜单重命名，随布局持久化） */
+    customTitle?: string;
   };
 }
 
@@ -65,7 +67,9 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ api, params }) => {
 
   // 命令运行状态变化 → 更新 Dockview 页签标题和图标
   // originalTitleRef 仅在组件挂载时初始化，active=true 时不覆盖
-  const originalTitleRef = useRef(api.title ?? "terminal");
+  // 挂载时优先取 params.customTitle（重命名后的自定义标题）——重启恢复时布局 JSON
+  // 的 title 字段可能是瞬态值（如 claude 运行中退出），customTitle 才是真名
+  const originalTitleRef = useRef(params.customTitle ?? api.title ?? "terminal");
   const handleTabStateChange = useCallback((state: TabState) => {
     if (state.active) {
       // 仅当 title/icon 存在时才更新，不覆盖 originalTitleRef
@@ -76,6 +80,18 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ api, params }) => {
       api.updateParameters({ ...params, tabIcon: null });
     }
   }, [api, params]);
+
+  // 重命名同步：右键菜单重命名会 updateParameters({ customTitle })，订阅参数变化
+  // 更新原标题基准，保证 OSC 133 D 恢复时用自定义名而非挂载时旧名
+  useEffect(() => {
+    const d = api.onDidParametersChange((p) => {
+      const tp = p as { customTitle?: string };
+      if (tp?.customTitle !== undefined) {
+        originalTitleRef.current = tp.customTitle;
+      }
+    });
+    return () => d.dispose();
+  }, [api]);
 
   const { focus } = useXterm({
     container,

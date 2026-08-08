@@ -32,6 +32,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `layoutSerde.ts` | 布局序列化/反序列化：`saveLayout`（`api.toJSON()`）、`loadLayout`（`api.fromJSON()` + 旧格式修补 + 白名单过滤） |
 | `titleManager.ts` | 页签标题集中管理：terminal-N 编号、文件标题冲突检测、handleSaveAs、onDeletePage(pageId)：清理该页面 registry 和 counters 条目 |
 | `pageApis.ts` | 页面 API 注册表 + 共享切换：模块级 `Map<pageId, DockviewApi>` + `registerPageApi`/`unregisterPageApi`/`getPageApi` + `switchToPageShared(pageId)`（setProjectRoot 前置→setActivePage→重指向 `__dockviewApi`）+ `switchToPageAndFocus(pageId, panelId)`（切换后轮询聚焦面板）+ `openHooksConfigPanel(pageId)`（轮询 API 就绪 → 同页单例 addPanel，C13-7；侧栏「打开 Hooks 配置」入口消费，先切页后调用） |
+| `TerminalRenameDialog.tsx` | 终端页签重命名弹窗（F8）：自绘模态（照 SessionActionDialog 模式）——遮罩 + 居中卡片 + 输入框 + 确定/取消；Enter 确认（trim）/空名行内错误拒绝/Esc/遮罩/取消按钮；纯受控展示组件，零 IPC |
 
 > **panelRegistry.ts 已提取到 `src/panelRegistry.ts`（已提取为共享配置层）**：面板注册表是全局架构组件，被 workspace、explorer、测试等多方引用，不应埋于 workspace 子路径。
 
@@ -115,6 +116,13 @@ Workspace 使用 Allotment 实现三栏布局（旧为常驻四栏，侧栏视�
 - `window.__slterm_e2e_workspaceReady`：Workspace 挂载时同步设置（渲染阶段，非 `useEffect`），WDIO 脚本轮询此标志等待就绪
 - `window.__dockviewApi`：始终指向当前活跃页面的 DockviewApi，E2E 脚本通过它创建面板/执行操作
 
+## 终端页签自定义重命名（F8，右键菜单）
+
+- **入口**：`createGetContextMenu` 对终端面板（`panel.view.contentComponent === "terminal"`——**`panel.component` 不存在**）插入「重命名」项（7 项结构 `[新建终端, sep, 重命名, sep, close, closeOthers, closeAll]`）；claude 运行中（`TerminalRegistry.get(panel.id)?.claudeSession != null`，菜单每次右键重新构建判断实时）→ `disabled` 置灰（dockview 原生支持）
+- **存储单一真值源**：`params.customTitle`（随布局 JSON 持久化，照 editor filePath / terminal tabIcon 先例）。`applyRename(api, panel, newTitle, onLayoutChange)` 导出纯函数 = `updateParameters({...params, customTitle})` + `setTitle` + **显式 `onLayoutChange(saveLayout(api))`**——`setTitle`/`updateParameters` 均不触发 `onDidLayoutChange`（dockviewPanel.js:84-95），须显式保存
+- **恢复链路**：Dockview `toJSON` 输出 title + params、`fromJSON` 恢复；`rebuildAndRecomputeTitles` 只重算编辑器标题，终端标题不重算 → 自定义名跨重启存活。`TerminalPanel` 挂载 `originalTitleRef = params.customTitle ?? api.title ?? "terminal"`（customTitle 优先，防 claude 运行中退出保存的瞬态 title）并订阅 `onDidParametersChange` 在 `customTitle !== undefined` 时同步 ref——OSC 133 D / SessionEnd 恢复标题时用自定义名
+- **约束**：`titleManager` 计数器不动（新建终端仍按 `terminal-N` 递增，F8 不占用编号）；编辑器等非终端面板菜单无「重命名」
+
 ## 页签标题集中管理（`titleManager.ts`）
 
 - 终端页签 = `terminal-N`（每页独立从 0 开始，关闭不重算）
@@ -178,8 +186,10 @@ Workspace 使用 Allotment 实现三栏布局（旧为常驻四栏，侧栏视�
 `workspace-file-panel-types.test.ts`（14 用例）：
 - `FILE_PANEL_TYPES` 与 `isAlwaysRenderPanel` 分派矩阵（htmlviewer 等预览面板 renderer="always"）
 
-`workspace-header-actions.test.tsx`（16 用例）：
-- 分屏 + 按钮 & 右键菜单 addPanel 行为：非聚焦分屏点击 + 按钮或右键"新建终端"时，新面板创建在点击的分屏而非聚焦分屏。直测 `createRightHeader`/`createGetContextMenu` 工厂函数，不渲染完整 Dockview 树
+`workspace-header-actions.test.tsx`（21 用例）：
+- 分屏 + 按钮 & 右键菜单 addPanel 行为：非聚焦分屏点击 + 按钮或右键"新建终端"时，新面板创建在点击的分屏而非聚焦分屏。直测 `createRightHeader`/`createGetContextMenu` 工厂函数，不渲染完整 Dockview 树；C5-C10 覆盖重命名项（F8：终端 7 项结构/非终端 5 项/action 派发 `onRenameRequest(panel)`/claudeSession 存在 disabled，`TerminalRegistry._reset()` 隔离）
+
+新增测试文件（F8）：`terminal-rename-apply.test.ts`（5 用例，直测 `applyRename` 纯函数）+ `terminal-rename-dialog.test.tsx`（13 用例，照 claude-history-action-dialog 模式）
 
 `layout-switch.test.ts`（7 用例）+ `startup-restore.test.ts`（7 用例）：
 - 页面切换/启动恢复流程（`App.tsx` 启动恢复 lastPage：先 `await setProjectRoot` 再 `setActivePage`，DBG-6）

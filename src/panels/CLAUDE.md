@@ -223,7 +223,7 @@ xterm.js 6.0.0 原生支持 OSC 8 解析渲染。`useXterm.ts` 在 `term.open()`
 `shell-integration.ps1` 的 Enter hook 在命令执行前发射 OSC 133 C（`ESC ] 133;C;<命令行> ST`），`prompt()` 在命令退出后发射 OSC 133;D（退出码）。`useXterm.ts` 注册 `term.parser.registerOscHandler(133, ...)` 解析 C/D 序列：
 
 - **OSC 133 C**：提取命令行文本 → 调用 `onTabStateChange({ active: true, title, icon: "🟡" })` 设置 attention 态；同时 `TabTitleRegistry.match(command)` 查找规则 → 匹配时覆盖 `title`
-- **OSC 133 D**：命令退出 → `onTabStateChange({ active: false })` → `TerminalPanel` 恢复原标题并清除图标
+- **OSC 133 D**：命令退出 → `onTabStateChange({ active: false })` → `TerminalPanel` 恢复原标题并清除图标（F8 后原标题 = `customTitle` 优先，用户重命名过的终端恢复自定义名）
 
 **`TabTitleRegistry`**（Registry Pattern 单例）：管理 `command → { title, icon }` 映射。新增命令只需在 `tabRules.ts` 追加 `tabTitleRegistry.register(...)`，不修改核心逻辑。
 
@@ -265,7 +265,7 @@ Claude Code 在用户主动 Ctrl+C 中断时不发射任何 hook 事件（`Stop`
 |------|------|
 | `index.ts` | 公共 API 出口：导出 TerminalPanel、EditorPanel、HtmlPanel、GitShowPanel、DiffPanel |
 | `terminal/index.ts` | TerminalPanel 及 terminalOptions 导出 |
-| `terminal/TerminalPanel.tsx` | 终端面板 React 组件：获取 Windows build 号 → useXterm → 加载遮罩 |
+| `terminal/TerminalPanel.tsx` | 终端面板 React 组件：获取 Windows build 号 → useXterm → 加载遮罩；`originalTitleRef` 挂载时取 `params.customTitle ?? api.title ?? "terminal"`（F8 自定义标题优先）并订阅 `onDidParametersChange` 在 `customTitle !== undefined` 时同步 ref——OSC 133 D 恢复标题用自定义名 |
 | `terminal/useTerminalInstance.ts` | Terminal 实例 + WebGL/FitAddon 生命周期 + StrictMode 守卫 |
 | `terminal/usePtyOutput.ts` | PTY 输出合帧（Idle+Max 双定时器 + DEC 2026）+ 非焦点降频 |
 | `terminal/usePtyResize.ts` | ResizeObserver X/Y 分离 debounce + NaN 守卫 |
@@ -359,7 +359,7 @@ useXterm 是编排层——mock 6 个子 hook 才能隔离测试（`useFontSizeB
 | `terminal-lifecycle.test.ts`（4 用例） | 挂载→创建→卸载→dispose 完整链路；mock `pty.spawn` 验证调用参数 |
 | `terminal-instance.test.ts`（7 用例） | `useTerminalInstance` 生命周期分支（TRM-07）：fit 抛异常吞掉/`fontSize` undefined 跳过/prevFontSize 相同跳过重复写入/tryLoadWebgl 幂等（含 term 为 null 短路） |
 | `terminal-strictmode.test.ts`（2 用例） | `<React.StrictMode>` 包裹验证 `smGuardRef` 防双重挂载：Terminal 实例数=1、PTY spawn 仅一次、dispose 仅在最终卸载时调 |
-| `terminal.test.tsx`（8 用例） | TerminalPanel 组件：mock `useXterm` 返回 stub，验证 loading 遮罩/Windows build/spawn |
+| `terminal.test.tsx`（10 用例） | TerminalPanel 组件：mock `useXterm` 返回 stub，验证 loading 遮罩/Windows build/spawn/customTitle 挂载恢复 + onDidParametersChange 同步（F8） |
 | `can-fit.test.ts`（15 用例） | 纯函数边界测试：五条件守卫（null/undefined/0/isDisposed/no element） |
 | `detect-webgl.test.ts`（3 用例） | `vi.spyOn(HTMLCanvasElement.prototype, 'getContext')` 模拟三种分支 |
 | `webgl-setup.test.ts`（7 用例） | `setupWebglWithRetry` 指数退避（TRM-06）：不可用即回退/成功加载/context loss 重建（1000/2000ms 序列）/重试耗尽回退/cancel 清理/loadAddon 异常退避 |

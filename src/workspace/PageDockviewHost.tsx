@@ -21,6 +21,8 @@ import { panelRegistry, PANEL_TERMINAL } from "../panelRegistry";
 import { saveLayout, loadLayout } from "./layoutSerde";
 import { titleManager } from "./titleManager";
 import type { TitleUpdate } from "./titleManager";
+import { TerminalRegistry } from "../panels/terminal/TerminalRegistry";
+import { TerminalRenameDialog } from "./TerminalRenameDialog";
 import {
   INPUT_BORDER,
   SECONDARY_BG,
@@ -34,13 +36,18 @@ const WATERMARK_TEXT = "打开终端或编辑器开始工作";
 
 // ---- 类型 ----
 
-/** 扩展的 params 类型（终端面板通过 updateParameters 设置 tabIcon） */
+/** 扩展的 params 类型（终端面板通过 updateParameters 设置 tabIcon / customTitle） */
 export interface TabParams {
   panelId?: string;
   filePath?: string;
   cwd?: string;
   tabIcon?: string | null;
+  /** 用户自定义页签标题（右键菜单重命名，随布局 JSON 持久化） */
+  customTitle?: string;
 }
+
+/** 右键菜单面板类型（GetTabContextMenuItemsParams["panel"] 派生，免额外 import） */
+export type ContextMenuPanel = GetTabContextMenuItemsParams["panel"];
 
 export interface PageDockviewProps {
   pageId: string;
@@ -120,21 +127,55 @@ function createRightHeader(
   return Header;
 }
 
+/**
+ * 应用页签重命名（导出纯函数供 L2 直测）：
+ * 1. updateParameters 写入 customTitle（随布局 JSON 持久化的单一真值源）
+ * 2. setTitle 更新显示
+ * 3. 显式 onLayoutChange(saveLayout(api)) 触发持久化——setTitle/updateParameters
+ *    均不触发 onDidLayoutChange（dockviewPanel.js:84-95 只更新 _title + fire title change）
+ */
+export function applyRename(
+  api: DockviewApi,
+  panel: ContextMenuPanel,
+  newTitle: string,
+  onLayoutChange: (layout: Record<string, unknown>) => void,
+): void {
+  panel.api.updateParameters({
+    ...(panel.params ?? {}),
+    customTitle: newTitle,
+  });
+  panel.api.setTitle(newTitle);
+  onLayoutChange(saveLayout(api) as Record<string, unknown>);
+}
+
 /** 创建 getTabContextMenuItems 回调（捕获 pageId 闭包） */
 function createGetContextMenu(
   nextPanelId: () => string,
   pageId: string,
+  onRenameRequest: (panel: ContextMenuPanel) => void,
 ): (params: GetTabContextMenuItemsParams) => (BuiltInContextMenuItem | ReactContextMenuItemConfig)[] {
   return (params: GetTabContextMenuItemsParams) => {
     const newTerminalId = nextPanelId();
-    return [
+    // 仅终端面板显示「重命名」：判据为 view.contentComponent（panel.component 不存在）
+    const isTerminal = params.panel.view.contentComponent === PANEL_TERMINAL;
+    // claude 运行中（claudeSession 存在即运行中，二态模型）→ 禁用重命名；
+    // 菜单每次右键重新构建，判断实时
+    const claudeRunning = TerminalRegistry.get(params.panel.id)?.claudeSession != null;
+    const items: (BuiltInContextMenuItem | ReactContextMenuItemConfig)[] = [
       { label: "新建终端", action: () => { params.api.addPanel(
           { id: newTerminalId, component: PANEL_TERMINAL, title: titleManager.getTerminalTitle(pageId),
             params: { panelId: newTerminalId }, renderer: "always",
             position: { referenceGroup: params.group } }); } },
       "separator",
-      "close", "closeOthers", "closeAll",
     ];
+    if (isTerminal) {
+      items.push(
+        { label: "重命名", disabled: claudeRunning, action: () => onRenameRequest(params.panel) },
+        "separator",
+      );
+    }
+    items.push("close", "closeOthers", "closeAll");
+    return items;
   };
 }
 
@@ -270,9 +311,31 @@ const PageDockview: React.FC<PageDockviewProps> = React.memo(({
     () => createRightHeader(nextPanelId, pageId, cwd),
     [nextPanelId, pageId, cwd],
   );
+  // 重命名弹窗目标面板（右键菜单「重命名」→ setRenameTarget → 渲染 TerminalRenameDialog）
+  const [renameTarget, setRenameTarget] = useState<{ panel: ContextMenuPanel; initialTitle: string } | null>(null);
+  // ref 模式读取当前目标（handleRenameConfirm 保持稳定引用，照 ExplorerPanel actions 模式）
+  const renameTargetRef = useRef(renameTarget);
+  renameTargetRef.current = renameTarget;
+
+  /** 打开重命名弹窗（预填 customTitle 优先，避免预填运行中命令的瞬态标题） */
+  const openRenameDialog = useCallback((panel: ContextMenuPanel) => {
+    const p = panel.params as TabParams | undefined;
+    setRenameTarget({ panel, initialTitle: p?.customTitle ?? panel.title ?? "" });
+  }, []);
+
+  /** 重命名确认：applyRename（写 customTitle + setTitle + 显式保存）后关闭弹窗 */
+  const handleRenameConfirm = useCallback((newTitle: string) => {
+    const target = renameTargetRef.current;
+    const api = apiRef.current;
+    if (target && api) {
+      applyRename(api, target.panel, newTitle, onLayoutChange);
+      setRenameTarget(null);
+    }
+  }, [onLayoutChange]);
+
   const getTabContextMenuItems = useMemo(
-    () => createGetContextMenu(nextPanelId, pageId),
-    [nextPanelId, pageId],
+    () => createGetContextMenu(nextPanelId, pageId, openRenameDialog),
+    [nextPanelId, pageId, openRenameDialog],
   );
 
   // F2: savedLayout 已从 deps 移除——通过 savedLayoutRef.current 读取
@@ -378,6 +441,14 @@ const PageDockview: React.FC<PageDockviewProps> = React.memo(({
         rightHeaderActionsComponent={RightHeader}
         getTabContextMenuItems={getTabContextMenuItems}
       />
+      {/* 重命名弹窗：仅活跃页可触发右键，页面可见性有保证；切页后随 display:none 隐藏 */}
+      {renameTarget && (
+        <TerminalRenameDialog
+          initialTitle={renameTarget.initialTitle}
+          onConfirm={handleRenameConfirm}
+          onCancel={() => setRenameTarget(null)}
+        />
+      )}
     </div>
   );
 });

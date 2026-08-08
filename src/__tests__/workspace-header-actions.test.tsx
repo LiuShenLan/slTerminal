@@ -12,6 +12,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import React from "react";
 import { render, fireEvent, within } from "@testing-library/react";
 import { titleManager } from "../workspace/titleManager";
+import { TerminalRegistry } from "../panels/terminal/TerminalRegistry";
 import {
   createRightHeader,
   createGetContextMenu,
@@ -60,6 +61,7 @@ function renderHeader(pageId: string, cwd: string, groupId: string) {
 
 beforeEach(() => {
   titleManager.reset();
+  TerminalRegistry._reset();
 });
 
 // ============================================================
@@ -164,13 +166,28 @@ describe("createRightHeader", () => {
 // ============================================================
 
 describe("createGetContextMenu", () => {
-  function callMenu(pageId: string, groupId: string, apiSpy?: ReturnType<typeof vi.fn>) {
-    const getMenu = createGetContextMenu(makeNextPanelId(pageId), pageId);
-    const addPanelSpy = apiSpy ?? vi.fn();
+  function callMenu(
+    pageId: string,
+    groupId: string,
+    options?: { panelComponent?: string; apiSpy?: ReturnType<typeof vi.fn> },
+  ) {
+    const onRenameRequestSpy = vi.fn();
+    const getMenu = createGetContextMenu(
+      makeNextPanelId(pageId), pageId, onRenameRequestSpy,
+    );
+    const addPanelSpy = options?.apiSpy ?? vi.fn();
     const mockGroup = makeFakeGroup(groupId);
+    // fake 面板：id 与 TerminalRegistry 种子键一致；view.contentComponent 判终端
+    const fakePanel = {
+      id: `terminal-${pageId}-0`,
+      title: "terminal-0",
+      params: {},
+      view: { contentComponent: options?.panelComponent ?? "terminal" },
+      api: { setTitle: vi.fn(), updateParameters: vi.fn() },
+    };
 
     const items = getMenu({
-      panel: {} as any,
+      panel: fakePanel as any,
       group: mockGroup as any,
       api: { addPanel: addPanelSpy } as any,
       event: new MouseEvent("contextmenu"),
@@ -181,7 +198,11 @@ describe("createGetContextMenu", () => {
     );
     expect(newTerminalItem).toBeDefined();
 
-    return { newTerminalItem, addPanelSpy, mockGroup, items };
+    const renameItem = items.find(
+      (item) => typeof item === "object" && item.label === "重命名",
+    );
+
+    return { newTerminalItem, renameItem, addPanelSpy, mockGroup, items, onRenameRequestSpy, fakePanel };
   }
 
   it("C1: 菜单包含\"新建终端\"项", () => {
@@ -212,15 +233,55 @@ describe("createGetContextMenu", () => {
     expect(options.position).not.toBeUndefined();
   });
 
-  it("C5: 右键菜单完整结构", () => {
+  it("C5: 终端右键菜单完整结构（含重命名项）", () => {
     const { items } = callMenu("p1", "group-alpha");
-    // 结构：[新建终端, separator, close, closeOthers, closeAll]
-    expect(items).toHaveLength(5);
+    // 终端结构：[新建终端, separator, 重命名, separator, close, closeOthers, closeAll]
+    expect(items).toHaveLength(7);
     expect((items[0] as any).label).toBe("新建终端");
     expect(items[1]).toBe("separator");
+    expect((items[2] as any).label).toBe("重命名");
+    expect(items[3]).toBe("separator");
+    expect(items[4]).toBe("close");
+    expect(items[5]).toBe("closeOthers");
+    expect(items[6]).toBe("closeAll");
+  });
+
+  it("C6: 非终端面板菜单无重命名项（结构保持 5 项）", () => {
+    const { items, renameItem } = callMenu("p1", "group-alpha", {
+      panelComponent: "editor",
+    });
+    expect(renameItem).toBeUndefined();
+    expect(items).toHaveLength(5);
     expect(items[2]).toBe("close");
     expect(items[3]).toBe("closeOthers");
     expect(items[4]).toBe("closeAll");
+  });
+
+  it("C7: 重命名项 action 调 onRenameRequest(panel)", () => {
+    const { renameItem, onRenameRequestSpy, fakePanel } = callMenu("p1", "group-alpha");
+    (renameItem as any).action();
+    expect(onRenameRequestSpy).toHaveBeenCalledTimes(1);
+    expect(onRenameRequestSpy).toHaveBeenCalledWith(fakePanel);
+  });
+
+  it("C8: claude 运行中（claudeSession 存在）→ 重命名项 disabled", () => {
+    TerminalRegistry.register("terminal-p1-0", {} as any);
+    TerminalRegistry.setClaudeSession("terminal-p1-0", { sessionId: "s1" } as any);
+    const { renameItem } = callMenu("p1", "group-alpha");
+    expect((renameItem as any).disabled).toBe(true);
+  });
+
+  it("C9: 无 claudeSession → 重命名项可点", () => {
+    TerminalRegistry.register("terminal-p1-0", {} as any);
+    const { renameItem } = callMenu("p1", "group-alpha");
+    expect((renameItem as any).disabled).not.toBe(true);
+  });
+
+  it("C10: claudeSession 为空对象（已退出残留）→ 重命名项可点", () => {
+    TerminalRegistry.register("terminal-p1-0", {} as any);
+    TerminalRegistry.setClaudeSession("terminal-p1-0", null);
+    const { renameItem } = callMenu("p1", "group-alpha");
+    expect((renameItem as any).disabled).not.toBe(true);
   });
 });
 

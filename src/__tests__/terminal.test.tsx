@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => {
   const oscHandlers: Record<number, (data: string) => void> = {};
   // hooks.onHookEvent 回调捕获（useXterm 订阅 hook-event）
   let hookEventCb: ((payload: unknown) => void) | null = null;
+  // onDidParametersChange 回调捕获（TerminalPanel 订阅参数变化同步 originalTitleRef）
+  let paramsCb: ((p: Record<string, unknown>) => void) | null = null;
 
   const terminal = {
     open: vi.fn(),
@@ -46,7 +48,10 @@ const mocks = vi.hoisted(() => {
     setTitle: vi.fn(),
     updateParameters: vi.fn(),
     onDidTitleChange: vi.fn(() => ({ dispose: vi.fn() })),
-    onDidParametersChange: vi.fn(() => ({ dispose: vi.fn() })),
+    onDidParametersChange: vi.fn((cb: (p: Record<string, unknown>) => void) => {
+      paramsCb = cb;
+      return { dispose: vi.fn() };
+    }),
     close: vi.fn(),
   };
   const hooks = {
@@ -66,6 +71,7 @@ const mocks = vi.hoisted(() => {
     hooks,
     getOscHandler: (id: number) => oscHandlers[id] ?? null,
     getHookEventCb: () => hookEventCb,
+    getParamsCb: () => paramsCb,
   };
 });
 
@@ -212,5 +218,50 @@ describe("TerminalPanel", () => {
     expect(mocks.mockApi.updateParameters).toHaveBeenLastCalledWith(
       expect.objectContaining({ tabIcon: null }),
     );
+  });
+
+  it("params 含 customTitle 挂载 → active=false 恢复自定义名（而非 api.title）", async () => {
+    render(React.createElement(TerminalPanel, {
+      api: mocks.mockApi,
+      params: { panelId: "test-p8", customTitle: "我的终端" },
+    }));
+    await waitFor(() => expect(mocks.getOscHandler(133)).toBeDefined());
+    const oscHandler = mocks.getOscHandler(133)!;
+
+    // OSC 133 C：命令启动 → 标题覆盖为规则标题
+    await act(async () => {
+      oscHandler("C;claude");
+    });
+    expect(mocks.mockApi.setTitle).toHaveBeenCalledWith("claude");
+
+    // OSC 133 D：命令退出 → 恢复自定义名（而非挂载时 api.title "terminal-0"）
+    await act(async () => {
+      oscHandler("D;0");
+    });
+    expect(mocks.mockApi.setTitle).toHaveBeenLastCalledWith("我的终端");
+  });
+
+  it("onDidParametersChange 收到 customTitle → ref 同步 → active=false 恢复新名", async () => {
+    render(React.createElement(TerminalPanel, {
+      api: mocks.mockApi,
+      params: { panelId: "test-p9" },
+    }));
+    await waitFor(() => expect(mocks.getOscHandler(133)).toBeDefined());
+    await waitFor(() => expect(mocks.getParamsCb()).toBeDefined());
+    const oscHandler = mocks.getOscHandler(133)!;
+
+    // 模拟重命名动作：updateParameters({ customTitle: "改名" }) 触发订阅回调
+    await act(async () => {
+      mocks.getParamsCb()!({ panelId: "test-p9", customTitle: "改名" });
+    });
+
+    // OSC 133 C → D：命令退出后恢复重命名后的新名
+    await act(async () => {
+      oscHandler("C;claude");
+    });
+    await act(async () => {
+      oscHandler("D;0");
+    });
+    expect(mocks.mockApi.setTitle).toHaveBeenLastCalledWith("改名");
   });
 });
