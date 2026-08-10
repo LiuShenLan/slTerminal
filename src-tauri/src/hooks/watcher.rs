@@ -1,7 +1,7 @@
 //! Hook 信号目录监听器
 //!
 //! 监听 ~/.slterminal/hooks-events/ 目录，检测新增信号文件（.json），
-//! 调用 process_signal_file 解析后广播 hook-event 并删除文件。
+//! 调用 process_signal_file 解析后广播 agent-event 并删除文件。
 //!
 //! 双通道架构（win10 实证修复——notify 事件丢失/目录重建句柄失效导致 33 个残留）：
 //! - notify 实时通道：50ms debounce，初始化/监听失败仅降级 warn（不致命）

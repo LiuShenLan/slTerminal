@@ -21,6 +21,9 @@ import { ask } from "../../ipc/dialog";
 import { useProjects } from "../../stores/projects";
 import { useLayout } from "../../stores/layout";
 import type { HooksLayer, HooksConfigJson, HooksConfigGui } from "../../types/hooksConfig";
+// 中间态（Stage 03 写死）：泛化命令 cliId 实参暂传 CLAUDE_CLI_ID 常量（禁字面量）——
+// Stage 06 hub 化时改 selectedCliId 回收
+import { CLAUDE_CLI_ID } from "../../features/cliProfiles/profiles/claude";
 import { validateHooksJson } from "../../features/hooksConfig/schema";
 import {
   jsonToGui,
@@ -113,7 +116,7 @@ export function useHooksConfig(): UseHooksConfigResult {
       setError(false);
     }
     try {
-      const raw = await readHooksConfig(target, rootPathRef.current ?? undefined);
+      const raw = await readHooksConfig(CLAUDE_CLI_ID, target, rootPathRef.current ?? undefined);
       if (gen !== genRef.current) return; // 过期结果丢弃
       const json = (raw === null || raw === undefined ? {} : raw) as HooksConfigJson;
       setConfigJson(json);
@@ -194,7 +197,7 @@ export function useHooksConfig(): UseHooksConfigResult {
     }
     // ③ 写盘（后端 read-modify-write merge 保留其他字段，P3-BE-03）
     const layer = layerRef.current;
-    await writeHooksConfig(layer, json as unknown as ConfigJson, rootPathRef.current ?? undefined);
+    await writeHooksConfig(CLAUDE_CLI_ID, layer, json as unknown as ConfigJson, rootPathRef.current ?? undefined);
     setDirty(false);
     setSaved(true);
   }, []);

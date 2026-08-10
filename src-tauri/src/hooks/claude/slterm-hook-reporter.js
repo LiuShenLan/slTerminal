@@ -1,9 +1,9 @@
 // slterm-hook-reporter.js — slTerminal Claude Code hook 信号上报脚本
-// 由 hooks_inject 命令写入 ~/.slterminal/hooks/slterm-hook-reporter.js
+// 由 agent_hooks_inject（claude hooks provider）写入 ~/.slterminal/hooks/slterm-hook-reporter.js
 // 零依赖，仅使用 Node.js >= 18 内置 API
 // 契约：任何代码路径 exit code 恒为 0，不向 stderr 输出（C10）
 
-const SCRIPT_VERSION = 1;
+const SCRIPT_VERSION = 2;
 
 const fs = require("fs");
 const path = require("path");
@@ -40,9 +40,10 @@ const os = require("os");
         // 确保信号目录存在（recursive，首次创建）
         fs.mkdirSync(dir, { recursive: true });
 
-        // 按 C1 契约组装信号 payload（8 字段，camelCase）
+        // 按跨边界契约组装信号 payload（8 字段 + 显式 cliId，camelCase；决策 7）
         var payload = {
           panelId: panelId,
+          cliId: "claude",
           event: data.hook_event_name || "",
           timestamp: Date.now(),
           sessionId: data.session_id || "",

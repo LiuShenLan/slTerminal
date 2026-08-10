@@ -12,12 +12,12 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 // ── vi.hoisted：mock 状态在模块级 vi.mock 执行前就绪 ──
 const {
   mockTerminalRegistry,
-  mockOnHookEventCallback,
+  mockOnAgentEventCallback,
   mockContextUsage,
   mockSwitchToPageAndFocus,
   mockScanHistory,
 } = vi.hoisted(() => {
-  let onHookEventCb: ((payload: unknown) => void) | null = null;
+  let onAgentEventCb: ((payload: unknown) => void) | null = null;
   return {
     mockTerminalRegistry: {
       getAll: vi.fn(() => new Map<string, unknown>()),
@@ -25,16 +25,16 @@ const {
       _reset: vi.fn(),
       _size: vi.fn(() => 0),
     },
-    mockOnHookEventCallback: {
+    mockOnAgentEventCallback: {
       set cb(fn: ((payload: unknown) => void) | null) {
-        onHookEventCb = fn;
+        onAgentEventCb = fn;
       },
       get cb() {
-        return onHookEventCb;
+        return onAgentEventCb;
       },
-      // 手动触发 hook 事件
+      // 手动触发 agent 事件
       trigger(payload: unknown) {
-        onHookEventCb?.(payload);
+        onAgentEventCb?.(payload);
       },
     },
     mockContextUsage: vi.fn(),
@@ -50,11 +50,11 @@ vi.mock("../panels/terminal/TerminalRegistry", () => ({
   TerminalRegistry: mockTerminalRegistry,
 }));
 
-vi.mock("../ipc/hooks", () => ({
-  onHookEvent: vi.fn((cb: (payload: unknown) => void) => {
-    mockOnHookEventCallback.cb = cb;
+vi.mock("../ipc/agentHooks", () => ({
+  onAgentEvent: vi.fn((cb: (payload: unknown) => void) => {
+    mockOnAgentEventCallback.cb = cb;
     return () => {
-      mockOnHookEventCallback.cb = null;
+      mockOnAgentEventCallback.cb = null;
     };
   }),
   contextUsage: mockContextUsage,
@@ -164,7 +164,7 @@ function resetAll() {
   mockTerminalRegistry.getAll.mockReturnValue(new Map());
   mockContextUsage.mockReset();
   mockSwitchToPageAndFocus.mockReset();
-  mockOnHookEventCallback.cb = null;
+  mockOnAgentEventCallback.cb = null;
   // 真实 useClaudeHistory 的 scan 默认解析为空数组——未显式配置的测试展开历史区也不会崩
   mockScanHistory.mockReset();
   mockScanHistory.mockResolvedValue([]);

@@ -9,8 +9,8 @@
  */
 
 import { EditorView } from "@codemirror/view";
-import { hooks } from "../src/ipc";
-import type { HookInjectionStatus } from "../src/ipc/hooks";
+import { agentHooks } from "../src/ipc";
+import type { AgentHookInjectionStatus } from "../src/ipc/agentHooks";
 import { writeText } from "../src/ipc/clipboard";
 import { setProjectRoot } from "../src/ipc/fs";
 import { getShortcutRegistry } from "../src/features/shortcuts";
@@ -48,10 +48,10 @@ declare global {
     __slterm_e2e_getSideBarState?: () => SideBarSnapshot | null;
     __slterm_e2e_toggleSideView?: (id: string) => void;
     __slterm_e2e_moveSideViewButton?: (id: string, zone: string, index: number) => void;
-    // hooks 注入/卸载/状态（P1-TE-04）
-    __slterm_e2e_injectHooks?: () => Promise<HookInjectionStatus>;
+    // hooks 注入/卸载/状态（P1-TE-04；底层泛化命令 agent_hooks_*，cliId 固定 "claude"）
+    __slterm_e2e_injectHooks?: () => Promise<AgentHookInjectionStatus>;
     __slterm_e2e_uninstallHooks?: () => Promise<void>;
-    __slterm_e2e_getHookInjectionStatus?: () => Promise<HookInjectionStatus>;
+    __slterm_e2e_getHookInjectionStatus?: () => Promise<AgentHookInjectionStatus>;
     // hooks 配置面板 JSON 模式（P3-TE-18）
     __slterm_e2e_setHooksConfigJson?: (text: string) => boolean;
     __slterm_e2e_getHooksConfigJson?: () => string | null;
@@ -286,11 +286,16 @@ function installSideBarHelpers(): void {
   };
 }
 
-/** __slterm_e2e_injectHooks / __slterm_e2e_uninstallHooks / __slterm_e2e_getHookInjectionStatus */
+/**
+ * __slterm_e2e_injectHooks / __slterm_e2e_uninstallHooks / __slterm_e2e_getHookInjectionStatus
+ *
+ * 泛化命令（agent_hooks_* 六命令全表）的 E2E 后门——cliId 实参固定 "claude"：
+ * E2E 辅助代码属测试基建，字面量合法；随第二 CLI 接入如需覆盖再扩展参数。
+ */
 function installHookHelpers(): void {
-  window.__slterm_e2e_injectHooks = async () => hooks.inject();
-  window.__slterm_e2e_uninstallHooks = async () => hooks.uninstall();
-  window.__slterm_e2e_getHookInjectionStatus = async () => hooks.getInjectionStatus();
+  window.__slterm_e2e_injectHooks = async () => agentHooks.inject("claude");
+  window.__slterm_e2e_uninstallHooks = async () => agentHooks.uninstall("claude");
+  window.__slterm_e2e_getHookInjectionStatus = async () => agentHooks.getInjectionStatus("claude");
 }
 
 /**

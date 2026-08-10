@@ -2,10 +2,10 @@
 //
 // capabilities 为可选能力域：未声明 = 该域不可用，消费方优雅降级。
 // 类型引用随全局更名同步：ClaudeStatus → AgentStatus（Stage 02 随行），
-// HookEventPayload / HistorySession 随 Stage 03/04 更名时同步。
+// AgentEventPayload / HistorySession 随 Stage 03/04 更名时同步。
 
 import type { AgentStatus } from "../../lib/agentStatus";
-import type { HookEventPayload } from "../../ipc/hooks";
+import type { AgentEventPayload } from "../../types/agent";
 import type { HistorySession } from "../../types/claudeHistory";
 
 /** hooks 能力域（协议知识实现留在 profiles/<cli>/，本文件仅签名） */
@@ -14,7 +14,7 @@ export interface HooksCapability {
   eventToStatus(event: string, notificationType?: string | null): AgentStatus;
   /** hook 事件负载 → 通知类别判定（claude = classifyEvent 五映射） */
   classifyNotification(
-    payload: HookEventPayload,
+    payload: AgentEventPayload,
   ): "permission" | "error" | "done" | null;
   /** 上下文窗口上限（用量口径分母，claude = 200_000） */
   contextLimit: number;

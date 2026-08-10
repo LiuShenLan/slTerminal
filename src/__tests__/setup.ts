@@ -89,9 +89,9 @@ vi.mock("../ipc/notify", () => ({
   startWatch: () => Promise.resolve(),
 }));
 
-// 全局 mock：ipc/hooks（NotificationListener / useClaudeNotifications 依赖 onHookEvent）
-vi.mock("../ipc/hooks", () => ({
-  onHookEvent: () => () => {},
+// 全局 mock：ipc/agentHooks（NotificationListener / useAgentNotifications 依赖 onAgentEvent）
+vi.mock("../ipc/agentHooks", () => ({
+  onAgentEvent: () => () => {},
   inject: () => Promise.resolve({ status: "notInjected", version: null }),
   uninstall: () => Promise.resolve(),
   getInjectionStatus: () => Promise.resolve({ status: "notInjected", version: null }),

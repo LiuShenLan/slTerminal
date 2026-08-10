@@ -4,7 +4,7 @@
  *
  * 备份/还原（E2E-05 扩展）：E2E 运行会真实写盘三处用户配置——
  * ① ~/.slterminal/settings.json（侧栏视图状态等，FIX-TE-04 原有）
- * ② ~/.claude/settings.json（hooks_inject 注入 slterm matcher，E2E-05 新增）
+ * ② ~/.claude/settings.json（agent_hooks_inject 注入 slterm matcher，E2E-05 新增）
  * ③ ~/.slterminal/hooks/（注入的 reporter 脚本，E2E-05 新增）
  * 启动时备份（存在时），exit 时同步还原；~/.slterminal/hooks-events/
  * 为运行时信号文件目录（无用户价值），exit 时直接清理。
@@ -47,7 +47,8 @@ function restoreFile(filePath, existed) {
 const settingsPath = path.join(os.homedir(), '.slterminal', 'settings.json');
 const settingsExisted = backupFile(settingsPath);
 
-// ~/.claude/settings.json（hooks 注入污染防护，E2E-05）
+// ~/.claude/settings.json（hooks 注入污染防护，E2E-05）：
+// E2E-05 用户目录隔离备份集合保持 claude 硬编码——随第二 CLI 接入扩展（决策 4）
 const claudeSettingsPath = path.join(os.homedir(), '.claude', 'settings.json');
 const claudeSettingsExisted = backupFile(claudeSettingsPath);
 
@@ -75,7 +76,7 @@ const hooksEventsDir = path.join(os.homedir(), '.slterminal', 'hooks-events');
 process.on('exit', () => {
   // settings.json 还原（FIX-TE-04）
   restoreFile(settingsPath, settingsExisted);
-  // ~/.claude/settings.json 还原（E2E-05——hooks_inject 会真实写 slterm matcher）
+  // ~/.claude/settings.json 还原（E2E-05——agent_hooks_inject 会真实写 slterm matcher）
   restoreFile(claudeSettingsPath, claudeSettingsExisted);
   // hooks-events 清理（E2E-05——信号文件目录，watcher 消费后残留兜底删除）
   try { fs.rmSync(hooksEventsDir, { recursive: true, force: true }); } catch { /* 忽略 */ }

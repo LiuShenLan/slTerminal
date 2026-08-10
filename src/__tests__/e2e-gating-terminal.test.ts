@@ -95,7 +95,7 @@ vi.mock("../ipc", () => ({
     kill: vi.fn().mockResolvedValue(undefined),
     getWindowsBuildNumber: vi.fn().mockResolvedValue(22621),
   },
-  hooks: { onHookEvent: vi.fn(() => vi.fn()), inject: vi.fn(), uninstall: vi.fn(), getInjectionStatus: vi.fn() },
+  agentHooks: { onAgentEvent: vi.fn(() => vi.fn()), inject: vi.fn(), uninstall: vi.fn(), getInjectionStatus: vi.fn() },
 }));
 
 vi.mock("../ipc/clipboard", () => ({

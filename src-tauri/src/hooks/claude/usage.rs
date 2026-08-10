@@ -1,58 +1,15 @@
-//! Context usage 查询 —— 从 transcript 文件尾部 64KB 逆行扫描 token 用量
+//! claude hooks provider 用量查询 —— 从 transcript 文件尾部 64KB 逆行扫描 token 用量（MC-213 下沉）
 //!
 //! 职责：
-//! - 定义 ContextUsage DTO（C5 契约，camelCase）
-//! - hooks_context_usage 命令：扫描 transcript JSONL 尾部提取 usage
+//! - ContextUsage DTO 定义在 hooks/mod.rs（跨边界契约共享 DTO，MC-214 四字段保留）
 //! - parse_usage_line 纯函数：单行 JSON → Option<ContextUsage>
+//! - scan_transcript_usage 纯 I/O 逻辑：provider.context_usage 经命令层 spawn_blocking 调用
 
-use serde::{Deserialize, Serialize};
+use crate::hooks::ContextUsage;
 use std::io::{Read, Seek, SeekFrom};
-use tauri::AppHandle;
 
-/// Context usage DTO（C5 契约，camelCase 序列化）
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct ContextUsage {
-    /// 输入 token 数
-    pub input_tokens: u64,
-    /// 输出 token 数
-    pub output_tokens: u64,
-    /// 缓存读取输入 token 数（serde default 兼容旧 transcript 缺失）
-    #[serde(default)]
-    pub cache_read_input_tokens: u64,
-    /// 缓存创建输入 token 数（serde default 兼容旧 transcript 缺失）
-    #[serde(default)]
-    pub cache_creation_input_tokens: u64,
-}
-
-/// 从 transcript JSONL 文件尾部扫描 token 用量
-///
-/// 读取文件尾部约 64KB，按行分割后从末行逆行扫描，
-/// 返回第一个包含 `message.usage.input_tokens` 与 `output_tokens` 的行。
-/// 文件不存在、解析失败等任何异常返回 Ok(None)，不 panic。
-/// I/O 在 spawn_blocking 内执行。
-#[tauri::command]
-pub async fn hooks_context_usage(
-    _app: AppHandle,
-    transcript_path: String,
-) -> Result<Option<ContextUsage>, crate::AppError> {
-    run_context_usage(transcript_path).await
-}
-
-/// hooks_context_usage 命令核心逻辑（不含 Tauri AppHandle 注入参数，供 L1 测试直接调用）
-///
-/// 参数透传 transcript_path → spawn_blocking → scan_transcript_usage；
-/// 返回 None（无 usage 或文件异常）或 Some(usage)，映射到 Ok。
-async fn run_context_usage(
-    transcript_path: String,
-) -> Result<Option<ContextUsage>, crate::AppError> {
-    tokio::task::spawn_blocking(move || scan_transcript_usage(&transcript_path))
-        .await
-        .map_err(crate::AppError::from)
-}
-
-/// 扫描 transcript 文件的 token 用量（纯 I/O 逻辑，在 spawn_blocking 内调用）
-fn scan_transcript_usage(path: &str) -> Option<ContextUsage> {
+/// 扫描 transcript 文件的 token 用量（纯 I/O 逻辑，命令层在 spawn_blocking 内调用）
+pub(crate) fn scan_transcript_usage(path: &str) -> Option<ContextUsage> {
     let mut file = std::fs::File::open(path).ok()?;
     let file_size = file.metadata().ok()?.len();
 
@@ -374,23 +331,19 @@ mod tests {
         assert_eq!(u.cache_creation_input_tokens, 0);
     }
 
-    // ── hooks_context_usage 命令包装层（HUK-05：参数透传 + None/Some 返回映射） ──
+    // ── provider 层 context_usage（HUK-05：参数透传 + None/Some 返回映射，经 trait impl） ──
     //
     // 纯函数扫描路径由上方 scan_transcript_usage 组直接覆盖（HUK-10 去重，仅存一组）；
-    // 本组经 run_context_usage（命令核心逻辑 = spawn_blocking 包装）调用，
-    // 覆盖包装层参数透传与返回值映射，同时保留大文件尾部扫描用例（原 P2-TE-05）。
+    // 本组经 ClaudeHooksProvider::context_usage（CliHooksProvider trait impl）调用，
+    // 覆盖 trait 层参数透传与返回值映射，同时保留大文件尾部扫描用例（原 P2-TE-05）。
+    // 命令层 cliId 透传/未知 cliId 由 hooks::mod 命令层测试覆盖（block_on 直测）。
 
-    /// 手动 current_thread runtime 驱动 async 核心逻辑（tokio 未启用 #[tokio::test]）
-    fn block_on<F: std::future::Future>(future: F) -> F::Output {
-        tokio::runtime::Builder::new_current_thread()
-            .build()
-            .unwrap()
-            .block_on(future)
-    }
+    use crate::hooks::claude::ClaudeHooksProvider;
+    use crate::hooks::provider::CliHooksProvider;
 
     /// 参数透传 transcriptPath：不同文件 → 各自扫描结果（Some 返回映射）
     #[test]
-    fn hooks_context_usage_passes_transcript_path() {
+    fn context_usage_passes_transcript_path() {
         let (_dir_a, path_a) = make_temp_transcript(&[
             r#"{"message":{"usage":{"input_tokens":10,"output_tokens":5}}}"#,
         ]);
@@ -398,10 +351,12 @@ mod tests {
             r#"{"message":{"usage":{"input_tokens":20,"output_tokens":6}}}"#,
         ]);
 
-        let a = block_on(run_context_usage(path_a.to_str().unwrap().to_string()))
+        let a = ClaudeHooksProvider
+            .context_usage(path_a.to_str().unwrap())
             .unwrap()
             .unwrap();
-        let b = block_on(run_context_usage(path_b.to_str().unwrap().to_string()))
+        let b = ClaudeHooksProvider
+            .context_usage(path_b.to_str().unwrap())
             .unwrap()
             .unwrap();
         assert_eq!(a.input_tokens, 10, "transcript_path 应透传到扫描逻辑");
@@ -410,20 +365,22 @@ mod tests {
 
     /// None 返回映射：文件无 usage → Ok(None)
     #[test]
-    fn hooks_context_usage_none_mapping() {
+    fn context_usage_none_mapping() {
         let (_dir, path) = make_temp_transcript(&[r#"{"type":"system","message":"no usage"}"#]);
 
-        let r = block_on(run_context_usage(path.to_str().unwrap().to_string())).unwrap();
+        let r = ClaudeHooksProvider
+            .context_usage(path.to_str().unwrap())
+            .unwrap();
         assert!(r.is_none(), "无 usage 应映射为 Ok(None)");
     }
 
-    /// 大文件（>128KB）仅读尾部 64KB（原 P2-TE-05 用例 5，HUK-10 迁移至命令包装层）
+    /// 大文件（>128KB）仅读尾部 64KB（原 P2-TE-05 用例 5，HUK-10 迁移至 provider 层）
     ///
     /// 构造约 200KB 的 JSONL 文件，前 140KB 为无 usage 的填充行
     /// （超出 TRANSCRIPT_TAIL_BYTES 窗口），usage 行在末尾 1KB 内。
-    /// 经命令包装层调用，验证 spawn_blocking 全链路仍只加载尾部窗口。
+    /// 经 provider 层调用，验证全链路仍只加载尾部窗口。
     #[test]
-    fn hooks_context_usage_large_file_tail_scan() {
+    fn context_usage_large_file_tail_scan() {
         let mut file = NamedTempFile::new().unwrap();
 
         // 填充约 140KB 的 padding 行（有效 JSON 但无 usage 字段）
@@ -453,7 +410,9 @@ mod tests {
             meta.len()
         );
 
-        let r = block_on(run_context_usage(file.path().to_str().unwrap().to_string())).unwrap();
+        let r = ClaudeHooksProvider
+            .context_usage(file.path().to_str().unwrap())
+            .unwrap();
         assert!(r.is_some(), "应从尾部 64KB 找到 usage");
         let u = r.unwrap();
         assert_eq!(u.input_tokens, 99999);

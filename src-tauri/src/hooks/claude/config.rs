@@ -1,22 +1,20 @@
-//! Hooks 配置三层读写模块 — hooks 子树级 read-modify-write（P3-BE-01/02/03）
+//! claude hooks provider 配置三层读写 — hooks 子树级 read-modify-write（MC-213 下沉，P3-BE-01/02/03）
 //!
 //! 三层配置路径（P3-BE-01）：
-//! - user 层 → `~/.claude/settings.json`（`dirs::home_dir()` 解析，绕过 project_root 沙箱）
+//! - user 层 → `~/.claude/settings.json`（home 解析，绕过 project_root 沙箱）
 //! - project 层 → `<projectPath>/.claude/settings.json`
 //! - local 层 → `<projectPath>/.claude/settings.local.json`
 //!
 //! project/local 层入参经 `crate::state::validate_path_within_root` 沙箱校验：
 //! project_path 缺失返回 Validation，校验失败返回 PathNotAllowed（P3-BE-06/07）。
 //! 非法 layer / 非法 hooks / JSON 损坏统一走 AppError::Validation，IO 错误走
-//! AppError::IoKind（P3-BE-08）。阻塞 I/O 全部在 spawn_blocking 内执行（硬约束 #3）。
+//! AppError::IoKind（P3-BE-08）。阻塞 I/O 由命令层在 spawn_blocking 内执行（硬约束 #3）。
 
 use crate::error::AppError;
 use crate::state::validate_path_within_root;
-use crate::state::AppState;
 use serde_json::Value;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use tauri::State;
 use tempfile::NamedTempFile;
 
 /// hooks 配置层级
@@ -151,92 +149,39 @@ fn write_hooks_subtree(path: &Path, hooks: Value) -> Result<(), AppError> {
     Ok(())
 }
 
-/// hooks_config_read 命令核心逻辑（不含 Tauri State 注入参数，供 L1 测试直接调用）
+/// agent_hooks_config_read（claude）同步核心（provider trait impl 经命令层 spawn_blocking 调用）
 ///
-/// project_root 由命令从 AppState 锁内读取后传入；home_dir 闭包供 user 层解析
-/// （生产传 dirs::home_dir，测试注入 tempdir——L1 绝不读写真实用户 home）。
-async fn run_config_read(
-    layer: String,
-    project_path: Option<String>,
-    project_root: Option<PathBuf>,
+/// project_root 由命令层从 AppState 锁内读取后传入；home_dir 闭包供 user 层解析
+/// （生产传 claude::home_dir，测试注入 tempdir——L1 绝不读写真实用户 home）。
+pub(crate) fn config_read_sync(
+    layer: &str,
+    project_path: Option<&str>,
+    project_root: &Option<PathBuf>,
     home_dir: impl Fn() -> Option<PathBuf>,
 ) -> Result<Value, AppError> {
-    let l = parse_layer(&layer)?;
+    let l = parse_layer(layer)?;
     // 路径解析（user 层不经过沙箱；project/local 层沙箱校验 + 拼接）
-    let path = resolve_config_path(l, &project_root, project_path.as_deref(), home_dir)?;
-
-    // 阻塞 I/O 在 spawn_blocking 内执行（硬约束 #3）
-    match tokio::task::spawn_blocking(move || read_hooks_subtree(&path)).await {
-        Ok(inner) => inner,
-        Err(e) => Err(AppError::TaskJoin(e.to_string())),
-    }
+    let path = resolve_config_path(l, project_root, project_path, home_dir)?;
+    read_hooks_subtree(&path)
 }
 
-/// hooks_config_write 命令核心逻辑（不含 Tauri State 注入参数，供 L1 测试直接调用）
+/// agent_hooks_config_write（claude）同步核心（provider trait impl 经命令层 spawn_blocking 调用）
 ///
 /// 要求 hooks 为 JSON Object；原文件其他字段（permissions/env/$schema）原样保留。
-async fn run_config_write(
-    layer: String,
+pub(crate) fn config_write_sync(
+    layer: &str,
     hooks: Value,
-    project_path: Option<String>,
-    project_root: Option<PathBuf>,
+    project_path: Option<&str>,
+    project_root: &Option<PathBuf>,
     home_dir: impl Fn() -> Option<PathBuf>,
 ) -> Result<(), AppError> {
-    let l = parse_layer(&layer)?;
+    let l = parse_layer(layer)?;
     if !hooks.is_object() {
         return Err(AppError::Validation("hooks 必须为 JSON 对象".into()));
     }
     // 路径解析（user 层不经过沙箱；project/local 层沙箱校验 + 拼接）
-    let path = resolve_config_path(l, &project_root, project_path.as_deref(), home_dir)?;
-
-    // 阻塞 I/O 在 spawn_blocking 内执行（硬约束 #3）
-    match tokio::task::spawn_blocking(move || write_hooks_subtree(&path, hooks)).await {
-        Ok(inner) => inner,
-        Err(e) => Err(AppError::TaskJoin(e.to_string())),
-    }
-}
-
-/// 读取 hooks 配置子树（P3-BE-02）
-///
-/// 返回 hooks 子树（非整文件）；文件不存在或无 hooks 键返回 Null。
-#[tauri::command]
-pub async fn hooks_config_read(
-    layer: String,
-    project_path: Option<String>,
-    state: State<'_, AppState>,
-) -> Result<Value, AppError> {
-    // 锁内读取 project_root 并 clone 出（作用域块：块结束即 drop 锁守卫，
-    // 避免非 Send 的 RwLockReadGuard 跨 await 存活）
-    let project_root = {
-        let root_guard = state.project_root.read().map_err(|e| AppError::IoKind {
-            kind: "lock".into(),
-            message: format!("获取 project_root 锁失败: {e}"),
-        })?;
-        root_guard.clone()
-    };
-    run_config_read(layer, project_path, project_root, dirs::home_dir).await
-}
-
-/// 写回 hooks 配置子树（read-modify-write merge，P3-BE-03）
-///
-/// 要求 hooks 为 JSON Object；原文件其他字段（permissions/env/$schema）原样保留。
-#[tauri::command]
-pub async fn hooks_config_write(
-    layer: String,
-    hooks: Value,
-    project_path: Option<String>,
-    state: State<'_, AppState>,
-) -> Result<(), AppError> {
-    // 锁内读取 project_root 并 clone 出（作用域块：块结束即 drop 锁守卫，
-    // 避免非 Send 的 RwLockReadGuard 跨 await 存活）
-    let project_root = {
-        let root_guard = state.project_root.read().map_err(|e| AppError::IoKind {
-            kind: "lock".into(),
-            message: format!("获取 project_root 锁失败: {e}"),
-        })?;
-        root_guard.clone()
-    };
-    run_config_write(layer, hooks, project_path, project_root, dirs::home_dir).await
+    let path = resolve_config_path(l, project_root, project_path, home_dir)?;
+    write_hooks_subtree(&path, hooks)
 }
 
 #[cfg(test)]
@@ -538,22 +483,14 @@ mod tests {
         std::fs::set_permissions(&path, perms).unwrap();
     }
 
-    // ── 命令包装层透传（HUK-06） ──
+    // ── 同步核心透传（HUK-06，config_read_sync / config_write_sync） ──
     //
-    // run_config_read / run_config_write 为命令核心逻辑（不含 Tauri State 注入），
     // 覆盖 layer / project_path / hooks / project_root 参数透传与返回映射；
     // user 层经 home_dir 闭包注入 tempdir，绝不读写真实用户 home。
-
-    /// 手动 current_thread runtime 驱动 async 核心逻辑（tokio 未启用 #[tokio::test]）
-    fn block_on<F: std::future::Future>(future: F) -> F::Output {
-        tokio::runtime::Builder::new_current_thread()
-            .build()
-            .unwrap()
-            .block_on(future)
-    }
+    // 命令层 cliId 透传/未知 cliId 由 hooks::mod 命令层测试覆盖（block_on 直测）。
 
     #[test]
-    fn run_config_read_user_layer_passes_paths_through() {
+    fn config_read_sync_user_layer_passes_paths_through() {
         // user 层：注入 home tempdir，透传 layer 后读回 hooks 子树
         let home = tempfile::tempdir().unwrap();
         let settings = home.path().join(".claude").join("settings.json");
@@ -566,15 +503,12 @@ mod tests {
         .unwrap();
         let home_path = home.path().to_path_buf();
 
-        let v = block_on(run_config_read("user".into(), None, None, move || {
-            Some(home_path.clone())
-        }))
-        .unwrap();
+        let v = config_read_sync("user", None, &None, move || Some(home_path.clone())).unwrap();
         assert_eq!(v, hooks, "user 层应透传注入 home 并返回 hooks 子树");
     }
 
     #[test]
-    fn run_config_read_project_layer_passes_paths_through() {
+    fn config_read_sync_project_layer_passes_paths_through() {
         // project 层：透传 project_path / project_root，沙箱通过后读回 hooks 子树
         let dir = tempfile::tempdir().unwrap();
         let proj = dir.path().to_path_buf();
@@ -587,37 +521,33 @@ mod tests {
         )
         .unwrap();
 
-        let v = block_on(run_config_read(
-            "project".into(),
-            Some(proj.to_str().unwrap().to_string()),
-            Some(proj.clone()),
+        let v = config_read_sync(
+            "project",
+            Some(proj.to_str().unwrap()),
+            &Some(proj.clone()),
             || None, // user 层闭包惰性，不会被调用
-        ))
+        )
         .unwrap();
         assert_eq!(v, hooks);
     }
 
     #[test]
-    fn run_config_read_rejects_invalid_layer() {
-        // 非法 layer 经包装层透传到 parse_layer → Validation
-        let err = block_on(run_config_read("bogus".into(), None, None, || None)).unwrap_err();
+    fn config_read_sync_rejects_invalid_layer() {
+        // 非法 layer 透传到 parse_layer → Validation
+        let err = config_read_sync("bogus", None, &None, || None).unwrap_err();
         assert!(matches!(err, AppError::Validation(_)));
     }
 
     #[test]
-    fn run_config_write_user_layer_passes_paths_through() {
+    fn config_write_sync_user_layer_passes_paths_through() {
         // user 层：注入 home tempdir，透传 layer / hooks 写回 home/.claude/settings.json
         let home = tempfile::tempdir().unwrap();
         let hooks = serde_json::json!({"SessionStart": []});
         let home_path = home.path().to_path_buf();
 
-        block_on(run_config_write(
-            "user".into(),
-            hooks.clone(),
-            None,
-            None,
-            move || Some(home_path.clone()),
-        ))
+        config_write_sync("user", hooks.clone(), None, &None, move || {
+            Some(home_path.clone())
+        })
         .unwrap();
 
         let path = home.path().join(".claude").join("settings.json");
@@ -627,16 +557,10 @@ mod tests {
     }
 
     #[test]
-    fn run_config_write_rejects_non_object_hooks() {
-        // 非 Object hooks 经包装层校验透传 → Validation
-        let err = block_on(run_config_write(
-            "user".into(),
-            serde_json::json!([1, 2]),
-            None,
-            None,
-            || None,
-        ))
-        .unwrap_err();
+    fn config_write_sync_rejects_non_object_hooks() {
+        // 非 Object hooks 校验透传 → Validation
+        let err =
+            config_write_sync("user", serde_json::json!([1, 2]), None, &None, || None).unwrap_err();
         assert!(matches!(err, AppError::Validation(_)));
     }
 }

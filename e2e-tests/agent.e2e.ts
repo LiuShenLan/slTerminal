@@ -283,7 +283,7 @@ describe("Agent Status 视图与 toast 通知", () => {
    * 验证：假 transcript JSONL（含 message.usage 四字段）→ 信号文件携真实
    * transcriptPath 建行 → contextUsage 后端真实解析 → 行含量化百分比 →
    * 切项目往返（addPage → switchToPage → switchToPage 回）→ 用量数值保持。
-   * L4 级覆盖：cache 口径全链路（后端 hooks_context_usage 真实解析，非 mock）。
+   * L4 级覆盖：cache 口径全链路（后端 agent_context_usage 真实解析，非 mock）。
    */
   it("R2 变体：切项目往返后用量保持（contextUsage 全链路 + cache 字段）", async () => {
     const eventsDir = join(homedir(), ".slterminal", "hooks-events");
@@ -610,22 +610,22 @@ describe("Agent Status 视图与 toast 通知", () => {
    *   待 @tauri-apps/plugin-notification 支持程序化查询/触发通知后，
    *   可修改 useClaudeNotifications 暴露 sendNotification 调用的 spy，
    *   在 E2E 中通过 browser.execute 设置 __slterm_windowFocused = false
-   *   后注入合成 hook-event，再验证 spy 被调用参数。
+   *   后注入合成 agent-event，再验证 spy 被调用参数。
    */
   it.skip("toast 触发链路需人工验证（失焦 + 权限请求 / Stop / 错误）", async () => {
     // 骨架保留供未来自动化参考。
     //
     // 前置：
-    //   1. hooks 已注入 → onHookEvent 正常工作
+    //   1. hooks 已注入 → onAgentEvent 正常工作
     //   2. 终端面板存在 → panelId 已知
     //   3. window.__slterm_windowFocused = false → 失焦门控通过
     //
     // 验证断言（自动化后启用）：
-    //   1. inject PermissionRequest hook-event → sendClickableNotification 被调用
+    //   1. inject PermissionRequest agent-event → sendClickableNotification 被调用
     //      参数 title="slTerminal"，body 含 "🔐 权限请求"
-    //   2. inject Stop hook-event → sendClickableNotification 被调用
+    //   2. inject Stop agent-event → sendClickableNotification 被调用
     //      参数 body 含 "✅ 任务完成"
-    //   3. inject StopFailure hook-event → sendClickableNotification 被调用
+    //   3. inject StopFailure agent-event → sendClickableNotification 被调用
     //      参数 body 含 "❌ 错误"
     //   4. Notification onclick → setFocus + setActivePage + panel.focus 被调用
     //   5. 非通知类事件（PreToolUse/PostToolUse/SessionStart/SessionEnd）

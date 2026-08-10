@@ -8,7 +8,7 @@
 // src/features/notifications/ 的 classifyEvent 五映射（MC-422，行为零改动）。
 
 import type { AgentStatus } from "../../../../lib/agentStatus";
-import type { HookEventPayload } from "../../../../ipc/hooks";
+import type { AgentEventPayload } from "../../../../types/agent";
 
 /** Notification 事件中需要用户处理的子类型 */
 export const ATTENTION_NOTIFICATION_TYPES = new Set([
@@ -69,7 +69,7 @@ export function eventToStatus(
  *   - 其他：不触发通知
  */
 export function classifyNotification(
-  payload: HookEventPayload,
+  payload: AgentEventPayload,
 ): "permission" | "error" | "done" | null {
   // 权限请求
   if (payload.event === "PermissionRequest") return "permission";

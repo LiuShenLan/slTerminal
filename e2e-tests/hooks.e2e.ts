@@ -159,7 +159,7 @@ describe("hooks 状态可视化", () => {
     const signalFiles: string[] = [];
 
     try {
-      // 1. 注入完成 → 脚本已落盘（hooks_inject 写入的固定路径）
+      // 1. 注入完成 → 脚本已落盘（agent_hooks_inject 写入的固定路径）
       const scriptPath = join(homedir(), ".slterminal", "hooks", "slterm-hook-reporter.js");
       expect(existsSync(scriptPath)).toBe(true);
 

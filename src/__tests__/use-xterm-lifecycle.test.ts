@@ -23,17 +23,17 @@ const {
   mockRegistryGet,
   mockRegistryRemove,
   mockSetAgentSession,
-  // Hooks 事件测试：捕获 onHookEvent 回调
-  mockOnHookEvent,
-  mockUnsubscribeHookEvent,
-  capturedHookEventCallbackRef,
+  // Agent 事件测试：捕获 onAgentEvent 回调
+  mockOnAgentEvent,
+  mockUnsubscribeAgentEvent,
+  capturedAgentEventCallbackRef,
   // MC-403: cliProfileRegistry.get 解析 profile（hook 事件按 cliId 取能力）
   mockCliProfileGet,
   // MC-403: profile.hooks.eventToStatus 真实调用断言（入参 mock）
   mockEventToStatus,
 } = vi.hoisted(() => {
   const registry = new Map<string, { sessionId: string; agentSession?: { cliId?: string } | null }>();
-  const hookCallbackRef: { current: ((_p: Record<string, unknown>) => void) | null } = { current: null };
+  const agentEventCallbackRef: { current: ((_p: Record<string, unknown>) => void) | null } = { current: null };
   const mockUnsub = vi.fn();
   return {
     mockPushContext: vi.fn(),
@@ -60,13 +60,13 @@ const {
       return true;
     }),
     mockSetAgentSession: vi.fn(),
-    // Hooks 事件 mock
-    mockOnHookEvent: vi.fn((callback: (_p: Record<string, unknown>) => void) => {
-      hookCallbackRef.current = callback;
+    // Agent 事件 mock
+    mockOnAgentEvent: vi.fn((callback: (_p: Record<string, unknown>) => void) => {
+      agentEventCallbackRef.current = callback;
       return mockUnsub;
     }),
-    mockUnsubscribeHookEvent: mockUnsub,
-    capturedHookEventCallbackRef: hookCallbackRef,
+    mockUnsubscribeAgentEvent: mockUnsub,
+    capturedAgentEventCallbackRef: agentEventCallbackRef,
     mockCliProfileGet: vi.fn(),
     // 默认 stub 语义对齐 claude eventToStatus（10 事件映射）；单测可按需 mockReturnValue 覆盖
     mockEventToStatus: vi.fn(
@@ -169,7 +169,6 @@ vi.mock("../features/shortcuts", () => ({
 }));
 
 // useXterm.ts import { pty } from "../../ipc" → src/ipc
-// 同时 mock hooks.onHookEvent（P1-F3-07）
 vi.mock("../ipc", () => ({
   pty: {
     spawn: vi.fn().mockResolvedValue("test-session-id"),
@@ -178,12 +177,12 @@ vi.mock("../ipc", () => ({
     kill: vi.fn().mockResolvedValue(undefined),
     getWindowsBuildNumber: vi.fn().mockResolvedValue(22621),
   },
-  hooks: {
-    onHookEvent: mockOnHookEvent,
-    inject: vi.fn(),
-    uninstall: vi.fn(),
-    getInjectionStatus: vi.fn(),
-  },
+}));
+
+// useXterm.ts import { onAgentEvent } from "../../ipc/agentHooks"（MC-202，P1-F3-07）——
+// 本地覆盖 setup.ts 全局 mock 以捕获回调供测试手动触发
+vi.mock("../ipc/agentHooks", () => ({
+  onAgentEvent: mockOnAgentEvent,
 }));
 
 // OSC 52 测试：mock clipboard（src/ipc/clipboard.ts）
@@ -1768,7 +1767,7 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
   let container: HTMLDivElement;
   let mockOnTabStateChange: ReturnType<typeof vi.fn<(state: TabState) => void>>;
 
-  /** 构造最小合法 HookEventPayload 的模拟对象 */
+  /** 构造最小合法 AgentEventPayload 的模拟对象 */
   function makeHookPayload(overrides: Partial<Record<string, unknown>> = {}): Record<string, unknown> {
     return {
       panelId: "hooks-test",
@@ -1796,7 +1795,7 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     Object.defineProperty(container, "offsetHeight", { value: 600, configurable: true });
   });
 
-  /** 渲染 useXterm 并等待 PTY spawn + hooks.onHookEvent 注册完成 */
+  /** 渲染 useXterm 并等待 PTY spawn + onAgentEvent 注册完成 */
   async function mountAndWaitForHooks() {
     renderHook(() =>
       useXterm({
@@ -1810,9 +1809,9 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     await vi.waitFor(() => {
       expect(pty.spawn).toHaveBeenCalled();
     }, { timeout: 3000 });
-    // onHookEvent 在 effect 中同步调用，spawn 后应已注册
-    expect(mockOnHookEvent).toHaveBeenCalled();
-    expect(capturedHookEventCallbackRef.current).not.toBeNull();
+    // onAgentEvent 在 effect 中同步调用，spawn 后应已注册
+    expect(mockOnAgentEvent).toHaveBeenCalled();
+    expect(capturedAgentEventCallbackRef.current).not.toBeNull();
   }
 
   it("HUK1: 匹配 panelId + UserPromptSubmit → eventToStatus 真实调用（入参断言）+ setAgentSession 携 transcriptPath", async () => {
@@ -1821,7 +1820,7 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     mockOnTabStateChange.mockClear();
     mockSetAgentSession.mockClear();
 
-    capturedHookEventCallbackRef.current!(makeHookPayload({
+    capturedAgentEventCallbackRef.current!(makeHookPayload({
       event: "UserPromptSubmit",
     }));
 
@@ -1844,7 +1843,7 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     mockOnTabStateChange.mockClear();
     mockSetAgentSession.mockClear();
 
-    capturedHookEventCallbackRef.current!(makeHookPayload({
+    capturedAgentEventCallbackRef.current!(makeHookPayload({
       event: "SessionEnd",
     }));
 
@@ -1858,7 +1857,7 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     mockOnTabStateChange.mockClear();
     mockSetAgentSession.mockClear();
 
-    capturedHookEventCallbackRef.current!(makeHookPayload({
+    capturedAgentEventCallbackRef.current!(makeHookPayload({
       panelId: "other-panel-id",
       event: "UserPromptSubmit",
     }));
@@ -1872,7 +1871,7 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     mockOnTabStateChange.mockClear();
     mockSetAgentSession.mockClear();
 
-    capturedHookEventCallbackRef.current!(makeHookPayload({
+    capturedAgentEventCallbackRef.current!(makeHookPayload({
       event: "PreToolUse",
     }));
 
@@ -1893,7 +1892,7 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     mockOnTabStateChange.mockClear();
     mockSetAgentSession.mockClear();
 
-    capturedHookEventCallbackRef.current!(makeHookPayload({
+    capturedAgentEventCallbackRef.current!(makeHookPayload({
       event: "Stop",
     }));
 
@@ -1914,7 +1913,7 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     mockOnTabStateChange.mockClear();
     mockSetAgentSession.mockClear();
 
-    capturedHookEventCallbackRef.current!(makeHookPayload({
+    capturedAgentEventCallbackRef.current!(makeHookPayload({
       event: "StopFailure",
     }));
 
@@ -1935,7 +1934,7 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     mockOnTabStateChange.mockClear();
     mockSetAgentSession.mockClear();
 
-    capturedHookEventCallbackRef.current!(makeHookPayload({
+    capturedAgentEventCallbackRef.current!(makeHookPayload({
       event: "SessionStart",
     }));
 
@@ -1956,7 +1955,7 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     mockOnTabStateChange.mockClear();
     mockSetAgentSession.mockClear();
 
-    capturedHookEventCallbackRef.current!(makeHookPayload({
+    capturedAgentEventCallbackRef.current!(makeHookPayload({
       event: "Notification",
       notificationType: "general",
     }));
@@ -1977,7 +1976,7 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     mockOnTabStateChange.mockClear();
     mockSetAgentSession.mockClear();
 
-    capturedHookEventCallbackRef.current!(makeHookPayload({
+    capturedAgentEventCallbackRef.current!(makeHookPayload({
       event: "UserPromptSubmit",
       sessionId: "",
       transcriptPath: "",
@@ -2005,12 +2004,12 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
       expect(pty.spawn).toHaveBeenCalled();
     }, { timeout: 3000 });
 
-    expect(mockOnHookEvent).toHaveBeenCalled();
-    mockUnsubscribeHookEvent.mockClear();
+    expect(mockOnAgentEvent).toHaveBeenCalled();
+    mockUnsubscribeAgentEvent.mockClear();
     unmount();
 
     // 验证 unsubscribe 被调用（清理函数在 effect cleanup 中执行）
-    expect(mockUnsubscribeHookEvent).toHaveBeenCalled();
+    expect(mockUnsubscribeAgentEvent).toHaveBeenCalled();
   });
 
   // ═══════════════════════════════════════════════════════════
@@ -2024,7 +2023,7 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     mockSetAgentSession.mockClear();
     mockCliProfileGet.mockClear();
 
-    capturedHookEventCallbackRef.current!(makeHookPayload({
+    capturedAgentEventCallbackRef.current!(makeHookPayload({
       event: "UserPromptSubmit",
       cliId: "codex",
     }));
@@ -2046,7 +2045,7 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     mockSetAgentSession.mockClear();
     mockCliProfileGet.mockClear();
 
-    capturedHookEventCallbackRef.current!(makeHookPayload({
+    capturedAgentEventCallbackRef.current!(makeHookPayload({
       event: "UserPromptSubmit",
       // 不传 cliId——走反查分支
     }));
@@ -2064,7 +2063,7 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     mockSetAgentSession.mockClear();
     mockCliProfileGet.mockClear();
 
-    capturedHookEventCallbackRef.current!(makeHookPayload({
+    capturedAgentEventCallbackRef.current!(makeHookPayload({
       event: "UserPromptSubmit",
     }));
 
@@ -2083,7 +2082,7 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     mockSetAgentSession.mockClear();
     mockCliProfileGet.mockClear();
 
-    capturedHookEventCallbackRef.current!(makeHookPayload({
+    capturedAgentEventCallbackRef.current!(makeHookPayload({
       event: "UserPromptSubmit",
     }));
 
@@ -2102,7 +2101,7 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     mockSetAgentSession.mockClear();
 
     expect(() => {
-      capturedHookEventCallbackRef.current!(makeHookPayload({
+      capturedAgentEventCallbackRef.current!(makeHookPayload({
         event: "UserPromptSubmit",
         cliId: "unknown-cli",
       }));
@@ -2126,7 +2125,7 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     mockSetAgentSession.mockClear();
 
     expect(() => {
-      capturedHookEventCallbackRef.current!(makeHookPayload({
+      capturedAgentEventCallbackRef.current!(makeHookPayload({
         event: "UserPromptSubmit",
         cliId: "codex",
       }));
@@ -2147,7 +2146,7 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     mockOnTabStateChange.mockClear();
     mockSetAgentSession.mockClear();
 
-    capturedHookEventCallbackRef.current!(makeHookPayload({
+    capturedAgentEventCallbackRef.current!(makeHookPayload({
       event: "Exit",
     }));
 
@@ -2160,7 +2159,7 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     mockOnTabStateChange.mockClear();
     mockSetAgentSession.mockClear();
 
-    capturedHookEventCallbackRef.current!(makeHookPayload({
+    capturedAgentEventCallbackRef.current!(makeHookPayload({
       event: "SessionEnd",
     }));
 

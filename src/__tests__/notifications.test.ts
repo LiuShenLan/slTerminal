@@ -21,13 +21,13 @@ import { renderHook, act } from "@testing-library/react";
 const {
   mockSendToastNotification,
   mockRequestUserAttention,
-  mockOnHookEventCallback,
+  mockOnAgentEventCallback,
   mockEnsureNotificationPermission,
 } = vi.hoisted(() => ({
   mockSendToastNotification: vi.fn(),
   mockRequestUserAttention: vi.fn().mockResolvedValue(undefined),
-  mockOnHookEventCallback: {
-    cb: null as ((payload: import("../ipc/hooks").HookEventPayload) => void) | null,
+  mockOnAgentEventCallback: {
+    cb: null as ((payload: import("../types/agent").AgentEventPayload) => void) | null,
   },
   mockEnsureNotificationPermission: vi.fn().mockResolvedValue(true),
 }));
@@ -43,9 +43,9 @@ vi.mock("../ipc/notification", () => ({
   isPermissionGranted: vi.fn(() => Promise.resolve(true)),
 }));
 
-vi.mock("../ipc/hooks", () => ({
-  onHookEvent: vi.fn((cb: (payload: import("../ipc/hooks").HookEventPayload) => void) => {
-    mockOnHookEventCallback.cb = cb;
+vi.mock("../ipc/agentHooks", () => ({
+  onAgentEvent: vi.fn((cb: (payload: import("../types/agent").AgentEventPayload) => void) => {
+    mockOnAgentEventCallback.cb = cb;
     return () => {};
   }),
   contextUsage: vi.fn(),
@@ -83,7 +83,7 @@ import "../features/cliProfiles/profiles";
 
 /** classifyNotification spy：Stop → done，其余 → null（断言"被真实调用"） */
 const mockClassifyNotification = vi.fn(
-  (payload: import("../ipc/hooks").HookEventPayload) =>
+  (payload: import("../types/agent").AgentEventPayload) =>
     payload.event === "Stop" ? "done" : null,
 );
 
@@ -120,10 +120,10 @@ cliProfileRegistry.register(noHooksProfile);
 
 // ── 辅助函数 ───────────────────────────────────────────────
 
-/** 构造 HookEventPayload（最小字段 + 可覆盖） */
+/** 构造 AgentEventPayload（最小字段 + 可覆盖） */
 function makePayload(
-  overrides: Partial<import("../ipc/hooks").HookEventPayload> = {},
-): import("../ipc/hooks").HookEventPayload {
+  overrides: Partial<import("../types/agent").AgentEventPayload> = {},
+): import("../types/agent").AgentEventPayload {
   return {
     panelId: "terminal-p1-0",
     event: "Stop",
@@ -194,7 +194,7 @@ describe("classifyEvent 分类表驱动（NAH-03）", () => {
   beforeEach(() => {
     // 重置所有 mock
     vi.clearAllMocks();
-    mockOnHookEventCallback.cb = null;
+    mockOnAgentEventCallback.cb = null;
 
     // 重置 stores 到初始状态
     useProjects.setState({
@@ -214,7 +214,7 @@ describe("classifyEvent 分类表驱动（NAH-03）", () => {
 
   const classifyTable: Array<{
     name: string;
-    payload: Partial<import("../ipc/hooks").HookEventPayload>;
+    payload: Partial<import("../types/agent").AgentEventPayload>;
     expected: NotifyCategory | null;
   }> = [
     { name: "PermissionRequest → permission", payload: { event: "PermissionRequest" }, expected: "permission" },
@@ -236,7 +236,7 @@ describe("classifyEvent 分类表驱动（NAH-03）", () => {
 
   const hookTable: Array<{
     name: string;
-    payload: Partial<import("../ipc/hooks").HookEventPayload>;
+    payload: Partial<import("../types/agent").AgentEventPayload>;
     label: string | null; // null = 不触发 toast
   }> = [
     { name: "失焦 + PermissionRequest → toast「权限请求」", payload: { event: "PermissionRequest" }, label: "权限请求" },
@@ -253,7 +253,7 @@ describe("classifyEvent 分类表驱动（NAH-03）", () => {
     renderHook(() => useAgentNotifications());
 
     act(() => {
-      mockOnHookEventCallback.cb!(makePayload(payload));
+      mockOnAgentEventCallback.cb!(makePayload(payload));
     });
 
     if (label === null) {
@@ -277,7 +277,7 @@ describe("classifyEvent 分类表驱动（NAH-03）", () => {
 describe("classifyEvent 类别判定委托 profile（MC-420）", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockOnHookEventCallback.cb = null;
+    mockOnAgentEventCallback.cb = null;
     TerminalRegistry._reset();
 
     useProjects.setState({
@@ -336,7 +336,7 @@ describe("classifyEvent 类别判定委托 profile（MC-420）", () => {
     renderHook(() => useAgentNotifications());
 
     act(() => {
-      mockOnHookEventCallback.cb!(makePayload({ event: "Stop", cliId: "no-hooks-cli" }));
+      mockOnAgentEventCallback.cb!(makePayload({ event: "Stop", cliId: "no-hooks-cli" }));
     });
 
     expect(mockSendToastNotification).not.toHaveBeenCalled();
@@ -352,7 +352,7 @@ describe("F4 通知门控", () => {
   beforeEach(() => {
     // 重置所有 mock
     vi.clearAllMocks();
-    mockOnHookEventCallback.cb = null;
+    mockOnAgentEventCallback.cb = null;
 
     // 重置 stores 到初始状态
     useProjects.setState({
@@ -374,15 +374,15 @@ describe("F4 通知门控", () => {
 
   // ── 基础渲染 ─────────────────────────────────────────────
 
-  it("挂载时注册 onHookEvent 监听", () => {
+  it("挂载时注册 onAgentEvent 监听", () => {
     const { unmount } = renderHook(() => useAgentNotifications());
-    expect(mockOnHookEventCallback.cb).not.toBeNull();
+    expect(mockOnAgentEventCallback.cb).not.toBeNull();
     unmount();
   });
 
-  it("卸载时清理 onHookEvent 监听", () => {
+  it("卸载时清理 onAgentEvent 监听", () => {
     const { unmount } = renderHook(() => useAgentNotifications());
-    expect(mockOnHookEventCallback.cb).not.toBeNull();
+    expect(mockOnAgentEventCallback.cb).not.toBeNull();
     unmount();
   });
 
@@ -394,7 +394,7 @@ describe("F4 通知门控", () => {
 
     const payload = makePayload({ event: "PermissionRequest" });
     act(() => {
-      mockOnHookEventCallback.cb!(payload);
+      mockOnAgentEventCallback.cb!(payload);
     });
 
     // 验证 toast 发送（两参数，无 onClick）
@@ -418,7 +418,7 @@ describe("F4 通知门控", () => {
       notificationType: "permission_prompt",
     });
     act(() => {
-      mockOnHookEventCallback.cb!(payload);
+      mockOnAgentEventCallback.cb!(payload);
     });
 
     expect(mockSendToastNotification).toHaveBeenCalledTimes(1);
@@ -436,7 +436,7 @@ describe("F4 通知门控", () => {
 
     const payload = makePayload({ event: "Stop" });
     act(() => {
-      mockOnHookEventCallback.cb!(payload);
+      mockOnAgentEventCallback.cb!(payload);
     });
 
     expect(mockSendToastNotification).toHaveBeenCalledTimes(1);
@@ -456,7 +456,7 @@ describe("F4 通知门控", () => {
 
     const payload = makePayload({ event: "StopFailure" });
     act(() => {
-      mockOnHookEventCallback.cb!(payload);
+      mockOnAgentEventCallback.cb!(payload);
     });
 
     expect(mockSendToastNotification).toHaveBeenCalledTimes(1);
@@ -474,7 +474,7 @@ describe("F4 通知门控", () => {
 
     const payload = makePayload({ event: "PostToolUseFailure" });
     act(() => {
-      mockOnHookEventCallback.cb!(payload);
+      mockOnAgentEventCallback.cb!(payload);
     });
 
     expect(mockSendToastNotification).toHaveBeenCalledTimes(1);
@@ -493,7 +493,7 @@ describe("F4 通知门控", () => {
     renderHook(() => useAgentNotifications());
 
     act(() => {
-      mockOnHookEventCallback.cb!(makePayload({ event: "PermissionRequest" }));
+      mockOnAgentEventCallback.cb!(makePayload({ event: "PermissionRequest" }));
     });
 
     expect(mockSendToastNotification).not.toHaveBeenCalled();
@@ -505,7 +505,7 @@ describe("F4 通知门控", () => {
     renderHook(() => useAgentNotifications());
 
     act(() => {
-      mockOnHookEventCallback.cb!(makePayload({ event: "Stop" }));
+      mockOnAgentEventCallback.cb!(makePayload({ event: "Stop" }));
     });
 
     expect(mockSendToastNotification).not.toHaveBeenCalled();
@@ -517,7 +517,7 @@ describe("F4 通知门控", () => {
     renderHook(() => useAgentNotifications());
 
     act(() => {
-      mockOnHookEventCallback.cb!(makePayload({ event: "StopFailure" }));
+      mockOnAgentEventCallback.cb!(makePayload({ event: "StopFailure" }));
     });
 
     expect(mockSendToastNotification).not.toHaveBeenCalled();
@@ -530,7 +530,7 @@ describe("F4 通知门控", () => {
     renderHook(() => useAgentNotifications());
 
     act(() => {
-      mockOnHookEventCallback.cb!(makePayload({ event: "PermissionRequest" }));
+      mockOnAgentEventCallback.cb!(makePayload({ event: "PermissionRequest" }));
     });
 
     expect(mockSendToastNotification).not.toHaveBeenCalled();
@@ -543,7 +543,7 @@ describe("F4 通知门控", () => {
     renderHook(() => useAgentNotifications());
 
     act(() => {
-      mockOnHookEventCallback.cb!(makePayload({ event: "PreToolUse" }));
+      mockOnAgentEventCallback.cb!(makePayload({ event: "PreToolUse" }));
     });
 
     expect(mockSendToastNotification).not.toHaveBeenCalled();
@@ -555,7 +555,7 @@ describe("F4 通知门控", () => {
     renderHook(() => useAgentNotifications());
 
     act(() => {
-      mockOnHookEventCallback.cb!(makePayload({ event: "SessionStart" }));
+      mockOnAgentEventCallback.cb!(makePayload({ event: "SessionStart" }));
     });
 
     expect(mockSendToastNotification).not.toHaveBeenCalled();
@@ -566,7 +566,7 @@ describe("F4 通知门控", () => {
     renderHook(() => useAgentNotifications());
 
     act(() => {
-      mockOnHookEventCallback.cb!(makePayload({ event: "SessionEnd" }));
+      mockOnAgentEventCallback.cb!(makePayload({ event: "SessionEnd" }));
     });
 
     expect(mockSendToastNotification).not.toHaveBeenCalled();
@@ -577,7 +577,7 @@ describe("F4 通知门控", () => {
     renderHook(() => useAgentNotifications());
 
     act(() => {
-      mockOnHookEventCallback.cb!(makePayload({ event: "PostToolUse" }));
+      mockOnAgentEventCallback.cb!(makePayload({ event: "PostToolUse" }));
     });
 
     expect(mockSendToastNotification).not.toHaveBeenCalled();
@@ -591,13 +591,13 @@ describe("F4 通知门控", () => {
 
     const payload = makePayload({ event: "Stop", sessionId: "s1", timestamp: 1000 });
     act(() => {
-      mockOnHookEventCallback.cb!(payload);
+      mockOnAgentEventCallback.cb!(payload);
     });
     expect(mockSendToastNotification).toHaveBeenCalledTimes(1);
 
     // 同一事件再次触发 → 去重跳过
     act(() => {
-      mockOnHookEventCallback.cb!(payload);
+      mockOnAgentEventCallback.cb!(payload);
     });
     expect(mockSendToastNotification).toHaveBeenCalledTimes(1);
   });
@@ -607,7 +607,7 @@ describe("F4 通知门控", () => {
     renderHook(() => useAgentNotifications());
 
     act(() => {
-      mockOnHookEventCallback.cb!(makePayload({
+      mockOnAgentEventCallback.cb!(makePayload({
         event: "Stop", sessionId: "s1", timestamp: 1000,
       }));
     });
@@ -615,7 +615,7 @@ describe("F4 通知门控", () => {
 
     // 不同的 sessionId
     act(() => {
-      mockOnHookEventCallback.cb!(makePayload({
+      mockOnAgentEventCallback.cb!(makePayload({
         event: "Stop", sessionId: "s2", timestamp: 1000,
       }));
     });
@@ -623,7 +623,7 @@ describe("F4 通知门控", () => {
 
     // 不同事件
     act(() => {
-      mockOnHookEventCallback.cb!(makePayload({
+      mockOnAgentEventCallback.cb!(makePayload({
         event: "StopFailure", sessionId: "s1", timestamp: 2000,
       }));
     });
@@ -637,7 +637,7 @@ describe("F4 通知门控", () => {
     // 构造 250 个不同事件（timestamp 递增推进）→ 各自 toast
     for (let i = 1; i <= 250; i++) {
       act(() => {
-        mockOnHookEventCallback.cb!(makePayload({
+        mockOnAgentEventCallback.cb!(makePayload({
           event: "Stop", sessionId: "s1", timestamp: i,
         }));
       });
@@ -647,7 +647,7 @@ describe("F4 通知门控", () => {
     // 第 201 个事件触发时缓存超 200 → slice(-100) 截断，
     // 第 101 个（被截断移除的边界）重新触发 → 再弹 toast
     act(() => {
-      mockOnHookEventCallback.cb!(makePayload({
+      mockOnAgentEventCallback.cb!(makePayload({
         event: "Stop", sessionId: "s1", timestamp: 101,
       }));
     });
@@ -655,7 +655,7 @@ describe("F4 通知门控", () => {
 
     // 最旧事件（第 1 个）已被截断移除 → 重新触发再弹 toast（核心断言）
     act(() => {
-      mockOnHookEventCallback.cb!(makePayload({
+      mockOnAgentEventCallback.cb!(makePayload({
         event: "Stop", sessionId: "s1", timestamp: 1,
       }));
     });
@@ -663,12 +663,12 @@ describe("F4 通知门控", () => {
 
     // 截断保留的第 102 个与最新第 250 个仍被去重 → 不再弹 toast
     act(() => {
-      mockOnHookEventCallback.cb!(makePayload({
+      mockOnAgentEventCallback.cb!(makePayload({
         event: "Stop", sessionId: "s1", timestamp: 102,
       }));
     });
     act(() => {
-      mockOnHookEventCallback.cb!(makePayload({
+      mockOnAgentEventCallback.cb!(makePayload({
         event: "Stop", sessionId: "s1", timestamp: 250,
       }));
     });
@@ -684,7 +684,7 @@ describe("F4 通知门控", () => {
     renderHook(() => useAgentNotifications());
 
     act(() => {
-      mockOnHookEventCallback.cb!(makePayload({
+      mockOnAgentEventCallback.cb!(makePayload({
         event: "Stop",
         panelId: "terminal-p1-0",
       }));
@@ -704,7 +704,7 @@ describe("F4 通知门控", () => {
     renderHook(() => useAgentNotifications());
 
     act(() => {
-      mockOnHookEventCallback.cb!(makePayload({ event: "Stop" }));
+      mockOnAgentEventCallback.cb!(makePayload({ event: "Stop" }));
     });
 
     expect(mockSendToastNotification).toHaveBeenCalledTimes(1);
@@ -724,7 +724,7 @@ describe("F4 通知门控", () => {
 describe("任务栏闪烁（UserAttention）", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockOnHookEventCallback.cb = null;
+    mockOnAgentEventCallback.cb = null;
 
     useProjects.setState({
       projects: {},
@@ -742,7 +742,7 @@ describe("任务栏闪烁（UserAttention）", () => {
     renderHook(() => useAgentNotifications());
 
     act(() => {
-      mockOnHookEventCallback.cb!(makePayload({ event: "PermissionRequest" }));
+      mockOnAgentEventCallback.cb!(makePayload({ event: "PermissionRequest" }));
     });
 
     expect(mockRequestUserAttention).toHaveBeenCalledTimes(1);
@@ -754,7 +754,7 @@ describe("任务栏闪烁（UserAttention）", () => {
     renderHook(() => useAgentNotifications());
 
     act(() => {
-      mockOnHookEventCallback.cb!(makePayload({
+      mockOnAgentEventCallback.cb!(makePayload({
         event: "Notification",
         notificationType: "permission_prompt",
       }));
@@ -768,7 +768,7 @@ describe("任务栏闪烁（UserAttention）", () => {
     renderHook(() => useAgentNotifications());
 
     act(() => {
-      mockOnHookEventCallback.cb!(makePayload({ event: "Stop" }));
+      mockOnAgentEventCallback.cb!(makePayload({ event: "Stop" }));
     });
 
     expect(mockRequestUserAttention).toHaveBeenCalledWith(1);
@@ -779,7 +779,7 @@ describe("任务栏闪烁（UserAttention）", () => {
     renderHook(() => useAgentNotifications());
 
     act(() => {
-      mockOnHookEventCallback.cb!(makePayload({ event: "StopFailure" }));
+      mockOnAgentEventCallback.cb!(makePayload({ event: "StopFailure" }));
     });
 
     expect(mockRequestUserAttention).toHaveBeenCalledWith(1);
@@ -790,7 +790,7 @@ describe("任务栏闪烁（UserAttention）", () => {
     renderHook(() => useAgentNotifications());
 
     act(() => {
-      mockOnHookEventCallback.cb!(makePayload({ event: "PostToolUseFailure" }));
+      mockOnAgentEventCallback.cb!(makePayload({ event: "PostToolUseFailure" }));
     });
 
     expect(mockRequestUserAttention).toHaveBeenCalledWith(1);
@@ -801,7 +801,7 @@ describe("任务栏闪烁（UserAttention）", () => {
     renderHook(() => useAgentNotifications());
 
     act(() => {
-      mockOnHookEventCallback.cb!(makePayload({ event: "PermissionRequest" }));
+      mockOnAgentEventCallback.cb!(makePayload({ event: "PermissionRequest" }));
     });
 
     expect(mockRequestUserAttention).not.toHaveBeenCalled();

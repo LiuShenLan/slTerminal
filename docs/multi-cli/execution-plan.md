@@ -75,7 +75,7 @@ public/cli-icons/          # 本任务补充：Stage 01 的 mockcli.png（config
 | Stage | 状态（待跑/进行中/已提交/已验证） | commit hash | verify allFixed | fix-loop 轮次 | 备注（人工验证点确认） |
 |-------|------|------------|-----------------|--------------|----------------------|
 | 01 | 已提交/已验证 | 9898faa | true | 1 | import 路径笔误修复（S01-01/05/09）+ 守卫用例落点（S01-08）+ cargo fmt 历史债（gate:fmt）；e2e 补跑 8 spec 全绿 |
-| 02 | 待跑 | — | — | 0 | |
+| 02 | 已提交/已验证 | afdd74d | true | 1 | claudeHistory 3 文件 import 断裂（分工表遗漏，S02-01/09）+ HUK12 mock 未对齐 merge 语义（S02-06/05）+ 文档残留（S02-03）+ strategies.ts 注释字面命中 + npm test 证据缺失（测试 agent no-return，主 agent 补跑）；cargo test 需 Bash 跑（PowerShell 工具 env 缺 SYSTEMROOT） |
 | 03 | 待跑 | — | — | 0 | |
 | 04 | 待跑 | — | — | 0 | |
 | 05 | 待跑 | — | — | 0 | |

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 模块职责
 
-通知调度模块（F4）——订阅 hook-event 事件流，在窗口失焦时触发桌面 toast 通知 + 任务栏闪烁。三类事件映射：权限请求 / 任务完成 / 错误。
+通知调度模块（F4）——订阅 agent-event 事件流，在窗口失焦时触发桌面 toast 通知 + 任务栏闪烁。三类事件映射：权限请求 / 任务完成 / 错误。
 
 **点击路由已放弃**：`sendToastNotification` 无 onClick（Tauri 原生通知通道），**任务栏闪烁是唯一的回窗引导通道**，三类事件全覆盖（P2-FE-09 去路由化）。
 
@@ -39,7 +39,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 | 文件 | 职责 |
 |------|------|
-| `useClaudeNotifications.ts` | F4 通知调度 hook：`useClaudeNotifications()`（订阅 onHookEvent → 门控 → 分类 → 去重 → 闪烁 + toast）+ `classifyEvent` 纯函数 + `NotificationListener` 无 UI 副作用组件（App.tsx 挂载一次） |
+| `useClaudeNotifications.ts` | F4 通知调度 hook：`useClaudeNotifications()`（订阅 onAgentEvent → 门控 → 分类 → 去重 → 闪烁 + toast）+ `classifyEvent` 纯函数 + `NotificationListener` 无 UI 副作用组件（App.tsx 挂载一次） |
 | `index.ts` | barrel export |
 
 ## 测试模式

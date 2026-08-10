@@ -195,9 +195,15 @@ export async function switchToPageAndWait(pageId: string, timeout = 10000): Prom
   );
 }
 
-// ── hooks ──
+// ── hooks 注入（泛化命令 agent_hooks_* 六命令全表，PREAMBLE 契约段 1） ──
+//
+// spec 侧不直接 invoke——一律经应用侧 window helper（__slterm_e2e_*，helpers.ts）：
+// helper 内 cliId 实参固定 "claude"（E2E 辅助代码属测试基建，字面量合法），
+// 本文件无命令名字面量。六命令全表：agent_hooks_inject / agent_hooks_uninstall /
+// agent_hooks_injection_status / agent_context_usage / agent_hooks_config_read /
+// agent_hooks_config_write。
 
-/** 确保 hooks 已注入（幂等：已注入跳过；注入是 spawn_blocking 异步，轮询状态） */
+/** 确保 hooks 已注入（幂等：已注入跳过；注入是 spawn_blocking 异步，轮询状态；底层经 agent_hooks_inject → agent_hooks_injection_status） */
 export async function ensureHooksInjected(timeout = 15000): Promise<void> {
   await browser.execute(() => (window as any).__slterm_e2e_injectHooks?.());
   await browser.waitUntil(

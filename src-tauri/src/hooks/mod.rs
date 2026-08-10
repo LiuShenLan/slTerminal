@@ -1,34 +1,36 @@
-//! Hooks 模块 —— 宿主侧增强信号通道、注入管理与状态可视化
+//! Hooks 模块 —— 宿主侧增强信号通道、注入管理与状态可视化（CLI 泛化命令层）
 //!
 //! 职责：
 //! - 信号文件监听与解析（signal.rs）
-//! - Hook 脚本注入/卸载/状态检测（inject.rs）
 //! - 信号目录监听器（watcher.rs）
+//! - CliHooksProvider trait + cliId 键静态注册表（provider.rs）
+//! - claude hooks provider（claude/：注入/卸载/状态/用量/配置实现下沉）
+//! - 6 条泛化 Tauri 命令（本文件命令层，按 cliId 分发到 provider）
+//! - 共享 DTO：AgentInjectionStatus / AgentHookInjectionStatus / ContextUsage
 
-pub mod config;
-pub mod inject;
+pub mod claude;
+pub mod provider;
 pub mod signal;
-pub mod usage;
 pub mod watcher;
 
-// 三命令由 inject 模块实现，经此 re-export 供外部引用
-// （generate_handler! 使用完整路径 hooks::inject::xxx，此处保留供前端 IPC 类型导入）
-#[allow(unused_imports)]
-pub use inject::{hooks_inject, hooks_injection_status, hooks_uninstall};
-
-// 配置读写命令由 config 模块实现，经此 re-export 供外部引用（风格同 inject）
-#[allow(unused_imports)]
-pub use config::{hooks_config_read, hooks_config_write};
-
+use serde_json::Value;
+use std::path::PathBuf;
 use std::sync::Mutex;
-use tauri::AppHandle;
+use tauri::{AppHandle, State};
 
+use crate::error::AppError;
+use crate::hooks::provider::resolve_provider;
 use crate::hooks::watcher::HookSignalWatcher;
+use crate::state::AppState;
 
-/// 注入状态枚举（C6 契约）
+/// 重导出 signal 模块的 AgentEventPayload DTO
+#[allow(unused_imports)]
+pub use signal::AgentEventPayload;
+
+/// 注入状态枚举（C6 契约；决策 3 更名 AgentInjectionStatus）
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub enum InjectionStatus {
+pub enum AgentInjectionStatus {
     /// 已注入且版本匹配
     Injected,
     /// 未注入
@@ -37,21 +39,37 @@ pub enum InjectionStatus {
     Outdated,
 }
 
-/// Hook 注入状态 DTO（C6 契约）
+/// Agent 注入状态 DTO（C6 契约；决策 3 更名 AgentHookInjectionStatus）
 ///
 /// PartialEq 供 serde 往返精确断言测试使用（HUK-09）。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct HookInjectionStatus {
+pub struct AgentHookInjectionStatus {
     /// 注入状态
-    pub status: InjectionStatus,
+    pub status: AgentInjectionStatus,
     /// 已注入脚本版本号（未注入时为 null）
     pub version: Option<u32>,
 }
 
-/// 重导出 signal 模块的 HookEventPayload DTO
-#[allow(unused_imports)]
-pub use signal::HookEventPayload;
+/// Context usage DTO（C5 契约，camelCase 序列化；MC-214 四字段保留，cache serde default 0）
+///
+/// 定义于聚合层（mod.rs）：provider 与前端 DTO 的共享契约。
+/// 用量口径：总占用 = inputTokens + cacheReadInputTokens + cacheCreationInputTokens，
+/// contextLimit 由前端 profile.hooks.contextLimit 提供（MC-214）；outputTokens 不计占用。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextUsage {
+    /// 输入 token 数
+    pub input_tokens: u64,
+    /// 输出 token 数（信息字段，不计占用）
+    pub output_tokens: u64,
+    /// 缓存读取输入 token 数（serde default 兼容旧 transcript 缺失）
+    #[serde(default)]
+    pub cache_read_input_tokens: u64,
+    /// 缓存创建输入 token 数（serde default 兼容旧 transcript 缺失）
+    #[serde(default)]
+    pub cache_creation_input_tokens: u64,
+}
 
 /// 监听器句柄抽象（HUK-04 最小可测性重构：存储 trait object 化，测试可注入桩）
 /// 仅用于 WATCHER 静态存储，生产实例为 `HookSignalWatcher`。
@@ -65,8 +83,9 @@ static WATCHER: Mutex<Option<Box<dyn WatcherHandle>>> = Mutex::new(None);
 
 /// 启动 Hook 信号文件监听器
 ///
-/// 监听 `~/.slterminal/hooks-events/` 目录，检测信号文件创建事件，
-/// 解析后通过 Tauri Event `hook-event` 广播到前端。
+/// 监听 `~/.slterminal/hooks-events/` 目录（单目录全 CLI 共用，路由靠
+/// payload.panelId + cliId），检测信号文件创建事件，解析后通过
+/// Tauri Event `agent-event` 广播到前端。
 /// 幂等：已启动时跳过而不报错。
 pub fn start_signal_watcher(app_handle: AppHandle) {
     start_signal_watcher_impl(|| {
@@ -106,11 +125,155 @@ fn reset_watcher_for_test() {
     let _ = WATCHER.lock().unwrap().take();
 }
 
+// ── 命令核心（L1 可测：block_on 直测 cliId 透传；provider 解析无 IO） ──
+//
+// 错误语义（MC-211）：未知 cliId → Validation("未知 cliId: ...")；
+// 已注册但无 hooks 能力 → Validation（含「不支持 hooks 能力」语义），
+// 两者均由 resolve_provider 统一产出（见 provider.rs）。
+// 阻塞 I/O 经 spawn_blocking 串行化（硬约束 #3）。
+
+pub(crate) async fn run_agent_hooks_inject(
+    cli_id: String,
+) -> Result<AgentHookInjectionStatus, AppError> {
+    let provider = resolve_provider(&cli_id)?;
+    tokio::task::spawn_blocking(move || provider.inject())
+        .await
+        .map_err(|e| AppError::TaskJoin(e.to_string()))?
+}
+
+pub(crate) async fn run_agent_hooks_uninstall(cli_id: String) -> Result<(), AppError> {
+    let provider = resolve_provider(&cli_id)?;
+    tokio::task::spawn_blocking(move || provider.uninstall())
+        .await
+        .map_err(|e| AppError::TaskJoin(e.to_string()))?
+}
+
+pub(crate) async fn run_agent_hooks_injection_status(
+    cli_id: String,
+) -> Result<AgentHookInjectionStatus, AppError> {
+    let provider = resolve_provider(&cli_id)?;
+    tokio::task::spawn_blocking(move || provider.injection_status())
+        .await
+        .map_err(|e| AppError::TaskJoin(e.to_string()))?
+}
+
+pub(crate) async fn run_agent_context_usage(
+    cli_id: String,
+    transcript_path: String,
+) -> Result<Option<ContextUsage>, AppError> {
+    let provider = resolve_provider(&cli_id)?;
+    tokio::task::spawn_blocking(move || provider.context_usage(&transcript_path))
+        .await
+        .map_err(|e| AppError::TaskJoin(e.to_string()))?
+}
+
+pub(crate) async fn run_agent_hooks_config_read(
+    cli_id: String,
+    layer: String,
+    project_path: Option<String>,
+    project_root: Option<PathBuf>,
+) -> Result<Value, AppError> {
+    let provider = resolve_provider(&cli_id)?;
+    tokio::task::spawn_blocking(move || {
+        provider.config_read(&layer, project_path.as_deref(), &project_root)
+    })
+    .await
+    .map_err(|e| AppError::TaskJoin(e.to_string()))?
+}
+
+pub(crate) async fn run_agent_hooks_config_write(
+    cli_id: String,
+    layer: String,
+    hooks: Value,
+    project_path: Option<String>,
+    project_root: Option<PathBuf>,
+) -> Result<(), AppError> {
+    let provider = resolve_provider(&cli_id)?;
+    tokio::task::spawn_blocking(move || {
+        provider.config_write(&layer, hooks, project_path.as_deref(), &project_root)
+    })
+    .await
+    .map_err(|e| AppError::TaskJoin(e.to_string()))?
+}
+
+// ── Tauri 命令（cliId 分发到 provider；config 两命令读取 AppState.project_root） ──
+
+/// agent_hooks_inject — 按 cliId 分发注入（claude：落盘脚本 + merge 注入 user 层 settings.json）
+#[tauri::command]
+pub async fn agent_hooks_inject(cli_id: String) -> Result<AgentHookInjectionStatus, AppError> {
+    run_agent_hooks_inject(cli_id).await
+}
+
+/// agent_hooks_uninstall — 按 cliId 分发卸载（移除配置段 + 删脚本目录 + 清信号目录）
+#[tauri::command]
+pub async fn agent_hooks_uninstall(cli_id: String) -> Result<(), AppError> {
+    run_agent_hooks_uninstall(cli_id).await
+}
+
+/// agent_hooks_injection_status — 按 cliId 分发注入状态查询（三态）
+#[tauri::command]
+pub async fn agent_hooks_injection_status(
+    cli_id: String,
+) -> Result<AgentHookInjectionStatus, AppError> {
+    run_agent_hooks_injection_status(cli_id).await
+}
+
+/// agent_context_usage — 按 cliId 分发 transcript token 用量查询
+#[tauri::command]
+pub async fn agent_context_usage(
+    cli_id: String,
+    transcript_path: String,
+) -> Result<Option<ContextUsage>, AppError> {
+    run_agent_context_usage(cli_id, transcript_path).await
+}
+
+/// agent_hooks_config_read — 按 cliId 分发 hooks 配置子树读取（P3-BE-02）
+#[tauri::command]
+pub async fn agent_hooks_config_read(
+    cli_id: String,
+    layer: String,
+    project_path: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Value, AppError> {
+    // 锁内读取 project_root 并 clone 出（作用域块：块结束即 drop 锁守卫，
+    // 避免非 Send 的 RwLockReadGuard 跨 await 存活）
+    let project_root = {
+        let root_guard = state.project_root.read().map_err(|e| AppError::IoKind {
+            kind: "lock".into(),
+            message: format!("获取 project_root 锁失败: {e}"),
+        })?;
+        root_guard.clone()
+    };
+    run_agent_hooks_config_read(cli_id, layer, project_path, project_root).await
+}
+
+/// agent_hooks_config_write — 按 cliId 分发 hooks 配置子树写回（read-modify-write merge，P3-BE-03）
+#[tauri::command]
+pub async fn agent_hooks_config_write(
+    cli_id: String,
+    layer: String,
+    hooks: Value,
+    project_path: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<(), AppError> {
+    // 锁内读取 project_root 并 clone 出（作用域块：块结束即 drop 锁守卫，
+    // 避免非 Send 的 RwLockReadGuard 跨 await 存活）
+    let project_root = {
+        let root_guard = state.project_root.read().map_err(|e| AppError::IoKind {
+            kind: "lock".into(),
+            message: format!("获取 project_root 锁失败: {e}"),
+        })?;
+        root_guard.clone()
+    };
+    run_agent_hooks_config_write(cli_id, layer, hooks, project_path, project_root).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hooks::claude::HomeDirGuard;
 
-    // ── InjectionStatus / HookInjectionStatus serde（HUK-09：roundtrip + 键集合精确匹配） ──
+    // ── AgentInjectionStatus / AgentHookInjectionStatus serde（HUK-09：roundtrip + 键集合精确匹配） ──
 
     /// serde 键集合精确匹配辅助（防多键/缺键）
     fn assert_status_key_set(json: &str) {
@@ -122,8 +285,8 @@ mod tests {
 
     #[test]
     fn injection_status_roundtrip_injected() {
-        let s = HookInjectionStatus {
-            status: InjectionStatus::Injected,
+        let s = AgentHookInjectionStatus {
+            status: AgentInjectionStatus::Injected,
             version: Some(1),
         };
         let json = serde_json::to_string(&s).unwrap();
@@ -133,14 +296,14 @@ mod tests {
         assert_eq!(v["status"], "injected");
         assert_eq!(v["version"], 1);
         // 序列化 → 反序列化往返
-        let back: HookInjectionStatus = serde_json::from_str(&json).unwrap();
+        let back: AgentHookInjectionStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(back, s);
     }
 
     #[test]
     fn injection_status_roundtrip_not_injected() {
-        let s = HookInjectionStatus {
-            status: InjectionStatus::NotInjected,
+        let s = AgentHookInjectionStatus {
+            status: AgentInjectionStatus::NotInjected,
             version: None,
         };
         let json = serde_json::to_string(&s).unwrap();
@@ -148,14 +311,14 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(v["status"], "notInjected");
         assert_eq!(v["version"], serde_json::Value::Null);
-        let back: HookInjectionStatus = serde_json::from_str(&json).unwrap();
+        let back: AgentHookInjectionStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(back, s);
     }
 
     #[test]
     fn injection_status_roundtrip_outdated() {
-        let s = HookInjectionStatus {
-            status: InjectionStatus::Outdated,
+        let s = AgentHookInjectionStatus {
+            status: AgentInjectionStatus::Outdated,
             version: Some(2),
         };
         let json = serde_json::to_string(&s).unwrap();
@@ -163,15 +326,15 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(v["status"], "outdated");
         assert_eq!(v["version"], 2);
-        let back: HookInjectionStatus = serde_json::from_str(&json).unwrap();
+        let back: AgentHookInjectionStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(back, s);
     }
 
-    // ── HookEventPayload serde（HUK-09：roundtrip + 键集合精确匹配） ──
+    // ── AgentEventPayload serde（HUK-09：roundtrip + 键集合精确匹配，9 键含 cliId） ──
 
     #[test]
-    fn hook_event_payload_roundtrip_and_key_set() {
-        let p = signal::HookEventPayload {
+    fn agent_event_payload_roundtrip_and_key_set() {
+        let p = signal::AgentEventPayload {
             panel_id: "p1".into(),
             event: "SessionStart".into(),
             timestamp: 1700000000000,
@@ -180,15 +343,17 @@ mod tests {
             cwd: "/cwd".into(),
             tool_name: Some("Bash".into()),
             notification_type: Some("idle".into()),
+            cli_id: Some("claude".into()),
         };
         let json = serde_json::to_string(&p).unwrap();
-        // 键集合精确匹配（8 字段全量，防多键/缺键）
+        // 键集合精确匹配（9 字段全量含 cliId，防多键/缺键）
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         let mut keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
         keys.sort_unstable();
         assert_eq!(
             keys,
             [
+                "cliId",
                 "cwd",
                 "event",
                 "notificationType",
@@ -200,7 +365,7 @@ mod tests {
             ]
         );
         // 序列化 → 反序列化往返
-        let back: signal::HookEventPayload = serde_json::from_str(&json).unwrap();
+        let back: signal::AgentEventPayload = serde_json::from_str(&json).unwrap();
         assert_eq!(back, p);
     }
 
@@ -283,5 +448,153 @@ mod tests {
     #[test]
     fn parse_signal_file_empty() {
         assert!(signal::parse_signal_file("").is_none());
+    }
+
+    // ── 命令层 cliId 透传（L1 新增：block_on 直测；HomeDirGuard 注入 tempdir 隔离） ──
+
+    /// 手动 current_thread runtime 驱动 async 命令核心（tokio 未启用 #[tokio::test]）
+    fn block_on<F: std::future::Future>(future: F) -> F::Output {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(future)
+    }
+
+    #[test]
+    fn agent_hooks_inject_cli_id_passthrough() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = HomeDirGuard::set(dir.path());
+        let status = block_on(run_agent_hooks_inject("claude".into())).unwrap();
+        assert_eq!(status.status, AgentInjectionStatus::Injected);
+        // 注入全部落在覆盖 home 的 tempdir 内（L1 隔离纪律）
+        assert!(
+            dir.path()
+                .join(".slterminal")
+                .join("hooks")
+                .join("slterm-hook-reporter.js")
+                .exists(),
+            "脚本应写入覆盖 home 的脚本目录"
+        );
+        assert!(dir.path().join(".claude").join("settings.json").exists());
+    }
+
+    #[test]
+    fn agent_hooks_uninstall_cli_id_passthrough() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = HomeDirGuard::set(dir.path());
+        // 先注入再卸载：settings matcher 移除 + 目录删除
+        block_on(run_agent_hooks_inject("claude".into())).unwrap();
+        block_on(run_agent_hooks_uninstall("claude".into())).unwrap();
+        assert!(
+            !dir.path().join(".slterminal").join("hooks").exists(),
+            "卸载后脚本目录应删除"
+        );
+        let settings: Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join(".claude").join("settings.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(settings.get("hooks").is_none(), "卸载后 hooks 键应整体移除");
+    }
+
+    #[test]
+    fn agent_hooks_injection_status_cli_id_passthrough() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = HomeDirGuard::set(dir.path());
+        // 未注入 → NotInjected（三态经命令层返回）
+        let status = block_on(run_agent_hooks_injection_status("claude".into())).unwrap();
+        assert_eq!(status.status, AgentInjectionStatus::NotInjected);
+    }
+
+    #[test]
+    fn agent_context_usage_cli_id_passthrough() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("transcript.jsonl");
+        std::fs::write(
+            &path,
+            r#"{"message":{"usage":{"input_tokens":100,"output_tokens":50}}}"#,
+        )
+        .unwrap();
+        let u = block_on(run_agent_context_usage(
+            "claude".into(),
+            path.to_str().unwrap().into(),
+        ))
+        .unwrap()
+        .unwrap();
+        assert_eq!(u.input_tokens, 100, "transcriptPath 应透传到 provider");
+    }
+
+    #[test]
+    fn agent_hooks_config_read_cli_id_passthrough() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = HomeDirGuard::set(dir.path());
+        let settings = dir.path().join(".claude").join("settings.json");
+        std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+        let hooks = serde_json::json!({"PreToolUse": [1]});
+        std::fs::write(
+            &settings,
+            serde_json::to_string(&serde_json::json!({"hooks": hooks})).unwrap(),
+        )
+        .unwrap();
+        let v = block_on(run_agent_hooks_config_read(
+            "claude".into(),
+            "user".into(),
+            None,
+            None,
+        ))
+        .unwrap();
+        assert_eq!(v, hooks, "layer/project_path 应透传到 provider");
+    }
+
+    #[test]
+    fn agent_hooks_config_write_cli_id_passthrough() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = HomeDirGuard::set(dir.path());
+        let hooks = serde_json::json!({"SessionStart": []});
+        block_on(run_agent_hooks_config_write(
+            "claude".into(),
+            "user".into(),
+            hooks.clone(),
+            None,
+            None,
+        ))
+        .unwrap();
+        let path = dir.path().join(".claude").join("settings.json");
+        let reloaded: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(reloaded, serde_json::json!({"hooks": hooks}));
+    }
+
+    #[test]
+    fn unknown_cli_id_validation_on_all_commands() {
+        // 6 命令未知 cliId → Validation（消息含「未知 cliId」语义，resolve_provider 统一产出）
+        let errs = vec![
+            block_on(run_agent_hooks_inject("nope".into())).unwrap_err(),
+            block_on(run_agent_hooks_uninstall("nope".into())).unwrap_err(),
+            block_on(run_agent_hooks_injection_status("nope".into())).unwrap_err(),
+            block_on(run_agent_context_usage("nope".into(), "/x.jsonl".into())).unwrap_err(),
+            block_on(run_agent_hooks_config_read(
+                "nope".into(),
+                "user".into(),
+                None,
+                None,
+            ))
+            .unwrap_err(),
+            block_on(run_agent_hooks_config_write(
+                "nope".into(),
+                "user".into(),
+                serde_json::json!({}),
+                None,
+                None,
+            ))
+            .unwrap_err(),
+        ];
+        for err in errs {
+            match err {
+                AppError::Validation(msg) => {
+                    assert!(msg.contains("未知 cliId"), "消息应含「未知 cliId」: {msg}");
+                }
+                other => panic!("未知 cliId 应返回 Validation，实际: {other:?}"),
+            }
+        }
     }
 }

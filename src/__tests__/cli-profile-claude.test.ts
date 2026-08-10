@@ -24,7 +24,7 @@ import {
 } from "../features/cliProfiles/profiles/claude/strategies";
 import { cliProfileRegistry } from "../features/cliProfiles/cliProfileRegistry";
 import { STATUS_EMOJI, type AgentStatus } from "../lib/agentStatus";
-import type { HookEventPayload } from "../ipc/hooks";
+import type { AgentEventPayload } from "../types/agent";
 
 /** 每用例后恢复 claude 注册（全局单例隔离，照 cli-icons.test.ts 模式） */
 afterEach(() => {
@@ -326,10 +326,10 @@ describe("eventToStatus", () => {
 // classifyNotification — 五映射表驱动（MC-422 迁入，行为零改动）
 // ═══════════════════════════════════════════════════════════════════
 
-/** 构造最小 HookEventPayload（缺省字段事件用 PreToolUse 占位） */
+/** 构造最小 AgentEventPayload（缺省字段事件用 PreToolUse 占位） */
 function makePayload(
-  partial: Partial<HookEventPayload>,
-): HookEventPayload {
+  partial: Partial<AgentEventPayload>,
+): AgentEventPayload {
   return {
     panelId: "terminal-page1-0",
     event: "PreToolUse",
@@ -346,7 +346,7 @@ function makePayload(
 describe("classifyNotification 五映射表驱动（NAH-03 语义迁入）", () => {
   const classifyTable: Array<{
     name: string;
-    payload: Partial<HookEventPayload>;
+    payload: Partial<AgentEventPayload>;
     expected: "permission" | "error" | "done" | null;
   }> = [
     { name: "PermissionRequest → permission", payload: { event: "PermissionRequest" }, expected: "permission" },

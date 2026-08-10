@@ -1,16 +1,17 @@
-//! hooks 注入/卸载/状态检测三命令实现（P1-BE-04）
+//! claude hooks provider 注入/卸载/状态检测实现（MC-213 下沉，provider 内部是 claude 合法领地 D11）
 //!
-//! 三命令均读写 ~/.claude/settings.json（绕过 project_root 路径沙箱，照 settings.rs 先例），
-//! 阻塞 I/O 经 spawn_blocking 串行化（硬约束 #3）。
+//! 读写 ~/.claude/settings.json（绕过 project_root 路径沙箱，照 settings.rs 先例），
+//! 阻塞 I/O 由命令层经 spawn_blocking 串行化（硬约束 #3）。
+//! 路径辅助（home 解析）在 claude/mod.rs，供 CliHooksProvider impl 使用。
 
-use super::{HookInjectionStatus, InjectionStatus};
 use crate::error::AppError;
+use crate::hooks::{AgentHookInjectionStatus, AgentInjectionStatus};
 use serde_json::Value;
 use std::io::Write;
 use tempfile::NamedTempFile;
 
 /// 内嵌 hook reporter 脚本模板（编译期嵌入，用于版本比对与升级）
-const HOOK_SCRIPT_TEMPLATE: &str = include_str!("../../assets/slterm-hook-reporter.js");
+const HOOK_SCRIPT_TEMPLATE: &str = include_str!("slterm-hook-reporter.js");
 
 /// C9 规定的 10 个注入事件（与四态映射相关的最小集）
 const HOOK_EVENTS: &[&str] = &[
@@ -25,24 +26,6 @@ const HOOK_EVENTS: &[&str] = &[
     "Notification",
     "PermissionRequest",
 ];
-
-// ── 路径辅助 ──
-
-fn hooks_dir() -> Option<std::path::PathBuf> {
-    dirs::home_dir().map(|h| h.join(".slterminal").join("hooks"))
-}
-
-fn hooks_events_dir() -> Option<std::path::PathBuf> {
-    dirs::home_dir().map(|h| h.join(".slterminal").join("hooks-events"))
-}
-
-fn claude_settings_path() -> Option<std::path::PathBuf> {
-    dirs::home_dir().map(|h| h.join(".claude").join("settings.json"))
-}
-
-fn hook_script_path() -> Option<std::path::PathBuf> {
-    hooks_dir().map(|d| d.join("slterm-hook-reporter.js"))
-}
 
 // ── 版本提取（纯函数，供测试） ──
 
@@ -180,15 +163,15 @@ fn inject_matchers(hooks: &mut serde_json::Map<String, Value>, script_abs_path: 
 
 // ── 实现（路径可注入，供命令与测试共用——D2 零行为变更） ──
 
-/// hooks_inject 实现：落盘脚本 + merge 注入 settings.json（C6/C9）
+/// agent_hooks_inject（claude）实现：落盘脚本 + merge 注入 settings.json（C6/C9）
 ///
 /// 流程：确保脚本目录存在 → 原子写脚本 → 读 settings.json →
 /// 移除旧 slterm 段 → 追加 10 事件 matcher → 原子写回。
 /// JSON 非法时返回 AppError 且不改动文件。
-fn inject_impl(
+pub(crate) fn inject_impl(
     settings_path: &std::path::Path,
     script_dir: &std::path::Path,
-) -> Result<HookInjectionStatus, AppError> {
+) -> Result<AgentHookInjectionStatus, AppError> {
     // 1. 确保脚本目录存在并原子写脚本
     std::fs::create_dir_all(script_dir)?;
 
@@ -260,16 +243,16 @@ fn inject_impl(
             message: format!("settings.json 写入失败: {e}"),
         })?;
 
-    Ok(HookInjectionStatus {
-        status: InjectionStatus::Injected,
+    Ok(AgentHookInjectionStatus {
+        status: AgentInjectionStatus::Injected,
         version: Some(template_version()),
     })
 }
 
-/// hooks_uninstall 实现：移除配置段 + 删脚本目录 + 清信号目录（C6/C9）
+/// agent_hooks_uninstall（claude）实现：移除配置段 + 删脚本目录 + 清信号目录（C6/C9）
 ///
 /// 安全策略：settings.json 非法时仅跳过配置清理（不损坏用户文件），但仍删除目录。
-fn uninstall_impl(
+pub(crate) fn uninstall_impl(
     settings_path: Option<&std::path::Path>,
     script_dir: Option<&std::path::Path>,
     events_dir: Option<&std::path::Path>,
@@ -331,18 +314,18 @@ fn uninstall_impl(
     Ok(())
 }
 
-/// hooks_injection_status 实现：查询注入状态（C6/C9）
+/// agent_hooks_injection_status（claude）实现：查询注入状态（C6/C9）
 ///
 /// 三态判定：脚本存在 + settings 含 matcher + 版本一致 → Injected;
 /// 版本不一致 → Outdated; 其他 → NotInjected。
-fn injection_status_impl(
+pub(crate) fn injection_status_impl(
     script_path: &std::path::Path,
     settings_path: &std::path::Path,
-) -> HookInjectionStatus {
+) -> AgentHookInjectionStatus {
     // 脚本是否存在且为普通文件
     if !script_path.is_file() {
-        return HookInjectionStatus {
-            status: InjectionStatus::NotInjected,
+        return AgentHookInjectionStatus {
+            status: AgentInjectionStatus::NotInjected,
             version: None,
         };
     }
@@ -367,8 +350,8 @@ fn injection_status_impl(
     };
 
     if !has_matchers {
-        return HookInjectionStatus {
-            status: InjectionStatus::NotInjected,
+        return AgentHookInjectionStatus {
+            status: AgentInjectionStatus::NotInjected,
             version: None,
         };
     }
@@ -378,84 +361,16 @@ fn injection_status_impl(
     let template_ver = template_version();
 
     if disk_ver != Some(template_ver) {
-        return HookInjectionStatus {
-            status: InjectionStatus::Outdated,
+        return AgentHookInjectionStatus {
+            status: AgentInjectionStatus::Outdated,
             version: disk_ver,
         };
     }
 
-    HookInjectionStatus {
-        status: InjectionStatus::Injected,
+    AgentHookInjectionStatus {
+        status: AgentInjectionStatus::Injected,
         version: disk_ver,
     }
-}
-
-// ── Tauri 命令（路径解析 + spawn_blocking 包装，逻辑在 impl） ──
-
-/// hooks_inject — 落盘脚本 + merge 注入 user 层 settings.json（C6/C9）
-#[tauri::command]
-pub async fn hooks_inject() -> Result<HookInjectionStatus, AppError> {
-    let script_dir = hooks_dir().ok_or_else(|| AppError::IoKind {
-        kind: "home_dir".into(),
-        message: "无法获取用户 home 目录".into(),
-    })?;
-    let settings_path = claude_settings_path().ok_or_else(|| AppError::IoKind {
-        kind: "home_dir".into(),
-        message: "无法获取用户 home 目录".into(),
-    })?;
-
-    tokio::task::spawn_blocking(move || inject_impl(&settings_path, &script_dir))
-        .await
-        .map_err(|e| AppError::TaskJoin(e.to_string()))?
-}
-
-/// hooks_uninstall — 移除配置段 + 删脚本目录 + 清信号目录（C6/C9）
-///
-/// 安全策略：settings.json 非法时仅跳过配置清理（不损坏用户文件），但仍删除目录。
-#[tauri::command]
-pub async fn hooks_uninstall() -> Result<(), AppError> {
-    let settings_path = claude_settings_path();
-    let script_dir = hooks_dir();
-    let events_dir = hooks_events_dir();
-
-    tokio::task::spawn_blocking(move || {
-        uninstall_impl(
-            settings_path.as_deref(),
-            script_dir.as_deref(),
-            events_dir.as_deref(),
-        )
-    })
-    .await
-    .map_err(|e| AppError::TaskJoin(e.to_string()))?
-}
-
-/// hooks_injection_status — 查询注入状态（C6/C9）
-#[tauri::command]
-pub async fn hooks_injection_status() -> Result<HookInjectionStatus, AppError> {
-    let script_path = match hook_script_path() {
-        Some(p) => p,
-        None => {
-            return Ok(HookInjectionStatus {
-                status: InjectionStatus::NotInjected,
-                version: None,
-            });
-        }
-    };
-    let settings_path = match claude_settings_path() {
-        Some(p) => p,
-        None => {
-            return Ok(HookInjectionStatus {
-                status: InjectionStatus::NotInjected,
-                version: None,
-            });
-        }
-    };
-
-    let status =
-        tokio::task::spawn_blocking(move || injection_status_impl(&script_path, &settings_path))
-            .await
-            .map_err(|e| AppError::TaskJoin(e.to_string()))?;
-    Ok(status)
 }
 
 // ── 测试 ──
@@ -470,7 +385,18 @@ mod tests {
     fn template_version_positive() {
         let v = template_version();
         assert!(v > 0, "SCRIPT_VERSION 应大于 0，实际: {v}");
-        assert_eq!(v, 1, "初始版本应为 1");
+        // 决策 7：新增 cliId 字段后 SCRIPT_VERSION 已递增（已注入用户变「版本过旧」需重新注入）
+        assert_eq!(v, 2, "SCRIPT_VERSION 应已递增到 2（决策 7）");
+    }
+
+    // ── 模板内嵌校验（决策 7：显式 cliId + SCRIPT_VERSION 递增） ──
+
+    #[test]
+    fn template_contains_explicit_cli_id() {
+        assert!(
+            HOOK_SCRIPT_TEMPLATE.contains("cliId: \"claude\""),
+            "reporter 模板应显式写 cliId: \"claude\"（决策 7）"
+        );
     }
 
     // ── HOOK_EVENTS ──
@@ -858,7 +784,7 @@ mod tests {
     fn inject_impl_basic() {
         let (_dir, settings_path, script_dir) = make_inject_env();
         let status = inject_impl(&settings_path, &script_dir).unwrap();
-        assert_eq!(status.status, InjectionStatus::Injected);
+        assert_eq!(status.status, AgentInjectionStatus::Injected);
         assert_eq!(status.version, Some(template_version()));
         // 脚本已落盘且内容为内嵌模板
         let script_path = script_dir.join("slterm-hook-reporter.js");
@@ -1047,12 +973,12 @@ mod tests {
 
         // ① 脚本不存在 → NotInjected
         let s = injection_status_impl(&script_path, &settings_path);
-        assert_eq!(s.status, InjectionStatus::NotInjected);
+        assert_eq!(s.status, AgentInjectionStatus::NotInjected);
 
         // ② 注入后（脚本版本与模板一致 + settings 含 matcher）→ Injected
         inject_impl(&settings_path, &script_dir).unwrap();
         let s = injection_status_impl(&script_path, &settings_path);
-        assert_eq!(s.status, InjectionStatus::Injected);
+        assert_eq!(s.status, AgentInjectionStatus::Injected);
         assert_eq!(s.version, Some(template_version()));
 
         // ③ 磁盘脚本版本 ≠ 模板版本 → Outdated（version 为磁盘版本）
@@ -1062,7 +988,7 @@ mod tests {
         )
         .unwrap();
         let s = injection_status_impl(&script_path, &settings_path);
-        assert_eq!(s.status, InjectionStatus::Outdated);
+        assert_eq!(s.status, AgentInjectionStatus::Outdated);
         assert_eq!(s.version, Some(template_version() + 1));
 
         // ④ settings 无 slterm matcher → NotInjected
@@ -1073,6 +999,6 @@ mod tests {
         .unwrap();
         std::fs::write(&settings_path, "{}").unwrap();
         let s = injection_status_impl(&script_path, &settings_path);
-        assert_eq!(s.status, InjectionStatus::NotInjected);
+        assert_eq!(s.status, AgentInjectionStatus::NotInjected);
     }
 }

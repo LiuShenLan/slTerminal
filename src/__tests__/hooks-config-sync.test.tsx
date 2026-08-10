@@ -62,6 +62,7 @@ import { useHooksConfig } from "../panels/hooksConfig/useHooksConfig";
 import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
 import type { HooksConfigJson } from "../types/hooksConfig";
+import { CLAUDE_CLI_ID } from "../features/cliProfiles/profiles/claude";
 
 /** 基线合法 hooks 子树（通过 schema 校验） */
 const VALID_BASE: HooksConfigJson = {
@@ -307,15 +308,16 @@ describe("P3-TE-14 保存拒绝与提示", () => {
     });
 
     expect(mockWriteHooksConfig).toHaveBeenCalledTimes(1);
-    // 键集合精确匹配：user 层无 projectPath → 第 3 参 undefined，
-    // wrapper 层（ipc/hooksConfig.ts）按 undefined 省略 projectPath 键 → invoke payload 为 { layer, hooks }
+    // 键集合精确匹配：cliId 首参（中间态 = CLAUDE_CLI_ID）+ user 层无 projectPath → 第 4 参 undefined，
+    // wrapper 层（ipc/hooksConfig.ts）按 undefined 省略 projectPath 键 → invoke payload 为 { cliId, layer, hooks }
     //（wrapper→invoke 键集合契约由 ipc-hooks-config-contract.test.ts 守卫）
     const callArgs = mockWriteHooksConfig.mock.calls[0];
-    expect(callArgs[0]).toBe("user");
-    expect(callArgs[2]).toBeUndefined();
+    expect(callArgs[0]).toBe(CLAUDE_CLI_ID);
+    expect(callArgs[1]).toBe("user");
+    expect(callArgs[3]).toBeUndefined();
     // hooks 参数为纯 hooks 子树：仅事件键，无其他 settings 字段
-    expect(callArgs[1]).toEqual(VALID_BASE);
-    expect(Object.keys(callArgs[1])).toEqual(["PreToolUse"]);
+    expect(callArgs[2]).toEqual(VALID_BASE);
+    expect(Object.keys(callArgs[2])).toEqual(["PreToolUse"]);
     expect(result.current.dirty).toBe(false);
     expect(result.current.saved).toBe(true);
   });
@@ -343,14 +345,15 @@ describe("P3-TE-14 保存拒绝与提示", () => {
     });
 
     expect(mockWriteHooksConfig).toHaveBeenCalledTimes(1);
-    // 键集合精确匹配：project 层含 projectPath → invoke payload 为 { layer, hooks, projectPath }
+    // 键集合精确匹配：cliId 首参 + project 层含 projectPath → invoke payload 为 { cliId, layer, hooks, projectPath }
     const callArgs = mockWriteHooksConfig.mock.calls[0];
-    expect(callArgs[0]).toBe("project");
-    expect(callArgs[1]).toEqual({
+    expect(callArgs[0]).toBe(CLAUDE_CLI_ID);
+    expect(callArgs[1]).toBe("project");
+    expect(callArgs[2]).toEqual({
       ...VALID_BASE,
       Stop: [{ hooks: [{ type: "command", command: "echo stop" }] }],
     });
-    expect(callArgs[2]).toBe("C:/proj");
+    expect(callArgs[3]).toBe("C:/proj");
     expect(result.current.saved).toBe(true);
   });
 

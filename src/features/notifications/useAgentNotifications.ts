@@ -1,6 +1,6 @@
 // useAgentNotifications — F4 通知调度核心（MC-420 更名）
 //
-// 订阅 hook-event 事件流，在窗口失焦时触发桌面 toast 通知 + 任务栏闪烁。
+// 订阅 agent-event 事件流，在窗口失焦时触发桌面 toast 通知 + 任务栏闪烁。
 // 通用门控（失焦/去重/seenRef 截断）CLI 无关保留本模块；通知类别判定委托
 // profile.capabilities.hooks.classifyNotification（claude 五映射已迁入
 // profiles/claude/strategies.ts，MC-422）。
@@ -11,7 +11,8 @@
 // P2-FE-09: 去路由化——删 routeToPanel/findPanelTitle/onClick 绑定，三类事件均闪烁
 
 import { useEffect, useRef } from "react";
-import { onHookEvent, type HookEventPayload } from "../../ipc/hooks";
+import { onAgentEvent } from "../../ipc/agentHooks";
+import type { AgentEventPayload } from "../../types/agent";
 import {
   ensureNotificationPermission,
   sendToastNotification,
@@ -49,7 +50,7 @@ const CATEGORY_LABEL: Record<NotifyCategory, string> = {
 };
 
 /**
- * 判定 hook-event payload 的通知类别（纯函数，MC-420 两段分解）
+ * 判定 agent-event payload 的通知类别（纯函数，MC-420 两段分解）
  *
  * 类别判定知识委托 profile：按 MC-205 三级解析取 profile 后调
  * profile.capabilities.hooks.classifyNotification(payload)：
@@ -59,7 +60,7 @@ const CATEGORY_LABEL: Record<NotifyCategory, string> = {
  *   - profile 无 hooks 能力 → 返回 null（不通知）
  *   - 其余 → 委托 hooks.classifyNotification，返回类别 permission/error/done/null
  */
-export function classifyEvent(payload: HookEventPayload): NotifyCategory | null {
+export function classifyEvent(payload: AgentEventPayload): NotifyCategory | null {
   // MC-205 三级解析（三消费点同一表达式形态）
   const cliId =
     payload.cliId ??
@@ -109,7 +110,7 @@ let permissionEnsured = false;
  * F4 通知调度 hook
  *
  * 在 App.tsx 挂载的 NotificationListener 组件中调用。
- * 订阅 onHookEvent，在窗口失焦时按事件类别触发通知。
+ * 订阅 onAgentEvent，在窗口失焦时按事件类别触发通知。
  */
 export function useAgentNotifications(): void {
   // 用于防止同一事件重复通知的去重 set（基于 sessionId + event + timestamp）
@@ -124,7 +125,7 @@ export function useAgentNotifications(): void {
       });
     }
 
-    const unlisten = onHookEvent((payload) => {
+    const unlisten = onAgentEvent((payload) => {
       // 门控：窗口聚焦时不触发通知
       if (window.__slterm_windowFocused !== false) return;
 

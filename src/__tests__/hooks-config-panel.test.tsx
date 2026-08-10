@@ -30,8 +30,8 @@ vi.mock("../ipc/hooksConfig", () => ({
   writeHooksConfig: mockWriteHooksConfig,
 }));
 
-// mock IPC hooks —— F2 注入/卸载/状态查询（P3-FE-21/22；本地覆盖 setup.ts 全局 mock 以便断言调用）
-vi.mock("../ipc/hooks", () => ({
+// mock IPC agentHooks —— F2 注入/卸载/状态查询（P3-FE-21/22；本地覆盖 setup.ts 全局 mock 以便断言调用）
+vi.mock("../ipc/agentHooks", () => ({
   inject: mockInject,
   uninstall: mockUninstall,
   getInjectionStatus: mockGetInjectionStatus,
@@ -58,6 +58,7 @@ import { render, cleanup, fireEvent, waitFor, act } from "@testing-library/react
 import { HooksConfigPanel } from "../panels/hooksConfig";
 import { PANEL_TYPES, isValidPanelType } from "../panelRegistry";
 import { useProjects } from "../stores/projects";
+import { CLAUDE_CLI_ID } from "../features/cliProfiles/profiles/claude";
 import { useLayout } from "../stores/layout";
 
 // ── 辅助函数：种子 stores（照 commit-view 模式）──
@@ -210,8 +211,10 @@ describe("HooksConfigPanel 渲染", () => {
     await waitFor(() => {
       const calls = mockReadHooksConfig.mock.calls;
       const last = calls[calls.length - 1];
-      expect(last[0]).toBe("project");
-      expect(last[1]).toBe("C:/proj");
+      // 泛化命令 cliId 首参（中间态 = CLAUDE_CLI_ID）+ layer + projectPath
+      expect(last[0]).toBe(CLAUDE_CLI_ID);
+      expect(last[1]).toBe("project");
+      expect(last[2]).toBe("C:/proj");
     });
   });
 
@@ -411,9 +414,11 @@ describe("F2 注入/卸载与注入状态条（P3-FE-21/22）", () => {
     const callsBefore = mockReadHooksConfig.mock.calls.length;
     fireEvent.click(injectBtn);
     await waitFor(() => expect(mockInject).toHaveBeenCalled());
-    // 注入后重读 user 层（当前层即 user → reload）
+    // 注入后重读 user 层（当前层即 user → reload）；泛化命令 cliId 首参 = CLAUDE_CLI_ID（中间态）
     await waitFor(() => expect(mockReadHooksConfig.mock.calls.length).toBe(callsBefore + 1));
-    expect(mockReadHooksConfig.mock.calls[mockReadHooksConfig.mock.calls.length - 1][0]).toBe("user");
+    expect(mockReadHooksConfig.mock.calls[mockReadHooksConfig.mock.calls.length - 1][1]).toBe("user");
+    expect(mockReadHooksConfig.mock.calls[mockReadHooksConfig.mock.calls.length - 1][0]).toBe(CLAUDE_CLI_ID);
+    expect(mockInject).toHaveBeenCalledWith(CLAUDE_CLI_ID);
   });
 
   it("project 层点注入 → 自动切到 user 层重读（最后一次 read 为 user 层）", async () => {
@@ -425,13 +430,13 @@ describe("F2 注入/卸载与注入状态条（P3-FE-21/22）", () => {
     fireEvent.click(projectBtn);
     await waitFor(() => {
       const calls = mockReadHooksConfig.mock.calls;
-      expect(calls[calls.length - 1][0]).toBe("project");
+      expect(calls[calls.length - 1][1]).toBe("project");
     });
     fireEvent.click(getByRole("button", { name: "注入 Hooks" }));
-    await waitFor(() => expect(mockInject).toHaveBeenCalled());
+    await waitFor(() => expect(mockInject).toHaveBeenCalledWith(CLAUDE_CLI_ID));
     await waitFor(() => {
       const calls = mockReadHooksConfig.mock.calls;
-      expect(calls[calls.length - 1][0]).toBe("user");
+      expect(calls[calls.length - 1][1]).toBe("user");
     });
   });
 
@@ -444,7 +449,7 @@ describe("F2 注入/卸载与注入状态条（P3-FE-21/22）", () => {
     const uninstallBtn = await waitFor(() => getByRole("button", { name: "卸载 Hooks" }));
     const callsBefore = mockReadHooksConfig.mock.calls.length;
     fireEvent.click(uninstallBtn);
-    await waitFor(() => expect(mockUninstall).toHaveBeenCalled());
+    await waitFor(() => expect(mockUninstall).toHaveBeenCalledWith(CLAUDE_CLI_ID));
     // 卸载后重新查询状态（uninstall 返回 void，状态由二次查询刷新）
     await waitFor(() => expect(mockGetInjectionStatus.mock.calls.length).toBe(2));
     await waitFor(() => expect(mockReadHooksConfig.mock.calls.length).toBe(callsBefore + 1));

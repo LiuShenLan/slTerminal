@@ -10,7 +10,7 @@ export * as clipboard from "./clipboard";
 export * as dialog from "./dialog";
 export * as shell from "./shell";
 export * as window from "./window";
-export * as hooks from "./hooks";
+export * as agentHooks from "./agentHooks";
 export * as hooksConfig from "./hooksConfig";
 export * as claudeHistory from "./claudeHistory";
 export * as notification from "./notification";

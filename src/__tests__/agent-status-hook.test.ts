@@ -23,7 +23,7 @@ const {
   const map = new Map<string, Record<string, unknown>>();
   const listeners = new Set<(e: { type: string; panelId: string }) => void>();
   return {
-    // 保存 onHookEvent 注册的回调引用，供测试手动触发事件
+    // 保存 onAgentEvent 注册的回调引用，供测试手动触发事件
     capturedCallback: {
       current: null as ((payload: Record<string, unknown>) => void) | null,
     },
@@ -123,16 +123,16 @@ vi.mock("../workspace/pageApis", () => ({
   switchToPageAndFocus: vi.fn(),
 }));
 
-// ── mock ipc/hooks（覆盖 setup.ts 全局 mock，捕获回调 + 可控 contextUsage） ──
-vi.mock("../ipc/hooks", () => ({
-  onHookEvent: vi.fn((cb: (payload: Record<string, unknown>) => void) => {
+// ── mock ipc/agentHooks（覆盖 setup.ts 全局 mock，捕获回调 + 可控 contextUsage） ──
+vi.mock("../ipc/agentHooks", () => ({
+  onAgentEvent: vi.fn((cb: (payload: Record<string, unknown>) => void) => {
     capturedCallback.current = cb;
     return () => {
       capturedCallback.current = null;
     };
   }),
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  contextUsage: ((path: string) => mockContextUsage(path)) as any,
+  contextUsage: ((cliId: string, path: string) => mockContextUsage(cliId, path)) as any,
   inject: () =>
     Promise.resolve({ status: "notInjected" as const, version: null }),
   uninstall: () => Promise.resolve(),
@@ -145,7 +145,7 @@ import { useLayout } from "../stores/layout";
 import { useProjects } from "../stores/projects";
 import { useAgentStatus } from "../features/agentStatus/useAgentStatus";
 import { TerminalRegistry } from "../panels/terminal/TerminalRegistry";
-import { onHookEvent } from "../ipc/hooks";
+import { onAgentEvent } from "../ipc/agentHooks";
 import { CLAUDE_CLI_ID } from "../features/cliProfiles/profiles/claude";
 
 // ═══════════════════════════════════════════════════════════════════
@@ -226,7 +226,7 @@ function registerTerminalWithNotify(
   (TerminalRegistry as any).register(panelId, entry);
 }
 
-/** 构造 HookEventPayload（字段对齐 src/ipc/hooks.ts HookEventPayload，含可选 cliId——MC-205 显式分支注入） */
+/** 构造 AgentEventPayload（字段对齐 src/types/agent.ts AgentEventPayload，含可选 cliId——MC-205 显式分支注入） */
 function makePayload(
   overrides: Partial<{
     panelId: string;
@@ -460,7 +460,7 @@ describe("useAgentStatus（行建模新语义）", () => {
     renderHook(() => useAgentStatus());
 
     // 同步验证：contextUsage 在初始扫描时被调用（StrictMode 下 effect 双次触发，故不断言精确次数）
-    expect(mockContextUsage).toHaveBeenCalledWith("/path/to/transcript.jsonl");
+    expect(mockContextUsage).toHaveBeenCalledWith(CLAUDE_CLI_ID, "/path/to/transcript.jsonl");
   });
 
   it("初始扫描无 transcriptPath → 不调 contextUsage", () => {
@@ -562,7 +562,7 @@ describe("useAgentStatus（行建模新语义）", () => {
       });
     });
 
-    expect(mockContextUsage).toHaveBeenCalledWith("/t.json");
+    expect(mockContextUsage).toHaveBeenCalledWith(CLAUDE_CLI_ID, "/t.json");
     expect(result.current.rows).toHaveLength(1);
   });
 
@@ -925,7 +925,7 @@ describe("useAgentStatus（行建模新语义）", () => {
       );
     });
 
-    expect(mockContextUsage).toHaveBeenCalledWith("/path/to/transcript.jsonl");
+    expect(mockContextUsage).toHaveBeenCalledWith(CLAUDE_CLI_ID, "/path/to/transcript.jsonl");
 
     await waitFor(() => {
       expect(result.current.rows[0].usage).toEqual({
@@ -1108,16 +1108,16 @@ describe("useAgentStatus（行建模新语义）", () => {
   });
 
   // ──────────────────────────────────────────────────
-  // FE-06: onHookEvent 订阅不因渲染重建
+  // FE-06: onAgentEvent 订阅不因渲染重建
   // ──────────────────────────────────────────────────
 
-  it("行更新触发重渲染后 onHookEvent 调用次数不增（deps [] 稳定订阅）", () => {
+  it("行更新触发重渲染后 onAgentEvent 调用次数不增（deps [] 稳定订阅）", () => {
     seedProject();
     registerTerminal("terminal-page1-0", makeSession({ lastEventAt: 1000 }));
 
     const { result } = renderHook(() => useAgentStatus());
 
-    const callCountBefore = (onHookEvent as ReturnType<typeof vi.fn>).mock.calls.length;
+    const callCountBefore = (onAgentEvent as ReturnType<typeof vi.fn>).mock.calls.length;
 
     // 发送事件 → 行更新 → 重渲染
     act(() => {
@@ -1132,8 +1132,8 @@ describe("useAgentStatus（行建模新语义）", () => {
       );
     });
 
-    // onHookEvent 不应被重新调用（handleHookEvent deps [] 稳定）
-    expect((onHookEvent as ReturnType<typeof vi.fn>).mock.calls.length).toBe(callCountBefore);
+    // onAgentEvent 不应被重新调用（handleHookEvent deps [] 稳定）
+    expect((onAgentEvent as ReturnType<typeof vi.fn>).mock.calls.length).toBe(callCountBefore);
     expect(result.current.rows).toHaveLength(1);
   });
 

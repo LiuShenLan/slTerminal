@@ -115,7 +115,6 @@ vi.mock("../ipc", () => ({
     kill: vi.fn().mockResolvedValue(undefined),
     getWindowsBuildNumber: vi.fn().mockResolvedValue(22621),
   },
-  hooks: { onHookEvent: vi.fn(() => vi.fn()), inject: vi.fn(), uninstall: vi.fn(), getInjectionStatus: vi.fn() },
 }));
 
 // OSC 52 测试：mock clipboard（src/ipc/clipboard.ts）

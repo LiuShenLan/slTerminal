@@ -2,11 +2,11 @@
 
 > **本文档是项目用例数唯一真值源。** 所有 CLAUDE.md、README、CI 配置中引用的用例数均以此文件为准。更新测试后必须同步本文档。
 
-全量 **3075** 用例（Rust 571 + 前端 2329 + L3 138 + E2E 37），2026-08-10 更新。
+全量 **3088** 用例（Rust 584 + 前端 2329 + L3 138 + E2E 37），2026-08-10 更新。
 
 > **计数口径**：
 > - L2 以 `npm test` 实跑（Vitest 报告）为准——`it.each(...)` 参数化与 `describeIpcContract` 工厂（`helpers/ipc-contract.ts`，IHE-06）等按**展开后用例数**计入（138 文件 2333 用例全绿实测）；纯 grep `it(/test(` 块数会少计 it.each 展开（如 colors 85 = 13 块 + 7 组 each 展开 72）。
-> - L1 以 `grep -c '#\[test\]'` 统计的 `#[test]` 属性数为准（28 文件 571）。
+> - L1 以 `grep -c '#\[test\]'` 统计的 `#[test]` 属性数为准（29 文件 584）。
 > - L3 以 `npm run test:l3` 实跑为准（7 文件 138，`test/terminal/**/*.test.ts`）。
 > - L4 以 spec 内 `it(`/`it.skip(` 计数为准（8 spec，35 active + 2 skip）。
 > - L2 与 L3 **独立运行**：`vitest.config.ts` include 仅 `src/__tests__/**`，L3 走 `vitest.l3.config.ts`（environment: node）。旧注释"L3 同时被 npm test 包含执行"已废弃。
@@ -39,7 +39,7 @@
 | ⑤ | L2 | **E2E helper 行为契约**——`app.test.tsx`/`e2e-create-project.test.ts` 验证的是 `__slterm_e2e_createProject` 等 helper 的契约（pending 标记/localStorage 交互），非真实 App 初始化逻辑；真实挂载路径由 `e2e-gating-*` 测试 + L4 使用实证 | 13 P-14 |
 | ⑥ | L2 | **浅层组件定位**——`editor.test.tsx` mock `useCodeMirror` 只验证 prop 透传与容器样式，定位为组件集成契约测试（非行为测试），真实编辑器行为由 `use-code-mirror.test.ts` 等覆盖 | 07 G1/G2 |
 
-## L1 — Rust 单元/集成测试（28 文件 / 571 用例）
+## L1 — Rust 单元/集成测试（29 文件 / 584 用例）
 
 运行：`cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1`
 
@@ -58,12 +58,13 @@
 | `src-tauri/src/fs/mod.rs` | 31 | read_dir/write_file（真实命令，CRLF 保留）/create_dir/delete/rename + 命令包装单测 + 异常路径（删除不存在/root 外拒绝/TaskJoin panic 映射） |
 | `src-tauri/src/notify/mod.rs` | 38 | FileWatcher 生命周期 + classify_by_kind 事件分类（全 7 种 EventKind）+ **EventEmitter trait 注入驱动事件循环（HFN-03/D6）** + Drop 轮询等待（HFN-07） |
 | `src-tauri/src/notify/pool.rs` | 13 | LruWatcherPool: 缓存命中/LRU 淘汰/pause_all_except/replace（同 path 二次 insert stop 旧 watcher）/remove/stop_all/Drop |
-| `src-tauri/src/hooks/mod.rs` | 12 | InjectionStatus/HookInjectionStatus serde 往返精确断言 + parse_signal_file 快速冒烟 + start_signal_watcher 幂等（#[cfg(test)] 重置钩子） |
-| `src-tauri/src/hooks/signal.rs` | 14 | parse_signal_file 全分支 + camelCase 往返 + **process_signal_file 全流程（emit 注入参数：读→emit→删/emit 失败仍删/非法 JSON 降级，HUK-01）** |
-| `src-tauri/src/hooks/watcher.rs` | 20 | is_signal_file/collect_signal_files/poll_once（含目录删除重建恢复/幂等）/**run_one_tick 或临时目录真实启动（轮询补漏消费残留，HUK-03）**/生命周期（stop 幂等 + thread.is_finished 断言） |
-| `src-tauri/src/hooks/inject.rs` | 34 | 注入幂等（空 settings/已有用户 hooks/已注入升级）/卸载 handler 级剔除（混组保用户 handler/全 slterm 组删除/无 slterm 零写盘）/状态检测三态/非法 JSON 中止/版本比对/**注入/卸载/状态三命令 impl 路径 tempdir 驱动（HUK-02）**/handler_contains_slterm 非字符串分支 |
-| `src-tauri/src/hooks/usage.rs` | 26 | parse_usage_line 全分支 + scan_transcript_usage 集成（逆行命中/回溯/损坏跳过）+ ContextUsage serde 往返 + TRANSCRIPT_TAIL_BYTES + **hooks_context_usage 命令包装层（HUK-05）+ 端到端五用例（P2-TE-05）** |
-| `src-tauri/src/hooks/config.rs` | 27 | parse_layer/resolve_config_path（home 注入 tempdir，HUK-07）/read_hooks_subtree/write_hooks_subtree（原子写/merge 保留/损坏拒绝）+ IO 异常分支（persist 失败，HUK-06） |
+| `src-tauri/src/hooks/mod.rs` | 19 | AgentInjectionStatus/AgentHookInjectionStatus serde 往返精确断言 + parse_signal_file 快速冒烟 + start_signal_watcher 幂等（#[cfg(test)] 重置钩子） + **命令层泛化（6 命令 cliId 透传 block_on 直测，MC-211）** |
+| `src-tauri/src/hooks/signal.rs` | 16 | parse_signal_file 全分支 + camelCase 往返 + **process_signal_file 全流程（emit 注入参数：读→emit→删/emit 失败仍删/非法 JSON 降级，HUK-01）** + **AgentEventPayload 九键 serde（含无 cliId 旧信号反序列化兼容，MC-201）** + agent-event 广播（MC-202） |
+| `src-tauri/src/hooks/watcher.rs` | 20 | is_signal_file/collect_signal_files/poll_once（含目录删除重建恢复/幂等）/**run_one_tick 或临时目录真实启动（轮询补漏消费残留，HUK-03）**/生命周期（stop 幂等 + thread.is_finished 断言）——MC-203 核对零改动 |
+| `src-tauri/src/hooks/provider.rs` | 3 | CliHooksProvider trait + cliId 键注册表：resolve_provider 命中（身份断言）/未知 cliId Validation（MC-211）/已注册无 hooks 能力 Validation（「不支持 hooks 能力」语义）+ 未注册未知分支（MC-210 新建） |
+| `src-tauri/src/hooks/claude/inject.rs` | 35 | 注入幂等（空 settings/已有用户 hooks/已注入升级）/卸载 handler 级剔除（混组保用户 handler/全 slterm 组删除/无 slterm 零写盘）/状态检测三态/非法 JSON 中止/版本比对/**注入/卸载/状态三命令 impl 路径 tempdir 驱动（HUK-02）**/handler_contains_slterm 非字符串分支 + **reporter 模板内嵌校验断言（显式 cliId + SCRIPT_VERSION 递增，MC-215 决策 7）** |
+| `src-tauri/src/hooks/claude/usage.rs` | 26 | parse_usage_line 全分支 + scan_transcript_usage 集成（逆行命中/回溯/损坏跳过）+ ContextUsage serde 往返 + TRANSCRIPT_TAIL_BYTES + **命令包装层（HUK-05）+ 端到端五用例（P2-TE-05）**——下沉 claude/ 用例数不变（MC-213） |
+| `src-tauri/src/hooks/claude/config.rs` | 27 | parse_layer/resolve_config_path（home 注入 tempdir，HUK-07）/read_hooks_subtree/write_hooks_subtree（原子写/merge 保留/损坏拒绝）+ IO 异常分支（persist 失败，HUK-06）——下沉 claude/ 用例数不变（MC-213） |
 | `src-tauri/src/settings.rs` | 25 | 读写往返/文件不存在/JSON 损坏回退 .bak/浅合并/并发写/只读文件 + **block_on 真实 save_settings/load_settings 命令（SPE-01）+ app_data_dir 注入 + persist 失败映射（SPE-05）** |
 | `src-tauri/src/projects.rs` | 17 | 序列化往返/ID 生成/路径校验 + **block_on 真实 save_projects/load_projects（SPE-02）+ persist 失败映射** |
 | `src-tauri/src/error.rs` | 7 | 序列化/Display/From\<io::Error\>/SessionNotFound + **serde_json/git2/JoinError 三 From 转换（SPE-03）** |
@@ -85,7 +86,7 @@
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
 | `src/__tests__/ipc-contract.test.ts` | 65 | pty/fs/settings/projects/notify/git 全模块四维验证（IHE-06 工厂化：8 裸 it + 57 cases）+ DBG-4 PTY payload 契约守卫 + onFsEvent listen 回调解包行为契约（IHE-01②） |
-| `src/__tests__/ipc-hooks-contract.test.ts` | 22 | hooks 四命令四维验证 + ContextUsage 键集合守卫 + HookEventPayload 8 字段契约 + onHookEvent 解包（6 裸 it + 16 cases） |
+| `src/__tests__/ipc-agent-hooks-contract.test.ts` | 22 | agent hooks 四命令四维验证（命令名 agent_hooks_*/agent_context_usage + 参数含 cliId camelCase + 返回 + 异常）+ ContextUsage 键集合守卫 + AgentEventPayload 8 字段契约 + onAgentEvent 解包（6 裸 it + 16 cases，MC-212 更名同步） |
 | `src/__tests__/ipc-claude-history-contract.test.ts` | 8 | claude_history_scan/delete 两命令四维验证（F7，rename 已移除） |
 | `src/__tests__/ipc-window-contract.test.ts` | 10 | `registerCloseHandler` 关闭生命周期契约（WRK-04 处置：保留 + 契约测试） |
 | `src/__tests__/ipc-ping.test.ts` | 2 | `ping()` wrapper 调用（IHE-07① 改调导出函数） |
@@ -226,7 +227,7 @@
 | `src/__tests__/hooks-config-matcher.test.ts` | 21 | matchHook 全分支（exact-or/regex/all/受限窄字符集/非法正则防御） |
 | `src/__tests__/hooks-config-catalog.test.ts` | 19 | eventsCatalog 事件元数据（30 事件 × 10 组/HANDLER_FIELD_MATRIX/纯查询函数） |
 | `src/__tests__/hooks-config-model.test.ts` | 17 | jsonToGui/guiToJson 双向转换/round-trip/容错/isSltermManaged |
-| `src/__tests__/ipc-hooks-config-contract.test.ts` | 12 | readHooksConfig/writeHooksConfig 四维验证（IHE-06 工厂化） |
+| `src/__tests__/ipc-hooks-config-contract.test.ts` | 12 | readHooksConfig/writeHooksConfig 四维验证（agent_hooks_config_read/write + cliId 首参，IHE-06 工厂化，MC-212 同步） |
 | `src/__tests__/hooks-config-schema.test.ts` | 10 | validateHooksJson 直测边界（HKC-08 新建）：合法/缺 hooks 键/非法 matcher/未知事件告警 |
 | `src/__tests__/hooks-config-sync.test.tsx` | 9 | 双模式同步（JSON→GUI/GUI→JSON/非法禁切/脏状态流转） |
 
@@ -364,6 +365,7 @@ embedded WDIO 驱动**无法将 OS 级按键（`browser.keys`）投递进 WebVie
 
 ## 历史变更
 
+- 2026-08-10（multi-cli Stage 03 后端 hooks 泛化 + 前端 ipc/types，MC-201~215 + D-01/03/09/10/11/14）：L1 hooks 域 133→146（+13）。位置迁移：inject 34→claude/inject.rs 35（+1 reporter 模板内嵌校验断言——显式 cliId + SCRIPT_VERSION 递增，MC-215 决策 7）、usage 26 / config 27 下沉 claude/ 用例数不变（MC-213）、watcher 20 MC-203 核对零改动；mod.rs 12→19（+7 命令层泛化：6 命令 cliId 透传 block_on 直测 + 更名 AgentInjectionStatus/AgentHookInjectionStatus，MC-211）、signal.rs 14→16（+2 AgentEventPayload 九键 serde 含无 cliId 旧信号反序列化兼容 MC-201 + agent-event 广播 MC-202）、新建 provider.rs 3（注册表 resolve_provider 命中/未知 cliId Validation/无 hooks 能力 Validation「不支持 hooks 能力」+ 未注册未知分支，MC-210）。L2：ipc-hooks-contract → ipc-agent-hooks-contract 22 用例数不变（命令名 agent_hooks_*/agent_context_usage + 参数含 cliId camelCase 四维同步，MC-212）；ipc-hooks-config-contract 12 用例数不变（agent_hooks_config_read/write + cliId 首参）；setup.ts 全局 mock 更名 ../ipc/hooks → ../ipc/agentHooks + onHookEvent→onAgentEvent（D-01 红线）；use-xterm-lifecycle 71 / use-xterm-output 35 / use-xterm-integration 12 / agent-status-view 29 / agent-status-hook 39 / notifications 33 / hooks-config-panel 23 / hooks-config-sync 9 用例数不变（事件名 onAgentEvent/"agent-event" + contextUsage 传行 cliId + 中间态 CLAUDE_CLI_ID 断言同步，MC-202/212）；调用点中间态：useHooksConfig/HooksConfigPanel 泛化命令 cliId 暂传 CLAUDE_CLI_ID 常量（Stage 06 回收）、useAgentStatus contextUsage 传行 cliId。L4 hooks.e2e 4 / agent.e2e 7 用例数不变（命令名 agent_hooks_* 与事件名 agent-event 断言同步，D-14）；run-wdio.cjs E2E-05 备份集合注释「随第二 CLI 接入扩展」（D-11，无用例变动）。L2 2329 不变，L1 571→584，全量 3075→3088。
 - 2026-08-10（multi-cli Stage 02 前端状态域去 claude 化，MC-401~422）：删 claude-status 32（语义拆分迁出：lib 层 6 用例 → 新建 agent-status-lib；事件映射 26 用例 → cli-profile-claude，落点改此）+ 新建 agent-status-lib 6（STATUS_EMOJI/getStatusIcon/AgentStatus 类型——lib 层不再含 claude 事件名字面量，MC-401）。cli-profile-claude 7→43（+36：eventToStatus 26 用例语义迁入 + classifyNotification 五映射表驱动 9 条迁入（NAH-03，notifications 纯函数层迁出）+ hooks 能力五字段断言 +1 与 capabilities.history 未迁入——contextLimit=200_000/restartHint/hasConfigEditor，MC-214 前端半 + MC-422）。notifications 42→33（classifyEvent 纯函数表驱动 9 条迁出，类别判定改经 profile.hooks.classifyNotification 委托——MC-420）。terminal-registry 24 / terminal-registry-subscribe 7 / use-xterm-lifecycle 71 / use-xterm-output 35 / use-xterm-integration 12 / claude-history-model 41 / claude-history-view 33 / claude-history-hook 13 用例数不变（ClaudeStatus→AgentStatus、claudeSession→agentSession、setClaudeSession→setAgentSession 更名同步 + AgentSessionInfo 新增 cliId——MC-402/403/410）；agent-status-view 29 / agent-status-hook 39 用例数不变（更名 + 空态文案「无运行中的编码 CLI 会话」MC-414 + 用量口径 contextLimit 来自 profile MC-412）；workspace-header-actions 21 用例数不变（F8 禁用判定 agentSession，MC-405）；L4 agent.e2e 7 用例数不变（空态文案断言同步，MC-414）；L3 production-osc 8 用例数不变（更名同步）。L2 2328→2329（137 文件不变），全量 3074→3075。
 - 2026-08-10（multi-cli Stage 01 CLI profile 注册表，MC-101~108）：新增「CLI profile 注册表」类目 2 文件 26 用例——cli-profile-registry 18（CliProfileRegistry：register/get/getAll 注册序/同 id 覆盖（注册序不变）/matchByCommand 多 commands·带参·空命令行·仅空白·未命中·不 toLowerCase/`_reset`/独立实例/单例）、cli-profile-claude 8（claude 身份域字段 + CLAUDE_CLI_ID 常量一致性 + side-effect 注册 + 资源守卫泛化遍历——iconSrc 磁盘存在 + PNG 魔数，含 mockcli.png 先行资源）。删 3 文件 31 用例：tab-title-registry 13 / tab-rules 6（语义并入上述两文件）、cli-icons 12（资源守卫语义并入 cli-profile-claude）。use-xterm-lifecycle 71 / use-xterm-output 35 / use-xterm-integration 12 / terminal 14 / e2e-gating-terminal 5 用例数不变（断言与 mock 改指 profile 注册表）；L3 production-osc 8 用例数不变（OSC 133 复刻段改写，D-08）。L2 2333→2328（138→137 文件），全量 3079→3074。
 - 2026-08-08（CLI 品牌 logo 显示，F9）：新增 1 文件——cli-icons 12（CliIconRegistry 注册表全分支 + public 文件/PNG 魔数守卫）；use-xterm-lifecycle 70→71（+1 OSC 133 C 未注册 CLI → logo null）、terminal.test.tsx 10→14（+4 tabLogo logoRef 状态机）、workspace-defaulttab 21→27（+6 tabLogo 渲染/顺序/仅随 emoji/动态双向/URL 并存）、agent-status-view 25→29（+4 行1 logo/图标列 40px 簇/行2 缩进 48px）、claude-history-row 16→19（+3 logo 仅随 status emoji/孤儿行不加图）；L3 production-osc 断言同步（OSC 133 C 携 logo）。L2 2303→2333（+30 实跑口径），全量 →3079。

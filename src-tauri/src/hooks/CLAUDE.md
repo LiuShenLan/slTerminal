@@ -12,8 +12,8 @@ hooks 模块——Claude Code hook 宿主侧增强：信号文件通道（接收
 claude 子进程 hook 触发
   → Node 脚本读 stdin → 组装 JSON → 原子写 .tmp → rename .json
   → HookSignalWatcher（notify+轮询双通道：notify NonRecursive 50ms debounce 实时 + 3s 轮询补漏）
-  → process_signal_file（读 → parse → emit("hook-event") → 删文件）
-  → 前端 onHookEvent 回调 → eventToStatus → 页签 emoji 更新
+  → process_signal_file（读 → parse → emit("agent-event") → 删文件）
+  → 前端 onAgentEvent 回调 → eventToStatus → 页签 emoji 更新
 ```
 
 ### notify+轮询双通道（win10 实证修复）
@@ -103,7 +103,7 @@ project/local 层入参经 `validate_path_within_root` 沙箱校验：project_pa
 | 文件 | 职责 |
 |------|------|
 | `mod.rs` | 模块入口：`InjectionStatus` 枚举 + `HookInjectionStatus` DTO + `start_signal_watcher()` + 静态 `WATCHER` |
-| `signal.rs` | 信号文件解析与处理：`HookEventPayload` DTO（8 字段 camelCase）、`parse_signal_file()` 纯函数、`process_signal_file()` 文件处理流程 |
+| `signal.rs` | 信号文件解析与处理：`AgentEventPayload` DTO（8 字段 camelCase）、`parse_signal_file()` 纯函数、`process_signal_file()` 文件处理流程 |
 | `watcher.rs` | 信号目录监听器 `HookSignalWatcher`：**notify+轮询双通道**——notify（NonRecursive，50ms debounce，失败降级 warn）+ **3s 轮询补漏**（`collect_signal_files`/`poll_once` 纯函数，目录删除自动重建，免疫事件丢失/句柄失效），线程名 `hook-signal-watcher`，`stop()` 幂等 + `Drop` 清理 |
 | `inject.rs` | 注入/卸载/状态三命令：`hooks_inject`、`hooks_uninstall`、`hooks_injection_status`。阻塞 I/O 经 `spawn_blocking` 串行化（硬约束 #3） |
 | `usage.rs` | transcript token 用量查询：`hooks_context_usage` 命令 + `ContextUsage` DTO + `parse_usage_line` / `scan_transcript_usage` 纯 I/O 逻辑 |
@@ -138,7 +138,7 @@ project/local 层入参经 `validate_path_within_root` 沙箱校验：project_pa
 
 签名：`async fn hooks_context_usage(_app: AppHandle, transcript_path: String) -> Result<Option<ContextUsage>, AppError>`
 
-参数：`transcript_path` — transcript JSONL 文件路径（来自 `HookEventPayload.transcript_path`）。
+参数：`transcript_path` — transcript JSONL 文件路径（来自 `AgentEventPayload.transcript_path`）。
 
 返回：`Option<ContextUsage>`——最后一条含 `message.usage` 的行的 token 数据；无 usage 记录或文件异常返回 `null`（非 error）。
 
@@ -206,7 +206,7 @@ hook 脚本性能实测结论（2026-07-29，Win11 build 26200，Node v22）：
 - **原子写**：settings.json 和脚本文件均使用 `tempfile::NamedTempFile` + `persist()`，确保写盘原子性。
 - **路径规范化**：脚本绝对路径经 `dunce::simplified()` 处理（剥 Windows `\\?\` 前缀），matcher command 中反斜杠统一替换为 `/`。
 - **模板内嵌**：`slterm-hook-reporter.js` 通过 `include_str!` 编译期嵌入，无需运行时读 assets 目录。
-- **DTO 双边对应**：`HookInjectionStatus` / `InjectionStatus` / `HookEventPayload` / `ContextUsage` 均 `snake_case` ↔ JS `camelCase`（硬约束 #4）。
+- **DTO 双边对应**：`HookInjectionStatus` / `InjectionStatus` / `AgentEventPayload` / `ContextUsage` 均 `snake_case` ↔ JS `camelCase`（硬约束 #4）。
 - **三命令走绝对 home 路径**：不依赖 `project_root`（类似 `settings.rs`/`projects.rs`），故不经过路径沙箱 `validate_path_within_root`。
 
 ## 测试模式
@@ -228,7 +228,7 @@ Rust 测试分布 6 个位置（均为 `#[cfg(test)] mod tests` 嵌入源文件�
 
 ### 信号解析测试模式
 
-`parse_signal_file` 是纯函数（`&str → Option<HookEventPayload>`），无依赖，直接构造 JSON 字符串断言：
+`parse_signal_file` 是纯函数（`&str → Option<AgentEventPayload>`），无依赖，直接构造 JSON 字符串断言：
 
 ```rust
 // 合法完整 JSON

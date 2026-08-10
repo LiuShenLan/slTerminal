@@ -231,21 +231,21 @@ xterm.js 6.0.0 原生支持 OSC 8 解析渲染。`useXterm.ts` 在 `term.open()`
 
 **仅限于 pwsh/powershell**——shell integration 脚本仅在 PowerShell 注入，cmd.exe 无此能力。
 
-### F3 页签四态指示（hook-event + emoji）
+### F3 页签四态指示（agent-event + emoji）
 
 终端页签通过双源事件合成四态 emoji 指示，优先级自上而下：
 
 | 状态 | emoji | 触发源 | 说明 |
 |------|-------|--------|------|
-| `working` | ⚡ | hook-event `PreToolUse`/`PostToolUse` | Claude Code 正在执行工具调用 |
-| `attention` | 🟡 | OSC 133 C（命令开始）或 hook-event Notification | 用户命令运行中或需要关注（notificationType 为 `permission_prompt`/`idle_prompt`/`agent_needs_input`） |
-| `done` | ✅ | hook-event `Stop` | 主代理完成响应输出（`SessionEnd`/OSC 133 D 由 hook/命令层清图标，不产生 ✅） |
-| `error` | ❌ | hook-event `PostToolUseFailure`/`StopFailure` | 工具调用失败或轮次因 API 错误结束 |
+| `working` | ⚡ | agent-event `PreToolUse`/`PostToolUse` | Claude Code 正在执行工具调用 |
+| `attention` | 🟡 | OSC 133 C（命令开始）或 agent-event Notification | 用户命令运行中或需要关注（notificationType 为 `permission_prompt`/`idle_prompt`/`agent_needs_input`） |
+| `done` | ✅ | agent-event `Stop` | 主代理完成响应输出（`SessionEnd`/OSC 133 D 由 hook/命令层清图标，不产生 ✅） |
+| `error` | ❌ | agent-event `PostToolUseFailure`/`StopFailure` | 工具调用失败或轮次因 API 错误结束 |
 
 实现：
 
 - **`useCommandDetection`**：OSC 133 C 触发时调用 `onTabStateChange({ active: true, title, icon: "🟡", logo: cliIconRegistry.match(command) })`（F9）；OSC 133 D 重置
-- **`useXterm`**：新增 `onHookEvent` 订阅 → 按 `panelId` 过滤 → `eventToStatus(event, notificationType?)`（经 `profile.hooks` 委托，claude 实现在 `src/features/cliProfiles/profiles/claude/strategies.ts`）→ `onTabStateChange({ active: true, icon: emoji })`（hook 路径无 command，**不传 logo**——TerminalPanel 层保持前值）；`SessionEnd` 调 `{ active: false }`
+- **`useXterm`**：新增 `onAgentEvent` 订阅 → 按 `panelId` 过滤 → `eventToStatus(event, notificationType?)`（经 `profile.hooks` 委托，claude 实现在 `src/features/cliProfiles/profiles/claude/strategies.ts`）→ `onTabStateChange({ active: true, icon: emoji })`（hook 路径无 command，**不传 logo**——TerminalPanel 层保持前值）；`SessionEnd` 调 `{ active: false }`
 - **`TerminalPanel.handleTabStateChange`**：`active=true` 时只有 `title` 存在才 `setTitle`，只有 `icon !== undefined` 才 `updateParameters`；`logoRef` 照 `originalTitleRef` 模式保持当前 CLI logo——`state.logo !== undefined` 时更新（OSC 133 C），hook 事件路径不清，`updateParameters({ ...params, tabIcon, tabLogo: logoRef.current })`；`active=false` 恢复原标题并**双清** icon + logo
 - **`DefaultTab`**（workspace 层）：`tabIcon` 含 `/` 走 `<img>`，否则走 `<span>` 渲染 emoji；`tabLogo`（`params.tabLogo`）在 emoji 后渲染 16×16 CLI logo（F9：仅随 emoji——`tabIcon && tabLogo` 双条件）
 - **`tabRules.ts`**：claude 规则的 `icon` 字段已移除——emoji 由 F3 四态系统接管，不再硬编码图标
@@ -257,7 +257,7 @@ Claude Code 在用户主动 Ctrl+C 中断时不发射任何 hook 事件（`Stop`
 行为特征（非 bug，属于阶段 1 规划缺口）：
 1. **滞留自愈**：下一事件（UserPromptSubmit/Stop 等）覆盖旧状态——继续使用后图标自动恢复正常流转
 2. **内置衰减**：中断回提示符约 60s 无操作 → `idle_prompt` Notification（attention 子类型）→ 自动转 🟡，无需超时机制
-3. **已知局限**：`eventToStatus`（`src/features/cliProfiles/profiles/claude/strategies.ts`）无中断类事件映射；`useXterm` hook-event 处理（`src/panels/terminal/useXterm.ts:348-357`）仅在 `SessionEnd` 时清图标
+3. **已知局限**：`eventToStatus`（`src/features/cliProfiles/profiles/claude/strategies.ts`）无中断类事件映射；`useXterm` agent-event 处理（`src/panels/terminal/useXterm.ts:348-357`）仅在 `SessionEnd` 时清图标
 
 ## 文件
 
@@ -272,7 +272,7 @@ Claude Code 在用户主动 Ctrl+C 中断时不发射任何 hook 事件（`Stop`
 | `terminal/useClipboardHandler.ts` | OSC 52 剪贴板拦截 + CJK 解码 + 焦点门控 |
 | `terminal/useCommandDetection.ts` | OSC 133 命令边界检测 + TabTitleRegistry 匹配 + 🟡 attention 指示（OSC 133 C 触发 `onTabStateChange({ active: true, icon: "🟡", logo: cliIconRegistry.match(command) })`，F9 CLI logo） |
 | `terminal/webgl.ts` | `detectWebgl()` + `setupWebglWithRetry()` 纯函数 |
-| `terminal/useXterm.ts` | 编排层（~420 行），组合上述 6 个 hook + `src/lib/useFontSizeWheel`（Ctrl+Wheel 字体缩放）+ `onHookEvent` 订阅（按 panelId 过滤 → `eventToStatus` → F3 四态 emoji；非 SessionEnd/Exit 时 `setAgentSession` 携 `sessionId`/`transcriptPath`/`status`——两区四态同源，**payload 空串归一 `|| undefined`** 防 claude hook 输入缺字段时下游静默失效），对外接口兼容 TerminalPanel |
+| `terminal/useXterm.ts` | 编排层（~420 行），组合上述 6 个 hook + `src/lib/useFontSizeWheel`（Ctrl+Wheel 字体缩放）+ `onAgentEvent` 订阅（按 panelId 过滤 → `eventToStatus` → F3 四态 emoji；非 SessionEnd/Exit 时 `setAgentSession` 携 `sessionId`/`transcriptPath`/`status`——两区四态同源，**payload 空串归一 `|| undefined`** 防 claude hook 输入缺字段时下游静默失效），对外接口兼容 TerminalPanel |
 | `terminal/keyboard.ts` | 终端快捷键命令工厂：`createTerminalShortcuts()`（无参）经 `commandFromMeta` 生成 `terminal.copy/paste/newline`，App 一次性注册；handler 经 `getActiveTerminal()` 派发到聚焦终端。Ctrl+C 不注册（透传 SIGINT） |
 | `terminal/activeTerminal.ts` | 模块级"聚焦终端"指针：`setActiveTerminal`/`clearActiveTerminal`（仅匹配时清）/`getActiveTerminal`。终端聚焦时设为 active，命令 handler 据此派发 |
 | `terminal/theme.ts` | xterm.js 暗色主题选项（JetBrains 配色），硬约束 #6 单点。`drawBoldTextInBrightColors` 显式声明为 `true`，消除对 xterm.js 默认值的隐式依赖（仅影响 ANSI 16 色粗体→亮色映射，不影响 True Color）。`vtExtensions: { kittyKeyboard: true }` 启用 Kitty 键盘协议被动支持 |

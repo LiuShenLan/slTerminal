@@ -36,9 +36,9 @@ import { useFontSizeWheel } from "../../lib/useFontSizeWheel";
 import { E2E_ENABLED } from "../../lib/e2eEnabled";
 import { STATUS_EMOJI } from "../../lib/agentStatus";
 import { FONT_SIZE_MIN, FONT_SIZE_MAX } from "../../stores/fontSize";
-// Hooks 事件订阅
-import { hooks } from "../../ipc";
-// MC-205: hook 事件按 cliId 解析 profile——eventToStatus 等 hooks 能力实现迁入 profile
+// Agent 事件订阅（MC-202：onAgentEvent，照 onFsEvent 模式直接引 ipc 文件）
+import { onAgentEvent } from "../../ipc/agentHooks";
+// MC-205: agent 事件按 cliId 解析 profile——eventToStatus 等 hooks 能力实现迁入 profile
 // （lib 层不再含 claude 事件名映射）；缺省回退常量经 profiles/claude 导出（AC-5 兼容）
 import { cliProfileRegistry } from "../../features/cliProfiles";
 import { CLAUDE_CLI_ID } from "../../features/cliProfiles/profiles/claude";
@@ -347,12 +347,12 @@ export function useXterm({
       }
     });
 
-    // ── Hooks 事件订阅（F3 页签四态指示 + 会话状态写入）──
-    const unsubscribeHookEvent = hooks.onHookEvent((payload) => {
+    // ── Agent 事件订阅（F3 页签四态指示 + 会话状态写入）──
+    const unsubscribeAgentEvent = onAgentEvent((payload) => {
       if (payload.panelId !== panelId) return;
 
       // MC-205 三级解析：显式 payload.cliId → 反查注册表 agentSession.cliId → 缺省 CLAUDE_CLI_ID。
-      // 本 Stage HookEventPayload 的 cliId 恒 undefined（Stage 03 后端加字段后自然生效）
+      // 旧信号无 cliId 字段（serde default）——缺省分支兼容
       const cliId =
         payload.cliId ??
         TerminalRegistry.get(panelId)?.agentSession?.cliId ??
@@ -394,7 +394,7 @@ export function useXterm({
 
     // ── 清理 ──
     return () => {
-      unsubscribeHookEvent();
+      unsubscribeAgentEvent();
       isDisposedRef.current = true;
       if (fitRafId !== null) {
         cancelAnimationFrame(fitRafId);

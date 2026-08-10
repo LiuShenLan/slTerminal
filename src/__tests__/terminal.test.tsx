@@ -6,7 +6,7 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 const mocks = vi.hoisted(() => {
   // OSC 133 handler 注册捕获（useCommandDetection 经 parser.registerOscHandler(133, cb) 注册）
   const oscHandlers: Record<number, (data: string) => void> = {};
-  // hooks.onHookEvent 回调捕获（useXterm 订阅 hook-event）
+  // agentHooks.onAgentEvent 回调捕获（useXterm 订阅 agent-event）
   let hookEventCb: ((payload: unknown) => void) | null = null;
   // onDidParametersChange 回调捕获（TerminalPanel 订阅参数变化同步 originalTitleRef）
   let paramsCb: ((p: Record<string, unknown>) => void) | null = null;
@@ -55,7 +55,7 @@ const mocks = vi.hoisted(() => {
     close: vi.fn(),
   };
   const hooks = {
-    onHookEvent: vi.fn((cb: (payload: unknown) => void) => {
+    onAgentEvent: vi.fn((cb: (payload: unknown) => void) => {
       hookEventCb = cb;
       return vi.fn();
     }),
@@ -95,7 +95,16 @@ vi.mock("@xterm/addon-webgl", () => ({
 
 vi.mock("../ipc", () => ({
   pty: mocks.pty,
-  hooks: mocks.hooks,
+  agentHooks: mocks.hooks,
+}));
+
+// 文件级覆盖 setup.ts 全局 mock（照 setup.ts:93-94 形态）：捕获 onAgentEvent 回调，
+// 否则 getHookEventCb() 恒 null、hookCb(...) 抛 TypeError
+vi.mock("../ipc/agentHooks", () => ({
+  onAgentEvent: mocks.hooks.onAgentEvent,
+  inject: mocks.hooks.inject,
+  uninstall: mocks.hooks.uninstall,
+  getInjectionStatus: mocks.hooks.getInjectionStatus,
 }));
 
 import React from "react";
@@ -203,7 +212,7 @@ describe("TerminalPanel", () => {
     );
   });
 
-  it("hook-event SessionEnd → handleTabStateChange active=false 恢复原标题", async () => {
+  it("agent-event SessionEnd → handleTabStateChange active=false 恢复原标题", async () => {
     render(React.createElement(TerminalPanel, { api: mocks.mockApi, params: { panelId: "test-p7" } }));
     await waitFor(() => expect(mocks.getHookEventCb()).toBeDefined());
     const hookCb = mocks.getHookEventCb()!;

@@ -4,7 +4,7 @@
 // 建行双通道：sessionChange（session 非 null）∨ hook 事件（非 SessionEnd/Exit 且行不存在）——两通道独立幂等。
 // 删行三通道：sessionChange（session 为 null）∨ SessionEnd/Exit hook 事件 ∨ remove 事件。
 // 初始扫描只建 agentSession 非 null 的行；携 transcriptPath 时主动拉 contextUsage（修复问题 2b）。
-// #5 竞态双保险：① registry/hook-event 双 listener 经 ref 读最新状态，effect deps [] 订阅永不重建；
+// #5 竞态双保险：① registry/agent-event 双 listener 经 ref 读最新状态，effect deps [] 订阅永不重建；
 // ② 初始扫描按注册表现值对账（agentSession 非 null 才建行），兜底任何事件丢失。
 //
 // 行 cliId（MC-410）：hook 事件通道建行按 MC-205 三级解析
@@ -15,14 +15,14 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useLayout } from "../../stores/layout";
 import { useProjects } from "../../stores/projects";
 import { TerminalRegistry } from "../../panels/terminal/TerminalRegistry";
-import { onHookEvent, contextUsage } from "../../ipc/hooks";
+import { onAgentEvent, contextUsage } from "../../ipc/agentHooks";
 import { parseTerminalPageId } from "../../lib/panelId";
 import { getPageApi } from "../../workspace/pageApis";
 import { cliProfileRegistry } from "../cliProfiles";
 import { CLAUDE_CLI_ID } from "../cliProfiles/profiles/claude";
 import type { AgentStatus } from "../../lib/agentStatus";
-import type { HookEventPayload } from "../../ipc/hooks";
-import type { ContextUsage } from "../../types/hooks";
+import type { AgentEventPayload } from "../../types/agent";
+import type { ContextUsage } from "../../types/agent";
 
 // ---- 类型定义 ----
 
@@ -86,7 +86,7 @@ export function useAgentStatus(): AgentStatusResult {
     return () => clearInterval(timer);
   }, []);
 
-  // 跟踪事件回调引用（避免 onHookEvent 重建订阅）
+  // 跟踪事件回调引用（避免 onAgentEvent 重建订阅）
   const rowsRef = useRef(rows);
   rowsRef.current = rows;
 
@@ -114,7 +114,7 @@ export function useAgentStatus(): AgentStatusResult {
 
   // ---- hook 事件处理（deps []——所有数据经 ref 读取，回调永不重建） ----
   const handleHookEvent = useCallback(
-    (payload: HookEventPayload) => {
+    (payload: AgentEventPayload) => {
       const projRoot = projectRootRef.current;
       if (!projRoot) return;
 
@@ -201,9 +201,9 @@ export function useAgentStatus(): AgentStatusResult {
         return next;
       });
 
-      // 事件含 transcriptPath 时异步拉取用量
+      // 事件含 transcriptPath 时异步拉取用量（cliId 传行 cliId——事件通道建行的行 cliId = 三级解析结果）
       if (payload.transcriptPath) {
-        contextUsage(payload.transcriptPath)
+        contextUsage(cliId, payload.transcriptPath)
           .then((usage) => {
             setRows((prev) =>
               prev.map((r) =>
@@ -219,9 +219,9 @@ export function useAgentStatus(): AgentStatusResult {
     [], // deps []——所有动态数据经 ref 读取，回调永不重建
   );
 
-  // 订阅 onHookEvent（deps [handleHookEvent]，handleHookEvent deps [] 故永不重建）
+  // 订阅 onAgentEvent（deps [handleHookEvent]，handleHookEvent deps [] 故永不重建）
   useEffect(() => {
-    const unlisten = onHookEvent(handleHookEvent);
+    const unlisten = onAgentEvent(handleHookEvent);
     return () => {
       unlisten();
     };
@@ -245,6 +245,9 @@ export function useAgentStatus(): AgentStatusResult {
         if (!entry) return;
 
         if (entry.agentSession && entry.agentSession !== null) {
+          // OSC 133 通道建行的行 cliId：agentSession.cliId（MC-107 命中时写入），缺省兜底防旧数据/mock
+          const rowCliId = entry.agentSession.cliId ?? CLAUDE_CLI_ID;
+
           // session 非 null → 建行（幂等：行已存在则跳过）
           setRows((prev) => {
             if (prev.some((r) => r.panelId === event.panelId)) return prev;
@@ -252,8 +255,7 @@ export function useAgentStatus(): AgentStatusResult {
               panelId: event.panelId,
               pageId,
               projectId: proj.projectId,
-              // OSC 133 通道建行：cliId 取 agentSession.cliId（MC-107 命中时写入），缺省兜底防旧数据/mock
-              cliId: entry.agentSession!.cliId ?? CLAUDE_CLI_ID,
+              cliId: rowCliId,
               title: resolveTitle(event.panelId, pageId),
               status: "attention",
               lastEventAt: entry.agentSession!.lastEventAt,
@@ -264,9 +266,9 @@ export function useAgentStatus(): AgentStatusResult {
             return [...prev, row].sort((a, b) => b.lastEventAt - a.lastEventAt);
           });
 
-          // 携 transcriptPath 时主动拉取用量
+          // 携 transcriptPath 时主动拉取用量（cliId 传行 cliId）
           if (entry.agentSession.transcriptPath) {
-            contextUsage(entry.agentSession.transcriptPath)
+            contextUsage(rowCliId, entry.agentSession.transcriptPath)
               .then((usage) => {
                 setRows((prev) =>
                   prev.map((r) =>
@@ -322,11 +324,14 @@ export function useAgentStatus(): AgentStatusResult {
       if (!pageId) continue;
       if (!projectPageIds.has(pageId)) continue;
 
+      // 初始扫描建行的行 cliId：agentSession.cliId，缺省兜底防旧数据/mock
+      const rowCliId = entry.agentSession.cliId ?? CLAUDE_CLI_ID;
+
       initialRows.push({
         panelId,
         pageId,
         projectId: activeProject.projectId,
-        cliId: entry.agentSession.cliId ?? CLAUDE_CLI_ID,
+        cliId: rowCliId,
         title: resolveTitle(panelId, pageId),
         status: "attention",
         lastEventAt: entry.agentSession.lastEventAt,
@@ -335,9 +340,9 @@ export function useAgentStatus(): AgentStatusResult {
         usage: undefined,
       });
 
-      // 携 transcriptPath 时主动拉取一次（修复问题 2b：切项目后 idle 会话用量永远 --）
+      // 携 transcriptPath 时主动拉取一次（修复问题 2b：切项目后 idle 会话用量永远 --；cliId 传行 cliId）
       if (entry.agentSession.transcriptPath) {
-        contextUsage(entry.agentSession.transcriptPath)
+        contextUsage(rowCliId, entry.agentSession.transcriptPath)
           .then((usage) => {
             setRows((prev) =>
               prev.map((r) =>
