@@ -13,7 +13,7 @@ _Avoid_: workspace, repo
 _Avoid_: 操作页, tab, 标签页
 
 **硬约束**（Hard Constraints）：
-10 条不可违背的架构规则，编号 #1–#10，分别约束 IPC 边界、模块隔离、面板注册、配色、布局、会话、平台代码、权限等方面。任何新增功能必须遵守。
+11 条不可违背的架构规则，编号 #1–#11，分别约束 IPC 边界、模块隔离、面板注册、配色、布局、会话、平台代码、权限、测试覆盖等方面。任何新增功能必须遵守。
 
 ---
 
@@ -67,7 +67,7 @@ FIFO 字节队列。前端 Channel 断开时缓存 PTY 最新输出，重连时�
 前端页面切换后重新挂载终端面板时，替换已有 PTY 会话的 Channel 并回放环形缓冲的操作。避免了杀进程重建。
 
 **历史会话**（Agent Session History）：
-编码 CLI 在某项目目录运行产生的持久化会话记录（claude 为 `~/.claude/projects/` 下 `<uuid>.jsonl` transcript），由各 CLI 的 HistoryProvider 扫描/删除/恢复。与前端会话、PTY 会话是不同概念（详见 claude_history 模块文档）。
+编码 CLI 在某项目目录运行产生的持久化会话记录（claude 为 `~/.claude/projects/` 下 `<uuid>.jsonl` transcript），由各 CLI 的 CliHistoryProvider 扫描/删除/恢复。与前端会话、PTY 会话是不同概念（详见 agent_history 模块文档）。
 
 **编码 CLI**（Coding CLI）：
 以命令行形态运行的 AI 编码代理程序（如 claude、codex、aider）。slTerminal 对其提供专门优化（状态可视化、历史会话、hooks 配置等），经 CLI profile 抽象实现可插拔支持。
@@ -164,7 +164,7 @@ Commit 视图中双击文件条目时，git 状态到面板类型的映射规则
 前端唯一允许调用 Tauri `invoke` 的通信层。所有其他前端代码必须通过此层的领域函数访问后端能力（PTY、文件、git、剪贴板、对话框、设置、通知）。
 
 **IPC 模块映射**：
-前端 IPC 模块与后端功能模块一一对应——PTY、文件系统、Git、设置/项目、文件监听、hooks 注入与配置、历史会话、剪贴板、对话框、通知、窗口、外部链接（完整映射见 ipc 模块文档）。
+前端 IPC 模块与后端功能模块一一对应——PTY、文件系统、Git、设置/项目、文件监听、agent hooks 注入与配置、历史会话、剪贴板、对话框、通知、窗口、外部链接（完整映射见 ipc 模块文档）。
 
 ---
 
@@ -222,11 +222,11 @@ CC settings.json 的三个编辑层级——user（`~/.claude/settings.json`）�
 hooks 配置编辑面板的两种编辑模式——GUI 表单（Master-Detail）与 JSON 编辑器（CM6 + Schema 校验），顶部切换、实时同步编辑同一份配置。
 
 **Agent Status 视图**：
-侧栏视图（id `agent-status`，图标 🤖），一屏总览当前活跃项目所有运行中的 claude 会话——四态、上下文用量条、最后事件时间，点击行跳转聚焦对应终端页签。会话退出行即移除，非历史列表（详见 agentStatus 模块文档）。
+侧栏视图（id `agent-status`，图标 🤖），一屏总览当前活跃项目所有运行中的编码 CLI 会话——四态、上下文用量条、最后事件时间，点击行跳转聚焦对应终端页签。会话退出行即移除，非历史列表（详见 agentStatus 模块文档）。
 _Avoid_: agent 面板, 会话列表
 
 **会话行**：
-Agent Status 视图中的一行，对应一个**运行中的 claude 会话**（非终端面板——纯 shell 终端无行）。经 OSC 133 C（命令检测，未注入 hooks 的会话也有行，四态 🟡、用量条不可用态）或 SessionStart（hook 事件）建立；上下文用量由信号文件 transcriptPath 定位 transcript JSONL 后端解析，事件驱动更新、不轮询。
+Agent Status 视图中的一行，对应一个**运行中的编码 CLI 会话**（非终端面板——纯 shell 终端无行）。经 OSC 133 C（命令检测，未注入 hooks 的会话也有行，四态 🟡、用量条不可用态）或 SessionStart（agent-event 事件）建立；上下文用量由信号文件 transcriptPath 定位 transcript JSONL 后端解析，事件驱动更新、不轮询。
 _Avoid_: 终端行
 
 ---
@@ -257,3 +257,6 @@ React 挂载前防白闪的硬编码色（index.html body 底色、tauri.conf.js
 | 标签页 | 页签标题 / 操作页面 | "标签页"既可能指 Dockview tab（标题），也可能指 OperationPage（页面切换），避免多义 |
 | 四态（当指侧栏布局/Commit 状态机时） | 四布局态 / 四渲染态 | F3 页签四态为专有术语，其他概念避免裸用 |
 | 双通道（当指 hooks 消费架构时） | notify+轮询双通道 | 与 F5 行建模"双通道建行"区分 |
+| `hook-event` / `onHookEvent` | `agent-event` / `onAgentEvent` | 信号广播按 agent 域泛化（MC-202） |
+| `claude_history_*` / `claudeHistory` / `claude-history-*` | `agent_history_*` / `agentHistory` / `agent-history-*` | 历史会话模块泛化为 CLI 无关（MC-5 命名去 claude 化） |
+| `claudeSession` / `setClaudeSession` | `agentSession` / `setAgentSession` | 会话模型泛化（MC-402） |
