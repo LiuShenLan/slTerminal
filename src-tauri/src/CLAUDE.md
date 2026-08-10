@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 模块职责
 
-`src-tauri/src/` 顶层单文件模块——不属于任何功能子模块（pty/fs/git/notify/hooks/claude_history）的全局支撑件：
+`src-tauri/src/` 顶层单文件模块——不属于任何功能子模块（pty/fs/git/notify/hooks/agent_history）的全局支撑件：
 
 - **`lib.rs`** — Tauri 入口：`generate_handler!` 注册全部命令 + `AppState` 注入 + `.setup()` 启动 HookSignalWatcher + 窗口事件
 - **`settings.rs`** — 设置持久化（`load_settings`/`save_settings`，`~/.slterminal/settings.json`）
@@ -34,13 +34,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### 模块边界
 
-子模块（pty/fs/git/notify/hooks/claude_history）经 `use crate::state::...` / `use crate::error::AppError` 引用顶层件；顶层件不反向依赖子模块实现（仅 `lib.rs` 聚合注册）。新增顶层单文件模块（非功能子模块）时在此登记。
+子模块（pty/fs/git/notify/hooks/agent_history）经 `use crate::state::...` / `use crate::error::AppError` 引用顶层件；顶层件不反向依赖子模块实现（仅 `lib.rs` 聚合注册）。新增顶层单文件模块（非功能子模块）时在此登记。
 
 ## 文件
 
 | 文件 | 职责 |
 |------|------|
-| `lib.rs` | Tauri 入口：命令注册（32 条 generate_handler!）+ State 注入 + setup + 窗口关闭清理 |
+| `lib.rs` | Tauri 入口：命令注册（32 条 generate_handler!——hooks 泛化 6 条 `agent_hooks_inject`/`agent_hooks_uninstall`/`agent_hooks_injection_status`/`agent_context_usage`/`agent_hooks_config_read`/`agent_hooks_config_write` + 历史泛化 2 条 `agent_history_scan`/`agent_history_delete`，旧命令名 `hooks_*`/`claude_history_*` 零残留）+ State 注入 + setup + 窗口关闭清理 |
 | `settings.rs` | 设置持久化：`load_settings`/`save_settings` 浅合并 + `resolve_app_data_dir` |
 | `projects.rs` | 项目数据持久化：`load_projects`/`save_projects`（exe 同级，绕过沙箱）+ `.bak` 兜底 |
 | `state.rs` | `AppState` + `PtySession`/`PtyState`（细节 @pty/CLAUDE.md）+ `validate_path_within_root` 路径沙箱（15 条 sandbox 测试 + 32 条含 ring buffer） |

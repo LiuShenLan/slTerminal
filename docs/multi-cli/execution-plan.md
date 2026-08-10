@@ -80,7 +80,7 @@ public/cli-icons/          # 本任务补充：Stage 01 的 mockcli.png（config
 | 04 | 已提交/已验证 | bca4be3 | true | 1 | 6 处 types/claudeHistory 残留 import（S04-06）+ test-inventory 分布失实（S04-09）；e2e 被 tsc 阻断 + 测试 agent no-return → 主 agent 补跑 e2e 8 spec 全绿 |
 | 05 | 已提交/已验证 | 1c59c4d | true | 1 | S05-09 事件名字面量残留 3 处（useXterm/useAgentStatus 的 SessionEnd/Exit）→ 常量下沉 profiles/claude（SESSION_END_EVENT/EXIT_EVENT）；测试 agent no-return → 主 agent 补跑 L1-L4 全绿 |
 | 06 | 已提交/已验证 | 904f169 | true | 0 | 7 项 partial 全因测试 agent no-return（实现全部达意）→ 主 agent 补跑门禁全绿，无 fix-loop |
-| 07 | 待跑 | — | — | 0 | |
+| 07 | 已提交/已验证 | bb82b15 | true | 0 | S07-01 eslint 桩参数未用（主 agent 修）+ 执行证据缺失（测试 agent no-return，主 agent 补跑）；mockcli.e2e 根因链：用户布局残留 30 终端面板（首匹配歧义）→ data-panel-id 定位 → 循环注入等 handler 注册；9/9 spec 全绿 |
 | 08 | 待跑 | — | — | 0 | |
 
 ## 8. 人工验证点汇总（收尾实测项）

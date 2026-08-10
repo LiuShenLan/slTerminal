@@ -31,14 +31,15 @@ npm run wdio          # → node ./e2e-tests/run-wdio.cjs
 | `html.e2e.ts` | HTML 面板 spec（1 active + 1 skip）：iframe Ctrl+W postMessage 转发关闭（真实二进制全链路）、**内联脚本/事件 CSP 执行验证**（skip，执行断言不稳定） |
 | `sidebar.e2e.ts` | 侧栏视图 spec（2 条 active）：点击开关（R1/R2）、**跨区移动状态机（R6/R7——经 store helper，非真实 DnD，见定位声明）** |
 | `commit.e2e.ts` | Commit 视图 spec（2 条 active）：真实 git 仓库（`gitScaffold.ts` 脚手架）变更列表渲染、双击 modified 打开 diff 页签 |
-| `hooks.e2e.ts` | hooks spec（4 条 active）：注入/卸载/状态三态、信号文件驱动页签 emoji、**真实 hook reporter 链路（E2E-06：node 执行脚本 + stdin JSON + SLTERM_PANEL_ID → 信号文件产生/消费 + 非法 JSON exit 0 的 C10 守卫）**、hooksConfig project 层保存写盘 + merge 保留其他字段 |
-| `agent.e2e.ts` | Agent 状态 spec（6 active + 1 skip）：视图存在性、纯 shell 终端无行、动态四态（首个信号即建行→⚡→✅→行消失）、R2/R3/R4 变体、toast 触发链路（skip，权限弹窗需用户交互） |
-| `history.e2e.ts` | 历史会话 spec（8 条 active）：fixture 6 行展示 + 排除规则、标题回退链、搜索过滤、复制恢复命令（剪贴板断言）、孤儿行 ✗、删除（ask 钩子 + 副本删除）、历史区四态同源、**恢复编排（部分端到端：断言到 pty.write 注入，不含真实进入会话）** |
-| `specUtils.ts` | spec 共享工具（Node 侧，E2E-09）：Workspace/Dockview 就绪等待、项目/终端创建、PTY session 等待、hooks 注入、信号文件原子写与消费等待、页面切换等待（waitUntil 替代 pause，E2E-10）、共享 setup `withProjectAndTerminal`。**与应用侧 `helpers.ts` 相互独立，二者禁止互相 import** |
+| `hooks.e2e.ts` | hooks spec（5 条 active）：注入/卸载/状态三态、信号文件驱动页签 emoji、**真实 hook reporter 链路（E2E-06：node 执行脚本 + stdin JSON + SLTERM_PANEL_ID → 信号文件产生/消费 + 非法 JSON exit 0 的 C10 守卫）**、hooksConfig project 层保存写盘 + merge 保留其他字段、**hub 注入按钮三态（Stage 06 D-14 段：hub 注入/卸载按钮 → 状态条流转并恢复；cliId 实参 = hub 选中态，E2E 构建仅 claude 一个 hasConfigEditor CLI）** |
+| `agent.e2e.ts` | Agent 状态 spec（6 active + 1 skip）：视图存在性、纯 shell 终端无行、动态四态（agent-event 信号即建行→⚡→✅→行消失）、R2/R3/R4 变体、toast 触发链路（skip，权限弹窗需用户交互） |
+| `history.e2e.ts` | 历史会话 spec（8 条 active）：fixture 6 行展示 + 排除规则、标题回退链、搜索过滤、复制恢复命令（剪贴板断言，`buildResumeCommand` 输出 = `cd '<cwd>' && claude --resume <id>`）、孤儿行 ✗、删除（ask 钩子 + 副本删除）、历史区四态同源、**恢复编排（部分端到端：断言到 pty.write 注入 `profile.history.buildRestoreInput` 输出，不含真实进入会话）** |
+| `mockcli.e2e.ts` | mock profile 冒烟 spec（1 条 active，Stage 07 AC-4 ① 的 L4 侧）：`__slterm_e2e_registerMockCliProfile` 注册 mock 夹具 → OSC 133 C 注入（`__e2e_writeToTerminal` 走真实 parser + useCommandDetection → matchByCommand 命中 mockcli）→ 页签标题 "mockcli"（profile.tabTitle）+ 16×16 logo（profile.iconSrc）+ 🟡 attention → OSC 133 D 退出恢复（标题还原 + logo/图标双清）。按 `data-panel-id` 精确定位面板（app 恢复用户布局多终端，防全局首匹配错位） |
+| `specUtils.ts` | spec 共享工具（Node 侧，E2E-09）：Workspace/Dockview 就绪等待、项目/终端创建、PTY session 等待、hooks 注入（泛化命令 `agent_hooks_*` 六命令全表，一律经 window helper 调用、spec 侧无命令名字面量）、信号文件原子写与消费等待、页签 emoji 参数断言（`waitForPanelTabIcon`，F3 四态）、页面切换等待（waitUntil 替代 pause，E2E-10）、共享 setup `withProjectAndTerminal`。**与应用侧 `helpers.ts` 相互独立，二者禁止互相 import** |
 | `gitScaffold.ts` | git 仓库脚手架（Node 侧）：`makeGitRepo` 按场景描述初始化真实 git 仓库（init/commit/modified/untracked），tempdir 隔离，execSync 调系统 git CLI |
-| `fixtures/claude-projects/` | claude_history 扫描 fixture（`SLTERM_CLAUDE_PROJECTS_DIR` 指向的副本）：7 形态会话文件（custom-title/ai-title/prompt 回退/无 cwd/孤儿/agent-* 平铺/subagents 子目录）+ **README.md（E2E-13③）说明编码目录名/UUID 与 claude_history 排除规则的同步关系** |
+| `fixtures/claude-projects/` | agent_history claude provider 的扫描 fixture（`SLTERM_CLAUDE_PROJECTS_DIR` env 覆盖指向的副本，env 覆盖留 provider 内部）：7 形态会话文件（custom-title/ai-title/prompt 回退/无 cwd/孤儿/agent-* 平铺/subagents 子目录）+ **README.md（E2E-13③）说明编码目录名/UUID 与 agent_history claude provider 排除规则的同步关系** |
 | `run-wdio.cjs` | Node 版本兼容启动器 + 用户目录隔离备份/还原（见下节） |
-| `helpers.ts` | 应用侧 E2E 辅助（`installAllE2eHelpers()` 统一注入 window 全局对象，见通信方式表） |
+| `helpers.ts` | 应用侧 E2E 辅助（`installAllE2eHelpers()` 统一注入 window 全局对象，见通信方式表；含 `__slterm_e2e_registerMockCliProfile`——mockcli 测试 profile 注册入口，Stage 07 AC-4） |
 
 ## 配置要点
 
@@ -74,6 +75,8 @@ E2E helpers 通过 `main.tsx` 中 `E2E_ENABLED`（`src/lib/e2eEnabled.ts`）条�
 | `__slterm_e2e_getSideBarState()` | 返回 `useSideBar` 纯数据快照（`{zones, open, width, splitRatio, loaded}`），可安全经 `browser.execute` 序列化 |
 | `__slterm_e2e_toggleSideView(id)` | 等价点击活动栏按钮，走 `store.toggleView(id)`（委托 `toggleViewPure`） |
 | `__slterm_e2e_moveSideViewButton(id, zone, index)` | 等价拖拽落点，走 `store.moveButton(id, zone, index)`（委托 `moveButtonPure`）。zone 为 `"top"` 或 `"bottom"` |
+| `__slterm_e2e_injectHooks` / `__slterm_e2e_uninstallHooks` / `__slterm_e2e_getHookInjectionStatus` | hooks 注入/卸载/状态三态。底层泛化命令 `agent_hooks_inject` / `agent_hooks_uninstall` / `agent_hooks_injection_status`（六命令全表），**cliId 实参固定 "claude"**——E2E 辅助属测试基建，字面量合法；随第二 CLI 接入再扩展 cliId 参数 |
+| `__slterm_e2e_registerMockCliProfile` | mockcli 测试 profile 注册（Stage 07 AC-4）：mock 夹具 profile 进 `CliProfileRegistry`（register 幂等，同 id 覆盖）；仅 E2E_ENABLED 构建存在，生产构建整块 tree-shake |
 | `__dockviewApi` | Dockview 布局 API（`addPanel` 等） |
 | `__e2e_sessionReady` | PTY session 就绪标志（挂载在终端容器 DOM 元素上，非 window 全局） |
 | `__e2e_writeToPty(text)` | 向 PTY 写入文本（挂载在终端容器 DOM 元素上） |
@@ -89,11 +92,13 @@ E2E helpers 通过 `main.tsx` 中 `E2E_ENABLED`（`src/lib/e2eEnabled.ts`）条�
 | 目标 | 备份方式 | 说明 |
 |------|----------|------|
 | `~/.slterminal/settings.json` | 复制为 `.e2e-bak` | FIX-TE-04 原有——侧栏视图状态等 |
-| `~/.claude/settings.json` | 复制为 `.e2e-bak` | E2E-05 新增——`hooks_inject` 会写入 slterm matcher，异常退出残留会污染用户配置 |
+| `~/.claude/settings.json` | 复制为 `.e2e-bak` | E2E-05 新增——`agent_hooks_inject` 会写入 slterm matcher，异常退出残留会污染用户配置 |
 | `~/.slterminal/hooks/` | 整目录复制为 `.e2e-bak` | E2E-05 新增——注入的 reporter 脚本目录；备份失败（目录占用）降级为 exit 时跳过还原 |
 | `~/.slterminal/hooks-events/` | exit 时清理 | 信号文件目录，运行产物直接删除 |
 
 还原语义：原文件存在 → 删 E2E 产物后 rename 备份回来；原文件不存在 → 删产物 + 残留 bak。
+
+> **决策 4（multi-cli 重构）**：E2E-05 备份集合保持 claude 硬编码（`~/.claude/settings.json` 等不按 CLI 泛化）——规格「二选一」取后者降范围；`run-wdio.cjs` 对应注释「随第二 CLI 接入扩展」。
 
 ## 已知无害噪声
 
@@ -107,7 +112,7 @@ E2E helpers 通过 `main.tsx` 中 `E2E_ENABLED`（`src/lib/e2eEnabled.ts`）条�
 |----------|----------|----------|------|
 | 键盘（Ctrl+S / Ctrl+W / 终端按键） | 页面内 dispatch 合成 `keydown` → ShortcutRegistry window capture 真实捕获 → 命令 handler → 真实 IPC | 事件来源是 JS dispatch 而非 OS 键盘（embedded WDIO 无法投递 `browser.keys`，见下节） | L2 keyboard 系测试 + 真实 OS 按键豁免（见豁免表） |
 | 侧栏视图拖拽跨区（R6/R7） | `__slterm_e2e_moveSideViewButton` 走 store 纯函数（`moveButtonPure`），等价拖拽落点 | 未触发真实 HTML5 DnD 事件链（jsdom/驱动能力所限） | `activityBar.test.tsx` L2 拖拽用例（含 drop index 断言） |
-| 历史会话恢复编排 | 双击普通行 → 项目入列 + 页面切换 + 终端注入 `claude --resume <id>`（断言到 `pty.write` 注入） | 不断言 claude 真实进入会话（fixture id 非真实） | 真实进入会话属人工验证（M 系列人工验证点） |
+| 历史会话恢复编排 | 双击普通行 → 项目入列 + 页面切换 + 终端注入 `profile.history.buildRestoreInput` 输出（claude provider 策略 = `claude --resume <id>`，断言到 `pty.write` 注入） | 不断言 CLI 真实进入会话（fixture id 非真实） | 真实进入会话属人工验证（M 系列人工验证点） |
 | E2E helper 类用例（`__slterm_e2e_createProject` 等） | 页面内直接调 store/workspace 层函数 | 绕过用户真实交互（对话框/拖拽/点击） | 对应组件 L2 测试覆盖交互路径 |
 
 **应用侧 helpers 是测试后门而非用户路径**：`app.test.tsx` / `e2e-create-project.test.ts` 等 L2 用例验证的是 **E2E helper 行为契约**（pending 标记、localStorage 恢复交互），不是应用用户路径——它们守护的是 E2E 基建本身不漂移。

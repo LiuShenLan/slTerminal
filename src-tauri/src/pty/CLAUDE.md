@@ -75,12 +75,13 @@ JobHandle 在 `#[cfg(windows)]` 下为 HANDLE RAII 包装；`#[cfg(not(windows))
 
 ### 终端能力环境变量注入
 
-`pty_spawn` 在 spawn 阶段注入三个环境变量（直接构造 `Vec<(String, String)>`，通过 `spawn_conpty_child` 的 `build_env_block` 合并到子进程环境块）：
-- `COLORTERM=truecolor` — Chalk/supports-color 的核心检测信号，Claude Code 依赖此变量启用 24-bit RGB
+`pty_spawn` 在 spawn 阶段注入四个环境变量（直接构造 `Vec<(String, String)>`，通过 `spawn_conpty_child` 的 `build_env_block` 合并到子进程环境块）：
+- `COLORTERM=truecolor` — Chalk/supports-color 的核心检测信号，Ink 系 TUI 依赖此变量启用 24-bit RGB（终端平台能力，设计动机 Claude Code，对全部子进程生效）
 - `TERM=xterm-256color` — 传统 terminfo 能力宣告（部分应用不看 COLORTERM，防御性设置）
 - `TERM_PROGRAM=slTerminal` — 品牌标识（非功能性，行业惯例）
+- `SLTERM_PANEL_ID=<panelId>` — **通用每终端路由键**（MC-110 文档记录项），值 = `request.panel_id`；子进程据此识别所属终端页签（供 hook 信号文件标记事件来源）。「无此变量 exit(0)」门控语义归各 CLI reporter 实现（见 @../hooks/CLAUDE.md），pty 层不假设消费方
 
-注入在 spawn 阶段（非 shell rc），确保子进程一启动即可见。三个变量对 pwsh/powershell/cmd 统一注入，不加 shell 类型判断。
+注入在 spawn 阶段（非 shell rc），确保子进程一启动即可见。四个变量对 pwsh/powershell/cmd 统一注入，不加 shell 类型判断。
 
 ### 自定义 ConPTY 创建（绕过 portable-pty）
 
@@ -144,7 +145,7 @@ JobHandle 在 `#[cfg(windows)]` 下为 HANDLE RAII 包装；`#[cfg(not(windows))
 
 ### DA1 查询模拟响应
 
-Claude Code 的 Ink 渲染器启动时发送 DA1 查询（`ESC[c`）作为同步哨兵。ConPTY 拦截 DA1 查询后内部处理，不向子进程 stdout 返回响应。Ink 的 `waitFor` Promise 永不 resolve，阻塞约 60s。
+DA1 查询响应是终端平台能力（设计动机：Ink 系 TUI，对全部子进程生效）。Claude Code 的 Ink 渲染器启动时发送 DA1 查询（`ESC[c`）作为同步哨兵；ConPTY 拦截 DA1 查询后内部处理，不向子进程 stdout 返回响应，Ink 的 `waitFor` Promise 永不 resolve，阻塞约 60s。
 
 `reader_loop` 在 startup_drained 后扫描输出中的 DA1 查询（`ESC[c` / `ESC[0c`），通过 `mirror_da1_query()` 检测。检测到后向子进程 stdin 注入 `ESC[?64;22c`（VT420 + ANSI 颜色），模拟 ConPTY + conhost 的一致行为。`std::sync::atomic::AtomicBool` 防重复注入（每 PTY 会话一次）。
 

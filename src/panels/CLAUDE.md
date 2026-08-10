@@ -12,7 +12,7 @@ Dockview 面板系统——所有可托管到 Dockview 布局的面板组件及�
 - **html** — iframe + srcDoc HTML 浏览器式预览，sandbox 沙箱隔离
 - **gitshow** — CM6 只读模式（`EditorState.readOnly + EditorView.editable`），查看 HEAD 中文件内容
 - **diff** — 双栏 CM6 diff 面板：左侧 HEAD 只读 + HEAD gutter + 占位行，右侧工作区可编辑 + workdir gutter + 占位行
-- **hooksConfig** — hooks 配置面板（F6）：双模式编辑（JSON 优先 / GUI 表单）settings.json 的 hooks 子树（user/project/local 三层），F2 注入入口并入
+- **hooksConfig** — hooks 配置面板（F6，hub 容器）：顶部 CLI 选择行 + 选中 CLI 的配置编辑器（claude 专属编辑器——双模式编辑 JSON/GUI settings.json 的 hooks 子树 user/project/local 三层，F2 注入入口并入）
 
 ## 架构决策
 
@@ -143,24 +143,26 @@ DiffPanel 的加载/错误/就绪三态中，容器 div 仅在 `"ready"` 态挂�
 
 **修复**：`renderKey` state + `bridgedRef` guard + `useEffect([state.kind])`——effect 在 commit 后运行（ref 已绑定），设 `bridgedRef = true` 防重入，`setRenderKey` 触发额外渲染。`state.kind !== "ready"` 时重置 `bridgedRef`，支持 filePath 切换后重新桥接。效果：`useFontSizeWheel` / `usePanelFocus` 在 bridge 重渲染时以非 null 容器执行。
 
-### hooksConfig：双模式编辑（JSON/GUI）
+### hooksConfig：hub 容器 + claude 专属编辑器（MC-502~508）
 
-`HooksConfigPanel`（F6，P3-FE-02/11/12/16/17/19/21/22）编辑 settings.json 的 **hooks 子树**（C13-1 编辑范围），三层配置：`user`（`~/.claude/settings.json`）/ `project`（`<projectPath>/.claude/settings.json`）/ `local`（`<projectPath>/.claude/settings.local.json`），优先级 Local > Project > User。
+`HooksConfigPanel`（F6）为 **hub 容器**（Stage 06，MC-502~507）：顶部 CLI 选择行（遍历 `cliProfileRegistry.getAll()` 过滤 `capabilities.hooks?.hasConfigEditor === true`，按钮 = iconSrc 16×16 logo + displayName，选中态高亮走 theme token）+ 编辑器槽（渲染选中 CLI 的配置编辑器）。选中态 `params.selectedCli` 随布局 JSON 持久化（照 F8 customTitle 先例——`api.updateParameters` + **显式 `onLayoutChange(saveLayout(api))`**，updateParameters 不触发 onDidLayoutChange 须显式保存；挂载读 params 恢复，缺省/失效回退首个有能力 CLI）。切换 CLI = 卸载当前编辑器并重挂载目标编辑器（ADR-0001 先例），dirty 时 `dialog.ask` 确认丢弃（askGuard 防循环）。无任何 hasConfigEditor profile → 「无可配置 CLI」占位（不渲染编辑器）；单 CLI 也渲染选择行（防布局跳动）。
+
+**claude 专属编辑器**（MC-223/508，决策 2）：`ClaudeHooksConfigEditor`（原 HooksConfigPanel 全部内容整体下移一层，P3-FE-02/11/12/16/17/19/21/22）编辑 settings.json 的 **hooks 子树**（C13-1 编辑范围），三层配置：`user`（`~/.claude/settings.json`）/ `project`（`<projectPath>/.claude/settings.json`）/ `local`（`<projectPath>/.claude/settings.local.json`），优先级 Local > Project > User。claude hooks 协议知识（eventsCatalog 30 事件/matcherEngine/5 种 handler 字段矩阵/schema 内嵌/Draft07 校验）**不抽象**、文件物理位置保留现状——面板仅服务 claude profile（`capabilities.hooks.hasConfigEditor=true`）；hub 内 IPC 实参一律来自选中态 cliId（Stage 03 临时代理常量已回收，MC-220）。
 
 - **双模式编辑**（P3-FE-16）：默认 JSON 模式（CM6 + codemirror-json-schema 补全/悬停/波浪线 + 事件导航侧栏 + MatcherTester 内联试测），GUI 模式为 Master-Detail（EventTree 事件树 + HandlerForm 表单）。`configJson` / `guiModel` / `dirty` 共享于 `useHooksConfig`——JSON 编辑经 `jsonToGui` 重算 GUI，GUI 编辑经 `guiToJson` 回写 JSON。非法 JSON（`onValidationChange` 上报）→ 禁切 GUI + 禁用保存。schema 内嵌于 `src/features/hooksConfig/schema/claude-code-settings.json`（SchemaStore 官方 schema + hooks 子 schema 提取，本地 `$ref` 自包含已核实）。
-- **hooks 子树三层配置**：rootPath 为空（无活跃项目）时 project/local 层禁用（仅 user 可用）；切层 / 页面重新可见（document.visibilitychange，visibilityState === "visible"，面板可见时）轻量重读做外部修改检测，dirty 时 `dialog.ask` 确认丢弃（ask 弹窗打开/关闭的回归触发由 askGuard 抑制——验收 2.1 弹窗循环根因；select 下拉等页面内焦点转移不触发 visibilitychange；窗口移动/缩放全程可见不触发——拖动窗口标题框不误弹）；后端 `hooks_config_write` read-modify-write merge 原样保留 permissions/env 等其他字段（P3-BE-03），前端不做 .bak。
-- **保存安全**（P3-FE-17）：JSON.parse + `validateHooksJson`（json-schema-library Draft07，非 ajv）双校验，任一失败弹窗拒绝写盘 → 写盘；成功后提示「hooks 改动需重启 claude 会话生效」。
+- **hooks 子树三层配置**：rootPath 为空（无活跃项目）时 project/local 层禁用（仅 user 可用）；切层 / 页面重新可见（document.visibilitychange，visibilityState === "visible"，面板可见时）轻量重读做外部修改检测，dirty 时 `dialog.ask` 确认丢弃（ask 弹窗打开/关闭的回归触发由 askGuard 抑制——验收 2.1 弹窗循环根因；select 下拉等页面内焦点转移不触发 visibilitychange；窗口移动/缩放全程可见不触发——拖动窗口标题框不误弹）；后端 `agent_hooks_config_write` read-modify-write merge 原样保留 permissions/env 等其他字段（P3-BE-03），前端不做 .bak。
+- **保存安全**（P3-FE-17）：JSON.parse + `validateHooksJson`（json-schema-library Draft07，非 ajv）双校验，任一失败弹窗拒绝写盘 → 写盘；成功后提示条文案由 `profile.hooks.restartHint` 驱动（claude 值 =「hooks 改动需重启 claude 会话生效」，MC-506；`data-e2e="hooks-restart-hint"` 保留）。
 - **注入段保护**（C13-8）：`command` 含 `slterm-hook-reporter` 子串的条目（`isSltermManaged`，识别规则照 C9）GUI 标记「slTerminal 托管」+ 禁删/表单只读；**JSON 模式不限制**（用户对自己文件有最终权利）。
-- **F2 并入**（P3-FE-21/22）：工具栏「注入 Hooks」/「卸载 Hooks」按钮直接调用 `src/ipc/hooks` 的 `inject()`/`uninstall()`（不改其实现），状态条显示 `getInjectionStatus()` 三态（已注入/未注入/版本过旧）；注入/卸载完成后自动重读 user 层配置（操作改写 `~/.claude/settings.json`，C13-8）——当前层非 user 则切到 user 层。
+- **F2 并入**（P3-FE-21/22）：工具栏「注入 Hooks」/「卸载 Hooks」按钮调用 `src/ipc/agentHooks` 的 `inject()`/`uninstall()`（cliId 实参 = hub 选中态，MC-221），状态条显示 `getInjectionStatus()` 三态（已注入/未注入/版本过旧）；注入/卸载完成后自动重读 user 层配置（操作改写 `~/.claude/settings.json`，C13-8）——当前层非 user 则切到 user 层。
 - **同页单例**（C13-7）：面板 id = `hooksConfig-{activePageId}`，入口为侧栏右键菜单「打开 Hooks 配置」（SidebarTree：先切到目标页 → `openHooksConfigPanel(pageId)`，见 workspace/pageApis）命中 `getPanel(id)` 聚焦、未命中 addPanel；面板 props 兼容 Dockview（无需依赖 panelId 的单例语义）。
 
 ### Ctrl+C 保留为中断
 
 `keyboard.ts` 的 `createTerminalShortcuts` 不注册 Ctrl+C 命令——`ShortcutRegistry` 无匹配即透传，xterm.js 自然发送 `\x03` 到 PTY，claude 用它取消操作。
 
-### 输出合帧策略（针对 Claude Code Ink 流式输出优化）
+### 输出合帧策略（终端平台能力：针对 Ink 系 TUI 流式输出优化）
 
-Claude Code 基于 Ink (React-in-terminal)，以约 60fps 全帧刷写 ANSI 序列，单次输出通常 64-200 字节（逐 token 级 ANSI 控制序列）。
+Ink 系 TUI（设计动机：Claude Code 基于 Ink (React-in-terminal)）以约 60fps 全帧刷写 ANSI 序列，单次输出通常 64-200 字节（逐 token 级 ANSI 控制序列）。合帧管道是终端平台能力，对全部子进程生效。
 
 **合帧管道**：`PTY 输出 → handlePtyOutput → 阈值分流 → 合帧缓冲 → 双定时器 → flushBuffer → xterm.js`
 
@@ -173,7 +175,7 @@ Claude Code 基于 Ink (React-in-terminal)，以约 60fps 全帧刷写 ANSI 序�
 
 ### Resize X/Y 分离 debounce + NaN 防御
 
-针对 Claude Code Ink TUI 在 resize 后画面错位问题（调查 #3），ResizeObserver 回调采用分层策略：
+针对 Ink 系 TUI 在 resize 后画面错位问题（设计动机：Claude Code；调查 #3），ResizeObserver 回调采用分层策略：
 
 - **NaN guard**：`proposeDimensions()` 在 WebGL 渲染器未就绪时可能返回 `cols/rows=NaN`（xtermjs#4338），`Number.isFinite()` 守卫防止 NaN 传入 `pty.resize()`
 - **X/Y 分离**：仅行数变化（高度拖拽，廉价）→ 立即 `fit()` + `pty.resize()`；列数变化（宽度拖拽，需 re-wrap）→ 100ms debounce。`prevDimsRef` 跟踪上次尺寸区分变化类型
@@ -182,7 +184,7 @@ Claude Code 基于 Ink (React-in-terminal)，以约 60fps 全帧刷写 ANSI 序�
 
 ### OSC 52 剪贴板拦截（调查 #4）
 
-Claude Code `/copy` 命令通过 OSC 52 序列（`ESC ] 52 ; c ; <base64> BEL`）写入系统剪贴板。
+OSC 52 剪贴板写入是终端平台能力，对全部子进程生效（设计动机：Claude Code `/copy` 命令通过 OSC 52 序列（`ESC ] 52 ; c ; <base64> BEL`）写入系统剪贴板）。
 xterm.js 6.0+ 核心解析器内建 OSC 52 handler，但无 addon 时静默丢弃。`useXterm.ts` 在 `term.open()` 后注册自定义 handler：
 
 - **仅写入**：不响应读请求（`Pd=?`），安全策略对齐行业实践（Windows Terminal/iTerm2/Alacritty）
@@ -212,7 +214,7 @@ term.attachCustomKeyEventHandler((event) => {
 
 ### Kitty 键盘协议（CSI u）被动启用
 
-`theme.ts` 的 `terminalOptions` 设置 `vtExtensions: { kittyKeyboard: true }`，允许子进程（如 Claude Code）通过 `CSI>1u`（Disambiguate 模式）激活差异化编码。协议为被动模式：终端声明能力后，应用需主动 push flags。若应用未激活，`KeyboardService.useKitty` 返回 `false`，回退传统 handler。
+`theme.ts` 的 `terminalOptions` 设置 `vtExtensions: { kittyKeyboard: true }`（终端平台能力，设计动机 Ink 系 TUI，对全部子进程生效），允许子进程（如 Claude Code）通过 `CSI>1u`（Disambiguate 模式）激活差异化编码。协议为被动模式：终端声明能力后，应用需主动 push flags。若应用未激活，`KeyboardService.useKitty` 返回 `false`，回退传统 handler。
 
 ### OSC 8 超链接
 
@@ -222,10 +224,10 @@ xterm.js 6.0.0 原生支持 OSC 8 解析渲染。`useXterm.ts` 在 `term.open()`
 
 `shell-integration.ps1` 的 Enter hook 在命令执行前发射 OSC 133 C（`ESC ] 133;C;<命令行> ST`），`prompt()` 在命令退出后发射 OSC 133;D（退出码）。`useXterm.ts` 注册 `term.parser.registerOscHandler(133, ...)` 解析 C/D 序列：
 
-- **OSC 133 C**：提取命令行文本 → 调用 `onTabStateChange({ active: true, title, icon: "🟡", logo })` 设置 attention 态；同时 `TabTitleRegistry.match(command)` 查找规则 → 匹配时覆盖 `title`；`logo` = `CliIconRegistry.match(command)`（F9：按命令行首 token 匹配 CLI 品牌 logo，未注册 → null 清旧 logo）
+- **OSC 133 C**：提取命令行文本 → 调用 `onTabStateChange({ active: true, title, icon: "🟡", logo })` 设置 attention 态；同时 `cliProfileRegistry.matchByCommand(command)` 查 profile → 命中时覆盖 `title` = profile.tabTitle；`logo` = profile.iconSrc（F9：按命令行首 token 匹配 CLI 品牌 logo，未注册 → null 清旧 logo）
 - **OSC 133 D**：命令退出 → `onTabStateChange({ active: false })` → `TerminalPanel` 恢复原标题并清除图标与 logo（F8 后原标题 = `customTitle` 优先，用户重命名过的终端恢复自定义名）
 
-**`TabTitleRegistry`**（Registry Pattern 单例）：管理 `command → { title, icon }` 映射。新增命令只需在 `tabRules.ts` 追加 `tabTitleRegistry.register(...)`，不修改核心逻辑。CLI 品牌 logo 独立于标题规则，由 `src/lib/cliIcons.ts` 的 `CliIconRegistry` 管理（F9，见 @../lib/CLAUDE.md）。
+**`CliProfileRegistry`**（Registry Pattern 单例，见 @../features/cliProfiles/CLAUDE.md）：管理 `command → profile` 映射（`matchByCommand` 首 token 精确查表——覆盖 `claude --resume` / `claude -p` 等带参变体）。新增 CLI 只需在 `features/cliProfiles/profiles/` 追加 profile 注册，不修改核心逻辑；标题与品牌 logo 同源（profile.tabTitle / profile.iconSrc，F9）。
 
 **初始化重置**：PTY spawn 成功后调 `onTabStateChange({ active: false })`，覆盖持久化残留。`PtyEvent::Exit` 时若 `isCommandRunningRef` 为 true 同样重置。
 
@@ -248,7 +250,7 @@ xterm.js 6.0.0 原生支持 OSC 8 解析渲染。`useXterm.ts` 在 `term.open()`
 - **`useXterm`**：新增 `onAgentEvent` 订阅 → 按 `panelId` 过滤 → `eventToStatus(event, notificationType?)`（经 `profile.hooks` 委托，claude 实现在 `src/features/cliProfiles/profiles/claude/strategies.ts`）→ `onTabStateChange({ active: true, icon: emoji })`（hook 路径无 command，**不传 logo**——TerminalPanel 层保持前值）；`SessionEnd` 调 `{ active: false }`
 - **`TerminalPanel.handleTabStateChange`**：`active=true` 时只有 `title` 存在才 `setTitle`，只有 `icon !== undefined` 才 `updateParameters`；`logoRef` 照 `originalTitleRef` 模式保持当前 CLI logo——`state.logo !== undefined` 时更新（OSC 133 C），hook 事件路径不清，`updateParameters({ ...params, tabIcon, tabLogo: logoRef.current })`；`active=false` 恢复原标题并**双清** icon + logo
 - **`DefaultTab`**（workspace 层）：`tabIcon` 含 `/` 走 `<img>`，否则走 `<span>` 渲染 emoji；`tabLogo`（`params.tabLogo`）在 emoji 后渲染 16×16 CLI logo（F9：仅随 emoji——`tabIcon && tabLogo` 双条件）
-- **`tabRules.ts`**：claude 规则的 `icon` 字段已移除——emoji 由 F3 四态系统接管，不再硬编码图标
+- **profile 注册表**（Stage 01）：claude profile 身份域只含 `tabTitle`/`iconSrc` 等数据，不含硬编码事件图标——emoji 由 F3 四态系统接管（原 `tabRules.ts` 已退役）
 
 ### 中断场景已知行为（Ctrl+C）
 
@@ -270,15 +272,13 @@ Claude Code 在用户主动 Ctrl+C 中断时不发射任何 hook 事件（`Stop`
 | `terminal/usePtyOutput.ts` | PTY 输出合帧（Idle+Max 双定时器 + DEC 2026）+ 非焦点降频 |
 | `terminal/usePtyResize.ts` | ResizeObserver X/Y 分离 debounce + NaN 守卫 |
 | `terminal/useClipboardHandler.ts` | OSC 52 剪贴板拦截 + CJK 解码 + 焦点门控 |
-| `terminal/useCommandDetection.ts` | OSC 133 命令边界检测 + TabTitleRegistry 匹配 + 🟡 attention 指示（OSC 133 C 触发 `onTabStateChange({ active: true, icon: "🟡", logo: cliIconRegistry.match(command) })`，F9 CLI logo） |
+| `terminal/useCommandDetection.ts` | OSC 133 命令边界检测 + `cliProfileRegistry.matchByCommand` 匹配（MC-105：title/logo 取 profile.tabTitle/iconSrc）+ 🟡 attention 指示（OSC 133 C 触发 `onTabStateChange({ active: true, title, icon: "🟡", logo })`，F9 CLI logo）；`TabState`（含可选 `logo` 字段，hook 事件路径不传）迁入本文件顶部导出（Stage 01 退役 TabTitleRegistry 后） |
 | `terminal/webgl.ts` | `detectWebgl()` + `setupWebglWithRetry()` 纯函数 |
 | `terminal/useXterm.ts` | 编排层（~420 行），组合上述 6 个 hook + `src/lib/useFontSizeWheel`（Ctrl+Wheel 字体缩放）+ `onAgentEvent` 订阅（按 panelId 过滤 → `eventToStatus` → F3 四态 emoji；非 SessionEnd/Exit 时 `setAgentSession` 携 `sessionId`/`transcriptPath`/`status`——两区四态同源，**payload 空串归一 `|| undefined`** 防 claude hook 输入缺字段时下游静默失效），对外接口兼容 TerminalPanel |
 | `terminal/keyboard.ts` | 终端快捷键命令工厂：`createTerminalShortcuts()`（无参）经 `commandFromMeta` 生成 `terminal.copy/paste/newline`，App 一次性注册；handler 经 `getActiveTerminal()` 派发到聚焦终端。Ctrl+C 不注册（透传 SIGINT） |
 | `terminal/activeTerminal.ts` | 模块级"聚焦终端"指针：`setActiveTerminal`/`clearActiveTerminal`（仅匹配时清）/`getActiveTerminal`。终端聚焦时设为 active，命令 handler 据此派发 |
 | `terminal/theme.ts` | xterm.js 暗色主题选项（JetBrains 配色），硬约束 #6 单点。`drawBoldTextInBrightColors` 显式声明为 `true`，消除对 xterm.js 默认值的隐式依赖（仅影响 ANSI 16 色粗体→亮色映射，不影响 True Color）。`vtExtensions: { kittyKeyboard: true }` 启用 Kitty 键盘协议被动支持 |
 | `terminal/TerminalRegistry.ts` | 模块级 `Map<panelId, RegisteredTerminal>` + `AgentSessionInfo`（含可选 `cliId`，存在即运行中，二态模型）+ `setAgentSession(panelId, patch|null)`（merge 语义：null 清空、undefined 键不覆盖、缺 lastEventAt 自动填 Date.now()）+ `subscribe(listener)` 订阅 register/remove/**sessionChange** 事件（sessionChange 仅携 panelId，listener 经 `get()` 读现值防快照不一致）；register 幂等覆盖时 `agentSession` 缺省保留旧值（StrictMode/重试场景不丢 session）。跨页面切换时供查询/reattach |
-| `terminal/TabTitleRegistry.ts` | 命令→标题/图标映射注册表单例（Registry Pattern）。`match(command)` 首 token 匹配（`command.trim().split(/\s+/)[0]` 后精确查表——覆盖 `claude --resume` / `claude -p` 等带参变体），`register(rule)` 注册规则，`_reset()` 测试用；`TabState` 含可选 `logo` 字段（F9：OSC 133 C 携带的 CLI 品牌 logo，hook 事件路径不传） |
-| `terminal/tabRules.ts` | 规则注册文件——side-effect import 向 `tabTitleRegistry` 注册命令行命令规则（claude 规则的 `icon` 字段已移除，仅保留 `command` + `title`；emoji 表示由 F3 四态系统接管）。后续新增命令在此追加 `register(...)` |
 | `editor/index.ts` | EditorPanel 导出 |
 | `editor/EditorPanel.tsx` | 编辑器面板 React 组件：container `overflow: clip`（裁剪不吸收滚动事件，委托 `.cm-scroller` 管理滚动；`.cm-editor` `height: 100%` 约束 scroller 高度产生溢出）→ useCodeMirror |
 | `editor/keyboard.ts` | 编辑器快捷键命令工厂：`createEditorShortcuts()`（无参）经 `commandFromMeta` 生成 `editor.save`、`editor.toggleWordWrap`，App 一次性注册；handler 经 `getActiveEditor()` 派发 |
@@ -293,8 +293,9 @@ Claude Code 在用户主动 Ctrl+C 中断时不发射任何 hook 事件（`Stop`
 | `diff/DiffPanel.tsx` | Git 双栏 diff 面板：横向均分两栏（flex 50/50 + minWidth:0 防内容撑开）、容器 ref 桥接（renderKey + bridgedRef 支持条件渲染）、占位对齐（Decoration.widget）、垂直滚动同步（syncingRef）、双侧 gutter（headDiffGutter + diffGutter）、右侧 Ctrl+S 保存刷新链、左侧 .git 变更刷新 HEAD、右侧外部修改检测（净重载/脏弹窗） |
 | `diff/alignment.ts` | `computeAlignment(hunks)` 纯函数：DiffHunk[] → `{ left: Map<afterLine, count>, right: Map<afterLine, count> }`。规则：纯新增左侧插占位、纯删除右侧插占位、modified 行数不等少侧插差值。零 DOM 访问 |
 | `hooksConfig/index.ts` | HooksConfigPanel 导出 |
-| `hooksConfig/HooksConfigPanel.tsx` | 面板根组件：层级切换器（user/project/local + 优先级标注，rootPath 空时 project/local 禁用）+ 模式切换（GUI/JSON，非法 JSON 禁 GUI）+ F2 注入状态条与注入/卸载按钮 + 保存按钮（dirty 且合法才可点）+ 重启提示条；三态（loading/content/损坏 error） |
-| `hooksConfig/useHooksConfig.ts` | 数据 hook：rootPath 推导（照 useCommitStatus）、`readHooksConfig` 加载（null 视为 {}，Err 置损坏态）、双模式同步（configJson/guiModel/dirty）、保存（双校验 + writeHooksConfig）、切层/visibilitychange 轻量重读（dirty `dialog.ask` 守卫 + askGuard 防循环 + generation 取消） |
+| `hooksConfig/HooksConfigPanel.tsx` | **hub 容器**（Stage 06，MC-502~507）：顶部 CLI 选择行（`hasConfigEditor` 过滤 + iconSrc logo + displayName + 选中态高亮 token）+ 编辑器槽；选中态 `params.selectedCli` 随布局 JSON 持久化（`updateParameters` + 显式 `onLayoutChange`，挂载恢复/失效回退首个有能力 CLI）；切换 = 卸载重挂载，dirty `dialog.ask` 守卫（askGuard 防循环）；空态「无可配置 CLI」；单 CLI 也渲染选择行 |
+| `hooksConfig/ClaudeHooksConfigEditor.tsx` | **claude 专属编辑器**（MC-504/508）：原 HooksConfigPanel 全部内容整体下移一层——层级切换器（user/project/local + 优先级标注，rootPath 空时 project/local 禁用）+ 模式切换（GUI/JSON，非法 JSON 禁 GUI）+ F2 注入状态条与注入/卸载按钮（cliId = hub 选中态，MC-221）+ 保存按钮（dirty 且合法才可点）+ 重启提示条（`profile.hooks.restartHint` 驱动）；三态（loading/content/损坏 error） |
+| `hooksConfig/useHooksConfig.ts` | 数据 hook：cliId 实参 = hub 选中态 profile.id（MC-220，ipc 实参唯一来源）、rootPath 推导（照 useCommitStatus）、`readHooksConfig(cliId, layer, ...)` 加载（null 视为 {}，Err 置损坏态）、双模式同步（configJson/guiModel/dirty）、保存（双校验 + writeHooksConfig(cliId)）、切层/visibilitychange 轻量重读（dirty `dialog.ask` 守卫 + askGuard 防循环 + generation 取消） |
 | `hooksConfig/configModel.ts` | 配置模型双向转换纯函数：`jsonToGui`/`guiToJson`（round-trip 不丢数据，未知字段归 extraFields）、`isSltermManaged`（注入段识别，C9） |
 | `hooksConfig/eventsCatalog.ts` | 事件元数据单点（P3-FE-26）：30 事件 × 10 组全表 + handler 支持档（A/B/C）+ 5 种 handler 字段矩阵（C13-3 官方版）+ matcher 窄字符集受限事件（FileChanged/StopFailure）+ 纯查询函数（getEventMeta/isMatcherSupported/getSupportedHandlerTypes 等） |
 | `hooksConfig/matcherEngine.ts` | matcher 语义引擎（C13-5）：`matchHook` 纯函数（exact-or / regex / all + 受限窄字符集），供 MatcherTester 试测与保存校验共用 |
@@ -368,8 +369,7 @@ useXterm 是编排层——mock 6 个子 hook 才能隔离测试（`useFontSizeB
 
 | 文件 | 模式 |
 |------|------|
-| `tab-title-registry.test.ts`（13 用例） | 直接测试真实 `TabTitleRegistry` 实例（非 mock）：register/match（首 token 匹配——含带参命中/空命令行/仅空白/首 token 无规则仍 null）、大小写、覆盖、`_reset()`、单例校验 |
-| `tab-rules.test.ts`（6 用例） | side-effect import 验证 + `_reset()` 后手动注册行为。不依赖手动 register，直接验证模块加载副作用 |
+| （Stage 01 退役迁移） | 原 `tab-title-registry.test.ts`（13 用例）/ `tab-rules.test.ts`（6 用例）语义已并入 `src/__tests__/cli-profile-registry.test.ts` + `cli-profile-claude.test.ts`（注册表/侧效应注册/logo 资源守卫，见 @../features/cliProfiles/CLAUDE.md） |
 | `workspace-defaulttab.test.tsx`（21 用例，WRK-05） | 渲染**生产 `DefaultTab`**（非手写 Mock，经 `PageDockviewHost.tsx` 导出）：tabIcon emoji/img 分支（含 `/` `\` http: data: → img）、`onDidParametersChange` 事件结构回归（回调直接接收扁平 `Parameters`，`event.tabIcon` 而非 `event.params.tabIcon`——漂移即失败）、`onDidTitleChange` 标题更新、关闭按钮 `api.close` |
 
 ### 键盘与快捷键测试

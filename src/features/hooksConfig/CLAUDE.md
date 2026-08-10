@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 hooks 配置面板的 **schema 内嵌单点**（C13-1）——SchemaStore 官方 settings schema + hooks 子 schema 提取 + Draft07 校验。仅供 hooksConfig 面板（`src/panels/hooksConfig/`）消费；面板本身的架构决策（双模式编辑/事件目录/MatcherTester 等）见 @../../panels/CLAUDE.md，不在此展开。
 
+> **claude 专属编辑器语义（MC-223，决策 2）**：本模块（及 `src/panels/hooksConfig/` 面板）是 **claude 专属编辑器**——claude hooks 协议知识（eventsCatalog 30 事件 / matcherEngine / 5 种 handler 字段矩阵 / schema 内嵌 / Draft07 校验）**不抽象**为通用能力，文件物理位置保留现状（决策 2）。协议知识只属于 claude profile 域（与 `features/cliProfiles/profiles/claude/` 的 claude 合法领地同源），不为多 CLI 泛化；面板选择行允许其他 CLI 挂载自有编辑器，但本模块的 schema 单点仍是 claude 专属资产。
+
 ## 架构决策
 
 ### SchemaStore 官方 schema 内嵌（P3-FE-07）

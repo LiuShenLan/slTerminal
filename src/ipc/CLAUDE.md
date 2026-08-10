@@ -23,9 +23,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `dialog.ts` | Tauri plugin | 直接 re-export `@tauri-apps/plugin-dialog` |
 | `window.ts` | Tauri Window API | `registerCloseHandler` — 封装 `onCloseRequested` 关闭生命周期 |
 | `shell.ts` | Tauri plugin | `@tauri-apps/plugin-opener` 的 `openUrl` re-export |
-| `hooks.ts` | `hooks/` | `hooks_inject`, `hooks_uninstall`, `hooks_injection_status`, `hooks_context_usage`（参数 `{ transcriptPath: string }`，返回 `ContextUsage \| null`）；`onAgentEvent`（`listen("agent-event")` 封装） |
-| `hooksConfig.ts` | `hooks/`（config.rs） | `hooks_config_read`, `hooks_config_write`（C13-1 配置编辑命令）：`readHooksConfig(layer, projectPath?)` 返回该层 settings.json 的 **hooks 子树**（文件不存在或无 hooks 键 → `null`，JSON 损坏 → 后端 Err）；`writeHooksConfig(layer, hooks, projectPath?)` 传 hooks 子树，后端 **read-modify-write merge**（替换/插入 hooks 键，原样保留 permissions/env 等其他字段），hooks 必须为 JSON Object。user 层不传 projectPath；project/local 层必须传（后端沙箱校验后拼接 `.claude/settings.json` / `.claude/settings.local.json`）。**与 `hooks.ts` 区分**：后者是 C6 注入/卸载/状态/用量命令 + agent-event 事件订阅，本文件是 C13-1 配置编辑命令的唯一 invoke 位置 |
-| `claudeHistory.ts` | `claude_history/` | `claude_history_scan`, `claude_history_delete`（claude 历史会话查询与恢复两命令——**rename 已随功能整体移除**，问题 7 修复）：`scanHistory()` 扫描全部历史会话（返回 `HistorySession[]`，单文件失败降级条目、扫描根不存在返回空数组均非 Err）；`deleteHistorySession(sessionId)` 按 sessionId 定位文件（**前端不传路径，后端 SEC-05 校验**），invoke 参数 camelCase（JS `sessionId` ↔ Rust `session_id` 由 Tauri 自动转换） |
+| `agentHooks.ts` | `hooks/` | `agent_hooks_inject`, `agent_hooks_uninstall`, `agent_hooks_injection_status`, `agent_context_usage`——**wrapper 全部加 cliId 首参**（MC-211 泛化命令，未知 cliId → 后端 Validation）：`inject(cliId)` / `uninstall(cliId)` / `getInjectionStatus(cliId)`（返回 `AgentHookInjectionStatus`）/ `contextUsage(cliId, transcriptPath)`（返回 `ContextUsage \| null`）；`onAgentEvent`（`listen("agent-event")` 封装，MC-202） |
+| `hooksConfig.ts` | `hooks/`（config.rs） | `agent_hooks_config_read`, `agent_hooks_config_write`（C13-1 配置编辑命令）：`readHooksConfig(cliId, layer, projectPath?)` 返回该层 settings.json 的 **hooks 子树**（文件不存在或无 hooks 键 → `null`，JSON 损坏 → 后端 Err）；`writeHooksConfig(cliId, layer, hooks, projectPath?)` 传 hooks 子树，后端 **read-modify-write merge**（替换/插入 hooks 键，原样保留 permissions/env 等其他字段），hooks 必须为 JSON Object。user 层不传 projectPath；project/local 层必须传（后端沙箱校验后拼接 `.claude/settings.json` / `.claude/settings.local.json`）。**与 `agentHooks.ts` 区分**：后者是 C6 注入/卸载/状态/用量命令 + agent-event 事件订阅，本文件是 C13-1 配置编辑命令的唯一 invoke 位置 |
+| `agentHistory.ts` | `agent_history/` | `agent_history_scan`, `agent_history_delete`（历史会话查询与删除两命令——**rename 已随功能整体移除**，问题 7 修复；MC-303 泛化）：`scanHistory()` **无参聚合**扫描全部已注册 provider（返回 `AgentHistorySession[]`（含 `cliId`），单 provider 失败不阻塞其他、单文件失败降级条目、扫描根不存在返回空数组均非 Err）；`deleteHistorySession(cliId, sessionId)`——后端按 cliId 路由 provider，delete 前经该 provider `validate_session_id` 前置校验（**前端不传路径，仅传 cliId + sessionId，SEC-05 等价强制**），未知 cliId 返回 Err，invoke 参数 camelCase（JS `cliId`/`sessionId` ↔ Rust `cli_id`/`session_id` 由 Tauri 自动转换） |
 | `index.ts` | — | barrel export，统一对外暴露；含 `ping()` 健康检查命令 |
 
 ## 编码约定
@@ -40,7 +40,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 测试模式
 
-测试文件：`src/__tests__/ipc-contract.test.ts`（65 用例，含 3 条 DBG-4 契约守卫）+ `ipc-ping.test.ts`（2 用例，IHE-07① 改调 `ping()` wrapper）+ `ipc-hooks-contract.test.ts`（22 用例）+ `ipc-hooks-config-contract.test.ts`（12 用例，C13-1 配置命令四维验证）+ `ipc-claude-history-contract.test.ts`（8 用例）+ `ipc-window-contract.test.ts`（10 用例，`registerCloseHandler` 关闭生命周期契约）+ `notification.test.ts`（9 用例，IHE-02 分支覆盖）。共享工厂位于 `src/__tests__/helpers/ipc-contract.ts`（IHE-06）。
+测试文件：`src/__tests__/ipc-contract.test.ts`（65 用例，含 3 条 DBG-4 契约守卫）+ `ipc-ping.test.ts`（2 用例，IHE-07① 改调 `ping()` wrapper）+ `ipc-agent-hooks-contract.test.ts`（22 用例，MC-212 泛化——含 cliId 首参四维）+ `ipc-hooks-config-contract.test.ts`（12 用例，C13-1 配置命令四维验证，含 cliId 首参）+ `ipc-agent-history-contract.test.ts`（8 用例，MC-306 更名——scan 无参 / delete 参数 `{cliId, sessionId}`）+ `ipc-window-contract.test.ts`（10 用例，`registerCloseHandler` 关闭生命周期契约）+ `notification.test.ts`（9 用例，IHE-02 分支覆盖）。共享工厂位于 `src/__tests__/helpers/ipc-contract.ts`（IHE-06）。
 
 ### mockIPC 盲区声明（IHE-01）
 
@@ -51,7 +51,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Uint8Array ↔ number[] 实际序列化
 - listen 回调运行时解包（`event.payload`）
 
-即：**契约测试只防 wrapper 写错命令名/参数结构，真实序列化由 L4 守卫**。后端必填参数缺失时 invoke 必 reject 且被调用方 catch 吞 = 契约全绿但运行时静默失败——此场景由 L4 兜底（引用 DOC-01/02：L4 为半端到端定位声明）。四个契约文件（ipc-contract / ipc-hooks-contract / ipc-hooks-config-contract / ipc-claude-history-contract）文件头均含此盲区注释。
+即：**契约测试只防 wrapper 写错命令名/参数结构，真实序列化由 L4 守卫**。后端必填参数缺失时 invoke 必 reject 且被调用方 catch 吞 = 契约全绿但运行时静默失败——此场景由 L4 兜底（引用 DOC-01/02：L4 为半端到端定位声明）。四个契约文件（ipc-contract / ipc-agent-hooks-contract / ipc-hooks-config-contract / ipc-agent-history-contract）文件头均含此盲区注释。
 
 ### IPC 合约测试（IHE-06 工厂化）
 

@@ -121,10 +121,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | src/features/sidebar | 侧栏项目/页面二级树（项目/页面 CRUD + 页面切换导航） | src/features/sidebar/index.ts | ../src/features/sidebar/CLAUDE.md |
 | src/features/sideViews | 侧栏视图系统——活动栏+共享侧栏区+单槽位状态机 | src/features/sideViews/index.ts | ../src/features/sideViews/CLAUDE.md |
 | src/features/commit | Commit 侧栏视图（git 变更列表 + 状态→面板分派） | src/features/commit/index.ts | ../src/features/commit/CLAUDE.md |
-| src/features/agentStatus | Agent 状态视图（claudeSession 行建模 + 上下文用量） | src/features/agentStatus/index.ts | ../src/features/agentStatus/CLAUDE.md |
+| src/features/agentStatus | Agent 状态视图（agentSession 行建模 + 上下文用量） | src/features/agentStatus/index.ts | ../src/features/agentStatus/CLAUDE.md |
 | src/features/notifications | toast 通知（Tauri 原生 sendNotification + 任务栏闪烁） | src/features/notifications/index.ts | ../src/features/notifications/CLAUDE.md |
 | src/features/hooksConfig | hooks 配置面板 schema 内嵌单点（SchemaStore 官方 schema + hooks 子 schema + Draft07 校验） | src/features/hooksConfig/schema/index.ts | ../src/features/hooksConfig/CLAUDE.md |
-| src/features/claudeHistory | 历史会话查询与恢复 UI（三下拉框历史区 + 双行式行 + 四态同源 + 四步恢复编排 + 操作矩阵） | src/features/claudeHistory/index.ts | ../src/features/claudeHistory/CLAUDE.md |
+| src/features/cliProfiles | CLI profile 注册表（CliProfileRegistry 模块级单例 + claude profile 身份域 + hooks/history 能力策略，MC-1） | src/features/cliProfiles/index.ts | ../src/features/cliProfiles/CLAUDE.md |
+| src/features/agentHistory | 历史会话聚合 UI（AgentHistorySections + useAgentHistory + 复合键 cliId\|sessionId + 四步恢复编排） | src/features/agentHistory/index.ts | ../src/features/agentHistory/CLAUDE.md |
 | src/__tests__ | L2 前端测试集中目录 + 共享测试工厂 | — | ../src/__tests__/CLAUDE.md |
 | src/panelRegistry.ts | 面板注册表共享配置层（workspace/explorer/测试多方引用，硬约束 #5） | src/panelRegistry.ts | — |
 | test/ | L3 终端 headless 测试（xterm/headless + xterm/addon-serialize） | vitest.l3.config.ts | — |
@@ -132,8 +133,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | src-tauri/src/fs | 文件系统命令（读/写/列目录/建/删/改名） | src-tauri/src/fs/mod.rs | ../src-tauri/src/fs/CLAUDE.md |
 | src-tauri/src/git | Git 状态/diff/HEAD 读取/回滚/取消暂存（git2） | src-tauri/src/git/mod.rs | ../src-tauri/src/git/CLAUDE.md |
 | src-tauri/src/notify | 文件系统监听（LruWatcherPool 缓存 + pause/resume 切换） | src-tauri/src/notify/mod.rs | ../src-tauri/src/notify/CLAUDE.md |
-| src-tauri/src/hooks | Claude Code hooks 注入/卸载/状态 + hook-event 广播 + 上下文用量 + hooks 配置三层读写（hooks_config_read/write） | src-tauri/src/hooks/mod.rs | ../src-tauri/src/hooks/CLAUDE.md |
-| src-tauri/src/claude_history | Claude 历史会话查询（scan/delete 两命令 + 头部 512KB/尾部 64KB 轻量解析 + SEC-05 sessionId 校验） | src-tauri/src/claude_history/mod.rs | ../src-tauri/src/claude_history/CLAUDE.md |
+| src-tauri/src/hooks | CLI hooks 能力层（CliHooksProvider trait + cliId 键注册表 + agent-event 广播 + claude provider 注入/卸载/状态/用量/三层配置读写 + 6 条 agent_hooks_* 泛化命令） | src-tauri/src/hooks/mod.rs | ../src-tauri/src/hooks/CLAUDE.md |
+| src-tauri/src/agent_history | 历史会话聚合层（CliHistoryProvider trait + cliId 键注册表 + claude provider 扫描/删除 + SEC-05 sessionId 校验） | src-tauri/src/agent_history/mod.rs | ../src-tauri/src/agent_history/CLAUDE.md |
 | src-tauri/src 顶层 | 单文件模块：lib.rs（命令注册/State/setup）、settings.rs（浅合并）、projects.rs（exe 同级 JSON 绕过沙箱）、state.rs（AppState/PtySession/路径沙箱）、error.rs（AppError） | src-tauri/src/lib.rs | ../src-tauri/src/CLAUDE.md |
 | e2e-tests | WDIO E2E 端到端测试 | e2e-tests/wdio.conf.ts | ../e2e-tests/CLAUDE.md |
 
@@ -159,7 +160,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **登记规则**：跨模块引用的标识符首次使用时登记到下表；仅模块内部使用的就近定义，不登记。
 
-**未列入的编号家族免登记**：阶段项目代号（如 C13-*、DOC-*、E2E-*、HFN-*、HUK-*、IHE-*、SVC-*、WRK-*、TE-* 等）登记于所属模块文档与 `.claude/test-inventory.md`，免入根表。
+**未列入的编号家族免登记**：阶段项目代号（如 MC-*（multi-cli profile 重构，逐条清单见 docs/multi-cli/checklist.md）、C13-*、DOC-*、E2E-*、HFN-*、HUK-*、IHE-*、SVC-*、WRK-*、TE-* 等）登记于所属模块文档与 `.claude/test-inventory.md`，免入根表。
 
 | 标识符 | 类型 | 含义 |
 |--------|------|------|
@@ -168,17 +169,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | P1-19 | 问题 | 窗口关闭前杀子进程——前端 registerCloseHandler（onCloseRequested → 遍历 TerminalRegistry pty.kill，SHUTDOWN_TIMEOUT_MS=3000）+ 后端 Job Object KILL_ON_JOB_CLOSE 兜底 |
 | SEC-01 | 安全 | project_root 是页面切换前置条件（路径沙箱） |
 | SEC-03 | 安全 | HTML postMessage origin/source/信任标记三层校验 |
-| SEC-05 | 安全 | claude_history_delete 的 sessionId 校验 + 定位不信托前端（原 SEC-01 拆号） |
+| SEC-05 | 安全 | agent_history_delete 的 sessionId 校验 + 定位不信托前端（原 SEC-01 拆号） |
 | SEC-08 | 安全 | PTY write/resize/kill 的 panelId 归属校验 |
 | DBG-5 | 调试调查 | switchToPage 改 async——setProjectRoot 必须在 setActivePage 之前完成（React effect 时序坑） |
 | DBG-6 | 调试调查 | 启动恢复 lastPage 先 await setProjectRoot 再 setActivePage |
 | B10 | 缺陷 | 编辑器去重聚焦须匹配 suffix（普通编辑器与 git 页签互不误聚焦） |
 | ADR-0001 | 架构决策 | 侧栏视图换区重建丢失组件内部状态（已确认接受）（详见 .claude/adr.md） |
 | F2 | 特性 | hooks 注入入口（F6 面板工具栏并入；与功能键 F2 区分） |
-| F3 | 特性 | 终端页签四态 emoji 指示（hook-event + OSC 133 合成） |
-| F5 | 特性 | claudeSession 契约行建模（双通道建行/三通道删行） |
+| F3 | 特性 | 终端页签四态 emoji 指示（agent-event + OSC 133 合成） |
+| F5 | 特性 | agentSession 契约行建模（双通道建行/三通道删行） |
 | F6 | 特性 | hooks 双模式配置面板（JSON/GUI 编辑 hooks 子树，user/project/local 三层，F2 注入入口并入） |
-| F7 | 特性 | claude 历史会话查询与恢复（历史区三下拉框 + 扫描/恢复/删除；重命名已移除） |
+| F7 | 特性 | 历史会话查询与恢复（历史区三下拉框 + 扫描/恢复/删除；重命名已移除） |
 | F8 | 特性 | 终端页签自定义重命名（右键菜单「重命名」+ 自绘弹窗；customTitle 随布局持久化；claude 运行中禁用；不影响 terminal-N 递增） |
 
 > 测试策略概览见上方「测试策略」章节；完整用例清单见 `.claude/test-inventory.md`。

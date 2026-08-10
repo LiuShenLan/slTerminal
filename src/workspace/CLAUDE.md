@@ -189,7 +189,7 @@ Workspace 使用 Allotment 实现三栏布局（旧为常驻四栏，侧栏视�
 `workspace-header-actions.test.tsx`（21 用例）：
 - 分屏 + 按钮 & 右键菜单 addPanel 行为：非聚焦分屏点击 + 按钮或右键"新建终端"时，新面板创建在点击的分屏而非聚焦分屏。直测 `createRightHeader`/`createGetContextMenu` 工厂函数，不渲染完整 Dockview 树；C5-C10 覆盖重命名项（F8：终端 7 项结构/非终端 5 项/action 派发 `onRenameRequest(panel)`/agentSession 存在 disabled，`TerminalRegistry._reset()` 隔离）
 
-新增测试文件（F8）：`terminal-rename-apply.test.ts`（5 用例，直测 `applyRename` 纯函数）+ `terminal-rename-dialog.test.tsx`（13 用例，照 claude-history-action-dialog 模式）
+新增测试文件（F8）：`terminal-rename-apply.test.ts`（5 用例，直测 `applyRename` 纯函数）+ `terminal-rename-dialog.test.tsx`（13 用例，照 agent-history-action-dialog 模式）
 
 `layout-switch.test.ts`（7 用例）+ `startup-restore.test.ts`（7 用例）：
 - 页面切换/启动恢复流程（`App.tsx` 启动恢复 lastPage：先 `await setProjectRoot` 再 `setActivePage`，DBG-6）
