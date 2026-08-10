@@ -1,14 +1,16 @@
 // useHooksConfig — hooks 配置面板数据 hook（P3-FE-15 + P3-FE-16/17）
 //
 // 职责：
+// - cliId 参数 = hub 面板选中 CLI（Stage 03 临时代理常量已回收，MC-220）——
+//   readHooksConfig/writeHooksConfig 的 cliId 实参唯一来源
 // - 从 useProjects + useLayout 推导当前活跃项目 rootPath（照 useCommitStatus 模式）
 // - rootPath 为空时 project/local 层禁用（仅 user 层可用）
-// - 加载：readHooksConfig(layer, rootPath?)，null 视为 {}；挂载时加载禁用状态 store
+// - 加载：readHooksConfig(cliId, layer, rootPath?)，null 视为 {}；挂载时加载禁用状态 store
 // - 双模式同步（P3-FE-16）：configJson（hooks 子树）与 guiModel 共享于此；
 //   JsonMode.onChange 经 updateConfigJson（JSON 合法 → jsonToGui 重算 guiModel），
 //   GuiMode.onChange 经 updateGui（guiToJson 更新 configJson）
 // - 保存（P3-FE-17）：JSON 语法校验 → json-schema-library schema 校验（validateHooksJson，
-//   Stage 04 已建）→ 任一失败弹窗提示、拒绝写盘 → writeHooksConfig；成功后置 saved
+//   Stage 04 已建）→ 任一失败弹窗提示、拒绝写盘 → writeHooksConfig(cliId)；成功后置 saved
 //   （状态条显示重启提示）。不做 .bak，其他字段保留由后端 merge 保证（P3-BE-03）
 // - 轻量重读（外部修改检测）：切层 / 页面重新可见（document.visibilitychange 且
 //   visibilityState === "visible"，面板可见时）重新 readHooksConfig；dirty 时用
@@ -21,9 +23,6 @@ import { ask } from "../../ipc/dialog";
 import { useProjects } from "../../stores/projects";
 import { useLayout } from "../../stores/layout";
 import type { HooksLayer, HooksConfigJson, HooksConfigGui } from "../../types/hooksConfig";
-// 中间态（Stage 03 写死）：泛化命令 cliId 实参暂传 CLAUDE_CLI_ID 常量（禁字面量）——
-// Stage 06 hub 化时改 selectedCliId 回收
-import { CLAUDE_CLI_ID } from "../../features/cliProfiles/profiles/claude";
 import { validateHooksJson } from "../../features/hooksConfig/schema";
 import {
   jsonToGui,
@@ -67,7 +66,7 @@ export interface UseHooksConfigResult {
   reload: () => Promise<void>;
 }
 
-export function useHooksConfig(): UseHooksConfigResult {
+export function useHooksConfig(cliId: string): UseHooksConfigResult {
   const projects = useProjects((s) => s.projects);
   const activePageId = useLayout((s) => s.activePageId);
 
@@ -91,7 +90,11 @@ export function useHooksConfig(): UseHooksConfigResult {
   const [error, setError] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  // ref 镜像：回调/effect 闭包内读取最新值（照 useCommitStatus rootPathRef 模式）
+  // ref 镜像：回调/effect 闭包内读取最新值（照 useCommitStatus rootPathRef 模式）。
+  // cliId 由 hub 选中态传入——hub 切换 = 卸载重挂载（ADR-0001），组件生命周期内恒定；
+  // ref 形态保持 load/save 的 useCallback deps 稳定（与 layerRef/rootPathRef 一致）
+  const cliIdRef = useRef(cliId);
+  cliIdRef.current = cliId;
   const layerRef = useRef(layer);
   layerRef.current = layer;
   const rootPathRef = useRef(rootPath);
@@ -116,7 +119,7 @@ export function useHooksConfig(): UseHooksConfigResult {
       setError(false);
     }
     try {
-      const raw = await readHooksConfig(CLAUDE_CLI_ID, target, rootPathRef.current ?? undefined);
+      const raw = await readHooksConfig(cliIdRef.current, target, rootPathRef.current ?? undefined);
       if (gen !== genRef.current) return; // 过期结果丢弃
       const json = (raw === null || raw === undefined ? {} : raw) as HooksConfigJson;
       setConfigJson(json);
@@ -197,7 +200,7 @@ export function useHooksConfig(): UseHooksConfigResult {
     }
     // ③ 写盘（后端 read-modify-write merge 保留其他字段，P3-BE-03）
     const layer = layerRef.current;
-    await writeHooksConfig(CLAUDE_CLI_ID, layer, json as unknown as ConfigJson, rootPathRef.current ?? undefined);
+    await writeHooksConfig(cliIdRef.current, layer, json as unknown as ConfigJson, rootPathRef.current ?? undefined);
     setDirty(false);
     setSaved(true);
   }, []);

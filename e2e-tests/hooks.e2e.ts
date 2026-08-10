@@ -1,7 +1,7 @@
 /**
  * hooks 域 E2E spec（E2E-09 拆分 + E2E-06 新用例）：
  * 注入/卸载/状态、信号文件驱动页签 emoji、真实 hook reporter 链路（E2E-06）、
- * hooks 配置面板保存链路（P3-TE-18）。
+ * hooks 配置面板 hub 用例（P3-TE-18 保存链路 + D-14 Stage 06：选择行渲染/注入三态）。
  */
 
 import { expect, browser } from "@wdio/globals";
@@ -234,6 +234,10 @@ describe("hooks 状态可视化", () => {
 // 预置的旧 hooks 被整体替换）；③ merge 保留——预置的 permissions/env/$schema
 // 原样保留（验证后端 read-modify-write，P3-BE-03）。
 // 安全：全程只写 tempdir 项目的 project 层，不碰真实 ~/.claude/settings.json（C13-9）。
+// hub 面板（Stage 06 起）：面板 = 顶部 CLI 选择行 + 编辑器槽，claude 编辑器内容整体
+// 下移一层（行为零改动）；本组用例断言随 hub 结构同步——选择行渲染（单 CLI 也有
+// 选择行 + claude logo/displayName）、保存链路经 hub、注入按钮三态经 hub、
+// data-e2e="hooks-restart-hint" 断言保留。
 //
 // 按钮交互统一走 browser.execute 程序化 .click()，不用 WebDriver 真实点击——两个根因：
 // 1) 面板根容器 onFocus（React focusin）触发轻量重读 reload() → setLoading(true) →
@@ -318,6 +322,34 @@ describe("hooks 配置面板保存链路 (P3-TE-18)", () => {
           (await browser.execute(() => !!document.querySelector('[data-e2e="hooks-config-panel"]'))) === true,
         { timeout: 15000, timeoutMsg: "hooksConfig 面板未就绪" },
       );
+
+      // 4b. hub 选择行断言（D-14 Stage 06 段）：选择行位于编辑器上方（编辑器下移一层后的
+      //     hub 结构）；单 CLI 也渲染选择行（边界 1，防布局跳动）——claude logo
+      //     （iconSrc 16×16）+ displayName 文本。选择行无 data-e2e 契约，按 claude
+      //     品牌 logo img 定位：E2E 构建仅 claude 注册（mockcli 属 Stage 07 经 E2E
+      //     helper 注册），本流程无终端会话页签 logo，全页唯一。
+      const hubRow = await browser.execute(() => {
+        const imgs = Array.from(
+          document.querySelectorAll<HTMLImageElement>('img[src="/cli-icons/claude.png"]'),
+        );
+        const buttons = imgs
+          .map((img) => img.closest("button"))
+          .filter((b): b is HTMLButtonElement => b !== null);
+        const editor = document.querySelector('[data-e2e="hooks-config-panel"]');
+        return {
+          logoCount: imgs.length,
+          buttonTexts: buttons.map((b) => b.textContent ?? ""),
+          rowButtonCount: buttons.length,
+          rowAboveEditor:
+            imgs.length > 0 && editor !== null
+              ? (imgs[0].compareDocumentPosition(editor) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+              : false,
+        };
+      });
+      expect(hubRow.logoCount).toBeGreaterThan(0); // 选择行渲染 claude logo
+      expect(hubRow.buttonTexts[0]).toContain("claude"); // 按钮 displayName
+      expect(hubRow.rowButtonCount).toBe(1); // 单 CLI 也渲染选择行（恰一枚按钮）
+      expect(hubRow.rowAboveEditor).toBe(true); // 选择行在编辑器上方（hub 结构）
 
       // 5. 切到 project 层：rootPath 就绪后按钮才可点（disabled=!rootPath）——execute 轮询
       //    等待启用，再程序化 .click()（真实 onClick → setLayer → 重读 project 层；
@@ -409,5 +441,92 @@ describe("hooks 配置面板保存链路 (P3-TE-18)", () => {
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+
+  /**
+   * 用例：hub 注入按钮三态（D-14 Stage 06 段）。
+   * 注入状态条（data-e2e="hooks-injection-status"）三态文案（已注入/未注入/版本过旧）
+   * 经 hub 面板真实按钮链路流转：「注入 Hooks」/「卸载 Hooks」onClick →
+   * agent_hooks_inject/uninstall（cliId 实参 = hub 选中态，E2E 构建仅 claude 一个
+   * hasConfigEditor CLI，选中态即 claude）。链路末尾恢复「已注入」，不污染后续用例；
+   * run-wdio.cjs 对 ~/.claude/settings.json 亦有备份还原兜底（E2E-05）。
+   */
+  it("hub 注入按钮三态：状态条随注入/卸载链路流转并恢复", async () => {
+    // 0. 等待 Workspace 就绪 + Dockview API
+    await waitForWorkspaceReady();
+    await waitForDockviewApi();
+
+    // 1. 关闭前序用例遗留的 hooksConfig 面板（保存用例面板未关；document.querySelector
+    //    取首匹配元素，多面板并存会让状态条/按钮断言命中间态面板——先关后开保证唯一）
+    await browser.execute(() => {
+      for (const p of window.__dockviewApi!.panels) {
+        if (p.component === "hooksConfig") p.api.close();
+      }
+    });
+
+    // 2. 程序化打开 hooksConfig 面板（hub 容器 = 选择行 + claude 编辑器槽）
+    const panelId = "hooksConfig-e2e-inject-" + Date.now();
+    await browser.execute((pid: string) => {
+      window.__dockviewApi!.addPanel({
+        id: pid,
+        component: "hooksConfig",
+        title: "Hooks 配置",
+        params: { panelId: pid },
+      });
+    }, panelId);
+    // 注入状态条在编辑器工具栏——仅非 loading/error 态渲染（编辑器下移一层后同语义）
+    await browser.waitUntil(
+      async () =>
+        (await browser.execute(() => !!document.querySelector('[data-e2e="hooks-injection-status"]'))) === true,
+      { timeout: 15000, timeoutMsg: "hooksConfig 面板未就绪（注入状态条未出现）" },
+    );
+
+    // 3. 状态条文案读取 + 三态其一等待（初始异步查询未完成时为 "注入状态：--"，非三态）
+    const readBarText = () =>
+      browser.execute(
+        () => document.querySelector('[data-e2e="hooks-injection-status"]')?.textContent ?? "",
+      );
+    const waitBarText = (expected: string) =>
+      browser.waitUntil(
+        async () => (await readBarText()) === expected,
+        { timeout: 15000, timeoutMsg: `注入状态条未变为「${expected}」` },
+      );
+    await browser.waitUntil(
+      async () => {
+        const t = await readBarText();
+        return t === "注入状态：已注入" || t === "注入状态：未注入" || t === "注入状态：版本过旧";
+      },
+      { timeout: 10000, timeoutMsg: "注入状态条未进入三态之一" },
+    );
+
+    // 4. 按钮就绪后程序化点击（同保存用例注释：程序化 .click() 不触发 focusin，规避
+    //    面板根容器 focus 重读竞态；busy 期间按钮禁用，未就绪/禁用则重试等待）
+    const clickWhenReady = (sel: string) =>
+      browser.waitUntil(
+        async () => {
+          const ok = await browser.execute((s: string) => {
+            const btn = document.querySelector(s) as HTMLButtonElement | null;
+            if (btn && !btn.disabled) {
+              btn.click();
+              return true;
+            }
+            return false;
+          }, sel);
+          return ok;
+        },
+        { timeout: 10000, timeoutMsg: `按钮 ${sel} 未就绪` },
+      );
+
+    // 5. 三态链路：非已注入则经面板注入 → 已注入；卸载 → 未注入；再注入 → 已注入（恢复）
+    if ((await readBarText()) !== "注入状态：已注入") {
+      await clickWhenReady('[data-e2e="hooks-inject"]');
+    }
+    await waitBarText("注入状态：已注入");
+
+    await clickWhenReady('[data-e2e="hooks-uninstall"]');
+    await waitBarText("注入状态：未注入");
+
+    await clickWhenReady('[data-e2e="hooks-inject"]');
+    await waitBarText("注入状态：已注入");
   });
 });

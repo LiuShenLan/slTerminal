@@ -2,7 +2,7 @@
 
 > **本文档是项目用例数唯一真值源。** 所有 CLAUDE.md、README、CI 配置中引用的用例数均以此文件为准。更新测试后必须同步本文档。
 
-全量 **3101** 用例（Rust 584 + 前端 2342 + L3 138 + E2E 37），2026-08-10 更新。
+全量 **3115** 用例（Rust 584 + 前端 2355 + L3 138 + E2E 38），2026-08-10 更新。
 
 > **计数口径**：
 > - L2 以 `npm test` 实跑（Vitest 报告）为准——`it.each(...)` 参数化与 `describeIpcContract` 工厂（`helpers/ipc-contract.ts`，IHE-06）等按**展开后用例数**计入（138 文件 2333 用例全绿实测）；纯 grep `it(/test(` 块数会少计 it.each 展开（如 colors 85 = 13 块 + 7 组 each 展开 72）。
@@ -81,7 +81,7 @@
 
 > `pty/mod.rs`、`pty/win_build.rs`、`main.rs` 不含 `#[test]`，不在此列。git/mod.rs 测试已按 GIT-12 全量拆出至 `tests/`（`#[test]` 零残留）。agent_history 模块 grep 口径：claude/jsonl 28 + claude/scan 16 + claude/ops 7 + mod 13 = 64（命令包装层 4 用例已迁入 mod.rs:407-464，MC-301 下沉时随行）+ claude/mod 4 + provider 2 = 全模块 70；env 测试依赖 L1 `--test-threads=1` 门禁（`std::env::set_var` 全局可变）。
 
-## L2 — 前端单元/集成测试（137 文件 / 2342 用例）
+## L2 — 前端单元/集成测试（137 文件 / 2355 用例）
 
 运行：`npm test`（Vitest + jsdom，实跑全绿 2328）
 
@@ -220,20 +220,20 @@
 | `src/__tests__/commit-view-status.test.ts` | 7 | 状态机四态（no-root/loading/error/ready） |
 | `src/__tests__/commit-view.test.tsx` | 4 | 残余主干用例（拆分后） |
 
-### hooks 配置面板（10 文件 / 197 用例）
+### hooks 配置面板（10 文件 / 210 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
 | `src/__tests__/hooks-config-handlerform.test.tsx` | 40 | 5 种 type 字段矩阵（官方版字段名断言）/switchHandlerType 纯函数/事件支持矩阵过滤/type 切换交互/字段编辑（合法上报/非法保留草稿/清空删键，HKC-04）/注入段禁改 |
 | `src/__tests__/hooks-config-gui.test.tsx` | 28 | Master-Detail 渲染/增删事件与 matcher 组/**删除选中项选中态回退空态（HKC-05）**/注入段禁删 |
-| `src/__tests__/hooks-config-panel.test.tsx` | 23 | 三态/层级切换器禁用/保存按钮初始禁用/visibilitychange 轻量重读（askGuard 防循环）/JSON 错误单行截断/**注入状态条初始 "--" 帧（HKC-10）**/**非法 JSON 快照不变+保存禁用（HKC-03）**/**uninstall reject 分支（HKC-07）** |
+| `src/__tests__/hooks-config-panel.test.tsx` | 36 | 三态/层级切换器禁用/保存按钮初始禁用/visibilitychange 轻量重读（askGuard 防循环）/JSON 错误单行截断/**注入状态条初始 "--" 帧（HKC-10）**/**非法 JSON 快照不变+保存禁用（HKC-03）**/**uninstall reject 分支（HKC-07）**/**hub CLI 选择行 13 用例（MC-502~507，Stage 06）**：能力过滤（hasConfigEditor=false 不出现）/logo 16×16+displayName/选中高亮 EXPLORER_SELECTION_BG token/单 CLI 也渲染/点击切换→编辑器重挂载+IPC 携新 cliId/selectedCli 持久化（updateParameters+显式保存 toJSON）/挂载恢复/失效回退首个有能力 CLI/dirty 守卫 ask 确认与取消/非 dirty 直接切换/空态「无可配置 CLI」/restartHint 由 profile 驱动 + **persistSelectedCli 纯函数直测 4 用例（MC-503，照 F8 applyRename 先例）** |
 | `src/__tests__/hooks-config-jsonmode.test.tsx` | 18 | CM6 创建 + schema 扩展注册/**linter 顺序身份断言（HKC-01）**/非法 JSON 校验上报/事件导航/MatcherTester |
 | `src/__tests__/hooks-config-matcher.test.ts` | 21 | matchHook 全分支（exact-or/regex/all/受限窄字符集/非法正则防御） |
 | `src/__tests__/hooks-config-catalog.test.ts` | 19 | eventsCatalog 事件元数据（30 事件 × 10 组/HANDLER_FIELD_MATRIX/纯查询函数） |
 | `src/__tests__/hooks-config-model.test.ts` | 17 | jsonToGui/guiToJson 双向转换/round-trip/容错/isSltermManaged |
 | `src/__tests__/ipc-hooks-config-contract.test.ts` | 12 | readHooksConfig/writeHooksConfig 四维验证（agent_hooks_config_read/write + cliId 首参，IHE-06 工厂化，MC-212 同步） |
 | `src/__tests__/hooks-config-schema.test.ts` | 10 | validateHooksJson 直测边界（HKC-08 新建）：合法/缺 hooks 键/非法 matcher/未知事件告警 |
-| `src/__tests__/hooks-config-sync.test.tsx` | 9 | 双模式同步（JSON→GUI/GUI→JSON/非法禁切/脏状态流转） |
+| `src/__tests__/hooks-config-sync.test.tsx` | 9 | 双模式同步（JSON→GUI/GUI→JSON/非法禁切/脏状态流转）——**useHooksConfig 收 cliId 选中态参数（MC-220，Stage 06 同步，用例数不变）** |
 
 ### Diff/GitShow 面板（3 文件 / 78 用例）
 
@@ -333,7 +333,7 @@
 | `test/terminal/production-osc.test.ts` | 8 | **生产 OSC 52/133/8 handler（E2E-03 新增）**：OSC 52 → mock writeText 断言（CJK 解码）/OSC 133 复刻段按生产 matchByCommand/profile 取值改写（D-08，8 用例数不变）/OSC 8 → mock openUrl |
 | `test/terminal/negative-ansi.test.ts` | 9 | **反向/异常 ANSI（E2E-14 新增）**：非法 ANSI、截断多字节序列、嵌套 OSC、异常 resize（0×0）——headless 不崩溃 + 状态可恢复 |
 
-## L4 — E2E 端到端测试（8 spec / 37 用例，35 active + 2 skip）
+## L4 — E2E 端到端测试（8 spec / 38 用例，36 active + 2 skip）
 
 运行：`npm run e2e`（= `npm run build:e2e` + `npm run wdio`）  
 技术栈：WDIO + `@wdio/tauri-service` 1.1.0 + embedded driver（`webview2-com` COM 直连 `ICoreWebView2`）；specs 通配 `./*.e2e.ts`（E2E-09 拆分，单 worker 顺序执行）
@@ -346,7 +346,7 @@
 | `editor.e2e.ts` | 5 | 5 active | 编辑器标题 basename/同名冲突相对路径/关闭后重算/Ctrl+S 经 capture 真实写盘（mtime）/外部修改触发 reload 后保存（dirty→clean） |
 | `history.e2e.ts` | 8 | 8 active | fixture 6 行展示 + agent-*/非 UUID/subagents 排除/标题回退链/搜索过滤/复制恢复命令（剪贴板断言）/孤儿 ✗ 双击无反应/删除（ask 钩子 + 副本删除）/历史区四态同源/**恢复编排（部分端到端：断言到 pty.write 注入，不断言真实进入会话）**——命令名 agent_history_scan/delete 断言同步（D-14/MC-306）；恢复注入断言（终端缓冲含 `claude --resume <id>`）与 claude profile buildRestoreInput 输出逐字一致核对（D-14 Stage 05，零改动，用例数不变） |
 | `agent.e2e.ts` | 7 | 6 active + 1 skip | 视图存在性/纯 shell 终端无行（行建模新语义）/动态四态（首个信号即建行→⚡→✅→行消失）/R2 变体（切项目用量保持 + cache 字段）/R3 变体（SessionEnd 删行不复活）/R4 变体（关页签删行）/**toast 触发链路（skip：权限弹窗需用户交互）**——空态文案「无运行中的编码 CLI 会话」断言（MC-414，Stage 02） |
-| `hooks.e2e.ts` | 4 | 4 active | 注入/卸载/状态三态/信号文件驱动页签 emoji/**真实 hook reporter 链路（E2E-06：node 执行脚本 + stdin JSON + SLTERM_PANEL_ID → 信号消费 + 非法 JSON exit 0 的 C10 守卫）**/hooksConfig project 层保存写盘 + merge 保留其他字段 |
+| `hooks.e2e.ts` | 5 | 5 active | 注入/卸载/状态三态/信号文件驱动页签 emoji/**真实 hook reporter 链路（E2E-06：node 执行脚本 + stdin JSON + SLTERM_PANEL_ID → 信号消费 + 非法 JSON exit 0 的 C10 守卫）**/hooksConfig project 层保存写盘 + merge 保留其他字段/**hub 面板用例（D-14 Stage 06）：+1「hub 注入按钮三态」it（状态条随注入/卸载链路经 hub 流转，cliId 实参 = 选中态，末尾恢复已注入）；保存链路用例内追加 4b 选择行断言（单 CLI 也有选择行 + claude logo/displayName + 选择行在编辑器上方，用例数不变）** |
 | `html.e2e.ts` | 2 | 1 active + 1 skip | iframe Ctrl+W postMessage 转发关闭（真实二进制全链路）/**内联脚本/事件 CSP 执行验证（skip：执行断言不稳定）** |
 | `sidebar.e2e.ts` | 2 | 2 active | 点击开关（R1/R2）/跨区移动状态机（R6/R7——经 store helper，非真实 DnD） |
 | `commit.e2e.ts` | 2 | 2 active | 真实 git 仓库变更列表渲染（Changes/Unversioned）/双击 modified 打开 diff 页签 |
@@ -369,6 +369,7 @@ embedded WDIO 驱动**无法将 OS 级按键（`browser.keys`）投递进 WebVie
 
 ## 历史变更
 
+- 2026-08-10（multi-cli Stage 06 hub 面板 + CLI 选择行，MC-501~507 + D-15/D-14 本 Stage 段）：hooks-config-panel 23→36（+13 hub CLI 选择行用例——能力过滤 hasConfigEditor=false 不出现/logo 16×16+displayName/选中高亮 EXPLORER_SELECTION_BG token/单 CLI 也渲染/点击切换→编辑器重挂载且 IPC 携新 cliId/selectedCli 持久化（updateParameters 写入 + 显式布局保存 containerApi.toJSON）/挂载恢复/失效回退首个有能力 CLI/dirty 守卫 ask 确认与取消/非 dirty 直接切换/空态「无可配置 CLI」/restartHint 由 profile 驱动，MC-502~507 + persistSelectedCli 纯函数直测 4 用例——updateParameters 展开保留原键/onLayoutChange 收到 saveLayout 结果/原 params 不被修改/无条件写入锁定，MC-503 照 F8 applyRename 先例）；面板渲染改经 renderPanel 辅助传 mock api/containerApi（hub 化后 Dockview content component）；claude 编辑器 23 现有用例语义保留（层级/注入/visibilitychange 断言语义不丢，编辑器下移一层后渲染断言同步）。hooks-config-sync 9 用例数不变（useHooksConfig 收 cliId 选中态参数 + cliId 断言 = 传入选中态值，MC-220——Stage 03 中间态 CLAUDE_CLI_ID 断言回收）。其余 7 文件（catalog/matcher/model/schema/jsonmode/handlerform/gui）零改动（纯函数/子组件直测，MC-508 物理位置不变）。D-15 核对零改动通过：open-hooks-config-panel 6 / sidebar-actions 47 / default-layout-format 10（入口面板 id hooksConfig-{pageId}、侧栏菜单流程、pageApis 未动，MC-501）。L4 hooks.e2e 4→5（+1「hub 注入按钮三态」it——状态条随注入/卸载链路经 hub 流转 + 保存链路用例内追加 4b 选择行断言：单 CLI 也有选择行 + claude logo/displayName + 选择行在编辑器上方，D-14）。L2 2342→2355（137 文件不变），L4 37→38（36 active + 2 skip），全量 3101→3115。
 - 2026-08-10（multi-cli Stage 05 前端历史聚合 UI 泛化，MC-310~317 + D-05/D-14 核对）：L2 更名 6 文件——claude-history-{model,view,row,hook,restore,action-dialog}.test.ts(x) → agent-history-*（features 目录更名 + 组件/Hook 更名 + barrel 同步 + 宿主 AgentStatusView import 同步，MC-310/D-05）。断言同步：model 41→44（+3 复合键——显式 cliId 键/同 sessionId 不同 cliId 防冲突/旧数据无 cliId 按 CLAUDE_CLI_ID 回退，MC-313）、view 33→35（+2 supportsFork=false 不展示「分支恢复」MC-316 + 同 sessionId 不同 cliId 反查命中本 CLI 面板 MC-313；activeStatuses/标题覆盖断言改复合键）、row 19→20（+1 未注册 cliId → 无 logo 不报错 MC-311；logo 断言改经 profile.iconSrc 查询）、hook 13 不变（activeStatuses 复合键断言同步）、restore 7 不变（注入内容断言 = claude profile.history.buildRestoreInput 输出逐字一致——MC-315 委托，用例内 side-effect 注册 claude profile）、action-dialog 7 不变（仅 import 路径）。agent-status-view 29 不变（restoreSession mock 路径 ../features/agentHistory/ + 注释同步，D-05；标题覆盖集成断言经复合键 cliId|sessionId——MC-314 语义式覆盖）。cli-profile-claude 43→50（+7 history 策略用例——buildResumeCommand 3 + buildRestoreInput 4，MC-315/316 交付，输出与迁出源逐字一致）。L4 history.e2e 8 用例数不变（恢复注入断言与 claude profile buildRestoreInput 输出逐字一致核对，D-14——零改动通过）。L2 2329→2342（137 文件不变），全量 3088→3101。
 - 2026-08-10（multi-cli Stage 04 后端历史泛化 + 前端 ipc/types，MC-301~306 + D-03/D-14 历史段）：L1 claude_history 63 用例迁移 agent_history（claude/jsonl 28 + claude/scan 19 + claude/ops 9 + mod 7 用例数不变，MC-301——下沉 claude/ 行为零改动 + env 覆盖 SLTERM_CLAUDE_PROJECTS_DIR 留 provider 内部 MC-305）；mod.rs 7 覆盖更新（HistorySession→AgentHistorySession serde camelCase 八键含 cliId 打标 + titleSource 开放字符串，MC-302）；新建 provider.rs（①：CliHistoryProvider trait 三方法 + 注册表 + 聚合 scan 遍历/delete 未知 cliId Validation/validate_session_id 强制前置，MC-303/304——计数以 backend 实落为准）。L2：ipc-claude-history-contract → ipc-agent-history-contract 8 用例数不变（命令名 agent_history_scan（无参）/agent_history_delete（{cliId, sessionId} 双参 camelCase）四维同步，MC-306）；claude-history-{model 41/view 33/row 19/hook 13/restore 7} 用例数不变（AgentHistorySession 八键含 cliId + mock 路径 ../ipc/agentHistory + 删除链传 session.cliId 断言同步，MC-306；action-dialog 7 零改动）；调用点中间态：useClaudeHistory/HistorySessionList/historyContextMenu 类型与签名同步（删除链 deleteHistorySession(session.cliId, session.sessionId)，features 目录更名留 Stage 05）。L4 history.e2e 8 用例数不变（命令名 agent_history_scan/delete 断言同步，D-14）。L1 584→584+①，L2 2329 不变，全量 3088→3088+①。
 - 2026-08-10（multi-cli Stage 03 后端 hooks 泛化 + 前端 ipc/types，MC-201~215 + D-01/03/09/10/11/14）：L1 hooks 域 133→146（+13）。位置迁移：inject 34→claude/inject.rs 35（+1 reporter 模板内嵌校验断言——显式 cliId + SCRIPT_VERSION 递增，MC-215 决策 7）、usage 26 / config 27 下沉 claude/ 用例数不变（MC-213）、watcher 20 MC-203 核对零改动；mod.rs 12→19（+7 命令层泛化：6 命令 cliId 透传 block_on 直测 + 更名 AgentInjectionStatus/AgentHookInjectionStatus，MC-211）、signal.rs 14→16（+2 AgentEventPayload 九键 serde 含无 cliId 旧信号反序列化兼容 MC-201 + agent-event 广播 MC-202）、新建 provider.rs 3（注册表 resolve_provider 命中/未知 cliId Validation/无 hooks 能力 Validation「不支持 hooks 能力」+ 未注册未知分支，MC-210）。L2：ipc-hooks-contract → ipc-agent-hooks-contract 22 用例数不变（命令名 agent_hooks_*/agent_context_usage + 参数含 cliId camelCase 四维同步，MC-212）；ipc-hooks-config-contract 12 用例数不变（agent_hooks_config_read/write + cliId 首参）；setup.ts 全局 mock 更名 ../ipc/hooks → ../ipc/agentHooks + onHookEvent→onAgentEvent（D-01 红线）；use-xterm-lifecycle 71 / use-xterm-output 35 / use-xterm-integration 12 / agent-status-view 29 / agent-status-hook 39 / notifications 33 / hooks-config-panel 23 / hooks-config-sync 9 用例数不变（事件名 onAgentEvent/"agent-event" + contextUsage 传行 cliId + 中间态 CLAUDE_CLI_ID 断言同步，MC-202/212）；调用点中间态：useHooksConfig/HooksConfigPanel 泛化命令 cliId 暂传 CLAUDE_CLI_ID 常量（Stage 06 回收）、useAgentStatus contextUsage 传行 cliId。L4 hooks.e2e 4 / agent.e2e 7 用例数不变（命令名 agent_hooks_* 与事件名 agent-event 断言同步，D-14）；run-wdio.cjs E2E-05 备份集合注释「随第二 CLI 接入扩展」（D-11，无用例变动）。L2 2329 不变，L1 571→584，全量 3075→3088。
