@@ -20,8 +20,8 @@ use std::fs;
 use std::process::Command;
 
 use common::{block_on, commit_file, git_add, init_temp_repo, make_app_state};
+use slterminal_lib::git::{get_or_open_repo, git_status_impl, status_to_str, GitStatusEntry};
 use slterminal_lib::AppError;
-use slterminal_lib::git::{GitStatusEntry, get_or_open_repo, git_status_impl, status_to_str};
 
 // ---- B1: status_to_str 纯函数映射测试 ----
 
@@ -30,8 +30,14 @@ fn test_status_to_str_all_flags() {
     let cases = vec![
         (git2::Status::WT_NEW, Some("untracked")),
         (git2::Status::INDEX_NEW, Some("added")),
-        (git2::Status::INDEX_NEW | git2::Status::WT_NEW, Some("added")),
-        (git2::Status::INDEX_NEW | git2::Status::WT_MODIFIED, Some("added")),
+        (
+            git2::Status::INDEX_NEW | git2::Status::WT_NEW,
+            Some("added"),
+        ),
+        (
+            git2::Status::INDEX_NEW | git2::Status::WT_MODIFIED,
+            Some("added"),
+        ),
         (git2::Status::WT_MODIFIED, Some("modified")),
         (git2::Status::INDEX_MODIFIED, Some("modified")),
         (git2::Status::WT_DELETED, Some("deleted")),
@@ -63,10 +69,7 @@ fn git_status_empty_repo_no_files() {
     let (_dir, path) = init_temp_repo();
     let repo = git2::Repository::open(&path).unwrap();
     let statuses = repo.statuses(None).unwrap();
-    assert!(
-        statuses.is_empty(),
-        "空仓库无文件应返回空状态"
-    );
+    assert!(statuses.is_empty(), "空仓库无文件应返回空状态");
 }
 
 // ---- B2: git_status 状态行为（git2 底层原语：直接 repo.statuses，不经过命令） ----
@@ -284,10 +287,7 @@ fn git_status_absolute_path_for_root_file() {
             abs.starts_with(&repo_path_str),
             "绝对路径应以仓库根开头: {abs} vs {repo_path_str}"
         );
-        assert!(
-            abs.ends_with("test.txt"),
-            "绝对路径应以文件名结尾: {abs}"
-        );
+        assert!(abs.ends_with("test.txt"), "绝对路径应以文件名结尾: {abs}");
         // 应为 repo_path + "/" + filename 格式（非 Windows 原始反斜杠）
         assert!(!abs.contains('\\'), "路径不应含反斜杠: {abs}");
     }
@@ -349,8 +349,11 @@ fn git_status_modified_file_absolute_path() {
         if entry.status().contains(git2::Status::WT_MODIFIED) {
             let rel = entry.path().unwrap_or("").to_string().replace('\\', "/");
             let abs = status_entry_to_absolute(&path, &rel);
-            assert_eq!(abs, format!("{repo_path_str}/test.txt"),
-                "modified 文件的绝对路径应为 repo/test.txt");
+            assert_eq!(
+                abs,
+                format!("{repo_path_str}/test.txt"),
+                "modified 文件的绝对路径应为 repo/test.txt"
+            );
             found = true;
         }
     }
@@ -370,11 +373,16 @@ fn git_status_untracked_file_absolute_path() {
     let repo_path_str = path.to_string_lossy().replace('\\', "/");
     let mut found = false;
     for entry in statuses.iter() {
-        if entry.status().contains(git2::Status::WT_NEW) && !entry.status().contains(git2::Status::INDEX_NEW) {
+        if entry.status().contains(git2::Status::WT_NEW)
+            && !entry.status().contains(git2::Status::INDEX_NEW)
+        {
             let rel = entry.path().unwrap_or("").to_string().replace('\\', "/");
             let abs = status_entry_to_absolute(&path, &rel);
-            assert_eq!(abs, format!("{repo_path_str}/new_file.txt"),
-                "untracked 文件的绝对路径应为 repo/new_file.txt");
+            assert_eq!(
+                abs,
+                format!("{repo_path_str}/new_file.txt"),
+                "untracked 文件的绝对路径应为 repo/new_file.txt"
+            );
             found = true;
         }
     }
@@ -398,8 +406,11 @@ fn git_status_added_file_absolute_path() {
         if entry.status().contains(git2::Status::INDEX_NEW) {
             let rel = entry.path().unwrap_or("").to_string().replace('\\', "/");
             let abs = status_entry_to_absolute(&path, &rel);
-            assert_eq!(abs, format!("{repo_path_str}/staged.txt"),
-                "added 文件的绝对路径应为 repo/staged.txt");
+            assert_eq!(
+                abs,
+                format!("{repo_path_str}/staged.txt"),
+                "added 文件的绝对路径应为 repo/staged.txt"
+            );
             found = true;
         }
     }
@@ -423,8 +434,11 @@ fn git_status_deleted_file_absolute_path() {
         if entry.status().contains(git2::Status::WT_DELETED) {
             let rel = entry.path().unwrap_or("").to_string().replace('\\', "/");
             let abs = status_entry_to_absolute(&path, &rel);
-            assert_eq!(abs, format!("{repo_path_str}/to_delete.txt"),
-                "deleted 文件的绝对路径应为 repo/to_delete.txt");
+            assert_eq!(
+                abs,
+                format!("{repo_path_str}/to_delete.txt"),
+                "deleted 文件的绝对路径应为 repo/to_delete.txt"
+            );
             found = true;
         }
     }
@@ -449,12 +463,12 @@ fn git_status_recurse_untracked_dirs() {
 
     let repo = git2::Repository::open(&path).unwrap();
     let mut opts = git2::StatusOptions::new();
-    opts.include_untracked(true)
-        .recurse_untracked_dirs(true);
+    opts.include_untracked(true).recurse_untracked_dirs(true);
     let statuses = repo.statuses(Some(&mut opts)).unwrap();
 
     // 收集所有 untracked 路径
-    let untracked_paths: Vec<String> = statuses.iter()
+    let untracked_paths: Vec<String> = statuses
+        .iter()
         .filter(|e| {
             let s = e.status();
             s.contains(git2::Status::WT_NEW) && !s.contains(git2::Status::INDEX_NEW)
@@ -463,15 +477,23 @@ fn git_status_recurse_untracked_dirs() {
         .collect();
 
     // 每个文件单独出现，不是目录单条目 "newdir/"
-    assert!(untracked_paths.contains(&"newdir/a.txt".to_string()),
-        "应包含 newdir/a.txt，实际: {untracked_paths:?}");
-    assert!(untracked_paths.contains(&"newdir/b.txt".to_string()),
-        "应包含 newdir/b.txt，实际: {untracked_paths:?}");
-    assert!(untracked_paths.contains(&"newdir/nested/c.txt".to_string()),
-        "应包含 newdir/nested/c.txt，实际: {untracked_paths:?}");
+    assert!(
+        untracked_paths.contains(&"newdir/a.txt".to_string()),
+        "应包含 newdir/a.txt，实际: {untracked_paths:?}"
+    );
+    assert!(
+        untracked_paths.contains(&"newdir/b.txt".to_string()),
+        "应包含 newdir/b.txt，实际: {untracked_paths:?}"
+    );
+    assert!(
+        untracked_paths.contains(&"newdir/nested/c.txt".to_string()),
+        "应包含 newdir/nested/c.txt，实际: {untracked_paths:?}"
+    );
     // 不应出现目录条目
-    assert!(!untracked_paths.contains(&"newdir/".to_string()),
-        "递归模式下不应出现目录单条目 newdir/，实际: {untracked_paths:?}");
+    assert!(
+        !untracked_paths.contains(&"newdir/".to_string()),
+        "递归模式下不应出现目录单条目 newdir/，实际: {untracked_paths:?}"
+    );
 }
 
 #[test]
@@ -487,15 +509,18 @@ fn git_status_path_matches_fs_read_dir_format() {
     let statuses = repo.statuses(Some(&mut opts)).unwrap();
 
     // 模拟 fs_read_dir 的路径格式
-    let fs_read_dir_path = path.join("compare.txt")
+    let fs_read_dir_path = path
+        .join("compare.txt")
         .to_string_lossy()
         .replace('\\', "/");
 
     for entry in statuses.iter() {
         let rel = entry.path().unwrap_or("").to_string().replace('\\', "/");
         let abs = status_entry_to_absolute(&path, &rel);
-        assert_eq!(abs, fs_read_dir_path,
-            "git_status 的绝对路径应与 fs_read_dir 的 DirEntry.path 格式完全一致");
+        assert_eq!(
+            abs, fs_read_dir_path,
+            "git_status 的绝对路径应与 fs_read_dir 的 DirEntry.path 格式完全一致"
+        );
     }
 }
 
@@ -527,7 +552,8 @@ fn git_status_renamed_has_old_path() {
         .replace('\\', "/");
 
     // 查找 renamed 条目
-    let renamed: Vec<_> = statuses.iter()
+    let renamed: Vec<_> = statuses
+        .iter()
         .filter(|e| {
             let s = e.status();
             s.contains(git2::Status::INDEX_RENAMED) || s.contains(git2::Status::WT_RENAMED)
@@ -539,21 +565,26 @@ fn git_status_renamed_has_old_path() {
         let status_flag = entry.status();
         let old_path = if status_flag.contains(git2::Status::INDEX_RENAMED) {
             entry.head_to_index().and_then(|delta| {
-                delta.old_file().path().map(|p| {
-                    workdir.join(p).to_string_lossy().replace('\\', "/")
-                })
+                delta
+                    .old_file()
+                    .path()
+                    .map(|p| workdir.join(p).to_string_lossy().replace('\\', "/"))
             })
         } else if status_flag.contains(git2::Status::WT_RENAMED) {
             entry.index_to_workdir().and_then(|delta| {
-                delta.old_file().path().map(|p| {
-                    workdir.join(p).to_string_lossy().replace('\\', "/")
-                })
+                delta
+                    .old_file()
+                    .path()
+                    .map(|p| workdir.join(p).to_string_lossy().replace('\\', "/"))
             })
         } else {
             None
         };
-        assert_eq!(old_path.as_deref(), Some(&expected_old[..]),
-            "renamed 条目的 oldPath 应为旧绝对路径");
+        assert_eq!(
+            old_path.as_deref(),
+            Some(&expected_old[..]),
+            "renamed 条目的 oldPath 应为旧绝对路径"
+        );
     }
 }
 
@@ -614,14 +645,24 @@ fn git_status_command_old_path_field_contract() {
 
 #[test]
 fn git_status_entry_serializes_camelcase() {
-    let entry = GitStatusEntry { path: "/abs/path".into(), status: "modified".into(), old_path: None };
+    let entry = GitStatusEntry {
+        path: "/abs/path".into(),
+        status: "modified".into(),
+        old_path: None,
+    };
     let json = serde_json::to_string(&entry).unwrap();
     assert!(json.contains("\"path\""), "应包含 path: {json}");
     assert!(json.contains("\"status\""), "应包含 status: {json}");
-    assert!(json.contains("\"oldPath\""), "应包含 camelCase 字段 oldPath: {json}");
+    assert!(
+        json.contains("\"oldPath\""),
+        "应包含 camelCase 字段 oldPath: {json}"
+    );
     assert!(!json.contains("\"Path\""), "不应包含 PascalCase");
     // 非 renamed 条目 oldPath 应为 null
-    assert!(json.contains("\"oldPath\":null"), "非 renamed 条目 oldPath 应为 null: {json}");
+    assert!(
+        json.contains("\"oldPath\":null"),
+        "非 renamed 条目 oldPath 应为 null: {json}"
+    );
 }
 
 #[test]
@@ -632,7 +673,10 @@ fn git_status_entry_renamed_has_old_path_camelcase() {
         old_path: Some("/repo/old.txt".into()),
     };
     let json = serde_json::to_string(&entry).unwrap();
-    assert!(json.contains("\"oldPath\":\"/repo/old.txt\""), "renamed 条目 oldPath 应为旧路径: {json}");
+    assert!(
+        json.contains("\"oldPath\":\"/repo/old.txt\""),
+        "renamed 条目 oldPath 应为旧路径: {json}"
+    );
 }
 
 // ---- dunce::simplified() 路径前缀剥离（git2/路径底层原语） ----
@@ -723,14 +767,19 @@ fn git_discover_from_subdirectory() {
         .unwrap();
 
     // 从子目录 discover
-    let repo = git2::Repository::discover(&sub_dir)
-        .expect("从子目录 discover 应能找到仓库");
+    let repo = git2::Repository::discover(&sub_dir).expect("从子目录 discover 应能找到仓库");
     assert!(repo.workdir().is_some(), "应能找到 workdir");
 
     // 验证路径拼接正确
     let workdir = dunce::simplified(repo.workdir().unwrap());
-    let abs = workdir.join("sub/deep/file.txt").to_string_lossy().replace('\\', "/");
-    let expected = path.join("sub/deep/file.txt").to_string_lossy().replace('\\', "/");
+    let abs = workdir
+        .join("sub/deep/file.txt")
+        .to_string_lossy()
+        .replace('\\', "/");
+    let expected = path
+        .join("sub/deep/file.txt")
+        .to_string_lossy()
+        .replace('\\', "/");
     assert_eq!(abs, expected, "workdir 拼接路径应与实际路径一致");
 }
 
@@ -768,7 +817,10 @@ fn get_or_open_repo_cache_miss() {
 
     let cache = std::sync::Mutex::new(std::collections::HashMap::new());
     let result = get_or_open_repo(&cache, &path.to_string_lossy(), &Some(path.clone()));
-    assert!(result.is_ok(), "首次访问应成功（cache miss → discover → 缓存）");
+    assert!(
+        result.is_ok(),
+        "首次访问应成功（cache miss → discover → 缓存）"
+    );
     let (_repo, workdir) = result.unwrap();
     assert_eq!(workdir, dunce::simplified(path.as_path()));
 }
@@ -907,7 +959,11 @@ fn get_or_open_repo_bare_repo_returns_err() {
     git2::Repository::init_bare(&bare_path).unwrap();
 
     let cache = std::sync::Mutex::new(std::collections::HashMap::new());
-    let result = get_or_open_repo(&cache, &bare_path.to_string_lossy(), &Some(bare_path.clone()));
+    let result = get_or_open_repo(
+        &cache,
+        &bare_path.to_string_lossy(),
+        &Some(bare_path.clone()),
+    );
     assert!(result.is_err(), "bare repo 无 workdir 应返回错误");
 }
 

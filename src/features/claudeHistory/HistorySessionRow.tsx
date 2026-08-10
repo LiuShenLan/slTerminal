@@ -13,7 +13,8 @@ import React from "react";
 import type { HistorySession } from "../../types/claudeHistory";
 import type { ClaudeStatus } from "../../lib/claudeStatus";
 import { STATUS_EMOJI } from "../../lib/claudeStatus";
-import { cliIconRegistry } from "../../lib/cliIcons";
+import { cliProfileRegistry } from "../cliProfiles";
+import { CLAUDE_CLI_ID } from "../cliProfiles/profiles/claude";
 import { formatRelativeTime } from "./historyModel";
 import { EXPLORER_SELECTION_BG, SIDEBAR_COLORS, DIM_FG } from "../../theme";
 
@@ -49,9 +50,9 @@ export const HistorySessionRow: React.FC<HistorySessionRowProps> = ({
   const title = session.title ?? session.sessionId.slice(0, 8);
   const timeStr = formatRelativeTime(session.mtimeMs, Date.now());
   const statusIcon = status != null ? (STATUS_EMOJI[status] ?? "") : "";
-  // 当前历史区会话均为 claude（HistorySession 无 CLI 字段），直接取注册表 claude 条目；
-  // 未来新增编码 CLI 时按行 CLI 标识扩展
-  const logoSrc = cliIconRegistry.getSrc("claude");
+  // 过渡形态：HistorySession 暂无 cliId 字段（Stage 05 MC-311 数据侧就绪后回收），暂取 claude profile 的 iconSrc；
+  // 未命中（claude profile 未注册）→ undefined → 无 logo 不报错（与原 cliIconRegistry.getSrc 语义一致）
+  const logoSrc = cliProfileRegistry.get(CLAUDE_CLI_ID)?.iconSrc;
 
   return (
     <div

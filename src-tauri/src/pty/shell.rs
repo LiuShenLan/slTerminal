@@ -34,10 +34,7 @@ pub(crate) fn validate_shell_allowlist(program: &str) -> Result<(), AppError> {
         .unwrap_or(program);
 
     let filename_lower = filename.to_lowercase();
-    if ALLOWED_SHELLS
-        .iter()
-        .any(|a| filename_lower == *a)
-    {
+    if ALLOWED_SHELLS.iter().any(|a| filename_lower == *a) {
         return Ok(());
     }
 
@@ -200,11 +197,13 @@ mod tests {
 
     #[test]
     fn test_which_full_path_finds_pwsh_or_powershell() {
-        let found = which_full_path("pwsh.exe")
-            .or_else(|| which_full_path("powershell.exe"));
+        let found = which_full_path("pwsh.exe").or_else(|| which_full_path("powershell.exe"));
         assert!(found.is_some(), "至少 pwsh 或 powershell 应存在");
         let path = found.unwrap();
-        assert!(path.contains('\\') || path.contains('/'), "应返回完整路径，实际: {path}");
+        assert!(
+            path.contains('\\') || path.contains('/'),
+            "应返回完整路径，实际: {path}"
+        );
         assert!(path.ends_with(".exe"), "路径应以 .exe 结尾，实际: {path}");
     }
 
@@ -215,7 +214,9 @@ mod tests {
 
     #[test]
     fn test_resolve_shell_info_returns_full_path() {
-        let info = if which_full_path("pwsh.exe").is_some() || which_full_path("powershell.exe").is_some() {
+        let info = if which_full_path("pwsh.exe").is_some()
+            || which_full_path("powershell.exe").is_some()
+        {
             resolve_shell_info(None)
         } else {
             // 无 pwsh 时至少 cmd 能找到
@@ -225,7 +226,8 @@ mod tests {
         // program 应是完整路径（含路径分隔符）
         assert!(
             info.program.contains('\\') || info.program.contains('/'),
-            "ShellInfo.program 应为完整路径，实际: {}", info.program
+            "ShellInfo.program 应为完整路径，实际: {}",
+            info.program
         );
     }
 
@@ -326,8 +328,7 @@ mod tests {
         // cmd.exe 可通过 which_full_path 解析
         let resolved = which_full_path("cmd.exe");
         if let Some(path) = resolved {
-            validate_shell_allowlist(&path)
-                .expect("通过 PATH 解析的 cmd.exe 应通过白名单校验");
+            validate_shell_allowlist(&path).expect("通过 PATH 解析的 cmd.exe 应通过白名单校验");
         }
     }
 

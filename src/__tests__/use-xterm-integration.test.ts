@@ -233,9 +233,6 @@ vi.mock("../../../e2e-tests/helpers", () => ({
   initTerminalE2e: vi.fn(),
 }));
 
-// tabRules — 副作用导入（注册 tab 规则），stub 防止加载图片等资源
-vi.mock("../panels/terminal/tabRules", () => ({}));
-
 // WebGL — 可控 mock：默认不可用，WebGL 测试中设为可用
 vi.mock("../panels/terminal/webgl", () => ({
   detectWebgl: () => webglConfig.available,

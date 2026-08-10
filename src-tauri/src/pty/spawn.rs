@@ -35,18 +35,17 @@ pub mod conpty_custom {
     use std::mem;
     use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
     use std::sync::{Arc, Mutex};
+    use windows::core::{PCWSTR, PWSTR};
+    use windows::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
     use windows::Win32::System::Console::{
-        ClosePseudoConsole, CreatePseudoConsole, ResizePseudoConsole, HPCON, COORD,
+        ClosePseudoConsole, CreatePseudoConsole, ResizePseudoConsole, COORD, HPCON,
         PSEUDOCONSOLE_INHERIT_CURSOR,
     };
     use windows::Win32::System::Threading::{
         CreateProcessW, DeleteProcThreadAttributeList, InitializeProcThreadAttributeList,
-        UpdateProcThreadAttribute, EXTENDED_STARTUPINFO_PRESENT, PROCESS_INFORMATION,
-        PROCESS_CREATION_FLAGS, LPPROC_THREAD_ATTRIBUTE_LIST, STARTF_USESTDHANDLES,
-        STARTUPINFOEXW,
+        UpdateProcThreadAttribute, EXTENDED_STARTUPINFO_PRESENT, LPPROC_THREAD_ATTRIBUTE_LIST,
+        PROCESS_CREATION_FLAGS, PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOEXW,
     };
-    use windows::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
-    use windows::core::{PCWSTR, PWSTR};
 
     // ─── flag 常量（windows crate 仅定义 PSEUDOCONSOLE_INHERIT_CURSOR）───
     const FLAG_RESIZE_QUIRK: u32 = 0x2;
@@ -82,9 +81,13 @@ pub mod conpty_custom {
         let mut s = String::new();
         // 程序路径含空格时加引号
         let quote = program.contains(' ');
-        if quote { s.push('"'); }
+        if quote {
+            s.push('"');
+        }
         s.push_str(program);
-        if quote { s.push('"'); }
+        if quote {
+            s.push('"');
+        }
         for arg in args {
             s.push(' ');
             if arg.contains(' ') || arg.contains('\t') {
@@ -138,7 +141,12 @@ pub mod conpty_custom {
         fn with_capacity(num_attributes: u32) -> Result<Self, Error> {
             let mut bytes_required: usize = 0;
             unsafe {
-                let _ = InitializeProcThreadAttributeList(None, num_attributes, Some(0), &mut bytes_required);
+                let _ = InitializeProcThreadAttributeList(
+                    None,
+                    num_attributes,
+                    Some(0),
+                    &mut bytes_required,
+                );
             };
             let mut data = vec![0u8; bytes_required];
             let res = unsafe {
@@ -172,10 +180,7 @@ pub mod conpty_custom {
                     None,
                 )
             };
-            ensure!(
-                res.is_ok(),
-                "UpdateProcThreadAttribute 失败"
-            );
+            ensure!(res.is_ok(), "UpdateProcThreadAttribute 失败");
             Ok(())
         }
     }
@@ -206,7 +211,10 @@ pub mod conpty_custom {
 
     impl MasterPty for ConPtyMaster {
         fn resize(&self, size: PtySize) -> Result<(), Error> {
-            let mut inner = self.inner.lock().map_err(|e| anyhow::anyhow!("ConPtyInner lock poisoned: {e}"))?;
+            let mut inner = self
+                .inner
+                .lock()
+                .map_err(|e| anyhow::anyhow!("ConPtyInner lock poisoned: {e}"))?;
             // 检查 HPCON 有效性（初始化或已关闭时为 INVALID_HANDLE_VALUE）
             if inner.hpc.is_invalid() {
                 inner.size = size;
@@ -223,11 +231,21 @@ pub mod conpty_custom {
         }
 
         fn get_size(&self) -> Result<PtySize, Error> {
-            Ok(self.inner.lock().map_err(|e| anyhow::anyhow!("ConPtyInner lock poisoned: {e}"))?.size)
+            Ok(self
+                .inner
+                .lock()
+                .map_err(|e| anyhow::anyhow!("ConPtyInner lock poisoned: {e}"))?
+                .size)
         }
 
         fn try_clone_reader(&self) -> Result<Box<dyn Read + Send>, Error> {
-            Ok(Box::new(self.inner.lock().map_err(|e| anyhow::anyhow!("ConPtyInner lock poisoned: {e}"))?.readable.try_clone()?))
+            Ok(Box::new(
+                self.inner
+                    .lock()
+                    .map_err(|e| anyhow::anyhow!("ConPtyInner lock poisoned: {e}"))?
+                    .readable
+                    .try_clone()?,
+            ))
         }
 
         fn take_writer(&self) -> Result<Box<dyn Write + Send>, Error> {
@@ -260,11 +278,12 @@ pub mod conpty_custom {
     impl ChildKiller for RawChild {
         fn kill(&mut self) -> std::io::Result<()> {
             use windows::Win32::System::Threading::TerminateProcess;
-            let proc = self.proc_handle.lock().map_err(|e| std::io::Error::other(format!("RawChild proc_handle lock poisoned: {e}")))?;
+            let proc = self.proc_handle.lock().map_err(|e| {
+                std::io::Error::other(format!("RawChild proc_handle lock poisoned: {e}"))
+            })?;
             // SAFETY: TerminateProcess 是 Win32 API；HANDLE 来自 CreateProcessW 创建的有效子进程句柄
             unsafe {
-                TerminateProcess(HANDLE(proc.as_raw_handle()), 1)
-                    .map_err(std::io::Error::other)?;
+                TerminateProcess(HANDLE(proc.as_raw_handle()), 1).map_err(std::io::Error::other)?;
             }
             Ok(())
         }
@@ -281,10 +300,12 @@ pub mod conpty_custom {
 
     impl Child for RawChild {
         fn try_wait(&mut self) -> std::io::Result<Option<portable_pty::ExitStatus>> {
-            use windows::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject};
             use windows::Win32::Foundation::WAIT_OBJECT_0;
+            use windows::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject};
 
-            let proc = self.proc_handle.lock().map_err(|e| std::io::Error::other(format!("RawChild proc_handle lock poisoned: {e}")))?;
+            let proc = self.proc_handle.lock().map_err(|e| {
+                std::io::Error::other(format!("RawChild proc_handle lock poisoned: {e}"))
+            })?;
             // SAFETY: WaitForSingleObject 和 GetExitCodeProcess 是 Win32 API；HANDLE 来自 CreateProcessW 创建的有效子进程句柄
             unsafe {
                 let result = WaitForSingleObject(HANDLE(proc.as_raw_handle()), 0);
@@ -307,11 +328,13 @@ pub mod conpty_custom {
         }
 
         fn wait(&mut self) -> std::io::Result<portable_pty::ExitStatus> {
-            use windows::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject};
             use windows::Win32::Foundation::WAIT_OBJECT_0;
+            use windows::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject};
             const INFINITE: u32 = 0xFFFF_FFFF;
 
-            let proc = self.proc_handle.lock().map_err(|e| std::io::Error::other(format!("RawChild proc_handle lock poisoned: {e}")))?;
+            let proc = self.proc_handle.lock().map_err(|e| {
+                std::io::Error::other(format!("RawChild proc_handle lock poisoned: {e}"))
+            })?;
             // SAFETY: WaitForSingleObject 和 GetExitCodeProcess 是 Win32 API；HANDLE 来自 CreateProcessW 创建的有效子进程句柄
             unsafe {
                 let result = WaitForSingleObject(HANDLE(proc.as_raw_handle()), INFINITE);
@@ -451,11 +474,7 @@ pub mod conpty_custom {
 
         if res.is_err() {
             let err = std::io::Error::last_os_error();
-            bail!(
-                "CreateProcessW `{}` 失败: {}",
-                shell_info.program,
-                err
-            );
+            bail!("CreateProcessW `{}` 失败: {}", shell_info.program, err);
         }
 
         // 关闭子进程的主线程句柄（不需要），进程句柄由 RawChild 持有
@@ -464,7 +483,9 @@ pub mod conpty_custom {
         }
 
         Ok(RawChild {
-            proc_handle: Arc::new(Mutex::new(unsafe { OwnedHandle::from_raw_handle(pi.hProcess.0 as _) })),
+            proc_handle: Arc::new(Mutex::new(unsafe {
+                OwnedHandle::from_raw_handle(pi.hProcess.0 as _)
+            })),
             pid: pi.dwProcessId,
         })
     }
@@ -623,12 +644,10 @@ pub mod conpty_custom {
             // 环境块应以双 null 结尾（\0\0）
             let len = block.len();
             assert!(len >= 2, "环境块长度应 ≥ 2");
+            assert_eq!(block[len - 1], 0, "环境块最后一个 wchar 应为 null");
             assert_eq!(
-                block[len - 1], 0,
-                "环境块最后一个 wchar 应为 null"
-            );
-            assert_eq!(
-                block[len - 2], 0,
+                block[len - 2],
+                0,
                 "环境块倒数第二个 wchar 应为 null（双 null 终止）"
             );
         }
@@ -645,8 +664,10 @@ pub mod conpty_custom {
             assert!(wide.ends_with(&[0]), "应以 null 结尾");
             // 去掉尾部 null 后解码验证
             let text = String::from_utf16_lossy(&wide[..wide.len() - 1]);
-            assert_eq!(text, "C:\\Users\\test\\project",
-                "反斜杠路径应正确编码为 UTF-16LE");
+            assert_eq!(
+                text, "C:\\Users\\test\\project",
+                "反斜杠路径应正确编码为 UTF-16LE"
+            );
         }
 
         #[test]
@@ -654,8 +675,7 @@ pub mod conpty_custom {
             // 不含正斜杠的路径无需转换（build_cwd_wide 原样编码）
             let wide = build_cwd_wide("C:\\Users\\test");
             let text = String::from_utf16_lossy(&wide[..wide.len() - 1]);
-            assert_eq!(text, "C:\\Users\\test",
-                "纯反斜杠路径应保持不变");
+            assert_eq!(text, "C:\\Users\\test", "纯反斜杠路径应保持不变");
         }
 
         #[test]
@@ -663,8 +683,10 @@ pub mod conpty_custom {
             // 混合斜杠：只有 / 转为 \（build_cwd_wide 内部规范化）
             let wide = build_cwd_wide("C:/Users\\test/project\\sub");
             let text = String::from_utf16_lossy(&wide[..wide.len() - 1]);
-            assert_eq!(text, "C:\\Users\\test\\project\\sub",
-                "混合斜杠应将 / 统一为 \\");
+            assert_eq!(
+                text, "C:\\Users\\test\\project\\sub",
+                "混合斜杠应将 / 统一为 \\"
+            );
         }
 
         #[test]
@@ -691,8 +713,7 @@ pub mod conpty_custom {
             let wide = build_cmdline("C:\\Program Files\\PowerShell\\7\\pwsh.exe", &[]);
             let text = String::from_utf16_lossy(&wide[..wide.len() - 1]);
             assert_eq!(
-                text,
-                "\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\"",
+                text, "\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\"",
                 "含空格程序路径应整体加引号"
             );
         }
@@ -700,14 +721,10 @@ pub mod conpty_custom {
         /// 参数含空格 → 该参数加引号，无空格程序路径不加
         #[test]
         fn build_cmdline_quotes_arg_with_space() {
-            let wide = build_cmdline(
-                "pwsh.exe",
-                &["-Command".into(), "echo hello world".into()],
-            );
+            let wide = build_cmdline("pwsh.exe", &["-Command".into(), "echo hello world".into()]);
             let text = String::from_utf16_lossy(&wide[..wide.len() - 1]);
             assert_eq!(
-                text,
-                "pwsh.exe -Command \"echo hello world\"",
+                text, "pwsh.exe -Command \"echo hello world\"",
                 "含空格参数应加引号，无空格参数不加"
             );
         }
@@ -717,11 +734,7 @@ pub mod conpty_custom {
         fn build_cmdline_quotes_arg_with_tab() {
             let wide = build_cmdline("cmd.exe", &["echo\thello".into()]);
             let text = String::from_utf16_lossy(&wide[..wide.len() - 1]);
-            assert_eq!(
-                text,
-                "cmd.exe \"echo\thello\"",
-                "含制表符参数应加引号"
-            );
+            assert_eq!(text, "cmd.exe \"echo\thello\"", "含制表符参数应加引号");
         }
 
         /// 无空格路径与参数 → 全部不加引号
@@ -733,8 +746,7 @@ pub mod conpty_custom {
             );
             let text = String::from_utf16_lossy(&wide[..wide.len() - 1]);
             assert_eq!(
-                text,
-                "C:\\Windows\\System32\\cmd.exe /c echo",
+                text, "C:\\Windows\\System32\\cmd.exe /c echo",
                 "无空格时不应加任何引号"
             );
         }
@@ -879,7 +891,9 @@ fn validate_spawn_request(
     if request.cols > i16::MAX as u16 || request.rows > i16::MAX as u16 {
         return Err(AppError::Pty(format!(
             "终端尺寸超限: cols={}, rows={}, 最大允许值={}",
-            request.cols, request.rows, i16::MAX
+            request.cols,
+            request.rows,
+            i16::MAX
         )));
     }
 
@@ -982,13 +996,8 @@ pub async fn pty_spawn(
         // spawn 子进程（仍在 SPAWN_LOCK 内）
         #[cfg(windows)]
         let mut child: Box<dyn portable_pty::Child + Send> = Box::new(
-            conpty_custom::spawn_conpty_child(
-                conpty_hpc,
-                &shell_info,
-                &extra_envs,
-                cwd.as_deref(),
-            )
-            .map_err(|e| AppError::Pty(e.to_string()))?,
+            conpty_custom::spawn_conpty_child(conpty_hpc, &shell_info, &extra_envs, cwd.as_deref())
+                .map_err(|e| AppError::Pty(e.to_string()))?,
         );
         #[cfg(not(windows))]
         let child: Box<dyn portable_pty::Child + Send> = {
@@ -1012,8 +1021,7 @@ pub async fn pty_spawn(
         let raw_writer = master
             .take_writer()
             .map_err(|e| AppError::Pty(e.to_string()))?;
-        let writer: Arc<Mutex<Box<dyn std::io::Write + Send>>> =
-            Arc::new(Mutex::new(raw_writer));
+        let writer: Arc<Mutex<Box<dyn std::io::Write + Send>>> = Arc::new(Mutex::new(raw_writer));
 
         // Windows: spawn 后向 stdin 写 CPR \x1b[1;1R（锁外）
         // 补偿 ConPTY VtIo::StartIfNeeded() DSR 握手。
@@ -1050,8 +1058,7 @@ pub async fn pty_spawn(
         let output_ring: Arc<Mutex<VecDeque<u8>>> = Arc::new(Mutex::new(VecDeque::new()));
 
         // P2-11: child 包装为 Arc<Mutex<>>，reader 线程通过 clone 获取真实退出码
-        let child: Arc<Mutex<Box<dyn portable_pty::Child + Send>>> =
-            Arc::new(Mutex::new(child));
+        let child: Arc<Mutex<Box<dyn portable_pty::Child + Send>>> = Arc::new(Mutex::new(child));
 
         // 克隆 reader，启动 reader 线程（reader.rs 首轮读取剥离 ConPTY 启动注入序列）
         let reader = master
@@ -1382,15 +1389,13 @@ fn job_limits() -> windows::Win32::System::JobObjects::JOBOBJECT_EXTENDED_LIMIT_
 /// 过早触发。`JobHandle::drop` 会调用 `CloseHandle` 释放句柄。
 #[cfg(windows)]
 unsafe fn create_and_assign_job(pid: u32, job_name_wide: &[u16]) -> Result<JobHandle, AppError> {
-    use windows::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, SetInformationJobObject,
-        JobObjectExtendedLimitInformation, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-    };
-    use windows::Win32::System::Threading::{
-        OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
-    };
-    use windows::Win32::Foundation::CloseHandle;
     use windows::core::PCWSTR;
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    };
+    use windows::Win32::System::Threading::{OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE};
 
     // 创建 Job Object
     let job = CreateJobObjectW(None, PCWSTR::from_raw(job_name_wide.as_ptr()))
@@ -1408,12 +1413,8 @@ unsafe fn create_and_assign_job(pid: u32, job_name_wide: &[u16]) -> Result<JobHa
     .map_err(|e| AppError::Pty(format!("SetInformationJobObject failed: {e}")))?;
 
     // 打开子进程句柄并分配到 Job Object
-    let process = OpenProcess(
-        PROCESS_SET_QUOTA | PROCESS_TERMINATE,
-        false,
-        pid,
-    )
-    .map_err(|e| AppError::Pty(format!("OpenProcess failed: {e}")))?;
+    let process = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, false, pid)
+        .map_err(|e| AppError::Pty(format!("OpenProcess failed: {e}")))?;
 
     AssignProcessToJobObject(job, process)
         .map_err(|e| AppError::Pty(format!("AssignProcessToJobObject failed: {e}")))?;
@@ -1537,8 +1538,16 @@ mod tests {
         let s1 = make_test_session("panel-x");
         let s2 = make_test_session("panel-x"); // 同 panel_id
 
-        pty_state.sessions.write().unwrap().insert("sid-1".into(), s1);
-        pty_state.sessions.write().unwrap().insert("sid-2".into(), s2);
+        pty_state
+            .sessions
+            .write()
+            .unwrap()
+            .insert("sid-1".into(), s1);
+        pty_state
+            .sessions
+            .write()
+            .unwrap()
+            .insert("sid-2".into(), s2);
         assert_eq!(pty_state.sessions.read().unwrap().len(), 2);
 
         // 移除 sid-1，sid-2 应不受影响
@@ -1549,7 +1558,10 @@ mod tests {
 
         let sessions = pty_state.sessions.read().unwrap();
         assert!(!sessions.contains_key("sid-1"));
-        assert!(sessions.contains_key("sid-2"), "同 panel_id 的另一 session 应仍存在");
+        assert!(
+            sessions.contains_key("sid-2"),
+            "同 panel_id 的另一 session 应仍存在"
+        );
         assert_eq!(sessions.get("sid-2").unwrap().panel_id, "panel-x");
         drop(sessions);
 
@@ -1563,11 +1575,19 @@ mod tests {
     fn test_remove_nonexistent_session_no_side_effect() {
         let pty_state = PtyState::new();
         let s = make_test_session("panel-y");
-        pty_state.sessions.write().unwrap().insert("sid-y".into(), s);
+        pty_state
+            .sessions
+            .write()
+            .unwrap()
+            .insert("sid-y".into(), s);
         assert_eq!(pty_state.sessions.read().unwrap().len(), 1);
 
         // 移除不存在的 key
-        let result = pty_state.sessions.write().unwrap().remove("sid-nonexistent");
+        let result = pty_state
+            .sessions
+            .write()
+            .unwrap()
+            .remove("sid-nonexistent");
         assert!(result.is_none(), "移除不存在的 session 应返回 None");
 
         // 已有 session 不受影响
@@ -1595,15 +1615,17 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn job_limits_contains_kill_on_job_close() {
-        use windows::Win32::System::JobObjects::{JOB_OBJECT_LIMIT, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE};
+        use windows::Win32::System::JobObjects::{
+            JOB_OBJECT_LIMIT, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        };
         let limits = job_limits();
         assert_eq!(
-            limits.BasicLimitInformation.LimitFlags,
-            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            limits.BasicLimitInformation.LimitFlags, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
             "LimitFlags 应包含 KILL_ON_JOB_CLOSE"
         );
         assert_eq!(
-            limits.BasicLimitInformation.LimitFlags, JOB_OBJECT_LIMIT(0x2000),
+            limits.BasicLimitInformation.LimitFlags,
+            JOB_OBJECT_LIMIT(0x2000),
             "KILL_ON_JOB_CLOSE 值应锁死为 0x2000（防误删孤儿防护）"
         );
     }
@@ -1782,8 +1804,8 @@ mod tests {
     /// 使用 conpty_custom 创建真实 ConPTY 对 + 启动 cmd.exe 子进程
     #[cfg(windows)]
     fn make_test_session(panel_id: &str) -> PtySession {
-        let shell_info =
-            crate::pty::shell::resolve_shell_info(Some("cmd.exe")).expect("resolve_shell_info 应成功");
+        let shell_info = crate::pty::shell::resolve_shell_info(Some("cmd.exe"))
+            .expect("resolve_shell_info 应成功");
         let (hpc, conpty_master) =
             conpty_custom::create_conpty_pair(80, 24, 26100).expect("create_conpty_pair 应成功");
         // CPR 注入（对齐生产代码 pty_spawn 行为）

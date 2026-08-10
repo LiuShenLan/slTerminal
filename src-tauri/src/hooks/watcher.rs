@@ -196,11 +196,7 @@ fn handle_notify_events(events: &[DebouncedEvent], process: impl Fn(&Path)) {
 /// 单次轮询补漏 tick（事件循环第 2 段，D6 抽取）：
 /// 目录被删除（卸载 hooks 的 remove_dir_all 等）后自动重建 → poll_once 消费残留 →
 /// 检查停止信号。返回 true 表示收到停止信号、应退出循环。
-fn run_one_tick(
-    signal_dir: &Path,
-    stop_rx: &mpsc::Receiver<()>,
-    process: impl Fn(&Path),
-) -> bool {
+fn run_one_tick(signal_dir: &Path, stop_rx: &mpsc::Receiver<()>, process: impl Fn(&Path)) -> bool {
     // 目录被删除后自动重建——免疫 notify 事件丢失/目录删除重建（win10 实证兜底）
     if let Err(e) = std::fs::create_dir_all(signal_dir) {
         tracing::warn!("重建信号目录失败 {}: {e}", signal_dir.display());

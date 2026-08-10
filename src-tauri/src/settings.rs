@@ -406,12 +406,8 @@ mod tests {
         let _guard = AppDataDirGuard::set(dir.path());
 
         // 两个独立线程各持 runtime 并发 block_on 真实 save_settings（read-merge-write 竞态）
-        let h1 = std::thread::spawn(move || {
-            run_save_with_retry(serde_json::json!({"key": "a"}))
-        });
-        let h2 = std::thread::spawn(move || {
-            run_save_with_retry(serde_json::json!({"key": "b"}))
-        });
+        let h1 = std::thread::spawn(move || run_save_with_retry(serde_json::json!({"key": "a"})));
+        let h2 = std::thread::spawn(move || run_save_with_retry(serde_json::json!({"key": "b"})));
         h1.join().unwrap().unwrap();
         h2.join().unwrap().unwrap();
 

@@ -101,7 +101,10 @@ vi.mock("../ipc", () => ({
 import React from "react";
 import { render, screen, waitFor, act, cleanup } from "@testing-library/react";
 import TerminalPanel from "../panels/terminal/TerminalPanel";
-import { cliIconRegistry } from "../lib/cliIcons";
+import { cliProfileRegistry } from "../features/cliProfiles";
+import { claudeProfile } from "../features/cliProfiles/profiles/claude";
+// claude profile 注册（side-effect，等价旧 cliIcons.ts 内嵌注册）
+import "../features/cliProfiles/profiles";
 
 afterEach(() => {
   // RTL 无全局 cleanup（vitest.config.ts 未开 globals）——必须显式卸载，否则遮罩 DOM 跨用例累积
@@ -109,9 +112,9 @@ afterEach(() => {
   // 防用例抛错后 fake timers 泄漏到后续用例
   vi.useRealTimers();
   vi.clearAllMocks();
-  // 恢复 CliIconRegistry 默认 claude 注册（_reset 用例污染隔离）
-  cliIconRegistry._reset();
-  cliIconRegistry.register({ command: "claude", src: "/cli-icons/claude.png" });
+  // 恢复默认 claude profile 注册（_reset 用例污染隔离）
+  cliProfileRegistry._reset();
+  cliProfileRegistry.register(claudeProfile);
 });
 
 describe("TerminalPanel", () => {
@@ -303,18 +306,22 @@ describe("TerminalPanel", () => {
     );
   });
 
-  it("OSC 133 C 时 CLI 未注册 logo（注册表清空）→ tabLogo null（清旧 logo）", async () => {
-    cliIconRegistry._reset(); // 清空默认 claude 注册 → match("claude") 返回 null
+  it("OSC 133 C 未命中 profile（注册表清空）→ 零副作用（标题/图标均不更新）", async () => {
+    cliProfileRegistry._reset(); // 清空全部 profile → matchByCommand("claude") 返回 null
     render(React.createElement(TerminalPanel, { api: mocks.mockApi, params: { panelId: "test-logo3" } }));
     await waitFor(() => expect(mocks.getOscHandler(133)).toBeDefined());
     const oscHandler = mocks.getOscHandler(133)!;
 
+    // 清除 spawn 成功时 resetCommandState 产生的页签更新调用
+    mocks.mockApi.setTitle.mockClear();
+    mocks.mockApi.updateParameters.mockClear();
+
     await act(async () => {
       oscHandler("C;claude");
     });
-    expect(mocks.mockApi.updateParameters).toHaveBeenLastCalledWith(
-      expect.objectContaining({ tabIcon: "🟡", tabLogo: null }),
-    );
+    // 未命中 → 零副作用：不触发任何页签更新（现状 rule == null 分支语义保留）
+    expect(mocks.mockApi.setTitle).not.toHaveBeenCalled();
+    expect(mocks.mockApi.updateParameters).not.toHaveBeenCalled();
   });
 
   it("hook 事件路径无 logo 历史 → tabLogo null", async () => {

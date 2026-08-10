@@ -161,21 +161,6 @@ vi.mock("../panels/terminal/TerminalRegistry", () => ({
   },
 }));
 
-// useXterm.ts import { tabTitleRegistry } from "./TabTitleRegistry"
-const { mockTabTitleMatch } = vi.hoisted(() => ({
-  mockTabTitleMatch: vi.fn<(cmd: string) => { command: string; title: string; icon: string } | null>(),
-}));
-vi.mock("../panels/terminal/TabTitleRegistry", () => ({
-  tabTitleRegistry: {
-    match: mockTabTitleMatch,
-    register: vi.fn(),
-    _reset: vi.fn(),
-  },
-}));
-
-// useXterm.ts 的 side-effect import "./tabRules" — stub 防止实际加载图片资源
-vi.mock("../panels/terminal/tabRules", () => ({}));
-
 // 导入被测模块（mocks 就绪后）
 import { useXterm } from "../panels/terminal/useXterm";
 import { usePtyOutput } from "../panels/terminal/usePtyOutput";

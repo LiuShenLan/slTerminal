@@ -10,11 +10,11 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Terminal } from '@xterm/headless';
-import type { TabState } from '../../src/panels/terminal/TabTitleRegistry';
-import { tabTitleRegistry } from '../../src/panels/terminal/TabTitleRegistry';
-import '../../src/panels/terminal/tabRules'; // side-effect：注册 claude 首 token 规则
+import type { TabState } from '../../src/panels/terminal/useCommandDetection';
+import '../../src/features/cliProfiles/profiles'; // side-effect：注册 claude profile（首 token "claude"）
 import { TerminalRegistry } from '../../src/panels/terminal/TerminalRegistry';
-import { cliIconRegistry } from '../../src/lib/cliIcons'; // 真实注册表（import 即注册 claude）
+import { cliProfileRegistry } from '../../src/features/cliProfiles'; // 真实注册表
+import { STATUS_EMOJI } from '../../src/lib/claudeStatus';
 import type { Terminal as XtermTerminal } from '@xterm/xterm';
 
 vi.mock('../../src/ipc/clipboard', () => ({
@@ -76,9 +76,9 @@ function registerOsc52(term: Terminal, visible = true): void {
   });
 }
 
-// ============ OSC 133 handler 复刻（生产 src/panels/terminal/useCommandDetection.ts:41-65） ============
+// ============ OSC 133 handler 复刻（生产 src/panels/terminal/useCommandDetection.ts:57-87） ============
 
-/** 复刻生产 OSC 133 命令边界 handler（tabTitleRegistry / TerminalRegistry 均为真实生产模块）。 */
+/** 复刻生产 OSC 133 命令边界 handler（cliProfileRegistry / TerminalRegistry 均为真实生产模块）。 */
 function registerOsc133(
   term: Terminal,
   panelId: string,
@@ -93,18 +93,18 @@ function registerOsc133(
     if (type === 'C') {
       // OSC 133 C — 命令即将执行
       const command = semicolonIndex >= 0 ? data.slice(semicolonIndex + 1).trim() : '';
-      const rule = tabTitleRegistry.match(command);
-      if (rule) {
+      const profile = cliProfileRegistry.matchByCommand(command);
+      if (profile) {
         isCommandRunningRef.current = true;
-        // logo = CliIconRegistry 按命令行首 token 匹配的 CLI 品牌图（未注册 → null，清旧 logo）
+        // title/logo 均取自匹配 profile（tabTitle / iconSrc）；未命中零副作用（不触发回调）
         onTabStateChangeRef.current?.({
           active: true,
-          title: rule.title,
-          icon: '🟡',
-          logo: cliIconRegistry.match(command),
+          title: profile.tabTitle,
+          icon: STATUS_EMOJI.attention,
+          logo: profile.iconSrc,
         });
         // 写入 claude 会话状态（未注入 hooks 时无 transcriptPath）
-        TerminalRegistry.setClaudeSession(panelId, { matchedCommand: rule.command });
+        TerminalRegistry.setClaudeSession(panelId, { matchedCommand: profile.id });
       }
     } else if (type === 'D' && isCommandRunningRef.current) {
       // OSC 133 D — 命令执行完毕
@@ -177,14 +177,14 @@ describe('L3 终端渲染 — 生产 OSC handler（E2E-03）', () => {
 
   // ============ OSC 133 命令边界 ============
 
-  it('OSC 133 C — 匹配 claude 规则时 onTabStateChange 携 icon/title + 写 claudeSession', async () => {
+  it('OSC 133 C — 匹配 claude profile 时 onTabStateChange 携 icon/title + 写 claudeSession', async () => {
     const term = createTerminal();
     const states: TabState[] = [];
     registerOsc133(term, 'p1', (state) => states.push(state));
     // shell-integration.ps1 Enter hook 发射：OSC 133 C;<命令行> ST
     await writeSync(term, '\x1b]133;C;claude --resume abc\x1b\\');
-    // 首 token "claude" 命中 tabRules 注册规则（title: "claude"），attention 态 🟡 +
-    // CLI 品牌 logo（CliIconRegistry 默认注册 claude）
+    // 首 token "claude" 命中 claude profile（tabTitle: "claude"），attention 态 🟡 +
+    // CLI 品牌 logo（profile.iconSrc 默认 claude.png）
     expect(states).toEqual([
       { active: true, title: 'claude', icon: '🟡', logo: '/cli-icons/claude.png' },
     ]);
@@ -205,7 +205,7 @@ describe('L3 终端渲染 — 生产 OSC handler（E2E-03）', () => {
     expect(TerminalRegistry.get('p1')?.claudeSession).toBeNull();
   });
 
-  it('OSC 133 C — 未匹配规则的命令不触发 onTabStateChange / claudeSession', async () => {
+  it('OSC 133 C — 未匹配 profile 的命令不触发 onTabStateChange / claudeSession（零副作用）', async () => {
     const term = createTerminal();
     const states: TabState[] = [];
     registerOsc133(term, 'p1', (state) => states.push(state));

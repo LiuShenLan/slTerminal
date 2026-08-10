@@ -3,8 +3,8 @@
 //! 三命令均读写 ~/.claude/settings.json（绕过 project_root 路径沙箱，照 settings.rs 先例），
 //! 阻塞 I/O 经 spawn_blocking 串行化（硬约束 #3）。
 
-use crate::error::AppError;
 use super::{HookInjectionStatus, InjectionStatus};
+use crate::error::AppError;
 use serde_json::Value;
 use std::io::Write;
 use tempfile::NamedTempFile;
@@ -86,9 +86,9 @@ fn has_slterm_matchers(settings: &Value) -> bool {
         .and_then(|h| h.as_object())
         .is_some_and(|obj| {
             obj.values().any(|matchers| {
-                matchers.as_array().is_some_and(|arr| {
-                    arr.iter().any(matcher_contains_slterm)
-                })
+                matchers
+                    .as_array()
+                    .is_some_and(|arr| arr.iter().any(matcher_contains_slterm))
             })
         })
 }
@@ -141,9 +141,7 @@ fn remove_slterm_matchers(hooks: &mut serde_json::Map<String, Value>) -> bool {
         }
     }
     // 清理空数组的事件键
-    hooks.retain(|_event, matchers_val| {
-        matchers_val.as_array().is_none_or(|arr| !arr.is_empty())
-    });
+    hooks.retain(|_event, matchers_val| matchers_val.as_array().is_none_or(|arr| !arr.is_empty()));
     removed
 }
 
@@ -198,10 +196,12 @@ fn inject_impl(
     let mut tmp_script = NamedTempFile::new_in(script_dir)?;
     tmp_script.write_all(HOOK_SCRIPT_TEMPLATE.as_bytes())?;
     tmp_script.flush()?;
-    tmp_script.persist(&script_path).map_err(|e| AppError::IoKind {
-        kind: format!("{:?}", e.error.kind()),
-        message: format!("脚本写入失败: {e}"),
-    })?;
+    tmp_script
+        .persist(&script_path)
+        .map_err(|e| AppError::IoKind {
+            kind: format!("{:?}", e.error.kind()),
+            message: format!("脚本写入失败: {e}"),
+        })?;
 
     // 2. 读 settings.json
     let mut settings: Value = if settings_path.exists() {
@@ -236,7 +236,9 @@ fn inject_impl(
     })?;
 
     // 5. 移除旧 slterm 段（幂等/升级场景），追加新的 10 事件 matcher
-    let script_abs = dunce::simplified(&script_path).to_string_lossy().to_string();
+    let script_abs = dunce::simplified(&script_path)
+        .to_string_lossy()
+        .to_string();
     remove_slterm_matchers(hooks_obj);
     inject_matchers(hooks_obj, &script_abs);
 
@@ -251,10 +253,12 @@ fn inject_impl(
     let mut tmp_settings = NamedTempFile::new_in(settings_parent)?;
     tmp_settings.write_all(json_str.as_bytes())?;
     tmp_settings.flush()?;
-    tmp_settings.persist(settings_path).map_err(|e| AppError::IoKind {
-        kind: format!("{:?}", e.error.kind()),
-        message: format!("settings.json 写入失败: {e}"),
-    })?;
+    tmp_settings
+        .persist(settings_path)
+        .map_err(|e| AppError::IoKind {
+            kind: format!("{:?}", e.error.kind()),
+            message: format!("settings.json 写入失败: {e}"),
+        })?;
 
     Ok(HookInjectionStatus {
         status: InjectionStatus::Injected,
@@ -276,9 +280,7 @@ fn uninstall_impl(
             if let Ok(content) = std::fs::read_to_string(settings_path) {
                 let trimmed = content.trim();
                 if !trimmed.is_empty() {
-                    if let Ok(mut settings) =
-                        serde_json::from_str::<Value>(&content)
-                    {
+                    if let Ok(mut settings) = serde_json::from_str::<Value>(&content) {
                         let mut changed = false;
                         if let Some(hooks) =
                             settings.get_mut("hooks").and_then(|h| h.as_object_mut())
@@ -296,17 +298,12 @@ fn uninstall_impl(
                         if changed {
                             if let Some(parent) = settings_path.parent() {
                                 let json_str = serde_json::to_string_pretty(&settings)?;
-                                let mut tmp =
-                                    NamedTempFile::new_in(parent)?;
+                                let mut tmp = NamedTempFile::new_in(parent)?;
                                 tmp.write_all(json_str.as_bytes())?;
                                 tmp.flush()?;
-                                tmp.persist(settings_path).map_err(|e| {
-                                    AppError::IoKind {
-                                        kind: format!("{:?}", e.error.kind()),
-                                        message: format!(
-                                            "settings.json 写入失败: {e}"
-                                        ),
-                                    }
+                                tmp.persist(settings_path).map_err(|e| AppError::IoKind {
+                                    kind: format!("{:?}", e.error.kind()),
+                                    message: format!("settings.json 写入失败: {e}"),
                                 })?;
                             }
                         }
@@ -547,11 +544,7 @@ mod tests {
     fn disk_version_parses() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test.js");
-        std::fs::write(
-            &path,
-            "const SCRIPT_VERSION = 3;\n// other code\n",
-        )
-        .unwrap();
+        std::fs::write(&path, "const SCRIPT_VERSION = 3;\n// other code\n").unwrap();
         assert_eq!(disk_script_version(&path), Some(3));
     }
 
@@ -611,10 +604,7 @@ mod tests {
         .clone();
         let removed = remove_slterm_matchers(&mut hooks);
         assert!(removed);
-        assert!(
-            !hooks.contains_key("SessionStart"),
-            "空事件键应被清理"
-        );
+        assert!(!hooks.contains_key("SessionStart"), "空事件键应被清理");
     }
 
     #[test]
@@ -909,11 +899,7 @@ mod tests {
         let settings = assert_injected_settings(&settings_path);
         for &event in HOOK_EVENTS {
             let arr = settings["hooks"][event].as_array().unwrap();
-            assert_eq!(
-                arr.len(),
-                1,
-                "事件 {event} 二次注入后不应出现重复 matcher"
-            );
+            assert_eq!(arr.len(), 1, "事件 {event} 二次注入后不应出现重复 matcher");
         }
     }
 

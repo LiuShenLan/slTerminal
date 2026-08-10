@@ -24,8 +24,10 @@ import {
   getPageApi,
   switchToPageShared,
 } from "./pageApis";
-// 侧栏视图：side-effect 注册（类比 tabRules.ts，静态 import 链保证 App init 的 loadFromDisk 运行时注册已完成）
+// 侧栏视图 + CLI profile：side-effect 注册（静态 import 链保证 App init 的 loadFromDisk 运行时注册已完成）
 import "../features/sideViews/sideViewDefs";
+// CLI profile 注册触发点（D-07）：side-effect import 使 claude profile 在任何消费方使用前完成注册（照 tabRules/schemes 先例）
+import "../features/cliProfiles/profiles";
 import {
   ActivityBar,
   SideBarArea,

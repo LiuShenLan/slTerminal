@@ -9,7 +9,7 @@ import { useXterm } from "./useXterm";
 import { pty } from "../../ipc";
 import { useLayout, useFontSize } from "../../stores";
 import { PANEL_BG, INPUT_BORDER } from "../../theme";
-import type { TabState } from "./TabTitleRegistry";
+import type { TabState } from "./useCommandDetection";
 import type { DockviewPanelApi } from "dockview-react";
 
 /** 加载遮罩兜底超时（ms）——首帧数据未到达时自动隐藏 */

@@ -135,7 +135,10 @@ fn canonicalize_or_ancestor(target: &Path) -> std::io::Result<PathBuf> {
 /// 相对路径先以 project_root 为基准 join 成绝对路径，再 dunce::canonicalize。
 /// 目标不存在时上溯到最近存在的祖先目录，canonicalize 后再拼接剩余部分做校验。
 /// project_root 未设置时拒绝（#[cfg(test)] 豁免，避免每个测试都需设置 project_root）。
-pub fn validate_path_within_root(root_opt: &Option<PathBuf>, target: &Path) -> Result<(), AppError> {
+pub fn validate_path_within_root(
+    root_opt: &Option<PathBuf>,
+    target: &Path,
+) -> Result<(), AppError> {
     let root = match root_opt {
         Some(r) => r,
         None => {
@@ -199,7 +202,9 @@ const RING_BUFFER_CAPACITY: usize = 262144; // 256KB
 /// 向 ring buffer 追加数据，超过容量时从头部丢弃旧数据
 /// P2-47: 淘汰到 \\n 边界，避免行内 UTF-8 序列截断
 pub fn ring_buffer_append(ring: &Mutex<VecDeque<u8>>, data: &[u8]) -> Result<(), AppError> {
-    let mut buf = ring.lock().map_err(|e| AppError::Pty(format!("锁获取失败: {e}")))?;
+    let mut buf = ring
+        .lock()
+        .map_err(|e| AppError::Pty(format!("锁获取失败: {e}")))?;
     buf.extend(data);
     // FIFO: 超过容量时从头部以行为粒度丢弃
     while buf.len() > RING_BUFFER_CAPACITY {
@@ -378,10 +383,7 @@ mod sandbox_tests {
         let child = root.path().join("inside.txt");
         std::fs::write(&child, "ok").unwrap();
 
-        let result = validate_path_within_root(
-            &Some(root.path().to_path_buf()),
-            &child,
-        );
+        let result = validate_path_within_root(&Some(root.path().to_path_buf()), &child);
         assert!(result.is_ok(), "根内路径应放行");
     }
 
@@ -394,10 +396,7 @@ mod sandbox_tests {
         let file = subdir.join("test.txt");
         std::fs::write(&file, "ok").unwrap();
 
-        let result = validate_path_within_root(
-            &Some(root.path().to_path_buf()),
-            &file,
-        );
+        let result = validate_path_within_root(&Some(root.path().to_path_buf()), &file);
         assert!(result.is_ok(), "子目录内文件应放行");
     }
 
@@ -409,10 +408,7 @@ mod sandbox_tests {
         let file = outside.path().join("outside.txt");
         std::fs::write(&file, "bad").unwrap();
 
-        let result = validate_path_within_root(
-            &Some(root.path().to_path_buf()),
-            &file,
-        );
+        let result = validate_path_within_root(&Some(root.path().to_path_buf()), &file);
         assert!(result.is_err(), "根外路径应拒绝");
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("超出项目范围"), "错误消息应含'超出项目范围'");
@@ -427,10 +423,7 @@ mod sandbox_tests {
         std::fs::create_dir(&parent).unwrap();
         let nonexistent = parent.join("not_created_yet.txt");
 
-        let result = validate_path_within_root(
-            &Some(root.path().to_path_buf()),
-            &nonexistent,
-        );
+        let result = validate_path_within_root(&Some(root.path().to_path_buf()), &nonexistent);
         assert!(result.is_ok(), "根内不存在的路径应上溯到祖先后放行");
     }
 
@@ -441,10 +434,7 @@ mod sandbox_tests {
         let outside = tempfile::tempdir().unwrap();
         let nonexistent = outside.path().join("not_exists.txt");
 
-        let result = validate_path_within_root(
-            &Some(root.path().to_path_buf()),
-            &nonexistent,
-        );
+        let result = validate_path_within_root(&Some(root.path().to_path_buf()), &nonexistent);
         assert!(result.is_err(), "根外不存在的路径应拒绝");
     }
 
@@ -457,10 +447,7 @@ mod sandbox_tests {
         std::fs::create_dir(&subdir).unwrap();
         let traversal = subdir.join("..").join("..").join("Windows");
 
-        let result = validate_path_within_root(
-            &Some(root.path().to_path_buf()),
-            &traversal,
-        );
+        let result = validate_path_within_root(&Some(root.path().to_path_buf()), &traversal);
         // ../ 逃逸经 canonicalize 后应解析到根外路径
         assert!(result.is_err(), "路径穿越应拒绝");
     }
@@ -472,10 +459,7 @@ mod sandbox_tests {
         // 相对路径 ".." 以 canonical_root 为基准 join → canonicalize 后解析到根外
         let traversal = std::path::Path::new("..").join("sltest_escape_pty11.txt");
 
-        let result = validate_path_within_root(
-            &Some(root.path().to_path_buf()),
-            &traversal,
-        );
+        let result = validate_path_within_root(&Some(root.path().to_path_buf()), &traversal);
         assert!(result.is_err(), "相对路径 .. 穿越应拒绝");
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("超出项目范围"), "错误消息应含'超出项目范围'");
@@ -488,10 +472,7 @@ mod sandbox_tests {
         // 相对路径（含不存在的中层目录）以 canonical_root 为基准 join → 上溯到根后放行
         let relative = std::path::Path::new("sub_dir").join("rel.txt");
 
-        let result = validate_path_within_root(
-            &Some(root.path().to_path_buf()),
-            &relative,
-        );
+        let result = validate_path_within_root(&Some(root.path().to_path_buf()), &relative);
         assert!(result.is_ok(), "根内相对路径应放行");
     }
 
@@ -512,10 +493,7 @@ mod sandbox_tests {
             return;
         }
 
-        let result = validate_path_within_root(
-            &Some(root.path().to_path_buf()),
-            &link,
-        );
+        let result = validate_path_within_root(&Some(root.path().to_path_buf()), &link);
         assert!(result.is_err(), "指向根外的符号链接应拒绝");
     }
 
@@ -536,10 +514,7 @@ mod sandbox_tests {
         }
 
         let linked_file = link_root.join("data.txt");
-        let result = validate_path_within_root(
-            &Some(link_root),
-            &linked_file,
-        );
+        let result = validate_path_within_root(&Some(link_root), &linked_file);
         assert!(result.is_ok(), "symlink 根内路径应放行");
     }
 
@@ -687,7 +662,10 @@ mod sandbox_tests {
 
         let result = result.unwrap();
         let expected = dunce::canonicalize(dir.path().join("rel.txt")).unwrap();
-        assert_eq!(result, expected, "相对路径存在时应解析为 cwd 基准下的真实路径");
+        assert_eq!(
+            result, expected,
+            "相对路径存在时应解析为 cwd 基准下的真实路径"
+        );
     }
 
     /// 直接传相对路径（叶子缺失、最近存在祖先为 cwd 下的子目录）→ 上溯到子目录后拼接
@@ -701,7 +679,9 @@ mod sandbox_tests {
         std::env::set_current_dir(original).unwrap();
 
         let result = result.unwrap();
-        let expected = dunce::canonicalize(dir.path().join("sub")).unwrap().join("ghost.txt");
+        let expected = dunce::canonicalize(dir.path().join("sub"))
+            .unwrap()
+            .join("ghost.txt");
         assert_eq!(result, expected, "应上溯到存在的子目录后拼接缺失叶子");
     }
 
@@ -725,12 +705,12 @@ mod sandbox_tests {
         let root = tempfile::tempdir().unwrap();
         let existing = root.path().join("src");
         std::fs::create_dir(&existing).unwrap();
-        let deep = existing.join("components").join("ui").join("NewFeature.tsx");
+        let deep = existing
+            .join("components")
+            .join("ui")
+            .join("NewFeature.tsx");
 
-        let result = validate_path_within_root(
-            &Some(root.path().to_path_buf()),
-            &deep,
-        );
+        let result = validate_path_within_root(&Some(root.path().to_path_buf()), &deep);
         assert!(result.is_ok(), "根内多层不存在路径应放行");
     }
 
@@ -750,10 +730,7 @@ mod sandbox_tests {
             .join(outside.path().file_name().unwrap())
             .join("ghost.txt");
 
-        let result = validate_path_within_root(
-            &Some(root.path().to_path_buf()),
-            &traversal,
-        );
+        let result = validate_path_within_root(&Some(root.path().to_path_buf()), &traversal);
         assert!(result.is_err(), ".. 逃逸的不存在路径应拒绝");
     }
 }

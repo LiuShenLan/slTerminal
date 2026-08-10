@@ -14,7 +14,7 @@ pub mod watcher;
 // 三命令由 inject 模块实现，经此 re-export 供外部引用
 // （generate_handler! 使用完整路径 hooks::inject::xxx，此处保留供前端 IPC 类型导入）
 #[allow(unused_imports)]
-pub use inject::{hooks_inject, hooks_uninstall, hooks_injection_status};
+pub use inject::{hooks_inject, hooks_injection_status, hooks_uninstall};
 
 // 配置读写命令由 config 模块实现，经此 re-export 供外部引用（风格同 inject）
 #[allow(unused_imports)]

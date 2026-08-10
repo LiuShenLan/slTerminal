@@ -156,8 +156,7 @@ mod tests {
 
     #[test]
     fn parse_large_token_values() {
-        let json =
-            r#"{"message":{"usage":{"input_tokens":18446744073709551615,"output_tokens":999999999}}}"#;
+        let json = r#"{"message":{"usage":{"input_tokens":18446744073709551615,"output_tokens":999999999}}}"#;
         let r = parse_usage_line(json);
         assert!(r.is_some());
         let u = r.unwrap();
@@ -412,9 +411,7 @@ mod tests {
     /// None 返回映射：文件无 usage → Ok(None)
     #[test]
     fn hooks_context_usage_none_mapping() {
-        let (_dir, path) = make_temp_transcript(&[
-            r#"{"type":"system","message":"no usage"}"#,
-        ]);
+        let (_dir, path) = make_temp_transcript(&[r#"{"type":"system","message":"no usage"}"#]);
 
         let r = block_on(run_context_usage(path.to_str().unwrap().to_string())).unwrap();
         assert!(r.is_none(), "无 usage 应映射为 Ok(None)");

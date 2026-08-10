@@ -15,8 +15,8 @@ use std::path::Path;
 use std::process::Command;
 
 use common::{block_on, commit_file, git_add, init_temp_repo, make_app_state};
-use slterminal_lib::AppError;
 use slterminal_lib::git::git_file_at_head_impl;
+use slterminal_lib::AppError;
 
 /// 命令层辅助：构造 root=repo 的 AppState 并 await 真实命令
 fn at_head(path: &Path, file_path: &Path) -> Result<String, AppError> {

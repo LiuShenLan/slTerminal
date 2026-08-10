@@ -17,8 +17,8 @@ use std::path::Path;
 use std::process::Command;
 
 use common::{block_on, commit_file, init_temp_repo, make_app_state};
-use slterminal_lib::AppError;
 use slterminal_lib::git::git_rollback_impl;
+use slterminal_lib::AppError;
 
 /// 命令层辅助：构造 root=repo 的 AppState 并 await 真实命令
 fn rollback(repo_path: &Path, file_path: &Path) -> Result<(), AppError> {
@@ -42,7 +42,10 @@ fn git_rollback_restores_modified() {
     // 前置：修改后应在 status 中
     let repo = git2::Repository::open(&path).unwrap();
     assert!(
-        repo.statuses(None).unwrap().iter().any(|e| e.path().unwrap_or("") == "a.txt"),
+        repo.statuses(None)
+            .unwrap()
+            .iter()
+            .any(|e| e.path().unwrap_or("") == "a.txt"),
         "前置：修改后应在 status 中"
     );
 
@@ -52,7 +55,11 @@ fn git_rollback_restores_modified() {
     let restored = std::fs::read_to_string(&file_path).unwrap();
     assert_eq!(restored, "HEAD content\n");
     assert!(
-        !repo.statuses(None).unwrap().iter().any(|e| e.path().unwrap_or("") == "a.txt"),
+        !repo
+            .statuses(None)
+            .unwrap()
+            .iter()
+            .any(|e| e.path().unwrap_or("") == "a.txt"),
         "回滚后 git status 应干净"
     );
 }
@@ -70,9 +77,16 @@ fn git_rollback_restores_deleted() {
     rollback(&path, &file_path).unwrap();
 
     assert!(file_path.exists());
-    assert_eq!(std::fs::read_to_string(&file_path).unwrap(), "HEAD content\n");
+    assert_eq!(
+        std::fs::read_to_string(&file_path).unwrap(),
+        "HEAD content\n"
+    );
     let repo = git2::Repository::open(&path).unwrap();
-    assert!(!repo.statuses(None).unwrap().iter().any(|e| e.path().unwrap_or("") == "a.txt"));
+    assert!(!repo
+        .statuses(None)
+        .unwrap()
+        .iter()
+        .any(|e| e.path().unwrap_or("") == "a.txt"));
 }
 
 /// autocrlf=true：写 LF blob → add_path(clean:LF→LF) → status 干净
@@ -91,14 +105,20 @@ fn git_rollback_autocrlf_clean_status() {
     std::fs::write(&file_path, "dirty\r\n").unwrap();
 
     let repo = git2::Repository::open(&path).unwrap();
-    assert!(
-        repo.statuses(None).unwrap().iter().any(|e| e.path().unwrap_or("") == "a.txt")
-    );
+    assert!(repo
+        .statuses(None)
+        .unwrap()
+        .iter()
+        .any(|e| e.path().unwrap_or("") == "a.txt"));
 
     rollback(&path, &file_path).unwrap();
 
     assert!(
-        !repo.statuses(None).unwrap().iter().any(|e| e.path().unwrap_or("") == "a.txt"),
+        !repo
+            .statuses(None)
+            .unwrap()
+            .iter()
+            .any(|e| e.path().unwrap_or("") == "a.txt"),
         "autocrlf=true：LF 工作区 + LF index → status 应干净"
     );
 }
@@ -116,7 +136,10 @@ fn git_rollback_paths_isolation() {
     rollback(&path, &path.join("a.txt")).unwrap();
 
     assert_eq!(std::fs::read_to_string(path.join("a.txt")).unwrap(), "A\n");
-    assert_eq!(std::fs::read_to_string(path.join("b.txt")).unwrap(), "B-modified\n");
+    assert_eq!(
+        std::fs::read_to_string(path.join("b.txt")).unwrap(),
+        "B-modified\n"
+    );
 }
 
 /// 跨实例回归：命令回滚后，实例 B（全新 open）status 干净
@@ -130,14 +153,22 @@ fn git_rollback_cross_instance_clean() {
 
     // 实例 A：命令回滚
     let repo_a = git2::Repository::open(&path).unwrap();
-    assert!(repo_a.statuses(None).unwrap().iter().any(|e| e.path().unwrap_or("") == "a.txt"));
+    assert!(repo_a
+        .statuses(None)
+        .unwrap()
+        .iter()
+        .any(|e| e.path().unwrap_or("") == "a.txt"));
 
     rollback(&path, &file_path).unwrap();
 
     // 实例 B：全新 open（模拟 get_or_open_repo 新实例）
     let repo_b = git2::Repository::open(&path).unwrap();
     assert!(
-        !repo_b.statuses(None).unwrap().iter().any(|e| e.path().unwrap_or("") == "a.txt"),
+        !repo_b
+            .statuses(None)
+            .unwrap()
+            .iter()
+            .any(|e| e.path().unwrap_or("") == "a.txt"),
         "跨实例回归：实例 B status 应干净"
     );
 }

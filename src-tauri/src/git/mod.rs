@@ -8,7 +8,7 @@
 //! git_rollback_tests / git_unstage_tests + 共享 common 工厂），本文件无内嵌测试。
 
 use crate::error::AppError;
-use crate::state::{AppState, validate_path_within_root};
+use crate::state::{validate_path_within_root, AppState};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use tauri::State;
@@ -153,9 +153,9 @@ pub async fn git_status_impl(
         opts.include_untracked(true)
             .include_unreadable(true)
             .include_unreadable_as_untracked(true)
-            .recurse_untracked_dirs(true)            // FR-4: 递归列出未跟踪目录内文件
-            .renames_head_to_index(true)              // CV-BE-02: 启用 HEAD→index 重命名检测
-            .renames_index_to_workdir(true);          // CV-BE-02: 启用 index→workdir 重命名检测
+            .recurse_untracked_dirs(true) // FR-4: 递归列出未跟踪目录内文件
+            .renames_head_to_index(true) // CV-BE-02: 启用 HEAD→index 重命名检测
+            .renames_index_to_workdir(true); // CV-BE-02: 启用 index→workdir 重命名检测
 
         let statuses = repo
             .statuses(Some(&mut opts))
@@ -165,16 +165,9 @@ pub async fn git_status_impl(
         // 确保与 fs_read_dir 返回的 DirEntry.path 格式一致。
         let mut entries: Vec<GitStatusEntry> = Vec::new();
         for entry in statuses.iter() {
-            let rel = entry
-                .path()
-                .unwrap_or("")
-                .to_string()
-                .replace('\\', "/");
+            let rel = entry.path().unwrap_or("").to_string().replace('\\', "/");
             // 拼接为绝对路径：workdir + "/" + rel
-            let path = workdir
-                .join(&rel)
-                .to_string_lossy()
-                .replace('\\', "/");
+            let path = workdir.join(&rel).to_string_lossy().replace('\\', "/");
 
             let status_flag = entry.status();
             let status_str = match status_to_str(status_flag) {
@@ -185,15 +178,17 @@ pub async fn git_status_impl(
             // 提取重命名条目的旧路径（绝对路径，\\→/ 规范化）
             let old_path = if status_flag.contains(git2::Status::INDEX_RENAMED) {
                 entry.head_to_index().and_then(|delta| {
-                    delta.old_file().path().map(|p| {
-                        workdir.join(p).to_string_lossy().replace('\\', "/")
-                    })
+                    delta
+                        .old_file()
+                        .path()
+                        .map(|p| workdir.join(p).to_string_lossy().replace('\\', "/"))
                 })
             } else if status_flag.contains(git2::Status::WT_RENAMED) {
                 entry.index_to_workdir().and_then(|delta| {
-                    delta.old_file().path().map(|p| {
-                        workdir.join(p).to_string_lossy().replace('\\', "/")
-                    })
+                    delta
+                        .old_file()
+                        .path()
+                        .map(|p| workdir.join(p).to_string_lossy().replace('\\', "/"))
                 })
             } else {
                 None
@@ -249,16 +244,18 @@ pub async fn git_diff_impl(
         validate_path_within_root(&root, Path::new(file_path))?;
 
         // 从缓存获取/创建 Repository（以 repo_path 或 file_path 搜索）
-        let search_path = if !repo_path.is_empty() { repo_path } else { file_path };
+        let search_path = if !repo_path.is_empty() {
+            repo_path
+        } else {
+            file_path
+        };
         get_or_open_repo(&app.git_repo_cache, search_path, &root)?
     };
 
     // spawn_blocking 闭包要求 'static：&str 参数转 owned String 后 move 捕获
     let file_path = file_path.to_string();
-    match tokio::task::spawn_blocking(move || {
-        compute_diff_hunks(&repo, Path::new(&file_path))
-    })
-    .await
+    match tokio::task::spawn_blocking(move || compute_diff_hunks(&repo, Path::new(&file_path)))
+        .await
     {
         Ok(inner) => inner,
         Err(e) => Err(AppError::TaskJoin(e.to_string())),
@@ -377,8 +374,8 @@ pub fn compute_diff_hunks(
 
     diff.foreach(
         &mut |_delta, _num| true, // file callback
-        None,                      // binary callback
-        None,                      // hunk callback
+        None,                     // binary callback
+        None,                     // hunk callback
         Some(&mut |_delta, _hunk, line| {
             let c = line.origin();
             if c == '+' {
@@ -442,7 +439,11 @@ pub async fn git_file_at_head_impl(
         // 路径沙箱校验
         validate_path_within_root(&root, Path::new(file_path))?;
         // 从缓存获取/创建 Repository
-        let search_path = if !repo_path.is_empty() { repo_path } else { file_path };
+        let search_path = if !repo_path.is_empty() {
+            repo_path
+        } else {
+            file_path
+        };
         get_or_open_repo(&app.git_repo_cache, search_path, &root)?
     };
 
@@ -466,15 +467,13 @@ pub async fn git_file_at_head_impl(
             .to_string_lossy()
             .replace('\\', "/");
 
-        let entry = tree
-            .get_path(Path::new(&rel))
-            .map_err(|e| {
-                if e.code() == git2::ErrorCode::NotFound {
-                    AppError::Git(format!("文件在 HEAD 中不存在: {rel}"))
-                } else {
-                    AppError::Git(format!("获取 tree 条目失败: {e}"))
-                }
-            })?;
+        let entry = tree.get_path(Path::new(&rel)).map_err(|e| {
+            if e.code() == git2::ErrorCode::NotFound {
+                AppError::Git(format!("文件在 HEAD 中不存在: {rel}"))
+            } else {
+                AppError::Git(format!("获取 tree 条目失败: {e}"))
+            }
+        })?;
 
         let blob = entry
             .to_object(&repo)
@@ -521,7 +520,11 @@ pub async fn git_rollback_impl(
             .read()
             .map_err(|e| AppError::Git(format!("获取 project_root 锁失败: {e}")))?;
         validate_path_within_root(&root, Path::new(file_path))?;
-        let search_path = if !repo_path.is_empty() { repo_path } else { file_path };
+        let search_path = if !repo_path.is_empty() {
+            repo_path
+        } else {
+            file_path
+        };
         get_or_open_repo(&app.git_repo_cache, search_path, &root)?
     };
 
@@ -538,15 +541,13 @@ pub async fn git_rollback_impl(
         // UnbornBranch 映射对齐 git_file_at_head_impl：仓库尚无提交时 head() 即失败，
         // 错误消息须含"HEAD 中不存在"（HEAD 不存在错误约定，GIT-01 错误契约测试守卫）
         let tree = match repo.head() {
-            Ok(head) => head
-                .peel_to_tree()
-                .map_err(|e| {
-                    if e.code() == git2::ErrorCode::UnbornBranch {
-                        AppError::Git("HEAD 中不存在：尚无提交记录".to_string())
-                    } else {
-                        AppError::Git(format!("获取 HEAD tree 失败: {e}"))
-                    }
-                })?,
+            Ok(head) => head.peel_to_tree().map_err(|e| {
+                if e.code() == git2::ErrorCode::UnbornBranch {
+                    AppError::Git("HEAD 中不存在：尚无提交记录".to_string())
+                } else {
+                    AppError::Git(format!("获取 HEAD tree 失败: {e}"))
+                }
+            })?,
             Err(e) if e.code() == git2::ErrorCode::UnbornBranch => {
                 return Err(AppError::Git("HEAD 中不存在：尚无提交记录".to_string()));
             }
@@ -621,7 +622,11 @@ pub async fn git_unstage_impl(
             .read()
             .map_err(|e| AppError::Git(format!("获取 project_root 锁失败: {e}")))?;
         validate_path_within_root(&root, Path::new(file_path))?;
-        let search_path = if !repo_path.is_empty() { repo_path } else { file_path };
+        let search_path = if !repo_path.is_empty() {
+            repo_path
+        } else {
+            file_path
+        };
         get_or_open_repo(&app.git_repo_cache, search_path, &root)?
     };
 
@@ -669,4 +674,3 @@ pub async fn git_unstage(
 ) -> Result<(), AppError> {
     git_unstage_impl(&state, &repo_path, &file_path).await
 }
-

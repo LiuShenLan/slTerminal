@@ -270,12 +270,9 @@ mod tests {
     fn user_layer_resolves_to_injected_home_dir() {
         // user 层指向 {注入 home}/.claude/settings.json，不依赖 project_path / 沙箱
         let home = tempfile::tempdir().unwrap();
-        let path = resolve_config_path(
-            HooksLayer::User,
-            &None,
-            None,
-            || Some(home.path().to_path_buf()),
-        )
+        let path = resolve_config_path(HooksLayer::User, &None, None, || {
+            Some(home.path().to_path_buf())
+        })
         .unwrap();
         assert_eq!(
             path,
@@ -325,8 +322,7 @@ mod tests {
         let err =
             resolve_config_path(HooksLayer::Project, &None, None, dirs::home_dir).unwrap_err();
         assert!(matches!(err, AppError::Validation(_)));
-        let err =
-            resolve_config_path(HooksLayer::Local, &None, None, dirs::home_dir).unwrap_err();
+        let err = resolve_config_path(HooksLayer::Local, &None, None, dirs::home_dir).unwrap_err();
         assert!(matches!(err, AppError::Validation(_)));
     }
 
@@ -570,12 +566,9 @@ mod tests {
         .unwrap();
         let home_path = home.path().to_path_buf();
 
-        let v = block_on(run_config_read(
-            "user".into(),
-            None,
-            None,
-            move || Some(home_path.clone()),
-        ))
+        let v = block_on(run_config_read("user".into(), None, None, move || {
+            Some(home_path.clone())
+        }))
         .unwrap();
         assert_eq!(v, hooks, "user 层应透传注入 home 并返回 hooks 子树");
     }

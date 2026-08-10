@@ -130,11 +130,16 @@ vi.mock("../panels/terminal/TerminalRegistry", () => ({
   },
 }));
 
-vi.mock("../panels/terminal/TabTitleRegistry", () => ({
-  tabTitleRegistry: { match: vi.fn(), register: vi.fn(), _reset: vi.fn() },
+// useCommandDetection.ts 经 cliProfileRegistry.matchByCommand 匹配 profile（本测试不触发 OSC 133 命中）
+vi.mock("../features/cliProfiles", () => ({
+  cliProfileRegistry: {
+    matchByCommand: vi.fn(() => null),
+    register: vi.fn(),
+    get: vi.fn(),
+    getAll: vi.fn(),
+    _reset: vi.fn(),
+  },
 }));
-
-vi.mock("../panels/terminal/tabRules", () => ({}));
 
 // ─── 被测模块（mocks 就绪后）───
 import { useXterm } from "../panels/terminal/useXterm";

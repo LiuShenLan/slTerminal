@@ -1,20 +1,35 @@
 // useCommandDetection — OSC 133 命令边界检测 hook
 //
 // 解析 shell-integration.ps1 注入的 OSC 133 C/D 序列，
-// 匹配注册的命令（如 claude）并通过 onTabStateChange 回调通知页签标题/图标切换。
+// 经 CliProfileRegistry.matchByCommand 匹配 CLI profile（首 token 精确匹配，
+// 覆盖 claude --resume / claude -p 等带参变体）并通过 onTabStateChange
+// 回调通知页签标题/图标切换。
 // 仅限于 pwsh/powershell——cmd.exe 无 shell integration 能力。
 
 import { useCallback, useEffect, useRef } from "react";
 import type { MutableRefObject } from "react";
 import type { Terminal } from "@xterm/xterm";
-import { tabTitleRegistry } from "./TabTitleRegistry";
-import type { TabState } from "./TabTitleRegistry";
 import { TerminalRegistry } from "./TerminalRegistry";
-import { cliIconRegistry } from "../../lib/cliIcons";
+import { cliProfileRegistry } from "../../features/cliProfiles";
+import { STATUS_EMOJI } from "../../lib/claudeStatus";
+
+/** 页签状态变化事件（原 TabTitleRegistry.ts 定义，注册表退役后迁入本文件顶部导出） */
+export interface TabState {
+  /** 命令是否启动（true=启动, false=退出） */
+  active: boolean;
+  /** 命令运行时标题（active=true 时有效） */
+  title?: string;
+  /** 命令运行时图标（active=true 时有效，null=无图标） */
+  icon?: string | null;
+  /** 当前 CLI 品牌 logo 根绝对路径（OSC 133 C 时经 profile.iconSrc 携带；
+   *  hook 事件路径无 command 不传；null=该 CLI 未注册 logo） */
+  logo?: string | null;
+}
 
 /** OSC 133 命令边界检测 hook
  *
  * @param terminal            xterm.js Terminal 实例（可为 null，null 时不注册 handler）
+ * @param panelId             面板 ID（供 TerminalRegistry 写入会话状态）
  * @param onTabStateChange    页签状态变更回调
  * @param sharedCmdRunningRef 共享的命令运行状态 ref（由 useXterm 创建，供 usePtyOutput 读取）
  */
@@ -46,18 +61,18 @@ export function useCommandDetection(
       if (type === "C") {
         // OSC 133 C — 命令即将执行
         const command = semicolonIndex >= 0 ? data.slice(semicolonIndex + 1).trim() : "";
-        const rule = tabTitleRegistry.match(command);
-        if (rule) {
+        const profile = cliProfileRegistry.matchByCommand(command);
+        if (profile) {
           isCommandRunningRef.current = true;
-          // logo = CliIconRegistry 按命令行首 token 匹配的 CLI 品牌图（未注册 → null，清旧 logo）
+          // title/logo 均取自匹配 profile（tabTitle / iconSrc）；未命中零副作用（不触发回调）
           onTabStateChangeRef.current?.({
             active: true,
-            title: rule.title,
-            icon: "🟡",
-            logo: cliIconRegistry.match(command),
+            title: profile.tabTitle,
+            icon: STATUS_EMOJI.attention,
+            logo: profile.iconSrc,
           });
           // 写入 claude 会话状态（未注入 hooks 时无 transcriptPath，用量条不可用）
-          TerminalRegistry.setClaudeSession(panelId, { matchedCommand: rule.command });
+          TerminalRegistry.setClaudeSession(panelId, { matchedCommand: profile.id });
         }
       } else if (type === "D" && isCommandRunningRef.current) {
         // OSC 133 D — 命令执行完毕

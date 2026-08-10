@@ -1,19 +1,19 @@
-mod error;
-mod state;
-pub mod pty;
-mod fs;
-mod settings;
-mod notify;
-pub mod git;
-mod projects;
-mod hooks;
 pub mod claude_history;
+mod error;
+mod fs;
+pub mod git;
+mod hooks;
+mod notify;
+mod projects;
+pub mod pty;
+mod settings;
+mod state;
 
+use crate::pty::win_build::get_windows_build_number;
 pub use error::AppError;
+pub use state::validate_path_within_root;
 pub use state::AppState;
 pub use state::PtyState;
-pub use state::validate_path_within_root;
-use crate::pty::win_build::get_windows_build_number;
 use tauri_plugin_prevent_default::{Builder as PreventDefaultBuilder, Flags, PlatformOptions};
 
 /// ping 命令 — 占位，用于验证 IPC 链路和测试基建
@@ -34,7 +34,10 @@ fn ping() -> Result<String, AppError> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")))
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
+        )
         .init();
 
     // wdio-webdriver 仅 debug 构建启用，生产构建排除（P0-08）
@@ -55,10 +58,7 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(
             PreventDefaultBuilder::default()
-                .with_flags(
-                    Flags::all()
-                        .difference(Flags::FIND),
-                )
+                .with_flags(Flags::all().difference(Flags::FIND))
                 .platform(
                     PlatformOptions::new()
                         .browser_accelerator_keys(false)
@@ -132,10 +132,7 @@ mod tests {
         let result = crate::pty::win_build::get_windows_build_number();
         #[cfg(windows)]
         {
-            assert!(
-                result.is_ok(),
-                "Windows 上应返回 build 号"
-            );
+            assert!(result.is_ok(), "Windows 上应返回 build 号");
             let build = result.unwrap();
             // Windows 10 最低 build 号为 10240
             assert!(build > 10000, "build 号应大于 10000，实际: {build}");

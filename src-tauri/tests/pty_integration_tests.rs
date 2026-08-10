@@ -1,5 +1,5 @@
 /// PTY 集成测试
-use portable_pty::{native_pty_system, CommandBuilder, PtySize, MasterPty, ChildKiller, Child};
+use portable_pty::{native_pty_system, Child, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use std::io::{Read, Write};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -7,10 +7,22 @@ use std::time::Duration;
 static SPAWN_LOCK: Mutex<()> = Mutex::new(());
 
 /// 启动 cmd.exe 返回 PTY 句柄
-fn spawn_cmd() -> (Box<dyn portable_pty::MasterPty + Send>, Box<dyn portable_pty::Child + Send>, Box<dyn Read + Send>, Box<dyn Write + Send>) {
+fn spawn_cmd() -> (
+    Box<dyn portable_pty::MasterPty + Send>,
+    Box<dyn portable_pty::Child + Send>,
+    Box<dyn Read + Send>,
+    Box<dyn Write + Send>,
+) {
     let _lock = SPAWN_LOCK.lock().unwrap();
     let pty_system = native_pty_system();
-    let pair = pty_system.openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 }).unwrap();
+    let pair = pty_system
+        .openpty(PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .unwrap();
 
     let mut writer = pair.master.take_writer().unwrap();
     writer.write_all(b"\x1b[1;1R").unwrap();
@@ -73,7 +85,14 @@ fn pty_roundtrip() {
 #[test]
 fn pty_resize_applies() {
     let (master, mut child, _reader, _writer) = spawn_cmd();
-    master.resize(PtySize { rows: 30, cols: 100, pixel_width: 0, pixel_height: 0 }).unwrap();
+    master
+        .resize(PtySize {
+            rows: 30,
+            cols: 100,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .unwrap();
     let size = master.get_size().unwrap();
     assert_eq!(size.rows, 30);
     assert_eq!(size.cols, 100);
@@ -113,8 +132,8 @@ fn pty_spawn_custom_conpty() {
     use slterminal_lib::pty::{shell, spawn::conpty_custom};
 
     let shell_info = shell::resolve_shell_info(Some("cmd.exe")).expect("resolve_shell_info 应成功");
-    let (hpc, master) = conpty_custom::create_conpty_pair(80, 24, 26100)
-        .expect("create_conpty_pair 应成功");
+    let (hpc, master) =
+        conpty_custom::create_conpty_pair(80, 24, 26100).expect("create_conpty_pair 应成功");
 
     // CPR 注入
     let mut writer = master.take_writer().expect("take_writer 应成功");
@@ -127,13 +146,8 @@ fn pty_spawn_custom_conpty() {
         ("TERM".into(), "xterm-256color".into()),
     ];
 
-    let mut child = conpty_custom::spawn_conpty_child(
-        hpc,
-        &shell_info,
-        &extra_envs,
-        None,
-    )
-    .expect("spawn_conpty_child 应成功");
+    let mut child = conpty_custom::spawn_conpty_child(hpc, &shell_info, &extra_envs, None)
+        .expect("spawn_conpty_child 应成功");
 
     let pid = child.process_id();
     assert!(pid.is_some(), "子进程应有 PID");
@@ -159,10 +173,16 @@ fn pty_spawn_custom_conpty() {
 #[test]
 fn osc_cwd_venv_parsed() {
     let script = include_str!("../assets/shell-integration.ps1");
-    assert!(script.contains("OSC") || script.contains("133"), "集成脚本应定义 OSC/133 序列");
+    assert!(
+        script.contains("OSC") || script.contains("133"),
+        "集成脚本应定义 OSC/133 序列"
+    );
     assert!(script.contains("9;9"), "应包含 OSC 9;9 CWD 跟踪");
     assert!(script.contains("133"), "应包含 OSC 133 命令边界");
-    assert!(script.contains("UTF8") || script.contains("65001"), "应包含 UTF-8 编码修复");
+    assert!(
+        script.contains("UTF8") || script.contains("65001"),
+        "应包含 UTF-8 编码修复"
+    );
     assert!(!script.contains("$env:SLTERM_PANE_ID"), "无嵌套检测");
     assert!(
         script.contains("[char]0x1b") || script.contains("0x1b"),
@@ -189,10 +209,9 @@ fn pty_reattach_ring_buffer_replay() {
     use std::time::Duration;
 
     // 1. spawn cmd.exe
-    let shell_info =
-        shell::resolve_shell_info(Some("cmd.exe")).expect("resolve_shell_info 应成功");
-    let (hpc, master) = conpty_custom::create_conpty_pair(80, 24, 26100)
-        .expect("create_conpty_pair 应成功");
+    let shell_info = shell::resolve_shell_info(Some("cmd.exe")).expect("resolve_shell_info 应成功");
+    let (hpc, master) =
+        conpty_custom::create_conpty_pair(80, 24, 26100).expect("create_conpty_pair 应成功");
 
     // CPR 注入（对齐生产代码 pty_spawn）
     let mut writer = master.take_writer().expect("take_writer 应成功");
@@ -319,29 +338,32 @@ fn pty_session_isolation() {
     use std::io::Write as _;
 
     // Session A
-    let shell_info =
-        shell::resolve_shell_info(Some("cmd.exe")).expect("resolve_shell_info 应成功");
-    let (hpc_a, master_a) = conpty_custom::create_conpty_pair(80, 24, 26100)
-        .expect("create_conpty_pair A 应成功");
+    let shell_info = shell::resolve_shell_info(Some("cmd.exe")).expect("resolve_shell_info 应成功");
+    let (hpc_a, master_a) =
+        conpty_custom::create_conpty_pair(80, 24, 26100).expect("create_conpty_pair A 应成功");
     let mut writer_a = master_a.take_writer().expect("take_writer A 应成功");
     writer_a.write_all(b"\x1b[1;1R").unwrap();
     writer_a.flush().unwrap();
     let extra_envs: Vec<(String, String)> = vec![];
     let mut child_a = conpty_custom::spawn_conpty_child(hpc_a, &shell_info, &extra_envs, None)
         .expect("spawn_conpty_child A 应成功");
-    let mut reader_a = master_a.try_clone_reader().expect("try_clone_reader A 应成功");
+    let mut reader_a = master_a
+        .try_clone_reader()
+        .expect("try_clone_reader A 应成功");
 
     // Session B（独立 PTY 对）
     let shell_info_b =
         shell::resolve_shell_info(Some("cmd.exe")).expect("resolve_shell_info B 应成功");
-    let (hpc_b, master_b) = conpty_custom::create_conpty_pair(80, 24, 26100)
-        .expect("create_conpty_pair B 应成功");
+    let (hpc_b, master_b) =
+        conpty_custom::create_conpty_pair(80, 24, 26100).expect("create_conpty_pair B 应成功");
     let mut writer_b = master_b.take_writer().expect("take_writer B 应成功");
     writer_b.write_all(b"\x1b[1;1R").unwrap();
     writer_b.flush().unwrap();
     let mut child_b = conpty_custom::spawn_conpty_child(hpc_b, &shell_info_b, &extra_envs, None)
         .expect("spawn_conpty_child B 应成功");
-    let mut reader_b = master_b.try_clone_reader().expect("try_clone_reader B 应成功");
+    let mut reader_b = master_b
+        .try_clone_reader()
+        .expect("try_clone_reader B 应成功");
 
     // Session A 写命令（不再固定 sleep 等待启动）
     writer_a.write_all(b"echo SESSION_A_ONLY\r\n").unwrap();
@@ -395,10 +417,9 @@ fn pty_env_injects_slterm_panel_id() {
     use slterminal_lib::pty::{shell, spawn::conpty_custom};
     use std::io::Write as _;
 
-    let shell_info =
-        shell::resolve_shell_info(Some("cmd.exe")).expect("resolve_shell_info 应成功");
-    let (hpc, master) = conpty_custom::create_conpty_pair(80, 24, 26100)
-        .expect("create_conpty_pair 应成功");
+    let shell_info = shell::resolve_shell_info(Some("cmd.exe")).expect("resolve_shell_info 应成功");
+    let (hpc, master) =
+        conpty_custom::create_conpty_pair(80, 24, 26100).expect("create_conpty_pair 应成功");
 
     // CPR 注入（对齐生产代码 pty_spawn）
     let mut writer = master.take_writer().expect("take_writer 应成功");
@@ -406,17 +427,10 @@ fn pty_env_injects_slterm_panel_id() {
     writer.flush().unwrap();
 
     let test_panel_id = "test-panel-pty-03";
-    let extra_envs: Vec<(String, String)> = vec![
-        ("SLTERM_PANEL_ID".into(), test_panel_id.into()),
-    ];
+    let extra_envs: Vec<(String, String)> = vec![("SLTERM_PANEL_ID".into(), test_panel_id.into())];
 
-    let mut child = conpty_custom::spawn_conpty_child(
-        hpc,
-        &shell_info,
-        &extra_envs,
-        None,
-    )
-    .expect("spawn_conpty_child 应成功");
+    let mut child = conpty_custom::spawn_conpty_child(hpc, &shell_info, &extra_envs, None)
+        .expect("spawn_conpty_child 应成功");
 
     let mut reader = master.try_clone_reader().expect("try_clone_reader 应成功");
 

@@ -12,8 +12,8 @@ mod common;
 use std::path::Path;
 
 use common::{block_on, commit_file, git_add, init_temp_repo, make_app_state};
-use slterminal_lib::AppError;
 use slterminal_lib::git::{git_unstage_impl, status_to_str};
+use slterminal_lib::AppError;
 
 /// 命令层辅助：构造 root=repo 的 AppState 并 await 真实命令
 fn unstage(repo_path: &std::path::Path, file_path: &Path) -> Result<(), AppError> {
@@ -43,7 +43,10 @@ fn git_unstage_index_new_file() {
     let before_entry = before.iter().find(|e| e.path().unwrap_or("") == "new.txt");
     assert!(before_entry.is_some(), "前置：new.txt 应在 git status 中");
     assert!(
-        before_entry.unwrap().status().contains(git2::Status::INDEX_NEW),
+        before_entry
+            .unwrap()
+            .status()
+            .contains(git2::Status::INDEX_NEW),
         "前置：应包含 INDEX_NEW"
     );
 
@@ -52,7 +55,9 @@ fn git_unstage_index_new_file() {
 
     // 验证：文件不再在 index 中，变为 untracked
     let statuses2 = repo.statuses(None).unwrap();
-    let after = statuses2.iter().find(|e| e.path().unwrap_or("") == "new.txt");
+    let after = statuses2
+        .iter()
+        .find(|e| e.path().unwrap_or("") == "new.txt");
     assert!(
         after.is_some(),
         "取消暂存后文件仍应出现在 status 中（untracked）"
@@ -78,7 +83,10 @@ fn git_unstage_remove_path_on_index_modified_removes_entry() {
     let before_entry = before.iter().find(|e| e.path().unwrap_or("") == "a.txt");
     assert!(before_entry.is_some());
     assert!(
-        before_entry.unwrap().status().contains(git2::Status::INDEX_MODIFIED),
+        before_entry
+            .unwrap()
+            .status()
+            .contains(git2::Status::INDEX_MODIFIED),
         "前置：INDEX_MODIFIED"
     );
 
@@ -92,7 +100,10 @@ fn git_unstage_remove_path_on_index_modified_removes_entry() {
     // 此测试锁死 remove_path 行为：它删除条目，不 reset 到 HEAD
     assert!(
         after_entry.is_none()
-            || !after_entry.unwrap().status().contains(git2::Status::INDEX_MODIFIED),
+            || !after_entry
+                .unwrap()
+                .status()
+                .contains(git2::Status::INDEX_MODIFIED),
         "remove_path 后不应有 INDEX_MODIFIED"
     );
 }

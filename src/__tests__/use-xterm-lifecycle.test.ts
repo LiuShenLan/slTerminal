@@ -202,29 +202,49 @@ vi.mock("../panels/terminal/TerminalRegistry", () => ({
   },
 }));
 
-// useXterm.ts import { tabTitleRegistry } from "./TabTitleRegistry"
-const { mockTabTitleMatch } = vi.hoisted(() => ({
-  mockTabTitleMatch: vi.fn<(cmd: string) => { command: string; title: string; icon: string } | null>(),
+// useCommandDetection.ts import { cliProfileRegistry } from "../../features/cliProfiles"
+const { mockMatchByCommand } = vi.hoisted(() => ({
+  mockMatchByCommand: vi.fn<
+    (cmd: string) => {
+      id: string;
+      displayName: string;
+      commands: string[];
+      iconSrc: string;
+      tabTitle: string;
+      capabilities: Record<string, never>;
+    } | null
+  >(),
 }));
-vi.mock("../panels/terminal/TabTitleRegistry", () => ({
-  tabTitleRegistry: {
-    match: mockTabTitleMatch,
+vi.mock("../features/cliProfiles", () => ({
+  cliProfileRegistry: {
+    matchByCommand: mockMatchByCommand,
     register: vi.fn(),
+    get: vi.fn(),
+    getAll: vi.fn(),
     _reset: vi.fn(),
   },
 }));
 
-// useXterm.ts 的 side-effect import "./tabRules" — stub 防止实际加载图片资源
-vi.mock("../panels/terminal/tabRules", () => ({}));
-
 // 导入被测模块（mocks 就绪后）
 import { useXterm } from "../panels/terminal/useXterm";
-import type { TabState } from "../panels/terminal/TabTitleRegistry";
+import type { TabState } from "../panels/terminal/useCommandDetection";
 import { pty } from "../ipc";
 import {
   createContainer,
   mockResizeObserver,
 } from "./helpers/xterm-test-utils";
+
+/** 构造 matchByCommand 返回的 profile（CodingCliProfile 最小合法形态，跨边界契约） */
+function makeCliProfile(id: string, iconSrc: string) {
+  return {
+    id,
+    displayName: id,
+    commands: [id],
+    iconSrc,
+    tabTitle: id,
+    capabilities: {},
+  };
+}
 
 // ─── 全局 beforeEach：清空 mock Registry 状态（约束 #8：仅 register 后 get 才返回 entry） ───
 beforeEach(() => {
@@ -1279,11 +1299,7 @@ describe("OSC 133 命令边界检测", () => {
   }
 
     it("OSC133-1: OSC 133 C 序列匹配注册命令 → onTabStateChange 含 title 和 attention icon + setClaudeSession", async () => {
-    mockTabTitleMatch.mockReturnValue({
-      command: "claude",
-      title: "claude",
-      icon: "/claude-logo.png",
-    });
+    mockMatchByCommand.mockReturnValue(makeCliProfile("claude", "/cli-icons/claude.png"));
 
     const handler = await mountAndWaitForOsc133();
     // spawn 成功回调中调用了 onTabStateChange({ active: false })，需清除
@@ -1308,11 +1324,7 @@ describe("OSC 133 命令边界检测", () => {
   });
 
   it("OSC133-2: OSC 133 D 序列 → onTabStateChange({ active: false }) + setClaudeSession(null)", async () => {
-    mockTabTitleMatch.mockReturnValue({
-      command: "claude",
-      title: "claude",
-      icon: "/claude-logo.png",
-    });
+    mockMatchByCommand.mockReturnValue(makeCliProfile("claude", "/cli-icons/claude.png"));
 
     const handler = await mountAndWaitForOsc133();
     mockOnTabStateChange.mockClear();
@@ -1331,12 +1343,8 @@ describe("OSC 133 命令边界检测", () => {
     expect(mockSetClaudeSession).toHaveBeenCalledWith("osc133-test", null);
   });
 
-  it("OSC133-2b: OSC 133 C 匹配标题规则但 CLI 未注册 logo → logo: null（清旧 logo）", async () => {
-    mockTabTitleMatch.mockReturnValue({
-      command: "codex",
-      title: "codex",
-      icon: "/codex-logo.png",
-    });
+  it("OSC133-2b: OSC 133 C 匹配 profile → title/logo 均取自 profile（tabTitle / iconSrc）", async () => {
+    mockMatchByCommand.mockReturnValue(makeCliProfile("codex", "/cli-icons/codex.png"));
 
     const handler = await mountAndWaitForOsc133();
     mockOnTabStateChange.mockClear();
@@ -1344,17 +1352,17 @@ describe("OSC 133 命令边界检测", () => {
 
     handler("C;codex");
 
-    // cliIconRegistry 仅注册 claude → match("codex") 返回 null
+    // profile 原子匹配：命中即 title=tabTitle、logo=iconSrc（不再存在"标题命中但 logo 缺失"组合）
     expect(mockOnTabStateChange).toHaveBeenCalledWith({
       active: true,
       title: "codex",
       icon: "🟡",
-      logo: null,
+      logo: "/cli-icons/codex.png",
     });
   });
 
   it("OSC133-3: 空命令名不触发 onTabStateChange", async () => {
-    mockTabTitleMatch.mockReturnValue(null); // 显式重置（hoisted mock 不受 clearAllMocks 影响）
+    mockMatchByCommand.mockReturnValue(null); // 显式重置（hoisted mock 不受 clearAllMocks 影响）
 
     const handler = await mountAndWaitForOsc133();
     mockOnTabStateChange.mockClear();
@@ -1362,12 +1370,12 @@ describe("OSC 133 命令边界检测", () => {
     const result = handler("C;"); // 空命令名，trim() 后为 ""
 
     expect(result).toBe(false);
-    // tabTitleRegistry.match("") 返回 null → 不触发 onTabStateChange
+    // cliProfileRegistry.matchByCommand("") 返回 null → 不触发 onTabStateChange（未命中零副作用）
     expect(mockOnTabStateChange).not.toHaveBeenCalled();
   });
 
   it("OSC133-4: 未注册命令不触发 onTabStateChange", async () => {
-    mockTabTitleMatch.mockReturnValue(null);
+    mockMatchByCommand.mockReturnValue(null);
 
     const handler = await mountAndWaitForOsc133();
     mockOnTabStateChange.mockClear();
@@ -1455,11 +1463,7 @@ describe("PTY exit 处理", () => {
 
   it("EXIT-3: PtyEvent::Exit 时 isCommandRunningRef 为 true → onTabStateChange({ active: false })", async () => {
     // 需要先通过 OSC 133 C 将 isCommandRunningRef 设为 true
-    mockTabTitleMatch.mockReturnValue({
-      command: "claude",
-      title: "claude",
-      icon: "/claude-logo.png",
-    });
+    mockMatchByCommand.mockReturnValue(makeCliProfile("claude", "/cli-icons/claude.png"));
 
     renderHook(() =>
       useXterm({

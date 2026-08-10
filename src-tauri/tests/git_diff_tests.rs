@@ -18,8 +18,8 @@ use std::fs;
 use std::process::Command;
 
 use common::{block_on, commit_file, git_add, init_temp_repo, make_app_state};
+use slterminal_lib::git::{compute_diff_hunks, git_diff_impl, DiffHunk};
 use slterminal_lib::AppError;
-use slterminal_lib::git::{DiffHunk, compute_diff_hunks, git_diff_impl};
 
 // ---- B3: git_diff 命令层测试（GIT-01：inline git2 序列重写为调真实 git_diff_impl） ----
 
@@ -191,7 +191,11 @@ fn git_diff_pathspec_uses_workdir() {
     commit_file(&path, "src/main.rs", "fn main() {}\n");
 
     // 在子目录中修改文件
-    std::fs::write(path.join("src").join("main.rs"), "fn main() { println!(); }\n").unwrap();
+    std::fs::write(
+        path.join("src").join("main.rs"),
+        "fn main() { println!(); }\n",
+    )
+    .unwrap();
 
     let repo = git2::Repository::open(&path).unwrap();
     let head = repo.head().unwrap();
@@ -200,9 +204,16 @@ fn git_diff_pathspec_uses_workdir() {
     // 模拟：从子目录调用 git_diff，传入 parent_dir 作为 repo_path
     let workdir = dunce::simplified(repo.workdir().unwrap());
     let file_path = path.join("src").join("main.rs");
-    let rel = file_path.strip_prefix(workdir).unwrap().to_string_lossy().replace('\\', "/");
+    let rel = file_path
+        .strip_prefix(workdir)
+        .unwrap()
+        .to_string_lossy()
+        .replace('\\', "/");
     // pathspec 应为 repo-相对路径，如 "src/main.rs"
-    assert_eq!(rel, "src/main.rs", "pathspec 应为 repo-相对路径而非仅文件名");
+    assert_eq!(
+        rel, "src/main.rs",
+        "pathspec 应为 repo-相对路径而非仅文件名"
+    );
 
     let mut opts = git2::DiffOptions::new();
     opts.pathspec(&rel);
@@ -214,7 +225,10 @@ fn git_diff_pathspec_uses_workdir() {
     diff.foreach(
         &mut |_delta, _num| true,
         None,
-        Some(&mut |_delta, _hunk| { hunk_count += 1; true }),
+        Some(&mut |_delta, _hunk| {
+            hunk_count += 1;
+            true
+        }),
         None,
     )
     .unwrap();
@@ -234,7 +248,11 @@ fn git_diff_absolute_file_path_works() {
 
     let workdir = dunce::simplified(repo.workdir().unwrap());
     let file_path = path.join("lib.rs");
-    let rel = file_path.strip_prefix(workdir).unwrap().to_string_lossy().replace('\\', "/");
+    let rel = file_path
+        .strip_prefix(workdir)
+        .unwrap()
+        .to_string_lossy()
+        .replace('\\', "/");
     assert_eq!(rel, "lib.rs");
 
     let mut opts = git2::DiffOptions::new();
@@ -247,7 +265,10 @@ fn git_diff_absolute_file_path_works() {
     diff.foreach(
         &mut |_delta, _num| true,
         None,
-        Some(&mut |_delta, _hunk| { hunk_count += 1; true }),
+        Some(&mut |_delta, _hunk| {
+            hunk_count += 1;
+            true
+        }),
         None,
     )
     .unwrap();
@@ -294,10 +315,13 @@ fn git_diff_deep_nested_file() {
 
     let repo = git2::Repository::open(&path).unwrap();
     let workdir = dunce::simplified(repo.workdir().unwrap());
-    let rel = deep_file.strip_prefix(workdir).unwrap().to_string_lossy().replace('\\', "/");
+    let rel = deep_file
+        .strip_prefix(workdir)
+        .unwrap()
+        .to_string_lossy()
+        .replace('\\', "/");
     assert_eq!(
-        rel,
-        "src/components/ui/Button.tsx",
+        rel, "src/components/ui/Button.tsx",
         "深层嵌套文件 pathspec 应为完整 repo-相对路径"
     );
 }
@@ -315,7 +339,11 @@ fn git_diff_strip_prefix_with_verbatim_workdir() {
 
     // 模拟 fs_read_dir 风格的绝对路径（无 \\?\ 前缀）
     let file_path = path.join("diff.txt");
-    let rel = file_path.strip_prefix(workdir).unwrap().to_string_lossy().replace('\\', "/");
+    let rel = file_path
+        .strip_prefix(workdir)
+        .unwrap()
+        .to_string_lossy()
+        .replace('\\', "/");
     assert_eq!(rel, "diff.txt", "strip_prefix 应成功得到相对路径");
 
     // 验证 pathspec 不是绝对路径
@@ -332,7 +360,11 @@ fn git_diff_pathspec_never_absolute() {
     let repo = git2::Repository::open(&path).unwrap();
     let workdir = dunce::simplified(repo.workdir().unwrap());
     let file_path = path.join("check.txt");
-    let rel = file_path.strip_prefix(workdir).unwrap_or(&file_path).to_string_lossy().replace('\\', "/");
+    let rel = file_path
+        .strip_prefix(workdir)
+        .unwrap_or(&file_path)
+        .to_string_lossy()
+        .replace('\\', "/");
 
     // 如果 rel 含盘符，说明 strip_prefix 失败，绝对是 bug
     if rel.contains(':') {
@@ -350,7 +382,11 @@ fn git_diff_precise_single_line_modification() {
     let (_dir, path) = init_temp_repo();
     // 5 行文件，修改第 3 行
     commit_file(&path, "f.txt", "line1\nline2\nline3\nline4\nline5\n");
-    fs::write(path.join("f.txt"), "line1\nline2\nline3 MODIFIED\nline4\nline5\n").unwrap();
+    fs::write(
+        path.join("f.txt"),
+        "line1\nline2\nline3 MODIFIED\nline4\nline5\n",
+    )
+    .unwrap();
 
     let repo = git2::Repository::open(&path).unwrap();
     let hunks = compute_diff_hunks(&repo, &path.join("f.txt")).unwrap();
@@ -406,10 +442,16 @@ fn git_diff_precise_multiple_groups_separated_by_context() {
     let hunks = compute_diff_hunks(&repo, &path.join("f.txt")).unwrap();
 
     // 两处独立修改，各合并为 modified hunk
-    let modified_count = hunks.iter().filter(|h| h.old_lines > 0 && h.new_lines > 0).count();
+    let modified_count = hunks
+        .iter()
+        .filter(|h| h.old_lines > 0 && h.new_lines > 0)
+        .count();
     assert_eq!(modified_count, 2, "应有 2 个独立的 modified hunk");
     let total_changed: u32 = hunks.iter().map(|h| h.new_lines + h.old_lines).sum();
-    assert!(total_changed <= 4, "总变更行数不应超过 4（修改 2 行=4），实际: {total_changed}");
+    assert!(
+        total_changed <= 4,
+        "总变更行数不应超过 4（修改 2 行=4），实际: {total_changed}"
+    );
 }
 
 /// 无修改文件 → 0 hunk
@@ -431,7 +473,11 @@ fn git_diff_precise_no_change_returns_empty() {
 fn git_diff_precise_extra_added_lines_old_start_zero() {
     let (_dir, path) = init_temp_repo();
     commit_file(&path, "f.txt", "line1\nline2\nline3\n");
-    fs::write(path.join("f.txt"), "line1\nline2 NEW\nline3\nline4 NEW\nline5 NEW\n").unwrap();
+    fs::write(
+        path.join("f.txt"),
+        "line1\nline2 NEW\nline3\nline4 NEW\nline5 NEW\n",
+    )
+    .unwrap();
 
     let repo = git2::Repository::open(&path).unwrap();
     let hunks = compute_diff_hunks(&repo, &path.join("f.txt")).unwrap();
@@ -443,7 +489,10 @@ fn git_diff_precise_extra_added_lines_old_start_zero() {
     assert_eq!(hunks[0].old_lines, 1);
     assert_eq!(hunks[0].new_start, 2);
     assert_eq!(hunks[0].new_lines, 1);
-    assert_eq!(hunks[1].old_start, 0, "多余新增行 hunk 的 old_start 必须为 0");
+    assert_eq!(
+        hunks[1].old_start, 0,
+        "多余新增行 hunk 的 old_start 必须为 0"
+    );
     assert_eq!(hunks[1].old_lines, 0, "added hunk old_lines=0");
     assert_eq!(hunks[1].new_start, 4, "新增首行（line4 NEW）new_start=4");
     assert_eq!(hunks[1].new_lines, 2, "多余新增 2 行");
@@ -544,9 +593,15 @@ fn line_callback_context_lines_not_included() {
     let content: String = (1..=10).map(|i| format!("line{i}\n")).collect();
     commit_file(&path, "f.txt", &content);
     // 修改第 5 行
-    let new_content: String = (1..=10).map(|i| {
-        if i == 5 { format!("line{i} MODIFIED\n") } else { format!("line{i}\n") }
-    }).collect();
+    let new_content: String = (1..=10)
+        .map(|i| {
+            if i == 5 {
+                format!("line{i} MODIFIED\n")
+            } else {
+                format!("line{i}\n")
+            }
+        })
+        .collect();
     fs::write(path.join("f.txt"), &new_content).unwrap();
 
     let repo = git2::Repository::open(&path).unwrap();
@@ -592,7 +647,11 @@ fn line_callback_pure_deletion() {
 fn line_callback_modified_plus_extra_additions() {
     let (_dir, path) = init_temp_repo();
     commit_file(&path, "f.txt", "line1\nline2\nline3\n");
-    fs::write(path.join("f.txt"), "line1\nline2 NEW\nline3\nline4 NEW\nline5 NEW\n").unwrap();
+    fs::write(
+        path.join("f.txt"),
+        "line1\nline2 NEW\nline3\nline4 NEW\nline5 NEW\n",
+    )
+    .unwrap();
 
     let repo = git2::Repository::open(&path).unwrap();
     let hunks = compute_diff_hunks(&repo, &path.join("f.txt")).unwrap();
@@ -600,8 +659,11 @@ fn line_callback_modified_plus_extra_additions() {
     // 应包含 modified（蓝色）hunk
     let modified = hunks.iter().find(|h| h.old_lines > 0 && h.new_lines > 0);
     assert!(modified.is_some(), "应有 modified hunk");
-    assert_eq!(modified.unwrap().old_lines, modified.unwrap().new_lines,
-        "modified 的 old/new 行数应相等");
+    assert_eq!(
+        modified.unwrap().old_lines,
+        modified.unwrap().new_lines,
+        "modified 的 old/new 行数应相等"
+    );
 
     // 应包含新增（绿色）hunk（old_lines=0）
     let added = hunks.iter().find(|h| h.old_lines == 0 && h.new_lines > 0);
@@ -627,8 +689,11 @@ fn line_callback_modified_plus_extra_deletions() {
     // 应包含 modified（蓝色）hunk
     let modified = hunks.iter().find(|h| h.old_lines > 0 && h.new_lines > 0);
     assert!(modified.is_some(), "应有 modified hunk");
-    assert_eq!(modified.unwrap().old_lines, modified.unwrap().new_lines,
-        "modified 的 old/new 行数应相等");
+    assert_eq!(
+        modified.unwrap().old_lines,
+        modified.unwrap().new_lines,
+        "modified 的 old/new 行数应相等"
+    );
 
     // 应包含删除（灰三角）hunk（new_lines=0）
     let deleted = hunks.iter().find(|h| h.old_lines > 0 && h.new_lines == 0);
@@ -652,7 +717,10 @@ fn line_callback_multiple_change_groups() {
     let hunks = compute_diff_hunks(&repo, &path.join("f.txt")).unwrap();
 
     // 两处独立的修改
-    let modified = hunks.iter().filter(|h| h.old_lines > 0 && h.new_lines > 0).count();
+    let modified = hunks
+        .iter()
+        .filter(|h| h.old_lines > 0 && h.new_lines > 0)
+        .count();
     assert_eq!(modified, 2, "应有 2 个独立的 modified hunk");
 }
 
@@ -707,10 +775,27 @@ fn line_callback_add_all_new_lines_after_commit() {
 
 #[test]
 fn diff_hunk_serializes_camelcase() {
-    let hunk = DiffHunk { old_start: 10, old_lines: 2, new_start: 12, new_lines: 3 };
+    let hunk = DiffHunk {
+        old_start: 10,
+        old_lines: 2,
+        new_start: 12,
+        new_lines: 3,
+    };
     let json = serde_json::to_string(&hunk).unwrap();
-    assert!(json.contains("\"oldStart\""), "应包含 camelCase 字段 oldStart: {json}");
-    assert!(json.contains("\"oldLines\""), "应包含 camelCase 字段 oldLines: {json}");
-    assert!(json.contains("\"newStart\""), "应包含 camelCase 字段 newStart: {json}");
-    assert!(json.contains("\"newLines\""), "应包含 camelCase 字段 newLines: {json}");
+    assert!(
+        json.contains("\"oldStart\""),
+        "应包含 camelCase 字段 oldStart: {json}"
+    );
+    assert!(
+        json.contains("\"oldLines\""),
+        "应包含 camelCase 字段 oldLines: {json}"
+    );
+    assert!(
+        json.contains("\"newStart\""),
+        "应包含 camelCase 字段 newStart: {json}"
+    );
+    assert!(
+        json.contains("\"newLines\""),
+        "应包含 camelCase 字段 newLines: {json}"
+    );
 }

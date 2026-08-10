@@ -36,11 +36,9 @@ import { useFontSizeWheel } from "../../lib/useFontSizeWheel";
 import { E2E_ENABLED } from "../../lib/e2eEnabled";
 import { eventToStatus, STATUS_EMOJI } from "../../lib/claudeStatus";
 import { FONT_SIZE_MIN, FONT_SIZE_MAX } from "../../stores/fontSize";
-// 命令行→标题/图标规则（side-effect import 注册规则）
-import "./tabRules";
 // Hooks 事件订阅
 import { hooks } from "../../ipc";
-import type { TabState } from "./TabTitleRegistry";
+import type { TabState } from "./useCommandDetection";
 import {
   installTerminalWriteToPty,
   setTerminalSessionReady,

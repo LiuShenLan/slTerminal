@@ -11,7 +11,7 @@ import { useRef, useCallback } from "react";
 import type { MutableRefObject } from "react";
 import type { Terminal } from "@xterm/xterm";
 import type { PtyEvent } from "../../types";
-import type { TabState } from "./TabTitleRegistry";
+import type { TabState } from "./useCommandDetection";
 
 /** DEC 2026 同步更新 ANSI 转义序列 */
 const DEC2026_PREFIX = "\x1b[?2026h";

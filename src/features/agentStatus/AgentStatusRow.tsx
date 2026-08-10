@@ -8,7 +8,8 @@ import React, { useState, useCallback } from "react";
 import type { AgentSessionRow } from "./useAgentStatus";
 import { CLAUDE_CONTEXT_LIMIT } from "./consts";
 import { getStatusIcon } from "../../lib/claudeStatus";
-import { cliIconRegistry } from "../../lib/cliIcons";
+import { cliProfileRegistry } from "../cliProfiles";
+import { CLAUDE_CLI_ID } from "../cliProfiles/profiles/claude";
 import { formatRelativeTime } from "../claudeHistory/historyModel";
 import { AGENT_STATUS_USAGE_COLORS, SIDEBAR_COLORS, DIM_FG } from "../../theme/colors";
 
@@ -45,9 +46,9 @@ export const AgentStatusRow: React.FC<Props> = ({ row, onFocus, now }) => {
 
   // ---- 图标与时间（相对时间，与历史区口径统一；now 由 60s ticker 驱动重算） ----
   const icon = getStatusIcon(row.status);
-  // 当前侧栏会话均为 claude（AgentSessionRow 无 CLI 字段），直接取注册表 claude 条目；
-  // 未来新增编码 CLI 时按行 CLI 标识扩展
-  const logoSrc = cliIconRegistry.getSrc("claude");
+  // 过渡形态：AgentSessionRow 暂无 cliId 字段（Stage 02 MC-410 就绪后回收），暂取 claude profile 的 iconSrc；
+  // 未命中（claude profile 未注册）→ undefined → 无 logo 不报错（与原 cliIconRegistry.getSrc 语义一致）
+  const logoSrc = cliProfileRegistry.get(CLAUDE_CLI_ID)?.iconSrc;
   const timeStr = formatRelativeTime(row.lastEventAt, now ?? Date.now());
 
   // ---- 容器样式 ----
