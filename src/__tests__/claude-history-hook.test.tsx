@@ -121,7 +121,7 @@ describe("useClaudeHistory 初始态", () => {
   it("activeStatuses 初值 = 挂载时注册表派生结果（Map<sessionId, status>）", () => {
     h.all.set("panel-1", {
       term: {}, sessionId: "p1", webglAddon: null, fitAddon: {},
-      claudeSession: {
+      agentSession: {
         sessionId: "abc",
         transcriptPath: "D:/proj/abc.jsonl",
         status: "working",
@@ -258,7 +258,7 @@ describe("useClaudeHistory 订阅", () => {
     // sessionChange：claude 会话建立（sessionId + status 出现）
     h.all.set("panel-1", {
       term: {}, sessionId: "p1", webglAddon: null, fitAddon: {},
-      claudeSession: {
+      agentSession: {
         sessionId: "aaa",
         status: "attention",
         lastEventAt: 1,
@@ -270,10 +270,10 @@ describe("useClaudeHistory 订阅", () => {
     expect(result.current.activeStatuses).toEqual(
       new Map([["aaa", "attention"]]),
     );
-    // sessionChange：会话结束（claudeSession 清空）
+    // sessionChange：会话结束（agentSession 清空）
     h.all.set("panel-1", {
       term: {}, sessionId: "p1", webglAddon: null, fitAddon: {},
-      claudeSession: null,
+      agentSession: null,
     });
     act(() => {
       notifyListeners({ type: "sessionChange", panelId: "panel-1" });

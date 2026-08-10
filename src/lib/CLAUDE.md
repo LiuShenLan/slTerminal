@@ -17,7 +17,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `ErrorBoundary.tsx` | React 错误边界组件 |
 | `e2eEnabled.ts` | E2E helper 注入总开关：`E2E_ENABLED` 常量 + `computeE2eEnabled` 纯函数 |
 | `injectScript.ts` | HTML 脚本注入纯函数：`injectScript(html, script, marker)` 向 HTML 字符串的 `</head>`/`<body` 前插入脚本，幂等（marker 检测），大小写不敏感，供 HtmlPanel 键盘转发 |
-| `claudeStatus.ts` | 四态映射单点：`ClaudeStatus` 类型（`working`/`attention`/`done`/`error`）+ `STATUS_EMOJI` 常量（⚡🟡✅❌）+ `eventToStatus(event, notificationType?)` 纯函数（F3 状态机） |
+| `agentStatus.ts` | 四态类型与 emoji 常量（MC-401 迁移）：`AgentStatus` 类型（`working`/`attention`/`done`/`error`）+ `STATUS_EMOJI` 常量（⚡🟡✅❌）+ `getStatusIcon(status)` 纯函数。**事件→状态映射已随 MC-401 迁出**至 CLI profile hooks 能力（`profiles/claude/strategies.ts` 的 `eventToStatus`，经 `profile.hooks` 委托分发），lib 层不再含 claude 事件名字面量 |
 | `cliIcons.ts` | CLI 品牌 logo 注册表单例（F9）：`CliIconRegistry`（`register`/`match` 首 token/`getSrc`/`_reset`）+ 内嵌注册 claude → `/cli-icons/claude.png`。三处 emoji 状态指示（页签/活跃/历史）消费。**新增编码 CLI 两步**：`public/cli-icons/<命令>.png` 放图（32×32 透明底，渲染 16×16，随 frontendDist 内嵌 exe，同源 `'self'` 加载）+ 本文件末尾追加一行 `register({ command, src })` |
 | `panelId.ts` | 终端 panelId 解析单点：`parseTerminalPageId(panelId)` → pageId \| null（≥3 段 + 首段 `terminal` + 末段全数字） |
 
@@ -51,14 +51,14 @@ export const E2E_ENABLED =
 ## 关键约束
 
 - **E2E_ENABLED 必须内联**：`import.meta.env` 字面量表达式（编译期折叠），禁止常量调用 `computeE2eEnabled`——函数调用阻碍 Rollup DCE，生产会误带 helper（守卫：`e2e-build-config.test.ts`）
-- **四态映射单点**：`claudeStatus.ts` 是 F3 四态唯一映射（`eventToStatus`），组件不得另建映射
+- **四态映射单点**：F3 事件→状态唯一映射按 CLI profile 分发（`profile.hooks.eventToStatus`，claude 实现见 `profiles/claude/strategies.ts`），组件不得另建映射；`agentStatus.ts` 仅保留四态类型与 emoji 常量
 - **CLI 图标映射单点**：`cliIcons.ts` 是 CLI → 品牌 logo 唯一映射（F9），新增 CLI 在此注册（每 CLI 一行 register + public/cli-icons 放图），组件不得另建映射
 - **panelId 解析单点**：`parseTerminalPageId` 是终端 panelId 唯一解析入口
 - **路径函数纯性**：`path.ts` 四函数不访问文件系统、不抛异常、空输入安全（消费方依赖此契约）
 
 ## 测试模式
 
-测试文件：`src/__tests__/path.test.ts`（27 用例）、`panelId.test.ts`（5 用例）、`cli-icons.test.ts`（12 用例，F9）、`inject-script.test.ts`（21 用例）、`claude-status.test.ts`（32 用例）、`e2e-enabled.test.ts`（9 用例，含 it.each 展开口径，见 `.claude/test-inventory.md`）、`e2e-build-config.test.ts`（8 用例，IHE-04）、`error-boundary.test.tsx`（5 用例，含 IHE-05 `variant="inline"` 分支）。
+测试文件：`src/__tests__/path.test.ts`（27 用例）、`panelId.test.ts`（5 用例）、`cli-icons.test.ts`（12 用例，F9）、`inject-script.test.ts`（21 用例）、`agent-status-lib.test.ts`（6 用例，MC-401 迁移——事件映射用例随实现迁入 `cli-profile-claude.test.ts`）、`e2e-enabled.test.ts`（9 用例，含 it.each 展开口径，见 `.claude/test-inventory.md`）、`e2e-build-config.test.ts`（8 用例，IHE-04）、`error-boundary.test.tsx`（5 用例，含 IHE-05 `variant="inline"` 分支）。
 
 ### path.test.ts
 

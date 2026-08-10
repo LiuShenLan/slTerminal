@@ -1,8 +1,8 @@
-// TerminalRegistry 单元测试——Map 操作 + 幂等性 + 生命周期 + claudeSession 契约
+// TerminalRegistry 单元测试——Map 操作 + 幂等性 + 生命周期 + agentSession 契约
 //
 // TerminalRegistry 是终端跨页面复用的核心基础设施。
-// 测试覆盖 register/get/remove/has/_reset/setClaudeSession/subscribe。
-// claudeSession 为可选字段——stub 工厂不含该字段编译不炸（契约 1 设计目标）。
+// 测试覆盖 register/get/remove/has/_reset/setAgentSession/subscribe。
+// agentSession 为可选字段——stub 工厂不含该字段编译不炸（契约 1 设计目标）。
 
 import { describe, it, expect, beforeEach } from "vitest";
 import { TerminalRegistry } from "../panels/terminal/TerminalRegistry";
@@ -11,7 +11,7 @@ import type { Terminal } from "@xterm/xterm";
 import type { FitAddon } from "@xterm/addon-fit";
 import type { WebglAddon } from "@xterm/addon-webgl";
 
-/** 构造满足 RegisteredTerminal 接口的最小 stub（不含 claudeSession——可选字段编译不炸验证） */
+/** 构造满足 RegisteredTerminal 接口的最小 stub（不含 agentSession——可选字段编译不炸验证） */
 function makeEntry(overrides?: {
   term?: Terminal;
   sessionId?: string;
@@ -82,23 +82,23 @@ describe("TerminalRegistry", () => {
     expect(TerminalRegistry.has("b")).toBe(false);
   });
 
-  // ── claudeSession 可选字段编译不炸验证 ──
+  // ── agentSession 可选字段编译不炸验证 ──
 
-  it("stub 工厂不含 claudeSession 字段也能 register → get 往返（可选字段编译不炸）", () => {
+  it("stub 工厂不含 agentSession 字段也能 register → get 往返（可选字段编译不炸）", () => {
     const entry = makeEntry({ sessionId: "sid-optional" });
     TerminalRegistry.register("panel-opt", entry);
     const retrieved = TerminalRegistry.get("panel-opt")!;
     expect(retrieved.sessionId).toBe("sid-optional");
-    // claudeSession 为 undefined（未设置默认值）
-    expect(retrieved.claudeSession).toBeUndefined();
+    // agentSession 为 undefined（未设置默认值）
+    expect(retrieved.agentSession).toBeUndefined();
   });
 });
 
 // ═══════════════════════════════════════════════════════════════
-// setClaudeSession 契约测试
+// setAgentSession 契约测试
 // ═══════════════════════════════════════════════════════════════
 
-describe("TerminalRegistry.setClaudeSession", () => {
+describe("TerminalRegistry.setAgentSession", () => {
   beforeEach(() => {
     TerminalRegistry._reset();
   });
@@ -108,32 +108,32 @@ describe("TerminalRegistry.setClaudeSession", () => {
     TerminalRegistry.register("p1", entry);
 
     // 首次设置 matchedCommand
-    TerminalRegistry.setClaudeSession("p1", { matchedCommand: "claude" });
+    TerminalRegistry.setAgentSession("p1", { matchedCommand: "claude" });
     let got = TerminalRegistry.get("p1")!;
-    expect(got.claudeSession?.matchedCommand).toBe("claude");
-    expect(got.claudeSession?.transcriptPath).toBeUndefined();
-    expect(got.claudeSession?.lastEventAt).toBeGreaterThan(0);
+    expect(got.agentSession?.matchedCommand).toBe("claude");
+    expect(got.agentSession?.transcriptPath).toBeUndefined();
+    expect(got.agentSession?.lastEventAt).toBeGreaterThan(0);
 
     // 后续只更新 transcriptPath——matchedCommand 应保留（merge）
-    TerminalRegistry.setClaudeSession("p1", { transcriptPath: "/t.json" });
+    TerminalRegistry.setAgentSession("p1", { transcriptPath: "/t.json" });
     got = TerminalRegistry.get("p1")!;
-    expect(got.claudeSession?.matchedCommand).toBe("claude");
-    expect(got.claudeSession?.transcriptPath).toBe("/t.json");
+    expect(got.agentSession?.matchedCommand).toBe("claude");
+    expect(got.agentSession?.transcriptPath).toBe("/t.json");
   });
 
-  it("null 清空 claudeSession", () => {
+  it("null 清空 agentSession", () => {
     const entry = makeEntry();
     TerminalRegistry.register("p1", entry);
-    TerminalRegistry.setClaudeSession("p1", { matchedCommand: "claude" });
-    expect(TerminalRegistry.get("p1")!.claudeSession).not.toBeNull();
+    TerminalRegistry.setAgentSession("p1", { matchedCommand: "claude" });
+    expect(TerminalRegistry.get("p1")!.agentSession).not.toBeNull();
 
-    TerminalRegistry.setClaudeSession("p1", null);
-    expect(TerminalRegistry.get("p1")!.claudeSession).toBeNull();
+    TerminalRegistry.setAgentSession("p1", null);
+    expect(TerminalRegistry.get("p1")!.agentSession).toBeNull();
   });
 
   it("panelId 不存在 → no-op，不抛异常", () => {
     expect(() => {
-      TerminalRegistry.setClaudeSession("nonexistent", { matchedCommand: "claude" });
+      TerminalRegistry.setAgentSession("nonexistent", { matchedCommand: "claude" });
     }).not.toThrow();
     expect(TerminalRegistry.get("nonexistent")).toBeUndefined();
   });
@@ -142,9 +142,9 @@ describe("TerminalRegistry.setClaudeSession", () => {
     const entry = makeEntry();
     TerminalRegistry.register("p1", entry);
     const before = Date.now();
-    TerminalRegistry.setClaudeSession("p1", { matchedCommand: "claude" });
+    TerminalRegistry.setAgentSession("p1", { matchedCommand: "claude" });
     const after = Date.now();
-    const ts = TerminalRegistry.get("p1")!.claudeSession!.lastEventAt;
+    const ts = TerminalRegistry.get("p1")!.agentSession!.lastEventAt;
     expect(ts).toBeGreaterThanOrEqual(before);
     expect(ts).toBeLessThanOrEqual(after);
   });
@@ -152,12 +152,12 @@ describe("TerminalRegistry.setClaudeSession", () => {
   it("undefined 键不覆盖旧值", () => {
     const entry = makeEntry();
     TerminalRegistry.register("p1", entry);
-    TerminalRegistry.setClaudeSession("p1", { matchedCommand: "claude", transcriptPath: "/orig.json" });
+    TerminalRegistry.setAgentSession("p1", { matchedCommand: "claude", transcriptPath: "/orig.json" });
 
     // 传 transcriptPath=undefined——不应覆盖旧值
-    TerminalRegistry.setClaudeSession("p1", { matchedCommand: undefined, transcriptPath: undefined });
+    TerminalRegistry.setAgentSession("p1", { matchedCommand: undefined, transcriptPath: undefined });
 
-    const got = TerminalRegistry.get("p1")!.claudeSession!;
+    const got = TerminalRegistry.get("p1")!.agentSession!;
     expect(got.matchedCommand).toBe("claude");    // 保留旧值
     expect(got.transcriptPath).toBe("/orig.json"); // 保留旧值
   });
@@ -165,12 +165,12 @@ describe("TerminalRegistry.setClaudeSession", () => {
   it("sessionId/status 存储与透传（hook 事件写入）", () => {
     const entry = makeEntry();
     TerminalRegistry.register("p1", entry);
-    TerminalRegistry.setClaudeSession("p1", {
+    TerminalRegistry.setAgentSession("p1", {
       sessionId: "abc-123",
       status: "working",
     });
 
-    const got = TerminalRegistry.get("p1")!.claudeSession!;
+    const got = TerminalRegistry.get("p1")!.agentSession!;
     expect(got.sessionId).toBe("abc-123");
     expect(got.status).toBe("working");
   });
@@ -178,15 +178,15 @@ describe("TerminalRegistry.setClaudeSession", () => {
   it("sessionId/status undefined 不覆盖旧值（merge 语义）", () => {
     const entry = makeEntry();
     TerminalRegistry.register("p1", entry);
-    TerminalRegistry.setClaudeSession("p1", {
+    TerminalRegistry.setAgentSession("p1", {
       sessionId: "abc-123",
       status: "working",
     });
 
     // matchedCommand-only 更新（sessionId/status undefined）→ 旧值保留
-    TerminalRegistry.setClaudeSession("p1", { matchedCommand: "claude" });
+    TerminalRegistry.setAgentSession("p1", { matchedCommand: "claude" });
 
-    const got = TerminalRegistry.get("p1")!.claudeSession!;
+    const got = TerminalRegistry.get("p1")!.agentSession!;
     expect(got.sessionId).toBe("abc-123");
     expect(got.status).toBe("working");
     expect(got.matchedCommand).toBe("claude");
@@ -195,50 +195,50 @@ describe("TerminalRegistry.setClaudeSession", () => {
   it("status 显式 null 清空（Notification 普通类型 → 无有效状态）", () => {
     const entry = makeEntry();
     TerminalRegistry.register("p1", entry);
-    TerminalRegistry.setClaudeSession("p1", { status: "working" });
+    TerminalRegistry.setAgentSession("p1", { status: "working" });
 
-    TerminalRegistry.setClaudeSession("p1", { status: null });
+    TerminalRegistry.setAgentSession("p1", { status: null });
 
-    const got = TerminalRegistry.get("p1")!.claudeSession!;
+    const got = TerminalRegistry.get("p1")!.agentSession!;
     expect(got.status).toBeNull();
   });
 });
 
 // ═══════════════════════════════════════════════════════════════
-// register 幂等覆盖保留旧 claudeSession
+// register 幂等覆盖保留旧 agentSession
 // ═══════════════════════════════════════════════════════════════
 
-describe("TerminalRegistry.register 幂等覆盖保留旧 claudeSession", () => {
+describe("TerminalRegistry.register 幂等覆盖保留旧 agentSession", () => {
   beforeEach(() => {
     TerminalRegistry._reset();
   });
 
-  it("register 幂等覆盖且不传 claudeSession → 保留旧值（StrictMode/重试场景不丢 session）", () => {
+  it("register 幂等覆盖且不传 agentSession → 保留旧值（StrictMode/重试场景不丢 session）", () => {
     const entry1 = makeEntry();
     TerminalRegistry.register("p1", entry1);
-    TerminalRegistry.setClaudeSession("p1", { matchedCommand: "claude" });
+    TerminalRegistry.setAgentSession("p1", { matchedCommand: "claude" });
 
-    // 再次 register 不含 claudeSession → 旧 session 应保留
+    // 再次 register 不含 agentSession → 旧 session 应保留
     const entry2 = makeEntry({ sessionId: "new-sid" });
     TerminalRegistry.register("p1", entry2);
 
     const got = TerminalRegistry.get("p1")!;
     expect(got.sessionId).toBe("new-sid");          // 幂等覆盖
-    expect(got.claudeSession?.matchedCommand).toBe("claude"); // 旧 session 保留
+    expect(got.agentSession?.matchedCommand).toBe("claude"); // 旧 session 保留
   });
 
-  it("register 显式传 claudeSession → 取新值（不保留旧值）", () => {
+  it("register 显式传 agentSession → 取新值（不保留旧值）", () => {
     const entry1 = makeEntry();
     TerminalRegistry.register("p1", entry1);
-    TerminalRegistry.setClaudeSession("p1", { matchedCommand: "claude" });
+    TerminalRegistry.setAgentSession("p1", { matchedCommand: "claude" });
 
-    // 再次 register 显式含 claudeSession: null → 覆盖
-    const entry2 = { ...makeEntry({ sessionId: "new-sid" }), claudeSession: null } as RegisteredTerminal;
+    // 再次 register 显式含 agentSession: null → 覆盖
+    const entry2 = { ...makeEntry({ sessionId: "new-sid" }), agentSession: null } as RegisteredTerminal;
     TerminalRegistry.register("p1", entry2);
 
     const got = TerminalRegistry.get("p1")!;
     expect(got.sessionId).toBe("new-sid");
-    expect(got.claudeSession).toBeNull();
+    expect(got.agentSession).toBeNull();
   });
 });
 
@@ -288,10 +288,10 @@ describe("TerminalRegistry.getAll/_size/_dump", () => {
 });
 
 // ═══════════════════════════════════════════════════════════════
-// setClaudeSession merge 语义补充（NAH-02）
+// setAgentSession merge 语义补充（NAH-02）
 // ═══════════════════════════════════════════════════════════════
 
-describe("TerminalRegistry.setClaudeSession merge 语义（NAH-02）", () => {
+describe("TerminalRegistry.setAgentSession merge 语义（NAH-02）", () => {
   beforeEach(() => {
     TerminalRegistry._reset();
   });
@@ -300,7 +300,7 @@ describe("TerminalRegistry.setClaudeSession merge 语义（NAH-02）", () => {
     const entry = makeEntry();
     TerminalRegistry.register("p1", entry);
     // 全量设置（含显式 lastEventAt）
-    TerminalRegistry.setClaudeSession("p1", {
+    TerminalRegistry.setAgentSession("p1", {
       sessionId: "abc-123",
       transcriptPath: "/t.json",
       matchedCommand: "claude",
@@ -309,10 +309,10 @@ describe("TerminalRegistry.setClaudeSession merge 语义（NAH-02）", () => {
     });
     // 增量仅更新 status——其余字段 merge 保留
     const before = Date.now();
-    TerminalRegistry.setClaudeSession("p1", { status: "working" });
+    TerminalRegistry.setAgentSession("p1", { status: "working" });
     const after = Date.now();
 
-    const got = TerminalRegistry.get("p1")!.claudeSession!;
+    const got = TerminalRegistry.get("p1")!.agentSession!;
     expect(got.sessionId).toBe("abc-123");
     expect(got.transcriptPath).toBe("/t.json");
     expect(got.matchedCommand).toBe("claude");
@@ -326,19 +326,74 @@ describe("TerminalRegistry.setClaudeSession merge 语义（NAH-02）", () => {
   it("null 清空后增量 patch 不复活旧值（prev=null → undefined 键不回填）", () => {
     const entry = makeEntry();
     TerminalRegistry.register("p1", entry);
-    TerminalRegistry.setClaudeSession("p1", {
+    TerminalRegistry.setAgentSession("p1", {
       sessionId: "abc-123",
       transcriptPath: "/t.json",
     });
-    TerminalRegistry.setClaudeSession("p1", null);
-    expect(TerminalRegistry.get("p1")!.claudeSession).toBeNull();
+    TerminalRegistry.setAgentSession("p1", null);
+    expect(TerminalRegistry.get("p1")!.agentSession).toBeNull();
 
     // null 清空后再增量 patch——prev 为 null，旧 sessionId/transcriptPath 不回填
-    TerminalRegistry.setClaudeSession("p1", { status: "working" });
-    const got = TerminalRegistry.get("p1")!.claudeSession!;
+    TerminalRegistry.setAgentSession("p1", { status: "working" });
+    const got = TerminalRegistry.get("p1")!.agentSession!;
     expect(got.status).toBe("working");
     expect(got.sessionId).toBeUndefined();
     expect(got.transcriptPath).toBeUndefined();
     expect(got.matchedCommand).toBeUndefined();
+    expect(got.cliId).toBeUndefined();
+  });
+});
+
+// ═════════════════════════════════════════════════════════════
+// setAgentSession cliId 字段（MC-402/107：OSC 133 C 命中写入 cliId）
+// ═════════════════════════════════════════════════════════════
+
+describe("TerminalRegistry.setAgentSession cliId 字段（MC-402）", () => {
+  beforeEach(() => {
+    TerminalRegistry._reset();
+  });
+
+  it("显式传 cliId → 存储（OSC 133 C 命中形态）", () => {
+    const entry = makeEntry();
+    TerminalRegistry.register("p1", entry);
+    TerminalRegistry.setAgentSession("p1", {
+      cliId: "claude",
+      matchedCommand: "claude",
+    });
+    const got = TerminalRegistry.get("p1")!.agentSession!;
+    expect(got.cliId).toBe("claude");
+    expect(got.matchedCommand).toBe("claude");
+  });
+
+  it("cliId undefined 不覆盖旧值（merge——hook 事件路径不传 cliId，保留 OSC 133 C 写入值）", () => {
+    const entry = makeEntry();
+    TerminalRegistry.register("p1", entry);
+    TerminalRegistry.setAgentSession("p1", { cliId: "codex", matchedCommand: "codex" });
+
+    // hook 事件路径 patch 不含 cliId → 旧 cliId 保留
+    TerminalRegistry.setAgentSession("p1", {
+      sessionId: "abc-123",
+      status: "working",
+    });
+
+    const got = TerminalRegistry.get("p1")!.agentSession!;
+    expect(got.cliId).toBe("codex");
+    expect(got.sessionId).toBe("abc-123");
+  });
+
+  it("首次 setAgentSession 未带 cliId → cliId 为 undefined（缺省回退由消费方 CLAUDE_CLI_ID 兜底）", () => {
+    const entry = makeEntry();
+    TerminalRegistry.register("p1", entry);
+    TerminalRegistry.setAgentSession("p1", { sessionId: "abc-123", status: "working" });
+    expect(TerminalRegistry.get("p1")!.agentSession!.cliId).toBeUndefined();
+  });
+
+  it("null 清空后再增量 patch → cliId 不回填", () => {
+    const entry = makeEntry();
+    TerminalRegistry.register("p1", entry);
+    TerminalRegistry.setAgentSession("p1", { cliId: "claude" });
+    TerminalRegistry.setAgentSession("p1", null);
+    TerminalRegistry.setAgentSession("p1", { status: "working" });
+    expect(TerminalRegistry.get("p1")!.agentSession!.cliId).toBeUndefined();
   });
 });

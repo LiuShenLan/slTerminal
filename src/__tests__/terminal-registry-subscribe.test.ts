@@ -72,12 +72,12 @@ describe("TerminalRegistry.subscribe sessionChange", () => {
     TerminalRegistry._reset();
   });
 
-  it("setClaudeSession（非 null）→ 通知 listener 收到 { type:'sessionChange', panelId } 裸结构", () => {
+  it("setAgentSession（非 null）→ 通知 listener 收到 { type:'sessionChange', panelId } 裸结构", () => {
     TerminalRegistry.register("p1", stubTerminal());
     const listener = vi.fn();
     TerminalRegistry.subscribe(listener);
 
-    TerminalRegistry.setClaudeSession("p1", { matchedCommand: "claude" });
+    TerminalRegistry.setAgentSession("p1", { matchedCommand: "claude" });
 
     expect(listener).toHaveBeenCalledTimes(1);
     expect(listener).toHaveBeenCalledWith({
@@ -86,18 +86,18 @@ describe("TerminalRegistry.subscribe sessionChange", () => {
     });
     // 契约 1：payload 不带 session 数据——listener 经 get() 读现值
     const callArg = listener.mock.calls[0][0];
-    expect(callArg).not.toHaveProperty("claudeSession");
+    expect(callArg).not.toHaveProperty("agentSession");
     expect(callArg).not.toHaveProperty("session");
   });
 
-  it("setClaudeSession(null) → 通知 listener（清空也触发）", () => {
+  it("setAgentSession(null) → 通知 listener（清空也触发）", () => {
     TerminalRegistry.register("p1", stubTerminal());
-    TerminalRegistry.setClaudeSession("p1", { matchedCommand: "claude" });
+    TerminalRegistry.setAgentSession("p1", { matchedCommand: "claude" });
 
     const listener = vi.fn();
     TerminalRegistry.subscribe(listener);
 
-    TerminalRegistry.setClaudeSession("p1", null);
+    TerminalRegistry.setAgentSession("p1", null);
 
     expect(listener).toHaveBeenCalledTimes(1);
     expect(listener).toHaveBeenCalledWith({
@@ -106,11 +106,11 @@ describe("TerminalRegistry.subscribe sessionChange", () => {
     });
   });
 
-  it("setClaudeSession 对不存在的 panelId → no-op 不通知", () => {
+  it("setAgentSession 对不存在的 panelId → no-op 不通知", () => {
     const listener = vi.fn();
     TerminalRegistry.subscribe(listener);
 
-    TerminalRegistry.setClaudeSession("nonexistent", { matchedCommand: "claude" });
+    TerminalRegistry.setAgentSession("nonexistent", { matchedCommand: "claude" });
 
     expect(listener).not.toHaveBeenCalled();
   });

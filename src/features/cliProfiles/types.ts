@@ -1,17 +1,17 @@
 // cliProfiles/types.ts — CLI profile 类型定义（跨边界契约，spec 00 §3.1）
 //
-// 本 Stage 落地时 capabilities 签名引用现状类型名（ClaudeStatus / HookEventPayload /
-// HistorySession），Stage 02/03/04 更名时随行同步。
 // capabilities 为可选能力域：未声明 = 该域不可用，消费方优雅降级。
+// 类型引用随全局更名同步：ClaudeStatus → AgentStatus（Stage 02 随行），
+// HookEventPayload / HistorySession 随 Stage 03/04 更名时同步。
 
-import type { ClaudeStatus } from "../../lib/claudeStatus";
+import type { AgentStatus } from "../../lib/agentStatus";
 import type { HookEventPayload } from "../../ipc/hooks";
 import type { HistorySession } from "../../types/claudeHistory";
 
 /** hooks 能力域（协议知识实现留在 profiles/<cli>/，本文件仅签名） */
 export interface HooksCapability {
   /** hook 事件名 → 会话四态（F3 状态机，claude = eventToStatus 10 事件映射） */
-  eventToStatus(event: string, notificationType?: string | null): ClaudeStatus;
+  eventToStatus(event: string, notificationType?: string | null): AgentStatus;
   /** hook 事件负载 → 通知类别判定（claude = classifyEvent 五映射） */
   classifyNotification(
     payload: HookEventPayload,

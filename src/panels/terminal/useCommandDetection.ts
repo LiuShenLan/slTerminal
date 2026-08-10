@@ -11,7 +11,7 @@ import type { MutableRefObject } from "react";
 import type { Terminal } from "@xterm/xterm";
 import { TerminalRegistry } from "./TerminalRegistry";
 import { cliProfileRegistry } from "../../features/cliProfiles";
-import { STATUS_EMOJI } from "../../lib/claudeStatus";
+import { STATUS_EMOJI } from "../../lib/agentStatus";
 
 /** 页签状态变化事件（原 TabTitleRegistry.ts 定义，注册表退役后迁入本文件顶部导出） */
 export interface TabState {
@@ -71,15 +71,19 @@ export function useCommandDetection(
             icon: STATUS_EMOJI.attention,
             logo: profile.iconSrc,
           });
-          // 写入 claude 会话状态（未注入 hooks 时无 transcriptPath，用量条不可用）
-          TerminalRegistry.setClaudeSession(panelId, { matchedCommand: profile.id });
+          // MC-107: 写入会话状态（未注入 hooks 时无 transcriptPath，用量条不可用）——
+          // cliId 取匹配 profile 的 id（hook 事件三级解析反查键，MC-205）
+          TerminalRegistry.setAgentSession(panelId, {
+            cliId: profile.id,
+            matchedCommand: profile.id,
+          });
         }
       } else if (type === "D" && isCommandRunningRef.current) {
         // OSC 133 D — 命令执行完毕
         isCommandRunningRef.current = false;
         onTabStateChangeRef.current?.({ active: false });
-        // 注册命令退出 → 清除 claude 会话行
-        TerminalRegistry.setClaudeSession(panelId, null);
+        // 注册命令退出 → 清除会话行
+        TerminalRegistry.setAgentSession(panelId, null);
       }
 
       // 返回 false 不消费序列，xterm.js 仍渲染提示符

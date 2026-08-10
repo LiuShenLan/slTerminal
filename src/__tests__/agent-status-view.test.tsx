@@ -65,16 +65,13 @@ vi.mock("../workspace/pageApis", () => ({
   getPageApi: vi.fn(() => undefined),
 }));
 
-vi.mock("../lib/claudeStatus", () => ({
+vi.mock("../lib/agentStatus", () => ({
   // null/未识别状态 → ""（与真实实现一致：真实 getStatusIcon 对 null 返回 ""，
   // 否则 status null 行会误渲染 emoji 与 CLI logo）
   getStatusIcon: vi.fn(
     (s: string | null) =>
       s != null ? ({ working: "⚡", attention: "🟡", done: "✅", error: "❌" })[s] ?? "" : "",
   ),
-  // eventToStatus 不在 mock 中（测试不触发 hook 事件回调），
-  // 设为 stub 防 import 时 undefined
-  eventToStatus: vi.fn(() => "attention"),
   // STATUS_EMOJI 必须保留真实值——HistorySessionRow 直接访问
   // STATUS_EMOJI[status]（历史区与活跃区四态同源），缺失会抛 TypeError
   STATUS_EMOJI: { working: "⚡", attention: "🟡", done: "✅", error: "❌" },
@@ -108,6 +105,7 @@ import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
 import type { AgentSessionRow } from "../features/agentStatus/useAgentStatus";
 import type { HistorySession } from "../types/claudeHistory";
+import { CLAUDE_CLI_ID } from "../features/cliProfiles/profiles/claude";
 import { AGENT_STATUS_USAGE_COLORS } from "../theme";
 // ── 辅助函数 ──
 
@@ -145,11 +143,11 @@ function seedActivePage(pageId: string | null) {
   useLayout.setState({ activePageId: pageId });
 }
 
-/** 构建 TerminalRegistry 模拟 Map——entry 含 claudeSession 非 null（行建模改后纯 shell 无行） */
+/** 构建 TerminalRegistry 模拟 Map——entry 含 agentSession 非 null（行建模改后纯 shell 无行） */
 function makeTerminalMap(panelIds: string[]): Map<string, unknown> {
   const map = new Map<string, unknown>();
   for (const pid of panelIds) {
-    map.set(pid, { claudeSession: { lastEventAt: Date.now() } });
+    map.set(pid, { agentSession: { lastEventAt: Date.now() } });
   }
   return map;
 }
@@ -172,12 +170,13 @@ function resetAll() {
   mockScanHistory.mockResolvedValue([]);
 }
 
-/** 构造 AgentSessionRow */
+/** 构造 AgentSessionRow（cliId 缺省 CLAUDE_CLI_ID——真实注册表 claude profile 的 contextLimit/iconSrc 生效） */
 function makeRow(overrides: Partial<AgentSessionRow> = {}): AgentSessionRow {
   return {
     panelId: "terminal-page1-0",
     pageId: "page1",
     projectId: "proj-1",
+    cliId: CLAUDE_CLI_ID,
     title: "终端 page1",
     status: "attention",
     lastEventAt: Date.now(),
@@ -231,7 +230,7 @@ describe("AgentStatusView 三态渲染", () => {
     );
 
     expect(
-      getByText("当前项目无运行中的 claude 会话"),
+      getByText("当前项目无运行中的编码 CLI 会话"),
     ).toBeTruthy();
   });
 
@@ -367,7 +366,8 @@ describe("AgentStatusRow 双行布局（问题 1 修复）", () => {
     expect(line1.textContent).toContain("⚡");
   });
 
-  it("status 非 null → 行1 渲染 CLI logo（src=claude 条目/16×16/位于图标列内）", () => {
+  it("status 非 null → 行1 渲染 CLI logo（按 row.cliId 查 profile.iconSrc/16×16/位于图标列内）", () => {
+    // 行 cliId = CLAUDE_CLI_ID（真实注册表）→ iconSrc = /cli-icons/claude.png
     const row = makeRow({ status: "working" });
     const { container } = render(
       React.createElement(AgentStatusRow, { row, onFocus: vi.fn() }),
@@ -379,6 +379,17 @@ describe("AgentStatusRow 双行布局（问题 1 修复）", () => {
     expect(logoImg?.getAttribute("src")).toBe("/cli-icons/claude.png");
     expect(logoImg?.getAttribute("width")).toBe("16");
     expect(logoImg?.getAttribute("height")).toBe("16");
+  });
+
+  it("未注册 cliId → 行1 无 logo 不报错（MC-411 降级语义）", () => {
+    const row = makeRow({ status: "working", cliId: "unknown-cli" });
+    const { container } = render(
+      React.createElement(AgentStatusRow, { row, onFocus: vi.fn() }),
+    );
+
+    const { line1 } = rowChildren(container);
+    expect(line1.textContent).toContain("⚡"); // emoji 仍显示
+    expect(line1.querySelector('img[alt="CLI 图标"]')).toBeNull(); // 无 logo
   });
 
   it("status null → 行1 无 CLI logo（仅随 emoji 显示）", () => {
@@ -510,6 +521,28 @@ describe("用量条", () => {
 
   it("contextUsage 返回 null → 用量条显示不可用态 '--'", () => {
     const row = makeRow({ usage: null });
+
+    const { container } = render(
+      React.createElement(AgentStatusRow, {
+        row,
+        onFocus: vi.fn(),
+      }),
+    );
+
+    const { line2 } = rowChildren(container);
+    expect(line2.children[1].textContent).toBe("--");
+  });
+
+  it("usage 有值但 cliId 无 hooks 能力（contextLimit 缺失）→ 用量条显示不可用态 '--'（MC-412）", () => {
+    const row = makeRow({
+      cliId: "unknown-cli", // 未注册 cliId → profile 缺失 → contextLimit undefined
+      usage: {
+        inputTokens: 100_000,
+        outputTokens: 0,
+        cacheReadInputTokens: 0,
+        cacheCreationInputTokens: 0,
+      },
+    });
 
     const { container } = render(
       React.createElement(AgentStatusRow, {
@@ -761,7 +794,7 @@ describe("三下拉框结构（FE-08）", () => {
     ).toBeTruthy();
     first.unmount();
 
-    // 红线 4b：空态文案「无运行中的 claude 会话」+ 活跃行选择器（ready 态）
+    // 红线 4b：空态文案「无运行中的编码 CLI 会话」+ 活跃行选择器（ready 态）
     seedProject("C:/test", "proj-1", [
       { pageId: "page1", name: "页面 1" },
     ]);
@@ -769,7 +802,7 @@ describe("三下拉框结构（FE-08）", () => {
     mockTerminalRegistry.getAll.mockReturnValue(new Map());
     const second = render(React.createElement(AgentStatusView, defaultProps));
     expect(
-      second.getByText("当前项目无运行中的 claude 会话"),
+      second.getByText("当前项目无运行中的编码 CLI 会话"),
     ).toBeTruthy();
     second.unmount();
 
@@ -799,7 +832,7 @@ describe("活跃区标题覆盖（问题 6：真实 useClaudeHistory 集成）",
     seedActivePage("page1");
     const map = new Map<string, unknown>();
     map.set("terminal-page1-0", {
-      claudeSession: {
+      agentSession: {
         sessionId,
         lastEventAt: Date.now(),
         status: "attention",

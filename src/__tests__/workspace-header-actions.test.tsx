@@ -264,22 +264,22 @@ describe("createGetContextMenu", () => {
     expect(onRenameRequestSpy).toHaveBeenCalledWith(fakePanel);
   });
 
-  it("C8: claude 运行中（claudeSession 存在）→ 重命名项 disabled", () => {
+  it("C8: claude 运行中（agentSession 存在）→ 重命名项 disabled", () => {
     TerminalRegistry.register("terminal-p1-0", {} as any);
-    TerminalRegistry.setClaudeSession("terminal-p1-0", { sessionId: "s1" } as any);
+    TerminalRegistry.setAgentSession("terminal-p1-0", { sessionId: "s1" } as any);
     const { renameItem } = callMenu("p1", "group-alpha");
     expect((renameItem as any).disabled).toBe(true);
   });
 
-  it("C9: 无 claudeSession → 重命名项可点", () => {
+  it("C9: 无 agentSession → 重命名项可点", () => {
     TerminalRegistry.register("terminal-p1-0", {} as any);
     const { renameItem } = callMenu("p1", "group-alpha");
     expect((renameItem as any).disabled).not.toBe(true);
   });
 
-  it("C10: claudeSession 为空对象（已退出残留）→ 重命名项可点", () => {
+  it("C10: agentSession 为空对象（已退出残留）→ 重命名项可点", () => {
     TerminalRegistry.register("terminal-p1-0", {} as any);
-    TerminalRegistry.setClaudeSession("terminal-p1-0", null);
+    TerminalRegistry.setAgentSession("terminal-p1-0", null);
     const { renameItem } = callMenu("p1", "group-alpha");
     expect((renameItem as any).disabled).not.toBe(true);
   });

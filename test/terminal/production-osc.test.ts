@@ -14,7 +14,7 @@ import type { TabState } from '../../src/panels/terminal/useCommandDetection';
 import '../../src/features/cliProfiles/profiles'; // side-effect：注册 claude profile（首 token "claude"）
 import { TerminalRegistry } from '../../src/panels/terminal/TerminalRegistry';
 import { cliProfileRegistry } from '../../src/features/cliProfiles'; // 真实注册表
-import { STATUS_EMOJI } from '../../src/lib/claudeStatus';
+import { STATUS_EMOJI } from '../../src/lib/agentStatus';
 import type { Terminal as XtermTerminal } from '@xterm/xterm';
 
 vi.mock('../../src/ipc/clipboard', () => ({
@@ -103,14 +103,17 @@ function registerOsc133(
           icon: STATUS_EMOJI.attention,
           logo: profile.iconSrc,
         });
-        // 写入 claude 会话状态（未注入 hooks 时无 transcriptPath）
-        TerminalRegistry.setClaudeSession(panelId, { matchedCommand: profile.id });
+        // MC-107: 写入会话状态（未注入 hooks 时无 transcriptPath）——cliId 取匹配 profile 的 id
+        TerminalRegistry.setAgentSession(panelId, {
+          cliId: profile.id,
+          matchedCommand: profile.id,
+        });
       }
     } else if (type === 'D' && isCommandRunningRef.current) {
       // OSC 133 D — 命令执行完毕
       isCommandRunningRef.current = false;
       onTabStateChangeRef.current?.({ active: false });
-      TerminalRegistry.setClaudeSession(panelId, null);
+      TerminalRegistry.setAgentSession(panelId, null);
     }
     // 返回 false 不消费序列，xterm.js 仍渲染提示符
     return false;
@@ -128,7 +131,7 @@ describe('L3 终端渲染 — 生产 OSC handler（E2E-03）', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     TerminalRegistry._reset();
-    // 注册测试面板（仅 claudeSession 断言需要；term/fitAddon 用占位，本测试不触达）
+    // 注册测试面板（仅 agentSession 断言需要；term/fitAddon 用占位，本测试不触达）
     TerminalRegistry.register('p1', {
       term: undefined as unknown as XtermTerminal,
       sessionId: 's1',
@@ -177,7 +180,7 @@ describe('L3 终端渲染 — 生产 OSC handler（E2E-03）', () => {
 
   // ============ OSC 133 命令边界 ============
 
-  it('OSC 133 C — 匹配 claude profile 时 onTabStateChange 携 icon/title + 写 claudeSession', async () => {
+  it('OSC 133 C — 匹配 claude profile 时 onTabStateChange 携 icon/title + 写 agentSession', async () => {
     const term = createTerminal();
     const states: TabState[] = [];
     registerOsc133(term, 'p1', (state) => states.push(state));
@@ -188,10 +191,12 @@ describe('L3 终端渲染 — 生产 OSC handler（E2E-03）', () => {
     expect(states).toEqual([
       { active: true, title: 'claude', icon: '🟡', logo: '/cli-icons/claude.png' },
     ]);
-    expect(TerminalRegistry.get('p1')?.claudeSession?.matchedCommand).toBe('claude');
+    // MC-107: cliId 取匹配 profile 的 id（三级解析反查键）
+    expect(TerminalRegistry.get('p1')?.agentSession?.matchedCommand).toBe('claude');
+    expect(TerminalRegistry.get('p1')?.agentSession?.cliId).toBe('claude');
   });
 
-  it('OSC 133 D — 命令退出恢复 active=false + 清空 claudeSession', async () => {
+  it('OSC 133 D — 命令退出恢复 active=false + 清空 agentSession', async () => {
     const term = createTerminal();
     const states: TabState[] = [];
     registerOsc133(term, 'p1', (state) => states.push(state));
@@ -202,16 +207,16 @@ describe('L3 终端渲染 — 生产 OSC handler（E2E-03）', () => {
       { active: true, title: 'claude', icon: '🟡', logo: '/cli-icons/claude.png' },
       { active: false },
     ]);
-    expect(TerminalRegistry.get('p1')?.claudeSession).toBeNull();
+    expect(TerminalRegistry.get('p1')?.agentSession).toBeNull();
   });
 
-  it('OSC 133 C — 未匹配 profile 的命令不触发 onTabStateChange / claudeSession（零副作用）', async () => {
+  it('OSC 133 C — 未匹配 profile 的命令不触发 onTabStateChange / agentSession（零副作用）', async () => {
     const term = createTerminal();
     const states: TabState[] = [];
     registerOsc133(term, 'p1', (state) => states.push(state));
     await writeSync(term, '\x1b]133;C;git status\x1b\\');
     expect(states).toEqual([]);
-    expect(TerminalRegistry.get('p1')?.claudeSession).toBeUndefined();
+    expect(TerminalRegistry.get('p1')?.agentSession).toBeUndefined();
   });
 
   // ============ OSC 8 超链接 ============

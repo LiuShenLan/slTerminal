@@ -36,7 +36,7 @@ import { TerminalRegistry } from "../../panels/terminal/TerminalRegistry";
 import { parseTerminalPageId } from "../../lib/panelId";
 import { switchToPageAndFocus } from "../../workspace/pageApis";
 import type { HistorySession } from "../../types/claudeHistory";
-import type { ClaudeStatus } from "../../lib/claudeStatus";
+import type { AgentStatus } from "../../lib/agentStatus";
 import {
   EXPLORER_COLORS,
   INPUT_BORDER,
@@ -186,12 +186,12 @@ const ContextMenu: React.FC<{
 // ── 反查 TerminalRegistry：sessionId → panelId（双击弹窗「切换到该会话操作页面」用） ──
 
 /**
- * 反查运行中会话所在终端面板：claudeSession.sessionId 精确匹配，
+ * 反查运行中会话所在终端面板：agentSession.sessionId 精确匹配，
  * 回退 transcriptPath basename 去 .jsonl（旧数据兼容）；未命中 → undefined。
  */
 function findPanelForSession(sessionId: string): string | undefined {
   for (const [panelId, entry] of TerminalRegistry.getAll()) {
-    const cs = entry.claudeSession;
+    const cs = entry.agentSession;
     if (!cs) continue;
     if (cs.sessionId === sessionId) return panelId;
     if (!cs.sessionId && cs.transcriptPath) {
@@ -215,7 +215,7 @@ export interface HistorySessionListProps {
   /** 搜索词（matchesSearch 过滤，作用于两区） */
   search: string;
   /** 运行中会话四态映射（Map<sessionId, status>，与活跃区同源——问题 2 修复） */
-  activeStatuses: Map<string, ClaudeStatus>;
+  activeStatuses: Map<string, AgentStatus>;
   /** 选中会话 id（受控，ClaudeHistorySections 持有） */
   selectedId: string | null;
   /** 单击选中回调 */

@@ -240,8 +240,8 @@ describe("deriveActiveSessionStatuses", () => {
     h.all.clear();
   });
 
-  /** claudeSession 工厂（默认带 sessionId + status） */
-  function makeClaudeSession(overrides: Record<string, unknown> = {}) {
+  /** agentSession 工厂（默认带 sessionId + status） */
+  function makeAgentSession(overrides: Record<string, unknown> = {}) {
     return {
       sessionId: "abc-123",
       transcriptPath: "C:\\Users\\x\\.claude\\projects\\proj-dir\\abc-123.jsonl",
@@ -254,7 +254,7 @@ describe("deriveActiveSessionStatuses", () => {
   it("sessionId 优先 → Map 键 = sessionId，值为 status", () => {
     h.all.set("panel-1", {
       term: {}, sessionId: "p1", webglAddon: null, fitAddon: {},
-      claudeSession: makeClaudeSession({ status: "working" }),
+      agentSession: makeAgentSession({ status: "working" }),
     });
     expect(deriveActiveSessionStatuses()).toEqual(
       new Map([["abc-123", "working"]]),
@@ -264,7 +264,7 @@ describe("deriveActiveSessionStatuses", () => {
   it("无 sessionId 有 transcriptPath → basename 去 .jsonl 回退（旧数据兼容）", () => {
     h.all.set("panel-1", {
       term: {}, sessionId: "p1", webglAddon: null, fitAddon: {},
-      claudeSession: makeClaudeSession({
+      agentSession: makeAgentSession({
         sessionId: undefined,
         status: "done",
       }),
@@ -275,7 +275,7 @@ describe("deriveActiveSessionStatuses", () => {
   it("sessionId 为 null → basename 去 .jsonl 回退（NAH-01）", () => {
     h.all.set("panel-1", {
       term: {}, sessionId: "p1", webglAddon: null, fitAddon: {},
-      claudeSession: {
+      agentSession: {
         sessionId: null,
         transcriptPath: "C:/x/abc.jsonl",
         status: "working",
@@ -287,7 +287,7 @@ describe("deriveActiveSessionStatuses", () => {
   it("sessionId 与 transcriptPath 均无（matchedCommand-only）→ 跳过不产出", () => {
     h.all.set("panel-1", {
       term: {}, sessionId: "p1", webglAddon: null, fitAddon: {},
-      claudeSession: {
+      agentSession: {
         matchedCommand: "claude",
         status: "attention",
         lastEventAt: 1,
@@ -299,19 +299,19 @@ describe("deriveActiveSessionStatuses", () => {
   it("status 为 null / undefined → 不产出键（历史区无标记，与活跃区 null 无图标一致）", () => {
     h.all.set("panel-1", {
       term: {}, sessionId: "p1", webglAddon: null, fitAddon: {},
-      claudeSession: makeClaudeSession({ status: null }),
+      agentSession: makeAgentSession({ status: null }),
     });
     h.all.set("panel-2", {
       term: {}, sessionId: "p2", webglAddon: null, fitAddon: {},
-      claudeSession: makeClaudeSession({ sessionId: "def-456", status: undefined }),
+      agentSession: makeAgentSession({ sessionId: "def-456", status: undefined }),
     });
     expect(deriveActiveSessionStatuses().size).toBe(0);
   });
 
-  it("claudeSession 为 null / 未设置 → 不产出", () => {
+  it("agentSession 为 null / 未设置 → 不产出", () => {
     h.all.set("panel-1", {
       term: {}, sessionId: "p1", webglAddon: null, fitAddon: {},
-      claudeSession: null,
+      agentSession: null,
     });
     h.all.set("panel-2", {
       term: {}, sessionId: "p2", webglAddon: null, fitAddon: {},
@@ -324,7 +324,7 @@ describe("deriveActiveSessionStatuses", () => {
     statuses.forEach((status, i) => {
       h.all.set(`panel-${i}`, {
         term: {}, sessionId: `p${i}`, webglAddon: null, fitAddon: {},
-        claudeSession: makeClaudeSession({
+        agentSession: makeAgentSession({
           sessionId: `id-${i}`,
           status,
         }),
@@ -339,11 +339,11 @@ describe("deriveActiveSessionStatuses", () => {
   it("多条 → Map 含全部 sessionId → status", () => {
     h.all.set("panel-1", {
       term: {}, sessionId: "p1", webglAddon: null, fitAddon: {},
-      claudeSession: makeClaudeSession({ sessionId: "aaa", status: "working" }),
+      agentSession: makeAgentSession({ sessionId: "aaa", status: "working" }),
     });
     h.all.set("panel-2", {
       term: {}, sessionId: "p2", webglAddon: null, fitAddon: {},
-      claudeSession: makeClaudeSession({ sessionId: "bbb", status: "error" }),
+      agentSession: makeAgentSession({ sessionId: "bbb", status: "error" }),
     });
     expect(deriveActiveSessionStatuses()).toEqual(
       new Map([

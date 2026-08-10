@@ -126,16 +126,16 @@ describe("Agent Status 视图与 toast 通知", () => {
     // 8. 断言初始态为空态或 no-root 提示（此时无终端面板）
     const hasHint = await browser.execute(() => {
       const text = document.querySelector('[data-e2e="agent-status-view"]')?.textContent ?? "";
-      return text.includes("选择一个项目") || text.includes("无运行中的 claude 会话");
+      return text.includes("选择一个项目") || text.includes("无运行中的编码 CLI 会话");
     });
     expect(hasHint).toBe(true);
   });
 
   /**
-   * 用例 2a：Agent Status 纯 shell 终端无行（行建模改后语义——仅 claudeSession 非 null 才建行）。
+   * 用例 2a：Agent Status 纯 shell 终端无行（行建模改后语义——仅 agentSession 非 null 才建行）。
    *
-   * 原理：useAgentStatus 初始扫描只建 claudeSession 非 null 的行。
-   * 纯 shell 终端（未运行 claude、未注入 hooks）的 claudeSession 为 null，
+   * 原理：useAgentStatus 初始扫描只建 agentSession 非 null 的行。
+   * 纯 shell 终端（未运行编码 CLI、未注入 hooks）的 agentSession 为 null，
    * 因此 agent-status-row 不出现。用例 1 空态文案断言保留作回归。
    *
    * E2E-10：原 500ms 固定等待（等初始扫描）→ 改为 waitUntil 轮询
@@ -153,7 +153,7 @@ describe("Agent Status 视图与 toast 通知", () => {
       // 0c. Dockview API
       await waitForDockviewApi();
 
-      // 1. 创建终端面板（纯 shell——不注入 hooks、不运行 claude，claudeSession 为 null）
+      // 1. 创建终端面板（纯 shell——不注入 hooks、不运行编码 CLI，agentSession 为 null）
       const panelId = `terminal-${pageId}-0`;
       await addTerminalPanel(panelId);
 
@@ -173,7 +173,7 @@ describe("Agent Status 视图与 toast 通知", () => {
         { timeout: 10000, timeoutMsg: "agent-status 视图未在 toggle 后渲染" },
       );
 
-      // 5. 断言 agent-status-row 不存在——纯 shell 终端的 claudeSession 为 null，不建行
+      // 5. 断言 agent-status-row 不存在——纯 shell 终端的 agentSession 为 null，不建行
       const rowExists = await browser.execute(() => {
         return !!document.querySelector('[data-e2e="agent-status-row"]');
       });
@@ -182,7 +182,7 @@ describe("Agent Status 视图与 toast 通知", () => {
       // 6. 断言空态或 no-root 提示文案存在（用例 1 回归——纯 shell 项目应显示空态）
       const hasHint = await browser.execute(() => {
         const text = document.querySelector('[data-e2e="agent-status-view"]')?.textContent ?? "";
-        return text.includes("选择一个项目") || text.includes("无运行中的 claude 会话");
+        return text.includes("选择一个项目") || text.includes("无运行中的编码 CLI 会话");
       });
       expect(hasHint).toBe(true);
     } finally {
@@ -477,7 +477,7 @@ describe("Agent Status 视图与 toast 通知", () => {
       await switchToPageAndWait(page2Id);
       await switchToPageAndWait(page1Id);
 
-      // 12. 断言行仍不存在——claudeSession 已 null，初始扫描不建行
+      // 12. 断言行仍不存在——agentSession 已 null，初始扫描不建行
       const rowStillGone = await browser.execute(() => {
         return !document.querySelector('[data-e2e="agent-status-row"]');
       });

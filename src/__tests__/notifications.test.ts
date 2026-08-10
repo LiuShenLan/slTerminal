@@ -6,6 +6,8 @@
 //   3. 窗口失焦 + StopFailure → toast 发送（错误类别）+ 任务栏闪烁
 //   4. 窗口聚焦时三类事件 → toast 不发送、任务栏不闪烁
 //   5. toast 正文含项目名 + 事件类别（去路由化后不含面板标题）
+//   6. classifyEvent 类别判定委托 profile（MC-420）：显式 cliId / 反查 /
+//      缺省三分支 + 无 hooks 能力不通知 + 未知 cliId warn 跳过
 //   P2-TE-04: sendClickableNotification → sendToastNotification（两参数无 onClick）
 //             删 onClick 路由 describe 整块；任务栏闪烁三类均触发（原仅 permission）
 
@@ -62,11 +64,59 @@ vi.mock("@tauri-apps/api/window", () => ({
 // ═══════════════════════════════════════════════════════════
 
 import {
-  useClaudeNotifications,
+  useAgentNotifications,
   classifyEvent,
   type NotifyCategory,
-} from "../features/notifications/useClaudeNotifications";
+} from "../features/notifications/useAgentNotifications";
 import { useProjects } from "../stores/projects";
+import { cliProfileRegistry, type CodingCliProfile } from "../features/cliProfiles";
+import { TerminalRegistry } from "../panels/terminal/TerminalRegistry";
+import type { Terminal } from "@xterm/xterm";
+import type { FitAddon } from "@xterm/addon-fit";
+
+// side-effect 注册 claude profile（缺省回退分支依赖；import 即注册）
+import "../features/cliProfiles/profiles";
+
+// ═══════════════════════════════════════════════════════════
+// 测试专用 profile（classifyEvent 委托断言，MC-420）
+// ═══════════════════════════════════════════════════════════
+
+/** classifyNotification spy：Stop → done，其余 → null（断言"被真实调用"） */
+const mockClassifyNotification = vi.fn(
+  (payload: import("../ipc/hooks").HookEventPayload) =>
+    payload.event === "Stop" ? "done" : null,
+);
+
+/** 带 hooks 能力的测试 profile（显式 cliId / 反查分支解析目标） */
+const testNotifyProfile: CodingCliProfile = {
+  id: "test-notify-cli",
+  displayName: "test-notify",
+  commands: ["test-notify"],
+  iconSrc: "/cli-icons/test-notify.png",
+  tabTitle: "test-notify",
+  capabilities: {
+    hooks: {
+      eventToStatus: () => "done",
+      classifyNotification: mockClassifyNotification,
+      contextLimit: 100,
+      restartHint: "test",
+      hasConfigEditor: true,
+    },
+  },
+};
+
+/** 无 hooks 能力的测试 profile（不通知分支） */
+const noHooksProfile: CodingCliProfile = {
+  id: "no-hooks-cli",
+  displayName: "no-hooks",
+  commands: ["no-hooks"],
+  iconSrc: "/cli-icons/no-hooks.png",
+  tabTitle: "no-hooks",
+  capabilities: {},
+};
+
+cliProfileRegistry.register(testNotifyProfile);
+cliProfileRegistry.register(noHooksProfile);
 
 // ── 辅助函数 ───────────────────────────────────────────────
 
@@ -120,8 +170,24 @@ function setWindowFocused(focused: boolean): void {
   (window as any).__slterm_windowFocused = focused;
 }
 
+/** 构造满足 RegisteredTerminal 接口的最小 stub（照 terminal-registry.test.ts 先例） */
+function makeTerminalEntry(overrides?: {
+  sessionId?: string;
+  agentSession?: import("../panels/terminal/TerminalRegistry").AgentSessionInfo;
+}): import("../panels/terminal/TerminalRegistry").RegisteredTerminal {
+  return {
+    term: { dispose: () => {} } as unknown as Terminal,
+    sessionId: overrides?.sessionId ?? "test-session",
+    webglAddon: null,
+    fitAddon: { dispose: () => {}, fit: () => {} } as unknown as FitAddon,
+    ...(overrides?.agentSession !== undefined
+      ? { agentSession: overrides.agentSession }
+      : {}),
+  };
+}
+
 // ═══════════════════════════════════════════════════════════
-// classifyEvent 表驱动（NAH-03，D2 导出纯函数）
+// classifyEvent 分类表驱动（NAH-03，D2 导出纯函数）
 // ═══════════════════════════════════════════════════════════
 
 describe("classifyEvent 分类表驱动（NAH-03）", () => {
@@ -143,6 +209,8 @@ describe("classifyEvent 分类表驱动（NAH-03）", () => {
   });
 
   // ── 纯函数层：事件 × notificationType → 类别映射 ──────────
+  // 类别判定已委托 claude profile 的 hooks.classifyNotification（MC-420/422）
+  // ——本表经缺省回退（无 cliId + 未注册终端 → CLAUDE_CLI_ID）验证链路
 
   const classifyTable: Array<{
     name: string;
@@ -182,7 +250,7 @@ describe("classifyEvent 分类表驱动（NAH-03）", () => {
 
   it.each(hookTable)("$name", ({ payload, label }) => {
     setWindowFocused(false);
-    renderHook(() => useClaudeNotifications());
+    renderHook(() => useAgentNotifications());
 
     act(() => {
       mockOnHookEventCallback.cb!(makePayload(payload));
@@ -199,6 +267,80 @@ describe("classifyEvent 分类表驱动（NAH-03）", () => {
       expect(options.body).toContain(label);
       expect(mockRequestUserAttention).toHaveBeenCalledWith(1);
     }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+// classifyEvent 类别判定委托 profile（MC-420 三级解析 + 委托）
+// ═══════════════════════════════════════════════════════════
+
+describe("classifyEvent 类别判定委托 profile（MC-420）", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockOnHookEventCallback.cb = null;
+    TerminalRegistry._reset();
+
+    useProjects.setState({
+      projects: {},
+      expandedNodes: {},
+      deletionLock: { pendingDelete: null, acquiredAt: null },
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (window as any).__slterm_windowFocused;
+  });
+
+  it("显式 cliId 分支：委托对应 profile 的 classifyNotification 并返回其类别", () => {
+    const payload = makePayload({ cliId: "test-notify-cli", event: "Stop" });
+
+    const result = classifyEvent(payload);
+
+    // spy 被真实调用（入参 = 原 payload）
+    expect(mockClassifyNotification).toHaveBeenCalledTimes(1);
+    expect(mockClassifyNotification).toHaveBeenCalledWith(payload);
+    expect(result).toBe("done");
+  });
+
+  it("反查分支：无 cliId 时经 TerminalRegistry.agentSession.cliId 解析", () => {
+    TerminalRegistry.register("terminal-p1-0", makeTerminalEntry({
+      agentSession: { cliId: "test-notify-cli", lastEventAt: Date.now() },
+    }));
+
+    const result = classifyEvent(makePayload({ event: "Stop" }));
+
+    expect(mockClassifyNotification).toHaveBeenCalledTimes(1);
+    expect(result).toBe("done");
+  });
+
+  it("缺省分支：无 cliId 且无注册终端 → CLAUDE_CLI_ID（claude profile 五映射）", () => {
+    // panelId 未注册 + 无 cliId → 回退 claude：Stop → done（分类表已全表覆盖，此处显式断言分支）
+    expect(classifyEvent(makePayload({ event: "Stop" }))).toBe("done");
+  });
+
+  it("无 hooks 能力 profile → 返回 null 不通知", () => {
+    expect(classifyEvent(makePayload({ cliId: "no-hooks-cli" }))).toBeNull();
+    expect(mockClassifyNotification).not.toHaveBeenCalled();
+  });
+
+  it("未知 cliId → console.warn + 返回 null 不抛异常（MC-206）", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(classifyEvent(makePayload({ cliId: "unknown-cli" }))).toBeNull();
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("hook 链路：无 hooks 能力 profile 的事件不触发 toast 与闪烁", () => {
+    setWindowFocused(false);
+    renderHook(() => useAgentNotifications());
+
+    act(() => {
+      mockOnHookEventCallback.cb!(makePayload({ event: "Stop", cliId: "no-hooks-cli" }));
+    });
+
+    expect(mockSendToastNotification).not.toHaveBeenCalled();
+    expect(mockRequestUserAttention).not.toHaveBeenCalled();
   });
 });
 
@@ -233,13 +375,13 @@ describe("F4 通知门控", () => {
   // ── 基础渲染 ─────────────────────────────────────────────
 
   it("挂载时注册 onHookEvent 监听", () => {
-    const { unmount } = renderHook(() => useClaudeNotifications());
+    const { unmount } = renderHook(() => useAgentNotifications());
     expect(mockOnHookEventCallback.cb).not.toBeNull();
     unmount();
   });
 
   it("卸载时清理 onHookEvent 监听", () => {
-    const { unmount } = renderHook(() => useClaudeNotifications());
+    const { unmount } = renderHook(() => useAgentNotifications());
     expect(mockOnHookEventCallback.cb).not.toBeNull();
     unmount();
   });
@@ -248,7 +390,7 @@ describe("F4 通知门控", () => {
 
   it("窗口失焦 + PermissionRequest 事件 → 发送 toast 且闪烁任务栏", () => {
     setWindowFocused(false);
-    renderHook(() => useClaudeNotifications());
+    renderHook(() => useAgentNotifications());
 
     const payload = makePayload({ event: "PermissionRequest" });
     act(() => {
@@ -269,7 +411,7 @@ describe("F4 通知门控", () => {
 
   it("窗口失焦 + Notification(permission_prompt) 事件 → 发送 toast + 闪烁", () => {
     setWindowFocused(false);
-    renderHook(() => useClaudeNotifications());
+    renderHook(() => useAgentNotifications());
 
     const payload = makePayload({
       event: "Notification",
@@ -290,7 +432,7 @@ describe("F4 通知门控", () => {
 
   it("窗口失焦 + Stop 事件 → 发送 toast + 任务栏闪烁", () => {
     setWindowFocused(false);
-    renderHook(() => useClaudeNotifications());
+    renderHook(() => useAgentNotifications());
 
     const payload = makePayload({ event: "Stop" });
     act(() => {
@@ -310,7 +452,7 @@ describe("F4 通知门控", () => {
 
   it("窗口失焦 + StopFailure 事件 → 发送 toast（错误类别）+ 闪烁", () => {
     setWindowFocused(false);
-    renderHook(() => useClaudeNotifications());
+    renderHook(() => useAgentNotifications());
 
     const payload = makePayload({ event: "StopFailure" });
     act(() => {
@@ -328,7 +470,7 @@ describe("F4 通知门控", () => {
 
   it("窗口失焦 + PostToolUseFailure 事件 → 发送 toast（错误类别）+ 闪烁", () => {
     setWindowFocused(false);
-    renderHook(() => useClaudeNotifications());
+    renderHook(() => useAgentNotifications());
 
     const payload = makePayload({ event: "PostToolUseFailure" });
     act(() => {
@@ -348,7 +490,7 @@ describe("F4 通知门控", () => {
 
   it("窗口聚焦 + PermissionRequest 事件 → 不发送 toast、不闪烁", () => {
     setWindowFocused(true);
-    renderHook(() => useClaudeNotifications());
+    renderHook(() => useAgentNotifications());
 
     act(() => {
       mockOnHookEventCallback.cb!(makePayload({ event: "PermissionRequest" }));
@@ -360,7 +502,7 @@ describe("F4 通知门控", () => {
 
   it("窗口聚焦 + Stop 事件 → 不发送 toast、不闪烁", () => {
     setWindowFocused(true);
-    renderHook(() => useClaudeNotifications());
+    renderHook(() => useAgentNotifications());
 
     act(() => {
       mockOnHookEventCallback.cb!(makePayload({ event: "Stop" }));
@@ -372,7 +514,7 @@ describe("F4 通知门控", () => {
 
   it("窗口聚焦 + StopFailure 事件 → 不发送 toast、不闪烁", () => {
     setWindowFocused(true);
-    renderHook(() => useClaudeNotifications());
+    renderHook(() => useAgentNotifications());
 
     act(() => {
       mockOnHookEventCallback.cb!(makePayload({ event: "StopFailure" }));
@@ -385,7 +527,7 @@ describe("F4 通知门控", () => {
   // ── 窗口聚焦状态缺失时的行为 ────────────────────────────
 
   it("__slterm_windowFocused 未定义时按聚焦处理（不发送通知）", () => {
-    renderHook(() => useClaudeNotifications());
+    renderHook(() => useAgentNotifications());
 
     act(() => {
       mockOnHookEventCallback.cb!(makePayload({ event: "PermissionRequest" }));
@@ -398,7 +540,7 @@ describe("F4 通知门控", () => {
 
   it("失焦 + PreToolUse 事件 → 不发送 toast", () => {
     setWindowFocused(false);
-    renderHook(() => useClaudeNotifications());
+    renderHook(() => useAgentNotifications());
 
     act(() => {
       mockOnHookEventCallback.cb!(makePayload({ event: "PreToolUse" }));
@@ -410,7 +552,7 @@ describe("F4 通知门控", () => {
 
   it("失焦 + SessionStart 事件 → 不发送 toast", () => {
     setWindowFocused(false);
-    renderHook(() => useClaudeNotifications());
+    renderHook(() => useAgentNotifications());
 
     act(() => {
       mockOnHookEventCallback.cb!(makePayload({ event: "SessionStart" }));
@@ -421,7 +563,7 @@ describe("F4 通知门控", () => {
 
   it("失焦 + SessionEnd 事件 → 不发送 toast", () => {
     setWindowFocused(false);
-    renderHook(() => useClaudeNotifications());
+    renderHook(() => useAgentNotifications());
 
     act(() => {
       mockOnHookEventCallback.cb!(makePayload({ event: "SessionEnd" }));
@@ -432,7 +574,7 @@ describe("F4 通知门控", () => {
 
   it("失焦 + PostToolUse 事件 → 不发送 toast", () => {
     setWindowFocused(false);
-    renderHook(() => useClaudeNotifications());
+    renderHook(() => useAgentNotifications());
 
     act(() => {
       mockOnHookEventCallback.cb!(makePayload({ event: "PostToolUse" }));
@@ -445,7 +587,7 @@ describe("F4 通知门控", () => {
 
   it("60s 内同一 session+event+timestamp 只发送一次 toast", () => {
     setWindowFocused(false);
-    renderHook(() => useClaudeNotifications());
+    renderHook(() => useAgentNotifications());
 
     const payload = makePayload({ event: "Stop", sessionId: "s1", timestamp: 1000 });
     act(() => {
@@ -462,7 +604,7 @@ describe("F4 通知门控", () => {
 
   it("不同 sessionId 或不同 event 的事件各自发送 toast", () => {
     setWindowFocused(false);
-    renderHook(() => useClaudeNotifications());
+    renderHook(() => useAgentNotifications());
 
     act(() => {
       mockOnHookEventCallback.cb!(makePayload({
@@ -490,7 +632,7 @@ describe("F4 通知门控", () => {
 
   it("去重缓存超 200 截断保留最近 100 条，最旧事件重新触发再弹 toast（NAH-04）", () => {
     setWindowFocused(false);
-    renderHook(() => useClaudeNotifications());
+    renderHook(() => useAgentNotifications());
 
     // 构造 250 个不同事件（timestamp 递增推进）→ 各自 toast
     for (let i = 1; i <= 250; i++) {
@@ -539,7 +681,7 @@ describe("F4 通知门控", () => {
     seedProjects();
     setWindowFocused(false);
 
-    renderHook(() => useClaudeNotifications());
+    renderHook(() => useAgentNotifications());
 
     act(() => {
       mockOnHookEventCallback.cb!(makePayload({
@@ -559,7 +701,7 @@ describe("F4 通知门控", () => {
 
   it("sendToastNotification 仅接收两个参数（无 onClick）", () => {
     setWindowFocused(false);
-    renderHook(() => useClaudeNotifications());
+    renderHook(() => useAgentNotifications());
 
     act(() => {
       mockOnHookEventCallback.cb!(makePayload({ event: "Stop" }));
@@ -597,7 +739,7 @@ describe("任务栏闪烁（UserAttention）", () => {
 
   it("PermissionRequest 触发时调用 requestUserAttention 并传入 Critical", () => {
     setWindowFocused(false);
-    renderHook(() => useClaudeNotifications());
+    renderHook(() => useAgentNotifications());
 
     act(() => {
       mockOnHookEventCallback.cb!(makePayload({ event: "PermissionRequest" }));
@@ -609,7 +751,7 @@ describe("任务栏闪烁（UserAttention）", () => {
 
   it("Notification(permission_prompt) 触发时调用 requestUserAttention", () => {
     setWindowFocused(false);
-    renderHook(() => useClaudeNotifications());
+    renderHook(() => useAgentNotifications());
 
     act(() => {
       mockOnHookEventCallback.cb!(makePayload({
@@ -623,7 +765,7 @@ describe("任务栏闪烁（UserAttention）", () => {
 
   it("Stop 事件触发 requestUserAttention（P2-TE-04 反转）", () => {
     setWindowFocused(false);
-    renderHook(() => useClaudeNotifications());
+    renderHook(() => useAgentNotifications());
 
     act(() => {
       mockOnHookEventCallback.cb!(makePayload({ event: "Stop" }));
@@ -634,7 +776,7 @@ describe("任务栏闪烁（UserAttention）", () => {
 
   it("StopFailure 事件触发 requestUserAttention（P2-TE-04 反转）", () => {
     setWindowFocused(false);
-    renderHook(() => useClaudeNotifications());
+    renderHook(() => useAgentNotifications());
 
     act(() => {
       mockOnHookEventCallback.cb!(makePayload({ event: "StopFailure" }));
@@ -645,7 +787,7 @@ describe("任务栏闪烁（UserAttention）", () => {
 
   it("PostToolUseFailure 事件触发 requestUserAttention（P2-TE-04 反转）", () => {
     setWindowFocused(false);
-    renderHook(() => useClaudeNotifications());
+    renderHook(() => useAgentNotifications());
 
     act(() => {
       mockOnHookEventCallback.cb!(makePayload({ event: "PostToolUseFailure" }));
@@ -656,7 +798,7 @@ describe("任务栏闪烁（UserAttention）", () => {
 
   it("聚焦时不触发 requestUserAttention", () => {
     setWindowFocused(true);
-    renderHook(() => useClaudeNotifications());
+    renderHook(() => useAgentNotifications());
 
     act(() => {
       mockOnHookEventCallback.cb!(makePayload({ event: "PermissionRequest" }));

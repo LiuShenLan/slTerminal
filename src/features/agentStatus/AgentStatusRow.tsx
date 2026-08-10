@@ -6,10 +6,8 @@
 
 import React, { useState, useCallback } from "react";
 import type { AgentSessionRow } from "./useAgentStatus";
-import { CLAUDE_CONTEXT_LIMIT } from "./consts";
-import { getStatusIcon } from "../../lib/claudeStatus";
+import { getStatusIcon } from "../../lib/agentStatus";
 import { cliProfileRegistry } from "../cliProfiles";
-import { CLAUDE_CLI_ID } from "../cliProfiles/profiles/claude";
 import { formatRelativeTime } from "../claudeHistory/historyModel";
 import { AGENT_STATUS_USAGE_COLORS, SIDEBAR_COLORS, DIM_FG } from "../../theme/colors";
 
@@ -35,20 +33,27 @@ export const AgentStatusRow: React.FC<Props> = ({ row, onFocus, now }) => {
   }, [onFocus, row.panelId]);
 
   // ---- 用量计算（input + cacheRead + cacheCreation；output 不计占用，保留为信息字段） ----
+  // MC-412：contextLimit 由行 cliId 对应 profile.hooks.contextLimit 提供；
+  // profile 缺失或无 hooks 能力 → 用量 "--"（现状语义保留）
+  const contextLimit =
+    cliProfileRegistry.get(row.cliId)?.capabilities?.hooks?.contextLimit;
   const total =
     row.usage != null
       ? row.usage.inputTokens +
         row.usage.cacheReadInputTokens +
         row.usage.cacheCreationInputTokens
       : 0;
-  const percent = Math.min(100, (total / CLAUDE_CONTEXT_LIMIT) * 100);
-  const usageAvailable = row.usage != null;
+  const usageAvailable =
+    row.usage != null && contextLimit != null && contextLimit > 0;
+  const percent = usageAvailable
+    ? Math.min(100, (total / contextLimit!) * 100)
+    : 0;
 
   // ---- 图标与时间（相对时间，与历史区口径统一；now 由 60s ticker 驱动重算） ----
   const icon = getStatusIcon(row.status);
-  // 过渡形态：AgentSessionRow 暂无 cliId 字段（Stage 02 MC-410 就绪后回收），暂取 claude profile 的 iconSrc；
-  // 未命中（claude profile 未注册）→ undefined → 无 logo 不报错（与原 cliIconRegistry.getSrc 语义一致）
-  const logoSrc = cliProfileRegistry.get(CLAUDE_CLI_ID)?.iconSrc;
+  // MC-411：CLI 品牌 logo 按行 cliId 查 profile.iconSrc（OSC 133-only 行同样有 cliId）；
+  // 未注册 cliId → undefined → 无 logo 不报错（与原 cliIconRegistry.getSrc 语义一致）
+  const logoSrc = cliProfileRegistry.get(row.cliId)?.iconSrc;
   const timeStr = formatRelativeTime(row.lastEventAt, now ?? Date.now());
 
   // ---- 容器样式 ----

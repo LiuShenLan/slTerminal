@@ -118,7 +118,7 @@ Workspace 使用 Allotment 实现三栏布局（旧为常驻四栏，侧栏视�
 
 ## 终端页签自定义重命名（F8，右键菜单）
 
-- **入口**：`createGetContextMenu` 对终端面板（`panel.view.contentComponent === "terminal"`——**`panel.component` 不存在**）插入「重命名」项（7 项结构 `[新建终端, sep, 重命名, sep, close, closeOthers, closeAll]`）；claude 运行中（`TerminalRegistry.get(panel.id)?.claudeSession != null`，菜单每次右键重新构建判断实时）→ `disabled` 置灰（dockview 原生支持）
+- **入口**：`createGetContextMenu` 对终端面板（`panel.view.contentComponent === "terminal"`——**`panel.component` 不存在**）插入「重命名」项（7 项结构 `[新建终端, sep, 重命名, sep, close, closeOthers, closeAll]`）；claude 运行中（`TerminalRegistry.get(panel.id)?.agentSession != null`，菜单每次右键重新构建判断实时）→ `disabled` 置灰（dockview 原生支持）
 - **存储单一真值源**：`params.customTitle`（随布局 JSON 持久化，照 editor filePath / terminal tabIcon 先例）。`applyRename(api, panel, newTitle, onLayoutChange)` 导出纯函数 = `updateParameters({...params, customTitle})` + `setTitle` + **显式 `onLayoutChange(saveLayout(api))`**——`setTitle`/`updateParameters` 均不触发 `onDidLayoutChange`（dockviewPanel.js:84-95），须显式保存
 - **恢复链路**：Dockview `toJSON` 输出 title + params、`fromJSON` 恢复；`rebuildAndRecomputeTitles` 只重算编辑器标题，终端标题不重算 → 自定义名跨重启存活。`TerminalPanel` 挂载 `originalTitleRef = params.customTitle ?? api.title ?? "terminal"`（customTitle 优先，防 claude 运行中退出保存的瞬态 title）并订阅 `onDidParametersChange` 在 `customTitle !== undefined` 时同步 ref——OSC 133 D / SessionEnd 恢复标题时用自定义名
 - **约束**：`titleManager` 计数器不动（新建终端仍按 `terminal-N` 递增，F8 不占用编号）；编辑器等非终端面板菜单无「重命名」
@@ -187,7 +187,7 @@ Workspace 使用 Allotment 实现三栏布局（旧为常驻四栏，侧栏视�
 - `FILE_PANEL_TYPES` 与 `isAlwaysRenderPanel` 分派矩阵（htmlviewer 等预览面板 renderer="always"）
 
 `workspace-header-actions.test.tsx`（21 用例）：
-- 分屏 + 按钮 & 右键菜单 addPanel 行为：非聚焦分屏点击 + 按钮或右键"新建终端"时，新面板创建在点击的分屏而非聚焦分屏。直测 `createRightHeader`/`createGetContextMenu` 工厂函数，不渲染完整 Dockview 树；C5-C10 覆盖重命名项（F8：终端 7 项结构/非终端 5 项/action 派发 `onRenameRequest(panel)`/claudeSession 存在 disabled，`TerminalRegistry._reset()` 隔离）
+- 分屏 + 按钮 & 右键菜单 addPanel 行为：非聚焦分屏点击 + 按钮或右键"新建终端"时，新面板创建在点击的分屏而非聚焦分屏。直测 `createRightHeader`/`createGetContextMenu` 工厂函数，不渲染完整 Dockview 树；C5-C10 覆盖重命名项（F8：终端 7 项结构/非终端 5 项/action 派发 `onRenameRequest(panel)`/agentSession 存在 disabled，`TerminalRegistry._reset()` 隔离）
 
 新增测试文件（F8）：`terminal-rename-apply.test.ts`（5 用例，直测 `applyRename` 纯函数）+ `terminal-rename-dialog.test.tsx`（13 用例，照 claude-history-action-dialog 模式）
 

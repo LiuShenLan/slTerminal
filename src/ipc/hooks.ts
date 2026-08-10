@@ -19,6 +19,8 @@ export interface HookEventPayload {
   cwd: string;
   toolName: string | null;
   notificationType: string | null;
+  /** 来源 CLI 标识（MC-205 三级解析显式分支；本 Stage 后端尚未发送——恒 undefined 向后兼容，Stage 03 字段到达后自然生效） */
+  cliId?: string;
 }
 
 /** 注入 hook 脚本到 claude settings.json，返回注入后状态 */

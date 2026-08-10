@@ -18,7 +18,7 @@ import { useLayout } from "../../stores/layout";
 import { TerminalRegistry } from "../../panels/terminal/TerminalRegistry";
 import { deriveActiveSessionStatuses } from "./historyModel";
 import type { HistorySession } from "../../types/claudeHistory";
-import type { ClaudeStatus } from "../../lib/claudeStatus";
+import type { AgentStatus } from "../../lib/agentStatus";
 
 /** 加载状态机：idle 初始未扫描 / loading 扫描中 / ready 成功 / error 失败 */
 export type ClaudeHistoryState = "idle" | "loading" | "ready" | "error";
@@ -42,7 +42,7 @@ export function useClaudeHistory() {
   const [state, setState] = useState<ClaudeHistoryState>("idle");
   const [sessions, setSessions] = useState<HistorySession[]>([]);
   const [activeStatuses, setActiveStatuses] = useState<
-    Map<string, ClaudeStatus>
+    Map<string, AgentStatus>
   >(() => deriveActiveSessionStatuses());
   const genRef = useRef(0);
 

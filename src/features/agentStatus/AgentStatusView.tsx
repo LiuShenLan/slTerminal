@@ -13,7 +13,7 @@
 //
 // 状态机（活跃区，优先级自上而下，原文保留）：
 //   no-root → "选择一个项目以查看 Agent 状态"
-//   empty   → "当前项目无运行中的 claude 会话"
+//   empty   → "当前项目无运行中的编码 CLI 会话"
 //   ready   → 渲染行列表
 //
 // 字号层级（问题 4）：折叠框名 13px 粗体 > 会话标题 12px 粗体 > 第二行 11px 灰；
@@ -21,7 +21,7 @@
 //
 // E2E 兼容红线（逐字保留）：根容器 data-e2e="agent-status-view"、活跃行
 // data-e2e="agent-status-row"（AgentStatusRow.tsx 内）、标题栏 "AGENT STATUS"、
-// 空态文案「选择一个项目」「无运行中的 claude 会话」。
+// 空态文案「选择一个项目」「无运行中的编码 CLI 会话」。
 
 import React, { useCallback, useMemo, useState } from "react";
 import type { SideViewComponentProps } from "../sideViews/sideViewRegistry";
@@ -173,7 +173,7 @@ export const AgentStatusView: React.FC<SideViewComponentProps> = (_props) => { /
             )}
             {state.kind === "empty" && (
               <div style={centerHintStyle}>
-                当前项目无运行中的 claude 会话
+                当前项目无运行中的编码 CLI 会话
               </div>
             )}
             {state.kind === "ready" && (

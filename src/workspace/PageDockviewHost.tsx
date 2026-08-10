@@ -160,9 +160,9 @@ function createGetContextMenu(
     const newTerminalId = nextPanelId();
     // 仅终端面板显示「重命名」：判据为 view.contentComponent（panel.component 不存在）
     const isTerminal = params.panel.view.contentComponent === PANEL_TERMINAL;
-    // claude 运行中（claudeSession 存在即运行中，二态模型）→ 禁用重命名；
+    // claude 运行中（agentSession 存在即运行中，二态模型）→ 禁用重命名；
     // 菜单每次右键重新构建，判断实时
-    const claudeRunning = TerminalRegistry.get(params.panel.id)?.claudeSession != null;
+    const claudeRunning = TerminalRegistry.get(params.panel.id)?.agentSession != null;
     const items: (BuiltInContextMenuItem | ReactContextMenuItemConfig)[] = [
       { label: "新建终端", action: () => { params.api.addPanel(
           { id: newTerminalId, component: PANEL_TERMINAL, title: titleManager.getTerminalTitle(pageId),

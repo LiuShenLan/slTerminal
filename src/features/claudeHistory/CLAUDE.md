@@ -10,7 +10,7 @@ Claude Code 历史会话查询与恢复——历史区 UI 与数据层。宿主�
 
 ### 四态同源（问题 2 修复）
 
-历史区行状态与活跃区**同源**（TerminalRegistry）：hook 事件到达时 `useXterm` 经 `setClaudeSession({ sessionId, transcriptPath, status })` 写入四态（`eventToStatus` 结果；null 状态不传，undefined 保留旧值）；`deriveActiveSessionStatuses()` 纯函数派生 `Map<sessionId, ClaudeStatus>`（sessionId 优先，回退 transcriptPath basename 去 `.jsonl` 兼容旧数据；matchedCommand-only 会话无两者可定位——文档化局限）。`useClaudeHistory.activeStatuses` 经 `TerminalRegistry.subscribe` 实时跟随（register/remove/sessionChange 任一事件重算，不重扫）；`HistorySessionRow` 按 `status` 渲染 `STATUS_EMOJI`（⚡🟡✅❌，null → 无标记），与活跃区 `getStatusIcon` 展示一致。
+历史区行状态与活跃区**同源**（TerminalRegistry）：hook 事件到达时 `useXterm` 经 `setAgentSession({ sessionId, transcriptPath, status })` 写入四态（`eventToStatus` 结果；null 状态不传，undefined 保留旧值）；`deriveActiveSessionStatuses()` 纯函数派生 `Map<sessionId, AgentStatus>`（sessionId 优先，回退 transcriptPath basename 去 `.jsonl` 兼容旧数据；matchedCommand-only 会话无两者可定位——文档化局限）。`useClaudeHistory.activeStatuses` 经 `TerminalRegistry.subscribe` 实时跟随（register/remove/sessionChange 任一事件重算，不重扫）；`HistorySessionRow` 按 `status` 渲染 `STATUS_EMOJI`（⚡🟡✅❌，null → 无标记），与活跃区 `getStatusIcon` 展示一致。
 
 ### 双行式行（FE-07）与三级字号层级（问题 1/4 修复）
 
@@ -71,7 +71,7 @@ Claude Code 历史会话查询与恢复——历史区 UI 与数据层。宿主�
 
 ### 双击分派（问题 5 修复）与动作弹窗
 
-`HistorySessionList` 双击三分支：普通行 → 恢复四步；孤儿/无 cwd → 无操作；**运行中（status 非 null）→ `SessionActionDialog` 弹窗**（「切换到该会话操作页面」/「取消」；**分支恢复仅保留在右键菜单**——Tauri 原生 dialog 无法三按钮，自绘模态照 InputDialog 模式，`data-e2e="agent-history-action-dialog"`）。「切换到该会话操作页面」= 反查 `TerminalRegistry.getAll()`（`claudeSession.sessionId` 精确匹配，回退 transcriptPath basename）→ `parseTerminalPageId(panelId)` → `switchToPageAndFocus(pageId, panelId)`（内部：activePageId 相同则直接聚焦）；反查不到 → `sendToastNotification` 提示（会话已结束）。
+`HistorySessionList` 双击三分支：普通行 → 恢复四步；孤儿/无 cwd → 无操作；**运行中（status 非 null）→ `SessionActionDialog` 弹窗**（「切换到该会话操作页面」/「取消」；**分支恢复仅保留在右键菜单**——Tauri 原生 dialog 无法三按钮，自绘模态照 InputDialog 模式，`data-e2e="agent-history-action-dialog"`）。「切换到该会话操作页面」= 反查 `TerminalRegistry.getAll()`（`agentSession.sessionId` 精确匹配，回退 transcriptPath basename）→ `parseTerminalPageId(panelId)` → `switchToPageAndFocus(pageId, panelId)`（内部：activePageId 相同则直接聚焦）；反查不到 → `sendToastNotification` 提示（会话已结束）。
 
 ## 文件
 
@@ -101,7 +101,7 @@ L2 测试位于 `src/__tests__/`，命名规则 `claude-history-*.test.ts(x)` + 
 | `claude-history-action-dialog.test.tsx` | SessionActionDialog：标题/消息/动作按钮渲染、action 回调、取消（按钮/Esc/遮罩）、空 actions 防御 |
 | `ipc-claude-history-contract.test.ts` | 两命令 × 四维验证（命令名 / 参数结构 camelCase / 正常返回 / 异常传播），经共享工厂 `describeIpcContract`（`helpers/ipc-contract.ts`，IHE-06）声明式驱动——8 条用例，mockIPC 盲区声明见 `src/ipc/CLAUDE.md` |
 
-> 另有 `agent-status-view.test.tsx`（agentStatus 侧）覆盖 AgentStatusRow 双行布局与 AgentStatusView 三区结构；`agent-status-hook.test.ts` 覆盖 useAgentStatus sessionId 字段；`terminal-registry.test.ts` / `use-xterm-lifecycle.test.ts` 覆盖 claudeSession sessionId/status 存储与 hook 事件写入（HUK1-9）。
+> 另有 `agent-status-view.test.tsx`（agentStatus 侧）覆盖 AgentStatusRow 双行布局与 AgentStatusView 三区结构；`agent-status-hook.test.ts` 覆盖 useAgentStatus sessionId 字段；`terminal-registry.test.ts` / `use-xterm-lifecycle.test.ts` 覆盖 agentSession sessionId/status 存储与 hook 事件写入（HUK1-9）。
 
 ### 测试模式要点
 

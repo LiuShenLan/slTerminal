@@ -31,7 +31,7 @@ import {
   seedExplorerProject,
 } from "./helpers/workspace-setup";
 import type { HistorySession } from "../types/claudeHistory";
-import type { ClaudeStatus } from "../lib/claudeStatus";
+import type { AgentStatus } from "../lib/agentStatus";
 
 // ── vi.hoisted：mock 状态在模块级 vi.mock 执行前就绪 ──
 const h = vi.hoisted(() => {
@@ -136,7 +136,7 @@ function makeSectionsProps(
     onToggleAll: vi.fn(),
     historyState: "idle",
     sessions: [],
-    activeStatuses: new Map<string, ClaudeStatus>(),
+    activeStatuses: new Map<string, AgentStatus>(),
     rootPath: null,
     scan: h.mockScan,
     removeLocal: h.mockRemoveLocal,
@@ -495,7 +495,7 @@ describe("右键菜单可用性矩阵", () => {
   /** 渲染全部区（组展开）并返回「第一行」元素 */
   function renderAllAndGetFirstRow(
     sessions: HistorySession[],
-    activeStatuses: Map<string, ClaudeStatus> = new Map(),
+    activeStatuses: Map<string, AgentStatus> = new Map(),
   ) {
     seedExplorerProject("C:/project");
     const { container } = render(
@@ -764,7 +764,7 @@ describe("双击分派三分支", () => {
     seedExplorerProject("C:/project");
     // TerminalRegistry 含 session-1 的终端（panelId → pageId 可解析）
     h.all.set("terminal-page1-0", {
-      claudeSession: { sessionId: "session-1", status: "attention" },
+      agentSession: { sessionId: "session-1", status: "attention" },
     });
     const { container } = render(
       React.createElement(
@@ -866,7 +866,7 @@ describe("AgentStatusView 三区集成", () => {
         projectId: "proj-1",
         sessionId: "session-1",
         title: "claude",
-        status: "attention" as ClaudeStatus,
+        status: "attention" as AgentStatus,
         lastEventAt: Date.now(),
         usage: undefined,
       },
@@ -877,7 +877,7 @@ describe("AgentStatusView 三区集成", () => {
   const defaultHistory = {
     state: "idle" as const,
     sessions: [] as HistorySession[],
-    activeStatuses: new Map<string, ClaudeStatus>(),
+    activeStatuses: new Map<string, AgentStatus>(),
     rootPath: null,
     scan: h.mockScan,
     removeLocal: h.mockRemoveLocal,

@@ -23,7 +23,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { HistorySessionList } from "./HistorySessionList";
 import type { ClaudeHistoryState } from "./useClaudeHistory";
 import type { HistorySession } from "../../types/claudeHistory";
-import type { ClaudeStatus } from "../../lib/claudeStatus";
+import type { AgentStatus } from "../../lib/agentStatus";
 import {
   EXPLORER_COLORS,
   INPUT_BG,
@@ -47,7 +47,7 @@ export interface ClaudeHistorySectionsProps {
   /** 全部历史会话（扫描结果） */
   sessions: HistorySession[];
   /** 运行中会话四态映射（Map<sessionId, status>） */
-  activeStatuses: Map<string, ClaudeStatus>;
+  activeStatuses: Map<string, AgentStatus>;
   /** 当前项目 rootPath（null → 当前项目区显示「无活跃项目」） */
   rootPath: string | null;
   /** 手动全量重扫 */

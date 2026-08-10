@@ -6,7 +6,7 @@
 
 import { normalizePath, basename } from "../../lib/path";
 import { TerminalRegistry } from "../../panels/terminal/TerminalRegistry";
-import type { ClaudeStatus } from "../../lib/claudeStatus";
+import type { AgentStatus } from "../../lib/agentStatus";
 import type { HistorySession } from "../../types/claudeHistory";
 
 /** 无 cwd 会话的分组键（null；展示文案「(未知目录)」由 UI 层负责） */
@@ -112,18 +112,18 @@ export function formatRelativeTime(mtimeMs: number, nowMs: number): string {
 
 /**
  * 从 TerminalRegistry 派生运行中会话 id → 四态 status 映射（问题 2 修复：历史区
- * 与活跃区同源——status 由 hook 事件写入 claudeSession，两区展示一致）
+ * 与活跃区同源——status 由 hook 事件写入 agentSession，两区展示一致）
  *
- * sessionId 优先 claudeSession.sessionId（hook 事件 payload 精确值），回退
+ * sessionId 优先 agentSession.sessionId（hook 事件 payload 精确值），回退
  * transcriptPath 的 basename（去 .jsonl 后缀，兼容旧数据）；两者皆无的条目
  * （matchedCommand-only 会话）不产出 id，⚡/四态无法覆盖——已知局限（checklist FE-05）。
  * status 为 null/undefined（无有效状态）的条目不产出键（历史区无标记，与活跃区
  * null 无图标语义一致）。
  */
-export function deriveActiveSessionStatuses(): Map<string, ClaudeStatus> {
-  const map = new Map<string, ClaudeStatus>();
+export function deriveActiveSessionStatuses(): Map<string, AgentStatus> {
+  const map = new Map<string, AgentStatus>();
   for (const entry of TerminalRegistry.getAll().values()) {
-    const cs = entry.claudeSession;
+    const cs = entry.agentSession;
     if (!cs || cs.status == null) continue;
     let id = cs.sessionId;
     if (!id && cs.transcriptPath) {

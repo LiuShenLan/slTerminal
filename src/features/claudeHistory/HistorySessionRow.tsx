@@ -11,8 +11,8 @@
 
 import React from "react";
 import type { HistorySession } from "../../types/claudeHistory";
-import type { ClaudeStatus } from "../../lib/claudeStatus";
-import { STATUS_EMOJI } from "../../lib/claudeStatus";
+import type { AgentStatus } from "../../lib/agentStatus";
+import { STATUS_EMOJI } from "../../lib/agentStatus";
 import { cliProfileRegistry } from "../cliProfiles";
 import { CLAUDE_CLI_ID } from "../cliProfiles/profiles/claude";
 import { formatRelativeTime } from "./historyModel";
@@ -22,7 +22,7 @@ import { EXPLORER_SELECTION_BG, SIDEBAR_COLORS, DIM_FG } from "../../theme";
 export interface HistorySessionRowProps {
   session: HistorySession;
   /** 运行中会话四态（⚡🟡✅❌；null/undefined → 无标记） */
-  status?: ClaudeStatus | null;
+  status?: AgentStatus | null;
   /** 孤儿会话（cwd≠null 且 cwd 目录已删除，✗ 标记） */
   orphan: boolean;
   /** 无 cwd 会话（cwd===null，不显示 ✗，恢复类操作禁用） */

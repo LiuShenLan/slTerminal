@@ -2,7 +2,7 @@
 
 > **本文档是项目用例数唯一真值源。** 所有 CLAUDE.md、README、CI 配置中引用的用例数均以此文件为准。更新测试后必须同步本文档。
 
-全量 **3074** 用例（Rust 571 + 前端 2328 + L3 138 + E2E 37），2026-08-10 更新。
+全量 **3075** 用例（Rust 571 + 前端 2329 + L3 138 + E2E 37），2026-08-10 更新。
 
 > **计数口径**：
 > - L2 以 `npm test` 实跑（Vitest 报告）为准——`it.each(...)` 参数化与 `describeIpcContract` 工厂（`helpers/ipc-contract.ts`，IHE-06）等按**展开后用例数**计入（138 文件 2333 用例全绿实测）；纯 grep `it(/test(` 块数会少计 it.each 展开（如 colors 85 = 13 块 + 7 组 each 展开 72）。
@@ -76,7 +76,7 @@
 
 > `pty/mod.rs`、`pty/win_build.rs`、`main.rs` 不含 `#[test]`，不在此列。git/mod.rs 测试已按 GIT-12 全量拆出至 `tests/`（`#[test]` 零残留）。claude_history 模块 grep 口径：jsonl 28 + scan 19 + ops 9 + mod 7 = 63；env 测试依赖 L1 `--test-threads=1` 门禁（`std::env::set_var` 全局可变）。
 
-## L2 — 前端单元/集成测试（137 文件 / 2328 用例）
+## L2 — 前端单元/集成测试（137 文件 / 2329 用例）
 
 运行：`npm test`（Vitest + jsdom，实跑全绿 2328）
 
@@ -95,13 +95,13 @@
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
-| `src/__tests__/use-xterm-lifecycle.test.ts` | 71 | PTY spawn/exit/setupRetry/快捷键/rAF 轮询/ResizeObserver/字体/OSC 52/133/8/键盘委托/hook-event 过滤与状态更新（F3 四态，问题 2 同源）/setClaudeSession 写入（TRM-01 去重后归位）/OSC 133 C 携 CLI logo（命中/未注册 null——经 matchByCommand 查 profile.iconSrc，OSC133-2b） |
+| `src/__tests__/use-xterm-lifecycle.test.ts` | 71 | PTY spawn/exit/setupRetry/快捷键/rAF 轮询/ResizeObserver/字体/OSC 52/133/8/键盘委托/hook-event 过滤与状态更新（F3 四态，问题 2 同源）/setAgentSession 写入（TRM-01 去重后归位）/OSC 133 C 携 CLI logo（命中/未注册 null——经 matchByCommand 查 profile.iconSrc，OSC133-2b） |
 | `src/__tests__/use-xterm-output.test.ts` | 35 | DEC 2026/直写阈值/交替缓冲/Idle+Max 合帧/Uint8Array/非焦点降频/cancelPendingFlush/64KB 淘汰（TRM-04）/退出码透传；TabTitleRegistry/tabRules mock 改指 cliProfiles 注册表（Stage 01 迁移，用例数不变） |
-| `src/__tests__/terminal-registry.test.ts` | 24 | register/get/remove/has/幂等/setClaudeSession merge 语义（null 清空/undefined 不覆盖/缺 lastEventAt 自动填——NAH-02）/sessionChange 事件/`_reset` |
+| `src/__tests__/terminal-registry.test.ts` | 24 | register/get/remove/has/幂等/setAgentSession merge 语义（AgentSessionInfo + cliId 字段/null 清空/undefined 不覆盖/缺 lastEventAt 自动填——NAH-02）/sessionChange 事件/`_reset` |
 | `src/__tests__/can-fit.test.ts` | 15 | 五条件守卫 + null/undefined 参数防护 |
 | `src/__tests__/use-xterm-integration.test.ts` | 12 | 轻 mock（真实 Terminal/FitAddon）；rAF 回退/onData→pty.write/visible 切换 WebGL 释放；tabRules mock 改指 cliProfiles 注册表（Stage 01 迁移，用例数不变） |
 | `src/__tests__/keyboard.test.ts` | 12 | `createTerminalShortcuts()` 经 active 指针派发；Ctrl+C 不注册 |
-| `src/__tests__/terminal-registry-subscribe.test.ts` | 7 | subscribe register/remove/sessionChange 通知/退订 |
+| `src/__tests__/terminal-registry-subscribe.test.ts` | 7 | subscribe register/remove/sessionChange 通知/退订（setAgentSession 触发） |
 | `src/__tests__/webgl-setup.test.ts` | 7 | `setupWebglWithRetry` 指数退避/重试耗尽回退 DOM/cancel 清理（TRM-06 新建） |
 | `src/__tests__/terminal-instance.test.ts` | 6 | `useTerminalInstance` 四分支：fit 异常/fontSize undefined/prevFontSize 相同跳过/tryLoadWebgl 幂等（TRM-07 新建） |
 | `src/__tests__/terminal.test.tsx` | 14 | TerminalPanel：loading 遮罩 1.5s 超时（TRM-05）/Windows build/spawn/active=false 标题恢复/customTitle 挂载恢复 + onDidParametersChange 同步（F8）/tabLogo 状态机（logoRef 命中保持/清空/双清——CliIconRegistry 引用改指 profile 注册表，F9） |
@@ -111,12 +111,12 @@
 | `src/__tests__/detect-webgl.test.ts` | 3 | WebGL2 可用/不可用/抛异常 |
 | `src/__tests__/terminal-strictmode.test.ts` | 2 | `smGuardRef` 防双重挂载 |
 
-### CLI profile 注册表（2 文件 / 26 用例，Stage 01）
+### CLI profile 注册表（2 文件 / 62 用例，Stage 01）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
 | `src/__tests__/cli-profile-registry.test.ts` | 19 | CliProfileRegistry（MC-101/102）：register/get/getAll 注册序/同 id 覆盖（注册序不变）/matchByCommand 首 token 精确匹配（多 commands 非首键/带参变体/前导空白/空命令行/仅空白/未命中/不 toLowerCase/同键冲突先注册者优先）/`_reset`/独立实例/全局单例 + logo 资源守卫泛化（MC-108：遍历注册表全部 profile 断言 iconSrc 磁盘存在 + PNG 魔数，含 mockcli.png 先行资源）——语义并入自 tab-title-registry（13）+ cli-icons（12） |
-| `src/__tests__/cli-profile-claude.test.ts` | 7 | claude profile 身份域（MC-104）：side-effect 注册/CLAUDE_CLI_ID 常量与注册一致性/身份域字段完整/capabilities 空态/带参命中/`_reset` 恢复——语义并入自 tab-rules（6） |
+| `src/__tests__/cli-profile-claude.test.ts` | 43 | claude profile 身份域（MC-104）：side-effect 注册/CLAUDE_CLI_ID 常量与注册一致性/身份域字段完整（含 hooks 五字段）/capabilities.history 未迁入/带参命中/`_reset` 恢复（8）——语义并入自 tab-rules（6）+ hooks 策略（Stage 02，35）：eventToStatus 26 用例语义迁入（原 claude-status，10 事件 × notificationType + STATUS_EMOJI 联合守卫 + AgentStatus 类型兼容）+ classifyNotification 五映射表驱动 9 条（NAH-03 迁入，MC-422） |
 
 ### 编辑器面板（8 文件 / 134 用例）
 
@@ -141,7 +141,7 @@
 | `src/__tests__/workspace-defaulttab.test.tsx` | 27 | **生产 DefaultTab 渲染（WRK-05 非手写 Mock）**：tabIcon emoji/img 分支/onDidParametersChange 扁平事件结构回归（event.tabIcon 非 event.params.tabIcon）/tabLogo CLI logo 渲染（仅随 emoji/顺序/动态双向/URL 并存，F9） |
 | `src/__tests__/workspace-page-dockview.test.tsx` | 7 | PageDockview 真实组件（WRK-01）：handleReady 空布局不兜底/Watermark 按钮 addPanel/RightHeader「+」/onSaveAs 重算标题 |
 | `src/__tests__/pageapis.test.ts` | 11 | pageApis（WRK-02）：switchToPageShared 时序（invocationCallOrder，DBG-5/9）/reject 降级/`__dockviewApi` 重指；switchToPageAndFocus 轮询命中/5s 超时降级 |
-| `src/__tests__/workspace-header-actions.test.tsx` | 21 | RightHeader Watermark 按钮/页签操作/右键菜单重命名项（F8：终端 7 项结构/非终端 5 项/action 派发/claudeSession 存在禁用） |
+| `src/__tests__/workspace-header-actions.test.tsx` | 21 | RightHeader Watermark 按钮/页签操作/右键菜单重命名项（F8：终端 7 项结构/非终端 5 项/action 派发/agentSession 存在禁用——MC-405 更名同步） |
 | `src/__tests__/terminal-rename-dialog.test.tsx` | 13 | 重命名弹窗（F8）：预填/受控输入/Enter 提交 trim/空名拒绝行内错误/取消（按钮/Esc/遮罩）/错误清除/initialTitle 跟随 |
 | `src/__tests__/terminal-rename-apply.test.ts` | 5 | `applyRename` 纯函数（F8）：updateParameters 展开保留原键 + customTitle/params undefined 分支/setTitle/onLayoutChange 收到 toJSON 值/原对象不被修改 |
 | `src/__tests__/workspace-switch-order.test.tsx` | 14 | **真实驱动（WRK-06）**：点击页面行触发 switchToPage 断言 setProjectRoot 先于 setActivePage/reject 降级/SEC-01 effect 兜底 |
@@ -250,35 +250,35 @@
 | `src/__tests__/use-panel-focus.test.ts` | 5 | focusin→pushContext+onActivate/focusout→popContext+onDeactivate/卸载清理 |
 | `src/__tests__/wire-keybindings.test.ts` | 3 | 立即应用/store 变更重应用/unsubscribe |
 
-### 主题/配色/基础（7 文件 / 195 用例）
+### 主题/配色/基础（7 文件 / 169 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
 | `src/__tests__/colors.test.ts` | 85 | **配色 token 真实导出值断言（STS-01：GIT_FILE/GIT_GUTTER/EXPLORER/SIDEBAR/AGENT_STATUS_USAGE 五组 + uiTokenCases 补 EXPLORER_SELECTION_BG 等，STS-09）**——it.each 表驱动展开；facade 化后 89→85（死配置清理移除 4 条断言） |
 | `src/__tests__/scheme-registry.test.ts` | 18 | 方案注册表单测（TST-02）：register/get/getAll/getDefaultId、setActive 已知/未知 id 回退 darcula + console.warn、getActive 默认 darcula、重复注册覆盖、`_reset` 隔离、darcula 四段完整性（ui 6 组键数 7/3/5/8/3/3 + 23 标量、terminal 25 键、editor oneDark 透出非 undefined、libraries dockview 20 条 + allotment 2 键） |
 | `src/__tests__/overrides.test.ts` | 7 | 主题 overrides 导出单测（TST-03）：dockviewVarStyle 键集合 20 条且值为 active 方案色、allotmentVarStyle 2 键、editorTheme === active 方案 editor 段、editorColorOverrides 返回 CM6 扩展（lint/searchMatch/background 键生效）、层叠胜出守卫（ACC-05：竞争规则选择器带 .cm-editor 前缀）、setActive 后输出跟随切换 |
-| `src/__tests__/claude-status.test.ts` | 32 | eventToStatus 纯函数全分支（10 事件 × notificationType）+ getStatusIcon（**null 分支，STS-04**） |
+| `src/__tests__/agent-status-lib.test.ts` | 6 | lib 层四态常量（MC-401 迁移）：STATUS_EMOJI 恰好 4 键/emoji 值（契约 C7）/null 不在映射表 + getStatusIcon（**null 分支，STS-04**）+ AgentStatus 类型接受 5 值——事件映射用例已随实现迁出至 cli-profile-claude（lib 层不再含 claude 事件名字面量） |
 | `src/__tests__/path.test.ts` | 27 | normalizePath/basename/isChildOf/relativePath 边界覆盖 |
 | `src/__tests__/inject-script.test.ts` | 21 | HTML 脚本注入/`</script>` 转义/幂等/大小写不敏感/键盘转发+片段链接拦截（STS-11① 性能断言已删） |
 | `src/__tests__/theme.test.ts` | 13 | terminalOptions: ANSI 16 色/font/cursor/scrollback/**kittyKeyboard（STS-05）** |
 | `src/__tests__/panelId.test.ts` | 5 | parseTerminalPageId 全分支 |
 
-### 通知/Agent 状态（3 文件 / 106 用例）
+### 通知/Agent 状态（3 文件 / 101 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
-| `src/__tests__/agent-status-hook.test.ts` | 39 | useAgentStatus 行建模新语义全分支：纯 shell 无行/双通道建行/三通道删行/初始扫描携 transcriptPath 拉 usage/reconcile 对账/now ticker 60s 重算 |
-| `src/__tests__/notifications.test.ts` | 42 | **classifyEvent 表驱动（NAH-03：事件 × notificationType 全表）**/**去重缓存 250 事件截断 100 + 最旧再弹（NAH-04）**/hook-event 通知调度/窗口失焦门控/任务栏闪烁/积压 flush/并发竞态 |
-| `src/__tests__/agent-status-view.test.tsx` | 29 | AgentStatusView 组件：no-root/empty 占位/**行2 用量条+相对时间断言（NAH-05）**/点击行 switchToPageAndFocus/**双行布局结构**/三级字号/用量口径/分段颜色/now prop 驱动重算/三下拉框结构/**标题覆盖真实/受控 history 集成（NAH-06）**/行1 CLI logo（仅随 emoji/图标列 40px 簇/行2 缩进 48px，F9） |
+| `src/__tests__/agent-status-hook.test.ts` | 39 | useAgentStatus 行建模新语义全分支（Stage 02 更名同步）：纯 shell 无行/双通道建行（hook 通道按 MC-205 三级解析 cliId 写入行）/三通道删行/初始扫描携 transcriptPath 拉 usage/reconcile 对账/now ticker 60s 重算 |
+| `src/__tests__/notifications.test.ts` | 33 | **去重缓存 250 事件截断 100 + 最旧再弹（NAH-04）**/hook-event 通知调度（类别判定经 profile.hooks.classifyNotification 委托——MC-420 两段分解，纯函数表驱动 9 条迁入 cli-profile-claude）/窗口失焦门控/任务栏闪烁/积压 flush/并发竞态 |
+| `src/__tests__/agent-status-view.test.tsx` | 29 | AgentStatusView 组件（Stage 02 更名 + 空态文案同步）：no-root/empty 占位（**空态「无运行中的编码 CLI 会话」，MC-414**）/**行2 用量条+相对时间断言（NAH-05）**/点击行 switchToPageAndFocus/**双行布局结构**/三级字号/用量口径（contextLimit 来自行 cliId profile.hooks，MC-412）/分段颜色/now prop 驱动重算/三下拉框结构/**标题覆盖真实/受控 history 集成（NAH-06）**/行1 CLI logo（仅随 emoji/图标列 40px 簇/行2 缩进 48px，F9） |
 
 ### Claude 历史会话（6 文件 / 117 用例，F7）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
-| `src/__tests__/claude-history-model.test.ts` | 41 | 纯函数全分支：isCurrentProject（决策 24）/groupByCwd/matchesSearch/formatRelativeTime（决策 26）/deriveActiveSessionStatuses（**sessionId null 回退 basename，NAH-01**） |
-| `src/__tests__/claude-history-view.test.tsx` | 33 | 受控 props 注入/三区结构/搜索过滤/组默认收起+计数/**双击运行中 → SessionActionDialog（NAH-09②）**/菜单矩阵 3 项/标题覆盖集成/空态文案/E2E 红线 |
+| `src/__tests__/claude-history-model.test.ts` | 41 | 纯函数全分支（Stage 02 更名同步，AgentStatus）：isCurrentProject（决策 24）/groupByCwd/matchesSearch/formatRelativeTime（决策 26）/deriveActiveSessionStatuses（**sessionId null 回退 basename，NAH-01**） |
+| `src/__tests__/claude-history-view.test.tsx` | 33 | 受控 props 注入/三区结构/搜索过滤/组默认收起+计数/**双击运行中 → SessionActionDialog（NAH-09②）**/菜单矩阵 3 项/标题覆盖集成/空态文案/E2E 红线（Stage 02 更名同步，AgentStatus） |
 | `src/__tests__/claude-history-row.test.tsx` | 19 | 双行渲染/四态标记/✗ 孤儿标记/**图标优先级（status 覆盖 orphan，NAH-10）**/字号断言/单击选中/双击三分派/行1 CLI logo（仅随 status emoji/孤儿行不加图，F9） |
-| `src/__tests__/claude-history-hook.test.tsx` | 13 | 状态机流转/scan 成功失败/removeLocal 不重扫/**scan generation 竞态（NAH-08）**/subscribe 驱动 activeStatuses/卸载清理 |
+| `src/__tests__/claude-history-hook.test.tsx` | 13 | 状态机流转/scan 成功失败/removeLocal 不重扫/**scan generation 竞态（NAH-08）**/subscribe 驱动 activeStatuses/卸载清理（Stage 02 更名同步，AgentStatus） |
 | `src/__tests__/claude-history-restore.test.ts` | 7 | 四步编排/pty.write 内容（普通/fork/`\r`）/**防重入（NAH-07①）**/失败 toast/**cwd null 防御性 throw（NAH-07②）** |
 | `src/__tests__/claude-history-action-dialog.test.tsx` | 7 | SessionActionDialog 渲染/action 回调/取消（按钮/Esc/遮罩）/**空 actions 防御（NAH-11）** |
 
@@ -340,7 +340,7 @@
 | `terminal.e2e.ts` | 7 | 7 active | 启动标题/PTY 通信+缓冲断言/helper 写入读取/terminal-N 标题/**H6 跨页面存活**/**全屏 TUI 大负载+切页签往返（E2E-04 视觉回归，M2 人工确认）**/**强杀 slterminal.exe 子进程树无残留（E2E-12）** |
 | `editor.e2e.ts` | 5 | 5 active | 编辑器标题 basename/同名冲突相对路径/关闭后重算/Ctrl+S 经 capture 真实写盘（mtime）/外部修改触发 reload 后保存（dirty→clean） |
 | `history.e2e.ts` | 8 | 8 active | fixture 6 行展示 + agent-*/非 UUID/subagents 排除/标题回退链/搜索过滤/复制恢复命令（剪贴板断言）/孤儿 ✗ 双击无反应/删除（ask 钩子 + 副本删除）/历史区四态同源/**恢复编排（部分端到端：断言到 pty.write 注入，不断言真实进入会话）** |
-| `agent.e2e.ts` | 7 | 6 active + 1 skip | 视图存在性/纯 shell 终端无行（行建模新语义）/动态四态（首个信号即建行→⚡→✅→行消失）/R2 变体（切项目用量保持 + cache 字段）/R3 变体（SessionEnd 删行不复活）/R4 变体（关页签删行）/**toast 触发链路（skip：权限弹窗需用户交互）** |
+| `agent.e2e.ts` | 7 | 6 active + 1 skip | 视图存在性/纯 shell 终端无行（行建模新语义）/动态四态（首个信号即建行→⚡→✅→行消失）/R2 变体（切项目用量保持 + cache 字段）/R3 变体（SessionEnd 删行不复活）/R4 变体（关页签删行）/**toast 触发链路（skip：权限弹窗需用户交互）**——空态文案「无运行中的编码 CLI 会话」断言（MC-414，Stage 02） |
 | `hooks.e2e.ts` | 4 | 4 active | 注入/卸载/状态三态/信号文件驱动页签 emoji/**真实 hook reporter 链路（E2E-06：node 执行脚本 + stdin JSON + SLTERM_PANEL_ID → 信号消费 + 非法 JSON exit 0 的 C10 守卫）**/hooksConfig project 层保存写盘 + merge 保留其他字段 |
 | `html.e2e.ts` | 2 | 1 active + 1 skip | iframe Ctrl+W postMessage 转发关闭（真实二进制全链路）/**内联脚本/事件 CSP 执行验证（skip：执行断言不稳定）** |
 | `sidebar.e2e.ts` | 2 | 2 active | 点击开关（R1/R2）/跨区移动状态机（R6/R7——经 store helper，非真实 DnD） |
@@ -364,6 +364,7 @@ embedded WDIO 驱动**无法将 OS 级按键（`browser.keys`）投递进 WebVie
 
 ## 历史变更
 
+- 2026-08-10（multi-cli Stage 02 前端状态域去 claude 化，MC-401~422）：删 claude-status 32（语义拆分迁出：lib 层 6 用例 → 新建 agent-status-lib；事件映射 26 用例 → cli-profile-claude，落点改此）+ 新建 agent-status-lib 6（STATUS_EMOJI/getStatusIcon/AgentStatus 类型——lib 层不再含 claude 事件名字面量，MC-401）。cli-profile-claude 7→43（+36：eventToStatus 26 用例语义迁入 + classifyNotification 五映射表驱动 9 条迁入（NAH-03，notifications 纯函数层迁出）+ hooks 能力五字段断言 +1 与 capabilities.history 未迁入——contextLimit=200_000/restartHint/hasConfigEditor，MC-214 前端半 + MC-422）。notifications 42→33（classifyEvent 纯函数表驱动 9 条迁出，类别判定改经 profile.hooks.classifyNotification 委托——MC-420）。terminal-registry 24 / terminal-registry-subscribe 7 / use-xterm-lifecycle 71 / use-xterm-output 35 / use-xterm-integration 12 / claude-history-model 41 / claude-history-view 33 / claude-history-hook 13 用例数不变（ClaudeStatus→AgentStatus、claudeSession→agentSession、setClaudeSession→setAgentSession 更名同步 + AgentSessionInfo 新增 cliId——MC-402/403/410）；agent-status-view 29 / agent-status-hook 39 用例数不变（更名 + 空态文案「无运行中的编码 CLI 会话」MC-414 + 用量口径 contextLimit 来自 profile MC-412）；workspace-header-actions 21 用例数不变（F8 禁用判定 agentSession，MC-405）；L4 agent.e2e 7 用例数不变（空态文案断言同步，MC-414）；L3 production-osc 8 用例数不变（更名同步）。L2 2328→2329（137 文件不变），全量 3074→3075。
 - 2026-08-10（multi-cli Stage 01 CLI profile 注册表，MC-101~108）：新增「CLI profile 注册表」类目 2 文件 26 用例——cli-profile-registry 18（CliProfileRegistry：register/get/getAll 注册序/同 id 覆盖（注册序不变）/matchByCommand 多 commands·带参·空命令行·仅空白·未命中·不 toLowerCase/`_reset`/独立实例/单例）、cli-profile-claude 8（claude 身份域字段 + CLAUDE_CLI_ID 常量一致性 + side-effect 注册 + 资源守卫泛化遍历——iconSrc 磁盘存在 + PNG 魔数，含 mockcli.png 先行资源）。删 3 文件 31 用例：tab-title-registry 13 / tab-rules 6（语义并入上述两文件）、cli-icons 12（资源守卫语义并入 cli-profile-claude）。use-xterm-lifecycle 71 / use-xterm-output 35 / use-xterm-integration 12 / terminal 14 / e2e-gating-terminal 5 用例数不变（断言与 mock 改指 profile 注册表）；L3 production-osc 8 用例数不变（OSC 133 复刻段改写，D-08）。L2 2333→2328（138→137 文件），全量 3079→3074。
 - 2026-08-08（CLI 品牌 logo 显示，F9）：新增 1 文件——cli-icons 12（CliIconRegistry 注册表全分支 + public 文件/PNG 魔数守卫）；use-xterm-lifecycle 70→71（+1 OSC 133 C 未注册 CLI → logo null）、terminal.test.tsx 10→14（+4 tabLogo logoRef 状态机）、workspace-defaulttab 21→27（+6 tabLogo 渲染/顺序/仅随 emoji/动态双向/URL 并存）、agent-status-view 25→29（+4 行1 logo/图标列 40px 簇/行2 缩进 48px）、claude-history-row 16→19（+3 logo 仅随 status emoji/孤儿行不加图）；L3 production-osc 断言同步（OSC 133 C 携 logo）。L2 2303→2333（+30 实跑口径），全量 →3079。
 - 2026-08-08（终端页签右键菜单重命名，F8）：新增 2 文件——terminal-rename-dialog 13（弹窗交互全分支）、terminal-rename-apply 5（applyRename 纯函数）；terminal.test.tsx 8→10（+2 customTitle 挂载恢复/参数同步）、workspace-header-actions 16→21（+5 C6-C10 重命名项结构/派发/禁用矩阵，C5 改 7 项结构）。L2 2279→2304（+25 实跑口径），全量 →3050。

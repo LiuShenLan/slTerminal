@@ -1,12 +1,14 @@
-// profiles/claude/index.ts — claude CLI profile 身份域（Stage 01 注册）
+// profiles/claude/index.ts — claude CLI profile 身份域 + hooks 能力（Stage 02 补全）
 //
 // claude 合法领地：本文件是 claude 身份域数据定义点（id/displayName/commands/
-// tabTitle 均引用 CLAUDE_CLI_ID 常量）。CLAUDE_CLI_ID 供通用层缺省回退 import
+// tabTitle 均引用 CLAUDE_CLI_ID 常量）+ hooks 策略能力挂载点（MC-214 前端半 +
+// MC-422，实现见 strategies.ts）。CLAUDE_CLI_ID 供通用层缺省回退 import
 // （AC-5 字面量守卫兼容——通用层禁写 "claude" 字面量，一律 import 本常量）。
-// capabilities 本 Stage 为空（hooks 能力 Stage 02 迁入、history 能力 Stage 05 迁入）。
+// capabilities.history 能力 Stage 05 迁入。
 
 import { cliProfileRegistry } from "../../cliProfileRegistry";
 import type { CodingCliProfile } from "../../types";
+import { classifyNotification, eventToStatus } from "./strategies";
 
 /** claude cliId 公共键（通用层缺省回退一律 import 此常量，禁止写 "claude" 字面量） */
 export const CLAUDE_CLI_ID = "claude";
@@ -18,7 +20,15 @@ export const claudeProfile: CodingCliProfile = {
   commands: [CLAUDE_CLI_ID],
   iconSrc: "/cli-icons/claude.png",
   tabTitle: CLAUDE_CLI_ID,
-  capabilities: {},
+  capabilities: {
+    hooks: {
+      eventToStatus,
+      classifyNotification,
+      contextLimit: 200_000,
+      restartHint: "hooks 改动需重启 claude 会话生效",
+      hasConfigEditor: true,
+    },
+  },
 };
 
 // side-effect 注册（import 即注册，照 tabRules 先例）

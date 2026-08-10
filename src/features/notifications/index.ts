@@ -1,2 +1,2 @@
-// 通知调度模块 — barrel export
-export { useClaudeNotifications, NotificationListener } from "./useClaudeNotifications";
+// 通知调度模块 — barrel export（MC-420 更名）
+export { useAgentNotifications, NotificationListener } from "./useAgentNotifications";

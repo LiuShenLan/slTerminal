@@ -7,16 +7,21 @@
 import { Terminal } from "@xterm/xterm";
 import type { FitAddon } from "@xterm/addon-fit";
 import type { WebglAddon } from "@xterm/addon-webgl";
-import type { ClaudeStatus } from "../../lib/claudeStatus";
+import type { AgentStatus } from "../../lib/agentStatus";
 
-/** claude 会话信息——存在即运行中（二态模型，无 running 布尔） */
-export interface ClaudeSessionInfo {
+/** 会话信息——存在即运行中（二态模型，无 running 布尔） */
+export interface AgentSessionInfo {
   /** 会话 UUID（hook 事件 payload.sessionId；matchedCommand-only 会话无此字段） */
   sessionId?: string;
   transcriptPath?: string;
   matchedCommand?: string;
-  /** 四态（eventToStatus 结果；null 状态不存储——undefined 保留旧值） */
-  status?: ClaudeStatus;
+  /** 四态（profile.hooks.eventToStatus 结果；null 状态不存储——undefined 保留旧值） */
+  status?: AgentStatus;
+  /**
+   * cliId（OSC 133 C 命中时写入，MC-107）。可选——hook 事件路径不经 setAgentSession
+   * 写 cliId，消费方三级解析缺省回退 CLAUDE_CLI_ID（MC-205）。
+   */
+  cliId?: string;
   lastEventAt: number;
 }
 
@@ -25,8 +30,8 @@ export interface RegisteredTerminal {
   sessionId: string;
   webglAddon: WebglAddon | null;
   fitAddon: FitAddon;
-  /** claude 会话状态：存在即运行中，null = 明确无会话，undefined = 未设置（缺省保留旧值） */
-  claudeSession?: ClaudeSessionInfo | null;
+  /** 会话状态：存在即运行中，null = 明确无会话，undefined = 未设置（缺省保留旧值） */
+  agentSession?: AgentSessionInfo | null;
 }
 
 /** 注册表变更事件（sessionChange 仅携 panelId——listener 经 get() 读现值，防快照不一致） */
@@ -43,10 +48,10 @@ function notify(event: RegistryEvent): void {
 
 export const TerminalRegistry = {
   register(panelId: string, entry: RegisteredTerminal): void {
-    // 幂等覆盖：claudeSession 缺省时保留旧值（StrictMode/重试场景不丢 session）
+    // 幂等覆盖：agentSession 缺省时保留旧值（StrictMode/重试场景不丢 session）
     const old = registry.get(panelId);
-    if (old && entry.claudeSession === undefined) {
-      entry = { ...entry, claudeSession: old.claudeSession };
+    if (old && entry.agentSession === undefined) {
+      entry = { ...entry, agentSession: old.agentSession };
     }
     registry.set(panelId, entry);
     notify({ type: "register", panelId });
@@ -73,23 +78,24 @@ export const TerminalRegistry = {
     return new Map(registry);
   },
 
-  /** 设置面板的 claudeSession：patch 中 undefined 键不覆盖旧值（merge），
+  /** 设置面板的 agentSession：patch 中 undefined 键不覆盖旧值（merge），
    *  null 清空为 null，panelId 不存在 no-op 不 notify，
    *  缺 lastEventAt 自动填 Date.now()。
    *  成功后 notify({ type: "sessionChange", panelId })。 */
-  setClaudeSession(panelId: string, patch: Partial<ClaudeSessionInfo> | null): void {
+  setAgentSession(panelId: string, patch: Partial<AgentSessionInfo> | null): void {
     const entry = registry.get(panelId);
     if (!entry) return; // no-op，不 notify
 
     if (patch === null) {
-      entry.claudeSession = null;
+      entry.agentSession = null;
     } else {
-      const prev = entry.claudeSession;
-      entry.claudeSession = {
+      const prev = entry.agentSession;
+      entry.agentSession = {
         sessionId: patch.sessionId !== undefined ? patch.sessionId : prev?.sessionId,
         transcriptPath: patch.transcriptPath !== undefined ? patch.transcriptPath : prev?.transcriptPath,
         matchedCommand: patch.matchedCommand !== undefined ? patch.matchedCommand : prev?.matchedCommand,
         status: patch.status !== undefined ? patch.status : prev?.status,
+        cliId: patch.cliId !== undefined ? patch.cliId : prev?.cliId,
         lastEventAt: patch.lastEventAt ?? Date.now(),
       };
     }

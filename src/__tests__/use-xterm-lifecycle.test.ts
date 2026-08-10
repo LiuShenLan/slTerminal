@@ -22,13 +22,17 @@ const {
   mockRegistryRegister,
   mockRegistryGet,
   mockRegistryRemove,
-  mockSetClaudeSession,
+  mockSetAgentSession,
   // Hooks 事件测试：捕获 onHookEvent 回调
   mockOnHookEvent,
   mockUnsubscribeHookEvent,
   capturedHookEventCallbackRef,
+  // MC-403: cliProfileRegistry.get 解析 profile（hook 事件按 cliId 取能力）
+  mockCliProfileGet,
+  // MC-403: profile.hooks.eventToStatus 真实调用断言（入参 mock）
+  mockEventToStatus,
 } = vi.hoisted(() => {
-  const registry = new Map<string, { sessionId: string }>();
+  const registry = new Map<string, { sessionId: string; agentSession?: { cliId?: string } | null }>();
   const hookCallbackRef: { current: ((_p: Record<string, unknown>) => void) | null } = { current: null };
   const mockUnsub = vi.fn();
   return {
@@ -41,7 +45,13 @@ const {
     mockProposeDimensions: vi.fn(() => ({ cols: 80, rows: 24 })),
     mockOnFontSizeChange: vi.fn(),
     mockRegistryMap: registry,
-    mockRegistryRegister: vi.fn((panelId: string, entry: { sessionId: string }) => {
+    mockRegistryRegister: vi.fn((panelId: string, entry: { sessionId: string; agentSession?: { cliId?: string } | null }) => {
+      // 幂等 merge（对齐生产 TerminalRegistry.register：agentSession 缺省时保留旧值，
+      // 测试预置的 agentSession 不被注册覆盖——HUK12 反查分支依赖此语义）
+      const old = registry.get(panelId);
+      if (old && entry.agentSession === undefined) {
+        entry = { ...entry, agentSession: old.agentSession };
+      }
       registry.set(panelId, entry);
     }),
     mockRegistryGet: vi.fn((panelId: string) => registry.get(panelId)),
@@ -49,7 +59,7 @@ const {
       registry.delete(panelId);
       return true;
     }),
-    mockSetClaudeSession: vi.fn(),
+    mockSetAgentSession: vi.fn(),
     // Hooks 事件 mock
     mockOnHookEvent: vi.fn((callback: (_p: Record<string, unknown>) => void) => {
       hookCallbackRef.current = callback;
@@ -57,6 +67,24 @@ const {
     }),
     mockUnsubscribeHookEvent: mockUnsub,
     capturedHookEventCallbackRef: hookCallbackRef,
+    mockCliProfileGet: vi.fn(),
+    // 默认 stub 语义对齐 claude eventToStatus（10 事件映射）；单测可按需 mockReturnValue 覆盖
+    mockEventToStatus: vi.fn(
+      (event: string, notificationType?: string | null): string | null => {
+        if (event === "SessionStart") return "attention";
+        if (event === "UserPromptSubmit" || event === "PreToolUse" || event === "PostToolUse") return "working";
+        if (event === "Stop") return "done";
+        if (event === "StopFailure" || event === "PostToolUseFailure") return "error";
+        if (event === "Notification") {
+          return notificationType === "permission_prompt" ||
+            notificationType === "idle_prompt" ||
+            notificationType === "agent_needs_input"
+            ? "attention"
+            : null;
+        }
+        return null;
+      },
+    ),
   };
 });
 
@@ -198,7 +226,7 @@ vi.mock("../panels/terminal/TerminalRegistry", () => ({
     register: mockRegistryRegister,
     get: mockRegistryGet,
     remove: mockRegistryRemove,
-    setClaudeSession: mockSetClaudeSession,
+    setAgentSession: mockSetAgentSession,
   },
 }));
 
@@ -219,7 +247,7 @@ vi.mock("../features/cliProfiles", () => ({
   cliProfileRegistry: {
     matchByCommand: mockMatchByCommand,
     register: vi.fn(),
-    get: vi.fn(),
+    get: mockCliProfileGet,
     getAll: vi.fn(),
     _reset: vi.fn(),
   },
@@ -243,6 +271,26 @@ function makeCliProfile(id: string, iconSrc: string) {
     iconSrc,
     tabTitle: id,
     capabilities: {},
+  };
+}
+
+/** 构造含 hooks 能力的 profile（MC-403：eventToStatus 经 profile.capabilities.hooks 真实调用） */
+function makeHooksProfile(id: string) {
+  return {
+    id,
+    displayName: id,
+    commands: [id],
+    iconSrc: `/cli-icons/${id}.png`,
+    tabTitle: id,
+    capabilities: {
+      hooks: {
+        eventToStatus: mockEventToStatus,
+        classifyNotification: vi.fn(),
+        contextLimit: 200_000,
+        restartHint: "hooks 改动需重启会话生效",
+        hasConfigEditor: true,
+      },
+    },
   };
 }
 
@@ -1298,13 +1346,13 @@ describe("OSC 133 命令边界检测", () => {
     return capturedOsc133Handler!;
   }
 
-    it("OSC133-1: OSC 133 C 序列匹配注册命令 → onTabStateChange 含 title 和 attention icon + setClaudeSession", async () => {
+    it("OSC133-1: OSC 133 C 序列匹配注册命令 → onTabStateChange 含 title 和 attention icon + setAgentSession", async () => {
     mockMatchByCommand.mockReturnValue(makeCliProfile("claude", "/cli-icons/claude.png"));
 
     const handler = await mountAndWaitForOsc133();
     // spawn 成功回调中调用了 onTabStateChange({ active: false })，需清除
     mockOnTabStateChange.mockClear();
-    mockSetClaudeSession.mockClear();
+    mockSetAgentSession.mockClear();
 
     const result = handler("C;claude");
 
@@ -1317,13 +1365,14 @@ describe("OSC 133 命令边界检测", () => {
       logo: "/cli-icons/claude.png",
     });
       // P1-F3-01: OSC 133 C 固定使用 🟡 (attention)，不使用 rule.icon
-    // PF2-FE-03: OSC 133 C 命中注册命令 → 写入 claude 会话状态
-    expect(mockSetClaudeSession).toHaveBeenCalledWith("osc133-test", {
+    // MC-107: OSC 133 C 命中注册命令 → 写入会话状态（cliId 取匹配 profile 的 id）
+    expect(mockSetAgentSession).toHaveBeenCalledWith("osc133-test", {
+      cliId: "claude",
       matchedCommand: "claude",
     });
   });
 
-  it("OSC133-2: OSC 133 D 序列 → onTabStateChange({ active: false }) + setClaudeSession(null)", async () => {
+  it("OSC133-2: OSC 133 D 序列 → onTabStateChange({ active: false }) + setAgentSession(null)", async () => {
     mockMatchByCommand.mockReturnValue(makeCliProfile("claude", "/cli-icons/claude.png"));
 
     const handler = await mountAndWaitForOsc133();
@@ -1332,15 +1381,15 @@ describe("OSC 133 命令边界检测", () => {
     // 先发送 C 序列使 isCommandRunningRef = true
     handler("C;claude");
     mockOnTabStateChange.mockClear();
-    mockSetClaudeSession.mockClear();
+    mockSetAgentSession.mockClear();
 
     // 发送 D 序列 → 重置运行状态
     const result = handler("D;0");
 
     expect(result).toBe(false);
     expect(mockOnTabStateChange).toHaveBeenCalledWith({ active: false });
-    // PF2-FE-03: OSC 133 D → 清除 claude 会话行
-    expect(mockSetClaudeSession).toHaveBeenCalledWith("osc133-test", null);
+    // MC-107: OSC 133 D → 清除会话行
+    expect(mockSetAgentSession).toHaveBeenCalledWith("osc133-test", null);
   });
 
   it("OSC133-2b: OSC 133 C 匹配 profile → title/logo 均取自 profile（tabTitle / iconSrc）", async () => {
@@ -1348,7 +1397,7 @@ describe("OSC 133 命令边界检测", () => {
 
     const handler = await mountAndWaitForOsc133();
     mockOnTabStateChange.mockClear();
-    mockSetClaudeSession.mockClear();
+    mockSetAgentSession.mockClear();
 
     handler("C;codex");
 
@@ -1715,7 +1764,7 @@ describe("setupRetry Enter 重连", () => {
 // P1-F3-07: Hooks 事件过滤测试
 // ═══════════════════════════════════════════════════════════
 
-describe("Hooks 事件过滤 (panelId + eventToStatus)", () => {
+describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => {
   let container: HTMLDivElement;
   let mockOnTabStateChange: ReturnType<typeof vi.fn<(state: TabState) => void>>;
 
@@ -1739,6 +1788,8 @@ describe("Hooks 事件过滤 (panelId + eventToStatus)", () => {
     mockProposeDimensions.mockReturnValue({ cols: 80, rows: 24 });
     capturedTerminal = null;
     mockOnTabStateChange = vi.fn<(state: TabState) => void>();
+    // 缺省：claude cliId → claude hooks profile（eventToStatus 经 mockEventToStatus 真实调用）
+    mockCliProfileGet.mockReturnValue(makeHooksProfile("claude"));
 
     container = document.createElement("div");
     Object.defineProperty(container, "offsetWidth", { value: 800, configurable: true });
@@ -1764,46 +1815,48 @@ describe("Hooks 事件过滤 (panelId + eventToStatus)", () => {
     expect(capturedHookEventCallbackRef.current).not.toBeNull();
   }
 
-  it("HUK1: 匹配 panelId + UserPromptSubmit → onTabStateChange + setClaudeSession 携 transcriptPath", async () => {
+  it("HUK1: 匹配 panelId + UserPromptSubmit → eventToStatus 真实调用（入参断言）+ setAgentSession 携 transcriptPath", async () => {
     await mountAndWaitForHooks();
     // 清除 spawn 成功时 resetCommandState 产生的 onTabStateChange 调用
     mockOnTabStateChange.mockClear();
-    mockSetClaudeSession.mockClear();
+    mockSetAgentSession.mockClear();
 
     capturedHookEventCallbackRef.current!(makeHookPayload({
       event: "UserPromptSubmit",
     }));
 
+    // MC-403: 四态映射委托 profile.hooks.eventToStatus（入参 = event + notificationType）
+    expect(mockEventToStatus).toHaveBeenCalledWith("UserPromptSubmit", null);
     expect(mockOnTabStateChange).toHaveBeenCalledWith({
       active: true,
       icon: "⚡",
     });
-    // PF2-FE-04: 非 SessionEnd 事件 → setClaudeSession 携 sessionId/transcriptPath/status（问题 2 四态同源）
-    expect(mockSetClaudeSession).toHaveBeenCalledWith("hooks-test", {
+    // PF2-FE-04: 非 SessionEnd 事件 → setAgentSession 携 sessionId/transcriptPath/status（问题 2 四态同源）
+    expect(mockSetAgentSession).toHaveBeenCalledWith("hooks-test", {
       sessionId: "s1",
       transcriptPath: "/t.json",
       status: "working",
     });
   });
 
-  it("HUK2: 匹配 panelId + SessionEnd → onTabStateChange({ active: false }) + setClaudeSession(null)", async () => {
+  it("HUK2: 匹配 panelId + SessionEnd → onTabStateChange({ active: false }) + setAgentSession(null)", async () => {
     await mountAndWaitForHooks();
     mockOnTabStateChange.mockClear();
-    mockSetClaudeSession.mockClear();
+    mockSetAgentSession.mockClear();
 
     capturedHookEventCallbackRef.current!(makeHookPayload({
       event: "SessionEnd",
     }));
 
     expect(mockOnTabStateChange).toHaveBeenCalledWith({ active: false });
-    // PF2-FE-04: SessionEnd → 清除 claude 会话行
-    expect(mockSetClaudeSession).toHaveBeenCalledWith("hooks-test", null);
+    // PF2-FE-04: SessionEnd → 清除会话行
+    expect(mockSetAgentSession).toHaveBeenCalledWith("hooks-test", null);
   });
 
-  it("HUK3: 不匹配 panelId → onTabStateChange + setClaudeSession 均不触发", async () => {
+  it("HUK3: 不匹配 panelId → onTabStateChange + setAgentSession 均不触发", async () => {
     await mountAndWaitForHooks();
     mockOnTabStateChange.mockClear();
-    mockSetClaudeSession.mockClear();
+    mockSetAgentSession.mockClear();
 
     capturedHookEventCallbackRef.current!(makeHookPayload({
       panelId: "other-panel-id",
@@ -1811,100 +1864,106 @@ describe("Hooks 事件过滤 (panelId + eventToStatus)", () => {
     }));
 
     expect(mockOnTabStateChange).not.toHaveBeenCalled();
-    expect(mockSetClaudeSession).not.toHaveBeenCalled();
+    expect(mockSetAgentSession).not.toHaveBeenCalled();
   });
 
-  it("HUK4: PreToolUse → working → ⚡ + setClaudeSession", async () => {
+  it("HUK4: PreToolUse → working → ⚡ + setAgentSession", async () => {
     await mountAndWaitForHooks();
     mockOnTabStateChange.mockClear();
-    mockSetClaudeSession.mockClear();
+    mockSetAgentSession.mockClear();
 
     capturedHookEventCallbackRef.current!(makeHookPayload({
       event: "PreToolUse",
     }));
 
+    expect(mockEventToStatus).toHaveBeenCalledWith("PreToolUse", null);
     expect(mockOnTabStateChange).toHaveBeenCalledWith({
       active: true,
       icon: "⚡",
     });
-    expect(mockSetClaudeSession).toHaveBeenCalledWith("hooks-test", {
+    expect(mockSetAgentSession).toHaveBeenCalledWith("hooks-test", {
       sessionId: "s1",
       transcriptPath: "/t.json",
       status: "working",
     });
   });
 
-  it("HUK5: Stop → done → ✅ + setClaudeSession", async () => {
+  it("HUK5: Stop → done → ✅ + setAgentSession", async () => {
     await mountAndWaitForHooks();
     mockOnTabStateChange.mockClear();
-    mockSetClaudeSession.mockClear();
+    mockSetAgentSession.mockClear();
 
     capturedHookEventCallbackRef.current!(makeHookPayload({
       event: "Stop",
     }));
 
+    expect(mockEventToStatus).toHaveBeenCalledWith("Stop", null);
     expect(mockOnTabStateChange).toHaveBeenCalledWith({
       active: true,
       icon: "✅",
     });
-    expect(mockSetClaudeSession).toHaveBeenCalledWith("hooks-test", {
+    expect(mockSetAgentSession).toHaveBeenCalledWith("hooks-test", {
       sessionId: "s1",
       transcriptPath: "/t.json",
       status: "done",
     });
   });
 
-  it("HUK6: StopFailure → error → ❌ + setClaudeSession", async () => {
+  it("HUK6: StopFailure → error → ❌ + setAgentSession", async () => {
     await mountAndWaitForHooks();
     mockOnTabStateChange.mockClear();
-    mockSetClaudeSession.mockClear();
+    mockSetAgentSession.mockClear();
 
     capturedHookEventCallbackRef.current!(makeHookPayload({
       event: "StopFailure",
     }));
 
+    expect(mockEventToStatus).toHaveBeenCalledWith("StopFailure", null);
     expect(mockOnTabStateChange).toHaveBeenCalledWith({
       active: true,
       icon: "❌",
     });
-    expect(mockSetClaudeSession).toHaveBeenCalledWith("hooks-test", {
+    expect(mockSetAgentSession).toHaveBeenCalledWith("hooks-test", {
       sessionId: "s1",
       transcriptPath: "/t.json",
       status: "error",
     });
   });
 
-  it("HUK7: SessionStart → attention → 🟡 + setClaudeSession", async () => {
+  it("HUK7: SessionStart → attention → 🟡 + setAgentSession", async () => {
     await mountAndWaitForHooks();
     mockOnTabStateChange.mockClear();
-    mockSetClaudeSession.mockClear();
+    mockSetAgentSession.mockClear();
 
     capturedHookEventCallbackRef.current!(makeHookPayload({
       event: "SessionStart",
     }));
 
+    expect(mockEventToStatus).toHaveBeenCalledWith("SessionStart", null);
     expect(mockOnTabStateChange).toHaveBeenCalledWith({
       active: true,
       icon: "🟡",
     });
-    expect(mockSetClaudeSession).toHaveBeenCalledWith("hooks-test", {
+    expect(mockSetAgentSession).toHaveBeenCalledWith("hooks-test", {
       sessionId: "s1",
       transcriptPath: "/t.json",
       status: "attention",
     });
   });
 
-  it("HUK9: Notification 非 attention 子类型 → setClaudeSession 携 status: undefined（不覆盖旧值）", async () => {
+  it("HUK9: Notification 非 attention 子类型 → setAgentSession 携 status: undefined（不覆盖旧值）", async () => {
     await mountAndWaitForHooks();
     mockOnTabStateChange.mockClear();
-    mockSetClaudeSession.mockClear();
+    mockSetAgentSession.mockClear();
 
     capturedHookEventCallbackRef.current!(makeHookPayload({
       event: "Notification",
       notificationType: "general",
     }));
 
-    expect(mockSetClaudeSession).toHaveBeenCalledWith("hooks-test", {
+    // notificationType 透传给 profile.eventToStatus（子类型判定归 profile 实现）
+    expect(mockEventToStatus).toHaveBeenCalledWith("Notification", "general");
+    expect(mockSetAgentSession).toHaveBeenCalledWith("hooks-test", {
       sessionId: "s1",
       transcriptPath: "/t.json",
       status: undefined,
@@ -1913,10 +1972,10 @@ describe("Hooks 事件过滤 (panelId + eventToStatus)", () => {
     expect(mockOnTabStateChange).not.toHaveBeenCalled();
   });
 
-  it("HUK10: payload sessionId/transcriptPath 空串 → setClaudeSession 携 undefined（空串防御归一）", async () => {
+  it("HUK10: payload sessionId/transcriptPath 空串 → setAgentSession 携 undefined（空串防御归一）", async () => {
     await mountAndWaitForHooks();
     mockOnTabStateChange.mockClear();
-    mockSetClaudeSession.mockClear();
+    mockSetAgentSession.mockClear();
 
     capturedHookEventCallbackRef.current!(makeHookPayload({
       event: "UserPromptSubmit",
@@ -1925,7 +1984,7 @@ describe("Hooks 事件过滤 (panelId + eventToStatus)", () => {
     }));
 
     // 空串必须归一为 undefined——否则 derive 定位/标题覆盖/usage 拉取全部静默失效
-    expect(mockSetClaudeSession).toHaveBeenCalledWith("hooks-test", {
+    expect(mockSetAgentSession).toHaveBeenCalledWith("hooks-test", {
       sessionId: undefined,
       transcriptPath: undefined,
       status: "working",
@@ -1952,5 +2011,160 @@ describe("Hooks 事件过滤 (panelId + eventToStatus)", () => {
 
     // 验证 unsubscribe 被调用（清理函数在 effect cleanup 中执行）
     expect(mockUnsubscribeHookEvent).toHaveBeenCalled();
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // MC-205 三级解析（payload.cliId → 反查 agentSession.cliId → CLAUDE_CLI_ID 缺省）
+  // ═══════════════════════════════════════════════════════════
+
+  it("HUK11: 三级解析分支一——payload.cliId 显式（可选字段注入）→ 按该 cliId 解析 profile", async () => {
+    mockCliProfileGet.mockReturnValue(makeHooksProfile("codex"));
+    await mountAndWaitForHooks();
+    mockOnTabStateChange.mockClear();
+    mockSetAgentSession.mockClear();
+    mockCliProfileGet.mockClear();
+
+    capturedHookEventCallbackRef.current!(makeHookPayload({
+      event: "UserPromptSubmit",
+      cliId: "codex",
+    }));
+
+    expect(mockCliProfileGet).toHaveBeenCalledWith("codex");
+    expect(mockEventToStatus).toHaveBeenCalledWith("UserPromptSubmit", null);
+    expect(mockSetAgentSession).toHaveBeenCalled();
+  });
+
+  it("HUK12: 三级解析分支二——payload.cliId 缺省 → 反查注册表 agentSession.cliId", async () => {
+    mockCliProfileGet.mockReturnValue(makeHooksProfile("codex"));
+    // 反查键：TerminalRegistry.get(panelId)?.agentSession?.cliId（OSC 133 C 已写入）
+    mockRegistryMap.set("hooks-test", {
+      sessionId: "s1",
+      agentSession: { cliId: "codex" },
+    });
+    await mountAndWaitForHooks();
+    mockOnTabStateChange.mockClear();
+    mockSetAgentSession.mockClear();
+    mockCliProfileGet.mockClear();
+
+    capturedHookEventCallbackRef.current!(makeHookPayload({
+      event: "UserPromptSubmit",
+      // 不传 cliId——走反查分支
+    }));
+
+    expect(mockCliProfileGet).toHaveBeenCalledWith("codex");
+    expect(mockSetAgentSession).toHaveBeenCalled();
+  });
+
+  it("HUK13: 三级解析分支三——payload.cliId 缺省且无反查值 → 缺省 CLAUDE_CLI_ID", async () => {
+    mockCliProfileGet.mockReturnValue(makeHooksProfile("claude"));
+    // 注册表无 entry / entry 无 agentSession——反查为空
+    mockRegistryMap.delete("hooks-test");
+    await mountAndWaitForHooks();
+    mockOnTabStateChange.mockClear();
+    mockSetAgentSession.mockClear();
+    mockCliProfileGet.mockClear();
+
+    capturedHookEventCallbackRef.current!(makeHookPayload({
+      event: "UserPromptSubmit",
+    }));
+
+    expect(mockCliProfileGet).toHaveBeenCalledWith("claude");
+    expect(mockSetAgentSession).toHaveBeenCalled();
+  });
+
+  it("HUK14: 反查 agentSession 存在但 cliId 未设置 → 缺省 CLAUDE_CLI_ID", async () => {
+    mockCliProfileGet.mockReturnValue(makeHooksProfile("claude"));
+    mockRegistryMap.set("hooks-test", {
+      sessionId: "s1",
+      agentSession: null, // 已退出残留（OSC 133 D 清空）——cliId 反查为空
+    });
+    await mountAndWaitForHooks();
+    mockOnTabStateChange.mockClear();
+    mockSetAgentSession.mockClear();
+    mockCliProfileGet.mockClear();
+
+    capturedHookEventCallbackRef.current!(makeHookPayload({
+      event: "UserPromptSubmit",
+    }));
+
+    expect(mockCliProfileGet).toHaveBeenCalledWith("claude");
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // MC-206/403: 未知 cliId / 无 hooks 能力 → console.warn + 跳过
+  // ═══════════════════════════════════════════════════════════
+
+  it("HUK15: 未知 cliId（未注册）→ console.warn + 跳过（不建行/不置图标/不通知），不抛异常", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    mockCliProfileGet.mockReturnValue(undefined); // 未注册
+    await mountAndWaitForHooks();
+    mockOnTabStateChange.mockClear();
+    mockSetAgentSession.mockClear();
+
+    expect(() => {
+      capturedHookEventCallbackRef.current!(makeHookPayload({
+        event: "UserPromptSubmit",
+        cliId: "unknown-cli",
+      }));
+    }).not.toThrow();
+
+    expect(mockCliProfileGet).toHaveBeenCalledWith("unknown-cli");
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("unknown-cli"),
+    );
+    expect(mockSetAgentSession).not.toHaveBeenCalled();
+    expect(mockOnTabStateChange).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it("HUK16: 无 hooks 能力 profile → console.warn + 跳过", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // 身份域 profile：capabilities 为空（无 hooks 能力）
+    mockCliProfileGet.mockReturnValue(makeCliProfile("codex", "/cli-icons/codex.png"));
+    await mountAndWaitForHooks();
+    mockOnTabStateChange.mockClear();
+    mockSetAgentSession.mockClear();
+
+    expect(() => {
+      capturedHookEventCallbackRef.current!(makeHookPayload({
+        event: "UserPromptSubmit",
+        cliId: "codex",
+      }));
+    }).not.toThrow();
+
+    expect(mockCliProfileGet).toHaveBeenCalledWith("codex");
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("codex"),
+    );
+    expect(mockEventToStatus).not.toHaveBeenCalled();
+    expect(mockSetAgentSession).not.toHaveBeenCalled();
+    expect(mockOnTabStateChange).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it("HUK17: Exit 事件 → setAgentSession(null) 清会话（不触发 onTabStateChange——仅 SessionEnd 清图标）", async () => {
+    await mountAndWaitForHooks();
+    mockOnTabStateChange.mockClear();
+    mockSetAgentSession.mockClear();
+
+    capturedHookEventCallbackRef.current!(makeHookPayload({
+      event: "Exit",
+    }));
+
+    expect(mockSetAgentSession).toHaveBeenCalledWith("hooks-test", null);
+    expect(mockOnTabStateChange).not.toHaveBeenCalled();
+  });
+
+  it("HUK18: SessionEnd 清图标语义保留——eventToStatus 返回 null 时仍 onTabStateChange({ active: false })", async () => {
+    await mountAndWaitForHooks();
+    mockOnTabStateChange.mockClear();
+    mockSetAgentSession.mockClear();
+
+    capturedHookEventCallbackRef.current!(makeHookPayload({
+      event: "SessionEnd",
+    }));
+
+    expect(mockSetAgentSession).toHaveBeenCalledWith("hooks-test", null);
+    expect(mockOnTabStateChange).toHaveBeenCalledWith({ active: false });
   });
 });

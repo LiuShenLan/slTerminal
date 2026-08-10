@@ -34,10 +34,14 @@ import { usePanelFocus, getShortcutRegistry } from "../../features/shortcuts";
 import { TerminalRegistry } from "./TerminalRegistry";
 import { useFontSizeWheel } from "../../lib/useFontSizeWheel";
 import { E2E_ENABLED } from "../../lib/e2eEnabled";
-import { eventToStatus, STATUS_EMOJI } from "../../lib/claudeStatus";
+import { STATUS_EMOJI } from "../../lib/agentStatus";
 import { FONT_SIZE_MIN, FONT_SIZE_MAX } from "../../stores/fontSize";
 // Hooks 事件订阅
 import { hooks } from "../../ipc";
+// MC-205: hook 事件按 cliId 解析 profile——eventToStatus 等 hooks 能力实现迁入 profile
+// （lib 层不再含 claude 事件名映射）；缺省回退常量经 profiles/claude 导出（AC-5 兼容）
+import { cliProfileRegistry } from "../../features/cliProfiles";
+import { CLAUDE_CLI_ID } from "../../features/cliProfiles/profiles/claude";
 import type { TabState } from "./useCommandDetection";
 import {
   installTerminalWriteToPty,
@@ -343,16 +347,34 @@ export function useXterm({
       }
     });
 
-    // ── Hooks 事件订阅（F3 页签四态指示 + claude 会话状态写入）──
+    // ── Hooks 事件订阅（F3 页签四态指示 + 会话状态写入）──
     const unsubscribeHookEvent = hooks.onHookEvent((payload) => {
       if (payload.panelId !== panelId) return;
 
-      // 写入 claude 会话状态（与页签 emoji 正交）
-      const status = eventToStatus(payload.event, payload.notificationType);
+      // MC-205 三级解析：显式 payload.cliId → 反查注册表 agentSession.cliId → 缺省 CLAUDE_CLI_ID。
+      // 本 Stage HookEventPayload 的 cliId 恒 undefined（Stage 03 后端加字段后自然生效）
+      const cliId =
+        payload.cliId ??
+        TerminalRegistry.get(panelId)?.agentSession?.cliId ??
+        CLAUDE_CLI_ID;
+      const profile = cliProfileRegistry.get(cliId);
+      const hooksCapability = profile?.capabilities?.hooks;
+
+      // MC-206/403: 未知 cliId（未注册）或无 hooks 能力 → console.warn + 跳过
+      // （不建行/不置图标/不通知），不抛异常
+      if (!hooksCapability) {
+        console.warn(
+          `[hooks] 未知或无 hooks 能力的 cliId "${cliId}"——跳过 hook 事件（panelId=${panelId}）`,
+        );
+        return;
+      }
+
+      // 写入会话状态（与页签 emoji 正交）——四态映射委托 profile.hooks.eventToStatus
+      const status = hooksCapability.eventToStatus(payload.event, payload.notificationType);
       if (payload.event === "SessionEnd" || payload.event === "Exit") {
-        TerminalRegistry.setClaudeSession(panelId, null);
+        TerminalRegistry.setAgentSession(panelId, null);
       } else {
-        TerminalRegistry.setClaudeSession(panelId, {
+        TerminalRegistry.setAgentSession(panelId, {
           // sessionId/status 供历史区四态派生（问题 2 修复：两区同源 TerminalRegistry）
           // || undefined 空串防御：claude hook 输入缺字段时兜底成空串，
           // 空串会使下游（derive/标题覆盖/usage 拉取）全部失效——统一归一为 undefined
