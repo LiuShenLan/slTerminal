@@ -41,7 +41,9 @@ import { onAgentEvent } from "../../ipc/agentHooks";
 // MC-205: agent 事件按 cliId 解析 profile——eventToStatus 等 hooks 能力实现迁入 profile
 // （lib 层不再含 claude 事件名映射）；缺省回退常量经 profiles/claude 导出（AC-5 兼容）
 import { cliProfileRegistry } from "../../features/cliProfiles";
-import { CLAUDE_CLI_ID } from "../../features/cliProfiles/profiles/claude";
+// AC-5: 事件名字面量只允许出现在 profiles/claude/（claude 合法领地）——
+// SessionEnd/Exit 判定一律引用本常量，不写字面量
+import { CLAUDE_CLI_ID, SESSION_END_EVENT, EXIT_EVENT } from "../../features/cliProfiles/profiles/claude";
 import type { TabState } from "./useCommandDetection";
 import {
   installTerminalWriteToPty,
@@ -371,7 +373,7 @@ export function useXterm({
 
       // 写入会话状态（与页签 emoji 正交）——四态映射委托 profile.hooks.eventToStatus
       const status = hooksCapability.eventToStatus(payload.event, payload.notificationType);
-      if (payload.event === "SessionEnd" || payload.event === "Exit") {
+      if (payload.event === SESSION_END_EVENT || payload.event === EXIT_EVENT) {
         TerminalRegistry.setAgentSession(panelId, null);
       } else {
         TerminalRegistry.setAgentSession(panelId, {
@@ -386,7 +388,7 @@ export function useXterm({
       }
 
       if (status === null) {
-        if (payload.event === "SessionEnd") onTabStateChange?.({ active: false });
+        if (payload.event === SESSION_END_EVENT) onTabStateChange?.({ active: false });
         return;
       }
       onTabStateChange?.({ active: true, icon: STATUS_EMOJI[status] });

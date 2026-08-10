@@ -19,7 +19,9 @@ import { onAgentEvent, contextUsage } from "../../ipc/agentHooks";
 import { parseTerminalPageId } from "../../lib/panelId";
 import { getPageApi } from "../../workspace/pageApis";
 import { cliProfileRegistry } from "../cliProfiles";
-import { CLAUDE_CLI_ID } from "../cliProfiles/profiles/claude";
+// AC-5: 事件名字面量只允许出现在 profiles/claude/（claude 合法领地）——
+// SessionEnd/Exit 判定一律引用本常量，不写字面量
+import { CLAUDE_CLI_ID, SESSION_END_EVENT, EXIT_EVENT } from "../cliProfiles/profiles/claude";
 import type { AgentStatus } from "../../lib/agentStatus";
 import type { AgentEventPayload } from "../../types/agent";
 import type { ContextUsage } from "../../types/agent";
@@ -148,7 +150,7 @@ export function useAgentStatus(): AgentStatusResult {
       );
 
       // SessionEnd / Exit → 删行
-      if (payload.event === "SessionEnd" || payload.event === "Exit") {
+      if (payload.event === SESSION_END_EVENT || payload.event === EXIT_EVENT) {
         setRows((prev) => {
           const idx = prev.findIndex((r) => r.panelId === payload.panelId);
           if (idx === -1) return prev;

@@ -3,12 +3,12 @@
 // 三个可展开/收起区块（默认态：活跃展开、两历史区收起）：
 //   1. 活跃会话 —— useAgentStatus + AgentStatusRow（行标题经历史区 scan 数据覆盖——
 //      问题 6 修复：/rename 后刷新即同步；hook 事件不再覆盖标题）
-//   2. 当前项目历史会话 —— ClaudeHistorySections 受控区
-//   3. 全部项目历史会话 —— ClaudeHistorySections 受控区
-// 三区展开 state 由本组件持有并下传；useClaudeHistory 上提至本组件单实例（问题 6），
-// ClaudeHistorySections 改纯受控（数据/回调经 props 注入）——刷新按钮 scan 后
+//   2. 当前项目历史会话 —— AgentHistorySections 受控区
+//   3. 全部项目历史会话 —— AgentHistorySections 受控区
+// 三区展开 state 由本组件持有并下传；useAgentHistory 上提至本组件单实例（问题 6），
+// AgentHistorySections 改纯受控（数据/回调经 props 注入）——刷新按钮 scan 后
 // sessions 更新 → 活跃区标题同步。
-// 历史区首次展开触发 scan()（ClaudeHistorySections 内部，仅首次，之后靠刷新按钮）。
+// 历史区首次展开触发 scan()（AgentHistorySections 内部，仅首次，之后靠刷新按钮）。
 // 整视图可滚动。
 //
 // 状态机（活跃区，优先级自上而下，原文保留）：
@@ -27,8 +27,9 @@ import React, { useCallback, useMemo, useState } from "react";
 import type { SideViewComponentProps } from "../sideViews/sideViewRegistry";
 import { useAgentStatus } from "./useAgentStatus";
 import { AgentStatusRow } from "./AgentStatusRow";
-import { ClaudeHistorySections } from "../claudeHistory/ClaudeHistorySections";
-import { useClaudeHistory } from "../claudeHistory/useClaudeHistory";
+import { AgentHistorySections } from "../agentHistory/AgentHistorySections";
+import { useAgentHistory } from "../agentHistory/useAgentHistory";
+import { CLAUDE_CLI_ID } from "../cliProfiles/profiles/claude";
 import { switchToPageAndFocus } from "../../workspace/pageApis";
 import { parseTerminalPageId } from "../../lib/panelId";
 import {
@@ -103,8 +104,8 @@ const listContainerStyle: React.CSSProperties = {
 export const AgentStatusView: React.FC<SideViewComponentProps> = (_props) => { // eslint-disable-line @typescript-eslint/no-unused-vars -- SideViewComponentProps 必需但 handleFocus 已委托共享函数
   const { state, rows, now } = useAgentStatus();
 
-  // useClaudeHistory 单实例（问题 6 修复：数据上提，历史区与活跃区标题同源）
-  const history = useClaudeHistory();
+  // useAgentHistory 单实例（问题 6 修复：数据上提，历史区与活跃区标题同源）
+  const history = useAgentHistory();
 
   // 三区展开 state（默认态：活跃展开、两历史区收起）
   const [activeExpanded, setActiveExpanded] = useState(true);
@@ -121,12 +122,16 @@ export const AgentStatusView: React.FC<SideViewComponentProps> = (_props) => { /
     [],
   );
 
-  // 活跃区标题覆盖：历史区 scan 数据中同 sessionId 的标题优先（问题 6 修复——
-  // /rename 写 transcript custom-title，刷新后 scan 结果即为新标题）
+  // 活跃区标题覆盖：历史区 scan 数据中同会话（复合键 `cliId|sessionId`——MC-314，
+  // 防跨 CLI sessionId 理论冲突）的标题优先（问题 6 修复——/rename 写 transcript
+  // custom-title，刷新后 scan 结果即为新标题）；旧数据无 cliId 按 CLAUDE_CLI_ID
+  // 常量回退（非字面量，AC-5 兼容）
   const titleBySessionId = useMemo(() => {
     const map = new Map<string, string>();
     for (const s of history.sessions) {
-      if (s.title != null) map.set(s.sessionId, s.title);
+      if (s.title != null) {
+        map.set(`${s.cliId ?? CLAUDE_CLI_ID}|${s.sessionId}`, s.title);
+      }
     }
     return map;
   }, [history.sessions]);
@@ -135,7 +140,9 @@ export const AgentStatusView: React.FC<SideViewComponentProps> = (_props) => { /
     () =>
       rows.map((r) => {
         const diskTitle =
-          r.sessionId != null ? titleBySessionId.get(r.sessionId) : undefined;
+          r.sessionId != null
+            ? titleBySessionId.get(`${r.cliId ?? CLAUDE_CLI_ID}|${r.sessionId}`)
+            : undefined;
         return diskTitle !== undefined ? { ...r, title: diskTitle } : r;
       }),
     [rows, titleBySessionId],
@@ -192,8 +199,8 @@ export const AgentStatusView: React.FC<SideViewComponentProps> = (_props) => { /
         )}
       </div>
 
-      {/* 区块 2+3：历史区（受控展开；数据/回调经 props 注入——useClaudeHistory 已上提本组件） */}
-      <ClaudeHistorySections
+      {/* 区块 2+3：历史区（受控展开；数据/回调经 props 注入——useAgentHistory 已上提本组件） */}
+      <AgentHistorySections
         expandedCurrent={currentExpanded}
         expandedAll={allExpanded}
         onToggleCurrent={() => setCurrentExpanded((v) => !v)}

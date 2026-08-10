@@ -1,11 +1,12 @@
-// historyModel.ts — claude 历史会话纯函数模型（FE-05）
+// historyModel.ts — agent 历史会话纯函数模型（FE-05）
 //
 // 纯函数模块：禁 import react / 任何 hook，零副作用。
 // 所有展示派生逻辑（当前项目匹配 / 分组 / 搜索 / 相对时间 / ⚡ 派生）集中于此，
-// 供 UI 层与 L2 测试共用。契约要点见 src/features/claudeHistory/CLAUDE.md 架构决策。
+// 供 UI 层与 L2 测试共用。契约要点见 src/features/agentHistory/CLAUDE.md 架构决策。
 
 import { normalizePath, basename } from "../../lib/path";
 import { TerminalRegistry } from "../../panels/terminal/TerminalRegistry";
+import { CLAUDE_CLI_ID } from "../cliProfiles/profiles/claude";
 import type { AgentStatus } from "../../lib/agentStatus";
 import type { AgentHistorySession } from "../../types/agentHistory";
 
@@ -111,12 +112,15 @@ export function formatRelativeTime(mtimeMs: number, nowMs: number): string {
 }
 
 /**
- * 从 TerminalRegistry 派生运行中会话 id → 四态 status 映射（问题 2 修复：历史区
+ * 从 TerminalRegistry 派生运行中会话 → 四态 status 映射（问题 2 修复：历史区
  * 与活跃区同源——status 由 hook 事件写入 agentSession，两区展示一致）
  *
+ * 复合键 `cliId|sessionId`（MC-313）：防跨 CLI sessionId 理论冲突——运行中会话
+ * 定位须同时匹配 cliId 与 sessionId 双维度。
  * sessionId 优先 agentSession.sessionId（hook 事件 payload 精确值），回退
  * transcriptPath 的 basename（去 .jsonl 后缀，兼容旧数据）；两者皆无的条目
  * （matchedCommand-only 会话）不产出 id，⚡/四态无法覆盖——已知局限（checklist FE-05）。
+ * 旧数据 agentSession 无 cliId → 按 CLAUDE_CLI_ID 常量回退（非字面量，AC-5 兼容）。
  * status 为 null/undefined（无有效状态）的条目不产出键（历史区无标记，与活跃区
  * null 无图标语义一致）。
  */
@@ -131,7 +135,7 @@ export function deriveActiveSessionStatuses(): Map<string, AgentStatus> {
       id = base.endsWith(".jsonl") ? base.slice(0, -".jsonl".length) : base;
     }
     if (!id) continue; // matchedCommand-only 会话无法定位（文档化局限）
-    map.set(id, cs.status);
+    map.set(`${cs.cliId ?? CLAUDE_CLI_ID}|${id}`, cs.status);
   }
   return map;
 }

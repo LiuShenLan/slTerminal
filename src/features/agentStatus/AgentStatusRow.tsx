@@ -8,7 +8,7 @@ import React, { useState, useCallback } from "react";
 import type { AgentSessionRow } from "./useAgentStatus";
 import { getStatusIcon } from "../../lib/agentStatus";
 import { cliProfileRegistry } from "../cliProfiles";
-import { formatRelativeTime } from "../claudeHistory/historyModel";
+import { formatRelativeTime } from "../agentHistory/historyModel";
 import { AGENT_STATUS_USAGE_COLORS, SIDEBAR_COLORS, DIM_FG } from "../../theme/colors";
 
 interface Props {

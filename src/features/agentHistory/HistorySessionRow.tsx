@@ -7,18 +7,17 @@
 // 孤儿判定，orphan 恒 false）不显示 ✗。
 // 交互：单击选中 / 双击恢复分派 / 右键菜单，均回调 props 委托（纯受控展示组件，不碰 IPC）。
 // 字号层级（问题 4）：行1 标题 12px 粗体 > 行2 11px 灰。
-// 契约要点见 src/features/claudeHistory/CLAUDE.md。
+// 契约要点见 src/features/agentHistory/CLAUDE.md。
 
 import React from "react";
 import type { AgentHistorySession } from "../../types/agentHistory";
 import type { AgentStatus } from "../../lib/agentStatus";
 import { STATUS_EMOJI } from "../../lib/agentStatus";
 import { cliProfileRegistry } from "../cliProfiles";
-import { CLAUDE_CLI_ID } from "../cliProfiles/profiles/claude";
 import { formatRelativeTime } from "./historyModel";
 import { EXPLORER_SELECTION_BG, SIDEBAR_COLORS, DIM_FG } from "../../theme";
 
-/** 行组件契约（写死，见 src/features/claudeHistory/CLAUDE.md 测试模式——agent B 照此消费） */
+/** 行组件契约（写死，见 src/features/agentHistory/CLAUDE.md 测试模式——agent B 照此消费） */
 export interface HistorySessionRowProps {
   session: AgentHistorySession;
   /** 运行中会话四态（⚡🟡✅❌；null/undefined → 无标记） */
@@ -50,9 +49,9 @@ export const HistorySessionRow: React.FC<HistorySessionRowProps> = ({
   const title = session.title ?? session.sessionId.slice(0, 8);
   const timeStr = formatRelativeTime(session.mtimeMs, Date.now());
   const statusIcon = status != null ? (STATUS_EMOJI[status] ?? "") : "";
-  // 过渡形态：HistorySession 暂无 cliId 字段（Stage 05 MC-311 数据侧就绪后回收），暂取 claude profile 的 iconSrc；
-  // 未命中（claude profile 未注册）→ undefined → 无 logo 不报错（与原 cliIconRegistry.getSrc 语义一致）
-  const logoSrc = cliProfileRegistry.get(CLAUDE_CLI_ID)?.iconSrc;
+  // 行 logo（MC-311）：按 session.cliId 查对应 profile 的 iconSrc——不同 CLI 同目录
+  // 同组时经行级 logo 区分（MC-312）；未注册 cliId → undefined → 无 logo 不报错
+  const logoSrc = cliProfileRegistry.get(session.cliId)?.iconSrc;
 
   return (
     <div

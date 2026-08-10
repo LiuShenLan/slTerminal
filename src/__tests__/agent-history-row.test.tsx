@@ -1,14 +1,19 @@
-// claude-history-row.test.tsx — HistorySessionRow L2 测试（FE-07 / FE-10）
+// agent-history-row.test.tsx — HistorySessionRow L2 测试（FE-07 / FE-10）
 //
 // 覆盖：双行渲染（标题/相对时间/prompt 预览）、title null → sessionId 前 8 位、
 // 四态标记（status：working/attention/done/error/null——问题 2）、✗ 孤儿标记、
-// 字号层级（行1 标题 12px 粗体/行2 11px——问题 4）、单击/双击/右键回调、选中态高亮。
+// 字号层级（行1 标题 12px 粗体/行2 11px——问题 4）、单击/双击/右键回调、选中态高亮、
+// CLI logo 按 session.cliId 查 profile.iconSrc（MC-311：未注册 cliId → 无 logo 不报错）。
+//
+// Stage 05：side-effect import profiles 注册真实 claude profile——logo 断言
+// （iconSrc = /cli-icons/claude.png）经注册表查询（MC-311 委托）。
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, cleanup, fireEvent } from "@testing-library/react";
-import { HistorySessionRow } from "../features/claudeHistory/HistorySessionRow";
-import { formatRelativeTime } from "../features/claudeHistory/historyModel";
+import { HistorySessionRow } from "../features/agentHistory/HistorySessionRow";
+import { formatRelativeTime } from "../features/agentHistory/historyModel";
 import { EXPLORER_SELECTION_BG } from "../theme";
+import "../features/cliProfiles/profiles";
 import type { AgentHistorySession } from "../types/agentHistory";
 
 afterEach(cleanup);
@@ -141,11 +146,11 @@ describe("HistorySessionRow 状态标记（问题 2：四态同源）", () => {
     expect(row.querySelector('img[alt="CLI 图标"]')).toBeNull();
   });
 
-  it("status=working → emoji 后渲染 CLI logo（src=claude 条目/16×16/位于 emoji 与标题间）", () => {
+  it("status=working → emoji 后渲染 CLI logo（按 session.cliId 查 profile.iconSrc/16×16/位于 emoji 与标题间——MC-311）", () => {
     const { row } = renderRow(makeSession(), { status: "working" });
     const line1 = row.children[0] as HTMLElement;
     const logoImg = row.querySelector('img[alt="CLI 图标"]');
-    // logo 存在：src = CliIconRegistry claude 条目、16×16
+    // logo 存在：src = claude profile.iconSrc（经 cliProfileRegistry 查 session.cliId）、16×16
     expect(logoImg).toBeTruthy();
     expect(logoImg?.getAttribute("src")).toBe("/cli-icons/claude.png");
     expect(logoImg?.getAttribute("width")).toBe("16");
@@ -155,6 +160,15 @@ describe("HistorySessionRow 状态标记（问题 2：四态同源）", () => {
     expect(children[0].tagName).toBe("SPAN");
     expect(children[0].textContent).toBe("⚡");
     expect(children[1]).toBe(logoImg);
+  });
+
+  it("未注册 cliId → 无 logo 不报错（MC-311 降级语义）", () => {
+    const session = makeSession({ cliId: "unknown-cli" });
+    const { row } = renderRow(session, { status: "working" });
+
+    // emoji 仍渲染；logo 查询未命中 → 无 img（组件不抛错）
+    expect(row.textContent).toContain("⚡");
+    expect(row.querySelector('img[alt="CLI 图标"]')).toBeNull();
   });
 
   it("orphan ✗ 行（status null）→ 不渲染 logo（✗ 后不加图）", () => {

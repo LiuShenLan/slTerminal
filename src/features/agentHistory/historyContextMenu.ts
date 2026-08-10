@@ -2,7 +2,7 @@
 //
 // 契约（workflows/stage-05-frontend-ui.js 脚本头，逐字）：
 //   getHistoryContextMenuItems(
-//     session: HistorySession,
+//     session: AgentHistorySession,
 //     opts: { active: boolean; orphan: boolean; noCwd: boolean;
 //             onCopy(): void; onFork(): void; onDelete(): void }
 //   ): { label: string; disabled?: boolean; action(): void }[]
@@ -14,10 +14,15 @@
 //
 // 操作矩阵（README 4.4，重命名功能已整体移除——问题 7 修复）：
 //   复制恢复命令 —— 全行可用（含孤儿/运行中）
-//   分支恢复     —— orphan / noCwd 禁用（孤儿目录已删除、无 cwd 无法编排）
+//   分支恢复     —— orphan / noCwd 禁用（孤儿目录已删除、无 cwd 无法编排）；
+//                   profile.history.supportsFork=false（能力未声明）→ 不展示该菜单项（MC-316）
 //   删除         —— active 禁用（运行中文件句柄占用删除失败 + 外部进程续写幽灵文件）
+//
+// 命令构造（buildResumeCommand）委托 profile.history.buildResumeCommand（MC-316）——
+// 命令形态（含 cwd 单引号路径等 CLI 专属限制）由各 CLI 的 history 能力实现负责。
 
 import type { AgentHistorySession } from "../../types/agentHistory";
+import { cliProfileRegistry } from "../cliProfiles";
 
 /** 菜单项（契约：label + disabled? + action） */
 export interface HistoryMenuItem {
@@ -44,35 +49,45 @@ export interface HistoryContextMenuOpts {
 }
 
 /**
- * 复制恢复命令构造（README 4.4）：
- * 有 cwd → `cd '<cwd>' && claude --resume <id>`（带单引号路径）；
- * 无 cwd → 仅 `claude --resume <id>`。
+ * 复制恢复命令构造（README 4.4）——委托 profile.history.buildResumeCommand（MC-316）：
+ * 按 session.cliId 查 profile；history 能力未声明（或 profile 未注册）→ 空串
+ * （复制空串无害的优雅降级）；具体命令形态由各 CLI 的 history 能力实现负责。
  */
 export function buildResumeCommand(session: AgentHistorySession): string {
-  const resume = `claude --resume ${session.sessionId}`;
-  return session.cwd ? `cd '${session.cwd}' && ${resume}` : resume;
+  return (
+    cliProfileRegistry
+      .get(session.cliId)
+      ?.capabilities?.history?.buildResumeCommand(session) ?? ""
+  );
 }
 
 /**
  * 右键菜单项构造（策略查询，禁用态按操作矩阵）。
  *
- * @param session 历史会话（契约参数——命令构造经 buildResumeCommand 由调用方完成，
- *                本函数仅做禁用态判定与回调接线）
+ * @param session 历史会话（契约参数——经 cliId 查 profile 取分支恢复能力与命令构造）
  * @param opts    会话状态 + 四个操作回调（action 由调用方注入）
  */
 export function getHistoryContextMenuItems(
   session: AgentHistorySession,
   opts: HistoryContextMenuOpts,
 ): HistoryMenuItem[] {
-  // session 为契约参数；复制命令的构造在调用方侧经 buildResumeCommand 完成
-  void session;
-  return [
+  // 分支恢复能力（MC-316）：profile.history.supportsFork 缺省 false——能力未声明
+  // = 该 CLI 不支持分支恢复 → 不展示「分支恢复」菜单项
+  const supportsFork =
+    cliProfileRegistry
+      .get(session.cliId)
+      ?.capabilities?.history?.supportsFork ?? false;
+
+  const items: HistoryMenuItem[] = [
     { label: "复制恢复命令", action: opts.onCopy },
-    {
+  ];
+  if (supportsFork) {
+    items.push({
       label: "分支恢复",
       disabled: opts.orphan || opts.noCwd,
       action: opts.onFork,
-    },
-    { label: "删除", disabled: opts.active, action: opts.onDelete },
-  ];
+    });
+  }
+  items.push({ label: "删除", disabled: opts.active, action: opts.onDelete });
+  return items;
 }

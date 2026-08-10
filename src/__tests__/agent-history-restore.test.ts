@@ -1,13 +1,19 @@
-// claude-history-restore.test.ts — FE-06 四步恢复编排测试（L2）
+// agent-history-restore.test.ts — FE-06 四步恢复编排测试（L2）
 //
 // mock 边界（只守 JS 侧形状，真实编排由 Stage 06 E2E 兜底）：
 //   stores/projects（useProjects.getState + ID 生成）、features/sidebar（makeEmptyLayout）、
 //   workspace/pageApis（switchToPageShared/getPageApi）、ipc/pty（write）、
 //   panels/terminal/TerminalRegistry（get）、ipc/notification（sendToastNotification）
 // 全部 mock 经 vi.hoisted() 创建，确保模块级 vi.mock 执行前就绪（项目测试惯例）。
+//
+// Stage 05（MC-315）：第 4 步注入内容 = profile.history.buildRestoreInput 输出、
+// addPanel title = profile.tabTitle——side-effect import profiles 注册真实 claude
+// profile（claude-history-cap 交付），注入内容断言与 claude 策略输出逐字一致
+// （`claude --resume <id>` + fork 追加 ` --fork-session` + `\r` 结尾）。
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { restoreHistorySession } from "../features/claudeHistory/restoreSession";
+import { restoreHistorySession } from "../features/agentHistory/restoreSession";
+import "../features/cliProfiles/profiles";
 import type { AgentHistorySession } from "../types/agentHistory";
 import type { Project, OperationPage } from "../stores/projects";
 
@@ -183,7 +189,9 @@ describe("restoreHistorySession 四步恢复编排", () => {
       .calls[0] as [string, string, Uint8Array];
     expect(sessionId).toBe("session-test-1");
     expect(panelId).toMatch(/^terminal-page-restore-test-\d+$/);
-    // 内容断言为准（vitest mock.calls 参数跨 realm，instanceof 不可靠）
+    // 内容断言为准（vitest mock.calls 参数跨 realm，instanceof 不可靠）；
+    // 注入内容 = claude profile.history.buildRestoreInput 输出（MC-315 委托，
+    // 与迁出源 restoreSession.ts 字面量逐字一致——断言漂移即实现有误）
     expect(new TextDecoder().decode(data)).toBe(
       `claude --resume ${SESSION_ID}\r`,
     );

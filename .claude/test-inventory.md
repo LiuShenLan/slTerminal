@@ -2,7 +2,7 @@
 
 > **本文档是项目用例数唯一真值源。** 所有 CLAUDE.md、README、CI 配置中引用的用例数均以此文件为准。更新测试后必须同步本文档。
 
-全量 **3088** 用例（Rust 584 + 前端 2329 + L3 138 + E2E 37），2026-08-10 更新。
+全量 **3101** 用例（Rust 584 + 前端 2342 + L3 138 + E2E 37），2026-08-10 更新。
 
 > **计数口径**：
 > - L2 以 `npm test` 实跑（Vitest 报告）为准——`it.each(...)` 参数化与 `describeIpcContract` 工厂（`helpers/ipc-contract.ts`，IHE-06）等按**展开后用例数**计入（138 文件 2333 用例全绿实测）；纯 grep `it(/test(` 块数会少计 it.each 展开（如 colors 85 = 13 块 + 7 组 each 展开 72）。
@@ -81,7 +81,7 @@
 
 > `pty/mod.rs`、`pty/win_build.rs`、`main.rs` 不含 `#[test]`，不在此列。git/mod.rs 测试已按 GIT-12 全量拆出至 `tests/`（`#[test]` 零残留）。agent_history 模块 grep 口径：claude/jsonl 28 + claude/scan 16 + claude/ops 7 + mod 13 = 64（命令包装层 4 用例已迁入 mod.rs:407-464，MC-301 下沉时随行）+ claude/mod 4 + provider 2 = 全模块 70；env 测试依赖 L1 `--test-threads=1` 门禁（`std::env::set_var` 全局可变）。
 
-## L2 — 前端单元/集成测试（137 文件 / 2329 用例）
+## L2 — 前端单元/集成测试（137 文件 / 2342 用例）
 
 运行：`npm test`（Vitest + jsdom，实跑全绿 2328）
 
@@ -116,12 +116,12 @@
 | `src/__tests__/detect-webgl.test.ts` | 3 | WebGL2 可用/不可用/抛异常 |
 | `src/__tests__/terminal-strictmode.test.ts` | 2 | `smGuardRef` 防双重挂载 |
 
-### CLI profile 注册表（2 文件 / 62 用例，Stage 01）
+### CLI profile 注册表（2 文件 / 69 用例，Stage 01）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
 | `src/__tests__/cli-profile-registry.test.ts` | 19 | CliProfileRegistry（MC-101/102）：register/get/getAll 注册序/同 id 覆盖（注册序不变）/matchByCommand 首 token 精确匹配（多 commands 非首键/带参变体/前导空白/空命令行/仅空白/未命中/不 toLowerCase/同键冲突先注册者优先）/`_reset`/独立实例/全局单例 + logo 资源守卫泛化（MC-108：遍历注册表全部 profile 断言 iconSrc 磁盘存在 + PNG 魔数，含 mockcli.png 先行资源）——语义并入自 tab-title-registry（13）+ cli-icons（12） |
-| `src/__tests__/cli-profile-claude.test.ts` | 43 | claude profile 身份域（MC-104）：side-effect 注册/CLAUDE_CLI_ID 常量与注册一致性/身份域字段完整（含 hooks 五字段）/capabilities.history 未迁入/带参命中/`_reset` 恢复（8）——语义并入自 tab-rules（6）+ hooks 策略（Stage 02，35）：eventToStatus 26 用例语义迁入（原 claude-status，10 事件 × notificationType + STATUS_EMOJI 联合守卫 + AgentStatus 类型兼容）+ classifyNotification 五映射表驱动 9 条（NAH-03 迁入，MC-422） |
+| `src/__tests__/cli-profile-claude.test.ts` | 50 | claude profile 身份域（MC-104）：side-effect 注册/CLAUDE_CLI_ID 常量与注册一致性/身份域字段完整（含 hooks 五字段 + history 三字段）/capabilities.history 三字段齐备（supportsFork/buildResumeCommand/buildRestoreInput，MC-315/316）/带参命中/`_reset` 恢复（8）——语义并入自 tab-rules（6）+ hooks 策略（Stage 02，35）：eventToStatus 26 用例语义迁入（原 claude-status，10 事件 × notificationType + STATUS_EMOJI 联合守卫 + AgentStatus 类型兼容）+ classifyNotification 五映射表驱动 9 条（NAH-03 迁入，MC-422）+ **history 策略（Stage 05，7）：buildResumeCommand 3（有 cwd/无 cwd/与迁出源逐字一致）+ buildRestoreInput 4（普通/fork 追加/`\r` 结尾无 `\r\n`/无 cwd 可注入——输出与迁出源逐字一致，断言漂移即实现有误）** |
 
 ### 编辑器面板（8 文件 / 134 用例）
 
@@ -274,18 +274,18 @@
 |------|------|---------|
 | `src/__tests__/agent-status-hook.test.ts` | 39 | useAgentStatus 行建模新语义全分支（Stage 02 更名同步）：纯 shell 无行/双通道建行（hook 通道按 MC-205 三级解析 cliId 写入行）/三通道删行/初始扫描携 transcriptPath 拉 usage/reconcile 对账/now ticker 60s 重算 |
 | `src/__tests__/notifications.test.ts` | 33 | **去重缓存 250 事件截断 100 + 最旧再弹（NAH-04）**/hook-event 通知调度（类别判定经 profile.hooks.classifyNotification 委托——MC-420 两段分解，纯函数表驱动 9 条迁入 cli-profile-claude）/窗口失焦门控/任务栏闪烁/积压 flush/并发竞态 |
-| `src/__tests__/agent-status-view.test.tsx` | 29 | AgentStatusView 组件（Stage 02 更名 + 空态文案同步）：no-root/empty 占位（**空态「无运行中的编码 CLI 会话」，MC-414**）/**行2 用量条+相对时间断言（NAH-05）**/点击行 switchToPageAndFocus/**双行布局结构**/三级字号/用量口径（contextLimit 来自行 cliId profile.hooks，MC-412）/分段颜色/now prop 驱动重算/三下拉框结构/**标题覆盖真实/受控 history 集成（NAH-06）**/行1 CLI logo（仅随 emoji/图标列 40px 簇/行2 缩进 48px，F9） |
+| `src/__tests__/agent-status-view.test.tsx` | 29 | AgentStatusView 组件（Stage 02 更名 + 空态文案同步；Stage 05 mock 路径/注释同步——D-05，用例数不变）：no-root/empty 占位（**空态「无运行中的编码 CLI 会话」，MC-414**）/**行2 用量条+相对时间断言（NAH-05）**/点击行 switchToPageAndFocus/**双行布局结构**/三级字号/用量口径（contextLimit 来自行 cliId profile.hooks，MC-412）/分段颜色/now prop 驱动重算/三下拉框结构/**标题覆盖真实/受控 history 集成（NAH-06，复合键 cliId\|sessionId——MC-314）**/行1 CLI logo（仅随 emoji/图标列 40px 簇/行2 缩进 48px，F9） |
 
-### Claude 历史会话（6 文件 / 117 用例，F7）
+### Agent 历史会话（6 文件 / 126 用例，F7）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
-| `src/__tests__/claude-history-model.test.ts` | 41 | 纯函数全分支（Stage 02 更名同步，AgentStatus；Stage 04 类型/工厂同步 AgentHistorySession 八键含 cliId，MC-306）：isCurrentProject（决策 24）/groupByCwd/matchesSearch/formatRelativeTime（决策 26）/deriveActiveSessionStatuses（**sessionId null 回退 basename，NAH-01**） |
-| `src/__tests__/claude-history-view.test.tsx` | 33 | 受控 props 注入/三区结构/搜索过滤/组默认收起+计数/**双击运行中 → SessionActionDialog（NAH-09②）**/菜单矩阵 3 项/标题覆盖集成/空态文案/E2E 红线（Stage 02 更名同步，AgentStatus；Stage 04 mock 路径 ../ipc/agentHistory + 删除链传 cliId 断言同步，MC-306） |
-| `src/__tests__/claude-history-row.test.tsx` | 19 | 双行渲染/四态标记/✗ 孤儿标记/**图标优先级（status 覆盖 orphan，NAH-10）**/字号断言/单击选中/双击三分派/行1 CLI logo（仅随 status emoji/孤儿行不加图，F9）（Stage 04 类型同步，MC-306） |
-| `src/__tests__/claude-history-hook.test.tsx` | 13 | 状态机流转/scan 成功失败/removeLocal 不重扫/**scan generation 竞态（NAH-08）**/subscribe 驱动 activeStatuses/卸载清理（Stage 02 更名同步，AgentStatus；Stage 04 mock 路径 + 类型同步，MC-306） |
-| `src/__tests__/claude-history-restore.test.ts` | 7 | 四步编排/pty.write 内容（普通/fork/`\r`）/**防重入（NAH-07①）**/失败 toast/**cwd null 防御性 throw（NAH-07②）**（Stage 04 类型同步，MC-306） |
-| `src/__tests__/claude-history-action-dialog.test.tsx` | 7 | SessionActionDialog 渲染/action 回调/取消（按钮/Esc/遮罩）/**空 actions 防御（NAH-11）**（Stage 04 零改动） |
+| `src/__tests__/agent-history-model.test.ts` | 44 | 纯函数全分支（Stage 02 更名同步，AgentStatus；Stage 04 类型/工厂同步 AgentHistorySession 八键含 cliId，MC-306；Stage 05 目录更名 + **复合键 cliId\|sessionId——MC-313**）：isCurrentProject（决策 24）/groupByCwd/matchesSearch/formatRelativeTime（决策 26）/deriveActiveSessionStatuses（**sessionId null 回退 basename，NAH-01**/**显式 cliId 键不依赖回退/同 sessionId 不同 cliId 防冲突/旧数据无 cliId 按 CLAUDE_CLI_ID 回退——MC-313 +3**） |
+| `src/__tests__/agent-history-view.test.tsx` | 35 | 受控 props 注入/三区结构/搜索过滤/组默认收起+计数/**双击运行中 → SessionActionDialog（NAH-09②）**/菜单矩阵 3 项/**supportsFork=false 不展示「分支恢复」（MC-316 显隐）**/复制命令委托 profile.history.buildResumeCommand 输出逐字不变/标题覆盖集成（复合键）/空态文案/E2E 红线（Stage 02 更名同步，AgentStatus；Stage 04 mock 路径 ../ipc/agentHistory + 删除链传 cliId 断言同步，MC-306；Stage 05 目录更名 + activeStatuses/反查复合键断言同步 + **同 sessionId 不同 cliId 反查命中本 CLI 面板（MC-313，+1）**） |
+| `src/__tests__/agent-history-row.test.tsx` | 20 | 双行渲染/四态标记/✗ 孤儿标记/**图标优先级（status 覆盖 orphan，NAH-10）**/字号断言/单击选中/双击三分派/行1 CLI logo（仅随 status emoji/孤儿行不加图，F9；**按 session.cliId 查 profile.iconSrc，未注册 cliId → 无 logo 不报错——MC-311 +1**）（Stage 04 类型同步，MC-306；Stage 05 目录更名） |
+| `src/__tests__/agent-history-hook.test.tsx` | 13 | 状态机流转/scan 成功失败/removeLocal 不重扫/**scan generation 竞态（NAH-08）**/subscribe 驱动 activeStatuses（**复合键 cliId\|sessionId——MC-313 断言同步**）/卸载清理（Stage 02 更名同步，AgentStatus；Stage 04 mock 路径 + 类型同步，MC-306；Stage 05 目录更名 + useAgentHistory） |
+| `src/__tests__/agent-history-restore.test.ts` | 7 | 四步编排/pty.write 内容（普通/fork/`\r`）/**防重入（NAH-07①）**/失败 toast/**cwd null 防御性 throw（NAH-07②）**（Stage 04 类型同步，MC-306；Stage 05 目录更名 + **注入内容断言 = claude profile.history.buildRestoreInput 输出逐字一致（MC-315 委托，用例数不变）**） |
+| `src/__tests__/agent-history-action-dialog.test.tsx` | 7 | SessionActionDialog 渲染/action 回调/取消（按钮/Esc/遮罩）/**空 actions 防御（NAH-11）**（Stage 04 零改动；Stage 05 仅 import 路径更名） |
 
 ### 启动/关闭（4 文件 / 22 用例）
 
@@ -344,7 +344,7 @@
 |------|------|-------------|---------|
 | `terminal.e2e.ts` | 7 | 7 active | 启动标题/PTY 通信+缓冲断言/helper 写入读取/terminal-N 标题/**H6 跨页面存活**/**全屏 TUI 大负载+切页签往返（E2E-04 视觉回归，M2 人工确认）**/**强杀 slterminal.exe 子进程树无残留（E2E-12）** |
 | `editor.e2e.ts` | 5 | 5 active | 编辑器标题 basename/同名冲突相对路径/关闭后重算/Ctrl+S 经 capture 真实写盘（mtime）/外部修改触发 reload 后保存（dirty→clean） |
-| `history.e2e.ts` | 8 | 8 active | fixture 6 行展示 + agent-*/非 UUID/subagents 排除/标题回退链/搜索过滤/复制恢复命令（剪贴板断言）/孤儿 ✗ 双击无反应/删除（ask 钩子 + 副本删除）/历史区四态同源/**恢复编排（部分端到端：断言到 pty.write 注入，不断言真实进入会话）**——命令名 agent_history_scan/delete 断言同步（D-14/MC-306，用例数不变） |
+| `history.e2e.ts` | 8 | 8 active | fixture 6 行展示 + agent-*/非 UUID/subagents 排除/标题回退链/搜索过滤/复制恢复命令（剪贴板断言）/孤儿 ✗ 双击无反应/删除（ask 钩子 + 副本删除）/历史区四态同源/**恢复编排（部分端到端：断言到 pty.write 注入，不断言真实进入会话）**——命令名 agent_history_scan/delete 断言同步（D-14/MC-306）；恢复注入断言（终端缓冲含 `claude --resume <id>`）与 claude profile buildRestoreInput 输出逐字一致核对（D-14 Stage 05，零改动，用例数不变） |
 | `agent.e2e.ts` | 7 | 6 active + 1 skip | 视图存在性/纯 shell 终端无行（行建模新语义）/动态四态（首个信号即建行→⚡→✅→行消失）/R2 变体（切项目用量保持 + cache 字段）/R3 变体（SessionEnd 删行不复活）/R4 变体（关页签删行）/**toast 触发链路（skip：权限弹窗需用户交互）**——空态文案「无运行中的编码 CLI 会话」断言（MC-414，Stage 02） |
 | `hooks.e2e.ts` | 4 | 4 active | 注入/卸载/状态三态/信号文件驱动页签 emoji/**真实 hook reporter 链路（E2E-06：node 执行脚本 + stdin JSON + SLTERM_PANEL_ID → 信号消费 + 非法 JSON exit 0 的 C10 守卫）**/hooksConfig project 层保存写盘 + merge 保留其他字段 |
 | `html.e2e.ts` | 2 | 1 active + 1 skip | iframe Ctrl+W postMessage 转发关闭（真实二进制全链路）/**内联脚本/事件 CSP 执行验证（skip：执行断言不稳定）** |
@@ -369,6 +369,7 @@ embedded WDIO 驱动**无法将 OS 级按键（`browser.keys`）投递进 WebVie
 
 ## 历史变更
 
+- 2026-08-10（multi-cli Stage 05 前端历史聚合 UI 泛化，MC-310~317 + D-05/D-14 核对）：L2 更名 6 文件——claude-history-{model,view,row,hook,restore,action-dialog}.test.ts(x) → agent-history-*（features 目录更名 + 组件/Hook 更名 + barrel 同步 + 宿主 AgentStatusView import 同步，MC-310/D-05）。断言同步：model 41→44（+3 复合键——显式 cliId 键/同 sessionId 不同 cliId 防冲突/旧数据无 cliId 按 CLAUDE_CLI_ID 回退，MC-313）、view 33→35（+2 supportsFork=false 不展示「分支恢复」MC-316 + 同 sessionId 不同 cliId 反查命中本 CLI 面板 MC-313；activeStatuses/标题覆盖断言改复合键）、row 19→20（+1 未注册 cliId → 无 logo 不报错 MC-311；logo 断言改经 profile.iconSrc 查询）、hook 13 不变（activeStatuses 复合键断言同步）、restore 7 不变（注入内容断言 = claude profile.history.buildRestoreInput 输出逐字一致——MC-315 委托，用例内 side-effect 注册 claude profile）、action-dialog 7 不变（仅 import 路径）。agent-status-view 29 不变（restoreSession mock 路径 ../features/agentHistory/ + 注释同步，D-05；标题覆盖集成断言经复合键 cliId|sessionId——MC-314 语义式覆盖）。cli-profile-claude 43→50（+7 history 策略用例——buildResumeCommand 3 + buildRestoreInput 4，MC-315/316 交付，输出与迁出源逐字一致）。L4 history.e2e 8 用例数不变（恢复注入断言与 claude profile buildRestoreInput 输出逐字一致核对，D-14——零改动通过）。L2 2329→2342（137 文件不变），全量 3088→3101。
 - 2026-08-10（multi-cli Stage 04 后端历史泛化 + 前端 ipc/types，MC-301~306 + D-03/D-14 历史段）：L1 claude_history 63 用例迁移 agent_history（claude/jsonl 28 + claude/scan 19 + claude/ops 9 + mod 7 用例数不变，MC-301——下沉 claude/ 行为零改动 + env 覆盖 SLTERM_CLAUDE_PROJECTS_DIR 留 provider 内部 MC-305）；mod.rs 7 覆盖更新（HistorySession→AgentHistorySession serde camelCase 八键含 cliId 打标 + titleSource 开放字符串，MC-302）；新建 provider.rs（①：CliHistoryProvider trait 三方法 + 注册表 + 聚合 scan 遍历/delete 未知 cliId Validation/validate_session_id 强制前置，MC-303/304——计数以 backend 实落为准）。L2：ipc-claude-history-contract → ipc-agent-history-contract 8 用例数不变（命令名 agent_history_scan（无参）/agent_history_delete（{cliId, sessionId} 双参 camelCase）四维同步，MC-306）；claude-history-{model 41/view 33/row 19/hook 13/restore 7} 用例数不变（AgentHistorySession 八键含 cliId + mock 路径 ../ipc/agentHistory + 删除链传 session.cliId 断言同步，MC-306；action-dialog 7 零改动）；调用点中间态：useClaudeHistory/HistorySessionList/historyContextMenu 类型与签名同步（删除链 deleteHistorySession(session.cliId, session.sessionId)，features 目录更名留 Stage 05）。L4 history.e2e 8 用例数不变（命令名 agent_history_scan/delete 断言同步，D-14）。L1 584→584+①，L2 2329 不变，全量 3088→3088+①。
 - 2026-08-10（multi-cli Stage 03 后端 hooks 泛化 + 前端 ipc/types，MC-201~215 + D-01/03/09/10/11/14）：L1 hooks 域 133→146（+13）。位置迁移：inject 34→claude/inject.rs 35（+1 reporter 模板内嵌校验断言——显式 cliId + SCRIPT_VERSION 递增，MC-215 决策 7）、usage 26 / config 27 下沉 claude/ 用例数不变（MC-213）、watcher 20 MC-203 核对零改动；mod.rs 12→19（+7 命令层泛化：6 命令 cliId 透传 block_on 直测 + 更名 AgentInjectionStatus/AgentHookInjectionStatus，MC-211）、signal.rs 14→16（+2 AgentEventPayload 九键 serde 含无 cliId 旧信号反序列化兼容 MC-201 + agent-event 广播 MC-202）、新建 provider.rs 3（注册表 resolve_provider 命中/未知 cliId Validation/无 hooks 能力 Validation「不支持 hooks 能力」+ 未注册未知分支，MC-210）。L2：ipc-hooks-contract → ipc-agent-hooks-contract 22 用例数不变（命令名 agent_hooks_*/agent_context_usage + 参数含 cliId camelCase 四维同步，MC-212）；ipc-hooks-config-contract 12 用例数不变（agent_hooks_config_read/write + cliId 首参）；setup.ts 全局 mock 更名 ../ipc/hooks → ../ipc/agentHooks + onHookEvent→onAgentEvent（D-01 红线）；use-xterm-lifecycle 71 / use-xterm-output 35 / use-xterm-integration 12 / agent-status-view 29 / agent-status-hook 39 / notifications 33 / hooks-config-panel 23 / hooks-config-sync 9 用例数不变（事件名 onAgentEvent/"agent-event" + contextUsage 传行 cliId + 中间态 CLAUDE_CLI_ID 断言同步，MC-202/212）；调用点中间态：useHooksConfig/HooksConfigPanel 泛化命令 cliId 暂传 CLAUDE_CLI_ID 常量（Stage 06 回收）、useAgentStatus contextUsage 传行 cliId。L4 hooks.e2e 4 / agent.e2e 7 用例数不变（命令名 agent_hooks_* 与事件名 agent-event 断言同步，D-14）；run-wdio.cjs E2E-05 备份集合注释「随第二 CLI 接入扩展」（D-11，无用例变动）。L2 2329 不变，L1 571→584，全量 3075→3088。
 - 2026-08-10（multi-cli Stage 02 前端状态域去 claude 化，MC-401~422）：删 claude-status 32（语义拆分迁出：lib 层 6 用例 → 新建 agent-status-lib；事件映射 26 用例 → cli-profile-claude，落点改此）+ 新建 agent-status-lib 6（STATUS_EMOJI/getStatusIcon/AgentStatus 类型——lib 层不再含 claude 事件名字面量，MC-401）。cli-profile-claude 7→43（+36：eventToStatus 26 用例语义迁入 + classifyNotification 五映射表驱动 9 条迁入（NAH-03，notifications 纯函数层迁出）+ hooks 能力五字段断言 +1 与 capabilities.history 未迁入——contextLimit=200_000/restartHint/hasConfigEditor，MC-214 前端半 + MC-422）。notifications 42→33（classifyEvent 纯函数表驱动 9 条迁出，类别判定改经 profile.hooks.classifyNotification 委托——MC-420）。terminal-registry 24 / terminal-registry-subscribe 7 / use-xterm-lifecycle 71 / use-xterm-output 35 / use-xterm-integration 12 / claude-history-model 41 / claude-history-view 33 / claude-history-hook 13 用例数不变（ClaudeStatus→AgentStatus、claudeSession→agentSession、setClaudeSession→setAgentSession 更名同步 + AgentSessionInfo 新增 cliId——MC-402/403/410）；agent-status-view 29 / agent-status-hook 39 用例数不变（更名 + 空态文案「无运行中的编码 CLI 会话」MC-414 + 用量口径 contextLimit 来自 profile MC-412）；workspace-header-actions 21 用例数不变（F8 禁用判定 agentSession，MC-405）；L4 agent.e2e 7 用例数不变（空态文案断言同步，MC-414）；L3 production-osc 8 用例数不变（更名同步）。L2 2328→2329（137 文件不变），全量 3074→3075。

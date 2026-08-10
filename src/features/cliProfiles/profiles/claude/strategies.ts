@@ -1,14 +1,18 @@
-// strategies.ts — claude hooks 策略实现（MC-214 前端半 + MC-422 迁入）
+// strategies.ts — claude hooks + history 策略实现（MC-214 前端半 + MC-422 + Stage 05）
 //
-// claude 合法领地：hook 事件名/notificationType 子类型字面量只允许出现在
-// profiles/claude/ 目录（AC-5 守卫——通用层经 profile.hooks 能力委托消费，
-// 不写 claude 字面量）。本文件实现迁自 lib 层状态映射模块（Stage 02
+// claude 合法领地：hook 事件名/notificationType 子类型/命令名 "claude" 字面量
+// 只允许出现在 profiles/claude/ 目录（AC-5 守卫——通用层经 profile 能力委托
+// 消费，不写 claude 字面量）。本文件实现迁自 lib 层状态映射模块（Stage 02
 // MC-401 更名 agentStatus 后落点 src/lib/agentStatus.ts）的
 // eventToStatus（32 用例语义不丢，落点 cli-profile-claude.test.ts）与
-// src/features/notifications/ 的 classifyEvent 五映射（MC-422，行为零改动）。
+// src/features/notifications/ 的 classifyEvent 五映射（MC-422，行为零改动）；
+// history 策略（buildResumeCommand/buildRestoreInput）Stage 05 迁自
+// features/claudeHistory/ 的 historyContextMenu.ts 与 restoreSession.ts，
+// 输出与迁出源逐字一致（E2E history.e2e 恢复编排用例零改动通过）。
 
 import type { AgentStatus } from "../../../../lib/agentStatus";
 import type { AgentEventPayload } from "../../../../types/agent";
+import type { AgentHistorySession } from "../../../../types/agentHistory";
 
 /** Notification 事件中需要用户处理的子类型 */
 export const ATTENTION_NOTIFICATION_TYPES = new Set([
@@ -88,4 +92,35 @@ export function classifyNotification(
 
   // 其他事件（PreToolUse / PostToolUse / SessionStart / SessionEnd 等）不触发 toast
   return null;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// history 能力（MC-315/316 迁入，输出与迁出源逐字一致）
+// ═══════════════════════════════════════════════════════════════════
+
+/**
+ * 恢复命令构造（右键菜单「复制恢复命令」，MC-316 迁自 historyContextMenu.ts
+ * buildResumeCommand，行为零改动）：
+ * 有 cwd → `cd '<cwd>' && claude --resume <id>`（带单引号路径）；
+ * 无 cwd → 仅 `claude --resume <id>`。
+ * 已知限制（注释随迁）：cwd 单引号未转义——PowerShell 路径内含单引号时
+ * 缺 `''` 转义会断命令，原实现遗留限制，原样保留。
+ */
+export function buildResumeCommand(session: AgentHistorySession): string {
+  const resume = `claude --resume ${session.sessionId}`;
+  return session.cwd ? `cd '${session.cwd}' && ${resume}` : resume;
+}
+
+/**
+ * 恢复注入内容（恢复编排第 4 步，MC-315 迁自 restoreSession.ts:137-139 字面量，
+ * 输出必须逐字一致）：`claude --resume <id>` + fork 时追加 " --fork-session" +
+ * `\r` 结尾——E2E history.e2e 恢复编排用例零改动通过，断言漂移即实现有误。
+ */
+export function buildRestoreInput(
+  session: AgentHistorySession,
+  opts: { fork: boolean },
+): string {
+  return `claude --resume ${session.sessionId}${
+    opts.fork ? " --fork-session" : ""
+  }\r`;
 }

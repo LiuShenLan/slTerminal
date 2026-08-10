@@ -1,8 +1,9 @@
-// claude-history-hook.test.tsx — FE-04 useClaudeHistory 数据 hook 测试
+// agent-history-hook.test.tsx — FE-04 useAgentHistory 数据 hook 测试
 //
 // 覆盖：初始 idle / scan 成功 ready+sessions / scan 失败 error /
 // removeLocal（不触发 scan）/
-// TerminalRegistry.subscribe 事件驱动 activeStatuses 更新 / 卸载取消订阅 /
+// TerminalRegistry.subscribe 事件驱动 activeStatuses 更新（复合键 cliId|sessionId——
+// MC-313，旧数据无 cliId 按 CLAUDE_CLI_ID 回退）/ 卸载取消订阅 /
 // generation 防竞（旧结果丢弃）/ rootPath 推导与切换不自动重扫。
 //
 // mock 模式：vi.hoisted() 共享状态 + 模块级 vi.mock（照 agent-status-hook.test.ts 先例）+
@@ -10,7 +11,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
-import { useClaudeHistory } from "../features/claudeHistory/useClaudeHistory";
+import { useAgentHistory } from "../features/agentHistory/useAgentHistory";
 import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
 import { resetProjectStores, seedExplorerProject } from "./helpers/workspace-setup";
@@ -85,9 +86,9 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("useClaudeHistory 初始态", () => {
+describe("useAgentHistory 初始态", () => {
   it("初始 idle + 空 sessions + 空 activeStatuses，rootPath 推导自活跃页面 cwd", () => {
-    const { result } = renderHook(() => useClaudeHistory());
+    const { result } = renderHook(() => useAgentHistory());
     expect(result.current.state).toBe("idle");
     expect(result.current.sessions).toEqual([]);
     expect(result.current.activeStatuses.size).toBe(0);
@@ -117,11 +118,11 @@ describe("useClaudeHistory 初始态", () => {
         },
       },
     });
-    const { result } = renderHook(() => useClaudeHistory());
+    const { result } = renderHook(() => useAgentHistory());
     expect(result.current.rootPath).toBe("D:/root");
   });
 
-  it("activeStatuses 初值 = 挂载时注册表派生结果（Map<sessionId, status>）", () => {
+  it("activeStatuses 初值 = 挂载时注册表派生结果（Map<cliId|sessionId, status> 复合键，MC-313）", () => {
     h.all.set("panel-1", {
       term: {}, sessionId: "p1", webglAddon: null, fitAddon: {},
       agentSession: {
@@ -131,18 +132,18 @@ describe("useClaudeHistory 初始态", () => {
         lastEventAt: 1,
       },
     });
-    const { result } = renderHook(() => useClaudeHistory());
+    const { result } = renderHook(() => useAgentHistory());
     expect(result.current.activeStatuses).toEqual(
-      new Map([["abc", "working"]]),
+      new Map([["claude|abc", "working"]]),
     );
   });
 });
 
-describe("useClaudeHistory scan", () => {
+describe("useAgentHistory scan", () => {
   it("scan 成功 → ready + sessions", async () => {
     const sessions = [makeSession({ sessionId: "s1", cwd: "D:/a" })];
     h.mockScanHistory.mockResolvedValue(sessions);
-    const { result } = renderHook(() => useClaudeHistory());
+    const { result } = renderHook(() => useAgentHistory());
     await act(async () => {
       await result.current.scan();
     });
@@ -153,7 +154,7 @@ describe("useClaudeHistory scan", () => {
   it("scan 失败 → error + console.error 留痕，不静默吞", async () => {
     const error = new Error("scan failed");
     h.mockScanHistory.mockRejectedValue(error);
-    const { result } = renderHook(() => useClaudeHistory());
+    const { result } = renderHook(() => useAgentHistory());
     await act(async () => {
       await result.current.scan();
     });
@@ -165,7 +166,7 @@ describe("useClaudeHistory scan", () => {
     h.mockScanHistory.mockRejectedValueOnce(new Error("boom"));
     const sessions = [makeSession({ sessionId: "s2" })];
     h.mockScanHistory.mockResolvedValueOnce(sessions);
-    const { result } = renderHook(() => useClaudeHistory());
+    const { result } = renderHook(() => useAgentHistory());
     await act(async () => {
       await result.current.scan();
     });
@@ -187,7 +188,7 @@ describe("useClaudeHistory scan", () => {
       )
       .mockResolvedValueOnce(second);
 
-    const { result } = renderHook(() => useClaudeHistory());
+    const { result } = renderHook(() => useAgentHistory());
     let p1: Promise<void>;
     act(() => {
       p1 = result.current.scan();
@@ -211,7 +212,7 @@ describe("useClaudeHistory scan", () => {
   });
 
   it("rootPath 变化不自动重扫（历史区数据与项目弱相关）", () => {
-    const { result, rerender } = renderHook(() => useClaudeHistory());
+    const { result, rerender } = renderHook(() => useAgentHistory());
     expect(h.mockScanHistory).not.toHaveBeenCalled();
     act(() => {
       useLayout.setState({ activePageId: null });
@@ -222,14 +223,14 @@ describe("useClaudeHistory scan", () => {
   });
 });
 
-describe("useClaudeHistory 局部更新", () => {
+describe("useAgentHistory 局部更新", () => {
   async function seedSessions() {
     const sessions = [
       makeSession({ sessionId: "s1", title: "标题一" }),
       makeSession({ sessionId: "s2", title: "标题二" }),
     ];
     h.mockScanHistory.mockResolvedValue(sessions);
-    const { result } = renderHook(() => useClaudeHistory());
+    const { result } = renderHook(() => useAgentHistory());
     await act(async () => {
       await result.current.scan();
     });
@@ -255,9 +256,9 @@ describe("useClaudeHistory 局部更新", () => {
   });
 });
 
-describe("useClaudeHistory 订阅", () => {
-  it("注册表事件后 activeStatuses 重算（sessionChange 加/删）", () => {
-    const { result } = renderHook(() => useClaudeHistory());
+describe("useAgentHistory 订阅", () => {
+  it("注册表事件后 activeStatuses 重算（sessionChange 加/删，复合键）", () => {
+    const { result } = renderHook(() => useAgentHistory());
     // sessionChange：claude 会话建立（sessionId + status 出现）
     h.all.set("panel-1", {
       term: {}, sessionId: "p1", webglAddon: null, fitAddon: {},
@@ -271,7 +272,7 @@ describe("useClaudeHistory 订阅", () => {
       notifyListeners({ type: "sessionChange", panelId: "panel-1" });
     });
     expect(result.current.activeStatuses).toEqual(
-      new Map([["aaa", "attention"]]),
+      new Map([["claude|aaa", "attention"]]),
     );
     // sessionChange：会话结束（agentSession 清空）
     h.all.set("panel-1", {
@@ -285,7 +286,7 @@ describe("useClaudeHistory 订阅", () => {
   });
 
   it("订阅不触发 scan（规格 4.5：不重扫）", () => {
-    renderHook(() => useClaudeHistory());
+    renderHook(() => useAgentHistory());
     act(() => {
       notifyListeners({ type: "register", panelId: "panel-x" });
     });
@@ -293,7 +294,7 @@ describe("useClaudeHistory 订阅", () => {
   });
 
   it("卸载取消订阅", () => {
-    const { unmount } = renderHook(() => useClaudeHistory());
+    const { unmount } = renderHook(() => useAgentHistory());
     expect(h.mockSubscribe).toHaveBeenCalledTimes(1);
     unmount();
     expect(h.mockUnsubscribe).toHaveBeenCalledTimes(1);

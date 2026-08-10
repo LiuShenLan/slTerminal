@@ -1,13 +1,17 @@
-// cli-profile-claude.test.ts — claude profile 身份域 + hooks 策略 L2 测试
+// cli-profile-claude.test.ts — claude profile 身份域 + hooks/history 策略 L2 测试
 //
 // 语义来源（MC-104 迁移）：原 tab-rules.test.ts（6 用例：side-effect 注册/手动
 // 注册/_reset 恢复语义）。
 // 覆盖：claude 身份域字段断言（MC-104）+ CLAUDE_CLI_ID 常量一致性 + side-effect
 // 注册 + hooks 能力字段（MC-214 前端半：eventToStatus/classifyNotification/
-// contextLimit/restartHint/hasConfigEditor）。
+// contextLimit/restartHint/hasConfigEditor）+ history 能力字段（MC-315/316：
+// supportsFork/buildResumeCommand/buildRestoreInput）。
 // hooks 策略用例（MC-401/MC-422 迁入，Stage 02）：eventToStatus 26 用例语义
 // 迁自原 claude-status.test.ts（事件映射部分），落点改此；classifyNotification
 // 五映射表驱动（NAH-03 语义）迁自 notifications.test.ts 纯函数层。
+// history 策略用例（Stage 05）：buildResumeCommand/buildRestoreInput 输出与
+// 迁出源（historyContextMenu.ts / restoreSession.ts）逐字一致——断言漂移即
+// 实现有误（E2E history.e2e 恢复编排用例零改动通过）。
 // logo 资源守卫（MC-108）已移至 cli-profile-registry.test.ts（遍历注册表全部
 // profile 断言 iconSrc 磁盘存在 + PNG 魔数——img 404 无报错通道，资源缺失靠此
 // 守卫；含 mockcli.png 先行资源，决策 5，Stage 07 mock 夹具引用）。
@@ -21,10 +25,13 @@ import {
 import {
   eventToStatus,
   classifyNotification,
+  buildResumeCommand,
+  buildRestoreInput,
 } from "../features/cliProfiles/profiles/claude/strategies";
 import { cliProfileRegistry } from "../features/cliProfiles/cliProfileRegistry";
 import { STATUS_EMOJI, type AgentStatus } from "../lib/agentStatus";
 import type { AgentEventPayload } from "../types/agent";
+import type { AgentHistorySession } from "../types/agentHistory";
 
 /** 每用例后恢复 claude 注册（全局单例隔离，照 cli-icons.test.ts 模式） */
 afterEach(() => {
@@ -50,7 +57,7 @@ describe("claude profile 身份域（MC-104）", () => {
     expect(profile!.id).toBe(CLAUDE_CLI_ID);
   });
 
-  it("身份域字段完整：id/displayName/commands/iconSrc/tabTitle/capabilities.hooks（含策略函数引用）", () => {
+  it("身份域字段完整：id/displayName/commands/iconSrc/tabTitle/capabilities.hooks+history（含策略函数引用）", () => {
     const profile = cliProfileRegistry.get(CLAUDE_CLI_ID)!;
     expect(profile).toEqual({
       id: "claude",
@@ -66,6 +73,11 @@ describe("claude profile 身份域（MC-104）", () => {
           restartHint: "hooks 改动需重启 claude 会话生效",
           hasConfigEditor: true,
         },
+        history: {
+          supportsFork: true,
+          buildResumeCommand,
+          buildRestoreInput,
+        },
       },
     });
   });
@@ -80,9 +92,12 @@ describe("claude profile 身份域（MC-104）", () => {
     expect(hooks!.hasConfigEditor).toBe(true);
   });
 
-  it("capabilities.history 仍未迁入（history 能力 Stage 05）", () => {
-    const profile = cliProfileRegistry.get(CLAUDE_CLI_ID)!;
-    expect(profile.capabilities.history).toBeUndefined();
+  it("capabilities.history 三字段齐备（supportsFork/buildResumeCommand/buildRestoreInput）", () => {
+    const history = cliProfileRegistry.get(CLAUDE_CLI_ID)!.capabilities.history;
+    expect(history).toBeDefined();
+    expect(history!.supportsFork).toBe(true);
+    expect(typeof history!.buildResumeCommand).toBe("function");
+    expect(typeof history!.buildRestoreInput).toBe("function");
   });
 
   it("matchByCommand 带参变体命中 claude（claude --resume xxx）", () => {
@@ -362,5 +377,80 @@ describe("classifyNotification 五映射表驱动（NAH-03 语义迁入）", () 
 
   it.each(classifyTable)("$name", ({ payload, expected }) => {
     expect(classifyNotification(makePayload(payload))).toBe(expected);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// history 策略 — buildResumeCommand / buildRestoreInput（MC-315/316 迁入）
+// ═══════════════════════════════════════════════════════════════════
+// 输出断言与迁出源（historyContextMenu.ts buildResumeCommand /
+// restoreSession.ts:137-139 字面量）逐字一致，断言漂移即实现有误。
+
+/** 构造最小 AgentHistorySession（缺省字段占位，cwd 由用例指定） */
+function makeSession(partial: Partial<AgentHistorySession>): AgentHistorySession {
+  return {
+    sessionId: "abc",
+    cwd: null,
+    title: null,
+    titleSource: "firstPrompt",
+    firstPrompt: null,
+    mtimeMs: 0,
+    cwdExists: false,
+    cliId: "claude",
+    ...partial,
+  };
+}
+
+describe("buildResumeCommand（MC-316 迁入，行为零改动）", () => {
+  it("有 cwd → `cd '<cwd>' && claude --resume <id>`（单引号路径）", () => {
+    expect(
+      buildResumeCommand(makeSession({ sessionId: "abc", cwd: "D:\\proj" })),
+    ).toBe("cd 'D:\\proj' && claude --resume abc");
+  });
+
+  it("无 cwd（null）→ 仅 `claude --resume <id>`", () => {
+    expect(buildResumeCommand(makeSession({ sessionId: "abc" }))).toBe(
+      "claude --resume abc",
+    );
+  });
+
+  it("输出与迁出源 historyContextMenu.buildResumeCommand 逐字一致（含 sessionId 原样透传）", () => {
+    const session = makeSession({ sessionId: "uuid-123", cwd: "C:/work/x" });
+    // 与迁出源模板逐字比对：`cd '${cwd}' && claude --resume ${sessionId}`
+    expect(buildResumeCommand(session)).toBe(
+      `cd '${session.cwd}' && claude --resume ${session.sessionId}`,
+    );
+  });
+});
+
+describe("buildRestoreInput（MC-315 迁入，输出与 restoreSession.ts 字面量逐字一致）", () => {
+  it("普通恢复：`claude --resume <id>` + \\r 结尾（无 \\n）", () => {
+    expect(
+      buildRestoreInput(makeSession({ sessionId: "abc", cwd: "D:\\proj" }), {
+        fork: false,
+      }),
+    ).toBe("claude --resume abc\r");
+  });
+
+  it("fork 恢复：追加 ` --fork-session`", () => {
+    expect(
+      buildRestoreInput(makeSession({ sessionId: "abc", cwd: "D:\\proj" }), {
+        fork: true,
+      }),
+    ).toBe("claude --resume abc --fork-session\r");
+  });
+
+  it("\\r 结尾且不含 \\r\\n（照现状 pty.write 注入形态）", () => {
+    const out = buildRestoreInput(makeSession({ sessionId: "abc" }), {
+      fork: false,
+    });
+    expect(out.endsWith("\r")).toBe(true);
+    expect(out.endsWith("\r\n")).toBe(false);
+  });
+
+  it("无 cwd 会话同样可注入（注入内容不依赖 cwd，仅 resume 命令）", () => {
+    expect(
+      buildRestoreInput(makeSession({ sessionId: "abc" }), { fork: false }),
+    ).toBe("claude --resume abc\r");
   });
 });

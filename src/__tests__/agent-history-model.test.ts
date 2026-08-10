@@ -1,9 +1,10 @@
-// claude-history-model.test.ts — FE-05 纯函数全分支测试
+// agent-history-model.test.ts — FE-05 纯函数全分支测试
 //
 // 纯函数零依赖（仅 mock TerminalRegistry 供 deriveActiveSessionStatuses 读注册表）：
 // isCurrentProject（决策 24 匹配）/ groupByCwd（组内+组间排序/未知目录组）/
 // matchesSearch（标题+prompt/大小写/空白）/ formatRelativeTime（六档边界+mtime=0）/
-// deriveActiveSessionStatuses（sessionId 优先/basename 回退/双无跳过/空注册表/status 透传）。
+// deriveActiveSessionStatuses（复合键 cliId|sessionId——MC-313：sessionId 优先/
+// basename 回退/无 cliId 按 CLAUDE_CLI_ID 回退/双无跳过/空注册表/status 透传）。
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
@@ -12,7 +13,7 @@ import {
   matchesSearch,
   formatRelativeTime,
   deriveActiveSessionStatuses,
-} from "../features/claudeHistory/historyModel";
+} from "../features/agentHistory/historyModel";
 import type { AgentHistorySession } from "../types/agentHistory";
 
 // ── vi.hoisted()：mock 状态在模块级 vi.mock 执行前就绪 ──
@@ -254,14 +255,49 @@ describe("deriveActiveSessionStatuses", () => {
     };
   }
 
-  it("sessionId 优先 → Map 键 = sessionId，值为 status", () => {
+  it("sessionId 优先 → Map 键 = `cliId|sessionId` 复合键（MC-313），值为 status", () => {
     h.all.set("panel-1", {
       term: {}, sessionId: "p1", webglAddon: null, fitAddon: {},
       agentSession: makeAgentSession({ status: "working" }),
     });
     expect(deriveActiveSessionStatuses()).toEqual(
-      new Map([["abc-123", "working"]]),
+      new Map([["claude|abc-123", "working"]]),
     );
+  });
+
+  it("显式 cliId → 键 = `${cliId}|${sessionId}`（不依赖缺省回退）", () => {
+    h.all.set("panel-1", {
+      term: {}, sessionId: "p1", webglAddon: null, fitAddon: {},
+      agentSession: makeAgentSession({ cliId: "mockcli", status: "working" }),
+    });
+    expect(deriveActiveSessionStatuses()).toEqual(
+      new Map([["mockcli|abc-123", "working"]]),
+    );
+  });
+
+  it("同 sessionId 不同 cliId → 两条键互不覆盖（复合键防跨 CLI 冲突）", () => {
+    h.all.set("panel-1", {
+      term: {}, sessionId: "p1", webglAddon: null, fitAddon: {},
+      agentSession: makeAgentSession({ cliId: "claude", sessionId: "dup-1" }),
+    });
+    h.all.set("panel-2", {
+      term: {}, sessionId: "p2", webglAddon: null, fitAddon: {},
+      agentSession: makeAgentSession({ cliId: "mockcli", sessionId: "dup-1" }),
+    });
+    expect(deriveActiveSessionStatuses()).toEqual(
+      new Map([
+        ["claude|dup-1", "attention"],
+        ["mockcli|dup-1", "attention"],
+      ]),
+    );
+  });
+
+  it("旧数据无 cliId → 按 CLAUDE_CLI_ID 常量回退（非字面量，AC-5 兼容）", () => {
+    h.all.set("panel-1", {
+      term: {}, sessionId: "p1", webglAddon: null, fitAddon: {},
+      agentSession: makeAgentSession({ sessionId: "old-1", status: "working" }),
+    });
+    expect(deriveActiveSessionStatuses().get("claude|old-1")).toBe("working");
   });
 
   it("无 sessionId 有 transcriptPath → basename 去 .jsonl 回退（旧数据兼容）", () => {
@@ -272,7 +308,7 @@ describe("deriveActiveSessionStatuses", () => {
         status: "done",
       }),
     });
-    expect(deriveActiveSessionStatuses()).toEqual(new Map([["abc-123", "done"]]));
+    expect(deriveActiveSessionStatuses()).toEqual(new Map([["claude|abc-123", "done"]]));
   });
 
   it("sessionId 为 null → basename 去 .jsonl 回退（NAH-01）", () => {
@@ -284,7 +320,7 @@ describe("deriveActiveSessionStatuses", () => {
         status: "working",
       },
     });
-    expect(deriveActiveSessionStatuses().get("abc")).toBe("working");
+    expect(deriveActiveSessionStatuses().get("claude|abc")).toBe("working");
   });
 
   it("sessionId 与 transcriptPath 均无（matchedCommand-only）→ 跳过不产出", () => {
@@ -335,11 +371,11 @@ describe("deriveActiveSessionStatuses", () => {
     });
     const map = deriveActiveSessionStatuses();
     statuses.forEach((status, i) => {
-      expect(map.get(`id-${i}`)).toBe(status);
+      expect(map.get(`claude|id-${i}`)).toBe(status);
     });
   });
 
-  it("多条 → Map 含全部 sessionId → status", () => {
+  it("多条 → Map 含全部复合键 → status", () => {
     h.all.set("panel-1", {
       term: {}, sessionId: "p1", webglAddon: null, fitAddon: {},
       agentSession: makeAgentSession({ sessionId: "aaa", status: "working" }),
@@ -350,8 +386,8 @@ describe("deriveActiveSessionStatuses", () => {
     });
     expect(deriveActiveSessionStatuses()).toEqual(
       new Map([
-        ["aaa", "working"],
-        ["bbb", "error"],
+        ["claude|aaa", "working"],
+        ["claude|bbb", "error"],
       ]),
     );
   });

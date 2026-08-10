@@ -1,4 +1,4 @@
-// ClaudeHistorySections.tsx — 历史区组合件（FE-07 集成部分 + FE-09 空态）
+// AgentHistorySections.tsx — 历史区组合件（FE-07 集成部分 + FE-09 空态）
 //
 // 结构（自上而下，README 4.3.4/4.3.5）：
 //   搜索框（agent-history-search）—— 过滤两区当前展开的列表（标题 + 首条 prompt，大小写不敏感）
@@ -6,7 +6,7 @@
 //   当前项目历史会话（agent-history-section-current）—— rootPath 过滤平铺（HistorySessionList current）
 //   全部项目历史会话（agent-history-section-all）—— groupByCwd 二级折叠（HistorySessionList all）
 //
-// 受控组件（问题 6 修复：useClaudeHistory 上提至 AgentStatusView 单实例，本组件经 props
+// 受控组件（问题 6 修复：useAgentHistory 上提至 AgentStatusView 单实例，本组件经 props
 // 接收全部数据与回调——刷新后活跃区标题同步依赖此数据通路）。
 // 展开/收起 state 受控（AgentStatusView 持有三区展开态，本组件经 props 接收）；
 // 历史区首次展开触发 scan()（仅首次，之后靠刷新按钮——README 4.3.5）；
@@ -21,7 +21,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { HistorySessionList } from "./HistorySessionList";
-import type { ClaudeHistoryState } from "./useClaudeHistory";
+import type { AgentHistoryState } from "./useAgentHistory";
 import type { AgentHistorySession } from "../../types/agentHistory";
 import type { AgentStatus } from "../../lib/agentStatus";
 import {
@@ -32,7 +32,7 @@ import {
   SIDEBAR_COLORS,
 } from "../../theme";
 
-export interface ClaudeHistorySectionsProps {
+export interface AgentHistorySectionsProps {
   /** 当前项目历史会话区展开态（受控，AgentStatusView 持有） */
   expandedCurrent: boolean;
   /** 全部项目历史会话区展开态（受控，AgentStatusView 持有） */
@@ -41,9 +41,9 @@ export interface ClaudeHistorySectionsProps {
   onToggleCurrent(): void;
   /** 切换全部项目区展开 */
   onToggleAll(): void;
-  // ── 数据与回调（useClaudeHistory 上提至 AgentStatusView 后经 props 注入） ──
+  // ── 数据与回调（useAgentHistory 上提至 AgentStatusView 后经 props 注入） ──
   /** 扫描状态机（idle/loading/ready/error） */
-  historyState: ClaudeHistoryState;
+  historyState: AgentHistoryState;
   /** 全部历史会话（扫描结果） */
   sessions: AgentHistorySession[];
   /** 运行中会话四态映射（Map<sessionId, status>） */
@@ -130,7 +130,7 @@ const emptyHintStyle: React.CSSProperties = {
   userSelect: "none",
 };
 
-export const ClaudeHistorySections: React.FC<ClaudeHistorySectionsProps> = ({
+export const AgentHistorySections: React.FC<AgentHistorySectionsProps> = ({
   expandedCurrent,
   expandedAll,
   onToggleCurrent,

@@ -1,19 +1,22 @@
-// claude-history-view.test.tsx — FE-07/08/09 历史区视图 L2 测试
+// agent-history-view.test.tsx — FE-07/08/09 历史区视图 L2 测试
 //
 // 覆盖：
-//   1. ClaudeHistorySections 结构（搜索框/刷新按钮/两区块头）与默认折叠态
+//   1. AgentHistorySections 结构（搜索框/刷新按钮/两区块头）与默认折叠态
 //   2. 历史区首次展开触发 scan()（仅首次；之后靠刷新按钮）
 //   3. 搜索框输入过滤行（matchesSearch）+ 无结果提示
 //   4. 全部项目区分组折叠（组默认收起——问题 3、组标题计数、展开/收起）
 //   5. 空态四文案（该项目暂无历史会话 / 暂无历史会话 / 无活跃项目 / 无匹配的会话）
-//   6. 右键菜单可用性矩阵（普通/孤儿/无 cwd/运行中 × 3 操作——重命名已移除，问题 7）
+//   6. 右键菜单可用性矩阵（普通/孤儿/无 cwd/运行中 × 3 操作——重命名已移除，问题 7；
+//      复制命令委托 profile.history.buildResumeCommand、分支恢复按 supportsFork 显隐——MC-316）
 //   7. 双击分派三分支（普通 → 恢复；孤儿/无 cwd → 无操作；运行中 → 动作弹窗
-//      「切换到该会话操作页面」/取消——问题 5，分支恢复仅右键菜单）
-//   8. AgentStatusView 三区集成（默认态、展开触发 scan、标题覆盖——问题 6、E2E 红线）
+//      「切换到该会话操作页面」/取消——问题 5，分支恢复仅右键菜单；
+//      反查 = 复合键 cliId|sessionId 精确匹配——MC-313）
+//   8. AgentStatusView 三区集成（默认态、展开触发 scan、标题覆盖——问题 6，复合键 MC-314、E2E 红线）
 //   9. 字号层级（区块标题 13px 粗体，问题 4）
 //
-// ClaudeHistorySections 为受控组件（useClaudeHistory 上提至 AgentStatusView——问题 6），
-// 测试直接注入受控 props；AgentStatusView 集成测试 mock useAgentStatus + useClaudeHistory。
+// AgentHistorySections 为受控组件（useAgentHistory 上提至 AgentStatusView——问题 6），
+// 测试直接注入受控 props；AgentStatusView 集成测试 mock useAgentStatus + useAgentHistory。
+// Stage 05：side-effect import profiles 注册真实 claude profile（菜单/命令委托消费）。
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import React from "react";
@@ -23,9 +26,12 @@ import {
   fireEvent,
   waitFor,
 } from "@testing-library/react";
-import { ClaudeHistorySections } from "../features/claudeHistory/ClaudeHistorySections";
-import type { ClaudeHistorySectionsProps } from "../features/claudeHistory/ClaudeHistorySections";
+import { AgentHistorySections } from "../features/agentHistory/AgentHistorySections";
+import type { AgentHistorySectionsProps } from "../features/agentHistory/AgentHistorySections";
 import { AgentStatusView } from "../features/agentStatus/AgentStatusView";
+import "../features/cliProfiles/profiles";
+import { cliProfileRegistry } from "../features/cliProfiles/cliProfileRegistry";
+import { claudeProfile } from "../features/cliProfiles/profiles/claude";
 import {
   resetProjectStores,
   seedExplorerProject,
@@ -52,7 +58,7 @@ const h = vi.hoisted(() => {
     mockWriteText: vi.fn(),
     mockRestore: vi.fn(),
     mockUseAgentStatus: vi.fn(),
-    mockUseClaudeHistory: vi.fn(),
+    mockUseAgentHistory: vi.fn(),
     mockScan: vi.fn(),
     mockRemoveLocal: vi.fn(),
     mockSwitchToPageAndFocus: vi.fn(),
@@ -78,7 +84,7 @@ vi.mock("../ipc/notification", () => ({
   sendToastNotification: h.mockSendToastNotification,
 }));
 
-vi.mock("../features/claudeHistory/restoreSession", () => ({
+vi.mock("../features/agentHistory/restoreSession", () => ({
   restoreHistorySession: h.mockRestore,
 }));
 
@@ -93,8 +99,8 @@ vi.mock("../features/agentStatus/useAgentStatus", () => ({
   useAgentStatus: h.mockUseAgentStatus,
 }));
 
-vi.mock("../features/claudeHistory/useClaudeHistory", () => ({
-  useClaudeHistory: h.mockUseClaudeHistory,
+vi.mock("../features/agentHistory/useAgentHistory", () => ({
+  useAgentHistory: h.mockUseAgentHistory,
 }));
 
 vi.mock("../workspace/pageApis", () => ({
@@ -126,10 +132,10 @@ function normalSession(id: string, cwd: string, overrides: Partial<AgentHistoryS
   return makeSession(id, { cwd, cwdExists: true, ...overrides });
 }
 
-/** 受控 props 工厂（useClaudeHistory 上提后 ClaudeHistorySections 为纯受控） */
+/** 受控 props 工厂（useAgentHistory 上提后 AgentHistorySections 为纯受控） */
 function makeSectionsProps(
-  overrides: Partial<ClaudeHistorySectionsProps> = {},
-): ClaudeHistorySectionsProps {
+  overrides: Partial<AgentHistorySectionsProps> = {},
+): AgentHistorySectionsProps {
   return {
     expandedCurrent: false,
     expandedAll: false,
@@ -159,7 +165,7 @@ beforeEach(() => {
   h.mockRestore.mockReset();
   h.mockRestore.mockResolvedValue(undefined);
   h.mockUseAgentStatus.mockReset();
-  h.mockUseClaudeHistory.mockReset();
+  h.mockUseAgentHistory.mockReset();
   h.mockScan.mockReset();
   h.mockRemoveLocal.mockReset();
   h.mockSwitchToPageAndFocus.mockReset();
@@ -171,17 +177,20 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  // 还原 profile 注册表（supportsFork 显隐用例局部覆写后复原，照 cli-profile 测试先例）
+  cliProfileRegistry._reset();
+  cliProfileRegistry.register(claudeProfile);
 });
 
 // ═══════════════════════════════════════════════════════════════
-// ClaudeHistorySections 结构与默认态
+// AgentHistorySections 结构与默认态
 // ═══════════════════════════════════════════════════════════════
 
-describe("ClaudeHistorySections 结构与默认态", () => {
+describe("AgentHistorySections 结构与默认态", () => {
   it("渲染搜索框 + 刷新按钮 + 两个区块头（位于搜索框之下）", () => {
     seedExplorerProject("C:/project");
     const { container, getByText } = render(
-      React.createElement(ClaudeHistorySections, makeSectionsProps()),
+      React.createElement(AgentHistorySections, makeSectionsProps()),
     );
 
     expect(
@@ -212,7 +221,7 @@ describe("ClaudeHistorySections 结构与默认态", () => {
   it("区块标题 13px 粗体（问题 4：折叠框名层级 > 行标题 12px）", () => {
     seedExplorerProject("C:/project");
     const { getByText } = render(
-      React.createElement(ClaudeHistorySections, makeSectionsProps()),
+      React.createElement(AgentHistorySections, makeSectionsProps()),
     );
     for (const label of ["当前项目历史会话", "全部项目历史会话"]) {
       const el = getByText(label).parentElement as HTMLElement;
@@ -225,7 +234,7 @@ describe("ClaudeHistorySections 结构与默认态", () => {
     seedExplorerProject("C:/project");
     const { container } = render(
       React.createElement(
-        ClaudeHistorySections,
+        AgentHistorySections,
         makeSectionsProps({
           sessions: [normalSession("session-1", "C:/project/src")],
         }),
@@ -241,7 +250,7 @@ describe("ClaudeHistorySections 结构与默认态", () => {
   it("点击刷新按钮触发 scan()", () => {
     seedExplorerProject("C:/project");
     const { container } = render(
-      React.createElement(ClaudeHistorySections, makeSectionsProps()),
+      React.createElement(AgentHistorySections, makeSectionsProps()),
     );
 
     const refresh = container.querySelector(
@@ -266,13 +275,13 @@ describe("历史区首次展开触发 scan", () => {
     });
 
     const { rerender } = render(
-      React.createElement(ClaudeHistorySections, props),
+      React.createElement(AgentHistorySections, props),
     );
     expect(h.mockScan).not.toHaveBeenCalled();
 
     // 首次展开当前项目区 → scan 一次，行渲染
     rerender(
-      React.createElement(ClaudeHistorySections, {
+      React.createElement(AgentHistorySections, {
         ...props,
         expandedCurrent: true,
       }),
@@ -284,13 +293,13 @@ describe("历史区首次展开触发 scan", () => {
 
     // 收起当前区再展开全部区 → 不重复 scan（仅首次）
     rerender(
-      React.createElement(ClaudeHistorySections, {
+      React.createElement(AgentHistorySections, {
         ...props,
         expandedCurrent: false,
       }),
     );
     rerender(
-      React.createElement(ClaudeHistorySections, {
+      React.createElement(AgentHistorySections, {
         ...props,
         expandedAll: true,
       }),
@@ -308,7 +317,7 @@ describe("搜索框过滤", () => {
     seedExplorerProject("C:/project");
     const { container } = render(
       React.createElement(
-        ClaudeHistorySections,
+        AgentHistorySections,
         makeSectionsProps({
           expandedCurrent: true,
           rootPath: "C:/project/src",
@@ -359,7 +368,7 @@ describe("全部项目区分组折叠", () => {
     seedExplorerProject("C:/project");
     const { container } = render(
       React.createElement(
-        ClaudeHistorySections,
+        AgentHistorySections,
         makeSectionsProps({
           expandedAll: true,
           sessions: [
@@ -429,7 +438,7 @@ describe("空态与提示文案", () => {
     seedExplorerProject("C:/project");
     const { getByText, container } = render(
       React.createElement(
-        ClaudeHistorySections,
+        AgentHistorySections,
         makeSectionsProps({
           expandedCurrent: true,
           rootPath: "C:/project/src",
@@ -447,7 +456,7 @@ describe("空态与提示文案", () => {
     seedExplorerProject("C:/project");
     const { getByText, container } = render(
       React.createElement(
-        ClaudeHistorySections,
+        AgentHistorySections,
         makeSectionsProps({ expandedAll: true }),
       ),
     );
@@ -460,7 +469,7 @@ describe("空态与提示文案", () => {
   it("无活跃项目（rootPath null）→ 当前项目区显示「无活跃项目」", () => {
     const { getByText } = render(
       React.createElement(
-        ClaudeHistorySections,
+        AgentHistorySections,
         makeSectionsProps({ expandedCurrent: true, rootPath: null }),
       ),
     );
@@ -471,7 +480,7 @@ describe("空态与提示文案", () => {
     seedExplorerProject("C:/project");
     const { container, getByText } = render(
       React.createElement(
-        ClaudeHistorySections,
+        AgentHistorySections,
         makeSectionsProps({
           expandedCurrent: true,
           rootPath: "C:/project/src",
@@ -501,7 +510,7 @@ describe("右键菜单可用性矩阵", () => {
     seedExplorerProject("C:/project");
     const { container } = render(
       React.createElement(
-        ClaudeHistorySections,
+        AgentHistorySections,
         makeSectionsProps({
           expandedAll: true,
           sessions,
@@ -538,6 +547,26 @@ describe("右键菜单可用性矩阵", () => {
     expect(labels).toContain("分支恢复");
     expect(labels).toContain("删除");
     expect(labels).not.toContain("重命名");
+  });
+
+  it("supportsFork=false（能力未声明）→ 不展示「分支恢复」菜单项（MC-316 显隐）", () => {
+    // 用例内局部注册测试 profile：覆写 claude profile 的 history 能力 supportsFork=false
+    // （afterEach _reset + 重注册真实 claudeProfile 复原——照 cli-profile 测试先例）
+    cliProfileRegistry.register({
+      ...claudeProfile,
+      capabilities: {
+        ...claudeProfile.capabilities,
+        history: { ...claudeProfile.capabilities!.history!, supportsFork: false },
+      },
+    });
+    const row = renderAllAndGetFirstRow([
+      normalSession("session-1", "D:/a/projA", { title: "普通会话" }),
+    ]);
+    const { labels } = openMenu(row);
+
+    expect(labels).toContain("复制恢复命令");
+    expect(labels).not.toContain("分支恢复");
+    expect(labels).toContain("删除");
   });
 
   it("复制恢复命令：写入剪贴板，格式 = cd '<cwd>' && claude --resume <id>", () => {
@@ -608,7 +637,7 @@ describe("右键菜单可用性矩阵", () => {
   it("运行中行：删除禁用（activeStatuses 含 session-1）", () => {
     const row = renderAllAndGetFirstRow(
       [normalSession("session-1", "D:/a/projA", { title: "运行中会话" })],
-      new Map([["session-1", "attention"]]),
+      new Map([["claude|session-1", "attention"]]),
     );
     openMenu(row);
 
@@ -674,7 +703,7 @@ describe("双击分派三分支", () => {
     seedExplorerProject("C:/project");
     const { container } = render(
       React.createElement(
-        ClaudeHistorySections,
+        AgentHistorySections,
         makeSectionsProps({
           expandedCurrent: true,
           rootPath: "C:/project/src",
@@ -695,7 +724,7 @@ describe("双击分派三分支", () => {
     seedExplorerProject("C:/project");
     const { container } = render(
       React.createElement(
-        ClaudeHistorySections,
+        AgentHistorySections,
         makeSectionsProps({
           expandedAll: true,
           sessions: [
@@ -720,7 +749,7 @@ describe("双击分派三分支", () => {
     seedExplorerProject("C:/project");
     const { container } = render(
       React.createElement(
-        ClaudeHistorySections,
+        AgentHistorySections,
         makeSectionsProps({
           expandedAll: true,
           sessions: [makeSession("session-1", { cwd: null, title: "无 cwd 会话" })],
@@ -740,12 +769,12 @@ describe("双击分派三分支", () => {
     seedExplorerProject("C:/project");
     const { container } = render(
       React.createElement(
-        ClaudeHistorySections,
+        AgentHistorySections,
         makeSectionsProps({
           expandedCurrent: true,
           rootPath: "C:/project/src",
           sessions: [normalSession("session-1", "C:/project/src", { title: "运行中会话" })],
-          activeStatuses: new Map([["session-1", "attention"]]),
+          activeStatuses: new Map([["claude|session-1", "attention"]]),
         }),
       ),
     );
@@ -772,12 +801,52 @@ describe("双击分派三分支", () => {
     });
     const { container } = render(
       React.createElement(
-        ClaudeHistorySections,
+        AgentHistorySections,
         makeSectionsProps({
           expandedCurrent: true,
           rootPath: "C:/project/src",
           sessions: [normalSession("session-1", "C:/project/src", { title: "运行中会话" })],
-          activeStatuses: new Map([["session-1", "attention"]]),
+          activeStatuses: new Map([["claude|session-1", "attention"]]),
+        }),
+      ),
+    );
+
+    fireEvent.doubleClick(
+      container.querySelector('[data-e2e="agent-history-row"]')!,
+    );
+    const switchBtn = Array.from(
+      document.querySelectorAll('[data-e2e="agent-history-action-dialog"] button'),
+    ).find((b) => b.textContent === "切换到该会话操作页面") as HTMLElement;
+    fireEvent.click(switchBtn);
+
+    await waitFor(() => {
+      expect(h.mockSwitchToPageAndFocus).toHaveBeenCalledWith(
+        "page1",
+        "terminal-page1-0",
+      );
+    });
+  });
+
+  it("同 sessionId 不同 cliId → 反查命中本 CLI 所在面板（复合键 cliId|sessionId，MC-313）", async () => {
+    seedExplorerProject("C:/project");
+    // 注册表两个面板共享 sessionId "dup-1" 但 cliId 不同——claude 会话行必须命中
+    // claude 面板（terminal-page1-0），不得被 mockcli 面板（terminal-page2-0）抢走
+    h.all.set("terminal-page1-0", {
+      agentSession: { cliId: "claude", sessionId: "dup-1", status: "attention" },
+    });
+    h.all.set("terminal-page2-0", {
+      agentSession: { cliId: "mockcli", sessionId: "dup-1", status: "attention" },
+    });
+    const { container } = render(
+      React.createElement(
+        AgentHistorySections,
+        makeSectionsProps({
+          expandedCurrent: true,
+          rootPath: "C:/project/src",
+          sessions: [
+            normalSession("dup-1", "C:/project/src", { title: "运行中会话" }),
+          ],
+          activeStatuses: new Map([["claude|dup-1", "attention"]]),
         }),
       ),
     );
@@ -803,12 +872,12 @@ describe("双击分派三分支", () => {
     // TerminalRegistry 无 session-1 条目
     const { container } = render(
       React.createElement(
-        ClaudeHistorySections,
+        AgentHistorySections,
         makeSectionsProps({
           expandedCurrent: true,
           rootPath: "C:/project/src",
           sessions: [normalSession("session-1", "C:/project/src", { title: "运行中会话" })],
-          activeStatuses: new Map([["session-1", "attention"]]),
+          activeStatuses: new Map([["claude|session-1", "attention"]]),
         }),
       ),
     );
@@ -831,12 +900,12 @@ describe("双击分派三分支", () => {
     seedExplorerProject("C:/project");
     render(
       React.createElement(
-        ClaudeHistorySections,
+        AgentHistorySections,
         makeSectionsProps({
           expandedCurrent: true,
           rootPath: "C:/project/src",
           sessions: [normalSession("session-1", "C:/project/src", { title: "运行中会话" })],
-          activeStatuses: new Map([["session-1", "attention"]]),
+          activeStatuses: new Map([["claude|session-1", "attention"]]),
         }),
       ),
     );
@@ -868,6 +937,7 @@ describe("AgentStatusView 三区集成", () => {
         panelId: "terminal-page1-0",
         pageId: "page1",
         projectId: "proj-1",
+        cliId: "claude",
         sessionId: "session-1",
         title: "claude",
         status: "attention" as AgentStatus,
@@ -889,7 +959,7 @@ describe("AgentStatusView 三区集成", () => {
 
   beforeEach(() => {
     h.mockUseAgentStatus.mockReturnValue(defaultAgentStatus);
-    h.mockUseClaudeHistory.mockReturnValue(defaultHistory);
+    h.mockUseAgentHistory.mockReturnValue(defaultHistory);
   });
 
   it("默认态：活跃展开（行可见）、两历史区收起（无历史行、不触发 scan）", () => {
@@ -942,7 +1012,7 @@ describe("AgentStatusView 三区集成", () => {
   it("活跃区标题覆盖：历史区 scan 数据中同 sessionId 标题覆盖行标题（问题 6）", () => {
     seedExplorerProject("C:/project");
     // 活跃区行标题为「claude」，历史区 scan 结果同 sessionId 标题为「新标题」→ 显示新标题
-    h.mockUseClaudeHistory.mockReturnValue({
+    h.mockUseAgentHistory.mockReturnValue({
       ...defaultHistory,
       sessions: [
         normalSession("session-1", "C:/project/src", {
@@ -979,7 +1049,7 @@ describe("AgentStatusView 三区集成", () => {
     ).toContain("claude");
 
     // sessions 有同 sessionId 但 title 为 null → 不覆盖
-    h.mockUseClaudeHistory.mockReturnValue({
+    h.mockUseAgentHistory.mockReturnValue({
       ...defaultHistory,
       sessions: [makeSession("session-1", { title: null })],
     });

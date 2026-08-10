@@ -1,14 +1,15 @@
-// useClaudeHistory.ts — claude 历史会话数据 hook（FE-04）
+// useAgentHistory.ts — agent 历史会话数据 hook（FE-04）
 //
 // 返回形状契约（跨 Stage 契约写死，Stage 05 消费）：
 //   { state, sessions, activeStatuses, rootPath, scan, removeLocal }
 //
 // 设计要点：
 // - 状态机 idle | loading | ready | error，初始 idle（未扫描）
-// - scan() 由历史区首次展开与手动刷新按钮触发（规格 4.3.5）
+// - scan() 由历史区首次展开与手动刷新按钮触发（规格 4.3.5）——无参聚合
+//   全部 provider 数据直达 UI，无前端二次过滤（MC-312）
 // - removeLocal 纯本地即时刷新，不触发重扫（删除 IPC 由调用方先执行）
 // - activeStatuses 实时跟随 TerminalRegistry（register/remove/sessionChange），
-//   不重扫（规格 4.5）——Map<sessionId, 四态 status>，历史区行显示与活跃区一致（问题 2）
+//   不重扫（规格 4.5）——Map<cliId|sessionId, 四态 status>，历史区行显示与活跃区一致（问题 2）
 // - rootPath 变化不自动重扫——历史区数据与项目弱相关（checklist FE-04）
 
 import { useState, useEffect, useRef, useCallback } from "react";
@@ -21,9 +22,9 @@ import type { AgentHistorySession } from "../../types/agentHistory";
 import type { AgentStatus } from "../../lib/agentStatus";
 
 /** 加载状态机：idle 初始未扫描 / loading 扫描中 / ready 成功 / error 失败 */
-export type ClaudeHistoryState = "idle" | "loading" | "ready" | "error";
+export type AgentHistoryState = "idle" | "loading" | "ready" | "error";
 
-export function useClaudeHistory() {
+export function useAgentHistory() {
   const projects = useProjects((s) => s.projects);
   const activePageId = useLayout((s) => s.activePageId);
 
@@ -39,7 +40,7 @@ export function useClaudeHistory() {
     }
   }
 
-  const [state, setState] = useState<ClaudeHistoryState>("idle");
+  const [state, setState] = useState<AgentHistoryState>("idle");
   const [sessions, setSessions] = useState<AgentHistorySession[]>([]);
   const [activeStatuses, setActiveStatuses] = useState<
     Map<string, AgentStatus>
@@ -56,7 +57,7 @@ export function useClaudeHistory() {
       setSessions(result);
       setState("ready");
     } catch (err) {
-      console.error("[slTerminal] claude 历史扫描失败:", err);
+      console.error("[slTerminal] 历史扫描失败:", err);
       if (gen !== genRef.current) return;
       setState("error");
     }

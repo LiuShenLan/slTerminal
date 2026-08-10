@@ -12,8 +12,9 @@
 //     运行中行（status 非 null）→ SessionActionDialog 弹窗（「切换到该会话操作页面」/取消，
 //     分支恢复仅保留在右键菜单）——切换 = 反查 TerminalRegistry 定位 panelId → 切页 + 聚焦
 //   右键菜单 → getHistoryContextMenuItems 策略查询（复制/分支恢复/删除）；删除完成回调
-//   （removeLocal 来自 useClaudeHistory）经 props 注入。
-// 状态标记：行 status 四态来自 useClaudeHistory.activeStatuses（与活跃区同源，问题 2 修复）。
+//   （removeLocal 来自 useAgentHistory）经 props 注入。
+// 状态标记：行 status 四态来自 useAgentHistory.activeStatuses（与活跃区同源，问题 2 修复；
+//   复合键 cliId|sessionId 查询——MC-313）。
 //
 // 配色全部 theme/colors.ts token（硬约束 #6），零硬编码色值。
 
@@ -33,6 +34,7 @@ import type { HistoryMenuItem } from "./historyContextMenu";
 import { basename } from "../../lib/path";
 import { groupByCwd, isCurrentProject, matchesSearch } from "./historyModel";
 import { TerminalRegistry } from "../../panels/terminal/TerminalRegistry";
+import { CLAUDE_CLI_ID } from "../cliProfiles/profiles/claude";
 import { parseTerminalPageId } from "../../lib/panelId";
 import { switchToPageAndFocus } from "../../workspace/pageApis";
 import type { AgentHistorySession } from "../../types/agentHistory";
@@ -186,19 +188,22 @@ const ContextMenu: React.FC<{
 // ── 反查 TerminalRegistry：sessionId → panelId（双击弹窗「切换到该会话操作页面」用） ──
 
 /**
- * 反查运行中会话所在终端面板：agentSession.sessionId 精确匹配，
- * 回退 transcriptPath basename 去 .jsonl（旧数据兼容）；未命中 → undefined。
+ * 反查运行中会话所在终端面板：复合键 `cliId|sessionId` 精确匹配（MC-313——
+ * 与 deriveActiveSessionStatuses 同键形态，防跨 CLI sessionId 理论冲突），
+ * 旧数据 agentSession 无 cliId → 按 CLAUDE_CLI_ID 常量回退；未命中 → undefined。
  */
-function findPanelForSession(sessionId: string): string | undefined {
+function findPanelForSession(cliId: string, sessionId: string): string | undefined {
+  const key = `${cliId}|${sessionId}`;
   for (const [panelId, entry] of TerminalRegistry.getAll()) {
     const cs = entry.agentSession;
     if (!cs) continue;
-    if (cs.sessionId === sessionId) return panelId;
-    if (!cs.sessionId && cs.transcriptPath) {
+    let id = cs.sessionId;
+    if (!id && cs.transcriptPath) {
       const base = basename(cs.transcriptPath);
-      const id = base.endsWith(".jsonl") ? base.slice(0, -".jsonl".length) : base;
-      if (id === sessionId) return panelId;
+      id = base.endsWith(".jsonl") ? base.slice(0, -".jsonl".length) : base;
     }
+    if (!id) continue;
+    if (`${cs.cliId ?? CLAUDE_CLI_ID}|${id}` === key) return panelId;
   }
   return undefined;
 }
@@ -210,17 +215,17 @@ export interface HistorySessionListProps {
   mode: "current" | "all";
   /** 全部历史会话（未过滤未分组，本组件按 mode 派生） */
   sessions: AgentHistorySession[];
-  /** 当前项目 rootPath（null 时 current 区由 ClaudeHistorySections 显示「无活跃项目」，本组件不渲染） */
+  /** 当前项目 rootPath（null 时 current 区由 AgentHistorySections 显示「无活跃项目」，本组件不渲染） */
   rootPath: string | null;
   /** 搜索词（matchesSearch 过滤，作用于两区） */
   search: string;
-  /** 运行中会话四态映射（Map<sessionId, status>，与活跃区同源——问题 2 修复） */
+  /** 运行中会话四态映射（Map<cliId|sessionId, status>，与活跃区同源——问题 2 修复，复合键 MC-313） */
   activeStatuses: Map<string, AgentStatus>;
-  /** 选中会话 id（受控，ClaudeHistorySections 持有） */
+  /** 选中会话 id（受控，AgentHistorySections 持有） */
   selectedId: string | null;
   /** 单击选中回调 */
   onSelect(id: string): void;
-  /** 删除成功后的即时局部刷新（useClaudeHistory.removeLocal，不重扫） */
+  /** 删除成功后的即时局部刷新（useAgentHistory.removeLocal，不重扫） */
   removeLocal(id: string): void;
 }
 
@@ -270,7 +275,7 @@ export const HistorySessionList: React.FC<HistorySessionListProps> = ({
   /** 行状态标记派生（四态 status / ✗ / 无 cwd——Row 的 status/orphan/noCwd 三 props） */
   const rowFlags = useCallback(
     (session: AgentHistorySession) => ({
-      status: activeStatuses.get(session.sessionId),
+      status: activeStatuses.get(`${session.cliId}|${session.sessionId}`),
       orphan: session.cwd !== null && !session.cwdExists,
       noCwd: session.cwd === null,
     }),
@@ -280,7 +285,7 @@ export const HistorySessionList: React.FC<HistorySessionListProps> = ({
   /** 切换到该会话所在操作页面并聚焦终端页签（问题 5 修复） */
   const handleSwitchToSession = useCallback(
     async (session: AgentHistorySession) => {
-      const panelId = findPanelForSession(session.sessionId);
+      const panelId = findPanelForSession(session.cliId, session.sessionId);
       if (!panelId) {
         sendToastNotification("未找到运行中的会话", {
           body: "该会话已结束或无法定位其终端页签",
@@ -372,7 +377,7 @@ export const HistorySessionList: React.FC<HistorySessionListProps> = ({
   const renderRows = (list: AgentHistorySession[]) =>
     list.map((s) => (
       <HistorySessionRow
-        key={s.sessionId}
+        key={`${s.cliId}|${s.sessionId}`}
         session={s}
         selected={s.sessionId === selectedId}
         onSelect={onSelect}

@@ -1,11 +1,11 @@
-// claude-history-action-dialog.test.tsx — SessionActionDialog L2 测试（问题 5 修复）
+// agent-history-action-dialog.test.tsx — SessionActionDialog L2 测试（问题 5 修复）
 //
 // 覆盖：标题/消息/动作按钮渲染、动作回调触发、取消（按钮/Esc/遮罩点击）、空 actions 防御。
 // 纯受控展示组件，零 IPC mock。
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, cleanup, fireEvent } from "@testing-library/react";
-import { SessionActionDialog } from "../features/claudeHistory/SessionActionDialog";
+import { SessionActionDialog } from "../features/agentHistory/SessionActionDialog";
 
 afterEach(cleanup);
 

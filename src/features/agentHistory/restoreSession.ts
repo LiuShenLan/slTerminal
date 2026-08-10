@@ -6,8 +6,10 @@
 //   2. 页面保障：项目 pages 为空则 addPage（「页面-N」+ makeEmptyLayout 空布局，照 handleNewPage 模式）
 //   3. 页面切换：switchToPageShared(pages[0].pageId)——setProjectRoot 前置 await 由其内部保证（DBG-5）；
 //      新建页面由 Workspace 的 activePageId effect 触发惰性初始化，Dockview API 在 onReady 后注册
-//   4. 终端恢复：轮询 getPageApi（100ms×50，照 openHooksConfigPanel）→ addPanel(terminal) →
-//      轮询 TerminalRegistry 注册 → pty.write 注入 "claude --resume <id>\r"（fork 时追加 " --fork-session"）
+//   4. 终端恢复：轮询 getPageApi（100ms×50，照 openHooksConfigPanel）→ addPanel(terminal，
+//      title = profile.tabTitle) → 轮询 TerminalRegistry 注册 → pty.write 注入
+//      profile.history.buildRestoreInput(session, { fork })（MC-315 委托——注入内容
+//      含 fork 追加与 \r 结尾，由各 CLI 的 history 能力实现负责）
 //
 // 失败路径：任一步骤异常 → sendToastNotification + console.error，不静默吞错、不中断其他流程（场景 10）。
 // 孤儿行（cwdExists=false）/无 cwd 行的禁用判定由调用方（Stage 05 菜单/双击分派）负责，本函数不判定。
@@ -20,6 +22,7 @@ import { TerminalRegistry } from "../../panels/terminal/TerminalRegistry";
 import { write as ptyWrite } from "../../ipc/pty";
 import { sendToastNotification } from "../../ipc/notification";
 import { normalizePath, basename } from "../../lib/path";
+import { cliProfileRegistry } from "../cliProfiles";
 import type { AgentHistorySession } from "../../types/agentHistory";
 
 /** 轮询上限：100ms × 50 = 5s（照 openHooksConfigPanel / switchToPageAndFocus 模式） */
@@ -42,9 +45,10 @@ async function waitFor<T>(probe: () => T | undefined, label: string): Promise<T>
 let restoring = false;
 
 /**
- * 四步恢复编排：项目入列 → 页面保障 → 页面切换 → 终端恢复注入 claude --resume。
+ * 四步恢复编排：项目入列 → 页面保障 → 页面切换 → 终端恢复注入
+ * profile.history.buildRestoreInput 输出（MC-315）。
  * @param session 历史会话（cwd 为 null 时调用方已前置拦截，此处仍防御性 throw）
- * @param opts.fork 分支恢复（注入 --fork-session）
+ * @param opts.fork 分支恢复（注入内容由 profile.history 实现追加 fork 语义）
  */
 export async function restoreHistorySession(
   session: AgentHistorySession,
@@ -72,6 +76,13 @@ async function doRestore(session: AgentHistorySession, fork: boolean): Promise<v
   // 防御性拦截：cwd 为 null 无法编排（调用方已前置拦截，此处双保险）
   if (session.cwd == null) {
     throw new Error("会话缺少工作目录（cwd），无法恢复");
+  }
+  // 恢复策略（MC-315）：按 session.cliId 查 profile——无 history 能力（含 profile
+  // 未注册）→ 防御性失败，走统一失败 toast 路径（能力未声明 = 该域不可用）
+  const profile = cliProfileRegistry.get(session.cliId);
+  const historyCap = profile?.capabilities?.history;
+  if (!profile || !historyCap) {
+    throw new Error(`CLI "${session.cliId}" 不支持历史会话恢复`);
   }
   const cwd = session.cwd;
 
@@ -123,7 +134,7 @@ async function doRestore(session: AgentHistorySession, fork: boolean): Promise<v
   api.addPanel({
     id: panelId,
     component: "terminal",
-    title: "claude",
+    title: profile.tabTitle,
     params: { panelId, cwd },
     renderer: "always",
   });
@@ -133,9 +144,8 @@ async function doRestore(session: AgentHistorySession, fork: boolean): Promise<v
     `终端面板 ${panelId} 的 PTY 会话`,
   );
 
-  // 注入恢复命令（决策 25）：OSC 133 / hooks 全链路随终端自然生效，零后端改动
-  const command = `claude --resume ${session.sessionId}${
-    fork ? " --fork-session" : ""
-  }\r`;
+  // 注入恢复内容（决策 25，MC-315 委托）：profile.history.buildRestoreInput——
+  // OSC 133 / hooks 全链路随终端自然生效，零后端改动
+  const command = historyCap.buildRestoreInput(session, { fork });
   await ptyWrite(entry.sessionId, panelId, new TextEncoder().encode(command));
 }
