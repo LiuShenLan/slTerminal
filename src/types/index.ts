@@ -7,7 +7,7 @@ export type {
   AgentEventPayload,
   AgentHookInjectionStatus,
 } from "./agent";
-export type { HistorySession, TitleSource } from "./claudeHistory";
+export type { AgentHistorySession, TitleSource } from "./agentHistory";
 export type {
   HooksLayer,
   HooksConfigJson,

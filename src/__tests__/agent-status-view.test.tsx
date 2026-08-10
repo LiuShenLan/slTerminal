@@ -80,7 +80,7 @@ vi.mock("../lib/agentStatus", () => ({
 // ── 历史区数据源 mock（NAH-06：useClaudeHistory 保持真实——标题覆盖集成测试
 //    须走真实 scan → sessions → titleBySessionId 派生链，仅 mock IPC 层 scanHistory；
 //    历史区列表交互由 claude-history-view.test.tsx 覆盖）──
-vi.mock("../ipc/claudeHistory", () => ({
+vi.mock("../ipc/agentHistory", () => ({
   scanHistory: mockScanHistory,
   deleteHistorySession: vi.fn(),
 }));
@@ -104,7 +104,7 @@ import { AgentStatusRow } from "../features/agentStatus/AgentStatusRow";
 import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
 import type { AgentSessionRow } from "../features/agentStatus/useAgentStatus";
-import type { HistorySession } from "../types/claudeHistory";
+import type { AgentHistorySession } from "../types/agentHistory";
 import { CLAUDE_CLI_ID } from "../features/cliProfiles/profiles/claude";
 import { AGENT_STATUS_USAGE_COLORS } from "../theme";
 // ── 辅助函数 ──
@@ -845,7 +845,7 @@ describe("活跃区标题覆盖（问题 6：真实 useClaudeHistory 集成）",
   function makeHistorySession(
     sessionId: string,
     title: string | null,
-  ): HistorySession {
+  ): AgentHistorySession {
     return {
       sessionId,
       cwd: "C:/test",
@@ -854,6 +854,8 @@ describe("活跃区标题覆盖（问题 6：真实 useClaudeHistory 集成）",
       firstPrompt: null,
       mtimeMs: 1000,
       cwdExists: true,
+      // Stage 04 新增必填字段（provider 打标；测试数据恒为 claude 会话）
+      cliId: CLAUDE_CLI_ID,
     };
   }
 

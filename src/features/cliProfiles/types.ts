@@ -6,7 +6,7 @@
 
 import type { AgentStatus } from "../../lib/agentStatus";
 import type { AgentEventPayload } from "../../types/agent";
-import type { HistorySession } from "../../types/claudeHistory";
+import type { AgentHistorySession } from "../../types/agentHistory";
 
 /** hooks 能力域（协议知识实现留在 profiles/<cli>/，本文件仅签名） */
 export interface HooksCapability {
@@ -29,10 +29,10 @@ export interface HistoryCapability {
   /** 是否支持分支恢复（claude = true） */
   supportsFork: boolean;
   /** 恢复命令（右键菜单复制，claude = `claude --resume <id>`） */
-  buildResumeCommand(session: HistorySession): string;
+  buildResumeCommand(session: AgentHistorySession): string;
   /** 恢复注入内容（恢复编排第 4 步，claude = resume 命令 + fork 追加） */
   buildRestoreInput(
-    session: HistorySession,
+    session: AgentHistorySession,
     opts: { fork: boolean },
   ): string;
 }

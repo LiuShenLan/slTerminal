@@ -20,7 +20,7 @@ import { TerminalRegistry } from "../../panels/terminal/TerminalRegistry";
 import { write as ptyWrite } from "../../ipc/pty";
 import { sendToastNotification } from "../../ipc/notification";
 import { normalizePath, basename } from "../../lib/path";
-import type { HistorySession } from "../../types/claudeHistory";
+import type { AgentHistorySession } from "../../types/agentHistory";
 
 /** 轮询上限：100ms × 50 = 5s（照 openHooksConfigPanel / switchToPageAndFocus 模式） */
 const POLL_COUNT = 50;
@@ -47,7 +47,7 @@ let restoring = false;
  * @param opts.fork 分支恢复（注入 --fork-session）
  */
 export async function restoreHistorySession(
-  session: HistorySession,
+  session: AgentHistorySession,
   opts?: { fork?: boolean },
 ): Promise<void> {
   // 防重入：恢复编排进行中，并发调用直接返回（如快速双击同一历史行）
@@ -68,7 +68,7 @@ export async function restoreHistorySession(
   }
 }
 
-async function doRestore(session: HistorySession, fork: boolean): Promise<void> {
+async function doRestore(session: AgentHistorySession, fork: boolean): Promise<void> {
   // 防御性拦截：cwd 为 null 无法编排（调用方已前置拦截，此处双保险）
   if (session.cwd == null) {
     throw new Error("会话缺少工作目录（cwd），无法恢复");

@@ -10,7 +10,7 @@
 // 契约要点见 src/features/claudeHistory/CLAUDE.md。
 
 import React from "react";
-import type { HistorySession } from "../../types/claudeHistory";
+import type { AgentHistorySession } from "../../types/agentHistory";
 import type { AgentStatus } from "../../lib/agentStatus";
 import { STATUS_EMOJI } from "../../lib/agentStatus";
 import { cliProfileRegistry } from "../cliProfiles";
@@ -20,7 +20,7 @@ import { EXPLORER_SELECTION_BG, SIDEBAR_COLORS, DIM_FG } from "../../theme";
 
 /** 行组件契约（写死，见 src/features/claudeHistory/CLAUDE.md 测试模式——agent B 照此消费） */
 export interface HistorySessionRowProps {
-  session: HistorySession;
+  session: AgentHistorySession;
   /** 运行中会话四态（⚡🟡✅❌；null/undefined → 无标记） */
   status?: AgentStatus | null;
   /** 孤儿会话（cwd≠null 且 cwd 目录已删除，✗ 标记） */
@@ -32,9 +32,9 @@ export interface HistorySessionRowProps {
   /** 单击选中 */
   onSelect(id: string): void;
   /** 双击恢复分派 */
-  onDoubleClick(session: HistorySession): void;
+  onDoubleClick(session: AgentHistorySession): void;
   /** 右键菜单（坐标 clientX/clientY） */
-  onContextMenu(session: HistorySession, pos: { x: number; y: number }): void;
+  onContextMenu(session: AgentHistorySession, pos: { x: number; y: number }): void;
 }
 
 export const HistorySessionRow: React.FC<HistorySessionRowProps> = ({

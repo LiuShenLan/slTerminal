@@ -1,25 +1,28 @@
-//! 历史会话写操作 —— SEC-01 sessionId 校验 + 删除命令（BE-07）
+//! claude 历史会话写操作 —— SEC-05 sessionId 校验 + 删除（BE-07，MC-301/304 下沉）
 //!
 //! 职责：
-//! - `validate_session_id()`：SEC-01 严格校验（仅 UUID 形态，非法 → Validation）
-//! - `claude_history_delete`：删除 `<id>.jsonl` + 同名 `<id>/` 附属目录（BE-07）
+//! - `validate_session_id()`：SEC-05 严格校验（仅 UUID 形态，非法 → Validation）
+//! - `delete_session()`：删除 `<id>.jsonl` + 同名 `<id>/` 附属目录（BE-07）
 //!
-//! 安全模型（SEC-01）：定位只接受 sessionId（不信托前端任何路径参数），
+//! 安全模型（SEC-05）：定位只接受 sessionId（不信托前端任何路径参数），
 //! 文件路径全部由「扫描根 + 一级子目录名 + 校验过的 sessionId」拼接派生。
 //! 命令写用户 home 目录文件、绕过 project_root 沙箱（照 hooks/config.rs user 层先例），
 //! 入参即攻击面——sessionId 严格校验是唯一防线。
+//! 命令 `agent_history_delete` 在聚合层 mod.rs 经 provider `validate_session_id`
+//! 前置后分发到本模块（trait 契约强制，MC-304）。
 
 use std::path::{Path, PathBuf};
 
-use crate::claude_history::{is_uuid_filename, scan::resolve_projects_root};
+use crate::agent_history::claude::scan::resolve_projects_root;
+use crate::agent_history::is_uuid_filename;
 
-/// SEC-01 sessionId 严格校验
+/// SEC-05 sessionId 严格校验
 ///
 /// 仅接受 UUID 形态（8-4-4-4-12 十六进制带连字符，大小写不敏感）。
 /// 该形态天然拒绝含 `..`、路径分隔符（`/`、`\`）、空串、超长等一切非 UUID 输入
-/// （复用 mod.rs `is_uuid_filename`：36 长度 + 连字符位置 + ascii hex 全检）。
-/// 非法 → `AppError::Validation`。
-fn validate_session_id(session_id: &str) -> Result<(), crate::AppError> {
+/// （复用聚合层 `is_uuid_filename`：36 长度 + 连字符位置 + ascii hex 全检）。
+/// 非法 → `AppError::Validation`。provider impl 的 `validate_session_id` 委托本函数。
+pub(crate) fn validate_session_id(session_id: &str) -> Result<(), crate::AppError> {
     if !is_uuid_filename(session_id) {
         return Err(crate::AppError::Validation(format!(
             "非法 sessionId: {session_id}"
@@ -33,7 +36,7 @@ fn session_not_found(session_id: &str) -> crate::AppError {
     crate::AppError::Validation(format!("会话不存在: {session_id}"))
 }
 
-/// 在扫描根一级子目录中定位 `<session_id>.jsonl`（SEC-01 定位，不递归子目录）
+/// 在扫描根一级子目录中定位 `<session_id>.jsonl`（SEC-05 定位，不递归子目录）
 ///
 /// 遍历扫描根的一级子目录（cwd 编码目录），精确匹配文件名。
 /// 扫描根不存在 / 未命中 → None（调用方按「会话不存在」处理）。
@@ -55,19 +58,13 @@ fn locate_session_jsonl(root: &Path, session_id: &str) -> Option<PathBuf> {
     None
 }
 
-/// claude_history_delete 命令（BE-07）
+/// 删除会话纯逻辑（阻塞 I/O，供 provider impl 的 `delete` 委托 + 单元测试直测）
 ///
-/// SEC-01 校验 → spawn_blocking 内定位 → 删除 `<id>.jsonl` + 同名 `<id>/` 目录
-/// （存在则 remove_dir_all，含 subagents 等附属数据）；jsonl 不存在 → Err。
-#[tauri::command]
-pub async fn claude_history_delete(session_id: String) -> Result<(), crate::AppError> {
-    tokio::task::spawn_blocking(move || delete_session(&session_id))
-        .await
-        .map_err(crate::AppError::from)?
-}
-
-/// 删除会话纯逻辑（阻塞 I/O，供命令 spawn_blocking 包装 + 单元测试直测）
-fn delete_session(session_id: &str) -> Result<(), crate::AppError> {
+/// SEC-05 校验 → 定位 → 删除 `<id>.jsonl` + 同名 `<id>/` 目录（存在则 remove_dir_all，
+/// 含 subagents 等附属数据）；jsonl 不存在 → Err。
+/// 命令层已经 provider `validate_session_id` 前置，本函数内部自带校验兜底——
+/// 零行为改动（SEC-05 保留）。
+pub(crate) fn delete_session(session_id: &str) -> Result<(), crate::AppError> {
     validate_session_id(session_id)?;
     let Some(root) = resolve_projects_root() else {
         return Err(session_not_found(session_id));
@@ -124,7 +121,7 @@ mod tests {
 
     const UUID: &str = "123e4567-e89b-12d3-a456-426614174000";
 
-    // ── SEC-01：sessionId 校验 ──
+    // ── SEC-05：sessionId 校验 ──
 
     #[test]
     fn validate_session_id_accepts_uuid_forms() {
@@ -135,7 +132,7 @@ mod tests {
 
     #[test]
     fn validate_session_id_rejects_non_uuid_inputs() {
-        // SEC-01 五类非法输入全拒：含 `..` / 含 `/` / 含 `\` / 空串 / 非 UUID 形态
+        // SEC-05 五类非法输入全拒：含 `..` / 含 `/` / 含 `\` / 空串 / 非 UUID 形态
         for bad in [
             "..",
             "abc/def",
@@ -218,42 +215,6 @@ mod tests {
         assert!(msg.contains("非法"), "消息应说明非法，实际: {msg}");
         // 越界文件未被触碰
         assert!(!proj.join("..").join("evil.jsonl").exists());
-    }
-
-    // ── 命令包装层（HFN-05/D6 最小用例：直接 await #[tauri::command] fn） ──
-
-    /// 手动 current_thread runtime 驱动 async 命令包装（tokio 未启用 #[tokio::test]，
-    /// 照 hooks/usage.rs block_on 先例）
-    fn block_on<F: std::future::Future>(future: F) -> F::Output {
-        tokio::runtime::Builder::new_current_thread()
-            .build()
-            .unwrap()
-            .block_on(future)
-    }
-
-    #[test]
-    fn command_delete_wraps_spawn_blocking_and_passes_params() {
-        // 包装层最小用例（HFN-05/D6）：sessionId 透传 spawn_blocking → 文件真实删除
-        let (_dir, root, proj) = make_scan_root();
-        std::fs::write(proj.join(format!("{UUID}.jsonl")), "{}").unwrap();
-
-        set_scan_root(&root);
-        block_on(claude_history_delete(UUID.to_string())).unwrap();
-        unset_scan_root();
-
-        assert!(!proj.join(format!("{UUID}.jsonl")).exists());
-    }
-
-    #[test]
-    fn command_delete_invalid_id_returns_validation() {
-        // 包装层 + 错误映射（HFN-05/D6）：非法 id 经 spawn_blocking 校验失败 → Err(Validation)
-        // 透传；env 指向 tempdir——即使校验回归（越界）也只触碰隔离目录
-        let (_dir, root, _proj) = make_scan_root();
-        set_scan_root(&root);
-        let err = block_on(claude_history_delete("../evil".to_string())).unwrap_err();
-        unset_scan_root();
-        let msg = assert_validation(err);
-        assert!(msg.contains("非法"), "消息应说明非法，实际: {msg}");
     }
 
     // ── 越界防护（BE-10：扫描根外无写入） ──

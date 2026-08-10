@@ -8,7 +8,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { restoreHistorySession } from "../features/claudeHistory/restoreSession";
-import type { HistorySession } from "../types/claudeHistory";
+import type { AgentHistorySession } from "../types/agentHistory";
 import type { Project, OperationPage } from "../stores/projects";
 
 // ── vi.hoisted 共享 mock 状态 ──────────────────────────────
@@ -73,7 +73,9 @@ vi.mock("../ipc/notification", () => ({
 
 const SESSION_ID = "1a2b3c4d-1111-2222-3333-444455556666";
 
-function makeSession(overrides: Partial<HistorySession> = {}): HistorySession {
+function makeSession(
+  overrides: Partial<AgentHistorySession> = {},
+): AgentHistorySession {
   return {
     sessionId: SESSION_ID,
     cwd: "C:\\Users\\test\\proj",
@@ -82,6 +84,7 @@ function makeSession(overrides: Partial<HistorySession> = {}): HistorySession {
     firstPrompt: "帮我写代码",
     mtimeMs: 123456,
     cwdExists: true,
+    cliId: "claude",
     ...overrides,
   };
 }

@@ -12,7 +12,7 @@ export * as shell from "./shell";
 export * as window from "./window";
 export * as agentHooks from "./agentHooks";
 export * as hooksConfig from "./hooksConfig";
-export * as claudeHistory from "./claudeHistory";
+export * as agentHistory from "./agentHistory";
 export * as notification from "./notification";
 
 /** 验证 IPC 链路和测试基建 — 占位命令 */

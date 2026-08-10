@@ -18,7 +18,7 @@ import {
 
 // ── Claude 历史会话视图（TE-01..03） ──
 //
-// 数据隔离（SEC-02 安全红线）：后端 claude_history 扫描根由 run-wdio.cjs 指向
+// 数据隔离（SEC-02 安全红线）：后端 agent_history 扫描根由 run-wdio.cjs 指向
 // e2e-tests/.tmp-claude-projects/ 副本（每次运行从 fixtures/claude-projects/ 重建）。
 // 本 describe 全部读写在副本内进行，删除用例只动副本文件，不触碰用户真实
 // ~/.claude/projects/。恢复编排用例的项目根 = run-wdio.cjs 创建的 E2E 临时项目目录

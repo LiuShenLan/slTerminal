@@ -1,18 +1,22 @@
-//! 历史会话扫描 —— 扫描根单点 + `claude_history_scan` 命令（BE-02/BE-05/BE-06）
+//! claude 历史会话扫描 —— 扫描根单点 + 会话收集（BE-02/BE-05/BE-06，MC-301/305 下沉）
 //!
 //! 职责：
-//! - `resolve_projects_root()`：扫描根单点（SEC-02 约束面 / BE-06 实现面）
-//! - `claude_history_scan` 命令：遍历扫描根一级子目录收集会话元数据
+//! - `resolve_projects_root()`：扫描根单点（SEC-02 约束面 / BE-06 实现面，MC-305）
+//! - `scan_sessions()`：遍历扫描根一级子目录收集会话元数据（provider impl 调用，
+//!   命令 `agent_history_scan` 在聚合层 mod.rs 按 cliId 分发）
 //!
 //! 排除规则（规格 3.1）：`agent-*.jsonl` 平铺形态、文件名主干非 UUID 者；
 //! 不递归子目录（`<id>/subagents/` 天然不命中）。
 //! 容错：单文件解析失败 → 降级条目；扫描根不存在 → 空 Vec（新机无 claude 数据属正常）。
+//! env 覆盖 `SLTERM_CLAUDE_PROJECTS_DIR` 留 provider 内部（MC-305：聚合层不假设
+//! env 命名——未来 `SLTERM_<CLI>_PROJECTS_DIR` 同款模式自管）。
 
 use std::path::{Path, PathBuf};
 
-use crate::claude_history::{is_uuid_filename, jsonl, HistorySession};
+use crate::agent_history::claude::jsonl;
+use crate::agent_history::{is_uuid_filename, AgentHistorySession};
 
-/// 扫描根解析单点（SEC-02/BE-06）
+/// 扫描根解析单点（SEC-02/BE-06，MC-305：env 覆盖留 provider 内部）
 ///
 /// 解析顺序：`SLTERM_CLAUDE_PROJECTS_DIR` env 非空 → 用之；
 /// 否则 `dirs::home_dir()/.claude/projects`。
@@ -25,19 +29,11 @@ pub fn resolve_projects_root() -> Option<PathBuf> {
     dirs::home_dir().map(|home| home.join(".claude").join("projects"))
 }
 
-/// claude_history_scan 命令：扫描全部历史会话元数据（BE-02）
-///
-/// 阻塞 I/O 全部在 spawn_blocking 内执行（硬约束 #3）。
-/// 扫描根不存在 → 空 Vec（非 Err）；单文件解析失败 → 降级条目，不阻塞整体。
-#[tauri::command]
-pub async fn claude_history_scan() -> Result<Vec<HistorySession>, crate::AppError> {
-    tokio::task::spawn_blocking(scan_sessions)
-        .await
-        .map_err(crate::AppError::from)
-}
-
 /// 遍历扫描根一级子目录，收集其中 UUID 形态的顶层 *.jsonl 会话（纯 I/O 逻辑）
-fn scan_sessions() -> Vec<HistorySession> {
+///
+/// 无 Err 通道：任何失败（扫描根缺失/目录不可读/单文件解析失败）均降级为空或
+/// 降级条目——聚合层「单 provider 失败不阻塞其他」由此保证（MC-303）。
+pub(crate) fn scan_sessions() -> Vec<AgentHistorySession> {
     let Some(root) = resolve_projects_root() else {
         return Vec::new(); // 无法解析扫描根（无 home 目录）
     };
@@ -79,11 +75,11 @@ fn is_session_jsonl(path: &Path) -> bool {
     !stem.starts_with("agent-") && is_uuid_filename(stem)
 }
 
-/// 解析单个会话文件 → HistorySession
+/// 解析单个会话文件 → AgentHistorySession（cli_id 打标 "claude"，MC-302）
 ///
 /// 任何解析失败不返回 Err——降级为仅 sessionId + mtime_ms 的条目，
 /// 其余字段 None / titleSource=none / cwdExists=false（BE-02 降级契约）。
-fn parse_session_file(path: &Path) -> HistorySession {
+fn parse_session_file(path: &Path) -> AgentHistorySession {
     let session_id = path
         .file_stem()
         .and_then(|s| s.to_str())
@@ -97,14 +93,17 @@ fn parse_session_file(path: &Path) -> HistorySession {
     // cwd 一律从 JSONL 内容解析（目录名只是 cwd 的有损编码，禁止反解码）
     let cwd = head.cwd;
     let cwd_exists = cwd.as_ref().map(|c| Path::new(c).is_dir()).unwrap_or(false);
-    HistorySession {
+    AgentHistorySession {
         session_id,
         cwd,
         title,
-        title_source,
+        // 内部枚举 → DTO 开放字符串（claude 值集；UI 不消费具体值，MC-302）
+        title_source: title_source.as_str().to_string(),
         first_prompt: head.first_prompt,
         mtime_ms,
         cwd_exists,
+        // provider 打标（provider 内部写字面量合法，MC-302）
+        cli_id: "claude".to_string(),
     }
 }
 
@@ -123,7 +122,7 @@ fn file_mtime_ms(path: &Path) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::claude_history::TitleSource;
+    use crate::agent_history::claude::{ScanRootGuard, TitleSource};
     use std::io::Write;
 
     // ── 测试辅助 ──
@@ -159,57 +158,7 @@ mod tests {
         std::fs::write(proj.join(format!("{uuid}.jsonl")), content).unwrap();
     }
 
-    /// `SLTERM_CLAUDE_PROJECTS_DIR` 环境变量守卫（HFN-06）
-    ///
-    /// set/unset 后无论测试成功或 panic，Drop 时均恢复原 env 值（原无 → 移除），
-    /// 不残留污染后续用例。替代手动 set/unset 成对调用（依赖 --test-threads=1 门禁：
-    /// env 全局可变，并行测试会互相污染）。
-    struct ScanRootGuard(Option<std::ffi::OsString>);
-
-    impl ScanRootGuard {
-        /// 设置 env 为给定值（路径 / 空串均可），Drop 时恢复原值
-        fn set(value: impl AsRef<std::ffi::OsStr>) -> Self {
-            let prev = std::env::var_os("SLTERM_CLAUDE_PROJECTS_DIR");
-            std::env::set_var("SLTERM_CLAUDE_PROJECTS_DIR", value);
-            ScanRootGuard(prev)
-        }
-
-        /// 移除 env（等价未设），Drop 时恢复原值
-        fn unset() -> Self {
-            let prev = std::env::var_os("SLTERM_CLAUDE_PROJECTS_DIR");
-            std::env::remove_var("SLTERM_CLAUDE_PROJECTS_DIR");
-            ScanRootGuard(prev)
-        }
-    }
-
-    impl Drop for ScanRootGuard {
-        fn drop(&mut self) {
-            match &self.0 {
-                Some(v) => std::env::set_var("SLTERM_CLAUDE_PROJECTS_DIR", v),
-                None => std::env::remove_var("SLTERM_CLAUDE_PROJECTS_DIR"),
-            }
-        }
-    }
-
-    #[test]
-    fn scan_root_guard_restores_previous_env_on_drop() {
-        // 守卫 Drop 恢复原 env（HFN-06：set 后 panic 不残留）；外层 guard 保护本测试自身
-        let _outer = ScanRootGuard::set("C:\\guard-prev");
-        {
-            let _g = ScanRootGuard::set("C:\\guard-new");
-            assert_eq!(
-                std::env::var_os("SLTERM_CLAUDE_PROJECTS_DIR"),
-                Some(std::ffi::OsString::from("C:\\guard-new"))
-            );
-        }
-        assert_eq!(
-            std::env::var_os("SLTERM_CLAUDE_PROJECTS_DIR"),
-            Some(std::ffi::OsString::from("C:\\guard-prev")),
-            "Drop 后应恢复原 env 值"
-        );
-    }
-
-    // ── resolve_projects_root（SEC-02/BE-06） ──
+    // ── resolve_projects_root（SEC-02/BE-06，MC-305：env 覆盖留 provider 内部） ──
 
     #[test]
     fn resolve_root_env_override() {
@@ -323,7 +272,7 @@ mod tests {
         assert_eq!(s.session_id, uuid);
         assert!(s.cwd.is_none());
         assert!(s.title.is_none());
-        assert_eq!(s.title_source, TitleSource::None);
+        assert_eq!(s.title_source, TitleSource::None.as_str());
         assert!(s.first_prompt.is_none());
         assert!(s.mtime_ms > 0, "降级条目应保留文件 mtime");
         assert!(!s.cwd_exists);
@@ -360,7 +309,7 @@ mod tests {
         assert_eq!(s.session_id, uuid);
         assert!(s.title.is_none());
         assert!(s.cwd.is_none());
-        assert_eq!(s.title_source, TitleSource::None);
+        assert_eq!(s.title_source, TitleSource::None.as_str());
         assert!(!s.cwd_exists);
     }
 
@@ -409,11 +358,12 @@ mod tests {
         assert_eq!(s.session_id, uuid);
         // 标题回退链：custom-title/ai-title 均无 → summary 赢
         assert_eq!(s.title.as_deref(), Some("修复登录 bug"));
-        assert_eq!(s.title_source, TitleSource::Summary);
+        assert_eq!(s.title_source, TitleSource::Summary.as_str());
         assert_eq!(s.first_prompt.as_deref(), Some("帮我修 bug"));
         assert!(s.mtime_ms > 0);
         assert_eq!(s.cwd.as_deref(), Some(existing.to_str().unwrap()));
         assert!(s.cwd_exists, "cwd 指向存在的目录 → cwd_exists=true");
+        assert_eq!(s.cli_id, "claude", "provider 打标 cliId");
     }
 
     #[test]
@@ -458,41 +408,6 @@ mod tests {
 
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].session_id, uuid);
-    }
-
-    // ── 命令包装层（HFN-05/D6 最小用例：直接 await #[tauri::command] fn） ──
-
-    /// 手动 current_thread runtime 驱动 async 命令包装（tokio 未启用 #[tokio::test]，
-    /// 照 hooks/usage.rs block_on 先例）
-    fn block_on<F: std::future::Future>(future: F) -> F::Output {
-        tokio::runtime::Builder::new_current_thread()
-            .build()
-            .unwrap()
-            .block_on(future)
-    }
-
-    #[test]
-    fn command_scan_wraps_spawn_blocking_and_returns_sessions() {
-        // 包装层最小用例（HFN-05/D6）：spawn_blocking + await + map_err 全链路，内容透传
-        let (_dir, root, proj) = make_scan_root();
-        let uuid = "123e4567-e89b-12d3-a456-426614174000";
-        write_valid_session(&proj, uuid);
-
-        let _guard = ScanRootGuard::set(&root);
-        let sessions = block_on(claude_history_scan()).unwrap();
-
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].session_id, uuid);
-    }
-
-    #[test]
-    fn command_scan_degraded_root_returns_empty_ok() {
-        // 包装层 + IO 降级（HFN-05）：扫描根不存在 → 命令仍 Ok(空)，不把降级变 Err
-        let dir = tempfile::tempdir().unwrap();
-        let missing = dir.path().join("不存在");
-        let _guard = ScanRootGuard::set(&missing);
-        let sessions = block_on(claude_history_scan()).unwrap();
-        assert!(sessions.is_empty());
     }
 
     // ── file_mtime_ms ──
@@ -545,6 +460,6 @@ mod tests {
 
         let s = &sessions[0];
         assert_eq!(s.title.as_deref(), Some("重命名后的标题"));
-        assert_eq!(s.title_source, TitleSource::CustomTitle);
+        assert_eq!(s.title_source, TitleSource::CustomTitle.as_str());
     }
 }

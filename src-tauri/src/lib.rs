@@ -1,4 +1,4 @@
-pub mod claude_history;
+pub mod agent_history;
 mod error;
 mod fs;
 pub mod git;
@@ -103,8 +103,8 @@ pub fn run() {
             hooks::agent_context_usage,
             hooks::agent_hooks_config_read,
             hooks::agent_hooks_config_write,
-            claude_history::scan::claude_history_scan,
-            claude_history::ops::claude_history_delete,
+            agent_history::agent_history_scan,
+            agent_history::agent_history_delete,
         ])
         .run(tauri::generate_context!())
     {

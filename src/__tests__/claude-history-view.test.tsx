@@ -30,7 +30,7 @@ import {
   resetProjectStores,
   seedExplorerProject,
 } from "./helpers/workspace-setup";
-import type { HistorySession } from "../types/claudeHistory";
+import type { AgentHistorySession } from "../types/agentHistory";
 import type { AgentStatus } from "../lib/agentStatus";
 
 // ── vi.hoisted：mock 状态在模块级 vi.mock 执行前就绪 ──
@@ -62,7 +62,7 @@ const h = vi.hoisted(() => {
 
 // ── 模块级 mock ──
 
-vi.mock("../ipc/claudeHistory", () => ({
+vi.mock("../ipc/agentHistory", () => ({
   deleteHistorySession: h.mockDeleteHistorySession,
 }));
 
@@ -103,11 +103,11 @@ vi.mock("../workspace/pageApis", () => ({
 
 // ── 辅助函数 ──
 
-/** 最小 HistorySession 工厂 */
+/** 最小 AgentHistorySession 工厂 */
 function makeSession(
   id: string,
-  overrides: Partial<HistorySession> = {},
-): HistorySession {
+  overrides: Partial<AgentHistorySession> = {},
+): AgentHistorySession {
   return {
     sessionId: id,
     cwd: null,
@@ -116,12 +116,13 @@ function makeSession(
     firstPrompt: null,
     mtimeMs: 0,
     cwdExists: false,
+    cliId: "claude",
     ...overrides,
   };
 }
 
 /** 常规（可恢复）会话：cwd 存在且目录存在 */
-function normalSession(id: string, cwd: string, overrides: Partial<HistorySession> = {}) {
+function normalSession(id: string, cwd: string, overrides: Partial<AgentHistorySession> = {}) {
   return makeSession(id, { cwd, cwdExists: true, ...overrides });
 }
 
@@ -494,7 +495,7 @@ describe("空态与提示文案", () => {
 describe("右键菜单可用性矩阵", () => {
   /** 渲染全部区（组展开）并返回「第一行」元素 */
   function renderAllAndGetFirstRow(
-    sessions: HistorySession[],
+    sessions: AgentHistorySession[],
     activeStatuses: Map<string, AgentStatus> = new Map(),
   ) {
     seedExplorerProject("C:/project");
@@ -635,7 +636,10 @@ describe("右键菜单可用性矩阵", () => {
         '确定删除会话"待删会话"？此操作不可撤销。',
         expect.any(Object),
       );
-      expect(h.mockDeleteHistorySession).toHaveBeenCalledWith("session-1");
+      expect(h.mockDeleteHistorySession).toHaveBeenCalledWith(
+        "claude",
+        "session-1",
+      );
     });
     await waitFor(() => {
       expect(h.mockRemoveLocal).toHaveBeenCalledWith("session-1");
@@ -876,7 +880,7 @@ describe("AgentStatusView 三区集成", () => {
 
   const defaultHistory = {
     state: "idle" as const,
-    sessions: [] as HistorySession[],
+    sessions: [] as AgentHistorySession[],
     activeStatuses: new Map<string, AgentStatus>(),
     rootPath: null,
     scan: h.mockScan,

@@ -12,12 +12,12 @@
 // - rootPath 变化不自动重扫——历史区数据与项目弱相关（checklist FE-04）
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { scanHistory } from "../../ipc/claudeHistory";
+import { scanHistory } from "../../ipc/agentHistory";
 import { useProjects } from "../../stores/projects";
 import { useLayout } from "../../stores/layout";
 import { TerminalRegistry } from "../../panels/terminal/TerminalRegistry";
 import { deriveActiveSessionStatuses } from "./historyModel";
-import type { HistorySession } from "../../types/claudeHistory";
+import type { AgentHistorySession } from "../../types/agentHistory";
 import type { AgentStatus } from "../../lib/agentStatus";
 
 /** 加载状态机：idle 初始未扫描 / loading 扫描中 / ready 成功 / error 失败 */
@@ -40,7 +40,7 @@ export function useClaudeHistory() {
   }
 
   const [state, setState] = useState<ClaudeHistoryState>("idle");
-  const [sessions, setSessions] = useState<HistorySession[]>([]);
+  const [sessions, setSessions] = useState<AgentHistorySession[]>([]);
   const [activeStatuses, setActiveStatuses] = useState<
     Map<string, AgentStatus>
   >(() => deriveActiveSessionStatuses());

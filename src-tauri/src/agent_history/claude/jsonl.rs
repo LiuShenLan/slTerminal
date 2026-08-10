@@ -10,7 +10,7 @@
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
-use crate::claude_history::TitleSource;
+use super::TitleSource;
 
 /// 头部顺序扫描上限（512KB，BE-03）
 pub const HEAD_SCAN_LIMIT_BYTES: u64 = 512 * 1024;

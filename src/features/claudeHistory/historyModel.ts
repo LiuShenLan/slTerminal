@@ -7,7 +7,7 @@
 import { normalizePath, basename } from "../../lib/path";
 import { TerminalRegistry } from "../../panels/terminal/TerminalRegistry";
 import type { AgentStatus } from "../../lib/agentStatus";
-import type { HistorySession } from "../../types/claudeHistory";
+import type { AgentHistorySession } from "../../types/agentHistory";
 
 /** 无 cwd 会话的分组键（null；展示文案「(未知目录)」由 UI 层负责） */
 export const UNKNOWN_CWD_KEY: null = null;
@@ -34,7 +34,7 @@ export interface CwdGroup {
   /** 组展示用 cwd（取组内 mtime 最大会话的原始 cwd）；null = 未知目录组 */
   cwd: string | null;
   /** 组内会话，mtimeMs 降序 */
-  sessions: HistorySession[];
+  sessions: AgentHistorySession[];
 }
 
 /**
@@ -44,8 +44,8 @@ export interface CwdGroup {
  * - 组内 mtimeMs 降序；组间按组内最大 mtimeMs 降序（最近活动的组排前）
  * - 组展示 cwd 取组内最大 mtime 会话的原始 cwd（保留用户原始写法）
  */
-export function groupByCwd(sessions: HistorySession[]): CwdGroup[] {
-  const groups = new Map<string | null, HistorySession[]>();
+export function groupByCwd(sessions: AgentHistorySession[]): CwdGroup[] {
+  const groups = new Map<string | null, AgentHistorySession[]>();
   for (const s of sessions) {
     const key = s.cwd
       ? normalizePath(s.cwd).toLowerCase()
@@ -73,7 +73,7 @@ export function groupByCwd(sessions: HistorySession[]): CwdGroup[] {
  * 搜索匹配（规格 4.3.4）：标题 + firstPrompt，大小写不敏感 includes；
  * query 空白 → 恒 true（不参与过滤）。
  */
-export function matchesSearch(session: HistorySession, query: string): boolean {
+export function matchesSearch(session: AgentHistorySession, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return true;
   return (

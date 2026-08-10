@@ -1,11 +1,11 @@
-// ipc-claude-history-contract.test.ts — claude 历史会话 IPC wrapper 合约测试（FE-03，IHE-06 工厂化）
+// ipc-agent-history-contract.test.ts — agent 历史会话 IPC wrapper 合约测试（FE-03，IHE-06 工厂化）
 //
 // 照 ipc-hooks-config-contract.test.ts 模式，经共享工厂 describeIpcContract（helpers/ipc-contract.ts）
 // 声明式驱动两命令 × 四维（命令名 / 参数结构 / 正常返回 / 异常传播）= 8 条用例
 // （重命名命令已随功能整体移除——问题 7 修复）：
-// 1. 命令名 snake_case 逐字（claude_history_scan 等，非驼峰）
-// 2. 参数结构键集合精确匹配（{ sessionId }，防字段漂移）
-// 3. 返回透传（scan 返回 HistorySession[] 全形态样例）
+// 1. 命令名 snake_case 逐字（agent_history_scan 等，非驼峰）
+// 2. 参数结构键集合精确匹配（scan 无参 / delete { cliId, sessionId }，防字段漂移）
+// 3. 返回透传（scan 返回 AgentHistorySession[] 八键全形态样例）
 // 4. 异常传播不吞异常
 //
 // ⚠️ mockIPC 盲区（IHE-01）：mockIPC 只守 JS 侧形状——camelCase/snake_case 真实转换、
@@ -15,11 +15,11 @@
 import { afterEach, vi } from "vitest";
 import { clearMocks } from "@tauri-apps/api/mocks";
 import { describeIpcContract } from "./helpers/ipc-contract";
-import * as claudeHistory from "../ipc/claudeHistory";
+import * as agentHistory from "../ipc/agentHistory";
 
-// 导入原始 ../ipc/claudeHistory 模块以测试真实 IPC 合约（照 hooksConfig 模式覆盖潜在全局 mock）
-vi.mock("../ipc/claudeHistory", async (importOriginal) => {
-  return importOriginal<typeof import("../ipc/claudeHistory")>();
+// 导入原始 ../ipc/agentHistory 模块以测试真实 IPC 合约（照 hooksConfig 模式覆盖潜在全局 mock）
+vi.mock("../ipc/agentHistory", async (importOriginal) => {
+  return importOriginal<typeof import("../ipc/agentHistory")>();
 });
 
 afterEach(() => {
@@ -27,6 +27,7 @@ afterEach(() => {
 });
 
 const SESSION_ID = "123e4567-e89b-12d3-a456-426614174000";
+const CLI_ID = "claude";
 
 const mockSessions = [
   {
@@ -37,6 +38,7 @@ const mockSessions = [
     firstPrompt: "帮我看看登录流程",
     mtimeMs: 1_752_500_000_000,
     cwdExists: true,
+    cliId: CLI_ID,
   },
   {
     sessionId: "223e4567-e89b-12d3-a456-426614174000",
@@ -46,6 +48,7 @@ const mockSessions = [
     firstPrompt: null,
     mtimeMs: 0,
     cwdExists: false,
+    cliId: CLI_ID,
   },
   {
     sessionId: "323e4567-e89b-12d3-a456-426614174000",
@@ -55,73 +58,74 @@ const mockSessions = [
     firstPrompt: "短 prompt",
     mtimeMs: 1_752_000_000_000,
     cwdExists: false,
+    cliId: CLI_ID,
   },
 ];
 
-describeIpcContract("scanHistory 合约（claude_history_scan）", [
+describeIpcContract("scanHistory 合约（agent_history_scan 无参聚合）", [
   // 维度 1：命令名（snake_case 逐字）
   {
-    name: "应调用 claude_history_scan 命令（非驼峰）",
-    cmd: "claude_history_scan",
-    call: () => claudeHistory.scanHistory(),
+    name: "应调用 agent_history_scan 命令（非驼峰）",
+    cmd: "agent_history_scan",
+    call: () => agentHistory.scanHistory(),
     respond: [],
   },
   // 维度 2：参数结构——scan 无参数（invoke payload 为空对象）
   {
     name: "调用无参数（invoke payload 为空对象）",
-    cmd: "claude_history_scan",
-    call: () => claudeHistory.scanHistory(),
+    cmd: "agent_history_scan",
+    call: () => agentHistory.scanHistory(),
     respond: [],
     expectArgs: {},
   },
-  // 维度 3：正常返回透传——HistorySession[] 七字段全形态样例
+  // 维度 3：正常返回透传——AgentHistorySession[] 八键全形态样例（含 cliId 打标）
   {
-    name: "透传 HistorySession[]（七字段全形态）",
-    cmd: "claude_history_scan",
-    call: () => claudeHistory.scanHistory(),
+    name: "透传 AgentHistorySession[]（八键全形态含 cliId）",
+    cmd: "agent_history_scan",
+    call: () => agentHistory.scanHistory(),
     respond: [...mockSessions],
     expectResult: mockSessions,
   },
   // 维度 4：异常传播
   {
     name: "invoke 失败时异常应传播给调用方",
-    cmd: "claude_history_scan",
-    call: () => claudeHistory.scanHistory(),
+    cmd: "agent_history_scan",
+    call: () => agentHistory.scanHistory(),
     mockThrow: "扫描失败",
     expectReject: "扫描失败",
   },
 ]);
 
-describeIpcContract("deleteHistorySession 合约（claude_history_delete）", [
+describeIpcContract("deleteHistorySession 合约（agent_history_delete）", [
   // 维度 1：命令名（snake_case 逐字）
   {
-    name: "应调用 claude_history_delete 命令（非驼峰）",
-    cmd: "claude_history_delete",
-    call: () => claudeHistory.deleteHistorySession(SESSION_ID),
+    name: "应调用 agent_history_delete 命令（非驼峰）",
+    cmd: "agent_history_delete",
+    call: () => agentHistory.deleteHistorySession(CLI_ID, SESSION_ID),
     respond: undefined,
   },
-  // 维度 2：参数结构——键集合精确匹配 { sessionId }（防字段漂移）
+  // 维度 2：参数结构——键集合精确匹配 { cliId, sessionId }（防字段漂移）
   {
-    name: "payload 键集合精确为 { sessionId }",
-    cmd: "claude_history_delete",
-    call: () => claudeHistory.deleteHistorySession(SESSION_ID),
+    name: "payload 键集合精确为 { cliId, sessionId }",
+    cmd: "agent_history_delete",
+    call: () => agentHistory.deleteHistorySession(CLI_ID, SESSION_ID),
     respond: undefined,
-    expectArgs: { sessionId: SESSION_ID },
-    expectExactKeys: ["sessionId"],
+    expectArgs: { cliId: CLI_ID, sessionId: SESSION_ID },
+    expectExactKeys: ["cliId", "sessionId"],
   },
   // 维度 3：正常返回 void
   {
     name: "正常返回 void",
-    cmd: "claude_history_delete",
-    call: () => claudeHistory.deleteHistorySession(SESSION_ID),
+    cmd: "agent_history_delete",
+    call: () => agentHistory.deleteHistorySession(CLI_ID, SESSION_ID),
     respond: undefined,
     expectUndefined: true,
   },
   // 维度 4：异常传播
   {
-    name: "invoke 失败（会话不存在等）时异常应传播",
-    cmd: "claude_history_delete",
-    call: () => claudeHistory.deleteHistorySession(SESSION_ID),
+    name: "invoke 失败（未知 cliId/会话不存在等）时异常应传播",
+    cmd: "agent_history_delete",
+    call: () => agentHistory.deleteHistorySession(CLI_ID, SESSION_ID),
     mockThrow: "会话不存在",
     expectReject: "会话不存在",
   },

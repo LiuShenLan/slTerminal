@@ -9,7 +9,7 @@ import { render, cleanup, fireEvent } from "@testing-library/react";
 import { HistorySessionRow } from "../features/claudeHistory/HistorySessionRow";
 import { formatRelativeTime } from "../features/claudeHistory/historyModel";
 import { EXPLORER_SELECTION_BG } from "../theme";
-import type { HistorySession } from "../types/claudeHistory";
+import type { AgentHistorySession } from "../types/agentHistory";
 
 afterEach(cleanup);
 
@@ -20,7 +20,9 @@ function hexToRgb(hex: string): string {
 }
 
 /** 构造测试会话（默认值：5 分钟前、有标题、cwd 存在） */
-function makeSession(overrides: Partial<HistorySession> = {}): HistorySession {
+function makeSession(
+  overrides: Partial<AgentHistorySession> = {},
+): AgentHistorySession {
   return {
     sessionId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
     cwd: "D:\\data\\learn\\code\\slTerminal",
@@ -29,13 +31,14 @@ function makeSession(overrides: Partial<HistorySession> = {}): HistorySession {
     firstPrompt: "修复了 token 过期问题导致的重…",
     mtimeMs: Date.now() - 60_000 * 5,
     cwdExists: true,
+    cliId: "claude",
     ...overrides,
   };
 }
 
 /** 渲染行组件，返回根元素与 mock 回调 */
 function renderRow(
-  session: HistorySession,
+  session: AgentHistorySession,
   props: Partial<
     Pick<
       Parameters<typeof HistorySessionRow>[0],

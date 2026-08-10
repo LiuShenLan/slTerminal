@@ -17,7 +17,7 @@
 //   分支恢复     —— orphan / noCwd 禁用（孤儿目录已删除、无 cwd 无法编排）
 //   删除         —— active 禁用（运行中文件句柄占用删除失败 + 外部进程续写幽灵文件）
 
-import type { HistorySession } from "../../types/claudeHistory";
+import type { AgentHistorySession } from "../../types/agentHistory";
 
 /** 菜单项（契约：label + disabled? + action） */
 export interface HistoryMenuItem {
@@ -48,7 +48,7 @@ export interface HistoryContextMenuOpts {
  * 有 cwd → `cd '<cwd>' && claude --resume <id>`（带单引号路径）；
  * 无 cwd → 仅 `claude --resume <id>`。
  */
-export function buildResumeCommand(session: HistorySession): string {
+export function buildResumeCommand(session: AgentHistorySession): string {
   const resume = `claude --resume ${session.sessionId}`;
   return session.cwd ? `cd '${session.cwd}' && ${resume}` : resume;
 }
@@ -61,7 +61,7 @@ export function buildResumeCommand(session: HistorySession): string {
  * @param opts    会话状态 + 四个操作回调（action 由调用方注入）
  */
 export function getHistoryContextMenuItems(
-  session: HistorySession,
+  session: AgentHistorySession,
   opts: HistoryContextMenuOpts,
 ): HistoryMenuItem[] {
   // session 为契约参数；复制命令的构造在调用方侧经 buildResumeCommand 完成

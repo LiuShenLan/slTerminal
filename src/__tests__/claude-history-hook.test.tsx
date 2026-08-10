@@ -14,7 +14,7 @@ import { useClaudeHistory } from "../features/claudeHistory/useClaudeHistory";
 import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
 import { resetProjectStores, seedExplorerProject } from "./helpers/workspace-setup";
-import type { HistorySession } from "../types/claudeHistory";
+import type { AgentHistorySession } from "../types/agentHistory";
 
 // ── vi.hoisted()：mock 状态在模块级 vi.mock 执行前就绪 ──
 const h = vi.hoisted(() => {
@@ -42,7 +42,7 @@ function notifyListeners(event: { type: string; panelId: string }) {
 }
 
 // ── mock IPC + TerminalRegistry（hook 仅消费 scanHistory / getAll / subscribe） ──
-vi.mock("../ipc/claudeHistory", () => ({
+vi.mock("../ipc/agentHistory", () => ({
   scanHistory: h.mockScanHistory,
 }));
 vi.mock("../panels/terminal/TerminalRegistry", () => ({
@@ -52,8 +52,10 @@ vi.mock("../panels/terminal/TerminalRegistry", () => ({
   },
 }));
 
-/** 最小 HistorySession 工厂 */
-function makeSession(overrides: Partial<HistorySession> = {}): HistorySession {
+/** 最小 AgentHistorySession 工厂 */
+function makeSession(
+  overrides: Partial<AgentHistorySession> = {},
+): AgentHistorySession {
   return {
     sessionId: "session-1",
     cwd: null,
@@ -62,6 +64,7 @@ function makeSession(overrides: Partial<HistorySession> = {}): HistorySession {
     firstPrompt: null,
     mtimeMs: 0,
     cwdExists: false,
+    cliId: "claude",
     ...overrides,
   };
 }
@@ -175,12 +178,12 @@ describe("useClaudeHistory scan", () => {
   });
 
   it("generation 防竞：scan 进行中再触发，旧结果丢弃", async () => {
-    let resolveFirst: ((v: HistorySession[]) => void) | undefined;
+    let resolveFirst: ((v: AgentHistorySession[]) => void) | undefined;
     const first = [makeSession({ sessionId: "old" })];
     const second = [makeSession({ sessionId: "new" })];
     h.mockScanHistory
       .mockImplementationOnce(
-        () => new Promise<HistorySession[]>((r) => { resolveFirst = r; }),
+        () => new Promise<AgentHistorySession[]>((r) => { resolveFirst = r; }),
       )
       .mockResolvedValueOnce(second);
 

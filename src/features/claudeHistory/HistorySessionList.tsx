@@ -20,7 +20,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ask } from "../../ipc/dialog";
 import { writeText } from "../../ipc/clipboard";
-import { deleteHistorySession } from "../../ipc/claudeHistory";
+import { deleteHistorySession } from "../../ipc/agentHistory";
 import { sendToastNotification } from "../../ipc/notification";
 import { restoreHistorySession } from "./restoreSession";
 import { HistorySessionRow } from "./HistorySessionRow";
@@ -35,7 +35,7 @@ import { groupByCwd, isCurrentProject, matchesSearch } from "./historyModel";
 import { TerminalRegistry } from "../../panels/terminal/TerminalRegistry";
 import { parseTerminalPageId } from "../../lib/panelId";
 import { switchToPageAndFocus } from "../../workspace/pageApis";
-import type { HistorySession } from "../../types/claudeHistory";
+import type { AgentHistorySession } from "../../types/agentHistory";
 import type { AgentStatus } from "../../lib/agentStatus";
 import {
   EXPLORER_COLORS,
@@ -209,7 +209,7 @@ export interface HistorySessionListProps {
   /** current = 当前项目区平铺；all = 全部项目区二级折叠分组 */
   mode: "current" | "all";
   /** 全部历史会话（未过滤未分组，本组件按 mode 派生） */
-  sessions: HistorySession[];
+  sessions: AgentHistorySession[];
   /** 当前项目 rootPath（null 时 current 区由 ClaudeHistorySections 显示「无活跃项目」，本组件不渲染） */
   rootPath: string | null;
   /** 搜索词（matchesSearch 过滤，作用于两区） */
@@ -242,7 +242,7 @@ export const HistorySessionList: React.FC<HistorySessionListProps> = ({
   });
 
   /** 双击运行中会话的动作弹窗目标（null = 关闭） */
-  const [dialogSession, setDialogSession] = useState<HistorySession | null>(
+  const [dialogSession, setDialogSession] = useState<AgentHistorySession | null>(
     null,
   );
 
@@ -269,7 +269,7 @@ export const HistorySessionList: React.FC<HistorySessionListProps> = ({
 
   /** 行状态标记派生（四态 status / ✗ / 无 cwd——Row 的 status/orphan/noCwd 三 props） */
   const rowFlags = useCallback(
-    (session: HistorySession) => ({
+    (session: AgentHistorySession) => ({
       status: activeStatuses.get(session.sessionId),
       orphan: session.cwd !== null && !session.cwdExists,
       noCwd: session.cwd === null,
@@ -279,7 +279,7 @@ export const HistorySessionList: React.FC<HistorySessionListProps> = ({
 
   /** 切换到该会话所在操作页面并聚焦终端页签（问题 5 修复） */
   const handleSwitchToSession = useCallback(
-    async (session: HistorySession) => {
+    async (session: AgentHistorySession) => {
       const panelId = findPanelForSession(session.sessionId);
       if (!panelId) {
         sendToastNotification("未找到运行中的会话", {
@@ -299,7 +299,7 @@ export const HistorySessionList: React.FC<HistorySessionListProps> = ({
    *  普通行 → 恢复；孤儿/无 cwd → 无操作；运行中（status 非 null）→ 动作弹窗
    * （分支恢复仅保留在右键菜单——双击弹窗不再提供） */
   const handleDoubleClick = useCallback(
-    (session: HistorySession) => {
+    (session: AgentHistorySession) => {
       const { status, orphan, noCwd } = rowFlags(session);
       if (status != null) {
         // 运行中：动作弹窗（切换到该会话操作页面 / 取消）
@@ -315,7 +315,7 @@ export const HistorySessionList: React.FC<HistorySessionListProps> = ({
 
   /** 右键菜单——委托策略注册表；操作回调在本层实现（剪贴板/fork/删除） */
   const handleContextMenu = useCallback(
-    (session: HistorySession, pos: { x: number; y: number }) => {
+    (session: AgentHistorySession, pos: { x: number; y: number }) => {
       const { status, orphan, noCwd } = rowFlags(session);
       const title = session.title ?? session.sessionId.slice(0, 8);
       const items = getHistoryContextMenuItems(session, {
@@ -338,7 +338,7 @@ export const HistorySessionList: React.FC<HistorySessionListProps> = ({
           }).then(async (ok) => {
             if (!ok) return;
             try {
-              await deleteHistorySession(session.sessionId);
+              await deleteHistorySession(session.cliId, session.sessionId);
               removeLocal(session.sessionId);
             } catch (err) {
               console.error(
@@ -369,7 +369,7 @@ export const HistorySessionList: React.FC<HistorySessionListProps> = ({
   // 全部项目区：groupByCwd 二级折叠（组内/组间均按最近活动降序，空组不产生）
   const groups = mode === "all" ? groupByCwd(filtered) : [];
 
-  const renderRows = (list: HistorySession[]) =>
+  const renderRows = (list: AgentHistorySession[]) =>
     list.map((s) => (
       <HistorySessionRow
         key={s.sessionId}

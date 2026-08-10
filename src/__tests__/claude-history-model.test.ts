@@ -13,7 +13,7 @@ import {
   formatRelativeTime,
   deriveActiveSessionStatuses,
 } from "../features/claudeHistory/historyModel";
-import type { HistorySession } from "../types/claudeHistory";
+import type { AgentHistorySession } from "../types/agentHistory";
 
 // ── vi.hoisted()：mock 状态在模块级 vi.mock 执行前就绪 ──
 const h = vi.hoisted(() => {
@@ -33,8 +33,10 @@ vi.mock("../panels/terminal/TerminalRegistry", () => ({
   },
 }));
 
-/** 最小 HistorySession 工厂 */
-function makeSession(overrides: Partial<HistorySession> = {}): HistorySession {
+/** 最小 AgentHistorySession 工厂 */
+function makeSession(
+  overrides: Partial<AgentHistorySession> = {},
+): AgentHistorySession {
   return {
     sessionId: "session-1",
     cwd: null,
@@ -43,6 +45,7 @@ function makeSession(overrides: Partial<HistorySession> = {}): HistorySession {
     firstPrompt: null,
     mtimeMs: 0,
     cwdExists: false,
+    cliId: "claude",
     ...overrides,
   };
 }
