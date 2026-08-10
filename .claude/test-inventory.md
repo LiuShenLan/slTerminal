@@ -2,7 +2,7 @@
 
 > **本文档是项目用例数唯一真值源。** 所有 CLAUDE.md、README、CI 配置中引用的用例数均以此文件为准。更新测试后必须同步本文档。
 
-全量 **3115** 用例（Rust 584 + 前端 2355 + L3 138 + E2E 38），2026-08-10 更新。
+全量 **3133** 用例（Rust 584 + 前端 2371 + L3 138 + E2E 40），2026-08-10 更新。
 
 > **计数口径**：
 > - L2 以 `npm test` 实跑（Vitest 报告）为准——`it.each(...)` 参数化与 `describeIpcContract` 工厂（`helpers/ipc-contract.ts`，IHE-06）等按**展开后用例数**计入（138 文件 2333 用例全绿实测）；纯 grep `it(/test(` 块数会少计 it.each 展开（如 colors 85 = 13 块 + 7 组 each 展开 72）。
@@ -81,7 +81,7 @@
 
 > `pty/mod.rs`、`pty/win_build.rs`、`main.rs` 不含 `#[test]`，不在此列。git/mod.rs 测试已按 GIT-12 全量拆出至 `tests/`（`#[test]` 零残留）。agent_history 模块 grep 口径：claude/jsonl 28 + claude/scan 16 + claude/ops 7 + mod 13 = 64（命令包装层 4 用例已迁入 mod.rs:407-464，MC-301 下沉时随行）+ claude/mod 4 + provider 2 = 全模块 70；env 测试依赖 L1 `--test-threads=1` 门禁（`std::env::set_var` 全局可变）。
 
-## L2 — 前端单元/集成测试（137 文件 / 2355 用例）
+## L2 — 前端单元/集成测试（139 文件 / 2371 用例）
 
 运行：`npm test`（Vitest + jsdom，实跑全绿 2328）
 
@@ -116,12 +116,16 @@
 | `src/__tests__/detect-webgl.test.ts` | 3 | WebGL2 可用/不可用/抛异常 |
 | `src/__tests__/terminal-strictmode.test.ts` | 2 | `smGuardRef` 防双重挂载 |
 
-### CLI profile 注册表（2 文件 / 69 用例，Stage 01）
+### CLI profile 注册表（4 文件 / 85 用例，Stage 01 + Stage 07）
+
+> mock 夹具 `src/__tests__/helpers/mockCliProfile.ts`（AC-4 契约：mockcli profile 定义——id/displayName/commands/tabTitle "mockcli" + iconSrc `/cli-icons/mockcli.png` + hooks 全能力（eventToStatus 恒等映射桩/classifyNotification 桩/contextLimit/restartHint 桩文案/hasConfigEditor=true）+ history 全能力（supportsFork=true/buildResumeCommand/buildRestoreInput 桩输出带 "mockcli --resume" 前缀）+ registerMockCliProfile/resetCliProfileRegistry 辅助——**仅测试环境注册**（vitest register + afterEach `_reset` 清理，L4 经 E2E helper），生产零引用；不计文件/用例数）。
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
 | `src/__tests__/cli-profile-registry.test.ts` | 19 | CliProfileRegistry（MC-101/102）：register/get/getAll 注册序/同 id 覆盖（注册序不变）/matchByCommand 首 token 精确匹配（多 commands 非首键/带参变体/前导空白/空命令行/仅空白/未命中/不 toLowerCase/同键冲突先注册者优先）/`_reset`/独立实例/全局单例 + logo 资源守卫泛化（MC-108：遍历注册表全部 profile 断言 iconSrc 磁盘存在 + PNG 魔数，含 mockcli.png 先行资源）——语义并入自 tab-title-registry（13）+ cli-icons（12） |
 | `src/__tests__/cli-profile-claude.test.ts` | 50 | claude profile 身份域（MC-104）：side-effect 注册/CLAUDE_CLI_ID 常量与注册一致性/身份域字段完整（含 hooks 五字段 + history 三字段）/capabilities.history 三字段齐备（supportsFork/buildResumeCommand/buildRestoreInput，MC-315/316）/带参命中/`_reset` 恢复（8）——语义并入自 tab-rules（6）+ hooks 策略（Stage 02，35）：eventToStatus 26 用例语义迁入（原 claude-status，10 事件 × notificationType + STATUS_EMOJI 联合守卫 + AgentStatus 类型兼容）+ classifyNotification 五映射表驱动 9 条（NAH-03 迁入，MC-422）+ **history 策略（Stage 05，7）：buildResumeCommand 3（有 cwd/无 cwd/与迁出源逐字一致）+ buildRestoreInput 4（普通/fork 追加/`\r` 结尾无 `\r\n`/无 cwd 可注入——输出与迁出源逐字一致，断言漂移即实现有误）** |
+| `src/__tests__/mock-cli-profile.test.tsx` | 12 | **AC-4 mock profile 全链路验收（Stage 07，夹具 helpers/mockCliProfile）**：① OSC 133 命中——matchByCommand("mockcli --flag") 命中 → 页签标题/logo（profile.tabTitle/iconSrc）+ agentSession.cliId 写入（useCommandDetection 链路，真实注册表 + 真实 TerminalRegistry；未命中零副作用 + OSC 133 D 清会话）② hooks 能力被真实调用——eventToStatus 经 useXterm 事件路径（spy 入参 event+notificationType + 四态/会话写入）+ classifyNotification 经通知调度路径（spy 入参 payload + toast 派发）③ 历史聚合 UI——mock 条目（AgentHistorySession cliId="mockcli"）出现在历史区 + 行 logo 按 session.cliId 取 mockcli iconSrc ④ hub 选择行——两枚按钮（claude + mockcli，均 hasConfigEditor=true）+ 切换渲染 mock 桩编辑器（readHooksConfig 携 mockcli + restartHint 桩文案）+ selectedCli 持久化（updateParameters + 显式 onLayoutChange/toJSON）与挂载恢复 ⑤ 恢复注入——pty.write 内容 = mock buildRestoreInput 桩输出（"mockcli --resume" 可识别前缀，普通/fork）+ addPanel title = profile.tabTitle |
+| `src/__tests__/no-claude-literals.test.ts` | 4 | **AC-5 字面量守卫（Stage 07，ac5-guard 落地）**：通用层七路径（src/lib、src/panels/terminal、src/features/agentStatus、src/features/agentHistory、src/features/notifications、src/ipc、src/types）grep 断言——无 "claude" 字符串字面量/claude 事件名字面量（SessionStart/Stop 等）/`~/.claude` 路径；白名单 import 形态 = profiles/claude 导出常量引用（CLAUDE_CLI_ID 等） |
 
 ### 编辑器面板（8 文件 / 134 用例）
 
@@ -333,7 +337,7 @@
 | `test/terminal/production-osc.test.ts` | 8 | **生产 OSC 52/133/8 handler（E2E-03 新增）**：OSC 52 → mock writeText 断言（CJK 解码）/OSC 133 复刻段按生产 matchByCommand/profile 取值改写（D-08，8 用例数不变）/OSC 8 → mock openUrl |
 | `test/terminal/negative-ansi.test.ts` | 9 | **反向/异常 ANSI（E2E-14 新增）**：非法 ANSI、截断多字节序列、嵌套 OSC、异常 resize（0×0）——headless 不崩溃 + 状态可恢复 |
 
-## L4 — E2E 端到端测试（8 spec / 38 用例，36 active + 2 skip）
+## L4 — E2E 端到端测试（9 spec / 40 用例，38 active + 2 skip）
 
 运行：`npm run e2e`（= `npm run build:e2e` + `npm run wdio`）  
 技术栈：WDIO + `@wdio/tauri-service` 1.1.0 + embedded driver（`webview2-com` COM 直连 `ICoreWebView2`）；specs 通配 `./*.e2e.ts`（E2E-09 拆分，单 worker 顺序执行）
@@ -350,6 +354,7 @@
 | `html.e2e.ts` | 2 | 1 active + 1 skip | iframe Ctrl+W postMessage 转发关闭（真实二进制全链路）/**内联脚本/事件 CSP 执行验证（skip：执行断言不稳定）** |
 | `sidebar.e2e.ts` | 2 | 2 active | 点击开关（R1/R2）/跨区移动状态机（R6/R7——经 store helper，非真实 DnD） |
 | `commit.e2e.ts` | 2 | 2 active | 真实 git 仓库变更列表渲染（Changes/Unversioned）/双击 modified 打开 diff 页签 |
+| `mockcli.e2e.ts` | 1 | 1 active | **mock 冒烟（Stage 07，AC-4 L4 端）：E2E helper `__slterm_e2e_registerMockCliProfile`（E2E_ENABLED 门控段内）注册 mockcli → 终端注入 OSC 133 C → 页签标题 "mockcli"/logo `/cli-icons/mockcli.png` 断言 → OSC 133 D 恢复（单用例：C→D 全链共享 setup 面板，规避容器 DOM 不卸载的跨用例残留）** |
 
 ### 用户目录隔离机制（FIX-TE-04 + E2E-05 扩展）
 
@@ -368,6 +373,8 @@ embedded WDIO 驱动**无法将 OS 级按键（`browser.keys`）投递进 WebVie
 | Clippy | `cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings` | Rust 代码规范 |
 
 ## 历史变更
+
+- 2026-08-10（multi-cli Stage 07 mock profile 全链路验收 + AC-5 守卫，AC-4/AC-5/MC-4/MC-6）：新建夹具 `src/__tests__/helpers/mockCliProfile.ts`（AC-4 契约，spec 06 §7 + 决策 5——id/displayName/commands/tabTitle "mockcli" + iconSrc `/cli-icons/mockcli.png`（Stage 01 已放资源）+ hooks 全能力（eventToStatus 恒等映射桩（任意事件恒 working，SessionEnd/Exit null）/classifyNotification 桩（恒 done）/contextLimit 1000/restartHint 桩文案/hasConfigEditor=true）+ history 全能力（supportsFork=true/buildResumeCommand/buildRestoreInput 桩输出带 "mockcli --resume" 可识别前缀）+ registerMockCliProfile/resetCliProfileRegistry 辅助——仅测试环境注册（vitest register + afterEach `_reset` 清理），生产零引用，不计文件/用例数）。「CLI profile 注册表」类目 2→4 文件 69→85（+16）——新建 mock-cli-profile.test.tsx 12 用例（AC-4 五点全表：① OSC 133 C 命中 mockcli 带参命令 → 页签标题/logo（profile.tabTitle/iconSrc）+ agentSession.cliId（useCommandDetection 链路，真实注册表 + 真实 TerminalRegistry；未命中零副作用 + OSC 133 D 清会话）② eventToStatus 经 useXterm 事件路径真实调用（spy 入参 + 四态/会话写入）+ classifyNotification 经通知调度路径真实调用（spy 入参 + toast 派发）③ 历史聚合 UI：mock 条目（cliId="mockcli"）出现在历史区 + 行 logo 按 session.cliId 取 mockcli iconSrc ④ hub 选择行两枚按钮（claude + mockcli）+ 切换渲染 mock 桩编辑器（readHooksConfig 携 mockcli + restartHint 桩文案）+ selectedCli 持久化（updateParameters + 显式 onLayoutChange/toJSON）与挂载恢复 ⑤ 恢复注入 = mock buildRestoreInput 桩输出（普通/fork，addPanel title = tabTitle））；新建 no-claude-literals.test.ts 4 用例（AC-5 守卫——通用层七路径 grep 断言：无 "claude" 字符串字面量/claude 事件名字面量/`~/.claude` 路径，白名单 = profiles/claude 导出常量 import 形态，ac5-guard 落地）。L4 新建 mockcli.e2e.ts 2 用例（2 active——E2E helper `__slterm_e2e_registerMockCliProfile` 注册 mockcli → OSC 133 C 注入 → 页签标题/logo 断言 + OSC 133 D 还原双清，E2E_ENABLED 内联门控红线不动，ac5-guard 落地）。L2 2355→2371（137→139 文件），L4 38→40（8→9 spec，38 active + 2 skip），全量 3115→3133。
 
 - 2026-08-10（multi-cli Stage 06 hub 面板 + CLI 选择行，MC-501~507 + D-15/D-14 本 Stage 段）：hooks-config-panel 23→36（+13 hub CLI 选择行用例——能力过滤 hasConfigEditor=false 不出现/logo 16×16+displayName/选中高亮 EXPLORER_SELECTION_BG token/单 CLI 也渲染/点击切换→编辑器重挂载且 IPC 携新 cliId/selectedCli 持久化（updateParameters 写入 + 显式布局保存 containerApi.toJSON）/挂载恢复/失效回退首个有能力 CLI/dirty 守卫 ask 确认与取消/非 dirty 直接切换/空态「无可配置 CLI」/restartHint 由 profile 驱动，MC-502~507 + persistSelectedCli 纯函数直测 4 用例——updateParameters 展开保留原键/onLayoutChange 收到 saveLayout 结果/原 params 不被修改/无条件写入锁定，MC-503 照 F8 applyRename 先例）；面板渲染改经 renderPanel 辅助传 mock api/containerApi（hub 化后 Dockview content component）；claude 编辑器 23 现有用例语义保留（层级/注入/visibilitychange 断言语义不丢，编辑器下移一层后渲染断言同步）。hooks-config-sync 9 用例数不变（useHooksConfig 收 cliId 选中态参数 + cliId 断言 = 传入选中态值，MC-220——Stage 03 中间态 CLAUDE_CLI_ID 断言回收）。其余 7 文件（catalog/matcher/model/schema/jsonmode/handlerform/gui）零改动（纯函数/子组件直测，MC-508 物理位置不变）。D-15 核对零改动通过：open-hooks-config-panel 6 / sidebar-actions 47 / default-layout-format 10（入口面板 id hooksConfig-{pageId}、侧栏菜单流程、pageApis 未动，MC-501）。L4 hooks.e2e 4→5（+1「hub 注入按钮三态」it——状态条随注入/卸载链路经 hub 流转 + 保存链路用例内追加 4b 选择行断言：单 CLI 也有选择行 + claude logo/displayName + 选择行在编辑器上方，D-14）。L2 2342→2355（137 文件不变），L4 37→38（36 active + 2 skip），全量 3101→3115。
 - 2026-08-10（multi-cli Stage 05 前端历史聚合 UI 泛化，MC-310~317 + D-05/D-14 核对）：L2 更名 6 文件——claude-history-{model,view,row,hook,restore,action-dialog}.test.ts(x) → agent-history-*（features 目录更名 + 组件/Hook 更名 + barrel 同步 + 宿主 AgentStatusView import 同步，MC-310/D-05）。断言同步：model 41→44（+3 复合键——显式 cliId 键/同 sessionId 不同 cliId 防冲突/旧数据无 cliId 按 CLAUDE_CLI_ID 回退，MC-313）、view 33→35（+2 supportsFork=false 不展示「分支恢复」MC-316 + 同 sessionId 不同 cliId 反查命中本 CLI 面板 MC-313；activeStatuses/标题覆盖断言改复合键）、row 19→20（+1 未注册 cliId → 无 logo 不报错 MC-311；logo 断言改经 profile.iconSrc 查询）、hook 13 不变（activeStatuses 复合键断言同步）、restore 7 不变（注入内容断言 = claude profile.history.buildRestoreInput 输出逐字一致——MC-315 委托，用例内 side-effect 注册 claude profile）、action-dialog 7 不变（仅 import 路径）。agent-status-view 29 不变（restoreSession mock 路径 ../features/agentHistory/ + 注释同步，D-05；标题覆盖集成断言经复合键 cliId|sessionId——MC-314 语义式覆盖）。cli-profile-claude 43→50（+7 history 策略用例——buildResumeCommand 3 + buildRestoreInput 4，MC-315/316 交付，输出与迁出源逐字一致）。L4 history.e2e 8 用例数不变（恢复注入断言与 claude profile buildRestoreInput 输出逐字一致核对，D-14——零改动通过）。L2 2329→2342（137 文件不变），全量 3088→3101。

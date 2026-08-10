@@ -122,9 +122,12 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ api, params }) => {
   }, []);
 
   return (
+    // E2E 定位锚点：app 可能恢复用户布局的多终端面板，__e2e_* helper 经
+    // data-panel-id 按 panelId 精确定位（见 e2e-tests/mockcli.e2e.ts 首匹配歧义说明）
     <div
       ref={containerRef}
       data-e2e="terminal-container"
+      data-panel-id={params.panelId}
       style={{
         width: "100%",
         height: "100%",

@@ -21,6 +21,8 @@ import { makeEmptyLayout } from "../src/features/sidebar/SidebarTree";
 import { titleManager } from "../src/workspace/titleManager";
 import { switchToPageShared } from "../src/workspace/pageApis";
 import { useSideBar } from "../src/stores/sideBar";
+import { cliProfileRegistry } from "../src/features/cliProfiles";
+import type { CodingCliProfile } from "../src/features/cliProfiles/types";
 
 // ── Window 全局类型扩展 ──
 
@@ -55,6 +57,8 @@ declare global {
     // hooks 配置面板 JSON 模式（P3-TE-18）
     __slterm_e2e_setHooksConfigJson?: (text: string) => boolean;
     __slterm_e2e_getHooksConfigJson?: () => string | null;
+    // mockcli 测试 profile 注册（Stage 07 AC-4：L4 经 E2E helper 注册）
+    __slterm_e2e_registerMockCliProfile?: () => void;
   }
 }
 
@@ -78,6 +82,7 @@ export function installAllE2eHelpers(): void {
   installSideBarHelpers();
   installHookHelpers();
   installHooksConfigHelpers();
+  installMockCliProfile();
 
   // 标记 Workspace 就绪（Workspace 组件渲染时同步设置）
   window.__slterm_e2e_workspaceReady = false;
@@ -324,5 +329,47 @@ function installHooksConfigHelpers(): void {
     if (!container) return null;
     const view = EditorView.findFromDOM(container as HTMLElement);
     return view ? view.state.doc.toString() : null;
+  };
+}
+
+/**
+ * __slterm_e2e_registerMockCliProfile（Stage 07 AC-4：mock profile 的 L4 注册入口）
+ *
+ * mockcli 是测试夹具而非真实 CLI（spec 06 §7 约定）：id/displayName/commands/
+ * tabTitle 均 "mockcli"、iconSrc "/cli-icons/mockcli.png"（Stage 01 已放资源）、
+ * hooks/history 全能力（恒等映射/桩策略）。仅经本 helper 注册——本文件整体在
+ * E2E_ENABLED 门控内加载（main.tsx 内联 import.meta.env 字面量分支），生产构建
+ * 整块 tree-shake，生产二进制无此 profile。register 幂等（同 id 覆盖），重复
+ * 调用安全。
+ */
+function installMockCliProfile(): void {
+  const mockCliProfile: CodingCliProfile = {
+    id: "mockcli",
+    displayName: "mockcli",
+    commands: ["mockcli"],
+    iconSrc: "/cli-icons/mockcli.png",
+    tabTitle: "mockcli",
+    capabilities: {
+      hooks: {
+        // 桩实现（恒等映射简化形态）：非 Stop 事件一律 working，Stop → done——
+        // 供 AC-4 ②「eventToStatus 被真实调用」类用例断言
+        eventToStatus: (event) => (event === "Stop" ? "done" : "working"),
+        // 桩实现：一律不触发通知
+        classifyNotification: () => null,
+        contextLimit: 1_000_000,
+        restartHint: "mockcli 桩提示：hooks 改动需重启 mockcli 会话生效",
+        hasConfigEditor: true,
+      },
+      history: {
+        supportsFork: true,
+        // 桩输出带可识别前缀 "mockcli --resume"（AC-4 ⑤ 恢复注入断言用）
+        buildResumeCommand: (session) => `mockcli --resume ${session.sessionId}`,
+        buildRestoreInput: (session, opts) =>
+          `mockcli --resume ${session.sessionId}${opts.fork ? " --fork" : ""}\r`,
+      },
+    },
+  };
+  window.__slterm_e2e_registerMockCliProfile = () => {
+    cliProfileRegistry.register(mockCliProfile);
   };
 }

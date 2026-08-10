@@ -1,0 +1,790 @@
+// mock-cli-profile.test.tsx — AC-4 mock profile 全链路验收 L2 用例（五点全表，Stage 07）
+//
+// 覆盖（spec 06 §7 + stages.md Stage 07 实现要点 2，夹具契约见 helpers/mockCliProfile.ts）：
+//   ① OSC 133 命中：matchByCommand("mockcli --flag") 命中 → 页签标题 = mockcli tabTitle /
+//      logo = mockcli iconSrc / setAgentSession 写入 agentSession.cliId（useCommandDetection
+//      链路 L2 断言——真实 cliProfileRegistry + 真实 TerminalRegistry，未命中零副作用 + OSC 133 D 清会话）
+//   ② hooks 能力被真实调用：eventToStatus 经 useXterm 事件路径（spy 入参 event+notificationType +
+//      四态/会话写入）、classifyNotification 经通知调度路径（spy 入参 payload + toast 派发）
+//   ③ 历史聚合 UI：mock 条目（AgentHistorySession cliId="mockcli"）出现在历史区 +
+//      行 logo 按 session.cliId 取 mockcli iconSrc
+//   ④ hub 选择行：两枚按钮（claude + mockcli，均 hasConfigEditor=true）+ 切换渲染 mock 桩编辑器
+//      （readHooksConfig 携 mockcli + restartHint 桩文案）+ selectedCli 持久化
+//      （updateParameters + 显式 onLayoutChange/toJSON）与挂载恢复
+//   ⑤ 恢复注入：pty.write 内容 = mock buildRestoreInput 桩输出（可识别前缀 "mockcli --resume"，
+//      普通/fork）+ addPanel title = profile.tabTitle
+//
+// mock 边界：claude 基线（profiles/claude 常量）+ mockcli 夹具（helpers/mockCliProfile）经真实
+// cliProfileRegistry 注册；cliProfiles 注册表、TerminalRegistry、stores 均真实（全链路）；
+// 仅 mock @xterm/xterm（Terminal 实例捕获）、IPC 层、shortcuts/sidebar/pageApis 隔离。
+
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import React from "react";
+import {
+  render,
+  cleanup,
+  fireEvent,
+  waitFor,
+  act,
+  renderHook,
+} from "@testing-library/react";
+import { Terminal } from "@xterm/xterm";
+import type { FitAddon } from "@xterm/addon-fit";
+import {
+  useCommandDetection,
+  type TabState,
+} from "../panels/terminal/useCommandDetection";
+import { useXterm } from "../panels/terminal/useXterm";
+import { TerminalRegistry } from "../panels/terminal/TerminalRegistry";
+import { useAgentNotifications } from "../features/notifications/useAgentNotifications";
+import { AgentHistorySections } from "../features/agentHistory/AgentHistorySections";
+import { restoreHistorySession } from "../features/agentHistory/restoreSession";
+import HooksConfigPanel from "../panels/hooksConfig/HooksConfigPanel";
+import { cliProfileRegistry } from "../features/cliProfiles";
+import {
+  claudeProfile,
+  CLAUDE_CLI_ID,
+} from "../features/cliProfiles/profiles/claude";
+import { STATUS_EMOJI, type AgentStatus } from "../lib/agentStatus";
+import { EXPLORER_SELECTION_BG } from "../theme";
+import { useProjects } from "../stores/projects";
+import { useLayout } from "../stores/layout";
+import type { AgentEventPayload } from "../types/agent";
+import type { AgentHistorySession } from "../types/agentHistory";
+import {
+  mockCliProfile,
+  MOCK_CLI_RESTART_HINT,
+  registerMockCliProfile,
+  resetCliProfileRegistry,
+} from "./helpers/mockCliProfile";
+
+// ═══════════════════════════════════════════════════════════════
+// vi.hoisted：mock 状态在模块级 vi.mock 执行前就绪
+// ═══════════════════════════════════════════════════════════════
+
+const h = vi.hoisted(() => {
+  const agentEventCallbackRef: {
+    current: ((p: AgentEventPayload) => void) | null;
+  } = { current: null };
+  return {
+    agentEventCallbackRef,
+    // Agent 事件捕获（useXterm 与 useAgentNotifications 各自测试内注册，逐测试覆盖）
+    mockOnAgentEvent: vi.fn((cb: (p: AgentEventPayload) => void) => {
+      agentEventCallbackRef.current = cb;
+      return () => {};
+    }),
+    mockPtySpawn: vi.fn(),
+    mockPtyWrite: vi.fn(),
+    mockPtyResize: vi.fn(),
+    mockPtyKill: vi.fn(),
+    mockPtyGetBuildNumber: vi.fn(),
+    mockOpenUrl: vi.fn(),
+    mockWriteText: vi.fn(),
+    mockSendToastNotification: vi.fn(),
+    // 权限桩须返回 Promise——useAgentNotifications 对 ensureNotificationPermission().catch()
+    mockEnsureNotificationPermission: vi.fn(async () => {}),
+    mockDeleteHistorySession: vi.fn(),
+    mockAsk: vi.fn(async () => true),
+    mockReadHooksConfig: vi.fn(),
+    mockWriteHooksConfig: vi.fn(),
+    mockJsonMode: vi.fn(() => null),
+    mockInject: vi.fn(),
+    mockUninstall: vi.fn(),
+    mockGetInjectionStatus: vi.fn(),
+    mockSwitchToPageShared: vi.fn(),
+    mockGetPageApi: vi.fn(),
+    mockSwitchToPageAndFocus: vi.fn(),
+    mockFit: vi.fn(),
+    mockProposeDimensions: vi.fn(),
+    // hub Dockview props mock（照 hooks-config-panel.test.tsx 先例）
+    mockApi: {
+      updateParameters: vi.fn(),
+      onDidParametersChange: vi.fn(() => ({ dispose: vi.fn() })),
+      getParameters: vi.fn(() => ({})),
+      toJSON: vi.fn(() => ({ mockPanel: true })),
+      title: "Hooks 配置",
+      close: vi.fn(),
+    },
+    mockContainerApi: {
+      toJSON: vi.fn(() => ({ mockLayout: true })),
+    },
+  };
+});
+
+// ═══════════════════════════════════════════════════════════════
+// 捕获 mock Terminal 实例 + OSC 133 handler（照 use-xterm-lifecycle 先例）
+// ═══════════════════════════════════════════════════════════════
+
+let capturedTerminal: {
+  element: HTMLDivElement;
+  open: ReturnType<typeof vi.fn>;
+  loadAddon: ReturnType<typeof vi.fn>;
+  dispose: ReturnType<typeof vi.fn>;
+  onData: ReturnType<typeof vi.fn>;
+  write: ReturnType<typeof vi.fn>;
+  writeln: ReturnType<typeof vi.fn>;
+  focus: ReturnType<typeof vi.fn>;
+  getSelection: ReturnType<typeof vi.fn>;
+  paste: ReturnType<typeof vi.fn>;
+  attachCustomKeyEventHandler: ReturnType<typeof vi.fn>;
+  options: Record<string, unknown>;
+  parser: {
+    registerOscHandler: ReturnType<typeof vi.fn>;
+  };
+} | null = null;
+
+let capturedOsc133Handler: ((data: string) => boolean) | null = null;
+
+// ═══════════════════════════════════════════════════════════════
+// 模块级 mock（路径相对于被测源文件 import 解析）
+// ═══════════════════════════════════════════════════════════════
+
+vi.mock("@xterm/xterm", () => {
+  class MockTerminal {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    element: any;
+    open = vi.fn();
+    loadAddon = vi.fn();
+    dispose = vi.fn();
+    onData = vi.fn(() => ({ dispose: vi.fn() }));
+    write = vi.fn();
+    writeln = vi.fn();
+    focus = vi.fn();
+    getSelection = vi.fn(() => "");
+    paste = vi.fn();
+    attachCustomKeyEventHandler = vi.fn();
+    options: Record<string, unknown> = {};
+    parser = {
+      registerOscHandler: vi.fn(
+        (osc: number, handler: (data: string) => boolean) => {
+          if (osc === 133) capturedOsc133Handler = handler;
+          return { dispose: vi.fn() };
+        },
+      ),
+    };
+
+    constructor() {
+      const el = document.createElement("div");
+      this.element = el;
+      capturedTerminal = this as unknown as typeof capturedTerminal;
+    }
+  }
+  return { Terminal: MockTerminal };
+});
+
+vi.mock("@xterm/addon-fit", () => ({
+  FitAddon: class {
+    fit = h.mockFit;
+    proposeDimensions = h.mockProposeDimensions;
+    dispose = vi.fn();
+  },
+}));
+
+vi.mock("@xterm/addon-webgl", () => ({
+  WebglAddon: class {
+    dispose = vi.fn();
+    onContextLoss = vi.fn();
+  },
+}));
+
+vi.mock("@tauri-apps/plugin-opener", () => ({
+  openUrl: h.mockOpenUrl,
+}));
+
+// useXterm 经 src/ipc  barrel 取 pty；restoreSession 直引 src/ipc/pty——两路共用同一 mock
+vi.mock("../ipc", () => ({
+  pty: {
+    spawn: h.mockPtySpawn,
+    write: h.mockPtyWrite,
+    resize: h.mockPtyResize,
+    kill: h.mockPtyKill,
+    getWindowsBuildNumber: h.mockPtyGetBuildNumber,
+  },
+}));
+
+vi.mock("../ipc/pty", () => ({
+  write: h.mockPtyWrite,
+}));
+
+// 本地覆盖 setup.ts 全局 mock：捕获 onAgentEvent 回调供测试手动触发
+vi.mock("../ipc/agentHooks", () => ({
+  onAgentEvent: h.mockOnAgentEvent,
+  inject: h.mockInject,
+  uninstall: h.mockUninstall,
+  getInjectionStatus: h.mockGetInjectionStatus,
+}));
+
+vi.mock("../ipc/clipboard", () => ({
+  writeText: h.mockWriteText,
+}));
+
+vi.mock("../ipc/notification", () => ({
+  sendToastNotification: h.mockSendToastNotification,
+  ensureNotificationPermission: h.mockEnsureNotificationPermission,
+}));
+
+vi.mock("../ipc/agentHistory", () => ({
+  deleteHistorySession: h.mockDeleteHistorySession,
+}));
+
+vi.mock("../ipc/dialog", () => ({
+  ask: h.mockAsk,
+}));
+
+vi.mock("../ipc/hooksConfig", () => ({
+  readHooksConfig: h.mockReadHooksConfig,
+  writeHooksConfig: h.mockWriteHooksConfig,
+}));
+
+vi.mock("../ipc/settings", () => ({
+  loadSettings: vi.fn(async () => null),
+  saveSettings: vi.fn(async () => {}),
+}));
+
+vi.mock("../panels/hooksConfig/JsonMode", () => ({
+  default: h.mockJsonMode,
+}));
+
+vi.mock("../features/shortcuts", () => ({
+  usePanelFocus: vi.fn(),
+  getShortcutRegistry: () => ({
+    register: vi.fn(),
+    unregister: vi.fn(),
+    pushContext: vi.fn(),
+    popContext: vi.fn(),
+    resolve: () => false,
+    _reset: vi.fn(),
+  }),
+}));
+
+vi.mock("../features/sidebar", () => ({
+  makeEmptyLayout: () => ({}),
+}));
+
+vi.mock("../workspace/pageApis", () => ({
+  switchToPageShared: h.mockSwitchToPageShared,
+  getPageApi: h.mockGetPageApi,
+  switchToPageAndFocus: h.mockSwitchToPageAndFocus,
+}));
+
+// ═══════════════════════════════════════════════════════════════
+// 测试数据工厂
+// ═══════════════════════════════════════════════════════════════
+
+/** 构造最小 AgentEventPayload（cliId 可选注入，MC-205 分支一） */
+function makeAgentPayload(
+  partial: Partial<AgentEventPayload>,
+): AgentEventPayload {
+  return {
+    panelId: "terminal-page1-0",
+    event: "PreToolUse",
+    timestamp: 1,
+    sessionId: "s1",
+    transcriptPath: "/t.json",
+    cwd: "",
+    toolName: null,
+    notificationType: null,
+    ...partial,
+  };
+}
+
+const SESSION_ID = "1a2b3c4d-1111-2222-3333-444455556666";
+
+/** 构造最小 AgentHistorySession（缺省 cliId=mockcli，恢复注入断言用） */
+function makeHistorySession(
+  partial: Partial<AgentHistorySession> = {},
+): AgentHistorySession {
+  return {
+    sessionId: SESSION_ID,
+    cwd: "C:\\Users\\test\\proj",
+    title: null,
+    titleSource: "customTitle",
+    firstPrompt: "mock 首条提示",
+    mtimeMs: 123456,
+    cwdExists: true,
+    cliId: "mockcli",
+    ...partial,
+  };
+}
+
+/** TerminalRegistry 条目所需的 fitAddon 桩（仅形状，TerminalRegistry 不消费） */
+const fitStub = {
+  fit: vi.fn(),
+  proposeDimensions: vi.fn(),
+  dispose: vi.fn(),
+} as unknown as FitAddon;
+
+/** 创建指定尺寸容器（照 xterm-test-utils 先例） */
+function createContainer(w = 800, h = 600): HTMLDivElement {
+  const el = document.createElement("div");
+  Object.defineProperty(el, "offsetWidth", { value: w, configurable: true });
+  Object.defineProperty(el, "offsetHeight", { value: h, configurable: true });
+  return el;
+}
+
+/** 注册表重置为指定集合（claude profile 为 side-effect 注册，测试内自管基线） */
+function registerOnly(
+  profiles: Parameters<typeof cliProfileRegistry.register>[0][],
+) {
+  cliProfileRegistry._reset();
+  for (const p of profiles) cliProfileRegistry.register(p);
+}
+
+/** 种子 stores（照 hooks-config-panel.test.tsx 先例） */
+function resetStores() {
+  useProjects.setState({
+    projects: {},
+    deletionLock: { pendingDelete: null, acquiredAt: null },
+    expandedNodes: {},
+  });
+  useLayout.setState({ activePageId: null });
+}
+
+/** hex 色值 → jsdom rgb 形态（照 hooks-config-gui 先例——jsdom 统一归一化） */
+function hexToRgb(hex: string): string {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
+/** 渲染 hub 面板（Dockview content component props 经强转传入 mock） */
+function renderPanel(params?: Record<string, unknown>) {
+  return render(
+    React.createElement(HooksConfigPanel, {
+      api: h.mockApi,
+      containerApi: h.mockContainerApi,
+      params,
+    } as unknown as React.ComponentProps<typeof HooksConfigPanel>),
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+// AC-4① OSC 133 命中（useCommandDetection 链路，真实注册表 + 真实 TerminalRegistry）
+// ═══════════════════════════════════════════════════════════════
+
+describe("AC-4① OSC 133 命中（useCommandDetection 链路）", () => {
+  const panelId = "ac4-osc-133";
+  let onTabStateChange: ReturnType<typeof vi.fn<(state: TabState) => void>>;
+
+  beforeEach(() => {
+    onTabStateChange = vi.fn<(state: TabState) => void>();
+    capturedTerminal = null;
+    capturedOsc133Handler = null;
+    TerminalRegistry._reset();
+    registerMockCliProfile();
+    // 注册面板条目——setAgentSession 需条目存在（真实 TerminalRegistry 语义）
+    const term = new Terminal() as unknown as Terminal;
+    TerminalRegistry.register(panelId, {
+      term,
+      sessionId: "sid-osc-133",
+      webglAddon: null,
+      fitAddon: fitStub,
+    });
+    renderHook(() =>
+      useCommandDetection(
+        capturedTerminal as unknown as Terminal,
+        panelId,
+        onTabStateChange,
+      ),
+    );
+  });
+
+  afterEach(() => {
+    cleanup();
+    resetCliProfileRegistry();
+    TerminalRegistry._reset();
+  });
+
+  it("matchByCommand('mockcli --flag') 命中 → 页签标题/logo + agentSession.cliId", () => {
+    expect(capturedOsc133Handler).not.toBeNull();
+    act(() => {
+      capturedOsc133Handler!("C;mockcli --flag");
+    });
+    // 页签标题/logo 均取自匹配 profile（tabTitle / iconSrc）
+    expect(onTabStateChange).toHaveBeenCalledWith({
+      active: true,
+      title: mockCliProfile.tabTitle,
+      icon: STATUS_EMOJI.attention,
+      logo: mockCliProfile.iconSrc,
+    });
+    // MC-107: setAgentSession 写入 agentSession.cliId（hook 事件三级解析反查键）
+    const session = TerminalRegistry.get(panelId)?.agentSession;
+    expect(session?.cliId).toBe(mockCliProfile.id);
+    expect(session?.matchedCommand).toBe(mockCliProfile.id);
+  });
+
+  it("未命中命令 → 零副作用（不触发回调/不写会话）", () => {
+    act(() => {
+      capturedOsc133Handler!("C;npm install");
+    });
+    expect(onTabStateChange).not.toHaveBeenCalled();
+    expect(TerminalRegistry.get(panelId)?.agentSession).toBeUndefined();
+  });
+
+  it("OSC 133 D 命令退出 → 清会话 + onTabStateChange({ active: false })", () => {
+    act(() => {
+      capturedOsc133Handler!("C;mockcli --flag");
+    });
+    onTabStateChange.mockClear();
+    act(() => {
+      capturedOsc133Handler!("D;0");
+    });
+    expect(onTabStateChange).toHaveBeenCalledWith({ active: false });
+    expect(TerminalRegistry.get(panelId)?.agentSession).toBeNull();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// AC-4② hooks 能力被真实调用（useXterm 事件路径 + 通知调度路径）
+// ═══════════════════════════════════════════════════════════════
+
+describe("AC-4② hooks 能力经真实链路调用", () => {
+  let container: HTMLDivElement;
+  let onTabStateChange: ReturnType<typeof vi.fn<(state: TabState) => void>>;
+
+  beforeEach(() => {
+    container = createContainer(800, 600);
+    onTabStateChange = vi.fn<(state: TabState) => void>();
+    capturedTerminal = null;
+    capturedOsc133Handler = null;
+    TerminalRegistry._reset();
+    registerMockCliProfile();
+    h.mockPtySpawn.mockReset().mockResolvedValue("test-session-id");
+    h.mockPtyWrite.mockReset().mockResolvedValue(undefined);
+    h.mockPtyResize.mockReset().mockResolvedValue(undefined);
+    h.mockPtyKill.mockReset().mockResolvedValue(undefined);
+    h.mockPtyGetBuildNumber.mockReset().mockResolvedValue(22621);
+    h.mockOpenUrl.mockReset().mockResolvedValue(undefined);
+    h.mockWriteText.mockReset().mockResolvedValue(undefined);
+    h.mockProposeDimensions.mockReturnValue({ cols: 80, rows: 24 });
+  });
+
+  afterEach(() => {
+    cleanup();
+    resetCliProfileRegistry();
+    TerminalRegistry._reset();
+    delete window.__slterm_windowFocused;
+  });
+
+  it("eventToStatus 经 useXterm 事件路径真实调用（spy 入参 + 四态/会话写入）", async () => {
+    const eventToStatusSpy = vi.spyOn(
+      mockCliProfile.capabilities.hooks!,
+      "eventToStatus",
+    );
+    const panelId = "ac4-hook";
+    renderHook(() =>
+      useXterm({
+        container,
+        cols: 80,
+        rows: 24,
+        panelId,
+        onTabStateChange,
+      }),
+    );
+    // PTY spawn 完成 + TerminalRegistry 注册（主 effect 内 onAgentEvent 同步注册）
+    await waitFor(() => expect(TerminalRegistry.get(panelId)).toBeDefined());
+    expect(h.mockOnAgentEvent).toHaveBeenCalled();
+    expect(h.agentEventCallbackRef.current).not.toBeNull();
+
+    // 清除 spawn 成功时 resetCommandState 的 {active:false} 调用
+    onTabStateChange.mockClear();
+    act(() => {
+      h.agentEventCallbackRef.current!(
+        makeAgentPayload({
+          panelId,
+          event: "UserPromptSubmit",
+          cliId: mockCliProfile.id,
+        }),
+      );
+    });
+
+    // MC-403: 四态映射委托 profile.hooks.eventToStatus（入参 = event + notificationType）
+    expect(eventToStatusSpy).toHaveBeenCalledWith("UserPromptSubmit", null);
+    expect(onTabStateChange).toHaveBeenCalledWith({
+      active: true,
+      icon: STATUS_EMOJI.working,
+    });
+    // PF2-FE-04: 非 SessionEnd 事件 → setAgentSession 携 sessionId/transcriptPath/status
+    const session = TerminalRegistry.get(panelId)?.agentSession;
+    expect(session?.sessionId).toBe("s1");
+    expect(session?.transcriptPath).toBe("/t.json");
+    expect(session?.status).toBe("working");
+    eventToStatusSpy.mockRestore();
+  });
+
+  it("classifyNotification 经通知调度路径真实调用（spy 入参 + toast 派发）", async () => {
+    const classifySpy = vi.spyOn(
+      mockCliProfile.capabilities.hooks!,
+      "classifyNotification",
+    );
+    // 失焦门控：窗口未聚焦才触发通知
+    window.__slterm_windowFocused = false;
+    renderHook(() => useAgentNotifications());
+    expect(h.mockOnAgentEvent).toHaveBeenCalled();
+
+    act(() => {
+      h.agentEventCallbackRef.current!(
+        makeAgentPayload({
+          event: "Stop",
+          cliId: mockCliProfile.id,
+        }),
+      );
+    });
+
+    // 类别判定委托 profile.hooks.classifyNotification（MC-420，payload 原样透传）
+    expect(classifySpy).toHaveBeenCalledTimes(1);
+    expect(classifySpy).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "Stop", cliId: mockCliProfile.id }),
+    );
+    // 桩返回 "done" → 任务完成类别 toast 派发
+    await waitFor(() => expect(h.mockSendToastNotification).toHaveBeenCalled());
+    const [title, opts] = h.mockSendToastNotification.mock
+      .calls[0] as [string, { body: string }];
+    expect(title).toBe("slTerminal");
+    expect(opts.body).toContain("✅ 任务完成");
+    classifySpy.mockRestore();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// AC-4③ 历史聚合 UI（mock 条目 + 行 logo 按 session.cliId）
+// ═══════════════════════════════════════════════════════════════
+
+describe("AC-4③ 历史聚合 UI", () => {
+  const sessions = [
+    makeHistorySession({
+      sessionId: "mock-s1",
+      cwd: "D:\\mock",
+      title: "mockcli 会话",
+      cwdExists: true,
+    }),
+  ];
+
+  beforeEach(() => {
+    registerMockCliProfile();
+    TerminalRegistry._reset();
+  });
+
+  afterEach(() => {
+    cleanup();
+    resetCliProfileRegistry();
+    TerminalRegistry._reset();
+  });
+
+  it("mock 条目出现在历史区 + 行 logo 按 session.cliId 取 mockcli iconSrc", () => {
+    const activeStatuses = new Map<string, AgentStatus>([
+      // 复合键（MC-313）：cliId|sessionId——行 logo「仅随 status emoji」依赖状态命中
+      ["mockcli|mock-s1", "working"],
+    ]);
+    const { getByText, container } = render(
+      React.createElement(AgentHistorySections, {
+        expandedCurrent: true,
+        expandedAll: false,
+        onToggleCurrent: () => {},
+        onToggleAll: () => {},
+        historyState: "ready",
+        sessions,
+        activeStatuses,
+        rootPath: "D:\\mock",
+        scan: () => {},
+        removeLocal: () => {},
+      }),
+    );
+    // mock 条目（cliId="mockcli"）出现在当前项目历史区
+    expect(getByText("mockcli 会话")).toBeTruthy();
+    // 行 logo（MC-311）：cliProfileRegistry.get(session.cliId)?.iconSrc —— mockcli 命中
+    const row = container.querySelector('[data-e2e="agent-history-row"]');
+    expect(row).not.toBeNull();
+    const logo = row!.querySelector("img");
+    expect(logo?.getAttribute("src")).toBe(mockCliProfile.iconSrc);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// AC-4④ hub 选择行（claude + mockcli，MC-502~507 全链）
+// ═══════════════════════════════════════════════════════════════
+
+describe("AC-4④ hub 选择行", () => {
+  beforeEach(() => {
+    h.mockReadHooksConfig.mockReset();
+    h.mockWriteHooksConfig.mockReset();
+    h.mockAsk.mockReset().mockResolvedValue(true);
+    h.mockJsonMode.mockClear();
+    h.mockInject.mockReset();
+    h.mockUninstall.mockReset();
+    h.mockGetInjectionStatus
+      .mockReset()
+      .mockResolvedValue({ status: "notInjected", version: null });
+    h.mockApi.updateParameters.mockReset();
+    h.mockApi.getParameters.mockReset().mockReturnValue({});
+    h.mockContainerApi.toJSON.mockReset().mockReturnValue({ mockLayout: true });
+    resetStores();
+    registerOnly([claudeProfile, mockCliProfile]);
+  });
+
+  afterEach(() => {
+    cleanup();
+    resetCliProfileRegistry();
+    resetStores();
+  });
+
+  it("两枚按钮（claude + mockcli，均 hasConfigEditor=true）", async () => {
+    h.mockReadHooksConfig.mockResolvedValue({});
+    const { getByRole } = renderPanel();
+    expect(await waitFor(() => getByRole("button", { name: "claude" }))).toBeTruthy();
+    expect(getByRole("button", { name: mockCliProfile.displayName })).toBeTruthy();
+  });
+
+  it("点击切换 → 渲染 mock 桩编辑器 + selectedCli 持久化（updateParameters + 显式布局保存）", async () => {
+    h.mockReadHooksConfig.mockResolvedValue({});
+    const { getByRole } = renderPanel({ panelId: "hooksConfig-page-1" });
+    // 初始缺省回退首个有能力 CLI = claude
+    await waitFor(() => expect(h.mockReadHooksConfig.mock.calls.length).toBe(1));
+    expect(h.mockReadHooksConfig.mock.calls[0][0]).toBe(CLAUDE_CLI_ID);
+    h.mockApi.updateParameters.mockClear();
+    h.mockContainerApi.toJSON.mockClear();
+
+    // 点击 mockcli → 编辑器按 mockcli 加载（readHooksConfig 携 mockcli id）
+    fireEvent.click(getByRole("button", { name: mockCliProfile.displayName }));
+    await waitFor(() => {
+      const calls = h.mockReadHooksConfig.mock.calls;
+      expect(calls[calls.length - 1][0]).toBe(mockCliProfile.id);
+    });
+    // MC-503: updateParameters 写入 params.selectedCli
+    expect(h.mockApi.updateParameters).toHaveBeenCalledWith({
+      panelId: "hooksConfig-page-1",
+      selectedCli: mockCliProfile.id,
+    });
+    // 显式 onLayoutChange(saveLayout(containerApi))——updateParameters 不触发
+    // onDidLayoutChange，必须显式保存（toJSON 被调用即 saveLayout 序列化执行）
+    expect(h.mockContainerApi.toJSON).toHaveBeenCalled();
+  });
+
+  it("持久化恢复：params.selectedCli=mockcli 挂载恢复选中 + 高亮", async () => {
+    h.mockReadHooksConfig.mockResolvedValue({});
+    const { getByRole } = renderPanel({
+      panelId: "hooksConfig-page-1",
+      selectedCli: mockCliProfile.id,
+    });
+    // 挂载即选中 mockcli → 编辑器加载携 mockcli（非默认回退 claude）
+    await waitFor(() => expect(h.mockReadHooksConfig.mock.calls.length).toBe(1));
+    expect(h.mockReadHooksConfig.mock.calls[0][0]).toBe(mockCliProfile.id);
+    const mockBtn = (await waitFor(() =>
+      getByRole("button", { name: mockCliProfile.displayName }),
+    )) as HTMLButtonElement;
+    const claudeBtn = getByRole("button", { name: "claude" }) as HTMLButtonElement;
+    expect(mockBtn.style.background).toBe(hexToRgb(EXPLORER_SELECTION_BG));
+    expect(claudeBtn.style.background).toBe("transparent");
+  });
+
+  it("mock 桩编辑器：保存后重启提示条文案 = mockcli restartHint 桩文案", async () => {
+    h.mockReadHooksConfig.mockResolvedValue({});
+    const { container } = renderPanel({
+      panelId: "hooksConfig-page-1",
+      selectedCli: mockCliProfile.id,
+    });
+    await waitFor(() => expect(h.mockReadHooksConfig.mock.calls.length).toBe(1));
+    // 合法编辑 → 保存成功 → 提示条文案 = mockcli profile 的 restartHint（MC-506）
+    act(() => {
+      const props = h.mockJsonMode.mock.calls[
+        h.mockJsonMode.mock.calls.length - 1
+      ] as unknown as [
+        {
+          onChange: (t: string) => void;
+          onValidationChange: (v: boolean, d: unknown[]) => void;
+        },
+      ];
+      props[0].onChange(
+        JSON.stringify({ PreToolUse: [{ hooks: [{ type: "command", command: "x" }] }] }),
+      );
+      props[0].onValidationChange(true, []);
+    });
+    fireEvent.click(
+      container.querySelector('[data-e2e="hooks-save"]') as HTMLButtonElement,
+    );
+    await waitFor(() =>
+      expect(
+        container.querySelector('[data-e2e="hooks-restart-hint"]'),
+      ).toBeTruthy(),
+    );
+    const hint = container.querySelector(
+      '[data-e2e="hooks-restart-hint"]',
+    ) as HTMLElement;
+    expect(hint.textContent).toContain(MOCK_CLI_RESTART_HINT);
+    // 保存携选中态 cliId
+    expect(h.mockWriteHooksConfig).toHaveBeenCalledTimes(1);
+    expect(h.mockWriteHooksConfig.mock.calls[0][0]).toBe(mockCliProfile.id);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// AC-4⑤ 恢复注入（mock buildRestoreInput 桩输出）
+// ═══════════════════════════════════════════════════════════════
+
+describe("AC-4⑤ 恢复注入", () => {
+  let apiStub: { addPanel: ReturnType<typeof vi.fn> };
+  let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    registerMockCliProfile();
+    TerminalRegistry._reset();
+    resetStores();
+    h.mockSwitchToPageShared.mockReset().mockResolvedValue(undefined);
+    h.mockGetPageApi.mockReset();
+    h.mockPtyWrite.mockReset().mockResolvedValue(undefined);
+    h.mockSendToastNotification.mockReset();
+    apiStub = {
+      addPanel: vi.fn((args: { id: string }) => {
+        // 模拟真实 Dockview addPanel → TerminalRegistry 注册（恢复编排 waitFor 轮询命中）
+        TerminalRegistry.register(args.id, {
+          term: new Terminal() as unknown as Terminal,
+          sessionId: "session-test-1",
+          webglAddon: null,
+          fitAddon: fitStub,
+        });
+      }),
+    };
+    h.mockGetPageApi.mockReturnValue(apiStub);
+    consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    resetCliProfileRegistry();
+    TerminalRegistry._reset();
+    consoleErrorSpy.mockRestore();
+  });
+
+  it("注入内容 = mock buildRestoreInput 桩输出 + addPanel title = tabTitle", async () => {
+    await restoreHistorySession(makeHistorySession({ cliId: mockCliProfile.id }));
+
+    // addPanel title 取自 profile.tabTitle（MC-315 委托）
+    expect(apiStub.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ title: mockCliProfile.tabTitle }),
+    );
+    // 注入内容 = mockcli history 能力输出（可识别前缀 "mockcli --resume"）
+    const [, , data] = h.mockPtyWrite.mock.calls[0] as [
+      string,
+      string,
+      Uint8Array,
+    ];
+    expect(new TextDecoder().decode(data)).toBe(
+      `mockcli --resume ${SESSION_ID}\r`,
+    );
+  });
+
+  it("fork 变体：注入内容追加 --fork-session", async () => {
+    await restoreHistorySession(
+      makeHistorySession({ cliId: mockCliProfile.id }),
+      { fork: true },
+    );
+    const [, , data] = h.mockPtyWrite.mock.calls[0] as [
+      string,
+      string,
+      Uint8Array,
+    ];
+    expect(new TextDecoder().decode(data)).toBe(
+      `mockcli --resume ${SESSION_ID} --fork-session\r`,
+    );
+  });
+});

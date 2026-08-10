@@ -79,7 +79,7 @@ public/cli-icons/          # 本任务补充：Stage 01 的 mockcli.png（config
 | 03 | 已提交/已验证 | a574752 | true | 1 | cliProfiles 3 文件残留 ipc/hooks import（S03-02/08）+ terminal.test.tsx mock 未更名 + 3 测试文件 onHookEvent 键 + watcher 注释/CLAUDE.md 引用（S03-02）；e2e 被 tsc 阻断 → 修复后全绿 |
 | 04 | 已提交/已验证 | bca4be3 | true | 1 | 6 处 types/claudeHistory 残留 import（S04-06）+ test-inventory 分布失实（S04-09）；e2e 被 tsc 阻断 + 测试 agent no-return → 主 agent 补跑 e2e 8 spec 全绿 |
 | 05 | 已提交/已验证 | 1c59c4d | true | 1 | S05-09 事件名字面量残留 3 处（useXterm/useAgentStatus 的 SessionEnd/Exit）→ 常量下沉 profiles/claude（SESSION_END_EVENT/EXIT_EVENT）；测试 agent no-return → 主 agent 补跑 L1-L4 全绿 |
-| 06 | 待跑 | — | — | 0 | |
+| 06 | 已提交/已验证 | 904f169 | true | 0 | 7 项 partial 全因测试 agent no-return（实现全部达意）→ 主 agent 补跑门禁全绿，无 fix-loop |
 | 07 | 待跑 | — | — | 0 | |
 | 08 | 待跑 | — | — | 0 | |
 
