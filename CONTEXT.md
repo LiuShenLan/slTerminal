@@ -66,8 +66,14 @@ FIFO 字节队列。前端 Channel 断开时缓存 PTY 最新输出，重连时�
 **PTY 重连**：
 前端页面切换后重新挂载终端面板时，替换已有 PTY 会话的 Channel 并回放环形缓冲的操作。避免了杀进程重建。
 
-**历史会话**（Claude Session）：
-claude CLI 在某项目目录运行产生的 transcript 会话（`~/.claude/projects/` 下 `<uuid>.jsonl`），由 claude_history 模块扫描/恢复。与前端会话、PTY 会话是不同概念（详见 claude_history 模块文档）。
+**历史会话**（Agent Session History）：
+编码 CLI 在某项目目录运行产生的持久化会话记录（claude 为 `~/.claude/projects/` 下 `<uuid>.jsonl` transcript），由各 CLI 的 HistoryProvider 扫描/删除/恢复。与前端会话、PTY 会话是不同概念（详见 claude_history 模块文档）。
+
+**编码 CLI**（Coding CLI）：
+以命令行形态运行的 AI 编码代理程序（如 claude、codex、aider）。slTerminal 对其提供专门优化（状态可视化、历史会话、hooks 配置等），经 CLI profile 抽象实现可插拔支持。
+
+**CLI profile**（编码 CLI Profile）：
+一个编码 CLI 的完整能力描述与注册单元——身份识别（commands 匹配集 + 品牌 logo）+ 分域能力声明（hooks 注入/事件状态映射/通知分类/历史 provider/用量/配置编辑器），能力可选（未声明即该域不可用）。前后端各有 profile 注册表，以 cliId 为公共键；claude 为首个注册 profile。
 
 **应用运行期**：
 应用进程的一次运行——ID 生成等"单运行期内唯一"语义的准确表述。
@@ -204,7 +210,7 @@ slTerminal 感知 CC hook 事件的主通道。注入用户配置的 hook 脚本
 pty_spawn 时注入子进程环境块的环境变量。经 shell → claude → hook 脚本继承链传递并写入信号文件，实现会话→页签的精确路由（不用 cwd 猜测）。
 
 **四态**：
-页签图标的四种 claude 会话状态——工作⚡、注意🟡、完成✅、错误❌。F3 专有术语，触发源映射见 panels 模块文档。
+页签图标的四种编码 CLI 会话状态——工作⚡、注意🟡、完成✅、错误❌。跨 CLI 归一状态模型，各 CLI profile 经 eventToStatus 策略把自有事件映射进四态；无 hooks 能力的 CLI 走 OSC 133 双态（🟡 运行中/无图标）。F3 专有术语，触发源映射见 panels 模块文档。
 
 **注入 / 卸载**：
 把 slTerminal 状态上报 hook 配置 merge 写入 user 层 settings.json（注入），或干净移除配置段与脚本文件（卸载）。仅手动按钮触发，不做启动引导。
