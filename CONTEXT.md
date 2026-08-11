@@ -73,7 +73,7 @@ FIFO 字节队列。前端 Channel 断开时缓存 PTY 最新输出，重连时�
 以命令行形态运行的 AI 编码代理程序（如 claude、codex、aider）。slTerminal 对其提供专门优化（状态可视化、历史会话、hooks 配置等），经 CLI profile 抽象实现可插拔支持。
 
 **CLI profile**（编码 CLI Profile）：
-一个编码 CLI 的完整能力描述与注册单元——身份识别（commands 匹配集 + 品牌 logo）+ 分域能力声明（hooks 注入/事件状态映射/通知分类/历史 provider/用量/配置编辑器），能力可选（未声明即该域不可用）。前后端各有 profile 注册表，以 cliId 为公共键；claude 为首个注册 profile。
+一个编码 CLI 的完整能力描述与注册单元——身份识别（commands 匹配集 + 品牌 logo）+ 分域能力声明（hooks 注入/事件状态映射/通知分类/历史 provider/用量/配置编辑器），能力可选（未声明即该域不可用）。前端为统一的 CliProfileRegistry；后端按能力拆分为 hooks/history 两个 cliId 键注册表（分别见 hooks/provider.rs 与 agent_history/provider.rs）。
 
 **应用运行期**：
 应用进程的一次运行——ID 生成等"单运行期内唯一"语义的准确表述。
@@ -226,7 +226,7 @@ hooks 配置编辑面板的两种编辑模式——GUI 表单（Master-Detail）
 _Avoid_: agent 面板, 会话列表
 
 **会话行**：
-Agent Status 视图中的一行，对应一个**运行中的编码 CLI 会话**（非终端面板——纯 shell 终端无行）。经 OSC 133 C（命令检测，未注入 hooks 的会话也有行，四态 🟡、用量条不可用态）或 SessionStart（agent-event 事件）建立；上下文用量由信号文件 transcriptPath 定位 transcript JSONL 后端解析，事件驱动更新、不轮询。
+Agent Status 视图中的一行，对应一个**运行中的编码 CLI 会话**（非终端面板——纯 shell 终端无行）。经 OSC 133 C（命令检测，未注入 hooks 的会话也有行，四态 🟡、用量条不可用态）或 SessionStart（agent-event 事件）建立；上下文用量由信号文件 usageSourcePath 定位 transcript JSONL 后端解析，事件驱动更新、不轮询。
 _Avoid_: 终端行
 
 ---
