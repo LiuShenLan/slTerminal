@@ -1,7 +1,7 @@
 // sideViewDefs — 侧栏视图 side-effect 注册
 //
 // 此文件在 import 时执行副作用，向 sideViewRegistry 注册两条视图。
-// 类比 src/panels/terminal/tabRules.ts 模式——side-effect import 触发注册。
+// 类比 cliProfiles/profiles 模式——side-effect import 触发注册。
 // 新增侧栏视图只需在此追加 sideViewRegistry.register(...) 一行即可，
 // 框架自动处理按钮渲染、开关、拖拽归属、槽位展示与持久化。
 // 组件内不 import 本文件（防循环），由 Workspace 顶层引入。

@@ -2,10 +2,10 @@
 
 > **本文档是项目用例数唯一真值源。** 所有 CLAUDE.md、README、CI 配置中引用的用例数均以此文件为准。更新测试后必须同步本文档。
 
-全量 **3204** 用例（Rust 597 + 前端 2428 + L3 138 + E2E 41），2026-08-11 更新。
+全量 **3203** 用例（Rust 597 + 前端 2427 + L3 138 + E2E 41），2026-08-12 更新。
 
 > **计数口径**：
-> - L2 以 `npm test` 实跑（Vitest 报告）为准——`it.each(...)` 参数化与 `describeIpcContract` 工厂（`helpers/ipc-contract.ts`，IHE-06）等按**展开后用例数**计入（139 文件 2411 用例，Stage 08 终验实跑回写 + Stage 01 review-fix 增量，见 L2 段 ① 注）；纯 grep `it(/test(` 块数会少计 it.each 展开（如 colors 85 = 13 块 + 7 组 each 展开 72）。
+> - L2 以 `npm test` 实跑（Vitest 报告）为准——`it.each(...)` 参数化与 `describeIpcContract` 工厂（`helpers/ipc-contract.ts`，IHE-06）等按**展开后用例数**计入（139 文件 2427 用例，Stage 08 终验实跑回写 + review-fix Stage 01/02/04 增量 + Stage 06 终验校正——it.each 展开口径差 1 以实跑为准，见 L2 段 ①-③ 注）；纯 grep `it(/test(` 块数会少计 it.each 展开（如 colors 85 = 13 块 + 7 组 each 展开 72）。
 > - L1 以 `grep -c '#\[test\]'` 统计的 `#[test]` 属性数为准（32 文件 597）。
 > - L3 以 `npm run test:l3` 实跑为准（7 文件 138，`test/terminal/**/*.test.ts`）。
 > - L4 以 spec 内 `it(`/`it.skip(` 计数为准（9 spec，41 用例，39 active + 2 skip）。
@@ -41,7 +41,7 @@
 | ⑤ | L2 | **E2E helper 行为契约**——`app.test.tsx`/`e2e-create-project.test.ts` 验证的是 `__slterm_e2e_createProject` 等 helper 的契约（pending 标记/localStorage 交互），非真实 App 初始化逻辑；真实挂载路径由 `e2e-gating-*` 测试 + L4 使用实证 | 13 P-14 |
 | ⑥ | L2 | **浅层组件定位**——`editor.test.tsx` mock `useCodeMirror` 只验证 prop 透传与容器样式，定位为组件集成契约测试（非行为测试），真实编辑器行为由 `use-code-mirror.test.ts` 等覆盖 | 07 G1/G2 |
 
-## L1 — Rust 单元/集成测试（32 文件 / 592 用例）
+## L1 — Rust 单元/集成测试（32 文件 / 597 用例）
 
 运行：`cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1`
 
@@ -80,19 +80,19 @@
 | `src-tauri/src/agent_history/provider.rs` | 2 | CliHistoryProvider trait 三方法（scan/delete/validate_session_id）+ cliId 键注册表 + resolve_provider 命中（身份断言）/未知 cliId Validation（MC-303/304 新建） |
 | `src-tauri/tests/pty_integration_tests.rs` | 8 | PTY 往返/OSC cwd 解析/resize 生效/kill 无孤儿/Custom ConPTY spawn/reattach/env 注入 |
 
-> ① 占位符已实落消除：provider.rs 实落 2 条（resolve_provider 命中/未知 cliId Validation），claude/mod.rs 实落 4 条（TitleSource serde ×2 + as_str 映射 + ScanRootGuard env 恢复）；Stage 08 补登 hooks/claude/mod.rs 1 条（HomeDirGuard 注入/恢复守卫）——L1 总数按实落对齐（584 + 净增 8 = 592）。
+> ① 占位符已实落消除：provider.rs 实落 2 条（resolve_provider 命中/未知 cliId Validation），claude/mod.rs 实落 4 条（TitleSource serde ×2 + as_str 映射 + ScanRootGuard env 恢复）；Stage 08 补登 hooks/claude/mod.rs 1 条（HomeDirGuard 注入/恢复守卫）——L1 总数按静态 grep `#[test]` 实查对齐 597（32 文件；review-fix Stage 01-05 行级增量——AQ-2 信号大小上限、AQ-3 符号链接拒跟随、ZQ-5 null 入参等——已逐行登记于上表各表行）。
 
 > `pty/mod.rs`、`pty/win_build.rs`、`main.rs` 不含 `#[test]`，不在此列。git/mod.rs 测试已按 GIT-12 全量拆出至 `tests/`（`#[test]` 零残留）。agent_history 模块 grep 口径：claude/jsonl 28 + claude/scan 16 + claude/ops 10 + mod 13 = 67（命令包装层 4 用例已迁入 mod.rs:407-464，MC-301 下沉时随行）+ claude/mod 4 + provider 2 = 全模块 73；env 测试依赖 L1 `--test-threads=1` 门禁（`std::env::set_var` 全局可变）。
 
-## L2 — 前端单元/集成测试（139 文件 / 2428 用例）
+## L2 — 前端单元/集成测试（139 文件 / 2427 用例）
 
-运行：`npm test`（Vitest + jsdom，登记 2428 用例）
+运行：`npm test`（Vitest + jsdom，登记 2427 用例）
 
 > ① Stage 08 行级校正：5 个陈旧行按磁盘 block 计数核实上修（use-xterm-lifecycle 71→79、terminal-registry 24→28、hooks-config-panel 36→40、agent-status-hook 39→43、agent-status-view 29→31，合计 +22）——L2 合计 2371→2394；**终验实跑回写**：npm test 实跑 2408 用例（139 文件），it.each 展开与 describeIpcContract 工厂生成用例按展开后计入，以实跑为准。
 >
 > ② Stage 02 review-fix 增量（ZQ-1~4/6/7，composite-key 单点代登记）：agent-history-model 44→47（keyOf 单点 +3）、agent-history-view 35→37（keyOf 随行消费方回退 +2）、use-xterm-lifecycle 79→81（resolvePayloadCliId 空串回退 + Exit 事件清图标，代 event-pipeline 登记 +2）、agent-status-hook 43→45（resolvePayloadCliId 空串回退 + null 映射事件建行 status null，代 event-pipeline 登记 +2）、notifications 33→34（resolvePayloadCliId 空串回退，代 event-pipeline 登记 +1）、agent-history-restore 7→8（同毫秒两次恢复 panelId 相异，代 restore-id 登记 +1）——合计 +11，L2 2411→2422；以终验实跑为准。
 >
-> ③ Stage 04 review-fix 增量（KZ-1/KZ-4，layers 单点代登记）：cli-profile-claude 51→53（**configEditor 挂载 = ClaudeHooksConfigEditor（KZ-1，代 editor-dispatch 登记 +1）** + **configLayers 三层现值（KZ-4：user/project/local + label/hint，层切换器数据源 +1）**；hooks 能力断言升七字段随行）、hooks-config-panel 40→43（**代 editor-dispatch 登记 +2**：hub 分派——选中 stubcli 渲染 profile 声明的桩编辑器（data-e2e 标记 + JsonMode 零新增挂载）+ hasConfigEditor=true 但 configEditor 缺失 → 编辑器槽空态占位「该 CLI 未提供配置编辑器」且不渲染 claude 编辑器；**KZ-4 +1**：层级切换器数据源 = profile.configLayers——自定义两层 profile（dev/prod）渲染且 claude 固定三层不出现 + 初始层 = configLayers[0].id 携首次 read）、hooks-config-sync 9→10（**KZ-4 +1**：useHooksConfig initialLayer 参数——初始层 = 传入值 + 缺省回退 "user"）——合计 +6，L2 2422→2428；以终验实跑为准。
+> ③ Stage 04 review-fix 增量（KZ-1/KZ-4，layers 单点代登记）：cli-profile-claude 51→53（**configEditor 挂载 = ClaudeHooksConfigEditor（KZ-1，代 editor-dispatch 登记 +1）** + **configLayers 三层现值（KZ-4：user/project/local + label/hint，层切换器数据源 +1）**；hooks 能力断言升七字段随行）、hooks-config-panel 40→43（**代 editor-dispatch 登记 +2**：hub 分派——选中 stubcli 渲染 profile 声明的桩编辑器（data-e2e 标记 + JsonMode 零新增挂载）+ hasConfigEditor=true 但 configEditor 缺失 → 编辑器槽空态占位「该 CLI 未提供配置编辑器」且不渲染 claude 编辑器；**KZ-4 +1**：层级切换器数据源 = profile.configLayers——自定义两层 profile（dev/prod）渲染且 claude 固定三层不出现 + 初始层 = configLayers[0].id 携首次 read）、hooks-config-sync 9→10（**KZ-4 +1**：useHooksConfig initialLayer 参数——初始层 = 传入值 + 缺省回退 "user"）——合计 +6，L2 2422→2428；**Stage 06 终验校正（2026-08-12）：实跑 2427——it.each 展开口径差 1，以实跑为准**。
 
 ### IPC 层（6 文件 / 116 用例）
 

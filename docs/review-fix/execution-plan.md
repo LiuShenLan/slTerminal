@@ -80,7 +80,7 @@ docs/
 | 02 | 已验证 | bed433d | true | 0（一次通过） | — |
 | 03 | 已验证 | a612fc0 | true | 1（hooks.e2e.ts :258 it 测试健壮性修复：rowAboveEditor 定位 bug + 面板残留；L4 9/9 转绿） | L4 修复后全绿 |
 | 04 | 已验证 | ef0ae64 | true | 1（vitest.l3.config.ts 补 codemirror-json-schema inline——L3 suite 加载失败；spawn.rs 断言大小写不敏感） | AC-4④ 3 例中间态由 Stage 05 消除；L1 597 全绿 |
-| 05 | 待跑 | | | | |
+| 05 | 已验证 | d19869e | true | 1（hooks.e2e.ts hub 断言限定面板容器作用域——终端页签 logo 残留；helpers.ts extractErrorText 提取 Tauri 结构化错误文案） | L4 9/9 转绿；AC-4④ 中间态消除（双向分派断言全绿） |
 | 06 | 待跑 | | | | |
 
 ## 8. 人工验证点汇总（收尾实测项）

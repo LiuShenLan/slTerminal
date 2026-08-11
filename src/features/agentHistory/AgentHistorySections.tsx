@@ -46,7 +46,7 @@ export interface AgentHistorySectionsProps {
   historyState: AgentHistoryState;
   /** 全部历史会话（扫描结果） */
   sessions: AgentHistorySession[];
-  /** 运行中会话四态映射（Map<sessionId, status>） */
+  /** 运行中会话四态映射（Map<cliId|sessionId, status>，复合键 MC-313——键构造经 historyModel.keyOf 单点） */
   activeStatuses: Map<string, AgentStatus>;
   /** 当前项目 rootPath（null → 当前项目区显示「无活跃项目」） */
   rootPath: string | null;

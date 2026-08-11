@@ -67,5 +67,5 @@ export const claudeProfile: CodingCliProfile = {
   },
 };
 
-// side-effect 注册（import 即注册，照 tabRules 先例）
+// side-effect 注册（import 即注册）
 cliProfileRegistry.register(claudeProfile);

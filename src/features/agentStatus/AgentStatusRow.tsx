@@ -52,7 +52,7 @@ export const AgentStatusRow: React.FC<Props> = ({ row, onFocus, now }) => {
   // ---- 图标与时间（相对时间，与历史区口径统一；now 由 60s ticker 驱动重算） ----
   const icon = getStatusIcon(row.status);
   // MC-411：CLI 品牌 logo 按行 cliId 查 profile.iconSrc（OSC 133-only 行同样有 cliId）；
-  // 未注册 cliId → undefined → 无 logo 不报错（与原 cliIconRegistry.getSrc 语义一致）
+  // 未注册 cliId → undefined → 无 logo 不报错
   const logoSrc = cliProfileRegistry.get(row.cliId)?.iconSrc;
   const timeStr = formatRelativeTime(row.lastEventAt, now ?? Date.now());
 

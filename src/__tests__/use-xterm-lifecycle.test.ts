@@ -1360,7 +1360,7 @@ describe("OSC 133 命令边界检测", () => {
       active: true,
       title: "claude",
       icon: "🟡",
-      // CLI 品牌 logo：CliIconRegistry.match("claude") 命中默认注册 → claude.png
+      // CLI 品牌 logo：cliProfileRegistry.matchByCommand("claude") 命中默认注册 → claude.png
       logo: "/cli-icons/claude.png",
     });
       // P1-F3-01: OSC 133 C 固定使用 🟡 (attention)，不使用 rule.icon

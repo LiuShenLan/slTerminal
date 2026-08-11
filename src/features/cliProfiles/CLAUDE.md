@@ -14,7 +14,7 @@ CLI profile 注册表（MC-1/101~108）——编码 CLI 身份域与能力策略
 
 ## 架构决策
 
-### 模块级单例（项目第 6 个注册表，照 TabTitleRegistry 模式）
+### 模块级单例（项目第 6 个注册表）
 
 `cliProfileRegistry` 为全局单例（`CliProfileRegistry` 类实例）：
 
@@ -50,7 +50,7 @@ CLI profile 注册表（MC-1/101~108）——编码 CLI 身份域与能力策略
 
 `profiles/claude/index.ts` import `panels/hooksConfig/ClaudeHooksConfigEditor` 并挂入 `capabilities.hooks.configEditor`——features/cliProfiles → panels 新方向合法化理由：`profiles/claude/` 是 claude 合法领地，编辑器组件是 claude 专属资产（MC-223 决策 2），hub 经 profile 的 configEditor 字段分派渲染（新增 CLI 自带编辑器组件即可接入 hub，hub 零改动）；`types.ts` 仅类型 import（`HooksConfigEditorProps` 的 `React.ComponentType`/`React.MutableRefObject` 类型引用，运行期擦除）不构成运行循环——打包图循环由 `npx vite build` 验证。
 
-### 注册触发点（side-effect import，照 tabRules 先例）
+### 注册触发点（side-effect import）
 
 - barrel `index.ts` **不触发注册**（仅导出类型与注册表；缺省回退常量经 `./profiles/claude` 直接引用）
 - `profiles/index.ts` import 即注册全部 profile——生产注册触发点为 `Workspace.tsx` 显式 import（D-07）；新增 CLI 在此追加 `import "./<cli>"`，不修改核心逻辑
@@ -77,4 +77,4 @@ L2 测试位于 `src/__tests__/`（用例数见 `.claude/test-inventory.md`）�
 | `mock-cli-profile.test.tsx` | AC-4 mock profile 全链路验收（Stage 07 五点全表：OSC 133 命中 / hooks 能力真实调用 / 历史聚合 UI / hub 选择行 / 恢复注入），夹具 `helpers/mockCliProfile.ts` |
 | `no-claude-literals.test.ts` | **AC-5 字面量守卫**：通用层七路径（src/lib、src/panels/terminal、features/agentStatus、features/agentHistory、features/notifications、src/ipc、src/types）递归扫描——"claude" 字符串/事件名字面量/`~/.claude` 路径字面量零残留（豁免：指向 profiles/claude 的 import 路径、标识符与注释） |
 
-**新增 CLI 步骤**：`public/cli-icons/<id>.png` 放图（32×32 透明底，渲染 16×16，随 frontendDist 内嵌 exe）→ `profiles/<cli>/` 定义 profile（含能力域，实现随 claude 先例）→ `profiles/index.ts` 追加 import → 对应 cli-profile 测试登记字段与策略用例。
+**新增 CLI 步骤**：`public/cli-icons/<id>.png` 放图（32×32 透明底，渲染 16×16，随 frontendDist 内嵌 exe）→ `profiles/<cli>/` 定义 profile（含能力域，实现随 claude 先例；**`hasConfigEditor=true` 时新增编辑器组件并挂入 `configEditor`，须同时声明 `configLayers`（`{ id, label, hint }[]`，claude 三层值见上）——hub 编辑器槽经 profile 字段分派渲染，hub 零改动（KZ-1/4）**）→ `profiles/index.ts` 追加 import → **后端 hooks provider：实现 `CliHooksProvider` trait（六方法，路径语义由具体 CLI 解释）并在 `src-tauri/src/hooks/provider.rs` 的 `REGISTRY` 注册 cliId 条目（无 hooks 能力 → 注册 `None` 条目，走「不支持 hooks 能力」Validation 分支）** → **后端 history provider：实现 `CliHistoryProvider` trait（scan 无 Err 通道失败降级；delete 前必过 `validate_session_id`——SEC-05 等价）并在 `src-tauri/src/agent_history/provider.rs` 的 `REGISTRY` 注册 cliId 条目** → 对应 cli-profile 测试登记字段与策略用例 + **`.claude/test-inventory.md` 用例数同步**。

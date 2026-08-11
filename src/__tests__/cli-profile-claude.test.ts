@@ -18,7 +18,7 @@
 // 守卫；含 mockcli.png 先行资源，决策 5，Stage 07 mock 夹具引用）。
 
 import { describe, it, expect, afterEach } from "vitest";
-// 导入触发 side-effect 注册（照 tab-rules.test.ts 先例，模块加载即注册 claude）
+// 导入触发 side-effect 注册（模块加载即注册 claude）
 import {
   CLAUDE_CLI_ID,
   claudeProfile,
@@ -43,7 +43,7 @@ afterEach(() => {
 
 describe("claude profile 身份域（MC-104）", () => {
   it("side-effect 注册生效：import profiles/claude 后 matchByCommand('claude') 命中", () => {
-    // tabRules 先例——模块顶层 import 已执行注册，此处直接 match 验证副作用
+    // cliProfiles/profiles 先例——模块顶层 import 已执行注册，此处直接 match 验证副作用
     const profile = cliProfileRegistry.matchByCommand("claude");
     expect(profile).not.toBeNull();
     expect(profile!.id).toBe(CLAUDE_CLI_ID);

@@ -289,7 +289,7 @@ describe("TerminalPanel", () => {
     await act(async () => {
       oscHandler("C;claude");
     });
-    // CliIconRegistry.match("claude") 命中默认注册 → tabLogo = claude.png
+    // cliProfileRegistry.matchByCommand("claude") 命中默认注册 → tabLogo = claude.png
     expect(mocks.mockApi.updateParameters).toHaveBeenLastCalledWith(
       expect.objectContaining({ tabIcon: "🟡", tabLogo: "/cli-icons/claude.png" }),
     );

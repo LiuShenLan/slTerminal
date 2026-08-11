@@ -2,7 +2,7 @@
 //
 // 模块级单例，管理侧栏视图定义。
 // ActivityBar 通过此注册表渲染按钮，SideBarArea 通过它渲染视图槽。
-// 同 TabTitleRegistry 模式——register/get/getAll/_reset。
+// 同 CliProfileRegistry 模式——register/get/getAll/_reset。
 //
 // 新增侧栏视图只需实现组件 + 一行 register()，框架自动处理：
 //   按钮渲染与开关、上区/下区拖拽归属、槽位展示、持久化。

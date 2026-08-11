@@ -181,5 +181,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | F6 | 特性 | hooks 双模式配置面板（JSON/GUI 编辑 hooks 子树，user/project/local 三层，F2 注入入口并入） |
 | F7 | 特性 | 历史会话查询与恢复（历史区三下拉框 + 扫描/恢复/删除；重命名已移除） |
 | F8 | 特性 | 终端页签自定义重命名（右键菜单「重命名」+ 自绘弹窗；customTitle 随布局持久化；claude 运行中禁用；不影响 terminal-N 递增） |
+| F9 | 特性 | 终端页签/侧栏 CLI 品牌 logo（按命令行首 token 匹配 profile.iconSrc） |
 
 > 测试策略概览见上方「测试策略」章节；完整用例清单见 `.claude/test-inventory.md`。

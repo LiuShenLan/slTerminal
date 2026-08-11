@@ -25,7 +25,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### SideViewRegistry 扩展指南
 
-`SideViewRegistry` 是模块级单例（同 TabTitleRegistry 模式），管理侧栏视图定义（`SideViewDef` = id + title + icon + React 组件）。ActivityBar 通过此注册表渲染按钮，SideBarArea 通过它渲染视图槽。
+`SideViewRegistry` 是模块级单例，管理侧栏视图定义（`SideViewDef` = id + title + icon + React 组件）。ActivityBar 通过此注册表渲染按钮，SideBarArea 通过它渲染视图槽。
 
 **新增侧栏视图只需两步**：
 1. 实现 ViewComponent（接受 `SideViewComponentProps = { switchToPage, onDeletePage }`）。例如 `agent-status` 视图——`AgentStatusView` 组件位于 `../agentStatus/AgentStatusView.tsx`
@@ -43,7 +43,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 默认按钮归属（`DEFAULT_ZONES.top`）：`projects` / `explorer` / `commit` / `agent-status`（`sideBarState.ts`）。
 
-与项目现有注册表对比：同 `TabTitleRegistry`（`panels/terminal/`）的 `register/getAll/_reset` 模式；同 `ShortcutRegistry` 的模块级单例模式；同 `FileViewerRegistry` 的注册即用零额外配置模式。
+与项目现有注册表对比：同 `CliProfileRegistry`（`cliProfiles/`）的 `register/getAll/_reset` 模式；同 `ShortcutRegistry` 的模块级单例模式；同 `FileViewerRegistry` 的注册即用零额外配置模式。
 
 ### HTML5 拖拽——外层容器统一处理 + 容器中点 zone 判定
 
@@ -69,7 +69,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 | 文件 | 职责 |
 |------|------|
-| `index.ts` | barrel export：组件（ActivityBar/SideBarArea）、注册表（sideViewRegistry）、类型、纯函数。不 re-export sideViewDefs（由 Workspace 显式 side-effect import，同 tabRules 模式） |
+| `index.ts` | barrel export：组件（ActivityBar/SideBarArea）、注册表（sideViewRegistry）、类型、纯函数。不 re-export sideViewDefs（由 Workspace 显式 side-effect import，照 cliProfiles/profiles 先例） |
 | `sideBarState.ts` | 类型定义（Zone/Zones/OpenState/LayoutKind/SideBarSlice）+ 默认值常量（DEFAULT_ZONES/DEFAULT_OPEN/ACTIVITY_BAR_SIZE/WIDTH_* /SPLIT_*）+ 纯函数（toggleViewPure/moveButtonPure/deriveLayout/reconcileZones/sanitizeSideBar） |
 | `sideViewRegistry.ts` | `SideViewRegistry` 模块级单例：`register(def)`（同 id 覆盖）/`getAll()`（注册序）/`get(id)`/`_reset()`（仅测试） |
 | `dropTarget.ts` | `computeDropTarget` 纯函数——零 DOM 访问，根据 clientY + 按钮矩形列表计算落点 zone + index |
@@ -122,7 +122,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `sanitizeSideBar` 6 分支（非对象→默认、zones/open 结构校验、width/splitRatio clamp）
 - **S1-S6 场景序列**（连续调用纯函数断言终态，直译需求 §5 验收用例）
 
-`sideViewRegistry.test.ts`（7 用例）：register/getAll/get、重复注册覆盖、未注册 get→undefined、`_reset` 隔离。照 TabTitleRegistry.test.ts 模式。
+`sideViewRegistry.test.ts`（7 用例）：register/getAll/get、重复注册覆盖、未注册 get→undefined、`_reset` 隔离。
 
 ### Store 测试（sideBar.test.ts）
 

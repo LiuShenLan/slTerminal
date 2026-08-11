@@ -1,11 +1,11 @@
 // SchemeRegistry — 配色方案注册表
 //
 // 模块级单例，管理 ColorScheme 方案的注册与 active 切换（spec §4.6、决策 D2）。
-// 项目第 6 个注册表单例（先例：TabTitleRegistry / SideViewRegistry / ShortcutRegistry /
-// FileViewerRegistry / TerminalRegistry），模式同 TabTitleRegistry——
-// register/get/getAll/_reset + active 状态。
+// 项目第 6 个注册表单例（先例：CliProfileRegistry / SideViewRegistry / ShortcutRegistry /
+// FileViewerRegistry / TerminalRegistry），模式同 SideViewRegistry——
+// register/get/getAll/_reset（active 状态为方案系统特有）。
 //
-// 内置方案经 src/theme/schemes/index.ts side-effect 注册（照 tabRules.ts 模式），
+// 内置方案经 src/theme/schemes/index.ts side-effect 注册（照 sideViewDefs.ts 模式），
 // 本文件不直接 import 具体方案。getActive() 回退语义依赖 darcula 恒已注册。
 
 import type { ColorScheme } from "./schemes/types";

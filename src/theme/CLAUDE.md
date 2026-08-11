@@ -12,11 +12,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **`types.ts`**：`ColorScheme` / `UiTokens` / `TerminalPalette` / `EditorScheme` / `LibraryOverrides` 接口定义。每个槽位带**区域级消费注释**（语义 + 消费区域/组件，行号不入注释，决策 D8）——**权威消费注释**，新方案值文件对象标注 `: ColorScheme` 后编辑器 hover 即显示 JSDoc，新方案零注释负担。**注释双处并存（2026-08-08 用户需求）**：内置默认方案 `darcula.ts` 另含 UI 区域速查注释（逐值标注影响的前端区域，可读性优先）；types.ts 为权威，darcula.ts 速查与其保持一致。
 - **`darcula.ts`**：内置默认方案（id `"darcula"`，即 settings.json `colorScheme` 段缺省值）。四段全量值：**ui 段** 6 组（gitFile 7 / gitGutter 3 / explorer 5 / sidebar 8 / agentStatusUsage 3 / errorBanner 3）+ 23 标量；**terminal 段** 25 键（前景/背景/光标/选区 + ANSI 16 色 + 滚动条滑块，ITheme 兼容）；**editor 段** = oneDark 直 import 透出（决策 D6）+ overrides（lint 7 键 / searchMatch 4 键 / background）；**libraries 段** = dockview 20 条 CSS 变量 + allotment 2 键。值一律搬运现状（D1 零视觉变化，禁止新造）。
-- **`index.ts`**：side-effect 注册文件（照 `tabRules.ts` / `sideViewDefs.ts` 模式）——import 时 `schemeRegistry.register(darcula)`。新增方案在此追加。
+- **`index.ts`**：side-effect 注册文件（照 `sideViewDefs.ts` 模式）——import 时 `schemeRegistry.register(darcula)`。新增方案在此追加。
 
 ### SchemeRegistry 注册表（`schemeRegistry.ts`）
 
-模块级单例（项目第 6 个注册表单例，同 TabTitleRegistry 模式），七方法：`register(scheme)`（同 id 覆盖）/ `get(id)` / `getActive()` / `setActive(id)` / `getAll()` / `getDefaultId()` / `_reset()`（仅测试）。**`setActive` 未知 id → `console.warn` + 回退默认 darcula**（ACC-04 降级冒烟）。内置方案经 `schemes/index.ts` side-effect 注册，本文件不直接 import 具体方案；`getActive()` 回退语义依赖 darcula 恒已注册。
+模块级单例（项目第 6 个注册表单例，同 `CliProfileRegistry` 模式），七方法：`register(scheme)`（同 id 覆盖）/ `get(id)` / `getActive()` / `setActive(id)` / `getAll()` / `getDefaultId()` / `_reset()`（仅测试）。**`setActive` 未知 id → `console.warn` + 回退默认 darcula**（ACC-04 降级冒烟）。内置方案经 `schemes/index.ts` side-effect 注册，本文件不直接 import 具体方案；`getActive()` 回退语义依赖 darcula 恒已注册。
 
 ### colors.ts facade（代理层）
 

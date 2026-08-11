@@ -43,7 +43,7 @@ export interface UiTokens {
     /** 新增行标记 */ added: string;
     /** 删除行标记 */ deleted: string;
   };
-  /** 文件浏览器通用色——文件树（FileTree）+ agentStatus/claudeHistory/commit 视图借用 */
+  /** 文件浏览器通用色——文件树（FileTree）+ agentStatus/agentHistory/commit 视图借用 */
   explorer: {
     /** 树背景 */ bg: string;
     /** 树文字 */ fg: string;

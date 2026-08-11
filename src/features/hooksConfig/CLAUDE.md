@@ -20,7 +20,7 @@ hooks 配置面板的 **schema 内嵌单点**（C13-1）——SchemaStore 官方
 
 ### hooks 子 schema 提取
 
-`properties.hooks` + 依赖的 `$defs` 子集（hookMatcher + hookCommand，**不含** permissions 专用的 permissionRule）——保证 `#/$defs/hookMatcher` 本地引用在独立 schema 中可解析。供 JsonMode（补全/悬停/波浪线）与保存校验共用，对齐 hooks 子树编辑范围。
+`properties.hooks` + 依赖的 `$defs` 子集（hookMatcher + hookCommand，**不含** permissions 专用的 permissionRule）——保证 `#/$defs/hookMatcher` 本地引用在独立 schema 中可解析。供 JsonMode（悬停/波浪线）与保存校验共用，对齐 hooks 子树编辑范围。
 
 ### Draft07 校验单例
 

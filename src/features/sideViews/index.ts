@@ -4,7 +4,7 @@
 // 类型（SideViewDef/SideViewComponentProps 等）、纯函数（sideBarState + dropTarget）。
 //
 // 注意：不 re-export sideViewDefs——由 Workspace 显式 side-effect import
-// （同 tabRules 模式），组件内不 import 以防循环。
+// （照 cliProfiles/profiles 先例），组件内不 import 以防循环。
 
 export { ActivityBar } from "./ActivityBar";
 

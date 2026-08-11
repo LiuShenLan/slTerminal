@@ -7,7 +7,7 @@
 
 import type { CodingCliProfile } from "./types";
 
-/** CLI profile 注册表（模块级单例，同 TabTitleRegistry 模式） */
+/** CLI profile 注册表（模块级单例，register/get/getAll/matchByCommand/_reset） */
 export class CliProfileRegistry {
   private profiles: Map<string, CodingCliProfile> = new Map();
 
