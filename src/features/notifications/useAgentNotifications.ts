@@ -24,8 +24,9 @@ import {
 import { useProjects } from "../../stores/projects";
 import { parseTerminalPageId } from "../../lib/panelId";
 import { cliProfileRegistry } from "../cliProfiles";
-import { CLAUDE_CLI_ID } from "../cliProfiles/profiles/claude";
-import { TerminalRegistry } from "../../panels/terminal/TerminalRegistry";
+// ZQ-2: 来源 CLI 标识三级解析单点（契约 4）——空串/空白 cliId 同等回退
+// （TerminalRegistry 不 import notifications——classifyEvent 纯函数导入无循环）
+import { resolvePayloadCliId } from "../../panels/terminal/resolvePayloadCliId";
 
 /** 通知事件类别 */
 export type NotifyCategory = "permission" | "done" | "error";
@@ -54,18 +55,16 @@ const CATEGORY_LABEL: Record<NotifyCategory, string> = {
  *
  * 类别判定知识委托 profile：按 MC-205 三级解析取 profile 后调
  * profile.capabilities.hooks.classifyNotification(payload)：
- *   - 三级解析：payload.cliId（显式）→ TerminalRegistry.get(panelId).agentSession.cliId
- *     （反查）→ CLAUDE_CLI_ID（缺省回退，兼容旧信号）
+ *   - 三级解析经 resolvePayloadCliId 单点（ZQ-2，契约 4）：payload.cliId
+ *     （trim 后非空）→ TerminalRegistry.get(panelId).agentSession.cliId（反查）
+ *     → CLAUDE_CLI_ID（缺省回退，兼容旧信号）；空串/仅空白同等回退
  *   - 未注册 cliId（未知 CLI）→ console.warn + 返回 null（不通知，不抛异常，MC-206）
  *   - profile 无 hooks 能力 → 返回 null（不通知）
  *   - 其余 → 委托 hooks.classifyNotification，返回类别 permission/error/done/null
  */
 export function classifyEvent(payload: AgentEventPayload): NotifyCategory | null {
-  // MC-205 三级解析（三消费点同一表达式形态）
-  const cliId =
-    payload.cliId ??
-    TerminalRegistry.get(payload.panelId)?.agentSession?.cliId ??
-    CLAUDE_CLI_ID;
+  // MC-205 三级解析单点（三消费方同一 helper）
+  const cliId = resolvePayloadCliId(payload);
 
   const profile = cliProfileRegistry.get(cliId);
   if (!profile) {

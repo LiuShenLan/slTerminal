@@ -32,9 +32,8 @@ import {
 } from "./historyContextMenu";
 import type { HistoryMenuItem } from "./historyContextMenu";
 import { basename } from "../../lib/path";
-import { groupByCwd, isCurrentProject, matchesSearch } from "./historyModel";
+import { groupByCwd, isCurrentProject, keyOf, matchesSearch } from "./historyModel";
 import { TerminalRegistry } from "../../panels/terminal/TerminalRegistry";
-import { CLAUDE_CLI_ID } from "../cliProfiles/profiles/claude";
 import { parseTerminalPageId } from "../../lib/panelId";
 import { switchToPageAndFocus } from "../../workspace/pageApis";
 import type { AgentHistorySession } from "../../types/agentHistory";
@@ -190,10 +189,11 @@ const ContextMenu: React.FC<{
 /**
  * 反查运行中会话所在终端面板：复合键 `cliId|sessionId` 精确匹配（MC-313——
  * 与 deriveActiveSessionStatuses 同键形态，防跨 CLI sessionId 理论冲突），
- * 旧数据 agentSession 无 cliId → 按 CLAUDE_CLI_ID 常量回退；未命中 → undefined。
+ * 两侧键构造均经 keyOf 单点（cliId 缺省回退 CLAUDE_CLI_ID + 转义，ZQ-1）；
+ * 未命中 → undefined。
  */
 function findPanelForSession(cliId: string, sessionId: string): string | undefined {
-  const key = `${cliId}|${sessionId}`;
+  const key = keyOf(cliId, sessionId);
   for (const [panelId, entry] of TerminalRegistry.getAll()) {
     const cs = entry.agentSession;
     if (!cs) continue;
@@ -203,7 +203,7 @@ function findPanelForSession(cliId: string, sessionId: string): string | undefin
       id = base.endsWith(".jsonl") ? base.slice(0, -".jsonl".length) : base;
     }
     if (!id) continue;
-    if (`${cs.cliId ?? CLAUDE_CLI_ID}|${id}` === key) return panelId;
+    if (keyOf(cs.cliId, id) === key) return panelId;
   }
   return undefined;
 }
@@ -275,7 +275,7 @@ export const HistorySessionList: React.FC<HistorySessionListProps> = ({
   /** 行状态标记派生（四态 status / ✗ / 无 cwd——Row 的 status/orphan/noCwd 三 props） */
   const rowFlags = useCallback(
     (session: AgentHistorySession) => ({
-      status: activeStatuses.get(`${session.cliId}|${session.sessionId}`),
+      status: activeStatuses.get(keyOf(session.cliId, session.sessionId)),
       orphan: session.cwd !== null && !session.cwdExists,
       noCwd: session.cwd === null,
     }),
@@ -377,7 +377,7 @@ export const HistorySessionList: React.FC<HistorySessionListProps> = ({
   const renderRows = (list: AgentHistorySession[]) =>
     list.map((s) => (
       <HistorySessionRow
-        key={`${s.cliId}|${s.sessionId}`}
+        key={keyOf(s.cliId, s.sessionId)}
         session={s}
         selected={s.sessionId === selectedId}
         onSelect={onSelect}

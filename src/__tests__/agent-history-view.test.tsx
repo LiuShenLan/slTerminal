@@ -10,7 +10,8 @@
 //      复制命令委托 profile.history.buildResumeCommand、分支恢复按 supportsFork 显隐——MC-316）
 //   7. 双击分派三分支（普通 → 恢复；孤儿/无 cwd → 无操作；运行中 → 动作弹窗
 //      「切换到该会话操作页面」/取消——问题 5，分支恢复仅右键菜单；
-//      反查 = 复合键 cliId|sessionId 精确匹配——MC-313）
+//      反查 = 复合键 cliId|sessionId 精确匹配——MC-313，键构造经 keyOf 单点
+//      （cliId 缺省回退 + 转义——ZQ-1/ZQ-7））
 //   8. AgentStatusView 三区集成（默认态、展开触发 scan、标题覆盖——问题 6，复合键 MC-314、E2E 红线）
 //   9. 字号层级（区块标题 13px 粗体，问题 4）
 //
@@ -922,6 +923,79 @@ describe("双击分派三分支", () => {
       document.querySelector('[data-e2e="agent-history-action-dialog"]'),
     ).toBeNull();
     expect(h.mockSwitchToPageAndFocus).not.toHaveBeenCalled();
+  });
+
+  it("消费方回退：session.cliId 为 null（旧数据形态）→ rowFlags 经 keyOf 命中 CLAUDE_CLI_ID 键（ZQ-1）", () => {
+    seedExplorerProject("C:/project");
+    const { container } = render(
+      React.createElement(
+        AgentHistorySections,
+        makeSectionsProps({
+          expandedCurrent: true,
+          rootPath: "C:/project/src",
+          sessions: [
+            makeSession("session-1", {
+              cliId: null as unknown as string, // 旧数据形态（类型上 string，运行时缺省）
+              cwd: "C:/project/src",
+              cwdExists: true,
+              title: "旧数据会话",
+            }),
+          ],
+          // 生产侧键 = keyOf(claude, session-1) = "claude|session-1"
+          activeStatuses: new Map([["claude|session-1", "attention"]]),
+        }),
+      ),
+    );
+
+    fireEvent.doubleClick(
+      container.querySelector('[data-e2e="agent-history-row"]')!,
+    );
+    // 运行中判定命中（消费方缺省回退生效）→ 动作弹窗而非恢复
+    expect(
+      document.querySelector('[data-e2e="agent-history-action-dialog"]'),
+    ).toBeTruthy();
+    expect(h.mockRestore).not.toHaveBeenCalled();
+  });
+
+  it("findPanelForSession 两侧回退：会话与注册表条目均无 cliId → 经 keyOf 归一后命中（ZQ-1）", async () => {
+    seedExplorerProject("C:/project");
+    // 注册表条目无 cliId（旧数据），会话 cliId 亦为 null——两侧键都回退到 "claude|session-1"
+    h.all.set("terminal-page1-0", {
+      agentSession: { sessionId: "session-1", status: "attention" },
+    });
+    const { container } = render(
+      React.createElement(
+        AgentHistorySections,
+        makeSectionsProps({
+          expandedCurrent: true,
+          rootPath: "C:/project/src",
+          sessions: [
+            makeSession("session-1", {
+              cliId: null as unknown as string,
+              cwd: "C:/project/src",
+              cwdExists: true,
+              title: "运行中会话",
+            }),
+          ],
+          activeStatuses: new Map([["claude|session-1", "attention"]]),
+        }),
+      ),
+    );
+
+    fireEvent.doubleClick(
+      container.querySelector('[data-e2e="agent-history-row"]')!,
+    );
+    const switchBtn = Array.from(
+      document.querySelectorAll('[data-e2e="agent-history-action-dialog"] button'),
+    ).find((b) => b.textContent === "切换到该会话操作页面") as HTMLElement;
+    fireEvent.click(switchBtn);
+
+    await waitFor(() => {
+      expect(h.mockSwitchToPageAndFocus).toHaveBeenCalledWith(
+        "page1",
+        "terminal-page1-0",
+      );
+    });
   });
 });
 

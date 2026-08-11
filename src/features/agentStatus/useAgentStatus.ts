@@ -15,6 +15,8 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useLayout } from "../../stores/layout";
 import { useProjects } from "../../stores/projects";
 import { TerminalRegistry } from "../../panels/terminal/TerminalRegistry";
+// ZQ-2: 来源 CLI 标识三级解析单点（契约 4）——空串/空白 cliId 同等回退
+import { resolvePayloadCliId } from "../../panels/terminal/resolvePayloadCliId";
 import { onAgentEvent, contextUsage } from "../../ipc/agentHooks";
 import { parseTerminalPageId } from "../../lib/panelId";
 import { getPageApi } from "../../workspace/pageApis";
@@ -129,12 +131,10 @@ export function useAgentStatus(): AgentStatusResult {
       const proj = activeProjectRef.current;
       if (!proj) return;
 
-      // MC-205 三级解析：payload.cliId（显式，本 Stage 恒 undefined）→ 注册表
-      // agentSession.cliId（反查）→ CLAUDE_CLI_ID（缺省兼容旧信号）
-      const cliId =
-        payload.cliId ??
-        TerminalRegistry.get(payload.panelId)?.agentSession?.cliId ??
-        CLAUDE_CLI_ID;
+      // MC-205 三级解析单点（ZQ-2，契约 4）：payload.cliId（trim 后非空）→ 注册表
+      // agentSession.cliId（反查）→ CLAUDE_CLI_ID（缺省兼容旧信号）；
+      // 空串/仅空白与 null/undefined 同等回退（原 ?? 链遇空串短路失效）
+      const cliId = resolvePayloadCliId(payload);
       const profile = cliProfileRegistry.get(cliId);
       // MC-206：未知 cliId（未注册）或无 hooks 能力 → console.warn + 跳过（不建行/不置图标/不通知），不抛异常
       if (!profile?.capabilities?.hooks) {
@@ -185,13 +185,17 @@ export function useAgentStatus(): AgentStatusResult {
         }
 
         // 建新行：hook 事件通道（非 SessionEnd/Exit 且行不存在——与 sessionChange 通道独立幂等）
+        // ZQ-3 决策 2：null 映射事件建行但 status null（无图标）——感知存活
+        // （SessionStart 丢失场景：事件到达即会话存在，行必须出现）且不误标
+        // attention（null 状态表示「无状态」，与 deriveActiveSessionStatuses
+        // 「status 为 null 不产出键」语义一致）
         const row: AgentSessionRow = {
           panelId: payload.panelId,
           pageId,
           projectId: proj.projectId,
           cliId,
           title: pageTitle,
-          status: newStatus ?? "attention",
+          status: newStatus,
           lastEventAt: payload.timestamp || Date.now(),
           transcriptPath: payload.transcriptPath || undefined,
           sessionId: payload.sessionId || undefined,

@@ -170,14 +170,14 @@ describe("restoreHistorySession 四步恢复编排", () => {
     expect(h.mockSwitchToPageShared).toHaveBeenCalledTimes(1);
     expect(h.mockSwitchToPageShared).toHaveBeenCalledWith("page-restore-test");
 
-    // 步骤 4a：addPanel 参数（panelId = terminal-{pageId}-{Date.now()}，cwd 透传）
+    // 步骤 4a：addPanel 参数（panelId = terminal-{pageId}-{Date.now()}-{序号}，cwd 透传）
     expect(apiStub.addPanel).toHaveBeenCalledTimes(1);
     expect(apiStub.addPanel).toHaveBeenCalledWith({
-      id: expect.stringMatching(/^terminal-page-restore-test-\d+$/),
+      id: expect.stringMatching(/^terminal-page-restore-test-\d+-\d+$/),
       component: "terminal",
       title: "claude",
       params: {
-        panelId: expect.stringMatching(/^terminal-page-restore-test-\d+$/),
+        panelId: expect.stringMatching(/^terminal-page-restore-test-\d+-\d+$/),
         cwd: "C:\\Users\\test\\proj",
       },
       renderer: "always",
@@ -188,7 +188,7 @@ describe("restoreHistorySession 四步恢复编排", () => {
     const [sessionId, panelId, data] = h.mockPtyWrite.mock
       .calls[0] as [string, string, Uint8Array];
     expect(sessionId).toBe("session-test-1");
-    expect(panelId).toMatch(/^terminal-page-restore-test-\d+$/);
+    expect(panelId).toMatch(/^terminal-page-restore-test-\d+-\d+$/);
     // 内容断言为准（vitest mock.calls 参数跨 realm，instanceof 不可靠）；
     // 注入内容 = claude profile.history.buildRestoreInput 输出（MC-315 委托，
     // 与迁出源 restoreSession.ts 字面量逐字一致——断言漂移即实现有误）
@@ -250,6 +250,29 @@ describe("restoreHistorySession 四步恢复编排", () => {
     expect(new TextDecoder().decode(data)).toBe(
       `claude --resume ${SESSION_ID} --fork-session\r`,
     );
+  });
+
+  it("同毫秒两次串行恢复 → panelId 相异（自增序号段防碰撞，ZQ-4）", async () => {
+    // mock Date.now 固定同值——restoring 只阻塞并发不阻塞串行，旧实现两次
+    // 恢复落在同一毫秒产生相同 panelId，恢复命令会被注入错误终端；序号段兜底
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1700000000000);
+    try {
+      await restoreHistorySession(makeSession());
+      await restoreHistorySession(makeSession());
+
+      const [firstId, secondId] = apiStub.addPanel.mock.calls.map(
+        (call) => (call[0] as { id: string }).id,
+      );
+      expect(firstId).toMatch(
+        /^terminal-page-restore-test-1700000000000-\d+$/,
+      );
+      expect(secondId).toMatch(
+        /^terminal-page-restore-test-1700000000000-\d+$/,
+      );
+      expect(firstId).not.toBe(secondId);
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it("防重入：恢复进行中并发调用直接返回、无副作用，完成后标记复位", async () => {

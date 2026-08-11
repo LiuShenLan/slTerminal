@@ -2089,6 +2089,25 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     expect(mockCliProfileGet).toHaveBeenCalledWith("claude");
   });
 
+  it("HUK14b: 空串/仅空白 cliId 同等回退缺省（ZQ-2——不按空串解析 profile）", async () => {
+    mockCliProfileGet.mockReturnValue(makeHooksProfile("claude"));
+    mockRegistryMap.delete("hooks-test");
+    await mountAndWaitForHooks();
+    mockOnTabStateChange.mockClear();
+    mockSetAgentSession.mockClear();
+    mockCliProfileGet.mockClear();
+
+    capturedAgentEventCallbackRef.current!(makeHookPayload({
+      event: "UserPromptSubmit",
+      cliId: "   ", // 仅空白——trim 后为空，必须回退缺省
+    }));
+
+    // 空串 cliId 不短路（原 ?? 链会以空串查 profile → 未注册跳过）；
+    // resolvePayloadCliId（契约 4）trim 后回退缺省 claude
+    expect(mockCliProfileGet).toHaveBeenCalledWith("claude");
+    expect(mockSetAgentSession).toHaveBeenCalled();
+  });
+
   // ═══════════════════════════════════════════════════════════
   // MC-206/403: 未知 cliId / 无 hooks 能力 → console.warn + 跳过
   // ═══════════════════════════════════════════════════════════
@@ -2141,17 +2160,19 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     warnSpy.mockRestore();
   });
 
-  it("HUK17: Exit 事件 → setAgentSession(null) 清会话（不触发 onTabStateChange——仅 SessionEnd 清图标）", async () => {
+  it("HUK17: Exit 事件 → setAgentSession(null) 清会话 + 清图标（ZQ-6——双事件判定对齐 SessionEnd）", async () => {
     await mountAndWaitForHooks();
     mockOnTabStateChange.mockClear();
     mockSetAgentSession.mockClear();
 
+    // ZQ-6: Exit 事件清图标条件扩为 SessionEnd ∨ Exit——与删 agentSession
+    // 的双事件判定对齐（原仅 SessionEnd 清图标，Exit 事件漏清页签图标）
     capturedAgentEventCallbackRef.current!(makeHookPayload({
       event: "Exit",
     }));
 
     expect(mockSetAgentSession).toHaveBeenCalledWith("hooks-test", null);
-    expect(mockOnTabStateChange).not.toHaveBeenCalled();
+    expect(mockOnTabStateChange).toHaveBeenCalledWith({ active: false });
   });
 
   it("HUK18: SessionEnd 清图标语义保留——eventToStatus 返回 null 时仍 onTabStateChange({ active: false })", async () => {

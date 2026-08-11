@@ -662,6 +662,53 @@ describe("useAgentStatus（行建模新语义）", () => {
     expect(result.current.rows[0].cliId).toBe(CLAUDE_CLI_ID);
   });
 
+  it("hook 事件建行携 cliId（ZQ-2：空串/仅空白 cliId 与 null/undefined 同等回退缺省）", () => {
+    seedProject();
+
+    const { result } = renderHook(() => useAgentStatus());
+
+    act(() => {
+      capturedCallback.current?.(
+        makePayload({
+          event: "SessionStart",
+          timestamp: 1000,
+          cliId: "   ", // 仅空白——trim 后为空，必须回退而非按空串解析 profile
+        }),
+      );
+    });
+
+    expect(result.current.rows).toHaveLength(1);
+    // 空串 cliId 不短路：回退缺省 CLAUDE_CLI_ID（原 ?? 链遇空串会解析出空串 profile 导致跳过）
+    expect(result.current.rows[0].cliId).toBe(CLAUDE_CLI_ID);
+  });
+
+  it("null 映射事件首达建行 status=null 无图标（ZQ-3 决策 2）——SessionStart 丢失场景感知存活", () => {
+    // 场景：SessionStart 事件丢失（进程间竞态），首个到达事件是 null 映射事件
+    // （Notification(auth_success) → eventToStatus 返回 null）。ZQ-3 决策 2：
+    // 建行但 status 置 null（无图标）——行出现证明会话存活，但不误标 attention。
+    seedProject();
+    // 不预注册 terminal——hook 事件独立建行
+
+    const { result } = renderHook(() => useAgentStatus());
+    expect(result.current.rows).toHaveLength(0);
+
+    act(() => {
+      capturedCallback.current?.(
+        makePayload({
+          event: "Notification",
+          notificationType: "auth_success", // null 映射子类型
+          timestamp: 1000,
+        }),
+      );
+    });
+
+    // 建行：会话感知存活
+    expect(result.current.rows).toHaveLength(1);
+    expect(result.current.rows[0].panelId).toBe("terminal-page1-0");
+    // status null = 无图标（getStatusIcon(null) 返回 ""）——不误标 attention
+    expect(result.current.rows[0].status).toBeNull();
+  });
+
   it("未知 cliId（未注册）→ console.warn + 跳过（不建行，MC-206）", () => {
     seedProject();
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});

@@ -14,7 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **通用门控（失焦/去重/seenRef 截断）CLI 无关保留本模块；类别判定委托 profile**——按 MC-205 三级解析取 profile 后调 `profile.capabilities.hooks.classifyNotification(payload)`（claude 五映射迁入 `profiles/claude/strategies.ts`，MC-422）：
 
-- **三级解析**：`payload.cliId`（显式）→ `TerminalRegistry.get(panelId)?.agentSession?.cliId`（反查）→ `CLAUDE_CLI_ID`（缺省回退，兼容旧信号）
+- **三级解析**：经 `resolvePayloadCliId` 单点（`src/panels/terminal/resolvePayloadCliId.ts`，ZQ-2 契约 4）——`payload.cliId` trim 后非空（显式）→ `TerminalRegistry.get(panelId)?.agentSession?.cliId`（反查）→ `CLAUDE_CLI_ID`（缺省回退，兼容旧信号）；空串/仅空白 cliId 与 null/undefined 同等回退（原 `??` 链遇空串短路会解析出空串 profile）
 - **未知 cliId（未注册）** → `console.warn` + 返回 null（不通知，不抛异常，MC-206）
 - **无 hooks 能力 profile** → 返回 null（不通知）
 

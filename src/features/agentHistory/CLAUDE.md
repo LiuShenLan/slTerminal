@@ -10,7 +10,7 @@ Agent 历史会话查询与恢复——历史区 UI 与数据层（CLI 无关聚
 
 ### 四态同源（问题 2 修复，复合键 MC-313）
 
-历史区行状态与活跃区**同源**（TerminalRegistry）：hook 事件到达时 `useXterm` 经 `setAgentSession({ sessionId, transcriptPath, status, cliId })` 写入四态（经 `profile.hooks.eventToStatus` 结果；null 状态不传，undefined 保留旧值）；`deriveActiveSessionStatuses()` 纯函数派生 **`Map<cliId|sessionId, AgentStatus>`**（复合键——sessionId 优先，回退 transcriptPath basename 去 `.jsonl` 兼容旧数据；matchedCommand-only 会话无两者可定位——文档化局限；旧数据 agentSession 无 cliId → 按 `CLAUDE_CLI_ID` 常量回退，非字面量）。`useAgentHistory.activeStatuses` 经 `TerminalRegistry.subscribe` 实时跟随（register/remove/sessionChange 任一事件重算，不重扫）；`HistorySessionRow` 按 `status` 渲染 `STATUS_EMOJI`（⚡🟡✅❌，null → 无标记），与活跃区 `getStatusIcon` 展示一致。
+历史区行状态与活跃区**同源**（TerminalRegistry）：hook 事件到达时 `useXterm` 经 `setAgentSession({ sessionId, transcriptPath, status, cliId })` 写入四态（经 `profile.hooks.eventToStatus` 结果；null 状态不传，undefined 保留旧值）；`deriveActiveSessionStatuses()` 纯函数派生 **`Map<cliId|sessionId, AgentStatus>`**（复合键——sessionId 优先，回退 transcriptPath basename 去 `.jsonl` 兼容旧数据；matchedCommand-only 会话无两者可定位——文档化局限；旧数据 agentSession 无 cliId → 按 `CLAUDE_CLI_ID` 常量回退，非字面量）。**复合键构造/解析唯一口径 = `keyOf(cliId, sessionId)` 单点**（ZQ-1/ZQ-7——cliId 缺省回退 + 竖线转义一处生效，生产/消费同函数；现状 cliId/sessionId 均不含竖线，转义对存量键零变化，纯防御未来）。`useAgentHistory.activeStatuses` 经 `TerminalRegistry.subscribe` 实时跟随（register/remove/sessionChange 任一事件重算，不重扫）；`HistorySessionRow` 按 `status` 渲染 `STATUS_EMOJI`（⚡🟡✅❌，null → 无标记），与活跃区 `getStatusIcon` 展示一致。
 
 ### 双行式行（FE-07）与三级字号层级（问题 1/4 修复）
 
@@ -40,7 +40,8 @@ Agent 历史会话查询与恢复——历史区 UI 与数据层（CLI 无关聚
 - `groupByCwd(sessions)`：分组键 = 规范化 cwd（同目录不同写法归一组）；无 cwd 归 `UNKNOWN_CWD_KEY`（null）组（展示文案「(未知目录)」由 UI 层负责）；组内 mtimeMs 降序，组间按组内最大 mtimeMs 降序。**同目录不同 CLI 同组**——行级 logo 区分（MC-312）
 - `matchesSearch`：标题 + firstPrompt 大小写不敏感 includes；query 空白 → 恒 true
 - `formatRelativeTime`：六档——刚刚（<1min）/ N 分钟前 / N 小时前 / N 天前（<7d）/ 同年 `MM-DD` / 跨年 `YYYY-MM-DD`；mtimeMs ≤ 0 → 「-」（口径 = 文件 mtime，决策 26）
-- `deriveActiveSessionStatuses()`：`TerminalRegistry.getAll()` 条目 → `Map<cliId|sessionId, AgentStatus>`（复合键 MC-313：sessionId 优先 / transcriptPath basename 去 `.jsonl` 回退 / 双无跳过 / status 为 null 不产出键——与活跃区 null 无图标语义一致；旧数据无 cliId → `CLAUDE_CLI_ID` 回退）
+- `keyOf(cliId, sessionId)`：**复合键构造/解析唯一口径**（ZQ-1/ZQ-7）——cliId 为 null/undefined 回退 `CLAUDE_CLI_ID`（旧数据兼容）；两侧各自 `replaceAll("|", "\\|")` 转义后拼接 `a|b` 形态返回；生产（拼接方）消费（查键/比较方）同函数即口径一致
+- `deriveActiveSessionStatuses()`：`TerminalRegistry.getAll()` 条目 → `Map<cliId|sessionId, AgentStatus>`（复合键 MC-313：键经 `keyOf` 构造 / sessionId 优先 / transcriptPath basename 去 `.jsonl` 回退 / 双无跳过 / status 为 null 不产出键——与活跃区 null 无图标语义一致）
 
 ### 组默认收起 + 计数（问题 3 修复）
 
@@ -72,7 +73,7 @@ Agent 历史会话查询与恢复——历史区 UI 与数据层（CLI 无关聚
 
 ### 双击分派（问题 5 修复）与动作弹窗
 
-`HistorySessionList` 双击三分支：普通行 → 恢复四步；孤儿/无 cwd → 无操作；**运行中（status 非 null）→ `SessionActionDialog` 弹窗**（「切换到该会话操作页面」/「取消」；**分支恢复仅保留在右键菜单**——Tauri 原生 dialog 无法三按钮，自绘模态照 InputDialog 模式，`data-e2e="agent-history-action-dialog"`）。「切换到该会话操作页面」= 反查 `TerminalRegistry.getAll()`（`findPanelForSession`：**复合键 `cliId|sessionId` 精确匹配**（MC-313），sessionId 精确匹配、回退 transcriptPath basename、旧数据无 cliId → `CLAUDE_CLI_ID` 回退）→ `parseTerminalPageId(panelId)` → `switchToPageAndFocus(pageId, panelId)`（内部：activePageId 相同则直接聚焦）；反查不到 → `sendToastNotification` 提示（会话已结束）。
+`HistorySessionList` 双击三分支：普通行 → 恢复四步；孤儿/无 cwd → 无操作；**运行中（status 非 null）→ `SessionActionDialog` 弹窗**（「切换到该会话操作页面」/「取消」；**分支恢复仅保留在右键菜单**——Tauri 原生 dialog 无法三按钮，自绘模态照 InputDialog 模式，`data-e2e="agent-history-action-dialog"`）。「切换到该会话操作页面」= 反查 `TerminalRegistry.getAll()`（`findPanelForSession`：**复合键 `cliId|sessionId` 精确匹配**（MC-313），键构造两侧均经 `keyOf`（cliId 缺省回退 `CLAUDE_CLI_ID` + 转义，ZQ-1）、sessionId 精确匹配、回退 transcriptPath basename）→ `parseTerminalPageId(panelId)` → `switchToPageAndFocus(pageId, panelId)`（内部：activePageId 相同则直接聚焦）；反查不到 → `sendToastNotification` 提示（会话已结束）。
 
 ### 已知限制（MC-318，规格确认不修——决策 6）
 
@@ -89,7 +90,7 @@ Agent 历史会话查询与恢复——历史区 UI 与数据层（CLI 无关聚
 | `HistorySessionRow.tsx` | 双行式行组件（纯受控展示）：**四态 status**（⚡🟡✅❌，问题 2 同源）/✗ 标记、行 logo 按 `session.cliId` 查 profile（MC-311）、12px 粗体标题、11px prompt、单击选中、双击/右键回调委托 |
 | `SessionActionDialog.tsx` | 动作弹窗（问题 5 新建，照 InputDialog 样式）：标题 + 消息 + 竖排动作按钮 + 取消；Esc/遮罩点击取消 |
 | `historyContextMenu.ts` | 右键菜单策略：`getHistoryContextMenuItems`（禁用态矩阵，重命名项已移除）+ `buildResumeCommand`（委托 `profile.history.buildResumeCommand`） |
-| `historyModel.ts` | 纯函数模型：`isCurrentProject` / `groupByCwd` / `matchesSearch` / `formatRelativeTime` / `deriveActiveSessionStatuses`（复合键 `cliId\|sessionId`）+ `UNKNOWN_CWD_KEY` |
+| `historyModel.ts` | 纯函数模型：`isCurrentProject` / `groupByCwd` / `matchesSearch` / `formatRelativeTime` / `keyOf`（复合键 `cliId\|sessionId` 构造单点——回退 + 转义）/ `deriveActiveSessionStatuses` + `UNKNOWN_CWD_KEY` |
 | `useAgentHistory.ts` | 数据 hook（上提至 AgentStatusView）：状态机 + scan（无参聚合）/removeLocal + TerminalRegistry 订阅四态映射 + rootPath 推导（照 `useCommitStatus`） |
 | `restoreSession.ts` | 四步恢复编排：`restoreHistorySession(session, {fork})`（profile 策略委托）+ `waitFor` 轮询（100ms×50）+ 防重入 + 失败 toast |
 

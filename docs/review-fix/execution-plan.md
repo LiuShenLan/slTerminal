@@ -76,7 +76,7 @@ docs/
 
 | Stage | 状态（待跑/进行中/已提交/已验证） | commit hash | verify allFixed | fix-loop 轮次 | 备注（人工验证点确认） |
 |-------|------|------------|-----------------|--------------|----------------------|
-| 01 | 待跑 | | | | |
+| 01 | 已验证 | 16a767a | true | 0（主 agent 直补 test-inventory + 全量 npm test 复跑排除 flaky + inline verify 复查） | diff-panel 2 例瞬时 flaky（并行负载致 waitFor 超时），复跑 2411/2411 全绿排除 |
 | 02 | 待跑 | | | | |
 | 03 | 待跑 | | | | |
 | 04 | 待跑 | | | | |

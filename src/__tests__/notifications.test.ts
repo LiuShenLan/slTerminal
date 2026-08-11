@@ -311,6 +311,21 @@ describe("classifyEvent 类别判定委托 profile（MC-420）", () => {
     expect(result).toBe("done");
   });
 
+  it("空串/仅空白 cliId 同等回退（ZQ-2——resolvePayloadCliId trim 后回退，不按空串查 profile）", () => {
+    // 空串 cliId 不短路：显式分支失效（trim 后为空）→ 反查（无注册终端）
+    // → 缺省 claude 五映射。若按空串解析会得到未注册 profile → warn + null。
+    // 委托的是 claude profile 自身 classifyNotification（非测试 spy），
+    // 以结果与无 warn 断言回退语义
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const result = classifyEvent(makePayload({ event: "Stop", cliId: "   " }));
+      expect(result).toBe("done");
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it("缺省分支：无 cliId 且无注册终端 → CLAUDE_CLI_ID（claude profile 五映射）", () => {
     // panelId 未注册 + 无 cliId → 回退 claude：Stop → done（分类表已全表覆盖，此处显式断言分支）
     expect(classifyEvent(makePayload({ event: "Stop" }))).toBe("done");

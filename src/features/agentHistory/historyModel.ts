@@ -112,11 +112,29 @@ export function formatRelativeTime(mtimeMs: number, nowMs: number): string {
 }
 
 /**
+ * 会话复合键单点：`cliId|sessionId`（MC-313，ZQ-1/ZQ-7）
+ *
+ * 构造/解析复合键的唯一口径——cliId 为 null/undefined 时回退 CLAUDE_CLI_ID
+ * （旧数据无 cliId 兼容），cliId 与 sessionId 两侧各自把竖线转义为
+ * 「反斜杠+竖线」两字符后拼接为 `a|b` 形态返回。生产（拼接方）与消费
+ * （查键/比较方）同函数即口径一致；现状 cliId/sessionId 均不含竖线
+ * （UUID + profile id），转义对存量键零变化（纯防御未来）。
+ */
+export function keyOf(
+  cliId: string | null | undefined,
+  sessionId: string,
+): string {
+  const a = (cliId ?? CLAUDE_CLI_ID).replaceAll("|", "\\|");
+  const b = sessionId.replaceAll("|", "\\|");
+  return `${a}|${b}`;
+}
+
+/**
  * 从 TerminalRegistry 派生运行中会话 → 四态 status 映射（问题 2 修复：历史区
  * 与活跃区同源——status 由 hook 事件写入 agentSession，两区展示一致）
  *
  * 复合键 `cliId|sessionId`（MC-313）：防跨 CLI sessionId 理论冲突——运行中会话
- * 定位须同时匹配 cliId 与 sessionId 双维度。
+ * 定位须同时匹配 cliId 与 sessionId 双维度；键构造经 keyOf 单点（回退 + 转义）。
  * sessionId 优先 agentSession.sessionId（hook 事件 payload 精确值），回退
  * transcriptPath 的 basename（去 .jsonl 后缀，兼容旧数据）；两者皆无的条目
  * （matchedCommand-only 会话）不产出 id，⚡/四态无法覆盖——已知局限（checklist FE-05）。
@@ -135,7 +153,7 @@ export function deriveActiveSessionStatuses(): Map<string, AgentStatus> {
       id = base.endsWith(".jsonl") ? base.slice(0, -".jsonl".length) : base;
     }
     if (!id) continue; // matchedCommand-only 会话无法定位（文档化局限）
-    map.set(`${cs.cliId ?? CLAUDE_CLI_ID}|${id}`, cs.status);
+    map.set(keyOf(cs.cliId, id), cs.status);
   }
   return map;
 }

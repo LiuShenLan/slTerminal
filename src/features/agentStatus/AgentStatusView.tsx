@@ -29,7 +29,7 @@ import { useAgentStatus } from "./useAgentStatus";
 import { AgentStatusRow } from "./AgentStatusRow";
 import { AgentHistorySections } from "../agentHistory/AgentHistorySections";
 import { useAgentHistory } from "../agentHistory/useAgentHistory";
-import { CLAUDE_CLI_ID } from "../cliProfiles/profiles/claude";
+import { keyOf } from "../agentHistory/historyModel";
 import { switchToPageAndFocus } from "../../workspace/pageApis";
 import { parseTerminalPageId } from "../../lib/panelId";
 import {
@@ -124,13 +124,13 @@ export const AgentStatusView: React.FC<SideViewComponentProps> = (_props) => { /
 
   // 活跃区标题覆盖：历史区 scan 数据中同会话（复合键 `cliId|sessionId`——MC-314，
   // 防跨 CLI sessionId 理论冲突）的标题优先（问题 6 修复——/rename 写 transcript
-  // custom-title，刷新后 scan 结果即为新标题）；旧数据无 cliId 按 CLAUDE_CLI_ID
-  // 常量回退（非字面量，AC-5 兼容）
+  // custom-title，刷新后 scan 结果即为新标题）；键构造经 keyOf 单点——cliId 缺省
+  // 回退 CLAUDE_CLI_ID（旧数据兼容）+ 竖线转义（ZQ-1/ZQ-7）
   const titleBySessionId = useMemo(() => {
     const map = new Map<string, string>();
     for (const s of history.sessions) {
       if (s.title != null) {
-        map.set(`${s.cliId ?? CLAUDE_CLI_ID}|${s.sessionId}`, s.title);
+        map.set(keyOf(s.cliId, s.sessionId), s.title);
       }
     }
     return map;
@@ -141,7 +141,7 @@ export const AgentStatusView: React.FC<SideViewComponentProps> = (_props) => { /
       rows.map((r) => {
         const diskTitle =
           r.sessionId != null
-            ? titleBySessionId.get(`${r.cliId ?? CLAUDE_CLI_ID}|${r.sessionId}`)
+            ? titleBySessionId.get(keyOf(r.cliId, r.sessionId))
             : undefined;
         return diskTitle !== undefined ? { ...r, title: diskTitle } : r;
       }),

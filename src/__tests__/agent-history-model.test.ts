@@ -13,6 +13,7 @@ import {
   matchesSearch,
   formatRelativeTime,
   deriveActiveSessionStatuses,
+  keyOf,
 } from "../features/agentHistory/historyModel";
 import type { AgentHistorySession } from "../types/agentHistory";
 
@@ -47,6 +48,17 @@ function makeSession(
     mtimeMs: 0,
     cwdExists: false,
     cliId: "claude",
+    ...overrides,
+  };
+}
+
+/** TerminalRegistry 条目 agentSession 工厂（模块级——deriveActiveSessionStatuses 与 keyOf 用例共用） */
+function makeAgentSession(overrides: Record<string, unknown> = {}) {
+  return {
+    sessionId: "abc-123",
+    transcriptPath: "C:\\Users\\x\\.claude\\projects\\proj-dir\\abc-123.jsonl",
+    status: "attention",
+    lastEventAt: 1,
     ...overrides,
   };
 }
@@ -244,17 +256,6 @@ describe("deriveActiveSessionStatuses", () => {
     h.all.clear();
   });
 
-  /** agentSession 工厂（默认带 sessionId + status） */
-  function makeAgentSession(overrides: Record<string, unknown> = {}) {
-    return {
-      sessionId: "abc-123",
-      transcriptPath: "C:\\Users\\x\\.claude\\projects\\proj-dir\\abc-123.jsonl",
-      status: "attention",
-      lastEventAt: 1,
-      ...overrides,
-    };
-  }
-
   it("sessionId 优先 → Map 键 = `cliId|sessionId` 复合键（MC-313），值为 status", () => {
     h.all.set("panel-1", {
       term: {}, sessionId: "p1", webglAddon: null, fitAddon: {},
@@ -394,5 +395,40 @@ describe("deriveActiveSessionStatuses", () => {
 
   it("空注册表 → 空 Map", () => {
     expect(deriveActiveSessionStatuses().size).toBe(0);
+  });
+});
+
+describe("keyOf（复合键单点，ZQ-1/ZQ-7）", () => {
+  it("cliId 缺省回退：null/undefined → CLAUDE_CLI_ID", () => {
+    expect(keyOf(null, "s1")).toBe("claude|s1");
+    expect(keyOf(undefined, "s1")).toBe("claude|s1");
+  });
+
+  it("显式 cliId 原样透传（不依赖缺省回退）", () => {
+    expect(keyOf("mockcli", "s1")).toBe("mockcli|s1");
+  });
+
+  it("cliId/sessionId 含竖线 → 两侧转义（`\\|` 两字符），生产消费两侧键一致", () => {
+    // 转义形态：竖线 → 「反斜杠+竖线」两字符，拼接为 a|b（分隔符竖线不转义）
+    expect(keyOf("a|b", "c|d")).toBe("a\\|b|c\\|d");
+    expect(keyOf("a|b", "c")).toBe("a\\|b|c");
+    expect(keyOf("a", "c|d")).toBe("a|c\\|d");
+    // 缺省回退 + 转义组合
+    expect(keyOf(null, "c|d")).toBe("claude|c\\|d");
+
+    // 生产侧（deriveActiveSessionStatuses 键构造经 keyOf）与消费侧（keyOf 查键）键一致
+    h.all.set("panel-1", {
+      term: {}, sessionId: "p1", webglAddon: null, fitAddon: {},
+      agentSession: makeAgentSession({
+        cliId: "a|b",
+        sessionId: "c|d",
+        status: "working",
+      }),
+    });
+    const key = keyOf("a|b", "c|d");
+    expect(key).toBe("a\\|b|c\\|d");
+    expect(deriveActiveSessionStatuses().get(key)).toBe("working");
+    // 未转义的裸拼接键不得命中（转义确为键的一部分，而非装饰）
+    expect(deriveActiveSessionStatuses().get("a|b|c|d")).toBeUndefined();
   });
 });

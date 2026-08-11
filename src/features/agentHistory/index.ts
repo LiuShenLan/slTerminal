@@ -21,6 +21,7 @@ export {
   groupByCwd,
   matchesSearch,
   formatRelativeTime,
+  keyOf,
   deriveActiveSessionStatuses,
 } from "./historyModel";
 export type { CwdGroup } from "./historyModel";

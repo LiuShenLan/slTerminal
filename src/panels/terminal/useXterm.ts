@@ -32,6 +32,8 @@ import { openUrl } from "../../ipc/shell";
 import { setActiveTerminal, clearActiveTerminal, type TerminalActions } from "./activeTerminal";
 import { usePanelFocus, getShortcutRegistry } from "../../features/shortcuts";
 import { TerminalRegistry } from "./TerminalRegistry";
+// ZQ-2: 来源 CLI 标识三级解析单点（契约 4）——空串/空白 cliId 同等回退
+import { resolvePayloadCliId } from "./resolvePayloadCliId";
 import { useFontSizeWheel } from "../../lib/useFontSizeWheel";
 import { E2E_ENABLED } from "../../lib/e2eEnabled";
 import { STATUS_EMOJI } from "../../lib/agentStatus";
@@ -43,7 +45,7 @@ import { onAgentEvent } from "../../ipc/agentHooks";
 import { cliProfileRegistry } from "../../features/cliProfiles";
 // AC-5: 事件名字面量只允许出现在 profiles/claude/（claude 合法领地）——
 // SessionEnd/Exit 判定一律引用本常量，不写字面量
-import { CLAUDE_CLI_ID, SESSION_END_EVENT, EXIT_EVENT } from "../../features/cliProfiles/profiles/claude";
+import { SESSION_END_EVENT, EXIT_EVENT } from "../../features/cliProfiles/profiles/claude";
 import type { TabState } from "./useCommandDetection";
 import {
   installTerminalWriteToPty,
@@ -353,12 +355,11 @@ export function useXterm({
     const unsubscribeAgentEvent = onAgentEvent((payload) => {
       if (payload.panelId !== panelId) return;
 
-      // MC-205 三级解析：显式 payload.cliId → 反查注册表 agentSession.cliId → 缺省 CLAUDE_CLI_ID。
-      // 旧信号无 cliId 字段（serde default）——缺省分支兼容
-      const cliId =
-        payload.cliId ??
-        TerminalRegistry.get(panelId)?.agentSession?.cliId ??
-        CLAUDE_CLI_ID;
+      // MC-205 三级解析单点（ZQ-2，契约 4）：payload.cliId（trim 后非空）
+      // → 反查注册表 agentSession.cliId → 缺省 CLAUDE_CLI_ID。
+      // 旧信号无 cliId 字段（serde default）——缺省分支兼容；
+      // 空串/仅空白与 null/undefined 同等回退（原 ?? 链遇空串短路失效）
+      const cliId = resolvePayloadCliId(payload);
       const profile = cliProfileRegistry.get(cliId);
       const hooksCapability = profile?.capabilities?.hooks;
 
@@ -388,7 +389,12 @@ export function useXterm({
       }
 
       if (status === null) {
-        if (payload.event === SESSION_END_EVENT) onTabStateChange?.({ active: false });
+        // ZQ-6: 清图标条件对齐删 agentSession 的双事件判定（SessionEnd ∨ Exit，
+        // 见上方 setAgentSession(null) 分支）——原仅 SessionEnd，Exit 事件
+        // 会先删 agentSession 后漏清页签图标
+        if (payload.event === SESSION_END_EVENT || payload.event === EXIT_EVENT) {
+          onTabStateChange?.({ active: false });
+        }
         return;
       }
       onTabStateChange?.({ active: true, icon: STATUS_EMOJI[status] });
