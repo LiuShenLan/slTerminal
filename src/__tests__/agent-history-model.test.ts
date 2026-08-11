@@ -56,7 +56,7 @@ function makeSession(
 function makeAgentSession(overrides: Record<string, unknown> = {}) {
   return {
     sessionId: "abc-123",
-    transcriptPath: "C:\\Users\\x\\.claude\\projects\\proj-dir\\abc-123.jsonl",
+    usageSourcePath: "C:\\Users\\x\\.claude\\projects\\proj-dir\\abc-123.jsonl",
     status: "attention",
     lastEventAt: 1,
     ...overrides,
@@ -301,7 +301,7 @@ describe("deriveActiveSessionStatuses", () => {
     expect(deriveActiveSessionStatuses().get("claude|old-1")).toBe("working");
   });
 
-  it("无 sessionId 有 transcriptPath → basename 去 .jsonl 回退（旧数据兼容）", () => {
+  it("无 sessionId 有 usageSourcePath → basename 去 .jsonl 回退（旧数据兼容）", () => {
     h.all.set("panel-1", {
       term: {}, sessionId: "p1", webglAddon: null, fitAddon: {},
       agentSession: makeAgentSession({
@@ -317,14 +317,14 @@ describe("deriveActiveSessionStatuses", () => {
       term: {}, sessionId: "p1", webglAddon: null, fitAddon: {},
       agentSession: {
         sessionId: null,
-        transcriptPath: "C:/x/abc.jsonl",
+        usageSourcePath: "C:/x/abc.jsonl",
         status: "working",
       },
     });
     expect(deriveActiveSessionStatuses().get("claude|abc")).toBe("working");
   });
 
-  it("sessionId 与 transcriptPath 均无（matchedCommand-only）→ 跳过不产出", () => {
+  it("sessionId 与 usageSourcePath 均无（matchedCommand-only）→ 跳过不产出", () => {
     h.all.set("panel-1", {
       term: {}, sessionId: "p1", webglAddon: null, fitAddon: {},
       agentSession: {

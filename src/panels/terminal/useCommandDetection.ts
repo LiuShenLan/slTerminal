@@ -71,7 +71,7 @@ export function useCommandDetection(
             icon: STATUS_EMOJI.attention,
             logo: profile.iconSrc,
           });
-          // MC-107: 写入会话状态（未注入 hooks 时无 transcriptPath，用量条不可用）——
+          // MC-107: 写入会话状态（未注入 hooks 时无 usageSourcePath，用量条不可用）——
           // cliId 取匹配 profile 的 id（hook 事件三级解析反查键，MC-205）
           TerminalRegistry.setAgentSession(panelId, {
             cliId: profile.id,

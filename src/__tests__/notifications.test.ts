@@ -129,7 +129,7 @@ function makePayload(
     event: "Stop",
     timestamp: Date.now(),
     sessionId: "s1",
-    transcriptPath: "/tmp/t.jsonl",
+    usageSourcePath: "/tmp/t.jsonl",
     cwd: "/home/user/proj",
     toolName: null,
     notificationType: null,

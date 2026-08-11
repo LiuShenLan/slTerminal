@@ -127,7 +127,7 @@ describe("useAgentHistory 初始态", () => {
       term: {}, sessionId: "p1", webglAddon: null, fitAddon: {},
       agentSession: {
         sessionId: "abc",
-        transcriptPath: "D:/proj/abc.jsonl",
+        usageSourcePath: "D:/proj/abc.jsonl",
         status: "working",
         lastEventAt: 1,
       },

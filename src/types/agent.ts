@@ -23,7 +23,8 @@ export interface AgentEventPayload {
   event: string;
   timestamp: number;
   sessionId: string;
-  transcriptPath: string;
+  /** 用量来源路径（中性名，KZ-2 决策 1——claude 解释为 transcript JSONL；可选——旧信号无此字段，serde default → null，对应后端 Option<String>） */
+  usageSourcePath?: string | null;
   cwd: string;
   toolName: string | null;
   notificationType: string | null;

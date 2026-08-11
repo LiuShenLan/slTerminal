@@ -3,7 +3,7 @@
 // 行 = 运行中的编码 CLI 会话（非全部终端）。
 // 建行双通道：sessionChange（session 非 null）∨ hook 事件（非 SessionEnd/Exit 且行不存在）——两通道独立幂等。
 // 删行三通道：sessionChange（session 为 null）∨ SessionEnd/Exit hook 事件 ∨ remove 事件。
-// 初始扫描只建 agentSession 非 null 的行；携 transcriptPath 时主动拉 contextUsage（修复问题 2b）。
+// 初始扫描只建 agentSession 非 null 的行；携 usageSourcePath 时主动拉 contextUsage（修复问题 2b）。
 // #5 竞态双保险：① registry/agent-event 双 listener 经 ref 读最新状态，effect deps [] 订阅永不重建；
 // ② 初始扫描按注册表现值对账（agentSession 非 null 才建行），兜底任何事件丢失。
 //
@@ -42,7 +42,7 @@ export interface AgentSessionRow {
   title: string;
   status: AgentStatus;
   lastEventAt: number;
-  transcriptPath?: string;
+  usageSourcePath?: string;
   usage?: ContextUsage | null;
 }
 
@@ -176,8 +176,8 @@ export function useAgentStatus(): AgentStatusResult {
             title: pageTitle,
             ...(newStatus !== null ? { status: newStatus } : {}),
             lastEventAt: payload.timestamp || Date.now(),
-            transcriptPath:
-              payload.transcriptPath ?? next[existingIdx].transcriptPath,
+            usageSourcePath:
+              payload.usageSourcePath ?? next[existingIdx].usageSourcePath,
             sessionId: payload.sessionId ?? next[existingIdx].sessionId,
           };
           next.sort((a, b) => b.lastEventAt - a.lastEventAt);
@@ -197,7 +197,7 @@ export function useAgentStatus(): AgentStatusResult {
           title: pageTitle,
           status: newStatus,
           lastEventAt: payload.timestamp || Date.now(),
-          transcriptPath: payload.transcriptPath || undefined,
+          usageSourcePath: payload.usageSourcePath || undefined,
           sessionId: payload.sessionId || undefined,
           usage: undefined,
         };
@@ -207,9 +207,9 @@ export function useAgentStatus(): AgentStatusResult {
         return next;
       });
 
-      // 事件含 transcriptPath 时异步拉取用量（cliId 传行 cliId——事件通道建行的行 cliId = 三级解析结果）
-      if (payload.transcriptPath) {
-        contextUsage(cliId, payload.transcriptPath)
+      // 事件含 usageSourcePath 时异步拉取用量（cliId 传行 cliId——事件通道建行的行 cliId = 三级解析结果）
+      if (payload.usageSourcePath) {
+        contextUsage(cliId, payload.usageSourcePath)
           .then((usage) => {
             setRows((prev) =>
               prev.map((r) =>
@@ -265,16 +265,16 @@ export function useAgentStatus(): AgentStatusResult {
               title: resolveTitle(event.panelId, pageId),
               status: "attention",
               lastEventAt: entry.agentSession!.lastEventAt,
-              transcriptPath: entry.agentSession!.transcriptPath,
+              usageSourcePath: entry.agentSession!.usageSourcePath,
               sessionId: entry.agentSession!.sessionId,
               usage: undefined,
             };
             return [...prev, row].sort((a, b) => b.lastEventAt - a.lastEventAt);
           });
 
-          // 携 transcriptPath 时主动拉取用量（cliId 传行 cliId）
-          if (entry.agentSession.transcriptPath) {
-            contextUsage(rowCliId, entry.agentSession.transcriptPath)
+          // 携 usageSourcePath 时主动拉取用量（cliId 传行 cliId）
+          if (entry.agentSession.usageSourcePath) {
+            contextUsage(rowCliId, entry.agentSession.usageSourcePath)
               .then((usage) => {
                 setRows((prev) =>
                   prev.map((r) =>
@@ -312,7 +312,7 @@ export function useAgentStatus(): AgentStatusResult {
     return unsub;
   }, []); // deps []——订阅永不重建
 
-  // ---- 初始扫描 + 项目切换（只建 agentSession 非 null 的行；携 transcriptPath 主动拉 usage） ----
+  // ---- 初始扫描 + 项目切换（只建 agentSession 非 null 的行；携 usageSourcePath 主动拉 usage） ----
   useEffect(() => {
     if (!projectRoot || !activeProject) {
       setRows([]);
@@ -341,14 +341,14 @@ export function useAgentStatus(): AgentStatusResult {
         title: resolveTitle(panelId, pageId),
         status: "attention",
         lastEventAt: entry.agentSession.lastEventAt,
-        transcriptPath: entry.agentSession.transcriptPath,
+        usageSourcePath: entry.agentSession.usageSourcePath,
         sessionId: entry.agentSession.sessionId,
         usage: undefined,
       });
 
-      // 携 transcriptPath 时主动拉取一次（修复问题 2b：切项目后 idle 会话用量永远 --；cliId 传行 cliId）
-      if (entry.agentSession.transcriptPath) {
-        contextUsage(rowCliId, entry.agentSession.transcriptPath)
+      // 携 usageSourcePath 时主动拉取一次（修复问题 2b：切项目后 idle 会话用量永远 --；cliId 传行 cliId）
+      if (entry.agentSession.usageSourcePath) {
+        contextUsage(rowCliId, entry.agentSession.usageSourcePath)
           .then((usage) => {
             setRows((prev) =>
               prev.map((r) =>

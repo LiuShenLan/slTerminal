@@ -280,7 +280,7 @@ function makeAgentPayload(
     event: "PreToolUse",
     timestamp: 1,
     sessionId: "s1",
-    transcriptPath: "/t.json",
+    usageSourcePath: "/t.json",
     cwd: "",
     toolName: null,
     notificationType: null,
@@ -505,10 +505,10 @@ describe("AC-4② hooks 能力经真实链路调用", () => {
       active: true,
       icon: STATUS_EMOJI.working,
     });
-    // PF2-FE-04: 非 SessionEnd 事件 → setAgentSession 携 sessionId/transcriptPath/status
+    // PF2-FE-04: 非 SessionEnd 事件 → setAgentSession 携 sessionId/usageSourcePath/status
     const session = TerminalRegistry.get(panelId)?.agentSession;
     expect(session?.sessionId).toBe("s1");
-    expect(session?.transcriptPath).toBe("/t.json");
+    expect(session?.usageSourcePath).toBe("/t.json");
     expect(session?.status).toBe("working");
     eventToStatusSpy.mockRestore();
   });

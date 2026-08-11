@@ -25,7 +25,7 @@ Agent 状态视图（`agent-status` 侧栏视图，图标 🤖）——一屏总
 - **删行三通道**：`sessionChange` session 为 null ∨ SessionEnd/Exit 事件 ∨ `remove`（面板关闭）
 - **行 cliId（MC-410）**：hook 事件通道建行按 MC-205 三级解析写入——经 `resolvePayloadCliId` 单点（`src/panels/terminal/resolvePayloadCliId.ts`，ZQ-2 契约 4：`payload.cliId` trim 后非空 → `TerminalRegistry.get(panelId)?.agentSession?.cliId` 反查 → `CLAUDE_CLI_ID` 缺省；空串/仅空白与 null/undefined 同等回退）；OSC 133/sessionChange 通道建行取 `agentSession.cliId`（缺省兜底）；无 hooks 能力或未知 cliId → `console.warn` + 跳过（不建行/不置图标/不通知，MC-206）
 - **建行 status（ZQ-3 决策 2）**：hook 事件通道建行 `status = newStatus` 原样写入（null 映射事件建行但 status null 无图标）——感知存活（SessionStart 丢失场景）且不误标 attention；更新已有行 null 不覆盖旧值逻辑不变；活跃区 null 行 ↔ 历史区「status null 不产出键」语义一致
-- **初始扫描**：只建 `agentSession` 非 null 的行并携 `transcriptPath` 主动拉 `contextUsage`（修复切项目后 idle 会话用量永远 --）
+- **初始扫描**：只建 `agentSession` 非 null 的行并携 `usageSourcePath` 主动拉 `contextUsage`（修复切项目后 idle 会话用量永远 --）
 - **竞态双保险**：双 listener 经 ref 读最新状态 + deps `[]` 订阅永不重建 + reconcile 对账兜底
 
 ### 相对时间 60s ticker

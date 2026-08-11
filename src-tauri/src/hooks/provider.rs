@@ -29,8 +29,9 @@ pub trait CliHooksProvider: Send + Sync + std::fmt::Debug {
     fn uninstall(&self) -> Result<(), AppError>;
     /// 查询注入状态（Injected/NotInjected/Outdated 三态）
     fn injection_status(&self) -> Result<AgentHookInjectionStatus, AppError>;
-    /// 查询 transcript token 用量（无 usage 或文件异常 → Ok(None)）
-    fn context_usage(&self, transcript_path: &str) -> Result<Option<ContextUsage>, AppError>;
+    /// 查询 token 用量（无 usage 或文件异常 → Ok(None)）
+    /// 路径语义由具体 CLI 解释（claude = transcript JSONL）
+    fn context_usage(&self, usage_source_path: &str) -> Result<Option<ContextUsage>, AppError>;
     /// 读取指定层 hooks 配置子树（project/local 层经 project_root 路径沙箱校验）
     fn config_read(
         &self,

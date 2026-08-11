@@ -125,8 +125,8 @@ impl CliHooksProvider for ClaudeHooksProvider {
         Ok(inject::injection_status_impl(&script_path, &settings_path))
     }
 
-    fn context_usage(&self, transcript_path: &str) -> Result<Option<ContextUsage>, AppError> {
-        Ok(usage::scan_transcript_usage(transcript_path))
+    fn context_usage(&self, usage_source_path: &str) -> Result<Option<ContextUsage>, AppError> {
+        Ok(usage::scan_transcript_usage(usage_source_path))
     }
 
     fn config_read(

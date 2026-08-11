@@ -159,10 +159,10 @@ pub(crate) async fn run_agent_hooks_injection_status(
 
 pub(crate) async fn run_agent_context_usage(
     cli_id: String,
-    transcript_path: String,
+    usage_source_path: String,
 ) -> Result<Option<ContextUsage>, AppError> {
     let provider = resolve_provider(&cli_id)?;
-    tokio::task::spawn_blocking(move || provider.context_usage(&transcript_path))
+    tokio::task::spawn_blocking(move || provider.context_usage(&usage_source_path))
         .await
         .map_err(|e| AppError::TaskJoin(e.to_string()))?
 }
@@ -218,13 +218,13 @@ pub async fn agent_hooks_injection_status(
     run_agent_hooks_injection_status(cli_id).await
 }
 
-/// agent_context_usage — 按 cliId 分发 transcript token 用量查询
+/// agent_context_usage — 按 cliId 分发 token 用量查询（JS invoke 键 { cliId, usageSourcePath }）
 #[tauri::command]
 pub async fn agent_context_usage(
     cli_id: String,
-    transcript_path: String,
+    usage_source_path: String,
 ) -> Result<Option<ContextUsage>, AppError> {
-    run_agent_context_usage(cli_id, transcript_path).await
+    run_agent_context_usage(cli_id, usage_source_path).await
 }
 
 /// agent_hooks_config_read — 按 cliId 分发 hooks 配置子树读取（P3-BE-02）
@@ -339,7 +339,7 @@ mod tests {
             event: "SessionStart".into(),
             timestamp: 1700000000000,
             session_id: "s1".into(),
-            transcript_path: "/t.jsonl".into(),
+            usage_source_path: Some("/t.jsonl".into()),
             cwd: "/cwd".into(),
             tool_name: Some("Bash".into()),
             notification_type: Some("idle".into()),
@@ -361,7 +361,7 @@ mod tests {
                 "sessionId",
                 "timestamp",
                 "toolName",
-                "transcriptPath",
+                "usageSourcePath",
             ]
         );
         // 序列化 → 反序列化往返
@@ -428,7 +428,7 @@ mod tests {
 
     #[test]
     fn parse_signal_file_valid_smoke() {
-        let content = r#"{"panelId":"p1","event":"PreToolUse","timestamp":1000,"sessionId":"s1","transcriptPath":"/t.jsonl","cwd":"/cwd","toolName":null,"notificationType":null}"#;
+        let content = r#"{"panelId":"p1","event":"PreToolUse","timestamp":1000,"sessionId":"s1","usageSourcePath":"/t.jsonl","cwd":"/cwd","toolName":null,"notificationType":null}"#;
         let r = signal::parse_signal_file(content);
         assert!(r.is_some());
         assert_eq!(r.unwrap().panel_id, "p1");
@@ -436,7 +436,7 @@ mod tests {
 
     #[test]
     fn parse_signal_file_missing_panel_id() {
-        let content = r#"{"event":"PreToolUse","timestamp":1000,"sessionId":"s1","transcriptPath":"/t.jsonl","cwd":"/cwd"}"#;
+        let content = r#"{"event":"PreToolUse","timestamp":1000,"sessionId":"s1","usageSourcePath":"/t.jsonl","cwd":"/cwd"}"#;
         assert!(signal::parse_signal_file(content).is_none());
     }
 
@@ -520,7 +520,7 @@ mod tests {
         ))
         .unwrap()
         .unwrap();
-        assert_eq!(u.input_tokens, 100, "transcriptPath 应透传到 provider");
+        assert_eq!(u.input_tokens, 100, "usageSourcePath 应透传到 provider");
     }
 
     #[test]

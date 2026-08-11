@@ -485,7 +485,7 @@ describe("Claude 历史会话视图", () => {
       await openAllSectionWithFreshScan();
       expect(await findRowByText("E2E自定义标题一")).not.toBeNull();
 
-      // 3. 原子写 PreToolUse 信号文件（sessionId = fixture 501 UUID；transcriptPath 指向副本）
+      // 3. 原子写 PreToolUse 信号文件（sessionId = fixture 501 UUID；usageSourcePath 指向副本）
       //    → 活跃区建行 ⚡；历史区 501 行 ⚡（两区同源 TerminalRegistry，问题 2）
       mkdirSync(eventsDir, { recursive: true });
       const writeSignal = (event: string, toolName: string | null, notificationType: string | null) => {
@@ -494,7 +494,7 @@ describe("Claude 历史会话视图", () => {
           event,
           timestamp: Date.now(),
           sessionId: UUID_CUSTOM,
-          transcriptPath: join(projectsDir, fixtureDirA, `${UUID_CUSTOM}.jsonl`),
+          usageSourcePath: join(projectsDir, fixtureDirA, `${UUID_CUSTOM}.jsonl`),
           cwd: tempDir,
           toolName,
           notificationType,

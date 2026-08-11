@@ -3,7 +3,7 @@
 // 零依赖，仅使用 Node.js >= 18 内置 API
 // 契约：任何代码路径 exit code 恒为 0，不向 stderr 输出（C10）
 
-const SCRIPT_VERSION = 2;
+const SCRIPT_VERSION = 3;
 
 const fs = require("fs");
 const path = require("path");
@@ -47,7 +47,7 @@ const os = require("os");
           event: data.hook_event_name || "",
           timestamp: Date.now(),
           sessionId: data.session_id || "",
-          transcriptPath: data.transcript_path || "",
+          usageSourcePath: data.transcript_path || null,
           cwd: data.cwd || "",
           toolName: data.tool_name || null,
           notificationType: data.notification_type || null,

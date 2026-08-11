@@ -33,7 +33,7 @@ pub trait CliHooksProvider: Send + Sync + std::fmt::Debug {
     fn inject(&self) -> Result<AgentHookInjectionStatus, AppError>;
     fn uninstall(&self) -> Result<(), AppError>;
     fn injection_status(&self) -> Result<AgentHookInjectionStatus, AppError>;
-    fn context_usage(&self, transcript_path: &str) -> Result<Option<ContextUsage>, AppError>;
+    fn context_usage(&self, usage_source_path: &str) -> Result<Option<ContextUsage>, AppError>; // 路径语义由具体 CLI 解释（claude = transcript JSONL）
     fn config_read(&self, layer: &str, project_path: Option<&str>, project_root: &Option<PathBuf>) -> Result<Value, AppError>;
     fn config_write(&self, layer: &str, hooks: Value, project_path: Option<&str>, project_root: &Option<PathBuf>) -> Result<(), AppError>;
 }
@@ -123,13 +123,13 @@ project/local 层入参经 `validate_path_within_root` 沙箱校验：project_pa
 |------|------|
 | `mod.rs` | 命令层 + 共享 DTO：6 条泛化 Tauri 命令（`agent_hooks_inject`/`agent_hooks_uninstall`/`agent_hooks_injection_status`/`agent_context_usage`/`agent_hooks_config_read`/`agent_hooks_config_write`，按 cliId 分发）+ `AgentInjectionStatus`/`AgentHookInjectionStatus`/`ContextUsage` DTO + `start_signal_watcher` + 静态 `WATCHER`（trait object 化，HUK-04） |
 | `provider.rs` | `CliHooksProvider` trait（六方法）+ cliId 键静态注册表 + `resolve_provider`/`lookup_provider` 分发入口（「无 hooks 能力」Validation 分支预留） |
-| `signal.rs` | 信号文件解析与处理：`AgentEventPayload` DTO（9 字段含可选 `cliId`，camelCase）、`parse_signal_file()` 纯函数、`process_signal_file()` 文件处理流程（读 → emit("agent-event") → 删） |
+| `signal.rs` | 信号文件解析与处理：`AgentEventPayload` DTO（9 字段 camelCase——可选 `cliId` + 可选 `usageSourcePath`；`#[serde(default)]` 不加 alias——旧键（transcriptPath）信号降级 None，仅丢该事件用量拉取）、`parse_signal_file()` 纯函数、`process_signal_file()` 文件处理流程（读 → emit("agent-event") → 删） |
 | `watcher.rs` | 信号目录监听器 `HookSignalWatcher`：**notify+轮询双通道**——notify（NonRecursive，50ms debounce，失败降级 warn）+ **3s 轮询补漏**（`collect_signal_files`/`poll_once` 纯函数，目录删除自动重建，免疫事件丢失/句柄失效），线程名 `hook-signal-watcher`，`stop()` 幂等 + `Drop` 清理 |
 | `claude/mod.rs` | claude hooks provider：`ClaudeHooksProvider` trait 六方法实现 + `home_dir()` 统一 home 解析（测试经 `HomeDirGuard` 注入覆盖） |
 | `claude/inject.rs` | 注入/卸载/状态三命令内核：`inject_impl`/`uninstall_impl`/`injection_status_impl`（路径可注入同步函数）+ `HOOK_EVENTS` 10 事件 + `remove_slterm_matchers`/`inject_matchers`/`build_matcher_entry` 纯逻辑 |
-| `claude/usage.rs` | transcript token 用量查询内核：`scan_transcript_usage` + `parse_usage_line` 纯 I/O 逻辑 |
+| `claude/usage.rs` | transcript token 用量查询内核（claude 领地语义）：`scan_transcript_usage` + `parse_usage_line` 纯 I/O 逻辑 |
 | `claude/config.rs` | hooks 配置三层读写内核（P3-BE-01/02/03）：`config_read_sync`/`config_write_sync` + `parse_layer`/`resolve_config_path`/`read_hooks_subtree`/`write_hooks_subtree` 纯逻辑 |
-| `claude/slterm-hook-reporter.js` | claude provider 资产（决策 7）：Node 单文件 hook 上报脚本（`include_str!` 嵌入），零依赖，C10 契约，payload 显式 `cliId:"claude"` + `SCRIPT_VERSION=2` |
+| `claude/slterm-hook-reporter.js` | claude provider 资产（决策 7）：Node 单文件 hook 上报脚本（`include_str!` 嵌入），零依赖，C10 契约，payload 显式 `cliId:"claude"` + `usageSourcePath` 键（值 = stdin 协议 `data.transcript_path`，snake_case 不动）+ `SCRIPT_VERSION=3` |
 
 ## 命令
 
@@ -157,9 +157,9 @@ project/local 层入参经 `validate_path_within_root` 沙箱校验：project_pa
 
 ### agent_context_usage
 
-签名：`async fn agent_context_usage(cli_id: String, transcript_path: String) -> Result<Option<ContextUsage>, AppError>`
+签名：`async fn agent_context_usage(cli_id: String, usage_source_path: String) -> Result<Option<ContextUsage>, AppError>`（JS invoke 键 `{ cliId, usageSourcePath }`，Tauri camelCase 双边）
 
-参数：`transcript_path` — transcript JSONL 文件路径（来自 `AgentEventPayload.transcript_path`）。
+参数：`usage_source_path` — 用量来源文件路径（可选语义，来自 `AgentEventPayload.usageSourcePath`；路径语义由具体 CLI 解释——claude = transcript JSONL）。
 
 返回：`Option<ContextUsage>`——最后一条含 `message.usage` 的行的 token 数据；无 usage 记录或文件异常返回 `null`（非 error）。
 
@@ -197,7 +197,7 @@ pub struct ContextUsage {
 
 **用量口径**：总占用 = `inputTokens + cacheReadInputTokens + cacheCreationInputTokens`；**contextLimit 由前端 `profile.hooks.contextLimit` 提供（claude=200_000，MC-214）**，后端 DTO 不含上限常量；`outputTokens` 不计占用保留为信息字段。缺 cache 字段默认 0（serde `default`，兼容旧 transcript）；`input_tokens` 缺失仍整行 None（沿用现状）。
 
-前端对应 `src/types/agent.ts` 的 `ContextUsage` 接口（四字段同名，`cacheReadInputTokens` / `cacheCreationInputTokens`），IPC 封装见 `src/ipc/agentHooks.ts` 的 `contextUsage(cliId, transcriptPath)`。
+前端对应 `src/types/agent.ts` 的 `ContextUsage` 接口（四字段同名，`cacheReadInputTokens` / `cacheCreationInputTokens`），IPC 封装见 `src/ipc/agentHooks.ts` 的 `contextUsage(cliId, usageSourcePath)`。
 
 ## 实现要点
 
@@ -238,11 +238,11 @@ Rust 测试分布 8 个位置（均为 `#[cfg(test)] mod tests` 嵌入源文件�
 |------|--------|---------|
 | `mod.rs` `#[cfg(test)]` | 19 | `AgentInjectionStatus`/`AgentHookInjectionStatus` serde roundtrip + 键集合精确匹配（HUK-09）、`AgentEventPayload` 9 键含 cliId serde 键集合（含无 cliId 旧信号兼容）、**start_signal_watcher（HUK-04：首次启动存实例/重复启动幂等跳过/启动失败不存/`reset_watcher_for_test` 重置钩子后重启）**、parse_signal_file 快速冒烟、**命令层 cliId 透传（HUK-02/05 式：六命令 block_on 直测 HomeDirGuard 注入 tempdir + 未知 cliId 六命令全 Validation）** |
 | `provider.rs` `#[cfg(test)]` | 3 | resolve_provider（已知 cliId 命中/未知 cliId Validation）、lookup_provider 注册表注入（已注册无 hooks 能力 Validation 分支） |
-| `signal.rs` `#[cfg(test)]` | 16 | parse_signal_file 全分支（合法完整/optionals null/缺 panelId/空 panelId/非法 JSON/空串/仅空白）、camelCase 序列化+反序列化往返、**process_signal_file_with（HUK-01：注入 emit 闭包——读→emit→删全流程/emit 失败仍删/非法 JSON 降级）** |
+| `signal.rs` `#[cfg(test)]` | 16 | parse_signal_file 全分支（合法完整/optionals null/缺 panelId/空 panelId/非法 JSON/空串/仅空白）、camelCase 序列化+反序列化往返（9 键含 `usageSourcePath`）、**旧信号兼容（无 cliId 键/无 usageSourcePath 键 → 缺省 None——决策 1 降级语义）**、**process_signal_file_with（HUK-01：注入 emit 闭包——读→emit→删全流程/emit 失败仍删/非法 JSON 降级）** |
 | `watcher.rs` `#[cfg(test)]` | 20 | is_signal_file、collect_signal_files、poll_once（逐个处理注入闭包/幂等二次不处理/目录删除重建后恢复/非 json 忽略/无文件零调用）、**run_one_tick（HUK-03：轮询补漏消费残留/目录重建恢复/stop 信号返回 true）**、watcher 生命周期（stop 幂等、Drop join 线程） |
 | `claude/mod.rs` `#[cfg(test)]` | 1 | HomeDirGuard 注入与 Drop 恢复原 home 解析 |
 | `claude/inject.rs` `#[cfg(test)]` | 35 | template_version 正值、HOOK_EVENTS 计数+唯一+关键事件、has_slterm_matchers、disk_script_version（解析/无版本/缺失/空格分号）、remove_slterm_matchers（清理 slterm 条目+保留用户 hook/清理空事件键/无 slterm 条目/**混组保用户 handler/全 slterm 组删除**——handler 级剔除）、inject_matchers（10 事件齐全/保留用户 matcher/二次注入幂等）、build_matcher_entry、模板内嵌校验（非空/含 SLTERM_PANEL_ID/含 SCRIPT_VERSION/含显式 `cliId:"claude"`）、**三命令 impl 层（HUK-02：`inject_impl`/`uninstall_impl`/`injection_status_impl` tempdir 驱动——注入/幂等/非法 JSON 中止/保留其他字段/非 Object 根与 hooks 拒绝/卸载混组保用户 handler/状态三态）** |
-| `claude/usage.rs` `#[cfg(test)]` | 26 | parse_usage_line 全分支、scan_transcript_usage 集成（末行命中/中间行回溯/无 usage/文件不存在/空文件/损坏行跳过）、ContextUsage serde camelCase、**命令层（HUK-05：`run_context_usage` + `block_on`——参数透传 transcriptPath/None 与 Some 返回映射/大文件 >128KB 仅读尾部 64KB）** |
+| `claude/usage.rs` `#[cfg(test)]` | 26 | parse_usage_line 全分支、scan_transcript_usage 集成（末行命中/中间行回溯/无 usage/文件不存在/空文件/损坏行跳过）、ContextUsage serde camelCase、**命令层（HUK-05：`run_context_usage` + `block_on`——参数透传 usageSourcePath/None 与 Some 返回映射/大文件 >128KB 仅读尾部 64KB）** |
 | `claude/config.rs` `#[cfg(test)]` | 28 | parse_layer、resolve_config_path（user 层 home 路径/三层拼接/缺失 project_path Validation/子树外 PathNotAllowed）、read_hooks_subtree（文件不存在 Null/无 hooks 键 Null/子树提取/损坏 Err）、write_hooks_subtree（原子写/父目录自动创建/merge 保留其他字段/损坏拒绝覆盖/非 Object hooks 拒绝无副作用/非 Object 根拒绝/null 根视空对象）、**config_write_sync null 入参视空对象（ZQ-5：hooks=Null 写入 → hooks 键 = 空对象且保留其他字段）**——P3-BE 读写命令纯逻辑、**命令层（`run_config_read`/`run_config_write` + `block_on`——参数透传/非法 layer/路径校验）** |
 
 ### 单元测试组织
@@ -315,7 +315,7 @@ let r = scan_transcript_usage(path.to_str().unwrap()).unwrap();
 assert_eq!(r.input_tokens, 100);  // 末行优先
 ```
 
-**命令层测试**（3 条，HUK-05）：`run_context_usage`（命令内核）经 `block_on` await——参数透传 transcriptPath（两条不同路径各取各自 usage）、None 与 Some 返回映射、大文件（>128KB padding + usage 在最后 1KB → 仅加载尾部 64KB 仍命中，P2-TE-05 兜底）。
+**命令层测试**（3 条，HUK-05）：`run_context_usage`（命令内核）经 `block_on` await——参数透传 usageSourcePath（两条不同路径各取各自 usage）、None 与 Some 返回映射、大文件（>128KB padding + usage 在最后 1KB → 仅加载尾部 64KB 仍命中，P2-TE-05 兜底）。
 
 `scan_transcript_usage` 是纯 I/O 逻辑函数（非 async），测试直接调用不依赖 `spawn_blocking`。命令层经 `block_on` 直测 `run_context_usage`；真实 L4 E2E 仍验收完整命令链路。
 

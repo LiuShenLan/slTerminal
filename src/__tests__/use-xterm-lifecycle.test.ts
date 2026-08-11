@@ -1774,7 +1774,7 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
       event: "UserPromptSubmit",
       timestamp: Date.now(),
       sessionId: "s1",
-      transcriptPath: "/t.json",
+      usageSourcePath: "/t.json",
       cwd: "/proj",
       toolName: null,
       notificationType: null,
@@ -1814,7 +1814,7 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     expect(capturedAgentEventCallbackRef.current).not.toBeNull();
   }
 
-  it("HUK1: 匹配 panelId + UserPromptSubmit → eventToStatus 真实调用（入参断言）+ setAgentSession 携 transcriptPath", async () => {
+  it("HUK1: 匹配 panelId + UserPromptSubmit → eventToStatus 真实调用（入参断言）+ setAgentSession 携 usageSourcePath", async () => {
     await mountAndWaitForHooks();
     // 清除 spawn 成功时 resetCommandState 产生的 onTabStateChange 调用
     mockOnTabStateChange.mockClear();
@@ -1830,10 +1830,10 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
       active: true,
       icon: "⚡",
     });
-    // PF2-FE-04: 非 SessionEnd 事件 → setAgentSession 携 sessionId/transcriptPath/status（问题 2 四态同源）
+    // PF2-FE-04: 非 SessionEnd 事件 → setAgentSession 携 sessionId/usageSourcePath/status（问题 2 四态同源）
     expect(mockSetAgentSession).toHaveBeenCalledWith("hooks-test", {
       sessionId: "s1",
-      transcriptPath: "/t.json",
+      usageSourcePath: "/t.json",
       status: "working",
     });
   });
@@ -1882,7 +1882,7 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     });
     expect(mockSetAgentSession).toHaveBeenCalledWith("hooks-test", {
       sessionId: "s1",
-      transcriptPath: "/t.json",
+      usageSourcePath: "/t.json",
       status: "working",
     });
   });
@@ -1903,7 +1903,7 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     });
     expect(mockSetAgentSession).toHaveBeenCalledWith("hooks-test", {
       sessionId: "s1",
-      transcriptPath: "/t.json",
+      usageSourcePath: "/t.json",
       status: "done",
     });
   });
@@ -1924,7 +1924,7 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     });
     expect(mockSetAgentSession).toHaveBeenCalledWith("hooks-test", {
       sessionId: "s1",
-      transcriptPath: "/t.json",
+      usageSourcePath: "/t.json",
       status: "error",
     });
   });
@@ -1945,7 +1945,7 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     });
     expect(mockSetAgentSession).toHaveBeenCalledWith("hooks-test", {
       sessionId: "s1",
-      transcriptPath: "/t.json",
+      usageSourcePath: "/t.json",
       status: "attention",
     });
   });
@@ -1964,14 +1964,14 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     expect(mockEventToStatus).toHaveBeenCalledWith("Notification", "general");
     expect(mockSetAgentSession).toHaveBeenCalledWith("hooks-test", {
       sessionId: "s1",
-      transcriptPath: "/t.json",
+      usageSourcePath: "/t.json",
       status: undefined,
     });
     // 页签状态不改变（eventToStatus 返回 null）
     expect(mockOnTabStateChange).not.toHaveBeenCalled();
   });
 
-  it("HUK10: payload sessionId/transcriptPath 空串 → setAgentSession 携 undefined（空串防御归一）", async () => {
+  it("HUK10: payload sessionId/usageSourcePath 空串 → setAgentSession 携 undefined（空串防御归一）", async () => {
     await mountAndWaitForHooks();
     mockOnTabStateChange.mockClear();
     mockSetAgentSession.mockClear();
@@ -1979,13 +1979,13 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     capturedAgentEventCallbackRef.current!(makeHookPayload({
       event: "UserPromptSubmit",
       sessionId: "",
-      transcriptPath: "",
+      usageSourcePath: "",
     }));
 
     // 空串必须归一为 undefined——否则 derive 定位/标题覆盖/usage 拉取全部静默失效
     expect(mockSetAgentSession).toHaveBeenCalledWith("hooks-test", {
       sessionId: undefined,
-      transcriptPath: undefined,
+      usageSourcePath: undefined,
       status: "working",
     });
   });

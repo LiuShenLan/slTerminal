@@ -63,7 +63,7 @@
 | `src-tauri/src/hooks/watcher.rs` | 20 | is_signal_file/collect_signal_files/poll_once（含目录删除重建恢复/幂等）/**run_one_tick 或临时目录真实启动（轮询补漏消费残留，HUK-03）**/生命周期（stop 幂等 + thread.is_finished 断言）——MC-203 核对零改动 |
 | `src-tauri/src/hooks/provider.rs` | 3 | CliHooksProvider trait + cliId 键注册表：resolve_provider 命中（身份断言）/未知 cliId Validation（MC-211）/已注册无 hooks 能力 Validation（「不支持 hooks 能力」语义）+ 未注册未知分支（MC-210 新建） |
 | `src-tauri/src/hooks/claude/inject.rs` | 35 | 注入幂等（空 settings/已有用户 hooks/已注入升级）/卸载 handler 级剔除（混组保用户 handler/全 slterm 组删除/无 slterm 零写盘）/状态检测三态/非法 JSON 中止/版本比对/**注入/卸载/状态三命令 impl 路径 tempdir 驱动（HUK-02）**/handler_contains_slterm 非字符串分支 + **reporter 模板内嵌校验断言（显式 cliId + SCRIPT_VERSION 递增，MC-215 决策 7）** |
-| `src-tauri/src/hooks/claude/usage.rs` | 26 | parse_usage_line 全分支 + scan_transcript_usage 集成（逆行命中/回溯/损坏跳过）+ ContextUsage serde 往返 + TRANSCRIPT_TAIL_BYTES + **命令包装层（HUK-05）+ 端到端五用例（P2-TE-05）**——下沉 claude/ 用例数不变（MC-213） |
+| `src-tauri/src/hooks/claude/usage.rs` | 26 | parse_usage_line 全分支 + scan_transcript_usage 集成（逆行命中/回溯/损坏跳过）+ ContextUsage serde 往返 + TRANSCRIPT_TAIL_BYTES + **命令包装层（HUK-05：context_usage_passes_usage_source_path 测试名随 KZ-2 更名）+ 端到端五用例（P2-TE-05）**——下沉 claude/ 用例数不变（MC-213） |
 | `src-tauri/src/hooks/claude/config.rs` | 28 | parse_layer/resolve_config_path（home 注入 tempdir，HUK-07）/read_hooks_subtree/write_hooks_subtree（原子写/merge 保留/损坏拒绝）+ IO 异常分支（persist 失败，HUK-06）+ **hooks 入参 null 视作空对象（清空该层，merge 保留其他字段，ZQ-5）**——下沉 claude/ 用例数不变（MC-213） |
 | `src-tauri/src/hooks/claude/mod.rs` | 1 | HomeDirGuard RAII 注入/恢复（命令层 cliId 透传测试经守卫注入 tempdir 的 L1 隔离纪律，Stage 08 grep 实查补登） |
 | `src-tauri/src/settings.rs` | 25 | 读写往返/文件不存在/JSON 损坏回退 .bak/浅合并/并发写/只读文件 + **block_on 真实 save_settings/load_settings 命令（SPE-01）+ app_data_dir 注入 + persist 失败映射（SPE-05）** |
@@ -281,7 +281,7 @@
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
-| `src/__tests__/agent-status-hook.test.ts` | 45 | useAgentStatus 行建模新语义全分支（Stage 02 更名同步）：纯 shell 无行/双通道建行（hook 通道按 MC-205 三级解析 cliId 写入行）/三通道删行/初始扫描携 transcriptPath 拉 usage/reconcile 对账/now ticker 60s 重算（Stage 08 校正 39→43）+ **resolvePayloadCliId 空串 cliId 回退（ZQ-2）+ null 映射事件首达建行 status null 无图标（ZQ-3 决策 2）（Stage 02 review-fix +2，代 event-pipeline 登记）** |
+| `src/__tests__/agent-status-hook.test.ts` | 45 | useAgentStatus 行建模新语义全分支（Stage 02 更名同步）：纯 shell 无行/双通道建行（hook 通道按 MC-205 三级解析 cliId 写入行）/三通道删行/初始扫描携 usageSourcePath 拉 usage/reconcile 对账/now ticker 60s 重算（Stage 08 校正 39→43）+ **resolvePayloadCliId 空串 cliId 回退（ZQ-2）+ null 映射事件首达建行 status null 无图标（ZQ-3 决策 2）（Stage 02 review-fix +2，代 event-pipeline 登记）** |
 | `src/__tests__/notifications.test.ts` | 34 | **去重缓存 250 事件截断 100 + 最旧再弹（NAH-04）**/agent-event 通知调度（类别判定经 profile.hooks.classifyNotification 委托——MC-420 两段分解，纯函数表驱动 9 条迁入 cli-profile-claude）/窗口失焦门控/任务栏闪烁/积压 flush/并发竞态 + **resolvePayloadCliId 空串 cliId 回退（ZQ-2，Stage 02 review-fix +1，代 event-pipeline 登记）** |
 | `src/__tests__/agent-status-view.test.tsx` | 31 | AgentStatusView 组件（Stage 02 更名 + 空态文案同步；Stage 05 mock 路径/注释同步——D-05，用例数不变）：no-root/empty 占位（**空态「无运行中的编码 CLI 会话」，MC-414**）/**行2 用量条+相对时间断言（NAH-05）**/点击行 switchToPageAndFocus/**双行布局结构**/三级字号/用量口径（contextLimit 来自行 cliId profile.hooks，MC-412）/分段颜色/now prop 驱动重算/三下拉框结构/**标题覆盖真实/受控 history 集成（NAH-06，复合键 cliId\|sessionId——MC-314）**/行1 CLI logo（仅随 emoji/图标列 40px 簇/行2 缩进 48px，F9）（Stage 08 校正 29→31） |
 

@@ -103,7 +103,7 @@ function registerOsc133(
           icon: STATUS_EMOJI.attention,
           logo: profile.iconSrc,
         });
-        // MC-107: 写入会话状态（未注入 hooks 时无 transcriptPath）——cliId 取匹配 profile 的 id
+        // MC-107: 写入会话状态（未注入 hooks 时无 usageSourcePath）——cliId 取匹配 profile 的 id
         TerminalRegistry.setAgentSession(panelId, {
           cliId: profile.id,
           matchedCommand: profile.id,

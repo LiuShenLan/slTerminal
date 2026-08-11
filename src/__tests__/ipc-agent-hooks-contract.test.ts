@@ -155,14 +155,14 @@ describeIpcContract("contextUsage 合约（agent_context_usage）", [
     call: () => agentHooks.contextUsage(CLI_ID, "/path/to/transcript.jsonl"),
     respond: null,
   },
-  // 维度 2：参数结构——cliId 首参 + transcriptPath camelCase
+  // 维度 2：参数结构——cliId 首参 + usageSourcePath camelCase
   {
-    name: "应传递 { cliId, transcriptPath } 参数（cliId 首参）",
+    name: "应传递 { cliId, usageSourcePath } 参数（cliId 首参）",
     cmd: "agent_context_usage",
     call: () => agentHooks.contextUsage(CLI_ID, "/tmp/transcript-abc.jsonl"),
     respond: null,
-    expectArgs: { cliId: CLI_ID, transcriptPath: "/tmp/transcript-abc.jsonl" },
-    expectExactKeys: ["cliId", "transcriptPath"],
+    expectArgs: { cliId: CLI_ID, usageSourcePath: "/tmp/transcript-abc.jsonl" },
+    expectExactKeys: ["cliId", "usageSourcePath"],
   },
   // 维度 3：正常返回透传——ContextUsage 对象
   {
@@ -223,7 +223,7 @@ describe("onAgentEvent 合约", () => {
       event: "UserPromptSubmit",
       timestamp: 1700000000000,
       sessionId: "abc-123",
-      transcriptPath: "/tmp/transcript.jsonl",
+      usageSourcePath: "/tmp/transcript.jsonl",
       cwd: "/home/user/project",
       toolName: null,
       notificationType: null,
@@ -270,13 +270,13 @@ describe("onAgentEvent 合约", () => {
       event: "PreToolUse",
       timestamp: 1700000000000,
       sessionId: "sess-001",
-      transcriptPath: "/path/to/transcript.jsonl",
+      usageSourcePath: "/path/to/transcript.jsonl",
       cwd: "/project",
       toolName: "read",
       notificationType: null,
     };
 
-    // 验证恰好 8 个字段（C1 契约；cliId 为可选字段不纳入）
+    // 验证恰好 8 个字段（C1 契约；cliId/usageSourcePath 为可选字段——本用例显式构造 usageSourcePath 纳入键集合）
     expect(Object.keys(payload).sort()).toEqual([
       "cwd",
       "event",
@@ -285,7 +285,7 @@ describe("onAgentEvent 合约", () => {
       "sessionId",
       "timestamp",
       "toolName",
-      "transcriptPath",
+      "usageSourcePath",
     ]);
 
     // toolName 可为非 null 值（工具事件）

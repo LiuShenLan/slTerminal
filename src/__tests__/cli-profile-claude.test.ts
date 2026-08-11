@@ -351,7 +351,7 @@ function makePayload(
     event: "PreToolUse",
     timestamp: 1,
     sessionId: "s1",
-    transcriptPath: "",
+    usageSourcePath: "",
     cwd: "",
     toolName: null,
     notificationType: null,

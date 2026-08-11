@@ -385,8 +385,9 @@ mod tests {
     fn template_version_positive() {
         let v = template_version();
         assert!(v > 0, "SCRIPT_VERSION 应大于 0，实际: {v}");
-        // 决策 7：新增 cliId 字段后 SCRIPT_VERSION 已递增（已注入用户变「版本过旧」需重新注入）
-        assert_eq!(v, 2, "SCRIPT_VERSION 应已递增到 2（决策 7）");
+        // 决策 7：新增 cliId 字段后 SCRIPT_VERSION 已递增；KZ-3 更名 usageSourcePath 后再次递增
+        // （已注入用户变「版本过旧」需重新注入）
+        assert_eq!(v, 3, "SCRIPT_VERSION 应已递增到 3（决策 7/KZ-3）");
     }
 
     // ── 模板内嵌校验（决策 7：显式 cliId + SCRIPT_VERSION 递增） ──

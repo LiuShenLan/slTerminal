@@ -104,7 +104,7 @@ describe("hooks 状态可视化", () => {
         event: "UserPromptSubmit",
         timestamp: Date.now(),
         sessionId: "e2e",
-        transcriptPath: "",
+        usageSourcePath: "",
         cwd: tempDir,
         toolName: null,
         notificationType: null,
@@ -123,7 +123,7 @@ describe("hooks 状态可视化", () => {
         event: "SessionEnd",
         timestamp: Date.now(),
         sessionId: "e2e",
-        transcriptPath: "",
+        usageSourcePath: "",
         cwd: tempDir,
         toolName: null,
         notificationType: null,
@@ -306,6 +306,16 @@ describe("hooks 配置面板保存链路 (P3-TE-18)", () => {
       // 3. 等待 Dockview API
       await waitForDockviewApi();
 
+      // 3b. 关闭前序用例遗留的 hooksConfig 面板（本用例保存后面板未关；mocha retries:1
+      //     重跑时旧面板残留 → addPanel 叠加出多个面板 → hub 选择行 logo 全页计数
+      //     断言（logoCount/rowButtonCount）命中间态面板——先关后开保证唯一，
+      //     照 :454 it 的既有先例）
+      await browser.execute(() => {
+        for (const p of window.__dockviewApi!.panels) {
+          if (p.component === "hooksConfig") p.api.close();
+        }
+      });
+
       // 4. 打开 hooksConfig 面板（经 __dockviewApi.addPanel；唯一 id 不与同页单例约定冲突）
       const panelId = "hooksConfig-e2e-" + Date.now();
       await browser.execute((pid: string) => {
@@ -335,7 +345,11 @@ describe("hooks 配置面板保存链路 (P3-TE-18)", () => {
         const buttons = imgs
           .map((img) => img.closest("button"))
           .filter((b): b is HTMLButtonElement => b !== null);
-        const editor = document.querySelector('[data-e2e="hooks-config-panel"]');
+        // "编辑器"参照取选择行所属容器内的编辑器槽（容器末子元素）——data-e2e 挂在
+        // 容器上，容器 = 选择行 + 编辑器槽两层；直接用容器比位会命中祖先分支
+        // （compareDocumentPosition 对祖先不置 FOLLOWING 位，实测恒 false）
+        const row = imgs[0]?.closest('[data-e2e="hooks-config-panel"]') ?? null;
+        const editor = row?.lastElementChild ?? null;
         return {
           logoCount: imgs.length,
           buttonTexts: buttons.map((b) => b.textContent ?? ""),
@@ -439,6 +453,16 @@ describe("hooks 配置面板保存链路 (P3-TE-18)", () => {
       expect(saved.env).toEqual(preseed.env);
       expect(saved.$schema).toBe(preseed.$schema);
     } finally {
+      // 回收本用例打开的 hooksConfig 面板（保存用例面板未关；mocha retries:1 重跑时
+      // 旧面板残留在上一页 dockview——页面用多 Dockview 实例 + CSS 显隐，隐藏页面板
+      // 不卸载仍留 DOM，全页 logo 计数断言（logoCount/rowButtonCount）会命中旧面板。
+      // 此时当前页仍活跃，__dockviewApi 正指向本页 dockview，关闭可达；照 :454 it
+      // 「先关后开保证唯一」先例，用例结束时回收，重跑/后续用例从零开始）
+      await browser.execute(() => {
+        for (const p of window.__dockviewApi!.panels) {
+          if (p.component === "hooksConfig") p.api.close();
+        }
+      });
       rmSync(tempDir, { recursive: true, force: true });
     }
   });

@@ -232,7 +232,7 @@ describe("Agent Status 视图与 toast 通知", () => {
         event: "PreToolUse",
         timestamp: Date.now(),
         sessionId: "e2e-agent-dyn",
-        transcriptPath: "",
+        usageSourcePath: "",
         cwd: tempDir,
         toolName: "Bash",
         notificationType: null,
@@ -246,7 +246,7 @@ describe("Agent Status 视图与 toast 通知", () => {
         event: "Stop",
         timestamp: Date.now(),
         sessionId: "e2e-agent-dyn",
-        transcriptPath: "",
+        usageSourcePath: "",
         cwd: tempDir,
         toolName: null,
         notificationType: null,
@@ -260,7 +260,7 @@ describe("Agent Status 视图与 toast 通知", () => {
         event: "SessionEnd",
         timestamp: Date.now(),
         sessionId: "e2e-agent-dyn",
-        transcriptPath: "",
+        usageSourcePath: "",
         cwd: tempDir,
         toolName: null,
         notificationType: null,
@@ -281,7 +281,7 @@ describe("Agent Status 视图与 toast 通知", () => {
    * 用例 2c（R2 变体）：切项目往返后用量保持。
    *
    * 验证：假 transcript JSONL（含 message.usage 四字段）→ 信号文件携真实
-   * transcriptPath 建行 → contextUsage 后端真实解析 → 行含量化百分比 →
+   * usageSourcePath 建行 → contextUsage 后端真实解析 → 行含量化百分比 →
    * 切项目往返（addPage → switchToPage → switchToPage 回）→ 用量数值保持。
    * L4 级覆盖：cache 口径全链路（后端 agent_context_usage 真实解析，非 mock）。
    */
@@ -301,7 +301,7 @@ describe("Agent Status 视图与 toast 通知", () => {
       //     input=30000 + cacheRead=50000 + cacheCreation=20000 = 100000 / 200000 = 50%
       const transcriptDir = join(tempDir, ".claude", "transcripts");
       mkdirSync(transcriptDir, { recursive: true });
-      const transcriptPath = join(transcriptDir, "e2e-r2-transcript.jsonl");
+      const usageSourcePath = join(transcriptDir, "e2e-r2-transcript.jsonl");
       const usageLine = JSON.stringify({
         message: {
           usage: {
@@ -312,7 +312,7 @@ describe("Agent Status 视图与 toast 通知", () => {
           },
         },
       });
-      writeFileSync(transcriptPath, usageLine + "\n", "utf8");
+      writeFileSync(usageSourcePath, usageLine + "\n", "utf8");
 
       // 0d. 创建项目 → 获取 pageId
       const page1Id = await createProject(tempDir);
@@ -346,13 +346,13 @@ describe("Agent Status 视图与 toast 通知", () => {
       // 5. 确保信号目录存在
       mkdirSync(eventsDir, { recursive: true });
 
-      // 6. 原子写 PreToolUse 信号文件——携真实 transcriptPath 建行 + usage 拉取
+      // 6. 原子写 PreToolUse 信号文件——携真实 usageSourcePath 建行 + usage 拉取
       signalFiles.push(writeSignalFile(eventsDir, {
         panelId,
         event: "PreToolUse",
         timestamp: Date.now(),
         sessionId: "e2e-agent-r2",
-        transcriptPath, // 真实 transcript 路径 → contextUsage 后端解析
+        usageSourcePath, // 真实 transcript 路径 → contextUsage 后端解析
         cwd: tempDir,
         toolName: "Bash",
         notificationType: null,
@@ -382,7 +382,7 @@ describe("Agent Status 视图与 toast 通知", () => {
       await switchToPageAndWait(page2Id);
       await switchToPageAndWait(page1Id);
 
-      // 12. 断言行仍存在且用量保持（50%——初始扫描携 transcriptPath 主动拉取）
+      // 12. 断言行仍存在且用量保持（50%——初始扫描携 usageSourcePath 主动拉取）
       const usageAfterSwitch = await browser.execute(() => {
         const row = document.querySelector('[data-e2e="agent-status-row"]');
         if (!row) return null;
@@ -443,7 +443,7 @@ describe("Agent Status 视图与 toast 通知", () => {
         event: "PreToolUse",
         timestamp: Date.now(),
         sessionId: "e2e-agent-r3",
-        transcriptPath: "",
+        usageSourcePath: "",
         cwd: tempDir,
         toolName: "Bash",
         notificationType: null,
@@ -458,7 +458,7 @@ describe("Agent Status 视图与 toast 通知", () => {
         event: "SessionEnd",
         timestamp: Date.now(),
         sessionId: "e2e-agent-r3",
-        transcriptPath: "",
+        usageSourcePath: "",
         cwd: tempDir,
         toolName: null,
         notificationType: null,
@@ -536,7 +536,7 @@ describe("Agent Status 视图与 toast 通知", () => {
         event: "PreToolUse",
         timestamp: Date.now(),
         sessionId: "e2e-agent-r4",
-        transcriptPath: "",
+        usageSourcePath: "",
         cwd: tempDir,
         toolName: "Bash",
         notificationType: null,

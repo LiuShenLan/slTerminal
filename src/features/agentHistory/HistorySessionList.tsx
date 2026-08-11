@@ -198,8 +198,8 @@ function findPanelForSession(cliId: string, sessionId: string): string | undefin
     const cs = entry.agentSession;
     if (!cs) continue;
     let id = cs.sessionId;
-    if (!id && cs.transcriptPath) {
-      const base = basename(cs.transcriptPath);
+    if (!id && cs.usageSourcePath) {
+      const base = basename(cs.usageSourcePath);
       id = base.endsWith(".jsonl") ? base.slice(0, -".jsonl".length) : base;
     }
     if (!id) continue;

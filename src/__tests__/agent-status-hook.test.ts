@@ -3,7 +3,7 @@
 // 行 = 运行中的编码 CLI 会话（非全部终端）。
 // 建行双通道：sessionChange（session 非 null）∨ hook 事件（非 SessionEnd/Exit 且行不存在）。
 // 删行三通道：sessionChange（session null）∨ SessionEnd/Exit ∨ remove。
-// 初始扫描只建 agentSession 非 null 的行；携 transcriptPath 时主动拉 contextUsage。
+// 初始扫描只建 agentSession 非 null 的行；携 usageSourcePath 时主动拉 contextUsage。
 // 行 cliId（MC-410）：hook 事件通道按 MC-205 三级解析写入；OSC 133 通道经
 // agentSession.cliId（setAgentSession sessionChange 自然驱动）。
 //
@@ -78,10 +78,10 @@ vi.mock("../panels/terminal/TerminalRegistry", () => ({
               patch.sessionId !== undefined
                 ? patch.sessionId
                 : prev?.sessionId,
-            transcriptPath:
-              patch.transcriptPath !== undefined
-                ? patch.transcriptPath
-                : prev?.transcriptPath,
+            usageSourcePath:
+              patch.usageSourcePath !== undefined
+                ? patch.usageSourcePath
+                : prev?.usageSourcePath,
             matchedCommand:
               patch.matchedCommand !== undefined
                 ? patch.matchedCommand
@@ -233,7 +233,7 @@ function makePayload(
     event: string;
     timestamp: number;
     sessionId: string;
-    transcriptPath: string;
+    usageSourcePath: string;
     cwd: string;
     toolName: string | null;
     notificationType: string | null;
@@ -245,7 +245,7 @@ function makePayload(
     event: "PreToolUse",
     timestamp: Date.now(),
     sessionId: "s1",
-    transcriptPath: "",
+    usageSourcePath: "",
     cwd: "C:/test",
     toolName: null,
     notificationType: null,
@@ -257,7 +257,7 @@ function makePayload(
 function makeSession(overrides: {
   lastEventAt?: number;
   matchedCommand?: string;
-  transcriptPath?: string;
+  usageSourcePath?: string;
   sessionId?: string;
   status?: string;
   cliId?: string;
@@ -266,7 +266,7 @@ function makeSession(overrides: {
     lastEventAt: overrides.lastEventAt ?? Date.now(),
     matchedCommand: overrides.matchedCommand ?? "claude",
     cliId: overrides.cliId,
-    transcriptPath: overrides.transcriptPath,
+    usageSourcePath: overrides.usageSourcePath,
     sessionId: overrides.sessionId,
     status: overrides.status,
   };
@@ -443,11 +443,11 @@ describe("useAgentStatus（行建模新语义）", () => {
     expect(result.current.rows[0].panelId).toBe("terminal-page1-0");
   });
 
-  it("初始扫描携 transcriptPath 时主动拉 contextUsage（修复问题 2b）", async () => {
+  it("初始扫描携 usageSourcePath 时主动拉 contextUsage（修复问题 2b）", async () => {
     seedProject();
     registerTerminal("terminal-page1-0", makeSession({
       lastEventAt: 1000,
-      transcriptPath: "/path/to/transcript.jsonl",
+      usageSourcePath: "/path/to/transcript.jsonl",
     }));
 
     mockContextUsage.mockResolvedValue({
@@ -463,11 +463,11 @@ describe("useAgentStatus（行建模新语义）", () => {
     expect(mockContextUsage).toHaveBeenCalledWith(CLAUDE_CLI_ID, "/path/to/transcript.jsonl");
   });
 
-  it("初始扫描无 transcriptPath → 不调 contextUsage", () => {
+  it("初始扫描无 usageSourcePath → 不调 contextUsage", () => {
     seedProject();
     registerTerminal("terminal-page1-0", makeSession({
       lastEventAt: 1000,
-      // 无 transcriptPath
+      // 无 usageSourcePath
     }));
 
     renderHook(() => useAgentStatus());
@@ -540,7 +540,7 @@ describe("useAgentStatus（行建模新语义）", () => {
     expect(result.current.rows).toHaveLength(1);
   });
 
-  it("sessionChange 建行携带 transcriptPath → 主动拉 usage", () => {
+  it("sessionChange 建行携带 usageSourcePath → 主动拉 usage", () => {
     seedProject();
     registerTerminal("terminal-page1-0", null);
 
@@ -558,7 +558,7 @@ describe("useAgentStatus（行建模新语义）", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (TerminalRegistry as any).setAgentSession("terminal-page1-0", {
         matchedCommand: "claude",
-        transcriptPath: "/t.json",
+        usageSourcePath: "/t.json",
       });
     });
 
@@ -950,7 +950,7 @@ describe("useAgentStatus（行建模新语义）", () => {
   // contextUsage 拉取
   // ──────────────────────────────────────────────────
 
-  it("事件含 transcriptPath → 调用 contextUsage 拉取用量", async () => {
+  it("事件含 usageSourcePath → 调用 contextUsage 拉取用量", async () => {
     seedProject();
     registerTerminal("terminal-page1-0", makeSession({ lastEventAt: 1000 }));
 
@@ -967,7 +967,7 @@ describe("useAgentStatus（行建模新语义）", () => {
       capturedCallback.current?.(
         makePayload({
           event: "PreToolUse",
-          transcriptPath: "/path/to/transcript.jsonl",
+          usageSourcePath: "/path/to/transcript.jsonl",
         }),
       );
     });
@@ -996,7 +996,7 @@ describe("useAgentStatus（行建模新语义）", () => {
       capturedCallback.current?.(
         makePayload({
           event: "PreToolUse",
-          transcriptPath: "/path/to/transcript.jsonl",
+          usageSourcePath: "/path/to/transcript.jsonl",
         }),
       );
     });
@@ -1018,7 +1018,7 @@ describe("useAgentStatus（行建模新语义）", () => {
       capturedCallback.current?.(
         makePayload({
           event: "PreToolUse",
-          transcriptPath: "/bad/path.jsonl",
+          usageSourcePath: "/bad/path.jsonl",
         }),
       );
     });
@@ -1028,7 +1028,7 @@ describe("useAgentStatus（行建模新语义）", () => {
     expect(result.current.rows[0].usage).toBeUndefined();
   });
 
-  it("无 transcriptPath 的事件不触发 contextUsage", () => {
+  it("无 usageSourcePath 的事件不触发 contextUsage", () => {
     seedProject();
     registerTerminal("terminal-page1-0", makeSession({ lastEventAt: 1000 }));
 
@@ -1038,7 +1038,7 @@ describe("useAgentStatus（行建模新语义）", () => {
       capturedCallback.current?.(
         makePayload({
           event: "PreToolUse",
-          transcriptPath: "",
+          usageSourcePath: "",
         }),
       );
     });

@@ -13,7 +13,7 @@ import type { AgentStatus } from "../../lib/agentStatus";
 export interface AgentSessionInfo {
   /** 会话 UUID（hook 事件 payload.sessionId；matchedCommand-only 会话无此字段） */
   sessionId?: string;
-  transcriptPath?: string;
+  usageSourcePath?: string;
   matchedCommand?: string;
   /** 四态（profile.hooks.eventToStatus 结果；null 状态不存储——undefined 保留旧值） */
   status?: AgentStatus;
@@ -92,7 +92,7 @@ export const TerminalRegistry = {
       const prev = entry.agentSession;
       entry.agentSession = {
         sessionId: patch.sessionId !== undefined ? patch.sessionId : prev?.sessionId,
-        transcriptPath: patch.transcriptPath !== undefined ? patch.transcriptPath : prev?.transcriptPath,
+        usageSourcePath: patch.usageSourcePath !== undefined ? patch.usageSourcePath : prev?.usageSourcePath,
         matchedCommand: patch.matchedCommand !== undefined ? patch.matchedCommand : prev?.matchedCommand,
         status: patch.status !== undefined ? patch.status : prev?.status,
         cliId: patch.cliId !== undefined ? patch.cliId : prev?.cliId,

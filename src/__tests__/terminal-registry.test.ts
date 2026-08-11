@@ -103,7 +103,7 @@ describe("TerminalRegistry.setAgentSession", () => {
     TerminalRegistry._reset();
   });
 
-  it("部分键更新——matchedCommand 保留 transcriptPath，反之亦然", () => {
+  it("部分键更新——matchedCommand 保留 usageSourcePath，反之亦然", () => {
     const entry = makeEntry();
     TerminalRegistry.register("p1", entry);
 
@@ -111,14 +111,14 @@ describe("TerminalRegistry.setAgentSession", () => {
     TerminalRegistry.setAgentSession("p1", { matchedCommand: "claude" });
     let got = TerminalRegistry.get("p1")!;
     expect(got.agentSession?.matchedCommand).toBe("claude");
-    expect(got.agentSession?.transcriptPath).toBeUndefined();
+    expect(got.agentSession?.usageSourcePath).toBeUndefined();
     expect(got.agentSession?.lastEventAt).toBeGreaterThan(0);
 
-    // 后续只更新 transcriptPath——matchedCommand 应保留（merge）
-    TerminalRegistry.setAgentSession("p1", { transcriptPath: "/t.json" });
+    // 后续只更新 usageSourcePath——matchedCommand 应保留（merge）
+    TerminalRegistry.setAgentSession("p1", { usageSourcePath: "/t.json" });
     got = TerminalRegistry.get("p1")!;
     expect(got.agentSession?.matchedCommand).toBe("claude");
-    expect(got.agentSession?.transcriptPath).toBe("/t.json");
+    expect(got.agentSession?.usageSourcePath).toBe("/t.json");
   });
 
   it("null 清空 agentSession", () => {
@@ -152,14 +152,14 @@ describe("TerminalRegistry.setAgentSession", () => {
   it("undefined 键不覆盖旧值", () => {
     const entry = makeEntry();
     TerminalRegistry.register("p1", entry);
-    TerminalRegistry.setAgentSession("p1", { matchedCommand: "claude", transcriptPath: "/orig.json" });
+    TerminalRegistry.setAgentSession("p1", { matchedCommand: "claude", usageSourcePath: "/orig.json" });
 
-    // 传 transcriptPath=undefined——不应覆盖旧值
-    TerminalRegistry.setAgentSession("p1", { matchedCommand: undefined, transcriptPath: undefined });
+    // 传 usageSourcePath=undefined——不应覆盖旧值
+    TerminalRegistry.setAgentSession("p1", { matchedCommand: undefined, usageSourcePath: undefined });
 
     const got = TerminalRegistry.get("p1")!.agentSession!;
     expect(got.matchedCommand).toBe("claude");    // 保留旧值
-    expect(got.transcriptPath).toBe("/orig.json"); // 保留旧值
+    expect(got.usageSourcePath).toBe("/orig.json"); // 保留旧值
   });
 
   it("sessionId/status 存储与透传（hook 事件写入）", () => {
@@ -302,7 +302,7 @@ describe("TerminalRegistry.setAgentSession merge 语义（NAH-02）", () => {
     // 全量设置（含显式 lastEventAt）
     TerminalRegistry.setAgentSession("p1", {
       sessionId: "abc-123",
-      transcriptPath: "/t.json",
+      usageSourcePath: "/t.json",
       matchedCommand: "claude",
       status: "done",
       lastEventAt: 1111,
@@ -314,7 +314,7 @@ describe("TerminalRegistry.setAgentSession merge 语义（NAH-02）", () => {
 
     const got = TerminalRegistry.get("p1")!.agentSession!;
     expect(got.sessionId).toBe("abc-123");
-    expect(got.transcriptPath).toBe("/t.json");
+    expect(got.usageSourcePath).toBe("/t.json");
     expect(got.matchedCommand).toBe("claude");
     expect(got.status).toBe("working");
     // 缺 lastEventAt → 自动填新 Date.now()，替换旧显式值
@@ -328,17 +328,17 @@ describe("TerminalRegistry.setAgentSession merge 语义（NAH-02）", () => {
     TerminalRegistry.register("p1", entry);
     TerminalRegistry.setAgentSession("p1", {
       sessionId: "abc-123",
-      transcriptPath: "/t.json",
+      usageSourcePath: "/t.json",
     });
     TerminalRegistry.setAgentSession("p1", null);
     expect(TerminalRegistry.get("p1")!.agentSession).toBeNull();
 
-    // null 清空后再增量 patch——prev 为 null，旧 sessionId/transcriptPath 不回填
+    // null 清空后再增量 patch——prev 为 null，旧 sessionId/usageSourcePath 不回填
     TerminalRegistry.setAgentSession("p1", { status: "working" });
     const got = TerminalRegistry.get("p1")!.agentSession!;
     expect(got.status).toBe("working");
     expect(got.sessionId).toBeUndefined();
-    expect(got.transcriptPath).toBeUndefined();
+    expect(got.usageSourcePath).toBeUndefined();
     expect(got.matchedCommand).toBeUndefined();
     expect(got.cliId).toBeUndefined();
   });

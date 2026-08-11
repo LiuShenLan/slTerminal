@@ -136,7 +136,7 @@ export function keyOf(
  * 复合键 `cliId|sessionId`（MC-313）：防跨 CLI sessionId 理论冲突——运行中会话
  * 定位须同时匹配 cliId 与 sessionId 双维度；键构造经 keyOf 单点（回退 + 转义）。
  * sessionId 优先 agentSession.sessionId（hook 事件 payload 精确值），回退
- * transcriptPath 的 basename（去 .jsonl 后缀，兼容旧数据）；两者皆无的条目
+ * usageSourcePath 的 basename（去 .jsonl 后缀，兼容旧数据）；两者皆无的条目
  * （matchedCommand-only 会话）不产出 id，⚡/四态无法覆盖——已知局限（checklist FE-05）。
  * 旧数据 agentSession 无 cliId → 按 CLAUDE_CLI_ID 常量回退（非字面量，AC-5 兼容）。
  * status 为 null/undefined（无有效状态）的条目不产出键（历史区无标记，与活跃区
@@ -148,8 +148,8 @@ export function deriveActiveSessionStatuses(): Map<string, AgentStatus> {
     const cs = entry.agentSession;
     if (!cs || cs.status == null) continue;
     let id = cs.sessionId;
-    if (!id && cs.transcriptPath) {
-      const base = basename(cs.transcriptPath);
+    if (!id && cs.usageSourcePath) {
+      const base = basename(cs.usageSourcePath);
       id = base.endsWith(".jsonl") ? base.slice(0, -".jsonl".length) : base;
     }
     if (!id) continue; // matchedCommand-only 会话无法定位（文档化局限）

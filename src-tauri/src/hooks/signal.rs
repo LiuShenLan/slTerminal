@@ -1,7 +1,7 @@
 //! 信号文件解析 —— 纯函数 + 文件处理流程
 //!
 //! 职责：
-//! - 定义 AgentEventPayload DTO（跨边界契约：8 字段 + 可选 cliId，camelCase）
+//! - 定义 AgentEventPayload DTO（跨边界契约：9 字段——可选 cliId + 可选 usageSourcePath，camelCase）
 //! - parse_signal_file 纯函数：JSON 字符串 → Option<AgentEventPayload>
 //! - process_signal_file：读文件 → 解析 → emit("agent-event") → 删除
 
@@ -17,11 +17,13 @@ use tauri::Emitter;
 /// 防异常/恶意巨大文件拖垮 watcher 线程。
 const MAX_SIGNAL_FILE_BYTES: u64 = 1024 * 1024;
 
-/// Agent 事件载荷（跨边界契约：8 字段 + 可选 cliId，camelCase 序列化）
+/// Agent 事件载荷（跨边界契约：9 字段——可选 cliId + 可选 usageSourcePath，camelCase 序列化）
 ///
 /// PartialEq 供 serde 往返精确断言测试使用（HUK-09）。
 /// cliId 为可选（serde default）：旧信号文件（无 cliId 键）反序列化兼容，
 /// 缺省由前端按 claude 兜底（MC-205 三级解析）。
+/// usageSourcePath 为可选（serde default，不加 serde alias）：信号文件瞬态（亚秒~3s 存活），
+/// 旧键（transcriptPath）信号降级 None——仅丢该事件用量拉取（决策 1）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentEventPayload {
@@ -33,8 +35,10 @@ pub struct AgentEventPayload {
     pub timestamp: u64,
     /// 会话标识
     pub session_id: String,
-    /// transcript 文件路径
-    pub transcript_path: String,
+    /// 用量来源文件路径（可选，serde default）：旧信号缺键降级 None，仅丢该事件用量拉取；
+    /// 路径语义由具体 CLI 解释（claude = transcript JSONL）
+    #[serde(default)]
+    pub usage_source_path: Option<String>,
     /// 当前工作目录
     pub cwd: String,
     /// 工具名（仅工具事件，可缺省）
@@ -123,7 +127,7 @@ mod tests {
     /// 合法完整 JSON → 返回 Some
     #[test]
     fn parse_valid_full_payload() {
-        let json = r#"{"panelId":"p1","event":"PreToolUse","timestamp":1700000000000,"sessionId":"s1","transcriptPath":"/t.jsonl","cwd":"/cwd","toolName":"Bash","notificationType":null}"#;
+        let json = r#"{"panelId":"p1","event":"PreToolUse","timestamp":1700000000000,"sessionId":"s1","usageSourcePath":"/t.jsonl","cwd":"/cwd","toolName":"Bash","notificationType":null}"#;
         let r = parse_signal_file(json);
         assert!(r.is_some());
         let p = r.unwrap();
@@ -138,7 +142,7 @@ mod tests {
     /// toolName 和 notificationType 均为 null → 正常解析
     #[test]
     fn parse_with_null_optionals() {
-        let json = r#"{"panelId":"p2","event":"SessionStart","timestamp":1,"sessionId":"s2","transcriptPath":"/t.jsonl","cwd":"/","toolName":null,"notificationType":null}"#;
+        let json = r#"{"panelId":"p2","event":"SessionStart","timestamp":1,"sessionId":"s2","usageSourcePath":"/t.jsonl","cwd":"/","toolName":null,"notificationType":null}"#;
         let p = parse_signal_file(json).unwrap();
         assert!(p.tool_name.is_none());
         assert!(p.notification_type.is_none());
@@ -147,14 +151,14 @@ mod tests {
     /// 缺 panelId 字段 → None
     #[test]
     fn parse_missing_panel_id() {
-        let json = r#"{"event":"SessionStart","timestamp":1,"sessionId":"s2","transcriptPath":"/t.jsonl","cwd":"/"}"#;
+        let json = r#"{"event":"SessionStart","timestamp":1,"sessionId":"s2","usageSourcePath":"/t.jsonl","cwd":"/"}"#;
         assert!(parse_signal_file(json).is_none());
     }
 
     /// panelId 为空串 → None
     #[test]
     fn parse_empty_panel_id() {
-        let json = r#"{"panelId":"","event":"SessionStart","timestamp":1,"sessionId":"s2","transcriptPath":"/t.jsonl","cwd":"/"}"#;
+        let json = r#"{"panelId":"","event":"SessionStart","timestamp":1,"sessionId":"s2","usageSourcePath":"/t.jsonl","cwd":"/"}"#;
         assert!(parse_signal_file(json).is_none());
     }
 
@@ -193,7 +197,7 @@ mod tests {
                 "sessionId",
                 "timestamp",
                 "toolName",
-                "transcriptPath",
+                "usageSourcePath",
             ]
         );
     }
@@ -206,7 +210,7 @@ mod tests {
             event: "SessionStart".into(),
             timestamp: 1700000000000,
             session_id: "s1".into(),
-            transcript_path: "/t.jsonl".into(),
+            usage_source_path: Some("/t.jsonl".into()),
             cwd: "/cwd".into(),
             tool_name: Some("Bash".into()),
             notification_type: None,
@@ -221,6 +225,7 @@ mod tests {
         assert_eq!(v["timestamp"], 1700000000000u64);
         assert_eq!(v["toolName"], "Bash");
         assert_eq!(v["notificationType"], serde_json::Value::Null);
+        assert_eq!(v["usageSourcePath"], "/t.jsonl");
         assert_eq!(v["cliId"], "claude");
         // 序列化 → 反序列化往返
         let back: AgentEventPayload = serde_json::from_str(&json).unwrap();
@@ -235,7 +240,7 @@ mod tests {
             event: "SessionStart".into(),
             timestamp: 1,
             session_id: "s1".into(),
-            transcript_path: "/t.jsonl".into(),
+            usage_source_path: Some("/t.jsonl".into()),
             cwd: "/cwd".into(),
             tool_name: None,
             notification_type: None,
@@ -250,7 +255,7 @@ mod tests {
     /// camelCase JSON 反序列化 → 字段正确映射（含显式 cliId）
     #[test]
     fn deserialize_camelcase() {
-        let json = r#"{"panelId":"p3","event":"Stop","timestamp":999,"sessionId":"s3","transcriptPath":"/x.jsonl","cwd":"/app","toolName":null,"notificationType":"idle","cliId":"claude"}"#;
+        let json = r#"{"panelId":"p3","event":"Stop","timestamp":999,"sessionId":"s3","usageSourcePath":"/x.jsonl","cwd":"/app","toolName":null,"notificationType":"idle","cliId":"claude"}"#;
         let p: AgentEventPayload = serde_json::from_str(json).unwrap();
         assert_eq!(p.panel_id, "p3");
         assert_eq!(p.event, "Stop");
@@ -258,19 +263,28 @@ mod tests {
         assert_eq!(p.cli_id.as_deref(), Some("claude"));
     }
 
-    /// 旧信号兼容：无 cliId 键的 8 字段 JSON → 正常反序列化，cli_id 缺省 None
+    /// 旧信号兼容：无 cliId 键的 8 字段 JSON → 正常反序列化，cli_id 缺省 None；
+    /// 形态扩展（决策 1）：无 usageSourcePath 键 → usage_source_path 缺省 None
+    /// （旧键 transcriptPath 信号降级 None，仅丢该事件用量拉取）
     #[test]
     fn deserialize_legacy_signal_without_cli_id() {
-        let json = r#"{"panelId":"p3","event":"Stop","timestamp":999,"sessionId":"s3","transcriptPath":"/x.jsonl","cwd":"/app","toolName":null,"notificationType":"idle"}"#;
+        let json = r#"{"panelId":"p3","event":"Stop","timestamp":999,"sessionId":"s3","usageSourcePath":"/x.jsonl","cwd":"/app","toolName":null,"notificationType":"idle"}"#;
         let p: AgentEventPayload = serde_json::from_str(json).unwrap();
         assert_eq!(p.panel_id, "p3");
         assert_eq!(p.event, "Stop");
         assert!(p.cli_id.is_none(), "旧信号缺 cliId 键应默认 None");
+        // 形态扩展：无 usageSourcePath 键的旧信号 → 缺省 None
+        let json_no_source = r#"{"panelId":"p3","event":"Stop","timestamp":999,"sessionId":"s3","cwd":"/app","toolName":null,"notificationType":"idle"}"#;
+        let p2: AgentEventPayload = serde_json::from_str(json_no_source).unwrap();
+        assert!(
+            p2.usage_source_path.is_none(),
+            "旧信号缺 usageSourcePath 键应默认 None"
+        );
     }
 
     // ── process_signal_file_with 全流程（HUK-01：D6 emit 注入）──
 
-    const VALID_SIGNAL_JSON: &str = r#"{"panelId":"p1","event":"PreToolUse","timestamp":1700000000000,"sessionId":"s1","transcriptPath":"/t.jsonl","cwd":"/cwd","toolName":"Bash","notificationType":null}"#;
+    const VALID_SIGNAL_JSON: &str = r#"{"panelId":"p1","event":"PreToolUse","timestamp":1700000000000,"sessionId":"s1","usageSourcePath":"/t.jsonl","cwd":"/cwd","toolName":"Bash","notificationType":null}"#;
 
     /// 全流程：读文件 → parse → emit("agent-event") → 删文件
     #[test]
@@ -339,7 +353,7 @@ mod tests {
         let path = dir.path().join("nopid.json");
         std::fs::write(
             &path,
-            r#"{"event":"SessionStart","timestamp":1,"sessionId":"s","transcriptPath":"/t.jsonl","cwd":"/"}"#,
+            r#"{"event":"SessionStart","timestamp":1,"sessionId":"s","usageSourcePath":"/t.jsonl","cwd":"/"}"#,
         )
         .unwrap();
 

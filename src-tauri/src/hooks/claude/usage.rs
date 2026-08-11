@@ -341,9 +341,9 @@ mod tests {
     use crate::hooks::claude::ClaudeHooksProvider;
     use crate::hooks::provider::CliHooksProvider;
 
-    /// 参数透传 transcriptPath：不同文件 → 各自扫描结果（Some 返回映射）
+    /// 参数透传 usageSourcePath：不同文件 → 各自扫描结果（Some 返回映射）
     #[test]
-    fn context_usage_passes_transcript_path() {
+    fn context_usage_passes_usage_source_path() {
         let (_dir_a, path_a) = make_temp_transcript(&[
             r#"{"message":{"usage":{"input_tokens":10,"output_tokens":5}}}"#,
         ]);
@@ -359,7 +359,7 @@ mod tests {
             .context_usage(path_b.to_str().unwrap())
             .unwrap()
             .unwrap();
-        assert_eq!(a.input_tokens, 10, "transcript_path 应透传到扫描逻辑");
+        assert_eq!(a.input_tokens, 10, "usage_source_path 应透传到扫描逻辑");
         assert_eq!(b.input_tokens, 20);
     }
 

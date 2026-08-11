@@ -39,9 +39,9 @@ export async function getInjectionStatus(
  */
 export async function contextUsage(
   cliId: string,
-  transcriptPath: string,
+  usageSourcePath: string,
 ): Promise<ContextUsage | null> {
-  return invoke("agent_context_usage", { cliId, transcriptPath });
+  return invoke("agent_context_usage", { cliId, usageSourcePath });
 }
 
 /**
