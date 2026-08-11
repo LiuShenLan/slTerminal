@@ -33,7 +33,7 @@ CLI profile 注册表（MC-1/101~108）——编码 CLI 身份域与能力策略
 | 类型 | 字段 | 说明 |
 |------|------|------|
 | `CodingCliProfile` | id / displayName / commands / iconSrc / tabTitle / capabilities | cliId 公共键（如 "claude"）；commands 支持多首 token（如 `["claude","cc"]`）；iconSrc 品牌 logo 根绝对路径（如 `/cli-icons/claude.png`） |
-| `HooksCapability` | eventToStatus / classifyNotification / contextLimit / restartHint / hasConfigEditor | hooks 能力域——协议知识实现留在 `profiles/<cli>/`，本文件仅签名 |
+| `HooksCapability` | eventToStatus / classifyNotification / contextLimit / restartHint / hasConfigEditor / configEditor / configLayers | hooks 能力域——协议知识实现留在 `profiles/<cli>/`，本文件仅签名；`configEditor`（KZ-1）：hub 配置编辑器组件（`HooksConfigEditorProps` 泛化自 ClaudeHooksConfigEditorProps），**hasConfigEditor=true 时必填**，缺失 → hub 编辑器槽空态占位防御；`configLayers`（KZ-4）：hooks 配置分层声明（`{ id, label, hint }[]`——编辑器层切换器数据源），**hasConfigEditor=true 时必填**，claude = user/project/local 三层现值 |
 | `HistoryCapability` | supportsFork / buildResumeCommand / buildRestoreInput | history 能力域——历史会话恢复策略 |
 
 能力**可选**：`capabilities.hooks` / `capabilities.history` 均可缺省——未声明 = 该域不可用，消费方优雅降级（无 hooks 能力 profile 的事件行不建/不通知/不置图标；supportsFork 缺省 false 不展示「分支恢复」菜单；恢复编排对无 history 能力 profile 防御性失败 toast）。
@@ -46,6 +46,10 @@ CLI profile 注册表（MC-1/101~108）——编码 CLI 身份域与能力策略
 
 `profiles/claude/` 是 claude 身份域与 hooks/history 策略实现点——claude 字面量（id/命令名/事件名字面量/`~/.claude` 路径）只允许出现在此目录；通用层经注册表/常量消费。策略实现（`strategies.ts`）迁自 lib 层状态映射（MC-401 前端半）、notifications 类别判定（MC-422）与 agentHistory 恢复策略（MC-315/316），行为零改动（AQ-1 例外：`buildResumeCommand` cwd 单引号按 PowerShell 规则转义为 `''`）。
 
+### features→panels 依赖方向合法化（KZ-1）
+
+`profiles/claude/index.ts` import `panels/hooksConfig/ClaudeHooksConfigEditor` 并挂入 `capabilities.hooks.configEditor`——features/cliProfiles → panels 新方向合法化理由：`profiles/claude/` 是 claude 合法领地，编辑器组件是 claude 专属资产（MC-223 决策 2），hub 经 profile 的 configEditor 字段分派渲染（新增 CLI 自带编辑器组件即可接入 hub，hub 零改动）；`types.ts` 仅类型 import（`HooksConfigEditorProps` 的 `React.ComponentType`/`React.MutableRefObject` 类型引用，运行期擦除）不构成运行循环——打包图循环由 `npx vite build` 验证。
+
 ### 注册触发点（side-effect import，照 tabRules 先例）
 
 - barrel `index.ts` **不触发注册**（仅导出类型与注册表；缺省回退常量经 `./profiles/claude` 直接引用）
@@ -55,11 +59,11 @@ CLI profile 注册表（MC-1/101~108）——编码 CLI 身份域与能力策略
 
 | 文件 | 职责 |
 |------|------|
-| `types.ts` | profile 接口契约：`CodingCliProfile` + `HooksCapability` + `HistoryCapability`（跨边界契约，spec 00 §3.1） |
+| `types.ts` | profile 接口契约：`CodingCliProfile` + `HooksCapability`（含 `HooksConfigEditorProps`/`configEditor`，KZ-1）+ `HistoryCapability`（跨边界契约，spec 00 §3.1） |
 | `cliProfileRegistry.ts` | `CliProfileRegistry` 类 + `cliProfileRegistry` 全局单例（register/get/getAll/matchByCommand/_reset） |
 | `index.ts` | barrel export（类型 + 注册表），不触发注册 |
 | `profiles/index.ts` | profile 注册触发点（side-effect import，生产入口 Workspace.tsx） |
-| `profiles/claude/index.ts` | claude 身份域定义 + `CLAUDE_CLI_ID` / `SESSION_END_EVENT` / `EXIT_EVENT` 常量 + hooks/history 能力挂载（side-effect 注册） |
+| `profiles/claude/index.ts` | claude 身份域定义 + `CLAUDE_CLI_ID` / `SESSION_END_EVENT` / `EXIT_EVENT` 常量 + hooks/history 能力挂载（side-effect 注册）；`configEditor` 挂载 claude 专属编辑器 `panels/hooksConfig/ClaudeHooksConfigEditor`（KZ-1，依赖方向合法化见上）+ `configLayers` 声明 user/project/local 三层（KZ-4，值 + 文案迁自编辑器退役 LAYERS 常量） |
 | `profiles/claude/strategies.ts` | claude hooks/history 策略实现：`eventToStatus`（10 事件映射）/ `classifyNotification`（五映射）/ `buildResumeCommand` / `buildRestoreInput`（输出与迁出源逐字一致；差异点 = cwd 单引号转义为 `''`（AQ-1）） |
 
 ## 测试模式

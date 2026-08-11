@@ -3,6 +3,8 @@
 // 职责：
 // - cliId 参数 = hub 面板选中 CLI（Stage 03 临时代理常量已回收，MC-220）——
 //   readHooksConfig/writeHooksConfig 的 cliId 实参唯一来源
+// - 初始层 = initialLayer 参数（编辑器传 profile.configLayers[0].id，KZ-4）；
+//   缺省回退 "user"（防御——configLayers 缺失不崩）
 // - 从 useProjects + useLayout 推导当前活跃项目 rootPath（照 useCommitStatus 模式）
 // - rootPath 为空时 project/local 层禁用（仅 user 层可用）
 // - 加载：readHooksConfig(cliId, layer, rootPath?)，null 视为 {}；挂载时加载禁用状态 store
@@ -66,7 +68,10 @@ export interface UseHooksConfigResult {
   reload: () => Promise<void>;
 }
 
-export function useHooksConfig(cliId: string): UseHooksConfigResult {
+export function useHooksConfig(
+  cliId: string,
+  initialLayer?: HooksLayer,
+): UseHooksConfigResult {
   const projects = useProjects((s) => s.projects);
   const activePageId = useLayout((s) => s.activePageId);
 
@@ -82,7 +87,8 @@ export function useHooksConfig(cliId: string): UseHooksConfigResult {
     }
   }
 
-  const [layer, setLayerState] = useState<HooksLayer>("user");
+  // 初始层 = 调用方传入（编辑器传 profile.configLayers[0].id——KZ-4）；缺省回退 "user"（防御）
+  const [layer, setLayerState] = useState<HooksLayer>(initialLayer ?? "user");
   const [configJson, setConfigJson] = useState<HooksConfigJson>({});
   const [guiModel, setGuiModel] = useState<HooksConfigGui>({ events: [] });
   const [dirty, setDirty] = useState(false);

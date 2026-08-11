@@ -2,7 +2,7 @@
 
 > **本文档是项目用例数唯一真值源。** 所有 CLAUDE.md、README、CI 配置中引用的用例数均以此文件为准。更新测试后必须同步本文档。
 
-全量 **3196** 用例（Rust 597 + 前端 2422 + L3 138 + E2E 39），2026-08-11 更新。
+全量 **3202** 用例（Rust 597 + 前端 2428 + L3 138 + E2E 39），2026-08-11 更新。
 
 > **计数口径**：
 > - L2 以 `npm test` 实跑（Vitest 报告）为准——`it.each(...)` 参数化与 `describeIpcContract` 工厂（`helpers/ipc-contract.ts`，IHE-06）等按**展开后用例数**计入（139 文件 2411 用例，Stage 08 终验实跑回写 + Stage 01 review-fix 增量，见 L2 段 ① 注）；纯 grep `it(/test(` 块数会少计 it.each 展开（如 colors 85 = 13 块 + 7 组 each 展开 72）。
@@ -82,13 +82,15 @@
 
 > `pty/mod.rs`、`pty/win_build.rs`、`main.rs` 不含 `#[test]`，不在此列。git/mod.rs 测试已按 GIT-12 全量拆出至 `tests/`（`#[test]` 零残留）。agent_history 模块 grep 口径：claude/jsonl 28 + claude/scan 16 + claude/ops 10 + mod 13 = 67（命令包装层 4 用例已迁入 mod.rs:407-464，MC-301 下沉时随行）+ claude/mod 4 + provider 2 = 全模块 73；env 测试依赖 L1 `--test-threads=1` 门禁（`std::env::set_var` 全局可变）。
 
-## L2 — 前端单元/集成测试（139 文件 / 2422 用例）
+## L2 — 前端单元/集成测试（139 文件 / 2428 用例）
 
-运行：`npm test`（Vitest + jsdom，登记 2422 用例）
+运行：`npm test`（Vitest + jsdom，登记 2428 用例）
 
 > ① Stage 08 行级校正：5 个陈旧行按磁盘 block 计数核实上修（use-xterm-lifecycle 71→79、terminal-registry 24→28、hooks-config-panel 36→40、agent-status-hook 39→43、agent-status-view 29→31，合计 +22）——L2 合计 2371→2394；**终验实跑回写**：npm test 实跑 2408 用例（139 文件），it.each 展开与 describeIpcContract 工厂生成用例按展开后计入，以实跑为准。
 >
 > ② Stage 02 review-fix 增量（ZQ-1~4/6/7，composite-key 单点代登记）：agent-history-model 44→47（keyOf 单点 +3）、agent-history-view 35→37（keyOf 随行消费方回退 +2）、use-xterm-lifecycle 79→81（resolvePayloadCliId 空串回退 + Exit 事件清图标，代 event-pipeline 登记 +2）、agent-status-hook 43→45（resolvePayloadCliId 空串回退 + null 映射事件建行 status null，代 event-pipeline 登记 +2）、notifications 33→34（resolvePayloadCliId 空串回退，代 event-pipeline 登记 +1）、agent-history-restore 7→8（同毫秒两次恢复 panelId 相异，代 restore-id 登记 +1）——合计 +11，L2 2411→2422；以终验实跑为准。
+>
+> ③ Stage 04 review-fix 增量（KZ-1/KZ-4，layers 单点代登记）：cli-profile-claude 51→53（**configEditor 挂载 = ClaudeHooksConfigEditor（KZ-1，代 editor-dispatch 登记 +1）** + **configLayers 三层现值（KZ-4：user/project/local + label/hint，层切换器数据源 +1）**；hooks 能力断言升七字段随行）、hooks-config-panel 40→43（**代 editor-dispatch 登记 +2**：hub 分派——选中 stubcli 渲染 profile 声明的桩编辑器（data-e2e 标记 + JsonMode 零新增挂载）+ hasConfigEditor=true 但 configEditor 缺失 → 编辑器槽空态占位「该 CLI 未提供配置编辑器」且不渲染 claude 编辑器；**KZ-4 +1**：层级切换器数据源 = profile.configLayers——自定义两层 profile（dev/prod）渲染且 claude 固定三层不出现 + 初始层 = configLayers[0].id 携首次 read）、hooks-config-sync 9→10（**KZ-4 +1**：useHooksConfig initialLayer 参数——初始层 = 传入值 + 缺省回退 "user"）——合计 +6，L2 2422→2428；以终验实跑为准。
 
 ### IPC 层（6 文件 / 116 用例）
 
@@ -121,14 +123,14 @@
 | `src/__tests__/detect-webgl.test.ts` | 3 | WebGL2 可用/不可用/抛异常 |
 | `src/__tests__/terminal-strictmode.test.ts` | 2 | `smGuardRef` 防双重挂载 |
 
-### CLI profile 注册表（4 文件 / 88 用例，Stage 01 + Stage 07）
+### CLI profile 注册表（4 文件 / 90 用例，Stage 01 + Stage 07）
 
 > mock 夹具 `src/__tests__/helpers/mockCliProfile.ts`（AC-4 契约：mockcli profile 定义——id/displayName/commands/tabTitle "mockcli" + iconSrc `/cli-icons/mockcli.png` + hooks 全能力（eventToStatus 恒等映射桩/classifyNotification 桩/contextLimit/restartHint 桩文案/hasConfigEditor=true）+ history 全能力（supportsFork=true/buildResumeCommand/buildRestoreInput 桩输出带 "mockcli --resume" 前缀）+ registerMockCliProfile/resetCliProfileRegistry 辅助——**仅测试环境注册**（vitest register + afterEach `_reset` 清理，L4 经 E2E helper），生产零引用；不计文件/用例数）。
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
 | `src/__tests__/cli-profile-registry.test.ts` | 19 | CliProfileRegistry（MC-101/102）：register/get/getAll 注册序/同 id 覆盖（注册序不变）/matchByCommand 首 token 精确匹配（多 commands 非首键/带参变体/前导空白/空命令行/仅空白/未命中/不 toLowerCase/同键冲突先注册者优先）/`_reset`/独立实例/全局单例 + logo 资源守卫泛化（MC-108：遍历注册表全部 profile 断言 iconSrc 磁盘存在 + PNG 魔数，含 mockcli.png 先行资源）——语义并入自退役注册表/图标守卫用例（13 + 12） |
-| `src/__tests__/cli-profile-claude.test.ts` | 51 | claude profile 身份域（MC-104）：side-effect 注册/CLAUDE_CLI_ID 常量与注册一致性/身份域字段完整（含 hooks 五字段 + history 三字段）/capabilities.history 三字段齐备（supportsFork/buildResumeCommand/buildRestoreInput，MC-315/316）/带参命中/`_reset` 恢复（8）——语义并入自退役规则用例（6）+ hooks 策略（Stage 02，35）：eventToStatus 26 用例语义迁入（原状态映射测试语义，10 事件 × notificationType + STATUS_EMOJI 联合守卫 + AgentStatus 类型兼容）+ classifyNotification 五映射表驱动 9 条（NAH-03 迁入，MC-422）+ **history 策略（Stage 05，7）+ AQ-1 单引号回归（Stage 01，1）：buildResumeCommand 4（有 cwd/无 cwd/与迁出源逐字一致/cwd 含单引号按 PowerShell 规则转义 `''`——AQ-1）+ buildRestoreInput 4（普通/fork 追加/`\r` 结尾无 `\r\n`/无 cwd 可注入——输出与迁出源逐字一致，断言漂移即实现有误）** |
+| `src/__tests__/cli-profile-claude.test.ts` | 53 | claude profile 身份域（MC-104）：side-effect 注册/CLAUDE_CLI_ID 常量与注册一致性/身份域字段完整（含 hooks 七字段 + history 三字段）/capabilities.history 三字段齐备（supportsFork/buildResumeCommand/buildRestoreInput，MC-315/316）/带参命中/`_reset` 恢复（9——含 **configEditor 挂载 = ClaudeHooksConfigEditor（KZ-1，代 editor-dispatch 登记 +1）** 与 **configLayers 三层现值（KZ-4：user/project/local + label/hint，层切换器数据源，Stage 04 review-fix +1）**）——语义并入自退役规则用例（6）+ hooks 策略（Stage 02，35）：eventToStatus 26 用例语义迁入（原状态映射测试语义，10 事件 × notificationType + STATUS_EMOJI 联合守卫 + AgentStatus 类型兼容）+ classifyNotification 五映射表驱动 9 条（NAH-03 迁入，MC-422）+ **history 策略（Stage 05，7）+ AQ-1 单引号回归（Stage 01，1）：buildResumeCommand 4（有 cwd/无 cwd/与迁出源逐字一致/cwd 含单引号按 PowerShell 规则转义 `''`——AQ-1）+ buildRestoreInput 4（普通/fork 追加/`\r` 结尾无 `\r\n`/无 cwd 可注入——输出与迁出源逐字一致，断言漂移即实现有误）** |
 | `src/__tests__/mock-cli-profile.test.tsx` | 12 | **AC-4 mock profile 全链路验收（Stage 07，夹具 helpers/mockCliProfile）**：① OSC 133 命中——matchByCommand("mockcli --flag") 命中 → 页签标题/logo（profile.tabTitle/iconSrc）+ agentSession.cliId 写入（useCommandDetection 链路，真实注册表 + 真实 TerminalRegistry；未命中零副作用 + OSC 133 D 清会话）② hooks 能力被真实调用——eventToStatus 经 useXterm 事件路径（spy 入参 event+notificationType + 四态/会话写入）+ classifyNotification 经通知调度路径（spy 入参 payload + toast 派发）③ 历史聚合 UI——mock 条目（AgentHistorySession cliId="mockcli"）出现在历史区 + 行 logo 按 session.cliId 取 mockcli iconSrc ④ hub 选择行——两枚按钮（claude + mockcli，均 hasConfigEditor=true）+ 切换渲染 mock 桩编辑器（readHooksConfig 携 mockcli + restartHint 桩文案）+ selectedCli 持久化（updateParameters + 显式 onLayoutChange/toJSON）与挂载恢复 ⑤ 恢复注入——pty.write 内容 = mock buildRestoreInput 桩输出（"mockcli --resume" 可识别前缀，普通/fork）+ addPanel title = profile.tabTitle |
 | `src/__tests__/no-claude-literals.test.ts` | 6 | **AC-5 字面量守卫（Stage 07，ac5-guard 落地 + Stage 01 review-fix CS-1/2 强化）**：通用层八路径（src/lib、src/panels/terminal、src/features/agentStatus、src/features/agentHistory、src/features/notifications、src/ipc、src/types、src/features/cliProfiles）grep 断言——无 "claude" 字符串字面量/claude 事件名字面量（SessionStart/Stop 等）/`~/.claude` 路径；白名单 import 形态 = profiles/claude 导出常量引用（CLAUDE_CLI_ID 等）+ **目录级豁免 profiles/claude/ 整目录（CS-2，自检断言目录存在 + 不参与违规收集）**；**含 `${}` 的模板字符串按字面量片段拼接后参与三类判定（CS-1，`cl${''}aude` 拼接自检用例 + `pre-${x}post` 不误报反向锚点）** |
 
@@ -229,20 +231,20 @@
 | `src/__tests__/commit-view-status.test.ts` | 7 | 状态机四态（no-root/loading/error/ready） |
 | `src/__tests__/commit-view.test.tsx` | 4 | 残余主干用例（拆分后） |
 
-### hooks 配置面板（10 文件 / 214 用例）
+### hooks 配置面板（10 文件 / 217 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
 | `src/__tests__/hooks-config-handlerform.test.tsx` | 40 | 5 种 type 字段矩阵（官方版字段名断言）/switchHandlerType 纯函数/事件支持矩阵过滤/type 切换交互/字段编辑（合法上报/非法保留草稿/清空删键，HKC-04）/注入段禁改 |
 | `src/__tests__/hooks-config-gui.test.tsx` | 28 | Master-Detail 渲染/增删事件与 matcher 组/**删除选中项选中态回退空态（HKC-05）**/注入段禁删 |
-| `src/__tests__/hooks-config-panel.test.tsx` | 40 | 三态/层级切换器禁用/保存按钮初始禁用/visibilitychange 轻量重读（askGuard 防循环）/JSON 错误单行截断/**注入状态条初始 "--" 帧（HKC-10）**/**非法 JSON 快照不变+保存禁用（HKC-03）**/**uninstall reject 分支（HKC-07）**/**hub CLI 选择行 13 用例（MC-502~507，Stage 06）**：能力过滤（hasConfigEditor=false 不出现）/logo 16×16+displayName/选中高亮 EXPLORER_SELECTION_BG token/单 CLI 也渲染/点击切换→编辑器重挂载+IPC 携新 cliId/selectedCli 持久化（updateParameters+显式保存 toJSON）/挂载恢复/失效回退首个有能力 CLI/dirty 守卫 ask 确认与取消/非 dirty 直接切换/空态「无可配置 CLI」/restartHint 由 profile 驱动 + **persistSelectedCli 纯函数直测 4 用例（MC-503，照 F8 applyRename 先例）**（Stage 08 校正 36→40） |
+| `src/__tests__/hooks-config-panel.test.tsx` | 43 | 三态/层级切换器禁用/保存按钮初始禁用/visibilitychange 轻量重读（askGuard 防循环）/JSON 错误单行截断/**注入状态条初始 "--" 帧（HKC-10）**/**非法 JSON 快照不变+保存禁用（HKC-03）**/**uninstall reject 分支（HKC-07）**/**hub CLI 选择行 15 用例（MC-502~507，Stage 06 + Stage 04 review-fix）**：能力过滤（hasConfigEditor=false 不出现）/logo 16×16+displayName/选中高亮 EXPLORER_SELECTION_BG token/单 CLI 也渲染/点击切换→编辑器重挂载+IPC 携新 cliId/selectedCli 持久化（updateParameters+显式保存 toJSON）/挂载恢复/失效回退首个有能力 CLI/dirty 守卫 ask 确认与取消/非 dirty 直接切换/空态「无可配置 CLI」/restartHint 由 profile 驱动 + **hub 分派：编辑器经 profile.configEditor 渲染（KZ-1，代 editor-dispatch 登记——选中 stubcli 渲染桩编辑器 data-e2e 标记 + JsonMode 零新增挂载 + 不读配置）** + **hasConfigEditor=true 但 configEditor 缺失 → 编辑器槽空态占位「该 CLI 未提供配置编辑器」且不渲染 claude 编辑器（KZ-1，代 editor-dispatch 登记）** + **层级切换器数据源 = profile.configLayers（KZ-4：自定义两层 profile（dev/prod）渲染且 claude 固定三层不出现 + 初始层 = configLayers[0].id 携首次 read）** + **persistSelectedCli 纯函数直测 4 用例（MC-503，照 F8 applyRename 先例）**（Stage 08 校正 36→40，Stage 04 review-fix 40→43） |
 | `src/__tests__/hooks-config-jsonmode.test.tsx` | 18 | CM6 创建 + schema 扩展注册/**linter 顺序身份断言（HKC-01）**/非法 JSON 校验上报/事件导航/MatcherTester |
 | `src/__tests__/hooks-config-matcher.test.ts` | 21 | matchHook 全分支（exact-or/regex/all/受限窄字符集/非法正则防御） |
 | `src/__tests__/hooks-config-catalog.test.ts` | 19 | eventsCatalog 事件元数据（30 事件 × 10 组/HANDLER_FIELD_MATRIX/纯查询函数） |
 | `src/__tests__/hooks-config-model.test.ts` | 17 | jsonToGui/guiToJson 双向转换/round-trip/容错/isSltermManaged |
 | `src/__tests__/ipc-hooks-config-contract.test.ts` | 12 | readHooksConfig/writeHooksConfig 四维验证（agent_hooks_config_read/write + cliId 首参，IHE-06 工厂化，MC-212 同步） |
 | `src/__tests__/hooks-config-schema.test.ts` | 10 | validateHooksJson 直测边界（HKC-08 新建）：合法/缺 hooks 键/非法 matcher/未知事件告警 |
-| `src/__tests__/hooks-config-sync.test.tsx` | 9 | 双模式同步（JSON→GUI/GUI→JSON/非法禁切/脏状态流转）——**useHooksConfig 收 cliId 选中态参数（MC-220，Stage 06 同步，用例数不变）** |
+| `src/__tests__/hooks-config-sync.test.tsx` | 10 | 双模式同步（JSON→GUI/GUI→JSON/非法禁切/脏状态流转）——**useHooksConfig 收 cliId 选中态参数（MC-220，Stage 06 同步，用例数不变）** + **useHooksConfig 初始层（KZ-4，Stage 04 review-fix +1）：initialLayer 参数（初始层 = 传入值 + 首次 read 携该层）/缺省回退 "user"** |
 
 ### Diff/GitShow 面板（3 文件 / 78 用例）
 
@@ -379,6 +381,7 @@ embedded WDIO 驱动**无法将 OS 级按键（`browser.keys`）投递进 WebVie
 
 ## 历史变更
 
+- 2026-08-11（review-fix Stage 04 hub 编辑器分派 + 配置层抽象——KZ-1/KZ-4/KZ-5，layers 单点代登记）：L2 +6——cli-profile-claude 51→53（**configEditor 挂载 = ClaudeHooksConfigEditor（KZ-1，代 editor-dispatch 登记 +1）** + **configLayers 三层现值（KZ-4 +1）**——user/project/local + label/hint，层切换器数据源 = profile 声明；「hooks 能力五字段」断言升七字段随行）、hooks-config-panel 40→43（**代 editor-dispatch 登记 +2**：hub 分派——选中 stubcli 经 profile.configEditor 渲染桩编辑器（data-e2e 标记 + JsonMode 零新增挂载 + 不读配置）/hasConfigEditor=true 但 configEditor 缺失 → 编辑器槽空态占位「该 CLI 未提供配置编辑器」且不渲染 claude 编辑器；**KZ-4 +1**：层级切换器数据源 = profile.configLayers——自定义两层 profile（dev/prod）渲染且 claude 固定三层不出现 + 初始层 = configLayers[0].id 携首次 read）、hooks-config-sync 9→10（**KZ-4 +1**：useHooksConfig initialLayer 参数——初始层 = 传入值 / 缺省回退 "user"）。类目标头同步（CLI profile 注册表 88→90、hooks 配置 214→217）→ L2 2422→2428（139 文件不变）。L1/L3/L4 零变动。全量 3196→3202（Rust 597 + 前端 2428 + L3 138 + E2E 39）。动态计数以终验 vitest 实跑为准。
 - 2026-08-11（review-fix Stage 02 前端正确性族——ZQ-1~4/6/7，composite-key 单点代登记）：L2 +11——agent-history-model 44→47（**keyOf 复合键单点 +3**：cliId null/undefined 缺省回退 / 显式 cliId 透传 / 含竖线两侧转义 `\|` + 生产消费两侧键一致 + 裸拼接键不命中，ZQ-1/ZQ-7）、agent-history-view 35→37（**keyOf 随行消费方回退 +2**：session.cliId null → rowFlags 命中 CLAUDE_CLI_ID 键开动作弹窗 / findPanelForSession 两侧回退归一命中切页，ZQ-1）；**代 event-pipeline 登记**（ZQ-2/ZQ-3/ZQ-6，+5）：use-xterm-lifecycle 79→81（resolvePayloadCliId 空串 cliId 回退 + Exit 事件清图标）、agent-status-hook 43→45（resolvePayloadCliId 空串 cliId 回退 + null 映射事件首达建行 status null 无图标）、notifications 33→34（resolvePayloadCliId 空串 cliId 回退）；**代 restore-id 登记**（ZQ-4，+1）：agent-history-restore 7→8（同毫秒两次恢复 panelId 相异——mock Date.now 同值断言自增序号）。类目标头同步（终端面板 233→235、通知/Agent 状态 107→110、Agent 历史会话 126→132）→ L2 2411→2422（139 文件不变）。L1/L3/L4 零变动。全量 3185→3196（Rust 597 + 前端 2422 + L3 138 + E2E 39）。动态计数以终验 vitest 实跑为准。
 - 2026-08-10（multi-cli Stage 08 文档同步——test-inventory 总数核对，MC-8）：L1 grep 实查补登 `src-tauri/src/hooks/claude/mod.rs` 1 条（HomeDirGuard RAII 注入/恢复——命令层 cliId 透传测试的 L1 隔离纪律，Stage 03 下沉后漏登）→ 584→592（30→32 文件，净增 8）。L2 行级校正 5 个陈旧行（磁盘 block 计数实查，it.each 展开计入）：use-xterm-lifecycle 71→79（76 裸 it + LNK2 it.each 3 展开）、terminal-registry 24→28、hooks-config-panel 36→40、agent-status-hook 39→43、agent-status-view 29→31（合计 +22）；类目标头同步重对齐（终端面板 214→233、hooks 配置 210→214、通知/Agent 状态 101→107、工作区/布局/页签 15→17 文件 / 218→247、主题/配色/基础 7→8 文件 / 169→182）→ L2 2371→2394（139 文件不变）。L4 it(/it.skip( 实查 9 spec 39 用例（37 active + 2 skip）——mockcli.e2e 终态 1 用例（C→D 合并），表行已为 1 而头部 40 未随动 → 40→39（38→37 active）。全量 3133→3163（Rust 592 + 前端 2394 + L3 138 + E2E 39）。动态计数（it.each 展开/工厂生成用例）以终验 vitest 实跑为准，全量测试 agent 单点核对。
 - 2026-08-10（multi-cli Stage 07 mock profile 全链路验收 + AC-5 守卫，AC-4/AC-5/MC-4/MC-6）：新建夹具 `src/__tests__/helpers/mockCliProfile.ts`（AC-4 契约，spec 06 §7 + 决策 5——id/displayName/commands/tabTitle "mockcli" + iconSrc `/cli-icons/mockcli.png`（Stage 01 已放资源）+ hooks 全能力（eventToStatus 恒等映射桩（任意事件恒 working，SessionEnd/Exit null）/classifyNotification 桩（恒 done）/contextLimit 1000/restartHint 桩文案/hasConfigEditor=true）+ history 全能力（supportsFork=true/buildResumeCommand/buildRestoreInput 桩输出带 "mockcli --resume" 可识别前缀）+ registerMockCliProfile/resetCliProfileRegistry 辅助——仅测试环境注册（vitest register + afterEach `_reset` 清理），生产零引用，不计文件/用例数）。「CLI profile 注册表」类目 2→4 文件 69→85（+16）——新建 mock-cli-profile.test.tsx 12 用例（AC-4 五点全表：① OSC 133 C 命中 mockcli 带参命令 → 页签标题/logo（profile.tabTitle/iconSrc）+ agentSession.cliId（useCommandDetection 链路，真实注册表 + 真实 TerminalRegistry；未命中零副作用 + OSC 133 D 清会话）② eventToStatus 经 useXterm 事件路径真实调用（spy 入参 + 四态/会话写入）+ classifyNotification 经通知调度路径真实调用（spy 入参 + toast 派发）③ 历史聚合 UI：mock 条目（cliId="mockcli"）出现在历史区 + 行 logo 按 session.cliId 取 mockcli iconSrc ④ hub 选择行两枚按钮（claude + mockcli）+ 切换渲染 mock 桩编辑器（readHooksConfig 携 mockcli + restartHint 桩文案）+ selectedCli 持久化（updateParameters + 显式 onLayoutChange/toJSON）与挂载恢复 ⑤ 恢复注入 = mock buildRestoreInput 桩输出（普通/fork，addPanel title = tabTitle））；新建 no-claude-literals.test.ts 4 用例（AC-5 守卫——通用层七路径 grep 断言：无 "claude" 字符串字面量/claude 事件名字面量/`~/.claude` 路径，白名单 = profiles/claude 导出常量 import 形态，ac5-guard 落地）。L4 新建 mockcli.e2e.ts 1 用例（1 active——E2E helper `__slterm_e2e_registerMockCliProfile` 注册 mockcli → OSC 133 C 注入 → 页签标题/logo 断言 → OSC 133 D 还原，C→D 合并单用例规避容器 DOM 不卸载的跨用例残留，E2E_ENABLED 内联门控红线不动，ac5-guard 落地；计数按终态 1 记，Stage 08 实查校正）。L2 2355→2371（137→139 文件），L4 38→39（8→9 spec，37 active + 2 skip），全量 3115→3132。

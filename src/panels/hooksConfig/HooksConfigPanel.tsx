@@ -9,10 +9,12 @@
 //   onLayoutChange(saveLayout(containerApi))——updateParameters 不触发 onDidLayoutChange
 //   （dockviewPanel.js:84-95），必须显式保存）；挂载时读 params 恢复；
 //   缺省/失效回退首个有能力 CLI。
-// - 编辑器槽（MC-504/505）：渲染选中 CLI 的配置编辑器 ClaudeHooksConfigEditor（现状全部内容
-//   下移一层，行为零改动）；key={cliId} 卸载当前编辑器并重挂载目标编辑器（ADR-0001 先例——
-//   dirty/选中态丢弃）；dirty 守卫：dirty 时切换需 dialog.ask 确认丢弃（照切层/visibilitychange
-//   ask 守卫先例，askGuard 防循环复用）。
+// - 编辑器槽（MC-504/505，KZ-1）：经选中 CLI 的 capabilities.hooks.configEditor 分派渲染
+//   （claude = ClaudeHooksConfigEditor，由 claude profile 挂载）——hub 不再直接引用任何
+//   具体 CLI 编辑器（新增 CLI 自带编辑器组件即可接入）；key={cliId} 卸载当前编辑器并
+//   重挂载目标编辑器（ADR-0001 先例——dirty/选中态丢弃）；dirty 守卫：dirty 时切换需
+//   dialog.ask 确认丢弃（照切层/visibilitychange ask 守卫先例，askGuard 防循环复用）；
+//   hasConfigEditor=true 但 configEditor 缺失（声明不一致）→ 编辑器槽空态占位防御。
 // - 空态（MC-507）：无任何 hasConfigEditor profile → 渲染「无可配置 CLI」占位，不渲染编辑器。
 // - 入口零改动（MC-501）：面板 id hooksConfig-{pageId}、侧栏右键菜单流程、pageApis 不动。
 // 配色全部引用 theme/colors.ts token（硬约束 #6）。
@@ -29,7 +31,6 @@ import {
   INPUT_BORDER,
   SIDEBAR_FG,
 } from "../../theme";
-import ClaudeHooksConfigEditor from "./ClaudeHooksConfigEditor";
 import type { DockviewPanelApi, DockviewApi } from "dockview-react";
 
 /** HooksConfigPanel 面板参数——单例面板无需 panelId（Stage 08 同页单例），保留 props 兼容 Dockview；
@@ -131,10 +132,14 @@ const HooksConfigPanel: React.FC<HooksConfigPanelProps> = ({
     [eligibleProfiles, selectedCliId],
   );
 
+  /** 编辑器槽组件（KZ-1）：选中 CLI 的 capabilities.hooks.configEditor（分派数据源）；
+      hasConfigEditor=true 但 configEditor 缺失 → null → 编辑器槽空态占位防御 */
+  const Editor = selectedProfile?.capabilities?.hooks?.configEditor ?? null;
+
   // ref 镜像：异步回调闭包内读取最新值
   const selectedCliRef = useRef(selectedCliId);
   selectedCliRef.current = selectedCliId;
-  // 当前编辑器 dirty（ClaudeHooksConfigEditor onDirtyChange 上报，MC-505 守卫数据源）
+  // 当前编辑器 dirty（编辑器组件 onDirtyChange 上报，MC-505 守卫数据源）
   const dirtyRef = useRef(false);
   // 切换确认弹窗守卫：弹窗打开期间 + 关闭后短暂窗口内抑制编辑器 visibilitychange 回归
   // 触发重读——弹窗开/关伴随回归触发，无守卫将再弹编辑器自己的 ask（循环复用，
@@ -248,16 +253,34 @@ const HooksConfigPanel: React.FC<HooksConfigPanelProps> = ({
           </button>
         ))}
       </div>
-      {/* 编辑器槽（MC-504/505）：key={cliId} 强制卸载重挂载（ADR-0001）；dirty 守卫在切换入口 */}
+      {/* 编辑器槽（MC-504/505，KZ-1）：经 selectedProfile.capabilities.hooks.configEditor 分派
+          渲染（hub 不直接引用任何具体 CLI 编辑器）；key={cliId} 强制卸载重挂载（ADR-0001）；
+          dirty 守卫在切换入口；configEditor 缺失（声明不一致）→ 空态占位防御 */}
       <div style={editorSlotStyle}>
-        {selectedProfile && (
-          <ClaudeHooksConfigEditor
-            key={selectedProfile.id}
-            profile={selectedProfile}
-            onDirtyChange={handleDirtyChange}
-            askGuardRef={askGuardRef}
-          />
-        )}
+        {selectedProfile &&
+          (Editor ? (
+            <Editor
+              key={selectedProfile.id}
+              profile={selectedProfile}
+              onDirtyChange={handleDirtyChange}
+              askGuardRef={askGuardRef}
+            />
+          ) : (
+            <div
+              style={{
+                width: "100%",
+                height: "100%",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+              data-e2e="hooks-editor-empty"
+            >
+              <span style={{ color: HTML_PANEL_LOADING_FG, fontSize: 13 }}>
+                该 CLI 未提供配置编辑器
+              </span>
+            </div>
+          ))}
       </div>
     </div>
   );

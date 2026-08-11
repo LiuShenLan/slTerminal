@@ -4,8 +4,9 @@
 // GUI 模型为面板展示/编辑用（EventTree / HandlerForm 数据源）。
 // handler 字段矩阵照 contract.md C13-3（2026-07-31 官方文档核实版）。
 
-/** hooks 配置层级（契约 C13-1：仅这三层合法） */
-export type HooksLayer = "user" | "project" | "local";
+/** hooks 配置层级（KZ-4 泛化：值集由 profile.capabilities.hooks.configLayers 声明——
+    claude = "user"|"project"|"local"；通用层禁写具体层值，一律经 profile 取） */
+export type HooksLayer = string;
 
 // ═══════════════════════════════════════════════════════════════════
 // 原始 JSON 类型（settings.json 的 hooks 子树）

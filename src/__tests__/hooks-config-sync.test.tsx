@@ -489,3 +489,36 @@ describe("HKC-02 load() generation 竞态取消", () => {
     expect(result.current.configJson).toEqual(PROJECT_CONFIG);
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════
+// useHooksConfig 初始层（KZ-4：layer 泛化 string + initialLayer 参数）
+// ═══════════════════════════════════════════════════════════════════
+describe("useHooksConfig 初始层（KZ-4）", () => {
+  beforeEach(() => {
+    mockReadHooksConfig.mockReset();
+    mockAsk.mockReset();
+    mockAsk.mockResolvedValue(true);
+    resetStores();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("初始层 = initialLayer 参数（编辑器传 profile.configLayers[0].id）；缺省回退 user", async () => {
+    seedProject("C:/proj"); // 初始层 project 非 user——无 rootPath 会被回退 user 层
+    mockReadHooksConfig.mockResolvedValue({});
+    const { result } = renderHook(() => useHooksConfig(SELECTED_CLI_ID, "project"));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.layer).toBe("project");
+    // 首次 read 携传入初始层（configLayers[0] 驱动路径）
+    expect(mockReadHooksConfig.mock.calls[0][1]).toBe("project");
+
+    // 缺省（未传 initialLayer）→ 防御回退 "user"
+    const { result: fallback } = renderHook(() => useHooksConfig(SELECTED_CLI_ID));
+    await waitFor(() => expect(fallback.current.loading).toBe(false));
+    expect(fallback.current.layer).toBe("user");
+    const calls = mockReadHooksConfig.mock.calls;
+    expect(calls[calls.length - 1][1]).toBe("user");
+  });
+});

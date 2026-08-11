@@ -1,8 +1,10 @@
 // ClaudeHooksConfigEditor — claude hooks 配置编辑器（Stage 06 hub 化后整体下移一层，MC-504）
 //
-// 内容 = 原 HooksConfigPanel 全部：顶部工具栏（层级切换器 user/project/local 标注优先级
-// local>project>user + 模式切换 GUI | JSON 默认 JSON + F2 注入状态条与注入/卸载按钮（P3-FE-21/22）
-// + 重启提示条 + 保存按钮）+ 中部模式渲染容器（JsonMode / GuiMode，Master-Detail 事件树 + 详情区）。
+// 内容 = 原 HooksConfigPanel 全部：顶部工具栏（层级切换器——数据源 = profile 声明的
+// capabilities.hooks.configLayers，KZ-4（claude 三层值 user/project/local 迁入 claude profile，
+// 优先级标注 local>project>user 保留编辑器内部硬编码）+ 模式切换 GUI | JSON 默认 JSON
+// + F2 注入状态条与注入/卸载按钮（P3-FE-21/22）+ 重启提示条 + 保存按钮）
+// + 中部模式渲染容器（JsonMode / GuiMode，Master-Detail 事件树 + 详情区）。
 // 双模式同步（P3-FE-16）：JsonMode.onChange → updateConfigJson（JSON.parse 门控），
 // GuiMode.onChange → updateGui（guiToJson），configJson/guiModel/dirty 共享于 useHooksConfig。
 // JSON 非法（onValidationChange 上报 false）→ GUI 按钮禁用 + 工具栏错误提示。
@@ -35,7 +37,7 @@ import {
 } from "../../ipc/agentHooks";
 import type { AgentHookInjectionStatus } from "../../types/agent";
 import type { HooksConfigGui as ConfigGui } from "./configModel";
-import type { HooksConfigJson, HooksLayer } from "../../types/hooksConfig";
+import type { HooksConfigJson } from "../../types/hooksConfig";
 import type { CodingCliProfile } from "../../features/cliProfiles";
 import {
   PANEL_BG,
@@ -55,14 +57,8 @@ export interface ClaudeHooksConfigEditorProps {
   askGuardRef?: React.MutableRefObject<boolean>;
 }
 
-/** 层级定义（显示优先级标注 local>project>user） */
-const LAYERS: { id: HooksLayer; label: string; hint: string }[] = [
-  { id: "user", label: "User", hint: "用户级（全局生效，优先级最低）" },
-  { id: "project", label: "Project", hint: "项目级（当前项目生效）" },
-  { id: "local", label: "Local", hint: "本地级（当前项目生效，优先级最高）" },
-];
-
-/** 优先级标注文案 */
+/** 优先级标注文案（claude 领地内硬编码——层集合已迁 profile.configLayers（KZ-4），
+    local>project>user 优先级语义是 claude 知识，不随层声明泛化） */
 const PRIORITY_HINT = "优先级：Local > Project > User";
 
 /** 居中容器样式（loading / error 共用） */
@@ -148,6 +144,9 @@ const ClaudeHooksConfigEditor: React.FC<ClaudeHooksConfigEditorProps> = ({
   const cliId = profile.id;
   // 重启提示文案 = profile 能力域驱动（claude 值同现状文案，MC-506/222）
   const restartHint = profile.capabilities?.hooks?.restartHint ?? "";
+  // 层集合数据源 = profile 声明（KZ-4：LAYERS 常量已退役，值迁入 claude profile
+  // configLayers；缺失 → 空渲染防御，不崩溃）
+  const layers = profile.capabilities?.hooks?.configLayers ?? [];
 
   const {
     layer,
@@ -163,7 +162,7 @@ const ClaudeHooksConfigEditor: React.FC<ClaudeHooksConfigEditorProps> = ({
     reload,
     updateConfigJson,
     updateGui,
-  } = useHooksConfig(cliId);
+  } = useHooksConfig(cliId, layers[0]?.id);
   // JsonMode 校验上报：非法 JSON / schema 违规 → 禁用保存 + 禁用切 GUI + 工具栏错误提示（P3-FE-16）
   const [jsonValid, setJsonValid] = useState(true);
   const [jsonError, setJsonError] = useState<string | null>(null);
@@ -308,8 +307,9 @@ const ClaudeHooksConfigEditor: React.FC<ClaudeHooksConfigEditorProps> = ({
     <div ref={containerRef} style={containerStyle}>
       {/* 顶部工具栏 */}
       <div style={toolbarStyle}>
-        {/* 层级切换器（rootPath 为空时 project/local 禁用，仅 user 层可用） */}
-        {LAYERS.map((l) => (
+        {/* 层级切换器（数据源 = profile.configLayers——KZ-4；rootPath 为空时
+            project/local 禁用判定是 claude 语义，保留编辑器内部） */}
+        {layers.map((l) => (
           <button
             key={l.id}
             type="button"

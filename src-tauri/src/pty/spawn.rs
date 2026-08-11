@@ -626,10 +626,12 @@ pub mod conpty_custom {
             let extra = vec![("SLTERM_TEST_DUMMY".into(), "dummy_value".into())];
             let block = build_env_block(&extra);
             let text = String::from_utf16_lossy(&block);
-            // Windows 必定存在的系统变量
+            // Windows 必定存在的系统变量（环境块键名保留原始大小写，如 SystemRoot=——
+            // 键名匹配不区分大小写，统一转大写后比对）
+            let upper = text.to_ascii_uppercase();
             assert!(
-                text.contains("SYSTEMROOT="),
-                "应保留继承的系统变量 SYSTEMROOT"
+                upper.contains("SYSTEMROOT="),
+                "应保留继承的系统变量 SYSTEMROOT，实际内容: {text}"
             );
             assert!(
                 text.contains("SLTERM_TEST_DUMMY=dummy_value"),

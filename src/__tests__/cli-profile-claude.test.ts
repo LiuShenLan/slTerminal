@@ -4,8 +4,8 @@
 // 注册/_reset 恢复语义）。
 // 覆盖：claude 身份域字段断言（MC-104）+ CLAUDE_CLI_ID 常量一致性 + side-effect
 // 注册 + hooks 能力字段（MC-214 前端半：eventToStatus/classifyNotification/
-// contextLimit/restartHint/hasConfigEditor）+ history 能力字段（MC-315/316：
-// supportsFork/buildResumeCommand/buildRestoreInput）。
+// contextLimit/restartHint/hasConfigEditor/configEditor（KZ-1）/configLayers（KZ-4））
+// + history 能力字段（MC-315/316：supportsFork/buildResumeCommand/buildRestoreInput）。
 // hooks 策略用例（MC-401/MC-422 迁入，Stage 02）：eventToStatus 26 用例语义
 // 迁自原 claude-status.test.ts（事件映射部分），落点改此；classifyNotification
 // 五映射表驱动（NAH-03 语义）迁自 notifications.test.ts 纯函数层。
@@ -29,6 +29,7 @@ import {
   buildResumeCommand,
   buildRestoreInput,
 } from "../features/cliProfiles/profiles/claude/strategies";
+import ClaudeHooksConfigEditor from "../panels/hooksConfig/ClaudeHooksConfigEditor";
 import { cliProfileRegistry } from "../features/cliProfiles/cliProfileRegistry";
 import { STATUS_EMOJI, type AgentStatus } from "../lib/agentStatus";
 import type { AgentEventPayload } from "../types/agent";
@@ -73,6 +74,12 @@ describe("claude profile 身份域（MC-104）", () => {
           contextLimit: 200_000,
           restartHint: "hooks 改动需重启 claude 会话生效",
           hasConfigEditor: true,
+          configEditor: ClaudeHooksConfigEditor,
+          configLayers: [
+            { id: "user", label: "User", hint: "用户级（全局生效，优先级最低）" },
+            { id: "project", label: "Project", hint: "项目级（当前项目生效）" },
+            { id: "local", label: "Local", hint: "本地级（当前项目生效，优先级最高）" },
+          ],
         },
         history: {
           supportsFork: true,
@@ -83,7 +90,7 @@ describe("claude profile 身份域（MC-104）", () => {
     });
   });
 
-  it("capabilities.hooks 五字段齐备（eventToStatus/classifyNotification/contextLimit/restartHint/hasConfigEditor）", () => {
+  it("capabilities.hooks 七字段齐备（eventToStatus/classifyNotification/contextLimit/restartHint/hasConfigEditor/configEditor/configLayers）", () => {
     const hooks = cliProfileRegistry.get(CLAUDE_CLI_ID)!.capabilities.hooks;
     expect(hooks).toBeDefined();
     expect(typeof hooks!.eventToStatus).toBe("function");
@@ -91,6 +98,22 @@ describe("claude profile 身份域（MC-104）", () => {
     expect(hooks!.contextLimit).toBe(200_000);
     expect(hooks!.restartHint).toBe("hooks 改动需重启 claude 会话生效");
     expect(hooks!.hasConfigEditor).toBe(true);
+    expect(hooks!.configEditor).toBe(ClaudeHooksConfigEditor);
+    expect(hooks!.configLayers).toHaveLength(3);
+  });
+
+  it("configEditor 挂载 = ClaudeHooksConfigEditor（KZ-1：hub 分派数据源，features→panels 依赖方向）", () => {
+    const profile = cliProfileRegistry.get(CLAUDE_CLI_ID)!;
+    expect(profile.capabilities.hooks?.configEditor).toBe(ClaudeHooksConfigEditor);
+  });
+
+  it("configLayers 三层现值（KZ-4：层切换器数据源 = profile 声明，user/project/local + label/hint 迁自编辑器 LAYERS）", () => {
+    const profile = cliProfileRegistry.get(CLAUDE_CLI_ID)!;
+    expect(profile.capabilities.hooks?.configLayers).toEqual([
+      { id: "user", label: "User", hint: "用户级（全局生效，优先级最低）" },
+      { id: "project", label: "Project", hint: "项目级（当前项目生效）" },
+      { id: "local", label: "Local", hint: "本地级（当前项目生效，优先级最高）" },
+    ]);
   });
 
   it("capabilities.history 三字段齐备（supportsFork/buildResumeCommand/buildRestoreInput）", () => {

@@ -87,13 +87,16 @@ import { PANEL_TYPES, isValidPanelType } from "../panelRegistry";
 import { useProjects } from "../stores/projects";
 import { cliProfileRegistry } from "../features/cliProfiles";
 import { claudeProfile, CLAUDE_CLI_ID } from "../features/cliProfiles/profiles/claude";
-import type { CodingCliProfile } from "../features/cliProfiles/types";
+import type { CodingCliProfile, HooksConfigEditorProps } from "../features/cliProfiles/types";
+import ClaudeHooksConfigEditor from "../panels/hooksConfig/ClaudeHooksConfigEditor";
 import { useLayout } from "../stores/layout";
 import { EXPLORER_SELECTION_BG } from "../theme";
 
 // ── 测试 profile（用例内局部注册，用后清理——Stage 05 验证项 6 允许）──
 
-/** hasConfigEditor=true 的测试 CLI：restartHint 用专属文案断言「提示条由 profile 驱动」 */
+/** hasConfigEditor=true 的测试 CLI：restartHint 用专属文案断言「提示条由 profile 驱动」；
+    configEditor = 真实 ClaudeHooksConfigEditor（KZ-1 分派后 hub 经 profile.configEditor 渲染，
+    现有用例编辑器行为语义保持——claude 编辑器与 profile 解耦，任意 profile 可挂载） */
 const TEST_PROFILE: CodingCliProfile = {
   id: "testcli",
   displayName: "testcli",
@@ -107,6 +110,73 @@ const TEST_PROFILE: CodingCliProfile = {
       contextLimit: 1000,
       restartHint: "testcli 专属提示",
       hasConfigEditor: true,
+      configEditor: ClaudeHooksConfigEditor,
+    },
+  },
+};
+
+/** 分派渲染专用 CLI：configEditor = 桩组件（渲染可识别标记 data-e2e="stub-config-editor"）——
+    断言 hub 渲染的是 profile 声明的编辑器而非无条件 claude 编辑器（KZ-1） */
+const STUB_PROFILE: CodingCliProfile = {
+  id: "stubcli",
+  displayName: "stubcli",
+  commands: ["stubcli"],
+  iconSrc: "/cli-icons/mockcli.png",
+  tabTitle: "stubcli",
+  capabilities: {
+    hooks: {
+      eventToStatus: () => null,
+      classifyNotification: () => null,
+      contextLimit: 1000,
+      restartHint: "stubcli 提示",
+      hasConfigEditor: true,
+      // 桩编辑器：渲染可识别标记（区别于 claude 编辑器内部 JsonMode/GuiMode 结构）
+      configEditor: ((props: HooksConfigEditorProps) => (
+        <div data-e2e="stub-config-editor">stub 编辑器：{props.profile.id}</div>
+      )) as React.ComponentType<HooksConfigEditorProps>,
+    },
+  },
+};
+
+/** 自定义分层 CLI：configLayers 两层（dev/prod）——断言层切换器按 profile 声明渲染
+    而非固定三层（KZ-4：数据源 = profile.capabilities.hooks.configLayers） */
+const LAYERS_PROFILE: CodingCliProfile = {
+  id: "layerscli",
+  displayName: "layerscli",
+  commands: ["layerscli"],
+  iconSrc: "/cli-icons/mockcli.png",
+  tabTitle: "layerscli",
+  capabilities: {
+    hooks: {
+      eventToStatus: () => null,
+      classifyNotification: () => null,
+      contextLimit: 1000,
+      restartHint: "layerscli 提示",
+      hasConfigEditor: true,
+      configEditor: ClaudeHooksConfigEditor,
+      configLayers: [
+        { id: "dev", label: "Dev", hint: "开发层" },
+        { id: "prod", label: "Prod", hint: "生产层" },
+      ],
+    },
+  },
+};
+
+/** 声明不一致 CLI：hasConfigEditor=true 但 configEditor 缺失 → hub 编辑器槽空态占位防御（KZ-1） */
+const GAP_PROFILE: CodingCliProfile = {
+  id: "gapcli",
+  displayName: "gapcli",
+  commands: ["gapcli"],
+  iconSrc: "/cli-icons/mockcli.png",
+  tabTitle: "gapcli",
+  capabilities: {
+    hooks: {
+      eventToStatus: () => null,
+      classifyNotification: () => null,
+      contextLimit: 1000,
+      restartHint: "gapcli 提示",
+      hasConfigEditor: true,
+      // 故意缺 configEditor——空态占位用例专用
     },
   },
 };
@@ -826,6 +896,64 @@ describe("hub CLI 选择行", () => {
     expect(mockJsonMode).not.toHaveBeenCalled();
     expect(mockReadHooksConfig).not.toHaveBeenCalled();
     expect(queryByText("保存")).toBeNull();
+  });
+
+  it("hub 分派：编辑器经 profile.configEditor 渲染（KZ-1——桩组件标记出现，claude 编辑器内部 JsonMode 零调用）", async () => {
+    registerOnly([claudeProfile, STUB_PROFILE]);
+    mockReadHooksConfig.mockResolvedValue({});
+    const { container, getByRole } = renderPanel();
+    // 默认缺省回退首个有能力 CLI = claude → 经 claude profile 的 configEditor（真实编辑器）渲染
+    await waitFor(() => expect(mockJsonMode).toHaveBeenCalled());
+    // 点击 stubcli → 编辑器槽渲染 stub 桩组件（profile 声明的 configEditor），而非 claude 编辑器
+    fireEvent.click(getByRole("button", { name: "stubcli" }));
+    await waitFor(
+      () => expect(container.querySelector('[data-e2e="stub-config-editor"]')).toBeTruthy(),
+    );
+    // 桩组件不经 claude 编辑器内部：JsonMode 不再新挂载 + 不读配置（桩无 IPC）
+    const jsonModeCalls = mockJsonMode.mock.calls.length;
+    expect(mockReadHooksConfig.mock.calls.length).toBe(1); // 仅 claude 挂载时一次
+    expect(mockJsonMode.mock.calls.length).toBe(jsonModeCalls); // stub 挂载后无新增
+    // 桩渲染携带 profile 数据（props 透传）
+    expect(container.textContent).toContain("stub 编辑器：stubcli");
+  });
+
+  it("hasConfigEditor=true 但 configEditor 缺失 → 编辑器槽空态占位（KZ-1 防御，不渲染 claude 编辑器）", async () => {
+    registerOnly([claudeProfile, GAP_PROFILE]);
+    mockReadHooksConfig.mockResolvedValue({});
+    const { container, getByRole, queryByRole } = renderPanel();
+    await waitFor(() => expect(mockJsonMode).toHaveBeenCalled()); // 初始 claude 正常渲染
+    fireEvent.click(getByRole("button", { name: "gapcli" }));
+    // 空态占位标记出现（data-e2e hooks-editor-empty），不渲染任何编辑器
+    await waitFor(
+      () => expect(container.querySelector('[data-e2e="hooks-editor-empty"]')).toBeTruthy(),
+    );
+    expect(container.textContent).toContain("该 CLI 未提供配置编辑器");
+    // 防御成立：claude 编辑器内部未被调用（JsonMode 零新增挂载、不读配置、无保存按钮）
+    const jsonModeCalls = mockJsonMode.mock.calls.length;
+    expect(mockJsonMode.mock.calls.length).toBe(jsonModeCalls);
+    expect(mockReadHooksConfig.mock.calls.length).toBe(1); // 仅 claude 挂载时一次
+    expect(queryByRole("button", { name: "保存" })).toBeNull();
+    // 选择行过滤条件不变：gapcli（hasConfigEditor=true）仍出现在选择行
+    expect(getByRole("button", { name: "gapcli" })).toBeTruthy();
+  });
+
+  it("层级切换器数据源 = profile.configLayers（KZ-4：自定义层渲染，非固定三层）", async () => {
+    registerOnly([claudeProfile, LAYERS_PROFILE]);
+    seedProject("C:/proj"); // 初始层 dev 非 user——无 rootPath 会被 useHooksConfig 回退 user 层
+    mockReadHooksConfig.mockResolvedValue({});
+    // 挂载选中 layerscli（configLayers = dev/prod 两层）→ 层按钮 = profile 声明层
+    const { getByRole, queryByRole } = renderPanel({
+      panelId: "hooksConfig-page-1",
+      selectedCli: LAYERS_PROFILE.id,
+    });
+    await waitFor(() => expect(getByRole("button", { name: "Dev" })).toBeTruthy());
+    expect(getByRole("button", { name: "Prod" })).toBeTruthy();
+    // claude 固定三层不渲染（数据源非常量 LAYERS，而是 profile 声明）
+    expect(queryByRole("button", { name: "User" })).toBeNull();
+    expect(queryByRole("button", { name: "Local" })).toBeNull();
+    // 初始层 = configLayers[0].id（dev）——首次 read 携初始层
+    await waitFor(() => expect(mockReadHooksConfig.mock.calls.length).toBe(1));
+    expect(mockReadHooksConfig.mock.calls[0][1]).toBe("dev");
   });
 
   it("restartHint 由 profile 驱动（文案来源 = profile.hooks.restartHint，MC-222/506）", async () => {
