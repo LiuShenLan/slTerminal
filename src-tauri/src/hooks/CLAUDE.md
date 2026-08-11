@@ -100,9 +100,11 @@ project/local 层入参经 `validate_path_within_root` 沙箱校验：project_pa
 
 **read 语义**：文件不存在或无 `hooks` 键 → `Ok(Null)`（面板首次创建场景）；**JSON 损坏 → `Err`**（不返回 Null——防止面板在损坏文件上编辑后 merge 丢其他字段，对齐 C9 注入的非法中止先例）。
 
-**write 语义**：`hooks` 必须为 JSON Object（否则 `Validation`）；后端 **read-modify-write**——读原文件 → 根对象 `hooks` 键替换为入参 → 原子写（`NamedTempFile` + `persist`，明确不做 `.bak`），`permissions`/`env`/`$schema` 等其他字段原样保留（P3-BE-03）。原文件损坏 → `Err` 拒绝覆盖；根元素为数组/标量无法安全 merge → `Err`；文件内容为 `null`（合法 JSON）视作空对象。父目录不存在时自动 `create_dir_all`（仅写入路径）。
+**write 语义**：`hooks` 入参为 `null` 视作空对象 `{}` 进行 merge（ZQ-5 决策 3——与 read 返回 null 对称；语义 = 清空该层 hooks）；非 `null` 且非 JSON Object → `Validation`。后端 **read-modify-write**——读原文件 → 根对象 `hooks` 键替换为入参 → 原子写（`NamedTempFile` + `persist`，明确不做 `.bak`），`permissions`/`env`/`$schema` 等其他字段原样保留（P3-BE-03）。原文件损坏 → `Err` 拒绝覆盖；根元素为数组/标量无法安全 merge → `Err`；文件内容为 `null`（合法 JSON）视作空对象。父目录不存在时自动 `create_dir_all`（仅写入路径）。
 
 ### 信号文件瞬态特性 + dev 环境注入路径
+
+**信号文件大小上限（AQ-2）**：信号文件读取前校验大小——超过 `MAX_SIGNAL_FILE_BYTES`（1MB，常量见 `signal.rs`）→ `tracing::warn!` 告警 + 删除文件不处理（不 emit，与「解析失败仍删」容错语义一致）。
 
 **目录常态为空是设计行为**：`process_signal_file`（`signal.rs`）处理后无论 emit 成败均立即 `fs::remove_file` 删除文件，watcher 实时通道 debounce 仅 50ms（`watcher.rs`）。信号文件从产生到删除存活亚秒级（实时通道）或 ≤3s（轮询补漏兜底），任何时刻 `ls` 几乎都看不到文件——目录为空恰是管道正常工作的表现。如需观察信号文件，应使用文件系统监视工具（如 `watchexec`）或临时停 watcher。
 
@@ -175,7 +177,7 @@ async fn agent_hooks_config_write(cli_id: String, layer: String, hooks: Value, p
 - **layer**：仅 `"user"` / `"project"` / `"local"`，非法 → `AppError::Validation`（P3-BE-02）。
 - **路径解析**：锁内读取 `state.project_root` 后 `resolve_config_path` 解析（作用域块结束时即 drop 锁守卫，避免非 Send 的 `RwLockReadGuard` 跨 await 存活）。user 层不经过沙箱；project/local 层 `project_path` 缺失 → `Validation`、沙箱校验失败 → `PathNotAllowed`（P3-BE-06/07）。
 - **read**：返回该层 `hooks` 子树（非整文件）；文件不存在或无 `hooks` 键 → `Ok(Value::Null)`；JSON 损坏 → `Err(Validation)`。
-- **write**：`hooks` 必须为 JSON Object；read-modify-write merge 原样保留其他字段；原文件损坏 → `Err` 拒绝覆盖；父目录自动创建；`NamedTempFile` + `persist` 原子写，不做 `.bak`。
+- **write**：`hooks` 为 `null` 视作空对象 `{}`（语义 = 清空该层 hooks）；非 `null` 且非 JSON Object → `Validation`（ZQ-5 决策 3）；read-modify-write merge 原样保留其他字段；原文件损坏 → `Err` 拒绝覆盖；父目录自动创建；`NamedTempFile` + `persist` 原子写，不做 `.bak`。
 - 阻塞 I/O 均在 `spawn_blocking` 内（硬约束 #3）。前端 wrapper 见 `src/ipc/hooksConfig.ts`（C13-1）。
 
 ## ContextUsage DTO
@@ -241,7 +243,7 @@ Rust 测试分布 8 个位置（均为 `#[cfg(test)] mod tests` 嵌入源文件�
 | `claude/mod.rs` `#[cfg(test)]` | 1 | HomeDirGuard 注入与 Drop 恢复原 home 解析 |
 | `claude/inject.rs` `#[cfg(test)]` | 35 | template_version 正值、HOOK_EVENTS 计数+唯一+关键事件、has_slterm_matchers、disk_script_version（解析/无版本/缺失/空格分号）、remove_slterm_matchers（清理 slterm 条目+保留用户 hook/清理空事件键/无 slterm 条目/**混组保用户 handler/全 slterm 组删除**——handler 级剔除）、inject_matchers（10 事件齐全/保留用户 matcher/二次注入幂等）、build_matcher_entry、模板内嵌校验（非空/含 SLTERM_PANEL_ID/含 SCRIPT_VERSION/含显式 `cliId:"claude"`）、**三命令 impl 层（HUK-02：`inject_impl`/`uninstall_impl`/`injection_status_impl` tempdir 驱动——注入/幂等/非法 JSON 中止/保留其他字段/非 Object 根与 hooks 拒绝/卸载混组保用户 handler/状态三态）** |
 | `claude/usage.rs` `#[cfg(test)]` | 26 | parse_usage_line 全分支、scan_transcript_usage 集成（末行命中/中间行回溯/无 usage/文件不存在/空文件/损坏行跳过）、ContextUsage serde camelCase、**命令层（HUK-05：`run_context_usage` + `block_on`——参数透传 transcriptPath/None 与 Some 返回映射/大文件 >128KB 仅读尾部 64KB）** |
-| `claude/config.rs` `#[cfg(test)]` | 27 | parse_layer、resolve_config_path（user 层 home 路径/三层拼接/缺失 project_path Validation/子树外 PathNotAllowed）、read_hooks_subtree（文件不存在 Null/无 hooks 键 Null/子树提取/损坏 Err）、write_hooks_subtree（原子写/父目录自动创建/merge 保留其他字段/损坏拒绝覆盖/非 Object hooks 拒绝无副作用/非 Object 根拒绝/null 根视空对象）——P3-BE 读写命令纯逻辑、**命令层（`run_config_read`/`run_config_write` + `block_on`——参数透传/非法 layer/路径校验）** |
+| `claude/config.rs` `#[cfg(test)]` | 28 | parse_layer、resolve_config_path（user 层 home 路径/三层拼接/缺失 project_path Validation/子树外 PathNotAllowed）、read_hooks_subtree（文件不存在 Null/无 hooks 键 Null/子树提取/损坏 Err）、write_hooks_subtree（原子写/父目录自动创建/merge 保留其他字段/损坏拒绝覆盖/非 Object hooks 拒绝无副作用/非 Object 根拒绝/null 根视空对象）、**config_write_sync null 入参视空对象（ZQ-5：hooks=Null 写入 → hooks 键 = 空对象且保留其他字段）**——P3-BE 读写命令纯逻辑、**命令层（`run_config_read`/`run_config_write` + `block_on`——参数透传/非法 layer/路径校验）** |
 
 ### 单元测试组织
 

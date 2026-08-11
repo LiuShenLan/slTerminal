@@ -83,7 +83,7 @@ Stage 01–07（`docs/multi-cli/checklist.md`）产生的测试文件更名/合�
 | 文件 | 覆盖 |
 |------|------|
 | `mock-cli-profile.test.tsx` | AC-4 五点全表 L2 用例：① OSC 133 命中页签标题/logo/agentSession.cliId ② eventToStatus/classifyNotification 被真实调用（spy 入参）③ 历史聚合条目 + 行 logo ④ hub 选择行两枚按钮 + 切换 + selectedCli 持久化 ⑤ 恢复注入 = mock 策略输出 |
-| `no-claude-literals.test.ts` | AC-5 字面量守卫（L2 grep 形态）：fs 递归枚举通用层七路径（src/lib、src/panels/terminal、src/features/agentStatus、src/features/agentHistory、src/features/notifications、src/ipc、src/types）扫描 .ts/.tsx——零 "claude" 字符串字面量/claude 事件名/`~/.claude` 路径；豁免形态 = `profiles/claude/` 导出常量 import 引用（CLAUDE_CLI_ID/SESSION_END_EVENT/EXIT_EVENT），新增文件自动纳入 |
+| `no-claude-literals.test.ts` | AC-5 字面量守卫（L2 grep 形态）：fs 递归枚举通用层八路径（src/lib、src/panels/terminal、src/features/agentStatus、src/features/agentHistory、src/features/notifications、src/ipc、src/types、src/features/cliProfiles）扫描 .ts/.tsx——零 "claude" 字符串字面量/claude 事件名/`~/.claude` 路径；豁免形态 = `profiles/claude/` 导出常量 import 引用（CLAUDE_CLI_ID/SESSION_END_EVENT/EXIT_EVENT）+ **目录级豁免 `src/features/cliProfiles/profiles/claude/` 整目录（CS-2）**；含 `${}` 的模板字符串按字面量片段拼接后参与判定（CS-1，`cl${''}aude` 自检用例）；新增文件自动纳入 |
 | `helpers/mockCliProfile.ts` | mockcli 测试夹具（AC-4 契约，决策 5）：`mockCliProfile` 定义（hooks/history 全能力桩）+ `registerMockCliProfile`（claude 基线缺失时补注册）/ `resetCliProfileRegistry`（afterEach `_reset` + 恢复 claude 基线）+ `MOCK_CLI_RESTART_HINT` 桩文案；生产代码零引用 |
 
 ## 共享测试工厂（helpers/ + testMocks/ + setup.ts）
@@ -110,7 +110,7 @@ Stage 01–07（`docs/multi-cli/checklist.md`）产生的测试文件更名/合�
 | `cli-profile-claude.test.ts` | `src/features/cliProfiles/profiles/claude/`（身份域 + hooks/history 策略） |
 | `agent-status-lib.test.ts` | `src/lib/agentStatus.ts`（四态类型/STATUS_EMOJI/getStatusIcon） |
 | `mock-cli-profile.test.tsx` | AC-4 五点全链路（useCommandDetection/useXterm/通知调度/agentHistory/hub 面板） |
-| `no-claude-literals.test.ts` | AC-5 通用层七路径字面量守卫 |
+| `no-claude-literals.test.ts` | AC-5 通用层八路径字面量守卫（profiles/claude 合法领地目录级豁免） |
 | `ipc-agent-hooks-contract.test.ts` | `src/ipc/agentHooks.ts`（四命令 × 四维 + onAgentEvent） |
 | `ipc-agent-history-contract.test.ts` | `src/ipc/agentHistory.ts`（scan 无参 / delete `{cliId, sessionId}`） |
 | `agent-history-model.test.ts` 等 6 文件 | `src/features/agentHistory/`（model/hook/restore/row/view/action-dialog） |

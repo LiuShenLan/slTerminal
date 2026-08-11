@@ -41,6 +41,8 @@ pub trait CliHistoryProvider: Send + Sync + std::fmt::Debug {
 
 **`validate_session_id` 是 `delete` 的强制前置**（trait 契约写明，未来 provider 的等价校验强制）：`run_delete` 先经 provider 校验 sessionId，通过后才执行删除。claude provider 的校验 = UUID 形态（`is_uuid_filename`：36 长度 + 连字符位置 + ascii hex 全检）+ `locate_session_jsonl` 在扫描根一级子目录遍历定位——**定位不信托前端任何路径参数**（前端只传 sessionId，SEC-05 保留）。
 
+**符号链接拒跟随（AQ-3）**：一级子目录、命中 jsonl 文件、同名 `<id>/` 删除目录为符号链接时一律拒绝（定位不命中 / 删除不触碰链接目标）——加防御分支，SEC-05 校验与定位流程语义不变。
+
 ### env 覆盖留 provider 内部（MC-305）
 
 `SLTERM_CLAUDE_PROJECTS_DIR` env 覆盖留在 claude provider 内部（`claude/scan.rs` 的 `resolve_projects_root`，每次调用读 env 不缓存）。聚合层不假设任何 provider 的 env 命名——未来 `SLTERM_<CLI>_PROJECTS_DIR` 同款模式由各 provider 自管。**生产不设置此 env，仅测试用途**（E2E fixture 隔离，防止测试触碰真实用户数据）；测试经 `ScanRootGuard` RAII 守卫 set/unset（Drop 恢复原值，依赖 `--test-threads=1` 门禁）。
@@ -62,7 +64,7 @@ serde camelCase 八键：`sessionId`/`cwd`/`title`/`titleSource`/`firstPrompt`/`
 | `claude/mod.rs` | claude history provider：`ClaudeHistoryProvider` trait 实现 + `TitleSource` 五态 + `ScanRootGuard`（cfg test，env 守卫） |
 | `claude/scan.rs` | 扫描根单点 `resolve_projects_root`（env 覆盖留 provider 内部）+ `scan_sessions` 一级子目录扫描（UUID 过滤 + `agent-` 平铺排除 + 单文件降级条目） |
 | `claude/jsonl.rs` | transcript JSONL 轻量解析：头部 512KB（cwd/firstPrompt/summary）+ 尾部 64KB（custom-title/ai-title） |
-| `claude/ops.rs` | 写操作：`validate_session_id`（SEC-05 严格校验）+ `locate_session_jsonl` 遍历定位 + `delete_session`（删 jsonl + 同名目录） |
+| `claude/ops.rs` | 写操作：`validate_session_id`（SEC-05 严格校验）+ `locate_session_jsonl` 遍历定位 + `delete_session`（删 jsonl + 同名目录），符号链接拒跟随（AQ-3） |
 
 ## 命令
 
@@ -87,7 +89,7 @@ serde camelCase 八键：`sessionId`/`cwd`/`title`/`titleSource`/`firstPrompt`/`
 | `claude/mod.rs` `#[cfg(test)]` | 4 | TitleSource serde camelCase 五变体（序列化/反序列化/as_str 映射）、ScanRootGuard Drop 恢复原 env |
 | `claude/scan.rs` `#[cfg(test)]` | 16 | resolve_projects_root（env 覆盖/缺省 home 拼接）、scan_sessions（一级子目录/UUID 过滤/`agent-` 平铺排除/降级条目/空目录） |
 | `claude/jsonl.rs` `#[cfg(test)]` | 28 | 头部/尾部解析窗口、标题回退链、cwd/firstPrompt 提取、损坏行容错 |
-| `claude/ops.rs` `#[cfg(test)]` | 7 | validate_session_id（UUID 形态接受/五类非法全拒）、locate_session_jsonl、delete_session（删文件 + 同名目录） |
+| `claude/ops.rs` `#[cfg(test)]` | 10 | validate_session_id（UUID 形态接受/五类非法全拒）、locate_session_jsonl、delete_session（删文件 + 同名目录）、符号链接拒跟随（AQ-3 三形态：一级子目录/命中文件/同名删除目录，Windows symlink 创建失败时跳过） |
 
 ### 运行
 

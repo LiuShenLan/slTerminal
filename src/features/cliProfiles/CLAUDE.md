@@ -44,7 +44,7 @@ CLI profile 注册表（MC-1/101~108）——编码 CLI 身份域与能力策略
 
 ### claude 合法领地（MC-213/223 前端半）
 
-`profiles/claude/` 是 claude 身份域与 hooks/history 策略实现点——claude 字面量（id/命令名/事件名字面量/`~/.claude` 路径）只允许出现在此目录；通用层经注册表/常量消费。策略实现（`strategies.ts`）迁自 lib 层状态映射（MC-401 前端半）、notifications 类别判定（MC-422）与 agentHistory 恢复策略（MC-315/316），行为零改动。
+`profiles/claude/` 是 claude 身份域与 hooks/history 策略实现点——claude 字面量（id/命令名/事件名字面量/`~/.claude` 路径）只允许出现在此目录；通用层经注册表/常量消费。策略实现（`strategies.ts`）迁自 lib 层状态映射（MC-401 前端半）、notifications 类别判定（MC-422）与 agentHistory 恢复策略（MC-315/316），行为零改动（AQ-1 例外：`buildResumeCommand` cwd 单引号按 PowerShell 规则转义为 `''`）。
 
 ### 注册触发点（side-effect import，照 tabRules 先例）
 
@@ -60,7 +60,7 @@ CLI profile 注册表（MC-1/101~108）——编码 CLI 身份域与能力策略
 | `index.ts` | barrel export（类型 + 注册表），不触发注册 |
 | `profiles/index.ts` | profile 注册触发点（side-effect import，生产入口 Workspace.tsx） |
 | `profiles/claude/index.ts` | claude 身份域定义 + `CLAUDE_CLI_ID` / `SESSION_END_EVENT` / `EXIT_EVENT` 常量 + hooks/history 能力挂载（side-effect 注册） |
-| `profiles/claude/strategies.ts` | claude hooks/history 策略实现：`eventToStatus`（10 事件映射）/ `classifyNotification`（五映射）/ `buildResumeCommand` / `buildRestoreInput`（输出与迁出源逐字一致） |
+| `profiles/claude/strategies.ts` | claude hooks/history 策略实现：`eventToStatus`（10 事件映射）/ `classifyNotification`（五映射）/ `buildResumeCommand` / `buildRestoreInput`（输出与迁出源逐字一致；差异点 = cwd 单引号转义为 `''`（AQ-1）） |
 
 ## 测试模式
 
@@ -69,7 +69,7 @@ L2 测试位于 `src/__tests__/`（用例数见 `.claude/test-inventory.md`）�
 | 文件 | 覆盖范围 |
 |------|---------|
 | `cli-profile-registry.test.ts` | 注册表行为全分支（register/get/getAll 注册序/同 id 覆盖/matchByCommand 多 commands/带参变体/空命令行/仅空白/未命中/不 toLowerCase/同键冲突先注册者优先/_reset/独立实例/全局单例）+ **logo 资源守卫**（MC-108 泛化：遍历注册表全部 profile 断言 iconSrc 磁盘存在 + PNG 魔数——img 404 无报错通道，资源缺失靠此守卫；含 mockcli.png 先行资源，Stage 07 mock 夹具引用） |
-| `cli-profile-claude.test.ts` | claude 身份域字段（MC-104）+ CLAUDE_CLI_ID 常量一致性 + side-effect 注册 + hooks 能力字段（MC-214 前端半）+ history 能力字段（MC-315/316）；hooks 策略用例（eventToStatus 26 用例迁自 claude-status.test.ts、classifyNotification 五映射迁自 notifications.test.ts）；history 策略用例（输出与迁出源逐字一致——断言漂移即实现有误） |
+| `cli-profile-claude.test.ts` | claude 身份域字段（MC-104）+ CLAUDE_CLI_ID 常量一致性 + side-effect 注册 + hooks 能力字段（MC-214 前端半）+ history 能力字段（MC-315/316）；hooks 策略用例（eventToStatus 26 用例迁自 claude-status.test.ts、classifyNotification 五映射迁自 notifications.test.ts）；history 策略用例（输出与迁出源逐字一致——断言漂移即实现有误；差异点 = cwd 单引号转义为 `''`（AQ-1），含回归用例） |
 | `mock-cli-profile.test.tsx` | AC-4 mock profile 全链路验收（Stage 07 五点全表：OSC 133 命中 / hooks 能力真实调用 / 历史聚合 UI / hub 选择行 / 恢复注入），夹具 `helpers/mockCliProfile.ts` |
 | `no-claude-literals.test.ts` | **AC-5 字面量守卫**：通用层七路径（src/lib、src/panels/terminal、features/agentStatus、features/agentHistory、features/notifications、src/ipc、src/types）递归扫描——"claude" 字符串/事件名字面量/`~/.claude` 路径字面量零残留（豁免：指向 profiles/claude 的 import 路径、标识符与注释） |
 

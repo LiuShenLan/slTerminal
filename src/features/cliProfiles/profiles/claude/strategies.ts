@@ -8,7 +8,8 @@
 // src/features/notifications/ 的 classifyEvent 五映射（MC-422，行为零改动）；
 // history 策略（buildResumeCommand/buildRestoreInput）Stage 05 迁自
 // features/claudeHistory/ 的 historyContextMenu.ts 与 restoreSession.ts，
-// 输出与迁出源逐字一致（E2E history.e2e 恢复编排用例零改动通过）。
+// 输出与迁出源逐字一致（E2E history.e2e 恢复编排用例零改动通过）；唯一差异
+// 点 = cwd 单引号转义（AQ-1 修复，见 buildResumeCommand 注释）。
 
 import type { AgentStatus } from "../../../../lib/agentStatus";
 import type { AgentEventPayload } from "../../../../types/agent";
@@ -95,20 +96,24 @@ export function classifyNotification(
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// history 能力（MC-315/316 迁入，输出与迁出源逐字一致）
+// history 能力（MC-315/316 迁入，输出与迁出源逐字一致；差异点 = cwd 单引号转义，AQ-1）
 // ═══════════════════════════════════════════════════════════════════
 
 /**
  * 恢复命令构造（右键菜单「复制恢复命令」，MC-316 迁自 historyContextMenu.ts
- * buildResumeCommand，行为零改动）：
+ * buildResumeCommand，AQ-1 修复）：
  * 有 cwd → `cd '<cwd>' && claude --resume <id>`（带单引号路径）；
  * 无 cwd → 仅 `claude --resume <id>`。
- * 已知限制（注释随迁）：cwd 单引号未转义——PowerShell 路径内含单引号时
- * 缺 `''` 转义会断命令，原实现遗留限制，原样保留。
+ * cwd 单引号按 PowerShell 规则转义为 `''`（AQ-1 修复）——单引号字符串内
+ * `''` = 字面单引号，路径含单引号（如 C:\Bob's Project）时不再断命令；
+ * cwd 无单引号时输出与迁出源逐字一致（E2E history.e2e fixture cwd 无
+ * 单引号，预期不变）。
  */
 export function buildResumeCommand(session: AgentHistorySession): string {
   const resume = `claude --resume ${session.sessionId}`;
-  return session.cwd ? `cd '${session.cwd}' && ${resume}` : resume;
+  return session.cwd
+    ? `cd '${session.cwd.replace(/'/g, "''")}' && ${resume}`
+    : resume;
 }
 
 /**

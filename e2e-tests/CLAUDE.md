@@ -100,6 +100,8 @@ E2E helpers 通过 `main.tsx` 中 `E2E_ENABLED`（`src/lib/e2eEnabled.ts`）条�
 
 > **决策 4（multi-cli 重构）**：E2E-05 备份集合保持 claude 硬编码（`~/.claude/settings.json` 等不按 CLI 泛化）——规格「二选一」取后者降范围；`run-wdio.cjs` 对应注释「随第二 CLI 接入扩展」。
 
+> **AQ-4（fixture 缺失终止而非降级）**：`fixtures/claude-projects/` 缺失时 `run-wdio.cjs` 在 wdio 启动前以 `console.error` 明确文案 + `process.exit(1)` 终止——不设 `SLTERM_CLAUDE_PROJECTS_DIR` 会令后端回落真实 `~/.claude/projects`（生产默认），历史会话用例有触碰真实用户目录风险。禁止引入新降级路径（自动创建空 fixture、临时目录兜底等）。
+
 ## 已知无害噪声
 
 `Tauri core.invoke not available after 5s timeout` — embedded 模式下降级到 WebDriver HTTP 协议时的日志，不影响测试结果。

@@ -101,7 +101,8 @@ fn read_hooks_subtree(path: &Path) -> Result<Value, AppError> {
 
 /// 写回 hooks 子树（read-modify-write merge，P3-BE-03 纯逻辑）
 ///
-/// - hooks 必须为 JSON 对象，否则 Validation
+/// - hooks 必须为 JSON 对象，否则 Validation（调用方 config_write_sync 已把 null
+///   归一为空对象，ZQ-5——此处收到的恒为 object）
 /// - 读原文件：不存在视为空对象 {}；损坏 → Err 拒绝覆盖用户文件
 /// - 根对象 hooks 键替换为入参，其余字段（permissions/env/$schema 等）原样保留
 /// - 父目录不存在时自动 create_dir_all（仅写入路径，P3-BE-01）
@@ -167,7 +168,9 @@ pub(crate) fn config_read_sync(
 
 /// agent_hooks_config_write（claude）同步核心（provider trait impl 经命令层 spawn_blocking 调用）
 ///
-/// 要求 hooks 为 JSON Object；原文件其他字段（permissions/env/$schema）原样保留。
+/// hooks 为 null 视作空对象 {} 进行 merge（ZQ-5 决策 3——与 read 返回 null 对称，
+/// 语义 = 清空该层 hooks）；非 null 且非 object → Validation；
+/// 原文件其他字段（permissions/env/$schema）原样保留。
 pub(crate) fn config_write_sync(
     layer: &str,
     hooks: Value,
@@ -176,6 +179,13 @@ pub(crate) fn config_write_sync(
     home_dir: impl Fn() -> Option<PathBuf>,
 ) -> Result<(), AppError> {
     let l = parse_layer(layer)?;
+    // 入口校验（ZQ-5 决策 3）：hooks 入参 null 视作空对象 {}（语义 = 清空该层 hooks），
+    // 非 null 且非 object 才拒绝——write_hooks_subtree 的 is_object 闸门保持不变（收到的恒为 object）
+    let hooks = if hooks.is_null() {
+        serde_json::json!({})
+    } else {
+        hooks
+    };
     if !hooks.is_object() {
         return Err(AppError::Validation("hooks 必须为 JSON 对象".into()));
     }
@@ -562,5 +572,38 @@ mod tests {
         let err =
             config_write_sync("user", serde_json::json!([1, 2]), None, &None, || None).unwrap_err();
         assert!(matches!(err, AppError::Validation(_)));
+    }
+
+    #[test]
+    fn config_write_sync_null_hooks_clears_layer() {
+        // ZQ-5 决策 3：hooks 入参 null 视作空对象 {} 写入——语义 = 清空该层 hooks，
+        // merge 保留原文件其他字段（与 read 返回 null 对称）
+        let home = tempfile::tempdir().unwrap();
+        let settings = home.path().join(".claude").join("settings.json");
+        std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+        let hooks = serde_json::json!({
+            "SessionStart": [{"hooks": [{"type": "command", "command": "echo hi"}]}]
+        });
+        std::fs::write(
+            &settings,
+            serde_json::to_string(&serde_json::json!({"hooks": hooks, "env": {"FOO": "bar"}}))
+                .unwrap(),
+        )
+        .unwrap();
+        let home_path = home.path().to_path_buf();
+
+        config_write_sync("user", Value::Null, None, &None, move || {
+            Some(home_path.clone())
+        })
+        .unwrap();
+
+        let reloaded: Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+        assert_eq!(
+            reloaded["hooks"],
+            serde_json::json!({}),
+            "null 入参应清空该层 hooks（hooks 键 = 空对象）"
+        );
+        assert_eq!(reloaded["env"]["FOO"], "bar", "merge 应保留原文件其他字段");
     }
 }

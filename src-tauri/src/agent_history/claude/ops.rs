@@ -47,11 +47,13 @@ fn locate_session_jsonl(root: &Path, session_id: &str) -> Option<PathBuf> {
     };
     for entry in entries.flatten() {
         let dir_path = entry.path();
-        if !dir_path.is_dir() {
+        // AQ-3 符号链接拒跟随：一级子目录为 symlink（可能指向扫描根外）→ 跳过
+        if !dir_path.is_dir() || dir_path.is_symlink() {
             continue;
         }
         let candidate = dir_path.join(&target);
-        if candidate.is_file() {
+        // AQ-3：命中文件为 symlink → 不命中（防外部文件被定位/删除）
+        if candidate.is_file() && !candidate.is_symlink() {
             return Some(candidate);
         }
     }
@@ -76,7 +78,8 @@ pub(crate) fn delete_session(session_id: &str) -> Result<(), crate::AppError> {
     // 同名 <id>/ 目录（subagents 等附属数据）存在则一并删除（规格 4.4 删除范围）
     if let Some(dir) = jsonl.parent() {
         let session_dir = dir.join(session_id);
-        if session_dir.is_dir() {
+        // AQ-3：同名目录为 symlink（指向扫描根外）→ 拒绝删除，不跟随链接目标
+        if session_dir.is_dir() && !session_dir.is_symlink() {
             std::fs::remove_dir_all(&session_dir)?;
         }
     }
@@ -242,5 +245,87 @@ mod tests {
             "扫描根外哨兵文件不应被写入/删除"
         );
         assert!(!proj.join(format!("{UUID}.jsonl")).exists());
+    }
+
+    // ── AQ-3：符号链接拒跟随 ──
+    //
+    // Windows 符号链接创建需管理员权限/开发者模式（CI runner 权限差异）——
+    // 创建失败时测试内直接 return 跳过（照 state.rs validate_symlink_* 先例）。
+
+    /// 一级子目录为 symlink（指向扫描根外）→ 定位不命中
+    #[cfg(windows)]
+    #[test]
+    fn locate_skips_symlinked_subdir() {
+        let (_dir, root, _proj) = make_scan_root();
+        let external = tempfile::tempdir().unwrap();
+        std::fs::write(external.path().join(format!("{UUID}.jsonl")), "{}").unwrap();
+
+        let link_dir = root.join("C--Users-test-link");
+        if std::os::windows::fs::symlink_dir(external.path(), &link_dir).is_err() {
+            return; // 无权限创建符号链接，跳过
+        }
+
+        assert!(
+            locate_session_jsonl(&root, UUID).is_none(),
+            "symlink 子目录不应被跟随定位"
+        );
+    }
+
+    /// 命中文件为 symlink（指向扫描根外文件）→ 定位不命中 + 删除按「会话不存在」拒绝
+    #[cfg(windows)]
+    #[test]
+    fn locate_and_delete_reject_symlinked_jsonl() {
+        let (_dir, root, proj) = make_scan_root();
+        let external = tempfile::tempdir().unwrap();
+        let ext_file = external.path().join(format!("{UUID}.jsonl"));
+        std::fs::write(&ext_file, "{}").unwrap();
+
+        let link = proj.join(format!("{UUID}.jsonl"));
+        if std::os::windows::fs::symlink_file(&ext_file, &link).is_err() {
+            return; // 无权限创建符号链接，跳过
+        }
+
+        set_scan_root(&root);
+        assert!(
+            locate_session_jsonl(&root, UUID).is_none(),
+            "symlink 文件不应命中定位"
+        );
+        let msg = assert_validation(delete_session(UUID).unwrap_err());
+        unset_scan_root();
+        assert!(
+            msg.contains("不存在"),
+            "symlink 文件删除应按「会话不存在」拒绝，实际: {msg}"
+        );
+        // 扫描根外真实文件未被触碰
+        assert!(ext_file.exists());
+    }
+
+    /// 同名 <id>/ 目录为 symlink → 删除不跟随，外部目录内容保留
+    #[cfg(windows)]
+    #[test]
+    fn delete_ignores_symlinked_session_dir() {
+        let (_dir, root, proj) = make_scan_root();
+        std::fs::write(proj.join(format!("{UUID}.jsonl")), "{}").unwrap();
+        let external = tempfile::tempdir().unwrap();
+        std::fs::write(external.path().join("keep.txt"), "keep").unwrap();
+
+        let session_link = proj.join(UUID);
+        if std::os::windows::fs::symlink_dir(external.path(), &session_link).is_err() {
+            return; // 无权限创建符号链接，跳过
+        }
+
+        set_scan_root(&root);
+        delete_session(UUID).unwrap();
+        unset_scan_root();
+
+        assert!(
+            !proj.join(format!("{UUID}.jsonl")).exists(),
+            "jsonl 应被删除"
+        );
+        assert_eq!(
+            std::fs::read_to_string(external.path().join("keep.txt")).unwrap(),
+            "keep",
+            "symlink 指向的外部目录内容不应被删除"
+        );
     }
 }

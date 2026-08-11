@@ -2,11 +2,11 @@
 
 > **本文档是项目用例数唯一真值源。** 所有 CLAUDE.md、README、CI 配置中引用的用例数均以此文件为准。更新测试后必须同步本文档。
 
-全量 **3177** 用例（Rust 592 + 前端 2408 + L3 138 + E2E 39），2026-08-10 更新。
+全量 **3185** 用例（Rust 597 + 前端 2411 + L3 138 + E2E 39），2026-08-11 更新。
 
 > **计数口径**：
-> - L2 以 `npm test` 实跑（Vitest 报告）为准——`it.each(...)` 参数化与 `describeIpcContract` 工厂（`helpers/ipc-contract.ts`，IHE-06）等按**展开后用例数**计入（139 文件 2408 用例，Stage 08 终验实跑回写，见 L2 段 ① 注）；纯 grep `it(/test(` 块数会少计 it.each 展开（如 colors 85 = 13 块 + 7 组 each 展开 72）。
-> - L1 以 `grep -c '#\[test\]'` 统计的 `#[test]` 属性数为准（32 文件 592）。
+> - L2 以 `npm test` 实跑（Vitest 报告）为准——`it.each(...)` 参数化与 `describeIpcContract` 工厂（`helpers/ipc-contract.ts`，IHE-06）等按**展开后用例数**计入（139 文件 2411 用例，Stage 08 终验实跑回写 + Stage 01 review-fix 增量，见 L2 段 ① 注）；纯 grep `it(/test(` 块数会少计 it.each 展开（如 colors 85 = 13 块 + 7 组 each 展开 72）。
+> - L1 以 `grep -c '#\[test\]'` 统计的 `#[test]` 属性数为准（32 文件 597）。
 > - L3 以 `npm run test:l3` 实跑为准（7 文件 138，`test/terminal/**/*.test.ts`）。
 > - L4 以 spec 内 `it(`/`it.skip(` 计数为准（9 spec，37 active + 2 skip）。
 > - L2 与 L3 **独立运行**：`vitest.config.ts` include 仅 `src/__tests__/**`，L3 走 `vitest.l3.config.ts`（environment: node）。旧注释"L3 同时被 npm test 包含执行"已废弃。
@@ -59,12 +59,12 @@
 | `src-tauri/src/notify/mod.rs` | 38 | FileWatcher 生命周期 + classify_by_kind 事件分类（全 7 种 EventKind）+ **EventEmitter trait 注入驱动事件循环（HFN-03/D6）** + Drop 轮询等待（HFN-07） |
 | `src-tauri/src/notify/pool.rs` | 13 | LruWatcherPool: 缓存命中/LRU 淘汰/pause_all_except/replace（同 path 二次 insert stop 旧 watcher）/remove/stop_all/Drop |
 | `src-tauri/src/hooks/mod.rs` | 19 | AgentInjectionStatus/AgentHookInjectionStatus serde 往返精确断言 + parse_signal_file 快速冒烟 + start_signal_watcher 幂等（#[cfg(test)] 重置钩子） + **命令层泛化（6 命令 cliId 透传 block_on 直测，MC-211）** |
-| `src-tauri/src/hooks/signal.rs` | 16 | parse_signal_file 全分支 + camelCase 往返 + **process_signal_file 全流程（emit 注入参数：读→emit→删/emit 失败仍删/非法 JSON 降级，HUK-01）** + **AgentEventPayload 九键 serde（含无 cliId 旧信号反序列化兼容，MC-201）** + agent-event 广播（MC-202） |
+| `src-tauri/src/hooks/signal.rs` | 17 | parse_signal_file 全分支 + camelCase 往返 + **process_signal_file 全流程（emit 注入参数：读→emit→删/emit 失败仍删/非法 JSON 降级，HUK-01）** + **AgentEventPayload 九键 serde（含无 cliId 旧信号反序列化兼容，MC-201）** + agent-event 广播（MC-202） + **信号文件大小上限（>1MB warn+删不 emit，AQ-2）** |
 | `src-tauri/src/hooks/watcher.rs` | 20 | is_signal_file/collect_signal_files/poll_once（含目录删除重建恢复/幂等）/**run_one_tick 或临时目录真实启动（轮询补漏消费残留，HUK-03）**/生命周期（stop 幂等 + thread.is_finished 断言）——MC-203 核对零改动 |
 | `src-tauri/src/hooks/provider.rs` | 3 | CliHooksProvider trait + cliId 键注册表：resolve_provider 命中（身份断言）/未知 cliId Validation（MC-211）/已注册无 hooks 能力 Validation（「不支持 hooks 能力」语义）+ 未注册未知分支（MC-210 新建） |
 | `src-tauri/src/hooks/claude/inject.rs` | 35 | 注入幂等（空 settings/已有用户 hooks/已注入升级）/卸载 handler 级剔除（混组保用户 handler/全 slterm 组删除/无 slterm 零写盘）/状态检测三态/非法 JSON 中止/版本比对/**注入/卸载/状态三命令 impl 路径 tempdir 驱动（HUK-02）**/handler_contains_slterm 非字符串分支 + **reporter 模板内嵌校验断言（显式 cliId + SCRIPT_VERSION 递增，MC-215 决策 7）** |
 | `src-tauri/src/hooks/claude/usage.rs` | 26 | parse_usage_line 全分支 + scan_transcript_usage 集成（逆行命中/回溯/损坏跳过）+ ContextUsage serde 往返 + TRANSCRIPT_TAIL_BYTES + **命令包装层（HUK-05）+ 端到端五用例（P2-TE-05）**——下沉 claude/ 用例数不变（MC-213） |
-| `src-tauri/src/hooks/claude/config.rs` | 27 | parse_layer/resolve_config_path（home 注入 tempdir，HUK-07）/read_hooks_subtree/write_hooks_subtree（原子写/merge 保留/损坏拒绝）+ IO 异常分支（persist 失败，HUK-06）——下沉 claude/ 用例数不变（MC-213） |
+| `src-tauri/src/hooks/claude/config.rs` | 28 | parse_layer/resolve_config_path（home 注入 tempdir，HUK-07）/read_hooks_subtree/write_hooks_subtree（原子写/merge 保留/损坏拒绝）+ IO 异常分支（persist 失败，HUK-06）+ **hooks 入参 null 视作空对象（清空该层，merge 保留其他字段，ZQ-5）**——下沉 claude/ 用例数不变（MC-213） |
 | `src-tauri/src/hooks/claude/mod.rs` | 1 | HomeDirGuard RAII 注入/恢复（命令层 cliId 透传测试经守卫注入 tempdir 的 L1 隔离纪律，Stage 08 grep 实查补登） |
 | `src-tauri/src/settings.rs` | 25 | 读写往返/文件不存在/JSON 损坏回退 .bak/浅合并/并发写/只读文件 + **block_on 真实 save_settings/load_settings 命令（SPE-01）+ app_data_dir 注入 + persist 失败映射（SPE-05）** |
 | `src-tauri/src/projects.rs` | 17 | 序列化往返/ID 生成/路径校验 + **block_on 真实 save_projects/load_projects（SPE-02）+ persist 失败映射** |
@@ -72,7 +72,7 @@
 | `src-tauri/src/lib.rs` | 2 | ping 返回 pong/`get_windows_build_number` 返回数字 |
 | `src-tauri/src/agent_history/claude/jsonl.rs` | 28 | parse_head（cwd 收集/首条可见 prompt 跳过 4 类/EOF 截断/200 字符截断/标题 last-wins）+ 大文件头尾窗口协同 + parse_tail_title（custom 恒优先/ai 兜底）+ resolve_title 回退链 5 态 + tail 优先（MC-301 下沉 claude/，用例数不变） |
 | `src-tauri/src/agent_history/claude/scan.rs` | 16 | resolve_projects_root（env 覆盖/默认）+ 排除 3 类 + 多目录收集 + 扫描根缺失空数组 + 降级条目 + 完整字段回退 + cwdExists + env 端到端 + mtime + ScanRootGuard RAII（HFN-06）（MC-301 下沉 + env 覆盖留 provider 内部，MC-305；命令包装层已迁 mod.rs） |
-| `src-tauri/src/agent_history/claude/ops.rs` | 7 | validate_session_id（UUID 双形态/5 类非法拒绝——空串断言错误消息含具体文案）+ delete（jsonl+目录范围/仅 jsonl/不存在 Err）+ 越界防护（MC-301 下沉 + SEC-05 等价保留，MC-304；命令包装层已迁 mod.rs） |
+| `src-tauri/src/agent_history/claude/ops.rs` | 10 | validate_session_id（UUID 双形态/5 类非法拒绝——空串断言错误消息含具体文案）+ delete（jsonl+目录范围/仅 jsonl/不存在 Err）+ 越界防护（MC-301 下沉 + SEC-05 等价保留，MC-304；命令包装层已迁 mod.rs）+ **符号链接拒跟随 3 例（AQ-3：symlink 子目录/文件/同名目录均不跟随；Windows 创建失败权限不足时跳过）** |
 | `src-tauri/src/agent_history/mod.rs` | 13 | AgentHistorySession serde camelCase 八键集合精确匹配（含 cliId 打标）+ 反序列化 + roundtrip + titleSource 开放字符串（claude 值集不变）+ is_uuid_filename（MC-302 更名）+ 聚合 scan 遍历全部 provider（单 provider 失败不阻塞/全部空 → 空数组）+ delete validate_session_id 强制前置 + 未知 cliId Validation（MC-303）+ **命令包装层 4 用例（command_scan_wraps/command_scan_degraded/command_delete_wraps/command_delete_invalid，迁移自 scan.rs/ops.rs——mod.rs:407-464「命令包装层（迁移自 scan.rs/ops.rs）」）** |
 | `src-tauri/src/agent_history/claude/mod.rs` | 4 | TitleSource serde camelCase 往返 + title_source as_str 值集映射 + ScanRootGuard env 恢复（MC-302 下沉 claude/，值集不变） |
 | `src-tauri/src/agent_history/provider.rs` | 2 | CliHistoryProvider trait 三方法（scan/delete/validate_session_id）+ cliId 键注册表 + resolve_provider 命中（身份断言）/未知 cliId Validation（MC-303/304 新建） |
@@ -80,11 +80,11 @@
 
 > ① 占位符已实落消除：provider.rs 实落 2 条（resolve_provider 命中/未知 cliId Validation），claude/mod.rs 实落 4 条（TitleSource serde ×2 + as_str 映射 + ScanRootGuard env 恢复）；Stage 08 补登 hooks/claude/mod.rs 1 条（HomeDirGuard 注入/恢复守卫）——L1 总数按实落对齐（584 + 净增 8 = 592）。
 
-> `pty/mod.rs`、`pty/win_build.rs`、`main.rs` 不含 `#[test]`，不在此列。git/mod.rs 测试已按 GIT-12 全量拆出至 `tests/`（`#[test]` 零残留）。agent_history 模块 grep 口径：claude/jsonl 28 + claude/scan 16 + claude/ops 7 + mod 13 = 64（命令包装层 4 用例已迁入 mod.rs:407-464，MC-301 下沉时随行）+ claude/mod 4 + provider 2 = 全模块 70；env 测试依赖 L1 `--test-threads=1` 门禁（`std::env::set_var` 全局可变）。
+> `pty/mod.rs`、`pty/win_build.rs`、`main.rs` 不含 `#[test]`，不在此列。git/mod.rs 测试已按 GIT-12 全量拆出至 `tests/`（`#[test]` 零残留）。agent_history 模块 grep 口径：claude/jsonl 28 + claude/scan 16 + claude/ops 10 + mod 13 = 67（命令包装层 4 用例已迁入 mod.rs:407-464，MC-301 下沉时随行）+ claude/mod 4 + provider 2 = 全模块 73；env 测试依赖 L1 `--test-threads=1` 门禁（`std::env::set_var` 全局可变）。
 
-## L2 — 前端单元/集成测试（139 文件 / 2408 用例）
+## L2 — 前端单元/集成测试（139 文件 / 2411 用例）
 
-运行：`npm test`（Vitest + jsdom，登记 2408 用例）
+运行：`npm test`（Vitest + jsdom，登记 2411 用例）
 
 > ① Stage 08 行级校正：5 个陈旧行按磁盘 block 计数核实上修（use-xterm-lifecycle 71→79、terminal-registry 24→28、hooks-config-panel 36→40、agent-status-hook 39→43、agent-status-view 29→31，合计 +22）——L2 合计 2371→2394；**终验实跑回写**：npm test 实跑 2408 用例（139 文件），it.each 展开与 describeIpcContract 工厂生成用例按展开后计入，以实跑为准。
 
@@ -119,16 +119,16 @@
 | `src/__tests__/detect-webgl.test.ts` | 3 | WebGL2 可用/不可用/抛异常 |
 | `src/__tests__/terminal-strictmode.test.ts` | 2 | `smGuardRef` 防双重挂载 |
 
-### CLI profile 注册表（4 文件 / 85 用例，Stage 01 + Stage 07）
+### CLI profile 注册表（4 文件 / 88 用例，Stage 01 + Stage 07）
 
 > mock 夹具 `src/__tests__/helpers/mockCliProfile.ts`（AC-4 契约：mockcli profile 定义——id/displayName/commands/tabTitle "mockcli" + iconSrc `/cli-icons/mockcli.png` + hooks 全能力（eventToStatus 恒等映射桩/classifyNotification 桩/contextLimit/restartHint 桩文案/hasConfigEditor=true）+ history 全能力（supportsFork=true/buildResumeCommand/buildRestoreInput 桩输出带 "mockcli --resume" 前缀）+ registerMockCliProfile/resetCliProfileRegistry 辅助——**仅测试环境注册**（vitest register + afterEach `_reset` 清理，L4 经 E2E helper），生产零引用；不计文件/用例数）。
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
 | `src/__tests__/cli-profile-registry.test.ts` | 19 | CliProfileRegistry（MC-101/102）：register/get/getAll 注册序/同 id 覆盖（注册序不变）/matchByCommand 首 token 精确匹配（多 commands 非首键/带参变体/前导空白/空命令行/仅空白/未命中/不 toLowerCase/同键冲突先注册者优先）/`_reset`/独立实例/全局单例 + logo 资源守卫泛化（MC-108：遍历注册表全部 profile 断言 iconSrc 磁盘存在 + PNG 魔数，含 mockcli.png 先行资源）——语义并入自退役注册表/图标守卫用例（13 + 12） |
-| `src/__tests__/cli-profile-claude.test.ts` | 50 | claude profile 身份域（MC-104）：side-effect 注册/CLAUDE_CLI_ID 常量与注册一致性/身份域字段完整（含 hooks 五字段 + history 三字段）/capabilities.history 三字段齐备（supportsFork/buildResumeCommand/buildRestoreInput，MC-315/316）/带参命中/`_reset` 恢复（8）——语义并入自退役规则用例（6）+ hooks 策略（Stage 02，35）：eventToStatus 26 用例语义迁入（原状态映射测试语义，10 事件 × notificationType + STATUS_EMOJI 联合守卫 + AgentStatus 类型兼容）+ classifyNotification 五映射表驱动 9 条（NAH-03 迁入，MC-422）+ **history 策略（Stage 05，7）：buildResumeCommand 3（有 cwd/无 cwd/与迁出源逐字一致）+ buildRestoreInput 4（普通/fork 追加/`\r` 结尾无 `\r\n`/无 cwd 可注入——输出与迁出源逐字一致，断言漂移即实现有误）** |
+| `src/__tests__/cli-profile-claude.test.ts` | 51 | claude profile 身份域（MC-104）：side-effect 注册/CLAUDE_CLI_ID 常量与注册一致性/身份域字段完整（含 hooks 五字段 + history 三字段）/capabilities.history 三字段齐备（supportsFork/buildResumeCommand/buildRestoreInput，MC-315/316）/带参命中/`_reset` 恢复（8）——语义并入自退役规则用例（6）+ hooks 策略（Stage 02，35）：eventToStatus 26 用例语义迁入（原状态映射测试语义，10 事件 × notificationType + STATUS_EMOJI 联合守卫 + AgentStatus 类型兼容）+ classifyNotification 五映射表驱动 9 条（NAH-03 迁入，MC-422）+ **history 策略（Stage 05，7）+ AQ-1 单引号回归（Stage 01，1）：buildResumeCommand 4（有 cwd/无 cwd/与迁出源逐字一致/cwd 含单引号按 PowerShell 规则转义 `''`——AQ-1）+ buildRestoreInput 4（普通/fork 追加/`\r` 结尾无 `\r\n`/无 cwd 可注入——输出与迁出源逐字一致，断言漂移即实现有误）** |
 | `src/__tests__/mock-cli-profile.test.tsx` | 12 | **AC-4 mock profile 全链路验收（Stage 07，夹具 helpers/mockCliProfile）**：① OSC 133 命中——matchByCommand("mockcli --flag") 命中 → 页签标题/logo（profile.tabTitle/iconSrc）+ agentSession.cliId 写入（useCommandDetection 链路，真实注册表 + 真实 TerminalRegistry；未命中零副作用 + OSC 133 D 清会话）② hooks 能力被真实调用——eventToStatus 经 useXterm 事件路径（spy 入参 event+notificationType + 四态/会话写入）+ classifyNotification 经通知调度路径（spy 入参 payload + toast 派发）③ 历史聚合 UI——mock 条目（AgentHistorySession cliId="mockcli"）出现在历史区 + 行 logo 按 session.cliId 取 mockcli iconSrc ④ hub 选择行——两枚按钮（claude + mockcli，均 hasConfigEditor=true）+ 切换渲染 mock 桩编辑器（readHooksConfig 携 mockcli + restartHint 桩文案）+ selectedCli 持久化（updateParameters + 显式 onLayoutChange/toJSON）与挂载恢复 ⑤ 恢复注入——pty.write 内容 = mock buildRestoreInput 桩输出（"mockcli --resume" 可识别前缀，普通/fork）+ addPanel title = profile.tabTitle |
-| `src/__tests__/no-claude-literals.test.ts` | 4 | **AC-5 字面量守卫（Stage 07，ac5-guard 落地）**：通用层七路径（src/lib、src/panels/terminal、src/features/agentStatus、src/features/agentHistory、src/features/notifications、src/ipc、src/types）grep 断言——无 "claude" 字符串字面量/claude 事件名字面量（SessionStart/Stop 等）/`~/.claude` 路径；白名单 import 形态 = profiles/claude 导出常量引用（CLAUDE_CLI_ID 等） |
+| `src/__tests__/no-claude-literals.test.ts` | 6 | **AC-5 字面量守卫（Stage 07，ac5-guard 落地 + Stage 01 review-fix CS-1/2 强化）**：通用层八路径（src/lib、src/panels/terminal、src/features/agentStatus、src/features/agentHistory、src/features/notifications、src/ipc、src/types、src/features/cliProfiles）grep 断言——无 "claude" 字符串字面量/claude 事件名字面量（SessionStart/Stop 等）/`~/.claude` 路径；白名单 import 形态 = profiles/claude 导出常量引用（CLAUDE_CLI_ID 等）+ **目录级豁免 profiles/claude/ 整目录（CS-2，自检断言目录存在 + 不参与违规收集）**；**含 `${}` 的模板字符串按字面量片段拼接后参与三类判定（CS-1，`cl${''}aude` 拼接自检用例 + `pre-${x}post` 不误报反向锚点）** |
 
 ### 编辑器面板（8 文件 / 134 用例）
 

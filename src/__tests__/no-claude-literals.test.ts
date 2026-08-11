@@ -6,9 +6,13 @@
 // 缺省回退经 profiles/claude 导出的常量引用（CLAUDE_CLI_ID / SESSION_END_EVENT
 // / EXIT_EVENT，MC-205/313 豁免写法）。
 //
-// 扫描范围（通用层七路径）：src/lib、src/panels/terminal、
+// 扫描范围（通用层八路径）：src/lib、src/panels/terminal、
 // src/features/agentStatus、src/features/agentHistory、src/features/notifications、
-// src/ipc、src/types。守卫自身用 fs 枚举目录递归扫描 .ts/.tsx，新增文件自动纳入。
+// src/ipc、src/types、src/features/cliProfiles。守卫自身用 fs 枚举目录递归扫描
+// .ts/.tsx，新增文件自动纳入。
+// 目录级豁免（CS-2）：src/features/cliProfiles/profiles/claude/ 是 claude 合法领地
+// （MC-213/223）——claude 知识唯一合法聚居地，整目录不参与扫描；豁免按相对路径
+// 前缀匹配（正斜杠归一），拼写错会静默空扫，由自检用例守住。
 //
 // 断言口径（语义式）：
 // 1. "claude" 字符串字面量——精确匹配（值 === "claude"）才算违规；子串
@@ -24,18 +28,18 @@
 //    features/cliProfiles/profiles/claude/（CLAUDE_CLI_ID 等常量引用形态）不检查。
 // 5. 词法近似说明：本守卫自实现极简词法器提取字符串字面量（~70 行），不识别
 //    正则字面量——正则内出现引号包围的违规字样会误报（保守方向，宁可人工复核）；
-//    转义形态（\uXXXX / 常见转义）解码后比较。当前七路径经宽松文本 grep 实证
-//    零命中（2026-08-10），守卫通过即基线。
+//    转义形态（\uXXXX / 常见转义）解码后比较。当前八路径经宽松文本 grep 实证
+//    零命中（2026-08-10，cliProfiles 根目录 2026-08-11 复核），守卫通过即基线。
 
 import { describe, it, expect, beforeAll } from "vitest";
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { resolve, join, relative, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "../..");
 
-/** AC-5 扫描范围：通用层七路径（相对 repoRoot） */
+/** AC-5 扫描范围：通用层八路径（相对 repoRoot；CS-2 追加 cliProfiles） */
 const SCAN_DIRS = [
   "src/lib",
   "src/panels/terminal",
@@ -44,7 +48,16 @@ const SCAN_DIRS = [
   "src/features/notifications",
   "src/ipc",
   "src/types",
+  "src/features/cliProfiles",
 ];
+
+/** 目录级豁免（CS-2）：claude 合法领地（MC-213/223），整目录不参与扫描 */
+const EXEMPT_DIR_REL = "src/features/cliProfiles/profiles/claude";
+
+/** 豁免判定：相对路径按正斜杠归一后匹配豁免目录前缀（拼写错会静默空扫，自检用例守住） */
+function isExemptRel(fileRel: string): boolean {
+  return fileRel.replace(/\\/g, "/").startsWith(EXEMPT_DIR_REL + "/");
+}
 
 /** 禁止作为字符串字面量出现的 claude 事件名（claude 协议知识专属 profiles/claude/） */
 const CLAUDE_EVENT_NAMES = new Set([
@@ -99,7 +112,9 @@ function decodeLiteral(raw: string): string {
  * - 跳过行注释（// 开头）与块注释（斜杠星号开头、星号斜杠结尾成对）——
  *   注释内字样不计（口径 1/2）
  * - 双引号/单引号字符串：转义序列原样保留后统一解码
- * - 模板字符串：含 ${}（表达式）的跳过——值非纯字面量，不检查
+ * - 模板字符串：含 ${}（表达式）不再整体跳过（CS-1）——提取表达式外的字面量
+ *   片段拼接成单值后参与判定（cl${''}aude 形态可命中）；表达式体按花括号配对
+ *   跳过，不识别表达式内嵌套模板/引号（极简词法器已知边界，保守方向，见口径 5）
  * - 正则字面量不识别：正则内引号包围字样会作为字符串提取（保守方向，见口径 5）
  */
 function extractStringLiterals(src: string): string[] {
@@ -127,16 +142,30 @@ function extractStringLiterals(src: string): string[] {
       out.push(decodeLiteral(raw));
       i = j + 1;
     } else if (c === "`") {
+      // 模板字符串：收集表达式外的字面量片段，拼接成单值后参与判定（CS-1）
       let j = i + 1;
+      const frags: string[] = [];
       let raw = "";
-      let hasExpr = false;
       while (j < n) {
         const ch = src[j];
         if (ch === "\\") { raw += ch + (src[j + 1] ?? ""); j += 2; }
         else if (ch === "`") break;
-        else { if (ch === "$" && src[j + 1] === "{") hasExpr = true; raw += ch; j++; }
+        else if (ch === "$" && src[j + 1] === "{") {
+          // 进入表达式：收尾当前字面量片段，按花括号配对跳过表达式体
+          frags.push(raw);
+          raw = "";
+          let depth = 1;
+          j += 2;
+          while (j < n && depth > 0) {
+            const c2 = src[j];
+            if (c2 === "{") depth++;
+            else if (c2 === "}") depth--;
+            j++;
+          }
+        } else { raw += ch; j++; }
       }
-      if (!hasExpr) out.push(decodeLiteral(raw));
+      frags.push(raw);
+      out.push(decodeLiteral(frags.join("")));
       i = j + 1;
     } else {
       i++;
@@ -160,13 +189,26 @@ function collectImportPaths(src: string): string[] {
   return paths;
 }
 
-/** 全量扫描：收集三类违规（七路径 × 全部 .ts/.tsx） */
+/** 单个字面量值的三类判定（claude 精确 / 10 事件名 / ~/.claude 路径），未命中返回 null */
+function classifyLiteral(value: string): Violation["kind"] | null {
+  if (value === "claude") return "claude-literal";
+  if (CLAUDE_EVENT_NAMES.has(value)) return "claude-event";
+  if (value.includes("~/.claude") || value.includes("~\\.claude")) return "claude-path";
+  return null;
+}
+
+/** 全量扫描：收集三类违规（八路径 × 全部 .ts/.tsx，豁免目录除外） */
 function scanViolations(): { violations: Violation[]; files: string[] } {
   const violations: Violation[] = [];
   const files: string[] = [];
   for (const rel of SCAN_DIRS) {
     const abs = resolve(repoRoot, rel);
-    files.push(...collectTsFiles(abs).map((f) => relative(repoRoot, f)));
+    // CS-2：目录级豁免 claude 合法领地（profiles/claude/）——不参与违规收集
+    files.push(
+      ...collectTsFiles(abs)
+        .map((f) => relative(repoRoot, f))
+        .filter((f) => !isExemptRel(f)),
+    );
   }
   for (const file of files) {
     const src = readFileSync(resolve(repoRoot, file), "utf8");
@@ -178,13 +220,8 @@ function scanViolations(): { violations: Violation[]; files: string[] } {
     );
     for (const value of extractStringLiterals(src)) {
       if (exemptPaths.has(value.replace(/\\/g, "/"))) continue; // 豁免 import 路径
-      if (value === "claude") {
-        violations.push({ file, value, kind: "claude-literal" });
-      } else if (CLAUDE_EVENT_NAMES.has(value)) {
-        violations.push({ file, value, kind: "claude-event" });
-      } else if (value.includes("~/.claude") || value.includes("~\\.claude")) {
-        violations.push({ file, value, kind: "claude-path" });
-      }
+      const kind = classifyLiteral(value);
+      if (kind) violations.push({ file, value, kind });
     }
   }
   return { violations, files };
@@ -195,7 +232,7 @@ function formatViolations(vs: Violation[]): string {
   return vs.map((v) => `${v.file}: ${v.kind} "${v.value}"`).join("\n");
 }
 
-describe("AC-5 字面量守卫（通用层七路径不出现 claude 字面量）", () => {
+describe("AC-5 字面量守卫（通用层八路径不出现 claude 字面量；profiles/claude 合法领地豁免）", () => {
   let violations: Violation[];
   let files: string[];
 
@@ -203,7 +240,7 @@ describe("AC-5 字面量守卫（通用层七路径不出现 claude 字面量）
     ({ violations, files } = scanViolations());
   });
 
-  it("扫描范围完整性：七路径均存在且枚举到 .ts(x) 文件（防路径拼写错致静默空扫）", () => {
+  it("扫描范围完整性：八路径均存在且枚举到 .ts(x) 文件（防路径拼写错致静默空扫）", () => {
     // relative() 在 Windows 返回反斜杠路径，统一归一正斜杠后比较前缀
     const normalized = files.map((f) => f.replace(/\\/g, "/"));
     for (const rel of SCAN_DIRS) {
@@ -225,5 +262,26 @@ describe("AC-5 字面量守卫（通用层七路径不出现 claude 字面量）
   it("无 '~/.claude' 路径字面量（含反斜杠变体）", () => {
     const vs = violations.filter((v) => v.kind === "claude-path");
     expect(vs, `通用层出现 ~/.claude 路径字面量：\n${formatViolations(vs)}`).toEqual([]);
+  });
+
+  it("CS-1 自检：含 ${} 的模板字符串按字面量片段拼接判定——`cl${''}aude` 拼出 'claude' 报违规", () => {
+    // 样例源码：模板拼接产出运行时值 "claude"（生产代码曾可用此形态绕过旧守卫）
+    const sample = 'const x = `cl${\'\'}aude`;';
+    const values = extractStringLiterals(sample);
+    expect(values).toContain("claude"); // 片段 cl + aude 拼接后命中精确匹配
+    expect(values.map((v) => classifyLiteral(v))).toContain("claude-literal");
+    // 反向锚点：表达式内容不混入字面量片段（`pre-${x}post` → "pre-post"，不误报）
+    expect(extractStringLiterals("const y = `pre-${x}post`;")).toEqual(["pre-post"]);
+    expect(classifyLiteral("pre-post")).toBeNull();
+  });
+
+  it("CS-2 自检：profiles/claude 目录存在且被目录级豁免（豁免路径拼写错会静默空扫）", () => {
+    // 存在性防线：豁免目录拼写错 → 不存在即暴露，claude 领地会被误扫
+    const exemptDirAbs = resolve(repoRoot, EXEMPT_DIR_REL);
+    expect(existsSync(exemptDirAbs), `豁免目录不存在：${EXEMPT_DIR_REL}`).toBe(true);
+    // 非空豁免防线：该目录确有 .ts/.tsx 被枚举到（否则豁免形同虚设）
+    expect(collectTsFiles(exemptDirAbs).length).toBeGreaterThan(0);
+    // 豁免生效防线：该目录下样例路径不参与违规收集（files 即实际扫描集）
+    expect(files.some((f) => isExemptRel(f))).toBe(false);
   });
 });

@@ -146,9 +146,10 @@ if (fs.existsSync(fixturesDir)) {
   console.log(`[wdio-launcher] SLTERM_CLAUDE_PROJECTS_DIR=${tmpProjectsDir}`);
   console.log(`[wdio-launcher] SLTERM_E2E_PROJECT_DIR=${e2eProjectDir}`);
 } else {
-  // fixtures 缺失（异常路径）：不设 env——后端回落真实 ~/.claude/projects（生产默认）；
-  // 历史会话用例会失败，属显式信号而非静默污染真实数据
-  console.warn('[wdio-launcher] fixtures/claude-projects 不存在，跳过 SLTERM_CLAUDE_PROJECTS_DIR 注入');
+  // fixtures 缺失（AQ-4）：E2E 终止而非降级——不设 env 会令后端回落真实
+  // ~/.claude/projects（生产默认），历史会话用例有触碰真实用户目录风险
+  console.error('[wdio-launcher] fixtures/claude-projects 缺失，E2E 终止——防止回落真实 ~/.claude/projects');
+  process.exit(1);
 }
 
 const major = parseInt(process.version.slice(1).split('.')[0], 10);

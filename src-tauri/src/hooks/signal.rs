@@ -13,6 +13,10 @@ use std::fs;
 use std::path::Path;
 use tauri::Emitter;
 
+/// 信号文件大小上限（AQ-2）：读取前 metadata 判定，超限直接删除不解析，
+/// 防异常/恶意巨大文件拖垮 watcher 线程。
+const MAX_SIGNAL_FILE_BYTES: u64 = 1024 * 1024;
+
 /// Agent 事件载荷（跨边界契约：8 字段 + 可选 cliId，camelCase 序列化）
 ///
 /// PartialEq 供 serde 往返精确断言测试使用（HUK-09）。
@@ -63,12 +67,27 @@ pub fn process_signal_file(app_handle: &tauri::AppHandle, path: &Path) {
 
 /// 可测试核心：读取 → 解析 → emit（注入闭包）→ 删除
 ///
-/// 读失败、解析失败、缺 panelId 均 tracing::warn! 并仍尝试删除文件，绝不 panic。
+/// 读失败、超限、解析失败、缺 panelId 均 tracing::warn! 并仍尝试删除文件，绝不 panic。
 /// emit 闭包返回 Err 时仅 warn，文件同样继续删除。
 pub(crate) fn process_signal_file_with(
     path: &Path,
     emit: impl Fn(&AgentEventPayload) -> Result<(), tauri::Error>,
 ) {
+    // AQ-2：读取前大小限制——超限 warn + 删除后返回（与「解析失败仍删」容错语义一致）；
+    // metadata 失败（如文件已消失）→ 走下方既有读失败分支。
+    if let Ok(meta) = fs::metadata(path) {
+        if meta.len() > MAX_SIGNAL_FILE_BYTES {
+            tracing::warn!(
+                "信号文件超限（{} 字节 > 上限 {} 字节）: {}",
+                meta.len(),
+                MAX_SIGNAL_FILE_BYTES,
+                path.display()
+            );
+            let _ = fs::remove_file(path);
+            return;
+        }
+    }
+
     let content = match fs::read_to_string(path) {
         Ok(c) => c,
         Err(e) => {
@@ -341,5 +360,27 @@ mod tests {
         let missing = dir.path().join("missing.json"); // 文件不存在——读失败分支
         process_signal_file_with(&missing, |_| Ok(())); // 不 panic
         assert!(!missing.exists());
+    }
+
+    /// AQ-2 超限防护：>1MB 信号文件 → emit 闭包零调用 + 文件已删除
+    #[test]
+    fn process_oversized_signal_skips_emit_and_deletes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("oversized.json");
+        // 构造超过上限（1MB + 1 字节）的文件
+        std::fs::write(&path, vec![b'x'; MAX_SIGNAL_FILE_BYTES as usize + 1]).unwrap();
+
+        let emitted = std::sync::atomic::AtomicUsize::new(0);
+        process_signal_file_with(&path, |_| {
+            emitted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        });
+
+        assert_eq!(
+            emitted.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "超限文件不应触发 emit"
+        );
+        assert!(!path.exists(), "超限文件应被删除");
     }
 }

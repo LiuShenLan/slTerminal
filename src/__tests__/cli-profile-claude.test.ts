@@ -11,7 +11,8 @@
 // 五映射表驱动（NAH-03 语义）迁自 notifications.test.ts 纯函数层。
 // history 策略用例（Stage 05）：buildResumeCommand/buildRestoreInput 输出与
 // 迁出源（historyContextMenu.ts / restoreSession.ts）逐字一致——断言漂移即
-// 实现有误（E2E history.e2e 恢复编排用例零改动通过）。
+// 实现有误（E2E history.e2e 恢复编排用例零改动通过）；差异点 = cwd 单引号按
+// PowerShell 规则转义为 ''（AQ-1 修复，见 buildResumeCommand 回归用例）。
 // logo 资源守卫（MC-108）已移至 cli-profile-registry.test.ts（遍历注册表全部
 // profile 断言 iconSrc 磁盘存在 + PNG 魔数——img 404 无报错通道，资源缺失靠此
 // 守卫；含 mockcli.png 先行资源，决策 5，Stage 07 mock 夹具引用）。
@@ -384,7 +385,9 @@ describe("classifyNotification 五映射表驱动（NAH-03 语义迁入）", () 
 // history 策略 — buildResumeCommand / buildRestoreInput（MC-315/316 迁入）
 // ═══════════════════════════════════════════════════════════════════
 // 输出断言与迁出源（historyContextMenu.ts buildResumeCommand /
-// restoreSession.ts:137-139 字面量）逐字一致，断言漂移即实现有误。
+// restoreSession.ts:137-139 字面量）逐字一致，断言漂移即实现有误；差异点 =
+// cwd 单引号按 PowerShell 规则转义为 ''（AQ-1 修复，buildResumeCommand 专用，
+// buildRestoreInput 不含 cwd 不受影响）。
 
 /** 构造最小 AgentHistorySession（缺省字段占位，cwd 由用例指定） */
 function makeSession(partial: Partial<AgentHistorySession>): AgentHistorySession {
@@ -401,7 +404,7 @@ function makeSession(partial: Partial<AgentHistorySession>): AgentHistorySession
   };
 }
 
-describe("buildResumeCommand（MC-316 迁入，行为零改动）", () => {
+describe("buildResumeCommand（MC-316 迁入 + AQ-1 cwd 单引号转义）", () => {
   it("有 cwd → `cd '<cwd>' && claude --resume <id>`（单引号路径）", () => {
     expect(
       buildResumeCommand(makeSession({ sessionId: "abc", cwd: "D:\\proj" })),
@@ -414,12 +417,21 @@ describe("buildResumeCommand（MC-316 迁入，行为零改动）", () => {
     );
   });
 
-  it("输出与迁出源 historyContextMenu.buildResumeCommand 逐字一致（含 sessionId 原样透传）", () => {
+  it("cwd 无单引号：与迁出源 historyContextMenu.buildResumeCommand 模板逐字一致（含 sessionId 原样透传）", () => {
     const session = makeSession({ sessionId: "uuid-123", cwd: "C:/work/x" });
     // 与迁出源模板逐字比对：`cd '${cwd}' && claude --resume ${sessionId}`
+    // AQ-1 修复后唯一差异点：cwd 单引号转义为 ''（此处 cwd 无单引号，与迁出源一致）
     expect(buildResumeCommand(session)).toBe(
-      `cd '${session.cwd}' && claude --resume ${session.sessionId}`,
+      `cd '${session.cwd!.replace(/'/g, "''")}' && claude --resume ${session.sessionId}`,
     );
+  });
+
+  it("cwd 含单引号 → 按 PowerShell 规则转义为 ''（AQ-1 回归：C:\\Bob's Project）", () => {
+    expect(
+      buildResumeCommand(
+        makeSession({ sessionId: "abc", cwd: "C:\\Bob's Project" }),
+      ),
+    ).toBe("cd 'C:\\Bob''s Project' && claude --resume abc");
   });
 });
 
