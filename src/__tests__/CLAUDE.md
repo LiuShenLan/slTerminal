@@ -82,9 +82,9 @@ Stage 01–07（`docs/multi-cli/checklist.md`）产生的测试文件更名/合�
 
 | 文件 | 覆盖 |
 |------|------|
-| `mock-cli-profile.test.tsx` | AC-4 五点全表 L2 用例：① OSC 133 命中页签标题/logo/agentSession.cliId ② eventToStatus/classifyNotification 被真实调用（spy 入参）③ 历史聚合条目 + 行 logo ④ hub 选择行两枚按钮 + 切换 + selectedCli 持久化 ⑤ 恢复注入 = mock 策略输出 |
+| `mock-cli-profile.test.tsx` | AC-4 五点全表 L2 用例：① OSC 133 命中页签标题/logo/agentSession.cliId ② eventToStatus/classifyNotification 被真实调用（spy 入参）③ 历史聚合条目 + 行 logo ④ hub 选择行两枚按钮 + 切换 + selectedCli 持久化 + **双向分派断言（KZ-7）**：选中 mockcli → 桩编辑器标记（data-e2e="mockcli-config-editor"）渲染 + JsonMode 零调用；选中 claude → JsonMode 被调用 + 桩标记不存在（含 claude 保存透传）⑤ 恢复注入 = mock 策略输出 |
 | `no-claude-literals.test.ts` | AC-5 字面量守卫（L2 grep 形态）：fs 递归枚举通用层八路径（src/lib、src/panels/terminal、src/features/agentStatus、src/features/agentHistory、src/features/notifications、src/ipc、src/types、src/features/cliProfiles）扫描 .ts/.tsx——零 "claude" 字符串字面量/claude 事件名/`~/.claude` 路径；豁免形态 = `profiles/claude/` 导出常量 import 引用（CLAUDE_CLI_ID/SESSION_END_EVENT/EXIT_EVENT）+ **目录级豁免 `src/features/cliProfiles/profiles/claude/` 整目录（CS-2）**；含 `${}` 的模板字符串按字面量片段拼接后参与判定（CS-1，`cl${''}aude` 自检用例）；新增文件自动纳入 |
-| `helpers/mockCliProfile.ts` | mockcli 测试夹具（AC-4 契约，决策 5）：`mockCliProfile` 定义（hooks/history 全能力桩）+ `registerMockCliProfile`（claude 基线缺失时补注册）/ `resetCliProfileRegistry`（afterEach `_reset` + 恢复 claude 基线）+ `MOCK_CLI_RESTART_HINT` 桩文案；生产代码零引用 |
+| `helpers/mockCliProfile.ts` | mockcli 测试夹具（AC-4 契约，决策 5）：`mockCliProfile` 定义（hooks/history 全能力桩，含 **KZ-7 configEditor 桩组件**——渲染 data-e2e="mockcli-config-editor"、props 签名 = HooksConfigEditorProps + **configLayers 单层桩声明** hint "mock" 区别于 claude 三层）+ `registerMockCliProfile`（claude 基线缺失时补注册）/ `resetCliProfileRegistry`（afterEach `_reset` + 恢复 claude 基线）+ `MOCK_CLI_RESTART_HINT` 桩文案；生产代码零引用 |
 
 ## 共享测试工厂（helpers/ + testMocks/ + setup.ts）
 

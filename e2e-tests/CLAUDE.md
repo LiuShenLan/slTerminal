@@ -34,12 +34,12 @@ npm run wdio          # → node ./e2e-tests/run-wdio.cjs
 | `hooks.e2e.ts` | hooks spec（5 条 active）：注入/卸载/状态三态、信号文件驱动页签 emoji、**真实 hook reporter 链路（E2E-06：node 执行脚本 + stdin JSON + SLTERM_PANEL_ID → 信号文件产生/消费 + 非法 JSON exit 0 的 C10 守卫）**、hooksConfig project 层保存写盘 + merge 保留其他字段、**hub 注入按钮三态（Stage 06 D-14 段：hub 注入/卸载按钮 → 状态条流转并恢复；cliId 实参 = hub 选中态，E2E 构建仅 claude 一个 hasConfigEditor CLI）** |
 | `agent.e2e.ts` | Agent 状态 spec（6 active + 1 skip）：视图存在性、纯 shell 终端无行、动态四态（agent-event 信号即建行→⚡→✅→行消失）、R2/R3/R4 变体、toast 触发链路（skip，权限弹窗需用户交互） |
 | `history.e2e.ts` | 历史会话 spec（8 条 active）：fixture 6 行展示 + 排除规则、标题回退链、搜索过滤、复制恢复命令（剪贴板断言，`buildResumeCommand` 输出 = `cd '<cwd>' && claude --resume <id>`）、孤儿行 ✗、删除（ask 钩子 + 副本删除）、历史区四态同源、**恢复编排（部分端到端：断言到 pty.write 注入 `profile.history.buildRestoreInput` 输出，不含真实进入会话）** |
-| `mockcli.e2e.ts` | mock profile 冒烟 spec（1 条 active，Stage 07 AC-4 ① 的 L4 侧）：`__slterm_e2e_registerMockCliProfile` 注册 mock 夹具 → OSC 133 C 注入（`__e2e_writeToTerminal` 走真实 parser + useCommandDetection → matchByCommand 命中 mockcli）→ 页签标题 "mockcli"（profile.tabTitle）+ 16×16 logo（profile.iconSrc）+ 🟡 attention → OSC 133 D 退出恢复（标题还原 + logo/图标双清）。按 `data-panel-id` 精确定位面板（app 恢复用户布局多终端，防全局首匹配错位） |
+| `mockcli.e2e.ts` | mock profile spec（3 条 active：Stage 07 AC-4 ① 冒烟 + Stage 05 review-fix CS-3 两条关键路径）：冒烟 = `__slterm_e2e_registerMockCliProfile` 注册 mock 夹具 → OSC 133 C 注入（`__e2e_writeToTerminal` 走真实 parser + useCommandDetection → matchByCommand 命中 mockcli）→ 页签标题 "mockcli"（profile.tabTitle）+ 16×16 logo（profile.iconSrc）+ 🟡 attention → OSC 133 D 退出恢复（标题还原 + logo/图标双清）；**CS-3 ① agent-event 注入 = Node 侧原子写信号文件（cliId="mockcli" 显式，9 字段契约）→ 页签 ⚡ + Agent Status 活跃区建行（真实 watcher → agent-event → resolvePayloadCliId 三级解析 → 桩策略全链）**；**CS-3 ② hub 分派/保存透传 = hooksConfig 选择行 mockcli 按钮（`data-e2e="hooks-cli-mockcli"`）→ 点击渲染桩编辑器（`data-e2e="mockcli-config-editor"`）→ 桩保存触发真实 `writeHooksConfig("mockcli", ...)` → 后端「未知 cliId: mockcli」错误透传展示**。按 `data-panel-id` 精确定位面板（app 恢复用户布局多终端，防全局首匹配错位） |
 | `specUtils.ts` | spec 共享工具（Node 侧，E2E-09）：Workspace/Dockview 就绪等待、项目/终端创建、PTY session 等待、hooks 注入（泛化命令 `agent_hooks_*` 六命令全表，一律经 window helper 调用、spec 侧无命令名字面量）、信号文件原子写与消费等待、页签 emoji 参数断言（`waitForPanelTabIcon`，F3 四态）、页面切换等待（waitUntil 替代 pause，E2E-10）、共享 setup `withProjectAndTerminal`。**与应用侧 `helpers.ts` 相互独立，二者禁止互相 import** |
 | `gitScaffold.ts` | git 仓库脚手架（Node 侧）：`makeGitRepo` 按场景描述初始化真实 git 仓库（init/commit/modified/untracked），tempdir 隔离，execSync 调系统 git CLI |
 | `fixtures/claude-projects/` | agent_history claude provider 的扫描 fixture（`SLTERM_CLAUDE_PROJECTS_DIR` env 覆盖指向的副本，env 覆盖留 provider 内部）：7 形态会话文件（custom-title/ai-title/prompt 回退/无 cwd/孤儿/agent-* 平铺/subagents 子目录）+ **README.md（E2E-13③）说明编码目录名/UUID 与 agent_history claude provider 排除规则的同步关系** |
 | `run-wdio.cjs` | Node 版本兼容启动器 + 用户目录隔离备份/还原（见下节） |
-| `helpers.ts` | 应用侧 E2E 辅助（`installAllE2eHelpers()` 统一注入 window 全局对象，见通信方式表；含 `__slterm_e2e_registerMockCliProfile`——mockcli 测试 profile 注册入口，Stage 07 AC-4） |
+| `helpers.ts` | 应用侧 E2E 辅助（`installAllE2eHelpers()` 统一注入 window 全局对象，见通信方式表；含 `__slterm_e2e_registerMockCliProfile`——mockcli 测试 profile 注册入口，Stage 07 AC-4；mockcli 定义含 **configEditor 桩**（CS-3：React.createElement 构造——.ts 无 JSX，`data-e2e="mockcli-config-editor"` 标记与 L2 桩同口径 + 保存按钮触发真实 `writeHooksConfig("mockcli", ...)`，错误展示于 `data-e2e="mockcli-config-error"`）+ **configLayers 桩**（单层 user）） |
 
 ## 配置要点
 
@@ -76,7 +76,7 @@ E2E helpers 通过 `main.tsx` 中 `E2E_ENABLED`（`src/lib/e2eEnabled.ts`）条�
 | `__slterm_e2e_toggleSideView(id)` | 等价点击活动栏按钮，走 `store.toggleView(id)`（委托 `toggleViewPure`） |
 | `__slterm_e2e_moveSideViewButton(id, zone, index)` | 等价拖拽落点，走 `store.moveButton(id, zone, index)`（委托 `moveButtonPure`）。zone 为 `"top"` 或 `"bottom"` |
 | `__slterm_e2e_injectHooks` / `__slterm_e2e_uninstallHooks` / `__slterm_e2e_getHookInjectionStatus` | hooks 注入/卸载/状态三态。底层泛化命令 `agent_hooks_inject` / `agent_hooks_uninstall` / `agent_hooks_injection_status`（六命令全表），**cliId 实参固定 "claude"**——E2E 辅助属测试基建，字面量合法；随第二 CLI 接入再扩展 cliId 参数 |
-| `__slterm_e2e_registerMockCliProfile` | mockcli 测试 profile 注册（Stage 07 AC-4）：mock 夹具 profile 进 `CliProfileRegistry`（register 幂等，同 id 覆盖）；仅 E2E_ENABLED 构建存在，生产构建整块 tree-shake |
+| `__slterm_e2e_registerMockCliProfile` | mockcli 测试 profile 注册（Stage 07 AC-4）：mock 夹具 profile 进 `CliProfileRegistry`（register 幂等，同 id 覆盖）；hooks 全能力含 **configEditor 桩**（CS-3：`data-e2e="mockcli-config-editor"` 标记 + 保存按钮触发真实 `writeHooksConfig("mockcli", ...)`——mockcli 无后端 provider，错误透传即 cliId 全链携带证据）+ **configLayers 桩**（单层 user）；仅 E2E_ENABLED 构建存在，生产构建整块 tree-shake |
 | `__dockviewApi` | Dockview 布局 API（`addPanel` 等） |
 | `__e2e_sessionReady` | PTY session 就绪标志（挂载在终端容器 DOM 元素上，非 window 全局） |
 | `__e2e_writeToPty(text)` | 向 PTY 写入文本（挂载在终端容器 DOM 元素上） |

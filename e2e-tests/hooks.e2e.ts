@@ -336,12 +336,18 @@ describe("hooks 配置面板保存链路 (P3-TE-18)", () => {
       // 4b. hub 选择行断言（D-14 Stage 06 段）：选择行位于编辑器上方（编辑器下移一层后的
       //     hub 结构）；单 CLI 也渲染选择行（边界 1，防布局跳动）——claude logo
       //     （iconSrc 16×16）+ displayName 文本。选择行无 data-e2e 契约，按 claude
-      //     品牌 logo img 定位：E2E 构建仅 claude 注册（mockcli 属 Stage 07 经 E2E
-      //     helper 注册），本流程无终端会话页签 logo，全页唯一。
+      //     品牌 logo img 定位；E2E 构建仅 claude 注册（mockcli 属 Stage 07 经 E2E
+      //     helper 注册）。img 查询限定面板容器作用域（3b 开前关闭已保证面板唯一）：
+      //     终端页签 logo 残留（history spec 恢复编排——双击历史行 → 创建终端 +
+      //     pty.write 注入 claude --resume 命令 → useCommandDetection 命中 → 终端
+      //     页签渲染 claude 16×16 logo；页面多 Dockview 实例 + CSS 显隐，隐藏页面板
+      //     不卸载仍留 DOM）不在面板容器内，全页计数会被污染（Stage 03 fix-loop 仅
+      //     覆盖 hooksConfig 面板残留来源，未覆盖终端页签 logo 来源）。
       const hubRow = await browser.execute(() => {
-        const imgs = Array.from(
-          document.querySelectorAll<HTMLImageElement>('img[src="/cli-icons/claude.png"]'),
-        );
+        const panel = document.querySelector('[data-e2e="hooks-config-panel"]');
+        const imgs = panel
+          ? Array.from(panel.querySelectorAll<HTMLImageElement>('img[src="/cli-icons/claude.png"]'))
+          : [];
         const buttons = imgs
           .map((img) => img.closest("button"))
           .filter((b): b is HTMLButtonElement => b !== null);

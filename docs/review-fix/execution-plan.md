@@ -79,7 +79,7 @@ docs/
 | 01 | 已验证 | 16a767a | true | 0（主 agent 直补 test-inventory + 全量 npm test 复跑排除 flaky + inline verify 复查） | diff-panel 2 例瞬时 flaky（并行负载致 waitFor 超时），复跑 2411/2411 全绿排除 |
 | 02 | 已验证 | bed433d | true | 0（一次通过） | — |
 | 03 | 已验证 | a612fc0 | true | 1（hooks.e2e.ts :258 it 测试健壮性修复：rowAboveEditor 定位 bug + 面板残留；L4 9/9 转绿） | L4 修复后全绿 |
-| 04 | 待跑 | | | | |
+| 04 | 已验证 | ef0ae64 | true | 1（vitest.l3.config.ts 补 codemirror-json-schema inline——L3 suite 加载失败；spawn.rs 断言大小写不敏感） | AC-4④ 3 例中间态由 Stage 05 消除；L1 597 全绿 |
 | 05 | 待跑 | | | | |
 | 06 | 待跑 | | | | |
 

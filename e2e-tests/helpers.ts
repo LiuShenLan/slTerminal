@@ -8,11 +8,13 @@
  * - __e2e_*       — 终端容器 DOM 元素 helper（随面板挂载/卸载）
  */
 
+import React from "react";
 import { EditorView } from "@codemirror/view";
 import { agentHooks } from "../src/ipc";
 import type { AgentHookInjectionStatus } from "../src/ipc/agentHooks";
 import { writeText } from "../src/ipc/clipboard";
 import { setProjectRoot } from "../src/ipc/fs";
+import { writeHooksConfig } from "../src/ipc/hooksConfig";
 import { getShortcutRegistry } from "../src/features/shortcuts";
 import { useProjects, createProjectId, createPageId } from "../src/stores/projects";
 import type { OperationPage, Project } from "../src/stores/projects";
@@ -22,7 +24,7 @@ import { titleManager } from "../src/workspace/titleManager";
 import { switchToPageShared } from "../src/workspace/pageApis";
 import { useSideBar } from "../src/stores/sideBar";
 import { cliProfileRegistry } from "../src/features/cliProfiles";
-import type { CodingCliProfile } from "../src/features/cliProfiles/types";
+import type { CodingCliProfile, HooksConfigEditorProps } from "../src/features/cliProfiles/types";
 
 // ── Window 全局类型扩展 ──
 
@@ -333,6 +335,67 @@ function installHooksConfigHelpers(): void {
 }
 
 /**
+ * mockcli 桩编辑器（CS-3）：mockcli 定义 configEditor 字段挂载点。
+ *
+ * helpers.ts 为 .ts 无 JSX——用 React.createElement 构造；渲染
+ * data-e2e="mockcli-config-editor" 标记（与 L2 桩 mockCliProfile.ts 同标记口径，KZ-7）。
+ * 保存按钮触发真实 writeHooksConfig("mockcli", ...)——mockcli 无后端 provider，
+ * invoke 必被后端拒绝（Validation「未知 cliId: mockcli」），错误经 setState 展示于
+ * data-e2e="mockcli-config-error"（mockcli.e2e.ts 用例 ② 的 cliId 全链携带证据）。
+ */
+function MockCliConfigEditor(
+  _props: HooksConfigEditorProps,
+): React.ReactElement | null {
+  // 桩不消费 props（无 dirty/守卫语义），显式引用规避 no-unused-vars
+  void _props;
+  const [error, setError] = React.useState<string | null>(null);
+  const [saving, setSaving] = React.useState(false);
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await writeHooksConfig("mockcli", "user", { mock: true });
+      setError(null);
+    } catch (err) {
+      // Tauri 2 命令错误经 serde 外部标记序列化（AppError enum → { "<camelCase 变体>": "文案" }，
+      // 如 { validation: "未知 cliId: mockcli" }）——非 Error 实例且无 message 键，String(err)
+      // 只得 "[object Object]"；递归取首个字符串字段值作文案（IoKind 形态
+      // { ioKind: { kind, message } } 内部优先 message 键）
+      const extractErrorText = (v: unknown): string | null => {
+        if (typeof v === "string") return v;
+        if (typeof v !== "object" || v === null) return null;
+        const o = v as Record<string, unknown>;
+        if (typeof o.message === "string") return o.message;
+        for (const val of Object.values(o)) {
+          const text = extractErrorText(val);
+          if (text !== null) return text;
+        }
+        return null;
+      };
+      setError(err instanceof Error ? err.message : extractErrorText(err) ?? String(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+  return React.createElement(
+    "div",
+    { "data-e2e": "mockcli-config-editor" },
+    React.createElement(
+      "button",
+      {
+        type: "button",
+        "data-e2e": "mockcli-config-save",
+        disabled: saving,
+        onClick: handleSave,
+      },
+      "保存（mockcli 桩）",
+    ),
+    error === null
+      ? null
+      : React.createElement("div", { "data-e2e": "mockcli-config-error" }, error),
+  );
+}
+
+/**
  * __slterm_e2e_registerMockCliProfile（Stage 07 AC-4：mock profile 的 L4 注册入口）
  *
  * mockcli 是测试夹具而非真实 CLI（spec 06 §7 约定）：id/displayName/commands/
@@ -359,6 +422,12 @@ function installMockCliProfile(): void {
         contextLimit: 1_000_000,
         restartHint: "mockcli 桩提示：hooks 改动需重启 mockcli 会话生效",
         hasConfigEditor: true,
+        // CS-3：桩编辑器（React.createElement 构造——helpers.ts 为 .ts 无 JSX；
+        // data-e2e="mockcli-config-editor" 标记与 L2 桩同口径；保存动作经真实
+        // writeHooksConfig 携带 mockcli cliId——用例 ② 的 cliId 透传断言）
+        configEditor: MockCliConfigEditor,
+        // CS-3：桩声明单层（值集由 profile 自声明——mockcli 仅 user 层可写）
+        configLayers: [{ id: "user", label: "User", hint: "mockcli 桩单层（user）" }],
       },
       history: {
         supportsFork: true,
