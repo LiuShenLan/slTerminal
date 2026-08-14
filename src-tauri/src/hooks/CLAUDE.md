@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 模块职责
 
-hooks 模块——CLI 泛化 hook 宿主侧能力层（Stage 03，MC-201~215）：信号文件通道（接收 + 解析 + 广播）、`CliHooksProvider` trait + cliId 键注册表、claude provider 下沉（注入/卸载/状态查询/transcript token 用量/三层配置读写）、6 条泛化 Tauri 命令。
+hooks 模块——CLI 泛化 hook 宿主侧能力层（Stage 03，MC-201~215）：信号文件通道（接收 + 解析 + 广播）、`CliHooksProvider` trait + cliId 键注册表、claude provider 下沉（注入/卸载/状态查询/statusline 桥接/三层配置读写）、6 条泛化 Tauri 命令。
 
 核心数据流：
 
@@ -14,6 +14,16 @@ claude 子进程 hook 触发
   → HookSignalWatcher（notify+轮询双通道：notify NonRecursive 50ms debounce 实时 + 3s 轮询补漏）
   → process_signal_file（读 → parse → emit("agent-event") → 删文件）
   → 前端 onAgentEvent 回调 → profile.hooks.eventToStatus → 页签 emoji 更新
+```
+
+context 官方用量百分比通道（statusline 桥接，原 transcript token 链路已退役）：
+
+```
+claude statusline 渲染（~300ms 一次）
+  → slterm-statusline.js（桥接脚本）读 stdin statusline JSON → used_percentage 提取
+  → 节流（取整无变化不写 + ≥1s，状态文件跨进程共享）→ 写 ContextUsage 信号文件
+  → 现有 watcher 双通道 → agent-event（usedPercentage 可选字段）
+  → 前端 useAgentStatus ContextUsage 分支 → 行 usage 更新 → profile.computeUsagePercent 渲染
 ```
 
 ### notify+轮询双通道（win10 实证修复）
@@ -33,21 +43,33 @@ pub trait CliHooksProvider: Send + Sync + std::fmt::Debug {
     fn inject(&self) -> Result<AgentHookInjectionStatus, AppError>;
     fn uninstall(&self) -> Result<(), AppError>;
     fn injection_status(&self) -> Result<AgentHookInjectionStatus, AppError>;
-    fn context_usage(&self, usage_source_path: &str) -> Result<Option<ContextUsage>, AppError>; // 路径语义由具体 CLI 解释（claude = transcript JSONL）
+    fn restore_statusline(&self) -> Result<(), AppError>; // 关闭清理：桥接 → 还原备份（备份保留）
+    fn reinject_statusline(&self) -> Result<(), AppError>; // 启动重注入：备份+原配置 → 重新注入桥接
     fn config_read(&self, layer: &str, project_path: Option<&str>, project_root: &Option<PathBuf>) -> Result<Value, AppError>;
     fn config_write(&self, layer: &str, hooks: Value, project_path: Option<&str>, project_root: &Option<PathBuf>) -> Result<(), AppError>;
 }
 ```
 
-注册表 = cliId 键静态映射（`REGISTRY`，条目为 `Option<&dyn CliHooksProvider>`——`None` 表示已注册但无 hooks 能力，预留分支）；`resolve_provider`/`lookup_provider` 是命令层分发唯一入口。错误语义（MC-211）：未知 cliId → `Validation("未知 cliId: ...")`；已注册但无 hooks 能力 → `Validation`（消息含「不支持 hooks 能力」语义，本期注册表仅 claude，走不到第二分支，但分支与测试已建好）。实现均为同步阻塞（含 IO），命令层经 `spawn_blocking` 串行化（硬约束 #3）。
+注册表 = cliId 键静态映射（`REGISTRY`，条目为 `Option<&dyn CliHooksProvider>`——`None` 表示已注册但无 hooks 能力，预留分支）；`resolve_provider`/`lookup_provider` 是命令层分发唯一入口。错误语义（MC-211）：未知 cliId → `Validation("未知 cliId: ...")`；已注册但无 hooks 能力 → `Validation`（消息含「不支持 hooks 能力」语义，本期注册表仅 claude，走不到第二分支，但分支与测试已建好）。实现均为同步阻塞（含 IO），命令层经 `spawn_blocking` 串行化（硬约束 #3）。原 `context_usage` 方法（transcript token 扫描）已随官方百分比口径退役删除（七方法现行）。
 
 ### claude provider 下沉（MC-213：provider 内部是 claude 合法领地）
 
-`hooks/claude/` 承载 claude hooks 全部实现（`inject.rs`/`usage.rs`/`config.rs` 整体下沉，行为零改动）：provider 内部保留全部 claude 命名与 claude 知识——`HOOK_EVENTS` 10 事件、`~/.claude/settings.json`、matcher 结构、`SCRIPT_VERSION` 检测、reporter 模板、三层配置路径。`ClaudeHooksProvider`（单元结构，静态注册表条目）实现 trait 六方法，home 解析统一走 `home_dir()`（测试经 `HomeDirGuard` 注入覆盖，L1 隔离纪律）。
+`hooks/claude/` 承载 claude hooks 全部实现（`inject.rs`/`config.rs` 下沉 + `slterm-hook-reporter.js`/`slterm-statusline.js` 资产；原 `usage.rs` 随 transcript 链路退役删除）：provider 内部保留全部 claude 命名与 claude 知识——`HOOK_EVENTS` 10 事件、`~/.claude/settings.json`、matcher 结构、`SCRIPT_VERSION` 检测、reporter/桥接脚本模板、statusline 协议（`context_window.used_percentage`）、三层配置路径。`ClaudeHooksProvider`（单元结构，静态注册表条目）实现 trait 七方法，home 解析统一走 `home_dir()`（测试经 `HomeDirGuard` 注入覆盖，L1 隔离纪律）。
 
 ### reporter 归 claude provider 资产（决策 7，MC-215）
 
-`slterm-hook-reporter.js` 由 `../../assets/` 迁入 `hooks/claude/`，随 claude provider 归属（`include_str!` 编译期嵌入）。**决策 7**：payload 显式写 `cliId: "claude"`；`SCRIPT_VERSION` 递增——**已注入用户升级后显示「版本过旧」（Outdated）需重新注入**，预期波及，测试锁死此形态。注入目标路径 `~/.slterminal/hooks/slterm-hook-reporter.js` 不变（E2E 零波及）。C10 契约（任何路径 exit 0、不写 stderr）不改，E2E-06 链路不削弱。
+`slterm-hook-reporter.js` 由 `../../assets/` 迁入 `hooks/claude/`，随 claude provider 归属（`include_str!` 编译期嵌入）。**决策 7**：payload 显式写 `cliId: "claude"`；`SCRIPT_VERSION` 递增——**已注入用户升级后显示「版本过旧」（Outdated）需重新注入**，预期波及，测试锁死此形态。注入目标路径 `~/.slterminal/hooks/slterm-hook-reporter.js` 不变（E2E 零波及）。C10 契约（任何路径 exit 0、不写 stderr）不改，E2E-06 链路不削弱。`SCRIPT_VERSION=4`（statusline 桥接引入——已注入用户须重注入装上桥接）。
+
+### statusline 桥接（context 官方用量百分比通道，原 transcript 链路退役）
+
+`slterm-statusline.js` 同驻 `hooks/claude/`（`include_str!` 嵌入，`STATUSLINE_SCRIPT_TEMPLATE`），随 inject 一并落盘 `~/.slterminal/hooks/slterm-statusline.js`。**数据源动机**：transcript 无官方窗口总量字段、hook stdin 无 context 字段（官方 issue #32406/#49226）——官方 `context_window.used_percentage` 仅存在于 statusline stdin JSON，故注入 `statusLine` 键桥接（官方建议做法）。
+
+- **脚本行为**：读 stdin statusline JSON → `context_window.used_percentage` 数字校验 → 节流（`Math.round` 与上次相同不写 AND 距上次 ≥1s，节流状态文件 `~/.slterminal/hooks/statusline-state.json` 跨进程共享）→ 原子写 ContextUsage 信号文件（hooks-events 目录，payload = `{panelId, cliId:"claude", event:"ContextUsage", timestamp, sessionId, cwd, usedPercentage}`——复用瞬态信号通道，读→emit→删语义不变）→ **包裹透传**：argv[2] 为用户原 statusline 命令（~ 展开 + .sh 经 bash、其余经系统 shell），stdin/stdout 透传、执行失败静默降级。C10 契约不变（任何路径 exit 0、不写 stderr）
+- **注入**：`inject_impl` 写桥接脚本 + settings.json 写 `statusLine` 键（`{type:"command", command:"node \"<桥接脚本>\" \"<原命令>\""}`）；原 statusLine 备份到 `~/.slterminal/statusline-backup.json`（原配置缺失/已为桥接 → 不备份；无原配置 → 桥接仍注入、原命令空）
+- **关闭恢复**（`restore_statusline_impl`，命令 `agent_hooks_restore_statusline`，前端 App.tsx 关闭序列调用）：当前为桥接 → 还原备份（备份**保留**供重开重注入）；无备份 → 移除键；非桥接/非法 JSON → 静默跳过（关闭链路尽力而为）
+- **启动重注入**（`reinject_statusline_impl`，lib.rs `.setup()` 调 `reinject_statusline_on_startup` 遍历注册表）：备份存在 + 当前 statusLine 等于备份原配置 → 重新注入桥接；无备份 / 已是桥接 / 用户已改过 / 脚本缺失 → 跳过（尊重用户现状）
+- **卸载**：桥接 → 还原备份（备份缺失 → 移除键），删备份文件；hooks matcher 关闭/卸载语义不变（C3 契约：其他终端 hook 触发 SLTERM_PANEL_ID 缺失 → 静默退出）
+- **状态三态扩展**：matcher + 版本一致 + statusLine 为桥接 → Injected；matcher 在但 statusLine 非桥接（关闭还原后未重注入）→ Outdated
 
 ### SLTERM_PANEL_ID 环境变量路由
 
@@ -121,25 +143,25 @@ project/local 层入参经 `validate_path_within_root` 沙箱校验：project_pa
 
 | 文件 | 职责 |
 |------|------|
-| `mod.rs` | 命令层 + 共享 DTO：6 条泛化 Tauri 命令（`agent_hooks_inject`/`agent_hooks_uninstall`/`agent_hooks_injection_status`/`agent_context_usage`/`agent_hooks_config_read`/`agent_hooks_config_write`，按 cliId 分发）+ `AgentInjectionStatus`/`AgentHookInjectionStatus`/`ContextUsage` DTO + `start_signal_watcher` + 静态 `WATCHER`（trait object 化，HUK-04） |
-| `provider.rs` | `CliHooksProvider` trait（六方法）+ cliId 键静态注册表 + `resolve_provider`/`lookup_provider` 分发入口（「无 hooks 能力」Validation 分支预留） |
-| `signal.rs` | 信号文件解析与处理：`AgentEventPayload` DTO（9 字段 camelCase——可选 `cliId` + 可选 `usageSourcePath`；`#[serde(default)]` 不加 alias——旧键（transcriptPath）信号降级 None，仅丢该事件用量拉取）、`parse_signal_file()` 纯函数、`process_signal_file()` 文件处理流程（读 → emit("agent-event") → 删） |
+| `mod.rs` | 命令层 + 共享 DTO：6 条泛化 Tauri 命令（`agent_hooks_inject`/`agent_hooks_uninstall`/`agent_hooks_injection_status`/`agent_hooks_restore_statusline`/`agent_hooks_config_read`/`agent_hooks_config_write`，按 cliId 分发）+ `AgentInjectionStatus`/`AgentHookInjectionStatus` DTO + `start_signal_watcher` + `reinject_statusline_on_startup`（启动重注入，遍历注册表）+ 静态 `WATCHER`（trait object 化，HUK-04） |
+| `provider.rs` | `CliHooksProvider` trait（七方法）+ cliId 键静态注册表 + `resolve_provider`/`lookup_provider` 分发入口（「无 hooks 能力」Validation 分支预留） |
+| `signal.rs` | 信号文件解析与处理：`AgentEventPayload` DTO（10 字段 camelCase——可选 `cliId` + 可选 `usageSourcePath` + 可选 `usedPercentage`（ContextUsage 信号字段）；`#[serde(default)]` 不加 alias——旧键（transcriptPath）信号降级 None，仅丢该事件用量拉取）、`parse_signal_file()` 纯函数、`process_signal_file()` 文件处理流程（读 → emit("agent-event") → 删） |
 | `watcher.rs` | 信号目录监听器 `HookSignalWatcher`：**notify+轮询双通道**——notify（NonRecursive，50ms debounce，失败降级 warn）+ **3s 轮询补漏**（`collect_signal_files`/`poll_once` 纯函数，目录删除自动重建，免疫事件丢失/句柄失效），线程名 `hook-signal-watcher`，`stop()` 幂等 + `Drop` 清理 |
-| `claude/mod.rs` | claude hooks provider：`ClaudeHooksProvider` trait 六方法实现 + `home_dir()` 统一 home 解析（测试经 `HomeDirGuard` 注入覆盖） |
-| `claude/inject.rs` | 注入/卸载/状态三命令内核：`inject_impl`/`uninstall_impl`/`injection_status_impl`（路径可注入同步函数）+ `HOOK_EVENTS` 10 事件 + `remove_slterm_matchers`/`inject_matchers`/`build_matcher_entry` 纯逻辑 |
-| `claude/usage.rs` | transcript token 用量查询内核（claude 领地语义）：`scan_transcript_usage` + `parse_usage_line` 纯 I/O 逻辑 |
+| `claude/mod.rs` | claude hooks provider：`ClaudeHooksProvider` trait 七方法实现（restore/reinject statusline 内核委托 inject.rs）+ `home_dir()` 统一 home 解析（测试经 `HomeDirGuard` 注入覆盖） |
+| `claude/inject.rs` | 注入/卸载/状态/statusline 桥接内核：`inject_impl`/`uninstall_impl`/`injection_status_impl`/`restore_statusline_impl`/`reinject_statusline_impl`（路径可注入同步函数）+ `HOOK_EVENTS` 10 事件 + `remove_slterm_matchers`/`inject_matchers`/`build_matcher_entry`/`statusline_is_bridge`/`build_bridge_statusline` 纯逻辑 |
 | `claude/config.rs` | hooks 配置三层读写内核（P3-BE-01/02/03）：`config_read_sync`/`config_write_sync` + `parse_layer`/`resolve_config_path`/`read_hooks_subtree`/`write_hooks_subtree` 纯逻辑 |
-| `claude/slterm-hook-reporter.js` | claude provider 资产（决策 7）：Node 单文件 hook 上报脚本（`include_str!` 嵌入），零依赖，C10 契约，payload 显式 `cliId:"claude"` + `usageSourcePath` 键（值 = stdin 协议 `data.transcript_path`，snake_case 不动）+ `SCRIPT_VERSION=3` |
+| `claude/slterm-hook-reporter.js` | claude provider 资产（决策 7）：Node 单文件 hook 上报脚本（`include_str!` 嵌入），零依赖，C10 契约，payload 显式 `cliId:"claude"` + `usageSourcePath` 键（值 = stdin 协议 `data.transcript_path`，snake_case 不动）+ `SCRIPT_VERSION=4` |
+| `claude/slterm-statusline.js` | claude provider 资产（statusline 桥接）：Node 单文件桥接脚本（`include_str!` 嵌入），零依赖，C10 契约——读 statusline stdin JSON 提取官方 `used_percentage` → 节流（取整无变化不写 + ≥1s）→ ContextUsage 信号文件 → 包裹透传用户原 statusline 命令（argv[2]） |
 
 ## 命令
 
-六条泛化 Tauri 命令均在 `lib.rs` 的 `generate_handler!` 注册（旧命令名 `hooks_*` 零残留）。命令层经 `run_agent_hooks_*` 内核按 cliId 分发到 provider（`resolve_provider`），阻塞 I/O 在 `spawn_blocking` 内（硬约束 #3）。前四条读写 `~/.claude/settings.json`，绕过 project_root 路径沙箱（照 `settings.rs` 先例）；后两条（配置读写，P3-BE）仅 user 层绕过沙箱，project/local 层经 `validate_path_within_root` 校验。
+六条泛化 Tauri 命令均在 `lib.rs` 的 `generate_handler!` 注册（旧命令名 `hooks_*` 零残留；原 `agent_context_usage` 已随 transcript 链路退役删除）。命令层经 `run_agent_hooks_*` 内核按 cliId 分发到 provider（`resolve_provider`），阻塞 I/O 在 `spawn_blocking` 内（硬约束 #3）。前四条读写 `~/.claude/settings.json`，绕过 project_root 路径沙箱（照 `settings.rs` 先例）；后两条（配置读写，P3-BE）仅 user 层绕过沙箱，project/local 层经 `validate_path_within_root` 校验。
 
 ### agent_hooks_inject
 
 签名：`async fn agent_hooks_inject(cli_id: String) -> Result<AgentHookInjectionStatus, AppError>`
 
-流程（claude provider）：确保 `~/.slterminal/hooks/` 目录存在 → 原子写脚本（NamedTempFile + persist）→ 读 `~/.claude/settings.json`（不存在或空则视为空 JSON 对象）→ 非法 JSON 返回 AppError（不改动文件）→ `remove_slterm_matchers` 清理旧段 → `inject_matchers` 追加 10 事件 matcher → 原子写回 → 返回 `{ status: "injected", version: N }`。
+流程（claude provider）：确保 `~/.slterminal/hooks/` 目录存在 → 原子写 reporter + statusline 桥接脚本（NamedTempFile + persist）→ 读 `~/.claude/settings.json`（不存在或空则视为空 JSON 对象）→ 非法 JSON 返回 AppError（不改动文件）→ `remove_slterm_matchers` 清理旧段 → `inject_matchers` 追加 10 事件 matcher → statusLine 桥接（备份原配置 + 写桥接键）→ 原子写回 → 返回 `{ status: "injected", version: N }`。
 
 返回值 `AgentHookInjectionStatus`：`{ status: "injected" | "notInjected" | "outdated", version: number | null }`（C6 契约，camelCase）。
 
@@ -147,23 +169,19 @@ project/local 层入参经 `validate_path_within_root` 沙箱校验：project_pa
 
 签名：`async fn agent_hooks_uninstall(cli_id: String) -> Result<(), AppError>`
 
-流程（claude provider）：读 `~/.claude/settings.json` → 移除全部 slterm matcher → 清理空事件键 → 若 hooks 段全空则移除整个键 → 原子写回 → `remove_dir_all` 删 `~/.slterminal/hooks/` + `~/.slterminal/hooks-events/`。JSON 非法时静默跳过配置清理，仍删目录。
+流程（claude provider）：读 `~/.claude/settings.json` → 移除全部 slterm matcher → 清理空事件键 → 若 hooks 段全空则移除整个键 → statusLine 桥接还原备份（备份缺失 → 移除键）→ 原子写回 → 删 statusline 备份文件 → `remove_dir_all` 删 `~/.slterminal/hooks/` + `~/.slterminal/hooks-events/`。JSON 非法时静默跳过配置清理，仍删目录。
 
 ### agent_hooks_injection_status
 
 签名：`async fn agent_hooks_injection_status(cli_id: String) -> Result<AgentHookInjectionStatus, AppError>`
 
-流程（claude provider）：检查脚本文件是否存在且为普通文件 → 检查 settings.json 中是否有 slterm matcher → 版本比对（磁盘 `SCRIPT_VERSION` vs 模板 `SCRIPT_VERSION`）→ 返回三态之一。
+流程（claude provider）：检查脚本文件是否存在且为普通文件 → 检查 settings.json 中是否有 slterm matcher → 版本比对（磁盘 `SCRIPT_VERSION` vs 模板 `SCRIPT_VERSION`）→ statusLine 桥接检查（非桥接 → Outdated）→ 返回三态之一。
 
-### agent_context_usage
+### agent_hooks_restore_statusline
 
-签名：`async fn agent_context_usage(cli_id: String, usage_source_path: String) -> Result<Option<ContextUsage>, AppError>`（JS invoke 键 `{ cliId, usageSourcePath }`，Tauri camelCase 双边）
+签名：`async fn agent_hooks_restore_statusline(cli_id: String) -> Result<(), AppError>`
 
-参数：`usage_source_path` — 用量来源文件路径（可选语义，来自 `AgentEventPayload.usageSourcePath`；路径语义由具体 CLI 解释——claude = transcript JSONL）。
-
-返回：`Option<ContextUsage>`——最后一条含 `message.usage` 的行的 token 数据；无 usage 记录或文件异常返回 `null`（非 error）。
-
-流程：`spawn_blocking` 内打开文件 → 读取尾部最多 64KB（`TRANSCRIPT_TAIL_BYTES`）→ UTF-8 解码 → 按行分割 → 从中途起始则跳过首行（截断行）→ 逆行扫描 → 对每行调用 `parse_usage_line` → 返回首个匹配的 usage。
+流程（claude provider）：`restore_statusline_impl`——当前 statusLine 为桥接 → 还原备份原配置（**备份保留**供重开重注入）；无备份 → 移除键；非桥接/无 settings/非法 JSON → 静默跳过（客户端关闭序列调用，App.tsx，失败静默 catch 不阻断关闭）。
 
 ### agent_hooks_config_read / agent_hooks_config_write（P3-BE-02/03）
 
@@ -180,38 +198,14 @@ async fn agent_hooks_config_write(cli_id: String, layer: String, hooks: Value, p
 - **write**：`hooks` 为 `null` 视作空对象 `{}`（语义 = 清空该层 hooks）；非 `null` 且非 JSON Object → `Validation`（ZQ-5 决策 3）；read-modify-write merge 原样保留其他字段；原文件损坏 → `Err` 拒绝覆盖；父目录自动创建；`NamedTempFile` + `persist` 原子写，不做 `.bak`。
 - 阻塞 I/O 均在 `spawn_blocking` 内（硬约束 #3）。前端 wrapper 见 `src/ipc/hooksConfig.ts`（C13-1）。
 
-## ContextUsage DTO
+## ContextUsage 信号（官方 used_percentage 口径）
 
-`mod.rs` 定义的 token 用量 DTO（C5 契约，camelCase 序列化；MC-214 四字段保留，cache serde default 0）：
+原 `ContextUsage` DTO（transcript token 四字段）与 `agent_context_usage` 命令已随官方百分比口径**整体退役删除**。现行数据通道：
 
-```rust
-pub struct ContextUsage {
-    pub input_tokens: u64,             // 输入 token 数，序列化为 "inputTokens"
-    pub output_tokens: u64,            // 输出 token 数，序列化为 "outputTokens"（信息字段，不计占用）
-    #[serde(default)]                  // 兼容旧 transcript 缺失
-    pub cache_read_input_tokens: u64,  // 缓存读取输入 token，序列化为 "cacheReadInputTokens"
-    #[serde(default)]                  // 兼容旧 transcript 缺失
-    pub cache_creation_input_tokens: u64, // 缓存创建输入 token，序列化为 "cacheCreationInputTokens"
-}
-```
-
-**用量口径**：总占用 = `inputTokens + cacheReadInputTokens + cacheCreationInputTokens`；**contextLimit 由前端 `profile.hooks.contextLimit` 提供（claude=200_000，MC-214）**，后端 DTO 不含上限常量；`outputTokens` 不计占用保留为信息字段。缺 cache 字段默认 0（serde `default`，兼容旧 transcript）；`input_tokens` 缺失仍整行 None（沿用现状）。
-
-前端对应 `src/types/agent.ts` 的 `ContextUsage` 接口（四字段同名，`cacheReadInputTokens` / `cacheCreationInputTokens`），IPC 封装见 `src/ipc/agentHooks.ts` 的 `contextUsage(cliId, usageSourcePath)`。
-
-## 实现要点
-
-### 尾部读取 + 逆行扫描
-
-`scan_transcript_usage` 从文件尾部读取最多 64KB（`TRANSCRIPT_TAIL_BYTES = 64 * 1024`），不足则全读。从中途起始时跳过首行（可能为截断行，JSON 不完整），其余行自末行逆向扫描，遇含 `message.usage` 的完整 JSON 行即解析返回。此策略确保仅读最小必要数据量，不加载全文件。cache 字段（`cache_read_input_tokens`/`cache_creation_input_tokens`）从同一条 `message.usage` 对象中提取，缺失默认 0。
-
-### parse_usage_line 纯函数
-
-`parse_usage_line(line: &str) -> Option<ContextUsage>` 解析单行 JSON：提取 `message.usage.input_tokens`、`message.usage.output_tokens`、`message.usage.cache_read_input_tokens`、`message.usage.cache_creation_input_tokens`（均为 `u64`，cache 字段缺失默认 0）。JSON 非法、字段缺失（除 cache 外）、类型不匹配均返回 `None`，不 panic。仅 `input_tokens` 缺失时整行 None（沿用现状）。
-
-### 解析失败返回 None
-
-任何异常路径均返回 `Ok(None)`（非 `Err`）：文件不存在、权限不足、UTF-8 无效字节、JSONL 全无 usage 行——调用方统一按"无 token 数据"处理，不区分具体错误类型。
+- **信号字段**：`AgentEventPayload.used_percentage: Option<f64>`（serde default，旧信号兼容）——ContextUsage 信号由 statusline 桥接脚本写入（`usedPercentage` = claude 官方 `context_window.used_percentage`，0–100 float，未取整）
+- **事件名**：`ContextUsage`（前端常量 `CONTEXT_USAGE_EVENT`，profiles/claude——claude 合法领地，AC-5）
+- **前端消费**：`useAgentStatus` ContextUsage 分支 → 行 `usage: ContextUsageSignal { usedPercentage }` → `profile.hooks.computeUsagePercent`（claude = round + clamp 0–100）→ 渲染百分比/四档配色
+- **口径正确性来源**：claude code 官方百分比（已知模型窗口/auto-compact 等内部口径）；transcript 单行 usage 是单次请求输入、且无窗口总量字段（官方 issue #32406/#49226）
 
 ## 性能实测（问题 5）
 
@@ -221,28 +215,30 @@ hook 脚本性能实测结论（2026-07-29，Win11 build 26200，Node v22）：
 - **启动路径 hook 触发**：claude 启动生命周期仅 `SessionStart` 一个 hook 事件触发 → hooks 总贡献 ~0.1s 量级。
 - **结论**：hooks **不是** claude 启动慢 1-3s 的主因——主因 = claude 自身 Windows node 模块加载 + Ink 渲染器初始化。**接受现状，不做 per-event node spawn 优化**（优化收益远低于架构复杂度成本）。
 
+> statusline 桥接同型考量：claude statusline 每 ~300ms 渲染一次、每帧 spawn node——节流（取整无变化不写 + ≥1s）把信号文件写入与 watcher/前端事件洪泛挡在管道最前端；透传执行用户脚本的额外耗时与 claude 直接执行用户 statusline 脚本同量级（官方机制本身如此）。
+
 ## 关键约束
 
-- **阻塞 I/O 必须 `spawn_blocking`**：六命令（三注入/卸载命令 + `agent_context_usage` + `agent_hooks_config_read`/`agent_hooks_config_write` 两条配置命令）均经 `tokio::task::spawn_blocking` 串行化（硬约束 #3）。
-- **原子写**：settings.json 和脚本文件均使用 `tempfile::NamedTempFile` + `persist()`，确保写盘原子性。
+- **阻塞 I/O 必须 `spawn_blocking`**：六命令（三注入/卸载命令 + `agent_hooks_restore_statusline` + `agent_hooks_config_read`/`agent_hooks_config_write` 两条配置命令）均经 `tokio::task::spawn_blocking` 串行化（硬约束 #3）。
+- **原子写**：settings.json、脚本文件、备份文件均使用 `tempfile::NamedTempFile` + `persist()`，确保写盘原子性。
 - **路径规范化**：脚本绝对路径经 `dunce::simplified()` 处理（剥 Windows `\\?\` 前缀），matcher command 中反斜杠统一替换为 `/`。
-- **模板内嵌**：`claude/slterm-hook-reporter.js` 通过 `include_str!` 编译期嵌入，无需运行时读 assets 目录。
-- **DTO 双边对应**：`AgentInjectionStatus` / `AgentHookInjectionStatus` / `AgentEventPayload` / `ContextUsage` 均 `snake_case` ↔ JS `camelCase`（硬约束 #4）。
+- **模板内嵌**：`claude/slterm-hook-reporter.js` 与 `claude/slterm-statusline.js` 通过 `include_str!` 编译期嵌入，无需运行时读 assets 目录。
+- **DTO 双边对应**：`AgentInjectionStatus` / `AgentHookInjectionStatus` / `AgentEventPayload`（含 `usedPercentage`）均 `snake_case` ↔ JS `camelCase`（硬约束 #4）。
 - **前四条命令走绝对 home 路径**：不依赖 `project_root`（类似 `settings.rs`/`projects.rs`），故不经过路径沙箱 `validate_path_within_root`。
+- **启动重注入**：`lib.rs` `.setup()` 调 `reinject_statusline_on_startup`（遍历 `provider::REGISTRY`，失败仅 warn 不阻断启动）；关闭恢复经前端 App.tsx 关闭序列调 `agent_hooks_restore_statusline`（备份保留 = 关闭恢复/重开重注入闭环）。
 
 ## 测试模式
 
-Rust 测试分布 8 个位置（均为 `#[cfg(test)] mod tests` 嵌入源文件），共 147 用例（Stage 03 前 133 条全保留迁移 + provider 注册表/命令层 cliId 透传新增）。
+Rust 测试分布 7 个位置（均为 `#[cfg(test)] mod tests` 嵌入源文件），共 138 用例（原 147——`usage.rs` 26 条随 transcript 链路退役删除，statusline 桥接新增 17 条）。
 
 | 位置 | 用例数 | 覆盖范围 |
 |------|--------|---------|
-| `mod.rs` `#[cfg(test)]` | 19 | `AgentInjectionStatus`/`AgentHookInjectionStatus` serde roundtrip + 键集合精确匹配（HUK-09）、`AgentEventPayload` 9 键含 cliId serde 键集合（含无 cliId 旧信号兼容）、**start_signal_watcher（HUK-04：首次启动存实例/重复启动幂等跳过/启动失败不存/`reset_watcher_for_test` 重置钩子后重启）**、parse_signal_file 快速冒烟、**命令层 cliId 透传（HUK-02/05 式：六命令 block_on 直测 HomeDirGuard 注入 tempdir + 未知 cliId 六命令全 Validation）** |
+| `mod.rs` `#[cfg(test)]` | 19 | `AgentInjectionStatus`/`AgentHookInjectionStatus` serde roundtrip + 键集合精确匹配（HUK-09）、`AgentEventPayload` 10 键含 cliId/usedPercentage serde 键集合（含无 cliId 旧信号兼容）、**start_signal_watcher（HUK-04：首次启动存实例/重复启动幂等跳过/启动失败不存/`reset_watcher_for_test` 重置钩子后重启）**、parse_signal_file 快速冒烟、**命令层 cliId 透传（六命令含 restore_statusline block_on 直测 HomeDirGuard 注入 tempdir + 未知 cliId 六命令全 Validation）** |
 | `provider.rs` `#[cfg(test)]` | 3 | resolve_provider（已知 cliId 命中/未知 cliId Validation）、lookup_provider 注册表注入（已注册无 hooks 能力 Validation 分支） |
-| `signal.rs` `#[cfg(test)]` | 16 | parse_signal_file 全分支（合法完整/optionals null/缺 panelId/空 panelId/非法 JSON/空串/仅空白）、camelCase 序列化+反序列化往返（9 键含 `usageSourcePath`）、**旧信号兼容（无 cliId 键/无 usageSourcePath 键 → 缺省 None——决策 1 降级语义）**、**process_signal_file_with（HUK-01：注入 emit 闭包——读→emit→删全流程/emit 失败仍删/非法 JSON 降级）** |
+| `signal.rs` `#[cfg(test)]` | 18 | parse_signal_file 全分支（合法完整/optionals null/缺 panelId/空 panelId/非法 JSON/空串/仅空白）、camelCase 序列化+反序列化往返（10 键含 `usedPercentage`）、**ContextUsage 信号反序列化（usedPercentage float 保真）**、**旧信号兼容（无 cliId 键/无 usageSourcePath 键/无 usedPercentage 键 → 缺省 None——决策 1 降级语义）**、**process_signal_file_with（HUK-01：注入 emit 闭包——读→emit→删全流程/emit 失败仍删/非法 JSON 降级）** |
 | `watcher.rs` `#[cfg(test)]` | 20 | is_signal_file、collect_signal_files、poll_once（逐个处理注入闭包/幂等二次不处理/目录删除重建后恢复/非 json 忽略/无文件零调用）、**run_one_tick（HUK-03：轮询补漏消费残留/目录重建恢复/stop 信号返回 true）**、watcher 生命周期（stop 幂等、Drop join 线程） |
 | `claude/mod.rs` `#[cfg(test)]` | 1 | HomeDirGuard 注入与 Drop 恢复原 home 解析 |
-| `claude/inject.rs` `#[cfg(test)]` | 35 | template_version 正值、HOOK_EVENTS 计数+唯一+关键事件、has_slterm_matchers、disk_script_version（解析/无版本/缺失/空格分号）、remove_slterm_matchers（清理 slterm 条目+保留用户 hook/清理空事件键/无 slterm 条目/**混组保用户 handler/全 slterm 组删除**——handler 级剔除）、inject_matchers（10 事件齐全/保留用户 matcher/二次注入幂等）、build_matcher_entry、模板内嵌校验（非空/含 SLTERM_PANEL_ID/含 SCRIPT_VERSION/含显式 `cliId:"claude"`）、**三命令 impl 层（HUK-02：`inject_impl`/`uninstall_impl`/`injection_status_impl` tempdir 驱动——注入/幂等/非法 JSON 中止/保留其他字段/非 Object 根与 hooks 拒绝/卸载混组保用户 handler/状态三态）** |
-| `claude/usage.rs` `#[cfg(test)]` | 26 | parse_usage_line 全分支、scan_transcript_usage 集成（末行命中/中间行回溯/无 usage/文件不存在/空文件/损坏行跳过）、ContextUsage serde camelCase、**命令层（HUK-05：`run_context_usage` + `block_on`——参数透传 usageSourcePath/None 与 Some 返回映射/大文件 >128KB 仅读尾部 64KB）** |
+| `claude/inject.rs` `#[cfg(test)]` | 49 | template_version 正值（=4）、HOOK_EVENTS 计数+唯一+关键事件、has_slterm_matchers、disk_script_version（解析/无版本/缺失/空格分号）、remove_slterm_matchers（清理 slterm 条目+保留用户 hook/清理空事件键/无 slterm 条目/**混组保用户 handler/全 slterm 组删除**——handler 级剔除）、inject_matchers（10 事件齐全/保留用户 matcher/二次注入幂等）、build_matcher_entry、模板内嵌校验（reporter 非空/含 SLTERM_PANEL_ID/含 SCRIPT_VERSION/含显式 `cliId:"claude"` + **桥接脚本非空/含 used_percentage/含 SLTERM_PANEL_ID/含 ContextUsage 事件/含 SCRIPT_VERSION**）、**三命令 impl 层（HUK-02：`inject_impl`/`uninstall_impl`/`injection_status_impl` tempdir 驱动——注入/幂等/非法 JSON 中止/保留其他字段/非 Object 根与 hooks 拒绝/卸载混组保用户 handler/状态三态含 statusLine 桥接检查）**、**statusline 桥接全表：注入写桥接+备份原配置/无原配置不备份仍注入/幂等不重建桥接/卸载还原备份+删备份/卸载无备份移除键/restore 三态（还原且备份保留/非桥接 no-op/无 settings no-op）/reinject 四态（备份+原配置重注入/用户已改过尊重/已是桥接或备份缺失 no-op/脚本缺失 no-op）/status 非桥接 Outdated** |
 | `claude/config.rs` `#[cfg(test)]` | 28 | parse_layer、resolve_config_path（user 层 home 路径/三层拼接/缺失 project_path Validation/子树外 PathNotAllowed）、read_hooks_subtree（文件不存在 Null/无 hooks 键 Null/子树提取/损坏 Err）、write_hooks_subtree（原子写/父目录自动创建/merge 保留其他字段/损坏拒绝覆盖/非 Object hooks 拒绝无副作用/非 Object 根拒绝/null 根视空对象）、**config_write_sync null 入参视空对象（ZQ-5：hooks=Null 写入 → hooks 键 = 空对象且保留其他字段）**——P3-BE 读写命令纯逻辑、**命令层（`run_config_read`/`run_config_write` + `block_on`——参数透传/非法 layer/路径校验）** |
 
 ### 单元测试组织
@@ -293,31 +289,9 @@ w.stop();  // 第一次停止
 w.stop();  // 第二次应不 panic（幂等）
 ```
 
-### usage token 用量测试模式
+### statusline 桥接内核测试模式
 
-`usage.rs` 测试分三层：
-
-**parse_usage_line 纯函数测试**（13 条）：无依赖，直接构造 JSON 字符串断言：
-```rust
-assert_eq!(parse_usage_line(r#"{"message":{"usage":{"input_tokens":100,"output_tokens":50}}}"#).unwrap(),
-           ContextUsage { input_tokens: 100, output_tokens: 50 });
-assert!(parse_usage_line("not json").is_none());
-assert!(parse_usage_line("").is_none());
-```
-
-**scan_transcript_usage 集成测试**（6 条）：使用 `NamedTempFile` 构造 JSONL 文件，验证尾部扫描 + 逆行逻辑：
-```rust
-let (_dir, path) = make_temp_transcript(&[
-    r#"{"message":{"usage":{"input_tokens":10,"output_tokens":5}}}"#,
-    r#"{"message":{"usage":{"input_tokens":100,"output_tokens":50}}}"#,
-]);
-let r = scan_transcript_usage(path.to_str().unwrap()).unwrap();
-assert_eq!(r.input_tokens, 100);  // 末行优先
-```
-
-**命令层测试**（3 条，HUK-05）：`run_context_usage`（命令内核）经 `block_on` await——参数透传 usageSourcePath（两条不同路径各取各自 usage）、None 与 Some 返回映射、大文件（>128KB padding + usage 在最后 1KB → 仅加载尾部 64KB 仍命中，P2-TE-05 兜底）。
-
-`scan_transcript_usage` 是纯 I/O 逻辑函数（非 async），测试直接调用不依赖 `spawn_blocking`。命令层经 `block_on` 直测 `run_context_usage`；真实 L4 E2E 仍验收完整命令链路。
+`restore_statusline_impl` / `reinject_statusline_impl` 为路径可注入同步函数（settings/备份/脚本三路径入参），tempdir 驱动——注入（含备份）→ 关闭恢复（备份保留）→ 重开重注入 闭环全链路在单用例内断言；用户已改过/无备份/已是桥接/脚本缺失各 no-op 分支独立用例。statusline 桥接判定 `statusline_is_bridge`（command 含 `slterm-statusline`）与桥接构造 `build_bridge_statusline`（原命令 argv 内嵌）为纯函数，直接断言输出形态。
 
 ### 运行
 
@@ -329,7 +303,6 @@ cargo test --manifest-path src-tauri/Cargo.toml hooks -- --test-threads=1
 cargo test --manifest-path src-tauri/Cargo.toml hooks::signal -- --test-threads=1
 cargo test --manifest-path src-tauri/Cargo.toml hooks::watcher -- --test-threads=1
 cargo test --manifest-path src-tauri/Cargo.toml hooks::claude::inject -- --test-threads=1
-cargo test --manifest-path src-tauri/Cargo.toml hooks::claude::usage -- --test-threads=1
 cargo test --manifest-path src-tauri/Cargo.toml hooks::claude::config -- --test-threads=1
 ```
 
@@ -338,12 +311,12 @@ cargo test --manifest-path src-tauri/Cargo.toml hooks::claude::config -- --test-
 1. 新增 Tauri 命令后在 `lib.rs` 的 `generate_handler!` 注册（旧命令名 `hooks_*` 不保留兼容）。
 2. 修改 `HOOK_EVENTS` 常量后跑 `hook_events_count_and_unique` + `hook_events_contains_key_events` 测试。
 3. 修改 `claude/slterm-hook-reporter.js` 后：确保 `SCRIPT_VERSION` 递增（决策 7——已注入用户会显示「版本过旧」需重新注入，测试锁死此形态）+ 跑 `template_version_positive` / `template_is_non_empty` 测试确认内嵌内容正确。
-4. 修改注入逻辑（`remove_slterm_matchers`/`inject_matchers`/`build_matcher_entry`）或三命令 impl 层（`inject_impl`/`uninstall_impl`/`injection_status_impl`）后跑 `claude/inject.rs` 全部 35 条测试，尤其幂等测试（`inject_impl_idempotent`）与混组保用户 handler 用例。
-5. 修改 `parse_signal_file` / `process_signal_file` / `process_signal_file_with` 后跑 `signal.rs` 全部 16 条测试 + `mod.rs` 的 4 条快速冒烟测试。
-6. **绝对不要修改 C10 契约**——`slterm-hook-reporter.js` 任何代码路径必须 `process.exit(0)`。新增 catch 分支时确认静默退出、不写 stderr。
+4. 修改注入逻辑（`remove_slterm_matchers`/`inject_matchers`/`build_matcher_entry`/`statusline_is_bridge`/`build_bridge_statusline`）或五命令 impl 层（`inject_impl`/`uninstall_impl`/`injection_status_impl`/`restore_statusline_impl`/`reinject_statusline_impl`）后跑 `claude/inject.rs` 全部 49 条测试，尤其幂等测试（`inject_impl_idempotent`/`inject_idempotent_keeps_existing_bridge`）与混组保用户 handler 用例。
+5. 修改 `parse_signal_file` / `process_signal_file` / `process_signal_file_with` 或 `AgentEventPayload`（含 `used_percentage` 字段）后跑 `signal.rs` 全部 18 条测试 + `mod.rs` 的 4 条快速冒烟测试。
+6. **绝对不要修改 C10 契约**——`slterm-hook-reporter.js` 与 `slterm-statusline.js` 任何代码路径必须 `process.exit(0)`。新增 catch 分支时确认静默退出、不写 stderr。
 7. 修改注入命令的 settings.json 读写逻辑后，务必跑 L4 E2E（`npm run e2e`）验证真实 settings.json merge/卸载/非法 JSON 中止行为（P1-TE-03）。
-8. 修改 `parse_usage_line` / `scan_transcript_usage` / `TRANSCRIPT_TAIL_BYTES` / `run_context_usage` 后跑 `claude/usage.rs` 全部 26 条测试，尤其命令层三用例（参数透传/None 与 Some 映射/大文件尾部扫描）与 cache 字段用例。
-9. 修改 `ContextUsage` DTO 字段后同步更新 `src/types/agent.ts`（前端 `ContextUsage` 接口）和 `src/ipc/agentHooks.ts`（IPC wrapper，cliId 首参），跑 `ipc-agent-hooks-contract.test.ts` + `context_usage_serialize_camelcase` / `context_usage_deserialize_camelcase` 测试。
-10. 修改 `claude/config.rs`（`parse_layer` / `resolve_config_path` / `read_hooks_subtree` / `write_hooks_subtree` / `run_config_read` / `run_config_write`）后跑 `hooks::claude::config` 全部 27 条测试。改 read 的「损坏 → Err」或 write 的 merge 语义时，同步核对 `src/ipc/hooksConfig.ts` 与契约 C13-1（损坏文件上编辑后 merge 丢字段是设计红线）。新增配置层（如 org 层）需同步更新 `parse_layer`、`layer_file_name` 与 `src/types/hooksConfig.ts` 的 `HooksLayer`。
+8. 修改 `slterm-statusline.js` 后：桥接脚本行为变更须同步 `STATUSLINE_SCRIPT_TEMPLATE` 内嵌校验测试（`statusline_template_is_non_empty_and_contains_contract`）；影响节流/信号契约时同步更新 `src/types/agent.ts` 与 `ipc-agent-hooks-contract.test.ts`；`SCRIPT_VERSION` 递增（已注入用户 Outdated 重注入）。
+9. 修改 `used_percentage` 信号字段语义后同步更新 `src/types/agent.ts`（`ContextUsageSignal` / `AgentEventPayload.usedPercentage`）与前端 `profiles/claude/strategies.ts` 的 `computeUsagePercent`，跑 `cli-profile-claude.test.ts` + `ipc-agent-hooks-contract.test.ts`。
+10. 修改 `claude/config.rs`（`parse_layer` / `resolve_config_path` / `read_hooks_subtree` / `write_hooks_subtree` / `run_config_read` / `run_config_write`）后跑 `hooks::claude::config` 全部 28 条测试。改 read 的「损坏 → Err」或 write 的 merge 语义时，同步核对 `src/ipc/hooksConfig.ts` 与契约 C13-1（损坏文件上编辑后 merge 丢字段是设计红线）。新增配置层（如 org 层）需同步更新 `parse_layer`、`layer_file_name` 与 `src/types/hooksConfig.ts` 的 `HooksLayer`。
 11. 修改 `watcher.rs`（`POLL_INTERVAL` / `LOOP_TICK` / `collect_signal_files` / `poll_once` / `run_one_tick` / notify 降级逻辑）后跑 `hooks::watcher` 全部 20 条测试。**勿削弱轮询补漏**——它是 win10 实证 watcher 静默失效的兜底（notify 事件丢失/目录重建句柄失效）。
-12. 新增 provider：在 `provider.rs` 的 `REGISTRY` 注册 cliId 条目；trait 六方法签名与错误语义（未知 cliId/无 hooks 能力）勿改。
+12. 新增 provider：在 `provider.rs` 的 `REGISTRY` 注册 cliId 条目；trait 七方法签名与错误语义（未知 cliId/无 hooks 能力）勿改。

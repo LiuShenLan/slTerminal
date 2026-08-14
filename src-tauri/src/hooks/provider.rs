@@ -1,7 +1,7 @@
 //! CLI hooks provider 注册表 —— trait + 以 cliId 为键的静态注册表
 //!
 //! 跨边界契约（PREAMBLE 契约段 4）：
-//! - `CliHooksProvider` trait 六方法，签名写死
+//! - `CliHooksProvider` trait 七方法，签名写死
 //! - 注册表 = cliId 键静态映射；claude 为首个实现（行为零改动）
 //!
 //! 错误语义（MC-211）：
@@ -15,9 +15,9 @@ use std::path::PathBuf;
 use crate::error::AppError;
 
 use super::claude::ClaudeHooksProvider;
-use super::{AgentHookInjectionStatus, ContextUsage};
+use super::AgentHookInjectionStatus;
 
-/// CLI hooks 能力 trait（六方法，跨边界契约签名写死）
+/// CLI hooks 能力 trait（七方法，跨边界契约签名写死）
 ///
 /// 实现均为同步阻塞（含 IO）——命令层经 `spawn_blocking` 串行化（硬约束 #3）。
 /// 仅 hooks 能力的 CLI 在此实现；无 hooks 能力的 CLI 不实现本 trait
@@ -29,9 +29,12 @@ pub trait CliHooksProvider: Send + Sync + std::fmt::Debug {
     fn uninstall(&self) -> Result<(), AppError>;
     /// 查询注入状态（Injected/NotInjected/Outdated 三态）
     fn injection_status(&self) -> Result<AgentHookInjectionStatus, AppError>;
-    /// 查询 token 用量（无 usage 或文件异常 → Ok(None)）
-    /// 路径语义由具体 CLI 解释（claude = transcript JSONL）
-    fn context_usage(&self, usage_source_path: &str) -> Result<Option<ContextUsage>, AppError>;
+    /// 恢复 statusline 注入（客户端关闭清理）：当前为桥接 → 还原备份原配置；
+    /// 备份保留供下次启动重注入。无备份/非桥接 → no-op。
+    fn restore_statusline(&self) -> Result<(), AppError>;
+    /// 启动重注入 statusline：备份存在 + 当前配置等于备份原配置 → 重新注入桥接；
+    /// 无备份 / 已是桥接 / 用户已改过 → no-op。
+    fn reinject_statusline(&self) -> Result<(), AppError>;
     /// 读取指定层 hooks 配置子树（project/local 层经 project_root 路径沙箱校验）
     fn config_read(
         &self,
@@ -57,7 +60,8 @@ static CLAUDE_PROVIDER: ClaudeHooksProvider = ClaudeHooksProvider;
 type ProviderEntry = (&'static str, Option<&'static dyn CliHooksProvider>);
 
 /// 静态注册表（cliId 键，跨边界契约「静态映射」形态）
-static REGISTRY: &[ProviderEntry] = &[("claude", Some(&CLAUDE_PROVIDER))];
+/// pub(crate)：启动重注入（hooks/mod.rs）遍历全部已注册 provider
+pub(crate) static REGISTRY: &[ProviderEntry] = &[("claude", Some(&CLAUDE_PROVIDER))];
 
 /// 解析 cliId → hooks provider（纯函数，无 IO；命令层分发唯一入口）
 pub(crate) fn resolve_provider(cli_id: &str) -> Result<&'static dyn CliHooksProvider, AppError> {

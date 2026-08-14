@@ -42,7 +42,7 @@ export interface TabParams {
   filePath?: string;
   cwd?: string;
   tabIcon?: string | null;
-  /** CLI 品牌 logo 根绝对路径（仅随 emoji 显示；随布局 JSON 持久化，spawn 成功重置清除残留） */
+  /** CLI 品牌 logo 根绝对路径（F9 修订：跟随页签名显示，不依赖 tabIcon；由 TerminalPanel 会话绑定写入） */
   tabLogo?: string | null;
   /** 用户自定义页签标题（右键菜单重命名，随布局 JSON 持久化） */
   customTitle?: string;
@@ -270,8 +270,9 @@ export const DefaultTab: React.FC<IDockviewPanelProps> = (props) => {
           </span>
         );
       })()}
-      {/* CLI 品牌 logo：仅随 emoji 显示（tabIcon 为 null 时无 logo，双清双保险） */}
-      {tabIcon && tabLogo && (
+      {/* CLI 品牌 logo：跟随页签名显示（F9 行为修订）——tabLogo 有值即渲染，
+          不依赖 tabIcon；emoji 为空时 logo 顶到标题前（位置语义不变） */}
+      {tabLogo && (
         <img src={tabLogo} width={16} height={16}
           style={{ flexShrink: 0, display: "block" }} alt="CLI 图标" />
       )}

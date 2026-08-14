@@ -5,7 +5,8 @@
 //   iconSrc "/cli-icons/mockcli.png"（Stage 01 已放资源，决策 5 真实最小 PNG）。
 //   hooks 全能力：eventToStatus 恒等映射桩（任意事件恒 "working"，SessionEnd/Exit
 //   除外返回 null——会话结束清图标语义）/ classifyNotification 桩（任意 payload 恒
-//   "done"——通知类别可识别）/ contextLimit 任意值 / restartHint 桩文案 /
+//   "done"——通知类别可识别）/ computeUsagePercent 桩（任意 usage 恒 42——可识别
+//   桩值，区别于 claude 官方口径取整钳位）/ restartHint 桩文案 /
 //   hasConfigEditor=true / configEditor 桩组件（渲染可识别标记
 //   data-e2e="mockcli-config-editor"，KZ-7 双向分派断言用）/ configLayers 单层桩声明
 //   （hint 带 "mock" 可识别，区别于 claude 三层）。history 全能力：supportsFork=true /
@@ -55,7 +56,8 @@ export const mockCliProfile: CodingCliProfile = {
       },
       // 分类桩：任意 payload 恒 "done"（通知类别可识别，区别于 claude 五映射）
       classifyNotification: () => "done",
-      contextLimit: 1000,
+      // 百分比桩：任意 usage 恒 42（可识别桩值——区别于 claude 官方 used_percentage 取整钳位）
+      computeUsagePercent: () => 42,
       restartHint: MOCK_CLI_RESTART_HINT,
       hasConfigEditor: true,
       // KZ-7：桩编辑器组件——hub 编辑器槽经本字段分派渲染（claude = ClaudeHooksConfigEditor）

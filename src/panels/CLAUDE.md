@@ -224,10 +224,10 @@ xterm.js 6.0.0 原生支持 OSC 8 解析渲染。`useXterm.ts` 在 `term.open()`
 
 `shell-integration.ps1` 的 Enter hook 在命令执行前发射 OSC 133 C（`ESC ] 133;C;<命令行> ST`），`prompt()` 在命令退出后发射 OSC 133;D（退出码）。`useXterm.ts` 注册 `term.parser.registerOscHandler(133, ...)` 解析 C/D 序列：
 
-- **OSC 133 C**：提取命令行文本 → 调用 `onTabStateChange({ active: true, title, icon: "🟡", logo })` 设置 attention 态；同时 `cliProfileRegistry.matchByCommand(command)` 查 profile → 命中时覆盖 `title` = profile.tabTitle；`logo` = profile.iconSrc（F9：按命令行首 token 匹配 CLI 品牌 logo，未注册 → null 清旧 logo）
-- **OSC 133 D**：命令退出 → `onTabStateChange({ active: false })` → `TerminalPanel` 恢复原标题并清除图标与 logo（F8 后原标题 = `customTitle` 优先，用户重命名过的终端恢复自定义名）
+- **OSC 133 C**：提取命令行文本 → 调用 `onTabStateChange({ active: true, title, icon: "🟡" })` 设置 attention 态；同时 `cliProfileRegistry.matchByCommand(command)` 查 profile → 命中时覆盖 `title` = profile.tabTitle，并 `setAgentSession({ cliId: profile.id })` 写入会话（F9 行为修订：logo 不经 C 路径直传——页签 logo 由 TerminalPanel 订阅 sessionChange 按 agentSession.cliId 查 profile.iconSrc 驱动，会话绑定）
+- **OSC 133 D**：命令退出 → `onTabStateChange({ active: false })` → `TerminalPanel` 恢复原标题并单清图标；`setAgentSession(null)` → sessionChange 驱动清 logo（F8 后原标题 = `customTitle` 优先，用户重命名过的终端恢复自定义名）
 
-**`CliProfileRegistry`**（Registry Pattern 单例，见 @../features/cliProfiles/CLAUDE.md）：管理 `command → profile` 映射（`matchByCommand` 首 token 精确查表——覆盖 `claude --resume` / `claude -p` 等带参变体）。新增 CLI 只需在 `features/cliProfiles/profiles/` 追加 profile 注册，不修改核心逻辑；标题与品牌 logo 同源（profile.tabTitle / profile.iconSrc，F9）。
+**`CliProfileRegistry`**（Registry Pattern 单例，见 @../features/cliProfiles/CLAUDE.md）：管理 `command → profile` 映射（`matchByCommand` 首 token 精确查表——覆盖 `claude --resume` / `claude -p` 等带参变体）。新增 CLI 只需在 `features/cliProfiles/profiles/` 追加 profile 注册，不修改核心逻辑；标题与品牌 logo 均取自 profile（tabTitle / iconSrc，F9——F9 行为修订后 logo 经 sessionChange 按 cliId 查询，非 C 路径直传）。
 
 **初始化重置**：PTY spawn 成功后调 `onTabStateChange({ active: false })`，覆盖持久化残留。`PtyEvent::Exit` 时若 `isCommandRunningRef` 为 true 同样重置。
 
@@ -246,10 +246,10 @@ xterm.js 6.0.0 原生支持 OSC 8 解析渲染。`useXterm.ts` 在 `term.open()`
 
 实现：
 
-- **`useCommandDetection`**：OSC 133 C 触发时经 `cliProfileRegistry.matchByCommand(command)` 匹配（MC-105：命中 → `onTabStateChange({ active: true, title: profile.tabTitle, icon: STATUS_EMOJI.attention, logo: profile.iconSrc })`，F9 CLI logo；未命中零副作用）；OSC 133 D 重置
-- **`useXterm`**：新增 `onAgentEvent` 订阅 → 按 `panelId` 过滤 → 来源 CLI 经 `resolvePayloadCliId` 单点解析（MC-205 三级解析，`src/panels/terminal/resolvePayloadCliId.ts`，ZQ-2 契约 4——空串/空白 cliId 同等回退）→ `eventToStatus(event, notificationType?)`（经 `profile.hooks` 委托，claude 实现在 `src/features/cliProfiles/profiles/claude/strategies.ts`）→ `onTabStateChange({ active: true, icon: emoji })`（hook 路径无 command，**不传 logo**——TerminalPanel 层保持前值）；清图标判定 `SessionEnd ∨ Exit` 双事件（ZQ-6，与删 agentSession 判定对齐）调 `{ active: false }`
-- **`TerminalPanel.handleTabStateChange`**：`active=true` 时只有 `title` 存在才 `setTitle`，只有 `icon !== undefined` 才 `updateParameters`；`logoRef` 照 `originalTitleRef` 模式保持当前 CLI logo——`state.logo !== undefined` 时更新（OSC 133 C），hook 事件路径不清，`updateParameters({ ...params, tabIcon, tabLogo: logoRef.current })`；`active=false` 恢复原标题并**双清** icon + logo
-- **`DefaultTab`**（workspace 层）：`tabIcon` 含 `/` 走 `<img>`，否则走 `<span>` 渲染 emoji；`tabLogo`（`params.tabLogo`）在 emoji 后渲染 16×16 CLI logo（F9：仅随 emoji——`tabIcon && tabLogo` 双条件）
+- **`useCommandDetection`**：OSC 133 C 触发时经 `cliProfileRegistry.matchByCommand(command)` 匹配（MC-105：命中 → `onTabStateChange({ active: true, title: profile.tabTitle, icon: STATUS_EMOJI.attention })`，未命中零副作用）；OSC 133 D 重置。**F9 行为修订：`TabState.logo` 字段已退役**——页签 logo 会话绑定（见 TerminalPanel 行）
+- **`useXterm`**：新增 `onAgentEvent` 订阅 → 按 `panelId` 过滤 → 来源 CLI 经 `resolvePayloadCliId` 单点解析（MC-205 三级解析，`src/panels/terminal/resolvePayloadCliId.ts`，ZQ-2 契约 4——空串/空白 cliId 同等回退）→ `eventToStatus(event, notificationType?)`（经 `profile.hooks` 委托，claude 实现在 `src/features/cliProfiles/profiles/claude/strategies.ts`）→ `onTabStateChange({ active: true, icon: emoji })`；清图标判定 `SessionEnd ∨ Exit` 双事件（ZQ-6，与删 agentSession 判定对齐）调 `{ active: false }`
+- **`TerminalPanel.handleTabStateChange`**：`active=true` 时只有 `title` 存在才 `setTitle`，只有 `icon !== undefined` 才 `updateParameters({ ...params, tabIcon })`；`active=false` 恢复原标题并**单清** icon。**页签 logo 会话绑定（F9 行为修订）**：`logoRef` 退役——TerminalPanel 订阅 `TerminalRegistry.subscribe`（register/sessionChange 事件过滤 panelId）→ 读 `get(panelId)?.agentSession` → session 非 null 时 `tabLogo = cliProfileRegistry.get(session.cliId ?? CLAUDE_CLI_ID)?.iconSrc ?? null`（cliId 缺省兜底口径与 useAgentStatus 行建行一致），null/undefined → `tabLogo = null` → `updateParameters({ ...params, tabLogo })`；挂载同步一次覆盖布局 JSON 残留、页面切回（H6）register 幂等保留旧 session 即恢复；deps 仅 `[api, panelId]`（params 经 ref 读——tabIcon 高频更新不重建订阅）
+- **`DefaultTab`**（workspace 层）：`tabIcon` 含 `/` 走 `<img>`，否则走 `<span>` 渲染 emoji；`tabLogo`（`params.tabLogo`）在 emoji 后渲染 16×16 CLI logo（F9 行为修订：**跟随页签名显示**——`tabLogo` 单条件，不依赖 tabIcon；emoji 缺席时 logo 顶到标题前）
 - **profile 注册表**（Stage 01）：claude profile 身份域只含 `tabTitle`/`iconSrc` 等数据，不含硬编码事件图标——emoji 由 F3 四态系统接管（原 `tabRules.ts` 已退役）
 
 ### 中断场景已知行为（Ctrl+C）
@@ -267,12 +267,12 @@ Claude Code 在用户主动 Ctrl+C 中断时不发射任何 hook 事件（`Stop`
 |------|------|
 | `index.ts` | 公共 API 出口：导出 TerminalPanel、EditorPanel、HtmlPanel、GitShowPanel、DiffPanel |
 | `terminal/index.ts` | TerminalPanel 及 terminalOptions 导出 |
-| `terminal/TerminalPanel.tsx` | 终端面板 React 组件：获取 Windows build 号 → useXterm → 加载遮罩；`originalTitleRef` 挂载时取 `params.customTitle ?? api.title ?? "terminal"`（F8 自定义标题优先）并订阅 `onDidParametersChange` 在 `customTitle !== undefined` 时同步 ref——OSC 133 D 恢复标题用自定义名；`logoRef` 照同模式保持 CLI logo（F9，active 时 `state.logo !== undefined` 更新、inactive 双清 tabIcon + tabLogo） |
+| `terminal/TerminalPanel.tsx` | 终端面板 React 组件：获取 Windows build 号 → useXterm → 加载遮罩；`originalTitleRef` 挂载时取 `params.customTitle ?? api.title ?? "terminal"`（F8 自定义标题优先）并订阅 `onDidParametersChange` 在 `customTitle !== undefined` 时同步 ref——OSC 133 D 恢复标题用自定义名；**页签 logo 会话绑定（F9 行为修订）**：`logoRef` 退役，订阅 TerminalRegistry（register/sessionChange）→ agentSession 非 null 按 `cliId ?? CLAUDE_CLI_ID` 查 iconSrc 写 `tabLogo`、null 清 `tabLogo`；inactive 单清 tabIcon；**`latestParamsRef` 参数合并单点（参数覆盖回归修复）**：tabIcon/tabLogo 分头经 `updateParameters` 写入互不可见——合并基准 = `latestParamsRef`（props 同步 + `onDidParametersChange` 合并），禁止用 props 快照覆盖（快照抹掉另一路径刚写入的键——mockcli E2E 冒烟 tabIcon 丢失根因；terminal.test.tsx 两键共存断言防复发） |
 | `terminal/useTerminalInstance.ts` | Terminal 实例 + WebGL/FitAddon 生命周期 + StrictMode 守卫 |
 | `terminal/usePtyOutput.ts` | PTY 输出合帧（Idle+Max 双定时器 + DEC 2026）+ 非焦点降频 |
 | `terminal/usePtyResize.ts` | ResizeObserver X/Y 分离 debounce + NaN 守卫 |
 | `terminal/useClipboardHandler.ts` | OSC 52 剪贴板拦截 + CJK 解码 + 焦点门控 |
-| `terminal/useCommandDetection.ts` | OSC 133 命令边界检测 + `cliProfileRegistry.matchByCommand` 匹配（MC-105：title/logo 取 profile.tabTitle/iconSrc）+ 🟡 attention 指示（OSC 133 C 触发 `onTabStateChange({ active: true, title, icon: "🟡", logo })`，F9 CLI logo）；`TabState`（含可选 `logo` 字段，hook 事件路径不传）迁入本文件顶部导出（Stage 01 退役 TabTitleRegistry 后） |
+| `terminal/useCommandDetection.ts` | OSC 133 命令边界检测 + `cliProfileRegistry.matchByCommand` 匹配（MC-105：title 取 profile.tabTitle）+ 🟡 attention 指示（OSC 133 C 触发 `onTabStateChange({ active: true, title, icon: "🟡" })`）；`TabState` 迁入本文件顶部导出（Stage 01 退役 TabTitleRegistry 后；F9 行为修订：`logo` 字段退役——logo 会话绑定由 TerminalPanel 订阅驱动） |
 | `terminal/webgl.ts` | `detectWebgl()` + `setupWebglWithRetry()` 纯函数 |
 | `terminal/useXterm.ts` | 编排层（~420 行），组合上述 6 个 hook + `src/lib/useFontSizeWheel`（Ctrl+Wheel 字体缩放）+ `onAgentEvent` 订阅（按 panelId 过滤 → 来源 CLI 经 `resolvePayloadCliId` 单点三级解析（ZQ-2）→ `eventToStatus` → F3 四态 emoji；SessionEnd/Exit 双事件清图标（ZQ-6）；非 SessionEnd/Exit 时 `setAgentSession` 携 `sessionId`/`usageSourcePath`/`status`——两区四态同源，**payload 空串归一 `|| undefined`** 防 claude hook 输入缺字段时下游静默失效），对外接口兼容 TerminalPanel |
 | `terminal/keyboard.ts` | 终端快捷键命令工厂：`createTerminalShortcuts()`（无参）经 `commandFromMeta` 生成 `terminal.copy/paste/newline`，App 一次性注册；handler 经 `getActiveTerminal()` 派发到聚焦终端。Ctrl+C 不注册（透传 SIGINT） |
@@ -326,7 +326,7 @@ Claude Code 在用户主动 Ctrl+C 中断时不发射任何 hook 事件（`Stop`
 
 ### useXterm 测试模式
 
-> 用例数见 `.claude/test-inventory.md`（终端面板类目，`use-xterm-output.test.ts`（35 用例）+ `use-xterm-lifecycle.test.ts`（70 用例）+ `use-xterm-integration.test.ts`（12 用例））。
+> 用例数见 `.claude/test-inventory.md`（终端面板类目，`use-xterm-output.test.ts`（35 用例）+ `use-xterm-lifecycle.test.ts`（80 用例）+ `use-xterm-integration.test.ts`（12 用例））。
 
 useXterm 是编排层——mock 6 个子 hook 才能隔离测试（`useFontSizeBridge` 已删除，字体缩放委托 `src/lib/useFontSizeWheel`）：
 
@@ -360,7 +360,7 @@ useXterm 是编排层——mock 6 个子 hook 才能隔离测试（`useFontSizeB
 | `terminal-lifecycle.test.ts`（4 用例） | 挂载→创建→卸载→dispose 完整链路；mock `pty.spawn` 验证调用参数 |
 | `terminal-instance.test.ts`（7 用例） | `useTerminalInstance` 生命周期分支（TRM-07）：fit 抛异常吞掉/`fontSize` undefined 跳过/prevFontSize 相同跳过重复写入/tryLoadWebgl 幂等（含 term 为 null 短路） |
 | `terminal-strictmode.test.ts`（2 用例） | `<React.StrictMode>` 包裹验证 `smGuardRef` 防双重挂载：Terminal 实例数=1、PTY spawn 仅一次、dispose 仅在最终卸载时调 |
-| `terminal.test.tsx`（10 用例） | TerminalPanel 组件：mock `useXterm` 返回 stub，验证 loading 遮罩/Windows build/spawn/customTitle 挂载恢复 + onDidParametersChange 同步（F8） |
+| `terminal.test.tsx`（19 用例） | TerminalPanel 组件：mock `useXterm` 返回 stub，验证 loading 遮罩/Windows build/spawn/customTitle 挂载恢复 + onDidParametersChange 同步（F8）/**页签 logo 会话绑定（F9 行为修订，真实 TerminalRegistry + registerStub 驱动 sessionChange）**：C 命中写 tabLogo/D 清空/hook 路径按 agentSession.cliId 查 + CLAUDE_CLI_ID 兜底/未注册 cliId null/挂载清残留+恢复/register 事件同步 |
 | `can-fit.test.ts`（15 用例） | 纯函数边界测试：五条件守卫（null/undefined/0/isDisposed/no element） |
 | `detect-webgl.test.ts`（3 用例） | `vi.spyOn(HTMLCanvasElement.prototype, 'getContext')` 模拟三种分支 |
 | `webgl-setup.test.ts`（7 用例） | `setupWebglWithRetry` 指数退避（TRM-06）：不可用即回退/成功加载/context loss 重建（1000/2000ms 序列）/重试耗尽回退/cancel 清理/loadAddon 异常退避 |
@@ -370,7 +370,7 @@ useXterm 是编排层——mock 6 个子 hook 才能隔离测试（`useFontSizeB
 | 文件 | 模式 |
 |------|------|
 | （Stage 01 退役迁移） | 原 `tab-title-registry.test.ts`（13 用例）/ `tab-rules.test.ts`（6 用例）语义已并入 `src/__tests__/cli-profile-registry.test.ts` + `cli-profile-claude.test.ts`（注册表/侧效应注册/logo 资源守卫，见 @../features/cliProfiles/CLAUDE.md） |
-| `workspace-defaulttab.test.tsx`（21 用例，WRK-05） | 渲染**生产 `DefaultTab`**（非手写 Mock，经 `PageDockviewHost.tsx` 导出）：tabIcon emoji/img 分支（含 `/` `\` http: data: → img）、`onDidParametersChange` 事件结构回归（回调直接接收扁平 `Parameters`，`event.tabIcon` 而非 `event.params.tabIcon`——漂移即失败）、`onDidTitleChange` 标题更新、关闭按钮 `api.close` |
+| `workspace-defaulttab.test.tsx`（29 用例，WRK-05） | 渲染**生产 `DefaultTab`**（非手写 Mock，经 `PageDockviewHost.tsx` 导出）：tabIcon emoji/img 分支（含 `/` `\` http: data: → img）、`onDidParametersChange` 事件结构回归（回调直接接收扁平 `Parameters`，`event.tabIcon` 而非 `event.params.tabIcon`——漂移即失败）、`onDidTitleChange` 标题更新、关闭按钮 `api.close`、**tabLogo 跟随页签名渲染（F9 行为修订：tabIcon null 仍渲染/仅 tabLogo 动态出现）** |
 
 ### 键盘与快捷键测试
 

@@ -278,14 +278,14 @@ describe("Agent Status 视图与 toast 通知", () => {
   });
 
   /**
-   * 用例 2c（R2 变体）：切项目往返后用量保持。
+   * 用例 2c（R2 变体）：切项目往返后用量经 ContextUsage 信号恢复。
    *
-   * 验证：假 transcript JSONL（含 message.usage 四字段）→ 信号文件携真实
-   * usageSourcePath 建行 → contextUsage 后端真实解析 → 行含量化百分比 →
-   * 切项目往返（addPage → switchToPage → switchToPage 回）→ 用量数值保持。
-   * L4 级覆盖：cache 口径全链路（后端 agent_context_usage 真实解析，非 mock）。
+   * 验证：PreToolUse 信号建行 → ContextUsage 信号（usedPercentage 官方口径）
+   * → 行含量化百分比 → 切项目往返（行重建，usage 短暂 "--"）→ 再发
+   * ContextUsage 信号 → 用量恢复。L4 级覆盖：statusline 桥接信号通道全链路
+   * （信号文件 → watcher → agent-event → useAgentStatus 行更新，真实二进制非 mock）。
    */
-  it("R2 变体：切项目往返后用量保持（contextUsage 全链路 + cache 字段）", async () => {
+  it("R2 变体：切项目往返后用量经 ContextUsage 信号恢复（官方 used_percentage 口径）", async () => {
     const eventsDir = join(homedir(), ".slterminal", "hooks-events");
     const tempDir = mkdtempSync(join(tmpdir(), "slterm-e2e-agent-r2-"));
     const signalFiles: string[] = [];
@@ -297,27 +297,10 @@ describe("Agent Status 视图与 toast 通知", () => {
       // 0b. 确保 hooks 已注入
       await ensureHooksInjected();
 
-      // 0c. 写假 transcript JSONL——含 message.usage 四字段
-      //     input=30000 + cacheRead=50000 + cacheCreation=20000 = 100000 / 200000 = 50%
-      const transcriptDir = join(tempDir, ".claude", "transcripts");
-      mkdirSync(transcriptDir, { recursive: true });
-      const usageSourcePath = join(transcriptDir, "e2e-r2-transcript.jsonl");
-      const usageLine = JSON.stringify({
-        message: {
-          usage: {
-            input_tokens: 30000,
-            output_tokens: 1000,
-            cache_read_input_tokens: 50000,
-            cache_creation_input_tokens: 20000,
-          },
-        },
-      });
-      writeFileSync(usageSourcePath, usageLine + "\n", "utf8");
-
-      // 0d. 创建项目 → 获取 pageId
+      // 0c. 创建项目 → 获取 pageId
       const page1Id = await createProject(tempDir);
 
-      // 0e. Dockview API
+      // 0d. Dockview API
       await waitForDockviewApi();
 
       // 1. 创建终端面板
@@ -346,13 +329,12 @@ describe("Agent Status 视图与 toast 通知", () => {
       // 5. 确保信号目录存在
       mkdirSync(eventsDir, { recursive: true });
 
-      // 6. 原子写 PreToolUse 信号文件——携真实 usageSourcePath 建行 + usage 拉取
+      // 6. 原子写 PreToolUse 信号文件——建行（不含 usageSourcePath，transcript 链路已退役）
       signalFiles.push(writeSignalFile(eventsDir, {
         panelId,
         event: "PreToolUse",
         timestamp: Date.now(),
         sessionId: "e2e-agent-r2",
-        usageSourcePath, // 真实 transcript 路径 → contextUsage 后端解析
         cwd: tempDir,
         toolName: "Bash",
         notificationType: null,
@@ -361,15 +343,24 @@ describe("Agent Status 视图与 toast 通知", () => {
       // 7. 轮询行出现且含 ⚡
       await waitForStatusRow({ panelId, emoji: "⚡" });
 
-      // 8. 等待用量异步拉取完成（contextUsage 是异步的，轮询直到不是 "--"）
+      // 8. ContextUsage 信号（官方 used_percentage 口径）→ 行用量 50%
+      signalFiles.push(writeSignalFile(eventsDir, {
+        panelId,
+        cliId: "claude",
+        event: "ContextUsage",
+        timestamp: Date.now(),
+        sessionId: "e2e-agent-r2",
+        cwd: tempDir,
+        usedPercentage: 50,
+      }));
+
       await browser.waitUntil(
         async () => await browser.execute(() => {
           const row = document.querySelector('[data-e2e="agent-status-row"]');
           const text = row?.textContent ?? "";
-          // 用量文本应为 "50%"（不含 "--"）
           return text.includes("50%") && !text.includes("--");
         }),
-        { timeout: 10000, timeoutMsg: "用量百分比未在 contextUsage 拉取后出现 50%" },
+        { timeout: 10000, timeoutMsg: "用量百分比未在 ContextUsage 信号后出现 50%" },
       );
 
       // 9. 获取 projectId，创建 page2
@@ -382,15 +373,25 @@ describe("Agent Status 视图与 toast 通知", () => {
       await switchToPageAndWait(page2Id);
       await switchToPageAndWait(page1Id);
 
-      // 12. 断言行仍存在且用量保持（50%——初始扫描携 usageSourcePath 主动拉取）
-      const usageAfterSwitch = await browser.execute(() => {
-        const row = document.querySelector('[data-e2e="agent-status-row"]');
-        if (!row) return null;
-        return row.textContent ?? "";
-      });
-      expect(usageAfterSwitch).not.toBeNull();
-      expect(usageAfterSwitch).toContain("50%");
-      // 50% = (30000 + 50000 + 20000) / 200000 —— 四字段完整口径（input + cacheRead + cacheCreation）
+      // 12. 行重建后 usage 短暂 "--"，再发 ContextUsage 信号 → 50% 恢复
+      //     （行重建 = usage undefined；桥接通道每 1s 节流推送，信号即数据）
+      signalFiles.push(writeSignalFile(eventsDir, {
+        panelId,
+        cliId: "claude",
+        event: "ContextUsage",
+        timestamp: Date.now(),
+        sessionId: "e2e-agent-r2",
+        cwd: tempDir,
+        usedPercentage: 50,
+      }));
+      await browser.waitUntil(
+        async () => await browser.execute(() => {
+          const row = document.querySelector('[data-e2e="agent-status-row"]');
+          const text = row?.textContent ?? "";
+          return text.includes("50%") && !text.includes("--");
+        }),
+        { timeout: 10000, timeoutMsg: "切项目往返后用量未经 ContextUsage 信号恢复 50%" },
+      );
     } finally {
       // 清理信号文件
       for (const f of signalFiles) {

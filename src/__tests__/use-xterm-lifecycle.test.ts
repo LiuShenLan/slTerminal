@@ -285,7 +285,7 @@ function makeHooksProfile(id: string) {
       hooks: {
         eventToStatus: mockEventToStatus,
         classifyNotification: vi.fn(),
-        contextLimit: 200_000,
+        computeUsagePercent: () => null,
         restartHint: "hooks 改动需重启会话生效",
         hasConfigEditor: true,
       },
@@ -1356,12 +1356,12 @@ describe("OSC 133 命令边界检测", () => {
     const result = handler("C;claude");
 
     expect(result).toBe(false); // 返回 false 不消费序列（xterm.js 仍渲染提示符）
+    // F9 行为修订：C 路径不再传 logo——页签 logo 由 TerminalPanel 订阅
+    // TerminalRegistry sessionChange 按 agentSession.cliId 查 profile 驱动
     expect(mockOnTabStateChange).toHaveBeenCalledWith({
       active: true,
       title: "claude",
       icon: "🟡",
-      // CLI 品牌 logo：cliProfileRegistry.matchByCommand("claude") 命中默认注册 → claude.png
-      logo: "/cli-icons/claude.png",
     });
       // P1-F3-01: OSC 133 C 固定使用 🟡 (attention)，不使用 rule.icon
     // MC-107: OSC 133 C 命中注册命令 → 写入会话状态（cliId 取匹配 profile 的 id）
@@ -1391,7 +1391,7 @@ describe("OSC 133 命令边界检测", () => {
     expect(mockSetAgentSession).toHaveBeenCalledWith("osc133-test", null);
   });
 
-  it("OSC133-2b: OSC 133 C 匹配 profile → title/logo 均取自 profile（tabTitle / iconSrc）", async () => {
+  it("OSC133-2b: OSC 133 C 匹配 profile → title 取自 profile（tabTitle，F9 修订后 logo 不经此路径）", async () => {
     mockMatchByCommand.mockReturnValue(makeCliProfile("codex", "/cli-icons/codex.png"));
 
     const handler = await mountAndWaitForOsc133();
@@ -1400,12 +1400,12 @@ describe("OSC 133 命令边界检测", () => {
 
     handler("C;codex");
 
-    // profile 原子匹配：命中即 title=tabTitle、logo=iconSrc（不再存在"标题命中但 logo 缺失"组合）
+    // profile 原子匹配：命中即 title=tabTitle；logo 由会话绑定驱动（setAgentSession
+    // 写入 cliId → TerminalPanel 订阅 sessionChange 查 iconSrc），C 路径不再直传
     expect(mockOnTabStateChange).toHaveBeenCalledWith({
       active: true,
       title: "codex",
       icon: "🟡",
-      logo: "/cli-icons/codex.png",
     });
   });
 

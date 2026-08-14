@@ -245,7 +245,7 @@ describe("DefaultTab（生产组件）", () => {
     });
   });
 
-  describe("CLI logo（tabLogo，仅随 emoji 显示）", () => {
+  describe("CLI logo（tabLogo，跟随页签名显示——F9 行为修订）", () => {
     it("emoji + tabLogo → img[alt='CLI 图标'] 存在（src/16×16/flexShrink）", () => {
       const { statusImg } = renderTab({ tabIcon: "⚡", tabLogo: "/cli-icons/claude.png" });
       expect(statusImg()).toBeTruthy();
@@ -268,13 +268,29 @@ describe("DefaultTab（生产组件）", () => {
       expect(closeBtn()?.getAttribute("title")).toBe("关闭");
     });
 
-    it("tabIcon 为 null + tabLogo → 无 img（仅随 emoji，双清双保险）", () => {
-      const { statusImg, iconImg } = renderTab({
+    it("tabIcon 为 null + tabLogo → 仍渲染 logo（不依赖 emoji）", () => {
+      const { statusImg, root, getChildren, titleSpan } = renderTab({
         tabIcon: null,
         tabLogo: "/cli-icons/claude.png",
       });
+      expect(statusImg()?.getAttribute("src")).toBe("/cli-icons/claude.png");
+      // 无 URL 分支页签图标（alt="页签图标" 的 img 不存在，logo img 是 img[alt="CLI 图标"]）
+      expect(root?.querySelector('img[alt="页签图标"]')).toBeNull();
+      // emoji 不存在时 logo 顶到标题前（位置语义：emoji 之后、名称之前）
+      expect(getChildren()[0]).toBe(statusImg());
+      expect(titleSpan()?.textContent).toBe("terminal-0");
+    });
+
+    it("tabLogo 为 null → 无 logo img（无会话）", () => {
+      const { statusImg } = renderTab({ tabLogo: null });
       expect(statusImg()).toBeNull();
-      expect(iconImg()).toBeNull();
+    });
+
+    it("动态更新：仅 tabLogo 出现（tabIcon 缺席）→ logo img 渲染", () => {
+      const { listeners, statusImg } = renderTab({ tabIcon: null });
+      expect(statusImg()).toBeNull();
+      emitParamsChange(listeners, { tabLogo: "/cli-icons/claude.png" });
+      expect(statusImg()?.getAttribute("src")).toBe("/cli-icons/claude.png");
     });
 
     it("动态更新：emitParamsChange 携 tabLogo → logo img 出现（扁平参数回归）", () => {

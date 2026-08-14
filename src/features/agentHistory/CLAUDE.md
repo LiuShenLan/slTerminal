@@ -14,7 +14,7 @@ Agent 历史会话查询与恢复——历史区 UI 与数据层（CLI 无关聚
 
 ### 双行式行（FE-07）与三级字号层级（问题 1/4 修复）
 
-- `HistorySessionRow`：行1 = 四态标记 + **CLI 品牌 logo（F9）** + 粗体标题（12px）+ 右上角相对时间（`formatRelativeTime` 灰字）；行2 = 首条 prompt 预览单行截断（11px）。状态标记：`status` 非 null → 对应 emoji 后渲染 logo（16×16，`cliProfileRegistry.get(session.cliId)?.iconSrc`——**按行 cliId 查 profile**（MC-311），未注册 cliId → 无 logo 不报错；**仅随 status emoji**，孤儿 ✗ 后不加图）；`orphan` → ✗（cwd 非 null 且 `cwdExists=false`）；`noCwd` → 不显示 ✗（恢复类操作禁用）。配色全部 `theme/colors.ts` token（硬约束 #6）。
+- `HistorySessionRow`：行1 = 四态标记 + **CLI 品牌 logo（F9）** + 粗体标题（12px）+ 右上角相对时间（`formatRelativeTime` 灰字）；行2 = 首条 prompt 预览单行截断（11px）。状态标记：`status` 非 null → 对应 emoji；**F9 行为修订：logo 跟随会话名显示——行存在即显示，不依赖 status emoji**（16×16，`cliProfileRegistry.get(session.cliId)?.iconSrc`——**按行 cliId 查 profile**（MC-311），未注册 cliId → 无 logo 不报错；孤儿 ✗ 行同样加图；emoji 缺席时 logo 顶到行1 首位）；`orphan` → ✗（cwd 非 null 且 `cwdExists=false`）；`noCwd` → 不显示 ✗（恢复类操作禁用）。配色全部 `theme/colors.ts` token（硬约束 #6）。
 - `AgentStatusRow`（活跃区，agentStatus 模块）：行1 = 四态图标 + 标题（12px 粗体）；行2 = 用量条 + 百分比 + 相对时间（11px 灰，缩进对齐图标列）。时间口径与历史区统一（`formatRelativeTime`，问题 1 修复——旧为 toLocaleTimeString 同行挤压导致窄侧栏遮挡）。
 - **三级字号递减**（问题 4）：折叠框名（区块标题）13px 粗体 > 会话标题 12px 粗体 > 第二行 11px 灰。树形引导线：区块内容 `paddingLeft: 12px` + 左侧 1px 竖线（`SIDEBAR_COLORS.treeGuide`）；全部区组内容再缩进 12px + 二级竖线。
 

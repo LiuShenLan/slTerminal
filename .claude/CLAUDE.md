@@ -133,7 +133,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | src-tauri/src/fs | 文件系统命令（读/写/列目录/建/删/改名） | src-tauri/src/fs/mod.rs | ../src-tauri/src/fs/CLAUDE.md |
 | src-tauri/src/git | Git 状态/diff/HEAD 读取/回滚/取消暂存（git2） | src-tauri/src/git/mod.rs | ../src-tauri/src/git/CLAUDE.md |
 | src-tauri/src/notify | 文件系统监听（LruWatcherPool 缓存 + pause/resume 切换） | src-tauri/src/notify/mod.rs | ../src-tauri/src/notify/CLAUDE.md |
-| src-tauri/src/hooks | CLI hooks 能力层（CliHooksProvider trait + cliId 键注册表 + agent-event 广播 + claude provider 注入/卸载/状态/用量/三层配置读写 + 6 条 agent_hooks_* 泛化命令） | src-tauri/src/hooks/mod.rs | ../src-tauri/src/hooks/CLAUDE.md |
+| src-tauri/src/hooks | CLI hooks 能力层（CliHooksProvider trait + cliId 键注册表 + agent-event 广播 + claude provider 注入/卸载/状态/statusline 桥接（context 官方 used_percentage 通道）/三层配置读写 + 6 条 agent_hooks_* 泛化命令） | src-tauri/src/hooks/mod.rs | ../src-tauri/src/hooks/CLAUDE.md |
 | src-tauri/src/agent_history | 历史会话聚合层（CliHistoryProvider trait + cliId 键注册表 + claude provider 扫描/删除 + SEC-05 sessionId 校验） | src-tauri/src/agent_history/mod.rs | ../src-tauri/src/agent_history/CLAUDE.md |
 | src-tauri/src 顶层 | 单文件模块：lib.rs（命令注册/State/setup）、settings.rs（浅合并）、projects.rs（exe 同级 JSON 绕过沙箱）、state.rs（AppState/PtySession/路径沙箱）、error.rs（AppError） | src-tauri/src/lib.rs | ../src-tauri/src/CLAUDE.md |
 | e2e-tests | WDIO E2E 端到端测试 | e2e-tests/wdio.conf.ts | ../e2e-tests/CLAUDE.md |
@@ -181,6 +181,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | F6 | 特性 | hooks 双模式配置面板（JSON/GUI 编辑 hooks 子树，user/project/local 三层，F2 注入入口并入） |
 | F7 | 特性 | 历史会话查询与恢复（历史区三下拉框 + 扫描/恢复/删除；重命名已移除） |
 | F8 | 特性 | 终端页签自定义重命名（右键菜单「重命名」+ 自绘弹窗；customTitle 随布局持久化；claude 运行中禁用；不影响 terminal-N 递增） |
-| F9 | 特性 | 终端页签/侧栏 CLI 品牌 logo（按命令行首 token 匹配 profile.iconSrc） |
+| F9 | 特性 | 终端页签/侧栏 CLI 品牌 logo（按命令行首 token 匹配 profile.iconSrc；2026-08 行为修订：渲染条件由「仅随状态 emoji」改为「跟随页签名/会话名显示」——页签 logo 会话绑定（agentSession 存在即显示，按 cliId 查 iconSrc，TabState.logo 退役），侧栏活跃/历史行 logo 行存在即显示，位置不变 emoji 后名称前） |
 
 > 测试策略概览见上方「测试策略」章节；完整用例清单见 `.claude/test-inventory.md`。

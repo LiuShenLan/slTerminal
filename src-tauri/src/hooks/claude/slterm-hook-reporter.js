@@ -3,7 +3,7 @@
 // 零依赖，仅使用 Node.js >= 18 内置 API
 // 契约：任何代码路径 exit code 恒为 0，不向 stderr 输出（C10）
 
-const SCRIPT_VERSION = 3;
+const SCRIPT_VERSION = 4;
 
 const fs = require("fs");
 const path = require("path");

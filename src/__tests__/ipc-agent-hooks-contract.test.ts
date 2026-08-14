@@ -1,9 +1,11 @@
 // ipc-agent-hooks-contract.test.ts — agent hooks IPC wrapper 合约测试（IHE-06 工厂化，MC-212 更名同步）
 //
 // 经共享工厂 describeIpcContract（helpers/ipc-contract.ts）声明式驱动
-// 四命令（inject/uninstall/getInjectionStatus/contextUsage）× 四维
+// 四命令（inject/uninstall/getInjectionStatus/restoreStatusline）× 四维
 // （命令名 / 参数含 cliId camelCase / 正常返回 / 异常传播）；onAgentEvent 为 listen 事件封装，
 // 属"wrapper 行为契约"（IHE-01②）——手写模拟驱动断言，不走 invoke 工厂。
+// 原 agent_context_usage（transcript token 扫描）已整体移除——百分比经 ContextUsage
+// 信号走 agent-event 通道推送，无独立 invoke 命令。
 //
 // ⚠️ mockIPC 盲区（IHE-01）：mockIPC 只守 JS 侧形状——camelCase/snake_case 真实转换、
 // Channel 序列化、Uint8Array 处理、listen 回调运行时解包均不在 mock 层验证，
@@ -25,7 +27,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 // eslint-disable-next-line no-restricted-imports
 import { listen } from "@tauri-apps/api/event";
-import type { ContextUsage, AgentEventPayload } from "../types/agent";
+import type { AgentEventPayload } from "../types/agent";
 import * as agentHooks from "../ipc/agentHooks";
 
 // 泛化命令 cliId 实参（合约测试固定用 claude——与 E2E helper 同口径，测试基建字面量合法）
@@ -137,56 +139,31 @@ describeIpcContract("agent_hooks_injection_status 合约", [
 ]);
 
 // ═══════════════════════════════════════════════════════════════════
-// agent_context_usage（token 用量查询）
+// agent_hooks_restore_statusline（关闭清理：还原 statusline 桥接）
 // ═══════════════════════════════════════════════════════════════════
 
-const mockUsage: ContextUsage = {
-  inputTokens: 1500,
-  outputTokens: 800,
-  cacheReadInputTokens: 200,
-  cacheCreationInputTokens: 100,
-};
-
-describeIpcContract("contextUsage 合约（agent_context_usage）", [
-  // 维度 1：命令名
+describeIpcContract("restoreStatusline 合约（agent_hooks_restore_statusline）", [
   {
-    name: "应调用 agent_context_usage 命令",
-    cmd: "agent_context_usage",
-    call: () => agentHooks.contextUsage(CLI_ID, "/path/to/transcript.jsonl"),
-    respond: null,
+    name: "应调用 agent_hooks_restore_statusline 命令（仅 cliId 参数）",
+    cmd: "agent_hooks_restore_statusline",
+    call: () => agentHooks.restoreStatusline(CLI_ID),
+    respond: undefined,
+    expectArgs: { cliId: CLI_ID },
+    expectExactKeys: ["cliId"],
   },
-  // 维度 2：参数结构——cliId 首参 + usageSourcePath camelCase
   {
-    name: "应传递 { cliId, usageSourcePath } 参数（cliId 首参）",
-    cmd: "agent_context_usage",
-    call: () => agentHooks.contextUsage(CLI_ID, "/tmp/transcript-abc.jsonl"),
-    respond: null,
-    expectArgs: { cliId: CLI_ID, usageSourcePath: "/tmp/transcript-abc.jsonl" },
-    expectExactKeys: ["cliId", "usageSourcePath"],
+    name: "正常返回 void",
+    cmd: "agent_hooks_restore_statusline",
+    call: () => agentHooks.restoreStatusline(CLI_ID),
+    respond: undefined,
+    expectUndefined: true,
   },
-  // 维度 3：正常返回透传——ContextUsage 对象
-  {
-    name: "有 usage 数据时透传 ContextUsage 对象",
-    cmd: "agent_context_usage",
-    call: () => agentHooks.contextUsage(CLI_ID, "/transcript.jsonl"),
-    respond: { ...mockUsage },
-    expectResult: mockUsage,
-  },
-  // 维度 3：正常返回透传——null（无 usage 数据）
-  {
-    name: "无 usage 数据时透传 null",
-    cmd: "agent_context_usage",
-    call: () => agentHooks.contextUsage(CLI_ID, "/empty.jsonl"),
-    respond: null,
-    expectResult: null,
-  },
-  // 维度 4：异常传播
   {
     name: "invoke 失败时异常应传播给调用方",
-    cmd: "agent_context_usage",
-    call: () => agentHooks.contextUsage(CLI_ID, "/nonexistent.jsonl"),
-    mockThrow: "transcript 文件不存在",
-    expectReject: "transcript 文件不存在",
+    cmd: "agent_hooks_restore_statusline",
+    call: () => agentHooks.restoreStatusline(CLI_ID),
+    mockThrow: "settings.json 写入失败",
+    expectReject: "settings.json 写入失败",
   },
 ]);
 
@@ -295,21 +272,24 @@ describe("onAgentEvent 合约", () => {
   });
 });
 
-// DBG-4 守卫：ContextUsage 键集合精确匹配（四字段）
-describe("ContextUsage 字段完整性（DBG-4 守卫）", () => {
-  it("ContextUsage 恰好 4 字段（C12 契约）", () => {
-    const usage: ContextUsage = {
-      inputTokens: 1000,
-      outputTokens: 500,
-      cacheReadInputTokens: 200,
-      cacheCreationInputTokens: 100,
-    };
+// ContextUsageSignal 键集合精确匹配（单字段——官方 used_percentage 口径）
+describe("ContextUsageSignal 字段完整性（官方口径契约）", () => {
+  it("ContextUsageSignal 恰好 1 字段（usedPercentage）", () => {
+    const signal = { usedPercentage: 23.6 };
+    expect(Object.keys(signal).sort()).toEqual(["usedPercentage"]);
+  });
 
-    expect(Object.keys(usage).sort()).toEqual([
-      "cacheCreationInputTokens",
-      "cacheReadInputTokens",
-      "inputTokens",
-      "outputTokens",
-    ]);
+  it("AgentEventPayload.usedPercentage 可承载 ContextUsage 信号（可选字段）", () => {
+    const payload: AgentEventPayload = {
+      panelId: "terminal-p1-0",
+      event: "ContextUsage",
+      timestamp: 1700000000000,
+      sessionId: "sess-001",
+      cwd: "/project",
+      toolName: null,
+      notificationType: null,
+      usedPercentage: 23.6,
+    };
+    expect(payload.usedPercentage).toBe(23.6);
   });
 });

@@ -10,13 +10,12 @@
 
 pub mod config;
 pub mod inject;
-pub mod usage;
 
 use std::path::PathBuf;
 
 use crate::error::AppError;
 use crate::hooks::provider::CliHooksProvider;
-use crate::hooks::{AgentHookInjectionStatus, AgentInjectionStatus, ContextUsage};
+use crate::hooks::{AgentHookInjectionStatus, AgentInjectionStatus};
 use serde_json::Value;
 
 // ── 路径辅助（provider impl 内部，home 解析统一走 home_dir()） ──
@@ -125,8 +124,21 @@ impl CliHooksProvider for ClaudeHooksProvider {
         Ok(inject::injection_status_impl(&script_path, &settings_path))
     }
 
-    fn context_usage(&self, usage_source_path: &str) -> Result<Option<ContextUsage>, AppError> {
-        Ok(usage::scan_transcript_usage(usage_source_path))
+    fn restore_statusline(&self) -> Result<(), AppError> {
+        let settings_path = claude_settings_path();
+        let backup_path = inject::statusline_backup_path(home_dir());
+        inject::restore_statusline_impl(settings_path.as_deref(), backup_path.as_deref())
+    }
+
+    fn reinject_statusline(&self) -> Result<(), AppError> {
+        let settings_path = claude_settings_path();
+        let backup_path = inject::statusline_backup_path(home_dir());
+        let script_path = hook_script_path();
+        inject::reinject_statusline_impl(
+            settings_path.as_deref(),
+            backup_path.as_deref(),
+            script_path.as_deref(),
+        )
     }
 
     fn config_read(

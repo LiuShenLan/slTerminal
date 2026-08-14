@@ -37,6 +37,7 @@ import {
 } from "../panels/terminal/useCommandDetection";
 import { useXterm } from "../panels/terminal/useXterm";
 import { TerminalRegistry } from "../panels/terminal/TerminalRegistry";
+import { AgentStatusRow } from "../features/agentStatus/AgentStatusRow";
 import { useAgentNotifications } from "../features/notifications/useAgentNotifications";
 import { AgentHistorySections } from "../features/agentHistory/AgentHistorySections";
 import { restoreHistorySession } from "../features/agentHistory/restoreSession";
@@ -396,19 +397,19 @@ describe("AC-4① OSC 133 命中（useCommandDetection 链路）", () => {
     TerminalRegistry._reset();
   });
 
-  it("matchByCommand('mockcli --flag') 命中 → 页签标题/logo + agentSession.cliId", () => {
+  it("matchByCommand('mockcli --flag') 命中 → 页签标题 + agentSession.cliId（F9 修订：logo 不经此路径）", () => {
     expect(capturedOsc133Handler).not.toBeNull();
     act(() => {
       capturedOsc133Handler!("C;mockcli --flag");
     });
-    // 页签标题/logo 均取自匹配 profile（tabTitle / iconSrc）
+    // 页签标题取自匹配 profile（tabTitle）；logo 由会话绑定驱动（TerminalPanel 订阅
+    // sessionChange 按 agentSession.cliId 查 iconSrc），C 路径不再直传 logo
     expect(onTabStateChange).toHaveBeenCalledWith({
       active: true,
       title: mockCliProfile.tabTitle,
       icon: STATUS_EMOJI.attention,
-      logo: mockCliProfile.iconSrc,
     });
-    // MC-107: setAgentSession 写入 agentSession.cliId（hook 事件三级解析反查键）
+    // MC-107: setAgentSession 写入 agentSession.cliId（会话绑定 logo 数据源 + hook 事件三级解析反查键）
     const session = TerminalRegistry.get(panelId)?.agentSession;
     expect(session?.cliId).toBe(mockCliProfile.id);
     expect(session?.matchedCommand).toBe(mockCliProfile.id);
@@ -545,6 +546,34 @@ describe("AC-4② hooks 能力经真实链路调用", () => {
     expect(opts.body).toContain("✅ 任务完成");
     classifySpy.mockRestore();
   });
+
+  it("computeUsagePercent 经行渲染路径真实调用（spy 入参 + 桩值 42 区别于 claude 官方口径）", () => {
+    const computeSpy = vi.spyOn(
+      mockCliProfile.capabilities.hooks!,
+      "computeUsagePercent",
+    );
+    // mockcli 行（usage 传 99——桩恒 42 证明百分比口径由 profile 策略决定，非通用层硬编码）
+    const row = {
+      panelId: "terminal-page1-0",
+      pageId: "page1",
+      projectId: "proj-1",
+      cliId: mockCliProfile.id,
+      title: "mockcli 会话",
+      status: "working" as AgentStatus,
+      lastEventAt: Date.now(),
+      usage: { usedPercentage: 99 },
+    };
+    const { container } = render(
+      React.createElement(AgentStatusRow, { row, onFocus: vi.fn() }),
+    );
+    const line2 = container.querySelector(
+      '[data-e2e="agent-status-row"]',
+    )?.children[1] as HTMLElement;
+    expect(computeSpy).toHaveBeenCalledWith({ usedPercentage: 99 });
+    // 桩值 42%——百分比策略由 profile 能力域决定（新增 CLI 自带百分比口径）
+    expect(line2.children[1].textContent).toBe("42%");
+    computeSpy.mockRestore();
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -572,11 +601,9 @@ describe("AC-4③ 历史聚合 UI", () => {
     TerminalRegistry._reset();
   });
 
-  it("mock 条目出现在历史区 + 行 logo 按 session.cliId 取 mockcli iconSrc", () => {
-    const activeStatuses = new Map<string, AgentStatus>([
-      // 复合键（MC-313）：cliId|sessionId——行 logo「仅随 status emoji」依赖状态命中
-      ["mockcli|mock-s1", "working"],
-    ]);
+  it("mock 条目出现在历史区 + 行 logo 按 session.cliId 取 mockcli iconSrc（不依赖 status）", () => {
+    // F9 行为修订：status 无命中（空 Map → 无 emoji）→ 行 logo 仍渲染（跟随会话名显示）
+    const activeStatuses = new Map<string, AgentStatus>([]);
     const { getByText, container } = render(
       React.createElement(AgentHistorySections, {
         expandedCurrent: true,

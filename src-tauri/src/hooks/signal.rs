@@ -17,13 +17,15 @@ use tauri::Emitter;
 /// 防异常/恶意巨大文件拖垮 watcher 线程。
 const MAX_SIGNAL_FILE_BYTES: u64 = 1024 * 1024;
 
-/// Agent 事件载荷（跨边界契约：9 字段——可选 cliId + 可选 usageSourcePath，camelCase 序列化）
+/// Agent 事件载荷（跨边界契约：10 字段——可选 cliId + 可选 usageSourcePath + 可选 usedPercentage，camelCase 序列化）
 ///
 /// PartialEq 供 serde 往返精确断言测试使用（HUK-09）。
 /// cliId 为可选（serde default）：旧信号文件（无 cliId 键）反序列化兼容，
 /// 缺省由前端按 claude 兜底（MC-205 三级解析）。
 /// usageSourcePath 为可选（serde default，不加 serde alias）：信号文件瞬态（亚秒~3s 存活），
 /// 旧键（transcriptPath）信号降级 None——仅丢该事件用量拉取（决策 1）。
+/// usedPercentage 为可选（serde default）：ContextUsage 信号携带官方 context 用量百分比
+/// （claude statusline `context_window.used_percentage` 桥接），旧信号缺键降级 None。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentEventPayload {
@@ -48,6 +50,10 @@ pub struct AgentEventPayload {
     /// CLI 标识（可选，serde default；旧信号缺省 → 前端按 claude 兼容）
     #[serde(default)]
     pub cli_id: Option<String>,
+    /// context 用量百分比（可选，serde default）：ContextUsage 信号字段——
+    /// 官方口径 used_percentage（0–100 float），前端经 profile 策略取整钳位
+    #[serde(default)]
+    pub used_percentage: Option<f64>,
 }
 
 /// 解析信号文件 JSON 内容为 AgentEventPayload
@@ -181,7 +187,7 @@ mod tests {
         assert!(parse_signal_file("   ").is_none());
     }
 
-    /// serde camelCase 键集合精确匹配（HUK-09：9 字段全量含 cliId，防多键/缺键）
+    /// serde camelCase 键集合精确匹配（HUK-09：10 字段全量含 cliId/usedPercentage，防多键/缺键）
     fn assert_payload_key_set(json: &str) {
         let v: serde_json::Value = serde_json::from_str(json).unwrap();
         let mut keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
@@ -198,6 +204,7 @@ mod tests {
                 "timestamp",
                 "toolName",
                 "usageSourcePath",
+                "usedPercentage",
             ]
         );
     }
@@ -215,6 +222,7 @@ mod tests {
             tool_name: Some("Bash".into()),
             notification_type: None,
             cli_id: Some("claude".into()),
+            used_percentage: None,
         };
         let json = serde_json::to_string(&p).unwrap();
         assert_payload_key_set(&json);
@@ -227,14 +235,25 @@ mod tests {
         assert_eq!(v["notificationType"], serde_json::Value::Null);
         assert_eq!(v["usageSourcePath"], "/t.jsonl");
         assert_eq!(v["cliId"], "claude");
+        assert_eq!(v["usedPercentage"], serde_json::Value::Null);
         // 序列化 → 反序列化往返
         let back: AgentEventPayload = serde_json::from_str(&json).unwrap();
         assert_eq!(back, p);
     }
 
-    /// cliId 缺省时序列化仍为 9 键（"cliId": null，九键契约锁定）
+    /// ContextUsage 信号：usedPercentage 有值 → 反序列化正确（float 保真，取整钳位在前端 profile 策略）
     #[test]
-    fn serialize_none_cli_id_keeps_nine_key_set() {
+    fn deserialize_context_usage_signal() {
+        let json = r#"{"panelId":"p1","cliId":"claude","event":"ContextUsage","timestamp":999,"sessionId":"s1","cwd":"/cwd","usedPercentage":23.6}"#;
+        let p: AgentEventPayload = serde_json::from_str(json).unwrap();
+        assert_eq!(p.event, "ContextUsage");
+        assert_eq!(p.used_percentage, Some(23.6));
+        assert_eq!(p.cli_id.as_deref(), Some("claude"));
+    }
+
+    /// cliId 缺省时序列化仍为 10 键（"cliId": null，键集合契约锁定）
+    #[test]
+    fn serialize_none_cli_id_keeps_key_set() {
         let p = AgentEventPayload {
             panel_id: "p1".into(),
             event: "SessionStart".into(),
@@ -245,6 +264,7 @@ mod tests {
             tool_name: None,
             notification_type: None,
             cli_id: None,
+            used_percentage: None,
         };
         let json = serde_json::to_string(&p).unwrap();
         assert_payload_key_set(&json);
@@ -265,7 +285,8 @@ mod tests {
 
     /// 旧信号兼容：无 cliId 键的 8 字段 JSON → 正常反序列化，cli_id 缺省 None；
     /// 形态扩展（决策 1）：无 usageSourcePath 键 → usage_source_path 缺省 None
-    /// （旧键 transcriptPath 信号降级 None，仅丢该事件用量拉取）
+    /// （旧键 transcriptPath 信号降级 None，仅丢该事件用量拉取）；
+    /// 无 usedPercentage 键 → used_percentage 缺省 None（非 ContextUsage 信号）
     #[test]
     fn deserialize_legacy_signal_without_cli_id() {
         let json = r#"{"panelId":"p3","event":"Stop","timestamp":999,"sessionId":"s3","usageSourcePath":"/x.jsonl","cwd":"/app","toolName":null,"notificationType":"idle"}"#;
@@ -279,6 +300,10 @@ mod tests {
         assert!(
             p2.usage_source_path.is_none(),
             "旧信号缺 usageSourcePath 键应默认 None"
+        );
+        assert!(
+            p2.used_percentage.is_none(),
+            "旧信号缺 usedPercentage 键应默认 None"
         );
     }
 

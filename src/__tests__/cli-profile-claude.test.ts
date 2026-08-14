@@ -4,7 +4,8 @@
 // 注册/_reset 恢复语义）。
 // 覆盖：claude 身份域字段断言（MC-104）+ CLAUDE_CLI_ID 常量一致性 + side-effect
 // 注册 + hooks 能力字段（MC-214 前端半：eventToStatus/classifyNotification/
-// contextLimit/restartHint/hasConfigEditor/configEditor（KZ-1）/configLayers（KZ-4））
+// computeUsagePercent（官方 used_percentage 口径，原 contextLimit 已退役）/
+// restartHint/hasConfigEditor/configEditor（KZ-1）/configLayers（KZ-4））
 // + history 能力字段（MC-315/316：supportsFork/buildResumeCommand/buildRestoreInput）。
 // hooks 策略用例（MC-401/MC-422 迁入，Stage 02）：eventToStatus 26 用例语义
 // 迁自原 claude-status.test.ts（事件映射部分），落点改此；classifyNotification
@@ -26,6 +27,7 @@ import {
 import {
   eventToStatus,
   classifyNotification,
+  computeUsagePercent,
   buildResumeCommand,
   buildRestoreInput,
 } from "../features/cliProfiles/profiles/claude/strategies";
@@ -71,7 +73,7 @@ describe("claude profile 身份域（MC-104）", () => {
         hooks: {
           eventToStatus,
           classifyNotification,
-          contextLimit: 200_000,
+          computeUsagePercent,
           restartHint: "hooks 改动需重启 claude 会话生效",
           hasConfigEditor: true,
           configEditor: ClaudeHooksConfigEditor,
@@ -90,16 +92,31 @@ describe("claude profile 身份域（MC-104）", () => {
     });
   });
 
-  it("capabilities.hooks 七字段齐备（eventToStatus/classifyNotification/contextLimit/restartHint/hasConfigEditor/configEditor/configLayers）", () => {
+  it("capabilities.hooks 七字段齐备（eventToStatus/classifyNotification/computeUsagePercent/restartHint/hasConfigEditor/configEditor/configLayers）", () => {
     const hooks = cliProfileRegistry.get(CLAUDE_CLI_ID)!.capabilities.hooks;
     expect(hooks).toBeDefined();
     expect(typeof hooks!.eventToStatus).toBe("function");
     expect(typeof hooks!.classifyNotification).toBe("function");
-    expect(hooks!.contextLimit).toBe(200_000);
+    expect(typeof hooks!.computeUsagePercent).toBe("function");
     expect(hooks!.restartHint).toBe("hooks 改动需重启 claude 会话生效");
     expect(hooks!.hasConfigEditor).toBe(true);
     expect(hooks!.configEditor).toBe(ClaudeHooksConfigEditor);
     expect(hooks!.configLayers).toHaveLength(3);
+  });
+
+  it("computeUsagePercent 官方口径（round + clamp 0-100；无数据 null）", () => {
+    const fn = cliProfileRegistry.get(CLAUDE_CLI_ID)!.capabilities.hooks!
+      .computeUsagePercent;
+    // 取整（round）
+    expect(fn({ usedPercentage: 23.6 })).toBe(24);
+    expect(fn({ usedPercentage: 23.4 })).toBe(23);
+    // 钳位边界
+    expect(fn({ usedPercentage: 99.6 })).toBe(100);
+    expect(fn({ usedPercentage: 100.4 })).toBe(100);
+    expect(fn({ usedPercentage: -5 })).toBe(0);
+    // 无数据 → null（渲染 "--"）
+    expect(fn(null)).toBeNull();
+    expect(fn(undefined)).toBeNull();
   });
 
   it("configEditor 挂载 = ClaudeHooksConfigEditor（KZ-1：hub 分派数据源，features→panels 依赖方向）", () => {

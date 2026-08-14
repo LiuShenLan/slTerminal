@@ -11,6 +11,8 @@ import { useKeybindings, cancelPendingSave as cancelKeybindingsSave } from "./st
 import { useSideBar, cancelPendingSave as cancelSideBarSave } from "./stores/sideBar";
 import { saveLayout } from "./workspace/layoutSerde";
 import { pty } from "./ipc";
+import * as agentHooks from "./ipc/agentHooks";
+import { CLAUDE_CLI_ID } from "./features/cliProfiles/profiles/claude";
 import { setProjectRoot } from "./ipc/fs";
 import { TerminalRegistry } from "./panels/terminal/TerminalRegistry";
 import { ErrorBoundary } from "./lib";
@@ -153,6 +155,13 @@ function App() {
           try {
             localStorage.setItem(LS_LAST_ACTIVE_PAGE_KEY, activePageId);
           } catch { /* localStorage 不可用时静默失败 */ }
+        }
+        // 4. 恢复 statusline 桥接（还原备份原配置，备份保留供重开重注入）——
+        //    用户在别处用 cli 时终端状态行不受桥接影响；失败静默不阻断关闭
+        try {
+          await agentHooks.restoreStatusline(CLAUDE_CLI_ID);
+        } catch (err) {
+          console.error("[slTerminal] 关闭时恢复 statusline 失败:", err);
         }
       } catch (err) {
         console.error("[slTerminal] 关闭保存失败:", err);

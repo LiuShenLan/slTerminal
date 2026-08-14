@@ -14,10 +14,10 @@ Agent 状态视图（`agent-status` 侧栏视图，图标 🤖）——一屏总
 
 行1 = 四态图标 + **CLI 品牌 logo（F9）** + 标题（12px 粗体）；行2 = 用量条 + 百分比 + 相对时间（11px 灰，缩进对齐图标列）。
 
-- **图标列 40px flex 簇**：emoji 与 CLI logo（16×16，`cliProfileRegistry.get(row.cliId)?.iconSrc`——**按行 cliId 查 profile**（MC-411），OSC 133-only 行同样有 cliId（logo 可展示），未注册 cliId → undefined → 无 logo 不报错）列内居中成组（列内 gap 4px）；`{icon}` 为空仍渲染空列占位（行1 标题起点恒定不漂移）；logo 仅随 emoji 显示（icon 为空 → 无 logo）
+- **图标列 40px flex 簇**：emoji 与 CLI logo（16×16，`cliProfileRegistry.get(row.cliId)?.iconSrc`——**按行 cliId 查 profile**（MC-411），OSC 133-only 行同样有 cliId（logo 可展示），未注册 cliId → undefined → 无 logo 不报错）列内居中成组（列内 gap 4px）；`{icon}` 为空仍渲染空列占位（行1 标题起点恒定不漂移）；**F9 行为修订：logo 跟随会话名显示——行存在即显示，不依赖 emoji（status=null 行同样有 logo）**
 - **行2 缩进 48px**（= 图标列 40 + gap 8），用量条与行1 标题起点对齐
 
-**用量口径** = `(inputTokens + cacheReadInputTokens + cacheCreationInputTokens) / contextLimit`（`contextLimit` = `cliProfileRegistry.get(row.cliId)?.capabilities?.hooks?.contextLimit`，缺失 → `--`，MC-412；outputTokens 不计占用保留为信息字段）。时间口径与历史区统一（`formatRelativeTime`，见 @../agentHistory/CLAUDE.md）。
+**用量口径（官方 used_percentage，原 transcript token 累加 ÷ 硬编码 contextLimit 已退役）** = ContextUsage 信号（statusline 桥接通道，payload `usedPercentage`）→ 经 `cliProfileRegistry.get(row.cliId)?.capabilities?.hooks?.computeUsagePercent(row.usage)` 委托（claude = round + clamp 0–100；profile 缺失/无 hooks 能力/无数据 → `--`，MC-412 语义保留）。**用量条四档分级**：≥90 critical 红 / ≥70 high 橙 / ≥50 medium 黄 / else low 绿（`AGENT_STATUS_USAGE_COLORS` 四键）。时间口径与历史区统一（`formatRelativeTime`，见 @../agentHistory/CLAUDE.md）。
 
 ### 行建模：建行双通道 / 删行三通道（F5）
 
@@ -25,7 +25,8 @@ Agent 状态视图（`agent-status` 侧栏视图，图标 🤖）——一屏总
 - **删行三通道**：`sessionChange` session 为 null ∨ SessionEnd/Exit 事件 ∨ `remove`（面板关闭）
 - **行 cliId（MC-410）**：hook 事件通道建行按 MC-205 三级解析写入——经 `resolvePayloadCliId` 单点（`src/panels/terminal/resolvePayloadCliId.ts`，ZQ-2 契约 4：`payload.cliId` trim 后非空 → `TerminalRegistry.get(panelId)?.agentSession?.cliId` 反查 → `CLAUDE_CLI_ID` 缺省；空串/仅空白与 null/undefined 同等回退）；OSC 133/sessionChange 通道建行取 `agentSession.cliId`（缺省兜底）；无 hooks 能力或未知 cliId → `console.warn` + 跳过（不建行/不置图标/不通知，MC-206）
 - **建行 status（ZQ-3 决策 2）**：hook 事件通道建行 `status = newStatus` 原样写入（null 映射事件建行但 status null 无图标）——感知存活（SessionStart 丢失场景）且不误标 attention；更新已有行 null 不覆盖旧值逻辑不变；活跃区 null 行 ↔ 历史区「status null 不产出键」语义一致
-- **初始扫描**：只建 `agentSession` 非 null 的行并携 `usageSourcePath` 主动拉 `contextUsage`（修复切项目后 idle 会话用量永远 --）
+- **初始扫描**：只建 `agentSession` 非 null 的行（usage 由 ContextUsage 信号事件推送——桥接脚本 1s 节流，行建立后很快有数据；无数据 → `--`）
+- **ContextUsage 信号分支**：`handleHookEvent` 前置分支——行存在才更新 `usage`（`usedPercentage` 数字校验），不建行/删行/不动状态（先于建行到达时忽略）；事件名经 `CONTEXT_USAGE_EVENT` 常量（profiles/claude，AC-5）
 - **竞态双保险**：双 listener 经 ref 读最新状态 + deps `[]` 订阅永不重建 + reconcile 对账兜底
 
 ### 相对时间 60s ticker
@@ -42,14 +43,14 @@ Agent 状态视图（`agent-status` 侧栏视图，图标 🤖）——一屏总
 |------|------|
 | `AgentStatusView.tsx` | 视图组件（F7 三下拉框结构）：活跃会话（useAgentStatus + AgentStatusRow，行标题经历史区 scan 数据覆盖——问题 6 修复，复合键 `cliId\|sessionId` 匹配，MC-314）+ 当前项目历史会话 + 全部项目历史会话（挂载 `AgentHistorySections` 受控区，useAgentHistory 上提本组件单实例）；默认活跃展开、两历史区收起；区块标题 13px 粗体 + 内容缩进引导线（问题 4 三级字号） |
 | `AgentStatusRow.tsx` | 会话行组件（双行式，见上） |
-| `useAgentStatus.ts` | 数据 hook：`useAgentStatus()` → `AgentStatusResult`（`state` + `rows: AgentSessionRow[]` + `now` 时间基准）+ TerminalRegistry 订阅（register/remove/sessionChange）+ contextUsage 拉取 |
+| `useAgentStatus.ts` | 数据 hook：`useAgentStatus()` → `AgentStatusResult`（`state` + `rows: AgentSessionRow[]` + `now` 时间基准）+ TerminalRegistry 订阅（register/remove/sessionChange）+ ContextUsage 信号事件处理（行 usage 更新） |
 | `index.ts` | barrel export：`export { AgentStatusView }` |
 
 ## 测试模式
 
 L2 测试位于 `src/__tests__/`（用例数见 `.claude/test-inventory.md`）：
 
-- `agent-status-view.test.tsx` — AgentStatusRow 双行布局 + AgentStatusView 三区结构
-- `agent-status-hook.test.ts` — useAgentStatus sessionId 字段、行建模通道（F5）
+- `agent-status-view.test.tsx` — AgentStatusRow 双行布局 + AgentStatusView 三区结构 + 官方 used_percentage 口径（round/clamp 边界）+ 四档分级边界
+- `agent-status-hook.test.ts` — useAgentStatus sessionId 字段、行建模通道（F5）+ ContextUsage 信号分支（行存在更新/不建行/字段缺失忽略/不删除）
 
 另有 `terminal-registry.test.ts` / `use-xterm-lifecycle.test.ts` 覆盖 agentSession sessionId/status 存储与 hook 事件写入（HUK1-9）。

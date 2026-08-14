@@ -18,11 +18,16 @@ import {
   buildResumeCommand,
   buildRestoreInput,
   classifyNotification,
+  computeUsagePercent,
   eventToStatus,
 } from "./strategies";
 
 /** claude cliId 公共键（通用层缺省回退一律 import 此常量，禁止写 "claude" 字面量） */
 export const CLAUDE_CLI_ID = "claude";
+
+/** context 用量信号事件名（statusline 桥接通道）——AC-5 守卫：claude 事件名字面量
+ *  只允许出现在 profiles/claude/（claude 合法领地），通用层消费一律 import 本常量 */
+export const CONTEXT_USAGE_EVENT = "ContextUsage";
 
 // 会话生命周期事件名常量——AC-5 守卫：claude 事件名字面量（SessionEnd/Exit 等）
 // 只允许出现在 profiles/claude/（claude 合法领地），通用层消费一律 import 本常量
@@ -45,7 +50,7 @@ export const claudeProfile: CodingCliProfile = {
     hooks: {
       eventToStatus,
       classifyNotification,
-      contextLimit: 200_000,
+      computeUsagePercent,
       restartHint: "hooks 改动需重启 claude 会话生效",
       hasConfigEditor: true,
       // KZ-1：hub 编辑器槽分派数据源——claude 专属编辑器（panels/hooksConfig/

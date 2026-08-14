@@ -204,19 +204,21 @@ describe("theme/colors.ts 配色 token", () => {
     });
   });
 
-  describe("AGENT_STATUS_USAGE_COLORS（Agent 用量条分段色）", () => {
-    it("包含 low / medium / high 三个 token", () => {
+  describe("AGENT_STATUS_USAGE_COLORS（Agent 用量条分段色，四档 ≥90/≥70/≥50）", () => {
+    it("包含 low / medium / high / critical 四个 token", () => {
       const keys = Object.keys(AGENT_STATUS_USAGE_COLORS);
-      expect(keys).toHaveLength(3);
+      expect(keys).toHaveLength(4);
       expect(keys).toContain("low");
       expect(keys).toContain("medium");
       expect(keys).toContain("high");
+      expect(keys).toContain("critical");
     });
 
     const usageCases = [
       { key: "low", expected: "#629755" },
       { key: "medium", expected: "#BBB529" },
-      { key: "high", expected: "#F44747" },
+      { key: "high", expected: "#FFAF00" },
+      { key: "critical", expected: "#F44747" },
     ];
 
     it.each(usageCases)(

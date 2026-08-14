@@ -140,7 +140,7 @@ describe("SchemeRegistry", () => {
   });
 
   describe("darcula 四段完整性", () => {
-    it("ui 段——6 组键数 7/3/5/8/3/3 + 23 标量", () => {
+    it("ui 段——6 组键数 7/3/5/8/3/4 + 23 标量", () => {
       expect(darcula.id).toBe("darcula");
       expect(darcula.label).toBe("Darcula");
       // 6 组
@@ -149,7 +149,7 @@ describe("SchemeRegistry", () => {
       expect(Object.keys(darcula.ui.explorer).length).toBe(5);
       expect(Object.keys(darcula.ui.sidebar).length).toBe(8);
       expect(Object.keys(darcula.ui.errorBanner).length).toBe(3);
-      expect(Object.keys(darcula.ui.agentStatusUsage).length).toBe(3);
+      expect(Object.keys(darcula.ui.agentStatusUsage).length).toBe(4);
       // 23 标量（标量均为 string，组为嵌套对象）
       const scalarCount = (Object.keys(darcula.ui) as Array<keyof typeof darcula.ui>).filter(
         (k) => typeof darcula.ui[k] === "string",

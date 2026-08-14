@@ -419,7 +419,8 @@ function installMockCliProfile(): void {
         eventToStatus: (event) => (event === "Stop" ? "done" : "working"),
         // 桩实现：一律不触发通知
         classifyNotification: () => null,
-        contextLimit: 1_000_000,
+        // 百分比桩：任意 usage 恒 42（与 L2 mockCliProfile 桩同口径）
+        computeUsagePercent: () => 42,
         restartHint: "mockcli 桩提示：hooks 改动需重启 mockcli 会话生效",
         hasConfigEditor: true,
         // CS-3：桩编辑器（React.createElement 构造——helpers.ts 为 .ts 无 JSX；

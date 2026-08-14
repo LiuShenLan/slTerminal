@@ -76,7 +76,7 @@ export const ERROR_BANNER_FG = ui.errorBanner.fg;
 export const EXPLORER_SELECTION_BG = ui.explorerSelectionBg;
 
 // --- Agent Status 用量条分段色（ui.agentStatusUsage）---
-// 阈值由组件逻辑决定：<50% low，50-80% medium，>80% high。
+// 阈值由组件逻辑决定：≥90 critical，≥70 high，≥50 medium，else low。
 
 export const AGENT_STATUS_USAGE_COLORS = ui.agentStatusUsage;
 

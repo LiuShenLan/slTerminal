@@ -3,7 +3,8 @@
 // 行 = 运行中的编码 CLI 会话（非全部终端）。
 // 建行双通道：sessionChange（session 非 null）∨ hook 事件（非 SessionEnd/Exit 且行不存在）——两通道独立幂等。
 // 删行三通道：sessionChange（session 为 null）∨ SessionEnd/Exit hook 事件 ∨ remove 事件。
-// 初始扫描只建 agentSession 非 null 的行；携 usageSourcePath 时主动拉 contextUsage（修复问题 2b）。
+// 初始扫描只建 agentSession 非 null 的行。usage 数据源 = ContextUsage 信号事件
+// （statusline 桥接通道，官方 used_percentage 口径——行存在才更新，不建行/删行/不动状态）。
 // #5 竞态双保险：① registry/agent-event 双 listener 经 ref 读最新状态，effect deps [] 订阅永不重建；
 // ② 初始扫描按注册表现值对账（agentSession 非 null 才建行），兜底任何事件丢失。
 //
@@ -17,16 +18,20 @@ import { useProjects } from "../../stores/projects";
 import { TerminalRegistry } from "../../panels/terminal/TerminalRegistry";
 // ZQ-2: 来源 CLI 标识三级解析单点（契约 4）——空串/空白 cliId 同等回退
 import { resolvePayloadCliId } from "../../panels/terminal/resolvePayloadCliId";
-import { onAgentEvent, contextUsage } from "../../ipc/agentHooks";
+import { onAgentEvent } from "../../ipc/agentHooks";
 import { parseTerminalPageId } from "../../lib/panelId";
 import { getPageApi } from "../../workspace/pageApis";
 import { cliProfileRegistry } from "../cliProfiles";
 // AC-5: 事件名字面量只允许出现在 profiles/claude/（claude 合法领地）——
-// SessionEnd/Exit 判定一律引用本常量，不写字面量
-import { CLAUDE_CLI_ID, SESSION_END_EVENT, EXIT_EVENT } from "../cliProfiles/profiles/claude";
+// SessionEnd/Exit/ContextUsage 判定一律引用本常量，不写字面量
+import {
+  CLAUDE_CLI_ID,
+  CONTEXT_USAGE_EVENT,
+  SESSION_END_EVENT,
+  EXIT_EVENT,
+} from "../cliProfiles/profiles/claude";
 import type { AgentStatus } from "../../lib/agentStatus";
-import type { AgentEventPayload } from "../../types/agent";
-import type { ContextUsage } from "../../types/agent";
+import type { AgentEventPayload, ContextUsageSignal } from "../../types/agent";
 
 // ---- 类型定义 ----
 
@@ -43,7 +48,8 @@ export interface AgentSessionRow {
   status: AgentStatus;
   lastEventAt: number;
   usageSourcePath?: string;
-  usage?: ContextUsage | null;
+  /** context 用量信号（ContextUsage 事件推送——官方 used_percentage 口径；未收到 → undefined） */
+  usage?: ContextUsageSignal | null;
 }
 
 /** 视图状态机 */
@@ -128,6 +134,22 @@ export function useAgentStatus(): AgentStatusResult {
       const pageIds = projectPageIdsRef.current;
       if (!pageIds.has(pageId)) return;
 
+      // ContextUsage 信号：行存在才更新 usage（不建行/删行/不动状态——事件先于
+      // 建行到达时忽略；桥接脚本 1s 节流保证行建立后很快有数据）；字段缺失 → 忽略
+      if (payload.event === CONTEXT_USAGE_EVENT) {
+        if (typeof payload.usedPercentage === "number") {
+          const pct = payload.usedPercentage;
+          setRows((prev) =>
+            prev.map((r) =>
+              r.panelId === payload.panelId
+                ? { ...r, usage: { usedPercentage: pct } }
+                : r,
+            ),
+          );
+        }
+        return;
+      }
+
       const proj = activeProjectRef.current;
       if (!proj) return;
 
@@ -206,21 +228,6 @@ export function useAgentStatus(): AgentStatusResult {
         next.sort((a, b) => b.lastEventAt - a.lastEventAt);
         return next;
       });
-
-      // 事件含 usageSourcePath 时异步拉取用量（cliId 传行 cliId——事件通道建行的行 cliId = 三级解析结果）
-      if (payload.usageSourcePath) {
-        contextUsage(cliId, payload.usageSourcePath)
-          .then((usage) => {
-            setRows((prev) =>
-              prev.map((r) =>
-                r.panelId === payload.panelId ? { ...r, usage } : r,
-              ),
-            );
-          })
-          .catch((err) => {
-            console.error("contextUsage 拉取失败:", err);
-          });
-      }
     },
     [], // deps []——所有动态数据经 ref 读取，回调永不重建
   );
@@ -271,21 +278,6 @@ export function useAgentStatus(): AgentStatusResult {
             };
             return [...prev, row].sort((a, b) => b.lastEventAt - a.lastEventAt);
           });
-
-          // 携 usageSourcePath 时主动拉取用量（cliId 传行 cliId）
-          if (entry.agentSession.usageSourcePath) {
-            contextUsage(rowCliId, entry.agentSession.usageSourcePath)
-              .then((usage) => {
-                setRows((prev) =>
-                  prev.map((r) =>
-                    r.panelId === event.panelId ? { ...r, usage } : r,
-                  ),
-                );
-              })
-              .catch((err) => {
-                console.error("contextUsage 拉取失败:", err);
-              });
-          }
         } else {
           // session 为 null → 删行
           setRows((prev) => {
@@ -345,21 +337,6 @@ export function useAgentStatus(): AgentStatusResult {
         sessionId: entry.agentSession.sessionId,
         usage: undefined,
       });
-
-      // 携 usageSourcePath 时主动拉取一次（修复问题 2b：切项目后 idle 会话用量永远 --；cliId 传行 cliId）
-      if (entry.agentSession.usageSourcePath) {
-        contextUsage(rowCliId, entry.agentSession.usageSourcePath)
-          .then((usage) => {
-            setRows((prev) =>
-              prev.map((r) =>
-                r.panelId === panelId ? { ...r, usage } : r,
-              ),
-            );
-          })
-          .catch((err) => {
-            console.error("contextUsage 拉取失败:", err);
-          });
-      }
     }
 
     initialRows.sort((a, b) => b.lastEventAt - a.lastEventAt);

@@ -4,8 +4,9 @@
  *
  * 备份/还原（E2E-05 扩展）：E2E 运行会真实写盘三处用户配置——
  * ① ~/.slterminal/settings.json（侧栏视图状态等，FIX-TE-04 原有）
- * ② ~/.claude/settings.json（agent_hooks_inject 注入 slterm matcher，E2E-05 新增）
- * ③ ~/.slterminal/hooks/（注入的 reporter 脚本，E2E-05 新增）
+ * ② ~/.claude/settings.json（agent_hooks_inject 注入 slterm matcher + statusLine 桥接，E2E-05 新增）
+ * ③ ~/.slterminal/hooks/（注入的 reporter + statusline 桥接脚本，E2E-05 新增）
+ * ④ ~/.slterminal/statusline-backup.json（注入的原 statusLine 备份，statusline 桥接新增）
  * 启动时备份（存在时），exit 时同步还原；~/.slterminal/hooks-events/
  * 为运行时信号文件目录（无用户价值），exit 时直接清理。
  * 三启动路径（node22 直跑 / 便携下载 / fallback）均在同一主进程内
@@ -52,6 +53,11 @@ const settingsExisted = backupFile(settingsPath);
 const claudeSettingsPath = path.join(os.homedir(), '.claude', 'settings.json');
 const claudeSettingsExisted = backupFile(claudeSettingsPath);
 
+// ~/.slterminal/statusline-backup.json（statusline 桥接注入的原配置备份）：
+// 注入/卸载会写删此文件——与 hooks 目录同批备份/还原
+const statuslineBackupPath = path.join(os.homedir(), '.slterminal', 'statusline-backup.json');
+const statuslineBackupExisted = backupFile(statuslineBackupPath);
+
 // ~/.slterminal/hooks/（reporter 脚本目录，E2E-05）：
 // 用户可能已有注入——目录整体备份/还原（cpSync 复制，rename 对占用目录易失败）；
 // 原本不存在时 exit 删除 E2E 注入产物。
@@ -78,6 +84,8 @@ process.on('exit', () => {
   restoreFile(settingsPath, settingsExisted);
   // ~/.claude/settings.json 还原（E2E-05——agent_hooks_inject 会真实写 slterm matcher）
   restoreFile(claudeSettingsPath, claudeSettingsExisted);
+  // statusline 备份文件还原（statusline 桥接注入/卸载会写删）
+  restoreFile(statuslineBackupPath, statuslineBackupExisted);
   // hooks-events 清理（E2E-05——信号文件目录，watcher 消费后残留兜底删除）
   try { fs.rmSync(hooksEventsDir, { recursive: true, force: true }); } catch { /* 忽略 */ }
   // hooks 目录还原/清理（E2E-05）

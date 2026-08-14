@@ -18,11 +18,12 @@ interface Props {
   now?: number;
 }
 
-/** 根据用量百分比返回对应分段颜色 */
+/** 根据用量百分比返回对应分段颜色（四档：≥90 红 / ≥70 橙 / ≥50 黄 / else 绿） */
 function usageBarColor(percent: number): string {
-  if (percent < 50) return AGENT_STATUS_USAGE_COLORS.low;
-  if (percent <= 80) return AGENT_STATUS_USAGE_COLORS.medium;
-  return AGENT_STATUS_USAGE_COLORS.high;
+  if (percent >= 90) return AGENT_STATUS_USAGE_COLORS.critical;
+  if (percent >= 70) return AGENT_STATUS_USAGE_COLORS.high;
+  if (percent >= 50) return AGENT_STATUS_USAGE_COLORS.medium;
+  return AGENT_STATUS_USAGE_COLORS.low;
 }
 
 export const AgentStatusRow: React.FC<Props> = ({ row, onFocus, now }) => {
@@ -32,27 +33,20 @@ export const AgentStatusRow: React.FC<Props> = ({ row, onFocus, now }) => {
     onFocus(row.panelId);
   }, [onFocus, row.panelId]);
 
-  // ---- 用量计算（input + cacheRead + cacheCreation；output 不计占用，保留为信息字段） ----
-  // MC-412：contextLimit 由行 cliId 对应 profile.hooks.contextLimit 提供；
-  // profile 缺失或无 hooks 能力 → 用量 "--"（现状语义保留）
-  const contextLimit =
-    cliProfileRegistry.get(row.cliId)?.capabilities?.hooks?.contextLimit;
-  const total =
-    row.usage != null
-      ? row.usage.inputTokens +
-        row.usage.cacheReadInputTokens +
-        row.usage.cacheCreationInputTokens
-      : 0;
-  const usageAvailable =
-    row.usage != null && contextLimit != null && contextLimit > 0;
-  const percent = usageAvailable
-    ? Math.min(100, (total / contextLimit!) * 100)
-    : 0;
+  // ---- 用量百分比（profile 能力域委托——claude = 官方 used_percentage 取整+钳位） ----
+  // 口径变更：原 transcript token 累加 ÷ 硬编码 contextLimit 已退役——官方
+  // used_percentage 经 statusline 桥接信号（ContextUsage 事件）推送；
+  // profile 缺失或无 hooks 能力 / 无数据 → 用量 "--"（现状语义保留）
+  const percent =
+    cliProfileRegistry.get(row.cliId)?.capabilities?.hooks?.computeUsagePercent(
+      row.usage,
+    ) ?? null;
 
   // ---- 图标与时间（相对时间，与历史区口径统一；now 由 60s ticker 驱动重算） ----
   const icon = getStatusIcon(row.status);
   // MC-411：CLI 品牌 logo 按行 cliId 查 profile.iconSrc（OSC 133-only 行同样有 cliId）；
-  // 未注册 cliId → undefined → 无 logo 不报错
+  // 未注册 cliId → undefined → 无 logo 不报错。
+  // F9 行为修订：logo 跟随会话名显示——行存在即显示，不依赖 icon（status=null 行同样有 logo）
   const logoSrc = cliProfileRegistry.get(row.cliId)?.iconSrc;
   const timeStr = formatRelativeTime(row.lastEventAt, now ?? Date.now());
 
@@ -90,8 +84,9 @@ export const AgentStatusRow: React.FC<Props> = ({ row, onFocus, now }) => {
           }}
         >
           {icon}
-          {/* CLI 品牌 logo：仅随 emoji 显示；icon 为空时渲染空列占位（对齐恒定不漂移） */}
-          {icon && logoSrc && (
+          {/* CLI 品牌 logo：跟随会话名显示（行存在即显示，F9 行为修订）；
+              icon 为空时仍渲染空列占位（对齐恒定不漂移），logo 独立于 emoji */}
+          {logoSrc && (
             <img src={logoSrc} width={16} height={16}
               style={{ flexShrink: 0, display: "block" }} alt="CLI 图标" />
           )}
@@ -132,12 +127,11 @@ export const AgentStatusRow: React.FC<Props> = ({ row, onFocus, now }) => {
         >
           <div
             style={{
-              width: usageAvailable ? `${percent}%` : "100%",
+              width: percent != null ? `${percent}%` : "100%",
               height: "100%",
               borderRadius: "3px",
-              backgroundColor: usageAvailable
-                ? usageBarColor(percent)
-                : DIM_FG,
+              backgroundColor:
+                percent != null ? usageBarColor(percent) : DIM_FG,
               transition: "width 0.3s ease",
             }}
           />
@@ -147,11 +141,11 @@ export const AgentStatusRow: React.FC<Props> = ({ row, onFocus, now }) => {
             width: "36px",
             textAlign: "right",
             fontSize: "11px",
-            color: usageAvailable ? SIDEBAR_COLORS.fg : DIM_FG,
+            color: percent != null ? SIDEBAR_COLORS.fg : DIM_FG,
             flexShrink: 0,
           }}
         >
-          {usageAvailable ? `${Math.round(percent)}%` : "--"}
+          {percent != null ? `${percent}%` : "--"}
         </span>
         <span
           style={{

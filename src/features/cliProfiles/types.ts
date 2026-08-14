@@ -5,7 +5,7 @@
 // AgentEventPayload / HistorySession 随 Stage 03/04 更名时同步。
 
 import type { AgentStatus } from "../../lib/agentStatus";
-import type { AgentEventPayload } from "../../types/agent";
+import type { AgentEventPayload, ContextUsageSignal } from "../../types/agent";
 import type { AgentHistorySession } from "../../types/agentHistory";
 // React 仅类型 import（KZ-1：类型引用 ComponentType/MutableRefObject，运行期擦除——
 // 不构成 features/cliProfiles → panels 的运行期依赖，防循环依赖）
@@ -29,8 +29,11 @@ export interface HooksCapability {
   classifyNotification(
     payload: AgentEventPayload,
   ): "permission" | "error" | "done" | null;
-  /** 上下文窗口上限（用量口径分母，claude = 200_000） */
-  contextLimit: number;
+  /** 用量信号 → 显示百分比（协议知识实现留在 profiles/<cli>/——claude = 官方
+   *  used_percentage 取整 + 钳位 0–100；无数据 → null（渲染 "--"）） */
+  computeUsagePercent(
+    usage: ContextUsageSignal | null | undefined,
+  ): number | null;
   /** 保存后提示文案（claude = "hooks 改动需重启 claude 会话生效"） */
   restartHint: string;
   /** 是否提供 hooks 配置编辑器（hub 面板选择行过滤条件，claude = true） */

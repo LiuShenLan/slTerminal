@@ -81,15 +81,15 @@ export const HistorySessionRow: React.FC<HistorySessionRowProps> = ({
           color: SIDEBAR_COLORS.fg,
         }}
       >
-        {/* CLI 品牌 logo 仅随 status emoji 渲染（status 为 null / 孤儿 ✗ 行不加图） */}
+        {/* 四态 emoji 仅随 status 渲染（status 为 null / 孤儿 ✗ 行无 emoji） */}
         {statusIcon && (
-          <>
-            <span style={{ flexShrink: 0 }}>{statusIcon}</span>
-            {logoSrc && (
-              <img src={logoSrc} width={16} height={16}
-                style={{ flexShrink: 0, display: "block" }} alt="CLI 图标" />
-            )}
-          </>
+          <span style={{ flexShrink: 0 }}>{statusIcon}</span>
+        )}
+        {/* CLI 品牌 logo 跟随会话名显示（F9 行为修订）：行存在即显示，
+            不依赖 status emoji——孤儿 ✗ 行同样按 cliId 加图 */}
+        {logoSrc && (
+          <img src={logoSrc} width={16} height={16}
+            style={{ flexShrink: 0, display: "block" }} alt="CLI 图标" />
         )}
         <span
           style={{

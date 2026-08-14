@@ -1,9 +1,9 @@
 // agent-status-view.test.tsx — AgentStatusView L2 测试
 //
 // 覆盖：三态渲染（no-root / empty / ready）、多行渲染、
-// 行点击 switchToPage + focus、用量条正常/降级、切换项目清空行、
-// 完整 usage 行行 2 断言（NAH-05）、活跃区标题覆盖集成（NAH-06——
-// 真实 useAgentHistory，非 mock history）。
+// 行点击 switchToPage + focus、用量条正常/降级（官方 used_percentage 口径）、
+// 切换项目清空行、完整 usage 行行 2 断言（NAH-05）、活跃区标题覆盖集成
+// （NAH-06——真实 useAgentHistory，非 mock history）。
 //
 // P2-TE-02 + P2-TE-04
 
@@ -13,7 +13,6 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 const {
   mockTerminalRegistry,
   mockOnAgentEventCallback,
-  mockContextUsage,
   mockSwitchToPageAndFocus,
   mockScanHistory,
 } = vi.hoisted(() => {
@@ -37,7 +36,6 @@ const {
         onAgentEventCb?.(payload);
       },
     },
-    mockContextUsage: vi.fn(),
     mockSwitchToPageAndFocus: vi.fn(),
     // NAH-06：scanHistory 是真实 useAgentHistory 唯一的外部数据源（IPC mock）
     mockScanHistory: vi.fn(),
@@ -57,7 +55,6 @@ vi.mock("../ipc/agentHooks", () => ({
       mockOnAgentEventCallback.cb = null;
     };
   }),
-  contextUsage: mockContextUsage,
 }));
 
 vi.mock("../workspace/pageApis", () => ({
@@ -67,7 +64,7 @@ vi.mock("../workspace/pageApis", () => ({
 
 vi.mock("../lib/agentStatus", () => ({
   // null/未识别状态 → ""（与真实实现一致：真实 getStatusIcon 对 null 返回 ""，
-  // 否则 status null 行会误渲染 emoji 与 CLI logo）
+  // 否则 status null 行会误渲染 emoji——F9 修订后 logo 独立于 emoji，不随此值变化）
   getStatusIcon: vi.fn(
     (s: string | null) =>
       s != null ? ({ working: "⚡", attention: "🟡", done: "✅", error: "❌" })[s] ?? "" : "",
@@ -163,7 +160,6 @@ function resetAll() {
   useLayout.setState({ activePageId: null });
   mockTerminalRegistry.getAll.mockReset();
   mockTerminalRegistry.getAll.mockReturnValue(new Map());
-  mockContextUsage.mockReset();
   mockSwitchToPageAndFocus.mockReset();
   mockOnAgentEventCallback.cb = null;
   // 真实 useAgentHistory 的 scan 默认解析为空数组——未显式配置的测试展开历史区也不会崩
@@ -171,7 +167,8 @@ function resetAll() {
   mockScanHistory.mockResolvedValue([]);
 }
 
-/** 构造 AgentSessionRow（cliId 缺省 CLAUDE_CLI_ID——真实注册表 claude profile 的 contextLimit/iconSrc 生效） */
+/** 构造 AgentSessionRow（cliId 缺省 CLAUDE_CLI_ID——真实注册表 claude profile 的
+    computeUsagePercent/iconSrc 生效） */
 function makeRow(overrides: Partial<AgentSessionRow> = {}): AgentSessionRow {
   return {
     panelId: "terminal-page1-0",
@@ -306,12 +303,7 @@ describe("AgentStatusRow 双行布局（问题 1 修复）", () => {
   it("结构断言：标题与用量条不在同一 flex 行（行1 = 图标+标题，行2 = 用量+时间）", () => {
     const row = makeRow({
       title: "修复 context 用量计算",
-      usage: {
-        inputTokens: 100_000,
-        outputTokens: 0,
-        cacheReadInputTokens: 0,
-        cacheCreationInputTokens: 0,
-      },
+      usage: { usedPercentage: 50 },
     });
     const { container } = render(
       React.createElement(AgentStatusRow, { row, onFocus: vi.fn() }),
@@ -393,8 +385,27 @@ describe("AgentStatusRow 双行布局（问题 1 修复）", () => {
     expect(line1.querySelector('img[alt="CLI 图标"]')).toBeNull(); // 无 logo
   });
 
-  it("status null → 行1 无 CLI logo（仅随 emoji 显示）", () => {
+  it("status null → 行1 仍渲染 CLI logo（F9 行为修订：跟随会话名显示，不依赖 emoji）", () => {
+    // ZQ-3 决策 2：status=null 行（无图标）同样有会话名与会话——logo 显示
     const row = makeRow({ status: null });
+    const { container } = render(
+      React.createElement(AgentStatusRow, { row, onFocus: vi.fn() }),
+    );
+
+    const { line1 } = rowChildren(container);
+    expect(line1.textContent).not.toContain("⚡");
+    const logoImg = line1.querySelector('img[alt="CLI 图标"]');
+    expect(logoImg).toBeTruthy();
+    expect(logoImg?.getAttribute("src")).toBe("/cli-icons/claude.png");
+    // 标题起点不变（图标列空占位保留）
+    const titleSpan = Array.from(line1.querySelectorAll("span")).find(
+      (s) => s.textContent === "终端 page1",
+    );
+    expect(titleSpan).toBeTruthy();
+  });
+
+  it("status null + 未注册 cliId → 无 logo 不报错（降级语义与 status 无关）", () => {
+    const row = makeRow({ status: null, cliId: "unknown-cli" });
     const { container } = render(
       React.createElement(AgentStatusRow, { row, onFocus: vi.fn() }),
     );
@@ -465,17 +476,9 @@ describe("AgentStatusRow 双行布局（问题 1 修复）", () => {
   });
 });
 
-describe("用量条", () => {
-  it("contextUsage 返回正常值 → 用量条填充宽度按 200000 上限计算", () => {
-    const row = makeRow({
-      usage: {
-        inputTokens: 100_000,
-        outputTokens: 50_000,
-        cacheReadInputTokens: 30_000,
-        cacheCreationInputTokens: 20_000,
-      },
-    });
-    // 总 tokens = input + cacheRead + cacheCreation = 150_000，上限 = 200_000 → percent = 75%
+describe("用量条（官方 used_percentage 口径）", () => {
+  it("官方 used_percentage 23.6 → 取整 24%（round）+ 用量条填充 24%", () => {
+    const row = makeRow({ usage: { usedPercentage: 23.6 } });
 
     const { container } = render(
       React.createElement(AgentStatusRow, {
@@ -489,21 +492,40 @@ describe("用量条", () => {
     const barContainer = line2.children[0] as HTMLElement;
     const innerBar = barContainer.firstElementChild as HTMLElement;
 
-    expect(innerBar.style.width).toBe("75%");
-    expect(line2.children[1].textContent).toBe("75%");
+    expect(innerBar.style.width).toBe("24%");
+    expect(line2.children[1].textContent).toBe("24%");
   });
 
-  it("完整 usage 行（含 outputTokens）：百分比排除 outputTokens 不计占用 + 相对时间出现（NAH-05）", () => {
+  it("round 边界 99.6 → 100%（无 99.6 浮点残留）", () => {
+    const row = makeRow({ usage: { usedPercentage: 99.6 } });
+    const { container } = render(
+      React.createElement(AgentStatusRow, { row, onFocus: vi.fn() }),
+    );
+    const { line2 } = rowChildren(container);
+    expect(line2.children[1].textContent).toBe("100%");
+  });
+
+  it("clamp 上界 100.4 → 100%；下界 -5 → 0%（对齐 statusline 参考脚本钳位）", () => {
+    const upper = makeRow({ usage: { usedPercentage: 100.4 } });
+    const u = render(
+      React.createElement(AgentStatusRow, { row: upper, onFocus: vi.fn() }),
+    );
+    expect(rowChildren(u.container).line2.children[1].textContent).toBe("100%");
+    u.unmount();
+
+    const lower = makeRow({ usage: { usedPercentage: -5 } });
+    const l = render(
+      React.createElement(AgentStatusRow, { row: lower, onFocus: vi.fn() }),
+    );
+    expect(rowChildren(l.container).line2.children[1].textContent).toBe("0%");
+  });
+
+  it("完整 usage 行：相对时间出现（NAH-05）", () => {
     const now = Date.now();
     const row = makeRow({
       title: "完整 usage 会话",
       lastEventAt: now - 10 * 60_000, // 10 分钟前
-      usage: {
-        inputTokens: 100_000,
-        outputTokens: 999_999, // 信息字段——不计占用、不展示（组件设计，见 agentHistory/CLAUDE.md）
-        cacheReadInputTokens: 30_000,
-        cacheCreationInputTokens: 20_000,
-      },
+      usage: { usedPercentage: 75 },
     });
     const { container } = render(
       React.createElement(AgentStatusRow, { row, onFocus: vi.fn(), now }),
@@ -512,15 +534,11 @@ describe("用量条", () => {
     const { line2 } = rowChildren(container);
     // formatRelativeTime 相对时间出现（与历史区口径统一）
     expect(line2.textContent).toContain("10 分钟前");
-    // 总占用 = input + cacheRead + cacheCreation = 150_000 / 200_000 → 75%
-    // ——outputTokens 不计入占用（守卫用量口径）
+    // 官方 used_percentage 直接渲染（profile 策略取整钳位后 75）
     expect(line2.children[1].textContent).toBe("75%");
-    // outputTokens 为信息字段不渲染进行 2（行 2 仅用量条 + 百分比 + 相对时间）
-    expect(line2.textContent).not.toContain("999999");
-    expect(line2.textContent).not.toContain("out");
   });
 
-  it("contextUsage 返回 null → 用量条显示不可用态 '--'", () => {
+  it("usage 为 null → 用量条显示不可用态 '--'", () => {
     const row = makeRow({ usage: null });
 
     const { container } = render(
@@ -534,15 +552,10 @@ describe("用量条", () => {
     expect(line2.children[1].textContent).toBe("--");
   });
 
-  it("usage 有值但 cliId 无 hooks 能力（contextLimit 缺失）→ 用量条显示不可用态 '--'（MC-412）", () => {
+  it("usage 有值但 cliId 无 hooks 能力（computeUsagePercent 缺失）→ 用量条显示不可用态 '--'（MC-412 语义保留）", () => {
     const row = makeRow({
-      cliId: "unknown-cli", // 未注册 cliId → profile 缺失 → contextLimit undefined
-      usage: {
-        inputTokens: 100_000,
-        outputTokens: 0,
-        cacheReadInputTokens: 0,
-        cacheCreationInputTokens: 0,
-      },
+      cliId: "unknown-cli", // 未注册 cliId → profile 缺失 → computeUsagePercent undefined
+      usage: { usedPercentage: 50 },
     });
 
     const { container } = render(
@@ -586,52 +599,58 @@ describe("用量条", () => {
     return `rgb(${r},${g},${b})`;
   }
 
-  it("用量 < 50% → 颜色为 low token (#629755)", () => {
-    // 40% = 80_000 / 200_000（input + cacheRead + cacheCreation）
-    const row = makeRow({
-      usage: {
-        inputTokens: 50_000,
-        outputTokens: 30_000,
-        cacheReadInputTokens: 20_000,
-        cacheCreationInputTokens: 10_000,
-      },
-    });
+  it("用量 49% → low token（<50 绿）", () => {
+    const row = makeRow({ usage: { usedPercentage: 49 } });
     const { container } = render(
       React.createElement(AgentStatusRow, { row, onFocus: vi.fn() }),
     );
     expect(getUsageBarColor(container)).toBe(hexToRgbStr(AGENT_STATUS_USAGE_COLORS.low));
   });
 
-  it("用量 50%~80% → 颜色为 medium token (#BBB529)", () => {
-    // 60% = 120_000 / 200_000（input + cacheRead + cacheCreation）
-    const row = makeRow({
-      usage: {
-        inputTokens: 70_000,
-        outputTokens: 50_000,
-        cacheReadInputTokens: 30_000,
-        cacheCreationInputTokens: 20_000,
-      },
-    });
+  it("用量 50% → medium token（≥50 黄，边界含）", () => {
+    const row = makeRow({ usage: { usedPercentage: 50 } });
     const { container } = render(
       React.createElement(AgentStatusRow, { row, onFocus: vi.fn() }),
     );
     expect(getUsageBarColor(container)).toBe(hexToRgbStr(AGENT_STATUS_USAGE_COLORS.medium));
   });
 
-  it("用量 > 80% → 颜色为 high token (#F44747)", () => {
-    // 90% = 180_000 / 200_000（input + cacheRead + cacheCreation）
-    const row = makeRow({
-      usage: {
-        inputTokens: 100_000,
-        outputTokens: 80_000,
-        cacheReadInputTokens: 40_000,
-        cacheCreationInputTokens: 40_000,
-      },
-    });
-    const { container } = render(
-      React.createElement(AgentStatusRow, { row, onFocus: vi.fn() }),
+  it("用量 69% → medium；70% → high token（≥70 橙，边界含）", () => {
+    const medium = makeRow({ usage: { usedPercentage: 69 } });
+    const m = render(
+      React.createElement(AgentStatusRow, { row: medium, onFocus: vi.fn() }),
     );
-    expect(getUsageBarColor(container)).toBe(hexToRgbStr(AGENT_STATUS_USAGE_COLORS.high));
+    expect(getUsageBarColor(m.container)).toBe(
+      hexToRgbStr(AGENT_STATUS_USAGE_COLORS.medium),
+    );
+    m.unmount();
+
+    const high = makeRow({ usage: { usedPercentage: 70 } });
+    const h = render(
+      React.createElement(AgentStatusRow, { row: high, onFocus: vi.fn() }),
+    );
+    expect(getUsageBarColor(h.container)).toBe(
+      hexToRgbStr(AGENT_STATUS_USAGE_COLORS.high),
+    );
+  });
+
+  it("用量 89% → high；90% → critical token（≥90 红，边界含）", () => {
+    const high = makeRow({ usage: { usedPercentage: 89 } });
+    const h = render(
+      React.createElement(AgentStatusRow, { row: high, onFocus: vi.fn() }),
+    );
+    expect(getUsageBarColor(h.container)).toBe(
+      hexToRgbStr(AGENT_STATUS_USAGE_COLORS.high),
+    );
+    h.unmount();
+
+    const critical = makeRow({ usage: { usedPercentage: 90 } });
+    const c = render(
+      React.createElement(AgentStatusRow, { row: critical, onFocus: vi.fn() }),
+    );
+    expect(getUsageBarColor(c.container)).toBe(
+      hexToRgbStr(AGENT_STATUS_USAGE_COLORS.critical),
+    );
   });
 });
 

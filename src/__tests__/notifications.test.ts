@@ -48,7 +48,6 @@ vi.mock("../ipc/agentHooks", () => ({
     mockOnAgentEventCallback.cb = cb;
     return () => {};
   }),
-  contextUsage: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/api/window", () => ({
@@ -98,7 +97,7 @@ const testNotifyProfile: CodingCliProfile = {
     hooks: {
       eventToStatus: () => "done",
       classifyNotification: mockClassifyNotification,
-      contextLimit: 100,
+      computeUsagePercent: () => null,
       restartHint: "test",
       hasConfigEditor: true,
     },

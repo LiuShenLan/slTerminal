@@ -46,7 +46,11 @@ const mocks = vi.hoisted(() => {
   const mockApi: any = {
     title: "terminal-0",
     setTitle: vi.fn(),
-    updateParameters: vi.fn(),
+    // 联动 onDidParametersChange（照 dockview 生产行为——updateParameters 同步触发参数变化事件），
+    // 组件 latestParamsRef 依赖此同步链（参数覆盖回归守卫用例断言两键共存）
+    updateParameters: vi.fn((p: Record<string, unknown>) => {
+      paramsCb?.(p);
+    }),
     onDidTitleChange: vi.fn(() => ({ dispose: vi.fn() })),
     onDidParametersChange: vi.fn((cb: (p: Record<string, unknown>) => void) => {
       paramsCb = cb;
@@ -114,6 +118,24 @@ import { cliProfileRegistry } from "../features/cliProfiles";
 import { claudeProfile } from "../features/cliProfiles/profiles/claude";
 // claude profile 注册（side-effect，等价旧 cliIcons.ts 内嵌注册）
 import "../features/cliProfiles/profiles";
+// 真实 TerminalRegistry：F9 行为修订后 TerminalPanel 经 subscribe/get 订阅会话状态，
+// 测试手动 register stub 条目 + setAgentSession 驱动 sessionChange（照生产语义）
+import { TerminalRegistry } from "../panels/terminal/TerminalRegistry";
+import type { RegisteredTerminal } from "../panels/terminal/TerminalRegistry";
+
+/** 注册 stub 终端条目（agentSession 缺省 undefined）——useXterm 真实 register
+ *  幂等覆盖保留旧值，测试注入的会话不被 spawn 完成后的注册冲掉 */
+function registerStub(panelId: string, agentSession?: RegisteredTerminal["agentSession"]): void {
+  const entry = {
+    term: mocks.terminal,
+    sessionId: "stub-session",
+    webglAddon: null,
+    fitAddon: mocks.fitAddon,
+    ...(agentSession !== undefined ? { agentSession } : {}),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any as RegisteredTerminal;
+  TerminalRegistry.register(panelId, entry);
+}
 
 afterEach(() => {
   // RTL 无全局 cleanup（vitest.config.ts 未开 globals）——必须显式卸载，否则遮罩 DOM 跨用例累积
@@ -124,6 +146,8 @@ afterEach(() => {
   // 恢复默认 claude profile 注册（_reset 用例污染隔离）
   cliProfileRegistry._reset();
   cliProfileRegistry.register(claudeProfile);
+  // 清空测试手动 register 的 stub 条目与订阅（真实注册表跨用例污染隔离）
+  TerminalRegistry._reset();
 });
 
 describe("TerminalPanel", () => {
@@ -202,13 +226,14 @@ describe("TerminalPanel", () => {
       expect.objectContaining({ tabIcon: "🟡" }),
     );
 
-    // OSC 133 D：命令退出 → active=false 恢复原标题并清图标（icon + logo 双清）
+    // OSC 133 D：命令退出 → active=false 恢复原标题并单清图标（logo 由
+    // sessionChange 驱动清除，不再经此路径双清——F9 行为修订）
     await act(async () => {
       oscHandler("D;0");
     });
     expect(mocks.mockApi.setTitle).toHaveBeenLastCalledWith("terminal-0");
     expect(mocks.mockApi.updateParameters).toHaveBeenLastCalledWith(
-      expect.objectContaining({ tabIcon: null, tabLogo: null }),
+      expect.objectContaining({ tabIcon: null }),
     );
   });
 
@@ -226,13 +251,13 @@ describe("TerminalPanel", () => {
       expect.objectContaining({ tabIcon: "🟡" }),
     );
 
-    // SessionEnd → active=false → 恢复原标题 + 清图标（icon + logo 双清）
+    // SessionEnd → active=false → 恢复原标题 + 单清图标（logo 由 sessionChange 驱动清除）
     await act(async () => {
       hookCb({ panelId: "test-p7", event: "SessionEnd" });
     });
     expect(mocks.mockApi.setTitle).toHaveBeenLastCalledWith("terminal-0");
     expect(mocks.mockApi.updateParameters).toHaveBeenLastCalledWith(
-      expect.objectContaining({ tabIcon: null, tabLogo: null }),
+      expect.objectContaining({ tabIcon: null }),
     );
   });
 
@@ -281,7 +306,9 @@ describe("TerminalPanel", () => {
     expect(mocks.mockApi.setTitle).toHaveBeenLastCalledWith("改名");
   });
 
-  it("OSC 133 C 命中 claude → updateParameters 携 tabIcon 🟡 + tabLogo claude logo", async () => {
+  it("OSC 133 C 命中 claude → sessionChange 驱动 tabLogo = claude logo（会话绑定）", async () => {
+    // 预置注册表条目——setAgentSession 仅在已注册面板上生效（生产 register 由 spawn 完成触发）
+    registerStub("test-logo1");
     render(React.createElement(TerminalPanel, { api: mocks.mockApi, params: { panelId: "test-logo1" } }));
     await waitFor(() => expect(mocks.getOscHandler(133)).toBeDefined());
     const oscHandler = mocks.getOscHandler(133)!;
@@ -289,35 +316,144 @@ describe("TerminalPanel", () => {
     await act(async () => {
       oscHandler("C;claude");
     });
-    // cliProfileRegistry.matchByCommand("claude") 命中默认注册 → tabLogo = claude.png
+    // C 路径：先 onTabStateChange（tabIcon 🟡）→ 后 setAgentSession({cliId})
+    // → sessionChange → syncTabLogo 按 cliId 查 profile.iconSrc 写入 tabLogo
+    expect(mocks.mockApi.updateParameters).toHaveBeenCalledWith(
+      expect.objectContaining({ tabIcon: "🟡" }),
+    );
     expect(mocks.mockApi.updateParameters).toHaveBeenLastCalledWith(
-      expect.objectContaining({ tabIcon: "🟡", tabLogo: "/cli-icons/claude.png" }),
+      expect.objectContaining({ tabLogo: "/cli-icons/claude.png" }),
+    );
+    // 防复发（参数覆盖回归守卫）：tabLogo 写入必须基于最新参数合并——
+    // props 快照覆盖会抹掉先写入的 tabIcon（mockcli E2E 冒烟 tabIcon 丢失根因）。
+    // 断言最后一次 updateParameters 参数中两键共存
+    const lastArgs = mocks.mockApi.updateParameters.mock.calls.at(-1)![0] as Record<
+      string,
+      unknown
+    >;
+    expect(lastArgs.tabIcon).toBe("🟡");
+    expect(lastArgs.tabLogo).toBe("/cli-icons/claude.png");
+  });
+
+  it("OSC 133 D → setAgentSession(null) → sessionChange → tabLogo 清空", async () => {
+    registerStub("test-logo1b");
+    render(React.createElement(TerminalPanel, { api: mocks.mockApi, params: { panelId: "test-logo1b" } }));
+    await waitFor(() => expect(mocks.getOscHandler(133)).toBeDefined());
+    const oscHandler = mocks.getOscHandler(133)!;
+
+    // C 建立会话 → D 结束：setAgentSession(null) → sessionChange → tabLogo null
+    await act(async () => {
+      oscHandler("C;claude");
+    });
+    await act(async () => {
+      oscHandler("D;0");
+    });
+    // D 路径：先 onTabStateChange 单清 tabIcon → 后 sessionChange 清 tabLogo
+    expect(mocks.mockApi.updateParameters).toHaveBeenCalledWith(
+      expect.objectContaining({ tabIcon: null }),
+    );
+    expect(mocks.mockApi.updateParameters).toHaveBeenLastCalledWith(
+      expect.objectContaining({ tabLogo: null }),
     );
   });
 
-  it("hook 事件（无 logo 字段）→ tabLogo 保持前值（logoRef 不清）", async () => {
+  it("hook 事件（无 command）→ sessionChange 按 agentSession.cliId 查 logo（C 已写 cliId）", async () => {
+    registerStub("test-logo2");
     render(React.createElement(TerminalPanel, { api: mocks.mockApi, params: { panelId: "test-logo2" } }));
     await waitFor(() => expect(mocks.getOscHandler(133)).toBeDefined());
     await waitFor(() => expect(mocks.getHookEventCb()).toBeDefined());
     const oscHandler = mocks.getOscHandler(133)!;
     const hookCb = mocks.getHookEventCb()!;
 
-    // 先 OSC 133 C：logo 建立
+    // 先 OSC 133 C：agentSession.cliId = claude
     await act(async () => {
       oscHandler("C;claude");
     });
-    // 再 hook 事件（Stop → ✅）：无 logo 字段 → logoRef 保持前值
+    // 再 hook 事件（Stop → ✅）：setAgentSession merge 保留 cliId → sessionChange
+    // → syncTabLogo 查 claude iconSrc → tabLogo 保持
     await act(async () => {
       hookCb({ panelId: "test-logo2", event: "Stop" });
     });
+    expect(mocks.mockApi.updateParameters).toHaveBeenCalledWith(
+      expect.objectContaining({ tabLogo: "/cli-icons/claude.png" }),
+    );
+    // onTabStateChange 路径（后执行）只写 tabIcon
     expect(mocks.mockApi.updateParameters).toHaveBeenLastCalledWith(
-      expect.objectContaining({ tabIcon: "✅", tabLogo: "/cli-icons/claude.png" }),
+      expect.objectContaining({ tabIcon: "✅" }),
+    );
+  });
+
+  it("hook 事件路径 agentSession.cliId 缺省 → CLAUDE_CLI_ID 兜底查 claude logo", async () => {
+    registerStub("test-logo3");
+    render(React.createElement(TerminalPanel, { api: mocks.mockApi, params: { panelId: "test-logo3" } }));
+    await waitFor(() => expect(mocks.getHookEventCb()).toBeDefined());
+    const hookCb = mocks.getHookEventCb()!;
+
+    // SessionStart 建行（patch 无 cliId）→ setAgentSession（sessionChange → syncTabLogo：
+    // session.cliId undefined → CLAUDE_CLI_ID 兜底，与 useAgentStatus 行建行口径一致）
+    // → 其后 onTabStateChange 写 tabIcon（hook 路径顺序：session 先于 icon）
+    await act(async () => {
+      hookCb({ panelId: "test-logo3", event: "SessionStart" });
+    });
+    expect(mocks.mockApi.updateParameters).toHaveBeenCalledWith(
+      expect.objectContaining({ tabLogo: "/cli-icons/claude.png" }),
+    );
+    expect(mocks.mockApi.updateParameters).toHaveBeenLastCalledWith(
+      expect.objectContaining({ tabIcon: "🟡" }),
+    );
+  });
+
+  it("sessionChange：agentSession.cliId 未注册 → tabLogo null（不报错）", async () => {
+    registerStub("test-logo4");
+    render(React.createElement(TerminalPanel, { api: mocks.mockApi, params: { panelId: "test-logo4" } }));
+    await waitFor(() => expect(mocks.getOscHandler(133)).toBeDefined());
+
+    await act(async () => {
+      TerminalRegistry.setAgentSession("test-logo4", { cliId: "unknown-cli" });
+    });
+    expect(mocks.mockApi.updateParameters).toHaveBeenLastCalledWith(
+      expect.objectContaining({ tabLogo: null }),
+    );
+  });
+
+  it("挂载初始化：布局残留 tabLogo + 无会话 → 清 null（覆盖持久化残留）", async () => {
+    render(React.createElement(TerminalPanel, {
+      api: mocks.mockApi,
+      // 模拟布局 JSON 恢复的 tabLogo 残留（会话绑定制下不持久化语义，挂载即清）
+      params: { panelId: "test-logo5", tabLogo: "/cli-icons/claude.png" },
+    }));
+    await waitFor(() => expect(mocks.getOscHandler(133)).toBeDefined());
+    expect(mocks.mockApi.updateParameters).toHaveBeenCalledWith(
+      expect.objectContaining({ tabLogo: null }),
+    );
+  });
+
+  it("挂载初始化：agentSession 存在（页面切回）→ tabLogo 恢复", async () => {
+    // 预置会话（H6：页面切回重挂载时 TerminalRegistry 保留会话）
+    registerStub("test-logo6");
+    TerminalRegistry.setAgentSession("test-logo6", { cliId: "claude" });
+    render(React.createElement(TerminalPanel, { api: mocks.mockApi, params: { panelId: "test-logo6" } }));
+    await waitFor(() => expect(mocks.getOscHandler(133)).toBeDefined());
+    expect(mocks.mockApi.updateParameters).toHaveBeenCalledWith(
+      expect.objectContaining({ tabLogo: "/cli-icons/claude.png" }),
+    );
+  });
+
+  it("register 事件（携 agentSession）→ 同步 tabLogo", async () => {
+    render(React.createElement(TerminalPanel, { api: mocks.mockApi, params: { panelId: "test-logo7" } }));
+    await waitFor(() => expect(mocks.getOscHandler(133)).toBeDefined());
+
+    await act(async () => {
+      registerStub("test-logo7", { cliId: "claude", lastEventAt: Date.now() });
+    });
+    expect(mocks.mockApi.updateParameters).toHaveBeenLastCalledWith(
+      expect.objectContaining({ tabLogo: "/cli-icons/claude.png" }),
     );
   });
 
   it("OSC 133 C 未命中 profile（注册表清空）→ 零副作用（标题/图标均不更新）", async () => {
     cliProfileRegistry._reset(); // 清空全部 profile → matchByCommand("claude") 返回 null
-    render(React.createElement(TerminalPanel, { api: mocks.mockApi, params: { panelId: "test-logo3" } }));
+    render(React.createElement(TerminalPanel, { api: mocks.mockApi, params: { panelId: "test-logo8" } }));
     await waitFor(() => expect(mocks.getOscHandler(133)).toBeDefined());
     const oscHandler = mocks.getOscHandler(133)!;
 
@@ -331,19 +467,5 @@ describe("TerminalPanel", () => {
     // 未命中 → 零副作用：不触发任何页签更新（现状 rule == null 分支语义保留）
     expect(mocks.mockApi.setTitle).not.toHaveBeenCalled();
     expect(mocks.mockApi.updateParameters).not.toHaveBeenCalled();
-  });
-
-  it("hook 事件路径无 logo 历史 → tabLogo null", async () => {
-    render(React.createElement(TerminalPanel, { api: mocks.mockApi, params: { panelId: "test-logo4" } }));
-    await waitFor(() => expect(mocks.getHookEventCb()).toBeDefined());
-    const hookCb = mocks.getHookEventCb()!;
-
-    // SessionStart → 🟡：logoRef 初始 null（无 params.tabLogo 残留）→ tabLogo null
-    await act(async () => {
-      hookCb({ panelId: "test-logo4", event: "SessionStart" });
-    });
-    expect(mocks.mockApi.updateParameters).toHaveBeenLastCalledWith(
-      expect.objectContaining({ tabIcon: "🟡", tabLogo: null }),
-    );
   });
 });

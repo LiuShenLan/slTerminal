@@ -32,7 +32,7 @@ npm run wdio          # → node ./e2e-tests/run-wdio.cjs
 | `sidebar.e2e.ts` | 侧栏视图 spec（2 条 active）：点击开关（R1/R2）、**跨区移动状态机（R6/R7——经 store helper，非真实 DnD，见定位声明）** |
 | `commit.e2e.ts` | Commit 视图 spec（2 条 active）：真实 git 仓库（`gitScaffold.ts` 脚手架）变更列表渲染、双击 modified 打开 diff 页签 |
 | `hooks.e2e.ts` | hooks spec（5 条 active）：注入/卸载/状态三态、信号文件驱动页签 emoji、**真实 hook reporter 链路（E2E-06：node 执行脚本 + stdin JSON + SLTERM_PANEL_ID → 信号文件产生/消费 + 非法 JSON exit 0 的 C10 守卫）**、hooksConfig project 层保存写盘 + merge 保留其他字段、**hub 注入按钮三态（Stage 06 D-14 段：hub 注入/卸载按钮 → 状态条流转并恢复；cliId 实参 = hub 选中态，E2E 构建仅 claude 一个 hasConfigEditor CLI）** |
-| `agent.e2e.ts` | Agent 状态 spec（6 active + 1 skip）：视图存在性、纯 shell 终端无行、动态四态（agent-event 信号即建行→⚡→✅→行消失）、R2/R3/R4 变体、toast 触发链路（skip，权限弹窗需用户交互） |
+| `agent.e2e.ts` | Agent 状态 spec（6 active + 1 skip）：视图存在性、纯 shell 终端无行、动态四态（agent-event 信号即建行→⚡→✅→行消失）、**R2 变体 = ContextUsage 信号通道全链路（官方 used_percentage 口径——PreToolUse 信号建行 → ContextUsage 信号 50% → 切项目往返行重建 → 再发信号 50% 恢复；原 transcript/contextUsage 链路已退役）**、R3/R4 变体、toast 触发链路（skip，权限弹窗需用户交互） |
 | `history.e2e.ts` | 历史会话 spec（8 条 active）：fixture 6 行展示 + 排除规则、标题回退链、搜索过滤、复制恢复命令（剪贴板断言，`buildResumeCommand` 输出 = `cd '<cwd>' && claude --resume <id>`）、孤儿行 ✗、删除（ask 钩子 + 副本删除）、历史区四态同源、**恢复编排（部分端到端：断言到 pty.write 注入 `profile.history.buildRestoreInput` 输出，不含真实进入会话）** |
 | `mockcli.e2e.ts` | mock profile spec（3 条 active：Stage 07 AC-4 ① 冒烟 + Stage 05 review-fix CS-3 两条关键路径）：冒烟 = `__slterm_e2e_registerMockCliProfile` 注册 mock 夹具 → OSC 133 C 注入（`__e2e_writeToTerminal` 走真实 parser + useCommandDetection → matchByCommand 命中 mockcli）→ 页签标题 "mockcli"（profile.tabTitle）+ 16×16 logo（profile.iconSrc）+ 🟡 attention → OSC 133 D 退出恢复（标题还原 + logo/图标双清）；**CS-3 ① agent-event 注入 = Node 侧原子写信号文件（cliId="mockcli" 显式，9 字段契约）→ 页签 ⚡ + Agent Status 活跃区建行（真实 watcher → agent-event → resolvePayloadCliId 三级解析 → 桩策略全链）**；**CS-3 ② hub 分派/保存透传 = hooksConfig 选择行 mockcli 按钮（`data-e2e="hooks-cli-mockcli"`）→ 点击渲染桩编辑器（`data-e2e="mockcli-config-editor"`）→ 桩保存触发真实 `writeHooksConfig("mockcli", ...)` → 后端「未知 cliId: mockcli」错误透传展示**。按 `data-panel-id` 精确定位面板（app 恢复用户布局多终端，防全局首匹配错位） |
 | `specUtils.ts` | spec 共享工具（Node 侧，E2E-09）：Workspace/Dockview 就绪等待、项目/终端创建、PTY session 等待、hooks 注入（泛化命令 `agent_hooks_*` 六命令全表，一律经 window helper 调用、spec 侧无命令名字面量）、信号文件原子写与消费等待、页签 emoji 参数断言（`waitForPanelTabIcon`，F3 四态）、页面切换等待（waitUntil 替代 pause，E2E-10）、共享 setup `withProjectAndTerminal`。**与应用侧 `helpers.ts` 相互独立，二者禁止互相 import** |
@@ -92,8 +92,9 @@ E2E helpers 通过 `main.tsx` 中 `E2E_ENABLED`（`src/lib/e2eEnabled.ts`）条�
 | 目标 | 备份方式 | 说明 |
 |------|----------|------|
 | `~/.slterminal/settings.json` | 复制为 `.e2e-bak` | FIX-TE-04 原有——侧栏视图状态等 |
-| `~/.claude/settings.json` | 复制为 `.e2e-bak` | E2E-05 新增——`agent_hooks_inject` 会写入 slterm matcher，异常退出残留会污染用户配置 |
-| `~/.slterminal/hooks/` | 整目录复制为 `.e2e-bak` | E2E-05 新增——注入的 reporter 脚本目录；备份失败（目录占用）降级为 exit 时跳过还原 |
+| `~/.claude/settings.json` | 复制为 `.e2e-bak` | E2E-05 新增——`agent_hooks_inject` 会写入 slterm matcher + statusLine 桥接，异常退出残留会污染用户配置 |
+| `~/.slterminal/hooks/` | 整目录复制为 `.e2e-bak` | E2E-05 新增——注入的 reporter + statusline 桥接脚本目录；备份失败（目录占用）降级为 exit 时跳过还原 |
+| `~/.slterminal/statusline-backup.json` | 复制为 `.e2e-bak` | statusline 桥接新增——注入备份的原 statusLine 配置，注入/卸载会写删此文件 |
 | `~/.slterminal/hooks-events/` | exit 时清理 | 信号文件目录，运行产物直接删除 |
 
 还原语义：原文件存在 → 删 E2E 产物后 rename 备份回来；原文件不存在 → 删产物 + 残留 bak。

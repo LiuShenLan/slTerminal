@@ -10,6 +10,11 @@ import { pty } from "../../ipc";
 import { useLayout, useFontSize } from "../../stores";
 import { PANEL_BG, INPUT_BORDER } from "../../theme";
 import type { TabState } from "./useCommandDetection";
+import { TerminalRegistry } from "./TerminalRegistry";
+import { cliProfileRegistry } from "../../features/cliProfiles";
+// AC-5: 事件名字面量只允许出现在 profiles/claude/（claude 合法领地）——
+// 缺省 cliId 兜底常量经 profiles/claude 导出（与 useAgentStatus 行建行口径一致）
+import { CLAUDE_CLI_ID } from "../../features/cliProfiles/profiles/claude";
 import type { DockviewPanelApi } from "dockview-react";
 
 /** 加载遮罩兜底超时（ms）——首帧数据未到达时自动隐藏 */
@@ -25,7 +30,7 @@ interface TerminalPanelProps {
     cwd?: string;
     /** 用户自定义页签标题（右键菜单重命名，随布局持久化） */
     customTitle?: string;
-    /** CLI 品牌 logo 根绝对路径（随布局持久化，spawn 成功重置清除残留） */
+    /** CLI 品牌 logo 根绝对路径（会话绑定写入，F9 修订；布局残留由挂载同步覆盖） */
     tabLogo?: string | null;
   };
 }
@@ -72,28 +77,59 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ api, params }) => {
   // 挂载时优先取 params.customTitle（重命名后的自定义标题）——重启恢复时布局 JSON
   // 的 title 字段可能是瞬态值（如 claude 运行中退出），customTitle 才是真名
   const originalTitleRef = useRef(params.customTitle ?? api.title ?? "terminal");
-  // 当前 CLI logo 根绝对路径：仅 OSC 133 C（有 command）更新；hook 事件路径
-  // （无 command）不传 logo 保持前值；null 清除（该 CLI 未注册 logo）
-  const logoRef = useRef<string | null>(params.tabLogo ?? null);
+  // 最新参数快照：props 同步 + onDidParametersChange 同步（下方订阅）——tabIcon/tabLogo
+  // 由两处 updateParameters 分头写入，互不可见；合并必须基于最新参数而非 props 快照
+  // （快照覆盖会抹掉另一路径刚写入的键——mockcli E2E 冒烟 tabIcon 丢失根因）
+  const latestParamsRef = useRef<Record<string, unknown>>(params);
+  latestParamsRef.current = params;
   const handleTabStateChange = useCallback((state: TabState) => {
     if (state.active) {
       // 仅当 title/icon 存在时才更新，不覆盖 originalTitleRef
       if (state.title) api.setTitle(state.title);
-      if (state.logo !== undefined) logoRef.current = state.logo;
       if (state.icon !== undefined) {
-        api.updateParameters({ ...params, tabIcon: state.icon, tabLogo: logoRef.current });
+        api.updateParameters({ ...latestParamsRef.current, tabIcon: state.icon });
       }
     } else {
       api.setTitle(originalTitleRef.current);
-      // 双清 icon + logo（覆盖布局 JSON 持久化残留，spawn 成功后 resetCommandState 触发）
-      api.updateParameters({ ...params, tabIcon: null, tabLogo: null });
+      // F9 行为修订：只清 icon——logo 跟随 agentSession 生命周期（会话绑定），
+      // 由下方 TerminalRegistry 订阅驱动清除，此处不再双清
+      api.updateParameters({ ...latestParamsRef.current, tabIcon: null });
     }
-  }, [api, params]);
+  }, [api]);
 
-  // 重命名同步：右键菜单重命名会 updateParameters({ customTitle })，订阅参数变化
-  // 更新原标题基准，保证 OSC 133 D 恢复时用自定义名而非挂载时旧名
+  // F9 行为修订：页签 logo 会话绑定——agentSession 存在即显示 logo（按 cliId 查
+  // profile.iconSrc，与 agent 侧栏行同源），会话结束（删行）即消失。
+  // register 事件同样触发同步：重启恢复时 agentSession 未设置 → 清布局 JSON
+  // 持久化残留；页面切回重挂载时（H6）register 幂等保留旧 session → logo 立即恢复。
+  // deps 仅 [api, panelId]（panelId 经 ref 读）——tabIcon 高频更新（hook 事件）不重建订阅。
+  const panelIdRef = useRef(params.panelId);
+  panelIdRef.current = params.panelId;
+  useEffect(() => {
+    const syncTabLogo = () => {
+      const session = TerminalRegistry.get(panelIdRef.current)?.agentSession;
+      // cliId 缺省兜底口径与 useAgentStatus 行建行一致（entry.agentSession.cliId ?? CLAUDE_CLI_ID）
+      const tabLogo = session
+        ? cliProfileRegistry.get(session.cliId ?? CLAUDE_CLI_ID)?.iconSrc ?? null
+        : null;
+      // 基于最新参数合并（见 latestParamsRef 注释）——快照覆盖会抹掉 tabIcon
+      api.updateParameters({ ...latestParamsRef.current, tabLogo });
+    };
+    // 挂载立即同步一次：覆盖布局恢复的 tabLogo 残留（未注册会话 → null）
+    syncTabLogo();
+    const unsubscribe = TerminalRegistry.subscribe((e) => {
+      if (e.panelId !== panelIdRef.current) return;
+      if (e.type !== "register" && e.type !== "sessionChange") return;
+      syncTabLogo();
+    });
+    return unsubscribe;
+  }, [api, params.panelId]);
+
+  // 参数变化同步：① 最新参数快照合并（tabIcon/tabLogo/customTitle 多路径分头写入，
+  // 互不可见——合并基准必须随每次参数变化更新）；② 重命名同步 originalTitleRef，
+  // 保证 OSC 133 D 恢复时用自定义名而非挂载时旧名
   useEffect(() => {
     const d = api.onDidParametersChange((p) => {
+      latestParamsRef.current = { ...latestParamsRef.current, ...p };
       const tp = p as { customTitle?: string };
       if (tp?.customTitle !== undefined) {
         originalTitleRef.current = tp.customTitle;

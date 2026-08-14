@@ -1,12 +1,13 @@
-// Agent hooks IPC — 注入/卸载/状态查询 + agent-event 事件订阅 + token 用量查询（MC-212 泛化）
+// Agent hooks IPC — 注入/卸载/状态查询 + agent-event 事件订阅 + 关闭 statusline 恢复（MC-212 泛化）
 //
 // wrapper 全部加 cliId 首参（6 命令全表：agent_hooks_inject / agent_hooks_uninstall /
-// agent_hooks_injection_status / agent_context_usage / agent_hooks_config_read /
+// agent_hooks_injection_status / agent_hooks_restore_statusline / agent_hooks_config_read /
 // agent_hooks_config_write——后两条在 hooksConfig.ts）。未知 cliId → 后端 Validation。
+// 原 agent_context_usage（transcript token 扫描）已整体移除——百分比经 ContextUsage
+// 信号（statusline 桥接）走 agent-event 通道推送。
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
-  ContextUsage,
   AgentEventPayload,
   AgentHookInjectionStatus,
 } from "../types/agent";
@@ -32,16 +33,13 @@ export async function getInjectionStatus(
 }
 
 /**
- * 从 transcript 文件尾部扫描 token 用量
+ * 关闭清理：恢复 statusline 桥接（还原备份原配置，备份保留供重开重注入）
  *
- * 读取 transcript JSONL 文件尾部约 64KB，逆行扫描含 usage 的行，
- * 返回 input/output token 数。无 usage 或文件异常返回 null。
+ * 客户端关闭序列调用——用户在别处用 cli 时终端状态行不受桥接影响。
+ * 非桥接/无备份 → 后端 no-op。
  */
-export async function contextUsage(
-  cliId: string,
-  usageSourcePath: string,
-): Promise<ContextUsage | null> {
-  return invoke("agent_context_usage", { cliId, usageSourcePath });
+export async function restoreStatusline(cliId: string): Promise<void> {
+  return invoke("agent_hooks_restore_statusline", { cliId });
 }
 
 /**

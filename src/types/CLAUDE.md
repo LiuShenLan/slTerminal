@@ -16,7 +16,7 @@ DTO 类型定义层（硬约束 #4）——`src/types/` ↔ Rust 模块 DTO 一�
 | `fs.ts` | `fs/mod.rs` | `DirEntry` |
 | `git.ts` | `git/mod.rs` | `GitStatusEntry`（含 `oldPath: string \| null`）、`DiffHunk`（oldStart/oldLines/newStart/newLines） |
 | `notify.ts` | `notify/mod.rs` | `FsEventPayload` |
-| `agent.ts` | `hooks/`（MC-212 决策 3 更名，原 `hooks.ts`） | `AgentEventPayload`（八字段 + 可选 `cliId`/`usageSourcePath`——usageSourcePath 对应后端 `Option<String>`，旧信号缺失时 null）、`ContextUsage`（inputTokens/outputTokens/cacheReadInputTokens/cacheCreationInputTokens）、`AgentInjectionStatus`、`AgentHookInjectionStatus` |
+| `agent.ts` | `hooks/`（MC-212 决策 3 更名，原 `hooks.ts`） | `AgentEventPayload`（十字段 + 可选 `cliId`/`usageSourcePath`/`usedPercentage`——ContextUsage 信号字段，旧信号缺省 undefined）、`ContextUsageSignal`（`{ usedPercentage }`——官方 used_percentage 口径，原 `ContextUsage` transcript 四字段已退役）、`AgentInjectionStatus`、`AgentHookInjectionStatus` |
 | `hooksConfig.ts` | `hooks/config.rs` | `HooksLayer`（**KZ-4 泛化：string**——值集由 `profile.capabilities.hooks.configLayers` 声明，claude = user/project/local；后端 parse_layer 校验是 claude provider 内部知识）、`HooksConfigJson`、`MatcherGroupJson`、`HookHandlerJson`、GUI 模型（`HooksConfigGui`/`HookEventGroup`/`HookMatcherGroup`/`HookHandlerGui`） |
 | `agentHistory.ts` | `agent_history/mod.rs` | `AgentHistorySession`（**八字段含 `cliId`**，provider 打标）、`TitleSource`（**开放字符串**——claude 值集 customTitle/aiTitle/summary/firstPrompt/none，UI 不消费具体值） |
 | `index.ts` | — | barrel export，统一对外暴露 |

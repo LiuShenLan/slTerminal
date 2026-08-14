@@ -96,12 +96,12 @@ function registerOsc133(
       const profile = cliProfileRegistry.matchByCommand(command);
       if (profile) {
         isCommandRunningRef.current = true;
-        // title/logo 均取自匹配 profile（tabTitle / iconSrc）；未命中零副作用（不触发回调）
+        // 标题取自匹配 profile（tabTitle）；未命中零副作用（不触发回调）。
+        // F9 行为修订：logo 不经此路径直传（会话绑定由 TerminalPanel 订阅驱动）
         onTabStateChangeRef.current?.({
           active: true,
           title: profile.tabTitle,
           icon: STATUS_EMOJI.attention,
-          logo: profile.iconSrc,
         });
         // MC-107: 写入会话状态（未注入 hooks 时无 usageSourcePath）——cliId 取匹配 profile 的 id
         TerminalRegistry.setAgentSession(panelId, {
@@ -186,12 +186,12 @@ describe('L3 终端渲染 — 生产 OSC handler（E2E-03）', () => {
     registerOsc133(term, 'p1', (state) => states.push(state));
     // shell-integration.ps1 Enter hook 发射：OSC 133 C;<命令行> ST
     await writeSync(term, '\x1b]133;C;claude --resume abc\x1b\\');
-    // 首 token "claude" 命中 claude profile（tabTitle: "claude"），attention 态 🟡 +
-    // CLI 品牌 logo（profile.iconSrc 默认 claude.png）
+    // 首 token "claude" 命中 claude profile（tabTitle: "claude"），attention 态 🟡。
+    // F9 行为修订：logo 不经此路径直传（会话绑定由 TerminalPanel 订阅驱动）
     expect(states).toEqual([
-      { active: true, title: 'claude', icon: '🟡', logo: '/cli-icons/claude.png' },
+      { active: true, title: 'claude', icon: '🟡' },
     ]);
-    // MC-107: cliId 取匹配 profile 的 id（三级解析反查键）
+    // MC-107: cliId 取匹配 profile 的 id（会话绑定 logo 数据源 + 三级解析反查键）
     expect(TerminalRegistry.get('p1')?.agentSession?.matchedCommand).toBe('claude');
     expect(TerminalRegistry.get('p1')?.agentSession?.cliId).toBe('claude');
   });
@@ -204,7 +204,7 @@ describe('L3 终端渲染 — 生产 OSC handler（E2E-03）', () => {
     // prompt() 发射 OSC 133;D;<退出码> ST
     await writeSync(term, '\x1b]133;D;0\x1b\\');
     expect(states).toEqual([
-      { active: true, title: 'claude', icon: '🟡', logo: '/cli-icons/claude.png' },
+      { active: true, title: 'claude', icon: '🟡' },
       { active: false },
     ]);
     expect(TerminalRegistry.get('p1')?.agentSession).toBeNull();

@@ -107,7 +107,7 @@ const TEST_PROFILE: CodingCliProfile = {
     hooks: {
       eventToStatus: () => null,
       classifyNotification: () => null,
-      contextLimit: 1000,
+      computeUsagePercent: () => null,
       restartHint: "testcli 专属提示",
       hasConfigEditor: true,
       configEditor: ClaudeHooksConfigEditor,
@@ -127,7 +127,7 @@ const STUB_PROFILE: CodingCliProfile = {
     hooks: {
       eventToStatus: () => null,
       classifyNotification: () => null,
-      contextLimit: 1000,
+      computeUsagePercent: () => null,
       restartHint: "stubcli 提示",
       hasConfigEditor: true,
       // 桩编辑器：渲染可识别标记（区别于 claude 编辑器内部 JsonMode/GuiMode 结构）
@@ -150,7 +150,7 @@ const LAYERS_PROFILE: CodingCliProfile = {
     hooks: {
       eventToStatus: () => null,
       classifyNotification: () => null,
-      contextLimit: 1000,
+      computeUsagePercent: () => null,
       restartHint: "layerscli 提示",
       hasConfigEditor: true,
       configEditor: ClaudeHooksConfigEditor,
@@ -173,7 +173,7 @@ const GAP_PROFILE: CodingCliProfile = {
     hooks: {
       eventToStatus: () => null,
       classifyNotification: () => null,
-      contextLimit: 1000,
+      computeUsagePercent: () => null,
       restartHint: "gapcli 提示",
       hasConfigEditor: true,
       // 故意缺 configEditor——空态占位用例专用
@@ -192,7 +192,7 @@ const NO_EDITOR_PROFILE: CodingCliProfile = {
     hooks: {
       eventToStatus: () => null,
       classifyNotification: () => null,
-      contextLimit: 1000,
+      computeUsagePercent: () => null,
       restartHint: "nocli 提示",
       hasConfigEditor: false,
     },

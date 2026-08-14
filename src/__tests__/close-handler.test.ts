@@ -17,6 +17,8 @@ const mocks = vi.hoisted(() => {
   const mockMarkPersistenceReady = vi.fn();
   const mockUpdatePageLayout = vi.fn();
   const mockSetActivePage = vi.fn();
+  /** 关闭序列第 4 步：statusline 桥接恢复（备份还原，cliId 恒 claude） */
+  const mockRestoreStatusline = vi.fn().mockResolvedValue(undefined);
   /** 可变 activePageId（test 3 设为 null 模拟无活跃页面） */
   let mockActivePageId: string | null = "test-page-1";
 
@@ -38,6 +40,7 @@ const mocks = vi.hoisted(() => {
     mockMarkPersistenceReady,
     mockUpdatePageLayout,
     mockSetActivePage,
+    mockRestoreStatusline,
     /** 完整重置（beforeEach 调用） */
     resetAll() {
       capturedHandler = null;
@@ -47,6 +50,7 @@ const mocks = vi.hoisted(() => {
       mockMarkPersistenceReady.mockClear();
       mockUpdatePageLayout.mockClear();
       mockSetActivePage.mockClear();
+      mockRestoreStatusline.mockClear();
     },
   };
 });
@@ -59,6 +63,15 @@ vi.mock("../ipc/window", () => ({
     return () => {};
   }),
   onFocusChanged: vi.fn(() => () => {}),
+}));
+
+// 关闭序列第 4 步：restoreStatusline（覆盖 setup.ts 全局 mock，spy 断言调用与 cliId 透传）
+vi.mock("../ipc/agentHooks", () => ({
+  onAgentEvent: () => () => {},
+  inject: () => Promise.resolve({ status: "notInjected", version: null }),
+  uninstall: () => Promise.resolve(),
+  getInjectionStatus: () => Promise.resolve({ status: "notInjected", version: null }),
+  restoreStatusline: mocks.mockRestoreStatusline,
 }));
 
 vi.mock("../workspace", () => ({
@@ -195,7 +208,7 @@ describe("onCloseRequested 关闭钩子", () => {
     const handler = await renderAndCapture();
     await handler();
 
-    // 验证三步保存序列（preventDefault + destroy 由 registerCloseHandler 封装处理）
+    // 验证四步保存序列（preventDefault + destroy 由 registerCloseHandler 封装处理）
     // flush: updatePageLayout 被调用
     expect(mocks.mockUpdatePageLayout).toHaveBeenCalledWith(
       "proj-1",
@@ -206,6 +219,8 @@ describe("onCloseRequested 关闭钩子", () => {
     expect(mocks.mockSaveAllProjects).toHaveBeenCalled();
     // localStorage
     expect(localStorageStub.getItem("slterm-last-active-page")).toBe("test-page-1");
+    // 第 4 步：restoreStatusline 在保存序列内被调用（cliId 恒 claude 常量）
+    expect(mocks.mockRestoreStatusline).toHaveBeenCalledWith("claude");
   });
 
   it("2. saveAllProjects 抛出异常 → 回调仍可完成（不崩溃，destroy 由 registerCloseHandler finally 保证）", async () => {
@@ -290,6 +305,21 @@ describe("onCloseRequested 关闭钩子", () => {
 
     // 不应崩溃
     expect(mocks.mockSaveAllProjects).toHaveBeenCalled();
+  });
+
+  it("7. restoreStatusline 失败 → 静默 catch，不阻断关闭（错误仅日志）", async () => {
+    (window as unknown as Record<string, unknown>).__dockviewApi = { _mock: true };
+    mocks.mockRestoreStatusline.mockRejectedValueOnce(new Error("settings.json 写入失败"));
+
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const handler = await renderAndCapture();
+    // 不应抛异常
+    await expect(handler()).resolves.toBeUndefined();
+    // 前序保存不受影响
+    expect(mocks.mockSaveAllProjects).toHaveBeenCalled();
+
+    consoleSpy.mockRestore();
   });
 });
 

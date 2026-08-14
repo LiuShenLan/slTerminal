@@ -3,7 +3,8 @@
 // 行 = 运行中的编码 CLI 会话（非全部终端）。
 // 建行双通道：sessionChange（session 非 null）∨ hook 事件（非 SessionEnd/Exit 且行不存在）。
 // 删行三通道：sessionChange（session null）∨ SessionEnd/Exit ∨ remove。
-// 初始扫描只建 agentSession 非 null 的行；携 usageSourcePath 时主动拉 contextUsage。
+// 初始扫描只建 agentSession 非 null 的行；ContextUsage 信号事件更新行 usage
+// （行存在才更新，不建行/删行/不动状态——官方 used_percentage 口径）。
 // 行 cliId（MC-410）：hook 事件通道按 MC-205 三级解析写入；OSC 133 通道经
 // agentSession.cliId（setAgentSession sessionChange 自然驱动）。
 //
@@ -15,7 +16,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 // ── vi.hoisted()：mock 状态在模块级 vi.mock 执行前就绪 ──
 const {
   capturedCallback,
-  mockContextUsage,
   terminalMap,
   registryListeners,
   mockGetPageApi,
@@ -27,7 +27,6 @@ const {
     capturedCallback: {
       current: null as ((payload: Record<string, unknown>) => void) | null,
     },
-    mockContextUsage: vi.fn(),
     terminalMap: map,
     registryListeners: listeners,
     mockGetPageApi: vi.fn(),
@@ -123,7 +122,7 @@ vi.mock("../workspace/pageApis", () => ({
   switchToPageAndFocus: vi.fn(),
 }));
 
-// ── mock ipc/agentHooks（覆盖 setup.ts 全局 mock，捕获回调 + 可控 contextUsage） ──
+// ── mock ipc/agentHooks（覆盖 setup.ts 全局 mock，捕获回调） ──
 vi.mock("../ipc/agentHooks", () => ({
   onAgentEvent: vi.fn((cb: (payload: Record<string, unknown>) => void) => {
     capturedCallback.current = cb;
@@ -131,16 +130,15 @@ vi.mock("../ipc/agentHooks", () => ({
       capturedCallback.current = null;
     };
   }),
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  contextUsage: ((cliId: string, path: string) => mockContextUsage(cliId, path)) as any,
   inject: () =>
     Promise.resolve({ status: "notInjected" as const, version: null }),
   uninstall: () => Promise.resolve(),
   getInjectionStatus: () =>
     Promise.resolve({ status: "notInjected" as const, version: null }),
+  restoreStatusline: () => Promise.resolve(),
 }));
 
-import { renderHook, act, waitFor } from "@testing-library/react";
+import { renderHook, act } from "@testing-library/react";
 import { useLayout } from "../stores/layout";
 import { useProjects } from "../stores/projects";
 import { useAgentStatus } from "../features/agentStatus/useAgentStatus";
@@ -226,7 +224,7 @@ function registerTerminalWithNotify(
   (TerminalRegistry as any).register(panelId, entry);
 }
 
-/** 构造 AgentEventPayload（字段对齐 src/types/agent.ts AgentEventPayload，含可选 cliId——MC-205 显式分支注入） */
+/** 构造 AgentEventPayload（字段对齐 src/types/agent.ts AgentEventPayload，含可选 cliId/usedPercentage） */
 function makePayload(
   overrides: Partial<{
     panelId: string;
@@ -238,6 +236,7 @@ function makePayload(
     toolName: string | null;
     notificationType: string | null;
     cliId?: string;
+    usedPercentage?: number;
   }> = {},
 ) {
   return {
@@ -290,8 +289,6 @@ describe("useAgentStatus（行建模新语义）", () => {
     registryListeners.clear();
     // 重置 hooks mock
     capturedCallback.current = null;
-    mockContextUsage.mockReset();
-    mockContextUsage.mockResolvedValue(null);
     // 重置 pageApis mock（默认无 api）
     mockGetPageApi.mockReset();
     mockGetPageApi.mockReturnValue(undefined);
@@ -443,38 +440,6 @@ describe("useAgentStatus（行建模新语义）", () => {
     expect(result.current.rows[0].panelId).toBe("terminal-page1-0");
   });
 
-  it("初始扫描携 usageSourcePath 时主动拉 contextUsage（修复问题 2b）", async () => {
-    seedProject();
-    registerTerminal("terminal-page1-0", makeSession({
-      lastEventAt: 1000,
-      usageSourcePath: "/path/to/transcript.jsonl",
-    }));
-
-    mockContextUsage.mockResolvedValue({
-      inputTokens: 5000,
-      outputTokens: 2000,
-      cacheReadInputTokens: 0,
-      cacheCreationInputTokens: 0,
-    });
-
-    renderHook(() => useAgentStatus());
-
-    // 同步验证：contextUsage 在初始扫描时被调用（StrictMode 下 effect 双次触发，故不断言精确次数）
-    expect(mockContextUsage).toHaveBeenCalledWith(CLAUDE_CLI_ID, "/path/to/transcript.jsonl");
-  });
-
-  it("初始扫描无 usageSourcePath → 不调 contextUsage", () => {
-    seedProject();
-    registerTerminal("terminal-page1-0", makeSession({
-      lastEventAt: 1000,
-      // 无 usageSourcePath
-    }));
-
-    renderHook(() => useAgentStatus());
-
-    expect(mockContextUsage).not.toHaveBeenCalled();
-  });
-
   // ──────────────────────────────────────────────────
   // sessionChange 建行（双通道之一）
   // ──────────────────────────────────────────────────
@@ -537,32 +502,6 @@ describe("useAgentStatus（行建模新语义）", () => {
       });
     });
 
-    expect(result.current.rows).toHaveLength(1);
-  });
-
-  it("sessionChange 建行携带 usageSourcePath → 主动拉 usage", () => {
-    seedProject();
-    registerTerminal("terminal-page1-0", null);
-
-    mockContextUsage.mockResolvedValue({
-      inputTokens: 8000,
-      outputTokens: 3000,
-      cacheReadInputTokens: 0,
-      cacheCreationInputTokens: 0,
-    });
-
-    const { result } = renderHook(() => useAgentStatus());
-    expect(result.current.rows).toHaveLength(0);
-
-    act(() => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (TerminalRegistry as any).setAgentSession("terminal-page1-0", {
-        matchedCommand: "claude",
-        usageSourcePath: "/t.json",
-      });
-    });
-
-    expect(mockContextUsage).toHaveBeenCalledWith(CLAUDE_CLI_ID, "/t.json");
     expect(result.current.rows).toHaveLength(1);
   });
 
@@ -947,103 +886,89 @@ describe("useAgentStatus（行建模新语义）", () => {
   });
 
   // ──────────────────────────────────────────────────
-  // contextUsage 拉取
+  // ContextUsage 信号事件（statusline 桥接通道——官方 used_percentage 口径）
   // ──────────────────────────────────────────────────
 
-  it("事件含 usageSourcePath → 调用 contextUsage 拉取用量", async () => {
+  it("ContextUsage 信号 → 行存在时更新 usage（usedPercentage 原样写入）", () => {
     seedProject();
     registerTerminal("terminal-page1-0", makeSession({ lastEventAt: 1000 }));
 
     const { result } = renderHook(() => useAgentStatus());
-
-    mockContextUsage.mockResolvedValue({
-      inputTokens: 12000,
-      outputTokens: 4500,
-      cacheReadInputTokens: 0,
-      cacheCreationInputTokens: 0,
-    });
-
-    act(() => {
-      capturedCallback.current?.(
-        makePayload({
-          event: "PreToolUse",
-          usageSourcePath: "/path/to/transcript.jsonl",
-        }),
-      );
-    });
-
-    expect(mockContextUsage).toHaveBeenCalledWith(CLAUDE_CLI_ID, "/path/to/transcript.jsonl");
-
-    await waitFor(() => {
-      expect(result.current.rows[0].usage).toEqual({
-        inputTokens: 12000,
-        outputTokens: 4500,
-        cacheReadInputTokens: 0,
-        cacheCreationInputTokens: 0,
-      });
-    });
-  });
-
-  it("contextUsage 返回 null → usage 字段为 null", async () => {
-    seedProject();
-    registerTerminal("terminal-page1-0", makeSession({ lastEventAt: 1000 }));
-
-    const { result } = renderHook(() => useAgentStatus());
-
-    mockContextUsage.mockResolvedValue(null);
-
-    act(() => {
-      capturedCallback.current?.(
-        makePayload({
-          event: "PreToolUse",
-          usageSourcePath: "/path/to/transcript.jsonl",
-        }),
-      );
-    });
-
-    await waitFor(() => {
-      expect(result.current.rows[0].usage).toBeNull();
-    });
-  });
-
-  it("contextUsage 报错 → 行仍存在且 usage 保持为 undefined（降级不崩）", async () => {
-    seedProject();
-    registerTerminal("terminal-page1-0", makeSession({ lastEventAt: 1000 }));
-
-    const { result } = renderHook(() => useAgentStatus());
-
-    mockContextUsage.mockRejectedValue(new Error("文件不存在"));
-
-    act(() => {
-      capturedCallback.current?.(
-        makePayload({
-          event: "PreToolUse",
-          usageSourcePath: "/bad/path.jsonl",
-        }),
-      );
-    });
-
-    // 降级：行仍存在，usage 保持 undefined（初始值）
-    expect(result.current.rows).toHaveLength(1);
     expect(result.current.rows[0].usage).toBeUndefined();
-  });
-
-  it("无 usageSourcePath 的事件不触发 contextUsage", () => {
-    seedProject();
-    registerTerminal("terminal-page1-0", makeSession({ lastEventAt: 1000 }));
-
-    renderHook(() => useAgentStatus());
 
     act(() => {
       capturedCallback.current?.(
         makePayload({
-          event: "PreToolUse",
-          usageSourcePath: "",
+          event: "ContextUsage",
+          timestamp: 2000,
+          usedPercentage: 23.6,
         }),
       );
     });
 
-    expect(mockContextUsage).not.toHaveBeenCalled();
+    expect(result.current.rows[0].usage).toEqual({ usedPercentage: 23.6 });
+    // 不动状态/时间（usage 更新不视为会话活动）
+    expect(result.current.rows[0].status).toBe("attention");
+    expect(result.current.rows[0].lastEventAt).toBe(1000);
+  });
+
+  it("ContextUsage 信号 → 行不存在时不建行（先于建行到达时忽略）", () => {
+    seedProject();
+    // 不注册终端——无行
+
+    const { result } = renderHook(() => useAgentStatus());
+    expect(result.current.rows).toHaveLength(0);
+
+    act(() => {
+      capturedCallback.current?.(
+        makePayload({
+          event: "ContextUsage",
+          usedPercentage: 50,
+        }),
+      );
+    });
+
+    // 不建行（usage 事件不是建行通道）
+    expect(result.current.rows).toHaveLength(0);
+    expect(result.current.state).toEqual({ kind: "empty" });
+  });
+
+  it("ContextUsage 信号字段缺失（usedPercentage undefined）→ 忽略不更新", () => {
+    seedProject();
+    registerTerminal("terminal-page1-0", makeSession({ lastEventAt: 1000 }));
+
+    const { result } = renderHook(() => useAgentStatus());
+
+    act(() => {
+      capturedCallback.current?.(
+        makePayload({
+          event: "ContextUsage",
+          // 无 usedPercentage 字段
+        }),
+      );
+    });
+
+    expect(result.current.rows[0].usage).toBeUndefined();
+    expect(result.current.rows).toHaveLength(1);
+  });
+
+  it("ContextUsage 信号不触发删除（非 SessionEnd/Exit 通道）", () => {
+    seedProject();
+    registerTerminal("terminal-page1-0", makeSession({ lastEventAt: 1000 }));
+
+    const { result } = renderHook(() => useAgentStatus());
+    expect(result.current.rows).toHaveLength(1);
+
+    act(() => {
+      capturedCallback.current?.(
+        makePayload({
+          event: "ContextUsage",
+          usedPercentage: 10,
+        }),
+      );
+    });
+
+    expect(result.current.rows).toHaveLength(1);
   });
 
   // ──────────────────────────────────────────────────

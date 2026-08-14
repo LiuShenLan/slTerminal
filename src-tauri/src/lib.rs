@@ -70,6 +70,9 @@ pub fn run() {
         .manage(AppState::new())
         .setup(|app| {
             hooks::start_signal_watcher(app.handle().clone());
+            // 启动自动重注入：上次关闭时已恢复 statusline 桥接（备份保留），
+            // 检测备份 + 当前为原配置 → 重新注入（失败仅 warn，不阻断启动）
+            hooks::reinject_statusline_on_startup();
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -100,7 +103,7 @@ pub fn run() {
             hooks::agent_hooks_inject,
             hooks::agent_hooks_uninstall,
             hooks::agent_hooks_injection_status,
-            hooks::agent_context_usage,
+            hooks::agent_hooks_restore_statusline,
             hooks::agent_hooks_config_read,
             hooks::agent_hooks_config_write,
             agent_history::agent_history_scan,

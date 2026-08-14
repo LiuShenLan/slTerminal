@@ -12,7 +12,7 @@
 // 点 = cwd 单引号转义（AQ-1 修复，见 buildResumeCommand 注释）。
 
 import type { AgentStatus } from "../../../../lib/agentStatus";
-import type { AgentEventPayload } from "../../../../types/agent";
+import type { AgentEventPayload, ContextUsageSignal } from "../../../../types/agent";
 import type { AgentHistorySession } from "../../../../types/agentHistory";
 
 /** Notification 事件中需要用户处理的子类型 */
@@ -93,6 +93,29 @@ export function classifyNotification(
 
   // 其他事件（PreToolUse / PostToolUse / SessionStart / SessionEnd 等）不触发 toast
   return null;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// context 用量能力（官方 used_percentage 口径——statusline 桥接通道）
+// ═══════════════════════════════════════════════════════════════════
+
+/**
+ * 用量信号 → 显示百分比（官方 used_percentage 取整 + 钳位 0–100）。
+ *
+ * 口径对齐 statusline 参考脚本（statusline.sh 的 PCT 处理）：
+ * `printf "%.0f"`（四舍五入取整）+ `PCT < 0 ? 0` + `PCT > 100 ? 100`。
+ * 无数据（null/undefined）→ null（渲染 "--"）。
+ */
+export function computeUsagePercent(
+  usage: ContextUsageSignal | null | undefined,
+): number | null {
+  if (usage == null || typeof usage.usedPercentage !== "number") {
+    return null;
+  }
+  const rounded = Math.round(usage.usedPercentage);
+  if (rounded < 0) return 0;
+  if (rounded > 100) return 100;
+  return rounded;
 }
 
 // ═══════════════════════════════════════════════════════════════════

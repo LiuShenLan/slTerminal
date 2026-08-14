@@ -68,11 +68,12 @@ export interface UiTokens {
     /** 横幅边框 */ border: string;
     /** 横幅文字 */ fg: string;
   };
-  /** 用量条分段色——AgentStatusRow 上下文用量条（阈值 <50/50-80/>80 由组件逻辑决定） */
+  /** 用量条分段色——AgentStatusRow 上下文用量条（阈值 ≥90/≥70/≥50 由组件逻辑决定） */
   agentStatusUsage: {
     /** 低用量（<50%） */ low: string;
-    /** 中用量（50-80%） */ medium: string;
-    /** 高用量（>80%） */ high: string;
+    /** 中用量（50-70%） */ medium: string;
+    /** 高用量（70-90%） */ high: string;
+    /** 临界用量（≥90%） */ critical: string;
   };
 
   // --- 标量（23 键）---

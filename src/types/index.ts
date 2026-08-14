@@ -3,7 +3,7 @@ export type { DirEntry } from "./fs";
 export type { GitStatusEntry, DiffHunk } from "./git";
 export type { FsEventPayload } from "./notify";
 export type {
-  ContextUsage,
+  ContextUsageSignal,
   AgentEventPayload,
   AgentHookInjectionStatus,
 } from "./agent";

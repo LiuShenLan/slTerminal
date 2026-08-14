@@ -3,15 +3,59 @@
 //! 读写 ~/.claude/settings.json（绕过 project_root 路径沙箱，照 settings.rs 先例），
 //! 阻塞 I/O 由命令层经 spawn_blocking 串行化（硬约束 #3）。
 //! 路径辅助（home 解析）在 claude/mod.rs，供 CliHooksProvider impl 使用。
+//!
+//! statusline 桥接（context 官方用量百分比通道）：
+//! - inject：写 slterm-statusline.js + settings.json 写 statusLine 键（桥接命令 = node 桥接脚本 + 原命令 argv），
+//!   原 statusLine 备份到 ~/.slterminal/statusline-backup.json
+//! - restore（客户端关闭清理）：statusLine 为桥接 → 还原备份，备份保留（供重开重注入）
+//! - reinject（启动自动重注入）：备份存在 + 当前等于备份原配置 → 重新注入桥接；用户已改过 → 尊重跳过
+//! - uninstall：statusLine 为桥接 → 还原备份（备份缺失 → 移除键），删备份
 
 use crate::error::AppError;
 use crate::hooks::{AgentHookInjectionStatus, AgentInjectionStatus};
 use serde_json::Value;
 use std::io::Write;
+use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
 
 /// 内嵌 hook reporter 脚本模板（编译期嵌入，用于版本比对与升级）
 const HOOK_SCRIPT_TEMPLATE: &str = include_str!("slterm-hook-reporter.js");
+
+/// 内嵌 statusline 桥接脚本模板（编译期嵌入；与 reporter 同批注入，版本同号）
+const STATUSLINE_SCRIPT_TEMPLATE: &str = include_str!("slterm-statusline.js");
+
+/// statusline 桥接脚本文件名
+const STATUSLINE_SCRIPT_NAME: &str = "slterm-statusline.js";
+
+/// statusline 备份文件名（script_dir 父目录 = ~/.slterminal 下）
+const STATUSLINE_BACKUP_NAME: &str = "statusline-backup.json";
+
+/// 备份文件路径推导（script_dir = ~/.slterminal/hooks → 备份 = ~/.slterminal/statusline-backup.json）
+fn backup_path_from_script_dir(script_dir: &Path) -> Option<PathBuf> {
+    script_dir.parent().map(|p| p.join(STATUSLINE_BACKUP_NAME))
+}
+
+/// 备份文件路径（home 解析注入，供 provider impl 使用；home 缺失 → None）
+pub(crate) fn statusline_backup_path(home: Option<PathBuf>) -> Option<PathBuf> {
+    home.map(|h| h.join(".slterminal").join(STATUSLINE_BACKUP_NAME))
+}
+
+/// statusLine 是否为 slterm 桥接（command 含桥接脚本名）
+fn statusline_is_bridge(status_line: &Value) -> bool {
+    status_line
+        .get("command")
+        .and_then(|c| c.as_str())
+        .is_some_and(|cmd| cmd.contains(STATUSLINE_SCRIPT_NAME))
+}
+
+/// 构造桥接 statusLine 配置（command = node 桥接脚本 + 原命令 argv——桥接脚本透传执行原命令）
+fn build_bridge_statusline(script_abs_path: &str, original_command: &str) -> Value {
+    let path_normalized = script_abs_path.replace('\\', "/");
+    serde_json::json!({
+        "type": "command",
+        "command": format!("node \"{}\" \"{}\"", path_normalized, original_command),
+    })
+}
 
 /// C9 规定的 10 个注入事件（与四态映射相关的最小集）
 const HOOK_EVENTS: &[&str] = &[
@@ -165,14 +209,14 @@ fn inject_matchers(hooks: &mut serde_json::Map<String, Value>, script_abs_path: 
 
 /// agent_hooks_inject（claude）实现：落盘脚本 + merge 注入 settings.json（C6/C9）
 ///
-/// 流程：确保脚本目录存在 → 原子写脚本 → 读 settings.json →
-/// 移除旧 slterm 段 → 追加 10 事件 matcher → 原子写回。
+/// 流程：确保脚本目录存在 → 原子写 reporter + statusline 桥接脚本 → 读 settings.json →
+/// 移除旧 slterm 段 → 追加 10 事件 matcher → statusLine 备份 + 写桥接配置 → 原子写回。
 /// JSON 非法时返回 AppError 且不改动文件。
 pub(crate) fn inject_impl(
     settings_path: &std::path::Path,
     script_dir: &std::path::Path,
 ) -> Result<AgentHookInjectionStatus, AppError> {
-    // 1. 确保脚本目录存在并原子写脚本
+    // 1. 确保脚本目录存在并原子写 reporter + statusline 桥接脚本
     std::fs::create_dir_all(script_dir)?;
 
     let script_path = script_dir.join("slterm-hook-reporter.js");
@@ -184,6 +228,17 @@ pub(crate) fn inject_impl(
         .map_err(|e| AppError::IoKind {
             kind: format!("{:?}", e.error.kind()),
             message: format!("脚本写入失败: {e}"),
+        })?;
+
+    let statusline_script_path = script_dir.join(STATUSLINE_SCRIPT_NAME);
+    let mut tmp_sl = NamedTempFile::new_in(script_dir)?;
+    tmp_sl.write_all(STATUSLINE_SCRIPT_TEMPLATE.as_bytes())?;
+    tmp_sl.flush()?;
+    tmp_sl
+        .persist(&statusline_script_path)
+        .map_err(|e| AppError::IoKind {
+            kind: format!("{:?}", e.error.kind()),
+            message: format!("statusline 桥接脚本写入失败: {e}"),
         })?;
 
     // 2. 读 settings.json
@@ -225,28 +280,186 @@ pub(crate) fn inject_impl(
     remove_slterm_matchers(hooks_obj);
     inject_matchers(hooks_obj, &script_abs);
 
-    // 6. 原子写回 settings.json
+    // 6. statusLine 桥接：已是桥接 → 幂等跳过；否则备份原配置（含 command 才备份）+ 写桥接配置
+    //    （原 statusLine 缺失 → 不备份，桥接仍注入、原命令空——透传分支退化为纯信号上报）
+    let statusline_abs = dunce::simplified(&statusline_script_path)
+        .to_string_lossy()
+        .to_string();
+    let existing_statusline = root_obj.get("statusLine").cloned();
+    if existing_statusline
+        .as_ref()
+        .is_some_and(statusline_is_bridge)
+    {
+        // 幂等：二次注入不重建桥接（原命令保持）
+    } else {
+        let original_command = existing_statusline
+            .as_ref()
+            .and_then(|sl| sl.get("command"))
+            .and_then(|c| c.as_str())
+            .map(str::to_string);
+        if original_command.is_some() {
+            if let Some(backup_path) = backup_path_from_script_dir(script_dir) {
+                write_backup(
+                    &backup_path,
+                    existing_statusline.clone().unwrap_or(Value::Null),
+                )?;
+            }
+        }
+        root_obj.insert(
+            "statusLine".into(),
+            build_bridge_statusline(&statusline_abs, original_command.as_deref().unwrap_or("")),
+        );
+    }
+
+    // 7. 原子写回 settings.json
     let settings_parent = settings_path.parent().ok_or_else(|| AppError::IoKind {
         kind: "path".into(),
         message: "无法获取 settings.json 父目录".into(),
     })?;
     std::fs::create_dir_all(settings_parent)?;
-
-    let json_str = serde_json::to_string_pretty(&settings)?;
-    let mut tmp_settings = NamedTempFile::new_in(settings_parent)?;
-    tmp_settings.write_all(json_str.as_bytes())?;
-    tmp_settings.flush()?;
-    tmp_settings
-        .persist(settings_path)
-        .map_err(|e| AppError::IoKind {
-            kind: format!("{:?}", e.error.kind()),
-            message: format!("settings.json 写入失败: {e}"),
-        })?;
+    atomic_write_settings(settings_path, &settings)?;
 
     Ok(AgentHookInjectionStatus {
         status: AgentInjectionStatus::Injected,
         version: Some(template_version()),
     })
+}
+
+/// 原子写 settings.json（NamedTempFile + persist；父目录须已存在）
+fn atomic_write_settings(
+    settings_path: &std::path::Path,
+    settings: &Value,
+) -> Result<(), AppError> {
+    let parent = settings_path.parent().ok_or_else(|| AppError::IoKind {
+        kind: "path".into(),
+        message: "无法获取 settings.json 父目录".into(),
+    })?;
+    std::fs::create_dir_all(parent)?;
+    let json_str = serde_json::to_string_pretty(settings)?;
+    let mut tmp = NamedTempFile::new_in(parent)?;
+    tmp.write_all(json_str.as_bytes())?;
+    tmp.flush()?;
+    tmp.persist(settings_path).map_err(|e| AppError::IoKind {
+        kind: format!("{:?}", e.error.kind()),
+        message: format!("settings.json 写入失败: {e}"),
+    })?;
+    Ok(())
+}
+
+/// 原子写 statusline 备份文件（失败静默——备份是增强特性，不阻断注入主流程）
+fn write_backup(backup_path: &std::path::Path, backup: Value) -> Result<(), AppError> {
+    if let Some(parent) = backup_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let json_str = serde_json::to_string_pretty(&backup)?;
+    let mut tmp = NamedTempFile::new_in(backup_path.parent().ok_or_else(|| AppError::IoKind {
+        kind: "path".into(),
+        message: "无法获取备份文件父目录".into(),
+    })?)?;
+    tmp.write_all(json_str.as_bytes())?;
+    tmp.flush()?;
+    tmp.persist(backup_path).map_err(|e| AppError::IoKind {
+        kind: format!("{:?}", e.error.kind()),
+        message: format!("statusline 备份写入失败: {e}"),
+    })?;
+    Ok(())
+}
+
+/// 读取 statusline 备份（缺失/损坏 → None，不区分具体错误）
+fn read_backup(backup_path: &std::path::Path) -> Option<Value> {
+    let content = std::fs::read_to_string(backup_path).ok()?;
+    serde_json::from_str::<Value>(content.trim()).ok()
+}
+
+/// 关闭清理：restore statusline——当前为桥接 → 还原备份原配置（备份**保留**，供重开重注入）；
+/// 非桥接（用户已改过）/ 无 settings / 非法 JSON → 静默跳过（关闭链路尽力而为，不阻断）
+pub(crate) fn restore_statusline_impl(
+    settings_path: Option<&std::path::Path>,
+    backup_path: Option<&std::path::Path>,
+) -> Result<(), AppError> {
+    let Some(settings_path) = settings_path else {
+        return Ok(());
+    };
+    if !settings_path.exists() {
+        return Ok(());
+    }
+    let Ok(content) = std::fs::read_to_string(settings_path) else {
+        return Ok(());
+    };
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return Ok(());
+    }
+    let Ok(mut settings) = serde_json::from_str::<Value>(trimmed) else {
+        return Ok(()); // 非法 JSON 静默跳过（不损坏用户文件）
+    };
+    if !settings.get("statusLine").is_some_and(statusline_is_bridge) {
+        return Ok(()); // 用户已改过 → 尊重不动
+    }
+    let Some(root) = settings.as_object_mut() else {
+        return Ok(());
+    };
+    match backup_path.and_then(read_backup) {
+        Some(backup) => {
+            root.insert("statusLine".into(), backup);
+        }
+        None => {
+            root.remove("statusLine"); // 无备份（注入时原配置缺失）→ 移除键
+        }
+    }
+    atomic_write_settings(settings_path, &settings)?;
+    Ok(())
+}
+
+/// 启动自动重注入：备份存在 + 当前 statusLine 等于备份原配置 → 重新注入桥接；
+/// 无备份 / 当前已是桥接 / 用户已改过（含删除键）/ 脚本缺失 → no-op（尊重用户现状）
+pub(crate) fn reinject_statusline_impl(
+    settings_path: Option<&std::path::Path>,
+    backup_path: Option<&std::path::Path>,
+    script_path: Option<&std::path::Path>,
+) -> Result<(), AppError> {
+    let (Some(settings_path), Some(backup_path), Some(script_path)) =
+        (settings_path, backup_path, script_path)
+    else {
+        return Ok(());
+    };
+    if !script_path.is_file() {
+        return Ok(()); // 桥接脚本不存在 → 未注入状态，跳过
+    }
+    let Some(backup) = read_backup(backup_path) else {
+        return Ok(()); // 无备份 → 跳过
+    };
+    if !settings_path.exists() {
+        return Ok(());
+    }
+    let Ok(content) = std::fs::read_to_string(settings_path) else {
+        return Ok(());
+    };
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return Ok(());
+    }
+    let Ok(mut settings) = serde_json::from_str::<Value>(trimmed) else {
+        return Ok(()); // 非法 JSON 跳过（不损坏用户文件）
+    };
+    let current = settings.get("statusLine").cloned();
+    if current.as_ref().is_some_and(statusline_is_bridge) {
+        return Ok(()); // 已是桥接（异常退出未恢复成）→ 无需重注入
+    }
+    if current.as_ref() != Some(&backup) {
+        return Ok(()); // 用户已改过 → 尊重不动
+    }
+    // 恢复场景：当前 = 备份原配置 → 重新注入桥接
+    let script_abs = dunce::simplified(script_path).to_string_lossy().to_string();
+    let original_command = backup.get("command").and_then(|c| c.as_str()).unwrap_or("");
+    if let Some(root) = settings.as_object_mut() {
+        root.insert(
+            "statusLine".into(),
+            build_bridge_statusline(&script_abs, original_command),
+        );
+    }
+    atomic_write_settings(settings_path, &settings)?;
+    Ok(())
 }
 
 /// agent_hooks_uninstall（claude）实现：移除配置段 + 删脚本目录 + 清信号目录（C6/C9）
@@ -257,7 +470,10 @@ pub(crate) fn uninstall_impl(
     script_dir: Option<&std::path::Path>,
     events_dir: Option<&std::path::Path>,
 ) -> Result<(), AppError> {
-    // 1. 从 settings.json 移除 slTerminal 全部 matcher 组
+    // 1. 从 settings.json 移除 slTerminal 全部 matcher 组 + 还原 statusLine 桥接
+    let backup_value = script_dir
+        .and_then(backup_path_from_script_dir)
+        .and_then(|p| read_backup(&p));
     if let Some(settings_path) = settings_path {
         if settings_path.exists() {
             if let Ok(content) = std::fs::read_to_string(settings_path) {
@@ -275,6 +491,21 @@ pub(crate) fn uninstall_impl(
                             if hooks.is_empty() {
                                 if let Some(root) = settings.as_object_mut() {
                                     root.remove("hooks");
+                                }
+                            }
+                        }
+                        // statusLine 桥接 → 还原备份（备份缺失 → 移除键，用户原本无 statusLine）；
+                        // 用户已改过（非桥接）→ 保留不动
+                        if settings.get("statusLine").is_some_and(statusline_is_bridge) {
+                            changed = true;
+                            if let Some(root) = settings.as_object_mut() {
+                                match backup_value {
+                                    Some(ref backup) => {
+                                        root.insert("statusLine".into(), backup.clone());
+                                    }
+                                    None => {
+                                        root.remove("statusLine");
+                                    }
                                 }
                             }
                         }
@@ -297,6 +528,11 @@ pub(crate) fn uninstall_impl(
         }
     }
 
+    // 1.5 删除 statusline 备份文件（还原已完成，备份使命结束）
+    if let Some(backup_path) = script_dir.and_then(backup_path_from_script_dir) {
+        let _ = std::fs::remove_file(&backup_path);
+    }
+
     // 2. 删除脚本目录
     if let Some(d) = script_dir {
         if d.exists() {
@@ -316,8 +552,9 @@ pub(crate) fn uninstall_impl(
 
 /// agent_hooks_injection_status（claude）实现：查询注入状态（C6/C9）
 ///
-/// 三态判定：脚本存在 + settings 含 matcher + 版本一致 → Injected;
-/// 版本不一致 → Outdated; 其他 → NotInjected。
+/// 三态判定：脚本存在 + settings 含 matcher + statusLine 为桥接 + 版本一致 → Injected;
+/// matcher 在但 statusLine 非桥接（关闭还原后未重注入）或版本不一致 → Outdated;
+/// 其他 → NotInjected。
 pub(crate) fn injection_status_impl(
     script_path: &std::path::Path,
     settings_path: &std::path::Path,
@@ -367,6 +604,20 @@ pub(crate) fn injection_status_impl(
         };
     }
 
+    // statusLine 桥接检查：关闭还原/手动改回后 → Outdated（hooks matcher 仍在但桥接缺失）
+    let statusline_bridged = std::fs::read_to_string(settings_path)
+        .ok()
+        .and_then(|c| serde_json::from_str::<Value>(c.trim()).ok())
+        .and_then(|settings| settings.get("statusLine").cloned())
+        .is_some_and(|sl| statusline_is_bridge(&sl));
+
+    if !statusline_bridged {
+        return AgentHookInjectionStatus {
+            status: AgentInjectionStatus::Outdated,
+            version: disk_ver,
+        };
+    }
+
     AgentHookInjectionStatus {
         status: AgentInjectionStatus::Injected,
         version: disk_ver,
@@ -385,9 +636,9 @@ mod tests {
     fn template_version_positive() {
         let v = template_version();
         assert!(v > 0, "SCRIPT_VERSION 应大于 0，实际: {v}");
-        // 决策 7：新增 cliId 字段后 SCRIPT_VERSION 已递增；KZ-3 更名 usageSourcePath 后再次递增
-        // （已注入用户变「版本过旧」需重新注入）
-        assert_eq!(v, 3, "SCRIPT_VERSION 应已递增到 3（决策 7/KZ-3）");
+        // 决策 7/KZ-3 后 = 3；statusline 桥接引入（reporter + 桥接脚本同批注入）→ 4
+        // （已注入用户变「版本过旧」需重新注入，装上 statusline 桥接）
+        assert_eq!(v, 4, "SCRIPT_VERSION 应已递增到 4（statusline 桥接）");
     }
 
     // ── 模板内嵌校验（决策 7：显式 cliId + SCRIPT_VERSION 递增） ──
@@ -758,7 +1009,7 @@ mod tests {
         (dir, settings_path, script_dir)
     }
 
-    /// 断言 settings.json 已按 C9 注入 10 事件 matcher（返回解析后的 settings）
+    /// 断言 settings.json 已按 C9 注入 10 事件 matcher + statusLine 桥接（返回解析后的 settings）
     fn assert_injected_settings(settings_path: &std::path::Path) -> Value {
         let content = std::fs::read_to_string(settings_path).unwrap();
         let settings: Value = serde_json::from_str(&content).unwrap();
@@ -778,6 +1029,19 @@ mod tests {
                 "事件 {event} command 应含 slterm-hook-reporter"
             );
         }
+        // statusLine 键 = 桥接（command 含 slterm-statusline；type = command）
+        let status_line = settings["statusLine"].as_object().unwrap();
+        assert_eq!(
+            status_line["type"], "command",
+            "statusLine type 应为 command"
+        );
+        assert!(
+            status_line["command"]
+                .as_str()
+                .unwrap()
+                .contains("slterm-statusline"),
+            "statusLine command 应含 slterm-statusline"
+        );
         settings
     }
 
@@ -1001,5 +1265,328 @@ mod tests {
         std::fs::write(&settings_path, "{}").unwrap();
         let s = injection_status_impl(&script_path, &settings_path);
         assert_eq!(s.status, AgentInjectionStatus::NotInjected);
+    }
+
+    // ── statusline 桥接（context 官方用量百分比通道）──
+
+    #[test]
+    fn statusline_template_is_non_empty_and_contains_contract() {
+        assert!(
+            STATUSLINE_SCRIPT_TEMPLATE.len() > 100,
+            "桥接脚本模板不应为空"
+        );
+        assert!(
+            STATUSLINE_SCRIPT_TEMPLATE.contains("used_percentage"),
+            "桥接脚本应提取官方 used_percentage 字段"
+        );
+        assert!(
+            STATUSLINE_SCRIPT_TEMPLATE.contains("SLTERM_PANEL_ID"),
+            "桥接脚本应引用 SLTERM_PANEL_ID 环境变量"
+        );
+        assert!(
+            STATUSLINE_SCRIPT_TEMPLATE.contains("slterm-statusline"),
+            "桥接脚本应含自身文件名（桥接判定子串）"
+        );
+        assert!(
+            STATUSLINE_SCRIPT_TEMPLATE.contains(r#"cliId: "claude""#),
+            "桥接脚本信号 payload 应显式写 cliId（决策 7 先例）"
+        );
+        assert!(
+            STATUSLINE_SCRIPT_TEMPLATE.contains(r#"event: "ContextUsage""#),
+            "桥接脚本信号 event 应为 ContextUsage"
+        );
+        assert!(
+            STATUSLINE_SCRIPT_TEMPLATE.contains("SCRIPT_VERSION"),
+            "桥接脚本应含版本常量"
+        );
+    }
+
+    #[test]
+    fn inject_writes_statusline_script_and_bridge_config() {
+        let (_dir, settings_path, script_dir) = make_inject_env();
+        // 预置用户原 statusLine（非桥接）
+        std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &settings_path,
+            r#"{"statusLine":{"type":"command","command":"~/.claude/statusline-user.sh"}}"#,
+        )
+        .unwrap();
+
+        inject_impl(&settings_path, &script_dir).unwrap();
+
+        // 桥接脚本已落盘且内容为内嵌模板
+        let bridge_path = script_dir.join(STATUSLINE_SCRIPT_NAME);
+        assert!(bridge_path.is_file(), "桥接脚本应落盘");
+        assert_eq!(
+            std::fs::read_to_string(&bridge_path).unwrap(),
+            STATUSLINE_SCRIPT_TEMPLATE
+        );
+        // statusLine = 桥接 + 原命令内嵌（argv 透传给桥接脚本）
+        let settings: Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
+        let cmd = settings["statusLine"]["command"].as_str().unwrap();
+        assert!(cmd.contains("slterm-statusline"), "command 应为桥接: {cmd}");
+        assert!(
+            cmd.contains("~/.claude/statusline-user.sh"),
+            "原命令应作为 argv 透传: {cmd}"
+        );
+        // 备份文件 = 原配置
+        let backup = backup_path_from_script_dir(&script_dir).unwrap();
+        let backup_value: Value =
+            serde_json::from_str(&std::fs::read_to_string(&backup).unwrap()).unwrap();
+        assert_eq!(
+            backup_value,
+            serde_json::json!({"type":"command","command":"~/.claude/statusline-user.sh"}),
+            "备份应为原 statusLine 配置"
+        );
+    }
+
+    #[test]
+    fn inject_without_original_statusline_skips_backup_but_injects_bridge() {
+        let (_dir, settings_path, script_dir) = make_inject_env();
+        inject_impl(&settings_path, &script_dir).unwrap();
+        // 无原配置 → 不备份
+        let backup = backup_path_from_script_dir(&script_dir).unwrap();
+        assert!(!backup.exists(), "无原 statusLine 不应产生备份");
+        // 桥接仍注入（原命令空——纯信号上报形态）
+        assert_injected_settings(&settings_path);
+    }
+
+    #[test]
+    fn inject_idempotent_keeps_existing_bridge() {
+        let (_dir, settings_path, script_dir) = make_inject_env();
+        std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &settings_path,
+            r#"{"statusLine":{"type":"command","command":"~/.claude/statusline-user.sh"}}"#,
+        )
+        .unwrap();
+        inject_impl(&settings_path, &script_dir).unwrap();
+        let after_first: Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
+        inject_impl(&settings_path, &script_dir).unwrap();
+        let after_second: Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
+        assert_eq!(
+            after_first["statusLine"], after_second["statusLine"],
+            "二次注入不应重建桥接（原命令保持）"
+        );
+    }
+
+    #[test]
+    fn uninstall_restores_backup_and_deletes_backup_file() {
+        let (_dir, settings_path, script_dir) = make_inject_env();
+        std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &settings_path,
+            r#"{"statusLine":{"type":"command","command":"~/.claude/statusline-user.sh"}}"#,
+        )
+        .unwrap();
+        inject_impl(&settings_path, &script_dir).unwrap();
+        let events_dir = script_dir.parent().unwrap().join("hooks-events");
+        std::fs::create_dir_all(&events_dir).unwrap();
+
+        uninstall_impl(Some(&settings_path), Some(&script_dir), Some(&events_dir)).unwrap();
+
+        let settings: Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
+        assert_eq!(
+            settings["statusLine"],
+            serde_json::json!({"type":"command","command":"~/.claude/statusline-user.sh"}),
+            "卸载应还原备份原配置"
+        );
+        let backup = backup_path_from_script_dir(&script_dir).unwrap();
+        assert!(!backup.exists(), "卸载后备份文件应删除");
+    }
+
+    #[test]
+    fn uninstall_without_backup_removes_bridge_statusline_key() {
+        // 注入时无原配置 → 无备份；卸载 → 移除 statusLine 键（用户原本无）
+        let (_dir, settings_path, script_dir) = make_inject_env();
+        inject_impl(&settings_path, &script_dir).unwrap();
+        let events_dir = script_dir.parent().unwrap().join("hooks-events");
+        std::fs::create_dir_all(&events_dir).unwrap();
+        uninstall_impl(Some(&settings_path), Some(&script_dir), Some(&events_dir)).unwrap();
+        let settings: Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
+        assert!(
+            settings.get("statusLine").is_none(),
+            "无备份时 statusLine 键应移除"
+        );
+    }
+
+    // ── restore_statusline_impl（关闭清理）三态 ──
+
+    #[test]
+    fn restore_bridge_with_backup_restores_and_keeps_backup() {
+        let (_dir, settings_path, script_dir) = make_inject_env();
+        std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &settings_path,
+            r#"{"statusLine":{"type":"command","command":"~/.claude/statusline-user.sh"}}"#,
+        )
+        .unwrap();
+        inject_impl(&settings_path, &script_dir).unwrap();
+        let backup = backup_path_from_script_dir(&script_dir).unwrap();
+
+        restore_statusline_impl(Some(&settings_path), Some(&backup)).unwrap();
+
+        let settings: Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
+        assert_eq!(
+            settings["statusLine"]["command"], "~/.claude/statusline-user.sh",
+            "关闭恢复应还原原配置"
+        );
+        assert!(backup.exists(), "备份应保留（供重开自动重注入）");
+    }
+
+    #[test]
+    fn restore_without_bridge_noop() {
+        // 用户已改过（非桥接）→ 不动
+        let (_dir, settings_path, script_dir) = make_inject_env();
+        std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+        let original = r#"{"statusLine":{"type":"command","command":"my-own.sh"}}"#;
+        std::fs::write(&settings_path, original).unwrap();
+        restore_statusline_impl(
+            Some(&settings_path),
+            backup_path_from_script_dir(&script_dir).as_deref(),
+        )
+        .unwrap();
+        assert_eq!(std::fs::read_to_string(&settings_path).unwrap(), original);
+    }
+
+    #[test]
+    fn restore_no_settings_or_backup_noop() {
+        let (_dir, settings_path, script_dir) = make_inject_env();
+        // settings 不存在 → no-op 不报错
+        restore_statusline_impl(
+            Some(&settings_path),
+            backup_path_from_script_dir(&script_dir).as_deref(),
+        )
+        .unwrap();
+        assert!(!settings_path.exists());
+    }
+
+    // ── reinject_statusline_impl（启动自动重注入）四态 ──
+
+    #[test]
+    fn reinject_with_backup_matching_current_reinjects_bridge() {
+        let (_dir, settings_path, script_dir) = make_inject_env();
+        std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &settings_path,
+            r#"{"statusLine":{"type":"command","command":"~/.claude/statusline-user.sh"}}"#,
+        )
+        .unwrap();
+        inject_impl(&settings_path, &script_dir).unwrap();
+        let backup = backup_path_from_script_dir(&script_dir).unwrap();
+        // 模拟关闭恢复后的状态
+        restore_statusline_impl(Some(&settings_path), Some(&backup)).unwrap();
+
+        reinject_statusline_impl(
+            Some(&settings_path),
+            Some(&backup),
+            Some(&script_dir.join(STATUSLINE_SCRIPT_NAME)),
+        )
+        .unwrap();
+
+        let settings: Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
+        assert!(
+            settings["statusLine"]["command"]
+                .as_str()
+                .unwrap()
+                .contains("slterm-statusline"),
+            "备份+原配置 → 应重新注入桥接"
+        );
+        assert!(backup.exists(), "重注入后备份仍保留");
+    }
+
+    #[test]
+    fn reinject_user_changed_statusline_respected() {
+        let (_dir, settings_path, script_dir) = make_inject_env();
+        std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &settings_path,
+            r#"{"statusLine":{"type":"command","command":"~/.claude/statusline-user.sh"}}"#,
+        )
+        .unwrap();
+        inject_impl(&settings_path, &script_dir).unwrap();
+        let backup = backup_path_from_script_dir(&script_dir).unwrap();
+        restore_statusline_impl(Some(&settings_path), Some(&backup)).unwrap();
+        // 用户在其他终端改过 statusLine
+        let user_changed = r#"{"statusLine":{"type":"command","command":"my-new-statusline.sh"}}"#;
+        std::fs::write(&settings_path, user_changed).unwrap();
+
+        reinject_statusline_impl(
+            Some(&settings_path),
+            Some(&backup),
+            Some(&script_dir.join(STATUSLINE_SCRIPT_NAME)),
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&settings_path).unwrap(),
+            user_changed,
+            "用户已改过 → 尊重不动"
+        );
+    }
+
+    #[test]
+    fn reinject_already_bridge_or_no_backup_noop() {
+        let (_dir, settings_path, script_dir) = make_inject_env();
+        std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+        // 已是桥接（异常退出未恢复成）→ 跳过
+        std::fs::write(
+            &settings_path,
+            r#"{"statusLine":{"type":"command","command":"node \"C:/x/slterm-statusline.js\" \"~/.claude/statusline-user.sh\""}}"#,
+        )
+        .unwrap();
+        let before = std::fs::read_to_string(&settings_path).unwrap();
+        reinject_statusline_impl(
+            Some(&settings_path),
+            backup_path_from_script_dir(&script_dir).as_deref(), // 备份不存在
+            Some(&script_dir.join(STATUSLINE_SCRIPT_NAME)),
+        )
+        .unwrap();
+        assert_eq!(std::fs::read_to_string(&settings_path).unwrap(), before);
+    }
+
+    #[test]
+    fn reinject_script_missing_noop() {
+        let (_dir, settings_path, script_dir) = make_inject_env();
+        std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &settings_path,
+            r#"{"statusLine":{"type":"command","command":"~/.claude/statusline-user.sh"}}"#,
+        )
+        .unwrap();
+        let before = std::fs::read_to_string(&settings_path).unwrap();
+        reinject_statusline_impl(
+            Some(&settings_path),
+            backup_path_from_script_dir(&script_dir).as_deref(),
+            Some(&script_dir.join(STATUSLINE_SCRIPT_NAME)), // 脚本不存在
+        )
+        .unwrap();
+        assert_eq!(std::fs::read_to_string(&settings_path).unwrap(), before);
+    }
+
+    #[test]
+    fn status_not_bridged_returns_outdated() {
+        // matcher + 版本一致但 statusLine 非桥接（关闭恢复后未重注入）→ Outdated
+        let (_dir, settings_path, script_dir) = make_inject_env();
+        std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &settings_path,
+            r#"{"statusLine":{"type":"command","command":"~/.claude/statusline-user.sh"}}"#,
+        )
+        .unwrap();
+        inject_impl(&settings_path, &script_dir).unwrap();
+        let backup = backup_path_from_script_dir(&script_dir).unwrap();
+        restore_statusline_impl(Some(&settings_path), Some(&backup)).unwrap();
+
+        let s = injection_status_impl(&script_dir.join("slterm-hook-reporter.js"), &settings_path);
+        assert_eq!(s.status, AgentInjectionStatus::Outdated);
+        assert_eq!(s.version, Some(template_version()));
     }
 }

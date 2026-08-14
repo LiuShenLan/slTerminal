@@ -21,9 +21,6 @@ export interface TabState {
   title?: string;
   /** 命令运行时图标（active=true 时有效，null=无图标） */
   icon?: string | null;
-  /** 当前 CLI 品牌 logo 根绝对路径（OSC 133 C 时经 profile.iconSrc 携带；
-   *  hook 事件路径无 command 不传；null=该 CLI 未注册 logo） */
-  logo?: string | null;
 }
 
 /** OSC 133 命令边界检测 hook
@@ -64,12 +61,14 @@ export function useCommandDetection(
         const profile = cliProfileRegistry.matchByCommand(command);
         if (profile) {
           isCommandRunningRef.current = true;
-          // title/logo 均取自匹配 profile（tabTitle / iconSrc）；未命中零副作用（不触发回调）
+          // 标题取自匹配 profile（tabTitle）；未命中零副作用（不触发回调）。
+          // F9 行为修订：logo 不再经此路径直传——页签 logo 由 TerminalPanel
+          // 订阅 TerminalRegistry 的 sessionChange 按 agentSession.cliId 查 profile
+          // （会话绑定，见 TerminalPanel.tsx）
           onTabStateChangeRef.current?.({
             active: true,
             title: profile.tabTitle,
             icon: STATUS_EMOJI.attention,
-            logo: profile.iconSrc,
           });
           // MC-107: 写入会话状态（未注入 hooks 时无 usageSourcePath，用量条不可用）——
           // cliId 取匹配 profile 的 id（hook 事件三级解析反查键，MC-205）

@@ -136,14 +136,16 @@ describe("HistorySessionRow 状态标记（问题 2：四态同源）", () => {
     expect(getByText("❌")).toBeTruthy();
   });
 
-  it("status=null / undefined → 无状态标记（与活跃区 null 无图标一致）", () => {
+  it("status=null / undefined → 无状态标记，但 CLI logo 仍渲染（F9 行为修订：跟随会话名显示）", () => {
     const { queryByText, row } = renderRow(makeSession(), { status: null });
     expect(queryByText("⚡")).toBeNull();
     expect(queryByText("🟡")).toBeNull();
     expect(queryByText("✅")).toBeNull();
     expect(queryByText("❌")).toBeNull();
-    // CLI logo 仅随 status emoji → status null 无 logo img
-    expect(row.querySelector('img[alt="CLI 图标"]')).toBeNull();
+    // logo 不依赖 emoji：行存在（有会话名）即按 session.cliId 显示
+    const logoImg = row.querySelector('img[alt="CLI 图标"]');
+    expect(logoImg).toBeTruthy();
+    expect(logoImg?.getAttribute("src")).toBe("/cli-icons/claude.png");
   });
 
   it("status=working → emoji 后渲染 CLI logo（按 session.cliId 查 profile.iconSrc/16×16/位于 emoji 与标题间——MC-311）", () => {
@@ -162,6 +164,18 @@ describe("HistorySessionRow 状态标记（问题 2：四态同源）", () => {
     expect(children[1]).toBe(logoImg);
   });
 
+  it("status=null → logo 顶到行1 首位（emoji 缺席时 logo 在标题前，位置语义不变）", () => {
+    const { row } = renderRow(makeSession(), { status: null });
+    const line1 = row.children[0] as HTMLElement;
+    const children = Array.from(line1.children);
+    // 第一个子元素即 logo img（无 emoji span 占位）
+    expect(children[0].tagName).toBe("IMG");
+    expect(children[0].getAttribute("alt")).toBe("CLI 图标");
+    // 其后是标题 span
+    expect(children[1].tagName).toBe("SPAN");
+    expect(children[1].textContent).toBe("修复登录 bug 的会话");
+  });
+
   it("未注册 cliId → 无 logo 不报错（MC-311 降级语义）", () => {
     const session = makeSession({ cliId: "unknown-cli" });
     const { row } = renderRow(session, { status: "working" });
@@ -171,11 +185,13 @@ describe("HistorySessionRow 状态标记（问题 2：四态同源）", () => {
     expect(row.querySelector('img[alt="CLI 图标"]')).toBeNull();
   });
 
-  it("orphan ✗ 行（status null）→ 不渲染 logo（✗ 后不加图）", () => {
+  it("orphan ✗ 行（status null）→ 仍渲染 logo（F9 行为修订：行存在即显示）", () => {
     const session = makeSession({ cwdExists: false });
     const { getByText, row } = renderRow(session, { orphan: true });
     expect(getByText("✗")).toBeTruthy();
-    expect(row.querySelector('img[alt="CLI 图标"]')).toBeNull();
+    const logoImg = row.querySelector('img[alt="CLI 图标"]');
+    expect(logoImg).toBeTruthy();
+    expect(logoImg?.getAttribute("src")).toBe("/cli-icons/claude.png");
   });
 
   it("orphan=true → ✗ 标记（与四态并存渲染）", () => {

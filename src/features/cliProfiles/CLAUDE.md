@@ -6,8 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 CLI profile 注册表（MC-1/101~108）——编码 CLI 身份域与能力策略的单点。claude 为首个 profile（MC-2：全部现有行为经 profile 驱动且零回归）。三处消费：
 
-- **身份域**（id/displayName/commands/iconSrc/tabTitle）：OSC 133 C 命中（`useCommandDetection`）经 `matchByCommand` 取页签标题与品牌 logo（MC-105）
-- **hooks 能力**（HooksCapability）：事件→四态映射 / 通知类别判定 / contextLimit / restartHint / hasConfigEditor——`useXterm`、agentStatus、notifications 经 profile 委托消费（MC-403/410/412/420）
+- **身份域**（id/displayName/commands/iconSrc/tabTitle）：OSC 133 C 命中（`useCommandDetection`）经 `matchByCommand` 取页签标题（MC-105）；品牌 logo 经 `agentSession.cliId` 查 iconSrc（F9 行为修订：会话绑定，页签/侧栏行按 cliId 查询同源）
+- **hooks 能力**（HooksCapability）：事件→四态映射 / 通知类别判定 / computeUsagePercent（用量信号→显示百分比——claude = 官方 used_percentage 取整+钳位 0–100；原 contextLimit 已退役）/ restartHint / hasConfigEditor——`useXterm`、agentStatus、notifications 经 profile 委托消费（MC-403/410/412/420）
 - **history 能力**（HistoryCapability）：恢复命令与恢复注入内容构造——agentHistory 右键菜单/恢复编排经 profile 委托消费（MC-315/316）
 
 能力域**可选**：未声明 = 该域不可用，消费方优雅降级（MC-1）。通用层禁止写 "claude" 字面量（AC-5 守卫），一律经注册表查询或 import `profiles/claude` 导出常量。
@@ -33,7 +33,7 @@ CLI profile 注册表（MC-1/101~108）——编码 CLI 身份域与能力策略
 | 类型 | 字段 | 说明 |
 |------|------|------|
 | `CodingCliProfile` | id / displayName / commands / iconSrc / tabTitle / capabilities | cliId 公共键（如 "claude"）；commands 支持多首 token（如 `["claude","cc"]`）；iconSrc 品牌 logo 根绝对路径（如 `/cli-icons/claude.png`） |
-| `HooksCapability` | eventToStatus / classifyNotification / contextLimit / restartHint / hasConfigEditor / configEditor / configLayers | hooks 能力域——协议知识实现留在 `profiles/<cli>/`，本文件仅签名；`configEditor`（KZ-1）：hub 配置编辑器组件（`HooksConfigEditorProps` 泛化自 ClaudeHooksConfigEditorProps），**hasConfigEditor=true 时必填**，缺失 → hub 编辑器槽空态占位防御；`configLayers`（KZ-4）：hooks 配置分层声明（`{ id, label, hint }[]`——编辑器层切换器数据源），**hasConfigEditor=true 时必填**，claude = user/project/local 三层现值 |
+| `HooksCapability` | eventToStatus / classifyNotification / computeUsagePercent / restartHint / hasConfigEditor / configEditor / configLayers | hooks 能力域——协议知识实现留在 `profiles/<cli>/`，本文件仅签名；`computeUsagePercent(usage)`：用量信号 → 显示百分比（claude = 官方 `usedPercentage` 取整 + 钳位 0–100，无数据 null；原 `contextLimit` 硬编码已随官方口径退役）；`configEditor`（KZ-1）：hub 配置编辑器组件（`HooksConfigEditorProps` 泛化自 ClaudeHooksConfigEditorProps），**hasConfigEditor=true 时必填**，缺失 → hub 编辑器槽空态占位防御；`configLayers`（KZ-4）：hooks 配置分层声明（`{ id, label, hint }[]`——编辑器层切换器数据源），**hasConfigEditor=true 时必填**，claude = user/project/local 三层现值 |
 | `HistoryCapability` | supportsFork / buildResumeCommand / buildRestoreInput | history 能力域——历史会话恢复策略 |
 
 能力**可选**：`capabilities.hooks` / `capabilities.history` 均可缺省——未声明 = 该域不可用，消费方优雅降级（无 hooks 能力 profile 的事件行不建/不通知/不置图标；supportsFork 缺省 false 不展示「分支恢复」菜单；恢复编排对无 history 能力 profile 防御性失败 toast）。

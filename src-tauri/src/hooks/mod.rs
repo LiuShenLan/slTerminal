@@ -4,9 +4,9 @@
 //! - 信号文件监听与解析（signal.rs）
 //! - 信号目录监听器（watcher.rs）
 //! - CliHooksProvider trait + cliId 键静态注册表（provider.rs）
-//! - claude hooks provider（claude/：注入/卸载/状态/用量/配置实现下沉）
+//! - claude hooks provider（claude/：注入/卸载/状态/statusline 桥接/配置实现下沉）
 //! - 6 条泛化 Tauri 命令（本文件命令层，按 cliId 分发到 provider）
-//! - 共享 DTO：AgentInjectionStatus / AgentHookInjectionStatus / ContextUsage
+//! - 共享 DTO：AgentInjectionStatus / AgentHookInjectionStatus
 
 pub mod claude;
 pub mod provider;
@@ -49,26 +49,6 @@ pub struct AgentHookInjectionStatus {
     pub status: AgentInjectionStatus,
     /// 已注入脚本版本号（未注入时为 null）
     pub version: Option<u32>,
-}
-
-/// Context usage DTO（C5 契约，camelCase 序列化；MC-214 四字段保留，cache serde default 0）
-///
-/// 定义于聚合层（mod.rs）：provider 与前端 DTO 的共享契约。
-/// 用量口径：总占用 = inputTokens + cacheReadInputTokens + cacheCreationInputTokens，
-/// contextLimit 由前端 profile.hooks.contextLimit 提供（MC-214）；outputTokens 不计占用。
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct ContextUsage {
-    /// 输入 token 数
-    pub input_tokens: u64,
-    /// 输出 token 数（信息字段，不计占用）
-    pub output_tokens: u64,
-    /// 缓存读取输入 token 数（serde default 兼容旧 transcript 缺失）
-    #[serde(default)]
-    pub cache_read_input_tokens: u64,
-    /// 缓存创建输入 token 数（serde default 兼容旧 transcript 缺失）
-    #[serde(default)]
-    pub cache_creation_input_tokens: u64,
 }
 
 /// 监听器句柄抽象（HUK-04 最小可测性重构：存储 trait object 化，测试可注入桩）
@@ -157,12 +137,10 @@ pub(crate) async fn run_agent_hooks_injection_status(
         .map_err(|e| AppError::TaskJoin(e.to_string()))?
 }
 
-pub(crate) async fn run_agent_context_usage(
-    cli_id: String,
-    usage_source_path: String,
-) -> Result<Option<ContextUsage>, AppError> {
+/// 客户端关闭清理：恢复 statusline 桥接（还原备份原配置，备份保留供重开重注入）
+pub(crate) async fn run_agent_hooks_restore_statusline(cli_id: String) -> Result<(), AppError> {
     let provider = resolve_provider(&cli_id)?;
-    tokio::task::spawn_blocking(move || provider.context_usage(&usage_source_path))
+    tokio::task::spawn_blocking(move || provider.restore_statusline())
         .await
         .map_err(|e| AppError::TaskJoin(e.to_string()))?
 }
@@ -218,13 +196,20 @@ pub async fn agent_hooks_injection_status(
     run_agent_hooks_injection_status(cli_id).await
 }
 
-/// agent_context_usage — 按 cliId 分发 token 用量查询（JS invoke 键 { cliId, usageSourcePath }）
+/// agent_hooks_restore_statusline — 客户端关闭清理：还原 statusline 桥接（备份保留）
 #[tauri::command]
-pub async fn agent_context_usage(
-    cli_id: String,
-    usage_source_path: String,
-) -> Result<Option<ContextUsage>, AppError> {
-    run_agent_context_usage(cli_id, usage_source_path).await
+pub async fn agent_hooks_restore_statusline(cli_id: String) -> Result<(), AppError> {
+    run_agent_hooks_restore_statusline(cli_id).await
+}
+
+/// 启动自动重注入：对注册表全部已注册 provider 调 reinject_statusline（失败仅 warn 不阻断启动）
+pub fn reinject_statusline_on_startup() {
+    for (cli_id, entry) in provider::REGISTRY {
+        let Some(p) = entry else { continue };
+        if let Err(e) = p.reinject_statusline() {
+            tracing::warn!("启动重注入 statusline 失败（cliId {cli_id}）: {e}");
+        }
+    }
 }
 
 /// agent_hooks_config_read — 按 cliId 分发 hooks 配置子树读取（P3-BE-02）
@@ -330,7 +315,7 @@ mod tests {
         assert_eq!(back, s);
     }
 
-    // ── AgentEventPayload serde（HUK-09：roundtrip + 键集合精确匹配，9 键含 cliId） ──
+    // ── AgentEventPayload serde（HUK-09：roundtrip + 键集合精确匹配，10 键含 cliId/usedPercentage） ──
 
     #[test]
     fn agent_event_payload_roundtrip_and_key_set() {
@@ -344,9 +329,10 @@ mod tests {
             tool_name: Some("Bash".into()),
             notification_type: Some("idle".into()),
             cli_id: Some("claude".into()),
+            used_percentage: None,
         };
         let json = serde_json::to_string(&p).unwrap();
-        // 键集合精确匹配（9 字段全量含 cliId，防多键/缺键）
+        // 键集合精确匹配（10 字段全量含 cliId/usedPercentage，防多键/缺键）
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         let mut keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
         keys.sort_unstable();
@@ -362,6 +348,7 @@ mod tests {
                 "timestamp",
                 "toolName",
                 "usageSourcePath",
+                "usedPercentage",
             ]
         );
         // 序列化 → 反序列化往返
@@ -506,21 +493,20 @@ mod tests {
     }
 
     #[test]
-    fn agent_context_usage_cli_id_passthrough() {
+    fn agent_hooks_restore_statusline_cli_id_passthrough() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("transcript.jsonl");
-        std::fs::write(
-            &path,
-            r#"{"message":{"usage":{"input_tokens":100,"output_tokens":50}}}"#,
+        let _guard = HomeDirGuard::set(dir.path());
+        // 先注入（statusLine 桥接 + 备份）→ 恢复 → statusLine 还原为原配置
+        block_on(run_agent_hooks_inject("claude".into())).unwrap();
+        block_on(run_agent_hooks_restore_statusline("claude".into())).unwrap();
+        let settings: Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join(".claude").join("settings.json")).unwrap(),
         )
         .unwrap();
-        let u = block_on(run_agent_context_usage(
-            "claude".into(),
-            path.to_str().unwrap().into(),
-        ))
-        .unwrap()
-        .unwrap();
-        assert_eq!(u.input_tokens, 100, "usageSourcePath 应透传到 provider");
+        assert!(
+            settings.get("statusLine").is_none(),
+            "无原配置时恢复后 statusLine 键应移除"
+        );
     }
 
     #[test]
@@ -571,7 +557,7 @@ mod tests {
             block_on(run_agent_hooks_inject("nope".into())).unwrap_err(),
             block_on(run_agent_hooks_uninstall("nope".into())).unwrap_err(),
             block_on(run_agent_hooks_injection_status("nope".into())).unwrap_err(),
-            block_on(run_agent_context_usage("nope".into(), "/x.jsonl".into())).unwrap_err(),
+            block_on(run_agent_hooks_restore_statusline("nope".into())).unwrap_err(),
             block_on(run_agent_hooks_config_read(
                 "nope".into(),
                 "user".into(),
