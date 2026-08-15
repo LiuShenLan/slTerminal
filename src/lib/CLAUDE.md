@@ -18,7 +18,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `e2eEnabled.ts` | E2E helper 注入总开关：`E2E_ENABLED` 常量 + `computeE2eEnabled` 纯函数 |
 | `injectScript.ts` | HTML 脚本注入纯函数：`injectScript(html, script, marker)` 向 HTML 字符串的 `</head>`/`<body` 前插入脚本，幂等（marker 检测），大小写不敏感，供 HtmlPanel 键盘转发 |
 | `agentStatus.ts` | 四态类型与 emoji 常量（MC-401 迁移）：`AgentStatus` 类型（`working`/`attention`/`done`/`error`）+ `STATUS_EMOJI` 常量（⚡🟡✅❌）+ `getStatusIcon(status)` 纯函数。**事件→状态映射已随 MC-401 迁出**至 CLI profile hooks 能力（`profiles/claude/strategies.ts` 的 `eventToStatus`，经 `profile.hooks` 委托分发），lib 层不再含 claude 事件名字面量 |
-| `panelId.ts` | 终端 panelId 解析单点：`parseTerminalPageId(panelId)` → pageId \| null（≥3 段 + 首段 `terminal` + 末段全数字） |
+| `panelId.ts` | 终端 panelId **生成/解析成对单点（B14）**：`makeTerminalPanelId(pageId, seq?)`（模块级每页计数，与 PageDockviewHost/restoreSession 跨上下文共享）+ `parseTerminalPageId(panelId)` → pageId \| null（≥3 段 + 首段 `terminal` + 末段全数字 + 空 pageId 防御）+ `advanceTerminalPanelSeq(pageId, panelIds)`（布局恢复后推进计数防 id 重号）+ `resetTerminalPanelSeq`（仅测试） |
 
 ## e2eEnabled.ts — E2E 门控单一真值源
 
@@ -52,12 +52,12 @@ export const E2E_ENABLED =
 - **E2E_ENABLED 必须内联**：`import.meta.env` 字面量表达式（编译期折叠），禁止常量调用 `computeE2eEnabled`——函数调用阻碍 Rollup DCE，生产会误带 helper（守卫：`e2e-build-config.test.ts`）
 - **四态映射单点**：F3 事件→状态唯一映射按 CLI profile 分发（`profile.hooks.eventToStatus`，claude 实现见 `profiles/claude/strategies.ts`），组件不得另建映射；`agentStatus.ts` 仅保留四态类型与 emoji 常量
 - **CLI 图标映射单点**：CLI → 品牌 logo 唯一映射在 `src/features/cliProfiles/`（`profile.iconSrc` 字段，MC-104 退役原 `cliIcons.ts`），新增 CLI 在 profile 定义 iconSrc + `public/cli-icons/<id>.png` 放图（32×32 透明底，渲染 16×16，随 frontendDist 内嵌 exe，同源 `'self'` 加载），组件不得另建映射（详见 @../features/cliProfiles/CLAUDE.md）
-- **panelId 解析单点**：`parseTerminalPageId` 是终端 panelId 唯一解析入口
+- **panelId 生成/解析单点（B14）**：`makeTerminalPanelId` 是终端 panelId 唯一生成入口、`parseTerminalPageId` 是唯一解析入口——格式协议仅定义于 `panelId.ts`。**解析调用点防御分层**：TerminalPanel 的 visible 判定与 HistorySessionList 的页面定位均**优先按已知 pageId 前缀匹配**（旧恢复格式含 Date.now 数字段，语法切分无法判别），parse 仅兜底新格式
 - **路径函数纯性**：`path.ts` 四函数不访问文件系统、不抛异常、空输入安全（消费方依赖此契约）
 
 ## 测试模式
 
-测试文件：`src/__tests__/path.test.ts`（27 用例）、`panelId.test.ts`（5 用例）、`inject-script.test.ts`（21 用例）、`agent-status-lib.test.ts`（6 用例，MC-401 迁移——事件映射用例随实现迁入 `cli-profile-claude.test.ts`；CLI logo 资源守卫随 MC-108 迁入 `cli-profile-registry.test.ts`）、`e2e-enabled.test.ts`（9 用例，含 it.each 展开口径，见 `.claude/test-inventory.md`）、`e2e-build-config.test.ts`（8 用例，IHE-04）、`error-boundary.test.tsx`（5 用例，含 IHE-05 `variant="inline"` 分支）。
+测试文件：`src/__tests__/path.test.ts`（27 用例）、`panelId.test.ts`（13 用例——解析 5 + 生成 3 + advanceSeq 4 + 空 pageId 防御 1，B14 扩展）、`inject-script.test.ts`（21 用例）、`agent-status-lib.test.ts`（6 用例，MC-401 迁移——事件映射用例随实现迁入 `cli-profile-claude.test.ts`；CLI logo 资源守卫随 MC-108 迁入 `cli-profile-registry.test.ts`）、`e2e-enabled.test.ts`（9 用例，含 it.each 展开口径，见 `.claude/test-inventory.md`）、`e2e-build-config.test.ts`（8 用例，IHE-04）、`error-boundary.test.tsx`（5 用例，含 IHE-05 `variant="inline"` 分支）。
 
 ### path.test.ts
 

@@ -50,6 +50,7 @@ global.ResizeObserver = class ResizeObserver {
 
 import PageDockview from "../workspace/PageDockviewHost";
 import { titleManager } from "../workspace/titleManager";
+import { resetTerminalPanelSeq } from "../lib/panelId";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyApi = any;
@@ -74,6 +75,43 @@ const EDITOR_LAYOUT = {
   activeGroup: "group-1",
 };
 
+/** 含一个终端面板的合法保存布局（title 为瞬态值 "claude"——claude 运行中退出保存形态，
+ *  B12：恢复时无 customTitle 的终端应重算为 terminal-N） */
+const TERMINAL_TRANSIENT_LAYOUT = {
+  grid: {
+    root: { type: "branch", data: [{ type: "leaf", data: { views: ["terminal-page-dock-0"] } }] },
+    orientation: "HORIZONTAL",
+  },
+  panels: {
+    "terminal-page-dock-0": {
+      id: "terminal-page-dock-0",
+      contentComponent: "terminal",
+      title: "claude",
+      position: { group: "group-1" },
+      params: { panelId: "terminal-page-dock-0", cwd: "C:\\root" },
+    },
+  },
+  activeGroup: "group-1",
+};
+
+/** 含 customTitle 终端面板的合法保存布局（B12/F8：重算条件排除 customTitle，自定义名保留） */
+const TERMINAL_CUSTOM_LAYOUT = {
+  grid: {
+    root: { type: "branch", data: [{ type: "leaf", data: { views: ["terminal-page-dock-0"] } }] },
+    orientation: "HORIZONTAL",
+  },
+  panels: {
+    "terminal-page-dock-0": {
+      id: "terminal-page-dock-0",
+      contentComponent: "terminal",
+      title: "我的终端",
+      position: { group: "group-1" },
+      params: { panelId: "terminal-page-dock-0", cwd: "C:\\root", customTitle: "我的终端" },
+    },
+  },
+  activeGroup: "group-1",
+};
+
 /** 含未知面板类型的损坏布局（loadLayout 白名单过滤后无剩余面板） */
 const UNKNOWN_PANEL_LAYOUT = {
   grid: {
@@ -93,6 +131,8 @@ const UNKNOWN_PANEL_LAYOUT = {
 
 beforeEach(() => {
   titleManager.reset();
+  // B14: 模块级每页计数隔离（nextPanelId 消费 makeTerminalPanelId 的共享计数）
+  resetTerminalPanelSeq();
 });
 
 afterEach(() => {
@@ -171,6 +211,25 @@ describe("PageDockview 真实组件", () => {
       expect(panel.api.title).toBe("a.txt");
       // Watermark 不再显示（有内容面板）
       expect(container.textContent).not.toContain("打开终端或编辑器开始工作");
+    });
+
+    it("B12: 恢复含瞬态标题的终端 → 无 customTitle 重算为 terminal-N", async () => {
+      mockIPC(() => null);
+      const { api } = await renderDock({ savedLayout: TERMINAL_TRANSIENT_LAYOUT });
+      const panel = api.getPanel("terminal-page-dock-0");
+      expect(panel).toBeTruthy();
+      // 持久化 title "claude"（瞬态值）被 titleManager 重算覆盖（B12——
+      // 重开页签残留 claude 根因）
+      expect(panel.api.title).toBe("terminal-0");
+    });
+
+    it("B12: 恢复含 customTitle 的终端 → 自定义名保留不重算（F8）", async () => {
+      mockIPC(() => null);
+      const { api } = await renderDock({ savedLayout: TERMINAL_CUSTOM_LAYOUT });
+      const panel = api.getPanel("terminal-page-dock-0");
+      expect(panel).toBeTruthy();
+      // F8：customTitle 是用户自定义名，重算条件排除
+      expect(panel.api.title).toBe("我的终端");
     });
 
     it("损坏布局（白名单过滤后无面板）：loadLayout 返回 false → Watermark 接管且不崩溃", async () => {

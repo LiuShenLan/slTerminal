@@ -828,6 +828,42 @@ describe("双击分派三分支", () => {
     });
   });
 
+  it("B14: 旧恢复格式 panelId（含 Date.now 段）→ 前缀匹配命中真实页面而非幽灵页面", async () => {
+    seedExplorerProject("C:/project");
+    // 种子页面 pageId = "page-1"（含连字符）。旧格式 panelId 经 parseTerminalPageId
+    // 会切分出 "page-1-1700000000000"（幽灵页面，导航后主区空白根因）——
+    // 前缀匹配应命中已知页面 "page-1"
+    h.all.set("terminal-page-1-1700000000000-1", {
+      agentSession: { sessionId: "session-1", status: "attention" },
+    });
+    const { container } = render(
+      React.createElement(
+        AgentHistorySections,
+        makeSectionsProps({
+          expandedCurrent: true,
+          rootPath: "C:/project/src",
+          sessions: [normalSession("session-1", "C:/project/src", { title: "运行中会话" })],
+          activeStatuses: new Map([["claude|session-1", "attention"]]),
+        }),
+      ),
+    );
+
+    fireEvent.doubleClick(
+      container.querySelector('[data-e2e="agent-history-row"]')!,
+    );
+    const switchBtn = Array.from(
+      document.querySelectorAll('[data-e2e="agent-history-action-dialog"] button'),
+    ).find((b) => b.textContent === "切换到该会话操作页面") as HTMLElement;
+    fireEvent.click(switchBtn);
+
+    await waitFor(() => {
+      expect(h.mockSwitchToPageAndFocus).toHaveBeenCalledWith(
+        "page-1",
+        "terminal-page-1-1700000000000-1",
+      );
+    });
+  });
+
   it("同 sessionId 不同 cliId → 反查命中本 CLI 所在面板（复合键 cliId|sessionId，MC-313）", async () => {
     seedExplorerProject("C:/project");
     // 注册表两个面板共享 sessionId "dup-1" 但 cliId 不同——claude 会话行必须命中

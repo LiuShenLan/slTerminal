@@ -21,6 +21,10 @@ export interface TabState {
   title?: string;
   /** 命令运行时图标（active=true 时有效，null=无图标） */
   icon?: string | null;
+  /** active=false 时是否恢复原标题（缺省 true；false = 仅清图标不恢复——
+   *  B13：SessionEnd/EXIT hook 事件与 spawn 初始化重置不恢复标题，恢复只由
+   *  真退出信号（OSC 133 D / PTY EXIT）承担） */
+  restoreTitle?: boolean;
 }
 
 /** OSC 133 命令边界检测 hook
@@ -61,6 +65,14 @@ export function useCommandDetection(
         const profile = cliProfileRegistry.matchByCommand(command);
         if (profile) {
           isCommandRunningRef.current = true;
+          // MC-107: 写入会话状态（未注入 hooks 时无 usageSourcePath，用量条不可用）——
+          // cliId 取匹配 profile 的 id（hook 事件三级解析反查键，MC-205）
+          // B12: 先写会话再发回调——TerminalPanel 的 originalTitleRef 捕获守卫
+          // 检查 agentSession 非空即跳过，回调触发 onDidTitleChange 时会话必须已置位
+          TerminalRegistry.setAgentSession(panelId, {
+            cliId: profile.id,
+            matchedCommand: profile.id,
+          });
           // 标题取自匹配 profile（tabTitle）；未命中零副作用（不触发回调）。
           // F9 行为修订：logo 不再经此路径直传——页签 logo 由 TerminalPanel
           // 订阅 TerminalRegistry 的 sessionChange 按 agentSession.cliId 查 profile
@@ -69,12 +81,6 @@ export function useCommandDetection(
             active: true,
             title: profile.tabTitle,
             icon: STATUS_EMOJI.attention,
-          });
-          // MC-107: 写入会话状态（未注入 hooks 时无 usageSourcePath，用量条不可用）——
-          // cliId 取匹配 profile 的 id（hook 事件三级解析反查键，MC-205）
-          TerminalRegistry.setAgentSession(panelId, {
-            cliId: profile.id,
-            matchedCommand: profile.id,
           });
         }
       } else if (type === "D" && isCommandRunningRef.current) {
@@ -97,7 +103,9 @@ export function useCommandDetection(
   /** PTY spawn 成功后 / 进程退出时重置命令运行状态（稳定引用） */
   const resetCommandState = useCallback(() => {
     isCommandRunningRef.current = false;
-    onTabStateChangeRef.current?.({ active: false });
+    // B13: 初始化重置仅清图标不恢复标题——重启恢复时标题刚经 B12 重算，
+    // 恢复会抹掉重算结果（B12/B13 共同守卫）
+    onTabStateChangeRef.current?.({ active: false, restoreTitle: false });
   }, []);
 
   return { resetCommandState };

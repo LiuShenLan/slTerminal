@@ -33,6 +33,9 @@ export const CONTEXT_USAGE_EVENT = "ContextUsage";
 // 只允许出现在 profiles/claude/（claude 合法领地），通用层消费一律 import 本常量
 // （参照 CLAUDE_CLI_ID 先例），禁止在通用层书写事件名字面量。
 
+/** 会话开始事件名（B13：SessionStart → /resume 后页签标题按 profile.tabTitle 重设） */
+export const SESSION_START_EVENT = "SessionStart";
+
 /** 会话结束事件名（SessionEnd → 清图标/删行分支判定用） */
 export const SESSION_END_EVENT = "SessionEnd";
 

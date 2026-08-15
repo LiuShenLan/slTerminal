@@ -13,6 +13,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { restoreHistorySession } from "../features/agentHistory/restoreSession";
+import { resetTerminalPanelSeq } from "../lib/panelId";
 import "../features/cliProfiles/profiles";
 import type { AgentHistorySession } from "../types/agentHistory";
 import type { Project, OperationPage } from "../stores/projects";
@@ -123,6 +124,7 @@ describe("restoreHistorySession 四步恢复编排", () => {
   let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
+    resetTerminalPanelSeq(); // B14: 模块级每页计数隔离（跨用例残留会使 id 断言漂移）
     h.setProjects({});
     h.mockAddProject.mockReset();
     h.mockAddPage.mockReset();
@@ -170,14 +172,14 @@ describe("restoreHistorySession 四步恢复编排", () => {
     expect(h.mockSwitchToPageShared).toHaveBeenCalledTimes(1);
     expect(h.mockSwitchToPageShared).toHaveBeenCalledWith("page-restore-test");
 
-    // 步骤 4a：addPanel 参数（panelId = terminal-{pageId}-{Date.now()}-{序号}，cwd 透传）
+    // 步骤 4a：addPanel 参数（B14：panelId = terminal-{pageId}-{seq} 单点生成，cwd 透传）
     expect(apiStub.addPanel).toHaveBeenCalledTimes(1);
     expect(apiStub.addPanel).toHaveBeenCalledWith({
-      id: expect.stringMatching(/^terminal-page-restore-test-\d+-\d+$/),
+      id: expect.stringMatching(/^terminal-page-restore-test-\d+$/),
       component: "terminal",
       title: "claude",
       params: {
-        panelId: expect.stringMatching(/^terminal-page-restore-test-\d+-\d+$/),
+        panelId: expect.stringMatching(/^terminal-page-restore-test-\d+$/),
         cwd: "C:\\Users\\test\\proj",
       },
       renderer: "always",
@@ -188,7 +190,7 @@ describe("restoreHistorySession 四步恢复编排", () => {
     const [sessionId, panelId, data] = h.mockPtyWrite.mock
       .calls[0] as [string, string, Uint8Array];
     expect(sessionId).toBe("session-test-1");
-    expect(panelId).toMatch(/^terminal-page-restore-test-\d+-\d+$/);
+    expect(panelId).toMatch(/^terminal-page-restore-test-\d+$/);
     // 内容断言为准（vitest mock.calls 参数跨 realm，instanceof 不可靠）；
     // 注入内容 = claude profile.history.buildRestoreInput 输出（MC-315 委托，
     // 与迁出源 restoreSession.ts 字面量逐字一致——断言漂移即实现有误）
@@ -252,27 +254,16 @@ describe("restoreHistorySession 四步恢复编排", () => {
     );
   });
 
-  it("同毫秒两次串行恢复 → panelId 相异（自增序号段防碰撞，ZQ-4）", async () => {
-    // mock Date.now 固定同值——restoring 只阻塞并发不阻塞串行，旧实现两次
-    // 恢复落在同一毫秒产生相同 panelId，恢复命令会被注入错误终端；序号段兜底
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1700000000000);
-    try {
-      await restoreHistorySession(makeSession());
-      await restoreHistorySession(makeSession());
+  it("同页两次串行恢复 → panelId 相异（B14：模块级每页计数，ZQ-4 语义）", async () => {
+    await restoreHistorySession(makeSession());
+    await restoreHistorySession(makeSession());
 
-      const [firstId, secondId] = apiStub.addPanel.mock.calls.map(
-        (call) => (call[0] as { id: string }).id,
-      );
-      expect(firstId).toMatch(
-        /^terminal-page-restore-test-1700000000000-\d+$/,
-      );
-      expect(secondId).toMatch(
-        /^terminal-page-restore-test-1700000000000-\d+$/,
-      );
-      expect(firstId).not.toBe(secondId);
-    } finally {
-      nowSpy.mockRestore();
-    }
+    const [firstId, secondId] = apiStub.addPanel.mock.calls.map(
+      (call) => (call[0] as { id: string }).id,
+    );
+    // 每页计数确定性递增：首次 terminal-{pageId}-0、二次 -1
+    expect(firstId).toBe("terminal-page-restore-test-0");
+    expect(secondId).toBe("terminal-page-restore-test-1");
   });
 
   it("防重入：恢复进行中并发调用直接返回、无副作用，完成后标记复位", async () => {

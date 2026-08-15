@@ -22,6 +22,7 @@ import { TerminalRegistry } from "../../panels/terminal/TerminalRegistry";
 import { write as ptyWrite } from "../../ipc/pty";
 import { sendToastNotification } from "../../ipc/notification";
 import { normalizePath, basename } from "../../lib/path";
+import { makeTerminalPanelId } from "../../lib/panelId";
 import { cliProfileRegistry } from "../cliProfiles";
 import type { AgentHistorySession } from "../../types/agentHistory";
 
@@ -43,10 +44,6 @@ async function waitFor<T>(probe: () => T | undefined, label: string): Promise<T>
 
 /** 模块级恢复进行中标记——防重入（并发双击同一会话行时，第二次调用直接返回） */
 let restoring = false;
-
-/** 模块级恢复计数器——panelId 自增序号段：restoring 只阻塞并发、不阻塞串行，
- *  两次恢复落在同一毫秒时 Date.now() 同值，序号段保证 panelId 唯一（ZQ-4） */
-let restoreSeq = 0;
 
 /**
  * 四步恢复编排：项目入列 → 页面保障 → 页面切换 → 终端恢复注入
@@ -134,7 +131,10 @@ async function doRestore(session: AgentHistorySession, fork: boolean): Promise<v
     () => getPageApi(targetPageId),
     `页面 ${targetPageId} 的 DockviewApi`,
   );
-  const panelId = `terminal-${targetPageId}-${Date.now()}-${++restoreSeq}`;
+  // B14: panelId 经生成单点 makeTerminalPanelId（terminal-{pageId}-{seq}，模块级
+  // 每页计数与 PageDockviewHost 共享）——旧格式含 Date.now 数字段，破坏贪婪正则/
+  // 切分解析（visible 恒 false 黑屏 + 幽灵页面导航根因）
+  const panelId = makeTerminalPanelId(targetPageId);
   api.addPanel({
     id: panelId,
     component: "terminal",

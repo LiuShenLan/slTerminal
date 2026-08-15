@@ -19,6 +19,7 @@ import {
 } from "dockview-react";
 import { panelRegistry, PANEL_TERMINAL } from "../panelRegistry";
 import { saveLayout, loadLayout } from "./layoutSerde";
+import { makeTerminalPanelId, advanceTerminalPanelSeq } from "../lib/panelId";
 import { titleManager } from "./titleManager";
 import type { TitleUpdate } from "./titleManager";
 import { TerminalRegistry } from "../panels/terminal/TerminalRegistry";
@@ -194,15 +195,27 @@ function applyTitleUpdates(
   }
 }
 
-/** 遍历 DockviewApi 中所有编辑器面板，重建 titleManager 注册表并重算标题 */
+/** 遍历 DockviewApi 中所有面板，重建 titleManager 注册表并重算标题 */
 function rebuildAndRecomputeTitles(
   api: DockviewApi,
   pageId: string,
   rootPath: string | undefined,
 ): void {
+  // B12: 终端 pass——布局恢复的终端面板（无 customTitle）用 titleManager 重算编号。
+  // 持久化 title 可能是瞬态值（如 claude 运行中退出保存的 "claude"），恢复后
+  // 必须回 terminal-N；F8 自定义名（customTitle）保留。终端编号不依赖项目根，
+  // 此 pass 置于 rootPath 检查之前。
+  for (const panel of api.panels) {
+    const params = panel.params as { panelId?: string; customTitle?: string } | undefined;
+    if (!params?.panelId) continue;
+    if (panel.view?.contentComponent !== PANEL_TERMINAL) continue;
+    if (params.customTitle !== undefined) continue;
+    panel.api.setTitle(titleManager.getTerminalTitle(pageId));
+  }
+
   if (!rootPath) return;
 
-  // 遍历所有面板，重建注册表
+  // 遍历所有面板，重建编辑器注册表
   for (const panel of api.panels) {
     const params = panel.params as { panelId?: string; filePath?: string } | undefined;
     if (!params?.panelId) continue;
@@ -299,7 +312,6 @@ const PageDockview: React.FC<PageDockviewProps> = React.memo(({
   pageId, cwd, rootPath, savedLayout, visible, onReady: onApiReady, onLayoutChange,
 }) => {
   const apiRef = useRef<DockviewApi | null>(null);
-  const panelSeqRef = useRef(0);
   const restoreGuardRef = useRef(false);
   /** 收集 handleReady 内注册的三个 disposable（onDidLayoutFromJSON/onDidLayoutChange/onDidRemovePanel） */
   const disposablesRef = useRef<Array<{ dispose(): void }>>([]);
@@ -308,10 +320,10 @@ const PageDockview: React.FC<PageDockviewProps> = React.memo(({
   const savedLayoutRef = useRef(savedLayout);
   savedLayoutRef.current = savedLayout;
 
-  /** per-page 稳定 panel ID 生成器 */
+  /** per-page 稳定 panel ID 生成器（B14：生成单点 makeTerminalPanelId，与
+   *  restoreSession 共享模块级每页计数——同页手动终端与恢复终端 id 互斥） */
   const nextPanelId = useCallback((): string => {
-    const seq = panelSeqRef.current++;
-    return `terminal-${pageId}-${seq}`;
+    return makeTerminalPanelId(pageId);
   }, [pageId]);
 
   // per-page 子组件（useMemo 防止每次渲染重建组件引用）
@@ -371,6 +383,12 @@ const PageDockview: React.FC<PageDockviewProps> = React.memo(({
 
     // 从保存布局恢复后，重建编辑器注册表并重算标题（忽略持久化的 title）
     if (restored) {
+      // B14: 先把本页终端序号计数推进到现有面板 max+1——布局恢复的持久化
+      // 面板不占用计数，不推进则后续新建/恢复终端可能与已存在面板 id 重号
+      advanceTerminalPanelSeq(
+        pageId,
+        api.panels.map((p) => p.id),
+      );
       rebuildAndRecomputeTitles(api, pageId, rootPath);
     }
 

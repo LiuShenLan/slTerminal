@@ -54,7 +54,7 @@ Agent 历史会话查询与恢复——历史区 UI 与数据层（CLI 无关聚
 1. **项目入列**：`useProjects.getState()` 查 rootPath 与 `session.cwd` 规范化相等（决策 24 同款）的项目，无则 `addProject`（字段形状照 `SidebarTree.handleAddProject` 现值）
 2. **页面保障**：项目 `pages` 为空则 `addPage`（`页面-{Date.now()%10000}` + `makeEmptyLayout()` 空布局，照 `handleNewPage` 模式）
 3. **页面切换**：`switchToPageShared(pages[0].pageId)`（`workspace/pageApis`；setProjectRoot 前置 await 由其内部保证，DBG-5）
-4. **终端恢复**：轮询 `getPageApi`（100ms×50，照 `openHooksConfigPanel`）→ `addPanel({ id: "terminal-{pageId}-{Date.now()}", component: "terminal", title: profile.tabTitle, params: { panelId, cwd }, renderer: "always" })` → 轮询 `TerminalRegistry.get(panelId)` → `pty.write` 注入 `profile.history.buildRestoreInput(session, { fork })`（MC-315 委托——注入内容含 fork 追加与 `\r` 结尾，由各 CLI 的 history 能力实现负责）
+4. **终端恢复**：轮询 `getPageApi`（100ms×50，照 `openHooksConfigPanel`）→ `addPanel({ id: makeTerminalPanelId(targetPageId), component: "terminal", title: profile.tabTitle, params: { panelId, cwd }, renderer: "always" })` → 轮询 `TerminalRegistry.get(panelId)` → `pty.write` 注入 `profile.history.buildRestoreInput(session, { fork })`（MC-315 委托——注入内容含 fork 追加与 `\r` 结尾，由各 CLI 的 history 能力实现负责）。**B14：panelId 经生成单点 `makeTerminalPanelId`（`terminal-{pageId}-{seq}`，模块级每页计数与 PageDockviewHost 共享）**——旧格式 `terminal-{pageId}-{Date.now}-{seq}` 的 Date.now 数字段破坏两处解析（TerminalPanel 贪婪正则 → visible 恒 false 黑屏；parseTerminalPageId 切分 → 幽灵页面导航空白）
 
 - **profile 策略委托（MC-315）**：按 `session.cliId` 查 profile——无 history 能力（含 profile 未注册）→ 防御性失败，走统一失败 toast 路径（能力未声明 = 该域不可用）
 - **防重入**：模块级 `restoring` 标记，进行中再次调用直接返回（快速双击同一行）
@@ -73,7 +73,7 @@ Agent 历史会话查询与恢复——历史区 UI 与数据层（CLI 无关聚
 
 ### 双击分派（问题 5 修复）与动作弹窗
 
-`HistorySessionList` 双击三分支：普通行 → 恢复四步；孤儿/无 cwd → 无操作；**运行中（status 非 null）→ `SessionActionDialog` 弹窗**（「切换到该会话操作页面」/「取消」；**分支恢复仅保留在右键菜单**——Tauri 原生 dialog 无法三按钮，自绘模态照 InputDialog 模式，`data-e2e="agent-history-action-dialog"`）。「切换到该会话操作页面」= 反查 `TerminalRegistry.getAll()`（`findPanelForSession`：**复合键 `cliId|sessionId` 精确匹配**（MC-313），键构造两侧均经 `keyOf`（cliId 缺省回退 `CLAUDE_CLI_ID` + 转义，ZQ-1）、sessionId 精确匹配、回退 usageSourcePath basename）→ `parseTerminalPageId(panelId)` → `switchToPageAndFocus(pageId, panelId)`（内部：activePageId 相同则直接聚焦）；反查不到 → `sendToastNotification` 提示（会话已结束）。
+`HistorySessionList` 双击三分支：普通行 → 恢复四步；孤儿/无 cwd → 无操作；**运行中（status 非 null）→ `SessionActionDialog` 弹窗**（「切换到该会话操作页面」/「取消」；**分支恢复仅保留在右键菜单**——Tauri 原生 dialog 无法三按钮，自绘模态照 InputDialog 模式，`data-e2e="agent-history-action-dialog"`）。「切换到该会话操作页面」= 反查 `TerminalRegistry.getAll()`（`findPanelForSession`：**复合键 `cliId|sessionId` 精确匹配**（MC-313），键构造两侧均经 `keyOf`（cliId 缺省回退 `CLAUDE_CLI_ID` + 转义，ZQ-1）、sessionId 精确匹配、回退 usageSourcePath basename）→ **`findPageIdForPanelId`（B14：先按 useProjects 已知页面集合前缀匹配——旧格式可靠，兜底 `parseTerminalPageId`；均未命中 toast 不导航）** → `switchToPageAndFocus(pageId, panelId)`（内部：activePageId 相同则直接聚焦）；反查不到 → `sendToastNotification` 提示（会话已结束）。
 
 ### 已知限制（MC-318，规格确认不修——决策 6）
 

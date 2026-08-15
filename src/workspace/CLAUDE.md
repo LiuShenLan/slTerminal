@@ -120,12 +120,12 @@ Workspace 使用 Allotment 实现三栏布局（旧为常驻四栏，侧栏视�
 
 - **入口**：`createGetContextMenu` 对终端面板（`panel.view.contentComponent === "terminal"`——**`panel.component` 不存在**）插入「重命名」项（7 项结构 `[新建终端, sep, 重命名, sep, close, closeOthers, closeAll]`）；claude 运行中（`TerminalRegistry.get(panel.id)?.agentSession != null`，菜单每次右键重新构建判断实时）→ `disabled` 置灰（dockview 原生支持）
 - **存储单一真值源**：`params.customTitle`（随布局 JSON 持久化，照 editor filePath / terminal tabIcon 先例）。`applyRename(api, panel, newTitle, onLayoutChange)` 导出纯函数 = `updateParameters({...params, customTitle})` + `setTitle` + **显式 `onLayoutChange(saveLayout(api))`**——`setTitle`/`updateParameters` 均不触发 `onDidLayoutChange`（dockviewPanel.js:84-95），须显式保存
-- **恢复链路**：Dockview `toJSON` 输出 title + params、`fromJSON` 恢复；`rebuildAndRecomputeTitles` 只重算编辑器标题，终端标题不重算 → 自定义名跨重启存活。`TerminalPanel` 挂载 `originalTitleRef = params.customTitle ?? api.title ?? "terminal"`（customTitle 优先，防 claude 运行中退出保存的瞬态 title）并订阅 `onDidParametersChange` 在 `customTitle !== undefined` 时同步 ref——OSC 133 D / SessionEnd 恢复标题时用自定义名
+- **恢复链路**：Dockview `toJSON` 输出 title + params、`fromJSON` 恢复；`rebuildAndRecomputeTitles` 重算编辑器标题 + **终端标题（B12 扩展）**——**无 customTitle 的终端面板用 `titleManager.getTerminalTitle(pageId)` 重算**（持久化 title 可能是瞬态值如 claude 运行中退出保存的 "claude"，重开页签必须回 terminal-N），customTitle 保留不重算 → 自定义名跨重启存活。`TerminalPanel` 挂载 `originalTitleRef = params.customTitle ?? api.title ?? "terminal"`（customTitle 优先）并订阅 `onDidParametersChange`（customTitle 同步）+ `onDidTitleChange`（**B12：重算标题同步——customTitle 存在或 agentSession 非空（命令运行中）时不捕获**）——OSC 133 D / 真退出信号恢复标题时用自定义名或重算名
 - **约束**：`titleManager` 计数器不动（新建终端仍按 `terminal-N` 递增，F8 不占用编号）；编辑器等非终端面板菜单无「重命名」
 
 ## 页签标题集中管理（`titleManager.ts`）
 
-- 终端页签 = `terminal-N`（每页独立从 0 开始，关闭不重算）
+- 终端页签 = `terminal-N`（每页独立从 0 开始，关闭不重算；B12 后恢复的布局终端面板同样经 `getTerminalTitle` 消费编号——重启后从 0 重排与首开一致）
 - 编辑器页签 = 文件名；同名冲突 → 相对路径（相对 `Project.rootPath`）
 - 布局持久化时忽略保存的 `title`，从 `params.filePath` 重新计算
 - Save-As 通过 `slterm:file-saved-as` CustomEvent 通知 Workspace 层重算标题

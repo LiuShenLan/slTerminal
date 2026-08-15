@@ -36,6 +36,7 @@ import { groupByCwd, isCurrentProject, keyOf, matchesSearch } from "./historyMod
 import { TerminalRegistry } from "../../panels/terminal/TerminalRegistry";
 import { parseTerminalPageId } from "../../lib/panelId";
 import { switchToPageAndFocus } from "../../workspace/pageApis";
+import { useProjects } from "../../stores/projects";
 import type { AgentHistorySession } from "../../types/agentHistory";
 import type { AgentStatus } from "../../lib/agentStatus";
 import {
@@ -208,6 +209,24 @@ function findPanelForSession(cliId: string, sessionId: string): string | undefin
   return undefined;
 }
 
+/**
+ * panelId → 属主 pageId（B14）：先按已知页面集合做前缀匹配——旧恢复格式
+ * （terminal-{pageId}-{Date.now}-{seq}）的 pageId 含数字段，语法切分会把
+ * Date.now 段误并入 pageId 得到幽灵页面（导航后主区空白根因）；前缀匹配
+ * 对旧格式可靠。兜底 parseTerminalPageId（新格式）；均未命中 → null。
+ */
+function findPageIdForPanelId(panelId: string): string | null {
+  const { projects } = useProjects.getState();
+  for (const project of Object.values(projects)) {
+    for (const page of project.pages) {
+      if (panelId.startsWith(`terminal-${page.pageId}-`)) {
+        return page.pageId;
+      }
+    }
+  }
+  return parseTerminalPageId(panelId);
+}
+
 // ── 历史会话列表 ──
 
 export interface HistorySessionListProps {
@@ -292,8 +311,14 @@ export const HistorySessionList: React.FC<HistorySessionListProps> = ({
         });
         return;
       }
-      const pageId = parseTerminalPageId(panelId);
-      if (!pageId) return;
+      const pageId = findPageIdForPanelId(panelId);
+      if (!pageId) {
+        // B14: 解析不出属主页面时明确提示而非静默返回——旧格式防误导航兜底
+        sendToastNotification("未找到运行中的会话", {
+          body: "该会话已结束或无法定位其终端页签",
+        });
+        return;
+      }
       // switchToPageAndFocus 内部：activePageId 相同则直接聚焦，不同则先切页（setProjectRoot 前置）
       await switchToPageAndFocus(pageId, panelId);
     },

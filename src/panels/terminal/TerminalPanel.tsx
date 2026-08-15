@@ -4,7 +4,7 @@
 // 面板由 Dockview 管理生命周期。
 // 从 Dockview params 读取 cwd 作为终端工作目录。
 
-import React, { useRef, useState, useEffect, useMemo, useCallback } from "react";
+import React, { useRef, useState, useEffect, useCallback } from "react";
 import { useXterm } from "./useXterm";
 import { pty } from "../../ipc";
 import { useLayout, useFontSize } from "../../stores";
@@ -59,14 +59,13 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ api, params }) => {
 
   const cwd = params.cwd;
 
-  // P1-13: 从 panelId 解析所属 pageId，对比 activePageId 判断可见性
-  // panelId 格式: terminal-{pageId}-{seq}
-  const pageId = useMemo(() => {
-    const match = params.panelId.match(/^terminal-(.+)-(\d+)$/);
-    return match ? match[1] : "";
-  }, [params.panelId]);
+  // P1-13: 对比 activePageId 判断可见性（panelId 格式: terminal-{pageId}-{seq}）
+  // B14: 属主判定用前缀匹配——旧恢复格式曾含 Date.now 数字段，正则/切分解析
+  // 会吞掉多余数字段得到错误 pageId → visible 恒 false → 非焦点降频永不 flush
+  // （历史恢复黑屏根因）。本调用点持有正确 activePageId，直接前缀比对。
   const activePageId = useLayout((s) => s.activePageId);
-  const visible = activePageId === pageId;
+  const visible =
+    activePageId != null && params.panelId.startsWith(`terminal-${activePageId}-`);
 
   // 字体大小：从 store 订阅 + 通过 setter 回调变更
   const terminalFontSize = useFontSize((s) => s.terminalFontSize);
@@ -90,7 +89,12 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ api, params }) => {
         api.updateParameters({ ...latestParamsRef.current, tabIcon: state.icon });
       }
     } else {
-      api.setTitle(originalTitleRef.current);
+      // B13: restoreTitle=false 时仅清图标不恢复标题（SessionEnd/EXIT hook 事件
+      // 与 spawn 初始化重置）——恢复只由真退出信号（OSC 133 D / PTY EXIT）承担，
+      // /resume 的 SessionEnd→SessionStart 序列不再把标题误回退为 terminal-N
+      if (state.restoreTitle !== false) {
+        api.setTitle(originalTitleRef.current);
+      }
       // F9 行为修订：只清 icon——logo 跟随 agentSession 生命周期（会话绑定），
       // 由下方 TerminalRegistry 订阅驱动清除，此处不再双清
       api.updateParameters({ ...latestParamsRef.current, tabIcon: null });
@@ -134,6 +138,22 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ api, params }) => {
       if (tp?.customTitle !== undefined) {
         originalTitleRef.current = tp.customTitle;
       }
+    });
+    return () => d.dispose();
+  }, [api]);
+
+  // B12: 布局恢复重算标题（handleReady → rebuildAndRecomputeTitles）后同步
+  // originalTitleRef——挂载时快照到的是持久化瞬态标题（如 "claude"），重算
+  // setTitle("terminal-N") 若不捕获，后续真退出信号会回退到瞬态值。
+  // 守卫：① customTitle 存在（F8 重命名流，由上方参数订阅同步）不捕获；
+  // ② agentSession 非空（命令运行中）不捕获——OSC 133 C 的瞬态标题在
+  // setAgentSession 之后到达（useCommandDetection B12 顺序保证），此处防误捕获
+  useEffect(() => {
+    const d = api.onDidTitleChange((e) => {
+      const p = latestParamsRef.current as { customTitle?: string };
+      if (p.customTitle !== undefined) return;
+      if (TerminalRegistry.get(panelIdRef.current)?.agentSession != null) return;
+      originalTitleRef.current = e.title;
     });
     return () => d.dispose();
   }, [api]);

@@ -1838,7 +1838,7 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     });
   });
 
-  it("HUK2: 匹配 panelId + SessionEnd → onTabStateChange({ active: false }) + setAgentSession(null)", async () => {
+  it("HUK2: 匹配 panelId + SessionEnd → onTabStateChange({ active: false, restoreTitle: false }) + setAgentSession(null)", async () => {
     await mountAndWaitForHooks();
     mockOnTabStateChange.mockClear();
     mockSetAgentSession.mockClear();
@@ -1847,7 +1847,9 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
       event: "SessionEnd",
     }));
 
-    expect(mockOnTabStateChange).toHaveBeenCalledWith({ active: false });
+    // B13: SessionEnd 仅清图标不恢复标题（/resume 场景 claude 进程未退出，
+    // 恢复会把标题误回退为 terminal-N）
+    expect(mockOnTabStateChange).toHaveBeenCalledWith({ active: false, restoreTitle: false });
     // PF2-FE-04: SessionEnd → 清除会话行
     expect(mockSetAgentSession).toHaveBeenCalledWith("hooks-test", null);
   });
@@ -1929,7 +1931,7 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     });
   });
 
-  it("HUK7: SessionStart → attention → 🟡 + setAgentSession", async () => {
+  it("HUK7: SessionStart → attention → 🟡 + title（B13 补位）+ setAgentSession", async () => {
     await mountAndWaitForHooks();
     mockOnTabStateChange.mockClear();
     mockSetAgentSession.mockClear();
@@ -1939,9 +1941,12 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     }));
 
     expect(mockEventToStatus).toHaveBeenCalledWith("SessionStart", null);
+    // B13: SessionStart 补 title = profile.tabTitle（/resume 无 OSC 133 C，
+    // 标题经 hook 事件保持 claude）
     expect(mockOnTabStateChange).toHaveBeenCalledWith({
       active: true,
       icon: "🟡",
+      title: "claude",
     });
     expect(mockSetAgentSession).toHaveBeenCalledWith("hooks-test", {
       sessionId: "s1",
@@ -2166,16 +2171,17 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     mockSetAgentSession.mockClear();
 
     // ZQ-6: Exit 事件清图标条件扩为 SessionEnd ∨ Exit——与删 agentSession
-    // 的双事件判定对齐（原仅 SessionEnd 清图标，Exit 事件漏清页签图标）
+    // 的双事件判定对齐（原仅 SessionEnd 清图标，Exit 事件漏清页签图标）；
+    // B13: restoreTitle=false——标题恢复由 PTY EXIT（usePtyOutput 真退出信号）承担
     capturedAgentEventCallbackRef.current!(makeHookPayload({
       event: "Exit",
     }));
 
     expect(mockSetAgentSession).toHaveBeenCalledWith("hooks-test", null);
-    expect(mockOnTabStateChange).toHaveBeenCalledWith({ active: false });
+    expect(mockOnTabStateChange).toHaveBeenCalledWith({ active: false, restoreTitle: false });
   });
 
-  it("HUK18: SessionEnd 清图标语义保留——eventToStatus 返回 null 时仍 onTabStateChange({ active: false })", async () => {
+  it("HUK18: SessionEnd 清图标语义保留——eventToStatus 返回 null 时仍 onTabStateChange（restoreTitle: false）", async () => {
     await mountAndWaitForHooks();
     mockOnTabStateChange.mockClear();
     mockSetAgentSession.mockClear();
@@ -2185,6 +2191,34 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     }));
 
     expect(mockSetAgentSession).toHaveBeenCalledWith("hooks-test", null);
-    expect(mockOnTabStateChange).toHaveBeenCalledWith({ active: false });
+    expect(mockOnTabStateChange).toHaveBeenCalledWith({ active: false, restoreTitle: false });
+  });
+
+  it("HUK20: SessionEnd→SessionStart 连续（/resume 序列）→ 标题不回落，第二次调用携 title", async () => {
+    await mountAndWaitForHooks();
+    mockOnTabStateChange.mockClear();
+    mockSetAgentSession.mockClear();
+
+    // /resume 事件序列：当前会话结束 → 新会话开始（claude 进程全程未退出）
+    capturedAgentEventCallbackRef.current!(makeHookPayload({
+      event: "SessionEnd",
+    }));
+    capturedAgentEventCallbackRef.current!(makeHookPayload({
+      event: "SessionStart",
+    }));
+
+    // 第一次：SessionEnd → restoreTitle=false（不恢复标题）
+    expect(mockOnTabStateChange).toHaveBeenNthCalledWith(1, {
+      active: false,
+      restoreTitle: false,
+    });
+    // 第二次：SessionStart → 携 title 重新标 active（标题保持 claude 不回退）
+    expect(mockOnTabStateChange).toHaveBeenNthCalledWith(2, {
+      active: true,
+      icon: "🟡",
+      title: "claude",
+    });
+    // 无任何「恢复原标题」形态的调用（title 恢复只由真退出信号承担——B13）
+    expect(mockOnTabStateChange).not.toHaveBeenCalledWith({ active: false });
   });
 });

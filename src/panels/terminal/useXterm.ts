@@ -45,7 +45,7 @@ import { onAgentEvent } from "../../ipc/agentHooks";
 import { cliProfileRegistry } from "../../features/cliProfiles";
 // AC-5: 事件名字面量只允许出现在 profiles/claude/（claude 合法领地）——
 // SessionEnd/Exit 判定一律引用本常量，不写字面量
-import { SESSION_END_EVENT, EXIT_EVENT } from "../../features/cliProfiles/profiles/claude";
+import { SESSION_END_EVENT, EXIT_EVENT, SESSION_START_EVENT } from "../../features/cliProfiles/profiles/claude";
 import type { TabState } from "./useCommandDetection";
 import {
   installTerminalWriteToPty,
@@ -393,8 +393,22 @@ export function useXterm({
         // 见上方 setAgentSession(null) 分支）——原仅 SessionEnd，Exit 事件
         // 会先删 agentSession 后漏清页签图标
         if (payload.event === SESSION_END_EVENT || payload.event === EXIT_EVENT) {
-          onTabStateChange?.({ active: false });
+          // B13: 仅清图标不恢复标题——/resume 触发 SessionEnd→SessionStart
+          // 时 claude 进程未退出，恢复会把标题误回退为 terminal-N；
+          // 标题恢复只由真退出信号（OSC 133 D / PTY EXIT）承担
+          onTabStateChange?.({ active: false, restoreTitle: false });
         }
+        return;
+      }
+      // B13: SessionStart 补 title 重设——/resume 恢复历史会话时无 OSC 133 C
+      // （TUI 内部斜杠命令不经 shell），标题经 profile.tabTitle 保持 claude；
+      // profile 未注册（前置 hooksCapability 校验已拦截）→ 无 title 零副作用
+      if (payload.event === SESSION_START_EVENT) {
+        onTabStateChange?.({
+          active: true,
+          icon: STATUS_EMOJI[status],
+          title: profile?.tabTitle,
+        });
         return;
       }
       onTabStateChange?.({ active: true, icon: STATUS_EMOJI[status] });

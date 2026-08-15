@@ -630,7 +630,34 @@ describe("Claude 历史会话视图", () => {
         { timeout: 25000, timeoutMsg: "终端缓冲未含 claude --resume 注入命令" },
       );
 
-      // 4. 部分端到端：断言到「注入 + 编排」为止（E2E-11 标注）。
+      // 4. B14 真实渲染断言（修复脱靶盲区：e2eTextBuffer 在 visible 门控之前填充，
+      //    黑屏 bug 下文本断言全绿——此处补「主区正常 + 恢复面板可见」断言）
+      // 4a. 主区 dockview 中存在本页 terminal-{pageId}- 前缀面板（非幽灵页面导航）
+      const pageId = info.pageId;
+      const renderState = await browser.execute((pid: string) => {
+        const api = (window as any).__dockviewApi;
+        const prefix = `terminal-${pid}-`;
+        const panel = (api?.panels ?? []).find((p: { id: string }) =>
+          p.id.startsWith(prefix),
+        );
+        if (!panel) return { found: false };
+        // 面板属于当前活跃页面（visible 判定放行 → usePtyOutput flush 路径）
+        const container = document.querySelector(
+          `[data-e2e="terminal-container"][data-panel-id="${panel.id}"]`,
+        ) as HTMLElement | null;
+        return {
+          found: true,
+          title: panel.api?.title ?? panel.title,
+          visible: container ? container.offsetParent !== null : false,
+        };
+      }, pageId);
+      expect(renderState.found).toBe(true);
+      // 4b. 恢复面板标题 = profile.tabTitle "claude"（恢复即 claude 语义）
+      expect(renderState.title).toBe("claude");
+      // 4c. 面板处于可见页面（offsetParent 非 null——黑屏时面板不可见/渲染失败）
+      expect(renderState.visible).toBe(true);
+
+      // 5. 部分端到端：断言到「注入 + 编排 + 真实渲染」为止（E2E-11 标注）。
       //    不断言 claude 成功进入会话：fixture sessionId 非真实会话（真实恢复成功属人工验证）
     } finally {
       // 清理 E2E 临时项目目录（该用例是最后一个依赖 fixture 的用例；不清理会致

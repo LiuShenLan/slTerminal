@@ -10,6 +10,8 @@ const mocks = vi.hoisted(() => {
   let hookEventCb: ((payload: unknown) => void) | null = null;
   // onDidParametersChange 回调捕获（TerminalPanel 订阅参数变化同步 originalTitleRef）
   let paramsCb: ((p: Record<string, unknown>) => void) | null = null;
+  // onDidTitleChange 回调捕获（B12：TerminalPanel 订阅标题变化同步 originalTitleRef）
+  let titleCb: ((e: { title: string }) => void) | null = null;
 
   const terminal = {
     open: vi.fn(),
@@ -45,13 +47,21 @@ const mocks = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const mockApi: any = {
     title: "terminal-0",
-    setTitle: vi.fn(),
+    // 联动 onDidTitleChange（照 dockview 生产行为——setTitle 同步触发标题变化事件），
+    // B12 的 originalTitleRef 同步订阅依赖此链
+    setTitle: vi.fn((t: string) => {
+      mockApi.title = t;
+      titleCb?.({ title: t });
+    }),
     // 联动 onDidParametersChange（照 dockview 生产行为——updateParameters 同步触发参数变化事件），
     // 组件 latestParamsRef 依赖此同步链（参数覆盖回归守卫用例断言两键共存）
     updateParameters: vi.fn((p: Record<string, unknown>) => {
       paramsCb?.(p);
     }),
-    onDidTitleChange: vi.fn(() => ({ dispose: vi.fn() })),
+    onDidTitleChange: vi.fn((cb: (e: { title: string }) => void) => {
+      titleCb = cb;
+      return { dispose: vi.fn() };
+    }),
     onDidParametersChange: vi.fn((cb: (p: Record<string, unknown>) => void) => {
       paramsCb = cb;
       return { dispose: vi.fn() };
@@ -76,6 +86,7 @@ const mocks = vi.hoisted(() => {
     getOscHandler: (id: number) => oscHandlers[id] ?? null,
     getHookEventCb: () => hookEventCb,
     getParamsCb: () => paramsCb,
+    getTitleCb: () => titleCb,
   };
 });
 
@@ -116,6 +127,7 @@ import { render, screen, waitFor, act, cleanup } from "@testing-library/react";
 import TerminalPanel from "../panels/terminal/TerminalPanel";
 import { cliProfileRegistry } from "../features/cliProfiles";
 import { claudeProfile } from "../features/cliProfiles/profiles/claude";
+import { useLayout } from "../stores/layout";
 // claude profile 注册（side-effect，等价旧 cliIcons.ts 内嵌注册）
 import "../features/cliProfiles/profiles";
 // 真实 TerminalRegistry：F9 行为修订后 TerminalPanel 经 subscribe/get 订阅会话状态，
@@ -212,6 +224,9 @@ describe("TerminalPanel", () => {
   });
 
   it("OSC 133 C/D → handleTabStateChange：active=true 更新标题图标，active=false 恢复原标题", async () => {
+    // 面板须已注册（生产 register 由 spawn 完成触发）——C 的 setAgentSession
+    // 仅在已注册面板上生效，B12 守卫依赖 agentSession 置位
+    registerStub("test-p6");
     render(React.createElement(TerminalPanel, { api: mocks.mockApi, params: { panelId: "test-p6" } }));
     // 等待 useCommandDetection 注册 OSC 133 handler
     await waitFor(() => expect(mocks.getOscHandler(133)).toBeDefined());
@@ -237,28 +252,151 @@ describe("TerminalPanel", () => {
     );
   });
 
-  it("agent-event SessionEnd → handleTabStateChange active=false 恢复原标题", async () => {
+  it("B13: SessionStart 补 title / SessionEnd 仅清图标不恢复标题（/resume 序列）", async () => {
+    registerStub("test-p7");
     render(React.createElement(TerminalPanel, { api: mocks.mockApi, params: { panelId: "test-p7" } }));
     await waitFor(() => expect(mocks.getHookEventCb()).toBeDefined());
     const hookCb = mocks.getHookEventCb()!;
 
-    // SessionStart → attention → 设置 🟡 图标（无 title 不更新标题）
+    // SessionStart → attention → 🟡 + 标题重设为 profile.tabTitle（B13：
+    // /resume 无 OSC 133 C，标题经 hook 事件补位保持 claude）
     await act(async () => {
       hookCb({ panelId: "test-p7", event: "SessionStart" });
     });
-    expect(mocks.mockApi.setTitle).not.toHaveBeenCalled();
+    expect(mocks.mockApi.setTitle).toHaveBeenCalledWith("claude");
     expect(mocks.mockApi.updateParameters).toHaveBeenCalledWith(
       expect.objectContaining({ tabIcon: "🟡" }),
     );
 
-    // SessionEnd → active=false → 恢复原标题 + 单清图标（logo 由 sessionChange 驱动清除）
+    // SessionEnd → restoreTitle=false → 仅清图标，不恢复标题（B13：claude
+    // 进程仍在跑，恢复会把标题误回退为 terminal-N——/resume 根因）
     await act(async () => {
       hookCb({ panelId: "test-p7", event: "SessionEnd" });
     });
-    expect(mocks.mockApi.setTitle).toHaveBeenLastCalledWith("terminal-0");
+    expect(mocks.mockApi.setTitle).toHaveBeenLastCalledWith("claude");
     expect(mocks.mockApi.updateParameters).toHaveBeenLastCalledWith(
       expect.objectContaining({ tabIcon: null }),
     );
+
+    // 真退出信号（OSC 133 D）→ 恢复原标题（B13 共识：恢复只由真退出承担）。
+    // 前置：D 分支受 isCommandRunningRef 门控，需先经 OSC 133 C 置位
+    await waitFor(() => expect(mocks.getOscHandler(133)).toBeDefined());
+    await act(async () => {
+      mocks.getOscHandler(133)!("C;claude");
+    });
+    await act(async () => {
+      mocks.getOscHandler(133)!("D;0");
+    });
+    expect(mocks.mockApi.setTitle).toHaveBeenLastCalledWith("terminal-0");
+  });
+
+  it("B14: 旧恢复格式 panelId + activePageId 匹配 → visible 放行（PTY 输出直写防黑屏）", async () => {
+    vi.useFakeTimers();
+    // 旧恢复格式：terminal-{pageId}-{Date.now}-{seq}（pageId 本身含数字段——
+    // 贪婪正则/切分解析会吞掉 Date.now 段得到错误 pageId，visible 恒 false 黑屏）
+    useLayout.setState({ activePageId: "page-restore-x" });
+    try {
+      render(React.createElement(TerminalPanel, {
+        api: mocks.mockApi,
+        params: { panelId: "terminal-page-restore-x-1700000000000-1" },
+      }));
+      await vi.runAllTimersAsync();
+      expect(mocks.pty.spawn).toHaveBeenCalled();
+      // 提取 pty.spawn 的 onOutput 回调（= handlePtyOutput），注入短输出（<64 字节直写路径）。
+      // 事件形态 = PtyEvent 序列化：{ type: "output", data: { bytes: number[] } }
+      const handlePtyOutput = mocks.pty.spawn.mock.calls[0][1] as (
+        event: { type: string; data: { bytes: number[] } },
+      ) => void;
+      mocks.terminal.write.mockClear();
+      act(() => {
+        handlePtyOutput({ type: "output", data: { bytes: [104, 105] } }); // "hi"
+      });
+      // 前缀匹配判定 visible=true → 直写终端（旧实现恒 false → 永不 flush 黑屏）
+      expect(mocks.terminal.write).toHaveBeenCalled();
+    } finally {
+      useLayout.setState({ activePageId: null });
+      vi.useRealTimers();
+    }
+  });
+
+  it("B14: activePageId 不匹配 → visible=false 输出仅缓冲不直写", async () => {
+    vi.useFakeTimers();
+    useLayout.setState({ activePageId: "page-other" });
+    try {
+      render(React.createElement(TerminalPanel, {
+        api: mocks.mockApi,
+        params: { panelId: "terminal-page-restore-x-1700000000000-1" },
+      }));
+      await vi.runAllTimersAsync();
+      expect(mocks.pty.spawn).toHaveBeenCalled();
+      const handlePtyOutput = mocks.pty.spawn.mock.calls[0][1] as (
+        event: { type: string; data: { bytes: number[] } },
+      ) => void;
+      mocks.terminal.write.mockClear();
+      act(() => {
+        handlePtyOutput({ type: "output", data: { bytes: [104, 105] } });
+      });
+      // 非焦点降频：不写终端（切回后由 flushBuffer 回放）
+      expect(mocks.terminal.write).not.toHaveBeenCalled();
+    } finally {
+      useLayout.setState({ activePageId: null });
+      vi.useRealTimers();
+    }
+  });
+
+  it("B12: 布局恢复重算标题 → originalTitleRef 同步 → 真退出恢复重算名（非瞬态 claude）", async () => {
+    // 模拟持久化瞬态标题（claude 运行中退出保存的布局 title）
+    mocks.mockApi.title = "claude";
+    try {
+      registerStub("test-b12");
+      render(React.createElement(TerminalPanel, {
+        api: mocks.mockApi,
+        params: { panelId: "test-b12" },
+      }));
+      await waitFor(() => expect(mocks.getTitleCb()).toBeDefined());
+      // 模拟 handleReady → rebuildAndRecomputeTitles 重算：setTitle("terminal-0")
+      // （setTitle 联动 onDidTitleChange；agentSession 空 → 捕获重算名）
+      await act(async () => {
+        mocks.mockApi.setTitle("terminal-0");
+      });
+      // 跑 claude → 退出：恢复标题应为重算名，而非挂载快照的瞬态 "claude"
+      await waitFor(() => expect(mocks.getOscHandler(133)).toBeDefined());
+      await act(async () => {
+        mocks.getOscHandler(133)!("C;claude");
+      });
+      await act(async () => {
+        mocks.getOscHandler(133)!("D;0");
+      });
+      expect(mocks.mockApi.setTitle).toHaveBeenLastCalledWith("terminal-0");
+    } finally {
+      mocks.mockApi.title = "terminal-0";
+    }
+  });
+
+  it("B12: customTitle 存在时重算标题不被捕获（F8 自定义名保持）", async () => {
+    mocks.mockApi.title = "claude";
+    try {
+      render(React.createElement(TerminalPanel, {
+        api: mocks.mockApi,
+        params: { panelId: "test-b12c", customTitle: "我的终端" },
+      }));
+      await waitFor(() => expect(mocks.getTitleCb()).toBeDefined());
+      // 重算 setTitle（生产不会发生——重算条件排除 customTitle；此处验证守卫兜底）
+      await act(async () => {
+        mocks.mockApi.setTitle("terminal-0");
+      });
+      // customTitle 存在 → 不捕获（originalTitleRef 保持挂载快照 "我的终端"）
+      await waitFor(() => expect(mocks.getOscHandler(133)).toBeDefined());
+      await act(async () => {
+        mocks.getOscHandler(133)!("C;claude");
+      });
+      await act(async () => {
+        mocks.getOscHandler(133)!("D;0");
+      });
+      expect(mocks.mockApi.setTitle).toHaveBeenLastCalledWith("我的终端");
+    } finally {
+      mocks.mockApi.title = "terminal-0";
+    }
   });
 
   it("params 含 customTitle 挂载 → active=false 恢复自定义名（而非 api.title）", async () => {
