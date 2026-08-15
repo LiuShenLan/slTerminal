@@ -1,6 +1,6 @@
 // mockCliProfile.ts — mock CLI profile 测试夹具（AC-4 契约，spec 06 §7 + 决策 5）
 //
-// 跨边界契约（写死，见 docs/multi-cli/stages.md「跨边界契约」段）：
+// 跨边界契约（写死）：
 //   id "mockcli"、displayName "mockcli"、commands ["mockcli"]、tabTitle "mockcli"、
 //   iconSrc "/cli-icons/mockcli.png"（Stage 01 已放资源，决策 5 真实最小 PNG）。
 //   hooks 全能力：eventToStatus 恒等映射桩（任意事件恒 "working"，SessionEnd/Exit

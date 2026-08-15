@@ -160,7 +160,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **登记规则**：跨模块引用的标识符首次使用时登记到下表；仅模块内部使用的就近定义，不登记。
 
-**未列入的编号家族免登记**：阶段项目代号（如 MC-*（multi-cli profile 重构，逐条清单见 docs/multi-cli/checklist.md）、C13-*、DOC-*、E2E-*、HFN-*、HUK-*、IHE-*、SVC-*、WRK-*、TE-* 等）登记于所属模块文档与 `.claude/test-inventory.md`，免入根表。
+**未列入的编号家族免登记**：阶段项目代号（如 MC-*（multi-cli profile 重构）、C13-*、DOC-*、E2E-*、HFN-*、HUK-*、IHE-*、SVC-*、WRK-*、TE-* 等）登记于所属模块文档与 `.claude/test-inventory.md`，免入根表。
 
 | 标识符 | 类型 | 含义 |
 |--------|------|------|
