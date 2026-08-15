@@ -126,9 +126,9 @@ describe("CommitView 列表渲染", () => {
     });
 
     // 验证关键颜色匹配 GIT_FILE_COLORS（jsdom 将 hex 转为 rgb 格式）
-    expect(colors["mod.ts"]).toBe("rgb(104, 151, 187)");
-    expect(colors["add.ts"]).toBe("rgb(98, 151, 85)");
-    expect(colors["del.ts"]).toBe("rgb(108, 108, 108)");
+    expect(colors["mod.ts"]).toBe("rgb(112, 174, 255)");
+    expect(colors["add.ts"]).toBe("rgb(115, 189, 121)");
+    expect(colors["del.ts"]).toBe("rgb(111, 115, 122)");
     expect(colors["ren.ts"]).toBe("rgb(58, 132, 132)");
     expect(colors["conf.ts"]).toBe("rgb(213, 117, 108)");
   });

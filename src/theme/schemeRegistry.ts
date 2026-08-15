@@ -1,6 +1,6 @@
 // SchemeRegistry — 配色方案注册表
 //
-// 模块级单例，管理 ColorScheme 方案的注册与 active 切换（spec §4.6、决策 D2）。
+// 模块级单例，管理 ColorScheme 方案的注册与 active 切换（决策 D2）。
 // 项目第 6 个注册表单例（先例：CliProfileRegistry / SideViewRegistry / ShortcutRegistry /
 // FileViewerRegistry / TerminalRegistry），模式同 SideViewRegistry——
 // register/get/getAll/_reset（active 状态为方案系统特有）。

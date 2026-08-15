@@ -458,8 +458,8 @@ describe("SideBarArea", () => {
     const outerDiv = container.firstElementChild as HTMLElement;
     expect(outerDiv).not.toBeNull();
     // 背景色应为 theme token（非硬编码 #xxxxxx）
-    // PANEL_BG = "#1E1E1E"
-    expect(outerDiv.style.background).toBe("rgb(30, 30, 30)");
+    // PANEL_BG = "#1e1f22"
+    expect(outerDiv.style.background).toBe("rgb(30, 31, 34)");
   });
 
   // ─── SB-20: 持久化中未注册的 id 被过滤（防御） ───

@@ -4,7 +4,7 @@
 // 本文件在 import 时取 schemeRegistry.getActive() 的 ui 段并逐 token 代理导出。
 // 组件只引用本文件 token（硬约束 #6）；方案切换（D2）后本文件导出值随 active 方案变化。
 //
-// 求值时机保证（spec §4.7）：本文件首次求值发生在 setActive 之后——
+// 求值时机保证：本文件首次求值发生在 setActive 之后——
 // main.tsx 启动序列先注册内置方案 + setActive，再 import 本文件；
 // 测试环境无启动序列，getActive() 默认 darcula，值正确。
 

@@ -321,19 +321,19 @@ describe("explorer git 状态 — B 组：FileTree 渲染时查表", () => {
   });
 
   it("F11: status=modified → 文件名色 = GIT_FILE_COLORS.modified", () => {
-    expect(GIT_FILE_COLORS.modified).toBe("#6897BB");
+    expect(GIT_FILE_COLORS.modified).toBe("#70aeff");
   });
 
   it("F12: status=untracked → 文件名色 = GIT_FILE_COLORS.untracked", () => {
-    expect(GIT_FILE_COLORS.untracked).toBe("#D1675A");
+    expect(GIT_FILE_COLORS.untracked).toBe("#e88f89");
   });
 
   it("F13: status=added → 文件名色 = GIT_FILE_COLORS.added", () => {
-    expect(GIT_FILE_COLORS.added).toBe("#629755");
+    expect(GIT_FILE_COLORS.added).toBe("#73bd79");
   });
 
   it("F14: status=deleted → 文件名色 = GIT_FILE_COLORS.deleted", () => {
-    expect(GIT_FILE_COLORS.deleted).toBe("#6C6C6C");
+    expect(GIT_FILE_COLORS.deleted).toBe("#6f737a");
   });
 
   it("F15: status=renamed → 文件名色 = GIT_FILE_COLORS.renamed", () => {
@@ -345,7 +345,7 @@ describe("explorer git 状态 — B 组：FileTree 渲染时查表", () => {
   });
 
   it("F17: status=ignored → 文件名色 = GIT_FILE_COLORS.ignored", () => {
-    expect(GIT_FILE_COLORS.ignored).toBe("#848504");
+    expect(GIT_FILE_COLORS.ignored).toBe("#d69a6b");
   });
 
   it("F18: 未知 status → 回退默认前景色", () => {
@@ -418,14 +418,14 @@ describe("explorer git 状态 — C 组：配色 token 合规", () => {
   });
 
   it("F22b: FileTree 不硬编码 hex 色值——颜色来自 GIT_FILE_COLORS", async () => {
-    // 验证：GIT_FILE_COLORS 值与 JetBrains 配色一致（架构约束第 6 条）
-    expect(GIT_FILE_COLORS.modified).toBe("#6897BB");
-    expect(GIT_FILE_COLORS.added).toBe("#629755");
-    expect(GIT_FILE_COLORS.untracked).toBe("#D1675A");
-    expect(GIT_FILE_COLORS.deleted).toBe("#6C6C6C");
+    // 验证：GIT_FILE_COLORS 值来自 theme token（架构约束第 6 条，配色单点）
+    expect(GIT_FILE_COLORS.modified).toBe("#70aeff");
+    expect(GIT_FILE_COLORS.added).toBe("#73bd79");
+    expect(GIT_FILE_COLORS.untracked).toBe("#e88f89");
+    expect(GIT_FILE_COLORS.deleted).toBe("#6f737a");
     expect(GIT_FILE_COLORS.renamed).toBe("#3A8484");
     expect(GIT_FILE_COLORS.conflict).toBe("#D5756C");
-    expect(GIT_FILE_COLORS.ignored).toBe("#848504");
+    expect(GIT_FILE_COLORS.ignored).toBe("#d69a6b");
   });
 });
 

@@ -79,7 +79,7 @@ import { ExplorerPanel } from "../features/explorer";
 // ─── 辅助函数 ───
 
 /** 根目录文件条目（选中背景色断言用 rgb 值） */
-const SELECTION_BG_RGB = "rgb(9, 71, 113)";
+const SELECTION_BG_RGB = "rgb(42, 67, 113)";
 
 function seedProject(rootPath: string = "C:/test-project") {
   useProjects.setState({

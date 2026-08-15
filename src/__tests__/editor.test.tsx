@@ -22,7 +22,7 @@ afterEach(() => {
 });
 
 describe("EditorPanel", () => {
-  it("渲染编辑器容器（暗色背景 #282C34）", () => {
+  it("渲染编辑器容器（暗色背景）", () => {
     const { container } = render(
       React.createElement(EditorPanel, { params: { panelId: "editor-1" } }),
     );

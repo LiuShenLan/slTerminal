@@ -25,7 +25,7 @@ async function bootstrap() {
       console.error("[slTerminal]", msg);
       document.body.innerHTML =
         `<div style="display:flex;align-items:center;justify-content:center;height:100vh;` +
-        `background:#1e1e1e;color:#f44747;font-family:monospace;font-size:14px;padding:20px;">` +
+        `background:#1e1f22;color:#e35f6c;font-family:monospace;font-size:14px;padding:20px;">` +
         msg + "</div>";
       return;
     }

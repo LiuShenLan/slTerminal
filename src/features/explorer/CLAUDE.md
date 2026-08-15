@@ -37,7 +37,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **单击空白** → `onSelect(null)` 取消选中
 - **焦点离开** → 选中态保留（视觉高亮不变），但 `usePanelFocus` 的 `popContext("explorer")` 阻止快捷键在失焦时误触发
 
-高亮色：`EXPLORER_SELECTION_BG`（`#094771`，VS Code list activeSelectionBackground 风格），在 `theme/colors.ts` 单点定义。
+高亮色：`EXPLORER_SELECTION_BG`（`#2a4371`，VS Code list activeSelectionBackground 风格），在 `theme/schemes/darcula.ts` 单点定义。
 `onMouseEnter`/`onMouseLeave` 仅在非选中时动态设置背景——选中态不被 hover 覆盖。
 
 ### 焦点管理：tabIndex={-1} + usePanelFocus("explorer")

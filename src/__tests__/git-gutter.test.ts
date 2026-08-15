@@ -112,9 +112,9 @@ describe("gitGutter", () => {
   describe("GutterMarker DOM 颜色", () => {
     it("G6: marker 颜色与 GIT_GUTTER_COLORS token 一致", () => {
       // 验证 token 值
-      expect(GIT_GUTTER_COLORS.modified).toBe("#374752");
-      expect(GIT_GUTTER_COLORS.added).toBe("#384C38");
-      expect(GIT_GUTTER_COLORS.deleted).toBe("#656E76");
+      expect(GIT_GUTTER_COLORS.modified).toBe("#375fad");
+      expect(GIT_GUTTER_COLORS.added).toBe("#549159");
+      expect(GIT_GUTTER_COLORS.deleted).toBe("#868a91");
 
       // 验证均为合法 6 位 hex
       const hexRe = /^#[0-9A-Fa-f]{6}$/;

@@ -53,13 +53,13 @@ describe("theme/colors.ts 配色 token", () => {
     });
 
     const cases = [
-      { key: "modified", expected: "#6897BB" },
-      { key: "added", expected: "#629755" },
-      { key: "untracked", expected: "#D1675A" },
-      { key: "deleted", expected: "#6C6C6C" },
+      { key: "modified", expected: "#70aeff" },
+      { key: "added", expected: "#73bd79" },
+      { key: "untracked", expected: "#e88f89" },
+      { key: "deleted", expected: "#6f737a" },
       { key: "renamed", expected: "#3A8484" },
       { key: "conflict", expected: "#D5756C" },
-      { key: "ignored", expected: "#848504" },
+      { key: "ignored", expected: "#d69a6b" },
     ];
 
     it.each(cases)(
@@ -77,9 +77,9 @@ describe("theme/colors.ts 配色 token", () => {
     });
 
     const gutterCases = [
-      { key: "modified", expected: "#374752" },
-      { key: "added", expected: "#384C38" },
-      { key: "deleted", expected: "#656E76" },
+      { key: "modified", expected: "#375fad" },
+      { key: "added", expected: "#549159" },
+      { key: "deleted", expected: "#868a91" },
     ];
 
     it.each(gutterCases)(
@@ -96,11 +96,11 @@ describe("theme/colors.ts 配色 token", () => {
     });
 
     const explorerCases = [
-      { key: "bg", expected: "#1E1E1E" },
-      { key: "fg", expected: "#D4D4D4" },
-      { key: "hover", expected: "#2A2D2E" },
-      { key: "arrowClosed", expected: "#6C6C6C" },
-      { key: "arrowOpen", expected: "#D4D4D4" },
+      { key: "bg", expected: "#191a1c" },
+      { key: "fg", expected: "#d1d3d9" },
+      { key: "hover", expected: "#2a4371" },
+      { key: "arrowClosed", expected: "#b4b8bf" },
+      { key: "arrowOpen", expected: "#b4b8bf" },
     ];
 
     it.each(explorerCases)(
@@ -117,12 +117,12 @@ describe("theme/colors.ts 配色 token", () => {
     });
 
     const sidebarCases = [
-      { key: "bg", expected: "#252526" },
-      { key: "fg", expected: "#D4D4D4" },
-      { key: "hover", expected: "#2A2D2E" },
-      { key: "selected", expected: "#37373D" },
-      { key: "border", expected: "#444" },
-      { key: "contextMenuBorder", expected: "#454545" },
+      { key: "bg", expected: "#191a1c" },
+      { key: "fg", expected: "#d1d3d9" },
+      { key: "hover", expected: "#494f52" },
+      { key: "selected", expected: "#2a4371" },
+      { key: "border", expected: "#26282c" },
+      { key: "contextMenuBorder", expected: "#33353b" },
     ];
 
     it.each(sidebarCases)(
@@ -142,31 +142,31 @@ describe("theme/colors.ts 配色 token", () => {
   describe("通用 UI 色（独立 token）", () => {
     const uiTokenCases = [
       // 背景色
-      { name: "PANEL_BG", value: PANEL_BG, expected: "#1E1E1E" },
-      { name: "SIDEBAR_BG", value: SIDEBAR_BG, expected: "#252526" },
+      { name: "PANEL_BG", value: PANEL_BG, expected: "#1e1f22" },
+      { name: "SIDEBAR_BG", value: SIDEBAR_BG, expected: "#26282c" },
       { name: "SECONDARY_BG", value: SECONDARY_BG, expected: "#2D2D2D" },
-      { name: "APP_BG", value: APP_BG, expected: "#1e1e2e" },
-      { name: "APP_BG_PRIMARY", value: APP_BG_PRIMARY, expected: "#1e1e2e" },
-      { name: "EDITOR_BG", value: EDITOR_BG, expected: "#282C34" },
+      { name: "APP_BG", value: APP_BG, expected: "#1e1f22" },
+      { name: "APP_BG_PRIMARY", value: APP_BG_PRIMARY, expected: "#1e1f22" },
+      { name: "EDITOR_BG", value: EDITOR_BG, expected: "#1e1f22" },
       // 前景/文字色
-      { name: "SIDEBAR_FG", value: SIDEBAR_FG, expected: "#D4D4D4" },
-      { name: "ERROR_FG", value: ERROR_FG, expected: "#F44747" },
-      { name: "PLACEHOLDER_FG", value: PLACEHOLDER_FG, expected: "#808080" },
-      { name: "BUTTON_FG", value: BUTTON_FG, expected: "#CCCCCC" },
+      { name: "SIDEBAR_FG", value: SIDEBAR_FG, expected: "#bcbec4" },
+      { name: "ERROR_FG", value: ERROR_FG, expected: "#e35f6c" },
+      { name: "PLACEHOLDER_FG", value: PLACEHOLDER_FG, expected: "#4c4f56" },
+      { name: "BUTTON_FG", value: BUTTON_FG, expected: "#d1d3d9" },
       { name: "DIM_FG", value: DIM_FG, expected: "#999999" },
       // 交互控件色
-      { name: "INPUT_BG", value: INPUT_BG, expected: "#3C3C3C" },
-      { name: "INPUT_BORDER", value: INPUT_BORDER, expected: "#6C6C6C" },
-      { name: "FOCUS_BORDER", value: FOCUS_BORDER, expected: "#007ACC" },
-      { name: "ACTIVE_SELECTION_BG", value: ACTIVE_SELECTION_BG, expected: "#094771" },
-      { name: "EXPLORER_SELECTION_BG", value: EXPLORER_SELECTION_BG, expected: "#094771" },
-      { name: "SEPARATOR_BG", value: SEPARATOR_BG, expected: "#444" },
-      { name: "CONTEXT_MENU_BORDER", value: CONTEXT_MENU_BORDER, expected: "#454545" },
+      { name: "INPUT_BG", value: INPUT_BG, expected: "#191a1c" },
+      { name: "INPUT_BORDER", value: INPUT_BORDER, expected: "#40434a" },
+      { name: "FOCUS_BORDER", value: FOCUS_BORDER, expected: "#2a4371" },
+      { name: "ACTIVE_SELECTION_BG", value: ACTIVE_SELECTION_BG, expected: "#2a4371" },
+      { name: "EXPLORER_SELECTION_BG", value: EXPLORER_SELECTION_BG, expected: "#2a4371" },
+      { name: "SEPARATOR_BG", value: SEPARATOR_BG, expected: "#313438" },
+      { name: "CONTEXT_MENU_BORDER", value: CONTEXT_MENU_BORDER, expected: "#33353b" },
       // HTML 面板色
-      { name: "HTML_PANEL_LOADING_FG", value: HTML_PANEL_LOADING_FG, expected: "#6C6C6C" },
+      { name: "HTML_PANEL_LOADING_FG", value: HTML_PANEL_LOADING_FG, expected: "#bcbec4" },
       { name: "HTML_PANEL_IFRAME_BG", value: HTML_PANEL_IFRAME_BG, expected: "#FFFFFF" },
       // 强调底色前景
-      { name: "ON_ACCENT_FG", value: ON_ACCENT_FG, expected: "#FFFFFF" },
+      { name: "ON_ACCENT_FG", value: ON_ACCENT_FG, expected: "#bcbec4" },
       // 错误提示色
       { name: "ERROR_BANNER_BG", value: ERROR_BANNER_BG, expected: "#5A1D1D" },
       { name: "ERROR_BANNER_BORDER", value: ERROR_BANNER_BORDER, expected: "#8B0000" },
@@ -215,10 +215,10 @@ describe("theme/colors.ts 配色 token", () => {
     });
 
     const usageCases = [
-      { key: "low", expected: "#629755" },
+      { key: "low", expected: "#73bd79" },
       { key: "medium", expected: "#BBB529" },
       { key: "high", expected: "#FFAF00" },
-      { key: "critical", expected: "#F44747" },
+      { key: "critical", expected: "#e35f6c" },
     ];
 
     it.each(usageCases)(
@@ -241,8 +241,8 @@ describe("theme/colors.ts 配色 token", () => {
       expect(ROOT_CSS_VARS["--sl-bg-primary"]).toBe(APP_BG_PRIMARY);
     });
 
-    it("--sl-fg-primary 值为 #cdd6f4", () => {
-      expect(ROOT_CSS_VARS["--sl-fg-primary"]).toBe("#cdd6f4");
+    it("--sl-fg-primary 值为 #bcbec4", () => {
+      expect(ROOT_CSS_VARS["--sl-fg-primary"]).toBe("#bcbec4");
     });
 
     it("所有值均为非空字符串", () => {

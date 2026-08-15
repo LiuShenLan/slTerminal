@@ -1,6 +1,6 @@
 // overrides — 组件库配色注入（active 方案 → 库专用 CSS 变量 / CM6 扩展）
 //
-// 四导出签名以 Stage 01 脚本头注释 C2 为准（spec §4.8）：
+// 四导出签名：
 //   dockviewVarStyle(): Record<string, string>    active 方案 libraries.dockview 20 条
 //     CSS 变量，键为变量名原样（如 --dv-group-view-background-color），供 React style 内联注入
 //   allotmentVarStyle(): Record<string, string>   2 键（--separator-border / --focus-border，
@@ -11,7 +11,7 @@
 //     EditorView.theme 扩展（lint 7 键 / searchMatch 4 键 / background）
 //
 // 函数形导出每次调用取当前 active 方案（支持 D2 热切换）；editorTheme 为模块级常量
-// （求值时机由 main.tsx 启动序列保证，见 spec §5）。
+// （求值时机由 main.tsx 启动序列保证）。
 
 import { EditorView } from "@codemirror/view";
 import type { Extension } from "@codemirror/state";

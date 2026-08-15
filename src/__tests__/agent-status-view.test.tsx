@@ -588,7 +588,7 @@ describe("用量条（官方 used_percentage 口径）", () => {
     const { line2 } = rowChildren(container);
     const barContainer = line2.children[0] as HTMLElement;
     const innerBar = barContainer.firstElementChild as HTMLElement;
-    return innerBar.style.backgroundColor.replace(/\s/g, "");  // "rgb(98, 151, 85)"
+    return innerBar.style.backgroundColor.replace(/\s/g, "");  // "rgb(115, 189, 121)"
   }
 
   /** hex → rgb 字符串，对齐 jsdom rgb() 规范化 */

@@ -156,22 +156,22 @@ describe("SchemeRegistry", () => {
       ).length;
       expect(scalarCount).toBe(23);
       // 关键标量值对齐 darcula.ts
-      expect(darcula.ui.panelBg).toBe("#1E1E1E");
-      expect(darcula.ui.appBgPrimary).toBe("#1e1e2e");
+      expect(darcula.ui.panelBg).toBe("#1e1f22");
+      expect(darcula.ui.appBgPrimary).toBe("#1e1f22");
     });
 
     it("terminal 段——25 键", () => {
       expect(Object.keys(darcula.terminal).length).toBe(25);
       // 关键值对齐 darcula.ts（与 panels/terminal/theme.ts 现状一致）
-      expect(darcula.terminal.background).toBe("#1E1E1E");
-      expect(darcula.terminal.foreground).toBe("#D4D4D4");
-      expect(darcula.terminal.cursorAccent).toBe("#1E1E1E");
+      expect(darcula.terminal.background).toBe("#1e1f22");
+      expect(darcula.terminal.foreground).toBe("#bcbec4");
+      expect(darcula.terminal.cursorAccent).toBe("#1e1f22");
       expect(darcula.terminal.brightWhite).toBe("#FFFFFF");
     });
 
     it("editor 段——theme 透出非 undefined + overrides 结构完整", () => {
       expect(darcula.editor.theme).toBeDefined();
-      expect(darcula.editor.overrides.background).toBe("#282C34");
+      expect(darcula.editor.overrides.background).toBe("#1e1f22");
       expect(Object.keys(darcula.editor.overrides.lint).length).toBe(7);
       expect(Object.keys(darcula.editor.overrides.searchMatch).length).toBe(4);
     });
@@ -182,7 +182,7 @@ describe("SchemeRegistry", () => {
       for (const key of Object.keys(darcula.libraries.dockview)) {
         expect(key.startsWith("--dv-")).toBe(true);
       }
-      expect(darcula.libraries.dockview["--dv-group-view-background-color"]).toBe("#1E1E1E");
+      expect(darcula.libraries.dockview["--dv-group-view-background-color"]).toBe("#1e1f22");
       expect(Object.keys(darcula.libraries.allotment)).toEqual([
         "separatorBorder",
         "focusBorder",

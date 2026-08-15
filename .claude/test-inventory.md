@@ -273,7 +273,7 @@
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
-| `src/__tests__/colors.test.ts` | 86 | **配色 token 真实导出值断言（STS-01：GIT_FILE/GIT_GUTTER/EXPLORER/SIDEBAR/AGENT_STATUS_USAGE 五组 + uiTokenCases 补 EXPLORER_SELECTION_BG 等，STS-09）**——it.each 表驱动展开；facade 化后 89→85（死配置清理移除 4 条断言）；用量条四档（statusline 桥接：agentStatusUsage 3→4 键，low/medium/high(#FFAF00 橙)/critical(#F44747 红)，+1） |
+| `src/__tests__/colors.test.ts` | 86 | **配色 token 真实导出值断言（STS-01：GIT_FILE/GIT_GUTTER/EXPLORER/SIDEBAR/AGENT_STATUS_USAGE 五组 + uiTokenCases 补 EXPLORER_SELECTION_BG 等，STS-09）**——it.each 表驱动展开；facade 化后 89→85（死配置清理移除 4 条断言）；用量条四档（statusline 桥接：agentStatusUsage 3→4 键，low/medium/high(#FFAF00 橙)/critical(#e35f6c 红)，+1） |
 | `src/__tests__/scheme-registry.test.ts` | 18 | 方案注册表单测（TST-02）：register/get/getAll/getDefaultId、setActive 已知/未知 id 回退 darcula + console.warn、getActive 默认 darcula、重复注册覆盖、`_reset` 隔离、darcula 四段完整性（ui 6 组键数 7/3/5/8/3/4（agentStatusUsage 四档） + 23 标量、terminal 25 键、editor oneDark 透出非 undefined、libraries dockview 20 条 + allotment 2 键） |
 | `src/__tests__/overrides.test.ts` | 7 | 主题 overrides 导出单测（TST-03）：dockviewVarStyle 键集合 20 条且值为 active 方案色、allotmentVarStyle 2 键、editorTheme === active 方案 editor 段、editorColorOverrides 返回 CM6 扩展（lint/searchMatch/background 键生效）、层叠胜出守卫（ACC-05：竞争规则选择器带 .cm-editor 前缀）、setActive 后输出跟随切换 |
 | `src/__tests__/agent-status-lib.test.ts` | 6 | lib 层四态常量（MC-401 迁移）：STATUS_EMOJI 恰好 4 键/emoji 值（契约 C7）/null 不在映射表 + getStatusIcon（**null 分支，STS-04**）+ AgentStatus 类型接受 5 值——事件映射用例已随实现迁出至 cli-profile-claude（lib 层不再含 claude 事件名字面量） |
