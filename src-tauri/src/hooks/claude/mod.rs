@@ -36,6 +36,12 @@ fn hook_script_path() -> Option<PathBuf> {
     hooks_dir().map(|d| d.join("slterm-hook-reporter.js"))
 }
 
+/// statusline 桥接脚本路径（B15：reinject 必须用桥接脚本而非 reporter——
+/// 误传 reporter 会把 statusLine 写成 reporter 包裹，透传末端 stdout 恒空致状态行空白）
+fn statusline_script_path() -> Option<PathBuf> {
+    hooks_dir().map(|d| d.join(inject::STATUSLINE_SCRIPT_NAME))
+}
+
 fn home_dir_err() -> AppError {
     AppError::IoKind {
         kind: "home_dir".into(),
@@ -133,7 +139,7 @@ impl CliHooksProvider for ClaudeHooksProvider {
     fn reinject_statusline(&self) -> Result<(), AppError> {
         let settings_path = claude_settings_path();
         let backup_path = inject::statusline_backup_path(home_dir());
-        let script_path = hook_script_path();
+        let script_path = statusline_script_path();
         inject::reinject_statusline_impl(
             settings_path.as_deref(),
             backup_path.as_deref(),
@@ -176,5 +182,74 @@ mod tests {
             assert_eq!(home_dir(), Some(dir.path().to_path_buf()));
         }
         assert_eq!(home_dir(), real, "守卫 Drop 后应恢复原 home 解析");
+    }
+
+    // ── B15 防复发：provider 层 reinject 必须用 statusline 桥接脚本（非 reporter） ──
+    // 背景：B15 根因 = reinject_statusline 误传 hook_script_path()（reporter 路径）——
+    // impl 层测试传参正确掩盖了 provider 层路径 bug（注入后重启 settings.json 被写成
+    // reporter 包裹：透传末端 stdout 恒空 → TUI 状态行空白 + 状态检测 Outdated）。
+    #[test]
+    fn reinject_statusline_provider_uses_statusline_script() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = HomeDirGuard::set(home.path());
+
+        // 三件套：settings.json（statusLine = 原配置）+ 干净备份 + 两脚本落盘
+        let claude_dir = home.path().join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        let hooks_dir = home.path().join(".slterminal").join("hooks");
+        std::fs::create_dir_all(&hooks_dir).unwrap();
+
+        let original = serde_json::json!({
+            "type": "command",
+            "command": "~/.claude/statusline-deepseek.sh",
+        });
+        let settings = serde_json::json!({
+            "hooks": {},
+            "statusLine": original,
+        });
+        std::fs::write(
+            claude_dir.join("settings.json"),
+            serde_json::to_string_pretty(&settings).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            home.path()
+                .join(".slterminal")
+                .join("statusline-backup.json"),
+            serde_json::to_string_pretty(&original).unwrap(),
+        )
+        .unwrap();
+        // 脚本内容任意——reinject 只检查 is_file()
+        std::fs::write(hooks_dir.join("slterm-hook-reporter.js"), "// reporter\n").unwrap();
+        std::fs::write(
+            hooks_dir.join("slterm-statusline.js"),
+            "// statusline bridge\n",
+        )
+        .unwrap();
+
+        // 启动重注入（provider 层真实路径解析）
+        ClaudeHooksProvider.reinject_statusline().unwrap();
+
+        let after: Value = serde_json::from_str(
+            &std::fs::read_to_string(claude_dir.join("settings.json")).unwrap(),
+        )
+        .unwrap();
+        let cmd = after
+            .get("statusLine")
+            .and_then(|sl| sl.get("command"))
+            .and_then(|c| c.as_str())
+            .expect("statusLine command 应存在");
+        assert!(
+            cmd.contains("slterm-statusline"),
+            "桥接脚本应为 statusline（B15 复发：误用 reporter）: {cmd}"
+        );
+        assert!(
+            !cmd.contains("slterm-hook-reporter"),
+            "桥接脚本不得含 reporter（透传末端 stdout 恒空）: {cmd}"
+        );
+        assert!(
+            cmd.contains("~/.claude/statusline-deepseek.sh"),
+            "原命令应作为 argv 内嵌: {cmd}"
+        );
     }
 }

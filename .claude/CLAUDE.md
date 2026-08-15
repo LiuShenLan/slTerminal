@@ -174,6 +174,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | DBG-5 | 调试调查 | switchToPage 改 async——setProjectRoot 必须在 setActivePage 之前完成（React effect 时序坑） |
 | DBG-6 | 调试调查 | 启动恢复 lastPage 先 await setProjectRoot 再 setActivePage |
 | B10 | 缺陷 | 编辑器去重聚焦须匹配 suffix（普通编辑器与 git 页签互不误聚焦） |
+| B11 | 缺陷 | statusline 双重包裹——注入时递归解包自有脚本包裹为原配置（备份/透传目标）；桥接脚本引号容忍 + 剥引号后 ~ 展开 + 透传失败 stdout 占位（C10 保持） |
+| B12 | 缺陷 | 重开页签标题残留 claude——恢复时无 customTitle 的终端面板经 titleManager 重算 terminal-N（rebuildAndRecomputeTitles 终端 pass + TerminalPanel originalTitleRef 订阅同步）；F8 customTitle 保留 |
+| B13 | 缺陷 | /resume 后页签标题回退——SessionEnd 不再恢复标题（TabState.restoreTitle 信号），标题恢复只由真退出信号（OSC 133 D / PTY EXIT）承担；SessionStart 补 title 重设 |
+| B14 | 缺陷 | 历史恢复两空白——panelId 生成/解析单点收口（makeTerminalPanelId/parseTerminalPageId 成对，模块级每页计数）；TerminalPanel visible 改 activePageId 前缀匹配；HistorySessionList 前缀匹配防幽灵页面导航；恢复面板 id 不再含 Date.now 段 |
+| B15 | 缺陷 | 重启后 statusLine 变 reporter 包裹（空白行 + 版本过旧）——ClaudeHooksProvider::reinject_statusline 误传 hook_script_path()（reporter）作桥接脚本路径；修复 = reinject 改传 statusline_script_path()，provider 层 L1 用例锁死（自 4aed3e2 初始版即存在，B11 调查的「损坏中间态」即此产物） |
+| B16 | 缺陷 | 状态行占位文本——桥接脚本 .sh 分支 spawnSync("bash") 依赖 PATH（Windows 原生 PATH 无 bash，仅 Git\cmd）；且 bash -c 未加引号的反斜杠路径被 bash 词法吃掉致 127。修复 = bashCandidates 试错定位（PATH bash → where git 沿目录上溯推导 bin/usr\bin → 固定路径 fallback）+ 反斜杠转正斜杠；SCRIPT_VERSION 5→6 |
 | ADR-0001 | 架构决策 | 侧栏视图换区重建丢失组件内部状态（已确认接受）（详见 .claude/adr.md） |
 | F2 | 特性 | hooks 注入入口（F6 面板工具栏并入；与功能键 F2 区分） |
 | F3 | 特性 | 终端页签四态 emoji 指示（agent-event + OSC 133 合成） |

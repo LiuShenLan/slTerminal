@@ -25,7 +25,8 @@ const HOOK_SCRIPT_TEMPLATE: &str = include_str!("slterm-hook-reporter.js");
 const STATUSLINE_SCRIPT_TEMPLATE: &str = include_str!("slterm-statusline.js");
 
 /// statusline 桥接脚本文件名
-const STATUSLINE_SCRIPT_NAME: &str = "slterm-statusline.js";
+/// statusline 桥接脚本文件名（B15：mod.rs 的 reinject 单点引用，禁止硬编码重复）
+pub(crate) const STATUSLINE_SCRIPT_NAME: &str = "slterm-statusline.js";
 
 /// statusline 备份文件名（script_dir 父目录 = ~/.slterminal 下）
 const STATUSLINE_BACKUP_NAME: &str = "statusline-backup.json";
@@ -46,6 +47,62 @@ fn statusline_is_bridge(status_line: &Value) -> bool {
         .get("command")
         .and_then(|c| c.as_str())
         .is_some_and(|cmd| cmd.contains(STATUSLINE_SCRIPT_NAME))
+}
+
+/// 解包层数上限（防病态嵌套死循环）
+const MAX_UNWRAP_DEPTH: usize = 5;
+
+/// 解析单层包裹形态：`node "<自有脚本>" "<内层命令>"` → 内层命令。
+/// 仅当脚本路径含自有脚本名（slterm-statusline.js / slterm-hook-reporter.js）才解包——
+/// 用户自写 `node "x.js" "y"` 形态不碰（非自有包裹）。非包裹形态 → None。
+fn parse_wrapped_command(cmd: &str) -> Option<String> {
+    // JSON 转义引号还原：内层命令经 serde_json 序列化后引号带 `\"` 前缀，
+    // 不还原则引号剥离/匹配全部失配（多层嵌套解包依赖此还原）
+    let cmd = cmd.replace("\\\"", "\"");
+    // 剥 node 前缀（容忍前后空白）
+    let rest = cmd.strip_prefix("node")?.trim_start();
+    // 提取第一对双引号内的脚本路径
+    let rest = rest.strip_prefix('"')?;
+    let script_end = rest.find('"')?;
+    let script_path = &rest[..script_end];
+    // 仅解自有脚本包裹（B11：损坏中间态 = reporter 包裹——识别并解包防双重包裹）
+    if !script_path.contains(STATUSLINE_SCRIPT_NAME)
+        && !script_path.contains("slterm-hook-reporter.js")
+    {
+        return None;
+    }
+    // 内层命令 = 脚本路径之后的部分，trim 后剥最外层引号
+    let inner = rest[script_end + 1..].trim();
+    let inner = if inner.len() >= 2 && inner.starts_with('"') && inner.ends_with('"') {
+        &inner[1..inner.len() - 1]
+    } else {
+        inner
+    };
+    if inner.is_empty() {
+        None
+    } else {
+        Some(inner.to_string())
+    }
+}
+
+/// 递归解包包裹形态至最内层命令（B11：损坏中间态注入防御——
+/// inject 把非桥接配置一律当用户原配置备份+包裹，若现有配置本身是
+/// `node reporter "原命令"` 形态则双重包裹、透传末端是 reporter（stdout 恒空）。
+/// 注入前解包出最内层命令作为「用户原配置」备份+透传目标）。
+/// 至少解了一层才返回 Some；非包裹形态 → None（调用方按原样处理）。
+fn unwrap_wrapped_statusline(command: &str) -> Option<String> {
+    let mut current = command.to_string();
+    let mut unwrapped = false;
+    for _ in 0..MAX_UNWRAP_DEPTH {
+        match parse_wrapped_command(&current) {
+            Some(inner) => {
+                current = inner;
+                unwrapped = true;
+            }
+            None => break,
+        }
+    }
+    unwrapped.then_some(current)
 }
 
 /// 构造桥接 statusLine 配置（command = node 桥接脚本 + 原命令 argv——桥接脚本透传执行原命令）
@@ -292,17 +349,27 @@ pub(crate) fn inject_impl(
     {
         // 幂等：二次注入不重建桥接（原命令保持）
     } else {
-        let original_command = existing_statusline
+        // B11: 原命令提取前递归解包自有包裹形态——现有配置若本身是
+        // `node reporter "原命令"` 形态（损坏中间态），直接包裹会双重包裹、
+        // 透传末端是 reporter（stdout 恒空 → TUI 状态行空白）。解包命中时
+        // 备份值 = 最内层命令（干净原配置），restore/reinject 不再复刻损坏态。
+        let raw_command = existing_statusline
             .as_ref()
             .and_then(|sl| sl.get("command"))
-            .and_then(|c| c.as_str())
-            .map(str::to_string);
+            .and_then(|c| c.as_str());
+        let (original_command, backup_value) = match raw_command {
+            Some(raw) => match unwrap_wrapped_statusline(raw) {
+                Some(inner) => (
+                    Some(inner.clone()),
+                    Some(serde_json::json!({ "type": "command", "command": inner })),
+                ),
+                None => (Some(raw.to_string()), existing_statusline.clone()),
+            },
+            None => (None, None),
+        };
         if original_command.is_some() {
             if let Some(backup_path) = backup_path_from_script_dir(script_dir) {
-                write_backup(
-                    &backup_path,
-                    existing_statusline.clone().unwrap_or(Value::Null),
-                )?;
+                write_backup(&backup_path, backup_value.unwrap_or(Value::Null))?;
             }
         }
         root_obj.insert(
@@ -451,11 +518,17 @@ pub(crate) fn reinject_statusline_impl(
     }
     // 恢复场景：当前 = 备份原配置 → 重新注入桥接
     let script_abs = dunce::simplified(script_path).to_string_lossy().to_string();
-    let original_command = backup.get("command").and_then(|c| c.as_str()).unwrap_or("");
+    // B11: 备份文件可能存有损坏中间态（历史遗留）——解包最内层命令，
+    // 防重注入复刻双重包裹
+    let original_command = backup
+        .get("command")
+        .and_then(|c| c.as_str())
+        .map(|c| unwrap_wrapped_statusline(c).unwrap_or_else(|| c.to_string()))
+        .unwrap_or_default();
     if let Some(root) = settings.as_object_mut() {
         root.insert(
             "statusLine".into(),
-            build_bridge_statusline(&script_abs, original_command),
+            build_bridge_statusline(&script_abs, &original_command),
         );
     }
     atomic_write_settings(settings_path, &settings)?;
@@ -636,9 +709,13 @@ mod tests {
     fn template_version_positive() {
         let v = template_version();
         assert!(v > 0, "SCRIPT_VERSION 应大于 0，实际: {v}");
-        // 决策 7/KZ-3 后 = 3；statusline 桥接引入（reporter + 桥接脚本同批注入）→ 4
-        // （已注入用户变「版本过旧」需重新注入，装上 statusline 桥接）
-        assert_eq!(v, 4, "SCRIPT_VERSION 应已递增到 4（statusline 桥接）");
+        // 决策 7/KZ-3 后 = 3；statusline 桥接引入（reporter + 桥接脚本同批注入）→ 4；
+        // B11 注入解包 + 桥接引号容忍/失败占位 → 5；B16 bash 定位 + 正斜杠 → 6
+        // （已注入用户变「版本过旧」需重注入）
+        assert_eq!(
+            v, 6,
+            "SCRIPT_VERSION 应已递增到 6（B16 bash 定位 + 正斜杠）"
+        );
     }
 
     // ── 模板内嵌校验（决策 7：显式 cliId + SCRIPT_VERSION 递增） ──
@@ -1299,6 +1376,24 @@ mod tests {
             STATUSLINE_SCRIPT_TEMPLATE.contains("SCRIPT_VERSION"),
             "桥接脚本应含版本常量"
         );
+        assert!(
+            STATUSLINE_SCRIPT_TEMPLATE.contains("[slterm-statusline: 命令执行失败]"),
+            "桥接脚本透传失败应输出占位文本（B11）"
+        );
+        // B16：bash 候选定位（PATH 的 bash 缺失时经 git 推导同根 Git\bin\bash.exe）
+        // 与反斜杠转正斜杠（bash -c 词法吃反斜杠致 127）
+        assert!(
+            STATUSLINE_SCRIPT_TEMPLATE.contains("bashCandidates"),
+            "桥接脚本应含 bash 候选定位函数（B16：Windows PATH 通常无 bash）"
+        );
+        assert!(
+            STATUSLINE_SCRIPT_TEMPLATE.contains(r#"Program Files\\Git\\bin\\bash.exe"#),
+            "桥接脚本应含固定路径 fallback（Program Files\\Git\\bin\\bash.exe）"
+        );
+        assert!(
+            STATUSLINE_SCRIPT_TEMPLATE.contains(r#"replace(/\\/g, "/")"#),
+            "桥接脚本 bash 分支应将反斜杠转正斜杠（B16：bash -c 词法转义）"
+        );
     }
 
     #[test]
@@ -1350,6 +1445,179 @@ mod tests {
         assert!(!backup.exists(), "无原 statusLine 不应产生备份");
         // 桥接仍注入（原命令空——纯信号上报形态）
         assert_injected_settings(&settings_path);
+    }
+
+    // ── B11 包裹形态解包（损坏中间态注入防御） ──
+
+    #[test]
+    fn unwrap_wrapped_statusline_single_layer() {
+        // 单层 reporter 包裹（损坏中间态形态）→ 解出内层命令
+        let cmd = "node \"C:/Users/x/.slterminal/hooks/slterm-hook-reporter.js\" \"~/.claude/statusline-deepseek.sh\"";
+        assert_eq!(
+            unwrap_wrapped_statusline(cmd),
+            Some("~/.claude/statusline-deepseek.sh".to_string())
+        );
+    }
+
+    #[test]
+    fn unwrap_wrapped_statusline_double_layer() {
+        // 双层包裹（statusline 包 reporter）→ 解到最内层
+        let cmd = "node \"C:/x/.slterminal/hooks/slterm-statusline.js\" \"node \\\"C:/x/.slterminal/hooks/slterm-hook-reporter.js\\\" \\\"~/.claude/statusline-deepseek.sh\\\"\"";
+        assert_eq!(
+            unwrap_wrapped_statusline(cmd),
+            Some("~/.claude/statusline-deepseek.sh".to_string())
+        );
+    }
+
+    #[test]
+    fn unwrap_wrapped_statusline_not_wrap() {
+        // 普通用户原配置（非包裹形态）→ None（调用方按原样处理）
+        assert_eq!(
+            unwrap_wrapped_statusline("~/.claude/statusline-user.sh"),
+            None
+        );
+    }
+
+    #[test]
+    fn unwrap_wrapped_statusline_foreign_node_wrap() {
+        // 用户自写 node 包裹（脚本路径无自有脚本名）→ None 不误伤
+        assert_eq!(
+            unwrap_wrapped_statusline("node \"my-own-script.js\" \"--flag\""),
+            None
+        );
+    }
+
+    #[test]
+    fn inject_impl_damaged_wrapped_statusline_unwrapped() {
+        let (_dir, settings_path, script_dir) = make_inject_env();
+        // 预置损坏中间态（reporter 包裹——无透传能力，stdout 恒空）
+        std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &settings_path,
+            r#"{"statusLine":{"type":"command","command":"node \"C:/Users/x/.slterminal/hooks/slterm-hook-reporter.js\" \"~/.claude/statusline-deepseek.sh\""}}"#,
+        )
+        .unwrap();
+
+        inject_impl(&settings_path, &script_dir).unwrap();
+
+        // 桥接单层：command 含内层命令、不含 reporter
+        let settings: Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
+        let cmd = settings["statusLine"]["command"].as_str().unwrap();
+        assert!(cmd.contains("slterm-statusline"), "command 应为桥接: {cmd}");
+        assert!(
+            cmd.contains("~/.claude/statusline-deepseek.sh"),
+            "透传目标应为最内层命令: {cmd}"
+        );
+        assert!(
+            !cmd.contains("slterm-hook-reporter"),
+            "透传目标不应再含 reporter（防双重包裹）: {cmd}"
+        );
+        // 备份 = 干净原配置（非损坏态）
+        let backup = backup_path_from_script_dir(&script_dir).unwrap();
+        let backup_value: Value =
+            serde_json::from_str(&std::fs::read_to_string(&backup).unwrap()).unwrap();
+        assert_eq!(
+            backup_value,
+            serde_json::json!({"type":"command","command":"~/.claude/statusline-deepseek.sh"}),
+            "备份应为解包后的干净原配置"
+        );
+        // 关闭恢复 → 还原干净原配置（备份保留）
+        restore_statusline_impl(Some(&settings_path), Some(&backup)).unwrap();
+        let restored: Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
+        assert_eq!(
+            restored["statusLine"]["command"], "~/.claude/statusline-deepseek.sh",
+            "关闭恢复应还原干净原配置"
+        );
+        // 重开重注入 → 桥接仍含最内层命令（不复刻损坏态）
+        reinject_statusline_impl(
+            Some(&settings_path),
+            Some(&backup),
+            Some(&script_dir.join(STATUSLINE_SCRIPT_NAME)),
+        )
+        .unwrap();
+        let reinjected: Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
+        let cmd = reinjected["statusLine"]["command"].as_str().unwrap();
+        assert!(
+            cmd.contains("~/.claude/statusline-deepseek.sh"),
+            "重注入透传目标应为最内层: {cmd}"
+        );
+        assert!(
+            !cmd.contains("slterm-hook-reporter"),
+            "重注入不应复刻损坏态: {cmd}"
+        );
+    }
+
+    #[test]
+    fn inject_impl_double_wrapped_statusline_unwrapped() {
+        let (_dir, settings_path, script_dir) = make_inject_env();
+        // 预置双层损坏形态（reporter 包 reporter，外层非桥接——更深的损坏中间态）。
+        // 注意：外层若已是 slterm-statusline 桥接则 statusline_is_bridge 幂等跳过，
+        // 不构成解包场景——真实双层损坏只能是自有脚本的重复包裹
+        std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &settings_path,
+            r#"{"statusLine":{"type":"command","command":"node \"C:/x/.slterminal/hooks/slterm-hook-reporter.js\" \"node \\\"C:/x/.slterminal/hooks/slterm-hook-reporter.js\\\" \\\"~/.claude/statusline-deepseek.sh\\\"\""}}"#,
+        )
+        .unwrap();
+
+        inject_impl(&settings_path, &script_dir).unwrap();
+
+        let settings: Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
+        let cmd = settings["statusLine"]["command"].as_str().unwrap();
+        assert!(
+            cmd.contains("~/.claude/statusline-deepseek.sh"),
+            "双层包裹应解到最内层: {cmd}"
+        );
+        assert!(
+            !cmd.contains("slterm-hook-reporter"),
+            "解包后不应含 reporter: {cmd}"
+        );
+        // 单层桥接（statusline 脚本名只出现一次——桥接自身）
+        assert_eq!(
+            cmd.matches("slterm-statusline").count(),
+            1,
+            "桥接应为单层（脚本名仅出现一次）: {cmd}"
+        );
+    }
+
+    #[test]
+    fn reinject_damaged_backup_unwrapped() {
+        let (_dir, settings_path, script_dir) = make_inject_env();
+        std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+        // 当前 = 损坏备份值（历史遗留形态），备份文件 = 损坏态
+        std::fs::write(
+            &settings_path,
+            r#"{"statusLine":{"type":"command","command":"node \"C:/Users/x/.slterminal/hooks/slterm-hook-reporter.js\" \"~/.claude/statusline-deepseek.sh\""}}"#,
+        )
+        .unwrap();
+        let backup = backup_path_from_script_dir(&script_dir).unwrap();
+        std::fs::create_dir_all(backup.parent().unwrap()).unwrap();
+        write_backup(
+            &backup,
+            serde_json::json!({"type":"command","command":"node \"C:/Users/x/.slterminal/hooks/slterm-hook-reporter.js\" \"~/.claude/statusline-deepseek.sh\""}),
+        )
+        .unwrap();
+        let script_path = script_dir.join(STATUSLINE_SCRIPT_NAME);
+        std::fs::create_dir_all(&script_dir).unwrap();
+        std::fs::write(&script_path, STATUSLINE_SCRIPT_TEMPLATE).unwrap();
+
+        reinject_statusline_impl(Some(&settings_path), Some(&backup), Some(&script_path)).unwrap();
+
+        let settings: Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
+        let cmd = settings["statusLine"]["command"].as_str().unwrap();
+        assert!(
+            cmd.contains("~/.claude/statusline-deepseek.sh"),
+            "重注入透传目标应为最内层: {cmd}"
+        );
+        assert!(
+            !cmd.contains("slterm-hook-reporter"),
+            "损坏备份重注入不应复刻损坏态: {cmd}"
+        );
     }
 
     #[test]

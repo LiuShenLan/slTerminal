@@ -9,7 +9,7 @@
 // 3. 写 context 用量信号文件（hooks-events 目录，tmp+rename 原子写，复用现有瞬态信号通道）
 // 4. 包裹透传：argv[2] 为用户原 statusline 命令 → 执行并透传 stdin/stdout（失败静默降级）
 
-const SCRIPT_VERSION = 4;
+const SCRIPT_VERSION = 6;
 
 const fs = require("fs");
 const path = require("path");
@@ -142,29 +142,103 @@ function writeSignal(dir, panelId, pct, data) {
   }
 }
 
-/** 执行用户原 statusline 命令并透传输出（失败静默降级，C10） */
+/** bash 可执行候选定位（B16）：
+ *  Windows 原生 PATH 通常不含 bash（Git for Windows 只把 Git\cmd 放进 PATH，bash 在同根
+ *  Git\bin/Git\usr\bin）——按序返回：PATH 的 "bash" → where git 推导（git.exe 可能在
+ *  Git\cmd 或 Git\mingw64\bin 等布局，沿目录上溯逐祖先探测 bin/usr\bin）→ 常见固定
+ *  安装路径。spawn 侧逐候选试错，取首个可启动者 */
+function bashCandidates() {
+  var candidates = ["bash"];
+  try {
+    var w = spawnSync("where", ["git"], { encoding: "utf8", windowsHide: true });
+    if (!w.error && w.stdout) {
+      var line = w.stdout
+        .split(/\r?\n/)
+        .map(function (s) {
+          return s.trim();
+        })
+        .filter(Boolean)[0];
+      if (line) {
+        // 沿 git.exe 所在目录上溯（至多 3 层），每层推 bin\bash.exe 与 usr\bin\bash.exe
+        var dir = path.dirname(line);
+        for (var hops = 0; hops < 3 && dir; hops++) {
+          candidates.push(path.join(dir, "bin", "bash.exe"));
+          candidates.push(path.join(dir, "usr", "bin", "bash.exe"));
+          var parent = path.dirname(dir);
+          if (parent === dir) {
+            break;
+          }
+          dir = parent;
+        }
+      }
+    }
+  } catch (_) {
+    // 静默（C10）
+  }
+  candidates.push("C:\\Program Files\\Git\\bin\\bash.exe");
+  candidates.push("C:\\Program Files (x86)\\Git\\bin\\bash.exe");
+  return candidates;
+}
+
+/** 执行用户原 statusline 命令并透传输出（失败写占位文本，C10 保持：不写 stderr、exit 0） */
 function runUserCommand(cmd, input) {
   try {
-    // ~ 展开（claude 配置允许 ~ 前缀；cmd/shell 不展开）
-    var resolved = cmd.replace(/^~(?=[/\\])/, os.homedir());
+    // B11: 先剥最外层成对引号（桥接残留形态如 "~/.claude/xxx.sh"）——
+    // 旧实现的 ~ 展开与 .sh 判定作用于带引号串会双双失配，落系统 shell 分支
+    var trimmed = cmd.trim();
+    if (
+      trimmed.length >= 2 &&
+      ((trimmed[0] === '"' && trimmed[trimmed.length - 1] === '"') ||
+        (trimmed[0] === "'" && trimmed[trimmed.length - 1] === "'"))
+    ) {
+      trimmed = trimmed.slice(1, -1);
+    }
+    // ~ 展开（claude 配置允许 ~ 前缀；cmd/shell 不展开）——剥引号后串首才是 ~
+    var resolved = trimmed.replace(/^~(?=[/\\])/, os.homedir());
     // .sh 脚本经 bash（Git Bash）执行；其余交系统 shell（.exe/.cmd 等）
     var isSh = /\.sh(\s|$)/.test(resolved);
-    var r = isSh
-      ? spawnSync("bash", ["-c", resolved], {
-          input: input,
-          encoding: "utf8",
-          windowsHide: true,
-        })
-      : spawnSync(resolved, {
-          shell: true,
+    var r;
+    if (isSh) {
+      // B16: bash -c 的词法会吃掉未加引号的反斜杠（C:\Users → C:Users → 127）——
+      // 先转正斜杠（Git Bash 接受 C:/Users/... 形态）
+      var fwd = resolved.replace(/\\/g, "/");
+      // B16: Windows 原生 PATH 通常无 bash（仅 Git\cmd）——候选试错：
+      // PATH 的 bash → git.exe 推导同根 Git\bin/bash.exe → 常见固定路径
+      var candidates = bashCandidates();
+      r = null;
+      for (var i = 0; i < candidates.length; i++) {
+        r = spawnSync(candidates[i], ["-c", fwd], {
           input: input,
           encoding: "utf8",
           windowsHide: true,
         });
-    if (r && r.stdout) {
+        if (!r.error) {
+          break;
+        }
+      }
+    } else {
+      r = spawnSync(resolved, {
+        shell: true,
+        input: input,
+        encoding: "utf8",
+        windowsHide: true,
+      });
+    }
+    // B11: 透传失败（bash 缺失/命令不存在/非零退出且无输出）→ 输出占位文本，
+    // TUI 状态行可见故障；不写 stderr、exit 恒 0（C10 不变）
+    if (r && r.error) {
+      process.stdout.write("[slterm-statusline: 命令执行失败]");
+    } else if (r && r.status !== 0 && (!r.stdout || r.stdout.trim() === "")) {
+      process.stdout.write("[slterm-statusline: 命令执行失败]");
+    } else if (r && r.stdout) {
       process.stdout.write(r.stdout);
     }
   } catch (_) {
-    // 静默（C10）
+    // B11: 异常同样输出占位而非完全静默（C10 保持：不写 stderr）
+    try {
+      process.stdout.write("[slterm-statusline: 命令执行失败]");
+    } catch (_) {
+      // 极端情况下 stdout 也不可用——静默（C10）
+    }
   }
 }
