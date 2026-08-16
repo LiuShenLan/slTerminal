@@ -130,7 +130,7 @@ describe("HtmlPanel", () => {
     const { getByText } = renderHtmlPanel("C:/test/index.html");
     await waitForError(getByText, "加载失败: fail");
     const el = getByText("加载失败: fail");
-    expect(el.style.color).toBe("rgb(227, 95, 108)");
+    expect(el.style.color).toBe("rgb(217, 112, 107)");
   });
 
   it("filePath 为 undefined 显示错误", () => {
@@ -142,7 +142,7 @@ describe("HtmlPanel", () => {
     mocks.mockReadFile.mockReturnValue(new Promise(() => {}));
     const { container } = renderHtmlPanel("C:/test/index.html");
     const outerDiv = container.firstChild as HTMLElement;
-    expect(outerDiv.style.background).toBe("rgb(30, 31, 34)");
+    expect(outerDiv.style.background).toBe("rgb(10, 10, 11)");
   });
 
   it("iframe 样式填满容器", async () => {

@@ -6,10 +6,10 @@
 //
 // 求值时机保证：本文件首次求值发生在 setActive 之后——
 // main.tsx 启动序列先注册内置方案 + setActive，再 import 本文件；
-// 测试环境无启动序列，getActive() 默认 darcula，值正确。
+// 测试环境无启动序列，getActive() 默认 linear，值正确。
 
 import { schemeRegistry } from "./schemeRegistry";
-import "./schemes"; // side-effect：注册内置方案（darcula），保证 getActive() 恒有值（测试环境无 main.tsx）
+import "./schemes"; // side-effect：注册内置方案（linear），保证 getActive() 恒有值（测试环境无 main.tsx）
 
 // 取当前 active 方案的 ui 段（模块加载时求值一次，方案切换后重新 import 生效）
 const { ui } = schemeRegistry.getActive();
@@ -79,6 +79,21 @@ export const EXPLORER_SELECTION_BG = ui.explorerSelectionBg;
 // 阈值由组件逻辑决定：≥90 critical，≥70 high，≥50 medium，else low。
 
 export const AGENT_STATUS_USAGE_COLORS = ui.agentStatusUsage;
+
+// --- 强调派生前景色（ui.accentFg）---
+// 活动栏激活图标 / 状态行模型段文字
+
+export const ACCENT_FG = ui.accentFg;
+
+// --- 选中行 hover 背景（ui.selectionHoverBg）---
+// 导航树/文件树/侧栏选中行悬停背景（accent-dim-2）
+
+export const SELECTION_HOVER_BG = ui.selectionHoverBg;
+
+// --- 自绘标题栏 chrome 底（ui.titlebarBg）---
+// TitleBar 容器背景（明度阶梯 l2）
+
+export const TITLEBAR_BG = ui.titlebarBg;
 
 // --- CSS 变量桥接（供 App.css :root 变量从 token 取值）---
 // main.tsx 将本对象注入 document.documentElement，App.css 仅通过 var() 引用。

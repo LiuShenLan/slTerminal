@@ -1,11 +1,11 @@
 // overrides.test.ts — overrides.ts 四导出单元测试（TST-03，spec §7.2）
 //
 // 测试策略：
-// - 真实 schemeRegistry 单例 + 真实 darcula 方案；beforeEach 经 _reset() + register(darcula)
+// - 真实 schemeRegistry 单例 + 真实 linear 方案；beforeEach 经 _reset() + register(linear)
 //   还原隔离（照 tab-title-registry.test.ts 先例，_reset 仅测试用）
 // - 模块加载序：side-effect import "../theme/schemes" 必须先于 "../theme/overrides" 求值——
 //   editorTheme 为模块级常量（overrides.ts 头注释契约），加载时读取 getActive()，
-//   依赖 darcula 已注册（照 colors.ts 内部 import "./schemes" 的同一保护模式）
+//   依赖 linear 已注册（照 colors.ts 内部 import "./schemes" 的同一保护模式）
 // - editorColorOverrides 用真实 @codemirror/view：EditorState.create 消费扩展后经
 //   EditorView.styleModule facet 取 StyleModule，getRules() 断言规则值来自 active 方案
 //   （style-mod 编译后值原样保留，实测验证；选择器前缀每次调用随机生成，故只按值断言）
@@ -18,16 +18,17 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { EditorState, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 
-// side-effect：注册内置 darcula（必须先于 overrides 求值）
+// side-effect：注册内置 linear（必须先于 overrides 求值）
 import "../theme/schemes";
 import { schemeRegistry } from "../theme/schemeRegistry";
-import { darcula } from "../theme/schemes/darcula";
+import { linear } from "../theme/schemes/linear";
 import type { ColorScheme } from "../theme/schemes/types";
 import {
   dockviewVarStyle,
   allotmentVarStyle,
   editorTheme,
   editorColorOverrides,
+  editorSyntaxHighlight,
 } from "../theme/overrides";
 
 /** 提取 CM6 主题扩展编译后的 CSS 规则文本——EditorState.create 验证 + styleModule facet 读取 */
@@ -54,10 +55,10 @@ function ruleForValue(
 }
 
 describe("overrides", () => {
-  // 每用例独立：清空注册表 + active 复位 darcula + 重注册内置方案
+  // 每用例独立：清空注册表 + active 复位 linear + 重注册内置方案
   beforeEach(() => {
     schemeRegistry._reset();
-    schemeRegistry.register(darcula);
+    schemeRegistry.register(linear);
   });
 
   describe("dockviewVarStyle", () => {
@@ -67,9 +68,9 @@ describe("overrides", () => {
       for (const key of Object.keys(style)) {
         expect(key).toMatch(/^--dv-/);
       }
-      // active = darcula：与 getActive() 及内置方案值均一致
+      // active = linear：与 getActive() 及内置方案值均一致
       expect(style).toEqual(schemeRegistry.getActive().libraries.dockview);
-      expect(style).toEqual(darcula.libraries.dockview);
+      expect(style).toEqual(linear.libraries.dockview);
     });
   });
 
@@ -78,19 +79,19 @@ describe("overrides", () => {
       const style = allotmentVarStyle();
       expect(Object.keys(style)).toHaveLength(2);
       expect(style).toEqual({
-        "--separator-border": darcula.libraries.allotment.separatorBorder,
-        "--focus-border": darcula.libraries.allotment.focusBorder,
+        "--separator-border": linear.libraries.allotment.separatorBorder,
+        "--focus-border": linear.libraries.allotment.focusBorder,
       });
       // 值非空守卫
-      expect(darcula.libraries.allotment.separatorBorder).not.toBe("");
-      expect(darcula.libraries.allotment.focusBorder).not.toBe("");
+      expect(linear.libraries.allotment.separatorBorder).not.toBe("");
+      expect(linear.libraries.allotment.focusBorder).not.toBe("");
     });
   });
 
   describe("editorTheme", () => {
-    it("引用 === active 方案 editor 段 theme（darcula = oneDark 透出）", () => {
+    it("引用 === active 方案 editor 段 theme（linear = oneDark 透出）", () => {
       expect(editorTheme).toBe(schemeRegistry.getActive().editor.theme);
-      expect(editorTheme).toBe(darcula.editor.theme);
+      expect(editorTheme).toBe(linear.editor.theme);
       expect(editorTheme).toBeTruthy();
     });
   });
@@ -104,12 +105,12 @@ describe("overrides", () => {
       expect(modules).not.toHaveLength(0);
       const rules = modules.map((m) => m.getRules()).join("\n");
       // background 键
-      expect(rules).toContain(darcula.editor.overrides.background);
+      expect(rules).toContain(linear.editor.overrides.background);
       // searchMatch 键（match 背景 + outline 描边）
-      expect(rules).toContain(darcula.editor.overrides.searchMatch.match);
-      expect(rules).toContain(darcula.editor.overrides.searchMatch.matchOutline);
+      expect(rules).toContain(linear.editor.overrides.searchMatch.match);
+      expect(rules).toContain(linear.editor.overrides.searchMatch.matchOutline);
       // lint 键：波浪线 SVG 内色值经 encodeURIComponent 编码（# → %23）
-      expect(rules).toContain(encodeURIComponent(darcula.editor.overrides.lint.error));
+      expect(rules).toContain(encodeURIComponent(linear.editor.overrides.lint.error));
     });
 
     it("层叠胜出（ACC-05 修复守卫）：与 oneDark 竞争的规则选择器带 .cm-editor 前缀", () => {
@@ -119,7 +120,7 @@ describe("overrides", () => {
       // （0,2,0 > oneDark .ͼo 0,1,0），searchMatch 三键用 .ͼx.cm-editor .cm-searchMatch
       // （0,3,0 > oneDark .ͼo .cm-searchMatch 0,2,0），胜负与扩展数组顺序无关。
       const rules = themeRules(editorColorOverrides());
-      const { overrides } = darcula.editor;
+      const { overrides } = linear.editor;
 
       // background：选择器 = .ͼx.cm-editor
       const bgRule = ruleForValue(rules, overrides.background);
@@ -139,9 +140,15 @@ describe("overrides", () => {
       );
 
       // selectionMatch：选择器 = .ͼx.cm-editor .cm-selectionMatch
-      const selectionMatchRule = ruleForValue(rules, overrides.searchMatch.selectionMatch);
-      expect(selectionMatchRule).not.toBeNull();
-      expect(selectionMatchRule!.selector).toMatch(/^\.ͼ[0-9a-z]+\.cm-editor \.cm-selectionMatch$/);
+      // 注意：附录 A 契约下 match 与 selectionMatch 同为 rgba(214,178,94,0.25)，
+      // ruleForValue 按值定位会误命中 match 规则——改按选择器定位（守卫形态不变）
+      const selectionMatchLine = rules
+        .split("\n")
+        .find((line) => line.includes(".cm-selectionMatch"));
+      expect(selectionMatchLine).toBeDefined();
+      expect(selectionMatchLine!.slice(0, selectionMatchLine!.indexOf("{")).trim()).toMatch(
+        /^\.ͼ[0-9a-z]+\.cm-editor \.cm-selectionMatch$/,
+      );
 
       // 无前缀裸规则不存在（防回归：若又写回与 oneDark 平级的 .cm-searchMatch 选择器，
       // 层叠胜负回到 by-order，此断言失败）
@@ -151,7 +158,7 @@ describe("overrides", () => {
     it("两连调用规则值同源——均来自 active 方案 editor.overrides 全 12 值", () => {
       // 选择器前缀每次调用随机生成（StyleModule.newName），值原样保留——只按值断言
       const assertAllOverrideValues = (rules: string) => {
-        const { overrides } = darcula.editor;
+        const { overrides } = linear.editor;
         const plain = [
           overrides.background,
           overrides.searchMatch.match,
@@ -177,22 +184,35 @@ describe("overrides", () => {
     });
   });
 
+  describe("editorSyntaxHighlight", () => {
+    it("导出存在且为函数（TH-07 新增导出）", () => {
+      expect(typeof editorSyntaxHighlight).toBe("function");
+    });
+
+    it("返回合法 CM6 扩展（EditorState.create 可消费，不抛异常）", () => {
+      const ext = editorSyntaxHighlight();
+      expect(() => {
+        EditorState.create({ extensions: [ext] });
+      }).not.toThrow();
+    });
+  });
+
   describe("setActive 切换", () => {
     it("切换后函数形导出跟随 active 方案（editorTheme 常量契约不重绑定）", () => {
-      // 临时方案：darcula 基础上改三处单色（dockview 1 条 / allotment 1 键 / editor background）
+      // 临时方案：linear 基础上改三处单色（dockview 1 条 / allotment 1 键 / editor background）
       const testScheme: ColorScheme = {
-        ...darcula,
+        ...linear,
         id: "overrides-test",
         label: "Overrides Test",
         libraries: {
-          ...darcula.libraries,
+          ...linear.libraries,
           dockview: {
-            ...darcula.libraries.dockview,
+            ...linear.libraries.dockview,
             "--dv-group-view-background-color": "#123456",
           },
-          allotment: { ...darcula.libraries.allotment, separatorBorder: "#654321" },
+          allotment: { ...linear.libraries.allotment, separatorBorder: "#654321" },
         },
-        editor: { ...darcula.editor, overrides: { ...darcula.editor.overrides, background: "#010203" } },
+        editor: { ...linear.editor, overrides: { ...linear.editor.overrides, background: "#010203" } },
       };
       schemeRegistry.register(testScheme);
       schemeRegistry.setActive("overrides-test");
@@ -203,15 +223,15 @@ describe("overrides", () => {
       expect(themeRules(editorColorOverrides())).toContain("#010203");
 
       // editorTheme 为模块级常量（加载时求值，main.tsx 启动序列保证），不随 setActive 重绑定；
-      // 临时方案 editor.theme 与 darcula 同一引用（spread），两态下引用相等断言均成立
+      // 临时方案 editor.theme 与 linear 同一引用（spread），两态下引用相等断言均成立
       expect(editorTheme).toBe(schemeRegistry.getActive().editor.theme);
-      expect(editorTheme).toBe(darcula.editor.theme);
+      expect(editorTheme).toBe(linear.editor.theme);
 
-      // _reset 还原：清空注册表 + active 复位 darcula + 重注册
+      // _reset 还原：清空注册表 + active 复位 linear + 重注册
       schemeRegistry._reset();
-      schemeRegistry.register(darcula);
-      expect(schemeRegistry.getActive().id).toBe("darcula");
-      expect(dockviewVarStyle()).toEqual(darcula.libraries.dockview);
+      schemeRegistry.register(linear);
+      expect(schemeRegistry.getActive().id).toBe("linear");
+      expect(dockviewVarStyle()).toEqual(linear.libraries.dockview);
     });
   });
 });

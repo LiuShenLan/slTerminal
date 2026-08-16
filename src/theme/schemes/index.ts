@@ -7,7 +7,7 @@
 // 消费方（colors.ts facade / overrides.ts）无需任何改动。
 
 import { schemeRegistry } from "../schemeRegistry";
-import { darcula } from "./darcula";
+import { linear } from "./linear";
 
-// 注册内置默认方案（id "darcula" 即 settings.json colorScheme 段缺省取值）
-schemeRegistry.register(darcula);
+// 注册内置默认方案（id "linear" 即 settings.json colorScheme 段缺省取值）
+schemeRegistry.register(linear);

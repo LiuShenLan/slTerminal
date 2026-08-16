@@ -61,11 +61,18 @@ function createMockDataTransfer(initial: Record<string, string> = {}) {
   };
 }
 
+/** 色值 → jsdom 归一化形态（#hex → "rgb(r, g, b)"；rgba 输入补空格 → "rgba(r, g, b, a)"） */
 function hexToRgb(hex: string): string {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  return `rgb(${r}, ${g}, ${b})`;
+  if (hex.startsWith("#")) {
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    return `rgb(${r}, ${g}, ${b})`;
+  }
+  // 新方案 selection 类 token 为 rgba 形态，jsdom 输出 "rgba(r, g, b, a)"
+  const m = hex.match(/^rgba\((\d+),(\d+),(\d+),([0-9.]+)\)$/);
+  if (m) return `rgba(${m[1]}, ${m[2]}, ${m[3]}, ${m[4]})`;
+  return hex;
 }
 
 function dispatchDragEvent(

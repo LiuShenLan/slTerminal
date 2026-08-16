@@ -2,16 +2,16 @@
 //
 // 消费注释粒度：区域级（语义 + 消费区域/组件），行号不入注释（决策 D8）；
 // 高频 token 标引用计数 +「以 grep 为准」。
-// darcula.ts 等值文件的对象字面量标注 : ColorScheme 后，
+// linear.ts 等值文件的对象字面量标注 : ColorScheme 后，
 // 编辑器 hover 槽位即显示本文件的 JSDoc——注释单点不漂移，新方案零注释负担。
-// 注释双处并存（2026-08-08 用户需求）：内置默认方案 darcula.ts 另含 UI 区域速查
-// （逐值标注影响的前端区域），本文件为权威，两者保持一致。
+// 内置默认方案 linear.ts 文件头另含 fail-safe 交叉引用（启动链静态硬编码色登记），
+// 本文件为权威，两者保持一致。
 
 import type { Extension } from "@codemirror/state";
 
 /** 配色方案（Color Scheme）——一套完整配色定义的注册单元，仅暗色系（项目定位约束） */
 export interface ColorScheme {
-  /** 方案唯一 id——settings.json colorScheme 段取值（缺省/未知 → 回退 darcula） */
+  /** 方案唯一 id——settings.json colorScheme 段取值（缺省/未知 → 回退 linear） */
   id: string;
   /** 展示名（未来设置 UI 枚举用，D3 预留） */
   label: string;
@@ -76,7 +76,7 @@ export interface UiTokens {
     /** 临界用量（≥90%） */ critical: string;
   };
 
-  // --- 标量（23 键）---
+  // --- 标量（26 键）---
   /** 全部面板背景（21 处，以 grep 为准） */
   panelBg: string;
   /** 右键菜单底色（4 处） */
@@ -123,6 +123,12 @@ export interface UiTokens {
   onAccentFg: string;
   /** 文件树/历史行选中背景 */
   explorerSelectionBg: string;
+  /** 强调派生前景色——活动栏激活图标/状态行模型段文字 */
+  accentFg: string;
+  /** 选中行 hover（accent-dim-2）——导航树/文件树/侧栏选中行悬停背景 */
+  selectionHoverBg: string;
+  /** 自绘标题栏 chrome 底（明度阶梯 l2）——TitleBar 容器背景 */
+  titlebarBg: string;
 }
 
 /** xterm 调色板——25 键，ITheme 兼容（经 panels/terminal/theme.ts adapter 展开进 ITheme） */
@@ -159,7 +165,7 @@ export interface TerminalPalette {
 
 /** CM 主题引用 + 覆盖——4 个 oneDark 导入点经 overrides.ts 替换为 editorTheme + editorColorOverrides() */
 export interface EditorScheme {
-  /** CM 基础主题引用——darcula = oneDark（@codemirror/theme-one-dark 直 import 透出，D6） */
+  /** CM 基础主题引用——linear = oneDark（@codemirror/theme-one-dark 直 import 透出，D6） */
   theme: Extension;
   /** 编辑器颜色覆盖（EditorView.theme 规则，dark: true） */
   overrides: {
@@ -182,6 +188,24 @@ export interface EditorScheme {
       /** 选中匹配背景 */ selected: string;
       /** 多匹配整体背景 */ selectionMatch: string;
     };
+    /** 语法高亮 token 色——CM 正文 token 着色（HighlightStyle 映射，经 overrides.ts editorSyntaxHighlight 应用） */
+    syntax: {
+      /** 属性名 */ property: string;
+      /** 字符串 */ string: string;
+      /** 数字 */ number: string;
+      /** 关键字 */ keyword: string;
+      /** 函数名 */ function: string;
+      /** 类型名 */ type: string;
+      /** 运算符 */ operator: string;
+      /** 标点 */ punctuation: string;
+      /** 注释 */ comment: string;
+    };
+    /** 正文前景色——editorColorOverrides .cm-content 规则 */
+    plainText: string;
+    /** 行号前景色——editorColorOverrides gutter 规则 */
+    lineNumber: string;
+    /** 活跃行行号前景色——editorColorOverrides gutter 规则 */
+    lineNumberActive: string;
   };
 }
 

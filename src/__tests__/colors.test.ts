@@ -1,13 +1,14 @@
 // colors.test.ts — theme/colors.ts 配色 token 单元测试
 //
-// colors.ts 为 facade：值代理 schemeRegistry.getActive()（默认 darcula），
-// 测试断言值即 darcula 方案值（删除死配置与新增 ON_ACCENT_FG 见 C1 清单）。
+// colors.ts 为 facade：值代理 schemeRegistry.getActive()（默认 linear），
+// 测试断言值即 linear 方案值（值契约见 docs/ui-redesign-impl/checklist.md 附录 A；
+// 删除死配置与新增 ON_ACCENT_FG 见 C1 清单）。
 //
 // 覆盖路径：
 //   1. GIT_FILE_COLORS 7 个 token 均为合法 hex
 //   2. GIT_GUTTER_COLORS 3 个 token 均为合法 hex
 //   3. EXPLORER_COLORS 5 个 token
-//   4. 通用 UI 色 24 个独立 token
+//   4. 通用 UI 色 27 个独立 token（24 既有 + accentFg/selectionHoverBg/titlebarBg 3 新增）
 //   5. ROOT_CSS_VARS 键集合 --sl-bg-primary / --sl-fg-primary
 //   6. theme/index.ts 重导出所有 token
 
@@ -31,14 +32,17 @@ import {
   INPUT_BG,
   INPUT_BORDER,
   FOCUS_BORDER,
+  ACCENT_FG,
   ACTIVE_SELECTION_BG,
   EXPLORER_SELECTION_BG,
+  SELECTION_HOVER_BG,
   SEPARATOR_BG,
   CONTEXT_MENU_BORDER,
   SHADOW_MENU,
   HTML_PANEL_LOADING_FG,
   HTML_PANEL_IFRAME_BG,
   ON_ACCENT_FG,
+  TITLEBAR_BG,
   ERROR_BANNER_BG,
   ERROR_BANNER_BORDER,
   ERROR_BANNER_FG,
@@ -53,13 +57,13 @@ describe("theme/colors.ts 配色 token", () => {
     });
 
     const cases = [
-      { key: "modified", expected: "#70aeff" },
-      { key: "added", expected: "#73bd79" },
-      { key: "untracked", expected: "#e88f89" },
-      { key: "deleted", expected: "#6f737a" },
-      { key: "renamed", expected: "#3A8484" },
-      { key: "conflict", expected: "#D5756C" },
-      { key: "ignored", expected: "#d69a6b" },
+      { key: "modified", expected: "#d6b25e" },
+      { key: "added", expected: "#86bb7a" },
+      { key: "untracked", expected: "#6fbfc4" },
+      { key: "deleted", expected: "#d9706b" },
+      { key: "renamed", expected: "#6e9ff2" },
+      { key: "conflict", expected: "#d9706b" },
+      { key: "ignored", expected: "#6b675f" },
     ];
 
     it.each(cases)(
@@ -77,9 +81,9 @@ describe("theme/colors.ts 配色 token", () => {
     });
 
     const gutterCases = [
-      { key: "modified", expected: "#375fad" },
-      { key: "added", expected: "#549159" },
-      { key: "deleted", expected: "#868a91" },
+      { key: "modified", expected: "#d6b25e" },
+      { key: "added", expected: "#86bb7a" },
+      { key: "deleted", expected: "#d9706b" },
     ];
 
     it.each(gutterCases)(
@@ -96,11 +100,11 @@ describe("theme/colors.ts 配色 token", () => {
     });
 
     const explorerCases = [
-      { key: "bg", expected: "#191a1c" },
-      { key: "fg", expected: "#d1d3d9" },
-      { key: "hover", expected: "#2a4371" },
-      { key: "arrowClosed", expected: "#b4b8bf" },
-      { key: "arrowOpen", expected: "#b4b8bf" },
+      { key: "bg", expected: "#101012" },
+      { key: "fg", expected: "#b3aea6" },
+      { key: "hover", expected: "#222227" },
+      { key: "arrowClosed", expected: "#8a857d" },
+      { key: "arrowOpen", expected: "#8a857d" },
     ];
 
     it.each(explorerCases)(
@@ -117,12 +121,12 @@ describe("theme/colors.ts 配色 token", () => {
     });
 
     const sidebarCases = [
-      { key: "bg", expected: "#191a1c" },
-      { key: "fg", expected: "#d1d3d9" },
-      { key: "hover", expected: "#494f52" },
-      { key: "selected", expected: "#2a4371" },
-      { key: "border", expected: "#26282c" },
-      { key: "contextMenuBorder", expected: "#33353b" },
+      { key: "bg", expected: "#101012" },
+      { key: "fg", expected: "#b3aea6" },
+      { key: "hover", expected: "#222227" },
+      { key: "selected", expected: "rgba(110,159,242,0.13)" },
+      { key: "border", expected: "rgba(255,255,255,0.055)" },
+      { key: "contextMenuBorder", expected: "rgba(255,255,255,0.09)" },
     ];
 
     it.each(sidebarCases)(
@@ -134,7 +138,7 @@ describe("theme/colors.ts 配色 token", () => {
 
     it("contextMenuShadow 为合法阴影字符串", () => {
       expect(SIDEBAR_COLORS.contextMenuShadow).toMatch(
-        /^0 4px 12px rgba\(0,0,0,0\.5\)$/,
+        /^0 8px 32px rgba\(0,0,0,0\.35\)$/,
       );
     });
   });
@@ -142,46 +146,51 @@ describe("theme/colors.ts 配色 token", () => {
   describe("通用 UI 色（独立 token）", () => {
     const uiTokenCases = [
       // 背景色
-      { name: "PANEL_BG", value: PANEL_BG, expected: "#1e1f22" },
-      { name: "SIDEBAR_BG", value: SIDEBAR_BG, expected: "#26282c" },
-      { name: "SECONDARY_BG", value: SECONDARY_BG, expected: "#2D2D2D" },
-      { name: "APP_BG", value: APP_BG, expected: "#1e1f22" },
-      { name: "APP_BG_PRIMARY", value: APP_BG_PRIMARY, expected: "#1e1f22" },
-      { name: "EDITOR_BG", value: EDITOR_BG, expected: "#1e1f22" },
+      { name: "PANEL_BG", value: PANEL_BG, expected: "#0a0a0b" },
+      { name: "SIDEBAR_BG", value: SIDEBAR_BG, expected: "#1a1a1e" },
+      { name: "SECONDARY_BG", value: SECONDARY_BG, expected: "#222227" },
+      { name: "APP_BG", value: APP_BG, expected: "#0a0a0b" },
+      { name: "APP_BG_PRIMARY", value: APP_BG_PRIMARY, expected: "#0a0a0b" },
+      { name: "EDITOR_BG", value: EDITOR_BG, expected: "#0a0a0b" },
       // 前景/文字色
-      { name: "SIDEBAR_FG", value: SIDEBAR_FG, expected: "#bcbec4" },
-      { name: "ERROR_FG", value: ERROR_FG, expected: "#e35f6c" },
-      { name: "PLACEHOLDER_FG", value: PLACEHOLDER_FG, expected: "#4c4f56" },
-      { name: "BUTTON_FG", value: BUTTON_FG, expected: "#d1d3d9" },
-      { name: "DIM_FG", value: DIM_FG, expected: "#999999" },
+      { name: "SIDEBAR_FG", value: SIDEBAR_FG, expected: "#ece9e4" },
+      { name: "ERROR_FG", value: ERROR_FG, expected: "#d9706b" },
+      { name: "PLACEHOLDER_FG", value: PLACEHOLDER_FG, expected: "#6b675f" },
+      { name: "BUTTON_FG", value: BUTTON_FG, expected: "#ece9e4" },
+      { name: "DIM_FG", value: DIM_FG, expected: "#8a857d" },
       // 交互控件色
-      { name: "INPUT_BG", value: INPUT_BG, expected: "#191a1c" },
-      { name: "INPUT_BORDER", value: INPUT_BORDER, expected: "#40434a" },
-      { name: "FOCUS_BORDER", value: FOCUS_BORDER, expected: "#2a4371" },
-      { name: "ACTIVE_SELECTION_BG", value: ACTIVE_SELECTION_BG, expected: "#2a4371" },
-      { name: "EXPLORER_SELECTION_BG", value: EXPLORER_SELECTION_BG, expected: "#2a4371" },
-      { name: "SEPARATOR_BG", value: SEPARATOR_BG, expected: "#313438" },
-      { name: "CONTEXT_MENU_BORDER", value: CONTEXT_MENU_BORDER, expected: "#33353b" },
+      { name: "INPUT_BG", value: INPUT_BG, expected: "#1a1a1e" },
+      { name: "INPUT_BORDER", value: INPUT_BORDER, expected: "rgba(255,255,255,0.09)" },
+      { name: "FOCUS_BORDER", value: FOCUS_BORDER, expected: "#6e9ff2" },
+      { name: "ACCENT_FG", value: ACCENT_FG, expected: "#8fb4f5" },
+      { name: "ACTIVE_SELECTION_BG", value: ACTIVE_SELECTION_BG, expected: "rgba(110,159,242,0.13)" },
+      { name: "EXPLORER_SELECTION_BG", value: EXPLORER_SELECTION_BG, expected: "rgba(110,159,242,0.13)" },
+      { name: "SELECTION_HOVER_BG", value: SELECTION_HOVER_BG, expected: "rgba(110,159,242,0.22)" },
+      { name: "SEPARATOR_BG", value: SEPARATOR_BG, expected: "rgba(255,255,255,0.055)" },
+      { name: "CONTEXT_MENU_BORDER", value: CONTEXT_MENU_BORDER, expected: "rgba(255,255,255,0.09)" },
       // HTML 面板色
-      { name: "HTML_PANEL_LOADING_FG", value: HTML_PANEL_LOADING_FG, expected: "#bcbec4" },
+      { name: "HTML_PANEL_LOADING_FG", value: HTML_PANEL_LOADING_FG, expected: "#8a857d" },
       { name: "HTML_PANEL_IFRAME_BG", value: HTML_PANEL_IFRAME_BG, expected: "#FFFFFF" },
       // 强调底色前景
-      { name: "ON_ACCENT_FG", value: ON_ACCENT_FG, expected: "#bcbec4" },
+      { name: "ON_ACCENT_FG", value: ON_ACCENT_FG, expected: "#0c1220" },
+      // 标题栏
+      { name: "TITLEBAR_BG", value: TITLEBAR_BG, expected: "#141416" },
       // 错误提示色
-      { name: "ERROR_BANNER_BG", value: ERROR_BANNER_BG, expected: "#5A1D1D" },
-      { name: "ERROR_BANNER_BORDER", value: ERROR_BANNER_BORDER, expected: "#8B0000" },
-      { name: "ERROR_BANNER_FG", value: ERROR_BANNER_FG, expected: "#F48771" },
+      { name: "ERROR_BANNER_BG", value: ERROR_BANNER_BG, expected: "rgba(217,112,107,0.12)" },
+      { name: "ERROR_BANNER_BORDER", value: ERROR_BANNER_BORDER, expected: "#d9706b" },
+      { name: "ERROR_BANNER_FG", value: ERROR_BANNER_FG, expected: "#ece9e4" },
     ];
 
-    it("共 24 个 UI token", () => {
-      expect(uiTokenCases).toHaveLength(24);
+    it("共 27 个 UI token", () => {
+      expect(uiTokenCases).toHaveLength(27);
     });
 
     it.each(uiTokenCases)(
-      "$name 为合法 6 位 hex ($expected)",
+      "$name 为合法色值（hex 或 rgba）($expected)",
       ({ expected }: { expected: string }) => {
-        // SEPARATOR_BG 是 '#444'（3 位简写），也视为合法
-        expect(expected).toMatch(/^#[0-9A-Fa-f]{3,6}$/);
+        // 附录 A 中 rgba 形态（inputBorder/selection 系列/separator 等）与 hex 并存，
+        // 一律视为合法
+        expect(expected).toMatch(/^(#[0-9A-Fa-f]{3,6}|rgba?\([\d\s.,%]+\))$/);
       },
     );
 
@@ -194,8 +203,8 @@ describe("theme/colors.ts 配色 token", () => {
   });
 
   describe("SHADOW_MENU（上下文菜单阴影色，FE-24）", () => {
-    it("值为 rgba(0,0,0,0.5)", () => {
-      expect(SHADOW_MENU).toBe("rgba(0,0,0,0.5)");
+    it("值为 rgba(0,0,0,0.55)", () => {
+      expect(SHADOW_MENU).toBe("rgba(0,0,0,0.55)");
     });
 
     it("为非空字符串", () => {
@@ -215,10 +224,10 @@ describe("theme/colors.ts 配色 token", () => {
     });
 
     const usageCases = [
-      { key: "low", expected: "#73bd79" },
-      { key: "medium", expected: "#BBB529" },
-      { key: "high", expected: "#FFAF00" },
-      { key: "critical", expected: "#e35f6c" },
+      { key: "low", expected: "#86bb7a" },
+      { key: "medium", expected: "#a9c686" },
+      { key: "high", expected: "#d6b25e" },
+      { key: "critical", expected: "#d9706b" },
     ];
 
     it.each(usageCases)(
@@ -241,8 +250,8 @@ describe("theme/colors.ts 配色 token", () => {
       expect(ROOT_CSS_VARS["--sl-bg-primary"]).toBe(APP_BG_PRIMARY);
     });
 
-    it("--sl-fg-primary 值为 #bcbec4", () => {
-      expect(ROOT_CSS_VARS["--sl-fg-primary"]).toBe("#bcbec4");
+    it("--sl-fg-primary 值为 #b3aea6", () => {
+      expect(ROOT_CSS_VARS["--sl-fg-primary"]).toBe("#b3aea6");
     });
 
     it("所有值均为非空字符串", () => {

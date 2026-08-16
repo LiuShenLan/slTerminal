@@ -30,9 +30,9 @@ describe("main.tsx bootstrap", () => {
       "[slTerminal]",
       expect.stringContaining("Tauri IPC 初始化超时"),
     );
-    // 页面显示错误信息（暗色错误样式 #e35f6c）——非白屏
+    // 页面显示错误信息（暗色错误样式 #d9706b）——非白屏
     expect(document.body.innerHTML).toContain("Tauri IPC 初始化超时");
-    expect(document.body.innerHTML).toContain("#e35f6c");
+    expect(document.body.innerHTML).toContain("#d9706b");
     // 未挂载 React（无 App 启动中文案）
     expect(document.body.innerHTML).not.toContain("slTerminal 启动中");
   });

@@ -22,7 +22,7 @@ import { useFontSizeWheel } from "../../lib/useFontSizeWheel";
 import { FONT_SIZE_MIN, FONT_SIZE_MAX } from "../../stores/fontSize";
 import { usePanelFocus } from "../../features/shortcuts";
 import { setActiveEditor, clearActiveEditor, type EditorActions } from "../editor/activeEditor";
-import { EDITOR_BG, ERROR_FG, HTML_PANEL_LOADING_FG, PANEL_BG, editorTheme, editorColorOverrides } from "../../theme";
+import { EDITOR_BG, ERROR_FG, HTML_PANEL_LOADING_FG, PANEL_BG, editorTheme, editorColorOverrides, editorSyntaxHighlight } from "../../theme";
 
 /** GitShowPanel 接收的面板参数 */
 interface GitShowPanelProps {
@@ -139,6 +139,8 @@ const GitShowPanel: React.FC<GitShowPanelProps> = ({ params }) => {
         doc: displayText,
         extensions: [
           basicSetup,
+          // 语法高亮置于 editorTheme 之前（reverse 层叠后自定义规则排最后=恒胜，ACC-05）
+          editorSyntaxHighlight(),
           editorTheme,
           editorColorOverrides(),
           // .cm-editor 高度→.cm-scroller height:100%约束→溢出→滚动条（同 editor）

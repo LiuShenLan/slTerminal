@@ -18,10 +18,16 @@ import type { AgentHistorySession } from "../types/agentHistory";
 
 afterEach(cleanup);
 
-/** hex → "rgb(r, g, b)"（jsdom 会把 inline 色值规范化为 rgb 形式，照 activityBar.test.tsx 模式） */
+/** 色值 → jsdom 归一化形态（#hex → "rgb(r, g, b)"；rgba 输入补空格 → "rgba(r, g, b, a)"，照 activityBar.test.tsx 模式） */
 function hexToRgb(hex: string): string {
-  const n = parseInt(hex.slice(1), 16);
-  return `rgb(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255})`;
+  if (hex.startsWith("#")) {
+    const n = parseInt(hex.slice(1), 16);
+    return `rgb(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255})`;
+  }
+  // 新方案 selection 类 token 为 rgba 形态，jsdom 输出 "rgba(r, g, b, a)"
+  const m = hex.match(/^rgba\((\d+),(\d+),(\d+),([0-9.]+)\)$/);
+  if (m) return `rgba(${m[1]}, ${m[2]}, ${m[3]}, ${m[4]})`;
+  return hex;
 }
 
 /** 构造测试会话（默认值：5 分钟前、有标题、cwd 存在） */

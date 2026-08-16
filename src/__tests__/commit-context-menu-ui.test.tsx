@@ -243,9 +243,9 @@ describe("CommitFileList 右键菜单", () => {
     const menuItem = document.querySelector(
       'div[style*="position: fixed"] div',
     ) as HTMLDivElement;
-    // hover → ACTIVE_SELECTION_BG（#2a4371，jsdom 转 rgb）
+    // hover → ACTIVE_SELECTION_BG（rgba(110,159,242,0.13)，jsdom 转 rgb 形态）
     fireEvent.mouseEnter(menuItem);
-    expect(menuItem.style.background).toContain("rgb(42, 67, 113)");
+    expect(menuItem.style.background).toContain("rgba(110, 159, 242, 0.13)");
     // 移出 → 恢复透明
     fireEvent.mouseLeave(menuItem);
     expect(menuItem.style.background).toBe("transparent");

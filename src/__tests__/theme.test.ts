@@ -24,9 +24,11 @@ describe("terminalOptions 配色验证", () => {
     expect(t.cursorAccent).toMatch(HEX_COLOR);
   });
 
-  it("4. 选区色为合法 hex", () => {
+  it("4. 选区色为合法色值（hex 或 rgba）", () => {
     const t = terminalOptions.theme!;
-    expect(t.selectionBackground).toMatch(HEX_COLOR);
+    // selectionBackground 为 rgba 半透明（附录 A rgba(110,159,242,0.28)），selectionForeground 为 hex
+    const HEX_OR_RGBA = /^(#[0-9A-Fa-f]{6}|rgba\(\d{1,3},\d{1,3},\d{1,3},0?\.\d+\))$/;
+    expect(t.selectionBackground).toMatch(HEX_OR_RGBA);
     expect(t.selectionForeground).toMatch(HEX_COLOR);
   });
 

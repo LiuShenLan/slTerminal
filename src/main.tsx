@@ -25,19 +25,19 @@ async function bootstrap() {
       console.error("[slTerminal]", msg);
       document.body.innerHTML =
         `<div style="display:flex;align-items:center;justify-content:center;height:100vh;` +
-        `background:#1e1f22;color:#e35f6c;font-family:monospace;font-size:14px;padding:20px;">` +
-        msg + "</div>";
+        `background:#0a0a0b;color:#ece9e4;font-family:monospace;font-size:14px;padding:20px;">` +
+        `<span style="color:#d9706b;">` + msg + `</span></div>`;
       return;
     }
   }
 
   // ② 配色方案解析——必须在 App 模块图求值前完成（colors.ts facade 求值时取 active 方案）
   const { loadSettings } = await import("./ipc/settings");
-  const settings = await loadSettings().catch(() => null); // 失败降级 null → darcula，不阻塞启动
+  const settings = await loadSettings().catch(() => null); // 失败降级 null → linear，不阻塞启动
   const { schemeRegistry } = await import("./theme/schemeRegistry");
-  await import("./theme/schemes"); // side-effect：注册内置方案（darcula）
-  // 未知 id 回退 darcula 由注册表内部保证；非字符串（脏数据）同样回退
-  const schemeId = typeof settings?.colorScheme === "string" ? settings.colorScheme : "darcula";
+  await import("./theme/schemes"); // side-effect：注册内置方案（linear）
+  // 未知 id 回退 linear 由注册表内部保证；非字符串（脏数据）同样回退
+  const schemeId = typeof settings?.colorScheme === "string" ? settings.colorScheme : "linear";
   schemeRegistry.setActive(schemeId);
 
   // ③ 将 ROOT_CSS_VARS 注入 document.documentElement，替代 App.css :root 硬编码 hex

@@ -48,7 +48,7 @@ import { useFontSize } from "../../stores";
 import { useFontSizeWheel } from "../../lib/useFontSizeWheel";
 import { FONT_SIZE_MIN, FONT_SIZE_MAX } from "../../stores/fontSize";
 import { computeAlignment } from "./alignment";
-import { EDITOR_BG, ERROR_FG, HTML_PANEL_LOADING_FG, PANEL_BG, SEPARATOR_BG, editorTheme, editorColorOverrides } from "../../theme";
+import { EDITOR_BG, ERROR_FG, HTML_PANEL_LOADING_FG, PANEL_BG, SEPARATOR_BG, editorTheme, editorColorOverrides, editorSyntaxHighlight } from "../../theme";
 
 // ── 占位行 Widget ─────────────────────────────────────────────
 
@@ -517,6 +517,8 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ params }) => {
         doc: headContent,
         extensions: [
           basicSetup,
+          // 语法高亮置于 editorTheme 之前（reverse 层叠后自定义规则排最后=恒胜，ACC-05）
+          editorSyntaxHighlight(),
           editorTheme,
           editorColorOverrides(),
           EditorView.theme({ "&": { height: "100%" } }),
@@ -563,6 +565,8 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ params }) => {
         doc: workdirContent,
         extensions: [
           basicSetup,
+          // 语法高亮置于 editorTheme 之前（reverse 层叠后自定义规则排最后=恒胜，ACC-05）
+          editorSyntaxHighlight(),
           editorTheme,
           editorColorOverrides(),
           EditorView.theme({ "&": { height: "100%" } }),

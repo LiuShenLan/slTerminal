@@ -9,8 +9,8 @@ import { FileTree } from "../features/explorer/FileTree";
 import type { TreeNode } from "../features/explorer/useFileTree";
 import { EXPLORER_COLORS } from "../theme";
 
-// jsdom 将 #2a4371 转为 rgb(42, 67, 113)
-const HOVER_BG_RGB = "rgb(42, 67, 113)";
+// jsdom 将 #222227 转为 rgb(34, 34, 39)（hover 色，附录 A explorer.hover）
+const HOVER_BG_RGB = "rgb(34, 34, 39)";
 
 function makeFileNode(path: string, name: string, isDir = false): TreeNode {
   return {
@@ -81,8 +81,8 @@ describe("FileTree 选中模型", () => {
     const { getByText } = renderFileTree(nodes, { selectedPath: "/a/test.ts" });
     const row = getByText("test.ts").closest("div");
     expect(row).not.toBeNull();
-    // jsdom 将 #2a4371 转为 rgb(42, 67, 113)
-    expect(row!.style.background).toBe("rgb(42, 67, 113)");
+    // jsdom 将 rgba(110,159,242,0.13) 转为带空格 rgb 形态（explorerSelectionBg，附录 A）
+    expect(row!.style.background).toBe("rgba(110, 159, 242, 0.13)");
   });
 
   it("未选中行不渲染选中背景", () => {
@@ -90,7 +90,7 @@ describe("FileTree 选中模型", () => {
     const { getByText } = renderFileTree(nodes, { selectedPath: "/a/other.ts" });
     const row = getByText("test.ts").closest("div");
     expect(row).not.toBeNull();
-    expect(row!.style.background).not.toBe("rgb(42, 67, 113)");
+    expect(row!.style.background).not.toBe("rgba(110, 159, 242, 0.13)");
   });
 
   it("单击另一行 → onSelect(newPath) → 旧行取消高亮（单选）", () => {
@@ -116,7 +116,7 @@ describe("FileTree 选中模型", () => {
     const nodes = [makeFileNode("/a/test.ts", "test.ts")];
     const { getByText } = renderFileTree(nodes, { selectedPath: null });
     const row = getByText("test.ts").closest("div");
-    expect(row!.style.background).not.toBe("rgb(42, 67, 113)");
+    expect(row!.style.background).not.toBe("rgba(110, 159, 242, 0.13)");
   });
 
   it("双击文件 → onOpenFile 仍然调用（不破坏现有双击行为）", () => {
@@ -141,7 +141,7 @@ describe("FileTree 选中模型", () => {
     const row = getByText("test.ts").closest("div")!;
     fireEvent.mouseEnter(row);
     // 选中态背景保持（不变成 hover 色）
-    expect(row.style.background).toBe("rgb(42, 67, 113)");
+    expect(row.style.background).toBe("rgba(110, 159, 242, 0.13)");
   });
 
   it("非选中行 mouseEnter → 背景切换为 hover 色", () => {
@@ -165,7 +165,7 @@ describe("FileTree 选中模型", () => {
   });
 
   it("hover 色与 EXPLORER_COLORS.hover token 一致（配色单点）", () => {
-    expect(EXPLORER_COLORS.hover).toBe("#2a4371");
+    expect(EXPLORER_COLORS.hover).toBe("#222227");
   });
 
   it("selectedPath prop 变化 → 高亮跟随变化", () => {
@@ -190,7 +190,7 @@ describe("FileTree 选中模型", () => {
         onRenameCancel: vi.fn(),
       }),
     );
-    expect(getByText("test.ts").closest("div")!.style.background).toBe("rgb(42, 67, 113)");
+    expect(getByText("test.ts").closest("div")!.style.background).toBe("rgba(110, 159, 242, 0.13)");
 
     rerender(
       React.createElement(FileTree, {
@@ -212,7 +212,7 @@ describe("FileTree 选中模型", () => {
         onRenameCancel: vi.fn(),
       }),
     );
-    expect(getByText("test.ts").closest("div")!.style.background).not.toBe("rgb(42, 67, 113)");
+    expect(getByText("test.ts").closest("div")!.style.background).not.toBe("rgba(110, 159, 242, 0.13)");
   });
 
   it("嵌套子节点单击 → onSelect", () => {

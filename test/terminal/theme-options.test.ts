@@ -41,24 +41,25 @@ describe('L3 终端渲染 — 生产 terminalOptions（E2E-02）', () => {
       expect(cell.getFgColor()).toBe(i);
       expect(cell.getCode()).toBe(String.fromCharCode(65 + i).charCodeAt(0));
     }
-    // 主题色板快照（生产 theme.ts 现值，索引约定：0-7=black..white，8-15=brightBlack..brightWhite）
+    // 主题色板快照（生产 theme.ts 现值 = linear 方案 terminal 段，附录 A 契约；
+    // 索引约定：0-7=black..white，8-15=brightBlack..brightWhite）
     expect(terminalOptions.theme).toMatchObject({
-      black: '#000000',
-      red: '#CD3131',
-      green: '#0DBC79',
-      yellow: '#E5E510',
-      blue: '#2472C8',
-      magenta: '#BC3FBC',
-      cyan: '#11A8CD',
-      white: '#E5E5E5',
-      brightBlack: '#666666',
-      brightRed: '#F14C4C',
-      brightGreen: '#23D18B',
-      brightYellow: '#F5F543',
-      brightBlue: '#3B8EEA',
-      brightMagenta: '#D670D6',
-      brightCyan: '#29B8DB',
-      brightWhite: '#FFFFFF',
+      black: '#0a0a0b',
+      red: '#d9706b',
+      green: '#93b573',
+      yellow: '#d6b25e',
+      blue: '#7fa8e8',
+      magenta: '#b48ce0',
+      cyan: '#6fbfc4',
+      white: '#cfcac1',
+      brightBlack: '#7d7871',
+      brightRed: '#e2877f',
+      brightGreen: '#a8c98d',
+      brightYellow: '#e3c67f',
+      brightBlue: '#9dbfee',
+      brightMagenta: '#c6a6e8',
+      brightCyan: '#8dd0d4',
+      brightWhite: '#f0ede8',
     });
   });
 

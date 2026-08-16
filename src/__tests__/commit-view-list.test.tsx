@@ -125,12 +125,12 @@ describe("CommitView 列表渲染", () => {
       }
     });
 
-    // 验证关键颜色匹配 GIT_FILE_COLORS（jsdom 将 hex 转为 rgb 格式）
-    expect(colors["mod.ts"]).toBe("rgb(112, 174, 255)");
-    expect(colors["add.ts"]).toBe("rgb(115, 189, 121)");
-    expect(colors["del.ts"]).toBe("rgb(111, 115, 122)");
-    expect(colors["ren.ts"]).toBe("rgb(58, 132, 132)");
-    expect(colors["conf.ts"]).toBe("rgb(213, 117, 108)");
+    // 验证关键颜色匹配 GIT_FILE_COLORS（jsdom 将 hex 转为 rgb 格式；值 = 附录 A）
+    expect(colors["mod.ts"]).toBe("rgb(214, 178, 94)");
+    expect(colors["add.ts"]).toBe("rgb(134, 187, 122)");
+    expect(colors["del.ts"]).toBe("rgb(217, 112, 107)");
+    expect(colors["ren.ts"]).toBe("rgb(110, 159, 242)");
+    expect(colors["conf.ts"]).toBe("rgb(217, 112, 107)");
   });
 
   it("标题栏显示计数", async () => {

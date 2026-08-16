@@ -36,7 +36,7 @@ import { usePanelFocus } from "../../features/shortcuts";
 import { setActiveEditor, clearActiveEditor, type EditorActions } from "./activeEditor";
 import { useFontSizeWheel } from "../../lib/useFontSizeWheel";
 import { FONT_SIZE_MIN, FONT_SIZE_MAX } from "../../stores/fontSize";
-import { editorTheme, editorColorOverrides } from "../../theme";
+import { editorTheme, editorColorOverrides, editorSyntaxHighlight } from "../../theme";
 
 /** 文件大小上限（字节）——超过此值拒绝打开，保护内存 */
 export const MAX_FILE_SIZE_BYTES = 10_000_000;
@@ -286,6 +286,8 @@ export function useCodeMirror({ container, filePath, panelId, fontSize, onFontSi
           doc,
           extensions: [
             basicSetup,
+            // 语法高亮置于 editorTheme 之前（reverse 层叠后自定义规则排最后=恒胜，ACC-05）
+            editorSyntaxHighlight(),
             editorTheme,
             editorColorOverrides(),
             // .cm-editor 高度→.cm-scroller height:100%约束→溢出→滚动条。

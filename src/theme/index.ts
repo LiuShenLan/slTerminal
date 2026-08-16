@@ -1,7 +1,7 @@
 // theme barrel —— 配色 token facade（colors.ts）+ 方案注册表 + 方案定义 + 库覆盖
 //
-// colors.ts 段导出随 C1 清单：31 个（5 组 + 3 ERROR_BANNER 标量 + 22 其他标量 + ROOT_CSS_VARS）；
-// 方案系统段：schemeRegistry（注册表单例）+ schemes 类型与 darcula + overrides 四导出。
+// colors.ts 段导出随 C1 清单：34 个（5 组 + 3 ERROR_BANNER 标量 + 25 其他标量 + ROOT_CSS_VARS）；
+// 方案系统段：schemeRegistry（注册表单例）+ schemes 类型与 linear + overrides 四导出。
 
 export {
   GIT_FILE_COLORS,
@@ -35,13 +35,16 @@ export {
   ERROR_BANNER_FG,
   ROOT_CSS_VARS,
   AGENT_STATUS_USAGE_COLORS,
+  ACCENT_FG,
+  SELECTION_HOVER_BG,
+  TITLEBAR_BG,
 } from "./colors";
 
 // 方案注册表（单例 + 类型）
 export { schemeRegistry, SchemeRegistry } from "./schemeRegistry";
 
-// 方案定义（darcula 值 + ColorScheme 等类型）
-export { darcula } from "./schemes/darcula";
+// 方案定义（linear 值 + ColorScheme 等类型）
+export { linear } from "./schemes/linear";
 export type {
   ColorScheme,
   UiTokens,
@@ -56,4 +59,5 @@ export {
   allotmentVarStyle,
   editorTheme,
   editorColorOverrides,
+  editorSyntaxHighlight,
 } from "./overrides";

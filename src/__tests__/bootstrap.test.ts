@@ -44,7 +44,7 @@ vi.mock("../App", () => ({ default: () => null }));
 vi.mock("../App.css", () => ({}));
 
 // mock ipc/settings——BOOT-01 后 main.tsx 启动链动态 import 调 loadSettings，
-// 测试环境无 Tauri 运行时须 mock；resolve null = 首次启动（无配色配置 → darcula）
+// 测试环境无 Tauri 运行时须 mock；resolve null = 首次启动（无配色配置 → linear）
 vi.mock("../ipc/settings", () => ({
   loadSettings: async () => null,
 }));

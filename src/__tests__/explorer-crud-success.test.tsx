@@ -78,8 +78,8 @@ import { ExplorerPanel } from "../features/explorer";
 
 // ─── 辅助函数 ───
 
-/** 根目录文件条目（选中背景色断言用 rgb 值） */
-const SELECTION_BG_RGB = "rgb(42, 67, 113)";
+/** 根目录文件条目（选中背景色断言，值 = 附录 A explorerSelectionBg rgba） */
+const SELECTION_BG_RGB = "rgba(110, 159, 242, 0.13)";
 
 function seedProject(rootPath: string = "C:/test-project") {
   useProjects.setState({

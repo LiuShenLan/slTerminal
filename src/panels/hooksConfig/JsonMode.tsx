@@ -40,6 +40,7 @@ import {
   ON_ACCENT_FG,
   editorTheme,
   editorColorOverrides,
+  editorSyntaxHighlight,
 } from "../../theme";
 
 /** JsonMode props：value/onChange/onValidationChange（外部驱动 + 校验上报） */
@@ -159,6 +160,8 @@ const JsonMode: React.FC<JsonModeProps> = ({ value, onChange, onValidationChange
           hoverTooltip(jsonSchemaHover()),
           stateExtensions(hooksSubSchema as unknown as JSONSchema7),
           EditorView.theme({ "&": { height: "100%" } }),
+          // 语法高亮置于 editorTheme 之前（reverse 层叠后自定义规则排最后=恒胜，ACC-05）
+          editorSyntaxHighlight(),
           editorTheme,
           editorColorOverrides(),
           EditorView.updateListener.of(handleDocChanged),
