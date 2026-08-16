@@ -71,7 +71,7 @@ const groupHeaderStyle: React.CSSProperties = {
   cursor: "pointer",
   userSelect: "none",
   fontSize: 12,
-  fontWeight: "bold",
+  fontWeight: 500, // UI-205：bold → 500（字重仅 400/500）
   color: EXPLORER_COLORS.fg,
   whiteSpace: "nowrap",
   overflow: "hidden",

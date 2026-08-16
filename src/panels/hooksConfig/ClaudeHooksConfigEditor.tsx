@@ -98,7 +98,7 @@ function layerButtonStyle(active: boolean): React.CSSProperties {
     background: active ? INPUT_BORDER : "transparent",
     color: SIDEBAR_FG,
     border: `1px solid ${INPUT_BORDER}`,
-    borderRadius: 3,
+    borderRadius: 6, // GL-03：层切换按钮 3→6（按钮档）
   };
 }
 

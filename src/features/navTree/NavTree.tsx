@@ -145,7 +145,7 @@ const headerStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "space-between",
-  padding: "10px 12px 6px",
+  padding: "8px 12px 8px", // GL-04：间距收敛 10/6 → 8
   fontSize: 11,
   letterSpacing: "0.08em",
   textTransform: "uppercase",
@@ -167,7 +167,7 @@ const refreshBtnStyle: CSSProperties = {
 
 /** 搜索框外层（NAV-04：位于分组标题下） */
 const searchWrapStyle: CSSProperties = {
-  padding: "2px 10px 8px",
+  padding: "2px 12px 8px", // GL-04：间距收敛 10 → 12
   flexShrink: 0,
 };
 
@@ -187,7 +187,7 @@ const searchBoxStyle: CSSProperties = {
 const searchInputStyle: CSSProperties = {
   background: "none",
   border: "none",
-  outline: "none",
+  // UI-808：input 键盘可达，去 outline:none 让全局 :focus-visible 环生效
   font: "inherit",
   width: "100%",
   minWidth: 0,
@@ -642,7 +642,7 @@ export const NavTree: React.FC<NavTreeProps> = ({ switchToPage, onDeletePage }) 
           minHeight: 0,
           overflowY: "auto",
           overflowX: "hidden",
-          padding: "0 6px 12px",
+          padding: "0 8px 12px", // GL-04：间距收敛 6 → 8
         }}
       >
         {visibleProjects.length === 0 ? (

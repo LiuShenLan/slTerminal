@@ -77,7 +77,7 @@ function cliButtonStyle(active: boolean): React.CSSProperties {
     background: active ? EXPLORER_SELECTION_BG : "transparent",
     color: SIDEBAR_FG,
     border: `1px solid ${INPUT_BORDER}`,
-    borderRadius: 3,
+    borderRadius: 6, // GL-03：CLI 选择行按钮 3→6（按钮档）
   };
 }
 

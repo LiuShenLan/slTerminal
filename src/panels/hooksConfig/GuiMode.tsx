@@ -60,7 +60,7 @@ const addBarStyle: React.CSSProperties = {
 const eventTitleStyle: React.CSSProperties = {
   fontSize: 13,
   color: SIDEBAR_FG,
-  fontWeight: 600,
+  fontWeight: 500, // UI-205：600 → 500（字重仅 400/500）
 };
 
 /** 次要提示样式（分组 / matcher 目标 / 空态） */
@@ -79,7 +79,7 @@ function smallButtonStyle(disabled: boolean): React.CSSProperties {
     background: "transparent",
     color: SIDEBAR_FG,
     border: `1px solid ${INPUT_BORDER}`,
-    borderRadius: 3,
+    borderRadius: 6, // GL-03：小按钮 3→6（按钮档）
   };
 }
 
@@ -90,7 +90,7 @@ const matcherInputStyle: React.CSSProperties = {
   background: INPUT_BG,
   color: SIDEBAR_FG,
   border: `1px solid ${INPUT_BORDER}`,
-  borderRadius: 3,
+  borderRadius: 8, // GL-03：matcher 输入框 3→8（输入框档）
   padding: "2px 6px",
   fontSize: 12,
 };
@@ -115,7 +115,7 @@ function handlerRowStyle(selected: boolean): React.CSSProperties {
     padding: "2px 6px",
     fontSize: 12,
     cursor: "pointer",
-    borderRadius: 3,
+    borderRadius: 5, // GL-03：handler 行 3→5（行档）
     color: SIDEBAR_FG,
     background: selected ? ACTIVE_SELECTION_BG : "transparent",
   };
@@ -123,10 +123,10 @@ function handlerRowStyle(selected: boolean): React.CSSProperties {
 
 /** 「slTerminal 托管」标记样式（C13-8 注入段标识） */
 const managedBadgeStyle: React.CSSProperties = {
-  fontSize: 10,
+  fontSize: 11, // UI-204：阶梯外 10px → 11px
   color: ERROR_FG,
   border: `1px solid ${ERROR_FG}`,
-  borderRadius: 3,
+  borderRadius: 999, // GL-03：托管徽标 3→pill
   padding: "0 4px",
   flexShrink: 0,
 };
@@ -346,7 +346,7 @@ const GuiMode: React.FC<GuiModeProps> = ({ gui, onChange }) => {
             data-e2e="gui-add-event-select"
             value={addEventTarget}
             onChange={(e) => setDraftEvent(e.target.value)}
-            style={{ background: INPUT_BG, color: SIDEBAR_FG, border: `1px solid ${INPUT_BORDER}`, borderRadius: 3, fontSize: 12, padding: "2px 4px" }}
+            style={{ background: INPUT_BG, color: SIDEBAR_FG, border: `1px solid ${INPUT_BORDER}`, borderRadius: 8, fontSize: 12, padding: "2px 4px" }} // GL-03：内联输入框 3→8
           >
             {availableEvents.map((ev) => (
               <option key={ev} value={ev}>
@@ -493,12 +493,12 @@ const GuiMode: React.FC<GuiModeProps> = ({ gui, onChange }) => {
                   </React.Fragment>
                 ))}
                 {/* 添加 handler 入口（type 支持矩阵经 eventsCatalog 过滤） */}
-                <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 6 }}>
+                <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 8 }}> {/* GL-04：组件间距收敛 6 → 8 */}
                   <select
                     data-e2e={`gui-handler-type-${selected.event}-${gi}`}
                     value={draftHandlerType}
                     onChange={(e) => setDraftHandlerType(e.target.value as HandlerType)}
-                    style={{ background: INPUT_BG, color: SIDEBAR_FG, border: `1px solid ${INPUT_BORDER}`, borderRadius: 3, fontSize: 11, padding: "1px 4px" }}
+                    style={{ background: INPUT_BG, color: SIDEBAR_FG, border: `1px solid ${INPUT_BORDER}`, borderRadius: 8, fontSize: 11, padding: "1px 4px" }} // GL-03：内联输入框 3→8
                   >
                     {getSupportedHandlerTypes(selected.event).map((t) => (
                       <option key={t} value={t}>

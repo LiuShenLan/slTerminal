@@ -89,7 +89,7 @@ export const NavSessionRow: React.FC<NavSessionRowProps> = ({
         style={{
           width: 32,
           height: 3,
-          borderRadius: 1.5,
+          borderRadius: 999, // GL-03：3px 高条形全圆角（pill 档，视觉等价 1.5）
           backgroundColor: SIDEBAR_COLORS.border,
           flexShrink: 0,
           overflow: "hidden",
@@ -99,7 +99,7 @@ export const NavSessionRow: React.FC<NavSessionRowProps> = ({
           style={{
             width: percent != null ? `${percent}%` : "100%",
             height: "100%",
-            borderRadius: 1.5,
+            borderRadius: 999, // GL-03：同上 pill 档
             backgroundColor:
               percent != null ? usageBarColor(percent) : PLACEHOLDER_FG,
           }}

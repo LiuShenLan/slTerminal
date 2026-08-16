@@ -97,8 +97,8 @@ describe("HistorySessionRow 渲染", () => {
     const { getByText, container } = renderRow(session);
 
     const titleEl = getByText("修复登录 bug 的会话");
-    // 标题粗体 12px
-    expect(titleEl.style.fontWeight).toBe("bold");
+    // 标题 500 字重 12px（UI-205：字重仅 400/500）
+    expect(titleEl.style.fontWeight).toBe("500");
     expect(titleEl.style.fontSize).toBe("12px");
     // 相对时间（与 historyModel 同源函数计算期望值）
     expect(

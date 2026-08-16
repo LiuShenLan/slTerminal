@@ -61,7 +61,7 @@ const buttonBase: React.CSSProperties = {
   borderRadius: 6,
   padding: 0,
   position: "relative",
-  outline: "none",
+  // UI-808：button 键盘可达，去 outline:none 让全局 :focus-visible 环生效（鼠标点击不显示）
   transition: "background-color 0.15s",
 };
 

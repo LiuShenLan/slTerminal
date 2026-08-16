@@ -93,7 +93,7 @@ function eventButtonStyle(): React.CSSProperties {
     background: "transparent",
     color: SIDEBAR_FG,
     border: "none",
-    borderRadius: 3,
+    borderRadius: 6, // GL-03：事件导航按钮 3→6（按钮档）
   };
 }
 

@@ -17,7 +17,8 @@ import { titleManager } from "../../workspace/titleManager";
 import {
   EXPLORER_COLORS,
   SEPARATOR_BG,
-  INPUT_BORDER,
+  PLACEHOLDER_FG,
+  DIM_FG,
   ERROR_BANNER_BG,
   ERROR_BANNER_BORDER,
   ERROR_BANNER_FG,
@@ -28,7 +29,7 @@ import { usePanelFocus } from "../shortcuts/usePanelFocus";
 import { setActiveExplorer, clearActiveExplorer } from "./activeExplorer";
 import { basename } from "../../lib/path";
 import { confirmDialog } from "../../lib/ConfirmDialog";
-import { IconClose } from "../../lib/icons";
+import { IconClose, IconEmptyBox } from "../../lib/icons";
 
 /** 操作失败错误提示自动消失时间（ms） */
 const ERROR_AUTO_DISMISS_MS = 5000;
@@ -389,9 +390,10 @@ export const ExplorerPanel: React.FC = () => {
           borderBottom: `1px solid ${SEPARATOR_BG}`,
           height: 28,
           fontSize: 11,
-          color: INPUT_BORDER,
+          // UI-206：分组标题 fg-3（DIM_FG）+ 字距 0.08em
+          color: DIM_FG,
           textTransform: "uppercase",
-          letterSpacing: 1,
+          letterSpacing: "0.08em",
           userSelect: "none",
           flexShrink: 0,
         }}
@@ -477,15 +479,24 @@ export const ExplorerPanel: React.FC = () => {
             onRenameCancel={handleRenameCancel}
           />
         ) : (
+          // GL-05：空文件树统一空态——15px 线性图标 fg-4 + 说明文字 fg-3，居中
           <div
             style={{
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: 8,
               padding: 16,
-              color: INPUT_BORDER,
               fontSize: 12,
+              color: DIM_FG, // 说明文字 fg-3
               textAlign: "center",
+              userSelect: "none",
             }}
           >
-            选择一个项目以浏览文件
+            <span style={{ color: PLACEHOLDER_FG, display: "flex" }}>
+              <IconEmptyBox size={15} />
+            </span>
+            <span>选择一个项目以浏览文件</span>
           </div>
         )}
       </div>

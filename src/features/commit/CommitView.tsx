@@ -6,7 +6,7 @@
 //   error   → "当前项目并非 git 项目"
 //   ready   → Changes (N) + Unversioned Files (N) 两列表
 //
-// 标题栏 "COMMIT"（28px 高、大写、letterSpacing 1、fontSize 11）
+// 标题栏 "COMMIT"（28px 高、大写、字距 0.08em、fontSize 11、fg-3）
 // 样式照 ExplorerPanel 标题栏。
 
 import React from "react";
@@ -17,6 +17,7 @@ import {
   INPUT_BORDER,
   PANEL_BG,
   HTML_PANEL_LOADING_FG,
+  DIM_FG,
 } from "../../theme";
 
 /** 标题栏样式（照 ExplorerPanel） */
@@ -27,9 +28,10 @@ const headerStyle: React.CSSProperties = {
   borderBottom: `1px solid ${SEPARATOR_BG}`,
   height: 28,
   fontSize: 11,
-  color: INPUT_BORDER,
+  // UI-206：分组标题 fg-3（DIM_FG）+ 字距 0.08em
+  color: DIM_FG,
   textTransform: "uppercase",
-  letterSpacing: 1,
+  letterSpacing: "0.08em",
   userSelect: "none",
   flexShrink: 0,
 };

@@ -84,7 +84,7 @@ export const SessionActionDialog: React.FC<SessionActionDialogProps> = ({
         <div
           style={{
             fontSize: "13px",
-            fontWeight: "bold",
+            fontWeight: 500, // UI-205：bold → 500（字重仅 400/500）
             color: SIDEBAR_FG,
           }}
         >

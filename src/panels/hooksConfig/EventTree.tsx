@@ -80,7 +80,7 @@ function eventRowStyle(selected: boolean): React.CSSProperties {
     padding: "2px 6px",
     fontSize: 12,
     cursor: "pointer",
-    borderRadius: 3,
+    borderRadius: 5, // GL-03：事件行 3→5（行档）
     color: SIDEBAR_FG,
     background: selected ? ACTIVE_SELECTION_BG : "transparent",
   };
@@ -107,10 +107,10 @@ const handlerRowStyle: React.CSSProperties = {
 
 /** 「slTerminal 托管」标记样式（C13-8 注入段标识） */
 const managedBadgeStyle: React.CSSProperties = {
-  fontSize: 10,
+  fontSize: 11, // UI-204：阶梯外 10px → 11px
   color: ERROR_FG,
   border: `1px solid ${ERROR_FG}`,
-  borderRadius: 3,
+  borderRadius: 999, // GL-03：托管徽标 3→pill
   padding: "0 4px",
   flexShrink: 0,
 };

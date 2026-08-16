@@ -107,7 +107,7 @@ export const NavPageRow: React.FC<NavPageRowProps> = ({
             color: SIDEBAR_COLORS.fg,
             fontSize: 12.5,
             padding: "0 4px",
-            outline: "none",
+            // UI-808：input 键盘可达，去 outline:none 让全局 :focus-visible 环生效
           }}
         />
       ) : (

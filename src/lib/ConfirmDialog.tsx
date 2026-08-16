@@ -146,7 +146,8 @@ export function ConfirmDialogHost() {
         }}
       >
         {opts.title !== undefined && (
-          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 8 }}>
+          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 8 }}>
+            {/* UI-204/205：弹窗标题 13px + 500，与其它弹窗标题对齐 */}
             {opts.title}
           </div>
         )}

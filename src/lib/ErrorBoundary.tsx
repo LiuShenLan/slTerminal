@@ -66,7 +66,8 @@ export class ErrorBoundary extends React.Component<
               padding: 16,
             }}
           >
-            <div style={{ fontSize: 16, fontWeight: 600 }}>
+            <div style={{ fontSize: 13, fontWeight: 500 }}>
+              {/* UI-204/205：错误标题 13px + 500（收敛进字号阶梯/字重阶梯） */}
               页面渲染出错
             </div>
             <div

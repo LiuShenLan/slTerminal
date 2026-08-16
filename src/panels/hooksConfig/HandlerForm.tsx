@@ -179,9 +179,9 @@ const inputBaseStyle: React.CSSProperties = {
   fontFamily: "inherit",
   background: INPUT_BG,
   border: `1px solid ${INPUT_BORDER}`,
-  borderRadius: 3,
+  borderRadius: 8, // GL-03：输入框/select/textarea 3→8（输入框档）
   color: BUTTON_FG,
-  outline: "none",
+  // UI-808：input/select/textarea 键盘可达，去 outline:none 让全局 :focus-visible 环生效
 };
 
 const typeSelectStyle: React.CSSProperties = {
@@ -218,18 +218,18 @@ const sectionStyle: React.CSSProperties = {
 };
 
 const errorTextStyle: React.CSSProperties = {
-  fontSize: 10,
+  fontSize: 11, // UI-204：阶梯外 10px → 11px
   color: ERROR_FG,
   marginTop: 1,
 };
 
 /** 「slTerminal 托管」标记样式 */
 const managedBadgeStyle: React.CSSProperties = {
-  fontSize: 10,
+  fontSize: 11, // UI-204：阶梯外 10px → 11px
   color: BUTTON_FG,
   background: INPUT_BORDER,
   padding: "1px 6px",
-  borderRadius: 3,
+  borderRadius: 999, // GL-03：托管徽标 3→pill
   alignSelf: "flex-start",
   userSelect: "none",
 };
@@ -248,7 +248,7 @@ const lockButtonStyle: React.CSSProperties = {
   color: DIM_FG,
   background: "transparent",
   border: `1px solid ${INPUT_BORDER}`,
-  borderRadius: 3,
+  borderRadius: 6, // GL-03：锁定按钮 3→6（按钮档）
   cursor: "not-allowed",
 };
 

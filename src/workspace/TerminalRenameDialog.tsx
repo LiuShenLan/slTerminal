@@ -109,7 +109,7 @@ export const TerminalRenameDialog: React.FC<TerminalRenameDialogProps> = ({
         <div
           style={{
             fontSize: "13px",
-            fontWeight: "bold",
+            fontWeight: 500, // UI-205：bold → 500（字重仅 400/500）
             color: SIDEBAR_FG,
           }}
         >
@@ -140,7 +140,7 @@ export const TerminalRenameDialog: React.FC<TerminalRenameDialogProps> = ({
             border: `1px solid ${error ? ERROR_FG : INPUT_BORDER}`,
             borderRadius: 4,
             fontSize: "13px",
-            outline: "none",
+            // UI-808：input 键盘可达，去 outline:none 让全局 :focus-visible 环生效
           }}
           onFocus={(e) => {
             e.target.select();

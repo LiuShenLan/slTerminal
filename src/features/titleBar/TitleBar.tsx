@@ -75,7 +75,7 @@ export function TitleBar() {
         height: 34,
         display: "flex",
         alignItems: "center",
-        padding: "0 10px 0 12px",
+        padding: "0 12px", // GL-04：间距收敛 10 → 12
         background: TITLEBAR_BG,
         borderBottom: `1px solid ${SEPARATOR_BG}`,
         fontSize: 12,

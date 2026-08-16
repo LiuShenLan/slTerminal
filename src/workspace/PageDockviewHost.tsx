@@ -28,10 +28,9 @@ import { titleManager } from "./titleManager";
 import type { TitleUpdate } from "./titleManager";
 import { TerminalRegistry } from "../panels/terminal/TerminalRegistry";
 import { TerminalRenameDialog } from "./TerminalRenameDialog";
+import { IconEmptyBox } from "../lib/icons";
 import {
-  INPUT_BORDER,
   SECONDARY_BG,
-  BUTTON_FG,
   PLACEHOLDER_FG,
   SEPARATOR_BG,
   SIDEBAR_BG,
@@ -86,11 +85,15 @@ function createWatermark(
     <div
       style={{
         display: "flex", flexDirection: "column", alignItems: "center",
-        justifyContent: "center", height: "100%", color: INPUT_BORDER, fontSize: 14,
+        justifyContent: "center", height: "100%", // UI-204：正文 13px
         userSelect: "none", gap: 12,
       }}
     >
-      <span>{WATERMARK_TEXT}</span>
+      {/* GL-05：空态统一——15px 线性图标 fg-4 + 说明文字 fg-3 */}
+      <span style={{ color: PLACEHOLDER_FG, display: "flex" }}>
+        <IconEmptyBox size={15} />
+      </span>
+      <span style={{ color: DIM_FG, fontSize: 13 }}>{WATERMARK_TEXT}</span>
       <div style={{ display: "flex", gap: 8 }}>
         <button
           onClick={() => {
@@ -102,7 +105,7 @@ function createWatermark(
             });
           }}
           style={{
-            background: SECONDARY_BG, border: `1px solid ${SEPARATOR_BG}`, color: BUTTON_FG,
+            background: SECONDARY_BG, border: `1px solid ${SEPARATOR_BG}`, color: SIDEBAR_FG,
             cursor: "pointer", fontSize: 13, padding: "4px 12px", borderRadius: 4,
           }}
         >新建终端</button>

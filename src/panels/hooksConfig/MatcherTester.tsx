@@ -40,7 +40,7 @@ const inputStyle: React.CSSProperties = {
   background: "transparent",
   color: SIDEBAR_FG,
   border: `1px solid ${INPUT_BORDER}`,
-  borderRadius: 3,
+  borderRadius: 8, // GL-03：matcher 试测输入框 3→8（输入框档）
 };
 
 /** 结果文案样式（命中/未命中着色） */

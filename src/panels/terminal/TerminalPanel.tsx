@@ -201,7 +201,7 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ api, params }) => {
             alignItems: "center",
             justifyContent: "center",
             color: INPUT_BORDER,
-            fontSize: 14,
+            fontSize: 13, // UI-204：正文 13px
             background: PANEL_BG,
             transition: "opacity 0.3s",
             pointerEvents: "none",

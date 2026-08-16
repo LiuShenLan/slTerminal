@@ -89,7 +89,7 @@ export const HistorySessionRow: React.FC<HistorySessionRowProps> = ({
         style={{
           flex: 1,
           fontSize: "12px",
-          fontWeight: "bold",
+          fontWeight: 500, // UI-205：bold → 500（字重仅 400/500）
           color: SIDEBAR_COLORS.fg,
           overflow: "hidden",
           textOverflow: "ellipsis",

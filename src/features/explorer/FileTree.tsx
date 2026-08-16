@@ -20,12 +20,17 @@ import {
   SECONDARY_BG,
   ERROR_FG,
   INPUT_BG,
-  INPUT_BORDER,
+  PLACEHOLDER_FG,
+  DIM_FG,
   FOCUS_BORDER,
   CONTEXT_MENU_BORDER,
 } from "../../theme";
 import { confirmDialog } from "../../lib/ConfirmDialog";
-import { IconChevronRight, IconChevronDown } from "../../lib/icons";
+import {
+  IconChevronRight,
+  IconChevronDown,
+  IconEmptyBox,
+} from "../../lib/icons";
 
 // ---- 文件树布局几何常量 ----
 // 用于计算各节点的 paddingLeft，对齐文件名文本起始位置
@@ -479,8 +484,8 @@ export const FileTree: React.FC<FileTreeProps> = ({
               color: SIDEBAR_FG,
               fontSize: 13,
               padding: "0 4px",
-              outline: "none",
-              borderRadius: 2,
+              // UI-808：input 键盘可达，去 outline:none 让全局 :focus-visible 环生效
+              borderRadius: 8, // GL-03：输入框圆角收敛 2→8
               minWidth: 0,
             }}
           />
@@ -517,8 +522,8 @@ export const FileTree: React.FC<FileTreeProps> = ({
               color: SIDEBAR_FG,
               fontSize: 13,
               padding: "0 4px",
-              outline: "none",
-              borderRadius: 2,
+              // UI-808：input 键盘可达，去 outline:none 让全局 :focus-visible 环生效
+              borderRadius: 8, // GL-03：输入框圆角收敛 2→8
               minWidth: 0,
             }}
           />
@@ -561,8 +566,8 @@ export const FileTree: React.FC<FileTreeProps> = ({
                   color: SIDEBAR_FG,
                   fontSize: 13,
                   padding: "0 4px",
-                  outline: "none",
-                  borderRadius: 2,
+                  // UI-808：input 键盘可达，去 outline:none 让全局 :focus-visible 环生效
+                  borderRadius: 8, // GL-03：输入框圆角收敛 2→8
                   minWidth: 0,
                 }}
               />
@@ -616,8 +621,8 @@ export const FileTree: React.FC<FileTreeProps> = ({
                   color: SIDEBAR_FG,
                   fontSize: 13,
                   padding: "0 4px",
-                  outline: "none",
-                  borderRadius: 2,
+                  // UI-808：input 键盘可达，去 outline:none 让全局 :focus-visible 环生效
+                  borderRadius: 8, // GL-03：输入框圆角收敛 2→8
                   minWidth: 0,
                 }}
               />
@@ -656,8 +661,8 @@ export const FileTree: React.FC<FileTreeProps> = ({
                   color: SIDEBAR_FG,
                   fontSize: 13,
                   padding: "0 4px",
-                  outline: "none",
-                  borderRadius: 2,
+                  // UI-808：input 键盘可达，去 outline:none 让全局 :focus-visible 环生效
+                  borderRadius: 8, // GL-03：输入框圆角收敛 2→8
                   minWidth: 0,
                 }}
               />
@@ -707,15 +712,24 @@ export const FileTree: React.FC<FileTreeProps> = ({
         }}
       >
         {nodes.length === 0 && rootPath && (
+          // GL-05：空目录空态统一——15px 线性图标 fg-4 + 说明文字 fg-3，居中
           <div
             style={{
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: 8,
               padding: 16,
-              color: INPUT_BORDER,
               fontSize: 12,
+              color: DIM_FG, // 说明文字 fg-3
               textAlign: "center",
+              userSelect: "none",
             }}
           >
-            空目录
+            <span style={{ color: PLACEHOLDER_FG, display: "flex" }}>
+              <IconEmptyBox size={15} />
+            </span>
+            <span>空目录</span>
           </div>
         )}
         {renderRootInlineInput()}

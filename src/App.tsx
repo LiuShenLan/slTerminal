@@ -212,7 +212,7 @@ function App() {
             alignItems: "center",
             justifyContent: "center",
             color: INPUT_BORDER,
-            fontSize: 14,
+            fontSize: 13, // UI-204：正文 13px
             fontFamily: "monospace",
           }}
         >

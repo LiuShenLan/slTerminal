@@ -6,7 +6,8 @@
 
   color-scheme: dark;
   font-family: "JetBrains Mono", "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace;
-  font-size: 14px;
+  /* UI-204 字号阶梯：正文 13px（组件字号一律显式取值 11/11.5/12/12.5/13px，根基准收进阶梯） */
+  font-size: 13px;
   line-height: 1.5;
   font-weight: 400;
 
@@ -42,5 +43,35 @@ html, body, #root {
 /* Phase 2: flex 容器内 dockview 撑满 */
 .dv-dockview {
   height: 100%;
+}
+
+/* UI-807（GL-01）: 全局滚动条规范（9px、透明轨道、10% 滑块/hover 20%/拖动 28%、圆角 5、无箭头）。
+   dockview/terminal 滚动条变量已由 active 方案经 overrides 注入（--dv-scrollbar-* /
+   scrollbarSlider* 三键），本规则兜底其余原生滚动容器（侧栏列表/面板等）。 */
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.10);
+  border-radius: 5px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.20);
+}
+::-webkit-scrollbar-thumb:active {
+  background: rgba(255, 255, 255, 0.28);
+}
+::-webkit-scrollbar-button {
+  display: none; /* 无箭头 */
+}
+
+/* UI-808（GL-02）: 全局键盘焦点环——accent 定值 #6e9ff2，与 linear.focusBorder 同步
+   （ROOT_CSS_VARS 仅两键，var() 不可行，此处硬编码；鼠标点击聚焦不匹配 :focus-visible，不显示环） */
+:focus-visible {
+  outline: 1px solid #6e9ff2;
 }
 
