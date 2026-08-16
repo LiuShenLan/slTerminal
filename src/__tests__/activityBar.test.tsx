@@ -39,15 +39,23 @@ import {
 } from "../features/sideViews/sideBarState";
 import {
   SIDEBAR_COLORS,
+  SIDEBAR_FG,
+  DIM_FG,
+  ACCENT_FG,
   FOCUS_BORDER,
 } from "../theme/colors";
 
 // ── 测试辅助 ──
 
+/** 测试用 stub 图标组件（IC-06：icon 字段为组件形态） */
+function StubIcon(): null {
+  return null;
+}
+
 function registerTestViews(): void {
-  sideViewRegistry.register({ id: "projects", title: "项目列表", icon: "📋", component: () => null });
-  sideViewRegistry.register({ id: "explorer", title: "文件浏览器", icon: "📁", component: () => null });
-  sideViewRegistry.register({ id: "search", title: "搜索", icon: "🔍", component: () => null });
+  sideViewRegistry.register({ id: "projects", title: "项目列表", icon: StubIcon, component: () => null });
+  sideViewRegistry.register({ id: "explorer", title: "文件浏览器", icon: StubIcon, component: () => null });
+  sideViewRegistry.register({ id: "search", title: "搜索", icon: StubIcon, component: () => null });
 }
 
 function createMockDataTransfer(initial: Record<string, string> = {}) {
@@ -318,6 +326,25 @@ describe("ActivityBar", () => {
     expect(btn.style.backgroundColor).toBe(hexToRgb(SIDEBAR_COLORS.selected));
     fireEvent.mouseEnter(btn);
     expect(btn.style.backgroundColor).toBe(hexToRgb(SIDEBAR_COLORS.selected));
+  });
+
+  // ═══ 新增：图标色三级（IC-06：默认 fg-3 / hover fg-1 / active accentFg） ═══
+
+  it("SB-19.33 图标色三级：默认 DIM_FG（fg-3）、hover SIDEBAR_FG（fg-1）、active ACCENT_FG", () => {
+    render(<ActivityBar />);
+    // 默认种子：projects active（DEFAULT_OPEN）、explorer 非 active
+    const p = getButton("projects") as HTMLElement;
+    const e = getButton("explorer") as HTMLElement;
+    expect(p.style.color).toBe(hexToRgb(ACCENT_FG));
+    expect(e.style.color).toBe(hexToRgb(DIM_FG));
+    // hover 非 active 按钮 → fg-1；离开恢复 fg-3
+    fireEvent.mouseEnter(e);
+    expect(e.style.color).toBe(hexToRgb(SIDEBAR_FG));
+    fireEvent.mouseLeave(e);
+    expect(e.style.color).toBe(hexToRgb(DIM_FG));
+    // active 按钮 hover 时色不变（仍 accentFg）
+    fireEvent.mouseEnter(p);
+    expect(p.style.color).toBe(hexToRgb(ACCENT_FG));
   });
 
   // ═══ 新增：跨区拖拽——状态机行为 ═══

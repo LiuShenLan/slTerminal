@@ -49,15 +49,15 @@ import {
   CONTEXT_MENU_BORDER,
   SIDEBAR_COLORS,
 } from "../../theme";
+import { IconChevronRight, IconChevronDown } from "../../lib/icons";
 
-/** 折叠箭头样式 */
+/** 折叠箭头样式（chevron 12px，色经 EXPLORER_COLORS arrow 槽位 token——IC-05） */
 const arrowStyle: React.CSSProperties = {
-  display: "inline-block",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
   width: 16,
-  fontSize: 10,
   color: EXPLORER_COLORS.arrowClosed,
-  textAlign: "center",
-  lineHeight: "22px",
   userSelect: "none",
   flexShrink: 0,
 };
@@ -291,7 +291,7 @@ export const HistorySessionList: React.FC<HistorySessionListProps> = ({
     });
   };
 
-  /** 行状态标记派生（四态 status / ✗ / 无 cwd——Row 的 status/orphan/noCwd 三 props） */
+  /** 行状态标记派生（四态 status / 孤儿标记 / 无 cwd——Row 的 status/orphan/noCwd 三 props） */
   const rowFlags = useCallback(
     (session: AgentHistorySession) => ({
       status: activeStatuses.get(keyOf(session.cliId, session.sessionId)),
@@ -440,7 +440,9 @@ export const HistorySessionList: React.FC<HistorySessionListProps> = ({
                 onClick={() => toggleGroup(key)}
                 title={group.cwd ?? undefined}
               >
-                <span style={arrowStyle}>{expanded ? "▼" : "▶"}</span>
+                <span style={arrowStyle}>
+                  {expanded ? <IconChevronDown size={12} /> : <IconChevronRight size={12} />}
+                </span>
                 <span>{group.cwd ? basename(group.cwd) : "(未知目录)"}</span>
                 <span style={groupCountStyle}>({group.sessions.length})</span>
               </div>

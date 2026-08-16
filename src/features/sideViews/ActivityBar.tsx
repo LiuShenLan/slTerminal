@@ -20,6 +20,8 @@ import {
   PANEL_BG,
   SIDEBAR_COLORS,
   SIDEBAR_FG,
+  DIM_FG,
+  ACCENT_FG,
   FOCUS_BORDER,
 } from "../../theme/colors";
 
@@ -41,13 +43,10 @@ const buttonBase: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  fontSize: 20,
-  lineHeight: "40px",
   cursor: "pointer",
   background: "transparent",
   border: "none",
   borderLeft: "2px solid transparent",
-  color: SIDEBAR_FG,
   padding: 0,
   position: "relative",
   outline: "none",
@@ -140,6 +139,12 @@ export function ActivityBar() {
           } else if (isHovered) {
             bg = SIDEBAR_COLORS.hover;
           }
+          // 图标色（IC-06）：默认 fg-3（DIM_FG）→ hover fg-1（SIDEBAR_FG）→ active accentFg
+          const iconColor = isActive
+            ? ACCENT_FG
+            : isHovered
+              ? SIDEBAR_FG
+              : DIM_FG;
 
           const showIndicatorBefore =
             dropIndicator != null &&
@@ -160,6 +165,7 @@ export function ActivityBar() {
                   backgroundColor: bg,
                   borderLeftColor: isActive ? FOCUS_BORDER : "transparent",
                   opacity: isDragging ? 0.5 : 1,
+                  color: iconColor,
                 }}
                 onClick={() => useSideBar.getState().toggleView(def.id)}
                 onMouseEnter={() => {
@@ -177,7 +183,7 @@ export function ActivityBar() {
                   clearDragState();
                 }}
               >
-                {def.icon}
+                <def.icon size={15} />
               </button>
             </div>
           );

@@ -91,9 +91,9 @@ const MatcherTester: React.FC = () => {
         onChange={(e) => setToolName(e.target.value)}
         style={{ ...inputStyle, width: 140 }}
       />
-      {/* 命中结果 + 匹配模式 */}
+      {/* 命中结果 + 匹配模式（纯文本——IC-08：装饰字符清除，结果色由 resultStyle 区分） */}
       <span data-e2e="matcher-result" style={resultStyle(result.matched)}>
-        {result.matched ? "命中 ✓" : "未命中 ✗"}
+        {result.matched ? "命中" : "未命中"}
       </span>
       <span style={{ fontSize: 11, color: HTML_PANEL_LOADING_FG }}>
         模式：{MODE_LABEL[result.mode]}

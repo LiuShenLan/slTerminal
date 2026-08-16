@@ -76,17 +76,17 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ api, params }) => {
   // 挂载时优先取 params.customTitle（重命名后的自定义标题）——重启恢复时布局 JSON
   // 的 title 字段可能是瞬态值（如 claude 运行中退出），customTitle 才是真名
   const originalTitleRef = useRef(params.customTitle ?? api.title ?? "terminal");
-  // 最新参数快照：props 同步 + onDidParametersChange 同步（下方订阅）——tabIcon/tabLogo
+  // 最新参数快照：props 同步 + onDidParametersChange 同步（下方订阅）——tabStatus/tabLogo
   // 由两处 updateParameters 分头写入，互不可见；合并必须基于最新参数而非 props 快照
-  // （快照覆盖会抹掉另一路径刚写入的键——mockcli E2E 冒烟 tabIcon 丢失根因）
+  // （快照覆盖会抹掉另一路径刚写入的键——mockcli E2E 冒烟 tabStatus 丢失根因）
   const latestParamsRef = useRef<Record<string, unknown>>(params);
   latestParamsRef.current = params;
   const handleTabStateChange = useCallback((state: TabState) => {
     if (state.active) {
-      // 仅当 title/icon 存在时才更新，不覆盖 originalTitleRef
+      // 仅当 title/status 存在时才更新，不覆盖 originalTitleRef
       if (state.title) api.setTitle(state.title);
-      if (state.icon !== undefined) {
-        api.updateParameters({ ...latestParamsRef.current, tabIcon: state.icon });
+      if (state.status !== undefined) {
+        api.updateParameters({ ...latestParamsRef.current, tabStatus: state.status });
       }
     } else {
       // B13: restoreTitle=false 时仅清图标不恢复标题（SessionEnd/EXIT hook 事件
@@ -95,9 +95,9 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ api, params }) => {
       if (state.restoreTitle !== false) {
         api.setTitle(originalTitleRef.current);
       }
-      // F9 行为修订：只清 icon——logo 跟随 agentSession 生命周期（会话绑定），
+      // F9 行为修订：只清状态圆点——logo 跟随 agentSession 生命周期（会话绑定），
       // 由下方 TerminalRegistry 订阅驱动清除，此处不再双清
-      api.updateParameters({ ...latestParamsRef.current, tabIcon: null });
+      api.updateParameters({ ...latestParamsRef.current, tabStatus: null });
     }
   }, [api]);
 
@@ -105,7 +105,7 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ api, params }) => {
   // profile.iconSrc，与 agent 侧栏行同源），会话结束（删行）即消失。
   // register 事件同样触发同步：重启恢复时 agentSession 未设置 → 清布局 JSON
   // 持久化残留；页面切回重挂载时（H6）register 幂等保留旧 session → logo 立即恢复。
-  // deps 仅 [api, panelId]（panelId 经 ref 读）——tabIcon 高频更新（hook 事件）不重建订阅。
+  // deps 仅 [api, panelId]（panelId 经 ref 读）——tabStatus 高频更新（hook 事件）不重建订阅。
   const panelIdRef = useRef(params.panelId);
   panelIdRef.current = params.panelId;
   useEffect(() => {
@@ -115,7 +115,7 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ api, params }) => {
       const tabLogo = session
         ? cliProfileRegistry.get(session.cliId ?? CLAUDE_CLI_ID)?.iconSrc ?? null
         : null;
-      // 基于最新参数合并（见 latestParamsRef 注释）——快照覆盖会抹掉 tabIcon
+      // 基于最新参数合并（见 latestParamsRef 注释）——快照覆盖会抹掉 tabStatus
       api.updateParameters({ ...latestParamsRef.current, tabLogo });
     };
     // 挂载立即同步一次：覆盖布局恢复的 tabLogo 残留（未注册会话 → null）
@@ -128,7 +128,7 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ api, params }) => {
     return unsubscribe;
   }, [api, params.panelId]);
 
-  // 参数变化同步：① 最新参数快照合并（tabIcon/tabLogo/customTitle 多路径分头写入，
+  // 参数变化同步：① 最新参数快照合并（tabStatus/tabLogo/customTitle 多路径分头写入，
   // 互不可见——合并基准必须随每次参数变化更新）；② 重命名同步 originalTitleRef，
   // 保证 OSC 133 D 恢复时用自定义名而非挂载时旧名
   useEffect(() => {

@@ -644,7 +644,7 @@ describe("useAgentStatus（行建模新语义）", () => {
     // 建行：会话感知存活
     expect(result.current.rows).toHaveLength(1);
     expect(result.current.rows[0].panelId).toBe("terminal-page1-0");
-    // status null = 无图标（getStatusIcon(null) 返回 ""）——不误标 attention
+    // status null = 无状态（StatusDot 不渲染圆点）——不误标 attention
     expect(result.current.rows[0].status).toBeNull();
   });
 
@@ -1028,13 +1028,13 @@ describe("useAgentStatus（行建模新语义）", () => {
   // null 状态不覆盖已有行状态
   // ──────────────────────────────────────────────────
 
-  it("⚡ 行收到 Notification(auth_success) 后状态仍为 ⚡（null 不覆盖）", () => {
+  it("working 行收到 Notification(auth_success) 后状态仍为 working（null 不覆盖）", () => {
     seedProject();
     registerTerminal("terminal-page1-0", makeSession({ lastEventAt: 1000 }));
 
     const { result } = renderHook(() => useAgentStatus());
 
-    // PreToolUse → working (⚡)
+    // PreToolUse → working
     act(() => {
       capturedCallback.current?.(
         makePayload({ event: "PreToolUse", timestamp: 1000 }),

@@ -26,13 +26,13 @@ describe("SideViewRegistry", () => {
       registry.register({
         id: "projects",
         title: "项目列表",
-        icon: "📋",
+        icon: StubComponent,
         component: StubComponent,
       });
       registry.register({
         id: "explorer",
         title: "文件浏览器",
-        icon: "📁",
+        icon: StubComponent,
         component: StubComponent,
       });
 
@@ -47,7 +47,7 @@ describe("SideViewRegistry", () => {
       registry.register({
         id: "projects",
         title: "项目列表",
-        icon: "📋",
+        icon: StubComponent,
         component: StubComponent,
       });
 
@@ -55,7 +55,7 @@ describe("SideViewRegistry", () => {
       expect(def).toBeDefined();
       expect(def!.id).toBe("projects");
       expect(def!.title).toBe("项目列表");
-      expect(def!.icon).toBe("📋");
+      expect(def!.icon).toBe(StubComponent);
       expect(def!.component).toBe(StubComponent);
     });
 
@@ -63,7 +63,7 @@ describe("SideViewRegistry", () => {
       registry.register({
         id: "projects",
         title: "项目列表",
-        icon: "📋",
+        icon: StubComponent,
         component: StubComponent,
       });
 
@@ -74,20 +74,20 @@ describe("SideViewRegistry", () => {
       registry.register({
         id: "projects",
         title: "旧标题",
-        icon: "📋",
+        icon: StubComponent,
         component: StubComponent,
       });
       registry.register({
         id: "projects",
         title: "新标题",
-        icon: "🆕",
+        icon: StubComponent,
         component: StubComponent,
       });
 
       const def = registry.get("projects");
       expect(def).toBeDefined();
       expect(def!.title).toBe("新标题");
-      expect(def!.icon).toBe("🆕");
+      expect(def!.icon).toBe(StubComponent);
       // 同 id 覆盖不重复计数
       expect(registry.getAll()).toHaveLength(1);
     });
@@ -98,7 +98,7 @@ describe("SideViewRegistry", () => {
       registry.register({
         id: "projects",
         title: "项目列表",
-        icon: "📋",
+        icon: StubComponent,
         component: StubComponent,
       });
       registry._reset();
@@ -111,14 +111,14 @@ describe("SideViewRegistry", () => {
       registry.register({
         id: "projects",
         title: "项目列表",
-        icon: "📋",
+        icon: StubComponent,
         component: StubComponent,
       });
       registry._reset();
       registry.register({
         id: "explorer",
         title: "文件浏览器",
-        icon: "📁",
+        icon: StubComponent,
         component: StubComponent,
       });
 

@@ -1,7 +1,7 @@
 // agent-history-row.test.tsx — HistorySessionRow L2 测试（FE-07 / FE-10）
 //
 // 覆盖：双行渲染（标题/相对时间/prompt 预览）、title null → sessionId 前 8 位、
-// 四态标记（status：working/attention/done/error/null——问题 2）、✗ 孤儿标记、
+// 四态标记（status：working/attention/done/error/null——问题 2）、孤儿标记、
 // 字号层级（行1 标题 12px 粗体/行2 11px——问题 4）、单击/双击/右键回调、选中态高亮、
 // CLI logo 按 session.cliId 查 profile.iconSrc（MC-311：未注册 cliId → 无 logo 不报错）。
 //
@@ -15,6 +15,18 @@ import { formatRelativeTime } from "../features/agentHistory/historyModel";
 import { EXPLORER_SELECTION_BG } from "../theme";
 import "../features/cliProfiles/profiles";
 import type { AgentHistorySession } from "../types/agentHistory";
+
+// StatusDot 由 icon-base agent 并行实现（IC-02）——本文件 mock 为可识别 span
+// （data-testid="status-dot"，文本 = status 值），只断言接线不依赖其内部 DOM
+vi.mock("../lib/StatusDot", async () => {
+  const { createElement } = await import("react");
+  return {
+    StatusDot: ({ status }: { status: string | null }) =>
+      status == null
+        ? null
+        : createElement("span", { "data-testid": "status-dot" }, status),
+  };
+});
 
 afterEach(cleanup);
 
@@ -117,44 +129,43 @@ describe("HistorySessionRow 渲染", () => {
 });
 
 describe("HistorySessionRow 状态标记（问题 2：四态同源）", () => {
-  it("status=working → ⚡", () => {
+  it("status=working → 状态圆点（StatusDot 透传 working）", () => {
     const session = makeSession();
-    const { getByText, queryByText } = renderRow(session, {
+    const { row } = renderRow(session, {
       status: "working",
     });
 
-    expect(getByText("⚡")).toBeTruthy();
-    expect(queryByText("✗")).toBeNull();
+    const dot = row.querySelector('[data-testid="status-dot"]');
+    expect(dot?.textContent).toBe("working");
+    // 非孤儿行无孤儿标记（IC-08：孤儿标记 = IconClose，data-e2e="agent-history-orphan"）
+    expect(row.querySelector('[data-e2e="agent-history-orphan"]')).toBeNull();
   });
 
-  it("status=attention → 🟡", () => {
-    const { getByText } = renderRow(makeSession(), { status: "attention" });
-    expect(getByText("🟡")).toBeTruthy();
+  it("status=attention → 状态圆点（attention）", () => {
+    const { row } = renderRow(makeSession(), { status: "attention" });
+    expect(row.querySelector('[data-testid="status-dot"]')?.textContent).toBe("attention");
   });
 
-  it("status=done → ✅", () => {
-    const { getByText } = renderRow(makeSession(), { status: "done" });
-    expect(getByText("✅")).toBeTruthy();
+  it("status=done → 状态圆点（done）", () => {
+    const { row } = renderRow(makeSession(), { status: "done" });
+    expect(row.querySelector('[data-testid="status-dot"]')?.textContent).toBe("done");
   });
 
-  it("status=error → ❌", () => {
-    const { getByText } = renderRow(makeSession(), { status: "error" });
-    expect(getByText("❌")).toBeTruthy();
+  it("status=error → 状态圆点（error）", () => {
+    const { row } = renderRow(makeSession(), { status: "error" });
+    expect(row.querySelector('[data-testid="status-dot"]')?.textContent).toBe("error");
   });
 
-  it("status=null / undefined → 无状态标记，但 CLI logo 仍渲染（F9 行为修订：跟随会话名显示）", () => {
-    const { queryByText, row } = renderRow(makeSession(), { status: null });
-    expect(queryByText("⚡")).toBeNull();
-    expect(queryByText("🟡")).toBeNull();
-    expect(queryByText("✅")).toBeNull();
-    expect(queryByText("❌")).toBeNull();
-    // logo 不依赖 emoji：行存在（有会话名）即按 session.cliId 显示
+  it("status=null / undefined → 无状态圆点，但 CLI logo 仍渲染（F9 行为修订：跟随会话名显示）", () => {
+    const { row } = renderRow(makeSession(), { status: null });
+    expect(row.querySelector('[data-testid="status-dot"]')).toBeNull();
+    // logo 不依赖状态圆点：行存在（有会话名）即按 session.cliId 显示
     const logoImg = row.querySelector('img[alt="CLI 图标"]');
     expect(logoImg).toBeTruthy();
     expect(logoImg?.getAttribute("src")).toBe("/cli-icons/claude.png");
   });
 
-  it("status=working → emoji 后渲染 CLI logo（按 session.cliId 查 profile.iconSrc/16×16/位于 emoji 与标题间——MC-311）", () => {
+  it("status=working → 圆点后渲染 CLI logo（按 session.cliId 查 profile.iconSrc/16×16/位于圆点与标题间——MC-311）", () => {
     const { row } = renderRow(makeSession(), { status: "working" });
     const line1 = row.children[0] as HTMLElement;
     const logoImg = row.querySelector('img[alt="CLI 图标"]');
@@ -163,18 +174,18 @@ describe("HistorySessionRow 状态标记（问题 2：四态同源）", () => {
     expect(logoImg?.getAttribute("src")).toBe("/cli-icons/claude.png");
     expect(logoImg?.getAttribute("width")).toBe("16");
     expect(logoImg?.getAttribute("height")).toBe("16");
-    // 行1 子元素序：emoji span(⚡) → logo img → 标题 → 时间
+    // 行1 子元素序：状态圆点 span → logo img → 标题 → 时间
     const children = Array.from(line1.children);
-    expect(children[0].tagName).toBe("SPAN");
-    expect(children[0].textContent).toBe("⚡");
+    expect(children[0].getAttribute("data-testid")).toBe("status-dot");
+    expect(children[0].textContent).toBe("working");
     expect(children[1]).toBe(logoImg);
   });
 
-  it("status=null → logo 顶到行1 首位（emoji 缺席时 logo 在标题前，位置语义不变）", () => {
+  it("status=null → logo 顶到行1 首位（圆点缺席时 logo 在标题前，位置语义不变）", () => {
     const { row } = renderRow(makeSession(), { status: null });
     const line1 = row.children[0] as HTMLElement;
     const children = Array.from(line1.children);
-    // 第一个子元素即 logo img（无 emoji span 占位）
+    // 第一个子元素即 logo img（无圆点占位）
     expect(children[0].tagName).toBe("IMG");
     expect(children[0].getAttribute("alt")).toBe("CLI 图标");
     // 其后是标题 span
@@ -186,50 +197,51 @@ describe("HistorySessionRow 状态标记（问题 2：四态同源）", () => {
     const session = makeSession({ cliId: "unknown-cli" });
     const { row } = renderRow(session, { status: "working" });
 
-    // emoji 仍渲染；logo 查询未命中 → 无 img（组件不抛错）
-    expect(row.textContent).toContain("⚡");
+    // 状态圆点仍渲染；logo 查询未命中 → 无 img（组件不抛错）
+    expect(row.querySelector('[data-testid="status-dot"]')?.textContent).toBe("working");
     expect(row.querySelector('img[alt="CLI 图标"]')).toBeNull();
   });
 
-  it("orphan ✗ 行（status null）→ 仍渲染 logo（F9 行为修订：行存在即显示）", () => {
+  it("orphan 孤儿行（status null）→ 孤儿标记 + 仍渲染 logo（F9 行为修订：行存在即显示）", () => {
     const session = makeSession({ cwdExists: false });
-    const { getByText, row } = renderRow(session, { orphan: true });
-    expect(getByText("✗")).toBeTruthy();
+    const { row } = renderRow(session, { orphan: true });
+    // IC-08：孤儿标记 = IconClose（data-e2e="agent-history-orphan"）
+    expect(row.querySelector('[data-e2e="agent-history-orphan"]')).toBeTruthy();
     const logoImg = row.querySelector('img[alt="CLI 图标"]');
     expect(logoImg).toBeTruthy();
     expect(logoImg?.getAttribute("src")).toBe("/cli-icons/claude.png");
   });
 
-  it("orphan=true → ✗ 标记（与四态并存渲染）", () => {
+  it("orphan=true → 孤儿标记（与四态圆点并存渲染）", () => {
     const session = makeSession({ cwdExists: false });
-    const { getByText } = renderRow(session, {
+    const { row } = renderRow(session, {
       status: "attention",
       orphan: true,
     });
 
-    expect(getByText("🟡")).toBeTruthy();
-    expect(getByText("✗")).toBeTruthy();
+    expect(row.querySelector('[data-testid="status-dot"]')?.textContent).toBe("attention");
+    expect(row.querySelector('[data-e2e="agent-history-orphan"]')).toBeTruthy();
   });
 
-  it("status=working 且 orphan=true → ⚡ 渲染（四态标记不被孤儿标记掩盖，NAH-10）", () => {
+  it("status=working 且 orphan=true → 圆点渲染（四态标记不被孤儿标记掩盖，NAH-10）", () => {
     const session = makeSession({ cwdExists: false });
-    const { getByText } = renderRow(session, {
+    const { row } = renderRow(session, {
       status: "working",
       orphan: true,
     });
 
-    // 四态 emoji 优先展示（运行中会话即使 cwd 目录已删，行标记仍为 ⚡）
-    expect(getByText("⚡")).toBeTruthy();
-    // ✗ 按 orphan 语义独立渲染（两标记非互斥——现状设计，与上方并存用例一致）
-    expect(getByText("✗")).toBeTruthy();
+    // 四态圆点优先展示（运行中会话即使 cwd 目录已删，行标记仍为 working）
+    expect(row.querySelector('[data-testid="status-dot"]')?.textContent).toBe("working");
+    // 孤儿标记按 orphan 语义独立渲染（两标记非互斥——现状设计，与上方并存用例一致）
+    expect(row.querySelector('[data-e2e="agent-history-orphan"]')).toBeTruthy();
   });
 
-  it("noCwd=true（无 cwd 跳过孤儿判定）→ 不显示 ✗，无状态时不显示标记", () => {
+  it("noCwd=true（无 cwd 跳过孤儿判定）→ 无孤儿标记，无状态时不显示圆点", () => {
     const session = makeSession({ cwd: null, cwdExists: false });
-    const { queryByText } = renderRow(session, { noCwd: true });
+    const { row } = renderRow(session, { noCwd: true });
 
-    expect(queryByText("✗")).toBeNull();
-    expect(queryByText("⚡")).toBeNull();
+    expect(row.querySelector('[data-e2e="agent-history-orphan"]')).toBeNull();
+    expect(row.querySelector('[data-testid="status-dot"]')).toBeNull();
   });
 });
 

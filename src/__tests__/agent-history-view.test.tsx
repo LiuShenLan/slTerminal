@@ -405,25 +405,30 @@ describe("全部项目区分组折叠", () => {
     expect(groups[2].textContent).toContain("(1)");
     expect(groups[2].getAttribute("title")).toBeNull();
 
-    // NAH-09①：expandedGroups 初始为空（白名单模型）→ 组标题箭头 ▶
-    expect(groups[0].textContent).toContain("▶");
+    // NAH-09①：expandedGroups 初始为空（白名单模型）→ 组标题箭头为收起态
+    // （lucide ChevronRight path d="m9 18 6-6-6-6"，IC-05 chevron 化）
+    expect(
+      groups[0].querySelector("svg path")?.getAttribute("d"),
+    ).toContain("m9 18 6-6-6-6");
 
-    // 点击第一组展开 → 该组 key 加入 expandedGroups（箭头 ▼）+ 该组 2 行渲染，其他组仍收起
+    // 点击第一组展开 → 该组 key 加入 expandedGroups（箭头 ChevronDown）+ 该组 2 行渲染，其他组仍收起
     fireEvent.click(groups[0]);
     expect(
       container.querySelectorAll('[data-e2e="agent-history-group"]')[0]
-        .textContent,
-    ).toContain("▼");
+        .querySelector("svg path")
+        ?.getAttribute("d"),
+    ).toContain("m6 9 6 6 6-6");
     expect(
       container.querySelectorAll('[data-e2e="agent-history-row"]').length,
     ).toBe(2);
 
-    // 再点收起 → 该组 key 移除（箭头 ▶）→ 恢复 0 行
+    // 再点收起 → 该组 key 移除（箭头 ChevronRight）→ 恢复 0 行
     fireEvent.click(groups[0]);
     expect(
       container.querySelectorAll('[data-e2e="agent-history-group"]')[0]
-        .textContent,
-    ).toContain("▶");
+        .querySelector("svg path")
+        ?.getAttribute("d"),
+    ).toContain("m9 18 6-6-6-6");
     expect(
       container.querySelectorAll('[data-e2e="agent-history-row"]').length,
     ).toBe(0);

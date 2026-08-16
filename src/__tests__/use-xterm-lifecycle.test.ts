@@ -1345,7 +1345,7 @@ describe("OSC 133 命令边界检测", () => {
     return capturedOsc133Handler!;
   }
 
-    it("OSC133-1: OSC 133 C 序列匹配注册命令 → onTabStateChange 含 title 和 attention icon + setAgentSession", async () => {
+    it("OSC133-1: OSC 133 C 序列匹配注册命令 → onTabStateChange 含 title 和 attention status + setAgentSession", async () => {
     mockMatchByCommand.mockReturnValue(makeCliProfile("claude", "/cli-icons/claude.png"));
 
     const handler = await mountAndWaitForOsc133();
@@ -1361,9 +1361,9 @@ describe("OSC 133 命令边界检测", () => {
     expect(mockOnTabStateChange).toHaveBeenCalledWith({
       active: true,
       title: "claude",
-      icon: "🟡",
+      status: "attention",
     });
-      // P1-F3-01: OSC 133 C 固定使用 🟡 (attention)，不使用 rule.icon
+      // P1-F3-01: OSC 133 C 固定使用 attention 状态，不使用 rule.icon
     // MC-107: OSC 133 C 命中注册命令 → 写入会话状态（cliId 取匹配 profile 的 id）
     expect(mockSetAgentSession).toHaveBeenCalledWith("osc133-test", {
       cliId: "claude",
@@ -1405,7 +1405,7 @@ describe("OSC 133 命令边界检测", () => {
     expect(mockOnTabStateChange).toHaveBeenCalledWith({
       active: true,
       title: "codex",
-      icon: "🟡",
+      status: "attention",
     });
   });
 
@@ -1828,7 +1828,7 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     expect(mockEventToStatus).toHaveBeenCalledWith("UserPromptSubmit", null);
     expect(mockOnTabStateChange).toHaveBeenCalledWith({
       active: true,
-      icon: "⚡",
+      status: "working",
     });
     // PF2-FE-04: 非 SessionEnd 事件 → setAgentSession 携 sessionId/usageSourcePath/status（问题 2 四态同源）
     expect(mockSetAgentSession).toHaveBeenCalledWith("hooks-test", {
@@ -1868,7 +1868,7 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     expect(mockSetAgentSession).not.toHaveBeenCalled();
   });
 
-  it("HUK4: PreToolUse → working → ⚡ + setAgentSession", async () => {
+  it("HUK4: PreToolUse → working → status: working + setAgentSession", async () => {
     await mountAndWaitForHooks();
     mockOnTabStateChange.mockClear();
     mockSetAgentSession.mockClear();
@@ -1880,7 +1880,7 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     expect(mockEventToStatus).toHaveBeenCalledWith("PreToolUse", null);
     expect(mockOnTabStateChange).toHaveBeenCalledWith({
       active: true,
-      icon: "⚡",
+      status: "working",
     });
     expect(mockSetAgentSession).toHaveBeenCalledWith("hooks-test", {
       sessionId: "s1",
@@ -1889,7 +1889,7 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     });
   });
 
-  it("HUK5: Stop → done → ✅ + setAgentSession", async () => {
+  it("HUK5: Stop → done → status: done + setAgentSession", async () => {
     await mountAndWaitForHooks();
     mockOnTabStateChange.mockClear();
     mockSetAgentSession.mockClear();
@@ -1901,7 +1901,7 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     expect(mockEventToStatus).toHaveBeenCalledWith("Stop", null);
     expect(mockOnTabStateChange).toHaveBeenCalledWith({
       active: true,
-      icon: "✅",
+      status: "done",
     });
     expect(mockSetAgentSession).toHaveBeenCalledWith("hooks-test", {
       sessionId: "s1",
@@ -1910,7 +1910,7 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     });
   });
 
-  it("HUK6: StopFailure → error → ❌ + setAgentSession", async () => {
+  it("HUK6: StopFailure → error → status: error + setAgentSession", async () => {
     await mountAndWaitForHooks();
     mockOnTabStateChange.mockClear();
     mockSetAgentSession.mockClear();
@@ -1922,7 +1922,7 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     expect(mockEventToStatus).toHaveBeenCalledWith("StopFailure", null);
     expect(mockOnTabStateChange).toHaveBeenCalledWith({
       active: true,
-      icon: "❌",
+      status: "error",
     });
     expect(mockSetAgentSession).toHaveBeenCalledWith("hooks-test", {
       sessionId: "s1",
@@ -1931,7 +1931,7 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     });
   });
 
-  it("HUK7: SessionStart → attention → 🟡 + title（B13 补位）+ setAgentSession", async () => {
+  it("HUK7: SessionStart → attention → status: attention + title（B13 补位）+ setAgentSession", async () => {
     await mountAndWaitForHooks();
     mockOnTabStateChange.mockClear();
     mockSetAgentSession.mockClear();
@@ -1945,7 +1945,7 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     // 标题经 hook 事件保持 claude）
     expect(mockOnTabStateChange).toHaveBeenCalledWith({
       active: true,
-      icon: "🟡",
+      status: "attention",
       title: "claude",
     });
     expect(mockSetAgentSession).toHaveBeenCalledWith("hooks-test", {
@@ -2215,7 +2215,7 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     // 第二次：SessionStart → 携 title 重新标 active（标题保持 claude 不回退）
     expect(mockOnTabStateChange).toHaveBeenNthCalledWith(2, {
       active: true,
-      icon: "🟡",
+      status: "attention",
       title: "claude",
     });
     // 无任何「恢复原标题」形态的调用（title 恢复只由真退出信号承担——B13）

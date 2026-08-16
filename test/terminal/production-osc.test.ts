@@ -1,7 +1,7 @@
 // L3 终端渲染测试 — 生产 OSC 52/133/8 handler 语义（E2E-03）
 // 使用 @xterm/headless 触发生产 handler 对应的 OSC 序列，断言其行为：
 //   ① OSC 52 剪贴板（useClipboardHandler.ts）→ mock src/ipc/clipboard.writeText + CJK 解码
-//   ② OSC 133 命令边界（useCommandDetection.ts）→ onTabStateChange 参数（icon/title）
+//   ② OSC 133 命令边界（useCommandDetection.ts）→ onTabStateChange 参数（status/title）
 //   ③ OSC 8 超链接（useXterm.ts linkHandler）→ mock src/ipc/shell.openUrl
 //
 // 实现说明：三个 handler 均为 React hook/组件内注册（L3 node 环境不跑 React），测试在
@@ -14,7 +14,6 @@ import type { TabState } from '../../src/panels/terminal/useCommandDetection';
 import '../../src/features/cliProfiles/profiles'; // side-effect：注册 claude profile（首 token "claude"）
 import { TerminalRegistry } from '../../src/panels/terminal/TerminalRegistry';
 import { cliProfileRegistry } from '../../src/features/cliProfiles'; // 真实注册表
-import { STATUS_EMOJI } from '../../src/lib/agentStatus';
 import type { Terminal as XtermTerminal } from '@xterm/xterm';
 
 vi.mock('../../src/ipc/clipboard', () => ({
@@ -101,7 +100,7 @@ function registerOsc133(
         onTabStateChangeRef.current?.({
           active: true,
           title: profile.tabTitle,
-          icon: STATUS_EMOJI.attention,
+          status: 'attention',
         });
         // MC-107: 写入会话状态（未注入 hooks 时无 usageSourcePath）——cliId 取匹配 profile 的 id
         TerminalRegistry.setAgentSession(panelId, {
@@ -180,16 +179,16 @@ describe('L3 终端渲染 — 生产 OSC handler（E2E-03）', () => {
 
   // ============ OSC 133 命令边界 ============
 
-  it('OSC 133 C — 匹配 claude profile 时 onTabStateChange 携 icon/title + 写 agentSession', async () => {
+  it('OSC 133 C — 匹配 claude profile 时 onTabStateChange 携 status/title + 写 agentSession', async () => {
     const term = createTerminal();
     const states: TabState[] = [];
     registerOsc133(term, 'p1', (state) => states.push(state));
     // shell-integration.ps1 Enter hook 发射：OSC 133 C;<命令行> ST
     await writeSync(term, '\x1b]133;C;claude --resume abc\x1b\\');
-    // 首 token "claude" 命中 claude profile（tabTitle: "claude"），attention 态 🟡。
+    // 首 token "claude" 命中 claude profile（tabTitle: "claude"），attention 态。
     // F9 行为修订：logo 不经此路径直传（会话绑定由 TerminalPanel 订阅驱动）
     expect(states).toEqual([
-      { active: true, title: 'claude', icon: '🟡' },
+      { active: true, title: 'claude', status: 'attention' },
     ]);
     // MC-107: cliId 取匹配 profile 的 id（会话绑定 logo 数据源 + 三级解析反查键）
     expect(TerminalRegistry.get('p1')?.agentSession?.matchedCommand).toBe('claude');
@@ -204,7 +203,7 @@ describe('L3 终端渲染 — 生产 OSC handler（E2E-03）', () => {
     // prompt() 发射 OSC 133;D;<退出码> ST
     await writeSync(term, '\x1b]133;D;0\x1b\\');
     expect(states).toEqual([
-      { active: true, title: 'claude', icon: '🟡' },
+      { active: true, title: 'claude', status: 'attention' },
       { active: false },
     ]);
     expect(TerminalRegistry.get('p1')?.agentSession).toBeNull();

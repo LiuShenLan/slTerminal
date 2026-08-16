@@ -20,6 +20,8 @@ import {
 import { panelRegistry, PANEL_TERMINAL } from "../panelRegistry";
 import { saveLayout, loadLayout } from "./layoutSerde";
 import { makeTerminalPanelId, advanceTerminalPanelSeq } from "../lib/panelId";
+import { StatusDot } from "../lib/StatusDot";
+import type { AgentStatus } from "../lib/agentStatus";
 import { titleManager } from "./titleManager";
 import type { TitleUpdate } from "./titleManager";
 import { TerminalRegistry } from "../panels/terminal/TerminalRegistry";
@@ -37,13 +39,14 @@ const WATERMARK_TEXT = "打开终端或编辑器开始工作";
 
 // ---- 类型 ----
 
-/** 扩展的 params 类型（终端面板通过 updateParameters 设置 tabIcon / tabLogo / customTitle） */
+/** 扩展的 params 类型（终端面板通过 updateParameters 设置 tabStatus / tabLogo / customTitle） */
 export interface TabParams {
   panelId?: string;
   filePath?: string;
   cwd?: string;
-  tabIcon?: string | null;
-  /** CLI 品牌 logo 根绝对路径（F9 修订：跟随页签名显示，不依赖 tabIcon；由 TerminalPanel 会话绑定写入） */
+  /** 终端会话状态（IC-03：状态圆点渲染数据源，由 TerminalPanel 写入；null=无状态） */
+  tabStatus?: AgentStatus | null;
+  /** CLI 品牌 logo 根绝对路径（F9 修订：跟随页签名显示，不依赖 tabStatus；由 TerminalPanel 会话绑定写入） */
   tabLogo?: string | null;
   /** 用户自定义页签标题（右键菜单重命名，随布局 JSON 持久化） */
   customTitle?: string;
@@ -240,8 +243,8 @@ export const DefaultTab: React.FC<IDockviewPanelProps> = (props) => {
   const { api, params } = props;
   const tabParams = params as TabParams;
   const [title, setTitle] = useState(api.title || api.component || "");
-  const [tabIcon, setTabIcon] = useState<string | null>(
-    tabParams?.tabIcon ?? null,
+  const [tabStatus, setTabStatus] = useState<AgentStatus>(
+    tabParams?.tabStatus ?? null,
   );
   const [tabLogo, setTabLogo] = useState<string | null>(
     tabParams?.tabLogo ?? null,
@@ -254,7 +257,7 @@ export const DefaultTab: React.FC<IDockviewPanelProps> = (props) => {
       // event 就是 Parameters 对象本身（Dockview PanelApi.onDidParametersChange
       // 类型签名为 Event<Parameters>，回调直接接收 Parameters 对象）
       const p = event as TabParams;
-      setTabIcon(p?.tabIcon ?? null);
+      setTabStatus(p?.tabStatus ?? null);
       setTabLogo(p?.tabLogo ?? null);
     });
     return () => {
@@ -267,24 +270,11 @@ export const DefaultTab: React.FC<IDockviewPanelProps> = (props) => {
       display: "flex", alignItems: "center", height: "100%",
       padding: "0 8px", gap: 6, userSelect: "none",
     }}>
-      {tabIcon && (() => {
-        // URL 或文件路径 → <img>；emoji/纯文本 → <span>
-        const isUrl = tabIcon.includes("/") || tabIcon.includes("\\")
-          || tabIcon.startsWith("http:") || tabIcon.startsWith("data:");
-        if (isUrl) {
-          return (
-            <img src={tabIcon} width={16} height={16}
-              style={{ flexShrink: 0, display: "block" }} alt="页签图标" />
-          );
-        }
-        return (
-          <span style={{ fontSize: 14, lineHeight: 1, flexShrink: 0 }}>
-            {tabIcon}
-          </span>
-        );
-      })()}
+      {/* 终端状态圆点（IC-03：tabIcon emoji/img 分支随 STATUS_EMOJI 删除，
+          改 StatusDot 按状态渲染——working 绿/attention 黄/done 灰/error 红） */}
+      {tabStatus != null && <StatusDot status={tabStatus} />}
       {/* CLI 品牌 logo：跟随页签名显示（F9 行为修订）——tabLogo 有值即渲染，
-          不依赖 tabIcon；emoji 为空时 logo 顶到标题前（位置语义不变） */}
+          不依赖 tabStatus；状态圆点缺席时 logo 顶到标题前（位置语义不变） */}
       {tabLogo && (
         <img src={tabLogo} width={16} height={16}
           style={{ flexShrink: 0, display: "block" }} alt="CLI 图标" />

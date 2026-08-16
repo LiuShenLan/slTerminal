@@ -33,7 +33,7 @@ import {
 } from "../features/cliProfiles/profiles/claude/strategies";
 import ClaudeHooksConfigEditor from "../panels/hooksConfig/ClaudeHooksConfigEditor";
 import { cliProfileRegistry } from "../features/cliProfiles/cliProfileRegistry";
-import { STATUS_EMOJI, type AgentStatus } from "../lib/agentStatus";
+import type { AgentStatus } from "../lib/agentStatus";
 import type { AgentEventPayload } from "../types/agent";
 import type { AgentHistorySession } from "../types/agentHistory";
 
@@ -292,24 +292,24 @@ describe("eventToStatus", () => {
 
   it("完整会话周期：启动 → 处理 → 注意 → 处理 → 完成 → 新轮次 → 错误 → 退出", () => {
     // 启动
-    expect(eventToStatus("SessionStart")).toBe("attention"); // 🟡 等待
+    expect(eventToStatus("SessionStart")).toBe("attention"); // attention 等待
     // 用户提交 prompt
-    expect(eventToStatus("UserPromptSubmit")).toBe("working"); // ⚡ 处理中
+    expect(eventToStatus("UserPromptSubmit")).toBe("working"); // working 处理中
     // 工具执行
-    expect(eventToStatus("PreToolUse")).toBe("working"); // ⚡ 工具执行
-    expect(eventToStatus("PostToolUse")).toBe("working"); // ⚡ 继续处理
+    expect(eventToStatus("PreToolUse")).toBe("working"); // working 工具执行
+    expect(eventToStatus("PostToolUse")).toBe("working"); // working 继续处理
     // 权限请求（需要用户处理）
-    expect(eventToStatus("Notification", "permission_prompt")).toBe("attention"); // 🟡 等待
+    expect(eventToStatus("Notification", "permission_prompt")).toBe("attention"); // attention 等待
     // 授权后继续
-    expect(eventToStatus("PreToolUse")).toBe("working"); // ⚡ 覆盖 attention
+    expect(eventToStatus("PreToolUse")).toBe("working"); // working 覆盖 attention
     // 完成
-    expect(eventToStatus("Stop")).toBe("done"); // ✅ 完成
+    expect(eventToStatus("Stop")).toBe("done"); // done 完成
     // 新一轮 prompt
-    expect(eventToStatus("UserPromptSubmit")).toBe("working"); // ⚡ 再处理
+    expect(eventToStatus("UserPromptSubmit")).toBe("working"); // working 再处理
     // 失败
-    expect(eventToStatus("StopFailure")).toBe("error"); // ❌ 失败
+    expect(eventToStatus("StopFailure")).toBe("error"); // error 失败
     // 会话结束
-    expect(eventToStatus("SessionEnd")).toBeNull(); // 无图标
+    expect(eventToStatus("SessionEnd")).toBeNull(); // 无状态
   });
 
   it("Notification attention 后继续被后续事件覆盖", () => {
@@ -323,10 +323,11 @@ describe("eventToStatus", () => {
     expect(eventToStatus("Notification", "auth_success")).toBeNull();
   });
 
-  // ── STATUS_EMOJI × eventToStatus 联合守卫（原 claude-status 语义）────
+  // ── eventToStatus × 四态契约守卫（IC-03：STATUS_EMOJI 已退役，non-null 结果
+  //    必须落在四态字符串内——StatusDot 渲染层消费契约，原 claude-status 语义）────
 
-  it("eventToStatus 返回 non-null 时 STATUS_EMOJI[status] 必定合法", () => {
-    // 所有能产生 non-null 结果的事件组合，STATUS_EMOJI 都必须有对应 emoji
+  it("eventToStatus 返回 non-null 时必为四态之一（StatusDot 消费契约）", () => {
+    // 所有能产生 non-null 结果的事件组合，结果必须落在四态字符串内
     const nonNullCases: Array<[string, string?, string?]> = [
       ["SessionStart", undefined, "attention"],
       ["UserPromptSubmit", undefined, "working"],
@@ -344,13 +345,12 @@ describe("eventToStatus", () => {
     for (const [event, notifType, expected] of nonNullCases) {
       const status = eventToStatus(event, notifType);
       expect(status).toBe(expected);
-      // 非 null 状态必须能索引到 emoji
-      expect(STATUS_EMOJI[status!]).toBeDefined();
-      expect(typeof STATUS_EMOJI[status!]).toBe("string");
+      // 非 null 状态必为四态之一（working/attention/done/error）
+      expect(["working", "attention", "done", "error"]).toContain(status!);
     }
   });
 
-  it("eventToStatus 返回 null 时不索引 STATUS_EMOJI（null 无图标）", () => {
+  it("eventToStatus 返回 null（null 无状态）", () => {
     const nullCases: Array<[string, string?]> = [
       ["SessionEnd"],
       ["SessionEnd", undefined],

@@ -36,7 +36,6 @@ import { TerminalRegistry } from "./TerminalRegistry";
 import { resolvePayloadCliId } from "./resolvePayloadCliId";
 import { useFontSizeWheel } from "../../lib/useFontSizeWheel";
 import { E2E_ENABLED } from "../../lib/e2eEnabled";
-import { STATUS_EMOJI } from "../../lib/agentStatus";
 import { FONT_SIZE_MIN, FONT_SIZE_MAX } from "../../stores/fontSize";
 // Agent 事件订阅（MC-202：onAgentEvent，照 onFsEvent 模式直接引 ipc 文件）
 import { onAgentEvent } from "../../ipc/agentHooks";
@@ -276,7 +275,7 @@ export function useXterm({
       const rows = Number.isFinite(realRows) ? realRows : DEFAULT_ROWS;
       if (!Number.isFinite(realCols) || !Number.isFinite(realRows)) {
         console.warn(
-          `[H6] ⚠️ proposeDimensions 返回 NaN，回退 ${DEFAULT_COLS}x${DEFAULT_ROWS} (raw: cols=${realCols} rows=${realRows})`
+          `[H6] [warn] proposeDimensions 返回 NaN，回退 ${DEFAULT_COLS}x${DEFAULT_ROWS} (raw: cols=${realCols} rows=${realRows})`
         );
       }
       lastColsRef.current = cols;
@@ -299,7 +298,7 @@ export function useXterm({
         .catch((err) => {
           term.writeln(`\r\n[重新连接] 按 Enter 重试...\r\n`);
           if (E2E_ENABLED) setTerminalSessionError(container, String(err));
-          console.error(`[H6] ❌ spawn FAIL panelId="${panelId}"`, err);
+          console.error(`[H6] spawn FAIL panelId="${panelId}"`, err);
           // 设置 Enter 重连监听（不立即重新 spawn，由用户按 Enter 触发）
           setupRetry(cols, rows);
         });
@@ -406,12 +405,12 @@ export function useXterm({
       if (payload.event === SESSION_START_EVENT) {
         onTabStateChange?.({
           active: true,
-          icon: STATUS_EMOJI[status],
+          status,
           title: profile?.tabTitle,
         });
         return;
       }
-      onTabStateChange?.({ active: true, icon: STATUS_EMOJI[status] });
+      onTabStateChange?.({ active: true, status });
     });
 
     // ── 清理 ──

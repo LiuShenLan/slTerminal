@@ -13,12 +13,17 @@ import { openHooksConfigPanel } from "../../workspace/pageApis";
 import {
   PANEL_BG,
   SIDEBAR_COLORS,
+  EXPLORER_COLORS,
   ACTIVE_SELECTION_BG,
   INPUT_BG,
   FOCUS_BORDER,
-  PLACEHOLDER_FG,
   INPUT_BORDER,
 } from "../../theme";
+import {
+  IconChevronRight,
+  IconChevronDown,
+  IconFolder,
+} from "../../lib/icons";
 
 // ---- CSS 变量（暗色主题） ----
 const SIDEBAR_CSS = {
@@ -168,10 +173,23 @@ const ProjectRow: React.FC<{
       (e.target as HTMLDivElement).style.background = "transparent";
     }}
   >
-    <span style={{ width: 16, fontSize: 10, flexShrink: 0, color: PLACEHOLDER_FG }}>
-      {expanded ? "▼" : "▶"}
+    {/* 树箭头：chevron 12px fg-3（EXPLORER_COLORS.arrowClosed 槽位）——IC-05 */}
+    <span
+      style={{
+        width: 16,
+        flexShrink: 0,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        color: EXPLORER_COLORS.arrowClosed,
+      }}
+    >
+      {expanded ? <IconChevronDown size={12} /> : <IconChevronRight size={12} />}
     </span>
-    <span style={{ marginRight: 4, flexShrink: 0 }}>📁</span>
+    {/* 项目行图标：文件夹（icons.tsx IconFolder，12px）——IC-05 */}
+    <span style={{ marginRight: 4, flexShrink: 0, display: "flex" }}>
+      <IconFolder size={12} />
+    </span>
     <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
       {project.name}
     </span>
@@ -253,7 +271,9 @@ const PageRow: React.FC<{
       }}
     >
       <span style={{ width: 16, flexShrink: 0 }} />
-      <span style={{ marginRight: 4, flexShrink: 0 }}>📄</span>
+      {/* 页面行图标槽位：icons.tsx 无文档图标导出，暂留等宽占位（对齐项目行图标）；
+          Stage 06 导航树重建时按设计稿引入文档图标 */}
+      <span style={{ width: 12, marginRight: 4, flexShrink: 0 }} />
       {isRenaming ? (
         <input
           value={editValue}

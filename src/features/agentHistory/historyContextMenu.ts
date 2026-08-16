@@ -34,11 +34,11 @@ export interface HistoryMenuItem {
 
 /** 策略入参（契约逐字：active/orphan/noCwd + 三个操作回调） */
 export interface HistoryContextMenuOpts {
-  /** ⚡ 运行中会话标记 */
+  /** working 运行中会话标记 */
   active: boolean;
-  /** ✗ 孤儿会话标记（cwd 目录已删除，不可恢复） */
+  /** 孤儿会话标记（cwd 目录已删除，不可恢复；IconClose 标记） */
   orphan: boolean;
-  /** 无 cwd（恢复类操作禁用，不显示 ✗） */
+  /** 无 cwd（恢复类操作禁用，不显示孤儿标记） */
   noCwd: boolean;
   /** 复制恢复命令到剪贴板 */
   onCopy(): void;

@@ -129,17 +129,17 @@ describe("SideBarArea", () => {
     resetStore();
     resetPaneProps();
 
-    // 注册两个 stub 视图
+    // 注册两个 stub 视图（icon 为组件形态——IC-06）
     sideViewRegistry.register({
       id: "projects",
       title: "项目列表",
-      icon: "📋",
+      icon: () => null,
       component: makeStubView("projects"),
     });
     sideViewRegistry.register({
       id: "explorer",
       title: "文件浏览器",
-      icon: "📁",
+      icon: () => null,
       component: makeStubView("explorer"),
     });
   });
@@ -293,7 +293,7 @@ describe("SideBarArea", () => {
     sideViewRegistry.register({
       id: "projects",
       title: "项目列表",
-      icon: "📋",
+      icon: () => null,
       component: makeStubView(
         "projects",
         () => {
@@ -307,7 +307,7 @@ describe("SideBarArea", () => {
     sideViewRegistry.register({
       id: "explorer",
       title: "文件浏览器",
-      icon: "📁",
+      icon: () => null,
       component: makeStubView("explorer"),
     });
 
@@ -347,7 +347,7 @@ describe("SideBarArea", () => {
     sideViewRegistry.register({
       id: "projects",
       title: "项目列表",
-      icon: "📋",
+      icon: () => null,
       component: (props: SideViewComponentProps) => {
         capturedRef.current = props;
         return React.createElement("div", { "data-testid": "stub-view-projects" });

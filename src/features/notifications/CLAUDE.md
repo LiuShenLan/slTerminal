@@ -20,9 +20,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 claude 类别规则（实现于 profiles/claude，优先级自上而下，行为与迁入前一致）：
 
-- **permission（🔐 权限请求）**：`PermissionRequest` 或（`Notification` 且 `notificationType === "permission_prompt"`）
-- **error（❌ 错误）**：`StopFailure` / `PostToolUseFailure`
-- **done（✅ 任务完成）**：`Stop`
+- **permission（权限请求）**：`PermissionRequest` 或（`Notification` 且 `notificationType === "permission_prompt"`）
+- **error（错误）**：`StopFailure` / `PostToolUseFailure`
+- **done（任务完成）**：`Stop`
 - 其他事件（PreToolUse/PostToolUse/SessionStart/SessionEnd 等）→ 不触发通知
 
 ### 失焦门控

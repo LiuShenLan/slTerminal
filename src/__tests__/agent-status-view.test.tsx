@@ -62,17 +62,18 @@ vi.mock("../workspace/pageApis", () => ({
   getPageApi: vi.fn(() => undefined),
 }));
 
-vi.mock("../lib/agentStatus", () => ({
-  // null/未识别状态 → ""（与真实实现一致：真实 getStatusIcon 对 null 返回 ""，
-  // 否则 status null 行会误渲染 emoji——F9 修订后 logo 独立于 emoji，不随此值变化）
-  getStatusIcon: vi.fn(
-    (s: string | null) =>
-      s != null ? ({ working: "⚡", attention: "🟡", done: "✅", error: "❌" })[s] ?? "" : "",
-  ),
-  // STATUS_EMOJI 必须保留真实值——HistorySessionRow 直接访问
-  // STATUS_EMOJI[status]（历史区与活跃区四态同源），缺失会抛 TypeError
-  STATUS_EMOJI: { working: "⚡", attention: "🟡", done: "✅", error: "❌" },
-}));
+// IC-03：lib/agentStatus 已删除 STATUS_EMOJI/getStatusIcon（仅剩类型导出），
+// 状态渲染改 StatusDot——本文件 mock StatusDot 为可识别 span（data-testid=
+// "status-dot"，文本 = status 值），只断言接线不依赖其内部 DOM
+vi.mock("../lib/StatusDot", async () => {
+  const { createElement } = await import("react");
+  return {
+    StatusDot: ({ status }: { status: string | null }) =>
+      status == null
+        ? null
+        : createElement("span", { "data-testid": "status-dot" }, status),
+  };
+});
 
 // ── 历史区数据源 mock（NAH-06：useAgentHistory 保持真实——标题覆盖集成测试
 //    须走真实 scan → sessions → titleBySessionId 派生链，仅 mock IPC 层 scanHistory；
@@ -349,14 +350,16 @@ describe("AgentStatusRow 双行布局（问题 1 修复）", () => {
     expect(line2.textContent).toContain("5 分钟前");
   });
 
-  it("状态图标仍在行1（E2E 兼容：emoji 文本断言）", () => {
+  it("状态圆点在行1（StatusDot 透传 status 值）", () => {
     const row = makeRow({ status: "working" });
     const { container } = render(
       React.createElement(AgentStatusRow, { row, onFocus: vi.fn() }),
     );
 
     const { line1 } = rowChildren(container);
-    expect(line1.textContent).toContain("⚡");
+    const dot = line1.querySelector('[data-testid="status-dot"]');
+    expect(dot).toBeTruthy();
+    expect(dot?.textContent).toBe("working");
   });
 
   it("status 非 null → 行1 渲染 CLI logo（按 row.cliId 查 profile.iconSrc/16×16/位于图标列内）", () => {
@@ -381,11 +384,11 @@ describe("AgentStatusRow 双行布局（问题 1 修复）", () => {
     );
 
     const { line1 } = rowChildren(container);
-    expect(line1.textContent).toContain("⚡"); // emoji 仍显示
+    expect(line1.querySelector('[data-testid="status-dot"]')?.textContent).toBe("working"); // 圆点仍显示
     expect(line1.querySelector('img[alt="CLI 图标"]')).toBeNull(); // 无 logo
   });
 
-  it("status null → 行1 仍渲染 CLI logo（F9 行为修订：跟随会话名显示，不依赖 emoji）", () => {
+  it("status null → 行1 仍渲染 CLI logo（F9 行为修订：跟随会话名显示，不依赖状态圆点）", () => {
     // ZQ-3 决策 2：status=null 行（无图标）同样有会话名与会话——logo 显示
     const row = makeRow({ status: null });
     const { container } = render(
@@ -393,7 +396,7 @@ describe("AgentStatusRow 双行布局（问题 1 修复）", () => {
     );
 
     const { line1 } = rowChildren(container);
-    expect(line1.textContent).not.toContain("⚡");
+    expect(line1.querySelector('[data-testid="status-dot"]')).toBeNull(); // 无圆点
     const logoImg = line1.querySelector('img[alt="CLI 图标"]');
     expect(logoImg).toBeTruthy();
     expect(logoImg?.getAttribute("src")).toBe("/cli-icons/claude.png");
@@ -411,11 +414,11 @@ describe("AgentStatusRow 双行布局（问题 1 修复）", () => {
     );
 
     const { line1 } = rowChildren(container);
-    expect(line1.textContent).not.toContain("⚡");
+    expect(line1.querySelector('[data-testid="status-dot"]')).toBeNull();
     expect(line1.querySelector('img[alt="CLI 图标"]')).toBeNull();
   });
 
-  it("图标列 = 40px flex 簇（emoji 与 logo 列内居中成组）", () => {
+  it("图标列 = 40px flex 簇（圆点与 logo 列内居中成组）", () => {
     const row = makeRow({ status: "working" });
     const { container } = render(
       React.createElement(AgentStatusRow, { row, onFocus: vi.fn() }),
@@ -427,9 +430,10 @@ describe("AgentStatusRow 双行布局（问题 1 修复）", () => {
     expect(iconCol.style.display).toBe("flex");
     expect(iconCol.style.alignItems).toBe("center");
     expect(iconCol.style.justifyContent).toBe("center");
-    // 列内：emoji 文本节点（不入 children）+ logo img（children[0]）
-    expect(iconCol.firstChild?.textContent).toBe("⚡");
-    expect(iconCol.children[0]?.getAttribute("alt")).toBe("CLI 图标");
+    // 列内：状态圆点 span（children[0]）+ logo img（children[1]）
+    expect(iconCol.children[0]?.getAttribute("data-testid")).toBe("status-dot");
+    expect(iconCol.children[0]?.textContent).toBe("working");
+    expect(iconCol.children[1]?.getAttribute("alt")).toBe("CLI 图标");
   });
 
   it("行2 paddingLeft = 48px（对齐行1图标列 40 + gap 8，用量条与标题起点对齐）", () => {

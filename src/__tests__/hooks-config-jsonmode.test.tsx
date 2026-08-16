@@ -274,7 +274,7 @@ describe("P3-TE-09 JSON 模式渲染与 Schema 校验", () => {
     const { getByText, container } = render(React.createElement(MatcherTester));
     expect(container.querySelector('[data-e2e="hooks-matcher-tester"]')).toBeTruthy();
     // 空 matcher → 全匹配（mode: all）
-    expect(getByText("命中 ✓")).toBeTruthy();
+    expect(getByText("命中")).toBeTruthy();
     expect(container.textContent).toContain("全匹配");
   });
 });
@@ -294,7 +294,7 @@ describe("P3-TE-09 MatcherTester 试测", () => {
       container.querySelector('[data-e2e="matcher-tool"]') as HTMLInputElement,
       { target: { value: "Edit" } },
     );
-    expect(getByText("命中 ✓")).toBeTruthy();
+    expect(getByText("命中")).toBeTruthy();
     expect(container.textContent).toContain("精确匹配 OR");
   });
 
@@ -308,7 +308,7 @@ describe("P3-TE-09 MatcherTester 试测", () => {
       container.querySelector('[data-e2e="matcher-tool"]') as HTMLInputElement,
       { target: { value: "Bash" } },
     );
-    expect(getByText("未命中 ✗")).toBeTruthy();
+    expect(getByText("未命中")).toBeTruthy();
   });
 
   it("JS 正则模式：非窄字符集 matcher 走正则", () => {
@@ -321,7 +321,7 @@ describe("P3-TE-09 MatcherTester 试测", () => {
       container.querySelector('[data-e2e="matcher-tool"]') as HTMLInputElement,
       { target: { value: "Edit" } },
     );
-    expect(getByText("命中 ✓")).toBeTruthy();
+    expect(getByText("命中")).toBeTruthy();
     expect(container.textContent).toContain("JS 正则（非锚定）");
   });
 

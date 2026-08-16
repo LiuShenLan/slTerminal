@@ -47,7 +47,7 @@ import {
   claudeProfile,
   CLAUDE_CLI_ID,
 } from "../features/cliProfiles/profiles/claude";
-import { STATUS_EMOJI, type AgentStatus } from "../lib/agentStatus";
+import type { AgentStatus } from "../lib/agentStatus";
 import { EXPLORER_SELECTION_BG } from "../theme";
 import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
@@ -413,7 +413,7 @@ describe("AC-4① OSC 133 命中（useCommandDetection 链路）", () => {
     expect(onTabStateChange).toHaveBeenCalledWith({
       active: true,
       title: mockCliProfile.tabTitle,
-      icon: STATUS_EMOJI.attention,
+      status: "attention",
     });
     // MC-107: setAgentSession 写入 agentSession.cliId（会话绑定 logo 数据源 + hook 事件三级解析反查键）
     const session = TerminalRegistry.get(panelId)?.agentSession;
@@ -510,7 +510,7 @@ describe("AC-4② hooks 能力经真实链路调用", () => {
     expect(eventToStatusSpy).toHaveBeenCalledWith("UserPromptSubmit", null);
     expect(onTabStateChange).toHaveBeenCalledWith({
       active: true,
-      icon: STATUS_EMOJI.working,
+      status: "working",
     });
     // PF2-FE-04: 非 SessionEnd 事件 → setAgentSession 携 sessionId/usageSourcePath/status
     const session = TerminalRegistry.get(panelId)?.agentSession;
@@ -549,7 +549,7 @@ describe("AC-4② hooks 能力经真实链路调用", () => {
     const [title, opts] = h.mockSendToastNotification.mock
       .calls[0] as [string, { body: string }];
     expect(title).toBe("slTerminal");
-    expect(opts.body).toContain("✅ 任务完成");
+    expect(opts.body).toContain("任务完成");
     classifySpy.mockRestore();
   });
 

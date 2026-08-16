@@ -39,6 +39,7 @@ import {
   EXPLORER_COLORS,
   SIDEBAR_COLORS,
 } from "../../theme";
+import { IconChevronRight, IconChevronDown } from "../../lib/icons";
 
 /** 标题栏样式（照 CommitView.tsx） */
 const headerStyle: React.CSSProperties = {
@@ -68,14 +69,13 @@ const sectionHeaderStyle: React.CSSProperties = {
   color: EXPLORER_COLORS.fg,
 };
 
-/** 折叠箭头 */
+/** 折叠箭头（chevron 12px，色经 EXPLORER_COLORS arrow 槽位 token——IC-05） */
 const arrowStyle: React.CSSProperties = {
-  display: "inline-block",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
   width: 16,
-  fontSize: 10,
   color: EXPLORER_COLORS.arrowClosed,
-  textAlign: "center",
-  lineHeight: "22px",
   userSelect: "none",
   flexShrink: 0,
 };
@@ -170,7 +170,9 @@ export const AgentStatusView: React.FC<SideViewComponentProps> = (_props) => { /
           style={sectionHeaderStyle}
           onClick={() => setActiveExpanded((v) => !v)}
         >
-          <span style={arrowStyle}>{activeExpanded ? "▼" : "▶"}</span>
+          <span style={arrowStyle}>
+            {activeExpanded ? <IconChevronDown size={12} /> : <IconChevronRight size={12} />}
+          </span>
           <span>活跃会话</span>
         </div>
         {activeExpanded && (

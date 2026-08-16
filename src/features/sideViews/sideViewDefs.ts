@@ -12,36 +12,43 @@ import { ExplorerPanel } from "../explorer";
 import { CommitView } from "../commit";
 import { AgentStatusView } from "../agentStatus/AgentStatusView";
 import { sideViewRegistry } from "./sideViewRegistry";
+import {
+  IconNav,
+  IconFiles,
+  IconCommit,
+  IconHistory,
+} from "../../lib/icons";
 
-// 注册项目列表视图（📋）
+// 注册项目列表视图（导航树）
 sideViewRegistry.register({
   id: "projects",
   title: "项目列表",
-  icon: "📋",
+  icon: IconNav,
   component: SidebarTree,
 });
 
-// 注册文件浏览器视图（📁）
+// 注册文件浏览器视图
 // ExplorerPanel 不接受 props，箭头包装忽略 SideViewComponentProps
 sideViewRegistry.register({
   id: "explorer",
   title: "文件浏览器",
-  icon: "📁",
+  icon: IconFiles,
   component: () => React.createElement(ExplorerPanel),
 });
 
-// 注册 commit 视图（🔀）
+// 注册 commit 视图
 sideViewRegistry.register({
   id: "commit",
   title: "Commit",
-  icon: "🔀",
+  icon: IconCommit,
   component: () => React.createElement(CommitView),
 });
 
-// 注册 agent-status 视图（🤖）
+// 注册 agent-status 视图（图标暂用时钟 IconHistory——含历史会话区；
+// Stage 06 并入导航树后删除本视图）
 sideViewRegistry.register({
   id: "agent-status",
   title: "Agent 状态",
-  icon: "🤖",
+  icon: IconHistory,
   component: AgentStatusView,
 });

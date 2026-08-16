@@ -24,6 +24,7 @@ import {
   CONTEXT_MENU_BORDER,
 } from "../../theme";
 import { ask } from "../../ipc/dialog";
+import { IconChevronRight, IconChevronDown } from "../../lib/icons";
 
 // ---- 文件树布局几何常量 ----
 // 用于计算各节点的 paddingLeft，对齐文件名文本起始位置
@@ -196,19 +197,22 @@ const TreeNodeRow: React.FC<{
         }
       }}
     >
-      {/* 展开/折叠箭头 */}
+      {/* 展开/折叠箭头（chevron 12px，色经 EXPLORER_COLORS arrow 槽位 token——IC-05） */}
       {entry.isDir ? (
         <span
           style={{
             width: 12,
-            fontSize: 8,
             flexShrink: 0,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
             color: expanded
               ? EXPLORER_COLORS.arrowOpen
               : EXPLORER_COLORS.arrowClosed,
           }}
         >
-          {loading ? "⏳" : expanded ? "▼" : "▶"}
+          {/* 加载中 → 「…」三点（执行期定：icons.tsx 无 spinner 导出，不新建组件） */}
+          {loading ? "…" : expanded ? <IconChevronDown size={12} /> : <IconChevronRight size={12} />}
         </span>
       ) : (
         <span style={{ width: 12, flexShrink: 0 }} />

@@ -8,6 +8,7 @@
 //   按钮渲染与开关、上区/下区拖拽归属、槽位展示、持久化。
 
 import type React from "react";
+import type { IconProps } from "../../lib/icons";
 
 /** 侧栏视图组件的 props——与 SidebarTree props 精确匹配 */
 export interface SideViewComponentProps {
@@ -23,8 +24,8 @@ export interface SideViewDef {
   id: string;
   /** 视图名称（tooltip / 无障碍名称） */
   title: string;
-  /** 活动栏按钮图标（emoji） */
-  icon: string;
+  /** 活动栏按钮图标（icons.tsx 组件；15px 默认，currentColor 跟随按钮色——IC-06） */
+  icon: React.ComponentType<IconProps>;
   /** 视图 React 组件 */
   component: React.ComponentType<SideViewComponentProps>;
 }

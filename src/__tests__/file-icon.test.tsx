@@ -1,8 +1,10 @@
-// FileIcon.test.tsx — fileIcon() 纯函数 + FileIcon 组件测试
+// FileIcon.test.tsx — FileIcon 组件测试（UI-602 同步：emoji 断言 → SVG/色系断言）
 //
 // 覆盖：
-// A 组：fileIcon() — 通过组件渲染间接验证各扩展名图标
-// B 组：FileIcon 组件 — 文件/目录渲染 + git 状态着色
+// A 组：文件渲染——svg 存在 + 左缘色块 fill = 扩展名映射色（六色盘）
+// A2 组：扩展名 → 色块映射（表驱动全分支）
+// B 组：git 状态着色——轮廓描边 stroke = git 状态色（GIT_FILE_COLORS 逻辑不变）
+// C 组：目录渲染——IconFolder（svg）+ 默认色
 
 import { describe, it, expect } from "vitest";
 import { render } from "@testing-library/react";
@@ -17,83 +19,75 @@ function hexToStyleRgb(hex: string): string {
   return `rgb(${r}, ${g}, ${b})`;
 }
 
-// ─── A 组: 文件图标渲染（各扩展名分支）───
+/** 取渲染出的 SVG 内第一个 path（文件轮廓）的 stroke 属性 */
+function outlineStroke(container: HTMLElement): string | null {
+  return container.querySelector("svg path")?.getAttribute("stroke") ?? null;
+}
+
+/** 取渲染出的 SVG 内左缘色块（rect）的 fill 属性 */
+function blockFill(container: HTMLElement): string | null {
+  return container.querySelector("svg rect")?.getAttribute("fill") ?? null;
+}
+
+// ─── A 组: 文件图标渲染（SVG + 色块）───
 
 describe("FileIcon 组件渲染", () => {
-  it("渲染文件图标（TS 扩展名）", () => {
-    const { container } = render(
-      <FileIcon name="main.ts" isDir={false} />,
-    );
+  it("渲染文件图标（TS 扩展名，蓝色块）", () => {
+    const { container } = render(<FileIcon name="main.ts" isDir={false} />);
+    const svg = container.querySelector("svg");
+    expect(svg).not.toBeNull();
+    expect(blockFill(container)).toBe("#7fa8e8");
+    expect(outlineStroke(container)).toBe(EXPLORER_COLORS.fg);
+  });
+
+  it("渲染文件图标（RS 扩展名，红色块）", () => {
+    const { container } = render(<FileIcon name="lib.rs" isDir={false} />);
+    expect(container.querySelector("svg")).not.toBeNull();
+    expect(blockFill(container)).toBe("#d9706b");
+  });
+
+  it("渲染文件图标（JS 扩展名，黄色块）", () => {
+    const { container } = render(<FileIcon name="index.js" isDir={false} />);
+    expect(container.querySelector("svg")).not.toBeNull();
+    expect(blockFill(container)).toBe("#d6b25e");
+  });
+
+  it("渲染文件图标（JSON 扩展名，黄色块）", () => {
+    const { container } = render(<FileIcon name="package.json" isDir={false} />);
+    expect(container.querySelector("svg")).not.toBeNull();
+    expect(blockFill(container)).toBe("#d6b25e");
+  });
+
+  it("渲染文件图标（MD 扩展名，紫色块）", () => {
+    const { container } = render(<FileIcon name="README.md" isDir={false} />);
+    expect(container.querySelector("svg")).not.toBeNull();
+    expect(blockFill(container)).toBe("#b48ce0");
+  });
+
+  it("渲染文件图标（TOML 配置扩展名，灰青块）", () => {
+    const { container } = render(<FileIcon name="Cargo.toml" isDir={false} />);
+    expect(container.querySelector("svg")).not.toBeNull();
+    expect(blockFill(container)).toBe(EXPLORER_COLORS.fg);
+  });
+
+  it("渲染文件图标（无扩展名，默认：无彩块仅描边）", () => {
+    const { container } = render(<FileIcon name="Makefile" isDir={false} />);
+    expect(container.querySelector("svg")).not.toBeNull();
+    expect(blockFill(container)).toBeNull();
+    expect(outlineStroke(container)).toBe(EXPLORER_COLORS.fg);
+  });
+
+  it("渲染文件图标（未知扩展名，默认：无彩块仅描边）", () => {
+    const { container } = render(<FileIcon name="data.bin" isDir={false} />);
+    expect(container.querySelector("svg")).not.toBeNull();
+    expect(blockFill(container)).toBeNull();
+  });
+
+  it("渲染目录图标（IconFolder 描边 SVG）", () => {
+    const { container } = render(<FileIcon name="src" isDir={true} />);
     const span = container.querySelector("span");
     expect(span).not.toBeNull();
-    expect(span!.textContent?.length).toBeGreaterThan(0);
-    expect(span!.style.color).toBe(hexToStyleRgb(EXPLORER_COLORS.fg));
-  });
-
-  it("渲染文件图标（RS 扩展名）", () => {
-    const { container } = render(
-      <FileIcon name="lib.rs" isDir={false} />,
-    );
-    const span = container.querySelector("span");
-    expect(span!.textContent?.length).toBeGreaterThan(0);
-  });
-
-  it("渲染文件图标（JS 扩展名）", () => {
-    const { container } = render(
-      <FileIcon name="index.js" isDir={false} />,
-    );
-    const span = container.querySelector("span");
-    expect(span!.textContent?.length).toBeGreaterThan(0);
-  });
-
-  it("渲染文件图标（JSON 扩展名）", () => {
-    const { container } = render(
-      <FileIcon name="package.json" isDir={false} />,
-    );
-    const span = container.querySelector("span");
-    expect(span!.textContent?.length).toBeGreaterThan(0);
-  });
-
-  it("渲染文件图标（MD 扩展名）", () => {
-    const { container } = render(
-      <FileIcon name="README.md" isDir={false} />,
-    );
-    const span = container.querySelector("span");
-    expect(span!.textContent?.length).toBeGreaterThan(0);
-  });
-
-  it("渲染文件图标（TOML 扩展名）", () => {
-    const { container } = render(
-      <FileIcon name="Cargo.toml" isDir={false} />,
-    );
-    const span = container.querySelector("span");
-    expect(span!.textContent?.length).toBeGreaterThan(0);
-  });
-
-  it("渲染文件图标（无扩展名，默认图标）", () => {
-    const { container } = render(
-      <FileIcon name="Makefile" isDir={false} />,
-    );
-    const span = container.querySelector("span");
-    expect(span!.textContent?.length).toBeGreaterThan(0);
-    expect(span!.style.color).toBe(hexToStyleRgb(EXPLORER_COLORS.fg));
-  });
-
-  it("渲染文件图标（未知扩展名，默认图标）", () => {
-    const { container } = render(
-      <FileIcon name="data.bin" isDir={false} />,
-    );
-    const span = container.querySelector("span");
-    expect(span!.textContent?.length).toBeGreaterThan(0);
-  });
-
-  it("渲染目录图标", () => {
-    const { container } = render(
-      <FileIcon name="src" isDir={true} />,
-    );
-    const span = container.querySelector("span");
-    expect(span).not.toBeNull();
-    expect(span!.textContent).toBe("\u{1F4C1}");
+    expect(container.querySelector("svg")).not.toBeNull();
     expect(span!.style.color).toBe(hexToStyleRgb(EXPLORER_COLORS.fg));
   });
 
@@ -106,103 +100,96 @@ describe("FileIcon 组件渲染", () => {
   });
 });
 
-// ─── A2 组: 扩展名 → emoji 映射表驱动（EXP-05 分支补全）───
+// ─── A2 组: 扩展名 → 色系映射表驱动（全部分支，防止映射漂移）───
 
-describe("FileIcon 扩展名 → emoji 映射（表驱动）", () => {
-  // 现有单测仅覆盖 .ts/.rs/.js/.json/.md/.toml 且只断言文本非空；
-  // 此处表驱动补齐全部未覆盖分支（.pyw/.markdown/.less/.scss/.gitattributes 等），
-  // 断言精确图标，防止映射漂移。
+describe("FileIcon 扩展名 → 色系映射（表驱动）", () => {
   it.each([
-    ["app.tsx", "\u{1F596}"], // TS 蓝
-    ["app.jsx", "\u{1F4DC}"], // JS 黄
-    ["app.mjs", "\u{1F4DC}"],
-    ["app.cjs", "\u{1F4DC}"],
-    ["main.py", "\u{1F40D}"], // Python
-    ["main.pyw", "\u{1F40D}"],
-    ["tsconfig.jsonc", "\u{1F4CB}"], // JSON
-    ["README.markdown", "\u{1F4DD}"], // Markdown
-    ["index.htm", "\u{1F310}"], // HTML
-    ["style.css", "\u{1F3A8}"], // CSS
-    ["style.scss", "\u{1F3A8}"],
-    ["style.less", "\u{1F3A8}"],
-    ["config.xml", "\u{1F4C4}"], // XML
-    ["icon.svg", "\u{1F4C4}"],
-    ["config.yaml", "\u{2699}\u{FE0F}"], // 配置
-    ["config.yml", "\u{2699}\u{FE0F}"],
-    [".gitignore", "\u{1F4E6}"], // Git
-    [".gitattributes", "\u{1F4E6}"],
-  ])("扩展名分支 %s → 返回对应图标", (name, expected) => {
+    ["app.tsx", "#7fa8e8"], // TS 蓝
+    ["app.jsx", "#d6b25e"], // JS 黄
+    ["app.mjs", "#d6b25e"],
+    ["app.cjs", "#d6b25e"],
+    ["main.py", "#93b573"], // Python 绿
+    ["main.pyw", "#93b573"],
+    ["tsconfig.jsonc", "#d6b25e"], // JSON 黄（同 JS）
+    ["README.markdown", "#b48ce0"], // Markdown 紫
+    ["index.htm", "#6fbfc4"], // HTML 青
+    ["style.css", "#7fa8e8"], // CSS 蓝（同 TS）
+    ["style.scss", "#7fa8e8"],
+    ["style.less", "#7fa8e8"],
+    ["config.xml", EXPLORER_COLORS.fg], // 配置 → 灰青（主题灰）
+    ["icon.svg", EXPLORER_COLORS.fg],
+    ["config.yaml", EXPLORER_COLORS.fg],
+    ["config.yml", EXPLORER_COLORS.fg],
+    [".gitignore", EXPLORER_COLORS.fg],
+    [".gitattributes", EXPLORER_COLORS.fg],
+  ])("扩展名分支 %s → 色块 fill 为对应色系", (name, expected) => {
     const { container } = render(<FileIcon name={name} isDir={false} />);
-    const span = container.querySelector("span");
-    expect(span).not.toBeNull();
-    expect(span!.textContent).toBe(expected);
+    expect(blockFill(container)).toBe(expected);
   });
 });
 
-// ─── B 组: git 状态着色 ───
+// ─── B 组: git 状态着色（描边 stroke，GIT_FILE_COLORS 逻辑不变）───
 
 describe("FileIcon git 状态着色", () => {
   it("modified 状态应用修改色", () => {
     const { container } = render(
       <FileIcon name="main.ts" isDir={false} gitStatus="modified" />,
     );
-    const span = container.querySelector("span");
-    expect(span!.style.color).toBe(hexToStyleRgb(GIT_FILE_COLORS.modified));
+    expect(outlineStroke(container)).toBe(GIT_FILE_COLORS.modified);
   });
 
   it("added 状态应用新增色", () => {
     const { container } = render(
       <FileIcon name="lib.rs" isDir={false} gitStatus="added" />,
     );
-    const span = container.querySelector("span");
-    expect(span!.style.color).toBe(hexToStyleRgb(GIT_FILE_COLORS.added));
+    expect(outlineStroke(container)).toBe(GIT_FILE_COLORS.added);
   });
 
   it("untracked 状态应用未跟踪色", () => {
     const { container } = render(
       <FileIcon name="new.ts" isDir={false} gitStatus="untracked" />,
     );
-    const span = container.querySelector("span");
-    expect(span!.style.color).toBe(hexToStyleRgb(GIT_FILE_COLORS.untracked));
+    expect(outlineStroke(container)).toBe(GIT_FILE_COLORS.untracked);
   });
 
   it("deleted 状态应用删除色", () => {
     const { container } = render(
       <FileIcon name="old.ts" isDir={false} gitStatus="deleted" />,
     );
-    const span = container.querySelector("span");
-    expect(span!.style.color).toBe(hexToStyleRgb(GIT_FILE_COLORS.deleted));
+    expect(outlineStroke(container)).toBe(GIT_FILE_COLORS.deleted);
   });
 
   it("renamed 状态应用重命名色", () => {
     const { container } = render(
       <FileIcon name="moved.ts" isDir={false} gitStatus="renamed" />,
     );
-    const span = container.querySelector("span");
-    expect(span!.style.color).toBe(hexToStyleRgb(GIT_FILE_COLORS.renamed));
+    expect(outlineStroke(container)).toBe(GIT_FILE_COLORS.renamed);
   });
 
   it("conflict 状态应用冲突色", () => {
     const { container } = render(
       <FileIcon name="conflict.ts" isDir={false} gitStatus="conflict" />,
     );
-    const span = container.querySelector("span");
-    expect(span!.style.color).toBe(hexToStyleRgb(GIT_FILE_COLORS.conflict));
+    expect(outlineStroke(container)).toBe(GIT_FILE_COLORS.conflict);
   });
 
   it("ignored 状态应用忽略色", () => {
     const { container } = render(
       <FileIcon name="ignored.log" isDir={false} gitStatus="ignored" />,
     );
-    const span = container.querySelector("span");
-    expect(span!.style.color).toBe(hexToStyleRgb(GIT_FILE_COLORS.ignored));
+    expect(outlineStroke(container)).toBe(GIT_FILE_COLORS.ignored);
   });
 
   it("无 gitStatus 时使用默认前景色", () => {
+    const { container } = render(<FileIcon name="normal.ts" isDir={false} />);
+    expect(outlineStroke(container)).toBe(EXPLORER_COLORS.fg);
+  });
+
+  it("git 状态与类型色块叠加：描边用 git 色、色块保持类型色", () => {
     const { container } = render(
-      <FileIcon name="normal.ts" isDir={false} />,
+      <FileIcon name="main.ts" isDir={false} gitStatus="modified" />,
     );
-    const span = container.querySelector("span");
-    expect(span!.style.color).toBe(hexToStyleRgb(EXPLORER_COLORS.fg));
+    expect(outlineStroke(container)).toBe(GIT_FILE_COLORS.modified);
+    expect(blockFill(container)).toBe("#7fa8e8");
   });
 });

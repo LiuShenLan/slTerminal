@@ -57,7 +57,11 @@ describe("Claude 历史会话视图", () => {
     );
   }
 
-  /** 确保「全部项目历史会话」区展开（幂等：箭头 ▶ 才点击；已展开（▼）不动） */
+  /**
+   * 确保「全部项目历史会话」区展开（幂等：收起才点击；已展开不动）。
+   * 展开态检测（IC-05 箭头 chevron 化后无 ▶/▼ 文本）：区容器子节点数 > 1
+   * （1 = 仅标题栏，2 = 标题栏 + 内容区）。
+   */
   async function ensureAllSectionExpanded(): Promise<void> {
     await browser.waitUntil(
       async () =>
@@ -66,7 +70,7 @@ describe("Claude 历史会话视图", () => {
     );
     const expanded = await browser.execute(() => {
       const section = document.querySelector('[data-e2e="agent-history-section-all"]');
-      return (section?.firstElementChild?.textContent ?? "").includes("▼");
+      return (section?.children.length ?? 0) > 1;
     });
     if (!expanded) {
       await browser.execute(() => {
@@ -78,7 +82,8 @@ describe("Claude 历史会话视图", () => {
 
   /**
    * 展开全部项目区所有组（问题 3 修复：组默认收起——行操作用例需组内行可见）。
-   * 组标题箭头 ▼ 表示展开态；收起组点击展开。
+   * 组展开态检测（IC-05 箭头 chevron 化后无 ▼ 文本）：组标题的父容器子节点数 > 1
+   * （1 = 仅标题栏，2 = 标题栏 + 组内行容器）；收起组点击展开。
    * 时序：展开 all 区后 React 异步渲染组（dispatchEvent 非 React 事件系统，
    * setState 为异步批处理）——先轮询组渲染，再点击展开，再等行出现（展开生效）。
    */
@@ -95,7 +100,9 @@ describe("Claude 历史会话视图", () => {
     await browser.execute(() => {
       const groups = document.querySelectorAll('[data-e2e="agent-history-group"]');
       for (const g of groups) {
-        if (!(g.textContent ?? "").includes("▼")) {
+        const parent = g.parentElement;
+        const expanded = (parent?.children.length ?? 0) > 1;
+        if (!expanded) {
           g.dispatchEvent(new MouseEvent("click", { bubbles: true }));
         }
       }
@@ -356,14 +363,31 @@ describe("Claude 历史会话视图", () => {
 
   // ── 用例 5：孤儿行 ──
 
-  it("孤儿行 ✗ 标记展示 + 双击无反应（无新面板/无页面切换）", async () => {
+  it("孤儿行孤儿标记展示 + 双击无反应（无新面板/无页面切换）", async () => {
     await openAllSectionWithFreshScan();
 
-    // 形态5（cwd 指向不存在路径）→ 孤儿行 ✗
-    const orphanRow = await findRowByText("孤儿会话");
-    expect(orphanRow).toContain("✗");
-    // 普通行（cwd 存在）不显示 ✗
-    expect(await findRowByText("恢复目标会话")).not.toContain("✗");
+    // 形态5（cwd 指向不存在路径）→ 孤儿行显示 IconClose 孤儿标记（IC-08：✗ 字符清除）
+    const orphanRowHasMark = await browser.execute(() => {
+      const rows = document.querySelectorAll('[data-e2e="agent-history-row"]');
+      for (const r of rows) {
+        if ((r.textContent ?? "").includes("孤儿会话")) {
+          return !!r.querySelector('[data-e2e="agent-history-orphan"]');
+        }
+      }
+      return false;
+    });
+    expect(orphanRowHasMark).toBe(true);
+    // 普通行（cwd 存在）不显示孤儿标记
+    const normalRowHasMark = await browser.execute(() => {
+      const rows = document.querySelectorAll('[data-e2e="agent-history-row"]');
+      for (const r of rows) {
+        if ((r.textContent ?? "").includes("恢复目标会话")) {
+          return !!r.querySelector('[data-e2e="agent-history-orphan"]');
+        }
+      }
+      return false;
+    });
+    expect(normalRowHasMark).toBe(false);
 
     // 双击前快照：活跃页面 + 全部面板 id 集合
     const snapshot = (): Promise<{ pageId: string | null; panels: string }> =>

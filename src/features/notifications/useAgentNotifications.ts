@@ -31,19 +31,7 @@ import { resolvePayloadCliId } from "../../panels/terminal/resolvePayloadCliId";
 /** 通知事件类别 */
 export type NotifyCategory = "permission" | "done" | "error";
 
-/**
- * 类别 → emoji 映射
- *
- * MC-404：通知类别 emoji（🔐❌✅）与 src/lib/agentStatus.ts 的 STATUS_EMOJI
- * （⚡🟡✅❌ 会话状态）值有重叠但语义不同——两常量集不合并，改动时互相指引。
- */
-const CATEGORY_EMOJI: Record<NotifyCategory, string> = {
-  permission: "🔐",
-  done: "✅",
-  error: "❌",
-};
-
-/** 类别 → 中文标签 */
+/** 类别 → 中文标签（IC-07：通知标题纯文本——装饰 emoji 字符不进入通知正文） */
 const CATEGORY_LABEL: Record<NotifyCategory, string> = {
   permission: "权限请求",
   done: "任务完成",
@@ -154,11 +142,10 @@ export function useAgentNotifications(): void {
         }
       }
 
-      // 构建 toast 正文：<项目名> · <事件类别> · <时间>
+      // 构建 toast 正文：<项目名> · <事件类别> · <时间>（类别为纯文本标签——IC-07）
       const timeStr = new Date().toLocaleTimeString();
-      const emoji = CATEGORY_EMOJI[category];
       const label = CATEGORY_LABEL[category];
-      const bodyParts = [projectName, `${emoji} ${label}`, timeStr]
+      const bodyParts = [projectName, label, timeStr]
         .filter(Boolean)
         .join(" · ");
 

@@ -5,6 +5,7 @@
 
 import React, { useState, useCallback, useRef, useEffect } from "react";
 import { basename, relativePath } from "../../lib/path";
+import { IconChevronRight, IconChevronDown } from "../../lib/icons";
 import {
   GIT_FILE_COLORS,
   EXPLORER_COLORS,
@@ -22,12 +23,11 @@ import type { GitStatusEntry } from "../../types/git";
 
 /** 折叠箭头样式 */
 const arrowStyle: React.CSSProperties = {
-  display: "inline-block",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
   width: 16,
-  fontSize: 10,
   color: EXPLORER_COLORS.arrowClosed,
-  textAlign: "center",
-  lineHeight: "22px",
   userSelect: "none",
   flexShrink: 0,
 };
@@ -208,7 +208,7 @@ export const CommitFileList: React.FC<CommitFileListProps> = ({
       {/* 可折叠标题栏 */}
       <div style={sectionHeaderStyle} onClick={toggleCollapse}>
         <span style={arrowStyle}>
-          {collapsed ? "▶" : "▼"}
+          {collapsed ? <IconChevronRight size={12} /> : <IconChevronDown size={12} />}
         </span>
         <span>
           {title} ({entries.length})

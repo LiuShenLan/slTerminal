@@ -1,12 +1,12 @@
 // AgentStatusRow.tsx — Agent 状态行组件（双行式）
-// 行1 = 状态图标 + 标题（12px 粗体，截断）；行2 = 上下文用量条 + 百分比 + 相对时间
+// 行1 = 状态圆点（StatusDot）+ 标题（12px 粗体，截断）；行2 = 上下文用量条 + 百分比 + 相对时间
 // （11px 灰，缩进对齐图标列）。点击行可通过 onFocus 跳转到对应终端面板。
 // 时间口径与历史区统一（formatRelativeTime 相对时间，问题 1 修复——旧为
 // toLocaleTimeString 同行挤压导致窄侧栏遮挡）。
 
 import React, { useState, useCallback } from "react";
 import type { AgentSessionRow } from "./useAgentStatus";
-import { getStatusIcon } from "../../lib/agentStatus";
+import { StatusDot } from "../../lib/StatusDot";
 import { cliProfileRegistry } from "../cliProfiles";
 import { formatRelativeTime } from "../agentHistory/historyModel";
 import { AGENT_STATUS_USAGE_COLORS, SIDEBAR_COLORS, DIM_FG } from "../../theme/colors";
@@ -42,8 +42,9 @@ export const AgentStatusRow: React.FC<Props> = ({ row, onFocus, now }) => {
       row.usage,
     ) ?? null;
 
-  // ---- 图标与时间（相对时间，与历史区口径统一；now 由 60s ticker 驱动重算） ----
-  const icon = getStatusIcon(row.status);
+  // ---- 状态圆点与时间（相对时间，与历史区口径统一；now 由 60s ticker 驱动重算） ----
+  // IC-03：四态渲染改 StatusDot（working→绿/attention→黄/done→灰/error→红），
+  // null 状态不渲染圆点（保留空列占位）
   // MC-411：CLI 品牌 logo 按行 cliId 查 profile.iconSrc（OSC 133-only 行同样有 cliId）；
   // 未注册 cliId → undefined → 无 logo 不报错。
   // F9 行为修订：logo 跟随会话名显示——行存在即显示，不依赖 icon（status=null 行同样有 logo）
@@ -70,7 +71,7 @@ export const AgentStatusRow: React.FC<Props> = ({ row, onFocus, now }) => {
       onMouseLeave={() => setHovered(false)}
       onClick={handleClick}
     >
-      {/* 行1：四态图标 + CLI logo + 标题（12px 粗体，超出截断） */}
+      {/* 行1：四态状态圆点 + CLI logo + 标题（12px 粗体，超出截断） */}
       <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
         <span
           style={{
@@ -78,14 +79,14 @@ export const AgentStatusRow: React.FC<Props> = ({ row, onFocus, now }) => {
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            gap: "4px", // 列内收紧：emoji 与 logo 读作一个图标簇
+            gap: "4px", // 列内收紧：圆点与 logo 读作一个图标簇
             flexShrink: 0,
             fontSize: "14px",
           }}
         >
-          {icon}
+          {row.status != null && <StatusDot status={row.status} />}
           {/* CLI 品牌 logo：跟随会话名显示（行存在即显示，F9 行为修订）；
-              icon 为空时仍渲染空列占位（对齐恒定不漂移），logo 独立于 emoji */}
+              status 为 null 时仍渲染空列占位（对齐恒定不漂移），logo 独立于状态圆点 */}
           {logoSrc && (
             <img src={logoSrc} width={16} height={16}
               style={{ flexShrink: 0, display: "block" }} alt="CLI 图标" />

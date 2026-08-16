@@ -31,6 +31,7 @@ import {
   SIDEBAR_FG,
   SIDEBAR_COLORS,
 } from "../../theme";
+import { IconChevronRight, IconChevronDown } from "../../lib/icons";
 
 export interface AgentHistorySectionsProps {
   /** 当前项目历史会话区展开态（受控，AgentStatusView 持有） */
@@ -56,14 +57,13 @@ export interface AgentHistorySectionsProps {
   removeLocal(id: string): void;
 }
 
-/** 折叠箭头样式 */
+/** 折叠箭头样式（chevron 12px，色经 EXPLORER_COLORS arrow 槽位 token——IC-05） */
 const arrowStyle: React.CSSProperties = {
-  display: "inline-block",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
   width: 16,
-  fontSize: 10,
   color: EXPLORER_COLORS.arrowClosed,
-  textAlign: "center",
-  lineHeight: "22px",
   userSelect: "none",
   flexShrink: 0,
 };
@@ -180,7 +180,9 @@ export const AgentHistorySections: React.FC<AgentHistorySectionsProps> = ({
       {/* 区块：当前项目历史会话（rootPath 为 null →「无活跃项目」，FE-09 场景 7） */}
       <div data-e2e="agent-history-section-current">
         <div style={sectionHeaderStyle} onClick={onToggleCurrent}>
-          <span style={arrowStyle}>{expandedCurrent ? "▼" : "▶"}</span>
+          <span style={arrowStyle}>
+            {expandedCurrent ? <IconChevronDown size={12} /> : <IconChevronRight size={12} />}
+          </span>
           <span>当前项目历史会话</span>
         </div>
         {expandedCurrent && (
@@ -208,7 +210,9 @@ export const AgentHistorySections: React.FC<AgentHistorySectionsProps> = ({
       {/* 区块：全部项目历史会话 */}
       <div data-e2e="agent-history-section-all">
         <div style={sectionHeaderStyle} onClick={onToggleAll}>
-          <span style={arrowStyle}>{expandedAll ? "▼" : "▶"}</span>
+          <span style={arrowStyle}>
+            {expandedAll ? <IconChevronDown size={12} /> : <IconChevronRight size={12} />}
+          </span>
           <span>全部项目历史会话</span>
         </div>
         {expandedAll && (

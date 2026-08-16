@@ -32,29 +32,30 @@ import {
 } from "../features/sideViews/sideBarState";
 
 // 测试用 stub 视图定义（需与 DEFAULT_ZONES 中的 id 对齐，否则 reconcileZones 会过滤未注册 id）
+// icon 字段为组件形态（IC-06）——stub 不渲染内容
 function registerTestViews(): void {
   sideViewRegistry.register({
     id: "projects",
     title: "项目列表",
-    icon: "📋",
+    icon: () => null,
     component: () => null,
   });
   sideViewRegistry.register({
     id: "explorer",
     title: "文件浏览器",
-    icon: "📁",
+    icon: () => null,
     component: () => null,
   });
   sideViewRegistry.register({
     id: "commit",
     title: "Commit",
-    icon: "🔀",
+    icon: () => null,
     component: () => null,
   });
   sideViewRegistry.register({
     id: "agent-status",
     title: "Agent 状态",
-    icon: "🤖",
+    icon: () => null,
     component: () => null,
   });
 }

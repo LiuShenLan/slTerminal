@@ -19,12 +19,12 @@ describe("applyRename", () => {
   }
 
   it("updateParameters 展开保留原键并写入 customTitle", () => {
-    const panel = makePanel({ panelId: "terminal-p1-0", cwd: "D:/repo", tabIcon: "🟡" });
+    const panel = makePanel({ panelId: "terminal-p1-0", cwd: "D:/repo", tabStatus: "attention" });
     applyRename({ toJSON: () => ({ mock: "layout" }) } as any, panel as any, "我的终端", vi.fn());
     expect(panel.api.updateParameters).toHaveBeenCalledWith({
       panelId: "terminal-p1-0",
       cwd: "D:/repo",
-      tabIcon: "🟡",
+      tabStatus: "attention",
       customTitle: "我的终端",
     });
   });

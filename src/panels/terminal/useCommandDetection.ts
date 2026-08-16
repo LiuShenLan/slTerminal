@@ -3,7 +3,7 @@
 // 解析 shell-integration.ps1 注入的 OSC 133 C/D 序列，
 // 经 CliProfileRegistry.matchByCommand 匹配 CLI profile（首 token 精确匹配，
 // 覆盖 claude --resume / claude -p 等带参变体）并通过 onTabStateChange
-// 回调通知页签标题/图标切换。
+// 回调通知页签标题/状态切换。
 // 仅限于 pwsh/powershell——cmd.exe 无 shell integration 能力。
 
 import { useCallback, useEffect, useRef } from "react";
@@ -11,7 +11,7 @@ import type { MutableRefObject } from "react";
 import type { Terminal } from "@xterm/xterm";
 import { TerminalRegistry } from "./TerminalRegistry";
 import { cliProfileRegistry } from "../../features/cliProfiles";
-import { STATUS_EMOJI } from "../../lib/agentStatus";
+import type { AgentStatus } from "../../lib/agentStatus";
 
 /** 页签状态变化事件（原 TabTitleRegistry.ts 定义，注册表退役后迁入本文件顶部导出） */
 export interface TabState {
@@ -19,8 +19,8 @@ export interface TabState {
   active: boolean;
   /** 命令运行时标题（active=true 时有效） */
   title?: string;
-  /** 命令运行时图标（active=true 时有效，null=无图标） */
-  icon?: string | null;
+  /** 命令运行时状态（active=true 时有效，null=无状态；渲染层映射 StatusDot 圆点，IC-03） */
+  status?: AgentStatus | null;
   /** active=false 时是否恢复原标题（缺省 true；false = 仅清图标不恢复——
    *  B13：SessionEnd/EXIT hook 事件与 spawn 初始化重置不恢复标题，恢复只由
    *  真退出信号（OSC 133 D / PTY EXIT）承担） */
@@ -80,7 +80,7 @@ export function useCommandDetection(
           onTabStateChangeRef.current?.({
             active: true,
             title: profile.tabTitle,
-            icon: STATUS_EMOJI.attention,
+            status: "attention",
           });
         }
       } else if (type === "D" && isCommandRunningRef.current) {

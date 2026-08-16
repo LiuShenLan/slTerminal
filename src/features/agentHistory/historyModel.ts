@@ -1,7 +1,7 @@
 // historyModel.ts — agent 历史会话纯函数模型（FE-05）
 //
 // 纯函数模块：禁 import react / 任何 hook，零副作用。
-// 所有展示派生逻辑（当前项目匹配 / 分组 / 搜索 / 相对时间 / ⚡ 派生）集中于此，
+// 所有展示派生逻辑（当前项目匹配 / 分组 / 搜索 / 相对时间 / 四态派生）集中于此，
 // 供 UI 层与 L2 测试共用。契约要点见 src/features/agentHistory/CLAUDE.md 架构决策。
 
 import { normalizePath, basename } from "../../lib/path";
@@ -137,7 +137,7 @@ export function keyOf(
  * 定位须同时匹配 cliId 与 sessionId 双维度；键构造经 keyOf 单点（回退 + 转义）。
  * sessionId 优先 agentSession.sessionId（hook 事件 payload 精确值），回退
  * usageSourcePath 的 basename（去 .jsonl 后缀，兼容旧数据）；两者皆无的条目
- * （matchedCommand-only 会话）不产出 id，⚡/四态无法覆盖——已知局限（checklist FE-05）。
+ * （matchedCommand-only 会话）不产出 id，四态无法覆盖——已知局限（checklist FE-05）。
  * 旧数据 agentSession 无 cliId → 按 CLAUDE_CLI_ID 常量回退（非字面量，AC-5 兼容）。
  * status 为 null/undefined（无有效状态）的条目不产出键（历史区无标记，与活跃区
  * null 无图标语义一致）。
