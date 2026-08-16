@@ -514,19 +514,19 @@ describe("场景序列（S1–S6）", () => {
 // ── 常量验证 ──
 
 describe("常量", () => {
-  it("DEFAULT_ZONES 上区含 projects、explorer、commit 和 agent-status", () => {
+  it("DEFAULT_ZONES 上区为 NAV-05 三槽 nav、explorer、commit", () => {
     expect(DEFAULT_ZONES).toEqual({
-      top: ["projects", "explorer", "commit", "agent-status"],
+      top: ["nav", "explorer", "commit"],
       bottom: [],
     });
   });
 
-  it("DEFAULT_OPEN 默认打开 projects", () => {
-    expect(DEFAULT_OPEN).toEqual({ top: "projects", bottom: null });
+  it("DEFAULT_OPEN 默认打开 nav", () => {
+    expect(DEFAULT_OPEN).toEqual({ top: "nav", bottom: null });
   });
 
-  it("ACTIVITY_BAR_SIZE = 40", () => {
-    expect(ACTIVITY_BAR_SIZE).toBe(40);
+  it("ACTIVITY_BAR_SIZE = 46（NAV-05：40 → 46）", () => {
+    expect(ACTIVITY_BAR_SIZE).toBe(46);
   });
 
   it("宽度常量范围合理", () => {

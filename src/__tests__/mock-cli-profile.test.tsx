@@ -37,9 +37,11 @@ import {
 } from "../panels/terminal/useCommandDetection";
 import { useXterm } from "../panels/terminal/useXterm";
 import { TerminalRegistry } from "../panels/terminal/TerminalRegistry";
-import { AgentStatusRow } from "../features/agentStatus/AgentStatusRow";
+// NAV-08：AgentStatusRow/AgentHistorySections 已退役（视图迁入导航树）——
+// 行渲染路径等价组件 = NavSessionRow（活跃行）/ NavHistoryRow（历史行）
+import { NavSessionRow } from "../features/navTree/NavSessionRow";
+import { NavHistoryRow } from "../features/navTree/NavHistoryRow";
 import { useAgentNotifications } from "../features/notifications/useAgentNotifications";
-import { AgentHistorySections } from "../features/agentHistory/AgentHistorySections";
 import { restoreHistorySession } from "../features/agentHistory/restoreSession";
 import HooksConfigPanel from "../panels/hooksConfig/HooksConfigPanel";
 import { cliProfileRegistry } from "../features/cliProfiles";
@@ -258,7 +260,8 @@ vi.mock("../features/shortcuts", () => ({
   }),
 }));
 
-vi.mock("../features/sidebar", () => ({
+// NAV-06：makeEmptyLayout 随 SidebarTree 退役迁入 navTree（restoreSession 消费点改引用）
+vi.mock("../features/navTree/NavTree", () => ({
   makeEmptyLayout: () => ({}),
 }));
 
@@ -569,15 +572,16 @@ describe("AC-4② hooks 能力经真实链路调用", () => {
       lastEventAt: Date.now(),
       usage: { usedPercentage: 99 },
     };
+    // NAV-08：渲染等价路径 = NavSessionRow（导航树活跃会话行，口径委托不变）
     const { container } = render(
-      React.createElement(AgentStatusRow, { row, onFocus: vi.fn() }),
+      React.createElement(NavSessionRow, { row, active: true, onFocus: vi.fn() }),
     );
-    const line2 = container.querySelector(
-      '[data-e2e="agent-status-row"]',
-    )?.children[1] as HTMLElement;
+    const rowEl = container.querySelector(
+      '[data-e2e="nav-row-session"]',
+    ) as HTMLElement;
     expect(computeSpy).toHaveBeenCalledWith({ usedPercentage: 99 });
     // 桩值 42%——百分比策略由 profile 能力域决定（新增 CLI 自带百分比口径）
-    expect(line2.children[1].textContent).toBe("42%");
+    expect(rowEl.textContent).toContain("42%");
     computeSpy.mockRestore();
   });
 });
@@ -608,26 +612,19 @@ describe("AC-4③ 历史聚合 UI", () => {
   });
 
   it("mock 条目出现在历史区 + 行 logo 按 session.cliId 取 mockcli iconSrc（不依赖 status）", () => {
-    // F9 行为修订：status 无命中（空 Map → 无 emoji）→ 行 logo 仍渲染（跟随会话名显示）
-    const activeStatuses = new Map<string, AgentStatus>([]);
+    // F9 行为修订：status 无命中（undefined → 灰档圆点）→ 行 logo 仍渲染（跟随会话名显示）
     const { getByText, container } = render(
-      React.createElement(AgentHistorySections, {
-        expandedCurrent: true,
-        expandedAll: false,
-        onToggleCurrent: () => {},
-        onToggleAll: () => {},
-        historyState: "ready",
-        sessions,
-        activeStatuses,
-        rootPath: "D:\\mock",
-        scan: () => {},
-        removeLocal: () => {},
+      React.createElement(NavHistoryRow, {
+        session: sessions[0],
+        status: undefined,
+        onDoubleClick: () => {},
+        onContextMenu: () => {},
       }),
     );
-    // mock 条目（cliId="mockcli"）出现在当前项目历史区
+    // mock 条目（cliId="mockcli"）行标题渲染（导航树历史行——NAV-08 承接）
     expect(getByText("mockcli 会话")).toBeTruthy();
     // 行 logo（MC-311）：cliProfileRegistry.get(session.cliId)?.iconSrc —— mockcli 命中
-    const row = container.querySelector('[data-e2e="agent-history-row"]');
+    const row = container.querySelector('[data-e2e="nav-row-session"]');
     expect(row).not.toBeNull();
     const logo = row!.querySelector("img");
     expect(logo?.getAttribute("src")).toBe(mockCliProfile.iconSrc);

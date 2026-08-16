@@ -1,7 +1,15 @@
 /**
- * Agent Status 域 E2E spec（E2E-09 拆分 + E2E-10 waitUntil 替换）：
+ * Agent 会话域 E2E spec（NAV-08/NAV-10 重写）：
  * 视图存在性、纯 shell 无行、动态四态、R2 用量保持、R3 删行不复活、
  * R4 关页签删行、toast 触发链路（skip——人工验证）。
+ *
+ * NAV-08 迁移：旧状态视图退役（原组件已删除），
+ * 活跃会话行承接方 = 导航树 NavTree（nav 视图）：
+ *   - 视图打开：toggleSideView("nav")；容器 data-e2e="nav-tree"
+ *   - 活跃会话行：data-e2e="nav-row-session" + data-panel-id（挂页面下，NavSessionRow）
+ *   - 四态 emoji（⚡✅）→ 圆点存在性断言（StatusDot 7px 圆形 div，F3 四态渲染层）
+ *   - 旧空态文案已废除——空态 = 无会话行
+ *   - 行默认收起：项目/页面行点击展开（NavTree 组件内展开态，切换视图 display:none 保挂载不丢）
  */
 
 import { expect, browser } from "@wdio/globals";
@@ -21,64 +29,130 @@ import {
   getProjectIdForPage,
 } from "./specUtils";
 
-describe("Agent Status 视图与 toast 通知", () => {
-  /** 打开 agent-status 视图（幂等：已打开不重复 toggle，防 R2 关闭） */
-  async function openAgentStatusView(): Promise<void> {
+describe("Agent 会话视图与 toast 通知", () => {
+  /** 打开 nav 视图（幂等：已打开不重复 toggle，防 R2 关闭） */
+  async function openNavView(): Promise<void> {
     await waitForWorkspaceReady();
     const s = await browser.execute(() => (window as any).__slterm_e2e_getSideBarState?.() ?? null);
-    if (s?.open.top !== "agent-status") {
-      await browser.execute(() => (window as any).__slterm_e2e_toggleSideView?.("agent-status"));
+    if (s?.open.top !== "nav") {
+      await browser.execute(() => (window as any).__slterm_e2e_toggleSideView?.("nav"));
     }
     await browser.waitUntil(
       async () =>
-        await browser.execute(() => !!document.querySelector('[data-e2e="agent-status-view"]')),
-      { timeout: 10000, timeoutMsg: "agent-status 视图未渲染" },
-    );
-  }
-
-  /** 等待 agent-status 行出现/消失（动态四态用例用） */
-  async function waitForStatusRow(opts: { panelId?: string; emoji?: string; gone?: boolean }): Promise<void> {
-    await browser.waitUntil(
-      async () => {
-        // 读取必须发生在 execute 内部返回纯数据——execute 返回 DOM 元素会被
-        // WebDriver 序列化为元素引用对象，外层读 textContent/属性恒为 undefined
-        const state = await browser.execute(() => {
-          const row = document.querySelector('[data-e2e="agent-status-row"]');
-          if (!row) return { exists: false, text: "", panelId: null };
-          return {
-            exists: true,
-            text: (row as HTMLElement).textContent ?? "",
-            panelId: (row as HTMLElement).getAttribute("data-panel-id"),
-          };
-        });
-        if (!state.exists) return opts.gone === true;
-        if (opts.gone) return state.panelId !== opts.panelId;
-        if (opts.emoji && !state.text.includes(opts.emoji)) return false;
-        if (opts.panelId && state.panelId !== opts.panelId) return false;
-        return true;
-      },
-      { timeout: 15000, timeoutMsg: `agent-status-row 未在期限内${opts.gone ? "消失" : "出现"}` },
+        await browser.execute(() => !!document.querySelector('[data-e2e="nav-tree"]')),
+      { timeout: 10000, timeoutMsg: "nav 视图未渲染" },
     );
   }
 
   /**
-   * 用例 1：Agent Status 视图存在性验证。
-   * 通过 __slterm_e2e_toggleSideView("agent-status") 打开视图，
-   * 断言侧栏槽位 sidebar-slot-top-agent-status 可见 + AGENT STATUS 标题栏渲染。
+   * 展开导航树到会话行可见（幂等，遍历全部项目/页面行）：
+   * 项目持久化累积（slterminal-projects.json 跨 run 保留）——目标项目可能位于
+   * 导航树任意位置，必须展开全部未展开行。
+   * 展开态判定（DOM 结构）：项目行父容器 = [项目行, 历史节点常驻, 展开时 +子级容器]
+   *   → children > 2 即展开；页面行父容器 = [页面行, 展开时 +子级容器] → children > 1 即展开。
+   * 页面行点击 = 切换展开 + 切页（switchPage 幂等，切页不碍行归属渲染）。
+   * NavTree 展开态组件内维护，nav 视图 display:none 保挂载不丢。
    */
-  it("Agent Status 视图可通过活动栏按钮打开", async () => {
+  async function ensureTreeExpanded(): Promise<void> {
+    // 只展开「当前活跃项目」（含「当前」pill）的行——页面行点击 = 切页 + 初始化
+    // Dockview，点击其它项目的页面行会把 activePageId 切走（useAgentStatus 只建
+    // 活跃项目行，切走后信号建行被拒——实测根因）。多轮收敛（React 重渲染异步——
+    // 单轮内判定基于旧 DOM，已展开行会被误判折叠）。
+    for (let i = 0; i < 6; i++) {
+      const clicked = await browser.execute(() => {
+        let any = false;
+        const proj = Array.from(
+          document.querySelectorAll('[data-e2e="nav-row-project"]'),
+        ).find((p) => (p.textContent ?? "").includes("当前"));
+        if (!proj) return false;
+        const container = proj.parentElement as HTMLElement | null;
+        if (!container) return false;
+        // 项目行未展开（容器 children ≤ 2：项目行 + 历史节点常驻）→ 点击展开
+        if (container.children.length <= 2) {
+          (proj as HTMLElement).click();
+          any = true;
+        }
+        // 仅当前项目容器内的页面行（点击 = 切换展开 + 切页——当前项目即活跃页所属，幂等）
+        const pages = container.querySelectorAll(
+          '[data-e2e="nav-row-page"]',
+        );
+        for (const pg of pages) {
+          if ((pg.parentElement?.children.length ?? 0) <= 1) {
+            (pg as HTMLElement).click();
+            any = true;
+          }
+        }
+        return any;
+      });
+      if (!clicked) return;
+      await new Promise((r) => setTimeout(r, 350));
+    }
+  }
+
+  /**
+   * 等待活跃会话行出现/消失（动态四态用例用）。
+   * 导航树会话行 = nav-row-session（活跃行带 data-panel-id；历史行无——按 panelId 区分）。
+   * ⚡/✅ emoji 断言 → 行内圆点（StatusDot 7px 圆形 div）存在性断言（NAV-10 契约）。
+   */
+  async function waitForSessionRow(opts: {
+    panelId?: string;
+    dot?: boolean;
+    text?: string;
+    gone?: boolean;
+  }): Promise<void> {
+    await browser.waitUntil(
+      async () => {
+        await ensureTreeExpanded();
+        // 读取必须发生在 execute 内部返回纯数据——execute 返回 DOM 元素会被
+        // WebDriver 序列化为元素引用对象，外层读 textContent/属性恒为 undefined
+        const state = await browser.execute((pid: string) => {
+          const rows = Array.from(
+            document.querySelectorAll('[data-e2e="nav-row-session"]'),
+          ) as HTMLElement[];
+          // 活跃会话行按 data-panel-id 过滤（历史行无此属性）
+          const row = pid
+            ? rows.find((r) => r.getAttribute("data-panel-id") === pid)
+            : rows[0];
+          if (!row) return { exists: false, text: "", hasDot: false };
+          return {
+            exists: true,
+            text: row.textContent ?? "",
+            // StatusDot = 7px 圆形 div（borderRadius 50%，aria-hidden）
+            hasDot: Array.from(row.querySelectorAll("div")).some(
+              (d) =>
+                (d as HTMLElement).style.borderRadius === "50%" &&
+                (d as HTMLElement).style.width === "7px",
+            ),
+          };
+        }, opts.panelId ?? "");
+        if (!state.exists) return opts.gone === true;
+        if (opts.gone) return false;
+        if (opts.dot && !state.hasDot) return false;
+        if (opts.text && !state.text.includes(opts.text)) return false;
+        return true;
+      },
+      { timeout: 15000, timeoutMsg: `会话行未在期限内${opts.gone ? "消失" : "出现"}` },
+    );
+  }
+
+  /**
+   * 用例 1：导航树视图存在性验证。
+   * 通过 __slterm_e2e_toggleSideView("nav") 打开视图，
+   * 断言侧栏槽位 sidebar-slot-top-nav 可见 + 分组标题「导航」渲染。
+   */
+  it("nav 视图可通过活动栏按钮打开", async () => {
     // 0. 等待 Workspace 就绪
     await waitForWorkspaceReady();
 
     // 1. 创建测试项目
-    await createProject("C:\\e2e-agent-status");
+    await createProject("C:\\e2e-nav-tree");
 
-    // 2. 等待活动栏按钮渲染（agent-status 在 DEFAULT_ZONES.top 中，按钮始终存在）
+    // 2. 等待活动栏按钮渲染（nav 在 DEFAULT_ZONES.top 中，按钮始终存在）
     await browser.waitUntil(
       async () => await browser.execute(() => {
-        return !!document.querySelector('[data-e2e="activity-btn-agent-status"]');
+        return !!document.querySelector('[data-e2e="activity-btn-nav"]');
       }),
-      { timeout: 10000, timeoutMsg: "agent-status 活动栏按钮未渲染" },
+      { timeout: 10000, timeoutMsg: "nav 活动栏按钮未渲染" },
     );
 
     // 3. 重置侧栏为已知状态（避免持久化残留导致 open.top 已有其他视图）
@@ -87,61 +161,57 @@ describe("Agent Status 视图与 toast 通知", () => {
       const getState = (window as any).__slterm_e2e_getSideBarState;
       if (typeof toggle !== "function" || typeof getState !== "function") return;
       const s = getState();
-      // 关闭 top 区非 agent-status 的视图
-      if (s?.open.top && s.open.top !== "agent-status") toggle(s.open.top);
-      // 若 top 为空则打开 agent-status
-      if (!s?.open.top) toggle("agent-status");
+      // 关闭 top 区非 nav 的视图
+      if (s?.open.top && s.open.top !== "nav") toggle(s.open.top);
+      // 若 top 为空则打开 nav
+      if (!s?.open.top) toggle("nav");
     });
 
-    // 4. 断言 open.top === "agent-status"（toggle 已生效）
+    // 4. 断言 open.top === "nav"（toggle 已生效）
     const sideBarState = await browser.execute(() => {
       const fn = (window as any).__slterm_e2e_getSideBarState;
       return typeof fn === "function" ? fn() : null;
     });
     expect(sideBarState).not.toBeNull();
-    expect(sideBarState!.open.top).toBe("agent-status");
+    expect(sideBarState!.open.top).toBe("nav");
 
     // 5. 断言侧栏槽位存在且可见（display !== "none"）
     const slotVisible = await browser.execute(() => {
-      const slot = document.querySelector('[data-e2e="sidebar-slot-top-agent-status"]');
+      const slot = document.querySelector('[data-e2e="sidebar-slot-top-nav"]');
       if (!slot) return false;
       const style = window.getComputedStyle(slot);
       return style.display !== "none";
     });
     expect(slotVisible).toBe(true);
 
-    // 6. 断言 agent-status-view 存在（AgentStatusView 已挂载）
+    // 6. 断言 nav-tree 存在（NavTree 已挂载）
     const viewExists = await browser.execute(() => {
-      return !!document.querySelector('[data-e2e="agent-status-view"]');
+      return !!document.querySelector('[data-e2e="nav-tree"]');
     });
     expect(viewExists).toBe(true);
 
-    // 7. 断言 "AGENT STATUS" 标题栏文本存在
+    // 7. 断言分组标题「导航」存在
     const headerText = await browser.execute(() => {
-      const view = document.querySelector('[data-e2e="agent-status-view"]');
+      const view = document.querySelector('[data-e2e="nav-tree"]');
       return view?.textContent ?? "";
     });
-    expect(headerText).toContain("AGENT STATUS");
+    expect(headerText).toContain("导航");
 
-    // 8. 断言初始态为空态或 no-root 提示（此时无终端面板）
-    const hasHint = await browser.execute(() => {
-      const text = document.querySelector('[data-e2e="agent-status-view"]')?.textContent ?? "";
-      return text.includes("选择一个项目") || text.includes("无运行中的编码 CLI 会话");
+    // 8. 断言初始态为空态（无终端面板 → 无项目树外行；项目行存在）
+    const hasProjectRow = await browser.execute(() => {
+      return !!document.querySelector('[data-e2e="nav-row-project"]');
     });
-    expect(hasHint).toBe(true);
+    expect(hasProjectRow).toBe(true);
   });
 
   /**
-   * 用例 2a：Agent Status 纯 shell 终端无行（行建模改后语义——仅 agentSession 非 null 才建行）。
+   * 用例 2a：纯 shell 终端无活跃会话行（行建模语义——仅 agentSession 非 null 才建行）。
    *
    * 原理：useAgentStatus 初始扫描只建 agentSession 非 null 的行。
    * 纯 shell 终端（未运行编码 CLI、未注入 hooks）的 agentSession 为 null，
-   * 因此 agent-status-row 不出现。用例 1 空态文案断言保留作回归。
-   *
-   * E2E-10：原 500ms 固定等待（等初始扫描）→ 改为 waitUntil 轮询
-   * 视图挂载完成（useEffect 已触发扫描）——比固定时长更精确且更快。
+   * 因此导航树无活跃会话行（nav-row-session + data-panel-id）。
    */
-  it("Agent Status 纯 shell 终端无行（行建模新语义——不自动建行）", async () => {
+  it("纯 shell 终端无活跃会话行（行建模语义——不自动建行）", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "slterm-e2e-agent-pureshell-"));
     try {
       // 0a. Workspace 就绪
@@ -160,40 +230,29 @@ describe("Agent Status 视图与 toast 通知", () => {
       // 2. 等待 PTY session 就绪（TerminalRegistry 注册）
       await waitForPtySessionReady();
 
-      // 3. 打开 agent-status 视图
-      await browser.execute(() => {
-        (window as any).__slterm_e2e_toggleSideView?.("agent-status");
-      });
+      // 3. 打开 nav 视图
+      await openNavView();
 
-      // 4. 等待视图挂载完成（E2E-10：轮询 agent-status-view 渲染，替代 pause(500)；
-      //    视图挂载即 useAgentStatus useEffect 已执行——初始扫描已触发）
-      await browser.waitUntil(
-        async () =>
-          await browser.execute(() => !!document.querySelector('[data-e2e="agent-status-view"]')),
-        { timeout: 10000, timeoutMsg: "agent-status 视图未在 toggle 后渲染" },
-      );
+      // 4. 展开导航树到页面级
+      await ensureTreeExpanded();
 
-      // 5. 断言 agent-status-row 不存在——纯 shell 终端的 agentSession 为 null，不建行
-      const rowExists = await browser.execute(() => {
-        return !!document.querySelector('[data-e2e="agent-status-row"]');
-      });
+      // 5. 断言无该 panelId 的会话行——纯 shell 终端的 agentSession 为 null，不建行
+      const rowExists = await browser.execute((pid: string) => {
+        return Array.from(
+          document.querySelectorAll('[data-e2e="nav-row-session"]'),
+        ).some((r) => r.getAttribute("data-panel-id") === pid);
+      }, panelId);
       expect(rowExists).toBe(false);
-
-      // 6. 断言空态或 no-root 提示文案存在（用例 1 回归——纯 shell 项目应显示空态）
-      const hasHint = await browser.execute(() => {
-        const text = document.querySelector('[data-e2e="agent-status-view"]')?.textContent ?? "";
-        return text.includes("选择一个项目") || text.includes("无运行中的编码 CLI 会话");
-      });
-      expect(hasHint).toBe(true);
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
 
   /**
-   * 用例 2b：Agent Status 动态四态——Node 端原子写信号文件驱动状态流转。
+   * 用例 2b：动态四态——Node 端原子写信号文件驱动状态流转。
+   * PreToolUse → 建行（圆点出现）、Stop → 行保持（圆点仍存在）、SessionEnd → 行消失。
    */
-  it("Agent Status 动态四态（PreToolUse→⚡, Stop→✅, SessionEnd→行消失）", async () => {
+  it("动态四态（PreToolUse→建行, Stop→行保持, SessionEnd→行消失）", async () => {
     const eventsDir = join(homedir(), ".slterminal", "hooks-events");
     const tempDir = mkdtempSync(join(tmpdir(), "slterm-e2e-agent-dyn-"));
     const signalFiles: string[] = [];
@@ -218,15 +277,13 @@ describe("Agent Status 视图与 toast 通知", () => {
       // 2. 等待 PTY session 就绪
       await waitForPtySessionReady();
 
-      // 3. 打开 agent-status 视图
-      await browser.execute(() => {
-        (window as any).__slterm_e2e_toggleSideView?.("agent-status");
-      });
+      // 3. 打开 nav 视图
+      await openNavView();
 
       // 4. 确保信号目录存在
       mkdirSync(eventsDir, { recursive: true });
 
-      // 5. 原子写 PreToolUse 信号文件 → 断言行出现 ⚡（行建模改后首个 hook 事件即建行）
+      // 5. 原子写 PreToolUse 信号文件 → 建行（首个 hook 事件即建行）+ 圆点出现
       signalFiles.push(writeSignalFile(eventsDir, {
         panelId,
         event: "PreToolUse",
@@ -238,9 +295,9 @@ describe("Agent Status 视图与 toast 通知", () => {
         notificationType: null,
       }));
 
-      await waitForStatusRow({ panelId, emoji: "⚡" });
+      await waitForSessionRow({ panelId, dot: true });
 
-      // 6. 原子写 Stop 信号文件 → 断言行出现 ✅
+      // 6. 原子写 Stop 信号文件 → 行保持（圆点仍存在，done 灰档）
       signalFiles.push(writeSignalFile(eventsDir, {
         panelId,
         event: "Stop",
@@ -252,9 +309,9 @@ describe("Agent Status 视图与 toast 通知", () => {
         notificationType: null,
       }));
 
-      await waitForStatusRow({ panelId, emoji: "✅" });
+      await waitForSessionRow({ panelId, dot: true });
 
-      // 7. 原子写 SessionEnd 信号文件 → 断言行消失
+      // 7. 原子写 SessionEnd 信号文件 → 行消失
       signalFiles.push(writeSignalFile(eventsDir, {
         panelId,
         event: "SessionEnd",
@@ -266,7 +323,7 @@ describe("Agent Status 视图与 toast 通知", () => {
         notificationType: null,
       }));
 
-      await waitForStatusRow({ panelId, gone: true });
+      await waitForSessionRow({ panelId, gone: true });
     } finally {
       // 清理信号文件
       for (const f of signalFiles) {
@@ -310,20 +367,16 @@ describe("Agent Status 视图与 toast 通知", () => {
       // 2. 等待 PTY session 就绪
       await waitForPtySessionReady();
 
-      // 3. 打开 agent-status 视图
-      await browser.execute(() => {
-        (window as any).__slterm_e2e_toggleSideView?.("agent-status");
-      });
+      // 3. 打开 nav 视图
+      await openNavView();
 
-      // 4. 断言纯 shell 无行（E2E-10：轮询视图挂载完成替代 pause(500)——初始扫描已触发）
-      await browser.waitUntil(
-        async () =>
-          await browser.execute(() => !!document.querySelector('[data-e2e="agent-status-view"]')),
-        { timeout: 10000, timeoutMsg: "agent-status 视图未渲染" },
-      );
-      let rowExists = await browser.execute(() => {
-        return !!document.querySelector('[data-e2e="agent-status-row"]');
-      });
+      // 4. 断言纯 shell 无行（初始扫描已触发）
+      await ensureTreeExpanded();
+      let rowExists = await browser.execute((pid: string) => {
+        return Array.from(
+          document.querySelectorAll('[data-e2e="nav-row-session"]'),
+        ).some((r) => r.getAttribute("data-panel-id") === pid);
+      }, panelId);
       expect(rowExists).toBe(false);
 
       // 5. 确保信号目录存在
@@ -340,8 +393,8 @@ describe("Agent Status 视图与 toast 通知", () => {
         notificationType: null,
       }));
 
-      // 7. 轮询行出现且含 ⚡
-      await waitForStatusRow({ panelId, emoji: "⚡" });
+      // 7. 轮询行出现
+      await waitForSessionRow({ panelId });
 
       // 8. ContextUsage 信号（官方 used_percentage 口径）→ 行用量 50%
       signalFiles.push(writeSignalFile(eventsDir, {
@@ -354,14 +407,7 @@ describe("Agent Status 视图与 toast 通知", () => {
         usedPercentage: 50,
       }));
 
-      await browser.waitUntil(
-        async () => await browser.execute(() => {
-          const row = document.querySelector('[data-e2e="agent-status-row"]');
-          const text = row?.textContent ?? "";
-          return text.includes("50%") && !text.includes("--");
-        }),
-        { timeout: 10000, timeoutMsg: "用量百分比未在 ContextUsage 信号后出现 50%" },
-      );
+      await waitForSessionRow({ panelId, text: "50%" });
 
       // 9. 获取 projectId，创建 page2
       const projectId = await getProjectIdForPage(page1Id);
@@ -384,14 +430,7 @@ describe("Agent Status 视图与 toast 通知", () => {
         cwd: tempDir,
         usedPercentage: 50,
       }));
-      await browser.waitUntil(
-        async () => await browser.execute(() => {
-          const row = document.querySelector('[data-e2e="agent-status-row"]');
-          const text = row?.textContent ?? "";
-          return text.includes("50%") && !text.includes("--");
-        }),
-        { timeout: 10000, timeoutMsg: "切项目往返后用量未经 ContextUsage 信号恢复 50%" },
-      );
+      await waitForSessionRow({ panelId, text: "50%" });
     } finally {
       // 清理信号文件
       for (const f of signalFiles) {
@@ -430,15 +469,13 @@ describe("Agent Status 视图与 toast 通知", () => {
       // 2. 等待 PTY session 就绪
       await waitForPtySessionReady();
 
-      // 3. 打开 agent-status 视图
-      await browser.execute(() => {
-        (window as any).__slterm_e2e_toggleSideView?.("agent-status");
-      });
+      // 3. 打开 nav 视图
+      await openNavView();
 
       // 4. 确保信号目录存在
       mkdirSync(eventsDir, { recursive: true });
 
-      // 5. 原子写 PreToolUse 信号文件 → 建行（含 ⚡）
+      // 5. 原子写 PreToolUse 信号文件 → 建行
       signalFiles.push(writeSignalFile(eventsDir, {
         panelId,
         event: "PreToolUse",
@@ -450,8 +487,8 @@ describe("Agent Status 视图与 toast 通知", () => {
         notificationType: null,
       }));
 
-      // 6. 等待行出现含 ⚡
-      await waitForStatusRow({ panelId, emoji: "⚡" });
+      // 6. 等待行出现
+      await waitForSessionRow({ panelId });
 
       // 7. 原子写 SessionEnd 信号文件 → 删行
       signalFiles.push(writeSignalFile(eventsDir, {
@@ -466,7 +503,7 @@ describe("Agent Status 视图与 toast 通知", () => {
       }));
 
       // 8. 等待行消失
-      await waitForStatusRow({ panelId, gone: true });
+      await waitForSessionRow({ panelId, gone: true });
 
       // 9. 获取 projectId，创建 page2
       const projectId = await getProjectIdForPage(page1Id);
@@ -479,9 +516,11 @@ describe("Agent Status 视图与 toast 通知", () => {
       await switchToPageAndWait(page1Id);
 
       // 12. 断言行仍不存在——agentSession 已 null，初始扫描不建行
-      const rowStillGone = await browser.execute(() => {
-        return !document.querySelector('[data-e2e="agent-status-row"]');
-      });
+      const rowStillGone = await browser.execute((pid: string) => {
+        return !Array.from(
+          document.querySelectorAll('[data-e2e="nav-row-session"]'),
+        ).some((r) => r.getAttribute("data-panel-id") === pid);
+      }, panelId);
       expect(rowStillGone).toBe(true);
     } finally {
       for (const f of signalFiles) {
@@ -523,15 +562,13 @@ describe("Agent Status 视图与 toast 通知", () => {
       // 2. 等待 PTY session 就绪
       await waitForPtySessionReady();
 
-      // 3. 打开 agent-status 视图
-      await browser.execute(() => {
-        (window as any).__slterm_e2e_toggleSideView?.("agent-status");
-      });
+      // 3. 打开 nav 视图
+      await openNavView();
 
       // 4. 确保信号目录存在
       mkdirSync(eventsDir, { recursive: true });
 
-      // 5. 原子写 PreToolUse 信号文件 → 建行（含 ⚡）
+      // 5. 原子写 PreToolUse 信号文件 → 建行
       signalFiles.push(writeSignalFile(eventsDir, {
         panelId,
         event: "PreToolUse",
@@ -543,13 +580,14 @@ describe("Agent Status 视图与 toast 通知", () => {
         notificationType: null,
       }));
 
-      // 6. 等待行出现含 ⚡
-      await waitForStatusRow({ panelId, emoji: "⚡" });
+      // 6. 等待行出现
+      await waitForSessionRow({ panelId });
 
       // 7. 断言行存在
       let rowExists = await browser.execute((pid: string) => {
-        const row = document.querySelector('[data-e2e="agent-status-row"]');
-        return row?.getAttribute("data-panel-id") === pid;
+        return Array.from(
+          document.querySelectorAll('[data-e2e="nav-row-session"]'),
+        ).some((r) => r.getAttribute("data-panel-id") === pid);
       }, panelId);
       expect(rowExists).toBe(true);
 
@@ -564,12 +602,14 @@ describe("Agent Status 视图与 toast 通知", () => {
       }, panelId);
 
       // 9. 等待行消失（remove 事件 → useAgentStatus 删行，deps [] 稳定订阅不丢事件）
-      await waitForStatusRow({ panelId, gone: true });
+      await waitForSessionRow({ panelId, gone: true });
 
       // 10. 断言行不存在（R4 原始竞态不复现——deps [] 稳定订阅 + reconcile 兜底）
-      const rowGone = await browser.execute(() => {
-        return !document.querySelector('[data-e2e="agent-status-row"]');
-      });
+      const rowGone = await browser.execute((pid: string) => {
+        return !Array.from(
+          document.querySelectorAll('[data-e2e="nav-row-session"]'),
+        ).some((r) => r.getAttribute("data-panel-id") === pid);
+      }, panelId);
       expect(rowGone).toBe(true);
     } finally {
       for (const f of signalFiles) {

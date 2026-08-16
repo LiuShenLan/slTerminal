@@ -1,13 +1,14 @@
-// HistorySessionRow.tsx — 历史会话行组件（FE-07，双行式）
+// HistorySessionRow.tsx — 历史会话行组件（FE-07，单行式）
 //
-// 行1 = 四态状态圆点（StatusDot，working/attention/done/error，运行中会话与活跃区
-// 同源）+ 粗体标题（title 为 null 时显示 sessionId 前 8 位）+ 右上角相对时间；
-// 行2 = 首条 prompt 预览（单行截断省略）。
+// NAV-08 单行化改造（30px 行高，供导航树复用）：行 = 四态状态圆点（StatusDot，
+// working/attention/done/error，运行中会话与活跃区同源）+ CLI logo 14px + 粗体标题
+// （title 为 null 时显示 sessionId 前 8 位）+ 右侧相对时间（11px fg-4）；prompt 预览
+// 不再渲染为第二行，改放行容器原生 title 属性（悬停 tooltip）。
 // 状态标记（IC-03）：status 非 null → StatusDot 圆点（问题 2 修复：历史区与活跃区
 // 四态同源）；orphan → 孤儿标记 IconClose（cwd 目录已删除，不可恢复，IC-08）；
 // noCwd（无 cwd，调用方跳过孤儿判定，orphan 恒 false）不显示孤儿标记。
 // 交互：单击选中 / 双击恢复分派 / 右键菜单，均回调 props 委托（纯受控展示组件，不碰 IPC）。
-// 字号层级（问题 4）：行1 标题 12px 粗体 > 行2 11px 灰。
+// props 签名保持兼容（HistorySessionList 调用零改动，NAV-08）。
 // 契约要点见 src/features/agentHistory/CLAUDE.md。
 
 import React from "react";
@@ -57,10 +58,14 @@ export const HistorySessionRow: React.FC<HistorySessionRowProps> = ({
   return (
     <div
       data-e2e="agent-history-row"
+      // NAV-08 单行化：prompt 预览改放行容器原生 title（悬停 tooltip）；null 时不设
+      title={session.firstPrompt ?? undefined}
       style={{
         display: "flex",
-        flexDirection: "column",
-        padding: "4px 8px",
+        alignItems: "center",
+        gap: "4px",
+        height: 30, // 会话行高 30px（NAV-01 契约，NAV-08 单行化）
+        padding: "0 8px",
         cursor: "pointer",
         userSelect: "none",
         backgroundColor: selected ? EXPLORER_SELECTION_BG : "transparent",
@@ -72,64 +77,41 @@ export const HistorySessionRow: React.FC<HistorySessionRowProps> = ({
         onContextMenu(session, { x: e.clientX, y: e.clientY });
       }}
     >
-      {/* 行1：四态标记 + 粗体标题 + 右上角相对时间（12px 层级） */}
-      <div
+      {/* 四态状态圆点仅随 status 渲染（status 为 null / 孤儿行无圆点） */}
+      {status != null && <StatusDot status={status} />}
+      {/* CLI 品牌 logo 跟随会话名显示（F9 行为修订）：行存在即显示，
+          不依赖状态圆点——孤儿行同样按 cliId 加图 */}
+      {logoSrc && (
+        <img src={logoSrc} width={14} height={14}
+          style={{ flexShrink: 0, display: "block" }} alt="CLI 图标" />
+      )}
+      <span
         style={{
-          display: "flex",
-          alignItems: "center",
-          gap: "4px",
+          flex: 1,
           fontSize: "12px",
+          fontWeight: "bold",
           color: SIDEBAR_COLORS.fg,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
         }}
       >
-        {/* 四态状态圆点仅随 status 渲染（status 为 null / 孤儿行无圆点） */}
-        {status != null && <StatusDot status={status} />}
-        {/* CLI 品牌 logo 跟随会话名显示（F9 行为修订）：行存在即显示，
-            不依赖状态圆点——孤儿行同样按 cliId 加图 */}
-        {logoSrc && (
-          <img src={logoSrc} width={16} height={16}
-            style={{ flexShrink: 0, display: "block" }} alt="CLI 图标" />
-        )}
+        {title}
+      </span>
+      {/* 孤儿标记 IconClose（12px 错误色）仅按 orphan prop 渲染；noCwd 时调用方
+          不传 orphan=true（无 cwd 跳过孤儿判定）——IC-08：装饰字符清除 */}
+      {orphan && (
         <span
-          style={{
-            flex: 1,
-            fontWeight: "bold",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
+          data-e2e="agent-history-orphan"
+          style={{ flexShrink: 0, display: "flex", color: ERROR_FG }}
         >
-          {title}
+          <IconClose size={12} />
         </span>
-        {/* 孤儿标记 IconClose（12px 错误色）仅按 orphan prop 渲染；noCwd 时调用方
-            不传 orphan=true（无 cwd 跳过孤儿判定）——IC-08：装饰字符清除 */}
-        {orphan && (
-          <span
-            data-e2e="agent-history-orphan"
-            style={{ flexShrink: 0, display: "flex", color: ERROR_FG }}
-          >
-            <IconClose size={12} />
-          </span>
-        )}
-        <span style={{ flexShrink: 0, fontSize: "11px", color: DIM_FG }}>
-          {timeStr}
-        </span>
-      </div>
-
-      {/* 行2：首条 prompt 预览（单行截断省略；null 时不渲染，11px 层级） */}
-      {session.firstPrompt != null && (
-        <div
-          style={{
-            fontSize: "11px",
-            color: DIM_FG,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {session.firstPrompt}
-        </div>
       )}
+      {/* 右侧相对时间（11px fg-4） */}
+      <span style={{ flexShrink: 0, fontSize: "11px", color: DIM_FG }}>
+        {timeStr}
+      </span>
     </div>
   );
 };

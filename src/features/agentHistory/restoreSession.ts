@@ -16,7 +16,7 @@
 
 import { useProjects, createProjectId, createPageId } from "../../stores/projects";
 import type { OperationPage } from "../../stores/projects";
-import { makeEmptyLayout } from "../sidebar";
+import { makeEmptyLayout } from "../navTree";
 import { switchToPageShared, getPageApi } from "../../workspace/pageApis";
 import { TerminalRegistry } from "../../panels/terminal/TerminalRegistry";
 import { write as ptyWrite } from "../../ipc/pty";

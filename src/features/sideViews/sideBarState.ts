@@ -29,20 +29,20 @@ export interface SideBarSlice {
 
 // ── 默认值常量 ──
 
-/** 默认按钮归属：项目列表、文件浏览器、commit 均在上区 */
+/** 默认按钮归属（NAV-05 三槽）：导航树、文件浏览器、commit 均在上区 */
 export const DEFAULT_ZONES: Zones = {
-  top: ["projects", "explorer", "commit", "agent-status"],
+  top: ["nav", "explorer", "commit"],
   bottom: [],
 };
 
-/** 默认打开状态：项目列表打开，其余关闭 */
+/** 默认打开状态：导航树打开，其余关闭 */
 export const DEFAULT_OPEN: OpenState = {
-  top: "projects",
+  top: "nav",
   bottom: null,
 };
 
-/** 活动栏固定宽度（px） */
-export const ACTIVITY_BAR_SIZE = 40;
+/** 活动栏固定宽度（px）——NAV-05：40 → 46（GL-04 密度收敛） */
+export const ACTIVITY_BAR_SIZE = 46;
 
 /** 侧栏区宽度默认值 / 范围（px） */
 export const WIDTH_DEFAULT = 250;

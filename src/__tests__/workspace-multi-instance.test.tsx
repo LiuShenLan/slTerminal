@@ -85,8 +85,8 @@ beforeEach(() => {
   useLayout.setState({ activePageId: null });
   // 种子侧栏 store 默认值（Workspace 三栏改造后依赖 sideBar 状态）
   useSideBar.setState({
-    zones: { top: ["projects", "explorer"], bottom: [] },
-    open: { top: "projects", bottom: null },
+    zones: { top: ["nav", "explorer"], bottom: [] },
+    open: { top: "nav", bottom: null },
     width: 250,
     splitRatio: 0.5,
     loaded: true,

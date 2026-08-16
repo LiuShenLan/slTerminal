@@ -95,7 +95,7 @@ const Workspace: React.FC = () => {
     });
   }, []);
 
-  /** 操作页面切换（仅更新 activePageId + CSS 显隐，projectId 保留兼容 SidebarTree 接口）
+  /** 操作页面切换（仅更新 activePageId + CSS 显隐；projectId 参数保留兼容侧栏视图接口——NAV-05 三槽）
    *
    * ensurePageInitialized 依赖组件 setState，不下放 pageApis。
    * 其余逻辑（setProjectRoot → setActivePage → __dockviewApi 重指向）委托 switchToPageShared。 */

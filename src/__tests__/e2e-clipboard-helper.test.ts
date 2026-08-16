@@ -57,8 +57,8 @@ vi.mock("../stores/projects", () => ({
   },
 }));
 
-vi.mock("../features/sidebar/SidebarTree", () => ({
-  default: () => null,
+vi.mock("../features/navTree/NavTree", () => ({
+  NavTree: () => null,
   makeEmptyLayout: vi.fn(() => ({})),
 }));
 

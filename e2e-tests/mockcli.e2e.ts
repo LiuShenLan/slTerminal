@@ -9,7 +9,7 @@
  *   （profile.iconSrc）+ 🟡 attention 指示；OSC 133 D 退出恢复（标题还原 + logo/
  *   图标双清）。
  * - CS-3 用例 ①（agent-event 注入）：Node 侧原子写信号文件（cliId="mockcli"，
- *   事件经桩 eventToStatus 恒等映射 working）→ 页签 ⚡ + Agent Status 活跃区建行
+ *   事件经桩 eventToStatus 恒等映射 working）→ 页签 ⚡ + 导航树活跃区建行
  *   （真实 watcher → agent-event → resolvePayloadCliId 三级解析 → 桩策略全链路真实）。
  * - CS-3 用例 ②（hub 分派 + 保存 cliId 透传）：hooksConfig 面板选择行渲染 mockcli
  *   按钮（hasConfigEditor=true 过滤命中）→ 点击 → mock 编辑器桩渲染
@@ -48,17 +48,40 @@ async function registerMockCliProfile(): Promise<void> {
   });
 }
 
-/** 读取面板页签参数（tabIcon/tabLogo，undefined 归一 null） */
+/** 读取面板页签参数（tabStatus/tabLogo——IC-03 后状态字段为 tabStatus，undefined 归一 null） */
 async function getTabParams(
   panelId: string,
-): Promise<{ tabIcon: string | null; tabLogo: string | null }> {
+): Promise<{ tabStatus: string | null; tabLogo: string | null }> {
   return browser.execute((pid: string) => {
     const params = window.__dockviewApi?.getPanel(pid)?.params ?? {};
     return {
-      tabIcon: params.tabIcon === undefined ? null : (params.tabIcon as string),
+      tabStatus: params.tabStatus === undefined ? null : (params.tabStatus as string),
       tabLogo: params.tabLogo === undefined ? null : (params.tabLogo as string),
     };
   }, panelId);
+}
+
+/**
+ * 等待本面板 PTY session 就绪（容器级 __e2e_sessionReady，data-panel-id 精确匹配）。
+ * 与 specUtils.waitForPtySessionReady 的区别：后者全局首匹配——app 启动恢复的
+ * 用户布局残留面板（实测 ~30 个）先就绪会被其命中，用例面板 spawn 可能未完成。
+ * 本面板 spawn 未完成时注入 OSC 133 C 的后果（NAV-10 实证）：register 在 spawn
+ * 成功后才写入 TerminalRegistry（useXterm doSpawn），此前 setAgentSession no-op
+ * （不 notify，tabLogo 永不写）；spawn 完成后 resetCommandState 又把 tabStatus
+ * 清 null——页签状态被 spawn 初始化吞掉，冒烟用例必败。故注入 OSC 前必须先等
+ * 本面板就绪。
+ */
+async function waitForPanelPtyReady(panelId: string): Promise<void> {
+  await browser.waitUntil(
+    async () =>
+      await browser.execute((pid: string) => {
+        const el = document.querySelector(
+          `[data-e2e="terminal-container"][data-panel-id="${pid}"]`,
+        ) as any;
+        return !!el && el.__e2e_sessionReady === true;
+      }, panelId),
+    { timeout: 25000, timeoutMsg: `面板 ${panelId} PTY session 未就绪` },
+  );
 }
 
 /**
@@ -105,6 +128,11 @@ describe("mockcli profile 冒烟（AC-4 ①：OSC 133 命中页签/logo）", () 
   it("注册 mockcli → OSC 133 C 命中（标题 mockcli + logo + 🟡）→ OSC 133 D 恢复", async () => {
     const { panelId, tempDir } = await setupTerminal();
     try {
+      // 等本面板 PTY 就绪（setupTerminal 的 waitForPtySessionReady 可能命中用户
+      // 布局残留面板——本面板 spawn 未完成时注入 OSC，spawn 完成后的
+      // register/resetCommandState 会吞掉 tabStatus/tabLogo，见 helper 注释）
+      await waitForPanelPtyReady(panelId);
+
       // ── OSC 133 C：命令命中 mockcli profile ──
       // 循环注入直到生效：waitForPtySessionReady 可能命中用户布局残留面板的 ready 标志，
       // 用例面板挂载/OSC 133 handler 注册可能未完成——一次性注入的 OSC 序列在 handler
@@ -120,25 +148,25 @@ describe("mockcli profile 冒烟（AC-4 ①：OSC 133 命中页签/logo）", () 
         },
       );
 
-      // 页签 logo = profile.iconSrc "/cli-icons/mockcli.png" + 🟡 attention 指示
-      // （TerminalPanel handleTabStateChange → updateParameters 更新 params.tabLogo/tabIcon）
+      // 页签 logo = profile.iconSrc "/cli-icons/mockcli.png" + attention 状态圆点
+      // （TerminalPanel handleTabStateChange → updateParameters 更新 params.tabLogo/tabStatus）
       await browser.waitUntil(
         async () => {
           const p = await getTabParams(panelId);
-          return p.tabLogo === "/cli-icons/mockcli.png" && p.tabIcon === "🟡";
+          return p.tabLogo === "/cli-icons/mockcli.png" && p.tabStatus === "attention";
         },
-        { timeout: 10000, timeoutMsg: "页签 logo/🟡 未在 OSC 133 C 后出现" },
+        { timeout: 10000, timeoutMsg: "页签 logo/attention 圆点未在 OSC 133 C 后出现" },
       );
 
       // ── OSC 133 D：命令退出恢复 ──
-      // D → 命令退出：标题还原（非 mockcli，回 originalTitleRef）+ tabLogo/tabIcon 双清 null
+      // D → 命令退出：标题还原（非 mockcli，回 originalTitleRef）+ tabLogo/tabStatus 双清 null
       // （同样循环注入：OSC 133 D 仅当命令运行中才触发恢复分支）
       await browser.waitUntil(
         async () => {
           await writeOsc133(panelId, "D;0");
           const title = await getPanelTitle(panelId);
           const p = await getTabParams(panelId);
-          return title !== "mockcli" && p.tabLogo === null && p.tabIcon === null;
+          return title !== "mockcli" && p.tabLogo === null && p.tabStatus === null;
         },
         {
           timeout: 20000,
@@ -155,25 +183,55 @@ describe("mockcli 关键路径（CS-3：agent-event 注入 + hub 分派/保存 c
   /**
    * CS-3 用例 ①（agent-event 注入）：注册 mockcli → 终端面板 → Node 侧原子写
    * 信号文件（cliId="mockcli"、事件 PreToolUse 经桩 eventToStatus 恒等映射
-   * working）→ 断言页签 ⚡ + Agent Status 活跃区建行。全链路真实：真实 watcher
+   * working）→ 断言页签 ⚡ + 导航树活跃区建行。全链路真实：真实 watcher
    * （lib.rs setup 启动）→ agent-event 广播 → resolvePayloadCliId 三级解析
    * （payload cliId 显式命中，不依赖 claude hooks 注入）→ cliProfileRegistry
    * 查 mockcli → 桩策略。
    */
-  it("注册 mockcli → 信号文件（cliId=mockcli）→ 页签 ⚡ + 活跃区建行", async () => {
+  it("注册 mockcli → 信号文件（cliId=mockcli）→ 页签 ⚡ + 导航树活跃行建行", async () => {
     const { panelId, tempDir } = await setupTerminal();
     const eventsDir = join(homedir(), ".slterminal", "hooks-events");
     const signalFiles: string[] = [];
     try {
-      // 1. 打开 Agent Status 视图（活跃区）
+      // 1. 打开 nav 视图（NAV-08：活跃会话行承接方 = 导航树）
       await browser.execute(() => {
-        (window as any).__slterm_e2e_toggleSideView?.("agent-status");
+        (window as any).__slterm_e2e_toggleSideView?.("nav");
       });
       await browser.waitUntil(
         async () =>
-          await browser.execute(() => !!document.querySelector('[data-e2e="agent-status-view"]')),
-        { timeout: 10000, timeoutMsg: "agent-status 视图未渲染" },
+          await browser.execute(() => !!document.querySelector('[data-e2e="nav-tree"]')),
+        { timeout: 10000, timeoutMsg: "nav 视图未渲染" },
       );
+      // 展开「当前活跃项目」的行到会话行可见（含「当前」pill 的项目容器内——
+      // 页面行点击 = 切页 + 初始化 Dockview，点击其它项目页面行会把 activePageId
+      // 切走致信号建行被拒；多轮收敛：单轮内点击不触发 React 重渲染，判定失真）
+      for (let i = 0; i < 6; i++) {
+        const clicked = await browser.execute(() => {
+          let any = false;
+          const proj = Array.from(
+            document.querySelectorAll('[data-e2e="nav-row-project"]'),
+          ).find((p) => (p.textContent ?? "").includes("当前"));
+          if (!proj) return false;
+          const container = proj.parentElement as HTMLElement | null;
+          if (!container) return false;
+          if (container.children.length <= 2) {
+            (proj as HTMLElement).click();
+            any = true;
+          }
+          const pages = container.querySelectorAll(
+            '[data-e2e="nav-row-page"]',
+          );
+          for (const pg of pages) {
+            if ((pg.parentElement?.children.length ?? 0) <= 1) {
+              (pg as HTMLElement).click();
+              any = true;
+            }
+          }
+          return any;
+        });
+        if (!clicked) break;
+        await new Promise((r) => setTimeout(r, 350));
+      }
 
       // 2. 确保信号目录存在 + 原子写信号文件（9 字段契约，cliId 显式 "mockcli"——
       //    与既有 claude 系用例的信号构造同构，仅 cliId 键不同）
@@ -194,26 +252,31 @@ describe("mockcli 关键路径（CS-3：agent-event 注入 + hub 分派/保存 c
 
       // 3. 页签 ⚡：真实 watcher → agent-event → resolvePayloadCliId（payload cliId
       //    显式命中 mockcli）→ 桩 eventToStatus → working
-      await waitForPanelTabIcon(panelId, "⚡", 15000);
+      await waitForPanelTabIcon(panelId, "working", 15000);
 
-      // 4. 活跃区建行：agent-status-row 出现且 data-panel-id 匹配 + 文本含 ⚡
-      //    （useAgentStatus 经 TerminalRegistry sessionChange 订阅建行）
+      // 4. 导航树活跃行建行：nav-row-session 出现且 data-panel-id 匹配 + 行内圆点
+      //    （StatusDot 7px 圆形 div——NAV-10 契约：⚡ 断言改圆点存在性断言；
+      //    useAgentStatus 经 TerminalRegistry sessionChange 订阅建行）
       await browser.waitUntil(
         async () => {
-          const state = await browser.execute(() => {
-            const row = document.querySelector('[data-e2e="agent-status-row"]');
-            if (!row) return { exists: false, text: "", panelId: null };
+          const state = await browser.execute((pid: string) => {
+            const rows = Array.from(
+              document.querySelectorAll('[data-e2e="nav-row-session"]'),
+            ) as HTMLElement[];
+            const row = rows.find((r) => r.getAttribute("data-panel-id") === pid);
+            if (!row) return { exists: false };
             return {
               exists: true,
-              text: (row as HTMLElement).textContent ?? "",
-              panelId: (row as HTMLElement).getAttribute("data-panel-id"),
+              hasDot: Array.from(row.querySelectorAll("div")).some(
+                (d) =>
+                  (d as HTMLElement).style.borderRadius === "50%" &&
+                  (d as HTMLElement).style.width === "7px",
+              ),
             };
-          });
-          if (!state.exists) return false;
-          if (state.panelId !== panelId) return false;
-          return state.text.includes("⚡");
+          }, panelId);
+          return state.exists && state.hasDot;
         },
-        { timeout: 15000, timeoutMsg: "agent-status 活跃区未建行（含 ⚡）" },
+        { timeout: 15000, timeoutMsg: "导航树活跃行未建行（含圆点）" },
       );
 
       // 5. 信号文件被 watcher 消费（消失——notify 实时 + 3s 轮询兜底双路径）

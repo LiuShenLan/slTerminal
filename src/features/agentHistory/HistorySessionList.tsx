@@ -234,13 +234,13 @@ export interface HistorySessionListProps {
   mode: "current" | "all";
   /** 全部历史会话（未过滤未分组，本组件按 mode 派生） */
   sessions: AgentHistorySession[];
-  /** 当前项目 rootPath（null 时 current 区由 AgentHistorySections 显示「无活跃项目」，本组件不渲染） */
+  /** 当前项目 rootPath（null 时 current 区显示「无活跃项目」，本组件不渲染） */
   rootPath: string | null;
   /** 搜索词（matchesSearch 过滤，作用于两区） */
   search: string;
   /** 运行中会话四态映射（Map<cliId|sessionId, status>，与活跃区同源——问题 2 修复，复合键 MC-313） */
   activeStatuses: Map<string, AgentStatus>;
-  /** 选中会话 id（受控，AgentHistorySections 持有） */
+  /** 选中会话 id（受控，调用方持有） */
   selectedId: string | null;
   /** 单击选中回调 */
   onSelect(id: string): void;

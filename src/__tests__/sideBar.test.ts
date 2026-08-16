@@ -32,11 +32,12 @@ import {
 } from "../features/sideViews/sideBarState";
 
 // 测试用 stub 视图定义（需与 DEFAULT_ZONES 中的 id 对齐，否则 reconcileZones 会过滤未注册 id）
+// NAV-05 三槽：nav / explorer / commit（agent-status 已退役）
 // icon 字段为组件形态（IC-06）——stub 不渲染内容
 function registerTestViews(): void {
   sideViewRegistry.register({
-    id: "projects",
-    title: "项目列表",
+    id: "nav",
+    title: "导航树",
     icon: () => null,
     component: () => null,
   });
@@ -49,12 +50,6 @@ function registerTestViews(): void {
   sideViewRegistry.register({
     id: "commit",
     title: "Commit",
-    icon: () => null,
-    component: () => null,
-  });
-  sideViewRegistry.register({
-    id: "agent-status",
-    title: "Agent 状态",
     icon: () => null,
     component: () => null,
   });
@@ -98,13 +93,13 @@ describe("sideBar store", () => {
   // ── toggleView（经 store 委托 toggleViewPure） ──
 
   it("2. toggleView 关闭已打开视图（R2）", () => {
-    useSideBar.setState({ open: { top: "projects", bottom: null } });
-    useSideBar.getState().toggleView("projects");
+    useSideBar.setState({ open: { top: "nav", bottom: null } });
+    useSideBar.getState().toggleView("nav");
     expect(useSideBar.getState().open).toEqual({ top: null, bottom: null });
   });
 
   it("3. toggleView 打开未打开视图——隐式关闭同区旧视图（R1）", () => {
-    useSideBar.setState({ open: { top: "projects", bottom: null } });
+    useSideBar.setState({ open: { top: "nav", bottom: null } });
     useSideBar.getState().toggleView("explorer");
     expect(useSideBar.getState().open).toEqual({ top: "explorer", bottom: null });
   });
@@ -113,21 +108,21 @@ describe("sideBar store", () => {
 
   it("4. moveButton 跨区移动——打开中视图跟随到目标区（R6）", () => {
     useSideBar.setState({
-      zones: { top: ["projects", "explorer"], bottom: [] },
-      open: { top: "projects", bottom: null },
+      zones: { top: ["nav", "explorer"], bottom: [] },
+      open: { top: "nav", bottom: null },
     });
-    useSideBar.getState().moveButton("projects", "bottom", 0);
-    expect(useSideBar.getState().zones).toEqual({ top: ["explorer"], bottom: ["projects"] });
-    expect(useSideBar.getState().open).toEqual({ top: null, bottom: "projects" });
+    useSideBar.getState().moveButton("nav", "bottom", 0);
+    expect(useSideBar.getState().zones).toEqual({ top: ["explorer"], bottom: ["nav"] });
+    expect(useSideBar.getState().open).toEqual({ top: null, bottom: "nav" });
   });
 
   it("5. moveButton 同区移动——只调顺序不动 open（R8）", () => {
     useSideBar.setState({
-      zones: { top: ["projects", "explorer"], bottom: [] },
+      zones: { top: ["nav", "explorer"], bottom: [] },
       open: { top: "explorer", bottom: null },
     });
     useSideBar.getState().moveButton("explorer", "top", 0);
-    expect(useSideBar.getState().zones).toEqual({ top: ["explorer", "projects"], bottom: [] });
+    expect(useSideBar.getState().zones).toEqual({ top: ["explorer", "nav"], bottom: [] });
     expect(useSideBar.getState().open).toEqual({ top: "explorer", bottom: null });
   });
 
@@ -185,7 +180,7 @@ describe("sideBar store", () => {
   it("9. loadFromDisk 读取合法 sideBar 段 → 正确恢复", async () => {
     mockLoadSettings.mockResolvedValue({
       sideBar: {
-        zones: { top: ["explorer", "projects"], bottom: [] },
+        zones: { top: ["explorer", "nav"], bottom: [] },
         open: { top: "explorer", bottom: null },
         width: 320,
         splitRatio: 0.7,
@@ -193,8 +188,8 @@ describe("sideBar store", () => {
     });
     await useSideBar.getState().loadFromDisk();
     const s = useSideBar.getState();
-    // reconcileZones 补全注册表中缺失的 commit、agent-status
-    expect(s.zones).toEqual({ top: ["explorer", "projects", "commit", "agent-status"], bottom: [] });
+    // reconcileZones 补全注册表中缺失的 commit
+    expect(s.zones).toEqual({ top: ["explorer", "nav", "commit"], bottom: [] });
     expect(s.open).toEqual({ top: "explorer", bottom: null });
     expect(s.width).toBe(320);
     expect(s.splitRatio).toBe(0.7);
@@ -270,7 +265,7 @@ describe("sideBar store", () => {
     // saved 引用 id "ghost"（未注册），应被过滤掉
     mockLoadSettings.mockResolvedValue({
       sideBar: {
-        zones: { top: ["ghost", "projects"], bottom: ["ghost"] },
+        zones: { top: ["ghost", "nav"], bottom: ["ghost"] },
         open: { top: "ghost", bottom: "ghost" },
         width: 250,
         splitRatio: 0.5,
@@ -278,11 +273,31 @@ describe("sideBar store", () => {
     });
     await useSideBar.getState().loadFromDisk();
     const s = useSideBar.getState();
-    // "ghost" 被过滤掉，explorer、commit、agent-status 补全到上区末尾
-    expect(s.zones.top).toEqual(["projects", "explorer", "commit", "agent-status"]);
+    // "ghost" 被过滤掉，explorer、commit 补全到上区末尾
+    expect(s.zones.top).toEqual(["nav", "explorer", "commit"]);
     expect(s.zones.bottom).toEqual([]);
     // open 指向未注册 id → 清 null
     expect(s.open).toEqual({ top: null, bottom: null });
+  });
+
+  it("15b. loadFromDisk 旧 settings（projects/agent-status 未注册 id）→ 丢弃回退三槽（NAV-07 迁移）", async () => {
+    // Stage 05 前持久化的旧数据：projects/agent-status 视图已退役
+    mockLoadSettings.mockResolvedValue({
+      sideBar: {
+        zones: { top: ["projects", "agent-status", "explorer"], bottom: ["commit"] },
+        open: { top: "agent-status", bottom: "commit" },
+        width: 250,
+        splitRatio: 0.5,
+      },
+    });
+    await useSideBar.getState().loadFromDisk();
+    const s = useSideBar.getState();
+    // 未注册 id（projects/agent-status）全部丢弃；缺失的注册 id（nav）
+    // 按 registeredIds 顺序补全上区末尾；已注册的 commit 留在 bottom 原位
+    expect(s.zones).toEqual({ top: ["explorer", "nav"], bottom: ["commit"] });
+    // open 指向被丢弃的 agent-status → 置 null；bottom 的 commit 打开态保留
+    expect(s.open).toEqual({ top: null, bottom: "commit" });
+    expect(s.loaded).toBe(true);
   });
 
   // ── 持久化 ──

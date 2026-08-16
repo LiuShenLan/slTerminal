@@ -1,10 +1,11 @@
 // agent-history-row.test.tsx — HistorySessionRow L2 测试（FE-07 / FE-10）
 //
-// 覆盖：双行渲染（标题/相对时间/prompt 预览）、title null → sessionId 前 8 位、
-// 四态标记（status：working/attention/done/error/null——问题 2）、孤儿标记、
-// 字号层级（行1 标题 12px 粗体/行2 11px——问题 4）、单击/双击/右键回调、选中态高亮、
+// 覆盖：单行渲染（标题/相对时间/行高 30px）、prompt 预览 → 行容器原生 title tooltip、
+// title null → sessionId 前 8 位、四态标记（status：working/attention/done/error/null——
+// 问题 2）、孤儿标记、字号（标题 12px 粗体/时间 11px）、单击/双击/右键回调、选中态高亮、
 // CLI logo 按 session.cliId 查 profile.iconSrc（MC-311：未注册 cliId → 无 logo 不报错）。
 //
+// NAV-08：双行改单行 30px（供导航树复用）——prompt 预览不再渲染为第二行文本。
 // Stage 05：side-effect import profiles 注册真实 claude profile——logo 断言
 // （iconSrc = /cli-icons/claude.png）经注册表查询（MC-311 委托）。
 
@@ -91,24 +92,40 @@ function renderRow(
 }
 
 describe("HistorySessionRow 渲染", () => {
-  it("双行式：行1 粗体标题（12px）+ 右上角相对时间，行2 prompt 预览（11px）", () => {
+  it("单行式：粗体标题（12px）+ 右侧相对时间（11px），行高 30px（NAV-08）", () => {
     const session = makeSession();
     const { getByText, container } = renderRow(session);
 
     const titleEl = getByText("修复登录 bug 的会话");
-    // 行1 标题粗体
+    // 标题粗体 12px
     expect(titleEl.style.fontWeight).toBe("bold");
-    // 行1 容器 12px（问题 4：行标题层级）
-    expect(titleEl.parentElement!.style.fontSize).toBe("12px");
+    expect(titleEl.style.fontSize).toBe("12px");
     // 相对时间（与 historyModel 同源函数计算期望值）
     expect(
       getByText(formatRelativeTime(session.mtimeMs, Date.now())),
     ).toBeTruthy();
-    // 行2 prompt 预览（11px）
-    const promptEl = getByText("修复了 token 过期问题导致的重…");
-    expect(promptEl.style.fontSize).toBe("11px");
-    // 行1 与行2 为独立容器（双行结构）
-    expect(container.querySelectorAll('[data-e2e="agent-history-row"] > div').length).toBe(2);
+    // 单行结构：行根下不再有行1/行2 两级容器（直接是内容项）
+    const row = container.querySelector(
+      '[data-e2e="agent-history-row"]',
+    ) as HTMLElement;
+    expect(row.style.height).toBe("30px");
+    expect(row.querySelector("div")).toBeNull();
+  });
+
+  it("prompt 预览不再渲染为第二行，改放行容器原生 title（悬停 tooltip）", () => {
+    const session = makeSession();
+    const { row, queryByText } = renderRow(session);
+
+    // 预览文本不出现在 DOM 文本中
+    expect(queryByText("修复了 token 过期问题导致的重…")).toBeNull();
+    // 原生 title 属性 = firstPrompt（预览经 tooltip 呈现）
+    expect(row.getAttribute("title")).toBe(session.firstPrompt);
+  });
+
+  it("firstPrompt 为 null → 行容器无 title 属性", () => {
+    const session = makeSession({ firstPrompt: null });
+    const { row } = renderRow(session);
+    expect(row.hasAttribute("title")).toBe(false);
   });
 
   it("title 为 null 时显示 sessionId 前 8 位", () => {
@@ -118,13 +135,6 @@ describe("HistorySessionRow 渲染", () => {
     expect(getByText("a1b2c3d4")).toBeTruthy();
     // 不显示 sessionId 全串
     expect(queryByText(session.sessionId)).toBeNull();
-  });
-
-  it("firstPrompt 为 null 时不渲染行2", () => {
-    const session = makeSession({ firstPrompt: null });
-    const { row } = renderRow(session);
-    // 行2 不存在（行根下仅一个文本行容器 = 行1）
-    expect(row.querySelectorAll("div").length).toBe(1);
   });
 });
 
@@ -165,26 +175,24 @@ describe("HistorySessionRow 状态标记（问题 2：四态同源）", () => {
     expect(logoImg?.getAttribute("src")).toBe("/cli-icons/claude.png");
   });
 
-  it("status=working → 圆点后渲染 CLI logo（按 session.cliId 查 profile.iconSrc/16×16/位于圆点与标题间——MC-311）", () => {
+  it("status=working → 圆点后渲染 CLI logo（按 session.cliId 查 profile.iconSrc/14×14/位于圆点与标题间——MC-311）", () => {
     const { row } = renderRow(makeSession(), { status: "working" });
-    const line1 = row.children[0] as HTMLElement;
     const logoImg = row.querySelector('img[alt="CLI 图标"]');
-    // logo 存在：src = claude profile.iconSrc（经 cliProfileRegistry 查 session.cliId）、16×16
+    // logo 存在：src = claude profile.iconSrc（经 cliProfileRegistry 查 session.cliId）、14×14（NAV-08）
     expect(logoImg).toBeTruthy();
     expect(logoImg?.getAttribute("src")).toBe("/cli-icons/claude.png");
-    expect(logoImg?.getAttribute("width")).toBe("16");
-    expect(logoImg?.getAttribute("height")).toBe("16");
-    // 行1 子元素序：状态圆点 span → logo img → 标题 → 时间
-    const children = Array.from(line1.children);
+    expect(logoImg?.getAttribute("width")).toBe("14");
+    expect(logoImg?.getAttribute("height")).toBe("14");
+    // 单行子元素序：状态圆点 span → logo img → 标题 → 时间
+    const children = Array.from(row.children);
     expect(children[0].getAttribute("data-testid")).toBe("status-dot");
     expect(children[0].textContent).toBe("working");
     expect(children[1]).toBe(logoImg);
   });
 
-  it("status=null → logo 顶到行1 首位（圆点缺席时 logo 在标题前，位置语义不变）", () => {
+  it("status=null → logo 顶到行首位（圆点缺席时 logo 在标题前，位置语义不变）", () => {
     const { row } = renderRow(makeSession(), { status: null });
-    const line1 = row.children[0] as HTMLElement;
-    const children = Array.from(line1.children);
+    const children = Array.from(row.children);
     // 第一个子元素即 logo img（无圆点占位）
     expect(children[0].tagName).toBe("IMG");
     expect(children[0].getAttribute("alt")).toBe("CLI 图标");

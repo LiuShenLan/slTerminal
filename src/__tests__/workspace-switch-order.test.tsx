@@ -160,8 +160,8 @@ describe("DBG-9: switchToPage 时序", () => {
     useLayout.setState({ activePageId: null });
     // 种子侧栏 store 默认值（Workspace 三栏改造后依赖 sideBar 状态）
     useSideBar.setState({
-      zones: { top: ["projects", "explorer"], bottom: [] },
-      open: { top: "projects", bottom: null },
+      zones: { top: ["nav", "explorer"], bottom: [] },
+      open: { top: "nav", bottom: null },
       width: 250,
       splitRatio: 0.5,
       loaded: true,
@@ -222,6 +222,8 @@ describe("DBG-9: switchToPage 时序", () => {
       mockIPC(() => null);
       seedTwoPageProject();
       const { container } = render(<Workspace />);
+      // NavTree 项目默认收起（NAV-10 契约：组件内展开态）——点击项目行展开后页面名可见
+      fireEvent.click(container.querySelector('[data-e2e="nav-row-project"]') as HTMLElement);
       const text = container.textContent ?? "";
       expect(text).toContain("switch-test-project");
       expect(text).toContain("Alpha");
@@ -324,7 +326,8 @@ describe("DBG-9: switchToPage 时序", () => {
       });
       mocks.mockSetProjectRoot.mockClear();
 
-      // 点击 Beta 页面行（真实 UI 路径）
+      // 展开 NavTree 项目行（组件内展开态默认收起）——点击 Beta 页面行（真实 UI 路径）
+      fireEvent.click(getByText("switch-test-project"));
       fireEvent.click(getByText("Beta"));
       // 让 switchToPageShared 运行到 await setProjectRoot 挂起点
       await act(() => Promise.resolve());
@@ -360,6 +363,8 @@ describe("DBG-9: switchToPage 时序", () => {
       });
       mocks.mockSetProjectRoot.mockClear();
 
+      // 展开 NavTree 项目行后点击 Beta（组件内展开态默认收起）
+      fireEvent.click(getByText("switch-test-project"));
       fireEvent.click(getByText("Beta"));
       await act(() => Promise.resolve());
       mocks.rejectSetProjectRoot(new Error("路径不存在"));

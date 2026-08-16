@@ -19,7 +19,7 @@ import { getShortcutRegistry } from "../src/features/shortcuts";
 import { useProjects, createProjectId, createPageId } from "../src/stores/projects";
 import type { OperationPage, Project } from "../src/stores/projects";
 import { useLayout } from "../src/stores/layout";
-import { makeEmptyLayout } from "../src/features/sidebar/SidebarTree";
+import { makeEmptyLayout } from "../src/features/navTree/NavTree";
 import { titleManager } from "../src/workspace/titleManager";
 import { switchToPageShared } from "../src/workspace/pageApis";
 import { useSideBar } from "../src/stores/sideBar";

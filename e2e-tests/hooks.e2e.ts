@@ -65,10 +65,10 @@ describe("hooks 状态可视化", () => {
   });
 
   /**
-   * 用例 2：Node 端写信号文件 → 页签 DOM 出现 ⚡ → SessionEnd → ⚡ 消失。
+   * 用例 2：Node 端写信号文件 → 页签 tabStatus working → SessionEnd → 清空。
    *
-   * 查询方式：DOM 中 .dv-tab 元素文本含 "⚡"（DefaultTab 将
-   * emoji 渲染为 <span>⚡</span>，硬约束要求改 tab DOM 文本）。
+   * 查询方式：面板参数 params.tabStatus（IC-03 改造：tabIcon emoji 字段退役，
+   * 状态写入 tabStatus（AgentStatus 字符串）；DefaultTab 渲染 StatusDot 圆点）。
    */
   it("信号文件驱动页签图标流转", async () => {
     const eventsDir = defaultEventsDir();
@@ -111,11 +111,11 @@ describe("hooks 状态可视化", () => {
       };
       signalFiles.push(writeSignalFile(eventsDir, submitPayload));
 
-      // 5. 轮询本面板页签参数 tabIcon === "⚡"（UserPromptSubmit → working）。
+      // 5. 轮询本面板页签参数 tabStatus === "working"（UserPromptSubmit → working）。
       //    经 getPanel(params.tabIcon) 精确断言单面板，免疫其他面板页签状态污染
       //    （如 Agent Status R2 用例无 SessionEnd 信号、页签 ⚡ 滞留的场景）；
       //    DefaultTab 的 emoji DOM 渲染由 L2 workspace-defaulttab 覆盖。
-      await waitForPanelTabIcon(panelId, "⚡", 15000);
+      await waitForPanelTabIcon(panelId, "working", 15000);
 
       // 6. 写 SessionEnd 信号文件
       const endPayload = {
@@ -201,7 +201,7 @@ describe("hooks 状态可视化", () => {
 
       // 5. 页签 emoji 随事件流转（PreToolUse → ⚡）——经本面板 tabIcon 参数精确断言
       //    （同用例 2 语义：免疫其他面板页签状态污染）
-      await waitForPanelTabIcon(panelId, "⚡", 15000);
+      await waitForPanelTabIcon(panelId, "working", 15000);
 
       // 6. 非法 JSON 输入 → 脚本仍 exit 0（C10 守卫：任何代码路径恒 0）且不产生新信号文件
       const beforeCount = readdirSync(eventsDir).filter((f) => f.endsWith(".json")).length;

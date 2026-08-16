@@ -8,7 +8,7 @@ import { waitForWorkspaceReady, createProject } from "./specUtils";
 
 describe("侧栏视图", () => {
   // E2E-1: 点击活动栏按钮开关侧栏视图（R1 替换、R2 关闭）
-  // 验证：createProject 后默认项目列表打开 → 点击 projects 关闭 → 再点恢复 → 点 explorer 替换
+  // 验证：createProject 后默认 nav 打开 → 点击 nav 关闭 → 再点恢复 → 点 explorer 替换
   it("点击活动栏按钮开关/替换侧栏视图", async () => {
     // 0. 等待 Workspace 就绪
     await waitForWorkspaceReady();
@@ -19,7 +19,7 @@ describe("侧栏视图", () => {
     // 2. 等待活动栏按钮渲染（数据已驱，React 需完成渲染）
     await browser.waitUntil(
       async () => await browser.execute(() => {
-        return !!document.querySelector('[data-e2e="activity-btn-projects"]');
+        return !!document.querySelector('[data-e2e="activity-btn-nav"]');
       }),
       { timeout: 10000, timeoutMsg: "活动栏按钮未渲染" },
     );
@@ -31,36 +31,35 @@ describe("侧栏视图", () => {
       const getState = (window as any).__slterm_e2e_getSideBarState;
       if (typeof move !== "function" || typeof toggle !== "function") return;
 
-      // 所有按钮归位 top 区对应序位：projects(0) / explorer(1) / commit(2) / agent-status(3)
-      move("projects", "top", 0);
+      // 所有按钮归位 top 区对应序位：nav(0) / explorer(1) / commit(2)
+      move("nav", "top", 0);
       move("explorer", "top", 1);
       move("commit", "top", 2);
-      move("agent-status", "top", 3);
 
-      // open 重置为 projects 打开、bottom 关闭。
+      // open 重置为 nav 打开、bottom 关闭。
       // 注意：toggle 是同步 store 操作，但 getState 快照须在每次 toggle 后重读——
-      // 旧快照判断（初始 open.top='commit' 等非 projects 值）会导致 toggle 后
-      // open.top=null 时「补开 projects」分支误判跳过（实测 E2E settings 残留
+      // 旧快照判断（初始 open.top='commit' 等非 nav 值）会导致 toggle 后
+      // open.top=null 时「补开 nav」分支误判跳过（实测 E2E settings 残留
       // open.top='commit' 时连败 4 次）。
       const s = getState?.();
       if (s?.open.bottom) toggle(s.open.bottom);
-      if (s?.open.top && s.open.top !== "projects") toggle(s.open.top);
+      if (s?.open.top && s.open.top !== "nav") toggle(s.open.top);
       const s2 = getState?.();
-      if (!s2?.open.top) toggle("projects");
+      if (!s2?.open.top) toggle("nav");
     });
 
-    // 4. 验证初始状态：项目列表打开（open.top === "projects"）
+    // 4. 验证初始状态：项目列表打开（open.top === "nav"）
     const initialState = await browser.execute(() => {
       const fn = (window as any).__slterm_e2e_getSideBarState;
       return typeof fn === "function" ? fn() : null;
     });
     expect(initialState).not.toBeNull();
-    expect(initialState!.open.top).toBe("projects");
+    expect(initialState!.open.top).toBe("nav");
     expect(initialState!.open.bottom).toBeNull();
 
     // 5. 点击项目列表按钮 → 关闭侧栏区（R2: toggle 关闭）
     await browser.execute(() => {
-      const btn = document.querySelector('[data-e2e="activity-btn-projects"]') as HTMLElement;
+      const btn = document.querySelector('[data-e2e="activity-btn-nav"]') as HTMLElement;
       btn?.click();
     });
 
@@ -78,7 +77,7 @@ describe("侧栏视图", () => {
 
     // 6. 再次点击 → 恢复项目列表
     await browser.execute(() => {
-      const btn = document.querySelector('[data-e2e="activity-btn-projects"]') as HTMLElement;
+      const btn = document.querySelector('[data-e2e="activity-btn-nav"]') as HTMLElement;
       btn?.click();
     });
 
@@ -88,12 +87,12 @@ describe("侧栏视图", () => {
           const fn = (window as any).__slterm_e2e_getSideBarState;
           return typeof fn === "function" ? fn() : null;
         });
-        return s && s.open.top === "projects" ? s : false;
+        return s && s.open.top === "nav" ? s : false;
       },
-      { timeout: 5000, timeoutMsg: "侧栏区未恢复（open.top !== \"projects\"）" },
+      { timeout: 5000, timeoutMsg: "侧栏区未恢复（open.top !== \"nav\"）" },
     );
 
-    // 7. 点击文件浏览器 → R1 替换：explorer 替换 projects（单槽位覆盖）
+    // 7. 点击文件浏览器 → R1 替换：explorer 替换 nav（单槽位覆盖）
     await browser.execute(() => {
       const btn = document.querySelector('[data-e2e="activity-btn-explorer"]') as HTMLElement;
       btn?.click();
@@ -107,7 +106,7 @@ describe("侧栏视图", () => {
         });
         return s && s.open.top === "explorer" ? s : false;
       },
-      { timeout: 5000, timeoutMsg: "explorer 未替换 projects（R1 替换失败）" },
+      { timeout: 5000, timeoutMsg: "explorer 未替换 nav（R1 替换失败）" },
     );
     expect(explorerState.open.top).toBe("explorer");
     expect(explorerState.open.bottom).toBeNull(); // 单槽位：仅一区有视图
@@ -147,11 +146,10 @@ describe("侧栏视图", () => {
       const getState = (window as any).__slterm_e2e_getSideBarState;
       if (typeof move !== "function" || typeof toggle !== "function") return;
 
-      // 所有按钮归位 top 区对应序位：projects(0) / explorer(1) / commit(2) / agent-status(3)
-      move("projects", "top", 0);
+      // 所有按钮归位 top 区对应序位：nav(0) / explorer(1) / commit(2)
+      move("nav", "top", 0);
       move("explorer", "top", 1);
       move("commit", "top", 2);
-      move("agent-status", "top", 3);
 
       // open 重置为 explorer 打开、bottom 关闭
       const s = getState?.();

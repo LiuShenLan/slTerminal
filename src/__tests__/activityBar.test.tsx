@@ -28,6 +28,14 @@ vi.mock("../ipc/settings", () => ({
   loadSettings: mockLoadSettings,
 }));
 
+// 配置钮入口 mock（NAV-05：点击 = openHooksConfigFromActivityBar——入口唯一化）
+const { mockOpenHooksConfigFromActivityBar } = vi.hoisted(() => ({
+  mockOpenHooksConfigFromActivityBar: vi.fn(() => Promise.resolve()),
+}));
+vi.mock("../features/hooksConfig/openHooksConfig", () => ({
+  openHooksConfigFromActivityBar: mockOpenHooksConfigFromActivityBar,
+}));
+
 import { render, fireEvent, act } from "@testing-library/react";
 import { ActivityBar } from "../features/sideViews/ActivityBar";
 import { useSideBar } from "../stores/sideBar";
@@ -43,7 +51,9 @@ import {
   DIM_FG,
   ACCENT_FG,
   FOCUS_BORDER,
+  ACTIVE_SELECTION_BG,
 } from "../theme/colors";
+import { ACTIVITY_BAR_SIZE } from "../features/sideViews/sideBarState";
 
 // ── 测试辅助 ──
 
@@ -53,7 +63,7 @@ function StubIcon(): null {
 }
 
 function registerTestViews(): void {
-  sideViewRegistry.register({ id: "projects", title: "项目列表", icon: StubIcon, component: () => null });
+  sideViewRegistry.register({ id: "nav", title: "导航树", icon: StubIcon, component: () => null });
   sideViewRegistry.register({ id: "explorer", title: "文件浏览器", icon: StubIcon, component: () => null });
   sideViewRegistry.register({ id: "search", title: "搜索", icon: StubIcon, component: () => null });
 }
@@ -167,7 +177,7 @@ describe("ActivityBar", () => {
     render(<ActivityBar />);
     const topBtns = getZoneContainer("top").querySelectorAll("[data-view-id]");
     expect(topBtns).toHaveLength(2);
-    expect(topBtns[0].getAttribute("data-view-id")).toBe("projects");
+    expect(topBtns[0].getAttribute("data-view-id")).toBe("nav");
     expect(topBtns[1].getAttribute("data-view-id")).toBe("explorer");
     const bottomBtns = getZoneContainer("bottom").querySelectorAll("[data-view-id]");
     expect(bottomBtns).toHaveLength(0);
@@ -179,7 +189,7 @@ describe("ActivityBar", () => {
   });
 
   it("SB-19.2 种子下区按钮后正确渲染", () => {
-    useSideBar.setState({ zones: { top: ["projects"], bottom: ["explorer", "search"] }, open: { top: null, bottom: null } });
+    useSideBar.setState({ zones: { top: ["nav"], bottom: ["explorer", "search"] }, open: { top: null, bottom: null } });
     render(<ActivityBar />);
     expect(getZoneContainer("top").querySelectorAll("[data-view-id]")).toHaveLength(1);
     expect(getZoneContainer("bottom").querySelectorAll("[data-view-id]")).toHaveLength(2);
@@ -187,11 +197,11 @@ describe("ActivityBar", () => {
 
   // ═══ active 态 ═══
 
-  it("SB-19.3 active 按钮高亮背景 + 左侧指示条", () => {
+  it("SB-19.3 active 按钮高亮背景（ACCEPT_SELECTION_BG accent-dim）+ 左侧指示条", () => {
     render(<ActivityBar />);
-    const p = getButton("projects") as HTMLElement;
+    const p = getButton("nav") as HTMLElement;
     const e = getButton("explorer") as HTMLElement;
-    expect(p.style.backgroundColor).toBe(hexToRgb(SIDEBAR_COLORS.selected));
+    expect(p.style.backgroundColor).toBe(hexToRgb(ACTIVE_SELECTION_BG));
     expect(p.style.borderLeftColor).toBe(hexToRgb(FOCUS_BORDER));
     expect(e.style.borderLeftColor).toBe("transparent");
   });
@@ -200,10 +210,10 @@ describe("ActivityBar", () => {
     render(<ActivityBar />);
     fireEvent.click(getButton("explorer"));
     expect(useSideBar.getState().open.top).toBe("explorer");
-    const p = getButton("projects") as HTMLElement;
+    const p = getButton("nav") as HTMLElement;
     const e = getButton("explorer") as HTMLElement;
-    expect(p.style.backgroundColor).not.toBe(hexToRgb(SIDEBAR_COLORS.selected));
-    expect(e.style.backgroundColor).toBe(hexToRgb(SIDEBAR_COLORS.selected));
+    expect(p.style.backgroundColor).not.toBe(hexToRgb(ACTIVE_SELECTION_BG));
+    expect(e.style.backgroundColor).toBe(hexToRgb(ACTIVE_SELECTION_BG));
   });
 
   // ═══ 点击 → toggleView ═══
@@ -219,8 +229,8 @@ describe("ActivityBar", () => {
   it("SB-19.6 再次点击同一按钮关闭视图", () => {
     render(<ActivityBar />);
     const spy = vi.spyOn(useSideBar.getState(), "toggleView");
-    fireEvent.click(getButton("projects"));
-    expect(spy).toHaveBeenCalledWith("projects");
+    fireEvent.click(getButton("nav"));
+    expect(spy).toHaveBeenCalledWith("nav");
     expect(useSideBar.getState().open.top).toBeNull();
     spy.mockRestore();
   });
@@ -229,9 +239,9 @@ describe("ActivityBar", () => {
 
   it("SB-19.7 按钮有 title 和 data-e2e 属性", () => {
     render(<ActivityBar />);
-    expect(getButton("projects").getAttribute("title")).toBe("项目列表");
+    expect(getButton("nav").getAttribute("title")).toBe("导航树");
     expect(getButton("explorer").getAttribute("title")).toBe("文件浏览器");
-    expect(getButton("projects").getAttribute("data-e2e")).toBe("activity-btn-projects");
+    expect(getButton("nav").getAttribute("data-e2e")).toBe("activity-btn-nav");
   });
 
   // ═══ 拖拽：dragStart（按钮级，不变） ═══
@@ -256,7 +266,7 @@ describe("ActivityBar", () => {
 
   it("SB-19.10 dragOver 调用 preventDefault 并设置 dropEffect（向外层容器派发）", () => {
     render(<ActivityBar />);
-    const spy = installRectSpy({ projects: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } }, 800);
+    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } }, 800);
     const dt = createMockDataTransfer();
     dispatchDragEvent(getActivityBar(), "dragover", dt, 25);
     expect(dt.dropEffect).toBe("move");
@@ -265,7 +275,7 @@ describe("ActivityBar", () => {
 
   it("SB-19.11 dragOver 调用 computeDropTarget 不抛异常（向外层容器派发）", () => {
     render(<ActivityBar />);
-    const spy = installRectSpy({ projects: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } }, 800);
+    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } }, 800);
     expect(() => dispatchDragEvent(getActivityBar(), "dragover", createMockDataTransfer(), 25)).not.toThrow();
     spy.mockRestore();
   });
@@ -274,7 +284,7 @@ describe("ActivityBar", () => {
 
   it("SB-19.12 drop 调用 moveButton——同 zone（向外层容器派发）", () => {
     render(<ActivityBar />);
-    const spy = installRectSpy({ projects: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } }, 800);
+    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } }, 800);
     const moveSpy = vi.spyOn(useSideBar.getState(), "moveButton");
     const dt = createMockDataTransfer({ "application/x-side-view-id": "explorer" });
     const bar = getActivityBar();
@@ -303,7 +313,7 @@ describe("ActivityBar", () => {
   // ═══ 未注册 id 防御 ═══
 
   it("SB-19.14 zones 含未注册 id 时正常渲染不抛异常", () => {
-    useSideBar.setState({ zones: { top: ["projects", "unknown-view", "explorer"], bottom: [] } });
+    useSideBar.setState({ zones: { top: ["nav", "unknown-view", "explorer"], bottom: [] } });
     render(<ActivityBar />);
     expect(getZoneContainer("top").querySelectorAll("[data-view-id]")).toHaveLength(2);
   });
@@ -322,10 +332,10 @@ describe("ActivityBar", () => {
 
   it("SB-19.16 active 按钮 hover 时不覆盖 active 背景色", () => {
     render(<ActivityBar />);
-    const btn = getButton("projects") as HTMLElement;
-    expect(btn.style.backgroundColor).toBe(hexToRgb(SIDEBAR_COLORS.selected));
+    const btn = getButton("nav") as HTMLElement;
+    expect(btn.style.backgroundColor).toBe(hexToRgb(ACTIVE_SELECTION_BG));
     fireEvent.mouseEnter(btn);
-    expect(btn.style.backgroundColor).toBe(hexToRgb(SIDEBAR_COLORS.selected));
+    expect(btn.style.backgroundColor).toBe(hexToRgb(ACTIVE_SELECTION_BG));
   });
 
   // ═══ 新增：图标色三级（IC-06：默认 fg-3 / hover fg-1 / active accentFg） ═══
@@ -333,7 +343,7 @@ describe("ActivityBar", () => {
   it("SB-19.33 图标色三级：默认 DIM_FG（fg-3）、hover SIDEBAR_FG（fg-1）、active ACCENT_FG", () => {
     render(<ActivityBar />);
     // 默认种子：projects active（DEFAULT_OPEN）、explorer 非 active
-    const p = getButton("projects") as HTMLElement;
+    const p = getButton("nav") as HTMLElement;
     const e = getButton("explorer") as HTMLElement;
     expect(p.style.color).toBe(hexToRgb(ACCENT_FG));
     expect(e.style.color).toBe(hexToRgb(DIM_FG));
@@ -352,7 +362,7 @@ describe("ActivityBar", () => {
   it("SB-19.17 拖拽 explorer 从 top 到空 bottom → moveButton(targetZone='bottom')", () => {
     render(<ActivityBar />);
     // boundary = max(projects.bottom=50, explorer.bottom=90) = 90
-    const spy = installRectSpy({ projects: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } }, 100);
+    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } }, 100);
     const moveSpy = vi.spyOn(useSideBar.getState(), "moveButton");
     const dt = createMockDataTransfer({ "application/x-side-view-id": "explorer" });
     const bar = getActivityBar();
@@ -368,17 +378,17 @@ describe("ActivityBar", () => {
   });
 
   it("SB-19.18 拖拽 projects 从 bottom 到空 top → moveButton(targetZone='top')", () => {
-    useSideBar.setState({ zones: { top: [], bottom: ["projects", "explorer"] }, open: { top: null, bottom: null } });
+    useSideBar.setState({ zones: { top: [], bottom: ["nav", "explorer"] }, open: { top: null, bottom: null } });
     render(<ActivityBar />);
     // top zone 空 → boundary = container midpoint = 300（空上区回退）；clientY=10 < 300 → "top"
-    const spy = installRectSpy({ projects: { top: 90, height: 40 }, explorer: { top: 130, height: 40 } }, 90);
+    const spy = installRectSpy({ nav: { top: 90, height: 40 }, explorer: { top: 130, height: 40 } }, 90);
     const moveSpy = vi.spyOn(useSideBar.getState(), "moveButton");
-    const dt = createMockDataTransfer({ "application/x-side-view-id": "projects" });
+    const dt = createMockDataTransfer({ "application/x-side-view-id": "nav" });
     const bar = getActivityBar();
     dispatchDragEvent(bar, "dragover", dt, 10);
     dispatchDragEvent(bar, "drop", dt);
     expect(moveSpy).toHaveBeenCalled();
-    expect(moveSpy.mock.calls[0][0]).toBe("projects");
+    expect(moveSpy.mock.calls[0][0]).toBe("nav");
     expect(moveSpy.mock.calls[0][1]).toBe("top");
     expect(moveSpy.mock.calls[0][2]).toBe(0); // top 空 → 末尾 index 0
     moveSpy.mockRestore();
@@ -386,10 +396,10 @@ describe("ActivityBar", () => {
   });
 
   it("SB-19.19 拖拽 explorer 从 top 到有按钮的 bottom → zone + index 均正确", () => {
-    useSideBar.setState({ zones: { top: ["explorer"], bottom: ["projects", "search"] }, open: { top: null, bottom: null } });
+    useSideBar.setState({ zones: { top: ["explorer"], bottom: ["nav", "search"] }, open: { top: null, bottom: null } });
     render(<ActivityBar />);
     // boundary = explorer.bottom = 50; bottomZoneTop=90
-    const spy = installRectSpy({ explorer: { top: 10, height: 40 }, projects: { top: 90, height: 40 }, search: { top: 130, height: 40 } }, 90);
+    const spy = installRectSpy({ explorer: { top: 10, height: 40 }, nav: { top: 90, height: 40 }, search: { top: 130, height: 40 } }, 90);
     const moveSpy = vi.spyOn(useSideBar.getState(), "moveButton");
     const dt = createMockDataTransfer({ "application/x-side-view-id": "explorer" });
     const bar = getActivityBar();
@@ -406,9 +416,9 @@ describe("ActivityBar", () => {
   it("SB-19.20 同区拖拽排序（top zone）→ zone 不变", () => {
     render(<ActivityBar />);
     // boundary=90, clientY=70 < 90 → zone="top"
-    const spy = installRectSpy({ projects: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } }, 800);
+    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } }, 800);
     const moveSpy = vi.spyOn(useSideBar.getState(), "moveButton");
-    const dt = createMockDataTransfer({ "application/x-side-view-id": "projects" });
+    const dt = createMockDataTransfer({ "application/x-side-view-id": "nav" });
     const bar = getActivityBar();
     dispatchDragEvent(bar, "dragover", dt, 70);
     dispatchDragEvent(bar, "drop", dt);
@@ -419,10 +429,10 @@ describe("ActivityBar", () => {
   });
 
   it("SB-19.21 同区拖拽排序（bottom zone）→ zone='bottom'", () => {
-    useSideBar.setState({ zones: { top: [], bottom: ["projects", "explorer", "search"] }, open: { top: null, bottom: null } });
+    useSideBar.setState({ zones: { top: [], bottom: ["nav", "explorer", "search"] }, open: { top: null, bottom: null } });
     render(<ActivityBar />);
     // top 空, midpoint=300; clientY=400 > 300 → zone="bottom"
-    const spy = installRectSpy({ projects: { top: 90, height: 40 }, explorer: { top: 130, height: 40 }, search: { top: 170, height: 40 } }, 90);
+    const spy = installRectSpy({ nav: { top: 90, height: 40 }, explorer: { top: 130, height: 40 }, search: { top: 170, height: 40 } }, 90);
     const moveSpy = vi.spyOn(useSideBar.getState(), "moveButton");
     const dt = createMockDataTransfer({ "application/x-side-view-id": "search" });
     const bar = getActivityBar();
@@ -437,10 +447,10 @@ describe("ActivityBar", () => {
   // ═══ 新增：zone 判定边界 ═══
 
   it("SB-19.22 clientY 在上区按钮区域内 → zone='top'", () => {
-    useSideBar.setState({ zones: { top: ["projects"], bottom: ["explorer"] }, open: { top: null, bottom: null } });
+    useSideBar.setState({ zones: { top: ["nav"], bottom: ["explorer"] }, open: { top: null, bottom: null } });
     render(<ActivityBar />);
     // boundary = projects.bottom = 50
-    const spy = installRectSpy({ projects: { top: 10, height: 40 }, explorer: { top: 90, height: 40 } }, 90);
+    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 90, height: 40 } }, 90);
     const moveSpy = vi.spyOn(useSideBar.getState(), "moveButton");
     const dt = createMockDataTransfer({ "application/x-side-view-id": "explorer" });
     const bar = getActivityBar();
@@ -454,12 +464,12 @@ describe("ActivityBar", () => {
   });
 
   it("SB-19.23 clientY >= boundary → zone='bottom'", () => {
-    useSideBar.setState({ zones: { top: ["projects"], bottom: ["explorer"] }, open: { top: null, bottom: null } });
+    useSideBar.setState({ zones: { top: ["nav"], bottom: ["explorer"] }, open: { top: null, bottom: null } });
     render(<ActivityBar />);
     // boundary = projects.bottom = 50
-    const spy = installRectSpy({ projects: { top: 10, height: 40 }, explorer: { top: 90, height: 40 } }, 90);
+    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 90, height: 40 } }, 90);
     const moveSpy = vi.spyOn(useSideBar.getState(), "moveButton");
-    const dt = createMockDataTransfer({ "application/x-side-view-id": "projects" });
+    const dt = createMockDataTransfer({ "application/x-side-view-id": "nav" });
     const bar = getActivityBar();
     // clientY=50 >= midpoint? No——350 > 300 → "bottom"
     dispatchDragEvent(bar, "dragover", dt, 350);
@@ -471,11 +481,11 @@ describe("ActivityBar", () => {
   });
 
   it("SB-19.24 bottom zone 有按钮、拖到两按钮之间 → index 正确", () => {
-    useSideBar.setState({ zones: { top: [], bottom: ["projects", "explorer"] }, open: { top: null, bottom: null } });
+    useSideBar.setState({ zones: { top: [], bottom: ["nav", "explorer"] }, open: { top: null, bottom: null } });
     render(<ActivityBar />);
     // top 空 → boundary ~0; clientY=110 > 0 → "bottom"
     // projects mid=110, explorer mid=150; clientY=110 >=110 → index after projects
-    const spy = installRectSpy({ projects: { top: 90, height: 40 }, explorer: { top: 130, height: 40 } }, 90);
+    const spy = installRectSpy({ nav: { top: 90, height: 40 }, explorer: { top: 130, height: 40 } }, 90);
     const moveSpy = vi.spyOn(useSideBar.getState(), "moveButton");
     const dt = createMockDataTransfer({ "application/x-side-view-id": "search" });
     const bar = getActivityBar();
@@ -491,9 +501,9 @@ describe("ActivityBar", () => {
   // ═══ 新增：指示线与状态清理 ═══
 
   it("SB-19.25 dragOver 跨 zone 时 indicator.zone 切换", () => {
-    useSideBar.setState({ zones: { top: ["projects"], bottom: ["explorer"] }, open: { top: null, bottom: null } });
+    useSideBar.setState({ zones: { top: ["nav"], bottom: ["explorer"] }, open: { top: null, bottom: null } });
     render(<ActivityBar />);
-    const spy = installRectSpy({ projects: { top: 10, height: 40 }, explorer: { top: 90, height: 40 } }, 90);
+    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 90, height: 40 } }, 90);
     const dt = createMockDataTransfer();
     const bar = getActivityBar();
     dispatchDragEvent(bar, "dragover", dt, 20); // → "top" (< 300)
@@ -503,7 +513,7 @@ describe("ActivityBar", () => {
 
   it("SB-19.26 onDragLeave 离开活动栏 → dropIndicator 清 null", () => {
     render(<ActivityBar />);
-    const spy = installRectSpy({ projects: { top: 10, height: 40 } }, 800);
+    const spy = installRectSpy({ nav: { top: 10, height: 40 } }, 800);
     const dt = createMockDataTransfer();
     const bar = getActivityBar();
     dispatchDragEvent(bar, "dragover", dt, 20);
@@ -518,13 +528,13 @@ describe("ActivityBar", () => {
   });
 
   it("SB-19.27 drop 后 opacity 恢复 + dragEnd 幂等清理", () => {
-    useSideBar.setState({ zones: { top: ["projects"], bottom: ["explorer"] }, open: { top: null, bottom: null } });
+    useSideBar.setState({ zones: { top: ["nav"], bottom: ["explorer"] }, open: { top: null, bottom: null } });
     render(<ActivityBar />);
-    const spy = installRectSpy({ projects: { top: 10, height: 40 }, explorer: { top: 90, height: 40 } }, 90);
+    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 90, height: 40 } }, 90);
     const moveSpy = vi.spyOn(useSideBar.getState(), "moveButton");
-    const dt = createMockDataTransfer({ "application/x-side-view-id": "projects" });
+    const dt = createMockDataTransfer({ "application/x-side-view-id": "nav" });
     const bar = getActivityBar();
-    const btn = getButton("projects") as HTMLElement;
+    const btn = getButton("nav") as HTMLElement;
     dispatchDragEvent(btn, "dragstart", dt);
     expect(btn.style.opacity).toBe("0.5");
     // clientY=400 > midpoint=300 → "bottom" (cross-zone)
@@ -533,7 +543,7 @@ describe("ActivityBar", () => {
     expect(moveSpy.mock.calls[0][1]).toBe("bottom");
     expect(moveSpy.mock.calls[0][2]).toBe(1); // 400 >= explorer mid=110 → 末尾 index 1
     // drop 中 clearDragState → React 重渲染 → re-query
-    const after = getButton("projects") as HTMLElement;
+    const after = getButton("nav") as HTMLElement;
     expect(after.style.opacity).toBe("1");
     dispatchDragEvent(after, "dragend", createMockDataTransfer());
     expect(after.style.opacity).toBe("1");
@@ -543,7 +553,7 @@ describe("ActivityBar", () => {
 
   it("SB-19.28 onDragLeave 子元素间转移不触发清理", () => {
     render(<ActivityBar />);
-    const spy = installRectSpy({ projects: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } }, 800);
+    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } }, 800);
     const dt = createMockDataTransfer();
     const bar = getActivityBar();
     dispatchDragEvent(bar, "dragover", dt, 20);
@@ -561,7 +571,7 @@ describe("ActivityBar", () => {
 
   it("SB-19.29 落点在按钮上半 → moveButton index 为该按钮前方（0）", () => {
     render(<ActivityBar />);
-    const spy = installRectSpy({ projects: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } }, 800);
+    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } }, 800);
     const moveSpy = vi.spyOn(useSideBar.getState(), "moveButton");
     const dt = createMockDataTransfer({ "application/x-side-view-id": "explorer" });
     const bar = getActivityBar();
@@ -577,7 +587,7 @@ describe("ActivityBar", () => {
 
   it("SB-19.30 落点在按钮下半 → moveButton index 为该按钮后方（1）", () => {
     render(<ActivityBar />);
-    const spy = installRectSpy({ projects: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } }, 800);
+    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } }, 800);
     const moveSpy = vi.spyOn(useSideBar.getState(), "moveButton");
     const dt = createMockDataTransfer({ "application/x-side-view-id": "explorer" });
     const bar = getActivityBar();
@@ -594,7 +604,7 @@ describe("ActivityBar", () => {
 
   it("SB-19.31 clientY 恰好等于容器中点（300）→ zone='bottom'（>= 边界）", () => {
     render(<ActivityBar />);
-    const spy = installRectSpy({ projects: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } }, 800);
+    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } }, 800);
     const moveSpy = vi.spyOn(useSideBar.getState(), "moveButton");
     const dt = createMockDataTransfer({ "application/x-side-view-id": "explorer" });
     const bar = getActivityBar();
@@ -609,7 +619,7 @@ describe("ActivityBar", () => {
 
   it("SB-19.32 clientY 为中点 -1（299）→ zone='top'（< 边界）", () => {
     render(<ActivityBar />);
-    const spy = installRectSpy({ projects: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } }, 800);
+    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } }, 800);
     const moveSpy = vi.spyOn(useSideBar.getState(), "moveButton");
     const dt = createMockDataTransfer({ "application/x-side-view-id": "explorer" });
     const bar = getActivityBar();
@@ -620,5 +630,45 @@ describe("ActivityBar", () => {
     expect(moveSpy.mock.calls[0][2]).toBe(2); // 299 >= explorer mid=70 → 末尾 index 2
     moveSpy.mockRestore();
     spy.mockRestore();
+  });
+
+  // ═══ NAV-05：46px 栏宽 + 34×34 圆角 6 按钮 + 底部配置钮 ═══
+
+  it("SB-19.34 活动栏宽 46px（ACTIVITY_BAR_SIZE 常量驱动）", () => {
+    render(<ActivityBar />);
+    expect(ACTIVITY_BAR_SIZE).toBe(46);
+    const bar = getActivityBar() as HTMLElement;
+    expect(bar.style.width).toBe("46px");
+  });
+
+  it("SB-19.35 视图按钮 34×34 圆角 6px", () => {
+    render(<ActivityBar />);
+    const btn = getButton("nav") as HTMLElement;
+    expect(btn.style.width).toBe("34px");
+    expect(btn.style.height).toBe("34px");
+    expect(btn.style.borderRadius).toBe("6px");
+  });
+
+  it("SB-19.36 底部配置钮：data-e2e=activity-btn-config + title=配置，不入 zones/注册表（不可拖拽）", () => {
+    render(<ActivityBar />);
+    const config = document.querySelector(
+      '[data-e2e="activity-btn-config"]',
+    ) as HTMLElement;
+    expect(config).toBeTruthy();
+    expect(config.getAttribute("title")).toBe("配置");
+    // 配置钮不参与拖拽（无 draggable 属性）
+    expect(config.hasAttribute("draggable")).toBe(false);
+    // 不在 zones 数据中（不参与持久化）——zones 不含 config
+    const { zones } = useSideBar.getState();
+    expect([...zones.top, ...zones.bottom]).not.toContain("config");
+  });
+
+  it("SB-19.37 点击配置钮 → openHooksConfigFromActivityBar（入口唯一化）", () => {
+    render(<ActivityBar />);
+    const config = document.querySelector(
+      '[data-e2e="activity-btn-config"]',
+    ) as HTMLElement;
+    fireEvent.click(config);
+    expect(mockOpenHooksConfigFromActivityBar).toHaveBeenCalledTimes(1);
   });
 });

@@ -32,14 +32,30 @@ function backupFile(filePath) {
   return false;
 }
 
-/** 还原单个文件：原存在 → 先删产物再 rename 备份回来；原不存在 → 删产物 + 残留 bak */
+/** 还原单个文件：原存在 → 先删产物再 rename 备份回来；原不存在 → 删产物 + 残留 bak。
+ *  rename 失败重试（E2E-16：slterminal.exe 退出异步，exit 钩子执行时文件可能仍被
+ *  占用——重试 3 次 × 500ms；仍失败 warn 明示——残留 bak 会在下次运行备份时覆盖） */
 function restoreFile(filePath, existed) {
   const bakPath = filePath + '.e2e-bak';
   // E2E-13②：还原前先 rmSync 原路径（防 E2E 期间文件被删/损坏导致 rename/copy 失败、
   // 残留 bak 影响下次运行判定），再 rename 备份回来（同卷原子移动）
   try { fs.rmSync(filePath, { force: true }); } catch { /* 忽略 */ }
   if (existed) {
-    try { fs.renameSync(bakPath, filePath); } catch { /* 忽略 */ }
+    let ok = false;
+    for (let i = 0; i < 3 && !ok; i++) {
+      try {
+        fs.renameSync(bakPath, filePath);
+        ok = true;
+      } catch (err) {
+        if (i < 2) {
+          const waitMs = 500 * (i + 1);
+          const end = Date.now() + waitMs;
+          while (Date.now() < end) { /* 忙等——exit 钩子内无法用 setTimeout */ }
+        } else {
+          console.warn(`[wdio-launcher] 还原 ${filePath} 失败（3 次重试）:`, err.message);
+        }
+      }
+    }
   } else {
     try { fs.rmSync(bakPath, { force: true }); } catch { /* 忽略 */ }
   }
@@ -79,7 +95,39 @@ if (hooksExisted) {
 // ~/.slterminal/hooks-events/（信号文件运行时目录）：不做备份，exit 时直接清理
 const hooksEventsDir = path.join(os.homedir(), '.slterminal', 'hooks-events');
 
+// slterminal-projects.json（exe 同级项目数据，E2E-16 新增）：
+// 导航树按项目归属渲染——项目持久化跨 run 累积（实测 160+）会拖垮导航树
+// （展开全部行渲染爆炸 + execute 超时）。启动时备份后删除（E2E 从空项目开始），
+// exit 时还原用户项目数据（照 settings.json 备份/还原模式）。
+// 注意：后端 load_from_dir 有 .bak 恢复——主文件删除后从 .bak 读回旧数据，
+// 必须连 .bak 一并备份/清空/还原（E2E-16 实测：只清主文件 → .bak 恢复 200+ 项目）。
+const projectsJsonPath = path.join(__dirname, '..', 'src-tauri', 'target', 'debug', 'slterminal-projects.json');
+const projectsBakPath = projectsJsonPath + '.bak';
+const projectsJsonExisted = backupFile(projectsJsonPath);
+const projectsBakExisted = fs.existsSync(projectsBakPath);
+if (fs.existsSync(projectsBakPath)) {
+  try { fs.copyFileSync(projectsBakPath, projectsBakPath + '.e2e-bak'); } catch { /* 忽略 */ }
+}
+if (projectsJsonExisted) {
+  try { fs.rmSync(projectsJsonPath, { force: true }); } catch { /* 忽略 */ }
+  try { fs.rmSync(projectsBakPath, { force: true }); } catch { /* 忽略 */ }
+  console.log('[wdio-launcher] 已清空 E2E 项目数据（slterminal-projects.json + .bak，exit 时还原）');
+}
+
 process.on('exit', () => {
+  // slterminal-projects.json 还原（E2E-16——E2E 期间累积的测试项目数据丢弃）
+  restoreFile(projectsJsonPath, projectsJsonExisted);
+  // .bak 还原（.e2e-bak 命名——restoreFile 的 bakPath 约定不一致，直接 rename）
+  if (projectsBakExisted) {
+    try {
+      fs.rmSync(projectsBakPath, { force: true });
+      fs.renameSync(projectsBakPath + '.e2e-bak', projectsBakPath);
+    } catch (err) {
+      console.warn('[wdio-launcher] 还原 slterminal-projects.json.bak 失败:', err.message);
+    }
+  } else {
+    try { fs.rmSync(projectsBakPath + '.e2e-bak', { force: true }); } catch { /* 忽略 */ }
+  }
   // settings.json 还原（FIX-TE-04）
   restoreFile(settingsPath, settingsExisted);
   // ~/.claude/settings.json 还原（E2E-05——agent_hooks_inject 会真实写 slterm matcher）

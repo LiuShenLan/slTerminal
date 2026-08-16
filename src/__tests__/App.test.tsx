@@ -35,8 +35,8 @@ vi.mock("../ipc/notify", () => ({
   startWatch: () => Promise.resolve(),
 }));
 
-vi.mock("../features/sidebar/SidebarTree", () => ({
-  default: () => null,
+vi.mock("../features/navTree/NavTree", () => ({
+  NavTree: () => null,
   makeEmptyLayout: vi.fn(() => ({})),
 }));
 

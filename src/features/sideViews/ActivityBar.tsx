@@ -1,4 +1,4 @@
-// ActivityBar —— 活动栏组件（40px 宽常驻栏）
+// ActivityBar —— 活动栏组件（NAV-05：46px 宽常驻栏）
 //
 // 职责：
 // - 渲染上区/下区两按钮组，中间 flex:1 间隔
@@ -6,6 +6,12 @@
 // - 按钮 active 态高亮背景 + 左侧 2px 指示条（VS Code 风格）
 // - HTML5 原生拖拽（零依赖）：上区 ↔ 下区换区 + 半区内排序
 // - 拖拽落点指示线（computeDropTarget 纯函数）
+// - 底部「配置」钮（NAV-05）：id config、IconConfig、data-e2e=activity-btn-config、
+//   点击 = openHooksConfigFromActivityBar——不入 SideViewRegistry、不参与拖拽/持久化
+//
+// 规格（NAV-05/GL-04）：栏宽 46px（ACTIVITY_BAR_SIZE 常量，Workspace 同步引用）；
+// 按钮 34×34 圆角 6；激活态 = ACTIVE_SELECTION_BG（accent-dim）底 +
+// ACCENT_FG 图标 + 左侧 2px FOCUS_BORDER 竖条（沿用现指示条机制）。
 //
 // 硬约束 #6：全部颜色引用 theme/colors.ts token，禁止硬编码色值
 // 零新依赖：HTML5 DnD 原生，不引入 react-dnd / dnd-kit
@@ -14,8 +20,11 @@ import { useState, useCallback, useRef } from "react";
 import { useSideBar } from "../../stores/sideBar";
 import { sideViewRegistry } from "./sideViewRegistry";
 import { computeDropTarget } from "./dropTarget";
+import { ACTIVITY_BAR_SIZE } from "./sideBarState";
 import type { Zone } from "./sideBarState";
 import type { ButtonRect } from "./dropTarget";
+import { openHooksConfigFromActivityBar } from "../hooksConfig/openHooksConfig";
+import { IconConfig } from "../../lib/icons";
 import {
   PANEL_BG,
   SIDEBAR_COLORS,
@@ -23,12 +32,13 @@ import {
   DIM_FG,
   ACCENT_FG,
   FOCUS_BORDER,
+  ACTIVE_SELECTION_BG,
 } from "../../theme/colors";
 
 // ── 样式常量（全部引用 theme/colors.ts token） ──
 
 const containerStyle: React.CSSProperties = {
-  width: 40,
+  width: ACTIVITY_BAR_SIZE,
   display: "flex",
   flexDirection: "column",
   height: "100%",
@@ -38,8 +48,9 @@ const containerStyle: React.CSSProperties = {
 };
 
 const buttonBase: React.CSSProperties = {
-  width: 40,
-  height: 40,
+  width: 34,
+  height: 34,
+  margin: "6px auto", // 46px 栏内水平居中 + 上下 6px 间距
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
@@ -47,6 +58,7 @@ const buttonBase: React.CSSProperties = {
   background: "transparent",
   border: "none",
   borderLeft: "2px solid transparent",
+  borderRadius: 6,
   padding: 0,
   position: "relative",
   outline: "none",
@@ -135,7 +147,7 @@ export function ActivityBar() {
           // 计算按钮背景色
           let bg = "transparent";
           if (isActive) {
-            bg = SIDEBAR_COLORS.selected;
+            bg = ACTIVE_SELECTION_BG;
           } else if (isHovered) {
             bg = SIDEBAR_COLORS.hover;
           }
@@ -233,6 +245,26 @@ export function ActivityBar() {
       {renderZone("top")}
       <div style={spacerStyle} />
       {renderZone("bottom")}
+      {/* 底部「配置」钮（NAV-05：固定底部、不入注册表、不参与拖拽/持久化） */}
+      <button
+        data-e2e="activity-btn-config"
+        title="配置"
+        style={{
+          ...buttonBase,
+          marginBottom: 8,
+          backgroundColor: hoveredId === "config" ? SIDEBAR_COLORS.hover : "transparent",
+          color: hoveredId === "config" ? SIDEBAR_FG : DIM_FG,
+        }}
+        onClick={() => {
+          void openHooksConfigFromActivityBar();
+        }}
+        onMouseEnter={() => setHoveredId("config")}
+        onMouseLeave={() => {
+          if (hoveredId === "config") setHoveredId(null);
+        }}
+      >
+        <IconConfig size={15} />
+      </button>
     </div>
   );
 }

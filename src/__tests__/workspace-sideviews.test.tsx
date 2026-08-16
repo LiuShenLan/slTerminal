@@ -87,11 +87,6 @@ vi.mock("../workspace/layoutSerde", () => ({
   loadLayout: vi.fn(() => false),
 }));
 
-vi.mock("../features/sidebar", () => ({
-  SidebarTree: vi.fn(() => null),
-  makeEmptyLayout: vi.fn(() => ({})),
-}));
-
 vi.mock("../features/explorer", () => ({
   ExplorerPanel: vi.fn(() => null),
 }));

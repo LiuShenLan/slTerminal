@@ -1,4 +1,3 @@
-export { SidebarTree } from "./sidebar";
 export { getShortcutRegistry, usePanelFocus, wireKeybindings } from "./shortcuts";
 export type {
   KeyStroke,

@@ -55,7 +55,8 @@ vi.mock("../stores/projects", () => ({
   createPageId: () => "page-restore-test",
 }));
 
-vi.mock("../features/sidebar", () => ({
+// NAV-06：makeEmptyLayout 随 SidebarTree 退役迁入 navTree（restoreSession 消费点改引用）
+vi.mock("../features/navTree/NavTree", () => ({
   makeEmptyLayout: () => ({}),
 }));
 

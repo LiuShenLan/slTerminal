@@ -131,10 +131,10 @@ describe("SideBarArea", () => {
 
     // 注册两个 stub 视图（icon 为组件形态——IC-06）
     sideViewRegistry.register({
-      id: "projects",
+      id: "nav",
       title: "项目列表",
       icon: () => null,
-      component: makeStubView("projects"),
+      component: makeStubView("nav"),
     });
     sideViewRegistry.register({
       id: "explorer",
@@ -147,7 +147,7 @@ describe("SideBarArea", () => {
   // ─── SB-20: 单开上区全高 ───
   it("单开上区时仅上 pane visible，下 pane hidden", () => {
     useSideBar.setState({
-      open: { top: "projects", bottom: null },
+      open: { top: "nav", bottom: null },
     });
 
     render(React.createElement(SideBarArea, defaultProps));
@@ -162,8 +162,8 @@ describe("SideBarArea", () => {
   // ─── SB-20: 单开下区全高 ───
   it("单开下区时仅下 pane visible，上 pane hidden", () => {
     useSideBar.setState({
-      zones: { top: [], bottom: ["projects"] },
-      open: { top: null, bottom: "projects" },
+      zones: { top: [], bottom: ["nav"] },
+      open: { top: null, bottom: "nav" },
     });
 
     render(React.createElement(SideBarArea, defaultProps));
@@ -177,8 +177,8 @@ describe("SideBarArea", () => {
   // ─── SB-20: 双开两 pane visible ───
   it("双开时两 pane 均 visible", () => {
     useSideBar.setState({
-      zones: { top: ["projects"], bottom: ["explorer"] },
-      open: { top: "projects", bottom: "explorer" },
+      zones: { top: ["nav"], bottom: ["explorer"] },
+      open: { top: "nav", bottom: "explorer" },
     });
 
     render(React.createElement(SideBarArea, defaultProps));
@@ -193,7 +193,7 @@ describe("SideBarArea", () => {
   it("上 pane preferredSize = splitRatio * 100，下 pane preferredSize = (1-splitRatio) * 100", () => {
     useSideBar.setState({
       splitRatio: 0.6,
-      open: { top: "projects", bottom: "explorer" },
+      open: { top: "nav", bottom: "explorer" },
     });
     // 需要两个区都有视图才能看到 preferredSize
     useSideBar.getState().moveButton("explorer", "bottom", 0);
@@ -209,8 +209,8 @@ describe("SideBarArea", () => {
   it("打开的视图槽 display=flex，隐藏的视图槽 display=none", () => {
     // 两个视图都在上区，仅 projects 打开
     useSideBar.setState({
-      zones: { top: ["projects", "explorer"], bottom: [] },
-      open: { top: "projects", bottom: null },
+      zones: { top: ["nav", "explorer"], bottom: [] },
+      open: { top: "nav", bottom: null },
     });
 
     const { container } = render(
@@ -219,7 +219,7 @@ describe("SideBarArea", () => {
 
     // 上区 projects 槽应 display:flex
     const projectsSlot = container.querySelector(
-      '[data-e2e="sidebar-slot-top-projects"]',
+      '[data-e2e="sidebar-slot-top-nav"]',
     ) as HTMLElement | null;
     expect(projectsSlot).not.toBeNull();
     expect(projectsSlot!.style.display).toBe("flex");
@@ -236,8 +236,8 @@ describe("SideBarArea", () => {
   it("切换 open 后视图槽 display 同步更新", () => {
     // 初始：projects 打开
     useSideBar.setState({
-      zones: { top: ["projects", "explorer"], bottom: [] },
-      open: { top: "projects", bottom: null },
+      zones: { top: ["nav", "explorer"], bottom: [] },
+      open: { top: "nav", bottom: null },
     });
 
     const { container, rerender } = render(
@@ -250,7 +250,7 @@ describe("SideBarArea", () => {
     rerender(React.createElement(SideBarArea, defaultProps));
 
     const projectsSlot = container.querySelector(
-      '[data-e2e="sidebar-slot-top-projects"]',
+      '[data-e2e="sidebar-slot-top-nav"]',
     ) as HTMLElement | null;
     const explorerSlot = container.querySelector(
       '[data-e2e="sidebar-slot-top-explorer"]',
@@ -263,8 +263,8 @@ describe("SideBarArea", () => {
   // ─── SB-20: 视图槽始终渲染（display:none 保挂载，不卸载）───
   it("隐藏的视图组件仍挂载（display:none 保挂载）", () => {
     useSideBar.setState({
-      zones: { top: ["projects", "explorer"], bottom: [] },
-      open: { top: "projects", bottom: null },
+      zones: { top: ["nav", "explorer"], bottom: [] },
+      open: { top: "nav", bottom: null },
     });
 
     const { container } = render(
@@ -273,7 +273,7 @@ describe("SideBarArea", () => {
 
     // 两个 stub 组件都应存在于 DOM 中
     const projectsView = container.querySelector(
-      '[data-testid="stub-view-projects"]',
+      '[data-testid="stub-view-nav"]',
     );
     const explorerView = container.querySelector(
       '[data-testid="stub-view-explorer"]',
@@ -291,11 +291,11 @@ describe("SideBarArea", () => {
     // 使用带 mount/unmount 跟踪的 stub
     sideViewRegistry._reset();
     sideViewRegistry.register({
-      id: "projects",
+      id: "nav",
       title: "项目列表",
       icon: () => null,
       component: makeStubView(
-        "projects",
+        "nav",
         () => {
           projectMountCount++;
         },
@@ -313,8 +313,8 @@ describe("SideBarArea", () => {
 
     // 初始：projects 在上区打开
     useSideBar.setState({
-      zones: { top: ["projects", "explorer"], bottom: [] },
-      open: { top: "projects", bottom: null },
+      zones: { top: ["nav", "explorer"], bottom: [] },
+      open: { top: "nav", bottom: null },
     });
 
     const { rerender } = render(
@@ -326,7 +326,7 @@ describe("SideBarArea", () => {
     expect(projectUnmountCount).toBe(0);
 
     // 移动 projects 到下区（带跟随，因为正打开）
-    useSideBar.getState().moveButton("projects", "bottom", 0);
+    useSideBar.getState().moveButton("nav", "bottom", 0);
 
     rerender(React.createElement(SideBarArea, defaultProps));
 
@@ -345,7 +345,7 @@ describe("SideBarArea", () => {
 
     sideViewRegistry._reset();
     sideViewRegistry.register({
-      id: "projects",
+      id: "nav",
       title: "项目列表",
       icon: () => null,
       component: (props: SideViewComponentProps) => {
@@ -377,8 +377,8 @@ describe("SideBarArea", () => {
     );
 
     useSideBar.setState({
-      zones: { top: ["projects"], bottom: ["explorer"] },
-      open: { top: "projects", bottom: "explorer" },
+      zones: { top: ["nav"], bottom: ["explorer"] },
+      open: { top: "nav", bottom: "explorer" },
       splitRatio: 0.5,
     });
 
@@ -402,7 +402,7 @@ describe("SideBarArea", () => {
 
     // 仅上区打开
     useSideBar.setState({
-      open: { top: "projects", bottom: null },
+      open: { top: "nav", bottom: null },
     });
 
     render(React.createElement(SideBarArea, defaultProps));
@@ -428,8 +428,8 @@ describe("SideBarArea", () => {
 
     // 先单开渲染（bothOpen 过渡 effect 不触发）
     useSideBar.setState({
-      zones: { top: ["projects"], bottom: ["explorer"] },
-      open: { top: "projects", bottom: null },
+      zones: { top: ["nav"], bottom: ["explorer"] },
+      open: { top: "nav", bottom: null },
       splitRatio: 0.5,
     });
     const { rerender } = render(
@@ -437,7 +437,7 @@ describe("SideBarArea", () => {
     );
 
     // 切双开 → bothOpen false→true 过渡 effect 写回 0.5 一次 → 清掉后再测 onChange
-    useSideBar.setState({ open: { top: "projects", bottom: "explorer" } });
+    useSideBar.setState({ open: { top: "nav", bottom: "explorer" } });
     rerender(React.createElement(SideBarArea, defaultProps));
     setSplitRatioSpy.mockClear();
 
@@ -466,8 +466,8 @@ describe("SideBarArea", () => {
   it("持久化中未注册的 id 被过滤不渲染视图槽", () => {
     // zones 中含未注册 id "ghost"
     useSideBar.setState({
-      zones: { top: ["projects", "ghost"], bottom: [] },
-      open: { top: "projects", bottom: null },
+      zones: { top: ["nav", "ghost"], bottom: [] },
+      open: { top: "nav", bottom: null },
     });
 
     const { container } = render(
@@ -482,7 +482,7 @@ describe("SideBarArea", () => {
 
     // projects 正常渲染
     const projectsSlot = container.querySelector(
-      '[data-e2e="sidebar-slot-top-projects"]',
+      '[data-e2e="sidebar-slot-top-nav"]',
     );
     expect(projectsSlot).not.toBeNull();
   });
@@ -497,8 +497,8 @@ describe("SideBarArea", () => {
     // 模拟：上区打开、下区关闭、splitRatio 为极端值（上次手动调过）
     useSideBar.setState({
       splitRatio: 0.9,
-      open: { top: "projects", bottom: null },
-      zones: { top: ["projects"], bottom: ["explorer"] },
+      open: { top: "nav", bottom: null },
+      zones: { top: ["nav"], bottom: ["explorer"] },
     });
 
     // 首次渲染——bothOpen=false, 不触发重置
@@ -508,7 +508,7 @@ describe("SideBarArea", () => {
     expect(setSplitRatioSpy).not.toHaveBeenCalled();
 
     // 下区被打开 → bothOpen: false→true
-    useSideBar.setState({ open: { top: "projects", bottom: "explorer" } });
+    useSideBar.setState({ open: { top: "nav", bottom: "explorer" } });
     rerender(
       React.createElement(SideBarArea, defaultProps),
     );

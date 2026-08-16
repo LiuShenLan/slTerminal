@@ -54,7 +54,8 @@ export function useAgentHistory() {
     try {
       const result = await scanHistory();
       if (gen !== genRef.current) return; // 过期结果丢弃
-      setSessions(result);
+      // 契约返回 AgentHistorySession[]——非数组（后端异常/测试环境 null）回退空表防渲染崩溃
+      setSessions(Array.isArray(result) ? result : []);
       setState("ready");
     } catch (err) {
       console.error("[slTerminal] 历史扫描失败:", err);
