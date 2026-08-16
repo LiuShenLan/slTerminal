@@ -181,6 +181,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | B15 | 缺陷 | 重启后 statusLine 变 reporter 包裹（空白行 + 版本过旧）——ClaudeHooksProvider::reinject_statusline 误传 hook_script_path()（reporter）作桥接脚本路径；修复 = reinject 改传 statusline_script_path()，provider 层 L1 用例锁死（自 4aed3e2 初始版即存在，B11 调查的「损坏中间态」即此产物） |
 | B16 | 缺陷 | 状态行占位文本——桥接脚本 .sh 分支 spawnSync("bash") 依赖 PATH（Windows 原生 PATH 无 bash，仅 Git\cmd）；且 bash -c 未加引号的反斜杠路径被 bash 词法吃掉致 127。修复 = bashCandidates 试错定位（PATH bash → where git 沿目录上溯推导 bin/usr\bin → 固定路径 fallback）+ 反斜杠转正斜杠；SCRIPT_VERSION 5→6 |
 | ADR-0001 | 架构决策 | 侧栏视图换区重建丢失组件内部状态（已确认接受）（详见 .claude/adr.md） |
+| ADR-0003 | 架构决策 | UI 全面重设计「Linear 极黑克制」——候选 A 定稿（明度阶梯/发丝线/单强调色/统一导航树/双轨配色；交付物 docs/ui-redesign/，详见 .claude/adr.md） |
 | F2 | 特性 | hooks 注入入口（F6 面板工具栏并入；与功能键 F2 区分） |
 | F3 | 特性 | 终端页签四态 emoji 指示（agent-event + OSC 133 合成） |
 | F5 | 特性 | agentSession 契约行建模（双通道建行/三通道删行） |
