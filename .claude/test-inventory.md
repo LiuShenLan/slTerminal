@@ -2,7 +2,7 @@
 
 > **本文档是项目用例数唯一真值源。** 所有 CLAUDE.md、README、CI 配置中引用的用例数均以此文件为准。更新测试后必须同步本文档。
 
-全量 **3237** 用例（Rust 607 + 前端 2452 + L3 138 + E2E 40），2026-08-16 更新（人工验证五问题修复批次——标题栏拖拽/历史session行/claude 名称统一/commit 提示色/贴靠文档）。
+全量 **3238** 用例（Rust 607 + 前端 2453 + L3 138 + E2E 40），2026-08-16 更新（人工验证问题 6——标题栏拖拽区撑满全高）。
 
 > **计数口径**：
 > - L2 以 `npm test` 实跑（Vitest 报告）为准——`it.each(...)` 参数化与 `describeIpcContract` 工厂（`helpers/ipc-contract.ts`，IHE-06）等按**展开后用例数**计入（143 文件 2439 用例，2026-08-16 UI 重设计 Stage 09 终验实跑回写）；纯 grep `it(/test(` 块数会少计 it.each 展开（如 colors 92 = 13 块 + 7 组 each 展开 79）。
@@ -83,9 +83,9 @@
 
 > `pty/mod.rs`、`pty/win_build.rs`、`main.rs` 不含 `#[test]`，不在此列。git/mod.rs 测试已按 GIT-12 全量拆出至 `tests/`（`#[test]` 零残留）。agent_history 模块 grep 口径：claude/jsonl 28 + claude/scan 16 + claude/ops 16 + mod 20 = 80（命令包装层 4 用例已迁入 mod.rs，MC-301 下沉时随行）+ claude/mod 4 + provider 2 = 全模块 86；env 测试依赖 L1 `--test-threads=1` 门禁（`std::env::set_var` 全局可变）。
 
-## L2 — 前端单元/集成测试（143 文件 / 2452 用例）
+## L2 — 前端单元/集成测试（143 文件 / 2453 用例）
 
-运行：`npm test`（Vitest + jsdom，登记 2452 用例——2026-08-16 人工验证五问题修复批次实跑 2452 passed，0 failed）
+运行：`npm test`（Vitest + jsdom，登记 2453 用例——2026-08-16 人工验证问题 6 批次实跑 2453 passed，0 failed）
 
 > ① UI 重设计（Stage 01-08）L2 全量变动（明细见各段表行与文末「历史变更」）：删除 4 文件 123 用例（agent-status-view 35 / agent-history-view 38 / sidebar-actions 47 / dialog-e2e-hook 3）、新增 7 文件 67 用例（title-bar 7 / nav-tree 31 / nav-tree-history 8 / confirm-dialog 11 / toast 5 / open-hooks-config 5，emoji-scan 3 已登记）、既有文件净 +25（colors +6 / overrides +2 / activityBar +4 / sideBar +1 / workspace-defaulttab +5 / workspace-header-actions +1 / workspace-page-dockview +1 / explorer-delete +3 / file-icon +1 / commit-context-menu +2 / commit-context-menu-ui +2 / agent-status-lib -3）；另校正 2 行（notifications 34→49、close-handler 13→12，it.each 展开口径/挂载适配实跑口径）——行级合计 2439 = 实跑，旧表头 2463（行级和 2456）失实 7 一并校正。
 
@@ -332,11 +332,11 @@
 
 > `dialog-e2e-hook.test.ts`（3 用例）已随 OV-02 删除——`ipc/dialog` 的 ask 已删（确认语义改经 `confirmDialog`），E2E ask 钩子随之退役；文件对话框（open/save）为原生保留，无 L2 守卫。
 
-### 标题栏/统一浮层（3 文件 / 24 用例，Stage 04/07 新建）
+### 标题栏/统一浮层（3 文件 / 25 用例，Stage 04/07 新建）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
-| `src/__tests__/title-bar.test.tsx` | 8 | **TB-06 自绘标题栏（Stage 04 新建；TB-04 修订——人工验证问题 1）**：三段结构（左段 slTerminal 标识 + 右段三窗口钮，顺序契约最小化/最大化/关闭）/中段按 store 种子显示活跃项目名与活跃页面名（非活跃页不出现）/三钮点击分别调用 ipc/window 的 minimizeWindow/toggleMaximizeWindow/closeWindow（vi.mock 桩，互不误调）/中段无 React 双击 handler——双击不调 wrapper（Tauri 原生拖拽区承担，TB-04 修订）/左中段恰两处 `data-tauri-drag-region="deep"`（子树拖拽——裸属性只命中直接点击元素，文字 span/svg 子元素拦截）/无项目时左中段拖拽区仍渲染（中段空 div 可拖，TB-06-8 新增 7→8）——真实 projects store 种子（beforeEach setState） |
+| `src/__tests__/title-bar.test.tsx` | 9 | **TB-06 自绘标题栏（Stage 04 新建；TB-04 修订——人工验证问题 1；问题 6——拖拽区撑满全高）**：三段结构（左段 slTerminal 标识 + 右段三窗口钮，顺序契约最小化/最大化/关闭）/中段按 store 种子显示活跃项目名与活跃页面名（非活跃页不出现）/三钮点击分别调用 ipc/window 的 minimizeWindow/toggleMaximizeWindow/closeWindow（vi.mock 桩，互不误调）/中段无 React 双击 handler——双击不调 wrapper（Tauri 原生拖拽区承担，TB-04 修订）/左中段恰两处 `data-tauri-drag-region="deep"`（子树拖拽——裸属性只命中直接点击元素，文字 span/svg 子元素拦截）/无项目时中段空 div 撑满全高可拖（deep 属性 + `style.height === "100%"` 双断言，TB-06-8 修订——仅断言属性无法防「高度 0 点不到」，问题 6）/左中段拖拽区均 `height: "100%"`（有项目态全高可拖，TB-06-9 新增 8→9）——真实 projects store 种子（beforeEach setState） |
 | `src/__tests__/confirm-dialog.test.tsx` | 11 | **OV-01/UI-801 统一确认弹窗（Stage 07 新建）**：标题 + 消息 + 确认/取消按钮渲染/遮罩/卡片/按钮色值规格（遮罩 SHADOW_MENU、卡片 SIDEBAR_BG + 描边 + 圆角 8 + 阴影；主按钮 FOCUS_BORDER 底 + ON_ACCENT_FG 字）/**danger → 主按钮 ERROR_FG 底 + SIDEBAR_FG 字**/title/confirmText/cancelText 省略默认文案 + 无标题行/kind 契约三值均可接受/无挂起弹窗时 Host 渲染 null/点击确认 → Promise 解析 true/点击取消 → false/ESC → false/非 Escape 键不关闭/遮罩点击 → false（点卡片内部不关闭）——模块级单例经 `_resetConfirmDialog` 隔离 |
 | `src/__tests__/toast.test.tsx` | 5 | **OV-01/UI-804 toast（Stage 07 新建）**：show 渲染消息 + 容器右上角固定（16px 偏移）/三型语义色规格（success/warning/error 的 12% 底 + 1px 语义描边 + fg-1 文字 + 圆角 8，data-e2e=toast-{type}）/多条堆叠按 show 顺序/无通知时容器不渲染/自动消失（fake timers：success 3s/warning 4s/error 5s 到期仅移除自身，全部到期容器卸载）——`toast._reset` 隔离 |
 
@@ -422,6 +422,7 @@ embedded WDIO 驱动**无法将 OS 级按键（`browser.keys`）投递进 WebVie
 - 2026-08-01（验收修复 4：JSON 模式三修）：删自动补全（jsonCompletion + jsonLanguage.data.of + @codemirror/autocomplete 直接依赖移除，传递依赖仍在）；加 EditorView.theme height:100% + overflow:clip（竖向滚动条，验收 1.3）；hooks-config-panel 18→19（+1 错误提示单行截断断言，验收 1.2）；jsonmode 17（断言改 height theme，用例数不变）。L2 1779→1780，全量 2303→2304。
 - 2026-08-01（验收修复 3：GUI 接入 HandlerForm）：hooks-config-gui 21→25（+4：选中渲染表单/字段编辑上抛新模型/切换选中表单跟随/托管 handler 表单只读）。L2 1775→1779，全量 2299→2303。
 - 2026-08-16（人工验证五问题修复批次）：L1 +13（agent_history：ops.rs 10→16 read_session_title 6 例、mod.rs 13→20 AgentHistoryTitle 两键 serde + read_title 命令层 5 例），594→607。L2 +13（title-bar 7→8 TB-06-8 无项目拖拽区 + TB-06-6/7 修订；nav-tree 31→33 IconPage 图标 + 历史session 同级缩进；use-xterm-lifecycle 81→86 HUK21~25 运行中会话标题通道；ipc-agent-history-contract 8→12 readTitle 四维；agent-history-restore 8→9 初始标题两分支），2439→2452。L3/L4 零变动。全量 3211→3237。
+- 2026-08-16（人工验证问题 6——无项目标题栏拖拽失效）：L2 +1（title-bar 8→9：TB-06-8 修订为 deep 属性 + `style.height === "100%"` 双断言——无项目时中段空 div 无显式高度时高度 0，点击落点在无 drag 属性的父容器拖不动，仅断言属性无法防此回归；TB-06-9 新增左/中段拖拽区均撑满全高）。TitleBar.tsx 左/中段拖拽区加 `height: "100%"`（中段 flex 居中替代 textAlign）。L1/L3/L4 零变动。全量 3237→3238。
 - 2026-08-01（验收修复 2：外部修改检测改 window focus）：hooks-config-panel 17→18（删 3 个 focusin relatedTarget 用例——机制移除；改/增 4 个 window focus 用例——可见触发/不可见跳过/面板内点击不触发/ask 弹窗期间回归不二次弹窗）。L2 1774→1775，全量 2298→2299。
 - 2026-08-01（验收修复 1：删除单条启停）：删除 hooks-config-store.test.ts（21 用例）+ hooks-config-disable.test.tsx（10 用例）；model 22→17（删 filterDisabled describe 5 条）；sync 9→8（删 filterDisabled 保存链路用例）；panel 17（去失效记录条描述，用例数不变）。L2 1811→1774，全量 2335→2298。
 - 2026-08-01（验收 #1 修复）：hooks-config-panel.test.tsx 15→17（+2 focusin relatedTarget 判定——面板内焦点转移不重读/面板外进入重读）。L2 1809→1811。全量 2333→2335。

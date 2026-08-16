@@ -1,11 +1,13 @@
-// title-bar.test.tsx —— 自绘标题栏 TitleBar 组件 L2 测试（TB-06，8 用例）
+// title-bar.test.tsx —— 自绘标题栏 TitleBar 组件 L2 测试（TB-06，9 用例）
 //
-// 组件契约（stage-04 工作流写死 + TB-04 修订）：
+// 组件契约（stage-04 工作流写死 + TB-04 / 问题 6 修订）：
 //   - 路径 src/features/titleBar/TitleBar.tsx，无 props（自订阅 stores）
 //   - 三段结构：左 app 标识 / 中「项目名 / 页面名」/ 右三窗口钮
 //   - 三钮点击调用 ipc/window 的 minimizeWindow/toggleMaximizeWindow/closeWindow
 //   - 左/中段容器带 data-tauri-drag-region="deep"（子树拖拽——裸属性只命中直接点击
 //     元素本身，文字 span/svg logo 子元素会拦截拖拽）
+//   - 左/中段拖拽区 height "100%" 撑满 34px 全高（问题 6：无项目时中段空 div 高度 0，
+//     点击落点在无 drag 属性的父容器拖不动——仅断言 deep 属性无法防此回归）
 //   - 中段无 React 双击 handler——双击最大化由 Tauri 原生拖拽区脚本承担（drag.js
 //     detail===2 → internal_toggle_maximize；React onDoubleClick 会与之双重 toggle）
 // 测试模式：vi.mock ../ipc/window（三 wrapper 桩）+ 真实 projects store（beforeEach setState 种子）
@@ -140,8 +142,10 @@ describe("TitleBar", () => {
     }
   });
 
-  it("TB-06-8 无项目时左/中段拖拽区仍渲染（中段为空 div 可拖）", () => {
-    // 清空项目：中段无「项目名 / 页面名」内容——空 div 仍须带 deep 属性可拖
+  it("TB-06-8 无项目时中段空 div 撑满全高可拖（问题 6 防回归）", () => {
+    // 清空项目：中段无「项目名 / 页面名」内容——空 div 除 deep 属性外还须 height
+    // 100% 撑满 34px：无显式高度时空 div 高度 0，点击落点在无 drag 属性的父容器
+    // 拖不动（问题 6 根因；仅断言 deep 属性无法防此回归）
     useProjects.setState({
       projects: {},
       deletionLock: { pendingDelete: null, acquiredAt: null },
@@ -155,5 +159,17 @@ describe("TitleBar", () => {
     expect(regions[0].textContent).toContain("slTerminal");
     expect(regions[1].textContent).toBe("");
     expect(regions[1].getAttribute("data-tauri-drag-region")).toBe("deep");
+    expect((regions[1] as HTMLElement).style.height).toBe("100%");
+  });
+
+  it("TB-06-9 左/中段拖拽区均撑满全高（34px 栏任意处可拖，问题 6）", () => {
+    const { container } = render(<TitleBar />);
+    const regions = Array.from(
+      container.querySelectorAll("[data-tauri-drag-region]"),
+    ) as HTMLElement[];
+    expect(regions).toHaveLength(2);
+    for (const r of regions) {
+      expect(r.style.height).toBe("100%");
+    }
   });
 });

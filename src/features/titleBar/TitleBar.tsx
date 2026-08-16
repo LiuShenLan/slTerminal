@@ -1,7 +1,7 @@
 // TitleBar —— 自绘窗口标题栏（TB-02 / UI-301）
 //
 // 定位：tauri.conf.json decorations:false 后由本组件承担原生标题栏职责——
-// 拖拽（data-tauri-drag-region="deep" 子树拖拽，TB-04 修订）、
+// 拖拽（data-tauri-drag-region="deep" 子树拖拽 + 拖拽区撑满全高，TB-04 / 问题 6 修订）、
 // 双击最大化（Tauri 原生拖拽区脚本承担，本组件不注册 onDoubleClick，TB-04 修订）、
 // 最小化/最大化/关闭三钮（经 src/ipc/window wrapper，契约见 TB-03）。
 // 数据：中段标题 = projects store 活跃项目名 / 活跃页面名
@@ -84,11 +84,15 @@ export function TitleBar() {
         flexShrink: 0,
       }}
     >
-      {/* 左段：app 标识（拖拽区 deep——裸属性仅命中直接点击元素本身，span/svg 子元素拦截，
-          deep 使子树内任意处可拖，TB-04 修订） */}
+      {/* 左段：app 标识（拖拽区 deep + 撑满全高——裸属性仅命中直接点击元素本身，span/svg
+          子元素拦截，deep 使子树内任意处可拖；不撑满时 div 只占内容高度（≈16px 窄带），
+          上下死区点不到，TB-04 / 问题 6 修订） */}
       <div
         data-tauri-drag-region="deep"
-        style={{ display: "flex", alignItems: "center", gap: 8, color: DIM_FG, fontWeight: 500 }}
+        style={{
+          height: "100%",
+          display: "flex", alignItems: "center", gap: 8, color: DIM_FG, fontWeight: 500,
+        }}
       >
         <span
           style={{
@@ -108,15 +112,20 @@ export function TitleBar() {
         slTerminal
       </div>
 
-      {/* 中段：活跃项目名 / 页面名（拖拽区 deep；双击最大化由 Tauri 原生拖拽区脚本
-          承担——本组件不注册 onDoubleClick，避免与原生 internal_toggle_maximize
-          双重 toggle（最大化后立即还原），TB-04 修订） */}
+      {/* 中段：活跃项目名 / 页面名（拖拽区 deep + 撑满全高——无项目时本段为空 div，
+          无显式高度时高度 0，点击落点在无 drag 属性的父容器 → 拖不动（问题 6 根因）；
+          height 100% 使空 div 占满 34px，flex 居中替代 textAlign 保持文字居中。
+          双击最大化由 Tauri 原生拖拽区脚本承担——本组件不注册 onDoubleClick，避免与
+          原生 internal_toggle_maximize 双重 toggle（最大化后立即还原），TB-04 修订） */}
       <div
         data-tauri-drag-region="deep"
         style={{
           flex: 1,
           minWidth: 0,
-          textAlign: "center",
+          height: "100%",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
           color: DIM_FG,
           whiteSpace: "nowrap",
           overflow: "hidden",

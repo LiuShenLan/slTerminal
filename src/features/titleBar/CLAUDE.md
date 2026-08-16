@@ -11,6 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### 拖拽与双击（TB-04）
 
 - **拖拽**：左段 app 标识 + 中段标题区域标 `data-tauri-drag-region="deep"`（子树拖拽）——Tauri 2.11.3 裸属性语义只命中直接点击的元素本身（`el === composedPath[0]`），文字 span/svg logo 子元素会拦截拖拽、无项目时几乎整栏拖不动（人工验证问题 1 根因）；`deep` 使子树内任意处可拖
+- **拖拽区必须撑满全高**（`height: "100%"`，问题 6）：标题栏容器 34px + `alignItems: center`，拖拽区 div 无显式高度时收缩到内容高度（左段 ≈16px 窄带、**无项目时中段空 div 高度 0**）——点击死区落点在无 drag 属性的父容器，拖不动；中段 flex 居中（`display: flex` + `alignItems/justifyContent: center`）替代 `textAlign` 保持文字垂直居中
 - **双击最大化**：**Tauri 原生拖拽区脚本承担**（drag.js `detail===2` → `internal_toggle_maximize`）——本组件**不注册** `onDoubleClick`（React dblclick 与原生各 toggle 一次 → 最大化后立即还原，净无效果；人工验证连带缺陷）
 - **右段窗口控制三钮不在拖拽区内**（保证可点击）
 
@@ -33,14 +34,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 测试模式
 
-L2 测试：`src/__tests__/title-bar.test.tsx`（8 用例，TB-06-1~8，用例数见 `.claude/test-inventory.md`）：
+L2 测试：`src/__tests__/title-bar.test.tsx`（9 用例，TB-06-1~9，用例数见 `.claude/test-inventory.md`）：
 
 - TB-06-1 三段结构渲染（左段 app 标识 + 右段三窗口钮）
 - TB-06-2 中段按 store 种子显示活跃项目名与活跃页面名
 - TB-06-3/4/5 三钮点击 → `minimizeWindow`/`toggleMaximizeWindow`/`closeWindow` 各调用一次（mock `../ipc/window`）
 - TB-06-6 中段无 React 双击 handler——双击不调 `toggleMaximizeWindow`（原生承担，TB-04 修订）
 - TB-06-7 左/中段容器恰两处且属性值 `"deep"`（子树拖拽，TB-04 修订）
-- TB-06-8 无项目时左/中段拖拽区仍渲染（中段空 div 可拖）
+- TB-06-8 无项目时中段空 div 撑满全高可拖（deep 属性 + `style.height === "100%"` 双断言——问题 6 防回归，仅断言属性无法防「高度 0 点不到」）
+- TB-06-9 左/中段拖拽区均 `height: "100%"`（有项目态，全高可拖）
 
 ### 运行
 
