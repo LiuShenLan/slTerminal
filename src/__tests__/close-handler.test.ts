@@ -101,41 +101,63 @@ vi.mock("../panels/terminal/TerminalRegistry", () => ({
 }));
 
 // P1-03: mock lib ErrorBoundary（避免渲染实际组件）
+// TB-02: 补 TitleBar 三窗口图标（渲染 null，避免 jsdom 渲染警告干扰 console spy 断言）
 vi.mock("../lib", () => ({
   ErrorBoundary: ({ children }: { children: React.ReactNode }) =>
     React.createElement(React.Fragment, null, children),
+  IconMin: () => null,
+  IconMax: () => null,
+  IconCloseWin: () => null,
 }));
 
-vi.mock("../stores/layout", () => ({
-  useLayout: {
-    getState: vi.fn(() => ({
-      activePageId: mocks.mockActivePageId,
-      setActivePage: mocks.mockSetActivePage,
-    })),
-    setState: vi.fn(),
-    subscribe: vi.fn(),
-  },
-}));
+// TB-02: useLayout 需同时支持 App 的 getState() 调用与 TitleBar 的 hook 调用（双形态函数）
+vi.mock("../stores/layout", () => {
+  const layoutState = () => ({
+    activePageId: mocks.mockActivePageId,
+    setActivePage: mocks.mockSetActivePage,
+  });
+  const useLayout = Object.assign(
+    vi.fn((selector: (s: ReturnType<typeof layoutState>) => unknown) =>
+      selector ? selector(layoutState()) : layoutState(),
+    ),
+    {
+      getState: vi.fn(layoutState),
+      setState: vi.fn(),
+      subscribe: vi.fn(),
+    },
+  );
+  return { useLayout };
+});
 
-vi.mock("../stores/projects", () => ({
-  useProjects: {
-    getState: vi.fn(() => ({
-      projects: {
-        "proj-1": {
-          projectId: "proj-1",
-          pages: [{ pageId: "test-page-1", name: "Test", layout: { panels: {} } }],
-        },
+// TB-02: useProjects 同上双形态（hook selector 调用返回 projects）
+vi.mock("../stores/projects", () => {
+  const projectsState = () => ({
+    projects: {
+      "proj-1": {
+        projectId: "proj-1",
+        pages: [{ pageId: "test-page-1", name: "Test", layout: { panels: {} } }],
       },
-      updatePageLayout: mocks.mockUpdatePageLayout,
-    })),
-    setState: vi.fn(),
-    subscribe: vi.fn(),
-  },
-  loadAllProjects: mocks.mockLoadAllProjects,
-  saveAllProjects: mocks.mockSaveAllProjects,
-  cancelPendingSave: vi.fn(),
-  markPersistenceReady: mocks.mockMarkPersistenceReady,
-}));
+    },
+    updatePageLayout: mocks.mockUpdatePageLayout,
+  });
+  const useProjects = Object.assign(
+    vi.fn((selector: (s: ReturnType<typeof projectsState>) => unknown) =>
+      selector ? selector(projectsState()) : projectsState(),
+    ),
+    {
+      getState: vi.fn(projectsState),
+      setState: vi.fn(),
+      subscribe: vi.fn(),
+    },
+  );
+  return {
+    useProjects,
+    loadAllProjects: mocks.mockLoadAllProjects,
+    saveAllProjects: mocks.mockSaveAllProjects,
+    cancelPendingSave: vi.fn(),
+    markPersistenceReady: mocks.mockMarkPersistenceReady,
+  };
+});
 
 vi.mock("dockview-react/dist/styles/dockview.css", () => ({}));
 

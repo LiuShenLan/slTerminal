@@ -16,6 +16,7 @@
         "width": 1200,
         "height": 800,
         "dragDropEnabled": false,
+        "decorations": false,
         "theme": "Dark",
         "backgroundColor": "#0a0a0b"
       }

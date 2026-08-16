@@ -67,3 +67,36 @@ export function registerCloseHandler(cb: () => Promise<void>): () => void {
     unlisten.then((fn) => fn());
   };
 }
+
+/**
+ * 最小化窗口
+ *
+ * 供自绘标题栏最小化钮调用（TB-03）。
+ */
+export async function minimizeWindow(): Promise<void> {
+  const appWindow = getCurrentWindow();
+  await appWindow.minimize();
+}
+
+/**
+ * 切换最大化/还原
+ *
+ * 供自绘标题栏最大化钮与中段双击调用（TB-03/TB-04）。
+ */
+export async function toggleMaximizeWindow(): Promise<void> {
+  const appWindow = getCurrentWindow();
+  await appWindow.toggleMaximize();
+}
+
+/**
+ * 关闭窗口
+ *
+ * 走 getCurrentWindow().close()——触发 onCloseRequested 事件，复用
+ * registerCloseHandler 注册的 P1-19 关窗链路（遍历 TerminalRegistry 杀 PTY
+ * + 后端 Job Object KILL_ON_JOB_CLOSE 兜底），保证子进程清理。
+ * 禁止用 process.exit 或 destroy 绕过该链路（P1-19 依据）。
+ */
+export async function closeWindow(): Promise<void> {
+  const appWindow = getCurrentWindow();
+  await appWindow.close();
+}

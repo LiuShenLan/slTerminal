@@ -21,6 +21,7 @@ import { createTerminalShortcuts } from "./panels/terminal/keyboard";
 import { createEditorShortcuts } from "./panels/editor/keyboard";
 import { createExplorerShortcuts } from "./features/explorer/keyboard";
 import { NotificationListener } from "./features/notifications";
+import { TitleBar } from "./features/titleBar/TitleBar";
 import { PANEL_BG, INPUT_BORDER, APP_BG } from "./theme";
 import "dockview-react/dist/styles/dockview.css";
 // App.css 从 main.tsx 移此（BOOT-02）：dockview.css 先、App.css 后，CSS 变量覆盖语义正确
@@ -223,8 +224,20 @@ function App() {
 
   return (
     <ErrorBoundary>
-      <div style={{ width: "100vw", height: "100vh", background: APP_BG }}>
-        <Workspace />
+      {/* TB-05: ready 后骨架改列向 flex——首行自绘标题栏，其余为 Workspace（原三栏结构包一层） */}
+      <div
+        style={{
+          width: "100vw",
+          height: "100vh",
+          background: APP_BG,
+          display: "flex",
+          flexDirection: "column",
+        }}
+      >
+        <TitleBar />
+        <div style={{ flex: 1, minHeight: 0 }}>
+          <Workspace />
+        </div>
         <NotificationListener />
       </div>
     </ErrorBoundary>

@@ -80,31 +80,49 @@ vi.mock("../workspace/layoutSerde", () => ({
   saveLayout: vi.fn(() => ({ panels: {} })),
 }));
 
-vi.mock("../stores/layout", () => ({
-  useLayout: {
-    getState: vi.fn(() => ({
-      activePageId: "test-page-1",
-      setActivePage: mocks.mockSetActivePage,
-    })),
-    setState: vi.fn(),
-    subscribe: vi.fn(),
-  },
-}));
+// TB-02: useLayout 需同时支持 App 的 getState() 调用与 TitleBar 的 hook 调用（双形态函数）
+vi.mock("../stores/layout", () => {
+  const layoutState = () => ({
+    activePageId: "test-page-1",
+    setActivePage: mocks.mockSetActivePage,
+  });
+  const useLayout = Object.assign(
+    vi.fn((selector: (s: ReturnType<typeof layoutState>) => unknown) =>
+      selector ? selector(layoutState()) : layoutState(),
+    ),
+    {
+      getState: vi.fn(layoutState),
+      setState: vi.fn(),
+      subscribe: vi.fn(),
+    },
+  );
+  return { useLayout };
+});
 
-vi.mock("../stores/projects", () => ({
-  useProjects: {
-    getState: vi.fn(() => ({
-      projects: mocks.mockProjects,
-      updatePageLayout: vi.fn(),
-    })),
-    setState: vi.fn(),
-    subscribe: vi.fn(),
-  },
-  loadAllProjects: mocks.mockLoadAllProjects,
-  saveAllProjects: mocks.mockSaveAllProjects,
-  cancelPendingSave: vi.fn(),
-  markPersistenceReady: mocks.mockMarkPersistenceReady,
-}));
+// TB-02: useProjects 同上双形态（hook selector 调用返回 projects）
+vi.mock("../stores/projects", () => {
+  const projectsState = () => ({
+    projects: mocks.mockProjects,
+    updatePageLayout: vi.fn(),
+  });
+  const useProjects = Object.assign(
+    vi.fn((selector: (s: ReturnType<typeof projectsState>) => unknown) =>
+      selector ? selector(projectsState()) : projectsState(),
+    ),
+    {
+      getState: vi.fn(projectsState),
+      setState: vi.fn(),
+      subscribe: vi.fn(),
+    },
+  );
+  return {
+    useProjects,
+    loadAllProjects: mocks.mockLoadAllProjects,
+    saveAllProjects: mocks.mockSaveAllProjects,
+    cancelPendingSave: vi.fn(),
+    markPersistenceReady: mocks.mockMarkPersistenceReady,
+  };
+});
 
 vi.mock("dockview-react/dist/styles/dockview.css", () => ({}));
 
