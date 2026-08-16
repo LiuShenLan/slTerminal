@@ -18,6 +18,7 @@ import {
   type IWatermarkPanelProps,
 } from "dockview-react";
 import { panelRegistry, PANEL_TERMINAL } from "../panelRegistry";
+import { FileIcon } from "../features/explorer/FileIcon";
 import { saveLayout, loadLayout } from "./layoutSerde";
 import { makeTerminalPanelId, advanceTerminalPanelSeq } from "../lib/panelId";
 import { StatusDot } from "../lib/StatusDot";
@@ -32,6 +33,9 @@ import {
   BUTTON_FG,
   PLACEHOLDER_FG,
   SEPARATOR_BG,
+  SIDEBAR_FG,
+  DIM_FG,
+  FOCUS_BORDER,
   dockviewVarStyle,
 } from "../theme";
 
@@ -109,27 +113,37 @@ function createRightHeader(
   pageId: string,
   cwd: string | undefined,
 ): React.FC<IDockviewHeaderActionsProps> {
-  const Header: React.FC<IDockviewHeaderActionsProps> = ({ containerApi, group }) => (
-    <div style={{ display: "flex", alignItems: "center", height: "100%", paddingRight: 4 }}>
-      <button
-        onClick={() => {
-          const id = nextPanelId();
-          const title = titleManager.getTerminalTitle(pageId);
-          containerApi.addPanel({
-            id, component: PANEL_TERMINAL, title,
-            params: { panelId: id, cwd }, renderer: "always",
-            position: { referenceGroup: group },
-          });
-        }}
-        style={{
-          background: "none", border: `1px solid ${SEPARATOR_BG}`, color: BUTTON_FG,
-          cursor: "pointer", fontSize: 16, width: 24, height: 24, borderRadius: 4,
-          display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1,
-        }}
-        title="新建终端"
-      >+</button>
-    </div>
-  );
+  const Header: React.FC<IDockviewHeaderActionsProps> = ({ containerApi, group }) => {
+    // TAB-04: + 钮 hover 状态（同 DefaultTab ×——inline style 无法表达 :hover，
+    // 执行期定为 React 状态）
+    const [hovered, setHovered] = useState(false);
+    return (
+      <div style={{ display: "flex", alignItems: "center", height: "100%", paddingRight: 4 }}>
+        <button
+          onClick={() => {
+            const id = nextPanelId();
+            const title = titleManager.getTerminalTitle(pageId);
+            containerApi.addPanel({
+              id, component: PANEL_TERMINAL, title,
+              params: { panelId: id, cwd }, renderer: "always",
+              position: { referenceGroup: group },
+            });
+          }}
+          onMouseEnter={() => setHovered(true)}
+          onMouseLeave={() => setHovered(false)}
+          style={{
+            // TAB-04: 扁平图标钮——去边框；22px 圆角 4；fg-3（DIM_FG，design.md 明度
+            // 阶梯 fg-3=#8a857d，与 IC-06 活动栏图标同映射）；hover 底 ui.secondaryBg
+            background: hovered ? SECONDARY_BG : "none",
+            border: "none", color: DIM_FG,
+            cursor: "pointer", fontSize: 16, width: 22, height: 22, borderRadius: 4,
+            display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1,
+          }}
+          title="新建终端"
+        >+</button>
+      </div>
+    );
+  };
   return Header;
 }
 
@@ -249,6 +263,22 @@ export const DefaultTab: React.FC<IDockviewPanelProps> = (props) => {
   const [tabLogo, setTabLogo] = useState<string | null>(
     tabParams?.tabLogo ?? null,
   );
+  // TAB-03: 文件路径状态化——params prop 在 updateParameters 后不变，
+  // 文件页签图标须经 onDidParametersChange 事件驱动（照 tabStatus/tabLogo 先例）
+  const [filePath, setFilePath] = useState<string | null>(
+    tabParams?.filePath ?? null,
+  );
+  // TAB-01: 激活态 = 面板是本组可见面板（isActive）且本组为聚焦组（isGroupActive）
+  // ——底部指示条只给聚焦组的激活页签（非聚焦组可见页签已有实底 #0a0a0b，不加条）
+  // isActive ?? true：真实 dockview 恒为 boolean；测试 fake api 未提供该字段，
+  // 兜底视为本组可见面板（测试只驱动 isGroupActive 维度）
+  const [isActive, setIsActive] = useState(api.isActive ?? true);
+  const [isGroupActive, setIsGroupActive] = useState(api.isGroupActive);
+  // TAB-02: hover 状态——执行期定为 React 状态条件渲染（inline style 无法表达
+  // 跨 .dv-tab 父级的 :hover；dockview 内置 .dv-default-tab-action 显隐规则只作用于
+  // 其内置默认页签，不作用于自定义 defaultTabComponent，故不可复用其 CSS）
+  const [tabHovered, setTabHovered] = useState(false);
+  const [closeHovered, setCloseHovered] = useState(false);
   useEffect(() => {
     const d1 = api.onDidTitleChange((event) => {
       setTitle(event.title);
@@ -259,17 +289,39 @@ export const DefaultTab: React.FC<IDockviewPanelProps> = (props) => {
       const p = event as TabParams;
       setTabStatus(p?.tabStatus ?? null);
       setTabLogo(p?.tabLogo ?? null);
+      setFilePath(p?.filePath ?? null);
     });
+    // TAB-01: 激活态订阅（? 可选调用——测试 fake api 未提供 onDidActiveChange，
+    // 真实 dockview 恒有；if (e) 守卫：事件为 undefined 时不崩溃且保持当前态）
+    const d3 = api.onDidActiveChange?.((e) => { if (e) setIsActive(e.isActive); });
+    const d4 = api.onDidActiveGroupChange?.((e) => { if (e) setIsGroupActive(e.isActive); });
     return () => {
       d1.dispose();
       d2.dispose();
+      d3?.dispose();
+      d4?.dispose();
     };
   }, [api]);
+  // TAB-03: 文件型页签判据 = params.filePath 存在（只有 FILE_PANEL_TYPES
+  // ——editor/htmlviewer/gitshow/diff——的面板携带 filePath；terminal/hooksConfig
+  // 恒不设置，见 panelRegistry.ts），命中即渲染 FileIcon 彩色图标（按扩展名取色；
+  // gitshow/diff 标题含 suffix 不影响图标）
+  // 文件名 = 路径 basename（兼容 \ 与 / 分隔）
+  const fileName = filePath != null
+    ? filePath.split(/[\\/]/).pop() || filePath
+    : null;
   return (
-    <div style={{
-      display: "flex", alignItems: "center", height: "100%",
-      padding: "0 8px", gap: 6, userSelect: "none",
-    }}>
+    <div
+      onMouseEnter={() => setTabHovered(true)}
+      onMouseLeave={() => setTabHovered(false)}
+      style={{
+        display: "flex", alignItems: "center", height: "100%",
+        padding: "0 8px", gap: 6, userSelect: "none",
+        // 本 div 保持静态定位（不设 position）——TAB-01 指示条 absolute 锚定
+        // 库内建 position:relative 的 .dv-tab，bottom:0 即页签真实底边
+        // （与 dockview 的 4px 内边距解耦，padding 变化不影响指示条贴底）
+      }}
+    >
       {/* 终端状态圆点（IC-03：tabIcon emoji/img 分支随 STATUS_EMOJI 删除，
           改 StatusDot 按状态渲染——working 绿/attention 黄/done 灰/error 红） */}
       {tabStatus != null && <StatusDot status={tabStatus} />}
@@ -279,15 +331,39 @@ export const DefaultTab: React.FC<IDockviewPanelProps> = (props) => {
         <img src={tabLogo} width={16} height={16}
           style={{ flexShrink: 0, display: "block" }} alt="CLI 图标" />
       )}
-      <span style={{ fontSize: 13 }}>{title}</span>
+      {/* 文件型页签：FileIcon 彩色图标（TAB-03）——与终端分支（圆点/logo）互斥 */}
+      {fileName && <FileIcon name={fileName} isDir={false} />}
+      {/* 标题：hover 时未激活页签文字变 fg-1（激活页签 dockview 变量已置 fg-1），
+          底不变——TAB-01 hover 仅文字变色 */}
+      <span style={{
+        fontSize: 13,
+        color: tabHovered && !isActive ? SIDEBAR_FG : undefined,
+      }}>{title}</span>
       <button
         onClick={(e) => { e.stopPropagation(); api.close(); }}
+        onMouseEnter={() => setCloseHovered(true)}
+        onMouseLeave={() => setCloseHovered(false)}
         style={{
-          background: "none", border: "none", color: PLACEHOLDER_FG,
-          cursor: "pointer", padding: "0 2px", fontSize: 14, lineHeight: 1,
+          // TAB-02: × 默认不可见（opacity 0 + pointerEvents none 防误点），hover 页签
+          // 时显现——用 opacity 保布局稳定（条件渲染会致页签宽度随 hover 跳动）；
+          // 激活页签同样不常驻。自身 hover 底 #2b2b31 = --dv-icon-hover-background-color
+          // （linear 库变量已注入，复用单点，不新造色值）
+          background: closeHovered ? "var(--dv-icon-hover-background-color)" : "none",
+          border: "none", color: PLACEHOLDER_FG,
+          cursor: "pointer", padding: "1px 4px", fontSize: 14, lineHeight: 1,
+          borderRadius: 4, opacity: tabHovered ? 1 : 0,
+          pointerEvents: tabHovered ? "auto" : "none",
         }}
         title="关闭"
       >×</button>
+      {/* TAB-01: 激活页签底部 2px 指示条——absolute 定位锚定 .dv-tab（最近定位祖先），
+          色 FOCUS_BORDER（#6e9ff2）；pointerEvents none 不拦截页签点击 */}
+      {isActive && isGroupActive && (
+        <div style={{
+          position: "absolute", left: 0, right: 0, bottom: 0, height: 2,
+          background: FOCUS_BORDER, pointerEvents: "none",
+        }} />
+      )}
     </div>
   );
 };

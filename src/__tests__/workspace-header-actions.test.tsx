@@ -13,6 +13,7 @@ import React from "react";
 import { render, fireEvent, within } from "@testing-library/react";
 import { titleManager } from "../workspace/titleManager";
 import { TerminalRegistry } from "../panels/terminal/TerminalRegistry";
+import { DIM_FG } from "../theme";
 import {
   createRightHeader,
   createGetContextMenu,
@@ -29,6 +30,20 @@ function makeNextPanelId(pageId: string) {
 /** 创建 fake DockviewGroupPanel（满足类型，仅含 id 标识） */
 function makeFakeGroup(id: string) {
   return { api: { id }, id } as unknown as Record<string, unknown>;
+}
+
+/** 色值 → jsdom 归一化形态（#hex → "rgb(r, g, b)"；rgba 输入补空格 → "rgba(r, g, b, a)"） */
+function hexToRgb(hex: string): string {
+  if (hex.startsWith("#")) {
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    return `rgb(${r}, ${g}, ${b})`;
+  }
+  // 新方案 selection 类 token 为 rgba 形态，jsdom 输出 "rgba(r, g, b, a)"
+  const m = hex.match(/^rgba\((\d+),(\d+),(\d+),([0-9.]+)\)$/);
+  if (m) return `rgba(${m[1]}, ${m[2]}, ${m[3]}, ${m[4]})`;
+  return hex;
 }
 
 /** 渲染 Header 组件并返回 helpers（规避 StrictMode getByText 多元素问题） */
@@ -77,6 +92,15 @@ describe("createRightHeader", () => {
   it("R2: 按钮 title 为\"新建终端\"", () => {
     const { getAllByTitle } = renderHeader("p1", "/test", "group-alpha");
     expect(getAllByTitle("新建终端")[0]).toBeTruthy();
+  });
+
+  it("R9: + 按钮尺寸规格 22px/圆角 4/fg-3（TAB-04）", () => {
+    const { getAllByText } = renderHeader("p1", "/test", "group-alpha");
+    const btn = getAllByText("+").slice(-1)[0] as HTMLButtonElement;
+    expect(btn.style.width).toBe("22px");
+    expect(btn.style.height).toBe("22px");
+    expect(btn.style.borderRadius).toBe("4px");
+    expect(btn.style.color).toBe(hexToRgb(DIM_FG));
   });
 
   it("R3: 点击 + 调用 addPanel", () => {

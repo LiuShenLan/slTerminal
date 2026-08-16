@@ -273,6 +273,18 @@ describe("PageDockview 真实组件", () => {
     });
   });
 
+  describe("页签形态（TAB-03：文件页签 FileIcon 集成渲染）", () => {
+    it("恢复文件布局 → 页签渲染 FileIcon 彩色图标（14px svg）", async () => {
+      mockIPC(() => null);
+      const { container } = await renderDock({ savedLayout: EDITOR_LAYOUT });
+      // FileIcon 文件图标 = 14×14 svg（区别于 dockview 自身可能的其它 svg）
+      const fileIconSvgs = Array.from(container.querySelectorAll("svg")).filter(
+        (s) => s.getAttribute("width") === "14",
+      );
+      expect(fileIconSvgs.length).toBeGreaterThan(0);
+    });
+  });
+
   describe("onSaveAs（slterm:file-saved-as 事件）", () => {
     it("派发事件 → handleSaveAs 更新路径 → 冲突重算为相对路径标题", async () => {
       mockIPC(() => null);
