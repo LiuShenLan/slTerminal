@@ -2,8 +2,9 @@
 //
 // TE-13（双模式同步）：GUI 新增事件 → JSON 文本含该事件；JSON 合法修改 → GUI 树更新；
 //                      JSON 非法 → 切 GUI 被阻止（按钮禁用 + 工具栏错误提示）。
-// TE-14（保存拒绝与提示）：语法错误保存被拒（对象形态校验弹窗 + UI 禁用门控）、
-//                         schema 错误保存被拒（json-schema-library 校验弹窗）、
+// TE-14（保存拒绝与提示）：语法错误保存被拒（对象形态校验 toast 告警 + UI 禁用门控）、
+//                         schema 错误保存被拒（json-schema-library 校验 toast 告警，
+//                         OV-02：ask 弹窗 → toast.show("error")）、
 //                         合法保存成功显示重启提示、writeHooksConfig 调用 payload 为
 //                         hooks 子树（键集合精确匹配 { layer, hooks, projectPath? }）。
 //
@@ -36,7 +37,8 @@ interface GuiModePropsLike {
 const {
   mockReadHooksConfig,
   mockWriteHooksConfig,
-  mockAsk,
+  mockConfirmDialog,
+  mockToastShow,
   mockJsonMode,
   mockGuiMode,
   mockApi,
@@ -44,7 +46,8 @@ const {
 } = vi.hoisted(() => ({
   mockReadHooksConfig: vi.fn(),
   mockWriteHooksConfig: vi.fn().mockResolvedValue(undefined),
-  mockAsk: vi.fn().mockResolvedValue(true),
+  mockConfirmDialog: vi.fn().mockResolvedValue(true),
+  mockToastShow: vi.fn(),
   // JsonMode/GuiMode mock 组件：渲染 null，测试经 mock 调用参数断言 props 传递与回调
   mockJsonMode: vi.fn(() => null),
   mockGuiMode: vi.fn(() => null),
@@ -68,9 +71,14 @@ vi.mock("../ipc/hooksConfig", () => ({
   writeHooksConfig: mockWriteHooksConfig,
 }));
 
-// mock IPC dialog —— 保存失败弹窗 + dirty 确认（不弹真实对话框）
-vi.mock("../ipc/dialog", () => ({
-  ask: mockAsk,
+// mock ConfirmDialog/toast（src/lib barrel 再导出）——保存失败告警 + dirty 确认
+// （OV-02：ask → confirmDialog；纯告警改 toast）
+vi.mock("../lib/ConfirmDialog", () => ({
+  confirmDialog: mockConfirmDialog,
+}));
+vi.mock("../lib/toast", () => ({
+  toast: { show: mockToastShow },
+  ToastHost: () => null,
 }));
 
 // mock JsonMode/GuiMode —— 隔离 CM6/schema 与表单树（各自测试见对应文件）
@@ -166,8 +174,8 @@ describe("P3-TE-13 双模式同步", () => {
   beforeEach(() => {
     mockReadHooksConfig.mockReset();
     mockWriteHooksConfig.mockReset();
-    mockAsk.mockReset();
-    mockAsk.mockResolvedValue(true);
+    mockConfirmDialog.mockReset();
+    mockConfirmDialog.mockResolvedValue(true);
     mockJsonMode.mockClear();
     mockGuiMode.mockClear();
     mockApi.updateParameters.mockReset();
@@ -276,8 +284,9 @@ describe("P3-TE-14 保存拒绝与提示", () => {
   beforeEach(() => {
     mockReadHooksConfig.mockReset();
     mockWriteHooksConfig.mockReset();
-    mockAsk.mockReset();
-    mockAsk.mockResolvedValue(true);
+    mockConfirmDialog.mockReset();
+    mockConfirmDialog.mockResolvedValue(true);
+    mockToastShow.mockReset();
     mockJsonMode.mockClear();
     mockGuiMode.mockClear();
     mockApi.updateParameters.mockReset();
@@ -290,7 +299,7 @@ describe("P3-TE-14 保存拒绝与提示", () => {
     cleanup();
   });
 
-  it("语法错误（非对象）保存被拒：弹窗提示 + 拒绝 writeHooksConfig + dirty 保留", async () => {
+  it("语法错误（非对象）保存被拒：toast 提示 + 拒绝 writeHooksConfig + dirty 保留", async () => {
     mockReadHooksConfig.mockResolvedValue(VALID_BASE);
     // hub 选中态 cliId 传入（MC-220：useHooksConfig 泛化命令实参 = 选中态）
     const { result } = renderHook(() => useHooksConfig(SELECTED_CLI_ID));
@@ -303,17 +312,14 @@ describe("P3-TE-14 保存拒绝与提示", () => {
       await result.current.save();
     });
 
-    // JSON.parse 语法校验失败 → 弹窗提示、不调用 writeHooksConfig
-    expect(mockAsk).toHaveBeenCalledWith(
-      "hooks 配置必须是 JSON 对象",
-      expect.objectContaining({ title: "保存失败" }),
-    );
+    // JSON.parse 语法校验失败 → toast 错误告警（OV-02：纯告警无确认语义）、不调用 writeHooksConfig
+    expect(mockToastShow).toHaveBeenCalledWith("error", "hooks 配置必须是 JSON 对象");
     expect(mockWriteHooksConfig).not.toHaveBeenCalled();
     expect(result.current.dirty).toBe(true);
     expect(result.current.saved).toBe(false);
   });
 
-  it("schema 错误保存被拒：弹窗提示诊断 + 拒绝 writeHooksConfig", async () => {
+  it("schema 错误保存被拒：toast 提示诊断 + 拒绝 writeHooksConfig", async () => {
     mockReadHooksConfig.mockResolvedValue(VALID_BASE);
     // hub 选中态 cliId 传入（MC-220：useHooksConfig 泛化命令实参 = 选中态）
     const { result } = renderHook(() => useHooksConfig(SELECTED_CLI_ID));
@@ -329,9 +335,9 @@ describe("P3-TE-14 保存拒绝与提示", () => {
       await result.current.save();
     });
 
-    expect(mockAsk).toHaveBeenCalledWith(
+    expect(mockToastShow).toHaveBeenCalledWith(
+      "error",
       expect.stringContaining("Additional property"),
-      expect.objectContaining({ title: "保存失败" }),
     );
     expect(mockWriteHooksConfig).not.toHaveBeenCalled();
     expect(result.current.dirty).toBe(true);
@@ -444,8 +450,8 @@ describe("P3-TE-14 保存拒绝与提示", () => {
 describe("HKC-02 load() generation 竞态取消", () => {
   beforeEach(() => {
     mockReadHooksConfig.mockReset();
-    mockAsk.mockReset();
-    mockAsk.mockResolvedValue(true);
+    mockConfirmDialog.mockReset();
+    mockConfirmDialog.mockResolvedValue(true);
     mockApi.updateParameters.mockReset();
     resetStores();
   });
@@ -496,8 +502,8 @@ describe("HKC-02 load() generation 竞态取消", () => {
 describe("useHooksConfig 初始层（KZ-4）", () => {
   beforeEach(() => {
     mockReadHooksConfig.mockReset();
-    mockAsk.mockReset();
-    mockAsk.mockResolvedValue(true);
+    mockConfirmDialog.mockReset();
+    mockConfirmDialog.mockResolvedValue(true);
     resetStores();
   });
 

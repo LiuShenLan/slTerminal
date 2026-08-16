@@ -12,9 +12,9 @@ import {
   INPUT_BORDER,
   SIDEBAR_BG,
   SIDEBAR_FG,
+  ERROR_FG,
   CONTEXT_MENU_BORDER,
   SIDEBAR_COLORS,
-  ACTIVE_SELECTION_BG,
 } from "../../theme";
 import { openCommitFile } from "./openCommitFile";
 import { getContextMenuItems } from "./commitContextMenu";
@@ -76,6 +76,18 @@ interface ContextMenuState {
   items: CommitMenuItem[];
 }
 
+/** 菜单项行样式（项 28px 高、圆角 5——UI-802，照 NavContextMenu 规范） */
+const menuItemStyle: React.CSSProperties = {
+  height: 28,
+  margin: "0 4px",
+  borderRadius: 5,
+  display: "flex",
+  alignItems: "center",
+  padding: "0 12px",
+  fontSize: 12,
+  userSelect: "none",
+};
+
 /** 右键菜单浮层（纯渲染，照 FileTree.tsx ContextMenu 模式） */
 const ContextMenu: React.FC<{
   state: ContextMenuState;
@@ -105,7 +117,7 @@ const ContextMenu: React.FC<{
         top: state.y,
         background: SIDEBAR_BG,
         border: `1px solid ${CONTEXT_MENU_BORDER}`,
-        borderRadius: 4,
+        borderRadius: 5,
         padding: "4px 0",
         minWidth: 160,
         zIndex: 1000,
@@ -120,14 +132,14 @@ const ContextMenu: React.FC<{
             onClose();
           }}
           style={{
-            padding: "4px 12px",
+            ...menuItemStyle,
             cursor: "pointer",
-            color: SIDEBAR_FG,
-            fontSize: 13,
-            userSelect: "none",
+            // 危险项（回滚/删除类）ERROR_FG 着色（UI-802）
+            color: item.danger ? ERROR_FG : SIDEBAR_FG,
           }}
           onMouseEnter={(e) => {
-            (e.target as HTMLDivElement).style.background = ACTIVE_SELECTION_BG;
+            (e.target as HTMLDivElement).style.background =
+              SIDEBAR_COLORS.hover;
           }}
           onMouseLeave={(e) => {
             (e.target as HTMLDivElement).style.background = "transparent";

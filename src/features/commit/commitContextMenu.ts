@@ -3,12 +3,12 @@
 // 策略模式：git 状态 → 右键菜单项（照 openCommitFile.ts 的 STATUS_PANEL_MAP 模式）。
 // 职责：
 // - 声明哪些状态对应哪些菜单项（ROLLBACK_STATES / DELETE_STATES 集合）
-// - 构造菜单项的 action 闭包（ask 确认 → IPC 调用 → refresh）
+// - 构造菜单项的 action 闭包（confirmDialog 确认 → IPC 调用 → refresh）
 //
 // 新增菜单类型只需在本文件追加新 Set + 新构造分支，UI 组件零改动。
 
+import { confirmDialog } from "../../lib";
 import { basename } from "../../lib/path";
-import { ask } from "../../ipc/dialog";
 import { gitRollback, gitUnstage } from "../../ipc/git";
 import { deleteEntry } from "../../ipc/fs";
 import type { GitStatusEntry } from "../../types/git";
@@ -16,6 +16,8 @@ import type { GitStatusEntry } from "../../types/git";
 /** 右键菜单项 */
 export interface CommitMenuItem {
   label: string;
+  /** 危险项（回滚/删除类）——菜单渲染 ERROR_FG 着色（UI-802） */
+  danger?: boolean;
   action: () => Promise<void>;
 }
 
@@ -49,11 +51,13 @@ export function getContextMenuItems(
   if (ROLLBACK_STATES.has(entry.status)) {
     items.push({
       label: "回滚",
+      danger: true, // 不可撤销操作——危险项着色（UI-802）
       action: async () => {
-        const ok = await ask(
-          `确定回滚"${name}" 到 HEAD 版本？此操作不可撤销。`,
-          { title: "确认回滚", kind: "warning" },
-        );
+        const ok = await confirmDialog({
+          title: "确认回滚",
+          message: `确定回滚"${name}" 到 HEAD 版本？此操作不可撤销。`,
+          danger: true,
+        });
         if (!ok) return;
         try {
           await gitRollback(rootPath, entry.path);
@@ -68,11 +72,13 @@ export function getContextMenuItems(
   if (DELETE_STATES.has(entry.status)) {
     items.push({
       label: "删除",
+      danger: true, // 不可撤销操作——危险项着色（UI-802）
       action: async () => {
-        const ok = await ask(
-          `确定删除"${name}"？此操作不可撤销。`,
-          { title: "确认删除", kind: "warning" },
-        );
+        const ok = await confirmDialog({
+          title: "确认删除",
+          message: `确定删除"${name}"？此操作不可撤销。`,
+          danger: true,
+        });
         if (!ok) return;
         try {
           // added（staged 新文件）：先取消暂存，再删除磁盘

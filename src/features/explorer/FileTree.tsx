@@ -17,13 +17,14 @@ import {
   SIDEBAR_BG,
   SIDEBAR_FG,
   SIDEBAR_COLORS,
-  ACTIVE_SELECTION_BG,
+  SECONDARY_BG,
+  ERROR_FG,
   INPUT_BG,
   INPUT_BORDER,
   FOCUS_BORDER,
   CONTEXT_MENU_BORDER,
 } from "../../theme";
-import { ask } from "../../ipc/dialog";
+import { confirmDialog } from "../../lib/ConfirmDialog";
 import { IconChevronRight, IconChevronDown } from "../../lib/icons";
 
 // ---- 文件树布局几何常量 ----
@@ -51,8 +52,22 @@ interface ContextMenuState {
 
 interface ContextMenuItem {
   label: string;
+  /** 危险项（删除类）——ERROR_FG 着色（UI-802） */
+  danger?: boolean;
   action: () => void;
 }
+
+/** 菜单项行样式（项 28px、圆角 5——UI-802） */
+const itemStyle: React.CSSProperties = {
+  height: 28,
+  margin: "0 4px",
+  borderRadius: 5,
+  display: "flex",
+  alignItems: "center",
+  padding: "0 12px",
+  fontSize: 12,
+  userSelect: "none",
+};
 
 const ContextMenu: React.FC<{
   state: ContextMenuState;
@@ -82,7 +97,7 @@ const ContextMenu: React.FC<{
         top: state.y,
         background: SIDEBAR_BG,
         border: `1px solid ${CONTEXT_MENU_BORDER}`,
-        borderRadius: 4,
+        borderRadius: 5,
         padding: "4px 0",
         minWidth: 160,
         zIndex: 1000,
@@ -97,14 +112,12 @@ const ContextMenu: React.FC<{
             onClose();
           }}
           style={{
-            padding: "4px 12px",
+            ...itemStyle,
             cursor: "pointer",
-            color: SIDEBAR_FG,
-            fontSize: 13,
-            userSelect: "none",
+            color: item.danger ? ERROR_FG : SIDEBAR_FG,
           }}
           onMouseEnter={(e) => {
-            (e.target as HTMLDivElement).style.background = ACTIVE_SELECTION_BG;
+            (e.target as HTMLDivElement).style.background = SECONDARY_BG;
           }}
           onMouseLeave={(e) => {
             (e.target as HTMLDivElement).style.background = "transparent";
@@ -306,11 +319,14 @@ export const FileTree: React.FC<FileTreeProps> = ({
           },
           {
             label: "删除",
+            danger: true,
             action: () => {
               const name = node.entry.name;
-              ask(`确定删除 "${name}"？此操作不可撤销。`, {
+              confirmDialog({
                 title: "确认删除",
+                message: `确定删除 "${name}"？此操作不可撤销。`,
                 kind: "warning",
+                danger: true,
               }).then((ok) => {
                 if (ok) onDelete(node.entry.path);
               });
@@ -356,11 +372,14 @@ export const FileTree: React.FC<FileTreeProps> = ({
           },
           {
             label: "删除",
+            danger: true,
             action: () => {
               const name = node.entry.name;
-              ask(`确定删除文件夹 "${name}"？此操作不可撤销。`, {
+              confirmDialog({
                 title: "确认删除",
+                message: `确定删除文件夹 "${name}"？此操作不可撤销。`,
                 kind: "warning",
+                danger: true,
               }).then((ok) => {
                 if (ok) onDelete(node.entry.path);
               });

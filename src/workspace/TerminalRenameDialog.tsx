@@ -13,11 +13,12 @@ import React, { useEffect, useRef, useState } from "react";
 import {
   SIDEBAR_BG,
   SIDEBAR_FG,
-  BUTTON_FG,
   ERROR_FG,
   INPUT_BG,
   INPUT_BORDER,
   FOCUS_BORDER,
+  ON_ACCENT_FG,
+  SECONDARY_BG,
   CONTEXT_MENU_BORDER,
   SIDEBAR_COLORS,
   SHADOW_MENU,
@@ -158,16 +159,17 @@ export const TerminalRenameDialog: React.FC<TerminalRenameDialogProps> = ({
           </div>
         )}
 
-        {/* 按钮行 */}
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: "6px" }}>
+        {/* 按钮行（UI-801 按钮规格：次钮 SECONDARY_BG 底 + SIDEBAR_FG 字，主钮 FOCUS_BORDER
+            底 + ON_ACCENT_FG 字，照 ConfirmDialog 规格） */}
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
           <button
             type="button"
             onClick={onCancel}
             style={{
-              padding: "4px 12px",
-              background: "transparent",
-              color: BUTTON_FG,
-              border: "none",
+              padding: "5px 14px",
+              background: SECONDARY_BG,
+              color: SIDEBAR_FG,
+              border: `1px solid ${CONTEXT_MENU_BORDER}`,
               borderRadius: 4,
               cursor: "pointer",
               fontSize: "13px",
@@ -179,13 +181,14 @@ export const TerminalRenameDialog: React.FC<TerminalRenameDialogProps> = ({
             type="button"
             onClick={handleSubmit}
             style={{
-              padding: "4px 12px",
-              background: "transparent",
-              color: BUTTON_FG,
-              border: `1px solid ${FOCUS_BORDER}`,
+              padding: "5px 14px",
+              background: FOCUS_BORDER,
+              color: ON_ACCENT_FG,
+              border: "none",
               borderRadius: 4,
               cursor: "pointer",
               fontSize: "13px",
+              fontWeight: 500,
             }}
           >
             确定

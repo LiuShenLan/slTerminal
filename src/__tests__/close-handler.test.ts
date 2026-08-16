@@ -108,6 +108,9 @@ vi.mock("../lib", () => ({
   IconMin: () => null,
   IconMax: () => null,
   IconCloseWin: () => null,
+  // OV-01: App 根部浮层挂载点（本测试不关心浮层，渲染 null）
+  ConfirmDialogHost: () => null,
+  ToastHost: () => null,
 }));
 
 // TB-02: useLayout 需同时支持 App 的 getState() 调用与 TitleBar 的 hook 调用（双形态函数）

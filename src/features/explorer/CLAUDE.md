@@ -121,7 +121,7 @@ ExplorerPanel 组件本体不变。宿主从 Allotment 常驻栏（Workspace 四
 | 文件 | 用例数 | 覆盖范围 |
 |------|--------|---------|
 | `explorer-crud-success.test.tsx` | 4 | CRUD 成功路径 |
-| `explorer-delete.test.tsx` | 22 | 删除（文件/递归目录/确认弹窗） |
+| `explorer-delete.test.tsx` | 25 | 删除（文件/递归目录/确认弹窗/右键菜单 UI-802 视觉规格） |
 | `explorer-file-viewer.test.tsx` | 21 | handleOpenFile 面板分派（FileViewerRegistry 命中/回退） |
 | `file-icon.test.tsx` | 36 | 文件图标映射（扩展名→emoji 全表） |
 | `explorer-focus.test.tsx` | 6 | 焦点管理（tabIndex/usePanelFocus） |
@@ -162,7 +162,7 @@ ExplorerPanel 组件本体不变。宿主从 Allotment 常驻栏（Workspace 四
 - `helpers/workspace-setup.ts` — `resetProjectStores` / `seedExplorerProject` store 种子工厂
 
 **UI 弹窗 mock**（删除确认等）：
-- `@tauri-apps/plugin-dialog` — `ask`
+- `../lib/ConfirmDialog` — `confirmDialog`（OV-02 替换 ask；测试文件相对路径，勿用 `../../`）
 
 **Zustand stores** 使用真实实现（不 mock），通过 `.setState()` 种子数据，`beforeEach` 中重置。
 

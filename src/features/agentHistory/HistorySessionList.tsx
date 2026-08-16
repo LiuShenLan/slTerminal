@@ -19,7 +19,6 @@
 // 配色全部 theme/colors.ts token（硬约束 #6），零硬编码色值。
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { ask } from "../../ipc/dialog";
 import { writeText } from "../../ipc/clipboard";
 import { deleteHistorySession } from "../../ipc/agentHistory";
 import { sendToastNotification } from "../../ipc/notification";
@@ -31,6 +30,7 @@ import {
   getHistoryContextMenuItems,
 } from "./historyContextMenu";
 import type { HistoryMenuItem } from "./historyContextMenu";
+import { confirmDialog } from "../../lib";
 import { basename } from "../../lib/path";
 import { groupByCwd, isCurrentProject, keyOf, matchesSearch } from "./historyModel";
 import { TerminalRegistry } from "../../panels/terminal/TerminalRegistry";
@@ -45,7 +45,7 @@ import {
   PLACEHOLDER_FG,
   SIDEBAR_BG,
   SIDEBAR_FG,
-  ACTIVE_SELECTION_BG,
+  ERROR_FG,
   CONTEXT_MENU_BORDER,
   SIDEBAR_COLORS,
 } from "../../theme";
@@ -104,6 +104,18 @@ interface MenuState {
   items: HistoryMenuItem[];
 }
 
+/** 菜单项行样式（项 28px 高、圆角 5——UI-802，照 NavContextMenu 规范） */
+const menuItemStyle: React.CSSProperties = {
+  height: 28,
+  margin: "0 4px",
+  borderRadius: 5,
+  display: "flex",
+  alignItems: "center",
+  padding: "0 12px",
+  fontSize: 12,
+  userSelect: "none",
+};
+
 /** 右键菜单浮层（纯渲染，照 CommitFileList.tsx 私有 ContextMenu 模式） */
 const ContextMenu: React.FC<{
   state: MenuState;
@@ -134,7 +146,7 @@ const ContextMenu: React.FC<{
         top: state.y,
         background: SIDEBAR_BG,
         border: `1px solid ${CONTEXT_MENU_BORDER}`,
-        borderRadius: 4,
+        borderRadius: 5,
         padding: "4px 0",
         minWidth: 160,
         zIndex: 1000,
@@ -146,12 +158,7 @@ const ContextMenu: React.FC<{
           // 禁用项：灰显（PLACEHOLDER_FG）、无点击回调
           <div
             key={i}
-            style={{
-              padding: "4px 12px",
-              color: PLACEHOLDER_FG,
-              fontSize: 13,
-              userSelect: "none",
-            }}
+            style={{ ...menuItemStyle, color: PLACEHOLDER_FG, cursor: "default" }}
           >
             {item.label}
           </div>
@@ -163,15 +170,14 @@ const ContextMenu: React.FC<{
               onClose();
             }}
             style={{
-              padding: "4px 12px",
+              ...menuItemStyle,
               cursor: "pointer",
-              color: SIDEBAR_FG,
-              fontSize: 13,
-              userSelect: "none",
+              // 危险项（删除类）ERROR_FG 着色（UI-802）
+              color: item.danger ? ERROR_FG : SIDEBAR_FG,
             }}
             onMouseEnter={(e) => {
               (e.target as HTMLDivElement).style.background =
-                ACTIVE_SELECTION_BG;
+                SIDEBAR_COLORS.hover;
             }}
             onMouseLeave={(e) => {
               (e.target as HTMLDivElement).style.background = "transparent";
@@ -360,11 +366,12 @@ export const HistorySessionList: React.FC<HistorySessionListProps> = ({
         onFork: () => {
           void restoreHistorySession(session, { fork: true });
         },
-        // 删除：ask 确认 → 删除 IPC → 成功后 removeLocal 即时局部刷新（不重扫）
+        // 删除：confirmDialog 确认 → 删除 IPC → 成功后 removeLocal 即时局部刷新（不重扫）
         onDelete: () => {
-          void ask(`确定删除会话"${title}"？此操作不可撤销。`, {
+          void confirmDialog({
             title: "确认删除",
-            kind: "warning",
+            message: `确定删除会话"${title}"？此操作不可撤销。`,
+            danger: true,
           }).then(async (ok) => {
             if (!ok) return;
             try {

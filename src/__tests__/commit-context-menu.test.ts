@@ -1,8 +1,8 @@
 // commit-context-menu.test.ts — commitContextMenu 策略注册表 L2 测试
 //
-// 覆盖：状态→菜单映射、action 执行流程（ask → IPC → refresh）、
-// ask 取消、操作失败不抛异常。
-// 纯逻辑测试——mock 全部 IPC 和 dialog，直接调用 getContextMenuItems。
+// 覆盖：状态→菜单映射、action 执行流程（confirmDialog → IPC → refresh）、
+// confirmDialog 取消、操作失败不抛异常。
+// 纯逻辑测试——mock 全部 IPC 和 confirmDialog，直接调用 getContextMenuItems。
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
@@ -11,13 +11,13 @@ const {
   mockGitRollback,
   mockGitUnstage,
   mockDeleteEntry,
-  mockAsk,
+  mockConfirmDialog,
   mockRefresh,
 } = vi.hoisted(() => ({
   mockGitRollback: vi.fn(),
   mockGitUnstage: vi.fn(),
   mockDeleteEntry: vi.fn(),
-  mockAsk: vi.fn(),
+  mockConfirmDialog: vi.fn(),
   mockRefresh: vi.fn(),
 }));
 
@@ -30,8 +30,9 @@ vi.mock("../ipc/fs", () => ({
   deleteEntry: mockDeleteEntry,
 }));
 
-vi.mock("../ipc/dialog", () => ({
-  ask: mockAsk,
+// confirmDialog 经 src/lib barrel 导出（OV-02 契约）
+vi.mock("../lib", () => ({
+  confirmDialog: mockConfirmDialog,
 }));
 
 import { getContextMenuItems } from "../features/commit/commitContextMenu";
@@ -45,10 +46,10 @@ beforeEach(() => {
   mockGitRollback.mockReset();
   mockGitUnstage.mockReset();
   mockDeleteEntry.mockReset();
-  mockAsk.mockReset();
+  mockConfirmDialog.mockReset();
   mockRefresh.mockReset();
   // 默认：确认弹窗用户点确定
-  mockAsk.mockResolvedValue(true);
+  mockConfirmDialog.mockResolvedValue(true);
   // 默认：IPC 成功
   mockGitRollback.mockResolvedValue(undefined);
   mockGitUnstage.mockResolvedValue(undefined);
@@ -127,21 +128,31 @@ describe("getContextMenuItems 状态→菜单映射", () => {
 // ═══════════════════════════════════════════════════════
 
 describe("getContextMenuItems action 执行流程", () => {
-  it("回滚: ask 确认 → gitRollback → refresh", async () => {
+  it("回滚: confirmDialog 确认 → gitRollback → refresh", async () => {
     const action = getFirstAction(makeEntry("C:/repo/a.txt", "modified"));
     expect(action).not.toBeNull();
 
     await action!();
 
-    expect(mockAsk).toHaveBeenCalledWith(
-      '确定回滚"a.txt" 到 HEAD 版本？此操作不可撤销。',
-      { title: "确认回滚", kind: "warning" },
-    );
+    expect(mockConfirmDialog).toHaveBeenCalledWith({
+      title: "确认回滚",
+      message: '确定回滚"a.txt" 到 HEAD 版本？此操作不可撤销。',
+      danger: true,
+    });
     expect(mockGitRollback).toHaveBeenCalledWith("C:/repo", "C:/repo/a.txt");
     expect(mockRefresh).toHaveBeenCalledTimes(1);
   });
 
-  it("删除(added): ask → gitUnstage → deleteEntry → refresh", async () => {
+  it("回滚菜单项标记 danger（UI-802 危险项）", () => {
+    const items = getContextMenuItems(
+      makeEntry("C:/repo/a.txt", "modified"),
+      "C:/repo",
+      mockRefresh,
+    );
+    expect(items[0].danger).toBe(true);
+  });
+
+  it("删除(added): confirmDialog → gitUnstage → deleteEntry → refresh", async () => {
     const action = getFirstAction(makeEntry("C:/repo/b.txt", "added"));
     expect(action).not.toBeNull();
 
@@ -152,7 +163,7 @@ describe("getContextMenuItems action 执行流程", () => {
     expect(mockRefresh).toHaveBeenCalledTimes(1);
   });
 
-  it("删除(untracked): ask → deleteEntry → refresh（不调 gitUnstage）", async () => {
+  it("删除(untracked): confirmDialog → deleteEntry → refresh（不调 gitUnstage）", async () => {
     const action = getFirstAction(makeEntry("C:/repo/c.txt", "untracked"));
     expect(action).not.toBeNull();
 
@@ -163,8 +174,17 @@ describe("getContextMenuItems action 执行流程", () => {
     expect(mockRefresh).toHaveBeenCalledTimes(1);
   });
 
-  it("ask 取消后不执行任何 IPC", async () => {
-    mockAsk.mockResolvedValue(false); // 用户点取消
+  it("删除菜单项标记 danger（UI-802 危险项）", () => {
+    const items = getContextMenuItems(
+      makeEntry("C:/repo/b.txt", "added"),
+      "C:/repo",
+      mockRefresh,
+    );
+    expect(items[0].danger).toBe(true);
+  });
+
+  it("confirmDialog 取消后不执行任何 IPC", async () => {
+    mockConfirmDialog.mockResolvedValue(false); // 用户点取消
     const action = getFirstAction(makeEntry("C:/repo/a.txt", "modified"));
 
     await action!();

@@ -42,7 +42,7 @@ import { NavHistoryNode } from "./NavHistoryNode";
 import { NavHistoryRow } from "./NavHistoryRow";
 import { NavContextMenu } from "./NavContextMenu";
 import type { NavMenuState } from "./NavContextMenu";
-import { open, ask } from "../../ipc/dialog";
+import { open } from "../../ipc/dialog";
 import { writeText } from "../../ipc/clipboard";
 import { deleteHistorySession } from "../../ipc/agentHistory";
 import { sendToastNotification } from "../../ipc/notification";
@@ -54,6 +54,7 @@ import {
   SessionActionDialog,
 } from "../agentHistory";
 import { TerminalRegistry } from "../../panels/terminal/TerminalRegistry";
+import { confirmDialog } from "../../lib";
 import { parseTerminalPageId } from "../../lib/panelId";
 import { basename } from "../../lib/path";
 import { switchToPageAndFocus } from "../../workspace/pageApis";
@@ -388,11 +389,12 @@ export const NavTree: React.FC<NavTreeProps> = ({ switchToPage, onDeletePage }) 
         onFork: () => {
           void restoreHistorySession(session, { fork: true });
         },
-        // 删除：ask 确认 → 删除 IPC → removeLocal 即时局部刷新（不重扫）
+        // 删除：confirmDialog 确认 → 删除 IPC → removeLocal 即时局部刷新（不重扫）
         onDelete: () => {
-          void ask(`确定删除会话"${title}"？此操作不可撤销。`, {
+          void confirmDialog({
             title: "确认删除",
-            kind: "warning",
+            message: `确定删除会话"${title}"？此操作不可撤销。`,
+            danger: true,
           }).then(async (ok) => {
             if (!ok) return;
             try {

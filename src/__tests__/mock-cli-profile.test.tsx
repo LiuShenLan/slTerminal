@@ -87,7 +87,7 @@ const h = vi.hoisted(() => {
     // 权限桩须返回 Promise——useAgentNotifications 对 ensureNotificationPermission().catch()
     mockEnsureNotificationPermission: vi.fn(async () => {}),
     mockDeleteHistorySession: vi.fn(),
-    mockAsk: vi.fn(async () => true),
+    mockConfirmDialog: vi.fn(async () => true),
     mockReadHooksConfig: vi.fn(),
     mockWriteHooksConfig: vi.fn(),
     mockJsonMode: vi.fn(() => null),
@@ -230,8 +230,9 @@ vi.mock("../ipc/agentHistory", () => ({
   deleteHistorySession: h.mockDeleteHistorySession,
 }));
 
-vi.mock("../ipc/dialog", () => ({
-  ask: h.mockAsk,
+// OV-02：hub dirty 守卫经 src/lib 的 confirmDialog（ask 已从 ipc/dialog 删除）
+vi.mock("../lib/ConfirmDialog", () => ({
+  confirmDialog: h.mockConfirmDialog,
 }));
 
 vi.mock("../ipc/hooksConfig", () => ({
@@ -639,7 +640,7 @@ describe("AC-4④ hub 选择行", () => {
   beforeEach(() => {
     h.mockReadHooksConfig.mockReset();
     h.mockWriteHooksConfig.mockReset();
-    h.mockAsk.mockReset().mockResolvedValue(true);
+    h.mockConfirmDialog.mockReset().mockResolvedValue(true);
     h.mockJsonMode.mockClear();
     h.mockInject.mockReset();
     h.mockUninstall.mockReset();

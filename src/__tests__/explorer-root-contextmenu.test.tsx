@@ -17,7 +17,7 @@ const mocks = vi.hoisted(() => {
   const mockStartWatch = vi.fn();
   const mockCreateDir = vi.fn();
   const mockWriteFile = vi.fn();
-  const mockAsk = vi.fn();
+  const mockConfirmDialog = vi.fn();
 
   return {
     mockReadDir,
@@ -25,23 +25,21 @@ const mocks = vi.hoisted(() => {
     mockStartWatch,
     mockCreateDir,
     mockWriteFile,
-    mockAsk,
+    mockConfirmDialog,
     resetAll() {
       mockReadDir.mockClear();
       mockGitStatus.mockClear();
       mockStartWatch.mockClear();
       mockCreateDir.mockClear();
       mockWriteFile.mockClear();
-      mockAsk.mockClear();
+      mockConfirmDialog.mockClear();
     },
   };
 });
 
-// Mock @tauri-apps/plugin-dialog
-vi.mock("@tauri-apps/plugin-dialog", () => ({
-  ask: mocks.mockAsk,
-  save: vi.fn(),
-  open: vi.fn(),
+// Mock ConfirmDialog（FileTree 经 ../../lib/ConfirmDialog 的 confirmDialog 引用）
+vi.mock("../lib/ConfirmDialog", () => ({
+  confirmDialog: mocks.mockConfirmDialog,
 }));
 
 // Mock ipc/fs
@@ -155,7 +153,7 @@ function seedProject(rootPath: string = "C:/test-project") {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.resetAll();
-  mocks.mockAsk.mockResolvedValue(false);
+  mocks.mockConfirmDialog.mockResolvedValue(false);
   mocks.mockReadDir.mockResolvedValue([]);
   mocks.mockGitStatus.mockResolvedValue([]);
   mocks.mockStartWatch.mockResolvedValue(undefined);
@@ -433,7 +431,7 @@ describe("ExplorerPanel 根级重命名失败", () => {
     mocks.mockReadDir.mockResolvedValue([
       { name: "existing.txt", path: "C:/test-project/existing.txt", isDir: false, size: 32, modified: 1 },
     ]);
-    mocks.mockAsk.mockResolvedValue(false);
+    mocks.mockConfirmDialog.mockResolvedValue(false);
 
     seedProject();
 

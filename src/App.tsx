@@ -15,7 +15,7 @@ import * as agentHooks from "./ipc/agentHooks";
 import { CLAUDE_CLI_ID } from "./features/cliProfiles/profiles/claude";
 import { setProjectRoot } from "./ipc/fs";
 import { TerminalRegistry } from "./panels/terminal/TerminalRegistry";
-import { ErrorBoundary } from "./lib";
+import { ErrorBoundary, ConfirmDialogHost, ToastHost } from "./lib";
 import { getShortcutRegistry, createGlobalShortcuts, wireKeybindings } from "./features/shortcuts";
 import { createTerminalShortcuts } from "./panels/terminal/keyboard";
 import { createEditorShortcuts } from "./panels/editor/keyboard";
@@ -240,6 +240,9 @@ function App() {
         </div>
         <NotificationListener />
       </div>
+      {/* OV-01: 全局浮层挂载点（fixed 定位，不参与布局）——ConfirmDialog/toast */}
+      <ConfirmDialogHost />
+      <ToastHost />
     </ErrorBoundary>
   );
 }

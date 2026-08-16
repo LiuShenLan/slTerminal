@@ -14,6 +14,7 @@ import {
   type GetTabContextMenuItemsParams,
   type ReactContextMenuItemConfig,
   type BuiltInContextMenuItem,
+  type IContextMenuItemComponentProps,
   type IDockviewHeaderActionsProps,
   type IWatermarkPanelProps,
 } from "dockview-react";
@@ -33,9 +34,13 @@ import {
   BUTTON_FG,
   PLACEHOLDER_FG,
   SEPARATOR_BG,
+  SIDEBAR_BG,
   SIDEBAR_FG,
   DIM_FG,
   FOCUS_BORDER,
+  ERROR_FG,
+  CONTEXT_MENU_BORDER,
+  SIDEBAR_COLORS,
   dockviewVarStyle,
 } from "../theme";
 
@@ -168,6 +173,82 @@ export function applyRename(
   onLayoutChange(saveLayout(api) as Record<string, unknown>);
 }
 
+// ---- 页签右键菜单（UI-802 视觉统一）----
+
+/** 菜单项自定义组件——dockview-react 经 ReactContextMenuItemPart portal 渲染。
+    UI-802 规格：项高 28px、hover SECONDARY_BG、危险项 ERROR_FG；全部 token 引用
+    （硬约束 #6）。disabled 项置灰且不响应（opacity 0.4，照库 .dv-context-menu-item--disabled） */
+const TabContextMenuItem: React.FC<IContextMenuItemComponentProps> = ({
+  close,
+  componentProps,
+}) => {
+  const [hovered, setHovered] = useState(false);
+  const item = componentProps as
+    | { label: string; danger?: boolean; disabled?: boolean; action?: () => void }
+    | undefined;
+  const disabled = item?.disabled === true;
+  return (
+    <div
+      role="menuitem"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onClick={() => {
+        if (disabled) return;
+        item?.action?.();
+        close(); // 照库 buildItem 先例：先执行 action 再关菜单
+      }}
+      style={{
+        height: 28,
+        display: "flex",
+        alignItems: "center",
+        padding: "0 12px",
+        cursor: disabled ? "default" : "pointer",
+        fontSize: 13,
+        whiteSpace: "nowrap",
+        userSelect: "none",
+        background: hovered && !disabled ? SECONDARY_BG : "transparent",
+        color: item?.danger === true ? ERROR_FG : SIDEBAR_FG,
+        opacity: disabled ? 0.4 : 1,
+        pointerEvents: disabled ? "none" : "auto",
+      }}
+    >
+      {item?.label}
+    </div>
+  );
+};
+
+/** 菜单容器/分隔线 token 规则——库渲染的 .dv-context-menu 容器无法 inline style，
+    注入 <style> 覆盖：l3 底 SIDEBAR_BG + 0.09 描边 + 圆角 5 + UI-801 阴影（contextMenuShadow）；
+    分隔线同 0.09 描边色。选择器带 .dockview-theme-dark 前缀提升特异性，稳胜库样式 */
+const TAB_CONTEXT_MENU_CSS = `
+.dockview-theme-dark .dv-context-menu {
+  background: ${SIDEBAR_BG};
+  color: ${SIDEBAR_FG};
+  border: 1px solid ${CONTEXT_MENU_BORDER};
+  border-radius: 5px;
+  box-shadow: ${SIDEBAR_COLORS.contextMenuShadow};
+}
+.dockview-theme-dark .dv-context-menu-separator {
+  background: ${CONTEXT_MENU_BORDER};
+}
+`;
+
+/** 构造自定义菜单项配置（UI-802）：label/action/disabled 顶层保留（库契约 + 测试断言），
+    视觉参数经 componentProps 传给 TabContextMenuItem（component 键触发 dockview-react
+    的 React 渲染路径） */
+function menuItem(
+  label: string,
+  opts: { danger?: boolean; disabled?: boolean; action?: () => void },
+): ReactContextMenuItemConfig {
+  return {
+    label,
+    action: opts.action,
+    disabled: opts.disabled,
+    component: TabContextMenuItem,
+    componentProps: { label, ...opts },
+  };
+}
+
 /** 创建 getTabContextMenuItems 回调（捕获 pageId 闭包） */
 function createGetContextMenu(
   nextPanelId: () => string,
@@ -182,19 +263,44 @@ function createGetContextMenu(
     // 菜单每次右键重新构建，判断实时
     const claudeRunning = TerminalRegistry.get(params.panel.id)?.agentSession != null;
     const items: (BuiltInContextMenuItem | ReactContextMenuItemConfig)[] = [
-      { label: "新建终端", action: () => { params.api.addPanel(
+      menuItem("新建终端", {
+        action: () => { params.api.addPanel(
           { id: newTerminalId, component: PANEL_TERMINAL, title: titleManager.getTerminalTitle(pageId),
             params: { panelId: newTerminalId }, renderer: "always",
-            position: { referenceGroup: params.group } }); } },
+            position: { referenceGroup: params.group } }); },
+      }),
       "separator",
     ];
     if (isTerminal) {
       items.push(
-        { label: "重命名", disabled: claudeRunning, action: () => onRenameRequest(params.panel) },
+        menuItem("重命名", {
+          disabled: claudeRunning,
+          action: () => onRenameRequest(params.panel),
+        }),
         "separator",
       );
     }
-    items.push("close", "closeOthers", "closeAll");
+    // 关闭类 = 危险项（UI-802 ERROR_FG）
+    items.push(
+      menuItem("关闭", {
+        danger: true,
+        action: () => params.panel.api.close(),
+      }),
+      menuItem("关闭其他", {
+        danger: true,
+        action: () => {
+          params.group.panels
+            .filter((p) => p !== params.panel)
+            .forEach((p) => p.api.close());
+        },
+      }),
+      menuItem("关闭全部", {
+        danger: true,
+        action: () => {
+          [...params.group.panels].forEach((p) => p.api.close());
+        },
+      }),
+    );
     return items;
   };
 }
@@ -528,6 +634,8 @@ const PageDockview: React.FC<PageDockviewProps> = React.memo(({
       display: visible ? "block" : "none",
       width: "100%", height: "100%",
     }}>
+      {/* UI-802 页签右键菜单容器样式（库 DOM 菜单无法 inline style——token 驱动 <style>） */}
+      <style>{TAB_CONTEXT_MENU_CSS}</style>
       <DockviewReact
         className="dockview-theme-dark"
         components={panelRegistry}

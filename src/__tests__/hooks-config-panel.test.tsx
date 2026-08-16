@@ -7,7 +7,7 @@
 // F2 注入/卸载按钮与注入状态条（P3-FE-21/22：三态显示、注入/卸载后刷新状态 + 重读 user 层）/
 // hub CLI 选择行（MC-502~507）：能力过滤 / logo+displayName / 选中高亮 token / 单 CLI 也渲染 /
 // 点击切换 → 编辑器重挂载且 IPC 携新 cliId / selectedCli 持久化（updateParameters + 显式保存）/
-// 挂载恢复 / 失效回退首个有能力 CLI / dirty 守卫 ask 确认与取消 / 非 dirty 直接切换 /
+// 挂载恢复 / 失效回退首个有能力 CLI / dirty 守卫 confirmDialog 确认与取消 / 非 dirty 直接切换 /
 // 空态「无可配置 CLI」/ restartHint 由 profile 驱动。
 //
 // 面板 props 经强转传入 mock api/containerApi（hub 化后面板为 Dockview content component，
@@ -17,10 +17,10 @@
 import { describe, it, expect, afterEach, vi, beforeEach } from "vitest";
 
 // ── vi.hoisted：mock 状态在模块级 vi.mock 执行前就绪 ──
-const { mockReadHooksConfig, mockWriteHooksConfig, mockAsk, mockJsonMode } = vi.hoisted(() => ({
+const { mockReadHooksConfig, mockWriteHooksConfig, mockConfirmDialog, mockJsonMode } = vi.hoisted(() => ({
   mockReadHooksConfig: vi.fn(),
   mockWriteHooksConfig: vi.fn(),
-  mockAsk: vi.fn(async () => true),
+  mockConfirmDialog: vi.fn(async () => true),
   // JsonMode mock 组件：渲染 null，测试经 mockJsonMode.mock.calls 断言 props 传递
   mockJsonMode: vi.fn(() => null),
 }));
@@ -67,9 +67,9 @@ vi.mock("../panels/hooksConfig/JsonMode", () => ({
   default: mockJsonMode,
 }));
 
-// mock IPC dialog —— dirty 确认弹窗（不弹真实对话框）
-vi.mock("../ipc/dialog", () => ({
-  ask: mockAsk,
+// mock ConfirmDialog（src/lib barrel 再导出）——dirty 确认弹窗（OV-02：ask → confirmDialog）
+vi.mock("../lib/ConfirmDialog", () => ({
+  confirmDialog: mockConfirmDialog,
 }));
 
 // mock IPC settings —— hooksConfig store loadFromDisk 的后端读
@@ -293,8 +293,8 @@ describe("HooksConfigPanel 渲染", () => {
   beforeEach(() => {
     mockReadHooksConfig.mockReset();
     mockWriteHooksConfig.mockReset();
-    mockAsk.mockReset();
-    mockAsk.mockResolvedValue(true);
+    mockConfirmDialog.mockReset();
+    mockConfirmDialog.mockResolvedValue(true);
     mockJsonMode.mockClear();
     // F2 mock 默认值：挂载 effect 会查询注入状态（不设默认则返回 undefined 使状态条显示崩溃）
     mockInject.mockReset();
@@ -503,10 +503,10 @@ describe("HooksConfigPanel 渲染", () => {
     expect(container.querySelector('[data-e2e="hooks-mode-container"]')).toBeTruthy();
   });
 
-  it("ask 弹窗打开期间 visibilitychange 回归不二次弹窗（验收 2.1 防循环）", async () => {
+  it("confirmDialog 弹窗打开期间 visibilitychange 回归不二次弹窗（验收 2.1 防循环）", async () => {
     seedProject("C:/proj");
     mockReadHooksConfig.mockResolvedValue({});
-    mockAsk.mockReturnValue(new Promise(() => {})); // 弹窗挂起（模拟确认框打开中）
+    mockConfirmDialog.mockReturnValue(new Promise(() => {})); // 弹窗挂起（模拟确认框打开中）
     const { container } = renderPanel();
     await waitFor(() => expect(mockReadHooksConfig.mock.calls.length).toBe(1));
     // 置 dirty（合法 JSON 编辑 → updateConfigJson）
@@ -519,14 +519,14 @@ describe("HooksConfigPanel 渲染", () => {
         JSON.stringify({ PreToolUse: [{ hooks: [{ type: "command", command: "x" }] }] }),
       );
     });
-    // 第一次 visibilitychange（切回前台）→ reload → confirmDiscard → ask（挂起）
+    // 第一次 visibilitychange（切回前台）→ reload → confirmDiscard → confirmDialog（挂起）
     dispatchVisibilityChange();
     await new Promise((r) => setTimeout(r, 0));
-    expect(mockAsk).toHaveBeenCalledTimes(1);
+    expect(mockConfirmDialog).toHaveBeenCalledTimes(1);
     // 弹窗关闭的回归（visibilitychange）→ askGuard 抑制，不二次弹窗（点否循环根治）
     dispatchVisibilityChange();
     await new Promise((r) => setTimeout(r, 20));
-    expect(mockAsk).toHaveBeenCalledTimes(1);
+    expect(mockConfirmDialog).toHaveBeenCalledTimes(1);
     expect(container.firstElementChild).toBeTruthy();
   });
 });
@@ -534,8 +534,8 @@ describe("HooksConfigPanel 渲染", () => {
 describe("F2 注入/卸载与注入状态条（P3-FE-21/22）", () => {
   beforeEach(() => {
     mockReadHooksConfig.mockReset();
-    mockAsk.mockReset();
-    mockAsk.mockResolvedValue(true);
+    mockConfirmDialog.mockReset();
+    mockConfirmDialog.mockResolvedValue(true);
     mockInject.mockReset();
     mockUninstall.mockReset();
     mockGetInjectionStatus.mockReset();
@@ -697,8 +697,8 @@ describe("hub CLI 选择行", () => {
   beforeEach(() => {
     mockReadHooksConfig.mockReset();
     mockWriteHooksConfig.mockReset();
-    mockAsk.mockReset();
-    mockAsk.mockResolvedValue(true);
+    mockConfirmDialog.mockReset();
+    mockConfirmDialog.mockResolvedValue(true);
     mockJsonMode.mockClear();
     mockInject.mockReset();
     mockUninstall.mockReset();
@@ -828,10 +828,10 @@ describe("hub CLI 选择行", () => {
     expect(claudeBtn.style.background).toBe(hexToRgb(EXPLORER_SELECTION_BG));
   });
 
-  it("dirty 守卫：ask 确认 → 切换（MC-505）", async () => {
+  it("dirty 守卫：confirmDialog 确认 → 切换（MC-505）", async () => {
     registerOnly([claudeProfile, TEST_PROFILE]);
     mockReadHooksConfig.mockResolvedValue({});
-    mockAsk.mockResolvedValue(true); // 确认丢弃
+    mockConfirmDialog.mockResolvedValue(true); // 确认丢弃
     const { getByRole } = renderPanel();
     await waitFor(() => expect(mockReadHooksConfig.mock.calls.length).toBe(1));
     // 置 dirty（合法 JSON 编辑）
@@ -843,9 +843,9 @@ describe("hub CLI 选择行", () => {
         JSON.stringify({ PreToolUse: [{ hooks: [{ type: "command", command: "x" }] }] }),
       );
     });
-    // 点击切换 → ask 确认（丢弃未保存修改）
+    // 点击切换 → confirmDialog 确认（丢弃未保存修改）
     fireEvent.click(getByRole("button", { name: "testcli" }));
-    await waitFor(() => expect(mockAsk).toHaveBeenCalled());
+    await waitFor(() => expect(mockConfirmDialog).toHaveBeenCalled());
     // 确认后切换：IPC 携新 cliId
     await waitFor(() => {
       const calls = mockReadHooksConfig.mock.calls;
@@ -853,10 +853,10 @@ describe("hub CLI 选择行", () => {
     });
   });
 
-  it("dirty 守卫：ask 取消 → 不切换（MC-505）", async () => {
+  it("dirty 守卫：confirmDialog 取消 → 不切换（MC-505）", async () => {
     registerOnly([claudeProfile, TEST_PROFILE]);
     mockReadHooksConfig.mockResolvedValue({});
-    mockAsk.mockResolvedValue(false); // 取消丢弃
+    mockConfirmDialog.mockResolvedValue(false); // 取消丢弃
     const { getByRole } = renderPanel();
     await waitFor(() => expect(mockReadHooksConfig.mock.calls.length).toBe(1));
     // 置 dirty（合法 JSON 编辑）
@@ -868,9 +868,9 @@ describe("hub CLI 选择行", () => {
         JSON.stringify({ PreToolUse: [{ hooks: [{ type: "command", command: "x" }] }] }),
       );
     });
-    // 点击切换 → ask 确认，用户取消 → 不切换（选中态保持 claude，IPC 不携新 cliId）
+    // 点击切换 → confirmDialog 确认，用户取消 → 不切换（选中态保持 claude，IPC 不携新 cliId）
     fireEvent.click(getByRole("button", { name: "testcli" }));
-    await waitFor(() => expect(mockAsk).toHaveBeenCalled());
+    await waitFor(() => expect(mockConfirmDialog).toHaveBeenCalled());
     await new Promise((r) => setTimeout(r, 20));
     expect(mockReadHooksConfig.mock.calls[mockReadHooksConfig.mock.calls.length - 1][0]).toBe(
       CLAUDE_CLI_ID,
@@ -878,18 +878,18 @@ describe("hub CLI 选择行", () => {
     expect(mockApi.updateParameters).not.toHaveBeenCalled();
   });
 
-  it("非 dirty 直接切换（不弹 ask，MC-505）", async () => {
+  it("非 dirty 直接切换（不弹 confirmDialog，MC-505）", async () => {
     registerOnly([claudeProfile, TEST_PROFILE]);
     mockReadHooksConfig.mockResolvedValue({});
     const { getByRole } = renderPanel();
     await waitFor(() => expect(mockReadHooksConfig.mock.calls.length).toBe(1));
-    // 无编辑（非 dirty）→ 直接切换，ask 不被调用
+    // 无编辑（非 dirty）→ 直接切换，confirmDialog 不被调用
     fireEvent.click(getByRole("button", { name: "testcli" }));
     await waitFor(() => {
       const calls = mockReadHooksConfig.mock.calls;
       expect(calls[calls.length - 1][0]).toBe(TEST_PROFILE.id);
     });
-    expect(mockAsk).not.toHaveBeenCalled();
+    expect(mockConfirmDialog).not.toHaveBeenCalled();
   });
 
   it("空态：无 hasConfigEditor profile → 「无可配置 CLI」占位 + 不渲染编辑器（MC-507）", async () => {

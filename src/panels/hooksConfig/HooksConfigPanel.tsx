@@ -13,7 +13,7 @@
 //   （claude = ClaudeHooksConfigEditor，由 claude profile 挂载）——hub 不再直接引用任何
 //   具体 CLI 编辑器（新增 CLI 自带编辑器组件即可接入）；key={cliId} 卸载当前编辑器并
 //   重挂载目标编辑器（ADR-0001 先例——dirty/选中态丢弃）；dirty 守卫：dirty 时切换需
-//   dialog.ask 确认丢弃（照切层/visibilitychange ask 守卫先例，askGuard 防循环复用）；
+//   confirmDialog 确认丢弃（照切层/visibilitychange 守卫先例，askGuard 防循环复用）；
 //   hasConfigEditor=true 但 configEditor 缺失（声明不一致）→ 编辑器槽空态占位防御。
 // - 空态（MC-507）：无任何 hasConfigEditor profile → 渲染「无可配置 CLI」占位，不渲染编辑器。
 // - 入口零改动（MC-501）：面板 id hooksConfig-{pageId}、侧栏右键菜单流程、pageApis 不动。
@@ -21,7 +21,7 @@
 
 import React, { useCallback, useMemo, useRef, useState } from "react";
 import { cliProfileRegistry } from "../../features/cliProfiles";
-import { ask } from "../../ipc/dialog";
+import { confirmDialog } from "../../lib";
 import { saveLayout } from "../../workspace/layoutSerde";
 import { useProjects } from "../../stores/projects";
 import {
@@ -44,7 +44,7 @@ interface HooksConfigPanelProps {
   params?: { panelId?: string; selectedCli?: string };
 }
 
-/** ask 弹窗关闭后守卫窗口（ms）——期间内的回归触发的重读被抑制（防循环，照 useHooksConfig 同常量） */
+/** confirmDialog 弹窗关闭后守卫窗口（ms）——期间内的回归触发的重读被抑制（防循环，照 useHooksConfig 同常量） */
 const ASK_GUARD_MS = 500;
 
 /** 面板根容器样式 */
@@ -142,7 +142,7 @@ const HooksConfigPanel: React.FC<HooksConfigPanelProps> = ({
   // 当前编辑器 dirty（编辑器组件 onDirtyChange 上报，MC-505 守卫数据源）
   const dirtyRef = useRef(false);
   // 切换确认弹窗守卫：弹窗打开期间 + 关闭后短暂窗口内抑制编辑器 visibilitychange 回归
-  // 触发重读——弹窗开/关伴随回归触发，无守卫将再弹编辑器自己的 ask（循环复用，
+  // 触发重读——弹窗开/关伴随回归触发，无守卫将再弹编辑器自己的确认弹窗（循环复用，
   // 照 useHooksConfig askGuard 先例，MC-505）
   const askGuardRef = useRef(false);
 
@@ -169,20 +169,21 @@ const HooksConfigPanel: React.FC<HooksConfigPanelProps> = ({
     [params?.panelId],
   );
 
-  /** 切换 CLI（MC-505）：dirty 时 ask 确认丢弃；确认后切换 = 卸载当前编辑器并重挂载目标
+  /** 切换 CLI（MC-505）：dirty 时 confirmDialog 确认丢弃；确认后切换 = 卸载当前编辑器并重挂载目标
       编辑器（key={cliId} 强制重建，ADR-0001——dirty/选中态丢弃）+ 持久化选中态 */
   const handleCliSelect = useCallback(
     (cliId: string) => {
       if (cliId === selectedCliRef.current) return;
       void (async () => {
-        // dirty 守卫：有未保存修改时 ask 确认；ask 打开前置 askGuardRef
+        // dirty 守卫：有未保存修改时 confirmDialog 确认；弹窗打开前置 askGuardRef
         // （弹窗开/关伴随 visibilitychange 回归触发，无守卫将再弹窗——防循环复用）
         if (dirtyRef.current) {
           askGuardRef.current = true;
           let ok: boolean;
           try {
-            ok = await ask("当前 CLI 有未保存的修改，切换将丢弃这些修改。", {
+            ok = await confirmDialog({
               title: "未保存的修改",
+              message: "当前 CLI 有未保存的修改，切换将丢弃这些修改。",
               kind: "warning",
             });
           } finally {

@@ -10,7 +10,7 @@
 // 与 commitContextMenu 的差异：本策略不直接做 IPC——三项操作的 action 由调用方
 // （HistorySessionList）经 opts 回调注入（onCopy/onFork/onDelete），
 // 策略层只负责禁用态判定与菜单项构造。调用方回调内的流程（写剪贴板 / fork 恢复 /
-// ask 确认后删除 + removeLocal）见 HistorySessionList.tsx 与 README 4.4 操作矩阵。
+// confirmDialog 确认后删除 + removeLocal）见 HistorySessionList.tsx 与 README 4.4 操作矩阵。
 //
 // 操作矩阵（README 4.4，重命名功能已整体移除——问题 7 修复）：
 //   复制恢复命令 —— 全行可用（含孤儿/运行中）
@@ -24,11 +24,13 @@
 import type { AgentHistorySession } from "../../types/agentHistory";
 import { cliProfileRegistry } from "../cliProfiles";
 
-/** 菜单项（契约：label + disabled? + action） */
+/** 菜单项（契约：label + disabled? + danger? + action） */
 export interface HistoryMenuItem {
   label: string;
   /** true 时灰显不可点（无点击回调） */
   disabled?: boolean;
+  /** 危险项（删除类）——菜单渲染 ERROR_FG 着色（UI-802，项定义非视觉） */
+  danger?: boolean;
   action(): void;
 }
 
@@ -44,7 +46,7 @@ export interface HistoryContextMenuOpts {
   onCopy(): void;
   /** 分支恢复（fork 编排） */
   onFork(): void;
-  /** 删除（ask 确认 → IPC → 局部刷新） */
+  /** 删除（confirmDialog 确认 → IPC → 局部刷新） */
   onDelete(): void;
 }
 
@@ -88,6 +90,11 @@ export function getHistoryContextMenuItems(
       action: opts.onFork,
     });
   }
-  items.push({ label: "删除", disabled: opts.active, action: opts.onDelete });
+  items.push({
+    label: "删除",
+    disabled: opts.active,
+    danger: true, // 不可撤销操作——危险项着色（UI-802）
+    action: opts.onDelete,
+  });
   return items;
 }

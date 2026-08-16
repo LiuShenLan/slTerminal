@@ -1,4 +1,6 @@
 export { ErrorBoundary } from "./ErrorBoundary";
+export { confirmDialog, ConfirmDialogHost, _resetConfirmDialog, type ConfirmDialogOptions } from "./ConfirmDialog";
+export { toast, ToastHost, type ToastType } from "./toast";
 export { normalizePath, basename, isChildOf, relativePath } from "./path";
 export { createActivePointer } from "./activePointer";
 export { useFontSizeWheel } from "./useFontSizeWheel";

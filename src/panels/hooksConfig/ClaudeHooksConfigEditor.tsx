@@ -196,15 +196,15 @@ const ClaudeHooksConfigEditor: React.FC<ClaudeHooksConfigEditorProps> = ({
   /** 面板根容器 ref——visibilitychange 重读的可见性判断（面板不可见时不重读） */
   const containerRef = useRef<HTMLDivElement>(null);
 
-  /** visibilitychange 轻量重读——外部修改检测，dirty 时 ask 确认（useHooksConfig 内部处理）。
+  /** visibilitychange 轻量重读——外部修改检测，dirty 时 confirmDialog 确认（useHooksConfig 内部处理）。
       仅页面重新可见时（document.visibilityState === "visible"，如最小化恢复 / Alt+Tab
       切回）重读；窗口移动/缩放边框全程可见，不触发 visibilitychange——不误弹
       （window focus 方案下拖动窗口标题框致 WebView2 焦点暂失再回归会误触发）。
       页面内焦点转移（select 下拉/元素点击）也不触发 visibilitychange。
-      原生 ask 弹窗打开/关闭的回归触发由 useHooksConfig 的 askGuard 抑制（防循环）。
+      确认弹窗打开/关闭的回归触发由 useHooksConfig 的 askGuard 抑制（防循环）。
       面板不可见（Dockview 页面 display:none 显隐，或 loading/error 态无容器）时跳过。
       hub 切换确认弹窗守卫（MC-505）：hub 的 askGuardRef 置位期间（弹窗打开 + 关闭后
-      短暂窗口）回归触发的重读跳过——防 hub 弹窗关闭后编辑器再次弹 ask（循环复用） */
+      短暂窗口）回归触发的重读跳过——防 hub 弹窗关闭后编辑器再次弹确认框（循环复用） */
   const handleVisibilityChange = useCallback(() => {
     if (askGuardRef?.current) return;
     if (document.visibilityState !== "visible") return;
@@ -246,8 +246,8 @@ const ClaudeHooksConfigEditor: React.FC<ClaudeHooksConfigEditorProps> = ({
   }, [refreshInjectionStatus]);
 
   /** 注入/卸载完成后自动重读 user 层配置（操作改写 ~/.claude/settings.json，C13-8）：
-      当前层为 user → reload；非 user → 切到 user 层（dirty 守卫由 useHooksConfig 内部 ask 处理，
-      用户拒绝丢弃则不覆盖——与既有切层/重载语义一致） */
+      当前层为 user → reload；非 user → 切到 user 层（dirty 守卫由 useHooksConfig 内部
+      confirmDialog 处理，用户拒绝丢弃则不覆盖——与既有切层/重载语义一致） */
   const reloadUserConfig = useCallback(() => {
     if (layer === "user") {
       void reload();

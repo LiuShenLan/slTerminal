@@ -1,9 +1,9 @@
 // commit-context-menu-ui.test.tsx — CommitFileList 右键菜单 UI L2 测试
 //
 // 覆盖：右键菜单打开/无菜单项不弹/外点关闭/项点击执行 action、
-// 菜单项 hover 高亮背景切换、renamed oldPath 回退传递。
+// 菜单项 hover 高亮背景切换、危险项 ERROR_FG 着色、renamed oldPath 回退传递。
 // 拆分自原 commit-view.test.tsx（SVC-14）。
-// 菜单策略逻辑（ask → IPC → refresh）→ commit-context-menu.test.ts（纯逻辑层）。
+// 菜单策略逻辑（confirmDialog → IPC → refresh）→ commit-context-menu.test.ts（纯逻辑层）。
 // openCommitFile 分派逻辑 → commit-open-file.test.ts。
 
 import { describe, it, expect, afterEach, vi, beforeEach } from "vitest";
@@ -243,12 +243,63 @@ describe("CommitFileList 右键菜单", () => {
     const menuItem = document.querySelector(
       'div[style*="position: fixed"] div',
     ) as HTMLDivElement;
-    // hover → ACTIVE_SELECTION_BG（rgba(110,159,242,0.13)，jsdom 转 rgb 形态）
+    // hover → SIDEBAR_COLORS.hover（#222227，UI-802；jsdom 转 rgb 形态）
     fireEvent.mouseEnter(menuItem);
-    expect(menuItem.style.background).toContain("rgba(110, 159, 242, 0.13)");
+    expect(menuItem.style.background).toBe("rgb(34, 34, 39)");
     // 移出 → 恢复透明
     fireEvent.mouseLeave(menuItem);
     expect(menuItem.style.background).toBe("transparent");
+  });
+
+  it("菜单项 28px 高 + 圆角 5（UI-802 项规格）", async () => {
+    seedProject("C:/repo");
+    mockGetContextMenuItems.mockReturnValue([
+      { label: "回滚", action: vi.fn() },
+    ]);
+    const { container } = await renderReady([
+      makeEntry("C:/repo/a.ts", "modified"),
+    ]);
+
+    const item = container.querySelector('[data-e2e="commit-file-item"]')!;
+    fireEvent.contextMenu(item, { clientX: 100, clientY: 200 });
+
+    const menuItem = document.querySelector(
+      'div[style*="position: fixed"] div',
+    ) as HTMLDivElement;
+    expect(menuItem.style.height).toBe("28px");
+    expect(menuItem.style.borderRadius).toBe("5px");
+  });
+
+  it("危险项 ERROR_FG 着色、普通项 SIDEBAR_FG（UI-802）", async () => {
+    seedProject("C:/repo");
+    mockGetContextMenuItems.mockReturnValue([
+      { label: "回滚", danger: true, action: vi.fn() },
+    ]);
+    const { container } = await renderReady([
+      makeEntry("C:/repo/a.ts", "modified"),
+    ]);
+
+    const item = container.querySelector('[data-e2e="commit-file-item"]')!;
+    fireEvent.contextMenu(item, { clientX: 100, clientY: 200 });
+
+    const menuItem = document.querySelector(
+      'div[style*="position: fixed"] div',
+    ) as HTMLDivElement;
+    // 危险项 → ERROR_FG（#d9706b，UI-802；jsdom 转 rgb 形态）
+    expect(menuItem.style.color).toBe("rgb(217, 112, 107)");
+
+    // 普通项 → SIDEBAR_FG（#ece9e4）
+    fireEvent.contextMenu(item, { clientX: 100, clientY: 200 });
+    mockGetContextMenuItems.mockReturnValue([
+      { label: "普通项", action: vi.fn() },
+    ]);
+    // 重新打开菜单（state 更新后再查当前菜单项）
+    fireEvent.mouseDown(document.body);
+    fireEvent.contextMenu(item, { clientX: 100, clientY: 200 });
+    const normalItem = Array.from(
+      document.querySelectorAll('div[style*="position: fixed"] div'),
+    ).find((el) => el.textContent === "普通项") as HTMLDivElement;
+    expect(normalItem.style.color).toBe("rgb(236, 233, 228)");
   });
 
   it("CommitFileList 独立渲染时 onRefresh 可用", () => {

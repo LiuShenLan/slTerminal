@@ -1,20 +1,47 @@
 // explorer-delete.test.tsx — 文件浏览器右键删除确认自动化测试
 //
 // 覆盖：
-//   E1 组：FileTree 文件/文件夹删除 — ask 调用与 onDelete 回调
-//   E2 组：ask 参数验证 — 消息/title/kind
+//   E1 组：FileTree 文件/文件夹删除 — confirmDialog 调用与 onDelete 回调
+//   E2 组：confirmDialog 参数验证 — 消息/title/kind/danger
 //   E3 组：ExplorerPanel 集成 — deleteEntry → refresh 链路
 //   E4 组：边界条件 — 右键菜单包含"删除"项
 //   E5 组：操作失败 UI 通知 — 失败 → 内联错误横幅 + 横幅 dismiss/自动消失/卸载清理（EXP-04）
 //   E6 组：键盘 Del 删除 — ShortcutRegistry 路径（编号 17-22 与全文连续，EXP-11）
+//   E7 组：右键菜单视觉规格（UI-802）— 项 28px/圆角 5/hover token/危险项 ERROR_FG
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import React from "react";
 import { render, fireEvent, waitFor, cleanup, act } from "@testing-library/react";
+import {
+  SIDEBAR_BG,
+  SIDEBAR_FG,
+  SECONDARY_BG,
+  ERROR_FG,
+  CONTEXT_MENU_BORDER,
+  SIDEBAR_COLORS,
+} from "../theme";
+
+// ── 测试辅助 ──
+
+/** 色值 → jsdom 归一化形态（#hex → "rgb(r, g, b)"） */
+function hexToRgb(hex: string): string {
+  if (hex.startsWith("#")) {
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    return `rgb(${r}, ${g}, ${b})`;
+  }
+  return hex;
+}
+
+/** rgba 输入 jsdom 可能在逗号后补空格——比对前去空白 */
+function normColor(c: string): string {
+  return c.replace(/\s/g, "");
+}
 
 // ─── Hoisted mocks ───
 const mocks = vi.hoisted(() => {
-  const mockAsk = vi.fn();
+  const mockConfirmDialog = vi.fn();
   const mockDeleteEntry = vi.fn();
   const mockReadDir = vi.fn();
   const mockGitStatus = vi.fn();
@@ -24,7 +51,7 @@ const mocks = vi.hoisted(() => {
   const mockWriteFile = vi.fn();
 
   return {
-    mockAsk,
+    mockConfirmDialog,
     mockDeleteEntry,
     mockReadDir,
     mockGitStatus,
@@ -33,7 +60,7 @@ const mocks = vi.hoisted(() => {
     mockRename,
     mockWriteFile,
     resetAll() {
-      mockAsk.mockClear();
+      mockConfirmDialog.mockClear();
       mockDeleteEntry.mockClear();
       mockReadDir.mockClear();
       mockGitStatus.mockClear();
@@ -45,11 +72,9 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-// Mock @tauri-apps/plugin-dialog（FileTree 通过 ../../ipc/dialog 的 ask 间接引用）
-vi.mock("@tauri-apps/plugin-dialog", () => ({
-  ask: mocks.mockAsk,
-  save: vi.fn(),
-  open: vi.fn(),
+// Mock ConfirmDialog（FileTree/ExplorerPanel 经 ../../lib/ConfirmDialog 的 confirmDialog 引用，OV-02）
+vi.mock("../lib/ConfirmDialog", () => ({
+  confirmDialog: mocks.mockConfirmDialog,
 }));
 
 // Mock ipc/fs
@@ -159,7 +184,7 @@ function seedProject(rootPath: string = "C:/test-project") {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.resetAll();
-  mocks.mockAsk.mockResolvedValue(false); // 默认取消
+  mocks.mockConfirmDialog.mockResolvedValue(false); // 默认取消
   mocks.mockReadDir.mockResolvedValue([]);
   mocks.mockGitStatus.mockResolvedValue([]);
   mocks.mockStartWatch.mockResolvedValue(undefined);
@@ -177,9 +202,9 @@ beforeEach(() => {
 // E1 组：FileTree 文件/文件夹删除 — ask 调用与 onDelete 回调
 // =====================================================================
 
-describe("FileTree 删除确认 — ask 弹窗分支", () => {
+describe("FileTree 删除确认 — confirmDialog 弹窗分支", () => {
   it("1. 文件删除 + 用户确认 → onDelete 调用传入路径", async () => {
-    mocks.mockAsk.mockResolvedValue(true);
+    mocks.mockConfirmDialog.mockResolvedValue(true);
     const onDelete = vi.fn();
     const fileNode = makeFileNode("test.ts", "C:/project/test.ts");
 
@@ -199,7 +224,7 @@ describe("FileTree 删除确认 — ask 弹窗分支", () => {
   });
 
   it("2. 文件删除 + 用户取消 → onDelete 不调用", async () => {
-    mocks.mockAsk.mockResolvedValue(false);
+    mocks.mockConfirmDialog.mockResolvedValue(false);
     const onDelete = vi.fn();
     const fileNode = makeFileNode("app.rs", "C:/project/app.rs");
 
@@ -215,7 +240,7 @@ describe("FileTree 删除确认 — ask 弹窗分支", () => {
   });
 
   it("3. 文件夹删除 + 用户确认 → onDelete 调用", async () => {
-    mocks.mockAsk.mockResolvedValue(true);
+    mocks.mockConfirmDialog.mockResolvedValue(true);
     const onDelete = vi.fn();
     const dirNode = makeDirNode("src", "C:/project/src");
 
@@ -231,7 +256,7 @@ describe("FileTree 删除确认 — ask 弹窗分支", () => {
   });
 
   it("4. 文件夹删除 + 用户取消 → onDelete 不调用", async () => {
-    mocks.mockAsk.mockResolvedValue(false);
+    mocks.mockConfirmDialog.mockResolvedValue(false);
     const onDelete = vi.fn();
     const dirNode = makeDirNode("lib", "C:/project/lib");
 
@@ -247,11 +272,11 @@ describe("FileTree 删除确认 — ask 弹窗分支", () => {
 });
 
 // =====================================================================
-// E2 组：ask 参数验证
+// E2 组：confirmDialog 参数验证
 // =====================================================================
 
-describe("FileTree 删除确认 — ask 参数", () => {
-  it("5. 文件删除 ask 参数：消息含文件名+不可撤销，title/k kind 正确", () => {
+describe("FileTree 删除确认 — confirmDialog 参数", () => {
+  it("5. 文件删除 confirmDialog 参数：消息含文件名+不可撤销，title/kind/danger 正确", () => {
     const onDelete = vi.fn();
     const fileNode = makeFileNode("main.tsx", "C:/project/main.tsx");
 
@@ -260,15 +285,18 @@ describe("FileTree 删除确认 — ask 参数", () => {
     fireEvent.contextMenu(getAllByText("main.tsx")[0]);
     fireEvent.click(getAllByText("删除")[0]);
 
-    expect(mocks.mockAsk).toHaveBeenCalledTimes(1);
-    const [message, opts] = mocks.mockAsk.mock.calls[0];
+    expect(mocks.mockConfirmDialog).toHaveBeenCalledTimes(1);
+    const [opts] = mocks.mockConfirmDialog.mock.calls[0];
 
-    expect(message).toContain("main.tsx");
-    expect(message).toContain("不可撤销");
-    expect(opts).toEqual({ title: "确认删除", kind: "warning" });
+    expect(opts).toEqual({
+      title: "确认删除",
+      message: `确定删除 "main.tsx"？此操作不可撤销。`,
+      kind: "warning",
+      danger: true,
+    });
   });
 
-  it("6. 文件夹删除 ask 参数：消息含文件夹名+不可撤销，title/k kind 正确", () => {
+  it("6. 文件夹删除 confirmDialog 参数：消息含文件夹名+不可撤销，title/kind/danger 正确", () => {
     const onDelete = vi.fn();
     const dirNode = makeDirNode("components", "C:/project/components");
 
@@ -277,12 +305,15 @@ describe("FileTree 删除确认 — ask 参数", () => {
     fireEvent.contextMenu(getAllByText("components")[0]);
     fireEvent.click(getAllByText("删除")[0]);
 
-    expect(mocks.mockAsk).toHaveBeenCalledTimes(1);
-    const [message, opts] = mocks.mockAsk.mock.calls[0];
+    expect(mocks.mockConfirmDialog).toHaveBeenCalledTimes(1);
+    const [opts] = mocks.mockConfirmDialog.mock.calls[0];
 
-    expect(message).toContain("components");
-    expect(message).toContain("不可撤销");
-    expect(opts).toEqual({ title: "确认删除", kind: "warning" });
+    expect(opts).toEqual({
+      title: "确认删除",
+      message: `确定删除文件夹 "components"？此操作不可撤销。`,
+      kind: "warning",
+      danger: true,
+    });
   });
 });
 
@@ -292,7 +323,7 @@ describe("FileTree 删除确认 — ask 参数", () => {
 
 describe("ExplorerPanel 删除集成", () => {
   it("7. 删除成功 → deleteEntry 调用并触发 refresh", async () => {
-    mocks.mockAsk.mockResolvedValue(true);
+    mocks.mockConfirmDialog.mockResolvedValue(true);
     mocks.mockDeleteEntry.mockResolvedValue(undefined);
     // readDir 返回一个文件节点，供 FileTree 渲染
     mocks.mockReadDir.mockResolvedValue([
@@ -323,7 +354,7 @@ describe("ExplorerPanel 删除集成", () => {
   });
 
   it("8. 删除失败 → UI 错误横幅显示", async () => {
-    mocks.mockAsk.mockResolvedValue(true);
+    mocks.mockConfirmDialog.mockResolvedValue(true);
     mocks.mockDeleteEntry.mockRejectedValue(new Error("权限不足"));
 
     mocks.mockReadDir.mockResolvedValue([
@@ -376,6 +407,59 @@ describe("FileTree 右键菜单结构", () => {
 });
 
 // =====================================================================
+// E7 组：右键菜单视觉规格（UI-802）— 项 28px/圆角 5/hover token/危险项 ERROR_FG
+// =====================================================================
+
+describe("FileTree 右键菜单视觉规格（UI-802）", () => {
+  it("23. 菜单容器：SIDEBAR_BG 底 + CONTEXT_MENU_BORDER 描边 + 圆角 5 + contextMenuShadow 阴影", () => {
+    const fileNode = makeFileNode("index.ts", "C:/project/index.ts");
+
+    const { getAllByText } = renderFileTree([fileNode]);
+    fireEvent.contextMenu(getAllByText("index.ts")[0]);
+
+    const menu = document.querySelector('[style*="position: fixed"]') as HTMLElement;
+    expect(menu).toBeTruthy();
+    expect(menu.style.borderRadius).toBe("5px");
+    expect(menu.style.background).toBe(hexToRgb(SIDEBAR_BG));
+    expect(normColor(menu.style.border)).toBe(
+      normColor(`1px solid ${CONTEXT_MENU_BORDER}`),
+    );
+    expect(normColor(menu.style.boxShadow)).toBe(
+      normColor(SIDEBAR_COLORS.contextMenuShadow),
+    );
+  });
+
+  it("24. 菜单项：28px 高 + 圆角 5 + hover 变 SECONDARY_BG（#222227）", () => {
+    const fileNode = makeFileNode("index.ts", "C:/project/index.ts");
+
+    const { getAllByText } = renderFileTree([fileNode]);
+    fireEvent.contextMenu(getAllByText("index.ts")[0]);
+
+    const item = getAllByText("打开")[0] as HTMLElement;
+    expect(item.style.height).toBe("28px");
+    expect(item.style.borderRadius).toBe("5px");
+    expect(item.style.color).toBe(hexToRgb(SIDEBAR_FG));
+
+    fireEvent.mouseEnter(item);
+    expect(item.style.background).toBe(hexToRgb(SECONDARY_BG));
+    fireEvent.mouseLeave(item);
+    expect(item.style.background).toBe("transparent");
+  });
+
+  it("25. 危险项「删除」ERROR_FG 着色、普通项 SIDEBAR_FG（UI-802）", () => {
+    const fileNode = makeFileNode("index.ts", "C:/project/index.ts");
+
+    const { getAllByText } = renderFileTree([fileNode]);
+    fireEvent.contextMenu(getAllByText("index.ts")[0]);
+
+    const deleteItem = getAllByText("删除")[0] as HTMLElement;
+    expect(deleteItem.style.color).toBe(hexToRgb(ERROR_FG));
+    const openItem = getAllByText("打开")[0] as HTMLElement;
+    expect(openItem.style.color).toBe(hexToRgb(SIDEBAR_FG));
+  });
+});
+
+// =====================================================================
 // E5 组：操作失败 UI 通知 — 删除/重命名/新建文件/新建文件夹失败 → 内联错误横幅
 // =====================================================================
 
@@ -417,7 +501,7 @@ describe("ExplorerPanel 操作失败 UI 通知", () => {
     mocks.mockReadDir.mockResolvedValue([
       { name: "src", path: "C:/test-project/src", isDir: true, size: undefined, modified: undefined },
     ]);
-    mocks.mockAsk.mockResolvedValue(false);
+    mocks.mockConfirmDialog.mockResolvedValue(false);
 
     seedProject();
 
@@ -450,7 +534,7 @@ describe("ExplorerPanel 操作失败 UI 通知", () => {
     mocks.mockReadDir.mockResolvedValue([
       { name: "lib", path: "C:/test-project/lib", isDir: true, size: undefined, modified: undefined },
     ]);
-    mocks.mockAsk.mockResolvedValue(false);
+    mocks.mockConfirmDialog.mockResolvedValue(false);
 
     seedProject();
 
@@ -479,7 +563,7 @@ describe("ExplorerPanel 操作失败 UI 通知", () => {
   });
 
   it("14. 错误横幅 × 按钮点击 → 横幅立即消失", async () => {
-    mocks.mockAsk.mockResolvedValue(true);
+    mocks.mockConfirmDialog.mockResolvedValue(true);
     mocks.mockDeleteEntry.mockRejectedValue(new Error("权限不足"));
     mocks.mockReadDir.mockResolvedValue([
       { name: "readonly.txt", path: "C:/test-project/readonly.txt", isDir: false, size: 32, modified: 1 },
@@ -511,7 +595,7 @@ describe("ExplorerPanel 操作失败 UI 通知", () => {
   it("15. 错误横幅 5 秒后自动消失（fake timers）", async () => {
     vi.useFakeTimers();
     try {
-      mocks.mockAsk.mockResolvedValue(true);
+      mocks.mockConfirmDialog.mockResolvedValue(true);
       mocks.mockDeleteEntry.mockRejectedValue(new Error("权限不足"));
       mocks.mockReadDir.mockResolvedValue([
         { name: "readonly.txt", path: "C:/test-project/readonly.txt", isDir: false, size: 32, modified: 1 },
@@ -554,7 +638,7 @@ describe("ExplorerPanel 操作失败 UI 通知", () => {
   it("16. 错误横幅卸载 → 自动消失定时器被清理（无残留 timer）", async () => {
     vi.useFakeTimers();
     try {
-      mocks.mockAsk.mockResolvedValue(true);
+      mocks.mockConfirmDialog.mockResolvedValue(true);
       mocks.mockDeleteEntry.mockRejectedValue(new Error("权限不足"));
       mocks.mockReadDir.mockResolvedValue([
         { name: "readonly.txt", path: "C:/test-project/readonly.txt", isDir: false, size: 32, modified: 1 },

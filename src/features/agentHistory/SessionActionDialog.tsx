@@ -11,8 +11,10 @@ import React, { useEffect } from "react";
 import {
   SIDEBAR_BG,
   SIDEBAR_FG,
-  BUTTON_FG,
   DIM_FG,
+  FOCUS_BORDER,
+  ON_ACCENT_FG,
+  SECONDARY_BG,
   CONTEXT_MENU_BORDER,
   SIDEBAR_COLORS,
   SHADOW_MENU,
@@ -102,7 +104,8 @@ export const SessionActionDialog: React.FC<SessionActionDialogProps> = ({
           </div>
         )}
 
-        {/* 动作按钮（竖排） */}
+        {/* 动作按钮（竖排，UI-801 按钮规格：动作 = 主按钮 FOCUS_BORDER 底 + ON_ACCENT_FG 字，
+            取消 = 次按钮 SECONDARY_BG 底 + SIDEBAR_FG 字，照 ConfirmDialog 规格） */}
         <div
           style={{ display: "flex", flexDirection: "column", gap: "6px" }}
         >
@@ -113,12 +116,13 @@ export const SessionActionDialog: React.FC<SessionActionDialogProps> = ({
               onClick={a.action}
               style={{
                 padding: "6px 12px",
-                background: "transparent",
-                color: BUTTON_FG,
-                border: `1px solid ${CONTEXT_MENU_BORDER}`,
+                background: FOCUS_BORDER,
+                color: ON_ACCENT_FG,
+                border: "none",
                 borderRadius: 4,
                 cursor: "pointer",
                 fontSize: "13px",
+                fontWeight: 500,
                 textAlign: "center",
               }}
             >
@@ -127,16 +131,16 @@ export const SessionActionDialog: React.FC<SessionActionDialogProps> = ({
           ))}
         </div>
 
-        {/* 取消按钮 */}
+        {/* 取消按钮（次按钮规格） */}
         <div style={{ display: "flex", justifyContent: "flex-end" }}>
           <button
             type="button"
             onClick={onCancel}
             style={{
-              padding: "4px 12px",
-              background: "transparent",
-              color: BUTTON_FG,
-              border: "none",
+              padding: "5px 14px",
+              background: SECONDARY_BG,
+              color: SIDEBAR_FG,
+              border: `1px solid ${CONTEXT_MENU_BORDER}`,
               borderRadius: 4,
               cursor: "pointer",
               fontSize: "13px",

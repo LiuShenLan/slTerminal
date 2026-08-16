@@ -259,15 +259,16 @@ describe("createGetContextMenu", () => {
 
   it("C5: 终端右键菜单完整结构（含重命名项）", () => {
     const { items } = callMenu("p1", "group-alpha");
-    // 终端结构：[新建终端, separator, 重命名, separator, close, closeOthers, closeAll]
+    // 终端结构：[新建终端, separator, 重命名, separator, 关闭, 关闭其他, 关闭全部]
+    //（OV-04：库内建 close 字符串改自定义项——关闭类 = danger 危险项，UI-802）
     expect(items).toHaveLength(7);
     expect((items[0] as any).label).toBe("新建终端");
     expect(items[1]).toBe("separator");
     expect((items[2] as any).label).toBe("重命名");
     expect(items[3]).toBe("separator");
-    expect(items[4]).toBe("close");
-    expect(items[5]).toBe("closeOthers");
-    expect(items[6]).toBe("closeAll");
+    expect((items[4] as any).componentProps).toMatchObject({ label: "关闭", danger: true });
+    expect((items[5] as any).componentProps).toMatchObject({ label: "关闭其他", danger: true });
+    expect((items[6] as any).componentProps).toMatchObject({ label: "关闭全部", danger: true });
   });
 
   it("C6: 非终端面板菜单无重命名项（结构保持 5 项）", () => {
@@ -276,9 +277,9 @@ describe("createGetContextMenu", () => {
     });
     expect(renameItem).toBeUndefined();
     expect(items).toHaveLength(5);
-    expect(items[2]).toBe("close");
-    expect(items[3]).toBe("closeOthers");
-    expect(items[4]).toBe("closeAll");
+    expect((items[2] as any).componentProps).toMatchObject({ label: "关闭", danger: true });
+    expect((items[3] as any).componentProps).toMatchObject({ label: "关闭其他", danger: true });
+    expect((items[4] as any).componentProps).toMatchObject({ label: "关闭全部", danger: true });
   });
 
   it("C7: 重命名项 action 调 onRenameRequest(panel)", () => {

@@ -10,7 +10,7 @@ import { render, fireEvent, waitFor, cleanup } from "@testing-library/react";
 
 // ─── Hoisted mocks ───
 const mocks = vi.hoisted(() => {
-  const mockAsk = vi.fn();
+  const mockConfirmDialog = vi.fn();
   const mockDeleteEntry = vi.fn();
   const mockReadDir = vi.fn();
   const mockGitStatus = vi.fn();
@@ -20,7 +20,7 @@ const mocks = vi.hoisted(() => {
   const mockWriteFile = vi.fn();
 
   return {
-    mockAsk,
+    mockConfirmDialog,
     mockDeleteEntry,
     mockReadDir,
     mockGitStatus,
@@ -29,7 +29,7 @@ const mocks = vi.hoisted(() => {
     mockRename,
     mockWriteFile,
     resetAll() {
-      mockAsk.mockReset();
+      mockConfirmDialog.mockReset();
       mockDeleteEntry.mockReset();
       mockReadDir.mockReset();
       mockGitStatus.mockReset();
@@ -48,10 +48,8 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("@tauri-apps/plugin-dialog", () => ({
-  ask: mocks.mockAsk,
-  save: vi.fn(),
-  open: vi.fn(),
+vi.mock("../lib/ConfirmDialog", () => ({
+  confirmDialog: mocks.mockConfirmDialog,
 }));
 
 vi.mock("../ipc/fs", () => ({
@@ -114,7 +112,7 @@ function rowBackground(fileName: string): string {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.resetAll();
-  mocks.mockAsk.mockResolvedValue(false);
+  mocks.mockConfirmDialog.mockResolvedValue(false);
   cleanup();
   useProjects.setState({ projects: {}, expandedNodes: {} });
   useLayout.setState({ activePageId: null });
@@ -131,7 +129,7 @@ beforeEach(() => {
 
 describe("ExplorerPanel 删除成功路径", () => {
   it("C1: 删除成功 → deleteEntry 调用 + refresh（readDir 二次）+ 选中态清空", async () => {
-    mocks.mockAsk.mockResolvedValue(true);
+    mocks.mockConfirmDialog.mockResolvedValue(true);
     const fileEntry = { name: "config.json", path: "C:/test-project/config.json", isDir: false, size: 64, modified: 1 };
     mocks.mockReadDir.mockResolvedValue([fileEntry]);
 

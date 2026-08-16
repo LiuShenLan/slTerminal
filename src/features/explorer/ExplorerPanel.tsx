@@ -27,7 +27,8 @@ import { fileViewerRegistry } from "../fileViewers";
 import { usePanelFocus } from "../shortcuts/usePanelFocus";
 import { setActiveExplorer, clearActiveExplorer } from "./activeExplorer";
 import { basename } from "../../lib/path";
-import { ask } from "../../ipc/dialog";
+import { confirmDialog } from "../../lib/ConfirmDialog";
+import { IconClose } from "../../lib/icons";
 
 /** 操作失败错误提示自动消失时间（ms） */
 const ERROR_AUTO_DISMISS_MS = 5000;
@@ -106,9 +107,11 @@ export const ExplorerPanel: React.FC = () => {
     const path = selectedPathRef.current;
     if (!path) return;
     const name = basename(path);
-    const ok = await ask(`确定删除 "${name}"？此操作不可撤销。`, {
+    const ok = await confirmDialog({
       title: "确认删除",
+      message: `确定删除 "${name}"？此操作不可撤销。`,
       kind: "warning",
+      danger: true,
     });
     if (!ok) return;
     try {
@@ -423,13 +426,14 @@ export const ExplorerPanel: React.FC = () => {
               border: "none",
               color: ERROR_BANNER_FG,
               cursor: "pointer",
-              fontSize: 14,
+              display: "flex",
+              alignItems: "center",
               padding: "0 4px",
               lineHeight: 1,
             }}
             aria-label="关闭错误提示"
           >
-            ×
+            <IconClose size={14} />
           </button>
         </div>
       )}

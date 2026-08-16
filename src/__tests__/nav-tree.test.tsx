@@ -31,7 +31,6 @@ const {
   mockSwitchToPageAndFocus,
   mockScanHistory,
   mockWriteText,
-  mockAsk,
   mockSendToast,
   mockTerminalGetAll,
   mockRestoreHistorySession,
@@ -40,7 +39,6 @@ const {
   mockSwitchToPageAndFocus: vi.fn(),
   mockScanHistory: vi.fn(),
   mockWriteText: vi.fn(() => Promise.resolve()),
-  mockAsk: vi.fn(() => Promise.resolve(true)),
   mockSendToast: vi.fn(),
   mockTerminalGetAll: vi.fn(() => new Map()),
   mockRestoreHistorySession: vi.fn(() => Promise.resolve()),
@@ -74,7 +72,8 @@ vi.mock("../panels/terminal/TerminalRegistry", () => ({
   },
 }));
 
-// 历史行右键「复制恢复命令」→ writeText；删除 → ask + deleteHistorySession；
+// 历史行右键「复制恢复命令」→ writeText；删除 → confirmDialog + deleteHistorySession
+// （OV-02：NavTree 不再引用 ipc/dialog ask，确认弹窗改经 src/lib barrel 的 confirmDialog）；
 // SessionActionDialog「切换到该会话」反查失败 → sendToastNotification
 vi.mock("../ipc/clipboard", () => ({
   writeText: mockWriteText,
@@ -82,7 +81,6 @@ vi.mock("../ipc/clipboard", () => ({
 }));
 vi.mock("../ipc/dialog", () => ({
   open: vi.fn(),
-  ask: mockAsk,
 }));
 vi.mock("../ipc/notification", () => ({
   sendToastNotification: mockSendToast,
@@ -230,8 +228,6 @@ function resetAll(): void {
   mockScanHistory.mockReset();
   mockScanHistory.mockResolvedValue([]);
   mockWriteText.mockReset();
-  mockAsk.mockReset();
-  mockAsk.mockResolvedValue(true);
   mockSendToast.mockReset();
   mockTerminalGetAll.mockReset();
   mockTerminalGetAll.mockReturnValue(new Map());
