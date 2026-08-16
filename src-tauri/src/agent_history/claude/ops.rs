@@ -13,8 +13,9 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::agent_history::claude::jsonl;
 use crate::agent_history::claude::scan::resolve_projects_root;
-use crate::agent_history::is_uuid_filename;
+use crate::agent_history::{is_uuid_filename, AgentHistoryTitle};
 
 /// SEC-05 sessionId 严格校验
 ///
@@ -84,6 +85,38 @@ pub(crate) fn delete_session(session_id: &str) -> Result<(), crate::AppError> {
         }
     }
     Ok(())
+}
+
+/// 读取单会话标题（运行中会话页签/会话行显示名通道，人工验证问题 3）
+///
+/// SEC-05 校验 → 定位 → `parse_head` + `parse_tail_title` → `resolve_title`
+/// ——回退链与 `scan.rs` 的 `parse_session_file` **完全同源**（custom-title >
+/// ai-title > summary > firstPrompt），运行中页签/会话行标题与历史 session
+/// 标题一致。
+/// **文件未定位 → `Ok(title: None, source: "none")`**：运行中会话的 jsonl 可能
+/// 尚未创建（SessionStart 早于落盘）或已被删除——读是幂等查询，属正常条件，
+/// 与 delete 的「会话不存在 → Err」语义区分（删是有副作用操作）。
+pub(crate) fn read_session_title(session_id: &str) -> Result<AgentHistoryTitle, crate::AppError> {
+    validate_session_id(session_id)?;
+    let Some(root) = resolve_projects_root() else {
+        return Ok(AgentHistoryTitle {
+            title: None,
+            title_source: "none".to_string(),
+        });
+    };
+    let Some(jsonl_path) = locate_session_jsonl(&root, session_id) else {
+        return Ok(AgentHistoryTitle {
+            title: None,
+            title_source: "none".to_string(),
+        });
+    };
+    let head = jsonl::parse_head(&jsonl_path);
+    let tail = jsonl::parse_tail_title(&jsonl_path);
+    let (title, source) = jsonl::resolve_title(&head, tail);
+    Ok(AgentHistoryTitle {
+        title,
+        title_source: source.as_str().to_string(),
+    })
 }
 
 #[cfg(test)]
@@ -245,6 +278,146 @@ mod tests {
             "扫描根外哨兵文件不应被写入/删除"
         );
         assert!(!proj.join(format!("{UUID}.jsonl")).exists());
+    }
+
+    // ── read_session_title：运行中会话标题通道（人工验证问题 3） ──
+
+    #[test]
+    fn read_title_resolves_custom_title_then_ai_title() {
+        // 回退链与 scan 同源：custom-title 恒优先，其次 ai-title
+        // 1. 尾部 custom-title 恒优先（决策 22）
+        let (_dir, root, proj) = make_scan_root();
+        std::fs::write(
+            proj.join(format!("{UUID}.jsonl")),
+            concat!(
+                "{\"type\":\"summary\",\"summary\":\"旧摘要\"}\n",
+                "{\"type\":\"ai-title\",\"aiTitle\":\"自动标题\"}\n",
+                "{\"type\":\"custom-title\",\"customTitle\":\"用户重命名\",\"sessionId\":\"x\"}\n",
+            ),
+        )
+        .unwrap();
+        set_scan_root(&root);
+        let t = read_session_title(UUID).unwrap();
+        unset_scan_root();
+        assert_eq!(t.title.as_deref(), Some("用户重命名"));
+        assert_eq!(t.title_source, "customTitle");
+
+        // 2. 无 custom-title → ai-title
+        let (_dir, root, proj) = make_scan_root();
+        std::fs::write(
+            proj.join(format!("{UUID}.jsonl")),
+            "{\"type\":\"ai-title\",\"aiTitle\":\"自动标题\"}\n",
+        )
+        .unwrap();
+        set_scan_root(&root);
+        let t = read_session_title(UUID).unwrap();
+        unset_scan_root();
+        assert_eq!(t.title.as_deref(), Some("自动标题"));
+        assert_eq!(t.title_source, "aiTitle");
+    }
+
+    #[test]
+    fn read_title_falls_back_to_summary_then_first_prompt_then_none() {
+        // 3. summary
+        let (_dir, root, proj) = make_scan_root();
+        std::fs::write(
+            proj.join(format!("{UUID}.jsonl")),
+            "{\"type\":\"summary\",\"summary\":\"会话摘要\"}\n{\"type\":\"user\",\"message\":{\"content\":\"首条提问\"}}\n",
+        )
+        .unwrap();
+        set_scan_root(&root);
+        let t = read_session_title(UUID).unwrap();
+        unset_scan_root();
+        assert_eq!(t.title.as_deref(), Some("会话摘要"));
+        assert_eq!(t.title_source, "summary");
+
+        // 4. 仅 firstPrompt（运行中会话常见形态：首条消息已写入、无任何标题类字段）
+        let (_dir, root, proj) = make_scan_root();
+        std::fs::write(
+            proj.join(format!("{UUID}.jsonl")),
+            "{\"type\":\"user\",\"message\":{\"content\":\"首条提问\"}}\n",
+        )
+        .unwrap();
+        set_scan_root(&root);
+        let t = read_session_title(UUID).unwrap();
+        unset_scan_root();
+        assert_eq!(t.title.as_deref(), Some("首条提问"));
+        assert_eq!(t.title_source, "firstPrompt");
+
+        // 5. 空文件 → 四路全无 → None（前端兜底 CLI 名）
+        let (_dir, root, proj) = make_scan_root();
+        std::fs::write(proj.join(format!("{UUID}.jsonl")), "").unwrap();
+        set_scan_root(&root);
+        let t = read_session_title(UUID).unwrap();
+        unset_scan_root();
+        assert!(t.title.is_none());
+        assert_eq!(t.title_source, "none");
+    }
+
+    #[test]
+    fn read_title_missing_file_returns_none_ok() {
+        // 会话文件不存在（运行中会话尚未落盘）→ Ok(title: None)——正常条件非错误
+        // （与 delete 的「会话不存在 → Err」语义区分：读是幂等查询）
+        let (_dir, root, _proj) = make_scan_root();
+        set_scan_root(&root);
+        let t = read_session_title(UUID).unwrap();
+        unset_scan_root();
+        assert!(t.title.is_none());
+        assert_eq!(t.title_source, "none");
+    }
+
+    #[test]
+    fn read_title_rejects_invalid_session_id() {
+        // 非法 sessionId 在触碰文件系统前被拒（SEC-05 校验前置，端到端 1 条）
+        let (_dir, root, proj) = make_scan_root();
+        set_scan_root(&root);
+        let msg = assert_validation(read_session_title("../evil").unwrap_err());
+        unset_scan_root();
+        assert!(msg.contains("非法"), "消息应说明非法，实际: {msg}");
+        // 越界文件未被触碰
+        assert!(!proj.join("..").join("evil.jsonl").exists());
+    }
+
+    #[test]
+    fn read_title_tail_custom_title_overrides_head_summary() {
+        // 文件 >512KB：头部窗口内 summary、尾部 64KB 内 custom-title → 尾部赢（决策 22）
+        let (_dir, root, proj) = make_scan_root();
+        let path = proj.join(format!("{UUID}.jsonl"));
+        let mut f = std::fs::File::create(&path).unwrap();
+        use std::io::Write;
+        writeln!(
+            f,
+            r#"{{"type":"summary","summary":"头部摘要","leafUuid":"x"}}"#
+        )
+        .unwrap();
+        let line = b"{\"type\":\"pad\",\"payload\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}\n";
+        while f.metadata().unwrap().len() < 600 * 1024 {
+            f.write_all(line).unwrap();
+        }
+        writeln!(
+            f,
+            r#"{{"type":"custom-title","customTitle":"尾部重命名","sessionId":"{UUID}"}}"#
+        )
+        .unwrap();
+        f.flush().unwrap();
+
+        set_scan_root(&root);
+        let t = read_session_title(UUID).unwrap();
+        unset_scan_root();
+        assert_eq!(t.title.as_deref(), Some("尾部重命名"));
+        assert_eq!(t.title_source, "customTitle");
+    }
+
+    #[test]
+    fn read_title_corrupt_jsonl_returns_none_ok() {
+        // 损坏 jsonl → 解析容错降级 → 四路全无（None，非 Err——照单文件降级契约）
+        let (_dir, root, proj) = make_scan_root();
+        std::fs::write(proj.join(format!("{UUID}.jsonl")), "{broken json 没有换行").unwrap();
+        set_scan_root(&root);
+        let t = read_session_title(UUID).unwrap();
+        unset_scan_root();
+        assert!(t.title.is_none());
+        assert_eq!(t.title_source, "none");
     }
 
     // ── AQ-3：符号链接拒跟随 ──

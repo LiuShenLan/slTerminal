@@ -108,6 +108,7 @@ pub fn run() {
             hooks::agent_hooks_config_write,
             agent_history::agent_history_scan,
             agent_history::agent_history_delete,
+            agent_history::agent_history_read_title,
         ])
         .run(tauri::generate_context!())
     {

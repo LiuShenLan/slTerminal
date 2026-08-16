@@ -39,6 +39,8 @@ import { E2E_ENABLED } from "../../lib/e2eEnabled";
 import { FONT_SIZE_MIN, FONT_SIZE_MAX } from "../../stores/fontSize";
 // Agent 事件订阅（MC-202：onAgentEvent，照 onFsEvent 模式直接引 ipc 文件）
 import { onAgentEvent } from "../../ipc/agentHooks";
+// 运行中会话标题通道（人工验证问题 3）：与历史 session 同源回退链
+import { readHistoryTitle } from "../../ipc/agentHistory";
 // MC-205: agent 事件按 cliId 解析 profile——eventToStatus 等 hooks 能力实现迁入 profile
 // （lib 层不再含 claude 事件名映射）；缺省回退常量经 profiles/claude 导出（AC-5 兼容）
 import { cliProfileRegistry } from "../../features/cliProfiles";
@@ -90,6 +92,10 @@ export interface UseXtermReturn {
 /** fallback 终端尺寸 */
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
+
+/** 运行中会话标题重查节流（人工验证问题 3）：SessionStart 立即查一次，
+ *  其后 agent-event 距上次查询 ≥5s 才重查（/rename custom-title、ai-title 运行中变化） */
+const TITLE_FETCH_THROTTLE_MS = 5000;
 
 /** 检查终端是否可以安全执行 fit 操作（五条件守卫） */
 export function canFit(
@@ -153,6 +159,14 @@ export function useXterm({
 
   /** doSpawn 回调 ref（供 usePtyOutput 的 setupRetry / Enter 重连触发） */
   const doSpawnRef = useRef<((cols: number, rows: number) => void) | null>(null);
+
+  // ── 运行中会话标题通道（人工验证问题 3）──
+  // 节流时间戳与已应用标题——声明于 hook 顶层（不进 effect），
+  // 容器 bridge 重渲染/effect 重建不重置节流与去重状态。
+  /** 上次读标题时间戳（agent-event 5s 节流；SessionStart 归零强制立即查询） */
+  const lastTitleFetchAtRef = useRef(0);
+  /** 上次已应用标题（标题未变不重复回调——防 setTitle/onDidTitleChange 抖动） */
+  const lastAppliedTitleRef = useRef<string | null>(null);
 
   // ═══════════════════════════════════════════════════════════════
   // 4. 终端快捷键上下文（active terminal + focus context）
@@ -387,6 +401,41 @@ export function useXterm({
         });
       }
 
+      // ── 运行中会话标题（人工验证问题 3）：与历史 session 同源回退链 ──
+      // custom-title > ai-title > summary > firstPrompt（后端 agent_history_read_title
+      // 复用历史扫描 resolve_title）。SessionStart 立即查一次；其后 agent-event
+      // 5s 节流重查（/rename custom-title、ai-title 在运行中变化）。
+      // 无 sessionId（matchedCommand-only）/读取失败（未知 cliId 无 provider）/
+      // 面板已卸载/会话已切换 → 静默保持现标题（兜底 = profile.tabTitle）。
+      const sessionId = payload.sessionId || undefined;
+      const refreshSessionTitle = (force: boolean) => {
+        if (!sessionId || isDisposedRef.current) return;
+        if (
+          !force &&
+          Date.now() - lastTitleFetchAtRef.current < TITLE_FETCH_THROTTLE_MS
+        ) {
+          return;
+        }
+        lastTitleFetchAtRef.current = Date.now();
+        readHistoryTitle(cliId, sessionId)
+          .then((resolved) => {
+            // 陈旧守卫：应用前确认面板仍注册且会话未变（防迟到结果覆盖新会话标题）
+            if (
+              TerminalRegistry.get(panelId)?.agentSession?.sessionId !== sessionId
+            ) {
+              return;
+            }
+            const title = resolved?.title ?? profile?.tabTitle;
+            if (!title || title === lastAppliedTitleRef.current) return;
+            lastAppliedTitleRef.current = title;
+            // 仅标题（不带 status）——不动状态圆点
+            onTabStateChange?.({ active: true, title });
+          })
+          .catch(() => {
+            // 读取失败静默——保持现标题（无 provider 的 CLI 不炸，兜底 CLI 名）
+          });
+      };
+
       if (status === null) {
         // ZQ-6: 清图标条件对齐删 agentSession 的双事件判定（SessionEnd ∨ Exit，
         // 见上方 setAgentSession(null) 分支）——原仅 SessionEnd，Exit 事件
@@ -401,15 +450,23 @@ export function useXterm({
       }
       // B13: SessionStart 补 title 重设——/resume 恢复历史会话时无 OSC 133 C
       // （TUI 内部斜杠命令不经 shell），标题经 profile.tabTitle 保持 claude；
-      // profile 未注册（前置 hooksCapability 校验已拦截）→ 无 title 零副作用
+      // profile 未注册（前置 hooksCapability 校验已拦截）→ 无 title 零副作用。
+      // 人工验证问题 3：同步兜底 tabTitle 后，异步读历史同源标题覆盖
+      //（节流时间戳归零——新会话强制立即查询）
       if (payload.event === SESSION_START_EVENT) {
         onTabStateChange?.({
           active: true,
           status,
           title: profile?.tabTitle,
         });
+        // 记录同步已应用标题——异步回退同值时去重（不重复 setTitle）
+        lastAppliedTitleRef.current = profile?.tabTitle ?? null;
+        lastTitleFetchAtRef.current = 0;
+        refreshSessionTitle(true);
         return;
       }
+      // 非 SessionStart：5s 节流重查（/rename custom-title、ai-title 运行中变化）
+      refreshSessionTitle(false);
       onTabStateChange?.({ active: true, status });
     });
 

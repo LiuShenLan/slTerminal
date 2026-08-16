@@ -9,7 +9,7 @@
 //   行高 28（会话行 30）、圆角 5、hover #222227；选中行 accent-dim 底（hover 0.22）+ fg-1；
 //   每级左缩 15px + 1px 发丝引导线（SIDEBAR_COLORS.treeGuide）。
 // 项目行（NAV-09/UI-505）：500 字重 fg-1 + 彩色文件夹图标 + 「当前」pill + 页面计数 pill。
-// 历史节点（NAV-03/UI-303）：时钟图标 + 「历史」+ 计数 pill；展开 = 单行历史行
+// 历史节点（NAV-03/UI-303）：时钟图标 + 「历史session」+ 计数 pill；展开 = 单行历史行
 //   （StatusDot + logo + 标题 + 相对时间，prompt 预览 → 原生 title tooltip）；
 //   双击恢复三分支（运行中 → SessionActionDialog / 孤儿/无 cwd → 无操作 / 普通 → 恢复）
 //   + 右键菜单（复制恢复命令/分支恢复/删除）沿用 historyContextMenu 策略（照 HistorySessionList）。
@@ -577,8 +577,10 @@ export const NavTree: React.FC<NavTreeProps> = ({ switchToPage, onDeletePage }) 
             {model.pages.map((pageModel) => renderPage(model, pageModel))}
           </div>
         )}
-        {/* 历史节点常驻项目下（不随项目展开态隐藏——NAV-10 契约） */}
-        {renderHistory(model)}
+        {/* 历史节点常驻项目下（不随项目展开态隐藏——NAV-10 契约）；外包
+            childrenStyle 容器与操作页面同级缩进（15px + 发丝引导线），
+            位于 pages 容器之后恒置最下方（人工验证问题 2 修订） */}
+        <div style={childrenStyle}>{renderHistory(model)}</div>
       </div>
     );
   };

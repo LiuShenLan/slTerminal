@@ -1,8 +1,9 @@
-// agent 历史会话 IPC — 扫描/删除封装（契约见 checklist「跨边界契约」）
+// agent 历史会话 IPC — 扫描/删除/读标题封装（契约见 checklist「跨边界契约」）
 //
-// 本文件是 agent_history_scan / agent_history_delete 两条命令的唯一 invoke 位置（硬约束 #1）。
+// 本文件是 agent_history_scan / agent_history_delete / agent_history_read_title
+// 三条命令的唯一 invoke 位置（硬约束 #1）。
 import { invoke } from "@tauri-apps/api/core";
-import type { AgentHistorySession } from "../types/agentHistory";
+import type { AgentHistorySession, AgentHistoryTitle } from "../types/agentHistory";
 
 /**
  * 扫描全部历史会话（无参聚合）
@@ -25,4 +26,18 @@ export async function deleteHistorySession(
   sessionId: string,
 ): Promise<void> {
   return invoke("agent_history_delete", { cliId, sessionId });
+}
+
+/**
+ * 读取单会话标题（运行中会话页签/导航树行显示名——人工验证问题 3）
+ *
+ * 回退链与历史扫描同源（custom-title > ai-title > summary > firstPrompt）；
+ * 会话文件不存在 → `{ title: null }`（非 Err——调用方兜底 CLI 名）；
+ * 未知 cliId / 非法 sessionId → Err（调用方 catch 静默保持现标题）。
+ */
+export async function readHistoryTitle(
+  cliId: string,
+  sessionId: string,
+): Promise<AgentHistoryTitle> {
+  return invoke("agent_history_read_title", { cliId, sessionId });
 }

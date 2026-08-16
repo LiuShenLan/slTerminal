@@ -10,8 +10,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### 拖拽与双击（TB-04）
 
-- **拖拽**：左段 app 标识 + 中段标题区域标 `data-tauri-drag-region`（Tauri 原生拖拽属性，WebView2 拖拽命中区）
-- **双击最大化**：中段 `onDoubleClick` → `toggleMaximizeWindow()`（与标题栏最大化钮共用 wrapper）
+- **拖拽**：左段 app 标识 + 中段标题区域标 `data-tauri-drag-region="deep"`（子树拖拽）——Tauri 2.11.3 裸属性语义只命中直接点击的元素本身（`el === composedPath[0]`），文字 span/svg logo 子元素会拦截拖拽、无项目时几乎整栏拖不动（人工验证问题 1 根因）；`deep` 使子树内任意处可拖
+- **双击最大化**：**Tauri 原生拖拽区脚本承担**（drag.js `detail===2` → `internal_toggle_maximize`）——本组件**不注册** `onDoubleClick`（React dblclick 与原生各 toggle 一次 → 最大化后立即还原，净无效果；人工验证连带缺陷）
 - **右段窗口控制三钮不在拖拽区内**（保证可点击）
 
 ### 窗口控制三钮（TB-03）
@@ -33,13 +33,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 测试模式
 
-L2 测试：`src/__tests__/title-bar.test.tsx`（7 用例，TB-06-1~7，用例数见 `.claude/test-inventory.md`）：
+L2 测试：`src/__tests__/title-bar.test.tsx`（8 用例，TB-06-1~8，用例数见 `.claude/test-inventory.md`）：
 
 - TB-06-1 三段结构渲染（左段 app 标识 + 右段三窗口钮）
 - TB-06-2 中段按 store 种子显示活跃项目名与活跃页面名
 - TB-06-3/4/5 三钮点击 → `minimizeWindow`/`toggleMaximizeWindow`/`closeWindow` 各调用一次（mock `../ipc/window`）
-- TB-06-6 中段双击 → `toggleMaximizeWindow` 一次
-- TB-06-7 容器含 `data-tauri-drag-region` 属性
+- TB-06-6 中段无 React 双击 handler——双击不调 `toggleMaximizeWindow`（原生承担，TB-04 修订）
+- TB-06-7 左/中段容器恰两处且属性值 `"deep"`（子树拖拽，TB-04 修订）
+- TB-06-8 无项目时左/中段拖拽区仍渲染（中段空 div 可拖）
 
 ### 运行
 

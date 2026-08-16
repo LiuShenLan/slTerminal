@@ -31,8 +31,10 @@ const {
   mockCliProfileGet,
   // MC-403: profile.hooks.eventToStatus 真实调用断言（入参 mock）
   mockEventToStatus,
+  // 运行中会话标题通道（人工验证问题 3）：readHistoryTitle IPC 桩
+  mockReadHistoryTitle,
 } = vi.hoisted(() => {
-  const registry = new Map<string, { sessionId: string; agentSession?: { cliId?: string } | null }>();
+  const registry = new Map<string, { sessionId: string; agentSession?: { cliId?: string; sessionId?: string } | null }>();
   const agentEventCallbackRef: { current: ((_p: Record<string, unknown>) => void) | null } = { current: null };
   const mockUnsub = vi.fn();
   return {
@@ -68,6 +70,10 @@ const {
     mockUnsubscribeAgentEvent: mockUnsub,
     capturedAgentEventCallbackRef: agentEventCallbackRef,
     mockCliProfileGet: vi.fn(),
+    // 缺省：标题 null（回退链四路全无）——调用方兜底 profile.tabTitle
+    mockReadHistoryTitle: vi.fn<
+      () => Promise<{ title: string | null; titleSource: string }>
+    >(() => Promise.resolve({ title: null, titleSource: "none" })),
     // 默认 stub 语义对齐 claude eventToStatus（10 事件映射）；单测可按需 mockReturnValue 覆盖
     mockEventToStatus: vi.fn(
       (event: string, notificationType?: string | null): string | null => {
@@ -183,6 +189,13 @@ vi.mock("../ipc", () => ({
 // 本地覆盖 setup.ts 全局 mock 以捕获回调供测试手动触发
 vi.mock("../ipc/agentHooks", () => ({
   onAgentEvent: mockOnAgentEvent,
+}));
+
+// useXterm.ts import { readHistoryTitle } from "../../ipc/agentHistory"（人工验证问题 3）
+vi.mock("../ipc/agentHistory", () => ({
+  readHistoryTitle: mockReadHistoryTitle,
+  scanHistory: vi.fn().mockResolvedValue([]),
+  deleteHistorySession: vi.fn().mockResolvedValue(undefined),
 }));
 
 // OSC 52 测试：mock clipboard（src/ipc/clipboard.ts）
@@ -2220,5 +2233,165 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     });
     // 无任何「恢复原标题」形态的调用（title 恢复只由真退出信号承担——B13）
     expect(mockOnTabStateChange).not.toHaveBeenCalledWith({ active: false });
+  });
+
+  // ═══════════════════════════════════════════════════════════════
+  // 运行中会话标题通道（人工验证问题 3）——readHistoryTitle 异步接线
+  // ═══════════════════════════════════════════════════════════════
+
+  it("HUK21: SessionStart + sessionId → readHistoryTitle(cliId, sessionId)；解析标题 → 仅标题回调（不带 status）", async () => {
+    await mountAndWaitForHooks();
+    mockOnTabStateChange.mockClear();
+    mockSetAgentSession.mockClear();
+    mockReadHistoryTitle.mockClear();
+    mockReadHistoryTitle.mockResolvedValue({ title: "修复登录 bug", titleSource: "customTitle" });
+    // 陈旧守卫前提：注册表条目 agentSession.sessionId 与事件 sessionId 一致
+    mockRegistryMap.set("hooks-test", {
+      sessionId: "test-session-id",
+      agentSession: { sessionId: "s1", cliId: "claude" },
+    });
+
+    capturedAgentEventCallbackRef.current!(makeHookPayload({ event: "SessionStart" }));
+
+    // 同步兜底 title = profile.tabTitle（B13 补位语义不变）
+    expect(mockOnTabStateChange).toHaveBeenCalledWith({
+      active: true,
+      status: "attention",
+      title: "claude",
+    });
+    // 异步解析 → 仅标题回调（不带 status——不动状态圆点）
+    await waitFor(() => {
+      expect(mockReadHistoryTitle).toHaveBeenCalledWith("claude", "s1");
+      expect(mockOnTabStateChange).toHaveBeenCalledWith({
+        active: true,
+        title: "修复登录 bug",
+      });
+    });
+  });
+
+  it("HUK22: 解析 title null → 兜底 profile.tabTitle，与同步补位同值不重复回调", async () => {
+    await mountAndWaitForHooks();
+    mockOnTabStateChange.mockClear();
+    mockSetAgentSession.mockClear();
+    mockReadHistoryTitle.mockClear();
+    mockReadHistoryTitle.mockResolvedValue({ title: null, titleSource: "none" });
+    mockRegistryMap.set("hooks-test", {
+      sessionId: "test-session-id",
+      agentSession: { sessionId: "s1", cliId: "claude" },
+    });
+
+    capturedAgentEventCallbackRef.current!(makeHookPayload({ event: "SessionStart" }));
+
+    await waitFor(() => {
+      expect(mockReadHistoryTitle).toHaveBeenCalledWith("claude", "s1");
+    });
+    // 兜底标题 = profile.tabTitle——与同步补位同值，去重后无额外回调
+    expect(mockOnTabStateChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("HUK23: 无 sessionId 的 SessionStart 不调 IPC；IPC 失败静默不抛（未知 cliId 无 provider）", async () => {
+    await mountAndWaitForHooks();
+    mockOnTabStateChange.mockClear();
+    mockSetAgentSession.mockClear();
+    mockReadHistoryTitle.mockClear();
+    mockReadHistoryTitle.mockRejectedValue(new Error("未知 cliId"));
+
+    // 分支 1：无 sessionId → 不调 IPC（matchedCommand-only 场景）
+    capturedAgentEventCallbackRef.current!(makeHookPayload({
+      event: "SessionStart",
+      sessionId: undefined,
+    }));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockReadHistoryTitle).not.toHaveBeenCalled();
+    expect(mockOnTabStateChange).toHaveBeenCalledWith({
+      active: true,
+      status: "attention",
+      title: "claude",
+    });
+
+    // 分支 2：有 sessionId 但 IPC reject → catch 静默，保持现标题（无额外回调）
+    mockOnTabStateChange.mockClear();
+    mockRegistryMap.set("hooks-test", {
+      sessionId: "test-session-id",
+      agentSession: { sessionId: "s1", cliId: "claude" },
+    });
+    capturedAgentEventCallbackRef.current!(makeHookPayload({ event: "SessionStart" }));
+    await waitFor(() => {
+      expect(mockReadHistoryTitle).toHaveBeenCalledTimes(1);
+    });
+    expect(mockOnTabStateChange).toHaveBeenCalledTimes(1); // 仅同步补位
+    mockReadHistoryTitle.mockReset();
+    mockReadHistoryTitle.mockResolvedValue({ title: null, titleSource: "none" });
+  });
+
+  it("HUK24: agent-event 5s 节流——窗口内不重查、超窗重查；标题未变不重复回调", async () => {
+    await mountAndWaitForHooks();
+    mockOnTabStateChange.mockClear();
+    mockSetAgentSession.mockClear();
+    mockReadHistoryTitle.mockClear();
+    mockReadHistoryTitle.mockResolvedValue({ title: "修复登录 bug", titleSource: "customTitle" });
+    mockRegistryMap.set("hooks-test", {
+      sessionId: "test-session-id",
+      agentSession: { sessionId: "s1", cliId: "claude" },
+    });
+
+    let now = 1_000_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+
+    // SessionStart（force）→ 首次查询 + 标题应用
+    capturedAgentEventCallbackRef.current!(makeHookPayload({ event: "SessionStart" }));
+    await waitFor(() => {
+      expect(mockReadHistoryTitle).toHaveBeenCalledTimes(1);
+      expect(mockOnTabStateChange).toHaveBeenCalledWith({
+        active: true,
+        title: "修复登录 bug",
+      });
+    });
+
+    // 节流窗口内事件（+2s）→ 不重查
+    now += 2000;
+    capturedAgentEventCallbackRef.current!(makeHookPayload({ event: "PreToolUse" }));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockReadHistoryTitle).toHaveBeenCalledTimes(1);
+
+    // 超窗事件（+6s）→ 重查；标题未变 → 无新增携 title 回调
+    //（常规事件仍产生 status 回调——按「携 title 的调用数」断言去重语义）
+    const titleCallsBefore = mockOnTabStateChange.mock.calls.filter(
+      (c) => "title" in (c[0] as TabState),
+    ).length;
+    now += 6000;
+    capturedAgentEventCallbackRef.current!(makeHookPayload({ event: "PreToolUse" }));
+    await waitFor(() => {
+      expect(mockReadHistoryTitle).toHaveBeenCalledTimes(2);
+    });
+    const titleCallsAfter = mockOnTabStateChange.mock.calls.filter(
+      (c) => "title" in (c[0] as TabState),
+    ).length;
+    expect(titleCallsAfter).toBe(titleCallsBefore);
+
+    nowSpy.mockRestore();
+  });
+
+  it("HUK25: 陈旧结果丢弃——解析完成时会话已切换（sessionId 不符）→ 不应用标题", async () => {
+    await mountAndWaitForHooks();
+    mockOnTabStateChange.mockClear();
+    mockSetAgentSession.mockClear();
+    mockReadHistoryTitle.mockClear();
+    mockReadHistoryTitle.mockResolvedValue({ title: "旧会话标题", titleSource: "customTitle" });
+    // 注册表条目 sessionId 与事件 sessionId 不符（会话已切换）→ 陈旧
+    mockRegistryMap.set("hooks-test", {
+      sessionId: "test-session-id",
+      agentSession: { sessionId: "other-session", cliId: "claude" },
+    });
+
+    capturedAgentEventCallbackRef.current!(makeHookPayload({ event: "SessionStart" }));
+
+    await waitFor(() => {
+      expect(mockReadHistoryTitle).toHaveBeenCalledTimes(1);
+    });
+    // 仅同步补位一次，无陈旧标题回调
+    expect(mockOnTabStateChange).toHaveBeenCalledTimes(1);
   });
 });

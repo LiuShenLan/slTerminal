@@ -17,6 +17,7 @@ import {
   ChevronDown,
   ChevronRight,
   Clock,
+  FileText,
   Folder,
   FolderOpen,
   FolderTree,
@@ -55,6 +56,7 @@ export const IconChevronDown = makeIcon(ChevronDown); // 树展开节点收起�
 export const IconRefresh = makeIcon(RefreshCw); // 刷新
 export const IconSearch = makeIcon(Search); // 搜索
 export const IconHistory = makeIcon(Clock); // 历史会话
+export const IconPage = makeIcon(FileText); // 操作页面行图标（与 IconHistory 时钟区分）
 export const IconClose = makeIcon(X); // 关闭 ×（页签/横幅/浮层）
 export const IconMin = makeIcon(Minus); // 窗口最小化（自绘标题栏）
 export const IconMax = makeIcon(Square); // 窗口最大化（自绘标题栏）

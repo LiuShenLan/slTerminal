@@ -273,6 +273,26 @@ describe("三级层级渲染（项目→页面→会话）", () => {
     );
   });
 
+  it("页面行渲染 IconPage（FileText 文档图标）14px fg-3——与历史session 时钟区分", () => {
+    seedProject("C:/test", "proj-1", "测试项目", [
+      { pageId: "page1", name: "页面 1" },
+    ]);
+    seedActivePage("page1");
+
+    const { container } = render(<NavTree />);
+    expandTo(container, '[data-e2e="nav-row-page"]');
+    const pageRow = getRows(container, "nav-row-page")[0];
+    // 行内 svg 含 chevron（12px）+ IconPage（14px）——按槽位容器宽度定位页面图标
+    const iconWrap = Array.from(pageRow.querySelectorAll("svg"))
+      .map((s) => s.parentElement as HTMLElement)
+      .find((p) => p.style.width === "14px");
+    expect(iconWrap).toBeTruthy();
+    expect(iconWrap?.querySelector("svg")?.getAttribute("aria-hidden")).toBe(
+      "true",
+    );
+    expect(iconWrap?.style.color).toBe(hexToRgb(DIM_FG));
+  });
+
   it("活跃会话经 panelId→pageId 归属到对应页面下（page2 会话不出现在 page1 区域之外）", () => {
     seedProject("C:/test", "proj-1", "测试项目", [
       { pageId: "page1", name: "页面 1" },
@@ -814,6 +834,43 @@ describe("历史节点（NAV-03）", () => {
     expect(row.textContent).toContain("历史会话 s1");
     expect(row.querySelector('img[alt="CLI 图标"]')).toBeTruthy();
     expect(row.getAttribute("title")).toBe("修复 context 用量计算");
+  });
+
+  it("历史session 节点与操作页面同级缩进（childrenStyle 容器）且恒位于页面容器之后", async () => {
+    const container = renderWithHistory([makeHistorySession("s1")]);
+    const projRow = getRows(container, "nav-row-project")[0];
+    const projectContainer = projRow.parentElement as HTMLElement;
+
+    // 项目收起（默认态）：容器 children = [项目行, 历史容器]——历史常驻
+    let children = Array.from(projectContainer.children);
+    expect(children).toHaveLength(2);
+    const collapsedHistoryWrap = children[1] as HTMLElement;
+    expect(
+      collapsedHistoryWrap.querySelector('[data-e2e="nav-history-node"]'),
+    ).toBeTruthy();
+
+    // 展开项目 → [项目行, 页面容器, 历史容器]——历史恒位于末位（最下方）
+    fireEvent.click(projRow);
+    await waitFor(() => expect(getRows(container, "nav-row-page").length).toBe(1));
+    children = Array.from(projectContainer.children);
+    expect(children.length).toBeGreaterThanOrEqual(3);
+    const historyWrap = children[children.length - 1] as HTMLElement;
+    expect(historyWrap.querySelector('[data-e2e="nav-history-node"]')).toBeTruthy();
+    // 同级缩进：与页面容器同规格 childrenStyle（marginLeft 15 + 1px 发丝引导线）
+    const pagesWrap = children[1] as HTMLElement;
+    expect(historyWrap.style.marginLeft).toBe("15px");
+    expect(historyWrap.style.marginLeft).toBe(pagesWrap.style.marginLeft);
+    expect(historyWrap.style.borderLeft).toBe(pagesWrap.style.borderLeft);
+    expect(historyWrap.style.borderLeft).toContain("1px solid");
+
+    // 再次收起 → 历史容器仍存在（NAV-10 常驻契约不破）
+    fireEvent.click(projRow);
+    await waitFor(() => expect(getRows(container, "nav-row-page").length).toBe(0));
+    expect(
+      (projRow.parentElement as HTMLElement).querySelector(
+        '[data-e2e="nav-history-node"]',
+      ),
+    ).toBeTruthy();
   });
 
   it("双击普通历史行 → restoreHistorySession(session, { fork: false })", async () => {

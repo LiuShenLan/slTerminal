@@ -14,7 +14,6 @@ import { useCommitStatus } from "./useCommitStatus";
 import { CommitFileList } from "./CommitFileList";
 import {
   SEPARATOR_BG,
-  INPUT_BORDER,
   PANEL_BG,
   HTML_PANEL_LOADING_FG,
   DIM_FG,
@@ -36,14 +35,16 @@ const headerStyle: React.CSSProperties = {
   flexShrink: 0,
 };
 
-/** 状态提示居中样式 */
+/** 状态提示居中样式——文字色 fg-3（DIM_FG）：人工验证问题 4 修订，
+ *  原误用边框 token INPUT_BORDER（rgba 白 9% 近乎不可见），与 explorer/nav
+ *  空态提示色（DIM_FG）不符 */
 const centerHintStyle: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
   flex: 1,
   padding: 16,
-  color: INPUT_BORDER,
+  color: DIM_FG,
   fontSize: 12,
   textAlign: "center",
   userSelect: "none",

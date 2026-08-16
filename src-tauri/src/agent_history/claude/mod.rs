@@ -66,6 +66,14 @@ impl CliHistoryProvider for ClaudeHistoryProvider {
     fn validate_session_id(&self, session_id: &str) -> Result<(), AppError> {
         ops::validate_session_id(session_id)
     }
+
+    fn read_title(
+        &self,
+        session_id: &str,
+    ) -> Result<crate::agent_history::AgentHistoryTitle, AppError> {
+        // 回退链与 scan 的 parse_session_file 同源（运行中会话标题通道）
+        ops::read_session_title(session_id)
+    }
 }
 
 /// `SLTERM_CLAUDE_PROJECTS_DIR` 环境变量守卫（HFN-06，MC-305：env 覆盖留 provider 内部）

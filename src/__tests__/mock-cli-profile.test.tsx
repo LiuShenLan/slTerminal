@@ -87,6 +87,10 @@ const h = vi.hoisted(() => {
     // 权限桩须返回 Promise——useAgentNotifications 对 ensureNotificationPermission().catch()
     mockEnsureNotificationPermission: vi.fn(async () => {}),
     mockDeleteHistorySession: vi.fn(),
+    // 缺省 reject（mockcli 无后端 provider）——useXterm 标题通道 catch 静默
+    mockReadHistoryTitle: vi.fn(() =>
+      Promise.reject(new Error("未知 cliId")),
+    ),
     mockConfirmDialog: vi.fn(async () => true),
     mockReadHooksConfig: vi.fn(),
     mockWriteHooksConfig: vi.fn(),
@@ -228,6 +232,9 @@ vi.mock("../ipc/notification", () => ({
 
 vi.mock("../ipc/agentHistory", () => ({
   deleteHistorySession: h.mockDeleteHistorySession,
+  // 人工验证问题 3：useXterm 运行中会话标题通道——mockcli 无后端 provider，
+  // 缺省 reject 静默（验证 IPC 失败不炸）
+  readHistoryTitle: h.mockReadHistoryTitle,
 }));
 
 // OV-02：hub dirty 守卫经 src/lib 的 confirmDialog（ask 已从 ipc/dialog 删除）

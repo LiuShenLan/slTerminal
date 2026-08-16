@@ -39,7 +39,7 @@ const parallelAgents = [
   { label: "docs-root", prompt: `你负责 DOC-02/DOC-04/DOC-05/DOC-06：
 【DOC-02】CONTEXT.md：UI 重设计节核实术语（明度阶梯/发丝线/统一导航树/状态圆点/双轨配色与实现一致）；「Agent Status 视图」条标注已退役（2026-08 实现期并入统一导航树）；活动栏节补「配置」钮（hooks 配置面板唯一入口）。
 【DOC-04】docs/ui-redesign/requirements.md：UI-405/406/407 三条补「远期愿景，本期不实施（2026-08-16 决策：聊天式 Agent 面板为独立产品方向，未来单独立项）」注记（改表格或行内批注，不动编号）。
-【DOC-05】.claude/adr.md：ADR-0003 追加「实现期决策（2026-08）」小节——Agent 面板三条剔除/darcula 删除 linear 替换/配置钮入口唯一化/导航树挂法（会话挂页面、历史挂项目）/lucide-react 与 @fontsource/jetbrains-mono 两新依赖/自绘标题栏取舍（失 Snap Layouts）。
+【DOC-05】.claude/adr.md：ADR-0003 追加「实现期决策（2026-08）」小节——Agent 面板三条剔除/darcula 删除 linear 替换/配置钮入口唯一化/导航树挂法（会话挂页面、历史挂项目）/lucide-react 与 @fontsource/jetbrains-mono 两新依赖/自绘标题栏取舍（失原生标题栏/阴影与 Snap Layouts 悬停预览——Win+方向键 Aero Snap 仍可用，2026-08 实机验证修订）。
 【DOC-06】根 .claude/CLAUDE.md：模块索引表——新增 src/features/navTree 与 src/features/titleBar 行、sidebar/agentStatus/agentHistory/sideViews/lib/ipc/workspace 行职责更新（对照当前代码）；编号索引核实（无需新增编号则不增）。` },
   { label: "docs-test", prompt: `你负责 DOC-03：.claude/test-inventory.md 全量同步——本次实施新增用例（scheme 色值/emoji-scan/title-bar/nav-tree/confirm-dialog/toast 等）、修改用例（colors/scheme-registry/overrides/activityBar/sideBar 等改造）、删除用例（AgentStatusView/AgentStatusRow/AgentHistorySections 专属与被清理的 E2E 用例）逐条登记；对照 src/__tests__/ 与 e2e-tests/ 当前文件实查核实，禁止凭记忆。` },
 ]

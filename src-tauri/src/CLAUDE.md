@@ -40,7 +40,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 | 文件 | 职责 |
 |------|------|
-| `lib.rs` | Tauri 入口：命令注册（32 条 generate_handler!——hooks 泛化 6 条 `agent_hooks_inject`/`agent_hooks_uninstall`/`agent_hooks_injection_status`/`agent_hooks_restore_statusline`/`agent_hooks_config_read`/`agent_hooks_config_write` + 历史泛化 2 条 `agent_history_scan`/`agent_history_delete`，旧命令名 `hooks_*`/`claude_history_*`/`agent_context_usage` 零残留）+ State 注入 + setup（watcher 启动 + statusline 桥接启动重注入）+ 窗口关闭清理 |
+| `lib.rs` | Tauri 入口：命令注册（33 条 generate_handler!——hooks 泛化 6 条 `agent_hooks_inject`/`agent_hooks_uninstall`/`agent_hooks_injection_status`/`agent_hooks_restore_statusline`/`agent_hooks_config_read`/`agent_hooks_config_write` + 历史泛化 3 条 `agent_history_scan`/`agent_history_delete`/`agent_history_read_title`，旧命令名 `hooks_*`/`claude_history_*`/`agent_context_usage` 零残留）+ State 注入 + setup（watcher 启动 + statusline 桥接启动重注入）+ 窗口关闭清理 |
 | `settings.rs` | 设置持久化：`load_settings`/`save_settings` 浅合并 + `resolve_app_data_dir` |
 | `projects.rs` | 项目数据持久化：`load_projects`/`save_projects`（exe 同级，绕过沙箱）+ `.bak` 兜底 |
 | `state.rs` | `AppState` + `PtySession`/`PtyState`（细节 @pty/CLAUDE.md）+ `validate_path_within_root` 路径沙箱（15 条 sandbox 测试 + 32 条含 ring buffer） |
@@ -55,7 +55,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 修改注意事项
 
-1. 新增 Tauri 命令后在 `lib.rs` 的 `generate_handler!` 注册（32 条现行清单见 `src/ipc/CLAUDE.md` 模块映射）
+1. 新增 Tauri 命令后在 `lib.rs` 的 `generate_handler!` 注册（33 条现行清单见 `src/ipc/CLAUDE.md` 模块映射）
 2. 修改 `validate_path_within_root`/`canonicalize_or_ancestor` 后跑 `state.rs` 全部测试 + `fs`/`git`/`notify`/`pty` 相关命令层测试（沙箱是 10 命令的共同前置）
 3. 修改 `AppError` 变体后同步检查各模块错误映射（`From` impl 与 `map_err` 站点）
 4. settings/projects 浅合并语义改动时核对 `src/stores/CLAUDE.md`（各 store 独立写入依赖浅合并）

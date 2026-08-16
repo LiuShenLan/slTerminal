@@ -40,6 +40,18 @@ import { CommitView } from "../features/commit/CommitView";
 import { titleManager } from "../workspace/titleManager";
 import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
+import { DIM_FG } from "../theme";
+
+/** 色值 → jsdom 归一化形态（#hex → "rgb(r, g, b)"；rgba 去除内空白后比对） */
+function hexToRgb(hex: string): string {
+  if (hex.startsWith("#")) {
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    return `rgb(${r}, ${g}, ${b})`;
+  }
+  return hex;
+}
 
 // ── 辅助函数：种子 stores ──
 function seedProject(rootPath: string) {
@@ -149,7 +161,7 @@ describe("CommitView 列表渲染", () => {
     });
   });
 
-  it("空列表显示「无变更文件」", async () => {
+  it("空列表显示「无变更文件」（空态色 DIM_FG——人工验证问题 4）", async () => {
     seedProject("C:/repo");
     mockGitStatus.mockResolvedValue([]);
     const { container } = render(React.createElement(CommitView));
@@ -162,6 +174,13 @@ describe("CommitView 列表渲染", () => {
     await waitFor(() => {
       expect(container.textContent).toContain("无变更文件");
     });
+    // 空态文字色 = fg-3（DIM_FG）——原 INPUT_BORDER 边框 token 近乎不可见
+    //（textContent 精确匹配可能命中祖先容器——取带内联 color 的提示 div 本身）
+    const hintDiv = Array.from(container.querySelectorAll("div")).find(
+      (d) => d.textContent === "无变更文件" && d.style.color !== "",
+    );
+    expect(hintDiv).toBeTruthy();
+    expect((hintDiv as HTMLElement).style.color).toBe(hexToRgb(DIM_FG));
   });
 
   it("文件按完整相对路径字母序排序", async () => {

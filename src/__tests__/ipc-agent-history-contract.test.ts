@@ -1,11 +1,11 @@
 // ipc-agent-history-contract.test.ts — agent 历史会话 IPC wrapper 合约测试（FE-03，IHE-06 工厂化）
 //
 // 照 ipc-hooks-config-contract.test.ts 模式，经共享工厂 describeIpcContract（helpers/ipc-contract.ts）
-// 声明式驱动两命令 × 四维（命令名 / 参数结构 / 正常返回 / 异常传播）= 8 条用例
-// （重命名命令已随功能整体移除——问题 7 修复）：
+// 声明式驱动三命令 × 四维（命令名 / 参数结构 / 正常返回 / 异常传播）= 12 条用例
+// （重命名命令已随功能整体移除——问题 7 修复；readHistoryTitle = 人工验证问题 3 新增）：
 // 1. 命令名 snake_case 逐字（agent_history_scan 等，非驼峰）
-// 2. 参数结构键集合精确匹配（scan 无参 / delete { cliId, sessionId }，防字段漂移）
-// 3. 返回透传（scan 返回 AgentHistorySession[] 八键全形态样例）
+// 2. 参数结构键集合精确匹配（scan 无参 / delete { cliId, sessionId } / readTitle { cliId, sessionId }，防字段漂移）
+// 3. 返回透传（scan 返回 AgentHistorySession[] 八键全形态样例；readTitle 返回两键）
 // 4. 异常传播不吞异常
 //
 // ⚠️ mockIPC 盲区（IHE-01）：mockIPC 只守 JS 侧形状——camelCase/snake_case 真实转换、
@@ -128,6 +128,41 @@ describeIpcContract("deleteHistorySession 合约（agent_history_delete）", [
     call: () => agentHistory.deleteHistorySession(CLI_ID, SESSION_ID),
     mockThrow: "会话不存在",
     expectReject: "会话不存在",
+  },
+]);
+
+describeIpcContract("readHistoryTitle 合约（agent_history_read_title，人工验证问题 3）", [
+  // 维度 1：命令名（snake_case 逐字）
+  {
+    name: "应调用 agent_history_read_title 命令（非驼峰）",
+    cmd: "agent_history_read_title",
+    call: () => agentHistory.readHistoryTitle(CLI_ID, SESSION_ID),
+    respond: { title: null, titleSource: "none" },
+  },
+  // 维度 2：参数结构——键集合精确匹配 { cliId, sessionId }（防字段漂移）
+  {
+    name: "payload 键集合精确为 { cliId, sessionId }",
+    cmd: "agent_history_read_title",
+    call: () => agentHistory.readHistoryTitle(CLI_ID, SESSION_ID),
+    respond: { title: null, titleSource: "none" },
+    expectArgs: { cliId: CLI_ID, sessionId: SESSION_ID },
+    expectExactKeys: ["cliId", "sessionId"],
+  },
+  // 维度 3：正常返回透传——AgentHistoryTitle 两键（标题 + 来源；null 标题形态）
+  {
+    name: "透传 AgentHistoryTitle（两键：title/titleSource）",
+    cmd: "agent_history_read_title",
+    call: () => agentHistory.readHistoryTitle(CLI_ID, SESSION_ID),
+    respond: { title: "修复登录 bug", titleSource: "customTitle" },
+    expectResult: { title: "修复登录 bug", titleSource: "customTitle" },
+  },
+  // 维度 4：异常传播（未知 cliId / 非法 sessionId → 调用方 catch 兜底）
+  {
+    name: "invoke 失败时异常应传播给调用方",
+    cmd: "agent_history_read_title",
+    call: () => agentHistory.readHistoryTitle(CLI_ID, SESSION_ID),
+    mockThrow: "未知 cliId",
+    expectReject: "未知 cliId",
   },
 ]);
 

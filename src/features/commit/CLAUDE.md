@@ -14,9 +14,9 @@ CommitView 有四个渲染态，优先级从高到低：
 
 | 状态 | 触发条件 | UI |
 |------|---------|-----|
-| `no-root` | `activePageId` 无对应 project | "选择一个项目以查看变更" |
-| `loading` | `gitStatus` 调用中 | "加载中…" |
-| `error` | `gitStatus` 抛异常（含非 git 仓库） | "当前项目并非 git 项目" |
+| `no-root` | `activePageId` 无对应 project | "选择一个项目以查看变更"（`DIM_FG`） |
+| `loading` | `gitStatus` 调用中 | "加载中…"（`HTML_PANEL_LOADING_FG`，与 DIM_FG 同值） |
+| `error` | `gitStatus` 抛异常（含非 git 仓库） | "当前项目并非 git 项目"（`DIM_FG`） |
 | `ready` | `gitStatus` 成功返回 | Changes (N) + Unversioned Files (N) 两个可折叠列表 |
 
 状态推导流程：`activePageId` → project → `rootPath` → `gitStatus(rootPath)` → 状态机分发。`rootPath` 变化时立即清空旧数据并重载（generation 取消模式，照 `useFileTree` 模式）。
@@ -53,7 +53,7 @@ CommitView 有四个渲染态，优先级从高到低：
 - 文件名色：`GIT_FILE_COLORS[status]`（硬约束 #6，从 `theme/colors.ts` token 引用）
 - 父目录后缀：灰色 `INPUT_BORDER`，紧接文件名右侧显示相对目录路径
 - 可折叠：每列表标题栏点击折叠/展开，状态不持久化
-- 空态：展开时条目数为 0 显示"无变更文件"
+- 空态：展开时条目数为 0 显示"无变更文件"；**空态/状态提示文字色 = `DIM_FG`（fg-3，人工验证问题 4 修订——原误用边框 token `INPUT_BORDER`，与 explorer/nav 空态提示色不符）**
 
 ## 文件
 

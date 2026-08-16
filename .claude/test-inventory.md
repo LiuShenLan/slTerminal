@@ -2,7 +2,7 @@
 
 > **本文档是项目用例数唯一真值源。** 所有 CLAUDE.md、README、CI 配置中引用的用例数均以此文件为准。更新测试后必须同步本文档。
 
-全量 **3211** 用例（Rust 594 + 前端 2439 + L3 138 + E2E 40），2026-08-16 更新（UI 重设计 Stage 09 全量同步）。
+全量 **3237** 用例（Rust 607 + 前端 2452 + L3 138 + E2E 40），2026-08-16 更新（人工验证五问题修复批次——标题栏拖拽/历史session行/claude 名称统一/commit 提示色/贴靠文档）。
 
 > **计数口径**：
 > - L2 以 `npm test` 实跑（Vitest 报告）为准——`it.each(...)` 参数化与 `describeIpcContract` 工厂（`helpers/ipc-contract.ts`，IHE-06）等按**展开后用例数**计入（143 文件 2439 用例，2026-08-16 UI 重设计 Stage 09 终验实跑回写）；纯 grep `it(/test(` 块数会少计 it.each 展开（如 colors 92 = 13 块 + 7 组 each 展开 79）。
@@ -41,7 +41,7 @@
 | ⑤ | L2 | **E2E helper 行为契约**——`app.test.tsx`/`e2e-create-project.test.ts` 验证的是 `__slterm_e2e_createProject` 等 helper 的契约（pending 标记/localStorage 交互），非真实 App 初始化逻辑；真实挂载路径由 `e2e-gating-*` 测试 + L4 使用实证 | 13 P-14 |
 | ⑥ | L2 | **浅层组件定位**——`editor.test.tsx` mock `useCodeMirror` 只验证 prop 透传与容器样式，定位为组件集成契约测试（非行为测试），真实编辑器行为由 `use-code-mirror.test.ts` 等覆盖 | 07 G1/G2 |
 
-## L1 — Rust 单元/集成测试（31 文件 / 594 用例）
+## L1 — Rust 单元/集成测试（31 文件 / 607 用例）
 
 运行：`cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1`
 
@@ -73,38 +73,38 @@
 | `src-tauri/src/lib.rs` | 2 | ping 返回 pong/`get_windows_build_number` 返回数字 |
 | `src-tauri/src/agent_history/claude/jsonl.rs` | 28 | parse_head（cwd 收集/首条可见 prompt 跳过 4 类/EOF 截断/200 字符截断/标题 last-wins）+ 大文件头尾窗口协同 + parse_tail_title（custom 恒优先/ai 兜底）+ resolve_title 回退链 5 态 + tail 优先（MC-301 下沉 claude/，用例数不变） |
 | `src-tauri/src/agent_history/claude/scan.rs` | 16 | resolve_projects_root（env 覆盖/默认）+ 排除 3 类 + 多目录收集 + 扫描根缺失空数组 + 降级条目 + 完整字段回退 + cwdExists + env 端到端 + mtime + ScanRootGuard RAII（HFN-06）（MC-301 下沉 + env 覆盖留 provider 内部，MC-305；命令包装层已迁 mod.rs） |
-| `src-tauri/src/agent_history/claude/ops.rs` | 10 | validate_session_id（UUID 双形态/5 类非法拒绝——空串断言错误消息含具体文案）+ delete（jsonl+目录范围/仅 jsonl/不存在 Err）+ 越界防护（MC-301 下沉 + SEC-05 等价保留，MC-304；命令包装层已迁 mod.rs）+ **符号链接拒跟随 3 例（AQ-3：symlink 子目录/文件/同名目录均不跟随；Windows 创建失败权限不足时跳过）** |
-| `src-tauri/src/agent_history/mod.rs` | 13 | AgentHistorySession serde camelCase 八键集合精确匹配（含 cliId 打标）+ 反序列化 + roundtrip + titleSource 开放字符串（claude 值集不变）+ is_uuid_filename（MC-302 更名）+ 聚合 scan 遍历全部 provider（单 provider 失败不阻塞/全部空 → 空数组）+ delete validate_session_id 强制前置 + 未知 cliId Validation（MC-303）+ **命令包装层 4 用例（command_scan_wraps/command_scan_degraded/command_delete_wraps/command_delete_invalid，迁移自 scan.rs/ops.rs——mod.rs:407-464「命令包装层（迁移自 scan.rs/ops.rs）」）** |
+| `src-tauri/src/agent_history/claude/ops.rs` | 16 | validate_session_id（UUID 双形态/5 类非法拒绝——空串断言错误消息含具体文案）+ delete（jsonl+目录范围/仅 jsonl/不存在 Err）+ 越界防护（MC-301 下沉 + SEC-05 等价保留，MC-304；命令包装层已迁 mod.rs）+ **符号链接拒跟随 3 例（AQ-3：symlink 子目录/文件/同名目录均不跟随；Windows 创建失败权限不足时跳过）** + **read_session_title 6 例（人工验证问题 3 新增）：回退链（custom 恒优先/ai/summary/firstPrompt/空文件 None）/文件缺失 Ok None（与 delete 的 Err 语义区分）/非法 id Err/尾部 64KB 覆盖头部/损坏 jsonl 容错 None** |
+| `src-tauri/src/agent_history/mod.rs` | 20 | AgentHistorySession serde camelCase 八键集合精确匹配（含 cliId 打标）+ 反序列化 + roundtrip + titleSource 开放字符串（claude 值集不变）+ is_uuid_filename（MC-302 更名）+ 聚合 scan 遍历全部 provider（单 provider 失败不阻塞/全部空 → 空数组）+ delete validate_session_id 强制前置 + 未知 cliId Validation（MC-303）+ **命令包装层 4 用例（command_scan_wraps/command_scan_degraded/command_delete_wraps/command_delete_invalid，迁移自 scan.rs/ops.rs）** + **read_title 7 例（人工验证问题 3 新增）：AgentHistoryTitle 两键 serde ×2 + 桩分发 + validate 前置拒绝时不读 + 未知 cliId + 包装层真实文件（summary 回退链/文件缺失 Ok None）** |
 | `src-tauri/src/agent_history/claude/mod.rs` | 4 | TitleSource serde camelCase 往返 + title_source as_str 值集映射 + ScanRootGuard env 恢复（MC-302 下沉 claude/，值集不变） |
-| `src-tauri/src/agent_history/provider.rs` | 2 | CliHistoryProvider trait 三方法（scan/delete/validate_session_id）+ cliId 键注册表 + resolve_provider 命中（身份断言）/未知 cliId Validation（MC-303/304 新建） |
+| `src-tauri/src/agent_history/provider.rs` | 2 | CliHistoryProvider trait 四方法（scan/delete/validate_session_id/**read_title**，人工验证问题 3）+ cliId 键注册表 + resolve_provider 命中（身份断言）/未知 cliId Validation（MC-303/304 新建） |
 | `src-tauri/tests/pty_integration_tests.rs` | 8 | PTY 往返/OSC cwd 解析/resize 生效/kill 无孤儿/Custom ConPTY spawn/reattach/env 注入 |
 
-> ① 占位符已实落消除：provider.rs 实落 2 条（resolve_provider 命中/未知 cliId Validation），claude/mod.rs 实落 4 条（TitleSource serde ×2 + as_str 映射 + ScanRootGuard env 恢复）；Stage 08 补登 hooks/claude/mod.rs 1 条（HomeDirGuard 注入/恢复守卫）——L1 总数按静态 grep `#[test]` 实查对齐 **594（31 文件）**，与 `cargo test -- --test-threads=1` 实跑一致（lib 488 + tests/ 106；原 597/32 文件失实——`src/fs/CLAUDE.md` 内文含 `#[test]` 字样被误计入文件数，2026-08-16 实查校正）。**statusline 桥接（context 官方用量百分比口径）：usage.rs 随 transcript 链路退役整文件删除（-26），inject.rs 桥接全表 +14，signal.rs ContextUsage 信号 +1。B11 包裹解包：inject.rs +7。UI 重设计（Stage 01-08）src-tauri 仅 capabilities/tauri.conf.json 变动，L1 零用例变动。**
+> ① 占位符已实落消除：provider.rs 实落 2 条（resolve_provider 命中/未知 cliId Validation），claude/mod.rs 实落 4 条（TitleSource serde ×2 + as_str 映射 + ScanRootGuard env 恢复）；Stage 08 补登 hooks/claude/mod.rs 1 条（HomeDirGuard 注入/恢复守卫）——L1 总数按静态 grep `#[test]` 实查对齐 **607（31 文件）**（人工验证问题 3 read_title 批次 +13：ops.rs 10→16、mod.rs 13→20），与 `cargo test -- --test-threads=1` 实跑一致（lib 501 + tests/ 106；原 597/32 文件失实——`src/fs/CLAUDE.md` 内文含 `#[test]` 字样被误计入文件数，2026-08-16 实查校正）。**statusline 桥接（context 官方用量百分比口径）：usage.rs 随 transcript 链路退役整文件删除（-26），inject.rs 桥接全表 +14，signal.rs ContextUsage 信号 +1。B11 包裹解包：inject.rs +7。UI 重设计（Stage 01-08）src-tauri 仅 capabilities/tauri.conf.json 变动，L1 零用例变动。**
 
-> `pty/mod.rs`、`pty/win_build.rs`、`main.rs` 不含 `#[test]`，不在此列。git/mod.rs 测试已按 GIT-12 全量拆出至 `tests/`（`#[test]` 零残留）。agent_history 模块 grep 口径：claude/jsonl 28 + claude/scan 16 + claude/ops 10 + mod 13 = 67（命令包装层 4 用例已迁入 mod.rs:407-464，MC-301 下沉时随行）+ claude/mod 4 + provider 2 = 全模块 73；env 测试依赖 L1 `--test-threads=1` 门禁（`std::env::set_var` 全局可变）。
+> `pty/mod.rs`、`pty/win_build.rs`、`main.rs` 不含 `#[test]`，不在此列。git/mod.rs 测试已按 GIT-12 全量拆出至 `tests/`（`#[test]` 零残留）。agent_history 模块 grep 口径：claude/jsonl 28 + claude/scan 16 + claude/ops 16 + mod 20 = 80（命令包装层 4 用例已迁入 mod.rs，MC-301 下沉时随行）+ claude/mod 4 + provider 2 = 全模块 86；env 测试依赖 L1 `--test-threads=1` 门禁（`std::env::set_var` 全局可变）。
 
-## L2 — 前端单元/集成测试（143 文件 / 2439 用例）
+## L2 — 前端单元/集成测试（143 文件 / 2452 用例）
 
-运行：`npm test`（Vitest + jsdom，登记 2439 用例——2026-08-16 UI 重设计 Stage 09 终验实跑 2439 passed，0 failed）
+运行：`npm test`（Vitest + jsdom，登记 2452 用例——2026-08-16 人工验证五问题修复批次实跑 2452 passed，0 failed）
 
 > ① UI 重设计（Stage 01-08）L2 全量变动（明细见各段表行与文末「历史变更」）：删除 4 文件 123 用例（agent-status-view 35 / agent-history-view 38 / sidebar-actions 47 / dialog-e2e-hook 3）、新增 7 文件 67 用例（title-bar 7 / nav-tree 31 / nav-tree-history 8 / confirm-dialog 11 / toast 5 / open-hooks-config 5，emoji-scan 3 已登记）、既有文件净 +25（colors +6 / overrides +2 / activityBar +4 / sideBar +1 / workspace-defaulttab +5 / workspace-header-actions +1 / workspace-page-dockview +1 / explorer-delete +3 / file-icon +1 / commit-context-menu +2 / commit-context-menu-ui +2 / agent-status-lib -3）；另校正 2 行（notifications 34→49、close-handler 13→12，it.each 展开口径/挂载适配实跑口径）——行级合计 2439 = 实跑，旧表头 2463（行级和 2456）失实 7 一并校正。
 
-### IPC 层（6 文件 / 115 用例）
+### IPC 层（6 文件 / 119 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
 | `src/__tests__/ipc-contract.test.ts` | 65 | pty/fs/settings/projects/notify/git 全模块四维验证（IHE-06 工厂化：8 裸 it + 57 cases）+ DBG-4 PTY payload 契约守卫 + onFsEvent listen 回调解包行为契约（IHE-01②） |
 | `src/__tests__/ipc-agent-hooks-contract.test.ts` | 21 | agent hooks 四命令四维验证（命令名 agent_hooks_*——inject/uninstall/injection_status/restoreStatusline，原 contextUsage 随 transcript 链路退役删 5 cases）+ ContextUsageSignal 键集合守卫（官方 used_percentage 单字段）+ AgentEventPayload 字段契约（含 usedPercentage 承载）+ onAgentEvent 解包（7 裸 it + 14 cases，MC-212 更名同步） |
-| `src/__tests__/ipc-agent-history-contract.test.ts` | 8 | agent_history_scan（无参聚合）/agent_history_delete（{cliId, sessionId} 双参 camelCase）两命令四维验证（F7，rename 已移除；MC-306 更名同步） |
+| `src/__tests__/ipc-agent-history-contract.test.ts` | 12 | agent_history_scan（无参聚合）/agent_history_delete（{cliId, sessionId} 双参 camelCase）/agent_history_read_title（{cliId, sessionId} 双参 camelCase + AgentHistoryTitle 两键返回透传，人工验证问题 3 新增）三命令四维验证（F7，rename 已移除；MC-306 更名同步） |
 | `src/__tests__/ipc-window-contract.test.ts` | 10 | `registerCloseHandler` 关闭生命周期契约（WRK-04 处置：保留 + 契约测试） |
 | `src/__tests__/ipc-ping.test.ts` | 2 | `ping()` wrapper 调用（IHE-07① 改调导出函数） |
 | `src/__tests__/notification.test.ts` | 9 | `sendToastNotification` catch 静默/`ensureNotificationPermission` 拒绝路径（IHE-02 新建） |
 
-### 终端面板（15 文件 / 244 用例）
+### 终端面板（15 文件 / 249 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
-| `src/__tests__/use-xterm-lifecycle.test.ts` | 81 | PTY spawn/exit/setupRetry/快捷键/rAF 轮询/ResizeObserver/字体/OSC 52/133/8/键盘委托/agent-event 过滤与状态更新（F3 四态，问题 2 同源）/setAgentSession 写入（TRM-01 去重后归位）/OSC 133 C 携 title/icon（F9 行为修订：logo 不经 C 路径直传——会话绑定由 TerminalPanel 订阅驱动，OSC133-1/2b 断言同步）/LNK 链接点击（it.each 3 展开，Stage 08 校正 71→79）+ **resolvePayloadCliId 空串 cliId 回退（ZQ-2，代 event-pipeline 登记）+ Exit 事件清图标（ZQ-6，代 event-pipeline 登记）（Stage 02 review-fix +2；F9 修订实跑校正 81→80）** + **B13 信号形态（+1 净：HUK2/17/18 断言改 restoreTitle:false、HUK7 补 title、HUK20 新增 SessionEnd→SessionStart 连续标题不回落——80→81）** + **IC-03 断言同步（tabIcon→tabStatus：事件→状态写入字段更名，用例数不变）** |
+| `src/__tests__/use-xterm-lifecycle.test.ts` | 86 | PTY spawn/exit/setupRetry/快捷键/rAF 轮询/ResizeObserver/字体/OSC 52/133/8/键盘委托/agent-event 过滤与状态更新（F3 四态，问题 2 同源）/setAgentSession 写入（TRM-01 去重后归位）/OSC 133 C 携 title/icon（F9 行为修订：logo 不经 C 路径直传——会话绑定由 TerminalPanel 订阅驱动，OSC133-1/2b 断言同步）/LNK 链接点击（it.each 3 展开，Stage 08 校正 71→79）+ **resolvePayloadCliId 空串 cliId 回退（ZQ-2，代 event-pipeline 登记）+ Exit 事件清图标（ZQ-6，代 event-pipeline 登记）（Stage 02 review-fix +2；F9 修订实跑校正 81→80）** + **B13 信号形态（+1 净：HUK2/17/18 断言改 restoreTitle:false、HUK7 补 title、HUK20 新增 SessionEnd→SessionStart 连续标题不回落——80→81）** + **IC-03 断言同步（tabIcon→tabStatus：事件→状态写入字段更名，用例数不变）** + **HUK21~25 运行中会话标题通道 5 例（人工验证问题 3：SessionStart 异步 readHistoryTitle(cliId, sessionId) + 解析标题仅标题回调不带 status / null 兜底 tabTitle 同值去重 / 无 sessionId 不调 IPC + IPC reject 静默 / 5s 节流（窗口内不重查、超窗重查、标题未变不重复回调）/ 陈旧结果丢弃——81→86）** |
 | `src/__tests__/use-xterm-output.test.ts` | 35 | DEC 2026/直写阈值/交替缓冲/Idle+Max 合帧/Uint8Array/非焦点降频/cancelPendingFlush/64KB 淘汰（TRM-04）/退出码透传；终端规则 mock 改指 cliProfiles 注册表（Stage 01 迁移，用例数不变） |
 | `src/__tests__/terminal-registry.test.ts` | 28 | register/get/remove/has/幂等/setAgentSession merge 语义（AgentSessionInfo + cliId 字段/null 清空/undefined 不覆盖/缺 lastEventAt 自动填——NAH-02）/sessionChange 事件/`_reset`（Stage 08 校正 24→28） |
 | `src/__tests__/can-fit.test.ts` | 15 | 五条件守卫 + null/undefined 参数防护 |
@@ -201,12 +201,12 @@
 | `src/__tests__/explorer-rename-keyboard.test.tsx` | 5 | F2 快捷键 → renameSelected 集成 |
 | `src/__tests__/explorer-crud-success.test.tsx` | 4 | CRUD 成功路径（EXP-02）：IPC + refresh + 状态重置 |
 
-### 导航树（2 文件 / 39 用例，NAV-06/08 承接 SidebarTree 与 AgentStatus/历史视图退役语义）
+### 导航树（2 文件 / 41 用例，NAV-06/08 承接 SidebarTree 与 AgentStatus/历史视图退役语义）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
-| `src/__tests__/nav-tree.test.tsx` | 31 | **NAV-01/02/03/04/09 导航树（新建，承接 SidebarTree 项目/页面 CRUD + 右键菜单 + 内联重命名 + AgentStatus 活跃行 + 历史折叠节点）**：三级层级渲染（项目→页面→会话，活跃会话经 panelId→pageId 归属页面）/行高规格（项目/页面 28px、会话 30px、圆角 5）/选中态 token（ACTIVE_SELECTION_BG 底 + fg-1 字；hover 非选中 SIDEBAR_COLORS.hover、选中行 SELECTION_HOVER_BG）/活跃会话行构成（StatusDot status 透传 + CLI logo 14px + 标题 + 右侧迷你用量条 32×3 + 百分比 11px fg-4；usage 缺省「--」；用量条四档 it.each 4 展开）/点击会话行 → switchToPageAndFocus(pageId, panelId)/搜索过滤（页面名/项目名/会话名子串不区分大小写 + 父节点因子 + 空态）/「当前」pill（ACTIVE_SELECTION_BG 底 + ACCENT_FG 字 10px）与计数 pill（SIDEBAR_BG 底 + PLACEHOLDER_FG 字）/右键菜单（项目/页面行含新建/重命名/删除，**无「打开 Hooks 配置」——NAV-06 入口删除**）/data-e2e 五选择器契约 + 分组标题「导航」+ 搜索框占位/**历史节点（NAV-03）：计数 pill + 展开历史行 + 双击恢复 restoreHistorySession/运行中行 SessionActionDialog → switchToPageAndFocus + 右键菜单（复制/分支/删除 danger）+ 空态「暂无历史会话」** |
-| `src/__tests__/nav-tree-history.test.tsx` | 8 | **NAV-03/08 历史折叠节点迁入导航树（承接原 agent-history-view 历史区语义）**：历史折叠节点渲染（时钟图标 +「历史」+ 计数 pill）/计数 = cwd 前缀匹配会话数/历史会话项目归属（cwd 前缀匹配项目 rootPath，不匹配 → 该项目无历史）/历史行构成（StatusDot + CLI logo 14px + 标题 + 右侧相对时间）/**prompt 预览 → 行容器原生 title tooltip（预览文本不再渲染为可见文本，NAV-08 单行化）**/空历史展开无行（空态）/双击历史行 → restoreHistorySession(session)（四步恢复编排入口）/历史行右键菜单（复制恢复命令/分支恢复/删除，historyContextMenu 策略，无「打开 Hooks 配置」） |
+| `src/__tests__/nav-tree.test.tsx` | 33 | **NAV-01/02/03/04/09 导航树（新建，承接 SidebarTree 项目/页面 CRUD + 右键菜单 + 内联重命名 + AgentStatus 活跃行 + 历史折叠节点）**：三级层级渲染（项目→页面→会话，活跃会话经 panelId→pageId 归属页面）/行高规格（项目/页面 28px、会话 30px、圆角 5）/选中态 token（ACTIVE_SELECTION_BG 底 + fg-1 字；hover 非选中 SIDEBAR_COLORS.hover、选中行 SELECTION_HOVER_BG）/活跃会话行构成（StatusDot status 透传 + CLI logo 14px + 标题 + 右侧迷你用量条 32×3 + 百分比 11px fg-4；usage 缺省「--」；用量条四档 it.each 4 展开）/点击会话行 → switchToPageAndFocus(pageId, panelId)/搜索过滤（页面名/项目名/会话名子串不区分大小写 + 父节点因子 + 空态）/「当前」pill（ACTIVE_SELECTION_BG 底 + ACCENT_FG 字 10px）与计数 pill（SIDEBAR_BG 底 + PLACEHOLDER_FG 字）/右键菜单（项目/页面行含新建/重命名/删除，**无「打开 Hooks 配置」——NAV-06 入口删除**）/data-e2e 五选择器契约 + 分组标题「导航」+ 搜索框占位/**历史节点（NAV-03）：计数 pill + 展开历史行 + 双击恢复 restoreHistorySession/运行中行 SessionActionDialog → switchToPageAndFocus + 右键菜单（复制/分支/删除 danger）+ 空态「暂无历史会话」** + **页面行 IconPage 图标（svg aria-hidden + 14px fg-3，与历史session 时钟区分）+ 历史session 同级缩进（childrenStyle 容器：marginLeft 15 + 引导线、位于页面容器之后、收起常驻）2 例（人工验证问题 2——31→33）** |
+| `src/__tests__/nav-tree-history.test.tsx` | 8 | **NAV-03/08 历史折叠节点迁入导航树（承接原 agent-history-view 历史区语义）**：历史折叠节点渲染（时钟图标 +「历史session」+ 计数 pill——文案断言人工验证问题 2 修订）/计数 = cwd 前缀匹配会话数/历史会话项目归属（cwd 前缀匹配项目 rootPath，不匹配 → 该项目无历史）/历史行构成（StatusDot + CLI logo 14px + 标题 + 右侧相对时间）/**prompt 预览 → 行容器原生 title tooltip（预览文本不再渲染为可见文本，NAV-08 单行化）**/空历史展开无行（空态）/双击历史行 → restoreHistorySession(session)（四步恢复编排入口）/历史行右键菜单（复制恢复命令/分支恢复/删除，historyContextMenu 策略，无「打开 Hooks 配置」） |
 
 ### 侧栏视图（7 文件 / 153 用例）
 
@@ -226,10 +226,10 @@
 |------|------|---------|
 | `src/__tests__/commit-open-file.test.ts` | 17 | 双击分派（SVC-04/11）：四状态 addPanel 参数/去重聚焦（B10 反向经 openCommitFile 驱动）/守卫路径（无 pageApi/未知状态/addPanel 失败降级） |
 | `src/__tests__/commit-context-menu.test.ts` | 17 | getContextMenuItems 状态→菜单映射 + action 执行流程 + 删除 catch（SVC-09）+ **UI-802 危险项标记（+2：回滚/删除菜单项标记 danger）** |
-| `src/__tests__/commit-view-list.test.tsx` | 9 | 列表渲染（token/计数/排序/空态）/折叠交互/fs-event 200ms 去抖（SVC-03）/rootPath 切换（SVC-12 计时统一） |
+| `src/__tests__/commit-view-list.test.tsx` | 9 | 列表渲染（token/计数/排序/空态——**空态「无变更文件」文字色 DIM_FG 断言，人工验证问题 4**）/折叠交互/fs-event 200ms 去抖（SVC-03）/rootPath 切换（SVC-12 计时统一） |
 | `src/__tests__/commit-context-menu-ui.test.tsx` | 10 | 菜单 UI 交互（外点关闭/项点击 → confirmDialog → IPC → refresh）+ **UI-802 菜单视觉规格（+2：菜单项 28px 高 + 圆角 5/危险项 ERROR_FG 着色、普通项 SIDEBAR_FG）** |
 | `src/__tests__/commit-view-status.test.ts` | 7 | 状态机四态（no-root/loading/error/ready） |
-| `src/__tests__/commit-view.test.tsx` | 4 | 残余主干用例（拆分后） |
+| `src/__tests__/commit-view.test.tsx` | 4 | 残余主干用例（拆分后）——**no-root/error 提示色 DIM_FG、loading HTML_PANEL_LOADING_FG 断言（人工验证问题 4，用例数不变）** |
 
 ### hooks 配置面板（11 文件 / 228 用例）
 
@@ -289,14 +289,14 @@
 
 > `agent-status-view.test.tsx`（35 用例）已随 NAV-08 删除——AgentStatusView/AgentStatusRow 组件退役，渲染语义由 nav-tree.test.tsx 活跃会话行承接（原覆盖范围：空态文案/用量条/四档分段/logo/受控 history 集成等语义并入导航树测试）。
 
-### Agent 历史会话（5 文件 / 96 用例，F7）
+### Agent 历史会话（5 文件 / 97 用例，F7）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
 | `src/__tests__/agent-history-model.test.ts` | 47 | 纯函数全分支（Stage 02 更名同步，AgentStatus；Stage 04 类型/工厂同步 AgentHistorySession 八键含 cliId，MC-306；Stage 05 目录更名 + **复合键 cliId\|sessionId——MC-313**）：isCurrentProject（决策 24）/groupByCwd/matchesSearch/formatRelativeTime（决策 26）/deriveActiveSessionStatuses（**sessionId null 回退 basename，NAH-01**/**显式 cliId 键不依赖回退/同 sessionId 不同 cliId 防冲突/旧数据无 cliId 按 CLAUDE_CLI_ID 回退——MC-313 +3**）/**keyOf 单点（ZQ-1/ZQ-7，+3：cliId null/undefined 缺省回退/显式 cliId 透传/含竖线两侧转义 + 生产消费两侧键一致 + 裸拼接键不命中）** |
 | `src/__tests__/agent-history-row.test.tsx` | 21 | **NAV-08 单行化（20→21）**：单行渲染（标题 12px 粗体 + 相对时间 11px + 行高 30px + 行根无二级容器）/prompt 预览不再渲染为第二行 → **行容器原生 title tooltip 断言（+2：title=firstPrompt / firstPrompt null 无 title 属性，原「firstPrompt null 不渲染行2」并入）**/四态标记/**圆点替换 emoji（IC-03 断言同步）**/✗ 孤儿标记/**图标优先级（status 覆盖 orphan，NAH-10）**/单击选中/双击三分派/CLI logo（**F9 行为修订：跟随会话名显示不依赖 status emoji**——status null 仍渲染/孤儿行仍渲染/status null logo 顶到行首位；**按 session.cliId 查 profile.iconSrc，未注册 cliId → 无 logo 不报错——MC-311**；NAV-08 尺寸 16×16→14×14）（Stage 04 类型同步，MC-306；Stage 05 目录更名） |
 | `src/__tests__/agent-history-hook.test.tsx` | 13 | 状态机流转/scan 成功失败/removeLocal 不重扫/**scan generation 竞态（NAH-08）**/subscribe 驱动 activeStatuses（**复合键 cliId\|sessionId——MC-313 断言同步**）/卸载清理（Stage 02 更名同步，AgentStatus；Stage 04 mock 路径 + 类型同步，MC-306；Stage 05 目录更名 + useAgentHistory） |
-| `src/__tests__/agent-history-restore.test.ts` | 8 | 四步编排/pty.write 内容（普通/fork/`\r`）/**防重入（NAH-07①）**/失败 toast/**cwd null 防御性 throw（NAH-07②）**（Stage 04 类型同步，MC-306；Stage 05 目录更名 + **注入内容断言 = claude profile.history.buildRestoreInput 输出逐字一致（MC-315 委托，用例数不变）** + **同毫秒两次恢复 panelId 相异（ZQ-4 自增序号，Stage 02 review-fix +1，代 restore-id 登记；B14 改造为模块级每页计数确定性断言 `terminal-{pageId}-0/1`，用例数不变）**） |
+| `src/__tests__/agent-history-restore.test.ts` | 9 | 四步编排/pty.write 内容（普通/fork/`\r`）/**防重入（NAH-07①）**/失败 toast/**cwd null 防御性 throw（NAH-07②）**（Stage 04 类型同步，MC-306；Stage 05 目录更名 + **注入内容断言 = claude profile.history.buildRestoreInput 输出逐字一致（MC-315 委托，用例数不变）** + **同毫秒两次恢复 panelId 相异（ZQ-4 自增序号，Stage 02 review-fix +1，代 restore-id 登记；B14 改造为模块级每页计数确定性断言 `terminal-{pageId}-0/1`，用例数不变）**） + **初始标题两分支 1 例（人工验证问题 3：session.title 非空用它、null 兜底 profile.tabTitle——addPanel title 断言同步，8→9）** |
 | `src/__tests__/agent-history-action-dialog.test.tsx` | 7 | SessionActionDialog 渲染/action 回调/取消（按钮/Esc/遮罩）/**空 actions 防御（NAH-11）**（Stage 04 零改动；Stage 05 仅 import 路径更名） |
 
 > `agent-history-view.test.tsx`（38 用例）已随 NAV-08 删除——AgentHistorySections 组件退役，历史区渲染/搜索/菜单/恢复语义由 nav-tree.test.tsx 与 nav-tree-history.test.tsx 承接（搜索过滤/复制命令/标题回退链等并入导航树测试）。
@@ -332,11 +332,11 @@
 
 > `dialog-e2e-hook.test.ts`（3 用例）已随 OV-02 删除——`ipc/dialog` 的 ask 已删（确认语义改经 `confirmDialog`），E2E ask 钩子随之退役；文件对话框（open/save）为原生保留，无 L2 守卫。
 
-### 标题栏/统一浮层（3 文件 / 23 用例，Stage 04/07 新建）
+### 标题栏/统一浮层（3 文件 / 24 用例，Stage 04/07 新建）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
-| `src/__tests__/title-bar.test.tsx` | 7 | **TB-06 自绘标题栏（Stage 04 新建）**：三段结构（左段 slTerminal 标识 + 右段三窗口钮，顺序契约最小化/最大化/关闭）/中段按 store 种子显示活跃项目名与活跃页面名（非活跃页不出现）/三钮点击分别调用 ipc/window 的 minimizeWindow/toggleMaximizeWindow/closeWindow（vi.mock 桩，互不误调）/中段双击调用 toggleMaximizeWindow/容器含 data-tauri-drag-region（拖拽区域，TB-04）——真实 projects store 种子（beforeEach setState） |
+| `src/__tests__/title-bar.test.tsx` | 8 | **TB-06 自绘标题栏（Stage 04 新建；TB-04 修订——人工验证问题 1）**：三段结构（左段 slTerminal 标识 + 右段三窗口钮，顺序契约最小化/最大化/关闭）/中段按 store 种子显示活跃项目名与活跃页面名（非活跃页不出现）/三钮点击分别调用 ipc/window 的 minimizeWindow/toggleMaximizeWindow/closeWindow（vi.mock 桩，互不误调）/中段无 React 双击 handler——双击不调 wrapper（Tauri 原生拖拽区承担，TB-04 修订）/左中段恰两处 `data-tauri-drag-region="deep"`（子树拖拽——裸属性只命中直接点击元素，文字 span/svg 子元素拦截）/无项目时左中段拖拽区仍渲染（中段空 div 可拖，TB-06-8 新增 7→8）——真实 projects store 种子（beforeEach setState） |
 | `src/__tests__/confirm-dialog.test.tsx` | 11 | **OV-01/UI-801 统一确认弹窗（Stage 07 新建）**：标题 + 消息 + 确认/取消按钮渲染/遮罩/卡片/按钮色值规格（遮罩 SHADOW_MENU、卡片 SIDEBAR_BG + 描边 + 圆角 8 + 阴影；主按钮 FOCUS_BORDER 底 + ON_ACCENT_FG 字）/**danger → 主按钮 ERROR_FG 底 + SIDEBAR_FG 字**/title/confirmText/cancelText 省略默认文案 + 无标题行/kind 契约三值均可接受/无挂起弹窗时 Host 渲染 null/点击确认 → Promise 解析 true/点击取消 → false/ESC → false/非 Escape 键不关闭/遮罩点击 → false（点卡片内部不关闭）——模块级单例经 `_resetConfirmDialog` 隔离 |
 | `src/__tests__/toast.test.tsx` | 5 | **OV-01/UI-804 toast（Stage 07 新建）**：show 渲染消息 + 容器右上角固定（16px 偏移）/三型语义色规格（success/warning/error 的 12% 底 + 1px 语义描边 + fg-1 文字 + 圆角 8，data-e2e=toast-{type}）/多条堆叠按 show 顺序/无通知时容器不渲染/自动消失（fake timers：success 3s/warning 4s/error 5s 到期仅移除自身，全部到期容器卸载）——`toast._reset` 隔离 |
 
@@ -421,6 +421,7 @@ embedded WDIO 驱动**无法将 OS 级按键（`browser.keys`）投递进 WebVie
 - 2026-08-01（验收修复 5：卸载改 handler 级剔除）：inject.rs remove_slterm_matchers 组级→handler 级（混组保用户 handler，组空才删组）；20→22 用例（+2：混组保用户 handler/全 slterm 组删除）。L1 382→384，全量 2304→2306。
 - 2026-08-01（验收修复 4：JSON 模式三修）：删自动补全（jsonCompletion + jsonLanguage.data.of + @codemirror/autocomplete 直接依赖移除，传递依赖仍在）；加 EditorView.theme height:100% + overflow:clip（竖向滚动条，验收 1.3）；hooks-config-panel 18→19（+1 错误提示单行截断断言，验收 1.2）；jsonmode 17（断言改 height theme，用例数不变）。L2 1779→1780，全量 2303→2304。
 - 2026-08-01（验收修复 3：GUI 接入 HandlerForm）：hooks-config-gui 21→25（+4：选中渲染表单/字段编辑上抛新模型/切换选中表单跟随/托管 handler 表单只读）。L2 1775→1779，全量 2299→2303。
+- 2026-08-16（人工验证五问题修复批次）：L1 +13（agent_history：ops.rs 10→16 read_session_title 6 例、mod.rs 13→20 AgentHistoryTitle 两键 serde + read_title 命令层 5 例），594→607。L2 +13（title-bar 7→8 TB-06-8 无项目拖拽区 + TB-06-6/7 修订；nav-tree 31→33 IconPage 图标 + 历史session 同级缩进；use-xterm-lifecycle 81→86 HUK21~25 运行中会话标题通道；ipc-agent-history-contract 8→12 readTitle 四维；agent-history-restore 8→9 初始标题两分支），2439→2452。L3/L4 零变动。全量 3211→3237。
 - 2026-08-01（验收修复 2：外部修改检测改 window focus）：hooks-config-panel 17→18（删 3 个 focusin relatedTarget 用例——机制移除；改/增 4 个 window focus 用例——可见触发/不可见跳过/面板内点击不触发/ask 弹窗期间回归不二次弹窗）。L2 1774→1775，全量 2298→2299。
 - 2026-08-01（验收修复 1：删除单条启停）：删除 hooks-config-store.test.ts（21 用例）+ hooks-config-disable.test.tsx（10 用例）；model 22→17（删 filterDisabled describe 5 条）；sync 9→8（删 filterDisabled 保存链路用例）；panel 17（去失效记录条描述，用例数不变）。L2 1811→1774，全量 2335→2298。
 - 2026-08-01（验收 #1 修复）：hooks-config-panel.test.tsx 15→17（+2 focusin relatedTarget 判定——面板内焦点转移不重读/面板外进入重读）。L2 1809→1811。全量 2333→2335。

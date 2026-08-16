@@ -47,6 +47,20 @@ pub struct AgentHistorySession {
     pub cli_id: String,
 }
 
+/// 单会话标题 DTO（IPC 契约两键，serde camelCase，硬约束 #4）
+///
+/// 供运行中会话页签/导航树行取与历史 session 同源的标题
+/// （`agent_history_read_title`——人工验证问题 3）。`title` 为 None 表示回退链
+/// 四路全无（文件缺失/无任何标题数据）——前端兜底 CLI 名（claude 等）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentHistoryTitle {
+    /// 标题（回退链合成结果；全无时为 None）
+    pub title: Option<String>,
+    /// 标题来源开放字符串（claude 值集：customTitle/aiTitle/summary/firstPrompt/none）
+    pub title_source: String,
+}
+
 /// 校验字符串是否为 UUID 形态（`^[0-9a-fA-F]{8}-...-{12}$`）
 ///
 /// 可复用工具（MC-301）：scan 排除非会话文件、provider validate_session_id 校验复用。
@@ -115,6 +129,35 @@ pub(crate) async fn run_delete(
 ) -> Result<(), AppError> {
     provider.validate_session_id(&session_id)?;
     tokio::task::spawn_blocking(move || provider.delete(&session_id))
+        .await
+        .map_err(AppError::from)?
+}
+
+/// agent_history_read_title — 读取单会话标题（运行中会话页签/会话行显示名）
+///
+/// 回退链与历史扫描同源（custom-title > ai-title > summary > firstPrompt）。
+/// 未知 cliId → `AppError::Validation`（resolve_provider 统一产出）。
+/// 阻塞 I/O 全部在 spawn_blocking 内执行（硬约束 #3）。
+#[tauri::command]
+pub async fn agent_history_read_title(
+    cli_id: String,
+    session_id: String,
+) -> Result<AgentHistoryTitle, AppError> {
+    let provider = resolve_provider(&cli_id)?;
+    run_read_title(provider, session_id).await
+}
+
+/// 读标题核心（provider 注入，测试可直测 validate 前置）
+///
+/// **validate_session_id 是 read_title 的强制前置**（trait 契约，SEC-05 等价）：
+/// 先经 provider 校验 sessionId，通过后才在 spawn_blocking 内执行读取。
+/// 会话文件不存在 → provider 返回 `Ok(title: None)`（正常条件非错误）。
+pub(crate) async fn run_read_title(
+    provider: &'static dyn CliHistoryProvider,
+    session_id: String,
+) -> Result<AgentHistoryTitle, AppError> {
+    provider.validate_session_id(&session_id)?;
+    tokio::task::spawn_blocking(move || provider.read_title(&session_id))
         .await
         .map_err(AppError::from)?
 }
@@ -250,6 +293,12 @@ mod tests {
         fn validate_session_id(&self, _session_id: &str) -> Result<(), AppError> {
             Ok(())
         }
+        fn read_title(&self, _session_id: &str) -> Result<AgentHistoryTitle, AppError> {
+            Ok(AgentHistoryTitle {
+                title: None,
+                title_source: "none".to_string(),
+            })
+        }
     }
 
     /// 构造最小会话条目（sessionId/cliId 打标）
@@ -312,6 +361,7 @@ mod tests {
     #[derive(Debug)]
     struct RecordingStub {
         delete_called: AtomicBool,
+        read_called: AtomicBool,
     }
 
     impl CliHistoryProvider for RecordingStub {
@@ -332,6 +382,13 @@ mod tests {
                 )))
             }
         }
+        fn read_title(&self, session_id: &str) -> Result<AgentHistoryTitle, AppError> {
+            self.read_called.store(true, Ordering::SeqCst);
+            Ok(AgentHistoryTitle {
+                title: Some(format!("标题 {session_id}")),
+                title_source: "customTitle".to_string(),
+            })
+        }
     }
 
     #[test]
@@ -339,6 +396,7 @@ mod tests {
         // validate_session_id 是 delete 的强制前置：validate 拒绝 → delete 不应被调用
         static STUB: RecordingStub = RecordingStub {
             delete_called: AtomicBool::new(false),
+            read_called: AtomicBool::new(false),
         };
         let err = block_on(run_delete(&STUB, "../evil".to_string())).unwrap_err();
         match err {
@@ -367,6 +425,120 @@ mod tests {
             }
             other => panic!("未知 cliId 应返回 Validation，实际: {other:?}"),
         }
+    }
+
+    // ── AgentHistoryTitle serde camelCase（两键契约，防字段漂移） ──
+
+    #[test]
+    fn history_title_serialize_camelcase_two_keys() {
+        let t = AgentHistoryTitle {
+            title: Some("修复登录 bug".to_string()),
+            title_source: "customTitle".to_string(),
+        };
+        let json = serde_json::to_value(&t).unwrap();
+        let obj = json.as_object().unwrap();
+        let expected: std::collections::BTreeSet<&str> =
+            ["title", "titleSource"].into_iter().collect();
+        let actual: std::collections::BTreeSet<&str> = obj.keys().map(String::as_str).collect();
+        assert_eq!(actual, expected, "AgentHistoryTitle 键集合应与契约一致");
+    }
+
+    #[test]
+    fn history_title_deserialize_none_roundtrip() {
+        let json = r#"{"title":null,"titleSource":"none"}"#;
+        let t: AgentHistoryTitle = serde_json::from_str(json).unwrap();
+        assert!(t.title.is_none());
+        assert_eq!(t.title_source, "none");
+        let back: AgentHistoryTitle =
+            serde_json::from_str(&serde_json::to_string(&t).unwrap()).unwrap();
+        assert!(back.title.is_none());
+        assert_eq!(back.title_source, "none");
+    }
+
+    // ── read_title 命令层（运行中会话标题通道） ──
+
+    #[test]
+    fn read_title_dispatches_to_provider_and_returns_title() {
+        // 命令核心经 provider 分发：validate 通过 → read_title 调用 → 结果透传
+        static STUB: RecordingStub = RecordingStub {
+            delete_called: AtomicBool::new(false),
+            read_called: AtomicBool::new(false),
+        };
+        let t = block_on(run_read_title(&STUB, UUID.to_string())).unwrap();
+        assert!(
+            STUB.read_called.load(Ordering::SeqCst),
+            "read_title 应被调用"
+        );
+        assert_eq!(t.title.as_deref(), Some(format!("标题 {UUID}").as_str()));
+        assert_eq!(t.title_source, "customTitle");
+    }
+
+    #[test]
+    fn read_title_validates_session_id_before_read() {
+        // validate_session_id 是 read_title 的强制前置：validate 拒绝 → read_title 不应被调用
+        static STUB: RecordingStub = RecordingStub {
+            delete_called: AtomicBool::new(false),
+            read_called: AtomicBool::new(false),
+        };
+        let err = block_on(run_read_title(&STUB, "../evil".to_string())).unwrap_err();
+        match err {
+            AppError::Validation(msg) => {
+                assert!(msg.contains("非法 sessionId"), "消息应含校验文案: {msg}");
+            }
+            other => panic!("非法 sessionId 应返回 Validation，实际: {other:?}"),
+        }
+        assert!(
+            !STUB.read_called.load(Ordering::SeqCst),
+            "validate 拒绝时 read_title 不应被调用"
+        );
+    }
+
+    #[test]
+    fn read_title_unknown_cli_id_returns_validation() {
+        // 未知 cliId → Validation（resolve_provider 统一产出，消息含「未知 cliId」语义）
+        let err = block_on(agent_history_read_title(
+            "nope".to_string(),
+            UUID.to_string(),
+        ))
+        .unwrap_err();
+        match err {
+            AppError::Validation(msg) => {
+                assert!(msg.contains("未知 cliId"), "消息应含「未知 cliId」: {msg}");
+            }
+            other => panic!("未知 cliId 应返回 Validation，实际: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn command_read_title_wraps_spawn_blocking_and_returns_resolved_title() {
+        // 包装层最小用例：spawn_blocking + await + map_err 全链路——summary 首行
+        // → 回退链落位 summary（真实 claude provider + ScanRootGuard tempdir）
+        let (_dir, root, proj) = make_scan_root();
+        write_valid_session(&proj, UUID);
+
+        let _guard = ScanRootGuard::set(&root);
+        let t = block_on(agent_history_read_title(
+            "claude".to_string(),
+            UUID.to_string(),
+        ))
+        .unwrap();
+
+        assert_eq!(t.title.as_deref(), Some("修复登录 bug"));
+        assert_eq!(t.title_source, "summary");
+    }
+
+    #[test]
+    fn command_read_title_missing_file_returns_none_ok() {
+        // 会话文件不存在（运行中会话尚未落盘）→ Ok(title: None)——正常条件非 Err
+        let (_dir, root, _proj) = make_scan_root();
+        let _guard = ScanRootGuard::set(&root);
+        let t = block_on(agent_history_read_title(
+            "claude".to_string(),
+            UUID.to_string(),
+        ))
+        .unwrap();
+        assert!(t.title.is_none());
+        assert_eq!(t.title_source, "none");
     }
 
     // ── 命令包装层（迁移自 scan.rs/ops.rs：直接 await #[tauri::command] fn） ──

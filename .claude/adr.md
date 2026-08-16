@@ -96,4 +96,4 @@
 - **配置钮入口唯一化**：活动栏底部「配置」钮 = 打开 hooks 配置面板（唯一入口）；SidebarTree 右键菜单「打开 Hooks 配置」项随 SidebarTree 退役删除。
 - **导航树挂法**：活跃会话挂页面下（panelId→pageId 归属）；历史会话折叠节点挂项目下（cwd 归属——规范化前缀匹配，孤儿目录不展示）。
 - **两新依赖**：`lucide-react`（装饰图标全部线性 SVG 单点封装 src/lib/icons.tsx）、`@fontsource/jetbrains-mono`（400/500 woff2 随产物打包，断网可用）。
-- **自绘标题栏取舍**：`decorations:false` + 自绘 34px 一体化标题栏，**接受失去 Snap Layouts 与原生阴影**（关闭钮经 `getCurrentWindow().close()` 复用 P1-19 关窗杀 PTY 链路）。
+- **自绘标题栏取舍**：`decorations:false` + 自绘 34px 一体化标题栏，**接受失去原生标题栏/阴影与拖拽悬停时的 Snap Layouts 预览**（Win+方向键 Aero Snap 是 OS 窗口管理功能，与 decorations:false 无关，仍可用——2026-08 实机验证修订）；关闭钮经 `getCurrentWindow().close()` 复用 P1-19 关窗杀 PTY 链路。

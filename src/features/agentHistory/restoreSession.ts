@@ -138,7 +138,10 @@ async function doRestore(session: AgentHistorySession, fork: boolean): Promise<v
   api.addPanel({
     id: panelId,
     component: "terminal",
-    title: profile.tabTitle,
+    // 人工验证问题 3：初始标题直接用历史会话标题（回退链合成结果），
+    // 读不到（title null）兜底 profile.tabTitle——运行中由 SessionStart
+    // 异步标题通道保持同步
+    title: session.title ?? profile.tabTitle,
     params: { panelId, cwd },
     renderer: "always",
   });

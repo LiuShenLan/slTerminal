@@ -2,7 +2,7 @@
 //
 // 规格契约（写死于 docs/ui-redesign-impl/workflows/stage-06-sidebar.js 脚本头
 // + checklist.md NAV-03 条目 + stages.md Stage 06 实现要点）：
-//   - 历史会话折叠节点挂项目下（nav-history-node）：IconHistory 时钟 +「历史」+ 计数 pill
+//   - 历史会话折叠节点挂项目下（nav-history-node）：IconHistory 时钟 +「历史session」+ 计数 pill
 //     （SIDEBAR_BG 底 #1a1a1e + PLACEHOLDER_FG 字 fg-4）
 //   - 归属：cwd 前缀匹配项目 rootPath
 //   - 展开 = 历史行（StatusDot + logo + 标题 + 右侧相对时间，单行 30px）
@@ -193,7 +193,7 @@ afterEach(() => {
 // ═══════════════════════════════════════════════════════════════
 
 describe("历史折叠节点渲染", () => {
-  it("项目下渲染 nav-history-node：时钟图标 +「历史」+ 计数 pill（SIDEBAR_BG 底 + PLACEHOLDER_FG 字）", async () => {
+  it("项目下渲染 nav-history-node：时钟图标 +「历史session」+ 计数 pill（SIDEBAR_BG 底 + PLACEHOLDER_FG 字）", async () => {
     seedProject("C:/projA", "proj-A", "项目A", [
       { pageId: "pageA", name: "页面 A" },
     ]);
@@ -206,12 +206,12 @@ describe("历史折叠节点渲染", () => {
     // 挂载即 scan 为 async——等待计数落地后断言（NAV-10 契约：历史折叠节点常驻）
     const node = await waitFor(() => {
       const el = getRows(container, "nav-history-node")[0];
-      expect(el?.textContent).toMatch(/历史1/);
+      expect(el?.textContent).toMatch(/历史session1/);
       return el;
     });
 
-    // 「历史」文案（NAV-03 契约）+ 时钟图标（lucide Clock svg）
-    expect(node.textContent).toContain("历史");
+    // 「历史session」文案（NAV-03 契约 + 人工验证修订）+ 时钟图标（lucide Clock svg）
+    expect(node.textContent).toContain("历史session");
     expect(node.querySelector("svg")).toBeTruthy();
 
     // 计数 pill：SIDEBAR_BG 底 + PLACEHOLDER_FG 字，文本 = 匹配会话数
@@ -238,10 +238,10 @@ describe("历史折叠节点渲染", () => {
     // 挂载即 scan 为 async——等待计数落地（同上一用例时序）
     const node = await waitFor(() => {
       const el = getRows(container, "nav-history-node")[0];
-      expect(el?.textContent).toMatch(/历史2/);
+      expect(el?.textContent).toMatch(/历史session2/);
       return el;
     });
-    expect(node.textContent).toMatch(/历史/);
+    expect(node.textContent).toMatch(/历史session/);
     // 计数 pill 文本 = 2
     const pill = Array.from(node.querySelectorAll("*")).find(
       (el) =>
@@ -273,8 +273,8 @@ describe("历史会话项目归属（cwd 前缀匹配）", () => {
     const { container } = render(<NavTree />);
     const [nodeA, nodeB] = getRows(container, "nav-history-node");
     // 节点按项目顺序渲染（proj-A 在前）
-    expect(nodeA.textContent).toContain("历史");
-    expect(nodeB.textContent).toContain("历史");
+    expect(nodeA.textContent).toContain("历史session");
+    expect(nodeB.textContent).toContain("历史session");
 
     // 展开 projA 历史 → 渲染 A 的历史会话行
     fireEvent.click(nodeA);
@@ -311,7 +311,7 @@ describe("历史行构成", () => {
     ]);
 
     const { container } = render(<NavTree />);
-    const node = await expandHistoryNode(container, "历史");
+    const node = await expandHistoryNode(container, "历史session");
 
     // 历史行标题渲染
     const titleEl = Array.from(node.querySelectorAll("*")).find(
@@ -341,7 +341,7 @@ describe("历史行构成", () => {
     ]);
 
     const { container } = render(<NavTree />);
-    const node = await expandHistoryNode(container, "历史");
+    const node = await expandHistoryNode(container, "历史session");
 
     // title 属性承载预览（原生 tooltip）
     expect(
@@ -364,7 +364,7 @@ describe("历史行构成", () => {
     mockScanHistory.mockResolvedValue([]);
 
     const { container } = render(<NavTree />);
-    const node = await expandHistoryNode(container, "历史");
+    const node = await expandHistoryNode(container, "历史session");
 
     // scan 空 → 无历史行（无任何会话标题/logo）
     expect(node.querySelector('img[alt="CLI 图标"]')).toBeNull();
@@ -387,7 +387,7 @@ describe("历史行交互", () => {
     ]);
 
     const { container } = render(<NavTree />);
-    const node = await expandHistoryNode(container, "历史");
+    const node = await expandHistoryNode(container, "历史session");
 
     // 双击历史行（标题元素事件冒泡到行容器）
     const titleEl = Array.from(node.querySelectorAll("*")).find(
@@ -412,7 +412,7 @@ describe("历史行交互", () => {
     mockScanHistory.mockResolvedValue([makeHistorySession()]);
 
     const { container, queryByText } = render(<NavTree />);
-    const node = await expandHistoryNode(container, "历史");
+    const node = await expandHistoryNode(container, "历史session");
 
     const titleEl = Array.from(node.querySelectorAll("*")).find(
       (el) => el.textContent === "重构导航树",

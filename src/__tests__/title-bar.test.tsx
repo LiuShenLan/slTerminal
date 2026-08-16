@@ -1,10 +1,13 @@
-// title-bar.test.tsx —— 自绘标题栏 TitleBar 组件 L2 测试（TB-06，7 用例）
+// title-bar.test.tsx —— 自绘标题栏 TitleBar 组件 L2 测试（TB-06，8 用例）
 //
-// 组件契约（stage-04 工作流写死）：
+// 组件契约（stage-04 工作流写死 + TB-04 修订）：
 //   - 路径 src/features/titleBar/TitleBar.tsx，无 props（自订阅 stores）
 //   - 三段结构：左 app 标识 / 中「项目名 / 页面名」/ 右三窗口钮
 //   - 三钮点击调用 ipc/window 的 minimizeWindow/toggleMaximizeWindow/closeWindow
-//   - 中段双击调用 toggleMaximizeWindow；左/中段容器带 data-tauri-drag-region
+//   - 左/中段容器带 data-tauri-drag-region="deep"（子树拖拽——裸属性只命中直接点击
+//     元素本身，文字 span/svg logo 子元素会拦截拖拽）
+//   - 中段无 React 双击 handler——双击最大化由 Tauri 原生拖拽区脚本承担（drag.js
+//     detail===2 → internal_toggle_maximize；React onDoubleClick 会与之双重 toggle）
 // 测试模式：vi.mock ../ipc/window（三 wrapper 桩）+ 真实 projects store（beforeEach setState 种子）
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -111,21 +114,46 @@ describe("TitleBar", () => {
     expect(toggleMaximizeWindow).not.toHaveBeenCalled();
   });
 
-  // ═══ 中段双击 ═══
+  // ═══ 中段双击（TB-04 修订：React onDoubleClick 已删除——与 Tauri 原生拖拽区
+  //      双击最大化双重 toggle，净无效果；原生脚本在 mousedown 侧处理） ═══
 
-  it("TB-06-6 中段双击调用 toggleMaximizeWindow 一次", () => {
+  it("TB-06-6 中段无 React 双击 handler——双击不调 toggleMaximizeWindow（原生承担）", () => {
     render(<TitleBar />);
-    // 双击中段标题（事件冒泡至中段容器 onDoubleClick）
+    // 双击中段标题：不应再经 wrapper 调 toggleMaximizeWindow（原生 drag.js 处理）
     fireEvent.doubleClick(screen.getByText(/测试项目/));
-    expect(toggleMaximizeWindow).toHaveBeenCalledTimes(1);
+    expect(toggleMaximizeWindow).not.toHaveBeenCalled();
     expect(minimizeWindow).not.toHaveBeenCalled();
     expect(closeWindow).not.toHaveBeenCalled();
   });
 
   // ═══ 拖拽区域 ═══
 
-  it("TB-06-7 容器含 data-tauri-drag-region 属性", () => {
+  it("TB-06-7 左/中段容器带 data-tauri-drag-region=\"deep\"（子树拖拽）", () => {
     const { container } = render(<TitleBar />);
-    expect(container.querySelector("[data-tauri-drag-region]")).not.toBeNull();
+    const regions = Array.from(
+      container.querySelectorAll("[data-tauri-drag-region]"),
+    );
+    // 恰两处：左段 app 标识 + 中段标题区（右段三钮不在拖拽区内）
+    expect(regions).toHaveLength(2);
+    for (const r of regions) {
+      expect(r.getAttribute("data-tauri-drag-region")).toBe("deep");
+    }
+  });
+
+  it("TB-06-8 无项目时左/中段拖拽区仍渲染（中段为空 div 可拖）", () => {
+    // 清空项目：中段无「项目名 / 页面名」内容——空 div 仍须带 deep 属性可拖
+    useProjects.setState({
+      projects: {},
+      deletionLock: { pendingDelete: null, acquiredAt: null },
+      expandedNodes: {},
+    });
+    const { container } = render(<TitleBar />);
+    const regions = Array.from(
+      container.querySelectorAll("[data-tauri-drag-region]"),
+    );
+    expect(regions).toHaveLength(2);
+    expect(regions[0].textContent).toContain("slTerminal");
+    expect(regions[1].textContent).toBe("");
+    expect(regions[1].getAttribute("data-tauri-drag-region")).toBe("deep");
   });
 });

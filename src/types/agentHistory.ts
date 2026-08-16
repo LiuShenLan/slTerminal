@@ -24,3 +24,14 @@ export interface AgentHistorySession {
   /** 来源 CLI 标识（provider 打标——聚合扫描结果由各 provider 写入自己的 cliId） */
   cliId: string;
 }
+
+/**
+ * 单会话标题 DTO（后端 AgentHistoryTitle 两字段——人工验证问题 3，
+ * agent_history_read_title 返回；运行中会话页签/导航树行显示名通道）
+ */
+export interface AgentHistoryTitle {
+  /** 标题（回退链合成；null = 文件缺失/无任何标题数据——前端兜底 CLI 名） */
+  title: string | null;
+  /** 标题来源（开放字符串，UI 不消费具体值） */
+  titleSource: TitleSource;
+}

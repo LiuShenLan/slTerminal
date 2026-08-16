@@ -8,7 +8,7 @@
 
 1. UI-405/406/407 剔除（Agent 面板/composer/状态行 = 远期新功能，非视觉重设计），需求规格补注记（DOC-04）
 2. 新方案 `linear` 替换并删除 darcula；启动链未知 id 回退机制已内建（schemeRegistry.setActive），仅改默认 id
-3. 自绘标题栏接受失去 Snap Layouts/原生阴影
+3. 自绘标题栏接受失去原生标题栏/阴影与 Snap Layouts 悬停预览（Win+方向键 Aero Snap 仍可用——OS 窗口管理，与 decorations:false 无关，2026-08 实机验证修订）
 4. 活动栏底部「配置」钮 = 打开 hooks 配置面板；右键菜单 hooks 配置入口删除（入口唯一化）
 5. 导航树：活跃会话挂页面下（panelId→pageId），历史折叠节点挂项目下（cwd 归属）
 6. 会话行单行化：圆点+logo+标题+右侧迷你用量条（32×3+百分比 11px fg-4）；历史行 prompt 预览 → 原生 title tooltip

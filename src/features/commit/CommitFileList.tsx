@@ -15,6 +15,7 @@ import {
   ERROR_FG,
   CONTEXT_MENU_BORDER,
   SIDEBAR_COLORS,
+  DIM_FG,
 } from "../../theme";
 import { openCommitFile } from "./openCommitFile";
 import { getContextMenuItems } from "./commitContextMenu";
@@ -58,10 +59,10 @@ const fileRowStyle: React.CSSProperties = {
   textOverflow: "ellipsis",
 };
 
-/** 空态提示 */
+/** 空态提示——文字色 fg-3（DIM_FG）：人工验证问题 4 修订（原 INPUT_BORDER 边框 token 近乎不可见） */
 const emptyHintStyle: React.CSSProperties = {
   padding: "4px 8px 4px 24px",
-  color: INPUT_BORDER,
+  color: DIM_FG,
   fontSize: 11,
   fontStyle: "italic",
   userSelect: "none",

@@ -1,19 +1,20 @@
 //! 历史会话 provider 注册表 —— trait + 以 cliId 为键的静态注册表（MC-301）
 //!
 //! 跨边界契约（PREAMBLE 契约段 3，签名写死）：
-//! - `CliHistoryProvider` trait 三方法：`scan() -> Vec<AgentHistorySession>` /
-//!   `delete(session_id) -> Result<()>` / `validate_session_id(id) -> Result<()>`
-//! - 契约注释写明「validate_session_id 是 delete 的强制前置」（SEC-05 等价强制，
-//!   MC-304）——未来 provider 的等价校验强制
+//! - `CliHistoryProvider` trait 四方法：`scan() -> Vec<AgentHistorySession>` /
+//!   `delete(session_id) -> Result<()>` / `validate_session_id(id) -> Result<()>` /
+//!   `read_title(session_id) -> Result<AgentHistoryTitle>`（运行中会话标题通道）
+//! - 契约注释写明「validate_session_id 是 delete / read_title 的强制前置」
+//!   （SEC-05 等价强制，MC-304）——未来 provider 的等价校验强制
 //! - 注册表 = cliId 键静态映射；claude 为首个实现（行为零改动）
 //!
 //! 错误语义（MC-303）：未知 cliId → `AppError::Validation("未知 cliId: ...")`
 
 use crate::agent_history::claude::ClaudeHistoryProvider;
-use crate::agent_history::AgentHistorySession;
+use crate::agent_history::{AgentHistorySession, AgentHistoryTitle};
 use crate::error::AppError;
 
-/// CLI 历史会话能力 trait（三方法，跨边界契约签名写死）
+/// CLI 历史会话能力 trait（四方法，跨边界契约签名写死）
 ///
 /// 实现均为同步阻塞（含 IO）——命令层经 `spawn_blocking` 串行化（硬约束 #3）。
 pub trait CliHistoryProvider: Send + Sync + std::fmt::Debug {
@@ -30,8 +31,15 @@ pub trait CliHistoryProvider: Send + Sync + std::fmt::Debug {
     /// 的等价校验在此强制。
     fn delete(&self, session_id: &str) -> Result<(), AppError>;
 
-    /// 会话 ID 校验（delete 的强制前置校验；非法 → `AppError::Validation`）
+    /// 会话 ID 校验（delete / read_title 的强制前置校验；非法 → `AppError::Validation`）
     fn validate_session_id(&self, session_id: &str) -> Result<(), AppError>;
+
+    /// 读取单会话标题（回退链合成——运行中会话页签/会话行显示名与历史扫描同源）。
+    ///
+    /// 会话文件不存在/无任何标题数据 → `Ok(AgentHistoryTitle { title: None, .. })`
+    /// （运行中会话 jsonl 可能尚未创建，正常条件非错误）；仅 sessionId 非法 →
+    /// `Err(Validation)`。**validate_session_id 是 read_title 的强制前置**。
+    fn read_title(&self, session_id: &str) -> Result<AgentHistoryTitle, AppError>;
 }
 
 /// claude provider 静态实例（注册表条目引用）
