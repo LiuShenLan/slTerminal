@@ -10,7 +10,7 @@ export const terminalOptions: ITerminalOptions = {
   theme: { ...schemeRegistry.getActive().terminal },
   // 编译时默认值，运行时由 useFontSize store 覆盖（Ctrl+Wheel 动态调节）
   fontSize: 14,
-  fontFamily: `"JetBrains Mono", monospace`,
+  fontFamily: `"JetBrains Mono", "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace`,
   cursorBlink: true,
   cursorStyle: "bar",
   allowProposedApi: true,

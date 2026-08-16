@@ -45,7 +45,7 @@ export const LARGE_FILE_WARN_BYTES = 1_000_000;
 
 /** 编辑器字体 CSS spec —— 可独立测试 */
 export const EDITOR_FONT_SPEC = {
-  ".cm-scroller": { fontFamily: `"JetBrains Mono", monospace` },
+  ".cm-scroller": { fontFamily: `"JetBrains Mono", "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace` },
 };
 /** 编辑器字体主题 —— JetBrains Mono Regular */
 export const EDITOR_FONT_THEME = EditorView.theme(EDITOR_FONT_SPEC);
@@ -54,7 +54,7 @@ export const EDITOR_FONT_THEME = EditorView.theme(EDITOR_FONT_SPEC);
 export function createEditorFontExtension(fontSize: number): Extension {
   return EditorView.theme({
     ".cm-scroller": {
-      fontFamily: `"JetBrains Mono", monospace`,
+      fontFamily: `"JetBrains Mono", "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace`,
       fontSize: `${fontSize}px`,
     },
   });

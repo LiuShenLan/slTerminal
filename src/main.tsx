@@ -1,5 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
+import "@fontsource/jetbrains-mono/400.css"; // FT-01: JetBrains Mono 400 字重随产物打包（断网可用）
+import "@fontsource/jetbrains-mono/500.css"; // FT-01: JetBrains Mono 500 字重随产物打包（断网可用）
 
 // 等待 Tauri IPC 就绪后再挂载 React（WebView2 注入 window.__TAURI_INTERNALS__ 是异步的）
 async function bootstrap() {
@@ -25,7 +27,7 @@ async function bootstrap() {
       console.error("[slTerminal]", msg);
       document.body.innerHTML =
         `<div style="display:flex;align-items:center;justify-content:center;height:100vh;` +
-        `background:#0a0a0b;color:#ece9e4;font-family:monospace;font-size:14px;padding:20px;">` +
+        `background:#0a0a0b;color:#ece9e4;font-family:'JetBrains Mono','Cascadia Mono',Consolas,'Microsoft YaHei UI',monospace;font-size:14px;padding:20px;">` +
         `<span style="color:#d9706b;">` + msg + `</span></div>`;
       return;
     }

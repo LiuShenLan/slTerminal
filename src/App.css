@@ -5,7 +5,7 @@
   /* --sl-bg-primary / --sl-fg-primary 由 ROOT_CSS_VARS（colors.ts）经 main.tsx 注入 */
 
   color-scheme: dark;
-  font-family: "Cascadia Code", "JetBrains Mono", "Fira Code", "Consolas", monospace;
+  font-family: "JetBrains Mono", "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace;
   font-size: 14px;
   line-height: 1.5;
   font-weight: 400;

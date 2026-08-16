@@ -57,9 +57,9 @@ describe("编辑器字体主题", () => {
     expect(state).toBeDefined();
   });
 
-  it("2. 字体设为 JetBrains Mono", () => {
+  it("2. 字体设为规格字体栈", () => {
     expect(EDITOR_FONT_SPEC[".cm-scroller"].fontFamily).toBe(
-      '"JetBrains Mono", monospace',
+      '"JetBrains Mono", "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace',
     );
   });
 
