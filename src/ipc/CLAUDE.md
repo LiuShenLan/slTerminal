@@ -20,8 +20,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `notify.ts` | `notify/` | `notify_watch`、`onFsEvent`（`listen("fs-event")` 封装） |
 | `notification.ts` | Tauri plugin notification | re-export `isPermissionGranted` / `requestPermission` / `sendNotification` + `ensureNotificationPermission()` + `sendToastNotification(title, {body})`（Tauri 原生 `sendNotification` 通道，无 onClick——点击路由放弃。未打包 Win32 WebView2 无 AUMID：banner 可能被抑制、仅通知中心条目 + 任务栏闪烁作为回窗引导） |
 | `clipboard.ts` | Tauri plugin | 直接 re-export `@tauri-apps/plugin-clipboard-manager`。由 `keyboard.ts`（Ctrl+Shift+C/V）和 `useXterm.ts`（OSC 52 handler）消费 |
-| `dialog.ts` | Tauri plugin | 直接 re-export `@tauri-apps/plugin-dialog` |
-| `window.ts` | Tauri Window API | `registerCloseHandler` — 封装 `onCloseRequested` 关闭生命周期 |
+| `dialog.ts` | Tauri plugin | 直接 re-export `@tauri-apps/plugin-dialog` 的 `open`/`save`（原生文件对话框）。**`ask` 已删除（OV-02，Stage 07 浮层统一）**——确认语义改经 `src/lib` 的 `confirmDialog`（统一浮层 UI-801/803），不再透出 `ask` | 
+| `window.ts` | Tauri Window API | 六个 wrapper：`registerCloseHandler`（封装 `onCloseRequested` 关闭生命周期——preventDefault + 回调 + finally destroy）、`onFocusChanged`（窗口焦点监听，通知调度用）、`requestUserAttention`（任务栏闪烁）、`setFocus`（预留，当前无消费方）、**自绘标题栏三 wrapper（TB-03，NAV Stage 04 新增）**：`minimizeWindow` / `toggleMaximizeWindow`（最大化/还原，标题栏三钮 + 中段双击）/ `closeWindow`（走 `getCurrentWindow().close()` 触发 `onCloseRequested`——复用 P1-19 关窗链路杀 PTY，禁止 `destroy`/`process.exit` 绕过）；re-export `UserAttentionType` |
 | `shell.ts` | Tauri plugin | `@tauri-apps/plugin-opener` 的 `openUrl` re-export |
 | `agentHooks.ts` | `hooks/` | `agent_hooks_inject`, `agent_hooks_uninstall`, `agent_hooks_injection_status`, `agent_hooks_restore_statusline`——**wrapper 全部加 cliId 首参**（MC-211 泛化命令，未知 cliId → 后端 Validation）：`inject(cliId)` / `uninstall(cliId)` / `getInjectionStatus(cliId)`（返回 `AgentHookInjectionStatus`）/ `restoreStatusline(cliId)`（关闭清理：还原 statusline 桥接备份，App.tsx 关闭序列调用）；`onAgentEvent`（`listen("agent-event")` 封装，MC-202）。原 `contextUsage`（`agent_context_usage` transcript token 扫描）已随官方 used_percentage 口径退役删除 |
 | `hooksConfig.ts` | `hooks/`（config.rs） | `agent_hooks_config_read`, `agent_hooks_config_write`（C13-1 配置编辑命令）：`readHooksConfig(cliId, layer, projectPath?)` 返回该层 settings.json 的 **hooks 子树**（文件不存在或无 hooks 键 → `null`，JSON 损坏 → 后端 Err）；`writeHooksConfig(cliId, layer, hooks, projectPath?)` 传 hooks 子树，后端 **read-modify-write merge**（替换/插入 hooks 键，原样保留 permissions/env 等其他字段），hooks 必须为 JSON Object。user 层不传 projectPath；project/local 层必须传（后端沙箱校验后拼接 `.claude/settings.json` / `.claude/settings.local.json`）。**与 `agentHooks.ts` 区分**：后者是 C6 注入/卸载/状态/用量命令 + agent-event 事件订阅，本文件是 C13-1 配置编辑命令的唯一 invoke 位置 |
@@ -34,13 +34,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Channel 模式**：流式数据（如 PTY 输出）通过 `Channel<T>` 推送，调用方传入 `onOutput` 回调。
 - **Event 模式**：`onFsEvent` 封装 Tauri `listen<FsEvent>("fs-event")`，返回 unsubscribe 函数。`registerCloseHandler` 封装 `getCurrentWindow().onCloseRequested` 生命周期。
 - **类型对应**：封装函数的参数/返回值使用 `src/types/` 中的 DTO 类型，与 Rust 端 `snake_case` 字段对应。
-- **thin wrapper**：clipboard、dialog、shell 是 Tauri 官方插件的直接 re-export，仅为了聚合到本层，不添加额外逻辑。notification 包含 `sendToastNotification` 工厂逻辑（Tauri 原生 `sendNotification` 通道，无点击路由），非纯 re-export。新增 Tauri 插件导入遵循同一模式。
+- **thin wrapper**：clipboard、dialog（open/save）、shell 是 Tauri 官方插件的直接 re-export，仅为了聚合到本层，不添加额外逻辑。**dialog 的 `ask` 已删除（OV-02）**——确认语义改经 `src/lib` 的 `confirmDialog`（统一浮层），不回归 re-export。notification 包含 `sendToastNotification` 工厂逻辑（Tauri 原生 `sendNotification` 通道，无点击路由），非纯 re-export。新增 Tauri 插件导入遵循同一模式。
 - **命名**：函数名 camelCase，对应的 Rust 命令为 snake_case（如 `pty_spawn` → `spawn()`）。
 - **参数序列化**：`Uint8Array` 需转 `Array.from(data)` 再传给 `invoke`（`pty.write`）。`write`/`resize`/`kill` 的 invoke payload 均含 `panelId`（后端 SEC-08 归属校验），调用方须传入作用域内现成的 panelId。
 
 ## 测试模式
 
-测试文件：`src/__tests__/ipc-contract.test.ts`（65 用例，含 3 条 DBG-4 契约守卫）+ `ipc-ping.test.ts`（2 用例，IHE-07① 改调 `ping()` wrapper）+ `ipc-agent-hooks-contract.test.ts`（22 用例，MC-212 泛化——含 cliId 首参四维）+ `ipc-hooks-config-contract.test.ts`（12 用例，C13-1 配置命令四维验证，含 cliId 首参）+ `ipc-agent-history-contract.test.ts`（8 用例，MC-306 更名——scan 无参 / delete 参数 `{cliId, sessionId}`）+ `ipc-window-contract.test.ts`（10 用例，`registerCloseHandler` 关闭生命周期契约）+ `notification.test.ts`（9 用例，IHE-02 分支覆盖）。共享工厂位于 `src/__tests__/helpers/ipc-contract.ts`（IHE-06）。
+测试文件：`src/__tests__/ipc-contract.test.ts`（65 用例，含 3 条 DBG-4 契约守卫）+ `ipc-ping.test.ts`（2 用例，IHE-07① 改调 `ping()` wrapper）+ `ipc-agent-hooks-contract.test.ts`（22 用例，MC-212 泛化——含 cliId 首参四维）+ `ipc-hooks-config-contract.test.ts`（12 用例，C13-1 配置命令四维验证，含 cliId 首参）+ `ipc-agent-history-contract.test.ts`（8 用例，MC-306 更名——scan 无参 / delete 参数 `{cliId, sessionId}`）+ `ipc-window-contract.test.ts`（10 用例，六个 wrapper 契约：`registerCloseHandler` 关闭生命周期 / `onFocusChanged` / `requestUserAttention` / `setFocus`（预留）/ `minimizeWindow` / `toggleMaximizeWindow` / `closeWindow`（标题栏三钮））+ `notification.test.ts`（9 用例，IHE-02 分支覆盖）。共享工厂位于 `src/__tests__/helpers/ipc-contract.ts`（IHE-06）。
 
 ### mockIPC 盲区声明（IHE-01）
 

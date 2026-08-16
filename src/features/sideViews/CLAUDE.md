@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 职责
 
-侧栏视图系统——活动栏（ActivityBar）+ 共享侧栏区（SideBarArea）+ 单槽位状态机。替代旧 Allotment 常驻栏（SidebarTree + ExplorerPanel 各占固定栏位），改为 VS Code 风格的活动栏+视图槽模式。
+侧栏视图系统——活动栏（ActivityBar）+ 共享侧栏区（SideBarArea）+ 单槽位状态机。NAV-05 三槽重组后注册三条视图：`nav`（导航树）/ `explorer`（文件浏览器）/ `commit`（Commit）；原 `projects`（SidebarTree）与 `agent-status`（AgentStatusView）两视图随 NAV-06/08 退役（SidebarTree 删除、AgentStatusView 删除——导航树 NavTree 兼并两者职责，见 @../navTree/CLAUDE.md）。活动栏底部固定「配置」钮（id `config`）**不入注册表**。替代旧 Allotment 常驻栏模式，改为 VS Code 风格的活动栏+视图槽模式。
 
 ## 架构决策
 
@@ -25,23 +25,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### SideViewRegistry 扩展指南
 
-`SideViewRegistry` 是模块级单例，管理侧栏视图定义（`SideViewDef` = id + title + icon + React 组件）。ActivityBar 通过此注册表渲染按钮，SideBarArea 通过它渲染视图槽。
+`SideViewRegistry` 是模块级单例，管理侧栏视图定义（`SideViewDef` = id + title + icon（**React 组件，IC-06 图标组件化**——经 `lib/icons.tsx` 单点引用，禁止 emoji）+ React 组件）。ActivityBar 通过此注册表渲染按钮，SideBarArea 通过它渲染视图槽。
 
 **新增侧栏视图只需两步**：
-1. 实现 ViewComponent（接受 `SideViewComponentProps = { switchToPage, onDeletePage }`）。例如 `agent-status` 视图——`AgentStatusView` 组件位于 `../agentStatus/AgentStatusView.tsx`
-2. 在 `sideViewDefs.ts` 加一行 `sideViewRegistry.register({ id, title, icon, component })`。例如 `agent-status` 注册：
-   ```typescript
-   sideViewRegistry.register({
-     id: "agent-status",
-     title: "Agent 状态",
-     icon: "🤖",
-     component: AgentStatusView,
-   });
-   ```
+1. 实现 ViewComponent（接受 `SideViewComponentProps = { switchToPage, onDeletePage }`）
+2. 在 `sideViewDefs.ts` 加一行 `sideViewRegistry.register({ id, title, icon, component })`
 
 框架自动处理：活动栏按钮渲染与开关、上区/下区拖拽归属、槽位 display:none/flex 切换、持久化。
 
-默认按钮归属（`DEFAULT_ZONES.top`）：`projects` / `explorer` / `commit` / `agent-status`（`sideBarState.ts`）。
+默认按钮归属（`DEFAULT_ZONES`，`sideBarState.ts`）：**top = `["nav", "explorer", "commit"]`，bottom = `[]`**（NAV-05 三槽重组）；`DEFAULT_OPEN.top = "nav"`（默认打开导航树）。**活动栏固定宽度 `ACTIVITY_BAR_SIZE = 46`**（NAV-05/GL-04 密度收敛：40 → 46，Workspace 同步引用）。
+
+**「配置」钮（NAV-05 例外）**：id `config`、图标 IconConfig（lucide Settings）、`data-e2e="activity-btn-config"`——**固定渲染于活动栏底部，不入 SideViewRegistry**（不参与拖拽/换区/持久化），点击 = `openHooksConfigFromActivityBar()`（`../hooksConfig/openHooksConfig.ts`——迁移自 SidebarTree 右键菜单「打开 Hooks 配置」，决策 4 入口唯一化：目标项目 = 活跃页面所属优先兜底第一个、无页面则新建空布局页，先 `switchToPageShared` 再 `openHooksConfigPanel`）。
 
 与项目现有注册表对比：同 `CliProfileRegistry`（`cliProfiles/`）的 `register/getAll/_reset` 模式；同 `ShortcutRegistry` 的模块级单例模式；同 `FileViewerRegistry` 的注册即用零额外配置模式。
 
@@ -70,41 +64,38 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | 文件 | 职责 |
 |------|------|
 | `index.ts` | barrel export：组件（ActivityBar/SideBarArea）、注册表（sideViewRegistry）、类型、纯函数。不 re-export sideViewDefs（由 Workspace 显式 side-effect import，照 cliProfiles/profiles 先例） |
-| `sideBarState.ts` | 类型定义（Zone/Zones/OpenState/LayoutKind/SideBarSlice）+ 默认值常量（DEFAULT_ZONES/DEFAULT_OPEN/ACTIVITY_BAR_SIZE/WIDTH_* /SPLIT_*）+ 纯函数（toggleViewPure/moveButtonPure/deriveLayout/reconcileZones/sanitizeSideBar） |
+| `sideBarState.ts` | 类型定义（Zone/Zones/OpenState/LayoutKind/SideBarSlice）+ 默认值常量（**DEFAULT_ZONES 三槽 `["nav","explorer","commit"]`** / DEFAULT_OPEN / **ACTIVITY_BAR_SIZE=46** / WIDTH_* / SPLIT_*）+ 纯函数（toggleViewPure/moveButtonPure/deriveLayout/reconcileZones/sanitizeSideBar） |
 | `sideViewRegistry.ts` | `SideViewRegistry` 模块级单例：`register(def)`（同 id 覆盖）/`getAll()`（注册序）/`get(id)`/`_reset()`（仅测试） |
 | `dropTarget.ts` | `computeDropTarget` 纯函数——零 DOM 访问，根据 clientY + 按钮矩形列表计算落点 zone + index |
-| `sideViewDefs.ts` | side-effect 注册文件：注册 `projects`（📋 项目列表）+ `explorer`（📁 文件浏览器）+ `commit`（🔀 Commit）+ `agent-status`（🤖 Agent 状态）四条视图。新增视图在此追加 `sideViewRegistry.register(...)` |
-| `ActivityBar.tsx` | 活动栏组件：40px 宽 flex 列（上区按钮组 + flex:1 间隔 + 下区按钮组）、点击开关（R1/R2）、HTML5 拖拽换区/排序、VS Code 风格 active 态指示条（左侧 2px FOCUS_BORDER）、`data-e2e` 选择器。配色全部 `theme/colors.ts` token（硬约束 #6） |
-| `SideBarArea.tsx` | 侧栏区组件：`<Allotment vertical proportionalLayout>` 两 pane（上/下半区），每 pane `visible={!!open[zone]}`、`preferredSize` 由 splitRatio 控制；半区内按 zones 顺序渲染视图槽（`display: open[zone]===v.id ? "flex" : "none"` 保挂载）；onChange 仅双开时换算 ratio 写回 store |
-| `../agentStatus/AgentStatusView.tsx` | `agent-status` 视图组件（F7 三下拉框结构）：活跃会话（`useAgentStatus` + `AgentStatusRow`，行标题经历史区 scan 数据覆盖——问题 6 修复，复合键 `cliId\|sessionId`，/rename 后刷新即同步）+ 当前项目历史会话 + 全部项目历史会话（挂载 `AgentHistorySections` 受控区，`useAgentHistory` 上提本组件单实例）；默认活跃展开、两历史区收起；区块标题 13px 粗体 + 内容缩进引导线（问题 4 三级字号）；E2E 兼容红线（`agent-status-view`/`agent-status-row`/"AGENT STATUS"/空态文案）逐字保留 |
-| `../agentStatus/AgentStatusRow.tsx` | Agent 会话行组件：**双行式**（问题 1 修复——行1 = 四态图标 + 标题 12px 粗体；行2 = 用量条 + 百分比 + 相对时间 11px 灰）。用量口径 = ContextUsage 信号（官方 used_percentage）经 `profile.hooks.computeUsagePercent` 委托（claude = round + clamp 0–100，缺失 → `--`，MC-412 语义保留；原 contextLimit 硬编码口径已退役）；用量条四档分级（≥90 critical/≥70 high/≥50 medium/else low）；时间口径与历史区统一（`formatRelativeTime`） |
-| `../agentStatus/useAgentStatus.ts` | 数据 hook：`useAgentStatus()` 返回 `AgentStatusResult`（`state` 状态 + `rows: AgentSessionRow[]` + **`now` 相对时间基准**——60s ticker 驱动 `formatRelativeTime` 重算，idle 会话无 hook 事件时时间文本冻结的修复）。行 = 运行中的编码 CLI 会话（非全部终端——`agentSession` 为 null/undefined 的纯 shell 终端不建行）。建行双通道幂等（F5：`sessionChange` session 非 null ∨ hook 事件非 SessionEnd/Exit 且行不存在）；删行三通道（`sessionChange` session 为 null ∨ SessionEnd/Exit ∨ `remove`）。初始扫描只建 `agentSession` 非 null 的行；usage 由 ContextUsage 信号事件更新（行存在才更新，不建行/删行/不动状态——statusline 桥接通道，原 transcript 拉取已退役）。#5 竞态双保险：双 listener 经 ref 读最新状态 + deps `[]` 订阅永不重建 + reconcile 对账兜底 |
-| `../agentStatus/index.ts` | barrel export：`export { AgentStatusView }` |
+| `sideViewDefs.ts` | side-effect 注册文件：注册 `nav`（导航树）+ `explorer`（文件浏览器）+ `commit`（Commit）三条视图（icon = IconNav/IconFiles/IconCommit，`lib/icons.tsx` 单点）。新增视图在此追加 `sideViewRegistry.register(...)`；**配置钮不在此注册** |
+| `ActivityBar.tsx` | 活动栏组件：**46px 宽** flex 列（上区按钮组 + flex:1 间隔 + 下区按钮组 + 底部「配置」钮）、按钮 34×34 圆角 6、点击开关（R1/R2）、HTML5 拖拽换区/排序、VS Code 风格 active 态（ACTIVE_SELECTION_BG 底 + ACCENT_FG 图标 + 左侧 2px FOCUS_BORDER 指示条）、图标色三态（默认 DIM_FG → hover SIDEBAR_FG → active ACCENT_FG）、`data-e2e` 选择器。配色全部 `theme/colors.ts` token（硬约束 #6） |
+| `SideBarArea.tsx` | 侧栏区组件：`<Allotment vertical proportionalLayout>` 两 pane（上/下半区），每 pane `visible={!!open[zone]}`、`preferredSize` 由 splitRatio 控制；半区内按 zones 顺序渲染视图槽（`display: open[zone]===v.id ? "flex" : "none"` 保挂载）；onChange 仅双开时换算 ratio 写回 store；switchToPage/onDeletePage props 透传（nav 视图消费） |
+| `../features/navTree/NavTree.tsx` | `nav` 视图组件（NAV-05 注册）：项目/页面/活跃会话/历史折叠节点统一导航树（详见 @../navTree/CLAUDE.md） |
+| `../features/explorer/ExplorerPanel.tsx` | `explorer` 视图组件（本体不改，仅宿主变化；换区重建丢失展开状态——ADR-0001 已确认接受） |
+| `../features/commit/CommitView.tsx` | `commit` 视图组件（NAV-05 新增注册） |
 
 ## 硬约束
 
 - **#1（前端不碰 OS）**：侧栏视图纯前端 UI 层，不涉及系统调用。store 持久化经 `src/ipc/settings`。
-- **#6（配色单点）**：ActivityBar 全部颜色引用 `theme/colors.ts` token（PANEL_BG/SIDEBAR_COLORS/SIDEBAR_FG/FOCUS_BORDER），禁止硬编码色值。
-- **不改组件本体**：SidebarTree 和 ExplorerPanel 组件内部逻辑零改动——仅宿主从 Allotment 常驻栏变为侧栏区视图槽。
+- **#6（配色单点）**：ActivityBar 全部颜色引用 `theme/colors.ts` token（PANEL_BG/SIDEBAR_COLORS/DIM_FG/SIDEBAR_FG/ACCENT_FG/FOCUS_BORDER/ACTIVE_SELECTION_BG），禁止硬编码色值。
 
 ## 关键集成点
 
-- **`src/stores/sideBar.ts`** — Zustand store（zones/open/width/splitRatio + 持久化），组件订阅、纯函数委托
-- **`src/workspace/Workspace.tsx`** — 三栏 Allotment 容器：pane1=ActivityBar（40px 固定）、pane2=SideBarArea（visible=anyOpen）、pane3=主区
-- **`src/features/sidebar/SidebarTree.tsx`** — `projects` 视图组件（本体不改，仅宿主变化）
-- **`src/features/explorer/ExplorerPanel.tsx`** — `explorer` 视图组件（本体不改，仅宿主变化；换区重建丢失展开状态——ADR-0001 已确认接受）
+- **`src/stores/sideBar.ts`** — Zustand store（zones/open/width/splitRatio + 持久化，NAV-07 迁移：默认态改三槽 + 导航树），组件订阅、纯函数委托
+- **`src/workspace/Workspace.tsx`** — 三栏 Allotment 容器：pane1=ActivityBar（**46px 固定**）、pane2=SideBarArea（visible=anyOpen）、pane3=主区
 - **`src/App.tsx`** — init() 中 `useSideBar.loadFromDisk()` + 关窗冲刷 `cancelPendingSave()`
+- **`../hooksConfig/openHooksConfig.ts`** — 活动栏「配置」钮 → `openHooksConfigFromActivityBar()`（决策 4 入口唯一化）
 
 ## 测试模式
 
-测试文件位于 `src/__tests__/`：`sideBarState.test.ts`（53 用例）、`sideViewRegistry.test.ts`（7 用例）、`sideBar.test.ts`（21 用例）、`activityBar.test.tsx`（33 用例）、`sideBarArea.test.tsx`（15 用例）、`workspace-sideviews.test.tsx`（13 用例）。共 142 用例。
+测试文件位于 `src/__tests__/`：`sideBarState.test.ts`（53 用例）、`sideViewRegistry.test.ts`（7 用例）、`sideBar.test.ts`（22 用例）、`activityBar.test.tsx`（38 用例）、`sideBarArea.test.tsx`（15 用例）、`workspace-sideviews.test.tsx`（13 用例）。共 148 用例（用例数见 `.claude/test-inventory.md`）。
 
 ### activityBar 拖拽测试要点
 
 拖拽事件向外层容器 `[data-e2e="activity-bar"]` 派发（非 zone `<div>`）。关键辅助函数：
 - `installRectSpy(buttonRects, bottomZoneTop)`：mock `getBoundingClientRect`，为按钮 + zone 容器 + 活动栏根容器（height=600, midpoint=300）统一提供模拟矩形
 - `dispatchDragEvent(element, type, dt, clientY?)`：可选 `clientY` 供 zone 判定使用
-- 29 用例覆盖：渲染结构（3）、active 态（2）、点击 toggle（2）、title/e2e（1）、dragStart（2）、dragOver/drop 同 zone（3）、dragEnd（1）、未注册防御（1）、hover（2）、跨区拖拽状态机（5）、zone 判定边界（3）、指示线/清理（4）
+- 38 用例覆盖：渲染结构、active 态（指示条/图标色）、点击 toggle、title/e2e、dragStart、dragOver/drop 同 zone、dragEnd、未注册防御、hover、跨区拖拽状态机、zone 判定边界、指示线/清理、**配置钮（NAV-05：渲染于底部、不入注册表、点击调 openHooksConfigFromActivityBar）**、**三槽默认归属（nav/explorer/commit 全上区）**
 
 ### 技术栈
 
@@ -126,8 +117,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Store 测试（sideBar.test.ts）
 
-19 用例照 fontSize/keybindings.test.ts 模式：
-- 默认值、toggle/move 经 store 委托纯函数
+22 用例照 fontSize/keybindings.test.ts 模式：
+- 默认值（**DEFAULT_ZONES 三槽 / DEFAULT_OPEN 导航树**）、toggle/move 经 store 委托纯函数
 - setWidth/setSplitRatio 内部 clamp
 - loadFromDisk：合法/脏数据 sanitize/缺失/异常降级（5 分支）
 - reconcileZones 对齐注册表
@@ -138,8 +129,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### UI 组件测试
 
-`activityBar.test.tsx`（33 用例）：
-- 两组按钮渲染（上/下分组+按 zones 顺序）、active class+指示条（VS Code 风格）
+`activityBar.test.tsx`（38 用例）：
+- 两组按钮渲染（上/下分组+按 zones 顺序）、active class+指示条（VS Code 风格）+ 图标色三态
 - 点击→toggleView 调用、再次点击关闭（R1/R2）
 - tooltip/title + `data-e2e` 属性
 - dragStart dataTransfer 内容 + 半透明态
@@ -147,6 +138,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - drop→moveButton 参数（zone/index）+ dragEnd 清拖拽状态
 - zones 含未注册 id 正常渲染不抛异常
 - hover 态背景色（非 active 时）vs active 态不覆盖
+- 配置钮渲染/点击（mock openHooksConfigFromActivityBar）
 - 种子 sideBar store（真实）+ 手动注册测试视图（`_reset` 后 register stub 组件）；mock dataTransfer
 
 `sideBarArea.test.tsx`（15 用例）：
@@ -160,7 +152,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - mock Allotment 捕获 Pane props
 
 `workspace-sideviews.test.tsx`（13 用例）：
-- 活动栏 pane 40px 固定（preferred/min/max）
+- 活动栏 pane **46px** 固定（preferred/min/max）
 - 侧栏区 pane visible=anyOpen 四布局态（hidden→false、三种开→true）
 - preferredSize 来自 store width、onChange→setWidth
 - 主区 pane minSize=200 保持、SideBarArea props 透传

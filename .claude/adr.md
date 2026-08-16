@@ -88,3 +88,12 @@
 - 实现期按 requirements.md 逐条验收（P0 必做）；视觉验收参照 final-mockup.html 组件集页。
 - F3 四态 emoji 的**视觉呈现**被状态圆点取代（事件→状态映射逻辑不变）；F9 品牌 logo 保留。
 - 现状侧栏（项目列表 + Agent Status 等区块）IA 将随实现重构为统一导航树；行为逻辑（快捷键/右键菜单/会话恢复）不变。
+
+**实现期决策（2026-08）**：Stage 01-08 实施（docs/ui-redesign-impl/checklist.md 46 项）期间追加确认的决策，逐条落地于代码：
+
+- **UI-405/406/407 三条剔除**（Agent 面板/composer/状态行）：为远期新功能而非视觉重设计，不属本期范围；2026-08-16 定调——聊天式 Agent 面板为独立产品方向，未来单独立项。requirements.md 三条已补「远期愿景，本期不实施」注记（DOC-04），编号保留。
+- **darcula 删除、linear 替换**：新方案 `linear` 替换并删除 darcula（schemes/ 只余 linear.ts）；启动链默认 id 改 `linear`，未知 id 回退机制内建（schemeRegistry.setActive）。
+- **配置钮入口唯一化**：活动栏底部「配置」钮 = 打开 hooks 配置面板（唯一入口）；SidebarTree 右键菜单「打开 Hooks 配置」项随 SidebarTree 退役删除。
+- **导航树挂法**：活跃会话挂页面下（panelId→pageId 归属）；历史会话折叠节点挂项目下（cwd 归属——规范化前缀匹配，孤儿目录不展示）。
+- **两新依赖**：`lucide-react`（装饰图标全部线性 SVG 单点封装 src/lib/icons.tsx）、`@fontsource/jetbrains-mono`（400/500 woff2 随产物打包，断网可用）。
+- **自绘标题栏取舍**：`decorations:false` + 自绘 34px 一体化标题栏，**接受失去 Snap Layouts 与原生阴影**（关闭钮经 `getCurrentWindow().close()` 复用 P1-19 关窗杀 PTY 链路）。

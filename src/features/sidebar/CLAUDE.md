@@ -2,51 +2,24 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## 职责
+## 模块状态：已退役（NAV-06，2026-08）
 
-侧栏（SidebarTree）——左侧项目/操作页面二级树组件。管理项目 CRUD、操作页面 CRUD、页面切换导航。
+**`src/features/sidebar/` 目录仅剩本文件**——`SidebarTree.tsx` 及其配套（`index.ts` barrel）已于 NAV-06 整体删除。本目录待清理：目录删除时本文件一并删除（登记于 `.claude/CLAUDE.md` 模块索引与 `docs/ui-redesign-impl/checklist.md`）。
 
-## 架构决策
+## 历史职责与迁移去向
 
-### 新建页面不自动创建终端
+SidebarTree 曾是左侧项目/操作页面二级树组件（项目 CRUD、操作页面 CRUD、页面切换导航）。NAV-01~09 以 `src/features/navTree/` 统一导航树接管其全部职责，迁移承接约定：
 
-`makeEmptyLayout()` 返回空布局 `{}`，新建项目/操作页面时不包含任何默认面板。`PageDockview.handleReady` 在空布局时不做兜底终端创建。空白页面由 Dockview watermarkComponent 接管显示（"打开终端或编辑器开始工作"）。
+| 原职责 | 迁移去向 |
+|--------|---------|
+| 二级树渲染（项目/页面） | `navTree/NavTree.tsx`（+ 活跃会话行 + 历史折叠节点，决策 5 层级扩展） |
+| 项目 CRUD / 页面 CRUD / 内联重命名 | `NavTree.tsx`（handleAddProject/handleNewPage 行为不变迁入） |
+| `makeEmptyLayout()` | `navTree/NavTree.tsx` 导出（restoreSession 等消费点改引用，NAV-06 承接约定） |
+| 宿主（sideViewDefs `projects` 视图） | sideViews 三槽重组——`projects` 视图注销，`nav` 视图注册（NAV-05） |
+| 右键菜单「打开 Hooks 配置」 | 决策 4 入口唯一化——菜单项删除，配置钮移至活动栏底部（`sideViews/ActivityBar.tsx` + `hooksConfig/openHooksConfig.ts`） |
+| 相关测试 | `sidebar-actions.test.ts` 语义迁入 `nav-tree.test.tsx` / `nav-tree-history.test.tsx`（NAV-08 测试迁移） |
 
-**涉及路径**：
-- `handleAddProject` — 新建项目时 page.layout 为空
-- `handleNewPage` — 新建操作页面时 page.layout 为空
-- **右键菜单「打开 Hooks 配置」入口**：页面行菜单——先 `switchToPage` 切到目标页再 `openHooksConfigPanel(pageId)`（workspace/pageApis，同页单例 C13-7）；项目行菜单——已有操作页面（无论几个）切到 `pages[0]`、无页面则复用 `handleNewPage` 新建后切换，再开面板。面板只能在活跃页面打开（rootPath 推导依赖 activePageId），故切页先行；`switchToPage` prop 为 async
-- `__slterm_e2e_createProject` — E2E 辅助，同上
+## 防误用提示
 
-**旧 `makeDefaultLayout` 已删除**——早期版本硬编码 `contentComponent: "terminal"` 到新建页面布局中。`layoutSerde.patchLegacyLayout` 仍保留对旧格式的兼容修补（不影响新页面创建）。
-
-### 项目创建不自动切换页面
-
-`handleAddProject` 创建项目后调用 `addProject(project)`（store 内展开项目节点），但**不调 `useLayout.setActivePage()`**。用户需手动点击页面行切换。这与 E2E 辅助（`__slterm_e2e_createProject`）不同——后者显式设 `activePageId` 自动切换。
-
-## 文件
-
-| 文件 | 职责 |
-|------|------|
-| `index.ts` | barrel export：SidebarTree 组件 + makeEmptyLayout |
-| `SidebarTree.tsx` | 侧栏主组件：二级树渲染、工具栏、右键菜单、handleAddProject/handleNewPage/handleDeletePage |
-
-## 宿主变更
-
-SidebarTree 组件本体不变。宿主从 Allotment 常驻栏（Workspace 四栏布局中独立的 `<Allotment.Pane>`）变为侧栏区视图槽——经 `src/features/sideViews/sideViewDefs.ts` 注册为 `projects` 视图，由 `SideBarArea` 经 `display:none/flex` 切换渲染。组件接收的 `switchToPage` / `onDeletePage` props 由 `SideBarArea` 透传，与原宿主的 props 来源一致。
-
-## 关键集成点
-
-- **`src/stores/projects.ts`** — `addProject` / `addPage` / `removeProject` / `removePage`（CRUD）
-- **`src/ipc/dialog.ts`** — `open()` 原生文件夹选择对话框
-- **`src/workspace/Workspace.tsx`** — `switchToPage` / `onDeletePage` 回调经 Workspace → SideBarArea → SidebarTree 透传
-- **`src/features/sideViews/sideViewDefs.ts`** — SidebarTree 注册为 `projects` 视图（id: "projects", title: "项目列表", icon: "📋"）
-
-## 测试模式
-
-测试文件：`src/__tests__/sidebar-actions.test.ts`（47 用例，含「打开 Hooks 配置」菜单入口 5 用例：页面菜单含项/先切页后开面板顺序/项目菜单含项/有页切 pages[0]/无页新建后切换）。
-
-- 使用真实 Zustand stores（`setState` 种子数据），mock IPC dialog
-- `handleAddProject` 测试：mock dialog.open → fireEvent.click → waitFor store 更新 → 验证 project/pages/layout
-- `handleNewPage` 测试：populateStore → 右键菜单 → 验证 page 数量 +1 + layout 为空
-- 25 条测试覆盖：树结构渲染、展开折叠、右键菜单交互、内联重命名、Escape/空白/相同名称边界分支、项目删除 confirm、布局 CSS 自适应
+- 消费方不得再 `import` 本目录（无导出文件）；历史引用一律改指 `../navTree`。
+- 侧栏相关文档请读 @../sideViews/CLAUDE.md（视图系统）与 @../navTree/CLAUDE.md（导航树）。

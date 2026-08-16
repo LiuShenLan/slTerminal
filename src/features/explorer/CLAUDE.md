@@ -37,7 +37,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **单击空白** → `onSelect(null)` 取消选中
 - **焦点离开** → 选中态保留（视觉高亮不变），但 `usePanelFocus` 的 `popContext("explorer")` 阻止快捷键在失焦时误触发
 
-高亮色：`EXPLORER_SELECTION_BG`（`#2a4371`，VS Code list activeSelectionBackground 风格），在 `theme/schemes/darcula.ts` 单点定义。
+高亮色：`EXPLORER_SELECTION_BG`（linear 方案 = `rgba(110,159,242,0.13)` accent-dim，UI 重设计后与 ACTIVE_SELECTION_BG 同值），在 `theme/schemes/linear.ts` 单点定义。
 `onMouseEnter`/`onMouseLeave` 仅在非选中时动态设置背景——选中态不被 hover 覆盖。
 
 ### 焦点管理：tabIndex={-1} + usePanelFocus("explorer")
@@ -89,13 +89,13 @@ Explorer 的键盘快捷键遵循与 terminal/editor 相同的模式：
 | `ExplorerPanel.tsx` | React 容器组件：活跃项目推导、文件树渲染、CRUD 事件处理、`handleOpenFile` 面板分派（FileViewerRegistry）、`notify_watch` 启动、**选中模型** + **焦点管理**（tabIndex={-1} + usePanelFocus("explorer")）+ **active pointer 集成** |
 | `useFileTree.ts` | 文件树数据 hook：`loadRoot` / `loadDirectory` / `toggleExpand` / `refreshExpanded`（经 `reloadPreservingExpanded` 递归重载保留展开状态）/ generation 取消 |
 | `FileTree.tsx` | 递归树组件：节点渲染、git 状态着色、右键菜单、**单击选中（VS Code 风格高亮）** + **renamingPath 状态上提**（由 ExplorerPanel 管理） |
-| `FileIcon.tsx` | 文件图标映射（扩展名→emoji） |
+| `FileIcon.tsx` | 文件图标映射（UI-602：emoji → 描边 SVG 重构）——文件夹 = `lib/icons.tsx` 的 IconFolder（IC-01 图标单点）；文件 = 描边 + 左缘小色块自绘 SVG（轮廓/折角描边色 = 当前色（git 状态色，无则 `EXPLORER_COLORS.fg`），色块 fill = 扩展名映射色**六色盘**（ts/tsx 蓝、js/jsx/mjs/cjs 黄、py 绿、rs 红、md 紫、html 青、css/scss/less 蓝、配置类灰青、默认无色块）；git 状态色与类型色块分层叠加互不遮蔽）。**六色盘硬编码例外（IC-04 契约登记）**：色值写死于本文件 `FILE_COLORS` 常量（UI-602 checklist 指定色），NavProjectRow 文件夹蓝同规格例外 |
 | `activeExplorer.ts` | 模块级"聚焦 explorer"指针（createActivePointer 模式，同 activeTerminal/activeEditor） |
 | `keyboard.ts` | 快捷键命令工厂：`createExplorerShortcuts()` → 3 条命令（delete/open/rename），在 App.tsx 一次性注册 |
 
 ## 宿主变更
 
-ExplorerPanel 组件本体不变。宿主从 Allotment 常驻栏（Workspace 四栏布局中独立的 `<Allotment.Pane>`）变为侧栏区视图槽——经 `src/features/sideViews/sideViewDefs.ts` 注册为 `explorer` 视图（`id: "explorer"`, `title: "文件浏览器"`, `icon: "📁"`，`component: () => React.createElement(ExplorerPanel)`），由 `SideBarArea` 经 `display:none/flex` 切换渲染。
+ExplorerPanel 组件本体不变。宿主从 Allotment 常驻栏（Workspace 四栏布局中独立的 `<Allotment.Pane>`）变为侧栏区视图槽——经 `src/features/sideViews/sideViewDefs.ts` 注册为 `explorer` 视图（`id: "explorer"`, `title: "文件浏览器"`, `icon: IconFiles`（IC-06 图标组件化，`lib/icons.tsx` 单点），`component: () => React.createElement(ExplorerPanel)`），由 `SideBarArea` 经 `display:none/flex` 切换渲染。
 
 **已知行为：换区重建丢失展开状态**（ADR-0001）。当用户从活动栏拖拽 `explorer` 按钮跨区（上→下或下→上），React 将组件从旧 pane 卸载、在新 pane 重新挂载——ExplorerPanel 内部状态（文件树展开状态、`rootNodes`）全部丢失。此行为在 ADR-0001 中已确认接受：换区为低频操作（用户通常设定一次后不改），重建成本低于跨父节点保持实例的架构复杂度。
 
@@ -107,7 +107,7 @@ ExplorerPanel 组件本体不变。宿主从 Allotment 常驻栏（Workspace 四
 - **`src/stores/projects.ts` + `src/stores/layout.ts`** — 活跃项目 `rootPath` 推导
 - **`src/workspace/titleManager.ts`** — 文件打开时计算编辑器页签标题 + 去重
 - **`src/features/fileViewers/FileViewerRegistry.ts`** — 策略模式决定文件用哪个面板类型打开（`.html` → `"htmlviewer"`，未知 → `"editor"`）
-- **`src/features/sideViews/sideViewDefs.ts`** — ExplorerPanel 注册为 `explorer` 视图（`id: "explorer"`, icon: "📁"）
+- **`src/features/sideViews/sideViewDefs.ts`** — ExplorerPanel 注册为 `explorer` 视图（`id: "explorer"`, icon: IconFiles）
 
 ## IPC 约束
 
@@ -123,7 +123,7 @@ ExplorerPanel 组件本体不变。宿主从 Allotment 常驻栏（Workspace 四
 | `explorer-crud-success.test.tsx` | 4 | CRUD 成功路径 |
 | `explorer-delete.test.tsx` | 25 | 删除（文件/递归目录/确认弹窗/右键菜单 UI-802 视觉规格） |
 | `explorer-file-viewer.test.tsx` | 21 | handleOpenFile 面板分派（FileViewerRegistry 命中/回退） |
-| `file-icon.test.tsx` | 36 | 文件图标映射（扩展名→emoji 全表） |
+| `file-icon.test.tsx` | 36 | 文件图标映射（六色盘 SVG：扩展名→色块全表 + 文件夹 IconFolder + git 状态色叠加 + 默认无色块） |
 | `explorer-focus.test.tsx` | 6 | 焦点管理（tabIndex/usePanelFocus） |
 | `explorer-git-status.test.tsx` | 32 | git 状态着色 |
 | `explorer-input-boundary.test.tsx` | 10 | 重命名输入边界 |

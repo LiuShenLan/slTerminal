@@ -108,24 +108,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 | 模块 | 职责 | 入口 | 详情 |
 |------|------|------|------|
-| src/ipc | IPC 通信层，前端 invoke 唯一入口 | src/ipc/index.ts | ../src/ipc/CLAUDE.md |
+| src/ipc | IPC 通信层，前端 invoke 唯一入口（含 window 窗口控制三 wrapper——自绘标题栏用；dialog 仅 open/save 文件对话框，ask 已删） | src/ipc/index.ts | ../src/ipc/CLAUDE.md |
 | src/types | DTO 类型定义，与 Rust 模块双边对应（硬约束 #4） | src/types/ | ../src/types/CLAUDE.md |
 | src/stores | Zustand 状态管理（projects/layout/fontSize/keybindings/sideBar） | src/stores/index.ts | ../src/stores/CLAUDE.md |
-| src/workspace | 工作区布局管理（Dockview serde + 面板注册 + titleManager + pageApis） | src/workspace/Workspace.tsx | ../src/workspace/CLAUDE.md |
+| src/workspace | 工作区布局管理（Dockview serde + 面板注册 + titleManager + pageApis + DefaultTab 页签形态——状态圆点 + CLI logo） | src/workspace/Workspace.tsx | ../src/workspace/CLAUDE.md |
 | src/panels | Dockview 面板系统（terminal + editor + html + gitshow + diff + hooksConfig） | src/panels/index.ts | ../src/panels/CLAUDE.md |
-| src/lib | 通用工具 + createActivePointer + useFontSizeWheel + ErrorBoundary + E2E_ENABLED 门控 + 路径函数 | src/lib/index.ts | ../src/lib/CLAUDE.md |
+| src/lib | 通用工具 + icons（lucide 线性图标单点封装）+ StatusDot（状态圆点）+ ConfirmDialog/toast（应用内浮层）+ createActivePointer + useFontSizeWheel + ErrorBoundary + E2E_ENABLED 门控 + 路径函数 | src/lib/index.ts | ../src/lib/CLAUDE.md |
 | src/theme | 配色方案单点（schemes/ 值文件 + SchemeRegistry + colors.ts facade，硬约束 #6） | src/theme/colors.ts | ../src/theme/CLAUDE.md |
 | src/features/explorer | 文件浏览器（FileTree + 选中模型 + 键盘快捷键 + useFileTree + FileViewerRegistry 分派） | src/features/explorer/ExplorerPanel.tsx | ../src/features/explorer/CLAUDE.md |
 | src/features/fileViewers | 文件查看器注册表（策略模式，扩展名→面板类型映射） | src/features/fileViewers/index.ts | ../src/features/fileViewers/CLAUDE.md |
 | src/features/shortcuts | 快捷键模块（ShortcutRegistry 单例 + usePanelFocus + Command/Keybinding 分离 + 用户重绑定） | src/features/shortcuts/index.ts | ../src/features/shortcuts/CLAUDE.md |
-| src/features/sidebar | 侧栏项目/页面二级树（项目/页面 CRUD + 页面切换导航） | src/features/sidebar/index.ts | ../src/features/sidebar/CLAUDE.md |
-| src/features/sideViews | 侧栏视图系统——活动栏+共享侧栏区+单槽位状态机 | src/features/sideViews/index.ts | ../src/features/sideViews/CLAUDE.md |
+| src/features/sidebar | SidebarTree 已退役（2026-08 并入 navTree 统一导航树，NAV-06；目录仅存历史文档） | — | ../src/features/sidebar/CLAUDE.md |
+| src/features/navTree | 统一导航树（项目→页面→会话 + 历史折叠节点挂项目下；NavTree + useNavTree + makeEmptyLayout 迁自 SidebarTree，NAV-01~04/06/09） | src/features/navTree/index.ts | ../src/features/navTree/CLAUDE.md |
+| src/features/titleBar | 自绘一体化标题栏（34px + 窗口控制三钮 + data-tauri-drag-region 拖拽 + 双击最大化，decorations:false，TB-01~05） | src/features/titleBar/TitleBar.tsx | ../src/features/titleBar/CLAUDE.md |
+| src/features/sideViews | 侧栏视图系统——活动栏（46px 三槽：导航树/文件/Commit + 底部「配置」钮）+ 共享侧栏区 + 单槽位状态机 | src/features/sideViews/index.ts | ../src/features/sideViews/CLAUDE.md |
 | src/features/commit | Commit 侧栏视图（git 变更列表 + 状态→面板分派） | src/features/commit/index.ts | ../src/features/commit/CLAUDE.md |
-| src/features/agentStatus | Agent 状态视图（agentSession 行建模 + 上下文用量） | src/features/agentStatus/index.ts | ../src/features/agentStatus/CLAUDE.md |
+| src/features/agentStatus | Agent 会话数据层（useAgentStatus 行建模 + 上下文用量；视图已退役——2026-08 并入导航树活跃会话区，NAV-08） | src/features/agentStatus/useAgentStatus.ts | ../src/features/agentStatus/CLAUDE.md |
 | src/features/notifications | toast 通知（Tauri 原生 sendNotification + 任务栏闪烁） | src/features/notifications/index.ts | ../src/features/notifications/CLAUDE.md |
 | src/features/hooksConfig | hooks 配置面板 schema 内嵌单点（SchemaStore 官方 schema + hooks 子 schema + Draft07 校验） | src/features/hooksConfig/schema/index.ts | ../src/features/hooksConfig/CLAUDE.md |
 | src/features/cliProfiles | CLI profile 注册表（CliProfileRegistry 模块级单例 + claude profile 身份域 + hooks/history 能力策略，MC-1） | src/features/cliProfiles/index.ts | ../src/features/cliProfiles/CLAUDE.md |
-| src/features/agentHistory | 历史会话聚合 UI（AgentHistorySections + useAgentHistory + 复合键 cliId\|sessionId + 四步恢复编排） | src/features/agentHistory/index.ts | ../src/features/agentHistory/CLAUDE.md |
+| src/features/agentHistory | 历史会话数据层与行组件（useAgentHistory + 复合键 cliId\|sessionId + 四步恢复编排 + HistorySessionList/Row 供导航树历史区；AgentHistorySections 已删，NAV-08） | src/features/agentHistory/index.ts | ../src/features/agentHistory/CLAUDE.md |
 | src/__tests__ | L2 前端测试集中目录 + 共享测试工厂 | — | ../src/__tests__/CLAUDE.md |
 | src/panelRegistry.ts | 面板注册表共享配置层（workspace/explorer/测试多方引用，硬约束 #5） | src/panelRegistry.ts | — |
 | test/ | L3 终端 headless 测试（xterm/headless + xterm/addon-serialize） | vitest.l3.config.ts | — |
@@ -181,12 +183,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | B15 | 缺陷 | 重启后 statusLine 变 reporter 包裹（空白行 + 版本过旧）——ClaudeHooksProvider::reinject_statusline 误传 hook_script_path()（reporter）作桥接脚本路径；修复 = reinject 改传 statusline_script_path()，provider 层 L1 用例锁死（自 4aed3e2 初始版即存在，B11 调查的「损坏中间态」即此产物） |
 | B16 | 缺陷 | 状态行占位文本——桥接脚本 .sh 分支 spawnSync("bash") 依赖 PATH（Windows 原生 PATH 无 bash，仅 Git\cmd）；且 bash -c 未加引号的反斜杠路径被 bash 词法吃掉致 127。修复 = bashCandidates 试错定位（PATH bash → where git 沿目录上溯推导 bin/usr\bin → 固定路径 fallback）+ 反斜杠转正斜杠；SCRIPT_VERSION 5→6 |
 | ADR-0001 | 架构决策 | 侧栏视图换区重建丢失组件内部状态（已确认接受）（详见 .claude/adr.md） |
-| ADR-0003 | 架构决策 | UI 全面重设计「Linear 极黑克制」——候选 A 定稿（明度阶梯/发丝线/单强调色/统一导航树/双轨配色；交付物 docs/ui-redesign/，详见 .claude/adr.md） |
+| ADR-0003 | 架构决策 | UI 全面重设计「Linear 极黑克制」——候选 A 定稿并已实现（2026-08：linear 方案替换 darcula、自绘标题栏、统一导航树、状态圆点；交付物 docs/ui-redesign/ + 实现期决策，详见 .claude/adr.md） |
 | F2 | 特性 | hooks 注入入口（F6 面板工具栏并入；与功能键 F2 区分） |
-| F3 | 特性 | 终端页签四态 emoji 指示（agent-event + OSC 133 合成） |
+| F3 | 特性 | 终端页签四态状态指示（agent-event + OSC 133 合成；2026-08 视觉呈现由 emoji 改为状态圆点，IC-02/03） |
 | F5 | 特性 | agentSession 契约行建模（双通道建行/三通道删行） |
 | F6 | 特性 | hooks 双模式配置面板（JSON/GUI 编辑 hooks 子树，user/project/local 三层，F2 注入入口并入） |
-| F7 | 特性 | 历史会话查询与恢复（历史区三下拉框 + 扫描/恢复/删除；重命名已移除） |
+| F7 | 特性 | 历史会话查询与恢复（扫描/恢复/删除 + 四步恢复编排；重命名已移除；2026-08 历史区迁入导航树折叠节点，NAV-03） |
 | F8 | 特性 | 终端页签自定义重命名（右键菜单「重命名」+ 自绘弹窗；customTitle 随布局持久化；claude 运行中禁用；不影响 terminal-N 递增） |
 | F9 | 特性 | 终端页签/侧栏 CLI 品牌 logo（按命令行首 token 匹配 profile.iconSrc；2026-08 行为修订：渲染条件由「仅随状态 emoji」改为「跟随页签名/会话名显示」——页签 logo 会话绑定（agentSession 存在即显示，按 cliId 查 iconSrc，TabState.logo 退役），侧栏活跃/历史行 logo 行存在即显示，位置不变 emoji 后名称前） |
 
