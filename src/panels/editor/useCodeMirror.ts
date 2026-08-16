@@ -28,6 +28,8 @@ import { markdown } from "@codemirror/lang-markdown";
 import { xml } from "@codemirror/lang-xml";
 import { save } from "../../ipc/dialog";
 import { normalizePath } from "../../lib/path";
+// FE-01: 原生弹窗（window.alert/confirm）统一改为应用内浮层（toast / confirmDialog）
+import { confirmDialog, toast } from "../../lib";
 import { fs } from "../../ipc";
 import { diffGutter, updateDiffGutter, clearDiffGutter } from "./gitGutter";
 import { onFsEvent } from "../../ipc/notify";
@@ -173,8 +175,8 @@ export function useCodeMirror({ container, filePath, panelId, fontSize, onFontSi
     try {
       await fs.writeFile(path, content);
     } catch (err) {
-      // P1-05: 保存失败时显示通知，保留编辑器内容不清空
-      window.alert(`保存失败: ${err}`);
+      // P1-05: 保存失败时显示通知，保留编辑器内容不清空（FE-01: alert → toast）
+      toast.show("error", `保存失败: ${err}`);
       return;
     }
 
@@ -261,10 +263,12 @@ export function useCodeMirror({ container, filePath, panelId, fontSize, onFontSi
             doc = `// [slTerminal] 文件过大（约${(sizeHint / 1_000_000).toFixed(1)}MB），已拒绝打开以保护内存。`;
             filePathRef.current = undefined; // 防止误保存覆盖原文件
           } else if (sizeHint > LARGE_FILE_WARN_BYTES) {
-            // >1MB：弹窗警告，用户可选择继续或取消
-            const proceed = window.confirm(
-              `文件较大（约${(sizeHint / 1_000_000).toFixed(1)}MB），打开可能影响性能。\n\n确定继续？`,
-            );
+            // >1MB：弹窗警告，用户可选择继续或取消（FE-01: confirm → confirmDialog，确认=继续/取消=中止）
+            const proceed = await confirmDialog({
+              title: "打开大文件",
+              message: `文件较大（约${(sizeHint / 1_000_000).toFixed(1)}MB），打开可能影响性能。`,
+              confirmText: "继续",
+            });
             if (!proceed) {
               doc = `// [slTerminal] 用户取消打开大文件（约${(sizeHint / 1_000_000).toFixed(1)}MB）。`;
               filePathRef.current = undefined;
@@ -361,7 +365,8 @@ export function useCodeMirror({ container, filePath, panelId, fontSize, onFontSi
 
   // D3: 监听外部文件改动
   useEffect(() => {
-    const unlisten = onFsEvent((event) => {
+    // FE-01: 回调改 async——脏文件分支需 await confirmDialog（确认=重载/取消=保留）
+    const unlisten = onFsEvent(async (event) => {
       const currentPath = filePathRef.current;
       if (currentPath) {
         // 按文件路径去重：仅跳过该编辑器实例自己保存触发的文件事件
@@ -388,10 +393,12 @@ export function useCodeMirror({ container, filePath, panelId, fontSize, onFontSi
       if (!view) return;
 
       if (dirtyRef.current) {
-        // 有未保存修改 → 弹窗选择
-        const choice = window.confirm(
-          `文件 "${currentPath}" 已被外部修改。\n\n当前编辑器有未保存的修改。\n\n• 确定 = 重载（丢弃本地修改）\n• 取消 = 保留本地修改`,
-        );
+        // 有未保存修改 → 弹窗选择（FE-01: confirm → confirmDialog，确认=重载/取消=保留）
+        const choice = await confirmDialog({
+          title: "外部修改",
+          message: `文件 "${currentPath}" 已被外部修改。当前编辑器有未保存的修改。确认将重载并丢弃本地修改，取消将保留当前内容。`,
+          confirmText: "重载",
+        });
         if (choice) {
           // 重载
           fs.readFile(currentPath).then((content) => {

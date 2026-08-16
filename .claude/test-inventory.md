@@ -251,7 +251,7 @@
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
-| `src/__tests__/diff-panel.test.tsx` | 39 | mock gitFileAtHead+fs+gitDiff+onFsEvent、双栏渲染、加载/错误占位、**保存后刷新链真实断言（EDF-01：writeFile→gitDiff→gutter）**、**五分支补齐（EDF-02：占位刷新/.git 刷新/脏确认/滚动重绑/大文件）**、滚动同步去固定延时（EDF-07） |
+| `src/__tests__/diff-panel.test.tsx` | 40 | mock gitFileAtHead+fs+gitDiff+onFsEvent、双栏渲染、加载/错误占位、**保存后刷新链真实断言（EDF-01：writeFile→gitDiff→gutter）**、**五分支补齐（EDF-02：占位刷新/.git 刷新/脏确认/滚动重绑/大文件）**、滚动同步去固定延时（EDF-07）、**FE-02 浮层回归（脏确认改 mock confirmDialog 断言参数 + 保存失败 toast.show）** |
 | `src/__tests__/gitshow-panel.test.tsx` | 21 | mock gitFileAtHead、三态、readOnly 断言、oldPath 优先、**大文件警告精确断言 + EditorView identity 切换（EDF-04）**、**字号 reconfigure（EDF-09）** |
 | `src/__tests__/diff-alignment.test.ts` | 18 | computeAlignment 纯函数全分支 + **key<0 过滤（EDF-06）** |
 

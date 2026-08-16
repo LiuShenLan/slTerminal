@@ -29,6 +29,9 @@ const h = vi.hoisted(() => {
     mockDialogSave: vi.fn<() => Promise<string | null>>().mockResolvedValue(null),
     mockReconfigure: vi.fn().mockReturnValue([]),
     mockUsePanelFocus: vi.fn(),
+    // FE-01: 应用内浮层 mock（替代 window.confirm spy；参数签名对齐 ConfirmDialogOptions 子集）
+    mockConfirmDialog: vi.fn<(opts: { title?: string; message: string; confirmText?: string }) => Promise<boolean>>().mockResolvedValue(false),
+    mockToastShow: vi.fn(),
   };
 });
 
@@ -99,6 +102,17 @@ vi.mock("../ipc/dialog", () => ({
   save: h.mockDialogSave,
 }));
 
+// FE-01: mock 应用内浮层 confirmDialog/toast（importOriginal 保留其余导出，防破坏
+// importOriginal 展开的 ../features/shortcuts 对 lib 的依赖）
+vi.mock("../lib", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib")>();
+  return {
+    ...actual,
+    confirmDialog: h.mockConfirmDialog,
+    toast: { ...actual.toast, show: h.mockToastShow },
+  };
+});
+
 vi.mock("../features/shortcuts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../features/shortcuts")>();
   return { ...actual, usePanelFocus: h.mockUsePanelFocus };
@@ -144,6 +158,8 @@ describe("useCodeMirror fs-event 集成", () => {
     h.mockReadFile.mockResolvedValue("// modified content");
     h.mockWriteFile.mockResolvedValue(undefined);
     h.mockGitDiff.mockResolvedValue([]);
+    // FE-01: 默认取消（脏文件弹窗默认不重载，E7 覆盖为确认）
+    h.mockConfirmDialog.mockResolvedValue(false);
   });
 
   // ── E1: onFsEvent 订阅 ──
@@ -225,9 +241,9 @@ describe("useCodeMirror fs-event 集成", () => {
     }, { timeout: 3000 });
   });
 
-  // ── E6: Modify + dirty=true → confirm 弹窗 ──
+  // ── E6: Modify + dirty=true → confirmDialog 弹窗 ──
 
-  it("E6. Modify 事件 + 脏文件 → window.confirm 弹窗", async () => {
+  it("E6. Modify 事件 + 脏文件 → confirmDialog 弹窗（断言调用参数）", async () => {
     const { result } = await renderAndWait({ filePath: "/test/main.ts" });
 
     // 标记为 dirty
@@ -236,19 +252,23 @@ describe("useCodeMirror fs-event 集成", () => {
     h.mockReadFile.mockClear();
     h.mockDispatch.mockClear();
 
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
-
     h.mockOnFsCallback!({ paths: ["/test/main.ts"], kind: "Modify" });
 
-    expect(confirmSpy).toHaveBeenCalledTimes(1);
-    expect(confirmSpy.mock.calls[0][0]).toContain("/test/main.ts");
-    expect(confirmSpy.mock.calls[0][0]).toContain("已被外部修改");
-    expect(confirmSpy.mock.calls[0][0]).toContain("未保存的修改");
-
-    confirmSpy.mockRestore();
+    // FE-01: confirmDialog 被调用且参数含路径/未保存提示/确认按钮文案
+    expect(h.mockConfirmDialog).toHaveBeenCalledTimes(1);
+    expect(h.mockConfirmDialog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "外部修改",
+        message: expect.stringContaining("/test/main.ts"),
+        confirmText: "重载",
+      }),
+    );
+    const msg = h.mockConfirmDialog.mock.calls[0][0]?.message ?? "";
+    expect(msg).toContain("已被外部修改");
+    expect(msg).toContain("未保存的修改");
   });
 
-  // ── E7: Modify + dirty + confirm=true → 重载 ──
+  // ── E7: Modify + dirty + confirmDialog=true → 重载 ──
 
   it("E7. 用户确认重载 → readFile + dispatch，dirty 复位", async () => {
     const { result } = await renderAndWait({ filePath: "/test/main.ts" });
@@ -257,7 +277,7 @@ describe("useCodeMirror fs-event 集成", () => {
     h.mockReadFile.mockClear();
     h.mockDispatch.mockClear();
 
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    h.mockConfirmDialog.mockResolvedValue(true);
 
     h.mockOnFsCallback!({ paths: ["/test/main.ts"], kind: "Modify" });
 
@@ -270,11 +290,9 @@ describe("useCodeMirror fs-event 集成", () => {
         changes: { from: 0, to: 0, insert: "// modified content" },
       });
     }, { timeout: 3000 });
-
-    confirmSpy.mockRestore();
   });
 
-  // ── E8: Modify + dirty + confirm=false → 不重载 ──
+  // ── E8: Modify + dirty + confirmDialog=false → 不重载 ──
 
   it("E8. 用户拒绝重载 → readFile 不调用，dirty 保持 true", async () => {
     const { result } = await renderAndWait({ filePath: "/test/main.ts" });
@@ -283,15 +301,18 @@ describe("useCodeMirror fs-event 集成", () => {
     h.mockReadFile.mockClear();
     h.mockDispatch.mockClear();
 
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    h.mockConfirmDialog.mockResolvedValue(false);
 
     h.mockOnFsCallback!({ paths: ["/test/main.ts"], kind: "Modify" });
+
+    // 等待回调内 await confirmDialog 完成（resolve false → 不重载）
+    await waitFor(() => {
+      expect(h.mockConfirmDialog).toHaveBeenCalled();
+    }, { timeout: 3000 });
 
     // readFile 不应被调用（用户拒绝了重载）
     expect(h.mockReadFile).not.toHaveBeenCalled();
     expect(h.mockDispatch).not.toHaveBeenCalled();
-
-    confirmSpy.mockRestore();
   });
 
   // ── E9: container=null → viewRef 为 null → fs-event 不崩溃 ──

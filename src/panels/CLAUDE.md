@@ -420,7 +420,7 @@ useXterm 是编排层——mock 6 个子 hook 才能隔离测试（`useFontSizeB
 
 ### diff 面板测试
 
-`diff-panel.test.tsx`（39 用例）：
+`diff-panel.test.tsx`（40 用例）：
 - mock `gitFileAtHead` + `fs.readFile` + `gitDiff` + `onFsEvent` + `useFontSizeWheel` + `usePanelFocus`
 - 双栏渲染验证（`data-e2e="diff-left"` / `diff-right`）
 - 加载态 + 错误占位文案
@@ -429,6 +429,7 @@ useXterm 是编排层——mock 6 个子 hook 才能隔离测试（`useFontSizeB
 - 左栏 `Ctrl+F` 触发 `.cm-panel.cm-search` 出现
 - `useFontSizeWheel` 左右各调用一次
 - `usePanelFocus` 左右栏各注册一次
+- **FE-02 浮层回归**：脏弹窗改 mock `confirmDialog`（断言 title/confirmText/message 参数）+ 保存失败 `toast.show("error")`
 
 `diff-alignment.test.ts`（18 用例）：
 - `computeAlignment` 纯函数全分支覆盖：纯新增/纯删除/等行修改/多删少/多增少/多 hunk 合并/空 hunks

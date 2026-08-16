@@ -2,7 +2,8 @@
 //
 // 模块级 Map<pageId, DockviewApi>，管理每个页面的 DockviewApi 实例。
 // 提供 register/unregister/get 操作，以及共享切换函数 switchToPageShared /
-// switchToPageAndFocus / openHooksConfigPanel。
+// switchToPageAndFocus / openHooksConfigPanel，外加会话/面板反查
+// findPanelForSession / findPageIdForPanelId（FE-09 自 NavTree 上提）。
 //
 // 不变量：window.__dockviewApi 重指向只允许出现在三站点——
 //   switchToPageShared（本文件）、Workspace.onDeletePage、Workspace.handlePageApiReady
@@ -13,6 +14,10 @@ import type { DockviewApi } from "dockview-react";
 import { useLayout } from "../stores/layout";
 import { useProjects } from "../stores/projects";
 import { setProjectRoot } from "../ipc/fs";
+import { TerminalRegistry } from "../panels/terminal/TerminalRegistry";
+import { parseTerminalPageId } from "../lib/panelId";
+import { basename } from "../lib/path";
+import { keyOf } from "../features/agentHistory/historyModel";
 
 /** 模块级页面 API 注册表 */
 const pageApiMap = new Map<string, DockviewApi>();
@@ -132,4 +137,48 @@ export async function openHooksConfigPanel(pageId: string): Promise<boolean> {
     `[slTerminal] 页面 ${pageId} 的 DockviewApi 在 5s 内未就绪，无法打开 Hooks 配置`,
   );
   return false;
+}
+
+// ---- 会话/面板反查（FE-09 自 NavTree 上提——双击弹窗「切换到该会话操作页面」用） ----
+
+/**
+ * 反查运行中会话所在终端面板：复合键 `cliId|sessionId` 精确匹配（MC-313——与
+ * deriveActiveSessionStatuses 同键形态），两侧键构造均经 keyOf 单点
+ * （cliId 缺省回退 CLAUDE_CLI_ID + 转义，ZQ-1）；未命中 → undefined。
+ */
+export function findPanelForSession(
+  cliId: string,
+  sessionId: string,
+): string | undefined {
+  const key = keyOf(cliId, sessionId);
+  for (const [panelId, entry] of TerminalRegistry.getAll()) {
+    const cs = entry.agentSession;
+    if (!cs) continue;
+    let id = cs.sessionId;
+    if (!id && cs.usageSourcePath) {
+      const base = basename(cs.usageSourcePath);
+      id = base.endsWith(".jsonl") ? base.slice(0, -".jsonl".length) : base;
+    }
+    if (!id) continue;
+    if (keyOf(cs.cliId, id) === key) return panelId;
+  }
+  return undefined;
+}
+
+/**
+ * panelId → 属主 pageId（B14 防御分层）：先按已知页面集合做前缀匹配——旧恢复格式
+ * （terminal-{pageId}-{Date.now}-{seq}）的 pageId 含数字段，语法切分会把 Date.now
+ * 段误并入 pageId 得到幽灵页面；前缀匹配对旧格式可靠。兜底 parseTerminalPageId
+ * （新格式）；均未命中 → null。
+ */
+export function findPageIdForPanelId(panelId: string): string | null {
+  const { projects } = useProjects.getState();
+  for (const project of Object.values(projects)) {
+    for (const page of project.pages) {
+      if (panelId.startsWith(`terminal-${page.pageId}-`)) {
+        return page.pageId;
+      }
+    }
+  }
+  return parseTerminalPageId(panelId);
 }

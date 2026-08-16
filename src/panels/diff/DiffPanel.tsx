@@ -46,6 +46,7 @@ import { usePanelFocus } from "../../features/shortcuts";
 import { setActiveEditor, clearActiveEditor, type EditorActions } from "../editor/activeEditor";
 import { useFontSize } from "../../stores";
 import { useFontSizeWheel } from "../../lib/useFontSizeWheel";
+import { confirmDialog, toast } from "../../lib";
 import { FONT_SIZE_MIN, FONT_SIZE_MAX } from "../../stores/fontSize";
 import { computeAlignment } from "./alignment";
 import { EDITOR_BG, ERROR_FG, HTML_PANEL_LOADING_FG, PANEL_BG, SEPARATOR_BG, editorTheme, editorColorOverrides, editorSyntaxHighlight } from "../../theme";
@@ -360,7 +361,7 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ params }) => {
     try {
       await fs.writeFile(path, content);
     } catch (err) {
-      window.alert(`保存失败: ${err}`);
+      toast.show("error", `保存失败: ${err}`);
       return;
     }
 
@@ -434,7 +435,7 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ params }) => {
   // ── 右侧外部文件修改监听 ────────────────────────────────────
 
   useEffect(() => {
-    const unlisten = onFsEvent((event) => {
+    const unlisten = onFsEvent(async (event) => {
       const currentPath = filePathRef.current;
       if (!currentPath) return;
 
@@ -454,9 +455,12 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ params }) => {
       if (!view) return;
 
       if (dirtyRef.current) {
-        const choice = window.confirm(
-          `文件 "${currentPath}" 已被外部修改。\n\n当前编辑器有未保存的修改。\n\n确定 = 重载（丢弃本地修改）\n取消 = 保留本地修改`,
-        );
+        // FE-02：原生 window.confirm → confirmDialog（确认=重载继续 / 取消=保留中止，语义对照现状）
+        const choice = await confirmDialog({
+          title: "外部修改",
+          message: `文件 "${currentPath}" 已被外部修改。当前编辑器有未保存的修改，重载将丢弃本地修改。`,
+          confirmText: "重载",
+        });
         if (choice) {
           fs.readFile(currentPath).then((content) => {
             view.dispatch({

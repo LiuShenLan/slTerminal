@@ -13,9 +13,12 @@ import {
   switchToPageAndFocus,
   registerPageApi,
   unregisterPageApi,
+  findPanelForSession,
+  findPageIdForPanelId,
 } from "../workspace/pageApis";
 import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
+import { CLAUDE_CLI_ID } from "../features/cliProfiles/profiles/claude";
 
 /** fake 面板（getPanel 命中时的返回值） */
 interface FakePanel {
@@ -39,8 +42,10 @@ const mocks = vi.hoisted(() => {
     void _path;
     return sprPromise;
   });
+  const mockTerminalGetAll = vi.fn(() => new Map());
   return {
     mockSetProjectRoot,
+    mockTerminalGetAll,
     get resolve() { return () => { resolveSPR(); }; },
     get reject() { return (err?: unknown) => { rejectSPR(err); }; },
     resetDeferred() {
@@ -52,6 +57,13 @@ const mocks = vi.hoisted(() => {
 
 vi.mock("../ipc/fs", () => ({
   setProjectRoot: mocks.mockSetProjectRoot,
+}));
+
+// FE-09：findPanelForSession 反查 TerminalRegistry（getAll 经 mockTerminalGetAll 注入）
+vi.mock("../panels/terminal/TerminalRegistry", () => ({
+  TerminalRegistry: {
+    getAll: () => mocks.mockTerminalGetAll(),
+  },
 }));
 
 // ─── 辅助 ───
@@ -113,6 +125,8 @@ function castFakeApi(api: ReturnType<typeof makeFakeApi>): DockviewApi {
 
 beforeEach(() => {
   mocks.resetDeferred();
+  mocks.mockTerminalGetAll.mockReset();
+  mocks.mockTerminalGetAll.mockReturnValue(new Map());
   useProjects.setState({
     projects: {},
     deletionLock: { pendingDelete: null, acquiredAt: null },
@@ -303,5 +317,87 @@ describe("switchToPageAndFocus", () => {
     expect(api.getPanel).toHaveBeenCalledTimes(50);
     warnSpy.mockRestore();
     unregisterPageApi(pageB);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// findPanelForSession（FE-09 自 NavTree 上提——复合键反查运行中会话所在终端面板）
+// ═══════════════════════════════════════════════════════════════
+
+describe("findPanelForSession", () => {
+  /** 构造 RegisteredTerminal 形状条目（agentSession 最小字段） */
+  function entry(session: Record<string, unknown>): unknown {
+    return { agentSession: { lastEventAt: Date.now(), ...session } };
+  }
+
+  it("复合键命中：cliId|sessionId 精确匹配返回对应 panelId（keyOf 同键形态，MC-313）", () => {
+    mocks.mockTerminalGetAll.mockReturnValue(
+      new Map([
+        ["terminal-page-alpha-0", entry({ sessionId: "s1", cliId: CLAUDE_CLI_ID })],
+        ["terminal-page-beta-0", entry({ sessionId: "s2", cliId: CLAUDE_CLI_ID })],
+      ]),
+    );
+    expect(findPanelForSession(CLAUDE_CLI_ID, "s2")).toBe("terminal-page-beta-0");
+    expect(findPanelForSession(CLAUDE_CLI_ID, "s1")).toBe("terminal-page-alpha-0");
+  });
+
+  it("usageSourcePath 回退：无 sessionId 时 basename 去 .jsonl 参与匹配", () => {
+    mocks.mockTerminalGetAll.mockReturnValue(
+      new Map([
+        ["terminal-page-alpha-0", entry({ usageSourcePath: "C:/data/s1.jsonl", cliId: CLAUDE_CLI_ID })],
+        ["terminal-page-alpha-1", entry({ usageSourcePath: "C:/data/raw-s2", cliId: CLAUDE_CLI_ID })],
+      ]),
+    );
+    expect(findPanelForSession(CLAUDE_CLI_ID, "s1")).toBe("terminal-page-alpha-0");
+    // 非 .jsonl 后缀 basename 原样匹配
+    expect(findPanelForSession(CLAUDE_CLI_ID, "raw-s2")).toBe("terminal-page-alpha-1");
+  });
+
+  it("cliId 缺省回退：条目无 cliId 时按 CLAUDE_CLI_ID 匹配（keyOf 回退，ZQ-1）", () => {
+    mocks.mockTerminalGetAll.mockReturnValue(
+      new Map([["terminal-page-alpha-0", entry({ sessionId: "s1" })]]),
+    );
+    expect(findPanelForSession(CLAUDE_CLI_ID, "s1")).toBe("terminal-page-alpha-0");
+  });
+
+  it("未命中 → undefined（含无 agentSession 条目与 sessionId/usageSourcePath 双无跳过）", () => {
+    mocks.mockTerminalGetAll.mockReturnValue(
+      new Map([
+        ["terminal-page-alpha-0", entry({ sessionId: "s1", cliId: CLAUDE_CLI_ID })],
+        // 无 agentSession（undefined/null）→ 跳过
+        ["terminal-page-alpha-1", { agentSession: undefined }],
+        ["terminal-page-alpha-2", { agentSession: null }],
+        // sessionId 与 usageSourcePath 双无 → 跳过
+        ["terminal-page-alpha-3", entry({ cliId: CLAUDE_CLI_ID })],
+      ]),
+    );
+    expect(findPanelForSession(CLAUDE_CLI_ID, "ghost")).toBeUndefined();
+    expect(findPanelForSession(CLAUDE_CLI_ID, "s1")).toBe("terminal-page-alpha-0");
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// findPageIdForPanelId（FE-09 自 NavTree 上提——B14 防御分层：前缀匹配优先 + parse 兜底）
+// ═══════════════════════════════════════════════════════════════
+
+describe("findPageIdForPanelId", () => {
+  it("前缀匹配优先：旧恢复格式 terminal-{pageId}-{Date.now}-{seq} 归已知页面（B14）", () => {
+    seedTwoPageProject(); // 已知页面集合 = page-alpha/page-beta
+    // 旧格式含 Date.now 数字段——语法切分会把数字段误并入 pageId 得幽灵页面，前缀匹配可靠
+    expect(findPageIdForPanelId("terminal-page-alpha-1700000000000-0")).toBe(
+      "page-alpha",
+    );
+    expect(findPageIdForPanelId("terminal-page-beta-1")).toBe("page-beta");
+  });
+
+  it("parse 兜底：新格式 panelId 不在已知页面集合 → parseTerminalPageId", () => {
+    seedTwoPageProject();
+    expect(findPageIdForPanelId("terminal-page-ghost-0")).toBe("page-ghost");
+  });
+
+  it("均未命中 → null（无前缀匹配且 parse 不出）", () => {
+    seedTwoPageProject();
+    expect(findPageIdForPanelId("foo-1")).toBeNull();
+    expect(findPageIdForPanelId("")).toBeNull();
   });
 });

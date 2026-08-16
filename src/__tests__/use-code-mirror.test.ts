@@ -10,12 +10,15 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { EditorState } from "@codemirror/state";
 
 // ─── Hoisted mocks ───
-const { mockDispatch, mockDestroy, mockOnFontSizeChange, mockReconfigure, mockDialogSave } = vi.hoisted(() => ({
+// FE-01: confirmDialog/toast 为应用内浮层（模块级 mock，替代 window.alert/confirm spy）
+const { mockDispatch, mockDestroy, mockOnFontSizeChange, mockReconfigure, mockDialogSave, mockConfirmDialog, mockToastShow } = vi.hoisted(() => ({
   mockDispatch: vi.fn(),
   mockDestroy: vi.fn(),
   mockOnFontSizeChange: vi.fn(),
   mockReconfigure: vi.fn().mockReturnValue([]),
   mockDialogSave: vi.fn<(options?: { defaultPath?: string; filters?: Array<{ name: string; extensions: string[] }> }) => Promise<string | null>>(),
+  mockConfirmDialog: vi.fn<(opts: { title?: string; message: string; confirmText?: string }) => Promise<boolean>>().mockResolvedValue(true),
+  mockToastShow: vi.fn(),
 }));
 
 let capturedStateExtensions: unknown[] | null = null;
@@ -95,6 +98,17 @@ vi.mock("../panels/editor/gitGutter", () => ({
 vi.mock("../ipc/dialog", () => ({
   save: mockDialogSave,
 }));
+
+// FE-01: mock 应用内浮层 confirmDialog/toast（importOriginal 保留其余导出，防破坏
+// importOriginal 展开的 ../features/shortcuts 对 lib 的依赖）
+vi.mock("../lib", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib")>();
+  return {
+    ...actual,
+    confirmDialog: mockConfirmDialog,
+    toast: { ...actual.toast, show: mockToastShow },
+  };
+});
 
 // 只 stub usePanelFocus，保留其余真实实现
 const { mockUsePanelFocus } = vi.hoisted(() => ({ mockUsePanelFocus: vi.fn() }));
@@ -629,10 +643,8 @@ describe("handleSave 保存逻辑", () => {
     }, { timeout: 3000 });
   });
 
-  it("HS6: 保存失败 → window.alert 被调用", async () => {
+  it("HS6: 保存失败 → toast.show(\"error\", 含 保存失败)", async () => {
     (fs.writeFile as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("磁盘已满"));
-
-    const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => {});
 
     await renderAndActivate({ filePath: "/test/save.js", panelId: "hs-6" });
 
@@ -644,10 +656,8 @@ describe("handleSave 保存逻辑", () => {
     }, { timeout: 3000 });
 
     await waitFor(() => {
-      expect(alertSpy).toHaveBeenCalled();
+      expect(mockToastShow).toHaveBeenCalledWith("error", expect.stringContaining("保存失败"));
     }, { timeout: 3000 });
-
-    alertSpy.mockRestore();
   });
 
   it("HS7: 保存成功后派发 slterm:file-saved CustomEvent", async () => {
@@ -982,6 +992,8 @@ describe("EDF-03 大文件分支与保存失败", () => {
     capturedStateExtensions = null;
     vi.clearAllMocks();
     mockDialogSave.mockResolvedValue(null);
+    // FE-01: 默认确认继续（大文件弹窗默认放行，用例 2 覆盖为取消）
+    mockConfirmDialog.mockResolvedValue(true);
     (fs.writeFile as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
     (gitDiff as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     // 关键：readFile 的 mockResolvedValue 是 default implementation，clearAllMocks 不清除。
@@ -1011,13 +1023,20 @@ describe("EDF-03 大文件分支与保存失败", () => {
     expect(fs.writeFile).not.toHaveBeenCalled();
   });
 
-  it("2. 打开 >1MB 文档 + confirm 返回 false → 取消文案替换全文 + filePathRef 清空", async () => {
+  it("2. 打开 >1MB 文档 + confirmDialog 返回 false → 取消文案替换全文 + filePathRef 清空", async () => {
     (fs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue("y".repeat(LARGE_FILE_WARN_BYTES + 1));
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    mockConfirmDialog.mockResolvedValue(false);
 
     await renderAndActivate();
 
-    expect(confirmSpy).toHaveBeenCalled();
+    // FE-01: 断言 confirmDialog 调用参数（标题/正文/确认按钮文案）
+    expect(mockConfirmDialog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "打开大文件",
+        message: expect.stringContaining("打开可能影响性能"),
+        confirmText: "继续",
+      }),
+    );
     expect(lastCreatedDoc()).toContain("用户取消打开大文件");
 
     // filePathRef 被清空 → save 弹另存为，不覆盖原文件
@@ -1027,20 +1046,18 @@ describe("EDF-03 大文件分支与保存失败", () => {
       expect(mockDialogSave).toHaveBeenCalled();
     }, { timeout: 3000 });
     expect(fs.writeFile).not.toHaveBeenCalled();
-
-    confirmSpy.mockRestore();
   });
 
-  it("3. fs.writeFile reject → alert 且不派发 slterm:file-saved/file-saved-as 保存事件", async () => {
+  it("3. fs.writeFile reject → toast 且不派发 slterm:file-saved/file-saved-as 保存事件", async () => {
     (fs.writeFile as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("磁盘已满"));
-    const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => {});
     const dispatchSpy = vi.spyOn(window, "dispatchEvent");
 
     await renderAndActivate();
     getActiveEditor()!.save();
 
+    // FE-01: 保存失败 → toast.show("error", ...)（纯通知）
     await waitFor(() => {
-      expect(alertSpy).toHaveBeenCalled();
+      expect(mockToastShow).toHaveBeenCalledWith("error", expect.stringContaining("保存失败"));
     }, { timeout: 3000 });
 
     // 失败路径（catch 后 return）不派发任何 slterm: 保存事件
@@ -1052,7 +1069,6 @@ describe("EDF-03 大文件分支与保存失败", () => {
     );
     expect(savedEvents).toHaveLength(0);
 
-    alertSpy.mockRestore();
     dispatchSpy.mockRestore();
   });
 });

@@ -17,7 +17,7 @@
 //   查询非空时命中链自动展开（searching 覆盖手动展开态）。
 //
 // CRUD 迁移自 SidebarTree（NAV-06 承接约定，行为不变）：添加项目 / 新建页面 /
-// 删除项目（window.confirm）/ 删除页面（onDeletePage 委托）/ 内联重命名；
+// 删除项目（confirmDialog 确认，OV-02）/ 删除页面（onDeletePage 委托）/ 内联重命名；
 // 右键菜单删除「打开 Hooks 配置」项（决策 4 入口唯一化——配置钮移至活动栏底部）。
 // 新建页面空布局 = makeEmptyLayout（迁移自 SidebarTree——空布局由 Watermark 接管）。
 //
@@ -53,11 +53,12 @@ import {
   restoreHistorySession,
   SessionActionDialog,
 } from "../agentHistory";
-import { TerminalRegistry } from "../../panels/terminal/TerminalRegistry";
 import { confirmDialog } from "../../lib";
-import { parseTerminalPageId } from "../../lib/panelId";
-import { basename } from "../../lib/path";
-import { switchToPageAndFocus } from "../../workspace/pageApis";
+import {
+  findPageIdForPanelId,
+  findPanelForSession,
+  switchToPageAndFocus,
+} from "../../workspace/pageApis";
 import {
   IconEmptyBox,
   IconHistory,
@@ -97,46 +98,7 @@ export interface NavTreeProps {
   onDeletePage?: (projectId: string, pageId: string) => void;
 }
 
-// ---- 反查 TerminalRegistry（双击弹窗「切换到该会话操作页面」用，照 HistorySessionList 迁移） ----
-
-/**
- * 反查运行中会话所在终端面板：复合键 `cliId|sessionId` 精确匹配（MC-313——与
- * deriveActiveSessionStatuses 同键形态），两侧键构造均经 keyOf 单点
- * （cliId 缺省回退 CLAUDE_CLI_ID + 转义，ZQ-1）；未命中 → undefined。
- */
-function findPanelForSession(cliId: string, sessionId: string): string | undefined {
-  const key = keyOf(cliId, sessionId);
-  for (const [panelId, entry] of TerminalRegistry.getAll()) {
-    const cs = entry.agentSession;
-    if (!cs) continue;
-    let id = cs.sessionId;
-    if (!id && cs.usageSourcePath) {
-      const base = basename(cs.usageSourcePath);
-      id = base.endsWith(".jsonl") ? base.slice(0, -".jsonl".length) : base;
-    }
-    if (!id) continue;
-    if (keyOf(cs.cliId, id) === key) return panelId;
-  }
-  return undefined;
-}
-
-/**
- * panelId → 属主 pageId（B14 防御分层）：先按已知页面集合做前缀匹配——旧恢复格式
- * （terminal-{pageId}-{Date.now}-{seq}）的 pageId 含数字段，语法切分会把 Date.now
- * 段误并入 pageId 得到幽灵页面；前缀匹配对旧格式可靠。兜底 parseTerminalPageId
- * （新格式）；均未命中 → null。
- */
-function findPageIdForPanelId(panelId: string): string | null {
-  const { projects } = useProjects.getState();
-  for (const project of Object.values(projects)) {
-    for (const page of project.pages) {
-      if (panelId.startsWith(`terminal-${page.pageId}-`)) {
-        return page.pageId;
-      }
-    }
-  }
-  return parseTerminalPageId(panelId);
-}
+// 反查函数 findPanelForSession / findPageIdForPanelId 已上提 workspace/pageApis（FE-09）
 
 // ---- 顶部/搜索/空态/按钮样式 ----
 
@@ -306,7 +268,7 @@ export const NavTree: React.FC<NavTreeProps> = ({ switchToPage, onDeletePage }) 
   }, []);
 
   // 新建操作页面（迁移自 SidebarTree.handleNewPage——行为不变，不自动切换）
-  const handleNewPage = useCallback((projectId: string, cwd: string): string => {
+  const handleNewPage = useCallback((projectId: string, cwd: string) => {
     const pageId = createPageId();
     const page: OperationPage = {
       pageId,
@@ -317,7 +279,6 @@ export const NavTree: React.FC<NavTreeProps> = ({ switchToPage, onDeletePage }) 
       lastAccessedAt: Date.now(),
     };
     useProjects.getState().addPage(projectId, page);
-    return pageId;
   }, []);
 
   // 点击会话行 → 聚焦对应终端页签（照 AgentStatusView 现跳转逻辑 + B14 防御分层）
@@ -562,10 +523,14 @@ export const NavTree: React.FC<NavTreeProps> = ({ switchToPage, onDeletePage }) 
                 {
                   label: "删除项目",
                   danger: true,
-                  action: () => {
-                    if (window.confirm(`确定删除项目 "${proj.name}"？`)) {
-                      useProjects.getState().removeProject(projId);
-                    }
+                  action: async () => {
+                    // FE-03：window.confirm → 应用内 confirmDialog（OV-02 统一确认通道）
+                    const ok = await confirmDialog({
+                      title: "确认删除",
+                      message: `确定删除项目 "${proj.name}"？`,
+                      danger: true,
+                    });
+                    if (ok) useProjects.getState().removeProject(projId);
                   },
                 },
               ],

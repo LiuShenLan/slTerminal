@@ -34,6 +34,7 @@ const {
   mockSendToast,
   mockTerminalGetAll,
   mockRestoreHistorySession,
+  mockConfirmDialog,
 } = vi.hoisted(() => ({
   mockUseAgentStatus: vi.fn(),
   mockSwitchToPageAndFocus: vi.fn(),
@@ -42,6 +43,7 @@ const {
   mockSendToast: vi.fn(),
   mockTerminalGetAll: vi.fn(() => new Map()),
   mockRestoreHistorySession: vi.fn(() => Promise.resolve()),
+  mockConfirmDialog: vi.fn(() => Promise.resolve(false)),
 }));
 
 // useAgentStatus 数据层 mock（NAV-02 数据源——rows 由各测试显式注入）
@@ -55,10 +57,18 @@ vi.mock("../ipc/agentHistory", () => ({
   deleteHistorySession: vi.fn(),
 }));
 
-vi.mock("../workspace/pageApis", () => ({
-  switchToPageAndFocus: mockSwitchToPageAndFocus,
-  getPageApi: vi.fn(() => undefined),
-}));
+// FE-09：findPanelForSession/findPageIdForPanelId 已上提 pageApis——用真实实现
+// （TerminalRegistry/useProjects 分别被下方 mock 与 store 种子驱动），
+// 仅覆盖切换入口与 API 访问点
+vi.mock("../workspace/pageApis", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../workspace/pageApis")>();
+  return {
+    ...actual,
+    switchToPageAndFocus: mockSwitchToPageAndFocus,
+    getPageApi: vi.fn(() => undefined),
+  };
+});
 
 // useAgentHistory 订阅 TerminalRegistry（deriveActiveSessionStatuses 触发源）——
 // getAll 经 mockTerminalGetAll 可注入（历史行运行中判定 + SessionActionDialog 反查）
@@ -71,6 +81,13 @@ vi.mock("../panels/terminal/TerminalRegistry", () => ({
     _size: vi.fn(() => 0),
   },
 }));
+
+// FE-03：删除项目确认弹窗 mock（barrel partial——confirmDialog 覆盖，
+// 其余导出保持真实，icons/StatusDot 等经各自独立路径不受影响）
+vi.mock("../lib", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib")>();
+  return { ...actual, confirmDialog: mockConfirmDialog };
+});
 
 // 历史行右键「复制恢复命令」→ writeText；删除 → confirmDialog + deleteHistorySession
 // （OV-02：NavTree 不再引用 ipc/dialog ask，确认弹窗改经 src/lib barrel 的 confirmDialog）；
@@ -233,6 +250,8 @@ function resetAll(): void {
   mockTerminalGetAll.mockReturnValue(new Map());
   mockRestoreHistorySession.mockReset();
   mockRestoreHistorySession.mockResolvedValue(undefined);
+  mockConfirmDialog.mockReset();
+  mockConfirmDialog.mockResolvedValue(false);
 }
 
 beforeEach(() => {
@@ -727,6 +746,44 @@ describe("右键菜单", () => {
     expect(queryByText("重命名操作页面")).toBeTruthy();
     expect(queryByText("删除操作页面")).toBeTruthy();
     expect(queryByText("打开 Hooks 配置")).toBeNull();
+  });
+
+  it("删除项目（FE-03）：confirmDialog 确认（danger: true），确认后 removeProject、取消保留", async () => {
+    seedProject("C:/test", "proj-1", "测试项目", [
+      { pageId: "page1", name: "页面 1" },
+    ]);
+    seedActivePage("page1");
+    const { container } = render(<NavTree />);
+
+    // 右键项目行 → 点「删除项目」→ 应用内 confirmDialog 携带项目名与危险标记
+    fireEvent.contextMenu(getRows(container, "nav-row-project")[0]);
+    fireEvent.click(
+      Array.from(document.body.querySelectorAll("div")).find(
+        (el) => el.textContent === "删除项目",
+      )!,
+    );
+    await waitFor(() => {
+      expect(mockConfirmDialog).toHaveBeenCalledWith({
+        title: "确认删除",
+        message: `确定删除项目 "测试项目"？`,
+        danger: true,
+      });
+    });
+
+    // 取消（默认 resolve false）→ 项目保留
+    expect(getRows(container, "nav-row-project")).toHaveLength(1);
+
+    // 确认（下一次 resolve true）→ removeProject 生效（项目行消失 → 空态）
+    mockConfirmDialog.mockResolvedValueOnce(true);
+    fireEvent.contextMenu(getRows(container, "nav-row-project")[0]);
+    fireEvent.click(
+      Array.from(document.body.querySelectorAll("div")).find(
+        (el) => el.textContent === "删除项目",
+      )!,
+    );
+    await waitFor(() => {
+      expect(getRows(container, "nav-row-project")).toHaveLength(0);
+    });
   });
 });
 

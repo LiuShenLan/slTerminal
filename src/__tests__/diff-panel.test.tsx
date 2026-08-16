@@ -12,7 +12,7 @@ import React from "react";
 
 const { mockGitFileAtHead, mockGitDiff, mockReadFile, mockWriteFile, mockOnFsEvent,
   mockUseFontSizeWheel, mockSetEditorFontSize, mockUsePanelFocus,
-  mockSetActiveEditor, mockClearActiveEditor } = vi.hoisted(
+  mockSetActiveEditor, mockClearActiveEditor, mockConfirmDialog, mockToastShow } = vi.hoisted(
   () => ({
     mockGitFileAtHead: vi.fn(),
     mockGitDiff: vi.fn(),
@@ -24,6 +24,8 @@ const { mockGitFileAtHead, mockGitDiff, mockReadFile, mockWriteFile, mockOnFsEve
     mockUsePanelFocus: vi.fn(),
     mockSetActiveEditor: vi.fn(),
     mockClearActiveEditor: vi.fn(),
+    mockConfirmDialog: vi.fn(),
+    mockToastShow: vi.fn(),
   }),
 );
 
@@ -47,6 +49,12 @@ vi.mock("../ipc/notify", () => ({
 
 vi.mock("../lib/useFontSizeWheel", () => ({
   useFontSizeWheel: mockUseFontSizeWheel,
+}));
+
+// FE-02：浮层单点 mock——confirmDialog/toast（不 mock window）
+vi.mock("../lib", () => ({
+  confirmDialog: mockConfirmDialog,
+  toast: { show: mockToastShow },
 }));
 
 vi.mock("../stores/fontSize", () => ({
@@ -259,6 +267,41 @@ describe("DiffPanel", () => {
     await waitFor(() => {
       expect(placeholderCount(getDiffView(container, "diff-left"))).toBeGreaterThan(0);
       expect(placeholderCount(getDiffView(container, "diff-right"))).toBeGreaterThan(0);
+    });
+  });
+
+  it("保存失败 → toast.show(\"error\") 提示（FE-02 浮层回归）", async () => {
+    const { container } = render(
+      React.createElement(DiffPanel, { params: makeParams() }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
+    });
+
+    // 经 usePanelFocus activate 回调取得 editorActions（照保存链用例模式）
+    let activate: (() => void) | undefined;
+    await waitFor(() => {
+      activate = mockUsePanelFocus.mock.calls.find((c) => c[1] !== null)?.[2];
+      expect(activate).toBeTypeOf("function");
+    });
+    activate?.();
+    const calls = mockSetActiveEditor.mock.calls;
+    const actions = (calls[calls.length - 1]?.[0] ?? undefined) as
+      | { save: () => void }
+      | undefined;
+
+    // 必须用 mockRejectedValueOnce——默认实现（mockRejectedValue）会残留到后续用例
+    // （beforeEach 仅 clearAllMocks 不清 implementation），导致「保存后 gitDiff 重查」
+    // 用例里 writeFile 提前 reject → save 早退 → gitDiff 未重调 → 断言失败
+    mockWriteFile.mockRejectedValueOnce(new Error("磁盘只读"));
+    actions!.save();
+
+    // 保存失败不弹原生 alert——经 toast 提示（FE-02）
+    await waitFor(() => {
+      expect(mockToastShow).toHaveBeenCalledWith(
+        "error",
+        expect.stringContaining("保存失败"),
+      );
     });
   });
 
@@ -569,7 +612,7 @@ describe("DiffPanel", () => {
 
   // ── 外部修改：脏态弹窗（EDF-02） ─────────────────────────
 
-  it("脏态外部 Modify → confirm 弹窗；取消保留本地修改", async () => {
+  it("脏态外部 Modify → confirmDialog 弹窗；取消保留本地修改", async () => {
     const { container } = render(
       React.createElement(DiffPanel, { params: makeParams() }),
     );
@@ -581,21 +624,25 @@ describe("DiffPanel", () => {
     // 制造脏：dispatch 文档变更（updateListener → dirtyRef=true）
     rightView.dispatch({ changes: { from: 0, insert: "dirty" } });
 
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    mockConfirmDialog.mockResolvedValue(false);
     mockReadFile.mockResolvedValue("外部新内容");
 
     const fsCb = mockOnFsEvent.mock.calls[0]?.[0];
     fsCb({ paths: ["D:/repo/src/test.ts"], kind: "Modify" });
 
-    // 脏态必弹窗，文案含路径与语义
-    expect(confirmSpy).toHaveBeenCalledTimes(1);
-    expect(confirmSpy.mock.calls[0][0]).toContain("已被外部修改");
+    // 脏态必弹窗：confirmDialog 参数含标题/路径/确认按钮语义（确认=重载）
+    expect(mockConfirmDialog).toHaveBeenCalledTimes(1);
+    expect(mockConfirmDialog.mock.calls[0][0]).toMatchObject({
+      title: "外部修改",
+      confirmText: "重载",
+    });
+    expect(mockConfirmDialog.mock.calls[0][0].message).toContain("已被外部修改");
 
     // 取消 → 不重载，本地修改保留（readFile 仍仅初始 1 次）
-    expect(mockReadFile).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(mockReadFile).toHaveBeenCalledTimes(1);
+    });
     expect(rightView.state.doc.toString()).toContain("dirty");
-
-    confirmSpy.mockRestore();
   });
 
   it("脏态外部 Modify 确认 → 重载磁盘内容", async () => {
@@ -608,7 +655,7 @@ describe("DiffPanel", () => {
     const rightView = getDiffView(container, "diff-right")!;
     rightView.dispatch({ changes: { from: 0, insert: "dirty" } });
 
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    mockConfirmDialog.mockResolvedValue(true);
     mockReadFile.mockResolvedValue("外部新内容");
 
     const fsCb = mockOnFsEvent.mock.calls[0]?.[0];
@@ -617,8 +664,6 @@ describe("DiffPanel", () => {
     await waitFor(() => {
       expect(rightView.state.doc.toString()).toBe("外部新内容");
     });
-
-    confirmSpy.mockRestore();
   });
 
   // ── 大文件阈值（EDF-02） ────────────────────────────────
