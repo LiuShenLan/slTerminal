@@ -584,38 +584,37 @@ describe("Claude 历史会话视图", () => {
 
   // ── 用例 7：删除（放恢复编排后——507 是导航树唯一归属行，删除后不再有 fixture 依赖用例） ──
 
-  it("删除：ask 确认（E2E 钩子）→ 行消失 + 副本文件删除", async () => {
-    // ask 弹窗处理（执行期决策点）：embedded WDIO 无法操作原生对话框；JS 侧 patch
-    // `window.__TAURI_INTERNALS__.invoke` 不可行（Tauri 2 双层锁死）；@wdio/tauri-service
-    // 的 browser.tauri.mock 在 embedded 模式无 core.invoke 通道。故用 src/ipc/dialog.ts
-    // 的 E2E 钩子（E2E_ENABLED 门控，生产 tree-shake）：设置 __slterm_e2e_dialogAsk=true
-    // 等效用户点确认。真实原生弹窗交互属人工验收。
-    await browser.execute(() => {
-      (window as any).__slterm_e2e_dialogAsk = true;
-    });
+  it("删除：ConfirmDialog 确认 → 行消失 + 副本文件删除", async () => {
+    // OV-02 后删除确认由原生 ask() 改为应用内 ConfirmDialog（src/lib/ConfirmDialog.tsx，
+    // data-e2e=confirm-ok）——应用内浮层 embedded WDIO 可直接点击，旧 __slterm_e2e_dialogAsk
+    // 钩子已随 ipc/dialog ask 删除退役。
+    await openHistoryWithFreshScan();
 
-    try {
-      await openHistoryWithFreshScan();
+    // 右键 507 行 → 「删除」（普通行删除可用，操作矩阵 ✓）
+    expect(await contextMenuOnRow("恢复目标会话")).toBe(true);
+    await waitContextMenu("删除");
+    expect(await clickMenuByLabel("删除")).toBe(true);
 
-      // 右键 507 行 → 「删除」（普通行删除可用，操作矩阵 ✓）
-      expect(await contextMenuOnRow("恢复目标会话")).toBe(true);
-      await waitContextMenu("删除");
-      expect(await clickMenuByLabel("删除")).toBe(true);
+    // ConfirmDialog 出现 → 点确认（confirmDialog 返回 true → deleteHistorySession IPC → removeLocal 即时局部刷新）
+    await browser.waitUntil(
+      async () =>
+        await browser.execute(() => {
+          const ok = document.querySelector('[data-e2e="confirm-ok"]');
+          if (!ok) return false;
+          (ok as HTMLElement).click();
+          return true;
+        }),
+      { timeout: 5000, timeoutMsg: "ConfirmDialog 确认按钮未出现" },
+    );
 
-      // 行消失（ask 拦截返回 true → deleteHistorySession IPC → removeLocal 即时局部刷新）
-      await browser.waitUntil(
-        async () => (await findRowByText("恢复目标会话")) === null,
-        { timeout: 8000, timeoutMsg: "删除后行未消失" },
-      );
+    // 行消失
+    await browser.waitUntil(
+      async () => (await findRowByText("恢复目标会话")) === null,
+      { timeout: 8000, timeoutMsg: "删除后行未消失" },
+    );
 
-      // Node 侧断言：副本文件已删除（SEC-02——只动副本，不触碰用户真实 ~/.claude/projects/）
-      const restorePath = join(projectsDir, fixtureDirA, `${UUID_RESTORE}.jsonl`);
-      expect(existsSync(restorePath)).toBe(false);
-    } finally {
-      // 清理钩子（不泄漏到后续用例）
-      await browser.execute(() => {
-        delete (window as any).__slterm_e2e_dialogAsk;
-      });
-    }
+    // Node 侧断言：副本文件已删除（SEC-02——只动副本，不触碰用户真实 ~/.claude/projects/）
+    const restorePath = join(projectsDir, fixtureDirA, `${UUID_RESTORE}.jsonl`);
+    expect(existsSync(restorePath)).toBe(false);
   });
 });
