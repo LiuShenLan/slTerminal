@@ -5,7 +5,7 @@
 //      "terminal-my-page-2" → pageId = "my-page"
 //
 // B14: 生成与解析成对收口于本文件——旧实现格式分散三处（PageDockviewHost 生成、
-// restoreSession 生成、TerminalPanel/HistorySessionList 解析），恢复编排曾生成
+// restoreSession 生成、TerminalPanel/原 HistorySessionList（已删）解析），恢复编排曾生成
 // 含 Date.now 数字段的格式破坏贪婪正则/切分解析（历史恢复黑屏 + 幽灵页面导航根因）
 
 /** 每页终端序号计数器（模块级——PageDockviewHost 与 restoreSession 跨上下文共享
@@ -66,7 +66,7 @@ export function advanceTerminalPanelSeq(pageId: string, panelIds: string[]): voi
  *
  * 注意（B14）：旧恢复格式（terminal-{pageId}-{Date.now}-{seq}，pageId 本身含
  * 数字段）无法语法判别——调用方应优先按已知 pageId 做前缀匹配（见 TerminalPanel
- * visible 判定与 HistorySessionList 防御），本函数仅兜底新格式。
+ * visible 判定与原 HistorySessionList（已删）防御），本函数仅兜底新格式。
  */
 export function parseTerminalPageId(panelId: string): string | null {
   const parts = panelId.split("-");

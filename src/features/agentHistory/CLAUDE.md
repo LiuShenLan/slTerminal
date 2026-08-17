@@ -16,7 +16,7 @@ Agent 历史会话查询与恢复——历史区 UI 与数据层（CLI 无关聚
 
 导航树历史行 = **单行 30px**（原 `HistorySessionRow` 双行式行2 已退役）：`StatusDot`（运行中四态，无运行状态 → done 灰档）+ CLI logo 14px（`cliProfileRegistry.get(session.cliId)?.iconSrc`——**按行 cliId 查 profile**（MC-311），未注册 cliId → 无 logo 不报错）+ 标题（fg-1）+ 右侧相对时间（11px fg-4，`formatRelativeTime` 与历史区口径统一）。**prompt 预览 → 原生 `title` tooltip**（决策 6——双行式行2 改为 title 属性）。标题 null → sessionId 前 8 位。配色全部 `theme/colors.ts` token（硬约束 #6）。
 
-**`HistorySessionList` / `HistorySessionRow` 现状（NAV-08 保留但无生产消费方）**：两组件仍在（props 签名保持兼容——`HistorySessionRow` 双行式渲染保留），仅供兼容与测试引用；生产历史区由导航树 `NavHistoryRow` 承担。`agentHistory/index.ts` 仍导出两者。
+**`HistorySessionList` / `HistorySessionRow` 已删除（FE-25）**：两组件原为 NAV-08 后「保留但无生产消费方」的退役组件，本次修复直接删除，`agentHistory/index.ts` 已不再导出两者；生产历史区由导航树 `NavHistoryRow` 承担，原行级测试语义迁移至 `nav-history-row.test.tsx`。
 
 ### 数据流与刷新时机（FE-04，规格 4.3.5/4.5；NAV-10 契约调整）
 
@@ -77,8 +77,8 @@ Agent 历史会话查询与恢复——历史区 UI 与数据层（CLI 无关聚
 | 文件 | 职责 |
 |------|------|
 | `index.ts` | barrel export（照 `commit/index.ts` 模式）：列表/行/弹窗/数据 hook/恢复编排/菜单策略/模型纯函数（`AgentHistorySections` 已删除，NAV-08） |
-| `HistorySessionList.tsx` | 历史区列表组件（**保留但无生产消费方**——NAV-08 后生产历史区由导航树承担）：current 平铺 / all `groupByCwd` 二级折叠（组默认收起）；双击三分派 + 右键菜单调用方（经 props 注入） |
-| `HistorySessionRow.tsx` | 双行式行组件（**保留但无生产消费方**，props 签名保持兼容——NAV-08：导航树改用单行式 `NavHistoryRow`） |
+| `HistorySessionList.tsx` | 历史区列表组件（**已删除，FE-25**——原 NAV-08 后「保留但无生产消费方」）：current 平铺 / all `groupByCwd` 二级折叠（组默认收起）；双击三分派 + 右键菜单调用方（经 props 注入） |
+| `HistorySessionRow.tsx` | 双行式行组件（**已删除，FE-25**——原 NAV-08 后「保留但无生产消费方」、props 签名保持兼容；导航树改用单行式 `NavHistoryRow`） |
 | `SessionActionDialog.tsx` | 动作弹窗（问题 5 新建，照 InputDialog 样式）：标题 + 消息 + 竖排动作按钮 + 取消；Esc/遮罩点击取消——**生产消费方 = `NavTree`（运行中历史行双击）** |
 | `historyContextMenu.ts` | 右键菜单策略：`getHistoryContextMenuItems`（禁用态矩阵，重命名项已移除）+ `buildResumeCommand`（委托 `profile.history.buildResumeCommand`）——**生产消费方 = `NavTree`** |
 | `historyModel.ts` | 纯函数模型：`isCurrentProject` / `groupByCwd` / `matchesSearch` / `formatRelativeTime` / `keyOf`（复合键 `cliId\|sessionId` 构造单点——回退 + 转义）/ `deriveActiveSessionStatuses` + `UNKNOWN_CWD_KEY` |

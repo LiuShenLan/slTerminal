@@ -12,7 +12,7 @@
 // 历史节点（NAV-03/UI-303）：时钟图标 + 「历史session」+ 计数 pill；展开 = 单行历史行
 //   （StatusDot + logo + 标题 + 相对时间，prompt 预览 → 原生 title tooltip）；
 //   双击恢复三分支（运行中 → SessionActionDialog / 孤儿/无 cwd → 无操作 / 普通 → 恢复）
-//   + 右键菜单（复制恢复命令/分支恢复/删除）沿用 historyContextMenu 策略（照 HistorySessionList）。
+//   + 右键菜单（复制恢复命令/分支恢复/删除）沿用 historyContextMenu 策略（原 HistorySessionList（已删）右键菜单）。
 // 搜索（NAV-04）：子串不区分大小写过滤项目/页面/会话名；父节点因子命中而显示；
 //   查询非空时命中链自动展开（searching 覆盖手动展开态）。
 //
@@ -199,7 +199,7 @@ export const NavTree: React.FC<NavTreeProps> = ({ switchToPage, onDeletePage }) 
     y: 0,
     items: [],
   });
-  /** 双击运行中会话的动作弹窗目标（null = 关闭）——照 HistorySessionList */
+  /** 双击运行中会话的动作弹窗目标（null = 关闭）——原 HistorySessionList（已删）语义 */
   const [dialogSession, setDialogSession] = useState<AgentHistorySession | null>(
     null,
   );
@@ -288,7 +288,7 @@ export const NavTree: React.FC<NavTreeProps> = ({ switchToPage, onDeletePage }) 
     await switchToPageAndFocus(pageId, panelId);
   }, []);
 
-  // 切换到该会话所在操作页面并聚焦终端页签（SessionActionDialog 动作，照 HistorySessionList）
+  // 切换到该会话所在操作页面并聚焦终端页签（SessionActionDialog 动作，原 HistorySessionList（已删）语义）
   const handleSwitchToSession = useCallback(
     async (session: AgentHistorySession) => {
       const panelId = findPanelForSession(session.cliId, session.sessionId);
@@ -311,7 +311,7 @@ export const NavTree: React.FC<NavTreeProps> = ({ switchToPage, onDeletePage }) 
     [],
   );
 
-  // 历史行双击分派三分支（照 HistorySessionList：运行中 → 动作弹窗 / 孤儿/无 cwd → 无操作 / 普通 → 恢复）
+  // 历史行双击分派三分支（原 HistorySessionList（已删）语义：运行中 → 动作弹窗 / 孤儿/无 cwd → 无操作 / 普通 → 恢复）
   const handleHistoryDoubleClick = useCallback(
     (session: AgentHistorySession) => {
       const status = nav.activeStatuses.get(
@@ -331,7 +331,7 @@ export const NavTree: React.FC<NavTreeProps> = ({ switchToPage, onDeletePage }) 
     [nav.activeStatuses],
   );
 
-  // 历史行右键菜单——委托 historyContextMenu 策略（照 HistorySessionList 调用形态）
+  // 历史行右键菜单——委托 historyContextMenu 策略（原 HistorySessionList（已删）调用形态）
   const handleHistoryContextMenu = useCallback(
     (session: AgentHistorySession, pos: { x: number; y: number }) => {
       const status = nav.activeStatuses.get(
@@ -651,7 +651,7 @@ export const NavTree: React.FC<NavTreeProps> = ({ switchToPage, onDeletePage }) 
       {/* 右键菜单（项目/页面/历史行共用） */}
       <NavContextMenu state={menu} onClose={closeMenu} />
 
-      {/* 双击运行中历史会话的动作弹窗（照 HistorySessionList） */}
+      {/* 双击运行中历史会话的动作弹窗（原 HistorySessionList（已删）语义） */}
       {dialogSession && (
         <SessionActionDialog
           title="会话运行中"

@@ -58,7 +58,7 @@ export const NavContextMenu: React.FC<{
     if (state.visible) setHoveredIdx(null);
   }, [state.visible]);
 
-  // 点击菜单外任意处关闭（照 SidebarTree/HistorySessionList ContextMenu 模式）
+  // 点击菜单外任意处关闭（原 SidebarTree/HistorySessionList（均已退役删除）ContextMenu 同款）
   useEffect(() => {
     if (!state.visible) return;
     const handler = (e: MouseEvent) => {

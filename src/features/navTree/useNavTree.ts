@@ -134,7 +134,7 @@ export function useNavTree(): UseNavTreeResult {
     return map;
   }, [rows]);
 
-  // 历史会话按项目归组（cwd 前缀匹配 rootPath 归属；组内 mtimeMs 降序——照 HistorySessionList current 区）
+  // 历史会话按项目归组（cwd 前缀匹配 rootPath 归属；组内 mtimeMs 降序——原 HistorySessionList（已删）current 区）
   const historyByProject = useMemo(() => {
     const map = new Map<string, AgentHistorySession[]>();
     const projList = Object.values(projects);

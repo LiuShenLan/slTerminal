@@ -961,7 +961,7 @@ describe("历史节点（NAV-03）", () => {
 
     fireEvent.doubleClick(getRows(container, "nav-row-session")[0]);
 
-    // SessionActionDialog 弹出（运行中恢复冲突提示——照 HistorySessionList 分派语义）
+    // SessionActionDialog 弹出（运行中恢复冲突提示——照原 HistorySessionList（已删）分派语义）
     const dialog = await waitFor(() =>
       document.querySelector('[data-e2e="agent-history-action-dialog"]'),
     );

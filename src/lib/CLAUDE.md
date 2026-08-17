@@ -58,7 +58,7 @@ export const E2E_ENABLED =
 - **图标映射单点（IC-01/IC-06）**：所有 lucide 图标经 `icons.tsx` 引用（禁止直接 import lucide-react）；CLI → 品牌 logo 唯一映射在 `src/features/cliProfiles/`（`profile.iconSrc` 字段），新增 CLI 在 profile 定义 iconSrc + `public/cli-icons/<id>.png` 放图（32×32 透明底，渲染 16×16，随 frontendDist 内嵌 exe，同源 `'self'` 加载），组件不得另建映射（详见 @../features/cliProfiles/CLAUDE.md）
 - **状态圆点渲染单点（IC-03）**：四态渲染一律经 `StatusDot` 组件（页签/导航树会话行/历史行），组件不得另画圆点或 emoji
 - **确认弹窗单点（OV-02）**：确认语义一律经 `confirmDialog`（替换 Tauri `dialog.ask`——`src/ipc/dialog` 已删 ask，只保留 open/save 原生文件对话框）；删除/丢弃等危险确认均走此通道
-- **panelId 生成/解析单点（B14）**：`makeTerminalPanelId` 是终端 panelId 唯一生成入口、`parseTerminalPageId` 是唯一解析入口——格式协议仅定义于 `panelId.ts`。**解析调用点防御分层**：TerminalPanel 的 visible 判定与 NavTree/HistorySessionList 的页面定位均**优先按已知 pageId 前缀匹配**（旧恢复格式含 Date.now 数字段，语法切分无法判别），parse 仅兜底新格式
+- **panelId 生成/解析单点（B14）**：`makeTerminalPanelId` 是终端 panelId 唯一生成入口、`parseTerminalPageId` 是唯一解析入口——格式协议仅定义于 `panelId.ts`。**解析调用点防御分层**：TerminalPanel 的 visible 判定与 NavTree/原 HistorySessionList（已删）的页面定位均**优先按已知 pageId 前缀匹配**（旧恢复格式含 Date.now 数字段，语法切分无法判别），parse 仅兜底新格式
 - **路径函数纯性**：`path.ts` 四函数不访问文件系统、不抛异常、空输入安全（消费方依赖此契约）
 
 ## 测试模式

@@ -5,7 +5,7 @@
 // NAV-10 契约恒渲染圆点）+ CLI logo 14px（按 session.cliId 查 profile.iconSrc，MC-311）
 // + 标题（fg-1）+ 右侧相对时间（11px fg-4，formatRelativeTime 与历史区口径统一）。
 // prompt 预览 → 原生 title tooltip（决策 6——双行式行2 改造为 title 属性）。
-// 标题 null → sessionId 前 8 位（照 HistorySessionRow）。
+// 标题 null → sessionId 前 8 位（原 HistorySessionRow（已删）同款）。
 // 双击恢复三分支 / 右键菜单（复制恢复命令/分支恢复/删除）经回调委托 NavTree，
 // 策略沿用 historyContextMenu（getHistoryContextMenuItems 直接引用）。
 
