@@ -2,7 +2,7 @@
 
 > **本文档是项目用例数唯一真值源。** 所有 CLAUDE.md、README、CI 配置中引用的用例数均以此文件为准。更新测试后必须同步本文档。
 
-全量 **3281** 用例（Rust 615 + 前端 2488 + L3 138 + E2E 40），2026-08-17 更新（ui-redesign-review-fix Stage 01~08 全量同步——本批净增 19 + 既有表头与行级和失实 7 一并校正，明细见文末「历史变更」；ADR-0004 Win10 钳制 +5；Win10 分叉 0x3 +2；ADR-0005 嵌入捆绑 +6）。
+全量 **3282** 用例（Rust 615 + 前端 2489 + L3 138 + E2E 40），2026-08-17 更新（ui-redesign-review-fix Stage 01~08 全量同步——本批净增 19 + 既有表头与行级和失实 7 一并校正，明细见文末「历史变更」；ADR-0004 Win10 钳制 +5；Win10 分叉 0x3 +2；ADR-0005 嵌入捆绑 +6；FE-26 WebGL 检测 +1）。
 
 > **计数口径**：
 > - L2 以 `npm test` 实跑（Vitest 报告）为准——`it.each(...)` 参数化与 `describeIpcContract` 工厂（`helpers/ipc-contract.ts`，IHE-06）等按**展开后用例数**计入（143 文件 2483 用例，行级和实查；2026-08-16 UI 重设计 Stage 09 终验实跑回写 2439，动态计数以终验 vitest 实跑为准）；纯 grep `it(/test(` 块数会少计 it.each 展开（如 colors 96 = 15 块 + 7 组 each 展开 81）。
@@ -84,7 +84,7 @@
 
 > `pty/mod.rs`、`pty/win_build.rs`、`main.rs` 不含 `#[test]`，不在此列。git/mod.rs 测试已按 GIT-12 全量拆出至 `tests/`（`#[test]` 零残留）。agent_history 模块 grep 口径：claude/jsonl 28 + claude/scan 16 + claude/ops 16 + mod 20 = 80（命令包装层 4 用例已迁入 mod.rs，MC-301 下沉时随行）+ claude/mod 4 + provider 2 = 全模块 86；env 测试依赖 L1 `--test-threads=1` 门禁（`std::env::set_var` 全局可变）。
 
-## L2 — 前端单元/集成测试（144 文件 / 2488 用例）
+## L2 — 前端单元/集成测试（144 文件 / 2489 用例）
 
 运行：`npm test`（Vitest + jsdom，登记 2488 用例——行级和实查；2026-08-16 人工验证问题 6 批次实跑 2453 passed，0 failed，动态计数以终验实跑为准）
 
@@ -119,7 +119,7 @@
 | `src/__tests__/e2e-gating-terminal.test.ts` | 5 | E2E helper 终端门控（`__e2e_sessionReady` 等）；终端规则 mock 改指 cliProfiles 注册表（Stage 01，D-13 核对） |
 | `src/__tests__/terminal-lifecycle.test.ts` | 4 | 挂载→创建→卸载→dispose 完整链路 |
 | `src/__tests__/active-terminal.test.ts` | 4 | active 指针 set/get/覆盖、clear 仅匹配时生效 |
-| `src/__tests__/detect-webgl.test.ts` | 3 | WebGL2 可用/不可用/抛异常 |
+| `src/__tests__/detect-webgl.test.ts` | 4 | WebGL2 可用/不可用/抛异常/**检测不带 failIfMajorPerformanceCaveat（FE-26 快滚掉帧修复守卫）** |
 | `src/__tests__/terminal-strictmode.test.ts` | 2 | `smGuardRef` 防双重挂载 |
 
 ### CLI profile 注册表（5 文件 / 95 用例，Stage 01 + Stage 07 + Stage 03 emoji 守卫）
@@ -395,6 +395,7 @@ embedded WDIO 驱动**无法将 OS 级按键（`browser.keys`）投递进 WebVie
 
 ## 历史变更
 
+- 2026-08-17（FE-26 WebGL 检测去性能门槛）：**L2 +1**——`detect-webgl.test.ts` 3→4（+1 检测不带 failIfMajorPerformanceCaveat 守卫）。`webgl.ts` `detectWebgl()` 移除该标志——Chromium GPU blocklist 场景（Win10 + UHD 630 旧驱动）下拒软件渲染 → DOM renderer 回退 → 快滚整屏重绘掉帧（慢滚正常、WT 同机跟手的实机对照锁定）。L1/L3/L4 零变动。全量 3281→3282。**Win10 实机验证：快滚跟手度**。
 - 2026-08-17（ADR-0005 嵌入捆绑 ConPTY）：**L1 +6**——新增 `conpty_api.rs` 5 条（决策分叉/路径构造/提取幂等/覆盖与跳过）；`spawn.rs` 50→51（compute_conpty_flags 改三态 7 条：捆绑 19041→0x7 新增）。vendor/conpty/ 二进制入库（NuGet 1.24.260710001，include_bytes! 嵌入）。L2/L3/L4 零变动。全量 3275→3281。**Win10 实机验证红线**（自动化无法守卫鼠标转发）：真实 claude 滚轮 + 键盘/IME/kitty + resize + 删除提取目录回退验证。
 - 2026-08-17（Win10 分叉 flags 0x3 实验）：**L1 +2**——`spawn.rs` 48→50（compute_conpty_flags 4→6 条：分叉表 19041/21375→0x3、21376/22000/22621/26100→0x7，PASSTHROUGH 0x8 永不启用）。**实验结论：Win10 实机验证失败（滚轮仍不可用）——根因是老 conhost 两条输入路径均不转发鼠标，与 flags 无关**；0x3 保留为系统回退路径，修复转 ADR-0005 嵌入捆绑。L2/L3/L4 零变动。全量 3273→3275。
 - 2026-08-17（ADR-0004 Win10 xterm 钳制）：**L2 +5**——新建 `win-build-clamp.test.ts` 4（`clampWindowsBuildForXterm` 纯函数边界：19045→21376/26100 不变/边界 21376/0→21376）、`terminal.test.tsx` 23→24（+1 Win10 build 19045 → windowsPty.buildNumber 钳制 21376）。类目标头同步（终端面板 15→16 文件 / 249→254）→ L2 2483→2488（143→144 文件）。L1/L3/L4 零变动。全量 3268→3273。

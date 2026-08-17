@@ -24,6 +24,8 @@ xterm.js 不支持 `term.open()` 二次调用（GitHub Issue #4978）。因此�
 
 `useXterm.ts` 的 `detectWebgl()` 预检 WebGL2 可用性。可用则加载 WebglAddon（监听 `onContextLoss` 自动回退 DOM 渲染器），不可用则 DOM 渲染器兜底。仅焦点终端持有 WebGL context——`onContextLoss` 触发后 dispose addon 释放资源。
 
+**检测不带 `failIfMajorPerformanceCaveat`（FE-26）**：该标志在 Chromium GPU blocklist 场景（老 Intel 核显驱动常见）下连同软件渲染一并拒绝 → DOM renderer 回退 → 快滚整屏重绘掉帧（慢滚增量更新正常，Win10 + UHD 630 实机症状）。xterm WebGL 负载低，SwiftShader 软件渲染亦远快于 DOM renderer 全帧重建——勿加回该标志；DOM renderer 保留为 context loss 重试耗尽后的兜底（`detect-webgl.test.ts` 用例 4 守卫）。
+
 ### PTY spawn 等待布局就绪
 
 `useXterm` 挂载后不立即 spawn PTY，而是 rAF 轮询容器 `offsetWidth > 0`（最多 30 帧 / 500ms），然后 fit + proposeDimensions 获取实际字符尺寸，以真实 `cols × rows` 调用 `pty.spawn()`。超时回退 80×24。

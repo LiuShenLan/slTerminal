@@ -24,14 +24,18 @@ let webglCache: boolean | null = null;
  * 检测 WebGL2 是否可用。
  * 首次调用创建临时 canvas 检测并缓存结果，后续调用直接返回缓存值。
  * 生产环境全生命周期内 WebGL 可用性不变，无需重复检测。
+ *
+ * 不带 failIfMajorPerformanceCaveat（FE-26 快滚掉帧修复）：该标志在 Chromium
+ * GPU blocklist 场景（老 Intel 核显驱动常见，如 UHD 630 旧驱动）下会连同软件
+ * 渲染一并拒绝 → DOM renderer 回退 → 快滚整屏重绘掉帧（慢滚增量更新正常）。
+ * xterm WebGL 负载低（纹理 quad），SwiftShader 软件渲染亦远快于 DOM renderer
+ * 全帧 DOM 重建。DOM renderer 保留为 context loss 重试耗尽后的兜底。
  */
 export function detectWebgl(): boolean {
   if (webglCache !== null) return webglCache;
   try {
     const canvas = document.createElement("canvas");
-    const gl = canvas.getContext("webgl2", {
-      failIfMajorPerformanceCaveat: true,
-    });
+    const gl = canvas.getContext("webgl2");
     webglCache = gl !== null;
   } catch {
     webglCache = false;

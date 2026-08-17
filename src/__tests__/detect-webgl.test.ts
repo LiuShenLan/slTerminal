@@ -45,4 +45,20 @@ describe("detectWebgl", () => {
       spy.mockRestore();
     }
   });
+
+  it("4. 检测不带 failIfMajorPerformanceCaveat（FE-26：blocklist 下拒软件渲染 → DOM 回退 → 快滚掉帧）", () => {
+    const spy = vi
+      .spyOn(HTMLCanvasElement.prototype, "getContext")
+      .mockReturnValue({} as unknown as RenderingContext);
+    try {
+      detectWebgl();
+      const call = spy.mock.calls[0];
+      expect(call[0]).toBe("webgl2");
+      // 无第二参数或第二参数不含 failIfMajorPerformanceCaveat
+      const opts = call[1] as Record<string, unknown> | undefined;
+      expect(opts?.failIfMajorPerformanceCaveat).toBeUndefined();
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });
