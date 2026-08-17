@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>人工验证手册 — UI 重设计 Review 修复（48 项）</title>
+<style>
+  :root {
+    --bg: #0a0a0b;
+    --panel: #141416;
+    --panel-2: #1a1a1d;
+    --border: #26262a;
+    --fg: #e6e6e6;
+    --fg-2: #a3a3ad;
+    --fg-3: #6e6e78;
+    --accent: #6e9ff2;
+    --ok: #4ade80;
+    --warn: #d6b25e;
+    --err: #e5484d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: "JetBrains Mono", "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace;
+    font-size: 13px;
+    line-height: 1.7;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 40px 24px 80px; }
+  h1 { font-size: 22px; margin: 0 0 6px; }
+  h2 { font-size: 16px; margin: 48px 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 14px; margin: 28px 0 8px; }
+  .sub { color: var(--fg-3); margin-bottom: 32px; }
+  .step { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 16px 18px; margin: 14px 0; }
+  .step h3 { margin: 0 0 10px; }
+  .step h3 .id { color: var(--accent); }
+  .row { margin: 6px 0; }
+  .row b { color: var(--fg-2); font-weight: normal; display: inline-block; min-width: 88px; }
+  .row b::after { content: "："; }
+  code { background: var(--panel-2); padding: 1px 6px; border-radius: 4px; font-size: 12px; }
+  .tag { display: inline-block; font-size: 11px; padding: 1px 8px; border-radius: 10px; border: 1px solid var(--border); color: var(--fg-2); margin-right: 6px; }
+  .tag.pass { color: var(--ok); border-color: rgba(74,222,128,.35); }
+  .tag.warn { color: var(--warn); border-color: rgba(214,178,94,.35); }
+  .done { color: var(--ok); }
+  .note { background: var(--panel-2); border-left: 3px solid var(--accent); padding: 10px 14px; border-radius: 0 6px 6px 0; margin: 14px 0; color: var(--fg-2); }
+  .prep { background: var(--panel); border: 1px solid var(--accent); border-radius: 8px; padding: 16px 18px; }
+  .prep ol { margin: 8px 0 0; padding-left: 22px; }
+  .prep li { margin: 4px 0; }
+  .checkbox { color: var(--fg-3); }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 12px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); }
+  th { color: var(--fg-2); font-weight: normal; }
+  a { color: var(--accent); }
+  .foot { margin-top: 60px; color: var(--fg-3); font-size: 12px; border-top: 1px solid var(--border); padding-top: 16px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>人工验证手册</h1>
+<p class="sub">UI 重设计 Review 修复 · 48 项清单（SPEC 2 / FE 29 / TE 6 / DOC 11）已全部落地，9 Stage 各附全量自动化门禁。<br>自动化无法验证的 11 项 + 各 Stage 用户可感知变化由本手册指导实机验证。</p>
+
+<div class="prep">
+<b>前置准备（一次）</b>
+<ol>
+  <li>构建产物（本收尾已构建，可直接用）：<code>src-tauri\target\debug\slterminal.exe</code>；如需自行重构建：<code>npx tauri build --debug --no-bundle</code></li>
+  <li>运行 exe，按提示选择一个项目目录（或新建临时项目目录用于破坏性验证）</li>
+  <li>准备素材：一个 ≥1MB 的文本文件（放项目内，用于 GitShow 验证）、一段中文文本</li>
+</ol>
+</div>
+
+<h2>一、本次修复新增 5 个人工验证点</h2>
+
+<div class="step">
+<h3>1. ConfirmDialog 焦点陷阱 <span class="id">FE-28</span> <span class="tag warn">需实机手感</span></h3>
+<div class="row"><b>验证什么</b>弹窗焦点管理：初始聚焦、Tab 循环、Enter/Esc 语义</div>
+<div class="row"><b>怎么验证</b>导航树项目行右键 → <code>删除项目</code> 弹出确认框后：
+① 观察确认钮是否带焦点环（键盘焦点样式）
+② 按 <code>Tab</code> 数次——焦点须在「取消/确认」两钮间循环，不得逃逸到弹窗外控件
+③ <code>Shift+Tab</code> 反向循环同样成立
+④ 焦点在任一钮上按 <code>Enter</code> 触发该钮；按 <code>Esc</code> 取消关闭</div>
+<div class="row"><b>期望结果</b>弹窗打开瞬间焦点落在确认钮；Tab 永不逃出弹窗；Enter=执行焦点钮、Esc=取消（语义与 Stage 01 前一致）</div>
+</div>
+
+<div class="step">
+<h3>2. 右键菜单 hover 无闪烁 <span class="id">FE-05/06</span> <span class="tag warn">视觉对照</span></h3>
+<div class="row"><b>验证什么</b>文件树/导航树右键菜单 hover 改 React state 驱动后无渲染闪烁</div>
+<div class="row"><b>怎么验证</b>① 文件树任意行右键弹菜单，鼠标在菜单项间来回移动（含快速扫动）
+② 导航树项目行/页面行右键弹菜单，同上操作
+③ 观察菜单关闭再打开时高亮是否干净复位</div>
+<div class="row"><b>期望结果</b>hover 高亮顺滑跟随、无闪烁/无残留高亮；重开菜单无上次的悬停高亮残留（Stage 03 已加重置逻辑）</div>
+</div>
+
+<div class="step">
+<h3>3. GitShow 大文件警告图标 <span class="id">FE-18</span> <span class="tag warn">视觉对照</span></h3>
+<div class="row"><b>验证什么</b>大文件只读视图警告处 ⚠ emoji 已替换为 lucide 三角告警图标</div>
+<div class="row"><b>怎么验证</b>① 项目内放一个 ≥1MB 文本文件并 git 提交
+② 文件树点击该文件，或在 git 变更列表打开它进入 GitShow 面板
+③ 观察内容顶部警告注释行（「文件过大…只读查看」）行首</div>
+<div class="row"><b>期望结果</b>行首显示 13px 线框三角告警 SVG 图标（琥珀黄 warning 色 #d6b25e），无 ⚠ emoji 字符；图标垂直对齐不破坏代码行排版</div>
+</div>
+
+<div class="step">
+<h3>4. 侧栏双开 splitRatio 保留 <span class="id">FE-19</span> <span class="tag warn">交互验证</span></h3>
+<div class="row"><b>验证什么</b>单↔双视图切换不再无条件重置 0.5，用户调节的比例被保留</div>
+<div class="row"><b>怎么验证</b>① 活动栏依次点开两个视图（如「导航树」+「文件」，构成顶区双开）
+② 拖动两视图之间的分隔条，把比例调到明显偏离 0.5（如 0.3/0.7）
+③ 点活动栏「文件」关闭（回单视图），再点开「文件」（回双开）</div>
+<div class="row"><b>期望结果</b>步骤 ③ 后分隔条回到步骤 ② 调节的位置，不再被重置为 0.5；重启应用后该值同样保留（持久化链未动）</div>
+</div>
+
+<div class="step">
+<h3>5. 项目删除 confirmDialog 实机 <span class="id">FE-03</span> <span class="tag warn">替代原生弹窗</span></h3>
+<div class="row"><b>验证什么</b>window.confirm 原生阻塞弹窗已被应用内自绘 confirmDialog 替代（WebView2 实机）</div>
+<div class="row"><b>怎么验证</b>① 导航树项目行右键 → <code>删除项目</code>
+② 观察弹窗形态（深色自绘、danger 红色确认钮、圆角 6px）
+③ 点取消：项目保留；再删除并点确认：项目行消失</div>
+<div class="row"><b>期望结果</b>出现的是应用内自绘弹窗（与编辑器脏确认同款组件），非 Windows 系统样式的原生阻塞框；取消/确认行为正确</div>
+</div>
+
+<h2>二、继承 review 6 项未实机验证</h2>
+
+<div class="step">
+<h3>6. 标题栏拖拽/双击/三钮手感 <span class="id">TB-07</span></h3>
+<div class="row"><b>怎么验证</b>① 按住标题栏空白区拖拽移动窗口 ② 双击标题栏最大化/还原 ③ 依次悬停+点击最小化、最大化/还原、关闭三钮</div>
+<div class="row"><b>期望结果</b>拖拽顺滑无跳变；双击切换正常；关闭钮 hover 背景为红色 #c04747（FE-07 token 化后值不变），三钮点击行为正确</div>
+</div>
+
+<div class="step">
+<h3>7. 导航树三级交互与旧 settings 启动 <span class="id">NAV-11</span></h3>
+<div class="row"><b>怎么验证</b>① 导航树项目 → 页面 → 会话三级逐层展开/折叠，双击历史会话行恢复会话
+② 项目行/页面行/会话行各自右键菜单可用
+③ 用一个 2026-08 之前生成的旧版 <code>settings.json</code>（布局数据）启动应用</div>
+<div class="row"><b>期望结果</b>三级交互正常；旧 settings 启动不报错、不白屏，布局按迁移逻辑恢复或安全回退默认布局</div>
+</div>
+
+<div class="step">
+<h3>8. dockview sash 拖拽热区 <span class="id">GL-04</span></h3>
+<div class="row"><b>怎么验证</b>页签间分隔条（sash）逐条悬停观察光标变化，拖动调宽高后松开</div>
+<div class="row"><b>期望结果</b>悬停热区光标即时变为可拖形态（热区不虚胖也不难命中）；拖拽过程跟手、松开落位稳定</div>
+</div>
+
+<div class="step">
+<h3>9. 产物对照 final-mockup.html 视觉验收</h3>
+<div class="row"><b>怎么验证</b>浏览器打开 <code>docs\ui-redesign\final-mockup.html</code>，与应用窗口并排逐屏对照（整体布局/配色/圆角/间距）</div>
+<div class="row"><b>期望结果</b>应用与 mockup 视觉一致（配色 #0a0a0b 系、圆角档 6/8、间距节奏）；如发现偏差记录具体屏位</div>
+</div>
+
+<div class="step">
+<h3>10. 断网字体回退 <span class="id">UI-202</span></h3>
+<div class="row"><b>怎么验证</b>断网（禁用网卡或飞行模式）后启动应用，观察加载页 → 主界面 → 终端文字</div>
+<div class="row"><b>期望结果</b>无外网字体下载依赖，全部文字正常渲染；等宽文字回退到系统字体（Consolas / Microsoft YaHei UI），无豆腐块</div>
+</div>
+
+<div class="step">
+<h3>11. 中文 CJK 渲染 <span class="id">UI-203</span></h3>
+<div class="row"><b>怎么验证</b>① 终端内输入中文并回车（如 <code>echo 中文测试</code>）② 编辑器打开含中文的源文件 ③ 导航树用中文项目/页面名</div>
+<div class="row"><b>期望结果</b>中文无错位、无裁切；终端/编辑器等宽对齐不破版；导航树中文行正常省略号截断</div>
+</div>
+
+<h2>三、各 Stage 用户可感知修复项</h2>
+
+<table>
+<tr><th>Stage</th><th>可感知变化</th><th>快速验证</th><th>期望</th></tr>
+<tr><td>01 浮层收尾</td><td>保存失败/外部修改确认改应用内浮层</td><td>编辑器改文件后外部修改该文件</td><td>自绘 confirmDialog 弹出（确认=重载/取消=保留）；保存失败右上角 toast 红条</td></tr>
+<tr><td>02 配色收敛</td><td>承诺零视觉变化（token 值逐字相同）</td><td>滚动条三态、focus 焦点环、关闭钮 hover</td><td>与修复前完全一致</td></tr>
+<tr><td>03 菜单与树行</td><td>水印「新建终端」钮圆角 4→6、重命名输入框圆角 4→8</td><td>页签空白区水印按钮；页签右键 → 重命名</td><td>圆角肉眼可见略圆润；编号不跳号（右键菜单构建多次不点击，再点「新建终端」，编号连续）</td></tr>
+<tr><td>04 对话框形态</td><td>三弹窗按钮圆角 4→6、次按钮去描边；toast 容器 aria-live</td><td>任一跳 confirmDialog 的入口看按钮</td><td>圆角 6px 无描边；屏幕阅读器可播报 toast（如有）</td></tr>
+<tr><td>05 侧栏状态</td><td>ActivityBar 悬停无过渡动画（立即变色）</td><td>活动栏按钮来回悬停</td><td>变色即时无 0.15s 渐变</td></tr>
+<tr><td>06 杂项收敛</td><td>加载页字体栈统一；文件树键盘聚焦显示焦点环</td><td>启动瞬间观察加载页字体；Tab 键聚焦文件树</td><td>加载页非裸 monospace；键盘聚焦有环、鼠标点击无环（视觉几乎无变化）</td></tr>
+<tr><td>07 退役删除</td><td>无（生产零消费）</td><td>—</td><td>—</td></tr>
+<tr><td>08 测试强化</td><td>无（纯测试）</td><td>—</td><td>—</td></tr>
+<tr><td>09 文档同步</td><td>无（纯文档）</td><td>—</td><td>—</td></tr>
+</table>
+
+<h2>四、自动化已覆盖项（无需手动验证）</h2>
+
+<div class="note">
+48 项中以下类目已由自动化测试锁死（L1 Rust 607 + L2 前端 2483 + L3 headless 138 + L4 E2E 40 用例，本收尾全量门禁 + e2e 9/9 全绿）：
+<ul style="margin:6px 0;padding-left:20px">
+<li><b>代码断言类</b>：原生 alert/confirm 全仓清零（grep 守卫）、硬编码色收敛（scheme-registry/colors 计数断言）、hover state 驱动（explorer/nav 测试）、panelId 延迟生成（编号不跳用例）、纯函数化（入参不 mutate 断言）</li>
+<li><b>行为类</b>：confirmDialog 调用参数/双分支、toast 类型与参数、焦点陷阱 jsdom 层（Tab 循环/Enter 提交）、splitRatio 保留、activityBar 指示线、unlisten reject 吞掉、GitShow 图标 svg 存在性</li>
+<li><b>文档一致性</b>：DOC-01~11 全部经 verify agent 逐条证据核验（一手代码对照）</li>
+</ul>
+</div>
+
+<h2>验证记录表</h2>
+<table>
+<tr><th>#</th><th>验证项</th><th>结果</th><th>备注</th></tr>
+<tr><td>1</td><td>ConfirmDialog 焦点陷阱（FE-28）</td><td class="checkbox">☐ 通过 ☐ 失败</td><td></td></tr>
+<tr><td>2</td><td>右键菜单 hover 无闪烁（FE-05/06）</td><td class="checkbox">☐ 通过 ☐ 失败</td><td></td></tr>
+<tr><td>3</td><td>GitShow 告警图标（FE-18）</td><td class="checkbox">☐ 通过 ☐ 失败</td><td></td></tr>
+<tr><td>4</td><td>splitRatio 保留（FE-19）</td><td class="checkbox">☐ 通过 ☐ 失败</td><td></td></tr>
+<tr><td>5</td><td>项目删除 confirmDialog（FE-03）</td><td class="checkbox">☐ 通过 ☐ 失败</td><td></td></tr>
+<tr><td>6</td><td>标题栏手感（TB-07）</td><td class="checkbox">☐ 通过 ☐ 失败</td><td></td></tr>
+<tr><td>7</td><td>导航树三级 + 旧 settings（NAV-11）</td><td class="checkbox">☐ 通过 ☐ 失败</td><td></td></tr>
+<tr><td>8</td><td>sash 拖拽热区（GL-04）</td><td class="checkbox">☐ 通过 ☐ 失败</td><td></td></tr>
+<tr><td>9</td><td>final-mockup 视觉对照</td><td class="checkbox">☐ 通过 ☐ 失败</td><td></td></tr>
+<tr><td>10</td><td>断网字体回退（UI-202）</td><td class="checkbox">☐ 通过 ☐ 失败</td><td></td></tr>
+<tr><td>11</td><td>中文 CJK 渲染（UI-203）</td><td class="checkbox">☐ 通过 ☐ 失败</td><td></td></tr>
+</table>
+
+<div class="foot">
+生成于 2026-08-17 · 修复 commit：3bbc8b2 → ee39acd → 5c50c60 → fbd89ad → 0f421ea → db1a393 → 77f3153 → f4de871 → c1dffc5（9 Stage）<br>
+自动化门禁：tsc / eslint / clippy -D warnings / npm test（2483 用例）/ cargo test（607 用例）/ e2e（9/9 spec）全绿；debug 产物已构建。
+</div>
+
+</div>
+</body>
+</html>
