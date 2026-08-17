@@ -117,3 +117,23 @@
 - Win10 上启发式关闭（目标达成）+ resize reflow 连带启用——唯一新增风险：Win10 19045 conhost 若未 backport wrap 标记修复，resize 时 reflow 可能短暂错乱（claude 全屏重绘自愈）。已列 Win10 实机验证专项；异常则降级 pnpm patch 方案。
 - **xterm.js 升级时须重评估**：钳制语义依赖上游阈值 21376 与启发式实现，升级后核对 `CoreTerminal.ts` 分叉逻辑是否仍成立。
 - 行为固化点：`src/panels/terminal/useXterm.ts` 的 `XTERM_CONPTY_MIN_BUILD` / `clampWindowsBuildForXterm`（L2 `win-build-clamp.test.ts` 守卫）。
+- **2026-08-17 补注（ADR-0005 后）**：捆绑新版 ConPTY 宿主后，Win10 的 conhost 已非旧版——钳制语义（针对旧 conhost 行为）理论上可撤销，但**保留**：回退场景（用户未放捆绑文件，静默回退系统 conhost）仍需要钳制；捆绑场景钳制无害（与新版 conhost 兼容）。
+
+## 0005 捆绑新版 ConPTY 宿主（OpenConsole 并排加载）
+
+**Status**: accepted（2026-08-17）
+
+**上下文**：ADR-0004 修复 Win10 字符错位后，实测暴露滚轮失效——claude 全屏模式鼠标滚轮无法滚动内容。对照实验证实：Win10 上 Windows Terminal 跑 claude 滚轮正常，差异在 slTerminal 的 ConPTY flags 0x7 含 `WIN32_INPUT_MODE (0x4)`——老版 Win10 内置 conhost 的 0x4 实现不转发鼠标 VT 序列（键盘正常）。外部先例：WispTerm v1.19.0+ 捆绑新版 conpty.dll + OpenConsole.exe 修复同类问题（老 in-box ConPTY 不转发现代鼠标输入）；WezTerm 同法。微软官方机制：PseudoConsole API 开源为 conpty.dll（microsoft/terminal PR #2611，导出名带 Conpty 前缀）并产 NuGet 包 `Microsoft.Windows.Console.ConPTY`（#12980）。
+
+**决策**：exe 同目录并排捆绑 conpty.dll + OpenConsole.exe（NuGet 官方产物，MIT）；运行时检测 conpty.dll 存在 → LoadLibrary 动态解析 `Conpty*` 导出，缺失/加载失败 → 静默回退系统 kernel32。**不替换系统 conhost**（规避 #16343 替换导致的死锁/双编码问题）。vendor 目录：`src-tauri/vendor/conpty/`（版本 1.24.260710001）。
+
+**被否决的备选**：
+
+- **Win10 分叉 flags 0x3（去 0x4）**：改动最小，但老 conhost 传统 VT 路径对鼠标/键盘/kitty 的行为无保证，且键盘/IME 回归风险与捆绑方案相当、修复确定性低（需实验证实）。
+- **升级/替换系统 conhost**：microsoft/terminal#16343 已知死锁/双编码副作用，且需管理员权限，分发不可行。
+
+**后果**：
+
+- vendor 二进制维护负担：每次上游 conhost 修复需手动更新 NuGet 版本（vendor/conpty/README.md 有更新指引），更新后必须 Win10 实机验证（自动化无法守卫 ConPTY 交互，先例同 PASSTHROUGH_MODE）。
+- 分发面：package.ps1 release zip 恒含两文件；debug 部署用 `-CopyConpty` 开关拷贝。无捆绑文件 = 行为回退现状（Win11 零变化）。
+- 行为固化点：`src-tauri/src/pty/conpty_api.rs`（resolve_conpty_api + OnceLock 单次解析 + 纯函数 bundled_dll_path，L1 守卫）。
