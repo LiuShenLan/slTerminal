@@ -9,6 +9,11 @@ import { Allotment } from "allotment";
 import "allotment/dist/style.css";
 import { useSideBar } from "../../stores/sideBar";
 import { sideViewRegistry } from "./sideViewRegistry";
+import {
+  SPLIT_DEFAULT,
+  SPLIT_MIN,
+  SPLIT_MAX,
+} from "./sideBarState";
 import { PANEL_BG } from "../../theme/colors";
 
 /** SideBarArea 外部注入 props——与 SidebarTree props 精确匹配 */
@@ -53,14 +58,21 @@ export const SideBarArea: React.FC<SideBarAreaProps> = ({
   const bottomOpen = open.bottom !== null;
   const bothOpen = topOpen && bottomOpen;
 
-  // 从单视图过渡到双视图时重置 splitRatio → 上下各 50%
+  // 从单视图过渡到双视图时，仅当 splitRatio 为默认值（无持久化值，首次进入双视图）
+  // 或越界（出 [SPLIT_MIN, SPLIT_MAX]）才回退默认 0.5；
+  // 用户调节过的合法比例在正常单↔双切换中保留（FE-19）
   const prevBothOpen = useRef(bothOpen);
   useEffect(() => {
     if (bothOpen && !prevBothOpen.current) {
-      setSplitRatio(0.5);
+      const outOfRange =
+        splitRatio < SPLIT_MIN || splitRatio > SPLIT_MAX;
+      const noPersistedValue = splitRatio === SPLIT_DEFAULT;
+      if (outOfRange || noPersistedValue) {
+        setSplitRatio(SPLIT_DEFAULT);
+      }
     }
     prevBothOpen.current = bothOpen;
-  }, [bothOpen, setSplitRatio]);
+  }, [bothOpen, splitRatio, setSplitRatio]);
 
   return (
     <div

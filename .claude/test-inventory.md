@@ -2,7 +2,7 @@
 
 > **本文档是项目用例数唯一真值源。** 所有 CLAUDE.md、README、CI 配置中引用的用例数均以此文件为准。更新测试后必须同步本文档。
 
-全量 **3238** 用例（Rust 607 + 前端 2453 + L3 138 + E2E 40），2026-08-16 更新（人工验证问题 6——标题栏拖拽区撑满全高）。
+全量 **3240** 用例（Rust 607 + 前端 2455 + L3 138 + E2E 40），2026-08-17 更新（FE-17/23 回归：activityBar +2；上批 2026-08-16 人工验证问题 6——标题栏拖拽区撑满全高）。
 
 > **计数口径**：
 > - L2 以 `npm test` 实跑（Vitest 报告）为准——`it.each(...)` 参数化与 `describeIpcContract` 工厂（`helpers/ipc-contract.ts`，IHE-06）等按**展开后用例数**计入（143 文件 2439 用例，2026-08-16 UI 重设计 Stage 09 终验实跑回写）；纯 grep `it(/test(` 块数会少计 it.each 展开（如 colors 92 = 13 块 + 7 组 each 展开 79）。
@@ -83,9 +83,9 @@
 
 > `pty/mod.rs`、`pty/win_build.rs`、`main.rs` 不含 `#[test]`，不在此列。git/mod.rs 测试已按 GIT-12 全量拆出至 `tests/`（`#[test]` 零残留）。agent_history 模块 grep 口径：claude/jsonl 28 + claude/scan 16 + claude/ops 16 + mod 20 = 80（命令包装层 4 用例已迁入 mod.rs，MC-301 下沉时随行）+ claude/mod 4 + provider 2 = 全模块 86；env 测试依赖 L1 `--test-threads=1` 门禁（`std::env::set_var` 全局可变）。
 
-## L2 — 前端单元/集成测试（143 文件 / 2454 用例）
+## L2 — 前端单元/集成测试（143 文件 / 2456 用例）
 
-运行：`npm test`（Vitest + jsdom，登记 2454 用例——2026-08-16 人工验证问题 6 批次实跑 2453 passed，0 failed）
+运行：`npm test`（Vitest + jsdom，登记 2456 用例——2026-08-16 人工验证问题 6 批次实跑 2453 passed，0 failed）
 
 > ① UI 重设计（Stage 01-08）L2 全量变动（明细见各段表行与文末「历史变更」）：删除 4 文件 123 用例（agent-status-view 35 / agent-history-view 38 / sidebar-actions 47 / dialog-e2e-hook 3）、新增 7 文件 67 用例（title-bar 7 / nav-tree 31 / nav-tree-history 8 / confirm-dialog 11 / toast 5 / open-hooks-config 5，emoji-scan 3 已登记）、既有文件净 +25（colors +6 / overrides +2 / activityBar +4 / sideBar +1 / workspace-defaulttab +5 / workspace-header-actions +1 / workspace-page-dockview +1 / explorer-delete +3 / file-icon +1 / commit-context-menu +2 / commit-context-menu-ui +2 / agent-status-lib -3）；另校正 2 行（notifications 34→49、close-handler 13→12，it.each 展开口径/挂载适配实跑口径）——行级合计 2439 = 实跑，旧表头 2463（行级和 2456）失实 7 一并校正。
 
@@ -208,14 +208,14 @@
 | `src/__tests__/nav-tree.test.tsx` | 33 | **NAV-01/02/03/04/09 导航树（新建，承接 SidebarTree 项目/页面 CRUD + 右键菜单 + 内联重命名 + AgentStatus 活跃行 + 历史折叠节点）**：三级层级渲染（项目→页面→会话，活跃会话经 panelId→pageId 归属页面）/行高规格（项目/页面 28px、会话 30px、圆角 5）/选中态 token（ACTIVE_SELECTION_BG 底 + fg-1 字；hover 非选中 SIDEBAR_COLORS.hover、选中行 SELECTION_HOVER_BG）/活跃会话行构成（StatusDot status 透传 + CLI logo 14px + 标题 + 右侧迷你用量条 32×3 + 百分比 11px fg-4；usage 缺省「--」；用量条四档 it.each 4 展开）/点击会话行 → switchToPageAndFocus(pageId, panelId)/搜索过滤（页面名/项目名/会话名子串不区分大小写 + 父节点因子 + 空态）/「当前」pill（ACTIVE_SELECTION_BG 底 + ACCENT_FG 字 10px）与计数 pill（SIDEBAR_BG 底 + PLACEHOLDER_FG 字）/右键菜单（项目/页面行含新建/重命名/删除，**无「打开 Hooks 配置」——NAV-06 入口删除**）/data-e2e 五选择器契约 + 分组标题「导航」+ 搜索框占位/**历史节点（NAV-03）：计数 pill + 展开历史行 + 双击恢复 restoreHistorySession/运行中行 SessionActionDialog → switchToPageAndFocus + 右键菜单（复制/分支/删除 danger）+ 空态「暂无历史会话」** + **页面行 IconPage 图标（svg aria-hidden + 14px fg-3，与历史session 时钟区分）+ 历史session 同级缩进（childrenStyle 容器：marginLeft 15 + 引导线、位于页面容器之后、收起常驻）2 例（人工验证问题 2——31→33）** |
 | `src/__tests__/nav-tree-history.test.tsx` | 8 | **NAV-03/08 历史折叠节点迁入导航树（承接原 agent-history-view 历史区语义）**：历史折叠节点渲染（时钟图标 +「历史session」+ 计数 pill——文案断言人工验证问题 2 修订）/计数 = cwd 前缀匹配会话数/历史会话项目归属（cwd 前缀匹配项目 rootPath，不匹配 → 该项目无历史）/历史行构成（StatusDot + CLI logo 14px + 标题 + 右侧相对时间）/**prompt 预览 → 行容器原生 title tooltip（预览文本不再渲染为可见文本，NAV-08 单行化）**/空历史展开无行（空态）/双击历史行 → restoreHistorySession(session)（四步恢复编排入口）/历史行右键菜单（复制恢复命令/分支恢复/删除，historyContextMenu 策略，无「打开 Hooks 配置」） |
 
-### 侧栏视图（7 文件 / 153 用例）
+### 侧栏视图（7 文件 / 155 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
-| `src/__tests__/sideBarState.test.ts` | 53 | toggleViewPure/moveButtonPure（含 R7 目标区非空场景，SVC-06）/deriveLayout/reconcileZones/sanitizeSideBar（含 NaN/Infinity，SVC-13）+ S1-S6 场景序列（**NAV-05/07 断言同步：DEFAULT_ZONES 上区改三槽 nav/explorer/commit、DEFAULT_OPEN 默认 nav、ACTIVITY_BAR_SIZE 40→46；reconcileZones 丢弃 projects/agent-status 未注册 id 语义确认，用例数不变**） |
-| `src/__tests__/activityBar.test.tsx` | 38 | 渲染/active/toggle/title/dragStart/**dragOver+drop 全部含第三参数 index 断言（SVC-01）**/hover/**resolveTargetZone 中点 ±1 边界（SVC-05）**/指示线清理/**图标色三级（IC-06：默认 DIM_FG fg-3 / hover SIDEBAR_FG fg-1 / active ACCENT_FG，active hover 不变）+ NAV-05 活动栏改造（+5：46px 宽 ACTIVITY_BAR_SIZE 常量/视图钮 34×34 圆角 6/底部配置钮 data-e2e=activity-btn-config + title=配置 不入 zones 注册表不可拖拽/点击配置钮 → openHooksConfigFromActivityBar 入口唯一化；SB-19.3 激活样式断言同步 ACCEPT_SELECTION_BG accent-dim）**——拖拽 mock 理想化见豁免表 |
+| `src/__tests__/sideBarState.test.ts` | 54 | toggleViewPure/moveButtonPure（含 R7 目标区非空场景，SVC-06）/deriveLayout/reconcileZones/sanitizeSideBar（含 NaN/Infinity，SVC-13）+ S1-S6 场景序列（**NAV-05/07 断言同步：DEFAULT_ZONES 上区改三槽 nav/explorer/commit、DEFAULT_OPEN 默认 nav、ACTIVITY_BAR_SIZE 40→46；reconcileZones 丢弃 projects/agent-status 未注册 id 语义确认，用例数不变；FE-22 增「入参数组不被 mutate」快照断言**） |
+| `src/__tests__/activityBar.test.tsx` | 40 | 渲染/active/toggle/title/dragStart/**dragOver+drop 全部含第三参数 index 断言（SVC-01）**/hover/**resolveTargetZone 中点 ±1 边界（SVC-05）**/指示线清理/**图标色三级（IC-06：默认 DIM_FG fg-3 / hover SIDEBAR_FG fg-1 / active ACCENT_FG，active hover 不变）+ NAV-05 活动栏改造（+5：46px 宽 ACTIVITY_BAR_SIZE 常量/视图钮 34×34 圆角 6/底部配置钮 data-e2e=activity-btn-config + title=配置 不入 zones 注册表不可拖拽/点击配置钮 → openHooksConfigFromActivityBar 入口唯一化；SB-19.3 激活样式断言同步 ACCEPT_SELECTION_BG accent-dim）+ FE-17/23 回归（+2：style 不含 transition 负断言；容器→子元素转移 dragleave 不清指示线、relatedTarget=null 真正离开才清）**——拖拽 mock 理想化见豁免表 |
 | `src/__tests__/sideBar.test.ts` | 22 | 默认值/toggle/move/loadFromDisk 5 分支/loaded 守卫/debounce payload 键集合精确匹配 + **cancelPendingSave（SVC-02）** + clamp NaN/Infinity + **NAV-07 持久化迁移（+1：loadFromDisk 旧 settings 含 projects/agent-status 未注册 id → 丢弃回退三槽）** |
-| `src/__tests__/sideBarArea.test.tsx` | 15 | 四态布局/preferredSize splitRatio/display 切换保挂载/换区重建/props 透传/onChange→setSplitRatio/**total<=0 除零守卫（SVC-07）**/PANEL_BG token（TH-10 断言同步） |
+| `src/__tests__/sideBarArea.test.tsx` | 16 | 四态布局/preferredSize splitRatio/display 切换保挂载/换区重建/props 透传/onChange→setSplitRatio/**total<=0 除零守卫（SVC-07）**/PANEL_BG token（TH-10 断言同步）/**FE-19：越界回退改 0.95 断言 + 新增双开→拖比例→单开→再双开比例保留（15→16）** |
 | `src/__tests__/workspace-sideviews.test.tsx` | 13 | 活动栏固定宽（**40→46 断言同步，NAV-05**）/侧栏区 visible 四态/preferredSize/onChange→setWidth/主区 minSize/props 引用断言（SVC-10） |
 | `src/__tests__/sideViewRegistry.test.ts` | 7 | register/getAll/get/重复注册覆盖/未注册 get→undefined/_reset 隔离（**NAV-05 断言同步：注册表内容改 nav/explorer/commit 三视图，agent-status 退役**） |
 | `src/__tests__/open-hooks-config.test.ts` | 5 | **NAV-05 配置钮入口 openHooksConfigFromActivityBar（新建，承接原 sidebar-actions「打开 Hooks 配置」菜单入口 5 用例语义——入口唯一化 OV-02 决策 4）**：无任何项目 → 无操作/有项目无活跃页面 → 兜底 pages[0] 先切页后开面板/活跃页所属项目优先/项目无操作页面 → 新建空布局页面后切页打开（照 handleNewPage 模式）/活跃页指向已删除项目 → 兜底第一个项目 |

@@ -62,7 +62,6 @@ const buttonBase: React.CSSProperties = {
   padding: 0,
   position: "relative",
   // UI-808：button 键盘可达，去 outline:none 让全局 :focus-visible 环生效（鼠标点击不显示）
-  transition: "background-color 0.15s",
 };
 
 const spacerStyle: React.CSSProperties = {
@@ -224,8 +223,9 @@ export function ActivityBar() {
         setDropIndicator(target);
       }}
       onDragLeave={(e) => {
-        // 仅当拖拽真正离开活动栏时才清指示线（子元素间转移不触发）
-        if (e.currentTarget === e.target) {
+        // 仅当拖拽真正离开活动栏时才清指示线——relatedTarget 仍在本容器内
+        // （容器→子元素 / 子元素间转移）视为未离开，不清（FE-23）
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
           setDropIndicator(null);
         }
       }}

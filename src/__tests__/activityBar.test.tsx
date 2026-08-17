@@ -1,4 +1,4 @@
-// activityBar.test.tsx —— ActivityBar 组件 L2 测试（29 用例）
+// activityBar.test.tsx —— ActivityBar 组件 L2 测试（40 用例）
 //
 // 测试模式：真实 sideBar store（beforeEach setState 重置默认）+ sideViewRegistry._reset() 注册 stub
 // 拖拽测试用 Object.defineProperty 覆盖 DragEvent.dataTransfer（jsdom 兼容）
@@ -670,5 +670,45 @@ describe("ActivityBar", () => {
     ) as HTMLElement;
     fireEvent.click(config);
     expect(mockOpenHooksConfigFromActivityBar).toHaveBeenCalledTimes(1);
+  });
+
+  // ═══ FE-17/23：UI-110 无动效 + dragleave relatedTarget 判定 ═══
+
+  it("SB-19.38 按钮 style 不含 transition（FE-17——UI-110 硬约束无动效）", () => {
+    render(<ActivityBar />);
+    const btn = getButton("nav") as HTMLElement;
+    expect(btn.style.transition).toBe("");
+  });
+
+  it("SB-19.39 容器→子元素转移 dragleave 不清指示线；真正离开容器才清（FE-23）", () => {
+    render(<ActivityBar />);
+    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } }, 800);
+    const dt = createMockDataTransfer();
+    const bar = getActivityBar();
+    dispatchDragEvent(bar, "dragover", dt, 20); // → dropIndicator { top, 0 }（nav 前指示线）
+    const indicatorCount = () =>
+      Array.from(bar.querySelectorAll("div")).filter(
+        (d) => (d as HTMLElement).style.height === "2px",
+      ).length;
+    expect(indicatorCount()).toBe(1);
+    // 容器 → 子元素转移：relatedTarget 为容器内按钮 → 视为未离开，指示线保留
+    act(() => {
+      const ev = new DragEvent("dragleave", {
+        bubbles: true,
+        cancelable: true,
+        relatedTarget: getButton("explorer"),
+      });
+      Object.defineProperty(ev, "dataTransfer", { value: dt, configurable: true });
+      bar.dispatchEvent(ev);
+    });
+    expect(indicatorCount()).toBe(1);
+    // 真正离开容器：relatedTarget = null → 清指示线
+    act(() => {
+      const ev = new DragEvent("dragleave", { bubbles: true, cancelable: true });
+      Object.defineProperty(ev, "dataTransfer", { value: dt, configurable: true });
+      bar.dispatchEvent(ev);
+    });
+    expect(indicatorCount()).toBe(0);
+    spy.mockRestore();
   });
 });

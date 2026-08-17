@@ -57,7 +57,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **槽位内切换（display:none）**：同一半区内切换视图时，旧视图 div `display:none`，新视图 div `display:flex`。两者均保持挂载——状态不丢（同 React 条件渲染 vs display 策略的经典权衡）
 - **换区重建（已知行为）**：当按钮被拖拽跨区（上→下或下→上），zones 变化导致视图组件从上区 pane 移入下区 pane。React 将其视为不同父节点下的组件，触发卸载+重建——组件内部状态丢失。此行为在 ADR-0001 中已确认接受（权衡：换区为低频操作，重建成本低于跨父节点保持实例的复杂度）
-- **首次双开 splitRatio 重置**：从单视图（仅一个半区有打开视图）过渡到双视图时，`SideBarArea` 通过 `useEffect` 将 `splitRatio` 重置为 0.5，确保上下各半——避免残留上次手动调节的极端值（如 0.9/0.1）导致一侧不可见
+- **首次双开 splitRatio 回退（FE-19）**：从单视图过渡到双视图时，`SideBarArea` 的 `useEffect` 仅当 `splitRatio` 为默认值（无持久化值）或越界（出 [0.1,0.9]）才回退 0.5；用户调节过的合法比例在单↔双切换中保留
 
 ## 文件
 

@@ -262,6 +262,21 @@ describe("reconcileZones", () => {
     const result = reconcileZones(saved, open, registeredIds);
     expect(result.open).toEqual({ top: null, bottom: null });
   });
+
+  it("入参数组不被 mutate（纯函数语义）", () => {
+    // 触发 R9 追加路径：search 缺失 → push 到上区
+    const saved: Zones = { top: ["projects"], bottom: ["obsolete"] };
+    const open: OpenState = { top: "projects", bottom: null };
+    // 调用前快照（深拷贝内容）
+    const before: Zones = {
+      top: [...saved.top],
+      bottom: [...saved.bottom],
+    };
+    const result = reconcileZones(saved, open, registeredIds);
+    // 调用后比对：入参内容逐项不变
+    expect(saved).toEqual(before);
+    expect(result.zones.bottom).not.toBe(saved.bottom);
+  });
 });
 
 // ── sanitizeSideBar ──

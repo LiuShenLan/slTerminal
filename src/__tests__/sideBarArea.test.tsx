@@ -487,33 +487,71 @@ describe("SideBarArea", () => {
     expect(projectsSlot).not.toBeNull();
   });
 
-  // ─── SB-20.13: 首次双开 splitRatio 重置为 0.5 ───
-  it("从单视图过渡到双视图时 splitRatio 重置为默认 0.5", () => {
+  // ─── SB-20.13: 越界 splitRatio 双开过渡时回退默认 0.5 ───
+  it("双开过渡时 splitRatio 越界（>SPLIT_MAX）回退默认 0.5", () => {
     const setSplitRatioSpy = vi.spyOn(
       useSideBar.getState(),
       "setSplitRatio",
     );
 
-    // 模拟：上区打开、下区关闭、splitRatio 为极端值（上次手动调过）
+    // 模拟：上区打开、下区关闭、splitRatio 越界（脏数据/极端值）
     useSideBar.setState({
-      splitRatio: 0.9,
+      splitRatio: 0.95,
       open: { top: "nav", bottom: null },
       zones: { top: ["nav"], bottom: ["explorer"] },
     });
 
-    // 首次渲染——bothOpen=false, 不触发重置
+    // 首次渲染——bothOpen=false, 不触发回退
     const { rerender } = render(
       React.createElement(SideBarArea, defaultProps),
     );
     expect(setSplitRatioSpy).not.toHaveBeenCalled();
 
-    // 下区被打开 → bothOpen: false→true
+    // 下区被打开 → bothOpen: false→true，值越界 → 回退 0.5
     useSideBar.setState({ open: { top: "nav", bottom: "explorer" } });
     rerender(
       React.createElement(SideBarArea, defaultProps),
     );
 
     expect(setSplitRatioSpy).toHaveBeenCalledWith(0.5);
+    setSplitRatioSpy.mockRestore();
+  });
+
+  // ─── FE-19: 双开→拖比例→单开→再双开，比例保留 ───
+  it("双开→拖比例→单开→再双开，splitRatio 保留用户调节值", () => {
+    const setSplitRatioSpy = vi.spyOn(
+      useSideBar.getState(),
+      "setSplitRatio",
+    );
+
+    // 初始双开
+    useSideBar.setState({
+      zones: { top: ["nav"], bottom: ["explorer"] },
+      open: { top: "nav", bottom: "explorer" },
+      splitRatio: 0.5,
+    });
+
+    const { rerender } = render(
+      React.createElement(SideBarArea, defaultProps),
+    );
+
+    // 拖分隔条：上 300 / 下 200 → ratio 0.6 写回 store
+    const onChange = mocks.getOnChange();
+    expect(onChange).not.toBeNull();
+    onChange!([300, 200]);
+    expect(useSideBar.getState().splitRatio).toBeCloseTo(0.6);
+
+    // 单开（下区关闭）→ 再双开
+    useSideBar.setState({ open: { top: "nav", bottom: null } });
+    rerender(React.createElement(SideBarArea, defaultProps));
+    useSideBar.setState({ open: { top: "nav", bottom: "explorer" } });
+    rerender(React.createElement(SideBarArea, defaultProps));
+
+    // 过渡不重置：比例保持用户调节值，0.5 未再被写入
+    expect(useSideBar.getState().splitRatio).toBeCloseTo(0.6);
+    expect(
+      setSplitRatioSpy.mock.calls.filter((c) => c[0] === 0.5),
+    ).toHaveLength(0);
     setSplitRatioSpy.mockRestore();
   });
 });

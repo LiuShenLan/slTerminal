@@ -180,8 +180,9 @@ export function reconcileZones(
 ): { zones: Zones; open: OpenState } {
   const registeredSet = new Set(registeredIds);
 
-  // 过滤未注册 id，保留 saved 顺序
-  const top = saved.top.filter((id) => registeredSet.has(id));
+  // 过滤未注册 id，保留 saved 顺序（filter 已产出新数组，再浅复制一层——R9 push 只改副本，保入参不被 mutate）
+  const top = [...saved.top.filter((id) => registeredSet.has(id))];
+  // bottom 只过滤不 push，无 mutate 风险，无需复制
   const bottom = saved.bottom.filter((id) => registeredSet.has(id));
 
   const existingIds = new Set([...top, ...bottom]);

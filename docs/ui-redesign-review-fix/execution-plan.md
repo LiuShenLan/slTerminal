@@ -44,7 +44,7 @@
 | 01 | ✅ 已完成 | 3bbc8b2 | fix-loop 1 轮（diff-panel 测试隔离缺陷 mockRejectedValue→Once） |
 | 02 | ✅ 已完成 | ee39acd | fix-loop 1 轮（theme/index.ts 注释计数 36→35） |
 | 03 | ✅ 已完成 | 5c50c60 | 一次通过，无 fix-loop |
-| 04 | 未开始 | — | |
+| 04 | ✅ 已完成 | fbd89ad | 一次通过，无 fix-loop |
 | 05 | 未开始 | — | |
 | 06 | 未开始 | — | |
 | 07 | 未开始 | — | |
