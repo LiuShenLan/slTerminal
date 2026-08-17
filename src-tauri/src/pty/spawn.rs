@@ -37,7 +37,10 @@ pub mod conpty_custom {
     use std::sync::{Arc, Mutex};
     use windows::core::{PCWSTR, PWSTR};
     use windows::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
-    use windows::Win32::System::Console::{COORD, HPCON, PSEUDOCONSOLE_INHERIT_CURSOR};
+    use windows::Win32::System::Console::{
+        ClosePseudoConsole, CreatePseudoConsole, ResizePseudoConsole, COORD, HPCON,
+        PSEUDOCONSOLE_INHERIT_CURSOR,
+    };
     use windows::Win32::System::Threading::{
         CreateProcessW, DeleteProcThreadAttributeList, InitializeProcThreadAttributeList,
         UpdateProcThreadAttribute, EXTENDED_STARTUPINFO_PRESENT, LPPROC_THREAD_ATTRIBUTE_LIST,
@@ -221,10 +224,8 @@ pub mod conpty_custom {
                 X: size.cols as i16,
                 Y: size.rows as i16,
             };
-            // SAFETY: api.resize 是 Win32 ConPTY API（捆绑 conpty.dll 或系统 kernel32，ADR-0005）；
-            // hpc 由 create 创建，coord 基于已验证的 PtySize
-            unsafe { (crate::pty::conpty_api::resolve_conpty_api().resize)(inner.hpc, coord) }
-                .ok()?;
+            // SAFETY: ResizePseudoConsole 是 Win32 ConPTY API；hpc 由 CreatePseudoConsole 创建，coord 基于已验证的 PtySize
+            unsafe { ResizePseudoConsole(inner.hpc, coord)? };
             inner.size = size;
             Ok(())
         }
@@ -366,9 +367,8 @@ pub mod conpty_custom {
             // ConPTY 关闭前确保 writer 已 drop（stops child stdin → EOF 传递）
             drop(self.writable.take());
             if !self.hpc.is_invalid() {
-                // SAFETY: api.close 是 Win32 ConPTY 清理 API（捆绑 conpty.dll 或系统 kernel32，ADR-0005）；
-                // hpc 由 create 创建，仅调用一次
-                unsafe { (crate::pty::conpty_api::resolve_conpty_api().close)(self.hpc) };
+                // SAFETY: ClosePseudoConsole 是 Win32 ConPTY 清理 API；hpc 由 CreatePseudoConsole 创建，仅调用一次
+                unsafe { ClosePseudoConsole(self.hpc) };
             }
         }
     }
@@ -392,19 +392,15 @@ pub mod conpty_custom {
             Y: rows as i16,
         };
 
-        // SAFETY: api.create 是 Win32 ConPTY 创建 API（捆绑 conpty.dll 或系统 kernel32，ADR-0005）；
-        // 管道句柄来自 filedescriptor::Pipe，在其生命周期内有效
-        let mut hpc: HPCON = HPCON::default();
-        let hr = unsafe {
-            (crate::pty::conpty_api::resolve_conpty_api().create)(
+        // SAFETY: CreatePseudoConsole 是 Win32 ConPTY 创建 API；管道句柄来自 filedescriptor::Pipe，在其生命周期内有效
+        let hpc = unsafe {
+            CreatePseudoConsole(
                 size,
                 HANDLE(stdin_pipe.read.as_raw_handle()),
                 HANDLE(stdout_pipe.write.as_raw_handle()),
                 flags,
-                &mut hpc,
             )
-        };
-        hr.ok()?;
+        }?;
 
         let master = ConPtyMaster {
             inner: Arc::new(Mutex::new(ConPtyInner {

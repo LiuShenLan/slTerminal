@@ -83,15 +83,6 @@ JobHandle 在 `#[cfg(windows)]` 下为 HANDLE RAII 包装；`#[cfg(not(windows))
 
 注入在 spawn 阶段（非 shell rc），确保子进程一启动即可见。四个变量对 pwsh/powershell/cmd 统一注入，不加 shell 类型判断。
 
-### ConPTY 宿主捆绑（ADR-0005，conpty_api.rs）
-
-老版 Win10 内置 conhost 在 `WIN32_INPUT_MODE (0x4)` 下不转发鼠标 VT 序列——claude 全屏 TUI 滚轮失效（键盘正常；WT 对照实验证实）。修复 = exe 同目录并排捆绑新版 conpty.dll + OpenConsole.exe（微软开源 OpenConsole，`src-tauri/vendor/conpty/`，NuGet 包 `Microsoft.Windows.Console.ConPTY` 1.24.260710001，MIT）。
-
-- **加载机制**（`conpty_api.rs`）：`resolve_conpty_api()` 进程级 OnceLock 单次解析——exe 目录存在 conpty.dll → `LoadLibraryW` + `GetProcAddress` 解析 `ConptyCreatePseudoConsole`/`ConptyClosePseudoConsole`/`ConptyResizePseudoConsole`（导出名带 Conpty 前缀，避免与 kernel32 import 冲突）；缺失/加载失败 → 回退系统 kernel32（link_name 对齐的裸 extern 声明）。spawn.rs `conpty_custom` 三调用点（create_conpty_pair / ConPtyInner Drop / resize）统一经 `api.create/close/resize` 函数指针。
-- **不替换系统 conhost**（规避 microsoft/terminal#16343 死锁/双编码）；无捆绑文件 = 静默回退现状（Win11 零变化）。
-- **更新 vendor 二进制后必须 Win10 实机验证**：claude 滚轮 + 键盘/IME/kitty + 回退验证（删文件重启不崩溃）——自动化无法守卫 ConPTY 交互（先例同 PASSTHROUGH_MODE）。更新指引见 `vendor/conpty/README.md`。
-- flags 恒 0x7 不变：捆绑新版宿主后 0x4 全功能生效（含鼠标转发）。
-
 ### 自定义 ConPTY 创建（绕过 portable-pty）
 
 `spawn.rs` 中的 `conpty_custom` 模块（`#[cfg(windows)]`，约 300 行）绕过 `portable_pty::native_pty_system().openpty()`，直接调用 `windows` crate 的 `CreatePseudoConsole`/`CreateProcessW`，实现对 ConPTY flags 的完全控制。
@@ -172,7 +163,6 @@ DA1 查询响应是终端平台能力（设计动机：Ink 系 TUI，对全部�
 | 文件 | 职责 |
 |------|------|
 | `mod.rs` | PTY 模块入口：模块声明 + re-export |
-| `conpty_api.rs` | ConPTY 宿主捆绑动态加载（ADR-0005）：`resolve_conpty_api` OnceLock 单次解析（捆绑 conpty.dll → 系统 kernel32 回退）+ `bundled_dll_path` 纯函数 + 3 条 L1 测试 |
 | `spawn.rs` | Tauri 命令（`pty_spawn`/`pty_write`/`pty_resize`/`pty_kill`/`pty_reattach`）+ ConPTY 自定义实现 + PtyEvent 枚举定义 |
 | `reader.rs` | 独立 reader 线程：`reader_loop()` 阻塞读取 PTY 输出 → Channel 推送 PtyEvent；`strip_conpty_startup()` 启动序列剥离；`apply_startup_strip()` 纯函数；`mirror_da1_query()` DA1 查询检测 |
 | `shell.rs` | Shell 发现与选择：`resolve_shell()` / `resolve_shell_info()` → pwsh → powershell → cmd 回退；`which_full_path()` PATH 解析 |
@@ -198,7 +188,6 @@ cargo test --manifest-path src-tauri/Cargo.toml <test_name> -- --test-threads=1
 5. `reader.rs` 的 `strip_conpty_startup` 修改后务必跑全部 strip 相关测试，确认不误杀正常输出
 6. 修改 `READER_BUF_SIZE` 后跑 `reader_buf_size_is_16k` + `strip_startup_with_16k_boundary` + `strip_startup_with_large_payload` 测试
 7. 修改 `conpty_custom` 模块（flags 计算、AttrList、ConPtyMaster、RawChild、spawn 逻辑）后跑 `conpty_custom::tests` 全部 28 条测试（另：spawn.rs 顶层 `mod tests` 20 条覆盖 validate_spawn_request/validate_session_ownership/Job Object 纯逻辑/build_cmdline 引号）+ `pty_integration_tests` 的 `pty_spawn_custom_conpty` 端到端测试。**改 `compute_conpty_flags` 前必读其注释**——启用 PASSTHROUGH_MODE 会静默破坏 claude 全屏 TUI 滚轮（mouse input 不转发），改后须实测 claude 滚轮不回归
-8. **更新 `vendor/conpty/` 二进制（ADR-0005）后必须 Win10 实机验证**：claude 滚轮 + 键盘/IME/kitty + 回退验证（删捆绑文件重启不崩溃）——自动化无法守卫 ConPTY 交互；更新指引见 `vendor/conpty/README.md`。修改 `conpty_api.rs` 的加载/解析逻辑后跑其 3 条测试 + 全量 L1
 8. 修改 `resolve_shell_info()` / `which_full_path()` 后跑 `shell::tests` 全部 20 条测试
 9. `resolve_shell_info()` 返回的 `ShellInfo.program` **必须是完整路径**（非短名）——否则 `CreateProcessW(lpApplicationName=..., lpCommandLine=...)` 找不到可执行文件
 10. ConPTY 指针 cast：`as_raw_handle()` 已返回 `*mut c_void`，无需再 `as *mut std::ffi::c_void`——Clippy `unnecessary-cast` 会报错。同理 `std::io::Error::new(std::io::ErrorKind::Other, e)` 简化为 `std::io::Error::other(e)`（Rust 1.74+），`.map_err(|e| std::io::Error::other(e))` 进一步简化为 `.map_err(std::io::Error::other)`
@@ -211,7 +200,6 @@ Rust 测试分布在 5 个位置：
 |------|------|--------|---------|
 | `pty/reader.rs` `#[cfg(test)]` | 单元测试 | 36 | `use super::*` 访问 `pub(crate)` 和私有项 |
 | `pty/spawn.rs` `#[cfg(test)]` | 单元测试 | 48（`conpty_custom` 内 28 + 顶层 20） | `conpty_custom` 子模块 + 顶层 `mod tests`（validate_spawn_request/SEC-08/Job Object 纯逻辑） |
-| `pty/conpty_api.rs` `#[cfg(test)]` | 单元测试 | 3 | `bundled_dll_path` 存在性判断（tempdir 有/无文件）+ `resolve_conpty_api` 单例稳定（ADR-0005） |
 | `pty/shell.rs` `#[cfg(test)]` | 单元测试 | 20 | `use super::*` |
 | `tests/pty_integration_tests.rs` | 集成测试 | 8 | 仅能访问 `pub` API |
 | `state.rs` `#[cfg(test)]` | 单元测试 | 32 | sandbox 路径校验 + ring buffer 纯函数测试 |
