@@ -85,10 +85,12 @@ describe("ExplorerPanel 焦点管理", () => {
     expect((treeContainer as HTMLElement).getAttribute("tabindex")).toBe("-1");
   });
 
-  it("容器 style.outline=none（聚焦时不显示轮廓）", async () => {
+  it("容器不设 outline 抑制（全局 :focus-visible 环接管，UI-808）", async () => {
     const { container } = render(React.createElement(ExplorerPanel));
     const treeContainer = container.querySelector('[data-e2e="explorer-tree-container"]') as HTMLElement;
-    expect(treeContainer.style.outline).toBe("none");
+    // style 上无显式 outline 抑制——outline 由全局 :focus-visible 规则接管
+    // （鼠标点击不匹配 :focus-visible 视觉无变化；键盘编程聚焦时可见）
+    expect(treeContainer.style.outline).toBe("");
   });
 });
 

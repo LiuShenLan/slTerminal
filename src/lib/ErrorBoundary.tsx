@@ -60,7 +60,8 @@ export class ErrorBoundary extends React.Component<
               justifyContent: "center",
               background: PANEL_BG,
               color: ERROR_FG,
-              fontFamily: "monospace",
+              // UI-201：全局字体栈（与 App.css / 编辑器 / 终端一致）
+              fontFamily: '"JetBrains Mono", "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace',
               fontSize: 13,
               gap: 8,
               padding: 16,
@@ -122,7 +123,8 @@ export class ErrorBoundary extends React.Component<
             color: ERROR_FG,
             background: PANEL_BG,
             height: "100vh",
-            fontFamily: "monospace",
+            // UI-201：全局字体栈（与 App.css / 编辑器 / 终端一致）
+            fontFamily: '"JetBrains Mono", "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace',
             fontSize: 13,
           }}
         >

@@ -104,6 +104,7 @@ HTML 内容通过 `<iframe sandbox="allow-scripts" srcDoc={...}>` 渲染（**不
 - **字号 Compartment 热切换**：`fontCompartment.reconfigure()` 替代硬编码 `createEditorFontExtension`，字号变化不销毁重建 EditorView
 - **callback ref 容器桥接**：`<div>` 在 content 态才挂载，`ref.current` 在 render 期间为 null。`useCallback` ref + `setRenderKey` 触发额外渲染，确保 `useFontSizeWheel`/`usePanelFocus` 在容器就绪后收到非 null DOM 元素
 - **大文件阈值复用**：从 `useCodeMirror` 导出 `MAX_FILE_SIZE_BYTES` / `LARGE_FILE_WARN_BYTES`，超限拒绝/警告。禁止新造数值
+- **大文件警告图标（FE-18）**：警告 header 行首图标经 CM6 `Decoration.widget` 注入（`LargeFileWarnWidget` + `largeFileWarnField` StateField，仅警告分支挂载；doc 只读 update 仅 map）——⚠ 字符已移除（IC-08），lucide `IconAlertTriangle` 13px、色经 `GIT_FILE_COLORS.modified` warning 语义 token（硬约束 #6）。widget 渲染经 react-dom `createRoot`（`destroy` 时 unmount）
 - **错误契约**：catch 任意错误 → 占位文案"该文件在 HEAD 中不存在"，不解析错误内容
 - **语言扩展复用**：`getLanguageExtension(filePath)` 从 `useCodeMirror` 导出复用
 - **oldPath 优先**：renamed 场景传 oldPath 查询 HEAD 中旧路径内容

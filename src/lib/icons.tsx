@@ -11,6 +11,7 @@
 //   配置 IconConfig     = Settings 齿轮
 //   时钟 IconHistory    = Clock
 //   空态 IconEmptyBox   = FolderOpen（空态文件夹）
+//   告警 IconAlertTriangle = TriangleAlert（lucide 2.x 实际导出名，旧别名 AlertTriangle 已移除）
 
 import type { LucideIcon } from "lucide-react";
 import {
@@ -28,6 +29,7 @@ import {
   Search,
   Settings,
   Square,
+  TriangleAlert,
   X,
   XSquare,
 } from "lucide-react";
@@ -64,3 +66,4 @@ export const IconCloseWin = makeIcon(XSquare); // 窗口关闭（自绘标题栏
 export const IconPlus = makeIcon(Plus); // 新建（页签栏「+」钮）
 export const IconFolder = makeIcon(Folder); // 文件夹通用
 export const IconEmptyBox = makeIcon(FolderOpen); // 空态（空文件树/无搜索结果等）
+export const IconAlertTriangle = makeIcon(TriangleAlert); // 大文件警告（gitshow 行首图标，13px 用法）

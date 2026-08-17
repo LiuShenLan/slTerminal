@@ -81,14 +81,20 @@ vi.mock("@codemirror/view", () => {
   return {
     EditorView: MockEditorView,
     keymap: { of: vi.fn((x: unknown) => x) },
+    // FE-18：大文件警告 widget 装饰相关导出（Decoration.widget 仅在 StateField.create 中调用，
+    // mock EditorState 不驱动 field，桩仅防 undefined；WidgetType 为空基类供组件 extends）
+    Decoration: { widget: vi.fn((spec: unknown) => ({ __widget: true, ...(spec as object) })) },
+    WidgetType: class {},
   };
 });
 
 vi.mock("@codemirror/state", () => ({
   EditorState: {
     create(config: { doc?: string; extensions?: unknown[] }) {
-      capturedEditorStateConfig.push({ extensions: config.extensions, doc: config.doc });
-      return { doc: config.doc ?? "", config };
+      const docText = config.doc ?? "";
+      capturedEditorStateConfig.push({ extensions: config.extensions, doc: docText });
+      // FE-18：mock doc 需支持 line()（大文件警告 StateField.create 读首行）
+      return { doc: { line: () => ({ from: 0, text: docText }) }, config };
     },
     readOnly: { of: vi.fn((val: boolean) => ({ __readOnly: val })) },
   },
@@ -96,6 +102,17 @@ vi.mock("@codemirror/state", () => ({
     of = vi.fn(() => []);
     // EDF-09: 字号热切换走 reconfigure，共享 mock 供断言
     reconfigure = mockCompartmentReconfigure;
+  },
+  // FE-18：大文件警告装饰桩——define 原样透传 spec 并打标（供 extensions 断言）
+  StateField: { define: vi.fn((spec: unknown) => ({ __stateField: true, ...(spec as object) })) },
+  RangeSetBuilder: class {
+    ranges: { from: number; to: number; deco: unknown }[] = [];
+    add(from: number, to: number, deco: unknown) {
+      this.ranges.push({ from, to, deco });
+    }
+    finish() {
+      return { __ranges: this.ranges };
+    }
   },
 }));
 
@@ -156,10 +173,19 @@ vi.mock("../stores", () => ({
 }));
 
 import React from "react";
-import { render, cleanup } from "@testing-library/react";
-import GitShowPanel from "../panels/gitshow/GitShowPanel";
+import { render, cleanup, act } from "@testing-library/react";
+import GitShowPanel, { LargeFileWarnWidget } from "../panels/gitshow/GitShowPanel";
+import { GIT_FILE_COLORS } from "../theme";
 // 从 mock 导入以获取 vi.fn() 引用（供断言调用次数/参数）
 import { createEditorFontExtension } from "../panels/editor/useCodeMirror";
+
+/** 色值 → jsdom 归一化形态（#hex → "rgb(r, g, b)"）——jsdom cssstyle 将 hex 统一序列化为 rgb() 形式 */
+function hexToRgb(hex: string): string {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgb(${r}, ${g}, ${b})`;
+}
 
 const DEFAULT_PARAMS = {
   panelId: "gs-1",
@@ -324,11 +350,49 @@ describe("GitShowPanel", () => {
       expect(capturedEditorStateConfig.length).toBeGreaterThan(0);
     });
     const lastConfig = capturedEditorStateConfig[capturedEditorStateConfig.length - 1];
-    // 警告 header 精确文案
-    expect(lastConfig.doc).toContain("⚠ 大文件");
+    // 警告 header 精确文案（FE-18：⚠ emoji 已移除——图标经 widget 装饰注入，doc 中无 emoji）
+    expect(lastConfig.doc).toContain("大文件");
+    expect(lastConfig.doc).not.toContain("⚠");
     expect(lastConfig.doc).toContain("只读查看");
+    // 大文件警告 StateField 已挂入 extensions（行首图标的装饰载体）
+    const hasWarnField = (lastConfig.extensions as unknown[]).some(
+      (ext) => (ext as Record<string, unknown>).__stateField === true,
+    );
+    expect(hasWarnField).toBe(true);
     // 原文保留（header 前置而非替换）
     expect(lastConfig.doc).toContain("line1");
+  });
+
+  // ── FE-18：大文件警告图标（⚠ → lucide TriangleAlert，IC-08）──
+
+  it("大文件警告图标 widget 渲染 lucide svg（13px、warning 语义 token 色）", async () => {
+    // beforeEach 的 mockReset 清除了实现——补 mock 防 gitFileAtHead 返回 undefined
+    // 触发 GitShowPanel 内容态 text.length 运行期 TypeError（生产契约恒返回 string）
+    // doc 含大文件标记：面板走大文件警告分支，与用例语义一致
+    mockGitFileAtHead.mockResolvedValue("line1\n" + "y".repeat(1_100_000));
+    const { container } = render(
+      React.createElement(GitShowPanel, { params: DEFAULT_PARAMS }),
+    );
+    // CM6 decoration 挂载由 mock EditorView 短路（mock 不驱动 StateField），
+    // 故直接驱动 widget 实例验证 DOM 产物——与真实 CM6 的 widget.toDOM 调用等价
+    let host!: HTMLElement;
+    const widget = new LargeFileWarnWidget();
+    await act(async () => {
+      host = widget.toDOM();
+      container.appendChild(host);
+    });
+    const svg = host.querySelector("svg");
+    expect(svg).toBeTruthy();
+    expect(svg!.getAttribute("width")).toBe("13");
+    expect(svg!.getAttribute("height")).toBe("13");
+    expect(svg!.getAttribute("stroke-width")).toBe("1.5");
+    expect(svg!.getAttribute("aria-hidden")).toBe("true");
+    // 色经语义 token（warning 语义 = GIT_FILE_COLORS.modified，与 toast warning 同源，硬约束 #6）
+    // jsdom 将 hex 归一化为 rgb() 形式——比对归一化形态而非 hex 字面量
+    expect(host.style.color).toBe(hexToRgb(GIT_FILE_COLORS.modified));
+    await act(async () => {
+      widget.destroy();
+    });
   });
 
   // ── readOnly 配置 ──

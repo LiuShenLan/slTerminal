@@ -127,6 +127,15 @@ vi.mock("../stores/projects", () => {
 vi.mock("dockview-react/dist/styles/dockview.css", () => ({}));
 
 import App from "../App";
+import { DIM_FG } from "../theme";
+
+/** 色值 → jsdom 归一化形态（#hex → "rgb(r, g, b)"）——jsdom cssstyle 将 hex 统一序列化为 rgb() 形式 */
+function hexToRgb(hex: string): string {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgb(${r}, ${g}, ${b})`;
+}
 
 // ─── localStorage stub ───
 function setLastActivePage(value: string | null) {
@@ -204,6 +213,23 @@ describe("S4 启动恢复", () => {
     await waitFor(() => {
       expect(queryByText("slTerminal 启动中…")).toBeFalsy();
     }, { timeout: 3000 });
+  });
+
+  it("8. FE-10: 加载页使用全局字体栈 + DIM_FG 说明文字色（UI-201/UI-104）", async () => {
+    setLastActivePage(null);
+    // loadAllProjects 永不 resolve——加载页稳定呈现（ready 恒 false）
+    mocks.mockLoadAllProjects.mockReturnValueOnce(new Promise<void>(() => {}));
+
+    const { getByText } = render(React.createElement(App));
+
+    const loadingEl = getByText("slTerminal 启动中…");
+    // UI-201 全局字体栈完整形态（非裸 monospace）
+    expect(loadingEl.style.fontFamily).toBe(
+      '"JetBrains Mono", "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace',
+    );
+    // UI-104：说明文字 fg-3 档 = DIM_FG（非 INPUT_BORDER）
+    // jsdom 将 hex 归一化为 rgb() 形式——比对归一化形态而非 hex 字面量
+    expect(loadingEl.style.color).toBe(hexToRgb(DIM_FG));
   });
 
   it("5. DBG-6: setProjectRoot 先于 setActivePage 完成（D7 时序断言）", async () => {

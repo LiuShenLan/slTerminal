@@ -22,7 +22,7 @@ import { createEditorShortcuts } from "./panels/editor/keyboard";
 import { createExplorerShortcuts } from "./features/explorer/keyboard";
 import { NotificationListener } from "./features/notifications";
 import { TitleBar } from "./features/titleBar/TitleBar";
-import { PANEL_BG, INPUT_BORDER, APP_BG } from "./theme";
+import { PANEL_BG, DIM_FG, APP_BG } from "./theme";
 import "dockview-react/dist/styles/dockview.css";
 // App.css 从 main.tsx 移此（BOOT-02）：dockview.css 先、App.css 后，CSS 变量覆盖语义正确
 import "./App.css";
@@ -211,9 +211,9 @@ function App() {
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            color: INPUT_BORDER,
+            color: DIM_FG, // FE-10：说明文字 fg-3 档（UI-104，原误用输入框边框色）
             fontSize: 13, // UI-204：正文 13px
-            fontFamily: "monospace",
+            fontFamily: '"JetBrains Mono", "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace', // UI-201：全局字体栈
           }}
         >
           slTerminal 启动中…

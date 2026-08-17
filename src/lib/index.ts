@@ -25,6 +25,7 @@ export {
   IconPlus,
   IconFolder,
   IconEmptyBox,
+  IconAlertTriangle,
   type IconProps,
 } from "./icons";
 export { StatusDot, type StatusDotStatus, type StatusDotProps } from "./StatusDot";

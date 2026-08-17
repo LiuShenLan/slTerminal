@@ -14,6 +14,8 @@ const mocks = vi.hoisted(() => {
   const setFocus = vi.fn().mockResolvedValue(undefined);
   const destroy = vi.fn().mockResolvedValue(undefined);
   const unlisten = vi.fn();
+  /** FE-26：置 true 时 onCloseRequested 返回 rejected Promise（模拟窗口已销毁场景） */
+  let unlistenRejects = false;
 
   return {
     get focusCb() {
@@ -28,6 +30,12 @@ const mocks = vi.hoisted(() => {
     set closeCb(cb: ((e: { preventDefault: () => void }) => void) | null) {
       closeCb = cb;
     },
+    get unlistenRejects() {
+      return unlistenRejects;
+    },
+    set unlistenRejects(v: boolean) {
+      unlistenRejects = v;
+    },
     requestUserAttention,
     setFocus,
     destroy,
@@ -35,6 +43,7 @@ const mocks = vi.hoisted(() => {
     resetAll() {
       focusCb = null;
       closeCb = null;
+      unlistenRejects = false;
       requestUserAttention.mockClear();
       setFocus.mockClear();
       destroy.mockClear();
@@ -53,7 +62,10 @@ vi.mock("@tauri-apps/api/window", () => ({
     }),
     onCloseRequested: vi.fn((cb: (e: { preventDefault: () => void }) => void) => {
       mocks.closeCb = cb;
-      return Promise.resolve(mocks.unlisten);
+      // FE-26：窗口已销毁场景——返回 rejected Promise（registerCloseHandler 内部须 .catch 兜底）
+      return mocks.unlistenRejects
+        ? Promise.reject(new Error("window destroyed"))
+        : Promise.resolve(mocks.unlisten);
     }),
     requestUserAttention: mocks.requestUserAttention,
     setFocus: mocks.setFocus,
@@ -115,6 +127,23 @@ describe("registerCloseHandler（WRK-08 关窗拦截）", () => {
     await vi.waitFor(() => {
       expect(mocks.unlisten).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it("5. FE-26: unlisten Promise reject（窗口已销毁）→ 清理函数吞掉，无未处理 rejection", async () => {
+    mocks.unlistenRejects = true;
+    // 监听 unhandledrejection——实现缺 .catch 时 cleanup 会产生未处理 rejection 落入此数组
+    const unhandled: unknown[] = [];
+    const onUnhandled = (e: PromiseRejectionEvent) => { unhandled.push(e.reason); };
+    window.addEventListener("unhandledrejection", onUnhandled);
+
+    const cleanup = registerCloseHandler(vi.fn(async () => {}));
+    expect(() => cleanup()).not.toThrow();
+
+    // 等 unlisten 链 settle（微任务 + 事件循环），让潜在的未处理 rejection 派发
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(unhandled).toEqual([]);
+
+    window.removeEventListener("unhandledrejection", onUnhandled);
   });
 });
 

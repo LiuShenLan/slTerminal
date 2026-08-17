@@ -69,6 +69,10 @@ describe("ErrorBoundary", () => {
     );
     expect(container.textContent).toContain("应用渲染错误");
     expect(container.textContent).toContain("模拟渲染错误");
+    // UI-201：fullscreen variant 根容器为全局字体栈（不得回退裸 monospace）
+    expect((container.firstElementChild as HTMLElement).style.fontFamily).toBe(
+      '"JetBrains Mono", "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace',
+    );
     // 两个 <pre>：message 和 stack
     const pres = container.querySelectorAll("pre");
     expect(pres.length).toBe(2);
@@ -97,6 +101,10 @@ describe("ErrorBoundary", () => {
     expect(container.textContent).toContain("该操作页面因渲染错误无法显示，其他页面不受影响。");
     // 不渲染 fullscreen 分支标题
     expect(container.textContent).not.toContain("应用渲染错误");
+    // UI-201：inline variant 根容器为全局字体栈（不得回退裸 monospace）
+    expect((container.firstElementChild as HTMLElement).style.fontFamily).toBe(
+      '"JetBrains Mono", "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace',
+    );
     // componentDidCatch 不受 variant 影响——window.__sltermError 仍被赋值
     expect((window as unknown as Record<string, unknown>).__sltermError).toBeDefined();
     // 错误详情 <pre> 含 message + stack（details 折叠不影响 DOM 存在）

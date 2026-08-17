@@ -64,7 +64,8 @@ export function registerCloseHandler(cb: () => Promise<void>): () => void {
     }
   });
   return () => {
-    unlisten.then((fn) => fn());
+    // FE-26：窗口已销毁时 unlisten Promise reject——兜底吞掉，避免清理期未处理 rejection
+    unlisten.then((fn) => fn()).catch(() => {});
   };
 }
 

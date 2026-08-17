@@ -440,7 +440,7 @@ export const ExplorerPanel: React.FC = () => {
         </div>
       )}
 
-      {/* 文件树容器（tabIndex 使容器可聚焦，usePanelFocus 监听 focusin/focusout） */}
+      {/* 文件树容器（tabIndex 使容器可聚焦，usePanelFocus 监听 focusin/focusout；不设 outline 抑制——全局 :focus-visible 环接管，鼠标点击不匹配 :focus-visible，键盘编程聚焦时可见，UI-808） */}
       <div
         ref={containerRef}
         tabIndex={-1}
@@ -449,7 +449,6 @@ export const ExplorerPanel: React.FC = () => {
           overflowY: "auto",
           overflowX: "hidden",
           padding: "2px 0",
-          outline: "none",
         }}
         data-e2e="explorer-tree-container"
       >

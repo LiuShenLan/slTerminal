@@ -6,8 +6,9 @@
 // 大文件阈值从 useCodeMirror 复用，禁止新造数值。
 
 import React, { useRef, useState, useEffect, useCallback, useMemo } from "react";
-import { EditorView, keymap } from "@codemirror/view";
-import { EditorState, Compartment } from "@codemirror/state";
+import { EditorView, Decoration, keymap, WidgetType } from "@codemirror/view";
+import { EditorState, StateField, Compartment, RangeSetBuilder, type Extension, type RangeSet } from "@codemirror/state";
+import { createRoot, type Root } from "react-dom/client";
 import { basicSetup } from "codemirror";
 import { search, searchKeymap, highlightSelectionMatches } from "@codemirror/search";
 import { gitFileAtHead } from "../../ipc/git";
@@ -19,10 +20,11 @@ import {
 } from "../editor/useCodeMirror";
 import { useFontSize } from "../../stores";
 import { useFontSizeWheel } from "../../lib/useFontSizeWheel";
+import { IconAlertTriangle } from "../../lib";
 import { FONT_SIZE_MIN, FONT_SIZE_MAX } from "../../stores/fontSize";
 import { usePanelFocus } from "../../features/shortcuts";
 import { setActiveEditor, clearActiveEditor, type EditorActions } from "../editor/activeEditor";
-import { EDITOR_BG, ERROR_FG, HTML_PANEL_LOADING_FG, PANEL_BG, editorTheme, editorColorOverrides, editorSyntaxHighlight } from "../../theme";
+import { EDITOR_BG, ERROR_FG, GIT_FILE_COLORS, HTML_PANEL_LOADING_FG, PANEL_BG, editorTheme, editorColorOverrides, editorSyntaxHighlight } from "../../theme";
 
 /** GitShowPanel 接收的面板参数 */
 interface GitShowPanelProps {
@@ -42,6 +44,50 @@ type LoadState =
 
 /** 错误占位文案——见契约：catch 任意错误皆显示此文案，不解析错误内容 */
 const HEAD_NOT_FOUND_TEXT = "该文件在 HEAD 中不存在";
+
+// ── 大文件警告行首图标（FE-18：⚠ emoji 替代，IC-08 emoji 禁令）──
+
+/** 行首警告图标 widget——lucide TriangleAlert 13px，色经 warning 语义 token（同 toast warning） */
+export class LargeFileWarnWidget extends WidgetType {
+  private root: Root | null = null;
+
+  toDOM(): HTMLElement {
+    const host = document.createElement("span");
+    host.style.verticalAlign = "text-bottom"; // 与注释文本基线对齐
+    host.style.marginRight = "4px"; // 与「//」之间留白
+    host.style.color = GIT_FILE_COLORS.modified; // warning 语义 token（硬约束 #6）
+    this.root = createRoot(host);
+    this.root.render(<IconAlertTriangle size={13} />);
+    return host;
+  }
+
+  destroy(): void {
+    this.root?.unmount();
+    this.root = null;
+  }
+
+  ignoreEvent(): boolean {
+    return true; // 纯装饰，不响应指针/键盘事件
+  }
+}
+
+/** 大文件警告装饰 StateField——警告 header 首行行首挂图标 widget（仅警告分支挂载；doc 只读，update 仅 map） */
+const largeFileWarnField = StateField.define<RangeSet<Decoration>>({
+  create(state) {
+    const builder = new RangeSetBuilder<Decoration>();
+    const line = state.doc.line(1);
+    builder.add(
+      line.from,
+      line.from,
+      Decoration.widget({ widget: new LargeFileWarnWidget(), side: 1 }),
+    );
+    return builder.finish();
+  },
+  update(deco, tr) {
+    return deco.map(tr.changes);
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
 
 /** 居中容器样式（loading / error 共用） */
 const centerStyle: React.CSSProperties = {
@@ -126,12 +172,15 @@ const GitShowPanel: React.FC<GitShowPanelProps> = ({ params }) => {
     // 大文件检查
     const sizeHint = text.length;
     let displayText = text;
+    let warnField: Extension | null = null;
     if (sizeHint > MAX_FILE_SIZE_BYTES) {
       displayText = `// [slTerminal] 文件过大（约${(sizeHint / 1_000_000).toFixed(1)}MB），已拒绝打开以保护内存。`;
     } else if (sizeHint > LARGE_FILE_WARN_BYTES) {
-      // 大文件警告：在内容顶部插入注释提示（不弹窗——只读视图无保存风险）
-      const header = `// [slTerminal] ⚠ 大文件（约${(sizeHint / 1_000_000).toFixed(1)}MB），只读查看。\n// 语法高亮和搜索可能影响性能。\n\n`;
+      // 大文件警告：在内容顶部插入注释提示（不弹窗——只读视图无保存风险）；
+      // 行首图标经 largeFileWarnField 的 widget 装饰注入（FE-18：⚠ 字符已移除）
+      const header = `// [slTerminal] 大文件（约${(sizeHint / 1_000_000).toFixed(1)}MB），只读查看。\n// 语法高亮和搜索可能影响性能。\n\n`;
       displayText = header + text;
+      warnField = largeFileWarnField;
     }
 
     const newView = new EditorView({
@@ -143,6 +192,8 @@ const GitShowPanel: React.FC<GitShowPanelProps> = ({ params }) => {
           editorSyntaxHighlight(),
           editorTheme,
           editorColorOverrides(),
+          // 大文件警告：行首图标 widget（仅警告分支非 null）
+          ...(warnField ? [warnField] : []),
           // .cm-editor 高度→.cm-scroller height:100%约束→溢出→滚动条（同 editor）
           EditorView.theme({ "&": { height: "100%" } }),
           // 字体/自动换行用 Compartment 热切换，不销毁重建 EditorView

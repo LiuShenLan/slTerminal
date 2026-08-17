@@ -2,7 +2,7 @@
 
 > **本文档是项目用例数唯一真值源。** 所有 CLAUDE.md、README、CI 配置中引用的用例数均以此文件为准。更新测试后必须同步本文档。
 
-全量 **3240** 用例（Rust 607 + 前端 2455 + L3 138 + E2E 40），2026-08-17 更新（FE-17/23 回归：activityBar +2；上批 2026-08-16 人工验证问题 6——标题栏拖拽区撑满全高）。
+全量 **3241** 用例（Rust 607 + 前端 2456 + L3 138 + E2E 40），2026-08-17 更新（FE-18：gitshow-panel +1；上批 FE-17/23 回归：activityBar +2——标题栏拖拽区撑满全高）。
 
 > **计数口径**：
 > - L2 以 `npm test` 实跑（Vitest 报告）为准——`it.each(...)` 参数化与 `describeIpcContract` 工厂（`helpers/ipc-contract.ts`，IHE-06）等按**展开后用例数**计入（143 文件 2439 用例，2026-08-16 UI 重设计 Stage 09 终验实跑回写）；纯 grep `it(/test(` 块数会少计 it.each 展开（如 colors 92 = 13 块 + 7 组 each 展开 79）。
@@ -83,9 +83,9 @@
 
 > `pty/mod.rs`、`pty/win_build.rs`、`main.rs` 不含 `#[test]`，不在此列。git/mod.rs 测试已按 GIT-12 全量拆出至 `tests/`（`#[test]` 零残留）。agent_history 模块 grep 口径：claude/jsonl 28 + claude/scan 16 + claude/ops 16 + mod 20 = 80（命令包装层 4 用例已迁入 mod.rs，MC-301 下沉时随行）+ claude/mod 4 + provider 2 = 全模块 86；env 测试依赖 L1 `--test-threads=1` 门禁（`std::env::set_var` 全局可变）。
 
-## L2 — 前端单元/集成测试（143 文件 / 2456 用例）
+## L2 — 前端单元/集成测试（143 文件 / 2457 用例）
 
-运行：`npm test`（Vitest + jsdom，登记 2456 用例——2026-08-16 人工验证问题 6 批次实跑 2453 passed，0 failed）
+运行：`npm test`（Vitest + jsdom，登记 2457 用例——2026-08-16 人工验证问题 6 批次实跑 2453 passed，0 failed）
 
 > ① UI 重设计（Stage 01-08）L2 全量变动（明细见各段表行与文末「历史变更」）：删除 4 文件 123 用例（agent-status-view 35 / agent-history-view 38 / sidebar-actions 47 / dialog-e2e-hook 3）、新增 7 文件 67 用例（title-bar 7 / nav-tree 31 / nav-tree-history 8 / confirm-dialog 11 / toast 5 / open-hooks-config 5，emoji-scan 3 已登记）、既有文件净 +25（colors +6 / overrides +2 / activityBar +4 / sideBar +1 / workspace-defaulttab +5 / workspace-header-actions +1 / workspace-page-dockview +1 / explorer-delete +3 / file-icon +1 / commit-context-menu +2 / commit-context-menu-ui +2 / agent-status-lib -3）；另校正 2 行（notifications 34→49、close-handler 13→12，it.each 展开口径/挂载适配实跑口径）——行级合计 2439 = 实跑，旧表头 2463（行级和 2456）失实 7 一并校正。
 
@@ -96,7 +96,7 @@
 | `src/__tests__/ipc-contract.test.ts` | 65 | pty/fs/settings/projects/notify/git 全模块四维验证（IHE-06 工厂化：8 裸 it + 57 cases）+ DBG-4 PTY payload 契约守卫 + onFsEvent listen 回调解包行为契约（IHE-01②） |
 | `src/__tests__/ipc-agent-hooks-contract.test.ts` | 21 | agent hooks 四命令四维验证（命令名 agent_hooks_*——inject/uninstall/injection_status/restoreStatusline，原 contextUsage 随 transcript 链路退役删 5 cases）+ ContextUsageSignal 键集合守卫（官方 used_percentage 单字段）+ AgentEventPayload 字段契约（含 usedPercentage 承载）+ onAgentEvent 解包（7 裸 it + 14 cases，MC-212 更名同步） |
 | `src/__tests__/ipc-agent-history-contract.test.ts` | 12 | agent_history_scan（无参聚合）/agent_history_delete（{cliId, sessionId} 双参 camelCase）/agent_history_read_title（{cliId, sessionId} 双参 camelCase + AgentHistoryTitle 两键返回透传，人工验证问题 3 新增）三命令四维验证（F7，rename 已移除；MC-306 更名同步） |
-| `src/__tests__/ipc-window-contract.test.ts` | 10 | `registerCloseHandler` 关闭生命周期契约（WRK-04 处置：保留 + 契约测试） |
+| `src/__tests__/ipc-window-contract.test.ts` | 11 | `registerCloseHandler` 关闭生命周期契约（WRK-04 处置：保留 + 契约测试；FE-26 新增 unlisten reject 不抛用例） |
 | `src/__tests__/ipc-ping.test.ts` | 2 | `ping()` wrapper 调用（IHE-07① 改调导出函数） |
 | `src/__tests__/notification.test.ts` | 9 | `sendToastNotification` catch 静默/`ensureNotificationPermission` 拒绝路径（IHE-02 新建） |
 
@@ -247,12 +247,12 @@
 | `src/__tests__/hooks-config-sync.test.tsx` | 10 | 双模式同步（JSON→GUI/GUI→JSON/非法禁切/脏状态流转）——**useHooksConfig 收 cliId 选中态参数（MC-220，Stage 06 同步，用例数不变）** + **useHooksConfig 初始层（KZ-4，Stage 04 review-fix +1）：initialLayer 参数（初始层 = 传入值 + 首次 read 携该层）/缺省回退 "user"** |
 | `src/__tests__/statusline-bridge-behavior.test.ts` | 10 | **B11/B16 桥接脚本行为级（新建）**：spawnSync 真实 node 执行（脚本拷贝至临时目录还原生产 CommonJS 语义 + 独立临时 HOME 隔离节流状态）——.sh 尾随引号容忍（**B16：skip 条件升级为 bash 或 git 推导可达**，本机真实执行锁 git 推导+正斜杠链路）/系统 shell 透传/失败 stdout 占位（stderr 空 + exit 0，C10）/信号 payload 字段/节流抑制（同值 1s 内不写/值变即写）/无 SLTERM_PANEL_ID/非法 JSON/空 stdin + **B16 新 2：git 推导定位 bash（PATH 裁剪为 Git\cmd+System32 生产形态）/bash 完全不可得（PATH 仅 System32 + 固定路径探测不存在，defaultGitExists 守卫 skip）→ 占位** |
 
-### Diff/GitShow 面板（3 文件 / 78 用例）
+### Diff/GitShow 面板（3 文件 / 79 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
 | `src/__tests__/diff-panel.test.tsx` | 40 | mock gitFileAtHead+fs+gitDiff+onFsEvent、双栏渲染、加载/错误占位、**保存后刷新链真实断言（EDF-01：writeFile→gitDiff→gutter）**、**五分支补齐（EDF-02：占位刷新/.git 刷新/脏确认/滚动重绑/大文件）**、滚动同步去固定延时（EDF-07）、**FE-02 浮层回归（脏确认改 mock confirmDialog 断言参数 + 保存失败 toast.show）** |
-| `src/__tests__/gitshow-panel.test.tsx` | 21 | mock gitFileAtHead、三态、readOnly 断言、oldPath 优先、**大文件警告精确断言 + EditorView identity 切换（EDF-04）**、**字号 reconfigure（EDF-09）** |
+| `src/__tests__/gitshow-panel.test.tsx` | 22 | mock gitFileAtHead、三态、readOnly 断言、oldPath 优先、**大文件警告精确断言 + EditorView identity 切换（EDF-04）**、**字号 reconfigure（EDF-09）**、**大文件警告图标 svg 断言（FE-18：⚠ → lucide TriangleAlert 13px + warning 语义 token 色 + doc 无 emoji 负断言）** |
 | `src/__tests__/diff-alignment.test.ts` | 18 | computeAlignment 纯函数全分支 + **key<0 过滤（EDF-06）** |
 
 ### 快捷键/命令系统（7 文件 / 127 用例）
@@ -306,7 +306,7 @@
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
 | `src/__tests__/close-handler.test.ts` | 12 | flush layout→saveAllProjects→localStorage/超时/异常 + 关窗拦截（WRK-08） + **关闭序列第 4 步 restoreStatusline（statusline 桥接：调用与 cliId 透传断言 + 失败静默 catch 不阻断关闭）**（**TB-02/OV-01 mock 适配：App 根部挂载 TitleBar 三窗口图标 + ConfirmDialogHost/ToastHost（渲染 null）**——表行 13→12 为挂载适配后实跑口径校正） |
-| `src/__tests__/startup-restore.test.ts` | 7 | localStorage 恢复/空/异常降级/**setProjectRoot 先于 setActivePage 顺序断言（WRK-03）**/requestUserAttention catch |
+| `src/__tests__/startup-restore.test.ts` | 8 | localStorage 恢复/空/异常降级/**setProjectRoot 先于 setActivePage 顺序断言（WRK-03）**/requestUserAttention catch/**FE-10 加载页全局字体栈 + DIM_FG 样式断言** |
 | `src/__tests__/bootstrap.test.ts` | 3 | `__TAURI_INTERNALS__` 轮询/立即挂载/永不就绪 |
 | `src/__tests__/main-bootstrap.test.tsx` | 1 | main.tsx init 失败 catch 分支（WRK-10） |
 
@@ -393,6 +393,8 @@ embedded WDIO 驱动**无法将 OS 级按键（`browser.keys`）投递进 WebVie
 
 ## 历史变更
 
+- 2026-08-17（ui-redesign-review-fix Stage 06，FE-18）：**L2 +1**——`gitshow-panel` 21→22（大文件警告图标 svg 断言：⚠ emoji 移除 + doc 无 emoji 负断言 + LargeFileWarnWidget.toDOM 渲染 lucide TriangleAlert svg（13px/stroke 1.5/aria-hidden）+ warning 语义 token 色断言 + extensions 含大文件警告 StateField 断言）。前端 2441→2442。
+- 2026-08-17（ui-redesign-review-fix Stage 06，FE-10/26）：**L2 +2**——`ipc-window-contract` 10→11（FE-26 unlisten reject 不抛用例：窗口已销毁场景清理函数 .catch 兜底，unhandledrejection 事件断言）、`startup-restore` 7→8（FE-10 加载页样式断言：UI-201 全局字体栈完整形态 + DIM_FG fg-3 档，非裸 monospace/INPUT_BORDER）。前端 2439→2441。
 - 2026-08-16（UI 重设计 Stage 01-08 全量同步——TH/FT/IC/TB/TAB/NAV/OV/GL，DOC-03）：**L1 表头校正 597/32 文件 → 594/31 文件**（静态 grep `#[test]` 实查 = 594，与 `cargo test -- --test-threads=1` 实跑一致——lib 488 + tests/ 106；原 597/32 系 `src/fs/CLAUDE.md` 内文 `#[test]` 字样误计入文件数；UI 重设计 src-tauri 仅 capabilities/tauri.conf.json 变动，L1 零用例变动）。**L2 2463→2439（143 文件；旧行级和 2456 失实 7 一并校正，行级和 = 实跑）**：删 4 文件 123——agent-status-view 35 / agent-history-view 38（NAV-08 组件退役）/ sidebar-actions 47（NAV-06 SidebarTree 退役）/ dialog-e2e-hook 3（OV-02 ask 删除）；新 7 文件 67——title-bar 7（TB-06）/ nav-tree 31 + nav-tree-history 8（NAV-01~04/09 导航树）/ confirm-dialog 11 + toast 5（OV-01 统一浮层）/ open-hooks-config 5（NAV-05 配置钮入口，承接 sidebar-actions 菜单入口语义）（emoji-scan 3 已于 Stage 03 登记）；修改净 +25——colors 86→92（linear 色值 + uiTokenCases 24→27）、overrides 7→9（editorSyntaxHighlight +2）、activityBar 34→38（NAV-05 46px/34×34/配置钮×2）、sideBar 21→22（NAV-07 迁移）、workspace-defaulttab 29→34（IC-03 圆点 + TAB-01/02）、workspace-header-actions 21→22（TAB-04）、workspace-page-dockview 9→10（TAB-03/04）、explorer-delete 22→25（UI-802 菜单规格 + confirmDialog）、file-icon 36→37（IC-04 六色盘叠加）、commit-context-menu 15→17 + commit-context-menu-ui 8→10（danger 标记 + UI-802）、agent-status-lib 6→3（IC-03 STATUS_EMOJI/getStatusIcon 退役）；校正 2 行——notifications 34→49（it.each 展开实跑口径，文件未改动）、close-handler 13→12（App 挂载 TitleBar/浮层 mock 适配）。类目标头全量重算（侧栏段删除 → 导航树段 2 文件 39；侧栏视图 6→7 文件 143→153；通知/Agent 状态 3→2 文件 111→91；Agent 历史 6→5 文件 134→96；E2E 辅助 8→7 文件 38→35；新增标题栏/统一浮层段 3 文件 23）。**L3 138 不变**（theme-options/production-osc 断言同步：linear 色值/tabStatus）。**L4 41→40（38 active + 2 skip）**：history.e2e.ts 8→7（孤儿 ✗ 用例删除——✗ 标记随 IC-08/NAV-08 退役，孤儿语义由「归属外会话不显示」承载），agent/sidebar/mockcli/hooks 断言改写（agent-status→nav 视图、活动栏序位三槽、⚡ → tabStatus/圆点、makeEmptyLayout 迁 NavTree）用例数不变。全量 3212→3211（Rust 594 + 前端 2439 + L3 138 + E2E 40）。动态计数以终验 vitest 实跑为准（2026-08-16 实跑 2439 passed）。⚠️ 遗留：history.e2e.ts 删除用例仍设 `__slterm_e2e_dialogAsk`（ask 已删、ConfirmDialog 无自动确认钩子），最新代码下不可通过，待收尾修复。
 - 2026-08-16（UI 重设计 Stage 03 图标体系——IC-05/06/07/08/09，misc-emoji）：**L2 +4**——新建 emoji-scan.test.ts 3 用例（**IC-09 装饰 emoji 字面量守卫**：src/ 全树 .ts/.tsx 原始文本逐字符扫描（含注释，与 verify grep 口径一致）+ src/__tests__ 整目录排除 + **白名单逐文件显式登记初始为空** + 自检（排除目录存在/扫描集非空/白名单文件存在且被扫描/允许字符为禁止集合子集）——入「CLI profile 注册表」类目守卫域）；activityBar 33→34（**IC-06 图标色三级 +1：默认 DIM_FG（fg-3）/hover SIDEBAR_FG（fg-1）/active ACCENT_FG，active hover 不变**）。断言文本同步（用例数不变）：agent-history-view 38（组标题箭头 ▶▼ 文本断言 → lucide chevron path d 断言，IC-05）、hooks-config-jsonmode 18（MatcherTester「命中 ✓/未命中 ✗」→「命中/未命中」，IC-08）。L4 用例数不变：history.e2e.ts 展开态检测（区/组容器子节点数 > 1 替代 ▼ 文本）+ 孤儿行断言（`[data-e2e="agent-history-orphan"]` 替代 ✗ 文本，IC-08）。类目标头同步（侧栏视图 142→143；CLI profile 注册表 90→93，5 文件）→ L2 以终验 vitest 实跑为准（实跑 2466 passed）。L1/L3 零变动。动态计数以终验 vitest 实跑为准。
 - 2026-08-11（review-fix Stage 05 mockcli 验收强化——KZ-7/CS-3，l4-mockcli 单点负责）：L4 +2——mockcli.e2e.ts 1→3（3 active）：**CS-3 ① agent-event 注入**（Node 侧原子写信号文件 cliId 显式 "mockcli"、PreToolUse 经桩映射 working → 页签 ⚡ + Agent Status 活跃区建行，真实 watcher → agent-event → resolvePayloadCliId 三级解析 → 桩策略全链路；不依赖 claude hooks 注入）+ **CS-3 ② hub 分派/保存 cliId 透传**（hooksConfig 选择行 mockcli 按钮 → 点击渲染桩编辑器 data-e2e="mockcli-config-editor" → 桩保存触发真实 writeHooksConfig("mockcli", ...) → 后端「未知 cliId: mockcli」错误透传展示）。**E2E 夹具补桩（helpers.ts installMockCliProfile）**：mockcli 定义补 configEditor 桩（React.createElement 构造——.ts 无 JSX，渲染 data-e2e="mockcli-config-editor" 标记与 L2 桩同口径 + 保存按钮触发真实 writeHooksConfig 携带 mockcli cliId；错误展示 data-e2e="mockcli-config-error"）+ configLayers 桩（单层 user）；E2E_ENABLED 内联 import.meta.env 字面量形态未动（禁区 6）。**L4 豁免两条**（记入既定豁免清单）：历史条目展示/双击恢复注入——历史条目由后端 provider 打标产出，生产二进制仅 claude provider（cliId 恒 "claude"），无 mockcli 后端 provider 造不出 mockcli 历史行；为测试在生产留后门代价过大——兜底层级 L2 AC-4③/⑤。**代 l2-mock-editor 登记**：mockCliProfile.ts 夹具补 configEditor 桩（data-e2e="mockcli-config-editor" 标记）+ configLayers 桩声明（KZ-7）；mock-cli-profile.test.tsx AC-4④ 重写为双向分派断言（选中 mockcli → 桩渲染 + JsonMode 零调用；选中 claude → JsonMode 调用 + 桩标记不存在），**用例数保持 12**（单条 it 内双向断言；若 l2-mock-editor 拆分 it 致数变化，以终验 vitest 实跑为准）。类目标头同步（L4 39→41，39 active + 2 skip）→ E2E 39→41。L1/L2/L3 零变动。全量 3202→3204（Rust 597 + 前端 2428 + L3 138 + E2E 41）。动态计数以终验 vitest 实跑为准，全量测试 agent 单点核对。
