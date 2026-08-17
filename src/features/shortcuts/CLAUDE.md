@@ -123,7 +123,7 @@ usePanelFocus("terminal", container, activate, deactivate);
 
 `context: "global"`，`App.tsx` 中 `registry.register([...createGlobalShortcuts(), ...createTerminalShortcuts(), ...createEditorShortcuts()])` 一次性注册；overrides 经 `wireKeybindings(getShortcutRegistry(), useKeybindings)` 持续同步。优先级 0-99，面板级可覆盖。
 
-**Hooks 配置入口已迁移到侧栏右键菜单**（原 `global.openHooksConfig` Ctrl+Shift+H 命令已删除）：SidebarTree「打开 Hooks 配置」菜单项 → 先 `switchToPage`（面板须活跃页打开）→ `openHooksConfigPanel(pageId)`（`workspace/pageApis`，轮询 `getPageApi` 就绪 → `getPanel(id)` 命中 `focus()`、未命中 `addPanel`——同页单例语义 C13-7 不变）。
+**Hooks 配置入口为活动栏底部「配置」钮**（原 `global.openHooksConfig` Ctrl+Shift+H 命令已删除；SidebarTree 右键菜单随其退役，决策 4 入口唯一化）：`openHooksConfigFromActivityBar()`（`features/hooksConfig/openHooksConfig.ts`）→ 先 `switchToPageShared` 切页（面板须活跃页打开）→ `openHooksConfigPanel(pageId)`（`workspace/pageApis`，轮询 `getPageApi` 就绪 → `getPanel(id)` 命中 `focus()`、未命中 `addPanel`——同页单例语义 C13-7 不变）。
 
 ## 用户自定义重绑定
 

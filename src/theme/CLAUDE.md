@@ -61,7 +61,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ⑤ import("./App") + render               // App 模块图内静态引用 theme token，须在 ② 之后求值
 ```
 
-**启动链 fail-safe 三处**（先于方案加载，不随方案切换，改 linear 对应 ui 值须手动同步）：`index.html:10` body background、`src-tauri/tauri.conf.json:20` window backgroundColor、`main.tsx:28` 超时错误页（背景 #0a0a0b / 错误文字 #d9706b / 说明文字 #ece9e4——分别对齐 `ui.appBgPrimary`/`ui.errorFg`/`ui.sidebarFg`）。交叉引用登记于 `schemes/linear.ts` 文件头注释。
+**启动链 fail-safe 三处**（先于方案加载，不随方案切换，改 linear 对应 ui 值须手动同步）：`index.html:10` body background、`src-tauri/tauri.conf.json:21` window backgroundColor、`main.tsx:28` 超时错误页（背景 #0a0a0b / 错误文字 #d9706b / 说明文字 #ece9e4——分别对齐 `ui.appBgPrimary`/`ui.errorFg`/`ui.sidebarFg`）。交叉引用登记于 `schemes/linear.ts` 文件头注释。
 
 ### 终端 adapter（既定例外的收敛表述）
 

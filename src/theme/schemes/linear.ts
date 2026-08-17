@@ -6,7 +6,7 @@
 // 交叉引用（启动链 fail-safe）：React 挂载前的静态硬编码色不在方案系统内，
 // 改本文件对应 ui 值时必须手动同步——
 //   ui.appBgPrimary (#0a0a0b) ↔ index.html:10 body background
-//   ui.appBgPrimary (#0a0a0b) ↔ src-tauri/tauri.conf.json:20 window backgroundColor
+//   ui.appBgPrimary (#0a0a0b) ↔ src-tauri/tauri.conf.json:21 window backgroundColor
 //   ui.panelBg (#0a0a0b) / ui.errorFg (#d9706b) ↔ src/main.tsx:28 超时错误页（文字 #ece9e4）
 //
 // linear 为 UI 重设计定稿方案，值以附录 A 为契约随意图演进。

@@ -31,14 +31,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **fg 层级映射**（final-mockup 契约）：fg-1 = `SIDEBAR_FG` / fg-2 = `SIDEBAR_COLORS.fg` / fg-3 = `DIM_FG` / fg-4 = `PLACEHOLDER_FG`
 - **项目行**（NAV-09/UI-505）：500 字重 fg-1 + 彩色文件夹图标（六色盘蓝 `#7fa8e8`——**硬编码例外，NAV-09 写死**，与 FileIcon.tsx 六色盘同源规格，IC-04 契约）+「当前」pill（active 项目，accent-dim 底 + ACCENT_FG 字 10px）+ 页面计数 pill（SIDEBAR_BG 底 + fg-4）
 - **页面行**（UI-501）：**IconPage（FileText）14px fg-3 图标**（2026-08 人工验证问题 2：原等宽占位替换，与历史session 时钟图标区分）；chevron 点击仅切换会话展开（stopPropagation），**行点击 = 切换页面 + 切换展开**（照原 SidebarTree 语义）；选中 = 活跃页面；收起且含活跃会话时右侧 meta = 最近会话标题；内联重命名（右键菜单入口，Enter 确认/Esc/blur 取消/空白或同名取消）
-- **活跃会话行**（NAV-02/UI-504，决策 6 单行化）：StatusDot（F3 四态，null 不渲染）+ CLI logo 14px（按 `row.cliId` 查 `profile.iconSrc`，未注册无 logo 不报错）+ 标题 fg-1 + 右侧**迷你用量条 32×3 pill 档** + 百分比 11px fg-4（`computeUsagePercent` 经 `profile.hooks` 委托，四档分级 ≥90/≥70/≥50 照 AgentStatusRow 口径；无数据 → `--`）；页面级最近事件行 `active` = accent-dim 选中底（设计 6.3）；**点击行 → 聚焦对应终端页签**（B14：先按已知页面集合前缀匹配 panelId 属主，兜底 `parseTerminalPageId`）
+- **活跃会话行**（NAV-02/UI-504，决策 6 单行化）：StatusDot（F3 四态，null 不渲染）+ CLI logo 14px（按 `row.cliId` 查 `profile.iconSrc`，未注册无 logo 不报错）+ 标题 fg-1 + 右侧**迷你用量条 32×3 pill 档** + 百分比 11px fg-4（`computeUsagePercent` 经 `profile.hooks` 委托，四档分级 ≥90/≥70/≥50 照 AgentStatusRow 口径；无数据 → `--`）；页面级最近事件行 `active` = accent-dim 选中底（设计 6.3）；**点击行 → 聚焦对应终端页签**（B14：先按已知页面集合前缀匹配 panelId 属主，兜底 `parseTerminalPageId`；反查函数 `findPanelForSession`/`findPageIdForPanelId` 已上提 `workspace/pageApis`（FE-09），本组件经 pageApis 调用）
 - **历史行**（NAV-03，决策 6 单行化）：StatusDot（运行中四态；无运行状态 → **恒渲染 done 灰档**，mockup `.dot.idle` 契约）+ logo 14px + 标题 fg-1 + 右侧相对时间 11px fg-4（`formatRelativeTime`）；**prompt 预览 → 原生 `title` tooltip**（双行式行2 退役）；双击恢复三分支（运行中 → SessionActionDialog / 孤儿无 cwd → 无操作 / 普通 → `restoreHistorySession(session, { fork: false })`）+ 右键菜单沿用 `historyContextMenu` 策略（复制/分支恢复/删除——删除经 `confirmDialog` 确认 → `agent_history_delete` → `removeLocal` 不重扫）
 
 ### CRUD 迁移承接（NAV-06）与入口唯一化（决策 4）
 
 - **添加项目**：`open({ directory: true })` 选文件夹 → `addProject`（建项目 + 默认空布局页面，行为照原 SidebarTree.handleAddProject 不变）
 - **新建页面**：`handleNewPage`（`页面-{Date.now()%10000}` + `makeEmptyLayout()` 空布局，不自动切换）
-- **删除项目**：`window.confirm` 确认 → `removeProject`；**删除页面**：委托 props `onDeletePage`（Workspace 编排）或兜底 `removePage`
+- **删除项目**：`confirmDialog` 确认（danger 态，FE-03 替换 window.confirm）→ `removeProject`；**删除页面**：委托 props `onDeletePage`（Workspace 编排）或兜底 `removePage`
 - **`makeEmptyLayout()` 迁自 SidebarTree**（NAV-06 承接约定——`restoreSession` 等消费点改引用本导出）
 - **右键菜单删除「打开 Hooks 配置」项**（决策 4 入口唯一化——配置钮移至活动栏底部，`openHooksConfigFromActivityBar`）；删除确认弹窗统一 `confirmDialog`（OV-02）
 
@@ -65,7 +65,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **#6 配色单点**：全部颜色引用 `theme/colors.ts` token（经 navStyles/NavTree 统一）；**唯一例外** = 项目行彩色文件夹图标六色盘蓝（NavProjectRow 内登记，照 FileIcon 硬编码例外规格，IC-04）
 - **#1 前端不碰 OS**：纯前端 UI 层；IPC（dialog.open 选目录/deleteHistorySession/写剪贴板）全部经 `src/ipc/` 调用
-- **数据 hook 不自建订阅**：活跃会话/历史数据一律经 useAgentStatus/useAgentHistory 获取（NAV-01 数据接入契约），禁止直接订阅 TerminalRegistry/onAgentEvent
+- **数据 hook 不自建订阅**：活跃会话/历史数据一律经 useAgentStatus/useAgentHistory 获取（NAV-01 数据接入契约），禁止直接订阅 TerminalRegistry/onAgentEvent；运行中会话反查（`findPanelForSession`/`findPageIdForPanelId`）经 `workspace/pageApis` 调用（FE-09 上提后本模块代码不再直接引用 TerminalRegistry）
 
 ## 测试模式
 

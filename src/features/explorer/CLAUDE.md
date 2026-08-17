@@ -47,6 +47,7 @@ ExplorerPanel 的文件树容器 `<div ref={containerRef} tabIndex={-1}>` 可编
 - **focusin** → `pushContext("explorer")` + `activate()` → `setActiveExplorer(explorerActions)`
 - **focusout**（离开子树） → `popContext("explorer")` + `deactivate()` → `clearActiveExplorer(explorerActions)`
 - **卸载** → 同上清理
+- **焦点环（FE-27/UI-808）**：容器不再设 `outline:"none"` 抑制（原 ExplorerPanel.tsx:446-452 已删）——焦点环由全局 `:focus-visible` 接管：鼠标点击不匹配 `:focus-visible`（视觉无变化），键盘编程聚焦时可见焦点环
 
 ### 快捷键集成：active pointer + 命令工厂
 
@@ -88,7 +89,7 @@ Explorer 的键盘快捷键遵循与 terminal/editor 相同的模式：
 |------|------|
 | `ExplorerPanel.tsx` | React 容器组件：活跃项目推导、文件树渲染、CRUD 事件处理、`handleOpenFile` 面板分派（FileViewerRegistry）、`notify_watch` 启动、**选中模型** + **焦点管理**（tabIndex={-1} + usePanelFocus("explorer")）+ **active pointer 集成** |
 | `useFileTree.ts` | 文件树数据 hook：`loadRoot` / `loadDirectory` / `toggleExpand` / `refreshExpanded`（经 `reloadPreservingExpanded` 递归重载保留展开状态）/ generation 取消 |
-| `FileTree.tsx` | 递归树组件：节点渲染、git 状态着色、右键菜单、**单击选中（VS Code 风格高亮）** + **renamingPath 状态上提**（由 ExplorerPanel 管理） |
+| `FileTree.tsx` | 递归树组件：节点渲染（行高 24px——UI-305 紧凑列表档登记，导航树 28/会话行 30 分档）、git 状态着色、右键菜单、**单击选中（VS Code 风格高亮）** + **renamingPath 状态上提**（由 ExplorerPanel 管理） |
 | `FileIcon.tsx` | 文件图标映射（UI-602：emoji → 描边 SVG 重构）——文件夹 = `lib/icons.tsx` 的 IconFolder（IC-01 图标单点）；文件 = 描边 + 左缘小色块自绘 SVG（轮廓/折角描边色 = 当前色（git 状态色，无则 `EXPLORER_COLORS.fg`），色块 fill = 扩展名映射色**六色盘**（ts/tsx 蓝、js/jsx/mjs/cjs 黄、py 绿、rs 红、md 紫、html 青、css/scss/less 蓝、配置类灰青、默认无色块）；git 状态色与类型色块分层叠加互不遮蔽）。**六色盘硬编码例外（IC-04 契约登记）**：色值写死于本文件 `FILE_COLORS` 常量（UI-602 checklist 指定色），NavProjectRow 文件夹蓝同规格例外 |
 | `activeExplorer.ts` | 模块级"聚焦 explorer"指针（createActivePointer 模式，同 activeTerminal/activeEditor） |
 | `keyboard.ts` | 快捷键命令工厂：`createExplorerShortcuts()` → 3 条命令（delete/open/rename），在 App.tsx 一次性注册 |

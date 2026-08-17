@@ -9,7 +9,7 @@
 
   color-scheme: dark;
   font-family: "JetBrains Mono", "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace;
-  /* UI-204 字号阶梯：正文 13px（组件字号一律显式取值 11/11.5/12/12.5/13px，根基准收进阶梯） */
+  /* UI-204 字号阶梯：正文 13px（组件 chrome 字号一律显式取值 11/11.5/12/12.5/13px，根基准收进阶梯；终端/编辑器内容区默认 14px 为登记例外，见 docs/ui-redesign/requirements.md UI-204） */
   font-size: 13px;
   line-height: 1.5;
   font-weight: 400;

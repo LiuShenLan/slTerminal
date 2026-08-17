@@ -41,12 +41,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 | 文件 | 职责 |
 |------|------|
-| `index.ts` | 公共 API 出口：Workspace 组件、panelRegistry、PANEL_TYPES、`saveLayout`/`loadLayout`（从 `../panelRegistry` 重导出） |
+| `index.ts` | 公共 API 出口：Workspace 组件；`panelRegistry`/`PANEL_TYPES`/`PANEL_TERMINAL`/`PANEL_EDITOR`/`PANEL_HTML_VIEWER`/`FILE_PANEL_TYPES`/`isValidPanelType`/`isAlwaysRenderPanel` + `PanelType` 类型（重导出自 `../panelRegistry`）；`saveLayout`/`loadLayout`（重导出自 `./layoutSerde`） |
 | `Workspace.tsx` | 主组件：三栏布局（Allotment）容器——活动栏(**46px 固定**)+侧栏区(visible=anyOpen)+主区 + 页面生命周期管理（`ensurePageInitialized`/`pageCallbacksRef`），单页渲染委托 PageDockviewHost；`import sideViewDefs` 触发 side-effect 注册 |
 | `PageDockviewHost.tsx` | 单页面 Dockview 实例宿主组件（React.memo 包裹）：**DefaultTab（扁平页签，TAB-01/02/03）**、**Watermark（空态统一，GL-05）**、**RightHeader（「+」钮 22px，TAB-04）**、ContextMenu（UI-802 视觉统一：项 28px 圆角 5/hover SECONDARY_BG/危险项 ERROR_FG/容器 SIDEBAR_BG + 0.09 描边 `<style>` 注入）、布局恢复 |
 | `layoutSerde.ts` | 布局序列化/反序列化：`saveLayout`（`api.toJSON()`）、`loadLayout`（`api.fromJSON()` + 旧格式修补 + 白名单过滤） |
 | `titleManager.ts` | 页签标题集中管理：terminal-N 编号、文件标题冲突检测、handleSaveAs、onDeletePage(pageId)：清理该页面 registry 和 counters 条目 |
-| `pageApis.ts` | 页面 API 注册表 + 共享切换：模块级 `Map<pageId, DockviewApi>` + `registerPageApi`/`unregisterPageApi`/`getPageApi` + `switchToPageShared(pageId)`（setProjectRoot 前置→setActivePage→重指向 `__dockviewApi`）+ `switchToPageAndFocus(pageId, panelId)`（切换后轮询聚焦面板）+ `openHooksConfigPanel(pageId)`（轮询 API 就绪 → 同页单例 addPanel，C13-7；活动栏「配置」钮经 `hooksConfig/openHooksConfig.ts` 消费，先切页后调用） |
+| `pageApis.ts` | 页面 API 注册表 + 共享切换：模块级 `Map<pageId, DockviewApi>` + `registerPageApi`/`unregisterPageApi`/`getPageApi` + `switchToPageShared(pageId)`（setProjectRoot 前置→setActivePage→重指向 `__dockviewApi`）+ `switchToPageAndFocus(pageId, panelId)`（切换后轮询聚焦面板）+ `openHooksConfigPanel(pageId)`（轮询 API 就绪 → 同页单例 addPanel，C13-7；活动栏「配置」钮经 `hooksConfig/openHooksConfig.ts` 消费，先切页后调用）+ `findPanelForSession(cliId, sessionId)`/`findPageIdForPanelId(panelId)`（FE-09 会话/面板反查：复合键 `cliId\|sessionId` 精确匹配 → 终端面板；panelId → 属主 pageId，B14 前缀匹配 + parseTerminalPageId 兜底） |
 | `TerminalRenameDialog.tsx` | 终端页签重命名弹窗（F8）：自绘模态（照 SessionActionDialog 模式）——遮罩 + 居中卡片 + 输入框 + 确定/取消；Enter 确认（trim）/空名行内错误拒绝/Esc/遮罩/取消按钮；纯受控展示组件，零 IPC |
 
 > **panelRegistry.ts 已提取到 `src/panelRegistry.ts`（已提取为共享配置层）**：面板注册表是全局架构组件，被 workspace、explorer、测试等多方引用，不应埋于 workspace 子路径。
@@ -133,7 +133,7 @@ Workspace 使用 Allotment 实现三栏布局（旧为常驻四栏，侧栏视�
 
 ## 终端页签自定义重命名（F8，右键菜单）
 
-- **入口**：`createGetContextMenu` 对终端面板（`panel.view.contentComponent === "terminal"`——**`panel.component` 不存在**）插入「重命名」项（7 项结构 `[新建终端, sep, 重命名, sep, close, closeOthers, closeAll]`）；claude 运行中（`TerminalRegistry.get(panel.id)?.agentSession != null`，菜单每次右键重新构建判断实时）→ `disabled` 置灰（dockview 原生支持）；菜单项视觉 = 自定义 `TabContextMenuItem`（UI-802：项 28px 圆角 5/hover SECONDARY_BG/危险项 ERROR_FG），容器样式经 `<style>` 注入（token 驱动）
+- **入口**：`createGetContextMenu` 对终端面板（`panel.view.contentComponent === "terminal"`——**`panel.component` 不存在**；`view.contentComponent` 为 dockview 公开类型成员 `IDockviewPanelModel.contentComponent`，VER-01 核实）插入「重命名」项（7 项结构 `[新建终端, sep, 重命名, sep, close, closeOthers, closeAll]`）；claude 运行中（`TerminalRegistry.get(panel.id)?.agentSession != null`，菜单每次右键重新构建判断实时）→ `disabled` 置灰（dockview 原生支持）；菜单项视觉 = 自定义 `TabContextMenuItem`（UI-802：项 28px 圆角 5/hover SECONDARY_BG/危险项 ERROR_FG），容器样式经 `<style>` 注入（token 驱动）
 - **存储单一真值源**：`params.customTitle`（随布局 JSON 持久化，照 editor filePath 先例）。`applyRename(api, panel, newTitle, onLayoutChange)` 导出纯函数 = `updateParameters({...params, customTitle})` + `setTitle` + **显式 `onLayoutChange(saveLayout(api))`**——`setTitle`/`updateParameters` 均不触发 `onDidLayoutChange`（dockviewPanel.js:84-95），须显式保存
 - **恢复链路**：Dockview `toJSON` 输出 title + params、`fromJSON` 恢复；`rebuildAndRecomputeTitles` 重算编辑器标题 + **终端标题（B12 扩展）**——**无 customTitle 的终端面板用 `titleManager.getTerminalTitle(pageId)` 重算**（持久化 title 可能是瞬态值如 claude 运行中退出保存的 "claude"，重开页签必须回 terminal-N），customTitle 保留不重算 → 自定义名跨重启存活。`TerminalPanel` 挂载 `originalTitleRef = params.customTitle ?? api.title ?? "terminal"`（customTitle 优先）并订阅 `onDidParametersChange`（customTitle 同步）+ `onDidTitleChange`（**B12：重算标题同步——customTitle 存在或 agentSession 非空（命令运行中）时不捕获**）——OSC 133 D / 真退出信号恢复标题时用自定义名或重算名
 - **约束**：`titleManager` 计数器不动（新建终端仍按 `terminal-N` 递增，F8 不占用编号）；编辑器等非终端面板菜单无「重命名」

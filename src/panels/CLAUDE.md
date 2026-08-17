@@ -268,7 +268,7 @@ Claude Code 在用户主动 Ctrl+C 中断时不发射任何 hook 事件（`Stop`
 
 | 文件 | 职责 |
 |------|------|
-| `index.ts` | 公共 API 出口：导出 TerminalPanel、EditorPanel、HtmlPanel、GitShowPanel、DiffPanel |
+| `index.ts` | 公共 API 出口：导出 TerminalPanel、EditorPanel、HtmlPanel、GitShowPanel、DiffPanel、HooksConfigPanel |
 | `terminal/index.ts` | TerminalPanel 及 terminalOptions 导出 |
 | `terminal/TerminalPanel.tsx` | 终端面板 React 组件：获取 Windows build 号 → useXterm → 加载遮罩；`originalTitleRef` 挂载时取 `params.customTitle ?? api.title ?? "terminal"`（F8 自定义标题优先）并订阅 `onDidParametersChange`（customTitle 同步）+ `onDidTitleChange`（B12：customTitle 存在或 agentSession 非空不捕获，其余捕获重算标题）——OSC 133 D 恢复标题用自定义名/重算名；**页签状态圆点（IC-03）**：`handleTabStateChange` 写 `updateParameters({ ...latestParamsRef.current, tabStatus })`（null 清状态）；**页签 logo 会话绑定（F9 行为修订）**：`logoRef` 退役，订阅 TerminalRegistry（register/sessionChange）→ agentSession 非 null 按 `cliId ?? CLAUDE_CLI_ID` 查 iconSrc 写 `tabLogo`、null 清 `tabLogo`；inactive 单清 tabStatus（restoreTitle=false 时跳过标题恢复，B13）；**visible 前缀匹配（B14）**：`activePageId` 与 `panelId` 前缀比对（旧恢复格式数字段兼容）；**`latestParamsRef` 参数合并单点（参数覆盖回归修复）**：tabStatus/tabLogo 分头经 `updateParameters` 写入互不可见——合并基准 = `latestParamsRef`（props 同步 + `onDidParametersChange` 合并），禁止用 props 快照覆盖（快照抹掉另一路径刚写入的键——mockcli E2E 冒烟 tabStatus 丢失根因；terminal.test.tsx 两键共存断言防复发） |
 | `terminal/useTerminalInstance.ts` | Terminal 实例 + WebGL/FitAddon 生命周期 + StrictMode 守卫 |

@@ -44,7 +44,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 3. **命令统一注册**于 `lib.rs` 的 `generate_handler!`；一律返回 `Result<_, AppError>`；阻塞 I/O 用 `spawn_blocking`。
 4. **DTO 双边对应**：`src/types/` ↔ Rust 模块 DTO 一一对应；Rust `snake_case` ↔ JS `camelCase`，改一边必须改另一边。
 5. **面板封闭**：Dockview 面板只能是 `panels/` 下注册过的类型；新增类型 = 加目录 + 在 `panelRegistry.ts` 注册。
-6. **配色单点**：颜色定义于 `theme/schemes/<scheme>.ts`（配色方案值文件），组件经 `theme/colors.ts` facade token 引用，禁止硬编码颜色（既定例外见 ../src/panels/CLAUDE.md）。
+6. **配色单点**：颜色定义于 `theme/schemes/<scheme>.ts`（配色方案值文件），组件经 `theme/colors.ts` facade token 引用，禁止硬编码颜色（既定例外登记：启动链 fail-safe 三处与终端 adapter → ../src/theme/CLAUDE.md；FileIcon 六色盘 → ../src/features/explorer/CLAUDE.md；项目行文件夹蓝 → ../src/features/navTree/CLAUDE.md）。
 7. **布局单点**：操作页面布局只经 `workspace/layoutSerde.ts` 用 Dockview `toJSON/fromJSON` 存取。
 8. **会话元数据单点**：PTY 进程映射仅在 `panels/terminal/TerminalRegistry`（模块级 Map）管理，前端会话元数据已合并。面板只订阅，不自存。
 9. **平台分支收敛**：`#[cfg(windows)]` 只允许出现在 pty 模块等明确处，业务逻辑不撒 cfg（详见 ../src-tauri/src/pty/CLAUDE.md）。
@@ -127,7 +127,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | src/features/notifications | toast 通知（Tauri 原生 sendNotification + 任务栏闪烁） | src/features/notifications/index.ts | ../src/features/notifications/CLAUDE.md |
 | src/features/hooksConfig | hooks 配置面板 schema 内嵌单点（SchemaStore 官方 schema + hooks 子 schema + Draft07 校验） | src/features/hooksConfig/schema/index.ts | ../src/features/hooksConfig/CLAUDE.md |
 | src/features/cliProfiles | CLI profile 注册表（CliProfileRegistry 模块级单例 + claude profile 身份域 + hooks/history 能力策略，MC-1） | src/features/cliProfiles/index.ts | ../src/features/cliProfiles/CLAUDE.md |
-| src/features/agentHistory | 历史会话数据层与行组件（useAgentHistory + 复合键 cliId\|sessionId + 四步恢复编排 + HistorySessionList/Row 供导航树历史区；AgentHistorySections 已删，NAV-08） | src/features/agentHistory/index.ts | ../src/features/agentHistory/CLAUDE.md |
+| src/features/agentHistory | 历史会话数据层（useAgentHistory + 复合键 cliId\|sessionId + 四步恢复编排 + 菜单策略/模型纯函数；历史行组件 = 导航树 NavHistoryRow，原 HistorySessionList/Row 已删，FE-25；AgentHistorySections 已删，NAV-08） | src/features/agentHistory/index.ts | ../src/features/agentHistory/CLAUDE.md |
 | src/__tests__ | L2 前端测试集中目录 + 共享测试工厂 | — | ../src/__tests__/CLAUDE.md |
 | src/panelRegistry.ts | 面板注册表共享配置层（workspace/explorer/测试多方引用，硬约束 #5） | src/panelRegistry.ts | — |
 | test/ | L3 终端 headless 测试（xterm/headless + xterm/addon-serialize） | vitest.l3.config.ts | — |

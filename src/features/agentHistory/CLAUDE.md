@@ -55,7 +55,7 @@ Agent 历史会话查询与恢复——历史区 UI 与数据层（CLI 无关聚
 
 ### 操作矩阵（FE-07，规格 4.4，`historyContextMenu.ts`；重命名已移除）
 
-`getHistoryContextMenuItems(session, opts)` 策略函数（照 `commitContextMenu.ts` 策略模式），**差异**：本策略不直接做 IPC——三项操作的 action 由调用方（`NavTree` 历史行右键菜单，原 `HistorySessionList`）经 opts 回调注入（onCopy/onFork/onDelete），策略层只负责禁用态判定与菜单项构造：
+`getHistoryContextMenuItems(session, opts)` 策略函数（照 `commitContextMenu.ts` 策略模式），**差异**：本策略不直接做 IPC——三项操作的 action 由调用方（`NavTree` 历史行右键菜单，原 HistorySessionList（已删））经 opts 回调注入（onCopy/onFork/onDelete），策略层只负责禁用态判定与菜单项构造：
 
 | 操作 | 普通行 | 孤儿行 ✗ | 运行中行 | 无 cwd 行 |
 |------|--------|---------|----------|----------|
@@ -65,11 +65,11 @@ Agent 历史会话查询与恢复——历史区 UI 与数据层（CLI 无关聚
 
 ### 双击分派（问题 5 修复）与动作弹窗
 
-历史行双击三分支（`NavTree` 内实现，照原 HistorySessionList 语义）：普通行 → 恢复四步；孤儿/无 cwd → 无操作；**运行中（status 非 null）→ `SessionActionDialog` 弹窗**（「切换到该会话操作页面」/「取消」；**分支恢复仅保留在右键菜单**——Tauri 原生 dialog 无法三按钮，自绘模态照 InputDialog 模式，`data-e2e="agent-history-action-dialog"`）。「切换到该会话操作页面」= 反查 `TerminalRegistry.getAll()`（`findPanelForSession`：**复合键 `cliId|sessionId` 精确匹配**（MC-313），键构造两侧均经 `keyOf`（cliId 缺省回退 `CLAUDE_CLI_ID` + 转义，ZQ-1）、sessionId 精确匹配、回退 usageSourcePath basename）→ **`findPageIdForPanelId`（B14：先按 useProjects 已知页面集合前缀匹配——旧格式可靠，兜底 `parseTerminalPageId`；均未命中 toast 不导航）** → `switchToPageAndFocus(pageId, panelId)`（内部：activePageId 相同则直接聚焦）；反查不到 → `sendToastNotification` 提示（会话已结束）。
+历史行双击三分支（`NavTree` 内实现，原 HistorySessionList（已删）语义）：普通行 → 恢复四步；孤儿/无 cwd → 无操作；**运行中（status 非 null）→ `SessionActionDialog` 弹窗**（「切换到该会话操作页面」/「取消」；**分支恢复仅保留在右键菜单**——Tauri 原生 dialog 无法三按钮，自绘模态照 InputDialog 模式，`data-e2e="agent-history-action-dialog"`）。「切换到该会话操作页面」= 反查 `TerminalRegistry.getAll()`（`findPanelForSession`：**复合键 `cliId|sessionId` 精确匹配**（MC-313），键构造两侧均经 `keyOf`（cliId 缺省回退 `CLAUDE_CLI_ID` + 转义，ZQ-1）、sessionId 精确匹配、回退 usageSourcePath basename）→ **`findPageIdForPanelId`（B14：先按 useProjects 已知页面集合前缀匹配——旧格式可靠，兜底 `parseTerminalPageId`；均未命中 toast 不导航）** → `switchToPageAndFocus(pageId, panelId)`（内部：activePageId 相同则直接聚焦）；反查不到 → `sendToastNotification` 提示（会话已结束）。
 
 ### 已知限制（MC-318，规格确认不修——决策 6）
 
-1. **组键漂移**：原 `HistorySessionList` 的 `expandedGroups` 白名单组键漂移问题随其退役不涉及导航树——导航树历史归组键 = 项目 projectId（稳定），无漂移；`groupByCwd` 的未知目录组键漂移仅影响无生产消费方的列表组件
+1. **组键漂移**：原 HistorySessionList（已删）的 `expandedGroups` 白名单组键漂移问题随其删除不涉及导航树——导航树历史归组键 = 项目 projectId（稳定），无漂移；`groupByCwd` 的未知目录组键漂移仅影响无生产消费方的分组模型（当前仅测试消费）
 2. **历史区相对时间无 ticker**：`formatRelativeTime` 在渲染时计算，历史区无定时重渲染机制（活跃区有 60s ticker，见 agentStatus 模块）——挂起的历史区相对时间文本不自动刷新，直至其他状态变更触发重渲染（视为可接受，不修）
 
 ## 文件
