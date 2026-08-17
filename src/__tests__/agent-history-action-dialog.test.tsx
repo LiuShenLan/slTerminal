@@ -46,6 +46,16 @@ describe("SessionActionDialog 渲染", () => {
     expect(getByText("取消")).toBeTruthy();
   });
 
+  it("视觉规格（UI-306 按钮档）：动作按钮与取消按钮圆角 6px（FE-14）", () => {
+    const { getByText } = renderDialog();
+
+    // 动作按钮（主按钮规格）与取消按钮（次按钮规格）圆角 4 → 6
+    const actionBtn = getByText("切换到该会话操作页面") as HTMLElement;
+    const cancelBtn = getByText("取消") as HTMLElement;
+    expect(actionBtn.style.borderRadius).toBe("6px");
+    expect(cancelBtn.style.borderRadius).toBe("6px");
+  });
+
   it("message 省略 → 不渲染消息区", () => {
     const { queryByText } = renderDialog({ message: undefined });
     expect(queryByText("该会话已在运行中。")).toBeNull();

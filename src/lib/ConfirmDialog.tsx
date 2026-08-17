@@ -5,12 +5,15 @@
 //   - 视觉规格：遮罩 SHADOW_MENU；卡片 SIDEBAR_BG 底 + CONTEXT_MENU_BORDER 1px 描边
 //     + 圆角 8 + contextMenuShadow 阴影；主按钮 FOCUS_BORDER 底 + ON_ACCENT_FG 字
 //     （danger → ERROR_FG 底 + SIDEBAR_FG 字）；次按钮 SECONDARY_BG 底 + SIDEBAR_FG 字
+//     （UI-803 仅底色/字色、无描边）；两钮圆角 6（UI-306 按钮档）
+//   - 焦点管理（FE-28）：弹窗挂起后焦点落确认按钮；Tab/Shift+Tab 在确认/取消两钮间循环
+//     （焦点陷阱，不逃出弹窗）；Enter 经按钮原生提交确认（焦点恒在钮上）
 //
 // 用法：调用方 import { confirmDialog } from "../lib" 即可（无需传组件）；
 // 挂载点：ConfirmDialogHost 由 App.tsx 根部置入（本文件与调用点解耦）。
 // 硬约束 #1：本组件为纯 UI，不涉及 OS/文件/进程调用。
 
-import { useEffect, useReducer } from "react";
+import { useEffect, useReducer, useRef } from "react";
 import {
   SHADOW_MENU,
   SIDEBAR_BG,
@@ -91,6 +94,8 @@ export function _resetConfirmDialog(): void {
 /** 挂载点组件——置入 App.tsx 根部；无挂起弹窗时渲染 null */
 export function ConfirmDialogHost() {
   const [, setVersion] = useReducer((v: number) => v + 1, 0);
+  const okRef = useRef<HTMLButtonElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
 
   // 订阅模块级 pending 变更（imperative API → React 渲染桥）
   useEffect(() => {
@@ -108,6 +113,11 @@ export function ConfirmDialogHost() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
+  }, [pending]);
+
+  // 弹窗出现后焦点落到确认按钮（焦点陷阱入口；Enter 经按钮原生提交确认）
+  useEffect(() => {
+    if (pending) okRef.current?.focus();
   }, [pending]);
 
   if (!pending) return null;
@@ -133,6 +143,16 @@ export function ConfirmDialogHost() {
     >
       <div
         data-e2e="confirm-dialog"
+        onKeyDown={(e) => {
+          // 焦点陷阱：Tab/Shift+Tab 在确认/取消两钮间循环，不逃出弹窗
+          if (e.key !== "Tab") return;
+          e.preventDefault();
+          const next =
+            document.activeElement === okRef.current
+              ? cancelRef.current
+              : okRef.current;
+          next?.focus();
+        }}
         style={{
           background: SIDEBAR_BG, // 卡片 #1a1a1e 底
           border: `1px solid ${CONTEXT_MENU_BORDER}`, // rgba(255,255,255,0.09) 描边
@@ -155,12 +175,13 @@ export function ConfirmDialogHost() {
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
           <button
             data-e2e="confirm-cancel"
+            ref={cancelRef}
             onClick={dismiss}
             style={{
               background: SECONDARY_BG, // 次按钮 #222227 底
               color: SIDEBAR_FG, // #ece9e4 字
-              border: `1px solid ${CONTEXT_MENU_BORDER}`,
-              borderRadius: 4,
+              // UI-803 只规定底色/字色——无描边
+              borderRadius: 6,
               padding: "5px 14px",
               fontSize: 13,
               cursor: "pointer",
@@ -170,13 +191,14 @@ export function ConfirmDialogHost() {
           </button>
           <button
             data-e2e="confirm-ok"
+            ref={okRef}
             onClick={confirm}
             style={{
               // danger → ERROR_FG 底 + SIDEBAR_FG 字；否则 FOCUS_BORDER 底 + ON_ACCENT_FG 字
               background: isDanger ? ERROR_FG : FOCUS_BORDER,
               color: isDanger ? SIDEBAR_FG : ON_ACCENT_FG,
               border: "none",
-              borderRadius: 4,
+              borderRadius: 6,
               padding: "5px 14px",
               fontSize: 13,
               fontWeight: 500,

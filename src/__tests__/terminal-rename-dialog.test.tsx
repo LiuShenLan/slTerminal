@@ -47,6 +47,20 @@ describe("TerminalRenameDialog 渲染", () => {
     expect(getByText("取消")).toBeTruthy();
   });
 
+  it("视觉规格（UI-306）：输入框圆角 8、确定/取消按钮圆角 6", () => {
+    const { input, getByText } = renderDialog();
+
+    // 输入框（UI-306 输入框档圆角 8）
+    expect(input.style.borderRadius).toBe("8px");
+    // 确定/取消按钮（UI-306 按钮档圆角 6）
+    expect((getByText("确定") as HTMLButtonElement).style.borderRadius).toBe(
+      "6px",
+    );
+    expect((getByText("取消") as HTMLButtonElement).style.borderRadius).toBe(
+      "6px",
+    );
+  });
+
   it("输入框预填 initialTitle", () => {
     const { input } = renderDialog("我的终端");
     expect(input.value).toBe("我的终端");

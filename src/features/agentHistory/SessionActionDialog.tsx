@@ -119,7 +119,7 @@ export const SessionActionDialog: React.FC<SessionActionDialogProps> = ({
                 background: FOCUS_BORDER,
                 color: ON_ACCENT_FG,
                 border: "none",
-                borderRadius: 4,
+                borderRadius: 6,
                 cursor: "pointer",
                 fontSize: "13px",
                 fontWeight: 500,
@@ -141,7 +141,7 @@ export const SessionActionDialog: React.FC<SessionActionDialogProps> = ({
               background: SECONDARY_BG,
               color: SIDEBAR_FG,
               border: `1px solid ${CONTEXT_MENU_BORDER}`,
-              borderRadius: 4,
+              borderRadius: 6,
               cursor: "pointer",
               fontSize: "13px",
             }}

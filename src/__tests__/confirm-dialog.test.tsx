@@ -1,7 +1,8 @@
 // confirm-dialog.test.tsx — ConfirmDialog L2 测试（OV-01，UI-801/803）
 //
-// 覆盖：渲染规格（遮罩/卡片/按钮色值）、按钮回调（确认 true / 取消 false）、
-// ESC / 遮罩点击 = false、danger 变体、默认文案与可省略 title、kind 契约字段接受。
+// 覆盖：渲染规格（遮罩/卡片/按钮色值/圆角）、按钮回调（确认 true / 取消 false）、
+// ESC / 遮罩点击 = false、danger 变体、默认文案与可省略 title、kind 契约字段接受、
+// 焦点管理（FE-28：挂载聚焦 / Tab 循环 / Enter 原生提交）。
 // 纯前端组件，零 IPC mock。
 
 import { describe, it, expect, afterEach } from "vitest";
@@ -97,11 +98,15 @@ describe("ConfirmDialog 渲染规格", () => {
     expect(card.style.borderRadius).toBe("8px");
     expect(card.style.boxShadow).toBe(SIDEBAR_COLORS.contextMenuShadow);
 
-    // 主按钮 #6e9ff2 底 + #0c1220 字；次按钮 #222227 底 + #ece9e4 字
+    // 主按钮 #6e9ff2 底 + #0c1220 字、圆角 6（UI-306 按钮档）
     expect(ok.style.background).toBe(hexToRgb(FOCUS_BORDER));
     expect(ok.style.color).toBe(hexToRgb(ON_ACCENT_FG));
+    expect(ok.style.borderRadius).toBe("6px");
+    // 次按钮 #222227 底 + #ece9e4 字、圆角 6、无描边（UI-803 仅底色/字色）
     expect(cancel.style.background).toBe(hexToRgb(SECONDARY_BG));
     expect(cancel.style.color).toBe(hexToRgb(SIDEBAR_FG));
+    expect(cancel.style.borderRadius).toBe("6px");
+    expect(cancel.style.border).not.toMatch(/1px/);
   });
 
   it("danger → 主按钮 ERROR_FG 底 + SIDEBAR_FG 字", async () => {
@@ -197,5 +202,39 @@ describe("ConfirmDialog 交互", () => {
       fireEvent.click(second.cancel); // 按钮走 onClick
     });
     expect(await second.promise).toBe(false);
+  });
+
+  it("弹窗挂起后焦点落在确认按钮", async () => {
+    const { ok } = await openDialog({ message: "聚焦" });
+    expect(document.activeElement).toBe(ok);
+  });
+
+  it("Enter 经按钮原生提交确认——组件不拦截、焦点不逃逸", async () => {
+    const { ok, promise, container } = await openDialog({ message: "Enter 确认" });
+    expect(document.activeElement).toBe(ok);
+    // 焦点陷阱保证焦点恒在钮上；jsdom 不模拟按钮原生 click，按下 Enter 后弹窗保持、
+    // 焦点不逃逸，点击由浏览器原生完成（此处以 click 模拟原生提交语义）
+    fireEvent.keyDown(ok, { key: "Enter" });
+    expect(document.activeElement).toBe(ok);
+    expect(container.querySelector('[data-e2e="confirm-dialog"]')).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(ok);
+    });
+    expect(await promise).toBe(true);
+  });
+
+  it("Tab/Shift+Tab 在取消/确认两钮间循环，焦点不逃出弹窗", async () => {
+    const { ok, cancel } = await openDialog({ message: "Tab 循环" });
+    expect(document.activeElement).toBe(ok);
+    // Tab 前进：确认 → 取消 → 确认
+    fireEvent.keyDown(ok, { key: "Tab" });
+    expect(document.activeElement).toBe(cancel);
+    fireEvent.keyDown(cancel, { key: "Tab" });
+    expect(document.activeElement).toBe(ok);
+    // Shift+Tab 回退：确认 → 取消 → 确认
+    fireEvent.keyDown(ok, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(cancel);
+    fireEvent.keyDown(cancel, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(ok);
   });
 });

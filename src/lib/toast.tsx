@@ -93,6 +93,8 @@ export function ToastHost() {
   return (
     <div
       data-e2e="toast-container"
+      role="status"
+      aria-live="polite"
       style={{
         position: "fixed",
         top: 16,

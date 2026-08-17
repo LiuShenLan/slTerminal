@@ -64,6 +64,9 @@ describe("toast 渲染规格", () => {
     expect(container!.style.position).toBe("fixed");
     expect(container!.style.top).toBe("16px");
     expect(container!.style.right).toBe("16px");
+    // 无障碍：容器声明 live region，屏幕阅读器播报新通知（FE-29）
+    expect(container!.getAttribute("role")).toBe("status");
+    expect(container!.getAttribute("aria-live")).toBe("polite");
   });
 
   it("三型语义色规格：12% 底 + 1px 语义描边 + fg-1 文字 + 圆角 8", () => {
