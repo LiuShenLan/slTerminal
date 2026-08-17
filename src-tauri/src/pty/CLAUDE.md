@@ -89,7 +89,14 @@ JobHandle 在 `#[cfg(windows)]` 下为 HANDLE RAII 包装；`#[cfg(not(windows))
 
 **动机**：`portable-pty` 0.9.0 内部硬编码 flags=0x7（INHERIT_CURSOR | RESIZE_QUIRK | WIN32_INPUT_MODE），不暴露 `CreatePseudoConsole` 的 `dwFlags` 参数。最初为按 OS build 动态启用 `PASSTHROUGH_MODE`（0x8，Win11 22H2+ 输出吞吐优化）而绕过；后 PASSTHROUGH_MODE 已移除（见下），自定义路径保留用于 flags 完全控制。
 
-> **PASSTHROUGH_MODE (0x8) 已移除，勿重新启用**：0x8 下 claude 等全屏 TUI（v2.1.89+ 默认 alt buffer + mouse tracking）的鼠标滚轮完全失效。2026-07 在 Win11 build 26200 真实 app 双向实测确认：诊断埋点显示 xterm 的 SGR wheel report（`\x1b[<64/65;x;yM`）完整写入 ConPTY stdin 但 claude 无反应；去掉 0x8 后滚轮恢复，claude 输出流畅度无肉眼可见退化。疑似机制为 passthrough 下 conhost 不解析子进程输出、不跟踪 DECSET mouse mode（microsoft/terminal#376；PR #9970）。**注意：无法用最小实验/自动化测试守卫此回归**——node 直接子进程的最小复现（DECSET 1002/1003/1006 + alt buffer + 60fps 帧刷写负载）在 0xF 下 stdin 的 SGR report 仍原样透传，阻断条件仅真实 claude 场景（pwsh→claude 进程树 + kitty 协议）复现，行为级集成测试会产生假阴性（0x8 下也绿）故未落地。`compute_conpty_flags` 的 4 条测试锁死「任何 build 都返回 0x7」（配置层守卫）；**改 flags 必须实测真实 claude 滚轮**。
+> **PASSTHROUGH_MODE (0x8) 已移除，勿重新启用**：0x8 下 claude 等全屏 TUI（v2.1.89+ 默认 alt buffer + mouse tracking）的鼠标滚轮完全失效。2026-07 在 Win11 build 26200 真实 app 双向实测确认：诊断埋点显示 xterm 的 SGR wheel report（`\x1b[<64/65;x;yM`）完整写入 ConPTY stdin 但 claude 无反应；去掉 0x8 后滚轮恢复，claude 输出流畅度无肉眼可见退化。疑似机制为 passthrough 下 conhost 不解析子进程输出、不跟踪 DECSET mouse mode（microsoft/terminal#376；PR #9970）。**注意：无法用最小实验/自动化测试守卫此回归**——node 直接子进程的最小复现（DECSET 1002/1003/1006 + alt buffer + 60fps 帧刷写负载）在 0xF 下 stdin 的 SGR report 仍原样透传，阻断条件仅真实 claude 场景（pwsh→claude 进程树 + kitty 协议）复现，行为级集成测试会产生假阴性（0x8 下也绿）故未落地。**改 flags 必须实测真实 claude 滚轮**。
+
+### Win10 分叉 flags 0x3（WIN32_INPUT_MODE 按 build 禁用）
+
+`compute_conpty_flags` 按 OS build 分叉（阈值 21376，与前端 xterm 钳制 ADR-0004 同源）：Win11（≥21376）→ 0x7；Win10（<21376）→ 0x3（去 `WIN32_INPUT_MODE`）。动机：老版 Win10 内置 conhost 的 0x4 实现不转发鼠标 VT 序列——claude 全屏 TUI 滚轮失效（键盘正常；WT 在 Win10 滚轮正常的对照实验表明传统 VT 输入路径无此问题）。0x3 回归传统 VT 输入路径。
+
+- **实验状态**：2026-08-17 实施，Win10 实机验证中（滚轮 + 键盘/IME/kitty 全项）；验证通过前勿用于 release 打包。若键盘/IME 回归 → 回退恒 0x7。
+- **测试守卫**：`compute_conpty_flags` 6 条测试锁死分叉表（19041→0x3 / 21375→0x3 / 21376→0x7 / 22000/22621/26100→0x7）且任何 build 不含 PASSTHROUGH 0x8。
 
 **自定义组件**：
 | 类型 | 职责 |

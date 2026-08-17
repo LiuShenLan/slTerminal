@@ -54,7 +54,16 @@ pub mod conpty_custom {
     const PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE: usize = 0x00020016;
     const CREATE_UNICODE_ENVIRONMENT: u32 = 0x00000400;
 
-    /// 计算 ConPTY flags：固定 0x7（INHERIT_CURSOR | RESIZE_QUIRK | WIN32_INPUT_MODE）。
+    /// 计算 ConPTY flags：按 OS build 分叉。
+    ///
+    /// - Win11（build >= 21376）：0x7（INHERIT_CURSOR | RESIZE_QUIRK | WIN32_INPUT_MODE）
+    /// - Win10（build < 21376）：0x3（去 WIN32_INPUT_MODE）——老版 Win10 内置 conhost 的
+    ///   0x4 实现不转发鼠标 VT 序列（claude 全屏 TUI 滚轮失效；键盘正常）。0x3 回归
+    ///   传统 VT 输入路径（WT 在 Win10 滚轮正常即此路径）。**验证本函数改动必须实测
+    ///   真实 claude 滚轮 + 键盘/IME/kitty**（自动化无法守卫，先例同 PASSTHROUGH_MODE）。
+    ///
+    /// 阈值 21376 与前端 xterm 钳制（ADR-0004，XTERM_CONPTY_MIN_BUILD）同源——
+    /// 同为 xterm.js 的 ConPTY 兼容分界，Win10/Win11 分叉共用。
     ///
     /// **勿启用 PASSTHROUGH_MODE (0x8)**：0x8 下 claude 等全屏 TUI（v2.1.89+ 默认
     /// alt buffer + mouse tracking）的鼠标滚轮完全失效。2026-07 在 Win11 build 26200
@@ -65,10 +74,14 @@ pub mod conpty_custom {
     /// 子进程（DECSET 1002/1003/1006 + alt buffer + 60fps 负载）在 0xF 下 stdin 的 SGR
     /// report 仍原样透传，阻断条件仅真实 claude 场景（pwsh→claude 进程树 + kitty 协议）
     /// 复现。因此**验证本函数改动必须实测真实 claude 滚轮**，勿以最小实验/单测绿为依据。
-    /// 保留 build_number 参数：flags 与 OS build 的关联是 ConPTY 领域接口，若未来 ConPTY
-    /// 修复 passthrough 的 input 转发可按 build 恢复。
-    pub fn compute_conpty_flags(_build_number: u32) -> u32 {
-        PSEUDOCONSOLE_INHERIT_CURSOR | FLAG_RESIZE_QUIRK | FLAG_WIN32_INPUT_MODE
+    pub fn compute_conpty_flags(build_number: u32) -> u32 {
+        const CONPTY_WIN11_MIN_BUILD: u32 = 21376;
+        let base = PSEUDOCONSOLE_INHERIT_CURSOR | FLAG_RESIZE_QUIRK;
+        if build_number < CONPTY_WIN11_MIN_BUILD {
+            base // Win10 老 conhost：去 WIN32_INPUT_MODE，回归传统 VT 输入路径
+        } else {
+            base | FLAG_WIN32_INPUT_MODE
+        }
     }
 
     /// 将 UTF-8 字符串编码为以 null 结尾的 UTF-16LE 向量
@@ -495,11 +508,22 @@ pub mod conpty_custom {
     mod tests {
         use super::*;
 
-        // T1: compute_conpty_flags（4 条）——锁死「任何 build 都不启用 PASSTHROUGH_MODE」
-        // （回归守卫：passthrough 会吞 terminal→child 的 SGR mouse report，见函数注释）
+        // T1: compute_conpty_flags（6 条）——按 build 分叉：Win10 去 0x4（老 conhost
+        // 鼠标 VT 序列不转发）、Win11 保持 0x7；回归守卫：任何 build 都不启用
+        // PASSTHROUGH_MODE 0x8（passthrough 会吞 terminal→child 的 SGR mouse report）
         #[test]
-        fn flags_win10_returns_0x7() {
-            assert_eq!(compute_conpty_flags(19041), 0x7);
+        fn flags_win10_19041_returns_0x3() {
+            assert_eq!(compute_conpty_flags(19041), 0x3);
+        }
+
+        #[test]
+        fn flags_below_threshold_21375_returns_0x3() {
+            assert_eq!(compute_conpty_flags(21375), 0x3);
+        }
+
+        #[test]
+        fn flags_threshold_21376_returns_0x7() {
+            assert_eq!(compute_conpty_flags(21376), 0x7);
         }
 
         #[test]
