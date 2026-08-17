@@ -6,7 +6,7 @@
 // 决策 4 入口唯一化，配置钮移至活动栏底部）。
 // 危险项判定由调用方构造 items 时标记（danger: true）；disabled 项灰显不可点。
 
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   CONTEXT_MENU_BORDER,
   ERROR_FG,
@@ -50,6 +50,13 @@ export const NavContextMenu: React.FC<{
   onClose(): void;
 }> = ({ state, onClose }) => {
   const menuRef = useRef<HTMLDivElement>(null);
+  // hover 高亮 React state 驱动（FE-06：不再直改 DOM style.background）
+  const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
+
+  // 菜单重开时清空 hover 索引（防上次关闭残留指向错误项）
+  useEffect(() => {
+    if (state.visible) setHoveredIdx(null);
+  }, [state.visible]);
 
   // 点击菜单外任意处关闭（照 SidebarTree/HistorySessionList ContextMenu 模式）
   useEffect(() => {
@@ -97,13 +104,10 @@ export const NavContextMenu: React.FC<{
               ...itemStyle,
               cursor: "pointer",
               color: item.danger ? ERROR_FG : SIDEBAR_FG,
+              background: hoveredIdx === i ? SECONDARY_BG : "transparent",
             }}
-            onMouseEnter={(e) => {
-              (e.target as HTMLDivElement).style.background = SECONDARY_BG;
-            }}
-            onMouseLeave={(e) => {
-              (e.target as HTMLDivElement).style.background = "transparent";
-            }}
+            onMouseEnter={() => setHoveredIdx(i)}
+            onMouseLeave={() => setHoveredIdx(null)}
           >
             {item.label}
           </div>

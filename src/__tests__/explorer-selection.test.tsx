@@ -164,6 +164,39 @@ describe("FileTree 选中模型", () => {
     expect(row.style.background).toBe("transparent");
   });
 
+  it("hover 态下变为选中 → 背景切换为选中色（React state 驱动，选中态优先语义不变）", () => {
+    const nodes = [makeFileNode("/a/test.ts", "test.ts")];
+    const props = {
+      nodes,
+      depth: 0,
+      gitStatusMap: new Map<string, string>(),
+      onToggleExpand: vi.fn(),
+      onOpenFile: vi.fn(),
+      onOpenInTerminal: vi.fn(),
+      onRename: vi.fn(),
+      onDelete: vi.fn(),
+      onNewFile: vi.fn(),
+      onNewFolder: vi.fn(),
+      onSelect: vi.fn(),
+      renamingPath: null,
+      renameValue: "",
+      onRenameStart: vi.fn(),
+      onRenameCancel: vi.fn(),
+    };
+    const { getByText, rerender } = render(
+      React.createElement(FileTree, { ...props, selectedPath: null }),
+    );
+    const row = getByText("test.ts").closest("div")!;
+    fireEvent.mouseEnter(row);
+    expect(row.style.background).toBe(HOVER_BG_RGB);
+    // 变为选中（selectedPath 变化）→ hover state 保留但选中色优先
+    rerender(React.createElement(FileTree, { ...props, selectedPath: "/a/test.ts" }));
+    expect(row.style.background).toBe("rgba(110, 159, 242, 0.13)");
+    // mouseLeave 不破坏选中态
+    fireEvent.mouseLeave(row);
+    expect(row.style.background).toBe("rgba(110, 159, 242, 0.13)");
+  });
+
   it("hover 色与 EXPLORER_COLORS.hover token 一致（配色单点）", () => {
     expect(EXPLORER_COLORS.hover).toBe("#222227");
   });

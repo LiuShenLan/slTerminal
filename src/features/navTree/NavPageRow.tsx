@@ -105,7 +105,7 @@ export const NavPageRow: React.FC<NavPageRowProps> = ({
             minWidth: 0,
             background: INPUT_BG,
             border: `1px solid ${FOCUS_BORDER}`,
-            borderRadius: 4,
+            borderRadius: 8,
             color: SIDEBAR_COLORS.fg,
             fontSize: 12.5,
             padding: "0 4px",

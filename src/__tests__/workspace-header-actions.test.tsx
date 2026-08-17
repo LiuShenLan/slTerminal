@@ -308,6 +308,45 @@ describe("createGetContextMenu", () => {
     const { renameItem } = callMenu("p1", "group-alpha");
     expect((renameItem as any).disabled).not.toBe(true);
   });
+
+  it("C11: 连续两次构建菜单后执行新建，terminal-N 编号不跳（FE-04）", () => {
+    // FE-04 回归：nextPanelId() 延迟到「新建终端」action 执行时才分配——
+    // 右键弹菜单（构建菜单）不点击不消耗编号，两次构建后再点仍从 terminal-p1-0 起
+    const nextId = makeNextPanelId("p1");
+    const getMenu = createGetContextMenu(nextId, "p1", vi.fn());
+    const addPanelSpy = vi.fn();
+    const mockGroup = makeFakeGroup("group-alpha");
+    const fakePanel = {
+      id: "terminal-p1-0",
+      title: "terminal-0",
+      params: {},
+      view: { contentComponent: "terminal" },
+      api: { setTitle: vi.fn(), updateParameters: vi.fn() },
+    };
+    const menuParams = {
+      panel: fakePanel as any,
+      group: mockGroup as any,
+      api: { addPanel: addPanelSpy } as any,
+      event: new MouseEvent("contextmenu"),
+    };
+    const findNewTerminal = (items: ReturnType<typeof getMenu>) =>
+      items.find((item) => typeof item === "object" && item.label === "新建终端") as any;
+
+    // 连续两次构建菜单（右键弹菜单但不点击）
+    const firstItems = getMenu(menuParams);
+    const secondItems = getMenu(menuParams);
+
+    // 执行第二次构建的菜单——编号不因两次构建而跳号
+    findNewTerminal(secondItems).action();
+    expect(addPanelSpy).toHaveBeenCalledTimes(1);
+    expect(addPanelSpy.mock.calls[0][0].id).toBe("terminal-p1-0");
+    expect(addPanelSpy.mock.calls[0][0].params.panelId).toBe("terminal-p1-0");
+
+    // 再执行第一次构建的菜单——编号连续递增不重复
+    findNewTerminal(firstItems).action();
+    expect(addPanelSpy).toHaveBeenCalledTimes(2);
+    expect(addPanelSpy.mock.calls[1][0].id).toBe("terminal-p1-1");
+  });
 });
 
 // ============================================================

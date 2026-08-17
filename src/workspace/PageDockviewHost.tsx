@@ -106,7 +106,8 @@ function createWatermark(
           }}
           style={{
             background: SECONDARY_BG, border: `1px solid ${SEPARATOR_BG}`, color: SIDEBAR_FG,
-            cursor: "pointer", fontSize: 13, padding: "4px 12px", borderRadius: 4,
+            // FE-16: 圆角 6（UI-306 按钮档）
+            cursor: "pointer", fontSize: 13, padding: "4px 12px", borderRadius: 6,
           }}
         >新建终端</button>
       </div>
@@ -259,7 +260,8 @@ function createGetContextMenu(
   onRenameRequest: (panel: ContextMenuPanel) => void,
 ): (params: GetTabContextMenuItemsParams) => (BuiltInContextMenuItem | ReactContextMenuItemConfig)[] {
   return (params: GetTabContextMenuItemsParams) => {
-    const newTerminalId = nextPanelId();
+    // FE-04: nextPanelId() 移入「新建终端」action 闭包——菜单构建期不消耗编号，
+    // 右键弹菜单不点击即不消耗（terminal-N 不跳号）
     // 仅终端面板显示「重命名」：判据为 view.contentComponent（panel.component 不存在）
     const isTerminal = params.panel.view.contentComponent === PANEL_TERMINAL;
     // claude 运行中（agentSession 存在即运行中，二态模型）→ 禁用重命名；
@@ -267,10 +269,14 @@ function createGetContextMenu(
     const claudeRunning = TerminalRegistry.get(params.panel.id)?.agentSession != null;
     const items: (BuiltInContextMenuItem | ReactContextMenuItemConfig)[] = [
       menuItem("新建终端", {
-        action: () => { params.api.addPanel(
-          { id: newTerminalId, component: PANEL_TERMINAL, title: titleManager.getTerminalTitle(pageId),
-            params: { panelId: newTerminalId }, renderer: "always",
-            position: { referenceGroup: params.group } }); },
+        action: () => {
+          // FE-04: 点击时才分配编号（延迟到 action 执行，而非菜单构建时）
+          const newTerminalId = nextPanelId();
+          params.api.addPanel(
+            { id: newTerminalId, component: PANEL_TERMINAL, title: titleManager.getTerminalTitle(pageId),
+              params: { panelId: newTerminalId }, renderer: "always",
+              position: { referenceGroup: params.group } });
+        },
       }),
       "separator",
     ];

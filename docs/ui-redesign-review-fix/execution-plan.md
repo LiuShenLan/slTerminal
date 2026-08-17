@@ -42,7 +42,7 @@
 | Stage | 状态 | commit | 备注 |
 |---|---|---|---|
 | 01 | ✅ 已完成 | 3bbc8b2 | fix-loop 1 轮（diff-panel 测试隔离缺陷 mockRejectedValue→Once） |
-| 02 | 未开始 | — | |
+| 02 | ✅ 已完成 | ee39acd | fix-loop 1 轮（theme/index.ts 注释计数 36→35） |
 | 03 | 未开始 | — | |
 | 04 | 未开始 | — | |
 | 05 | 未开始 | — | |

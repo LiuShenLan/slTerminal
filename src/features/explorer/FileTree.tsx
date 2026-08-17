@@ -172,6 +172,8 @@ const TreeNodeRow: React.FC<{
   onSelect: (path: string) => void;
 }> = ({ node, depth, gitStatusMap, onToggleExpand, onOpenFile, onContextMenu, isSelected, onSelect }) => {
   const { entry, expanded, loading } = node;
+  // hover 态用 React state 驱动（照 NavProjectRow/NavPageRow 既有模式，不直改 DOM）
+  const [hovered, setHovered] = useState(false);
   // 渲染时实时查表，避免节点创建时写入 → 闭包陈旧/时序断裂问题
   const gitStatus = gitStatusMap.get(entry.path);
   const indent = depth * INDENT;
@@ -201,19 +203,15 @@ const TreeNodeRow: React.FC<{
         color: EXPLORER_COLORS.fg,
         height: 24,
         whiteSpace: "nowrap",
-        // 选中态优先于 hover（style 内联优先级高于 onMouseEnter/Leave 动态设置）
-        background: isSelected ? EXPLORER_SELECTION_BG : "transparent",
+        // 选中态优先于 hover（渲染判定 isSelected 先于 hovered）
+        background: isSelected
+          ? EXPLORER_SELECTION_BG
+          : hovered
+            ? EXPLORER_COLORS.hover
+            : "transparent",
       }}
-      onMouseEnter={(e) => {
-        if (!isSelected) {
-          (e.target as HTMLDivElement).style.background = EXPLORER_COLORS.hover;
-        }
-      }}
-      onMouseLeave={(e) => {
-        if (!isSelected) {
-          (e.target as HTMLDivElement).style.background = "transparent";
-        }
-      }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
     >
       {/* 展开/折叠箭头（chevron 12px，色经 EXPLORER_COLORS arrow 槽位 token——IC-05） */}
       {entry.isDir ? (
