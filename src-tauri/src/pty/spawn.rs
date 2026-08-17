@@ -28,6 +28,7 @@ use uuid::Uuid;
 
 #[cfg(windows)]
 pub mod conpty_custom {
+    use crate::pty::conpty_api::{resolve_conpty_api, CONPTY_WIN11_MIN_BUILD};
     use anyhow::{bail, ensure, Error};
     use filedescriptor::{FileDescriptor, Pipe};
     use portable_pty::{Child, ChildKiller, MasterPty, PtySize};
@@ -37,10 +38,7 @@ pub mod conpty_custom {
     use std::sync::{Arc, Mutex};
     use windows::core::{PCWSTR, PWSTR};
     use windows::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
-    use windows::Win32::System::Console::{
-        ClosePseudoConsole, CreatePseudoConsole, ResizePseudoConsole, COORD, HPCON,
-        PSEUDOCONSOLE_INHERIT_CURSOR,
-    };
+    use windows::Win32::System::Console::{COORD, HPCON, PSEUDOCONSOLE_INHERIT_CURSOR};
     use windows::Win32::System::Threading::{
         CreateProcessW, DeleteProcThreadAttributeList, InitializeProcThreadAttributeList,
         UpdateProcThreadAttribute, EXTENDED_STARTUPINFO_PRESENT, LPPROC_THREAD_ATTRIBUTE_LIST,
@@ -54,13 +52,14 @@ pub mod conpty_custom {
     const PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE: usize = 0x00020016;
     const CREATE_UNICODE_ENVIRONMENT: u32 = 0x00000400;
 
-    /// 计算 ConPTY flags：按 OS build 分叉。
+    /// 计算 ConPTY flags（三态）：
     ///
-    /// - Win11（build >= 21376）：0x7（INHERIT_CURSOR | RESIZE_QUIRK | WIN32_INPUT_MODE）
-    /// - Win10（build < 21376）：0x3（去 WIN32_INPUT_MODE）——老版 Win10 内置 conhost 的
-    ///   0x4 实现不转发鼠标 VT 序列（claude 全屏 TUI 滚轮失效；键盘正常）。0x3 回归
-    ///   传统 VT 输入路径（WT 在 Win10 滚轮正常即此路径）。**验证本函数改动必须实测
-    ///   真实 claude 滚轮 + 键盘/IME/kitty**（自动化无法守卫，先例同 PASSTHROUGH_MODE）。
+    /// - **捆绑新 conhost**（仅 Win10 尝试，见 conpty_api ADR-0005）：恒 0x7——
+    ///   新版完整支持 0x4（修复 microsoft/terminal#376 的 PR #4856 即在新版）
+    /// - 系统 conhost + Win11（build >= 21376）：0x7
+    /// - 系统 conhost + Win10（build < 21376）：0x3——**回退路径**。0x3 未修复滚轮
+    ///   （0x3/0x7 均实测失效，根因是老 conhost 不转发鼠标 VT 序列，#376），仅因
+    ///   键盘/IME 已实测正常而保留，防回退场景无谓启用 0x4。
     ///
     /// 阈值 21376 与前端 xterm 钳制（ADR-0004，XTERM_CONPTY_MIN_BUILD）同源——
     /// 同为 xterm.js 的 ConPTY 兼容分界，Win10/Win11 分叉共用。
@@ -74,13 +73,12 @@ pub mod conpty_custom {
     /// 子进程（DECSET 1002/1003/1006 + alt buffer + 60fps 负载）在 0xF 下 stdin 的 SGR
     /// report 仍原样透传，阻断条件仅真实 claude 场景（pwsh→claude 进程树 + kitty 协议）
     /// 复现。因此**验证本函数改动必须实测真实 claude 滚轮**，勿以最小实验/单测绿为依据。
-    pub fn compute_conpty_flags(build_number: u32) -> u32 {
-        const CONPTY_WIN11_MIN_BUILD: u32 = 21376;
+    pub fn compute_conpty_flags(build_number: u32, bundled: bool) -> u32 {
         let base = PSEUDOCONSOLE_INHERIT_CURSOR | FLAG_RESIZE_QUIRK;
-        if build_number < CONPTY_WIN11_MIN_BUILD {
-            base // Win10 老 conhost：去 WIN32_INPUT_MODE，回归传统 VT 输入路径
-        } else {
+        if bundled || build_number >= CONPTY_WIN11_MIN_BUILD {
             base | FLAG_WIN32_INPUT_MODE
+        } else {
+            base // 系统老 conhost 回退：去 WIN32_INPUT_MODE
         }
     }
 
@@ -213,6 +211,8 @@ pub mod conpty_custom {
         readable: FileDescriptor,
         writable: Option<FileDescriptor>,
         size: PtySize,
+        /// 进程级 ConPTY API 单例（系统或捆绑，见 conpty_api）
+        api: &'static crate::pty::conpty_api::ConptyApi,
     }
 
     /// 自定义 MasterPty 实现，持有直接通过 Win32 API 创建的 HPCON
@@ -237,8 +237,8 @@ pub mod conpty_custom {
                 X: size.cols as i16,
                 Y: size.rows as i16,
             };
-            // SAFETY: ResizePseudoConsole 是 Win32 ConPTY API；hpc 由 CreatePseudoConsole 创建，coord 基于已验证的 PtySize
-            unsafe { ResizePseudoConsole(inner.hpc, coord)? };
+            // SAFETY: ResizePseudoConsole 是 Win32 ConPTY API；hpc 由 create 创建，coord 基于已验证的 PtySize
+            unsafe { inner.api.resize(inner.hpc, coord)? };
             inner.size = size;
             Ok(())
         }
@@ -380,8 +380,8 @@ pub mod conpty_custom {
             // ConPTY 关闭前确保 writer 已 drop（stops child stdin → EOF 传递）
             drop(self.writable.take());
             if !self.hpc.is_invalid() {
-                // SAFETY: ClosePseudoConsole 是 Win32 ConPTY 清理 API；hpc 由 CreatePseudoConsole 创建，仅调用一次
-                unsafe { ClosePseudoConsole(self.hpc) };
+                // SAFETY: ClosePseudoConsole 是 Win32 ConPTY 清理 API；hpc 由 create 创建，仅调用一次
+                unsafe { self.api.close(self.hpc) };
             }
         }
     }
@@ -399,15 +399,18 @@ pub mod conpty_custom {
         let stdin_pipe = Pipe::new()?;
         let stdout_pipe = Pipe::new()?;
 
-        let flags = compute_conpty_flags(build_number);
+        // Win10 尝试捆绑新 conhost（ADR-0005），失败静默回退系统；Win11 恒系统
+        let api = resolve_conpty_api(build_number);
+        let flags = compute_conpty_flags(build_number, api.is_bundled());
         let size = COORD {
             X: cols as i16,
             Y: rows as i16,
         };
 
-        // SAFETY: CreatePseudoConsole 是 Win32 ConPTY 创建 API；管道句柄来自 filedescriptor::Pipe，在其生命周期内有效
+        // SAFETY: CreatePseudoConsole 是 Win32 ConPTY 创建 API；管道句柄来自 filedescriptor::Pipe，
+        // 在其生命周期内有效；api 为进程级单例引用
         let hpc = unsafe {
-            CreatePseudoConsole(
+            api.create(
                 size,
                 HANDLE(stdin_pipe.read.as_raw_handle()),
                 HANDLE(stdout_pipe.write.as_raw_handle()),
@@ -426,6 +429,7 @@ pub mod conpty_custom {
                     pixel_width: 0,
                     pixel_height: 0,
                 },
+                api,
             })),
         };
 
@@ -508,37 +512,43 @@ pub mod conpty_custom {
     mod tests {
         use super::*;
 
-        // T1: compute_conpty_flags（6 条）——按 build 分叉：Win10 去 0x4（老 conhost
-        // 鼠标 VT 序列不转发）、Win11 保持 0x7；回归守卫：任何 build 都不启用
-        // PASSTHROUGH_MODE 0x8（passthrough 会吞 terminal→child 的 SGR mouse report）
+        // T1: compute_conpty_flags（7 条）——三态：捆绑恒 0x7（新 conhost 完整支持
+        // 0x4）；系统按 build 分叉（Win10 0x3 为回退路径——0x3/0x7 均实测滚轮失效，
+        // 根因在老 conhost 不转发鼠标，见 conpty_api ADR-0005）；回归守卫：任何组合
+        // 都不启用 PASSTHROUGH_MODE 0x8（passthrough 会吞 terminal→child 的 SGR mouse report）
         #[test]
-        fn flags_win10_19041_returns_0x3() {
-            assert_eq!(compute_conpty_flags(19041), 0x3);
+        fn flags_win10_19041_system_returns_0x3() {
+            assert_eq!(compute_conpty_flags(19041, false), 0x3);
         }
 
         #[test]
-        fn flags_below_threshold_21375_returns_0x3() {
-            assert_eq!(compute_conpty_flags(21375), 0x3);
+        fn flags_below_threshold_21375_system_returns_0x3() {
+            assert_eq!(compute_conpty_flags(21375, false), 0x3);
         }
 
         #[test]
-        fn flags_threshold_21376_returns_0x7() {
-            assert_eq!(compute_conpty_flags(21376), 0x7);
+        fn flags_threshold_21376_system_returns_0x7() {
+            assert_eq!(compute_conpty_flags(21376, false), 0x7);
         }
 
         #[test]
-        fn flags_win11_21h2_returns_0x7() {
-            assert_eq!(compute_conpty_flags(22000), 0x7);
+        fn flags_win11_21h2_system_returns_0x7() {
+            assert_eq!(compute_conpty_flags(22000, false), 0x7);
         }
 
         #[test]
-        fn flags_win11_22h2_returns_0x7() {
-            assert_eq!(compute_conpty_flags(22621), 0x7);
+        fn flags_win11_22h2_system_returns_0x7() {
+            assert_eq!(compute_conpty_flags(22621, false), 0x7);
         }
 
         #[test]
-        fn flags_win11_24h2_returns_0x7() {
-            assert_eq!(compute_conpty_flags(26100), 0x7);
+        fn flags_win11_24h2_system_returns_0x7() {
+            assert_eq!(compute_conpty_flags(26100, false), 0x7);
+        }
+
+        #[test]
+        fn flags_win10_bundled_returns_0x7() {
+            assert_eq!(compute_conpty_flags(19041, true), 0x7);
         }
 
         // T3: 常量值验证（3 条）
@@ -804,6 +814,8 @@ pub mod conpty_custom {
                         pixel_width: 0,
                         pixel_height: 0,
                     },
+                    // 26100（Win11）→ 系统路径；本测试走 invalid HPCON 分支，不调用 api
+                    api: resolve_conpty_api(26100),
                 })),
             };
 

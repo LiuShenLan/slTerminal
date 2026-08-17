@@ -91,21 +91,30 @@ JobHandle 在 `#[cfg(windows)]` 下为 HANDLE RAII 包装；`#[cfg(not(windows))
 
 > **PASSTHROUGH_MODE (0x8) 已移除，勿重新启用**：0x8 下 claude 等全屏 TUI（v2.1.89+ 默认 alt buffer + mouse tracking）的鼠标滚轮完全失效。2026-07 在 Win11 build 26200 真实 app 双向实测确认：诊断埋点显示 xterm 的 SGR wheel report（`\x1b[<64/65;x;yM`）完整写入 ConPTY stdin 但 claude 无反应；去掉 0x8 后滚轮恢复，claude 输出流畅度无肉眼可见退化。疑似机制为 passthrough 下 conhost 不解析子进程输出、不跟踪 DECSET mouse mode（microsoft/terminal#376；PR #9970）。**注意：无法用最小实验/自动化测试守卫此回归**——node 直接子进程的最小复现（DECSET 1002/1003/1006 + alt buffer + 60fps 帧刷写负载）在 0xF 下 stdin 的 SGR report 仍原样透传，阻断条件仅真实 claude 场景（pwsh→claude 进程树 + kitty 协议）复现，行为级集成测试会产生假阴性（0x8 下也绿）故未落地。**改 flags 必须实测真实 claude 滚轮**。
 
-### Win10 分叉 flags 0x3（WIN32_INPUT_MODE 按 build 禁用）
+### Win10 ConPTY 宿主捆绑（ADR-0005，conpty_api.rs）
 
-`compute_conpty_flags` 按 OS build 分叉（阈值 21376，与前端 xterm 钳制 ADR-0004 同源）：Win11（≥21376）→ 0x7；Win10（<21376）→ 0x3（去 `WIN32_INPUT_MODE`）。动机：老版 Win10 内置 conhost 的 0x4 实现不转发鼠标 VT 序列——claude 全屏 TUI 滚轮失效（键盘正常；WT 在 Win10 滚轮正常的对照实验表明传统 VT 输入路径无此问题）。0x3 回归传统 VT 输入路径。
+老 Win10（build < 21376）in-box conhost 的 ConPTY **不转发鼠标 VT 序列**（microsoft/terminal#376，修复 PR #4856 只在新版 conhost）——0x3/0x7 两条输入路径均实测 claude 全屏滚轮失效（0x3 分叉实验 2026-08-17 验证失败，推翻 flags 假设）。修复：`vendor/conpty/` 的 conpty.dll + OpenConsole.exe（官方 NuGet `Microsoft.Windows.Console.ConPTY` 1.24.260710001，MIT）经 `include_bytes!` 嵌入 slterminal_lib.dll，仅 Win10 在首次 pty_spawn 前提取到 `%LOCALAPPDATA%\slterminal\conpty\` 并 `LoadLibraryW` 动态加载（`OnceLock` 进程级单次解析）。
 
-- **实验状态**：2026-08-17 实施，Win10 实机验证中（滚轮 + 键盘/IME/kitty 全项）；验证通过前勿用于 release 打包。若键盘/IME 回归 → 回退恒 0x7。
-- **测试守卫**：`compute_conpty_flags` 6 条测试锁死分叉表（19041→0x3 / 21375→0x3 / 21376→0x7 / 22000/22621/26100→0x7）且任何 build 不含 PASSTHROUGH 0x8。
+- **加载机制**：conpty.dll 定位 OpenConsole.exe 靠同目录查找（PR #12980），故两文件提取到同一目录；导出名带 Conpty 前缀（`ConptyCreatePseudoConsole`/`ConptyClosePseudoConsole`/`ConptyResizePseudoConsole`）；OpenConsole.exe 依赖全为系统 api-ms-win-*（自包含）。
+- **回退**：提取/加载任一失败 → `tracing::warn!` + 静默回退系统 ConPTY（行为 = 现状）；Win11（≥21376）恒系统路径零变化。
+- **提取幂等**：已存在且大小与嵌入一致 → 复用；不一致覆盖重写（vendor 升级自愈）。
+- **vendor 更新**：见 `vendor/conpty/README.md`；更新后必须 Win10 实机验证。
+- **实机验证红线**：自动化无法守卫真实鼠标转发（先例同 0x8/0x3）——改动必须实测真实 claude 滚轮 + 键盘/IME/kitty + resize。
+
+### flags 三态（compute_conpty_flags）
+
+`compute_conpty_flags(build, bundled)` 三态：捆绑新 conhost → 恒 0x7（新版完整支持 0x4）；系统 conhost + Win11（≥21376）→ 0x7；系统 conhost + Win10（<21376）→ 0x3（**回退路径**——0x3 未修复滚轮，仅因键盘/IME 已实测正常而保留，防回退场景无谓启用 0x4）。阈值 21376 与前端 xterm 钳制（ADR-0004）同源，常量单点于 `conpty_api::CONPTY_WIN11_MIN_BUILD`。
+
+- **测试守卫**：`compute_conpty_flags` 7 条测试锁死三态表（19041/21375 系统→0x3；21376/22000/22621/26100 系统→0x7；19041 捆绑→0x7）且任何组合不含 PASSTHROUGH 0x8。
 
 **自定义组件**：
 | 类型 | 职责 |
 |------|------|
-| `compute_conpty_flags(build)` | 计算 flags：固定 0x7（PASSTHROUGH_MODE 已移除——吞 mouse input，见上）；保留 build 参数供未来按 build 恢复 |
+| `compute_conpty_flags(build, bundled)` | 计算 flags 三态：捆绑/系统 Win11 → 0x7；系统 Win10 回退 → 0x3（见上） |
 | `AttrList` | `PROC_THREAD_ATTRIBUTE_LIST` RAII wrapper（`Initialize`→`Update`→`Delete`） |
 | `ConPtyMaster` | 实现 `portable_pty::MasterPty`（resize/get_size/try_clone_reader/take_writer），持有通过 `windows` crate 创建的 HPCON |
 | `RawChild` | 实现 `portable_pty::Child + ChildKiller`，封装 `OwnedHandle` + `TerminateProcess` |
-| `create_conpty_pair()` | 创建管道对 → `CreatePseudoConsole(flags)` → 返回 `(HPCON, ConPtyMaster)` |
+| `create_conpty_pair()` | 创建管道对 → `resolve_conpty_api(build)` → `api.create(flags)` → 返回 `(HPCON, ConPtyMaster)` |
 | `spawn_conpty_child()` | `AttrList::set_pty(hpc)` → `CreateProcessW` → 返回 `RawChild` |
 
 **shell 信息解耦**：`shell.rs` 新增 `ShellInfo` 结构体和 `resolve_shell_info()` 函数，返回纯数据结构（program + args），不依赖 `portable_pty::CommandBuilder`——后者内部方法为 `pub(crate)`，外部无法调用 `cmdline()`/`environment_block()`。
@@ -170,6 +179,7 @@ DA1 查询响应是终端平台能力（设计动机：Ink 系 TUI，对全部�
 | 文件 | 职责 |
 |------|------|
 | `mod.rs` | PTY 模块入口：模块声明 + re-export |
+| `conpty_api.rs` | ConPTY API 解析层（ADR-0005）：vendor 二进制嵌入 + Win10 提取/加载/回退 + 三函数指针封装 |
 | `spawn.rs` | Tauri 命令（`pty_spawn`/`pty_write`/`pty_resize`/`pty_kill`/`pty_reattach`）+ ConPTY 自定义实现 + PtyEvent 枚举定义 |
 | `reader.rs` | 独立 reader 线程：`reader_loop()` 阻塞读取 PTY 输出 → Channel 推送 PtyEvent；`strip_conpty_startup()` 启动序列剥离；`apply_startup_strip()` 纯函数；`mirror_da1_query()` DA1 查询检测 |
 | `shell.rs` | Shell 发现与选择：`resolve_shell()` / `resolve_shell_info()` → pwsh → powershell → cmd 回退；`which_full_path()` PATH 解析 |

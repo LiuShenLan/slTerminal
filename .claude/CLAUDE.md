@@ -56,7 +56,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 每条只留红线规则，机制与背景在链接的子文件。
 
 - **spawn 串行化**：并发 spawn 会卡死 ConPTY 输出管道——`pty_spawn` 必须握 `SPAWN_LOCK`。详见 ../src-tauri/src/pty/CLAUDE.md
-- **ConPTY flags 固定 0x7**：PASSTHROUGH_MODE (0x8) 吞全屏 TUI 鼠标滚轮输入；自动化测试无法守卫（假阴性），改 flags 必须实测真实 claude 滚轮。详见 ../src-tauri/src/pty/CLAUDE.md
+- **ConPTY flags 三态**：PASSTHROUGH_MODE (0x8) 吞全屏 TUI 鼠标滚轮输入（禁用红线）；捆绑新 conhost（ADR-0005，仅 Win10）/系统 Win11 → 0x7、系统 Win10 回退 → 0x3；自动化测试无法守卫（假阴性），改 flags 必须实测真实 claude 滚轮。详见 ../src-tauri/src/pty/CLAUDE.md
 - **cwd 反斜杠**：传给 ConPTY 前把 cwd 规范化成 `\`（`CreateProcessW` 对 `/` 行为异常）。详见 ../src-tauri/src/pty/CLAUDE.md
 - **cwd / 命令边界跟踪**：portable-pty 在 Windows 不返回 cwd——靠集成脚本注入的 OSC 序列跟踪，禁止解析提示符。详见 ../src-tauri/src/pty/CLAUDE.md
 - **键盘 / IME**：Shift+Tab、Ctrl 组合键用 xterm.js `attachCustomKeyEventHandler` 接管；中文 IME 合成要尽早实测。详见 ../src/panels/CLAUDE.md

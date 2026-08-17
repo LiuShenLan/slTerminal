@@ -2,7 +2,7 @@
 
 > **本文档是项目用例数唯一真值源。** 所有 CLAUDE.md、README、CI 配置中引用的用例数均以此文件为准。更新测试后必须同步本文档。
 
-全量 **3275** 用例（Rust 609 + 前端 2488 + L3 138 + E2E 40），2026-08-17 更新（ui-redesign-review-fix Stage 01~08 全量同步——本批净增 19 + 既有表头与行级和失实 7 一并校正，明细见文末「历史变更」；ADR-0004 Win10 钳制 +5；Win10 分叉 0x3 +2）。
+全量 **3281** 用例（Rust 615 + 前端 2488 + L3 138 + E2E 40），2026-08-17 更新（ui-redesign-review-fix Stage 01~08 全量同步——本批净增 19 + 既有表头与行级和失实 7 一并校正，明细见文末「历史变更」；ADR-0004 Win10 钳制 +5；Win10 分叉 0x3 +2；ADR-0005 嵌入捆绑 +6）。
 
 > **计数口径**：
 > - L2 以 `npm test` 实跑（Vitest 报告）为准——`it.each(...)` 参数化与 `describeIpcContract` 工厂（`helpers/ipc-contract.ts`，IHE-06）等按**展开后用例数**计入（143 文件 2483 用例，行级和实查；2026-08-16 UI 重设计 Stage 09 终验实跑回写 2439，动态计数以终验 vitest 实跑为准）；纯 grep `it(/test(` 块数会少计 it.each 展开（如 colors 96 = 15 块 + 7 组 each 展开 81）。
@@ -41,7 +41,7 @@
 | ⑤ | L2 | **E2E helper 行为契约**——`app.test.tsx`/`e2e-create-project.test.ts` 验证的是 `__slterm_e2e_createProject` 等 helper 的契约（pending 标记/localStorage 交互），非真实 App 初始化逻辑；真实挂载路径由 `e2e-gating-*` 测试 + L4 使用实证 | 13 P-14 |
 | ⑥ | L2 | **浅层组件定位**——`editor.test.tsx` mock `useCodeMirror` 只验证 prop 透传与容器样式，定位为组件集成契约测试（非行为测试），真实编辑器行为由 `use-code-mirror.test.ts` 等覆盖 | 07 G1/G2 |
 
-## L1 — Rust 单元/集成测试（31 文件 / 609 用例）
+## L1 — Rust 单元/集成测试（32 文件 / 615 用例）
 
 运行：`cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1`
 
@@ -54,7 +54,8 @@
 | `src-tauri/tests/git_unstage_tests.rs` | 6 | git_unstage 命令层（added 文件取消暂存/沙箱拒绝） |
 | `src-tauri/tests/ci_config_tests.rs` | 1 | `ci_l1_uses_single_test_thread`（GIT-11 领域污染迁移） |
 | `src-tauri/src/pty/reader.rs` | 36 | ConPTY 启动序列剥离（含 OSC 1/3/4/9 保留/CSI 3J/平台守卫）/DA1 查询检测/apply_startup_strip/should_inject_da1/mirror_da1_query/eof_exit_code/16KB 边界 |
-| `src-tauri/src/pty/spawn.rs` | 50 | compute_conpty_flags（6 条按 build 分叉：Win10 19041/21375→0x3、21376/22000/22621/26100→0x7，PASSTHROUGH 0x8 永不启用）/flag 常量/ConPtyMaster MasterPty trait/AttrList 生命周期/create_conpty_pair/build_cmdline 引号/build_env_block/**validate_spawn_request（尺寸/白名单/cwd 三拒绝）**/**validate_session_ownership（SEC-08 放行/拒绝）**/Job Object 纯逻辑（job_name/limit flags）/测试清理 helper |
+| `src-tauri/src/pty/spawn.rs` | 51 | compute_conpty_flags（7 条三态：系统 Win10 19041/21375→0x3、21376/22000/22621/26100→0x7、捆绑 19041→0x7，PASSTHROUGH 0x8 永不启用）/flag 常量/ConPtyMaster MasterPty trait/AttrList 生命周期/create_conpty_pair/build_cmdline 引号/build_env_block/**validate_spawn_request（尺寸/白名单/cwd 三拒绝）**/**validate_session_ownership（SEC-08 放行/拒绝）**/Job Object 纯逻辑（job_name/limit flags）/测试清理 helper |
+| `src-tauri/src/pty/conpty_api.rs` | 5 | ADR-0005 嵌入捆绑：should_bundle 决策分叉（</≥ 21376）/extraction_dir_from 路径构造/ensure_extracted 幂等（二次调用 mtime 不变 + 内容与嵌入一致）/write_if_size_differs 覆盖与跳过（vendor 升级自愈） |
 | `src-tauri/src/pty/shell.rs` | 20 | pwsh 发现 + 三档回退顺序（可控 PATH）/shell-integration.ps1 嵌入/UTF-16LE Base64 往返/which_full_path PATH 顺序/白名单解析后仍非法拒绝 |
 | `src-tauri/src/state.rs` | 32 | ring buffer append+eviction+无换行长行淘汰三边界/validate_path_within_root 沙箱（含 `..` 穿越拒绝）/canonicalize_or_ancestor |
 | `src-tauri/src/fs/mod.rs` | 31 | read_dir/write_file（真实命令，CRLF 保留）/create_dir/delete/rename + 命令包装单测 + 异常路径（删除不存在/root 外拒绝/TaskJoin panic 映射） |
@@ -394,7 +395,8 @@ embedded WDIO 驱动**无法将 OS 级按键（`browser.keys`）投递进 WebVie
 
 ## 历史变更
 
-- 2026-08-17（Win10 分叉 flags 0x3 实验）：**L1 +2**——`spawn.rs` 48→50（compute_conpty_flags 4→6 条：分叉表 19041/21375→0x3、21376/22000/22621/26100→0x7，PASSTHROUGH 0x8 永不启用）。**实验状态**：Win10 实机验证中（滚轮 + 键盘/IME/kitty），验证通过前勿 release 打包；键盘回归则回退恒 0x7。L2/L3/L4 零变动。全量 3273→3275。
+- 2026-08-17（ADR-0005 嵌入捆绑 ConPTY）：**L1 +6**——新增 `conpty_api.rs` 5 条（决策分叉/路径构造/提取幂等/覆盖与跳过）；`spawn.rs` 50→51（compute_conpty_flags 改三态 7 条：捆绑 19041→0x7 新增）。vendor/conpty/ 二进制入库（NuGet 1.24.260710001，include_bytes! 嵌入）。L2/L3/L4 零变动。全量 3275→3281。**Win10 实机验证红线**（自动化无法守卫鼠标转发）：真实 claude 滚轮 + 键盘/IME/kitty + resize + 删除提取目录回退验证。
+- 2026-08-17（Win10 分叉 flags 0x3 实验）：**L1 +2**——`spawn.rs` 48→50（compute_conpty_flags 4→6 条：分叉表 19041/21375→0x3、21376/22000/22621/26100→0x7，PASSTHROUGH 0x8 永不启用）。**实验结论：Win10 实机验证失败（滚轮仍不可用）——根因是老 conhost 两条输入路径均不转发鼠标，与 flags 无关**；0x3 保留为系统回退路径，修复转 ADR-0005 嵌入捆绑。L2/L3/L4 零变动。全量 3273→3275。
 - 2026-08-17（ADR-0004 Win10 xterm 钳制）：**L2 +5**——新建 `win-build-clamp.test.ts` 4（`clampWindowsBuildForXterm` 纯函数边界：19045→21376/26100 不变/边界 21376/0→21376）、`terminal.test.tsx` 23→24（+1 Win10 build 19045 → windowsPty.buildNumber 钳制 21376）。类目标头同步（终端面板 15→16 文件 / 249→254）→ L2 2483→2488（143→144 文件）。L1/L3/L4 零变动。全量 3268→3273。
 
 - 2026-08-17（ui-redesign-review-fix Stage 08，TE-01~06，f4de871）：**L2 +1**——`workspace-page-dockview` 10→11（TE-06 页签 FileIcon 断言强化：断言 svg 确为 FileIcon（特征 path/色块 fill）+ 非文件面板（terminal）不渲染 FileIcon 反向用例）。断言强化（用例数不变）：activityBar 40（TE-05 假守卫补实断言——SB-19.11 指示线 DOM 位置实断言（落点按钮前方）、SB-19.25 computeDropTarget spy 调用次数/zone 参数切换 + 指示线跨 zone 迁移、SB-19.26 dragleave 清理后指示线 DOM 移除）、nav-tree 34（TE-01 父节点因子假守卫：查询词改仅命中项目名）、nav-tree-history 8（TE-02 重扫次数改精确差值断言）、sideBarState 54（TE-04 测试数据退役 id "projects" 改 "nav" 与生产默认不混淆）。**L4 术语同步（TE-03）：`waitForPanelTabIcon` → `waitForPanelTabStatus`**（specUtils.ts 定义 + hooks.e2e/mockcli.e2e 调用点 + e2e-tests/CLAUDE.md specUtils 行，用例数不变）。**L2 表头 2457→2483**（本批净增 19 + 既有表头与行级和失实 7 校正——IPC 119→120、工作区 258→259、侧栏 155→157、Diff 79→80、启动/关闭 23→24，行级和实查；动态计数以终验 vitest 实跑为准）。

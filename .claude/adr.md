@@ -117,3 +117,25 @@
 - Win10 上启发式关闭（目标达成）+ resize reflow 连带启用——唯一新增风险：Win10 19045 conhost 若未 backport wrap 标记修复，resize 时 reflow 可能短暂错乱（claude 全屏重绘自愈）。已列 Win10 实机验证专项；异常则降级 pnpm patch 方案。
 - **xterm.js 升级时须重评估**：钳制语义依赖上游阈值 21376 与启发式实现，升级后核对 `CoreTerminal.ts` 分叉逻辑是否仍成立。
 - 行为固化点：`src/panels/terminal/useXterm.ts` 的 `XTERM_CONPTY_MIN_BUILD` / `clampWindowsBuildForXterm`（L2 `win-build-clamp.test.ts` 守卫）。
+
+## 0005 Win10 嵌入捆绑新版 ConPTY 宿主（conpty.dll + OpenConsole.exe）
+
+**Status**: accepted（2026-08-17）
+
+**上下文**：ADR-0004 修复四症状后，Win10 实测暴露滚轮问题：claude code 全屏模式鼠标滚轮无法滚动（键盘 PageUp/Down 正常）。排查链：① 0x7（初始）与 0x3 分叉（去 WIN32_INPUT_MODE）两条输入路径均实测失败——推翻 flags 假设；② 键盘正常说明通路 OK；③ WT 在 Win10 滚轮正常因自带新版 conhost 代码、不经系统 conhost。根因坐实：老 Win10 in-box conhost 的 ConPTY **不转发鼠标 VT 序列**（microsoft/terminal#376「吞掉 mouse reporting escape sequences」，修复 PR #4856 只在新版 conhost）。外部先例：WispTerm、WezTerm 均以捆绑新版 conpty.dll + OpenConsole.exe 修复。此前旁置 vendor 文件的捆绑尝试因部署冲突失败（用户只部署 exe + slterminal_lib.dll，未拷贝 vendor 文件 → 静默回退系统 conhost，实验无效）。
+
+**决策**：vendor 两文件（官方 NuGet `Microsoft.Windows.Console.ConPTY` 1.24.260710001，MIT）经 `include_bytes!` **嵌入 slterminal_lib.dll 资源**，仅 Win10（build < 21376）在首次 pty_spawn 前提取到 `%LOCALAPPDATA%\slterminal\conpty\` 并 `LoadLibraryW` 动态加载（`OnceLock` 进程级单次解析）。部署形态零变化（仍 exe + dll 两文件）；提取幂等（大小一致复用，vendor 升级自愈）；提取/加载任一失败 → `tracing::warn!` + 静默回退系统 ConPTY（行为 = 现状）；Win11 恒系统路径零变化。flags 改三态：捆绑/系统 Win11 → 0x7，系统 Win10 回退 → 0x3（键盘已实测正常，保留）。
+
+**被否决的备选**：
+
+- **0x3 分叉**（去 WIN32_INPUT_MODE，回归传统 VT 输入路径）：2026-08-17 实机验证失败——滚轮仍不可用，证实老 conhost 两条输入路径均不转发鼠标，与 flags 无关。
+- **旁置 vendor 文件 + package.ps1 打包**：与用户「只部署 exe + slterminal_lib.dll」工作流冲突，验收必漏文件（已实测踩坑）；仅嵌入方案能保住部署形态。
+- **更新系统 conhost**：不可要求用户改 OS。
+- **前端模拟 PageUp/Down**：全屏 TUI 滚动语义复杂且不可靠，绕过根因。
+
+**后果**：
+
+- vendor 二进制入库（`src-tauri/vendor/conpty/`，含 LICENSE/README，更新流程见 README）；slterminal_lib.dll 体积 +~1.1MB。
+- 杀软风险：OpenConsole.exe 为微软签名二进制，提取到用户目录风险低（先例：.NET 官方同法分发）。
+- **自动化无法守卫真实鼠标转发**（先例同 0x8/0x3）——Win10 实机验证红线：真实 claude 滚轮 + 键盘/IME/kitty + resize + 删除提取目录回退验证。
+- 行为固化点：`src-tauri/src/pty/conpty_api.rs`（L1 5 条测试守卫决策/路径/幂等）+ `compute_conpty_flags` 三态（L1 7 条）。
