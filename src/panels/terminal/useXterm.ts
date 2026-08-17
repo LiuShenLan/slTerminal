@@ -54,6 +54,17 @@ import {
   setTerminalSessionError,
 } from "../../../e2e-tests/helpers";
 
+// xterm.js ConPTY 兼容阈值（@xterm/xterm src/common/CoreTerminal.ts:283）：
+// buildNumber < 21376 时启用 wrapping 启发式（每次 LF + CSI H 强制重算 isWrapped），
+// 在 claude 高频全屏重绘下误判行 wrap 状态致 buffer 错乱（Win10 四症状，ADR-0004）。
+// 钳制真实 build 号至下界，使 Win10 走「新 ConPTY」分支，行为与 Win11 对齐。
+export const XTERM_CONPTY_MIN_BUILD = 21376;
+
+/** 钳制真实 Windows build 号至 xterm「新 ConPTY」分支下界（ADR-0004） */
+export function clampWindowsBuildForXterm(build: number): number {
+  return Math.max(build, XTERM_CONPTY_MIN_BUILD);
+}
+
 export interface UseXtermOptions {
   /** 容器 DOM 元素 */
   container: HTMLElement | null;
@@ -236,11 +247,11 @@ export function useXterm({
     // 同步 termState 供下游 hook 使用
     setTermState(term);
 
-    // F3: 动态设置 ConPTY buildNumber
+    // F3: 动态设置 ConPTY buildNumber（ADR-0004 钳制——见 clampWindowsBuildForXterm）
     if (windowsBuildNumber !== undefined) {
       term.options.windowsPty = {
         backend: "conpty",
-        buildNumber: windowsBuildNumber,
+        buildNumber: clampWindowsBuildForXterm(windowsBuildNumber),
       };
     }
 
@@ -492,13 +503,13 @@ export function useXterm({
     };
   }, [container, panelId, flushBuffer, cancelPendingFlush, handlePtyOutput, resetCommandState]);
 
-  // F3 Bug 1 修复: 独立 useEffect 监听 windowsBuildNumber 异步更新
+  // F3 Bug 1 修复: 独立 useEffect 监听 windowsBuildNumber 异步更新（ADR-0004 钳制）
   useEffect(() => {
     const term = terminalRef.current;
     if (term && windowsBuildNumber !== undefined) {
       term.options.windowsPty = {
         backend: "conpty",
-        buildNumber: windowsBuildNumber,
+        buildNumber: clampWindowsBuildForXterm(windowsBuildNumber),
       };
     }
   }, [windowsBuildNumber]);

@@ -223,6 +223,18 @@ describe("TerminalPanel", () => {
     }, { timeout: 3000 });
   });
 
+  it("Win10 build 号（19045）钳制至 21376 写入 windowsPty（ADR-0004）", async () => {
+    // Once 覆盖默认 26100，仅本用例生效；afterEach 的 clearAllMocks 不清实现
+    mocks.pty.getWindowsBuildNumber.mockResolvedValueOnce(19045);
+    render(React.createElement(TerminalPanel, { api: mocks.mockApi, params: { panelId: "test-p5b" } }));
+    await waitFor(() => {
+      expect(mocks.terminal.options.windowsPty).toEqual({
+        backend: "conpty",
+        buildNumber: 21376,
+      });
+    }, { timeout: 3000 });
+  });
+
   it("OSC 133 C/D → handleTabStateChange：active=true 更新标题图标，active=false 恢复原标题", async () => {
     // 面板须已注册（生产 register 由 spawn 完成触发）——C 的 setAgentSession
     // 仅在已注册面板上生效，B12 守卫依赖 agentSession 置位

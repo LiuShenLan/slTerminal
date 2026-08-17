@@ -28,6 +28,10 @@ xterm.js 不支持 `term.open()` 二次调用（GitHub Issue #4978）。因此�
 
 `useXterm` 挂载后不立即 spawn PTY，而是 rAF 轮询容器 `offsetWidth > 0`（最多 30 帧 / 500ms），然后 fit + proposeDimensions 获取实际字符尺寸，以真实 `cols × rows` 调用 `pty.spawn()`。超时回退 80×24。
 
+### windowsPty buildNumber 钳制（ADR-0004）
+
+`term.options.windowsPty = { backend: "conpty", buildNumber: clampWindowsBuildForXterm(真实值) }`——钳制至 xterm.js ConPTY 兼容阈值下界 `XTERM_CONPTY_MIN_BUILD = 21376`（`@xterm/xterm/src/common/CoreTerminal.ts:283`）。低于该值 xterm 启用 wrapping 启发式（每次 LF + CSI H 重算 `isWrapped`），claude 全屏高频重绘下误判致 buffer 错乱（Win10 四症状）。钳制使 Win10 与 Win11 行为对齐，连带启用 resize reflow（实机验证专项）。**真实 build 号获取链不动**（`TerminalPanel` → `pty.getWindowsBuildNumber()` 传真实值），钳制收口 useXterm 两处 windowsPty 写入点；spawn 请求不带 buildNumber，后端不受影响。xterm.js 升级时须重评估此钳制点（ADR-0004）。
+
 ### 编辑器：Compartment 模式切换语言
 
 文件扩展名 → `getLanguageExtension()` 返回对应 CodeMirror 语言扩展。语言扩展通过 `Compartment.reconfigure()` 热切换，不丢失文档状态。

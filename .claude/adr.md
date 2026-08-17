@@ -97,3 +97,23 @@
 - **导航树挂法**：活跃会话挂页面下（panelId→pageId 归属）；历史会话折叠节点挂项目下（cwd 归属——规范化前缀匹配，孤儿目录不展示）。
 - **两新依赖**：`lucide-react`（装饰图标全部线性 SVG 单点封装 src/lib/icons.tsx）、`@fontsource/jetbrains-mono`（400/500 woff2 随产物打包，断网可用）。
 - **自绘标题栏取舍**：`decorations:false` + 自绘 34px 一体化标题栏，**接受失去原生标题栏/阴影与拖拽悬停时的 Snap Layouts 预览**（Win+方向键 Aero Snap 是 OS 窗口管理功能，与 decorations:false 无关，仍可用——2026-08 实机验证修订）；关闭钮经 `getCurrentWindow().close()` 复用 P1-19 关窗杀 PTY 链路。
+
+## 0004 Windows build 号钳制至 xterm「新 ConPTY」分支下界（21376）
+
+**Status**: accepted（2026-08-17）
+
+**上下文**：Win11 正常、Win10 上 claude code 全屏模式出现四症状（字符错位/输入字符不显示/滚轮全屏滚动+重复表头/流式重复行缺行）。根因：xterm.js（6.1.0-beta.288）以 `windowsPty.buildNumber < 21376` 为阈值分叉 ConPTY 兼容行为（`@xterm/xterm/src/common/CoreTerminal.ts:283`）——旧分支启用 wrapping 启发式（每次 LF + CSI H 强制重算 `isWrapped`，`src/common/WindowsMode.ts`），claude 全屏 TUI 高频重绘时行末常为非空格字符（边框/进度条）→ 误标 wrapped → buffer 行结构错乱。Win10 19045 落旧分支，Win11 26100 落新分支，与症状分布吻合。同阈值还控制 resize reflow 开关（`Buffer.ts:318`，<21376 关闭）。
+
+**决策**：前端 `useXterm` 写入 `term.options.windowsPty` 时把真实 build 号钳制至下界（`clampWindowsBuildForXterm = Math.max(build, 21376)`）——Win10 走「新 ConPTY」分支，行为与 Win11 对齐。真实 build 号获取链（`TerminalPanel` → `pty.getWindowsBuildNumber()`）与后端均不动；spawn 请求本就不带 buildNumber。
+
+**被否决的备选**：
+
+- **不设 windowsPty**：`Buffer.ts:199` resize 行补充策略落入非 Windows 分支（ybase 滚动），与 ConPTY「自己重印屏幕」语义打架，且 Win11 现有正常路径同样被改——回归风险最高。
+- **升级 xterm.js**：未证实上游已移除该启发式（网络受限无法核对），且项目升到 6.1.0-beta.288 有特定动机（调查5修复），大版本跳变回归面最大。
+- **pnpm patch 改阈值**：可只关启发式、保持 Win10 不 reflow（最保守），但引入项目首个 patch 维护负担（升级时失效风险）。
+
+**后果**：
+
+- Win10 上启发式关闭（目标达成）+ resize reflow 连带启用——唯一新增风险：Win10 19045 conhost 若未 backport wrap 标记修复，resize 时 reflow 可能短暂错乱（claude 全屏重绘自愈）。已列 Win10 实机验证专项；异常则降级 pnpm patch 方案。
+- **xterm.js 升级时须重评估**：钳制语义依赖上游阈值 21376 与启发式实现，升级后核对 `CoreTerminal.ts` 分叉逻辑是否仍成立。
+- 行为固化点：`src/panels/terminal/useXterm.ts` 的 `XTERM_CONPTY_MIN_BUILD` / `clampWindowsBuildForXterm`（L2 `win-build-clamp.test.ts` 守卫）。

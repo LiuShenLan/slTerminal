@@ -2,7 +2,7 @@
 
 > **本文档是项目用例数唯一真值源。** 所有 CLAUDE.md、README、CI 配置中引用的用例数均以此文件为准。更新测试后必须同步本文档。
 
-全量 **3268** 用例（Rust 607 + 前端 2483 + L3 138 + E2E 40），2026-08-17 更新（ui-redesign-review-fix Stage 01~08 全量同步——本批净增 19 + 既有表头与行级和失实 7 一并校正，明细见文末「历史变更」）。
+全量 **3273** 用例（Rust 607 + 前端 2488 + L3 138 + E2E 40），2026-08-17 更新（ui-redesign-review-fix Stage 01~08 全量同步——本批净增 19 + 既有表头与行级和失实 7 一并校正，明细见文末「历史变更」；ADR-0004 Win10 钳制 +5）。
 
 > **计数口径**：
 > - L2 以 `npm test` 实跑（Vitest 报告）为准——`it.each(...)` 参数化与 `describeIpcContract` 工厂（`helpers/ipc-contract.ts`，IHE-06）等按**展开后用例数**计入（143 文件 2483 用例，行级和实查；2026-08-16 UI 重设计 Stage 09 终验实跑回写 2439，动态计数以终验 vitest 实跑为准）；纯 grep `it(/test(` 块数会少计 it.each 展开（如 colors 96 = 15 块 + 7 组 each 展开 81）。
@@ -83,9 +83,9 @@
 
 > `pty/mod.rs`、`pty/win_build.rs`、`main.rs` 不含 `#[test]`，不在此列。git/mod.rs 测试已按 GIT-12 全量拆出至 `tests/`（`#[test]` 零残留）。agent_history 模块 grep 口径：claude/jsonl 28 + claude/scan 16 + claude/ops 16 + mod 20 = 80（命令包装层 4 用例已迁入 mod.rs，MC-301 下沉时随行）+ claude/mod 4 + provider 2 = 全模块 86；env 测试依赖 L1 `--test-threads=1` 门禁（`std::env::set_var` 全局可变）。
 
-## L2 — 前端单元/集成测试（143 文件 / 2483 用例）
+## L2 — 前端单元/集成测试（144 文件 / 2488 用例）
 
-运行：`npm test`（Vitest + jsdom，登记 2483 用例——行级和实查；2026-08-16 人工验证问题 6 批次实跑 2453 passed，0 failed，动态计数以终验实跑为准）
+运行：`npm test`（Vitest + jsdom，登记 2488 用例——行级和实查；2026-08-16 人工验证问题 6 批次实跑 2453 passed，0 failed，动态计数以终验实跑为准）
 
 > ① UI 重设计（Stage 01-08）L2 全量变动（明细见各段表行与文末「历史变更」）：删除 4 文件 123 用例（agent-status-view 35 / agent-history-view 38 / sidebar-actions 47 / dialog-e2e-hook 3）、新增 7 文件 67 用例（title-bar 7 / nav-tree 31 / nav-tree-history 8 / confirm-dialog 11 / toast 5 / open-hooks-config 5，emoji-scan 3 已登记）、既有文件净 +25（colors +6 / overrides +2 / activityBar +4 / sideBar +1 / workspace-defaulttab +5 / workspace-header-actions +1 / workspace-page-dockview +1 / explorer-delete +3 / file-icon +1 / commit-context-menu +2 / commit-context-menu-ui +2 / agent-status-lib -3）；另校正 2 行（notifications 34→49、close-handler 13→12，it.each 展开口径/挂载适配实跑口径）——行级合计 2439 = 实跑，旧表头 2463（行级和 2456）失实 7 一并校正。
 
@@ -100,7 +100,7 @@
 | `src/__tests__/ipc-ping.test.ts` | 2 | `ping()` wrapper 调用（IHE-07① 改调导出函数） |
 | `src/__tests__/notification.test.ts` | 9 | `sendToastNotification` catch 静默/`ensureNotificationPermission` 拒绝路径（IHE-02 新建） |
 
-### 终端面板（15 文件 / 249 用例）
+### 终端面板（16 文件 / 254 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
@@ -113,7 +113,8 @@
 | `src/__tests__/terminal-registry-subscribe.test.ts` | 7 | subscribe register/remove/sessionChange 通知/退订（setAgentSession 触发） |
 | `src/__tests__/webgl-setup.test.ts` | 7 | `setupWebglWithRetry` 指数退避/重试耗尽回退 DOM/cancel 清理（TRM-06 新建） |
 | `src/__tests__/terminal-instance.test.ts` | 6 | `useTerminalInstance` 四分支：fit 异常/fontSize undefined/prevFontSize 相同跳过/tryLoadWebgl 幂等（TRM-07 新建） |
-| `src/__tests__/terminal.test.tsx` | 23 | TerminalPanel：loading 遮罩 1.5s 超时（TRM-05）/Windows build/spawn/active=false 标题恢复（单清 icon）/customTitle 挂载恢复 + onDidParametersChange 同步（F8）/**页签 logo 会话绑定（F9 行为修订 +5，真实 TerminalRegistry + registerStub 驱动 sessionChange）**：C 命中 → sessionChange 写 tabLogo/D 结束 → tabLogo 清空/hook 事件按 agentSession.cliId 查（C 已写 cliId）与 CLAUDE_CLI_ID 兜底/未注册 cliId → null/挂载清布局残留/挂载恢复（页面切回）/register 事件同步 + **参数覆盖回归守卫（C 命中用例末断言 tabStatus+tabLogo 两键共存——mock updateParameters 联动 onDidParametersChange 照 dockview 生产行为；latestParamsRef 合并链防复发，mockcli E2E 冒烟 tabStatus 丢失根因；IC-03 字段更名同步）** + **B12/B13/B14（+4）：SessionEnd 用例改 B13 语义（SessionStart 补 title/SessionEnd 仅清 icon/OSC D 恢复）+ visible 前缀匹配 ×2（旧格式 panelId 匹配放行直写/不匹配缓冲）+ originalTitleRef 同步 ×2（重算捕获/customTitle 不捕获）；mock setTitle 联动 onDidTitleChange** |
+| `src/__tests__/terminal.test.tsx` | 24 | TerminalPanel：loading 遮罩 1.5s 超时（TRM-05）/Windows build/spawn/active=false 标题恢复（单清 icon）/customTitle 挂载恢复 + onDidParametersChange 同步（F8）/**页签 logo 会话绑定（F9 行为修订 +5，真实 TerminalRegistry + registerStub 驱动 sessionChange）**：C 命中 → sessionChange 写 tabLogo/D 结束 → tabLogo 清空/hook 事件按 agentSession.cliId 查（C 已写 cliId）与 CLAUDE_CLI_ID 兜底/未注册 cliId → null/挂载清布局残留/挂载恢复（页面切回）/register 事件同步 + **参数覆盖回归守卫（C 命中用例末断言 tabStatus+tabLogo 两键共存——mock updateParameters 联动 onDidParametersChange 照 dockview 生产行为；latestParamsRef 合并链防复发，mockcli E2E 冒烟 tabStatus 丢失根因；IC-03 字段更名同步）** + **B12/B13/B14（+4）：SessionEnd 用例改 B13 语义（SessionStart 补 title/SessionEnd 仅清 icon/OSC D 恢复）+ visible 前缀匹配 ×2（旧格式 panelId 匹配放行直写/不匹配缓冲）+ originalTitleRef 同步 ×2（重算捕获/customTitle 不捕获）；mock setTitle 联动 onDidTitleChange** + **Win10 build 19045 → windowsPty.buildNumber 钳制 21376（ADR-0004 +1）** |
+| `src/__tests__/win-build-clamp.test.ts` | 4 | `clampWindowsBuildForXterm` 纯函数边界（ADR-0004）：Win10 19045→21376/Win11 26100 不变（零回归）/边界 21376 不变/0→21376 |
 | `src/__tests__/e2e-gating-terminal.test.ts` | 5 | E2E helper 终端门控（`__e2e_sessionReady` 等）；终端规则 mock 改指 cliProfiles 注册表（Stage 01，D-13 核对） |
 | `src/__tests__/terminal-lifecycle.test.ts` | 4 | 挂载→创建→卸载→dispose 完整链路 |
 | `src/__tests__/active-terminal.test.ts` | 4 | active 指针 set/get/覆盖、clear 仅匹配时生效 |
@@ -392,6 +393,8 @@ embedded WDIO 驱动**无法将 OS 级按键（`browser.keys`）投递进 WebVie
 | Clippy | `cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings` | Rust 代码规范 |
 
 ## 历史变更
+
+- 2026-08-17（ADR-0004 Win10 xterm 钳制）：**L2 +5**——新建 `win-build-clamp.test.ts` 4（`clampWindowsBuildForXterm` 纯函数边界：19045→21376/26100 不变/边界 21376/0→21376）、`terminal.test.tsx` 23→24（+1 Win10 build 19045 → windowsPty.buildNumber 钳制 21376）。类目标头同步（终端面板 15→16 文件 / 249→254）→ L2 2483→2488（143→144 文件）。L1/L3/L4 零变动。全量 3268→3273。
 
 - 2026-08-17（ui-redesign-review-fix Stage 08，TE-01~06，f4de871）：**L2 +1**——`workspace-page-dockview` 10→11（TE-06 页签 FileIcon 断言强化：断言 svg 确为 FileIcon（特征 path/色块 fill）+ 非文件面板（terminal）不渲染 FileIcon 反向用例）。断言强化（用例数不变）：activityBar 40（TE-05 假守卫补实断言——SB-19.11 指示线 DOM 位置实断言（落点按钮前方）、SB-19.25 computeDropTarget spy 调用次数/zone 参数切换 + 指示线跨 zone 迁移、SB-19.26 dragleave 清理后指示线 DOM 移除）、nav-tree 34（TE-01 父节点因子假守卫：查询词改仅命中项目名）、nav-tree-history 8（TE-02 重扫次数改精确差值断言）、sideBarState 54（TE-04 测试数据退役 id "projects" 改 "nav" 与生产默认不混淆）。**L4 术语同步（TE-03）：`waitForPanelTabIcon` → `waitForPanelTabStatus`**（specUtils.ts 定义 + hooks.e2e/mockcli.e2e 调用点 + e2e-tests/CLAUDE.md specUtils 行，用例数不变）。**L2 表头 2457→2483**（本批净增 19 + 既有表头与行级和失实 7 校正——IPC 119→120、工作区 258→259、侧栏 155→157、Diff 79→80、启动/关闭 23→24，行级和实查；动态计数以终验 vitest 实跑为准）。
 - 2026-08-17（ui-redesign-review-fix Stage 07，FE-25，77f3153）：**L2 净 -7**——删 `agent-history-row` 21（HistorySessionRow 退役，生产零消费）+ 新 `nav-history-row` 14（NavHistoryRow 承接：单行式标题+相对时间/prompt 行容器原生 title tooltip/firstPrompt null 无 title/title null 显示 sessionId 前 8 位/状态四态圆点 + null 恒渲染 done 灰档（mockup .dot.idle 契约）/单行子元素序（圆点→logo→标题→时间）/logo 按 session.cliId 查 iconSrc 14×14 + 未注册 cliId 无 logo 不报错（MC-311）/双击右键回调）。Agent 历史会话 5→4 文件、导航树 2→3 文件（行组件语义迁导航树，最终类目数见各段表头与 Stage 08 总述）。
