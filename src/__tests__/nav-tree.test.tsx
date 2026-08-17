@@ -621,19 +621,21 @@ describe("搜索过滤", () => {
     );
   });
 
-  it("父节点因子：项目名命中 → 其下页面行显示", () => {
+  it("父节点因子：项目名命中 → 仅项目行显示、未命中页面行隐藏（match 链单向）", () => {
     const container = seedTwoProjects();
+    // 查询词仅命中项目名「项目Beta」——页面名「页面Beta」不含该子串，
+    // 排除页面命中因子；NAV-04 match 链为单向（子命中→父显示），
+    // 父命中不向下传播——未命中页面整行隐藏（NavTree renderPage 返回 null）
     fireEvent.change(getSearchInput(container), {
-      target: { value: "Beta" },
+      target: { value: "项目Beta" },
     });
 
     const projects = getRows(container, "nav-row-project");
     expect(projects).toHaveLength(1);
     expect(projects[0].textContent).toContain("项目Beta");
-    // 项目命中因子 → 子页面一并显示
-    expect(getRows(container, "nav-row-page")[0].textContent).toContain(
-      "页面Beta",
-    );
+    // 对照上用例「页面命中→父项目行显示」：单向链只保证子→父方向，
+    // 项目名命中不会令未命中的页面行渲染
+    expect(getRows(container, "nav-row-page")).toHaveLength(0);
   });
 
   it("会话名命中 → 会话行显示", () => {

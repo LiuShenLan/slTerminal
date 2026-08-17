@@ -241,25 +241,25 @@ export async function waitForSignalConsumed(filePath: string, timeout = 8000): P
  * 等待指定面板页签参数 tabStatus 变为期望值（null = 无圆点）。
  *
  * 轮询 `getPanel(panelId).params.tabStatus`（IC-03 改造：终端面板 updateParameters
- * 写入 tabStatus（AgentStatus 字符串）——tabIcon emoji 字段已随 STATUS_EMOJI 退役；
+ * 写入 tabStatus（AgentStatus 字符串）——旧 emoji 图标字段已随 STATUS_EMOJI 退役；
  * updateParameters 更新的是面板参数，与 DefaultTab 渲染同一真值源）——精确匹配
  * 单一面板，免疫其他面板页签状态污染。Dockview 页签 DOM（.dv-tab）无面板标识
  * 属性，无法从 DOM 精确定位单面板页签，故经 params 断言流转；DefaultTab 的
  * StatusDot 渲染由 L2 workspace-defaulttab 覆盖。
  */
-export async function waitForPanelTabIcon(
+export async function waitForPanelTabStatus(
   panelId: string,
   expected: string | null,
   timeout = 15000,
 ): Promise<void> {
   await browser.waitUntil(
     async () => {
-      const icon = await browser.execute((pid: string) => {
+      const status = await browser.execute((pid: string) => {
         const panel = window.__dockviewApi?.getPanel(pid);
         const v = panel?.params?.tabStatus;
         return v === undefined ? null : v;
       }, panelId);
-      return icon === expected;
+      return status === expected;
     },
     { timeout, timeoutMsg: `面板 ${panelId} tabStatus 未在期限内变为 ${expected}` },
   );

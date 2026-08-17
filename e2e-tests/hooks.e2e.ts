@@ -1,6 +1,6 @@
 /**
  * hooks 域 E2E spec（E2E-09 拆分 + E2E-06 新用例）：
- * 注入/卸载/状态、信号文件驱动页签 emoji、真实 hook reporter 链路（E2E-06）、
+ * 注入/卸载/状态、信号文件驱动页签状态圆点、真实 hook reporter 链路（E2E-06）、
  * hooks 配置面板 hub 用例（P3-TE-18 保存链路 + D-14 Stage 06：选择行渲染/注入三态）。
  */
 
@@ -20,7 +20,7 @@ import {
   ensureHooksInjected,
   writeSignalFile,
   waitForSignalConsumed,
-  waitForPanelTabIcon,
+  waitForPanelTabStatus,
   defaultEventsDir,
   withProjectAndTerminal,
 } from "./specUtils";
@@ -70,7 +70,7 @@ describe("hooks 状态可视化", () => {
    * 查询方式：面板参数 params.tabStatus（IC-03 改造：tabIcon emoji 字段退役，
    * 状态写入 tabStatus（AgentStatus 字符串）；DefaultTab 渲染 StatusDot 圆点）。
    */
-  it("信号文件驱动页签图标流转", async () => {
+  it("信号文件驱动页签状态圆点流转", async () => {
     const eventsDir = defaultEventsDir();
     const tempDir = mkdtempSync(join(tmpdir(), "slterm-e2e-hooks-"));
     const signalFiles: string[] = [];
@@ -112,10 +112,10 @@ describe("hooks 状态可视化", () => {
       signalFiles.push(writeSignalFile(eventsDir, submitPayload));
 
       // 5. 轮询本面板页签参数 tabStatus === "working"（UserPromptSubmit → working）。
-      //    经 getPanel(params.tabIcon) 精确断言单面板，免疫其他面板页签状态污染
+      //    经 getPanel(params.tabStatus) 精确断言单面板，免疫其他面板页签状态污染
       //    （如 Agent Status R2 用例无 SessionEnd 信号、页签 ⚡ 滞留的场景）；
       //    DefaultTab 的 emoji DOM 渲染由 L2 workspace-defaulttab 覆盖。
-      await waitForPanelTabIcon(panelId, "working", 15000);
+      await waitForPanelTabStatus(panelId, "working", 15000);
 
       // 6. 写 SessionEnd 信号文件
       const endPayload = {
@@ -130,8 +130,8 @@ describe("hooks 状态可视化", () => {
       };
       signalFiles.push(writeSignalFile(eventsDir, endPayload));
 
-      // 7. 轮询本面板页签参数 tabIcon 回落 null（SessionEnd → active=false 清图标）
-      await waitForPanelTabIcon(panelId, null, 15000);
+      // 7. 轮询本面板页签参数 tabStatus 回落 null（SessionEnd → active=false 清状态）
+      await waitForPanelTabStatus(panelId, null, 15000);
     } finally {
       // 清理信号文件
       for (const f of signalFiles) {
@@ -148,7 +148,7 @@ describe("hooks 状态可视化", () => {
    * SLTERM_PANEL_ID env），断言：
    * ① 脚本 exit 0（C10 正常路径）；
    * ② 信号文件真实产生（脚本写 hooks-events/）且被 watcher 消费（消失）；
-   * ③ 页签 emoji 随事件流转（⚡ 出现）；
+   * ③ 页签状态圆点随事件流转（⚡ 出现）；
    * ④ 非法 JSON 输入 → 脚本仍 exit 0（C10 守卫，D7）且不产生信号文件。
    *
    * 与既有用例（Node 侧直接写 .json 绕过脚本）互补：本用例覆盖
@@ -199,9 +199,9 @@ describe("hooks 状态可视化", () => {
       // 4. 信号文件被 watcher 消费（消失——notify 实时 + 3s 轮询兜底双路径）
       await waitForSignalConsumed(signalFile as string);
 
-      // 5. 页签 emoji 随事件流转（PreToolUse → ⚡）——经本面板 tabIcon 参数精确断言
+      // 5. 页签状态圆点随事件流转（PreToolUse → ⚡）——经本面板 tabStatus 参数精确断言
       //    （同用例 2 语义：免疫其他面板页签状态污染）
-      await waitForPanelTabIcon(panelId, "working", 15000);
+      await waitForPanelTabStatus(panelId, "working", 15000);
 
       // 6. 非法 JSON 输入 → 脚本仍 exit 0（C10 守卫：任何代码路径恒 0）且不产生新信号文件
       const beforeCount = readdirSync(eventsDir).filter((f) => f.endsWith(".json")).length;

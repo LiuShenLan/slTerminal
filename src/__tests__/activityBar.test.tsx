@@ -38,6 +38,7 @@ vi.mock("../features/hooksConfig/openHooksConfig", () => ({
 
 import { render, fireEvent, act } from "@testing-library/react";
 import { ActivityBar } from "../features/sideViews/ActivityBar";
+import * as dropTargetModule from "../features/sideViews/dropTarget";
 import { useSideBar } from "../stores/sideBar";
 import { sideViewRegistry } from "../features/sideViews/sideViewRegistry";
 import {
@@ -273,10 +274,23 @@ describe("ActivityBar", () => {
     spy.mockRestore();
   });
 
-  it("SB-19.11 dragOver 调用 computeDropTarget 不抛异常（向外层容器派发）", () => {
+  it("SB-19.11 dragOver 更新 dropIndicator——指示线渲染在落点按钮前方（向外层容器派发）", () => {
     render(<ActivityBar />);
     const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } }, 800);
-    expect(() => dispatchDragEvent(getActivityBar(), "dragover", createMockDataTransfer(), 25)).not.toThrow();
+    const bar = getActivityBar();
+    const dt = createMockDataTransfer();
+    expect(() => dispatchDragEvent(bar, "dragover", dt, 25)).not.toThrow();
+    // 落点 25 < nav mid=30 → computeDropTarget index 0 → 指示线渲染于 nav 前方
+    // （dropIndicator DOM 实断言：top zone 内仅此一条 height 2px 指示线）
+    const topZone = getZoneContainer("top");
+    const indicators = Array.from(topZone.querySelectorAll("div")).filter(
+      (d) => (d as HTMLElement).style.height === "2px",
+    );
+    expect(indicators).toHaveLength(1);
+    // 指示线位于按钮 wrapper 内 button 之前——后邻元素即 nav 按钮
+    expect(
+      (indicators[0].nextElementSibling as HTMLElement | null)?.getAttribute("data-view-id"),
+    ).toBe("nav");
     spy.mockRestore();
   });
 
@@ -504,26 +518,49 @@ describe("ActivityBar", () => {
     useSideBar.setState({ zones: { top: ["nav"], bottom: ["explorer"] }, open: { top: null, bottom: null } });
     render(<ActivityBar />);
     const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 90, height: 40 } }, 90);
+    const dropTargetSpy = vi.spyOn(dropTargetModule, "computeDropTarget");
     const dt = createMockDataTransfer();
     const bar = getActivityBar();
+    // zone 内指示线计数（height 2px 即 dropIndicator 渲染产物）
+    const zoneIndicators = (zone: Zone) =>
+      Array.from(getZoneContainer(zone).querySelectorAll("div")).filter(
+        (d) => (d as HTMLElement).style.height === "2px",
+      ).length;
     dispatchDragEvent(bar, "dragover", dt, 20); // → "top" (< 300)
+    expect(zoneIndicators("top")).toBe(1); // nav 前方指示线
+    expect(zoneIndicators("bottom")).toBe(0);
     expect(() => dispatchDragEvent(bar, "dragover", dt, 400)).not.toThrow(); // → "bottom" (> 300)
+    // 两次 dragover → computeDropTarget 各调用一次，targetZone 参数随落点切换
+    expect(dropTargetSpy).toHaveBeenCalledTimes(2);
+    expect(dropTargetSpy.mock.calls[0][2]).toBe("top");
+    expect(dropTargetSpy.mock.calls[1][2]).toBe("bottom");
+    // 指示线整体移入 bottom zone（explorer 末尾，index 1 >= defs.length 1）
+    expect(zoneIndicators("top")).toBe(0);
+    expect(zoneIndicators("bottom")).toBe(1);
+    dropTargetSpy.mockRestore();
     spy.mockRestore();
   });
 
-  it("SB-19.26 onDragLeave 离开活动栏 → dropIndicator 清 null", () => {
+  it("SB-19.26 onDragLeave 离开活动栏 → dropIndicator 清 null（指示线样式移除）", () => {
     render(<ActivityBar />);
     const spy = installRectSpy({ nav: { top: 10, height: 40 } }, 800);
     const dt = createMockDataTransfer();
     const bar = getActivityBar();
+    // 指示线渲染产物——height 2px 的 div（与 SB-19.39 计数口径一致）
+    const indicatorCount = () =>
+      Array.from(bar.querySelectorAll("div")).filter(
+        (d) => (d as HTMLElement).style.height === "2px",
+      ).length;
     dispatchDragEvent(bar, "dragover", dt, 20);
+    expect(indicatorCount()).toBe(1); // dragover 后指示线出现（nav 前方）
     act(() => {
       const ev = new DragEvent("dragleave", { bubbles: true, cancelable: true });
       Object.defineProperty(ev, "dataTransfer", { value: dt, configurable: true });
       Object.defineProperty(ev, "clientY", { value: 20, configurable: true });
       bar.dispatchEvent(ev);
     });
-    // 不抛异常即通过
+    // 清理后样式实断言：relatedTarget=null → setDropIndicator(null) → 指示线 DOM 移除
+    expect(indicatorCount()).toBe(0);
     spy.mockRestore();
   });
 

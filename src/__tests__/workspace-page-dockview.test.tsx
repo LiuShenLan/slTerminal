@@ -274,14 +274,44 @@ describe("PageDockview 真实组件", () => {
   });
 
   describe("页签形态（TAB-03：文件页签 FileIcon 集成渲染）", () => {
-    it("恢复文件布局 → 页签渲染 FileIcon 彩色图标（14px svg）", async () => {
+    // FileIcon 独有特征（features/explorer/FileIcon.tsx 自绘坐标——区分于
+    // dockview 自身图标/StatusDot 等其它 svg）：
+    // - 14×14 svg + viewBox="0 0 14 14"
+    // - 文件轮廓 path（右上折角 + 弧线收角，含 a 弧线命令）
+    const FILE_ICON_OUTLINE =
+      "M3.5 1.5H8L11 4.5v6.5a1.5 1.5 0 0 1-1.5 1.5h-6A1.5 1.5 0 0 1 2 11V3a1.5 1.5 0 0 1 1.5-1.5Z";
+    function isFileIconSvg(svg: SVGSVGElement): boolean {
+      if (
+        svg.getAttribute("width") !== "14" ||
+        svg.getAttribute("viewBox") !== "0 0 14 14"
+      ) {
+        return false;
+      }
+      return Array.from(svg.querySelectorAll("path")).some(
+        (p) => p.getAttribute("d") === FILE_ICON_OUTLINE,
+      );
+    }
+
+    it("恢复文件布局 → 页签渲染 FileIcon 彩色图标（轮廓特征 path）", async () => {
       mockIPC(() => null);
       const { container } = await renderDock({ savedLayout: EDITOR_LAYOUT });
-      // FileIcon 文件图标 = 14×14 svg（区别于 dockview 自身可能的其它 svg）
+      // 双特征过滤（14×14 viewBox + 文件轮廓 path）后即 FileIcon 本体
       const fileIconSvgs = Array.from(container.querySelectorAll("svg")).filter(
-        (s) => s.getAttribute("width") === "14",
+        isFileIconSvg,
       );
       expect(fileIconSvgs.length).toBeGreaterThan(0);
+    });
+
+    it("反向：terminal 面板页签不渲染 FileIcon（filePath 缺席——TAB-03 判据互斥）", async () => {
+      mockIPC(() => null);
+      const { container } = await renderDock({
+        savedLayout: TERMINAL_TRANSIENT_LAYOUT,
+      });
+      // 终端页签无 filePath → 无 FileIcon：特征 svg 应为 0（其它 svg 不受影响）
+      const fileIconSvgs = Array.from(container.querySelectorAll("svg")).filter(
+        isFileIconSvg,
+      );
+      expect(fileIconSvgs.length).toBe(0);
     });
   });
 

@@ -287,10 +287,13 @@ describe("历史会话项目归属（cwd 前缀匹配）", () => {
     expect(nodeA.textContent).not.toContain("无归属会话");
 
     // 展开 projB 历史 → 无历史行（s-2 不归属）
-    // scan 调用次数 = 挂载即扫（NAV-10 契约）+ 两次展开刷新 ≥ 2——容错断言
+    // scan 精确次数断言（TE-02）：挂载即扫（NAV-10 契约，useNavTree mount effect 一次）
+    // + 展开 nodeA 重扫一次 = 展开前恰 2 次；点击 nodeB 展开 → 严格 +1 → 3 次
+    const before = mockScanHistory.mock.calls.length;
+    expect(before).toBe(2);
     fireEvent.click(nodeB);
     await waitFor(() => {
-      expect(mockScanHistory.mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(mockScanHistory.mock.calls.length).toBe(before + 1);
     });
     expect(nodeB.textContent).not.toContain("无归属会话");
   });

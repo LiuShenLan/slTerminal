@@ -36,7 +36,7 @@ import {
   addTerminalPanel,
   writeSignalFile,
   waitForSignalConsumed,
-  waitForPanelTabIcon,
+  waitForPanelTabStatus,
 } from "./specUtils";
 
 // ── 共享 helper（两个 describe 共用） ──
@@ -252,7 +252,7 @@ describe("mockcli 关键路径（CS-3：agent-event 注入 + hub 分派/保存 c
 
       // 3. 页签 ⚡：真实 watcher → agent-event → resolvePayloadCliId（payload cliId
       //    显式命中 mockcli）→ 桩 eventToStatus → working
-      await waitForPanelTabIcon(panelId, "working", 15000);
+      await waitForPanelTabStatus(panelId, "working", 15000);
 
       // 4. 导航树活跃行建行：nav-row-session 出现且 data-panel-id 匹配 + 行内圆点
       //    （StatusDot 7px 圆形 div——NAV-10 契约：⚡ 断言改圆点存在性断言；
