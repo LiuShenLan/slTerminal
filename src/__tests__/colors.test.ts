@@ -8,8 +8,8 @@
 //   1. GIT_FILE_COLORS 7 个 token 均为合法 hex
 //   2. GIT_GUTTER_COLORS 3 个 token 均为合法 hex
 //   3. EXPLORER_COLORS 5 个 token
-//   4. 通用 UI 色 27 个独立 token（24 既有 + accentFg/selectionHoverBg/titlebarBg 3 新增）
-//   5. ROOT_CSS_VARS 键集合 --sl-bg-primary / --sl-fg-primary
+//   4. 通用 UI 色 28 个独立 token（24 既有 + accentFg/selectionHoverBg/titlebarBg/titlebarCloseHover 4 新增）
+//   5. ROOT_CSS_VARS 键集合 6 键（--sl-bg-primary / --sl-fg-primary + FE-08 收编 4 键）
 //   6. theme/index.ts 重导出所有 token
 
 import { describe, it, expect } from "vitest";
@@ -43,6 +43,7 @@ import {
   HTML_PANEL_IFRAME_BG,
   ON_ACCENT_FG,
   TITLEBAR_BG,
+  TITLEBAR_CLOSE_HOVER_BG,
   ERROR_BANNER_BG,
   ERROR_BANNER_BORDER,
   ERROR_BANNER_FG,
@@ -175,14 +176,15 @@ describe("theme/colors.ts 配色 token", () => {
       { name: "ON_ACCENT_FG", value: ON_ACCENT_FG, expected: "#0c1220" },
       // 标题栏
       { name: "TITLEBAR_BG", value: TITLEBAR_BG, expected: "#141416" },
+      { name: "TITLEBAR_CLOSE_HOVER_BG", value: TITLEBAR_CLOSE_HOVER_BG, expected: "#c04747" },
       // 错误提示色
       { name: "ERROR_BANNER_BG", value: ERROR_BANNER_BG, expected: "rgba(217,112,107,0.12)" },
       { name: "ERROR_BANNER_BORDER", value: ERROR_BANNER_BORDER, expected: "#d9706b" },
       { name: "ERROR_BANNER_FG", value: ERROR_BANNER_FG, expected: "#ece9e4" },
     ];
 
-    it("共 27 个 UI token", () => {
-      expect(uiTokenCases).toHaveLength(27);
+    it("共 28 个 UI token", () => {
+      expect(uiTokenCases).toHaveLength(28);
     });
 
     it.each(uiTokenCases)(
@@ -238,12 +240,16 @@ describe("theme/colors.ts 配色 token", () => {
     );
   });
 
-  describe("ROOT_CSS_VARS（CSS 变量桥接，FE-24）", () => {
-    it("包含 --sl-bg-primary 和 --sl-fg-primary", () => {
+  describe("ROOT_CSS_VARS（CSS 变量桥接，FE-24 + FE-08 扩键）", () => {
+    it("包含 6 键：--sl-bg-primary / --sl-fg-primary + 聚焦边框 + 滚动条三键", () => {
       const keys = Object.keys(ROOT_CSS_VARS);
       expect(keys).toContain("--sl-bg-primary");
       expect(keys).toContain("--sl-fg-primary");
-      expect(keys).toHaveLength(2);
+      expect(keys).toContain("--sl-focus-border");
+      expect(keys).toContain("--sl-scrollbar-slider");
+      expect(keys).toContain("--sl-scrollbar-slider-hover");
+      expect(keys).toContain("--sl-scrollbar-slider-active");
+      expect(keys).toHaveLength(6);
     });
 
     it("--sl-bg-primary 引用 APP_BG_PRIMARY", () => {
@@ -252,6 +258,17 @@ describe("theme/colors.ts 配色 token", () => {
 
     it("--sl-fg-primary 值为 #b3aea6", () => {
       expect(ROOT_CSS_VARS["--sl-fg-primary"]).toBe("#b3aea6");
+    });
+
+    it("--sl-focus-border 引用 FOCUS_BORDER（ui.focusBorder 同源）", () => {
+      expect(ROOT_CSS_VARS["--sl-focus-border"]).toBe(FOCUS_BORDER);
+      expect(ROOT_CSS_VARS["--sl-focus-border"]).toBe("#6e9ff2");
+    });
+
+    it("滚动条三键与 App.css 收编前硬编码逐字相同（rgba(255,255,255,0.10/0.20/0.28)）", () => {
+      expect(ROOT_CSS_VARS["--sl-scrollbar-slider"]).toBe("rgba(255,255,255,0.10)");
+      expect(ROOT_CSS_VARS["--sl-scrollbar-slider-hover"]).toBe("rgba(255,255,255,0.20)");
+      expect(ROOT_CSS_VARS["--sl-scrollbar-slider-active"]).toBe("rgba(255,255,255,0.28)");
     });
 
     it("所有值均为非空字符串", () => {

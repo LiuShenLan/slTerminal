@@ -332,11 +332,11 @@
 
 > `dialog-e2e-hook.test.ts`（3 用例）已随 OV-02 删除——`ipc/dialog` 的 ask 已删（确认语义改经 `confirmDialog`），E2E ask 钩子随之退役；文件对话框（open/save）为原生保留，无 L2 守卫。
 
-### 标题栏/统一浮层（3 文件 / 25 用例，Stage 04/07 新建）
+### 标题栏/统一浮层（3 文件 / 27 用例，Stage 04/07 新建）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
-| `src/__tests__/title-bar.test.tsx` | 9 | **TB-06 自绘标题栏（Stage 04 新建；TB-04 修订——人工验证问题 1；问题 6——拖拽区撑满全高）**：三段结构（左段 slTerminal 标识 + 右段三窗口钮，顺序契约最小化/最大化/关闭）/中段按 store 种子显示活跃项目名与活跃页面名（非活跃页不出现）/三钮点击分别调用 ipc/window 的 minimizeWindow/toggleMaximizeWindow/closeWindow（vi.mock 桩，互不误调）/中段无 React 双击 handler——双击不调 wrapper（Tauri 原生拖拽区承担，TB-04 修订）/左中段恰两处 `data-tauri-drag-region="deep"`（子树拖拽——裸属性只命中直接点击元素，文字 span/svg 子元素拦截）/无项目时中段空 div 撑满全高可拖（deep 属性 + `style.height === "100%"` 双断言，TB-06-8 修订——仅断言属性无法防「高度 0 点不到」，问题 6）/左中段拖拽区均 `height: "100%"`（有项目态全高可拖，TB-06-9 新增 8→9）——真实 projects store 种子（beforeEach setState） |
+| `src/__tests__/title-bar.test.tsx` | 11 | **TB-06 自绘标题栏（Stage 04 新建；TB-04 修订——人工验证问题 1；问题 6——拖拽区撑满全高；FE-21 窄订阅）**：三段结构（左段 slTerminal 标识 + 右段三窗口钮，顺序契约最小化/最大化/关闭）/中段按 store 种子显示活跃项目名与活跃页面名（非活跃页不出现）/三钮点击分别调用 ipc/window 的 minimizeWindow/toggleMaximizeWindow/closeWindow（vi.mock 桩，互不误调）/中段无 React 双击 handler——双击不调 wrapper（Tauri 原生拖拽区承担，TB-04 修订）/左中段恰两处 `data-tauri-drag-region="deep"`（子树拖拽——裸属性只命中直接点击元素，文字 span/svg 子元素拦截）/无项目时中段空 div 撑满全高可拖（deep 属性 + `style.height === "100%"` 双断言，TB-06-8 修订——仅断言属性无法防「高度 0 点不到」，问题 6）/左中段拖拽区均 `height: "100%"`（有项目态全高可拖，TB-06-9 新增 8→9）/FE-21 新增 9→11：FE-21-1 无关项目变更不触发重渲染（Profiler onRender 计数无新提交，标题不变）/FE-21-2 切换 layout activePageId 后标题响应更新——真实 projects store 种子（beforeEach setState） |
 | `src/__tests__/confirm-dialog.test.tsx` | 11 | **OV-01/UI-801 统一确认弹窗（Stage 07 新建）**：标题 + 消息 + 确认/取消按钮渲染/遮罩/卡片/按钮色值规格（遮罩 SHADOW_MENU、卡片 SIDEBAR_BG + 描边 + 圆角 8 + 阴影；主按钮 FOCUS_BORDER 底 + ON_ACCENT_FG 字）/**danger → 主按钮 ERROR_FG 底 + SIDEBAR_FG 字**/title/confirmText/cancelText 省略默认文案 + 无标题行/kind 契约三值均可接受/无挂起弹窗时 Host 渲染 null/点击确认 → Promise 解析 true/点击取消 → false/ESC → false/非 Escape 键不关闭/遮罩点击 → false（点卡片内部不关闭）——模块级单例经 `_resetConfirmDialog` 隔离 |
 | `src/__tests__/toast.test.tsx` | 5 | **OV-01/UI-804 toast（Stage 07 新建）**：show 渲染消息 + 容器右上角固定（16px 偏移）/三型语义色规格（success/warning/error 的 12% 底 + 1px 语义描边 + fg-1 文字 + 圆角 8，data-e2e=toast-{type}）/多条堆叠按 show 顺序/无通知时容器不渲染/自动消失（fake timers：success 3s/warning 4s/error 5s 到期仅移除自身，全部到期容器卸载）——`toast._reset` 隔离 |
 

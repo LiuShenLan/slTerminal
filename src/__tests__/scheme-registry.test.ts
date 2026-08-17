@@ -140,7 +140,7 @@ describe("SchemeRegistry", () => {
   });
 
   describe("linear 四段完整性", () => {
-    it("ui 段——6 组键数 7/3/5/8/3/4 + 26 标量", () => {
+    it("ui 段——6 组键数 7/3/5/8/3/4 + 27 标量", () => {
       expect(linear.id).toBe("linear");
       expect(linear.label).toBe("Linear");
       // 6 组
@@ -150,19 +150,20 @@ describe("SchemeRegistry", () => {
       expect(Object.keys(linear.ui.sidebar).length).toBe(8);
       expect(Object.keys(linear.ui.errorBanner).length).toBe(3);
       expect(Object.keys(linear.ui.agentStatusUsage).length).toBe(4);
-      // 26 标量（23 既有 + accentFg/selectionHoverBg/titlebarBg 3 新增；
+      // 27 标量（23 既有 + accentFg/selectionHoverBg/titlebarBg/titlebarCloseHover 4 新增；
       // 标量均为 string，组为嵌套对象）
       const scalarCount = (Object.keys(linear.ui) as Array<keyof typeof linear.ui>).filter(
         (k) => typeof linear.ui[k] === "string",
       ).length;
-      expect(scalarCount).toBe(26);
+      expect(scalarCount).toBe(27);
       // 关键标量值对齐 linear.ts（附录 A 契约）
       expect(linear.ui.panelBg).toBe("#0a0a0b");
       expect(linear.ui.appBgPrimary).toBe("#0a0a0b");
-      // 新增 3 标量落位
+      // 新增 4 标量落位
       expect(linear.ui.accentFg).toBe("#8fb4f5");
       expect(linear.ui.selectionHoverBg).toBe("rgba(110,159,242,0.22)");
       expect(linear.ui.titlebarBg).toBe("#141416");
+      expect(linear.ui.titlebarCloseHover).toBe("#c04747");
     });
 
     it("terminal 段——25 键", () => {

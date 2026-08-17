@@ -1,6 +1,7 @@
 // FileIcon.tsx — 文件/文件夹类型图标（UI-602：emoji → 描边 SVG 重构）+ git 状态色叠加
 //
-// 文件夹 = 描边款 SVG（src/lib/icons.tsx 的 IconFolder，IC-01 图标单点，禁止直接用 lucide）
+// 文件夹 = 描边款 SVG（src/lib/icons.tsx 的 IconFolder，IC-01 图标单点，禁止直接用 lucide）；
+//   颜色 = git 状态色（与文件分支同一映射），无状态/未命中映射回退 EXPLORER_COLORS.fg
 // 文件   = 描边 + 小色块款自绘 SVG：
 //   - 轮廓/折角描边色 = 当前色（git 状态色，无则 EXPLORER_COLORS.fg）
 //   - 左缘小色块 fill = 扩展名映射色（六色盘，见下方映射表）
@@ -99,13 +100,14 @@ export const FileIcon: React.FC<FileIconProps> = ({
   isDir,
   gitStatus,
 }) => {
-  const color = gitStatus ? statusColorMap[gitStatus] : EXPLORER_COLORS.fg;
+  // git 状态色（文件/文件夹通用同一映射）；无状态/未命中映射回退默认前景色
+  const color = statusColorMap[gitStatus ?? ""] ?? EXPLORER_COLORS.fg;
 
   if (isDir) {
     return (
       <span
         style={{
-          color: EXPLORER_COLORS.fg,
+          color,
           display: "inline-flex",
           alignItems: "center",
         }}

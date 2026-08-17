@@ -4,7 +4,7 @@
 // A 组：文件渲染——svg 存在 + 左缘色块 fill = 扩展名映射色（六色盘）
 // A2 组：扩展名 → 色块映射（表驱动全分支）
 // B 组：git 状态着色——轮廓描边 stroke = git 状态色（GIT_FILE_COLORS 逻辑不变）
-// C 组：目录渲染——IconFolder（svg）+ 默认色
+// C 组：目录渲染——IconFolder（svg）+ git 状态色（与文件分支同一映射，无状态/未命中回退默认色）
 
 import { describe, it, expect } from "vitest";
 import { render } from "@testing-library/react";
@@ -91,9 +91,32 @@ describe("FileIcon 组件渲染", () => {
     expect(span!.style.color).toBe(hexToStyleRgb(EXPLORER_COLORS.fg));
   });
 
-  it("目录即使有 gitStatus 也使用默认颜色", () => {
+  it("目录 modified 状态应用修改色", () => {
     const { container } = render(
       <FileIcon name="src" isDir={true} gitStatus="modified" />,
+    );
+    const span = container.querySelector("span");
+    expect(span!.style.color).toBe(hexToStyleRgb(GIT_FILE_COLORS.modified));
+  });
+
+  it.each([
+    ["added", GIT_FILE_COLORS.added], // 已新增
+    ["untracked", GIT_FILE_COLORS.untracked], // 未跟踪
+    ["deleted", GIT_FILE_COLORS.deleted], // 已删除
+    ["renamed", GIT_FILE_COLORS.renamed], // 已重命名
+    ["conflict", GIT_FILE_COLORS.conflict], // 冲突
+    ["ignored", GIT_FILE_COLORS.ignored], // 已忽略
+  ])("目录 %s 状态应用对应状态色", (status, expected) => {
+    const { container } = render(
+      <FileIcon name="src" isDir={true} gitStatus={status} />,
+    );
+    const span = container.querySelector("span");
+    expect(span!.style.color).toBe(hexToStyleRgb(expected));
+  });
+
+  it("目录未知 gitStatus 回退默认前景色", () => {
+    const { container } = render(
+      <FileIcon name="src" isDir={true} gitStatus="unknown" />,
     );
     const span = container.querySelector("span");
     expect(span!.style.color).toBe(hexToStyleRgb(EXPLORER_COLORS.fg));

@@ -2,7 +2,10 @@
 
 :root {
   /* JetBrains 暗色配色基础色 */
-  /* --sl-bg-primary / --sl-fg-primary 由 ROOT_CSS_VARS（colors.ts）经 main.tsx 注入 */
+  /* 本 :root 全部 var() 键（6 键）由 ROOT_CSS_VARS（colors.ts）经 main.tsx 注入：
+     --sl-bg-primary ← ui.appBgPrimary；--sl-fg-primary ← ui.appFg；
+     --sl-scrollbar-slider 三键 ← terminal.scrollbarSlider*Background；
+     --sl-focus-border ← ui.focusBorder */
 
   color-scheme: dark;
   font-family: "JetBrains Mono", "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace;
@@ -56,22 +59,22 @@ html, body, #root {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.10);
+  background: var(--sl-scrollbar-slider);
   border-radius: 5px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.20);
+  background: var(--sl-scrollbar-slider-hover);
 }
 ::-webkit-scrollbar-thumb:active {
-  background: rgba(255, 255, 255, 0.28);
+  background: var(--sl-scrollbar-slider-active);
 }
 ::-webkit-scrollbar-button {
   display: none; /* 无箭头 */
 }
 
-/* UI-808（GL-02）: 全局键盘焦点环——accent 定值 #6e9ff2，与 linear.focusBorder 同步
-   （ROOT_CSS_VARS 仅两键，var() 不可行，此处硬编码；鼠标点击聚焦不匹配 :focus-visible，不显示环） */
+/* UI-808（GL-02）: 全局键盘焦点环——accent 定值 #6e9ff2（ui.focusBorder）经 ROOT_CSS_VARS
+   注入 var(--sl-focus-border)；鼠标点击聚焦不匹配 :focus-visible，不显示环 */
 :focus-visible {
-  outline: 1px solid #6e9ff2;
+  outline: 1px solid var(--sl-focus-border);
 }
 

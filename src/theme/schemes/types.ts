@@ -76,7 +76,7 @@ export interface UiTokens {
     /** 临界用量（≥90%） */ critical: string;
   };
 
-  // --- 标量（26 键）---
+  // --- 标量（27 键）---
   /** 全部面板背景（21 处，以 grep 为准） */
   panelBg: string;
   /** 右键菜单底色（4 处） */
@@ -129,6 +129,8 @@ export interface UiTokens {
   selectionHoverBg: string;
   /** 自绘标题栏 chrome 底（明度阶梯 l2）——TitleBar 容器背景 */
   titlebarBg: string;
+  /** 自绘标题栏关闭钮 hover 底（UI-301 定值）——TitleBar 关闭按钮 hover 背景 */
+  titlebarCloseHover: string;
 }
 
 /** xterm 调色板——25 键，ITheme 兼容（经 panels/terminal/theme.ts adapter 展开进 ITheme） */

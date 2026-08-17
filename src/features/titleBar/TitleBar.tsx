@@ -7,19 +7,17 @@
 // 数据：中段标题 = projects store 活跃项目名 / 活跃页面名
 //（layout store 的 activePageId 定位；无现成 selector，直接推导，不改 store）。
 
+import { useShallow } from "zustand/react/shallow";
 import { useState } from "react";
 import type { CSSProperties, FC } from "react";
 import type { IconProps } from "../../lib";
 import { IconMin, IconMax, IconCloseWin } from "../../lib";
 import { minimizeWindow, toggleMaximizeWindow, closeWindow } from "../../ipc/window";
 import { useLayout } from "../../stores/layout";
-import { useProjects, type Project } from "../../stores/projects";
+import { useProjects } from "../../stores/projects";
 import {
-  TITLEBAR_BG, SEPARATOR_BG, DIM_FG, SECONDARY_BG, ACCENT_FG, ACTIVE_SELECTION_BG,
+  TITLEBAR_BG, TITLEBAR_CLOSE_HOVER_BG, SEPARATOR_BG, DIM_FG, SECONDARY_BG, ACCENT_FG, ACTIVE_SELECTION_BG,
 } from "../../theme/colors";
-
-/** 关闭钮 hover 底——关闭危险色，设计定值（无 token 槽位，本组件内常量） */
-const CLOSE_HOVER_BG = "#c04747";
 
 /** app logo 终端提示符图形（lucide Terminal path，与设计稿 final-mockup 一致） */
 const LOGO_PATH = "M5 8l6 5-6 5M13 19h7";
@@ -47,27 +45,34 @@ const winButtonBaseStyle: CSSProperties = {
 };
 
 /** 从 projects store 推导活跃项目/页面（无现成 selector；禁止改 store） */
-function useActiveProjectPage(): { project: Project | null; pageName: string } {
+function useActiveProjectPage(): { projectName: string | null; pageName: string } {
   const activePageId = useLayout((s) => s.activePageId);
-  const projects = useProjects((s) => s.projects);
-  const projList = Object.values(projects);
-  if (projList.length === 0) return { project: null, pageName: "" };
-  // 优先按全局活跃页面（layout store）定位所属项目
-  if (activePageId) {
-    for (const proj of projList) {
-      const page = proj.pages.find((p) => p.pageId === activePageId);
-      if (page) return { project: proj, pageName: page.name };
-    }
-  }
-  // layout 无活跃页（未切换过页面/测试环境）：回退第一个项目的 activePageId 页
-  const first = projList[0];
-  const page = first.pages.find((p) => p.pageId === first.activePageId);
-  if (page) return { project: first, pageName: page.name };
-  return { project: null, pageName: "" };
+  // 窄订阅（FE-21）：selector 只推导标题所需两原始值字段并经 useShallow 浅比较——
+  // 无关项目变更（layout/version/expandedNodes 等）结果浅相等，不触发 TitleBar 重渲染；
+  // useShallow 包装器每次渲染重建（无 useCallback 缓存），activePageId 闭包恒最新，
+  // 布局切换响应与改造前一致
+  return useProjects(
+    useShallow((s) => {
+      const projList = Object.values(s.projects);
+      if (projList.length === 0) return { projectName: null, pageName: "" };
+      // 优先按全局活跃页面（layout store）定位所属项目
+      if (activePageId) {
+        for (const proj of projList) {
+          const page = proj.pages.find((p) => p.pageId === activePageId);
+          if (page) return { projectName: proj.name, pageName: page.name };
+        }
+      }
+      // layout 无活跃页（未切换过页面/测试环境）：回退第一个项目的 activePageId 页
+      const first = projList[0];
+      const page = first.pages.find((p) => p.pageId === first.activePageId);
+      if (page) return { projectName: first.name, pageName: page.name };
+      return { projectName: null, pageName: "" };
+    }),
+  );
 }
 
 export function TitleBar() {
-  const { project, pageName } = useActiveProjectPage();
+  const { projectName, pageName } = useActiveProjectPage();
   const [hover, setHover] = useState<WinButtonKind | null>(null);
 
   return (
@@ -132,9 +137,9 @@ export function TitleBar() {
           textOverflow: "ellipsis",
         }}
       >
-        {project && (
+        {projectName && (
           <>
-            <span style={{ fontWeight: 500 }}>{project.name}</span>
+            <span style={{ fontWeight: 500 }}>{projectName}</span>
             <span style={{ margin: "0 8px" }}>/</span>
             <span>{pageName}</span>
           </>
@@ -154,7 +159,7 @@ export function TitleBar() {
               title={label}
               style={{
                 ...winButtonBaseStyle,
-                background: isHovered ? (isClose ? CLOSE_HOVER_BG : SECONDARY_BG) : "transparent",
+                background: isHovered ? (isClose ? TITLEBAR_CLOSE_HOVER_BG : SECONDARY_BG) : "transparent",
               }}
               onMouseEnter={() => setHover(kind)}
               onMouseLeave={() => setHover((h) => (h === kind ? null : h))}

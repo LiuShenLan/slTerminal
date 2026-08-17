@@ -11,8 +11,9 @@
 import { schemeRegistry } from "./schemeRegistry";
 import "./schemes"; // side-effect：注册内置方案（linear），保证 getActive() 恒有值（测试环境无 main.tsx）
 
-// 取当前 active 方案的 ui 段（模块加载时求值一次，方案切换后重新 import 生效）
-const { ui } = schemeRegistry.getActive();
+// 取当前 active 方案的 ui 段 + terminal 段（模块加载时求值一次，方案切换后重新 import 生效）
+// terminal 段仅供 ROOT_CSS_VARS 滚动条三键取值，其余 token 一律代理 ui 段
+const { ui, terminal } = schemeRegistry.getActive();
 
 // --- 文件名 git 状态色（ui.gitFile）---
 // 用于文件浏览器文件名着色
@@ -95,10 +96,21 @@ export const SELECTION_HOVER_BG = ui.selectionHoverBg;
 
 export const TITLEBAR_BG = ui.titlebarBg;
 
+// --- 自绘标题栏关闭钮 hover 底（ui.titlebarCloseHover）---
+// TitleBar 关闭钮 hover 背景（危险色，UI-301 定值）
+
+export const TITLEBAR_CLOSE_HOVER_BG = ui.titlebarCloseHover;
+
 // --- CSS 变量桥接（供 App.css :root 变量从 token 取值）---
 // main.tsx 将本对象注入 document.documentElement，App.css 仅通过 var() 引用。
+// 后 4 键为 FE-08 收编 App.css 硬编码：--sl-focus-border ← ui.focusBorder；
+// 滚动条三键 ← terminal 段 scrollbarSlider*（App.css 滚动条与 xterm 滚动条共用同一滑配色）。
 
 export const ROOT_CSS_VARS = {
   "--sl-bg-primary": ui.appBgPrimary,
   "--sl-fg-primary": ui.appFg,
+  "--sl-focus-border": ui.focusBorder,
+  "--sl-scrollbar-slider": terminal.scrollbarSliderBackground,
+  "--sl-scrollbar-slider-hover": terminal.scrollbarSliderHoverBackground,
+  "--sl-scrollbar-slider-active": terminal.scrollbarSliderActiveBackground,
 } as const;

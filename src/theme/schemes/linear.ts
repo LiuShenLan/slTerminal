@@ -66,7 +66,7 @@ const ui: UiTokens = {
     critical: "#d9706b", // 临界用量 ≥90%
   },
 
-  // --- 标量（23 既有 + 3 新增）：全部自绘 UI 通用色 ---
+  // --- 标量（23 既有 + 4 新增）：全部自绘 UI 通用色 ---
   panelBg: "#0a0a0b",                    // 全部面板背景（终端/编辑器/diff/侧栏视图等容器底色）
   sidebarBg: "#1a1a1e",                  // 右键菜单/弹窗底色
   secondaryBg: "#222227",                // 页签按钮/弹窗次级背景
@@ -93,6 +93,7 @@ const ui: UiTokens = {
   accentFg: "#8fb4f5",                          // 强调派生前景色（活动栏激活图标/状态行模型段）
   selectionHoverBg: "rgba(110,159,242,0.22)",   // 选中行 hover（accent-dim-2）
   titlebarBg: "#141416",                        // 自绘标题栏 chrome 底（明度阶梯 l2）
+  titlebarCloseHover: "#c04747",                // 自绘标题栏关闭钮 hover 底（UI-301 定值）
 };
 
 // --- 方案组装（四段）---

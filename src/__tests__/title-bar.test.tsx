@@ -21,7 +21,8 @@ vi.mock("../ipc/window", () => ({
   closeWindow: vi.fn().mockResolvedValue(undefined),
 }));
 
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, act } from "@testing-library/react";
+import { Profiler } from "react";
 import { TitleBar } from "../features/titleBar/TitleBar";
 import {
   minimizeWindow,
@@ -29,6 +30,7 @@ import {
   closeWindow,
 } from "../ipc/window";
 import { useProjects } from "../stores/projects";
+import { useLayout } from "../stores/layout";
 
 // ── 测试辅助：projects store 种子 ──
 
@@ -88,6 +90,55 @@ describe("TitleBar", () => {
     expect(screen.getByText(/页面A/)).not.toBeNull();
     // 非活跃页「页面B」不应出现
     expect(screen.queryByText(/页面B/)).toBeNull();
+  });
+
+  // ═══ FE-21 窄订阅：无关项目变更不触发重渲染，标题切换响应保持 ═══
+
+  it("FE-21-1 无关项目变更不触发重渲染（标题不变）", () => {
+    // Profiler 计数 = TitleBar 子树提交次数：初始挂载 1 次；无关 store 变更
+    // 若仍触发 TitleBar 重渲染则计数增长（Zustand 浅比较失效即红）
+    let commits = 0;
+    render(
+      <Profiler id="titlebar-fn21" onRender={() => { commits++; }}>
+        <TitleBar />
+      </Profiler>,
+    );
+    expect(commits).toBe(1);
+    // 无关变更：新增另一项目（标题推导只涉及首个/活跃项目，proj-2 数据不参与）
+    act(() => {
+      useProjects.setState((s) => ({
+        projects: {
+          ...s.projects,
+          "proj-2": {
+            projectId: "proj-2",
+            name: "无关项目",
+            rootPath: "D:/other",
+            pages: [
+              { pageId: "page-9", name: "页面X", layout: {}, createdAt: 9, lastAccessedAt: 9 },
+            ],
+            activePageId: "page-9",
+            version: 1,
+          },
+        },
+      }));
+    });
+    // 无新提交（未重渲染）+ 标题不变
+    expect(commits).toBe(1);
+    expect(screen.getByText(/测试项目/)).not.toBeNull();
+    expect(screen.getByText(/页面A/)).not.toBeNull();
+    expect(screen.queryByText(/无关项目/)).toBeNull();
+  });
+
+  it("FE-21-2 切换布局活跃页（layout store）后标题响应更新", () => {
+    render(<TitleBar />);
+    // 种子默认 layout.activePageId 为空 → 回退首个项目 activePageId → 页面A
+    expect(screen.getByText(/页面A/)).not.toBeNull();
+    // 经 layout store 切换活跃页 → 中段标题随 activePageId 更新（窄订阅不破坏切换响应）
+    act(() => {
+      useLayout.setState({ activePageId: "page-2" });
+    });
+    expect(screen.getByText(/页面B/)).not.toBeNull();
+    expect(screen.queryByText(/页面A/)).toBeNull();
   });
 
   // ═══ 三钮点击 → 对应 wrapper ═══
