@@ -73,8 +73,9 @@ vi.mock("../lib/ConfirmDialog", () => ({
 }));
 
 // mock IPC settings —— hooksConfig store loadFromDisk 的后端读
+// FE-11/D11：wrapper 返回 { data, corrupted }——无文件 = data:null, corrupted:false
 vi.mock("../ipc/settings", () => ({
-  loadSettings: vi.fn(async () => null),
+  loadSettings: vi.fn(async () => ({ data: null, corrupted: false })),
   saveSettings: vi.fn(async () => {}),
 }));
 

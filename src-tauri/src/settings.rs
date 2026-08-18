@@ -1,65 +1,32 @@
 /// 设置持久化模块 — save/load settings 到 ~/.slterminal/settings.json
 ///
 /// 原子写入（tempfile）+ .bak 备份兜底。
+/// - BE-14/D11：load 返回 `{ data, corrupted }`——无文件 data:null/corrupted:false；
+///   损坏回退默认值 corrupted:true；.bak 命中也算 corrupted:true（数据来自备份）。
+/// - SEC-11：save 校验顶层键白名单（fontSize/keybindings/sideBar/colorScheme）+ 大小上限 1MB。
+/// - BE-16：应用数据目录解析/测试守卫/共享 DTO 自 app_dir 模块导入。
+use crate::app_dir::{app_data_dir, LoadResult, MAX_PERSIST_BYTES};
 use crate::error::{io_error, AppError};
 use std::io::Write as _;
-use std::path::PathBuf;
 use tempfile::NamedTempFile;
 
-/// 从可执行文件路径解析应用数据目录（纯函数，注入可失败点供 SPE-04 两错误分支测试）
-pub(crate) fn resolve_app_data_dir(
-    exe: Result<PathBuf, std::io::Error>,
-) -> Result<PathBuf, AppError> {
-    let exe = exe.map_err(|e| {
-        tracing::warn!(error = %e, "无法获取可执行文件路径");
-        AppError::IoKind {
-            kind: "exe_dir".into(),
-            message: "无法获取可执行文件路径".into(),
-        }
-    })?;
-    let exe_dir = exe.parent().ok_or_else(|| AppError::IoKind {
-        kind: "exe_dir".into(),
-        message: "无法获取可执行文件所在目录".into(),
-    })?;
-    Ok(exe_dir.to_path_buf())
-}
+/// 设置顶层键白名单（SEC-11）：前端各 store 只允许写这些键
+/// （fontSize/keybindings/sideBar/colorScheme——与 stores 模块持久化键一一对应）
+const SETTINGS_ALLOWED_KEYS: [&str; 4] = ["fontSize", "keybindings", "sideBar", "colorScheme"];
 
-/// 测试用：app_data_dir() 覆盖注入槽（仅测试编译，生产零行为变更）
-#[cfg(test)]
-static APP_DATA_DIR_OVERRIDE: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
-
-/// 测试用 RAII 守卫：把 app_data_dir() 指向指定目录，Drop 时恢复原值
-/// （防测试 panic 残留覆盖污染后续用例；projects 模块命令层测试复用）
-#[cfg(test)]
-pub(crate) struct AppDataDirGuard(Option<PathBuf>);
-
-#[cfg(test)]
-impl AppDataDirGuard {
-    pub(crate) fn set(dir: &std::path::Path) -> Self {
-        let mut slot = APP_DATA_DIR_OVERRIDE.lock().unwrap();
-        let prev = slot.clone();
-        *slot = Some(dir.to_path_buf());
-        AppDataDirGuard(prev)
-    }
-}
-
-#[cfg(test)]
-impl Drop for AppDataDirGuard {
-    fn drop(&mut self) {
-        *APP_DATA_DIR_OVERRIDE.lock().unwrap() = self.0.clone();
-    }
-}
-
-/// 获取应用数据目录（exe 同级目录，适配便携分发）
-pub(crate) fn app_data_dir() -> Result<PathBuf, AppError> {
-    // 测试注入覆盖（仅测试编译，生产恒走 current_exe 路径）
-    #[cfg(test)]
-    {
-        if let Some(dir) = APP_DATA_DIR_OVERRIDE.lock().unwrap().clone() {
-            return Ok(dir);
+/// SEC-11：校验设置保存输入——须为 JSON 对象且顶层键 ∈ 白名单
+fn validate_settings_input(settings: &serde_json::Value) -> Result<(), AppError> {
+    let obj = settings
+        .as_object()
+        .ok_or_else(|| AppError::Validation("保存设置失败: 设置必须是 JSON 对象".into()))?;
+    for key in obj.keys() {
+        if !SETTINGS_ALLOWED_KEYS.contains(&key.as_str()) {
+            return Err(AppError::Validation(format!(
+                "保存设置失败: 顶层键不在白名单内: {key}"
+            )));
         }
     }
-    resolve_app_data_dir(std::env::current_exe())
+    Ok(())
 }
 
 /// 浅合并：incoming 的 top-level 键覆盖 existing。
@@ -78,8 +45,13 @@ fn merge_settings(existing: serde_json::Value, incoming: serde_json::Value) -> s
 }
 
 /// 持久化设置（读现有 → 浅合并 top-level 键 → 原子写入：tempfile → flush → persist，.bak 备份兜底）
+///
+/// SEC-11 保存校验：顶层键白名单（spawn_blocking 前快速失败）+ 序列化后大小上限 1MB。
 #[tauri::command]
 pub async fn save_settings(settings: serde_json::Value) -> Result<(), AppError> {
+    // SEC-11：顶层键白名单校验（纯内存操作，spawn_blocking 前快速失败）
+    validate_settings_input(&settings)?;
+
     let app_dir = app_data_dir()?;
     let settings_path = app_dir.join("settings.json");
 
@@ -96,6 +68,10 @@ pub async fn save_settings(settings: serde_json::Value) -> Result<(), AppError> 
         let merged = merge_settings(existing, settings);
 
         let json = serde_json::to_string_pretty(&merged)?;
+        // SEC-11：序列化后大小上限（含合并进现有文件的部分）
+        if json.len() > MAX_PERSIST_BYTES {
+            return Err(AppError::Validation("保存设置失败: 数据超过 1MB 上限".into()));
+        }
         let mut tmp =
             NamedTempFile::new_in(&app_dir).map_err(|e| io_error("保存设置", &app_dir, e))?;
         tmp.write_all(json.as_bytes())
@@ -119,37 +95,55 @@ pub async fn save_settings(settings: serde_json::Value) -> Result<(), AppError> 
     Ok(())
 }
 
-/// 加载持久化设置，失败从 .bak 恢复，仍失败返回 Null
+/// 加载持久化设置（BE-14/D11）：返回 `{ data, corrupted }`
+///
+/// - 无文件 → data:null, corrupted:false
+/// - 主文件损坏 → 尝试 .bak：命中 → data:备份内容, corrupted:true；未命中 → data:null, corrupted:true
+/// - 主文件合法 → data:内容, corrupted:false
 #[tauri::command]
-pub async fn load_settings() -> Result<serde_json::Value, AppError> {
+pub async fn load_settings() -> Result<LoadResult<Option<serde_json::Value>>, AppError> {
     let app_dir = app_data_dir()?;
     let settings_path = app_dir.join("settings.json");
 
     let app_dir_clone = app_dir.clone();
-    let result =
-        match tokio::task::spawn_blocking(move || -> Result<serde_json::Value, AppError> {
+    let result = match tokio::task::spawn_blocking(
+        move || -> Result<LoadResult<Option<serde_json::Value>>, AppError> {
             match std::fs::read_to_string(&settings_path) {
                 Ok(content) => match serde_json::from_str(&content) {
-                    Ok(v) => Ok(v),
+                    Ok(v) => Ok(LoadResult {
+                        data: Some(v),
+                        corrupted: false,
+                    }),
                     Err(_) => {
                         let bak = app_dir_clone.join("settings.json.bak");
                         if let Ok(bak_content) = std::fs::read_to_string(&bak) {
                             if let Ok(v) = serde_json::from_str(&bak_content) {
                                 let _ = std::fs::write(&settings_path, &bak_content);
-                                return Ok(v);
+                                // BE-14：bak 命中也算 corrupted（数据来自备份）
+                                return Ok(LoadResult {
+                                    data: Some(v),
+                                    corrupted: true,
+                                });
                             }
                         }
-                        Ok(serde_json::Value::Null)
+                        Ok(LoadResult {
+                            data: None,
+                            corrupted: true,
+                        })
                     }
                 },
-                Err(_) => Ok(serde_json::Value::Null),
+                Err(_) => Ok(LoadResult {
+                    data: None,
+                    corrupted: false,
+                }),
             }
-        })
-        .await
-        {
-            Ok(inner) => inner,
-            Err(e) => Err(AppError::TaskJoin(e.to_string())),
-        }?;
+        },
+    )
+    .await
+    {
+        Ok(inner) => inner,
+        Err(e) => Err(AppError::TaskJoin(e.to_string())),
+    }?;
     Ok(result)
 }
 
@@ -157,6 +151,7 @@ pub async fn load_settings() -> Result<serde_json::Value, AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app_dir::AppDataDirGuard;
 
     /// 创建 tokio runtime 并 block_on 调真实 Tauri 命令（与 fs 模块命令层测试同模式）
     fn run<F: std::future::Future>(f: F) -> F::Output {
@@ -170,33 +165,35 @@ mod tests {
     // 注：TaskJoin 分支（spawn_blocking panic）无法经命令注入构造，由 error.rs 的
     // From<JoinError> 用例（SPE-03）在错误类型层覆盖。
 
-    /// 完整 save → load 往返（真实命令）
+    /// 完整 save → load 往返（真实命令）：data 一致且 corrupted=false
     #[test]
     fn save_then_load_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
         let _guard = AppDataDirGuard::set(dir.path());
         let settings: serde_json::Value = serde_json::json!({
-            "theme": "jetbrains-dark",
+            "colorScheme": "jetbrains-dark",
             "fontSize": 14
         });
 
         run(save_settings(settings.clone())).unwrap();
         let loaded = run(load_settings()).unwrap();
 
-        assert_eq!(loaded, settings);
+        assert_eq!(loaded.data, Some(settings), "加载数据应与保存一致");
+        assert!(!loaded.corrupted, "正常保存后加载不应标记 corrupted");
     }
 
-    /// 文件不存在时 load_settings 返回 Null
+    /// BE-14 corrupted 三态①：文件不存在 → data:null / corrupted:false
     #[test]
-    fn load_missing_file_returns_null() {
+    fn load_missing_file_returns_null_not_corrupted() {
         let dir = tempfile::tempdir().unwrap();
         let _guard = AppDataDirGuard::set(dir.path());
 
         let value = run(load_settings()).unwrap();
-        assert!(value.is_null(), "文件不存在时 load_settings 应返回 Null");
+        assert!(value.data.is_none(), "文件不存在时 data 应为 null");
+        assert!(!value.corrupted, "文件不存在不算损坏");
     }
 
-    /// JSON 损坏时从 .bak 恢复（真实命令：损坏主文件 → 恢复 .bak 内容并修复主文件）
+    /// BE-14 corrupted 三态②：JSON 损坏从 .bak 恢复 → data=备份内容 / corrupted:true
     #[test]
     fn load_corrupt_json_recovers_from_bak() {
         let dir = tempfile::tempdir().unwrap();
@@ -209,7 +206,11 @@ mod tests {
         let _guard = AppDataDirGuard::set(dir.path());
         let value = run(load_settings()).unwrap();
 
-        assert_eq!(value, serde_json::json!({"theme": "dark", "fontSize": 14}));
+        assert_eq!(
+            value.data,
+            Some(serde_json::json!({"theme": "dark", "fontSize": 14}))
+        );
+        assert!(value.corrupted, ".bak 命中也应标记 corrupted（数据来自备份）");
         // 验证 settings.json 已被 .bak 修复
         let repaired: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(dir.path().join("settings.json")).unwrap(),
@@ -221,7 +222,7 @@ mod tests {
         );
     }
 
-    /// JSON 损坏且无 .bak 时返回 Null
+    /// BE-14 corrupted 三态③：JSON 损坏且无 .bak → data:null / corrupted:true
     #[test]
     fn load_corrupt_json_no_bak_returns_null() {
         let dir = tempfile::tempdir().unwrap();
@@ -229,10 +230,11 @@ mod tests {
 
         let _guard = AppDataDirGuard::set(dir.path());
         let value = run(load_settings()).unwrap();
-        assert!(value.is_null(), "无 .bak 时应返回 Null");
+        assert!(value.data.is_none(), "无 .bak 时 data 应为 null");
+        assert!(value.corrupted, "损坏文件应标记 corrupted");
     }
 
-    /// .bak 也损坏时仍返回 Null
+    /// .bak 也损坏时 → data:null / corrupted:true
     #[test]
     fn load_corrupt_both_json_and_bak_returns_null() {
         let dir = tempfile::tempdir().unwrap();
@@ -241,10 +243,11 @@ mod tests {
 
         let _guard = AppDataDirGuard::set(dir.path());
         let value = run(load_settings()).unwrap();
-        assert!(value.is_null(), ".bak 也损坏时应返回 Null");
+        assert!(value.data.is_none(), ".bak 也损坏时 data 应为 null");
+        assert!(value.corrupted, "损坏文件应标记 corrupted");
     }
 
-    /// 空文件视为损坏 → 无 .bak → Null
+    /// 空文件视为损坏 → 无 .bak → data:null / corrupted:true
     #[test]
     fn load_empty_file_returns_null() {
         let dir = tempfile::tempdir().unwrap();
@@ -252,7 +255,8 @@ mod tests {
 
         let _guard = AppDataDirGuard::set(dir.path());
         let value = run(load_settings()).unwrap();
-        assert!(value.is_null(), "空文件非合法 JSON，应返回 Null");
+        assert!(value.data.is_none(), "空文件非合法 JSON，data 应为 null");
+        assert!(value.corrupted, "空文件应标记 corrupted");
     }
 
     /// 多次 save 不擦除其他段（浅合并经真实命令验证）
@@ -270,17 +274,18 @@ mod tests {
         .unwrap();
 
         let reloaded = run(load_settings()).unwrap();
+        let data = reloaded.data.as_ref().unwrap();
         assert_eq!(
-            reloaded["fontSize"], 14,
+            data["fontSize"], 14,
             "fontSize 不应被 keybindings 覆盖擦除"
         );
         assert_eq!(
-            reloaded["keybindings"]["terminal.copy"], "Ctrl+Alt+KeyC",
+            data["keybindings"]["terminal.copy"], "Ctrl+Alt+KeyC",
             "keybindings 应正确写入"
         );
     }
 
-    /// 三次增量 save 验证所有段均保留（fontSize → keybindings → editorFontSize）
+    /// 三次增量 save 验证所有段均保留（fontSize → keybindings → sideBar）
     #[test]
     fn three_save_cycles_preserve_all_sections() {
         let dir = tempfile::tempdir().unwrap();
@@ -291,20 +296,21 @@ mod tests {
             serde_json::json!({"keybindings": {"terminal.copy": "Ctrl+Shift+C"}}),
         ))
         .unwrap();
-        run(save_settings(serde_json::json!({"editorFontSize": 16}))).unwrap();
+        run(save_settings(serde_json::json!({"sideBar": {"width": 280}}))).unwrap();
 
         let final_value = run(load_settings()).unwrap();
+        let data = final_value.data.as_ref().unwrap();
         assert_eq!(
-            final_value["fontSize"], 14,
+            data["fontSize"], 14,
             "第一次 save 的 fontSize 应保留"
         );
         assert_eq!(
-            final_value["keybindings"]["terminal.copy"], "Ctrl+Shift+C",
+            data["keybindings"]["terminal.copy"], "Ctrl+Shift+C",
             "第二次 save 的 keybindings 应保留"
         );
         assert_eq!(
-            final_value["editorFontSize"], 16,
-            "第三次 save 的 editorFontSize 应保留"
+            data["sideBar"]["width"], 280,
+            "第三次 save 的 sideBar 应保留"
         );
     }
 
@@ -318,7 +324,10 @@ mod tests {
         run(save_settings(serde_json::json!({"fontSize": 18}))).unwrap();
 
         let reloaded = run(load_settings()).unwrap();
-        assert_eq!(reloaded["fontSize"], 18, "fontSize 应被覆盖为新值");
+        assert_eq!(
+            reloaded.data.unwrap()["fontSize"], 18,
+            "fontSize 应被覆盖为新值"
+        );
     }
 
     /// create_dir_all：目录不存在时 save 自动创建（BE-05 确保此 I/O 在 spawn_blocking 内）
@@ -342,8 +351,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let _guard = AppDataDirGuard::set(dir.path());
 
-        run(save_settings(serde_json::json!({"a": 1}))).unwrap();
-        run(save_settings(serde_json::json!({"b": 2}))).unwrap();
+        run(save_settings(serde_json::json!({"fontSize": 1}))).unwrap();
+        run(save_settings(serde_json::json!({"keybindings": {}}))).unwrap();
 
         let mut names: Vec<String> = std::fs::read_dir(dir.path())
             .unwrap()
@@ -368,7 +377,7 @@ mod tests {
         std::fs::create_dir(&settings_path).unwrap();
         let _guard = AppDataDirGuard::set(dir.path());
 
-        let err = run(save_settings(serde_json::json!({"a": 1}))).unwrap_err();
+        let err = run(save_settings(serde_json::json!({"fontSize": 1}))).unwrap_err();
         match err {
             AppError::IoKind { kind, message } => {
                 assert!(!kind.is_empty(), "kind 不应为空");
@@ -416,15 +425,19 @@ mod tests {
         let _guard = AppDataDirGuard::set(dir.path());
 
         // 两个独立线程各持 runtime 并发 block_on 真实 save_settings（read-merge-write 竞态）
-        let h1 = std::thread::spawn(move || run_save_with_retry(serde_json::json!({"key": "a"})));
-        let h2 = std::thread::spawn(move || run_save_with_retry(serde_json::json!({"key": "b"})));
+        let h1 = std::thread::spawn(move || {
+            run_save_with_retry(serde_json::json!({"fontSize": "a"}))
+        });
+        let h2 = std::thread::spawn(move || {
+            run_save_with_retry(serde_json::json!({"fontSize": "b"}))
+        });
         h1.join().unwrap().unwrap();
         h2.join().unwrap().unwrap();
 
         // 原子 persist 保证最终文件是完整文档（非撕裂），值为两者之一
         let content = std::fs::read_to_string(dir.path().join("settings.json")).unwrap();
         let final_value: serde_json::Value = serde_json::from_str(&content).unwrap();
-        let v = final_value["key"].as_str().unwrap();
+        let v = final_value["fontSize"].as_str().unwrap();
         assert!(
             v == "a" || v == "b",
             "并发写后文件应为两者之一，实际: {final_value}"
@@ -476,16 +489,72 @@ mod tests {
         }
     }
 
-    /// 超大 JSON（2MB 字符串）save/load 往返一致
+    // ── SEC-11: 保存校验（大小上限 + 顶层键白名单） ──
+
+    /// 保存超 1MB → AppError::Validation 拒绝且不落盘
     #[test]
-    fn save_and_load_large_json() {
+    fn save_rejects_over_size_limit() {
         let dir = tempfile::tempdir().unwrap();
         let _guard = AppDataDirGuard::set(dir.path());
 
-        let big = serde_json::json!({ "blob": "x".repeat(2 * 1024 * 1024) }); // 2MB 字符串
+        let big = serde_json::json!({ "fontSize": "x".repeat(MAX_PERSIST_BYTES + 1) });
+        let err = run(save_settings(big)).unwrap_err();
+        match err {
+            AppError::Validation(msg) => {
+                assert!(msg.contains("1MB"), "消息应提示大小上限，实际: {msg}");
+            }
+            other => panic!("超限应返回 Validation，实际: {other:?}"),
+        }
+        assert!(
+            !dir.path().join("settings.json").exists(),
+            "超限保存不应落盘"
+        );
+    }
+
+    /// 合法顶层键下的大数据（<1MB）save/load 往返一致
+    #[test]
+    fn save_load_large_json_under_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = AppDataDirGuard::set(dir.path());
+
+        let big = serde_json::json!({ "fontSize": "x".repeat(500 * 1024) }); // 500KB
         run(save_settings(big.clone())).unwrap();
         let loaded = run(load_settings()).unwrap();
-        assert_eq!(loaded, big);
+        assert_eq!(loaded.data, Some(big), "1MB 内大 JSON 应往返一致");
+        assert!(!loaded.corrupted);
+    }
+
+    /// 非法顶层键 → AppError::Validation 拒绝
+    #[test]
+    fn save_rejects_illegal_top_level_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = AppDataDirGuard::set(dir.path());
+
+        let err = run(save_settings(serde_json::json!({"theme": "dark"}))).unwrap_err();
+        match err {
+            AppError::Validation(msg) => {
+                assert!(msg.contains("白名单"), "消息应提示白名单，实际: {msg}");
+            }
+            other => panic!("非法顶层键应返回 Validation，实际: {other:?}"),
+        }
+        // 混合合法/非法键同样拒绝（白名单是整体约束）
+        let err2 = run(save_settings(serde_json::json!({"evil": 1, "fontSize": 14}))).unwrap_err();
+        assert!(matches!(err2, AppError::Validation(_)), "含白名单外键应拒绝: {err2:?}");
+    }
+
+    /// 非对象输入（标量/数组）→ AppError::Validation 拒绝
+    #[test]
+    fn save_rejects_non_object_input() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = AppDataDirGuard::set(dir.path());
+
+        let err = run(save_settings(serde_json::json!("scalar"))).unwrap_err();
+        match err {
+            AppError::Validation(msg) => {
+                assert!(msg.contains("JSON 对象"), "消息应提示对象要求，实际: {msg}");
+            }
+            other => panic!("非对象输入应返回 Validation，实际: {other:?}"),
+        }
     }
 
     // ── merge_settings 浅合并（纯函数，直接断言） ──
@@ -559,79 +628,6 @@ mod tests {
         );
     }
 
-    // ── SPE-04: app_data_dir() 错误分支（路径解析纯函数注入可失败点） ──
-
-    /// current_exe 失败 → IoKind("exe_dir")，消息含"无法获取可执行文件路径"
-    #[test]
-    fn resolve_app_data_dir_current_exe_error() {
-        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "模拟 current_exe 失败");
-        let result = resolve_app_data_dir(Err(io_err));
-        match result {
-            Err(AppError::IoKind { kind, message }) => {
-                assert_eq!(kind, "exe_dir");
-                assert!(
-                    message.contains("无法获取可执行文件路径"),
-                    "消息应含错误提示，实际: {message}"
-                );
-            }
-            other => panic!("current_exe 失败应映射为 IoKind，实际: {other:?}"),
-        }
-    }
-
-    /// exe 无父目录（根路径）→ IoKind("exe_dir")，消息含"无法获取可执行文件所在目录"
-    #[test]
-    fn resolve_app_data_dir_exe_no_parent() {
-        // 根路径的 parent() 为 None（Windows "C:\\" / Unix "/" 均无父目录）
-        let root_path = if cfg!(windows) {
-            std::path::PathBuf::from("C:\\")
-        } else {
-            std::path::PathBuf::from("/")
-        };
-        let result = resolve_app_data_dir(Ok(root_path));
-        match result {
-            Err(AppError::IoKind { kind, message }) => {
-                assert_eq!(kind, "exe_dir");
-                assert!(
-                    message.contains("无法获取可执行文件所在目录"),
-                    "消息应含错误提示，实际: {message}"
-                );
-            }
-            other => panic!("exe 无父目录应映射为 IoKind，实际: {other:?}"),
-        }
-    }
-
-    /// 正常路径：exe 位于目录下 → 返回该目录
-    #[test]
-    fn resolve_app_data_dir_happy_path() {
-        let dir = tempfile::tempdir().unwrap();
-        let result = resolve_app_data_dir(Ok(dir.path().join("slterminal.exe"))).unwrap();
-        assert_eq!(result, dir.path(), "应返回 exe 所在目录");
-    }
-
-    // ── 依赖真实 current_exe 的测试（SPE-06 ②） ──
-    // 说明：以下两测试依赖真实 std::env::current_exe()（测试进程的可执行文件路径），
-    // 未注入覆盖——验证的是生产 app_data_dir() 的便携分发语义（exe 同级目录）。
-    // 测试进程必在运行，current_exe() 恒成功，故仅断言父目录关系与路径拼接。
-
-    /// T2.1: app_data_dir 返回 current_exe 的父目录
-    #[test]
-    fn app_data_dir_returns_exe_parent() {
-        let app_dir = app_data_dir().expect("app_data_dir 不应失败");
-        let exe = std::env::current_exe().expect("current_exe 不应失败");
-        let exe_dir = exe.parent().expect("exe 应有父目录");
-        assert_eq!(app_dir, exe_dir, "app_data_dir 应返回 exe 所在目录");
-    }
-
-    /// T2.2: app_data_dir + settings.json 路径拼接
-    #[test]
-    fn app_data_dir_joins_settings_path() {
-        let app_dir = app_data_dir().expect("app_data_dir 不应失败");
-        let settings_path = app_dir.join("settings.json");
-        assert!(
-            settings_path.ends_with("settings.json"),
-            "应指向 settings.json"
-        );
-        // 验证父目录存在（测试运行时 exe 目录必然存在）
-        assert!(app_dir.exists(), "app_data_dir 返回的目录应存在");
-    }
+    // 注：resolve_app_data_dir 错误分支（SPE-04）与 app_data_dir 便携语义测试
+    // （T2.1/T2.2）已随 BE-16 上提至 app_dir.rs。
 }

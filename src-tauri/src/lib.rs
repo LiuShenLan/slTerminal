@@ -1,4 +1,5 @@
 pub mod agent_history;
+mod app_dir;
 mod error;
 mod fs;
 pub mod git;

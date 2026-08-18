@@ -40,10 +40,14 @@ async function bootstrap() {
     console.warn("[main] 加载设置失败，回退默认配色:", err);
     return null;
   });
+  // FE-11：corrupted=true（文件损坏/.bak 命中）——启动早期 toast 未挂载，仅 console.warn 告警
+  if (settings?.corrupted) {
+    console.warn("[main] 设置文件已损坏，已回退默认值");
+  }
   const { schemeRegistry } = await import("./theme/schemeRegistry");
   await import("./theme/schemes"); // side-effect：注册内置方案（linear）
   // 未知 id 回退 linear 由注册表内部保证；非字符串（脏数据）同样回退
-  const schemeId = typeof settings?.colorScheme === "string" ? settings.colorScheme : "linear";
+  const schemeId = typeof settings?.data?.colorScheme === "string" ? settings.data.colorScheme : "linear";
   schemeRegistry.setActive(schemeId);
 
   // ③ 将 ROOT_CSS_VARS 注入 document.documentElement，替代 App.css :root 硬编码 hex

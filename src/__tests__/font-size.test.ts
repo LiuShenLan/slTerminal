@@ -8,7 +8,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 // ─── Hoisted mocks ───
 const { mockSaveSettings, mockLoadSettings, mockToastShow, mockGetErrorMessage } = vi.hoisted(() => ({
   mockSaveSettings: vi.fn().mockResolvedValue(undefined),
-  mockLoadSettings: vi.fn().mockResolvedValue(null),
+  // FE-11/D11：wrapper 返回 { data, corrupted }——无文件 = data:null, corrupted:false
+  mockLoadSettings: vi.fn().mockResolvedValue({ data: null, corrupted: false }),
   mockToastShow: vi.fn(),
   // FE-09：错误消息统一经 getErrorMessage（契约），默认兜底 String(err)
   mockGetErrorMessage: vi.fn((err: unknown) => String(err)),
@@ -96,8 +97,8 @@ describe("fontSize store", () => {
 
   // ── loadFromDisk ──
 
-  it("7. loadFromDisk 首次启动（返回 null）→ 保持默认值，loaded=true", async () => {
-    mockLoadSettings.mockResolvedValue(null);
+  it("7. loadFromDisk 首次启动（data:null）→ 保持默认值，loaded=true", async () => {
+    mockLoadSettings.mockResolvedValue({ data: null, corrupted: false });
 
     await useFontSize.getState().loadFromDisk();
 
@@ -110,8 +111,8 @@ describe("fontSize store", () => {
 
   it("8. loadFromDisk 读取已保存值", async () => {
     mockLoadSettings.mockResolvedValue({
-      terminalFontSize: 18,
-      editorFontSize: 12,
+      data: { terminalFontSize: 18, editorFontSize: 12 },
+      corrupted: false,
     });
 
     await useFontSize.getState().loadFromDisk();
@@ -124,8 +125,8 @@ describe("fontSize store", () => {
 
   it("9. loadFromDisk 已保存值超限 clamp", async () => {
     mockLoadSettings.mockResolvedValue({
-      terminalFontSize: 100,
-      editorFontSize: 2,
+      data: { terminalFontSize: 100, editorFontSize: 2 },
+      corrupted: false,
     });
 
     await useFontSize.getState().loadFromDisk();
@@ -136,7 +137,10 @@ describe("fontSize store", () => {
   });
 
   it("10. loadFromDisk 仅部分 key 存在 → 缺失 key 保持默认", async () => {
-    mockLoadSettings.mockResolvedValue({ terminalFontSize: 20 });
+    mockLoadSettings.mockResolvedValue({
+      data: { terminalFontSize: 20 },
+      corrupted: false,
+    });
 
     await useFontSize.getState().loadFromDisk();
 
@@ -147,8 +151,11 @@ describe("fontSize store", () => {
 
   it("11. loadFromDisk 非数字类型 → 保持默认", async () => {
     mockLoadSettings.mockResolvedValue({
-      terminalFontSize: "not-a-number",
-      editorFontSize: null,
+      data: {
+        terminalFontSize: "not-a-number",
+        editorFontSize: null,
+      },
+      corrupted: false,
     });
 
     await useFontSize.getState().loadFromDisk();
@@ -167,6 +174,33 @@ describe("fontSize store", () => {
     expect(state.terminalFontSize).toBe(FONT_SIZE_DEFAULT);
     expect(state.editorFontSize).toBe(FONT_SIZE_DEFAULT);
     expect(state.loaded).toBe(true);
+  });
+
+  it("12b. loadFromDisk corrupted=true → 默认值 + toast 告警（FE-11）", async () => {
+    mockLoadSettings.mockResolvedValue({ data: null, corrupted: true });
+
+    await useFontSize.getState().loadFromDisk();
+
+    const state = useFontSize.getState();
+    expect(state.terminalFontSize).toBe(FONT_SIZE_DEFAULT);
+    expect(state.editorFontSize).toBe(FONT_SIZE_DEFAULT);
+    expect(state.loaded).toBe(true);
+    // FE-11：配置损坏统一 toast 告警（warning + 固定文案）
+    expect(mockToastShow).toHaveBeenCalledWith("warning", "配置已损坏，已回退默认值");
+  });
+
+  it("12c. loadFromDisk corrupted=true 且带数据 → 消费数据 + toast 告警（FE-11）", async () => {
+    mockLoadSettings.mockResolvedValue({
+      data: { terminalFontSize: 18 },
+      corrupted: true,
+    });
+
+    await useFontSize.getState().loadFromDisk();
+
+    // 损坏时后端返回默认/可用数据，仍正常消费
+    expect(useFontSize.getState().terminalFontSize).toBe(18);
+    expect(useFontSize.getState().editorFontSize).toBe(FONT_SIZE_DEFAULT);
+    expect(mockToastShow).toHaveBeenCalledWith("warning", "配置已损坏，已回退默认值");
   });
 
   // ── 持久化 ──

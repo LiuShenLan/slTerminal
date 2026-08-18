@@ -50,8 +50,9 @@ vi.mock("allotment", () => ({
 }));
 
 // 阻止 store subscribe 触发真实 saveSettings（loaded=false 已足够，但显式 mock 更安全）
+// FE-11/D11：wrapper 返回 { data, corrupted }——无文件 = data:null, corrupted:false
 vi.mock("../../ipc/settings", () => ({
-  loadSettings: vi.fn(() => Promise.resolve(null)),
+  loadSettings: vi.fn(() => Promise.resolve({ data: null, corrupted: false })),
   saveSettings: vi.fn(() => Promise.resolve()),
 }));
 

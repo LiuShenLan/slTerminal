@@ -20,7 +20,8 @@ if (typeof DragEvent === "undefined") {
 // ─── Hoisted mocks（防 store import 时加载真实 Tauri API） ───
 const { mockSaveSettings, mockLoadSettings } = vi.hoisted(() => ({
   mockSaveSettings: vi.fn().mockResolvedValue(undefined),
-  mockLoadSettings: vi.fn().mockResolvedValue(null),
+  // FE-11/D11：wrapper 返回 { data, corrupted }——无文件 = data:null, corrupted:false
+  mockLoadSettings: vi.fn().mockResolvedValue({ data: null, corrupted: false }),
 }));
 
 vi.mock("../ipc/settings", () => ({

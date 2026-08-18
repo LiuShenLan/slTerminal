@@ -3,9 +3,18 @@
 
 import { invoke } from "@tauri-apps/api/core";
 
-/** 加载持久化设置（返回 null 表示首次启动） */
-export async function loadSettings(): Promise<Record<string, unknown> | null> {
-  return invoke<Record<string, unknown> | null>("load_settings");
+/**
+ * 加载持久化设置（FE-11/D11 契约）：
+ * - data: null / corrupted: false → 无文件（首次启动）
+ * - data: 默认值 / corrupted: true → 解析失败回退默认（含 .bak 命中）
+ */
+export async function loadSettings(): Promise<{
+  data: Record<string, unknown> | null;
+  corrupted: boolean;
+}> {
+  return invoke<{ data: Record<string, unknown> | null; corrupted: boolean }>(
+    "load_settings",
+  );
 }
 
 /** 保存设置到磁盘 */

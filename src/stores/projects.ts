@@ -223,7 +223,11 @@ export const useProjects = create<ProjectsState>()((set, get) => ({
 
       loadFromDisk: async () => {
         try {
-          const raw = await projectsIpc.loadProjects();
+          const { data: raw, corrupted } = await projectsIpc.loadProjects();
+          // FE-11：损坏时后端已回退默认数据（data 为默认形态），toast 告警
+          if (corrupted) {
+            toast.show("warning", "配置已损坏，已回退默认值");
+          }
           const data: {
             projects?: Record<string, Project>;
             deletionLock?: DeletionLock;
@@ -238,7 +242,7 @@ export const useProjects = create<ProjectsState>()((set, get) => ({
             expandedNodes: data.expandedNodes ?? {},
           });
         } catch {
-          // 首次启动或文件损坏，保持默认状态
+          // 首次启动或 IPC 失败，保持默认状态
         }
       },
 

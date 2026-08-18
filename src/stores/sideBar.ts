@@ -97,7 +97,11 @@ export const useSideBar = create<SideBarState>((set, get) => ({
 
   loadFromDisk: async () => {
     try {
-      const saved = await loadSettings();
+      const { data: saved, corrupted } = await loadSettings();
+      // FE-11：配置损坏已回退默认值，toast 告警
+      if (corrupted) {
+        toast.show("warning", "配置已损坏，已回退默认值");
+      }
       if (saved) {
         // sanitizeSideBar 处理原始数据——非法/缺失回退默认值 + clamp
         const slice = sanitizeSideBar(saved["sideBar"]);
@@ -116,7 +120,7 @@ export const useSideBar = create<SideBarState>((set, get) => ({
         });
       }
     } catch {
-      // 首次启动或文件损坏，保持默认值
+      // 首次启动或 IPC 失败，保持默认值
     }
     set({ loaded: true });
   },

@@ -10,7 +10,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 // ─── Hoisted mocks ───
 const { mockSaveSettings, mockLoadSettings, mockToastShow, mockGetErrorMessage } = vi.hoisted(() => ({
   mockSaveSettings: vi.fn().mockResolvedValue(undefined),
-  mockLoadSettings: vi.fn().mockResolvedValue(null),
+  // FE-11/D11：wrapper 返回 { data, corrupted }——无文件 = data:null, corrupted:false
+  mockLoadSettings: vi.fn().mockResolvedValue({ data: null, corrupted: false }),
   mockToastShow: vi.fn(),
   // FE-09：错误消息统一经 getErrorMessage（契约），默认兜底 String(err)
   mockGetErrorMessage: vi.fn((err: unknown) => String(err)),
@@ -80,7 +81,7 @@ describe("sideBar store", () => {
     });
     vi.clearAllMocks();
     mockSaveSettings.mockResolvedValue(undefined);
-    mockLoadSettings.mockResolvedValue(null);
+    mockLoadSettings.mockResolvedValue({ data: null, corrupted: false });
   });
 
   afterEach(() => {
@@ -175,8 +176,8 @@ describe("sideBar store", () => {
 
   // ── loadFromDisk ──
 
-  it("8. loadFromDisk 首次启动（null）→ 保持默认，loaded=true", async () => {
-    mockLoadSettings.mockResolvedValue(null);
+  it("8. loadFromDisk 首次启动（data:null）→ 保持默认，loaded=true", async () => {
+    mockLoadSettings.mockResolvedValue({ data: null, corrupted: false });
     await useSideBar.getState().loadFromDisk();
     const s = useSideBar.getState();
     expect(s.zones).toEqual(DEFAULT_ZONES);
@@ -188,12 +189,15 @@ describe("sideBar store", () => {
 
   it("9. loadFromDisk 读取合法 sideBar 段 → 正确恢复", async () => {
     mockLoadSettings.mockResolvedValue({
-      sideBar: {
-        zones: { top: ["explorer", "nav"], bottom: [] },
-        open: { top: "explorer", bottom: null },
-        width: 320,
-        splitRatio: 0.7,
+      data: {
+        sideBar: {
+          zones: { top: ["explorer", "nav"], bottom: [] },
+          open: { top: "explorer", bottom: null },
+          width: 320,
+          splitRatio: 0.7,
+        },
       },
+      corrupted: false,
     });
     await useSideBar.getState().loadFromDisk();
     const s = useSideBar.getState();
@@ -206,7 +210,10 @@ describe("sideBar store", () => {
   });
 
   it("10. loadFromDisk 脏数据 sanitize——非对象 sideBar → 全回退默认", async () => {
-    mockLoadSettings.mockResolvedValue({ sideBar: "not-an-object" });
+    mockLoadSettings.mockResolvedValue({
+      data: { sideBar: "not-an-object" },
+      corrupted: false,
+    });
     await useSideBar.getState().loadFromDisk();
     const s = useSideBar.getState();
     // sanitizeSideBar 入参非对象 → 返回全默认值
@@ -219,12 +226,15 @@ describe("sideBar store", () => {
 
   it("11. loadFromDisk 脏数据 sanitize——width/splitRatio 超限 clamp", async () => {
     mockLoadSettings.mockResolvedValue({
-      sideBar: {
-        zones: { top: ["projects"], bottom: [] },
-        open: { top: "projects", bottom: null },
-        width: 9999,
-        splitRatio: 99,
+      data: {
+        sideBar: {
+          zones: { top: ["projects"], bottom: [] },
+          open: { top: "projects", bottom: null },
+          width: 9999,
+          splitRatio: 99,
+        },
       },
+      corrupted: false,
     });
     await useSideBar.getState().loadFromDisk();
     const s = useSideBar.getState();
@@ -234,12 +244,15 @@ describe("sideBar store", () => {
 
   it("12. loadFromDisk 脏数据 sanitize——zones/open 结构非法 → 回退默认", async () => {
     mockLoadSettings.mockResolvedValue({
-      sideBar: {
-        zones: { top: "not-an-array", bottom: null },
-        open: 123,
-        width: 250,
-        splitRatio: 0.5,
+      data: {
+        sideBar: {
+          zones: { top: "not-an-array", bottom: null },
+          open: 123,
+          width: 250,
+          splitRatio: 0.5,
+        },
       },
+      corrupted: false,
     });
     await useSideBar.getState().loadFromDisk();
     const s = useSideBar.getState();
@@ -251,7 +264,10 @@ describe("sideBar store", () => {
   });
 
   it("13. loadFromDisk sideBar 键缺失 → 保持默认，loaded=true", async () => {
-    mockLoadSettings.mockResolvedValue({ terminalFontSize: 14 });
+    mockLoadSettings.mockResolvedValue({
+      data: { terminalFontSize: 14 },
+      corrupted: false,
+    });
     await useSideBar.getState().loadFromDisk();
     const s = useSideBar.getState();
     expect(s.zones).toEqual(DEFAULT_ZONES);
@@ -270,15 +286,48 @@ describe("sideBar store", () => {
     expect(s.loaded).toBe(true);
   });
 
+  it("14b. loadFromDisk corrupted=true → 默认值 + toast 告警（FE-11）", async () => {
+    mockLoadSettings.mockResolvedValue({ data: null, corrupted: true });
+    await useSideBar.getState().loadFromDisk();
+    const s = useSideBar.getState();
+    expect(s.zones).toEqual(DEFAULT_ZONES);
+    expect(s.open).toEqual(DEFAULT_OPEN);
+    expect(s.loaded).toBe(true);
+    // FE-11：配置损坏统一 toast 告警（warning + 固定文案）
+    expect(mockToastShow).toHaveBeenCalledWith("warning", "配置已损坏，已回退默认值");
+  });
+
+  it("14c. loadFromDisk corrupted=true 且带数据 → 消费数据 + toast 告警（FE-11）", async () => {
+    mockLoadSettings.mockResolvedValue({
+      data: {
+        sideBar: {
+          zones: { top: ["explorer"], bottom: [] },
+          open: { top: "explorer", bottom: null },
+          width: 300,
+          splitRatio: 0.6,
+        },
+      },
+      corrupted: true,
+    });
+    await useSideBar.getState().loadFromDisk();
+    // 损坏时后端返回默认/可用数据，仍正常消费
+    expect(useSideBar.getState().width).toBe(300);
+    expect(useSideBar.getState().splitRatio).toBe(0.6);
+    expect(mockToastShow).toHaveBeenCalledWith("warning", "配置已损坏，已回退默认值");
+  });
+
   it("15. loadFromDisk reconcileZones 过滤未注册 id + 补全缺失", async () => {
     // saved 引用 id "ghost"（未注册），应被过滤掉
     mockLoadSettings.mockResolvedValue({
-      sideBar: {
-        zones: { top: ["ghost", "nav"], bottom: ["ghost"] },
-        open: { top: "ghost", bottom: "ghost" },
-        width: 250,
-        splitRatio: 0.5,
+      data: {
+        sideBar: {
+          zones: { top: ["ghost", "nav"], bottom: ["ghost"] },
+          open: { top: "ghost", bottom: "ghost" },
+          width: 250,
+          splitRatio: 0.5,
+        },
       },
+      corrupted: false,
     });
     await useSideBar.getState().loadFromDisk();
     const s = useSideBar.getState();
@@ -292,12 +341,15 @@ describe("sideBar store", () => {
   it("15b. loadFromDisk 旧 settings（projects/agent-status 未注册 id）→ 丢弃回退三槽（NAV-07 迁移）", async () => {
     // Stage 05 前持久化的旧数据：projects/agent-status 视图已退役
     mockLoadSettings.mockResolvedValue({
-      sideBar: {
-        zones: { top: ["projects", "agent-status", "explorer"], bottom: ["commit"] },
-        open: { top: "agent-status", bottom: "commit" },
-        width: 250,
-        splitRatio: 0.5,
+      data: {
+        sideBar: {
+          zones: { top: ["projects", "agent-status", "explorer"], bottom: ["commit"] },
+          open: { top: "agent-status", bottom: "commit" },
+          width: 250,
+          splitRatio: 0.5,
+        },
       },
+      corrupted: false,
     });
     await useSideBar.getState().loadFromDisk();
     const s = useSideBar.getState();

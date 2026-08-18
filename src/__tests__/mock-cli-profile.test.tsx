@@ -248,7 +248,8 @@ vi.mock("../ipc/hooksConfig", () => ({
 }));
 
 vi.mock("../ipc/settings", () => ({
-  loadSettings: vi.fn(async () => null),
+  // FE-11/D11：wrapper 返回 { data, corrupted }——无文件 = data:null, corrupted:false
+  loadSettings: vi.fn(async () => ({ data: null, corrupted: false })),
   saveSettings: vi.fn(async () => {}),
 }));
 

@@ -1,5 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mockIPC, clearMocks } from "@tauri-apps/api/mocks";
+
+// ─── Hoisted mocks ───
+const { mockToastShow } = vi.hoisted(() => ({
+  mockToastShow: vi.fn(),
+}));
+
+// FE-11：loadFromDisk 损坏 → toast 告警——mock src/lib 隔离断言（照 fontSize/keybindings 测试模式）
+vi.mock("../lib", () => ({
+  toast: { show: mockToastShow, _reset: vi.fn() },
+}));
 import {
   useProjects,
   createProjectId,
@@ -44,6 +54,8 @@ describe("projects store", () => {
   beforeEach(() => {
     // 重置持久化状态（清 timer + 复位 initialized 标记），防止上一用例 subscribe 触发写盘
     _resetPersistence();
+    // FE-11：清 toast mock 调用史（loadFromDisk corrupted 用例断言独立）
+    vi.clearAllMocks();
     // 重置 store 到初始状态
     useProjects.setState({
       projects: {},
@@ -429,7 +441,10 @@ describe("projects store", () => {
     };
 
     mockIPC((cmd) => {
-      if (cmd === "load_projects") return JSON.stringify(mockData);
+      // FE-11/D11：后端返回 { data, corrupted }
+      if (cmd === "load_projects") {
+        return { data: JSON.stringify(mockData), corrupted: false };
+      }
     });
 
     const { loadFromDisk } = useProjects.getState();
@@ -442,9 +457,10 @@ describe("projects store", () => {
     expect(deletionLock.pendingDelete).toBe("proj-1");
   });
 
-  it("loadFromDisk JSON 损坏 → catch 静默降级，状态不变", async () => {
+  it("loadFromDisk corrupted=true → 默认状态 + toast 告警（FE-11）", async () => {
+    // 后端解析失败回退默认数据（"{}"）且 corrupted:true
     mockIPC((cmd) => {
-      if (cmd === "load_projects") return "这不是合法的 JSON {{{";
+      if (cmd === "load_projects") return { data: "{}", corrupted: true };
     });
 
     const stateBefore = structuredClone(useProjects.getState().projects);
@@ -456,12 +472,14 @@ describe("projects store", () => {
     // 状态保持初始空值
     expect(useProjects.getState().projects).toEqual(stateBefore);
     expect(useProjects.getState().projects).toEqual({});
+    // FE-11：配置损坏统一 toast 告警（warning + 固定文案）
+    expect(mockToastShow).toHaveBeenCalledWith("warning", "配置已损坏，已回退默认值");
   });
 
   it("loadFromDisk 文件不存在 → 静默降级，状态不变", async () => {
-    // Rust 端返回 "{}" 表示文件不存在/首次启动
+    // Rust 端返回 data:"{}" corrupted:false 表示文件不存在/首次启动
     mockIPC((cmd) => {
-      if (cmd === "load_projects") return "{}";
+      if (cmd === "load_projects") return { data: "{}", corrupted: false };
     });
 
     const stateBefore = structuredClone(useProjects.getState().projects);
@@ -472,6 +490,8 @@ describe("projects store", () => {
     // "{}" 解析后 projects 为 undefined，走 ?? {} → 空对象
     expect(useProjects.getState().projects).toEqual(stateBefore);
     expect(useProjects.getState().projects).toEqual({});
+    // 未损坏 → 无 toast
+    expect(mockToastShow).not.toHaveBeenCalled();
   });
 
   // ═══════════════════════════════════════════════════════════
@@ -541,7 +561,9 @@ describe("projects store", () => {
     };
 
     mockIPC((cmd) => {
-      if (cmd === "load_projects") return JSON.stringify(mockData);
+      if (cmd === "load_projects") {
+        return { data: JSON.stringify(mockData), corrupted: false };
+      }
     });
 
     await loadAllProjects();
@@ -710,9 +732,9 @@ describe("projects store", () => {
   // ═══════════════════════════════════════════════════════════
 
   it("T4.13 loadFromDisk 空 JSON 对象 → store 保持空", async () => {
-    // Rust 端首次启动返回 "{}"
+    // Rust 端首次启动返回 data:"{}" corrupted:false
     mockIPC((cmd) => {
-      if (cmd === "load_projects") return "{}";
+      if (cmd === "load_projects") return { data: "{}", corrupted: false };
     });
 
     const { loadFromDisk } = useProjects.getState();
@@ -759,7 +781,7 @@ describe("projects store", () => {
 
     const writeSpy = vi.fn();
     mockIPC((cmd, args) => {
-      if (cmd === "load_projects") return "{}";
+      if (cmd === "load_projects") return { data: "{}", corrupted: false };
       if (cmd === "save_projects") writeSpy(cmd, args);
     });
 
@@ -781,7 +803,12 @@ describe("projects store", () => {
   it("T4.16 loadFromDisk JSON 缺少字段 → 走默认值", async () => {
     // 缺少 deletionLock 和 expandedNodes
     mockIPC((cmd) => {
-      if (cmd === "load_projects") return '{"projects":{"p1":{"name":"only"}}}';
+      if (cmd === "load_projects") {
+        return {
+          data: '{"projects":{"p1":{"name":"only"}}}',
+          corrupted: false,
+        };
+      }
     });
 
     const { loadFromDisk } = useProjects.getState();

@@ -18,8 +18,11 @@ const {
   const mockCreateRoot = vi.fn(() => ({ render: mockRender }));
   // 捕获 setInterval 回调列表（供手动轮询触发用）
   const capturedSetIntervalCallbacks: Array<() => void> = [];
-  // loadSettings 默认成功（首次启动 null → linear），FE-03 失败用例用 mockRejectedValueOnce 覆盖
-  const mockLoadSettings = vi.fn().mockResolvedValue(null);
+  // loadSettings 默认成功（首次启动 data:null → linear），FE-03 失败用例用 mockRejectedValueOnce 覆盖
+  // FE-11/D11：wrapper 返回 { data, corrupted }——无文件 = data:null, corrupted:false
+  const mockLoadSettings = vi
+    .fn()
+    .mockResolvedValue({ data: null, corrupted: false });
 
   return {
     mockRender,
@@ -67,9 +70,9 @@ describe("main.tsx bootstrap", () => {
     mockRender.mockClear();
     mockCreateRoot.mockClear();
     capturedSetIntervalCallbacks.length = 0;
-    // loadSettings 默认成功（首次启动 null → linear）
+    // loadSettings 默认成功（首次启动 data:null → linear）
     mockLoadSettings.mockReset();
-    mockLoadSettings.mockResolvedValue(null);
+    mockLoadSettings.mockResolvedValue({ data: null, corrupted: false });
 
     // 创建 div#root
     rootDiv = document.createElement("div");
@@ -178,6 +181,31 @@ describe("main.tsx bootstrap", () => {
     expect(consoleWarnSpy).toHaveBeenCalledWith(
       expect.stringContaining("[main]"),
       expect.any(Error),
+    );
+
+    consoleWarnSpy.mockRestore();
+  });
+
+  it("5. loadSettings corrupted=true → console.warn 带模块名，降级 linear 不阻塞启动（FE-11）", async () => {
+    // 场景：设置文件损坏（corrupted:true）——启动早期 toast 未挂载，仅 console.warn 告警
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+    mockLoadSettings.mockResolvedValueOnce({ data: null, corrupted: true });
+
+    const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.resetModules();
+    await import("../main");
+
+    // 损坏回退后仍正常挂载 React（不阻塞启动）
+    await vi.waitFor(() => {
+      expect(mockCreateRoot).toHaveBeenCalledWith(rootDiv);
+    });
+    expect(mockRender).toHaveBeenCalledTimes(1);
+    // corrupted 分支 console.warn 带模块名 [main] + 损坏文案
+    expect(consoleWarnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("[main]"),
+    );
+    expect(consoleWarnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("已损坏"),
     );
 
     consoleWarnSpy.mockRestore();

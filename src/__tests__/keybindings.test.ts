@@ -7,7 +7,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 // ─── Hoisted mocks ───
 const { mockSaveSettings, mockLoadSettings, mockToastShow, mockGetErrorMessage } = vi.hoisted(() => ({
   mockSaveSettings: vi.fn().mockResolvedValue(undefined),
-  mockLoadSettings: vi.fn().mockResolvedValue(null),
+  // FE-11/D11：wrapper 返回 { data, corrupted }——无文件 = data:null, corrupted:false
+  mockLoadSettings: vi.fn().mockResolvedValue({ data: null, corrupted: false }),
   mockToastShow: vi.fn(),
   // FE-09：错误消息统一经 getErrorMessage（契约），默认兜底 String(err)
   mockGetErrorMessage: vi.fn((err: unknown) => String(err)),
@@ -32,7 +33,7 @@ describe("keybindings store", () => {
     useKeybindings.setState({ overrides: {}, loaded: false });
     vi.clearAllMocks();
     mockSaveSettings.mockResolvedValue(undefined);
-    mockLoadSettings.mockResolvedValue(null);
+    mockLoadSettings.mockResolvedValue({ data: null, corrupted: false });
   });
 
   afterEach(() => {
@@ -81,8 +82,8 @@ describe("keybindings store", () => {
 
   // ── loadFromDisk ──
 
-  it("7. loadFromDisk 首次启动（null）→ 空覆盖，loaded=true", async () => {
-    mockLoadSettings.mockResolvedValue(null);
+  it("7. loadFromDisk 首次启动（data:null）→ 空覆盖，loaded=true", async () => {
+    mockLoadSettings.mockResolvedValue({ data: null, corrupted: false });
     await useKeybindings.getState().loadFromDisk();
     const s = useKeybindings.getState();
     expect(s.overrides).toEqual({});
@@ -91,7 +92,8 @@ describe("keybindings store", () => {
 
   it("8. loadFromDisk 读取合法 keybindings 段", async () => {
     mockLoadSettings.mockResolvedValue({
-      keybindings: { "terminal.copy": "Ctrl+Alt+KeyC", "global.closeTab": null },
+      data: { keybindings: { "terminal.copy": "Ctrl+Alt+KeyC", "global.closeTab": null } },
+      corrupted: false,
     });
     await useKeybindings.getState().loadFromDisk();
     expect(useKeybindings.getState().overrides).toEqual({
@@ -102,27 +104,33 @@ describe("keybindings store", () => {
 
   it("9. loadFromDisk sanitize 丢弃非 string|null 脏值", async () => {
     mockLoadSettings.mockResolvedValue({
-      keybindings: {
-        "a": "Ctrl+KeyA", // 保留
-        "b": null,          // 保留
-        "c": 123,           // 丢弃
-        "d": { nested: 1 }, // 丢弃
-        "e": ["x"],         // 丢弃
+      data: {
+        keybindings: {
+          "a": "Ctrl+KeyA", // 保留
+          "b": null,          // 保留
+          "c": 123,           // 丢弃
+          "d": { nested: 1 }, // 丢弃
+          "e": ["x"],         // 丢弃
+        },
       },
+      corrupted: false,
     });
     await useKeybindings.getState().loadFromDisk();
     expect(useKeybindings.getState().overrides).toEqual({ "a": "Ctrl+KeyA", "b": null });
   });
 
   it("10. loadFromDisk keybindings 键缺失 → 空覆盖", async () => {
-    mockLoadSettings.mockResolvedValue({ terminalFontSize: 14 });
+    mockLoadSettings.mockResolvedValue({ data: { terminalFontSize: 14 }, corrupted: false });
     await useKeybindings.getState().loadFromDisk();
     expect(useKeybindings.getState().overrides).toEqual({});
     expect(useKeybindings.getState().loaded).toBe(true);
   });
 
   it("11. loadFromDisk keybindings 非对象（数组/字符串）→ 空覆盖", async () => {
-    mockLoadSettings.mockResolvedValue({ keybindings: ["not", "an", "object"] });
+    mockLoadSettings.mockResolvedValue({
+      data: { keybindings: ["not", "an", "object"] },
+      corrupted: false,
+    });
     await useKeybindings.getState().loadFromDisk();
     expect(useKeybindings.getState().overrides).toEqual({});
   });
@@ -133,6 +141,27 @@ describe("keybindings store", () => {
     const s = useKeybindings.getState();
     expect(s.overrides).toEqual({});
     expect(s.loaded).toBe(true);
+  });
+
+  it("12b. loadFromDisk corrupted=true → 空覆盖 + toast 告警（FE-11）", async () => {
+    mockLoadSettings.mockResolvedValue({ data: null, corrupted: true });
+    await useKeybindings.getState().loadFromDisk();
+    const s = useKeybindings.getState();
+    expect(s.overrides).toEqual({});
+    expect(s.loaded).toBe(true);
+    // FE-11：配置损坏统一 toast 告警（warning + 固定文案）
+    expect(mockToastShow).toHaveBeenCalledWith("warning", "配置已损坏，已回退默认值");
+  });
+
+  it("12c. loadFromDisk corrupted=true 且带数据 → 消费数据 + toast 告警（FE-11）", async () => {
+    mockLoadSettings.mockResolvedValue({
+      data: { keybindings: { "terminal.copy": "Ctrl+Alt+KeyC" } },
+      corrupted: true,
+    });
+    await useKeybindings.getState().loadFromDisk();
+    // 损坏时后端返回默认/可用数据，仍正常消费
+    expect(useKeybindings.getState().overrides).toEqual({ "terminal.copy": "Ctrl+Alt+KeyC" });
+    expect(mockToastShow).toHaveBeenCalledWith("warning", "配置已损坏，已回退默认值");
   });
 
   // ── 持久化 ──
