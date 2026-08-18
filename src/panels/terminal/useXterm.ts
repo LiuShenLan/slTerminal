@@ -206,7 +206,7 @@ export function useXterm({
   // ═══════════════════════════════════════════════════════════════
 
   // PTY 输出处理（合帧缓冲 + Idle+Max 定时器 + 进程退出/重连）
-  const { flushBuffer, cancelPendingFlush, handlePtyOutput, getPendingBuffer, setupRetry, retryDisposableRef } = usePtyOutput(
+  const { flushBuffer, cancelPendingFlush, dispose, handlePtyOutput, getPendingBuffer, setupRetry, retryDisposableRef } = usePtyOutput(
     terminalRef,
     panelId,
     visible ?? true,
@@ -489,7 +489,10 @@ export function useXterm({
         cancelAnimationFrame(fitRafId);
       }
 
-      // FE-08: 先清理 retry disposable（Terminal dispose 前的显式路径）
+      // FE-18: 先清理输出合帧——清除 idle/max 定时器 + 丢弃待 flush 缓冲（防卸载后定时器回调泄漏）
+      dispose();
+
+      // FE-08: 再清理 retry disposable（Terminal dispose 前的显式路径）
       retryDisposableRef.current?.dispose();
       retryDisposableRef.current = null;
 
@@ -501,7 +504,7 @@ export function useXterm({
       doSpawnRef.current = null;
       // Terminal/addon 清理由 useTerminalInstance 的 useEffect cleanup 处理
     };
-  }, [container, panelId, flushBuffer, cancelPendingFlush, handlePtyOutput, resetCommandState]);
+  }, [container, panelId, flushBuffer, cancelPendingFlush, dispose, handlePtyOutput, resetCommandState]);
 
   // F3 Bug 1 修复: 独立 useEffect 监听 windowsBuildNumber 异步更新（ADR-0004 钳制）
   useEffect(() => {

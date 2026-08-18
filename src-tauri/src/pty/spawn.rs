@@ -17,6 +17,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::Duration;
 use tauri::ipc::Channel;
 use uuid::Uuid;
 
@@ -40,12 +41,13 @@ pub mod conpty_custom {
     use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
     use std::sync::{Arc, Mutex};
     use windows::core::{PCWSTR, PWSTR};
-    use windows::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
+    use windows::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0};
     use windows::Win32::System::Console::{COORD, HPCON, PSEUDOCONSOLE_INHERIT_CURSOR};
     use windows::Win32::System::Threading::{
         CreateProcessW, DeleteProcThreadAttributeList, InitializeProcThreadAttributeList,
-        UpdateProcThreadAttribute, EXTENDED_STARTUPINFO_PRESENT, LPPROC_THREAD_ATTRIBUTE_LIST,
-        PROCESS_CREATION_FLAGS, PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOEXW,
+        UpdateProcThreadAttribute, WaitForSingleObject, EXTENDED_STARTUPINFO_PRESENT,
+        LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_CREATION_FLAGS, PROCESS_INFORMATION,
+        STARTF_USESTDHANDLES, STARTUPINFOEXW,
     };
 
     // ─── flag 常量（windows crate 仅定义 PSEUDOCONSOLE_INHERIT_CURSOR）───
@@ -274,6 +276,51 @@ pub mod conpty_custom {
                     .ok_or_else(|| anyhow::anyhow!("writer 已被取走（仅允许 take 一次）"))?,
             ))
         }
+    }
+
+    /// raw 句柄的 Send 包装——仅用于 WaitForSingleObject 非阻塞查询（BE-05）。
+    /// 句柄所有权由 reader（FileDescriptor）持有，本包装只引用同一内核对象，
+    /// 不负责关闭；跨线程仅查询不释放，故 Send 安全。
+    struct SendRawHandle(std::os::windows::io::RawHandle);
+    // SAFETY: 句柄生命周期由 reader 端 FileDescriptor 保证（克隆句柄引用同一
+    // 内核对象），本方法仅做 WaitForSingleObject 查询（0ms 非阻塞），无所有权、
+    // 无关闭语义——跨线程传递安全。
+    unsafe impl Send for SendRawHandle {}
+    unsafe impl Sync for SendRawHandle {}
+
+    impl SendRawHandle {
+        /// 非阻塞查询管道是否有可读数据（有数据或对端关闭均视为 true——
+        /// 后者由后续阻塞 read 返回 Ok(0) EOF 兜底）
+        fn is_readable(&self) -> bool {
+            unsafe { WaitForSingleObject(HANDLE(self.0), 0) == WAIT_OBJECT_0 }
+        }
+    }
+
+    /// BE-05: 克隆 ConPTY 输出读端并构造微批续读检查器（PtyReaderInput）
+    ///
+    /// - reader: 输出管道读端（阻塞 read，供 reader_loop 主循环与微批续读）
+    /// - pending: 非阻塞「管道是否有可读数据」检测——WaitForSingleObject(handle, 0)：
+    ///   signaled（WAIT_OBJECT_0）= 有数据或对端已关闭（后者由后续阻塞 read 返回
+    ///   Ok(0) EOF 兜底）；其余 = 无数据。供 reader_loop 微批续读决策（BE-05：
+    ///   「读到即续读」非定时器，无数据时不空等）。
+    ///
+    /// 须在 conpty_master 装箱（Box<dyn MasterPty>）前调用——内部字段对上层不可见。
+    pub fn clone_reader_with_pending_check(
+        master: &ConPtyMaster,
+    ) -> Result<crate::pty::reader::PtyReaderInput, Error> {
+        let inner = master
+            .inner
+            .lock()
+            .map_err(|e| anyhow::anyhow!("ConPtyInner lock poisoned: {e}"))?;
+        let read_end = inner.readable.try_clone()?;
+        // raw 指针需 Send 包装才能跨线程（HANDLE 未实现 Send）；经方法调用捕获
+        // 整个包装（路径捕获 handle.0 会退化为捕获 raw 指针本身）
+        let handle = SendRawHandle(read_end.as_raw_handle());
+        let pending: Box<dyn Fn() -> bool + Send> = Box::new(move || handle.is_readable());
+        Ok(crate::pty::reader::PtyReaderInput::new(
+            Box::new(read_end),
+            pending,
+        ))
     }
 
     /// 子进程句柄 RAII wrapper。
@@ -1043,6 +1090,11 @@ pub async fn pty_spawn(
             conpty_custom::create_conpty_pair(cols, rows, build)
                 .map_err(|e| AppError::Pty(e.to_string()))?
         };
+        // BE-05: 克隆 reader + 微批续读检查器（Windows 专用）——必须在 conpty_master
+        // 装箱前完成（其内部字段对 pty_spawn 不可见）；非 Windows 分支在下方统一位置
+        #[cfg(windows)]
+        let input = conpty_custom::clone_reader_with_pending_check(&conpty_master)
+            .map_err(|e| AppError::Pty(e.to_string()))?;
         #[cfg(windows)]
         let master: Box<dyn portable_pty::MasterPty + Send> = Box::new(conpty_master);
 
@@ -1129,9 +1181,15 @@ pub async fn pty_spawn(
         let child: Arc<Mutex<Box<dyn portable_pty::Child + Send>>> = Arc::new(Mutex::new(child));
 
         // 克隆 reader，启动 reader 线程（reader.rs 首轮读取剥离 ConPTY 启动注入序列）
-        let reader = master
-            .try_clone_reader()
-            .map_err(|e| AppError::Pty(e.to_string()))?;
+        // Windows 分支的 input 已在上方 conpty_master 装箱前克隆（BE-05）
+        #[cfg(not(windows))]
+        let input = {
+            let r = master
+                .try_clone_reader()
+                .map_err(|e| AppError::Pty(e.to_string()))?;
+            // 非 Windows 无 ConPTY 管道非阻塞检查能力：微批退化为每轮一次 read（行为同现状）
+            crate::pty::reader::PtyReaderInput::new(r, Box::new(|| false))
+        };
         let reader_channel = channel.clone();
         let reader_ring = output_ring.clone();
         let reader_child = child.clone();
@@ -1147,7 +1205,7 @@ pub async fn pty_spawn(
 
         let reader_handle = std::thread::spawn(move || {
             crate::pty::reader::reader_loop(
-                reader,
+                input,
                 reader_channel,
                 reader_ring,
                 reader_child,
@@ -1299,6 +1357,9 @@ pub async fn pty_resize(
 /// G1b: async + spawn_blocking。先提取 session 后释放 RwLock 写锁，
 /// 再在 spawn_blocking 中执行 kill+join+drop（ClosePseudoConsole 在 pre-Win11 24H2 上永久阻塞），
 /// 避免持锁阻塞导致后续命令级联卡死。
+/// BE-06: kill 返回值检查（失败 warn 继续——Job Object KILL_ON_JOB_CLOSE 兜底杀子进程）；
+/// reader join 带 3s 超时（KILL_JOIN_TIMEOUT 轮询 is_finished，超时放弃 join 记 warn，
+/// 线程随 PtySession Drop 兜底）。
 /// SEC-08: 校验 panel_id 与 session 归属一致后再移除。
 #[tauri::command]
 pub async fn pty_kill(
@@ -1330,16 +1391,50 @@ pub async fn pty_kill(
             .child
             .lock()
             .map_err(|e| AppError::Pty(format!("锁获取失败: {}", e)))?;
-        let _ = child.kill();
+        // BE-06: 检查 kill 返回值——失败仅告警并继续（Job Object
+        // KILL_ON_JOB_CLOSE 兜底杀子进程；kill 失败不阻塞销毁流程）
+        if let Err(e) = child.kill() {
+            tracing::warn!("pty_kill: child.kill() 失败: {e}");
+        }
         drop(child);
         if let Some(handle) = session.reader_handle.take() {
-            let _ = handle.join();
+            // BE-06: join 带 3s 超时（轮询 is_finished）——超时放弃 join 记 warn，
+            // 线程随 PtySession Drop（state.rs Drop join）兜底
+            if !join_with_timeout(handle, KILL_JOIN_TIMEOUT) {
+                tracing::warn!("pty_kill: reader 线程 3s 内未退出，放弃 join（随 Drop 兜底）");
+            }
         }
         // session drop → master drop → ClosePseudoConsole
         Ok(())
     })
     .await
     .map_err(|e| AppError::Pty(format!("pty_kill join error: {e}")))?
+}
+
+/// BE-06: pty_kill 等待 reader 线程退出的超时——3s 后放弃 join，
+/// 线程随 PtySession Drop / 进程退出兜底
+const KILL_JOIN_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// BE-06: join 超时轮询间隔（10ms，轻量轮询，避免忙等）
+const KILL_JOIN_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+/// BE-06: 带超时的线程 join——轮询 `is_finished` 至 deadline，避免无限期阻塞
+///
+/// 返回 false = 超时未完成（调用方记 warn 后放弃，线程随 Drop 兜底）。
+/// 轮询到 is_finished 后调用 join() 回收线程资源（立即返回）。
+/// 纯逻辑 + 标准库线程，可 L1 单测（不依赖 PTY）。
+fn join_with_timeout(handle: std::thread::JoinHandle<()>, timeout: Duration) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if handle.is_finished() {
+            let _ = handle.join();
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(KILL_JOIN_POLL_INTERVAL);
+    }
 }
 
 /// Windows Job Object — 将子进程与父进程生命周期绑定，防止孤儿进程
@@ -1876,5 +1971,29 @@ mod tests {
             job_object: None,
             panel_id: panel_id.to_string(),
         }
+    }
+
+    // ─── BE-06: join_with_timeout 测试 ───
+
+    #[test]
+    fn join_with_timeout_fast_thread_returns_true() {
+        // 快速退出线程：超时前完成 join，返回 true
+        let handle = std::thread::spawn(|| {});
+        assert!(join_with_timeout(handle, Duration::from_millis(200)));
+    }
+
+    #[test]
+    fn join_with_timeout_slow_thread_times_out() {
+        // 慢线程 + 短超时 → 返回 false（调用方记 warn，线程随 Drop 兜底）
+        let handle = std::thread::spawn(|| std::thread::sleep(Duration::from_millis(500)));
+        assert!(!join_with_timeout(handle, Duration::from_millis(50)));
+    }
+
+    #[test]
+    fn join_with_timeout_abandoned_thread_finishes_later_no_panic() {
+        // 超时放弃 join 后，线程自行结束不 panic（JoinHandle drop 时 detach）
+        let handle = std::thread::spawn(|| std::thread::sleep(Duration::from_millis(100)));
+        assert!(!join_with_timeout(handle, Duration::from_millis(10)));
+        std::thread::sleep(Duration::from_millis(150));
     }
 }

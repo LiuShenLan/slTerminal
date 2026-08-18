@@ -17,8 +17,8 @@ import type { TabState } from "./useCommandDetection";
 const DEC2026_PREFIX = "\x1b[?2026h";
 const DEC2026_SUFFIX = "\x1b[?2026l";
 
-/** 合帧分流阈值（字节）：小于此值直写终端，大于等于此值走合帧 + DEC 2026 路径 */
-const DIRECT_WRITE_THRESHOLD = 64;
+/** 合帧分流阈值（字节）：小于等于此值直写终端，大于此值走合帧 + DEC 2026 路径（FE-18：64→256，后端已合并小写） */
+const DIRECT_WRITE_THRESHOLD = 256;
 
 /** Idle 定时器间隔（毫秒）：2ms 无新数据则 flush，适应 Ink 高频 burst 输出 */
 const IDLE_FLUSH_MS = 2;
@@ -35,6 +35,8 @@ export interface UsePtyOutputReturn {
   flushBuffer: () => void;
   /** 丢弃待输出缓冲区并清理定时器（不渲染，用于 resize 前清理） */
   cancelPendingFlush: () => void;
+  /** 组件卸载清理：清除 idle/max 双定时器并清空待输出缓冲（FE-18） */
+  dispose: () => void;
   /** PTY 输出事件处理器（传给 pty.spawn 的 onOutput 回调） */
   handlePtyOutput: (event: PtyEvent) => void;
   /** 当前是否有注册命令在运行（如 claude） */
@@ -114,6 +116,12 @@ export function usePtyOutput(
     pendingBufferRef.current = [];
     pendingBufSizeRef.current = 0;
   }, []);
+
+  /** 组件卸载清理（FE-18）：与 cancelPendingFlush 同清理逻辑，
+   *  语义区分——resize 场景可继续接收新数据，卸载后不再使用 */
+  const dispose = useCallback(() => {
+    cancelPendingFlush();
+  }, [cancelPendingFlush]);
 
   /** 将缓冲数据合并写入终端（DEC 2026 同步更新包裹，消除撕裂） */
   const flushBuffer = useCallback(() => {
@@ -199,11 +207,11 @@ export function usePtyOutput(
         // CJK 字符在 UTF-8 中每字符 3 字节，text.length 会低估实际数据量，
         // 导致含中文的 Ink 输出绕过合帧路径造成撕裂
         const isVisible = visibleRef.current !== false;
-        if (rawBytes.length < DIRECT_WRITE_THRESHOLD && isVisible) {
+        if (rawBytes.length <= DIRECT_WRITE_THRESHOLD && isVisible) {
           // 直写路径：极小数据且面板可见时低延迟优先
           terminal.current?.write(text);
         } else {
-          // 合帧路径：≥64 字节走缓冲 + DEC 2026 原子渲染
+          // 合帧路径：>256 字节走缓冲 + DEC 2026 原子渲染
 
           // 内存上限保护：超出 MAX_PENDING_BYTES 时丢弃最旧数据块
           if (pendingBufSizeRef.current + rawBytes.length > MAX_PENDING_BYTES) {
@@ -260,6 +268,7 @@ export function usePtyOutput(
   return {
     flushBuffer,
     cancelPendingFlush,
+    dispose,
     handlePtyOutput,
     isCommandRunning: isCommandRunningRef,
     setupRetry,

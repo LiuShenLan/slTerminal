@@ -314,7 +314,7 @@ describe("TerminalPanel", () => {
       }));
       await vi.runAllTimersAsync();
       expect(mocks.pty.spawn).toHaveBeenCalled();
-      // 提取 pty.spawn 的 onOutput 回调（= handlePtyOutput），注入短输出（<64 字节直写路径）。
+      // 提取 pty.spawn 的 onOutput 回调（= handlePtyOutput），注入短输出（<=256 字节直写路径）。
       // 事件形态 = PtyEvent 序列化：{ type: "output", data: { bytes: number[] } }
       const handlePtyOutput = mocks.pty.spawn.mock.calls[0][1] as (
         event: { type: string; data: { bytes: number[] } },

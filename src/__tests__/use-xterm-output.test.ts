@@ -204,7 +204,7 @@ describe("DEC 2026 同步更新包裹 flushBuffer", () => {
     vi.useRealTimers();
   });
 
-  it("DEC1: >=64 字节合帧后 term.write 以 \\x1b[?2026h 开头", async () => {
+  it("DEC1: >=256 字节合帧后 term.write 以 \\x1b[?2026h 开头", async () => {
     renderHook(() =>
       useXterm({ container, cols: 80, rows: 24, panelId: "dec-1" }),
     );
@@ -218,8 +218,8 @@ describe("DEC 2026 同步更新包裹 flushBuffer", () => {
     // 清空 spawn 过程中的 write 调用
     capturedTerminal!.write.mockClear();
 
-    // 发送 >=64 字节 → 走合帧路径
-    const testData = new Array(100).fill(65); // 100 个 'A' (0x41)
+    // 发送 >256 字节 → 走合帧路径
+    const testData = new Array(300).fill(65); // 300 个 'A' (0x41)
     ptyOut.sendPtyOutput(testData);
 
     // idle timer 未触发 → write 不应被调用（数据在 pendingBufferRef）
@@ -247,7 +247,7 @@ describe("DEC 2026 同步更新包裹 flushBuffer", () => {
 
     capturedTerminal!.write.mockClear();
 
-    const testData = new Array(100).fill(66); // 100 个 'B'
+    const testData = new Array(300).fill(66); // 300 个 'B'
     ptyOut.sendPtyOutput(testData);
     // TE-11: 推进假定时器 → idle timer 触发 flush
     vi.advanceTimersByTime(5);
@@ -269,10 +269,10 @@ describe("DEC 2026 同步更新包裹 flushBuffer", () => {
 
     capturedTerminal!.write.mockClear();
 
-    // 连续发送 3 块 >=64 字节数据（同一 idle 窗口内累积）
-    ptyOut.sendPtyOutput(new Array(80).fill(67));  // 'C'
-    ptyOut.sendPtyOutput(new Array(80).fill(68));  // 'D'
-    ptyOut.sendPtyOutput(new Array(80).fill(69));  // 'E'
+    // 连续发送 3 块 >256 字节数据（同一 idle 窗口内累积）
+    ptyOut.sendPtyOutput(new Array(300).fill(67));  // 'C'
+    ptyOut.sendPtyOutput(new Array(300).fill(68));  // 'D'
+    ptyOut.sendPtyOutput(new Array(300).fill(69));  // 'E'
 
     // idle timer 未触发 → 没有 write
     expect(capturedTerminal!.write).not.toHaveBeenCalled();
@@ -292,7 +292,7 @@ describe("DEC 2026 同步更新包裹 flushBuffer", () => {
     expect(written.indexOf("\x1b[?2026l")).toBe(written.lastIndexOf("\x1b[?2026l")); // 只有一个结束
   });
 
-  it("DEC4: <64 字节直写不含 DEC 2026 序列", async () => {
+  it("DEC4: <=256 字节直写不含 DEC 2026 序列", async () => {
     renderHook(() =>
       useXterm({ container, cols: 80, rows: 24, panelId: "dec-4" }),
     );
@@ -303,7 +303,7 @@ describe("DEC 2026 同步更新包裹 flushBuffer", () => {
 
     capturedTerminal!.write.mockClear();
 
-    // 发送 <64 字节 → 走直写路径
+    // 发送 <=256 字节 → 走直写路径
     const testData = new Array(30).fill(72); // 30 个 'H'
     ptyOut.sendPtyOutput(testData);
 
@@ -317,10 +317,10 @@ describe("DEC 2026 同步更新包裹 flushBuffer", () => {
 });
 
 // ═══════════════════════════════════════════════════════════
-// Step 1.2: 直写阈值 256→64 测试
+// Step 1.2: 直写阈值 64→256 测试（FE-18）
 // ═══════════════════════════════════════════════════════════
 
-describe("直写阈值 64 字节路由", () => {
+describe("直写阈值 256 字节路由", () => {
   let container: HTMLDivElement;
   let raf: ReturnType<typeof mockRaf>;
   let ptyOut: ReturnType<typeof ptyOutputSpy>;
@@ -341,7 +341,7 @@ describe("直写阈值 64 字节路由", () => {
     vi.useRealTimers();
   });
 
-  it("TH1: 63 字节 PTY 输出走直写路径（term.write 立即调用）", async () => {
+  it("TH1: 255 字节 PTY 输出走直写路径（term.write 立即调用）", async () => {
     renderHook(() =>
       useXterm({ container, cols: 80, rows: 24, panelId: "th-1" }),
     );
@@ -352,13 +352,13 @@ describe("直写阈值 64 字节路由", () => {
 
     capturedTerminal!.write.mockClear();
 
-    // 63 字节 < 阈值 64 → 直写
-    ptyOut.sendPtyOutput(new Array(63).fill(88)); // 'X'
+    // 255 字节 <= 阈值 256 → 直写
+    ptyOut.sendPtyOutput(new Array(255).fill(88)); // 'X'
 
     expect(capturedTerminal!.write).toHaveBeenCalledTimes(1);
   });
 
-  it("TH2: 64 字节 PTY 输出走合帧路径（阈值边界）", async () => {
+  it("TH2: 256 字节 PTY 输出走直写路径（阈值边界，FE-18）", async () => {
     renderHook(() =>
       useXterm({ container, cols: 80, rows: 24, panelId: "th-2" }),
     );
@@ -369,8 +369,28 @@ describe("直写阈值 64 字节路由", () => {
 
     capturedTerminal!.write.mockClear();
 
-    // 64 字节 >= 阈值 64 → 合帧
-    ptyOut.sendPtyOutput(new Array(64).fill(89)); // 'Y'
+    // 256 字节 = 阈值 256 → 直写（契约：<=256B 直接写）
+    ptyOut.sendPtyOutput(new Array(256).fill(89)); // 'Y'
+
+    expect(capturedTerminal!.write).toHaveBeenCalledTimes(1);
+    // 直写不含 DEC 2026 包裹
+    const written = (capturedTerminal!.write as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(written).not.toContain("\x1b[?2026h");
+  });
+
+  it("TH3: 257 字节 PTY 输出走合帧路径（>256 走合并，FE-18）", async () => {
+    renderHook(() =>
+      useXterm({ container, cols: 80, rows: 24, panelId: "th-3" }),
+    );
+
+    raf.flush();
+    await flushMicrotasks();
+    expect(pty.spawn).toHaveBeenCalled();
+
+    capturedTerminal!.write.mockClear();
+
+    // 257 字节 > 阈值 256 → 合帧
+    ptyOut.sendPtyOutput(new Array(257).fill(90)); // 'Z'
 
     // idle timer 未触发 → write 不应被调用
     expect(capturedTerminal!.write).not.toHaveBeenCalled();
@@ -380,7 +400,7 @@ describe("直写阈值 64 字节路由", () => {
     expect(capturedTerminal!.write).toHaveBeenCalledTimes(1);
   });
 
-  it("TH4: 高频小块输出（连续 5 次 50 字节）全部直写", async () => {
+  it("TH4: 高频小块输出（连续 5 次 50 字节，均 <=256）全部直写", async () => {
     renderHook(() =>
       useXterm({ container, cols: 80, rows: 24, panelId: "th-4" }),
     );
@@ -400,7 +420,7 @@ describe("直写阈值 64 字节路由", () => {
     expect(capturedTerminal!.write).toHaveBeenCalledTimes(5);
   });
 
-  it("TH5: 混合输出（先 50 字节直写，再 200 字节合帧）各自正确路由", async () => {
+  it("TH5: 混合输出（先 50 字节直写，再 300 字节合帧）各自正确路由", async () => {
     renderHook(() =>
       useXterm({ container, cols: 80, rows: 24, panelId: "th-5" }),
     );
@@ -416,7 +436,7 @@ describe("直写阈值 64 字节路由", () => {
     expect(capturedTerminal!.write).toHaveBeenCalledTimes(1);
 
     // 大块合帧
-    ptyOut.sendPtyOutput(new Array(200).fill(81)); // 'Q'
+    ptyOut.sendPtyOutput(new Array(300).fill(81)); // 'Q'
     // 直写调用数不变（大块走合帧，idle timer 未触发）
     expect(capturedTerminal!.write).toHaveBeenCalledTimes(1);
 
@@ -462,9 +482,9 @@ describe("Idle+Max 双定时器合帧", () => {
     capturedTerminal!.write.mockClear();
 
     // 连续 3 次大块输出
-    ptyOut.sendPtyOutput(new Array(80).fill(65));
-    ptyOut.sendPtyOutput(new Array(80).fill(66));
-    ptyOut.sendPtyOutput(new Array(80).fill(67));
+    ptyOut.sendPtyOutput(new Array(300).fill(65));
+    ptyOut.sendPtyOutput(new Array(300).fill(66));
+    ptyOut.sendPtyOutput(new Array(300).fill(67));
 
     // idle timer 被每次输出重置 → 不立即 flush
     expect(capturedTerminal!.write).not.toHaveBeenCalled();
@@ -484,15 +504,15 @@ describe("Idle+Max 双定时器合帧", () => {
     capturedTerminal!.write.mockClear();
 
     // 每隔 3ms 发送数据——idle timer 永远被重置，但 max timer 在 16ms 时强制 flush
-    ptyOut.sendPtyOutput(new Array(80).fill(65));
+    ptyOut.sendPtyOutput(new Array(300).fill(65));
     vi.advanceTimersByTime(3);
-    ptyOut.sendPtyOutput(new Array(80).fill(66));
+    ptyOut.sendPtyOutput(new Array(300).fill(66));
     vi.advanceTimersByTime(3);
-    ptyOut.sendPtyOutput(new Array(80).fill(67));
+    ptyOut.sendPtyOutput(new Array(300).fill(67));
     vi.advanceTimersByTime(3);
-    ptyOut.sendPtyOutput(new Array(80).fill(68));
+    ptyOut.sendPtyOutput(new Array(300).fill(68));
     vi.advanceTimersByTime(3);
-    ptyOut.sendPtyOutput(new Array(80).fill(69));
+    ptyOut.sendPtyOutput(new Array(300).fill(69));
     // 已过 ~12ms，max timer 即将触发——再推进 10ms → 总计 22ms
     vi.advanceTimersByTime(10);
 
@@ -518,7 +538,7 @@ describe("Idle+Max 双定时器合帧", () => {
     expect(smallWritten).not.toContain("\x1b[?2026h");
 
     // 大块合帧
-    ptyOut.sendPtyOutput(new Array(100).fill(81));
+    ptyOut.sendPtyOutput(new Array(300).fill(81));
     // 累积中
     expect(capturedTerminal!.write).toHaveBeenCalledTimes(1);
 
@@ -528,7 +548,7 @@ describe("Idle+Max 双定时器合帧", () => {
     expect(capturedTerminal!.write).toHaveBeenCalledTimes(2);
   });
 
-  it("IT5: 组件卸载 → idle + max timer 均被清除", async () => {
+  it("IT5: 组件卸载 → cleanup 调 dispose 清除 idle + max timer（FE-18）", async () => {
     const { unmount } = renderHook(() =>
       useXterm({ container, cols: 80, rows: 24, panelId: "it-5" }),
     );
@@ -538,16 +558,17 @@ describe("Idle+Max 双定时器合帧", () => {
     capturedTerminal!.write.mockClear();
 
     // 发送大块输出 → 启动 idle+max timer
-    ptyOut.sendPtyOutput(new Array(100).fill(65));
+    ptyOut.sendPtyOutput(new Array(300).fill(65));
     expect(capturedTerminal!.write).not.toHaveBeenCalled();
 
-    // 卸载 → cleanup 清除定时器
+    // 卸载 → cleanup 调用 dispose → clearTimeout 被调用（双定时器清除）
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
     unmount();
+    expect(clearTimeoutSpy).toHaveBeenCalled();
+    clearTimeoutSpy.mockRestore();
 
-    // TE-11: 推进假定时器 30ms → timer 不应触发 write（因为已卸载）
+    // TE-11: 推进假定时器 30ms → timer 已被 dispose 清除，不再触发 write
     vi.advanceTimersByTime(30);
-    // 卸载后不会再调用 write
-    // （即使 timer 触发，flushBuffer 内 terminalRef.current 已为 null 会提前返回）
     expect(capturedTerminal!.write).not.toHaveBeenCalled();
   });
 });
@@ -587,8 +608,8 @@ describe("Uint8Array 合帧缓冲", () => {
     capturedTerminal!.write.mockClear();
 
     // 发送多块数据，各块内容不同
-    const bytes1 = new Array(80).fill(65); // 'A'
-    const bytes2 = new Array(80).fill(66); // 'B'
+    const bytes1 = new Array(300).fill(65); // 'A'
+    const bytes2 = new Array(300).fill(66); // 'B'
     ptyOut.sendPtyOutput(bytes1);
     ptyOut.sendPtyOutput(bytes2);
 
@@ -599,9 +620,9 @@ describe("Uint8Array 合帧缓冲", () => {
     const decoded = new TextDecoder().decode(
       (capturedTerminal!.write as ReturnType<typeof vi.fn>).mock.calls[0][0] as Uint8Array,
     );
-    // 解码后应包含 'A'*80 + 'B'*80（包裹在 DEC 2026 之间）
-    expect(decoded).toContain("A".repeat(80));
-    expect(decoded).toContain("B".repeat(80));
+    // 解码后应包含 'A'*300 + 'B'*300（包裹在 DEC 2026 之间）
+    expect(decoded).toContain("A".repeat(300));
+    expect(decoded).toContain("B".repeat(300));
     // 'A' 块在 'B' 块之前
     expect(decoded.indexOf("A")).toBeLessThan(decoded.indexOf("B"));
   });
@@ -615,7 +636,7 @@ describe("Uint8Array 合帧缓冲", () => {
     expect(pty.spawn).toHaveBeenCalled();
     capturedTerminal!.write.mockClear();
 
-    ptyOut.sendPtyOutput(new Array(100).fill(88)); // 'X'
+    ptyOut.sendPtyOutput(new Array(300).fill(88)); // 'X'
 
     // TE-11: 推进假定时器 → idle timer 触发flush
     vi.advanceTimersByTime(5);
@@ -625,7 +646,7 @@ describe("Uint8Array 合帧缓冲", () => {
     );
     expect(decoded.startsWith("\x1b[?2026h")).toBe(true);
     expect(decoded.endsWith("\x1b[?2026l")).toBe(true);
-    expect(decoded).toContain("X".repeat(100));
+    expect(decoded).toContain("X".repeat(300));
   });
 
   it("UA4: 单块 Uint8Array flush 数据完整性", async () => {
@@ -637,7 +658,7 @@ describe("Uint8Array 合帧缓冲", () => {
     expect(pty.spawn).toHaveBeenCalled();
     capturedTerminal!.write.mockClear();
 
-    ptyOut.sendPtyOutput(new Array(256).fill(90)); // 'Z' * 256
+    ptyOut.sendPtyOutput(new Array(300).fill(90)); // 'Z' * 300
 
     // TE-11: 推进假定时器 → idle timer 触发flush
     vi.advanceTimersByTime(5);
@@ -646,7 +667,7 @@ describe("Uint8Array 合帧缓冲", () => {
       (capturedTerminal!.write as ReturnType<typeof vi.fn>).mock.calls[0][0] as Uint8Array,
     );
     const content = decoded.slice(8, decoded.length - 8); // 去除 DEC 2026 包裹
-    expect(content).toBe("Z".repeat(256));
+    expect(content).toBe("Z".repeat(300));
   });
 });
 
@@ -690,7 +711,7 @@ describe("非焦点终端降频", () => {
     capturedTerminal!.write.mockClear();
 
     // 发送大块输出
-    ptyOut.sendPtyOutput(new Array(200).fill(65));
+    ptyOut.sendPtyOutput(new Array(300).fill(65));
 
     // TE-11: 推进假定时器 10ms → idle timer 不应触发 flush（因为 visible=false）
     vi.advanceTimersByTime(10);
@@ -712,7 +733,7 @@ describe("非焦点终端降频", () => {
     capturedTerminal!.write.mockClear();
 
     // 发送大块输出（隐藏期间）
-    ptyOut.sendPtyOutput(new Array(200).fill(65));
+    ptyOut.sendPtyOutput(new Array(300).fill(65));
     // TE-11: 推进假定时器 → 不触发flush（visible=false）
     vi.advanceTimersByTime(10);
     expect(capturedTerminal!.write).not.toHaveBeenCalled();
@@ -739,8 +760,8 @@ describe("非焦点终端降频", () => {
     rerender({ visible: false });
     capturedTerminal!.write.mockClear();
 
-    // TE-16: visible=false 时，<64 字节直写路径也走累积缓冲，不直写终端
-    ptyOut.sendPtyOutput(new Array(30).fill(80)); // <64 字节 → 被 visible 门控抑制
+    // TE-16: visible=false 时，<=256 字节直写路径也走累积缓冲，不直写终端
+    ptyOut.sendPtyOutput(new Array(30).fill(80)); // <=256 字节 → 被 visible 门控抑制
     expect(capturedTerminal!.write).not.toHaveBeenCalled();
   });
 
@@ -758,7 +779,7 @@ describe("非焦点终端降频", () => {
     rerender({ visible: false });
 
     // 发送数据
-    ptyOut.sendPtyOutput(new Array(200).fill(65));
+    ptyOut.sendPtyOutput(new Array(300).fill(65));
 
     // 卸载 → 验证 PTY 被 kill（即使处于非焦点状态）
     unmount();
@@ -775,7 +796,7 @@ describe("非焦点终端降频", () => {
     expect(pty.spawn).toHaveBeenCalled();
     capturedTerminal!.write.mockClear();
 
-    ptyOut.sendPtyOutput(new Array(200).fill(65));
+    ptyOut.sendPtyOutput(new Array(300).fill(65));
     // TE-11: 推进假定时器 → idle timer 触发flush
     vi.advanceTimersByTime(5);
 
@@ -831,7 +852,7 @@ describe("cancelPendingFlush", () => {
     const { result } = await mountAndWait();
     capturedTerminal!.write.mockClear();
 
-    ptyOut.sendPtyOutput(new Array(100).fill(65));
+    ptyOut.sendPtyOutput(new Array(300).fill(65));
     expect(capturedTerminal!.write).not.toHaveBeenCalled();
 
     const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
@@ -851,8 +872,8 @@ describe("cancelPendingFlush", () => {
     const { result } = await mountAndWait();
 
     // 先积攒数据
-    ptyOut.sendPtyOutput(new Array(200).fill(65));
-    ptyOut.sendPtyOutput(new Array(312).fill(66));
+    ptyOut.sendPtyOutput(new Array(300).fill(65));
+    ptyOut.sendPtyOutput(new Array(400).fill(66));
     expect(result.current._test!.getPendingBuffer()).toHaveLength(2);
 
     // 取消 → 缓冲归零
@@ -860,7 +881,7 @@ describe("cancelPendingFlush", () => {
     expect(result.current._test!.getPendingBuffer()).toHaveLength(0);
 
     // 新数据从 0 开始累积
-    ptyOut.sendPtyOutput(new Array(100).fill(67));
+    ptyOut.sendPtyOutput(new Array(300).fill(67));
     expect(result.current._test!.getPendingBuffer()).toHaveLength(1);
   });
 
@@ -882,13 +903,13 @@ describe("cancelPendingFlush", () => {
     const { result } = await mountAndWait();
     capturedTerminal!.write.mockClear();
 
-    ptyOut.sendPtyOutput(new Array(200).fill(65));
+    ptyOut.sendPtyOutput(new Array(300).fill(65));
     expect(capturedTerminal!.write).not.toHaveBeenCalled();
 
     result.current._test!.cancelPendingFlush();
     expect(capturedTerminal!.write).not.toHaveBeenCalled();
 
-    ptyOut.sendPtyOutput(new Array(200).fill(66));
+    ptyOut.sendPtyOutput(new Array(300).fill(66));
     result.current._test!.flushBuffer();
     expect(capturedTerminal!.write).toHaveBeenCalledTimes(1);
   });
@@ -900,7 +921,7 @@ describe("cancelPendingFlush", () => {
     capturedTerminal!.write.mockClear();
 
     // 发送旧数据 → 启动 idle+max 定时器
-    ptyOut.sendPtyOutput(new Array(200).fill(65));
+    ptyOut.sendPtyOutput(new Array(300).fill(65));
     expect(capturedTerminal!.write).not.toHaveBeenCalled();
 
     // 首次 resize 触发 cancelPendingFlush → 丢弃旧数据 + 定时器
@@ -915,7 +936,7 @@ describe("cancelPendingFlush", () => {
 
     // TE-09: resize 完成后发新数据，验证旧数据未混入
     capturedTerminal!.write.mockClear();
-    ptyOut.sendPtyOutput(new Array(200).fill(88)); // 'X'
+    ptyOut.sendPtyOutput(new Array(300).fill(88)); // 'X'
     vi.advanceTimersByTime(5);
 
     const writeCalls = (capturedTerminal!.write as ReturnType<typeof vi.fn>).mock.calls;
@@ -923,7 +944,7 @@ describe("cancelPendingFlush", () => {
     expect(writeCalls.length).toBeGreaterThan(0);
     for (const call of writeCalls) {
       const decoded = new TextDecoder().decode(call[0] as Uint8Array);
-      expect(decoded).not.toContain("A".repeat(200));
+      expect(decoded).not.toContain("A".repeat(300));
     }
   });
 
@@ -939,7 +960,7 @@ describe("cancelPendingFlush", () => {
 
     capturedTerminal!.write.mockClear();
 
-    ptyOut.sendPtyOutput(new Array(200).fill(88));
+    ptyOut.sendPtyOutput(new Array(300).fill(88));
     expect(result.current._test!.getPendingBuffer()).toHaveLength(1);
 
     // TE-11: 推进假定时器 → idle timer 触发flush
@@ -957,7 +978,7 @@ describe("cancelPendingFlush", () => {
     mockFit.mockClear();
     (pty.resize as ReturnType<typeof vi.fn>).mockClear();
 
-    ptyOut.sendPtyOutput(new Array(200).fill(65));
+    ptyOut.sendPtyOutput(new Array(300).fill(65));
     expect(result.current._test!.getPendingBuffer()).toHaveLength(1);
 
     mockProposeDimensions.mockReturnValue({ cols: 70, rows: 30 });
@@ -1160,5 +1181,41 @@ describe("usePtyOutput 缓冲上限与退出码（直接驱动）", () => {
     expect(e2eBuffer.current[0]).toBe("G");
     // 末尾保持最新行（i=1005 → 'R'）
     expect(e2eBuffer.current[999]).toBe("R");
+  });
+
+  it("DSP1: dispose 清除 idle/max 定时器并清空待输出缓冲（FE-18）", () => {
+    const { result, terminal } = renderPtyOutput();
+
+    // 发送 >256 字节 → 走合帧路径并启动 idle+max 定时器
+    result.current.handlePtyOutput({
+      type: "output",
+      data: { bytes: new Array(300).fill(65) },
+    });
+    expect(result.current.getPendingBuffer()).toHaveLength(1);
+
+    // dispose → 缓冲清空
+    result.current.dispose();
+    expect(result.current.getPendingBuffer()).toHaveLength(0);
+
+    // 推进假定时器 30ms → idle/max 定时器已被清除，不触发 flush
+    // （terminalRef.current 非 null，若定时器未清此处会误触发 write——强断言）
+    vi.advanceTimersByTime(30);
+    expect(terminal.write).not.toHaveBeenCalled();
+  });
+
+  it("DSP2: dispose 幂等——空缓冲/重复调用不抛异常，dispose 后新输出可正常累积（FE-18）", () => {
+    const { result } = renderPtyOutput();
+
+    // 空缓冲 dispose 不抛
+    expect(() => result.current.dispose()).not.toThrow();
+    // 重复调用不抛
+    expect(() => result.current.dispose()).not.toThrow();
+
+    // dispose 后新输出仍可正常累积（组件存活语义不受影响）
+    result.current.handlePtyOutput({
+      type: "output",
+      data: { bytes: new Array(300).fill(66) },
+    });
+    expect(result.current.getPendingBuffer()).toHaveLength(1);
   });
 });

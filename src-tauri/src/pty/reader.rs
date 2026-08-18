@@ -1,6 +1,14 @@
-/// PTY reader 线程 — 阻塞读取 PTY 输出 → Channel 推送 PtyEvent
+/// PTY reader 线程 — 阻塞读取 PTY 输出 → 微批聚合 → Channel 推送 PtyEvent
 ///
 /// E1: Channel 断开时不退出，写入 ring buffer 等待 reattach。
+///
+/// BE-05 微批（I/O 编排）：read 成功后非阻塞续读（Windows 上基于
+/// WaitForSingleObject(handle, 0) 检测管道可读），累积至 MICRO_BATCH_MAX（64KB）
+/// 或无可读数据后，再一次批量 Channel::send + ring buffer append（BE-12）。
+/// 「读到即续读」非定时器——不引入固定延迟；首块经过 ConPTY 启动序列剥离，
+/// 续读块在首块真实数据出现后原样透传（BE-13 跨 16KB 边界残留由首块剥离状态机处理）。
+/// DOC-01 豁免项 1（reader_loop 残余 I/O 编排分支）随微批变动——豁免表同步在 S19，
+/// 本文件 M11 分析块已更新为微批后形态。
 ///
 /// 独立线程运行，不阻塞 tokio runtime。读取到 EOF（子进程退出）时发送 Exit 事件并退出。
 ///
@@ -19,17 +27,48 @@ use tauri::ipc::Channel;
 /// 189KB/s 输出场景：16KB → 约 12 次/秒 read() 调用（4KB 为 47 次/秒）
 pub const READER_BUF_SIZE: usize = 16384;
 
+/// BE-05: 微批续读上限（64KB）——read 成功后非阻塞续读，累积至此或无可读
+/// 数据再一次 Channel::send + ring buffer append（BE-12）。首块最多
+/// READER_BUF_SIZE，续读约 3 块满上限。契约：64KB（S06 跨边界写死）。
+pub const MICRO_BATCH_MAX: usize = 65536;
+
+/// BE-05: reader 输入——阻塞读取 + 非阻塞续读检查（微批用）
+///
+/// - reader: PTY 输出读端（阻塞 read，供主循环与微批续读）
+/// - pending: 非阻塞「管道是否有可读数据」检查——Windows 上由 spawn.rs 构造
+///   （WaitForSingleObject(handle, 0)），非 Windows 恒 false（微批退化为每轮一次 read）
+pub struct PtyReaderInput {
+    reader: Box<dyn Read + Send>,
+    pending: Box<dyn Fn() -> bool + Send>,
+}
+
+impl PtyReaderInput {
+    /// 构造 reader 输入（BE-05）
+    pub fn new(reader: Box<dyn Read + Send>, pending: Box<dyn Fn() -> bool + Send>) -> Self {
+        Self { reader, pending }
+    }
+}
+
+impl Read for PtyReaderInput {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.reader.read(buf)
+    }
+}
+
 /// reader 线程主循环（E1: 支持重连）
 ///
+/// - input: PtyReaderInput——阻塞读取 + BE-05 微批续读检查（pending 非阻塞
+///   「管道是否有未读数据」；Windows = WaitForSingleObject(handle, 0)（spawn.rs
+///   构造），非 Windows = 恒 false）
 /// - channel: 可替换的 Channel 引用，pty_reattach 通过写锁替换
 /// - ring: ring buffer，总是缓存最近输出供 reattach 回放
 /// - child: P2-11 子进程句柄，EOF 时调用 wait() 获取真实退出码
 /// - exit_code: P2-42 退出状态共享，reader 设置后 pty_reattach 检测
-/// - 循环读取 PTY 输出，通过 Channel 发送 Output 事件
+/// - 循环读取 PTY 输出，微批聚合后通过 Channel 发送 Output 事件（BE-05）
 /// - Ok(0) = EOF → 发 Exit 事件 → 退出
 /// - Windows 首轮读取剥离 ConPTY 启动注入序列
 pub fn reader_loop(
-    mut reader: Box<dyn Read + Send>,
+    mut input: PtyReaderInput,
     channel: Arc<RwLock<Option<Channel<PtyEvent>>>>,
     ring: Arc<Mutex<VecDeque<u8>>>,
     child: Arc<Mutex<Box<dyn portable_pty::Child + Send>>>,
@@ -41,7 +80,7 @@ pub fn reader_loop(
     let mut startup_drained = false;
 
     loop {
-        match reader.read(&mut buf) {
+        match input.read(&mut buf) {
             Ok(0) => {
                 // EOF — 子进程已退出
                 // P2-11: 从 child.wait() 获取真实退出码而非硬编码 0
@@ -84,7 +123,7 @@ pub fn reader_loop(
                 // 首轮剥离 ConPTY 启动序列（纯函数），全部剥离则跳过本轮
                 // 仅当出现真实非启动输出后才置 drained——若本轮全为启动序列（None），
                 // 保持剥离状态以处理跨 16KB 边界的残留启动序列（BE-13）
-                let bytes = match apply_startup_strip(startup_drained, &buf[..n]) {
+                let first = match apply_startup_strip(startup_drained, &buf[..n]) {
                     Some(b) => {
                         startup_drained = true;
                         b
@@ -94,6 +133,26 @@ pub fn reader_loop(
                     }
                 };
 
+                // DA1 查询模拟响应：Claude Code Ink 渲染器启动时发 ESC[c 作为同步哨兵。
+                // ConPTY 拦截 DA1 查询后内部处理，不向子进程 stdout 返回响应。
+                // 导致 Ink waitFor 永不 resolve，阻塞约 60s。
+                // 此处检测子进程发出的 DA1 查询，向 stdin 注入 ESC[?64;22c（VT420+ANSI 颜色）
+                // 模拟 ConPTY 的一致行为。同一会话仅注入一次（AtomicBool 防重复）。
+                maybe_inject_da1(&da1_injected, &writer, &first);
+
+                // BE-05: 微批——read 成功后非阻塞续读（「读到即续读」，非定时器），
+                // 累积至 MICRO_BATCH_MAX（64KB）或无可读数据，再一次批量
+                // Channel::send + ring buffer append。续读遇 EOF/错误时立即停止
+                // （tail 已含数据照常 flush，下一轮主循环 read 走 EOF/Err 分支，
+                // 无数据丢失）；续读块不再过启动序列剥离（startup_drained 已置 true）。
+                let mut batch: Vec<u8> = Vec::with_capacity(READER_BUF_SIZE * 2);
+                batch.extend_from_slice(&first);
+                let (tail, _eof) =
+                    micro_batch_tail(&mut input, &mut buf, MICRO_BATCH_MAX - first.len());
+                // 续读块同样检测 DA1（跨块边界残留序列；AtomicBool 防重复注入）
+                maybe_inject_da1(&da1_injected, &writer, &tail);
+                batch.extend_from_slice(&tail);
+
                 let ch = match channel.read() {
                     Ok(c) => c,
                     Err(e) => {
@@ -101,30 +160,15 @@ pub fn reader_loop(
                         break;
                     }
                 };
-                // DA1 查询模拟响应：Claude Code Ink 渲染器启动时发 ESC[c 作为同步哨兵。
-                // ConPTY 拦截 DA1 查询后内部处理，不向子进程 stdout 返回响应。
-                // 导致 Ink waitFor 永不 resolve，阻塞约 60s。
-                // 此处检测子进程发出的 DA1 查询，向 stdin 注入 ESC[?64;22c（VT420+ANSI 颜色）
-                // 模拟 ConPTY 的一致行为。同一会话仅注入一次（AtomicBool 防重复）。
-                if should_inject_da1(da1_injected.load(Ordering::Relaxed), &bytes) {
-                    da1_injected.store(true, Ordering::Relaxed);
-                    // 向子进程 stdin 注入 DA1 响应（不阻塞 reader 线程）
-                    if let Ok(mut w) = writer.lock() {
-                        if let Err(e) = w.write_all(b"\x1b[?64;22c") {
-                            tracing::warn!("DA1 响应注入失败: {}", e);
-                        }
-                        if let Err(e) = w.flush() {
-                            tracing::warn!("DA1 响应注入失败: {}", e);
-                        }
-                    }
-                }
-                // P2-46: 总是先缓存到 ring buffer（不 clone），再 send 消耗 bytes
+                // P2-46: 总是先缓存到 ring buffer（不 clone），再 send 消耗 batch
                 // 成功路径零 clone，失败路径（Channel 断连）ring buffer 已有数据
-                if let Err(e) = ring_buffer_append(&ring, &bytes) {
+                // BE-12: 批量 append——合并后 append 调用点仅此一处（每微批一次，
+                // 锁竞争随 send 频次同步下降），不引入无锁结构
+                if let Err(e) = ring_buffer_append(&ring, &batch) {
                     tracing::warn!("ring buffer 写入失败: {e}");
                 }
                 if let Some(ref c) = *ch {
-                    if let Err(e) = c.send(PtyEvent::Output { bytes }) {
+                    if let Err(e) = c.send(PtyEvent::Output { bytes: batch }) {
                         tracing::debug!("Channel send 失败（前端可能已断开）: {}", e);
                     }
                 }
@@ -149,6 +193,58 @@ pub fn reader_loop(
                 }
                 break;
             }
+        }
+    }
+}
+
+/// BE-05: 微批续读（纯逻辑，可单测）——非阻塞续读至上限或无可读数据
+///
+/// 首块 read 成功后调用：循环「有未读数据 && 未达上限」→ 阻塞 read 取块，
+/// 累积到 `tail`。返回（续读累积数据, 是否遇 EOF）：
+/// - 遇 EOF（Ok(0)）：停止续读并返回 true——调用方照常 flush 已累积数据，
+///   下一轮主循环 read 将再次 Ok(0) 走 EOF 分支（无数据丢失、无重复）
+/// - 遇读错误：停止续读并返回 false——同上，下一轮主循环 Err 分支处理
+/// - 达到 `limit` 或 pending 返回 false：正常返回 false
+///
+/// 关键语义：pending 为 true 后 `read` 才被调用——Windows 上 pending 基于
+/// WaitForSingleObject(handle, 0) 非阻塞检测（有数据或对端关闭才为 true），
+/// 因此 read 不会空等，「读到即续读」而非定时器轮询。
+fn micro_batch_tail(input: &mut PtyReaderInput, buf: &mut [u8], limit: usize) -> (Vec<u8>, bool) {
+    let mut tail: Vec<u8> = Vec::new();
+    while tail.len() < limit && (input.pending)() {
+        match input.read(buf) {
+            Ok(0) => return (tail, true),
+            Ok(m) => tail.extend_from_slice(&buf[..m]),
+            Err(e) => {
+                tracing::warn!("PTY reader 微批续读错误: {e}");
+                return (tail, false);
+            }
+        }
+    }
+    (tail, false)
+}
+
+/// DA1 查询模拟响应注入（首块与微批续读块共用）
+///
+/// 检测到 DA1 查询（ESC[c / ESC[0c）则向子进程 stdin 注入 ESC[?64;22c，
+/// 模拟 ConPTY + conhost 的一致行为；AtomicBool 保证同一会话仅注入一次。
+/// 检测决策已抽为纯函数 `should_inject_da1`，注入动作为 I/O（M11 豁免项）。
+fn maybe_inject_da1(
+    da1_injected: &AtomicBool,
+    writer: &Mutex<Box<dyn Write + Send>>,
+    data: &[u8],
+) {
+    if !should_inject_da1(da1_injected.load(Ordering::Relaxed), data) {
+        return;
+    }
+    da1_injected.store(true, Ordering::Relaxed);
+    // 向子进程 stdin 注入 DA1 响应（不阻塞 reader 线程）
+    if let Ok(mut w) = writer.lock() {
+        if let Err(e) = w.write_all(b"\x1b[?64;22c") {
+            tracing::warn!("DA1 响应注入失败: {}", e);
+        }
+        if let Err(e) = w.flush() {
+            tracing::warn!("DA1 响应注入失败: {}", e);
         }
     }
 }
@@ -313,12 +409,15 @@ mod tests {
     //    - channel.read()         → std::sync::RwLock，运行时同步原语
     //    - c.send(PtyEvent::Exit) → Tauri IPC Channel::send()，I/O
     //
-    // 2. Ok(n) — 数据分支：
+    // 2. Ok(n) — 数据分支（BE-05 微批后形态）：
     //    - apply_startup_strip()  → ✅ 已抽取为纯函数（Phase 2）
-    //    - channel.read()         → RwLock
+    //    - micro_batch_tail()     → ✅ 已抽取为纯函数（BE-05）：pending 检查 +
+    //                               续读累积（read 为系统调用，决策已抽，调用不可抽）
     //    - should_inject_da1()    → ✅ 已抽取为纯函数（Phase 2）
-    //    - writer.lock()+write_all()+flush() → Mutex + 管道 I/O
-    //    - ring_buffer_append()   → Mutex + VecDeque 状态变更
+    //    - maybe_inject_da1()     → 注入动作（writer.lock() + 管道 I/O），检测决策已抽
+    //    - channel.read()         → RwLock
+    //    - ring_buffer_append()   → Mutex + VecDeque 状态变更（BE-12: 批量 append，
+    //                               每微批一次，调用点仅此一处）
     //    - c.send(PtyEvent::Output) → Channel::send()，I/O
     //
     // 3. Err(e) — 读错误分支：
@@ -333,12 +432,14 @@ mod tests {
     //
     // 结论：reader_loop 中剩余的所有分支决策均依赖同步原语或系统调用，
     // 无法进一步抽取为纯函数。apply_startup_strip / should_inject_da1 /
-    // eof_exit_code 已覆盖主循环中全部可纯函数化的决策逻辑。
+    // eof_exit_code / micro_batch_tail 已覆盖主循环中全部可纯函数化的决策逻辑。
     //
     // M11 状态：已尽力——剩余均为 I/O 编排无法纯函数化。
     // PTY-12 评估产出：残余不可抽分支明细 + 豁免理由见
     // src-tauri/src/pty/CLAUDE.md「reader_loop I/O 编排残余豁免（草稿）」
     // （Stage 17 统一收编为豁免表，DOC-01 引用）。
+    // DOC-01 豁免项 1 随 BE-05 微批变动（ring buffer 写入/send 次数降为每微批一次，
+    // 新增 pending 检查——决策已抽为 micro_batch_tail）：豁免表同步在 S19。
 
     #[test]
     fn test_strip_osc_title_bel() {
@@ -643,5 +744,137 @@ mod tests {
     fn eof_exit_code_lock_failure_returns_none() {
         // P2-42: child 句柄锁获取失败 → None（退出码未知）
         assert_eq!(eof_exit_code(Err(())), None);
+    }
+
+    // ─── BE-05: micro_batch_tail 微批续读测试 ───
+
+    /// 微批续读测试 mock reader：按预设序列输出数据块 / EOF / 错误
+    struct MockSeqReader {
+        /// read 序列：Ok(Vec) 数据块、Ok(空) EOF、Err 错误
+        seq: Vec<std::io::Result<Vec<u8>>>,
+        idx: usize,
+    }
+
+    impl Read for MockSeqReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.idx >= self.seq.len() {
+                return Ok(0); // 序列耗尽默认 EOF
+            }
+            let item = std::mem::replace(&mut self.seq[self.idx], Ok(Vec::new()));
+            self.idx += 1;
+            match item {
+                Ok(data) => {
+                    let n = data.len().min(buf.len());
+                    buf[..n].copy_from_slice(&data[..n]);
+                    Ok(n)
+                }
+                Err(e) => Err(e),
+            }
+        }
+    }
+
+    fn ok_block(len: usize, fill: u8) -> std::io::Result<Vec<u8>> {
+        Ok(vec![fill; len])
+    }
+
+    #[test]
+    fn micro_batch_no_pending_reads_nothing() {
+        // pending=false → 不续读，tail 空（且不消费 reader 数据）
+        let mut input = PtyReaderInput::new(
+            Box::new(MockSeqReader {
+                seq: vec![ok_block(16, b'A')],
+                idx: 0,
+            }),
+            Box::new(|| false),
+        );
+        let mut buf = [0u8; 64];
+        let (tail, eof) = micro_batch_tail(&mut input, &mut buf, 1024);
+        assert!(tail.is_empty());
+        assert!(!eof);
+    }
+
+    #[test]
+    fn micro_batch_drains_until_no_data() {
+        // pending=true → 续读直至数据耗尽（read 返回 Ok(0) → eof=true）
+        let mut input = PtyReaderInput::new(
+            Box::new(MockSeqReader {
+                seq: vec![ok_block(10, b'A'), ok_block(20, b'B')],
+                idx: 0,
+            }),
+            Box::new(|| true),
+        );
+        let mut buf = [0u8; 64];
+        let (tail, eof) = micro_batch_tail(&mut input, &mut buf, 1024);
+        assert_eq!(tail.len(), 30);
+        assert_eq!(&tail[..10], &[b'A'; 10]);
+        assert_eq!(&tail[10..], &[b'B'; 20]);
+        assert!(eof, "数据耗尽后 read 返回 Ok(0) 应标记 EOF");
+    }
+
+    #[test]
+    fn micro_batch_stops_at_limit() {
+        // 数据充足 + 上限 → 累积至 limit 即停（超出一个块的量，不无限续读）
+        let mut input = PtyReaderInput::new(
+            Box::new(MockSeqReader {
+                seq: std::iter::repeat_with(|| ok_block(1024, b'C'))
+                    .take(10)
+                    .collect(),
+                idx: 0,
+            }),
+            Box::new(|| true),
+        );
+        let mut buf = [0u8; 4096];
+        let (tail, eof) = micro_batch_tail(&mut input, &mut buf, 4096);
+        assert_eq!(tail.len(), 4096);
+        assert!(!eof, "达上限停止不算 EOF");
+    }
+
+    #[test]
+    fn micro_batch_stops_on_error() {
+        // 续读遇错误 → 停止，已累积数据保留（eof=false，下一轮主循环 Err 分支处理）
+        let err = std::io::Error::other("mock read error");
+        let mut input = PtyReaderInput::new(
+            Box::new(MockSeqReader {
+                seq: vec![ok_block(8, b'X'), Err(err)],
+                idx: 0,
+            }),
+            Box::new(|| true),
+        );
+        let mut buf = [0u8; 64];
+        let (tail, eof) = micro_batch_tail(&mut input, &mut buf, 1024);
+        assert_eq!(tail, vec![b'X'; 8]);
+        assert!(!eof, "读错误不标记 EOF");
+    }
+
+    #[test]
+    fn micro_batch_immediate_eof() {
+        // pending=true 但首轮即 EOF → 空 tail + eof=true
+        let mut input = PtyReaderInput::new(
+            Box::new(MockSeqReader { seq: vec![], idx: 0 }),
+            Box::new(|| true),
+        );
+        let mut buf = [0u8; 64];
+        let (tail, eof) = micro_batch_tail(&mut input, &mut buf, 1024);
+        assert!(tail.is_empty());
+        assert!(eof);
+    }
+
+    #[test]
+    fn micro_batch_limit_respects_first_chunk_headroom() {
+        // 首块已占空间时 limit 收窄：调用方传 MICRO_BATCH_MAX - first.len()，
+        // tail 累积不超过剩余额度（总批 ≤ 64KB 契约）
+        let mut input = PtyReaderInput::new(
+            Box::new(MockSeqReader {
+                seq: std::iter::repeat_with(|| ok_block(1024, b'D'))
+                    .take(10)
+                    .collect(),
+                idx: 0,
+            }),
+            Box::new(|| true),
+        );
+        let mut buf = [0u8; 4096];
+        // 模拟首块 3000B 后剩余额度 = 7000 - 3000 = 4000
+        let (tail, _eof) = micro_batch_tail(&mut input, &mut buf, 4000);
+        assert_eq!(tail.len(), 4096); // 4000 额度 + 一个块粒度 = 4096
     }
 }
