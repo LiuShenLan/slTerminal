@@ -37,6 +37,16 @@ pub const WATCH_EXCLUDE_DIRS: [&str; 7] = [
     "__pycache__",
 ];
 
+/// BE-07: fs-event 单事件路径合并上限——去抖批内单事件 paths 数**严格超限**时
+/// 合并为 Rescan 变体下发（不再逐路径推送）。防巨型批次（大目录整体删除/
+/// rename 等一次性产生数千路径）打爆前端事件循环与 IPC。
+pub const FS_EVENT_PATH_BATCH_LIMIT: usize = 100;
+
+// BE-07 评估结论：agent-event（hooks/signal.rs）低频不节流——hook 触发才 emit
+// （常态每会话每事件一次，量级远小于 fs-event 的每秒级目录变更），节流会延误
+// 前端状态机响应（F3 四态状态指示依赖实时事件）。维持不节流，不改 signal.rs；
+// 评估结论登记在 S19（文档同步）。
+
 /// 发送到前端的文件系统事件载荷
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -192,6 +202,18 @@ fn is_excluded_path(path: &Path) -> bool {
         .any(|seg| WATCH_EXCLUDE_DIRS.contains(&seg))
 }
 
+/// 下发 Rescan 载荷（need_rescan 溢出 / BE-07 批量合并共用）——携带监听根路径
+fn emit_rescan_overflow(emitter: &dyn EventEmitter, wps: &Mutex<Vec<PathBuf>>) {
+    match wps.lock() {
+        Ok(guard) => emitter.emit_fs_event(FsEventPayload {
+            paths: guard.iter().map(|p| p.display().to_string()).collect(),
+            kind: "Rescan".to_string(),
+            detail: "Overflow".to_string(),
+        }),
+        Err(e) => tracing::error!("fs-watcher 锁获取失败: {e}"),
+    }
+}
+
 /// SEC-08：事件路径（或其任一祖先分量）是否为符号链接
 ///
 /// 用 `symlink_metadata` 检查（不跟随末级符号链接）。事件路径可能位于符号链接
@@ -222,18 +244,7 @@ fn event_loop(
                 for event in &events {
                     // need_rescan — 通知前端全量刷新
                     if event.need_rescan() {
-                        let wps_lock = match wps.lock() {
-                            Ok(g) => g,
-                            Err(e) => {
-                                tracing::error!("fs-watcher 锁获取失败: {e}");
-                                continue;
-                            }
-                        };
-                        emitter.emit_fs_event(FsEventPayload {
-                            paths: wps_lock.iter().map(|p| p.display().to_string()).collect(),
-                            kind: "Rescan".to_string(),
-                            detail: "Overflow".to_string(),
-                        });
+                        emit_rescan_overflow(emitter, wps);
                         continue;
                     }
 
@@ -243,6 +254,13 @@ fn event_loop(
                     }
                     // SEC-08：符号链接路径不 emit（防项目内 symlink 泄露外部路径）
                     if event.paths.iter().any(|p| is_symlink_path(p)) {
+                        continue;
+                    }
+
+                    // BE-07: 单事件路径数严格超限 → 合并为 Rescan（全量刷新比
+                    // 逐路径推送更省——前端 fs-event 消费侧本就整体刷新）
+                    if event.paths.len() > FS_EVENT_PATH_BATCH_LIMIT {
+                        emit_rescan_overflow(emitter, wps);
                         continue;
                     }
 
@@ -1025,6 +1043,71 @@ mod tests {
             emitter.last().unwrap().paths,
             vec!["/project/src/main.rs".to_string()]
         );
+
+        harness.shutdown();
+    }
+
+    // ─── BE-07: 单事件路径合并上限测试 ───
+
+    /// 单事件 paths 数严格超限 → 合并为单条 Rescan 下发（携带监听根路径，不再逐路径）
+    #[test]
+    fn event_loop_merges_oversized_batch_to_rescan() {
+        let emitter = Arc::new(MockEmitter::default());
+        let harness = LoopHarness::start(emitter.clone());
+        harness
+            .wps
+            .lock()
+            .unwrap()
+            .push(PathBuf::from("/project/root"));
+
+        // 超限批：LIMIT + 1 个路径的单事件
+        let paths: Vec<PathBuf> = (0..=FS_EVENT_PATH_BATCH_LIMIT)
+            .map(|i| PathBuf::from(format!("/project/src/file_{i}.rs")))
+            .collect();
+        harness
+            .event_tx
+            .send(Ok(vec![make_debounced(
+                EventKind::Create(CreateKind::File),
+                paths,
+            )]))
+            .unwrap();
+
+        wait_until(|| emitter.count() == 1, "超限批应合并为单条 Rescan");
+        let p = emitter.last().unwrap();
+        assert_eq!(p.kind, "Rescan");
+        assert_eq!(p.detail, "Overflow");
+        assert_eq!(
+            p.paths,
+            vec!["/project/root".to_string()],
+            "合并 Rescan 应携带监听根路径"
+        );
+
+        harness.shutdown();
+    }
+
+    /// 恰好达到限制值（阈值语义：严格大于才合并）→ 正常分类下发
+    #[test]
+    fn event_loop_batch_at_limit_stays_classified() {
+        let emitter = Arc::new(MockEmitter::default());
+        let harness = LoopHarness::start(emitter.clone());
+
+        // 恰好 LIMIT 个路径 → 仍按原分类逐路径下发
+        let paths: Vec<PathBuf> = (0..FS_EVENT_PATH_BATCH_LIMIT)
+            .map(|i| PathBuf::from(format!("/project/src/file_{i}.rs")))
+            .collect();
+        harness
+            .event_tx
+            .send(Ok(vec![make_debounced(
+                EventKind::Create(CreateKind::File),
+                paths,
+            )]))
+            .unwrap();
+
+        wait_until(|| emitter.count() == 1, "限制值内批应正常分类下发");
+        let p = emitter.last().unwrap();
+        assert_eq!(p.kind, "Create", "限制值内不应合并为 Rescan");
+        assert_eq!(p.detail, "File");
+        assert_eq!(p.paths.len(), FS_EVENT_PATH_BATCH_LIMIT);
 
         harness.shutdown();
     }

@@ -528,3 +528,108 @@ describe("useHooksConfig 初始层（KZ-4）", () => {
     expect(calls[calls.length - 1][1]).toBe("user");
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════
+// FE-25：setLayer 异步链异常捕获 + confirmDiscard timeout 清理
+// ═══════════════════════════════════════════════════════════════════
+describe("FE-25 setLayer 异常捕获与 askGuard 定时器", () => {
+  beforeEach(() => {
+    mockReadHooksConfig.mockReset();
+    mockWriteHooksConfig.mockReset();
+    mockConfirmDialog.mockReset();
+    mockConfirmDialog.mockResolvedValue(true);
+    mockToastShow.mockReset();
+    resetStores();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("setLayer 异步链异常（confirmDialog reject）→ toast 告警 + 层不切换（不静默吞错）", async () => {
+    seedProject("C:/proj");
+    mockReadHooksConfig.mockResolvedValue(VALID_BASE);
+    const { result } = renderHook(() => useHooksConfig(SELECTED_CLI_ID));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    // 置 dirty → setLayer 走 confirmDiscard
+    act(() => {
+      result.current.updateConfigJson(VALID_BASE);
+    });
+    // confirmDialog 异常（弹窗层故障）——FE-25 try/catch 应捕获
+    mockConfirmDialog.mockRejectedValueOnce(new Error("弹窗渲染失败"));
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await act(async () => {
+      result.current.setLayer("project");
+    });
+
+    expect(mockToastShow).toHaveBeenCalledWith(
+      "error",
+      expect.stringContaining("切换配置层失败"),
+    );
+    expect(result.current.layer).toBe("user"); // 异常后不切换层
+    expect(consoleErrorSpy).toHaveBeenCalled();
+    consoleErrorSpy.mockRestore();
+  });
+
+  it("confirmDiscard 关闭后 askGuard 定时器复位——500ms 后守卫解除，reload 可再次弹窗", async () => {
+    seedProject("C:/proj");
+    mockReadHooksConfig.mockResolvedValue(VALID_BASE);
+    const { result } = renderHook(() => useHooksConfig(SELECTED_CLI_ID));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    // 置 dirty → setLayer → confirmDiscard（resolve true）→ 重读 project 层
+    act(() => {
+      result.current.updateConfigJson(VALID_BASE);
+    });
+    await act(async () => {
+      result.current.setLayer("project");
+    });
+    await waitFor(() => expect(result.current.layer).toBe("project"));
+    expect(mockConfirmDialog).toHaveBeenCalledTimes(1);
+
+    // 守卫窗口内（500ms 未到）reload → askGuard 抑制，不二次弹窗
+    // 注意：setLayer 重读成功后 dirty 已清——先重新置 dirty，reload 是否弹窗
+    // 才真正由 askGuard 决定（否则 confirmDiscard 因非 dirty 直接放行）
+    act(() => {
+      result.current.updateConfigJson(VALID_BASE);
+    });
+    await act(async () => {
+      await result.current.reload();
+    });
+    expect(mockConfirmDialog).toHaveBeenCalledTimes(1);
+
+    // 越过 ASK_GUARD_MS（真实定时器，照 hooks-config-panel 先例）→ 守卫复位，
+    // reload 再次走 confirmDialog
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 600));
+    });
+    await act(async () => {
+      await result.current.reload();
+    });
+    expect(mockConfirmDialog).toHaveBeenCalledTimes(2);
+  });
+
+  it("卸载清理 askGuard 复位定时器——unmount 后越过窗口无残留回调副作用", async () => {
+    seedProject("C:/proj");
+    mockReadHooksConfig.mockResolvedValue(VALID_BASE);
+    const { result, unmount } = renderHook(() => useHooksConfig(SELECTED_CLI_ID));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    act(() => {
+      result.current.updateConfigJson(VALID_BASE);
+    });
+    // setLayer → confirmDiscard → 弹窗关闭 → 500ms 复位定时器 pending
+    await act(async () => {
+      result.current.setLayer("project");
+    });
+    await waitFor(() => expect(result.current.layer).toBe("project"));
+
+    unmount(); // cleanup clearTimeout（FE-25）
+    // 越过复位窗口：定时器已被清理——不抛错/无未捕获副作用即验证
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 600));
+    });
+  });
+});

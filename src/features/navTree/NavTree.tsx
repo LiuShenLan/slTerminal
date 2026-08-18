@@ -28,7 +28,7 @@
 // 行为委托：页面行点击同时切换页面——照 SidebarTree 切换语义）。
 // 历史节点常驻项目下（不随项目展开态隐藏）——计数 pill 与历史行入口恒可见（NAV-10 契约）。
 
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { useProjects, createProjectId, createPageId } from "../../stores/projects";
 import type { OperationPage, Project } from "../../stores/projects";
@@ -205,6 +205,16 @@ export const NavTree: React.FC<NavTreeProps> = ({ switchToPage, onDeletePage }) 
   );
   const [searchFocused, setSearchFocused] = useState(false);
 
+  // FE-26: switchToPageAndFocus 轮询的 AbortController——再次点击/卸载时
+  // abort 在途轮询（防过期聚焦动作落到已切换的页面）
+  const focusPollAbortRef = useRef<AbortController | null>(null);
+  useEffect(() => {
+    return () => {
+      focusPollAbortRef.current?.abort();
+      focusPollAbortRef.current = null;
+    };
+  }, []);
+
   const closeMenu = useCallback(() => {
     setMenu((prev) => ({ ...prev, visible: false }));
   }, []);
@@ -285,7 +295,14 @@ export const NavTree: React.FC<NavTreeProps> = ({ switchToPage, onDeletePage }) 
   const handleSessionFocus = useCallback(async (panelId: string) => {
     const pageId = findPageIdForPanelId(panelId);
     if (!pageId) return;
-    await switchToPageAndFocus(pageId, panelId);
+    // FE-26: 再次点击取消在途轮询（新轮询接替，防过期聚焦）
+    focusPollAbortRef.current?.abort();
+    const controller = new AbortController();
+    focusPollAbortRef.current = controller;
+    await switchToPageAndFocus(pageId, panelId, controller.signal);
+    if (focusPollAbortRef.current === controller) {
+      focusPollAbortRef.current = null;
+    }
   }, []);
 
   // 切换到该会话所在操作页面并聚焦终端页签（SessionActionDialog 动作，原 HistorySessionList（已删）语义）
@@ -306,7 +323,14 @@ export const NavTree: React.FC<NavTreeProps> = ({ switchToPage, onDeletePage }) 
         });
         return;
       }
-      await switchToPageAndFocus(pageId, panelId);
+      // FE-26: 再次点击/弹窗再次触发取消在途轮询（新轮询接替）
+      focusPollAbortRef.current?.abort();
+      const controller = new AbortController();
+      focusPollAbortRef.current = controller;
+      await switchToPageAndFocus(pageId, panelId, controller.signal);
+      if (focusPollAbortRef.current === controller) {
+        focusPollAbortRef.current = null;
+      }
     },
     [],
   );

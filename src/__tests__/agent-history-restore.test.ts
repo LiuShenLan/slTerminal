@@ -13,7 +13,10 @@
 // 逐字一致（`claude --resume <id>` + fork 追加 ` --fork-session` + `\r` 结尾）。
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { restoreHistorySession } from "../features/agentHistory/restoreSession";
+import {
+  restoreHistorySession,
+  waitFor,
+} from "../features/agentHistory/restoreSession";
 import { resetTerminalPanelSeq } from "../lib/panelId";
 import "../features/cliProfiles/profiles";
 import type { AgentHistorySession } from "../types/agentHistory";
@@ -354,5 +357,75 @@ describe("restoreHistorySession 四步恢复编排", () => {
     expect(h.mockSwitchToPageShared).not.toHaveBeenCalled();
     expect(apiStub.addPanel).not.toHaveBeenCalled();
     expect(h.mockPtyWrite).not.toHaveBeenCalled();
+  });
+
+  it("FE-27: getPageApi 恒不就绪 → waitFor 超时 → 统一失败 toast，不 addPanel（signal 接线不破坏超时路径）", async () => {
+    vi.useFakeTimers();
+    try {
+      h.mockGetPageApi.mockReturnValue(undefined);
+      const pending = restoreHistorySession(makeSession());
+      // 越过 50×100ms 轮询上限 → waitFor 抛超时错 → 外层 toast
+      await vi.advanceTimersByTimeAsync(50 * 100);
+      await pending;
+
+      expect(h.mockSendToastNotification).toHaveBeenCalledWith(
+        "恢复会话失败",
+        expect.objectContaining({ body: expect.stringContaining("5s 内未就绪") }),
+      );
+      expect(apiStub.addPanel).not.toHaveBeenCalled();
+      expect(h.mockPtyWrite).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// FE-27 waitFor AbortSignal 中止（测试专用导出直测）
+// ═══════════════════════════════════════════════════════════════════
+describe("FE-27 waitFor AbortSignal", () => {
+  it("signal 已 abort → 第一轮即抛「已取消」，probe 未被调用", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const probe = vi.fn(() => undefined);
+
+    await expect(waitFor(probe, "测试条件", controller.signal)).rejects.toThrow(
+      "测试条件 已取消",
+    );
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+  it("轮询中 abort → 停止轮询抛「已取消」，probe 次数停在 abort 前", async () => {
+    vi.useFakeTimers();
+    try {
+      const controller = new AbortController();
+      const probe = vi.fn(() => undefined);
+      const pending = waitFor(probe, "测试条件", controller.signal);
+
+      // 300ms 推进内共 4 次 probe：t=0 首次 + 100/200/300 三个定时器各触发一次
+      await vi.advanceTimersByTimeAsync(300);
+      expect(probe).toHaveBeenCalledTimes(4);
+
+      // abort → waitFor 尚挂起在 t=300 处未到期的 100ms 定时器上，须再推进
+      // 100ms 让其进入下一轮循环（循环开头检查 aborted → 抛错），此后不再 probe。
+      // 先注册 rejects 断言再推进——推进触发 reject 时 handler 须已就位（防 unhandled rejection）
+      controller.abort();
+      const abortAssertion = expect(pending).rejects.toThrow("测试条件 已取消");
+      await vi.advanceTimersByTimeAsync(100);
+      await abortAssertion;
+      expect(probe).toHaveBeenCalledTimes(4); // abort 后不再轮询
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("无 signal 后向兼容：条件满足即返回，超时仍抛错", async () => {
+    let calls = 0;
+    const probe = vi.fn(() => {
+      calls += 1;
+      return calls >= 3 ? "ready" : undefined;
+    });
+    await expect(waitFor(probe, "测试条件")).resolves.toBe("ready");
+    expect(calls).toBe(3);
   });
 });

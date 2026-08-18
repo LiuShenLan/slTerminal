@@ -22,6 +22,7 @@ use std::process::Command;
 use common::{block_on, commit_file, git_add, init_temp_repo, make_app_state};
 use slterminal_lib::git::{get_or_open_repo, git_status_impl, status_to_str, GitStatusEntry};
 use slterminal_lib::AppError;
+use slterminal_lib::{GitRepoCache, GIT_REPO_CACHE_CAPACITY};
 
 // ---- B1: status_to_str 纯函数映射测试 ----
 
@@ -815,7 +816,7 @@ fn get_or_open_repo_cache_miss() {
     let (_dir, path) = init_temp_repo();
     commit_file(&path, "test.txt", "hello");
 
-    let cache = std::sync::Mutex::new(std::collections::HashMap::new());
+    let cache = std::sync::Mutex::new(GitRepoCache::new(GIT_REPO_CACHE_CAPACITY));
     let result = get_or_open_repo(&cache, &path.to_string_lossy(), &Some(path.clone()));
     assert!(
         result.is_ok(),
@@ -854,7 +855,7 @@ fn init_temp_repo_path_canonicalized_and_strips() {
 fn get_or_open_repo_workdir_equals_canonical_path() {
     let (_dir, path) = init_temp_repo();
     commit_file(&path, "t.txt", "x");
-    let cache = std::sync::Mutex::new(std::collections::HashMap::new());
+    let cache = std::sync::Mutex::new(GitRepoCache::new(GIT_REPO_CACHE_CAPACITY));
     let (_repo, workdir) =
         get_or_open_repo(&cache, &path.to_string_lossy(), &Some(path.clone())).unwrap();
     assert_eq!(
@@ -868,7 +869,7 @@ fn get_or_open_repo_cache_hit() {
     let (_dir, path) = init_temp_repo();
     commit_file(&path, "test.txt", "hello");
 
-    let cache = std::sync::Mutex::new(std::collections::HashMap::new());
+    let cache = std::sync::Mutex::new(GitRepoCache::new(GIT_REPO_CACHE_CAPACITY));
     // 首次访问 → 缓存
     let result1 = get_or_open_repo(&cache, &path.to_string_lossy(), &Some(path.clone()));
     assert!(result1.is_ok(), "首次访问应成功");
@@ -916,7 +917,7 @@ fn get_or_open_repo_cache_no_false_hit_for_subrepo() {
         .output()
         .unwrap();
 
-    let cache = std::sync::Mutex::new(std::collections::HashMap::new());
+    let cache = std::sync::Mutex::new(GitRepoCache::new(GIT_REPO_CACHE_CAPACITY));
 
     // 先访问子目录 → 缓存子仓库 workdir
     let result_sub = get_or_open_repo(&cache, &sub.to_string_lossy(), &Some(path.clone()));
@@ -946,7 +947,7 @@ fn get_or_open_repo_discover_failure() {
     let non_repo = tmp.path().join("not_a_repo");
     std::fs::create_dir_all(&non_repo).unwrap();
 
-    let cache = std::sync::Mutex::new(std::collections::HashMap::new());
+    let cache = std::sync::Mutex::new(GitRepoCache::new(GIT_REPO_CACHE_CAPACITY));
     let result = get_or_open_repo(&cache, &non_repo.to_string_lossy(), &Some(non_repo.clone()));
     assert!(result.is_err(), "非 git 目录 discover 应失败");
 }
@@ -958,7 +959,7 @@ fn get_or_open_repo_bare_repo_returns_err() {
     let bare_path = tmp.path().join("bare.git");
     git2::Repository::init_bare(&bare_path).unwrap();
 
-    let cache = std::sync::Mutex::new(std::collections::HashMap::new());
+    let cache = std::sync::Mutex::new(GitRepoCache::new(GIT_REPO_CACHE_CAPACITY));
     let result = get_or_open_repo(
         &cache,
         &bare_path.to_string_lossy(),

@@ -318,6 +318,34 @@ describe("switchToPageAndFocus", () => {
     warnSpy.mockRestore();
     unregisterPageApi(pageB);
   });
+
+  it("FE-26: abort 后停止轮询——不 focus、不再 getPanel、无 warn（卸载/再次点击场景）", async () => {
+    vi.useFakeTimers();
+    const { pageB } = seedTwoPageProject();
+    const api = makeFakeApi();
+    api.neverPanel();
+    registerPageApi(pageB, castFakeApi(api));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const controller = new AbortController();
+    const pending = switchToPageAndFocus(pageB, "panel-x", controller.signal);
+    await Promise.resolve();
+    mocks.resolve();
+    // 前两次轮询（100ms 间隔）无面板
+    await vi.advanceTimersByTimeAsync(100);
+    expect(api.getPanel).toHaveBeenCalledTimes(2);
+
+    // abort（调用方卸载/再次点击）→ 下一轮循环前检查退出
+    controller.abort();
+    await vi.advanceTimersByTimeAsync(5 * 1000);
+    await pending;
+
+    expect(api.focusSpy).not.toHaveBeenCalled();
+    expect(warnSpy).not.toHaveBeenCalled(); // abort 静默退出，不按超时 warn
+    expect(api.getPanel).toHaveBeenCalledTimes(2); // 停在 abort 前的轮询次数
+    warnSpy.mockRestore();
+    unregisterPageApi(pageB);
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════

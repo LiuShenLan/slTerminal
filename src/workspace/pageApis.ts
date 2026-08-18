@@ -77,15 +77,19 @@ export async function switchToPageShared(pageId: string): Promise<void> {
  *
  * 轮询 getPageApi(pageId)?.getPanel(panelId)，100ms×50=5s 上限。
  * 超时后 console.warn 降级（不抛异常）。
+ * @param signal FE-26: 可选 AbortSignal——调用方卸载/再次点击时 abort，
+ *   中止后轮询静默退出（不 focus、不 warn；避免过期聚焦动作落到已切换的页面）
  */
 export async function switchToPageAndFocus(
   pageId: string,
   panelId: string,
+  signal?: AbortSignal,
 ): Promise<void> {
   await switchToPageShared(pageId);
 
   // 轮询面板挂载——页面可能尚未初始化，等 handlePageApiReady 注册 api 后再查
   for (let i = 0; i < 50; i++) {
+    if (signal?.aborted) return; // FE-26: abort 后停止轮询
     const panel = getPageApi(pageId)?.getPanel(panelId);
     if (panel) {
       panel.focus();

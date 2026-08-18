@@ -92,6 +92,17 @@ export async function kill(sessionId: string, panelId: string): Promise<void> {
 }
 
 /**
+ * 兜底销毁全部活跃 PTY 会话（BE-08）
+ *
+ * 关闭序列第二步：前端 TerminalRegistry 快速 kill 后调用，前后端 session 映射
+ * 不一致（前端漏记/后端残留）时后端 session 不泄漏。返回成功 kill 数（后端
+ * 逐 session kill + join，超时语义同 BE-06）。
+ */
+export async function ptyKillAll(): Promise<number> {
+  return await invoke<number>("pty_kill_all");
+}
+
+/**
  * 获取 Windows 真实 build 号（F3 动态检测）
  *
  * 通过 RtlGetNtVersionNumbers 获取，取低 16 位。

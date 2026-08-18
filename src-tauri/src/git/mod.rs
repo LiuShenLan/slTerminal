@@ -8,7 +8,7 @@
 //! git_rollback_tests / git_unstage_tests + 共享 common 工厂），本文件无内嵌测试。
 
 use crate::error::AppError;
-use crate::state::{validate_path_within_root, AppState};
+use crate::state::{validate_path_within_root, AppState, GitRepoCache};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use tauri::State;
@@ -77,9 +77,11 @@ pub fn status_to_str(status: git2::Status) -> Option<&'static str> {
 /// 缓存命中时通过 `Repository::open` 重新打开以绕过生命周期耦合。
 /// project_root 用于 discover 路径沙箱校验（防上溯到父仓库泄露），
 /// 未设置时在测试模式下豁免。
+/// BE-09：缓存为容量 8 的简易 LRU（GitRepoCache，state.rs）——命中 touch、
+/// 超容量淘汰最久未用，替代原无上限 HashMap。
 /// pub：GIT-12 拆分后供集成测试（tests/ 下 git 测试文件）直接调用。
 pub fn get_or_open_repo(
-    cache: &std::sync::Mutex<std::collections::HashMap<PathBuf, git2::Repository>>,
+    cache: &std::sync::Mutex<GitRepoCache>,
     search_path: &str,
     project_root: &Option<PathBuf>,
 ) -> Result<(git2::Repository, PathBuf), AppError> {
@@ -87,19 +89,16 @@ pub fn get_or_open_repo(
 
     // 缓存命中检测：仅 search 在 workdir 子树内时命中（不含反向匹配，防子仓库误命中）
     {
-        let cache_guard = cache
+        let mut cache_guard = cache
             .lock()
             .map_err(|e| AppError::Git(format!("获取 git_repo_cache 锁失败: {e}")))?;
-        for workdir in cache_guard.keys() {
-            if search.starts_with(workdir) {
-                let wd = workdir.clone();
-                drop(cache_guard);
-                // 验证缓存的 workdir 仍在 project_root 内
-                validate_path_within_root(project_root, &wd)?;
-                let repo = git2::Repository::open(&wd)
-                    .map_err(|e| AppError::Git(format!("打开仓库失败: {e}")))?;
-                return Ok((repo, wd));
-            }
+        if let Some(wd) = cache_guard.find_workdir(&search) {
+            drop(cache_guard);
+            // 验证缓存的 workdir 仍在 project_root 内
+            validate_path_within_root(project_root, &wd)?;
+            let repo = git2::Repository::open(&wd)
+                .map_err(|e| AppError::Git(format!("打开仓库失败: {e}")))?;
+            return Ok((repo, wd));
         }
     }
 
@@ -114,7 +113,7 @@ pub fn get_or_open_repo(
     // 验证 discover 到的 workdir 在 project_root 内（防上溯到父仓库泄露）
     validate_path_within_root(project_root, &workdir)?;
 
-    // 存入缓存（保留 repo 句柄标记此 workdir 可达）
+    // 存入缓存（保留 repo 句柄标记此 workdir 可达；超容量自动淘汰 LRU）
     let mut cache_guard = cache
         .lock()
         .map_err(|e| AppError::Git(format!("获取 git_repo_cache 锁失败: {e}")))?;

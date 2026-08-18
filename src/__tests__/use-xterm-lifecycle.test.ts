@@ -5,7 +5,7 @@
 // doSpawn 失败重试、setupRetry Enter 重连。
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { renderHook, waitFor } from "@testing-library/react";
+import { renderHook, waitFor, act } from "@testing-library/react";
 import { useFontSize } from "../stores";
 
 // ─── Hoisted mocks ───
@@ -1808,9 +1808,9 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     Object.defineProperty(container, "offsetHeight", { value: 600, configurable: true });
   });
 
-  /** 渲染 useXterm 并等待 PTY spawn + onAgentEvent 注册完成 */
+  /** 渲染 useXterm 并等待 PTY spawn + onAgentEvent 注册完成（返回 renderHook 结果供 unmount） */
   async function mountAndWaitForHooks() {
-    renderHook(() =>
+    const hook = renderHook(() =>
       useXterm({
         container,
         cols: 80,
@@ -1825,6 +1825,7 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     // onAgentEvent 在 effect 中同步调用，spawn 后应已注册
     expect(mockOnAgentEvent).toHaveBeenCalled();
     expect(capturedAgentEventCallbackRef.current).not.toBeNull();
+    return hook;
   }
 
   it("HUK1: 匹配 panelId + UserPromptSubmit → eventToStatus 真实调用（入参断言）+ setAgentSession 携 usageSourcePath", async () => {
@@ -2393,5 +2394,41 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     });
     // 仅同步补位一次，无陈旧标题回调
     expect(mockOnTabStateChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("HUK26: 卸载后 readHistoryTitle 迟到 resolve → 标题回调被丢弃（FE-24 isDisposedRef 守卫）", async () => {
+    // readHistoryTitle 挂起（IPC 未返回）——卸载发生在 resolve 之前
+    let resolveTitle!: (v: { title: string | null; titleSource: string }) => void;
+    mockReadHistoryTitle.mockReturnValueOnce(
+      new Promise((r) => {
+        resolveTitle = r;
+      }),
+    );
+    mockRegistryMap.set("hooks-test", {
+      sessionId: "test-session-id",
+      agentSession: { sessionId: "s1", cliId: "claude" },
+    });
+
+    const { unmount } = await mountAndWaitForHooks();
+    mockOnTabStateChange.mockClear();
+    mockReadHistoryTitle.mockClear();
+
+    // SessionStart → 发起 readHistoryTitle（挂起）
+    capturedAgentEventCallbackRef.current!(makeHookPayload({ event: "SessionStart" }));
+    await waitFor(() => {
+      expect(mockReadHistoryTitle).toHaveBeenCalledTimes(1);
+    });
+
+    // 卸载 → cleanup 置 isDisposedRef=true（+ TerminalRegistry.remove）
+    unmount();
+
+    // 迟到 resolve → 卸载守卫拦截，无携标题回调（同步补位已被 mockClear 清除）
+    await act(async () => {
+      resolveTitle({ title: "迟到标题", titleSource: "customTitle" });
+    });
+    expect(mockOnTabStateChange).not.toHaveBeenCalledWith({
+      active: true,
+      title: "迟到标题",
+    });
   });
 });

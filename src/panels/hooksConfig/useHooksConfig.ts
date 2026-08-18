@@ -22,7 +22,8 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { readHooksConfig, writeHooksConfig } from "../../ipc/hooksConfig";
-import { confirmDialog, toast } from "../../lib";
+// FE-25: 错误消息统一经 getErrorMessage（契约：src/ipc/appError.ts，src/lib re-export）
+import { confirmDialog, toast, getErrorMessage } from "../../lib";
 import { useProjects } from "../../stores/projects";
 import { useLayout } from "../../stores/layout";
 import type { HooksLayer, HooksConfigJson, HooksConfigGui } from "../../types/hooksConfig";
@@ -116,6 +117,19 @@ export function useHooksConfig(
   // 重读——弹窗打开/关闭伴随的回归触发若无守卫将再次弹窗（验收 2.1「点否无限
   // 循环 / 点是重弹」根因）
   const askGuardRef = useRef(false);
+  // FE-25: askGuard 复位定时器 id——存 ref 供卸载 cleanup clearTimeout（防卸载后定时器
+  // 回调仍执行改 ref；异步竞态窗口内重挂载也不被旧定时器误关守卫）
+  const askGuardTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // FE-25: 卸载时清理 askGuard 复位定时器（泄漏防护——cleanup 中 clearTimeout）
+  useEffect(() => {
+    return () => {
+      if (askGuardTimerRef.current !== null) {
+        clearTimeout(askGuardTimerRef.current);
+        askGuardTimerRef.current = null;
+      }
+    };
+  }, []);
 
   /** 加载指定层配置（generation 取消竞态；null 视为 {}，Err 置损坏错误态）
       showLoading=true 时显示 loading 遮罩（首次加载/切层/切项目）；
@@ -153,8 +167,13 @@ export function useHooksConfig(
         kind: "warning",
       });
     } finally {
-      setTimeout(() => {
+      // FE-25: 复位定时器 id 存 ref——卸载 cleanup clearTimeout；重入时先清旧定时器
+      if (askGuardTimerRef.current !== null) {
+        clearTimeout(askGuardTimerRef.current);
+      }
+      askGuardTimerRef.current = setTimeout(() => {
         askGuardRef.current = false;
+        askGuardTimerRef.current = null;
       }, ASK_GUARD_MS);
     }
   }, []);
@@ -164,11 +183,18 @@ export function useHooksConfig(
     (l: HooksLayer) => {
       if (l === layerRef.current) return;
       void (async () => {
-        const ok = await confirmDiscard("当前层有未保存的修改，切换层级将丢弃这些修改。");
-        if (!ok) return;
-        const gen = ++genRef.current;
-        setLayerState(l);
-        await load(l, gen, true); // 切层显示 loading 遮罩（内容替换有清晰反馈）
+        try {
+          const ok = await confirmDiscard("当前层有未保存的修改，切换层级将丢弃这些修改。");
+          if (!ok) return;
+          const gen = ++genRef.current;
+          setLayerState(l);
+          await load(l, gen, true); // 切层显示 loading 遮罩（内容替换有清晰反馈）
+        } catch (err) {
+          // FE-25: 切层异步链异常捕获——不静默吞错（confirmDialog 异常/未来 load 抛错），
+          // toast 提醒 + 日志（load 内部既有 generation 过期检查与 try/catch，此处兜外层）
+          toast.show("error", `切换配置层失败: ${getErrorMessage(err)}`);
+          console.error("[slTerminal] 切换 hooks 配置层失败:", err);
+        }
       })();
     },
     [confirmDiscard, load],

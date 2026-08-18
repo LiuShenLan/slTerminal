@@ -440,6 +440,58 @@ describe("useAgentStatus（行建模新语义）", () => {
     expect(result.current.rows[0].panelId).toBe("terminal-page1-0");
   });
 
+  it("FE-23: 快速连续切项目 A→B→C——最终 rows 只反映 C（gen 检查丢弃过期扫描）", () => {
+    // 照 useFileTree T2.4 模式：连续切换项目，最终态必须为末位项目的扫描结果，
+    // 中间项目的行不残留（genRef 每次 effect 递增 + setRows 前检查）
+    seedProject("proj-1", "pageA", "C:/projA");
+    registerTerminal("terminal-pageA-0", makeSession({ lastEventAt: 1000 }));
+    registerTerminal("terminal-pageB-0", makeSession({ lastEventAt: 2000 }));
+
+    const { result, rerender } = renderHook(() => useAgentStatus());
+    expect(result.current.rows).toHaveLength(1);
+    expect(result.current.rows[0].panelId).toBe("terminal-pageA-0");
+
+    // 切到 B（含 B 的终端）→ rows 切换为 B 的会话行
+    useProjects.setState({
+      projects: {
+        "proj-2": {
+          projectId: "proj-2",
+          name: "项目 B",
+          rootPath: "C:/projB",
+          pages: [{ pageId: "pageB", name: "页面 B", layout: {}, cwd: undefined, createdAt: 1, lastAccessedAt: 1 }],
+          activePageId: "pageB",
+          version: 1,
+        },
+      },
+      deletionLock: { pendingDelete: null, acquiredAt: null },
+      expandedNodes: { "proj-2": true },
+    });
+    useLayout.setState({ activePageId: "pageB" });
+    rerender();
+    expect(result.current.rows).toHaveLength(1);
+    expect(result.current.rows[0].panelId).toBe("terminal-pageB-0");
+
+    // 再切到 C（无终端）→ B 的行不残留（最终态 = 空）
+    useProjects.setState({
+      projects: {
+        "proj-3": {
+          projectId: "proj-3",
+          name: "项目 C",
+          rootPath: "C:/projC",
+          pages: [{ pageId: "pageC", name: "页面 C", layout: {}, cwd: undefined, createdAt: 1, lastAccessedAt: 1 }],
+          activePageId: "pageC",
+          version: 1,
+        },
+      },
+      deletionLock: { pendingDelete: null, acquiredAt: null },
+      expandedNodes: { "proj-3": true },
+    });
+    useLayout.setState({ activePageId: "pageC" });
+    rerender();
+    expect(result.current.rows).toHaveLength(0);
+    expect(result.current.state).toEqual({ kind: "empty" });
+  });
+
   // ──────────────────────────────────────────────────
   // sessionChange 建行（双通道之一）
   // ──────────────────────────────────────────────────

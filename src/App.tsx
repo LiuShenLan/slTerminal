@@ -150,6 +150,18 @@ function App() {
           }
         }
 
+        // BE-08：Registry kill 后 ptyKillAll 兜底——前后端 session 映射不一致
+        // （前端漏记/后端残留）时后端 session 不泄漏；返回 kill 数仅作日志，
+        // 失败不阻断关闭（Job Object KILL_ON_JOB_CLOSE 仍有最终兜底）
+        try {
+          const killed = await pty.ptyKillAll();
+          if (killed > 0) {
+            console.info(`[slTerminal] 关闭兜底清理 ${killed} 个后端残留 PTY session`);
+          }
+        } catch (err) {
+          console.error("[slTerminal] 关闭兜底 pty_kill_all 失败:", err);
+        }
+
         // 1. flush dirty layout
         const { activePageId } = useLayout.getState();
         if (activePageId && window.__dockviewApi) {
@@ -261,15 +273,26 @@ function App() {
           flexDirection: "column",
         }}
       >
-        <TitleBar />
+        {/* FE-28：五个顶层组件分别包 inline ErrorBoundary——单个渲染错误降级占位，不拖垮全局 */}
+        <ErrorBoundary variant="inline">
+          <TitleBar />
+        </ErrorBoundary>
         <div style={{ flex: 1, minHeight: 0 }}>
-          <Workspace />
+          <ErrorBoundary variant="inline">
+            <Workspace />
+          </ErrorBoundary>
         </div>
-        <NotificationListener />
+        <ErrorBoundary variant="inline">
+          <NotificationListener />
+        </ErrorBoundary>
       </div>
       {/* OV-01: 全局浮层挂载点（fixed 定位，不参与布局）——ConfirmDialog/toast */}
-      <ConfirmDialogHost />
-      <ToastHost />
+      <ErrorBoundary variant="inline">
+        <ConfirmDialogHost />
+      </ErrorBoundary>
+      <ErrorBoundary variant="inline">
+        <ToastHost />
+      </ErrorBoundary>
     </ErrorBoundary>
   );
 }

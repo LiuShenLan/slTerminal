@@ -100,6 +100,13 @@ describeIpcContract('pty IPC 合约', [
     expectArgs: { sessionId: 'session-3', panelId: 'panel-3' },
   },
   {
+    name: 'ptyKillAll: 应调用 pty_kill_all 命令（BE-08 关闭兜底，无参），返回 kill 数',
+    cmd: 'pty_kill_all',
+    call: () => pty.ptyKillAll(),
+    respond: 2,
+    expectResult: 2,
+  },
+  {
     name: 'getWindowsBuildNumber: 成功时返回 invoke 结果',
     cmd: 'get_windows_build_number',
     call: () => pty.getWindowsBuildNumber(),
@@ -141,6 +148,13 @@ describeIpcContract('pty IPC 合约', [
     call: () => pty.kill('dead-session', 'panel-1'),
     mockThrow: 'already dead',
     expectReject: 'already dead',
+  },
+  {
+    name: 'ptyKillAll: invoke 失败时异常应传播',
+    cmd: 'pty_kill_all',
+    call: () => pty.ptyKillAll(),
+    mockThrow: 'backend busy',
+    expectReject: 'backend busy',
   },
 ]);
 

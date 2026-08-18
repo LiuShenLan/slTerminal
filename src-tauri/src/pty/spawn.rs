@@ -8,7 +8,7 @@
 /// - 孤儿进程：每个子进程放入 Job Object，JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
 use crate::error::AppError;
 use crate::pty::shell;
-use crate::state::{self as app_state, AppState, PtySession};
+use crate::state::{self as app_state, AppState, PtySession, PtyState};
 #[cfg(not(windows))]
 use portable_pty::native_pty_system;
 use portable_pty::PtySize;
@@ -1411,6 +1411,65 @@ pub async fn pty_kill(
     .map_err(|e| AppError::Pty(format!("pty_kill join error: {e}")))?
 }
 
+/// 销毁全部 PTY 会话 — 关闭序列兜底（BE-08）
+///
+/// 前端关闭序列：先前端 TerminalRegistry 快速 kill，再调用本命令兜底——
+/// 前后端 session 不一致（前端 Registry 缺失条目）时防止后端 session 泄漏。
+/// 遍历 sessions 全部 kill + join（超时语义同 BE-06：KILL_JOIN_TIMEOUT 轮询
+/// is_finished，超时放弃 join 记 warn，线程随 PtySession Drop 兜底），
+/// 返回成功 kill 数。
+#[tauri::command]
+pub async fn pty_kill_all(state: tauri::State<'_, AppState>) -> Result<u32, AppError> {
+    pty_kill_all_impl(&state.pty).await
+}
+
+/// pty_kill_all 命令内核（BE-08，供 L1 直接调用，无需构造 tauri::State）
+///
+/// 先 drain 提取全部 session（清空 sessions map）后释放写锁，再在 spawn_blocking
+/// 中执行 kill+join+drop（ClosePseudoConsole 在 pre-Win11 24H2 上永久阻塞，
+/// 避免持锁阻塞后续命令；同 pty_kill 的 G1b 语义）。
+async fn pty_kill_all_impl(pty: &PtyState) -> Result<u32, AppError> {
+    // 提取全部 session 后释放写锁（锁在此 scope 结束时释放，<1ms）
+    let sessions: Vec<PtySession> = {
+        let mut guard = pty
+            .sessions
+            .write()
+            .map_err(|e| AppError::Pty(format!("获取 sessions 锁失败: {e}")))?;
+        guard.drain().map(|(_, s)| s).collect()
+    };
+
+    // blocking 线程中逐个 kill+join+drop，不阻塞 IPC worker
+    tokio::task::spawn_blocking(move || -> Result<u32, AppError> {
+        let mut killed = 0u32;
+        for mut session in sessions {
+            let mut child = session
+                .child
+                .lock()
+                .map_err(|e| AppError::Pty(format!("锁获取失败: {e}")))?;
+            // BE-06 同款语义：检查 kill 返回值——失败仅告警并继续
+            // （Job Object KILL_ON_JOB_CLOSE 兜底杀子进程）
+            match child.kill() {
+                Ok(()) => killed += 1,
+                Err(e) => tracing::warn!("pty_kill_all: child.kill() 失败: {e}"),
+            }
+            drop(child);
+            if let Some(handle) = session.reader_handle.take() {
+                // BE-06 同款：join 带 3s 超时（轮询 is_finished）——超时放弃
+                // join 记 warn，线程随 PtySession Drop（state.rs Drop join）兜底
+                if !join_with_timeout(handle, KILL_JOIN_TIMEOUT) {
+                    tracing::warn!(
+                        "pty_kill_all: reader 线程 3s 内未退出，放弃 join（随 Drop 兜底）"
+                    );
+                }
+            }
+            // session drop → master drop → ClosePseudoConsole
+        }
+        Ok(killed)
+    })
+    .await
+    .map_err(|e| AppError::Pty(format!("pty_kill_all join error: {e}")))?
+}
+
 /// BE-06: pty_kill 等待 reader 线程退出的超时——3s 后放弃 join，
 /// 线程随 PtySession Drop / 进程退出兜底
 const KILL_JOIN_TIMEOUT: Duration = Duration::from_secs(3);
@@ -1995,5 +2054,45 @@ mod tests {
         let handle = std::thread::spawn(|| std::thread::sleep(Duration::from_millis(100)));
         assert!(!join_with_timeout(handle, Duration::from_millis(10)));
         std::thread::sleep(Duration::from_millis(150));
+    }
+
+    // ─── BE-08: pty_kill_all 测试 ───
+
+    /// 空会话：返回 0，无副作用
+    #[test]
+    fn pty_kill_all_empty_returns_zero() {
+        let pty = PtyState::new();
+        let killed = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(pty_kill_all_impl(&pty))
+            .unwrap();
+        assert_eq!(killed, 0, "空会话应返回 0");
+        assert!(pty.sessions.read().unwrap().is_empty(), "sessions 保持为空");
+    }
+
+    /// 多会话：全部 kill 成功（计数 = 会话数），sessions 清空
+    #[cfg(windows)]
+    #[test]
+    fn pty_kill_all_kills_all_sessions() {
+        let pty = PtyState::new();
+        pty.sessions
+            .write()
+            .unwrap()
+            .insert("sid-a".into(), make_test_session("panel-a"));
+        pty.sessions
+            .write()
+            .unwrap()
+            .insert("sid-b".into(), make_test_session("panel-b"));
+        assert_eq!(pty.sessions.read().unwrap().len(), 2);
+
+        let killed = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(pty_kill_all_impl(&pty))
+            .unwrap();
+        assert_eq!(killed, 2, "两个真实 session 都应 kill 成功");
+        assert!(
+            pty.sessions.read().unwrap().is_empty(),
+            "kill_all 后 sessions 应清空（关闭序列兜底语义）"
+        );
     }
 }

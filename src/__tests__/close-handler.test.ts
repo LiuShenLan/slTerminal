@@ -21,6 +21,8 @@ const mocks = vi.hoisted(() => {
   const mockRestoreStatusline = vi.fn().mockResolvedValue(undefined);
   /** 可变 activePageId（test 3 设为 null 模拟无活跃页面） */
   let mockActivePageId: string | null = "test-page-1";
+  /** FE-28：ErrorBoundary mock 收到的 variant 序列（"fullscreen" | "inline"） */
+  const mockErrorBoundaryVariants: string[] = [];
 
   return {
     get capturedHandler() {
@@ -41,6 +43,7 @@ const mocks = vi.hoisted(() => {
     mockUpdatePageLayout,
     mockSetActivePage,
     mockRestoreStatusline,
+    mockErrorBoundaryVariants,
     /** 完整重置（beforeEach 调用） */
     resetAll() {
       capturedHandler = null;
@@ -51,6 +54,7 @@ const mocks = vi.hoisted(() => {
       mockUpdatePageLayout.mockClear();
       mockSetActivePage.mockClear();
       mockRestoreStatusline.mockClear();
+      mockErrorBoundaryVariants.length = 0;
     },
   };
 });
@@ -83,8 +87,12 @@ vi.mock("../workspace/layoutSerde", () => ({
 }));
 
 // P1-19: mock pty + TerminalRegistry（App 关闭时 kill 活跃 session）
+// BE-08: ptyKillAll 兜底命令（Registry kill 之后调用）
 vi.mock("../ipc", () => ({
-  pty: { kill: vi.fn().mockResolvedValue(undefined) },
+  pty: {
+    kill: vi.fn().mockResolvedValue(undefined),
+    ptyKillAll: vi.fn().mockResolvedValue(0),
+  },
 }));
 
 vi.mock("../panels/terminal/TerminalRegistry", () => ({
@@ -100,11 +108,14 @@ vi.mock("../panels/terminal/TerminalRegistry", () => ({
   },
 }));
 
-// P1-03: mock lib ErrorBoundary（避免渲染实际组件）
+// P1-03: mock lib ErrorBoundary（避免渲染实际组件；记录 variant 供 FE-28 断言）
 // TB-02: 补 TitleBar 三窗口图标（渲染 null，避免 jsdom 渲染警告干扰 console spy 断言）
 vi.mock("../lib", () => ({
-  ErrorBoundary: ({ children }: { children: React.ReactNode }) =>
-    React.createElement(React.Fragment, null, children),
+  // FE-28: 记录每次 ErrorBoundary 的 variant——顶层 fullscreen 1 处 + 五个顶层组件 inline 各 1 处
+  ErrorBoundary: ({ children, variant }: { children: React.ReactNode; variant?: string }) => {
+    mocks.mockErrorBoundaryVariants.push(variant ?? "fullscreen");
+    return React.createElement(React.Fragment, null, children);
+  },
   IconMin: () => null,
   IconMax: () => null,
   IconCloseWin: () => null,
@@ -155,6 +166,9 @@ vi.mock("../stores/projects", () => {
   );
   return {
     useProjects,
+    // S12 (88c4caa) 引入的共用 debounce 常量——fontSize/keybindings/sideBar 静态 import，
+    // mock 缺导出会得 undefined → setTimeout(fn, undefined) 立即执行保存链 → App init 抛错渲染卡死
+    PERSIST_DEBOUNCE_MS: 2000,
     loadAllProjects: mocks.mockLoadAllProjects,
     saveAllProjects: mocks.mockSaveAllProjects,
     cancelPendingSave: vi.fn(),
@@ -305,8 +319,9 @@ describe("onCloseRequested 关闭钩子", () => {
     // 触发关闭（不要 await，handler 会卡在 Promise.race）
     const closePromise = handler();
 
-    // 推进 3000ms 触发 race 超时
-    vi.advanceTimersByTime(3000);
+    // 推进 3000ms 触发 race 超时——须用异步版：handler 挂起在 ptyKillAll 等
+    // await 微任务链上，同步 advance 不 flush 微任务，race 的 setTimeout 尚未注册
+    await vi.advanceTimersByTimeAsync(3000);
 
     await closePromise;
 
@@ -362,6 +377,9 @@ describe("onCloseRequested PTY kill 路径", () => {
     vi.mocked(TerminalRegistry.getAll).mockReturnValue(new Map());
     vi.mocked(pty.kill).mockReset();
     vi.mocked(pty.kill).mockResolvedValue(undefined);
+    // BE-08: 重置兜底 killAll（默认 0 个残留 session）
+    vi.mocked(pty.ptyKillAll).mockReset();
+    vi.mocked(pty.ptyKillAll).mockResolvedValue(0);
   });
 
   afterEach(() => {
@@ -471,8 +489,8 @@ describe("onCloseRequested PTY kill 路径", () => {
     // 触发关闭
     const closePromise = handler();
 
-    // 推进 3000ms 触发 race 超时
-    vi.advanceTimersByTime(3000);
+    // 推进 3000ms 触发 race 超时（异步版：flush 微任务链后再推进，理由见测试 5）
+    await vi.advanceTimersByTimeAsync(3000);
 
     await closePromise;
 
@@ -524,5 +542,97 @@ describe("onCloseRequested PTY kill 路径", () => {
     expect(failures.map((f) => f.sessionId)).toEqual(["session-001", "session-002", "session-003"]);
 
     consoleSpy.mockRestore();
+  });
+
+  it("13. Registry 有活跃 session → 先逐 session kill，再 ptyKillAll 兜底（BE-08 顺序）", async () => {
+    (window as unknown as Record<string, unknown>).__dockviewApi = { _mock: true };
+
+    vi.mocked(TerminalRegistry.getAll).mockReturnValue(
+      new Map([
+        ["panel-1", { term: {} as never, sessionId: "session-001", webglAddon: null, fitAddon: {} as never }],
+      ]),
+    );
+    vi.mocked(pty.ptyKillAll).mockResolvedValue(2); // 后端兜底清理 2 个残留 session
+
+    const handler = await renderAndCapture();
+    await handler();
+
+    // Registry kill 与 ptyKillAll 都被调用
+    expect(pty.kill).toHaveBeenCalledWith("session-001", "panel-1");
+    expect(pty.ptyKillAll).toHaveBeenCalledTimes(1);
+    // 顺序契约：Registry 快速 kill 先于兜底 killAll
+    expect(vi.mocked(pty.kill).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(pty.ptyKillAll).mock.invocationCallOrder[0],
+    );
+  });
+
+  it("14. Registry 为空 → ptyKillAll 仍被调用（后端 session 兜底不依赖前端映射）", async () => {
+    (window as unknown as Record<string, unknown>).__dockviewApi = { _mock: true };
+
+    vi.mocked(TerminalRegistry.getAll).mockReturnValue(new Map());
+
+    const handler = await renderAndCapture();
+    await handler();
+
+    // 前端无 session 记录，但后端可能残留——兜底照常执行
+    expect(pty.kill).not.toHaveBeenCalled();
+    expect(pty.ptyKillAll).toHaveBeenCalledTimes(1);
+  });
+
+  it("15. ptyKillAll 失败 → 不阻断关闭（仅错误日志）", async () => {
+    (window as unknown as Record<string, unknown>).__dockviewApi = { _mock: true };
+
+    vi.mocked(pty.ptyKillAll).mockRejectedValue(new Error("backend gone"));
+
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const handler = await renderAndCapture();
+    await expect(handler()).resolves.toBeUndefined();
+    // 后续保存序列不受影响
+    expect(mocks.mockSaveAllProjects).toHaveBeenCalled();
+
+    consoleSpy.mockRestore();
+  });
+
+  it("16. ptyKillAll 返回 kill 数 > 0 → console.info 记录兜底清理数", async () => {
+    (window as unknown as Record<string, unknown>).__dockviewApi = { _mock: true };
+
+    vi.mocked(pty.ptyKillAll).mockResolvedValue(3);
+
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+
+    const handler = await renderAndCapture();
+    await handler();
+
+    expect(infoSpy).toHaveBeenCalledWith(
+      expect.stringContaining("关闭兜底清理 3 个后端残留 PTY session"),
+    );
+
+    infoSpy.mockRestore();
+  });
+});
+
+// ─── FE-28: App 五个顶层组件分别包 inline ErrorBoundary ───
+
+describe("FE-28 App 顶层组件错误边界", () => {
+  beforeEach(() => {
+    mocks.resetAll();
+    setupLocalStorage();
+    delete ((window as unknown) as Record<string, unknown>).__dockviewApi;
+  });
+
+  it("1. ready 后渲染五个 inline 边界（TitleBar/Workspace/NotificationListener/ConfirmDialogHost/ToastHost）", async () => {
+    render(React.createElement(App));
+
+    // 等待启动完成（ready=true → 完整骨架渲染）：inline 边界恰 5 处
+    await waitFor(() => {
+      expect(
+        mocks.mockErrorBoundaryVariants.filter((v) => v === "inline"),
+      ).toHaveLength(5);
+    }, { timeout: 3000 });
+    // 外层 fullscreen 兜底保留（启动中 1 处 + ready 后 1 处）——filter 返回数组，须取 .length 再数值断言
+    expect(
+      mocks.mockErrorBoundaryVariants.filter((v) => v === "fullscreen").length,
+    ).toBeGreaterThanOrEqual(2);
   });
 });

@@ -22,6 +22,7 @@
     "allow-pty-write",
     "allow-pty-resize",
     "allow-pty-kill",
+    "allow-pty-kill-all",
     "allow-fs-read-file",
     "allow-fs-write-file",
     "allow-fs-read-dir",

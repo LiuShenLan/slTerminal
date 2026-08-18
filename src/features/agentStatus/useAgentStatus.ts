@@ -114,6 +114,10 @@ export function useAgentStatus(): AgentStatusResult {
 
   const projectRoot = activeProject?.rootPath ?? null;
 
+  // generation 计数器（照 useFileTree 先例）：项目切换时递增，
+  // 初始扫描 setRows 前检查——快速切项目时丢弃过期扫描结果
+  const genRef = useRef(0);
+
   // ref 副本供稳定订阅（dept []）回调读取最新值，防 R4 竞态（remove 事件丢失）
   const projectRootRef = useRef(projectRoot);
   projectRootRef.current = projectRoot;
@@ -306,6 +310,9 @@ export function useAgentStatus(): AgentStatusResult {
 
   // ---- 初始扫描 + 项目切换（只建 agentSession 非 null 的行；携 usageSourcePath 主动拉 usage） ----
   useEffect(() => {
+    // FE-23: generation 递增——本项目扫描结果的 setRows 前检查，
+    // 快速切项目时旧扫描（理论上的慢 resolveTitle 等异步延伸）不覆盖新状态
+    const gen = ++genRef.current;
     if (!projectRoot || !activeProject) {
       setRows([]);
       return;
@@ -340,6 +347,8 @@ export function useAgentStatus(): AgentStatusResult {
     }
 
     initialRows.sort((a, b) => b.lastEventAt - a.lastEventAt);
+    // FE-23: generation 过期检查——项目已切换则丢弃本次扫描结果
+    if (gen !== genRef.current) return;
     setRows(initialRows);
   }, [projectRoot, activeProject?.projectId]);
 

@@ -549,7 +549,7 @@ describe("活跃会话行构成", () => {
     );
   });
 
-  it("点击会话行 → switchToPageAndFocus(pageId, panelId)", async () => {
+  it("点击会话行 → switchToPageAndFocus(pageId, panelId, signal)（FE-26 携 AbortSignal）", async () => {
     const row = seedSessionRow();
     fireEvent.click(row);
 
@@ -557,6 +557,7 @@ describe("活跃会话行构成", () => {
       expect(mockSwitchToPageAndFocus).toHaveBeenCalledWith(
         "page1",
         "terminal-page1-0",
+        expect.any(AbortSignal),
       );
     });
   });
@@ -979,6 +980,7 @@ describe("历史节点（NAV-03）", () => {
       expect(mockSwitchToPageAndFocus).toHaveBeenCalledWith(
         "page1",
         "terminal-page1-0",
+        expect.any(AbortSignal), // FE-26: 调用方携 AbortSignal（再次点击/卸载时 abort）
       );
     });
   });

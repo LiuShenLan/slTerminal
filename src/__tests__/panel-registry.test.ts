@@ -1,10 +1,13 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render } from "@testing-library/react";
+import React from "react";
 import {
   panelRegistry,
   terminalTabConfig,
   PANEL_TYPES,
   PANEL_HTML_VIEWER,
   isValidPanelType,
+  withPanelBoundary,
 } from "../panelRegistry";
 
 describe("panelRegistry", () => {
@@ -167,5 +170,73 @@ describe("isValidPanelType", () => {
 describe("PANEL_HTML_VIEWER", () => {
   it('值为 "htmlviewer"', () => {
     expect(PANEL_HTML_VIEWER).toBe("htmlviewer");
+  });
+});
+
+// ─── FE-22: 面板级错误边界（withPanelBoundary）───
+
+interface TestPanelProps {
+  params: { panelId: string };
+}
+
+/** 会抛错的子面板组件，用于验证边界隔离 */
+const ThrowingPanel: React.FC<TestPanelProps> = () => {
+  throw new Error("FE-22 模拟面板渲染错误");
+};
+
+/** 正常子面板组件（同页兄弟面板） */
+const NormalPanel: React.FC<TestPanelProps> = (props) =>
+  React.createElement(
+    "div",
+    { "data-testid": `normal-${props.params.panelId}` },
+    `正常面板 ${props.params.panelId}`,
+  );
+
+describe("FE-22 面板级错误边界（withPanelBoundary）", () => {
+  beforeEach(() => {
+    // 渲染错误边界会经 componentDidCatch 打 console.error——静默避免噪音
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    delete (window as unknown as Record<string, unknown>).__sltermError;
+  });
+
+  it("1. 抛错面板降级为 inline 占位，同页其他面板存活", () => {
+    const WrappedThrow = withPanelBoundary(ThrowingPanel);
+    const WrappedNormal = withPanelBoundary(NormalPanel);
+    const { container } = render(
+      React.createElement(
+        React.Fragment,
+        null,
+        React.createElement(WrappedThrow, { params: { panelId: "bad" } }),
+        React.createElement(WrappedNormal, { params: { panelId: "good" } }),
+      ),
+    );
+    // 抛错面板显示 inline 降级占位（错误被边界吞掉，不扩大为整页崩溃）
+    expect(container.textContent).toContain("页面渲染出错");
+    // 同页兄弟面板不受影响——内容仍在
+    expect(container.textContent).toContain("正常面板 good");
+    expect(container.querySelector('[data-testid="normal-good"]')).not.toBeNull();
+  });
+
+  it("2. 无错误时正常透传 children", () => {
+    const WrappedNormal = withPanelBoundary(NormalPanel);
+    const { container } = render(
+      React.createElement(WrappedNormal, { params: { panelId: "a" } }),
+    );
+    expect(container.textContent).toContain("正常面板 a");
+    expect(container.textContent).not.toContain("页面渲染出错");
+  });
+
+  it("3. 抛错后 window.__sltermError 被记录（componentDidCatch 副作用）", () => {
+    const WrappedThrow = withPanelBoundary(ThrowingPanel);
+    render(React.createElement(WrappedThrow, { params: { panelId: "bad" } }));
+    expect((window as unknown as Record<string, unknown>).__sltermError).toBeDefined();
+  });
+
+  it("4. panelRegistry 六个注册项均经 withPanelBoundary 包裹（displayName 前缀 Boundary）", () => {
+    for (const [type, Comp] of Object.entries(panelRegistry)) {
+      expect((Comp as { displayName?: string }).displayName, `类型 ${type}`).toMatch(
+        /^Boundary\(/,
+      );
+    }
   });
 });

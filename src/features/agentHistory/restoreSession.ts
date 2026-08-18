@@ -30,9 +30,19 @@ import type { AgentHistorySession } from "../../types/agentHistory";
 const POLL_COUNT = 50;
 const POLL_INTERVAL_MS = 100;
 
-/** 轮询等待条件满足（probe 返回非 undefined），超时抛错 */
-async function waitFor<T>(probe: () => T | undefined, label: string): Promise<T> {
+/** 轮询等待条件满足（probe 返回非 undefined），超时抛错。
+ *  @param signal FE-27: 可选 AbortSignal——中止后停止轮询并抛错
+ *   （走统一失败路径；页面切换/新恢复发起时取消在途恢复，防误操作）
+ *  导出为测试专用（FE-27 L2 直测 abort 语义；生产消费方 = 本模块内部） */
+export async function waitFor<T>(
+  probe: () => T | undefined,
+  label: string,
+  signal?: AbortSignal,
+): Promise<T> {
   for (let i = 0; i < POLL_COUNT; i++) {
+    if (signal?.aborted) {
+      throw new Error(`${label} 已取消`);
+    }
     const value = probe();
     if (value !== undefined) return value;
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
@@ -44,6 +54,10 @@ async function waitFor<T>(probe: () => T | undefined, label: string): Promise<T>
 
 /** 模块级恢复进行中标记——防重入（并发双击同一会话行时，第二次调用直接返回） */
 let restoring = false;
+
+/** FE-27: 模块级在途恢复的 AbortController——新恢复发起时 abort 旧的
+ *  （页面切换后旧编排的轮询应停止，防误在已切换的页面 addPanel 终端） */
+let restoreAbortRef: AbortController | null = null;
 
 /**
  * 四步恢复编排：项目入列 → 页面保障 → 页面切换 → 终端恢复注入
@@ -58,8 +72,13 @@ export async function restoreHistorySession(
   // 防重入：恢复编排进行中，并发调用直接返回（如快速双击同一历史行）
   if (restoring) return;
   restoring = true;
+  // FE-27: 新恢复发起时 abort 上一轮在途轮询（若已结束/已 abort 则为 no-op）；
+  // 四步编排共享本 Controller 的 signal
+  restoreAbortRef?.abort();
+  const controller = new AbortController();
+  restoreAbortRef = controller;
   try {
-    await doRestore(session, opts?.fork ?? false);
+    await doRestore(session, opts?.fork ?? false, controller.signal);
   } catch (err) {
     // 失败路径：toast + 日志，不静默吞错、不中断其他流程（场景 10）
     sendToastNotification("恢复会话失败", {
@@ -69,11 +88,18 @@ export async function restoreHistorySession(
     });
     console.error("[slTerminal] 恢复历史会话失败:", err);
   } finally {
+    if (restoreAbortRef === controller) {
+      restoreAbortRef = null;
+    }
     restoring = false;
   }
 }
 
-async function doRestore(session: AgentHistorySession, fork: boolean): Promise<void> {
+async function doRestore(
+  session: AgentHistorySession,
+  fork: boolean,
+  signal: AbortSignal,
+): Promise<void> {
   // 防御性拦截：cwd 为 null 无法编排（调用方已前置拦截，此处双保险）
   if (session.cwd == null) {
     throw new Error("会话缺少工作目录（cwd），无法恢复");
@@ -130,6 +156,7 @@ async function doRestore(session: AgentHistorySession, fork: boolean): Promise<v
   const api = await waitFor(
     () => getPageApi(targetPageId),
     `页面 ${targetPageId} 的 DockviewApi`,
+    signal, // FE-27: 四步共享 Controller——页面切换/新恢复发起时中止轮询
   );
   // B14: panelId 经生成单点 makeTerminalPanelId（terminal-{pageId}-{seq}，模块级
   // 每页计数与 PageDockviewHost 共享）——旧格式含 Date.now 数字段，破坏贪婪正则/
@@ -149,6 +176,7 @@ async function doRestore(session: AgentHistorySession, fork: boolean): Promise<v
   const entry = await waitFor(
     () => TerminalRegistry.get(panelId),
     `终端面板 ${panelId} 的 PTY 会话`,
+    signal, // FE-27: 四步共享 Controller——页面切换/新恢复发起时中止轮询
   );
 
   // 注入恢复内容（决策 25，MC-315 委托）：profile.history.buildRestoreInput——

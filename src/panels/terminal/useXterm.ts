@@ -461,6 +461,9 @@ export function useXterm({
         lastTitleFetchAtRef.current = Date.now();
         readHistoryTitle(cliId, sessionId)
           .then((resolved) => {
+            // FE-24: 卸载守卫——面板已卸载（cleanup 置 isDisposedRef）时
+            // 忽略过期结果（防卸载后回调改已 dispose 的终端标题）
+            if (isDisposedRef.current) return;
             // 陈旧守卫：应用前确认面板仍注册且会话未变（防迟到结果覆盖新会话标题）
             if (
               TerminalRegistry.get(panelId)?.agentSession?.sessionId !== sessionId

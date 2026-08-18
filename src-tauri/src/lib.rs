@@ -14,7 +14,9 @@ use crate::pty::win_build::get_windows_build_number;
 pub use error::AppError;
 pub use state::validate_path_within_root;
 pub use state::AppState;
+pub use state::GitRepoCache;
 pub use state::PtyState;
+pub use state::GIT_REPO_CACHE_CAPACITY;
 use tauri_plugin_prevent_default::{Builder as PreventDefaultBuilder, Flags, PlatformOptions};
 
 /// ping 命令 — 占位，用于验证 IPC 链路和测试基建
@@ -84,6 +86,7 @@ pub fn run() {
             pty::spawn::pty_write,
             pty::spawn::pty_resize,
             pty::spawn::pty_kill,
+            pty::spawn::pty_kill_all,
             fs::fs_read_file,
             fs::fs_write_file,
             fs::fs_read_dir,

@@ -67,6 +67,67 @@ impl PtyState {
     }
 }
 
+/// git 仓库缓存 — workdir → Repository 的简易 LRU（容量 8，BE-09）
+///
+/// 原 HashMap 无上限无淘汰（注释「目录切换时清除」失实——已核实无任何清理点），
+/// 现改容量上限 LRU，零新依赖手实现：HashMap 存值 + Vec<PathBuf> 维护访问顺序
+/// （front = 最近使用 MRU，back = 最久未用 LRU，超容量淘汰尾部）。
+///
+/// 消费方（git/mod.rs get_or_open_repo）仅把缓存当「该 workdir 已被 discover 校验」
+/// 的标记：命中后仍从磁盘 Repository::open 独立实例，故淘汰 Repository 值无资源泄漏。
+pub const GIT_REPO_CACHE_CAPACITY: usize = 8;
+
+pub struct GitRepoCache {
+    map: HashMap<PathBuf, git2::Repository>,
+    /// 访问顺序：front = 最近使用（MRU），back = 最久未用（LRU，淘汰对象）
+    lru: Vec<PathBuf>,
+    capacity: usize,
+}
+
+impl GitRepoCache {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            map: HashMap::new(),
+            lru: Vec::new(),
+            capacity,
+        }
+    }
+
+    /// 前缀匹配查找：search 在某个缓存 workdir 子树内则命中（MRU→LRU 顺序，
+    /// 命中即 touch 为 MRU；不含反向匹配，防子仓库误命中）。未命中返回 None。
+    pub(crate) fn find_workdir(&mut self, search: &Path) -> Option<PathBuf> {
+        let idx = self.lru.iter().position(|wd| search.starts_with(wd))?;
+        let wd = self.lru.remove(idx);
+        self.lru.insert(0, wd.clone());
+        Some(wd)
+    }
+
+    /// 插入（同 key 替换值或新增）并 touch 为 MRU；超容量时淘汰 LRU 尾部
+    pub(crate) fn insert(&mut self, key: PathBuf, repo: git2::Repository) {
+        self.map.insert(key.clone(), repo);
+        if let Some(idx) = self.lru.iter().position(|k| *k == key) {
+            self.lru.remove(idx);
+        }
+        self.lru.insert(0, key);
+        // 淘汰最久未用（尾部），直至回到容量内
+        while self.lru.len() > self.capacity {
+            if let Some(evicted) = self.lru.pop() {
+                self.map.remove(&evicted);
+            }
+        }
+    }
+
+    /// 当前缓存条目数
+    pub fn len(&self) -> usize {
+        self.lru.len()
+    }
+
+    /// 缓存是否为空
+    pub fn is_empty(&self) -> bool {
+        self.lru.is_empty()
+    }
+}
+
 /// 应用全局状态，各模块通过 AppState 共享资源
 pub struct AppState {
     pub pty: PtyState,
@@ -74,8 +135,8 @@ pub struct AppState {
     pub file_watchers: Mutex<LruWatcherPool>,
     /// 当前项目根路径（由前端打开项目时设置，用于路径 sandbox 校验）
     pub project_root: RwLock<Option<PathBuf>>,
-    /// git 仓库缓存：workdir → Repository（目录切换时清除）
-    pub git_repo_cache: Mutex<HashMap<PathBuf, git2::Repository>>,
+    /// git 仓库缓存：workdir → Repository，LRU 容量 GIT_REPO_CACHE_CAPACITY（BE-09）
+    pub git_repo_cache: Mutex<GitRepoCache>,
 }
 
 impl Default for AppState {
@@ -90,7 +151,7 @@ impl AppState {
             pty: PtyState::new(),
             file_watchers: Mutex::new(LruWatcherPool::new(WATCHER_POOL_CAPACITY)),
             project_root: RwLock::new(None),
-            git_repo_cache: Mutex::new(HashMap::new()),
+            git_repo_cache: Mutex::new(GitRepoCache::new(GIT_REPO_CACHE_CAPACITY)),
         }
     }
 }
@@ -880,5 +941,125 @@ mod project_root_tests {
             dunce::canonicalize(&first).unwrap(),
             "失败清空后应可重新成功设置"
         );
+    }
+}
+
+/// GitRepoCache LRU 测试（BE-09：容量淘汰、命中复用、同 key 替换）
+#[cfg(test)]
+mod git_repo_cache_tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    /// 构造一个真实 git 仓库实例（git2::Repository::init，无需外部 git CLI）
+    fn make_repo() -> git2::Repository {
+        let dir = tempdir().unwrap();
+        git2::Repository::init(dir.path()).unwrap()
+    }
+
+    /// 容量淘汰：超容量插入时淘汰最久未用（LRU 尾部）项
+    #[test]
+    fn evicts_oldest_when_over_capacity() {
+        let mut cache = GitRepoCache::new(2);
+        let dir_a = tempdir().unwrap();
+        let dir_b = tempdir().unwrap();
+        let dir_c = tempdir().unwrap();
+        cache.insert(dir_a.path().to_path_buf(), make_repo());
+        cache.insert(dir_b.path().to_path_buf(), make_repo());
+        assert_eq!(cache.len(), 2);
+
+        // 插入第三个 → 淘汰最久未用的 A（B 次新、C 最新）
+        cache.insert(dir_c.path().to_path_buf(), make_repo());
+        assert_eq!(cache.len(), 2, "超容量后应回落到容量内");
+        assert!(
+            cache.find_workdir(dir_a.path()).is_none(),
+            "最久未用的 A 应被淘汰"
+        );
+        assert!(cache.find_workdir(dir_b.path()).is_some());
+        assert!(cache.find_workdir(dir_c.path()).is_some());
+    }
+
+    /// 命中复用：find_workdir 命中后 touch 为 MRU，后续淘汰跳过它
+    #[test]
+    fn hit_touches_recently_used() {
+        let mut cache = GitRepoCache::new(2);
+        let dir_a = tempdir().unwrap();
+        let dir_b = tempdir().unwrap();
+        let dir_c = tempdir().unwrap();
+        cache.insert(dir_a.path().to_path_buf(), make_repo());
+        cache.insert(dir_b.path().to_path_buf(), make_repo());
+
+        // 访问 A → A 变 MRU（B 成 LRU）
+        assert_eq!(
+            cache.find_workdir(dir_a.path()).unwrap(),
+            dir_a.path().to_path_buf()
+        );
+
+        // 插入 C → 应淘汰 B（A 已被 touch 保留）
+        cache.insert(dir_c.path().to_path_buf(), make_repo());
+        assert!(cache.find_workdir(dir_b.path()).is_none(), "B 应被淘汰");
+        assert!(cache.find_workdir(dir_a.path()).is_some(), "A 应保留");
+        assert!(cache.find_workdir(dir_c.path()).is_some());
+    }
+
+    /// 同 key 再次 insert：替换值并 touch 为 MRU（条目数不增）
+    #[test]
+    fn insert_existing_key_replaces_and_touches() {
+        let mut cache = GitRepoCache::new(2);
+        let dir_a = tempdir().unwrap();
+        let dir_b = tempdir().unwrap();
+        let dir_c = tempdir().unwrap();
+        cache.insert(dir_a.path().to_path_buf(), make_repo());
+        cache.insert(dir_b.path().to_path_buf(), make_repo());
+
+        // 同 key 再插入 → touch 为 MRU，条目数不变
+        cache.insert(dir_a.path().to_path_buf(), make_repo());
+        assert_eq!(cache.len(), 2, "同 key 插入不应增加条目");
+
+        // 插入 C → 淘汰 B（A 已 touch）
+        cache.insert(dir_c.path().to_path_buf(), make_repo());
+        assert!(cache.find_workdir(dir_b.path()).is_none(), "B 应被淘汰");
+        assert!(cache.find_workdir(dir_a.path()).is_some(), "A 应保留");
+    }
+
+    /// 前缀匹配：search 在缓存 workdir 子树内命中；子树外不命中
+    #[test]
+    fn find_only_matches_subtree_prefix() {
+        let mut cache = GitRepoCache::new(GIT_REPO_CACHE_CAPACITY);
+        let dir_a = tempdir().unwrap();
+        let dir_b = tempdir().unwrap();
+        cache.insert(dir_a.path().to_path_buf(), make_repo());
+        cache.insert(dir_b.path().to_path_buf(), make_repo());
+
+        // 深层路径（workdir 子树内）命中
+        let deep = dir_a.path().join("sub").join("deep").join("file.txt");
+        assert_eq!(
+            cache.find_workdir(&deep).unwrap(),
+            dir_a.path().to_path_buf(),
+            "子树内路径应命中对应 workdir"
+        );
+        // 目录本身命中
+        assert!(cache.find_workdir(dir_a.path()).is_some());
+        // 完全无关路径不命中
+        let outside = tempdir().unwrap();
+        assert!(
+            cache.find_workdir(outside.path()).is_none(),
+            "无关路径不应命中"
+        );
+    }
+
+    /// 空缓存：find 返回 None，len/is_empty 正确
+    #[test]
+    fn empty_cache_find_returns_none() {
+        let mut cache = GitRepoCache::new(GIT_REPO_CACHE_CAPACITY);
+        let dir = tempdir().unwrap();
+        assert!(cache.find_workdir(dir.path()).is_none());
+        assert!(cache.is_empty());
+        assert_eq!(cache.len(), 0);
+    }
+
+    /// 容量常量契约：GIT_REPO_CACHE_CAPACITY = 8（BE-09 跨边界契约）
+    #[test]
+    fn cache_capacity_contract_is_eight() {
+        assert_eq!(GIT_REPO_CACHE_CAPACITY, 8);
     }
 }
