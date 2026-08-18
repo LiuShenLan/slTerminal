@@ -284,7 +284,7 @@ fn notify_watch_phase3(
 }
 
 #[tauri::command]
-pub fn notify_watch(
+pub async fn notify_watch(
     path: String,
     state: tauri::State<'_, AppState>,
     app_handle: AppHandle,
@@ -312,12 +312,21 @@ pub fn notify_watch(
     } // 池锁在此释放
 
     // 阶段 2：锁外创建 watcher（含 debouncer.watch 阻塞调用，避免持锁阻塞其他线程）
-    let watcher = FileWatcher::start_with_emitter(
-        Box::new(AppHandleEmitter { app_handle }),
-        vec![watch_path.clone()],
-        300,
-    )
-    .map_err(|e| AppError::Notify(format!("启动文件监听失败: {e}")))?;
+    // BE-04: 改 spawn_blocking——Windows 上递归注册大目录耗时约 2s，不阻塞 IPC worker
+    let watch_path_for_spawn = watch_path.clone();
+    let watcher = match tokio::task::spawn_blocking(move || -> Result<FileWatcher, AppError> {
+        FileWatcher::start_with_emitter(
+            Box::new(AppHandleEmitter { app_handle }),
+            vec![watch_path_for_spawn],
+            300,
+        )
+        .map_err(|e| AppError::Notify(format!("启动文件监听失败: {e}")))
+    })
+    .await
+    {
+        Ok(inner) => inner?,
+        Err(e) => return Err(AppError::TaskJoin(e.to_string())),
+    };
 
     // 阶段 3：短暂持锁插入池（处理可能的竞态——另一线程可能已为同一路径创建 watcher）
     {

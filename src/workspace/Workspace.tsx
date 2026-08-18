@@ -40,7 +40,7 @@ import { useSideBar } from "../stores/sideBar";
 import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
 import { allotmentVarStyle } from "../theme";
-import { ErrorBoundary, E2E_ENABLED } from "../lib";
+import { ErrorBoundary, E2E_ENABLED, toast } from "../lib";
 import { setProjectRoot } from "../ipc/fs";
 import { markWorkspaceReady } from "../../e2e-tests/helpers";
 
@@ -213,9 +213,11 @@ const Workspace: React.FC = () => {
       if (proj.pages.some((p) => p.pageId === activePageId)) {
         if (proj.rootPath && proj.rootPath !== prevRootRef.current) {
           prevRootRef.current = proj.rootPath;
-          setProjectRoot(proj.rootPath).catch((err) =>
-            console.error("[slTerminal] 设置项目根路径失败:", err),
-          );
+          setProjectRoot(proj.rootPath).catch((err) => {
+            console.error("[slTerminal] 设置项目根路径失败:", err);
+            // FE-04（D7）：SEC-01 兜底失败时 toast 告警，不阻断切换
+            toast.show("warning", "项目根路径设置失败，文件操作可能被拒绝");
+          });
         }
         break;
       }

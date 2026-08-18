@@ -7,6 +7,7 @@
 import { create } from "zustand";
 import { setProjectRoot } from "../ipc/fs";
 import * as projectsIpc from "../ipc/projects";
+import { toast } from "../lib";
 
 /** 持久化 debounce 间隔（毫秒），供 fontSize/keybindings 等 store 共用 */
 export const PERSIST_DEBOUNCE_MS = 2000;
@@ -151,9 +152,11 @@ export const useProjects = create<ProjectsState>()((set, get) => ({
           if (!project) return state;
           // SEC-01: 通知后端当前项目根路径（路径沙箱边界）
           if (project.rootPath) {
-            setProjectRoot(project.rootPath).catch((err) =>
-              console.error("[slTerminal] 设置项目根路径失败:", err),
-            );
+            setProjectRoot(project.rootPath).catch((err) => {
+              console.error("[slTerminal] 设置项目根路径失败:", err);
+              // FE-04（D7）：失败仍完成切换，toast 告警可感知
+              toast.show("warning", "项目根路径设置失败，文件操作可能被拒绝");
+            });
           }
           return {
             projects: {

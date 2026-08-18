@@ -15,7 +15,7 @@ import * as agentHooks from "./ipc/agentHooks";
 import { CLAUDE_CLI_ID } from "./features/cliProfiles/profiles/claude";
 import { setProjectRoot } from "./ipc/fs";
 import { TerminalRegistry } from "./panels/terminal/TerminalRegistry";
-import { ErrorBoundary, ConfirmDialogHost, ToastHost } from "./lib";
+import { ErrorBoundary, ConfirmDialogHost, ToastHost, toast } from "./lib";
 import { getShortcutRegistry, createGlobalShortcuts, wireKeybindings } from "./features/shortcuts";
 import { createTerminalShortcuts } from "./panels/terminal/keyboard";
 import { createEditorShortcuts } from "./panels/editor/keyboard";
@@ -84,6 +84,8 @@ function App() {
                     await setProjectRoot(proj.rootPath);
                   } catch (err) {
                     console.error("[slTerminal] 启动恢复—设置项目根路径失败:", err);
+                    // FE-04（D7）：失败仍继续恢复流程，toast 告警可感知
+                    toast.show("warning", "项目根路径设置失败，文件操作可能被拒绝");
                   }
                 }
                 break;

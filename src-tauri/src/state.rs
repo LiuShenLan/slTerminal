@@ -182,13 +182,52 @@ pub fn validate_path_within_root(
 /// 设置当前项目根路径（由前端打开项目时调用）
 ///
 /// canonicalize 后写入 AppState.project_root，用于后续文件操作的路径 sandbox 校验。
+/// BE-04: 异步化——canonicalize 为磁盘 I/O，在 spawn_blocking 中执行，不阻塞 IPC worker。
+/// SEC-14: canonicalize 失败/目录不可读 → 返回 Err 且清空旧 root（防沙箱误放行旧路径）。
 #[tauri::command]
-pub fn set_project_root(path: String, state: State<'_, AppState>) -> Result<(), AppError> {
-    let canonical = dunce::canonicalize(Path::new(&path)).map_err(|e| AppError::IoKind {
-        kind: "path".into(),
-        message: format!("无法解析项目路径: {e}"),
-    })?;
-    let mut root = state.project_root.write().map_err(|e| AppError::IoKind {
+pub async fn set_project_root(path: String, state: State<'_, AppState>) -> Result<(), AppError> {
+    set_project_root_impl(&state.project_root, path).await
+}
+
+/// set_project_root 命令内核（BE-04/SEC-14，供 L1 测试直接调用，无需构造 tauri::State）
+async fn set_project_root_impl(
+    project_root: &RwLock<Option<PathBuf>>,
+    path: String,
+) -> Result<(), AppError> {
+    // BE-04: canonicalize 在 spawn_blocking 中执行（磁盘 I/O 不占 IPC worker）
+    let canonical = match tokio::task::spawn_blocking(move || -> Result<PathBuf, AppError> {
+        dunce::canonicalize(Path::new(&path)).map_err(|e| AppError::IoKind {
+            kind: "path".into(),
+            message: format!("无法解析项目路径: {e}"),
+        })
+    })
+    .await
+    {
+        Ok(inner) => inner,
+        // 闭包 panic 等 join 失败同样视为失败路径（SEC-14: 清空旧 root）
+        Err(e) => Err(AppError::TaskJoin(e.to_string())),
+    };
+
+    apply_project_root(project_root, canonical)
+}
+
+/// 应用 canonicalize 结果（SEC-14 核心逻辑）：
+/// 成功 → 写入新 root；失败 → 返回 Err 且清空旧 root（防沙箱误放行旧路径）
+fn apply_project_root(
+    project_root: &RwLock<Option<PathBuf>>,
+    canonical: Result<PathBuf, AppError>,
+) -> Result<(), AppError> {
+    let canonical = match canonical {
+        Ok(c) => c,
+        Err(e) => {
+            // SEC-14: 失败时清空旧 root，防止沙箱继续放行已失效的旧路径
+            if let Ok(mut root) = project_root.write() {
+                *root = None;
+            }
+            return Err(e);
+        }
+    };
+    let mut root = project_root.write().map_err(|e| AppError::IoKind {
         kind: "lock".into(),
         message: format!("获取 project_root 锁失败: {e}"),
     })?;
@@ -732,5 +771,114 @@ mod sandbox_tests {
 
         let result = validate_path_within_root(&Some(root.path().to_path_buf()), &traversal);
         assert!(result.is_err(), ".. 逃逸的不存在路径应拒绝");
+    }
+}
+
+/// set_project_root 命令测试（BE-04 异步化 + SEC-14 失败清空旧 root）
+#[cfg(test)]
+mod project_root_tests {
+    use super::*;
+
+    /// BE-04: 异步化后成功路径行为不变——canonicalize 后写入 project_root
+    #[test]
+    fn set_project_root_success_sets_canonical_root() {
+        let app_state = AppState::new();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_string_lossy().to_string();
+
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(set_project_root_impl(&app_state.project_root, path))
+            .unwrap();
+
+        let root = app_state.project_root.read().unwrap().clone().unwrap();
+        let expected = dunce::canonicalize(dir.path()).unwrap();
+        assert_eq!(
+            root, expected,
+            "成功时 project_root 应写入 canonicalize 后的路径"
+        );
+    }
+
+    /// SEC-14: 失败路径——构造不存在路径调用，返回 Err 且清空旧 root
+    #[test]
+    fn set_project_root_failure_clears_old_root() {
+        let app_state = AppState::new();
+        let dir = tempfile::tempdir().unwrap();
+
+        // 先设置有效 root
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(set_project_root_impl(
+                &app_state.project_root,
+                dir.path().to_string_lossy().to_string(),
+            ))
+            .unwrap();
+        assert!(
+            app_state.project_root.read().unwrap().is_some(),
+            "前置：旧 root 应存在"
+        );
+
+        // 构造不存在路径（父目录亦不存在）→ canonicalize 失败 → Err 且清空旧 root
+        let nonexistent = dir
+            .path()
+            .join("no_such_dir")
+            .join("deeper")
+            .to_string_lossy()
+            .to_string();
+        let result = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(set_project_root_impl(&app_state.project_root, nonexistent));
+
+        assert!(result.is_err(), "不存在路径应返回 Err");
+        assert!(
+            app_state.project_root.read().unwrap().is_none(),
+            "失败后旧 root 应被清空（防沙箱误放行旧路径）"
+        );
+    }
+
+    /// SEC-14: 失败时保留原始错误信息，不吞错
+    #[test]
+    fn set_project_root_failure_preserves_error_message() {
+        let app_state = AppState::new();
+        let nonexistent = "Z:\\definitely_not_a_drive_xyz\\no_such_dir".to_string();
+
+        let result = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(set_project_root_impl(&app_state.project_root, nonexistent));
+
+        assert!(result.is_err(), "不存在路径应返回 Err");
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("无法解析项目路径"), "错误消息应保留原错误信息");
+    }
+
+    /// SEC-14: 失败清空对后续成功设置无影响——可再次成功设置新 root
+    #[test]
+    fn set_project_root_recovers_after_failure() {
+        let app_state = AppState::new();
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first");
+        std::fs::create_dir(&first).unwrap();
+
+        // 失败一次（清空旧 root）
+        let nonexistent = dir.path().join("no_such_dir").to_string_lossy().to_string();
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(set_project_root_impl(&app_state.project_root, nonexistent))
+            .unwrap_err();
+
+        // 再次成功设置
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(set_project_root_impl(
+                &app_state.project_root,
+                first.to_string_lossy().to_string(),
+            ))
+            .unwrap();
+        let root = app_state.project_root.read().unwrap().clone().unwrap();
+        assert_eq!(
+            root,
+            dunce::canonicalize(&first).unwrap(),
+            "失败清空后应可重新成功设置"
+        );
     }
 }

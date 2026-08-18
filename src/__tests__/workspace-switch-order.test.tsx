@@ -2,7 +2,7 @@
 //
 // 验证 switchToPage 的 setProjectRoot 前置时序契约：
 // - setProjectRoot 须先于 activePageId 生效
-// - setProjectRoot 失败时降级（console.error + 仍完成切换）
+// - setProjectRoot 失败时降级（console.error + toast 告警 + 仍完成切换，FE-04/D7）
 //
 // 约束：仅测试文件，不修改生产代码。
 
@@ -69,17 +69,22 @@ const mocks = vi.hoisted(() => {
     return sprPromise;
   });
 
+  // toast mock（FE-04：失败路径 toast 告警断言）
+  const mockToast = { show: vi.fn() };
+
   return {
     get mockReadDir() { return fs.readDir; },
     get mockGitStatus() { return git.gitStatus; },
     get mockSetProjectRoot() { return wrappedSetProjectRoot; },
     get resolveSetProjectRoot() { return () => { resolveSPR(); }; },
     get rejectSetProjectRoot() { return (err?: unknown) => { rejectSPR(err); }; },
+    get mockToast() { return mockToast; },
     resetDeferred() { resetDeferred(); calledCount = 0; wrappedSetProjectRoot.mockClear(); },
     get calledCount() { return calledCount; },
     resetAll() {
       fs.readDir.mockReset();
       git.gitStatus.mockReset();
+      mockToast.show.mockClear();
       resetDeferred();
     },
   };
@@ -99,6 +104,12 @@ vi.mock("../ipc/fs", () => ({
 vi.mock("../ipc/git", () => ({
   gitStatus: mocks.mockGitStatus,
 }));
+
+// Mock ../lib：toast 替换为 vi.fn()（FE-04 断言用），其余（ErrorBoundary/E2E_ENABLED 等）保持真实实现
+vi.mock("../lib", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib")>();
+  return { ...actual, toast: mocks.mockToast };
+});
 
 // setup.ts 已全局 mock ../ipc/notify
 
@@ -282,6 +293,11 @@ describe("DBG-9: switchToPage 时序", () => {
         "[slTerminal] 设置项目根路径失败:",
         expect.any(Error),
       );
+      // FE-04（D7）：失败路径 toast 告警
+      expect(mocks.mockToast.show).toHaveBeenCalledWith(
+        "warning",
+        "项目根路径设置失败，文件操作可能被拒绝",
+      );
       consoleErrorSpy.mockRestore();
     });
 
@@ -303,6 +319,11 @@ describe("DBG-9: switchToPage 时序", () => {
 
       // activePageId 仍为原始值，不会被清空
       expect(useLayout.getState().activePageId).toBe(pageA);
+      // FE-04（D7）：失败路径 toast 告警
+      expect(mocks.mockToast.show).toHaveBeenCalledWith(
+        "warning",
+        "项目根路径设置失败，文件操作可能被拒绝",
+      );
     });
   });
 
