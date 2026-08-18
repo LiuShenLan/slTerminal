@@ -1,0 +1,11 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": ["index.html", "src/main.tsx", "e2e-tests/**/*.ts"],
+  "ignoreDependencies": [
+    "@wdio/cli",
+    "@wdio/local-runner",
+    "@wdio/mocha-framework",
+    "@wdio/spec-reporter",
+    "@wdio/tauri-service"
+  ]
+}
