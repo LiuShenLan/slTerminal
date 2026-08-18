@@ -14,8 +14,16 @@
 // 保证 `#/$defs/hookMatcher` 本地引用在独立 schema 中可解析。
 // 供 JsonMode（悬停/波浪线）与 Stage 06 保存校验共用——对齐 hooks 子树编辑范围。
 
-import { Draft07 } from "json-schema-library";
-import type { JsonError, JsonSchema } from "json-schema-library";
+// TE-09：json-schema-library 9.x → 11.x（跨 2 major，完整重写）。
+// 旧 API `new Draft07(schema).validate(data) → JsonError[]` 已移除；
+// 新 API = `compileSchema(schema, { draft }).validate(data) → { valid, errors }`。
+// 本 schema 无 $schema 字段，compileSchema 缺省会选 draft-2020-12——显式
+// `draft: "draft-07"` 保持旧 Draft07 语义（实测九边界全等价，含 anyOf 消息形态）。
+// 去重评估结论（S19 登记）：codemirror-json-schema 0.8.1（npm 最新）内部
+// `import { Draft04 } from "json-schema-library"` 深度绑定 9.x API，11.x 无
+// Draft04/Draft07 构造函数——无法统一，保留双库（11.6.2 直接依赖 + 9.3.5 嵌套副本）。
+import { compileSchema } from "json-schema-library";
+import type { JsonSchema } from "json-schema-library";
 import claudeCodeSettingsSchema from "./claude-code-settings.json";
 
 /** 主 schema（完整 settings.json schema，供未来扩展/其他属性校验用） */
@@ -33,8 +41,8 @@ export const hooksSubSchema = {
   },
 };
 
-/** 校验用 Draft07 单例（schema 固定不变，复用避免重复编译开销） */
-const hooksDraft = new Draft07(hooksSubSchema as JsonSchema);
+/** 校验用 SchemaNode 单例（schema 固定不变，复用避免重复编译开销；显式 draft-07 保持旧语义） */
+const hooksSchemaNode = compileSchema(hooksSubSchema as JsonSchema, { draft: "draft-07" });
 
 // ===== 保存前校验（JsonMode 波浪线 / Stage 06 保存路径共用） =====
 
@@ -55,7 +63,7 @@ export interface JsonValidationResult {
 }
 
 /**
- * 校验 hooks 子树 JSON 文本（非 ajv，json-schema-library Draft07）：
+ * 校验 hooks 子树 JSON 文本（非 ajv，json-schema-library compileSchema draft-07）：
  * ① JSON.parse 语法校验 → ② hooks 子 schema 校验（additionalProperties: false 拦未知事件）。
  */
 export function validateHooksJson(text: string): JsonValidationResult {
@@ -68,12 +76,13 @@ export function validateHooksJson(text: string): JsonValidationResult {
       diagnostics: [{ message: `JSON 语法错误：${(err as Error).message}`, pointer: "" }],
     };
   }
-  const errors = hooksDraft.validate(data) as unknown as JsonError[];
+  // 11.x：validate 返回 { valid, errors }；pointer 由旧 dataPath/pointer 移至 error.data.pointer
+  const { errors } = hooksSchemaNode.validate(data);
   return {
     isValid: errors.length === 0,
     diagnostics: errors.map((e) => ({
       message: e.message,
-      pointer: String(e.dataPath ?? e.pointer ?? ""),
+      pointer: String(e.data?.pointer ?? ""),
     })),
   };
 }

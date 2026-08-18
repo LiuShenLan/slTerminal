@@ -927,8 +927,16 @@ describe("DiffPanel", () => {
     const { container } = render(
       React.createElement(DiffPanel, { params: makeParams() }),
     );
+    // CM6 view 创建/挂载为异步——dockview 8 渲染时序下左侧 view 可能滞后，
+    // 须将两侧 .cm-scroller 就绪并入 waitFor 整体轮询（仅等 diff-panel 容器不够）
     await waitFor(() => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
+      expect(
+        container.querySelector('[data-e2e="diff-left"] .cm-scroller'),
+      ).toBeTruthy();
+      expect(
+        container.querySelector('[data-e2e="diff-right"] .cm-scroller'),
+      ).toBeTruthy();
     });
     const leftScroller = container
       .querySelector('[data-e2e="diff-left"]')!
@@ -936,8 +944,6 @@ describe("DiffPanel", () => {
     const rightScroller = container
       .querySelector('[data-e2e="diff-right"]')!
       .querySelector(".cm-scroller") as HTMLElement;
-    expect(leftScroller).toBeTruthy();
-    expect(rightScroller).toBeTruthy();
     // CM6 base theme 默认 .cm-scroller { overflow: auto }，若显式设 hidden 则滚动失效
     expect(leftScroller.style.overflowY).not.toBe("hidden");
     expect(rightScroller.style.overflowY).not.toBe("hidden");
