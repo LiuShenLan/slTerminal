@@ -92,6 +92,7 @@ vi.mock("../ipc/git", () => ({
 
 vi.mock("../ipc/notify", () => ({
   startWatch: mocks.mockStartWatch,
+  stopWatch: vi.fn().mockResolvedValue(undefined),
   onFsEvent: () => () => {},
 }));
 

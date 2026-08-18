@@ -6,7 +6,7 @@ use std::thread::JoinHandle;
 use tauri::{ipc::Channel, State};
 
 use crate::error::AppError;
-use crate::notify::pool::LruWatcherPool;
+use crate::notify::pool::{LruWatcherPool, WATCHER_POOL_CAPACITY};
 use crate::pty::spawn::PtyEvent;
 
 /// PTY 会话 — 持有 master（读写/缩放）、子进程、writer 和 reader 线程句柄
@@ -70,7 +70,7 @@ impl PtyState {
 /// 应用全局状态，各模块通过 AppState 共享资源
 pub struct AppState {
     pub pty: PtyState,
-    /// 文件系统监听器池（按项目根路径缓存，最多 5 个，LRU 淘汰）
+    /// 文件系统监听器池（按项目根路径缓存，容量见 WATCHER_POOL_CAPACITY，LRU 淘汰）
     pub file_watchers: Mutex<LruWatcherPool>,
     /// 当前项目根路径（由前端打开项目时设置，用于路径 sandbox 校验）
     pub project_root: RwLock<Option<PathBuf>>,
@@ -88,7 +88,7 @@ impl AppState {
     pub fn new() -> Self {
         Self {
             pty: PtyState::new(),
-            file_watchers: Mutex::new(LruWatcherPool::new(5)),
+            file_watchers: Mutex::new(LruWatcherPool::new(WATCHER_POOL_CAPACITY)),
             project_root: RwLock::new(None),
             git_repo_cache: Mutex::new(HashMap::new()),
         }

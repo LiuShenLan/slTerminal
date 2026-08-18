@@ -27,10 +27,11 @@ function createGitMocks(overrides?: { gitStatus?: Fn }) {
   return { gitStatus: overrides?.gitStatus ?? vi.fn().mockResolvedValue([]) };
 }
 
-function createNotifyMocks(overrides?: { startWatch?: Fn; onFsEvent?: Fn }) {
+function createNotifyMocks(overrides?: { startWatch?: Fn; stopWatch?: Fn; onFsEvent?: Fn }) {
   let fsEventCallback: (() => void) | null = null;
   return {
     startWatch: overrides?.startWatch ?? vi.fn().mockResolvedValue(undefined),
+    stopWatch: overrides?.stopWatch ?? vi.fn().mockResolvedValue(undefined),
     onFsEvent: overrides?.onFsEvent ?? vi.fn((cb: () => void) => {
       fsEventCallback = cb;
       return () => { fsEventCallback = null; };
@@ -87,6 +88,7 @@ afterAll(() => {
 vi.mock("../ipc/notify", () => ({
   onFsEvent: () => () => {},
   startWatch: () => Promise.resolve(),
+  stopWatch: () => Promise.resolve(),
 }));
 
 // 全局 mock：ipc/agentHooks（NotificationListener / useAgentNotifications 依赖 onAgentEvent）

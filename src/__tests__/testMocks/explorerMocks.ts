@@ -8,7 +8,7 @@
 //   const mocks = vi.hoisted(() => {
 //     const fs = __createFsMocks();      // readDir 默认 mockResolvedValue([])
 //     const git = __createGitMocks();    // gitStatus 默认 mockResolvedValue([])
-//     const notify = __createNotifyMocks(); // startWatch 默认 mockResolvedValue(undefined)
+//     const notify = __createNotifyMocks(); // startWatch/stopWatch 默认 mockResolvedValue(undefined)
 //     return {
 //       get mockReadDir() { return fs.readDir; },
 //       get mockGitStatus() { return git.gitStatus; },
@@ -20,7 +20,7 @@
 //
 //   vi.mock("../ipc/fs", () => ({ readDir: mocks.mockReadDir, createDir: vi.fn(), ... }));
 //   vi.mock("../ipc/git", () => ({ gitStatus: mocks.mockGitStatus }));
-//   vi.mock("../ipc/notify", () => ({ startWatch: vi.fn().mockResolvedValue(undefined), onFsEvent: mocks.mockOnFsEvent }));
+//   vi.mock("../ipc/notify", () => ({ startWatch: vi.fn().mockResolvedValue(undefined), stopWatch: vi.fn().mockResolvedValue(undefined), onFsEvent: mocks.mockOnFsEvent }));
 //
 // 如需自定义 mock 行为（如特定文件系统的 readDir 实现），在 beforeEach/it 中调用：
 //   - makeVfs(mocks.mockReadDir, { "/root": [...] })  — 绑定虚拟文件系统
@@ -71,10 +71,11 @@ export function createGitMocks(overrides?: GitMockOverrides) {
 
 export interface NotifyMockOverrides {
   startWatch?: ReturnType<typeof vi.fn>;
+  stopWatch?: ReturnType<typeof vi.fn>;
   onFsEvent?: ReturnType<typeof vi.fn>;
 }
 
-/** 创建 notify IPC mock 函数集（含 triggerFsEvent 辅助）。startWatch 默认 resolve。 */
+/** 创建 notify IPC mock 函数集（含 triggerFsEvent 辅助）。startWatch/stopWatch 默认 resolve。 */
 export function createNotifyMocks(overrides?: NotifyMockOverrides) {
   let fsEventCallback: (() => void) | null = null;
 
@@ -86,9 +87,11 @@ export function createNotifyMocks(overrides?: NotifyMockOverrides) {
   });
 
   const defaultStartWatch = vi.fn().mockResolvedValue(undefined);
+  const defaultStopWatch = vi.fn().mockResolvedValue(undefined);
 
   return {
     startWatch: overrides?.startWatch ?? defaultStartWatch,
+    stopWatch: overrides?.stopWatch ?? defaultStopWatch,
     onFsEvent: overrides?.onFsEvent ?? defaultOnFsEvent,
     /** 手动触发 fs-event 回调（模拟后端文件变更通知） */
     triggerFsEvent() {

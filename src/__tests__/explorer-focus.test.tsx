@@ -30,6 +30,7 @@ vi.mock("../ipc/fs", () => ({
 
 vi.mock("../ipc/notify", () => ({
   startWatch: vi.fn().mockResolvedValue(undefined),
+  stopWatch: vi.fn().mockResolvedValue(undefined),
   // 必须返回 unlisten 函数（useFileTree 卸载时调用）
   onFsEvent: () => () => {},
 }));

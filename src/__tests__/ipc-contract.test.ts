@@ -385,6 +385,26 @@ describeIpcContract('notify IPC 合约', [
     mockThrow: '路径不存在',
     expectReject: '路径不存在',
   },
+  // ── stopWatch（BE-10：项目移除/切换时停止监听）─────────────
+  {
+    name: 'stopWatch: 应调用 notify_stop_watch 命令，参数包含 path',
+    cmd: 'notify_stop_watch',
+    call: () => notify.stopWatch('C:\\test-project'),
+    expectArgs: { path: 'C:\\test-project' },
+  },
+  {
+    name: 'stopWatch: 路径包含正斜杠时应原样传递',
+    cmd: 'notify_stop_watch',
+    call: () => notify.stopWatch('D:/projects/my-app'),
+    expectArgs: { path: 'D:/projects/my-app' },
+  },
+  {
+    name: 'stopWatch: invoke 失败时异常应传播',
+    cmd: 'notify_stop_watch',
+    call: () => notify.stopWatch('C:\\nonexistent'),
+    mockThrow: 'watcher 不存在',
+    expectReject: 'watcher 不存在',
+  },
 ]);
 
 // ── onFsEvent（事件订阅）——wrapper 行为契约（IHE-01②）────────

@@ -33,6 +33,7 @@ vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({
 vi.mock("../ipc/notify", () => ({
   onFsEvent: () => () => {},
   startWatch: () => Promise.resolve(),
+  stopWatch: () => Promise.resolve(),
 }));
 
 vi.mock("../features/navTree/NavTree", () => ({

@@ -11,6 +11,15 @@ use std::time::Instant;
 
 use super::FileWatcher;
 
+/// 池容量：覆盖多项目快速切换（BE-11）
+///
+/// 5 → 8 理由：用户在多项目间快速来回切换时，5 槽位易被交替访问的项目挤出重建
+/// （Windows 上递归注册大目录约需 2s，重建成本高）；8 覆盖「4-5 个活跃项目 +
+/// 3-4 个近期访问项目」的典型工作集。暂停的 watcher 仍占 OS 句柄（pause/resume
+/// 既定机制保留，不额外清理），故容量即 OS 句柄占用上限——8 个 watcher 的句柄
+/// 开销可忽略，放大容量换取切换零重建。
+pub const WATCHER_POOL_CAPACITY: usize = 8;
+
 /// 池中条目：watcher + 最后使用时间（LRU 淘汰依据）
 struct WatcherEntry {
     watcher: FileWatcher,
@@ -188,7 +197,7 @@ mod tests {
 
     #[test]
     fn p2_insert_and_get_hit() {
-        let mut pool = LruWatcherPool::new(5);
+        let mut pool = LruWatcherPool::new(WATCHER_POOL_CAPACITY);
         let path = PathBuf::from("/test/project-a");
         pool.insert(path.clone(), make_test_watcher("a"));
         assert_eq!(pool.len(), 1);
@@ -198,7 +207,7 @@ mod tests {
 
     #[test]
     fn p3_get_updates_last_used_reordering_lru() {
-        let mut pool = LruWatcherPool::new(5);
+        let mut pool = LruWatcherPool::new(WATCHER_POOL_CAPACITY);
         let a = PathBuf::from("/test/a");
         let b = PathBuf::from("/test/b");
 
@@ -208,22 +217,22 @@ mod tests {
         // 访问 a，使其成为最近使用
         pool.get(&a);
 
-        // 插入 c、d、e、f → 容量为 5 → 应淘汰 b（最久未使用）
-        for name in &["c", "d", "e", "f"] {
+        // 插入 c~i（7 个）→ 容量 8，第 9 个插入应淘汰 b（最久未使用）
+        for name in &["c", "d", "e", "f", "g", "h", "i"] {
             pool.insert(
                 PathBuf::from(format!("/test/{name}")),
                 make_test_watcher(name),
             );
         }
 
-        assert_eq!(pool.len(), 5);
+        assert_eq!(pool.len(), WATCHER_POOL_CAPACITY);
         // a 被最近访问 → 保留
         assert!(pool.contains(&a), "a 应保留（被 get 刷新）");
         // b 从未被访问 → 淘汰
         assert!(!pool.contains(&b), "b 应被 LRU 淘汰");
 
         // 验证剩余 watcher 均在运行（淘汰的 b 已 stopped + dropped）
-        for name in &["a", "c", "d", "e", "f"] {
+        for name in &["a", "c", "d", "e", "f", "g", "h", "i"] {
             let p = PathBuf::from(format!("/test/{name}"));
             assert!(
                 pool.get(&p).unwrap().is_running(),
@@ -234,23 +243,23 @@ mod tests {
 
     #[test]
     fn p4_insert_at_capacity_evicts_lru() {
-        let mut pool = LruWatcherPool::new(5);
-        for name in &["a", "b", "c", "d", "e"] {
+        let mut pool = LruWatcherPool::new(WATCHER_POOL_CAPACITY);
+        for name in &["a", "b", "c", "d", "e", "f", "g", "h"] {
             pool.insert(
                 PathBuf::from(format!("/test/{name}")),
                 make_test_watcher(name),
             );
         }
-        assert_eq!(pool.len(), 5);
+        assert_eq!(pool.len(), WATCHER_POOL_CAPACITY);
 
         // a 是最久未使用 → 应被淘汰
-        pool.insert(PathBuf::from("/test/f"), make_test_watcher("f"));
-        assert_eq!(pool.len(), 5);
+        pool.insert(PathBuf::from("/test/i"), make_test_watcher("i"));
+        assert_eq!(pool.len(), WATCHER_POOL_CAPACITY);
         assert!(!pool.contains(&PathBuf::from("/test/a")), "a 应被 LRU 淘汰");
-        assert!(pool.contains(&PathBuf::from("/test/f")), "f 应存在");
+        assert!(pool.contains(&PathBuf::from("/test/i")), "i 应存在");
 
         // 验证剩余 watcher 均在运行（淘汰的 a 已 stopped + dropped）
-        for name in &["b", "c", "d", "e", "f"] {
+        for name in &["b", "c", "d", "e", "f", "g", "h", "i"] {
             let p = PathBuf::from(format!("/test/{name}"));
             assert!(
                 pool.get(&p).unwrap().is_running(),
@@ -261,7 +270,7 @@ mod tests {
 
     #[test]
     fn p5_pause_all_except_target_resumed_others_paused() {
-        let mut pool = LruWatcherPool::new(5);
+        let mut pool = LruWatcherPool::new(WATCHER_POOL_CAPACITY);
         let a = PathBuf::from("/test/a");
         let b = PathBuf::from("/test/b");
         let c = PathBuf::from("/test/c");
@@ -281,7 +290,7 @@ mod tests {
 
     #[test]
     fn p6_pause_all_except_empty_pool_no_panic() {
-        let mut pool = LruWatcherPool::new(5);
+        let mut pool = LruWatcherPool::new(WATCHER_POOL_CAPACITY);
         let path = PathBuf::from("/test/not-exist");
         // 空池不应 panic
         pool.pause_all_except(&path);
@@ -290,7 +299,7 @@ mod tests {
 
     #[test]
     fn p7_remove_stops_and_returns_watcher() {
-        let mut pool = LruWatcherPool::new(5);
+        let mut pool = LruWatcherPool::new(WATCHER_POOL_CAPACITY);
         let path = PathBuf::from("/test/a");
         pool.insert(path.clone(), make_test_watcher("a"));
         assert_eq!(pool.len(), 1);
@@ -306,7 +315,7 @@ mod tests {
 
     #[test]
     fn p8_stop_all_clears_pool() {
-        let mut pool = LruWatcherPool::new(5);
+        let mut pool = LruWatcherPool::new(WATCHER_POOL_CAPACITY);
         for name in &["a", "b", "c"] {
             pool.insert(
                 PathBuf::from(format!("/test/{name}")),
@@ -322,7 +331,7 @@ mod tests {
 
     #[test]
     fn p9_drop_stops_all_watchers() {
-        let mut pool = LruWatcherPool::new(5);
+        let mut pool = LruWatcherPool::new(WATCHER_POOL_CAPACITY);
         let mut exit_flags = Vec::new();
         for i in 0..3 {
             let flag = Arc::new(AtomicBool::new(false));
@@ -346,7 +355,7 @@ mod tests {
 
     #[test]
     fn p10_insert_same_path_replaces_old_watcher() {
-        let mut pool = LruWatcherPool::new(5);
+        let mut pool = LruWatcherPool::new(WATCHER_POOL_CAPACITY);
         let path = PathBuf::from("/test/a");
 
         // 旧 watcher 带退出标志：验证 insert 内部替换分支 stop 了它（HFN-02：不再手动 remove）
@@ -402,5 +411,24 @@ mod tests {
             !w.is_running(),
             "stop 后应不再运行（thread_handle 被 take + join）"
         );
+    }
+
+    #[test]
+    fn p14_remove_nonexistent_returns_none() {
+        let mut pool = LruWatcherPool::new(WATCHER_POOL_CAPACITY);
+        pool.insert(PathBuf::from("/test/a"), make_test_watcher("a"));
+        // 移除不存在的 path（notify_stop_watch 幂等契约）：返回 None，池不受影响
+        assert!(
+            pool.remove(&PathBuf::from("/test/not-exist")).is_none(),
+            "移除不存在的路径应返回 None"
+        );
+        assert_eq!(pool.len(), 1);
+        assert!(pool.contains(&PathBuf::from("/test/a")));
+    }
+
+    #[test]
+    fn watcher_pool_capacity_is_8() {
+        // BE-11 守卫：容量常量固定为 8（覆盖多项目快速切换；pause/resume 既定机制保留）
+        assert_eq!(WATCHER_POOL_CAPACITY, 8);
     }
 }

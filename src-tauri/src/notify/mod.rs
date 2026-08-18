@@ -22,6 +22,21 @@ use tauri::{AppHandle, Emitter};
 use crate::error::AppError;
 use crate::state::AppState;
 
+/// BE-02：watcher 事件侧排除目录（D8 定稿七元素，仅事件侧过滤）
+///
+/// notify 不支持目录级排除（watcher 仍注册全树），排除在事件侧完成：
+/// 事件路径任一分量命中以下目录即丢弃该事件，防大仓库
+/// （node_modules/target 等）事件风暴。fs_read_dir 不动（懒加载既定决策）。
+pub const WATCH_EXCLUDE_DIRS: [&str; 7] = [
+    "node_modules",
+    "target",
+    ".venv",
+    "venv",
+    "dist",
+    ".git",
+    "__pycache__",
+];
+
 /// 发送到前端的文件系统事件载荷
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -168,6 +183,26 @@ impl FileWatcher {
     }
 }
 
+/// BE-02：事件路径是否命中排除目录（任一分量匹配即排除）
+///
+/// 用 `components()` 按整分量比较，避免子串误伤（如 `mytarget` 不匹配 `target`）。
+fn is_excluded_path(path: &Path) -> bool {
+    path.components()
+        .filter_map(|c| c.as_os_str().to_str())
+        .any(|seg| WATCH_EXCLUDE_DIRS.contains(&seg))
+}
+
+/// SEC-08：事件路径（或其任一祖先分量）是否为符号链接
+///
+/// 用 `symlink_metadata` 检查（不跟随末级符号链接）。事件路径可能位于符号链接
+/// 目录内部（祖先为 symlink 时外部路径会经 fs-event 泄露），故逐祖先检查。
+/// 元数据读取失败（如删除竞态——路径已不存在）视为非符号链接，不丢正常事件。
+fn is_symlink_path(path: &Path) -> bool {
+    path.ancestors()
+        .filter_map(|ancestor| std::fs::symlink_metadata(ancestor).ok())
+        .any(|m| m.file_type().is_symlink())
+}
+
 /// watcher 事件循环（D6 抽离为独立函数：事件/暂停/停止全部经参数驱动，emit 经 trait 注入，
 /// 使 L1 可用 mock emitter + channel 直接驱动，无需 AppHandle）
 fn event_loop(
@@ -199,6 +234,15 @@ fn event_loop(
                             kind: "Rescan".to_string(),
                             detail: "Overflow".to_string(),
                         });
+                        continue;
+                    }
+
+                    // BE-02：事件路径任一分量命中排除目录 → 丢弃（大目录事件风暴防护）
+                    if event.paths.iter().any(|p| is_excluded_path(p)) {
+                        continue;
+                    }
+                    // SEC-08：符号链接路径不 emit（防项目内 symlink 泄露外部路径）
+                    if event.paths.iter().any(|p| is_symlink_path(p)) {
                         continue;
                     }
 
@@ -238,7 +282,7 @@ impl Drop for FileWatcher {
 
 /// 启动/切换文件系统监听（watcher 池模式）
 ///
-/// 前端在项目切换时调用。内部维护最多 5 个 watcher 的 LRU 缓存池：
+/// 前端在项目切换时调用。内部维护最多 WATCHER_POOL_CAPACITY（8）个 watcher 的 LRU 缓存池：
 /// - 命中缓存：pause 其他 watcher，resume 目标，不重建
 /// - 未命中：暂停现有 watcher，新建并插入池（超限时淘汰 LRU）
 ///
@@ -336,6 +380,25 @@ pub async fn notify_watch(
             .map_err(|e| AppError::Notify(format!("获取 file_watchers 锁失败: {e}")))?;
         notify_watch_phase3(&mut pool, &watch_path, watcher)?;
     }
+    Ok(())
+}
+
+/// notify_stop_watch — 停止并移除指定路径的 watcher（BE-10）
+///
+/// 前端在项目移除/切换时调用，避免旧 watcher 占用 OS 句柄直至 LRU 淘汰。
+/// 路径不在池中时静默返回 Ok（幂等，无副作用）。路径 key 与 notify_watch
+/// 相同（dunce::simplified 规范化）。
+#[tauri::command]
+pub async fn notify_stop_watch(
+    path: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), AppError> {
+    let watch_path = dunce::simplified(std::path::Path::new(&path)).to_path_buf();
+    let mut pool = state
+        .file_watchers
+        .lock()
+        .map_err(|e| AppError::Notify(format!("获取 file_watchers 锁失败: {e}")))?;
+    pool.remove(&watch_path);
     Ok(())
 }
 
@@ -553,6 +616,28 @@ mod tests {
         let paths = vec!["/a/b.txt".to_string(), "/c/d.txt".to_string()];
         let p = classify_by_kind(&EventKind::Create(CreateKind::File), paths.clone());
         assert_eq!(p.paths, paths);
+    }
+
+    // ─── BE-02 排除目录过滤 ───
+
+    #[test]
+    fn is_excluded_path_matches_all_seven_dirs() {
+        // 契约七元素逐一验证：任一分量命中即排除
+        for dir in WATCH_EXCLUDE_DIRS {
+            let p = PathBuf::from(format!("C:/project/{dir}/sub/file.txt"));
+            assert!(is_excluded_path(&p), "分量 {dir} 应命中排除");
+        }
+        // 整分量比较：子串不误伤
+        assert!(
+            !is_excluded_path(&PathBuf::from("C:/project/mytarget/file.txt")),
+            "mytarget 不应命中 target"
+        );
+        assert!(
+            !is_excluded_path(&PathBuf::from("C:/project/target-backup/x.txt")),
+            "target-backup 不应命中 target"
+        );
+        // 普通路径不排除
+        assert!(!is_excluded_path(&PathBuf::from("C:/project/src/main.rs")));
     }
 
     // ─── FileWatcher 生命周期测试 ───
@@ -913,6 +998,146 @@ mod tests {
     }
 
     #[test]
+    fn event_loop_filters_excluded_paths_keeps_normal() {
+        let emitter = Arc::new(MockEmitter::default());
+        let harness = LoopHarness::start(emitter.clone());
+
+        // 含 node_modules 分量的路径 → 事件被过滤；正常路径 → 仍 emit
+        harness
+            .event_tx
+            .send(Ok(vec![
+                make_debounced(
+                    EventKind::Create(CreateKind::File),
+                    vec![PathBuf::from("/project/node_modules/pkg/x.js")],
+                ),
+                make_debounced(
+                    EventKind::Create(CreateKind::File),
+                    vec![PathBuf::from("/project/src/main.rs")],
+                ),
+            ]))
+            .unwrap();
+
+        wait_until(
+            || emitter.count() == 1,
+            "排除路径事件应被过滤，正常路径仍 emit",
+        );
+        assert_eq!(
+            emitter.last().unwrap().paths,
+            vec!["/project/src/main.rs".to_string()]
+        );
+
+        harness.shutdown();
+    }
+
+    #[test]
+    fn event_loop_rescan_bypasses_exclusion_filter() {
+        let emitter = Arc::new(MockEmitter::default());
+        let harness = LoopHarness::start(emitter.clone());
+        harness
+            .wps
+            .lock()
+            .unwrap()
+            .push(PathBuf::from("/project/root"));
+
+        // 同一批：排除路径事件 + need_rescan——rescan 分支在排除过滤之前，不受影响
+        harness
+            .event_tx
+            .send(Ok(vec![
+                make_debounced(
+                    EventKind::Create(CreateKind::File),
+                    vec![PathBuf::from("/project/node_modules/x.js")],
+                ),
+                make_rescan_debounced(),
+            ]))
+            .unwrap();
+
+        wait_until(
+            || emitter.count() == 1,
+            "need_rescan 事件应绕过排除过滤正常 emit",
+        );
+        let p = emitter.last().unwrap();
+        assert_eq!(p.kind, "Rescan", "排除过滤不应拦截 need_rescan");
+
+        harness.shutdown();
+    }
+
+    /// 创建目录符号链接（跨平台 helper）
+    ///
+    /// Windows 上创建符号链接需管理员权限或开发者模式——失败由调用方 skip 处理。
+    fn try_create_dir_symlink(target: &Path, link: &Path) -> std::io::Result<()> {
+        #[cfg(windows)]
+        {
+            std::os::windows::fs::symlink_dir(target, link)
+        }
+        #[cfg(not(windows))]
+        {
+            std::os::unix::fs::symlink(target, link)
+        }
+    }
+
+    #[test]
+    fn is_symlink_path_detects_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("real");
+        std::fs::create_dir(&target).unwrap();
+        let link = dir.path().join("link");
+        if let Err(e) = try_create_dir_symlink(&target, &link) {
+            // Windows 需管理员/developer mode——创建失败则跳过（BE-17 豁免约定）
+            eprintln!("跳过 symlink 测试：创建符号链接失败（需管理员/开发者模式）: {e}");
+            return;
+        }
+
+        assert!(is_symlink_path(&link), "符号链接路径应被检出");
+        assert!(!is_symlink_path(&target), "真实目录不应被误判");
+        // 符号链接目录内部的路径（祖先为 symlink）也应被检出——防外部路径经 fs-event 泄露
+        assert!(
+            is_symlink_path(&link.join("nested.txt")),
+            "祖先为 symlink 的路径应被检出"
+        );
+        // 不存在路径：symlink_metadata 失败 → 视为非符号链接，不丢事件
+        assert!(!is_symlink_path(&dir.path().join("not-exist.txt")));
+    }
+
+    #[test]
+    fn event_loop_filters_symlink_paths_keeps_normal() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("real");
+        std::fs::create_dir(&target).unwrap();
+        let link = dir.path().join("link");
+        if let Err(e) = try_create_dir_symlink(&target, &link) {
+            // Windows 需管理员/developer mode——创建失败则跳过（BE-17 豁免约定）
+            eprintln!("跳过 symlink 测试：创建符号链接失败（需管理员/开发者模式）: {e}");
+            return;
+        }
+
+        let emitter = Arc::new(MockEmitter::default());
+        let harness = LoopHarness::start(emitter.clone());
+
+        // symlink 路径 → 不 emit；正常路径 → 仍 emit
+        harness
+            .event_tx
+            .send(Ok(vec![
+                make_debounced(EventKind::Create(CreateKind::File), vec![link]),
+                make_debounced(
+                    EventKind::Create(CreateKind::File),
+                    vec![dir.path().join("normal.txt")],
+                ),
+            ]))
+            .unwrap();
+
+        wait_until(
+            || emitter.count() == 1,
+            "symlink 路径事件应被过滤，正常路径仍 emit",
+        );
+        assert_eq!(
+            emitter.last().unwrap().paths,
+            vec![dir.path().join("normal.txt").display().to_string()]
+        );
+
+        harness.shutdown();
+    }
+
+    #[test]
     fn event_loop_paused_skips_emit_resume_recovers() {
         let emitter = Arc::new(MockEmitter::default());
         let harness = LoopHarness::start(emitter.clone());
@@ -1082,7 +1307,7 @@ mod tests {
 
     #[test]
     fn notify_watch_phase1_hit_resumes_target_pauses_others() {
-        let mut pool = pool::LruWatcherPool::new(5);
+        let mut pool = pool::LruWatcherPool::new(pool::WATCHER_POOL_CAPACITY);
         let a = PathBuf::from("/test/a");
         let b = PathBuf::from("/test/b");
         pool.insert(a.clone(), make_test_watcher_with_exit("a", None));
@@ -1097,7 +1322,7 @@ mod tests {
 
     #[test]
     fn notify_watch_phase1_miss_returns_false() {
-        let mut pool = pool::LruWatcherPool::new(5);
+        let mut pool = pool::LruWatcherPool::new(pool::WATCHER_POOL_CAPACITY);
         pool.insert(
             PathBuf::from("/test/a"),
             make_test_watcher_with_exit("a", None),
@@ -1110,7 +1335,7 @@ mod tests {
 
     #[test]
     fn notify_watch_phase3_inserts_watcher() {
-        let mut pool = pool::LruWatcherPool::new(5);
+        let mut pool = pool::LruWatcherPool::new(pool::WATCHER_POOL_CAPACITY);
         let path = PathBuf::from("/test/a");
         notify_watch_phase3(&mut pool, &path, make_test_watcher_with_exit("a", None)).unwrap();
         assert!(pool.contains(&path), "新 watcher 应插入池");
@@ -1119,7 +1344,7 @@ mod tests {
 
     #[test]
     fn notify_watch_phase3_race_drops_incoming_watcher() {
-        let mut pool = pool::LruWatcherPool::new(5);
+        let mut pool = pool::LruWatcherPool::new(pool::WATCHER_POOL_CAPACITY);
         let path = PathBuf::from("/test/a");
         pool.insert(path.clone(), make_test_watcher_with_exit("existing", None));
 

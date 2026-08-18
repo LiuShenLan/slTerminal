@@ -14,6 +14,11 @@ export function startWatch(path: string): Promise<void> {
   return invoke("notify_watch", { path });
 }
 
+/** 停止对指定路径的文件监听（项目移除/切换时调用，释放后端 watcher，防占用至 LRU 淘汰） */
+export function stopWatch(path: string): Promise<void> {
+  return invoke("notify_stop_watch", { path });
+}
+
 /**
  * 订阅后端文件系统变更事件
  *

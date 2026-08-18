@@ -1,6 +1,7 @@
 // explorer-notify.test.tsx — ExplorerPanel 文件监听集成测试
 //
-// 验证：项目根路径变化时 ExplorerPanel 调用 startWatch 启动文件监听。
+// 验证：项目根路径变化时 ExplorerPanel 调用 startWatch 启动文件监听；
+// BE-10：切换/移除项目、组件卸载时调用 stopWatch 停止旧监听。
 // 使用 mock ipc/notify + 真实 stores，遵循 sidebar-actions 模式。
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
@@ -13,15 +14,18 @@ import { mockEntry } from "./helpers/vfs";
 const mocks = vi.hoisted(() => {
   const fs = __createFsMocks();
   const git = __createGitMocks();
-  // 此文件使用 startWatch mock，不依赖 onFsEvent 回调模式
+  // 此文件使用 startWatch/stopWatch mock，不依赖 onFsEvent 回调模式
   const startWatch = vi.fn().mockResolvedValue(undefined);
+  const stopWatch = vi.fn().mockResolvedValue(undefined);
 
   return {
     get mockStartWatch() { return startWatch; },
+    get mockStopWatch() { return stopWatch; },
     get mockReadDir() { return fs.readDir; },
     get mockGitStatus() { return git.gitStatus; },
     resetAll() {
       startWatch.mockClear();
+      stopWatch.mockClear();
       fs.readDir.mockClear();
       git.gitStatus.mockClear();
     },
@@ -30,6 +34,7 @@ const mocks = vi.hoisted(() => {
 
 vi.mock("../ipc/notify", () => ({
   startWatch: mocks.mockStartWatch,
+  stopWatch: mocks.mockStopWatch,
   onFsEvent: () => () => {},
 }));
 
@@ -143,6 +148,8 @@ describe("ExplorerPanel 文件监听集成", () => {
       rerender(React.createElement(ExplorerPanel));
 
       expect(mocks.mockStartWatch).toHaveBeenCalledWith("C:\\project-b");
+      // BE-10：切换项目时须停止旧路径监听
+      expect(mocks.mockStopWatch).toHaveBeenCalledWith("C:\\project-a");
     });
 
     it("4. startWatch 失败时 → 不抛错，静默 console.error", () => {
@@ -222,6 +229,55 @@ describe("ExplorerPanel 文件监听集成", () => {
       renderExplorer();
 
       expect(mocks.mockStartWatch).toHaveBeenCalledWith("E:\\bare-repo");
+    });
+  });
+
+  describe("stopWatch 调用时机（BE-10）", () => {
+    it("7. 项目移除（activePageId 置空）→ 停止旧路径监听，不启动新监听", () => {
+      populateStore("C:\\project-a");
+      const { rerender } = renderExplorer();
+      expect(mocks.mockStartWatch).toHaveBeenCalledWith("C:\\project-a");
+
+      mocks.resetAll();
+      resetStore();
+      rerender(React.createElement(ExplorerPanel));
+
+      expect(mocks.mockStopWatch).toHaveBeenCalledWith("C:\\project-a");
+      expect(mocks.mockStartWatch).not.toHaveBeenCalled();
+    });
+
+    it("8. 组件卸载 → 停止当前路径监听", () => {
+      populateStore("C:\\project-a");
+      const { unmount } = renderExplorer();
+
+      mocks.resetAll();
+      unmount();
+
+      expect(mocks.mockStopWatch).toHaveBeenCalledWith("C:\\project-a");
+    });
+
+    it("9. stopWatch 失败时 → 不抛错，静默 console.error", () => {
+      const consoleSpy = vi
+        .spyOn(console, "error")
+        .mockImplementation(() => {});
+      populateStore("C:\\project-a");
+      const { unmount } = renderExplorer();
+
+      mocks.resetAll();
+      mocks.mockStopWatch.mockRejectedValueOnce(new Error("watcher 不存在"));
+      expect(() => unmount()).not.toThrow();
+
+      expect(mocks.mockStopWatch).toHaveBeenCalledWith("C:\\project-a");
+      consoleSpy.mockRestore();
+    });
+
+    it("10. 无活跃项目挂载再卸载 → 不调用 stopWatch", () => {
+      const { unmount } = renderExplorer();
+      mocks.resetAll();
+      unmount();
+
+      expect(mocks.mockStopWatch).not.toHaveBeenCalled();
+      expect(mocks.mockStartWatch).not.toHaveBeenCalled();
     });
   });
 });

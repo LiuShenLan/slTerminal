@@ -38,6 +38,7 @@
     "allow-git-rollback",
     "allow-git-unstage",
     "allow-notify-watch",
+    "allow-notify-stop-watch",
     "allow-agent-hooks-inject",
     "allow-agent-hooks-uninstall",
     "allow-agent-hooks-injection-status",
