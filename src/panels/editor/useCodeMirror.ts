@@ -29,7 +29,8 @@ import { xml } from "@codemirror/lang-xml";
 import { save } from "../../ipc/dialog";
 import { normalizePath } from "../../lib/path";
 // FE-01: 原生弹窗（window.alert/confirm）统一改为应用内浮层（toast / confirmDialog）
-import { confirmDialog, toast } from "../../lib";
+// FE-10: 错误消息统一经 getErrorMessage（契约：src/ipc/appError.ts，src/lib re-export）
+import { confirmDialog, toast, getErrorMessage } from "../../lib";
 import { fs } from "../../ipc";
 import { diffGutter, updateDiffGutter, clearDiffGutter } from "./gitGutter";
 import { onFsEvent } from "../../ipc/notify";
@@ -194,7 +195,8 @@ export function useCodeMirror({ container, filePath, panelId, fontSize, onFontSi
           }
         })
         // P2-15: gitDiff 失败时 console.warn，不再静默吞错
-        .catch((err) => { console.warn("[slTerminal] git diff 刷新失败:", err); });
+        // FE-10: 消息统一经 getErrorMessage
+        .catch((err) => { console.warn("[slTerminal] git diff 刷新失败:", getErrorMessage(err)); });
     }
 
     // 通知标题管理器：路径变更（空白编辑器首次保存 或 另存为到新路径）
@@ -411,7 +413,12 @@ export function useCodeMirror({ container, filePath, panelId, fontSize, onFontSi
             });
             dirtyRef.current = false;
           // P2-16: 外部修改重载失败时 console.warn
-          }).catch((err) => { console.warn("[slTerminal] 外部修改重载失败:", err); });
+          // FE-10: + toast 提示——重载失败意味着编辑器内容可能过时，用户可感知
+          }).catch((err) => {
+            const msg = getErrorMessage(err);
+            console.warn("[slTerminal] 外部修改重载失败:", msg);
+            toast.show("error", `外部修改重载失败: ${msg}`);
+          });
         }
       } else {
         // 无修改 → 自动重载
@@ -424,7 +431,12 @@ export function useCodeMirror({ container, filePath, panelId, fontSize, onFontSi
             },
           });
           // P2-16: 外部修改重载失败时 console.warn
-        }).catch((err) => { console.warn("[slTerminal] 外部修改重载失败:", err); });
+          // FE-10: + toast 提示——重载失败意味着编辑器内容可能过时，用户可感知
+        }).catch((err) => {
+          const msg = getErrorMessage(err);
+          console.warn("[slTerminal] 外部修改重载失败:", msg);
+          toast.show("error", `外部修改重载失败: ${msg}`);
+        });
       }
     });
 

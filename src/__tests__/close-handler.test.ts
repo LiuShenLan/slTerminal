@@ -395,7 +395,7 @@ describe("onCloseRequested PTY kill 路径", () => {
     expect(pty.kill).toHaveBeenCalledTimes(2);
   });
 
-  it("8. 单条 kill 失败 → 不阻塞其他 kill（catch 静默处理）", async () => {
+  it("8. 单条 kill 失败 → 不阻塞其他 kill，全部结束后统一一条汇总日志（FE-05）", async () => {
     (window as unknown as Record<string, unknown>).__dockviewApi = { _mock: true };
 
     // session-001 的 kill 失败
@@ -417,11 +417,16 @@ describe("onCloseRequested PTY kill 路径", () => {
 
     // 两个 kill 都被调用
     expect(pty.kill).toHaveBeenCalledTimes(2);
-    // 失败日志已输出
+    // FE-05：统一一条汇总日志（含失败数 1），替代逐条 console.error
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
     expect(consoleSpy).toHaveBeenCalledWith(
-      expect.stringContaining("[slTerminal] 关闭时 kill PTY 失败 (session-001, panel-1):"),
-      expect.any(Error),
+      expect.stringContaining("[slTerminal] 关闭时 1 个 PTY session kill 失败:"),
+      expect.any(Array),
     );
+    // 汇总数组内含失败归属（sessionId + panelId + 错误）
+    const failures = consoleSpy.mock.calls[0][1] as Array<Record<string, unknown>>;
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatchObject({ sessionId: "session-001", panelId: "panel-1" });
 
     consoleSpy.mockRestore();
   });
@@ -487,5 +492,37 @@ describe("onCloseRequested PTY kill 路径", () => {
 
     // size=0 → 整个 kill 代码块跳过
     expect(pty.kill).not.toHaveBeenCalled();
+  });
+
+  it("12. 多条 kill 失败 → 汇总日志含失败数（FE-05）", async () => {
+    (window as unknown as Record<string, unknown>).__dockviewApi = { _mock: true };
+
+    // 全部失败
+    vi.mocked(pty.kill).mockRejectedValue(new Error("kill failed"));
+
+    vi.mocked(TerminalRegistry.getAll).mockReturnValue(
+      new Map([
+        ["panel-1", { term: {} as never, sessionId: "session-001", webglAddon: null, fitAddon: {} as never }],
+        ["panel-2", { term: {} as never, sessionId: "session-002", webglAddon: null, fitAddon: {} as never }],
+        ["panel-3", { term: {} as never, sessionId: "session-003", webglAddon: null, fitAddon: {} as never }],
+      ]),
+    );
+
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const handler = await renderAndCapture();
+    await handler();
+
+    // FE-05：仍只汇总一条日志，失败数 = 3，条目含全部归属
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining("[slTerminal] 关闭时 3 个 PTY session kill 失败:"),
+      expect.any(Array),
+    );
+    const failures = consoleSpy.mock.calls[0][1] as Array<Record<string, unknown>>;
+    expect(failures).toHaveLength(3);
+    expect(failures.map((f) => f.sessionId)).toEqual(["session-001", "session-002", "session-003"]);
+
+    consoleSpy.mockRestore();
   });
 });

@@ -29,7 +29,7 @@ import { usePanelFocus } from "../shortcuts/usePanelFocus";
 import { setActiveExplorer, clearActiveExplorer } from "./activeExplorer";
 import { basename } from "../../lib/path";
 import { confirmDialog } from "../../lib/ConfirmDialog";
-import { IconClose, IconEmptyBox } from "../../lib/icons";
+import { IconClose, IconEmptyBox, IconAlertTriangle } from "../../lib/icons";
 
 /** 操作失败错误提示自动消失时间（ms） */
 const ERROR_AUTO_DISMISS_MS = 5000;
@@ -65,7 +65,7 @@ export const ExplorerPanel: React.FC = () => {
     }
   }
 
-  const { rootNodes, gitStatusMap, toggleExpand, refresh } = useFileTree({ rootPath });
+  const { rootNodes, gitStatusMap, rootError, toggleExpand, refresh } = useFileTree({ rootPath });
 
   // --- 选中模型 ---
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -468,30 +468,72 @@ export const ExplorerPanel: React.FC = () => {
         data-e2e="explorer-tree-container"
       >
         {rootPath ? (
-          <FileTree
-            rootPath={rootPath}
-            nodes={rootNodes}
-            depth={0}
-            gitStatusMap={gitStatusMap}
-            onToggleExpand={toggleExpand}
-            onOpenFile={handleOpenFile}
-            onOpenInTerminal={handleOpenInTerminal}
-            onRename={handleRename}
-            onDelete={handleDelete}
-            onNewFile={handleNewFile}
-            onNewFolder={handleNewFolder}
-            // 新增 props：选中模型
-            selectedPath={selectedPath}
-            onSelect={handleSelect}
-            // 新增 props：重命名状态上提
-            renamingPath={renamingPath}
-            renameValue={renameValue}
-            onRenameStart={(path: string, name: string) => {
-              setRenamingPath(path);
-              setRenameValue(name);
-            }}
-            onRenameCancel={handleRenameCancel}
-          />
+          rootError ? (
+            // FE-07: 根目录加载失败 → 错误占位（错误消息 + 重试按钮），不再伪装空目录
+            <div
+              data-testid="explorer-load-error"
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                gap: 8,
+                padding: 16,
+                fontSize: 12,
+                color: DIM_FG, // 说明文字 fg-3
+                textAlign: "center",
+                userSelect: "none",
+              }}
+            >
+              <span style={{ color: ERROR_BANNER_FG, display: "flex" }}>
+                <IconAlertTriangle size={15} />
+              </span>
+              <span style={{ color: ERROR_BANNER_FG }}>文件树加载失败</span>
+              <span style={{ wordBreak: "break-all" }}>{rootError}</span>
+              <button
+                data-testid="explorer-load-retry"
+                onClick={() => {
+                  refresh();
+                }}
+                style={{
+                  marginTop: 4,
+                  background: "none",
+                  border: `1px solid ${ERROR_BANNER_BORDER}`,
+                  borderRadius: 4,
+                  color: ERROR_BANNER_FG,
+                  fontSize: 12,
+                  padding: "4px 14px",
+                  cursor: "pointer",
+                }}
+              >
+                重试
+              </button>
+            </div>
+          ) : (
+            <FileTree
+              rootPath={rootPath}
+              nodes={rootNodes}
+              depth={0}
+              gitStatusMap={gitStatusMap}
+              onToggleExpand={toggleExpand}
+              onOpenFile={handleOpenFile}
+              onOpenInTerminal={handleOpenInTerminal}
+              onRename={handleRename}
+              onDelete={handleDelete}
+              onNewFile={handleNewFile}
+              onNewFolder={handleNewFolder}
+              // 新增 props：选中模型
+              selectedPath={selectedPath}
+              onSelect={handleSelect}
+              // 新增 props：重命名状态上提
+              renamingPath={renamingPath}
+              renameValue={renameValue}
+              onRenameStart={(path: string, name: string) => {
+                setRenamingPath(path);
+                setRenameValue(name);
+              }}
+              onRenameCancel={handleRenameCancel}
+            />
+          )
         ) : (
           // GL-05：空文件树统一空态——15px 线性图标 fg-4 + 说明文字 fg-3，居中
           <div

@@ -499,9 +499,11 @@ describe("INT-2: term.onData → pty.write 调用链", () => {
     }, { timeout: 3000 });
 
     // console.error 被调用（onData handler 中的 .catch 路径）
+    // S08 契约：错误消息统一经 getErrorMessage（Error → String(err) 含 "Error: " 前缀），
+    // 断言用包含匹配而非 expect.any(Error)
     expect(consoleErrorSpy).toHaveBeenCalledWith(
       "PTY write 失败:",
-      expect.any(Error),
+      expect.stringContaining("写入失败"),
     );
 
     consoleErrorSpy.mockRestore();

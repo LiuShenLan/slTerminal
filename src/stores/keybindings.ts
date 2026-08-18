@@ -10,6 +10,7 @@
 
 import { create } from "zustand";
 import { loadSettings, saveSettings } from "../ipc/settings";
+import { toast, getErrorMessage } from "../lib";
 import type { KeybindingOverrides } from "../features/shortcuts";
 import { PERSIST_DEBOUNCE_MS } from "./projects";
 
@@ -76,8 +77,10 @@ useKeybindings.subscribe((state) => {
   if (!state.loaded) return; // loaded 守卫：启动加载阶段不触发保存
   if (saveTimer !== null) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
-    saveSettings({ keybindings: state.overrides }).catch(() => {
-      // 静默吞错，非关键数据
+    saveSettings({ keybindings: state.overrides }).catch((err) => {
+      // FE-09：保存失败统一 toast 告警（设置未落盘，重启后将丢失）；错误详情统一经 getErrorMessage
+      toast.show("warning", "设置保存失败，重启后将丢失");
+      console.warn("[stores/keybindings] 设置保存失败:", getErrorMessage(err));
     });
   }, PERSIST_DEBOUNCE_MS);
 });

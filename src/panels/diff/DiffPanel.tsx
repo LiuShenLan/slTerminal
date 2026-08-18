@@ -46,10 +46,12 @@ import { usePanelFocus } from "../../features/shortcuts";
 import { setActiveEditor, clearActiveEditor, type EditorActions } from "../editor/activeEditor";
 import { useFontSize } from "../../stores";
 import { useFontSizeWheel } from "../../lib/useFontSizeWheel";
-import { confirmDialog, toast } from "../../lib";
+// FE-10: 错误消息统一经 getErrorMessage（契约：src/ipc/appError.ts，src/lib re-export）
+import { confirmDialog, toast, getErrorMessage } from "../../lib";
+import { IconAlertTriangle } from "../../lib/icons";
 import { FONT_SIZE_MIN, FONT_SIZE_MAX } from "../../stores/fontSize";
 import { computeAlignment } from "./alignment";
-import { EDITOR_BG, ERROR_FG, HTML_PANEL_LOADING_FG, PANEL_BG, SEPARATOR_BG, editorTheme, editorColorOverrides, editorSyntaxHighlight } from "../../theme";
+import { EDITOR_BG, ERROR_BANNER_BG, ERROR_BANNER_BORDER, ERROR_BANNER_FG, ERROR_FG, HTML_PANEL_LOADING_FG, PANEL_BG, SEPARATOR_BG, editorTheme, editorColorOverrides, editorSyntaxHighlight } from "../../theme";
 
 // ── 占位行 Widget ─────────────────────────────────────────────
 
@@ -168,6 +170,8 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ params }) => {
   const leftViewRef = useRef<EditorView | null>(null);
   const rightViewRef = useRef<EditorView | null>(null);
   const [state, setState] = useState<PanelState>({ kind: "loading" });
+  // FE-10: git diff 获取失败 → 面板内「内容可能过时」提示条（diff 基于旧数据）
+  const [diffStale, setDiffStale] = useState(false);
   const editorFontSize = useFontSize((s) => s.editorFontSize);
   const setEditorFontSize = useFontSize((s) => s.setEditorFontSize);
   const fontSizeRef = useRef(editorFontSize);
@@ -225,6 +229,7 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ params }) => {
 
     (async () => {
       setState({ kind: "loading" });
+      setDiffStale(false); // FE-10: 新加载开始时重置过时标记（切换文件/重载后不残留）
 
       try {
         const [headContent, workdirContent] = await Promise.all([
@@ -254,9 +259,15 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ params }) => {
         // 异步加载 diff hunks（不阻塞渲染）
         try {
           const hunks = await gitDiff(repoPath, filePath);
-          if (!cancelled) hunksRef.current = hunks;
+          if (!cancelled) {
+            hunksRef.current = hunks;
+            setDiffStale(false);
+          }
         } catch {
+          if (cancelled) return;
           hunksRef.current = [];
+          // FE-10: git diff 失败 → 提示「内容可能过时」（hunks 为空，gutter/占位均缺）
+          setDiffStale(true);
         }
       } catch {
         if (cancelled) return;
@@ -382,7 +393,9 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ params }) => {
       }
       refreshPlaceholders();
     } catch (err) {
-      console.warn("[slTerminal] git diff 刷新失败:", err);
+      // FE-10: 保存后 diff 刷新失败 → 提示条（gutter/占位基于旧 hunks，可能过时）
+      console.warn("[slTerminal] git diff 刷新失败:", getErrorMessage(err));
+      setDiffStale(true);
     }
 
     window.dispatchEvent(new CustomEvent("slterm:file-saved", {
@@ -635,22 +648,48 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ params }) => {
         width: "100%",
         height: "100%",
         display: "flex",
-        flexDirection: "row",
+        flexDirection: "column",
       }}
     >
-      <div style={{ flex: "50%", display: "flex", minWidth: 0, borderRight: `1px solid ${SEPARATOR_BG}` }}>
+      {/* FE-10: git diff 失败提示条——双侧 gutter/占位基于旧 hunks，内容可能过时 */}
+      {diffStale && (
         <div
-          data-e2e="diff-left"
-          ref={leftContainerRef}
-          style={{ flex: 1, background: EDITOR_BG, overflow: "clip", minWidth: 0 }}
-        />
-      </div>
-      <div style={{ flex: "50%", display: "flex", minWidth: 0 }}>
-        <div
-          data-e2e="diff-right"
-          ref={rightContainerRef}
-          style={{ flex: 1, background: EDITOR_BG, overflow: "clip", minWidth: 0 }}
-        />
+          data-testid="diff-stale-banner"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "4px 8px",
+            background: ERROR_BANNER_BG,
+            borderBottom: `1px solid ${ERROR_BANNER_BORDER}`,
+            color: ERROR_BANNER_FG,
+            fontSize: 12,
+            flexShrink: 0,
+            minHeight: 24,
+            userSelect: "none",
+          }}
+        >
+          <IconAlertTriangle size={13} />
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            内容可能过时——git diff 获取失败
+          </span>
+        </div>
+      )}
+      <div style={{ flex: 1, display: "flex", flexDirection: "row", minHeight: 0 }}>
+        <div style={{ flex: "50%", display: "flex", minWidth: 0, borderRight: `1px solid ${SEPARATOR_BG}` }}>
+          <div
+            data-e2e="diff-left"
+            ref={leftContainerRef}
+            style={{ flex: 1, background: EDITOR_BG, overflow: "clip", minWidth: 0 }}
+          />
+        </div>
+        <div style={{ flex: "50%", display: "flex", minWidth: 0 }}>
+          <div
+            data-e2e="diff-right"
+            ref={rightContainerRef}
+            style={{ flex: 1, background: EDITOR_BG, overflow: "clip", minWidth: 0 }}
+          />
+        </div>
       </div>
     </div>
   );

@@ -798,8 +798,18 @@ describe("DiffPanel", () => {
 
   // ── 布局回归守卫 (L1-L3) ─────────────────────────────
 
-  // L1: 外层容器 flexDirection 为 "row" + minWidth 归零（左右双栏等宽）
-  it("diff-panel outer container has flexDirection row and minWidth 0", async () => {
+  // S08（FE-10）后 diff-panel 外层为 column 容器：提示条槽位（可选，children[0]）+ 内部 row 容器。
+  // 取内部 row 容器（左右 wrapper 的父节点）——按 flexDirection 定位，banner 显隐均稳定。
+  function getRowContainer(panel: HTMLElement): HTMLElement {
+    const row = Array.from(panel.children).find(
+      (el) => (el as HTMLElement).style.flexDirection === "row",
+    ) as HTMLElement;
+    expect(row).toBeTruthy();
+    return row;
+  }
+
+  // L1: 外层容器 flexDirection 为 "column"（提示条槽位 + 内部 row 双栏）；内部 row 为 "row"
+  it("diff-panel outer container is column with inner row container", async () => {
     const { container } = render(
       React.createElement(DiffPanel, { params: makeParams() }),
     );
@@ -807,8 +817,12 @@ describe("DiffPanel", () => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
     });
     const panel = container.querySelector('[data-e2e="diff-panel"]') as HTMLElement;
-    expect(panel.style.flexDirection).toBe("row");
-    // 外层非 flex 子项，minWidth 不做要求——但 wrapper 需要（见 M1/M2）
+    // 外层 = column：提示条（可选）在顶部，内部 row 容器在下
+    expect(panel.style.flexDirection).toBe("column");
+    // 内部 row 容器保持横向双栏
+    expect(getRowContainer(panel).style.flexDirection).toBe("row");
+    // row 容器 flex: 1 占满剩余高度（banner 存在时不挤压双栏）
+    expect(getRowContainer(panel).style.flex).toContain("1");
   });
 
   // L2: 左栏 wrapper 有 borderRight 垂直分隔线
@@ -820,7 +834,7 @@ describe("DiffPanel", () => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
     });
     const panel = container.querySelector('[data-e2e="diff-panel"]') as HTMLElement;
-    const leftWrapper = panel.children[0] as HTMLElement;
+    const leftWrapper = getRowContainer(panel).children[0] as HTMLElement;
     // jsdom 可能将颜色 token 解析为 rgb() 形式，仅验证存在 border-right
     expect(leftWrapper.style.borderRight).toBeTruthy();
     expect(leftWrapper.style.borderRight).toContain("1px solid");
@@ -835,7 +849,7 @@ describe("DiffPanel", () => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
     });
     const panel = container.querySelector('[data-e2e="diff-panel"]') as HTMLElement;
-    const leftWrapper = panel.children[0] as HTMLElement;
+    const leftWrapper = getRowContainer(panel).children[0] as HTMLElement;
     expect(leftWrapper.style.borderBottom).toBe("");
   });
 
@@ -943,7 +957,7 @@ describe("DiffPanel", () => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
     });
     const panel = container.querySelector('[data-e2e="diff-panel"]') as HTMLElement;
-    const leftWrapper = panel.children[0] as HTMLElement;
+    const leftWrapper = getRowContainer(panel).children[0] as HTMLElement;
     expect(leftWrapper.style.minWidth).toBe("0px");
   });
 
@@ -956,7 +970,7 @@ describe("DiffPanel", () => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
     });
     const panel = container.querySelector('[data-e2e="diff-panel"]') as HTMLElement;
-    const rightWrapper = panel.children[1] as HTMLElement;
+    const rightWrapper = getRowContainer(panel).children[1] as HTMLElement;
     expect(rightWrapper.style.minWidth).toBe("0px");
   });
 
@@ -1021,8 +1035,9 @@ describe("DiffPanel", () => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
     });
     const panel = container.querySelector('[data-e2e="diff-panel"]') as HTMLElement;
-    const leftWrapper = panel.children[0] as HTMLElement;
-    const rightWrapper = panel.children[1] as HTMLElement;
+    const row = getRowContainer(panel);
+    const leftWrapper = row.children[0] as HTMLElement;
+    const rightWrapper = row.children[1] as HTMLElement;
     // 等宽分配（jsdom 将 flex: "50%" 展开为 "1 1 50%"）
     expect(leftWrapper.style.flex).toContain("50%");
     expect(rightWrapper.style.flex).toContain("50%");

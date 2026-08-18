@@ -9,6 +9,12 @@ export { injectScript } from "./injectScript";
 export { type AgentStatus } from "./agentStatus";
 export { parseTerminalPageId } from "./panelId";
 export {
+  parseAppError,
+  getErrorMessage,
+  APP_ERROR_VARIANTS,
+  type ParsedAppError,
+} from "../ipc/appError";
+export {
   IconNav,
   IconFiles,
   IconCommit,

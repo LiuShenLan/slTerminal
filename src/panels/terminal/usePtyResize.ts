@@ -14,6 +14,8 @@ import { type Terminal } from "@xterm/xterm";
 import { type FitAddon } from "@xterm/addon-fit";
 import { pty } from "../../ipc";
 import { TerminalRegistry } from "./TerminalRegistry";
+// FE-08: resize 失败统一经 getErrorMessage + console.error（非关键路径不 toast，但不再静默）
+import { getErrorMessage } from "../../lib";
 
 /** 列数变化 resize debounce 时间（毫秒）：宽度变化需 re-wrap 所有行，成本高 */
 const COL_RESIZE_DEBOUNCE_MS = 100;
@@ -86,7 +88,10 @@ export function usePtyResize(
         if (rowsChanged && !colsChanged) {
           // 仅行数变化 → 立即 fit + resize（廉价，无需 re-wrap）
           fitAddon.fit();
-          pty.resize(sid, panelId, dims.cols, dims.rows).catch(() => {});
+          // FE-08: resize 非关键路径——失败仅 console.error（不影响渲染）
+          pty.resize(sid, panelId, dims.cols, dims.rows).catch((err) =>
+            console.error("PTY resize 失败:", getErrorMessage(err)),
+          );
           return;
         }
 
@@ -99,7 +104,10 @@ export function usePtyResize(
             fitAddon.fit();
             const currentSid = TerminalRegistry.get(panelId)?.sessionId;
             if (currentSid) {
-              pty.resize(currentSid, panelId, dims.cols, dims.rows).catch(() => {});
+              // FE-08: resize 非关键路径——失败仅 console.error（不影响渲染）
+              pty.resize(currentSid, panelId, dims.cols, dims.rows).catch((err) =>
+                console.error("PTY resize 失败:", getErrorMessage(err)),
+              );
             }
           } catch {
             // fit 失败不影响渲染

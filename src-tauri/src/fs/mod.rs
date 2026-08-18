@@ -1,7 +1,7 @@
 /// 文件系统模块 — 文件读/写命令
 ///
 /// 阻塞 I/O 用 spawn_blocking 包装，不阻塞 tokio runtime。
-use crate::error::AppError;
+use crate::error::{io_error, AppError};
 use crate::state::validate_path_within_root;
 use crate::state::AppState;
 use serde::Serialize;
@@ -42,9 +42,13 @@ where
 
 /// 从 State 提取 project_root（仅命令包装层使用——内核直接接收 root，测试无需构造 State）
 fn extract_root(state: &State<'_, AppState>) -> Result<Option<PathBuf>, AppError> {
-    let guard = state.project_root.read().map_err(|e| AppError::IoKind {
-        kind: "lock".into(),
-        message: format!("获取 project_root 锁失败: {e}"),
+    // 锁错误为内部不变量错误：用户可见消息保留语义，poisoning 技术细节进 tracing（BE-15）
+    let guard = state.project_root.read().map_err(|e| {
+        tracing::warn!(error = %e, "获取 project_root 读锁失败");
+        AppError::IoKind {
+            kind: "lock".into(),
+            message: "获取 project_root 锁失败".into(),
+        }
     })?;
     Ok((*guard).clone())
 }
@@ -79,9 +83,12 @@ pub async fn fs_read_file(
     fs_read_file_impl(
         path,
         move |chunk| {
-            on_chunk.send(chunk).map_err(|e| AppError::IoKind {
-                kind: "ipc".into(),
-                message: format!("fs_read_file 分块推送失败: {e}"),
+            on_chunk.send(chunk).map_err(|e| {
+                tracing::warn!(error = %e, "fs_read_file 分块推送失败");
+                AppError::IoKind {
+                    kind: "ipc".into(),
+                    message: "读取文件失败".into(),
+                }
             })
         },
         extract_root(&state)?,
@@ -93,11 +100,7 @@ pub async fn fs_read_file(
 ///
 /// 分块经 send 回调推送——tauri::ipc::Channel 无法在 L1 构造（无 webview 上下文），
 /// send 回调使内核可测（HFN-08 先例：内核直接接收依赖而非 State）。
-async fn fs_read_file_impl<F>(
-    path: String,
-    send: F,
-    root: Option<PathBuf>,
-) -> Result<(), AppError>
+async fn fs_read_file_impl<F>(path: String, send: F, root: Option<PathBuf>) -> Result<(), AppError>
 where
     F: FnMut(FsReadChunk) -> Result<(), AppError> + Send + 'static,
 {
@@ -116,7 +119,7 @@ where
     F: FnMut(FsReadChunk) -> Result<(), AppError>,
 {
     // 先 metadata 校验大小上限——超限 Err，避免大文件全量读入
-    let meta = std::fs::metadata(path)?;
+    let meta = std::fs::metadata(path).map_err(|e| io_error("读取文件", Path::new(path), e))?;
     if meta.len() > MAX_FILE_SIZE_BYTES {
         return Err(AppError::IoKind {
             kind: "size".into(),
@@ -125,13 +128,16 @@ where
     }
 
     use std::io::Read;
-    let mut file = std::fs::File::open(path)?;
+    let mut file =
+        std::fs::File::open(path).map_err(|e| io_error("读取文件", Path::new(path), e))?;
     let mut buf = vec![0u8; READ_CHUNK_BYTES];
     // 跨块残留：上一块回退的 UTF-8 多字节字符尾部，合并到下一块开头完整还原
     let mut remainder: Vec<u8> = Vec::new();
 
     loop {
-        let n = file.read(&mut buf)?;
+        let n = file
+            .read(&mut buf)
+            .map_err(|e| io_error("读取文件", Path::new(path), e))?;
         remainder.extend_from_slice(&buf[..n]);
 
         if remainder.is_empty() {
@@ -144,12 +150,13 @@ where
             .map(|s| s.len())
             .unwrap_or_else(|e| e.valid_up_to());
         if valid_len > 0 {
-            let data = String::from_utf8(remainder.drain(..valid_len).collect()).map_err(
-                |e| AppError::IoKind {
+            let data = String::from_utf8(remainder.drain(..valid_len).collect()).map_err(|e| {
+                tracing::warn!(error = %e, "文件编码错误（非 UTF-8）");
+                AppError::IoKind {
                     kind: "utf8".into(),
-                    message: format!("文件编码错误（非 UTF-8）: {path}: {e}"),
-                },
-            )?;
+                    message: format!("文件编码错误（非 UTF-8）: {path}"),
+                }
+            })?;
             send(FsReadChunk { data, done: false })?;
         }
 
@@ -166,7 +173,10 @@ where
     }
 
     // 终态：空数据 + done:true
-    send(FsReadChunk { data: String::new(), done: true })?;
+    send(FsReadChunk {
+        data: String::new(),
+        done: true,
+    })?;
     Ok(())
 }
 
@@ -197,7 +207,7 @@ async fn fs_write_file_impl(
     spawn_blocking_task(move || -> Result<(), AppError> {
         // 确保父目录存在
         if let Some(parent) = PathBuf::from(&path).parent() {
-            std::fs::create_dir_all(parent)?;
+            std::fs::create_dir_all(parent).map_err(|e| io_error("创建目录", parent, e))?;
         }
 
         // 检测原文件行尾风格：只读前 CRLF_SAMPLE_MAX_BYTES 字节样本（避免全量读大文件）
@@ -220,7 +230,8 @@ async fn fs_write_file_impl(
             content
         };
 
-        std::fs::write(&path, &final_content)?;
+        std::fs::write(&path, &final_content)
+            .map_err(|e| io_error("写入文件", Path::new(&path), e))?;
         Ok(())
     })
     .await
@@ -246,10 +257,11 @@ async fn fs_read_dir_impl(path: String, root: Option<PathBuf>) -> Result<Vec<Dir
 
     spawn_blocking_task(move || {
         let mut entries: Vec<DirEntry> = Vec::new();
-        let dir = std::fs::read_dir(&path)?;
+        let dir =
+            std::fs::read_dir(&path).map_err(|e| io_error("读取目录", Path::new(&path), e))?;
 
         for entry in dir {
-            let entry = entry?;
+            let entry = entry.map_err(|e| io_error("读取目录", Path::new(&path), e))?;
             let name = entry.file_name().to_string_lossy().to_string();
 
             // 过滤重型目录
@@ -257,14 +269,18 @@ async fn fs_read_dir_impl(path: String, root: Option<PathBuf>) -> Result<Vec<Dir
                 continue;
             }
 
-            let file_type = entry.file_type()?;
+            let file_type = entry
+                .file_type()
+                .map_err(|e| io_error("读取目录", Path::new(&path), e))?;
             let is_dir = file_type.is_dir();
             let path_str = entry.path().to_string_lossy().replace('\\', "/");
 
             let (size, modified) = if is_dir {
                 (None, None)
             } else {
-                let meta = entry.metadata()?;
+                let meta = entry
+                    .metadata()
+                    .map_err(|e| io_error("读取目录", Path::new(&path), e))?;
                 let mtime = meta
                     .modified()
                     .ok()
@@ -308,7 +324,7 @@ async fn fs_create_dir_impl(path: String, root: Option<PathBuf>) -> Result<(), A
     validate_path_within_root(&root, check_path)?;
 
     spawn_blocking_task(move || {
-        std::fs::create_dir_all(&path)?;
+        std::fs::create_dir_all(&path).map_err(|e| io_error("创建目录", Path::new(&path), e))?;
         Ok(())
     })
     .await
@@ -338,9 +354,9 @@ async fn fs_delete_impl(path: String, root: Option<PathBuf>) -> Result<(), AppEr
             });
         }
         if p.is_dir() {
-            std::fs::remove_dir_all(&path)?;
+            std::fs::remove_dir_all(&path).map_err(|e| io_error("删除", Path::new(&path), e))?;
         } else {
-            std::fs::remove_file(&path)?;
+            std::fs::remove_file(&path).map_err(|e| io_error("删除", Path::new(&path), e))?;
         }
         Ok(())
     })
@@ -378,9 +394,9 @@ async fn fs_rename_impl(src: String, dst: String, root: Option<PathBuf>) -> Resu
                 });
             }
             // 目标为已存在文件 → 先删除再 rename（Windows 上 std::fs::rename 不覆盖已有文件）
-            std::fs::remove_file(&dst_path)?;
+            std::fs::remove_file(&dst_path).map_err(|e| io_error("删除目标文件", &dst_path, e))?;
         }
-        std::fs::rename(&src, &dst)?;
+        std::fs::rename(&src, &dst).map_err(|e| io_error("重命名", Path::new(&src), e))?;
         Ok(())
     })
     .await
@@ -962,6 +978,86 @@ mod command_wrapper_tests {
         assert!(result.is_err(), "目标路径在根外应被沙箱拒绝");
     }
 
+    // ===== BE-13: 错误消息含路径上下文 =====
+
+    /// 读取不存在的文件 → 错误消息含完整路径
+    #[test]
+    fn test_fs_read_file_error_message_contains_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let ghost = dir.path().join("ghost.txt");
+
+        let err = run_read_file(
+            ghost.to_string_lossy().to_string(),
+            Some(dir.path().to_path_buf()),
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains(&ghost.to_string_lossy().to_string()),
+            "错误消息应含文件路径，实际: {msg}"
+        );
+    }
+
+    /// 读取不存在的目录 → 错误消息含完整路径
+    #[test]
+    fn test_fs_read_dir_error_message_contains_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let ghost = dir.path().join("ghost_dir");
+
+        let err = run(fs_read_dir_impl(
+            ghost.to_string_lossy().to_string(),
+            Some(dir.path().to_path_buf()),
+        ))
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains(&ghost.to_string_lossy().to_string()),
+            "错误消息应含目录路径，实际: {msg}"
+        );
+    }
+
+    /// 父路径为文件（create_dir_all 失败）→ 错误消息含业务语义「创建目录失败」+ 路径
+    #[test]
+    fn test_fs_write_file_error_message_contains_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let blocker = dir.path().join("blocker.txt");
+        std::fs::write(&blocker, "x").unwrap();
+        // 父路径是文件 → 创建父目录必然失败（Windows/Unix 均如此）
+        let target = blocker.join("child.txt");
+
+        let err = run(fs_write_file_impl(
+            target.to_string_lossy().to_string(),
+            "data".to_string(),
+            Some(dir.path().to_path_buf()),
+        ))
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("创建目录失败") && msg.contains("blocker.txt"),
+            "错误消息应含业务语义与路径，实际: {msg}"
+        );
+    }
+
+    /// 重命名不存在的源 → 错误消息含完整路径
+    #[test]
+    fn test_fs_rename_error_message_contains_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("missing.txt");
+        let dst = dir.path().join("new.txt");
+
+        let err = run(fs_rename_impl(
+            src.to_string_lossy().to_string(),
+            dst.to_string_lossy().to_string(),
+            Some(dir.path().to_path_buf()),
+        ))
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains(&src.to_string_lossy().to_string()),
+            "错误消息应含源路径，实际: {msg}"
+        );
+    }
+
     // ===== fs 异常路径（HFN-04） =====
 
     /// fs_delete 删除不存在的路径 → 返回错误（不静默成功）
@@ -1088,10 +1184,7 @@ mod read_file_chunked_tests {
         assert!(terminal.data.is_empty(), "终态块 data 应为空串");
         for c in &data_chunks {
             assert!(!c.done, "数据块 done 应为 false");
-            assert!(
-                c.data.len() <= READ_CHUNK_BYTES,
-                "单块大小不应超过 256KB"
-            );
+            assert!(c.data.len() <= READ_CHUNK_BYTES, "单块大小不应超过 256KB");
         }
         assert_eq!(join_data(&chunks), content, "分块拼接后应与原文一致");
     }
@@ -1155,7 +1248,10 @@ mod read_file_chunked_tests {
 
         let (chunks, result) = collect_chunks(&file);
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("10MB"), "超限错误消息应含 10MB 上限，实际: {err}");
+        assert!(
+            err.contains("10MB"),
+            "超限错误消息应含 10MB 上限，实际: {err}"
+        );
         assert!(chunks.is_empty(), "超限拒绝不应发送任何块");
     }
 
@@ -1189,7 +1285,12 @@ mod read_file_chunked_tests {
 
         let (chunks, result) = collect_chunks(&file);
         result.unwrap();
-        assert_eq!(chunks.len(), 1, "空文件应只发终态块，实际: {}", chunks.len());
+        assert_eq!(
+            chunks.len(),
+            1,
+            "空文件应只发终态块，实际: {}",
+            chunks.len()
+        );
         assert!(chunks[0].done, "终态块 done 应为 true");
         assert!(chunks[0].data.is_empty(), "终态块 data 应为空串");
     }

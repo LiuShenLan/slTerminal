@@ -11,6 +11,8 @@ import { onFsEvent } from "../../ipc/notify";
 import { readDir } from "../../ipc/fs";
 import { gitStatus } from "../../ipc/git";
 import type { DirEntry } from "../../types/fs";
+// FE-07: 错误消息统一经 getErrorMessage（契约：src/ipc/appError.ts，src/lib re-export）
+import { getErrorMessage } from "../../lib";
 
 /** 文件系统事件去抖延迟（ms） */
 const FS_EVENT_DEBOUNCE_MS = 200;
@@ -31,6 +33,9 @@ export function useFileTree({ rootPath }: UseFileTreeOptions) {
   const [gitStatusMap, setGitStatusMap] = useState<Map<string, string>>(
     new Map(),
   );
+  // FE-07: 目录加载错误按路径记录（路径 → 错误消息）。readDir 失败时
+  // loadDirectory 仍返回 []（子目录容错不冒泡），但错误不再伪装成空目录
+  const [dirErrors, setDirErrors] = useState<Map<string, string>>(new Map());
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const rootPathRef = useRef<string | null>(rootPath);
   rootPathRef.current = rootPath;
@@ -40,11 +45,18 @@ export function useFileTree({ rootPath }: UseFileTreeOptions) {
   // generation 计数器：rootPath 每次变化时递增，异步回调中检查以丢弃旧请求
   const genRef = useRef(0);
 
-  /** 读取目录内容并转换为 TreeNode */
+  /** 读取目录内容并转换为 TreeNode。失败时记录按路径错误并返回 []（子目录容错不冒泡） */
   const loadDirectory = useCallback(
     async (dirPath: string): Promise<TreeNode[]> => {
       try {
         const entries = await readDir(dirPath);
+        // 读取成功 → 清除该路径的加载错误
+        setDirErrors((prev) => {
+          if (!prev.has(dirPath)) return prev;
+          const next = new Map(prev);
+          next.delete(dirPath);
+          return next;
+        });
         return entries.map((entry) => ({
           entry,
           expanded: false,
@@ -53,6 +65,13 @@ export function useFileTree({ rootPath }: UseFileTreeOptions) {
         }));
       } catch (err) {
         console.error("[slTerminal] readDir 失败:", dirPath, err);
+        // FE-07: 错误按路径记录（不再伪装空目录），ExplorerPanel 据此渲染错误占位
+        const msg = getErrorMessage(err);
+        setDirErrors((prev) => {
+          const next = new Map(prev);
+          next.set(dirPath, msg);
+          return next;
+        });
         return [];
       }
     },
@@ -194,10 +213,12 @@ export function useFileTree({ rootPath }: UseFileTreeOptions) {
     if (!rootPath) {
       setRootNodes([]);
       setGitStatusMap(new Map());
+      setDirErrors(new Map());
       return;
     }
     setRootNodes([]);
     setGitStatusMap(new Map());
+    setDirErrors(new Map());
     loadRoot(gen);
     // 同时加载 git 状态
     gitStatus(rootPath)
@@ -255,9 +276,13 @@ export function useFileTree({ rootPath }: UseFileTreeOptions) {
     return () => window.removeEventListener("slterm:file-saved", handler);
   }, [refreshExpanded]);
 
+  // FE-07: 根目录加载错误（dirErrors 按路径记录，仅 rootPath 命中才暴露给面板）
+  const rootError = rootPath ? (dirErrors.get(rootPath) ?? null) : null;
+
   return {
     rootNodes,
     gitStatusMap,
+    rootError,
     toggleExpand,
     refresh: refreshExpanded,
   };

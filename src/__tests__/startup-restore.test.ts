@@ -183,9 +183,11 @@ describe("S4 启动恢复", () => {
     expect(mocks.mockSetActivePage).not.toHaveBeenCalled();
   });
 
-  it("3. loadAllProjects 异常 → 静默降级，应用仍进入 ready 状态", async () => {
+  it("3. loadAllProjects 异常 → console.warn 带模块名 + 静默降级，应用仍进入 ready 状态", async () => {
     mocks.mockLoadAllProjects.mockRejectedValueOnce(new Error("文件损坏"));
     setLastActivePage(null);
+
+    const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     render(React.createElement(App));
 
@@ -193,6 +195,13 @@ describe("S4 启动恢复", () => {
     await waitFor(() => {
       expect(mocks.mockMarkPersistenceReady).toHaveBeenCalled();
     }, { timeout: 3000 });
+    // FE-03：启动链 catch 不再静默——console.warn 带模块名 [App] + 原始错误
+    expect(consoleWarnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("[App] 加载项目数据失败"),
+      expect.any(Error),
+    );
+
+    consoleWarnSpy.mockRestore();
   });
 
   it("4. 启动时显示 Loading → 数据就绪后消失（ready 状态切换）", async () => {
@@ -301,12 +310,12 @@ describe("S4 启动恢复", () => {
     consoleSpy.mockRestore();
   });
 
-  it("7. requestUserAttention reject → 静默 catch（无 console.error、不冒泡）", async () => {
+  it("7. requestUserAttention reject → catch 内 console.warn（FE-06，非关键路径不 toast）", async () => {
     setLastActivePage(null);
     // 窗口获得焦点时 requestUserAttention(null) reject
     mocks.mockRequestUserAttention.mockRejectedValueOnce(new Error("attention 失败"));
 
-    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     render(React.createElement(App));
 
@@ -320,9 +329,12 @@ describe("S4 启动恢复", () => {
     await waitFor(() => {
       expect(mocks.mockRequestUserAttention).toHaveBeenCalledWith(null);
     }, { timeout: 3000 });
-    // 静默 catch：不输出任何错误日志
-    expect(consoleSpy).not.toHaveBeenCalled();
+    // FE-06：非关键路径——catch 内 console.warn 带模块名 + 原始错误，不 toast
+    expect(consoleWarnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("[App] 停止任务栏闪烁失败:"),
+      expect.any(Error),
+    );
 
-    consoleSpy.mockRestore();
+    consoleWarnSpy.mockRestore();
   });
 });

@@ -6,14 +6,23 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // ─── Hoisted mocks ───
-const { mockSaveSettings, mockLoadSettings } = vi.hoisted(() => ({
+const { mockSaveSettings, mockLoadSettings, mockToastShow, mockGetErrorMessage } = vi.hoisted(() => ({
   mockSaveSettings: vi.fn().mockResolvedValue(undefined),
   mockLoadSettings: vi.fn().mockResolvedValue(null),
+  mockToastShow: vi.fn(),
+  // FE-09：错误消息统一经 getErrorMessage（契约），默认兜底 String(err)
+  mockGetErrorMessage: vi.fn((err: unknown) => String(err)),
 }));
 
 vi.mock("../ipc/settings", () => ({
   saveSettings: mockSaveSettings,
   loadSettings: mockLoadSettings,
+}));
+
+// FE-09：store 保存失败经 src/lib 的 toast/getErrorMessage——mock 隔离断言
+vi.mock("../lib", () => ({
+  toast: { show: mockToastShow, _reset: vi.fn() },
+  getErrorMessage: mockGetErrorMessage,
 }));
 
 import {
@@ -211,18 +220,33 @@ describe("fontSize store", () => {
     });
   });
 
-  it("16. saveSettings 失败不影响 store（静默吞错）", () => {
+  it("16. saveSettings 失败 → toast 告警 + console.warn（FE-09），store 状态不受影响", async () => {
     mockSaveSettings.mockRejectedValue(new Error("write error"));
+    mockGetErrorMessage.mockReturnValue("write error");
     useFontSize.setState({ loaded: true });
+
+    const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     // 不应抛异常
     expect(() => {
       useFontSize.getState().setTerminalFontSize(16);
-      vi.advanceTimersByTime(2000);
     }).not.toThrow();
+    // 异步推进 timer 并排空微任务：saveSettings reject 的 .catch 在微任务队列执行
+    await vi.advanceTimersByTimeAsync(2000);
+
+    // FE-09：保存失败统一 toast 告警（warning + 固定文案）
+    expect(mockToastShow).toHaveBeenCalledWith("warning", "设置保存失败，重启后将丢失");
+    // 错误详情统一经 getErrorMessage 提取后 console.warn 记录
+    expect(mockGetErrorMessage).toHaveBeenCalledWith(expect.any(Error));
+    expect(consoleWarnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("[stores/fontSize]"),
+      "write error",
+    );
 
     // store 状态仍正常
     expect(useFontSize.getState().terminalFontSize).toBe(16);
+
+    consoleWarnSpy.mockRestore();
   });
 
   it("17. cancelPendingSave 取消活跃 timer——推进 2s 不再写盘", () => {

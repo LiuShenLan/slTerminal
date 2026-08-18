@@ -36,6 +36,8 @@ import { TerminalRegistry } from "./TerminalRegistry";
 import { resolvePayloadCliId } from "./resolvePayloadCliId";
 import { useFontSizeWheel } from "../../lib/useFontSizeWheel";
 import { E2E_ENABLED } from "../../lib/e2eEnabled";
+// FE-08: 错误消息统一经 getErrorMessage + toast（契约：src/ipc/appError.ts，src/lib re-export）
+import { toast, getErrorMessage } from "../../lib";
 import { FONT_SIZE_MIN, FONT_SIZE_MAX } from "../../stores/fontSize";
 // Agent 事件订阅（MC-202：onAgentEvent，照 onFsEvent 模式直接引 ipc 文件）
 import { onAgentEvent } from "../../ipc/agentHooks";
@@ -103,6 +105,9 @@ export interface UseXtermReturn {
 /** fallback 终端尺寸 */
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
+
+/** write 连续失败次数阈值（FE-08）：≥3 次触发 toast 提醒（单次失败多为瞬态，静默记日志） */
+const WRITE_FAIL_TOAST_THRESHOLD = 3;
 
 /** 运行中会话标题重查节流（人工验证问题 3）：SessionStart 立即查一次，
  *  其后 agent-event 距上次查询 ≥5s 才重查（/rename custom-title、ai-title 运行中变化） */
@@ -182,12 +187,32 @@ export function useXterm({
   // ═══════════════════════════════════════════════════════════════
   // 4. 终端快捷键上下文（active terminal + focus context）
   // ═══════════════════════════════════════════════════════════════
+
+  // FE-08: write 连续失败计数（成功清零）——PTY 输入是终端关键路径，
+  // 连续失败 ≥3 次说明管道已断，toast 提醒用户；单次失败多为瞬态，仅记日志
+  const writeFailCountRef = useRef(0);
+
+  /** write 失败统一处理：连续失败 ≥3 次 toast，其余 console.error（FE-08） */
+  const handleWriteError = useCallback((err: unknown) => {
+    writeFailCountRef.current += 1;
+    if (writeFailCountRef.current >= WRITE_FAIL_TOAST_THRESHOLD) {
+      writeFailCountRef.current = 0; // 每轮 3 次连续失败提醒一次，防 toast 风暴
+      toast.show("error", `终端输入发送失败: ${getErrorMessage(err)}`);
+    } else {
+      console.error("PTY write 失败:", getErrorMessage(err));
+    }
+  }, []);
+
   const writeToPty = useCallback((data: Uint8Array) => {
     const sid = TerminalRegistry.get(panelId)?.sessionId;
     if (sid) {
-      pty.write(sid, panelId, data).catch(() => {});
+      pty.write(sid, panelId, data)
+        .then(() => {
+          writeFailCountRef.current = 0;
+        })
+        .catch(handleWriteError);
     }
-  }, [panelId]);
+  }, [panelId, handleWriteError]);
 
   const terminalActions = useMemo<TerminalActions>(
     () => ({
@@ -269,7 +294,10 @@ export function useXterm({
     // OSC 8 超链接：点击后通过系统默认浏览器打开
     term.options.linkHandler = {
       activate: (_event, url) => {
-        openUrl(url).catch(() => {});
+        // FE-08: 非关键路径（openUrl）——打开失败不影响终端，仅 console.error
+        openUrl(url).catch((err) =>
+          console.error("打开链接失败:", getErrorMessage(err)),
+        );
       },
     };
 
@@ -281,7 +309,7 @@ export function useXterm({
         const sid = TerminalRegistry.get(panelId)?.sessionId;
         if (sid) {
           pty.write(sid, panelId, new TextEncoder().encode(data))
-            .catch((err) => console.error("E2E PTY write 失败:", err));
+            .catch((err) => console.error("E2E PTY write 失败:", getErrorMessage(err)));
         }
       });
     }
@@ -324,6 +352,8 @@ export function useXterm({
           term.writeln(`\r\n[重新连接] 按 Enter 重试...\r\n`);
           if (E2E_ENABLED) setTerminalSessionError(container, String(err));
           console.error(`[H6] spawn FAIL panelId="${panelId}"`, err);
+          // FE-08: 关键路径（spawn 失败）——toast 提醒用户，终端内仍写重连提示
+          toast.show("error", `终端启动失败: ${getErrorMessage(err)}`);
           // 设置 Enter 重连监听（不立即重新 spawn，由用户按 Enter 触发）
           setupRetry(cols, rows);
         });
@@ -371,7 +401,9 @@ export function useXterm({
           sid,
           panelId,
           new TextEncoder().encode(data),
-        ).catch((err) => console.error("PTY write 失败:", err));
+        ).then(() => {
+          writeFailCountRef.current = 0;
+        }).catch(handleWriteError);
       }
     });
 
@@ -442,8 +474,10 @@ export function useXterm({
             // 仅标题（不带 status）——不动状态圆点
             onTabStateChange?.({ active: true, title });
           })
-          .catch(() => {
-            // 读取失败静默——保持现标题（无 provider 的 CLI 不炸，兜底 CLI 名）
+          .catch((err) => {
+            // 读取失败不影响现标题（无 provider 的 CLI 不炸，兜底 CLI 名）——
+            // FE-08: 非关键路径仅 console.error，不打扰用户
+            console.error("[slTerminal] 读取会话标题失败:", getErrorMessage(err));
           });
       };
 
@@ -498,7 +532,10 @@ export function useXterm({
 
       const entry = TerminalRegistry.get(panelId);
       if (entry) {
-        pty.kill(entry.sessionId, panelId).catch(() => {});
+        // FE-08: 非关键路径（kill）——卸载清理中失败仅 console.error
+        pty.kill(entry.sessionId, panelId).catch((err) =>
+          console.error("终止 PTY 失败:", getErrorMessage(err)),
+        );
       }
       TerminalRegistry.remove(panelId);
       doSpawnRef.current = null;
@@ -547,7 +584,7 @@ export function useXterm({
       const sid = TerminalRegistry.get(panelId)?.sessionId;
       if (dims && sid) {
         pty.resize(sid, panelId, dims.cols, dims.rows)
-          .catch((err) => console.error("PTY resize 失败:", err));
+          .catch((err) => console.error("PTY resize 失败:", getErrorMessage(err)));
       }
     } catch {
       // fit 失败不影响渲染

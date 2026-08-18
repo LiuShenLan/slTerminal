@@ -42,30 +42,34 @@ function App() {
       try {
         // 加载字体大小偏好（先于项目数据，确保面板渲染时已有正确值）
         await useFontSize.getState().loadFromDisk();
-      } catch {
-        // 首次启动或文件损坏，保持默认值
+      } catch (err) {
+        // FE-03：启动链失败不再静默——降级兜底不变（保持默认值），仅告警记录
+        console.warn("[App] 加载字体大小设置失败，保持默认值:", err);
       }
 
       try {
         // 加载快捷键自定义绑定（覆盖层）——先于面板注册，确保注册表构建时已有覆盖
         await useKeybindings.getState().loadFromDisk();
-      } catch {
-        // 首次启动或文件损坏，保持默认（空覆盖）
+      } catch (err) {
+        // FE-03：启动链失败不再静默——降级兜底不变（保持默认空覆盖），仅告警记录
+        console.warn("[App] 加载快捷键设置失败，保持默认绑定:", err);
       }
 
       try {
         // 加载侧栏视图状态——区划/开关/宽度/比例，先于项目数据确保 Workspace 渲染时已有正确值
         await useSideBar.getState().loadFromDisk();
-      } catch {
-        // 首次启动或文件损坏，保持默认值
+      } catch (err) {
+        // FE-03：启动链失败不再静默——降级兜底不变（保持默认值），仅告警记录
+        console.warn("[App] 加载侧栏设置失败，保持默认值:", err);
       }
 
       try {
         // P2-07: loadAllProjects 内部 JSON.parse 当前数据量小无影响，
         // 若未来项目数据文件膨胀到 MB 级，可改为流式解析或 IndexedDB 存储。
         await loadAllProjects();
-      } catch {
-        // 首次启动或文件损坏，保持默认空状态
+      } catch (err) {
+        // FE-03：启动链失败不再静默——降级兜底不变（保持空状态）；损坏经 corrupted 通道 toast 在 S09
+        console.warn("[App] 加载项目数据失败，保持空状态:", err);
       }
       markPersistenceReady();
 
@@ -112,11 +116,13 @@ function App() {
         const allSessions = TerminalRegistry.getAll();
         if (allSessions.size > 0) {
           const killPromises: Promise<void>[] = [];
+          // FE-05：失败先收集（含 session/panel 归属），全部结束后统一汇总一条日志
+          const killFailures: Array<{ sessionId: string; panelId: string; error: unknown }> = [];
           allSessions.forEach((entry, panelId) => {
             if (entry.sessionId) {
               killPromises.push(
                 pty.kill(entry.sessionId, panelId).catch((err) => {
-                  console.error(`[slTerminal] 关闭时 kill PTY 失败 (${entry.sessionId}, ${panelId}):`, err);
+                  killFailures.push({ sessionId: entry.sessionId, panelId, error: err });
                 }),
               );
             }
@@ -126,6 +132,13 @@ function App() {
             Promise.all(killPromises),
             new Promise<void>((resolve) => setTimeout(resolve, SHUTDOWN_TIMEOUT_MS)),
           ]);
+          if (killFailures.length > 0) {
+            // FE-05：统一一条汇总日志（含失败数），替代逐条 console.error
+            console.error(
+              `[slTerminal] 关闭时 ${killFailures.length} 个 PTY session kill 失败:`,
+              killFailures,
+            );
+          }
         }
 
         // 1. flush dirty layout
@@ -197,7 +210,10 @@ function App() {
       window.__slterm_windowFocused = focused;
       // P2-FE-05：窗口恢复焦点时停止任务栏闪烁
       if (focused) {
-        requestUserAttention(null).catch(() => {});
+        requestUserAttention(null).catch((err) => {
+          // FE-06：停止闪烁失败为非关键路径——仅告警记录，不 toast
+          console.warn("[App] 停止任务栏闪烁失败:", err);
+        });
       }
     });
   }, []);

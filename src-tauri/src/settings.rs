@@ -1,7 +1,7 @@
 /// 设置持久化模块 — save/load settings 到 ~/.slterminal/settings.json
 ///
 /// 原子写入（tempfile）+ .bak 备份兜底。
-use crate::error::AppError;
+use crate::error::{io_error, AppError};
 use std::io::Write as _;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
@@ -10,9 +10,12 @@ use tempfile::NamedTempFile;
 pub(crate) fn resolve_app_data_dir(
     exe: Result<PathBuf, std::io::Error>,
 ) -> Result<PathBuf, AppError> {
-    let exe = exe.map_err(|e| AppError::IoKind {
-        kind: "exe_dir".into(),
-        message: format!("无法获取可执行文件路径: {e}"),
+    let exe = exe.map_err(|e| {
+        tracing::warn!(error = %e, "无法获取可执行文件路径");
+        AppError::IoKind {
+            kind: "exe_dir".into(),
+            message: "无法获取可执行文件路径".into(),
+        }
     })?;
     let exe_dir = exe.parent().ok_or_else(|| AppError::IoKind {
         kind: "exe_dir".into(),
@@ -82,7 +85,9 @@ pub async fn save_settings(settings: serde_json::Value) -> Result<(), AppError> 
 
     match tokio::task::spawn_blocking(move || -> Result<(), AppError> {
         // BE-05: create_dir_all 移入 spawn_blocking 闭包内部，避免异步上下文阻塞 I/O
-        std::fs::create_dir_all(&app_dir)?;
+        // 保存链 io 错误统一经 io_error 语义化（BE-15）：用户可见「保存设置失败 + 路径」，
+        // 原始 io 错误文本进 tracing 日志
+        std::fs::create_dir_all(&app_dir).map_err(|e| io_error("保存设置", &app_dir, e))?;
         // 读现有 settings.json（不存在/损坏视作 Null），与 incoming 浅合并
         let existing = std::fs::read_to_string(&settings_path)
             .ok()
@@ -91,19 +96,19 @@ pub async fn save_settings(settings: serde_json::Value) -> Result<(), AppError> 
         let merged = merge_settings(existing, settings);
 
         let json = serde_json::to_string_pretty(&merged)?;
-        let mut tmp = NamedTempFile::new_in(&app_dir)?;
-        tmp.write_all(json.as_bytes())?;
-        tmp.flush()?;
+        let mut tmp =
+            NamedTempFile::new_in(&app_dir).map_err(|e| io_error("保存设置", &app_dir, e))?;
+        tmp.write_all(json.as_bytes())
+            .map_err(|e| io_error("保存设置", &settings_path, e))?;
+        tmp.flush().map_err(|e| io_error("保存设置", &settings_path, e))?;
         if settings_path.exists() {
             let bak = app_dir.join("settings.json.bak");
             if let Err(e) = std::fs::copy(&settings_path, &bak) {
-                tracing::warn!("settings .bak 备份失败: {}", e);
+                tracing::warn!(error = %e, path = %settings_path.display(), "settings .bak 备份失败");
             }
         }
-        tmp.persist(&settings_path).map_err(|e| AppError::IoKind {
-            kind: format!("{:?}", e.error.kind()),
-            message: format!("persist 失败: {e}"),
-        })?;
+        tmp.persist(&settings_path)
+            .map_err(|e| io_error("保存设置", &settings_path, e.error))?;
         Ok(())
     })
     .await
@@ -354,12 +359,13 @@ mod tests {
 
     // ── SPE-05: persist 失败映射 ──
 
-    /// persist 目标为已存在目录（冲突构造）→ 映射为 AppError::IoKind（消息含 "persist 失败"）
+    /// persist 目标为已存在目录（冲突构造）→ 映射为 AppError::IoKind（消息含「保存设置失败」+ 路径）
     #[test]
     fn save_persist_failure_maps_to_io_error() {
         let dir = tempfile::tempdir().unwrap();
         // 目标路径 settings.json 为已存在目录 → rename 替换必然失败
-        std::fs::create_dir(dir.path().join("settings.json")).unwrap();
+        let settings_path = dir.path().join("settings.json");
+        std::fs::create_dir(&settings_path).unwrap();
         let _guard = AppDataDirGuard::set(dir.path());
 
         let err = run(save_settings(serde_json::json!({"a": 1}))).unwrap_err();
@@ -367,8 +373,12 @@ mod tests {
             AppError::IoKind { kind, message } => {
                 assert!(!kind.is_empty(), "kind 不应为空");
                 assert!(
-                    message.contains("persist 失败"),
-                    "消息应含 'persist 失败'，实际: {message}"
+                    message.contains("保存设置失败"),
+                    "消息应含业务语义 '保存设置失败'，实际: {message}"
+                );
+                assert!(
+                    message.contains(&settings_path.to_string_lossy().to_string()),
+                    "消息应含设置文件路径，实际: {message}"
                 );
             }
             other => panic!("persist 失败应映射为 AppError::IoKind，实际: {other:?}"),
@@ -442,8 +452,12 @@ mod tests {
                 AppError::IoKind { kind, message } => {
                     assert!(!kind.is_empty());
                     assert!(
-                        message.contains("persist 失败"),
-                        "消息应含 'persist 失败'，实际: {message}"
+                        message.contains("保存设置失败"),
+                        "消息应含业务语义 '保存设置失败'，实际: {message}"
+                    );
+                    assert!(
+                        message.contains("settings.json"),
+                        "消息应含设置文件路径，实际: {message}"
                     );
                 }
                 other => panic!("persist 失败应映射为 AppError::IoKind，实际: {other:?}"),

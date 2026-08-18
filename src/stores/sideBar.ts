@@ -11,6 +11,7 @@
 
 import { create } from "zustand";
 import { loadSettings, saveSettings } from "../ipc/settings";
+import { toast, getErrorMessage } from "../lib";
 import { PERSIST_DEBOUNCE_MS } from "./projects";
 import {
   type Zone,
@@ -134,8 +135,10 @@ useSideBar.subscribe((state) => {
         width: state.width,
         splitRatio: state.splitRatio,
       },
-    }).catch(() => {
-      // 静默吞错，侧栏状态非关键数据
+    }).catch((err) => {
+      // FE-09：保存失败统一 toast 告警（设置未落盘，重启后将丢失）；错误详情统一经 getErrorMessage
+      toast.show("warning", "设置保存失败，重启后将丢失");
+      console.warn("[stores/sideBar] 设置保存失败:", getErrorMessage(err));
     });
   }, PERSIST_DEBOUNCE_MS);
 });

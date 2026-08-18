@@ -12,11 +12,14 @@ const {
   mockSetInterval,
   mockClearInterval,
   capturedSetIntervalCallbacks,
+  mockLoadSettings,
 } = vi.hoisted(() => {
   const mockRender = vi.fn();
   const mockCreateRoot = vi.fn(() => ({ render: mockRender }));
   // 捕获 setInterval 回调列表（供手动轮询触发用）
   const capturedSetIntervalCallbacks: Array<() => void> = [];
+  // loadSettings 默认成功（首次启动 null → linear），FE-03 失败用例用 mockRejectedValueOnce 覆盖
+  const mockLoadSettings = vi.fn().mockResolvedValue(null);
 
   return {
     mockRender,
@@ -27,6 +30,7 @@ const {
     }),
     mockClearInterval: vi.fn(),
     capturedSetIntervalCallbacks,
+    mockLoadSettings,
   };
 });
 
@@ -46,7 +50,7 @@ vi.mock("../App.css", () => ({}));
 // mock ipc/settings——BOOT-01 后 main.tsx 启动链动态 import 调 loadSettings，
 // 测试环境无 Tauri 运行时须 mock；resolve null = 首次启动（无配色配置 → linear）
 vi.mock("../ipc/settings", () => ({
-  loadSettings: async () => null,
+  loadSettings: mockLoadSettings,
 }));
 
 // ─── 全局 mock ───
@@ -63,6 +67,9 @@ describe("main.tsx bootstrap", () => {
     mockRender.mockClear();
     mockCreateRoot.mockClear();
     capturedSetIntervalCallbacks.length = 0;
+    // loadSettings 默认成功（首次启动 null → linear）
+    mockLoadSettings.mockReset();
+    mockLoadSettings.mockResolvedValue(null);
 
     // 创建 div#root
     rootDiv = document.createElement("div");
@@ -151,6 +158,29 @@ describe("main.tsx bootstrap", () => {
 
     // 验证：setInterval 被清理（clearInterval called）
     expect(mockClearInterval).toHaveBeenCalled();
+  });
+
+  it("4. loadSettings 失败 → console.warn 带模块名，降级 linear 不阻塞启动（FE-03）", async () => {
+    // 场景：IPC 已就绪，但设置读取失败（损坏/IO 错误）→ 应告警 + 回退默认配色继续启动
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+    mockLoadSettings.mockRejectedValueOnce(new Error("settings 损坏"));
+
+    const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.resetModules();
+    await import("../main");
+
+    // 降级兜底后仍正常挂载 React（不阻塞启动）
+    await vi.waitFor(() => {
+      expect(mockCreateRoot).toHaveBeenCalledWith(rootDiv);
+    });
+    expect(mockRender).toHaveBeenCalledTimes(1);
+    // catch 内 console.warn 带模块名 [main] + 原始错误
+    expect(consoleWarnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("[main]"),
+      expect.any(Error),
+    );
+
+    consoleWarnSpy.mockRestore();
   });
 
   it("3. 轮询 200 次后超时 → 显示错误提示 + 清理定时器 + 不挂载 React", async () => {

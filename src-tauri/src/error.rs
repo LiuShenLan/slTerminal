@@ -1,10 +1,19 @@
 use serde::Serialize;
+use std::path::Path;
 use thiserror::Error;
 
 /// 应用统一错误类型，所有 Tauri 命令返回 Result<_, AppError>
+///
+/// ## 消息语义化约定（BE-15）
+/// - `message` 是用户可见消息：业务语义 + 必要上下文（涉及文件操作时含路径，BE-13）；
+///   原始技术细节（底层 io 错误文本等）在调用点进 tracing 日志，不暴露给前端。
+/// - `IoKind`/`Notify` 等宽变体继续承载异构错误——**不拆变体体系**，
+///   异构性经「消息语义化 + tracing 日志」收敛（语义见各变体注释）。
+/// - 需要「业务语义 + 路径」的 io 错误用 [`io_error`]，勿在命令内直接 `?` 走 From。
 #[derive(Debug, Error, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AppError {
+    /// 通用 IO 错误——承载异构底层错误（无路径上下文时的兜底转换；带路径场景用 [`io_error`]）
     #[error("IO 错误({kind}): {message}")]
     IoKind { kind: String, message: String },
 
@@ -17,6 +26,10 @@ pub enum AppError {
     #[error("序列化错误: {0}")]
     Serde(String),
 
+    /// 配置 JSON 解析失败（配置文件损坏场景，如 hooks 配置读取）
+    #[error("配置解析失败: {0}")]
+    ConfigParse(String),
+
     #[error("未知错误: {0}")]
     Unknown(String),
 
@@ -26,6 +39,7 @@ pub enum AppError {
     #[error("异步任务异常: {0}")]
     TaskJoin(String),
 
+    /// 文件监听错误——承载异构错误，消息 = 业务语义，技术细节在调用点进 tracing
     #[error("文件监听错误: {0}")]
     Notify(String),
 
@@ -63,6 +77,21 @@ impl From<tokio::task::JoinError> for AppError {
     }
 }
 
+/// 把底层 io 错误转换为用户可见的 AppError::IoKind（BE-13/BE-15 消息语义化约定）：
+///
+/// - `message` = 「业务动作失败 + 路径」——路径上下文在调用点注入（BE-13），用户可读；
+/// - 原始 io 错误文本（ErrorKind + 系统描述）只进 tracing 日志，不暴露给前端（BE-15）。
+///
+/// 仅用于「用户主动触发的文件操作」等需要把失败告知用户的场景；
+/// 无路径上下文或纯内部错误保留 `From<std::io::Error>`（BE-13 不改动该 From）。
+pub(crate) fn io_error(action: &str, path: &Path, e: std::io::Error) -> AppError {
+    tracing::warn!(target: "app_error", error = %e, path = %path.display(), "{action}失败");
+    AppError::IoKind {
+        kind: format!("{:?}", e.kind()),
+        message: format!("{action}失败: {}", path.display()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -89,6 +118,7 @@ mod tests {
             AppError::Pty("PTY 进程崩溃".to_string()),
             AppError::Git("rebase 冲突".to_string()),
             AppError::Serde("JSON 键缺失".to_string()),
+            AppError::ConfigParse("配置文件 JSON 损坏".to_string()),
             AppError::Unknown("未分类错误".to_string()),
             AppError::SessionNotFound("uuid-12345".to_string()),
             AppError::TaskJoin("join error".to_string()),
@@ -135,6 +165,43 @@ mod tests {
             json.contains("sessionNotFound"),
             "camelCase 序列化应包含 sessionNotFound 键，实际: {json}"
         );
+    }
+
+    /// ConfigParse 序列化形态——与前端 parseAppError（FE-02）契约对齐：
+    /// camelCase 变体名 `configParse` + 消息原文保留（变体总数 10+1=11）
+    #[test]
+    fn test_config_parse_serialization() {
+        let err = AppError::ConfigParse("配置文件 JSON 损坏".to_string());
+        let json = serde_json::to_string(&err).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            v["configParse"], "配置文件 JSON 损坏",
+            "camelCase 序列化应含 configParse 键且消息原样保留，实际: {json}"
+        );
+    }
+
+    /// io_error 辅助（BE-13/BE-15）：消息 = 业务动作 + 路径；kind 保留 ErrorKind；
+    /// 原始 io 错误文本只进 tracing，不进用户可见消息
+    #[test]
+    fn test_io_error_helper_injects_path_context() {
+        let path = Path::new("C:\\data\\settings.json");
+        let io_err =
+            std::io::Error::new(std::io::ErrorKind::PermissionDenied, "拒绝访问（技术细节）");
+        let err = io_error("保存设置", path, io_err);
+        match err {
+            AppError::IoKind { kind, message } => {
+                assert_eq!(kind, "PermissionDenied", "kind 应保留 ErrorKind");
+                assert!(
+                    message.contains("保存设置失败") && message.contains("settings.json"),
+                    "消息应含业务语义 + 路径，实际: {message}"
+                );
+                assert!(
+                    !message.contains("拒绝访问"),
+                    "技术细节不应进用户可见消息，实际: {message}"
+                );
+            }
+            other => panic!("io_error 应返回 AppError::IoKind，实际: {other:?}"),
+        }
     }
 
     // ── SPE-03: 三个 From 实现（变体 + 消息契约） ──

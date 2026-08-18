@@ -1,7 +1,7 @@
 /// 项目数据持久化模块 — save/load 项目数据到 exe 同级目录的 slterminal-projects.json
 ///
 /// 原子写入（tempfile）+ .bak 备份兜底。绕过路径 sandbox（项目数据是应用级元数据，非用户项目文件）。
-use crate::error::AppError;
+use crate::error::{io_error, AppError};
 use crate::settings::app_data_dir;
 use std::io::Write as _;
 use std::path::Path;
@@ -14,18 +14,22 @@ const PROJECTS_FILENAME: &str = "slterminal-projects.json";
 /// 保存项目数据到指定目录（原子写入 + .bak 备份）
 fn save_to_dir(app_dir: &Path, data: &str) -> Result<(), AppError> {
     let projects_path = app_dir.join(PROJECTS_FILENAME);
-    std::fs::create_dir_all(app_dir)?;
+    // 保存链 io 错误统一经 io_error 语义化（BE-15）：用户可见「保存项目失败 + 路径」，
+    // 原始 io 错误文本进 tracing 日志
+    std::fs::create_dir_all(app_dir).map_err(|e| io_error("保存项目", app_dir, e))?;
     if projects_path.exists() {
         let bak = app_dir.join("slterminal-projects.json.bak");
-        let _ = std::fs::copy(&projects_path, &bak);
+        if let Err(e) = std::fs::copy(&projects_path, &bak) {
+            tracing::warn!(error = %e, path = %projects_path.display(), "projects .bak 备份失败");
+        }
     }
-    let mut tmp = NamedTempFile::new_in(app_dir)?;
-    tmp.write_all(data.as_bytes())?;
-    tmp.flush()?;
-    tmp.persist(&projects_path).map_err(|e| AppError::IoKind {
-        kind: format!("{:?}", e.error.kind()),
-        message: format!("persist 失败: {e}"),
-    })?;
+    let mut tmp = NamedTempFile::new_in(app_dir).map_err(|e| io_error("保存项目", app_dir, e))?;
+    tmp.write_all(data.as_bytes())
+        .map_err(|e| io_error("保存项目", &projects_path, e))?;
+    tmp.flush()
+        .map_err(|e| io_error("保存项目", &projects_path, e))?;
+    tmp.persist(&projects_path)
+        .map_err(|e| io_error("保存项目", &projects_path, e.error))?;
     Ok(())
 }
 
@@ -302,20 +306,25 @@ mod tests {
 
     // ── SPE-05: persist 失败映射 ──
 
-    /// persist 目标为已存在目录（冲突构造）→ 映射为 AppError::IoKind（消息含 "persist 失败"）
+    /// persist 目标为已存在目录（冲突构造）→ 映射为 AppError::IoKind（消息含「保存项目失败」+ 路径）
     #[test]
     fn save_to_dir_persist_failure_maps_to_io_error() {
         let dir = tempfile::tempdir().unwrap();
         // 目标路径 slterminal-projects.json 为已存在目录 → rename 替换必然失败
-        std::fs::create_dir(dir.path().join(PROJECTS_FILENAME)).unwrap();
+        let projects_path = dir.path().join(PROJECTS_FILENAME);
+        std::fs::create_dir(&projects_path).unwrap();
 
         let err = save_to_dir(dir.path(), r#"{"projects":{}}"#).unwrap_err();
         match err {
             AppError::IoKind { kind, message } => {
                 assert!(!kind.is_empty(), "kind 不应为空");
                 assert!(
-                    message.contains("persist 失败"),
-                    "消息应含 'persist 失败'，实际: {message}"
+                    message.contains("保存项目失败"),
+                    "消息应含业务语义 '保存项目失败'，实际: {message}"
+                );
+                assert!(
+                    message.contains(&projects_path.to_string_lossy().to_string()),
+                    "消息应含项目文件路径，实际: {message}"
                 );
             }
             other => panic!("persist 失败应映射为 AppError::IoKind，实际: {other:?}"),

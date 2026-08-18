@@ -35,7 +35,11 @@ async function bootstrap() {
 
   // ② 配色方案解析——必须在 App 模块图求值前完成（colors.ts facade 求值时取 active 方案）
   const { loadSettings } = await import("./ipc/settings");
-  const settings = await loadSettings().catch(() => null); // 失败降级 null → linear，不阻塞启动
+  // FE-03：启动链失败不再静默——降级兜底不变（null → linear），仅 console.warn 告警
+  const settings = await loadSettings().catch((err) => {
+    console.warn("[main] 加载设置失败，回退默认配色:", err);
+    return null;
+  });
   const { schemeRegistry } = await import("./theme/schemeRegistry");
   await import("./theme/schemes"); // side-effect：注册内置方案（linear）
   // 未知 id 回退 linear 由注册表内部保证；非字符串（脏数据）同样回退
