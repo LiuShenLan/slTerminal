@@ -142,26 +142,6 @@ describeIpcContract('pty IPC 合约', [
     mockThrow: 'already dead',
     expectReject: 'already dead',
   },
-  // ── reattach（Channel 替换 + ring buffer 回放）────────────
-  {
-    name: 'reattach: 应调用 pty_reattach 命令，参数包含 sessionId 和 onOutput Channel',
-    cmd: 'pty_reattach',
-    call: () => pty.reattach('session-9', onOutputStub()),
-    expectArgs: { sessionId: 'session-9', onOutput: expect.any(Channel) },
-    assertArgs: (args) => {
-      // 验证 channel.onmessage 已绑定为 onOutput 回调
-      expect((args.onOutput as Channel<unknown>).onmessage).toBe(
-        lastOnOutput(),
-      );
-    },
-  },
-  {
-    name: 'reattach: invoke 失败时异常应传播给调用方',
-    cmd: 'pty_reattach',
-    call: () => pty.reattach('ghost-session', vi.fn()),
-    mockThrow: 'session not found',
-    expectReject: 'session not found',
-  },
 ]);
 
 // ── PTY 命令 payload 契约守卫（DBG-4）──────────────────────
@@ -669,7 +649,7 @@ describe('IPC ping', () => {
 });
 
 // ── pty 用例辅助：onOutput stub 追踪 ─────────────────────────
-// spawn/reattach 用例需要断言 Channel.onmessage 绑定到本次传入的 onOutput，
+// spawn 用例需要断言 Channel.onmessage 绑定到本次传入的 onOutput，
 // 经模块级变量记录最近一次调用传入的回调。
 
 let lastOutputStub: ((event: unknown) => void) | null = null;

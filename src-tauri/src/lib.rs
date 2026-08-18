@@ -83,7 +83,6 @@ pub fn run() {
             pty::spawn::pty_write,
             pty::spawn::pty_resize,
             pty::spawn::pty_kill,
-            pty::spawn::pty_reattach,
             fs::fs_read_file,
             fs::fs_write_file,
             fs::fs_read_dir,

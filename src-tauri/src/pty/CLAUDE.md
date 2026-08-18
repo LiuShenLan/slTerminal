@@ -12,7 +12,7 @@ PTY 管理——Windows ConPTY 终端模拟核心。负责 shell 进程的完整
 shell.rs          → resolve_shell() 返回 CommandBuilder（传统路径）+ resolve_shell_info() 返回 ShellInfo（自定义 ConPTY 路径）
 mod.rs/spawn.rs   → pty_spawn() 握 SPAWN_LOCK → conpty_custom::create_conpty_pair()（绕过 portable-pty，直接调 Win32）→ reader 线程（锁外）
 reader.rs         → reader_loop() 独立线程阻塞读 → Channel 推 PtyEvent（READER_BUF_SIZE=16KB）
-spawn.rs          → pty_spawn / pty_write / pty_resize / pty_kill / pty_reattach（Tauri 命令）
+spawn.rs          → pty_spawn / pty_write / pty_resize / pty_kill（Tauri 命令）
 src-tauri/src/state.rs（顶层模块，非 pty 子模块）→ PtySession 结构体 + PtyState 全局 HashMap
 ```
 
@@ -63,7 +63,7 @@ JobHandle 在 `#[cfg(windows)]` 下为 HANDLE RAII 包装；`#[cfg(not(windows))
 
 ### Channel 可替换 + ring buffer 回放（E1）
 
-`reader_loop` 通过 `Arc<RwLock<Option<Channel>>>` 引用 Channel。Channel 断开时写入 `output_ring`（256KB FIFO，按 1KB 粒度整行丢弃）。`pty_reattach` 替换 Channel 并回放 ring buffer 内容，用于前端页面切换后恢复终端显示。
+`reader_loop` 通过 `Arc<RwLock<Option<Channel>>>` 引用 Channel。Channel 断开时写入 `output_ring`（256KB FIFO，按 1KB 粒度整行丢弃）。重连时替换 Channel 并回放 ring buffer 内容，用于前端页面切换后恢复终端显示（E1 机制保留——对外重连命令已随 SEC-03 删除，替换逻辑仅存于 reader/state 内部）。
 
 ### ConPTY 启动序列剥离
 
@@ -180,7 +180,7 @@ DA1 查询响应是终端平台能力（设计动机：Ink 系 TUI，对全部�
 |------|------|
 | `mod.rs` | PTY 模块入口：模块声明 + re-export |
 | `conpty_api.rs` | ConPTY API 解析层（ADR-0005）：vendor 二进制嵌入 + Win10 提取/加载/回退 + 三函数指针封装 |
-| `spawn.rs` | Tauri 命令（`pty_spawn`/`pty_write`/`pty_resize`/`pty_kill`/`pty_reattach`）+ ConPTY 自定义实现 + PtyEvent 枚举定义 |
+| `spawn.rs` | Tauri 命令（`pty_spawn`/`pty_write`/`pty_resize`/`pty_kill`）+ ConPTY 自定义实现 + PtyEvent 枚举定义 |
 | `reader.rs` | 独立 reader 线程：`reader_loop()` 阻塞读取 PTY 输出 → Channel 推送 PtyEvent；`strip_conpty_startup()` 启动序列剥离；`apply_startup_strip()` 纯函数；`mirror_da1_query()` DA1 查询检测 |
 | `shell.rs` | Shell 发现与选择：`resolve_shell()` / `resolve_shell_info()` → pwsh → powershell → cmd 回退；`which_full_path()` PATH 解析 |
 | `state.rs` | 位于 `src-tauri/src/state.rs`（顶层模块）：`PtySession` 结构体 + `PtyState` 全局 HashMap + `validate_path_within_root` 路径沙箱 |
@@ -218,7 +218,7 @@ Rust 测试分布在 5 个位置：
 | `pty/reader.rs` `#[cfg(test)]` | 单元测试 | 36 | `use super::*` 访问 `pub(crate)` 和私有项 |
 | `pty/spawn.rs` `#[cfg(test)]` | 单元测试 | 48（`conpty_custom` 内 28 + 顶层 20） | `conpty_custom` 子模块 + 顶层 `mod tests`（validate_spawn_request/SEC-08/Job Object 纯逻辑） |
 | `pty/shell.rs` `#[cfg(test)]` | 单元测试 | 20 | `use super::*` |
-| `tests/pty_integration_tests.rs` | 集成测试 | 8 | 仅能访问 `pub` API |
+| `tests/pty_integration_tests.rs` | 集成测试 | 7 | 仅能访问 `pub` API |
 | `state.rs` `#[cfg(test)]` | 单元测试 | 32 | sandbox 路径校验 + ring buffer 纯函数测试 |
 
 ### 单元测试组织
@@ -277,7 +277,7 @@ fn spawn_cmd() -> (Box<dyn MasterPty>, Box<dyn Child>, Box<dyn Read>, Box<dyn Wr
 }
 ```
 
-测试覆盖（8 条）：echo roundtrip（写入 `echo marker` → 读取验证 marker 出现）、resize 应用（spawn → resize 30×100 → `get_size()` 验证）、kill 无孤儿（spawn → kill → `try_wait()` 验证子进程退出）、自定义 ConPTY spawn（仅 Windows CI runner）、shell 集成脚本 OSC 序列验证、reattach 回放（E1）、env 注入（COLORTERM/TERM/TERM_PROGRAM）等。
+测试覆盖（7 条）：echo roundtrip（写入 `echo marker` → 读取验证 marker 出现）、resize 应用（spawn → resize 30×100 → `get_size()` 验证）、kill 无孤儿（spawn → kill → `try_wait()` 验证子进程退出）、自定义 ConPTY spawn（仅 Windows CI runner）、shell 集成脚本 OSC 序列验证、会话隔离、env 注入（COLORTERM/TERM/TERM_PROGRAM）等。
 
 ### 运行约束
 
