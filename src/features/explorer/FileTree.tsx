@@ -1,13 +1,20 @@
-// FileTree.tsx — 递归文件树组件
+// FileTree.tsx — 文件树组件（FE-30 虚拟化渲染）
 //
 // 职责：
-// - 递归渲染文件/文件夹树
+// - 扁平化可见节点数组 + 固定行高 + overscan 滚动窗口渲染（零新依赖手实现虚拟化，FE-30）
 // - 单击选中 + 双击打开文件
 // - 右键菜单 CRUD
 // - git 状态色应用于文件名
 // - 键盘快捷键（Del/Enter/F2）经 ExplorerPanel → ShortcutRegistry 派发
+//
+// 虚拟化设计（FE-30）：
+// - 整棵树按展开状态深度优先扁平化为可见行数组（每行固定 24px），
+//   原「每层递归创建 FileTree 实例」的结构由一次扁平化取代——窗口切片在顶层一次完成。
+// - 滚动容器为组件自持 div（height:100% + overflowY:auto），窗口切片以
+//   scrollTop / 容器高度计算，上下各 OVERSCAN 行缓冲，content 用 paddingTop/Bottom 占位保持滚动条正确。
+// - 容器高度未测得（clientHeight === 0，如 jsdom 测试环境/布局异常）时回退全量渲染，保证功能可用。
 
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useMemo, useRef, useLayoutEffect } from "react";
 import { FileIcon } from "./FileIcon";
 import type { TreeNode } from "./useFileTree";
 import {
@@ -45,6 +52,10 @@ const ARROW_WIDTH = 12;
 const ICON_MARGIN = 4;
 /** 文件图标视觉宽度 (px)，对齐 FileIcon 渲染后的实际占用宽度 */
 const ICON_WIDTH = 14;
+/** 节点行高 (px)——与 TreeNodeRow 的 height 一致（UI-305 紧凑列表档）；虚拟化按此行高计算窗口 */
+const ROW_HEIGHT = 24;
+/** 滚动窗口上下 overscan 行数（缓冲渲染，防快速滚动白屏） */
+const OVERSCAN = 8;
 
 // ---- 右键菜单 ----
 
@@ -201,7 +212,7 @@ const TreeNodeRow: React.FC<{
         userSelect: "none",
         fontSize: 13,
         color: EXPLORER_COLORS.fg,
-        height: 24,
+        height: ROW_HEIGHT,
         whiteSpace: "nowrap",
         // 选中态优先于 hover（渲染判定 isSelected 先于 hovered）
         background: isSelected
@@ -259,6 +270,84 @@ const TreeNodeRow: React.FC<{
     </div>
   );
 };
+
+// ---- FE-30 虚拟化：扁平化可见行 ----
+
+/** 扁平化后的可见行（节点行 + 新建输入框行；重命名是替换节点行，不额外占位） */
+interface FlatRow {
+  /** React key（节点行 = 节点路径；输入框行 = 路径 + 类型后缀） */
+  key: string;
+  /** 节点行时为 TreeNode，输入框行为 null */
+  node: TreeNode | null;
+  /** 行缩进深度（输入框行 = 父节点深度 + 1） */
+  depth: number;
+  /** 行类型 */
+  kind: "node" | "newFile" | "newFolder";
+  /** 新建输入框行的父目录路径（node 行为 undefined） */
+  parentPath?: string;
+}
+
+/**
+ * 深度优先扁平化可见节点数组：节点行 → 新建文件/文件夹输入框行 → 展开的子节点。
+ * 取代原「每层递归创建 FileTree 实例」的结构——虚拟化窗口在顶层一次切片。
+ */
+function flattenVisible(
+  nodes: TreeNode[],
+  depth: number,
+  newFileName: string | null,
+  newFolderName: string | null,
+  rows: FlatRow[] = [],
+): FlatRow[] {
+  for (const node of nodes) {
+    rows.push({ key: node.entry.path, node, depth, kind: "node" });
+    if (newFileName === node.entry.path) {
+      rows.push({
+        key: `${node.entry.path}::new-file`,
+        node: null,
+        depth: depth + 1,
+        kind: "newFile",
+        parentPath: node.entry.path,
+      });
+    }
+    if (newFolderName === node.entry.path) {
+      rows.push({
+        key: `${node.entry.path}::new-folder`,
+        node: null,
+        depth: depth + 1,
+        kind: "newFolder",
+        parentPath: node.entry.path,
+      });
+    }
+    if (node.expanded && node.children.length > 0) {
+      flattenVisible(node.children, depth + 1, newFileName, newFolderName, rows);
+    }
+  }
+  return rows;
+}
+
+/** 内联输入框行容器样式（重命名/新建共用，行高与节点行一致） */
+const inlineInputRowStyle: React.CSSProperties = {
+  display: "flex",
+  paddingRight: 8,
+  height: ROW_HEIGHT,
+  alignItems: "center",
+};
+
+/** 内联输入框样式（UI-808：input 键盘可达，去 outline:none 让全局 :focus-visible 环生效） */
+const inlineInputStyle: React.CSSProperties = {
+  flex: 1,
+  background: INPUT_BG,
+  border: `1px solid ${FOCUS_BORDER}`,
+  color: SIDEBAR_FG,
+  fontSize: 13,
+  padding: "0 4px",
+  borderRadius: 8, // GL-03：输入框圆角收敛 2→8
+  minWidth: 0,
+};
+
+/** 内联输入框行的缩进（对齐文件名文本起始位置） */
+const inputRowPaddingLeft = (depth: number) =>
+  PADDING_BASE + depth * INDENT + ARROW_WIDTH + ICON_MARGIN + ICON_WIDTH;
 
 // ---- 主组件 ----
 
@@ -456,11 +545,8 @@ export const FileTree: React.FC<FileTreeProps> = ({
       {rootPath && newFileName === rootPath && (
         <div
           style={{
-            display: "flex",
-            paddingLeft: PADDING_BASE + (depth + 1) * INDENT + ARROW_WIDTH + ICON_MARGIN + ICON_WIDTH,
-            paddingRight: 8,
-            height: 24,
-            alignItems: "center",
+            ...inlineInputRowStyle,
+            paddingLeft: inputRowPaddingLeft(depth + 1),
           }}
         >
           <input
@@ -475,28 +561,15 @@ export const FileTree: React.FC<FileTreeProps> = ({
               if (e.key === "Escape") setNewFileName(null);
             }}
             autoFocus
-            style={{
-              flex: 1,
-              background: INPUT_BG,
-              border: `1px solid ${FOCUS_BORDER}`,
-              color: SIDEBAR_FG,
-              fontSize: 13,
-              padding: "0 4px",
-              // UI-808：input 键盘可达，去 outline:none 让全局 :focus-visible 环生效
-              borderRadius: 8, // GL-03：输入框圆角收敛 2→8
-              minWidth: 0,
-            }}
+            style={inlineInputStyle}
           />
         </div>
       )}
       {rootPath && newFolderName === rootPath && (
         <div
           style={{
-            display: "flex",
-            paddingLeft: PADDING_BASE + (depth + 1) * INDENT + ARROW_WIDTH + ICON_MARGIN + ICON_WIDTH,
-            paddingRight: 8,
-            height: 24,
-            alignItems: "center",
+            ...inlineInputRowStyle,
+            paddingLeft: inputRowPaddingLeft(depth + 1),
           }}
         >
           <input
@@ -513,187 +586,168 @@ export const FileTree: React.FC<FileTreeProps> = ({
               if (e.key === "Escape") setNewFolderName(null);
             }}
             autoFocus
-            style={{
-              flex: 1,
-              background: INPUT_BG,
-              border: `1px solid ${FOCUS_BORDER}`,
-              color: SIDEBAR_FG,
-              fontSize: 13,
-              padding: "0 4px",
-              // UI-808：input 键盘可达，去 outline:none 让全局 :focus-visible 环生效
-              borderRadius: 8, // GL-03：输入框圆角收敛 2→8
-              minWidth: 0,
-            }}
+            style={inlineInputStyle}
           />
         </div>
       )}
     </>
   );
 
-  // 公共树节点渲染（depth > 0 直接返回，depth === 0 套 wrapper）
-  const treeContent = (
-    <>
-      {nodes.map((node) => (
-        <React.Fragment key={node.entry.path}>
-          {/* 行 */}
-          {renamingPath === node.entry.path ? (
-            <div
-              style={{
-                display: "flex",
-                paddingLeft: PADDING_BASE + depth * INDENT + ARROW_WIDTH + ICON_MARGIN + ICON_WIDTH,
-                paddingRight: 8,
-                height: 24,
-                alignItems: "center",
-              }}
-            >
-              <input
-                ref={renameInputRef}
-                defaultValue={renameValue}
-                onBlur={confirmRename}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") confirmRename();
-                  if (e.key === "Escape") {
-                    onRenameCancel();
-                  }
-                }}
-                autoFocus
-                style={{
-                  flex: 1,
-                  background: INPUT_BG,
-                  border: `1px solid ${FOCUS_BORDER}`,
-                  color: SIDEBAR_FG,
-                  fontSize: 13,
-                  padding: "0 4px",
-                  // UI-808：input 键盘可达，去 outline:none 让全局 :focus-visible 环生效
-                  borderRadius: 8, // GL-03：输入框圆角收敛 2→8
-                  minWidth: 0,
-                }}
-              />
-            </div>
-          ) : (
-            <TreeNodeRow
-              node={node}
-              depth={depth}
-              gitStatusMap={gitStatusMap}
-              onToggleExpand={onToggleExpand}
-              onOpenFile={onOpenFile}
-              onContextMenu={(e) => {
-                if (node.entry.isDir) {
-                  folderContextMenu(e, node);
-                } else {
-                  fileContextMenu(e, node);
-                }
-              }}
-              isSelected={selectedPath === node.entry.path}
-              onSelect={onSelect}
-            />
-          )}
+  // ---- FE-30 虚拟化：扁平化 + 滚动窗口 ----
 
-          {/* 新建文件输入框 */}
-          {newFileName === node.entry.path && (
-            <div
-              style={{
-                display: "flex",
-                paddingLeft: PADDING_BASE + (depth + 1) * INDENT + ARROW_WIDTH + ICON_MARGIN + ICON_WIDTH,
-                paddingRight: 8,
-                height: 24,
-                alignItems: "center",
-              }}
-            >
-              <input
-                placeholder="文件名"
-                onBlur={(e) => confirmNewFile(node.entry.path, e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter")
-                    confirmNewFile(
-                      node.entry.path,
-                      (e.target as HTMLInputElement).value,
-                    );
-                  if (e.key === "Escape") setNewFileName(null);
-                }}
-                autoFocus
-                style={{
-                  flex: 1,
-                  background: INPUT_BG,
-                  border: `1px solid ${FOCUS_BORDER}`,
-                  color: SIDEBAR_FG,
-                  fontSize: 13,
-                  padding: "0 4px",
-                  // UI-808：input 键盘可达，去 outline:none 让全局 :focus-visible 环生效
-                  borderRadius: 8, // GL-03：输入框圆角收敛 2→8
-                  minWidth: 0,
-                }}
-              />
-            </div>
-          )}
+  // 深度优先扁平化可见行（含新建输入框行；重命名是替换行不占位）
+  const rows = useMemo(
+    () => flattenVisible(nodes, depth, newFileName, newFolderName),
+    [nodes, depth, newFileName, newFolderName],
+  );
 
-          {/* 新建文件夹输入框 */}
-          {newFolderName === node.entry.path && (
-            <div
-              style={{
-                display: "flex",
-                paddingLeft: PADDING_BASE + (depth + 1) * INDENT + ARROW_WIDTH + ICON_MARGIN + ICON_WIDTH,
-                paddingRight: 8,
-                height: 24,
-                alignItems: "center",
-              }}
-            >
-              <input
-                placeholder="文件夹名"
-                onBlur={(e) =>
-                  confirmNewFolder(node.entry.path, e.target.value)
-                }
-                onKeyDown={(e) => {
-                  if (e.key === "Enter")
-                    confirmNewFolder(
-                      node.entry.path,
-                      (e.target as HTMLInputElement).value,
-                    );
-                  if (e.key === "Escape") setNewFolderName(null);
-                }}
-                autoFocus
-                style={{
-                  flex: 1,
-                  background: INPUT_BG,
-                  border: `1px solid ${FOCUS_BORDER}`,
-                  color: SIDEBAR_FG,
-                  fontSize: 13,
-                  padding: "0 4px",
-                  // UI-808：input 键盘可达，去 outline:none 让全局 :focus-visible 环生效
-                  borderRadius: 8, // GL-03：输入框圆角收敛 2→8
-                  minWidth: 0,
-                }}
-              />
-            </div>
-          )}
+  // 滚动视口状态：scrollTop + 容器高度。
+  // height === 0（未测得：jsdom 测试环境/布局异常）→ 窗口退化为全量渲染兜底。
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [viewport, setViewport] = useState({ scrollTop: 0, height: 0 });
 
-          {/* 递归渲染子节点 */}
-          {node.expanded && node.children.length > 0 && (
-            <FileTree
-              nodes={node.children}
-              depth={depth + 1}
-              gitStatusMap={gitStatusMap}
-              onToggleExpand={onToggleExpand}
-              onOpenFile={onOpenFile}
-              onOpenInTerminal={onOpenInTerminal}
-              onRename={onRename}
-              onDelete={onDelete}
-              onNewFile={onNewFile}
-              onNewFolder={onNewFolder}
-              selectedPath={selectedPath}
-              onSelect={onSelect}
-              renamingPath={renamingPath}
-              renameValue={renameValue}
-              onRenameStart={onRenameStart}
-              onRenameCancel={onRenameCancel}
-            />
-          )}
-        </React.Fragment>
-      ))}
+  // 初始同步测量 + ResizeObserver 跟踪容器高度变化；
+  // 卸载时 disconnect（侧栏视图卸载，S12/FE-21 兼容——无残留订阅）。
+  // deps 含 hasList：根目录异步加载完成前 nodes 为空、容器尚未渲染，
+  // 首次挂载时测量会落空——容器出现后须重跑测量，虚拟化才会生效。
+  const hasList = nodes.length > 0;
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    // 容器重建（hasList false→true，如 rootPath 切换/加载失败重试）时重置滚动位置，
+    // 避免残留 scrollTop 造成新树窗口偏移（滚动条与内容错位）
+    setViewport((v) => (v.scrollTop === 0 ? v : { ...v, scrollTop: 0 }));
+    const measure = () => {
+      const h = el.clientHeight;
+      setViewport((v) => (v.height === h ? v : { ...v, height: h }));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [hasList]);
 
-      {/* 右键菜单 */}
-      <ContextMenu state={contextMenu} onClose={closeContextMenu} />
-    </>
+  const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    const st = e.currentTarget.scrollTop;
+    setViewport((v) => (v.scrollTop === st ? v : { ...v, scrollTop: st }));
+  }, []);
+
+  // 可见行切片：start/end 各含 OVERSCAN 缓冲行，clamp 到 [0, total]（树切换后 scrollTop 可能越界）
+  const total = rows.length;
+  const height = viewport.height;
+  const start =
+    height > 0
+      ? Math.min(Math.max(0, Math.floor(viewport.scrollTop / ROW_HEIGHT) - OVERSCAN), total)
+      : 0;
+  const end =
+    height > 0
+      ? Math.min(total, Math.ceil((viewport.scrollTop + height) / ROW_HEIGHT) + OVERSCAN)
+      : total;
+  const visibleRows = rows.slice(start, end);
+
+  /** 点击虚拟化内容区空白（padding 占位区域）→ 取消选中（与原「点击树下方空白取消选中」一致） */
+  const handleContentBlankClick = useCallback(
+    (e: React.MouseEvent) => {
+      if (e.target === e.currentTarget) onSelect(null);
+    },
+    [onSelect],
+  );
+
+  // 单行渲染：新建输入框行 / 重命名输入框行（替换节点行）/ 节点行
+  const renderRow = (row: FlatRow) => {
+    // 新建文件/文件夹输入框行（父节点行之后追加）
+    if (row.kind !== "node") {
+      const isFile = row.kind === "newFile";
+      const confirm = isFile ? confirmNewFile : confirmNewFolder;
+      return (
+        <div
+          key={row.key}
+          style={{
+            ...inlineInputRowStyle,
+            paddingLeft: inputRowPaddingLeft(row.depth),
+          }}
+        >
+          <input
+            placeholder={isFile ? "文件名" : "文件夹名"}
+            onBlur={(e) => confirm(row.parentPath!, e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter")
+                confirm(row.parentPath!, (e.target as HTMLInputElement).value);
+              if (e.key === "Escape")
+                (isFile ? setNewFileName : setNewFolderName)(null);
+            }}
+            autoFocus
+            style={inlineInputStyle}
+          />
+        </div>
+      );
+    }
+    const node = row.node!;
+    // 重命名输入框行（替换节点行，不额外占位）
+    if (renamingPath === node.entry.path) {
+      return (
+        <div
+          key={row.key}
+          style={{
+            ...inlineInputRowStyle,
+            paddingLeft: inputRowPaddingLeft(row.depth),
+          }}
+        >
+          <input
+            ref={renameInputRef}
+            defaultValue={renameValue}
+            onBlur={confirmRename}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") confirmRename();
+              if (e.key === "Escape") {
+                onRenameCancel();
+              }
+            }}
+            autoFocus
+            style={inlineInputStyle}
+          />
+        </div>
+      );
+    }
+    return (
+      <TreeNodeRow
+        key={row.key}
+        node={node}
+        depth={row.depth}
+        gitStatusMap={gitStatusMap}
+        onToggleExpand={onToggleExpand}
+        onOpenFile={onOpenFile}
+        onContextMenu={(e) => {
+          if (node.entry.isDir) {
+            folderContextMenu(e, node);
+          } else {
+            fileContextMenu(e, node);
+          }
+        }}
+        isSelected={selectedPath === node.entry.path}
+        onSelect={onSelect}
+      />
+    );
+  };
+
+  // 虚拟化列表：自持滚动容器 + padding 占位（top/bottom spacer 用容器 padding 而非子 div——
+  // 点击占位区域命中 content 自身，可触发空白取消选中）
+  const virtualList = (
+    <div
+      ref={scrollRef}
+      onScroll={handleScroll}
+      style={{ height: "100%", overflowY: "auto", overflowX: "hidden" }}
+    >
+      <div
+        onClick={handleContentBlankClick}
+        style={{
+          paddingTop: start * ROW_HEIGHT,
+          paddingBottom: (total - end) * ROW_HEIGHT,
+        }}
+      >
+        {visibleRows.map(renderRow)}
+      </div>
+    </div>
   );
 
   // 顶层（depth === 0）：wrapper div 捕获空白区域右键 + 单击空白取消选中
@@ -731,10 +785,13 @@ export const FileTree: React.FC<FileTreeProps> = ({
           </div>
         )}
         {renderRootInlineInput()}
-        {treeContent}
+        {nodes.length > 0 && virtualList}
+
+        {/* 右键菜单 */}
+        <ContextMenu state={contextMenu} onClose={closeContextMenu} />
       </div>
     );
   }
 
-  return treeContent;
+  return virtualList;
 };
