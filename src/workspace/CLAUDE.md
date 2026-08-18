@@ -10,6 +10,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **多 Dockview 实例（非单实例 + tab 切换）**：每个操作页面拥有独立 `<DockviewReact>` 实例。页面切换通过 CSS `display:none/block`，终端不销毁。根因：xterm.js 不支持二次 `open()`（Issue #4978），此架构从根本上解决 H6（终端跨页面存活）。
 
+**FE-01 豁免登记（多实例内存/DOM 线性增长的既定接受）**：保持多实例架构不变（H6 终端跨页面存活 + xterm.js 不可二次 `open()` 是硬约束），仅加**页面总数上限 `MAX_PAGES = 20`**（`stores/projects.ts`，`addPage` 超限拒绝 + toast 告警）缓解无界增长。豁免登记见 ADR-0001 配套豁免表，改动架构前必读。
+
 **惰性页面初始化**：`initializedPages` Set 控制哪些页面挂载了 `PageDockview`。未初始化的页面不渲染 DOM，切换到新页面时才触发 `ensurePageInitialized`。
 
 **fromJSON 恢复守卫**：`restoreGuardRef` 阻止 `onDidLayoutChange` 在程序化恢复布局时向 store 写回。`onDidLayoutFromJSON` 事件中置 true，`setTimeout(0)` 异步复位——因为 Dockview 会在 JSON 恢复后立即触发 layout change。
@@ -46,7 +48,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `PageDockviewHost.tsx` | 单页面 Dockview 实例宿主组件（React.memo 包裹）：**DefaultTab（扁平页签，TAB-01/02/03）**、**Watermark（空态统一，GL-05）**、**RightHeader（「+」钮 22px，TAB-04）**、ContextMenu（UI-802 视觉统一：项 28px 圆角 5/hover SECONDARY_BG/危险项 ERROR_FG/容器 SIDEBAR_BG + 0.09 描边 `<style>` 注入）、布局恢复 |
 | `layoutSerde.ts` | 布局序列化/反序列化：`saveLayout`（`api.toJSON()`）、`loadLayout`（`api.fromJSON()` + 旧格式修补 + 白名单过滤） |
 | `titleManager.ts` | 页签标题集中管理：terminal-N 编号、文件标题冲突检测、handleSaveAs、onDeletePage(pageId)：清理该页面 registry 和 counters 条目 |
-| `pageApis.ts` | 页面 API 注册表 + 共享切换：模块级 `Map<pageId, DockviewApi>` + `registerPageApi`/`unregisterPageApi`/`getPageApi` + `switchToPageShared(pageId)`（setProjectRoot 前置→setActivePage→重指向 `__dockviewApi`）+ `switchToPageAndFocus(pageId, panelId)`（切换后轮询聚焦面板）+ `openHooksConfigPanel(pageId)`（轮询 API 就绪 → 同页单例 addPanel，C13-7；活动栏「配置」钮经 `hooksConfig/openHooksConfig.ts` 消费，先切页后调用）+ `findPanelForSession(cliId, sessionId)`/`findPageIdForPanelId(panelId)`（FE-09 会话/面板反查：复合键 `cliId\|sessionId` 精确匹配 → 终端面板；panelId → 属主 pageId，B14 前缀匹配 + parseTerminalPageId 兜底） |
+| `pageApis.ts` | 页面 API 注册表 + 共享切换：模块级 `Map<pageId, DockviewApi>` + `registerPageApi`/`unregisterPageApi`/`getPageApi` + `switchToPageShared(pageId)`（setProjectRoot 前置→setActivePage→重指向 `__dockviewApi`）+ `switchToPageAndFocus(pageId, panelId, signal?)`（切换后轮询聚焦面板；**FE-26：可选 `AbortSignal`**——中止后轮询静默退出（不 focus 不 warn），导航树会话行点击传 NavTree 模块级 Controller（再次点击/卸载 abort））+ `openHooksConfigPanel(pageId)`（轮询 API 就绪 → 同页单例 addPanel，C13-7；活动栏「配置」钮经 `hooksConfig/openHooksConfig.ts` 消费，先切页后调用）+ `findPanelForSession(cliId, sessionId)`/`findPageIdForPanelId(panelId)`（FE-09 会话/面板反查：复合键 `cliId\|sessionId` 精确匹配 → 终端面板；panelId → 属主 pageId，B14 前缀匹配 + parseTerminalPageId 兜底） |
 | `TerminalRenameDialog.tsx` | 终端页签重命名弹窗（F8）：自绘模态（照 SessionActionDialog 模式）——遮罩 + 居中卡片 + 输入框 + 确定/取消；Enter 确认（trim）/空名行内错误拒绝/Esc/遮罩/取消按钮；纯受控展示组件，零 IPC |
 
 > **panelRegistry.ts 已提取到 `src/panelRegistry.ts`（已提取为共享配置层）**：面板注册表是全局架构组件，被 workspace、explorer、测试等多方引用，不应埋于 workspace 子路径。
@@ -79,8 +81,8 @@ NavTree.switchToPage(projectId, pageId)
   → React 重渲染，目标页面 display:block，其余 display:none
   → window.__dockviewApi 重指向活跃页面（handlePageApiReady 兜底未初始化页面）
 
-// toast/导航树会话行点击等调用方走 switchToPageAndFocus(pageId, panelId)
-// → switchToPageShared → 有限轮询（100ms×50）等待面板挂载 → panel.focus()
+// toast/导航树会话行点击等调用方走 switchToPageAndFocus(pageId, panelId, signal?)
+// → switchToPageShared → 有限轮询（100ms×50，FE-26：signal.aborted 即停）等待面板挂载 → panel.focus()
 // 活动栏「配置」钮 → openHooksConfigFromActivityBar → switchToPageShared → openHooksConfigPanel(pageId)
 // → 轮询 getPageApi 就绪 → getPanel 查重 focus / addPanel（C13-7 同页单例）
 ```
@@ -122,7 +124,7 @@ Workspace 使用 Allotment 实现三栏布局（旧为常驻四栏，侧栏视�
 - **`useSideBar`** (`stores/sideBar.ts`)：侧栏视图状态（zones/open/width/splitRatio，NAV-07 默认三槽），Workspace 订阅 `open`/`width` 控制 pane2 可见性和宽度
 - **`panelRegistry`**：被 Workspace 传给 DockviewReact 的 `components` prop
 - **`ActivityBar`** (`features/sideViews/ActivityBar.tsx`)：活动栏组件，渲染于 pane1，消费 `sideViewRegistry` + `useSideBar`
-- **`SideBarArea`** (`features/sideViews/SideBarArea.tsx`)：侧栏区组件，渲染于 pane2，通过 `sideViewDefs` 注册的三条视图（nav/explorer/commit）以 display:none 保挂载切换
+- **`SideBarArea`** (`features/sideViews/SideBarArea.tsx`)：侧栏区组件，渲染于 pane2，通过 `sideViewDefs` 注册的三条视图（nav/explorer/commit）**按需挂载切换（FE-21：隐藏视图卸载不保挂载，状态丢失语义 ADR-0001 已接受）**
 - **NavTree**（`features/navTree/NavTree.tsx`）：统一导航树（项目/页面/活跃会话/历史折叠节点），注册为 `nav` 视图（NAV-05）；页面切换入口 + CRUD 迁自 SidebarTree（NAV-06）
 - **ExplorerPanel**（文件浏览器）：活跃项目的文件树，注册为 `explorer` 视图。按钮跨区拖拽导致视图跨 pane 移动时组件重建（ADR-0001）
 
@@ -179,7 +181,7 @@ Workspace 使用 Allotment 实现三栏布局（旧为常驻四栏，侧栏视�
 
 ### 面板注册表测试
 
-`panel-registry.test.ts`（25 用例）：
+`panel-registry.test.ts`（29 用例）：
 - 三个面板注册验证（terminal/editor/htmlviewer）
 - `PANEL_TYPES` 常量完整性 + `isValidPanelType` type predicate（大小写敏感）
 - `FILE_PANEL_TYPES` Set 语义（编辑器 + 文件预览面板）
@@ -192,8 +194,11 @@ Workspace 使用 Allotment 实现三栏布局（旧为常驻四栏，侧栏视�
 
 ### 页面 API 与 PageDockviewHost 测试（WRK-01/02）
 
-`pageapis.test.ts`（11 用例）：
-- `registerPageApi`/`unregisterPageApi`/`getPageApi` 注册表 + `switchToPageShared`（setProjectRoot 前置）重指向不变量 + `switchToPageAndFocus` 轮询聚焦
+`pageapis.test.ts`（19 用例）：
+- `registerPageApi`/`unregisterPageApi`/`getPageApi` 注册表 + `switchToPageShared`（setProjectRoot 前置）重指向不变量 + `switchToPageAndFocus` 轮询聚焦（**FE-26：AbortSignal 中止轮询**、FE-09 会话反查）
+
+`workspace-callback-cache.test.tsx`（3 用例，FE-33）：
+- `pageCallbacksRef` 按 pageId 惰性创建 + 缓存（getOrCreate）——同一 pageId 跨渲染回调引用不变，不同 pageId 隔离，页面增删不影响既有回调引用
 
 `workspace-page-dockview.test.tsx`（7 用例，WRK-01）：
 - 渲染真实 `PageDockviewHost`（非 stub）：`handleReady` 布局恢复、restoreGuardRef 写回抑制、onDidRemovePanel 清理
@@ -204,9 +209,9 @@ Workspace 使用 Allotment 实现三栏布局（旧为常驻四栏，侧栏视�
 `workspace-header-actions.test.tsx`（23 用例）：
 - 分屏 + 按钮 & 右键菜单 addPanel 行为：非聚焦分屏点击 + 按钮或右键"新建终端"时，新面板创建在点击的分屏而非聚焦分屏。直测 `createRightHeader`/`createGetContextMenu` 工厂函数，不渲染完整 Dockview 树；C5-C10 覆盖重命名项（F8：终端 7 项结构/非终端 5 项/action 派发 `onRenameRequest(panel)`/agentSession 存在 disabled，`TerminalRegistry._reset()` 隔离）；C11 覆盖 FE-04（连续两次构建菜单不消耗编号——执行新建仍从 terminal-p1-0 起，连续递增不重复）
 
-新增测试文件（F8）：`terminal-rename-apply.test.ts`（5 用例，直测 `applyRename` 纯函数）+ `terminal-rename-dialog.test.tsx`（13 用例，照 agent-history-action-dialog 模式）
+新增测试文件（F8）：`terminal-rename-apply.test.ts`（5 用例，直测 `applyRename` 纯函数）+ `terminal-rename-dialog.test.tsx`（14 用例，照 agent-history-action-dialog 模式）
 
-`layout-switch.test.ts`（7 用例）+ `startup-restore.test.ts`（7 用例）：
+`layout-switch.test.ts`（7 用例）+ `startup-restore.test.ts`（8 用例）：
 - 页面切换/启动恢复流程（`App.tsx` 启动恢复 lastPage：先 `await setProjectRoot` 再 `setActivePage`，DBG-6）
 
 ### 多实例与 E2E 标记测试

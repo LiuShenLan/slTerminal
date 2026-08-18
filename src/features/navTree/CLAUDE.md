@@ -22,7 +22,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 展开状态**组件内维护**（不进 store）：`expanded`（项目/页面）与 `expandedHist`（历史节点）两个 Set，**默认空 = 全部收起**
 - **NAV-10 契约**：历史节点**常驻项目下**（不随项目展开态隐藏）——计数 pill 与历史行入口恒可见；测试辅助 `expandTo` 按点击展开驱动。历史节点外包 `childrenStyle` 容器（与页面同级缩进，人工验证问题 2）——容器常驻（不随展开态隐藏），项目容器 children 收起时 = [项目行, 历史容器]、展开时 = [项目行, 页面容器, 历史容器]（E2E agent.e2e.ts 计数判定兼容）
 - **搜索**：query 子串不区分大小写过滤项目/页面/会话名；父节点因子命中而显示（match 链）；**查询非空时命中链自动展开**（searching 覆盖手动展开态）
-- **挂载即扫描历史**（NAV-10：历史计数 pill 首屏可见）+ 历史节点**展开时重扫**（照原 agentHistory 历史区展开刷新语义；`useAgentHistory` generation 防竞兜底）
+- **挂载即扫描历史**（NAV-10：历史计数 pill 首屏可见）；历史节点**展开不重复 scan（FE-19）**——BE-19 后端 (目录 mtime, 文件数) 缓存命中复用不重复读盘；显式刷新/恢复完成场景经 `scanAgentHistory(cliId, force=true)` 强制重扫（`useAgentHistory` generation 防竞兜底）
 
 ### 行结构契约（UI-501/502/503，navStyles.ts）
 
@@ -52,7 +52,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 |------|------|
 | `index.ts` | barrel export：NavTree + makeEmptyLayout + useNavTree + 行组件 + NavContextMenu + 类型 |
 | `NavTree.tsx` | 主组件（`nav` 视图，NAV-05）：顶部分组标题「导航」（11px 全大写 0.08em fg-3）+ 刷新钮（重扫历史）+ 搜索框（INPUT_BG 底圆角 5、focus 描边 FOCUS_BORDER）+ 树区 + 底部「添加项目」钮；右键菜单（项目/页面/历史行共用 NavContextMenu）+ 运行中历史会话动作弹窗（SessionActionDialog）；**`makeEmptyLayout()` 导出（迁自 SidebarTree）**；props 可选（switchToPage/onDeletePage 缺省回退 store 级操作，NAV-10 契约：独立渲染 `<NavTree />` 无 props） |
-| `useNavTree.ts` | 数据 hook：tree 模型派生（搜索过滤 + 归属归组 + 页面级 active 会话标记）+ expanded/expandedHist 展开集合 + `isCwdUnderProject` 纯函数 |
+| `useNavTree.ts` | 数据 hook：tree 模型派生（搜索过滤 + 归属归组 + 页面级 active 会话标记）+ expanded/expandedHist 展开集合 + `isCwdUnderProject` 纯函数；**FE-16 历史归属索引**：规范化 rootPath → projectId 一次建表（`rootPathIndex` Map，O(1) 查表替代 O(N×M) 逐会话前缀匹配，`projectIdForCwd` 沿 cwd 逐级上溯查表——最深前缀命中，嵌套项目归子项；useMemo 依赖精确化——只依赖 sessions + 索引，项目页增删不重算归组）；**FE-19**：`refresh()` 注释登记 force 语义透传（`scanAgentHistory(cliId, force)`） |
 | `NavProjectRow.tsx` | 项目行（NAV-09/UI-505）：500 字重 + 彩色文件夹图标（六色盘蓝硬编码例外）+「当前」pill + 页面计数 pill |
 | `NavPageRow.tsx` | 操作页面行（UI-501）：chevron/IconPage 图标/名称/meta + 内联重命名（迁自 SidebarTree PageRow） |
 | `NavSessionRow.tsx` | 活跃会话行（NAV-02/UI-504）：StatusDot + logo + 迷你用量条 + 百分比，点击聚焦终端 |
@@ -69,12 +69,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 测试模式
 
-L2 测试位于 `src/__tests__/`：`nav-tree.test.tsx`（27 用例）+ `nav-tree-history.test.tsx`（8 用例）（用例数见 `.claude/test-inventory.md`；原 `sidebar-actions.test.ts` 语义于 NAV-08 迁入）。
+L2 测试位于 `src/__tests__/`：`nav-tree.test.tsx`（30 用例）+ `nav-tree-history.test.tsx`（11 用例）（用例数见 `.claude/test-inventory.md`；原 `sidebar-actions.test.ts` 语义于 NAV-08 迁入）。
 
 - **NAV-10 契约辅助**：测试按点击展开驱动（`expandTo`），断言基于最终渲染而非内部状态
 - **数据属性契约（写死）**：容器 `data-e2e="nav-tree"`；行 `data-e2e="nav-row-project"` / `nav-row-page"` / `nav-row-session"`；历史节点 `data-e2e="nav-history-node"`（历史行须嵌套于其内——测试经 `node.querySelectorAll` 定位行内容）
-- `nav-tree.test.tsx`（27）：树渲染（项目/页面/会话/历史节点层级）、展开折叠（默认收起/搜索自动展开）、搜索过滤（子串/父节点因子命中显示/无结果空态）、页面切换与选中态、会话行（StatusDot/迷你用量条百分比/logo）、CRUD（添加项目/新建页面/删除项目 confirm/删除页面/内联重命名）、右键菜单（项结构/危险项/「打开 Hooks 配置」项不存在）、空态、**页面行 IconPage 图标（svg aria-hidden + 14px fg-3）**、**历史session 同级缩进（childrenStyle 容器：marginLeft 15 + 引导线、位于页面容器之后、收起常驻）**
-- `nav-tree-history.test.tsx`（8）：历史节点常驻/计数 pill/展开重扫/单行行渲染（StatusDot 恒渲染 done 灰档/logo/title tooltip）/双击恢复/右键菜单（复制/分支/删除 confirmDialog）/历史空态；节点文案断言「历史session」（人工验证问题 2）
+- `nav-tree.test.tsx`（30）：树渲染（项目/页面/会话/历史节点层级）、展开折叠（默认收起/搜索自动展开）、搜索过滤（子串/父节点因子命中显示/无结果空态）、页面切换与选中态、会话行（StatusDot/迷你用量条百分比/logo）、CRUD（添加项目/新建页面/删除项目 confirm/删除页面/内联重命名）、右键菜单（项结构/危险项/「打开 Hooks 配置」项不存在）、空态、**页面行 IconPage 图标（svg aria-hidden + 14px fg-3）**、**历史session 同级缩进（childrenStyle 容器：marginLeft 15 + 引导线、位于页面容器之后、收起常驻）**
+- `nav-tree-history.test.tsx`（11）：历史节点常驻/计数 pill/展开重扫/单行行渲染（StatusDot 恒渲染 done 灰档/logo/title tooltip）/双击恢复/右键菜单（复制/分支/删除 confirmDialog）/历史空态；节点文案断言「历史session」（人工验证问题 2）；**FE-19 扫描时机（挂载即扫一次 + 展开不重复 scan + 刷新钮显式重扫）**；**FE-16 历史归属索引（嵌套 rootPath 最深前缀命中归子项，根项目不误含）**
 
 ### 运行
 

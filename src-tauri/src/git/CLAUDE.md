@@ -10,7 +10,7 @@ Git 版本控制模块——基于 `git2` crate，封装 `git_status`（文件�
 
 | 文件 | 职责 |
 |------|------|
-| `mod.rs` | 5 条 Tauri 命令内核（`git_status_impl`/`git_diff_impl`/`git_file_at_head_impl`/`git_rollback_impl`/`git_unstage_impl`）+ `status_to_str` 状态映射 + `get_or_open_repo` 仓库缓存 |
+| `mod.rs` | 5 条 Tauri 命令内核（`git_status_impl`/`git_diff_impl`/`git_file_at_head_impl`/`git_rollback_impl`/`git_unstage_impl`）+ `status_to_str` 状态映射 + `get_or_open_repo` 仓库缓存（LRU，见下） |
 | `tests/git_status_tests.rs` | git_status 集成测试（41 用例，见测试模式） |
 | `tests/git_diff_tests.rs` | git_diff hunk 测试（32 用例） |
 | `tests/git_file_at_head_tests.rs` | HEAD 内容 + 错误契约（8 用例） |
@@ -47,6 +47,10 @@ renamed 条目（`INDEX_RENAMED` / `WT_RENAMED`）从 delta 的 `old_file()` 取
 
 **已删除文件路径校验**：`validate_path_within_root`（`state.rs`）最初调用 `dunce::canonicalize(file_path)`，要求文件存在于磁盘上——已删除文件会被拒绝。已修改为 `canonicalize_or_ancestor`：路径不存在时上溯到最近存在的祖先目录，canonicalize 后再拼接剩余部分做校验。安全不变：祖先的 canonicalize 解析所有 symlink/`..` 穿越。
 
+### 仓库缓存：`get_or_open_repo` 简易 LRU（BE-09）
+
+`git_repo_cache`（state.rs）是 workdir → `Repository` 的**容量上限 LRU（`GIT_REPO_CACHE_CAPACITY = 8`，零新依赖手实现）**：HashMap 存值 + `Vec<PathBuf>` 维护访问顺序（front = 最近使用 MRU，back = 最久未用 LRU，超容量淘汰尾部）。**前缀匹配查找**：`search` 落在某个缓存 workdir 子树内即命中（MRU→LRU 顺序），跨项目切换命中缓存免重建。原注释「目录切换时清除」失实已修正（BE-09）。`get_or_open_repo`（git/mod.rs）消费点经 `AppState.git_repo_cache` 访问。L1 测试（state.rs `lru_cache` 模块）：超容量淘汰最旧 / 命中 touch MRU / 同 key 替换并 touch / 仅子树前缀命中 / 空缓存 None / 容量契约 = 8。
+
 ### 注册
 
 五条命令均在 `src-tauri/src/lib.rs` 的 `generate_handler!` 注册（`git_status`、`git_diff`、`git_file_at_head`、`git_rollback`、`git_unstage`）。
@@ -80,7 +84,7 @@ GIT-12 将原 `git/mod.rs` 的 88 条 `#[cfg(test)] mod tests`（Rust 端最大�
 
 | 文件 | 用例数 | 覆盖范围 |
 |------|--------|---------|
-| `tests/git_status_tests.rs` | 41 | status_to_str 映射、git_status 状态行为、include_ignored 行为、绝对路径格式、递归未跟踪目录、renamed oldPath + git2 底层原语（dunce/discover/get_or_open_repo 缓存） |
+| `tests/git_status_tests.rs` | 41 | status_to_str 映射、git_status 状态行为、include_ignored 行为、绝对路径格式、递归未跟踪目录、renamed oldPath + git2 底层原语（dunce/discover/**get_or_open_repo LRU 缓存断言——S13 BE-09 适配：缓存命中/淘汰语义）** |
 | `tests/git_diff_tests.rs` | 32 | git_diff hunk 收集与 diff 行为 |
 | `tests/git_file_at_head_tests.rs` | 8 | HEAD 文件内容读取 + UnbornBranch/不存在错误契约（GIT-09 直测命令） |
 | `tests/git_rollback_tests.rs` | 10 | 回滚行为 + autocrlf 仓库三方一致 |

@@ -42,6 +42,15 @@ xterm.js 不支持 `term.open()` 二次调用（GitHub Issue #4978）。因此�
 
 `Alt+Z` 触发 `editor.toggleWordWrap` 命令，通过 `wordWrapRef`（`useRef<boolean>`）跟踪当前状态、`wrapCompartment`（`Compartment`）热切换 `EditorView.lineWrapping` 扩展，不丢失文档状态。默认关闭，每编辑器实例独立，不持久化（同 VS Code 行为）。handler 经 `EditorActions.toggleWordWrap()` → `getActiveEditor()` 派发到聚焦编辑器。
 
+### 编辑器：大文件不虚拟化（FE-31 决策登记，D3 关闭）
+
+CodeMirror 6 不支持部分文档模型（虚拟化），大文件编辑**不虚拟化**——按 D3 方案以三层防线削峰（决策登记见 ADR 豁免表）：
+
+- **Channel 分块削峰（BE-03）**：`fs_read_file` 改后端按 256KB 块经 `onChunk` Channel 推送（见 `src/ipc/CLAUDE.md` fs.ts 行），消除单次 IPC 大 payload 峰值——大文件读取不再一次载入内存
+- **10MB 硬上限**：`MAX_FILE_SIZE_BYTES = 10_000_000`（`useCodeMirror.ts` 导出单点）——`sizeHint` 预检（UTF-8 文本 length 近似字节数）超限**直接拒绝**：doc 置错误提示 + 清 `filePathRef` 防误保存覆盖原文件
+- **1MB 警告**：`LARGE_FILE_WARN_BYTES = 1_000_000`，超限 `confirmDialog` 弹窗警告（确认=继续/取消=中止，取消同样清 filePathRef）
+- **阈值复用**：gitshow 面板经 `useCodeMirror` 导出复用同一阈值——禁止新造数值（既有约束）
+
 ### 编辑器：滚动委托 CM .cm-scroller
 
 旧方案外层 div `overflow: auto` 是实际滚动容器，`.cm-scroller` 无溢出（`.cm-editor` `height: auto`=内容高 → `.cm-scroller` `height: 100%`=内容高 → 无溢出 → 无滚动条）。横向滚动条在外层 div 底部，长内容时需垂直滚到底才能看到。
@@ -72,20 +81,22 @@ HTML 内容通过 `<iframe sandbox="allow-scripts" srcDoc={...}>` 渲染（**不
 
 **为何去掉 `allow-same-origin`**：`allow-scripts` + `allow-same-origin` 是已知危险组合（Chrome 警告 "can escape its sandboxing"、Tauri CVE-2024-35222），Tauri 会向同源 iframe 注入 App JS bundle 导致片段导航被 React Router 劫持。去掉后 iframe 使用 opaque origin，Tauri 不再注入。
 
-### postMessage origin 校验与威胁模型（SEC-03）
+### postMessage origin 校验与威胁模型（SEC-03/SEC-04）
 
-`HtmlPanel.tsx` 的 `handleMessage` 对来自 iframe 的 `postMessage` 实施三层校验，防止恶意页面伪装键盘事件注入：
+`HtmlPanel.tsx` 的 `handleMessage` 对来自 iframe 的 `postMessage` 实施四层校验，防止恶意页面伪装键盘事件注入：
 
 | 校验层 | 机制 | 防御目标 |
 |--------|------|---------|
 | **origin 校验** | `e.origin === "null"` — srcdoc iframe 为 opaque origin，按 WHATWG HTML 规范序列化为字符串 `"null"` | 阻止任意 origin 页面向父窗口发送伪造的 `slterm_key` 消息 |
 | **source 校验** | `e.source === iframeRef.current.contentWindow` — 仅接受本面板 iframe 发出的消息 | 阻止同进程内其他 iframe/窗口伪装（即使 origin 同为 "null"） |
+| **nonce 校验（SEC-04）** | 面板挂载期 `crypto.getRandomValues` 生成 128 位随机 nonce（`nonceRef` 惰性初始化——StrictMode 双渲染不重复生成），经注入脚本拼入 iframe 的 keydown postMessage；父窗口校验 `e.data.nonce === nonceRef.current`，不符静默丢弃 | 阻止 **iframe 自身内容**伪造消息——origin/source 校验只挡外部窗口/iframe，挡不住被预览的 HTML 自身内联脚本；nonce 拼入 srcDoc 内联（十六进制串无转义风险），同源页面拿不到即伪造失败 |
 | **信任标记** | 合成 `KeyboardEvent` 上 `Object.defineProperty(event, "__slterm_postMessage", { value: true })` | 允许 `ShortcutRegistry` 识别事件来源为 postMessage 重放，与原生 keydown 区分（预留——当前未在匹配逻辑中使用） |
 
 **威胁模型**：假设攻击者构造恶意 HTML 文件诱使用户在 slTerminal 中预览。攻击者可通过内联脚本向父窗口发送伪造的 `slterm_key` 消息，模拟 `Ctrl+W`（关闭页签）等全局快捷键。
 
 - **无 origin 校验时**：任意窗口（包括浏览器中打开的恶意页面）均可发送消息命中 `handleMessage`，但 `source` 校验仍可拦截——因为 `iframe.contentWindow` 仅本面板可匹配
 - **无 source 校验时**：同页面其他 `sandbox="allow-scripts"` iframe 可伪装键盘事件（均有 opaque origin `"null"`）
+- **无 nonce 校验时（SEC-04 核心威胁）**：被预览 HTML 的**自身内联脚本**可伪造 `slterm_key` 消息——origin/source 均校验通过（消息来自本面板 iframe），恶意 HTML 借此模拟全局快捷键（如 Ctrl+W 关页签）。nonce 使伪造方缺少消息携带的密钥——随机值仅经注入脚本写入 iframe（攻击者 HTML 无法读取 `buildInjectedScript` 产出），校验不一致即静默丢弃。**nonce 须挂载期一次性生成（`nonceRef` 惰性初始化）**——若每次渲染重新生成，注入脚本与校验值漂移导致键盘转发失效（html-panel.test.tsx 有守卫用例）
 - **信任标记作用**：若未来 `ShortcutRegistry.findWinner` 需区分物理按键与 postMessage 重放（如限制重放仅作用 `global` context），标记提供判定依据。当前两路径 handler 行为一致，标记为预留机制
 
 > **`e.origin === "null"` 为规范推断**：WHATWG HTML 规定 opaque origin 序列化为 `"null"`。此行为未经真实 WebView2 环境实测验证（单元测试用 jsdom 无法模拟 origin 校验），正确性由 E2E（L4）真实 WebView2 中 postMessage 往返验收。
@@ -131,6 +142,8 @@ HTML 内容通过 `<iframe sandbox="allow-scripts" srcDoc={...}>` 渲染（**不
 
 **右侧外部修改**：`onFsEvent` 检测文件路径匹配 → 净自动重载 / 脏弹窗确认（同 editor 语义）。
 
+**FE-10 diff 过时提示条**：git diff 获取失败 / 保存后刷新失败 → `diffStale` 提示条「内容可能过时」（hunks 为空，gutter/占位基于旧数据）；新加载/重载开始时重置标记（切换文件后不残留）。错误消息统一经 `getErrorMessage`（`src/ipc/appError.ts`）。
+
 **编辑器快捷键**（同 gitshow 模式）：
 - **只读但可聚焦**：左栏仅用 `EditorState.readOnly.of(true)`，不使用 `EditorView.editable.of(false)`
 - **Ctrl+Wheel 字体缩放**：左栏/右栏容器各调用一次 `useFontSizeWheel`
@@ -173,11 +186,12 @@ Ink 系 TUI（设计动机：Claude Code 基于 Ink (React-in-terminal)）以约
 
 **合帧管道**：`PTY 输出 → handlePtyOutput → 阈值分流 → 合帧缓冲 → 双定时器 → flushBuffer → xterm.js`
 
-- **直写阈值 64 字节**：<64 字节（打字回显）直写终端，≥64 字节走合帧路径
+- **直写阈值 256 字节（FE-18：64→256）**：≤256 字节（打字回显）直写终端，>256 字节走合帧路径——后端 reader 微批（BE-05）已先合并小写，前端阈值上调对齐降 IPC 频次收益
 - **Idle+Max 双定时器**：空闲 2ms 无新数据则 flush；最多 16ms 强制 flush 一次（防饥饿）。替代原纯 rAF 方案（对 Ink 高频小块输出合帧效果差）
 - **Uint8Array 缓冲**：`pendingBufferRef: Uint8Array[]` 跳过 TextDecoder 中间步骤，合并后单次 `term.write(merged)`，减少 GC 压力 60-80%
 - **DEC 2026 同步更新**：flushBuffer 中 `\x1b[?2026h` / `\x1b[?2026l` 包裹，xterm.js 6.0+ 原生支持，所有 grid 变更在单帧内原子渲染——消除撕裂
 - **非焦点终端降频**：`visible=false` 时仅累积不 flush（上限 64KB），切回时立即回放。`visibleRef` 避免 `handlePtyOutput` 依赖 `visible` 导致 PTY 回调重建
+- **卸载清理 `dispose()`（FE-18）**：清除 idle/max 双定时器并清空待输出缓冲（与 `cancelPendingFlush` 同清理逻辑，语义区分——resize 场景可继续接收新数据，卸载后不再使用）
 - **交替缓冲 resize**：`pty.resize()` 只发 SIGWINCH 给 ConPTY/子进程，不改变 xterm.js `term.rows`/`term.cols`。网格尺寸必须由客户端 `fitAddon.fit()` → `term.resize()` 更新。因此交替缓冲中也**必须调 `fit()`** 同步 xterm.js 网格——若跳过，Ink SIGWINCH 后新尺寸输出会渲染到旧网格造成永久撕裂。交替缓冲 reflow 的短暂错位（≤1 帧）由 TUI 下一帧全量重绘覆盖
 
 ### Resize X/Y 分离 debounce + NaN 防御
@@ -278,12 +292,12 @@ Claude Code 在用户主动 Ctrl+C 中断时不发射任何 hook 事件（`Stop`
 | `terminal/index.ts` | TerminalPanel 及 terminalOptions 导出 |
 | `terminal/TerminalPanel.tsx` | 终端面板 React 组件：获取 Windows build 号 → useXterm → 加载遮罩；`originalTitleRef` 挂载时取 `params.customTitle ?? api.title ?? "terminal"`（F8 自定义标题优先）并订阅 `onDidParametersChange`（customTitle 同步）+ `onDidTitleChange`（B12：customTitle 存在或 agentSession 非空不捕获，其余捕获重算标题）——OSC 133 D 恢复标题用自定义名/重算名；**页签状态圆点（IC-03）**：`handleTabStateChange` 写 `updateParameters({ ...latestParamsRef.current, tabStatus })`（null 清状态）；**页签 logo 会话绑定（F9 行为修订）**：`logoRef` 退役，订阅 TerminalRegistry（register/sessionChange）→ agentSession 非 null 按 `cliId ?? CLAUDE_CLI_ID` 查 iconSrc 写 `tabLogo`、null 清 `tabLogo`；inactive 单清 tabStatus（restoreTitle=false 时跳过标题恢复，B13）；**visible 前缀匹配（B14）**：`activePageId` 与 `panelId` 前缀比对（旧恢复格式数字段兼容）；**`latestParamsRef` 参数合并单点（参数覆盖回归修复）**：tabStatus/tabLogo 分头经 `updateParameters` 写入互不可见——合并基准 = `latestParamsRef`（props 同步 + `onDidParametersChange` 合并），禁止用 props 快照覆盖（快照抹掉另一路径刚写入的键——mockcli E2E 冒烟 tabStatus 丢失根因；terminal.test.tsx 两键共存断言防复发） |
 | `terminal/useTerminalInstance.ts` | Terminal 实例 + WebGL/FitAddon 生命周期 + StrictMode 守卫 |
-| `terminal/usePtyOutput.ts` | PTY 输出合帧（Idle+Max 双定时器 + DEC 2026）+ 非焦点降频 |
+| `terminal/usePtyOutput.ts` | PTY 输出合帧（Idle+Max 双定时器 + DEC 2026；**FE-18：直写阈值 256 字节**）+ 非焦点降频 + `dispose()` 卸载清理（FE-18） |
 | `terminal/usePtyResize.ts` | ResizeObserver X/Y 分离 debounce + NaN 守卫 |
 | `terminal/useClipboardHandler.ts` | OSC 52 剪贴板拦截 + CJK 解码 + 焦点门控 |
 | `terminal/useCommandDetection.ts` | OSC 133 命令边界检测 + `cliProfileRegistry.matchByCommand` 匹配（MC-105：title 取 profile.tabTitle）+ attention 状态（OSC 133 C 触发 `onTabStateChange({ active: true, title, status: "attention" })`，B12 先 setAgentSession 后回调）；`TabState` 迁入本文件顶部导出（Stage 01 退役 TabTitleRegistry 后；F9 行为修订：`logo`/`icon` 字段退役——logo 会话绑定由 TerminalPanel 订阅驱动、状态经 `status` 字段；**B13：新增 `restoreTitle?: boolean` 字段**——false = 仅清状态不恢复标题，resetCommandState 传 false） |
 | `terminal/webgl.ts` | `detectWebgl()` + `setupWebglWithRetry()` 纯函数 |
-| `terminal/useXterm.ts` | 编排层（~420 行），组合上述 6 个 hook + `src/lib/useFontSizeWheel`（Ctrl+Wheel 字体缩放）+ `onAgentEvent` 订阅（按 panelId 过滤 → 来源 CLI 经 `resolvePayloadCliId` 单点三级解析（ZQ-2）→ `eventToStatus` → F3 四态 status（圆点渲染在 DefaultTab/StatusDot）；SessionEnd/Exit 双事件清状态（ZQ-6）；非 SessionEnd/Exit 时 `setAgentSession` 携 `sessionId`/`usageSourcePath`/`status`——两区四态同源，**payload 空串归一 `|| undefined`** 防 claude hook 输入缺字段时下游静默失效）+ **运行中会话标题通道（人工验证问题 3）**：SessionStart 同步兜底 `profile.tabTitle` 后经 `readHistoryTitle(cliId, sessionId)` 异步读历史同源标题覆盖（回退链 custom-title > ai-title > summary > firstPrompt；null → 兜底 tabTitle）；非 SessionStart 事件 5s 节流（`TITLE_FETCH_THROTTLE_MS`）重查（/rename custom-title、ai-title 运行中变化）；**陈旧守卫**（应用前校验注册表 `agentSession.sessionId` 与捕获值一致）+ **标题去重**（`lastAppliedTitleRef`——同值不重复回调）+ 失败静默（未知 cliId 无 provider 不炸），对外接口兼容 TerminalPanel |
+| `terminal/useXterm.ts` | 编排层（~610 行），组合上述 6 个 hook + `src/lib/useFontSizeWheel`（Ctrl+Wheel 字体缩放）+ `onAgentEvent` 订阅（按 panelId 过滤 → 来源 CLI 经 `resolvePayloadCliId` 单点三级解析（ZQ-2）→ `eventToStatus` → F3 四态 status（圆点渲染在 DefaultTab/StatusDot）；SessionEnd/Exit 双事件清状态（ZQ-6）；非 SessionEnd/Exit 时 `setAgentSession` 携 `sessionId`/`usageSourcePath`/`status`——两区四态同源，**payload 空串归一 `|| undefined`** 防 claude hook 输入缺字段时下游静默失效）+ **运行中会话标题通道（人工验证问题 3）**：SessionStart 同步兜底 `profile.tabTitle` 后经 `readHistoryTitle(cliId, sessionId)` 异步读历史同源标题覆盖（回退链 custom-title > ai-title > summary > firstPrompt；null → 兜底 tabTitle）；非 SessionStart 事件 5s 节流（`TITLE_FETCH_THROTTLE_MS`）重查（/rename custom-title、ai-title 运行中变化）；**陈旧守卫**（应用前校验注册表 `agentSession.sessionId` 与捕获值一致）+ **标题去重**（`lastAppliedTitleRef`——同值不重复回调）+ 失败静默（未知 cliId 无 provider 不炸），对外接口兼容 TerminalPanel；**FE-08 错误可感知**：spawn 失败/写入失败 toast（写入连续失败 ≥3 次 toast，其余 console.error）+ `getErrorMessage` 统一解析；**FE-24 卸载守卫**：cleanup 置 `isDisposedRef`，卸载后异步回调不误操作 |
 | `terminal/keyboard.ts` | 终端快捷键命令工厂：`createTerminalShortcuts()`（无参）经 `commandFromMeta` 生成 `terminal.copy/paste/newline`，App 一次性注册；handler 经 `getActiveTerminal()` 派发到聚焦终端。Ctrl+C 不注册（透传 SIGINT） |
 | `terminal/activeTerminal.ts` | 模块级"聚焦终端"指针：`setActiveTerminal`/`clearActiveTerminal`（仅匹配时清）/`getActiveTerminal`。终端聚焦时设为 active，命令 handler 据此派发 |
 | `terminal/theme.ts` | xterm.js 主题 adapter（既定例外收敛表述）：**不再是独立主题定义**——`theme: { ...schemeRegistry.getActive().terminal }` 将 active 方案 terminal 段 25 键展开进 xterm `ITheme`（linear 方案值，硬约束 #6）；非色选项原位保留：`drawBoldTextInBrightColors` 显式声明为 `true`（消除对 xterm.js 默认值的隐式依赖，仅影响 ANSI 16 色粗体→亮色映射，不影响 True Color）、`vtExtensions: { kittyKeyboard: true }`（Kitty 键盘协议被动支持）、scrollback 等 |
@@ -292,10 +306,10 @@ Claude Code 在用户主动 Ctrl+C 中断时不发射任何 hook 事件（`Stop`
 | `editor/EditorPanel.tsx` | 编辑器面板 React 组件：container `overflow: clip`（裁剪不吸收滚动事件，委托 `.cm-scroller` 管理滚动；`.cm-editor` `height: 100%` 约束 scroller 高度产生溢出）→ useCodeMirror |
 | `editor/keyboard.ts` | 编辑器快捷键命令工厂：`createEditorShortcuts()`（无参）经 `commandFromMeta` 生成 `editor.save`、`editor.toggleWordWrap`，App 一次性注册；handler 经 `getActiveEditor()` 派发 |
 | `editor/activeEditor.ts` | 模块级"聚焦编辑器"指针：`setActiveEditor`/`clearActiveEditor`（仅匹配时清）/`getActiveEditor` |
-| `editor/useCodeMirror.ts` | CodeMirror 6 生命周期 hook：创建 EditorView、`.cm-editor` `height: 100%` theme（约束 scroller 高度产生溢出→滚动条）、语言扩展、字体大小动态调节、自动换行 Compartment 热切换（Alt+Z）、Ctrl+Wheel 监听、Ctrl+S 保存（`usePanelFocus("editor")` + `setActiveEditor`，无路径则另存为）、Tab 缩进/Shift+Tab 反缩进（`keymap.of([indentWithTab])`）、Ctrl+F 搜索/撤销/重做仍归 CM keymap、外部文件改动监听、脏状态跟踪 |
+| `editor/useCodeMirror.ts` | CodeMirror 6 生命周期 hook：创建 EditorView、`.cm-editor` `height: 100%` theme（约束 scroller 高度产生溢出→滚动条）、语言扩展、字体大小动态调节、自动换行 Compartment 热切换（Alt+Z）、Ctrl+Wheel 监听、Ctrl+S 保存（`usePanelFocus("editor")` + `setActiveEditor`，无路径则另存为）、Tab 缩进/Shift+Tab 反缩进（`keymap.of([indentWithTab])`）、Ctrl+F 搜索/撤销/重做仍归 CM keymap、外部文件改动监听、脏状态跟踪；**大文件阈值单点（FE-31/D3）：`MAX_FILE_SIZE_BYTES`（10MB 拒绝）/`LARGE_FILE_WARN_BYTES`（1MB 警告），供 gitshow 复用，不虚拟化** |
 | `editor/gitGutter.ts` | CodeMirror 6 gutter 扩展：DiffHunk → RangeSet<GutterMarker> 映射、setDiffMarkers StateEffect、diffMarkersField StateField、SpacerMarker 固定宽度防光标错位；新增 HEAD 侧 buildHeadRangeSet（old 行号映射）/ headDiffGutter / updateHeadDiffGutter / clearHeadDiffGutter |
 | `html/index.ts` | HtmlPanel 导出 |
-| `html/HtmlPanel.tsx` | HTML 预览面板：fs.readFile → injectScript 注入脚本（键盘转发 postMessage + 片段链接 click拦截 + scrollIntoView）→ iframe srcDoc 渲染（sandbox="allow-scripts"，不含 allow-same-origin），三态（loading/loaded/error），cancelled 防竞态；postMessage 接收键盘事件 → ShortcutRegistry 分发 |
+| `html/HtmlPanel.tsx` | HTML 预览面板：fs.readFile → injectScript 注入脚本（键盘转发 postMessage + 片段链接 click拦截 + scrollIntoView）→ iframe srcDoc 渲染（sandbox="allow-scripts"，不含 allow-same-origin），三态（loading/loaded/error），cancelled 防竞态；postMessage 接收键盘事件（**SEC-04：四层校验——origin/source/nonce/信任标记**，nonce 挂载期 `nonceRef` 一次性生成拼入注入脚本）→ ShortcutRegistry 分发 |
 | `gitshow/index.ts` | GitShowPanel 导出 |
 | `gitshow/GitShowPanel.tsx` | HEAD 文件只读查看面板：gitFileAtHead 取内容 → CM6 只读（readOnly+editable）+ editorTheme/editorColorOverrides（经 `../../theme`）+ 语言扩展 + 字体主题；三态（loading/content/error）；大文件阈值复用；任意错误 → "该文件在 HEAD 中不存在" |
 | `diff/index.ts` | DiffPanel 导出 + DiffPanelParams 类型 |
@@ -304,7 +318,7 @@ Claude Code 在用户主动 Ctrl+C 中断时不发射任何 hook 事件（`Stop`
 | `hooksConfig/index.ts` | HooksConfigPanel 导出 |
 | `hooksConfig/HooksConfigPanel.tsx` | **hub 容器**（Stage 06，MC-502~507）：顶部 CLI 选择行（`hasConfigEditor` 过滤 + iconSrc logo + displayName + 选中态高亮 token）+ 编辑器槽（**KZ-1 分派**：经选中 CLI 的 `capabilities.hooks.configEditor` 渲染，缺失 → 空态占位「该 CLI 未提供配置编辑器」）；选中态 `params.selectedCli` 随布局 JSON 持久化（`updateParameters` + 显式 `onLayoutChange`，挂载恢复/失效回退首个有能力 CLI）；切换 = 卸载重挂载，dirty `confirmDialog` 守卫（askGuard 防循环，OV-02）；空态「无可配置 CLI」；单 CLI 也渲染选择行 |
 | `hooksConfig/ClaudeHooksConfigEditor.tsx` | **claude 专属编辑器**（MC-504/508）：原 HooksConfigPanel 全部内容整体下移一层——层级切换器（**数据源 = `profile.capabilities.hooks.configLayers`（KZ-4：claude 三层值声明于 claude profile，模块级 LAYERS 常量已退役）；优先级标注 + rootPath 空时 project/local 禁用是 claude 语义保留内部**）+ 模式切换（GUI/JSON，非法 JSON 禁 GUI）+ F2 注入状态条与注入/卸载按钮（cliId = hub 选中态，MC-221）+ 保存按钮（dirty 且合法才可点）+ 重启提示条（`profile.hooks.restartHint` 驱动）；三态（loading/content/损坏 error）。**KZ-1**：整文件仅经 claude profile 的 `configEditor` 字段引用（hub 零直接引用），被 `features/cliProfiles/profiles/claude/index.ts` 挂载 |
-| `hooksConfig/useHooksConfig.ts` | 数据 hook：cliId 实参 = hub 选中态 profile.id（MC-220，ipc 实参唯一来源）、**初始层 = initialLayer 参数（编辑器传 `configLayers[0].id`，KZ-4；缺省回退 "user"）**、rootPath 推导（照 useCommitStatus）、`readHooksConfig(cliId, layer, ...)` 加载（null 视为 {}，Err 置损坏态）、双模式同步（configJson/guiModel/dirty）、保存（双校验 + writeHooksConfig(cliId)）、切层/visibilitychange 轻量重读（dirty `confirmDialog` 守卫 + askGuard 防循环 + generation 取消） |
+| `hooksConfig/useHooksConfig.ts` | 数据 hook：cliId 实参 = hub 选中态 profile.id（MC-220，ipc 实参唯一来源）、**初始层 = initialLayer 参数（编辑器传 `configLayers[0].id`，KZ-4；缺省回退 "user"）**、rootPath 推导（照 useCommitStatus）、`readHooksConfig(cliId, layer, ...)` 加载（null 视为 {}，Err 置损坏态）、双模式同步（configJson/guiModel/dirty）、保存（语法 + schema 双校验 → **user 层 `confirmDialog` 二次确认（SEC-05/D9，hooks 可执行任意命令，取消不写盘；project/local 不确认）** → writeHooksConfig(cliId)）、切层/visibilitychange 轻量重读（dirty `confirmDialog` 守卫 + askGuard 防循环 + generation 取消）、错误消息统一经 `getErrorMessage`（FE-25） |
 | `hooksConfig/configModel.ts` | 配置模型双向转换纯函数：`jsonToGui`/`guiToJson`（round-trip 不丢数据，未知字段归 extraFields）、`isSltermManaged`（注入段识别，C9） |
 | `hooksConfig/eventsCatalog.ts` | 事件元数据单点（P3-FE-26）：30 事件 × 10 组全表 + handler 支持档（A/B/C）+ 5 种 handler 字段矩阵（C13-3 官方版）+ matcher 窄字符集受限事件（FileChanged/StopFailure）+ 纯查询函数（getEventMeta/isMatcherSupported/getSupportedHandlerTypes 等） |
 | `hooksConfig/matcherEngine.ts` | matcher 语义引擎（C13-5）：`matchHook` 纯函数（exact-or / regex / all + 受限窄字符集），供 MatcherTester 试测与保存校验共用 |
@@ -409,7 +423,7 @@ useXterm 是编排层——mock 6 个子 hook 才能隔离测试（`useFontSizeB
 - 三态渲染：loading（转圈）→ loaded（iframe srcDoc）→ error（错误信息）
 - 竞态取消：快速切换 filePath 时旧请求 pending resolve 不覆盖新内容
 - sandbox 属性验证 + renderer="always" 生命周期
-- postMessage origin 校验 + 信任标记注入
+- postMessage 四层校验（origin/source/**nonce（SEC-04）**/信任标记）——伪造 nonce/缺失 nonce/类型不符静默丢弃 + 注入脚本 nonce 漂移守卫
 
 > 内联脚本/事件的 CSP 放行（见「HTML 面板内联脚本/事件执行」决策）不由 jsdom 验证（jsdom 不强制 CSP）：配置不变量由 L2 `src/__tests__/csp-config.test.ts` 守卫，真实执行由 L4 E2E（真实 WebView2 强制 CSP）验证。
 
@@ -426,6 +440,8 @@ useXterm 是编排层——mock 6 个子 hook 才能隔离测试（`useFontSizeB
 - `oldPath` 优先于 `filePath` 调用 gitFileAtHead
 
 ### diff 面板测试
+
+`diff-panel-stale-banner.test.tsx`（3 用例，FE-10）：git diff 失败 → 「内容可能过时」提示条渲染；保存后刷新失败 → 提示条；新加载/重载开始重置标记（不残留）。
 
 `diff-panel.test.tsx`（40 用例）：
 - mock `gitFileAtHead` + `fs.readFile` + `gitDiff` + `onFsEvent` + `useFontSizeWheel` + `usePanelFocus`

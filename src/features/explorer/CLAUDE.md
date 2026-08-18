@@ -24,7 +24,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 已展开目录被磁盘删除 → 父层 `readDir` 不再返回该项，节点连子树自然消失（复用 `loadDirectory` 容错，无需特判）。
 - 已展开子目录 `readDir` 抛错 → `loadDirectory` catch 返回 `[]`，该目录 children 为空、不冒泡。
 - `reloadPreservingExpanded` **不传 gen**（操作当前页数据），不碰 `loadRoot` 的 generation 取消机制。`loadRoot` 保持整树替换语义不变（`fullRefresh` 已删除——无调用方的死代码，刷新路径统一走 `refreshExpanded`）。
-- 权衡：深层多展开分支会并发多次 `readDir`（每展开层一次），fs-event 路径有 200ms 去抖限流，file-saved 路径无去抖。
+- 权衡：深层多展开分支会并发多次 `readDir`（每展开层一次），fs-event 路径有 200ms 去抖限流，file-saved 路径 300ms 去抖限流（FE-15）。
+
+**FE-15 已知路径子树刷新**：`slterm:file-saved` 事件 300ms debounce（`debounceRef` + 去抖窗口内最后保存路径）后，不再整树 `refreshExpanded`——在旧树中定位「变更路径的最近展开祖先」，仅重载该目录一层并原位合并（保留曾展开子目录的展开态与子树）；变更路径位于未展开目录内 → 只刷新其父层（折叠目录行元数据同步，不深挖未加载子树）。同时补 git 着色刷新（FE-15 从 refreshExpanded 拆出——子树刷新路径同样需要 git 着色）。
 
 **`handleOpenFile` 面板分派**：不再硬编码 `PANEL_EDITOR`，改为通过 `fileViewerRegistry.resolve(filePath)` 决定面板类型。命中策略（如 `.html` → `"htmlviewer"`）则用对应面板，返回 null 回退 `"editor"`。文件预览类面板（htmlviewer 等）通过 `isAlwaysRenderPanel()` 自动设置 `renderer: "always"` 保持 iframe browsing context 存活，避免页签切换白屏。新增文件预览类型无需修改 ExplorerPanel。
 
@@ -87,9 +89,9 @@ Explorer 的键盘快捷键遵循与 terminal/editor 相同的模式：
 
 | 文件 | 职责 |
 |------|------|
-| `ExplorerPanel.tsx` | React 容器组件：活跃项目推导、文件树渲染、CRUD 事件处理、`handleOpenFile` 面板分派（FileViewerRegistry）、`notify_watch` 启动、**选中模型** + **焦点管理**（tabIndex={-1} + usePanelFocus("explorer")）+ **active pointer 集成** |
-| `useFileTree.ts` | 文件树数据 hook：`loadRoot` / `loadDirectory` / `toggleExpand` / `refreshExpanded`（经 `reloadPreservingExpanded` 递归重载保留展开状态）/ generation 取消 |
-| `FileTree.tsx` | 递归树组件：节点渲染（行高 24px——UI-305 紧凑列表档登记，导航树 28/会话行 30 分档）、git 状态着色、右键菜单、**单击选中（VS Code 风格高亮）** + **renamingPath 状态上提**（由 ExplorerPanel 管理） |
+| `ExplorerPanel.tsx` | React 容器组件：活跃项目推导、文件树渲染、CRUD 事件处理、`handleOpenFile` 面板分派（FileViewerRegistry）、`startWatch` 启动 + **项目移除/切换时 `stopWatch` 释放 watcher（BE-10）**、**选中模型** + **焦点管理**（tabIndex={-1} + usePanelFocus("explorer")）+ **active pointer 集成** |
+| `useFileTree.ts` | 文件树数据 hook：`loadRoot` / `loadDirectory` / `toggleExpand` / `refreshExpanded`（经 `reloadPreservingExpanded` 递归重载保留展开状态）/ **FE-15 已知路径子树刷新（file-saved 300ms debounce + 最近展开祖先定位）** / generation 取消 |
+| `FileTree.tsx` | 树组件：**手实现窗口化虚拟化（FE-30，零新依赖）**——扁平化可见节点数组 + 固定行高（24px——UI-305 紧凑列表档登记）+ overscan 滚动窗口（`scrollTop`/容器高度计算可见切片，`paddingTop/Bottom` 占位保持滚动条），DOM 节点数与可见行数同量级；保持键盘导航/右键菜单/选中模型行为；git 状态着色、右键菜单、**单击选中（VS Code 风格高亮）** + **renamingPath 状态上提**（由 ExplorerPanel 管理） |
 | `FileIcon.tsx` | 文件图标映射（UI-602：emoji → 描边 SVG 重构）——文件夹 = `lib/icons.tsx` 的 IconFolder（IC-01 图标单点）；文件 = 描边 + 左缘小色块自绘 SVG（轮廓/折角描边色 = 当前色（git 状态色，无则 `EXPLORER_COLORS.fg`），色块 fill = 扩展名映射色**六色盘**（ts/tsx 蓝、js/jsx/mjs/cjs 黄、py 绿、rs 红、md 紫、html 青、css/scss/less 蓝、配置类灰青、默认无色块）；git 状态色与类型色块分层叠加互不遮蔽）。**六色盘硬编码例外（IC-04 契约登记）**：色值写死于本文件 `FILE_COLORS` 常量（UI-602 checklist 指定色），NavProjectRow 文件夹蓝同规格例外 |
 | `activeExplorer.ts` | 模块级"聚焦 explorer"指针（createActivePointer 模式，同 activeTerminal/activeEditor） |
 | `keyboard.ts` | 快捷键命令工厂：`createExplorerShortcuts()` → 3 条命令（delete/open/rename），在 App.tsx 一次性注册 |
@@ -104,7 +106,7 @@ ExplorerPanel 组件本体不变。宿主从 Allotment 常驻栏（Workspace 四
 
 - **`src/ipc/fs.ts`** — `readDir` / `writeFile` / `createDir` / `deleteEntry` / `rename`
 - **`src/ipc/git.ts`** — `gitStatus` 着色
-- **`src/ipc/notify.ts`** — `notify_watch` 启动后端监听 + `onFsEvent` 增量刷新
+- **`src/ipc/notify.ts`** — `notify_watch` 启动后端监听 + `notify_stop_watch`（BE-10：项目移除/切换时释放 watcher）+ `onFsEvent` 增量刷新
 - **`src/stores/projects.ts` + `src/stores/layout.ts`** — 活跃项目 `rootPath` 推导
 - **`src/workspace/titleManager.ts`** — 文件打开时计算编辑器页签标题 + 去重
 - **`src/features/fileViewers/FileViewerRegistry.ts`** — 策略模式决定文件用哪个面板类型打开（`.html` → `"htmlviewer"`，未知 → `"editor"`）
@@ -113,16 +115,18 @@ ExplorerPanel 组件本体不变。宿主从 Allotment 常驻栏（Workspace 四
 ## IPC 约束
 
 - 所有文件操作经 `src/ipc/` 层调用，禁止组件内直接 `invoke`
-- `onFsEvent` 通过 Tauri `listen()` 全局订阅，`useFileTree` 内 200ms debounce
+- `onFsEvent` 通过 Tauri `listen()` 全局订阅，`useFileTree` 内 200ms debounce；`slterm:file-saved` 300ms debounce（FE-15）
+- **watcher 成对**：`startWatch` 启动后必须在项目移除/切换时 `stopWatch`（BE-10）——只 start 不 stop 会让旧 watcher 占用后端池至 LRU 淘汰
 
 ## 测试模式
 
-测试文件位于 `src/__tests__/`，命名规则 `explorer-*.test.ts(x)`（20 文件，共 272 用例，用例数见 `.claude/test-inventory.md`）：
+测试文件位于 `src/__tests__/`，命名规则 `explorer-*.test.ts(x)`（21 文件，共 295 用例，用例数见 `.claude/test-inventory.md`）：
 
 | 文件 | 用例数 | 覆盖范围 |
 |------|--------|---------|
 | `explorer-crud-success.test.tsx` | 4 | CRUD 成功路径 |
 | `explorer-delete.test.tsx` | 25 | 删除（文件/递归目录/确认弹窗/右键菜单 UI-802 视觉规格） |
+| `explorer-error-placeholder.test.tsx` | 5 | 加载失败占位（FE-05/06 错误可感知化） |
 | `explorer-file-viewer.test.tsx` | 21 | handleOpenFile 面板分派（FileViewerRegistry 命中/回退） |
 | `file-icon.test.tsx` | 36 | 文件图标映射（六色盘 SVG：扩展名→色块全表 + 文件夹 IconFolder + git 状态色叠加 + 默认无色块） |
 | `explorer-focus.test.tsx` | 6 | 焦点管理（tabIndex/usePanelFocus） |
@@ -130,16 +134,17 @@ ExplorerPanel 组件本体不变。宿主从 Allotment 常驻栏（Workspace 四
 | `explorer-input-boundary.test.tsx` | 10 | 重命名输入边界 |
 | `explorer-keyboard.test.ts` | 15 | 快捷键（delete/open/rename）经 active 指针派发 |
 | `activeExplorer.test.ts` | 6 | active 指针 set/get/覆盖、clear 仅匹配时生效 |
-| `explorer-notify.test.tsx` | 12 | fs-event 增量刷新（200ms 去抖） |
+| `explorer-notify.test.tsx` | 16 | fs-event 增量刷新（200ms 去抖）+ **FE-15 file-saved 300ms 去抖 + 子树刷新触发路径** |
 | `explorer-open-in-terminal.test.tsx` | 7 | 在终端打开 |
 | `explorer-race-cleanup.test.tsx` | 6 | 竞态清理 |
-| `explorer-refresh-preserve.test.tsx` | 17 | 刷新保留展开状态 |
+| `explorer-refresh-preserve.test.tsx` | 23 | 刷新保留展开状态（覆盖矩阵 A–E + R14 file-saved / R15 fs-event / R16 CRUD 三触发路径 + R17 竞态） |
 | `explorer-rename-keyboard.test.ts` | 5 | 重命名中快捷键透传 |
 | `explorer-rename-state.test.tsx` | 8 | 重命名状态管理 |
 | `explorer-root-contextmenu.test.tsx` | 14 | 根节点右键菜单 |
 | `explorer-rootpath-clear.test.tsx` | 6 | rootPath 变化清空 + generation 丢弃 |
 | `explorer-sandbox-race.test.tsx` | 13 | 沙箱竞态 |
-| `explorer-selection.test.tsx` | 17 | 选中模型 |
+| `explorer-selection.test.tsx` | 18 | 选中模型 |
+| `explorer-virtualization.test.tsx` | 7 | **FE-30 虚拟化**：构造大节点树（1000 节点）断言渲染行数远小于节点总数、容器高度未测得（jsdom clientHeight=0）→ 全量渲染兜底、滚动后窗口平移、展开大目录后行数仍窗口化、窗口化下选中/右键菜单/重命名行为保持 |
 | `use-file-tree.test.ts` | 15 | `useFileTree` hook 直测 |
 
 ### 技术栈

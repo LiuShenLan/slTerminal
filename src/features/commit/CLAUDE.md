@@ -59,7 +59,7 @@ CommitView 有四个渲染态，优先级从高到低：
 
 | 文件 | 职责 |
 |------|------|
-| `index.ts` | barrel export：CommitView、CommitFileList、useCommitStatus、openCommitFile、STATUS_PANEL_MAP、getContextMenuItems |
+| `index.ts` | **已删除（FE-35 死代码清理）**——barrel 无消费方，`CommitView` 经 `sideViewDefs.ts` 直接引用，其余符号各消费方就近 import |
 | `CommitView.tsx` | 主组件：标题栏 "COMMIT"（28px、大写、照 ExplorerPanel 样式）+ 状态机四渲染态 + Changes/Unversioned Files 两个 CommitFileList |
 | `CommitFileList.tsx` | 可折叠文件列表：标题栏（N 计数）+ 展开/折叠 + 文件名+父目录渲染 + 双击分派 + **右键菜单**（ContextMenu 纯渲染组件，委托 commitContextMenu 策略函数） |
 | `useCommitStatus.ts` | 数据加载 hook：rootPath 推导 → gitStatus + onFsEvent 200ms debounce + generation 取消 + **暴露 refresh() 手动刷新** |

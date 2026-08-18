@@ -11,8 +11,8 @@ PTY 管理——Windows ConPTY 终端模拟核心。负责 shell 进程的完整
 ```
 shell.rs          → resolve_shell() 返回 CommandBuilder（传统路径）+ resolve_shell_info() 返回 ShellInfo（自定义 ConPTY 路径）
 mod.rs/spawn.rs   → pty_spawn() 握 SPAWN_LOCK → conpty_custom::create_conpty_pair()（绕过 portable-pty，直接调 Win32）→ reader 线程（锁外）
-reader.rs         → reader_loop() 独立线程阻塞读 → Channel 推 PtyEvent（READER_BUF_SIZE=16KB）
-spawn.rs          → pty_spawn / pty_write / pty_resize / pty_kill（Tauri 命令）
+reader.rs         → reader_loop() 独立线程阻塞读 → 微批聚合（BE-05，64KB/无可读即送）→ Channel 推 PtyEvent（READER_BUF_SIZE=16KB）
+spawn.rs          → pty_spawn / pty_write / pty_resize / pty_kill / pty_kill_all（Tauri 命令）
 src-tauri/src/state.rs（顶层模块，非 pty 子模块）→ PtySession 结构体 + PtyState 全局 HashMap
 ```
 
@@ -41,6 +41,10 @@ JobHandle 在 `#[cfg(windows)]` 下为 HANDLE RAII 包装；`#[cfg(not(windows))
 
 **并发 spawn 会卡死 ConPTY 输出管道**。`pty_spawn` 中 SPAWN_LOCK 仅保护 ConPTY 创建 + 子进程启动（`openpty` → `spawn_command`），reader 线程启动和 sessions 插入在锁外执行。
 
+### 会话上限 MAX_PTY_SESSIONS=32（BE-01）
+
+`const MAX_PTY_SESSIONS: usize = 32` 硬上限——防并发 spawn 耗尽 ConPTY/进程句柄。`pty_spawn` 在 **SPAWN_LOCK 持锁区间内**检查 `sessions.len() >= 32`（判定与 spawn 原子化，杜绝并发超发），命中上限返回 `AppError::Validation` 并显式 kill 已 spawn 的子进程（kill 后 ConPTY 输出端关闭 → reader 退出 → PtySession drop 时 join 正常返回；Job Object KILL_ON_JOB_CLOSE 兜底）。改上限后跑 spawn.rs `pty_capacity_*` 三条测试。
+
 ### CPR 注入（Windows）
 
 `openpty()` 后立即向 stdin 写 `\x1b[1;1R`。补偿 ConPTY `VtIo::StartIfNeeded()` 的 DSR 握手，避免首次读取时 DSR 死锁。蜂鸣和首字符消失由 `reader.rs` 的 `strip_conpty_startup()` 处理——与此机制无关。
@@ -57,9 +61,17 @@ JobHandle 在 `#[cfg(windows)]` 下为 HANDLE RAII 包装；`#[cfg(not(windows))
 
 每个子进程放入 Job Object，设置 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`。父进程崩溃/退出时 OS 自动杀所有子进程。
 
-### pty_kill：async + spawn_blocking
+### pty_kill：async + spawn_blocking + kill 加固（BE-06）
 
 `ClosePseudoConsole` 在 pre-Win11 24H2 上永久阻塞。`pty_kill` 先提取 session 释放 `RwLock` 写锁（<1ms），再在 `spawn_blocking` 中执行 `kill → join reader → drop master`，避免持锁阻塞导致后续命令级联卡死。
+
+**kill 加固（BE-06，S06）**：
+- `child.kill()` 返回值被检查——失败 `tracing::warn!` 后继续（不再 `let _ =` 丢弃）
+- reader 线程 join 改「带超时轮询 `is_finished`」：`KILL_JOIN_TIMEOUT = 3s`（`join_with_timeout` 纯逻辑），超时放弃 join 记 warn——线程随 `PtySession` Drop 兜底，避免永久阻塞
+
+### pty_kill_all：关闭兜底（BE-08）
+
+`pty_kill_all() -> Result<u32, AppError>`（返回 kill 数）——遍历 sessions 全部 kill+join（超时语义同 BE-06）。前端关闭序列 = 先前端 `TerminalRegistry` 快速 kill，再 `pty_kill_all` 兜底——前后端不一致时后端 session 不泄漏。命令注册 + capabilities `allow-pty_kill_all`（S13 后命令数 34）。L1 测试：空返回 0 / 多 session 全灭。
 
 ### Channel 可替换 + ring buffer 回放（E1）
 
@@ -71,7 +83,9 @@ JobHandle 在 `#[cfg(windows)]` 下为 HANDLE RAII 包装；`#[cfg(not(windows))
 
 ### Shell 选择与 profile 注入
 
-`shell.rs`：`pwsh.exe` → `powershell.exe` → `cmd.exe` 回退。提供两套接口——`resolve_shell()` 返回 `CommandBuilder`（旧路径/非 Windows fallback），`resolve_shell_info()` 返回 `ShellInfo`（自定义 ConPTY 路径，program 为完整路径）。Shell 可执行文件通过 `which_full_path()` 在 PATH 中解析为完整路径，确保 `CreateProcessW(lpApplicationName=...)` 正确工作。PowerShell 通过 `-EncodedCommand`（UTF-16LE Base64）内联集成脚本（`include_str!("../../assets/shell-integration.ps1")`），消除 `%APPDATA%` 文件写入，避免 AMSI/ASR 误杀。集成脚本注入 OSC 7（cwd 跟踪）+ OSC 133 A/B/D（提示符边界+退出码）+ UTF-8 编码修复。
+`shell.rs`：`pwsh.exe` → `powershell.exe` → `cmd.exe` 回退。提供两套接口——`resolve_shell()` 返回 `CommandBuilder`（旧路径/非 Windows fallback），`resolve_shell_info()` 返回 `ShellInfo`（自定义 ConPTY 路径，program 为完整路径）。Shell 可执行文件通过 `which_full_path()` 在 PATH 中解析为完整路径，确保 `CreateProcessW(lpApplicationName=...)` 正确工作。
+
+**白名单真实路径校验（SEC-01，S02）**：用户传入 shell **含路径分隔符**时——`canonicalize` 用户路径，与 `which_full_path(文件名)` 解析结果比对，**一致才放行**（只信任 PATH 解析出的真实路径，防传 `C:\project\cmd.exe` 或篡改 PATH 绕过 → RCE）；PATH 不可解析时 `%SystemRoot%\System32` 系统目录兜底（cmd 回退自洽）。纯文件名输入维持现状。忽略大小写比较（Windows 文件系统大小写不敏感）。L1 测试：伪造路径拒绝 / 合法绝对路径放行 / PATH 解析一致放行。PowerShell 通过 `-EncodedCommand`（UTF-16LE Base64）内联集成脚本（`include_str!("../../assets/shell-integration.ps1")`），消除 `%APPDATA%` 文件写入，避免 AMSI/ASR 误杀。集成脚本注入 OSC 7（cwd 跟踪）+ OSC 133 A/B/D（提示符边界+退出码）+ UTF-8 编码修复。
 
 ### 终端能力环境变量注入
 
@@ -129,25 +143,30 @@ JobHandle 在 `#[cfg(windows)]` 下为 HANDLE RAII 包装；`#[cfg(not(windows))
 
 **依赖**：`filedescriptor = "0.8"`（Pipe 创建）、`mopa = "0.2"`（Downcast trait blanket impl）。均仅 Windows 条件编译。
 
-### reader 缓冲区大小
+### reader 微批处理（BE-05/12，S06）
 
-`reader.rs` 的 `READER_BUF_SIZE` 常量设为 16384（16KB）。189KB/s 输出场景下约 12 次/秒 read() 调用（4KB 为 47 次/秒），减少约 75% 系统调用。
+**「读到即续读」非定时器微批**——每次 read 成功（16KB 首块）后非阻塞续读（Windows 上基于 `WaitForSingleObject(handle, 0)` 检测管道可读），累积至 `MICRO_BATCH_MAX`（64KB）**或无可读数据**再一次 `Channel::send` + 一次 `ring_buffer_append`（BE-12：append 调用点仅批量一处，Mutex 竞争随频率自然降级；不引入无锁结构）。避免引入固定延迟——非定时器，无批处理延迟。首块经过 ConPTY 启动序列剥离，续读块在首块真实数据出现后原样透传（跨 16KB 边界残留由首块剥离状态机处理）。
+
+`READER_BUF_SIZE` 常量 = 16384（16KB），首块最多 16KB、续读约 3 块满上限。效果：IPC 次数与字节数解耦（原每次 read 即 send，S06 前每次 16KB send 一次）。
+
+**DOC-01 豁免项 1（reader_loop 残余 I/O 编排）随微批变动**：豁免表同步在 S19（本文件「reader_loop I/O 编排残余豁免」段已更新为微批后形态，明细见下）。
 
 ### reader_loop 决策逻辑纯函数化
 
-`reader_loop()` 约 90 行含 7 个关键分支（EOF/正常读取/错误/DA1 注入/ring buffer 写入/Channel 断连/Windows 首轮剥离），已将可测试逻辑抽取为纯函数：
+`reader_loop()` 主循环三个 match 分支（EOF/正常读取/错误），已将可测试逻辑抽取为纯函数：
 
 - **`apply_startup_strip(startup_drained, data) -> Option<Vec<u8>>`** — 首轮读取时剥离 ConPTY 启动序列（OSC 标题/BEL/清屏/光标归位/DSR），返回 None 表示全部剥离（跳过），Some 返回剥离后数据。`startup_drained=true` 时原样返回。6 条测试覆盖：已排空透传、全剥离跳空、部分剥离保留正文、无启动序列原样返回
 - **`should_inject_da1(already_injected, data) -> bool`** — 检测输出中的 DA1 查询（`ESC[c`/`ESC[0c]`），纯布尔参数替代 AtomicBool。4 条测试覆盖：已注入跳过、含 DA1 需注入、不含 DA1 不注入、DA1 嵌入数据中
 - **`eof_exit_code(wait_outcome: Result<Result<i32, ()>, ()>) -> Option<i32>`**（PTY-12）— EOF 退出码降级决策（P2-11/P2-42）：child 锁获取失败 / `child.wait()` 失败 → `None`（不硬编码 0），两级均 Ok → 真实退出码。3 条测试覆盖：成功返真实码（含 0）、wait 失败 None、锁失败 None
+- **`micro_batch_tail()`**（BE-05）— 微批续读决策：pending 检查 + 续读累积（read 为系统调用，决策已抽，调用不可抽）。6 条测试覆盖：无 pending 不读 / 续读到无可读 / 至 64KB 上限停 / 读错误停 / 立即 EOF / 上限尊重首块头寸
 
-剩余 I/O 编排残余分支因依赖 Mutex/RwLock/系统调用无法纯函数化——已逐分支在测试注释中标明依赖类型（M11 分析块），明细与豁免理由见下方「reader_loop I/O 编排残余豁免」段（已收编进 `.claude/test-inventory.md` 既定豁免清单，DOC-01）。
+剩余 I/O 编排残余分支因依赖 Mutex/RwLock/系统调用无法纯函数化——已逐分支在测试注释中标明依赖类型（M11 分析块，微批后形态），明细与豁免理由见下方「reader_loop I/O 编排残余豁免」段（已收编进 `.claude/test-inventory.md` 既定豁免清单，DOC-01）。
 
 ### reader_loop I/O 编排残余豁免（PTY-12，DOC-01 收编）
 
-> **本段为豁免表登记项 1（`reader_loop` 残余 I/O 编排分支）的模块级明细**，与 `.claude/test-inventory.md`「既定豁免清单」登记一致（DOC-01 收编，Stage 02 草稿转正）；豁免原因/当前兜底层级两列以 test-inventory 为唯一真值源。逐分支分析原文见 reader.rs 测试注释 M11 块。
+> **本段为豁免表登记项 1（`reader_loop` 残余 I/O 编排分支）的模块级明细**，与 `.claude/test-inventory.md`「既定豁免清单」登记一致（DOC-01 收编，Stage 02 草稿转正，**S06 微批后形态 S19 同步**）；豁免原因/当前兜底层级两列以 test-inventory 为唯一真值源。逐分支分析原文见 reader.rs 测试注释 M11 块。
 
-`reader_loop`（reader.rs）经 PTY-12 评估：除 `apply_startup_strip` / `should_inject_da1` / `eof_exit_code` 已纯函数化外，残余分支全部依赖同步原语或系统调用，判定不可抽：
+`reader_loop`（reader.rs）经 PTY-12 评估：除 `apply_startup_strip` / `should_inject_da1` / `eof_exit_code` / `micro_batch_tail` 已纯函数化外，残余分支全部依赖同步原语或系统调用，判定不可抽：
 
 | 残余分支 | 依赖 | 不可抽原因 |
 |----------|------|-----------|
@@ -155,7 +174,8 @@ JobHandle 在 `#[cfg(windows)]` 下为 HANDLE RAII 包装；`#[cfg(not(windows))
 | send Output/Exit 失败 → debug 日志 | `Channel::send`（Tauri IPC） | send 依赖运行时 webview 上下文，无法注入 |
 | EOF `child.wait()` | portable-pty `Child::wait()` | Windows `WaitForSingleObject` 系统调用（退出码降级决策已抽为 `eof_exit_code`，调用本身不可抽） |
 | DA1 响应注入 | `writer.lock()` + 管道 I/O | Mutex + 管道系统调用（检测决策已抽为 `should_inject_da1`，注入动作不可抽） |
-| ring buffer 写入 | `ring_buffer_append`（state.rs） | 函数本体已抽取（state.rs 测试覆盖）；**不存在"channel 断开→写 ring"分流决策**——P2-46 设计为无条件缓存（先缓存再 send，成功路径零 clone），channel 为 None 时仅 Option 判空跳过 send，无分支逻辑可测 |
+| 微批续读循环（`micro_batch_tail` 调用点） | 非阻塞 `WaitForSingleObject` + `read` 系统调用 | 续读决策已抽为 `micro_batch_tail` 纯函数，循环调用本身不可抽 |
+| ring buffer 写入 | `ring_buffer_append`（state.rs） | 函数本体已抽取（state.rs 测试覆盖）；**BE-12 批量 append 后调用点仅微批一处**——不存在"channel 断开→写 ring"分流决策（P2-46 无条件缓存：先缓存再 send，成功路径零 clone），channel 为 None 时仅 Option 判空跳过 send，无分支逻辑可测 |
 | `tracing::warn!`/`error!` 告警 | 日志宏 | I/O 副作用 |
 | 读错误 → 退出码 -1 | 常量赋值 | 无分支逻辑（`Some(-1)` 字面量） |
 
@@ -180,7 +200,7 @@ DA1 查询响应是终端平台能力（设计动机：Ink 系 TUI，对全部�
 |------|------|
 | `mod.rs` | PTY 模块入口：模块声明 + re-export |
 | `conpty_api.rs` | ConPTY API 解析层（ADR-0005）：vendor 二进制嵌入 + Win10 提取/加载/回退 + 三函数指针封装 |
-| `spawn.rs` | Tauri 命令（`pty_spawn`/`pty_write`/`pty_resize`/`pty_kill`）+ ConPTY 自定义实现 + PtyEvent 枚举定义 |
+| `spawn.rs` | Tauri 命令（`pty_spawn`/`pty_write`/`pty_resize`/`pty_kill`/`pty_kill_all`）+ ConPTY 自定义实现 + PtyEvent 枚举定义 |
 | `reader.rs` | 独立 reader 线程：`reader_loop()` 阻塞读取 PTY 输出 → Channel 推送 PtyEvent；`strip_conpty_startup()` 启动序列剥离；`apply_startup_strip()` 纯函数；`mirror_da1_query()` DA1 查询检测 |
 | `shell.rs` | Shell 发现与选择：`resolve_shell()` / `resolve_shell_info()` → pwsh → powershell → cmd 回退；`which_full_path()` PATH 解析 |
 | `state.rs` | 位于 `src-tauri/src/state.rs`（顶层模块）：`PtySession` 结构体 + `PtyState` 全局 HashMap + `validate_path_within_root` 路径沙箱 |
@@ -198,16 +218,17 @@ cargo test --manifest-path src-tauri/Cargo.toml <test_name> -- --test-threads=1
 
 ## 修改注意事项
 
-1. 新增 Tauri 命令后必须在 `lib.rs` 的 `generate_handler!` 注册。Tauri 2 中 `invoke_handler` 注册的自定义命令自动对所有窗口放行，无需在 `capabilities/` 逐条声明（capabilities 仅管理插件权限）
+1. 新增 Tauri 命令后必须在 `lib.rs` 的 `generate_handler!` 注册 + `build.rs` 白名单 + `capabilities/default.json` 加 `allow-<cmd>`（SEC-07 契约，缺一即 invoke reject）
 2. Rust `snake_case` ↔ JS `camelCase`，改 DTO 必须双边对应修改
 3. 新增 `#[cfg(windows)]` 块需确认是否应放在本模块（架构约束 #9）。`win_build.rs` 更名已避开 cargo build script 歧义
 4. 修改 `shell-integration.ps1` 后要跑 `test_shell_integration_script_embedded` 测试确认嵌入内容正确
 5. `reader.rs` 的 `strip_conpty_startup` 修改后务必跑全部 strip 相关测试，确认不误杀正常输出
-6. 修改 `READER_BUF_SIZE` 后跑 `reader_buf_size_is_16k` + `strip_startup_with_16k_boundary` + `strip_startup_with_large_payload` 测试
-7. 修改 `conpty_custom` 模块（flags 计算、AttrList、ConPtyMaster、RawChild、spawn 逻辑）后跑 `conpty_custom::tests` 全部 28 条测试（另：spawn.rs 顶层 `mod tests` 20 条覆盖 validate_spawn_request/validate_session_ownership/Job Object 纯逻辑/build_cmdline 引号）+ `pty_integration_tests` 的 `pty_spawn_custom_conpty` 端到端测试。**改 `compute_conpty_flags` 前必读其注释**——启用 PASSTHROUGH_MODE 会静默破坏 claude 全屏 TUI 滚轮（mouse input 不转发），改后须实测 claude 滚轮不回归
-8. 修改 `resolve_shell_info()` / `which_full_path()` 后跑 `shell::tests` 全部 20 条测试
+6. 修改 `READER_BUF_SIZE`/`MICRO_BATCH_MAX` 后跑 `reader_buf_size_is_16k` + `strip_startup_with_16k_boundary` + `strip_startup_with_large_payload` + `micro_batch_*` 微批 6 条测试（BE-05 契约 64KB 跨边界写死，改动须同步 `src/panels/terminal/usePtyOutput.ts` 直写阈值 256B 侧）
+7. 修改 `conpty_custom` 模块（flags 计算、AttrList、ConPtyMaster、RawChild、spawn 逻辑）后跑 `conpty_custom::tests` 全部 31 条测试（另：spawn.rs 顶层 `mod tests` 28 条覆盖 validate_spawn_request/validate_session_ownership/Job Object 纯逻辑/build_cmdline 引号/BE-01 容量/BE-08 pty_kill_all）+ `pty_integration_tests` 的 `pty_spawn_custom_conpty` 端到端测试。**改 `compute_conpty_flags` 前必读其注释**——启用 PASSTHROUGH_MODE 会静默破坏 claude 全屏 TUI 滚轮（mouse input 不转发），改后须实测 claude 滚轮不回归
+8. 修改 `resolve_shell_info()` / `which_full_path()` / SEC-01 白名单比对逻辑后跑 `shell::tests` 全部 24 条测试（含 4 条白名单：PATH 解析一致放行/System32 兜底/伪造路径拒绝/绝对路径非 PATH 拒绝）
 9. `resolve_shell_info()` 返回的 `ShellInfo.program` **必须是完整路径**（非短名）——否则 `CreateProcessW(lpApplicationName=..., lpCommandLine=...)` 找不到可执行文件
-10. ConPTY 指针 cast：`as_raw_handle()` 已返回 `*mut c_void`，无需再 `as *mut std::ffi::c_void`——Clippy `unnecessary-cast` 会报错。同理 `std::io::Error::new(std::io::ErrorKind::Other, e)` 简化为 `std::io::Error::other(e)`（Rust 1.74+），`.map_err(|e| std::io::Error::other(e))` 进一步简化为 `.map_err(std::io::Error::other)`
+10. 修改 `MAX_PTY_SESSIONS` 后跑 `pty_capacity_*` 三条测试 + `pty_kill_all_*` 两条（BE-01/BE-08）；修改 kill/join 超时（`KILL_JOIN_TIMEOUT`/`join_with_timeout`）后跑 `join_with_timeout_*` 三条
+11. ConPTY 指针 cast：`as_raw_handle()` 已返回 `*mut c_void`，无需再 `as *mut std::ffi::c_void`——Clippy `unnecessary-cast` 会报错。同理 `std::io::Error::new(std::io::ErrorKind::Other, e)` 简化为 `std::io::Error::other(e)`（Rust 1.74+），`.map_err(|e| std::io::Error::other(e))` 进一步简化为 `.map_err(std::io::Error::other)`
 
 ## 测试模式
 
@@ -215,11 +236,12 @@ Rust 测试分布在 5 个位置：
 
 | 位置 | 类型 | 用例数 | 访问级别 |
 |------|------|--------|---------|
-| `pty/reader.rs` `#[cfg(test)]` | 单元测试 | 36 | `use super::*` 访问 `pub(crate)` 和私有项 |
-| `pty/spawn.rs` `#[cfg(test)]` | 单元测试 | 48（`conpty_custom` 内 28 + 顶层 20） | `conpty_custom` 子模块 + 顶层 `mod tests`（validate_spawn_request/SEC-08/Job Object 纯逻辑） |
-| `pty/shell.rs` `#[cfg(test)]` | 单元测试 | 20 | `use super::*` |
-| `tests/pty_integration_tests.rs` | 集成测试 | 7 | 仅能访问 `pub` API |
-| `state.rs` `#[cfg(test)]` | 单元测试 | 32 | sandbox 路径校验 + ring buffer 纯函数测试 |
+| `pty/reader.rs` `#[cfg(test)]` | 单元测试 | 42（含 BE-05 微批 6 + BE-06 join 超时 3） | `use super::*` 访问 `pub(crate)` 和私有项 |
+| `pty/spawn.rs` `#[cfg(test)]` | 单元测试 | 59（`conpty_custom` 内 31 + 顶层 28） | `conpty_custom` 子模块 + 顶层 `mod tests`（validate_spawn_request/SEC-08/Job Object 纯逻辑/BE-01 容量/BE-08 pty_kill_all） |
+| `pty/conpty_api.rs` `#[cfg(test)]` | 单元测试 | 5（ADR-0005 嵌入捆绑） | `use super::*` |
+| `pty/shell.rs` `#[cfg(test)]` | 单元测试 | 24（SEC-01 白名单 4） | `use super::*` |
+| `tests/pty_integration_tests.rs` | 集成测试 | 7（reattach 用例随 SEC-03 删除后） | 仅能访问 `pub` API |
+| `state.rs` `#[cfg(test)]` | 单元测试 | 42 | sandbox 路径校验（含 symlink 豁免测试）+ ring buffer 纯函数测试 |
 
 ### 单元测试组织
 
@@ -239,7 +261,7 @@ assert!(master.take_writer().is_ok());
 assert!(master.take_writer().is_err()); // 第二次失败
 ```
 
-测试覆盖（`conpty_custom` 内 28 条）：`compute_conpty_flags`（4 条——全部 build 均返回 0x7，锁死 PASSTHROUGH_MODE 不启用）、flag 常量值验证（3 条）、`ConPtyMaster` MasterPty trait（4 条）、`AttrList` 生命周期（2 条）、`create_conpty_pair` 尺寸/尺寸修改/take_writer 单次、`build_env_block`/`build_cmdline` 引号处理、`spawn_conpty_child` 可纯化部分等。spawn.rs 顶层 `mod tests`（20 条）覆盖 `validate_spawn_request`（尺寸超限/白名单/cwd 沙箱拒绝）、`validate_session_ownership`（SEC-08 放行/拒绝）、Job Object 纯逻辑（job_name/limit flags）与测试清理 helper。
+测试覆盖（`conpty_custom` 内 31 条）：`compute_conpty_flags`（7 条三态表——系统 Win10 19041/21375→0x3、21376/22000/22621/26100→0x7、捆绑 19041→0x7，锁死 PASSTHROUGH_MODE 0x8 永不启用）、flag 常量值验证（3 条）、`ConPtyMaster` MasterPty trait（4 条）、`AttrList` 生命周期（2 条）、`create_conpty_pair` 尺寸/尺寸修改/take_writer 单次、`build_env_block`/`build_cmdline` 引号处理、`spawn_conpty_child` 可纯化部分等。spawn.rs 顶层 `mod tests`（28 条）覆盖 `validate_spawn_request`（尺寸超限/白名单/cwd 沙箱拒绝）、`validate_session_ownership`（SEC-08 放行/拒绝）、Job Object 纯逻辑（job_name/limit flags）、**`session_capacity_check`（BE-01 三档：未达上限放行/达到上限拒绝/超上限拒绝）**、**`pty_kill_all`（BE-08：空返回 0/多 session 全灭）**与测试清理 helper。
 
 ### 启动序列剥离测试（reader.rs）
 

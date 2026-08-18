@@ -53,9 +53,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **执行**：`onDrop` → `useSideBar.getState().moveButton(id, zone, index)`（委托 `moveButtonPure` 纯函数）
 - **拖拽仅活动栏内有效**：外部不监听 drop，按钮不能拖出活动栏
 
-### 关闭语义——display:none 保挂载 + 换区重建
+### 关闭语义——按需卸载（FE-21）+ 换区重建
 
-- **槽位内切换（display:none）**：同一半区内切换视图时，旧视图 div `display:none`，新视图 div `display:flex`。两者均保持挂载——状态不丢（同 React 条件渲染 vs display 策略的经典权衡）
+- **槽位内切换（FE-21 按需卸载）**：同一半区内切换视图时**旧视图组件卸载**（条件渲染仅挂载当前打开视图），隐藏视图不保挂载——DOM/订阅随卸载释放，杜绝隐藏视图残留订阅与内存占用。**状态丢失语义 ADR-0001 已接受**；导航树滚动位置等轻状态不入保活范围（切换即重置，可接受）。FE-21 前为 display:none 保挂载策略（状态不丢但隐藏视图留 DOM/订阅），已废弃
 - **换区重建（已知行为）**：当按钮被拖拽跨区（上→下或下→上），zones 变化导致视图组件从上区 pane 移入下区 pane。React 将其视为不同父节点下的组件，触发卸载+重建——组件内部状态丢失。此行为在 ADR-0001 中已确认接受（权衡：换区为低频操作，重建成本低于跨父节点保持实例的复杂度）
 - **首次双开 splitRatio 回退（FE-19）**：从单视图过渡到双视图时，`SideBarArea` 的 `useEffect` 仅当 `splitRatio` 为默认值（无持久化值）或越界（出 [0.1,0.9]）才回退 0.5；用户调节过的合法比例在单↔双切换中保留
 
@@ -69,9 +69,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `dropTarget.ts` | `computeDropTarget` 纯函数——零 DOM 访问，根据 clientY + 按钮矩形列表计算落点 zone + index |
 | `sideViewDefs.ts` | side-effect 注册文件：注册 `nav`（导航树）+ `explorer`（文件浏览器）+ `commit`（Commit）三条视图（icon = IconNav/IconFiles/IconCommit，`lib/icons.tsx` 单点）。新增视图在此追加 `sideViewRegistry.register(...)`；**配置钮不在此注册** |
 | `ActivityBar.tsx` | 活动栏组件：**46px 宽** flex 列（上区按钮组 + flex:1 间隔 + 下区按钮组 + 底部「配置」钮）、按钮 34×34 圆角 6、点击开关（R1/R2）、HTML5 拖拽换区/排序、VS Code 风格 active 态（ACTIVE_SELECTION_BG 底 + ACCENT_FG 图标 + 左侧 2px FOCUS_BORDER 指示条）、图标色三态（默认 DIM_FG → hover SIDEBAR_FG → active ACCENT_FG）、`data-e2e` 选择器。配色全部 `theme/colors.ts` token（硬约束 #6） |
-| `SideBarArea.tsx` | 侧栏区组件：`<Allotment vertical proportionalLayout>` 两 pane（上/下半区），每 pane `visible={!!open[zone]}`、`preferredSize` 由 splitRatio 控制；半区内按 zones 顺序渲染视图槽（`display: open[zone]===v.id ? "flex" : "none"` 保挂载）；onChange 仅双开时换算 ratio 写回 store；switchToPage/onDeletePage props 透传（nav 视图消费） |
+| `SideBarArea.tsx` | 侧栏区组件：`<Allotment vertical proportionalLayout>` 两 pane（上/下半区），每 pane `visible={!!open[zone]}`、`preferredSize` 由 splitRatio 控制；半区内按 zones 顺序条件渲染视图槽（**FE-21：仅挂载当前打开视图，隐藏视图卸载**——`open[zone]===v.id` 条件渲染）；onChange 仅双开时换算 ratio 写回 store；switchToPage/onDeletePage props 透传（nav 视图消费） |
 | `../features/navTree/NavTree.tsx` | `nav` 视图组件（NAV-05 注册）：项目/页面/活跃会话/历史折叠节点统一导航树（详见 @../navTree/CLAUDE.md） |
-| `../features/explorer/ExplorerPanel.tsx` | `explorer` 视图组件（本体不改，仅宿主变化；换区重建丢失展开状态——ADR-0001 已确认接受） |
+| `../features/explorer/ExplorerPanel.tsx` | `explorer` 视图组件（宿主为侧栏槽位；换区重建丢失展开状态——ADR-0001 已确认接受；BE-10 stopWatch 等内部变更见 @../explorer/CLAUDE.md） |
 | `../features/commit/CommitView.tsx` | `commit` 视图组件（NAV-05 新增注册） |
 
 ## 硬约束
@@ -88,7 +88,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 测试模式
 
-测试文件位于 `src/__tests__/`：`sideBarState.test.ts`（53 用例）、`sideViewRegistry.test.ts`（7 用例）、`sideBar.test.ts`（22 用例）、`activityBar.test.tsx`（38 用例）、`sideBarArea.test.tsx`（15 用例）、`workspace-sideviews.test.tsx`（13 用例）。共 148 用例（用例数见 `.claude/test-inventory.md`）。
+测试文件位于 `src/__tests__/`：`sideBarState.test.ts`（54 用例）、`sideViewRegistry.test.ts`（7 用例）、`sideBar.test.ts`（24 用例）、`activityBar.test.tsx`（40 用例）、`sideBarArea.test.tsx`（17 用例）、`workspace-sideviews.test.tsx`（13 用例）。共 155 用例（用例数见 `.claude/test-inventory.md`）。
 
 ### activityBar 拖拽测试要点
 
@@ -141,10 +141,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 配置钮渲染/点击（mock openHooksConfigFromActivityBar）
 - 种子 sideBar store（真实）+ 手动注册测试视图（`_reset` 后 register stub 组件）；mock dataTransfer
 
-`sideBarArea.test.tsx`（15 用例）：
+`sideBarArea.test.tsx`（17 用例）：
 - 四布局态渲染：单开上（下 pane hidden）、单开下（上 pane hidden）、双开（两 pane visible）、全关无用例（Workspace 层 whole sidebar hidden 不挂载）
 - Allotment preferredSize = splitRatio×100 / (1-splitRatio)×100
-- 视图槽 display:none/flex 切换 + display:none 保挂载
+- **视图槽条件渲染（FE-21）**：打开的槽渲染、隐藏的槽不渲染（卸载不留 DOM/订阅）；切换 open 后旧槽卸载、新槽挂载
 - 换区后视图移槽——旧区组件卸载、新区组件挂载（重建行为验证）
 - switchToPage/onDeletePage props 透传到视图组件
 - onChange 双开时换算 ratio→setSplitRatio、单开时除零守卫

@@ -20,6 +20,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `loadFromDisk()` 在 App 启动时调用，先于项目数据加载。
 - `loaded` 守卫防止启动加载阶段触发空写。
 - IP 调用：通过 `src/ipc/settings` 的 `loadSettings` / `saveSettings` 读写磁盘。
+- **FE-09 保存失败 toast**：`saveSettings` 失败统一 `toast.show("warning", "设置保存失败，重启后将丢失")` + `console.warn`（不再静默）。
+- **FE-11 corrupted 消费**：`loadSettings` 返回 `{ data, corrupted }`——`corrupted: true`（解析失败回退默认，含 .bak 命中）时 `toast.show("warning", "配置已损坏，已回退默认值")`。
 
 ### `keybindings.ts` — 快捷键自定义绑定（用户覆盖层）
 
@@ -29,6 +31,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **独立写入靠后端浅合并**：`save_settings` 只写 `{ keybindings }` slice，后端 `settings.rs` 浅合并 top-level 键，不擦除 `fontSize` 等其他段（故 `fontSize.ts` 无需改动，两 store 各写各的互不覆盖）。
 - overrides 经 `App.tsx` 的 `wireKeybindings(getShortcutRegistry(), useKeybindings)` 注入 `ShortcutRegistry.setOverrides` 构建绑定表。
 - 与 `src/features/shortcuts` 的关系：本 store 只存覆盖数据，校验/降级/绑定表构建在注册表侧（`isReserved` + `effectiveKeystroke`）。
+- **FE-09 保存失败 toast + FE-11 corrupted 消费**：同 `fontSize.ts`——保存失败 toast 告警、load 返回 `corrupted` 时 toast「配置已损坏，已回退默认值」。
 
 ### `sideBar.ts` — 侧栏视图状态
 
@@ -36,14 +39,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 默认态：`DEFAULT_ZONES = {top:["nav","explorer","commit"], bottom:[]}`、`DEFAULT_OPEN = {top:"nav", bottom:null}`（NAV-05 三槽重组；原 `projects`/`agent-status` 视图随 NAV-06/08 退役）。
 - 操作方法：`toggleView(id)` / `moveButton(id, zone, index)` 委托 `sideBarState` 纯函数；`setWidth` / `setSplitRatio` 内部 clamp。
 - 持久化照 `fontSize.ts` 模式：`loadFromDisk` 读 `~/.slterminal/settings.json` 的 `sideBar` 段 → `sanitizeSideBar`（校验+clamp）→ `reconcileZones`（对齐注册表）→ 置 `loaded:true`；变更后 2s debounce → `saveSettings({sideBar})`（后端浅合并，不擦 fontSize/keybindings 段）。
+- **FE-09 保存失败 toast + FE-11 corrupted 消费**：同 `fontSize.ts`——保存失败 toast 告警、load 返回 `corrupted` 时 toast「配置已损坏，已回退默认值」。
 - 导出 `cancelPendingSave()` 供 App 关窗冲刷。
 
 ### `projects.ts` — 项目/操作页面数据模型与持久化
 
 - 二级模型：`Project` → `OperationPage[]`。面板由 Dockview 管理，不在此 store。
 - 所有变更操作（CRUD + rename + switchToPage + updatePageLayout）自动递增 `project.version`。
+- **页面总数上限（FE-01）**：`MAX_PAGES = 20` 常量——`addPage` 超限拒绝新增 + toast 告警（防多 Dockview 实例内存/DOM 无界增长，豁免登记见 workspace/CLAUDE.md + ADR）。
 - **持久化**：
-  - 启动时调用 `loadAllProjects()` 从 exe 同级 `slterminal-projects.json` 恢复（路径由 Rust `projects.rs` 解析，绕过路径 sandbox）。
+  - 启动时调用 `loadAllProjects()` 从 exe 同级 `slterminal-projects.json` 恢复（路径由 Rust `projects.rs` 解析，绕过路径 sandbox；**FE-11：`loadProjects` 返回 `{ data, corrupted }`**——损坏时回退默认并 toast「配置已损坏，已回退默认值」）。
   - 变更通过 Zustand `subscribe` + 2s debounce 自动调用 `saveAllProjects()` 保存。
   - 初始化标记 `markPersistenceReady()` 必须在 `loadFromDisk` 之后调用，防止首次加载触发空写。
   - 关闭钩子中调用 `cancelPendingSave()` 避免竞态。
@@ -63,11 +68,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 | Store | 测试文件 | 用例数 | 覆盖范围 |
 |-------|---------|--------|---------|
-| `projects` | `projects.test.ts` | 46 | Project/Page CRUD、持久化（loadFromDisk/saveToDisk）、version 递增、ID 生成、subscribe+debounce 持久化链（`_resetPersistence()` 测试辅助） |
-| `sideBar` | `sideBar.test.ts` | 21 | 默认值/toggle/move 经 store 委托纯函数、setWidth/setSplitRatio clamp（含 NaN/Infinity 回退，SVC-13）、loadFromDisk 5 分支（合法/脏数据/缺失/异常/reconcileZones）、loaded 守卫、2s debounce saveSettings({sideBar}) payload 键集合精确匹配、saveSettings 失败静默吞错 |
+| `projects` | `projects.test.ts` | 49 | Project/Page CRUD、持久化（loadFromDisk/saveToDisk）、version 递增、ID 生成、subscribe+debounce 持久化链（`_resetPersistence()` 测试辅助）、**FE-01 页面数上限 MAX_PAGES（超限拒绝 + toast）**、FE-11 corrupted 回退 |
+| `sideBar` | `sideBar.test.ts` | 24 | 默认值/toggle/move 经 store 委托纯函数、setWidth/setSplitRatio clamp（含 NaN/Infinity 回退，SVC-13）、loadFromDisk 5 分支（合法/脏数据/缺失/异常/reconcileZones）、loaded 守卫、2s debounce saveSettings({sideBar}) payload 键集合精确匹配、**FE-09 保存失败 toast + FE-11 corrupted toast** |
 | `layout` | `layout.test.ts` | 4 | activePageId 设置/清空/重复 |
-| `fontSize` | `fontSize.test.ts` | 17 | 默认值、clamp、loadFromDisk（多种分支）、debounce 持久化 |
-| `keybindings` | `keybindings.test.ts` | 17 | 默认空、setBinding/clearBinding/resetAll、loadFromDisk（合法/sanitize 脏值/缺失/非对象/异常）、loaded 守卫、debounce → saveSettings({keybindings}) |
+| `fontSize` | `font-size.test.ts` | 19 | 默认值、clamp、loadFromDisk（多种分支）、debounce 持久化、**FE-09 保存失败 toast + FE-11 corrupted toast** |
+| `keybindings` | `keybindings.test.ts` | 19 | 默认空、setBinding/clearBinding/resetAll、loadFromDisk（合法/sanitize 脏值/缺失/非对象/异常）、loaded 守卫、debounce → saveSettings({keybindings})、**FE-09 保存失败 toast + FE-11 corrupted toast** |
+| 启动链 | `startup-store-fail-warn.test.tsx` | 2 | **FE-03 启动链告警**：App 启动三 store（fontSize/keybindings/sideBar）loadFromDisk 失败/损坏时 toast 告警路径 |
 
 ### 测试模式
 

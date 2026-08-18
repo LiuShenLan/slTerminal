@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 | 文件 | 职责 |
 |------|------|
-| `index.ts` | 公共 API 出口（含 icons/StatusDot/ConfirmDialog/toast 全部导出） |
+| `index.ts` | 公共 API 出口（含 icons/StatusDot/ConfirmDialog/toast 全部导出）；**Stage 08：re-export `parseAppError`/`getErrorMessage`/`APP_ERROR_VARIANTS`（`src/ipc/appError.ts`）**——AppError 统一解析经 lib barrel 供全前端消费 |
 | `path.ts` | 路径工具函数：`normalizePath` / `basename` / `isChildOf` / `relativePath` |
 | `activePointer.ts` | `createActivePointer<T>()` 泛型工厂，供 terminal/editor/explorer 复用 |
 | `useFontSizeWheel.ts` | Ctrl+Wheel 字体缩放共享 hook，供 useXterm/useCodeMirror 复用 |

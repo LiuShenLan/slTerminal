@@ -42,14 +42,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 1. **前端绝不直接碰 OS/文件/进程**：`invoke` 只允许出现在 `src/ipc/`；其它文件只调用 `ipc/` 暴露的领域函数。
 2. **后端按功能分模块**（现行清单见模块索引）：模块间不互相穿透，共享只经 `state.rs` 的 `AppState`。
 3. **命令统一注册**于 `lib.rs` 的 `generate_handler!`；一律返回 `Result<_, AppError>`；阻塞 I/O 用 `spawn_blocking`。
-4. **DTO 双边对应**：`src/types/` ↔ Rust 模块 DTO 一一对应；Rust `snake_case` ↔ JS `camelCase`，改一边必须改另一边。
-5. **面板封闭**：Dockview 面板只能是 `panels/` 下注册过的类型；新增类型 = 加目录 + 在 `panelRegistry.ts` 注册。
-6. **配色单点**：颜色定义于 `theme/schemes/<scheme>.ts`（配色方案值文件），组件经 `theme/colors.ts` facade token 引用，禁止硬编码颜色（既定例外登记：启动链 fail-safe 三处与终端 adapter → ../src/theme/CLAUDE.md；FileIcon 六色盘 → ../src/features/explorer/CLAUDE.md；项目行文件夹蓝 → ../src/features/navTree/CLAUDE.md）。
+4. **DTO 双边对应**：`src/types/` ↔ Rust 模块 DTO 一一对应；Rust `snake_case` ↔ JS `camelCase`，改一边必须改另一边。字段类型泛化后，其语义值集（枚举字面量联合等）须在 CLI profile（前端 `cliProfiles` 能力声明）与后端对应 provider（Rust 枚举）同步登记，并配合同步测试锁死一致性（先例：HooksLayer `"user"|"project"|"local"` ↔ 后端 `Layer` 枚举，FE-14/BE-18）。
+5. **面板封闭**：Dockview 面板只能是 `panels/` 下注册过的类型；新增类型 = 加目录 + 在 `panelRegistry.ts` 注册。合法形态含「hub 容器 + 注册表分派子编辑器」——hub 面板本身是普通注册面板，内部经注册表分派渲染子编辑器组件（hooksConfig 先例：hub 经 CLI profile 的 `configEditor` 字段分派，新增 CLI 自带编辑器组件即可接入，hub 零改动，KZ-1）。
+6. **配色单点**：颜色定义于 `theme/schemes/<scheme>.ts`（配色方案值文件），组件经 `theme/colors.ts` facade token 引用，禁止硬编码颜色。既定例外完整清单：
+   - 启动链 fail-safe 三处静态色（index.html body 背景 / tauri.conf.json 窗口背景 / main.tsx 超时错误页）——先于方案加载，改 linear 对应 ui 值须手动同步（→ ../src/theme/CLAUDE.md）
+   - 终端 adapter（panels/terminal/theme.ts 展开 active 方案 terminal 段）——例外范围仅 terminal 段，不扩新（→ ../src/theme/CLAUDE.md）
+   - FileIcon 六色盘（→ ../src/features/explorer/CLAUDE.md）
+   - 项目行文件夹蓝（→ ../src/features/navTree/CLAUDE.md）
+   新增例外须同步登记对应模块 CLAUDE.md（注明范围与同步义务），禁止只改代码不留档。
 7. **布局单点**：操作页面布局只经 `workspace/layoutSerde.ts` 用 Dockview `toJSON/fromJSON` 存取。
 8. **会话元数据单点**：PTY 进程映射仅在 `panels/terminal/TerminalRegistry`（模块级 Map）管理，前端会话元数据已合并。面板只订阅，不自存。
-9. **平台分支收敛**：`#[cfg(windows)]` 只允许出现在 pty 模块等明确处，业务逻辑不撒 cfg（详见 ../src-tauri/src/pty/CLAUDE.md）。
+9. **平台分支收敛**：业务 `#[cfg(windows)]` 仅允许出现在 pty 模块（spawn.rs / shell.rs / win_build.rs / conpty_api.rs 等 Windows 专用 API 编译期分支），业务逻辑不撒 cfg（详见 ../src-tauri/src/pty/CLAUDE.md）。测试 `#[cfg(windows)]` 原则上改运行时 `cfg!(windows)` 分支；依赖 Windows 编译期 API（symlink 等）无法运行时区分的例外保留 cfg，须在所属模块 CLAUDE.md 登记豁免（BE-17/D5 先例：state.rs、agent_history/ops.rs、hooks/signal.rs、hooks/watcher.rs、notify/mod.rs 的 symlink 特权测试）。
 10. **权限最小化**：Tauri 2 自定义命令默认放行，`capabilities/` 只管插件权限；不追加通配 `*`。
-11. **测试覆盖**: 所有改动的代码都需要添加全量自动化测试用例覆盖
+11. **测试覆盖**: 改动的代码可自动化部分必须添加全量自动化测试用例覆盖；不可自动化部分（平台 API 直调、真实 ConPTY/OS 交互、人工实测场景等）须在 `.claude/test-inventory.md` 既定豁免清单登记，注明豁免原因与当前兜底层级（L1/L4 集成用例、人工验证手册等），禁止未登记豁免。
+12. **store 纯状态**：`src/stores/` 只存状态与状态转换，不存业务逻辑（校验/映射/编排放注册表、纯函数或上层组件）；持久化一律经 `src/ipc/` 对应领域函数（settings 类经 ipc/settings、项目数据经 ipc/projects），禁止在 store 内直接调用 `invoke`；禁止跨 store 隐式依赖——store 间协调在上层组件/命令中完成（详见 ../src/stores/CLAUDE.md）。
+13. **注册表家族通用契约**：注册表类模块统一形态——模块级单例（模块内实例化并导出，或 getXxxRegistry() 惰性获取）、`register(...)` / `getAll()`（按注册序）接口、`_reset()`（仅测试用，清空全部条目）；注册经 side-effect import 触发（import 即注册，触发点登记于所属模块 CLAUDE.md，禁止隐式初始化）；测试在 beforeEach/afterEach 调 `_reset()` 保证用例隔离。先例：panelRegistry / SchemeRegistry / FileViewerRegistry / ShortcutRegistry / SideViewRegistry / CliProfileRegistry / TerminalRegistry。
 
 ## Windows 关键坑
 
@@ -137,7 +144,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | src-tauri/src/notify | 文件系统监听（LruWatcherPool 缓存 + pause/resume 切换） | src-tauri/src/notify/mod.rs | ../src-tauri/src/notify/CLAUDE.md |
 | src-tauri/src/hooks | CLI hooks 能力层（CliHooksProvider trait + cliId 键注册表 + agent-event 广播 + claude provider 注入/卸载/状态/statusline 桥接（context 官方 used_percentage 通道）/三层配置读写 + 6 条 agent_hooks_* 泛化命令） | src-tauri/src/hooks/mod.rs | ../src-tauri/src/hooks/CLAUDE.md |
 | src-tauri/src/agent_history | 历史会话聚合层（CliHistoryProvider trait + cliId 键注册表 + claude provider 扫描/删除 + SEC-05 sessionId 校验） | src-tauri/src/agent_history/mod.rs | ../src-tauri/src/agent_history/CLAUDE.md |
-| src-tauri/src 顶层 | 单文件模块：lib.rs（命令注册/State/setup）、settings.rs（浅合并）、projects.rs（exe 同级 JSON 绕过沙箱）、state.rs（AppState/PtySession/路径沙箱）、error.rs（AppError） | src-tauri/src/lib.rs | ../src-tauri/src/CLAUDE.md |
+| src-tauri/src 顶层 | 单文件模块：lib.rs（命令注册/State/setup）、app_dir.rs（app 数据目录解析，BE-16 上提，settings/projects 共用）、settings.rs（浅合并）、projects.rs（exe 同级 JSON 绕过沙箱）、state.rs（AppState/PtySession/路径沙箱）、error.rs（AppError） | src-tauri/src/lib.rs | ../src-tauri/src/CLAUDE.md |
 | e2e-tests | WDIO E2E 端到端测试 | e2e-tests/wdio.conf.ts | ../e2e-tests/CLAUDE.md |
 
 ## 需求编号索引

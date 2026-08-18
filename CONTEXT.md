@@ -24,7 +24,7 @@ Dockview 布局中可托管的最小 UI 单元。每个面板属于一种面板�
 _Avoid_: 窗格, 视图
 
 **面板类型**（Panel Type）：
-面板的分类。当前有 6 种：terminal / editor / html / gitshow / diff / hooksConfig。新增面板类型需在面板注册表中显式注册。布局恢复时会过滤掉未注册的面板类型。
+面板的分类。当前有 6 种：terminal / editor / htmlviewer / gitshow / diff / hooksConfig（注册 id 与 panelRegistry.ts 一致）。新增面板类型需在面板注册表中显式注册。布局恢复时会过滤掉未注册的面板类型。
 
 **面板实例**（Panel Instance）：
 具体的一个面板，有唯一标识符，可被创建、关闭、拖拽分屏。
@@ -144,7 +144,7 @@ LRU 缓存的文件监听器池。切换项目时通过暂停/恢复切换活跃
 文件中连续变更行的范围。每个差异块记录旧文件和新文件中的起止行号（1-based），驱动编辑器行号 gutter 的颜色标记。
 
 **Git 仓库缓存**：
-工作目录到 git2 仓库对象的映射缓存。避免重复的 `Repository::discover` 遍历。目录切换时清理。
+工作目录到 git2 仓库对象的映射缓存。避免重复的 `Repository::discover` 遍历。容量上限 LRU（8，BE-09）：命中即刷新最近使用序，超容量淘汰最久未用；消费方只当「该 workdir 已被 discover 校验」标记，命中后仍从磁盘独立 open，淘汰无资源泄漏。
 
 **变更列表**（Changes）：
 Commit 视图中展示已跟踪变更文件的分组——状态为 added、modified、deleted、renamed、conflict 的文件。按相对路径字母序排列。
