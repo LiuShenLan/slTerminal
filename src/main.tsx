@@ -25,10 +25,26 @@ async function bootstrap() {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       console.error("[slTerminal]", msg);
-      document.body.innerHTML =
-        `<div style="display:flex;align-items:center;justify-content:center;height:100vh;` +
-        `background:#0a0a0b;color:#ece9e4;font-family:'JetBrains Mono','Cascadia Mono',Consolas,'Microsoft YaHei UI',monospace;font-size:14px;padding:20px;">` +
-        `<span style="color:#d9706b;">` + msg + `</span></div>`;
+      // SEC-10：fail-safe 页不再用字符串拼接注入消息（msg 为运行时变量，可能含路径/任意文本）——
+      // 改 createElement + textContent + style 赋值，textContent 天然转义，杜绝 HTML 注入。
+      // 视觉效果与原模板逐项一致（深色底 + 居中 + 错误红；色值属启动链 fail-safe 既定例外）。
+      const container = document.createElement("div");
+      container.style.display = "flex";
+      container.style.alignItems = "center";
+      container.style.justifyContent = "center";
+      container.style.height = "100vh";
+      container.style.background = "#0a0a0b";
+      container.style.color = "#ece9e4";
+      container.style.fontFamily =
+        "'JetBrains Mono','Cascadia Mono',Consolas,'Microsoft YaHei UI',monospace";
+      container.style.fontSize = "14px";
+      container.style.padding = "20px";
+      const messageSpan = document.createElement("span");
+      messageSpan.style.color = "#d9706b";
+      messageSpan.textContent = msg;
+      container.appendChild(messageSpan);
+      // 等价于原 body 整体替换（React 尚未挂载，body 仅含 #root）
+      document.body.replaceChildren(container);
       return;
     }
   }

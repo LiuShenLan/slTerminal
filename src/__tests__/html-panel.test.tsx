@@ -7,6 +7,7 @@
 //   4. 边界 — 空 HTML / 大内容 / script 标签
 //   5. 注入脚本内容 — 键盘转发 + 片段链接拦截
 //   6. postMessage 键盘转发桥 + SEC-03 校验（含负面用例；jsdom 模拟，真实 WebView2 由 L4 验收）
+//   7. SEC-04 nonce 校验——注入脚本携带面板 nonce / 无 nonce / 伪造 nonce 忽略 / 合法 nonce 触发 / 实例隔离
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import React from "react";
@@ -447,13 +448,33 @@ describe("HtmlPanel", () => {
   // 真实行为由 L4 E2E（真实 WebView2 中 postMessage 往返）验收。
   // ==========================================================================
 
-  /** 辅助：构造通过 origin + source 校验的 MessageEvent 并 dispatch */
-  function dispatchTrustedKey(iframe: HTMLIFrameElement, data: Record<string, unknown>) {
+  /** 从 iframe srcDoc 提取注入脚本中拼入的 nonce（SEC-04 校验值） */
+  function extractNonce(iframe: HTMLIFrameElement): string {
+    const doc = iframe.getAttribute("srcDoc") ?? "";
+    const m = /nonce:"([0-9a-f]+)"/.exec(doc);
+    if (!m) throw new Error("srcDoc 未找到 nonce——注入脚本结构已变，测试需同步");
+    return m[1]!;
+  }
+
+  /**
+   * 辅助：构造通过 origin + source 校验的 MessageEvent 并 dispatch。
+   * @param nonceOverride 消息携带的 nonce 值——缺省自动取 srcDoc 中合法 nonce；
+   *   "omit" = 消息不带 nonce 字段（SEC-04 负面用例）；其它字符串 = 伪造 nonce
+   */
+  function dispatchTrustedKey(
+    iframe: HTMLIFrameElement,
+    data: Record<string, unknown>,
+    nonceOverride?: string | "omit",
+  ) {
+    const payload =
+      nonceOverride === "omit"
+        ? { ...data }
+        : { nonce: nonceOverride ?? extractNonce(iframe), ...data };
     window.dispatchEvent(
       new MessageEvent("message", {
         origin: "null",
         source: iframe.contentWindow,
-        data,
+        data: payload,
       }),
     );
   }
@@ -672,7 +693,7 @@ describe("HtmlPanel", () => {
     const { iframe } = await getRenderedIframe();
 
     const spy = vi.spyOn(window, "dispatchEvent");
-    // 只发 fingerprint 和 type，缺所有修饰键字段
+    // 只发 fingerprint 和 type（nonce 自动补齐），缺所有修饰键字段
     dispatchTrustedKey(iframe, { type: "slterm_key", fingerprint: "Ctrl+KeyW" });
 
     await new Promise((r) => setTimeout(r, 10));
@@ -684,5 +705,126 @@ describe("HtmlPanel", () => {
     expect(event.code).toBe("");
     spy.mockRestore();
     mocks.mockExportContextBindings.mockReturnValue([]);
+  });
+
+  // ==========================================================================
+  // SEC-04: postMessage nonce 校验（面板挂载期随机值，防 iframe 内任意脚本伪造）
+  //
+  // 威胁模型：iframe 内任意脚本可 postMessage 伪造 slterm_key（origin/source 校验
+  // 挡不住 iframe 自身内容——origin 同为 "null"、source 同为 contentWindow）。
+  // 修复 = 面板挂载生成随机 nonce 拼入注入脚本，父窗口校验消息 nonce 一致才转发。
+  // jsdom 无法执行 srcdoc 内脚本，这里验证父窗口校验逻辑 + 注入脚本含 nonce；
+  // 真实 WebView2 往返由 L4 验收。
+  // ==========================================================================
+
+  it("SEC-04: 注入脚本的 keydown postMessage 携带面板 nonce", async () => {
+    mocks.mockReadFile.mockResolvedValue("<p>test</p>");
+    const { getByTitle } = renderHtmlPanel("C:/test/a.html");
+    const doc = (await waitForLoaded(getByTitle, "C:/test/a.html")).getAttribute("srcDoc")!;
+    // nonce 为 128 位随机数十六进制串（32 字符），拼在 type 字段之后
+    expect(doc).toMatch(/type:"slterm_key",nonce:"[0-9a-f]{32}",fingerprint:/);
+  });
+
+  it("SEC-04: 合法 nonce 的消息正常触发快捷键", async () => {
+    mocks.mockExportContextBindings.mockReturnValue([{ keystroke: "Ctrl+KeyW" }]);
+    const { iframe } = await getRenderedIframe();
+
+    const spy = vi.spyOn(window, "dispatchEvent");
+    dispatchTrustedKey(iframe, {
+      type: "slterm_key",
+      fingerprint: "Ctrl+KeyW",
+      ctrlKey: true, shiftKey: false, altKey: false, metaKey: false,
+      code: "KeyW", key: "w",
+    });
+
+    await new Promise((r) => setTimeout(r, 10));
+    expect(kbDispatchCount(spy)).toBeGreaterThan(0);
+    spy.mockRestore();
+    mocks.mockExportContextBindings.mockReturnValue([]);
+  });
+
+  it("SEC-04: 无 nonce 的消息被忽略（伪造消息不带 nonce）", async () => {
+    mocks.mockExportContextBindings.mockReturnValue([{ keystroke: "Ctrl+KeyW" }]);
+    const { iframe } = await getRenderedIframe();
+
+    const spy = vi.spyOn(window, "dispatchEvent");
+    dispatchTrustedKey(iframe, {
+      type: "slterm_key",
+      fingerprint: "Ctrl+KeyW",
+      ctrlKey: true, shiftKey: false, altKey: false, metaKey: false,
+      code: "KeyW", key: "w",
+    }, "omit");
+
+    await new Promise((r) => setTimeout(r, 10));
+    expect(kbDispatchCount(spy)).toBe(0);
+    spy.mockRestore();
+    mocks.mockExportContextBindings.mockReturnValue([]);
+  });
+
+  it("SEC-04: nonce 不符的消息被忽略（伪造 nonce）", async () => {
+    mocks.mockExportContextBindings.mockReturnValue([{ keystroke: "Ctrl+KeyW" }]);
+    const { iframe } = await getRenderedIframe();
+
+    const spy = vi.spyOn(window, "dispatchEvent");
+    dispatchTrustedKey(iframe, {
+      type: "slterm_key",
+      fingerprint: "Ctrl+KeyW",
+      ctrlKey: true, shiftKey: false, altKey: false, metaKey: false,
+      code: "KeyW", key: "w",
+    }, "00000000000000000000000000000000");
+
+    await new Promise((r) => setTimeout(r, 10));
+    expect(kbDispatchCount(spy)).toBe(0);
+    spy.mockRestore();
+    mocks.mockExportContextBindings.mockReturnValue([]);
+  });
+
+  it("SEC-04: nonce 非字符串（如数字）被忽略", async () => {
+    mocks.mockExportContextBindings.mockReturnValue([{ keystroke: "Ctrl+KeyW" }]);
+    const { iframe } = await getRenderedIframe();
+
+    const spy = vi.spyOn(window, "dispatchEvent");
+    dispatchTrustedKey(iframe, {
+      type: "slterm_key",
+      fingerprint: "Ctrl+KeyW",
+      ctrlKey: true,
+    }, 123 as unknown as string);
+
+    await new Promise((r) => setTimeout(r, 10));
+    expect(kbDispatchCount(spy)).toBe(0);
+    spy.mockRestore();
+    mocks.mockExportContextBindings.mockReturnValue([]);
+  });
+
+  it("SEC-04: 同面板重渲染 nonce 稳定（注入脚本与校验值不漂移）", async () => {
+    mocks.mockReadFile.mockResolvedValue("<p>test</p>");
+    const { rerender, getByTitle } = renderHtmlPanel("C:/test/a.html");
+    const first = await waitForLoaded(getByTitle, "C:/test/a.html");
+    const firstNonce = extractNonce(first);
+
+    // 触发一次重渲染（StrictMode 双渲染同源场景：ref 惰性初始化不重复生成）
+    rerender(
+      React.createElement(HtmlPanel, {
+        params: { panelId: "tp", filePath: "C:/test/a.html" },
+      }),
+    );
+
+    const second = await waitForLoaded(getByTitle, "C:/test/a.html");
+    expect(extractNonce(second)).toBe(firstNonce);
+  });
+
+  it("SEC-04: 两个独立面板实例 nonce 互不相同（防全局共享 nonce）", async () => {
+    mocks.mockReadFile.mockResolvedValue("<p>test</p>");
+    const { getByTitle } = render(
+      React.createElement("div", null, [
+        React.createElement(HtmlPanel, { key: "a", params: { panelId: "pa", filePath: "C:/test/a.html" } }),
+        React.createElement(HtmlPanel, { key: "b", params: { panelId: "pb", filePath: "C:/test/b.html" } }),
+      ]),
+    );
+    const iframeA = await waitForLoaded(getByTitle, "C:/test/a.html");
+    const iframeB = await waitForLoaded(getByTitle, "C:/test/b.html");
+    expect(extractNonce(iframeA)).toMatch(/^[0-9a-f]{32}$/);
+    expect(extractNonce(iframeB)).toMatch(/^[0-9a-f]{32}$/);
+    expect(extractNonce(iframeA)).not.toBe(extractNonce(iframeB));
   });
 });

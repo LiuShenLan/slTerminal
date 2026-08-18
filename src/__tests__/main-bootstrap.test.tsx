@@ -30,9 +30,11 @@ describe("main.tsx bootstrap", () => {
       "[slTerminal]",
       expect.stringContaining("Tauri IPC 初始化超时"),
     );
-    // 页面显示错误信息（暗色错误样式 #d9706b）——非白屏
+    // 页面显示错误信息（暗色错误样式）——非白屏
     expect(document.body.innerHTML).toContain("Tauri IPC 初始化超时");
-    expect(document.body.innerHTML).toContain("#d9706b");
+    // SEC-10：fail-safe 页改 createElement + textContent + style 赋值——
+    // 颜色经 CSSOM 写入 style attribute，jsdom 将 hex 规范化为 rgb 形态（html-panel.test.tsx 同先例）
+    expect(document.body.innerHTML).toContain("rgb(217, 112, 107)");
     // 未挂载 React（无 App 启动中文案）
     expect(document.body.innerHTML).not.toContain("slTerminal 启动中");
   });

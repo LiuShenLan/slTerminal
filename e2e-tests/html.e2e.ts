@@ -45,13 +45,17 @@ describe("HTML 面板 Ctrl+W 转发", () => {
       // window.postMessage 从主窗口发送时 e.origin 为 Tauri 协议 origin（非 "null"字符串）
       // 且 e.source 为 window（非 iframe.contentWindow），无法通过 HtmlPanel handleMessage 的
       // origin/source 校验。改用 MessageEvent 构造函数显式设置 origin="null" + source=iframe.contentWindow。
+      // SEC-04：消息须携带面板注入的随机 nonce——从 iframe srcdoc 属性提取（父窗口可读该属性，
+      // sandbox 无 allow-same-origin 不访问 contentDocument），与注入脚本拼入的 32 位 hex 一致。
       await browser.waitUntil(
         async () =>
           await browser.execute((pid: string) => {
             const iframe = document.querySelector("iframe");
+            const nonce = iframe?.getAttribute("srcdoc")?.match(/nonce:"([0-9a-f]{32})"/)?.[1] ?? "";
             const msgEvent = new MessageEvent("message", {
               data: {
                 type: "slterm_key",
+                nonce,
                 fingerprint: "Ctrl+KeyW",
                 ctrlKey: true, shiftKey: false, altKey: false, metaKey: false,
                 code: "KeyW", key: "w",
