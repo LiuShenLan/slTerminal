@@ -96,7 +96,8 @@ export interface UseNavTreeResult {
   activePageId: string | null;
   /** 历史扫描状态（useAgentHistory 透传） */
   historyState: AgentHistoryState;
-  /** 刷新（重扫历史会话——「导航」头刷新钮） */
+  /** 刷新（重扫历史会话——「导航」头刷新钮；缺省走后端 (mtime, 文件数) 缓存，
+   *  键失效自动重扫；显式 force 语义经 scanAgentHistory(cliId, force) 透传） */
   refresh(): void;
   /** 删除历史会话后的即时局部刷新（不重扫） */
   removeLocal(sessionId: string): void;
@@ -134,20 +135,53 @@ export function useNavTree(): UseNavTreeResult {
     return map;
   }, [rows]);
 
-  // 历史会话按项目归组（cwd 前缀匹配 rootPath 归属；组内 mtimeMs 降序——原 HistorySessionList（已删）current 区）
+  // FE-16: 历史归属索引——规范化 rootPath → projectId 一次建表（O(1) 查表），
+  // 替代「每会话扫描全部项目」的 O(N×M) 前缀匹配
+  const rootPathIndex = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const proj of Object.values(projects)) {
+      const key = normalizePath(proj.rootPath)
+        .toLowerCase()
+        .replace(/\/+$/, "");
+      // 重复 rootPath（异常数据）首见保留（照原 Object.values.find 首命中语义）
+      if (!map.has(key)) map.set(key, proj.projectId);
+    }
+    return map;
+  }, [projects]);
+
+  /** 归属项目定位（FE-16 索引版）：cwd 规范化后逐级上溯查表——命中即 rootPath
+   *  恰为 cwd 或其一前缀目录（段边界守卫，语义等价 isCwdUnderProject 的
+   *  `${b}/` 前缀判定）；最深前缀命中——比原 find 首命中更精确（嵌套项目归子项） */
+  const projectIdForCwd = useCallback(
+    (cwd: string | null): string | null => {
+      if (!cwd) return null;
+      let cur = normalizePath(cwd).toLowerCase().replace(/\/+$/, "");
+      while (cur) {
+        const id = rootPathIndex.get(cur);
+        if (id !== undefined) return id;
+        const sep = cur.lastIndexOf("/");
+        if (sep <= 0) break;
+        cur = cur.slice(0, sep);
+      }
+      return null;
+    },
+    [rootPathIndex],
+  );
+
+  // 历史会话按项目归组（索引归属；组内 mtimeMs 降序——原 HistorySessionList（已删）current 区）。
+  // 依赖精确化（FE-16）：只依赖 sessions + 索引，不再直接依赖 projects（项目页增删不重算归组）
   const historyByProject = useMemo(() => {
     const map = new Map<string, AgentHistorySession[]>();
-    const projList = Object.values(projects);
     for (const session of history.sessions) {
-      const proj = projList.find((p) => isCwdUnderProject(session.cwd, p.rootPath));
-      if (!proj) continue; // 无归属项目（孤儿目录）→ 导航树不展示
-      const list = map.get(proj.projectId);
+      const projId = projectIdForCwd(session.cwd);
+      if (!projId) continue; // 无归属项目（孤儿目录）→ 导航树不展示
+      const list = map.get(projId);
       if (list) list.push(session);
-      else map.set(proj.projectId, [session]);
+      else map.set(projId, [session]);
     }
     for (const list of map.values()) list.sort((a, b) => b.mtimeMs - a.mtimeMs);
     return map;
-  }, [history.sessions, projects]);
+  }, [history.sessions, projectIdForCwd]);
 
   const toggleExpand = useCallback((id: string) => {
     setExpanded((prev) => {
@@ -169,8 +203,9 @@ export function useNavTree(): UseNavTreeResult {
 
   const searching = query.trim().length > 0;
 
-  // 挂载即扫描历史（NAV-10 契约：计数 pill 与历史行在首屏可见——历史折叠节点
-  // 常驻项目下，计数需要数据；useAgentHistory generation 防竞兜底重复扫描）
+  // 挂载即扫描历史一次（NAV-10 契约：计数 pill 与历史行在首屏可见——历史折叠节点
+  // 常驻项目下，计数需要数据；FE-19：展开历史节点不再重复 scan——BE-19 后端
+  // (目录 mtime, 文件数) 缓存命中复用不重复读盘，显式刷新/恢复完成走 force=true）
   useEffect(() => {
     void history.scan();
   }, [history.scan]);

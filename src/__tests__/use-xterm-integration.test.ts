@@ -511,10 +511,10 @@ describe("INT-2: term.onData → pty.write 调用链", () => {
 });
 
 // ═══════════════════════════════════════════════════════════════
-// INT-3: visible 切换 → WebGL addon 释放/重建
+// INT-3: visible 切换 → WebGL addon 保持（FE-34 焦点切换不主动释放）
 // ═══════════════════════════════════════════════════════════════
 
-describe("INT-3: visible 切换 → WebGL addon 释放/重建", () => {
+describe("INT-3: visible 切换 → WebGL addon 保持（FE-34）", () => {
   let raf: ReturnType<typeof installRafMock>;
 
   beforeEach(() => {
@@ -561,7 +561,7 @@ describe("INT-3: visible 切换 → WebGL addon 释放/重建", () => {
     expect(addonInstances.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("INT-3.2: visible 从 true 切到 false → WebGL addon dispose 被调用", async () => {
+  it("INT-3.2: visible 从 true 切到 false → WebGL addon 不 dispose（FE-34 焦点切换不释放）", async () => {
     const container = createContainer(800, 600);
     const { rerender } = await mountWithWebgl(container, "int-3-2", true);
 
@@ -570,15 +570,15 @@ describe("INT-3: visible 切换 → WebGL addon 释放/重建", () => {
     }, { timeout: 3000 });
 
     const initialAddon = addonInstances[0];
-    // visible → false
+    // visible → false（rerender 内 act 已 flush effect）
     rerender({ visible: false });
 
-    await waitFor(() => {
-      expect(initialAddon.dispose).toHaveBeenCalled();
-    }, { timeout: 3000 });
+    // FE-34: 焦点切换不主动释放 WebGL context——释放只由卸载清理
+    // （performDispose → webglCancelRef）与 context loss 退避兜底
+    expect(initialAddon.dispose).not.toHaveBeenCalled();
   });
 
-  it("INT-3.3: visible 切回 true → tryLoadWebgl 创建新 WebglAddon", async () => {
+  it("INT-3.3: visible 切回 true → 不重建 WebglAddon（FE-34 焦点切换不重建）", async () => {
     const container = createContainer(800, 600);
     const { rerender } = await mountWithWebgl(container, "int-3-3", true);
 
@@ -586,31 +586,22 @@ describe("INT-3: visible 切换 → WebGL addon 释放/重建", () => {
       expect(addonInstances.length).toBeGreaterThanOrEqual(1);
     }, { timeout: 3000 });
 
-    // visible → false（释放 addon）
-    rerender({ visible: false });
-    await waitFor(() => {
-      expect(addonInstances[0].dispose).toHaveBeenCalled();
-    }, { timeout: 3000 });
-
     const countBefore = addonInstances.length;
     const callsBefore = mockSetupWebglWithRetry.mock.calls.length;
 
-    // visible → true（重建 addon）
+    // visible 往返切换 → 不 dispose、不触发 setupWebglWithRetry 重建
+    rerender({ visible: false });
     rerender({ visible: true });
 
-    await waitFor(() => {
-      expect(addonInstances.length).toBeGreaterThan(countBefore);
-    }, { timeout: 3000 });
-    expect(mockSetupWebglWithRetry.mock.calls.length).toBeGreaterThan(
-      callsBefore,
-    );
+    expect(addonInstances.length).toBe(countBefore);
+    expect(mockSetupWebglWithRetry.mock.calls.length).toBe(callsBefore);
   });
 
-  it("INT-3.4: 初始 visible=false 挂载 → WebGL addon 在 visible effect 中被释放", async () => {
+  it("INT-3.4: 初始 visible=false 挂载 → WebGL addon 保持（FE-34 不按可见性释放）", async () => {
     const container = createContainer(800, 600);
 
-    // useTerminalInstance 挂载时总是尝试加载 WebGL（与 visible 无关），
-    // useXterm 的 visible effect（visible=false）检测到 addon 非空后 dispose 它。
+    // useTerminalInstance 挂载时总是加载 WebGL（与 visible 无关），
+    // FE-34 起 useXterm 的 visible effect 不再按可见性 dispose addon。
     const { rerender } = renderHook(
       ({ visible }) =>
         useXterm({ container, cols: 80, rows: 24, panelId: "int-3-4", visible }),
@@ -621,20 +612,18 @@ describe("INT-3: visible 切换 → WebGL addon 释放/重建", () => {
       expect(mockPtySpawn).toHaveBeenCalled();
     }, { timeout: 3000 });
 
-    // 初始挂载时 useTerminalInstance 创建了 WebGL → useXterm visible effect dispose 了它
+    // 初始挂载创建的 WebGL addon 保持持有（visible=false 不释放）
     await waitFor(() => {
-      if (addonInstances.length > 0) {
-        expect(addonInstances[0].dispose).toHaveBeenCalled();
-      }
+      expect(addonInstances.length).toBeGreaterThanOrEqual(1);
     }, { timeout: 3000 });
+    if (addonInstances.length > 0) {
+      expect(addonInstances[0].dispose).not.toHaveBeenCalled();
+    }
 
-    // visible 切回 true → tryLoadWebgl 创建新实例
+    // visible 切回 true → 不重建（addon 实例数不变）
     const countBefore = addonInstances.length;
     rerender({ visible: true });
-
-    await waitFor(() => {
-      expect(addonInstances.length).toBeGreaterThan(countBefore);
-    }, { timeout: 3000 });
+    expect(addonInstances.length).toBe(countBefore);
   });
 
   it("INT-3.5: WebGL 不可用时 visible 切换不抛异常", async () => {
@@ -649,10 +638,10 @@ describe("INT-3: visible 切换 → WebGL addon 释放/重建", () => {
     const container = createContainer(800, 600);
     const { rerender } = await mountWithWebgl(container, "int-3-5", true);
 
-    // visible → false（webglAddonRef.current 为 null，不过 dispose 分支）
+    // visible → false（FE-34: 不 dispose addon——ref 为 null 也无操作）
     expect(() => rerender({ visible: false })).not.toThrow();
 
-    // visible → true（detectWebgl→false → tryLoadWebgl 直接返回）
+    // visible → true（FE-34: 不重建——仅 flush 非焦点累积输出）
     expect(() => rerender({ visible: true })).not.toThrow();
 
     // 无新 addon 实例

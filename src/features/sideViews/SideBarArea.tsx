@@ -1,8 +1,9 @@
 // SideBarArea — 侧栏区组件
 //
 // 活动栏与主区之间的共享展示区域，垂直划分为上区与下区两个半区。
-// 每半区一槽位，视图通过 display:none/flex 切换保挂载。
-// 换区重建为已知行为（ADR-0001）：组件随 zones 跨 pane 移动即卸载重建。
+// 每半区一槽位，视图通过条件渲染切换（FE-21）：仅渲染当前打开的视图，
+// 切换即卸载旧视图组件——状态丢失语义 ADR-0001 已接受（导航树滚动位置等
+// 轻状态不保活）；换区重建亦为已知行为（组件随 zones 跨 pane 移动即卸载重建）。
 
 import React, { useEffect, useRef } from "react";
 import { Allotment } from "allotment";
@@ -31,7 +32,7 @@ export interface SideBarAreaProps {
  * - 上 pane visible={!!open.top} preferredSize={splitRatio * 100}
  * - 下 pane visible={!!open.bottom} preferredSize={(1 - splitRatio) * 100}
  * - 每 pane 内：zones[zone].map(id → registry.get(id)) 过滤 undefined →
- *   每视图一槽 display: open==id ? "flex" : "none"，height: 100%
+ *   按单槽位过滤 open 视图后条件渲染（FE-21：隐藏视图卸载，不保挂载），height: 100%
  * - onChange 仅双开时换算 ratio 写回 store
  *
  * 硬约束 #6：全部颜色引用 theme/colors.ts token，禁止硬编码色值
@@ -93,53 +94,49 @@ export const SideBarArea: React.FC<SideBarAreaProps> = ({
           setSplitRatio(ratio);
         }}
       >
-        {/* 上区 pane */}
+        {/* 上区 pane — FE-21：条件渲染替代 display:none 保挂载，仅渲染打开的视图（单槽位） */}
         <Allotment.Pane
           visible={topOpen}
           preferredSize={splitRatio * 100}
         >
           <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
-            {topDefs.map((def) => (
-              <div
-                key={def.id}
-                style={{
-                  display: open.top === def.id ? "flex" : "none",
-                  height: "100%",
-                  flexDirection: "column",
-                }}
-                data-e2e={`sidebar-slot-top-${def.id}`}
-              >
-                <def.component
-                  switchToPage={switchToPage}
-                  onDeletePage={onDeletePage}
-                />
-              </div>
-            ))}
+            {topDefs
+              .filter((def) => def.id === open.top)
+              .map((def) => (
+                <div
+                  key={def.id}
+                  style={{ height: "100%", display: "flex", flexDirection: "column" }}
+                  data-e2e={`sidebar-slot-top-${def.id}`}
+                >
+                  <def.component
+                    switchToPage={switchToPage}
+                    onDeletePage={onDeletePage}
+                  />
+                </div>
+              ))}
           </div>
         </Allotment.Pane>
 
-        {/* 下区 pane */}
+        {/* 下区 pane — FE-21：同上一区，切换即卸载旧视图组件 */}
         <Allotment.Pane
           visible={bottomOpen}
           preferredSize={(1 - splitRatio) * 100}
         >
           <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
-            {bottomDefs.map((def) => (
-              <div
-                key={def.id}
-                style={{
-                  display: open.bottom === def.id ? "flex" : "none",
-                  height: "100%",
-                  flexDirection: "column",
-                }}
-                data-e2e={`sidebar-slot-bottom-${def.id}`}
-              >
-                <def.component
-                  switchToPage={switchToPage}
-                  onDeletePage={onDeletePage}
-                />
-              </div>
-            ))}
+            {bottomDefs
+              .filter((def) => def.id === open.bottom)
+              .map((def) => (
+                <div
+                  key={def.id}
+                  style={{ height: "100%", display: "flex", flexDirection: "column" }}
+                  data-e2e={`sidebar-slot-bottom-${def.id}`}
+                >
+                  <def.component
+                    switchToPage={switchToPage}
+                    onDeletePage={onDeletePage}
+                  />
+                </div>
+              ))}
           </div>
         </Allotment.Pane>
       </Allotment>

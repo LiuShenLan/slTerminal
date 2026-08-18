@@ -229,11 +229,7 @@ fn micro_batch_tail(input: &mut PtyReaderInput, buf: &mut [u8], limit: usize) ->
 /// 检测到 DA1 查询（ESC[c / ESC[0c）则向子进程 stdin 注入 ESC[?64;22c，
 /// 模拟 ConPTY + conhost 的一致行为；AtomicBool 保证同一会话仅注入一次。
 /// 检测决策已抽为纯函数 `should_inject_da1`，注入动作为 I/O（M11 豁免项）。
-fn maybe_inject_da1(
-    da1_injected: &AtomicBool,
-    writer: &Mutex<Box<dyn Write + Send>>,
-    data: &[u8],
-) {
+fn maybe_inject_da1(da1_injected: &AtomicBool, writer: &Mutex<Box<dyn Write + Send>>, data: &[u8]) {
     if !should_inject_da1(da1_injected.load(Ordering::Relaxed), data) {
         return;
     }
@@ -850,7 +846,10 @@ mod tests {
     fn micro_batch_immediate_eof() {
         // pending=true 但首轮即 EOF → 空 tail + eof=true
         let mut input = PtyReaderInput::new(
-            Box::new(MockSeqReader { seq: vec![], idx: 0 }),
+            Box::new(MockSeqReader {
+                seq: vec![],
+                idx: 0,
+            }),
             Box::new(|| true),
         );
         let mut buf = [0u8; 64];

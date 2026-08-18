@@ -203,7 +203,7 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ api, params }) => {
             color: INPUT_BORDER,
             fontSize: 13, // UI-204：正文 13px
             background: PANEL_BG,
-            transition: "opacity 0.3s",
+            // FE-29: ADR-0003 无动效——不设 transition，显隐切换瞬时完成
             pointerEvents: "none",
           }}
         >

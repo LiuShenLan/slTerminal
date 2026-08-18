@@ -476,4 +476,215 @@ describe("useFileTree 刷新保留展开状态", () => {
     expect(src?.expanded).toBe(true);
     expect(src?.children.map((c) => c.entry.name)).toEqual(["a.ts", "c.ts"]);
   });
+
+  // ═══ F. FE-15：file-saved 300ms 去抖 + 子树刷新范围 ═══
+
+  it("FE15-1: file-saved 300ms 去抖——窗口内连发只刷新一次", async () => {
+    vi.useFakeTimers();
+    try {
+      makeVfs(mocks.mockReadDir, {
+        "/proj": [mockEntry("src", true, "/proj/src")],
+        "/proj/src": [mockEntry("a.ts", false, "/proj/src/a.ts")],
+      });
+      const { result } = renderHook(() => useFileTree({ rootPath: "/proj" }));
+      await vi.waitFor(() => expect(result.current.rootNodes.length).toBe(1), { timeout: 3000 });
+      await act(async () => {
+        await result.current.toggleExpand("/proj/src");
+      });
+      await vi.waitFor(() =>
+        expect(findNode(result.current.rootNodes, "/proj/src")?.expanded).toBe(true),
+      { timeout: 3000 });
+
+      mocks.mockReadDir.mockClear();
+
+      // 去抖窗口内连发 3 次保存 → 只应触发一次刷新
+      await act(async () => {
+        window.dispatchEvent(new CustomEvent("slterm:file-saved", { detail: { path: "/proj/src/a.ts" } }));
+        window.dispatchEvent(new CustomEvent("slterm:file-saved", { detail: { path: "/proj/src/a.ts" } }));
+        window.dispatchEvent(new CustomEvent("slterm:file-saved", { detail: { path: "/proj/src/a.ts" } }));
+      });
+      await vi.advanceTimersByTimeAsync(250); // 未到 300ms：不刷新
+      expect(mocks.mockReadDir).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(100); // 跨过 300ms：仅刷新一次
+      expect(mocks.mockReadDir).toHaveBeenCalledTimes(1);
+      expect(mocks.mockReadDir).toHaveBeenCalledWith("/proj/src");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("FE15-2: file-saved 已知路径 → 只刷新最近展开祖先子树（不整树重建）", async () => {
+    vi.useFakeTimers();
+    try {
+      makeVfs(mocks.mockReadDir, {
+        "/proj": [mockEntry("src", true, "/proj/src")],
+        "/proj/src": [
+          mockEntry("deep", true, "/proj/src/deep"),
+          mockEntry("a.ts", false, "/proj/src/a.ts"),
+        ],
+        "/proj/src/deep": [mockEntry("b.ts", false, "/proj/src/deep/b.ts")],
+      });
+      const { result } = renderHook(() => useFileTree({ rootPath: "/proj" }));
+      await vi.waitFor(() => expect(result.current.rootNodes.length).toBe(1), { timeout: 3000 });
+      await act(async () => {
+        await result.current.toggleExpand("/proj/src");
+      });
+      await vi.waitFor(() =>
+        expect(findNode(result.current.rootNodes, "/proj/src")?.expanded).toBe(true),
+      { timeout: 3000 });
+      await act(async () => {
+        await result.current.toggleExpand("/proj/src/deep");
+      });
+      await vi.waitFor(() =>
+        expect(findNode(result.current.rootNodes, "/proj/src/deep")?.expanded).toBe(true),
+      { timeout: 3000 });
+
+      mocks.mockReadDir.mockClear();
+
+      // 保存深层文件 → 只重读最近展开祖先 /proj/src/deep 一层
+      await act(async () => {
+        window.dispatchEvent(
+          new CustomEvent("slterm:file-saved", { detail: { path: "/proj/src/deep/b.ts" } }),
+        );
+        await vi.advanceTimersByTimeAsync(350);
+      });
+
+      expect(mocks.mockReadDir).toHaveBeenCalledTimes(1);
+      expect(mocks.mockReadDir).toHaveBeenCalledWith("/proj/src/deep");
+      // 展开状态与子树保留
+      expect(findNode(result.current.rootNodes, "/proj/src")?.expanded).toBe(true);
+      expect(findNode(result.current.rootNodes, "/proj/src/deep")?.expanded).toBe(true);
+      expect(
+        findNode(result.current.rootNodes, "/proj/src/deep")?.children.map((c) => c.entry.name),
+      ).toEqual(["b.ts"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("FE15-3: file-saved 位于未展开目录内 → 只刷新其父层（不深挖未加载子树）", async () => {
+    vi.useFakeTimers();
+    try {
+      makeVfs(mocks.mockReadDir, {
+        "/proj": [mockEntry("collapsed", true, "/proj/collapsed")],
+        "/proj/collapsed": [mockEntry("x.ts", false, "/proj/collapsed/x.ts")],
+      });
+      const { result } = renderHook(() => useFileTree({ rootPath: "/proj" }));
+      await vi.waitFor(() => expect(result.current.rootNodes.length).toBe(1), { timeout: 3000 });
+
+      mocks.mockReadDir.mockClear();
+
+      // 保存未展开目录内的文件 → 只刷新根层（折叠目录行元数据同步）
+      await act(async () => {
+        window.dispatchEvent(
+          new CustomEvent("slterm:file-saved", { detail: { path: "/proj/collapsed/x.ts" } }),
+        );
+        await vi.advanceTimersByTimeAsync(350);
+      });
+
+      expect(mocks.mockReadDir).toHaveBeenCalledTimes(1);
+      expect(mocks.mockReadDir).toHaveBeenCalledWith("/proj");
+      // 折叠目录不误展开
+      expect(findNode(result.current.rootNodes, "/proj/collapsed")?.expanded).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("FE15-4: file-saved 路径不属于当前 rootPath → 跳过树刷新", async () => {
+    vi.useFakeTimers();
+    try {
+      makeVfs(mocks.mockReadDir, {
+        "/proj": [mockEntry("a.ts", false, "/proj/a.ts")],
+      });
+      const { result } = renderHook(() => useFileTree({ rootPath: "/proj" }));
+      await vi.waitFor(() => expect(result.current.rootNodes.length).toBe(1), { timeout: 3000 });
+
+      mocks.mockReadDir.mockClear();
+      mocks.mockGitStatus.mockClear();
+
+      // 保存另一项目的文件 → 树与 git 着色均不刷新
+      await act(async () => {
+        window.dispatchEvent(
+          new CustomEvent("slterm:file-saved", { detail: { path: "/other/x.ts" } }),
+        );
+        await vi.advanceTimersByTimeAsync(350);
+      });
+
+      expect(mocks.mockReadDir).not.toHaveBeenCalled();
+      expect(mocks.mockGitStatus).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("FE15-5: file-saved 新文件（旧树不存在）→ 刷新父层并出现新条目", async () => {
+    vi.useFakeTimers();
+    try {
+      const vfs = makeVfs(mocks.mockReadDir, {
+        "/proj": [mockEntry("src", true, "/proj/src")],
+        "/proj/src": [mockEntry("a.ts", false, "/proj/src/a.ts")],
+      });
+      const { result } = renderHook(() => useFileTree({ rootPath: "/proj" }));
+      await vi.waitFor(() => expect(result.current.rootNodes.length).toBe(1), { timeout: 3000 });
+      await act(async () => {
+        await result.current.toggleExpand("/proj/src");
+      });
+      await vi.waitFor(() =>
+        expect(findNode(result.current.rootNodes, "/proj/src")?.expanded).toBe(true),
+      { timeout: 3000 });
+
+      // 磁盘新增 new.ts 后保存它
+      vfs.set("/proj/src", [
+        mockEntry("a.ts", false, "/proj/src/a.ts"),
+        mockEntry("new.ts", false, "/proj/src/new.ts"),
+      ]);
+      mocks.mockReadDir.mockClear();
+
+      await act(async () => {
+        window.dispatchEvent(
+          new CustomEvent("slterm:file-saved", { detail: { path: "/proj/src/new.ts" } }),
+        );
+        await vi.advanceTimersByTimeAsync(350);
+      });
+
+      expect(mocks.mockReadDir).toHaveBeenCalledTimes(1);
+      expect(mocks.mockReadDir).toHaveBeenCalledWith("/proj/src");
+      expect(
+        findNode(result.current.rootNodes, "/proj/src")?.children.map((c) => c.entry.name),
+      ).toEqual(["a.ts", "new.ts"]);
+      expect(findNode(result.current.rootNodes, "/proj/src")?.expanded).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("FE15-6: file-saved 去抖定时器随卸载清理（不迟到触发）", async () => {
+    vi.useFakeTimers();
+    try {
+      makeVfs(mocks.mockReadDir, {
+        "/proj": [mockEntry("a.ts", false, "/proj/a.ts")],
+      });
+      const { result, unmount } = renderHook(() => useFileTree({ rootPath: "/proj" }));
+      await vi.waitFor(() => expect(result.current.rootNodes.length).toBe(1), { timeout: 3000 });
+
+      mocks.mockReadDir.mockClear();
+      mocks.mockGitStatus.mockClear();
+
+      // 保存事件入队去抖 → 卸载 → 定时器应被清理，不迟到触发
+      await act(async () => {
+        window.dispatchEvent(
+          new CustomEvent("slterm:file-saved", { detail: { path: "/proj/a.ts" } }),
+        );
+      });
+      unmount();
+      await vi.advanceTimersByTimeAsync(400);
+
+      expect(mocks.mockReadDir).not.toHaveBeenCalled();
+      expect(mocks.mockGitStatus).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

@@ -1,14 +1,18 @@
-//! 历史会话聚合层 —— provider 注册表 + 无参聚合命令（Stage 04，MC-301~305）
+//! 历史会话聚合层 —— provider 注册表 + cliId 分发命令（Stage 04，MC-301~305；BE-19 缓存）
 //!
 //! 职责：
 //! - DTO 定义：`AgentHistorySession`（IPC 契约八字段，serde camelCase）
 //! - `is_uuid_filename`：UUID 形态纯校验（可复用工具，provider 共用）
 //! - `provider.rs`：`CliHistoryProvider` trait + cliId 键静态注册表
-//! - `claude/`：claude history provider（scan/jsonl/ops 整体下沉，行为零改动）
-//! - 两条泛化命令：`agent_history_scan`（无参聚合）/ `agent_history_delete(cliId, sessionId)`
+//! - `claude/`：claude history provider（scan/jsonl/ops 整体下沉，行为零改动；
+//!   scan 带 BE-19 进程内缓存——键 (目录 mtime, 文件数)）
+//! - 泛化命令：`agent_history_scan(cliId, force)`（按 cliId 分发 + force 绕过缓存）/
+//!   `agent_history_delete(cliId, sessionId)` / `agent_history_read_title(cliId, sessionId)`
 //!
-//! 聚合语义（MC-303）：`agent_history_scan` 遍历全部已注册 provider 串行聚合；
-//! 单 provider 失败不阻塞其他（`scan()` 无 Err 通道——失败语义 = provider 内部降级为
+//! 分发语义（MC-303 + BE-19）：`agent_history_scan(cliId, force)` 按 cliId 分发单
+//! provider 扫描（非无参聚合）；`force=true` 绕过 provider 进程内缓存强制重扫
+//! （前端显式刷新/恢复完成后传 true，FE-19 联动）。
+//! 单 provider 失败不报错（`scan()` 无 Err 通道——失败语义 = provider 内部降级为
 //! 空/部分结果，照单文件降级条目契约的语义层级提升）；全部空 → 空数组（Ok 非 Err）。
 //! 聚合层不假设任何 provider 的 env 命名（MC-305：`SLTERM_<CLI>_PROJECTS_DIR` 类
 //! env 由各 provider 内部自管）。
@@ -81,32 +85,51 @@ pub fn is_uuid_filename(stem: &str) -> bool {
     true
 }
 
-/// agent_history_scan — 无参聚合扫描全部已注册 provider 的历史会话（MC-303）
+/// agent_history_scan — 按 cliId 分发扫描单 provider 历史会话（BE-19 契约）
 ///
+/// 签名契约：`agent_history_scan(cli_id: String, force: Option<bool>)`；
+/// `force=true` 绕过进程内缓存强制重扫（前端显式刷新/恢复完成后传 true，FE-19 联动）。
+/// 未知 cliId → `AppError::Validation`（resolve_provider 统一产出，与 delete/read_title 一致）。
 /// 阻塞 I/O 全部在 spawn_blocking 内执行（硬约束 #3）。
-/// 单 provider 失败不阻塞其他（`scan()` 无 Err 通道）；全部空 → 空数组（Ok 非 Err）。
+/// 单 provider 失败不报错（`scan()` 无 Err 通道——失败语义 = provider 内部降级为
+/// 空/部分结果）；全部空 → 空数组（Ok 非 Err）。
 #[tauri::command]
-pub async fn agent_history_scan() -> Result<Vec<AgentHistorySession>, AppError> {
-    tokio::task::spawn_blocking(scan_all)
+pub async fn agent_history_scan(
+    cli_id: String,
+    force: Option<bool>,
+) -> Result<Vec<AgentHistorySession>, AppError> {
+    let provider = resolve_provider(&cli_id)?;
+    let force = force.unwrap_or(false);
+    tokio::task::spawn_blocking(move || run_scan(provider, force))
         .await
         .map_err(AppError::from)
 }
 
-/// 聚合扫描核心（注册表可注入，测试构造多 provider 桩直测）
+/// 单 provider 扫描核心（provider 注入，测试可直测）
 ///
-/// 串行按注册表顺序聚合；`scan()` 无 Err 通道——provider 内部失败降级为空/部分
-/// 结果，聚合循环天然不阻塞其他 provider（MC-303 语义层级提升）。
-fn scan_all_with(registry: &[provider::ProviderEntry<'_>]) -> Vec<AgentHistorySession> {
-    let mut all = Vec::new();
-    for (_, p) in registry {
-        all.extend(p.scan());
+/// BE-19 缓存契约：`force=true` 绕过缓存强制重扫。trait `scan()` 无 force 通道——
+/// claude provider 的缓存层在 claude/scan.rs（`scan_sessions_with_force`），经注册表
+/// cliId 身份比对（数据指针相等，照 provider.rs 测试先例）确认后直达其 force 入口；
+/// 其余 provider 无缓存层 → force 无含义，恒走 trait `scan()`。
+pub(crate) fn run_scan(
+    provider: &'static dyn CliHistoryProvider,
+    force: bool,
+) -> Vec<AgentHistorySession> {
+    if force && is_claude_provider(provider) {
+        return claude::scan::scan_sessions_with_force(true);
     }
-    all
+    provider.scan()
 }
 
-/// 遍历静态注册表全部 provider 聚合（命令层 spawn_blocking 入口）
-fn scan_all() -> Vec<AgentHistorySession> {
-    scan_all_with(REGISTRY)
+/// provider 是否注册表 claude 实例（数据指针身份比对——REGISTRY 静态实例）
+fn is_claude_provider(provider: &'static dyn CliHistoryProvider) -> bool {
+    let claude = REGISTRY
+        .iter()
+        .find(|(id, _)| *id == "claude")
+        .map(|(_, p)| *p)
+        .expect("注册表恒含 claude 条目");
+    provider as *const dyn CliHistoryProvider as *const ()
+        == claude as *const dyn CliHistoryProvider as *const ()
 }
 
 /// agent_history_delete — 按 cliId 分发删除会话（MC-303）
@@ -275,77 +298,6 @@ mod tests {
         ));
     }
 
-    // ── 聚合 scan（L1 新增：多 provider 桩 / 单 provider 失败不阻塞） ──
-
-    /// 测试桩 provider（注册表注入直测聚合语义）
-    #[derive(Debug)]
-    struct StubProvider {
-        sessions: Vec<AgentHistorySession>,
-    }
-
-    impl CliHistoryProvider for StubProvider {
-        fn scan(&self) -> Vec<AgentHistorySession> {
-            self.sessions.clone()
-        }
-        fn delete(&self, _session_id: &str) -> Result<(), AppError> {
-            Ok(())
-        }
-        fn validate_session_id(&self, _session_id: &str) -> Result<(), AppError> {
-            Ok(())
-        }
-        fn read_title(&self, _session_id: &str) -> Result<AgentHistoryTitle, AppError> {
-            Ok(AgentHistoryTitle {
-                title: None,
-                title_source: "none".to_string(),
-            })
-        }
-    }
-
-    /// 构造最小会话条目（sessionId/cliId 打标）
-    fn stub_session(id: &str, cli_id: &str) -> AgentHistorySession {
-        AgentHistorySession {
-            session_id: id.to_string(),
-            cwd: None,
-            title: None,
-            title_source: "none".to_string(),
-            first_prompt: None,
-            mtime_ms: 0,
-            cwd_exists: false,
-            cli_id: cli_id.to_string(),
-        }
-    }
-
-    #[test]
-    fn scan_aggregates_all_registered_providers() {
-        // 多 provider 桩 → 串行按注册表顺序聚合全部条目
-        let p1 = StubProvider {
-            sessions: vec![stub_session("a", "cli1")],
-        };
-        let p2 = StubProvider {
-            sessions: vec![stub_session("b", "cli2"), stub_session("c", "cli2")],
-        };
-        let registry: &[provider::ProviderEntry<'_>] = &[("cli1", &p1), ("cli2", &p2)];
-        let all = scan_all_with(registry);
-        assert_eq!(all.len(), 3, "应聚合全部 provider 的条目");
-        let ids: Vec<&str> = all.iter().map(|s| s.session_id.as_str()).collect();
-        assert_eq!(ids, ["a", "b", "c"], "串行按注册表顺序聚合");
-        // cliId 打标随 provider 条目保留
-        assert_eq!(all[2].cli_id, "cli2");
-    }
-
-    #[test]
-    fn scan_single_provider_failure_does_not_block_others() {
-        // 单 provider「失败」（scan 无 Err 通道——失败语义 = 内部降级为空）不阻塞其他
-        let failed = StubProvider { sessions: vec![] };
-        let ok = StubProvider {
-            sessions: vec![stub_session("b", "cli2")],
-        };
-        let registry: &[provider::ProviderEntry<'_>] = &[("failed", &failed), ("cli2", &ok)];
-        let all = scan_all_with(registry);
-        assert_eq!(all.len(), 1, "失败 provider 不阻塞后续 provider 聚合");
-        assert_eq!(all[0].session_id, "b");
-    }
-
     // ── delete 命令层（L1 新增：未知 cliId Validation / validate_session_id 前置） ──
 
     /// 手动 current_thread runtime 驱动 async 命令核心（tokio 未启用 #[tokio::test]，
@@ -360,12 +312,14 @@ mod tests {
     /// 记录调用序的桩 provider（validate 前置测试用；static 须 Sync，用 AtomicBool）
     #[derive(Debug)]
     struct RecordingStub {
+        scan_called: AtomicBool,
         delete_called: AtomicBool,
         read_called: AtomicBool,
     }
 
     impl CliHistoryProvider for RecordingStub {
         fn scan(&self) -> Vec<AgentHistorySession> {
+            self.scan_called.store(true, Ordering::SeqCst);
             Vec::new()
         }
         fn delete(&self, _session_id: &str) -> Result<(), AppError> {
@@ -395,6 +349,7 @@ mod tests {
     fn delete_validates_session_id_before_delete() {
         // validate_session_id 是 delete 的强制前置：validate 拒绝 → delete 不应被调用
         static STUB: RecordingStub = RecordingStub {
+            scan_called: AtomicBool::new(false),
             delete_called: AtomicBool::new(false),
             read_called: AtomicBool::new(false),
         };
@@ -461,6 +416,7 @@ mod tests {
     fn read_title_dispatches_to_provider_and_returns_title() {
         // 命令核心经 provider 分发：validate 通过 → read_title 调用 → 结果透传
         static STUB: RecordingStub = RecordingStub {
+            scan_called: AtomicBool::new(false),
             delete_called: AtomicBool::new(false),
             read_called: AtomicBool::new(false),
         };
@@ -477,6 +433,7 @@ mod tests {
     fn read_title_validates_session_id_before_read() {
         // validate_session_id 是 read_title 的强制前置：validate 拒绝 → read_title 不应被调用
         static STUB: RecordingStub = RecordingStub {
+            scan_called: AtomicBool::new(false),
             delete_called: AtomicBool::new(false),
             read_called: AtomicBool::new(false),
         };
@@ -584,7 +541,7 @@ mod tests {
         write_valid_session(&proj, uuid);
 
         let _guard = ScanRootGuard::set(&root);
-        let sessions = block_on(agent_history_scan()).unwrap();
+        let sessions = block_on(agent_history_scan("claude".to_string(), None)).unwrap();
 
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].session_id, uuid);
@@ -600,8 +557,57 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let missing = dir.path().join("不存在");
         let _guard = ScanRootGuard::set(&missing);
-        let sessions = block_on(agent_history_scan()).unwrap();
+        let sessions = block_on(agent_history_scan("claude".to_string(), None)).unwrap();
         assert!(sessions.is_empty());
+    }
+
+    #[test]
+    fn command_scan_unknown_cli_id_returns_validation() {
+        // 未知 cliId → Validation（resolve_provider 统一产出，与 delete/read_title 一致）
+        let err = block_on(agent_history_scan("nope".to_string(), None)).unwrap_err();
+        match err {
+            AppError::Validation(msg) => {
+                assert!(msg.contains("未知 cliId"), "消息应含「未知 cliId」: {msg}");
+            }
+            other => panic!("未知 cliId 应返回 Validation，实际: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn command_scan_force_true_bypasses_cache() {
+        // BE-19 契约：默认走进程内缓存（键不变命中复用，不重复读盘）；force=true 绕过强制重扫
+        let (_dir, root, proj) = make_scan_root();
+        write_valid_session(&proj, UUID);
+        let _guard = ScanRootGuard::set(&root);
+
+        // 首次扫描 → 缓存回填 1 条
+        let first = block_on(agent_history_scan("claude".to_string(), None)).unwrap();
+        assert_eq!(first.len(), 1);
+
+        // 删除会话文件（根键不变：目录 mtime/一级条目数均未变）→ 默认走缓存 → 仍返回旧结果
+        std::fs::remove_file(proj.join(format!("{UUID}.jsonl"))).unwrap();
+        let cached = block_on(agent_history_scan("claude".to_string(), None)).unwrap();
+        assert_eq!(cached.len(), 1, "键不变缓存命中——不重复读盘");
+
+        // force=true → 绕过缓存强制重扫 → 文件已删 → 空
+        let forced = block_on(agent_history_scan("claude".to_string(), Some(true))).unwrap();
+        assert!(forced.is_empty(), "force=true 应绕过缓存强制重扫");
+    }
+
+    #[test]
+    fn run_scan_force_true_on_non_claude_falls_back_to_trait_scan() {
+        // force 通道身份比对：非 claude provider 无缓存层 → force 无含义，仍走 trait scan()
+        static STUB: RecordingStub = RecordingStub {
+            scan_called: AtomicBool::new(false),
+            delete_called: AtomicBool::new(false),
+            read_called: AtomicBool::new(false),
+        };
+        let sessions = run_scan(&STUB, true);
+        assert!(sessions.is_empty());
+        assert!(
+            STUB.scan_called.load(Ordering::SeqCst),
+            "force=true 的非 claude provider 应回落 trait scan()，而非 claude 缓存通道"
+        );
     }
 
     #[test]

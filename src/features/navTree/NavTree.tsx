@@ -471,10 +471,9 @@ export const NavTree: React.FC<NavTreeProps> = ({ switchToPage, onDeletePage }) 
         total={model.history.total}
         expanded={expanded}
         onToggle={() => {
-          const willExpand = !expanded;
+          // FE-19：展开历史节点不重复 scan——挂载即扫一次（useNavTree mount effect），
+          // BE-19 后端缓存兜底；显式重扫走「导航」头刷新钮
           nav.toggleHist(projId);
-          // 展开触发重扫（照 agentHistory 历史区展开刷新语义；useAgentHistory generation 防竞）
-          if (willExpand) void nav.refresh();
         }}
       >
         {model.history.sessions.length === 0 ? (

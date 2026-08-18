@@ -3,11 +3,18 @@
 // 每个操作页面拥有独立 Dockview 实例，页面切换通过 CSS display:none/block 实现。
 // xterm.js 不支持二次 open()（Issue #4978），此架构从根本上解决 H6（终端跨页面存活）。
 //
+// FE-01（D1 决策）：保持多 Dockview 实例（架构豁免登记，见 docs/review-fix/stages.md S19）——
+// 页面总数上限 MAX_PAGES = 20 在 stores/projects.ts 的 addPage 拒绝超限新增（防内存/DOM
+// 线性增长）；本组件不主动限制，超限由 store 层 toast 告警。
+//
 // PageDockview 逻辑已提取到 PageDockviewHost.tsx（J4），本文件只保留编排层：
 // Allotment 三栏布局 + 页面切换 + 生命周期管理。
 //
 // F2: onReady/onLayoutChange 稳定化——通过 ref 持有的回调 map，同一 pageId 始终返回
 //     同一函数引用，配合 PageDockview 的 React.memo 避免不必要的重渲染。
+//
+// FE-33: 回调 map 按 pageId 惰性创建 + 缓存（getOrCreate 模式），effect 依赖收窄为
+//     页面 ID 集合键——页面重命名/布局变更等不触发重建（详见 pageCallbacksRef 处注释）。
 //
 // 约束：#7 布局单点 — 每个 PageDockview 的 onDidLayoutChange 直接写 store
 //       #8 会话单点 — 终端会话只在面板内管理，不跨页面
@@ -176,27 +183,45 @@ const Workspace: React.FC = () => {
     onLayoutChange: (layout: Record<string, unknown>) => void;
   }>>(new Map());
 
-  // FE-03: 回调 map 维护移入 useEffect（依赖 allPages），渲染期 ref 只读。
-  // 避免 StrictMode/并发模式下渲染阶段直接增删 ref 导致双注册或半一致状态。
+  // FE-33: 回调按 pageId 惰性创建 + 缓存（getOrCreate 模式）——已存在则返回缓存引用，
+  // 仅缺失时创建，页面生命周期内引用不变（与 F2 稳定引用目标一致）。
+  const getOrCreatePageCallbacks = useCallback((pageId: string) => {
+    let callbacks = pageCallbacksRef.current.get(pageId);
+    if (!callbacks) {
+      callbacks = {
+        onReady: (api: DockviewApi) => handlePageApiReadyRef.current(pageId, api),
+        onLayoutChange: (layout: Record<string, unknown>) =>
+          handlePageLayoutChangeRef.current(pageId, layout),
+      };
+      pageCallbacksRef.current.set(pageId, callbacks);
+    }
+    return callbacks;
+  }, []);
+
+  // FE-33: effect 依赖收窄——从 allPages（对象引用，任何页面字段变更即变）收窄为
+  // 页面 ID 集合键（primitive string）：页面重命名/布局变更等不改 ID 集合时不触发
+  // effect，回调 map 不再随每次 allPages 变化重建。渲染期 ref 仍只读（FE-03 不变量）——
+  // 创建与删除均收敛于此 effect，经 getOrCreate 惰性创建 + 缓存。
+  const pageIdSetKey = useMemo(
+    () => allPages.map((p) => p.pageId).sort().join("|"),
+    [allPages],
+  );
+
   useEffect(() => {
-    const activePageIds = new Set(allPages.map((p) => p.pageId));
-    // 清理已删除页面的回调
+    const activePageIds = new Set(
+      pageIdSetKey === "" ? [] : pageIdSetKey.split("|"),
+    );
+    // 清理已删除页面的回调（getOrCreate 只增不删，删除全量收敛于此）
     for (const key of pageCallbacksRef.current.keys()) {
       if (!activePageIds.has(key)) {
         pageCallbacksRef.current.delete(key);
       }
     }
-    // 确保当前页面回调存在（惰性创建，pageId 生命周期内引用不变）
-    for (const page of allPages) {
-      if (!pageCallbacksRef.current.has(page.pageId)) {
-        pageCallbacksRef.current.set(page.pageId, {
-          onReady: (api: DockviewApi) => handlePageApiReadyRef.current(page.pageId, api),
-          onLayoutChange: (layout: Record<string, unknown>) =>
-            handlePageLayoutChangeRef.current(page.pageId, layout),
-        });
-      }
+    // 确保当前页面回调存在（getOrCreate 幂等：已存在返回缓存引用，缺失才创建）
+    for (const pageId of activePageIds) {
+      getOrCreatePageCallbacks(pageId);
     }
-  }, [allPages]);
+  }, [pageIdSetKey, getOrCreatePageCallbacks]);
 
   // E2E 兼容：activePageId 变化时自动初始化对应页面（Workspace 挂载后生效）
   useEffect(() => {

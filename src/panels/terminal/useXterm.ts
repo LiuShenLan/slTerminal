@@ -4,7 +4,7 @@
 // - 编排各子 hook：Terminal 实例、PTY 输出、Resize、剪贴板、命令检测、字体
 // - PTY spawn / write / kill（终端进程管理）
 // - 快捷键委托 + OSC 8 超链接
-// - visible 管理（WebGL 释放/重建 + 非焦点终端降频）
+// - visible 管理（非焦点终端降频）
 // - E2E 测试钩子
 //
 // 子 hook 分工：
@@ -80,7 +80,7 @@ export interface UseXtermOptions {
   windowsBuildNumber?: number;
   /** 终端工作目录（来自操作页面 cwd） */
   cwd?: string;
-  /** 面板是否可见（页面切换时 CSS display:none → WebGL 释放） */
+  /** 面板是否可见（页面切换时 CSS display:none → 非焦点降频门控；FE-34 不再按可见性释放 WebGL） */
   visible?: boolean;
   /** 终端字体大小（运行时动态调节，默认 14） */
   fontSize?: number;
@@ -156,7 +156,6 @@ export function useXterm({
     webglAddon: webglAddonRef,
     isDisposed: isDisposedRef,
     e2eTextBuffer: e2eTextBufferRef,
-    tryLoadWebgl,
   } = useTerminalInstance(container, terminalOptions, fontSize);
 
   // ═══════════════════════════════════════════════════════════════
@@ -554,22 +553,23 @@ export function useXterm({
     }
   }, [windowsBuildNumber]);
 
-  // P1-13: WebGL 按可见性管理
+  // FE-34: WebGL 上下文不再随焦点切换创建/释放——挂载即加载（useTerminalInstance），
+  // 切换仅 flush 非焦点期间累积的 PTY 输出。避免多终端快速切换时反复创建/销毁
+  // GPU context 的重建延迟与首帧回退 DOM 闪烁。资源释放由两处兜底：
+  // ① 面板卸载清理（useTerminalInstance performDispose → webglCancelRef → addon dispose）
+  // ② context loss / 加载失败指数退避重试 → 耗尽回退 DOM renderer（webgl.ts）
+  // 压力评估（静态）：多面板（≤MAX_PAGES=20）各持 1 个 context，超 Chromium 上限
+  // （约 16）时后续 WebglAddon 构造失败走退避 → DOM 兜底，不崩溃——潜在压力无实测
+  // 证据，是否超限由人工验证点（chrome://gpu GPU 内存观察）兜底，若实测有压力再恢复释放
   useEffect(() => {
     const term = terminalRef.current;
     if (!term) return;
 
-    if (visible === false) {
-      if (webglAddonRef.current) {
-        webglAddonRef.current.dispose();
-        webglAddonRef.current = null;
-      }
-    } else if (visible === true) {
-      tryLoadWebgl();
+    if (visible === true) {
       // 切回可见时 flush 非焦点期间累积的 PTY 输出
       flushBuffer();
     }
-  }, [visible, flushBuffer, tryLoadWebgl]);
+  }, [visible, flushBuffer]);
 
   // 字体大小变化 → fit + PTY resize
   useEffect(() => {

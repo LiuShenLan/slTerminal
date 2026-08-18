@@ -39,29 +39,38 @@ function App() {
   // S4-D1: 启动加载（单一时序：loadAllProjects → 恢复 activePageId → setReady → 渲染 Workspace）
   useEffect(() => {
     const init = async () => {
-      try {
-        // 加载字体大小偏好（先于项目数据，确保面板渲染时已有正确值）
-        await useFontSize.getState().loadFromDisk();
-      } catch (err) {
-        // FE-03：启动链失败不再静默——降级兜底不变（保持默认值），仅告警记录
-        console.warn("[App] 加载字体大小设置失败，保持默认值:", err);
-      }
-
-      try {
-        // 加载快捷键自定义绑定（覆盖层）——先于面板注册，确保注册表构建时已有覆盖
-        await useKeybindings.getState().loadFromDisk();
-      } catch (err) {
-        // FE-03：启动链失败不再静默——降级兜底不变（保持默认空覆盖），仅告警记录
-        console.warn("[App] 加载快捷键设置失败，保持默认绑定:", err);
-      }
-
-      try {
-        // 加载侧栏视图状态——区划/开关/宽度/比例，先于项目数据确保 Workspace 渲染时已有正确值
-        await useSideBar.getState().loadFromDisk();
-      } catch (err) {
-        // FE-03：启动链失败不再静默——降级兜底不变（保持默认值），仅告警记录
-        console.warn("[App] 加载侧栏设置失败，保持默认值:", err);
-      }
+      // FE-20：字体/快捷键/侧栏三 store loadFromDisk 改 Promise.all 并行加载——
+      // 各自独立 try/catch 保留（单个失败不阻塞其余）；loadAllProjects 保持在其后
+      // （markPersistenceReady 时序不动，见 S12 契约）
+      await Promise.all([
+        (async () => {
+          try {
+            // 加载字体大小偏好（先于项目数据，确保面板渲染时已有正确值）
+            await useFontSize.getState().loadFromDisk();
+          } catch (err) {
+            // FE-03：启动链失败不再静默——降级兜底不变（保持默认值），仅告警记录
+            console.warn("[App] 加载字体大小设置失败，保持默认值:", err);
+          }
+        })(),
+        (async () => {
+          try {
+            // 加载快捷键自定义绑定（覆盖层）——先于面板注册，确保注册表构建时已有覆盖
+            await useKeybindings.getState().loadFromDisk();
+          } catch (err) {
+            // FE-03：启动链失败不再静默——降级兜底不变（保持默认空覆盖），仅告警记录
+            console.warn("[App] 加载快捷键设置失败，保持默认绑定:", err);
+          }
+        })(),
+        (async () => {
+          try {
+            // 加载侧栏视图状态——区划/开关/宽度/比例，先于项目数据确保 Workspace 渲染时已有正确值
+            await useSideBar.getState().loadFromDisk();
+          } catch (err) {
+            // FE-03：启动链失败不再静默——降级兜底不变（保持默认值），仅告警记录
+            console.warn("[App] 加载侧栏设置失败，保持默认值:", err);
+          }
+        })(),
+      ]);
 
       try {
         // P2-07: loadAllProjects 内部 JSON.parse 当前数据量小无影响，

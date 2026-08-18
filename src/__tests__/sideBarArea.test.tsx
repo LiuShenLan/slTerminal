@@ -1,6 +1,6 @@
 // sideBarArea.test.tsx — SideBarArea 组件 L2 测试
 //
-// 验证：单开/双开 pane visible、视图槽 display 切换、
+// 验证：单开/双开 pane visible、视图槽条件渲染（FE-21：隐藏视图卸载不保挂载）、
 // 换区后视图移槽重建、props 透传、onChange→setSplitRatio。
 //
 // Mock allotment 为渲染 children 并记录 Pane props 的 stub
@@ -206,9 +206,9 @@ describe("SideBarArea", () => {
     expect(paneProps[1].preferredSize).toBe(40); // 0.4 * 100
   });
 
-  // ─── SB-20: 视图槽 display 切换 ───
-  it("打开的视图槽 display=flex，隐藏的视图槽 display=none", () => {
-    // 两个视图都在上区，仅 projects 打开
+  // ─── SB-20: 视图槽条件渲染（FE-21）───
+  it("打开的视图槽渲染，隐藏的视图槽不渲染（FE-21 条件渲染替代 display:none 保挂载）", () => {
+    // 两个视图都在上区，仅 nav 打开
     useSideBar.setState({
       zones: { top: ["nav", "explorer"], bottom: [] },
       open: { top: "nav", bottom: null },
@@ -218,24 +218,23 @@ describe("SideBarArea", () => {
       React.createElement(SideBarArea, defaultProps),
     );
 
-    // 上区 projects 槽应 display:flex
-    const projectsSlot = container.querySelector(
+    // 上区 nav 槽渲染
+    const navSlot = container.querySelector(
       '[data-e2e="sidebar-slot-top-nav"]',
     ) as HTMLElement | null;
-    expect(projectsSlot).not.toBeNull();
-    expect(projectsSlot!.style.display).toBe("flex");
+    expect(navSlot).not.toBeNull();
+    expect(navSlot!.style.display).toBe("flex");
 
-    // 上区 explorer 槽应 display:none（保挂载，仅隐藏）
+    // 上区 explorer 槽被卸载（隐藏视图不再留 DOM/订阅）
     const explorerSlot = container.querySelector(
       '[data-e2e="sidebar-slot-top-explorer"]',
     ) as HTMLElement | null;
-    expect(explorerSlot).not.toBeNull();
-    expect(explorerSlot!.style.display).toBe("none");
+    expect(explorerSlot).toBeNull();
   });
 
-  // ─── SB-20: 切换 open 后 display 更新 ───
-  it("切换 open 后视图槽 display 同步更新", () => {
-    // 初始：projects 打开
+  // ─── SB-20: 切换 open 后槽位卸载/挂载同步更新 ───
+  it("切换 open 后旧视图槽卸载、新视图槽挂载（FE-21）", () => {
+    // 初始：nav 打开
     useSideBar.setState({
       zones: { top: ["nav", "explorer"], bottom: [] },
       open: { top: "nav", bottom: null },
@@ -250,19 +249,21 @@ describe("SideBarArea", () => {
 
     rerender(React.createElement(SideBarArea, defaultProps));
 
-    const projectsSlot = container.querySelector(
+    const navSlot = container.querySelector(
       '[data-e2e="sidebar-slot-top-nav"]',
     ) as HTMLElement | null;
     const explorerSlot = container.querySelector(
       '[data-e2e="sidebar-slot-top-explorer"]',
     ) as HTMLElement | null;
 
-    expect(projectsSlot!.style.display).toBe("none");
+    // 旧视图槽卸载、新视图槽挂载
+    expect(navSlot).toBeNull();
+    expect(explorerSlot).not.toBeNull();
     expect(explorerSlot!.style.display).toBe("flex");
   });
 
-  // ─── SB-20: 视图槽始终渲染（display:none 保挂载，不卸载）───
-  it("隐藏的视图组件仍挂载（display:none 保挂载）", () => {
+  // ─── SB-20: 隐藏视图组件卸载（FE-21 条件渲染）───
+  it("隐藏的视图组件被卸载（FE-21），仅打开的视图挂载", () => {
     useSideBar.setState({
       zones: { top: ["nav", "explorer"], bottom: [] },
       open: { top: "nav", bottom: null },
@@ -272,16 +273,56 @@ describe("SideBarArea", () => {
       React.createElement(SideBarArea, defaultProps),
     );
 
-    // 两个 stub 组件都应存在于 DOM 中
-    const projectsView = container.querySelector(
+    // 仅打开视图组件存在于 DOM
+    const navView = container.querySelector(
       '[data-testid="stub-view-nav"]',
     );
     const explorerView = container.querySelector(
       '[data-testid="stub-view-explorer"]',
     );
 
-    expect(projectsView).not.toBeNull();
-    expect(explorerView).not.toBeNull();
+    expect(navView).not.toBeNull();
+    expect(explorerView).toBeNull();
+  });
+
+  // ─── SB-20: 切换时旧视图组件卸载（onUnmount 触发）───
+  it("切换视图时旧视图组件卸载（onUnmount 触发）——状态丢失语义 ADR-0001 已接受", () => {
+    let navUnmountCount = 0;
+
+    sideViewRegistry._reset();
+    sideViewRegistry.register({
+      id: "nav",
+      title: "项目列表",
+      icon: () => null,
+      component: makeStubView("nav", undefined, () => {
+        navUnmountCount++;
+      }),
+    });
+    sideViewRegistry.register({
+      id: "explorer",
+      title: "文件浏览器",
+      icon: () => null,
+      component: makeStubView("explorer"),
+    });
+
+    useSideBar.setState({
+      zones: { top: ["nav", "explorer"], bottom: [] },
+      open: { top: "nav", bottom: null },
+    });
+
+    const { container, rerender } = render(
+      React.createElement(SideBarArea, defaultProps),
+    );
+    expect(navUnmountCount).toBe(0);
+
+    // 切到 explorer：nav 组件卸载（onUnmount 触发一次）
+    useSideBar.getState().toggleView("explorer");
+    rerender(React.createElement(SideBarArea, defaultProps));
+
+    expect(navUnmountCount).toBe(1);
+    expect(
+      container.querySelector('[data-testid="stub-view-explorer"]'),
+    ).not.toBeNull();
   });
 
   // ─── SB-20: 换区后视图移槽——旧组件卸载，新组件挂载 ───

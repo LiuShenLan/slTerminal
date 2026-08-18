@@ -128,6 +128,7 @@ import TerminalPanel from "../panels/terminal/TerminalPanel";
 import { cliProfileRegistry } from "../features/cliProfiles";
 import { claudeProfile } from "../features/cliProfiles/profiles/claude";
 import { useLayout } from "../stores/layout";
+import { useFontSize } from "../stores/fontSize";
 // claude profile 注册（side-effect，等价旧 cliIcons.ts 内嵌注册）
 import "../features/cliProfiles/profiles";
 // 真实 TerminalRegistry：F9 行为修订后 TerminalPanel 经 subscribe/get 订阅会话状态，
@@ -166,6 +167,15 @@ describe("TerminalPanel", () => {
   it("挂载时显示'正在连接…'加载遮罩", () => {
     render(React.createElement(TerminalPanel, { api: mocks.mockApi, params: { panelId: "test-p1" } }));
     expect(screen.getByText("正在连接...")).toBeTruthy();
+  });
+
+  it("FE-29: 加载遮罩无 transition 动效（ADR-0003 无动效，显隐切换瞬时完成）", () => {
+    render(React.createElement(TerminalPanel, { api: mocks.mockApi, params: { panelId: "test-f29" } }));
+    // getByText 返回遮罩 div 本身（文本直接子节点）
+    const mask = screen.getByText("正在连接...") as HTMLElement;
+    // 检查单断言要点：遮罩不设 transition（旧实现 transition: "opacity 0.3s" 违反 ADR-0003）
+    expect(mask.style.transition).toBe("");
+    expect(mask.style.getPropertyValue("transition")).toBe("");
   });
 
   it("挂载后通过 IPC 获取 Windows build 号（F3 检测）", async () => {
@@ -617,5 +627,61 @@ describe("TerminalPanel", () => {
     // 未命中 → 零副作用：不触发任何页签更新（现状 rule == null 分支语义保留）
     expect(mocks.mockApi.setTitle).not.toHaveBeenCalled();
     expect(mocks.mockApi.updateParameters).not.toHaveBeenCalled();
+  });
+
+  it("FE-17: TerminalRegistry 订阅按 panelId 过滤——其他面板事件不触发本面板更新", async () => {
+    render(React.createElement(TerminalPanel, { api: mocks.mockApi, params: { panelId: "test-f17" } }));
+    await waitFor(() => expect(mocks.getOscHandler(133)).toBeDefined());
+    // 清掉挂载/spawn 期间产生的页签更新调用，从零计数
+    mocks.mockApi.updateParameters.mockClear();
+
+    // 其他面板的 register 事件（携 agentSession）→ 本面板过滤跳过，零更新
+    await act(async () => {
+      registerStub("other-panel", { cliId: "claude", lastEventAt: Date.now() });
+    });
+    // 其他面板的 sessionChange 事件 → 本面板过滤跳过，零更新
+    await act(async () => {
+      TerminalRegistry.setAgentSession("other-panel", { cliId: "claude" });
+    });
+    expect(mocks.mockApi.updateParameters).not.toHaveBeenCalled();
+
+    // 正对照：本面板 sessionChange → 同步 tabLogo（过滤未误伤自身）
+    await act(async () => {
+      registerStub("test-f17");
+      TerminalRegistry.setAgentSession("test-f17", { cliId: "claude" });
+    });
+    expect(mocks.mockApi.updateParameters).toHaveBeenCalledWith(
+      expect.objectContaining({ tabLogo: "/cli-icons/claude.png" }),
+    );
+  });
+
+  it("FE-32: useLayout/useFontSize 精确 selector 订阅——无关字段变化不触发重渲染", async () => {
+    vi.useFakeTimers();
+    // Profiler 计数子树 commit 次数：store 无关字段变化若触发组件重渲染即为粗粒度订阅
+    let renderCount = 0;
+    const Profiler = React.Profiler;
+    render(
+      React.createElement(
+        Profiler,
+        { id: "tp-fe32", onRender: () => { renderCount += 1; } },
+        React.createElement(TerminalPanel, { api: mocks.mockApi, params: { panelId: "test-fe32" } }),
+      ),
+    );
+    await vi.runAllTimersAsync();
+    renderCount = 0; // 挂载/spawn 产生的 commit 归零，从基线开始计数
+
+    // 无关字段（editorFontSize）变化 → selector 未命中 → 零重渲染
+    act(() => {
+      useFontSize.setState({ editorFontSize: 20 });
+    });
+    expect(renderCount).toBe(0);
+
+    // 相关字段（terminalFontSize）变化 → selector 命中 → 触发重渲染（正对照）
+    act(() => {
+      useFontSize.setState({ terminalFontSize: 18 });
+    });
+    expect(renderCount).toBeGreaterThan(0);
+
+    vi.useRealTimers();
   });
 });

@@ -95,7 +95,9 @@ fn is_valid_json(s: &str) -> bool {
 /// SEC-11：校验 projects 保存输入——大小上限 1MB + 须为合法 JSON 对象
 fn validate_projects_input(data: &str) -> Result<(), AppError> {
     if data.len() > MAX_PERSIST_BYTES {
-        return Err(AppError::Validation("保存项目失败: 数据超过 1MB 上限".into()));
+        return Err(AppError::Validation(
+            "保存项目失败: 数据超过 1MB 上限".into(),
+        ));
     }
     match serde_json::from_str::<serde_json::Value>(data) {
         Ok(serde_json::Value::Object(_)) => Ok(()),
@@ -182,7 +184,10 @@ mod tests {
 
         let loaded = load_from_dir(dir.path());
         assert_eq!(loaded.data, valid, "应从 .bak 恢复");
-        assert!(loaded.corrupted, ".bak 命中也应标记 corrupted（数据来自备份）");
+        assert!(
+            loaded.corrupted,
+            ".bak 命中也应标记 corrupted（数据来自备份）"
+        );
         // 验证主文件已被修复
         let repaired = std::fs::read_to_string(&projects_path).unwrap();
         assert_eq!(repaired, valid, "主文件应被修复为 .bak 内容");
@@ -358,7 +363,10 @@ mod tests {
             other => panic!("数组应返回 Validation，实际: {other:?}"),
         }
         let err2 = run(save_projects("123".to_string())).unwrap_err();
-        assert!(matches!(err2, AppError::Validation(_)), "标量应被拒绝: {err2:?}");
+        assert!(
+            matches!(err2, AppError::Validation(_)),
+            "标量应被拒绝: {err2:?}"
+        );
     }
 
     /// 非合法 JSON → AppError::Validation 拒绝
@@ -370,7 +378,10 @@ mod tests {
         let err = run(save_projects("not json {{{".to_string())).unwrap_err();
         match err {
             AppError::Validation(msg) => {
-                assert!(msg.contains("合法 JSON"), "消息应提示 JSON 格式，实际: {msg}");
+                assert!(
+                    msg.contains("合法 JSON"),
+                    "消息应提示 JSON 格式，实际: {msg}"
+                );
             }
             other => panic!("非法 JSON 应返回 Validation，实际: {other:?}"),
         }

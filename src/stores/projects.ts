@@ -12,6 +12,9 @@ import { toast } from "../lib";
 /** 持久化 debounce 间隔（毫秒），供 fontSize/keybindings 等 store 共用 */
 export const PERSIST_DEBOUNCE_MS = 2000;
 
+/** 页面总数上限（FE-01/D1 契约）——多 Dockview 实例架构每页一实例，上限防内存/DOM 线性增长 */
+export const MAX_PAGES = 20;
+
 // ── 数据模型 ──────────────────────────────────────────────
 
 export interface Project {
@@ -101,10 +104,16 @@ export const useProjects = create<ProjectsState>()((set, get) => ({
 
       // ── Page ─────────────────────────────────────────────
 
-      addPage: (projectId, page) =>
+      addPage: (projectId, page) => {
+        // FE-01（D1 契约）：页面总数上限 MAX_PAGES——超限拒绝新增 + toast 告警。
+        // 多 Dockview 实例架构每页一实例，上限防内存/DOM 线性增长（豁免登记 S19）
+        const project = get().projects[projectId];
+        if (!project) return;
+        if (project.pages.length >= MAX_PAGES) {
+          toast.show("warning", "页面数已达上限");
+          return;
+        }
         set((state) => {
-          const project = state.projects[projectId];
-          if (!project) return state;
           const pages = [...project.pages, page];
           return {
             projects: {
@@ -119,7 +128,8 @@ export const useProjects = create<ProjectsState>()((set, get) => ({
             },
             expandedNodes: { ...state.expandedNodes, [page.pageId]: true },
           };
-        }),
+        });
+      },
 
       removePage: (projectId, pageId) =>
         set((state) => {

@@ -277,7 +277,10 @@ mod tests {
     fn layer_serde_serializes_snake_case() {
         // 三值序列化为 "user"/"project"/"local"（硬约束 #4 双边对应）
         assert_eq!(serde_json::to_string(&Layer::User).unwrap(), "\"user\"");
-        assert_eq!(serde_json::to_string(&Layer::Project).unwrap(), "\"project\"");
+        assert_eq!(
+            serde_json::to_string(&Layer::Project).unwrap(),
+            "\"project\""
+        );
         assert_eq!(serde_json::to_string(&Layer::Local).unwrap(), "\"local\"");
     }
 
@@ -333,7 +336,10 @@ mod tests {
         // 序列化形态一致（无 timeout/matcher 省略键不回写）
         let out = serde_json::to_value(&tree).unwrap();
         assert_eq!(out["SessionStart"], json["SessionStart"]);
-        assert_eq!(out["Stop"], serde_json::json!([{"hooks": [{"type": "command", "command": "echo s"}]}]));
+        assert_eq!(
+            out["Stop"],
+            serde_json::json!([{"hooks": [{"type": "command", "command": "echo s"}]}])
+        );
     }
 
     #[test]
@@ -423,10 +429,9 @@ mod tests {
     fn user_layer_resolves_to_injected_home_dir() {
         // user 层指向 {注入 home}/.claude/settings.json，不依赖 project_path / 沙箱
         let home = tempfile::tempdir().unwrap();
-        let path = resolve_config_path(Layer::User, &None, None, || {
-            Some(home.path().to_path_buf())
-        })
-        .unwrap();
+        let path =
+            resolve_config_path(Layer::User, &None, None, || Some(home.path().to_path_buf()))
+                .unwrap();
         assert_eq!(
             path,
             home.path().join(".claude").join("settings.json"),
@@ -446,8 +451,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = Some(dir.path().to_path_buf());
         let proj = dir.path().to_str().unwrap();
-        let path =
-            resolve_config_path(Layer::Project, &root, Some(proj), dirs::home_dir).unwrap();
+        let path = resolve_config_path(Layer::Project, &root, Some(proj), dirs::home_dir).unwrap();
         assert_eq!(
             path,
             PathBuf::from(proj).join(".claude").join("settings.json")
@@ -459,8 +463,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = Some(dir.path().to_path_buf());
         let proj = dir.path().to_str().unwrap();
-        let path =
-            resolve_config_path(Layer::Local, &root, Some(proj), dirs::home_dir).unwrap();
+        let path = resolve_config_path(Layer::Local, &root, Some(proj), dirs::home_dir).unwrap();
         assert_eq!(
             path,
             PathBuf::from(proj)
@@ -472,8 +475,7 @@ mod tests {
     #[test]
     fn project_local_missing_project_path_validation() {
         // project/local 层缺失 project_path → Validation（P3-BE-07）
-        let err =
-            resolve_config_path(Layer::Project, &None, None, dirs::home_dir).unwrap_err();
+        let err = resolve_config_path(Layer::Project, &None, None, dirs::home_dir).unwrap_err();
         assert!(matches!(err, AppError::Validation(_)));
         let err = resolve_config_path(Layer::Local, &None, None, dirs::home_dir).unwrap_err();
         assert!(matches!(err, AppError::Validation(_)));

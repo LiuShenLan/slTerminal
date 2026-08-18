@@ -287,15 +287,53 @@ describe("历史会话项目归属（cwd 前缀匹配）", () => {
     expect(nodeA.textContent).not.toContain("无归属会话");
 
     // 展开 projB 历史 → 无历史行（s-2 不归属）
-    // scan 精确次数断言（TE-02）：挂载即扫（NAV-10 契约，useNavTree mount effect 一次）
-    // + 展开 nodeA 重扫一次 = 展开前恰 2 次；点击 nodeB 展开 → 严格 +1 → 3 次
-    const before = mockScanHistory.mock.calls.length;
-    expect(before).toBe(2);
+    // FE-19：展开历史节点不重复 scan——扫描次数恒为 1（挂载即扫一次，NAV-10 契约
+    // useNavTree mount effect），展开/折叠任何历史节点均不再触发 scan
+    expect(mockScanHistory).toHaveBeenCalledTimes(1);
     fireEvent.click(nodeB);
     await waitFor(() => {
-      expect(mockScanHistory.mock.calls.length).toBe(before + 1);
+      expect(nodeB.textContent).not.toContain("无归属会话");
     });
-    expect(nodeB.textContent).not.toContain("无归属会话");
+    expect(mockScanHistory).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// FE-16：历史归属 Map 索引（嵌套 rootPath 最深前缀命中）
+// ═══════════════════════════════════════════════════════════════
+
+describe("历史会话项目归属（FE-16 索引：嵌套 rootPath 最深前缀命中）", () => {
+  it("cwd 命中嵌套 rootPath → 归属最深前缀项目（根项目计数 0）", async () => {
+    seedProject("C:/root", "proj-A", "项目A", [
+      { pageId: "pageA", name: "页面 A" },
+    ]);
+    seedProject("C:/root/sub", "proj-B", "项目B", [
+      { pageId: "pageB", name: "页面 B" },
+    ]);
+    seedActivePage("pageA");
+    mockScanHistory.mockResolvedValue([
+      makeHistorySession({ sessionId: "s-1", cwd: "C:/root/sub/x", title: "嵌套项目会话" }),
+      makeHistorySession({ sessionId: "s-2", cwd: "C:/root/other", title: "根项目会话" }),
+    ]);
+
+    const { container } = render(<NavTree />);
+    // 挂载即 scan——等待计数落地；s-1 cwd C:/root/sub/x 最深前缀命中 proj-B、
+    // s-2 仅命中 proj-A（根）→ 两项目各 1（旧首命中实现下 proj-A 会得 2、proj-B 0）
+    const [nodeA, nodeB] = await waitFor(() => {
+      const els = getRows(container, "nav-history-node");
+      expect(els.length).toBe(2);
+      expect(els[0].textContent).toMatch(/历史session1/);
+      expect(els[1].textContent).toMatch(/历史session1/);
+      return els as [HTMLElement, HTMLElement];
+    });
+
+    // 展开 projB → 渲染嵌套项目会话（projA 不误含——s-1 未归属根项目）
+    fireEvent.click(nodeB);
+    await waitFor(() => {
+      expect(nodeB.textContent).toContain("嵌套项目会话");
+    });
+    expect(nodeB.textContent).not.toContain("根项目会话");
+    expect(nodeA.textContent).not.toContain("嵌套项目会话");
   });
 });
 
@@ -428,5 +466,80 @@ describe("历史行交互", () => {
     expect(queryByText("删除")).toBeTruthy();
     // 入口唯一化：历史行菜单同样无「打开 Hooks 配置」
     expect(queryByText("打开 Hooks 配置")).toBeNull();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// FE-19：扫描时机——挂载一次，展开不重复 scan，刷新钮显式重扫
+// ═══════════════════════════════════════════════════════════════
+
+describe("历史扫描时机（FE-19：挂载一次 + 展开不重复 scan + 刷新钮显式重扫）", () => {
+  it("挂载即扫一次；展开/折叠历史节点不触发第二次 scan", async () => {
+    seedProject("C:/projA", "proj-A", "项目A", [
+      { pageId: "pageA", name: "页面 A" },
+    ]);
+    seedActivePage("pageA");
+    mockScanHistory.mockResolvedValue([makeHistorySession()]);
+
+    const { container } = render(<NavTree />);
+    // 挂载即扫（useNavTree mount effect）——等 scan 落地
+    await waitFor(() => {
+      expect(mockScanHistory).toHaveBeenCalledTimes(1);
+    });
+    // 等计数 pill 落地（数据驱动渲染完成）
+    const node = await waitFor(() => {
+      const el = getRows(container, "nav-history-node")[0];
+      expect(el?.textContent).toMatch(/历史session1/);
+      return el as HTMLElement;
+    });
+
+    // 展开 → 仍 1 次（FE-19：不重复 scan）
+    fireEvent.click(node);
+    await waitFor(() => {
+      expect(getRows(container, "nav-row-session").length).toBe(1);
+    });
+    expect(mockScanHistory).toHaveBeenCalledTimes(1);
+
+    // 折叠再展开 → 仍 1 次
+    fireEvent.click(node);
+    await waitFor(() => {
+      expect(getRows(container, "nav-row-session").length).toBe(0);
+    });
+    fireEvent.click(node);
+    await waitFor(() => {
+      expect(getRows(container, "nav-row-session").length).toBe(1);
+    });
+    expect(mockScanHistory).toHaveBeenCalledTimes(1);
+  });
+
+  it("「导航」头刷新钮 → 显式重扫（scan 再触发一次）", async () => {
+    seedProject("C:/projA", "proj-A", "项目A", [
+      { pageId: "pageA", name: "页面 A" },
+    ]);
+    seedActivePage("pageA");
+    mockScanHistory.mockResolvedValue([]);
+
+    const { container } = render(<NavTree />);
+    await waitFor(() => {
+      expect(mockScanHistory).toHaveBeenCalledTimes(1);
+    });
+
+    // 新会话落盘 → 点刷新钮重扫
+    mockScanHistory.mockResolvedValue([makeHistorySession()]);
+    const refreshBtn = container.querySelector(
+      'button[aria-label="刷新"]',
+    ) as HTMLElement;
+    expect(refreshBtn).toBeTruthy();
+    fireEvent.click(refreshBtn);
+
+    await waitFor(() => {
+      expect(mockScanHistory).toHaveBeenCalledTimes(2);
+    });
+    // 数据落地：计数 pill 更新
+    await waitFor(() => {
+      expect(
+        getRows(container, "nav-history-node")[0].textContent,
+      ).toMatch(/历史session1/);
+    });
   });
 });

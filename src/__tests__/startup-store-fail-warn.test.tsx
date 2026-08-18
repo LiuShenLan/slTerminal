@@ -182,4 +182,26 @@ describe("App 启动链 store 加载失败告警（FE-03）", () => {
 
     consoleWarnSpy.mockRestore();
   });
+
+  it("2. FE-20: 三 store loadFromDisk 并行发起（Promise.all）——任一挂起时其余仍被调用", async () => {
+    // 三个 loadFromDisk 全部返回永不 resolve 的挂起 promise：
+    // 串行实现（逐个 await）下只有第一个会被调用；并行实现（Promise.all）下
+    // 三个会同时发起——以此区分串行/并行语义
+    mocks.mockFontSizeLoad.mockReturnValueOnce(new Promise<void>(() => {}));
+    mocks.mockKeybindingsLoad.mockReturnValueOnce(new Promise<void>(() => {}));
+    mocks.mockSideBarLoad.mockReturnValueOnce(new Promise<void>(() => {}));
+
+    render(React.createElement(App));
+
+    // 三个 load 全部已被调用（并行发起）
+    await waitFor(() => {
+      expect(mocks.mockFontSizeLoad).toHaveBeenCalledTimes(1);
+      expect(mocks.mockKeybindingsLoad).toHaveBeenCalledTimes(1);
+      expect(mocks.mockSideBarLoad).toHaveBeenCalledTimes(1);
+    }, { timeout: 3000 });
+
+    // loadAllProjects 保持在其后（Promise.all 未完成 → 未调用；markPersistenceReady 时序不动）
+    expect(mocks.mockLoadAllProjects).not.toHaveBeenCalled();
+    expect(mocks.mockMarkPersistenceReady).not.toHaveBeenCalled();
+  });
 });

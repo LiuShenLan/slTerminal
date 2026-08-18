@@ -210,7 +210,10 @@ mod tests {
             value.data,
             Some(serde_json::json!({"theme": "dark", "fontSize": 14}))
         );
-        assert!(value.corrupted, ".bak 命中也应标记 corrupted（数据来自备份）");
+        assert!(
+            value.corrupted,
+            ".bak 命中也应标记 corrupted（数据来自备份）"
+        );
         // 验证 settings.json 已被 .bak 修复
         let repaired: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(dir.path().join("settings.json")).unwrap(),
@@ -275,10 +278,7 @@ mod tests {
 
         let reloaded = run(load_settings()).unwrap();
         let data = reloaded.data.as_ref().unwrap();
-        assert_eq!(
-            data["fontSize"], 14,
-            "fontSize 不应被 keybindings 覆盖擦除"
-        );
+        assert_eq!(data["fontSize"], 14, "fontSize 不应被 keybindings 覆盖擦除");
         assert_eq!(
             data["keybindings"]["terminal.copy"], "Ctrl+Alt+KeyC",
             "keybindings 应正确写入"
@@ -296,14 +296,14 @@ mod tests {
             serde_json::json!({"keybindings": {"terminal.copy": "Ctrl+Shift+C"}}),
         ))
         .unwrap();
-        run(save_settings(serde_json::json!({"sideBar": {"width": 280}}))).unwrap();
+        run(save_settings(
+            serde_json::json!({"sideBar": {"width": 280}}),
+        ))
+        .unwrap();
 
         let final_value = run(load_settings()).unwrap();
         let data = final_value.data.as_ref().unwrap();
-        assert_eq!(
-            data["fontSize"], 14,
-            "第一次 save 的 fontSize 应保留"
-        );
+        assert_eq!(data["fontSize"], 14, "第一次 save 的 fontSize 应保留");
         assert_eq!(
             data["keybindings"]["terminal.copy"], "Ctrl+Shift+C",
             "第二次 save 的 keybindings 应保留"
@@ -325,7 +325,8 @@ mod tests {
 
         let reloaded = run(load_settings()).unwrap();
         assert_eq!(
-            reloaded.data.unwrap()["fontSize"], 18,
+            reloaded.data.unwrap()["fontSize"],
+            18,
             "fontSize 应被覆盖为新值"
         );
     }
@@ -425,12 +426,10 @@ mod tests {
         let _guard = AppDataDirGuard::set(dir.path());
 
         // 两个独立线程各持 runtime 并发 block_on 真实 save_settings（read-merge-write 竞态）
-        let h1 = std::thread::spawn(move || {
-            run_save_with_retry(serde_json::json!({"fontSize": "a"}))
-        });
-        let h2 = std::thread::spawn(move || {
-            run_save_with_retry(serde_json::json!({"fontSize": "b"}))
-        });
+        let h1 =
+            std::thread::spawn(move || run_save_with_retry(serde_json::json!({"fontSize": "a"})));
+        let h2 =
+            std::thread::spawn(move || run_save_with_retry(serde_json::json!({"fontSize": "b"})));
         h1.join().unwrap().unwrap();
         h2.join().unwrap().unwrap();
 
@@ -538,8 +537,14 @@ mod tests {
             other => panic!("非法顶层键应返回 Validation，实际: {other:?}"),
         }
         // 混合合法/非法键同样拒绝（白名单是整体约束）
-        let err2 = run(save_settings(serde_json::json!({"evil": 1, "fontSize": 14}))).unwrap_err();
-        assert!(matches!(err2, AppError::Validation(_)), "含白名单外键应拒绝: {err2:?}");
+        let err2 = run(save_settings(
+            serde_json::json!({"evil": 1, "fontSize": 14}),
+        ))
+        .unwrap_err();
+        assert!(
+            matches!(err2, AppError::Validation(_)),
+            "含白名单外键应拒绝: {err2:?}"
+        );
     }
 
     /// 非对象输入（标量/数组）→ AppError::Validation 拒绝

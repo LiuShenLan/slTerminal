@@ -1,10 +1,12 @@
 // ipc-agent-history-contract.test.ts — agent 历史会话 IPC wrapper 合约测试（FE-03，IHE-06 工厂化）
 //
 // 照 ipc-hooks-config-contract.test.ts 模式，经共享工厂 describeIpcContract（helpers/ipc-contract.ts）
-// 声明式驱动三命令 × 四维（命令名 / 参数结构 / 正常返回 / 异常传播）= 12 条用例
-// （重命名命令已随功能整体移除——问题 7 修复；readHistoryTitle = 人工验证问题 3 新增）：
+// 声明式驱动三命令 × 四维（命令名 / 参数结构 / 正常返回 / 异常传播）= 18 条用例
+// （重命名命令已随功能整体移除——问题 7 修复；readHistoryTitle = 人工验证问题 3 新增；
+// scanAgentHistory(cliId, force) = BE-19 新增——scanHistory 保留为无参聚合兼容导出）：
 // 1. 命令名 snake_case 逐字（agent_history_scan 等，非驼峰）
-// 2. 参数结构键集合精确匹配（scan 无参 / delete { cliId, sessionId } / readTitle { cliId, sessionId }，防字段漂移）
+// 2. 参数结构键集合精确匹配（scan 无参 / scanAgentHistory { cliId, force? } / delete { cliId, sessionId } /
+//    readTitle { cliId, sessionId }，防字段漂移）
 // 3. 返回透传（scan 返回 AgentHistorySession[] 八键全形态样例；readTitle 返回两键）
 // 4. 异常传播不吞异常
 //
@@ -62,7 +64,7 @@ const mockSessions = [
   },
 ];
 
-describeIpcContract("scanHistory 合约（agent_history_scan 无参聚合）", [
+describeIpcContract("scanHistory 合约（agent_history_scan 无参聚合——兼容导出）", [
   // 维度 1：命令名（snake_case 逐字）
   {
     name: "应调用 agent_history_scan 命令（非驼峰）",
@@ -91,6 +93,57 @@ describeIpcContract("scanHistory 合约（agent_history_scan 无参聚合）", [
     name: "invoke 失败时异常应传播给调用方",
     cmd: "agent_history_scan",
     call: () => agentHistory.scanHistory(),
+    mockThrow: "扫描失败",
+    expectReject: "扫描失败",
+  },
+]);
+
+describeIpcContract("scanAgentHistory 合约（agent_history_scan 带 cliId + force，BE-19）", [
+  // 维度 1：命令名（snake_case 逐字）
+  {
+    name: "应调用 agent_history_scan 命令（非驼峰）",
+    cmd: "agent_history_scan",
+    call: () => agentHistory.scanAgentHistory(CLI_ID),
+    respond: [],
+  },
+  // 维度 2：参数结构——force 缺省 undefined（toEqual 忽略 undefined 键；
+  // 真实序列化 JSON.stringify 丢弃该键，后端 Option 缺省 = 缓存命中路径）
+  {
+    name: "payload = { cliId }（force 缺省 undefined）",
+    cmd: "agent_history_scan",
+    call: () => agentHistory.scanAgentHistory(CLI_ID),
+    respond: [],
+    expectArgs: { cliId: CLI_ID },
+  },
+  {
+    name: "force=true 透传（显式刷新/恢复完成——绕过缓存强制重扫）",
+    cmd: "agent_history_scan",
+    call: () => agentHistory.scanAgentHistory(CLI_ID, true),
+    respond: [],
+    expectArgs: { cliId: CLI_ID, force: true },
+    expectExactKeys: ["cliId", "force"],
+  },
+  {
+    name: "force=false 透传（显式声明走缓存）",
+    cmd: "agent_history_scan",
+    call: () => agentHistory.scanAgentHistory(CLI_ID, false),
+    respond: [],
+    expectArgs: { cliId: CLI_ID, force: false },
+    expectExactKeys: ["cliId", "force"],
+  },
+  // 维度 3：正常返回透传——AgentHistorySession[] 八键全形态样例
+  {
+    name: "透传 AgentHistorySession[]（八键全形态含 cliId）",
+    cmd: "agent_history_scan",
+    call: () => agentHistory.scanAgentHistory(CLI_ID),
+    respond: [...mockSessions],
+    expectResult: mockSessions,
+  },
+  // 维度 4：异常传播
+  {
+    name: "invoke 失败时异常应传播给调用方",
+    cmd: "agent_history_scan",
+    call: () => agentHistory.scanAgentHistory(CLI_ID),
     mockThrow: "扫描失败",
     expectReject: "扫描失败",
   },

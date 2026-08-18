@@ -19,6 +19,7 @@ import {
   saveAllProjects,
   markPersistenceReady,
   _resetPersistence,
+  MAX_PAGES,
 } from "../stores/projects";
 import type { Project, OperationPage } from "../stores/projects";
 
@@ -351,6 +352,41 @@ describe("projects store", () => {
   });
 
   // ── addPage activePageId 保留 ─────────────────────────────
+
+  // ── FE-01: 页面总数上限 MAX_PAGES ────────────────────────
+
+  it("FE-01: MAX_PAGES 常量为 20（S12 跨边界契约）", () => {
+    expect(MAX_PAGES).toBe(20);
+  });
+
+  it("FE-01: 页面数达 MAX_PAGES 上限 → addPage 拒绝 + toast 告警，状态不变", () => {
+    const pages = Array.from({ length: MAX_PAGES }, (_, i) => makePage(`p-${i}`));
+    const project = makeProject({ pages, activePageId: pages[0].pageId });
+    useProjects.getState().addProject(project);
+
+    // STS-11②：structuredClone 深拷贝快照——同引用 toEqual 无法验证不可变性
+    const stateBefore = structuredClone(useProjects.getState().projects);
+    const extra = makePage("extra");
+    useProjects.getState().addPage(project.projectId, extra);
+
+    // 拒绝新增：页面数不变、version 不递增、expandedNodes 不新增
+    expect(useProjects.getState().projects[project.projectId].pages).toHaveLength(MAX_PAGES);
+    expect(useProjects.getState().projects).toEqual(stateBefore);
+    expect(useProjects.getState().expandedNodes[extra.pageId]).toBeUndefined();
+    // toast 告警（契约文案「页面数已达上限」）
+    expect(mockToastShow).toHaveBeenCalledWith("warning", "页面数已达上限");
+  });
+
+  it("FE-01: 页面数恰为 MAX_PAGES-1 → addPage 正常新增（边界内不拒绝不告警）", () => {
+    const pages = Array.from({ length: MAX_PAGES - 1 }, (_, i) => makePage(`p-${i}`));
+    const project = makeProject({ pages });
+    useProjects.getState().addProject(project);
+
+    useProjects.getState().addPage(project.projectId, makePage("last"));
+
+    expect(useProjects.getState().projects[project.projectId].pages).toHaveLength(MAX_PAGES);
+    expect(mockToastShow).not.toHaveBeenCalled();
+  });
 
   it("addPage 已有 activePageId 时不改变活跃页面", () => {
     const page1 = makePage("page-1");
