@@ -1,12 +1,41 @@
 // FS IPC 封装 — 前端调用文件读/写/目录命令的唯一入口
 // invoke 只允许在本文件出现（硬约束 #1）
 
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, Channel } from "@tauri-apps/api/core";
 import type { DirEntry } from "../types/fs";
 
-/** 读取文件内容（UTF-8 文本） */
+/** fs_read_file 分块推送的单块载荷（BE-03）——后端按 256KB 块经 onChunk Channel 推送 */
+export interface FsReadChunk {
+  /** 本块文本（UTF-8，后端保证落在字符边界） */
+  data: string;
+  /** 是否终态块：true 时 data 恒为空串，后续无更多块 */
+  done: boolean;
+}
+
+/**
+ * 读取文件内容（UTF-8 文本）
+ *
+ * 后端经 onChunk Channel 分块推送（256KB/块，终态 { data:"", done:true }），
+ * 此处累积拼接为完整字符串后 resolve；invoke 失败（沙箱外/超 10MB 等）直接 reject。
+ * 签名保持 Promise<string> 不变，消费方零适配。
+ */
 export async function readFile(path: string): Promise<string> {
-  return invoke<string>("fs_read_file", { path });
+  const onChunk = new Channel<FsReadChunk>();
+  const chunks: string[] = [];
+  const content = new Promise<string>((resolve) => {
+    onChunk.onmessage = (chunk) => {
+      if (chunk.done) {
+        // 终态：拼接全部数据块后 resolve（终态块 data 恒为空串，不入累积）
+        resolve(chunks.join(""));
+      } else {
+        chunks.push(chunk.data);
+      }
+    };
+  });
+
+  // 先 await invoke：后端校验失败时异常直接传播给调用方
+  await invoke("fs_read_file", { path, onChunk });
+  return content;
 }
 
 /** 写入文件内容（覆盖模式，UTF-8） */

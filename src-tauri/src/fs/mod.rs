@@ -6,6 +6,7 @@ use crate::state::validate_path_within_root;
 use crate::state::AppState;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
+use tauri::ipc::Channel;
 use tauri::State;
 
 /// CRLF 检测样本最大字节数（取前 64KB 判定原文件行尾风格）
@@ -48,23 +49,125 @@ fn extract_root(state: &State<'_, AppState>) -> Result<Option<PathBuf>, AppError
     Ok((*guard).clone())
 }
 
-/// 读取文件内容（UTF-8 文本）
-#[tauri::command]
-pub async fn fs_read_file(path: String, state: State<'_, AppState>) -> Result<String, AppError> {
-    // State 仅做提取，业务逻辑在 fs_read_file_impl（测试直接调内核）
-    fs_read_file_impl(path, extract_root(&state)?).await
+/// 文件分块读取块大小（256KB）——控制单块内存与 IPC 峰值（BE-03）
+const READ_CHUNK_BYTES: usize = 256 * 1024;
+
+/// 文件读取大小上限（10MB）——超限拒绝，保护内存（BE-03 由前端校验移至后端）
+const MAX_FILE_SIZE_BYTES: u64 = 10 * 1024 * 1024;
+
+/// 文件分块读取块（Channel 推送，camelCase 与前端对齐）
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsReadChunk {
+    /// 分块数据（UTF-8 文本，多字节字符跨块不切散）
+    pub data: String,
+    /// 是否终态（终态 data 恒为空串，表示发送序列结束）
+    pub done: bool,
 }
 
-/// fs_read_file 命令内核：路径 sandbox 校验 + 阻塞读文件
-async fn fs_read_file_impl(path: String, root: Option<PathBuf>) -> Result<String, AppError> {
+/// 读取文件内容（UTF-8 文本，Channel 分块推送）
+///
+/// 先 metadata 校验大小 ≤10MB（超限 Err），再按 256KB 分块读取推送。
+/// 发送序列 = 若干 {data, done:false} + 终态 {data:"", done:true}。
+#[tauri::command]
+pub async fn fs_read_file(
+    path: String,
+    on_chunk: Channel<FsReadChunk>,
+    state: State<'_, AppState>,
+) -> Result<(), AppError> {
+    // State 仅做提取，业务逻辑在 fs_read_file_impl（测试直接调内核）
+    fs_read_file_impl(
+        path,
+        move |chunk| {
+            on_chunk.send(chunk).map_err(|e| AppError::IoKind {
+                kind: "ipc".into(),
+                message: format!("fs_read_file 分块推送失败: {e}"),
+            })
+        },
+        extract_root(&state)?,
+    )
+    .await
+}
+
+/// fs_read_file 命令内核：路径 sandbox 校验 + 大小上限校验 + 分块读取推送
+///
+/// 分块经 send 回调推送——tauri::ipc::Channel 无法在 L1 构造（无 webview 上下文），
+/// send 回调使内核可测（HFN-08 先例：内核直接接收依赖而非 State）。
+async fn fs_read_file_impl<F>(
+    path: String,
+    send: F,
+    root: Option<PathBuf>,
+) -> Result<(), AppError>
+where
+    F: FnMut(FsReadChunk) -> Result<(), AppError> + Send + 'static,
+{
     // 路径 sandbox 校验
     validate_path_within_root(&root, Path::new(&path))?;
 
-    let content = spawn_blocking_task(move || -> Result<String, AppError> {
-        Ok(std::fs::read_to_string(&path)?)
-    })
-    .await?;
-    Ok(content)
+    spawn_blocking_task(move || read_file_chunked(&path, send)).await
+}
+
+/// 分块读取文件并通过 send 推送（块 256KB，UTF-8 边界回退）
+///
+/// 发送序列 = 若干 {data, done:false} + 终态 {data:"", done:true}；
+/// 空文件直接发终态；文件含非法/残缺 UTF-8 → Err（与旧 read_to_string 行为一致）。
+fn read_file_chunked<F>(path: &str, mut send: F) -> Result<(), AppError>
+where
+    F: FnMut(FsReadChunk) -> Result<(), AppError>,
+{
+    // 先 metadata 校验大小上限——超限 Err，避免大文件全量读入
+    let meta = std::fs::metadata(path)?;
+    if meta.len() > MAX_FILE_SIZE_BYTES {
+        return Err(AppError::IoKind {
+            kind: "size".into(),
+            message: format!("文件过大（超过 10MB 上限），已拒绝打开以保护内存: {path}"),
+        });
+    }
+
+    use std::io::Read;
+    let mut file = std::fs::File::open(path)?;
+    let mut buf = vec![0u8; READ_CHUNK_BYTES];
+    // 跨块残留：上一块回退的 UTF-8 多字节字符尾部，合并到下一块开头完整还原
+    let mut remainder: Vec<u8> = Vec::new();
+
+    loop {
+        let n = file.read(&mut buf)?;
+        remainder.extend_from_slice(&buf[..n]);
+
+        if remainder.is_empty() {
+            break; // EOF 且无残留
+        }
+
+        // UTF-8 边界回退：只发送合法前缀——多字节字符尾部（含跨块残缺序列）
+        // 留在 remainder，下一轮与后续字节合并
+        let valid_len = std::str::from_utf8(&remainder)
+            .map(|s| s.len())
+            .unwrap_or_else(|e| e.valid_up_to());
+        if valid_len > 0 {
+            let data = String::from_utf8(remainder.drain(..valid_len).collect()).map_err(
+                |e| AppError::IoKind {
+                    kind: "utf8".into(),
+                    message: format!("文件编码错误（非 UTF-8）: {path}: {e}"),
+                },
+            )?;
+            send(FsReadChunk { data, done: false })?;
+        }
+
+        if n == 0 {
+            // EOF：剩余字节若非空则文件含非法/残缺 UTF-8 序列（不完整字符尾部到文件结尾）
+            if !remainder.is_empty() {
+                return Err(AppError::IoKind {
+                    kind: "utf8".into(),
+                    message: format!("文件编码错误（非 UTF-8）: {path}"),
+                });
+            }
+            break;
+        }
+    }
+
+    // 终态：空数据 + done:true
+    send(FsReadChunk { data: String::new(), done: true })?;
+    Ok(())
 }
 
 /// 写入文件内容（覆盖模式，UTF-8）
@@ -631,6 +734,7 @@ mod write_file_tests {
 #[cfg(test)]
 mod command_wrapper_tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
 
     fn run<F: std::future::Future>(f: F) -> F::Output {
         tokio::runtime::Runtime::new().unwrap().block_on(f)
@@ -638,18 +742,45 @@ mod command_wrapper_tests {
 
     // ===== fs_read_file =====
 
+    /// 驱动 fs_read_file_impl 并收集全部分块（Channel 无法在 L1 构造——send 回调收集）
+    fn run_read_file(path: String, root: Option<PathBuf>) -> Result<Vec<FsReadChunk>, AppError> {
+        let chunks: Arc<Mutex<Vec<FsReadChunk>>> = Arc::new(Mutex::new(Vec::new()));
+        let collector = chunks.clone();
+        run(fs_read_file_impl(
+            path,
+            move |chunk| {
+                collector.lock().unwrap().push(chunk);
+                Ok(())
+            },
+            root,
+        ))?;
+        let collected = chunks.lock().unwrap().clone();
+        Ok(collected)
+    }
+
     #[test]
     fn test_fs_read_file_returns_content() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("read.txt");
         std::fs::write(&file, "hello world").unwrap();
 
-        let content = run(fs_read_file_impl(
+        let chunks = run_read_file(
             file.to_string_lossy().to_string(),
             Some(dir.path().to_path_buf()),
-        ))
+        )
         .unwrap();
-        assert_eq!(content, "hello world");
+        // 单块 + 终态，拼接还原一致
+        let joined: String = chunks
+            .iter()
+            .filter(|c| !c.done)
+            .map(|c| c.data.as_str())
+            .collect();
+        assert_eq!(joined, "hello world");
+        assert!(chunks.last().unwrap().done, "末块应为终态（done=true）");
+        assert!(
+            chunks.last().unwrap().data.is_empty(),
+            "终态块 data 应为空串"
+        );
     }
 
     #[test]
@@ -657,10 +788,10 @@ mod command_wrapper_tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("ghost.txt");
 
-        let result = run(fs_read_file_impl(
+        let result = run_read_file(
             file.to_string_lossy().to_string(),
             Some(dir.path().to_path_buf()),
-        ));
+        );
         assert!(result.is_err(), "不存在的文件应返回错误");
     }
 
@@ -671,10 +802,10 @@ mod command_wrapper_tests {
         let file = outside.path().join("secret.txt");
         std::fs::write(&file, "secret").unwrap();
 
-        let result = run(fs_read_file_impl(
+        let result = run_read_file(
             file.to_string_lossy().to_string(),
             Some(root.path().to_path_buf()),
-        ));
+        );
         assert!(result.is_err(), "根外路径应被沙箱拒绝");
     }
 
@@ -898,5 +1029,202 @@ mod command_wrapper_tests {
             }
             other => panic!("闭包 panic 应映射为 AppError::TaskJoin，实际: {other:?}"),
         }
+    }
+}
+
+/// fs_read_file 分块读取核心测试（BE-03）：多块拼接还原 / 多字节跨界 / 超限拒绝 / 空文件终态
+///
+/// 直接测同步核心 read_file_chunked（send 回调注入收集，无需构造 tauri::ipc::Channel——
+/// L1 无 webview 运行时上下文，见 pty/CLAUDE.md 豁免项 1）。
+#[cfg(test)]
+mod read_file_chunked_tests {
+    use super::*;
+
+    /// 收集分块，返回（全部分块, 核心执行结果）
+    fn collect_chunks(path: &Path) -> (Vec<FsReadChunk>, Result<(), AppError>) {
+        let mut chunks: Vec<FsReadChunk> = Vec::new();
+        let result = read_file_chunked(&path.to_string_lossy(), |chunk| {
+            chunks.push(chunk);
+            Ok(())
+        });
+        (chunks, result)
+    }
+
+    /// 数据块拼接还原原文
+    fn join_data(chunks: &[FsReadChunk]) -> String {
+        chunks
+            .iter()
+            .filter(|c| !c.done)
+            .map(|c| c.data.as_str())
+            .collect()
+    }
+
+    /// 多块文件：分块拼接还原一致 + 发送序列契约（数据块 done:false，终态恰一个且 data 空）
+    #[test]
+    fn test_read_file_chunked_multi_chunk_joins_correctly() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("multi.txt");
+        // 600KB ASCII——超过一块（256KB），至少 2 个数据块
+        let content = "abcdefghij".repeat(60 * 1024);
+        assert!(content.len() > READ_CHUNK_BYTES, "前置：内容超过单块大小");
+        std::fs::write(&file, &content).unwrap();
+
+        let (chunks, result) = collect_chunks(&file);
+        result.unwrap();
+
+        let data_chunks: Vec<&FsReadChunk> = chunks.iter().filter(|c| !c.done).collect();
+        assert!(
+            data_chunks.len() >= 2,
+            "应产生至少 2 个数据块，实际: {}",
+            data_chunks.len()
+        );
+        assert_eq!(
+            chunks.iter().filter(|c| c.done).count(),
+            1,
+            "终态块应恰为 1 个"
+        );
+        let terminal = chunks.last().unwrap();
+        assert!(terminal.done, "末块应为终态");
+        assert!(terminal.data.is_empty(), "终态块 data 应为空串");
+        for c in &data_chunks {
+            assert!(!c.done, "数据块 done 应为 false");
+            assert!(
+                c.data.len() <= READ_CHUNK_BYTES,
+                "单块大小不应超过 256KB"
+            );
+        }
+        assert_eq!(join_data(&chunks), content, "分块拼接后应与原文一致");
+    }
+
+    /// 多字节字符跨界：3 字节汉字「界」(E7 95 8C) 从 256KB 边界前 1 字节开始——首块切点落在字符中部
+    #[test]
+    fn test_read_file_chunked_utf8_boundary_not_split() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("utf8.txt");
+        let mut content = vec![b'a'; READ_CHUNK_BYTES - 1];
+        content.extend_from_slice("界".as_bytes());
+        content.extend_from_slice("后".repeat(1000).as_bytes());
+        std::fs::write(&file, &content).unwrap();
+
+        let (chunks, result) = collect_chunks(&file);
+        result.unwrap();
+
+        let data_chunks: Vec<&FsReadChunk> = chunks.iter().filter(|c| !c.done).collect();
+        assert!(
+            data_chunks.len() >= 2,
+            "应有多个数据块，实际: {}",
+            data_chunks.len()
+        );
+        // 字节级还原断言：跨块字符若被切散则字节序列必不等
+        assert_eq!(
+            join_data(&chunks).as_bytes(),
+            &content[..],
+            "跨块多字节字符不得切散，拼接后字节应与原文一致"
+        );
+    }
+
+    /// 4 字节 emoji「😀」(F0 9F 98 80) 从 256KB 边界前 2 字节开始——首块切点落在字符中部
+    #[test]
+    fn test_read_file_chunked_utf8_4byte_boundary_not_split() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("utf8_4b.txt");
+        let mut content = vec![b'x'; READ_CHUNK_BYTES - 2];
+        content.extend_from_slice("😀".as_bytes());
+        content.push(b'y');
+        std::fs::write(&file, &content).unwrap();
+
+        let (chunks, result) = collect_chunks(&file);
+        result.unwrap();
+        assert_eq!(
+            join_data(&chunks).as_bytes(),
+            &content[..],
+            "4 字节字符跨块不得切散，拼接后字节应与原文一致"
+        );
+    }
+
+    /// 超限拒绝：>10MB 文件 metadata 校验即 Err，不发送任何块
+    #[test]
+    fn test_read_file_chunked_over_limit_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("big.txt");
+        // 稀疏文件 10MB+1 字节——不写内容，metadata 长度即超限
+        std::fs::File::create(&file)
+            .unwrap()
+            .set_len(MAX_FILE_SIZE_BYTES + 1)
+            .unwrap();
+
+        let (chunks, result) = collect_chunks(&file);
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("10MB"), "超限错误消息应含 10MB 上限，实际: {err}");
+        assert!(chunks.is_empty(), "超限拒绝不应发送任何块");
+    }
+
+    /// 恰好 10MB：允许读取，全量拼接还原
+    #[test]
+    fn test_read_file_chunked_at_limit_allowed() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("limit.txt");
+        // 稀疏文件恰好 10MB——读出全 NUL（合法 UTF-8 的 U+0000）
+        std::fs::File::create(&file)
+            .unwrap()
+            .set_len(MAX_FILE_SIZE_BYTES)
+            .unwrap();
+
+        let (chunks, result) = collect_chunks(&file);
+        result.unwrap();
+        assert_eq!(
+            join_data(&chunks).len() as u64,
+            MAX_FILE_SIZE_BYTES,
+            "恰好 10MB 应完整读出"
+        );
+        assert!(chunks.last().unwrap().done, "末块应为终态");
+    }
+
+    /// 空文件：直接终态（{data:"", done:true}），无数据块
+    #[test]
+    fn test_read_file_chunked_empty_file_terminal_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("empty.txt");
+        std::fs::write(&file, "").unwrap();
+
+        let (chunks, result) = collect_chunks(&file);
+        result.unwrap();
+        assert_eq!(chunks.len(), 1, "空文件应只发终态块，实际: {}", chunks.len());
+        assert!(chunks[0].done, "终态块 done 应为 true");
+        assert!(chunks[0].data.is_empty(), "终态块 data 应为空串");
+    }
+
+    /// 非法 UTF-8（含非法字节）：拒绝且不发送终态（行为同旧 read_to_string）
+    #[test]
+    fn test_read_file_chunked_invalid_utf8_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("binary.txt");
+        // 0xFF/0xFE 为非法 UTF-8 字节
+        std::fs::write(&file, b"abc\xff\xfe").unwrap();
+
+        let (chunks, result) = collect_chunks(&file);
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("UTF-8") || err.contains("编码"),
+            "错误消息应说明编码问题，实际: {err}"
+        );
+        assert!(!chunks.iter().any(|c| c.done), "编码错误时不得发送终态");
+    }
+
+    /// 残缺多字节尾部到文件结尾（不完整字符）：拒绝（行为同旧 read_to_string）
+    #[test]
+    fn test_read_file_chunked_incomplete_tail_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("truncated.txt");
+        // 3 字节汉字只有前 2 字节，文件即以残缺序列结尾
+        std::fs::write(&file, b"abc\xe7\x95").unwrap();
+
+        let (chunks, result) = collect_chunks(&file);
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("UTF-8") || err.contains("编码"),
+            "错误消息应说明编码问题，实际: {err}"
+        );
+        assert!(!chunks.iter().any(|c| c.done), "编码错误时不得发送终态");
     }
 }

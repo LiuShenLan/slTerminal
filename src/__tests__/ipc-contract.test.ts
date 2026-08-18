@@ -180,27 +180,12 @@ const READ_DIR_RESULT = [
 
 describeIpcContract('fs IPC 合约', [
   {
-    name: 'readFile: 应调用 fs_read_file 命令，参数包含 path',
-    cmd: 'fs_read_file',
-    call: () => fs.readFile('C:\\test.txt'),
-    respond: 'file content',
-    expectArgs: { path: 'C:\\test.txt' },
-    expectResult: 'file content',
-  },
-  {
     name: 'writeFile: 应调用 fs_write_file 命令，参数包含 path 和 content',
     cmd: 'fs_write_file',
     call: () => fs.writeFile('C:\\output.txt', 'hello world'),
     expectArgs: { path: 'C:\\output.txt', content: 'hello world' },
   },
   // ── 异常路径 ──────────────────────────────────────────────
-  {
-    name: 'readFile: invoke 失败时异常应传播',
-    cmd: 'fs_read_file',
-    call: () => fs.readFile('C:\\protected.txt'),
-    mockThrow: 'access denied',
-    expectReject: 'access denied',
-  },
   {
     name: 'writeFile: invoke 失败时异常应传播',
     cmd: 'fs_write_file',
@@ -264,6 +249,71 @@ describeIpcContract('fs IPC 合约', [
     expectReject: 'target exists',
   },
 ]);
+
+// ── readFile（BE-03 Channel 分块）——wrapper 行为契约，手写驱动 ──
+// readFile 的 resolve 值由 onChunk Channel 的 done 序列驱动（非 invoke 返回值），
+// 工厂 respond/expectResult 无法表达，照 onFsEvent 先例手写。
+// mockIPC 只守 JS 侧形状；Channel 真实序列化由 L4 E2E 守卫（IHE-01）。
+
+describe('fs readFile Channel 合约（BE-03）', () => {
+  /** 注册 mockIPC，捕获 readFile 的 invoke 参数并返回 onChunk Channel */
+  function captureReadChannel(): {
+    promise: Promise<string>;
+    channel: Channel<fs.FsReadChunk>;
+  } {
+    let channel: Channel<fs.FsReadChunk> | null = null;
+    mockIPC((_cmd, args) => {
+      channel = (args as Record<string, unknown>).onChunk as Channel<fs.FsReadChunk>;
+      return undefined;
+    });
+    const promise = fs.readFile('C:\\test.txt');
+    expect(channel).not.toBeNull();
+    return { promise, channel: channel! };
+  }
+
+  it('readFile: 应调用 fs_read_file 命令，payload 为 path + onChunk Channel，按 done 序列拼接完整字符串', async () => {
+    const spy = vi.fn();
+    mockIPC((cmd, args) => {
+      spy(cmd, args);
+      return undefined;
+    });
+
+    const promise = fs.readFile('C:\\test.txt');
+    expect(spy).toHaveBeenCalledTimes(1);
+    const [cmd, args] = spy.mock.calls[0] as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(cmd).toBe('fs_read_file');
+    expect(args.path).toBe('C:\\test.txt');
+    expect(args.onChunk).toBeInstanceOf(Channel);
+    // payload 键恰好为 path/onChunk（防单边字段漂移）
+    expect(Object.keys(args).sort()).toEqual(['onChunk', 'path']);
+
+    // 驱动分块序列：若干 done:false + 终态 { data:"", done:true }
+    const channel = args.onChunk as Channel<fs.FsReadChunk>;
+    channel.onmessage({ data: 'Hello ', done: false });
+    channel.onmessage({ data: 'World', done: false });
+    channel.onmessage({ data: '', done: true });
+
+    await expect(promise).resolves.toBe('Hello World');
+  });
+
+  it('readFile: 空文件（无数据块直接终态）返回空串', async () => {
+    const { promise, channel } = captureReadChannel();
+    channel.onmessage({ data: '', done: true });
+    await expect(promise).resolves.toBe('');
+  });
+
+  it('readFile: invoke 失败时异常应传播', async () => {
+    mockIPC(() => {
+      throw new Error('access denied');
+    });
+    await expect(fs.readFile('C:\\protected.txt')).rejects.toThrow(
+      'access denied',
+    );
+  });
+});
 
 // ═══════════════════════════════════════════════════════════════════
 // Settings IPC
