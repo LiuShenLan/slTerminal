@@ -83,9 +83,20 @@ pub(crate) fn process_signal_file_with(
     path: &Path,
     emit: impl Fn(&AgentEventPayload) -> Result<(), tauri::Error>,
 ) {
+    // SEC-02：symlink_metadata 不跟随符号链接——命中 symlink 仅删除不读取
+    // （防恶意链接指向信号目录外敏感文件，内容经 agent-event 泄露）。
     // AQ-2：读取前大小限制——超限 warn + 删除后返回（与「解析失败仍删」容错语义一致）；
     // metadata 失败（如文件已消失）→ 走下方既有读失败分支。
-    if let Ok(meta) = fs::metadata(path) {
+    if let Ok(meta) = fs::symlink_metadata(path) {
+        if meta.is_symlink() {
+            tracing::warn!(
+                "信号文件为符号链接（仅删除不读取，防越界读取泄露）: {}",
+                path.display()
+            );
+            // remove_file 只删除链接本身，不删除链接目标
+            let _ = fs::remove_file(path);
+            return;
+        }
         if meta.len() > MAX_SIGNAL_FILE_BYTES {
             tracing::warn!(
                 "信号文件超限（{} 字节 > 上限 {} 字节）: {}",
@@ -421,5 +432,49 @@ mod tests {
             "超限文件不应触发 emit"
         );
         assert!(!path.exists(), "超限文件应被删除");
+    }
+
+    /// SEC-02 防复发：符号链接信号文件 → 仅删除不读取（emit 零调用、链接被删、目标保留）
+    ///
+    /// 前提：Windows 创建符号链接需管理员权限或开发者模式（Developer Mode）——
+    /// 无权限时 `symlink_file` 返回 Err → 本用例 skip（跳过不视为失败）。
+    #[test]
+    fn process_symlink_signal_deletes_without_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target.txt");
+        std::fs::write(&target, VALID_SIGNAL_JSON).unwrap();
+        let link = dir.path().join("link.json");
+
+        if !try_create_symlink(&link, &target) {
+            eprintln!("skip: 无符号链接创建权限（Windows 需管理员/开发者模式）");
+            return;
+        }
+
+        let emitted = std::sync::atomic::AtomicUsize::new(0);
+        process_signal_file_with(&link, |_| {
+            emitted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        });
+
+        assert_eq!(
+            emitted.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "symlink 不应触发 emit"
+        );
+        assert!(!link.exists(), "symlink 链接本身应被删除");
+        assert!(target.exists(), "symlink 目标文件不应被删除");
+    }
+
+    /// 创建文件符号链接（平台 API 差异封装）：
+    /// Windows 需管理员权限/开发者模式，无权限返回 false（调用方据此 skip）
+    fn try_create_symlink(link: &Path, target: &Path) -> bool {
+        #[cfg(windows)]
+        {
+            std::os::windows::fs::symlink_file(target, link).is_ok()
+        }
+        #[cfg(not(windows))]
+        {
+            std::os::unix::fs::symlink(target, link).is_ok()
+        }
     }
 }

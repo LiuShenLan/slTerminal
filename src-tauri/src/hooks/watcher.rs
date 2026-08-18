@@ -160,6 +160,8 @@ fn is_signal_file(path: &std::path::Path) -> bool {
 }
 
 /// 收集信号目录中的残留信号文件（.json，大小写不敏感）。
+/// SEC-02：符号链接不收集（含 .json 命名的）——防越界读取经 agent-event 泄露；
+/// 命中 symlink 的删除由 process_signal_file_with 承担（notify 通道，仅删不读）。
 /// 目录不存在/不可读 → 空 Vec（不报错，轮询下次再试）。
 pub fn collect_signal_files(dir: &Path) -> Vec<PathBuf> {
     let entries = match std::fs::read_dir(dir) {
@@ -169,8 +171,13 @@ pub fn collect_signal_files(dir: &Path) -> Vec<PathBuf> {
     entries
         .filter_map(|e| e.ok())
         .map(|e| e.path())
-        .filter(|p| is_signal_file(p))
+        .filter(|p| is_signal_file(p) && !is_symlink(p))
         .collect()
+}
+
+/// 判断路径是否为符号链接（symlink_metadata 不跟随目标，broken symlink 亦能识别）
+fn is_symlink(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_symlink())
 }
 
 /// 单次轮询：处理目录中全部残留信号文件（处理函数注入便于测试）。
@@ -274,6 +281,40 @@ mod tests {
         let base = tempfile::tempdir().unwrap();
         let missing = base.path().join("nonexistent-sub");
         assert!(collect_signal_files(&missing).is_empty());
+    }
+
+    /// SEC-02 防复发：collect_signal_files 过滤符号链接——.json 命名 symlink 不返回
+    ///
+    /// 前提：Windows 创建符号链接需管理员权限或开发者模式（Developer Mode）——
+    /// 无权限时 `symlink_file` 返回 Err → 本用例 skip（跳过不视为失败）。
+    #[test]
+    fn collect_excludes_symlink_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("real.json");
+        std::fs::write(&target, "{}").unwrap();
+        let link = dir.path().join("link.json");
+
+        if !try_create_symlink(&link, &target) {
+            eprintln!("skip: 无符号链接创建权限（Windows 需管理员/开发者模式）");
+            return;
+        }
+
+        let files = collect_signal_files(dir.path());
+        assert_eq!(files.len(), 1, "symlink 应被过滤，仅收集 real.json");
+        assert_eq!(files[0].file_name().unwrap(), "real.json");
+    }
+
+    /// 创建文件符号链接（平台 API 差异封装）：
+    /// Windows 需管理员权限/开发者模式，无权限返回 false（调用方据此 skip）
+    fn try_create_symlink(link: &Path, target: &Path) -> bool {
+        #[cfg(windows)]
+        {
+            std::os::windows::fs::symlink_file(target, link).is_ok()
+        }
+        #[cfg(not(windows))]
+        {
+            std::os::unix::fs::symlink(target, link).is_ok()
+        }
     }
 
     // ── poll_once ──

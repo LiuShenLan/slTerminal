@@ -56,7 +56,7 @@
 | `src-tauri/src/pty/reader.rs` | 36 | ConPTY 启动序列剥离（含 OSC 1/3/4/9 保留/CSI 3J/平台守卫）/DA1 查询检测/apply_startup_strip/should_inject_da1/mirror_da1_query/eof_exit_code/16KB 边界 |
 | `src-tauri/src/pty/spawn.rs` | 51 | compute_conpty_flags（7 条三态：系统 Win10 19041/21375→0x3、21376/22000/22621/26100→0x7、捆绑 19041→0x7，PASSTHROUGH 0x8 永不启用）/flag 常量/ConPtyMaster MasterPty trait/AttrList 生命周期/create_conpty_pair/build_cmdline 引号/build_env_block/**validate_spawn_request（尺寸/白名单/cwd 三拒绝）**/**validate_session_ownership（SEC-08 放行/拒绝）**/Job Object 纯逻辑（job_name/limit flags）/测试清理 helper |
 | `src-tauri/src/pty/conpty_api.rs` | 5 | ADR-0005 嵌入捆绑：should_bundle 决策分叉（</≥ 21376）/extraction_dir_from 路径构造/ensure_extracted 幂等（二次调用 mtime 不变 + 内容与嵌入一致）/write_if_size_differs 覆盖与跳过（vendor 升级自愈） |
-| `src-tauri/src/pty/shell.rs` | 20 | pwsh 发现 + 三档回退顺序（可控 PATH）/shell-integration.ps1 嵌入/UTF-16LE Base64 往返/which_full_path PATH 顺序/白名单解析后仍非法拒绝 |
+| `src-tauri/src/pty/shell.rs` | 24 | pwsh 发现 + 三档回退顺序（可控 PATH）/shell-integration.ps1 嵌入/UTF-16LE Base64 往返/which_full_path PATH 顺序/白名单解析后仍非法拒绝/**SEC-01：PATH 解析一致放行/伪造绝对路径拒绝/PATH 不可解析时 %SystemRoot%\System32 系统目录兜底放行（cmd 回退自洽回归守卫）** |
 | `src-tauri/src/state.rs` | 32 | ring buffer append+eviction+无换行长行淘汰三边界/validate_path_within_root 沙箱（含 `..` 穿越拒绝）/canonicalize_or_ancestor |
 | `src-tauri/src/fs/mod.rs` | 31 | read_dir/write_file（真实命令，CRLF 保留）/create_dir/delete/rename + 命令包装单测 + 异常路径（删除不存在/root 外拒绝/TaskJoin panic 映射） |
 | `src-tauri/src/notify/mod.rs` | 38 | FileWatcher 生命周期 + classify_by_kind 事件分类（全 7 种 EventKind）+ **EventEmitter trait 注入驱动事件循环（HFN-03/D6）** + Drop 轮询等待（HFN-07） |

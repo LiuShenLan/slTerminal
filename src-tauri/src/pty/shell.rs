@@ -25,7 +25,14 @@ pub struct ShellInfo {
 /// Shell 白名单校验——仅允许 pwsh.exe / powershell.exe / cmd.exe
 ///
 /// 提取 program 的文件名（不区分大小写）与白名单比对。
-/// 若文件名不在白名单中，尝试通过 which_full_path 在 PATH 中解析完整路径后再比较。
+/// - 纯文件名输入：命中白名单即放行（现状语义）。
+/// - SEC-01: 含路径分隔符的输入——canonicalize 用户路径，与
+///   `which_full_path(文件名)` 解析结果比对，一致才放行——
+///   只信任 PATH 解析出的真实路径，杜绝 `C:\project\cmd.exe` 式绕过。
+///   文件名不在白名单时：尝试通过 which_full_path 在 PATH 中解析完整路径后再比较。
+/// - 系统目录兜底：PATH 解析失败时，`%SystemRoot%\System32\<文件名>`（系统目录，
+///   二进制可信）经 canonicalize 比对一致同样放行——resolve_shell_info 的 cmd 回退
+///   在 PATH 不含 System32 时即使用该路径，校验须与之自洽，否则合法回退被确定性拒绝。
 pub(crate) fn validate_shell_allowlist(program: &str) -> Result<(), AppError> {
     // 提取文件名（不区分大小写）
     let filename = std::path::Path::new(program)
@@ -34,27 +41,69 @@ pub(crate) fn validate_shell_allowlist(program: &str) -> Result<(), AppError> {
         .unwrap_or(program);
 
     let filename_lower = filename.to_lowercase();
-    if ALLOWED_SHELLS.iter().any(|a| filename_lower == *a) {
+    let in_allowlist = ALLOWED_SHELLS.iter().any(|a| filename_lower == *a);
+
+    if !in_allowlist {
+        // 文件名不在白名单：尝试通过 PATH 解析完整路径后再比较（现状语义）
+        if let Some(resolved) = which_full_path(filename) {
+            let resolved_name = std::path::Path::new(&resolved)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(&resolved);
+            if ALLOWED_SHELLS
+                .iter()
+                .any(|a| resolved_name.to_lowercase() == *a)
+            {
+                return Ok(());
+            }
+        }
+        return Err(AppError::Pty(format!(
+            "不允许的 shell 程序: {program}。仅支持 pwsh.exe, powershell.exe, cmd.exe"
+        )));
+    }
+
+    // 文件名在白名单内
+    if !(program.contains('\\') || program.contains('/')) {
+        // 纯文件名输入——维持现状，直接放行
         return Ok(());
     }
 
-    // 尝试通过 PATH 解析完整路径后再比较
-    if let Some(resolved) = which_full_path(filename) {
-        let resolved_name = std::path::Path::new(&resolved)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or(&resolved);
-        if ALLOWED_SHELLS
-            .iter()
-            .any(|a| resolved_name.to_lowercase() == *a)
-        {
-            return Ok(());
-        }
+    // SEC-01: 含路径分隔符——只信任 PATH 解析出的真实路径。
+    // canonicalize 用户路径后与 which_full_path(文件名) 解析结果比对，一致才放行。
+    let canonical_user = std::fs::canonicalize(program)
+        .map_err(|e| AppError::Pty(format!("shell 路径解析失败: {program}: {e}")))?;
+    let resolved = match which_full_path(filename) {
+        Some(path) => path,
+        // 系统目录兜底：PATH 解析失败时，%SystemRoot%\System32\<文件名> 放行——
+        // resolve_shell_info 的 cmd 回退（PATH 不含 System32）即用该路径，
+        // 系统目录二进制可信，canonicalize 比对一致即放行。
+        None => match system32_exe_path(filename) {
+            Some(path) => path,
+            None => {
+                return Err(AppError::Pty(format!(
+                    "不允许的 shell 程序: {program}。仅支持 PATH 解析出的 pwsh.exe, powershell.exe, cmd.exe"
+                )));
+            }
+        },
+    };
+    let canonical_resolved = std::fs::canonicalize(&resolved)
+        .map_err(|e| AppError::Pty(format!("PATH 解析路径解析失败: {resolved}: {e}")))?;
+
+    // Windows 文件系统大小写不敏感，canonicalize 结果亦可能大小写不同，故忽略大小写比较
+    let matched = if cfg!(windows) {
+        canonical_user
+            .to_string_lossy()
+            .eq_ignore_ascii_case(&canonical_resolved.to_string_lossy())
+    } else {
+        canonical_user == canonical_resolved
+    };
+    if !matched {
+        return Err(AppError::Pty(format!(
+            "不允许的 shell 程序: {program}。仅支持 PATH 解析出的 pwsh.exe, powershell.exe, cmd.exe"
+        )));
     }
 
-    Err(AppError::Pty(format!(
-        "不允许的 shell 程序: {program}。仅支持 pwsh.exe, powershell.exe, cmd.exe"
-    )))
+    Ok(())
 }
 
 /// 解析 shell 程序，返回已配置好参数的基础 CommandBuilder
@@ -109,8 +158,10 @@ pub fn resolve_shell_info(user_shell: Option<&str>) -> Result<ShellInfo, AppErro
         build_pwsh_info(&path)
     } else {
         // cmd.exe 始终在 System32 下，which_full_path 可能找不到（PATH 不含 System32 的极端情况），
-        // 直接用完整路径回退
+        // 用 %SystemRoot%\System32\cmd.exe 完整路径回退（环境变量缺失时才硬编码 C:\Windows 兜底）。
+        // 与 validate_shell_allowlist 的系统目录兜底自洽（同一 helper 解析，避免校验拒绝）。
         let cmd_path = which_full_path("cmd.exe")
+            .or_else(|| system32_exe_path("cmd.exe"))
             .unwrap_or_else(|| r"C:\Windows\System32\cmd.exe".to_string());
         ShellInfo {
             program: cmd_path,
@@ -177,6 +228,23 @@ fn which_full_path(name: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// 系统目录（%SystemRoot%\System32）下可执行文件的路径
+///
+/// resolve_shell_info 的 cmd 回退与 validate_shell_allowlist 的系统目录兜底共用，
+/// 保证两侧路径一致（Windows 可安装在非 C: 盘，故优先环境变量解析，
+/// 环境变量缺失时才硬编码 C:\Windows 兜底）。文件不存在返回 None。
+fn system32_exe_path(name: &str) -> Option<String> {
+    let root = std::env::var("SystemRoot")
+        .or_else(|_| std::env::var("WINDIR"))
+        .unwrap_or_else(|_| r"C:\Windows".to_string());
+    let path = std::path::Path::new(&root).join("System32").join(name);
+    if path.exists() {
+        Some(path.to_string_lossy().into_owned())
+    } else {
+        None
+    }
 }
 
 /// 检查可执行文件是否在 PATH 中
@@ -304,9 +372,11 @@ mod tests {
 
     #[test]
     fn test_allowlist_full_path_passes() {
-        // 完整路径应取文件名比对
-        validate_shell_allowlist(r"C:\Windows\System32\cmd.exe")
-            .expect("完整路径的 cmd.exe 应通过");
+        // SEC-01 修订：完整路径仅当与 PATH 解析结果一致时才放行
+        //（旧语义「任意完整路径按文件名放行」正是被修复的绕过点）
+        if let Some(resolved) = which_full_path("cmd.exe") {
+            validate_shell_allowlist(&resolved).expect("PATH 解析出的 cmd.exe 完整路径应通过");
+        }
     }
 
     #[test]
@@ -330,6 +400,73 @@ mod tests {
         if let Some(path) = resolved {
             validate_shell_allowlist(&path).expect("通过 PATH 解析的 cmd.exe 应通过白名单校验");
         }
+    }
+
+    // ── SEC-01：含路径分隔符的 shell 输入——只信任 PATH 解析出的真实路径 ──
+
+    #[test]
+    fn test_allowlist_accepts_path_resolved_from_path() {
+        // PATH 解析出的合法绝对路径放行
+        let dir = tempfile::tempdir().unwrap();
+        fake_exe(dir.path(), "cmd.exe");
+        let _guard = set_test_path(&[dir.path()]);
+        let resolved = which_full_path("cmd.exe").expect("PATH 应解析出 cmd.exe");
+        validate_shell_allowlist(&resolved).expect("PATH 解析出的合法绝对路径应放行");
+    }
+
+    #[test]
+    fn test_allowlist_accepts_system32_cmd_when_path_lacks_system32() {
+        // SEC-01 回归守卫：PATH 不含 System32 时，resolve_shell_info 的 cmd 回退
+        // 使用 %SystemRoot%\System32\cmd.exe——校验必须放行，否则合法回退被确定性拒绝
+        //（test_resolve_shell_info_fallback_order 场景 3 回归）。
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = set_test_path(&[dir.path()]);
+        let system_cmd =
+            system32_exe_path("cmd.exe").expect("测试机 %SystemRoot%\\System32\\cmd.exe 应存在");
+        validate_shell_allowlist(&system_cmd).expect("系统目录 cmd.exe 应放行");
+    }
+
+    #[test]
+    fn test_allowlist_rejects_forged_absolute_path() {
+        // 伪造绝对路径拒绝：目录中自建 cmd.exe（白名单文件名）但 PATH 解析不出 → 拒绝
+        let dir = tempfile::tempdir().unwrap();
+        fake_exe(dir.path(), "cmd.exe");
+        // PATH 指向空目录——which_full_path 解析不出 cmd.exe
+        let empty_dir = tempfile::tempdir().unwrap();
+        let _guard = set_test_path(&[empty_dir.path()]);
+        let forged = dir.path().join("cmd.exe").to_string_lossy().into_owned();
+        let result = validate_shell_allowlist(&forged);
+        assert!(result.is_err(), "非 PATH 解析出的绝对路径应拒绝: {forged}");
+    }
+
+    #[test]
+    fn test_allowlist_rejects_absolute_path_not_in_path() {
+        // 白名单文件名 + 用户目录不在 PATH：即使 PATH 中存在同名文件
+        //（解析结果指向另一目录），用户路径与 PATH 解析结果不一致 → 拒绝
+        let user_dir = tempfile::tempdir().unwrap();
+        let path_dir = tempfile::tempdir().unwrap();
+        fake_exe(user_dir.path(), "cmd.exe");
+        fake_exe(path_dir.path(), "cmd.exe");
+        let _guard = set_test_path(&[path_dir.path()]);
+
+        // 用户目录的 cmd.exe 不是 PATH 解析出的那个 → 拒绝
+        let forged = user_dir
+            .path()
+            .join("cmd.exe")
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            validate_shell_allowlist(&forged).is_err(),
+            "与 PATH 解析结果不一致的绝对路径应拒绝: {forged}"
+        );
+
+        // PATH 解析出的那个 → 放行
+        let legit = path_dir
+            .path()
+            .join("cmd.exe")
+            .to_string_lossy()
+            .into_owned();
+        validate_shell_allowlist(&legit).expect("与 PATH 解析结果一致的绝对路径应放行");
     }
 
     // ── PATH 可控测试辅助（PTY-06/PTY-10/PTY-13③）──

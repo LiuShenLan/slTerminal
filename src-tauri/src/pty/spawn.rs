@@ -20,6 +20,9 @@ use std::sync::{Arc, Mutex, RwLock};
 use tauri::ipc::Channel;
 use uuid::Uuid;
 
+/// BE-01: PTY 会话总数上限——防止会话无上限堆积耗尽 ConPTY/进程句柄
+const MAX_PTY_SESSIONS: usize = 32;
+
 // ─── ConPTY flag 常量（绕过 portable-pty 直接调 Win32 API）───
 //
 // portable-pty 0.9.0 硬编码 flags=0x7（INHERIT_CURSOR|RESIZE_QUIRK|WIN32_INPUT_MODE），
@@ -948,6 +951,19 @@ fn validate_spawn_request(
     Ok(())
 }
 
+/// BE-01: 会话上限判定纯函数——active 达到 MAX_PTY_SESSIONS 即拒绝
+///
+/// 抽为纯函数便于 L1 单测边界用例（31 放行 / 32、64 拒绝）。
+fn ensure_pty_capacity(active: usize) -> Result<(), AppError> {
+    if active >= MAX_PTY_SESSIONS {
+        return Err(AppError::Validation(format!(
+            "PTY 会话数已达上限 {}，请先关闭部分终端",
+            MAX_PTY_SESSIONS
+        )));
+    }
+    Ok(())
+}
+
 /// 创建 PTY 并启动 shell，返回 session_id
 ///
 /// 输出通过 on_output Channel 持续推送到前端。
@@ -987,6 +1003,17 @@ pub async fn pty_spawn(
         ("SLTERM_PANEL_ID".into(), panel_id.clone()),
     ];
 
+    // BE-01: 会话上限检查——判定须在 SPAWN_LOCK 持锁区间内（防并发超发）。
+    // spawn_blocking 闭包为 'static，无法借用 state.pty.sessions，故先取读锁快照
+    // 传入闭包；判定在闭包内锁后、ConPTY 创建前执行（与 spawn 原子化）。
+    // 快照至插入间的并发窗口由下方插入点 sessions 写锁内原子复查兜底。
+    let active_sessions = state
+        .pty
+        .sessions
+        .read()
+        .map_err(|e| AppError::Pty(format!("获取 sessions 锁失败: {}", e)))?
+        .len();
+
     // BE-01: clone spawn_lock Arc 移送 spawn_blocking 内获取
     let spawn_lock = state.pty.spawn_lock.clone();
     let cols = request.cols;
@@ -1001,6 +1028,9 @@ pub async fn pty_spawn(
         let _lock = spawn_lock
             .lock()
             .map_err(|e| AppError::Pty(format!("锁获取失败: {}", e)))?;
+
+        // BE-01: 会话上限检查（SPAWN_LOCK 区间内，判定与 spawn 原子化）
+        ensure_pty_capacity(active_sessions)?;
 
         // 创建 PTY 并获取 master +（Windows 独有）HPCON 用于子进程 spawn
         // Windows: 绕过 portable-pty openpty，直接调 Win32 CreatePseudoConsole 控制 flags
@@ -1144,12 +1174,25 @@ pub async fn pty_spawn(
     .map_err(|e| AppError::Pty(format!("pty_spawn join error: {e}")))??;
 
     // 保存会话（在 async 上下文中，不在 spawn_blocking 内）
-    state
+    // BE-01: sessions 写锁内原子「检查+插入」——兜底锁内快照判定后的并发窗口
+    //（前序 spawn 的插入尚未完成时快照偏旧），杜绝并发超发。命中上限时显式
+    // kill 已 spawn 的子进程：kill 后 ConPTY 输出端关闭 → reader 退出 →
+    // PtySession drop 时 join 正常返回；Job Object KILL_ON_JOB_CLOSE 兜底。
+    let mut sessions = state
         .pty
         .sessions
         .write()
-        .map_err(|e| AppError::Pty(format!("锁获取失败: {}", e)))?
-        .insert(session_id.clone(), session);
+        .map_err(|e| AppError::Pty(format!("获取 sessions 锁失败: {}", e)))?;
+    if sessions.len() >= MAX_PTY_SESSIONS {
+        if let Ok(mut child) = session.child.lock() {
+            let _ = child.kill();
+        }
+        return Err(AppError::Validation(format!(
+            "PTY 会话数已达上限 {}，请先关闭部分终端",
+            MAX_PTY_SESSIONS
+        )));
+    }
+    sessions.insert(session_id.clone(), session);
 
     Ok(session_id)
 }
@@ -1823,6 +1866,33 @@ mod tests {
         let mut child_guard = session.child.lock().unwrap();
         let _ = child_guard.kill();
         drop(child_guard);
+    }
+
+    // ─── BE-01: PTY 会话总数上限测试 ───
+
+    /// 上限内放行（边界 31 / 空会话 0）
+    #[test]
+    fn pty_capacity_below_limit_passes() {
+        ensure_pty_capacity(0).expect("空会话应放行");
+        ensure_pty_capacity(MAX_PTY_SESSIONS - 1).expect("上限内应放行");
+    }
+
+    /// 达到上限拒绝——返回 AppError::Validation 且消息含上限值
+    #[test]
+    fn pty_capacity_at_limit_rejected() {
+        let err = ensure_pty_capacity(MAX_PTY_SESSIONS).expect_err("达到上限应拒绝");
+        assert!(matches!(err, AppError::Validation(_)));
+        assert!(
+            err.to_string().contains("32"),
+            "错误消息应含上限值，实际: {err}"
+        );
+    }
+
+    /// 超限拒绝（含 usize 极端值防溢出回绕）
+    #[test]
+    fn pty_capacity_above_limit_rejected() {
+        assert!(ensure_pty_capacity(MAX_PTY_SESSIONS + 1).is_err());
+        assert!(ensure_pty_capacity(usize::MAX).is_err());
     }
 
     // ─── 辅助函数 ───
