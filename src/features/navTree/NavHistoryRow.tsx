@@ -14,7 +14,7 @@ import type { AgentHistorySession } from "../../types/agentHistory";
 import type { AgentStatus } from "../../lib/agentStatus";
 import { StatusDot } from "../../lib/StatusDot";
 import { cliProfileRegistry } from "../cliProfiles";
-import { formatRelativeTime } from "../agentHistory";
+import { formatRelativeTime } from "../agentHistory/historyModel";
 import { PLACEHOLDER_FG, SIDEBAR_FG } from "../../theme";
 import { nameStyle, rowBaseStyle, SESSION_ROW_HEIGHT } from "./navStyles";
 

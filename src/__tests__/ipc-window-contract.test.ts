@@ -2,7 +2,8 @@
 //
 // 测试真实 window.ts 封装（不 mock 本模块），mock @tauri-apps/api/window：
 // - registerCloseHandler（WRK-08）：关窗拦截——event.preventDefault + 回调完成后 destroy（finally 保证）
-// - onFocusChanged / requestUserAttention / setFocus（WRK-04）：命令/参数/返回/异常传播四维
+// - onFocusChanged / requestUserAttention（WRK-04）：命令/参数/返回/异常传播四维
+// - setFocus 契约已删除（FE-35：预留 wrapper 全仓零消费，删除实现与契约用例）
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
@@ -11,7 +12,6 @@ const mocks = vi.hoisted(() => {
   let focusCb: ((e: { payload: boolean }) => void) | null = null;
   let closeCb: ((e: { preventDefault: () => void }) => void) | null = null;
   const requestUserAttention = vi.fn().mockResolvedValue(undefined);
-  const setFocus = vi.fn().mockResolvedValue(undefined);
   const destroy = vi.fn().mockResolvedValue(undefined);
   const unlisten = vi.fn();
   /** FE-26：置 true 时 onCloseRequested 返回 rejected Promise（模拟窗口已销毁场景） */
@@ -37,7 +37,6 @@ const mocks = vi.hoisted(() => {
       unlistenRejects = v;
     },
     requestUserAttention,
-    setFocus,
     destroy,
     unlisten,
     resetAll() {
@@ -45,7 +44,6 @@ const mocks = vi.hoisted(() => {
       closeCb = null;
       unlistenRejects = false;
       requestUserAttention.mockClear();
-      setFocus.mockClear();
       destroy.mockClear();
       unlisten.mockClear();
     },
@@ -68,7 +66,6 @@ vi.mock("@tauri-apps/api/window", () => ({
         : Promise.resolve(mocks.unlisten);
     }),
     requestUserAttention: mocks.requestUserAttention,
-    setFocus: mocks.setFocus,
     destroy: mocks.destroy,
   })),
 }));
@@ -77,7 +74,6 @@ vi.mock("@tauri-apps/api/window", () => ({
 import {
   onFocusChanged,
   requestUserAttention,
-  setFocus,
   registerCloseHandler,
   UserAttentionType,
 } from "../ipc/window";
@@ -191,22 +187,5 @@ describe("requestUserAttention（WRK-04）", () => {
     mocks.requestUserAttention.mockRejectedValueOnce(new Error("window api fail"));
 
     await expect(requestUserAttention(null)).rejects.toThrow("window api fail");
-  });
-});
-
-describe("setFocus（WRK-04，预留标注）", () => {
-  beforeEach(() => {
-    mocks.resetAll();
-  });
-
-  it("1. 正常调用透传至 appWindow.setFocus", async () => {
-    await setFocus();
-    expect(mocks.setFocus).toHaveBeenCalledTimes(1);
-  });
-
-  it("2. reject 传播（不吞异常）", async () => {
-    mocks.setFocus.mockRejectedValueOnce(new Error("focus fail"));
-
-    await expect(setFocus()).rejects.toThrow("focus fail");
   });
 });

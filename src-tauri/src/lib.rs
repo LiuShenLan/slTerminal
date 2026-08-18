@@ -138,15 +138,13 @@ mod tests {
     #[test]
     fn test_get_windows_build_number_returns_number() {
         let result = crate::pty::win_build::get_windows_build_number();
-        #[cfg(windows)]
-        {
+        // 运行时平台分支（BE-17/D5）：两分支均无平台专属 API，编译期同时可见
+        if cfg!(windows) {
             assert!(result.is_ok(), "Windows 上应返回 build 号");
             let build = result.unwrap();
             // Windows 10 最低 build 号为 10240
             assert!(build > 10000, "build 号应大于 10000，实际: {build}");
-        }
-        #[cfg(not(windows))]
-        {
+        } else {
             assert!(result.is_err(), "非 Windows 平台应返回错误");
             match result {
                 Err(AppError::Unknown(msg)) => {

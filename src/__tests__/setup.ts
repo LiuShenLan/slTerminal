@@ -106,7 +106,6 @@ vi.mock("@tauri-apps/api/window", () => {
   const createMockWindow = () => ({
     onFocusChanged: vi.fn().mockResolvedValue(() => {}),
     requestUserAttention: vi.fn().mockResolvedValue(undefined),
-    setFocus: vi.fn().mockResolvedValue(undefined),
   });
   let mockWin: ReturnType<typeof createMockWindow> | null = null;
   return {

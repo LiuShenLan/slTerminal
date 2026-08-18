@@ -702,18 +702,13 @@ mod write_file_tests {
         .unwrap();
 
         // 固定输出字节断言：平台默认行尾
-        #[cfg(windows)]
-        assert_eq!(
-            std::fs::read(&file_path).unwrap(),
-            b"hello\r\nworld\r\n",
-            "Windows 上新文件默认 CRLF"
-        );
-        #[cfg(not(windows))]
-        assert_eq!(
-            std::fs::read(&file_path).unwrap(),
-            b"hello\nworld\n",
-            "Unix 上新文件默认 LF"
-        );
+        // 运行时平台分支（BE-17/D5）：写文件行为由当前平台决定，两分支无平台专属 API
+        let bytes = std::fs::read(&file_path).unwrap();
+        if cfg!(windows) {
+            assert_eq!(bytes, b"hello\r\nworld\r\n", "Windows 上新文件默认 CRLF");
+        } else {
+            assert_eq!(bytes, b"hello\nworld\n", "Unix 上新文件默认 LF");
+        }
     }
 
     /// 混合行尾 → 原文件含 CRLF 时全部归一为 CRLF（无孤立 LF）

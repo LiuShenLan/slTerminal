@@ -49,10 +49,10 @@ import { sendToastNotification } from "../../ipc/notification";
 import {
   buildResumeCommand,
   getHistoryContextMenuItems,
-  keyOf,
-  restoreHistorySession,
-  SessionActionDialog,
-} from "../agentHistory";
+} from "../agentHistory/historyContextMenu";
+import { keyOf } from "../agentHistory/historyModel";
+import { restoreHistorySession } from "../agentHistory/restoreSession";
+import { SessionActionDialog } from "../agentHistory/SessionActionDialog";
 import { confirmDialog } from "../../lib";
 import {
   findPageIdForPanelId,

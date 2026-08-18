@@ -12,7 +12,7 @@
 import React from "react";
 import { NavTree } from "../navTree";
 import { ExplorerPanel } from "../explorer";
-import { CommitView } from "../commit";
+import { CommitView } from "../commit/CommitView";
 import { sideViewRegistry } from "./sideViewRegistry";
 import {
   IconNav,

@@ -5,9 +5,6 @@
 //! - parse_signal_file 纯函数：JSON 字符串 → Option<AgentEventPayload>
 //! - process_signal_file：读文件 → 解析 → emit("agent-event") → 删除
 
-// P1-BE-01/02 阶段钩子：以下公有 API 待后续模块消费后移除本行
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;

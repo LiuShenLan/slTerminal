@@ -18,12 +18,8 @@ export const PANEL_TERMINAL = "terminal" as const;
 export const PANEL_EDITOR = "editor" as const;
 /** HTML 预览面板类型标识 */
 export const PANEL_HTML_VIEWER = "htmlviewer" as const;
-/** Git HEAD 只读查看面板类型标识 */
-export const PANEL_GIT_SHOW = "gitshow" as const;
-/** Git 双栏 diff 面板类型标识——Stage 04 实现，此处仅注册占位 */
-export const PANEL_DIFF = "diff" as const;
-/** hooks 配置面板类型标识 */
-export const PANEL_HOOKS_CONFIG = "hooksConfig" as const;
+// PANEL_GIT_SHOW/PANEL_DIFF/PANEL_HOOKS_CONFIG 已删除（FE-35）——
+// 全仓零外部消费（grep 无 import），内部 PANEL_TYPES/FILE_PANEL_TYPES 改字面量。
 
 /**
  * 面板级错误边界 HOC（FE-22）
@@ -83,9 +79,9 @@ export const PANEL_TYPES = [
   PANEL_TERMINAL,
   PANEL_EDITOR,
   PANEL_HTML_VIEWER,
-  PANEL_GIT_SHOW,
-  PANEL_DIFF,
-  PANEL_HOOKS_CONFIG,
+  "gitshow",
+  "diff",
+  "hooksConfig",
 ] as const;
 export type PanelType = (typeof PANEL_TYPES)[number];
 
@@ -93,8 +89,8 @@ export type PanelType = (typeof PANEL_TYPES)[number];
 export const FILE_PANEL_TYPES: ReadonlySet<string> = new Set([
   PANEL_EDITOR,
   PANEL_HTML_VIEWER,
-  PANEL_GIT_SHOW,
-  PANEL_DIFF,
+  "gitshow",
+  "diff",
 ]);
 
 /** 检查面板类型是否有效 */

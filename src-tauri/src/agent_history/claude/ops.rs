@@ -424,8 +424,15 @@ mod tests {
     //
     // Windows 符号链接创建需管理员权限/开发者模式（CI runner 权限差异）——
     // 创建失败时测试内直接 return 跳过（照 state.rs validate_symlink_* 先例）。
+    //
+    // 豁免（BE-17/D5）：下方三条测试保留 #[cfg(windows)]——测试调用
+    // std::os::windows::fs::symlink_dir/symlink_file，该 API 仅 Windows target
+    // 编译期存在，非 Windows 无法编译，故不能改 cfg!(windows) 运行时分支；
+    // 且创建 symlink 需 Windows 特权（管理员/开发者模式），无权限时运行时跳过。
 
     /// 一级子目录为 symlink（指向扫描根外）→ 定位不命中
+    // 豁免（BE-17/D5）：依赖 std::os::windows::fs::symlink_dir（仅 Windows target 编译期存在，
+    // 非 Windows 无法编译）+ symlink 创建需 Windows 特权，失败时运行时跳过
     #[cfg(windows)]
     #[test]
     fn locate_skips_symlinked_subdir() {
@@ -445,6 +452,8 @@ mod tests {
     }
 
     /// 命中文件为 symlink（指向扫描根外文件）→ 定位不命中 + 删除按「会话不存在」拒绝
+    // 豁免（BE-17/D5）：依赖 std::os::windows::fs::symlink_file（仅 Windows target 编译期存在，
+    // 非 Windows 无法编译）+ symlink 创建需 Windows 特权，失败时运行时跳过
     #[cfg(windows)]
     #[test]
     fn locate_and_delete_reject_symlinked_jsonl() {
@@ -474,6 +483,8 @@ mod tests {
     }
 
     /// 同名 <id>/ 目录为 symlink → 删除不跟随，外部目录内容保留
+    // 豁免（BE-17/D5）：依赖 std::os::windows::fs::symlink_dir（仅 Windows target 编译期存在，
+    // 非 Windows 无法编译）+ symlink 创建需 Windows 特权，失败时运行时跳过
     #[cfg(windows)]
     #[test]
     fn delete_ignores_symlinked_session_dir() {

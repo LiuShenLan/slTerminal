@@ -36,17 +36,6 @@ export async function requestUserAttention(
 }
 
 /**
- * 聚焦窗口
- *
- * 预留：当前无消费方（通知回窗引导仅用 requestUserAttention 任务栏闪烁，点击路由已放弃）。
- * 未来通知点击回窗等场景启用；保留完整实现与最小契约测试（ipc-window-contract.test.ts）。
- */
-export async function setFocus(): Promise<void> {
-  const appWindow = getCurrentWindow();
-  await appWindow.setFocus();
-}
-
-/**
  * 注册窗口关闭处理器
  *
  * 自动调用 event.preventDefault() 阻止立即关闭，

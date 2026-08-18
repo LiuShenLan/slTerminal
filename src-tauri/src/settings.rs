@@ -457,8 +457,8 @@ mod tests {
         let _guard = AppDataDirGuard::set(dir.path());
         let result = run(save_settings(serde_json::json!({"keybindings": {}})));
 
-        #[cfg(windows)]
-        {
+        // 运行时平台分支（BE-17/D5）：替换只读目标行为由平台实现决定，两分支无平台专属 API
+        if cfg!(windows) {
             let err = result.expect_err("Windows 上替换只读目标应失败");
             match err {
                 AppError::IoKind { kind, message } => {
@@ -477,9 +477,7 @@ mod tests {
             // 恢复可写位，确保 tempdir 清理能删除文件
             perms.set_readonly(false);
             std::fs::set_permissions(&settings_path, perms).unwrap();
-        }
-        #[cfg(not(windows))]
-        {
+        } else {
             result.unwrap();
             let loaded: serde_json::Value =
                 serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
