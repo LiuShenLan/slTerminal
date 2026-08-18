@@ -37,7 +37,7 @@ import {
 } from "../../ipc/agentHooks";
 import type { AgentHookInjectionStatus } from "../../types/agent";
 import type { HooksConfigGui as ConfigGui } from "./configModel";
-import type { HooksConfigJson } from "../../types/hooksConfig";
+import type { HooksConfigJson, HooksLayer } from "../../types/hooksConfig";
 import type { CodingCliProfile } from "../../features/cliProfiles";
 import {
   PANEL_BG,
@@ -147,6 +147,12 @@ const ClaudeHooksConfigEditor: React.FC<ClaudeHooksConfigEditorProps> = ({
   // 层集合数据源 = profile 声明（KZ-4：LAYERS 常量已退役，值迁入 claude profile
   // configLayers；缺失 → 空渲染防御，不崩溃）
   const layers = profile.capabilities?.hooks?.configLayers ?? [];
+  // FE-14 收窄守卫：HooksLayer 联合仅 user/project/local（后端 parse_layer 只认这三值）——
+  // profile 声明的层 id 落在联合内才放行进 API；未来 CLI 加层时再泛化 HooksLayer
+  const isHooksLayer = (id: string | undefined): id is HooksLayer =>
+    id === "user" || id === "project" || id === "local";
+  // 初始层 = configLayers[0].id（KZ-4）；不在联合内 → 缺省回退 useHooksConfig 的 "user"
+  const initialLayer = layers[0] && isHooksLayer(layers[0].id) ? layers[0].id : undefined;
 
   const {
     layer,
@@ -162,7 +168,7 @@ const ClaudeHooksConfigEditor: React.FC<ClaudeHooksConfigEditorProps> = ({
     reload,
     updateConfigJson,
     updateGui,
-  } = useHooksConfig(cliId, layers[0]?.id);
+  } = useHooksConfig(cliId, initialLayer);
   // JsonMode 校验上报：非法 JSON / schema 违规 → 禁用保存 + 禁用切 GUI + 工具栏错误提示（P3-FE-16）
   const [jsonValid, setJsonValid] = useState(true);
   const [jsonError, setJsonError] = useState<string | null>(null);
@@ -316,7 +322,10 @@ const ClaudeHooksConfigEditor: React.FC<ClaudeHooksConfigEditorProps> = ({
             title={l.hint}
             data-e2e={`hooks-layer-${l.id}`}
             disabled={l.id !== "user" && !rootPath}
-            onClick={() => setLayer(l.id)}
+            onClick={() => {
+              // FE-14 收窄：联合外的层 id 不进入 API（后端会拒绝，静默忽略）
+              if (isHooksLayer(l.id)) setLayer(l.id);
+            }}
             style={layerButtonStyle(layer === l.id)}
           >
             {l.label}

@@ -8,8 +8,8 @@ export interface DirEntry {
   path: string;
   /** 是否为目录 */
   isDir: boolean;
-  /** 文件大小（字节），仅文件时有值 */
-  size?: number;
-  /** 最后修改时间（Unix 毫秒），仅文件时有值 */
-  modified?: number;
+  /** 文件大小（字节），仅文件时有值；目录恒为 null（FE-12：Rust serde 输出 null 而非省略） */
+  size: number | null;
+  /** 最后修改时间（Unix 毫秒），仅文件时有值；目录恒为 null（FE-12：Rust serde 输出 null 而非省略） */
+  modified: number | null;
 }

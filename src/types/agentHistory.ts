@@ -17,7 +17,7 @@ export interface AgentHistorySession {
   titleSource: TitleSource;
   /** 首条可见 user prompt（≤200 字符，后端截断） */
   firstPrompt: string | null;
-  /** 文件修改时间（毫秒时间戳） */
+  /** 文件修改时间（毫秒时间戳；Rust u64 → JS number，安全整数范围（< 2^53）约定） */
   mtimeMs: number;
   /** cwd 目录当前是否存在（cwd 为 null 时恒 false） */
   cwdExists: boolean;

@@ -4,6 +4,28 @@
 import { invoke, Channel } from "@tauri-apps/api/core";
 import type { PtyEvent, SpawnRequest } from "../types/pty";
 
+/** PTY 尺寸合法下界（ConPTY 最小 1 列/行） */
+const MIN_PTY_DIM = 1;
+/** PTY 尺寸合法上界（Rust SpawnRequest.cols/rows: u16 → 32767） */
+const MAX_PTY_DIM = 32767;
+
+/**
+ * 校验 PTY 尺寸参数（FE-14 前置校验）：cols/rows 越界直接抛错，不 invoke。
+ * 与后端 validate_spawn_request 的尺寸约束一致——前置拒绝避免非法参数进入 IPC。
+ */
+function assertPtyDim(cols: number, rows: number): void {
+  if (!Number.isInteger(cols) || cols < MIN_PTY_DIM || cols > MAX_PTY_DIM) {
+    throw new Error(
+      `pty.spawn: cols 必须在 ${MIN_PTY_DIM}..=${MAX_PTY_DIM} 范围内（实际 ${cols}）`,
+    );
+  }
+  if (!Number.isInteger(rows) || rows < MIN_PTY_DIM || rows > MAX_PTY_DIM) {
+    throw new Error(
+      `pty.spawn: rows 必须在 ${MIN_PTY_DIM}..=${MAX_PTY_DIM} 范围内（实际 ${rows}）`,
+    );
+  }
+}
+
 /**
  * 创建 PTY 会话并启动 shell
  *
@@ -13,6 +35,9 @@ export async function spawn(
   request: SpawnRequest,
   onOutput: (event: PtyEvent) => void,
 ): Promise<string> {
+  // FE-14：cols/rows 越界（含非整数/NaN）在 invoke 前拒绝，防止非法 ConPTY 创建参数
+  assertPtyDim(request.cols, request.rows);
+
   const channel = new Channel<PtyEvent>();
   channel.onmessage = onOutput;
 

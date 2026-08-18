@@ -13,13 +13,16 @@
 use crate::error::AppError;
 use crate::state::validate_path_within_root;
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
 
-/// hooks 配置层级
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum HooksLayer {
+/// hooks 配置层级（BE-18：serde 枚举 DTO——snake_case ↔ 前端 `HooksLayer` 字面量值集
+/// `"user" | "project" | "local"`，硬约束 #4 双边对应）
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Layer {
     /// 用户全局层 `~/.claude/settings.json`
     User,
     /// 项目共享层 `<projectPath>/.claude/settings.json`
@@ -29,22 +32,75 @@ enum HooksLayer {
 }
 
 /// 解析层级字符串，仅允许 "user" / "project" / "local"，非法返回 Validation（P3-BE-02）
-fn parse_layer(layer: &str) -> Result<HooksLayer, AppError> {
+fn parse_layer(layer: &str) -> Result<Layer, AppError> {
     match layer {
-        "user" => Ok(HooksLayer::User),
-        "project" => Ok(HooksLayer::Project),
-        "local" => Ok(HooksLayer::Local),
+        "user" => Ok(Layer::User),
+        "project" => Ok(Layer::Project),
+        "local" => Ok(Layer::Local),
         _ => Err(AppError::Validation(format!(
             "非法 hooks 配置层级: {layer}"
         ))),
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// hooks 子树结构体（BE-18：serde 反序列化形态校验骨架）
+//
+// 对应前端 `src/types/hooksConfig.ts` 的 `HooksConfigJson`（契约 C13-1 编辑范围）：
+// JSON 根即事件名键 → matcher 组数组 → handler 数组。本结构只做形态校验
+// （类型 / 嵌套层级），不加载验规则——事件名白名单（HOOK_EVENTS 10 事件）、
+// handler type 白名单（"command"）、command 非空字符串审查由 S17 SEC-05
+// 语义校验层基于本结构实现。serde 默认忽略未知字段：官方 handler 字段矩阵
+// （C13-3 的 args/async/timeout 等）不属于校验点，未知事件名容忍。
+// ═══════════════════════════════════════════════════════════════════
+
+/// claude settings.json 的 hooks 子树（事件名 → matcher 组数组）
+///
+/// BE-18 骨架期仅被测试构造；S17 SEC-05 语义校验层接入后自然消费，届时移除本 allow。
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub struct HooksSubtree {
+    /// 事件名 → matcher 组数组（serde flatten——根对象键即事件名）
+    #[serde(flatten)]
+    pub events: BTreeMap<String, Vec<MatcherGroup>>,
+}
+
+/// matcher 组：matcher 匹配串（省略 = 全匹配，C13-5）+ handler 数组
+///
+/// BE-18 骨架期仅被测试构造；S17 SEC-05 语义校验层接入后自然消费，届时移除本 allow。
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct MatcherGroup {
+    /// matcher 匹配串（省略 = 全匹配）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matcher: Option<String>,
+    /// handler 数组（必填键——形态校验拒绝缺失）
+    pub hooks: Vec<HookHandler>,
+}
+
+/// 单个 hook handler（SEC-05 校验点：type 白名单 + command 非空审查）
+///
+/// 只承载校验所需字段（C13-3 字段矩阵的其余字段不属于校验点，反序列化时
+/// serde 默认忽略未知键，不断言其类型）；type/command 缺失容忍为默认值，
+/// 语义审查（type 是否白名单、command 是否非空）归 S17 SEC-05 校验层。
+///
+/// BE-18 骨架期仅被测试构造；S17 SEC-05 语义校验层接入后自然消费，届时移除本 allow。
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct HookHandler {
+    /// handler 类型（官方值集 command/http/mcp_tool/prompt/agent）
+    #[serde(default)]
+    pub r#type: String,
+    /// 命令串（type=command 时必填，非空审查归 SEC-05）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+}
+
 /// 各层配置文件名（project 与 user 同名，local 独立）
-fn layer_file_name(layer: HooksLayer) -> &'static str {
+fn layer_file_name(layer: Layer) -> &'static str {
     match layer {
-        HooksLayer::User | HooksLayer::Project => "settings.json",
-        HooksLayer::Local => "settings.local.json",
+        Layer::User | Layer::Project => "settings.json",
+        Layer::Local => "settings.local.json",
     }
 }
 
@@ -56,20 +112,20 @@ fn layer_file_name(layer: HooksLayer) -> &'static str {
 /// - project/local 层：project_path 缺失 → Validation；经 validate_path_within_root
 ///   沙箱校验，未通过 → PathNotAllowed；通过后拼接 .claude/ 下的配置文件名（P3-BE-07）
 fn resolve_config_path(
-    layer: HooksLayer,
+    layer: Layer,
     project_root: &Option<PathBuf>,
     project_path: Option<&str>,
     home_dir: impl Fn() -> Option<PathBuf>,
 ) -> Result<PathBuf, AppError> {
     match layer {
-        HooksLayer::User => {
+        Layer::User => {
             let home = home_dir().ok_or_else(|| AppError::IoKind {
                 kind: "home_dir".into(),
                 message: "无法解析用户主目录".into(),
             })?;
             Ok(home.join(".claude").join(layer_file_name(layer)))
         }
-        HooksLayer::Project | HooksLayer::Local => {
+        Layer::Project | Layer::Local => {
             let pp = project_path.ok_or_else(|| {
                 AppError::Validation("project/local 层必须提供 projectPath".into())
             })?;
@@ -202,9 +258,9 @@ mod tests {
 
     #[test]
     fn parse_layer_accepts_three_layers() {
-        assert_eq!(parse_layer("user").unwrap(), HooksLayer::User);
-        assert_eq!(parse_layer("project").unwrap(), HooksLayer::Project);
-        assert_eq!(parse_layer("local").unwrap(), HooksLayer::Local);
+        assert_eq!(parse_layer("user").unwrap(), Layer::User);
+        assert_eq!(parse_layer("project").unwrap(), Layer::Project);
+        assert_eq!(parse_layer("local").unwrap(), Layer::Local);
     }
 
     #[test]
@@ -213,6 +269,148 @@ mod tests {
         assert!(matches!(parse_layer("bogus"), Err(AppError::Validation(_))));
         assert!(matches!(parse_layer("User"), Err(AppError::Validation(_))));
         assert!(matches!(parse_layer(""), Err(AppError::Validation(_))));
+    }
+
+    // ── Layer 枚举 serde（BE-18：snake_case ↔ 前端 HooksLayer 值集） ──
+
+    #[test]
+    fn layer_serde_serializes_snake_case() {
+        // 三值序列化为 "user"/"project"/"local"（硬约束 #4 双边对应）
+        assert_eq!(serde_json::to_string(&Layer::User).unwrap(), "\"user\"");
+        assert_eq!(serde_json::to_string(&Layer::Project).unwrap(), "\"project\"");
+        assert_eq!(serde_json::to_string(&Layer::Local).unwrap(), "\"local\"");
+    }
+
+    #[test]
+    fn layer_serde_deserializes_snake_case() {
+        // 三值反序列化往返
+        assert_eq!(
+            serde_json::from_str::<Layer>("\"user\"").unwrap(),
+            Layer::User
+        );
+        assert_eq!(
+            serde_json::from_str::<Layer>("\"project\"").unwrap(),
+            Layer::Project
+        );
+        assert_eq!(
+            serde_json::from_str::<Layer>("\"local\"").unwrap(),
+            Layer::Local
+        );
+    }
+
+    #[test]
+    fn layer_serde_rejects_invalid() {
+        // 非法字符串 / 大小写不匹配 / 非字符串 → serde 拒绝（与 parse_layer 语义一致）
+        assert!(serde_json::from_str::<Layer>("\"bogus\"").is_err());
+        assert!(serde_json::from_str::<Layer>("\"User\"").is_err());
+        assert!(serde_json::from_str::<Layer>("\"\"").is_err());
+        assert!(serde_json::from_str::<Layer>("42").is_err());
+    }
+
+    // ── hooks 子树结构体形态校验（BE-18 骨架；语义校验归 S17 SEC-05） ──
+
+    #[test]
+    fn hooks_subtree_accepts_well_formed() {
+        // 合法完整形态：事件名键 → matcher 组数组 → handler 数组
+        let json = serde_json::json!({
+            "SessionStart": [
+                {"matcher": "", "hooks": [{"type": "command", "command": "node x"}]}
+            ],
+            "Stop": [
+                {"hooks": [{"type": "command", "command": "echo s", "timeout": 5}]}
+            ]
+        });
+        let tree: HooksSubtree = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(tree.events.len(), 2, "两个事件名键应各自解析");
+        let start = &tree.events["SessionStart"];
+        assert_eq!(start[0].matcher.as_deref(), Some(""));
+        assert_eq!(start[0].hooks[0].r#type, "command");
+        assert_eq!(start[0].hooks[0].command.as_deref(), Some("node x"));
+        // matcher 省略 → None；未知 handler 字段（timeout）形态容忍
+        let stop = &tree.events["Stop"];
+        assert_eq!(stop[0].matcher, None);
+        assert_eq!(stop[0].hooks[0].command.as_deref(), Some("echo s"));
+        // 序列化形态一致（无 timeout/matcher 省略键不回写）
+        let out = serde_json::to_value(&tree).unwrap();
+        assert_eq!(out["SessionStart"], json["SessionStart"]);
+        assert_eq!(out["Stop"], serde_json::json!([{"hooks": [{"type": "command", "command": "echo s"}]}]));
+    }
+
+    #[test]
+    fn hooks_subtree_empty_object_accepted() {
+        // 空 hooks 子树（`"hooks": {}` 清空形态）→ 空 map，不报错
+        let tree: HooksSubtree = serde_json::from_str("{}").unwrap();
+        assert!(tree.events.is_empty());
+    }
+
+    #[test]
+    fn hooks_subtree_rejects_non_object_root() {
+        // 根为数组 / 字符串 / 数字 → 形态拒绝（hooks 子树必须是对象）
+        assert!(serde_json::from_str::<HooksSubtree>("[1,2]").is_err());
+        assert!(serde_json::from_str::<HooksSubtree>("\"str\"").is_err());
+        assert!(serde_json::from_str::<HooksSubtree>("42").is_err());
+        assert!(serde_json::from_str::<HooksSubtree>("null").is_err());
+    }
+
+    #[test]
+    fn matcher_group_shape_validated() {
+        // 事件值必须是数组（Vec<MatcherGroup>）；组内 hooks 键必填且必须是数组
+        assert!(serde_json::from_str::<HooksSubtree>(r#"{"Stop": {"hooks": []}}"#).is_err());
+        assert!(serde_json::from_str::<HooksSubtree>(r#"{"Stop": [{"matcher": ""}]}"#).is_err());
+        assert!(
+            serde_json::from_str::<HooksSubtree>(r#"{"Stop": [{"hooks": "not-array"}]}"#).is_err()
+        );
+    }
+
+    #[test]
+    fn handler_must_be_object() {
+        // handler 非对象（字符串 / 数字 / null）→ 形态拒绝
+        assert!(serde_json::from_str::<HooksSubtree>(r#"{"Stop": [{"hooks": ["str"]}]}"#).is_err());
+        assert!(serde_json::from_str::<HooksSubtree>(r#"{"Stop": [{"hooks": [42]}]}"#).is_err());
+        assert!(serde_json::from_str::<HooksSubtree>(r#"{"Stop": [{"hooks": [null]}]}"#).is_err());
+    }
+
+    #[test]
+    fn handler_missing_type_and_command_accepted_by_shape() {
+        // 形态校验阶段不审查语义：type/command 缺失容忍为默认值
+        // （type 白名单 / command 非空审查归 S17 SEC-05 语义校验层）
+        let json = r#"{"PreToolUse": [{"hooks": [{}]}]}"#;
+        let tree: HooksSubtree = serde_json::from_str(json).unwrap();
+        let h = &tree.events["PreToolUse"][0].hooks[0];
+        assert_eq!(h.r#type, "");
+        assert_eq!(h.command, None);
+    }
+
+    #[test]
+    fn unknown_event_and_handler_fields_tolerated() {
+        // 未知事件名（白名单归 SEC-05）与未知 handler 字段（C13-3 非校验点）→ 形态容忍
+        let json = r#"{"SomeFutureEvent": [{"hooks": [{"type": "http", "url": "https://x", "headers": {"A": "b"}}]}]}"#;
+        let tree: HooksSubtree = serde_json::from_str(json).unwrap();
+        let h = &tree.events["SomeFutureEvent"][0].hooks[0];
+        assert_eq!(h.r#type, "http");
+        assert_eq!(h.command, None);
+    }
+
+    #[test]
+    fn hooks_subtree_serialize_matches_frontend_dto_shape() {
+        // 序列化输出键形态 = 事件名 → matcher 组数组（与前端 HooksConfigJson 对应，
+        // 硬约束 #4）；matcher 省略时键不回写
+        let tree = HooksSubtree {
+            events: BTreeMap::from([(
+                "Stop".to_string(),
+                vec![MatcherGroup {
+                    matcher: None,
+                    hooks: vec![HookHandler {
+                        r#type: "command".into(),
+                        command: Some("echo hi".into()),
+                    }],
+                }],
+            )]),
+        };
+        assert_eq!(
+            serde_json::to_value(&tree).unwrap(),
+            serde_json::json!({"Stop": [{"hooks": [{"type": "command", "command": "echo hi"}]}]})
+        );
     }
 
     // ── resolve_config_path（P3-TE-02 路径解析 + 沙箱） ──
@@ -225,7 +423,7 @@ mod tests {
     fn user_layer_resolves_to_injected_home_dir() {
         // user 层指向 {注入 home}/.claude/settings.json，不依赖 project_path / 沙箱
         let home = tempfile::tempdir().unwrap();
-        let path = resolve_config_path(HooksLayer::User, &None, None, || {
+        let path = resolve_config_path(Layer::User, &None, None, || {
             Some(home.path().to_path_buf())
         })
         .unwrap();
@@ -239,7 +437,7 @@ mod tests {
     #[test]
     fn user_layer_home_dir_failure_returns_io_kind() {
         // home 解析失败（闭包返回 None）→ IoKind（HUK-06 注入失败点）
-        let err = resolve_config_path(HooksLayer::User, &None, None, || None).unwrap_err();
+        let err = resolve_config_path(Layer::User, &None, None, || None).unwrap_err();
         assert!(matches!(err, AppError::IoKind { .. }));
     }
 
@@ -249,7 +447,7 @@ mod tests {
         let root = Some(dir.path().to_path_buf());
         let proj = dir.path().to_str().unwrap();
         let path =
-            resolve_config_path(HooksLayer::Project, &root, Some(proj), dirs::home_dir).unwrap();
+            resolve_config_path(Layer::Project, &root, Some(proj), dirs::home_dir).unwrap();
         assert_eq!(
             path,
             PathBuf::from(proj).join(".claude").join("settings.json")
@@ -262,7 +460,7 @@ mod tests {
         let root = Some(dir.path().to_path_buf());
         let proj = dir.path().to_str().unwrap();
         let path =
-            resolve_config_path(HooksLayer::Local, &root, Some(proj), dirs::home_dir).unwrap();
+            resolve_config_path(Layer::Local, &root, Some(proj), dirs::home_dir).unwrap();
         assert_eq!(
             path,
             PathBuf::from(proj)
@@ -275,9 +473,9 @@ mod tests {
     fn project_local_missing_project_path_validation() {
         // project/local 层缺失 project_path → Validation（P3-BE-07）
         let err =
-            resolve_config_path(HooksLayer::Project, &None, None, dirs::home_dir).unwrap_err();
+            resolve_config_path(Layer::Project, &None, None, dirs::home_dir).unwrap_err();
         assert!(matches!(err, AppError::Validation(_)));
-        let err = resolve_config_path(HooksLayer::Local, &None, None, dirs::home_dir).unwrap_err();
+        let err = resolve_config_path(Layer::Local, &None, None, dirs::home_dir).unwrap_err();
         assert!(matches!(err, AppError::Validation(_)));
     }
 
@@ -288,7 +486,7 @@ mod tests {
         let outside = tempfile::tempdir().unwrap();
         let root = Some(inside.path().to_path_buf());
         let err = resolve_config_path(
-            HooksLayer::Project,
+            Layer::Project,
             &root,
             Some(outside.path().to_str().unwrap()),
             dirs::home_dir,

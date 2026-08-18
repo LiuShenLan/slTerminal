@@ -2,5 +2,6 @@
 export interface FsEventPayload {
   paths: string[];
   kind: string;
-  detail?: string;
+  /** 事件附加详情（FE-13：Rust 必填，非可选） */
+  detail: string;
 }

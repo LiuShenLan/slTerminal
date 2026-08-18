@@ -169,12 +169,56 @@ describeIpcContract('PTY 命令 payload 契约守卫', [
   },
 ]);
 
+// ── spawn cols/rows 前置校验（FE-14）─────────────────────
+// 越界（含非整数/NaN）在 invoke 前抛错——mockIPC 不应被调用；
+// 边界值 1 / 32767 放行并正常 invoke。
+
+describe('pty.spawn cols/rows 前置校验（FE-14）', () => {
+  it.each([
+    ['cols=0', { cols: 0, rows: 24 }],
+    ['cols=-1', { cols: -1, rows: 24 }],
+    ['cols=32768', { cols: 32768, rows: 24 }],
+    ['cols=1.5（非整数）', { cols: 1.5, rows: 24 }],
+    ['cols=NaN', { cols: NaN, rows: 24 }],
+    ['rows=0', { cols: 80, rows: 0 }],
+    ['rows=-5', { cols: 80, rows: -5 }],
+    ['rows=32768', { cols: 80, rows: 32768 }],
+  ])('%s → 拒绝且不 invoke', async (_name, dims) => {
+    const spy = vi.fn();
+    mockIPC((cmd) => {
+      spy(cmd);
+      return 'mock-session-01';
+    });
+    await expect(
+      pty.spawn({ panelId: 'p1', ...dims }, onOutputStub()),
+    ).rejects.toThrow(/1\.\.=32767/);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('边界值 cols=1 / rows=32767 → 放行并正常 invoke', async () => {
+    const spy = vi.fn();
+    mockIPC((cmd, args) => {
+      spy(cmd, args);
+      return 'mock-session-01';
+    });
+    const req = { panelId: 'p1', cols: 1, rows: 32767 };
+    await expect(pty.spawn(req, onOutputStub())).resolves.toBe('mock-session-01');
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0][0]).toBe('pty_spawn');
+    expect(spy.mock.calls[0][1]).toEqual({
+      request: req,
+      onOutput: expect.any(Channel),
+    });
+  });
+});
+
 // ═══════════════════════════════════════════════════════════════════
 // FS IPC
 // ═══════════════════════════════════════════════════════════════════
 
+// FE-12：DirEntry.size/modified 契约 = number | null，目录条目恒为 null（与 Rust serde 输出一致）
 const READ_DIR_RESULT = [
-  { name: 'src', path: 'C:/test/src', isDir: true },
+  { name: 'src', path: 'C:/test/src', isDir: true, size: null, modified: null },
   { name: 'README.md', path: 'C:/test/README.md', isDir: false, size: 1024, modified: 1700000000000 },
 ];
 

@@ -121,7 +121,7 @@ function makeFileNode(name: string, path: string): TreeNode {
 
 function makeDirNode(name: string, path: string, children: TreeNode[] = []): TreeNode {
   return {
-    entry: { name, path, isDir: true, size: undefined, modified: undefined },
+    entry: { name, path, isDir: true, size: null, modified: null },
     expanded: false,
     children,
     loading: false,

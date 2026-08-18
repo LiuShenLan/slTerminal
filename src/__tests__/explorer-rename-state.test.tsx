@@ -10,7 +10,7 @@ import type { TreeNode } from "../features/explorer/useFileTree";
 
 function makeFileNode(path: string, name: string, isDir = false): TreeNode {
   return {
-    entry: { name, path, isDir, size: isDir ? undefined : 100, modified: Date.now() },
+    entry: { name, path, isDir, size: isDir ? null : 100, modified: Date.now() },
     expanded: false,
     children: [],
     loading: false,
@@ -102,7 +102,7 @@ describe("重命名状态上提", () => {
   it("文件夹右键 '重命名' → onRenameStart 传入文件夹名", () => {
     const onRenameStart = vi.fn();
     const dirNode: TreeNode = {
-      entry: { name: "src", path: "/a/src", isDir: true, size: undefined, modified: Date.now() },
+      entry: { name: "src", path: "/a/src", isDir: true, size: null, modified: Date.now() },
       expanded: false,
       children: [],
       loading: false,

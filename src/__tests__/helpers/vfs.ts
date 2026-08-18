@@ -16,13 +16,14 @@
 
 import type { DirEntry } from "../../types/fs";
 
-/** 创建模拟 DirEntry */
+/** 创建模拟 DirEntry（FE-12：size/modified 为 number | null，目录恒为 null 与 Rust 一致） */
 export function mockEntry(name: string, isDir: boolean, path: string): DirEntry {
   return {
     name,
     path,
     isDir,
-    ...(isDir ? {} : { size: 1024, modified: 1 }),
+    size: isDir ? null : 1024,
+    modified: isDir ? null : 1,
   };
 }
 

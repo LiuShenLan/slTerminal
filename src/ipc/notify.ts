@@ -2,11 +2,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
-/** fs-event 后端推送的文件系统事件负载 */
+/** fs-event 后端推送的文件系统事件负载（FE-13：detail 与 Rust 一致为必填） */
 export interface FsEvent {
   paths: string[];
   kind: string;
-  detail?: string;
+  detail: string;
 }
 
 /** 启动对指定路径的递归文件监听（后端 300ms 去抖 → fs-event） */

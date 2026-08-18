@@ -14,7 +14,7 @@ const HOVER_BG_RGB = "rgb(34, 34, 39)";
 
 function makeFileNode(path: string, name: string, isDir = false): TreeNode {
   return {
-    entry: { name, path, isDir, size: isDir ? undefined : 100, modified: Date.now() },
+    entry: { name, path, isDir, size: isDir ? null : 100, modified: Date.now() },
     expanded: false,
     children: [],
     loading: false,
@@ -251,7 +251,7 @@ describe("FileTree 选中模型", () => {
   it("嵌套子节点单击 → onSelect", () => {
     const child = makeFileNode("/a/src/index.ts", "index.ts");
     const parent: TreeNode = {
-      entry: { name: "src", path: "/a/src", isDir: true, size: undefined, modified: Date.now() },
+      entry: { name: "src", path: "/a/src", isDir: true, size: null, modified: Date.now() },
       expanded: true,
       children: [child],
       loading: false,

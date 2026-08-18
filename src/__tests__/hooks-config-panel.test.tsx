@@ -139,8 +139,9 @@ const STUB_PROFILE: CodingCliProfile = {
   },
 };
 
-/** 自定义分层 CLI：configLayers 两层（dev/prod）——断言层切换器按 profile 声明渲染
-    而非固定三层（KZ-4：数据源 = profile.capabilities.hooks.configLayers） */
+/** 自定义分层 CLI：configLayers 两层（project/local）——断言层切换器按 profile 声明渲染
+    而非固定三层（KZ-4：数据源 = profile.capabilities.hooks.configLayers；
+    FE-14 收窄后层 id 须落在 "user"|"project"|"local" 联合内） */
 const LAYERS_PROFILE: CodingCliProfile = {
   id: "layerscli",
   displayName: "layerscli",
@@ -156,8 +157,8 @@ const LAYERS_PROFILE: CodingCliProfile = {
       hasConfigEditor: true,
       configEditor: ClaudeHooksConfigEditor,
       configLayers: [
-        { id: "dev", label: "Dev", hint: "开发层" },
-        { id: "prod", label: "Prod", hint: "生产层" },
+        { id: "project", label: "Project", hint: "项目层" },
+        { id: "local", label: "Local", hint: "本地层" },
       ],
     },
   },
@@ -946,21 +947,20 @@ describe("hub CLI 选择行", () => {
 
   it("层级切换器数据源 = profile.configLayers（KZ-4：自定义层渲染，非固定三层）", async () => {
     registerOnly([claudeProfile, LAYERS_PROFILE]);
-    seedProject("C:/proj"); // 初始层 dev 非 user——无 rootPath 会被 useHooksConfig 回退 user 层
+    seedProject("C:/proj"); // 初始层 project 非 user——无 rootPath 会被 useHooksConfig 回退 user 层
     mockReadHooksConfig.mockResolvedValue({});
-    // 挂载选中 layerscli（configLayers = dev/prod 两层）→ 层按钮 = profile 声明层
+    // 挂载选中 layerscli（configLayers = project/local 两层）→ 层按钮 = profile 声明层
     const { getByRole, queryByRole } = renderPanel({
       panelId: "hooksConfig-page-1",
       selectedCli: LAYERS_PROFILE.id,
     });
-    await waitFor(() => expect(getByRole("button", { name: "Dev" })).toBeTruthy());
-    expect(getByRole("button", { name: "Prod" })).toBeTruthy();
-    // claude 固定三层不渲染（数据源非常量 LAYERS，而是 profile 声明）
+    await waitFor(() => expect(getByRole("button", { name: "Project" })).toBeTruthy());
+    expect(getByRole("button", { name: "Local" })).toBeTruthy();
+    // claude 固定三层不渲染（数据源非常量 LAYERS，而是 profile 声明；User 不在本 profile 声明内）
     expect(queryByRole("button", { name: "User" })).toBeNull();
-    expect(queryByRole("button", { name: "Local" })).toBeNull();
-    // 初始层 = configLayers[0].id（dev）——首次 read 携初始层
+    // 初始层 = configLayers[0].id（project）——首次 read 携初始层
     await waitFor(() => expect(mockReadHooksConfig.mock.calls.length).toBe(1));
-    expect(mockReadHooksConfig.mock.calls[0][1]).toBe("dev");
+    expect(mockReadHooksConfig.mock.calls[0][1]).toBe("project");
   });
 
   it("restartHint 由 profile 驱动（文案来源 = profile.hooks.restartHint，MC-222/506）", async () => {

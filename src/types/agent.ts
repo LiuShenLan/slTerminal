@@ -18,6 +18,7 @@ export interface ContextUsageSignal {
 export interface AgentEventPayload {
   panelId: string;
   event: string;
+  /** 事件时间戳（毫秒；Rust u64 → JS number，安全整数范围（< 2^53）约定） */
   timestamp: number;
   sessionId: string;
   /** 用量来源路径（中性名，KZ-2 决策 1——claude 解释为 transcript JSONL；可选——旧信号无此字段，serde default → null，对应后端 Option<String>） */

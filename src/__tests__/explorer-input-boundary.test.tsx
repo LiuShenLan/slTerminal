@@ -12,7 +12,7 @@ import type { TreeNode } from "../features/explorer/useFileTree";
 
 function makeFileNode(path: string, name: string, isDir = false): TreeNode {
   return {
-    entry: { name, path, isDir, size: isDir ? undefined : 100, modified: Date.now() },
+    entry: { name, path, isDir, size: isDir ? null : 100, modified: Date.now() },
     expanded: false,
     children: [],
     loading: false,
