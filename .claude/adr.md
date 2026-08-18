@@ -139,3 +139,52 @@
 - 杀软风险：OpenConsole.exe 为微软签名二进制，提取到用户目录风险低（先例：.NET 官方同法分发）。
 - **自动化无法守卫真实鼠标转发**（先例同 0x8/0x3）——Win10 实机验证红线：真实 claude 滚轮 + 键盘/IME/kitty + resize + 删除提取目录回退验证。
 - 行为固化点：`src-tauri/src/pty/conpty_api.rs`（L1 5 条测试守卫决策/路径/幂等）+ `compute_conpty_flags` 三态（L1 7 条）。
+
+## 0006 依赖版本策略（生产精确 / 开发 ^）
+
+**Status**: accepted（2026-08-18，TE-11）
+
+**上下文**：59 个 npm 依赖版本策略不一致（8 精确 + 51 `^`），生产运行时依赖浮动升级不可控——终端核心路径（xterm 等）的静默 minor/beta 浮动曾引入回归（调查5）。需求：统一版本声明策略，生产与开发工具分流。
+
+**决策**：`package.json` 双区版本策略——
+
+- **dependencies（生产运行时）全精确版本**（无 `^`，锁死当前解析版本）：浮动的任何升级都必须显式改 package.json，进入评审流程。
+- **devDependencies（开发工具）全 `^`**：开发工具升级风险低、频次高，允许 minor 浮动。
+- **overrides 段保持现状**（`^`），不随本策略调整。
+- 精确版本一律以 package-lock.json 当前解析版本为准（pin 不改解析版本本身，`npm install` 刷新 lock）。
+
+**后果**：
+
+- 升级依赖 = 显式改 package.json 版本号 + 跑对应测试门禁，杜绝 `npm install` 静默升级。
+- 例外登记：xterm 三件套 beta 保留（ADR-0007）与 notify RC 保持（ADR-0008）为 pre-release 场景既定例外，升级审批见各自条目；Cargo.toml Rust 侧沿用语义化版本区间（不属本策略范围）。
+
+## 0007 xterm 三件套 beta 保留 + 升级审批约定
+
+**Status**: accepted（2026-08-18，TE-03）
+
+**上下文**：终端核心路径依赖 xterm beta（`@xterm/xterm` 6.1.0-beta.288 + addon-webgl/fit）。升级到该版本有特定动机（调查5修复，ADR-0004 被否决备选记载）——回退稳定版会回归已修复问题；且 ADR-0004 后果明示「xterm.js 升级时须重评估」：`windowsPty` build 钳制语义依赖上游阈值 21376 与 wrapping 启发式实现（`CoreTerminal.ts:283`），升级后须核对分叉逻辑是否仍成立。
+
+**决策**：**保留 beta，不降稳定版**；三件套在 package.json 中精确锁定（ADR-0006 策略）。任何 xterm 版本变更（升/降）须经审批，审批门禁：
+
+1. 全量 L3 headless 渲染测试（`npm run test:l3`）通过；
+2. 全量 E2E（`npm run e2e`）通过；
+3. **真实 claude 实机滚轮测试**（全屏 TUI + 滚轮滚动；滚轮行为自动化无法守卫——ADR-0005 先例）；
+4. Win10 上核对 `CoreTerminal.ts` 的 21376 分叉阈值与 wrapping 启发式现状，评估 ADR-0004 钳制是否仍成立。
+
+**后果**：
+
+- 版本变更必须显式改 package.json 精确版本号，变更本身即触发审批流程。
+- 上游发布稳定版时按上述门禁评估升级；发布「新 beta」同样须走审批（不得经 `^` 浮动自动引入）。
+
+## 0008 notify RC 保持（9.0.0-rc.4 / notify-debouncer-full 0.8.0-rc.2）
+
+**Status**: accepted（2026-08-18，TE-04）
+
+**上下文**：Rust 侧 `notify`（文件系统监听核心）与 `notify-debouncer-full` 为 RC 版本。一手证据（`src-tauri/Cargo.toml:36-37、48-49` 跟踪注释）：`notify` 9.0.0 仍为 RC 阶段——最新稳定版 8.2.0（2025-08-03），而 rc.4（2026-05-02）为当前**最新**版本，无更高稳定版可升；降 8.x 属功能回退。watcher 行为有 notify 模块 51 条 L1 回归测试守护。
+
+**决策**：**保持 RC，不降 8.x**；沿用 Cargo.toml 跟踪注释关注 `https://crates.io/crates/notify` 正式发布。上游发布稳定版后升级，升级时跑 notify 模块全量 L1（51 条 watcher 回归）+ 大目录监听实测。
+
+**后果**：
+
+- `notify` 正式版发布即升级触发点（Cargo.toml 注释已登记），升级走常规依赖变更流程。
+- RC 风险（API 变动/缺陷）由 51 条 L1 回归守护兜底，与 9.x 前瞻收益（后续版本能力）权衡后接受。

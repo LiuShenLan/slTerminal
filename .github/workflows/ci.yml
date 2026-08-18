@@ -28,8 +28,22 @@ jobs:
       - name: Clippy check
         run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
 
+      # Rust 依赖漏洞审计（D10/TE-13）：advisory-db 由 CI 网络拉取，本地网络受限时跳过。
+      - name: Dependency audit (cargo)
+        working-directory: src-tauri
+        run: cargo install cargo-audit && cargo audit
+
       - name: Install frontend dependencies
         run: npm ci
+
+      # 依赖审计门禁（D10/TE-13）：high 级漏洞即阻断；显式指定官方 registry，
+      # 避免镜像源缺失 audit 端点导致误报失败。
+      - name: Dependency audit (npm)
+        run: npm audit --registry=https://registry.npmjs.org/ --audit-level=high
+
+      # 死代码门禁（D10/TE-13）：基于 S01 所建 knip.json 检查未使用依赖与导出。
+      - name: Dead code check (knip)
+        run: npx knip --production
 
       - name: Lint check
         run: npx eslint src/
