@@ -7,6 +7,8 @@
 //                         OV-02：ask 弹窗 → toast.show("error")）、
 //                         合法保存成功显示重启提示、writeHooksConfig 调用 payload 为
 //                         hooks 子树（键集合精确匹配 { layer, hooks, projectPath? }）。
+// SEC-05/D9（user 层二次确认）：user 层保存弹 confirmDialog（确认写盘 / 取消不写盘
+//                         dirty 保留）、project/local 层不弹确认直接写。
 //
 // 测试模式照 hooks-config-panel.test.tsx：mock JsonMode/GuiMode 捕获 props 驱动双向同步；
 // useHooksConfig 保存路径用 renderHook 直测（绕过 UI 禁用门控，直达校验拒绝逻辑）。
@@ -343,7 +345,7 @@ describe("P3-TE-14 保存拒绝与提示", () => {
     expect(result.current.dirty).toBe(true);
   });
 
-  it("合法保存成功（user 层）：payload 为 hooks 子树，键集合 { layer, hooks } + saved 置位", async () => {
+  it("合法保存成功（user 层）：confirmDialog 二次确认（SEC-05/D9）→ payload 为 hooks 子树，键集合 { layer, hooks } + saved 置位", async () => {
     mockReadHooksConfig.mockResolvedValue(VALID_BASE);
     // hub 选中态 cliId 传入（MC-220：useHooksConfig 泛化命令实参 = 选中态）
     const { result } = renderHook(() => useHooksConfig(SELECTED_CLI_ID));
@@ -356,6 +358,13 @@ describe("P3-TE-14 保存拒绝与提示", () => {
       await result.current.save();
     });
 
+    // user 层写入前弹确认（SEC-05/D9 文案契约）
+    expect(mockConfirmDialog).toHaveBeenCalledTimes(1);
+    expect(mockConfirmDialog).toHaveBeenCalledWith({
+      title: "确认写入用户级 hooks 配置",
+      message: "hooks 可执行任意命令",
+      kind: "warning",
+    });
     expect(mockWriteHooksConfig).toHaveBeenCalledTimes(1);
     // 键集合精确匹配：cliId 首参（= hub 选中态传入值）+ user 层无 projectPath → 第 4 参 undefined，
     // wrapper 层（ipc/hooksConfig.ts）按 undefined 省略 projectPath 键 → invoke payload 为 { cliId, layer, hooks }
@@ -371,7 +380,7 @@ describe("P3-TE-14 保存拒绝与提示", () => {
     expect(result.current.saved).toBe(true);
   });
 
-  it("合法保存成功（project 层）：payload 键集合 { layer, hooks, projectPath }", async () => {
+  it("合法保存成功（project 层）：不弹确认直接写（SEC-05/D9），payload 键集合 { layer, hooks, projectPath }", async () => {
     seedProject("C:/proj");
     mockReadHooksConfig.mockResolvedValue(VALID_BASE);
     // hub 选中态 cliId 传入（MC-220：useHooksConfig 泛化命令实参 = 选中态）
@@ -394,6 +403,8 @@ describe("P3-TE-14 保存拒绝与提示", () => {
       await result.current.save();
     });
 
+    // project 层不弹确认（SEC-05/D9：仅 user 层二次确认）
+    expect(mockConfirmDialog).not.toHaveBeenCalled();
     expect(mockWriteHooksConfig).toHaveBeenCalledTimes(1);
     // 键集合精确匹配：cliId 首参（= hub 选中态传入值）+ project 层含 projectPath → invoke payload 为 { cliId, layer, hooks, projectPath }
     const callArgs = mockWriteHooksConfig.mock.calls[0];
@@ -404,6 +415,54 @@ describe("P3-TE-14 保存拒绝与提示", () => {
       Stop: [{ hooks: [{ type: "command", command: "echo stop" }] }],
     });
     expect(callArgs[3]).toBe("C:/proj");
+    expect(result.current.saved).toBe(true);
+  });
+
+  it("user 层保存取消（confirmDialog false）：拒绝写盘 + dirty 保留 + saved 不置位（SEC-05/D9）", async () => {
+    mockReadHooksConfig.mockResolvedValue(VALID_BASE);
+    mockConfirmDialog.mockResolvedValueOnce(false); // 用户取消二次确认
+    const { result } = renderHook(() => useHooksConfig(SELECTED_CLI_ID));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    act(() => {
+      result.current.updateConfigJson(VALID_BASE);
+    });
+    await act(async () => {
+      await result.current.save();
+    });
+
+    // 弹了确认但用户取消 → 不调用 writeHooksConfig；dirty 保留（不丢修改）、saved 不置位
+    expect(mockConfirmDialog).toHaveBeenCalledTimes(1);
+    expect(mockWriteHooksConfig).not.toHaveBeenCalled();
+    expect(result.current.dirty).toBe(true);
+    expect(result.current.saved).toBe(false);
+  });
+
+  it("合法保存成功（local 层）：不弹确认直接写（SEC-05/D9）", async () => {
+    seedProject("C:/proj");
+    mockReadHooksConfig.mockResolvedValue(VALID_BASE);
+    const { result } = renderHook(() => useHooksConfig(SELECTED_CLI_ID));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    // 切到 local 层（dirty=false 无需确认弹窗）
+    act(() => {
+      result.current.setLayer("local");
+    });
+    await waitFor(() => expect(result.current.layer).toBe("local"));
+
+    act(() => {
+      result.current.updateConfigJson(VALID_BASE);
+    });
+    await act(async () => {
+      await result.current.save();
+    });
+
+    expect(mockConfirmDialog).not.toHaveBeenCalled();
+    expect(mockWriteHooksConfig).toHaveBeenCalledTimes(1);
+    const callArgs = mockWriteHooksConfig.mock.calls[0];
+    expect(callArgs[1]).toBe("local");
+    expect(callArgs[3]).toBe("C:/proj");
+    expect(result.current.dirty).toBe(false);
     expect(result.current.saved).toBe(true);
   });
 

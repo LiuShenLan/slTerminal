@@ -10,6 +10,7 @@
 //! 非法 layer / 非法 hooks / JSON 损坏统一走 AppError::Validation，IO 错误走
 //! AppError::IoKind（P3-BE-08）。阻塞 I/O 由命令层在 spawn_blocking 内执行（硬约束 #3）。
 
+use super::inject::HOOK_EVENTS;
 use crate::error::AppError;
 use crate::state::validate_path_within_root;
 use serde_json::Value;
@@ -56,8 +57,7 @@ fn parse_layer(layer: &str) -> Result<Layer, AppError> {
 
 /// claude settings.json 的 hooks 子树（事件名 → matcher 组数组）
 ///
-/// BE-18 骨架期仅被测试构造；S17 SEC-05 语义校验层接入后自然消费，届时移除本 allow。
-#[allow(dead_code)]
+/// 形态校验（BE-18）+ 语义校验（S17 SEC-05：validate_hooks_semantics 消费）
 #[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 pub struct HooksSubtree {
     /// 事件名 → matcher 组数组（serde flatten——根对象键即事件名）
@@ -67,8 +67,7 @@ pub struct HooksSubtree {
 
 /// matcher 组：matcher 匹配串（省略 = 全匹配，C13-5）+ handler 数组
 ///
-/// BE-18 骨架期仅被测试构造；S17 SEC-05 语义校验层接入后自然消费，届时移除本 allow。
-#[allow(dead_code)]
+/// 形态校验（BE-18）+ 语义校验（S17 SEC-05）消费
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MatcherGroup {
     /// matcher 匹配串（省略 = 全匹配）
@@ -82,10 +81,7 @@ pub struct MatcherGroup {
 ///
 /// 只承载校验所需字段（C13-3 字段矩阵的其余字段不属于校验点，反序列化时
 /// serde 默认忽略未知键，不断言其类型）；type/command 缺失容忍为默认值，
-/// 语义审查（type 是否白名单、command 是否非空）归 S17 SEC-05 校验层。
-///
-/// BE-18 骨架期仅被测试构造；S17 SEC-05 语义校验层接入后自然消费，届时移除本 allow。
-#[allow(dead_code)]
+/// 语义审查（type 是否白名单、command 是否非空）由 S17 SEC-05 校验层执行。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct HookHandler {
     /// handler 类型（官方值集 command/http/mcp_tool/prompt/agent）
@@ -153,6 +149,51 @@ fn read_hooks_subtree(path: &Path) -> Result<Value, AppError> {
     let root: Value = serde_json::from_str(&content)
         .map_err(|e| AppError::Validation(format!("配置文件 JSON 损坏: {e}")))?;
     Ok(root.get("hooks").cloned().unwrap_or(Value::Null))
+}
+
+// ── SEC-05 hooks 子树语义校验 ──
+//
+// 契约（S17 跨边界写死）：事件名 ∈ HOOK_EVENTS（10 事件白名单，复用 inject.rs 单点
+// 定义）、handler type == "command"、command 为非空字符串；校验失败返回
+// AppError::Validation。基于 BE-18 所建 HooksSubtree/MatcherGroup/HookHandler 结构体
+// 反序列化——形态非法（事件值非数组/hooks 键缺失/handler 非对象等）同样落入
+// Validation。校验在 config_write_sync 路径解析与写盘之前执行，失败零副作用。
+
+/// hooks 子树语义校验（SEC-05 纯函数）：事件名白名单 + type/command 审查
+///
+/// - 反序列化为 HooksSubtree（BE-18 形态校验）失败 → Validation
+/// - 事件名 ∉ HOOK_EVENTS → Validation
+/// - handler type ≠ "command" → Validation
+/// - command 缺失 / null / 空串 / 纯空白 → Validation
+/// - 空子树（{} 清空形态）→ Ok
+fn validate_hooks_semantics(hooks: &Value) -> Result<(), AppError> {
+    let tree: HooksSubtree = serde_json::from_value(hooks.clone())
+        .map_err(|e| AppError::Validation(format!("hooks 子树形态非法: {e}")))?;
+    for (event, groups) in &tree.events {
+        if !HOOK_EVENTS.contains(&event.as_str()) {
+            return Err(AppError::Validation(format!(
+                "非法 hook 事件名: {event}（仅允许: {}）",
+                HOOK_EVENTS.join(" / ")
+            )));
+        }
+        for group in groups {
+            for handler in &group.hooks {
+                if handler.r#type != "command" {
+                    return Err(AppError::Validation(format!(
+                        "事件 {event} 的 handler type 非法: {}（仅允许: command）",
+                        handler.r#type
+                    )));
+                }
+                let command = handler.command.as_deref().unwrap_or("");
+                if command.trim().is_empty() {
+                    return Err(AppError::Validation(format!(
+                        "事件 {event} 的 handler command 必须为非空字符串"
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// 写回 hooks 子树（read-modify-write merge，P3-BE-03 纯逻辑）
@@ -245,6 +286,9 @@ pub(crate) fn config_write_sync(
     if !hooks.is_object() {
         return Err(AppError::Validation("hooks 必须为 JSON 对象".into()));
     }
+    // SEC-05 语义校验（事件名白名单 + handler type/command 审查）——
+    // 在路径解析与写盘之前，校验失败零副作用
+    validate_hooks_semantics(&hooks)?;
     // 路径解析（user 层不经过沙箱；project/local 层沙箱校验 + 拼接）
     let path = resolve_config_path(l, project_root, project_path, home_dir)?;
     write_hooks_subtree(&path, hooks)
@@ -385,6 +429,156 @@ mod tests {
         let h = &tree.events["PreToolUse"][0].hooks[0];
         assert_eq!(h.r#type, "");
         assert_eq!(h.command, None);
+    }
+
+    // ── SEC-05 语义校验（事件名白名单 + handler type/command 审查） ──
+    //
+    // 形态层容忍的缺省（type="" / command 缺失）在此被拒绝——语义校验与形态校验
+    // 分层：形态保证类型/嵌套，语义保证白名单与非空。
+
+    #[test]
+    fn semantics_rejects_unknown_event() {
+        // 事件名不在 HOOK_EVENTS 10 事件白名单 → Validation
+        let hooks = serde_json::json!({
+            "SomeFutureEvent": [{"hooks": [{"type": "command", "command": "node x"}]}]
+        });
+        let err = validate_hooks_semantics(&hooks).unwrap_err();
+        assert!(
+            matches!(err, AppError::Validation(_)),
+            "未知事件名应被语义校验拒绝: {err}"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("SomeFutureEvent"),
+            "错误消息应指明事件名: {msg}"
+        );
+    }
+
+    #[test]
+    fn semantics_rejects_invalid_handler_type() {
+        // handler type 非 "command"（含缺失缺省空串）→ Validation
+        for hooks in [
+            serde_json::json!({"Stop": [{"hooks": [{"type": "http", "url": "https://x"}]}]}),
+            // 形态容忍的缺省（type=""）语义层拒绝
+            serde_json::json!({"Stop": [{"hooks": [{}]}]}),
+        ] {
+            let err = validate_hooks_semantics(&hooks).unwrap_err();
+            assert!(
+                matches!(err, AppError::Validation(_)),
+                "非法 handler type 应被拒绝: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn semantics_rejects_empty_or_missing_command() {
+        // command 空串 / 纯空白 / 缺失 / null → Validation
+        for hooks in [
+            serde_json::json!({"Stop": [{"hooks": [{"type": "command", "command": ""}]}]}),
+            serde_json::json!({"Stop": [{"hooks": [{"type": "command", "command": "   "}]}]}),
+            serde_json::json!({"Stop": [{"hooks": [{"type": "command"}]}]}),
+            serde_json::json!({"Stop": [{"hooks": [{"type": "command", "command": null}]}]}),
+        ] {
+            let err = validate_hooks_semantics(&hooks).unwrap_err();
+            assert!(
+                matches!(err, AppError::Validation(_)),
+                "空 command 应被语义校验拒绝: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn semantics_rejects_shape_invalid_subtree() {
+        // 形态非法（事件值非数组/handler 非对象/command 非字符串）同样落入 Validation
+        for hooks in [
+            serde_json::json!({"Stop": {"hooks": []}}),
+            serde_json::json!({"Stop": [{"hooks": ["str"]}]}),
+            serde_json::json!({"Stop": [{"hooks": [{"type": "command", "command": 42}]}]}),
+        ] {
+            let err = validate_hooks_semantics(&hooks).unwrap_err();
+            assert!(
+                matches!(err, AppError::Validation(_)),
+                "形态非法子树应被语义校验拒绝: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn semantics_accepts_legal_hooks() {
+        // 合法完整写入放行：10 事件内的事件名 + command handler
+        let hooks = serde_json::json!({
+            "SessionStart": [{"matcher": "", "hooks": [{"type": "command", "command": "node x", "timeout": 5}]}],
+            "Stop": [{"hooks": [{"type": "command", "command": "echo s"}]}],
+            "PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "node y"}]}]
+        });
+        validate_hooks_semantics(&hooks).unwrap();
+    }
+
+    #[test]
+    fn semantics_accepts_empty_subtree() {
+        // 空子树（{} 清空形态）→ 放行
+        validate_hooks_semantics(&serde_json::json!({})).unwrap();
+        validate_hooks_semantics(&serde_json::json!({"Stop": []})).unwrap();
+    }
+
+    // ── SEC-05 写入路径集成（config_write_sync 拒绝 + 放行，零副作用） ──
+
+    #[test]
+    fn config_write_sync_rejects_illegal_event_name_no_side_effect() {
+        // 非法事件名 → Validation，且不产生任何文件（校验在路径解析/写盘之前）
+        let home = tempfile::tempdir().unwrap();
+        let hooks = serde_json::json!({
+            "NotInWhitelist": [{"hooks": [{"type": "command", "command": "node x"}]}]
+        });
+        let home_path = home.path().to_path_buf();
+        let err = config_write_sync("user", hooks, None, &None, move || Some(home_path.clone()))
+            .unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
+        let settings = home.path().join(".claude").join("settings.json");
+        assert!(!settings.exists(), "校验失败不应产生配置文件");
+    }
+
+    #[test]
+    fn config_write_sync_rejects_invalid_handler_type() {
+        let home = tempfile::tempdir().unwrap();
+        let hooks = serde_json::json!({
+            "Stop": [{"hooks": [{"type": "mcp_tool", "command": "node x"}]}]
+        });
+        let home_path = home.path().to_path_buf();
+        let err = config_write_sync("user", hooks, None, &None, move || Some(home_path.clone()))
+            .unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
+    }
+
+    #[test]
+    fn config_write_sync_rejects_empty_command() {
+        let home = tempfile::tempdir().unwrap();
+        let hooks = serde_json::json!({
+            "Stop": [{"hooks": [{"type": "command", "command": ""}]}]
+        });
+        let home_path = home.path().to_path_buf();
+        let err = config_write_sync("user", hooks, None, &None, move || Some(home_path.clone()))
+            .unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
+    }
+
+    #[test]
+    fn config_write_sync_accepts_legal_hooks_and_writes() {
+        // 合法写入放行：全部事件名 ∈ 白名单 → 正常落盘
+        let home = tempfile::tempdir().unwrap();
+        let hooks = serde_json::json!({
+            "SessionStart": [{"hooks": [{"type": "command", "command": "echo hi"}]}],
+            "PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "node x"}]}]
+        });
+        let home_path = home.path().to_path_buf();
+        config_write_sync("user", hooks.clone(), None, &None, move || {
+            Some(home_path.clone())
+        })
+        .unwrap();
+        let path = home.path().join(".claude").join("settings.json");
+        let reloaded: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(reloaded, serde_json::json!({"hooks": hooks}));
     }
 
     #[test]

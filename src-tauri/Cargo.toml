@@ -49,6 +49,8 @@ git2 = { version = "0.21", features = ["vendored-libgit2"] }
 # notify 正式发布后同步升级此依赖。
 notify-debouncer-full = "0.8.0-rc.2"
 dunce = "1"
+# SEC-13：脚本状态检测 SHA-256 哈希比对（模板 vs 磁盘脚本防首行伪造；lock 树已有 0.10.x 传递版本）
+sha2 = "0.10"
 
 [target.'cfg(windows)'.dependencies]
 nt_version = "0.1"
