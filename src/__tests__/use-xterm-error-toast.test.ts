@@ -135,7 +135,7 @@ vi.mock("../ipc/agentHooks", () => ({
 
 vi.mock("../ipc/agentHistory", () => ({
   readHistoryTitle: mockReadHistoryTitle,
-  scanHistory: vi.fn().mockResolvedValue([]),
+  scanAgentHistory: vi.fn().mockResolvedValue([]),
   deleteHistorySession: vi.fn().mockResolvedValue(undefined),
 }));
 

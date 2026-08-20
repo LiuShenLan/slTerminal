@@ -5,15 +5,19 @@
 //
 // 设计要点：
 // - 状态机 idle | loading | ready | error，初始 idle（未扫描）
-// - scan() 由历史区首次展开与手动刷新按钮触发（规格 4.3.5）——无参聚合
-//   全部 provider 数据直达 UI，无前端二次过滤（MC-312）
+// - scan(force?) 由导航树挂载与手动刷新按钮触发（规格 4.3.5）——按 CLAUDE_CLI_ID
+//   单 CLI 扫描（后端 provider REGISTRY 当前仅 claude，单 cliId 扫描即全量，
+//   MC-312 聚合语义收敛到后端 cliId 分发；第二后端 provider 接入时重评估前端
+//   聚合）；force=true 绕过 BE-19 缓存强制重扫（显式刷新按钮，缓存空结果可
+//   被永久命中——目录内会话增删不改根键）
 // - removeLocal 纯本地即时刷新，不触发重扫（删除 IPC 由调用方先执行）
 // - activeStatuses 实时跟随 TerminalRegistry（register/remove/sessionChange），
 //   不重扫（规格 4.5）——Map<cliId|sessionId, 四态 status>，历史区行显示与活跃区一致（问题 2）
 // - rootPath 变化不自动重扫——历史区数据与项目弱相关（checklist FE-04）
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { scanHistory } from "../../ipc/agentHistory";
+import { scanAgentHistory } from "../../ipc/agentHistory";
+import { CLAUDE_CLI_ID } from "../cliProfiles/profiles/claude";
 import { useProjects } from "../../stores/projects";
 import { useLayout } from "../../stores/layout";
 import { TerminalRegistry } from "../../panels/terminal/TerminalRegistry";
@@ -47,12 +51,12 @@ export function useAgentHistory() {
   >(() => deriveActiveSessionStatuses());
   const genRef = useRef(0);
 
-  /** 扫描全部历史会话——generation 防竞：进行中再次触发，旧结果丢弃（照 useFileTree genRef 模式） */
-  const scan = useCallback(async () => {
+  /** 扫描历史会话——generation 防竞：进行中再次触发，旧结果丢弃（照 useFileTree genRef 模式） */
+  const scan = useCallback(async (force?: boolean) => {
     const gen = ++genRef.current;
     setState("loading");
     try {
-      const result = await scanHistory();
+      const result = await scanAgentHistory(CLAUDE_CLI_ID, force);
       if (gen !== genRef.current) return; // 过期结果丢弃
       // 契约返回 AgentHistorySession[]——非数组（后端异常/测试环境 null）回退空表防渲染崩溃
       setSessions(Array.isArray(result) ? result : []);

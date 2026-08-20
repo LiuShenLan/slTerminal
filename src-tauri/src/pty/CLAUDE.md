@@ -85,7 +85,7 @@ JobHandle 在 `#[cfg(windows)]` 下为 HANDLE RAII 包装；`#[cfg(not(windows))
 
 `shell.rs`：`pwsh.exe` → `powershell.exe` → `cmd.exe` 回退。提供两套接口——`resolve_shell()` 返回 `CommandBuilder`（旧路径/非 Windows fallback），`resolve_shell_info()` 返回 `ShellInfo`（自定义 ConPTY 路径，program 为完整路径）。Shell 可执行文件通过 `which_full_path()` 在 PATH 中解析为完整路径，确保 `CreateProcessW(lpApplicationName=...)` 正确工作。
 
-**白名单真实路径校验（SEC-01，S02）**：用户传入 shell **含路径分隔符**时——`canonicalize` 用户路径，与 `which_full_path(文件名)` 解析结果比对，**一致才放行**（只信任 PATH 解析出的真实路径，防传 `C:\project\cmd.exe` 或篡改 PATH 绕过 → RCE）；PATH 不可解析时 `%SystemRoot%\System32` 系统目录兜底（cmd 回退自洽）。纯文件名输入维持现状。忽略大小写比较（Windows 文件系统大小写不敏感）。L1 测试：伪造路径拒绝 / 合法绝对路径放行 / PATH 解析一致放行。PowerShell 通过 `-EncodedCommand`（UTF-16LE Base64）内联集成脚本（`include_str!("../../assets/shell-integration.ps1")`），消除 `%APPDATA%` 文件写入，避免 AMSI/ASR 误杀。集成脚本注入 OSC 7（cwd 跟踪）+ OSC 133 A/B/D（提示符边界+退出码）+ UTF-8 编码修复。
+**白名单真实路径校验（SEC-01，S02）**：用户传入 shell **含路径分隔符**时——`canonicalize` 用户路径，与 `which_full_path(文件名)` 解析结果比对，**一致才放行**（只信任 PATH 解析出的真实路径，防传 `C:\project\cmd.exe` 或篡改 PATH 绕过 → RCE）；PATH 不可解析时 `%SystemRoot%\System32` 系统目录兜底（cmd 回退自洽）。纯文件名输入维持现状。忽略大小写比较（Windows 文件系统大小写不敏感）。**alias 兼容（人工验证修复）**：canonicalize 失败（应用执行别名/特殊 ACL——Store 版 pwsh 的 `%LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.exe`，CreateProcess 可运行但普通文件 API 打开失败 os error 1920）时**不拒绝**，回退归一字符串比较（`paths_match` 纯函数：`/`→`\`、去尾分隔符、忽略大小写）——alias 场景两侧字符串相同放行，伪造路径字符串必不同仍拒绝，威胁模型不变。L1 测试：伪造路径拒绝 / 合法绝对路径放行 / PATH 解析一致放行 / **paths_match 纯函数 5 条 + 统一错误文案 1 条 + 真实 alias 条件测试 1 条（shell.rs 共 31 条）**。PowerShell 通过 `-EncodedCommand`（UTF-16LE Base64）内联集成脚本（`include_str!("../../assets/shell-integration.ps1")`），消除 `%APPDATA%` 文件写入，避免 AMSI/ASR 误杀。集成脚本注入 OSC 7（cwd 跟踪）+ OSC 133 A/B/D（提示符边界+退出码）+ UTF-8 编码修复。
 
 ### 终端能力环境变量注入
 
@@ -145,7 +145,9 @@ JobHandle 在 `#[cfg(windows)]` 下为 HANDLE RAII 包装；`#[cfg(not(windows))
 
 ### reader 微批处理（BE-05/12，S06）
 
-**「读到即续读」非定时器微批**——每次 read 成功（16KB 首块）后非阻塞续读（Windows 上基于 `WaitForSingleObject(handle, 0)` 检测管道可读），累积至 `MICRO_BATCH_MAX`（64KB）**或无可读数据**再一次 `Channel::send` + 一次 `ring_buffer_append`（BE-12：append 调用点仅批量一处，Mutex 竞争随频率自然降级；不引入无锁结构）。避免引入固定延迟——非定时器，无批处理延迟。首块经过 ConPTY 启动序列剥离，续读块在首块真实数据出现后原样透传（跨 16KB 边界残留由首块剥离状态机处理）。
+**「读到即续读」非定时器微批**——每次 read 成功（16KB 首块）后非阻塞续读（Windows 上基于 **`PeekNamedPipe` 查询管道可读字节数**（`SendRawHandle::pending_bytes`）检测管道可读），累积至 `MICRO_BATCH_MAX`（64KB）**或无可读数据**再一次 `Channel::send` + 一次 `ring_buffer_append`（BE-12：append 调用点仅批量一处，Mutex 竞争随频率自然降级；不引入无锁结构）。避免引入固定延迟——非定时器，无批处理延迟。首块经过 ConPTY 启动序列剥离，续读块在首块真实数据出现后原样透传（跨 16KB 边界残留由首块剥离状态机处理）。
+
+**pending 检查禁用 WaitForSingleObject（信号竞态修复）**：旧实现 `WaitForSingleObject(handle, 0)` 对匿名管道读端存在**信号 reset 延迟竞态**——数据被 read 读走后信号未及时 reset → 误报「有数据」→ 微批续读的阻塞 read 空等 → **reader 线程卡死 → 该终端永久无输出**（E2E 全部终端文本为空 + win10 黑屏人工验证问题根因）。改用 `PeekNamedPipe`（同步查询可读字节数，与后续 read 同一管道状态视角，零竞态窗口）；对端关闭时 Peek 返回 0，由主循环 read Ok(0) EOF 兜底。回归测试：`pending_bytes_reflects_pipe_data_availability`（spawn.rs conpty_custom T9，真实管道锁死 空→写→读走→0 语义）。
 
 `READER_BUF_SIZE` 常量 = 16384（16KB），首块最多 16KB、续读约 3 块满上限。效果：IPC 次数与字节数解耦（原每次 read 即 send，S06 前每次 16KB send 一次）。
 
@@ -239,7 +241,7 @@ Rust 测试分布在 5 个位置：
 | `pty/reader.rs` `#[cfg(test)]` | 单元测试 | 42（含 BE-05 微批 6 + BE-06 join 超时 3） | `use super::*` 访问 `pub(crate)` 和私有项 |
 | `pty/spawn.rs` `#[cfg(test)]` | 单元测试 | 59（`conpty_custom` 内 31 + 顶层 28） | `conpty_custom` 子模块 + 顶层 `mod tests`（validate_spawn_request/SEC-08/Job Object 纯逻辑/BE-01 容量/BE-08 pty_kill_all） |
 | `pty/conpty_api.rs` `#[cfg(test)]` | 单元测试 | 5（ADR-0005 嵌入捆绑） | `use super::*` |
-| `pty/shell.rs` `#[cfg(test)]` | 单元测试 | 24（SEC-01 白名单 4） | `use super::*` |
+| `pty/shell.rs` `#[cfg(test)]` | 单元测试 | 31（SEC-01 白名单 4 + alias 兼容 7） | `use super::*` |
 | `tests/pty_integration_tests.rs` | 集成测试 | 7（reattach 用例随 SEC-03 删除后） | 仅能访问 `pub` API |
 | `state.rs` `#[cfg(test)]` | 单元测试 | 42 | sandbox 路径校验（含 symlink 豁免测试）+ ring buffer 纯函数测试 |
 

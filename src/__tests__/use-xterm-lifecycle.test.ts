@@ -194,7 +194,7 @@ vi.mock("../ipc/agentHooks", () => ({
 // useXterm.ts import { readHistoryTitle } from "../../ipc/agentHistory"（人工验证问题 3）
 vi.mock("../ipc/agentHistory", () => ({
   readHistoryTitle: mockReadHistoryTitle,
-  scanHistory: vi.fn().mockResolvedValue([]),
+  scanAgentHistory: vi.fn().mockResolvedValue([]),
   deleteHistorySession: vi.fn().mockResolvedValue(undefined),
 }));
 

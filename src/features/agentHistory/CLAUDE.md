@@ -22,8 +22,8 @@ Agent 历史会话查询与恢复——历史区 UI 与数据层（CLI 无关聚
 
 `useAgentHistory` 状态机 `idle | loading | ready | error`（初始 idle 未扫描），**消费方 = `useNavTree`**（导航树内建聚合，单实例）：
 
-- **scan() 触发时机调整（NAV-10 + FE-19）**：导航树**挂载即扫描**（历史折叠节点常驻项目下，计数 pill 与历史行首屏可见——计数需要数据；`useAgentHistory` generation 防竞兜底重复扫描）；**展开不再重复 scan（FE-19）**——BE-19 后端 (目录 mtime, 文件数) 缓存命中复用不重复读盘；手动刷新钮（导航头「刷新」）同源调用，显式刷新/恢复完成场景预留 `scanAgentHistory(cliId, force=true)` 强制重扫通道
-- **无参聚合**全部 provider 数据直达 UI，无前端二次过滤（MC-312）；generation 防竞（`genRef`，照 `useFileTree` 模式）；**BE-19 缓存语义**：后端按 (目录 mtime, 文件数) 进程内缓存——目录内会话文件增删不影响根键（不触发自动重扫），由前端显式刷新（force=true）兜底
+- **scan(force?) 触发时机（NAV-10 + FE-19）**：导航树**挂载即扫描**（历史折叠节点常驻项目下，计数 pill 与历史行首屏可见——计数需要数据；`useAgentHistory` generation 防竞兜底重复扫描）；**展开不再重复 scan（FE-19）**——BE-19 后端 (目录 mtime, 文件数) 缓存命中复用不重复读盘；手动刷新钮（导航头「刷新」）= `scan(true)` **已实现** force=true 强制重扫通道
+- **单 CLI 扫描（契约断链接线修复）**：`scan(force?)` 调 `scanAgentHistory(CLAUDE_CLI_ID, force)`——后端 provider REGISTRY 当前仅 claude，单 cliId 扫描即全量（MC-312 聚合语义收敛到后端 cliId 分发，前端不再无参聚合；第二后端 provider 接入时重评估）；generation 防竞（`genRef`，照 `useFileTree` 模式）；**BE-19 缓存语义**：后端按 (目录 mtime, 文件数) 进程内缓存——目录内会话文件增删不影响根键（不触发自动重扫），由前端显式刷新（force=true）兜底
 - `removeLocal` 纯本地即时刷新，**不触发重扫**（删除 IPC 由调用方先执行，成功后调本函数同步 UI——`NavTree` 历史行右键菜单删除走此路径）
 - `activeStatuses` 经 `TerminalRegistry.subscribe` 实时跟随（register/remove/sessionChange 任一事件重算四态映射），**不重扫**；卸载清理订阅
 - `rootPath` 推导：activePageId → 所属 project（照 `useCommitStatus` 先例）；rootPath 变化**不自动重扫**（历史区数据与项目弱相关）
@@ -82,7 +82,7 @@ Agent 历史会话查询与恢复——历史区 UI 与数据层（CLI 无关聚
 | `SessionActionDialog.tsx` | 动作弹窗（问题 5 新建，照 InputDialog 样式）：标题 + 消息 + 竖排动作按钮 + 取消；Esc/遮罩点击取消——**生产消费方 = `NavTree`（运行中历史行双击）** |
 | `historyContextMenu.ts` | 右键菜单策略：`getHistoryContextMenuItems`（禁用态矩阵，重命名项已移除）+ `buildResumeCommand`（委托 `profile.history.buildResumeCommand`）——**生产消费方 = `NavTree`** |
 | `historyModel.ts` | 纯函数模型：`isCurrentProject` / `groupByCwd` / `matchesSearch` / `formatRelativeTime` / `keyOf`（复合键 `cliId\|sessionId` 构造单点——回退 + 转义）/ `deriveActiveSessionStatuses` + `UNKNOWN_CWD_KEY` |
-| `useAgentHistory.ts` | 数据 hook（消费方 = `useNavTree`）：状态机 + scan（无参聚合，BE-19 后端缓存命中）/removeLocal + TerminalRegistry 订阅四态映射 + rootPath 推导（照 `useCommitStatus`） |
+| `useAgentHistory.ts` | 数据 hook（消费方 = `useNavTree`）：状态机 + scan(force?)（`scanAgentHistory(CLAUDE_CLI_ID, force)` 单 CLI 扫描，BE-19 后端缓存命中 / force 透传）/removeLocal + TerminalRegistry 订阅四态映射 + rootPath 推导（照 `useCommitStatus`） |
 | `restoreSession.ts` | 四步恢复编排：`restoreHistorySession(session, {fork})`（profile 策略委托）+ `waitFor` 轮询（100ms×50，**FE-27：接受 `AbortSignal`**，模块级 `restoreAbortRef` 新恢复 abort 旧）+ 防重入 + 失败 toast |
 
 ## 测试模式

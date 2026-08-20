@@ -96,8 +96,9 @@ export interface UseNavTreeResult {
   activePageId: string | null;
   /** 历史扫描状态（useAgentHistory 透传） */
   historyState: AgentHistoryState;
-  /** 刷新（重扫历史会话——「导航」头刷新钮；缺省走后端 (mtime, 文件数) 缓存，
-   *  键失效自动重扫；显式 force 语义经 scanAgentHistory(cliId, force) 透传） */
+  /** 刷新（重扫历史会话——「导航」头刷新钮；force=true 绕过后端 (mtime, 文件数)
+   *  缓存强制重扫——缓存空结果可被永久命中（目录内会话增删不改根键），
+   *  显式刷新必须 bypass） */
   refresh(): void;
   /** 删除历史会话后的即时局部刷新（不重扫） */
   removeLocal(sessionId: string): void;
@@ -269,7 +270,10 @@ export function useNavTree(): UseNavTreeResult {
     toggleHist,
     activePageId,
     historyState: history.state,
-    refresh: history.scan,
+    // 刷新钮 = 显式重扫：force=true 绕过后端缓存（空结果永久命中场景必须 bypass）
+    refresh: useCallback(() => {
+      void history.scan(true);
+    }, [history.scan]),
     removeLocal: history.removeLocal,
     activeStatuses: history.activeStatuses,
   };

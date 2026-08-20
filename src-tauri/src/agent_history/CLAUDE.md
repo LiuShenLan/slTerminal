@@ -72,7 +72,7 @@ serde camelCase 两键：`title`（回退链合成结果，全无时 null——�
 
 | 文件 | 职责 |
 |------|------|
-| `mod.rs` | 聚合层：`AgentHistorySession` DTO + `AgentHistoryTitle` DTO + `is_uuid_filename` 工具 + 三条泛化命令 `agent_history_scan`（无参聚合）/ `agent_history_delete(cliId, sessionId)`（validate 前置，`run_delete` provider 可注入测试）/ `agent_history_read_title(cliId, sessionId)`（validate 前置，`run_read_title` provider 可注入测试） |
+| `mod.rs` | 聚合层：`AgentHistorySession` DTO + `AgentHistoryTitle` DTO + `is_uuid_filename` 工具 + 三条泛化命令 `agent_history_scan(cliId, force)`（必填 cliId——无参 invoke 恒 reject，前端 `scanAgentHistory(cliId, force?)` 唯一调用点）/ `agent_history_delete(cliId, sessionId)`（validate 前置，`run_delete` provider 可注入测试）/ `agent_history_read_title(cliId, sessionId)`（validate 前置，`run_read_title` provider 可注入测试） |
 | `provider.rs` | `CliHistoryProvider` trait（四方法）+ cliId 键静态注册表 + `resolve_provider` 分发入口 |
 | `claude/mod.rs` | claude history provider：`ClaudeHistoryProvider` trait 实现 + `TitleSource` 五态 + `ScanRootGuard`（cfg test，env 守卫） |
 | `claude/scan.rs` | 扫描根单点 `resolve_projects_root`（env 覆盖留 provider 内部）+ `scan_sessions` 一级子目录扫描（UUID 过滤 + `agent-` 平铺排除 + 单文件降级条目） |

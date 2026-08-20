@@ -70,7 +70,7 @@ Stage 01–07 产生的测试文件更名/合并登记。旧名全部退役、�
 | `cli-icons.test.ts`（12 用例） | `cli-profile-registry.test.ts` + `cli-profile-claude.test.ts` | 首 token 匹配/资源守卫语义拆分并入（MC-108 泛化，含 mockcli.png 先行资源断言） |
 | `claude-status.test.ts`（32 用例） | `agent-status-lib.test.ts` + `cli-profile-claude.test.ts` | 拆分（MC-401）：lib 层 6 用例（AgentStatus 四态类型/STATUS_EMOJI/getStatusIcon）留 `agent-status-lib.test.ts`；eventToStatus 26 用例随实现迁 `profiles/claude/` hooks 策略（落点 `cli-profile-claude.test.ts`，语义不丢） |
 | `ipc-hooks-contract.test.ts`（22 用例） | `ipc-agent-hooks-contract.test.ts` | 四维同步 + cliId 首参（MC-212）；经共享工厂 `describeIpcContract`（`helpers/ipc-contract.ts`）声明式驱动 |
-| `ipc-claude-history-contract.test.ts`（8 用例） | `ipc-agent-history-contract.test.ts` | scan 无参 / delete `{cliId, sessionId}`（MC-306） |
+| `ipc-claude-history-contract.test.ts`（8 用例） | `ipc-agent-history-contract.test.ts` | scanAgentHistory `{cliId, force?}` / delete `{cliId, sessionId}`（MC-306；scanHistory 无参块于人工验证修复删除） |
 | `claude-history-model.test.ts` | `agent-history-model.test.ts` | 目录迁移 + 复合键 `cliId\|sessionId`（MC-313） |
 | `claude-history-hook.test.tsx` | `agent-history-hook.test.tsx` | 目录迁移（MC-310） |
 | `claude-history-restore.test.ts` | `agent-history-restore.test.ts` | 目录迁移 + 恢复注入 = `profile.history.buildRestoreInput` 输出（MC-315） |
@@ -112,5 +112,5 @@ Stage 01–07 产生的测试文件更名/合并登记。旧名全部退役、�
 | `mock-cli-profile.test.tsx` | AC-4 五点全链路（useCommandDetection/useXterm/通知调度/agentHistory/hub 面板） |
 | `no-claude-literals.test.ts` | AC-5 通用层八路径字面量守卫（profiles/claude 合法领地目录级豁免） |
 | `ipc-agent-hooks-contract.test.ts` | `src/ipc/agentHooks.ts`（四命令 × 四维 + onAgentEvent） |
-| `ipc-agent-history-contract.test.ts` | `src/ipc/agentHistory.ts`（scan 无参 / delete `{cliId, sessionId}`） |
+| `ipc-agent-history-contract.test.ts` | `src/ipc/agentHistory.ts`（scanAgentHistory `{cliId, force?}` / delete `{cliId, sessionId}`——scanHistory 无参块已删，契约断链修复） |
 | `agent-history-model.test.ts` 等 6 文件 | `src/features/agentHistory/`（model/hook/restore/row/view/action-dialog） |

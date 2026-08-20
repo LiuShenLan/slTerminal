@@ -137,6 +137,11 @@ export function useTerminalInstance(
     fitAddonRef.current = fitAddon;
     term.loadAddon(fitAddon);
 
+    // 挂载到 DOM——必须先 open 再加载 WebGL addon（WebGL 渲染器需要挂载后的
+    // canvas；先加载会绑定空 canvas → 静默黑渲染且不触发 context loss 兜底，
+    // win10 纯黑屏 FE-34 时序根因，顺序断言见 terminal-instance.test.ts）
+    term.open(container);
+
     // WebGL addon（context loss 后指数退避重试，非永久退化）
     // onSuccess/onFail 回调更新 webglAddonRef，cancel 函数存入 webglCancelRef 供 cleanup 调用
     const { cancel } = setupWebglWithRetry(
@@ -145,9 +150,6 @@ export function useTerminalInstance(
       () => { webglAddonRef.current = null; },
     );
     webglCancelRef.current = cancel;
-
-    // 挂载到 DOM
-    term.open(container);
 
     // 字体预加载后刷新布局（包裹 rAF 确保布局稳定）
     document.fonts.ready.then(() => {
@@ -203,6 +205,7 @@ export function useTerminalInstance(
   }, [fontSize]);
 
   /** 尝试加载 WebGL addon（可见性恢复时调用，已加载或不可用时无操作） */
+  // 约束：调用方须保证 term 已 open（可见性恢复路径天然满足——主 effect 先 open 后加载）
   const tryLoadWebgl = useCallback(() => {
     const term = terminalRef.current;
     if (!term || webglAddonRef.current || !detectWebgl()) return;

@@ -192,4 +192,19 @@ describe("useTerminalInstance 分支覆盖（TRM-07）", () => {
     // detectWebgl false → tryLoadWebgl 短路，不新增加载
     expect(mocks.webgl.setupWebglWithRetry).toHaveBeenCalledTimes(1);
   });
+
+  it("7. setupWebglWithRetry 在 term.open 之后调用（win10 黑屏 FE-34 时序回归守卫）", () => {
+    // FE-34 曾把 WebGL 加载挪到 term.open() 之前：WebglAddon 在 canvas 创建前
+    // loadAddon → 渲染器绑定空 canvas → 静默黑渲染、不触发 context loss 兜底
+    // （win10 终端纯黑屏根因）。修复 = 先 open 再 setupWebglWithRetry，
+    // 本用例以 Vitest 调用序锁死该不变量，防止未来再调回错误时序。
+    const container = containerStub();
+    renderHook(() => useTerminalInstance(container, {}));
+
+    const openOrder = mocks.terminal.open.mock.invocationCallOrder[0];
+    const setupOrder = mocks.webgl.setupWebglWithRetry.mock.invocationCallOrder[0];
+    expect(openOrder).toBeDefined();
+    expect(setupOrder).toBeDefined();
+    expect(openOrder).toBeLessThan(setupOrder);
+  });
 });

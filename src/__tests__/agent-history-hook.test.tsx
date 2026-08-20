@@ -42,9 +42,9 @@ function notifyListeners(event: { type: string; panelId: string }) {
   }
 }
 
-// ── mock IPC + TerminalRegistry（hook 仅消费 scanHistory / getAll / subscribe） ──
+// ── mock IPC + TerminalRegistry（hook 仅消费 scanAgentHistory / getAll / subscribe） ──
 vi.mock("../ipc/agentHistory", () => ({
-  scanHistory: h.mockScanHistory,
+  scanAgentHistory: h.mockScanHistory,
 }));
 vi.mock("../panels/terminal/TerminalRegistry", () => ({
   TerminalRegistry: {
@@ -220,6 +220,26 @@ describe("useAgentHistory scan", () => {
     rerender();
     expect(result.current.rootPath).toBeNull();
     expect(h.mockScanHistory).not.toHaveBeenCalled();
+  });
+
+  it("scan 默认按 CLAUDE_CLI_ID 扫描（force 缺省 undefined = 后端缓存路径，契约断链回归）", async () => {
+    // 契约断链根因：scanHistory() 无参 invoke 被后端必填 cli_id 拒绝——
+    // 接线后必须携带 cliId 参数（"claude"），否则历史区恒空
+    h.mockScanHistory.mockResolvedValue([]);
+    const { result } = renderHook(() => useAgentHistory());
+    await act(async () => {
+      await result.current.scan();
+    });
+    expect(h.mockScanHistory).toHaveBeenCalledWith("claude", undefined);
+  });
+
+  it("scan(true) → force=true 透传（显式刷新绕过 BE-19 缓存）", async () => {
+    h.mockScanHistory.mockResolvedValue([]);
+    const { result } = renderHook(() => useAgentHistory());
+    await act(async () => {
+      await result.current.scan(true);
+    });
+    expect(h.mockScanHistory).toHaveBeenCalledWith("claude", true);
   });
 });
 

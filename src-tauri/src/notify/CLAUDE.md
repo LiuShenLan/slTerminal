@@ -59,6 +59,8 @@ FileWatcher {
   → notify_stop_watch(path) → pool.remove(path)  // 移除并 stop，不再占用池槽与 OS 句柄
 ```
 
+**watcher 上提至 Workspace 项目激活层（E2E editor auto-reload 修复）**：`startWatch`/`stopWatch` 的唯一生产调用点 = `Workspace.tsx` 的 SEC-01 effect（activePageId 变化 → 项目激活 → startWatch(rootPath) / 切换时 stopWatch(prev)）。原 ExplorerPanel 的 watcher 管理已移除——fs-event 消费方（编辑器外部修改 reload / commit 面板 / 文件树增量刷新）不依赖 explorer 视图是否打开；ExplorerPanel 仅消费 `onFsEvent`。双管理互停风险消除（ExplorerPanel 卸载 cleanup 曾会停掉共享 watcher）。
+
 ## 关键约束
 
 - **watcher 重建开销**：不要在每次页面切换时 `stop()` + `start()` watcher。始终走池的 `pause_all_except`。

@@ -1,11 +1,13 @@
 // ipc-agent-history-contract.test.ts — agent 历史会话 IPC wrapper 合约测试（FE-03，IHE-06 工厂化）
 //
 // 照 ipc-hooks-config-contract.test.ts 模式，经共享工厂 describeIpcContract（helpers/ipc-contract.ts）
-// 声明式驱动三命令 × 四维（命令名 / 参数结构 / 正常返回 / 异常传播）= 18 条用例
+// 声明式驱动三命令 × 四维（命令名 / 参数结构 / 正常返回 / 异常传播）= 14 条用例
 // （重命名命令已随功能整体移除——问题 7 修复；readHistoryTitle = 人工验证问题 3 新增；
-// scanAgentHistory(cliId, force) = BE-19 新增——scanHistory 保留为无参聚合兼容导出）：
+// scanAgentHistory(cliId, force) = BE-19 新增；scanHistory 无参聚合导出已删除——
+// 后端 agent_history_scan 的 cli_id 必填（S12 起），无参 invoke 恒 reject，历史区
+// 「暂无历史会话」根因，契约断链修复）：
 // 1. 命令名 snake_case 逐字（agent_history_scan 等，非驼峰）
-// 2. 参数结构键集合精确匹配（scan 无参 / scanAgentHistory { cliId, force? } / delete { cliId, sessionId } /
+// 2. 参数结构键集合精确匹配（scanAgentHistory { cliId, force? } / delete { cliId, sessionId } /
 //    readTitle { cliId, sessionId }，防字段漂移）
 // 3. 返回透传（scan 返回 AgentHistorySession[] 八键全形态样例；readTitle 返回两键）
 // 4. 异常传播不吞异常
@@ -63,40 +65,6 @@ const mockSessions = [
     cliId: CLI_ID,
   },
 ];
-
-describeIpcContract("scanHistory 合约（agent_history_scan 无参聚合——兼容导出）", [
-  // 维度 1：命令名（snake_case 逐字）
-  {
-    name: "应调用 agent_history_scan 命令（非驼峰）",
-    cmd: "agent_history_scan",
-    call: () => agentHistory.scanHistory(),
-    respond: [],
-  },
-  // 维度 2：参数结构——scan 无参数（invoke payload 为空对象）
-  {
-    name: "调用无参数（invoke payload 为空对象）",
-    cmd: "agent_history_scan",
-    call: () => agentHistory.scanHistory(),
-    respond: [],
-    expectArgs: {},
-  },
-  // 维度 3：正常返回透传——AgentHistorySession[] 八键全形态样例（含 cliId 打标）
-  {
-    name: "透传 AgentHistorySession[]（八键全形态含 cliId）",
-    cmd: "agent_history_scan",
-    call: () => agentHistory.scanHistory(),
-    respond: [...mockSessions],
-    expectResult: mockSessions,
-  },
-  // 维度 4：异常传播
-  {
-    name: "invoke 失败时异常应传播给调用方",
-    cmd: "agent_history_scan",
-    call: () => agentHistory.scanHistory(),
-    mockThrow: "扫描失败",
-    expectReject: "扫描失败",
-  },
-]);
 
 describeIpcContract("scanAgentHistory 合约（agent_history_scan 带 cliId + force，BE-19）", [
   // 维度 1：命令名（snake_case 逐字）

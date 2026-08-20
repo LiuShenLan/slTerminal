@@ -12,7 +12,7 @@
 //
 // Mock 策略（照 src/__tests__/ 既有种子模式——agent-status-view.test.tsx 先例）：
 //   useAgentStatus 模块 mock（NavTree 会调用）；agentHistory scan 走真实 useAgentHistory +
-//   ipc/agentHistory.scanHistory mock（数据链真实：scan → sessions → 归属过滤）；
+//   ipc/agentHistory.scanAgentHistory mock（数据链真实：scan → sessions → 归属过滤）；
 //   stores/projects、stores/layout 真实 store + setState 种子。
 //   NavTree 本体由 navtree-new agent 按契约产出，本文件只锁定契约点。
 
@@ -30,9 +30,9 @@ vi.mock("../features/agentStatus/useAgentStatus", () => ({
   useAgentStatus: () => mockUseAgentStatus(),
 }));
 
-// 历史数据源：真实 useAgentHistory，仅 mock IPC 层 scanHistory
+// 历史数据源：真实 useAgentHistory，仅 mock IPC 层 scanAgentHistory
 vi.mock("../ipc/agentHistory", () => ({
-  scanHistory: mockScanHistory,
+  scanAgentHistory: mockScanHistory,
   deleteHistorySession: vi.fn(),
 }));
 
@@ -512,7 +512,7 @@ describe("历史扫描时机（FE-19：挂载一次 + 展开不重复 scan + 刷
     expect(mockScanHistory).toHaveBeenCalledTimes(1);
   });
 
-  it("「导航」头刷新钮 → 显式重扫（scan 再触发一次）", async () => {
+  it("「导航」头刷新钮 → 显式重扫（scan 再触发一次，force=true 绕缓存）", async () => {
     seedProject("C:/projA", "proj-A", "项目A", [
       { pageId: "pageA", name: "页面 A" },
     ]);
@@ -523,8 +523,10 @@ describe("历史扫描时机（FE-19：挂载一次 + 展开不重复 scan + 刷
     await waitFor(() => {
       expect(mockScanHistory).toHaveBeenCalledTimes(1);
     });
+    // 挂载首扫：按 CLAUDE_CLI_ID、force 缺省 undefined（后端缓存路径）
+    expect(mockScanHistory).toHaveBeenCalledWith("claude", undefined);
 
-    // 新会话落盘 → 点刷新钮重扫
+    // 新会话落盘 → 点刷新钮重扫（force=true 绕过 BE-19 缓存——契约断链接线回归）
     mockScanHistory.mockResolvedValue([makeHistorySession()]);
     const refreshBtn = container.querySelector(
       'button[aria-label="刷新"]',
@@ -535,6 +537,7 @@ describe("历史扫描时机（FE-19：挂载一次 + 展开不重复 scan + 刷
     await waitFor(() => {
       expect(mockScanHistory).toHaveBeenCalledTimes(2);
     });
+    expect(mockScanHistory).toHaveBeenLastCalledWith("claude", true);
     // 数据落地：计数 pill 更新
     await waitFor(() => {
       expect(

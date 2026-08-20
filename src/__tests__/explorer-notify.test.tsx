@@ -1,12 +1,12 @@
-// explorer-notify.test.tsx — ExplorerPanel 文件监听集成测试
+// explorer-notify.test.tsx — useFileTree 状态转换 + fs-event 消费测试
 //
-// 验证：项目根路径变化时 ExplorerPanel 调用 startWatch 启动文件监听；
-// BE-10：切换/移除项目、组件卸载时调用 stopWatch 停止旧监听。
-// 使用 mock ipc/notify + 真实 stores，遵循 sidebar-actions 模式。
+// watcher 生命周期用例（startWatch/stopWatch 时机、projectRootPath 推导、
+// 卸载清理）已随 watcher 上提至 Workspace 项目激活层迁移——
+// 见 workspace-switch-order.test.tsx「文件监听跟随项目激活（watcher 上提）」；
+// 本文件仅保留 useFileTree 状态转换用例（loadRoot/toggleExpand/错误处理）。
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import React from "react";
-import { render, cleanup, renderHook, act } from "@testing-library/react";
+import { renderHook, act } from "@testing-library/react";
 
 // ─── 共享 mock（通过 setup.ts 注册到 globalThis，vi.hoisted 中可用）───
 import { mockEntry } from "./helpers/vfs";
@@ -50,237 +50,15 @@ vi.mock("../ipc/git", () => ({
   gitStatus: mocks.mockGitStatus,
 }));
 
-// 导入真实 stores + ExplorerPanel（在 IPC mock 之后）
-import { useProjects } from "../stores/projects";
-import { useLayout } from "../stores/layout";
-import { ExplorerPanel } from "../features/explorer";
+// 导入真实 stores + useFileTree（在 IPC mock 之后）
 import { useFileTree } from "../features/explorer/useFileTree";
-
-// ─── 辅助函数 ───
-
-function populateStore(rootPath = "C:\\test-project") {
-  useProjects.setState({
-    projects: {
-      "proj-1": {
-        projectId: "proj-1",
-        name: "测试项目",
-        rootPath,
-        pages: [
-          {
-            pageId: "page-1",
-            name: "操作页面 1",
-            layout: {},
-            cwd: `${rootPath}\\sub`,
-            createdAt: 1,
-            lastAccessedAt: 1,
-          },
-        ],
-        activePageId: "page-1",
-        version: 1,
-      },
-    },
-  });
-  useLayout.setState({ activePageId: "page-1" });
-}
-
-function resetStore() {
-  useProjects.setState({ projects: {} });
-  useLayout.setState({ activePageId: null });
-}
-
-function renderExplorer() {
-  return render(React.createElement(ExplorerPanel));
-}
 
 // ─── Tests ───
 
-describe("ExplorerPanel 文件监听集成", () => {
-  beforeEach(() => {
-    cleanup();
-    mocks.resetAll();
-    resetStore();
-  });
-
-  describe("startWatch 调用时机", () => {
-    it("1. 活跃项目存在时 → 调用 startWatch(projectRootPath)", () => {
-      populateStore("C:\\my-project");
-      renderExplorer();
-
-      expect(mocks.mockStartWatch).toHaveBeenCalledWith("C:\\my-project");
-      expect(mocks.mockStartWatch).toHaveBeenCalledTimes(1);
-    });
-
-    it("2. 无活跃项目时 → 不调用 startWatch", () => {
-      renderExplorer();
-
-      expect(mocks.mockStartWatch).not.toHaveBeenCalled();
-    });
-
-    it("3. 切换项目 → 为新项目根路径重新调用 startWatch", () => {
-      populateStore("C:\\project-a");
-      const { rerender } = renderExplorer();
-      expect(mocks.mockStartWatch).toHaveBeenCalledWith("C:\\project-a");
-
-      // 切换到 project-b
-      mocks.resetAll();
-      useProjects.setState({
-        projects: {
-          "proj-2": {
-            projectId: "proj-2",
-            name: "项目 B",
-            rootPath: "C:\\project-b",
-            pages: [
-              {
-                pageId: "page-2",
-                name: "页面 2",
-                layout: {},
-                cwd: "C:\\project-b",
-                createdAt: 2,
-                lastAccessedAt: 2,
-              },
-            ],
-            activePageId: "page-2",
-            version: 1,
-          },
-        },
-      });
-      useLayout.setState({ activePageId: "page-2" });
-      rerender(React.createElement(ExplorerPanel));
-
-      expect(mocks.mockStartWatch).toHaveBeenCalledWith("C:\\project-b");
-      // BE-10：切换项目时须停止旧路径监听
-      expect(mocks.mockStopWatch).toHaveBeenCalledWith("C:\\project-a");
-    });
-
-    it("4. startWatch 失败时 → 不抛错，静默 console.error", () => {
-      const consoleSpy = vi
-        .spyOn(console, "error")
-        .mockImplementation(() => {});
-      mocks.resetAll();
-      mocks.mockStartWatch.mockRejectedValueOnce(
-        new Error("路径不存在"),
-      );
-
-      populateStore("C:\\invalid");
-      expect(() => renderExplorer()).not.toThrow();
-
-      // 异步错误在 microtask 中捕获
-      expect(mocks.mockStartWatch).toHaveBeenCalled();
-      consoleSpy.mockRestore();
-    });
-  });
-
-  describe("projectRootPath 计算", () => {
-    it("5. cwd 和 rootPath 不同时 → 对 rootPath 启动监听（项目根）", () => {
-      useProjects.setState({
-        projects: {
-          "proj-3": {
-            projectId: "proj-3",
-            name: "深层项目",
-            rootPath: "D:\\repo-root",
-            pages: [
-              {
-                pageId: "page-3",
-                name: "子目录页面",
-                layout: {},
-                cwd: "D:\\repo-root\\src\\components",
-                createdAt: 3,
-                lastAccessedAt: 3,
-              },
-            ],
-            activePageId: "page-3",
-            version: 1,
-          },
-        },
-      });
-      useLayout.setState({ activePageId: "page-3" });
-      renderExplorer();
-
-      // 应传 rootPath 而非 cwd
-      expect(mocks.mockStartWatch).toHaveBeenCalledWith("D:\\repo-root");
-      expect(mocks.mockStartWatch).not.toHaveBeenCalledWith(
-        "D:\\repo-root\\src\\components",
-      );
-    });
-
-    it("6. 仅 rootPath、无 cwd → 使用 rootPath", () => {
-      useProjects.setState({
-        projects: {
-          "proj-4": {
-            projectId: "proj-4",
-            name: "无 cwd 项目",
-            rootPath: "E:\\bare-repo",
-            pages: [
-              {
-                pageId: "page-4",
-                name: "默认页面",
-                layout: {},
-                // cwd 为 undefined
-                createdAt: 4,
-                lastAccessedAt: 4,
-              },
-            ],
-            activePageId: "page-4",
-            version: 1,
-          },
-        },
-      });
-      useLayout.setState({ activePageId: "page-4" });
-      renderExplorer();
-
-      expect(mocks.mockStartWatch).toHaveBeenCalledWith("E:\\bare-repo");
-    });
-  });
-
-  describe("stopWatch 调用时机（BE-10）", () => {
-    it("7. 项目移除（activePageId 置空）→ 停止旧路径监听，不启动新监听", () => {
-      populateStore("C:\\project-a");
-      const { rerender } = renderExplorer();
-      expect(mocks.mockStartWatch).toHaveBeenCalledWith("C:\\project-a");
-
-      mocks.resetAll();
-      resetStore();
-      rerender(React.createElement(ExplorerPanel));
-
-      expect(mocks.mockStopWatch).toHaveBeenCalledWith("C:\\project-a");
-      expect(mocks.mockStartWatch).not.toHaveBeenCalled();
-    });
-
-    it("8. 组件卸载 → 停止当前路径监听", () => {
-      populateStore("C:\\project-a");
-      const { unmount } = renderExplorer();
-
-      mocks.resetAll();
-      unmount();
-
-      expect(mocks.mockStopWatch).toHaveBeenCalledWith("C:\\project-a");
-    });
-
-    it("9. stopWatch 失败时 → 不抛错，静默 console.error", () => {
-      const consoleSpy = vi
-        .spyOn(console, "error")
-        .mockImplementation(() => {});
-      populateStore("C:\\project-a");
-      const { unmount } = renderExplorer();
-
-      mocks.resetAll();
-      mocks.mockStopWatch.mockRejectedValueOnce(new Error("watcher 不存在"));
-      expect(() => unmount()).not.toThrow();
-
-      expect(mocks.mockStopWatch).toHaveBeenCalledWith("C:\\project-a");
-      consoleSpy.mockRestore();
-    });
-
-    it("10. 无活跃项目挂载再卸载 → 不调用 stopWatch", () => {
-      const { unmount } = renderExplorer();
-      mocks.resetAll();
-      unmount();
-
-      expect(mocks.mockStopWatch).not.toHaveBeenCalled();
-      expect(mocks.mockStartWatch).not.toHaveBeenCalled();
-    });
-  });
-});
+// watcher 生命周期用例（startWatch/stopWatch 时机、projectRootPath 推导、
+// 卸载清理）已随 watcher 上提至 Workspace 项目激活层迁移——
+// 见 workspace-switch-order.test.tsx「文件监听跟随项目激活（watcher 上提）」；
+// 本文件仅保留 fs-event 消费与 useFileTree 状态转换用例。
 
 // ═══════════════════════════════════════════════════════════
 // P2-50: useFileTree hook 测试 — loadRoot / toggleExpand / loadChildren 状态转换

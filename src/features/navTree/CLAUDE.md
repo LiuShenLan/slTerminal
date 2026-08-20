@@ -22,7 +22,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 展开状态**组件内维护**（不进 store）：`expanded`（项目/页面）与 `expandedHist`（历史节点）两个 Set，**默认空 = 全部收起**
 - **NAV-10 契约**：历史节点**常驻项目下**（不随项目展开态隐藏）——计数 pill 与历史行入口恒可见；测试辅助 `expandTo` 按点击展开驱动。历史节点外包 `childrenStyle` 容器（与页面同级缩进，人工验证问题 2）——容器常驻（不随展开态隐藏），项目容器 children 收起时 = [项目行, 历史容器]、展开时 = [项目行, 页面容器, 历史容器]（E2E agent.e2e.ts 计数判定兼容）
 - **搜索**：query 子串不区分大小写过滤项目/页面/会话名；父节点因子命中而显示（match 链）；**查询非空时命中链自动展开**（searching 覆盖手动展开态）
-- **挂载即扫描历史**（NAV-10：历史计数 pill 首屏可见）；历史节点**展开不重复 scan（FE-19）**——BE-19 后端 (目录 mtime, 文件数) 缓存命中复用不重复读盘；显式刷新/恢复完成场景经 `scanAgentHistory(cliId, force=true)` 强制重扫（`useAgentHistory` generation 防竞兜底）
+- **挂载即扫描历史**（NAV-10：历史计数 pill 首屏可见）；历史节点**展开不重复 scan（FE-19）**——BE-19 后端 (目录 mtime, 文件数) 缓存命中复用不重复读盘；**刷新钮 = `history.scan(true)`（force=true 已接线**——绕过后端缓存强制重扫，空结果永久命中场景必须 bypass；`useAgentHistory` generation 防竞兜底）
 
 ### 行结构契约（UI-501/502/503，navStyles.ts）
 
@@ -52,7 +52,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 |------|------|
 | `index.ts` | barrel export：NavTree + makeEmptyLayout + useNavTree + 行组件 + NavContextMenu + 类型 |
 | `NavTree.tsx` | 主组件（`nav` 视图，NAV-05）：顶部分组标题「导航」（11px 全大写 0.08em fg-3）+ 刷新钮（重扫历史）+ 搜索框（INPUT_BG 底圆角 5、focus 描边 FOCUS_BORDER）+ 树区 + 底部「添加项目」钮；右键菜单（项目/页面/历史行共用 NavContextMenu）+ 运行中历史会话动作弹窗（SessionActionDialog）；**`makeEmptyLayout()` 导出（迁自 SidebarTree）**；props 可选（switchToPage/onDeletePage 缺省回退 store 级操作，NAV-10 契约：独立渲染 `<NavTree />` 无 props） |
-| `useNavTree.ts` | 数据 hook：tree 模型派生（搜索过滤 + 归属归组 + 页面级 active 会话标记）+ expanded/expandedHist 展开集合 + `isCwdUnderProject` 纯函数；**FE-16 历史归属索引**：规范化 rootPath → projectId 一次建表（`rootPathIndex` Map，O(1) 查表替代 O(N×M) 逐会话前缀匹配，`projectIdForCwd` 沿 cwd 逐级上溯查表——最深前缀命中，嵌套项目归子项；useMemo 依赖精确化——只依赖 sessions + 索引，项目页增删不重算归组）；**FE-19**：`refresh()` 注释登记 force 语义透传（`scanAgentHistory(cliId, force)`） |
+| `useNavTree.ts` | 数据 hook：tree 模型派生（搜索过滤 + 归属归组 + 页面级 active 会话标记）+ expanded/expandedHist 展开集合 + `isCwdUnderProject` 纯函数；**FE-16 历史归属索引**：规范化 rootPath → projectId 一次建表（`rootPathIndex` Map，O(1) 查表替代 O(N×M) 逐会话前缀匹配，`projectIdForCwd` 沿 cwd 逐级上溯查表——最深前缀命中，嵌套项目归子项；useMemo 依赖精确化——只依赖 sessions + 索引，项目页增删不重算归组）；**FE-19**：`refresh()` = `history.scan(true)`（force=true 绕过后端缓存强制重扫——显式刷新语义） |
 | `NavProjectRow.tsx` | 项目行（NAV-09/UI-505）：500 字重 + 彩色文件夹图标（六色盘蓝硬编码例外）+「当前」pill + 页面计数 pill |
 | `NavPageRow.tsx` | 操作页面行（UI-501）：chevron/IconPage 图标/名称/meta + 内联重命名（迁自 SidebarTree PageRow） |
 | `NavSessionRow.tsx` | 活跃会话行（NAV-02/UI-504）：StatusDot + logo + 迷你用量条 + 百分比，点击聚焦终端 |

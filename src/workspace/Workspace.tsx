@@ -49,6 +49,7 @@ import { useLayout } from "../stores/layout";
 import { allotmentVarStyle } from "../theme";
 import { ErrorBoundary, E2E_ENABLED, toast } from "../lib";
 import { setProjectRoot } from "../ipc/fs";
+import { startWatch, stopWatch } from "../ipc/notify";
 import { markWorkspaceReady } from "../../e2e-tests/helpers";
 
 declare global {
@@ -229,6 +230,10 @@ const Workspace: React.FC = () => {
   }, [activePageId, ensurePageInitialized]);
 
   // SEC-01: 活动项目变化时同步项目根路径到后端（路径沙箱边界）
+  // 文件监听（fs-event）跟随项目激活——宿主从 ExplorerPanel 上提到本项目激活层：
+  // 编辑器外部修改 reload / commit 面板刷新等消费方依赖 fs-event，
+  // 不依赖 explorer 视图是否打开（E2E editor auto-reload 失败根因修复）。
+  // ExplorerPanel 不再管理 watcher（防双管理互停），统一由本 effect 单点负责。
   const prevRootRef = useRef<string | null>(null);
   useEffect(() => {
     if (!activePageId) return;
@@ -237,12 +242,15 @@ const Workspace: React.FC = () => {
     for (const [, proj] of Object.entries(currentProjects)) {
       if (proj.pages.some((p) => p.pageId === activePageId)) {
         if (proj.rootPath && proj.rootPath !== prevRootRef.current) {
+          const prev = prevRootRef.current;
           prevRootRef.current = proj.rootPath;
+          if (prev) void stopWatch(prev);
           setProjectRoot(proj.rootPath).catch((err) => {
             console.error("[slTerminal] 设置项目根路径失败:", err);
             // FE-04（D7）：SEC-01 兜底失败时 toast 告警，不阻断切换
             toast.show("warning", "项目根路径设置失败，文件操作可能被拒绝");
           });
+          void startWatch(proj.rootPath);
         }
         break;
       }

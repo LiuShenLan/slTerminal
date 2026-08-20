@@ -16,7 +16,7 @@
 //   - 右键菜单（NAV-06）：承接 SidebarTree 菜单但删除「打开 Hooks 配置」项（入口唯一化）
 //
 // Mock 策略（照 src/__tests__/ 既有种子模式——agent-status-view.test.tsx 先例）：
-//   - useAgentStatus / ipc/agentHistory（scanHistory）模块级 vi.mock + vi.hoisted 状态；
+//   - useAgentStatus / ipc/agentHistory（scanAgentHistory）模块级 vi.mock + vi.hoisted 状态；
 //   - stores/projects、stores/layout 真实 store + setState 种子；
 //   - StatusDot mock 为可识别 span（data-testid="status-dot"，只断言接线不依赖其内部 DOM）；
 //   - TerminalRegistry / workspace/pageApis / restoreSession mock。
@@ -53,7 +53,7 @@ vi.mock("../features/agentStatus/useAgentStatus", () => ({
 
 // agentHistory scan mock（真实 useAgentHistory 的唯一外部数据源，照 agent-status-view 先例）
 vi.mock("../ipc/agentHistory", () => ({
-  scanHistory: mockScanHistory,
+  scanAgentHistory: mockScanHistory,
   deleteHistorySession: vi.fn(),
 }));
 

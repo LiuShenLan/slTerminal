@@ -10,7 +10,6 @@ import React, { useEffect, useCallback, useState, useRef, useMemo } from "react"
 import { useFileTree } from "./useFileTree";
 import { FileTree } from "./FileTree";
 import { createDir, deleteEntry, rename, writeFile } from "../../ipc/fs";
-import { startWatch, stopWatch } from "../../ipc/notify";
 import { useProjects } from "../../stores/projects";
 import { useLayout } from "../../stores/layout";
 import { titleManager } from "../../workspace/titleManager";
@@ -179,29 +178,9 @@ export const ExplorerPanel: React.FC = () => {
 
   usePanelFocus("explorer", containerRef.current, activate, deactivate);
 
-  // 已启动监听的项目根路径（ref 追踪——供 effect cleanup 停止旧 watcher，BE-10）
-  const watchedRootRef = useRef<string | null>(null);
-
-  // 项目根路径变化时启动文件监听（后端 emit fs-event → 前端增量刷新）；
-  // 旧路径监听由 effect cleanup 停止（React 重跑 effect 前先执行上一轮 cleanup），
-  // 覆盖路径切换/项目移除/组件卸载三场景——防旧 watcher 残留占用至 LRU 淘汰
-  useEffect(() => {
-    watchedRootRef.current = projectRootPath;
-    if (projectRootPath) {
-      startWatch(projectRootPath).catch((err) =>
-        console.error("启动文件监听失败:", err),
-      );
-    }
-    return () => {
-      const prev = watchedRootRef.current;
-      if (prev) {
-        watchedRootRef.current = null;
-        stopWatch(prev).catch((err) =>
-          console.error("停止文件监听失败:", err),
-        );
-      }
-    };
-  }, [projectRootPath]);
+  // 文件监听已上提至 Workspace 项目激活层（SEC-01 effect）——fs-event 消费方
+  // （编辑器外部修改 reload/commit 面板）不依赖 explorer 视图打开；本组件仅消费
+  // onFsEvent 增量刷新，不再管理 watcher 生命周期（防双管理互停）。
 
   // rootPath 变化时重置选中和重命名状态
   useEffect(() => {

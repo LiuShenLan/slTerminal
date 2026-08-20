@@ -26,6 +26,8 @@ xterm.js 不支持 `term.open()` 二次调用（GitHub Issue #4978）。因此�
 
 **检测不带 `failIfMajorPerformanceCaveat`（FE-26）**：该标志在 Chromium GPU blocklist 场景（老 Intel 核显驱动常见）下连同软件渲染一并拒绝 → DOM renderer 回退 → 快滚整屏重绘掉帧（慢滚增量更新正常，Win10 + UHD 630 实机症状）。xterm WebGL 负载低，SwiftShader 软件渲染亦远快于 DOM renderer 全帧重建——勿加回该标志；DOM renderer 保留为 context loss 重试耗尽后的兜底（`detect-webgl.test.ts` 用例 4 守卫）。
 
+**加载时序约束（win10 纯黑屏根因，FE-34 修复）**：`setupWebglWithRetry` 必须在 `term.open(container)` **之后**调用——WebGL 渲染器需要挂载后的 canvas；先加载会绑定空 canvas → 静默黑渲染且不触发 context loss 兜底（win10 终端纯黑屏人工验证问题根因，`terminal-instance.test.ts` 用例 7 以调用序锁死）。`tryLoadWebgl`（可见性恢复路径）天然满足（主 effect 先 open 后加载）。
+
 ### PTY spawn 等待布局就绪
 
 `useXterm` 挂载后不立即 spawn PTY，而是 rAF 轮询容器 `offsetWidth > 0`（最多 30 帧 / 500ms），然后 fit + proposeDimensions 获取实际字符尺寸，以真实 `cols × rows` 调用 `pty.spawn()`。超时回退 80×24。

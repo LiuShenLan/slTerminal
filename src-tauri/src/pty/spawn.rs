@@ -41,11 +41,11 @@ pub mod conpty_custom {
     use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
     use std::sync::{Arc, Mutex};
     use windows::core::{PCWSTR, PWSTR};
-    use windows::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0};
+    use windows::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
     use windows::Win32::System::Console::{COORD, HPCON, PSEUDOCONSOLE_INHERIT_CURSOR};
     use windows::Win32::System::Threading::{
         CreateProcessW, DeleteProcThreadAttributeList, InitializeProcThreadAttributeList,
-        UpdateProcThreadAttribute, WaitForSingleObject, EXTENDED_STARTUPINFO_PRESENT,
+        UpdateProcThreadAttribute, EXTENDED_STARTUPINFO_PRESENT,
         LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_CREATION_FLAGS, PROCESS_INFORMATION,
         STARTF_USESTDHANDLES, STARTUPINFOEXW,
     };
@@ -278,21 +278,41 @@ pub mod conpty_custom {
         }
     }
 
-    /// raw 句柄的 Send 包装——仅用于 WaitForSingleObject 非阻塞查询（BE-05）。
+    /// raw 句柄的 Send 包装——仅用于 PeekNamedPipe 非阻塞查询（BE-05 微批续读）。
     /// 句柄所有权由 reader（FileDescriptor）持有，本包装只引用同一内核对象，
     /// 不负责关闭；跨线程仅查询不释放，故 Send 安全。
     struct SendRawHandle(std::os::windows::io::RawHandle);
     // SAFETY: 句柄生命周期由 reader 端 FileDescriptor 保证（克隆句柄引用同一
-    // 内核对象），本方法仅做 WaitForSingleObject 查询（0ms 非阻塞），无所有权、
+    // 内核对象），本方法仅做 PeekNamedPipe 查询（同步非阻塞），无所有权、
     // 无关闭语义——跨线程传递安全。
     unsafe impl Send for SendRawHandle {}
     unsafe impl Sync for SendRawHandle {}
 
     impl SendRawHandle {
-        /// 非阻塞查询管道是否有可读数据（有数据或对端关闭均视为 true——
-        /// 后者由后续阻塞 read 返回 Ok(0) EOF 兜底）
-        fn is_readable(&self) -> bool {
-            unsafe { WaitForSingleObject(HANDLE(self.0), 0) == WAIT_OBJECT_0 }
+        /// 非阻塞查询管道可读字节数（微批续读决策用）
+        ///
+        /// 用 PeekNamedPipe（同步查询，与后续 read 同一管道状态视角，零竞态）
+        /// 替代旧 WaitForSingleObject 信号检查——匿名管道读端的信号在数据
+        /// 被读走后存在 reset 延迟（经典竞态）：误报「有数据」→ 微批续读的
+        /// 阻塞 read 空等 → reader 线程卡死 → 该终端永久无输出（E2E 全部终端
+        /// 文本为空 + win10 黑屏根因）。Peek 返回当前可读字节数，为 0 即不续读，
+        /// 不存在信号时序窗口。对端关闭时 Peek 返回 0，由后续 read Ok(0) EOF 兜底。
+        fn pending_bytes(&self) -> u32 {
+            use windows::Win32::System::Pipes::PeekNamedPipe;
+            let mut avail: u32 = 0;
+            unsafe {
+                // PeekNamedPipe 失败（句柄无效等异常）→ 视为无数据（0），
+                // 不续读——由主循环 read 走 Err/EOF 分支兜底，不卡死
+                let _ = PeekNamedPipe(
+                    HANDLE(self.0),
+                    None,
+                    0,
+                    None,
+                    Some(&mut avail),
+                    None,
+                );
+            }
+            avail
         }
     }
 
@@ -316,7 +336,7 @@ pub mod conpty_custom {
         // raw 指针需 Send 包装才能跨线程（HANDLE 未实现 Send）；经方法调用捕获
         // 整个包装（路径捕获 handle.0 会退化为捕获 raw 指针本身）
         let handle = SendRawHandle(read_end.as_raw_handle());
-        let pending: Box<dyn Fn() -> bool + Send> = Box::new(move || handle.is_readable());
+        let pending: Box<dyn Fn() -> bool + Send> = Box::new(move || handle.pending_bytes() > 0);
         Ok(crate::pty::reader::PtyReaderInput::new(
             Box::new(read_end),
             pending,
@@ -896,6 +916,57 @@ pub mod conpty_custom {
             let size = master.get_size().unwrap();
             assert_eq!(size.rows, 40, "多次 resize 后 rows 应持续更新");
             assert_eq!(size.cols, 120, "多次 resize 后 cols 应持续更新");
+        }
+
+        // ─── T9: SendRawHandle::pending_bytes（BE-05 微批续读——S06 信号竞态修复回归）───
+        // 旧实现 WaitForSingleObject(handle, 0)：数据被读走后信号 reset 存在延迟，
+        // 误报「有数据」→ 微批续读的阻塞 read 空等 → reader 线程卡死 → 该终端
+        // 永久无输出（E2E 全部终端文本为空 + win10 黑屏根因）。PeekNamedPipe
+        // 同步查询可读字节数，无信号时序窗口。本用例锁死新语义。
+
+        #[cfg(windows)]
+        #[test]
+        fn pending_bytes_reflects_pipe_data_availability() {
+            use std::io::{Read, Write};
+            use std::os::windows::io::AsRawHandle;
+
+            let mut pipe = Pipe::new().unwrap();
+            let handle = SendRawHandle(pipe.read.as_raw_handle());
+
+            // 空管道 → 0
+            assert_eq!(handle.pending_bytes(), 0, "空管道应无待读数据");
+
+            // 写入数据 → >0
+            pipe.write.write_all(b"hello").unwrap();
+            assert!(handle.pending_bytes() > 0, "有数据时应报告可读");
+
+            // 读走后 → 0（Peek 同步查询，无信号 reset 竞态窗口——修复点）
+            let mut buf = [0u8; 64];
+            let n = pipe.read.read(&mut buf).unwrap();
+            assert_eq!(n, 5);
+            assert_eq!(
+                handle.pending_bytes(),
+                0,
+                "数据读走后应立即返回 0（旧 WaitForSingleObject 存在 reset 延迟误报）"
+            );
+
+            // 再写再读（模拟启动序列后的正常续读节奏）
+            pipe.write.write_all(b"more data").unwrap();
+            assert!(handle.pending_bytes() > 0);
+            let mut buf2 = [0u8; 64];
+            let n2 = pipe.read.read(&mut buf2).unwrap();
+            assert_eq!(n2, 9);
+            assert_eq!(handle.pending_bytes(), 0);
+
+            // 写端关闭：数据读完 → 0（EOF 由主循环 read Ok(0) 兜底）
+            drop(pipe.write);
+            let mut rest = Vec::new();
+            pipe.read.read_to_end(&mut rest).unwrap();
+            assert_eq!(
+                handle.pending_bytes(),
+                0,
+                "对端关闭且数据读完 → 0（不误报有数据）"
+            );
         }
     }
 }

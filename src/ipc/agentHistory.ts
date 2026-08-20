@@ -21,14 +21,10 @@ export async function scanAgentHistory(
 }
 
 /**
- * 扫描全部历史会话（无参聚合——useAgentHistory 聚合入口，走后端缓存默认路径）
- *
- * 与 scanAgentHistory 同命令，不带 cliId/force（后端缺省 = 全部 provider + 缓存命中）；
- * 保留为兼容导出（聚合 hook 消费），显式刷新经 scanAgentHistory(cliId, force)。
+ * 删除说明：无参聚合导出 scanHistory 已删除（契约断链修复）——后端
+ * agent_history_scan 的 cli_id 为必填参数（S12 起），无参 invoke 恒被
+ * 反序列化拒绝（历史区「暂无历史会话」根因）。消费方统一经 scanAgentHistory。
  */
-export async function scanHistory(): Promise<AgentHistorySession[]> {
-  return invoke("agent_history_scan");
-}
 
 /**
  * 删除指定历史会话（transcript jsonl + 同名目录）

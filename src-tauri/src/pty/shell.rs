@@ -69,14 +69,14 @@ pub(crate) fn validate_shell_allowlist(program: &str) -> Result<(), AppError> {
     }
 
     // SEC-01: 含路径分隔符——只信任 PATH 解析出的真实路径。
-    // canonicalize 用户路径后与 which_full_path(文件名) 解析结果比对，一致才放行。
-    let canonical_user = std::fs::canonicalize(program)
-        .map_err(|e| AppError::Pty(format!("shell 路径解析失败: {program}: {e}")))?;
+    // canonicalize 用户路径后与 which_full_path(文件名) 解析结果比对，一致才放行；
+    // canonicalize 失败（应用执行别名/特殊 ACL——CreateProcess 可运行但普通文件
+    // API 打开失败，os error 1920 场景）回退归一字符串比对，不因此拒绝合法 shell。
     let resolved = match which_full_path(filename) {
         Some(path) => path,
         // 系统目录兜底：PATH 解析失败时，%SystemRoot%\System32\<文件名> 放行——
         // resolve_shell_info 的 cmd 回退（PATH 不含 System32）即用该路径，
-        // 系统目录二进制可信，canonicalize 比对一致即放行。
+        // 系统目录二进制可信，比对一致即放行。
         None => match system32_exe_path(filename) {
             Some(path) => path,
             None => {
@@ -86,24 +86,50 @@ pub(crate) fn validate_shell_allowlist(program: &str) -> Result<(), AppError> {
             }
         },
     };
-    let canonical_resolved = std::fs::canonicalize(&resolved)
-        .map_err(|e| AppError::Pty(format!("PATH 解析路径解析失败: {resolved}: {e}")))?;
-
-    // Windows 文件系统大小写不敏感，canonicalize 结果亦可能大小写不同，故忽略大小写比较
-    let matched = if cfg!(windows) {
-        canonical_user
-            .to_string_lossy()
-            .eq_ignore_ascii_case(&canonical_resolved.to_string_lossy())
-    } else {
-        canonical_user == canonical_resolved
-    };
-    if !matched {
+    if !paths_match(program, &resolved) {
         return Err(AppError::Pty(format!(
             "不允许的 shell 程序: {program}。仅支持 PATH 解析出的 pwsh.exe, powershell.exe, cmd.exe"
         )));
     }
 
     Ok(())
+}
+
+/// 比较 program 与 PATH 解析结果是否指向同一可执行文件（SEC-01 判定核心）
+///
+/// 优先 canonicalize 精确比较（拉平 8.3 短名/`..`/symlink 差异）；
+/// 任一侧 canonicalize 失败（应用执行别名/特殊 ACL——CreateProcess 可运行但
+/// 普通文件 API 打开失败，os error 1920 场景）回退归一字符串比较：
+/// Windows 大小写不敏感文件系统下，归一化后字符串相等的两路径必然指向
+/// 同一文件，安全语义不弱化（伪造路径与 PATH 解析结果字符串必不同，仍拒绝）。
+fn paths_match(program: &str, resolved: &str) -> bool {
+    // 1) canonicalize 双成功 → 精确比较（8.3 短名/`..`/symlink 差异由系统拉平）
+    if let (Ok(cp), Ok(cr)) = (std::fs::canonicalize(program), std::fs::canonicalize(resolved)) {
+        return if cfg!(windows) {
+            cp.to_string_lossy().eq_ignore_ascii_case(&cr.to_string_lossy())
+        } else {
+            cp == cr
+        };
+    }
+    // 2) fallback：分隔符归一 + 去尾分隔符后比对（Windows 忽略大小写）
+    let a = normalize_for_compare(program);
+    let b = normalize_for_compare(resolved);
+    if cfg!(windows) {
+        a.eq_ignore_ascii_case(&b)
+    } else {
+        a == b
+    }
+}
+
+/// 路径归一化（canonicalize 失败时的字符串比对用）：`/`→`\`、去尾分隔符
+fn normalize_for_compare(p: &str) -> String {
+    if cfg!(windows) {
+        p.replace('/', "\\")
+            .trim_end_matches(['\\', '/'])
+            .to_string()
+    } else {
+        p.trim_end_matches('/').to_string()
+    }
 }
 
 /// 解析 shell 程序，返回已配置好参数的基础 CommandBuilder
@@ -467,6 +493,117 @@ mod tests {
             .to_string_lossy()
             .into_owned();
         validate_shell_allowlist(&legit).expect("与 PATH 解析结果一致的绝对路径应放行");
+    }
+
+    // ── paths_match 纯函数测试（SEC-01 alias 兼容修复）──
+    //
+    // paths_match 两层判定：canonicalize 双成功 → 精确比较；任一侧失败 →
+    // 归一字符串比较。fallback 用例用「不存在的路径」构造 canonicalize 双失败
+    // （alias 场景等价——alias 文件 exists 为真但普通文件 API 打开失败，
+    // canonicalize 同失败，代码路径一致；纯函数层不依赖文件系统权限）。
+
+    #[test]
+    fn test_paths_match_canonical_equal() {
+        // canonicalize 双成功 → 精确比较：同一文件大小写变体相等
+        let dir = tempfile::tempdir().unwrap();
+        fake_exe(dir.path(), "cmd.exe");
+        let p = dir.path().join("cmd.exe").to_string_lossy().into_owned();
+        let upper = dir.path().join("CMD.EXE").to_string_lossy().into_owned();
+        assert!(paths_match(&p, &upper), "canonicalize 成功时大小写变体应相等");
+        assert!(paths_match(&p, &p));
+    }
+
+    #[test]
+    fn test_paths_match_canonical_unequal() {
+        // 两个不同 tempdir 文件 → false
+        let d1 = tempfile::tempdir().unwrap();
+        let d2 = tempfile::tempdir().unwrap();
+        fake_exe(d1.path(), "cmd.exe");
+        fake_exe(d2.path(), "cmd.exe");
+        let p1 = d1.path().join("cmd.exe").to_string_lossy().into_owned();
+        let p2 = d2.path().join("cmd.exe").to_string_lossy().into_owned();
+        assert!(!paths_match(&p1, &p2));
+    }
+
+    #[test]
+    fn test_paths_match_fallback_case_insensitive() {
+        // canonicalize 双失败（应用执行别名场景等价）→ fallback 忽略大小写
+        let alias = r"C:\Users\x\AppData\Local\Microsoft\WindowsApps\pwsh.exe";
+        let lower = r"c:\users\x\appdata\local\microsoft\windowsapps\pwsh.exe";
+        assert!(
+            paths_match(alias, lower),
+            "fallback 应忽略大小写（Windows 大小写不敏感文件系统）"
+        );
+    }
+
+    #[test]
+    fn test_paths_match_fallback_separator_normalization() {
+        // 分隔符归一：/ 与 \ 写法指向同一路径；尾部分隔符容忍
+        let a = r"C:/no-such-dir-x/cmd.exe";
+        let b = r"C:\no-such-dir-x\cmd.exe";
+        assert!(paths_match(a, b), "fallback 应归一化路径分隔符");
+        assert!(paths_match(r"C:\no-such-dir-x\cmd.exe\", b));
+    }
+
+    #[test]
+    fn test_paths_match_fallback_unequal() {
+        // 两个不同的不存在路径 → false（伪造路径仍拒绝）
+        assert!(!paths_match(r"C:\a\b\cmd.exe", r"C:\a\c\cmd.exe"));
+    }
+
+    // ── validate_shell_allowlist alias 兼容集成测试 ──
+
+    #[test]
+    fn test_allowlist_nonexistent_absolute_path_rejects_with_unified_message() {
+        // canonicalize 失败 + fallback 不匹配 → Err 且消息为「不允许的 shell 程序」
+        //（钉死新错误契约：canonicalize 失败不再产出「shell 路径解析失败」文案）
+        let result = validate_shell_allowlist(r"C:\Windows\System32\__nope__\cmd.exe");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("不允许的 shell 程序"),
+            "错误消息应为统一文案，实际: {msg}"
+        );
+        assert!(
+            !msg.contains("shell 路径解析失败"),
+            "不应再出现 canonicalize 失败文案，实际: {msg}"
+        );
+    }
+
+    // ── 真实应用执行别名测试（SEC-01 alias 兼容，Windows 专属条件测试）──
+    //
+    // 应用执行别名的「exists 为真、canonicalize 失败（os error 1920）」属性
+    // 无法用 tempdir 模拟（Rust std canonicalize 对非 reparse 路径不做句柄打开，
+    // 锁定文件无法触发失败）。改用真实环境条件测试：本机装有 Store 版应用
+    // （如 MSIX 安装的 PowerShell 7）时 `%LOCALAPPDATA%\Microsoft\WindowsApps\`
+    // 下的 pwsh.exe 即真实 alias——PATH 收敛到该目录后，which_full_path 命中
+    // alias → canonicalize 失败 → fallback 字符串比对放行。无 alias 的机器
+    // （如 CI runner）条件不满足，用例空跑不失败。
+
+    #[cfg(windows)]
+    #[test]
+    fn test_allowlist_accepts_real_alias_when_present() {
+        use std::path::PathBuf;
+
+        let alias_dir = std::env::var("LOCALAPPDATA")
+            .map(|p| PathBuf::from(p).join("Microsoft").join("WindowsApps"))
+            .ok();
+        let alias = alias_dir.map(|d| d.join("pwsh.exe"));
+        if let Some(a) = alias {
+            if !a.exists() {
+                return; // 本机无 Store 版 pwsh（无应用执行别名）→ 条件不满足空跑
+            }
+            let _guard = set_test_path(&[a.parent().expect("alias 目录")]);
+            // PATH 收敛到 alias 目录后，which_full_path 首匹配即 alias 本身
+            assert_eq!(
+                which_full_path("pwsh.exe").as_deref(),
+                Some(a.to_str().expect("alias 路径为 UTF-8")),
+                "PATH 收敛后应命中 alias"
+            );
+            // canonicalize(alias) 失败（os error 1920）→ fallback 字符串比对放行
+            let s = a.to_string_lossy().into_owned();
+            validate_shell_allowlist(&s).expect("真实 alias 路径应放行（canonicalize 失败 fallback）");
+        }
     }
 
     // ── PATH 可控测试辅助（PTY-06/PTY-10/PTY-13③）──

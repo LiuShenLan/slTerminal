@@ -47,6 +47,7 @@ global.ResizeObserver = class ResizeObserver {
 const mocks = vi.hoisted(() => {
   const fs = __createFsMocks();
   const git = __createGitMocks();
+  const notify = __createNotifyMocks();
 
   // setProjectRoot 手动控制 promise
   let resolveSPR!: (value: void) => void;
@@ -79,11 +80,15 @@ const mocks = vi.hoisted(() => {
     get resolveSetProjectRoot() { return () => { resolveSPR(); }; },
     get rejectSetProjectRoot() { return (err?: unknown) => { rejectSPR(err); }; },
     get mockToast() { return mockToast; },
+    get mockStartWatch() { return notify.startWatch; },
+    get mockStopWatch() { return notify.stopWatch; },
     resetDeferred() { resetDeferred(); calledCount = 0; wrappedSetProjectRoot.mockClear(); },
     get calledCount() { return calledCount; },
     resetAll() {
       fs.readDir.mockReset();
       git.gitStatus.mockReset();
+      notify.startWatch.mockReset();
+      notify.stopWatch.mockReset();
       mockToast.show.mockClear();
       resetDeferred();
     },
@@ -111,7 +116,13 @@ vi.mock("../lib", async (importOriginal) => {
   return { ...actual, toast: mocks.mockToast };
 });
 
-// setup.ts 已全局 mock ../ipc/notify
+// setup.ts 已全局 mock ../ipc/notify——本文件覆盖为可断言实例
+// （watcher 上提后 startWatch/stopWatch 由 Workspace 项目激活层调用）
+vi.mock("../ipc/notify", () => ({
+  startWatch: mocks.mockStartWatch,
+  stopWatch: mocks.mockStopWatch,
+  onFsEvent: vi.fn(() => () => {}),
+}));
 
 import Workspace from "../workspace/Workspace";
 import { useProjects, type OperationPage } from "../stores/projects";
@@ -266,6 +277,66 @@ describe("DBG-9: switchToPage 时序", () => {
       await waitFor(() => {
         expect(mocks.mockSetProjectRoot).toHaveBeenCalledWith(rootPath);
       });
+    });
+  });
+
+  describe("文件监听跟随项目激活（watcher 上提——E2E editor auto-reload 根因修复）", () => {
+    // watcher 生命周期从 ExplorerPanel 上提到 Workspace 项目激活层：
+    // 编辑器外部修改 reload / commit 面板刷新依赖 fs-event，
+    // 不依赖 explorer 视图是否打开（explorer 关闭时 watcher 缺失根因）。
+    it("项目激活 → startWatch(rootPath)（与 setProjectRoot 同 effect）", async () => {
+      mockIPC(() => null);
+      mocks.resetDeferred();
+      const { rootPath } = seedTwoPageProject();
+
+      render(<Workspace />);
+
+      await waitFor(() => {
+        expect(mocks.mockSetProjectRoot).toHaveBeenCalledWith(rootPath);
+      });
+      expect(mocks.mockStartWatch).toHaveBeenCalledWith(rootPath);
+    });
+
+    it("切换项目 → stopWatch(旧) + startWatch(新)（BE-10 成对语义）", async () => {
+      mockIPC(() => null);
+      mocks.resetDeferred();
+      const { rootPath } = seedTwoPageProject();
+      render(<Workspace />);
+      await waitFor(() => {
+        expect(mocks.mockStartWatch).toHaveBeenCalledWith(rootPath);
+      });
+
+      // 切换到另一项目（rootPath 不同）
+      mocks.resetAll();
+      useProjects.getState().addProject({
+        projectId: "proj-other",
+        name: "其他项目",
+        rootPath: "C:\\other-root",
+        pages: [
+          {
+            pageId: "page-other",
+            name: "其他页面",
+            layout: {},
+            cwd: "C:\\other-root",
+            createdAt: 9,
+            lastAccessedAt: 9,
+          },
+        ],
+        activePageId: "page-other",
+        version: 1,
+      });
+      useLayout.setState({ activePageId: "page-other" });
+
+      await waitFor(() => {
+        expect(mocks.mockStopWatch).toHaveBeenCalledWith(rootPath);
+        expect(mocks.mockStartWatch).toHaveBeenCalledWith("C:\\other-root");
+      });
+    });
+
+    it("无活跃项目 → 不调用 startWatch", () => {
+      mockIPC(() => null);
+      render(<Workspace />);
+      expect(mocks.mockStartWatch).not.toHaveBeenCalled();
     });
   });
 
