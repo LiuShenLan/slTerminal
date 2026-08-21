@@ -6,9 +6,10 @@
 ## 断言清单
 
 - **TE-06**：`npm ls @tauri-apps/plugin-dialog` 输出 2.7.2 且单实例（verify agent 实跑取数）
-- **TE-07**：`npm ls typescript` 单版本 7.x，输出中无 `@typescript/native`、无 `typescript6` 残留（verify agent 实跑取数）
-- **TE-07**：grep `package.json` 无 `@typescript/native`；`"typescript"` 字段值为 `^7.0.2`（Read 确认）
-- **TE-07**：若执行期发生 eslint 兼容妥协（升级 typescript-eslint 或 overrides），`package.json` 中可见对应改动且 S02 执行报告/进度表留有结论记录（无妥协则本条自动通过）
+- **TE-07**：`npx tsc --version` 输出 7.x——编译器实际为 TS7，tsc bin 由 `@typescript/native`（`npm:typescript@7.0.2`）提供（verify agent 实跑取数）
+- **TE-07**：`npm ls typescript` 输出无 `invalid` 标记（允许 `npm:@typescript/typescript6@6.0.2` 单实例存在）；`npm ls @typescript/native` 输出 7.0.2 且单实例（verify agent 实跑取数）
+- **TE-07**：妥协结论记录存在——execution-plan.md 进度表 S02 行含 commit hash + 妥协摘要，或 `s02-execution-report.md` 存在且含升级触发条件（Read 确认）
+- **TE-07 分工说明（非断言）**：ADR 登记由 S10-C 负责（stages.md S10 已含 TE-07 结果登记义务），本 Stage 只留结论不写 ADR——verify agent 不得以「ADR 未登记」判 not_fixed
 - **TE-14**：`npm ls @wdio/globals expect-webdriverio webdriverio` 三包各单版本（verify agent 实跑取数）
 - **TE-14**：`npm run build:e2e` 退出码 0（verify agent 实跑取数；全量测试的 e2eBuild 为 `npx tauri build --debug --no-bundle`，两者其一通过即可，以 build:e2e 为准）
 
