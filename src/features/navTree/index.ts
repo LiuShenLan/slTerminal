@@ -6,7 +6,7 @@
 
 export { NavTree, makeEmptyLayout } from "./NavTree";
 export type { NavTreeProps } from "./NavTree";
-export { useNavTree, isCwdUnderProject } from "./useNavTree";
+export { useNavTree } from "./useNavTree";
 export type {
   UseNavTreeResult,
   NavProjectModel,

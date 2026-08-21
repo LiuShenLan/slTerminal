@@ -15,7 +15,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   - 项目/页面树：`useProjects`（照原 SidebarTree 订阅形态）
   - 活跃会话：`useAgentStatus`（rows——panelId/pageId/projectId/cliId/title/status/usage）
   - 历史会话：`useAgentHistory`（sessions + activeStatuses + scan/removeLocal）
-- **归属规则**：活跃会话挂页面下（`row.pageId`——useAgentStatus 内部已按 `parseTerminalPageId` 解析）；历史会话挂项目下（`isCwdUnderProject`：规范化 + 忽略大小写 + 去尾部斜杠后 cwd === rootPath 或为其子路径（前缀 + `/` 防同前缀目录误归属）；无归属项目（孤儿目录）→ 导航树不展示）
+- **归属规则**：活跃会话挂页面下（`row.pageId`——useAgentStatus 内部已按 `parseTerminalPageId` 解析）；历史会话挂项目下（**FE-16 索引版 `projectIdForCwd`**：规范化 + 忽略大小写 + 去尾部斜杠后逐级上溯查表——cwd === rootPath 或为其子路径（前缀 + `/` 防同前缀目录误归属），最深前缀命中；原 `isCwdUnderProject` 纯函数已随 FE-16 替代删除）；无归属项目（孤儿目录）→ 导航树不展示
 
 ### 展开/折叠与搜索（NAV-01/04/10）
 
@@ -52,7 +52,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 |------|------|
 | `index.ts` | barrel export：NavTree + makeEmptyLayout + useNavTree + 行组件 + NavContextMenu + 类型 |
 | `NavTree.tsx` | 主组件（`nav` 视图，NAV-05）：顶部分组标题「导航」（11px 全大写 0.08em fg-3）+ 刷新钮（重扫历史）+ 搜索框（INPUT_BG 底圆角 5、focus 描边 FOCUS_BORDER）+ 树区 + 底部「添加项目」钮；右键菜单（项目/页面/历史行共用 NavContextMenu）+ 运行中历史会话动作弹窗（SessionActionDialog）；**`makeEmptyLayout()` 导出（迁自 SidebarTree）**；props 可选（switchToPage/onDeletePage 缺省回退 store 级操作，NAV-10 契约：独立渲染 `<NavTree />` 无 props） |
-| `useNavTree.ts` | 数据 hook：tree 模型派生（搜索过滤 + 归属归组 + 页面级 active 会话标记）+ expanded/expandedHist 展开集合 + `isCwdUnderProject` 纯函数；**FE-16 历史归属索引**：规范化 rootPath → projectId 一次建表（`rootPathIndex` Map，O(1) 查表替代 O(N×M) 逐会话前缀匹配，`projectIdForCwd` 沿 cwd 逐级上溯查表——最深前缀命中，嵌套项目归子项；useMemo 依赖精确化——只依赖 sessions + 索引，项目页增删不重算归组）；**FE-19**：`refresh()` = `history.scan(true)`（force=true 绕过后端缓存强制重扫——显式刷新语义） |
+| `useNavTree.ts` | 数据 hook：tree 模型派生（搜索过滤 + 归属归组 + 页面级 active 会话标记）+ expanded/expandedHist 展开集合；**FE-16 历史归属索引**：规范化 rootPath → projectId 一次建表（`rootPathIndex` Map，O(1) 查表替代 O(N×M) 逐会话前缀匹配，`projectIdForCwd` 沿 cwd 逐级上溯查表——最深前缀命中，嵌套项目归子项；useMemo 依赖精确化——只依赖 sessions + 索引，项目页增删不重算归组；原 `isCwdUnderProject` 纯函数已随替代删除）；**FE-19**：`refresh()` = `history.scan(true)`（force=true 绕过后端缓存强制重扫——显式刷新语义） |
 | `NavProjectRow.tsx` | 项目行（NAV-09/UI-505）：500 字重 + 彩色文件夹图标（六色盘蓝硬编码例外）+「当前」pill + 页面计数 pill |
 | `NavPageRow.tsx` | 操作页面行（UI-501）：chevron/IconPage 图标/名称/meta + 内联重命名（迁自 SidebarTree PageRow） |
 | `NavSessionRow.tsx` | 活跃会话行（NAV-02/UI-504）：StatusDot + logo + 迷你用量条 + 百分比，点击聚焦终端 |

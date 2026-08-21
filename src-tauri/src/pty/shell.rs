@@ -104,9 +104,13 @@ pub(crate) fn validate_shell_allowlist(program: &str) -> Result<(), AppError> {
 /// 同一文件，安全语义不弱化（伪造路径与 PATH 解析结果字符串必不同，仍拒绝）。
 fn paths_match(program: &str, resolved: &str) -> bool {
     // 1) canonicalize 双成功 → 精确比较（8.3 短名/`..`/symlink 差异由系统拉平）
-    if let (Ok(cp), Ok(cr)) = (std::fs::canonicalize(program), std::fs::canonicalize(resolved)) {
+    if let (Ok(cp), Ok(cr)) = (
+        std::fs::canonicalize(program),
+        std::fs::canonicalize(resolved),
+    ) {
         return if cfg!(windows) {
-            cp.to_string_lossy().eq_ignore_ascii_case(&cr.to_string_lossy())
+            cp.to_string_lossy()
+                .eq_ignore_ascii_case(&cr.to_string_lossy())
         } else {
             cp == cr
         };
@@ -509,7 +513,10 @@ mod tests {
         fake_exe(dir.path(), "cmd.exe");
         let p = dir.path().join("cmd.exe").to_string_lossy().into_owned();
         let upper = dir.path().join("CMD.EXE").to_string_lossy().into_owned();
-        assert!(paths_match(&p, &upper), "canonicalize 成功时大小写变体应相等");
+        assert!(
+            paths_match(&p, &upper),
+            "canonicalize 成功时大小写变体应相等"
+        );
         assert!(paths_match(&p, &p));
     }
 
@@ -602,7 +609,8 @@ mod tests {
             );
             // canonicalize(alias) 失败（os error 1920）→ fallback 字符串比对放行
             let s = a.to_string_lossy().into_owned();
-            validate_shell_allowlist(&s).expect("真实 alias 路径应放行（canonicalize 失败 fallback）");
+            validate_shell_allowlist(&s)
+                .expect("真实 alias 路径应放行（canonicalize 失败 fallback）");
         }
     }
 

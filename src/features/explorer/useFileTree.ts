@@ -232,7 +232,7 @@ export function useFileTree({ rootPath }: UseFileTreeOptions) {
       const rp = rootPathRef.current;
       if (!rp) return false;
 
-      // 规范化 + 忽略大小写 + 去尾部斜杠（照 isCwdUnderProject 同口径）
+      // 规范化 + 忽略大小写 + 去尾部斜杠（与 useNavTree 历史归属口径一致）
       const norm = (p: string) =>
         normalizePath(p).toLowerCase().replace(/\/+$/, "");
       const root = norm(rp);

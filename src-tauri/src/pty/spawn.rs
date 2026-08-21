@@ -45,9 +45,8 @@ pub mod conpty_custom {
     use windows::Win32::System::Console::{COORD, HPCON, PSEUDOCONSOLE_INHERIT_CURSOR};
     use windows::Win32::System::Threading::{
         CreateProcessW, DeleteProcThreadAttributeList, InitializeProcThreadAttributeList,
-        UpdateProcThreadAttribute, EXTENDED_STARTUPINFO_PRESENT,
-        LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_CREATION_FLAGS, PROCESS_INFORMATION,
-        STARTF_USESTDHANDLES, STARTUPINFOEXW,
+        UpdateProcThreadAttribute, EXTENDED_STARTUPINFO_PRESENT, LPPROC_THREAD_ATTRIBUTE_LIST,
+        PROCESS_CREATION_FLAGS, PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOEXW,
     };
 
     // ─── flag 常量（windows crate 仅定义 PSEUDOCONSOLE_INHERIT_CURSOR）───
@@ -303,14 +302,7 @@ pub mod conpty_custom {
             unsafe {
                 // PeekNamedPipe 失败（句柄无效等异常）→ 视为无数据（0），
                 // 不续读——由主循环 read 走 Err/EOF 分支兜底，不卡死
-                let _ = PeekNamedPipe(
-                    HANDLE(self.0),
-                    None,
-                    0,
-                    None,
-                    Some(&mut avail),
-                    None,
-                );
+                let _ = PeekNamedPipe(HANDLE(self.0), None, 0, None, Some(&mut avail), None);
             }
             avail
         }

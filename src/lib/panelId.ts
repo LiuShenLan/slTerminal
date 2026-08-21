@@ -25,7 +25,8 @@ export function makeTerminalPanelId(pageId: string, seq?: number): string {
   return `terminal-${pageId}-${seq}`;
 }
 
-/** 仅测试：重置每页序号计数（vitest 文件内模块态隔离 + beforeEach 调用） */
+/** 测试专用：重置每页序号计数（panelId.test.ts / agent-history-restore.test.ts /
+ *  workspace-page-dockview.test.tsx 的 beforeEach 调用隔离模块态——生产零消费） */
 export function resetTerminalPanelSeq(pageId?: string): void {
   if (pageId !== undefined) seqByPage.delete(pageId);
   else seqByPage.clear();

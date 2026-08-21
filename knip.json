@@ -1,6 +1,248 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "entry": ["index.html", "src/main.tsx", "e2e-tests/**/*.ts"],
+  "entry": [
+    "index.html",
+    "src/main.tsx",
+    "e2e-tests/**/*.ts",
+    "e2e-tests/run-wdio.cjs"
+  ],
+  "ignore": [
+    "src/__tests__/**",
+    "docs/**",
+    ".claude/**",
+    "src-tauri/**"
+  ],
+  "ignoreIssues": {
+    "src/features/agentHistory/historyModel.ts": [
+      "exports",
+      "types"
+    ],
+    "src/features/agentHistory/restoreSession.ts": [
+      "exports"
+    ],
+    "src/features/agentStatus/useAgentStatus.ts": [
+      "types"
+    ],
+    "src/features/cliProfiles/cliProfileRegistry.ts": [
+      "exports"
+    ],
+    "src/features/cliProfiles/index.ts": [
+      "exports",
+      "types"
+    ],
+    "src/features/cliProfiles/profiles/claude/index.ts": [
+      "exports"
+    ],
+    "src/features/cliProfiles/profiles/claude/strategies.ts": [
+      "exports"
+    ],
+    "src/features/cliProfiles/types.ts": [
+      "types"
+    ],
+    "src/features/commit/openCommitFile.ts": [
+      "exports",
+      "types"
+    ],
+    "src/features/explorer/ExplorerPanel.tsx": [
+      "exports"
+    ],
+    "src/features/explorer/activeExplorer.ts": [
+      "types"
+    ],
+    "src/features/explorer/index.ts": [
+      "exports"
+    ],
+    "src/features/fileViewers/FileViewerRegistry.ts": [
+      "exports",
+      "types"
+    ],
+    "src/features/fileViewers/index.ts": [
+      "exports",
+      "types"
+    ],
+    "src/features/hooksConfig/schema/index.ts": [
+      "exports"
+    ],
+    "src/features/navTree/NavContextMenu.tsx": [
+      "types"
+    ],
+    "src/features/navTree/index.ts": [
+      "exports",
+      "types"
+    ],
+    "src/features/navTree/navStyles.ts": [
+      "exports"
+    ],
+    "src/features/navTree/useNavTree.ts": [
+      "types"
+    ],
+    "src/features/notifications/index.ts": [
+      "exports"
+    ],
+    "src/features/notifications/useAgentNotifications.ts": [
+      "exports",
+      "types"
+    ],
+    "src/features/shortcuts/commandCatalog.ts": [
+      "exports"
+    ],
+    "src/features/shortcuts/index.ts": [
+      "exports",
+      "types"
+    ],
+    "src/features/shortcuts/keystroke.ts": [
+      "exports"
+    ],
+    "src/features/shortcuts/types.ts": [
+      "types"
+    ],
+    "src/features/sideViews/index.ts": [
+      "exports",
+      "types"
+    ],
+    "src/features/sideViews/sideViewRegistry.ts": [
+      "exports",
+      "types"
+    ],
+    "src/ipc/appError.ts": [
+      "exports",
+      "types"
+    ],
+    "src/ipc/fs.ts": [
+      "types"
+    ],
+    "src/ipc/index.ts": [
+      "exports"
+    ],
+    "src/ipc/notification.ts": [
+      "exports"
+    ],
+    "src/lib/ConfirmDialog.tsx": [
+      "exports"
+    ],
+    "src/lib/StatusDot.tsx": [
+      "types"
+    ],
+    "src/lib/e2eEnabled.ts": [
+      "exports"
+    ],
+    "src/lib/index.ts": [
+      "exports",
+      "types"
+    ],
+    "src/lib/panelId.ts": [
+      "exports"
+    ],
+    "src/lib/path.ts": [
+      "exports"
+    ],
+    "src/panelRegistry.ts": [
+      "exports"
+    ],
+    "src/panels/diff/DiffPanel.tsx": [
+      "types"
+    ],
+    "src/panels/diff/index.ts": [
+      "types"
+    ],
+    "src/panels/editor/gitGutter.ts": [
+      "exports"
+    ],
+    "src/panels/editor/useCodeMirror.ts": [
+      "exports"
+    ],
+    "src/panels/gitshow/GitShowPanel.tsx": [
+      "exports"
+    ],
+    "src/panels/hooksConfig/ClaudeHooksConfigEditor.tsx": [
+      "types"
+    ],
+    "src/panels/hooksConfig/EventTree.tsx": [
+      "exports",
+      "types"
+    ],
+    "src/panels/hooksConfig/GuiMode.tsx": [
+      "types"
+    ],
+    "src/panels/hooksConfig/HandlerForm.tsx": [
+      "exports"
+    ],
+    "src/panels/hooksConfig/HooksConfigPanel.tsx": [
+      "exports"
+    ],
+    "src/panels/hooksConfig/JsonMode.tsx": [
+      "exports",
+      "types"
+    ],
+    "src/panels/hooksConfig/configModel.ts": [
+      "types"
+    ],
+    "src/panels/hooksConfig/eventsCatalog.ts": [
+      "exports",
+      "types"
+    ],
+    "src/panels/hooksConfig/useHooksConfig.ts": [
+      "exports"
+    ],
+    "src/panels/terminal/useTerminalInstance.ts": [
+      "exports"
+    ],
+    "src/panels/terminal/useXterm.ts": [
+      "exports"
+    ],
+    "src/panels/terminal/webgl.ts": [
+      "exports"
+    ],
+    "src/stores/fontSize.ts": [
+      "exports"
+    ],
+    "src/stores/index.ts": [
+      "exports",
+      "types"
+    ],
+    "src/stores/projects.ts": [
+      "exports"
+    ],
+    "src/theme/colors.ts": [
+      "exports"
+    ],
+    "src/theme/index.ts": [
+      "exports",
+      "types"
+    ],
+    "src/theme/schemeRegistry.ts": [
+      "exports"
+    ],
+    "src/theme/schemes/types.ts": [
+      "types"
+    ],
+    "src/types/agent.ts": [
+      "types"
+    ],
+    "src/types/agentHistory.ts": [
+      "types"
+    ],
+    "src/types/hooksConfig.ts": [
+      "types"
+    ],
+    "src/types/index.ts": [
+      "types"
+    ],
+    "src/types/notify.ts": [
+      "types"
+    ],
+    "src/workspace/PageDockviewHost.tsx": [
+      "exports",
+      "types"
+    ],
+    "src/workspace/Workspace.tsx": [
+      "exports"
+    ],
+    "src/workspace/titleManager.ts": [
+      "exports",
+      "types"
+    ]
+  },
   "ignoreDependencies": [
     "@wdio/cli",
     "@wdio/local-runner",

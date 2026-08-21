@@ -66,19 +66,6 @@ export interface NavProjectModel {
 
 // ---- 归属辅助 ----
 
-/**
- * 历史会话归属项目判定（决策 5：历史折叠节点挂项目下，cwd 归属）：
- * 两侧规范化（反斜杠→/）+ 忽略大小写 + 去尾部斜杠后，cwd === rootPath 或
- * cwd 为 rootPath 子路径（前缀 + "/" 防同前缀目录误归属）。cwd 为 null/空 → false。
- */
-export function isCwdUnderProject(cwd: string | null, rootPath: string): boolean {
-  if (!cwd) return false;
-  const a = normalizePath(cwd).toLowerCase().replace(/\/+$/, "");
-  const b = normalizePath(rootPath).toLowerCase().replace(/\/+$/, "");
-  if (a === b) return true;
-  return a.startsWith(`${b}/`);
-}
-
 export interface UseNavTreeResult {
   /** 查询过滤后的导航树（项目 → 页面 → 会话 + 历史节点） */
   tree: NavProjectModel[];
@@ -150,9 +137,10 @@ export function useNavTree(): UseNavTreeResult {
     return map;
   }, [projects]);
 
-  /** 归属项目定位（FE-16 索引版）：cwd 规范化后逐级上溯查表——命中即 rootPath
-   *  恰为 cwd 或其一前缀目录（段边界守卫，语义等价 isCwdUnderProject 的
-   *  `${b}/` 前缀判定）；最深前缀命中——比原 find 首命中更精确（嵌套项目归子项） */
+  /** 归属项目定位（FE-16 索引版）：cwd 规范化（反斜杠→/ + 忽略大小写 + 去尾部斜杠）后
+   *  逐级上溯查表——命中即 rootPath 恰为 cwd 或其一前缀目录（段边界守卫：
+   *  `${b}/` 前缀判定，防同前缀目录误归属）；最深前缀命中——比原 find 首命中
+   *  更精确（嵌套项目归子项） */
   const projectIdForCwd = useCallback(
     (cwd: string | null): string | null => {
       if (!cwd) return null;

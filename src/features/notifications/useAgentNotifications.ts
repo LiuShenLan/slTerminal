@@ -40,6 +40,8 @@ const CATEGORY_LABEL: Record<NotifyCategory, string> = {
 
 /**
  * 判定 agent-event payload 的通知类别（纯函数，MC-420 两段分解）
+ * 导出为测试专用（notifications.test.ts 直测分类表与 MC-420 委托分支；
+ * 生产消费方 = 本模块内部 useAgentNotifications effect）
  *
  * 类别判定知识委托 profile：按 MC-205 三级解析取 profile 后调
  * profile.capabilities.hooks.classifyNotification(payload)：
@@ -95,6 +97,8 @@ let permissionEnsured = false;
 
 /**
  * F4 通知调度 hook
+ * 导出为测试专用（notifications.test.ts / mock-cli-profile.test.tsx 直测；
+ * 生产消费方 = 本模块内部 NotificationListener 组件）
  *
  * 在 App.tsx 挂载的 NotificationListener 组件中调用。
  * 订阅 onAgentEvent，在窗口失焦时按事件类别触发通知。

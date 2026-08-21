@@ -16,7 +16,8 @@ export function basename(filePath: string): string {
 }
 
 /**
- * 判断 filePath 是否在 rootPath 子树中。
+ * 测试专用：判断 filePath 是否在 rootPath 子树中（path.test.ts 直测分支；
+ * 生产零消费——生产侧子树判定走 relativePath 非 null 分支，本函数保留供测试）。
  * 规范化后比较前缀，要求 rootPath 以 "/" 结尾或以相同的路径分隔结束。
  */
 export function isChildOf(filePath: string, rootPath: string): boolean {

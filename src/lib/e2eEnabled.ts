@@ -6,7 +6,8 @@
 // 改由本开关统一门控：dev serve 时 DEV=true；E2E 构建经 VITE_E2E=1 打开；
 // 生产发布构建两者皆为编译期字面量 false → 整块 tree-shake，二进制不含测试后门。
 
-/** 纯逻辑：供单测全表覆盖（无需 env stub）。 */
+/** 测试专用：纯逻辑真值表——供单测全表覆盖（e2e-enabled.test.ts 直测；
+ *  生产禁止调用（函数调用阻碍 Rollup DCE，见下注释）） */
 export function computeE2eEnabled(
   dev: boolean,
   viteE2e: string | undefined,
