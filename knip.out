@@ -1,0 +1,291 @@
+Unused files (38)
+.claude/skills/structured-web-research/scripts/decompose.mjs      
+.claude/skills/structured-web-research/scripts/depth-tier.mjs     
+.claude/skills/systematic-changes-plan/templates/fix-workflow.js  
+.claude/skills/systematic-changes-plan/templates/stage-workflow.js
+.claude/skills/verify-research-output/scripts/classify-error.mjs  
+.claude/skills/verify-research-output/scripts/detect-conflicts.mjs
+.claude/skills/verify-research-output/scripts/review-template.mjs 
+docs/review-fix/workflows/fix-loop.js                             
+docs/review-fix/workflows/stage-01-deps.js                        
+docs/review-fix/workflows/stage-02-backend-security.js            
+docs/review-fix/workflows/stage-03-whitelist.js                   
+docs/review-fix/workflows/stage-04-async-root.js                  
+docs/review-fix/workflows/stage-05-watcher.js                     
+docs/review-fix/workflows/stage-06-reader-batch.js                
+docs/review-fix/workflows/stage-07-fs-chunk.js                    
+docs/review-fix/workflows/stage-08-errors.js                      
+docs/review-fix/workflows/stage-09-corrupted.js                   
+docs/review-fix/workflows/stage-10-dto.js                         
+docs/review-fix/workflows/stage-11-frontend-security.js           
+docs/review-fix/workflows/stage-12-frontend-perf.js               
+docs/review-fix/workflows/stage-13-stability.js                   
+docs/review-fix/workflows/stage-14-deadcode.js                    
+docs/review-fix/workflows/stage-15-major-upgrades.js              
+docs/review-fix/workflows/stage-16-ci-version.js                  
+docs/review-fix/workflows/stage-17-hooks-validate.js              
+docs/review-fix/workflows/stage-18-filetree-virtual.js            
+docs/review-fix/workflows/stage-19-docs.js                        
+e2e-tests/run-wdio.cjs                                            
+src-tauri/src/hooks/claude/slterm-hook-reporter.js                
+src-tauri/src/hooks/claude/slterm-statusline.js                   
+src/__tests__/helpers/ipc-contract.ts                             
+src/__tests__/helpers/mockCliProfile.ts                           
+src/__tests__/helpers/vfs.ts                                      
+src/__tests__/helpers/workspace-setup.ts                          
+src/__tests__/helpers/xterm-test-utils.ts                         
+src/__tests__/setup.ts                                            
+src/__tests__/testMocks/explorerMocks.ts                          
+src/__tests__/testMocks/xterm.ts                                  
+Unused exports (146)
+UNKNOWN_CWD_KEY                              src/features/agentHistory/historyModel.ts:14:14             
+isCurrentProject                   function  src/features/agentHistory/historyModel.ts:22:17             
+groupByCwd                         function  src/features/agentHistory/historyModel.ts:48:17             
+matchesSearch                      function  src/features/agentHistory/historyModel.ts:77:17             
+waitFor                            function  src/features/agentHistory/restoreSession.ts:37:23           
+CliProfileRegistry                 class     src/features/cliProfiles/cliProfileRegistry.ts:11:14        
+CliProfileRegistry                           src/features/cliProfiles/index.ts:12:10                     
+claudeProfile                                src/features/cliProfiles/profiles/claude/index.ts:46:14     
+ATTENTION_NOTIFICATION_TYPES                 src/features/cliProfiles/profiles/claude/strategies.ts:19:14
+STATUS_PANEL_MAP                             src/features/commit/openCommitFile.ts:23:14                 
+getPanelDispatch                   function  src/features/commit/openCommitFile.ts:33:17                 
+canOpenFile                                  src/features/explorer/ExplorerPanel.tsx:42:14               
+canOpenFile                                  src/features/explorer/index.ts:3:25                         
+ExtensionBasedViewerStrategy       class     src/features/fileViewers/FileViewerRegistry.ts:23:14        
+FileViewerRegistry                 class     src/features/fileViewers/FileViewerRegistry.ts:58:14        
+FileViewerRegistry                           src/features/fileViewers/index.ts:3:3                       
+ExtensionBasedViewerStrategy                 src/features/fileViewers/index.ts:4:3                       
+claudeCodeSettings                           src/features/hooksConfig/schema/index.ts:30:14              
+SCHEMA_ID                                    src/features/hooksConfig/schema/index.ts:33:14              
+useNavTree                                   src/features/navTree/index.ts:9:10                          
+isCwdUnderProject                            src/features/navTree/index.ts:9:22                          
+NavProjectRow                                src/features/navTree/index.ts:17:10                         
+NavPageRow                                   src/features/navTree/index.ts:18:10                         
+NavSessionRow                                src/features/navTree/index.ts:19:10                         
+NavHistoryNode                               src/features/navTree/index.ts:20:10                         
+NavHistoryRow                                src/features/navTree/index.ts:21:10                         
+NavContextMenu                               src/features/navTree/index.ts:22:10                         
+ROW_HEIGHT                                   src/features/navTree/navStyles.ts:25:14                     
+isCwdUnderProject                  function  src/features/navTree/useNavTree.ts:74:17                    
+useAgentNotifications                        src/features/notifications/index.ts:2:10                    
+classifyEvent                      function  src/features/notifications/useAgentNotifications.ts:53:17   
+useAgentNotifications              function  src/features/notifications/useAgentNotifications.ts:102:17  
+COMMAND_CATALOG                              src/features/shortcuts/commandCatalog.ts:26:14              
+COMMAND_META_BY_ID                           src/features/shortcuts/commandCatalog.ts:102:14             
+COMMAND_CATALOG                              src/features/shortcuts/index.ts:17:10                       
+COMMAND_META_BY_ID                           src/features/shortcuts/index.ts:17:27                       
+formatKeystroke                              src/features/shortcuts/index.ts:18:10                       
+parseKeystroke                               src/features/shortcuts/index.ts:18:27                       
+isValidKeystrokeString                       src/features/shortcuts/index.ts:18:43                       
+isReserved                                   src/features/shortcuts/index.ts:19:10                       
+isValidKeystrokeString             function  src/features/shortcuts/keystroke.ts:54:17                   
+sideViewRegistry                             src/features/sideViews/index.ts:14:10                       
+DEFAULT_ZONES                                src/features/sideViews/index.ts:24:3                        
+DEFAULT_OPEN                                 src/features/sideViews/index.ts:25:3                        
+WIDTH_DEFAULT                                src/features/sideViews/index.ts:27:3                        
+SPLIT_DEFAULT                                src/features/sideViews/index.ts:30:3                        
+SPLIT_MIN                                    src/features/sideViews/index.ts:31:3                        
+SPLIT_MAX                                    src/features/sideViews/index.ts:32:3                        
+toggleViewPure                               src/features/sideViews/index.ts:33:3                        
+moveButtonPure                               src/features/sideViews/index.ts:34:3                        
+reconcileZones                               src/features/sideViews/index.ts:36:3                        
+sanitizeSideBar                              src/features/sideViews/index.ts:37:3                        
+computeDropTarget                            src/features/sideViews/index.ts:41:10                       
+SideViewRegistry                   class     src/features/sideViews/sideViewRegistry.ts:34:14            
+APP_ERROR_VARIANTS                           src/ipc/appError.ts:16:14                                   
+parseAppError                      function  src/ipc/appError.ts:50:17                                   
+ping                               function  src/ipc/index.ts:19:23                                      
+isPermissionGranted                          src/ipc/notification.ts:18:10                               
+requestPermission                            src/ipc/notification.ts:18:31                               
+sendNotification                             src/ipc/notification.ts:18:50                               
+_resetConfirmDialog                function  src/lib/ConfirmDialog.tsx:89:17                             
+computeE2eEnabled                  function  src/lib/e2eEnabled.ts:10:17                                 
+_resetConfirmDialog                          src/lib/index.ts:2:44                                       
+normalizePath                                src/lib/index.ts:4:10                                       
+basename                                     src/lib/index.ts:4:25                                       
+isChildOf                                    src/lib/index.ts:4:35                                       
+relativePath                                 src/lib/index.ts:4:46                                       
+createActivePointer                          src/lib/index.ts:5:10                                       
+useFontSizeWheel                             src/lib/index.ts:6:10                                       
+computeE2eEnabled                            src/lib/index.ts:7:23                                       
+parseTerminalPageId                          src/lib/index.ts:10:10                                      
+parseAppError                                src/lib/index.ts:12:3                                       
+APP_ERROR_VARIANTS                           src/lib/index.ts:14:3                                       
+IconNav                                      src/lib/index.ts:18:3                                       
+IconFiles                                    src/lib/index.ts:19:3                                       
+IconCommit                                   src/lib/index.ts:20:3                                       
+IconConfig                                   src/lib/index.ts:21:3                                       
+IconChevronRight                             src/lib/index.ts:22:3                                       
+IconChevronDown                              src/lib/index.ts:23:3                                       
+IconRefresh                                  src/lib/index.ts:24:3                                       
+IconSearch                                   src/lib/index.ts:25:3                                       
+IconHistory                                  src/lib/index.ts:26:3                                       
+IconClose                                    src/lib/index.ts:27:3                                       
+IconPlus                                     src/lib/index.ts:31:3                                       
+IconFolder                                   src/lib/index.ts:32:3                                       
+IconEmptyBox                                 src/lib/index.ts:33:3                                       
+StatusDot                                    src/lib/index.ts:37:10                                      
+resetTerminalPanelSeq              function  src/lib/panelId.ts:29:17                                    
+isChildOf                          function  src/lib/path.ts:22:17                                       
+PANEL_HTML_VIEWER                            src/panelRegistry.ts:20:14                                  
+withPanelBoundary                  function  src/panelRegistry.ts:32:17                                  
+terminalTabConfig                            src/panelRegistry.ts:73:14                                  
+PANEL_TYPES                                  src/panelRegistry.ts:78:14                                  
+FILE_PANEL_TYPES                             src/panelRegistry.ts:89:14                                  
+AddedMarker                        class     src/panels/editor/gitGutter.ts:22:14                        
+ModifiedMarker                     class     src/panels/editor/gitGutter.ts:31:14                        
+SpacerMarker                       class     src/panels/editor/gitGutter.ts:40:14                        
+setDiffMarkers                               src/panels/editor/gitGutter.ts:66:14                        
+diffMarkersField                             src/panels/editor/gitGutter.ts:144:14                       
+buildHeadRangeSet                  function  src/panels/editor/gitGutter.ts:200:17                       
+setHeadDiffMarkers                           src/panels/editor/gitGutter.ts:279:14                       
+headDiffMarkersField                         src/panels/editor/gitGutter.ts:282:14                       
+EDITOR_FONT_SPEC                             src/panels/editor/useCodeMirror.ts:50:14                    
+EDITOR_FONT_THEME                            src/panels/editor/useCodeMirror.ts:54:14                    
+LargeFileWarnWidget                class     src/panels/gitshow/GitShowPanel.tsx:51:14                   
+HANDLER_TYPES_BY_LEVEL                       src/panels/hooksConfig/eventsCatalog.ts:25:14               
+RESTRICTED_MATCHER_CHARSET_EVENTS            src/panels/hooksConfig/eventsCatalog.ts:118:14              
+formatHandlerSummary               function  src/panels/hooksConfig/EventTree.tsx:38:17                  
+switchHandlerType                  function  src/panels/hooksConfig/HandlerForm.tsx:102:17               
+persistSelectedCli                 function  src/panels/hooksConfig/HooksConfigPanel.tsx:97:17           
+findEventPosition                  function  src/panels/hooksConfig/JsonMode.tsx:61:17                   
+CONFIG_CORRUPTED_TEXT                        src/panels/hooksConfig/useHooksConfig.ts:41:14              
+E2E_BUFFER_MAX_LINES                         src/panels/terminal/useTerminalInstance.ts:32:14            
+detectWebgl                                  src/panels/terminal/useXterm.ts:29:10                       
+resetWebglCache                              src/panels/terminal/useXterm.ts:29:23                       
+XTERM_CONPTY_MIN_BUILD                       src/panels/terminal/useXterm.ts:63:14                       
+clampWindowsBuildForXterm          function  src/panels/terminal/useXterm.ts:66:17                       
+canFit                             function  src/panels/terminal/useXterm.ts:117:17                      
+resetWebglCache                    function  src/panels/terminal/webgl.ts:47:17                          
+FONT_SIZE_DEFAULT                            src/stores/fontSize.ts:18:14                                
+useProjects                                  src/stores/index.ts:1:10                                    
+createProjectId                              src/stores/index.ts:1:23                                    
+createPageId                                 src/stores/index.ts:1:40                                    
+loadAllProjects                              src/stores/index.ts:1:54                                    
+saveAllProjects                              src/stores/index.ts:1:71                                    
+markPersistenceReady                         src/stores/index.ts:1:88                                    
+useKeybindings                               src/stores/index.ts:5:10                                    
+useSideBar                                   src/stores/index.ts:7:10                                    
+MAX_PAGES                                    src/stores/projects.ts:16:14                                
+_resetPersistence                  function  src/stores/projects.ts:307:17                               
+APP_BG_PRIMARY                               src/theme/colors.ts:40:14                                   
+GIT_GUTTER_COLORS                            src/theme/index.ts:8:3                                      
+APP_BG_PRIMARY                               src/theme/index.ts:15:3                                     
+TITLEBAR_BG                                  src/theme/index.ts:40:3                                     
+TITLEBAR_CLOSE_HOVER_BG                      src/theme/index.ts:41:3                                     
+SchemeRegistry                               src/theme/index.ts:45:26                                    
+linear                                       src/theme/index.ts:48:10                                    
+SchemeRegistry                     class     src/theme/schemeRegistry.ts:17:14                           
+applyRename                        function  src/workspace/PageDockviewHost.tsx:166:17                   
+DefaultTab                                   src/workspace/PageDockviewHost.tsx:371:14                   
+createRightHeader                            src/workspace/PageDockviewHost.tsx:670:10                   
+createGetContextMenu                         src/workspace/PageDockviewHost.tsx:670:29                   
+createTitleManager                 function  src/workspace/titleManager.ts:28:17                         
+createRightHeader                            src/workspace/Workspace.tsx:311:10                          
+createGetContextMenu                         src/workspace/Workspace.tsx:311:29                          
+applyRename                                  src/workspace/Workspace.tsx:311:51                          
+Unused exported types (104)
+CwdGroup                      interface  src/features/agentHistory/historyModel.ts:34:18          
+AgentStatusState              type       src/features/agentStatus/useAgentStatus.ts:56:13         
+HooksCapability               type       src/features/cliProfiles/index.ts:9:3                    
+HistoryCapability             type       src/features/cliProfiles/index.ts:10:3                   
+HooksConfigEditorProps        interface  src/features/cliProfiles/types.ts:15:18                  
+HooksCapability               interface  src/features/cliProfiles/types.ts:25:18                  
+HistoryCapability             interface  src/features/cliProfiles/types.ts:52:18                  
+PanelDispatch                 interface  src/features/commit/openCommitFile.ts:11:18              
+ExplorerActions               interface  src/features/explorer/activeExplorer.ts:10:18            
+FileViewerStrategy            interface  src/features/fileViewers/FileViewerRegistry.ts:13:18     
+FileViewerStrategy            type       src/features/fileViewers/index.ts:6:15                   
+NavTreeProps                  type       src/features/navTree/index.ts:8:15                       
+UseNavTreeResult              type       src/features/navTree/index.ts:11:3                       
+NavProjectModel               type       src/features/navTree/index.ts:12:3                       
+NavPageModel                  type       src/features/navTree/index.ts:13:3                       
+NavSessionModel               type       src/features/navTree/index.ts:14:3                       
+NavHistoryModel               type       src/features/navTree/index.ts:15:3                       
+NavMenuItem                   type       src/features/navTree/index.ts:23:15                      
+NavMenuState                  type       src/features/navTree/index.ts:23:28                      
+NavMenuItem                   interface  src/features/navTree/NavContextMenu.tsx:20:18            
+NavPageModel                  interface  src/features/navTree/useNavTree.ts:40:18                 
+NavHistoryModel               interface  src/features/navTree/useNavTree.ts:48:18                 
+NotifyCategory                type       src/features/notifications/useAgentNotifications.ts:32:13
+KeyStroke                     type       src/features/shortcuts/index.ts:4:3                      
+CommandMeta                   type       src/features/shortcuts/index.ts:6:3                      
+CommandCategory               type       src/features/shortcuts/index.ts:7:3                      
+ShortcutContext               type       src/features/shortcuts/index.ts:8:3                      
+Priority                      type       src/features/shortcuts/index.ts:9:3                      
+ExportedBinding               type       src/features/shortcuts/index.ts:11:3                     
+ShortcutRegistryAPI           type       src/features/shortcuts/index.ts:12:3                     
+Priority                      type       src/features/shortcuts/types.ts:26:13                    
+CommandCategory               type       src/features/shortcuts/types.ts:29:13                    
+SideBarAreaProps              type       src/features/sideViews/index.ts:12:15                    
+SideViewDef                   type       src/features/sideViews/index.ts:15:15                    
+SideViewComponentProps        type       src/features/sideViews/index.ts:15:28                    
+Zone                          type       src/features/sideViews/index.ts:19:8                     
+Zones                         type       src/features/sideViews/index.ts:20:8                     
+OpenState                     type       src/features/sideViews/index.ts:21:8                     
+LayoutKind                    type       src/features/sideViews/index.ts:22:8                     
+SideBarSlice                  type       src/features/sideViews/index.ts:23:8                     
+ButtonRect                    type       src/features/sideViews/index.ts:42:15                    
+DropTarget                    type       src/features/sideViews/index.ts:42:27                    
+SideViewComponentProps        interface  src/features/sideViews/sideViewRegistry.ts:14:18         
+SideViewDef                   interface  src/features/sideViews/sideViewRegistry.ts:22:18         
+ParsedAppError                interface  src/ipc/appError.ts:31:18                                
+FsReadChunk                   interface  src/ipc/fs.ts:8:18                                       
+ConfirmDialogOptions          type       src/lib/index.ts:2:70                                    
+ToastType                     type       src/lib/index.ts:3:33                                    
+AgentStatus                   type       src/lib/index.ts:9:15                                    
+ParsedAppError                type       src/lib/index.ts:15:8                                    
+StatusDotStatus               type       src/lib/index.ts:37:26                                   
+StatusDotProps                type       src/lib/index.ts:37:48                                   
+StatusDotStatus               type       src/lib/StatusDot.tsx:15:13                              
+DiffPanelParams               interface  src/panels/diff/DiffPanel.tsx:141:18                     
+DiffPanelParams               type       src/panels/diff/index.ts:2:15                            
+ClaudeHooksConfigEditorProps  interface  src/panels/hooksConfig/ClaudeHooksConfigEditor.tsx:51:18 
+MatcherGroupJson              interface  src/panels/hooksConfig/configModel.ts:21:18              
+HookHandlerJson               interface  src/panels/hooksConfig/configModel.ts:28:18              
+HandlerSupportLevel           type       src/panels/hooksConfig/eventsCatalog.ts:23:13            
+EventTreeProps                interface  src/panels/hooksConfig/EventTree.tsx:25:18               
+GuiModeProps                  interface  src/panels/hooksConfig/GuiMode.tsx:32:18                 
+JsonModeProps                 interface  src/panels/hooksConfig/JsonMode.tsx:47:18                
+Project                       type       src/stores/index.ts:2:15                                 
+OperationPage                 type       src/stores/index.ts:2:24                                 
+KeybindingsState              type       src/stores/index.ts:6:15                                 
+SideBarState                  type       src/stores/index.ts:8:15                                 
+ColorScheme                   type       src/theme/index.ts:50:3                                  
+UiTokens                      type       src/theme/index.ts:51:3                                  
+TerminalPalette               type       src/theme/index.ts:52:3                                  
+EditorScheme                  type       src/theme/index.ts:53:3                                  
+LibraryOverrides              type       src/theme/index.ts:54:3                                  
+TerminalPalette               interface  src/theme/schemes/types.ts:137:18                        
+EditorScheme                  interface  src/theme/schemes/types.ts:169:18                        
+LibraryOverrides              interface  src/theme/schemes/types.ts:215:18                        
+AgentInjectionStatus          type       src/types/agent.ts:37:13                                 
+TitleSource                   type       src/types/agentHistory.ts:6:13                           
+MatcherGroupJson              interface  src/types/hooksConfig.ts:20:18                           
+HookHandlerJson               interface  src/types/hooksConfig.ts:26:18                           
+HookEventGroup                interface  src/types/hooksConfig.ts:63:18                           
+HookMatcherGroup              interface  src/types/hooksConfig.ts:69:18                           
+HookHandlerGui                interface  src/types/hooksConfig.ts:75:18                           
+SpawnRequest                  type       src/types/index.ts:1:25                                  
+DirEntry                      type       src/types/index.ts:2:15                                  
+GitStatusEntry                type       src/types/index.ts:3:15                                  
+DiffHunk                      type       src/types/index.ts:3:31                                  
+FsEventPayload                type       src/types/index.ts:4:15                                  
+ContextUsageSignal            type       src/types/index.ts:6:3                                   
+AgentEventPayload             type       src/types/index.ts:7:3                                   
+AgentHookInjectionStatus      type       src/types/index.ts:8:3                                   
+AgentHistorySession           type       src/types/index.ts:10:15                                 
+TitleSource                   type       src/types/index.ts:10:36                                 
+HooksLayer                    type       src/types/index.ts:12:3                                  
+HooksConfigJson               type       src/types/index.ts:13:3                                  
+MatcherGroupJson              type       src/types/index.ts:14:3                                  
+HookHandlerJson               type       src/types/index.ts:15:3                                  
+HooksConfigGui                type       src/types/index.ts:16:3                                  
+HookEventGroup                type       src/types/index.ts:17:3                                  
+HookMatcherGroup              type       src/types/index.ts:18:3                                  
+HookHandlerGui                type       src/types/index.ts:19:3                                  
+FsEventPayload                interface  src/types/notify.ts:2:18                                 
+TabParams                     interface  src/workspace/PageDockviewHost.tsx:51:18                 
+ContextMenuPanel              type       src/workspace/PageDockviewHost.tsx:64:13                 
+PageDockviewProps             interface  src/workspace/PageDockviewHost.tsx:66:18                 
+EditorEntry                   interface  src/workspace/titleManager.ts:12:18                      
