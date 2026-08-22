@@ -6,6 +6,7 @@
 // - 滚动后窗口平移（顶部行卸载、中部行进入窗口）
 // - 展开大目录后行数仍窗口化（嵌套深度参与扁平化）
 // - 窗口化下选中模型 / 右键菜单 / 重命名输入框行为保持
+// - FE-40 程序式选中视口外行 → 滚动跟随（scrollTop 定位到该行）
 //
 // 实现说明：jsdom 无真实布局，滚动容器 clientHeight 恒 0——测试经
 // HTMLElement.prototype.clientHeight 覆盖模拟视口高度（beforeEach mock / afterEach 恢复，
@@ -192,6 +193,48 @@ describe("FileTree 虚拟化（FE-30）", () => {
       const inputs = document.querySelectorAll("input");
       expect(inputs.length).toBe(1);
       expect((inputs[0] as HTMLInputElement).value).toBe("f0.ts");
+    } finally {
+      restore();
+    }
+  });
+
+  it("FE-40 程序式选中视口外行 → 滚动跟随：scrollTop 定位到该行", () => {
+    const restore = mockClientHeight(300);
+    try {
+      const props: Parameters<typeof FileTree>[0] = {
+        nodes: makeTree(1000),
+        depth: 0,
+        gitStatusMap: new Map<string, string>(),
+        onToggleExpand: vi.fn(),
+        onOpenFile: vi.fn(),
+        onOpenInTerminal: vi.fn(),
+        onRename: vi.fn(),
+        onDelete: vi.fn(),
+        onNewFile: vi.fn(),
+        onNewFolder: vi.fn(),
+        selectedPath: null,
+        onSelect: vi.fn(),
+        renamingPath: null,
+        renameValue: "",
+        onRenameStart: vi.fn(),
+        onRenameCancel: vi.fn(),
+      };
+      const { container, rerender } = render(
+        React.createElement(FileTree, props),
+      );
+      const scroller = findScroller(container);
+      // 初始无选中 → 不滚动
+      expect(scroller.scrollTop).toBe(0);
+
+      // 程序式选中视口外行（f500.ts 行索引 500，视口 300px ≈ 12.5 行）→
+      // FE-40 effect 滚动跟随：scrollTop = 行索引 × ROW_HEIGHT
+      rerender(
+        React.createElement(FileTree, {
+          ...props,
+          selectedPath: "/p/f500.ts",
+        }),
+      );
+      expect(scroller.scrollTop).toBe(500 * 24);
     } finally {
       restore();
     }

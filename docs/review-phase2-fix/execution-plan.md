@@ -78,7 +78,7 @@ Workflow({
 | S04 | ✅ | 7664caf | SEC-16 fixed（fix-loop 1 轮：新增用例 path_b clone 编译修复） | 连切沙箱不串 |
 | S05 | ✅ | be96a77 | BE-10/FE-38 fixed（一次通过，无 fix-loop） | 空页面 watcher 停止 |
 | S06 | ✅ | 34c3bf1 | FE-37/36、BE-23 fixed（一次通过，无 fix-loop） | 切换无回归 + toast 实测 |
-| S07 | ⬜ | | | — |
+| S07 | ✅ | 33d6723 | SEC-04、FE-08/10/42/43/44/45 fixed（一次通过，无 fix-loop） | — |
 | S08 | ⬜ | | | — |
 | S09 | ⬜ | | | 多 session 关窗时长 |
 | S10 | ⬜ | | | — |

@@ -5,6 +5,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
+import { makeVfs, mockEntry } from "./helpers/vfs";
 
 // ─── Hoisted mocks ───
 const mocks = vi.hoisted(() => {
@@ -413,5 +414,68 @@ describe("useFileTree — F3 Generation 取消机制", () => {
     // 推进时间触发慢 gitStatus
     await vi.advanceTimersByTimeAsync(300);
     expect(result.current.gitStatusMap.get("C:/project-a/x.ts")).toBeUndefined();
+  });
+});
+
+// ============================================================
+// FE-41: refreshSubtreeAt 目标已删空目录行移除
+// ============================================================
+describe("useFileTree — FE-41 目标已删目录行移除", () => {
+  beforeEach(() => {
+    mocks.resetAll();
+  });
+
+  it("FE-41-1: 已展开目录被删除后 file-saved 子树刷新 → 该目录行从树中移除", async () => {
+    // vfs：根含 a.ts + src 目录，src 已展开（含 b.ts + sub 子目录）
+    const vfs = makeVfs(mocks.mockReadDir, {
+      "C:/project": [
+        mockEntry("a.ts", false, "C:/project/a.ts"),
+        mockEntry("src", true, "C:/project/src"),
+      ],
+      "C:/project/src": [
+        mockEntry("b.ts", false, "C:/project/src/b.ts"),
+        mockEntry("sub", true, "C:/project/src/sub"),
+      ],
+      "C:/project/src/sub": [],
+    });
+
+    const { result } = renderHook(
+      () => useFileTree({ rootPath: "C:/project" }),
+    );
+
+    await waitFor(() => {
+      expect(result.current.rootNodes.length).toBe(2);
+    }, { timeout: 3000 });
+
+    // 展开 src，加载其子项
+    await act(async () => {
+      await result.current.toggleExpand("C:/project/src");
+    });
+    await waitFor(() => {
+      const src = result.current.rootNodes.find(
+        (n) => n.entry.path === "C:/project/src",
+      );
+      expect(src?.expanded).toBe(true);
+      expect(src?.children.length).toBe(2);
+    }, { timeout: 3000 });
+
+    // 磁盘上删除 src 目录（vfs.delete 后 readDir 抛 ENOENT），
+    // 再模拟其内部文件保存事件触发子树刷新（300ms 去抖）
+    vfs.delete("C:/project/src");
+    window.dispatchEvent(
+      new CustomEvent("slterm:file-saved", {
+        detail: { path: "C:/project/src/b.ts" },
+      }),
+    );
+
+    // 刷新目标（src）readDir 抛错 → 判定「目标已删除」→ 从父层移除该目录行
+    await waitFor(() => {
+      expect(
+        result.current.rootNodes.find((n) => n.entry.path === "C:/project/src"),
+      ).toBeUndefined();
+    }, { timeout: 3000 });
+    expect(result.current.rootNodes.map((n) => n.entry.path)).toEqual([
+      "C:/project/a.ts",
+    ]);
   });
 });

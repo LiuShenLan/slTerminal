@@ -645,6 +645,19 @@ export const FileTree: React.FC<FileTreeProps> = ({
       : total;
   const visibleRows = rows.slice(start, end);
 
+  // FE-40：程序式选中视口外行时滚动跟随——selectedPath 变化且对应行不在
+  // [start, end] 窗口内 → scrollTop 定位使该行可见（虚拟化常见缺口补齐；
+  // 鼠标点击天然落在可见区，本 effect 服务 explorer.open 等程序式选中路径）
+  useLayoutEffect(() => {
+    if (!selectedPath) return;
+    const index = rows.findIndex(
+      (row) => row.kind === "node" && row.node?.entry.path === selectedPath,
+    );
+    if (index < 0 || (index >= start && index < end)) return;
+    const el = scrollRef.current;
+    if (el) el.scrollTop = index * ROW_HEIGHT;
+  }, [selectedPath, rows, start, end]);
+
   /** 点击虚拟化内容区空白（padding 占位区域）→ 取消选中（与原「点击树下方空白取消选中」一致） */
   const handleContentBlankClick = useCallback(
     (e: React.MouseEvent) => {

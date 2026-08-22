@@ -255,7 +255,37 @@ export function useFileTree({ rootPath }: UseFileTreeOptions) {
       }
 
       // 重载目标目录一层，原位合并（保留子节点展开态与子树）
-      const fresh = await loadDirectory(targetPath);
+      // FE-41：直调 readDir 以区分「目标目录已删除」（readDir 抛错）与「空目录」（返回 []）——
+      // loadDirectory 容错返回 [] 无法区分两者；目标已删时须从父层移除该目录行
+      let fresh: TreeNode[];
+      let targetMissing = false;
+      try {
+        const entries = await readDir(targetPath);
+        fresh = entries.map((entry) => ({
+          entry,
+          expanded: false,
+          children: [],
+          loading: false,
+        }));
+      } catch {
+        targetMissing = true;
+        fresh = [];
+      }
+      if (targetMissing && targetPath !== rp) {
+        // 目标目录本身已被删除 → 从父层 children 移除该目录行（不留空目录行残留）
+        setRootNodes((prev) => {
+          const removeNode = (nodes: TreeNode[]): TreeNode[] =>
+            nodes
+              .filter((n) => n.entry.path !== targetPath)
+              .map((n) =>
+                n.expanded && n.children.length > 0
+                  ? { ...n, children: removeNode(n.children) }
+                  : n,
+              );
+          return removeNode(prev);
+        });
+        return true;
+      }
       setRootNodes((prev) => {
         const mergeLayer = (
           freshNodes: TreeNode[],
