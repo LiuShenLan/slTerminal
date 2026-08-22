@@ -35,7 +35,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### state.rs — AppState 与路径沙箱
 
-- `AppState`：`project_root: RwLock<Option<PathBuf>>` + `pty: PtyState` + `watcher_pool: LruWatcherPool`（notify 模块）+ `git_repo_cache: LruCache`（BE-09 容量 8，见 @git/CLAUDE.md）
+- `AppState`：`project_root: RwLock<Option<PathBuf>>` + `project_root_lock: tokio::sync::Mutex<()>`（SEC-16：set_project_root 串行化锁——canonicalize+apply 全程互斥，A→B 快速切换时慢 canonicalize 的 A 不得后写回覆盖 B）+ `pty: PtyState` + `watcher_pool: LruWatcherPool`（notify 模块）+ `git_repo_cache: LruCache`（BE-09 容量 8，见 @git/CLAUDE.md）
 - `PtySession`/`PtyState`：PTY 会话生命周期（master/child/writer/reader_handle/channel/output_ring/exit_code/da1_injected/job_object/panel_id）——细节见 @pty/CLAUDE.md
 - `validate_path_within_root`：路径沙箱核心，覆盖全部 10 个命令（fs 6 + notify_watch + git_status/git_diff + pty_spawn cwd）；`canonicalize_or_ancestor` 支持已删除文件路径校验（上溯最近存在的祖先）。对 `project_root=None` 一律拒绝（非 cfg!(test)）——前端加载时序保障见 @fs/CLAUDE.md
 

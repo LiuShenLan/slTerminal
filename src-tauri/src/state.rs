@@ -135,6 +135,9 @@ pub struct AppState {
     pub file_watchers: Mutex<LruWatcherPool>,
     /// 当前项目根路径（由前端打开项目时设置，用于路径 sandbox 校验）
     pub project_root: RwLock<Option<PathBuf>>,
+    /// set_project_root 串行化锁（SEC-16：A→B 快速切换时慢 canonicalize 的 A
+    /// 不得后写回覆盖 B——整个 canonicalize+apply 过程互斥）
+    pub project_root_lock: tokio::sync::Mutex<()>,
     /// git 仓库缓存：workdir → Repository，LRU 容量 GIT_REPO_CACHE_CAPACITY（BE-09）
     pub git_repo_cache: Mutex<GitRepoCache>,
 }
@@ -151,6 +154,7 @@ impl AppState {
             pty: PtyState::new(),
             file_watchers: Mutex::new(LruWatcherPool::new(WATCHER_POOL_CAPACITY)),
             project_root: RwLock::new(None),
+            project_root_lock: tokio::sync::Mutex::new(()),
             git_repo_cache: Mutex::new(GitRepoCache::new(GIT_REPO_CACHE_CAPACITY)),
         }
     }
@@ -247,14 +251,18 @@ pub fn validate_path_within_root(
 /// SEC-14: canonicalize 失败/目录不可读 → 返回 Err 且清空旧 root（防沙箱误放行旧路径）。
 #[tauri::command]
 pub async fn set_project_root(path: String, state: State<'_, AppState>) -> Result<(), AppError> {
-    set_project_root_impl(&state.project_root, path).await
+    set_project_root_impl(&state.project_root, &state.project_root_lock, path).await
 }
 
 /// set_project_root 命令内核（BE-04/SEC-14，供 L1 测试直接调用，无需构造 tauri::State）
 async fn set_project_root_impl(
     project_root: &RwLock<Option<PathBuf>>,
+    lock: &tokio::sync::Mutex<()>,
     path: String,
 ) -> Result<(), AppError> {
+    // SEC-16: 持锁至函数尾——canonicalize 与 apply 全程互斥，
+    // A→B 快速切换时慢 canonicalize 的 A 不得在 B 写入后再后写回覆盖 B
+    let _guard = lock.lock().await;
     // BE-04: canonicalize 在 spawn_blocking 中执行（磁盘 I/O 不占 IPC worker）
     let canonical = match tokio::task::spawn_blocking(move || -> Result<PathBuf, AppError> {
         dunce::canonicalize(Path::new(&path)).map_err(|e| AppError::IoKind {
@@ -853,7 +861,11 @@ mod project_root_tests {
 
         tokio::runtime::Runtime::new()
             .unwrap()
-            .block_on(set_project_root_impl(&app_state.project_root, path))
+            .block_on(set_project_root_impl(
+                &app_state.project_root,
+                &tokio::sync::Mutex::new(()),
+                path,
+            ))
             .unwrap();
 
         let root = app_state.project_root.read().unwrap().clone().unwrap();
@@ -875,6 +887,7 @@ mod project_root_tests {
             .unwrap()
             .block_on(set_project_root_impl(
                 &app_state.project_root,
+                &tokio::sync::Mutex::new(()),
                 dir.path().to_string_lossy().to_string(),
             ))
             .unwrap();
@@ -892,7 +905,11 @@ mod project_root_tests {
             .to_string();
         let result = tokio::runtime::Runtime::new()
             .unwrap()
-            .block_on(set_project_root_impl(&app_state.project_root, nonexistent));
+            .block_on(set_project_root_impl(
+                &app_state.project_root,
+                &tokio::sync::Mutex::new(()),
+                nonexistent,
+            ));
 
         assert!(result.is_err(), "不存在路径应返回 Err");
         assert!(
@@ -909,7 +926,11 @@ mod project_root_tests {
 
         let result = tokio::runtime::Runtime::new()
             .unwrap()
-            .block_on(set_project_root_impl(&app_state.project_root, nonexistent));
+            .block_on(set_project_root_impl(
+                &app_state.project_root,
+                &tokio::sync::Mutex::new(()),
+                nonexistent,
+            ));
 
         assert!(result.is_err(), "不存在路径应返回 Err");
         let msg = result.unwrap_err().to_string();
@@ -928,7 +949,11 @@ mod project_root_tests {
         let nonexistent = dir.path().join("no_such_dir").to_string_lossy().to_string();
         tokio::runtime::Runtime::new()
             .unwrap()
-            .block_on(set_project_root_impl(&app_state.project_root, nonexistent))
+            .block_on(set_project_root_impl(
+                &app_state.project_root,
+                &tokio::sync::Mutex::new(()),
+                nonexistent,
+            ))
             .unwrap_err();
 
         // 再次成功设置
@@ -936,6 +961,7 @@ mod project_root_tests {
             .unwrap()
             .block_on(set_project_root_impl(
                 &app_state.project_root,
+                &tokio::sync::Mutex::new(()),
                 first.to_string_lossy().to_string(),
             ))
             .unwrap();
@@ -945,6 +971,58 @@ mod project_root_tests {
             dunce::canonicalize(&first).unwrap(),
             "失败清空后应可重新成功设置"
         );
+    }
+
+    /// SEC-16: 并发 set_project_root_impl 串行化——A→B 快速切换时慢 canonicalize 的 A
+    /// 不得后写回覆盖 B（Mutex 保证 canonicalize+apply 全程互斥）；
+    /// 两调用均 Ok、最终 root 为 A/B 之一且非 None、顺序调用 B 后 root == B
+    #[test]
+    fn set_project_root_serializes_concurrent_calls() {
+        let app_state = AppState::new();
+        let dir_a = tempfile::tempdir().unwrap();
+        let dir_b = tempfile::tempdir().unwrap();
+        let path_a = dir_a.path().to_string_lossy().to_string();
+        let path_b = dir_b.path().to_string_lossy().to_string();
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (result_a, result_b) = rt.block_on(async {
+            tokio::join!(
+                set_project_root_impl(
+                    &app_state.project_root,
+                    &app_state.project_root_lock,
+                    path_a,
+                ),
+                set_project_root_impl(
+                    &app_state.project_root,
+                    &app_state.project_root_lock,
+                    // path_b 传 clone——String 非 Copy，join! 分支 move 后末尾顺序调用仍需再用
+                    path_b.clone(),
+                ),
+            )
+        });
+
+        assert!(result_a.is_ok(), "并发 A 调用应 Ok");
+        assert!(result_b.is_ok(), "并发 B 调用应 Ok");
+        // 串行化保证 root 为 A/B 之一（非交错写回产物），且非 None
+        let root = app_state.project_root.read().unwrap().clone().unwrap();
+        let canonical_a = dunce::canonicalize(dir_a.path()).unwrap();
+        let canonical_b = dunce::canonicalize(dir_b.path()).unwrap();
+        assert!(
+            root == canonical_a || root == canonical_b,
+            "并发后 root 应为 A/B 之一，实际: {root:?}"
+        );
+
+        // 再顺序调用 B → root 稳定为 B
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(set_project_root_impl(
+                &app_state.project_root,
+                &app_state.project_root_lock,
+                path_b,
+            ))
+            .unwrap();
+        let root = app_state.project_root.read().unwrap().clone().unwrap();
+        assert_eq!(root, canonical_b, "顺序调用 B 后 root 应为 B");
     }
 }
 
