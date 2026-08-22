@@ -1,7 +1,7 @@
 // colors.test.ts — theme/colors.ts 配色 token 单元测试
 //
 // colors.ts 为 facade：值代理 schemeRegistry.getActive()（默认 linear），
-// 测试断言值即 linear 方案值（值契约见 docs/ui-redesign-impl/checklist.md 附录 A；
+// 测试断言值即 linear 方案值（值契约锚点 = src/theme/schemes/linear.ts；
 // 删除死配置与新增 ON_ACCENT_FG 见 C1 清单）。
 //
 // 覆盖路径：

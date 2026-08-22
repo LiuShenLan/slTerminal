@@ -66,7 +66,7 @@
 
 **Status**: accepted（2026-08-16）
 
-**上下文**：现状 UI（darcula 时代）被评价为「古板呆滞」——中灰蓝底平铺、实色粗边框、盒式页签、装饰 emoji、侧栏多区块堆叠。用户调研 11 款软件暗黑 UI（docs/refer/）后要求整套重设计：仅暗黑、JetBrains Mono 全局、无动效、不做多主题切换。只交付设计产物（设计方案 + 需求规格 + 视觉稿），不含实现。
+**上下文**：现状 UI（darcula 时代）被评价为「古板呆滞」——中灰蓝底平铺、实色粗边框、盒式页签、装饰 emoji、侧栏多区块堆叠。用户调研 11 款软件暗黑 UI 后要求整套重设计：仅暗黑、JetBrains Mono 全局、无动效、不做多主题切换。只交付设计产物（设计方案 + 需求规格 + 视觉稿），不含实现。
 
 **决策**：经 13 题澄清（风格锚点/底色温度/强调色/标题栏/图标/页签/密度/IA/内容色/交付流程/规格粒度）+ 6 个候选视觉稿（3 骨架内 + 3 突破型）浏览器实测对比，选定**候选 A「Linear 极黑克制」**，无微调：
 
@@ -75,7 +75,7 @@
 - 自绘 34px 一体化标题栏（原生标题栏退役）；扁平页签 + 底部 2px 指示条 + hover 才显关闭钮。
 - 侧栏 IA 重构为**统一导航树**（项目 → 页面 → 会话，历史会话折叠计数）；文件浏览器独立为活动栏视图；活动栏固定三槽（导航树/文件/Commit）。
 - 装饰图标全部单色线性 SVG（15px/1.5px 描边/currentColor）；状态 emoji → **状态圆点**（绿/黄/灰，语义来源 F3 不变）；CLI 品牌 logo 保留彩色。
-- 交付物：`docs/ui-redesign/design.md`（设计方案）、`requirements.md`（UI-xxx 编号需求 + 可测验收 + P0/P1 + 对比度自检附录）、`final-mockup.html`（主界面 + 组件集双页静态稿）。
+- 交付物：`design.md`（设计方案）、`requirements.md`（UI-xxx 编号需求 + 可测验收 + P0/P1 + 对比度自检附录）、`final-mockup.html`（主界面 + 组件集双页静态稿）。
 
 **与 theme 系统对接**（后续实现期）：全部色值经 ADR-0002 配色方案单点落位——新增 scheme 文件替换 darcula 内置方案，需求规格每条色值标注 types.ts 槽位；启动链 fail-safe 三处静态色手动同步 `#0a0a0b`；多主题切换机制不建（硬约束）。
 
@@ -89,7 +89,7 @@
 - F3 四态 emoji 的**视觉呈现**被状态圆点取代（事件→状态映射逻辑不变）；F9 品牌 logo 保留。
 - 现状侧栏（项目列表 + Agent Status 等区块）IA 将随实现重构为统一导航树；行为逻辑（快捷键/右键菜单/会话恢复）不变。
 
-**实现期决策（2026-08）**：Stage 01-08 实施（docs/ui-redesign-impl/checklist.md 46 项）期间追加确认的决策，逐条落地于代码：
+**实现期决策（2026-08）**：Stage 01-08 实施（checklist.md 46 项）期间追加确认的决策，逐条落地于代码：
 
 - **UI-405/406/407 三条剔除**（Agent 面板/composer/状态行）：为远期新功能而非视觉重设计，不属本期范围；2026-08-16 定调——聊天式 Agent 面板为独立产品方向，未来单独立项。requirements.md 三条已补「远期愿景，本期不实施」注记（DOC-04），编号保留。
 - **darcula 删除、linear 替换**：新方案 `linear` 替换并删除 darcula（schemes/ 只余 linear.ts）；启动链默认 id 改 `linear`，未知 id 回退机制内建（schemeRegistry.setActive）。
@@ -193,7 +193,7 @@
 
 **Status**: accepted（2026-08-18，DOC-10）
 
-**上下文**：review 修复（docs/review-fix/checklist.md 93 项）多处以「登记豁免/保留现状 + 文档登记」关闭，登记点散落各模块文档。此处汇总 root 侧豁免决策，避免各登记点失散；模块内明细以对应模块 CLAUDE.md 为准。
+**上下文**：review 修复（93 项）多处以「登记豁免/保留现状 + 文档登记」关闭，登记点散落各模块文档。此处汇总 root 侧豁免决策，避免各登记点失散；模块内明细以对应模块 CLAUDE.md 为准。
 
 **决策**：
 
@@ -217,7 +217,7 @@
 
 **Status**: accepted（2026-08-22，S10-C）
 
-**上下文**：`docs/review-phase2-fix/checklist.md` 第 0 节决策表 D12~D20（续 review-fix D1~D11，编号规则：未闭环/partial 沿用原 ID，新发现续编 SEC-15~17/BE-22~25/FE-36~48/TE-14~16/DOC-11~14）。此处汇总 root 侧决策、TE-07 妥协结论与 TE-15 工程债务，模块内明细以对应模块 CLAUDE.md 为准。
+**上下文**：review-phase2-fix 清单第 0 节决策表 D12~D20（续 review-fix D1~D11，编号规则：未闭环/partial 沿用原 ID，新发现续编 SEC-15~17/BE-22~25/FE-36~48/TE-14~16/DOC-11~14）。此处汇总 root 侧决策、TE-07 妥协结论与 TE-15 工程债务，模块内明细以对应模块 CLAUDE.md 为准。
 
 **决策（D12~D20）**：
 
@@ -235,7 +235,7 @@
 
 **核验留痕（计划期已实读全部修复点代码原文）**：FE-39 经实查 `nav-tree-history.test.tsx:302-336` 已含嵌套最深前缀用例（Phase 2 04 报告此项失实）——降为「验证已固化，零改动」。FE-45 实查为 **5 处** catch{}（05 报告列 3 处，projects.ts 有 2 处：:254 与 :275）。
 
-**TE-07 执行结果（S02 妥协背书，详见 docs/review-phase2-fix/s02-execution-report.md）**：主 typescript 直改 ^7.0.2 **不可行**，D14 三支 fallback 实测走尽（typescript-eslint 最新 8.67.0 peerDependencies `typescript: '>=4.8.4 <6.1.0'` 全系拒绝 TS7、且模块加载期硬校验 `ts.versionMajorMinor >= 7` 崩在加载期，与 type-aware 规则开关无关；overrides 钉兼容组合与根依赖 `^7.0.2` 冲突不可行）。**正式化妥协：双 TS 并存（side-by-side）**——`"typescript": "npm:@typescript/typescript6@^6.0.2"`（TS6 包装器，供 typescript-eslint 8.67.0 消费）+ `"@typescript/native": "npm:typescript@^7.0.2"`（tsc bin = TS7，`npx tsc --version` 7.0.2）。该形态全门禁绿。**升级触发条件（同时满足）**：① typescript-eslint issue #10940 闭环（发布支持 TS7 版本）② TS7.1 稳定发布；触发后删 TS6 包装器与 `@typescript/native` 别名，`"typescript"` 直改 `^7.1.0`。
+**TE-07 执行结果（S02 妥协背书）**：主 typescript 直改 ^7.0.2 **不可行**，D14 三支 fallback 实测走尽（typescript-eslint 最新 8.67.0 peerDependencies `typescript: '>=4.8.4 <6.1.0'` 全系拒绝 TS7、且模块加载期硬校验 `ts.versionMajorMinor >= 7` 崩在加载期，与 type-aware 规则开关无关；overrides 钉兼容组合与根依赖 `^7.0.2` 冲突不可行）。**正式化妥协：双 TS 并存（side-by-side）**——`"typescript": "npm:@typescript/typescript6@^6.0.2"`（TS6 包装器，供 typescript-eslint 8.67.0 消费）+ `"@typescript/native": "npm:typescript@^7.0.2"`（tsc bin = TS7，`npx tsc --version` 7.0.2）。该形态全门禁绿。**升级触发条件（同时满足）**：① typescript-eslint issue #10940 闭环（发布支持 TS7 版本）② TS7.1 稳定发布；触发后删 TS6 包装器与 `@typescript/native` 别名，`"typescript"` 直改 `^7.1.0`。
 
 **TE-15 工程债务（已知债务登记，代码零改动）**：json-schema-library 9.x/11.x 双 major 并存——codemirror-json-schema@0.8.1 锁 9.x（上游约束），主声明 11.6.2；运行时两实例并存无冲突（JSON Schema 校验各自独立），待上游升级消解（TE-15）。
 

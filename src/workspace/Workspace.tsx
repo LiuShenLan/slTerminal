@@ -3,7 +3,7 @@
 // 每个操作页面拥有独立 Dockview 实例，页面切换通过 CSS display:none/block 实现。
 // xterm.js 不支持二次 open()（Issue #4978），此架构从根本上解决 H6（终端跨页面存活）。
 //
-// FE-01（D1 决策）：保持多 Dockview 实例（架构豁免登记，见 docs/review-fix/stages.md S19）——
+// FE-01（D1 决策）：保持多 Dockview 实例（架构豁免登记，见 .claude/adr.md ADR-0009 FE-01 行）——
 // 页面总数上限 MAX_PAGES = 20 在 stores/projects.ts 的 addPage 拒绝超限新增（防内存/DOM
 // 线性增长）；本组件不主动限制，超限由 store 层 toast 告警。
 //

@@ -1,7 +1,6 @@
 // nav-tree-history.test.tsx — 导航树历史折叠节点 L2 测试（NAV-10 L2 部分，NAV-03）
 //
-// 规格契约（写死于 docs/ui-redesign-impl/workflows/stage-06-sidebar.js 脚本头
-// + checklist.md NAV-03 条目 + stages.md Stage 06 实现要点）：
+// 规格契约（写死于 NAV-03 决策，登记于 src/features/navTree/CLAUDE.md）：
 //   - 历史会话折叠节点挂项目下（nav-history-node）：IconHistory 时钟 +「历史session」+ 计数 pill
 //     （SIDEBAR_BG 底 #1a1a1e + PLACEHOLDER_FG 字 fg-4）
 //   - 归属：cwd 前缀匹配项目 rootPath

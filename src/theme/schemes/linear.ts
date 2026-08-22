@@ -1,6 +1,6 @@
 // linear — 内置默认配色方案（Linear 极黑克制，ADR-0003 定稿）
 //
-// 值契约单点 = docs/ui-redesign-impl/checklist.md 附录 A（执行 agent 只准照抄，禁止自估色值）。
+// 值契约锚点 = .claude/adr.md ADR-0003（执行 agent 只准照抄本文件现有值，禁止自估色值）。
 // 消费注释权威在 types.ts 各槽位 JSDoc（决策 D8）——本文件只含 fail-safe 交叉引用。
 //
 // 交叉引用（启动链 fail-safe）：React 挂载前的静态硬编码色不在方案系统内，

@@ -34,4 +34,3 @@
 - `CONTEXT.md` — 领域术语表（项目/操作页面/面板/会话等概念的定义与同义词避讳）
 - `.claude/adr.md` — 架构决策记录（ADR-0001~0009）
 - `.claude/test-inventory.md` — 测试用例清单（四级测试全量登记 + 既定豁免清单）
-- `docs/review-fix/` — review 修复清单与 Stage 执行计划

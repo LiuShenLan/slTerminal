@@ -1,7 +1,6 @@
 // nav-tree.test.tsx — 导航树 NavTree L2 测试（NAV-10 L2 部分）
 //
-// 规格契约（写死于 docs/ui-redesign-impl/workflows/stage-06-sidebar.js 脚本头
-// + checklist.md NAV-01/02/03/04/09 条目 + stages.md Stage 06 实现要点）：
+// 规格契约（写死于 NAV-01~09 决策，登记于 src/features/navTree/CLAUDE.md）：
 //   - data-e2e 选择器：nav-tree / nav-row-project / nav-row-page / nav-row-session / nav-history-node
 //   - 三级层级：项目→页面→会话；活跃会话经 panelId→pageId 挂页面下
 //   - 行高 28px（会话行 30px）、圆角 5px；hover #222227（SIDEBAR_COLORS.hover）

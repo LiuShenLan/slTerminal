@@ -1,4 +1,4 @@
-Unused files (38)
+Unused files (19)
 .claude/skills/structured-web-research/scripts/decompose.mjs      
 .claude/skills/structured-web-research/scripts/depth-tier.mjs     
 .claude/skills/systematic-changes-plan/templates/fix-workflow.js  
@@ -6,26 +6,6 @@ Unused files (38)
 .claude/skills/verify-research-output/scripts/classify-error.mjs  
 .claude/skills/verify-research-output/scripts/detect-conflicts.mjs
 .claude/skills/verify-research-output/scripts/review-template.mjs 
-docs/review-fix/workflows/fix-loop.js                             
-docs/review-fix/workflows/stage-01-deps.js                        
-docs/review-fix/workflows/stage-02-backend-security.js            
-docs/review-fix/workflows/stage-03-whitelist.js                   
-docs/review-fix/workflows/stage-04-async-root.js                  
-docs/review-fix/workflows/stage-05-watcher.js                     
-docs/review-fix/workflows/stage-06-reader-batch.js                
-docs/review-fix/workflows/stage-07-fs-chunk.js                    
-docs/review-fix/workflows/stage-08-errors.js                      
-docs/review-fix/workflows/stage-09-corrupted.js                   
-docs/review-fix/workflows/stage-10-dto.js                         
-docs/review-fix/workflows/stage-11-frontend-security.js           
-docs/review-fix/workflows/stage-12-frontend-perf.js               
-docs/review-fix/workflows/stage-13-stability.js                   
-docs/review-fix/workflows/stage-14-deadcode.js                    
-docs/review-fix/workflows/stage-15-major-upgrades.js              
-docs/review-fix/workflows/stage-16-ci-version.js                  
-docs/review-fix/workflows/stage-17-hooks-validate.js              
-docs/review-fix/workflows/stage-18-filetree-virtual.js            
-docs/review-fix/workflows/stage-19-docs.js                        
 e2e-tests/run-wdio.cjs                                            
 src-tauri/src/hooks/claude/slterm-hook-reporter.js                
 src-tauri/src/hooks/claude/slterm-statusline.js                   
