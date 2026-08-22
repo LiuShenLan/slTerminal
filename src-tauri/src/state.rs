@@ -282,8 +282,12 @@ fn apply_project_root(
         Ok(c) => c,
         Err(e) => {
             // SEC-14: 失败时清空旧 root，防止沙箱继续放行已失效的旧路径
-            if let Ok(mut root) = project_root.write() {
-                *root = None;
+            match project_root.write() {
+                Ok(mut root) => *root = None,
+                // BE-24：锁中毒时旧 root 无法清空——接受语义偏差但可观测化（登记见 src-tauri/CLAUDE.md）
+                Err(lock_err) => {
+                    tracing::warn!("project_root 写锁中毒，旧 root 未能清空: {lock_err}");
+                }
             }
             return Err(e);
         }

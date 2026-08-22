@@ -195,11 +195,17 @@ impl FileWatcher {
 
 /// BE-02：事件路径是否命中排除目录（任一分量匹配即排除）
 ///
-/// 用 `components()` 按整分量比较，避免子串误伤（如 `mytarget` 不匹配 `target`）。
+/// 用 `components()` 按整分量比较，避免子串误伤（如 `mytarget` 不匹配 `target`）；
+/// BE-25：分量比较大小写不敏感——Windows 文件系统不区分大小写，
+/// `Node_Modules`/`TARGET`/`DIST` 等变体同样排除（WATCH_EXCLUDE_DIRS 全小写定义）。
 fn is_excluded_path(path: &Path) -> bool {
     path.components()
         .filter_map(|c| c.as_os_str().to_str())
-        .any(|seg| WATCH_EXCLUDE_DIRS.contains(&seg))
+        .any(|seg| {
+            WATCH_EXCLUDE_DIRS
+                .iter()
+                .any(|d| seg.eq_ignore_ascii_case(d))
+        })
 }
 
 /// 下发 Rescan 载荷（need_rescan 溢出 / BE-07 批量合并共用）——携带监听根路径
@@ -353,13 +359,23 @@ pub async fn notify_watch(
 ) -> Result<(), AppError> {
     let watch_path = dunce::simplified(std::path::Path::new(&path)).to_path_buf();
 
-    // 路径前置校验（存在性 + 沙箱），短暂持有 project_root 锁
-    {
+    // 路径前置校验（存在性 + 沙箱），短暂持有 project_root 锁取快照；
+    // BE-22: 校验本身（exists/canonicalize 磁盘 I/O）移入 spawn_blocking，不占 IPC worker
+    let root_snapshot = {
         let root = state
             .project_root
             .read()
             .map_err(|e| AppError::Notify(format!("获取 project_root 锁失败: {e}")))?;
-        validate_watch_path(&watch_path, &root)?;
+        root.clone()
+    };
+    let watch_path_for_validate = watch_path.clone();
+    match tokio::task::spawn_blocking(move || {
+        validate_watch_path(&watch_path_for_validate, &root_snapshot)
+    })
+    .await
+    {
+        Ok(inner) => inner?,
+        Err(e) => return Err(AppError::TaskJoin(e.to_string())),
     }
 
     // 阶段 1：持池锁 → pause_all_except + 缓存检查
@@ -645,7 +661,19 @@ mod tests {
             let p = PathBuf::from(format!("C:/project/{dir}/sub/file.txt"));
             assert!(is_excluded_path(&p), "分量 {dir} 应命中排除");
         }
-        // 整分量比较：子串不误伤
+        // BE-25：大小写变体同样命中（Windows 文件系统不区分大小写，整分量比较忽略大小写）
+        for (dir, variant) in [
+            ("node_modules", "Node_Modules"),
+            ("target", "TARGET"),
+            ("dist", "DIST"),
+        ] {
+            let p = PathBuf::from(format!("C:/project/{variant}/sub/file.txt"));
+            assert!(
+                is_excluded_path(&p),
+                "大小写变体 {variant} 应命中排除（对照 {dir}）"
+            );
+        }
+        // 整分量比较：子串不误伤（大小写不敏感下仍成立——mytarget 与 target 非整分量相等）
         assert!(
             !is_excluded_path(&PathBuf::from("C:/project/mytarget/file.txt")),
             "mytarget 不应命中 target"

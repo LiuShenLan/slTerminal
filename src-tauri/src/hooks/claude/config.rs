@@ -291,6 +291,10 @@ pub(crate) fn config_write_sync(
     validate_hooks_semantics(&hooks)?;
     // 路径解析（user 层不经过沙箱；project/local 层沙箱校验 + 拼接）
     let path = resolve_config_path(l, project_root, project_path, home_dir)?;
+    // SEC-17：user 层写入审计——二次确认仅前端门控（UX 层），后端日志兜底可观测
+    if matches!(l, Layer::User) {
+        tracing::warn!(target: "audit", "hooks user 层配置写入: {}", path.display());
+    }
     write_hooks_subtree(&path, hooks)
 }
 

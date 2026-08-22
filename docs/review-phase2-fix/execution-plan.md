@@ -73,8 +73,8 @@ Workflow({
 | Stage | 状态 | commit hash | verify 结果 | 人工验证点 |
 |-------|------|-------------|-------------|------------|
 | S01 | ✅ | ee02b4a | TE-16/13 fixed；TE-12 fix-loop 1 轮（真死代码删除+注释背书+执行报告） | — |
-| S02 | ⬜ | | 妥协结论（TE-07）：typescript-eslint 8.x 全系不支持 TS7——8.67.0 最新版 peerDependencies 上限 `<6.1.0` 且模块加载期硬拒 TS7，D14 fallback 三支（升级/overrides/暂停 type-aware）全部实测走尽；保留 side-by-side 形态（typescript6 包装器 + @typescript/native 7.0.2 供 tsc bin + typescript-eslint 8.67.0），全门禁绿。升级触发条件：typescript-eslint issue #10940 闭环且 TS7.1 稳定发布后移除 TS6 包装器、主 typescript 直改 ^7.x（详见 s02-execution-report.md）；ADR 登记由 S10-C 收口 | 真实产物冒烟 |
-| S03 | ⬜ | | | 三 shell spawn（Win11+Win10） |
+| S02 | ✅ | 1233336 | TE-06/14 fixed；TE-07 fix-loop 1 轮（妥协正式化）。妥协结论（TE-07）：typescript-eslint 8.x 全系不支持 TS7——8.67.0 最新版 peerDependencies 上限 `<6.1.0` 且模块加载期硬拒 TS7，D14 fallback 三支（升级/overrides/暂停 type-aware）全部实测走尽；保留 side-by-side 形态（typescript6 包装器 + @typescript/native 7.0.2 供 tsc bin + typescript-eslint 8.67.0），全门禁绿。升级触发条件：typescript-eslint issue #10940 闭环且 TS7.1 稳定发布后移除 TS6 包装器、主 typescript 直改 ^7.x（详见 s02-execution-report.md）；ADR 登记由 S10-C 收口 | 真实产物冒烟 |
+| S03 | ✅ | | SEC-17/BE-22/BE-24 fixed；SEC-15/BE-25 fix-loop 1 轮（新增代码 fmt 门禁修复） | 三 shell spawn（Win11+Win10） |
 | S04 | ⬜ | | | 连切沙箱不串 |
 | S05 | ⬜ | | | 空页面 watcher 停止 |
 | S06 | ⬜ | | | 切换无回归 + toast 实测 |

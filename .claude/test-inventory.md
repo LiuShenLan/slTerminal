@@ -27,6 +27,7 @@
 | HTML postMessage 真实 WebView2 行为（opaque origin 序列化 / CSP 强制） | jsdom 无法模拟 opaque origin 与 WebView2 CSP；`e.origin === "null"` 为 WHATWG 规范推断 | L4 `html.e2e.ts` Ctrl+W postMessage 往返（真实二进制）+ L2 四负面用例（IHE-03） | 13 P-5 |
 | mockcli 历史条目展示（L4） | 历史条目由后端 provider 打标产出，生产二进制仅 claude provider（cliId 恒 "claude"）——无 mockcli 后端 provider 则造不出 mockcli 历史行；为测试在生产留后门（假 provider/agent_history 扩展）代价过大 | L2 AC-4③（mock-cli-profile.test.tsx 历史聚合 UI：mock 条目 cliId="mockcli" 出现在历史区 + 行 logo 按 session.cliId 取 mockcli iconSrc） | CS-3 |
 | mockcli 双击恢复注入（L4） | 同历史条目——恢复编排注入内容由 claude provider buildRestoreInput 产出（`claude --resume <id>`），mockcli 无后端 provider 造不出可恢复的 mockcli 历史会话行；该链路 CLI 无关性由 L2 覆盖 | L2 AC-4⑤（mock-cli-profile.test.tsx 恢复注入：pty.write 内容 = mock buildRestoreInput 桩输出，普通/fork） | CS-3 |
+| SEC-17 hooks user 层写入审计日志（`tracing::warn!(target: "audit")`） | tracing 输出为 I/O 副作用，L1 不可断言（同 reader_loop 日志告警豁免先例）；插入审计不改写盘行为 | 人工可观测——运行日志含 `hooks user 层配置写入:` audit 条目；行为本身由既有 `config_write_sync_*` L1 用例（含无副作用断言）锁死 | SEC-17 |
 
 > 原豁免表中 `FileWatcher::start`/`notify_watch` 与 `claude_history` 命令包装两项已按 D6 **从豁免重分类为补测**（Stage 05：notify 抽 `EventEmitter` trait 注入 mock emitter 驱动事件循环；history 补命令包装层 `block_on` 用例），不再列入豁免表。
 

@@ -43,6 +43,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 state.rs 多处 `Arc<Mutex<...>>`（child/writer/output_ring 等）用标准库 `std::sync::Mutex`。review 建议换 `parking_lot`（无中毒）或 `catch_unwind` 包裹——**决策：保持现状，不引入**。理由：中毒仅在持锁 panic 时发生（毒后 `.lock()` 返回 Err），本仓持锁临界区均为短小无 panic 路径（锁内不做可能 panic 的分配/IO），中毒实际不可达；换 parking_lot 是零收益依赖变更。**`parking_lot`/`catch_unwind` 仅作未来引入高风险外部代码（可能在锁内 panic）时的预案**——届时再评估。新建持锁临界区时保持「锁内不做可能 panic 的工作」纪律即可。
 
+**BE-24 例外（SEC-14 锁中毒分支可观测化）**：`apply_project_root` 失败时清空旧 root（SEC-14）在写锁中毒时不生效（旧 root 残留至进程退出）——已 `tracing::warn!` 可观测化，接受偏差（中毒本身不可达，见上节）。
+
 ### error.rs — 统一错误类型
 
 `AppError`（camelCase 序列化）：IoKind/Pty/Git/Serde/**ConfigParse**（BE-15，配置 JSON 损坏场景）/Unknown/SessionNotFound/TaskJoin/Notify/Validation/PathNotAllowed——共 11 变体。全部 Tauri 命令返回 `Result<_, AppError>`（硬约束 #3）。**BE-13（S08）**：`From<std::io::Error>` 本身不动，fs/settings/projects 命令内 `map_err` 调用点注入路径上下文，错误消息含路径；用户可见消息改业务语义（如「保存设置失败」），技术细节进 tracing。

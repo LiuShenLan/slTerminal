@@ -127,7 +127,7 @@ watcher 使用 `static WATCHER: Mutex<Option<Box<dyn WatcherHandle>>>`（模块�
 
 **Layer 枚举（BE-18，S10）**：`parse_layer` 返回 `Layer::User/Project/Local` 枚举（serde `rename_all = "snake_case"`，与前端 `HooksLayer = "user"|"project"|"local"` 字面量联合双边对应——硬约束 #4/DOC-06 语义值集同步登记）。非法 layer / 非法 hooks / JSON 损坏统一走 `AppError::Validation`，IO 错误走 `AppError::IoKind`（P3-BE-08）。阻塞 I/O 全部在 `spawn_blocking` 内执行（硬约束 #3）。
 
-**写入语义校验（SEC-05，S17，D9）**：`config_write_sync` 写盘前经 `validate_hooks_semantics` 三规则校验（基于 BE-18 所建 `HooksSubtree`/`MatcherGroup`/`HookHandler` 结构体反序列化校验形态）——事件名 ∈ `HOOK_EVENTS`（10 事件白名单，复用 inject.rs 单点）、handler `type == "command"`、`command` 为非空字符串（缺失/null/空串/纯空白全拒）；校验失败返回 `AppError::Validation` **且零副作用**（不写盘）。**user 层写入时前端 confirmDialog 二次确认**（D9，project/local 层不确认）。L1 测试：`semantics_rejects_*` 五条 + `config_write_sync_*` 四条（含无副作用断言）。
+**写入语义校验（SEC-05，S17，D9）**：`config_write_sync` 写盘前经 `validate_hooks_semantics` 三规则校验（基于 BE-18 所建 `HooksSubtree`/`MatcherGroup`/`HookHandler` 结构体反序列化校验形态）——事件名 ∈ `HOOK_EVENTS`（10 事件白名单，复用 inject.rs 单点）、handler `type == "command"`、`command` 为非空字符串（缺失/null/空串/纯空白全拒）；校验失败返回 `AppError::Validation` **且零副作用**（不写盘）。**user 层写入时前端 confirmDialog 二次确认**（D9，project/local 层不确认）。**威胁模型登记（SEC-17）**：user 层二次确认 = UX 层非安全边界（同进程信任模型，恶意前端代码本可绕过任何后端门控）；后端以 `tracing::warn!(target: "audit")` 记录 user 层写入供事后审计。L1 测试：`semantics_rejects_*` 五条 + `config_write_sync_*` 四条（含无副作用断言）。
 
 **read 语义**：文件不存在或无 `hooks` 键 → `Ok(Null)`（面板首次创建场景）；**JSON 损坏 → `Err`**（不返回 Null——防止面板在损坏文件上编辑后 merge 丢其他字段，对齐 C9 注入的非法中止先例）。
 

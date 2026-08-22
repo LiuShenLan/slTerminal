@@ -98,30 +98,40 @@ pub(crate) fn validate_shell_allowlist(program: &str) -> Result<(), AppError> {
 /// 比较 program 与 PATH 解析结果是否指向同一可执行文件（SEC-01 判定核心）
 ///
 /// 优先 canonicalize 精确比较（拉平 8.3 短名/`..`/symlink 差异）；
-/// 任一侧 canonicalize 失败（应用执行别名/特殊 ACL——CreateProcess 可运行但
-/// 普通文件 API 打开失败，os error 1920 场景）回退归一字符串比较：
-/// Windows 大小写不敏感文件系统下，归一化后字符串相等的两路径必然指向
-/// 同一文件，安全语义不弱化（伪造路径与 PATH 解析结果字符串必不同，仍拒绝）。
+/// 双侧 canonicalize 均失败（应用执行别名/特殊 ACL——CreateProcess 可运行但
+/// 普通文件 API 打开失败，os error 1920 场景；alias 两侧指向同一路径）
+/// 才回退归一字符串比较（残余风险登记：此时仅剩字符串证据，理论上可构造
+/// 同名字符串绕过——alias 兼容与风险的权衡，D15 决策，SEC-15）；
+/// 单侧失败即拒绝（SEC-15 收窄：字符串比对无法证明文件身份，
+/// reparse point/执行别名组合可绕过，从严）。
 fn paths_match(program: &str, resolved: &str) -> bool {
-    // 1) canonicalize 双成功 → 精确比较（8.3 短名/`..`/symlink 差异由系统拉平）
-    if let (Ok(cp), Ok(cr)) = (
+    match (
         std::fs::canonicalize(program),
         std::fs::canonicalize(resolved),
     ) {
-        return if cfg!(windows) {
-            cp.to_string_lossy()
-                .eq_ignore_ascii_case(&cr.to_string_lossy())
-        } else {
-            cp == cr
-        };
-    }
-    // 2) fallback：分隔符归一 + 去尾分隔符后比对（Windows 忽略大小写）
-    let a = normalize_for_compare(program);
-    let b = normalize_for_compare(resolved);
-    if cfg!(windows) {
-        a.eq_ignore_ascii_case(&b)
-    } else {
-        a == b
+        // 1) canonicalize 双成功 → 精确比较（8.3 短名/`..`/symlink 差异由系统拉平）
+        (Ok(cp), Ok(cr)) => {
+            if cfg!(windows) {
+                cp.to_string_lossy()
+                    .eq_ignore_ascii_case(&cr.to_string_lossy())
+            } else {
+                cp == cr
+            }
+        }
+        // 2) 双侧均失败（应用执行别名/特殊 ACL——CreateProcess 可运行但普通文件
+        //    API 打开失败，os error 1920 场景；alias 两侧指向同一路径）→ 回退归一字符串比较
+        (Err(_), Err(_)) => {
+            let a = normalize_for_compare(program);
+            let b = normalize_for_compare(resolved);
+            if cfg!(windows) {
+                a.eq_ignore_ascii_case(&b)
+            } else {
+                a == b
+            }
+        }
+        // 3) SEC-15：单侧失败即拒绝——字符串比对无法证明文件身份，
+        //    reparse point/执行别名组合可绕过，从严
+        _ => false,
     }
 }
 
@@ -499,12 +509,13 @@ mod tests {
         validate_shell_allowlist(&legit).expect("与 PATH 解析结果一致的绝对路径应放行");
     }
 
-    // ── paths_match 纯函数测试（SEC-01 alias 兼容修复）──
+    // ── paths_match 纯函数测试（SEC-01 alias 兼容修复 + SEC-15 收窄）──
     //
-    // paths_match 两层判定：canonicalize 双成功 → 精确比较；任一侧失败 →
-    // 归一字符串比较。fallback 用例用「不存在的路径」构造 canonicalize 双失败
-    // （alias 场景等价——alias 文件 exists 为真但普通文件 API 打开失败，
-    // canonicalize 同失败，代码路径一致；纯函数层不依赖文件系统权限）。
+    // paths_match 三层判定：canonicalize 双成功 → 精确比较；双侧失败 →
+    // 归一字符串比较；单侧失败 → 拒绝（SEC-15）。fallback 用例用「不存在的
+    // 路径」构造 canonicalize 双失败（alias 场景等价——alias 文件 exists 为真
+    // 但普通文件 API 打开失败，canonicalize 同失败，代码路径一致；纯函数层
+    // 不依赖文件系统权限）。单侧失败用例：一侧真实存在、一侧不存在 → 拒绝。
 
     #[test]
     fn test_paths_match_canonical_equal() {
@@ -556,6 +567,33 @@ mod tests {
     fn test_paths_match_fallback_unequal() {
         // 两个不同的不存在路径 → false（伪造路径仍拒绝）
         assert!(!paths_match(r"C:\a\b\cmd.exe", r"C:\a\c\cmd.exe"));
+    }
+
+    #[test]
+    fn paths_match_single_side_failure_rejected() {
+        // SEC-15：单侧 canonicalize 失败即拒绝——字符串比对无法证明文件身份，
+        // reparse point/执行别名组合可绕过。一侧真实存在（canonicalize 成功）、
+        // 一侧不存在（canonicalize 失败）→ false；正反两侧都验证。
+        let real = if which_full_path("cmd.exe").is_some() {
+            which_full_path("cmd.exe").unwrap()
+        } else {
+            // PATH 不含 cmd.exe 的极端情况：用 %SystemRoot%\System32\cmd.exe 兜底
+            system32_exe_path("cmd.exe").expect("测试机 %SystemRoot%\\System32\\cmd.exe 应存在")
+        };
+        let nonexistent = r"C:\__slterm_no_such_dir__\cmd.exe";
+        // 前提守卫：待比较两侧确实分别处于「成功/失败」态（该路径确实不存在）
+        assert!(
+            !std::path::Path::new(nonexistent).exists(),
+            "前提：不存在路径不应存在"
+        );
+        assert!(
+            !paths_match(&real, nonexistent),
+            "单侧失败（program 存在、resolved 不存在）应拒绝"
+        );
+        assert!(
+            !paths_match(nonexistent, &real),
+            "单侧失败（program 不存在、resolved 存在）应拒绝"
+        );
     }
 
     // ── validate_shell_allowlist alias 兼容集成测试 ──
