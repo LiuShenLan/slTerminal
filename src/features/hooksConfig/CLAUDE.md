@@ -29,6 +29,8 @@ hooks 配置面板的 **schema 内嵌单点**（C13-1）——SchemaStore 官方
 `hooksSchemaNode` 为 `compileSchema(schema, { draft: "draft-07" })` 单例（json-schema-library 11.x，非 ajv）——schema 固定不变，复用避免重复编译开销。**11.x 完整重写**：旧 API `new Draft07(schema).validate(data) → JsonError[]` 已移除，新 API = `compileSchema().validate(data) → { valid, errors }`；本 schema 无 `$schema` 字段，compileSchema 缺省会选 draft-2020-12——**显式 `draft: "draft-07"` 保持旧语义**（实测九边界全等价，含 anyOf 消息形态）；errors 的 pointer 由旧 `dataPath`/`pointer` 移至 `error.data.pointer`。`validateHooksJson` 供 JsonMode 波浪线与保存路径（P3-FE-17 双校验）共用。
 
 > **TE-09 去重评估结论（S19 登记）**：codemirror-json-schema 0.8.1（npm 最新）内部 `import { Draft04 } from "json-schema-library"` 深度绑定 9.x API，11.x 无 Draft04/Draft07 构造函数——无法统一，保留双库（本模块 11.6.2 直接依赖 + codemirror-json-schema 9.3.5 嵌套副本）。
+>
+> **TE-15 债务登记（同义引用，详见 .claude/adr.md ADR-0010）**：json-schema-library 9.x/11.x 双 major 并存——codemirror-json-schema@0.8.1 锁 9.x（上游约束），主声明 11.6.2；运行时两实例并存无冲突（JSON Schema 校验各自独立），待上游升级消解（TE-15）。
 
 ## 文件
 

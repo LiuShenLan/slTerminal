@@ -95,7 +95,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 拖拽事件向外层容器 `[data-e2e="activity-bar"]` 派发（非 zone `<div>`）。关键辅助函数：
 - `installRectSpy(buttonRects, bottomZoneTop)`：mock `getBoundingClientRect`，为按钮 + zone 容器 + 活动栏根容器（height=600, midpoint=300）统一提供模拟矩形
 - `dispatchDragEvent(element, type, dt, clientY?)`：可选 `clientY` 供 zone 判定使用
-- 38 用例覆盖：渲染结构、active 态（指示条/图标色）、点击 toggle、title/e2e、dragStart、dragOver/drop 同 zone、dragEnd、未注册防御、hover、跨区拖拽状态机、zone 判定边界、指示线/清理、**配置钮（NAV-05：渲染于底部、不入注册表、点击调 openHooksConfigFromActivityBar）**、**三槽默认归属（nav/explorer/commit 全上区）**
+- 40 用例覆盖：渲染结构、active 态（指示条/图标色）、点击 toggle、title/e2e、dragStart、dragOver/drop 同 zone、dragEnd、未注册防御、hover、跨区拖拽状态机、zone 判定边界、指示线/清理、**配置钮（NAV-05：渲染于底部、不入注册表、点击调 openHooksConfigFromActivityBar）**、**三槽默认归属（nav/explorer/commit 全上区）**
 
 ### 技术栈
 
@@ -105,7 +105,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### 纯函数测试（sideBarState + dropTarget）
 
-`sideBarState.test.ts`（53 用例）：
+`sideBarState.test.ts`（54 用例）：
 - `toggleViewPure` 4 分支（R1 打开/替换、R2 关闭、未在 zones 防御）
 - `moveButtonPure` 8 分支（跨区跟随替换 R6、跟随空区、未打开仅归属 R7、区内前移/后移/同位、index clamp）
 - `deriveLayout` 4 态（hidden/single-top/single-bottom/split = R3/R4/R5）
@@ -117,7 +117,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Store 测试（sideBar.test.ts）
 
-22 用例照 fontSize/keybindings.test.ts 模式：
+24 用例照 fontSize/keybindings.test.ts 模式：
 - 默认值（**DEFAULT_ZONES 三槽 / DEFAULT_OPEN 导航树**）、toggle/move 经 store 委托纯函数
 - setWidth/setSplitRatio 内部 clamp
 - loadFromDisk：合法/脏数据 sanitize/缺失/异常降级（5 分支）
@@ -129,7 +129,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### UI 组件测试
 
-`activityBar.test.tsx`（38 用例）：
+`activityBar.test.tsx`（40 用例）：
 - 两组按钮渲染（上/下分组+按 zones 顺序）、active class+指示条（VS Code 风格）+ 图标色三态
 - 点击→toggleView 调用、再次点击关闭（R1/R2）
 - tooltip/title + `data-e2e` 属性

@@ -80,7 +80,7 @@ Workflow({
 | S06 | ✅ | 34c3bf1 | FE-37/36、BE-23 fixed（一次通过，无 fix-loop） | 切换无回归 + toast 实测 |
 | S07 | ✅ | 33d6723 | SEC-04、FE-08/10/42/43/44/45 fixed（一次通过，无 fix-loop） | — |
 | S08 | ✅ | 21ba6b7 | FE-39 验证固化、FE-40/41 fixed（一次通过，无 fix-loop） | — |
-| S09 | ⬜ | | | 多 session 关窗时长 |
+| S09 | ✅ | 339181e | FE-35/47/48 fixed；FE-46 fix-loop 1 轮（测试桩适配 React 19 自动恢复语义） | 多 session 关窗时长 |
 | S10 | ⬜ | | | — |
 
 > 状态：⬜ 未开始 / 🔄 进行中 / ✅ 完成。每 Stage commit 前跑全门禁（TE-16 根因留痕）。

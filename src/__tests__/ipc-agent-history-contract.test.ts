@@ -1,7 +1,7 @@
 // ipc-agent-history-contract.test.ts — agent 历史会话 IPC wrapper 合约测试（FE-03，IHE-06 工厂化）
 //
 // 照 ipc-hooks-config-contract.test.ts 模式，经共享工厂 describeIpcContract（helpers/ipc-contract.ts）
-// 声明式驱动三命令 × 四维（命令名 / 参数结构 / 正常返回 / 异常传播）= 14 条用例
+// 声明式驱动三命令 × 四维（命令名 / 参数结构 / 正常返回 / 异常传播）= 18 条用例
 // （重命名命令已随功能整体移除——问题 7 修复；readHistoryTitle = 人工验证问题 3 新增；
 // scanAgentHistory(cliId, force) = BE-19 新增；scanHistory 无参聚合导出已删除——
 // 后端 agent_history_scan 的 cli_id 必填（S12 起），无参 invoke 恒 reject，历史区

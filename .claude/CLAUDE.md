@@ -180,7 +180,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | SEC-03 | 安全 | HTML postMessage origin/source/信任标记三层校验 |
 | SEC-05 | 安全 | agent_history_delete 的 sessionId 校验 + 定位不信托前端（原 SEC-01 拆号） |
 | SEC-08 | 安全 | PTY write/resize/kill 的 panelId 归属校验 |
-| DBG-5 | 调试调查 | switchToPage 改 async——setProjectRoot 必须在 setActivePage 之前完成（React effect 时序坑） |
+| SEC-15 | 安全 | shell 白名单 fallback 收窄——双侧 canonicalize 均失败才回退归一字符串比较（alias 兼容），单侧失败即拒绝（字符串比对无法证明文件身份） |
+| SEC-16 | 安全 | set_project_root 经 AppState.project_root_lock（tokio::sync::Mutex）串行化——A→B 快速切换时慢 canonicalize 的 A 不得后写回覆盖 B |
+| SEC-17 | 安全 | hooks user 层写入后端审计日志——二次确认仅前端门控（UX 层非安全边界），后端 `tracing::warn!(target: "audit")` 兜底可观测 |
 | DBG-6 | 调试调查 | 启动恢复 lastPage 先 await setProjectRoot 再 setActivePage |
 | B10 | 缺陷 | 编辑器去重聚焦须匹配 suffix（普通编辑器与 git 页签互不误聚焦） |
 | B11 | 缺陷 | statusline 双重包裹——注入时递归解包自有脚本包裹为原配置（备份/透传目标）；桥接脚本引号容忍 + 剥引号后 ~ 展开 + 透传失败 stdout 占位（C10 保持） |

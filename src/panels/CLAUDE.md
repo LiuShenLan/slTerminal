@@ -36,38 +36,9 @@ xterm.js 不支持 `term.open()` 二次调用（GitHub Issue #4978）。因此�
 
 `term.options.windowsPty = { backend: "conpty", buildNumber: clampWindowsBuildForXterm(真实值) }`——钳制至 xterm.js ConPTY 兼容阈值下界 `XTERM_CONPTY_MIN_BUILD = 21376`（`@xterm/xterm/src/common/CoreTerminal.ts:283`）。低于该值 xterm 启用 wrapping 启发式（每次 LF + CSI H 重算 `isWrapped`），claude 全屏高频重绘下误判致 buffer 错乱（Win10 四症状）。钳制使 Win10 与 Win11 行为对齐，连带启用 resize reflow（实机验证专项）。**真实 build 号获取链不动**（`TerminalPanel` → `pty.getWindowsBuildNumber()` 传真实值），钳制收口 useXterm 两处 windowsPty 写入点；spawn 请求不带 buildNumber，后端不受影响。xterm.js 升级时须重评估此钳制点（ADR-0004）。
 
-### 编辑器：Compartment 模式切换语言
+### 编辑器（详见 @editor/CLAUDE.md）
 
-文件扩展名 → `getLanguageExtension()` 返回对应 CodeMirror 语言扩展。语言扩展通过 `Compartment.reconfigure()` 热切换，不丢失文档状态。
-
-### 编辑器：Compartment 模式切换自动换行（Alt+Z）
-
-`Alt+Z` 触发 `editor.toggleWordWrap` 命令，通过 `wordWrapRef`（`useRef<boolean>`）跟踪当前状态、`wrapCompartment`（`Compartment`）热切换 `EditorView.lineWrapping` 扩展，不丢失文档状态。默认关闭，每编辑器实例独立，不持久化（同 VS Code 行为）。handler 经 `EditorActions.toggleWordWrap()` → `getActiveEditor()` 派发到聚焦编辑器。
-
-### 编辑器：大文件不虚拟化（FE-31 决策登记，D3 关闭）
-
-CodeMirror 6 不支持部分文档模型（虚拟化），大文件编辑**不虚拟化**——按 D3 方案以三层防线削峰（决策登记见 ADR 豁免表）：
-
-- **Channel 分块削峰（BE-03）**：`fs_read_file` 改后端按 256KB 块经 `onChunk` Channel 推送（见 `src/ipc/CLAUDE.md` fs.ts 行），消除单次 IPC 大 payload 峰值——大文件读取不再一次载入内存
-- **10MB 硬上限**：`MAX_FILE_SIZE_BYTES = 10_000_000`（`useCodeMirror.ts` 导出单点）——`sizeHint` 预检（UTF-8 文本 length 近似字节数）超限**直接拒绝**：doc 置错误提示 + 清 `filePathRef` 防误保存覆盖原文件
-- **1MB 警告**：`LARGE_FILE_WARN_BYTES = 1_000_000`，超限 `confirmDialog` 弹窗警告（确认=继续/取消=中止，取消同样清 filePathRef）
-- **阈值复用**：gitshow 面板经 `useCodeMirror` 导出复用同一阈值——禁止新造数值（既有约束）
-
-### 编辑器：滚动委托 CM .cm-scroller
-
-旧方案外层 div `overflow: auto` 是实际滚动容器，`.cm-scroller` 无溢出（`.cm-editor` `height: auto`=内容高 → `.cm-scroller` `height: 100%`=内容高 → 无溢出 → 无滚动条）。横向滚动条在外层 div 底部，长内容时需垂直滚到底才能看到。
-
-修复分两层：
-- **容器** `overflow: clip`（非 `hidden`）：`hidden` 是 CSS 滚动容器→吸收鼠标滚轮事件不传递。`clip` 裁剪但不创建滚动容器→滚轮穿透到 `.cm-scroller`
-- **`.cm-editor` 高度**：`EditorView.theme({ "&": { height: "100%" } })` 给予明确高度 → `.cm-scroller` `height: 100%` 约束为视口高度 → 内容溢出 → 滚动条出现。CM6 base theme 已设 `.cm-scroller { overflowX: auto }`，CSS 规范强制 `overflowY: auto`
-
-### 编辑器：CM6 主题扩展与层叠
-
-CM6 编辑器主题来源 = **`editorTheme`**（active 方案 `editor.theme`，linear 为 oneDark 透出）+ **`editorColorOverrides()`**（active 方案 `editor.overrides`，lint/searchMatch/background/正文行号覆盖）+ **`editorSyntaxHighlight()`**（active 方案 `editor.overrides.syntax`，9 组 tag 语法高亮——**消费点须置于 `editorTheme` 之前**，数组顺序决胜，ACC-05），经 `../../theme` barrel 引用，四处消费点：useCodeMirror / GitShowPanel / DiffPanel ×2 / JsonMode。**层叠规则与特异性守卫（ACC-05 实证）见 @../theme/CLAUDE.md「editorColorOverrides 的 CM6 层叠」**——改动覆盖规则前必读：`@codemirror/view` `mountStyles()` reverse 注入使先声明主题恒胜，竞争选择器必须保持 `.cm-editor` 前缀形态。
-
-### 编辑器 Ctrl+S 迁入 ShortcutRegistry
-
-`editor.save`（Ctrl+S）不再走 CodeMirror keymap。命令在 `App.tsx` 一次性注册（`createEditorShortcuts()`），handler 经 `getActiveEditor().save()` 派发到聚焦编辑器；`useCodeMirror` 经 `usePanelFocus("editor", container, activate, deactivate)` 在聚焦时 `setActiveEditor`。window capture 命中 → `stopPropagation` 屏蔽 CM；`Ctrl+F`/撤销/重做未注册 → 冒泡回 CM 内部 keymap（capture/bubble 分阶段共存）。`save` 动作用 `handleSaveRef` 保持最新引用（`handleSave` 依赖 panelId 会变）。
+编辑器专属决策已迁入 `editor/` 子路径文档：Compartment 语言切换 / Alt+Z 自动换行 / 大文件不虚拟化（FE-31/D3）/ 滚动委托 `.cm-scroller` / CM6 主题扩展与层叠 / Ctrl+S 迁入 ShortcutRegistry。
 
 ### HTML 面板全局键转发（iframe 键盘桥，postMessage 路径 + 片段拦截）
 
@@ -305,12 +276,7 @@ Claude Code 在用户主动 Ctrl+C 中断时不发射任何 hook 事件（`Stop`
 | `terminal/activeTerminal.ts` | 模块级"聚焦终端"指针：`setActiveTerminal`/`clearActiveTerminal`（仅匹配时清）/`getActiveTerminal`。终端聚焦时设为 active，命令 handler 据此派发 |
 | `terminal/theme.ts` | xterm.js 主题 adapter（既定例外收敛表述）：**不再是独立主题定义**——`theme: { ...schemeRegistry.getActive().terminal }` 将 active 方案 terminal 段 25 键展开进 xterm `ITheme`（linear 方案值，硬约束 #6）；非色选项原位保留：`drawBoldTextInBrightColors` 显式声明为 `true`（消除对 xterm.js 默认值的隐式依赖，仅影响 ANSI 16 色粗体→亮色映射，不影响 True Color）、`vtExtensions: { kittyKeyboard: true }`（Kitty 键盘协议被动支持）、scrollback 等 |
 | `terminal/TerminalRegistry.ts` | 模块级 `Map<panelId, RegisteredTerminal>` + `AgentSessionInfo`（含可选 `cliId`，存在即运行中，二态模型）+ `setAgentSession(panelId, patch|null)`（merge 语义：null 清空、undefined 键不覆盖、缺 lastEventAt 自动填 Date.now()）+ `subscribe(listener)` 订阅 register/remove/**sessionChange** 事件（sessionChange 仅携 panelId，listener 经 `get()` 读现值防快照不一致）；register 幂等覆盖时 `agentSession` 缺省保留旧值（StrictMode/重试场景不丢 session）。跨页面切换时供查询/重连 |
-| `editor/index.ts` | EditorPanel 导出 |
-| `editor/EditorPanel.tsx` | 编辑器面板 React 组件：container `overflow: clip`（裁剪不吸收滚动事件，委托 `.cm-scroller` 管理滚动；`.cm-editor` `height: 100%` 约束 scroller 高度产生溢出）→ useCodeMirror |
-| `editor/keyboard.ts` | 编辑器快捷键命令工厂：`createEditorShortcuts()`（无参）经 `commandFromMeta` 生成 `editor.save`、`editor.toggleWordWrap`，App 一次性注册；handler 经 `getActiveEditor()` 派发 |
-| `editor/activeEditor.ts` | 模块级"聚焦编辑器"指针：`setActiveEditor`/`clearActiveEditor`（仅匹配时清）/`getActiveEditor` |
-| `editor/useCodeMirror.ts` | CodeMirror 6 生命周期 hook：创建 EditorView、`.cm-editor` `height: 100%` theme（约束 scroller 高度产生溢出→滚动条）、语言扩展、字体大小动态调节、自动换行 Compartment 热切换（Alt+Z）、Ctrl+Wheel 监听、Ctrl+S 保存（`usePanelFocus("editor")` + `setActiveEditor`，无路径则另存为）、Tab 缩进/Shift+Tab 反缩进（`keymap.of([indentWithTab])`）、Ctrl+F 搜索/撤销/重做仍归 CM keymap、外部文件改动监听、脏状态跟踪；**大文件阈值单点（FE-31/D3）：`MAX_FILE_SIZE_BYTES`（10MB 拒绝）/`LARGE_FILE_WARN_BYTES`（1MB 警告），供 gitshow 复用，不虚拟化** |
-| `editor/gitGutter.ts` | CodeMirror 6 gutter 扩展：DiffHunk → RangeSet<GutterMarker> 映射、setDiffMarkers StateEffect、diffMarkersField StateField、SpacerMarker 固定宽度防光标错位；新增 HEAD 侧 buildHeadRangeSet（old 行号映射）/ headDiffGutter / updateHeadDiffGutter / clearHeadDiffGutter |
+| `editor/` | 编辑器面板模块（EditorPanel + useCodeMirror + gitGutter + keyboard + activeEditor，文件表见 @editor/CLAUDE.md） |
 | `html/index.ts` | HtmlPanel 导出 |
 | `html/HtmlPanel.tsx` | HTML 预览面板：fs.readFile → injectScript 注入脚本（键盘转发 postMessage + 片段链接 click拦截 + scrollIntoView）→ iframe srcDoc 渲染（sandbox="allow-scripts"，不含 allow-same-origin），三态（loading/loaded/error），cancelled 防竞态；postMessage 接收键盘事件（**SEC-04：四层校验——origin/source/nonce/信任标记**，nonce 挂载期 `nonceRef` 一次性生成拼入注入脚本）→ ShortcutRegistry 分发 |
 | `gitshow/index.ts` | GitShowPanel 导出 |
@@ -352,7 +318,7 @@ Claude Code 在用户主动 Ctrl+C 中断时不发射任何 hook 事件（`Stop`
 
 ### useXterm 测试模式
 
-> 用例数见 `.claude/test-inventory.md`（终端面板类目，`use-xterm-output.test.ts`（35 用例）+ `use-xterm-lifecycle.test.ts`（80 用例）+ `use-xterm-integration.test.ts`（12 用例））。
+> 用例数见 `.claude/test-inventory.md`（终端面板类目，`use-xterm-output.test.ts`（35 用例）+ `use-xterm-lifecycle.test.ts`（86 用例）+ `use-xterm-integration.test.ts`（12 用例））。
 
 useXterm 是编排层——mock 6 个子 hook 才能隔离测试（`useFontSizeBridge` 已删除，字体缩放委托 `src/lib/useFontSizeWheel`）：
 
@@ -384,11 +350,11 @@ useXterm 是编排层——mock 6 个子 hook 才能隔离测试（`useFontSizeB
 | 文件 | 模式 |
 |------|------|
 | `terminal-lifecycle.test.ts`（4 用例） | 挂载→创建→卸载→dispose 完整链路；mock `pty.spawn` 验证调用参数 |
-| `terminal-instance.test.ts`（7 用例） | `useTerminalInstance` 生命周期分支（TRM-07）：fit 抛异常吞掉/`fontSize` undefined 跳过/prevFontSize 相同跳过重复写入/tryLoadWebgl 幂等（含 term 为 null 短路） |
+| `terminal-instance.test.ts`（6 用例） | `useTerminalInstance` 生命周期分支（TRM-07）：fit 抛异常吞掉/`fontSize` undefined 跳过/prevFontSize 相同跳过重复写入/tryLoadWebgl 幂等（含 term 为 null 短路） |
 | `terminal-strictmode.test.ts`（2 用例） | `<React.StrictMode>` 包裹验证 `smGuardRef` 防双重挂载：Terminal 实例数=1、PTY spawn 仅一次、dispose 仅在最终卸载时调 |
-| `terminal.test.tsx`（19 用例） | TerminalPanel 组件：mock `useXterm` 返回 stub，验证 loading 遮罩/Windows build/spawn/customTitle 挂载恢复 + onDidParametersChange 同步（F8）/**页签 logo 会话绑定（F9 行为修订，真实 TerminalRegistry + registerStub 驱动 sessionChange）**：C 命中写 tabLogo/D 清空/hook 路径按 agentSession.cliId 查 + CLAUDE_CLI_ID 兜底/未注册 cliId null/挂载清残留+恢复/register 事件同步 |
+| `terminal.test.tsx`（27 用例） | TerminalPanel 组件：mock `useXterm` 返回 stub，验证 loading 遮罩/Windows build/spawn/customTitle 挂载恢复 + onDidParametersChange 同步（F8）/**页签 logo 会话绑定（F9 行为修订，真实 TerminalRegistry + registerStub 驱动 sessionChange）**：C 命中写 tabLogo/D 清空/hook 路径按 agentSession.cliId 查 + CLAUDE_CLI_ID 兜底/未注册 cliId null/挂载清残留+恢复/register 事件同步 |
 | `can-fit.test.ts`（15 用例） | 纯函数边界测试：五条件守卫（null/undefined/0/isDisposed/no element） |
-| `detect-webgl.test.ts`（3 用例） | `vi.spyOn(HTMLCanvasElement.prototype, 'getContext')` 模拟三种分支 |
+| `detect-webgl.test.ts`（4 用例） | `vi.spyOn(HTMLCanvasElement.prototype, 'getContext')` 模拟三种分支 + 检测不带 failIfMajorPerformanceCaveat（FE-26 快滚掉帧修复守卫） |
 | `webgl-setup.test.ts`（7 用例） | `setupWebglWithRetry` 指数退避（TRM-06）：不可用即回退/成功加载/context loss 重建（1000/2000ms 序列）/重试耗尽回退/cancel 清理/loadAddon 异常退避 |
 
 ### 页签标题/图标测试
@@ -403,22 +369,14 @@ useXterm 是编排层——mock 6 个子 hook 才能隔离测试（`useFontSizeB
 | 文件 | 模式 |
 |------|------|
 | `keyboard.test.ts`（12 用例） | `createTerminalShortcuts()`（无参）handler 经 `getActiveTerminal()` 派发：设 active stub 后调 handler 验证 copy/paste/newline；无 active 返回 false 透传；Ctrl+C 不注册。jsdom 局限标注（真实按键投递由 L4 E2E 验收，E2E-01） |
-| `editor-keyboard.test.ts`（7 用例） | `createEditorShortcuts()` save 经 `getActiveEditor()` 派发；后设置的 active 覆盖先前的；无 active 返回 false |
-| `active-terminal.test.ts`（4 用例）/ `active-editor.test.ts`（5 用例） | active 指针 set/get/覆盖、clear 仅匹配时生效（防竞态） |
+| `active-terminal.test.ts`（4 用例） | active 指针 set/get/覆盖、clear 仅匹配时生效（防竞态） |
 | `use-panel-focus.test.ts`（5 用例） | focusin→pushContext+onActivate、focusout(离子树)→popContext+onDeactivate、内部焦点转移不触发、卸载清理 |
 | `shortcuts.test.ts`（54 用例） | `_reset()` 隔离；指纹 O(1) 匹配；上下文栈竞态；setOverrides 重绑/解绑/降级/冲突、resolve/forceContext、export/list |
 | `global-commands.test.ts`（13 用例） | `createGlobalShortcuts(getApi)` 延迟求值 DockviewApi |
 
-### 编辑器测试
+### 编辑器测试（详见 @editor/CLAUDE.md）
 
-| 文件 | 模式 |
-|------|------|
-| `use-code-mirror.test.ts`（39 用例） | `EditorState.create` 验证字体扩展；Compartment reconfigure 不重复 dispatch；handleSave（有/无 filePath、另存为、gitDiff 刷新、失败 alert、slterm:file-saved/file-saved-as 事件） |
-| `editor.test.tsx`（9 用例） | EditorPanel 组件：mock `useCodeMirror` 返回 stub，验证 panelId/filePath 传递 + 容器 `overflow: clip` 样式 |
-| `editor-confirm.test.ts`（11 用例） | `renderHook(useCodeMirror)` 真实驱动；mock `onFsEvent` 保留回调引用手动触发 fs-event；覆盖订阅/取消、kind 过滤、路径匹配、脏/净状态分支 |
-| `editor-font.test.ts`（8 用例） | 字体 CSS 选择器断言（`.cm-scroller` vs `.cm-editor`） |
-| `git-gutter.test.ts`（32 用例） | StateEffect → RangeSet 映射验证；GutterMarker DOM 颜色断言；SpacerMarker 宽度一致性 |
-| `language-mapping.test.ts`（23 用例） | 扩展名→语言扩展全表验证（`.js`/`.ts`/`.py`/`.rs`/`.json` 等） |
+编辑器测试模式表（use-code-mirror / editor / editor-confirm / editor-font / git-gutter / language-mapping / use-code-mirror-reload-error / editor-keyboard / active-editor）已迁入 `editor/` 子路径文档。
 
 ### HTML 面板测试
 

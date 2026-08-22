@@ -199,7 +199,7 @@
 
 | 标识 | 决策 | 登记点 |
 |------|------|--------|
-| FE-01 | Workspace 多 Dockview 实例**保持**（H6 终端跨页面存活 + xterm 实例限制，D1）；以页面总数上限 `MAX_PAGES = 20`（src/stores/projects.ts，超限 addPage 拒绝 + toast「页面数已达上限」）防内存/DOM 线性增长 | src/workspace/CLAUDE.md |
+| FE-01 | Workspace 多 Dockview 实例**保持**（H6 终端跨页面存活 + xterm 实例限制，D1）；以页面总数上限 `MAX_PAGES = 20`（src/stores/projects.ts，超限 addPage 拒绝 + toast「页面数已达上限」）防内存/DOM 线性增长。**2026-08-22 FE-36 语义修订：页面总数上限改为跨项目全局计数**（原按项目计数——多项目下 Dockview 实例仍可无界增长；`Object.values(projects).flatMap(p => p.pages).length` 全局判定，L2 跨项目用例锁死） | src/workspace/CLAUDE.md、src/stores/CLAUDE.md |
 | SEC-09 | CSP `script-src 'unsafe-inline'` **保留**（D4）：srcdoc iframe 继承父 CSP（W3C 行为），HTML 预览注入脚本（锚点拦截/键盘转发/nonce）必须内联，移除即破坏预览。现状 = tauri.conf.json `script-src 'self' 'unsafe-inline'` + `dangerousDisableAssetCspModification: ["script-src"]` | src-tauri/tauri.conf.json 注释 |
 | SEC-06 | 剪贴板读权限 `clipboard-manager:allow-read-text` **保留**（D6）：唯一消费点为 keyboard.ts 的 Ctrl+Shift+V 显式手势，改后端命令不缩小攻击面（前端上下文被注入时同样能 invoke）；grep 级守卫测试锁消费点集合 | src/ipc/CLAUDE.md |
 | BE-21 | `fs_read_dir` 返回整目录列表**不分页**（登记豁免）：懒加载按目录分层 + FileTree 虚拟化（FE-30）覆盖渲染侧，单层万级文件罕见；改分页 = IPC 契约破坏性变更，收益不抵成本 | src-tauri/src/fs/CLAUDE.md |
@@ -212,3 +212,31 @@
 
 - 新增豁免须先在本表或对应模块 CLAUDE.md 登记再关闭，禁止只改代码不留档。
 - 行为固化点：`MAX_PAGES`（L2 测试断言）、CSP（tauri.conf.json）、剪贴板守卫测试、`GIT_REPO_CACHE_CAPACITY`/`WATCHER_POOL_CAPACITY`/`MAX_PTY_SESSIONS`（L1 契约测试）。
+
+## 0010 review-phase2-fix 决策与债务登记（D12~D20、TE-07、TE-15）
+
+**Status**: accepted（2026-08-22，S10-C）
+
+**上下文**：`docs/review-phase2-fix/checklist.md` 第 0 节决策表 D12~D20（续 review-fix D1~D11，编号规则：未闭环/partial 沿用原 ID，新发现续编 SEC-15~17/BE-22~25/FE-36~48/TE-14~16/DOC-11~14）。此处汇总 root 侧决策、TE-07 妥协结论与 TE-15 工程债务，模块内明细以对应模块 CLAUDE.md 为准。
+
+**决策（D12~D20）**：
+
+| 编号 | 决策点 | 结论 |
+|------|--------|------|
+| D12 | 修复范围 | 全量修复：P0+P1+P2+未闭环 10 项+fmt 基线，去重合并后 **37 项**（含 FE-39 验证项） |
+| D13 | TE-12 knip 门禁 | 方案 A：补 `entry`/`ignoreExports`/`ignoreFiles` 至 `npx knip --production` 退出码 0；不窄化 CI 口径 |
+| D14 | TE-07 TS7 声明失真 | 主 `typescript` 字段直改 `^7.0.2`，删 `@typescript/native` 别名与 TS6 包装器；执行前 `npm view typescript-eslint` 实查兼容版，不兼容则升级/overrides 统一或暂停 type-aware 规则并 ADR 登记（**执行结果见下节：三支 fallback 全走尽，妥协为双 TS 并存**） |
+| D15 | SEC-15 shell fallback | 收窄为「两侧 canonicalize 均失败且归一化字符串完全相同」才放行，单侧失败即拒绝；`pty/CLAUDE.md` 登记残余风险；补 L1 拒绝用例。不引入 Win32 文件身份比对。**alias 兼容保持**（Store 版 pwsh 场景两侧指向同一路径、双侧均失败，仍走 fallback 放行） |
+| D16 | SEC-04 nonce | 威胁模型登记（HtmlPanel 顶部注释 + `src/panels/CLAUDE.md` 修正失实描述）+ L2 守卫测试锁死 global context 命令集；不加 UI 提示、不移除 nonce |
+| D17 | SEC-16 root 竞态 | 后端 `tokio::sync::Mutex` 串行化整个 `set_project_root_impl`（Cargo.toml tokio 补 `"sync"` feature）；前端零改动 |
+| D18 | FE-37 store IPC | `setProjectRoot` 调用上提调用方（store 纯状态化）；toast 由 `switchToPageShared` 承担（BE-23 同链修）；不登记豁免 |
+| D19 | FE-39 嵌套项目 | 接受「最深前缀」语义；实查测试已固化（`nav-tree-history.test.tsx:302-336`），零代码改动，仅 verify 断言确认存在 |
+| D20 | FE-40/FE-41/FE-46 | 三项 P2 均实修（滚动跟随 / 空目录行移除 / ErrorBoundary 重试） |
+
+**核验留痕（计划期已实读全部修复点代码原文）**：FE-39 经实查 `nav-tree-history.test.tsx:302-336` 已含嵌套最深前缀用例（Phase 2 04 报告此项失实）——降为「验证已固化，零改动」。FE-45 实查为 **5 处** catch{}（05 报告列 3 处，projects.ts 有 2 处：:254 与 :275）。
+
+**TE-07 执行结果（S02 妥协背书，详见 docs/review-phase2-fix/s02-execution-report.md）**：主 typescript 直改 ^7.0.2 **不可行**，D14 三支 fallback 实测走尽（typescript-eslint 最新 8.67.0 peerDependencies `typescript: '>=4.8.4 <6.1.0'` 全系拒绝 TS7、且模块加载期硬校验 `ts.versionMajorMinor >= 7` 崩在加载期，与 type-aware 规则开关无关；overrides 钉兼容组合与根依赖 `^7.0.2` 冲突不可行）。**正式化妥协：双 TS 并存（side-by-side）**——`"typescript": "npm:@typescript/typescript6@^6.0.2"`（TS6 包装器，供 typescript-eslint 8.67.0 消费）+ `"@typescript/native": "npm:typescript@^7.0.2"`（tsc bin = TS7，`npx tsc --version` 7.0.2）。该形态全门禁绿。**升级触发条件（同时满足）**：① typescript-eslint issue #10940 闭环（发布支持 TS7 版本）② TS7.1 稳定发布；触发后删 TS6 包装器与 `@typescript/native` 别名，`"typescript"` 直改 `^7.1.0`。
+
+**TE-15 工程债务（已知债务登记，代码零改动）**：json-schema-library 9.x/11.x 双 major 并存——codemirror-json-schema@0.8.1 锁 9.x（上游约束），主声明 11.6.2；运行时两实例并存无冲突（JSON Schema 校验各自独立），待上游升级消解（TE-15）。
+
+**FE-31 登记点确认**：ADR-0009 表 FE-31 行登记点链接已指向 `src/panels/editor/CLAUDE.md`（新建文件存在，编辑器专属决策已迁入，S10 核对通过）。**FE-36 语义修订**已顺带补入 ADR-0009 表 FE-01 行（MAX_PAGES 跨项目全局计数）。

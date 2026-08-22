@@ -2,7 +2,7 @@
 
 > **本文档是项目用例数唯一真值源。** 所有 CLAUDE.md、README、CI 配置中引用的用例数均以此文件为准。更新测试后必须同步本文档。
 
-全量 **3480** 用例（Rust 722 + 前端 2620 + L3 138 + E2E 40），2026-08-20 更新（人工验证 3 问题修复全量同步——Rust 714→722 净增 8：shell.rs SEC-01 alias 兼容 +7（paths_match 纯函数 5 + 统一文案 1 + 真实 alias 条件 1）+ spawn.rs pending_bytes 信号竞态回归 +1；L2 2532→2620 净增 88（S19 后基线 2628 → 修复 2 契约断链 -4 + 接线断言 +3 + watcher 上提 -10 +3 + 其余 S19 后增量已实跑口径）；L3 138 不变；L4 40 不变（9 spec 全过——terminal.e2e.ts 恢复 = S02 alias 修复回归、history.e2e.ts 恢复 = 契约断链接线回归 + PTY 输出链恢复）。明细见文末「历史变更」）。
+全量 **3492** 用例（Rust 724 + 前端 2630 + L3 138 + E2E 40），2026-08-22 更新（review-phase2-fix S03~S09 执行期登记——Rust 722→724 净增 2：shell.rs 31→32（SEC-15 paths_match 单侧失败拒绝 +1）+ state.rs 42→43（SEC-16 set_project_root 并发串行化 +1）；L2 2620→2630 净增 10（S03~S09 执行期 +7：command-catalog +1 / diff-panel-stale-banner +1 / workspace-switch-order +2 / projects +1 / pageapis +1 / explorer-virtualization +1 / use-file-tree +1 / close-handler +1 / error-boundary +1 / panel-registry -3；行级失实校正 +3：workspace-switch-order 2026-08-20 watcher 上提 +3 未同步行级）；L3 138 不变；L4 40 不变。明细见文末「历史变更」）。
 
 > **计数口径**：
 > - L2 以 `npm test` 实跑（Vitest 报告）为准——`it.each(...)` 参数化与 `describeIpcContract` 工厂（`helpers/ipc-contract.ts`，IHE-06）等按**展开后用例数计入**（145 文件 2532 用例，2026-08-18 S19 静态核算：在 Stage 12 终验实跑 2504 基线上加 S13~S18 裸 it 净增与工厂 cases 增量，动态计数以终验 vitest 实跑为准）；纯 grep `it(/test(` 块数会少计 it.each 展开（如 colors 96 = 15 块 + 7 组 each 展开 81）。
@@ -42,7 +42,7 @@
 | ⑤ | L2 | **E2E helper 行为契约**——`app.test.tsx`/`e2e-create-project.test.ts` 验证的是 `__slterm_e2e_createProject` 等 helper 的契约（pending 标记/localStorage 交互），非真实 App 初始化逻辑；真实挂载路径由 `e2e-gating-*` 测试 + L4 使用实证 | 13 P-14 |
 | ⑥ | L2 | **浅层组件定位**——`editor.test.tsx` mock `useCodeMirror` 只验证 prop 透传与容器样式，定位为组件集成契约测试（非行为测试），真实编辑器行为由 `use-code-mirror.test.ts` 等覆盖 | 07 G1/G2 |
 
-## L1 — Rust 单元/集成测试（34 文件 / 714 用例）
+## L1 — Rust 单元/集成测试（34 文件 / 724 用例）
 
 运行：`cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1`
 
@@ -57,8 +57,8 @@
 | `src-tauri/src/pty/reader.rs` | 42 | ConPTY 启动序列剥离（含 OSC 1/3/4/9 保留/CSI 3J/平台守卫）/DA1 查询检测/apply_startup_strip/should_inject_da1/mirror_da1_query/eof_exit_code/16KB 边界/**BE-05 微批 6（micro_batch_no_pending_reads_nothing/drains_until_no_data/stops_at_limit/stops_on_error/immediate_eof/limit_respects_first_chunk_headroom）**/**BE-06 join 超时 3（join_with_timeout_fast_thread_returns_true/slow_thread_times_out/abandoned_thread_finishes_later_no_panic）** |
 | `src-tauri/src/pty/spawn.rs` | 60 | compute_conpty_flags（7 条三态：系统 Win10 19041/21375→0x3、21376/22000/22621/26100→0x7、捆绑 19041→0x7，PASSTHROUGH 0x8 永不启用）/flag 常量/ConPtyMaster MasterPty trait/AttrList 生命周期/create_conpty_pair/build_cmdline 引号/build_env_block/**validate_spawn_request（尺寸/白名单/cwd 三拒绝）**/**validate_session_ownership（SEC-08 放行/拒绝）**/Job Object 纯逻辑（job_name/limit flags）/测试清理 helper/**BE-01 会话容量 3（pty_capacity_below_limit_passes/at_limit_rejected/above_limit_rejected）**/**BE-08 pty_kill_all 2（pty_kill_all_empty_returns_zero/kills_all_sessions）**/**S06 信号竞态修复 1（pending_bytes_reflects_pipe_data_availability——PeekNamedPipe 语义锁死：空→写→读走→0，防 WaitForSingleObject reset 延迟卡死 reader 回归）** |
 | `src-tauri/src/pty/conpty_api.rs` | 5 | ADR-0005 嵌入捆绑：should_bundle 决策分叉（</≥ 21376）/extraction_dir_from 路径构造/ensure_extracted 幂等（二次调用 mtime 不变 + 内容与嵌入一致）/write_if_size_differs 覆盖与跳过（vendor 升级自愈） |
-| `src-tauri/src/pty/shell.rs` | 31 | pwsh 发现 + 三档回退顺序（可控 PATH）/shell-integration.ps1 嵌入/UTF-16LE Base64 往返/which_full_path PATH 顺序/白名单解析后仍非法拒绝/**SEC-01（S02）+4：test_allowlist_accepts_path_resolved_from_path（PATH 解析一致放行）/test_allowlist_accepts_system32_cmd_when_path_lacks_system32（System32 兜底）/test_allowlist_rejects_forged_absolute_path（伪造路径拒绝）/test_allowlist_rejects_absolute_path_not_in_path（非 PATH 绝对路径拒绝）**/**SEC-01 alias 兼容（人工验证修复）+7：paths_match 纯函数 5（canonicalize 成功相等/不相等/fallback 忽略大小写/分隔符归一/不同路径拒绝）+ test_allowlist_nonexistent_absolute_path_rejects_with_unified_message（canonicalize 失败统一文案）+ test_allowlist_accepts_real_alias_when_present（真实应用执行别名条件测试——canonicalize 失败 fallback 放行）** |
-| `src-tauri/src/state.rs` | 42 | ring buffer append+eviction+无换行长行淘汰三边界/validate_path_within_root 沙箱（含 `..` 穿越拒绝）/canonicalize_or_ancestor/**BE-04 set_project_root 4（成功 canonical/失败清空旧 root/失败保留错误消息/失败后恢复）**/**BE-09 git_repo_cache LRU 6（evicts_oldest_when_over_capacity/hit_touches_recently_used/insert_existing_key_replaces_and_touches/find_only_matches_subtree_prefix/empty_cache_find_returns_none/cache_capacity_contract_is_eight）**（symlink 特权测试保留 `#[cfg(windows)]`——BE-17/D5 豁免） |
+| `src-tauri/src/pty/shell.rs` | 32 | pwsh 发现 + 三档回退顺序（可控 PATH）/shell-integration.ps1 嵌入/UTF-16LE Base64 往返/which_full_path PATH 顺序/白名单解析后仍非法拒绝/**SEC-01（S02）+4：test_allowlist_accepts_path_resolved_from_path（PATH 解析一致放行）/test_allowlist_accepts_system32_cmd_when_path_lacks_system32（System32 兜底）/test_allowlist_rejects_forged_absolute_path（伪造路径拒绝）/test_allowlist_rejects_absolute_path_not_in_path（非 PATH 绝对路径拒绝）**/**SEC-01 alias 兼容（人工验证修复）+7：paths_match 纯函数 5（canonicalize 成功相等/不相等/fallback 忽略大小写/分隔符归一/不同路径拒绝）+ test_allowlist_nonexistent_absolute_path_rejects_with_unified_message（canonicalize 失败统一文案）+ test_allowlist_accepts_real_alias_when_present（真实应用执行别名条件测试——canonicalize 失败 fallback 放行）**/**SEC-15（S03）+1：paths_match_single_side_failure_rejected（单侧 canonicalize 失败即拒绝——字符串比对无法证明文件身份）** |
+| `src-tauri/src/state.rs` | 43 | ring buffer append+eviction+无换行长行淘汰三边界/validate_path_within_root 沙箱（含 `..` 穿越拒绝）/canonicalize_or_ancestor/**BE-04 set_project_root 4（成功 canonical/失败清空旧 root/失败保留错误消息/失败后恢复）**/**BE-09 git_repo_cache LRU 6（evicts_oldest_when_over_capacity/hit_touches_recently_used/insert_existing_key_replaces_and_touches/find_only_matches_subtree_prefix/empty_cache_find_returns_none/cache_capacity_contract_is_eight）**/**SEC-16（S04）+1：set_project_root_serializes_concurrent_calls（tokio::Mutex 串行化——并发 join! 两 impl 调用终态为其中之一且非 None；既有直测用例调用点补传 Mutex 适配）**（symlink 特权测试保留 `#[cfg(windows)]`——BE-17/D5 豁免） |
 | `src-tauri/src/fs/mod.rs` | 43 | read_dir/write_file（真实命令，CRLF 保留）/create_dir/delete/rename + 命令包装单测 + 异常路径（删除不存在/root 外拒绝/TaskJoin panic 映射）+ **BE-13 路径注入 4（test_fs_read_file/read_dir/write_file/rename_error_message_contains_path）** + **BE-03 分块 8（multi_chunk_joins_correctly/utf8_boundary_not_split/utf8_4byte_boundary_not_split/over_limit_rejected/at_limit_allowed/empty_file_terminal_only/invalid_utf8_rejected/incomplete_tail_rejected）** |
 | `src-tauri/src/notify/mod.rs` | 45 | FileWatcher 生命周期 + classify_by_kind 事件分类（全 7 种 EventKind）+ **EventEmitter trait 注入驱动事件循环（HFN-03/D6）** + Drop 轮询等待（HFN-07）+ **BE-02 排除 3（is_excluded_path_matches_all_seven_dirs/event_loop_filters_excluded_paths_keeps_normal/event_loop_rescan_bypasses_exclusion_filter）** + **SEC-08 symlink 2（is_symlink_path_detects_symlink/event_loop_filters_symlink_paths_keeps_normal——创建失败 skip 豁免 `#[cfg(windows)]`，BE-17/D5）** + **BE-07 合并 2（event_loop_merges_oversized_batch_to_rescan/event_loop_batch_at_limit_stays_classified）** |
 | `src-tauri/src/notify/pool.rs` | 15 | LruWatcherPool: 缓存命中/LRU 淘汰/pause_all_except/replace（同 path 二次 insert stop 旧 watcher）/remove/stop_all/Drop + **BE-10 remove 幂等（p14_remove_nonexistent_returns_none）** + **BE-11 watcher_pool_capacity_is_8** |
@@ -82,13 +82,13 @@
 | `src-tauri/src/agent_history/provider.rs` | 2 | CliHistoryProvider trait 四方法（scan/delete/validate_session_id/**read_title**，人工验证问题 3）+ cliId 键注册表 + resolve_provider 命中（身份断言）/未知 cliId Validation（MC-303/304 新建） |
 | `src-tauri/tests/pty_integration_tests.rs` | 7 | PTY 往返/OSC cwd 解析/resize 生效/kill 无孤儿/Custom ConPTY spawn/会话隔离/env 注入（原重连回放用例随 SEC-03 删除） |
 
-> ① 占位符已实落消除：provider.rs 实落 2 条（resolve_provider 命中/未知 cliId Validation），claude/mod.rs 实落 4 条（TitleSource serde ×2 + as_str 映射 + ScanRootGuard env 恢复）；Stage 08 补登 hooks/claude/mod.rs 1 条（HomeDirGuard 注入/恢复守卫）——L1 总数按静态 grep `#[test]` 实查对齐 **714（34 文件）**（2026-08-18 review-fix S01~S18 终态：app_dir.rs 新模块 7、fs/mod.rs 31→43、state.rs 32→42、notify 38+13→45+15、hooks 146→180、pty reader 36→42 / spawn 48→59 / shell 20→24、settings 25→23（BE-14/SEC-11 重构计数）、projects 17→21、error 7→9、agent_history 86→92、lib.rs 2 不变、tests/ 98+7 不变），与 `cargo test -- --test-threads=1` 实跑一致（lib 609 + tests/ 105）。**statusline 桥接（context 官方用量百分比口径）：usage.rs 随 transcript 链路退役整文件删除（-26），inject.rs 桥接全表 +14，signal.rs ContextUsage 信号 +1。B11 包裹解包：inject.rs +7。UI 重设计（Stage 01-08）src-tauri 仅 capabilities/tauri.conf.json 变动，L1 零用例变动。**
+> ① 占位符已实落消除：provider.rs 实落 2 条（resolve_provider 命中/未知 cliId Validation），claude/mod.rs 实落 4 条（TitleSource serde ×2 + as_str 映射 + ScanRootGuard env 恢复）；Stage 08 补登 hooks/claude/mod.rs 1 条（HomeDirGuard 注入/恢复守卫）——L1 总数按静态 grep `#[test]` 实查对齐 **724（34 文件）**（2026-08-18 review-fix S01~S18 终态 714：app_dir.rs 新模块 7、fs/mod.rs 31→43、state.rs 32→42、notify 38+13→45+15、hooks 146→180、pty reader 36→42 / spawn 48→59 / shell 20→24、settings 25→23（BE-14/SEC-11 重构计数）、projects 17→21、error 7→9、agent_history 86→92、lib.rs 2 不变、tests/ 98+7 不变；2026-08-20 人工验证修复 +8：shell.rs SEC-01 alias 兼容 +7、spawn.rs pending_bytes 信号竞态回归 +1；2026-08-22 phase2-fix S03/S04 +2：shell.rs SEC-15 单侧失败拒绝 +1、state.rs SEC-16 并发串行化 +1），与 `cargo test -- --test-threads=1` 实跑一致（lib 609 + tests/ 105）。**statusline 桥接（context 官方用量百分比口径）：usage.rs 随 transcript 链路退役整文件删除（-26），inject.rs 桥接全表 +14，signal.rs ContextUsage 信号 +1。B11 包裹解包：inject.rs +7。UI 重设计（Stage 01-08）src-tauri 仅 capabilities/tauri.conf.json 变动，L1 零用例变动。**
 
 > `pty/mod.rs`、`pty/win_build.rs`、`main.rs` 不含 `#[test]`，不在此列。git/mod.rs 测试已按 GIT-12 全量拆出至 `tests/`（`#[test]` 零残留）。agent_history 模块 grep 口径：claude/jsonl 28 + claude/scan 16 + claude/ops 16 + mod 20 = 80（命令包装层 4 用例已迁入 mod.rs，MC-301 下沉时随行）+ claude/mod 4 + provider 2 = 全模块 86；env 测试依赖 L1 `--test-threads=1` 门禁（`std::env::set_var` 全局可变）。
 
-## L2 — 前端单元/集成测试（154 文件 / 2620 用例）
+## L2 — 前端单元/集成测试（154 文件 / 2630 用例）
 
-运行：`npm test`（Vitest + jsdom，登记 2532 用例——2026-08-18 S19 静态核算：在 2026-08-18 Stage 12 终验实跑 2504 基线上加 S13~S18 净增（裸 it +26：S13 +19 / S14 -2 / S17 +2 / S18 +7，ipc-contract ptyKillAll cases +2），动态计数以终验实跑为准）
+运行：`npm test`（Vitest + jsdom，登记 2620 用例——2026-08-20 基线；2026-08-22 review-phase2-fix S03~S09 执行期净 +7：S05 workspace-switch-order +2 / S06 projects +1 + pageapis +1 / S07 command-catalog +1 + diff-panel-stale-banner +1 / S08 explorer-virtualization +1 + use-file-tree +1 / S09 close-handler +1 + error-boundary +1 + panel-registry -3；行级失实校正 +3：workspace-switch-order 2026-08-20 watcher 上提 +3 未同步行级。受影响 14 文件实跑 290/290 全绿验证，动态计数以终验实跑为准）
 
 > ① UI 重设计（Stage 01-08）L2 全量变动（明细见各段表行与文末「历史变更」）：删除 4 文件 123 用例（agent-status-view 35 / agent-history-view 38 / sidebar-actions 47 / dialog-e2e-hook 3）、新增 7 文件 67 用例（title-bar 7 / nav-tree 31 / nav-tree-history 8 / confirm-dialog 11 / toast 5 / open-hooks-config 5，emoji-scan 3 已登记）、既有文件净 +25（colors +6 / overrides +2 / activityBar +4 / sideBar +1 / workspace-defaulttab +5 / workspace-header-actions +1 / workspace-page-dockview +1 / explorer-delete +3 / file-icon +1 / commit-context-menu +2 / commit-context-menu-ui +2 / agent-status-lib -3）；另校正 2 行（notifications 34→49、close-handler 13→12，it.each 展开口径/挂载适配实跑口径）——行级合计 2439 = 实跑，旧表头 2463（行级和 2456）失实 7 一并校正。
 
@@ -113,7 +113,7 @@
 | `src/__tests__/terminal-registry.test.ts` | 28 | register/get/remove/has/幂等/setAgentSession merge 语义（AgentSessionInfo + cliId 字段/null 清空/undefined 不覆盖/缺 lastEventAt 自动填——NAH-02）/sessionChange 事件/`_reset`（Stage 08 校正 24→28） |
 | `src/__tests__/can-fit.test.ts` | 15 | 五条件守卫 + null/undefined 参数防护 |
 | `src/__tests__/use-xterm-integration.test.ts` | 12 | 轻 mock（真实 Terminal/FitAddon）；rAF 回退/onData→pty.write/visible 切换 WebGL 释放；终端规则 mock 改指 cliProfiles 注册表（Stage 01 迁移，用例数不变） |
-| `src/__tests__/keyboard.test.ts` | 12 | `createTerminalShortcuts()` 经 active 指针派发；Ctrl+C 不注册 |
+| `src/__tests__/keyboard.test.ts` | 12 | `createTerminalShortcuts()` 经 active 指针派发；Ctrl+C 不注册 + **S07 FE-08 断言增补（用例数不变：readText 拒绝 → 不 paste + console.error 记录）** |
 | `src/__tests__/terminal-registry-subscribe.test.ts` | 7 | subscribe register/remove/sessionChange 通知/退订（setAgentSession 触发） |
 | `src/__tests__/webgl-setup.test.ts` | 7 | `setupWebglWithRetry` 指数退避/重试耗尽回退 DOM/cancel 清理（TRM-06 新建） |
 | `src/__tests__/terminal-instance.test.ts` | 6 | `useTerminalInstance` 四分支：fit 异常/fontSize undefined/prevFontSize 相同跳过/tryLoadWebgl 幂等（TRM-07 新建） |
@@ -142,7 +142,7 @@
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
-| `src/__tests__/use-code-mirror.test.ts` | 39 | 字体扩展/Compartment reconfigure/handleSave（有/无 filePath、另存为、失败 alert——EDF-03 大文件拒绝/警告）/slterm:file-saved + file-saved-as |
+| `src/__tests__/use-code-mirror.test.ts` | 39 | 字体扩展/Compartment reconfigure/handleSave（有/无 filePath、另存为、失败 alert——EDF-03 大文件拒绝/警告）/slterm:file-saved + file-saved-as + **S07 FE-44 断言适配（用例数不变：保存失败文案 = getErrorMessage 解析后消息，含原始 message）** |
 | `src/__tests__/git-gutter.test.ts` | 32 | StateEffect → RangeSet 映射/GutterMarker DOM/SpacerMarker/HEAD 侧 old 行号映射 + **四 dispatch wrapper 直接调用（EDF-05）** |
 | `src/__tests__/language-mapping.test.ts` | 23 | 扩展名→语言映射 + 未知回退 |
 | `src/__tests__/editor-confirm.test.ts` | 11 | dirty/clean 外部修改确认/订阅取消/kind 过滤 |
@@ -152,20 +152,20 @@
 | `src/__tests__/active-editor.test.ts` | 5 | active 指针 set/get/覆盖、clear 仅匹配时生效 |
 | `src/__tests__/use-code-mirror-reload-error.test.ts` | 3 | **FE-10 编辑器外部重载失败可感知（S08 新建）**：reload 失败 console.warn + 状态条提示/成功路径无提示/卸载后结果忽略 |
 
-### 工作区/布局/页签（18 文件 / 272 用例）
+### 工作区/布局/页签（18 文件 / 275 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
 | `src/__tests__/title-manager.test.ts` | 47 | terminal-N 递增/编辑器 basename/同名冲突相对路径/handleSaveAs/onDeletePage/suffix 标题生成/冲突重算保留后缀/findExistingEditor 匹配隔离（B10） |
 | `src/__tests__/layout-serde.test.ts` | 26 | 旧格式修补/白名单过滤（对齐真实 6 种 PANEL_TYPES，WRK-07）/深拷贝/嵌套 branch/activeGroup 保留 + 条目级容错（null 条目跳过） |
-| `src/__tests__/panel-registry.test.ts` | 29 | 注册表 6 面板/PANEL_TYPES 长度 6/isValidPanelType/FILE_PANEL_TYPES/isAlwaysRenderPanel + **S13 FE-22 ErrorBoundary HOC（+4：面板组件映射统一包 inline ErrorBoundary/抛错面板渲染降级占位/同页其他面板存活/错误隔离不冒泡整页崩溃）** |
+| `src/__tests__/panel-registry.test.ts` | 26 | 注册表 6 面板/PANEL_TYPES 长度 6/isValidPanelType/FILE_PANEL_TYPES/isAlwaysRenderPanel + **S13 FE-22 ErrorBoundary HOC（+4：面板组件映射统一包 inline ErrorBoundary/抛错面板渲染降级占位/同页其他面板存活/错误隔离不冒泡整页崩溃）** + **S09 FE-35 死代码删除（-3：terminalTabConfig describe 块整删——29→26）** |
 | `src/__tests__/workspace-defaulttab.test.tsx` | 34 | **生产 DefaultTab 渲染（WRK-05 非手写 Mock）**：**IC-03/TAB-01/TAB-02 页签形态改造（29→34 净 +5）**——tabIcon emoji/img 分支退役改 tabStatus 状态圆点（null 无圆点/working → StatusDot 渲染/undefined 不崩溃/动态更新/圆点与 logo 并存顺序；img 分支 edge cases 4 条删除——URL/路径图标不再由 DefaultTab 承担）+ **TAB-01 底部 2px accent 指示条（+1：isGroupActive=true 渲染）** + **TAB-02 关闭 × hover 显隐（+4：默认隐藏仍在 DOM/mouseEnter 可见/mouseLeave 重隐/hover 与标题圆点互不干扰）**/onDidParametersChange 扁平事件结构回归（event.tabStatus 非 event.params.tabStatus）/tabLogo CLI logo 渲染（F9 行为修订 +2：**跟随页签名显示不依赖圆点**——tabStatus null 仍渲染/仅 tabLogo 动态出现/tabLogo null 无 logo/顺序/动态双向/URL 并存） |
 | `src/__tests__/workspace-page-dockview.test.tsx` | 11 | PageDockview 真实组件（WRK-01）：handleReady 空布局不兜底/Watermark 按钮 addPanel/RightHeader「+」/onSaveAs 重算标题 + **B12 布局恢复终端标题重算（+2：瞬态 title "claude" 无 customTitle → 重算 terminal-N/customTitle 保留不重算；beforeEach resetTerminalPanelSeq 计数隔离）** + **TAB-04「+」按钮规格（+1：22px/圆角 4/fg-3）+ TAB-03 文件页签 FileIcon 集成渲染（+1：恢复文件布局 → 页签渲染 FileIcon 彩色图标 14px svg）** + **TE-06 页签 FileIcon 断言强化（+1：断言 svg 确为 FileIcon 特征（色块 fill）+ 非文件面板（terminal）不渲染 FileIcon 反向用例）** |
-| `src/__tests__/pageapis.test.ts` | 19 | pageApis（WRK-02）：switchToPageShared 时序（invocationCallOrder，DBG-5/9）/reject 降级/`__dockviewApi` 重指；switchToPageAndFocus 轮询命中/5s 超时降级 + **FE-09 会话反查上提（+7）：findPanelForSession 4（复合键 cliId\|sessionId 精确命中/usageSourcePath 回退（无 sessionId basename 去 .jsonl）/cliId 缺省回退 CLAUDE_CLI_ID（keyOf 同键形态）/未命中 undefined）+ findPageIdForPanelId 3（前缀匹配优先旧恢复格式 B14/parse 兜底新格式/均未命中 null）** + **FE-26 AbortSignal（S13 +1：switchToPageAndFocus 轮询支持 abort——abort 后停止轮询不再切换）** |
+| `src/__tests__/pageapis.test.ts` | 20 | pageApis（WRK-02）：switchToPageShared 时序（invocationCallOrder，DBG-5/9）/reject 降级/`__dockviewApi` 重指；switchToPageAndFocus 轮询命中/5s 超时降级 + **FE-09 会话反查上提（+7）：findPanelForSession 4（复合键 cliId\|sessionId 精确命中/usageSourcePath 回退（无 sessionId basename 去 .jsonl）/cliId 缺省回退 CLAUDE_CLI_ID（keyOf 同键形态）/未命中 undefined）+ findPageIdForPanelId 3（前缀匹配优先旧恢复格式 B14/parse 兜底新格式/均未命中 null）** + **FE-26 AbortSignal（S13 +1：switchToPageAndFocus 轮询支持 abort——abort 后停止轮询不再切换）** + **S06 BE-23（+1：setProjectRoot reject → toast warning 告警且切换仍完成）** + **S09 FE-48 waitFor abort 断言适配（abort 后 advance 0 即完成，用例数不变）** |
 | `src/__tests__/workspace-header-actions.test.tsx` | 23 | RightHeader Watermark 按钮/页签操作/右键菜单重命名项（F8：终端 7 项结构/非终端 5 项/action 派发/agentSession 存在禁用——MC-405 更名同步）+ **TAB-04「+」按钮尺寸规格（+1：22px/圆角 4/fg-3）** + **FE-04 菜单构建不消耗编号（+1：连续两次构建菜单后执行新建仍从 terminal-p1-0 起/连续递增不重复）** |
 | `src/__tests__/terminal-rename-dialog.test.tsx` | 14 | 重命名弹窗（F8）：预填/受控输入/Enter 提交 trim/空名拒绝行内错误/取消（按钮/Esc/遮罩）/错误清除/initialTitle 跟随 + **FE-13 视觉规格（+1：输入框圆角 8、确定/取消按钮圆角 6——UI-306 圆角档收敛）** |
 | `src/__tests__/terminal-rename-apply.test.ts` | 5 | `applyRename` 纯函数（F8）：updateParameters 展开保留原键 + customTitle/params undefined 分支/setTitle/onLayoutChange 收到 toJSON 值/原对象不被修改 |
-| `src/__tests__/workspace-switch-order.test.tsx` | 14 | **真实驱动（WRK-06）**：点击页面行触发 switchToPage 断言 setProjectRoot 先于 setActivePage/reject 降级/SEC-01 effect 兜底（**S04 FE-04 补 toast 断言：setProjectRoot 失败 toast 被调且切换仍发生**） |
+| `src/__tests__/workspace-switch-order.test.tsx` | 19 | **真实驱动（WRK-06）**：点击页面行触发 switchToPage 断言 setProjectRoot 先于 setActivePage/reject 降级/SEC-01 effect 兜底（**S04 FE-04 补 toast 断言：setProjectRoot 失败 toast 被调且切换仍发生**） + **S05 BE-10/FE-38（+2：activePageId 置 null → stopWatch(旧 rootPath)（BE-10）/setProjectRoot resolve 前 startWatch 不启动、reject 时 startWatch 不调用且 toast 告警（FE-38））**（行级 14→19：S05 +2 与 2026-08-20 watcher 上提 +3 行级失实校正） |
 | `src/__tests__/workspace-callback-cache.test.tsx` | 3 | **FE-33 pageCallbacksRef 惰性缓存（S12 新建）**：回调按 pageId getOrCreate（同 id 复用引用）/effect 依赖收窄无关页不重建/卸载后新调用走兜底 |
 | `src/__tests__/workspace-file-panel-types.test.ts` | 14 | FILE_PANEL_TYPES/isAlwaysRenderPanel（5 面板） |
 | `src/__tests__/default-layout-format.test.ts` | 10 | makeEmptyLayout 空布局验证 + **NavTree 实际使用断言（WRK-11②，NAV-06 承接：SidebarTree 退役后 NavTree 承接新建项目/页面 CRUD）** |
@@ -175,16 +175,16 @@
 | `src/__tests__/workspace-e2e-ready.test.tsx` | 4 | `__slterm_e2e_workspaceReady` 标记同步性 |
 | `src/__tests__/workspace.test.tsx` | 4 | Dockview 初始化/项目页面关联 |
 
-### Store 状态管理（4 文件 / 91 用例）
+### Store 状态管理（4 文件 / 92 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
-| `src/__tests__/projects.test.ts` | 49 | Project/Page CRUD/持久化/version 递增/ID 生成/expandedNodes + cancelPendingSave 清理（STS-06）+ **S09 FE-11 corrupted 消费（loadProjects corrupted:true → toast「配置已损坏」）+ S12 FE-01 MAX_PAGES=20（超限 addPage 拒绝 + toast「页面数已达上限」）** |
+| `src/__tests__/projects.test.ts` | 50 | Project/Page CRUD/持久化/version 递增/ID 生成/expandedNodes + cancelPendingSave 清理（STS-06）+ **S09 FE-11 corrupted 消费（loadProjects corrupted:true → toast「配置已损坏」）+ S12 FE-01 MAX_PAGES=20（超限 addPage 拒绝 + toast「页面数已达上限」）+ S06 FE-36 全局计数（+1：跨项目全局计数——项目 A 15 页 + 项目 B 5 页时 B addPage 拒绝 + toast；FE-01 两条既有用例更名 FE-01/FE-36 适配按全局构造，49→50）** |
 | `src/__tests__/font-size.test.ts` | 19 | 默认值/clamp/loadFromDisk/debounce 持久化 + **cancelPendingSave 活跃 timer 取消（SVC-02）** + **S08 FE-09 保存失败 toast（「设置保存失败，重启后将丢失」）+ S09 FE-11 corrupted 消费** |
 | `src/__tests__/keybindings.test.ts` | 19 | setBinding/clearBinding/resetAll/sanitize/loaded 守卫/debounce + **cancelPendingSave（SVC-02）** + **S08 FE-09 保存失败 toast + S09 FE-11 corrupted 消费** |
 | `src/__tests__/layout.test.ts` | 4 | activePageId 设置/清空/重复 |
 
-### 资源管理器（23 文件 / 303 用例）
+### 资源管理器（23 文件 / 305 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
@@ -195,7 +195,7 @@
 | `src/__tests__/explorer-refresh-preserve.test.tsx` | 23 | reloadPreservingExpanded 递归重建/边界容错/三条触发路径/竞态 + **FE-15 file-saved 300ms 去抖 + 子树刷新范围 6 例（FE15-1~6：去抖合并/只刷最近展开祖先/折叠目录父层/外部路径跳过/新文件父层/卸载清理定时器）** |
 | `src/__tests__/explorer-selection.test.tsx` | 18 | FileTree 选中模型（单击/双击/空白取消/hover 不覆盖）+ 非选中行 hover（EXP-04）+ **FE-15 hover 变选中（+1：hover 态下变为选中 → 背景切换选中色，React state 驱动）** |
 | `src/__tests__/explorer-keyboard.test.ts` | 15 | `createExplorerShortcuts()` delete/open/rename 经 active 指针派发 + ref 模式闭包不过期 |
-| `src/__tests__/use-file-tree.test.ts` | 15 | loadRoot/loadDirectory/toggleExpand/generation 取消 |
+| `src/__tests__/use-file-tree.test.ts` | 16 | loadRoot/loadDirectory/toggleExpand/generation 取消 + **S08 FE-41（+1：目标已删目录行移除——file-saved 子树刷新时 readDir 抛错 → 从父层 children 移除该目录行（不留空目录行残留）；根被删走原 mergeLayer 空合并路径）** |
 | `src/__tests__/explorer-root-contextmenu.test.tsx` | 14 | 根节点右键菜单/新建文件+文件夹 |
 | `src/__tests__/explorer-sandbox-race.test.tsx` | 13 | DBG-10：deferred setProjectRoot 竞态回归 |
 | `src/__tests__/explorer-notify.test.tsx` | 16 | startWatch 调用时机/loadRoot/toggleExpand + **S05 BE-10 stopWatch 4（项目移除/切换时调用 stopWatch/卸载清理/未 watch 不调/startWatch 后 stopWatch 对称）** |
@@ -210,7 +210,7 @@
 | `src/__tests__/explorer-crud-success.test.tsx` | 4 | CRUD 成功路径（EXP-02）：IPC + refresh + 状态重置 |
 | `src/__tests__/explorer-error-placeholder.test.tsx` | 5 | **FE-07 加载错误占位（S08 新建）**：loadDirectory 失败 → 按路径 error 状态渲染错误占位（错误消息 + 重试按钮）/重试成功后恢复/切换路径错误隔离/空目录与错误区分/卸载清理 |
 | `src/__tests__/dir-entry-null.test.tsx` | 3 | **FE-12 DirEntry null 适配（S10 新建）**：size/modified 为 null 的目录条目渲染（排序/显示不崩）/null 与 undefined 区分/测试工厂同步 |
-| `src/__tests__/explorer-virtualization.test.tsx` | 7 | **FE-30 FileTree 虚拟化（S18 新建，零新依赖手实现）**：可见切片渲染（1000 节点树渲染行 << 1000）/overscan 窗口/滚动更新可见行/展开收起维持滚动/键盘导航（上下移动跨窗口）/右键菜单/选中模型行为保持 |
+| `src/__tests__/explorer-virtualization.test.tsx` | 8 | **FE-30 FileTree 虚拟化（S18 新建，零新依赖手实现）**：可见切片渲染（1000 节点树渲染行 << 1000）/overscan 窗口/滚动更新可见行/展开收起维持滚动/键盘导航（上下移动跨窗口）/右键菜单/选中模型行为保持 + **S08 FE-40（+1：程序式选中视口外行 → 滚动跟随——selectedPath 不在 [start, end] 窗口内 → scrollTop 定位到该行）** |
 
 ### 导航树（3 文件 / 56 用例，NAV-06/08 承接 SidebarTree 与 AgentStatus/历史视图退役语义；FE-25 迁移 NavHistoryRow 入驻）
 
@@ -259,23 +259,23 @@
 | `src/__tests__/hooks-config-sync.test.tsx` | 15 | 双模式同步（JSON→GUI/GUI→JSON/非法禁切/脏状态流转）——**useHooksConfig 收 cliId 选中态参数（MC-220，Stage 06 同步，用例数不变）** + **useHooksConfig 初始层（KZ-4，Stage 04 review-fix +1）：initialLayer 参数（初始层 = 传入值 + 首次 read 携该层）/缺省回退 "user"** + **S13 FE-25 异步守卫（+3：setLayer IIFE try/catch + toast/confirmDiscard timeout id 存 ref + cleanup clearTimeout）** + **S17 SEC-05 user 层二次确认（+2：layer==="user" 写盘前 confirmDialog 弹出/取消不 invoke，project/local 层不弹）** |
 | `src/__tests__/statusline-bridge-behavior.test.ts` | 10 | **B11/B16 桥接脚本行为级（新建）**：spawnSync 真实 node 执行（脚本拷贝至临时目录还原生产 CommonJS 语义 + 独立临时 HOME 隔离节流状态）——.sh 尾随引号容忍（**B16：skip 条件升级为 bash 或 git 推导可达**，本机真实执行锁 git 推导+正斜杠链路）/系统 shell 透传/失败 stdout 占位（stderr 空 + exit 0，C10）/信号 payload 字段/节流抑制（同值 1s 内不写/值变即写）/无 SLTERM_PANEL_ID/非法 JSON/空 stdin + **B16 新 2：git 推导定位 bash（PATH 裁剪为 Git\cmd+System32 生产形态）/bash 完全不可得（PATH 仅 System32 + 固定路径探测不存在，defaultGitExists 守卫 skip）→ 占位** |
 
-### Diff/GitShow 面板（4 文件 / 83 用例）
+### Diff/GitShow 面板（4 文件 / 84 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
-| `src/__tests__/diff-panel.test.tsx` | 40 | mock gitFileAtHead+fs+gitDiff+onFsEvent、双栏渲染、加载/错误占位、**保存后刷新链真实断言（EDF-01：writeFile→gitDiff→gutter）**、**五分支补齐（EDF-02：占位刷新/.git 刷新/脏确认/滚动重绑/大文件）**、滚动同步去固定延时（EDF-07）、**FE-02 浮层回归（脏确认改 mock confirmDialog 断言参数 + 保存失败 toast.show）** |
+| `src/__tests__/diff-panel.test.tsx` | 40 | mock gitFileAtHead+fs+gitDiff+onFsEvent、双栏渲染、加载/错误占位、**保存后刷新链真实断言（EDF-01：writeFile→gitDiff→gutter）**、**五分支补齐（EDF-02：占位刷新/.git 刷新/脏确认/滚动重绑/大文件）**、滚动同步去固定延时（EDF-07）、**FE-02 浮层回归（脏确认改 mock confirmDialog 断言参数 + 保存失败 toast.show）** + **S07 FE-43 断言适配（用例数不变：保存失败文案 = getErrorMessage 解析后消息「保存失败: 磁盘只读」）** |
 | `src/__tests__/gitshow-panel.test.tsx` | 22 | mock gitFileAtHead、三态、readOnly 断言、oldPath 优先、**大文件警告精确断言 + EditorView identity 切换（EDF-04）**、**字号 reconfigure（EDF-09）**、**大文件警告图标 svg 断言（FE-18：⚠ → lucide TriangleAlert 13px + warning 语义 token 色 + doc 无 emoji 负断言）** |
 | `src/__tests__/diff-alignment.test.ts` | 18 | computeAlignment 纯函数全分支 + **key<0 过滤（EDF-06）** |
-| `src/__tests__/diff-panel-stale-banner.test.tsx` | 3 | **FE-10 Diff 面板「内容可能过时」提示条（S08 新建）**：diff 加载失败 → 提示条渲染/重试成功后消失/非失败路径无提示条 |
+| `src/__tests__/diff-panel-stale-banner.test.tsx` | 4 | **FE-10 Diff 面板「内容可能过时」提示条（S08 新建）**：diff 加载失败 → 提示条渲染/重试成功后消失/非失败路径无提示条 + **S07 FE-10 外部修改重载失败（+1：readFile reject → `data-testid="diff-stale-banner"` 出现——复用提示条）** |
 
-### 快捷键/命令系统（7 文件 / 127 用例）
+### 快捷键/命令系统（7 文件 / 128 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
 | `src/__tests__/shortcuts.test.ts` | 54 | 注册/注销/引用计数/上下文栈竞态/IME/匹配排序/setOverrides 重绑解绑降级冲突/resolve/forceContext（**含 global 先注册反向分支，STS-03**）/export/list |
 | `src/__tests__/keystroke.test.ts` | 26 | formatKeystroke/parseKeystroke/isValidKeystrokeString/format∘parse 恒等 |
 | `src/__tests__/global-commands.test.ts` | 13 | createGlobalShortcuts 延迟求值/Ctrl+W 关闭/返回一条命令/无面板透传/（STS-02 名实对齐） |
-| `src/__tests__/command-catalog.test.ts` | 17 | 9 命令齐全 + 元数据 + **commandFromMeta 参数化遍历全 9 命令（STS-08）** |
+| `src/__tests__/command-catalog.test.ts` | 18 | 9 命令齐全 + 元数据 + **commandFromMeta 参数化遍历全 9 命令（STS-08）** + **S07 SEC-04（+1：global context 命令集恒为 [global.closeTab] 守卫——iframe 内脚本可提取 nonce 伪造全局快捷键消息，扩充 global 命令必须先评估威胁模型）** |
 | `src/__tests__/reserved.test.ts` | 9 | isReserved 各 context/保留键命中/global 两集并集 |
 | `src/__tests__/use-panel-focus.test.ts` | 5 | focusin→pushContext+onActivate/focusout→popContext+onDeactivate/卸载清理 |
 | `src/__tests__/wire-keybindings.test.ts` | 3 | 立即应用/store 变更重应用/unsubscribe |
@@ -308,16 +308,16 @@
 |------|------|---------|
 | `src/__tests__/agent-history-model.test.ts` | 47 | 纯函数全分支（Stage 02 更名同步，AgentStatus；Stage 04 类型/工厂同步 AgentHistorySession 八键含 cliId，MC-306；Stage 05 目录更名 + **复合键 cliId\|sessionId——MC-313**）：isCurrentProject（决策 24）/groupByCwd/matchesSearch/formatRelativeTime（决策 26）/deriveActiveSessionStatuses（**sessionId null 回退 basename，NAH-01**/**显式 cliId 键不依赖回退/同 sessionId 不同 cliId 防冲突/旧数据无 cliId 按 CLAUDE_CLI_ID 回退——MC-313 +3**）/**keyOf 单点（ZQ-1/ZQ-7，+3：cliId null/undefined 缺省回退/显式 cliId 透传/含竖线两侧转义 + 生产消费两侧键一致 + 裸拼接键不命中）** |
 | `src/__tests__/agent-history-hook.test.tsx` | 13 | 状态机流转/scan 成功失败/removeLocal 不重扫/**scan generation 竞态（NAH-08）**/subscribe 驱动 activeStatuses（**复合键 cliId\|sessionId——MC-313 断言同步**）/卸载清理（Stage 02 更名同步，AgentStatus；Stage 04 mock 路径 + 类型同步，MC-306；Stage 05 目录更名 + useAgentHistory） |
-| `src/__tests__/agent-history-restore.test.ts` | 13 | 四步编排/pty.write 内容（普通/fork/`\r`）/**防重入（NAH-07①）**/失败 toast/**cwd null 防御性 throw（NAH-07②）**（Stage 04 类型同步，MC-306；Stage 05 目录更名 + **注入内容断言 = claude profile.history.buildRestoreInput 输出逐字一致（MC-315 委托，用例数不变）** + **同毫秒两次恢复 panelId 相异（ZQ-4 自增序号，Stage 02 review-fix +1，代 restore-id 登记；B14 改造为模块级每页计数确定性断言 `terminal-{pageId}-0/1`，用例数不变）**） + **初始标题两分支 1 例（人工验证问题 3：session.title 非空用它、null 兜底 profile.tabTitle——addPanel title 断言同步，8→9）** + **S13 FE-27 waitFor AbortSignal（+4：waitFor 支持 abort——signal.aborted 提前返回/恢复编排共享 Controller 新恢复发起 abort 旧/卸载 abort 后不误操作/无 signal 后向兼容）** |
+| `src/__tests__/agent-history-restore.test.ts` | 13 | 四步编排/pty.write 内容（普通/fork/`\r`）/**防重入（NAH-07①）**/失败 toast/**cwd null 防御性 throw（NAH-07②）**（Stage 04 类型同步，MC-306；Stage 05 目录更名 + **注入内容断言 = claude profile.history.buildRestoreInput 输出逐字一致（MC-315 委托，用例数不变）** + **同毫秒两次恢复 panelId 相异（ZQ-4 自增序号，Stage 02 review-fix +1，代 restore-id 登记；B14 改造为模块级每页计数确定性断言 `terminal-{pageId}-0/1`，用例数不变）**） + **初始标题两分支 1 例（人工验证问题 3：session.title 非空用它、null 兜底 profile.tabTitle——addPanel title 断言同步，8→9）** + **S13 FE-27 waitFor AbortSignal（+4：waitFor 支持 abort——signal.aborted 提前返回/恢复编排共享 Controller 新恢复发起 abort 旧/卸载 abort 后不误操作/无 signal 后向兼容）** + **S09 FE-48 断言适配（用例数不变：abort 后轮询 Promise advance 0 即 settle——abort listener 立即 clearTimeout + resolve，原实现须推进 100ms 定时器）** |
 | `src/__tests__/agent-history-action-dialog.test.tsx` | 8 | SessionActionDialog 渲染/action 回调/取消（按钮/Esc/遮罩）/**空 actions 防御（NAH-11）** + **FE-12 视觉规格（+1：输入框圆角 8、确定/取消按钮圆角 6——UI-306 圆角档收敛）**（Stage 04 类型同步，MC-306；Stage 05 仅 import 路径更名） |
 
 > `agent-history-view.test.tsx`（38 用例）已随 NAV-08 删除——AgentHistorySections 组件退役，历史区渲染/搜索/菜单/恢复语义由 nav-tree.test.tsx 与 nav-tree-history.test.tsx 承接（搜索过滤/复制命令/标题回退链等并入导航树测试）。
 
-### 启动/关闭（5 文件 / 34 用例）
+### 启动/关闭（5 文件 / 35 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
-| `src/__tests__/close-handler.test.ts` | 18 | flush layout→saveAllProjects→localStorage/超时/异常 + 关窗拦截（WRK-08） + **关闭序列第 4 步 restoreStatusline（statusline 桥接：调用与 cliId 透传断言 + 失败静默 catch 不阻断关闭）** + **S13 BE-08 关闭兜底（+6）：关闭序列先 Registry 快速 kill 再 ptyKillAll 兜底/ptyKillAll 失败不阻断关闭/返回 kill 数透传/Registry 空时仍调兜底/顺序断言（kill 先于 killAll）/超时兜底**（**TB-02/OV-01 mock 适配：App 根部挂载 TitleBar 三窗口图标 + ConfirmDialogHost/ToastHost（渲染 null）**——表行 13→12 为挂载适配后实跑口径校正） |
+| `src/__tests__/close-handler.test.ts` | 19 | flush layout→saveAllProjects→localStorage/超时/异常 + 关窗拦截（WRK-08） + **关闭序列第 4 步 restoreStatusline（statusline 桥接：调用与 cliId 透传断言 + 失败静默 catch 不阻断关闭）** + **S13 BE-08 关闭兜底（+6）：关闭序列先 Registry 快速 kill 再 ptyKillAll 兜底/ptyKillAll 失败不阻断关闭/返回 kill 数透传/Registry 空时仍调兜底/顺序断言（kill 先于 killAll）/超时兜底** + **S09 FE-47（+1：ptyKillAll 永不 resolve → 3s 总超时后关窗流程继续——极端多 session 防拖长关窗）**（**TB-02/OV-01 mock 适配：App 根部挂载 TitleBar 三窗口图标 + ConfirmDialogHost/ToastHost（渲染 null）**——表行 13→12 为挂载适配后实跑口径校正） |
 | `src/__tests__/startup-restore.test.ts` | 8 | localStorage 恢复/空/异常降级/**setProjectRoot 先于 setActivePage 顺序断言（WRK-03）**/requestUserAttention catch（**S08 FE-06 catch 内 console.warn 断言**）/**FE-10 加载页全局字体栈 + DIM_FG 样式断言** |
 | `src/__tests__/bootstrap.test.ts` | 5 | `__TAURI_INTERNALS__` 轮询/立即挂载/永不就绪 + **S08 FE-03 启动链 catch console.warn（loadSettings/字体/快捷键/侧栏各带模块名）** |
 | `src/__tests__/main-bootstrap.test.tsx` | 1 | main.tsx init 失败 catch 分支（WRK-10） |
@@ -332,14 +332,14 @@
 | `src/__tests__/file-viewer-registry.test.ts` | 31 | 扩展名注册/策略链式调用/隐藏文件排除/大小写/**`_reset` 后预注册恢复 + resolve(".gitignore")/resolve("file.") 边界（EXP-12）** |
 | `src/__tests__/csp-config.test.ts` | 7 | tauri.conf.json CSP 不变量：script-src unsafe-inline/dangerousDisableAssetCspModification/default-src 严格/**style-src/connect-src/img-src 关键字段快照（IHE-07④）** |
 
-### E2E 辅助/门控测试（7 文件 / 35 用例）
+### E2E 辅助/门控测试（7 文件 / 36 用例）
 
 | 文件 | 用例 | 覆盖范围 |
 |------|------|---------|
 | `src/__tests__/e2e-build-config.test.ts` | 8 | VITE_E2E build 配置不变量 + **E2E_ENABLED 字面量表达式断言（IHE-04，AST/正则）** |
 | `src/__tests__/e2e-enabled.test.ts` | 9 | E2E_ENABLED 真值表（it.each 7 组展开）+ 常量与纯函数一致性 |
 | `src/__tests__/app.test.tsx` | 5 | **E2E helper 行为契约（DOC-02⑤）**：`__slterm_e2e_createProject` 行为/pending 标记 |
-| `src/__tests__/error-boundary.test.tsx` | 5 | 正常透传/抛错 UI/`__sltermError` 赋值/**variant="inline" 渲染（IHE-05）** |
+| `src/__tests__/error-boundary.test.tsx` | 6 | 正常透传/抛错 UI/`__sltermError` 赋值/**variant="inline" 渲染（IHE-05）** + **S09 FE-46（+1：inline 重试按钮——点击「重试」清 error → 子树重新渲染（恢复路径，二次抛错再落占位））** |
 | `src/__tests__/e2e-clipboard-helper.test.ts` | 3 | writeClipboard/createProject 函数可用性 |
 | `src/__tests__/e2e-create-project.test.ts` | 3 | **E2E helper 行为契约（DOC-02⑤）**：pending 标记→localStorage 恢复交互 |
 | `src/__tests__/e2e-gating-workspace.test.tsx` | 2 | `__slterm_e2e_workspaceReady` 存在性 |
@@ -407,6 +407,7 @@ embedded WDIO 驱动**无法将 OS 级按键（`browser.keys`）投递进 WebVie
 
 ## 历史变更
 
+- 2026-08-22（review-phase2-fix S03~S09 执行期全量同步，S10 收口）：**L1 722→724**——S03 SEC-15（shell.rs 31→32 +1 `paths_match_single_side_failure_rejected`——canonicalize 单侧失败即拒绝，D15）；S04 SEC-16（state.rs 42→43 +1 `set_project_root_serializes_concurrent_calls`——tokio::Mutex 串行化，D17；既有直测用例调用点补传 Mutex 适配）。notify/mod.rs 45 不变（BE-25 大小写变体断言增补于既有 `is_excluded_path_matches_all_seven_dirs`）。SEC-17 审计豁免已随 S03 commit 登记豁免表。**L2 2620→2630（净增 10）**——S05 workspace-switch-order 17→19（+2：BE-10 activePageId 置 null → stopWatch(旧 rootPath) / FE-38 setProjectRoot resolve 前 startWatch 不启动 + reject 时 toast 告警）、S06 projects 49→50（+1 FE-36 跨项目全局计数；FE-01 两条用例更名 FE-01/FE-36 适配）+ pageapis 19→20（+1 BE-23 setProjectRoot reject → toast warning 且切换仍完成）、S07 command-catalog 17→18（+1 SEC-04 global 命令集守卫）+ diff-panel-stale-banner 3→4（+1 FE-10 外部修改重载失败提示条）；断言适配（用例数不变）：keyboard 12（FE-08 粘贴失败 console.error）、diff-panel 40（FE-43 保存失败文案）、use-code-mirror 39（FE-44 保存失败文案）、S08 explorer-virtualization 7→8（+1 FE-40 滚动跟随）+ use-file-tree 15→16（+1 FE-41 已删目录行移除；FE-39 验证已固化零改动）、S09 close-handler 18→19（+1 FE-47 ptyKillAll 总超时）+ error-boundary 5→6（+1 FE-46 重试按钮）+ panel-registry 29→26（-3 FE-35 terminalTabConfig describe 块删除）+ agent-history-restore 13 不变（FE-48 abort 断言适配 advance 0）；**行级失实校正 +3**：workspace-switch-order 2026-08-20 watcher 上提 +3 未同步行级（14→17 漏登，本条一并校正至 19）。受影响 14 文件 vitest 实跑 290/290 全绿。**L3 138 / L4 40 零变动**。全量 3480→3492（Rust 724 + 前端 2630 + L3 138 + E2E 40）。
 - 2026-08-20（人工验证 3 问题修复——S02 alias / S06 信号竞态 / S12 契约断链 / watcher 上提）：**L1 714→722**——shell.rs 24→31（SEC-01 alias 兼容 +7：paths_match 纯函数 5 + 统一错误文案 1 + 真实应用执行别名条件测试 1——Store 版 pwsh alias 路径 canonicalize 失败 1920 场景）；spawn.rs 59→60（**S06 信号竞态修复回归 1**：`pending_bytes_reflects_pipe_data_availability`——旧 WaitForSingleObject 管道信号 reset 延迟误报 → 微批阻塞 read 空等 → reader 卡死 → 终端永久无输出（win10 黑屏/E2E 全终端空文本根因）；改 PeekNamedPipe 同步查询，真实管道锁死 空→写→读走→0 语义）。**L2 2628→2620**——修复 2 契约断链（ipc-agent-history-contract -4 scanHistory 无参块删除、agent-history-hook +2 接线断言、nav-tree-history +1 刷新钮 force 断言、nav-tree/use-xterm×2 mock 键换名）；watcher 上提 Workspace 项目激活层（explorer-notify -10 watcher 生命周期用例迁移、workspace-switch-order +3 文件监听跟随项目激活——E2E editor auto-reload 根因：watcher 原只在 ExplorerPanel 挂载时启动，编辑器外部修改 reload 不依赖 explorer 视图打开）。**L3 138 不变。L4 40 不变但 9 spec 全过**（terminal.e2e.ts 恢复 = S02 alias 修复回归；history.e2e.ts 恢复 = 契约断链接线 + PTY 输出链恢复回归；editor.e2e.ts 恢复 = watcher 上提回归）。全量 3424→3480。动态计数以终验 vitest 实跑为准。
 - 2026-08-18（review-fix S02~S18 全量同步，S19 终态）：**L1 615→714（32→34 文件，净增 99）**——S02 SEC-01/02/BE-01（shell.rs 20→24 白名单 4 + signal/watcher symlink 2 + spawn 容量 3）、S03 reattach 删除（pty_integration_tests 8→7 -1）、S04 BE-04（state.rs 32→36 set_project_root 4）、S05 BE-02/10/11/SEC-08（notify 38→45、pool 13→15）、S06 BE-05/06（reader 36→42 微批 6 + join 超时 3、spawn kill 加固断言）、S07 BE-03（fs 31→43 分块 8）、S08 BE-13/15（error 7→9 ConfigParse + 路径注入 2、fs 路径注入 4）、S09 BE-14/16/SEC-11（新建 app_dir.rs 7、settings 25→23、projects 17→21 corrupted/上限）、S10 BE-18（config 28→39 Layer 枚举 + 子树形态 11）、S12 BE-19（scan 16→21 缓存 5、mod 20→21 force 通道 3）、S13 BE-07/08/09（notify 合并 2、spawn pty_kill_all 2、state LRU 6 + git_status 13 行断言）、S14 BE-17（ops.rs 3 处测试 cfg 豁免保留登记，用例数不变）、S17 SEC-05/12/13（config 39→49 语义校验 9、inject 56→67 审查 5 + 哈希 4）。**L2 2504→2532（净增 28）**——S13 +19（close-handler 12→18 关闭兜底 6、agent-history-restore 9→13 waitFor Abort 4、panel-registry 25→29 错误边界 4、hooks-config-sync 10→13 FE-25 守卫 3、agent-status-hook 42→43 genRef 1、pageapis 18→19 FE-26 1）、S14 -2（ipc-window-contract 11→9 setFocus 删除）、S17 +2（hooks-config-sync 13→15 user 层确认 2）、S18 +7（新建 explorer-virtualization 7 FE-30）。S02~S12 行级补登（基线已含）：新建 app-error 7 / diff-panel-stale-banner 3 / explorer-error-placeholder 5 / startup-store-fail-warn 2 / use-code-mirror-reload-error 3 / use-xterm-error-toast 4（S08）/ dir-entry-null 3（S10）/ clipboard-guard 4（S11）/ workspace-callback-cache 3（S12）；行级更新 use-xterm-output 35→38、terminal 24→27、explorer-notify 12→16、html-panel 42→49、projects 46→49、font-size/keybindings 17→19、sideBar 22→24、sideBarArea 16→17、ipc-contract 65→78（Channel 分块/corrupted/pty 校验/ptyKillAll cases）。**L3 138 / L4 40 零变动**。全量 3282→3424（Rust 714 + 前端 2532 + L3 138 + E2E 40）。动态计数以终验 vitest 实跑为准。
 - 2026-08-18（review-fix Stage 12 前端性能，FE-15/16/19）：**L2 +15**——`ipc-agent-history-contract.test.ts` 12→18（scanAgentHistory {cliId, force?} 四维 +6，BE-19）；`explorer-refresh-preserve.test.tsx` 17→23（file-saved 300ms 去抖 + 子树刷新范围 FE15-1~6）；`nav-tree-history.test.tsx` 8→11（FE-16 嵌套 rootPath 索引归属 +1、FE-19 扫描时机 2 例、归属用例扫描次数断言改恒 1）。L2 2489→2504。L1/L3/L4 零变动。
