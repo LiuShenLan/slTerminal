@@ -58,7 +58,8 @@ interface ProjectsState {
 
   addProject: (project: Project) => void;
   removeProject: (projectId: string) => void;
-  addPage: (projectId: string, page: OperationPage) => void;
+  /** 新增操作页面——成功 true；项目不存在/超全局上限（FE-36）拒绝 false（供调用方可观测） */
+  addPage: (projectId: string, page: OperationPage) => boolean;
   removePage: (projectId: string, pageId: string) => void;
   switchToPage: (projectId: string, pageId: string) => void;
   renamePage: (projectId: string, pageId: string, newName: string) => void;
@@ -108,13 +109,13 @@ export const useProjects = create<ProjectsState>()((set, get) => ({
         // 多 Dockview 实例架构每页一实例，上限防内存/DOM 线性增长（豁免登记 S19）；
         // FE-36 全局化：上限按跨项目全局页面总数计数（原按项目计数）
         const project = get().projects[projectId];
-        if (!project) return;
+        if (!project) return false;
         // FE-36（D1 契约名实相符）：页面总数上限 = 跨项目全局计数
         // （原按项目计数——多项目下 Dockview 实例仍可无界增长）
         const totalPages = Object.values(get().projects).flatMap((p) => p.pages).length;
         if (totalPages >= MAX_PAGES) {
           toast.show("warning", "页面数已达上限");
-          return;
+          return false;
         }
         set((state) => {
           const pages = [...project.pages, page];
@@ -132,6 +133,7 @@ export const useProjects = create<ProjectsState>()((set, get) => ({
             expandedNodes: { ...state.expandedNodes, [page.pageId]: true },
           };
         });
+        return true;
       },
 
       removePage: (projectId, pageId) =>

@@ -38,8 +38,11 @@ declare global {
     __slterm_e2e_shortcutDebug?: () => { stack: string[]; commands: string[] };
     // 项目管理
     __slterm_e2e_createProject?: (dirPath: string) => Promise<string>;
+    /** 用例开始前清空项目 store（wdio beforeTest 调用；FE-36 全局页数上限兼容） */
+    __slterm_e2e_resetProjects?: () => void;
     __slterm_e2e_getProjectIdForPage?: (pageId: string) => string | null;
-    __slterm_e2e_addPage?: (projectId: string, name: string, rootPath: string) => string;
+    /** 新增操作页面——被 store 拒绝（超页数上限等）返回 null */
+    __slterm_e2e_addPage?: (projectId: string, name: string, rootPath: string) => string | null;
     __slterm_e2e_switchToPage?: (pageId: string) => Promise<void>;
     // 页签标题
     __slterm_e2e_registerAndRecompute?: (
@@ -194,6 +197,18 @@ function installProjectHelpers(): void {
     return pageId;
   };
 
+  // __slterm_e2e_resetProjects —— 用例开始前清空项目 store（wdio beforeTest 调用）。
+  // 单 session 共享 app 实例（wdio.conf 文件头注释）：前序 spec/用例的项目在
+  // store 累积（一轮可 20+ 项目/30+ 页），S06 FE-36 全局页数上限（MAX_PAGES=20）
+  // 会拒绝后续 addPage（H6/E2E-04 回归根因）。清空粒度 = 用例级——用例内
+  // 多项目累积不受影响（agent R2 切项目往返等）。
+  window.__slterm_e2e_resetProjects = () => {
+    useProjects.setState({ projects: {}, expandedNodes: {} });
+    // 同步清 activePageId——残留指向被清项目的 pageId 会使
+    // __slterm_e2e_getActivePageInfo 断链（「无法获取活跃页面信息」）
+    useLayout.setState({ activePageId: null });
+  };
+
   // __slterm_e2e_getProjectIdForPage
   window.__slterm_e2e_getProjectIdForPage = (pageId: string) => {
     const { projects } = useProjects.getState();
@@ -206,6 +221,8 @@ function installProjectHelpers(): void {
   };
 
   // __slterm_e2e_addPage —— 在已有项目中新增操作页面（H6 跨页面存活测试）
+  // 返回 null 表示被 store 拒绝（项目不存在/页面总数超 MAX_PAGES 上限）——
+  // spec 侧 addPage 返回值断言可提前失败，避免切换幽灵页面的隐性超时
   window.__slterm_e2e_addPage = (projectId: string, name: string, rootPath: string) => {
     const pageId = createPageId();
     const page: OperationPage = {
@@ -216,7 +233,8 @@ function installProjectHelpers(): void {
       createdAt: Date.now(),
       lastAccessedAt: Date.now(),
     };
-    useProjects.getState().addPage(projectId, page);
+    const ok = useProjects.getState().addPage(projectId, page);
+    if (!ok) return null;
     return pageId;
   };
 

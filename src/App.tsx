@@ -75,7 +75,15 @@ function App() {
       try {
         // P2-07: loadAllProjects 内部 JSON.parse 当前数据量小无影响，
         // 若未来项目数据文件膨胀到 MB 级，可改为流式解析或 IndexedDB 存储。
-        await loadAllProjects();
+        // E2E 构建（VITE_E2E=1）跳过项目数据恢复：前序 spec 的项目经
+        // slterminal-projects.json 恢复进 store（一轮可累积 20+ 页），FE-36
+        // 全局页数上限会拒绝后续 addPage（H6/E2E-04 回归根因）；且恢复与
+        // __slterm_e2e_createProject 的清空存在竞态（IPC 慢时恢复覆盖）。
+        // 内联表达式门控（引用 E2E_ENABLED 常量会使 helpers chunk 残留
+        // 生产 dist，CI 守卫 fail——见 main.tsx:77-81）。
+        if (import.meta.env.VITE_E2E !== "1") {
+          await loadAllProjects();
+        }
       } catch (err) {
         // FE-03：启动链失败不再静默——降级兜底不变（保持空状态）；损坏经 corrupted 通道 toast 在 S09
         console.warn("[App] 加载项目数据失败，保持空状态:", err);

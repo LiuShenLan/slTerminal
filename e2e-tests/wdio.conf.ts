@@ -41,4 +41,18 @@ export const config: WebdriverIO.Config = {
     // 不用 specFileRetries（整文件重跑成本高，且与 E2E-12 杀 app 语义冲突）。
     retries: 1,
   },
+
+  // 每个 spec 开始前清空项目 store——单 session 共享 app 实例（见文件头注释），
+  // 前序 spec 的项目在 store 累积（一轮可 20+ 项目/30+ 页），S06 FE-36 全局
+  // 页数上限（MAX_PAGES=20）会拒绝后续 addPage（H6/E2E-04 回归根因）。
+  // 粒度 = spec 级（beforeSuite 先于 mocha before()——后者建的项目不被清；
+  // 不用 beforeTest：wdio 层在 mocha before() 之后执行，会清掉 before()
+  // 里建的项目，且 editor 标题等用例依赖 spec 内累积状态）。
+  // spec 内用例累积 ≤10 项目不触发 20 页上限；用例内多项目（agent R2）不受影响。
+  beforeSuite: async function () {
+    await browser.execute(() => {
+      (window as unknown as { __slterm_e2e_resetProjects?: () => void })
+        .__slterm_e2e_resetProjects?.();
+    });
+  },
 };
