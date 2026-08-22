@@ -1955,12 +1955,12 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     }));
 
     expect(mockEventToStatus).toHaveBeenCalledWith("SessionStart", null);
-    // B13: SessionStart 补 title = profile.tabTitle（/resume 无 OSC 133 C，
-    // 标题经 hook 事件保持 claude）
+    // B13: SessionStart 补 title——同步兜底 = 回退链 null 兜底（sessionId 前 8 位，
+    // 与历史行同口径；默认 sessionId "s1" 短于 8 位 → 原样 "s1"）
     expect(mockOnTabStateChange).toHaveBeenCalledWith({
       active: true,
       status: "attention",
-      title: "claude",
+      title: "s1",
     });
     expect(mockSetAgentSession).toHaveBeenCalledWith("hooks-test", {
       sessionId: "s1",
@@ -2226,11 +2226,12 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
       active: false,
       restoreTitle: false,
     });
-    // 第二次：SessionStart → 携 title 重新标 active（标题保持 claude 不回退）
+    // 第二次：SessionStart → 携 title 重新标 active（同步兜底 = sessionId 前 8 位，
+    // 默认 sessionId "s1" 短值原样——标题不回退 terminal-N，B13）
     expect(mockOnTabStateChange).toHaveBeenNthCalledWith(2, {
       active: true,
       status: "attention",
-      title: "claude",
+      title: "s1",
     });
     // 无任何「恢复原标题」形态的调用（title 恢复只由真退出信号承担——B13）
     expect(mockOnTabStateChange).not.toHaveBeenCalledWith({ active: false });
@@ -2246,23 +2247,25 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     mockSetAgentSession.mockClear();
     mockReadHistoryTitle.mockClear();
     mockReadHistoryTitle.mockResolvedValue({ title: "修复登录 bug", titleSource: "customTitle" });
-    // 陈旧守卫前提：注册表条目 agentSession.sessionId 与事件 sessionId 一致
+    // 陈旧守卫前提：注册表条目 agentSession.sessionId 与事件 sessionId 一致；
+    // 用 8+ 位 sessionId 让「前 8 位」截断语义真实覆盖
+    const sid = "1a2b3c4d-9e8f-4a7b-9c1d-2e3f4a5b6c7d";
     mockRegistryMap.set("hooks-test", {
       sessionId: "test-session-id",
-      agentSession: { sessionId: "s1", cliId: "claude" },
+      agentSession: { sessionId: sid, cliId: "claude" },
     });
 
-    capturedAgentEventCallbackRef.current!(makeHookPayload({ event: "SessionStart" }));
+    capturedAgentEventCallbackRef.current!(makeHookPayload({ event: "SessionStart", sessionId: sid }));
 
-    // 同步兜底 title = profile.tabTitle（B13 补位语义不变）
+    // 同步兜底 = 回退链 null 兜底（sessionId 前 8 位，与历史行同口径）
     expect(mockOnTabStateChange).toHaveBeenCalledWith({
       active: true,
       status: "attention",
-      title: "claude",
+      title: "1a2b3c4d",
     });
     // 异步解析 → 仅标题回调（不带 status——不动状态圆点）
     await waitFor(() => {
-      expect(mockReadHistoryTitle).toHaveBeenCalledWith("claude", "s1");
+      expect(mockReadHistoryTitle).toHaveBeenCalledWith("claude", sid);
       expect(mockOnTabStateChange).toHaveBeenCalledWith({
         active: true,
         title: "修复登录 bug",
@@ -2270,23 +2273,24 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
     });
   });
 
-  it("HUK22: 解析 title null → 兜底 profile.tabTitle，与同步补位同值不重复回调", async () => {
+  it("HUK22: 解析 title null → 兜底 sessionId 前 8 位，与同步补位同值不重复回调", async () => {
     await mountAndWaitForHooks();
     mockOnTabStateChange.mockClear();
     mockSetAgentSession.mockClear();
     mockReadHistoryTitle.mockClear();
     mockReadHistoryTitle.mockResolvedValue({ title: null, titleSource: "none" });
+    const sid = "1a2b3c4d-9e8f-4a7b-9c1d-2e3f4a5b6c7d";
     mockRegistryMap.set("hooks-test", {
       sessionId: "test-session-id",
-      agentSession: { sessionId: "s1", cliId: "claude" },
+      agentSession: { sessionId: sid, cliId: "claude" },
     });
 
-    capturedAgentEventCallbackRef.current!(makeHookPayload({ event: "SessionStart" }));
+    capturedAgentEventCallbackRef.current!(makeHookPayload({ event: "SessionStart", sessionId: sid }));
 
     await waitFor(() => {
-      expect(mockReadHistoryTitle).toHaveBeenCalledWith("claude", "s1");
+      expect(mockReadHistoryTitle).toHaveBeenCalledWith("claude", sid);
     });
-    // 兜底标题 = profile.tabTitle——与同步补位同值，去重后无额外回调
+    // 兜底标题 = sessionId 前 8 位——与同步补位同值，去重后无额外回调
     expect(mockOnTabStateChange).toHaveBeenCalledTimes(1);
   });
 
@@ -2313,11 +2317,12 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
 
     // 分支 2：有 sessionId 但 IPC reject → catch 静默，保持现标题（无额外回调）
     mockOnTabStateChange.mockClear();
+    const sid = "1a2b3c4d-9e8f-4a7b-9c1d-2e3f4a5b6c7d";
     mockRegistryMap.set("hooks-test", {
       sessionId: "test-session-id",
-      agentSession: { sessionId: "s1", cliId: "claude" },
+      agentSession: { sessionId: sid, cliId: "claude" },
     });
-    capturedAgentEventCallbackRef.current!(makeHookPayload({ event: "SessionStart" }));
+    capturedAgentEventCallbackRef.current!(makeHookPayload({ event: "SessionStart", sessionId: sid }));
     await waitFor(() => {
       expect(mockReadHistoryTitle).toHaveBeenCalledTimes(1);
     });

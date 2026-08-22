@@ -34,7 +34,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 | 文件 | 职责 |
 |------|------|
-| `useAgentStatus.ts` | 数据 hook：`useAgentStatus()` → `AgentStatusResult`（`state` + `rows: AgentSessionRow[]` + `currentProjectName` + `now` 时间基准）+ TerminalRegistry 订阅（register/remove/sessionChange）+ ContextUsage 信号事件处理（行 usage 更新）；行标题经 `resolveTitle`（getPageApi 查 dockview 面板标题）；**FE-23 generation 防竞**（照 useFileTree 先例——项目切换递增 `genRef`，初始扫描 `setRows` 前检查，快速切项目时旧扫描结果不覆盖新状态） |
+| `useAgentStatus.ts` | 数据 hook：`useAgentStatus()` → `AgentStatusResult`（`state` + `rows: AgentSessionRow[]` + `currentProjectName` + `now` 时间基准）+ TerminalRegistry 订阅（register/remove/sessionChange）+ ContextUsage 信号事件处理（行 usage 更新）；行标题经 `resolveTitle`（getPageApi 查 dockview 面板标题）；**行 title 动态跟随页签（人工验证问题 3 一致化）**：建行三通道（hook 事件/sessionChange/初始扫描）订阅面板 `onDidTitleChange` → 行 title 实时同步（页签异步标题覆盖后侧栏不再滞留快照）；订阅表 `Map<panelId, dispose>`——删行三通道（SessionEnd/sessionChange null/remove）取消、项目切换/卸载全清（cleanup），面板 api 未就绪静默不订阅（行保持快照标题）；**FE-23 generation 防竞**（照 useFileTree 先例——项目切换递增 `genRef`，初始扫描 `setRows` 前检查，快速切项目时旧扫描结果不覆盖新状态） |
 
 > 原 `AgentStatusView.tsx` / `AgentStatusRow.tsx` / `index.ts` 已删除（NAV-08）；本目录无 barrel——`useAgentStatus` 经 `../navTree/useNavTree.ts` 直接引用。
 

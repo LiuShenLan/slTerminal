@@ -811,12 +811,13 @@ describe("AC-4⑤ 恢复注入", () => {
     consoleErrorSpy.mockRestore();
   });
 
-  it("注入内容 = mock buildRestoreInput 桩输出 + addPanel title = tabTitle", async () => {
+  it("注入内容 = mock buildRestoreInput 桩输出 + addPanel title = sessionId 前 8 位（title null 兜底）", async () => {
     await restoreHistorySession(makeHistorySession({ cliId: mockCliProfile.id }));
 
-    // addPanel title 取自 profile.tabTitle（MC-315 委托）
+    // addPanel title = session.title ?? sessionId 前 8 位（makeHistorySession 默认
+    // title null → 兜底截断，与历史行 NavHistoryRow 同口径，MC-315 委托）
     expect(apiStub.addPanel).toHaveBeenCalledWith(
-      expect.objectContaining({ title: mockCliProfile.tabTitle }),
+      expect.objectContaining({ title: SESSION_ID.slice(0, 8) }),
     );
     // 注入内容 = mockcli history 能力输出（可识别前缀 "mockcli --resume"）
     const [, , data] = h.mockPtyWrite.mock.calls[0] as [

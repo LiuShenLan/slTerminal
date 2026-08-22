@@ -138,7 +138,7 @@ vi.mock("../ipc/agentHooks", () => ({
   restoreStatusline: () => Promise.resolve(),
 }));
 
-import { renderHook, act } from "@testing-library/react";
+import { renderHook, act, cleanup } from "@testing-library/react";
 import { useLayout } from "../stores/layout";
 import { useProjects } from "../stores/projects";
 import { useAgentStatus } from "../features/agentStatus/useAgentStatus";
@@ -296,6 +296,10 @@ describe("useAgentStatus（行建模新语义）", () => {
 
   afterEach(() => {
     capturedCallback.current = null;
+    // vitest 未开 globals → RTL auto-cleanup 不生效，前置用例的 hook 实例残留
+    //（其 effect 会在 beforeEach setState 后重跑并消费当前用例的 mock——订阅
+    // dispose 计数污染新用例断言）。显式 unmount 保证用例间渲染隔离。
+    cleanup();
   });
 
   // ──────────────────────────────────────────────────
@@ -1208,5 +1212,248 @@ describe("useAgentStatus（行建模新语义）", () => {
         (TerminalRegistry as any).remove("terminal-nonexistent-0");
       });
     }).not.toThrow();
+  });
+
+  // ──────────────────────────────────────────────────
+  // 面板标题订阅（行 title 动态跟随页签——/resume 侧栏固定 claude 根因修复）
+  // ──────────────────────────────────────────────────
+
+  /** 构造带 onDidTitleChange 的 getPageApi mock；返回标题回调捕获表 + dispose 列表 */
+  function mockPageApiWithTitle(
+    titleCbs: Map<string, (e: { title: string }) => void>,
+    disposeFns: ReturnType<typeof vi.fn>[],
+    title = "旧标题",
+  ) {
+    mockGetPageApi.mockImplementation(() => ({
+      getPanel: (panelId: string) => ({
+        title,
+        focus: vi.fn(),
+        api: {
+          onDidTitleChange: (cb: (e: { title: string }) => void) => {
+            titleCbs.set(panelId, cb);
+            const d = vi.fn();
+            disposeFns.push(d);
+            return { dispose: d };
+          },
+        },
+      }),
+    }));
+  }
+
+  it("建行三通道均订阅面板标题；标题变化仅更新匹配行", () => {
+    const titleCbs = new Map<string, (e: { title: string }) => void>();
+    const disposeFns: ReturnType<typeof vi.fn>[] = [];
+    mockPageApiWithTitle(titleCbs, disposeFns);
+    seedProject();
+    // 通道 1：初始扫描建行（register 带 agentSession → renderHook 扫描）
+    registerTerminal("terminal-page1-0", makeSession({ lastEventAt: 1000 }));
+    // 通道 3 前置：先注册纯 shell，后续 sessionChange 建行
+    registerTerminal("terminal-page1-2", null);
+
+    const { result } = renderHook(() => useAgentStatus());
+    // 通道 2：hook 事件建行（无需注册表条目——handleHookEvent 不查注册表）
+    act(() => {
+      capturedCallback.current?.(makePayload({ panelId: "terminal-page1-1" }));
+    });
+    // 通道 3：sessionChange 建行
+    act(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (TerminalRegistry as any).setAgentSession("terminal-page1-2", {
+        sessionId: "s1",
+        lastEventAt: 3000,
+      });
+    });
+
+    expect(result.current.rows).toHaveLength(3);
+    expect(disposeFns).toHaveLength(3);
+
+    // 触发 page1-0 的标题变化 → 仅该行 title 更新，其余行保持快照
+    act(() => {
+      titleCbs.get("terminal-page1-0")?.({ title: "新标题0" });
+    });
+    const row0 = result.current.rows.find(
+      (r) => r.panelId === "terminal-page1-0",
+    );
+    const row1 = result.current.rows.find(
+      (r) => r.panelId === "terminal-page1-1",
+    );
+    const row2 = result.current.rows.find(
+      (r) => r.panelId === "terminal-page1-2",
+    );
+    expect(row0?.title).toBe("新标题0");
+    expect(row1?.title).toBe("旧标题");
+    expect(row2?.title).toBe("旧标题");
+  });
+
+  it("删行三通道均取消面板标题订阅（dispose 被调用）", () => {
+    const titleCbs = new Map<string, (e: { title: string }) => void>();
+    const disposeFns: ReturnType<typeof vi.fn>[] = [];
+    mockPageApiWithTitle(titleCbs, disposeFns);
+    seedProject();
+    registerTerminal("terminal-page1-0", null);
+    registerTerminal("terminal-page1-1", null);
+
+    const { result } = renderHook(() => useAgentStatus());
+    // hook 事件建两行
+    act(() => {
+      capturedCallback.current?.(makePayload({ panelId: "terminal-page1-0" }));
+    });
+    act(() => {
+      capturedCallback.current?.(makePayload({ panelId: "terminal-page1-1" }));
+    });
+    expect(disposeFns).toHaveLength(2);
+
+    // 通道 1：SessionEnd hook 事件删行 → dispose
+    act(() => {
+      capturedCallback.current?.(
+        makePayload({ panelId: "terminal-page1-0", event: "SessionEnd" }),
+      );
+    });
+    expect(disposeFns[0]).toHaveBeenCalledTimes(1);
+
+    // 通道 2：sessionChange null 删行 → dispose
+    act(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (TerminalRegistry as any).setAgentSession("terminal-page1-1", null);
+    });
+    expect(disposeFns[1]).toHaveBeenCalledTimes(1);
+
+    // 通道 3：remove 删行 → dispose（真实场景面板必已注册——先 register 再
+    // hook 事件建行，remove 才触发 notify；未注册的 remove 不 notify 是 mock 契约）
+    act(() => {
+      registerTerminalWithNotify(
+        "terminal-page1-2",
+        makeSession({ lastEventAt: 3000 }),
+      );
+    });
+    act(() => {
+      capturedCallback.current?.(makePayload({ panelId: "terminal-page1-2" }));
+    });
+    expect(disposeFns).toHaveLength(3);
+    act(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (TerminalRegistry as any).remove("terminal-page1-2");
+    });
+    expect(disposeFns[2]).toHaveBeenCalledTimes(1);
+    expect(result.current.rows).toHaveLength(0);
+  });
+
+  it("项目切换 → 旧订阅全量取消（cleanup + 无项目分支双保险）", () => {
+    const titleCbs = new Map<string, (e: { title: string }) => void>();
+    const disposeFns: ReturnType<typeof vi.fn>[] = [];
+    mockPageApiWithTitle(titleCbs, disposeFns);
+    seedProject("proj-1", "pageA", "C:/projA");
+    registerTerminal("terminal-pageA-0", makeSession({ lastEventAt: 1000 }));
+
+    const { result, rerender } = renderHook(() => useAgentStatus());
+    expect(disposeFns).toHaveLength(1);
+
+    // 切到 C（无终端）→ effect cleanup 全清 + 无项目分支再清（幂等空表）
+    useProjects.setState({
+      projects: {
+        "proj-3": {
+          projectId: "proj-3",
+          name: "项目 C",
+          rootPath: "C:/projC",
+          pages: [
+            {
+              pageId: "pageC",
+              name: "页面 C",
+              layout: {},
+              cwd: undefined,
+              createdAt: 1,
+              lastAccessedAt: 1,
+            },
+          ],
+          activePageId: "pageC",
+          version: 1,
+        },
+      },
+      deletionLock: { pendingDelete: null, acquiredAt: null },
+      expandedNodes: { "proj-3": true },
+    });
+    useLayout.setState({ activePageId: "pageC" });
+    rerender();
+    expect(disposeFns[0]).toHaveBeenCalledTimes(1);
+    expect(result.current.rows).toHaveLength(0);
+  });
+
+  it("面板 api 不可用（无 onDidTitleChange / getPanel 抛错）→ 行保持快照标题不崩", () => {
+    // 变体 1：既有 mock 形状 { title, focus }（无 api 属性）→ 不订阅，行快照正常
+    mockGetPageApi.mockImplementation(() => ({
+      getPanel: (panelId: string) =>
+        panelId === "terminal-page1-0"
+          ? { title: "我的终端", focus: vi.fn() }
+          : undefined,
+    }));
+    seedProject();
+    registerTerminal("terminal-page1-0", makeSession({ lastEventAt: 1000 }));
+
+    const { result } = renderHook(() => useAgentStatus());
+    expect(result.current.rows[0].title).toBe("我的终端");
+
+    // 变体 2：getPanel 抛错 → resolveTitle catch 兜底 + 订阅静默跳过，不崩
+    mockGetPageApi.mockImplementation(() => ({
+      getPanel: () => {
+        throw new Error("panel gone");
+      },
+    }));
+    expect(() => {
+      act(() => {
+        capturedCallback.current?.(makePayload({ panelId: "terminal-page1-1" }));
+      });
+    }).not.toThrow();
+    const row1 = result.current.rows.find(
+      (r) => r.panelId === "terminal-page1-1",
+    );
+    expect(row1?.title).toBe("终端 page1"); // resolveTitle catch 兜底
+  });
+
+  it("重复建行（sessionChange 两次）→ 订阅幂等先清旧（旧 dispose 调用），行不重复", () => {
+    const titleCbs = new Map<string, (e: { title: string }) => void>();
+    const disposeFns: ReturnType<typeof vi.fn>[] = [];
+    mockPageApiWithTitle(titleCbs, disposeFns);
+    seedProject();
+    registerTerminal("terminal-page1-0", null);
+
+    const { result } = renderHook(() => useAgentStatus());
+    expect(result.current.rows).toHaveLength(0);
+
+    act(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (TerminalRegistry as any).setAgentSession("terminal-page1-0", {
+        sessionId: "s1",
+      });
+    });
+    expect(result.current.rows).toHaveLength(1);
+    expect(disposeFns).toHaveLength(1);
+
+    // 第二次 sessionChange（行已存在 → setRows 内跳过，但订阅幂等先清旧再建新）
+    act(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (TerminalRegistry as any).setAgentSession("terminal-page1-0", {
+        sessionId: "s1",
+        status: "working",
+      });
+    });
+    expect(disposeFns).toHaveLength(2); // 旧 dispose + 新订阅
+    expect(disposeFns[0]).toHaveBeenCalledTimes(1);
+    expect(result.current.rows).toHaveLength(1); // 行不重复
+  });
+
+  it("卸载（unmount）→ 全量取消订阅", () => {
+    const titleCbs = new Map<string, (e: { title: string }) => void>();
+    const disposeFns: ReturnType<typeof vi.fn>[] = [];
+    mockPageApiWithTitle(titleCbs, disposeFns);
+    seedProject();
+    registerTerminal("terminal-page1-0", makeSession({ lastEventAt: 1000 }));
+    registerTerminal("terminal-page1-1", makeSession({ lastEventAt: 2000 }));
+
+    const { unmount } = renderHook(() => useAgentStatus());
+    expect(disposeFns).toHaveLength(2);
+
+    unmount();
+    expect(disposeFns[0]).toHaveBeenCalledTimes(1);
+    expect(disposeFns[1]).toHaveBeenCalledTimes(1);
   });
 });

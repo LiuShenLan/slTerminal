@@ -448,7 +448,8 @@ export function useXterm({
       // 复用历史扫描 resolve_title）。SessionStart 立即查一次；其后 agent-event
       // 5s 节流重查（/rename custom-title、ai-title 在运行中变化）。
       // 无 sessionId（matchedCommand-only）/读取失败（未知 cliId 无 provider）/
-      // 面板已卸载/会话已切换 → 静默保持现标题（兜底 = profile.tabTitle）。
+      // 面板已卸载/会话已切换 → 静默保持现标题（null 兜底 = sessionId 前 8 位，
+      // 与历史行 NavHistoryRow 同口径；无 sessionId 时兜底 profile.tabTitle）。
       const sessionId = payload.sessionId || undefined;
       const refreshSessionTitle = (force: boolean) => {
         if (!sessionId || isDisposedRef.current) return;
@@ -470,7 +471,10 @@ export function useXterm({
             ) {
               return;
             }
-            const title = resolved?.title ?? profile?.tabTitle;
+            // 完全一致（人工验证问题 3）：null 兜底 = sessionId 前 8 位（与历史行
+            // NavHistoryRow / restoreSession 同口径）——新会话早期 jsonl 无标题数据
+            // 时不再兜底品牌名 claude；入口守卫（!sessionId return）保证已定义
+            const title = resolved?.title ?? sessionId.slice(0, 8);
             if (!title || title === lastAppliedTitleRef.current) return;
             lastAppliedTitleRef.current = title;
             // 仅标题（不带 status）——不动状态圆点
@@ -496,18 +500,20 @@ export function useXterm({
         return;
       }
       // B13: SessionStart 补 title 重设——/resume 恢复历史会话时无 OSC 133 C
-      // （TUI 内部斜杠命令不经 shell），标题经 profile.tabTitle 保持 claude；
+      // （TUI 内部斜杠命令不经 shell），标题经同步兜底保持；
       // profile 未注册（前置 hooksCapability 校验已拦截）→ 无 title 零副作用。
-      // 人工验证问题 3：同步兜底 tabTitle 后，异步读历史同源标题覆盖
-      //（节流时间戳归零——新会话强制立即查询）
+      // 人工验证问题 3：同步兜底 = 回退链 null 兜底（sessionId 前 8 位，与历史行/
+      // restoreSession 同口径）；无 sessionId（matchedCommand-only）→ 保持 tabTitle。
+      // 随后异步读历史同源标题覆盖（节流时间戳归零——新会话强制立即查询）
       if (payload.event === SESSION_START_EVENT) {
+        const syncTitle = sessionId ? sessionId.slice(0, 8) : profile?.tabTitle;
         onTabStateChange?.({
           active: true,
           status,
-          title: profile?.tabTitle,
+          title: syncTitle,
         });
         // 记录同步已应用标题——异步回退同值时去重（不重复 setTitle）
-        lastAppliedTitleRef.current = profile?.tabTitle ?? null;
+        lastAppliedTitleRef.current = syncTitle ?? null;
         lastTitleFetchAtRef.current = 0;
         refreshSessionTitle(true);
         return;

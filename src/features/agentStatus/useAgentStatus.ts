@@ -96,6 +96,7 @@ export function useAgentStatus(): AgentStatusResult {
     return () => clearInterval(timer);
   }, []);
 
+
   // 跟踪事件回调引用（避免 onAgentEvent 重建订阅）
   const rowsRef = useRef(rows);
   rowsRef.current = rows;
@@ -125,6 +126,49 @@ export function useAgentStatus(): AgentStatusResult {
   projectPageIdsRef.current = projectPageIds;
   const activeProjectRef = useRef(activeProject);
   activeProjectRef.current = activeProject;
+
+  // ---- 面板标题订阅（行 title 动态跟随页签，人工验证问题 3 一致化） ----
+  // 行 title 是建行时刻的面板标题快照（resolveTitle）——页签异步标题覆盖
+  // （useXterm refreshSessionTitle → api.setTitle）后行不更新（/resume 侧栏
+  // 固定 claude 根因）。订阅面板 onDidTitleChange → 行 title 实时同步；
+  // 订阅失败（页面 api 未就绪/面板已卸载）→ 静默跳过，行保持快照标题。
+  const panelTitleSubsRef = useRef<Map<string, () => void>>(new Map());
+
+  /** 取消单个面板标题订阅（幂等：不存在条目零操作；删行时调用） */
+  const unsubscribePanelTitle = useCallback((panelId: string) => {
+    panelTitleSubsRef.current.get(panelId)?.();
+    panelTitleSubsRef.current.delete(panelId);
+  }, []);
+
+  /** 全量取消（项目切换/无项目/卸载——初始扫描 effect cleanup） */
+  const unsubscribeAllPanelTitles = useCallback(() => {
+    for (const dispose of panelTitleSubsRef.current.values()) dispose();
+    panelTitleSubsRef.current.clear();
+  }, []);
+
+  /** 建行时订阅面板 onDidTitleChange → 行 title 实时更新（幂等先清旧订阅） */
+  const subscribePanelTitle = useCallback(
+    (pageId: string, panelId: string) => {
+      unsubscribePanelTitle(panelId); // StrictMode 双渲染/重复建行安全
+      try {
+        // 必须用行所在页面的 api（跨页 panelId 不混用）
+        const panel = getPageApi(pageId)?.getPanel(panelId);
+        if (!panel?.api?.onDidTitleChange) return; // 未就绪 → 静默不订阅
+        const disposable = panel.api.onDidTitleChange((e) => {
+          // e.title 为 TitleEvent.title（dockviewPanelApi.d.ts，TerminalPanel:152 先例）
+          setRows((prev) =>
+            prev.map((r) =>
+              r.panelId === panelId ? { ...r, title: e.title } : r,
+            ),
+          );
+        });
+        panelTitleSubsRef.current.set(panelId, () => disposable.dispose());
+      } catch {
+        // 面板 api 获取异常 → 不订阅（行保持快照标题，resolveTitle 兜底不变）
+      }
+    },
+    [unsubscribePanelTitle],
+  );
 
   // ---- hook 事件处理（deps []——所有数据经 ref 读取，回调永不重建） ----
   const handleHookEvent = useCallback(
@@ -175,8 +219,9 @@ export function useAgentStatus(): AgentStatusResult {
         payload.notificationType,
       );
 
-      // SessionEnd / Exit → 删行
+      // SessionEnd / Exit → 删行（同步取消面板标题订阅防泄漏）
       if (payload.event === SESSION_END_EVENT || payload.event === EXIT_EVENT) {
+        unsubscribePanelTitle(payload.panelId);
         setRows((prev) => {
           const idx = prev.findIndex((r) => r.panelId === payload.panelId);
           if (idx === -1) return prev;
@@ -232,6 +277,8 @@ export function useAgentStatus(): AgentStatusResult {
         next.sort((a, b) => b.lastEventAt - a.lastEventAt);
         return next;
       });
+      // 建行后订阅面板标题——行 title 随页签标题演进（异步覆盖通道）
+      subscribePanelTitle(pageId, payload.panelId);
     },
     [], // deps []——所有动态数据经 ref 读取，回调永不重建
   );
@@ -282,8 +329,11 @@ export function useAgentStatus(): AgentStatusResult {
             };
             return [...prev, row].sort((a, b) => b.lastEventAt - a.lastEventAt);
           });
+          // 建行后订阅面板标题（幂等：重复建行先清旧订阅）
+          subscribePanelTitle(pageId, event.panelId);
         } else {
-          // session 为 null → 删行
+          // session 为 null → 删行（同步取消面板标题订阅）
+          unsubscribePanelTitle(event.panelId);
           setRows((prev) => {
             const idx = prev.findIndex((r) => r.panelId === event.panelId);
             if (idx === -1) return prev;
@@ -293,7 +343,8 @@ export function useAgentStatus(): AgentStatusResult {
           });
         }
       } else if (event.type === "remove") {
-        // remove → 删行
+        // remove → 删行（同步取消面板标题订阅）
+        unsubscribePanelTitle(event.panelId);
         setRows((prev) => {
           const idx = prev.findIndex((r) => r.panelId === event.panelId);
           if (idx === -1) return prev;
@@ -314,6 +365,8 @@ export function useAgentStatus(): AgentStatusResult {
     // 快速切项目时旧扫描（理论上的慢 resolveTitle 等异步延伸）不覆盖新状态
     const gen = ++genRef.current;
     if (!projectRoot || !activeProject) {
+      // 无项目 → 清行 + 全量取消面板标题订阅（防跨项目残留监听）
+      unsubscribeAllPanelTitles();
       setRows([]);
       return;
     }
@@ -350,6 +403,11 @@ export function useAgentStatus(): AgentStatusResult {
     // FE-23: generation 过期检查——项目已切换则丢弃本次扫描结果
     if (gen !== genRef.current) return;
     setRows(initialRows);
+    // 扫描建行后逐行订阅面板标题（subscription 在 cleanup 全清，无残留）
+    for (const row of initialRows) subscribePanelTitle(row.pageId, row.panelId);
+
+    // 项目切换/卸载 → 全量取消面板标题订阅（行随下轮扫描重建）
+    return () => unsubscribeAllPanelTitles();
   }, [projectRoot, activeProject?.projectId]);
 
   // 派生视图状态

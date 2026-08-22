@@ -7,8 +7,9 @@
 // 全部 mock 经 vi.hoisted() 创建，确保模块级 vi.mock 执行前就绪（项目测试惯例）。
 //
 // Stage 05（MC-315）：第 4 步注入内容 = profile.history.buildRestoreInput 输出、
-// addPanel title = session.title ?? profile.tabTitle（人工验证问题 3——初始标题
-// 直接用历史会话标题，读不到兜底 claude 名）——side-effect import profiles 注册
+// addPanel title = session.title ?? session.sessionId 前 8 位（人工验证问题 3——
+// 初始标题直接用历史会话标题，读不到兜底 = sessionId 前 8 位，与历史行同口径）——
+// side-effect import profiles 注册
 // 真实 claude profile（claude-history-cap 交付），注入内容断言与 claude 策略输出
 // 逐字一致（`claude --resume <id>` + fork 追加 ` --fork-session` + `\r` 结尾）。
 
@@ -215,12 +216,12 @@ describe("restoreHistorySession 四步恢复编排", () => {
     expect([...order].sort((a, b) => a - b)).toEqual(order);
   });
 
-  it("初始标题两分支（人工验证问题 3）：session.title 非空用它，null 兜底 profile.tabTitle", async () => {
-    // 分支 1：title null（新建/读不到名称）→ 兜底 claude profile tabTitle
+  it("初始标题两分支（人工验证问题 3）：session.title 非空用它，null 兜底 sessionId 前 8 位", async () => {
+    // 分支 1：title null（新建/读不到名称）→ 兜底 = sessionId 前 8 位（与历史行同口径）
     await restoreHistorySession(makeSession({ title: null }));
     expect(apiStub.addPanel).toHaveBeenCalledTimes(1);
     expect(apiStub.addPanel).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "claude" }),
+      expect.objectContaining({ title: SESSION_ID.slice(0, 8) }),
     );
 
     // 分支 2：title 非空 → 初始标题直接用历史标题（首个用例已覆盖
