@@ -81,6 +81,6 @@ Workflow({
 | S07 | ✅ | 33d6723 | SEC-04、FE-08/10/42/43/44/45 fixed（一次通过，无 fix-loop） | — |
 | S08 | ✅ | 21ba6b7 | FE-39 验证固化、FE-40/41 fixed（一次通过，无 fix-loop） | — |
 | S09 | ✅ | 339181e | FE-35/47/48 fixed；FE-46 fix-loop 1 轮（测试桩适配 React 19 自动恢复语义） | 多 session 关窗时长 |
-| S10 | ⬜ | | | — |
+| S10 | ✅ | 86130ca | FE-31、DOC-11~14、TE-15 fixed（一次通过；全门禁 9/9 终跑全绿） | — |
 
 > 状态：⬜ 未开始 / 🔄 进行中 / ✅ 完成。每 Stage commit 前跑全门禁（TE-16 根因留痕）。
