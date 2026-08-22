@@ -39,7 +39,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **setProjectRoot 前置为页面切换前置条件**：`project_root` 是 `activePageId` 生效的前提，不是它的副作用。`switchToPage`（`Workspace.tsx`）改为 async——先 `await setProjectRoot(rootPath)` 再 `setActivePage(pageId)`。`App.tsx` 启动恢复 `lastPage` 同样先 `await setProjectRoot`。SEC-01 effect（`Workspace.tsx`）保留兜底（服务于 `pty_spawn` 等其它消费者 + E2E helper 直设 `activePageId` 的路径）。根因：React 同一 commit 的 passive effect 子组件先于父组件执行——旧代码中 `setProjectRoot` 在父 effect 执行时，子组件（ExplorerPanel）的 `fs_read_dir` 已因 `project_root=None` 被路径沙箱拒绝（`loadDirectory` catch 静默吞错 → 文件树恒"空目录"，确定性失败）。
 
-**文件监听跟随项目激活（watcher 上提）**：SEC-01 effect 同时承担 `startWatch(rootPath)`/`stopWatch(prev)`——watcher 宿主从 ExplorerPanel 上提到项目激活层：编辑器外部修改 reload / commit 面板刷新等 fs-event 消费方不依赖 explorer 视图是否打开（E2E editor auto-reload 失败根因修复）。ExplorerPanel 不再管理 watcher（防双管理互停）；App 关闭时 watcher 由后端 AppState drop 兜底清理。
+**文件监听跟随项目激活（watcher 上提）**：SEC-01 effect 同时承担 `startWatch(rootPath)`/`stopWatch(prev)`——watcher 宿主从 ExplorerPanel 上提到项目激活层：编辑器外部修改 reload / commit 面板刷新等 fs-event 消费方不依赖 explorer 视图是否打开（E2E editor auto-reload 失败根因修复）。ExplorerPanel 不再管理 watcher（防双管理互停）；App 关闭时 watcher 由后端 AppState drop 兜底清理。**activePageId 置 null → stopWatch（BE-10）**：SEC-01 effect 在 activePageId 置 null（删除末页/移除活跃项目两条链：onDeletePage 删末页、NavTree removeProject）时对 `prevRootRef.current` 调 `stopWatch` 并清 ref——防 OS 句柄残留至 LRU 淘汰。
 
 ## 文件
 

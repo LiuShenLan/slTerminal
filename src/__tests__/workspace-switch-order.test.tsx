@@ -294,7 +294,11 @@ describe("DBG-9: switchToPage 时序", () => {
       await waitFor(() => {
         expect(mocks.mockSetProjectRoot).toHaveBeenCalledWith(rootPath);
       });
-      expect(mocks.mockStartWatch).toHaveBeenCalledWith(rootPath);
+      // FE-38：setProjectRoot resolve 成功后 startWatch 才启动
+      mocks.resolveSetProjectRoot();
+      await waitFor(() => {
+        expect(mocks.mockStartWatch).toHaveBeenCalledWith(rootPath);
+      });
     });
 
     it("切换项目 → stopWatch(旧) + startWatch(新)（BE-10 成对语义）", async () => {
@@ -302,6 +306,11 @@ describe("DBG-9: switchToPage 时序", () => {
       mocks.resetDeferred();
       const { rootPath } = seedTwoPageProject();
       render(<Workspace />);
+      await waitFor(() => {
+        expect(mocks.mockSetProjectRoot).toHaveBeenCalledWith(rootPath);
+      });
+      // FE-38：resolve 成功后 startWatch 才启动
+      mocks.resolveSetProjectRoot();
       await waitFor(() => {
         expect(mocks.mockStartWatch).toHaveBeenCalledWith(rootPath);
       });
@@ -327,8 +336,12 @@ describe("DBG-9: switchToPage 时序", () => {
       });
       useLayout.setState({ activePageId: "page-other" });
 
+      // stopWatch(旧) 在 effect 内同步执行；startWatch(新) 待 resolve（FE-38）
       await waitFor(() => {
         expect(mocks.mockStopWatch).toHaveBeenCalledWith(rootPath);
+      });
+      mocks.resolveSetProjectRoot();
+      await waitFor(() => {
         expect(mocks.mockStartWatch).toHaveBeenCalledWith("C:\\other-root");
       });
     });
@@ -337,6 +350,56 @@ describe("DBG-9: switchToPage 时序", () => {
       mockIPC(() => null);
       render(<Workspace />);
       expect(mocks.mockStartWatch).not.toHaveBeenCalled();
+    });
+
+    it("activePageId 置 null → stopWatch(旧 rootPath)（BE-10）", async () => {
+      mockIPC(() => null);
+      mocks.resetDeferred();
+      const { rootPath } = seedTwoPageProject();
+
+      render(<Workspace />);
+
+      // 先等 watcher 激活完成（FE-38：resolve 后 startWatch 才启动）
+      await waitFor(() => {
+        expect(mocks.mockSetProjectRoot).toHaveBeenCalledWith(rootPath);
+      });
+      mocks.resolveSetProjectRoot();
+      await waitFor(() => {
+        expect(mocks.mockStartWatch).toHaveBeenCalledWith(rootPath);
+      });
+
+      // 置 null（删除末页/移除活跃项目两条链）→ 停掉旧项目 watcher
+      useLayout.setState({ activePageId: null });
+
+      await waitFor(() => {
+        expect(mocks.mockStopWatch).toHaveBeenCalledWith(rootPath);
+      });
+    });
+
+    it("setProjectRoot resolve 前 startWatch 不启动；reject 时 startWatch 不调用且 toast 告警（FE-38）", async () => {
+      mockIPC(() => null);
+      mocks.resetDeferred();
+      const { rootPath } = seedTwoPageProject();
+      const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      render(<Workspace />);
+
+      // setProjectRoot 已调用但未 resolve → startWatch 未启动
+      await waitFor(() => {
+        expect(mocks.mockSetProjectRoot).toHaveBeenCalledWith(rootPath);
+      });
+      expect(mocks.mockStartWatch).not.toHaveBeenCalled();
+
+      // reject → startWatch 仍不调用（失败不启动 watcher）+ toast 告警
+      mocks.rejectSetProjectRoot(new Error("路径不存在"));
+      await act(() => Promise.resolve());
+
+      expect(mocks.mockStartWatch).not.toHaveBeenCalled();
+      expect(mocks.mockToast.show).toHaveBeenCalledWith(
+        "warning",
+        "项目根路径设置失败，文件操作可能被拒绝",
+      );
+      consoleErrorSpy.mockRestore();
     });
   });
 

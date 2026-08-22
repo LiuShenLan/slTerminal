@@ -236,7 +236,15 @@ const Workspace: React.FC = () => {
   // ExplorerPanel 不再管理 watcher（防双管理互停），统一由本 effect 单点负责。
   const prevRootRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!activePageId) return;
+    // BE-10：activePageId 置 null（删除末页/移除活跃项目）→ 停掉旧项目 watcher，
+    // 防 OS 句柄残留至 LRU 淘汰（两条置 null 链：onDeletePage 删末页、NavTree removeProject）
+    if (!activePageId) {
+      if (prevRootRef.current) {
+        void stopWatch(prevRootRef.current);
+        prevRootRef.current = null;
+      }
+      return;
+    }
     // 从当前快照推导活跃项目的 rootPath（避免以 projects 为 deps 导致频繁触发）
     const { projects: currentProjects } = useProjects.getState();
     for (const [, proj] of Object.entries(currentProjects)) {
@@ -245,12 +253,19 @@ const Workspace: React.FC = () => {
           const prev = prevRootRef.current;
           prevRootRef.current = proj.rootPath;
           if (prev) void stopWatch(prev);
-          setProjectRoot(proj.rootPath).catch((err) => {
-            console.error("[slTerminal] 设置项目根路径失败:", err);
-            // FE-04（D7）：SEC-01 兜底失败时 toast 告警，不阻断切换
-            toast.show("warning", "项目根路径设置失败，文件操作可能被拒绝");
-          });
-          void startWatch(proj.rootPath);
+          // FE-38：setProjectRoot 成功后才 startWatch（失败不启动 watcher）；
+          // 过期守卫：then 回调时 prevRootRef 已指向其他项目（快速连切）→ 丢弃
+          const targetRoot = proj.rootPath;
+          setProjectRoot(targetRoot)
+            .then(() => {
+              if (prevRootRef.current !== targetRoot) return;
+              void startWatch(targetRoot);
+            })
+            .catch((err) => {
+              console.error("[slTerminal] 设置项目根路径失败:", err);
+              // FE-04（D7）：SEC-01 兜底失败时 toast 告警，不阻断切换
+              toast.show("warning", "项目根路径设置失败，文件操作可能被拒绝");
+            });
         }
         break;
       }
