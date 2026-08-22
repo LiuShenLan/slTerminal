@@ -11,8 +11,18 @@ use std::io::Write as _;
 use tempfile::NamedTempFile;
 
 /// 设置顶层键白名单（SEC-11）：前端各 store 只允许写这些键
-/// （fontSize/keybindings/sideBar/colorScheme——与 stores 模块持久化键一一对应）
+/// （fontSize/keybindings/sideBar/colorScheme——与 stores 模块持久化键一一对应。
+/// 契约断链先例：fontSize store 曾发平铺 terminalFontSize/editorFontSize 顶层键被拒，
+/// 已改段形态并用双侧测试锁死——前端 payload 键集合精确断言 + 后端平铺拒绝用例）
 const SETTINGS_ALLOWED_KEYS: [&str; 4] = ["fontSize", "keybindings", "sideBar", "colorScheme"];
+
+/// save_settings 进程内互斥（SPE-06 场景转正修复）：
+/// 前端三 store（fontSize/keybindings/sideBar）启动时几乎同时各触发一次 debounced 保存，
+/// 并发对同一 settings.json 读-合并-写（NamedTempFile persist rename + .bak copy）时，
+/// Windows 上另一线程的瞬时句柄占用会导致 persist 偶发 PermissionDenied（os error 5）——
+/// 持锁串行化「读-合并-写」全程，并发冲突消除（杀软实时扫描窗口为残余偶发源）。
+/// 持锁临界区均为无 panic 路径（读/合并/serde/写），中毒不可达；map_err 兜底防御。
+static SETTINGS_SAVE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// SEC-11：校验设置保存输入——须为 JSON 对象且顶层键 ∈ 白名单
 fn validate_settings_input(settings: &serde_json::Value) -> Result<(), AppError> {
@@ -56,6 +66,10 @@ pub async fn save_settings(settings: serde_json::Value) -> Result<(), AppError> 
     let settings_path = app_dir.join("settings.json");
 
     match tokio::task::spawn_blocking(move || -> Result<(), AppError> {
+        // SETTINGS_SAVE_LOCK：串行化并发保存（见锁定义注释——三 store 启动并发写竞态）
+        let _guard = SETTINGS_SAVE_LOCK
+            .lock()
+            .map_err(|_| AppError::Unknown("settings 保存锁中毒".into()))?;
         // BE-05: create_dir_all 移入 spawn_blocking 闭包内部，避免异步上下文阻塞 I/O
         // 保存链 io 错误统一经 io_error 语义化（BE-15）：用户可见「保存设置失败 + 路径」，
         // 原始 io 错误文本进 tracing 日志
@@ -417,7 +431,9 @@ mod tests {
 
     /// 并发写：两线程并发 save 同一目录，最终文件恒为合法 JSON 且值为二者之一（原子写不撕裂）
     /// 覆盖注入槽由主线程持有（工作线程只读不改）——避免线程内守卫 Drop 恢复清空全局槽
-    /// 导致 save 落到真实 exe 目录（隔离纪律）；persist 偶发冲突经 run_save_with_retry 容忍
+    /// 导致 save 落到真实 exe 目录（隔离纪律）。
+    /// SETTINGS_SAVE_LOCK 串行化后「读-合并-写」不再并发（SPE-06 并发 rename/copy 冲突已消除）；
+    /// run_save_with_retry 保留为杀软实时扫描窗口的容忍（Defender 对刚写出的新文件短暂占用）。
     #[test]
     fn concurrent_saves_never_torn() {
         let dir = tempfile::tempdir().unwrap();
@@ -519,6 +535,45 @@ mod tests {
         let loaded = run(load_settings()).unwrap();
         assert_eq!(loaded.data, Some(big), "1MB 内大 JSON 应往返一致");
         assert!(!loaded.corrupted);
+    }
+
+    /// 契约断链防复发①：fontSize 段形态放行（fontSize store 合法 payload——段内
+    /// terminalFontSize/editorFontSize，顶层键 = fontSize 段名 ∈ 白名单）→ save/load 往返一致
+    #[test]
+    fn save_accepts_font_size_section_shape() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = AppDataDirGuard::set(dir.path());
+
+        let settings = serde_json::json!({
+            "fontSize": { "terminalFontSize": 16, "editorFontSize": 12 }
+        });
+        run(save_settings(settings.clone())).unwrap();
+        let loaded = run(load_settings()).unwrap();
+        assert_eq!(loaded.data, Some(settings), "fontSize 段应完整往返一致");
+        assert!(!loaded.corrupted);
+    }
+
+    /// 契约断链防复发②：平铺 terminalFontSize/editorFontSize 顶层键 → Validation 拒绝
+    /// （fontSize store 曾发此平铺形态导致每次保存被拒、用户配置静默丢失——锁死错误形态防回归）
+    #[test]
+    fn save_rejects_flat_font_size_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = AppDataDirGuard::set(dir.path());
+
+        let err = run(save_settings(
+            serde_json::json!({ "terminalFontSize": 16, "editorFontSize": 12 }),
+        ))
+        .unwrap_err();
+        match err {
+            AppError::Validation(msg) => {
+                assert!(msg.contains("白名单"), "平铺键应提示白名单，实际: {msg}");
+            }
+            other => panic!("平铺 fontSize 键应返回 Validation，实际: {other:?}"),
+        }
+        assert!(
+            !dir.path().join("settings.json").exists(),
+            "被拒保存不应落盘"
+        );
     }
 
     /// 非法顶层键 → AppError::Validation 拒绝

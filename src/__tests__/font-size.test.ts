@@ -109,9 +109,9 @@ describe("fontSize store", () => {
     expect(mockLoadSettings).toHaveBeenCalledOnce();
   });
 
-  it("8. loadFromDisk 读取已保存值", async () => {
+  it("8. loadFromDisk 读取已保存值（fontSize 段形态）", async () => {
     mockLoadSettings.mockResolvedValue({
-      data: { terminalFontSize: 18, editorFontSize: 12 },
+      data: { fontSize: { terminalFontSize: 18, editorFontSize: 12 } },
       corrupted: false,
     });
 
@@ -125,7 +125,7 @@ describe("fontSize store", () => {
 
   it("9. loadFromDisk 已保存值超限 clamp", async () => {
     mockLoadSettings.mockResolvedValue({
-      data: { terminalFontSize: 100, editorFontSize: 2 },
+      data: { fontSize: { terminalFontSize: 100, editorFontSize: 2 } },
       corrupted: false,
     });
 
@@ -136,9 +136,9 @@ describe("fontSize store", () => {
     expect(state.editorFontSize).toBe(FONT_SIZE_MIN);
   });
 
-  it("10. loadFromDisk 仅部分 key 存在 → 缺失 key 保持默认", async () => {
+  it("10. loadFromDisk 段内仅部分 key 存在 → 缺失 key 保持默认", async () => {
     mockLoadSettings.mockResolvedValue({
-      data: { terminalFontSize: 20 },
+      data: { fontSize: { terminalFontSize: 20 } },
       corrupted: false,
     });
 
@@ -152,8 +152,10 @@ describe("fontSize store", () => {
   it("11. loadFromDisk 非数字类型 → 保持默认", async () => {
     mockLoadSettings.mockResolvedValue({
       data: {
-        terminalFontSize: "not-a-number",
-        editorFontSize: null,
+        fontSize: {
+          terminalFontSize: "not-a-number",
+          editorFontSize: null,
+        },
       },
       corrupted: false,
     });
@@ -163,6 +165,41 @@ describe("fontSize store", () => {
     const state = useFontSize.getState();
     expect(state.terminalFontSize).toBe(FONT_SIZE_DEFAULT);
     expect(state.editorFontSize).toBe(FONT_SIZE_DEFAULT);
+  });
+
+  it("11b. loadFromDisk fontSize 段整体缺失（data 含其它段）→ 默认值", async () => {
+    mockLoadSettings.mockResolvedValue({
+      data: { sideBar: { width: 250 }, keybindings: {} },
+      corrupted: false,
+    });
+
+    await useFontSize.getState().loadFromDisk();
+
+    const state = useFontSize.getState();
+    expect(state.terminalFontSize).toBe(FONT_SIZE_DEFAULT);
+    expect(state.editorFontSize).toBe(FONT_SIZE_DEFAULT);
+    expect(state.loaded).toBe(true);
+  });
+
+  it("11c. loadFromDisk fontSize 段非对象（字符串/数组）→ 默认值不崩", async () => {
+    // 字符串段
+    mockLoadSettings.mockResolvedValue({
+      data: { fontSize: "oops" },
+      corrupted: false,
+    });
+    await useFontSize.getState().loadFromDisk();
+    expect(useFontSize.getState().terminalFontSize).toBe(FONT_SIZE_DEFAULT);
+    expect(useFontSize.getState().editorFontSize).toBe(FONT_SIZE_DEFAULT);
+
+    // 数组段
+    useFontSize.setState({ loaded: false });
+    mockLoadSettings.mockResolvedValue({
+      data: { fontSize: [18, 12] },
+      corrupted: false,
+    });
+    await useFontSize.getState().loadFromDisk();
+    expect(useFontSize.getState().terminalFontSize).toBe(FONT_SIZE_DEFAULT);
+    expect(useFontSize.getState().editorFontSize).toBe(FONT_SIZE_DEFAULT);
   });
 
   it("12. loadFromDisk 异常 → 保持默认，loaded=true", async () => {
@@ -191,7 +228,7 @@ describe("fontSize store", () => {
 
   it("12c. loadFromDisk corrupted=true 且带数据 → 消费数据 + toast 告警（FE-11）", async () => {
     mockLoadSettings.mockResolvedValue({
-      data: { terminalFontSize: 18 },
+      data: { fontSize: { terminalFontSize: 18 } },
       corrupted: true,
     });
 
@@ -226,9 +263,12 @@ describe("fontSize store", () => {
 
     // 到达 2s 触发
     vi.advanceTimersByTime(600);
+    // SEC-11 白名单契约锁死：payload 顶层键必须是 fontSize 段（平铺键会被后端拒绝）
     expect(mockSaveSettings).toHaveBeenCalledWith({
-      terminalFontSize: 16,
-      editorFontSize: FONT_SIZE_DEFAULT,
+      fontSize: {
+        terminalFontSize: 16,
+        editorFontSize: FONT_SIZE_DEFAULT,
+      },
     });
   });
 
@@ -249,8 +289,10 @@ describe("fontSize store", () => {
 
     expect(mockSaveSettings).toHaveBeenCalledTimes(1);
     expect(mockSaveSettings).toHaveBeenCalledWith({
-      terminalFontSize: 20,
-      editorFontSize: FONT_SIZE_DEFAULT,
+      fontSize: {
+        terminalFontSize: 20,
+        editorFontSize: FONT_SIZE_DEFAULT,
+      },
     });
   });
 

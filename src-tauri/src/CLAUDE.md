@@ -23,9 +23,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `MAX_PERSIST_BYTES = 1MB` — save 侧大小上限（SEC-11，settings/projects 共用）
 - `AppDataDirGuard` — 测试守卫（RAII 注入覆盖应用目录，SPE-04）
 
-### settings.rs — 浅合并持久化 + SEC-11 校验
+### settings.rs — 浅合并持久化 + SEC-11 校验 + 保存互斥
 
-`save_settings` 只写前端传入的 slice（如 `{ keybindings }` 或 `{ sideBar }`），后端**浅合并** top-level 键——各 store 各写各的互不覆盖（fontSize/keybindings/sideBar 三段独立写入）。应用数据目录 `~/.slterminal` 由 `app_dir::app_data_dir` 解析，测试用 `AppDataDirGuard` RAII 注入覆盖（SPE-04）。
+`save_settings` 只写前端传入的 slice（如 `{ keybindings }` 或 `{ sideBar }`），后端**浅合并** top-level 键——各 store 各写各的互不覆盖（fontSize/keybindings/sideBar 三段独立写入，前端 payload 顶层键必须是白名单段名——fontSize 平铺键断链先例已被双侧测试锁死）。应用数据目录 = exe 同级（`app_dir::app_data_dir`），测试用 `AppDataDirGuard` RAII 注入覆盖（SPE-04）。
+
+**`SETTINGS_SAVE_LOCK` 互斥（SPE-06 场景转正）**：前端三 store 启动时几乎同时各触发一次 debounced 保存，并发对同一 settings.json 读-合并-写（persist rename + .bak copy）时 Windows 上偶发 PermissionDenied——`save_settings` 的 spawn_blocking 闭包持锁串行化全程（锁内无 panic 路径；`load_settings` 不加锁，读旧值无害）。
 
 **SEC-11（S09）**：save 侧校验——顶层键白名单（`SETTINGS_ALLOWED_KEYS = [fontSize, keybindings, sideBar, colorScheme]`，spawn_blocking 前快速失败）+ 序列化后大小上限 `MAX_PERSIST_BYTES`（1MB）。**load 返回 `LoadResult`**（BE-14/D11）：损坏回退默认值 + `.bak` 命中均 `corrupted:true`。
 

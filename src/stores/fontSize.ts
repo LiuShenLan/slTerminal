@@ -3,8 +3,8 @@
 // 职责：
 // - 存储 terminalFontSize / editorFontSize（默认 14，范围 [8, 32]）
 // - setter 内部 clamp
-// - loadFromDisk 从 ~/.slterminal/settings.json 恢复
-// - 变更后 2s debounce 自动保存
+// - loadFromDisk 从 settings.json 的 fontSize 段恢复（exe 同级应用数据目录）
+// - 变更后 2s debounce 自动保存（后端 save_settings 浅合并，写 fontSize 段不擦 keybindings/sideBar 段）
 
 import { create } from "zustand";
 import { loadSettings, saveSettings } from "../ipc/settings";
@@ -55,10 +55,15 @@ export const useFontSize = create<FontSizeState>((set) => ({
         toast.show("warning", "配置已损坏，已回退默认值");
       }
       if (saved) {
-        const terminal = typeof saved.terminalFontSize === "number"
-          ? clamp(saved.terminalFontSize) : FONT_SIZE_DEFAULT;
-        const editor = typeof saved.editorFontSize === "number"
-          ? clamp(saved.editorFontSize) : FONT_SIZE_DEFAULT;
+        // 段形态读取：settings.json 的 fontSize 段（与 sideBar/keybindings 各写各的段一致）；
+        // 段缺失/非对象（section 为 null/string/数组等）→ 字段访问安全返回 undefined → 默认值
+        const section = saved.fontSize as
+          | { terminalFontSize?: unknown; editorFontSize?: unknown }
+          | undefined;
+        const terminal = typeof section?.terminalFontSize === "number"
+          ? clamp(section.terminalFontSize) : FONT_SIZE_DEFAULT;
+        const editor = typeof section?.editorFontSize === "number"
+          ? clamp(section.editorFontSize) : FONT_SIZE_DEFAULT;
         set({ terminalFontSize: terminal, editorFontSize: editor });
       }
     } catch (err) {
@@ -75,9 +80,13 @@ useFontSize.subscribe((state) => {
 
   if (saveTimer !== null) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
+    // 段形态保存（SEC-11 白名单契约）：顶层键必须是 fontSize 段名——
+    // 平铺 terminalFontSize/editorFontSize 会被后端白名单拒绝（契约断链先例已用测试锁死）
     saveSettings({
-      terminalFontSize: state.terminalFontSize,
-      editorFontSize: state.editorFontSize,
+      fontSize: {
+        terminalFontSize: state.terminalFontSize,
+        editorFontSize: state.editorFontSize,
+      },
     }).catch((err) => {
       // FE-09：保存失败统一 toast 告警（设置未落盘，重启后将丢失）；错误详情统一经 getErrorMessage
       toast.show("warning", "设置保存失败，重启后将丢失");

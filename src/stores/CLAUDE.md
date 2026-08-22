@@ -16,8 +16,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### `fontSize.ts` — 字体大小设置
 
 - 终端/编辑器独立字体大小（`terminalFontSize` / `editorFontSize`），默认 14，范围 [8, 32]。
-- setter 内部 clamp，变更通过 Zustand `subscribe` + 2s debounce 自动保存到 `~/.slterminal/settings.json`。
-- `loadFromDisk()` 在 App 启动时调用，先于项目数据加载。
+- setter 内部 clamp，变更通过 Zustand `subscribe` + 2s debounce 自动保存到 exe 同级 `settings.json` 的 **fontSize 段**。
+- **段形态契约（断链修复，2026-08）**：payload 顶层键必须是 `fontSize`（`{ fontSize: { terminalFontSize, editorFontSize } }`）——与 sideBar/keybindings「各 store 各写各的段」一致，后端 SEC-11 白名单只接受段名键；曾发平铺 `terminalFontSize`/`editorFontSize` 顶层键导致每次保存被拒（用户配置静默丢失 + 启动恒弹「设置保存失败」toast）。双侧测试锁死：前端 payload 键集合精确断言 + 后端平铺拒绝/fontSize 段放行用例。
+- `loadFromDisk()` 读 `saved.fontSize` 段（段缺失/非对象 → 默认值），在 App 启动时调用，先于项目数据加载。
 - `loaded` 守卫防止启动加载阶段触发空写。
 - IP 调用：通过 `src/ipc/settings` 的 `loadSettings` / `saveSettings` 读写磁盘。
 - **FE-09 保存失败 toast**：`saveSettings` 失败统一 `toast.show("warning", "设置保存失败，重启后将丢失")` + `console.warn`（不再静默）。
@@ -72,7 +73,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `projects` | `projects.test.ts` | 50 | Project/Page CRUD、持久化（loadFromDisk/saveToDisk）、version 递增、ID 生成、subscribe+debounce 持久化链（`_resetPersistence()` 测试辅助）、**FE-01/FE-36 页面数上限 MAX_PAGES（跨项目全局计数，超限拒绝 + toast）**、FE-11 corrupted 回退 |
 | `sideBar` | `sideBar.test.ts` | 24 | 默认值/toggle/move 经 store 委托纯函数、setWidth/setSplitRatio clamp（含 NaN/Infinity 回退，SVC-13）、loadFromDisk 5 分支（合法/脏数据/缺失/异常/reconcileZones）、loaded 守卫、2s debounce saveSettings({sideBar}) payload 键集合精确匹配、**FE-09 保存失败 toast + FE-11 corrupted toast** |
 | `layout` | `layout.test.ts` | 4 | activePageId 设置/清空/重复 |
-| `fontSize` | `font-size.test.ts` | 19 | 默认值、clamp、loadFromDisk（多种分支）、debounce 持久化、**FE-09 保存失败 toast + FE-11 corrupted toast** |
+| `fontSize` | `font-size.test.ts` | 21 | 默认值、clamp、loadFromDisk（多种分支，含段缺失/非对象）、debounce 持久化、**payload 键集合精确匹配（fontSize 段契约锁死）**、**FE-09 保存失败 toast + FE-11 corrupted toast** |
 | `keybindings` | `keybindings.test.ts` | 19 | 默认空、setBinding/clearBinding/resetAll、loadFromDisk（合法/sanitize 脏值/缺失/非对象/异常）、loaded 守卫、debounce → saveSettings({keybindings})、**FE-09 保存失败 toast + FE-11 corrupted toast** |
 | 启动链 | `startup-store-fail-warn.test.tsx` | 2 | **FE-03 启动链告警**：App 启动三 store（fontSize/keybindings/sideBar）loadFromDisk 失败/损坏时 toast 告警路径 |
 

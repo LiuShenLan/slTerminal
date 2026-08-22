@@ -144,7 +144,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | src-tauri/src/notify | 文件系统监听（LruWatcherPool 缓存 + pause/resume 切换） | src-tauri/src/notify/mod.rs | ../src-tauri/src/notify/CLAUDE.md |
 | src-tauri/src/hooks | CLI hooks 能力层（CliHooksProvider trait + cliId 键注册表 + agent-event 广播 + claude provider 注入/卸载/状态/statusline 桥接（context 官方 used_percentage 通道）/三层配置读写 + 6 条 agent_hooks_* 泛化命令） | src-tauri/src/hooks/mod.rs | ../src-tauri/src/hooks/CLAUDE.md |
 | src-tauri/src/agent_history | 历史会话聚合层（CliHistoryProvider trait + cliId 键注册表 + claude provider 扫描/删除 + SEC-05 sessionId 校验） | src-tauri/src/agent_history/mod.rs | ../src-tauri/src/agent_history/CLAUDE.md |
-| src-tauri/src 顶层 | 单文件模块：lib.rs（命令注册/State/setup）、app_dir.rs（app 数据目录解析，BE-16 上提，settings/projects 共用）、settings.rs（浅合并）、projects.rs（exe 同级 JSON 绕过沙箱）、state.rs（AppState/PtySession/路径沙箱）、error.rs（AppError） | src-tauri/src/lib.rs | ../src-tauri/src/CLAUDE.md |
+| src-tauri/src 顶层 | 单文件模块：lib.rs（命令注册/State/setup）、app_dir.rs（app 数据目录解析，BE-16 上提，settings/projects 共用）、settings.rs（浅合并 + SETTINGS_SAVE_LOCK 保存互斥）、projects.rs（exe 同级 JSON 绕过沙箱）、state.rs（AppState/PtySession/路径沙箱）、error.rs（AppError） | src-tauri/src/lib.rs | ../src-tauri/src/CLAUDE.md |
 | e2e-tests | WDIO E2E 端到端测试 | e2e-tests/wdio.conf.ts | ../e2e-tests/CLAUDE.md |
 
 ## 需求编号索引
