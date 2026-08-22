@@ -43,14 +43,18 @@ const mocks = vi.hoisted(() => {
     return sprPromise;
   });
   const mockTerminalGetAll = vi.fn(() => new Map());
+  // BE-23：switchToPageShared 失败 toast 断言用
+  const mockToastShow = vi.fn();
   return {
     mockSetProjectRoot,
     mockTerminalGetAll,
+    mockToastShow,
     get resolve() { return () => { resolveSPR(); }; },
     get reject() { return (err?: unknown) => { rejectSPR(err); }; },
     resetDeferred() {
       resetDeferred();
       mockSetProjectRoot.mockClear();
+      mockToastShow.mockClear();
     },
   };
 });
@@ -58,6 +62,12 @@ const mocks = vi.hoisted(() => {
 vi.mock("../ipc/fs", () => ({
   setProjectRoot: mocks.mockSetProjectRoot,
 }));
+
+// BE-23：pageApis 新增 toast import——mock ../lib 隔离断言（其余导出保持真实实现）
+vi.mock("../lib", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib")>();
+  return { ...actual, toast: { ...actual.toast, show: mocks.mockToastShow } };
+});
 
 // FE-09：findPanelForSession 反查 TerminalRegistry（getAll 经 mockTerminalGetAll 注入）
 vi.mock("../panels/terminal/TerminalRegistry", () => ({
@@ -200,6 +210,25 @@ describe("switchToPageShared", () => {
       "[slTerminal] 设置项目根路径失败:",
       expect.any(Error),
     );
+    expect(useLayout.getState().activePageId).toBe(pageB);
+    consoleErrorSpy.mockRestore();
+  });
+
+  it("BE-23：setProjectRoot reject → toast.show warning 告警且切换仍完成", async () => {
+    const { pageB } = seedTwoPageProject();
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const pending = switchToPageShared(pageB);
+    await Promise.resolve();
+    mocks.reject(new Error("路径不存在"));
+    await pending;
+
+    // BE-23：失败 toast 可感知（文案照 FE-04 既有先例，与 Workspace SEC-01 effect 一致）
+    expect(mocks.mockToastShow).toHaveBeenCalledWith(
+      "warning",
+      "项目根路径设置失败，文件操作可能被拒绝",
+    );
+    // 切换仍完成（降级不阻断）
     expect(useLayout.getState().activePageId).toBe(pageB);
     consoleErrorSpy.mockRestore();
   });

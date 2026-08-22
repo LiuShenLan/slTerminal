@@ -14,6 +14,7 @@ import type { DockviewApi } from "dockview-react";
 import { useLayout } from "../stores/layout";
 import { useProjects } from "../stores/projects";
 import { setProjectRoot } from "../ipc/fs";
+import { toast } from "../lib";
 import { TerminalRegistry } from "../panels/terminal/TerminalRegistry";
 import { parseTerminalPageId } from "../lib/panelId";
 import { basename } from "../lib/path";
@@ -59,6 +60,8 @@ export async function switchToPageShared(pageId: string): Promise<void> {
           await setProjectRoot(proj.rootPath);
         } catch (err) {
           console.error("[slTerminal] 设置项目根路径失败:", err);
+          // BE-23：与 FE-04 三处一致——失败 toast 可感知（原仅 console.error）
+          toast.show("warning", "项目根路径设置失败，文件操作可能被拒绝");
         }
       }
       break;

@@ -5,7 +5,6 @@
 // 持久化：Zustand subscribe + 2s debounce 变更即保存
 
 import { create } from "zustand";
-import { setProjectRoot } from "../ipc/fs";
 import * as projectsIpc from "../ipc/projects";
 import { toast } from "../lib";
 
@@ -106,10 +105,14 @@ export const useProjects = create<ProjectsState>()((set, get) => ({
 
       addPage: (projectId, page) => {
         // FE-01（D1 契约）：页面总数上限 MAX_PAGES——超限拒绝新增 + toast 告警。
-        // 多 Dockview 实例架构每页一实例，上限防内存/DOM 线性增长（豁免登记 S19）
+        // 多 Dockview 实例架构每页一实例，上限防内存/DOM 线性增长（豁免登记 S19）；
+        // FE-36 全局化：上限按跨项目全局页面总数计数（原按项目计数）
         const project = get().projects[projectId];
         if (!project) return;
-        if (project.pages.length >= MAX_PAGES) {
+        // FE-36（D1 契约名实相符）：页面总数上限 = 跨项目全局计数
+        // （原按项目计数——多项目下 Dockview 实例仍可无界增长）
+        const totalPages = Object.values(get().projects).flatMap((p) => p.pages).length;
+        if (totalPages >= MAX_PAGES) {
           toast.show("warning", "页面数已达上限");
           return;
         }
@@ -157,17 +160,11 @@ export const useProjects = create<ProjectsState>()((set, get) => ({
         }),
 
       switchToPage: (projectId, pageId) =>
+        // FE-37（D18）：纯状态转换——setProjectRoot 已上提调用方
+        // switchToPageShared（src/workspace/pageApis.ts），store 不触 IPC（硬约束 #12）
         set((state) => {
           const project = state.projects[projectId];
           if (!project) return state;
-          // SEC-01: 通知后端当前项目根路径（路径沙箱边界）
-          if (project.rootPath) {
-            setProjectRoot(project.rootPath).catch((err) => {
-              console.error("[slTerminal] 设置项目根路径失败:", err);
-              // FE-04（D7）：失败仍完成切换，toast 告警可感知
-              toast.show("warning", "项目根路径设置失败，文件操作可能被拒绝");
-            });
-          }
           return {
             projects: {
               ...state.projects,

@@ -46,7 +46,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - 二级模型：`Project` → `OperationPage[]`。面板由 Dockview 管理，不在此 store。
 - 所有变更操作（CRUD + rename + switchToPage + updatePageLayout）自动递增 `project.version`。
-- **页面总数上限（FE-01）**：`MAX_PAGES = 20` 常量——`addPage` 超限拒绝新增 + toast 告警（防多 Dockview 实例内存/DOM 无界增长，豁免登记见 workspace/CLAUDE.md + ADR）。
+- **switchToPage 为纯状态转换（FE-37：setProjectRoot 已上提调用方 switchToPageShared，约束 #12 合规）**——store action 不触 IPC，页面切换的 setProjectRoot 前置由 `src/workspace/pageApis.ts` 的 `switchToPageShared` 承担。
+- **页面总数上限（FE-01，FE-36 全局化）**：`MAX_PAGES = 20` 常量——`addPage` 超限拒绝新增 + toast 告警（防多 Dockview 实例内存/DOM 无界增长，豁免登记见 workspace/CLAUDE.md + ADR）；**FE-36：上限按跨项目全局页面总数计数**（`Object.values(projects).flatMap(p => p.pages).length`）——项目自身未达上限也可能因其他项目占额而被拒绝。
 - **持久化**：
   - 启动时调用 `loadAllProjects()` 从 exe 同级 `slterminal-projects.json` 恢复（路径由 Rust `projects.rs` 解析，绕过路径 sandbox；**FE-11：`loadProjects` 返回 `{ data, corrupted }`**——损坏时回退默认并 toast「配置已损坏，已回退默认值」）。
   - 变更通过 Zustand `subscribe` + 2s debounce 自动调用 `saveAllProjects()` 保存。
@@ -68,7 +69,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 | Store | 测试文件 | 用例数 | 覆盖范围 |
 |-------|---------|--------|---------|
-| `projects` | `projects.test.ts` | 49 | Project/Page CRUD、持久化（loadFromDisk/saveToDisk）、version 递增、ID 生成、subscribe+debounce 持久化链（`_resetPersistence()` 测试辅助）、**FE-01 页面数上限 MAX_PAGES（超限拒绝 + toast）**、FE-11 corrupted 回退 |
+| `projects` | `projects.test.ts` | 50 | Project/Page CRUD、持久化（loadFromDisk/saveToDisk）、version 递增、ID 生成、subscribe+debounce 持久化链（`_resetPersistence()` 测试辅助）、**FE-01/FE-36 页面数上限 MAX_PAGES（跨项目全局计数，超限拒绝 + toast）**、FE-11 corrupted 回退 |
 | `sideBar` | `sideBar.test.ts` | 24 | 默认值/toggle/move 经 store 委托纯函数、setWidth/setSplitRatio clamp（含 NaN/Infinity 回退，SVC-13）、loadFromDisk 5 分支（合法/脏数据/缺失/异常/reconcileZones）、loaded 守卫、2s debounce saveSettings({sideBar}) payload 键集合精确匹配、**FE-09 保存失败 toast + FE-11 corrupted toast** |
 | `layout` | `layout.test.ts` | 4 | activePageId 设置/清空/重复 |
 | `fontSize` | `font-size.test.ts` | 19 | 默认值、clamp、loadFromDisk（多种分支）、debounce 持久化、**FE-09 保存失败 toast + FE-11 corrupted toast** |
