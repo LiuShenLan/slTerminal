@@ -68,8 +68,9 @@ export const useKeybindings = create<KeybindingsState>((set, get) => ({
       if (saved) {
         set({ overrides: sanitize(saved.keybindings) });
       }
-    } catch {
+    } catch (err) {
       // 首次启动或 IPC 失败，保持默认（空覆盖）
+      console.warn("[slTerminal] keybindings loadFromDisk 失败:", err);
     }
     set({ loaded: true });
   },

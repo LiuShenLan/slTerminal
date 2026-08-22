@@ -177,7 +177,8 @@ export function useCodeMirror({ container, filePath, panelId, fontSize, onFontSi
       await fs.writeFile(path, content);
     } catch (err) {
       // P1-05: 保存失败时显示通知，保留编辑器内容不清空（FE-01: alert → toast）
-      toast.show("error", `保存失败: ${err}`);
+      // FE-44: 错误消息统一经 getErrorMessage（解析 IPC AppError 结构化消息）
+      toast.show("error", `保存失败: ${getErrorMessage(err)}`);
       return;
     }
 

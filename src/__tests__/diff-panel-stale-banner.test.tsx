@@ -176,4 +176,29 @@ describe("DiffPanel 内容可能过时提示条（FE-10）", () => {
     }, { timeout: 3000 });
     expect(container.textContent).toContain("内容可能过时");
   });
+
+  it("S4: 外部修改重载 readFile 失败 → 提示条出现（FE-10）", async () => {
+    const { container } = await renderReady();
+    // 初始无提示条
+    expect(container.querySelector('[data-testid="diff-stale-banner"]')).toBeNull();
+
+    // 捕获 onFsEvent 回调（第一个注册 = 外部修改监听）
+    const fsEventCb = mockOnFsEvent.mock.calls[0]?.[0];
+    expect(fsEventCb).toBeTypeOf("function");
+
+    // 净态外部 Modify → 自动重载 readFile，重载失败（renderReady 已消费初始读取，
+    // mockRejectedValueOnce 排队的下一次调用即重载）
+    mockReadFile.mockRejectedValueOnce(new Error("读取失败"));
+
+    fsEventCb({
+      paths: ["D:/repo/src/test.ts"],
+      kind: "Modify",
+    });
+
+    // 重载失败 → diffStale 置位 → 复用提示条（内容可能过时，用户可感知）
+    await waitFor(() => {
+      expect(container.querySelector('[data-testid="diff-stale-banner"]')).toBeTruthy();
+    }, { timeout: 3000 });
+    expect(container.textContent).toContain("内容可能过时");
+  });
 });

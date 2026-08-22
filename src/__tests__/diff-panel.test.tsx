@@ -12,7 +12,8 @@ import React from "react";
 
 const { mockGitFileAtHead, mockGitDiff, mockReadFile, mockWriteFile, mockOnFsEvent,
   mockUseFontSizeWheel, mockSetEditorFontSize, mockUsePanelFocus,
-  mockSetActiveEditor, mockClearActiveEditor, mockConfirmDialog, mockToastShow } = vi.hoisted(
+  mockSetActiveEditor, mockClearActiveEditor, mockConfirmDialog, mockToastShow,
+  mockGetErrorMessage } = vi.hoisted(
   () => ({
     mockGitFileAtHead: vi.fn(),
     mockGitDiff: vi.fn(),
@@ -26,6 +27,10 @@ const { mockGitFileAtHead, mockGitDiff, mockReadFile, mockWriteFile, mockOnFsEve
     mockClearActiveEditor: vi.fn(),
     mockConfirmDialog: vi.fn(),
     mockToastShow: vi.fn(),
+    // 契约兜底（FE-43）：Error → message，其余 String
+    mockGetErrorMessage: vi.fn((err: unknown) =>
+      err instanceof Error ? err.message : String(err),
+    ),
   }),
 );
 
@@ -52,9 +57,11 @@ vi.mock("../lib/useFontSizeWheel", () => ({
 }));
 
 // FE-02：浮层单点 mock——confirmDialog/toast（不 mock window）
+// FE-43：getErrorMessage 同库导出，一并 mock（契约兜底见 vi.hoisted）
 vi.mock("../lib", () => ({
   confirmDialog: mockConfirmDialog,
   toast: { show: mockToastShow },
+  getErrorMessage: mockGetErrorMessage,
 }));
 
 vi.mock("../stores/fontSize", () => ({
@@ -297,11 +304,9 @@ describe("DiffPanel", () => {
     actions!.save();
 
     // 保存失败不弹原生 alert——经 toast 提示（FE-02）
+    // FE-43：文案为 getErrorMessage 解析后消息（Error → message）
     await waitFor(() => {
-      expect(mockToastShow).toHaveBeenCalledWith(
-        "error",
-        expect.stringContaining("保存失败"),
-      );
+      expect(mockToastShow).toHaveBeenCalledWith("error", "保存失败: 磁盘只读");
     });
   });
 

@@ -91,14 +91,15 @@ HTML 内容通过 `<iframe sandbox="allow-scripts" srcDoc={...}>` 渲染（**不
 |--------|------|---------|
 | **origin 校验** | `e.origin === "null"` — srcdoc iframe 为 opaque origin，按 WHATWG HTML 规范序列化为字符串 `"null"` | 阻止任意 origin 页面向父窗口发送伪造的 `slterm_key` 消息 |
 | **source 校验** | `e.source === iframeRef.current.contentWindow` — 仅接受本面板 iframe 发出的消息 | 阻止同进程内其他 iframe/窗口伪装（即使 origin 同为 "null"） |
-| **nonce 校验（SEC-04）** | 面板挂载期 `crypto.getRandomValues` 生成 128 位随机 nonce（`nonceRef` 惰性初始化——StrictMode 双渲染不重复生成），经注入脚本拼入 iframe 的 keydown postMessage；父窗口校验 `e.data.nonce === nonceRef.current`，不符静默丢弃 | 阻止 **iframe 自身内容**伪造消息——origin/source 校验只挡外部窗口/iframe，挡不住被预览的 HTML 自身内联脚本；nonce 拼入 srcDoc 内联（十六进制串无转义风险），同源页面拿不到即伪造失败 |
+| **nonce 校验（SEC-04）** | 面板挂载期 `crypto.getRandomValues` 生成 128 位随机 nonce（`nonceRef` 惰性初始化——StrictMode 双渲染不重复生成），经注入脚本拼入 iframe 的 keydown postMessage；父窗口校验 `e.data.nonce === nonceRef.current`，不符静默丢弃 | 阻止 **不知密钥的外部**伪造——origin/source 校验只挡外部窗口/iframe；nonce 明文内联于 srcDoc，被预览 HTML 自身可读取并伪造，故 nonce 不防内部伪造（防线分层见下节） |
 | **信任标记** | 合成 `KeyboardEvent` 上 `Object.defineProperty(event, "__slterm_postMessage", { value: true })` | 允许 `ShortcutRegistry` 识别事件来源为 postMessage 重放，与原生 keydown 区分（预留——当前未在匹配逻辑中使用） |
 
 **威胁模型**：假设攻击者构造恶意 HTML 文件诱使用户在 slTerminal 中预览。攻击者可通过内联脚本向父窗口发送伪造的 `slterm_key` 消息，模拟 `Ctrl+W`（关闭页签）等全局快捷键。
 
 - **无 origin 校验时**：任意窗口（包括浏览器中打开的恶意页面）均可发送消息命中 `handleMessage`，但 `source` 校验仍可拦截——因为 `iframe.contentWindow` 仅本面板可匹配
 - **无 source 校验时**：同页面其他 `sandbox="allow-scripts"` iframe 可伪装键盘事件（均有 opaque origin `"null"`）
-- **无 nonce 校验时（SEC-04 核心威胁）**：被预览 HTML 的**自身内联脚本**可伪造 `slterm_key` 消息——origin/source 均校验通过（消息来自本面板 iframe），恶意 HTML 借此模拟全局快捷键（如 Ctrl+W 关页签）。nonce 使伪造方缺少消息携带的密钥——随机值仅经注入脚本写入 iframe（攻击者 HTML 无法读取 `buildInjectedScript` 产出），校验不一致即静默丢弃。**nonce 须挂载期一次性生成（`nonceRef` 惰性初始化）**——若每次渲染重新生成，注入脚本与校验值漂移导致键盘转发失效（html-panel.test.tsx 有守卫用例）
+- **无 nonce 校验时（SEC-04 核心威胁）**：被预览 HTML 的**自身内联脚本**可伪造 `slterm_key` 消息——origin/source 均校验通过（消息来自本面板 iframe），恶意 HTML 借此模拟全局快捷键（如 Ctrl+W 关页签）。nonce 明文内联于 srcDoc——iframe 内任意脚本可读取注入脚本提取 nonce 并伪造消息（**攻击者 HTML 可直接读取 `buildInjectedScript` 产出，nonce 不防内部伪造**），校验不一致即静默丢弃。**nonce 须挂载期一次性生成（`nonceRef` 惰性初始化）**——若每次渲染重新生成，注入脚本与校验值漂移导致键盘转发失效（html-panel.test.tsx 有守卫用例）
+- **防线分层（SEC-04 威胁模型，D16 登记）**：nonce = **外部防线**（拦截不知密钥的窗口/iframe 伪造），内部伪造（被预览 HTML 自身）由 **global 命令集最小化**兜底——当前 global context 仅 `global.closeTab`（关页签，低风险），`command-catalog.test.ts` 守卫测试锁死该集合，扩充 global 命令必须先评估本威胁模型
 - **信任标记作用**：若未来 `ShortcutRegistry.findWinner` 需区分物理按键与 postMessage 重放（如限制重放仅作用 `global` context），标记提供判定依据。当前两路径 handler 行为一致，标记为预留机制
 
 > **`e.origin === "null"` 为规范推断**：WHATWG HTML 规定 opaque origin 序列化为 `"null"`。此行为未经真实 WebView2 环境实测验证（单元测试用 jsdom 无法模拟 origin 校验），正确性由 E2E（L4）真实 WebView2 中 postMessage 往返验收。

@@ -77,7 +77,7 @@ Workflow({
 | S03 | ✅ | 223ac89 | SEC-17/BE-22/BE-24 fixed；SEC-15/BE-25 fix-loop 1 轮（新增代码 fmt 门禁修复） | 三 shell spawn（Win11+Win10） |
 | S04 | ✅ | 7664caf | SEC-16 fixed（fix-loop 1 轮：新增用例 path_b clone 编译修复） | 连切沙箱不串 |
 | S05 | ✅ | be96a77 | BE-10/FE-38 fixed（一次通过，无 fix-loop） | 空页面 watcher 停止 |
-| S06 | ⬜ | | | 切换无回归 + toast 实测 |
+| S06 | ✅ | 34c3bf1 | FE-37/36、BE-23 fixed（一次通过，无 fix-loop） | 切换无回归 + toast 实测 |
 | S07 | ⬜ | | | — |
 | S08 | ⬜ | | | — |
 | S09 | ⬜ | | | 多 session 关窗时长 |

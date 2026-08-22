@@ -61,6 +61,12 @@ function createNonce(): string {
  * 3) CSS 注入——.slterm-target 基础样式（:target 备选）
  *
  * @param nonce 面板挂载期生成的随机值，拼入 keydown postMessage——父窗口据此校验消息来源
+ *
+ * 【SEC-04 威胁模型（D16 登记）】nonce 明文内联于 srcDoc——iframe 内任意脚本可读取
+ * 文档中的注入脚本提取 nonce 并伪造 slterm_key 消息。nonce 仅防「不知密钥的外部伪造」，
+ * 不防被预览 HTML 自身。真正防线 = global context 命令集最小化（当前仅 global.closeTab
+ * 关页签，低风险）——守卫测试 command-catalog.test.ts 锁死该集合，扩充 global 命令
+ * 必须先评估本威胁模型。
  */
 function buildInjectedScript(nonce: string): string {
   return (
@@ -130,8 +136,8 @@ const HtmlPanel: React.FC<HtmlPanelProps> = ({ params }) => {
       if (e.source !== iframeRef.current?.contentWindow) return;
       if (!e.data || e.data.type !== "slterm_key") return;
       // SEC-04：nonce 校验——注入脚本拼入的随机值（经 srcDoc 内联），不符静默丢弃。
-      // iframe 内任意脚本可伪造 origin/source 不可伪造的消息，但拿不到本面板 nonce，
-      // 伪造消息在此被拦截（origin/source 校验只挡其他窗口/iframe，挡不住 iframe 自身内容）。
+      // iframe 内脚本可提取 nonce 伪造（见上方威胁模型）——nonce 拦截外部伪造，
+      // 内部伪造由 global 命令集最小化兜底。
       if (typeof e.data.nonce !== "string" || e.data.nonce !== nonceRef.current) return;
       const fingerprint: string | undefined = e.data.fingerprint;
       if (!fingerprint) return;

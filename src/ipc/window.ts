@@ -53,8 +53,10 @@ export function registerCloseHandler(cb: () => Promise<void>): () => void {
     }
   });
   return () => {
-    // FE-26：窗口已销毁时 unlisten Promise reject——兜底吞掉，避免清理期未处理 rejection
-    unlisten.then((fn) => fn()).catch(() => {});
+    // FE-26：窗口已销毁时 unlisten Promise reject——兜底记录，避免清理期未处理 rejection
+    unlisten.then((fn) => fn()).catch((err) => {
+      console.warn("[slTerminal] 取消关窗监听失败:", err);
+    });
   };
 }
 

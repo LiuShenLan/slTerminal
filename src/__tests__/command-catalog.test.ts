@@ -57,6 +57,14 @@ describe("COMMAND_CATALOG", () => {
     }
   });
 
+  // SEC-04（D16）：global context 命令集守卫——iframe 内脚本可提取 nonce 伪造
+  // 全局快捷键消息（HtmlPanel 威胁模型），global 命令集必须保持最小低风险；
+  // 扩充即红，迫使先评估威胁模型
+  it("global context 命令集恒为 [global.closeTab]", () => {
+    const globals = COMMAND_CATALOG.filter((m) => m.context === "global").map((m) => m.id);
+    expect(globals).toEqual(["global.closeTab"]);
+  });
+
 });
 
 describe("COMMAND_META_BY_ID", () => {

@@ -119,8 +119,9 @@ export const useSideBar = create<SideBarState>((set, get) => ({
           splitRatio: slice.splitRatio,
         });
       }
-    } catch {
+    } catch (err) {
       // 首次启动或 IPC 失败，保持默认值
+      console.warn("[slTerminal] sideBar loadFromDisk 失败:", err);
     }
     set({ loaded: true });
   },

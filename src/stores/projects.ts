@@ -248,8 +248,9 @@ export const useProjects = create<ProjectsState>()((set, get) => ({
             },
             expandedNodes: data.expandedNodes ?? {},
           });
-        } catch {
+        } catch (err) {
           // 首次启动或 IPC 失败，保持默认状态
+          console.warn("[slTerminal] projects loadFromDisk 失败:", err);
         }
       },
 
@@ -269,8 +270,9 @@ export const useProjects = create<ProjectsState>()((set, get) => ({
 export async function loadAllProjects(): Promise<void> {
   try {
     await useProjects.getState().loadFromDisk();
-  } catch {
+  } catch (err) {
     // 首次启动或文件损坏，保持默认空状态
+    console.warn("[slTerminal] loadAllProjects loadFromDisk 失败:", err);
   }
 }
 

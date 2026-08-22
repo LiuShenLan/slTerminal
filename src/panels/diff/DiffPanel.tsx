@@ -372,7 +372,8 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ params }) => {
     try {
       await fs.writeFile(path, content);
     } catch (err) {
-      toast.show("error", `保存失败: ${err}`);
+      // FE-43: 错误消息统一经 getErrorMessage（解析 IPC AppError 结构化消息）
+      toast.show("error", `保存失败: ${getErrorMessage(err)}`);
       return;
     }
 
@@ -480,14 +481,22 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ params }) => {
               changes: { from: 0, to: view.state.doc.length, insert: content },
             });
             dirtyRef.current = false;
-          }).catch((err) => { console.warn("[slTerminal] 外部修改重载失败:", err); });
+          }).catch((err) => {
+            console.warn("[slTerminal] 外部修改重载失败:", err);
+            // FE-10：复用 diffStale 提示条——重载失败内容可能过时，用户可感知
+            setDiffStale(true);
+          });
         }
       } else {
         fs.readFile(currentPath).then((content) => {
           view.dispatch({
             changes: { from: 0, to: view.state.doc.length, insert: content },
           });
-        }).catch((err) => { console.warn("[slTerminal] 外部修改重载失败:", err); });
+        }).catch((err) => {
+          console.warn("[slTerminal] 外部修改重载失败:", err);
+          // FE-10：复用 diffStale 提示条——重载失败内容可能过时，用户可感知
+          setDiffStale(true);
+        });
       }
     });
 

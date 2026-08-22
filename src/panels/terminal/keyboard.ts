@@ -34,7 +34,9 @@ export function createTerminalShortcuts(): Command[] {
       if (!t) return false;
       readText()
         .then((text) => t.paste(text))
-        .catch(() => {});
+        .catch((err) => {
+          console.error("[slTerminal] 读取剪贴板失败:", err);
+        });
       return true;
     }),
     commandFromMeta("terminal.newline", () => {

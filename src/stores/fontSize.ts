@@ -61,8 +61,9 @@ export const useFontSize = create<FontSizeState>((set) => ({
           ? clamp(saved.editorFontSize) : FONT_SIZE_DEFAULT;
         set({ terminalFontSize: terminal, editorFontSize: editor });
       }
-    } catch {
+    } catch (err) {
       // 首次启动或 IPC 失败，保持默认值
+      console.warn("[slTerminal] fontSize loadFromDisk 失败:", err);
     }
     set({ loaded: true });
   },

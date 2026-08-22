@@ -130,13 +130,20 @@ describe("createTerminalShortcuts", () => {
       await vi.waitFor(() => expect(pasteSpy).toHaveBeenCalledWith("clipboard content"), { timeout: 3000 });
     });
 
-    it("paste：readText 拒绝 → 不 paste", async () => {
+    it("paste：readText 拒绝 → 不 paste，console.error 记录（FE-08）", async () => {
       readTextMock.mockRejectedValue(new Error("NotAllowedError"));
       const pasteSpy = vi.fn();
+      const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       setActive(makeActive({ paste: pasteSpy }));
       findCommand(cmds, "terminal.paste")!.handler(keyEvent({ ctrlKey: true, shiftKey: true, code: "KeyV" }));
       await new Promise<void>((r) => setTimeout(r, 0));
       expect(pasteSpy).not.toHaveBeenCalled();
+      // FE-08：读取剪贴板失败可观测——console.error 记录错误详情
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        "[slTerminal] 读取剪贴板失败:",
+        expect.any(Error),
+      );
+      consoleErrorSpy.mockRestore();
     });
 
     it("newline：写 [0x0a] 到聚焦终端 PTY，返回 true", () => {

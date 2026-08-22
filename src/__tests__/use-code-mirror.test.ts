@@ -655,8 +655,10 @@ describe("handleSave 保存逻辑", () => {
       expect(fs.writeFile).toHaveBeenCalled();
     }, { timeout: 3000 });
 
+    // FE-44：文案经 getErrorMessage 解析——含原始 message（真实实现保留于
+    // vi.mock("../lib") importOriginal，String(Error) 含 "磁盘已满"）
     await waitFor(() => {
-      expect(mockToastShow).toHaveBeenCalledWith("error", expect.stringContaining("保存失败"));
+      expect(mockToastShow).toHaveBeenCalledWith("error", expect.stringContaining("磁盘已满"));
     }, { timeout: 3000 });
   });
 
@@ -1056,8 +1058,9 @@ describe("EDF-03 大文件分支与保存失败", () => {
     getActiveEditor()!.save();
 
     // FE-01: 保存失败 → toast.show("error", ...)（纯通知）
+    // FE-44：文案经 getErrorMessage 解析——含原始 message
     await waitFor(() => {
-      expect(mockToastShow).toHaveBeenCalledWith("error", expect.stringContaining("保存失败"));
+      expect(mockToastShow).toHaveBeenCalledWith("error", expect.stringContaining("磁盘已满"));
     }, { timeout: 3000 });
 
     // 失败路径（catch 后 return）不派发任何 slterm: 保存事件
