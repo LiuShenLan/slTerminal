@@ -83,6 +83,22 @@ export class ErrorBoundary extends React.Component<
               该操作页面因渲染错误无法显示，其他页面不受影响。
               请切换到其他页面或重启应用。
             </div>
+            <button
+              onClick={() => this.setState({ error: null })}
+              style={{
+                marginTop: 4,
+                padding: "4px 16px",
+                background: SECONDARY_BG,
+                color: PLACEHOLDER_FG,
+                border: `1px solid ${SEPARATOR_BG}`,
+                borderRadius: 4,
+                cursor: "pointer",
+                fontSize: 12,
+                fontFamily: "inherit",
+              }}
+            >
+              重试
+            </button>
             <details style={{ marginTop: 8, maxWidth: "100%" }}>
               <summary
                 style={{

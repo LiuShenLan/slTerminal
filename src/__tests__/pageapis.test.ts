@@ -364,9 +364,10 @@ describe("switchToPageAndFocus", () => {
     await vi.advanceTimersByTimeAsync(100);
     expect(api.getPanel).toHaveBeenCalledTimes(2);
 
-    // abort（调用方卸载/再次点击）→ 下一轮循环前检查退出
+    // abort（调用方卸载/再次点击）→ FE-48：abort listener 立即 clearTimeout + resolve，
+    // 不等 100ms 轮询定时器——advance 0 即完成（原实现须等定时器到期才能进下一轮检查）
     controller.abort();
-    await vi.advanceTimersByTimeAsync(5 * 1000);
+    await vi.advanceTimersByTimeAsync(0);
     await pending;
 
     expect(api.focusSpy).not.toHaveBeenCalled();

@@ -610,6 +610,31 @@ describe("onCloseRequested PTY kill 路径", () => {
 
     infoSpy.mockRestore();
   });
+
+  it("17. ptyKillAll 永不 resolve → 3s 超时后关窗流程继续（FE-47）", async () => {
+    (window as unknown as Record<string, unknown>).__dockviewApi = { _mock: true };
+
+    // ptyKillAll 永远不 resolve（后端逐 session 串行 kill 卡死场景）
+    vi.mocked(pty.ptyKillAll).mockReturnValue(new Promise(() => {}));
+
+    const handler = await renderAndCapture();
+
+    vi.useFakeTimers();
+
+    // 触发关闭
+    const closePromise = handler();
+
+    // 推进 3000ms 触发 ptyKillAll race 超时（异步版：flush 微任务链后再推进，
+    // race 的 setTimeout 须先注册；理由见测试 5）——超时后 killed=null，分支跳过
+    await vi.advanceTimersByTimeAsync(3000);
+
+    await closePromise;
+
+    // 不应卡死——后续保存序列照常执行
+    expect(mocks.mockSaveAllProjects).toHaveBeenCalled();
+
+    vi.useRealTimers();
+  });
 });
 
 // ─── FE-28: App 五个顶层组件分别包 inline ErrorBoundary ───

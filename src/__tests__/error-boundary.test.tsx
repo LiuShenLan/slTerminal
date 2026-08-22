@@ -3,7 +3,7 @@
 // 验证 getDerivedStateFromError + componentDidCatch + render 错误态 + 正常透传。
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render } from "@testing-library/react";
+import { render, fireEvent } from "@testing-library/react";
 import React from "react";
 import { ErrorBoundary } from "../lib";
 
@@ -121,6 +121,36 @@ describe("ErrorBoundary", () => {
       </ErrorBoundary>,
     );
     expect(container.textContent).toContain("内联正常内容");
+    expect(container.textContent).not.toContain("页面渲染出错");
+  });
+
+  it("6. inline 重试按钮：点击「重试」清 error → 子树重新渲染（FE-46 恢复路径）", () => {
+    // 「外部状态控制 throw 条件」桩：抛错与否由外部变量决定，渲染期间不翻转——
+    // React 19 对初始渲染错误会同步重试整个 root（自动恢复语义），闭包内翻转
+    // （抛后即改）会让重试成功、错误被判可恢复、错误边界不触发（历史缺陷：
+    // 本用例确定性失败）；外部状态在两次渲染尝试间保持不变 → 重试仍抛错 →
+    // 边界正常捕获落占位；点击重试前再翻转 → children 重渲染走正常路径
+    let shouldThrow = true;
+    const Flaky: React.FC = () => {
+      if (shouldThrow) {
+        throw new Error("首次渲染模拟错误");
+      }
+      return <div data-testid="flaky-content">重试后正常内容</div>;
+    };
+    const { container } = render(
+      <ErrorBoundary variant="inline">
+        <Flaky />
+      </ErrorBoundary>,
+    );
+    // 首次渲染落入 inline 占位，子树未渲染
+    expect(container.textContent).toContain("页面渲染出错");
+    expect(container.querySelector('[data-testid="flaky-content"]')).toBeNull();
+    // 翻转外部状态（模拟故障已恢复）→ 点击「重试」→ setState 清 error → children 重渲染正常
+    // （顺序不可反：先点击再翻转则 children 再次抛错落回占位，无法验证恢复路径）
+    shouldThrow = false;
+    fireEvent.click(container.querySelector("button") as HTMLButtonElement);
+    expect(container.querySelector('[data-testid="flaky-content"]')).not.toBeNull();
+    expect(container.textContent).toContain("重试后正常内容");
     expect(container.textContent).not.toContain("页面渲染出错");
   });
 });

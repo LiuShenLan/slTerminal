@@ -45,7 +45,16 @@ export async function waitFor<T>(
     }
     const value = probe();
     if (value !== undefined) return value;
-    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+    // FE-48：abort 感知轮询——abort 时立即 clearTimeout + resolve，不等下一 tick
+    //（循环顶部 signal?.aborted 检查在下一轮抛「已取消」——abort 后 resolve 落入顶部即退出）
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, POLL_INTERVAL_MS);
+      signal?.addEventListener(
+        "abort",
+        () => { clearTimeout(timer); resolve(); },
+        { once: true },
+      );
+    });
   }
   throw new Error(
     `${label} 在 ${(POLL_COUNT * POLL_INTERVAL_MS) / 1000}s 内未就绪`,

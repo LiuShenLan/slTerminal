@@ -98,7 +98,16 @@ export async function switchToPageAndFocus(
       panel.focus();
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    // FE-48：abort 感知轮询——abort 时立即 clearTimeout + resolve，不等下一 tick
+    //（循环顶部 signal?.aborted 检查在下一轮退出——abort 后 resolve 落入顶部即返回）
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, 100);
+      signal?.addEventListener(
+        "abort",
+        () => { clearTimeout(timer); resolve(); },
+        { once: true },
+      );
+    });
   }
 
   console.warn(

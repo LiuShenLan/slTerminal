@@ -79,7 +79,7 @@ Workflow({
 | S05 | ✅ | be96a77 | BE-10/FE-38 fixed（一次通过，无 fix-loop） | 空页面 watcher 停止 |
 | S06 | ✅ | 34c3bf1 | FE-37/36、BE-23 fixed（一次通过，无 fix-loop） | 切换无回归 + toast 实测 |
 | S07 | ✅ | 33d6723 | SEC-04、FE-08/10/42/43/44/45 fixed（一次通过，无 fix-loop） | — |
-| S08 | ⬜ | | | — |
+| S08 | ✅ | 21ba6b7 | FE-39 验证固化、FE-40/41 fixed（一次通过，无 fix-loop） | — |
 | S09 | ⬜ | | | 多 session 关窗时长 |
 | S10 | ⬜ | | | — |
 

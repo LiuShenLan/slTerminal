@@ -154,8 +154,15 @@ function App() {
         // （前端漏记/后端残留）时后端 session 不泄漏；返回 kill 数仅作日志，
         // 失败不阻断关闭（Job Object KILL_ON_JOB_CLOSE 仍有最终兜底）
         try {
-          const killed = await pty.ptyKillAll();
-          if (killed > 0) {
+          // FE-47：ptyKillAll 包总超时——后端逐 session 3s 串行 kill+join，
+          // 极端多 session 场景防拖长关窗（与上方 Registry kill 同形 race）
+          const killed = await Promise.race([
+            pty.ptyKillAll(),
+            new Promise<null>((resolve) =>
+              setTimeout(() => resolve(null), SHUTDOWN_TIMEOUT_MS),
+            ),
+          ]);
+          if (killed !== null && killed > 0) {
             console.info(`[slTerminal] 关闭兜底清理 ${killed} 个后端残留 PTY session`);
           }
         } catch (err) {

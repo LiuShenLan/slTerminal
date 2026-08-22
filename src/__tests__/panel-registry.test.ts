@@ -3,7 +3,6 @@ import { render } from "@testing-library/react";
 import React from "react";
 import {
   panelRegistry,
-  terminalTabConfig,
   PANEL_TYPES,
   PANEL_HTML_VIEWER,
   isValidPanelType,
@@ -57,22 +56,6 @@ describe("panelRegistry", () => {
   it("hooksConfig 注册项为函数组件", () => {
     const entry = panelRegistry.hooksConfig;
     expect(typeof entry).toBe("function");
-  });
-});
-
-describe("terminalTabConfig", () => {
-  // 4. terminal 的 tabComponent 使用 terminalTabConfig
-  it("terminalTabConfig 存在", () => {
-    expect(terminalTabConfig).toBeDefined();
-  });
-
-  // 5. terminalTabConfig.renderer === "always"（跨页面存活关键配置）
-  it('renderer 为 "always"（跨页面存活关键配置）', () => {
-    expect(terminalTabConfig.renderer).toBe("always");
-  });
-
-  it("terminalTabConfig 只有一个属性 renderer", () => {
-    expect(Object.keys(terminalTabConfig)).toEqual(["renderer"]);
   });
 });
 

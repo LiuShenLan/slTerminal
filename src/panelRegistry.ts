@@ -69,11 +69,6 @@ export const panelRegistry = {
   }>),
 };
 
-/** 终端面板渲染策略：始终挂载（保持 PTY 存活） */
-export const terminalTabConfig = {
-  renderer: "always" as const,
-};
-
 /** 面板类型列表（用于 fromJSON 校验白名单） */
 export const PANEL_TYPES = [
   PANEL_TERMINAL,

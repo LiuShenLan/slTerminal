@@ -406,12 +406,13 @@ describe("FE-27 waitFor AbortSignal", () => {
       await vi.advanceTimersByTimeAsync(300);
       expect(probe).toHaveBeenCalledTimes(4);
 
-      // abort → waitFor 尚挂起在 t=300 处未到期的 100ms 定时器上，须再推进
-      // 100ms 让其进入下一轮循环（循环开头检查 aborted → 抛错），此后不再 probe。
-      // 先注册 rejects 断言再推进——推进触发 reject 时 handler 须已就位（防 unhandled rejection）
+      // abort → FE-48：abort listener 立即 clearTimeout + resolve，不等 100ms 定时器——
+      // 下一轮循环开头检查 aborted → 抛「已取消」；advance 0 即完成（原实现须再推进
+      // 100ms 定时器到期才能进下一轮）。先注册 rejects 断言再推进——推进触发 reject
+      // 时 handler 须已就位（防 unhandled rejection）
       controller.abort();
       const abortAssertion = expect(pending).rejects.toThrow("测试条件 已取消");
-      await vi.advanceTimersByTimeAsync(100);
+      await vi.advanceTimersByTimeAsync(0);
       await abortAssertion;
       expect(probe).toHaveBeenCalledTimes(4); // abort 后不再轮询
     } finally {
