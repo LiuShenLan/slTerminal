@@ -103,6 +103,14 @@ E2E helpers 通过 `main.tsx` 中 `E2E_ENABLED`（`src/lib/e2eEnabled.ts`）条�
 
 > **AQ-4（fixture 缺失终止而非降级）**：`fixtures/claude-projects/` 缺失时 `run-wdio.cjs` 在 wdio 启动前以 `console.error` 明确文案 + `process.exit(1)` 终止——不设 `SLTERM_CLAUDE_PROJECTS_DIR` 会令后端回落真实 `~/.claude/projects`（生产默认），历史会话用例有触碰真实用户目录风险。禁止引入新降级路径（自动创建空 fixture、临时目录兜底等）。
 
+## 单 session 跨 spec 项目累积（beforeSuite 清空，FE-36 兼容）
+
+**wdio 单 session 共享 app 实例**（见文件头注释）——前序 spec 的 `__slterm_e2e_createProject` 项目在 store 累积（一轮可 20+ 项目/30+ 页）。**S06 FE-36 后 `addPage` 按跨项目全局页数计数（`MAX_PAGES=20`）**——terminal spec（末位）的 `addPage` 被拒绝 → `switchToPageAndWait` 切换幽灵页超时（H6/E2E-04 回归根因，2026-08-22 实证）。
+
+**修复机制（wdio.conf `beforeSuite`）**：每个 spec 开始前 `__slterm_e2e_resetProjects()` 清空 store——粒度 = spec 级：先于 mocha `before()`（后者建的项目不被清）；**不用 `beforeTest`**（wdio 层在 mocha `before()` 之后执行，会清掉 `before()` 里的项目 + 破坏 editor 标题等依赖 spec 内累积的用例）。spec 内用例累积 ≤10 项目不触发上限；用例内多项目（agent R2 切项目往返）不受影响。
+
+配套改动：`helpers.__slterm_e2e_addPage` 在 store 拒绝时返回 `null`（spec 侧 `specUtils.addPage` 提前抛「无法创建页面」而非隐性超时）；`src/stores/projects.ts` 的 `addPage` 返回 `boolean`；`App.tsx` E2E 构建（`import.meta.env.VITE_E2E === "1"` 内联门控）跳过 `loadAllProjects`（防御启动恢复）。
+
 ## 已知无害噪声
 
 `Tauri core.invoke not available after 5s timeout` — embedded 模式下降级到 WebDriver HTTP 协议时的日志，不影响测试结果。
