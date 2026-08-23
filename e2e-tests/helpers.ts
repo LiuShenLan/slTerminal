@@ -22,8 +22,16 @@ import { useLayout } from "../src/stores/layout";
 import { makeEmptyLayout } from "../src/features/navTree/NavTree";
 import { titleManager } from "../src/workspace/titleManager";
 import { switchToPageShared } from "../src/workspace/pageApis";
+import { useFontSize, FONT_SIZE_DEFAULT } from "../src/stores/fontSize";
+import { useKeybindings } from "../src/stores/keybindings";
 import { useSideBar } from "../src/stores/sideBar";
 import { cliProfileRegistry } from "../src/features/cliProfiles";
+import {
+  DEFAULT_ZONES,
+  DEFAULT_OPEN,
+  WIDTH_DEFAULT,
+  SPLIT_DEFAULT,
+} from "../src/features/sideViews/sideBarState";
 import type { CodingCliProfile, HooksConfigEditorProps } from "../src/features/cliProfiles/types";
 
 // ── Window 全局类型扩展 ──
@@ -40,6 +48,8 @@ declare global {
     __slterm_e2e_createProject?: (dirPath: string) => Promise<string>;
     /** 用例开始前清空项目 store（wdio beforeTest 调用；FE-36 全局页数上限兼容） */
     __slterm_e2e_resetProjects?: () => void;
+    /** spec 间隔离前端配置类 store（wdio beforeSuite 调用；TQ-E-08） */
+    __slterm_e2e_resetSettings?: () => void;
     __slterm_e2e_getProjectIdForPage?: (pageId: string) => string | null;
     /** 新增操作页面——被 store 拒绝（超页数上限等）返回 null */
     __slterm_e2e_addPage?: (projectId: string, name: string, rootPath: string) => string | null;
@@ -83,6 +93,7 @@ export function installAllE2eHelpers(): void {
   installClipboard();
   installShortcutDebug();
   installProjectHelpers();
+  installSettingsHelpers();
   installTitleHelpers();
   installSideBarHelpers();
   installHookHelpers();
@@ -242,6 +253,32 @@ function installProjectHelpers(): void {
   // 委托 switchToPageShared 统一处理 setProjectRoot → setActivePage → __dockviewApi 重指向
   window.__slterm_e2e_switchToPage = async (pageId: string) => {
     await switchToPageShared(pageId);
+  };
+}
+
+/**
+ * __slterm_e2e_resetSettings —— spec 间隔离前端配置类 store（TQ-E-08）。
+ * 后端 settings.json 由 run-wdio.cjs 备份/还原做进程级隔离；此处管
+ * 同一 run 内跨 spec 的 Zustand 内存态（keybindings/sideBar/fontSize）。
+ * 不清 hooks 注入状态——hooks.e2e.ts 依赖 ensureHooksInjected 的幂等。
+ */
+function installSettingsHelpers(): void {
+  window.__slterm_e2e_resetSettings = () => {
+    // keybindings：清空用户覆盖 → 全部回退默认键
+    useKeybindings.setState({ overrides: {}, loaded: true });
+    // sideBar：回到生产默认态（DEFAULT_ZONES/DEFAULT_OPEN/WIDTH_DEFAULT/SPLIT_DEFAULT）
+    useSideBar.setState({
+      zones: { top: [...DEFAULT_ZONES.top], bottom: [...DEFAULT_ZONES.bottom] },
+      open: { ...DEFAULT_OPEN },
+      width: WIDTH_DEFAULT,
+      splitRatio: SPLIT_DEFAULT,
+      loaded: true,
+    });
+    // fontSize：terminal/editor 双字号回默认（FONT_SIZE_DEFAULT=14）
+    useFontSize.setState({
+      terminalFontSize: FONT_SIZE_DEFAULT,
+      editorFontSize: FONT_SIZE_DEFAULT,
+    });
   };
 }
 

@@ -85,7 +85,26 @@ describe("Agent 会话视图与 toast 通知", () => {
         return any;
       });
       if (!clicked) return;
-      await new Promise((r) => setTimeout(r, 350));
+      // 条件等待展开结果出现（替代固定 350ms sleep——TQ-E-03）：
+      // 条件 = 当前项目容器已展开（nav-row-page 已渲染）——本轮点击的 React 提交
+      // 落地后，下一轮判定（querySelectorAll nav-row-page）与后续会话行断言才基于
+      // 新 DOM。页面行无会话时展开不渲染子级容器（DOM 无变化），故以项目展开为统一
+      // 收敛点；toggleExpand 为 functional setState 逐次生效，每轮点击各自提交后
+      // 奇数次翻转必然到达展开稳态。
+      await browser.waitUntil(
+        async () =>
+          await browser.execute(() => {
+            const proj = Array.from(
+              document.querySelectorAll('[data-e2e="nav-row-project"]'),
+            ).find((p) => (p.textContent ?? "").includes("当前"));
+            if (!proj) return false;
+            const container = proj.parentElement as HTMLElement | null;
+            if (!container) return false;
+            // 展开结果：项目容器内已渲染页面行（收起态无页面容器）
+            return container.querySelectorAll('[data-e2e="nav-row-page"]').length > 0;
+          }),
+        { timeout: 5000, interval: 100, timeoutMsg: "树节点展开超时" },
+      );
     }
   }
 

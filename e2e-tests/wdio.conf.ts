@@ -51,8 +51,15 @@ export const config: WebdriverIO.Config = {
   // spec 内用例累积 ≤10 项目不触发 20 页上限；用例内多项目（agent R2）不受影响。
   beforeSuite: async function () {
     await browser.execute(() => {
-      (window as unknown as { __slterm_e2e_resetProjects?: () => void })
-        .__slterm_e2e_resetProjects?.();
+      const w = window as unknown as {
+        __slterm_e2e_resetProjects?: () => void;
+        __slterm_e2e_resetSettings?: () => void;
+      };
+      w.__slterm_e2e_resetProjects?.();
+      // TQ-E-08：settings 类 store（keybindings/sideBar/fontSize 内存态）同步隔离——
+      // 防前序 spec 的用户覆盖/侧栏形态/字号跨 spec 泄漏；后端 settings.json 由
+      // run-wdio.cjs 备份/还原兜底，此处只管同一 run 内的 Zustand 内存态
+      w.__slterm_e2e_resetSettings?.();
     });
   },
 };

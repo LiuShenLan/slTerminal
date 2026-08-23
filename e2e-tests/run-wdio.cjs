@@ -34,7 +34,8 @@ function backupFile(filePath) {
 
 /** 还原单个文件：原存在 → 先删产物再 rename 备份回来；原不存在 → 删产物 + 残留 bak。
  *  rename 失败重试（E2E-16：slterminal.exe 退出异步，exit 钩子执行时文件可能仍被
- *  占用——重试 3 次 × 500ms；仍失败 warn 明示——残留 bak 会在下次运行备份时覆盖） */
+ *  占用——重试 3 次 × 500ms；仍失败 warn 明示——残留 bak 会在下次运行备份时覆盖）
+ *  返回是否还原成功——false 由调用方 restoreAll 收集上报（TQ-E-06，静默会污染用户数据） */
 function restoreFile(filePath, existed) {
   const bakPath = filePath + '.e2e-bak';
   // E2E-13②：还原前先 rmSync 原路径（防 E2E 期间文件被删/损坏导致 rename/copy 失败、
@@ -56,8 +57,13 @@ function restoreFile(filePath, existed) {
         }
       }
     }
-  } else {
-    try { fs.rmSync(bakPath, { force: true }); } catch { /* 忽略 */ }
+    return ok;
+  }
+  try {
+    fs.rmSync(bakPath, { force: true });
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -114,41 +120,89 @@ if (projectsJsonExisted) {
   console.log('[wdio-launcher] 已清空 E2E 项目数据（slterminal-projects.json + .bak，exit 时还原）');
 }
 
-process.on('exit', () => {
+/**
+ * exit 时统一恢复用户目录（单一恢复点——三启动路径均在同一主进程 exit，有意设计见文件头）。
+ * 返回失败项描述数组：恢复失败必须可观测——静默会污染 ~/.slterminal 与 ~/.claude
+ * 真实用户数据（TQ-E-06）。恢复动作本身与改造前一致，仅 catch 时 push 失败描述而非吞掉。
+ */
+function restoreAll() {
+  const failures = [];
+  // 收集失败描述：带 err 时附加 message，便于定位根因
+  const fail = (desc, err) => {
+    failures.push(err && err.message ? `${desc}: ${err.message}` : desc);
+  };
+
   // slterminal-projects.json 还原（E2E-16——E2E 期间累积的测试项目数据丢弃）
-  restoreFile(projectsJsonPath, projectsJsonExisted);
+  if (!restoreFile(projectsJsonPath, projectsJsonExisted)) {
+    failures.push(`还原 ${projectsJsonPath} 失败（3 次重试）`);
+  }
   // .bak 还原（.e2e-bak 命名——restoreFile 的 bakPath 约定不一致，直接 rename）
   if (projectsBakExisted) {
     try {
       fs.rmSync(projectsBakPath, { force: true });
       fs.renameSync(projectsBakPath + '.e2e-bak', projectsBakPath);
     } catch (err) {
-      console.warn('[wdio-launcher] 还原 slterminal-projects.json.bak 失败:', err.message);
+      fail(`还原 ${projectsBakPath} 失败`, err);
     }
   } else {
-    try { fs.rmSync(projectsBakPath + '.e2e-bak', { force: true }); } catch { /* 忽略 */ }
+    try { fs.rmSync(projectsBakPath + '.e2e-bak', { force: true }); } catch (err) {
+      fail(`清理残留备份 ${projectsBakPath}.e2e-bak 失败`, err);
+    }
   }
   // settings.json 还原（FIX-TE-04）
-  restoreFile(settingsPath, settingsExisted);
+  if (!restoreFile(settingsPath, settingsExisted)) {
+    failures.push(`还原 ${settingsPath} 失败（3 次重试）`);
+  }
   // ~/.claude/settings.json 还原（E2E-05——agent_hooks_inject 会真实写 slterm matcher）
-  restoreFile(claudeSettingsPath, claudeSettingsExisted);
+  if (!restoreFile(claudeSettingsPath, claudeSettingsExisted)) {
+    failures.push(`还原 ${claudeSettingsPath} 失败（3 次重试）`);
+  }
   // statusline 备份文件还原（statusline 桥接注入/卸载会写删）
-  restoreFile(statuslineBackupPath, statuslineBackupExisted);
+  if (!restoreFile(statuslineBackupPath, statuslineBackupExisted)) {
+    failures.push(`还原 ${statuslineBackupPath} 失败（3 次重试）`);
+  }
   // hooks-events 清理（E2E-05——信号文件目录，watcher 消费后残留兜底删除）
-  try { fs.rmSync(hooksEventsDir, { recursive: true, force: true }); } catch { /* 忽略 */ }
+  try { fs.rmSync(hooksEventsDir, { recursive: true, force: true }); } catch (err) {
+    fail(`清理 ${hooksEventsDir} 失败`, err);
+  }
   // hooks 目录还原/清理（E2E-05）
   if (hooksBackedUp) {
     // 还原：删 E2E 产物 → 从备份复制回来 → 清 bak
-    try { fs.rmSync(hooksDir, { recursive: true, force: true }); } catch { /* 忽略 */ }
-    try { fs.cpSync(hooksDirBak, hooksDir, { recursive: true }); } catch { /* 忽略 */ }
-    try { fs.rmSync(hooksDirBak, { recursive: true, force: true }); } catch { /* 忽略 */ }
+    try { fs.rmSync(hooksDir, { recursive: true, force: true }); } catch (err) {
+      fail(`删除 E2E hooks 产物失败（${hooksDir}）`, err);
+    }
+    try { fs.cpSync(hooksDirBak, hooksDir, { recursive: true }); } catch (err) {
+      fail(`从备份还原 ${hooksDir} 失败`, err);
+    }
+    try { fs.rmSync(hooksDirBak, { recursive: true, force: true }); } catch (err) {
+      fail(`清理 hooks 备份 ${hooksDirBak} 失败`, err);
+    }
   } else if (hooksExisted) {
-    // 备份失败降级：无法还原原状——保留用户目录（日志已 warn），仅清 bak
-    try { fs.rmSync(hooksDirBak, { recursive: true, force: true }); } catch { /* 忽略 */ }
+    // 备份失败降级：无法还原原状——保留用户目录（启动时已 warn），仅清 bak
+    try { fs.rmSync(hooksDirBak, { recursive: true, force: true }); } catch (err) {
+      fail(`清理 hooks 备份 ${hooksDirBak} 失败`, err);
+    }
   } else {
     // 原本不存在 → 删除 E2E 注入产物 + 残留 bak
-    try { fs.rmSync(hooksDir, { recursive: true, force: true }); } catch { /* 忽略 */ }
-    try { fs.rmSync(hooksDirBak, { recursive: true, force: true }); } catch { /* 忽略 */ }
+    try { fs.rmSync(hooksDir, { recursive: true, force: true }); } catch (err) {
+      fail(`清理 E2E hooks 产物失败（${hooksDir}）`, err);
+    }
+    try { fs.rmSync(hooksDirBak, { recursive: true, force: true }); } catch (err) {
+      fail(`清理残留 hooks 备份失败（${hooksDirBak}）`, err);
+    }
+  }
+  return failures;
+}
+
+process.on('exit', () => {
+  const failures = restoreAll();
+  if (failures.length > 0) {
+    // 恢复失败必须可观测——静默会污染 ~/.slterminal 与 ~/.claude 真实用户数据（TQ-E-06）
+    console.error(`[wdio-launcher] 用户目录恢复失败 ${failures.length} 项:`);
+    for (const f of failures) console.error(`  - ${f}`);
+    process.exitCode = 1;
+  } else {
+    console.log('[wdio-launcher] 用户目录恢复完成（全部成功）');
   }
 });
 

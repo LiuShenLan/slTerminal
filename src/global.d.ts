@@ -36,6 +36,8 @@ declare global {
     __slterm_e2e_addPage?: (projectId: string, name: string, rootPath: string) => string;
     /** 切换活跃页面 */
     __slterm_e2e_switchToPage?: (pageId: string) => void;
+    /** 重置前端配置类 store（keybindings/sideBar/fontSize 内存态）——wdio beforeSuite 调用（TQ-E-08） */
+    __slterm_e2e_resetSettings?: () => void;
     /** 注册编辑器并重算标题 */
     __slterm_e2e_registerAndRecompute?: (
       pageId: string,

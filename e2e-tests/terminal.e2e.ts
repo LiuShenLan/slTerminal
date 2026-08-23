@@ -84,7 +84,7 @@ describe("slTerminal E2E", () => {
 });
 
 describe("键盘快捷键", () => {
-  it("终端面板可通过 E2E helper 写入文本并读取", async () => {
+  it("终端面板可通过 E2E helper 写入文本并读取（按键链路豁免见 inventory）", async () => {
     // 1. 创建新终端面板
     const panelId = "e2e-paste-" + Date.now();
     await addTerminalPanel(panelId);
@@ -101,6 +101,15 @@ describe("键盘快捷键", () => {
       // clipboard writeText 返回 Promise，但 browser.execute 支持 async 回调
       return writeClipboard(text);
     }, "e2e_paste_marker");
+
+    // 3.5. 剪贴板真实写入断言（不依赖按键投递）：写入后经生产剪贴板读取通道读回——
+    //      读取路径与 history.e2e.ts 复制恢复命令用例同款（clipboard-manager read_text，
+    //      capabilities 已放行 allow-read-text；browser.execute 支持 async 回调）
+    const clipText = await browser.execute(async () => {
+      const t = await (window as any).__TAURI_INTERNALS__.invoke("plugin:clipboard-manager|read_text");
+      return typeof t === "string" ? t : "";
+    });
+    expect(clipText).toBe("e2e_paste_marker");
 
     // 4. 聚焦终端 xterm textarea
     await browser.execute(() => {
