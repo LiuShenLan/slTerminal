@@ -2,92 +2,59 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## 目录职责
+## 存在理由
 
-`src/stores/` 是 Zustand 状态管理层——项目唯一的全局状态真值来源。每个 store 覆盖一类状态域，面板只订阅（`useXxx((s) => s.field)`），不自存状态。PTY 进程映射在 `panels/terminal/TerminalRegistry`（模块级 Map）管理（硬约束 #8）。
+Zustand 全局状态真值来源。每个 store 覆盖一类状态域，面板只订阅，不自存状态（硬约束 #12）。PTY 进程映射在 `panels/terminal/TerminalRegistry` 管理。
 
-## Store 清单
+## 关键约束与决策
 
-### `layout.ts` — 布局状态
+### Store 纯状态（硬约束 #12）
 
-- 极简 store：仅跟踪 `activePageId: string | null`，通过 `setActivePage` 设置。
-- **不持有布局数据**——布局序列化数据（Dockview `toJSON/fromJSON`）存在 `projects.ts` 的 `OperationPage.layout` 字段。
+- `src/stores/` 只存状态与状态转换，不存业务逻辑（校验/映射/编排放到注册表、纯函数或上层组件）。
+- 持久化一律经 `src/ipc/` 对应领域函数：settings 类（`fontSize` / `keybindings` / `sideBar`）走 `src/ipc/settings`；项目数据（`projects`）走 `src/ipc/projects`。
+- 禁止在 store 内直接调用 Tauri `invoke`；禁止跨 store 隐式依赖，store 间协调在上层组件/命令中完成。
 
-### `fontSize.ts` — 字体大小设置
+### 持久化模式
 
-- 终端/编辑器独立字体大小（`terminalFontSize` / `editorFontSize`），默认 14，范围 [8, 32]。
-- setter 内部 clamp，变更通过 Zustand `subscribe` + 2s debounce 自动保存到 exe 同级 `settings.json` 的 **fontSize 段**。
-- **段形态契约（断链修复，2026-08）**：payload 顶层键必须是 `fontSize`（`{ fontSize: { terminalFontSize, editorFontSize } }`）——与 sideBar/keybindings「各 store 各写各的段」一致，后端 SEC-11 白名单只接受段名键；曾发平铺 `terminalFontSize`/`editorFontSize` 顶层键导致每次保存被拒（用户配置静默丢失 + 启动恒弹「设置保存失败」toast）。双侧测试锁死：前端 payload 键集合精确断言 + 后端平铺拒绝/fontSize 段放行用例。
-- `loadFromDisk()` 读 `saved.fontSize` 段（段缺失/非对象 → 默认值），在 App 启动时调用，先于项目数据加载。
-- `loaded` 守卫防止启动加载阶段触发空写。
-- IP 调用：通过 `src/ipc/settings` 的 `loadSettings` / `saveSettings` 读写磁盘。
-- **FE-09 保存失败 toast**：`saveSettings` 失败统一 `toast.show("warning", "设置保存失败，重启后将丢失")` + `console.warn`（不再静默）。
-- **FE-11 corrupted 消费**：`loadSettings` 返回 `{ data, corrupted }`——`corrupted: true`（解析失败回退默认，含 .bak 命中）时 `toast.show("warning", "配置已损坏，已回退默认值")`。
+settings 类三 store 与 `projects` 均遵循同一模式：
 
-### `keybindings.ts` — 快捷键自定义绑定（用户覆盖层）
+- 启动时 `loadFromDisk()` 恢复；`loaded` 守卫防止加载阶段触发空写。
+- 变更后 Zustand `subscribe` + 2s debounce 自动保存。
+- `markPersistenceReady()`（projects）/ `loaded = true`（settings）在加载完成后置位。
+- `cancelPendingSave()` 供关闭钩子冲刷未落盘的 timer。
 
-- `overrides: Record<commandId, keystrokeString | null>`——用户对命令的重绑（`null` = 解绑，缺省 = 用默认键）。持久化于 `~/.slterminal/settings.json` 的 `keybindings` 段。
-- 操作：`setBinding(id, ks|null)` / `clearBinding(id)` / `resetAll`。
-- `loadFromDisk` 读 `saved.keybindings` 并 **sanitize**（只保留值为 `string|null` 的项，丢弃脏数据）。`loaded` 守卫防启动空写；变更 2s debounce 保存。
-- **独立写入靠后端浅合并**：`save_settings` 只写 `{ keybindings }` slice，后端 `settings.rs` 浅合并 top-level 键，不擦除 `fontSize` 等其他段（故 `fontSize.ts` 无需改动，两 store 各写各的互不覆盖）。
-- overrides 经 `App.tsx` 的 `wireKeybindings(getShortcutRegistry(), useKeybindings)` 注入 `ShortcutRegistry.setOverrides` 构建绑定表。
-- 与 `src/features/shortcuts` 的关系：本 store 只存覆盖数据，校验/降级/绑定表构建在注册表侧（`isReserved` + `effectiveKeystroke`）。
-- **FE-09 保存失败 toast + FE-11 corrupted 消费**：同 `fontSize.ts`——保存失败 toast 告警、load 返回 `corrupted` 时 toast「配置已损坏，已回退默认值」。
+### 段形态契约（断链修复）
 
-### `sideBar.ts` — 侧栏视图状态
+settings 类 store 保存时顶层键必须是段名（`fontSize` / `keybindings` / `sideBar`），后端 `settings.rs` 浅合并 top-level 键。`fontSize.ts` 曾因平铺 `terminalFontSize` / `editorFontSize` 顶层键被 SEC-11 白名单拒绝，导致配置静默丢失；现 payload 精确写段，双侧测试锁死。
 
-- 状态形状：`zones: Zones`（按钮归属——`{top: string[], bottom: string[]}`）、`open: OpenState`（各半区打开的视图 id——`{top: string|null, bottom: string|null}`）、`width: number`（侧栏区宽度，默认 250，范围 [160, 500]）、`splitRatio: number`（上下分割比例，默认 0.5，范围 [0.1, 0.9]）。
-- 默认态：`DEFAULT_ZONES = {top:["nav","explorer","commit"], bottom:[]}`、`DEFAULT_OPEN = {top:"nav", bottom:null}`（NAV-05 三槽重组；原 `projects`/`agent-status` 视图随 NAV-06/08 退役）。
-- 操作方法：`toggleView(id)` / `moveButton(id, zone, index)` 委托 `sideBarState` 纯函数；`setWidth` / `setSplitRatio` 内部 clamp。
-- 持久化照 `fontSize.ts` 模式：`loadFromDisk` 读 `~/.slterminal/settings.json` 的 `sideBar` 段 → `sanitizeSideBar`（校验+clamp）→ `reconcileZones`（对齐注册表）→ 置 `loaded:true`；变更后 2s debounce → `saveSettings({sideBar})`（后端浅合并，不擦 fontSize/keybindings 段）。
-- **FE-09 保存失败 toast + FE-11 corrupted 消费**：同 `fontSize.ts`——保存失败 toast 告警、load 返回 `corrupted` 时 toast「配置已损坏，已回退默认值」。
-- 导出 `cancelPendingSave()` 供 App 关窗冲刷。
+### FE-09 / FE-11 统一消费
 
-### `projects.ts` — 项目/操作页面数据模型与持久化
+- **FE-09 保存失败**：`saveSettings` / `saveProjects` 失败统一 `toast.show("warning", "设置保存失败，重启后将丢失")`。
+- **FE-11 corrupted**：`loadSettings` / `loadProjects` 返回 `{ data, corrupted }`，`corrupted: true` 时 toast「配置已损坏，已回退默认值」。
 
-- 二级模型：`Project` → `OperationPage[]`。面板由 Dockview 管理，不在此 store。
-- 所有变更操作（CRUD + rename + switchToPage + updatePageLayout）自动递增 `project.version`。
-- **switchToPage 为纯状态转换（FE-37：setProjectRoot 已上提调用方 switchToPageShared，约束 #12 合规）**——store action 不触 IPC，页面切换的 setProjectRoot 前置由 `src/workspace/pageApis.ts` 的 `switchToPageShared` 承担。
-- **页面总数上限（FE-01，FE-36 全局化）**：`MAX_PAGES = 20` 常量——`addPage` 超限拒绝新增 + toast 告警（防多 Dockview 实例内存/DOM 无界增长，豁免登记见 workspace/CLAUDE.md + ADR）；**FE-36：上限按跨项目全局页面总数计数**（`Object.values(projects).flatMap(p => p.pages).length`）——项目自身未达上限也可能因其他项目占额而被拒绝。
-- **持久化**：
-  - 启动时调用 `loadAllProjects()` 从 exe 同级 `slterminal-projects.json` 恢复（路径由 Rust `projects.rs` 解析，绕过路径 sandbox；**FE-11：`loadProjects` 返回 `{ data, corrupted }`**——损坏时回退默认并 toast「配置已损坏，已回退默认值」）。
-  - 变更通过 Zustand `subscribe` + 2s debounce 自动调用 `saveAllProjects()` 保存。
-  - 初始化标记 `markPersistenceReady()` 必须在 `loadFromDisk` 之后调用，防止首次加载触发空写。
-  - 关闭钩子中调用 `cancelPendingSave()` 避免竞态。
-- **ID 生成**：`createProjectId()` / `createPageId()` 使用 `nextId()`（组合时间戳+自增计数器），确保单运行期内唯一。
-- **展开状态**：`expandedNodes` 跟踪侧栏树的折叠/展开状态，随 Project/Page 增删联动清理。
-- **IP 调用**：通过 `src/ipc/projects` 的 `loadProjects` / `saveProjects` 读写磁盘（专属命令，不经 `fs_read_file`/`fs_write_file` 路径 sandbox）。
+### FE-01 / FE-36 页面总数上限
 
-## 消费模式
+- `MAX_PAGES = 20`：多 Dockview 实例架构每页一实例，上限防内存/DOM 无界增长。
+- **FE-36 全局化**：按跨项目全局页面总数计数（`Object.values(projects).flatMap(p => p.pages).length`），项目自身未达上限也可能因其他项目占额而被拒绝。
+- 超限 `addPage` 返回 `false` + toast「页面数已达上限」。
 
-- **React 组件**通过 selector 订阅：`useProjects((s) => s.projects)`，Zustand 自动追踪 selector 返回值变化触发重渲染。
-- **非 React 代码**（事件处理、清理钩子）用 `.getState()` 读写当前快照：`useProjects.getState().removePage(projId, pageId)`。
-- 两类访问方式可混用——selector 用于渲染绑定，`getState()` 用于一次性副作用。
+### FE-37 switchToPage 纯状态转换
 
-## 测试
+`switchToPage` 为纯状态转换，不触 IPC。页面切换的 `setProjectRoot` 前置由 `src/workspace/pageApis.ts` 的 `switchToPageShared` 承担，符合硬约束 #12。
 
-### 测试文件
+### sideBar 默认态
 
-| Store | 测试文件 | 用例数 | 覆盖范围 |
-|-------|---------|--------|---------|
-| `projects` | `projects.test.ts` | 50 | Project/Page CRUD、持久化（loadFromDisk/saveToDisk）、version 递增、ID 生成、subscribe+debounce 持久化链（`_resetPersistence()` 测试辅助）、**FE-01/FE-36 页面数上限 MAX_PAGES（跨项目全局计数，超限拒绝 + toast）**、FE-11 corrupted 回退 |
-| `sideBar` | `sideBar.test.ts` | 24 | 默认值/toggle/move 经 store 委托纯函数、setWidth/setSplitRatio clamp（含 NaN/Infinity 回退，SVC-13）、loadFromDisk 5 分支（合法/脏数据/缺失/异常/reconcileZones）、loaded 守卫、2s debounce saveSettings({sideBar}) payload 键集合精确匹配、**FE-09 保存失败 toast + FE-11 corrupted toast** |
-| `layout` | `layout.test.ts` | 4 | activePageId 设置/清空/重复 |
-| `fontSize` | `font-size.test.ts` | 21 | 默认值、clamp、loadFromDisk（多种分支，含段缺失/非对象）、debounce 持久化、**payload 键集合精确匹配（fontSize 段契约锁死）**、**FE-09 保存失败 toast + FE-11 corrupted toast** |
-| `keybindings` | `keybindings.test.ts` | 19 | 默认空、setBinding/clearBinding/resetAll、loadFromDisk（合法/sanitize 脏值/缺失/非对象/异常）、loaded 守卫、debounce → saveSettings({keybindings})、**FE-09 保存失败 toast + FE-11 corrupted toast** |
-| 启动链 | `startup-store-fail-warn.test.tsx` | 2 | **FE-03 启动链告警**：App 启动三 store（fontSize/keybindings/sideBar）loadFromDisk 失败/损坏时 toast 告警路径 |
+默认 `zones.top = ["nav", "explorer", "commit"]`、`open.top = "nav"`；`projects` / `agent-status` 视图随 NAV-06/08 退役。
 
-### 测试模式
+## 测试模式
 
-- **使用真实 store 而非 mock**：Zustand `create()` 创建的真实 store，`beforeEach` 中 `.setState()` 重置到初始状态
-- **`getState()` 直接操作**：测试不依赖 React 渲染，通过 `.getState()` 操作和断言——避免 jsdom 无关的环境差异
-- **持久化测试**（projects / fontSize）：mock `src/ipc/fs` 或 `src/ipc/settings` 返回模拟数据，验证 save/load 往返 + 异常降级 + `loaded` 守卫
-- **debounce 测试**：用 `vi.useFakeTimers()` + `vi.advanceTimersByTime()` 控制时间，验证 debounce 窗口内的批量保存。projects 的 `_resetPersistence()` 测试辅助函数（仅 `#[cfg(test)]` 可见）重置 `initialized` 守卫和 timer，支持连续多个 debounce 测试
-- **运行**：`npm test`（Vitest，含在 L2 全量中）
+- **真实 store**：测试用 Zustand `create()` 创建真实 store，`beforeEach` 用 `.setState()` 重置。
+- **`getState()` 直接操作**：不依赖 React 渲染，直接操作和断言。
+- **持久化测试**：mock `src/ipc/settings` 或 `src/ipc/projects`，验证 save/load 往返 + 异常降级 + `loaded` 守卫。
+- **debounce 测试**：`vi.useFakeTimers()` + `vi.advanceTimersByTime()`；projects 用 `_resetPersistence()` 辅助函数重置 `initialized` 和 timer。
 
-## 新增 Store 规则
+## 运行
 
-1. 新 store 文件放在 `src/stores/` 下。
-2. 在 `index.ts` 中 re-export store hook 和类型。
-3. 持久化按数据类型委托对应 IPC 模块：settings 类（`fontSize`/`keybindings`）走 `src/ipc/settings`（`~/.slterminal/settings.json`）；项目数据类（`projects`）走 `src/ipc/fs`（`slterminal-projects.json`）。不在 store 内直接调用 Tauri `invoke`。
-4. 避免跨 store 的隐式依赖——store 之间如需协调，在上层组件或命令中完成。
+```bash
+npm test
+```
