@@ -13,7 +13,7 @@ _Avoid_: workspace, repo
 _Avoid_: 操作页, tab, 标签页
 
 **硬约束**（Hard Constraints）：
-11 条不可违背的架构规则，编号 #1–#11，分别约束 IPC 边界、模块隔离、面板注册、配色、布局、会话、平台代码、权限、测试覆盖等方面。任何新增功能必须遵守。
+13 条不可违背的架构规则，编号 #1–#13，约束 IPC 边界、模块隔离、面板注册、配色、布局、会话、平台代码、权限、测试覆盖、store 纯态、注册表家族等方面。新增功能必须遵守。完整清单见 `.claude/CLAUDE.md`。
 
 ---
 
@@ -24,22 +24,22 @@ Dockview 布局中可托管的最小 UI 单元。每个面板属于一种面板�
 _Avoid_: 窗格, 视图
 
 **面板类型**（Panel Type）：
-面板的分类。当前有 6 种：terminal / editor / htmlviewer / gitshow / diff / hooksConfig（注册 id 与 panelRegistry.ts 一致）。新增面板类型需在面板注册表中显式注册。布局恢复时会过滤掉未注册的面板类型。
+面板的分类。当前有 6 种：terminal / editor / htmlviewer / gitshow / diff / hooksConfig（注册 id 与 `panelRegistry.ts` 一致）。新增面板类型需在面板注册表中显式注册。布局恢复时会过滤掉未注册的面板类型。
 
 **面板实例**（Panel Instance）：
 具体的一个面板，有唯一标识符，可被创建、关闭、拖拽分屏。
 
 **终端面板**：
-xterm.js 驱动的终端面板。每个终端面板对应一个 PTY 会话，提供命令行交互。渲染优先使用 WebGL，不可用时回退 DOM 渲染。每个终端面板在 React 挂载时创建新的 xterm.js 实例。
+xterm.js 驱动的终端面板。每个终端面板对应一个 PTY 会话，提供命令行交互。
 
 **编辑器面板**：
-CodeMirror 6 驱动的文件编辑器面板。支持语法高亮热切换、Ctrl+S 保存、git 差异 gutter 标记、脏状态跟踪。
+CodeMirror 6 驱动的文件编辑器面板。
 
 **页签标题**（Tab Title）：
-Dockview 标签页上显示的文字。终端为 `terminal-N`（每页独立编号），编辑器为文件名（冲突时用相对路径）。标题由集中的标题管理器计算，布局持久化时不保存标题——从文件路径恢复。
+Dockview 标签页上显示的文字。终端为 `terminal-N`（每页独立编号），编辑器为文件名（冲突时用相对路径）。
 
 **文件查看器注册表**（FileViewerRegistry）：
-策略模式单例，根据文件扩展名决定用哪种面板类型打开文件。策略链式匹配、命中即返回，未命中回退编辑器面板；当前注册 `.html`/`.htm` → HTML 预览面板。由文件浏览器和 Commit 视图共用（详见 fileViewers 模块文档）。
+策略模式单例，根据文件扩展名决定用哪种面板类型打开文件。命中即返回，未命中回退编辑器面板；当前注册 `.html`/`.htm` → HTML 预览面板。由文件浏览器和 Commit 视图共用（详见 fileViewers 模块文档）。
 _Avoid_: 文件类型映射
 
 ---
@@ -122,7 +122,7 @@ _Avoid_: 页面, 面板
 ## 文件系统
 
 **文件浏览器**：
-以侧栏视图形式展示的文件树。展示活跃项目根目录的文件结构，支持创建/删除/重命名/打开文件，git 状态着色，并对文件系统变更事件做增量刷新。双击文件通过文件查看器注册表决定用哪种面板类型打开——`.html`→HTML 预览面板，其余→编辑器面板。
+以侧栏视图形式展示的文件树。展示活跃项目根目录的文件结构，支持创建/删除/重命名/打开文件，git 状态着色，并对文件系统变更事件做增量刷新。双击文件通过文件查看器注册表决定用哪种面板类型打开。
 
 **文件监听器**（FileWatcher）：
 基于操作系统文件变更通知的监听器。递归监听目录树，去抖后广播变更事件到前端。
@@ -154,7 +154,7 @@ _Avoid_: 暂存区列表
 Commit 视图中展示未跟踪文件的分组——状态为 untracked 的文件。按相对路径字母序排列。
 
 **状态分派**（Status Dispatch）：
-Commit 视图中双击文件条目时，git 状态到面板类型的映射规则。modified/renamed/conflict → diff 面板（双栏对比），deleted → gitshow 面板（只读查看 HEAD 版本），added/untracked → editor 面板（普通编辑）。页签标题带后缀区分（如 `(git diff)`、`(git delete)`、`(git add)`）。
+Commit 视图中双击文件条目时，git 状态到面板类型的映射规则。modified/renamed/conflict → diff 面板，deleted → gitshow 面板，added/untracked → editor 面板。页签标题带后缀区分（如 `(git diff)`、`(git delete)`、`(git add)`）。
 
 ---
 
@@ -210,13 +210,13 @@ slTerminal 感知 CC hook 事件与 context 用量信号的主通道。注入用
 context 官方用量百分比的数据通道。注入 settings.json `statusLine` 键指向桥接脚本——claude 每次渲染状态行经 stdin 传入 statusline JSON（含 `context_window.used_percentage` 官方口径），桥接脚本节流后写 ContextUsage 信号文件（复用信号文件通道），并透传执行用户原 statusline 命令（包裹透传，注入时备份原配置、关闭时恢复、重开自动重注入）。
 
 **ContextUsage 信号**：
-statusline 桥接脚本产出的信号事件（event = `ContextUsage`），payload 携带 `usedPercentage`（claude 官方 `context_window.used_percentage`，0–100 float）。前端行更新 usage 后经 profile `computeUsagePercent` 策略取整钳位渲染（claude = round + clamp 0–100）。
+statusline 桥接脚本产出的信号事件（event = `ContextUsage`），payload 携带 `usedPercentage`（claude 官方 `context_window.used_percentage`，0–100 float）。前端行更新 usage 后经 profile `computeUsagePercent` 策略取整钳位渲染。
 
 **SLTERM_PANEL_ID**：
 pty_spawn 时注入子进程环境块的环境变量。经 shell → claude → hook 脚本继承链传递并写入信号文件，实现会话→页签的精确路由（不用 cwd 猜测）。
 
 **四态**：
-页签图标的四种编码 CLI 会话状态——工作⚡、注意🟡、完成✅、错误❌。跨 CLI 归一状态模型，各 CLI profile 经 eventToStatus 策略把自有事件映射进四态；无 hooks 能力的 CLI 走 OSC 133 双态（🟡 运行中/无图标）。F3 专有术语，触发源映射见 panels 模块文档。
+页签图标的四种编码 CLI 会话状态——工作、注意、完成、错误。跨 CLI 归一状态模型，各 CLI profile 经 eventToStatus 策略把自有事件映射进四态；无 hooks 能力的 CLI 走 OSC 133 双态。F3 专有术语，触发源映射见 panels 模块文档。
 
 **注入 / 卸载**：
 把 slTerminal 状态上报 hook 配置 merge 写入 user 层 settings.json（注入），或干净移除配置段与脚本文件（卸载）。仅手动按钮触发，不做启动引导。
@@ -228,11 +228,11 @@ CC settings.json 的三个编辑层级——user（`~/.claude/settings.json`）�
 hooks 配置编辑面板的两种编辑模式——GUI 表单（Master-Detail）与 JSON 编辑器（CM6 + Schema 校验），顶部切换、实时同步编辑同一份配置。
 
 **Agent Status 视图**：
-~~侧栏视图（id `agent-status`，图标 🤖），一屏总览当前活跃项目所有运行中的编码 CLI 会话——四态、上下文用量条、最后事件时间，点击行跳转聚焦对应终端页签。会话退出行即移除，非历史列表。~~ **已退役（2026-08 实现期）**：视图并入统一导航树（NavTree 活跃会话区，UI 重设计 ADR-0003），`useAgentStatus` 数据层留存供导航树消费（详见 agentStatus 模块文档）。
+~~侧栏视图（id `agent-status`），一屏总览当前活跃项目所有运行中的编码 CLI 会话。~~ **已退役（2026-08）**：视图并入统一导航树（NavTree 活跃会话区，UI 重设计 ADR-0003），`useAgentStatus` 数据层留存供导航树消费（详见 agentStatus 模块文档）。
 _Avoid_: agent 面板, 会话列表
 
 **会话行**：
-统一导航树活跃会话区中的一行，对应一个**运行中的编码 CLI 会话**（非终端面板——纯 shell 终端无行）。经 OSC 133 C（命令检测，未注入 hooks 的会话也有行，圆点黄、用量条不可用态）或 SessionStart（agent-event 事件）建立；上下文用量由 ContextUsage 信号（statusline 桥接通道，官方 used_percentage 口径）事件驱动更新、不轮询。
+统一导航树活跃会话区中的一行，对应一个**运行中的编码 CLI 会话**（非终端面板——纯 shell 终端无行）。经 OSC 133 C 或 SessionStart 建立；上下文用量由 ContextUsage 信号事件驱动更新、不轮询。
 _Avoid_: 终端行
 
 ---
@@ -262,10 +262,10 @@ UI 背景色的 6 档离散取值（l0-content `#0a0a0b` → l5-active `#2b2b31`
 暗色界面分隔线的唯一形态——半透明白 1px 线，两档：默认 `rgba(255,255,255,0.055)`（sash/栏底线/侧栏边线/树引导线）、加强 `rgba(255,255,255,0.09)`（浮层与输入框描边）。禁止实色粗边框。
 
 **统一导航树**：
-侧栏导航视图的信息架构——树层级恰为 项目 → 页面 → 会话，活跃会话挂页面下、历史会话折叠为计数节点挂项目下；文件浏览器不在树内，是活动栏独立视图。活动栏固定三槽：导航树 / 文件 / Commit，底部「配置」钮（hooks 配置面板唯一入口）。
+侧栏导航视图的信息架构——树层级恰为 项目 → 页面 → 会话，活跃会话挂页面下、历史会话折叠为计数节点挂项目下；文件浏览器不在树内，是活动栏独立视图。活动栏固定三槽：导航树 / 文件 / Commit，底部「配置」钮。
 
 **状态圆点**：
-会话运行状态的可视化——7px 圆点，F3 四态完整映射：working→绿=运行、attention→黄=等待、done→灰=空闲/结束、error→红=错误；出现于会话行与终端页签（写死契约见 src/lib/StatusDot.tsx）。替代 F3 四态 emoji 的视觉呈现（状态语义来源不变）。
+会话运行状态的可视化——7px 圆点，F3 四态完整映射：working→绿=运行、attention→黄=等待、done→灰=空闲/结束、error→红=错误；出现于会话行与终端页签。替代 F3 四态 emoji 的视觉呈现（状态语义来源不变）。
 
 **双轨配色**：
 UI 壳层与内容区配色各自独立的用色体系——壳层走明度阶梯+单强调色（`#6e9ff2`），终端 ANSI 16 色与编辑器语法色自成暖协调色板，两轨不混用 token。
@@ -279,9 +279,9 @@ UI 壳层与内容区配色各自独立的用色体系——壳层走明度阶�
 | 操作页 | 操作页面 | 省略"面"字不正式，统一全称 |
 | 会话（当指 PTY 时） | PTY 会话 | 前端 SessionInfo 和后端 PtySession 是不同概念，不可混用 |
 | 窗格 | 面板 | 统一使用 Dockview 的 "panel" 对译 |
-| 标签页 | 页签标题 / 操作页面 | "标签页"既可能指 Dockview tab（标题），也可能指 OperationPage（页面切换），避免多义 |
+| 标签页 | 页签标题 / 操作页面 | "标签页"既可能指 Dockview tab，也可能指 OperationPage，避免多义 |
 | 四态（当指侧栏布局/Commit 状态机时） | 四布局态 / 四渲染态 | F3 页签四态为专有术语，其他概念避免裸用 |
 | 双通道（当指 hooks 消费架构时） | notify+轮询双通道 | 与 F5 行建模"双通道建行"区分 |
 | `hook-event` / `onHookEvent` | `agent-event` / `onAgentEvent` | 信号广播按 agent 域泛化（MC-202） |
-| `claude_history_*` / `claudeHistory` / `claude-history-*` | `agent_history_*` / `agentHistory` / `agent-history-*` | 历史会话模块泛化为 CLI 无关（MC-5 命名去 claude 化） |
+| `claude_history_*` / `claudeHistory` / `claude-history-*` | `agent_history_*` / `agentHistory` / `agent-history-*` | 历史会话模块泛化为 CLI 无关（MC-5） |
 | `claudeSession` / `setClaudeSession` | `agentSession` / `setAgentSession` | 会话模型泛化（MC-402） |
