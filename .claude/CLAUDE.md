@@ -13,29 +13,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 文档规范
 
-当前项目中存在大量文档，所有非代码文档（CLAUDE.md、设计文档、测试清单等）遵循渐进式披露原则，只有在读取对应目录下的代码后，才需要读取该目录对应的CLAUDE.md文件
-
-- **收录判定**：跨 ≥2 个模块适用、或每次会话必需的指令才入根文件；只在触碰某模块时才需要的细节，归该模块子路径的 `CLAUDE.md`
-- **子文件创建**：新建模块目录时同步创建该路径的 `CLAUDE.md`，并登记下方模块索引
-- **子文件模板**：职责 → 架构决策（关键约束）→ 文件表 → 测试模式（可选）
-- 修改或新增代码时，同步更新所属子路径的 CLAUDE.md，不在根文件展开细节
-- 配套文档：领域术语表见根目录 `@../CONTEXT.md`；架构决策记录见 `@.claude/adr.md`；测试用例清单见 `@.claude/test-inventory.md`
-- 及时同步: 当代码开发、测试用例修改等完成后，需要遵循渐进式披露的原则，将变动记录到合适的 CLAUDE.md 文件中
+- **代码自证原则（ADR-0011）**：凡能通过阅读代码直接理解的信息（模块职责、文件清单、入口路径、接口签名、数据流、技术栈、现状描述等）一律不写入文档——此类内容必然腐化为失真文档。文档只记录代码无法自证的信息：设计决策与原因（why）、外部依赖的坑与红线、操作指令、约定与豁免登记。
+- **渐进式披露**：读取某目录代码后，才需要读取该目录的 CLAUDE.md。
+- **收录判定**：跨 ≥2 个模块适用、或每次会话必需的指令入根文件；仅触碰某模块才需要的归该模块子路径 CLAUDE.md。
+- **子文件创建**：新建模块目录时同步创建该路径 CLAUDE.md，并登记下方模块索引。
+- **子文件模板**：存在理由（一段话：为何需要此模块/不这么设计会怎样）→ 关键约束与决策（why）→ 外部坑/红线 → 测试模式（仅非显而易见部分）。不写「职责」「文件表」（代码自证）。
+- **及时同步**：改动约定/决策/红线时同步对应 CLAUDE.md；只改实现不改约定时无需动文档。
+- 配套文档：领域术语表 `@../CONTEXT.md`；架构决策记录 `@.claude/adr.md`；测试用例清单 `@.claude/test-inventory.md`。
 
 ## 架构（两进程模型）
 
-**Rust 后端拥有一切 OS 访问；Web 前端只做 UI，经 IPC 调用后端。**
+**Rust 后端拥有一切 OS 访问；Web 前端只做 UI，经 IPC 调用后端。**（技术选型清单读 package.json / Cargo.toml 即得，不复述。）
 
-- 外壳 Tauri 2（系统 WebView2，不打包 Chromium）。
-- 前端 React + TypeScript + Vite，状态用 Zustand。
-- 终端 xterm.js（`xterm/addon-webgl` + `addon-fit`）；编辑器 CodeMirror 6；布局 Dockview。
-- 后端 portable-pty（Windows→ConPTY）、git2、notify。
-
-目录结构原则：实现落到既定分层，不另起炉灶。
-- 前端 `src/`：`ipc/`（唯一通信层）、`types/`、`stores/`、`workspace/`、`panels/`、`features/`、`theme/`、`lib/`。
-- 后端 `src-tauri/src/`：`lib.rs`（注册命令/State/run）、`error.rs`、`state.rs` + 功能模块。
-
-现行模块清单以下方「模块索引」为准。
+目录结构原则：实现落到既定分层，不另起炉灶。现行模块清单以下方「模块索引」为准。
 
 ## 硬性开发约束（新增功能必须遵守）
 
@@ -82,12 +72,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 四级测试金字塔，按执行速度和隔离度分层。完整用例清单 → `@.claude/test-inventory.md`。
 
-| 层级 | 名称 | 技术栈 | 运行命令 | 用例数 |
-|------|------|--------|----------|--------|
-| L1 | Rust 单元/集成 | `cargo test`、`tempfile` 隔离 | `cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1` | 见 test-inventory |
-| L2 | 前端单元/集成 | Vitest + jsdom | `npm test` | 见 test-inventory |
-| L3 | 终端 headless 渲染 | Vitest + `xterm/headless` | `npm run test:l3` | 见 test-inventory |
-| L4 | 端到端 (E2E) | WDIO + embedded driver | `npm run e2e`（= `build:e2e` + `wdio`） | 见 test-inventory |
+| 层级 | 名称 | 技术栈 | 运行命令 |
+|------|------|--------|----------|
+| L1 | Rust 单元/集成 | `cargo test`、`tempfile` 隔离 | `cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1` |
+| L2 | 前端单元/集成 | Vitest + jsdom | `npm test` |
+| L3 | 终端 headless 渲染 | Vitest + `xterm/headless` | `npm run test:l3` |
+| L4 | 端到端 (E2E) | WDIO + embedded driver | `npm run e2e`（= `build:e2e` + `wdio`） |
 
 核心原则：
 - **隔离优先**：L1 用 `tempfile::tempdir()` 隔离文件系统、`SPAWN_LOCK` 串行化 PTY；L2 用 `vi.mock()` 隔离 IPC/终端库；L4 用 embedded driver 隔离浏览器依赖
@@ -111,41 +101,41 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 模块索引
 
-登记规则：增删模块时同步增删行；模块新建子路径 CLAUDE.md 后在「详情」列补链接。
+登记规则：增删模块时同步增删行。职责与入口读代码即得（代码自证原则），此表仅作子 CLAUDE.md 导航。
 
-| 模块 | 职责 | 入口 | 详情 |
-|------|------|------|------|
-| src/ipc | IPC 通信层，前端 invoke 唯一入口（含 window 窗口控制三 wrapper——自绘标题栏用；dialog 仅 open/save 文件对话框，ask 已删） | src/ipc/index.ts | ../src/ipc/CLAUDE.md |
-| src/types | DTO 类型定义，与 Rust 模块双边对应（硬约束 #4） | src/types/ | ../src/types/CLAUDE.md |
-| src/stores | Zustand 状态管理（projects/layout/fontSize/keybindings/sideBar） | src/stores/index.ts | ../src/stores/CLAUDE.md |
-| src/workspace | 工作区布局管理（Dockview serde + 面板注册 + titleManager + pageApis + DefaultTab 页签形态——状态圆点 + CLI logo） | src/workspace/Workspace.tsx | ../src/workspace/CLAUDE.md |
-| src/panels | Dockview 面板系统（terminal + editor + html + gitshow + diff + hooksConfig） | src/panels/index.ts | ../src/panels/CLAUDE.md |
-| src/lib | 通用工具 + icons（lucide 线性图标单点封装）+ StatusDot（状态圆点）+ ConfirmDialog/toast（应用内浮层）+ createActivePointer + useFontSizeWheel + ErrorBoundary + E2E_ENABLED 门控 + 路径函数 | src/lib/index.ts | ../src/lib/CLAUDE.md |
-| src/theme | 配色方案单点（schemes/ 值文件 + SchemeRegistry + colors.ts facade，硬约束 #6） | src/theme/colors.ts | ../src/theme/CLAUDE.md |
-| src/features/explorer | 文件浏览器（FileTree + 选中模型 + 键盘快捷键 + useFileTree + FileViewerRegistry 分派） | src/features/explorer/ExplorerPanel.tsx | ../src/features/explorer/CLAUDE.md |
-| src/features/fileViewers | 文件查看器注册表（策略模式，扩展名→面板类型映射） | src/features/fileViewers/index.ts | ../src/features/fileViewers/CLAUDE.md |
-| src/features/shortcuts | 快捷键模块（ShortcutRegistry 单例 + usePanelFocus + Command/Keybinding 分离 + 用户重绑定） | src/features/shortcuts/index.ts | ../src/features/shortcuts/CLAUDE.md |
-| src/features/sidebar | SidebarTree 已退役（2026-08 并入 navTree 统一导航树，NAV-06；目录仅存历史文档） | — | ../src/features/sidebar/CLAUDE.md |
-| src/features/navTree | 统一导航树（项目→页面→会话 + 历史折叠节点挂项目下；NavTree + useNavTree + makeEmptyLayout 迁自 SidebarTree，NAV-01~04/06/09） | src/features/navTree/index.ts | ../src/features/navTree/CLAUDE.md |
-| src/features/titleBar | 自绘一体化标题栏（34px + 窗口控制三钮 + data-tauri-drag-region 拖拽 + 双击最大化，decorations:false，TB-01~05） | src/features/titleBar/TitleBar.tsx | ../src/features/titleBar/CLAUDE.md |
-| src/features/sideViews | 侧栏视图系统——活动栏（46px 三槽：导航树/文件/Commit + 底部「配置」钮）+ 共享侧栏区 + 单槽位状态机 | src/features/sideViews/index.ts | ../src/features/sideViews/CLAUDE.md |
-| src/features/commit | Commit 侧栏视图（git 变更列表 + 状态→面板分派） | src/features/commit/index.ts | ../src/features/commit/CLAUDE.md |
-| src/features/agentStatus | Agent 会话数据层（useAgentStatus 行建模 + 上下文用量；视图已退役——2026-08 并入导航树活跃会话区，NAV-08） | src/features/agentStatus/useAgentStatus.ts | ../src/features/agentStatus/CLAUDE.md |
-| src/features/notifications | toast 通知（Tauri 原生 sendNotification + 任务栏闪烁） | src/features/notifications/index.ts | ../src/features/notifications/CLAUDE.md |
-| src/features/hooksConfig | hooks 配置面板 schema 内嵌单点（SchemaStore 官方 schema + hooks 子 schema + Draft07 校验） | src/features/hooksConfig/schema/index.ts | ../src/features/hooksConfig/CLAUDE.md |
-| src/features/cliProfiles | CLI profile 注册表（CliProfileRegistry 模块级单例 + claude profile 身份域 + hooks/history 能力策略，MC-1） | src/features/cliProfiles/index.ts | ../src/features/cliProfiles/CLAUDE.md |
-| src/features/agentHistory | 历史会话数据层（useAgentHistory + 复合键 cliId\|sessionId + 四步恢复编排 + 菜单策略/模型纯函数；历史行组件 = 导航树 NavHistoryRow，原 HistorySessionList/Row 已删，FE-25；AgentHistorySections 已删，NAV-08） | src/features/agentHistory/index.ts | ../src/features/agentHistory/CLAUDE.md |
-| src/__tests__ | L2 前端测试集中目录 + 共享测试工厂 | — | ../src/__tests__/CLAUDE.md |
-| src/panelRegistry.ts | 面板注册表共享配置层（workspace/explorer/测试多方引用，硬约束 #5） | src/panelRegistry.ts | — |
-| test/ | L3 终端 headless 测试（xterm/headless + xterm/addon-serialize） | vitest.l3.config.ts | — |
-| src-tauri/src/pty | PTY 管理，Windows ConPTY 核心 | src-tauri/src/pty/mod.rs | ../src-tauri/src/pty/CLAUDE.md |
-| src-tauri/src/fs | 文件系统命令（读/写/列目录/建/删/改名） | src-tauri/src/fs/mod.rs | ../src-tauri/src/fs/CLAUDE.md |
-| src-tauri/src/git | Git 状态/diff/HEAD 读取/回滚/取消暂存（git2） | src-tauri/src/git/mod.rs | ../src-tauri/src/git/CLAUDE.md |
-| src-tauri/src/notify | 文件系统监听（LruWatcherPool 缓存 + pause/resume 切换） | src-tauri/src/notify/mod.rs | ../src-tauri/src/notify/CLAUDE.md |
-| src-tauri/src/hooks | CLI hooks 能力层（CliHooksProvider trait + cliId 键注册表 + agent-event 广播 + claude provider 注入/卸载/状态/statusline 桥接（context 官方 used_percentage 通道）/三层配置读写 + 6 条 agent_hooks_* 泛化命令） | src-tauri/src/hooks/mod.rs | ../src-tauri/src/hooks/CLAUDE.md |
-| src-tauri/src/agent_history | 历史会话聚合层（CliHistoryProvider trait + cliId 键注册表 + claude provider 扫描/删除 + SEC-05 sessionId 校验） | src-tauri/src/agent_history/mod.rs | ../src-tauri/src/agent_history/CLAUDE.md |
-| src-tauri/src 顶层 | 单文件模块：lib.rs（命令注册/State/setup）、app_dir.rs（app 数据目录解析，BE-16 上提，settings/projects 共用）、settings.rs（浅合并 + SETTINGS_SAVE_LOCK 保存互斥）、projects.rs（exe 同级 JSON 绕过沙箱）、state.rs（AppState/PtySession/路径沙箱）、error.rs（AppError） | src-tauri/src/lib.rs | ../src-tauri/src/CLAUDE.md |
-| e2e-tests | WDIO E2E 端到端测试 | e2e-tests/wdio.conf.ts | ../e2e-tests/CLAUDE.md |
+| 模块 | CLAUDE.md |
+|------|-----------|
+| src/ipc | ../src/ipc/CLAUDE.md |
+| src/types | ../src/types/CLAUDE.md |
+| src/stores | ../src/stores/CLAUDE.md |
+| src/workspace | ../src/workspace/CLAUDE.md |
+| src/panels | ../src/panels/CLAUDE.md |
+| src/lib | ../src/lib/CLAUDE.md |
+| src/theme | ../src/theme/CLAUDE.md |
+| src/features/explorer | ../src/features/explorer/CLAUDE.md |
+| src/features/fileViewers | ../src/features/fileViewers/CLAUDE.md |
+| src/features/shortcuts | ../src/features/shortcuts/CLAUDE.md |
+| src/features/sidebar（已退役并入 navTree，仅存历史文档） | ../src/features/sidebar/CLAUDE.md |
+| src/features/navTree | ../src/features/navTree/CLAUDE.md |
+| src/features/titleBar | ../src/features/titleBar/CLAUDE.md |
+| src/features/sideViews | ../src/features/sideViews/CLAUDE.md |
+| src/features/commit | ../src/features/commit/CLAUDE.md |
+| src/features/agentStatus | ../src/features/agentStatus/CLAUDE.md |
+| src/features/notifications | ../src/features/notifications/CLAUDE.md |
+| src/features/hooksConfig | ../src/features/hooksConfig/CLAUDE.md |
+| src/features/cliProfiles | ../src/features/cliProfiles/CLAUDE.md |
+| src/features/agentHistory | ../src/features/agentHistory/CLAUDE.md |
+| src/__tests__ | ../src/__tests__/CLAUDE.md |
+| src/panelRegistry.ts（共享配置层，硬约束 #5） | — |
+| test/（L3 headless） | — |
+| src-tauri/src/pty | ../src-tauri/src/pty/CLAUDE.md |
+| src-tauri/src/fs | ../src-tauri/src/fs/CLAUDE.md |
+| src-tauri/src/git | ../src-tauri/src/git/CLAUDE.md |
+| src-tauri/src/notify | ../src-tauri/src/notify/CLAUDE.md |
+| src-tauri/src/hooks | ../src-tauri/src/hooks/CLAUDE.md |
+| src-tauri/src/agent_history | ../src-tauri/src/agent_history/CLAUDE.md |
+| src-tauri/src 顶层单文件模块（lib/app_dir/settings/projects/state/error） | ../src-tauri/src/CLAUDE.md |
+| e2e-tests | ../e2e-tests/CLAUDE.md |
 
 ## 需求编号索引
 
@@ -175,30 +165,30 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 |--------|------|------|
 | H6 | 需求 | 终端跨页面存活——页面切换不杀 PTY 进程 |
 | E1 | 需求 | Channel 可替换 + ring buffer 回放——PTY 重连机制 |
-| P1-19 | 问题 | 窗口关闭前杀子进程——前端 registerCloseHandler（onCloseRequested → 遍历 TerminalRegistry pty.kill，SHUTDOWN_TIMEOUT_MS=3000）+ 后端 Job Object KILL_ON_JOB_CLOSE 兜底 |
+| P1-19 | 问题 | 窗口关闭前杀子进程——前端 registerCloseHandler 遍历 kill + 后端 Job Object KILL_ON_JOB_CLOSE 兜底 |
 | SEC-01 | 安全 | project_root 是页面切换前置条件（路径沙箱） |
 | SEC-03 | 安全 | HTML postMessage origin/source/信任标记三层校验 |
-| SEC-05 | 安全 | agent_history_delete 的 sessionId 校验 + 定位不信托前端（原 SEC-01 拆号） |
+| SEC-05 | 安全 | agent_history_delete 的 sessionId 校验 + 定位不信托前端 |
 | SEC-08 | 安全 | PTY write/resize/kill 的 panelId 归属校验 |
-| SEC-15 | 安全 | shell 白名单 fallback 收窄——双侧 canonicalize 均失败才回退归一字符串比较（alias 兼容），单侧失败即拒绝（字符串比对无法证明文件身份） |
-| SEC-16 | 安全 | set_project_root 经 AppState.project_root_lock（tokio::sync::Mutex）串行化——A→B 快速切换时慢 canonicalize 的 A 不得后写回覆盖 B |
-| SEC-17 | 安全 | hooks user 层写入后端审计日志——二次确认仅前端门控（UX 层非安全边界），后端 `tracing::warn!(target: "audit")` 兜底可观测 |
+| SEC-15 | 安全 | shell 白名单 fallback 收窄——双侧 canonicalize 均失败才回退归一化字符串比较，单侧失败即拒绝 |
+| SEC-16 | 安全 | set_project_root 经 tokio Mutex 串行化——慢 canonicalize 不得后写覆盖 |
+| SEC-17 | 安全 | hooks user 层写入后端审计日志（`tracing::warn! target:"audit"`）兜底 |
 | DBG-6 | 调试调查 | 启动恢复 lastPage 先 await setProjectRoot 再 setActivePage |
 | B10 | 缺陷 | 编辑器去重聚焦须匹配 suffix（普通编辑器与 git 页签互不误聚焦） |
-| B11 | 缺陷 | statusline 双重包裹——注入时递归解包自有脚本包裹为原配置（备份/透传目标）；桥接脚本引号容忍 + 剥引号后 ~ 展开 + 透传失败 stdout 占位（C10 保持） |
-| B12 | 缺陷 | 重开页签标题残留 claude——恢复时无 customTitle 的终端面板经 titleManager 重算 terminal-N（rebuildAndRecomputeTitles 终端 pass + TerminalPanel originalTitleRef 订阅同步）；F8 customTitle 保留 |
-| B13 | 缺陷 | /resume 后页签标题回退——SessionEnd 不再恢复标题（TabState.restoreTitle 信号），标题恢复只由真退出信号（OSC 133 D / PTY EXIT）承担；SessionStart 补 title 重设 |
-| B14 | 缺陷 | 历史恢复两空白——panelId 生成/解析单点收口（makeTerminalPanelId/parseTerminalPageId 成对，模块级每页计数）；TerminalPanel visible 改 activePageId 前缀匹配；HistorySessionList 前缀匹配防幽灵页面导航；恢复面板 id 不再含 Date.now 段 |
-| B15 | 缺陷 | 重启后 statusLine 变 reporter 包裹（空白行 + 版本过旧）——ClaudeHooksProvider::reinject_statusline 误传 hook_script_path()（reporter）作桥接脚本路径；修复 = reinject 改传 statusline_script_path()，provider 层 L1 用例锁死（自 4aed3e2 初始版即存在，B11 调查的「损坏中间态」即此产物） |
-| B16 | 缺陷 | 状态行占位文本——桥接脚本 .sh 分支 spawnSync("bash") 依赖 PATH（Windows 原生 PATH 无 bash，仅 Git\cmd）；且 bash -c 未加引号的反斜杠路径被 bash 词法吃掉致 127。修复 = bashCandidates 试错定位（PATH bash → where git 沿目录上溯推导 bin/usr\bin → 固定路径 fallback）+ 反斜杠转正斜杠；SCRIPT_VERSION 5→6 |
-| ADR-0001 | 架构决策 | 侧栏视图换区重建丢失组件内部状态（已确认接受）（详见 .claude/adr.md） |
-| ADR-0003 | 架构决策 | UI 全面重设计「Linear 极黑克制」——候选 A 定稿并已实现（2026-08：linear 方案替换 darcula、自绘标题栏、统一导航树、状态圆点；实现期决策，详见 .claude/adr.md） |
+| B11 | 缺陷 | statusline 注入须递归解包自有脚本包裹；桥接脚本容忍引号 + 剥引号后 ~ 展开 + 透传失败 stdout 占位 |
+| B12 | 缺陷 | 恢复时无 customTitle 的终端面板经 titleManager 重算 terminal-N；F8 customTitle 保留 |
+| B13 | 缺陷 | 标题恢复只由真退出信号（OSC 133 D / PTY EXIT）承担；SessionEnd 不恢复，SessionStart 补 title 重设 |
+| B14 | 缺陷 | panelId 生成/解析单点收口（makeTerminalPanelId/parseTerminalPageId 成对）；恢复面板 id 不含 Date.now 段 |
+| B15 | 缺陷 | reinject_statusline 须传 statusline_script_path() 作桥接路径（误传 reporter 路径致重启后空白行） |
+| B16 | 缺陷 | 桥接 .sh 经 bashCandidates 试错定位（PATH→where git 上溯→固定路径）+ 反斜杠转正斜杠 |
+| ADR-0001 | 架构决策 | 侧栏视图换区重建丢失组件内部状态（已确认接受）（→ .claude/adr.md） |
+| ADR-0003 | 架构决策 | UI 全面重设计「Linear 极黑克制」（→ .claude/adr.md） |
 | F2 | 特性 | hooks 注入入口（F6 面板工具栏并入；与功能键 F2 区分） |
-| F3 | 特性 | 终端页签四态状态指示（agent-event + OSC 133 合成；2026-08 视觉呈现由 emoji 改为状态圆点，IC-02/03） |
+| F3 | 特性 | 终端页签四态状态指示（agent-event + OSC 133 合成；视觉呈现为状态圆点） |
 | F5 | 特性 | agentSession 契约行建模（双通道建行/三通道删行） |
-| F6 | 特性 | hooks 双模式配置面板（JSON/GUI 编辑 hooks 子树，user/project/local 三层，F2 注入入口并入） |
-| F7 | 特性 | 历史会话查询与恢复（扫描/恢复/删除 + 四步恢复编排；重命名已移除；2026-08 历史区迁入导航树折叠节点，NAV-03） |
-| F8 | 特性 | 终端页签自定义重命名（右键菜单「重命名」+ 自绘弹窗；customTitle 随布局持久化；claude 运行中禁用；不影响 terminal-N 递增） |
-| F9 | 特性 | 终端页签/侧栏 CLI 品牌 logo（按命令行首 token 匹配 profile.iconSrc；2026-08 行为修订：渲染条件由「仅随状态 emoji」改为「跟随页签名/会话名显示」——页签 logo 会话绑定（agentSession 存在即显示，按 cliId 查 iconSrc，TabState.logo 退役），侧栏活跃/历史行 logo 行存在即显示，位置不变 emoji 后名称前） |
+| F6 | 特性 | hooks 双模式配置面板（JSON/GUI 编辑 hooks 子树，user/project/local 三层，F2 并入） |
+| F7 | 特性 | 历史会话查询与恢复（扫描/恢复/删除 + 四步恢复编排；重命名已移除） |
+| F8 | 特性 | 终端页签自定义重命名（customTitle 随布局持久化；claude 运行中禁用；不影响 terminal-N 递增） |
+| F9 | 特性 | 终端页签/侧栏 CLI 品牌 logo（按命令行首 token 匹配 profile.iconSrc；页签 logo 会话绑定，侧栏行存在即显示） |
 
 > 测试策略概览见上方「测试策略」章节；完整用例清单见 `.claude/test-inventory.md`。
