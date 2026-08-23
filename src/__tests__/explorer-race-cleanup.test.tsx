@@ -137,11 +137,9 @@ describe("useFileTree 竞态清理 — G3 fs-event 去抖清理", () => {
 
     const { result, unmount } = renderHook(() => useFileTree({ rootPath: "/proj" }));
 
-    // 冲刷初始加载（readDir/gitStatus 微任务）
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
-    });
-    expect(result.current.rootNodes.length).toBe(1);
+    // 等初始加载真实完成（微任务链时长不定，0ms 推进假设过强——TQ-B-04）。
+    // fake timers 下用 vi.waitFor（自动推进假定时器）
+    await vi.waitFor(() => expect(result.current.rootNodes.length).toBe(1), { timeout: 3000 });
 
     // 清空计数，触发 fs-event → 200ms 去抖挂起
     mocks.mockReadDir.mockClear();

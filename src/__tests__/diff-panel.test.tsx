@@ -624,6 +624,10 @@ describe("DiffPanel", () => {
     await waitFor(() => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
     });
+    // 等 CM6 编辑器实例挂载完成（组合运行时可能滞后于面板 DOM——实证 1/8 偶发失败）
+    await waitFor(() => {
+      expect(getDiffView(container, "diff-right")).toBeTruthy();
+    });
     const rightView = getDiffView(container, "diff-right")!;
 
     // 制造脏：dispatch 文档变更（updateListener → dirtyRef=true）
@@ -656,6 +660,10 @@ describe("DiffPanel", () => {
     );
     await waitFor(() => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
+    });
+    // 等 CM6 编辑器实例挂载完成（组合运行时可能滞后于面板 DOM——实证 1/8 偶发失败）
+    await waitFor(() => {
+      expect(getDiffView(container, "diff-right")).toBeTruthy();
     });
     const rightView = getDiffView(container, "diff-right")!;
     rightView.dispatch({ changes: { from: 0, insert: "dirty" } });

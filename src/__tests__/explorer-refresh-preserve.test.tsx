@@ -461,6 +461,9 @@ describe("useFileTree 刷新保留展开状态", () => {
     await waitFor(() => expect(result.current.rootNodes.length).toBe(1), { timeout: 3000 });
     await expand(result, "/proj/src");
 
+    // 两次 refresh 的 gitStatus 时序可控（确定性 resolved）——防异步抖动 flaky（TQ-B-18）。
+    // 返回类型以本文件 mocks 工厂为准（{path,status}[]，非 Map）
+    mocks.mockGitStatus.mockResolvedValue([]);
     await act(async () => {
       const first = result.current.refresh();
       // 第二次 refresh 前磁盘发生变更
@@ -472,9 +475,12 @@ describe("useFileTree 刷新保留展开状态", () => {
       await Promise.all([first, second]);
     });
 
-    const src = findNode(result.current.rootNodes, "/proj/src");
-    expect(src?.expanded).toBe(true);
-    expect(src?.children.map((c) => c.entry.name)).toEqual(["a.ts", "c.ts"]);
+    // 终态断言改为 waitFor——并发 refresh 下同步断言可能早于刷新链落地（TQ-B-18）
+    await waitFor(() => {
+      const src = findNode(result.current.rootNodes, "/proj/src");
+      expect(src?.expanded).toBe(true);
+      expect(src?.children.map((c) => c.entry.name)).toEqual(["a.ts", "c.ts"]);
+    }, { timeout: 3000 });
   });
 
   // ═══ F. FE-15：file-saved 300ms 去抖 + 子树刷新范围 ═══

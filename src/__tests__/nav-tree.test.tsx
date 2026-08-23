@@ -419,36 +419,45 @@ describe("行高规格与选中态 token", () => {
     }
   });
 
-  it("点击行 → 选中态 token：ACTIVE_SELECTION_BG 底 + fg-1 文字", () => {
+  it("点击行 → 选中态 token：ACTIVE_SELECTION_BG 底 + fg-1 文字", async () => {
     const container = seedBasicTree();
     const pageRow = getRows(container, "nav-row-page")[0];
 
+    // React 重渲染可能未稳定——选中态样式断言统一在 waitFor 内等待落地
     fireEvent.click(pageRow);
-    expect(normColor(pageRow.style.backgroundColor)).toBe(
-      normColor(ACTIVE_SELECTION_BG),
-    );
-    expect(pageRow.style.color).toBe(hexToRgb(SIDEBAR_FG));
+    await waitFor(() => {
+      expect(normColor(pageRow.style.backgroundColor)).toBe(
+        normColor(ACTIVE_SELECTION_BG),
+      );
+      expect(pageRow.style.color).toBe(hexToRgb(SIDEBAR_FG));
+    });
   });
 
-  it("hover 非选中行 → SIDEBAR_COLORS.hover；选中行 hover → SELECTION_HOVER_BG", () => {
+  it("hover 非选中行 → SIDEBAR_COLORS.hover；选中行 hover → SELECTION_HOVER_BG", async () => {
     const container = seedBasicTree();
     // 种子 activePageId="page1" → 首个页面行选中、第二个非选中
     const [, page2] = getRows(container, "nav-row-page");
 
-    // 非选中行 hover → hover token（#222227）
+    // 非选中行 hover → hover token（#222227）——样式断言在 waitFor 内等待落地
     fireEvent.mouseEnter(page2);
-    expect(page2.style.backgroundColor).toBe(hexToRgb(SIDEBAR_COLORS.hover));
+    await waitFor(() => {
+      expect(page2.style.backgroundColor).toBe(hexToRgb(SIDEBAR_COLORS.hover));
+    });
     fireEvent.mouseLeave(page2);
 
     // 选中行 hover → SELECTION_HOVER_BG（0.22 强于 0.13）
     fireEvent.click(page2); // page2 变为选中
-    expect(normColor(page2.style.backgroundColor)).toBe(
-      normColor(ACTIVE_SELECTION_BG),
-    );
+    await waitFor(() => {
+      expect(normColor(page2.style.backgroundColor)).toBe(
+        normColor(ACTIVE_SELECTION_BG),
+      );
+    });
     fireEvent.mouseEnter(page2);
-    expect(normColor(page2.style.backgroundColor)).toBe(
-      normColor(SELECTION_HOVER_BG),
-    );
+    await waitFor(() => {
+      expect(normColor(page2.style.backgroundColor)).toBe(
+        normColor(SELECTION_HOVER_BG),
+      );
+    });
   });
 });
 
@@ -585,43 +594,52 @@ describe("搜索过滤", () => {
     return input;
   }
 
-  it("页面名子串命中（不区分大小写）→ 该页面行显示、未命中页面行隐藏", () => {
+  it("页面名子串命中（不区分大小写）→ 该页面行显示、未命中页面行隐藏", async () => {
     const container = seedTwoProjects();
     fireEvent.change(getSearchInput(container), {
       target: { value: "alpha" },
     });
 
-    const pages = getRows(container, "nav-row-page");
-    expect(pages).toHaveLength(1);
-    expect(pages[0].textContent).toContain("页面Alpha");
+    // 过滤渲染可能未稳定——行渲染断言在 waitFor 内等待落地
+    await waitFor(() => {
+      const pages = getRows(container, "nav-row-page");
+      expect(pages).toHaveLength(1);
+      expect(pages[0].textContent).toContain("页面Alpha");
+    });
   });
 
-  it("未命中 → 无任何项目行（搜索无结果显示空态，不抛异常）", () => {
+  it("未命中 → 无任何项目行（搜索无结果显示空态，不抛异常）", async () => {
     const container = seedTwoProjects();
     fireEvent.change(getSearchInput(container), {
       target: { value: "zzz" },
     });
 
-    expect(getRows(container, "nav-row-project")).toHaveLength(0);
-    expect(getRows(container, "nav-row-page")).toHaveLength(0);
+    // 过滤渲染可能未稳定——空态断言在 waitFor 内等待落地
+    await waitFor(() => {
+      expect(getRows(container, "nav-row-project")).toHaveLength(0);
+      expect(getRows(container, "nav-row-page")).toHaveLength(0);
+    });
   });
 
-  it("父节点因子：页面命中 → 父项目行一并显示（即使项目名不匹配）", () => {
+  it("父节点因子：页面命中 → 父项目行一并显示（即使项目名不匹配）", async () => {
     const container = seedTwoProjects();
     // 命中页面Alpha——父项目「项目Alpha」行必须显示
     fireEvent.change(getSearchInput(container), {
       target: { value: "页面Alpha" },
     });
 
-    const projects = getRows(container, "nav-row-project");
-    expect(projects).toHaveLength(1);
-    expect(projects[0].textContent).toContain("项目Alpha");
-    expect(getRows(container, "nav-row-page")[0].textContent).toContain(
-      "页面Alpha",
-    );
+    // 过滤渲染可能未稳定——父节点因子断言在 waitFor 内等待落地
+    await waitFor(() => {
+      const projects = getRows(container, "nav-row-project");
+      expect(projects).toHaveLength(1);
+      expect(projects[0].textContent).toContain("项目Alpha");
+      expect(getRows(container, "nav-row-page")[0].textContent).toContain(
+        "页面Alpha",
+      );
+    });
   });
 
-  it("父节点因子：项目名命中 → 仅项目行显示、未命中页面行隐藏（match 链单向）", () => {
+  it("父节点因子：项目名命中 → 仅项目行显示、未命中页面行隐藏（match 链单向）", async () => {
     const container = seedTwoProjects();
     // 查询词仅命中项目名「项目Beta」——页面名「页面Beta」不含该子串，
     // 排除页面命中因子；NAV-04 match 链为单向（子命中→父显示），
@@ -630,15 +648,18 @@ describe("搜索过滤", () => {
       target: { value: "项目Beta" },
     });
 
-    const projects = getRows(container, "nav-row-project");
-    expect(projects).toHaveLength(1);
-    expect(projects[0].textContent).toContain("项目Beta");
-    // 对照上用例「页面命中→父项目行显示」：单向链只保证子→父方向，
-    // 项目名命中不会令未命中的页面行渲染
-    expect(getRows(container, "nav-row-page")).toHaveLength(0);
+    // 过滤渲染可能未稳定——match 链单向断言在 waitFor 内等待落地
+    await waitFor(() => {
+      const projects = getRows(container, "nav-row-project");
+      expect(projects).toHaveLength(1);
+      expect(projects[0].textContent).toContain("项目Beta");
+      // 对照上用例「页面命中→父项目行显示」：单向链只保证子→父方向，
+      // 项目名命中不会令未命中的页面行渲染
+      expect(getRows(container, "nav-row-page")).toHaveLength(0);
+    });
   });
 
-  it("会话名命中 → 会话行显示", () => {
+  it("会话名命中 → 会话行显示", async () => {
     seedProject("C:/test", "proj-1", "测试项目", [
       { pageId: "page1", name: "页面 1" },
     ]);
@@ -655,9 +676,12 @@ describe("搜索过滤", () => {
       target: { value: "导航树" },
     });
 
-    const sessions = getRows(container, "nav-row-session");
-    expect(sessions).toHaveLength(1);
-    expect(sessions[0].textContent).toContain("重构导航树");
+    // 过滤渲染可能未稳定——会话行渲染断言在 waitFor 内等待落地
+    await waitFor(() => {
+      const sessions = getRows(container, "nav-row-session");
+      expect(sessions).toHaveLength(1);
+      expect(sessions[0].textContent).toContain("重构导航树");
+    });
   });
 });
 
@@ -885,14 +909,15 @@ describe("历史节点（NAV-03）", () => {
     });
 
     // 展开 → 历史行渲染（标题 + logo + title tooltip = prompt 预览）
+    // 行内容断言与行渲染同处 waitFor——重渲染可能未稳定
     fireEvent.click(node);
     await waitFor(() => {
       expect(getRows(container, "nav-row-session").length).toBe(1);
+      const row = getRows(container, "nav-row-session")[0];
+      expect(row.textContent).toContain("历史会话 s1");
+      expect(row.querySelector('img[alt="CLI 图标"]')).toBeTruthy();
+      expect(row.getAttribute("title")).toBe("修复 context 用量计算");
     });
-    const row = getRows(container, "nav-row-session")[0];
-    expect(row.textContent).toContain("历史会话 s1");
-    expect(row.querySelector('img[alt="CLI 图标"]')).toBeTruthy();
-    expect(row.getAttribute("title")).toBe("修复 context 用量计算");
   });
 
   it("历史session 节点与操作页面同级缩进（childrenStyle 容器）且恒位于页面容器之后", async () => {
@@ -909,27 +934,32 @@ describe("历史节点（NAV-03）", () => {
     ).toBeTruthy();
 
     // 展开项目 → [项目行, 页面容器, 历史容器]——历史恒位于末位（最下方）
+    // 结构与缩进样式断言与行渲染同处 waitFor——重渲染可能未稳定
     fireEvent.click(projRow);
-    await waitFor(() => expect(getRows(container, "nav-row-page").length).toBe(1));
-    children = Array.from(projectContainer.children);
-    expect(children.length).toBeGreaterThanOrEqual(3);
-    const historyWrap = children[children.length - 1] as HTMLElement;
-    expect(historyWrap.querySelector('[data-e2e="nav-history-node"]')).toBeTruthy();
-    // 同级缩进：与页面容器同规格 childrenStyle（marginLeft 15 + 1px 发丝引导线）
-    const pagesWrap = children[1] as HTMLElement;
-    expect(historyWrap.style.marginLeft).toBe("15px");
-    expect(historyWrap.style.marginLeft).toBe(pagesWrap.style.marginLeft);
-    expect(historyWrap.style.borderLeft).toBe(pagesWrap.style.borderLeft);
-    expect(historyWrap.style.borderLeft).toContain("1px solid");
+    await waitFor(() => {
+      expect(getRows(container, "nav-row-page").length).toBe(1);
+      children = Array.from(projectContainer.children);
+      expect(children.length).toBeGreaterThanOrEqual(3);
+      const historyWrap = children[children.length - 1] as HTMLElement;
+      expect(historyWrap.querySelector('[data-e2e="nav-history-node"]')).toBeTruthy();
+      // 同级缩进：与页面容器同规格 childrenStyle（marginLeft 15 + 1px 发丝引导线）
+      const pagesWrap = children[1] as HTMLElement;
+      expect(historyWrap.style.marginLeft).toBe("15px");
+      expect(historyWrap.style.marginLeft).toBe(pagesWrap.style.marginLeft);
+      expect(historyWrap.style.borderLeft).toBe(pagesWrap.style.borderLeft);
+      expect(historyWrap.style.borderLeft).toContain("1px solid");
+    });
 
     // 再次收起 → 历史容器仍存在（NAV-10 常驻契约不破）
     fireEvent.click(projRow);
-    await waitFor(() => expect(getRows(container, "nav-row-page").length).toBe(0));
-    expect(
-      (projRow.parentElement as HTMLElement).querySelector(
-        '[data-e2e="nav-history-node"]',
-      ),
-    ).toBeTruthy();
+    await waitFor(() => {
+      expect(getRows(container, "nav-row-page").length).toBe(0);
+      expect(
+        (projRow.parentElement as HTMLElement).querySelector(
+          '[data-e2e="nav-history-node"]',
+        ),
+      ).toBeTruthy();
+    });
   });
 
   it("双击普通历史行 → restoreHistorySession(session, { fork: false })", async () => {

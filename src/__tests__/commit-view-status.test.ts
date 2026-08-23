@@ -283,9 +283,14 @@ describe("useCommitStatus rootPath 切换", () => {
 
     // 旧请求 resolve
     resolveOld([makeEntry("C:/repo1/old.ts", "modified")]);
-    await vi.advanceTimersByTimeAsync(10);
 
-    // 状态应为 repo2 的数据（旧结果被 gen 检查丢弃）
+    // 轮询确认渲染稳定后旧数据仍不落地（单次 10ms 推进抓不住闪屏——TQ-B-06）
+    await vi.waitFor(() => {
+      const view = document.querySelector('[data-e2e="commit-view"]');
+      expect(view?.textContent).toContain("x.ts");
+    }, { timeout: 3000 });
+
+    // 稳定期复查：状态应为 repo2 的数据（旧结果被 gen 检查丢弃）
     const commitView = document.querySelector('[data-e2e="commit-view"]');
     // 不应包含旧数据
     expect(commitView?.textContent).not.toContain("old.ts");

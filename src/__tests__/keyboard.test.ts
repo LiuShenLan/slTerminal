@@ -63,8 +63,10 @@ describe("createTerminalShortcuts", () => {
   }
 
   beforeEach(() => {
-    writeTextMock.mockClear();
-    readTextMock.mockClear();
+    // mockReset 清调用记录 + once 队列——防前序用例 mockResolvedValueOnce 残留串扰（TQ-B-19）
+    writeTextMock.mockReset();
+    readTextMock.mockReset();
+    // mockReset 后默认值丢失，此处显式补默认（各用例内自行覆盖）
     writeTextMock.mockResolvedValue(undefined);
     readTextMock.mockResolvedValue("");
   });

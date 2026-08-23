@@ -210,17 +210,20 @@ describe("历史折叠节点渲染", () => {
     });
 
     // 「历史session」文案（NAV-03 契约 + 人工验证修订）+ 时钟图标（lucide Clock svg）
-    expect(node.textContent).toContain("历史session");
-    expect(node.querySelector("svg")).toBeTruthy();
+    // + 计数 pill（SIDEBAR_BG 底 + PLACEHOLDER_FG 字，文本 = 匹配会话数）
+    // ——重渲染可能未稳定，统一在 waitFor 内等待落地
+    await waitFor(() => {
+      expect(node.textContent).toContain("历史session");
+      expect(node.querySelector("svg")).toBeTruthy();
 
-    // 计数 pill：SIDEBAR_BG 底 + PLACEHOLDER_FG 字，文本 = 匹配会话数
-    const pill = Array.from(node.querySelectorAll("*")).find(
-      (el) =>
-        (el as HTMLElement).style.backgroundColor === hexToRgb(SIDEBAR_BG) &&
-        (el as HTMLElement).style.color === hexToRgb(PLACEHOLDER_FG),
-    ) as HTMLElement | undefined;
-    expect(pill).toBeTruthy();
-    expect(pill?.textContent).toBe("1");
+      const pill = Array.from(node.querySelectorAll("*")).find(
+        (el) =>
+          (el as HTMLElement).style.backgroundColor === hexToRgb(SIDEBAR_BG) &&
+          (el as HTMLElement).style.color === hexToRgb(PLACEHOLDER_FG),
+      ) as HTMLElement | undefined;
+      expect(pill).toBeTruthy();
+      expect(pill?.textContent).toBe("1");
+    });
   });
 
   it("计数 = 同一项目匹配会话数（2 个 cwd 前缀匹配会话 → 计数 2）", async () => {
@@ -240,13 +243,16 @@ describe("历史折叠节点渲染", () => {
       expect(el?.textContent).toMatch(/历史session2/);
       return el;
     });
-    expect(node.textContent).toMatch(/历史session/);
-    // 计数 pill 文本 = 2
-    const pill = Array.from(node.querySelectorAll("*")).find(
-      (el) =>
-        (el as HTMLElement).style.backgroundColor === hexToRgb(SIDEBAR_BG),
-    ) as HTMLElement | undefined;
-    expect(pill?.textContent).toBe("2");
+    // 重渲染可能未稳定——textContent/计数 pill 断言统一在 waitFor 内等待落地
+    await waitFor(() => {
+      expect(node.textContent).toMatch(/历史session/);
+      // 计数 pill 文本 = 2
+      const pill = Array.from(node.querySelectorAll("*")).find(
+        (el) =>
+          (el as HTMLElement).style.backgroundColor === hexToRgb(SIDEBAR_BG),
+      ) as HTMLElement | undefined;
+      expect(pill?.textContent).toBe("2");
+    });
   });
 });
 
