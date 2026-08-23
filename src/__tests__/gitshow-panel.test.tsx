@@ -41,6 +41,9 @@ const {
   mockGitshowDispatch,
   mockCompartmentReconfigure,
   mockFontSizeState,
+  // TQ-COV-10：大文件警告 StateField 三函数 + EditorView.decorations 断言
+  mockStateFieldDefine,
+  mockDecorationsFrom,
 } = vi.hoisted(() => {
   const mockEditorViewDestroy = vi.fn();
   const capturedEditorStateConfig: { extensions?: unknown[]; doc?: string }[] = [];
@@ -50,6 +53,14 @@ const {
   const mockGitshowDispatch = vi.fn();
   const mockCompartmentReconfigure = vi.fn(() => []);
   const mockFontSizeState = { editorFontSize: 14 };
+  // FE-18：largeFileWarnField 在模块加载时经 StateField.define 定义——
+  // spec 打标 __stateField（extensions 断言用），create/update/provide 留待测试直接驱动
+  const mockStateFieldDefine = vi.fn((spec: unknown) => ({
+    __stateField: true,
+    ...(spec as object),
+  }));
+  // provide: (field) => EditorView.decorations.from(field)
+  const mockDecorationsFrom = vi.fn((field: unknown) => field);
   return {
     mockEditorViewDestroy,
     capturedEditorStateConfig,
@@ -57,6 +68,8 @@ const {
     mockGitshowDispatch,
     mockCompartmentReconfigure,
     mockFontSizeState,
+    mockStateFieldDefine,
+    mockDecorationsFrom,
   };
 });
 
@@ -66,6 +79,8 @@ vi.mock("@codemirror/view", () => {
     // 静态属性——CM6 EditorView 的 theme / editable Facet（匿名类表达式用 static 声明，TypeScript 才认类型）
     static theme = vi.fn(() => []);
     static editable = { of: vi.fn((val: boolean) => ({ __editable: val })) };
+    // TQ-COV-10：provide: (field) => EditorView.decorations.from(field) 依赖此静态
+    static decorations = { from: mockDecorationsFrom };
     state: unknown;
     dispatch = mockGitshowDispatch;
     constructor(config: { state: unknown; parent: HTMLElement }) {
@@ -103,8 +118,9 @@ vi.mock("@codemirror/state", () => ({
     // EDF-09: 字号热切换走 reconfigure，共享 mock 供断言
     reconfigure = mockCompartmentReconfigure;
   },
-  // FE-18：大文件警告装饰桩——define 原样透传 spec 并打标（供 extensions 断言）
-  StateField: { define: vi.fn((spec: unknown) => ({ __stateField: true, ...(spec as object) })) },
+  // FE-18：大文件警告装饰桩——define 原样透传 spec 并打标（供 extensions 断言）；
+  // TQ-COV-10：spec 经 hoisted mock 可获取，测试直接驱动 create/update/provide 三函数
+  StateField: { define: mockStateFieldDefine },
   RangeSetBuilder: class {
     ranges: { from: number; to: number; deco: unknown }[] = [];
     add(from: number, to: number, deco: unknown) {
@@ -178,6 +194,7 @@ import GitShowPanel, { LargeFileWarnWidget } from "../panels/gitshow/GitShowPane
 import { GIT_FILE_COLORS } from "../theme";
 // 从 mock 导入以获取 vi.fn() 引用（供断言调用次数/参数）
 import { createEditorFontExtension } from "../panels/editor/useCodeMirror";
+// TQ-COV-10：StateField spec 经 hoisted mockStateFieldDefine 获取（不直接 import 被 mock 的模块路径）
 
 /** 色值 → jsdom 归一化形态（#hex → "rgb(r, g, b)"）——jsdom cssstyle 将 hex 统一序列化为 rgb() 形式 */
 function hexToRgb(hex: string): string {
@@ -628,5 +645,95 @@ it("editorFontSize 变化触发 fontCompartment.reconfigure（dispatch + reconfi
   expect(createEditorFontExtension).toHaveBeenCalledWith(20);
   // 不重建 view——仍为同一实例
   expect(capturedEditorViews.length).toBe(1);
+});
+
+// ── TQ-COV-10：大文件警告 widget/StateField 补测 ──
+
+it("LargeFileWarnWidget.ignoreEvent 返回 true（纯装饰，不响应指针/键盘事件）", async () => {
+  expect(new LargeFileWarnWidget().ignoreEvent()).toBe(true);
+});
+
+it("largeFileWarnField StateField 三函数：create 挂首行行首装饰 / update 仅 map / provide 经 decorations.from 挂载", async () => {
+  mockGitFileAtHead.mockResolvedValue("line1\n" + "y".repeat(1_100_000));
+  render(React.createElement(GitShowPanel, { params: DEFAULT_PARAMS }));
+  await vi.waitFor(() => {
+    expect(capturedEditorStateConfig.length).toBeGreaterThan(0);
+  });
+
+  // 模块加载时 StateField.define 已执行——取 spec 直接驱动三函数
+  const spec = mockStateFieldDefine.mock.calls[0][0] as {
+    create: (state: { doc: { line: () => { from: number } } }) => {
+      __ranges: Array<{ from: number; to: number; deco: { widget?: unknown } }>;
+    };
+    update: (
+      deco: { map: (changes: unknown) => unknown },
+      tr: { changes: string },
+    ) => unknown;
+    provide: (field: unknown) => unknown;
+  };
+
+  // create：首行行首挂 widget 装饰（from === to === 0——行首零宽占位，FE-18）
+  const rangeSet = spec.create({ doc: { line: () => ({ from: 0 }) } });
+  expect(rangeSet.__ranges).toHaveLength(1);
+  expect(rangeSet.__ranges[0].from).toBe(0);
+  expect(rangeSet.__ranges[0].to).toBe(0);
+  expect(rangeSet.__ranges[0].deco.widget).toBeInstanceOf(LargeFileWarnWidget);
+
+  // update：doc 只读 → 仅 map changes（FE-18 契约：不做任何重算）
+  const decoMap = vi.fn((changes: unknown) => changes);
+  const updated = spec.update({ map: decoMap }, { changes: "CHG" });
+  expect(decoMap).toHaveBeenCalledWith("CHG");
+  expect(updated).toBe("CHG");
+
+  // provide：装饰经 EditorView.decorations.from(field) 挂载（field 透传）
+  expect(spec.provide("FIELD")).toBe("FIELD");
+  expect(mockDecorationsFrom).toHaveBeenCalledWith("FIELD");
+});
+
+// ── TQ-COV-10：Alt+Z 自动换行切换（经 usePanelFocus 激活的 editorActions 派发）──
+
+it("Alt+Z 自动换行：激活编辑器后 toggleWordWrap 经 wrapCompartment 热切换（dispatch + reconfigure）", async () => {
+  mockGitFileAtHead.mockResolvedValue("wrap content");
+  let capturedActivate: (() => void) | null = null;
+  mockUsePanelFocus.mockImplementation(
+    (_ctx: unknown, _el: unknown, activate: () => void) => {
+      capturedActivate = activate;
+    },
+  );
+
+  render(React.createElement(GitShowPanel, { params: DEFAULT_PARAMS }));
+  await vi.waitFor(() => {
+    expect(capturedEditorStateConfig.length).toBeGreaterThan(0);
+    expect(capturedActivate).not.toBeNull();
+  });
+
+  mockSetActiveEditor.mockClear();
+  mockGitshowDispatch.mockClear();
+  mockCompartmentReconfigure.mockClear();
+
+  // 激活 → setActiveEditor(editorActions)：save 为 no-op（只读面板无保存）
+  capturedActivate!();
+  expect(mockSetActiveEditor).toHaveBeenCalledTimes(1);
+  const actions = mockSetActiveEditor.mock.calls[0][0] as {
+    save: () => void;
+    toggleWordWrap: () => void;
+  };
+  expect(() => actions.save()).not.toThrow();
+
+  // 首次 toggle：wrapRef false → 挂 lineWrapping；再次：卸载（[] 分支）
+  actions.toggleWordWrap();
+  actions.toggleWordWrap();
+  expect(mockGitshowDispatch).toHaveBeenCalledTimes(2);
+  expect(mockCompartmentReconfigure).toHaveBeenCalledTimes(2);
+  // vi.fn(() => []) 的 calls 推断为 [] 元组——先扩为 unknown[] 再取每调的首参
+  const reconfigureCalls = mockCompartmentReconfigure.mock
+    .calls as unknown[][];
+  const firstArgs = reconfigureCalls[0][0];
+  const secondArgs = reconfigureCalls[1][0];
+  // 两分支参数不同（挂载 ≠ 卸载）；卸载分支 = []（无扩展）
+  expect(firstArgs).not.toEqual([]);
+  expect(secondArgs).toEqual([]);
+  // dispatch 携带 reconfigure 结果（effects 热切换）
+  expect(mockGitshowDispatch.mock.calls[0][0]).toEqual({ effects: [] });
 });
 });

@@ -268,10 +268,12 @@ vi.mock("../features/cliProfiles", () => ({
 // 导入被测模块（mocks 就绪后）
 import { useXterm } from "../panels/terminal/useXterm";
 import type { TabState } from "../panels/terminal/useCommandDetection";
+import { getActiveTerminal } from "../panels/terminal/activeTerminal";
 import { pty } from "../ipc";
 import {
   createContainer,
   mockResizeObserver,
+  flushMicrotasks,
 } from "./helpers/xterm-test-utils";
 
 /** 构造 matchByCommand 返回的 profile（CodingCliProfile 最小合法形态，跨边界契约） */
@@ -541,6 +543,8 @@ describe("ResizeObserver 尺寸变化 → fit → pty.resize 链路", () => {
   afterEach(() => {
     ro.cleanup();
     vi.restoreAllMocks();
+    // 防御：断言失败跳过 useRealTimers 时不把假定时器泄漏给后续用例（T10-T14 依赖）
+    vi.useRealTimers();
   });
 
   it("T6: ResizeObserver 回调 → 100ms debounce → fit → proposeDimensions → pty.resize", async () => {
@@ -674,6 +678,145 @@ describe("ResizeObserver 尺寸变化 → fit → pty.resize 链路", () => {
 
     vi.useRealTimers();
   });
+
+  // ────────────────────────────────────────────────
+  // TQ-COV-07：usePtyResize 错误分支（真实 usePtyResize 经 useXterm 驱动）
+  // ────────────────────────────────────────────────
+
+  it("T10: 仅行数变化 → 立即 fit+resize；resize reject → console.error 且不 throw", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    renderHook(() =>
+      useXterm({ container, cols: 80, rows: 24, panelId: "resize-10" }),
+    );
+
+    await waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    }, { timeout: 3000 });
+
+    // 首次触发建立 prevDims（100x40，走 debounce 分支）并完成首轮 resize
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    ro.trigger();
+    vi.advanceTimersByTime(150);
+    mockFit.mockClear();
+    (pty.resize as ReturnType<typeof vi.fn>).mockClear();
+
+    // 仅行数变化（cols 不变 rows 40→45）→ 立即 fit + resize（不走 debounce）
+    mockProposeDimensions.mockReturnValue({ cols: 100, rows: 45 });
+    (pty.resize as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error("resize boom"),
+    );
+    ro.trigger();
+    await flushMicrotasks();
+
+    expect(pty.resize).toHaveBeenCalledWith("test-session-id", "resize-10", 100, 45);
+    // FE-08: resize 非关键路径——失败仅 console.error，不 toast、不 throw
+    //（S08 契约：getErrorMessage(Error) = String(err) 含 "Error: " 前缀）
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("PTY resize 失败"),
+      expect.stringContaining("resize boom"),
+    );
+
+    vi.useRealTimers();
+    errorSpy.mockRestore();
+    (pty.resize as ReturnType<typeof vi.fn>).mockReset().mockResolvedValue(undefined);
+  });
+
+  it("T11: 列变化 debounce 分支 resize reject → console.error 且不 throw", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    renderHook(() =>
+      useXterm({ container, cols: 80, rows: 24, panelId: "resize-11" }),
+    );
+
+    await waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    }, { timeout: 3000 });
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    // 首次触发（prevDims 为 null → 双变化）→ debounce 分支；resize reject 走 catch
+    (pty.resize as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error("debounce boom"),
+    );
+    ro.trigger();
+    vi.advanceTimersByTime(150);
+    await flushMicrotasks();
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("PTY resize 失败"),
+      expect.stringContaining("debounce boom"),
+    );
+
+    vi.useRealTimers();
+    errorSpy.mockRestore();
+    (pty.resize as ReturnType<typeof vi.fn>).mockReset().mockResolvedValue(undefined);
+  });
+
+  it("T12: debounce 回调内 fit 抛异常 → catch 吞掉，resize 不调用", async () => {
+    renderHook(() =>
+      useXterm({ container, cols: 80, rows: 24, panelId: "resize-12" }),
+    );
+
+    await waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    }, { timeout: 3000 });
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    (pty.resize as ReturnType<typeof vi.fn>).mockClear();
+    mockFit.mockImplementation(() => {
+      throw new Error("fit boom");
+    });
+
+    // fit 抛异常 → debounce 回调内 try/catch 吞掉（不影响渲染），resize 不执行
+    ro.trigger();
+    vi.advanceTimersByTime(150);
+
+    expect(pty.resize).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
+    mockFit.mockReset();
+  });
+
+  it("T13: ResizeObserver 回调内 proposeDimensions 抛异常 → 外层 catch 吞掉，resize 不调用", async () => {
+    renderHook(() =>
+      useXterm({ container, cols: 80, rows: 24, panelId: "resize-13" }),
+    );
+
+    await waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    }, { timeout: 3000 });
+
+    (pty.resize as ReturnType<typeof vi.fn>).mockClear();
+    mockProposeDimensions.mockImplementation(() => {
+      throw new Error("dims boom");
+    });
+
+    // proposeDimensions 抛异常 → ResizeObserver 回调外层 try/catch 吞掉（不影响渲染）
+    ro.trigger();
+
+    expect(pty.resize).not.toHaveBeenCalled();
+
+    mockProposeDimensions.mockReset();
+    mockProposeDimensions.mockReturnValue({ cols: 100, rows: 40 });
+  });
+
+  it("T14: debounce 定时器 pending 时卸载 → cleanup 清除定时器（防卸载后回调泄漏）", async () => {
+    const { unmount } = renderHook(() =>
+      useXterm({ container, cols: 80, rows: 24, panelId: "resize-14" }),
+    );
+
+    await waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    }, { timeout: 3000 });
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    ro.trigger(); // 调度 100ms debounce 定时器，不推进
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+
+    // 卸载 → cleanup 分支 clearTimeout 清除 pending 定时器（line 124-126）
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
+
+    vi.useRealTimers();
+  });
 });
 
 // ═══════════════════════════════════════════════════════════
@@ -767,6 +910,62 @@ describe("字体大小调节", () => {
     }, { timeout: 3000 });
 
     expect(pty.resize).not.toHaveBeenCalled();
+  });
+
+  // ── TQ-COV-07：fontSize effect 错误分支（:590-600）──
+
+  it("FZ3: fontSize 变化 + fit 抛异常 → catch 吞掉不 throw，resize 不调用", async () => {
+    const { rerender } = renderHook(
+      ({ fontSize }) =>
+        useXterm({ container, cols: 80, rows: 24, panelId: "fs-7", fontSize }),
+      { initialProps: { fontSize: 14 } },
+    );
+
+    await waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    }, { timeout: 3000 });
+
+    mockFit.mockClear();
+    (pty.resize as ReturnType<typeof vi.fn>).mockClear();
+    mockFit.mockImplementation(() => {
+      throw new Error("fit boom");
+    });
+
+    // fit 抛异常 → fontSize effect 内 try/catch 吞掉（fit 失败不影响渲染），
+    // proposeDimensions/resize 均不执行，且不向用户抛错
+    expect(() => rerender({ fontSize: 18 })).not.toThrow();
+    await flushMicrotasks();
+    expect(pty.resize).not.toHaveBeenCalled();
+
+    mockFit.mockReset();
+  });
+
+  it("FZ4: fontSize 变化 + pty.resize reject → console.error 且不 throw（FE-08）", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { rerender } = renderHook(
+      ({ fontSize }) =>
+        useXterm({ container, cols: 80, rows: 24, panelId: "fs-8", fontSize }),
+      { initialProps: { fontSize: 14 } },
+    );
+
+    await waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    }, { timeout: 3000 });
+
+    (pty.resize as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error("resize boom"),
+    );
+    rerender({ fontSize: 18 });
+    await flushMicrotasks();
+
+    // FE-08: resize 非关键路径——失败仅 console.error（错误消息经 getErrorMessage 提取）
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("PTY resize 失败"),
+      expect.stringContaining("resize boom"),
+    );
+
+    errorSpy.mockRestore();
+    (pty.resize as ReturnType<typeof vi.fn>).mockReset().mockResolvedValue(undefined);
   });
 
   // ── Ctrl+Wheel ──
@@ -2435,5 +2634,140 @@ describe("Hooks 事件过滤 (panelId + profile 解析 + eventToStatus)", () => 
       active: true,
       title: "迟到标题",
     });
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// TQ-COV-07：terminalActions 链路（usePanelFocus 激活/停用回调）+ 卸载清理错误分支
+// ═══════════════════════════════════════════════════════════════
+
+describe("terminal actions 链路 + 卸载清理错误分支（TQ-COV-07）", () => {
+  let container: HTMLDivElement;
+
+  beforeEach(() => {
+    container = createContainer();
+    capturedTerminal = null;
+    mockUsePanelFocus.mockReset();
+    vi.clearAllMocks();
+    // 显式复位 spawn 解析值——SR 重连用例的 mockResolvedValue 跨用例残留（clearAllMocks 不清实现）
+    (pty.spawn as ReturnType<typeof vi.fn>).mockResolvedValue("test-session-id");
+    (pty.kill as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    mockUsePanelFocus.mockReset();
+    vi.restoreAllMocks();
+  });
+
+  it("ACT1: usePanelFocus 激活回调 → actions 注册 → getSelection/paste/writeToPty 派发 + focus()", async () => {
+    // 捕获 usePanelFocus 的激活/停用回调（mockImplementationOnce 自清理，防跨用例泄漏）
+    const captured: {
+      activate?: () => void;
+      deactivate?: () => void;
+    } = {};
+    mockUsePanelFocus.mockImplementationOnce((_ctx, _el, activate, deactivate) => {
+      captured.activate = activate;
+      captured.deactivate = deactivate;
+    });
+
+    const { result } = renderHook(() =>
+      useXterm({ container, cols: 80, rows: 24, panelId: "act-1" }),
+    );
+
+    // 激活 → setActiveTerminal(actions) 写入模块级指针
+    act(() => {
+      captured.activate!();
+    });
+    const actions = getActiveTerminal();
+    expect(actions).not.toBeNull();
+
+    // getSelection / paste 委托到 Terminal 实例
+    expect(actions!.getSelection()).toBe("");
+    expect(capturedTerminal!.getSelection).toHaveBeenCalled();
+    actions!.paste("粘贴文本");
+    expect(capturedTerminal!.paste).toHaveBeenCalledWith("粘贴文本");
+
+    // writeToPty 无 sessionId（spawn 未完成）→ 短路不调 IPC（防御分支）
+    actions!.writeToPty(new Uint8Array([72, 73]));
+    expect(pty.write).not.toHaveBeenCalled();
+
+    // spawn 完成后 → pty.write(sessionId, panelId, data)
+    //（先等 spawn resolve 链：TerminalRegistry.register 在 .then 中执行，注册后 sessionId 才可查）
+    await waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    }, { timeout: 3000 });
+    await waitFor(() => {
+      expect(mockRegistryRegister).toHaveBeenCalled();
+    }, { timeout: 3000 });
+    actions!.writeToPty(new Uint8Array([72, 73]));
+    await waitFor(() => {
+      expect(pty.write).toHaveBeenCalledWith(
+        "test-session-id",
+        "act-1",
+        new Uint8Array([72, 73]),
+      );
+    }, { timeout: 3000 });
+
+    // focus() → Terminal 实例 focus
+    act(() => {
+      result.current.focus();
+    });
+    expect(capturedTerminal!.focus).toHaveBeenCalled();
+
+    // 停用 → clearActiveTerminal 仅匹配时清（指针回归 null）
+    act(() => {
+      captured.deactivate!();
+    });
+    expect(getActiveTerminal()).toBeNull();
+  });
+
+  it("WBUILD1: windowsBuildNumber 传入 → 主 effect 写入 windowsPty（ADR-0004 钳制 21376）", async () => {
+    // useXterm 主 effect 的 windowsBuildNumber 分支（line 276-279）——
+    // 独立 effect（line 555-563）覆盖的是异步更新路径，本用例锁定挂载时同步写入
+    renderHook(() =>
+      useXterm({
+        container,
+        cols: 80,
+        rows: 24,
+        panelId: "wbuild-1",
+        windowsBuildNumber: 19045,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    }, { timeout: 3000 });
+
+    // 钳制至 xterm ConPTY 兼容阈值下界（Win10 19045 → 21376，ADR-0004）
+    expect(capturedTerminal!.options.windowsPty).toEqual({
+      backend: "conpty",
+      buildNumber: 21376,
+    });
+  });
+
+  it("CLN1: 卸载时 pty.kill reject → console.error('终止 PTY 失败') 且不抛异常（FE-08）", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { unmount } = renderHook(() =>
+      useXterm({ container, cols: 80, rows: 24, panelId: "cln-1" }),
+    );
+
+    await waitFor(() => {
+      expect(pty.spawn).toHaveBeenCalled();
+    }, { timeout: 3000 });
+
+    (pty.kill as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error("kill boom"),
+    );
+
+    // 卸载清理 → pty.kill 失败仅 console.error，不向用户抛错
+    expect(() => unmount()).not.toThrow();
+    await flushMicrotasks();
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("终止 PTY 失败"),
+      expect.stringContaining("kill boom"),
+    );
+
+    errorSpy.mockRestore();
+    (pty.kill as ReturnType<typeof vi.fn>).mockReset().mockResolvedValue(undefined);
   });
 });

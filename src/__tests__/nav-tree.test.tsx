@@ -120,6 +120,7 @@ vi.mock("../features/agentHistory/restoreSession", () => ({
 
 import { render, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { NavTree } from "../features/navTree/NavTree";
+import { NavContextMenu } from "../features/navTree/NavContextMenu";
 import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
 import { resetProjectStores } from "./helpers/workspace-setup";
@@ -128,6 +129,7 @@ import { CLAUDE_CLI_ID } from "../features/cliProfiles/profiles/claude";
 import {
   ACTIVE_SELECTION_BG,
   SELECTION_HOVER_BG,
+  SECONDARY_BG,
   SIDEBAR_COLORS,
   SIDEBAR_FG,
   SIDEBAR_BG,
@@ -452,6 +454,46 @@ describe("行高规格与选中态 token", () => {
     await waitFor(() => {
       expect(normColor(page2.style.backgroundColor)).toBe(
         normColor(SELECTION_HOVER_BG),
+      );
+    });
+  });
+
+  it("项目行 hover → SIDEBAR_COLORS.hover；移出恢复 transparent（TQ-COV-10）", async () => {
+    const container = seedBasicTree();
+    const projRow = getRows(container, "nav-row-project")[0];
+
+    // 项目行无选中态——hover 恒走非选中档（#222227）
+    fireEvent.mouseEnter(projRow);
+    await waitFor(() => {
+      expect(projRow.style.backgroundColor).toBe(hexToRgb(SIDEBAR_COLORS.hover));
+    });
+    fireEvent.mouseLeave(projRow);
+    await waitFor(() => {
+      expect(projRow.style.backgroundColor).toBe("transparent");
+    });
+  });
+
+  it("活跃会话行 hover → SELECTION_HOVER_BG；移出恢复 ACTIVE_SELECTION_BG（TQ-COV-10）", async () => {
+    const container = seedBasicTree();
+    // seedBasicTree 的会话行挂活跃页面 page1 且为页面首行 → active（设计 6.3 accent-dim 底）
+    const sessRow = getRows(container, "nav-row-session")[0];
+
+    // 初始 = 选中态底（0.13）
+    expect(normColor(sessRow.style.backgroundColor)).toBe(
+      normColor(ACTIVE_SELECTION_BG),
+    );
+    // hover → 选中行 hover 档（0.22）
+    fireEvent.mouseEnter(sessRow);
+    await waitFor(() => {
+      expect(normColor(sessRow.style.backgroundColor)).toBe(
+        normColor(SELECTION_HOVER_BG),
+      );
+    });
+    // 移出 → 回选中态底（非透明——会话行恒带 active 底）
+    fireEvent.mouseLeave(sessRow);
+    await waitFor(() => {
+      expect(normColor(sessRow.style.backgroundColor)).toBe(
+        normColor(ACTIVE_SELECTION_BG),
       );
     });
   });
@@ -807,6 +849,78 @@ describe("右键菜单", () => {
       expect(getRows(container, "nav-row-project")).toHaveLength(0);
     });
   });
+
+  it("点击菜单外任意处 → 菜单关闭（UI-802，document mousedown 监听）", async () => {
+    seedProject("C:/test", "proj-1", "测试项目", [
+      { pageId: "page1", name: "页面 1" },
+    ]);
+    seedActivePage("page1");
+    const { container, queryByText } = render(<NavTree />);
+
+    fireEvent.contextMenu(getRows(container, "nav-row-project")[0]);
+    expect(queryByText("删除项目")).toBeTruthy();
+
+    // 菜单外 mousedown → onClose（target 不在 menuRef 内）
+    fireEvent.mouseDown(document.body);
+    await waitFor(() => {
+      expect(queryByText("删除项目")).toBeNull();
+    });
+  });
+
+  it("菜单项 hover → SECONDARY_BG 高亮；移出恢复 transparent（UI-802）", async () => {
+    seedProject("C:/test", "proj-1", "测试项目", [
+      { pageId: "page1", name: "页面 1" },
+    ]);
+    seedActivePage("page1");
+    const { container } = render(<NavTree />);
+
+    fireEvent.contextMenu(getRows(container, "nav-row-project")[0]);
+    // 危险项「删除项目」：hover 高亮与普通项同档（SECONDARY_BG）
+    const item = Array.from(document.body.querySelectorAll("div")).find(
+      (el) => el.textContent === "删除项目",
+    )!;
+    fireEvent.mouseEnter(item);
+    await waitFor(() => {
+      expect(item.style.backgroundColor).toBe(hexToRgb(SECONDARY_BG));
+    });
+    fireEvent.mouseLeave(item);
+    await waitFor(() => {
+      expect(item.style.backgroundColor).toBe("transparent");
+    });
+  });
+
+  it("disabled 菜单项灰显（PLACEHOLDER_FG + cursor default）且点击不触发 action/onClose（UI-802）", () => {
+    // 直接渲染 NavContextMenu（UI-802 契约组件层）——disabled 项 = 运行中删除禁用等场景
+    const onClose = vi.fn();
+    const disabledAction = vi.fn();
+    const normalAction = vi.fn();
+    render(
+      <NavContextMenu
+        state={{
+          visible: true,
+          x: 0,
+          y: 0,
+          items: [
+            { label: "恢复会话", disabled: true, action: disabledAction },
+            { label: "删除", danger: true, action: normalAction },
+          ],
+        }}
+        onClose={onClose}
+      />,
+    );
+
+    const disabledItem = Array.from(document.body.querySelectorAll("div")).find(
+      (el) => el.textContent === "恢复会话",
+    )!;
+    // 灰显契约：PLACEHOLDER_FG + 默认光标（不可点语义）
+    expect(disabledItem.style.color).toBe(hexToRgb(PLACEHOLDER_FG));
+    expect(disabledItem.style.cursor).toBe("default");
+
+    // 点击 disabled 项：无 action 回调、不关闭菜单
+    fireEvent.click(disabledItem);
+    expect(disabledAction).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -1048,6 +1162,203 @@ describe("历史节点（NAV-03）", () => {
     fireEvent.click(container.querySelector('[data-e2e="nav-history-node"]') as HTMLElement);
     await waitFor(() => {
       expect(container.textContent).toContain("暂无历史会话");
+    });
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// 操作页面行交互（TQ-COV-09：NavPageRow 未覆盖分支——内联重命名
+// confirmRename/handleKeyDown + chevron stopPropagation + renaming 中行点击禁用）
+// ═══════════════════════════════════════════════════════════════
+
+describe("操作页面行交互（内联重命名 / chevron，TQ-COV-09）", () => {
+  /** 右键页面行 → 点「重命名操作页面」→ 返回行内重命名 input（未渲染则抛错） */
+  function openRename(pageRow: HTMLElement): HTMLInputElement {
+    fireEvent.contextMenu(pageRow);
+    fireEvent.click(
+      Array.from(document.body.querySelectorAll("div")).find(
+        (el) => el.textContent === "重命名操作页面",
+      )!,
+    );
+    const input = pageRow.querySelector("input");
+    if (!input) throw new Error("重命名输入框未渲染");
+    return input;
+  }
+
+  /** 种子单项目单页面（activePageId = page1）并渲染 NavTree，返回页面行 */
+  function seedSinglePage(): HTMLElement {
+    seedProject("C:/test", "proj-1", "测试项目", [
+      { pageId: "page1", name: "页面 1" },
+    ]);
+    seedActivePage("page1");
+    const { container } = render(<NavTree />);
+    expandTo(container, '[data-e2e="nav-row-page"]');
+    return getRows(container, "nav-row-page")[0];
+  }
+
+  it("右键「重命名操作页面」→ input 预填页面名 + 自动聚焦；Enter 确认 → 行名与 store 同步更新、input 消失", async () => {
+    const pageRow = seedSinglePage();
+
+    const input = openRename(pageRow);
+    // 预填当前页面名 + autoFocus（用户可见：input 现值与焦点）
+    expect(input.value).toBe("页面 1");
+    expect(document.activeElement).toBe(input);
+
+    // Enter 确认 → onRename → renamePage 生效
+    fireEvent.change(input, { target: { value: "重构页面" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    // 用户可见：行内名称更新、输入框消失；store 同步更新
+    await waitFor(() => {
+      const row = getRows(document.body, "nav-row-page")[0];
+      expect(row.textContent).toContain("重构页面");
+      expect(row.querySelector("input")).toBeNull();
+    });
+    expect(useProjects.getState().projects["proj-1"].pages[0].name).toBe(
+      "重构页面",
+    );
+  });
+
+  it("Enter 空白或同名 → 取消重命名（confirmRename 守卫分支：trimmed 空 / 同名不提交）", () => {
+    const pageRow = seedSinglePage();
+
+    // 同名 Enter：不改名 → 取消
+    let input = openRename(pageRow);
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(pageRow.querySelector("input")).toBeNull();
+    expect(useProjects.getState().projects["proj-1"].pages[0].name).toBe(
+      "页面 1",
+    );
+
+    // 空白（trim 后为空）Enter：取消
+    input = openRename(pageRow);
+    fireEvent.change(input, { target: { value: "   " } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(pageRow.querySelector("input")).toBeNull();
+    expect(useProjects.getState().projects["proj-1"].pages[0].name).toBe(
+      "页面 1",
+    );
+  });
+
+  it("Escape 取消重命名 → 输入框消失、名称不变", () => {
+    const pageRow = seedSinglePage();
+
+    const input = openRename(pageRow);
+    fireEvent.change(input, { target: { value: "临时修改" } });
+
+    // 非 Enter/Escape 键（普通输入）→ handleKeyDown 无动作分支：仍处重命名态
+    fireEvent.keyDown(input, { key: "a" });
+    expect(pageRow.querySelector("input")).toBe(input);
+
+    fireEvent.keyDown(input, { key: "Escape" });
+
+    expect(pageRow.querySelector("input")).toBeNull();
+    // 行名仍为原页面名（Escape 不提交）
+    expect(pageRow.textContent).toContain("页面 1");
+    expect(useProjects.getState().projects["proj-1"].pages[0].name).toBe(
+      "页面 1",
+    );
+  });
+
+  it("blur 确认重命名 → 改名生效（onBlur=confirmRename 分支）", async () => {
+    const pageRow = seedSinglePage();
+
+    const input = openRename(pageRow);
+    fireEvent.change(input, { target: { value: "blur 改名" } });
+    fireEvent.blur(input);
+
+    await waitFor(() => {
+      expect(
+        useProjects.getState().projects["proj-1"].pages[0].name,
+      ).toBe("blur 改名");
+    });
+    expect(pageRow.querySelector("input")).toBeNull();
+  });
+
+  it("重命名中行点击禁用：不切换页面、不折叠会话（onClick=undefined 分支）", () => {
+    seedProject("C:/test", "proj-1", "测试项目", [
+      { pageId: "page1", name: "页面 1" },
+    ]);
+    seedActivePage("page1");
+    mockUseAgentStatus.mockReturnValue({
+      state: { kind: "ready" },
+      rows: [makeRow()],
+      currentProjectName: "测试项目",
+      now: Date.now(),
+    });
+    const { container } = render(<NavTree />);
+    expandTo(container, '[data-e2e="nav-row-session"]');
+    expect(getRows(container, "nav-row-session")).toHaveLength(1);
+    const pageRow = getRows(container, "nav-row-page")[0];
+
+    const input = openRename(pageRow);
+    fireEvent.click(pageRow);
+
+    // 行点击被禁用：会话展开态保持（仍 1 行）、页面未切换、仍处重命名态
+    expect(getRows(container, "nav-row-session")).toHaveLength(1);
+    expect(useLayout.getState().activePageId).toBe("page1");
+    expect(pageRow.querySelector("input")).toBe(input);
+
+    // input 自身点击 stopPropagation（NavPageRow :102 防御分支）——同样不触发行动作
+    fireEvent.click(input);
+    expect(getRows(container, "nav-row-session")).toHaveLength(1);
+    expect(useLayout.getState().activePageId).toBe("page1");
+  });
+
+  it("chevron 点击仅切换会话展开（stopPropagation 不切页面）+ 方向图标随展开态翻转", async () => {
+    // 双页面：活跃 page1，会话挂在 page2——若 chevron 冒泡触发页面切换，activePageId 将变为 page2
+    seedProject("C:/test", "proj-1", "测试项目", [
+      { pageId: "page1", name: "页面 1" },
+      { pageId: "page2", name: "页面 2" },
+    ]);
+    seedActivePage("page1");
+    mockUseAgentStatus.mockReturnValue({
+      state: { kind: "ready" },
+      rows: [
+        makeRow({
+          panelId: "terminal-page2-0",
+          pageId: "page2",
+          title: "终端 page2",
+        }),
+      ],
+      currentProjectName: "测试项目",
+      now: Date.now(),
+    });
+    const { container } = render(<NavTree />);
+    expandTo(container, '[data-e2e="nav-row-page"]');
+
+    const page2Row = getRows(container, "nav-row-page").find((r) =>
+      r.textContent?.includes("页面 2"),
+    )!;
+    // 收起态：chevron 为右侧箭头（IconChevronRight——lucide path d 契约）
+    const chevron = page2Row.querySelector('svg[width="12"]')!;
+    expect(
+      chevron.querySelector("path")?.getAttribute("d"),
+    ).toBe("m9 18 6-6-6-6");
+
+    // 点击 chevron → 会话展开；页面未切换（stopPropagation 生效）
+    fireEvent.click(chevron);
+    await waitFor(() => {
+      expect(getRows(container, "nav-row-session")).toHaveLength(1);
+    });
+    expect(getRows(container, "nav-row-session")[0].textContent).toContain(
+      "终端 page2",
+    );
+    expect(useLayout.getState().activePageId).toBe("page1");
+
+    // 展开态：chevron 翻转为向下箭头（IconChevronDown）
+    const page2Row2 = getRows(container, "nav-row-page").find((r) =>
+      r.textContent?.includes("页面 2"),
+    )!;
+    const chevron2 = page2Row2.querySelector('svg[width="12"]')!;
+    expect(chevron2.querySelector("path")?.getAttribute("d")).toBe(
+      "m6 9 6 6 6-6",
+    );
+
+    // 再次点击 → 会话收起
+    fireEvent.click(chevron2);
+    await waitFor(() => {
+      expect(getRows(container, "nav-row-session")).toHaveLength(0);
     });
   });
 });

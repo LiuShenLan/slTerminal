@@ -13,6 +13,7 @@
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from "vitest";
 import { mockIPC, clearMocks } from "@tauri-apps/api/mocks";
 import React from "react";
+import * as ReactDOM from "react-dom/client";
 import { render, act, fireEvent, cleanup } from "@testing-library/react";
 
 // Mock @xterm/xterm — xterm.js 6.1+ 渲染器初始化在 jsdom 中抛异常（同 workspace 测试）
@@ -56,6 +57,7 @@ afterAll(() => {
 import PageDockview from "../workspace/PageDockviewHost";
 import { titleManager } from "../workspace/titleManager";
 import { resetTerminalPanelSeq } from "../lib/panelId";
+import { TerminalRegistry } from "../panels/terminal/TerminalRegistry";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyApi = any;
@@ -138,6 +140,8 @@ beforeEach(() => {
   titleManager.reset();
   // B14: 模块级每页计数隔离（nextPanelId 消费 makeTerminalPanelId 的共享计数）
   resetTerminalPanelSeq();
+  // TQ-COV-08: 右键菜单「重命名」disabled 判据经 TerminalRegistry 会话状态
+  TerminalRegistry._reset();
 });
 
 afterEach(() => {
@@ -145,6 +149,8 @@ afterEach(() => {
   // 污染按钮查询与全局事件监听，必须显式清理
   cleanup();
   clearMocks();
+  // TQ-COV-08: 清掉 fake 右键菜单残留的 body 挂载节点（未点击关闭项的用例兜底）
+  document.querySelectorAll("[data-menu='host']").forEach((el) => el.remove());
 });
 
 /** 等待 Dockview 渲染 settle（onReady → watermark/header 渲染为异步） */
@@ -195,6 +201,75 @@ function clickButton(container: HTMLElement, text: string): void {
     expect.fail(`找不到按钮「${text}」。HTML: ${container.innerHTML.slice(0, 5000)}`);
   }
   fireEvent.click(btns[btns.length - 1]);
+}
+
+// ---- TQ-COV-08：fake contextMenuService（测试探针，仅本文件使用）----
+//
+// dockview-core 8.1.0 的 ContextMenu 模块是 enterprise 实现（free core 不注册
+// contextMenuService——`api.component._moduleRegistry._services` 无该项），真实
+// DockviewReact 的页签 contextmenu 监听因 `?.` 静默短路，jsdom 中右键不出菜单。
+// 本探针在 live DockviewComponent 上安装最小 contextMenuService：右键页签 →
+// 真实 `getTabContextMenuItems` 构建菜单项 → 真实 TabContextMenuItem 组件渲染到
+// body（照 dockview-react ReactContextMenuItemPart 的 props 形态：close +
+// componentProps）→ 点击驱动真实 action（新建终端/重命名/关闭/关闭其他/关闭全部）。
+// 由此覆盖生产右键菜单全链路（openRenameDialog → TerminalRenameDialog →
+// handleRenameConfirm → applyRename），不改动生产代码。
+
+/** 安装 fake contextMenuService 并返回菜单项查询函数 */
+function installFakeContextMenu(api: AnyApi): () => Element[] {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const comp = api.component as any;
+  comp._moduleRegistry._services.contextMenuService = {
+    show: (panel: unknown, group: unknown, event: unknown) => {
+      const menuHost = document.createElement("div");
+      menuHost.dataset.menu = "host";
+      document.body.appendChild(menuHost);
+      const root = ReactDOM.createRoot(menuHost);
+      const items = comp.options.getTabContextMenuItems({ panel, group, api: comp.api, event });
+      const els: React.ReactNode[] = [];
+      let key = 0;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      for (const item of items as any[]) {
+        if (item === "separator") continue;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const C = item.component as React.ComponentType<any>;
+        els.push(React.createElement(C, {
+          key: key++,
+          panel, group, api: comp.api,
+          close: () => root.unmount(),
+          componentProps: item.componentProps,
+        }));
+      }
+      root.render(React.createElement(React.Fragment, null, els));
+    },
+  };
+  return () => Array.from(document.body.querySelectorAll("[role='menuitem']"));
+}
+
+/** 右键第一个页签触发菜单（真实 contextmenu 事件 → 真实 getTabContextMenuItems） */
+async function openTabContextMenu(): Promise<void> {
+  await act(async () => {
+    fireEvent.contextMenu(document.querySelector(".dv-tab") as Element);
+    await new Promise((r) => setTimeout(r, 0));
+  });
+}
+
+// FileIcon 独有特征（features/explorer/FileIcon.tsx 自绘坐标——区分于
+// dockview 自身图标/StatusDot 等其它 svg）：
+// - 14×14 svg + viewBox="0 0 14 14"
+// - 文件轮廓 path（右上折角 + 弧线收角，含 a 弧线命令）
+const FILE_ICON_OUTLINE =
+  "M3.5 1.5H8L11 4.5v6.5a1.5 1.5 0 0 1-1.5 1.5h-6A1.5 1.5 0 0 1 2 11V3a1.5 1.5 0 0 1 1.5-1.5Z";
+function isFileIconSvg(svg: SVGSVGElement): boolean {
+  if (
+    svg.getAttribute("width") !== "14" ||
+    svg.getAttribute("viewBox") !== "0 0 14 14"
+  ) {
+    return false;
+  }
+  return Array.from(svg.querySelectorAll("path")).some(
+    (p) => p.getAttribute("d") === FILE_ICON_OUTLINE,
+  );
 }
 
 describe("PageDockview 真实组件", () => {
@@ -279,24 +354,6 @@ describe("PageDockview 真实组件", () => {
   });
 
   describe("页签形态（TAB-03：文件页签 FileIcon 集成渲染）", () => {
-    // FileIcon 独有特征（features/explorer/FileIcon.tsx 自绘坐标——区分于
-    // dockview 自身图标/StatusDot 等其它 svg）：
-    // - 14×14 svg + viewBox="0 0 14 14"
-    // - 文件轮廓 path（右上折角 + 弧线收角，含 a 弧线命令）
-    const FILE_ICON_OUTLINE =
-      "M3.5 1.5H8L11 4.5v6.5a1.5 1.5 0 0 1-1.5 1.5h-6A1.5 1.5 0 0 1 2 11V3a1.5 1.5 0 0 1 1.5-1.5Z";
-    function isFileIconSvg(svg: SVGSVGElement): boolean {
-      if (
-        svg.getAttribute("width") !== "14" ||
-        svg.getAttribute("viewBox") !== "0 0 14 14"
-      ) {
-        return false;
-      }
-      return Array.from(svg.querySelectorAll("path")).some(
-        (p) => p.getAttribute("d") === FILE_ICON_OUTLINE,
-      );
-    }
-
     it("恢复文件布局 → 页签渲染 FileIcon 彩色图标（轮廓特征 path）", async () => {
       mockIPC(() => null);
       const { container } = await renderDock({ savedLayout: EDITOR_LAYOUT });
@@ -367,6 +424,464 @@ describe("PageDockview 真实组件", () => {
         }));
       });
       expect(api).toBeTruthy();
+    });
+  });
+
+  // ============================================================
+  // TQ-COV-08 覆盖补测（2026-08）——页签右键菜单真实链路（fake contextMenuService
+  // 驱动：dockview 8.1.0 free core 无 ContextMenu 模块，右键真实触发 getTabContextMenuItems
+  // 后由探针渲染菜单项并派发点击；断言全部为用户可见行为）
+  // ============================================================
+
+  /** 创建两个终端面板（watermark 按钮 + "+" 按钮），返回 api + container */
+  async function twoTerminals() {
+    const rendered = await renderDock();
+    await act(async () => { clickButton(rendered.container, "新建终端"); });
+    await settle();
+    await act(async () => { clickButton(rendered.container, "+"); });
+    await settle();
+    return rendered;
+  }
+
+  describe("页签右键菜单（TQ-COV-08）", () => {
+    it("右键终端页签 → 真实菜单构建渲染 5 项（新建终端/重命名/关闭/关闭其他/关闭全部）", async () => {
+      mockIPC(() => null);
+      const { api, container } = await renderDock();
+      await act(async () => { clickButton(container, "新建终端"); });
+      await settle();
+      const getItems = installFakeContextMenu(api);
+      await openTabContextMenu();
+      // 用户可见：菜单项渲染于 DOM（7 项结构 minus 分隔线）
+      expect(getItems().map((m) => m.textContent)).toEqual([
+        "新建终端", "重命名", "关闭", "关闭其他", "关闭全部",
+      ]);
+    });
+
+    it("点击「重命名」→ 弹窗预填当前标题 → 输入新名确定 → 标题/customTitle 更新 + 显式保存", async () => {
+      mockIPC(() => null);
+      const { api, container, onLayoutChange } = await renderDock();
+      await act(async () => { clickButton(container, "新建终端"); });
+      await settle();
+      const panelId = `terminal-${PAGE_ID}-0`;
+      const getItems = installFakeContextMenu(api);
+      await openTabContextMenu();
+      const rename = getItems().find((m) => m.textContent === "重命名") as Element;
+      await act(async () => { fireEvent.click(rename); });
+      await settle();
+      // 用户可见：TerminalRenameDialog 弹窗出现（含输入框与确定按钮）
+      const input = container.querySelector("input") as HTMLInputElement;
+      expect(input).toBeTruthy();
+      expect(input.value).toBe("terminal-0"); // 预填当前标题（customTitle 优先）
+      const confirmBtn = Array.from(container.querySelectorAll("button")).find(
+        (b) => b.textContent === "确定",
+      ) as HTMLButtonElement;
+      expect(confirmBtn).toBeTruthy();
+      onLayoutChange.mockClear();
+      await act(async () => {
+        fireEvent.change(input, { target: { value: "我的终端" } });
+        fireEvent.click(confirmBtn);
+      });
+      await settle();
+      // 用户可见：页签标题更新为自定义名
+      expect(api.getPanel(panelId).api.title).toBe("我的终端");
+      // customTitle 写入 params（随布局 JSON 持久化的单一真值源）
+      expect(api.getPanel(panelId).params.customTitle).toBe("我的终端");
+      // applyRename 显式 onLayoutChange(saveLayout(api))——最近一次保存的布局
+      // 必须已含新 customTitle（setTitle/updateParameters 不触发 onDidLayoutChange，
+      // 此保存即持久化证据；不数精确调用次数——面板创建期的 debounce 事件可能迟到）
+      const lastSaved = onLayoutChange.mock.calls[onLayoutChange.mock.calls.length - 1]?.[0] as
+        | { panels?: Record<string, { params?: Record<string, unknown> }> }
+        | undefined;
+      expect(lastSaved?.panels?.[panelId]?.params?.customTitle).toBe("我的终端");
+      // 弹窗关闭
+      expect(container.querySelector("input")).toBeNull();
+    });
+
+    it("恢复 customTitle 终端 → 重命名弹窗预填 customTitle（F8 优先）", async () => {
+      mockIPC(() => null);
+      const { api, container, onLayoutChange } = await renderDock({
+        savedLayout: TERMINAL_CUSTOM_LAYOUT,
+      });
+      const panelId = "terminal-page-dock-0";
+      expect(api.getPanel(panelId).api.title).toBe("我的终端");
+      const getItems = installFakeContextMenu(api);
+      await openTabContextMenu();
+      const rename = getItems().find((m) => m.textContent === "重命名") as Element;
+      await act(async () => { fireEvent.click(rename); });
+      await settle();
+      const input = container.querySelector("input") as HTMLInputElement;
+      // 用户可见：预填 = 既有 customTitle（非瞬态标题）
+      expect(input.value).toBe("我的终端");
+      const confirmBtn = Array.from(container.querySelectorAll("button")).find(
+        (b) => b.textContent === "确定",
+      ) as HTMLButtonElement;
+      onLayoutChange.mockClear();
+      await act(async () => {
+        fireEvent.change(input, { target: { value: "我的终端2" } });
+        fireEvent.click(confirmBtn);
+      });
+      await settle();
+      expect(api.getPanel(panelId).api.title).toBe("我的终端2");
+      expect(api.getPanel(panelId).params.customTitle).toBe("我的终端2");
+      // 显式保存的布局已含新 customTitle
+      const lastSaved = onLayoutChange.mock.calls[onLayoutChange.mock.calls.length - 1]?.[0] as
+        | { panels?: Record<string, { params?: Record<string, unknown> }> }
+        | undefined;
+      expect(lastSaved?.panels?.[panelId]?.params?.customTitle).toBe("我的终端2");
+    });
+
+    it("点击「关闭」→ 右键面板关闭（其余保留）", async () => {
+      mockIPC(() => null);
+      const { api } = await twoTerminals();
+      const getItems = installFakeContextMenu(api);
+      await openTabContextMenu();
+      const close = getItems().find((m) => m.textContent === "关闭") as Element;
+      await act(async () => { fireEvent.click(close); });
+      await settle();
+      // 用户可见：右键的第一个终端被关闭，第二个保留
+      expect(api.panels.map((p: AnyApi) => p.id)).toEqual([`terminal-${PAGE_ID}-1`]);
+    });
+
+    it("点击「关闭其他」→ 仅保留右键面板", async () => {
+      mockIPC(() => null);
+      const { api } = await twoTerminals();
+      const getItems = installFakeContextMenu(api);
+      await openTabContextMenu();
+      const closeOthers = getItems().find((m) => m.textContent === "关闭其他") as Element;
+      await act(async () => { fireEvent.click(closeOthers); });
+      await settle();
+      expect(api.panels.map((p: AnyApi) => p.id)).toEqual([`terminal-${PAGE_ID}-0`]);
+    });
+
+    it("点击「关闭全部」→ 面板清空 + Watermark 空态回归", async () => {
+      mockIPC(() => null);
+      const { api, container } = await twoTerminals();
+      const getItems = installFakeContextMenu(api);
+      await openTabContextMenu();
+      const closeAll = getItems().find((m) => m.textContent === "关闭全部") as Element;
+      await act(async () => { fireEvent.click(closeAll); });
+      await settle();
+      // 用户可见：面板全关 + 空白页由 Watermark 接管
+      expect(api.panels.length).toBe(0);
+      expect(container.textContent).toContain("打开终端或编辑器开始工作");
+    });
+
+    it("菜单项 hover → SECONDARY_BG 底；危险项（关闭类）ERROR_FG 字（UI-802）", async () => {
+      mockIPC(() => null);
+      const { api, container } = await renderDock();
+      await act(async () => { clickButton(container, "新建终端"); });
+      await settle();
+      const getItems = installFakeContextMenu(api);
+      await openTabContextMenu();
+      const newTerminal = getItems().find((m) => m.textContent === "新建终端") as HTMLElement;
+      // 用户可见：hover 菜单项 → ui.secondaryBg 底（#222227 → rgb(34, 34, 39)）
+      await act(async () => { fireEvent.mouseEnter(newTerminal); });
+      expect(newTerminal.style.background).toBe("rgb(34, 34, 39)");
+      // 离开 → 还原透明
+      await act(async () => { fireEvent.mouseLeave(newTerminal); });
+      expect(newTerminal.style.background).toBe("transparent");
+      // 危险项（关闭）→ ERROR_FG 文字（#d9706b → rgb(217, 112, 107)）
+      const close = getItems().find((m) => m.textContent === "关闭") as HTMLElement;
+      expect(close.style.color).toBe("rgb(217, 112, 107)");
+    });
+
+    it("重命名弹窗取消（确定旁「取消」按钮）→ 弹窗关闭且标题不变", async () => {
+      mockIPC(() => null);
+      const { api, container } = await renderDock();
+      await act(async () => { clickButton(container, "新建终端"); });
+      await settle();
+      const panelId = `terminal-${PAGE_ID}-0`;
+      const getItems = installFakeContextMenu(api);
+      await openTabContextMenu();
+      const rename = getItems().find((m) => m.textContent === "重命名") as Element;
+      await act(async () => { fireEvent.click(rename); });
+      await settle();
+      const input = container.querySelector("input") as HTMLInputElement;
+      expect(input).toBeTruthy();
+      await act(async () => {
+        fireEvent.change(input, { target: { value: "改了名" } });
+        const cancelBtn = Array.from(container.querySelectorAll("button")).find(
+          (b) => b.textContent === "取消",
+        ) as HTMLButtonElement;
+        fireEvent.click(cancelBtn);
+      });
+      await settle();
+      // 用户可见：弹窗关闭（输入框消失）
+      expect(container.querySelector("input")).toBeNull();
+      // 标题未被修改（取消不落盘）
+      expect(api.getPanel(panelId).api.title).toBe("terminal-0");
+    });
+
+    it("claude 运行中（agentSession 存在）→ 重命名项 disabled：置灰 + 点击不弹窗", async () => {
+      mockIPC(() => null);
+      const { api, container } = await renderDock();
+      await act(async () => { clickButton(container, "新建终端"); });
+      await settle();
+      const panelId = `terminal-${PAGE_ID}-0`;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      TerminalRegistry.register(panelId, {} as any);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      TerminalRegistry.setAgentSession(panelId, { sessionId: "s1" } as any);
+      const getItems = installFakeContextMenu(api);
+      await openTabContextMenu();
+      const rename = getItems().find((m) => m.textContent === "重命名") as HTMLElement;
+      // 用户可见：disabled 置灰样式（opacity 0.4 + pointerEvents none）
+      expect(rename.style.opacity).toBe("0.4");
+      expect(rename.style.pointerEvents).toBe("none");
+      await act(async () => { fireEvent.click(rename); });
+      await settle();
+      // 点击无响应：弹窗不出现
+      expect(container.querySelector("input")).toBeNull();
+    });
+  });
+
+  describe("页签/按钮 hover（TQ-COV-08）", () => {
+    it("× 关闭钮 hover → 背景 var(--dv-icon-hover-background-color)（TAB-02）", async () => {
+      mockIPC(() => null);
+      const { container } = await renderDock();
+      await act(async () => { clickButton(container, "新建终端"); });
+      await settle();
+      const tab = container.querySelector(".dv-tab") as HTMLElement;
+      const closeBtn = Array.from(tab.querySelectorAll("button")).find(
+        (b) => b.textContent === "×",
+      ) as HTMLButtonElement;
+      await act(async () => { fireEvent.mouseEnter(closeBtn); });
+      // 用户可见：hover 时显示 hover 底色（默认 none）
+      expect(closeBtn.style.background).toBe("var(--dv-icon-hover-background-color)");
+      await act(async () => { fireEvent.mouseLeave(closeBtn); });
+      expect(closeBtn.style.background).toBe("none");
+    });
+
+    it("「+」钮 hover → 背景 SECONDARY_BG，离开还原（TAB-04）", async () => {
+      mockIPC(() => null);
+      const { container } = await renderDock();
+      await act(async () => { clickButton(container, "新建终端"); });
+      await settle();
+      const plusBtn = Array.from(container.querySelectorAll("button")).find(
+        (b) => b.textContent === "+",
+      ) as HTMLButtonElement;
+      expect(plusBtn).toBeTruthy();
+      await act(async () => { fireEvent.mouseEnter(plusBtn); });
+      // 用户可见：hover 底 ui.secondaryBg（#222227 → rgb(34, 34, 39)）
+      expect(plusBtn.style.background).toBe("rgb(34, 34, 39)");
+      await act(async () => { fireEvent.mouseLeave(plusBtn); });
+      expect(plusBtn.style.background).toBe("none");
+    });
+
+    it("hover 未激活页签 → 标题文字变 fg-1（TAB-01 仅文字变色）", async () => {
+      mockIPC(() => null);
+      const { container } = await renderDock();
+      await act(async () => { clickButton(container, "新建终端"); });
+      await settle();
+      await act(async () => { clickButton(container, "+"); });
+      await settle();
+      const tabs = Array.from(container.querySelectorAll(".dv-tab"));
+      // 两个同组页签：后创建的面板（terminal-1）为激活——第一个（terminal-0）非激活。
+      // onMouseEnter 挂在 DefaultTab 根 div（.dv-tab > .dv-react-part 内层），
+      // 以标题 span 的父元素为派发目标
+      const inactiveTab = tabs[0] as HTMLElement;
+      const titleSpan = inactiveTab.querySelector("span") as HTMLElement;
+      const tabRoot = titleSpan.parentElement as HTMLElement;
+      await act(async () => { fireEvent.mouseEnter(tabRoot); });
+      // 用户可见：hover 未激活页签文字变 sidebarFg（#ece9e4 → rgb(236, 233, 228)），
+      // 激活页签（第一个）文字不变
+      expect(titleSpan.style.color).toBe("rgb(236, 233, 228)");
+    });
+  });
+
+  describe("页面可见性（TQ-COV-08）", () => {
+    it("visible=false → 根容器 display:none（多实例 CSS 显隐）", async () => {
+      mockIPC(() => null);
+      const { container } = await renderDock({ visible: false });
+      // 用户可见：非活跃页面 DOM 隐藏（display:none）——H6 终端跨页面存活的基础
+      const root = container.firstElementChild as HTMLElement;
+      expect(root.style.display).toBe("none");
+    });
+
+    it("visible=true → 根容器 display:block", async () => {
+      mockIPC(() => null);
+      const { container } = await renderDock({ visible: true });
+      const root = container.firstElementChild as HTMLElement;
+      expect(root.style.display).toBe("block");
+    });
+  });
+
+  describe("布局恢复边界（TQ-COV-08）", () => {
+    /** 含一个无 panelId 编辑器面板的布局（触发 rebuildAndRecomputeTitles 双 pass 的
+     *  `!params?.panelId continue` 守卫——面板自身恢复不受影响） */
+    const BARE_PANEL_LAYOUT = {
+      grid: {
+        root: { type: "branch", data: [{ type: "leaf", data: { views: ["editor-1", "bare"] } }] },
+        orientation: "HORIZONTAL",
+      },
+      panels: {
+        "editor-1": {
+          id: "editor-1",
+          contentComponent: "editor",
+          title: "a.txt",
+          position: { group: "group-1" },
+          params: { panelId: "editor-1", filePath: "C:\\root\\a.txt" },
+        },
+        "bare": {
+          id: "bare",
+          contentComponent: "editor",
+          title: "bare",
+          position: { group: "group-1" },
+          params: {},
+        },
+      },
+      activeGroup: "group-1",
+    };
+
+    it("恢复含无 panelId 面板的布局 → 面板齐全 + 正常面板标题重算（守卫 continue 不崩）", async () => {
+      mockIPC(() => null);
+      const { api } = await renderDock({ savedLayout: BARE_PANEL_LAYOUT });
+      // 用户可见：两个面板都恢复（无 panelId 的面板不参与标题注册但保留）
+      expect(api.panels.map((p: AnyApi) => p.id)).toEqual(["editor-1", "bare"]);
+      expect(api.getPanel("editor-1").api.title).toBe("a.txt");
+    });
+
+    it("rootPath 为空 + 恢复终端布局 → 终端标题仍重算 terminal-N（B12 pass 先于 rootPath 检查）", async () => {
+      mockIPC(() => null);
+      const { api } = await renderDock({
+        savedLayout: TERMINAL_TRANSIENT_LAYOUT,
+        rootPath: undefined,
+      });
+      // 用户可见：瞬态标题 "claude" 被重算（不依赖 rootPath 的终端 pass 先执行）
+      expect(api.getPanel("terminal-page-dock-0").api.title).toBe("terminal-0");
+    });
+
+    it("尾部反斜杠 filePath → 文件名回退整路径（FileIcon 渲染 + 标题回退 component）", async () => {
+      mockIPC(() => null);
+      const TRAILING_LAYOUT = {
+        grid: {
+          root: { type: "branch", data: [{ type: "leaf", data: { views: ["editor-x"] } }] },
+          orientation: "HORIZONTAL",
+        },
+        panels: {
+          "editor-x": {
+            id: "editor-x",
+            contentComponent: "editor",
+            title: "sub",
+            position: { group: "group-1" },
+            params: { panelId: "editor-x", filePath: "C:\\root\\sub\\" },
+          },
+        },
+        activeGroup: "group-1",
+      };
+      const { container } = await renderDock({ savedLayout: TRAILING_LAYOUT });
+      // 用户可见：FileIcon 渲染（文件名 = 整路径回退，TAB-03 判据命中）
+      const fileIconSvgs = Array.from(container.querySelectorAll("svg")).filter(
+        isFileIconSvg,
+      );
+      expect(fileIconSvgs.length).toBeGreaterThan(0);
+      // basename 为空 → 重算标题为空 → DefaultTab 回退 component 名
+      const tab = container.querySelector(".dv-tab") as HTMLElement;
+      expect(tab.textContent).toBe("editor×");
+    });
+  });
+
+  describe("onDidRemovePanel / 布局恢复守卫（TQ-COV-08）", () => {
+    /** 两个同目录层级不同但 basename 相同的编辑器（冲突 → 相对路径标题） */
+    const CONFLICT_LAYOUT = {
+      grid: {
+        root: { type: "branch", data: [{ type: "leaf", data: { views: ["editor-1", "editor-2"] } }] },
+        orientation: "HORIZONTAL",
+      },
+      panels: {
+        "editor-1": {
+          id: "editor-1",
+          contentComponent: "editor",
+          title: "a.txt",
+          position: { group: "group-1" },
+          params: { panelId: "editor-1", filePath: "C:\\root\\a.txt" },
+        },
+        "editor-2": {
+          id: "editor-2",
+          contentComponent: "editor",
+          title: "a.txt",
+          position: { group: "group-1" },
+          params: { panelId: "editor-2", filePath: "C:\\root\\other\\a.txt" },
+        },
+      },
+      activeGroup: "group-1",
+    };
+
+    it("removePanel 编辑器 → 面板消失 + 剩余面板标题重算（冲突解除回 basename）+ 布局保存", async () => {
+      mockIPC(() => null);
+      const { api, onLayoutChange } = await renderDock({ savedLayout: CONFLICT_LAYOUT });
+      // 恢复期同名冲突 → 相对路径标题（用户可见）
+      expect(api.getPanel("editor-2").api.title).toBe("other/a.txt");
+      onLayoutChange.mockClear();
+      await act(async () => { api.removePanel(api.getPanel("editor-1")); });
+      await settle();
+      // 用户可见：面板关闭 + 剩余同名编辑器冲突解除 → 标题回 basename
+      expect(api.getPanel("editor-1")).toBeUndefined();
+      expect(api.getPanel("editor-2").api.title).toBe("a.txt");
+      // onDidRemovePanel 触发的布局变更写回 store
+      expect(onLayoutChange).toHaveBeenCalled();
+    });
+
+    it("幽灵编辑器注册（无对应面板）→ 移除其它面板时重算目标不存在 → 跳过不崩溃", async () => {
+      mockIPC(() => null);
+      const { api } = await renderDock({ savedLayout: CONFLICT_LAYOUT });
+      // 幽灵条目：titleManager 有注册但 dockview 无对应面板（getPanel 返回 null）
+      titleManager.registerEditor(PAGE_ID, "phantom", "C:\\root\\phantom.txt");
+      await act(async () => { api.removePanel(api.getPanel("editor-1")); });
+      await settle();
+      // 用户可见：真实面板仍正确重算（幽灵条目被 applyTitleUpdates 跳过）
+      expect(api.getPanel("editor-2").api.title).toBe("a.txt");
+    });
+
+    it("rootPath 为空 + 移除无 panelId 面板 → 跳过注销与重算不崩溃", async () => {
+      mockIPC(() => null);
+      const { api } = await renderDock({ rootPath: undefined });
+      await act(async () => {
+        api.addPanel({ id: "bare-3", component: "editor", title: "bare", params: {} });
+      });
+      await settle();
+      await act(async () => { api.removePanel(api.getPanel("bare-3")); });
+      await settle();
+      // 用户可见：无 panelId 面板可正常关闭
+      expect(api.panels.length).toBe(0);
+    });
+
+    it("fromJSON 恢复守卫：程序化恢复后的布局变更不写回，守卫复位后恢复写回", async () => {
+      mockIPC(() => null);
+      const { api, onLayoutChange } = await renderDock();
+      // 程序化恢复（非用户操作）→ onDidLayoutFromJSON 置守卫
+      await act(async () => { api.fromJSON(api.toJSON()); });
+      // 守卫期内 addPanel → 布局变更被抑制（不写回 store）
+      await act(async () => {
+        api.addPanel({
+          id: "guard-1", component: "editor", title: "g1",
+          params: { panelId: "guard-1", filePath: "C:\\root\\g1.txt" },
+        });
+      });
+      expect(onLayoutChange).not.toHaveBeenCalled();
+      // setTimeout(0) 复位后 → 布局变更正常写回
+      await settle();
+      await act(async () => {
+        api.addPanel({
+          id: "guard-2", component: "editor", title: "g2",
+          params: { panelId: "guard-2", filePath: "C:\\root\\g2.txt" },
+        });
+      });
+      expect(onLayoutChange).toHaveBeenCalled();
+    });
+  });
+
+  describe("DefaultTab 标题回退（TQ-COV-08）", () => {
+    it("addPanel 空标题 → 页签显示 component 名回退", async () => {
+      mockIPC(() => null);
+      const { api, container } = await renderDock();
+      await act(async () => {
+        api.addPanel({ id: "e0", component: "editor", title: "", params: { panelId: "e0" } });
+      });
+      await settle();
+      // 用户可见：标题回退链 api.title || api.component || "" → "editor"
+      const tab = container.querySelector(".dv-tab") as HTMLElement;
+      expect(tab.textContent).toBe("editor×");
     });
   });
 });

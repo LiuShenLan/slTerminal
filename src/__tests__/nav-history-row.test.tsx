@@ -20,10 +20,11 @@
 // （iconSrc = /cli-icons/claude.png）经注册表查询（MC-311 委托）。
 
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, cleanup, fireEvent } from "@testing-library/react";
+import { render, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { NavHistoryRow } from "../features/navTree/NavHistoryRow";
 import { formatRelativeTime } from "../features/agentHistory/historyModel";
 import { SESSION_ROW_HEIGHT } from "../features/navTree/navStyles";
+import { SIDEBAR_COLORS } from "../theme";
 import type { AgentStatus } from "../lib/agentStatus";
 import "../features/cliProfiles/profiles";
 import type { AgentHistorySession } from "../types/agentHistory";
@@ -63,6 +64,14 @@ function makeSession(
     cliId: "claude",
     ...overrides,
   };
+}
+
+/** 色值 → jsdom 归一化形态（#hex → "rgb(r, g, b)"）——jsdom cssstyle 将 hex 统一序列化为 rgb() */
+function hexToRgb(hex: string): string {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgb(${r}, ${g}, ${b})`;
 }
 
 /** 渲染行组件，返回根元素与 mock 回调（status 缺省 undefined = 无运行状态） */
@@ -225,5 +234,29 @@ describe("NavHistoryRow 交互回调", () => {
     fireEvent.contextMenu(row, { clientX: 123, clientY: 45 });
     expect(onContextMenu).toHaveBeenCalledTimes(1);
     expect(onContextMenu).toHaveBeenCalledWith(session, { x: 123, y: 45 });
+  });
+});
+
+describe("NavHistoryRow hover 态（UI-501：hover #222227 = SIDEBAR_COLORS.hover）", () => {
+  it("mouseEnter → 行背景 SIDEBAR_COLORS.hover（非选中行 hover 档）", async () => {
+    const { row } = renderRow(makeSession());
+
+    fireEvent.mouseEnter(row);
+    await waitFor(() => {
+      expect(row.style.backgroundColor).toBe(hexToRgb(SIDEBAR_COLORS.hover));
+    });
+  });
+
+  it("mouseLeave → 背景恢复 transparent（hover 态清理）", async () => {
+    const { row } = renderRow(makeSession());
+
+    fireEvent.mouseEnter(row);
+    await waitFor(() => {
+      expect(row.style.backgroundColor).toBe(hexToRgb(SIDEBAR_COLORS.hover));
+    });
+    fireEvent.mouseLeave(row);
+    await waitFor(() => {
+      expect(row.style.backgroundColor).toBe("transparent");
+    });
   });
 });

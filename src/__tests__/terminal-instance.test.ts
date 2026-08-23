@@ -19,7 +19,9 @@ const mocks = vi.hoisted(() => {
     open: vi.fn(),
     dispose: vi.fn(),
     loadAddon: vi.fn(),
-    element: document.createElement("div"),
+    // 类型放宽为 HTMLElement | null——用例 11 需模拟 element 未挂载（置 null）；
+    // 字面量推断会收窄为 HTMLDivElement，赋 null 报 TS2322
+    element: document.createElement("div") as HTMLElement | null,
     options: {} as Record<string, unknown>,
   };
   const fitAddon = { fit: vi.fn(), dispose: vi.fn() };
@@ -66,6 +68,8 @@ vi.mock("../panels/terminal/webgl", () => ({
 
 /** 最近一次 setupWebglWithRetry 收到的 onSuccess 回调（挂载时主 effect 注册） */
 let lastOnSuccess: ((addon: WebglAddon) => void) | null = null;
+/** 最近一次 setupWebglWithRetry 收到的 onFail 回调（重试耗尽/不可用回退时触发） */
+let lastOnFail: (() => void) | null = null;
 /** setupWebglWithRetry 返回的 cancel 函数 */
 let cancelFn: ReturnType<typeof vi.fn>;
 
@@ -81,8 +85,9 @@ describe("useTerminalInstance 分支覆盖（TRM-07）", () => {
     cancelFn = vi.fn();
     mocks.webgl.detectWebgl.mockClear().mockReturnValue(true);
     mocks.webgl.setupWebglWithRetry.mockClear();
-    mocks.webgl.setupWebglWithRetry.mockImplementation((_term, onSuccess) => {
+    mocks.webgl.setupWebglWithRetry.mockImplementation((_term, onSuccess, onFail) => {
       lastOnSuccess = onSuccess;
+      lastOnFail = onFail;
       return { cancel: cancelFn };
     });
   });
@@ -206,5 +211,163 @@ describe("useTerminalInstance 分支覆盖（TRM-07）", () => {
     expect(openOrder).toBeDefined();
     expect(setupOrder).toBeDefined();
     expect(openOrder).toBeLessThan(setupOrder);
+  });
+
+  it("8. onFail 回调接线——重试耗尽/不可用回退 → webglAddonRef 置 null，tryLoadWebgl 可重新发起加载", () => {
+    // TQ-COV-07：WebGL 重试耗尽时 webgl.ts 调 onFail，本用例验证 useTerminalInstance
+    // 的 onFail 接线（ref 置 null = 回退 DOM 渲染器），并验证回退后可见性恢复路径
+    // tryLoadWebgl 能重新发起加载（ref 已空不短路）。
+    const container = containerStub();
+    const { result } = renderHook(() => useTerminalInstance(container, {}));
+    // 挂载时主 effect 已调用一次 setupWebglWithRetry
+    expect(mocks.webgl.setupWebglWithRetry).toHaveBeenCalledTimes(1);
+
+    // 主 effect 注册的 onFail 触发（重试耗尽）→ ref 置 null
+    act(() => {
+      lastOnFail!();
+    });
+    expect(result.current.webglAddon.current).toBeNull();
+
+    // ref 已空 → tryLoadWebgl 重新发起加载（回退后可见性恢复再试 WebGL）
+    act(() => {
+      result.current.tryLoadWebgl();
+    });
+    expect(mocks.webgl.setupWebglWithRetry).toHaveBeenCalledTimes(2);
+
+    // tryLoadWebgl 注册的 onSuccess 触发 → ref 恢复（覆盖 tryLoadWebgl 的 onSuccess 箭头）
+    act(() => {
+      lastOnSuccess!(mocks.webglAddon as unknown as WebglAddon);
+    });
+    expect(result.current.webglAddon.current).toBe(mocks.webglAddon);
+
+    // tryLoadWebgl 注册的 onFail 触发 → ref 再次置 null（覆盖 tryLoadWebgl 的 onFail 箭头）
+    act(() => {
+      lastOnFail!();
+    });
+    expect(result.current.webglAddon.current).toBeNull();
+  });
+
+  it("9. dispose 幂等——二次调用经 isDisposedRef 提前返回（dispose/cancel 仅执行一次）", () => {
+    // performDispose 入口守卫（isDisposedRef.current → return）：二次 dispose 不再重复
+    // 清理——Terminal.dispose / WebGL cancel 只应各执行一次
+    // （terminal.dispose 为跨用例共享 mock——先清计数再断言）
+    mocks.terminal.dispose.mockClear();
+    const container = containerStub();
+    const { result } = renderHook(() => useTerminalInstance(container, {}));
+
+    act(() => {
+      result.current.dispose();
+    });
+    act(() => {
+      result.current.dispose();
+    });
+
+    expect(mocks.terminal.dispose).toHaveBeenCalledTimes(1);
+    expect(cancelFn).toHaveBeenCalledTimes(1);
+    expect(result.current.isDisposed.current).toBe(true);
+    expect(result.current.isReady.current).toBe(false);
+  });
+
+  it("10. dispose 后 fonts.ready rAF 回调触发 → 取消守卫提前返回（fit 不再执行）", async () => {
+    // fonts.ready.then 回调内双重检查 fontsReadyCancelledRef/isDisposedRef：
+    // 已销毁组件不得再 fit（防卸载后对已 dispose 的 addon 操作）。
+    // 手动接管 rAF：捕获回调后手动触发，不依赖真实定时器（规避跨用例积压的
+    // 真实 rAF 定时器在 await 期间误触发共享 fit mock 计数）
+    const origRAF = globalThis.requestAnimationFrame;
+    const origCAF = globalThis.cancelAnimationFrame;
+    let rafCallback: FrameRequestCallback | null = null;
+    globalThis.requestAnimationFrame = vi.fn(
+      (cb: FrameRequestCallback) => {
+        rafCallback = cb;
+        return 1;
+      },
+    ) as unknown as typeof requestAnimationFrame;
+    globalThis.cancelAnimationFrame = vi.fn();
+
+    try {
+      const container = containerStub();
+      const { result } = renderHook(() => useTerminalInstance(container, {}));
+      // 排空微任务让 fonts.ready.then 执行（其内 requestAnimationFrame 被捕获入队列）
+      await act(async () => {});
+      expect(rafCallback).not.toBeNull();
+
+      // 同步 dispose 置取消标志（fontsReadyCancelledRef + isDisposedRef）
+      act(() => {
+        result.current.dispose();
+      });
+      mocks.fitAddon.fit.mockClear();
+
+      // 手动触发 fonts.ready 的 rAF 回调：取消守卫提前返回，fit 不被调用
+      act(() => {
+        rafCallback!(performance.now());
+      });
+      expect(mocks.fitAddon.fit).not.toHaveBeenCalled();
+      expect(mocks.terminal.dispose).toHaveBeenCalled();
+    } finally {
+      globalThis.requestAnimationFrame = origRAF;
+      globalThis.cancelAnimationFrame = origCAF;
+    }
+  });
+
+  it("11. term.element 为空 → fonts.ready rAF 回调跳过 fit（!term.element 守卫）", async () => {
+    // 与用例 10 同模式接管 rAF：手动触发回调；term.element 为 null 时
+    // 回调在 line 161 提前返回（element 未挂载不 fit）
+    const origRAF = globalThis.requestAnimationFrame;
+    const origCAF = globalThis.cancelAnimationFrame;
+    const origElement = mocks.terminal.element;
+    let rafCallback: FrameRequestCallback | null = null;
+    globalThis.requestAnimationFrame = vi.fn(
+      (cb: FrameRequestCallback) => {
+        rafCallback = cb;
+        return 1;
+      },
+    ) as unknown as typeof requestAnimationFrame;
+    globalThis.cancelAnimationFrame = vi.fn();
+
+    try {
+      const container = containerStub();
+      renderHook(() => useTerminalInstance(container, {}));
+      // 排空微任务让 fonts.ready.then 执行（rAF 回调被捕获）；
+      // await 期间积压的真实 rAF 定时器可能已触发——清计数后再手动触发
+      await act(async () => {});
+      expect(rafCallback).not.toBeNull();
+      mocks.fitAddon.fit.mockClear();
+
+      // 模拟 element 未挂载（term.element 为 null）→ 回调提前返回，fit 不执行
+      mocks.terminal.element = null;
+      act(() => {
+        rafCallback!(performance.now());
+      });
+      expect(mocks.fitAddon.fit).not.toHaveBeenCalled();
+    } finally {
+      globalThis.requestAnimationFrame = origRAF;
+      globalThis.cancelAnimationFrame = origCAF;
+      mocks.terminal.element = origElement;
+    }
+  });
+
+  it("12. fontSize 经 undefined 再恢复同值 → prevFontSize 相同分支跳过写入（effect 重建路径）", () => {
+    // 用例 3 的「相同值跳过」由 React deps 相等性短路（effect 不重跑）；
+    // 本用例经 fontSize 14→undefined→14 强制 effect 每次重建，走代码内
+    // prevFontSizeRef 相同值 return 分支（line 202）——setter 仍只写入 1 次
+    const container = containerStub();
+    const setter = vi.fn();
+    Object.defineProperty(mocks.terminal.options, "fontSize", {
+      configurable: true,
+      set: setter,
+    });
+    const { rerender } = renderHook(
+      ({ fontSize }: { fontSize?: number }) => useTerminalInstance(container, {}, fontSize),
+      // initialProps 显式标注可空类型——否则 TS 从字面量推断 Props 为
+      // { fontSize: number }，后续 rerender({ fontSize: undefined }) 报 TS2322
+      { initialProps: { fontSize: 14 } as { fontSize?: number } },
+    );
+    expect(setter).toHaveBeenCalledTimes(1); // 首次 14 写入
+
+    rerender({ fontSize: undefined }); // undefined → 跳过（fontSize === undefined 分支）
+    expect(setter).toHaveBeenCalledTimes(1);
+
+    rerender({ fontSize: 14 }); // 恢复 14 → prev 相同 → 跳过写入
+    expect(setter).toHaveBeenCalledTimes(1);
   });
 });
