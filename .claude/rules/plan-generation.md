@@ -6,106 +6,96 @@ description: "执行计划生成规则——处理 plan/ 目录时自动加载�
 
 # 执行计划生成规则
 
-本文件在读取 `plan/` 路径下任何文件时自动加载。记录 Phase 0 执行计划三轮生成/补救中积累的编排方法论、`/goal` 写法规范与决策模板。下次为其他 Phase 编写执行计划时自动生效。
+本文件在读取 `plan/` 路径下任何文件时自动加载。记录执行计划编排方法论、`/goal` 写法规范与决策模板。
 
-## 0. grill 前先并行检索（新增于 Phase 1）
+## 1. 调研与 grill 前置
 
-**grill 每个技术问题前,先 spawn ≥3 个 agent 在网络上大规模并行检索**,汇总后再向用户提出推荐方案。
+grill 技术问题前，先 spawn 3–6 个 agent 并行网络检索，汇总后交叉核验矛盾信息，再向用户提出推荐方案 + 证据链。技术选型类问题必须查当前版本/社区实践，训练数据易过时。
 
-流程：
-```
-grill 问题提出
-  → spawn 3–6 agent 并行检索（不同方向、不同关键词、不同来源）
-  → 汇总检索结果
-  → 交叉核验矛盾信息
-  → 形成推荐方案 + 证据链
-  → 向用户提问（附推荐 + 理由）
-```
+## 2. 编排策略决策树
 
-原因（Phase 1 验证）：
-- 单 agent 检索覆盖度不足,容易遗漏关键反例
-- 多 agent 独立检索→交叉核验可防范幻觉和单一来源偏差
-- 技术选型类问题的答案高度依赖当前版本/社区实践,训练数据往往过时
-
----
-
-## 1. 编排策略决策树
-
-按依赖类型选择编排结构。**不问用户、直接判断**——用户要求"用 workflow"或"用 /goal"时遵循,否则按下表自定:
+按依赖类型选择结构，**不问用户、直接判断**：
 
 ```
 任务有什么依赖关系？
-├─ 强串行（A→B→C，B 需 A 产物）？
-│  └─ /goal 为主干 + 主会话顺序 spawn agent（如首次 Phase 0 脚手架→骨架→测试）
-│     workflow 仅用于旁路：版本核验(W0)、验收审计(W1)
-│
-├─ 独立文件编辑（互不冲突，仅少量屏障）？
-│  ├─ 屏障项少（1-2 个）→ 1 个 dynamic workflow：屏障入 Phase → 并行扇出 → 验证 → CI
-│  │  （如 §8 补救 D7 屏障→D1-D5 并行）
+├─ 强串行（A→B→C，B 需 A 产物）
+│  └─ /goal 为主干 + 主会话顺序 spawn agent
+│     workflow 仅用于旁路：版本核验、验收审计
+├─ 独立文件编辑（互不冲突，仅少量屏障）
+│  ├─ 屏障 1–2 个 → 1 个 dynamic workflow：屏障入 Phase → 并行扇出 → 验证 → CI
 │  └─ 完全无屏障 → workflow：全部并行扇出 → 验证 → CI
-│     （如 §9 第二轮 R1-R7，仅 R1+R5 同文件串行其余并行）
-│
-└─ 混合（部分串行 + 部分并行）？
+└─ 混合（部分串行 + 部分并行）
    └─ /goal 锁定终态 + workflow 处理可并行部分 + 主会话处理串行部分
 ```
 
-**规则**:
-- 只读核验/资料检索 → workflow 并行（W0/W1 模式）
-- 改盘任务 → 先判定文件冲突:同文件串行、异文件并行
-- `/effort ultracode` 仅当"每个实质任务都值得 workflow"时使用
-- `ultracode:` 关键字单次触发推荐用于一次性编排
+**规则**：
+- 只读核验/资料检索 → workflow 并行。
+- 改盘任务 → 先判定文件冲突：同文件串行、异文件并行。
+- `/effort ultracode` 仅当"每个实质任务都值得 workflow"时使用；`ultracode:` 关键字单次触发。
 
-## 2. `/goal` 条件写法规范
+## 3. `/goal` 条件写法
 
-### 2.1 核心约束
+### 3.1 核心机制
 
-- **评判只读对话里 Claude 已暴露的产出**——不自己跑命令、不读文件
-- ⇒ **凡声称"通过"的项,必须把真实命令输出贴回主会话**,否则评判失明
-- ⇒ CI 不能放进 `/goal` 条件（评判看不到 GitHub）,单独用 `gh run view` 贴回
+Evaluator 不执行命令、不读文件、不写代码，只基于主会话中已展示的文本判断。因此：
+- 声称"通过"的项必须把真实命令输出贴回主会话。
+- CI 状态不能放进 `/goal`（Evaluator 看不到 GitHub），单独用 `gh run view` 贴回。
+- grep/源码检查格式多变，易误判，**移出 `/goal`、放入 §5 人工验收**。
 
-### 2.2 条件写法
+### 3.2 标准格式
 
 ```
 /goal <阶段> <目标>，下列每项在本会话中均有真实命令输出自证：
 (1) <可测项>：<命令> <期望输出>；
 (2) …
-硬约束：<不可破坏的条件>
+硬约束：<不可破坏的条件，含反作弊条款>
 以上未全部满足则继续；或 <N> turns 后停止并逐项汇报缺口。
 ```
 
-### 2.3 条件质量检查清单
+### 3.3 条件质量检查清单
 
-- [ ] 每项有明确的**命令 + 期望输出**（如"`cargo test` 退出 0，含 X 用例 PASS"）
-- [ ] 每个期望输出**可在对话中找到对应文本**（评判者无需读文件）
-- [ ] 硬约束包含**反作弊条款**（"不得弱化断言""不得放宽 lint""不得引入业务功能"）
-- [ ] 有**止盈上限**（"30 turns 后停止"——防死循环）
-- [ ] 不含 CI/外部网络依赖项（改在 Phase 'CI' 或 §5 独立门处理）
+- [ ] 每项有明确的**命令 + 期望输出**（如"`cargo test` 退出 0，输出含 `test_app_error` PASS"）。
+- [ ] 期望输出**可在对话中找到对应文本**。
+- [ ] 硬约束含**反作弊条款**（"不得弱化断言""不得放宽 lint""不得引入业务功能"）。
+- [ ] 有**止盈上限**（10–30 turns）。
+- [ ] 不含 CI/外部网络依赖项。
 
-### 2.4 反模式
+### 3.4 好条件 vs 坏条件
 
 | ❌ 坏条件 | ✅ 好条件 |
 |----------|----------|
-| "所有测试通过"（无法定位输出） | "`cargo test` 退出 0，输出含 `test_app_error` PASS" |
-| "CI 全绿"（评判看不到） | 分开：/goal 不含 CI，manual §5 独立验 CI |
-| "代码质量良好"（不可测） | "ESLint `npx eslint src/` 退出 0" |
-| 无止盈上限 | "40 turns 后停止并逐项汇报缺口" |
+| "所有测试通过" | `cargo test → 退出 0，输出含 "10 passed"` |
+| "CI 全绿" | /goal 不含 CI，manual §5 独立验 CI |
+| "代码无问题" | `npx eslint src/ → 退出 0` |
+| "feature 完成" | `npm test → 退出 0，输出含 "37 tests" 且 "0 failing"` |
+| 无止盈上限 | `30 turns 后停止并逐项汇报缺口` |
+| 含 grep 源码检查 | grep 移到人工验收，`/goal` 只放 exit 0 + 文本匹配 |
 
-## 3. 决策表模板
+### 3.5 精简化
 
-每个执行计划末尾必须有决策台账。格式:
+`/goal` 只放自动化命令门。社区实证（1,272 轮）：条件越多 → Evaluator 误判率越高（Silent Failure 69%、Numeric Alteration 25%、Tail Ignoring 19%）。标准八门：
+
+`cargo test` / `npm test` / `npm run test:l3` / `npm run wdio` / `npx tsc --noEmit` / `npx eslint src/` / `cargo clippy -- -D warnings` / `cargo build --debug`。
+
+### 3.6 与 Dynamic Workflow 结合
 
 ```
-| # | 议题 | 决策 | 落点 |
-|---|------|------|------|
-| EN | <简短议题名> | <一句话决策> | <落点文件/agent> |
+/goal 启动 → 读计划 → 基线检查 → 基线全绿 → workflow 并行实现 →
+workflow 回归阶段子 agent 把 cargo test/npm test 输出贴回主会话 →
+Evaluator 匹配条件 → 完成 / 修复
 ```
 
-编号规则:
-- 首次 Phase 执行:A1–A6（agent）+ E1–EN（策略决策）
-- 第一轮补救:D1–DN（补救项）+ E1–EN（补救策略决策）
-- 第二轮补救:R1–RN（修补项）+ F1–FN（修补策略决策）
+**关键约束**：
+1. `/goal` 是单条命令，不是每 Turn 一个；Turn 标注是概念阶段。
+2. 预写 workflow 脚本是结构约束（phase 划分、parallel 编排），Agent 可调整 prompt/重试。
+3. `/goal` 必须显式引用计划文件路径，否则 Agent 可能凭记忆偏离。
+4. workflow 子 agent 必须把验证命令输出贴回主会话。
+5. 硬约束加"W1 必须用 Workflow 工具"，零冲突场景强制并行。
+6. 基线不绿时，硬约束须写明"先修基线直到全绿再进 W1"；L4 teardown 噪声可暂搁置，spec 必须 PASS。
 
-**决策表审计优先**:审查执行结果时,**先查决策表再下结论**。决策表说了"去自定义 CI 检查",就不要报告里写"缺 CI 检查"。
+### 3.7 终止条件三件套
+
+成功条件（二元可测） + 失败条件（turn 上限） + 预算条件（`+500k` token 上限）。
 
 ## 4. Workflow 编排规范
 
@@ -116,23 +106,22 @@ Phase '<名>' [barrier|parallel]
   agent <ID> — <一句话任务>（<文件>，<模型>）
 ```
 
-### 4.2 规则
+**规则**：
+- `barrier` → 该 Phase 全部完成后才进下一 Phase。
+- `parallel` → Phase 内所有 agent 同时启动。
+- 同文件冲突 → 合并为一个 agent 或用 pipeline 串行。
+- 复杂/首次/技术选型 → `opus`；确定性小修 → `sonnet`。
+- Verification Phase → 4 agent 并行：cargo test / npm test / tauri build / npm run wdio。
 
-- **barrier**（屏障）→ 该 Phase 全部完成后才进下一 Phase
-- **parallel**（并行）→ Phase 内所有 agent 同时启动
-- **同文件冲突** → 合并为一个 agent 或用 `pipeline` 保证串行（如 R1+R5 同改 `version-pins.md`）
-- **模型选择**:复杂/首次/技术选型→`opus`；确定性小修→`sonnet`
-- **Verification Phase** → 4 agent 并行：cargo test / npm test / tauri build / npm run wdio
-
-### 4.3 触发方式
+### 4.2 触发方式
 
 ```
 ultracode: 按以下编排执行 slTerminal <Phase> <任务描述>，只做计划内修改、不做无关改动，每阶段完成后贴命令输出回主会话
 ```
 
-或 `/effort ultracode`（整会话自动编排）。推荐单次触发——可控、不干扰后续任务。
+或 `/effort ultracode`（整会话自动编排）。推荐单次触发。
 
-### 4.4 任务卡模板
+### 4.3 任务卡模板
 
 ```markdown
 ##### Agent <ID> — <简短描述>（Phase '<阶段>'，<模型>）
@@ -145,185 +134,70 @@ ultracode: 按以下编排执行 slTerminal <Phase> <任务描述>，只做计�
 | **验收** | <命令> → <期望输出> |
 ```
 
-## 5. 本章完整结构模板
-
-执行计划的标准章序:
+## 5. 执行计划标准结构
 
 ```
 1. 编排总览（为什么这样编 / 三层结构图 / 版本前提与降级）
 2. 如何使用 /goal（机制要点 / 完成条件 / 运行方式）
 3. 如何用 dynamic workflow（边界 / W0 前置核验 / W1 验收审计 / 何时不用）
 4. 各 agent 任务卡（A1..AN，表格 + 验收命令）
-5. 验收闭环（自动化/CI 门/人工/DoD）
-6. 执行顺序速查（1..N 步骤）
-7. 注意事项（踩坑前置）
+5. 验收闭环（自动化 / CI 门 / 人工 / DoD）
+6. 执行顺序速查
+7. 注意事项
 8. 决策台账
-（如需补救:9. 补救执行计划·第N轮）
+（如需补救：9. 补救执行计划·第 N 轮）
 ```
 
-## 6. 已知陷阱（勿重复踩）
+## 6. 已知陷阱
 
-- **条件只测易测项会被钻空子**:把"不弱化断言/不放宽 lint/不引业务"写进硬约束
-- **证据回灌是 /goal 正确的命门**:每步贴命令输出,不靠 agent 自述"已完成"
-- **workflow 子 agent 强制 acceptEdits**:审计/只读验证需在 prompt 明令"不改源/不改断言"
-- **workflow 不跨会话续**:单会话内跑完,大任务先切片估费
-- **同文件多 agent 并行写冲突**:R1+R5 同改 version-pins.md → 合并为一个 agent
-- **CI msedgedriver 步**:embedded driver 不需要,别在 ci.yml 保留
-- **审计标"失实"前**:先查本文件 §3 决策表 + 取 L0–L2 一手证据,见 `audit-review.md`
+### 6.1 证据与核验
 
-### 6.1 能力≠时序可用
+- **条件只测易测项会被钻空子**：硬约束必须写"不弱化断言/不放宽 lint/不引业务"。
+- **证据回灌是 `/goal` 正确的命门**：每步贴命令输出，不靠 agent 自述"已完成"。
+- **workflow 子 agent 输出默认不可见**：回归阶段必须贴回主会话。
+- **workflow 不跨会话续**：单会话内跑完，大任务先切片估费。
+- **审计标"失实"前先查决策表 + 取 L0–L2 一手证据** → 详见 `audit-review.md`。
+- **审查文档/核查批注本身也可能出错**：外部引用、版本号、API 行为均需独立 agent + 一手来源交叉核验。
 
-- **反面案例（Phase 1）**:xterm.js 确实会自动响应 ConPTY DSR `\x1b[6n` → `\x1b[1;1R`,但 DSR 在 `spawn()` 后子进程 attach conhost 时发出,此时 xterm.js→前端 IPC→PTY 的 CPR 响应回路尚未闭合。**能力存在不代表启动时序上可用**——仍需 `openpty()` 后手动写 CPR 到 stdin
-- **教训**:对有时序依赖的能力项,必须画出完整时序图（谁先启动/谁后连接/中间链路是否闭合）,不能仅凭"双方都有此能力"就推断"自动工作"
+### 6.2 版本与外部事实
 
-### 6.2 npm/GitHub 关闭状态 ≠ 修复已发布
+- **GitHub Closed / PR merged ≠ 修复已发布**：必须查 npm/crates.io 当前版本号。例：xterm.js #5734 Closed，但 v6.0.0 不含修复，里程碑 v7.0.0。
+- **依赖版本号必须实时查询**：crates.io / npm registry API，不靠记忆。例：`tauri-plugin-prevent-default` 从记忆中的 v2.0.0 实际已到 v5.0.0。
+- **PR 合并状态须经 GitHub API 确证**：例：wezterm PR #5977 实为 Open，commit `7e50c4db68` 是应用层 WSL workaround，非 portable-pty crate 修复。
+- **Windows API 版本阈值以 Microsoft Learn 为唯一权威来源**：例 `ClosePseudoConsole` 非阻塞阈值 build 26100（Win11 24H2），原文 "Starting Windows 11 24H2 (build 26100) ClosePseudoConsole will return immediately"。
+- **阻塞操作严重度须精确到 API 级**：pre-Win11 24H2 上 `ClosePseudoConsole` 调用 `WaitForSingleObjectEx(INFINITE)` 永久阻塞；`spawn_blocking` 512 线程池上限可能耗尽。
 
-- **反面案例（Phase 1）**:xterm.js #5734（IME 候选窗定位）在 GitHub 已 Closed、PR #5759 已 merged to main,但修复里程碑是 v7.0.0——npm latest 仍是 6.0.0,**不含此修复**
-- **教训**:审查时对每个"已修复"的 issue 必须额外查 npm/crates.io 当前版本号,确认修复是否已包含在用户使用的版本中
+### 6.3 代码存在性与架构
 
-### 6.3 crates.io/npm 版本号必须实时查询
+- **"修复 X 的 Y" 前须先确认 Y 存在**：不存在时应写"创建 X 的 Y"而非"修复"。例：D5 计划写"修复 Workspace.tsx 右键菜单 addPanel"，但 Workspace.tsx 无右键菜单。
+- **架构文档是执行计划的权威约束**：技术选型与架构不一致时必须标注"偏离架构基线"并给出理由。grill 阶段优先查架构文档。
+- **行业参考项目的实际选择权重大于理论推演**：技术选型争议时优先查同类项目的 Cargo.toml/Cargo.lock。例：terax-ai 用 portable-pty 0.9.0 + Channel IPC。
+- **源码审查权威性高于文档和搜索**：关键行为存疑时直接 `Read` node_modules 源码。例：xterm.js `_keyDown` 不检查 `hasSelection()`（CoreBrowserTerminal.ts:849-851）；Dockview `doSetActivePanel()` 内部不调 `dispose()`。
 
-- **反面案例（Phase 1）**:`tauri-plugin-prevent-default` 从记忆中的 v2.0.0 实际已到 v5.0.0。不查 crates.io 就会给出过时的版本号和 API
-- **教训**:执行计划中的任何依赖版本号必须在写计划时实时查询（crates.io API / npm registry）,不靠聊天记录或记忆
+### 6.4 时序与平台行为
 
-### 6.4 审查文档本身也可能出错
+- **能力 ≠ 时序可用**：双方有能力不代表启动时序上自动工作。例：xterm.js 能响应 ConPTY DSR `\x1b[6n`，但启动时 IPC 回路未闭合，仍需 `openpty()` 后手动写 CPR。
+- **控制字符与序列化器交互是隐藏陷阱**：C0 控制字符（如 `\x03`）被 xterm.js InputHandler 消费，绝不进 buffer 单元格；`serialize()` 从 buffer 重建，无法恢复已被 parser 消费的字节。
+- **Tauri `dragDropEnabled: true` 静默劫持 HTML5 DnD**：Tauri 默认在 WebView2 宿主层注册 OLE `IDropTarget`，DOM `dragover/drop` 不到达 JS。依赖 HTML5 DnD 的组件（Dockview、React DnD）必须置 `"dragDropEnabled": false`（Tauri #14373）。
+- **审查文档的 issue 引用可能跨版本/跨插件误引**：核验版本（v1 vs v2）、插件（shell vs dialog vs 核心）、修复状态、根因一致性。
 
-- **反面案例（Phase 1）**:初审质疑 Dockview `addPanel` 没有 `renderer` 参数——核查后确认 Dockview 6.6 的 `AddPanelOptions` 类型明确定义了 `renderer?: DockviewPanelRenderer`。**审查意见也需要被核验**
-- **教训**:审查文档输出后,对其中的"错漏"主张也应做一轮交叉核验,再落地修改执行计划
+### 6.5 补救计划也是计划
 
-### 6.5 架构文档是执行计划的权威约束
+补救执行计划必须经过与首次计划相同的审查流程。"只是小修"不是跳过审查的理由。
 
-- **正面案例（Phase 1）**:E3 偏离架构文档（emit 替代 Channel）被审查发现并纠正。架构文档的技术选型（Channel、addon-webgl）不是建议——是已决策的基线
-- **教训**:执行计划中的任何技术选型与架构文档不一致时,必须明确标注"偏离架构基线"并给出充分理由。grill 阶段优先查架构文档
+## 7. 决策表模板
 
-### 6.6 行业参考项目的实际选择权重大于理论推演
+每个执行计划末尾必须有决策台账：
 
-- **正面案例（Phase 1）**:terax-ai（6.9k star Tauri 终端）用 portable-pty 0.9.0 + Channel IPC,这些事实直接证伪了"0.8.x 更安全""emit 可以做 PTY 输出"的理论推演
-- **教训**:技术选型争议时,优先查同类项目的 Cargo.toml/Cargo.lock,实际选择比理论推演有更高证据效力
+```
+| # | 议题 | 决策 | 落点 |
+|---|------|------|------|
+| EN | <简短议题名> | <一句话决策> | <落点文件/agent> |
+```
 
-### 6.7 "修复"任务前必须核实被修复对象是否存在
+编号规则：
+- 首次 Phase：A1–A6（agent）+ E1–EN（策略决策）。
+- 第一轮补救：D1–DN（补救项）+ E1–EN（补救策略决策）。
+- 第二轮补救：R1–RN（修补项）+ F1–FN（修补策略决策）。
 
-- **反面案例（Phase 1 补救）**:补救计划 D5 写"修复 Workspace.tsx 右键菜单的 addPanel 调用"——但 Workspace.tsx 根本**没有右键菜单、没有工具栏、没有任何 addPanel 调用**。计划把"代码应该存在"和"代码已经存在"混为一谈
-- **教训**:写"修复 X 的 Y"类任务前,必须先 grep/Read 确认 Y 确实存在于 X 中。如果 Y 不存在,任务应该写"创建 X 的 Y"而非"修复 X 的 Y"
-
-### 6.8 补救计划也是计划——同样需要审查
-
-- **反面案例（Phase 1 补救）**:补救计划 D1–D5 经审查发现 3 个严重/中等问题（D1 Ctrl+C 与需求冲突、D5 右键菜单不存在、D2 缺少 DEV guard）。如果在执行前不审查,这些错误会直接进入代码
-- **教训**:补救执行计划必须经过与首次执行计划相同的审查流程（读审计→查决策表→取一手证据→网络检索→分类→grill）。"只是小修"不是跳过审查的理由
-
-### 6.9 控制字符与序列化器的交互是隐藏陷阱
-
-- **反面案例（Phase 1 补救）**:D3 假设 `serialize()` 会包含 `\x03` 控制字符,但 C0 控制字符被 xterm.js InputHandler 消费,**绝不进 buffer 单元格**。`serialize()` 从 buffer 单元格属性反向重建 ANSI——无法恢复已被 parser 消费的原始字节
-- **教训**:当断言对象是某种转换/序列化工具的输出时,必须先确认该工具的工作机制（输入→内部表示→输出管线）。不要假设"输入了什么输出就应该含什么"
-
-### 6.10 源码审查的权威性高于文档和搜索
-
-- **正面案例（Phase 1 补救）**:两个关键发现来自直接读源码——① xterm.js `_keyDown` 不检查 `hasSelection()`（`CoreBrowserTerminal.ts:849-851`）证伪了 D1 的 Ctrl+C 逻辑 ② Dockview `doSetActivePanel()` 内部不调 `dispose()`（5 条调用链裁决）证伪了"PTY 会被杀"的假设。**npm/node_modules 下的源码是可读的**——比文档更精确,比网络检索更可信
-- **教训**:对关键行为存疑时,直接 `Read` node_modules 下的 `.ts`/`.js` 源码（或 GitHub 仓库源码）,比搜索文档/博客/issue 更快更准
-
-### 6.11 Tauri `dragDropEnabled: true` 默认值静默劫持 HTML5 DnD
-
-- **反面案例（Phase 1 第二轮收口）**:页签拖拽不工作——表面看像是 Dockview StrictMode 状态损坏的次生效应。深入 Dockview 源码（`dndCapabilities.js`/`tab.js`/backend.js）发现：Dockview `auto` 模式鼠标走 HTML5 后端（`html5: true, pointerHandlesMouse: false`），Pointer 后端 `touchOnly=true` 忽略鼠标。但 Tauri 默认 `dragDropEnabled: true` 在 WebView2 宿主层注册 OLE `IDropTarget` 并拦截所有 HTML5 DnD 事件——`dragover/drop` 永远不到达 JS 层。**两个故障层叠加：Tauri 宿主层劫持 + Dockview 无可用后端 = 鼠标拖拽完全失效。**
-- **教训**:Tauri 项目中任何依赖 HTML5 DnD 的 Web 组件（Dockview、React DnD、自定义 drag-and-drop）都必须检查 `tauri.conf.json` 中 `dragDropEnabled` 的值。默认 `true` 意味着"Tauri 原生拖放系统开启，DOM 拖放被禁用"（Tauri #14373）。修复：`"dragDropEnabled": false`（一行 JSON）。不要假设 HTML5 DnD 在 Tauri 中默认可用
-
-### 6.12 审查文档的 issue 引用可能跨版本、跨插件误引
-
-- **反面案例（Phase 1 第二轮收口审查）**:审查文档引用 3 个 Tauri issues（#7673/#10586/#11212）论证 dialog 事件循环死锁风险。经 GitHub API + 源码交叉核验：① #7673 是 v2.0.0-alpha.11 的 IPC 参数名冲突 bug，alpha.12 已修复，不相关 ② #10586 是 Tauri **v1**.7.1 macOS 偶发冻结，v2 架构完全不同 ③ #11212 属于 `tauri-plugin-shell`（非 dialog），且已修复。3/3 引用均不适用于当前场景。真实风险 #2268（import 即失焦）反被遗漏。
-- **教训**:审查文档中引用的 issue 应验证：① 版本匹配（v1 vs v2）② 插件匹配（shell vs dialog vs 核心）③ 修复状态（已修复/仍 Open）④ 根因是否与当前场景一致。不可假设"issue 号存在 = 风险成立"
-
-### 6.13 阻塞操作的严重度描述必须精确——"数秒"和"INFINITE"天差地别
-
-- **反面案例（Phase 1 第二轮收口审查）**:审查文档将 `ClosePseudoConsole` 阻塞描述为"可能延迟数秒"。经 Microsoft Learn 官方文档 + 源码逆向 + 5 个项目（Turborepo/wezterm/VS Code/node-pty/Alacritty）实锤：pre-Win11 24H2 上 `ClosePseudoConsole` 调用 `WaitForSingleObjectEx(INFINITE)`——**永久阻塞**（非数秒）。触发条件：输出管道未排空 + conhost RenderThread 持有 ticket lock 阻塞在 `WriteFile`→conhost 永远无法退出。此外，阈值 build 也被错误标为 22621（实际 26100）。`spawn_blocking` 512 线程池上限在生产项目（nxv#14）中 4 小时耗尽全部线程。
-- **教训**:评估阻塞操作风险时必须精确到 API 级别——查官方文档中的超时参数（`INFINITE` vs `N` ms），而非凭经验估算。对 `spawn_blocking` 包裹的阻塞操作，始终考虑线程池耗尽场景（512 上限 + 无界队列 = 永久卡死）。Windows API 的版本阈值需查 Microsoft Learn 确证
-
-### 6.14 PR 合并状态和 commit 归属需通过 API 确证
-
-- **反面案例（Phase 1 第二轮收口核查）**:前一轮核查标注 wezterm PR #5977 为"已合并"、commit `7e50c4db68` 为 portable-pty 修复。经 GitHub API 确证：PR #5977 实为 **Open**（`state:"open"`, `merged:false`, `merged_at:null`，自 2024-08 创建至今未合）；`7e50c4db68` 是 2019 年 Wez Furlong 在 wezterm **应用层**针对 daemonized WSL 的 `std::mem::forget` workaround（"gross bug workaround"），非 portable-pty crate 的通用修复，不在 `pseudocon.rs` 中。
-- **教训**:对关键依赖（crate/plugin）的 PR 合并状态和修复归属，必须通过 GitHub API（`/repos/{owner}/{repo}/pulls/{number}`）或 crates.io/npm registry API 实时查询确证。不可凭记忆或推理——"有 workaround commit"≠"已合并到发布版本"、"commit 在 wezterm 仓库中"≠"属于 portable-pty crate"
-
-### 6.15 核查批注同样需要独立核验——"审查者"与"核查者"证据标准对等
-
-- **反面案例（Phase 1 第二轮收口审查核查）**：用户核查批注标注 `wezterm PR #5977 已合并到 wezterm 主分支`、`commit 7e50c4db 在 pseudocon.rs 中`。经第二轮 agent 通过 GitHub API 确认——PR #5977 为 **Open**（`state:"open"`, `merged:false`），commit `7e50c4db68` 是 2019 年 wezterm 应用层 WSL workaround（`std::mem::forget`），非 portable-pty 通用修复。**核查批注本身也包含了事实性错误。**
-- **教训**：核查批注的技术断言与第一轮审查结论享有**对等的证据标准**——不因"人审"身份而降低核验门槛。每条核查批注中的事实性声明（PR 状态、commit 归属、版本号、API 行为）都需要独立 agent + API 交叉验证。**审查→核查→核验核查——每层都可能引入新错误，没有哪层天然免疫。**
-
-### 6.16 审查→核查→核验的递归验证模式（新增方法论）
-
-- **模式（Phase 1 验证）**：
-  ```
-  第一轮：spawn N agent → 审查报告（可能含错误）
-  第二轮：用户核查批注 → spawn N agent → 核验核查（纠正审查错误，但核查自身可能有误）
-  第三轮：spawn N agent → 核验第二轮（纠正核查错误 → 更新审查文件 → 定论）
-  ```
-- **适用条件**：① 审查涉及多个外部引用（GitHub issues/crates.io/PR）且引用准确性需交叉验证 ② 核查批注提出了新的技术断言（如"PR 已合并""commit 属于某 crate"）③ 断言涉及高精度事实（如 Windows API 版本阈值、堵塞时长参数）
-- **止盈条件**：连续两轮无新增事实性错误发现 → 停止递归。Phase 1 实际止于第三轮（第二轮纠正 3/3 误引 issues + 1 处遗漏 issue，第三轮纠正 1 处 PR 状态错误）
-
-### 6.17 Windows OS API 版本阈值的单一权威来源是 Microsoft Learn
-
-- **反面案例（Phase 1 第二轮收口审查）**：`ClosePseudoConsole` 阻塞→非阻塞的阈值 build 在审查中被标为 22621（Win11 22H2），用户核查纠正为 26100（24H2）。经 Microsoft Learn 官方文档确证：原文 "Starting Windows 11 24H2 (build 26100) ClosePseudoConsole will return immediately"——**唯一权威来源**。社区讨论、博客、issue 描述均可能过时或不准。
-- **教训**：OS API 的版本行为差异以 Microsoft Learn / Apple Developer Documentation / man pages 等**官方文档为唯一权威来源**。搜索结果的 AI 摘要、社区博客、甚至其他项目的 issue 讨论都不可直接采信——API 行为在不同 Windows 版本间可能被多次修改，二手来源记录的可能只是中间态。
-
-### 6.18 `/goal` Evaluator 看不见文件、不跑命令——条件必须可"对话内验证"
-
-- **核心机制（Claude Code 官方文档 + 社区实证）**：`/goal` 每轮结束后由独立小模型（默认 Haiku）评判条件是否满足。Evaluator **不执行命令、不读取文件、不写代码**——仅基于 Agent 在主会话中已展示的文本判断。这意味着：
-  - `cargo test → 退出 0，输出含 "10 passed"` ✅ 可验证——Agent 贴出的命令输出中能匹配到 "10 passed"
-  - `"代码质量良好"` ❌ 不可验证——无客观文本匹配规则
-  - `"CI 全绿"` ❌ 不可验证——Evaluator 看不到 GitHub
-  - `grep 'pattern' file → 有匹配行` ⚠️ 依赖 Agent 诚实执行并贴输出——Agent 可能在对话中声称"有匹配"而实际未执行（Goodhart's Law 在 `/goal` 上的具体表现）
-- **workflow 子 agent 输出默认不可见**：Dynamic Workflow 子 agent 的内部对话在后台，Evaluator 看不到。必须在 workflow 的回归阶段把验证命令输出（`cargo test`/`npm test` 等）**贴回主会话**——否则 Evaluator 只能看到 workflow 前的旧输出，一轮后判定"未完成"触发无效重跑。
-- **教训**：
-  - `/goal` 条件 = Agent 能在对话中贴出的**命令输出文本** + Evaluator 能可靠匹配的**文本模式**
-  - workflow 编排必须在回归阶段显式要求子 agent 回灌验证输出到主会话
-  - 来自 2026-06-20 4 agent 并行网络检索 + plan-generation.md §2 实践验证
-
-### 6.19 `/goal` 条件精简化——只放自动化命令门，grep/源码检查移人工验收
-
-- **反面案例（Phase 1 第三轮收口计划 §4.0.1 初版）**：`/goal` 含 20 条判断项——8 条自动化命令 + 8 条 grep 源码检查 + 5 条硬约束。社区实证（1,272 轮测试）：条件越多 → Evaluator 误判率越高（Silent Failure 69%、Numeric Alteration 25%）；grep 输出格式多变（绝对/相对路径、行号、颜色码），小模型 Haiku 易误判。
-- **修正**：`/goal` 条件缩至 8 条自动化命令——`cargo test`/`npm test`/`npm run test:l3`/`npm run wdio`/`npx tsc --noEmit`/`npx eslint src/`/`cargo clippy -- -D warnings`/`cargo build --debug`。8 条 grep 源码检查保留在计划 §5.3，`/goal` 完成后人工逐条执行。
-- **教训**：
-  - `/goal` Evaluator 对 `exit 0 + 含 "N tests PASS"` 这种二元判断最可靠
-  - grep/源码检查不放 `/goal` 条件——Agent 贴出的 grep 文本可能格式异常导致 Evaluator 误判
-  - 条件越多 → 不收敛概率越高 → 滚到 turn 上限 → 浪费 token
-  - 来源：4 agent 检索（Goodhart's Law 批判、groundtruth Stop Hook 实证、社区 `/goal` 最佳实践）
-
-### 6.20 W1 实现前基线先验——允许修复基线问题再进实现
-
-- **反面案例（Phase 1 第三轮收口计划硬约束初版）**：硬约束写"W1 实现前必须先确证基线全绿，再开始修改代码"，但未覆盖"基线不绿怎么办"——Agent 陷入两难：基线红色不能实现 W1，但 `/goal` 条件又是 W1 的验收标准。
-- **修正**：硬约束改为"若基线不绿，先修基线直到全绿再进 W1"。L4 wdio 若仅 teardown 噪声（`@wdio/tauri-service` session 销毁时序问题）可暂搁置——spec 必须 PASS，teardown 允许非零退出。
-- **教训**：硬约束必须覆盖"先决条件不满足时的处理路径"——不能只写"必须 X"而不说"X 不成立时怎么处理"。`/goal` 是自主循环，Agent 需要明确的决策分支逻辑。
-
-### 6.21 `/goal` 与 Dynamic Workflow 结合使用的注意事项
-
-- **模式（Phase 1 第三轮收口验证）**：
-  ```
-  /goal 启动 → Agent 读计划文件 → 基线检查 → 基线全绿 →
-  调用 Workflow 工具（3 agent 并行实现） →
-  workflow 回归阶段子 agent 把 cargo test/npm test 输出贴回主会话 →
-  Evaluator 读主会话输出 → 逐条匹配 /goal 条件 →
-  全满足 → 完成 / 未全满足 → Agent 修复 → 下一轮
-  ```
-- **关键约束**：
-  1. **`/goal` 是单条命令，不是每 Turn 一个**——Evaluator 只看终态条件，不管中间经过几个 Turn。计划中的 Turn 标注是概念阶段（基线→实现→回归→修），不是多条 `/goal` 命令
-  2. **Workflow 脚本是蓝图，Agent 是执行者**——计划中预写的 workflow 脚本是编排结构约束（phase 划分、parallel 编排），Agent 可根据上下文调整 prompt 细节与重试策略，但并行结构、回归阶段不变
-  3. **`/goal` 条件中必须显式引用计划文件**——`/goal 按 plan/.../N.计划.md 的方案完成...`——否则 Agent 可能不读计划凭记忆/推理动手，偏离具体修复方案
-  4. **Workflow 必须回灌验证输出**——Evaluator 看不见 workflow 子 agent 内部对话；回归阶段子 agent 须把验证命令输出（`cargo test`/`npm test` 等）贴回主会话供 Evaluator 判定
-  5. **硬约束加"W1 必须用 Workflow 工具"**——零文件冲突场景下串行手动改浪费时间，需强制并行
-- **来源**：2026-06-20 4 agent 并行检索（Claude Code 官方 `/goal` 文档 + Workflow 文档 + 社区 Stop Hook/groundtruth 实证 + Goodhart's Law 分析）+ Phase 1 第三轮收口计划 grill 审查
-
-### 6.22 `/goal` 条件编写速查——社区研究汇总
-
-- **三段式**：`/goal [做工作] until [可衡量终态] without [约束边界]`
-- **安全网必须**：`或 N turns 后停止并逐项汇报缺口`（10-30 turns 是社区共识安全范围）
-- **条件格式**：`[标签] 命令 → 退出码 + 期望输出文本`（Evaluator 做文本匹配，不是语义判断）
-- **好条件 vs 坏条件**（补充 §2.4）：
-
-| ❌ 坏条件 | ✅ 好条件 |
-|----------|----------|
-| "所有测试通过" | `cargo test → 退出 0，输出含 "10 passed"` |
-| "代码无问题" | `npx eslint src/ → 退出 0` |
-| "feature 完成" | `npm test → 退出 0，输出含 "37 tests" 且 "0 failing"` |
-| 无止盈上限 | `30 turns 后停止并逐项汇报缺口` |
-| 含 grep 源码检查 | grep 移到人工验收，`/goal` 只放 exit 0 + 文本匹配 |
-
-- **已知系统性失败模式**（实证研究，1,272 轮）：Silent Failure 69%（函数存在但无调用者）、Numeric Alteration 25%（参数值被静默改变）、Tail Ignoring 19%（提示末尾指令被跳过）
-- **终止条件三件套**：成功条件（二元可测）+ 失败条件（turn 上限）+ 预算条件（token 上限 `+500k`）
-- **来源**：2026-06-20 Claude Code 官方文档 + dev.to / XDA / 腾讯云社区分析 + Goodhart's Law 批判 + groundtruth Stop Hook 项目
+**决策表审计优先**：审查结果时先查决策表再下结论。
