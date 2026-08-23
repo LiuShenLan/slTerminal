@@ -5,6 +5,7 @@
 // 覆盖 claude --resume / claude -p 等带参变体）并通过 onTabStateChange
 // 回调通知页签标题/状态切换。
 // 仅限于 pwsh/powershell——cmd.exe 无 shell integration 能力。
+// TQ-E-01：注册体抽离至 oscHandlers.ts 纯注册层，本文件为薄包装（仅注入依赖）。
 
 import { useCallback, useEffect, useRef } from "react";
 import type { MutableRefObject } from "react";
@@ -12,6 +13,7 @@ import type { Terminal } from "@xterm/xterm";
 import { TerminalRegistry } from "./TerminalRegistry";
 import { cliProfileRegistry } from "../../features/cliProfiles";
 import type { AgentStatus } from "../../lib/agentStatus";
+import { registerOsc133 } from "./oscHandlers";
 
 /** 页签状态变化事件（原 TabTitleRegistry.ts 定义，注册表退役后迁入本文件顶部导出） */
 export interface TabState {
@@ -55,44 +57,18 @@ export function useCommandDetection(
 
     // OSC 133;D（命令退出），xterm.js 解析器剥离 OSC number 前缀（133），
     // handler 收到的 data 为 "C;claude" 或 "D;0"
-    const disposable = terminal.parser.registerOscHandler(133, (data: string) => {
-      const semicolonIndex = data.indexOf(";");
-      const type = semicolonIndex >= 0 ? data.slice(0, semicolonIndex) : data;
-
-      if (type === "C") {
-        // OSC 133 C — 命令即将执行
-        const command = semicolonIndex >= 0 ? data.slice(semicolonIndex + 1).trim() : "";
-        const profile = cliProfileRegistry.matchByCommand(command);
-        if (profile) {
-          isCommandRunningRef.current = true;
-          // MC-107: 写入会话状态（未注入 hooks 时无 usageSourcePath，用量条不可用）——
-          // cliId 取匹配 profile 的 id（hook 事件三级解析反查键，MC-205）
-          // B12: 先写会话再发回调——TerminalPanel 的 originalTitleRef 捕获守卫
-          // 检查 agentSession 非空即跳过，回调触发 onDidTitleChange 时会话必须已置位
-          TerminalRegistry.setAgentSession(panelId, {
-            cliId: profile.id,
-            matchedCommand: profile.id,
-          });
-          // 标题取自匹配 profile（tabTitle）；未命中零副作用（不触发回调）。
-          // F9 行为修订：logo 不再经此路径直传——页签 logo 由 TerminalPanel
-          // 订阅 TerminalRegistry 的 sessionChange 按 agentSession.cliId 查 profile
-          // （会话绑定，见 TerminalPanel.tsx）
-          onTabStateChangeRef.current?.({
-            active: true,
-            title: profile.tabTitle,
-            status: "attention",
-          });
-        }
-      } else if (type === "D" && isCommandRunningRef.current) {
-        // OSC 133 D — 命令执行完毕
-        isCommandRunningRef.current = false;
-        onTabStateChangeRef.current?.({ active: false });
-        // 注册命令退出 → 清除会话行
-        TerminalRegistry.setAgentSession(panelId, null);
-      }
-
-      // 返回 false 不消费序列，xterm.js 仍渲染提示符
-      return false;
+    // TQ-E-01: 注册体在 oscHandlers.ts 纯注册层——本 hook 仅注入依赖：
+    // matchByCommand/setAgentSession/onTabStateChange 参数化，语义与原内联体一致
+    // （B12 先写会话再发回调的顺序在注册层内保持）
+    const disposable = registerOsc133(terminal, {
+      isCommandRunning: isCommandRunningRef,
+      matchByCommand: (cmd) => cliProfileRegistry.matchByCommand(cmd),
+      setAgentSession: (cliId) =>
+        TerminalRegistry.setAgentSession(
+          panelId,
+          cliId ? { cliId, matchedCommand: cliId } : null,
+        ),
+      onTabStateChange: (s) => onTabStateChangeRef.current?.(s as TabState),
     });
 
     return () => {

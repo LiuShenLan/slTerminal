@@ -26,11 +26,15 @@ import { usePtyOutput } from "./usePtyOutput";
 import { usePtyResize } from "./usePtyResize";
 import { useClipboardHandler } from "./useClipboardHandler";
 import { useCommandDetection } from "./useCommandDetection";
+// TQ-E-02: 终端按键分发纯函数（L3 headless 可挂生产链路）
+import { handleTerminalKeyEvent } from "./keyEventHandler";
+// TQ-E-01: OSC 52/133/8 注册层纯函数（hook 薄包装 + L3 复用同一真值源）
+import { makeLinkHandler } from "./oscHandlers";
 export { detectWebgl, resetWebglCache } from "./webgl";
 import { pty } from "../../ipc";
 import { openUrl } from "../../ipc/shell";
 import { setActiveTerminal, clearActiveTerminal, type TerminalActions } from "./activeTerminal";
-import { usePanelFocus, getShortcutRegistry } from "../../features/shortcuts";
+import { usePanelFocus } from "../../features/shortcuts";
 import { TerminalRegistry } from "./TerminalRegistry";
 // ZQ-2: 来源 CLI 标识三级解析单点（契约 4）——空串/空白 cliId 同等回退
 import { resolvePayloadCliId } from "./resolvePayloadCliId";
@@ -280,25 +284,12 @@ export function useXterm({
     }
 
     // ── 键盘事件委托（xterm.js 内部 keydown 之前拦截）──
-    term.attachCustomKeyEventHandler((event: KeyboardEvent) => {
-      if (event.type !== "keydown") return true;
-      const consumed = getShortcutRegistry().resolve(event, "terminal");
-      if (consumed) {
-        event.preventDefault();
-        return false;
-      }
-      return true;
-    });
+    // TQ-E-02: 按键分发纯函数 keyEventHandler.ts（行为与原内联体一致）
+    term.attachCustomKeyEventHandler(handleTerminalKeyEvent);
 
     // OSC 8 超链接：点击后通过系统默认浏览器打开
-    term.options.linkHandler = {
-      activate: (_event, url) => {
-        // FE-08: 非关键路径（openUrl）——打开失败不影响终端，仅 console.error
-        openUrl(url).catch((err) =>
-          console.error("打开链接失败:", getErrorMessage(err)),
-        );
-      },
-    };
+    // TQ-E-01: linkHandler 纯注册层 oscHandlers.ts makeLinkHandler（行为与原内联体一致）
+    term.options.linkHandler = makeLinkHandler(openUrl);
 
     // E2E 测试辅助钩子——委托给 helpers.ts（E2E_ENABLED 时编译期保留，生产 tree-shake）
     // __e2e_writeToTerminal / __e2e_getTerminalText 由 useTerminalInstance 在 E2E_ENABLED 时安装
