@@ -27,6 +27,7 @@ import { SESSION_ROW_HEIGHT } from "../features/navTree/navStyles";
 import type { AgentStatus } from "../lib/agentStatus";
 import "../features/cliProfiles/profiles";
 import type { AgentHistorySession } from "../types/agentHistory";
+import { resetCliProfileRegistry } from "./helpers/mockCliProfile";
 
 // StatusDot 由 icon-base agent 并行实现（IC-02）——本文件 mock 为可识别 span
 // （data-testid="status-dot"，文本 = status 值），只断言接线不依赖其内部 DOM
@@ -40,7 +41,12 @@ vi.mock("../lib/StatusDot", async () => {
   };
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  // 清空 import profiles 的注册残留并恢复 claude 基线（TQ-B-14）——
+  // 单例 _reset 后 side-effect 注册失效，logo 断言依赖的 claude profile 须显式补回
+  resetCliProfileRegistry();
+});
 
 /** 构造测试会话（默认值：5 分钟前、有标题、cwd 存在） */
 function makeSession(

@@ -56,6 +56,10 @@ vi.mock("../../ipc/settings", () => ({
   saveSettings: vi.fn(() => Promise.resolve()),
 }));
 
+// 阻断 side-effect 注册：真实 nav/explorer/commit 视图不得混入本文件的
+// sideViewRegistry 隔离（_reset 后仅注册 stub；TQ-B-02）
+vi.mock("../features/sideViews/sideViewDefs", () => ({}));
+
 // ─── 导入（mock 之后）───
 import { SideBarArea } from "../features/sideViews/SideBarArea";
 import type { SideBarAreaProps } from "../features/sideViews/SideBarArea";
@@ -127,6 +131,8 @@ describe("SideBarArea", () => {
     vi.clearAllMocks();
     cleanup();
     sideViewRegistry._reset();
+    // 防御断言：_reset 后注册表必须为空（sideViewDefs 被 mock 阻断，TQ-B-02）
+    expect(sideViewRegistry.getAll().length).toBe(0);
     resetStore();
     resetPaneProps();
 

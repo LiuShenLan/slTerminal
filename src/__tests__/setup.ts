@@ -63,6 +63,15 @@ beforeAll(() => {
   if (!vi.isMockFunction(HTMLCanvasElement.prototype.getContext)) {
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
   }
+  // jsdom 缺 Range.getClientRects——CM6 几何测量走异常回退路径并刷 stderr（TQ-A-03）。
+  // 返回空矩形列表：测量结果为零尺寸，断言不依赖具体几何值，仅消除异常路径。
+  if (typeof Range !== 'undefined' && !Range.prototype.getClientRects) {
+    Range.prototype.getClientRects = (() => ({
+      length: 0,
+      item: () => null,
+      [Symbol.iterator]: [][Symbol.iterator],
+    })) as unknown as DOMRectList & (() => DOMRectList);
+  }
 });
 
 afterAll(() => {

@@ -28,6 +28,10 @@ vi.mock("../lib", () => ({
   getErrorMessage: mockGetErrorMessage,
 }));
 
+// 阻断 side-effect 注册：真实 nav/explorer/commit 视图不得混入本文件的
+// sideViewRegistry 隔离（_reset 后仅注册 stub；TQ-B-02）
+vi.mock("../features/sideViews/sideViewDefs", () => ({}));
+
 import { useSideBar, cancelPendingSave } from "../stores/sideBar";
 import { sideViewRegistry } from "../features/sideViews/sideViewRegistry";
 import {
@@ -70,6 +74,8 @@ describe("sideBar store", () => {
     vi.useFakeTimers();
     // 注册 stub 视图 → reconcileZones 不会过滤掉已注册 id
     sideViewRegistry._reset();
+    // 防御断言：_reset 后注册表必须为空（sideViewDefs 被 mock 阻断，TQ-B-02）
+    expect(sideViewRegistry.getAll().length).toBe(0);
     registerTestViews();
     // 重置 store 到初始状态（loaded: false 防 debounce 触发）
     useSideBar.setState({

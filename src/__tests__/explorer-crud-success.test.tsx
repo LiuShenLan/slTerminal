@@ -4,7 +4,7 @@
 //   IPC 调用、refresh()（readDir 二次调用）、状态重置（选中清空/输入框消失）
 // 防回归：静默失败不红（如某次重构误删 refresh() 或状态重置）
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import React from "react";
 import { render, fireEvent, waitFor, cleanup } from "@testing-library/react";
 
@@ -73,6 +73,7 @@ vi.mock("../ipc/notify", () => ({
 // ─── 真实模块导入（mock 之后）───
 import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
+import { resetProjectStores } from "./helpers/workspace-setup";
 import { ExplorerPanel } from "../features/explorer";
 
 // ─── 辅助函数 ───
@@ -115,13 +116,17 @@ beforeEach(() => {
   mocks.resetAll();
   mocks.mockConfirmDialog.mockResolvedValue(false);
   cleanup();
-  useProjects.setState({ projects: {}, expandedNodes: {} });
-  useLayout.setState({ activePageId: null });
+  resetProjectStores(); // 共享重置：projects/layout/sideBar/keybindings 全量（TQ-B-10）
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (window as any).__dockviewApi = {
     addPanel: vi.fn(),
     getPanel: vi.fn(),
   };
+});
+
+afterEach(() => {
+  cleanup();
+  delete (window as unknown as Record<string, unknown>).__dockviewApi; // 防过期 mock 外泄（TQ-B-15）
 });
 
 // =====================================================================

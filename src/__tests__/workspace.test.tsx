@@ -1,6 +1,6 @@
 // L2 Workspace 测试 — 多 Dockview 实例架构
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { mockIPC, clearMocks } from '@tauri-apps/api/mocks';
 
 // Mock @xterm/xterm — xterm.js 6.1+ 渲染器初始化在 jsdom 中抛异常（WidthCache 需要真实 DOM 指标）
@@ -31,11 +31,16 @@ vi.mock("@xterm/addon-fit", () => ({
 }));
 
 // jsdom 缺少 ResizeObserver（Dockview 依赖）
+// 模块级 stub 须 afterAll 恢复——防同 worker 后续文件被污染（TQ-A-02）
+const originalResizeObserver = global.ResizeObserver;
 global.ResizeObserver = class ResizeObserver {
   observe() {}
   unobserve() {}
   disconnect() {}
 };
+afterAll(() => {
+  global.ResizeObserver = originalResizeObserver;
+});
 
 import { render } from '@testing-library/react';
 import Workspace from '../workspace/Workspace';

@@ -10,7 +10,7 @@
 //
 // 注：jsdom 中真实 Dockview 的 addPanel/setTitle/fromJSON 均可用（探针验证）。
 
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from "vitest";
 import { mockIPC, clearMocks } from "@tauri-apps/api/mocks";
 import React from "react";
 import { render, act, fireEvent, cleanup } from "@testing-library/react";
@@ -42,11 +42,16 @@ vi.mock("@xterm/addon-fit", () => ({
   }),
 }));
 
+// 模块级 stub 须 afterAll 恢复——防同 worker 后续文件被污染（TQ-A-02）
+const originalResizeObserver = global.ResizeObserver;
 global.ResizeObserver = class ResizeObserver {
   observe() {}
   unobserve() {}
   disconnect() {}
 };
+afterAll(() => {
+  global.ResizeObserver = originalResizeObserver;
+});
 
 import PageDockview from "../workspace/PageDockviewHost";
 import { titleManager } from "../workspace/titleManager";

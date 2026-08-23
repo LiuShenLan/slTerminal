@@ -122,6 +122,7 @@ import { render, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { NavTree } from "../features/navTree/NavTree";
 import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
+import { resetProjectStores } from "./helpers/workspace-setup";
 import type { AgentSessionRow } from "../features/agentStatus/useAgentStatus";
 import { CLAUDE_CLI_ID } from "../features/cliProfiles/profiles/claude";
 import {
@@ -227,12 +228,7 @@ function makeRow(overrides: Partial<AgentSessionRow> = {}): AgentSessionRow {
 
 /** 重置 stores + mocks */
 function resetAll(): void {
-  useProjects.setState({
-    projects: {},
-    deletionLock: { pendingDelete: null, acquiredAt: null },
-    expandedNodes: {},
-  });
-  useLayout.setState({ activePageId: null });
+  resetProjectStores(); // 共享重置：projects/layout/sideBar/keybindings 全量（TQ-B-10）
   mockUseAgentStatus.mockReset();
   mockUseAgentStatus.mockReturnValue({
     state: { kind: "ready" },

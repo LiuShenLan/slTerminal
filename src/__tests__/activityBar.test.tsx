@@ -37,6 +37,10 @@ vi.mock("../features/hooksConfig/openHooksConfig", () => ({
   openHooksConfigFromActivityBar: mockOpenHooksConfigFromActivityBar,
 }));
 
+// 阻断 side-effect 注册：真实 nav/explorer/commit 视图不得混入本文件的
+// sideViewRegistry 隔离（_reset 后仅注册 stub；TQ-B-02）
+vi.mock("../features/sideViews/sideViewDefs", () => ({}));
+
 import { render, fireEvent, act } from "@testing-library/react";
 import { ActivityBar } from "../features/sideViews/ActivityBar";
 import * as dropTargetModule from "../features/sideViews/dropTarget";
@@ -161,6 +165,8 @@ function installRectSpy(
 describe("ActivityBar", () => {
   beforeEach(() => {
     sideViewRegistry._reset();
+    // 防御断言：_reset 后注册表必须为空（sideViewDefs 被 mock 阻断，TQ-B-02）
+    expect(sideViewRegistry.getAll().length).toBe(0);
     registerTestViews();
     useSideBar.setState({
       zones: { top: [...DEFAULT_ZONES.top], bottom: [...DEFAULT_ZONES.bottom] },

@@ -13,11 +13,19 @@
 
 import { useProjects } from "../../stores/projects";
 import { useLayout } from "../../stores/layout";
+import { useSideBar } from "../../stores/sideBar";
+import { useKeybindings } from "../../stores/keybindings";
+import {
+  DEFAULT_ZONES,
+  DEFAULT_OPEN,
+  WIDTH_DEFAULT,
+  SPLIT_DEFAULT,
+} from "../../features/sideViews/sideBarState";
 import type { Project, OperationPage } from "../../stores/projects";
 
 // ─── 基本重置 ───
 
-/** 重置 projects + layout store 到初始状态 */
+/** 重置 projects/layout/sideBar/keybindings store 到初始状态（TQ-B-10 全量） */
 export function resetProjectStores() {
   useProjects.setState({
     projects: {},
@@ -25,6 +33,14 @@ export function resetProjectStores() {
     expandedNodes: {},
   });
   useLayout.setState({ activePageId: null });
+  useSideBar.setState({
+    zones: { top: [...DEFAULT_ZONES.top], bottom: [...DEFAULT_ZONES.bottom] },
+    open: { ...DEFAULT_OPEN },
+    width: WIDTH_DEFAULT,
+    splitRatio: SPLIT_DEFAULT,
+    loaded: true,
+  });
+  useKeybindings.setState({ overrides: {}, loaded: true });
 }
 
 /** 仅重置 projects store 到空状态（保留 expandedNodes） */

@@ -43,6 +43,7 @@ import { CommitView } from "../features/commit/CommitView";
 import { titleManager } from "../workspace/titleManager";
 import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
+import { resetProjectStores } from "./helpers/workspace-setup";
 import { DIM_FG, HTML_PANEL_LOADING_FG } from "../theme";
 
 /** 色值 → jsdom 归一化形态（#hex → "rgb(r, g, b)"；rgba 去除内空白后比对） */
@@ -94,12 +95,7 @@ function seedProject(rootPath: string) {
 }
 
 function resetStores() {
-  useProjects.setState({
-    projects: {},
-    deletionLock: { pendingDelete: null, acquiredAt: null },
-    expandedNodes: {},
-  });
-  useLayout.setState({ activePageId: null });
+  resetProjectStores(); // 共享重置：projects/layout/sideBar/keybindings 全量（TQ-B-10）
   titleManager.reset();
 }
 

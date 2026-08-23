@@ -8,7 +8,7 @@
 // - INT-2: term.onData → pty.write 调用链
 // - INT-3: visible 切换 → WebGL addon 释放/重建
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 
 // ═══════════════════════════════════════════════════════════════
@@ -165,6 +165,10 @@ vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(
     return null; // WebGL 等上下文不可用（同 setup.ts 默认行为）
   },
 );
+// 顶层 spyOn 须 afterAll 恢复——防同 worker 后续文件被污染（TQ-A-02）
+afterAll(() => {
+  (HTMLCanvasElement.prototype.getContext as unknown as { mockRestore?: () => void }).mockRestore?.();
+});
 
 // ═══════════════════════════════════════════════════════════════
 // 1. Hoisted 共享状态

@@ -5,7 +5,7 @@
 // 拆分自原 commit-view.test.tsx（SVC-14）。
 // 纯逻辑测试——无组件渲染，stores/titleManager 用真实实现，window.__dockviewApi 手工 mock。
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 import { openCommitFile, STATUS_PANEL_MAP, getPanelDispatch } from "../features/commit/openCommitFile";
 import { titleManager } from "../workspace/titleManager";
@@ -66,6 +66,10 @@ function mockDockApi(overrides: { addPanel?: Fn; getPanel?: Fn } = {}) {
 beforeEach(() => {
   resetStores();
   mockDockApi();
+});
+
+afterEach(() => {
+  delete (window as unknown as Record<string, unknown>).__dockviewApi; // 防过期 mock 外泄（TQ-B-15）
 });
 
 describe("openCommitFile 双击分派", () => {

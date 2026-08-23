@@ -6,7 +6,7 @@
 // 注：jsdom 中 DockviewReact 的 onReady 会创建终端面板，React StrictMode 双重挂载
 // 会导致多个 Terminal 实例，测试仅验证架构层面的行为（panel ID 存在性 + DOM 结构）。
 
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from "vitest";
 import { mockIPC, clearMocks } from "@tauri-apps/api/mocks";
 import { render, waitFor, act, fireEvent, cleanup } from "@testing-library/react";
 
@@ -37,11 +37,16 @@ vi.mock("@xterm/addon-fit", () => ({
   }),
 }));
 
+// 模块级 stub 须 afterAll 恢复——防同 worker 后续文件被污染（TQ-A-02）
+const originalResizeObserver = global.ResizeObserver;
 global.ResizeObserver = class ResizeObserver {
   observe() {}
   unobserve() {}
   disconnect() {}
 };
+afterAll(() => {
+  global.ResizeObserver = originalResizeObserver;
+});
 
 import Workspace from "../workspace/Workspace";
 import { useProjects } from "../stores/projects";
