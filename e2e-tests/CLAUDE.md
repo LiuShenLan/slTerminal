@@ -25,7 +25,7 @@ npm run wdio          # → node ./e2e-tests/run-wdio.cjs
 
 | 文件 | 用途 |
 |------|------|
-| `wdio.conf.ts` | WDIO 配置：local runner、mocha BDD、embedded driverProvider、单实例端口 4445、60s 超时、**用例级重试（E2E-15，mocha `retries: 1`；E2E-12 杀 app 用例在用例内 `this.retries(0)` 显式关闭）**。specs 通配 `./*.e2e.ts`（E2E-09 拆分后自动纳入），同一 worker 顺序执行（maxInstances=1，字母序即执行序——terminal.e2e.ts 末位承载 E2E-12 杀 app 用例） |
+| `wdio.conf.ts` | WDIO 配置：local runner、mocha BDD、embedded driverProvider、单实例端口 4445、60s 超时、**用例级重试（E2E-15，mocha `retries` 由 `WDIO_RETRIES` 环境变量驱动——默认 1；`WDIO_RETRIES=0` 关闭重试供 CI flakiness 观察面 job `e2e-flakiness-probe` 暴露真实 flakiness，TQ-E-09；E2E-12 杀 app 用例在用例内 `this.retries(0)` 显式关闭）**。**beforeSuite 双重置（TQ-E-08）**：`__slterm_e2e_resetProjects` + `__slterm_e2e_resetSettings`（settings 类 store 内存态隔离，见下节）。specs 通配 `./*.e2e.ts`（E2E-09 拆分后自动纳入），同一 worker 顺序执行（maxInstances=1，字母序即执行序——terminal.e2e.ts 末位承载 E2E-12 杀 app 用例） |
 | `terminal.e2e.ts` | 终端 spec（7 条 active）：启动标题、PTY 通信+缓冲断言、E2E helper 写入读取、terminal-N 标题、**H6 跨页面存活**、**全屏 TUI 大负载 + 切页签往返（E2E-04 视觉回归——M2 人工验证点）**、**强杀 slterminal.exe → 子进程树无残留（E2E-12，KILL_ON_JOB_CLOSE 真实验证）** |
 | `editor.e2e.ts` | 编辑器 spec（5 条 active）：编辑器标题 basename/同名冲突相对路径/关闭后重算、Ctrl+S 真实写盘（mtime 断言）、外部修改触发 reload 后保存（dirty→clean） |
 | `html.e2e.ts` | HTML 面板 spec（1 active + 1 skip）：iframe Ctrl+W postMessage 转发关闭（真实二进制全链路）、**内联脚本/事件 CSP 执行验证**（skip，执行断言不稳定） |
@@ -73,6 +73,7 @@ E2E helpers 通过 `main.tsx` 中 `E2E_ENABLED`（`src/lib/e2eEnabled.ts`）条�
 | `__slterm_e2e_writeClipboard(text)` | 写入剪贴板（绕过 browser.execute 中裸模块解析） |
 | `__slterm_e2e_shortcutDebug()` | 诊断：返回 `{ stack, commands }`（ShortcutRegistry 上下文栈 + 已注册命令 id） |
 | `__slterm_e2e_getSideBarState()` | 返回 `useSideBar` 纯数据快照（`{zones, open, width, splitRatio, loaded}`），可安全经 `browser.execute` 序列化 |
+| `__slterm_e2e_resetSettings()` | **spec 间隔离前端配置类 store（TQ-E-08）**：重置 keybindings/sideBar/fontSize 的 Zustand 内存态——后端 settings.json 由 run-wdio.cjs 备份/还原兜底，此处只管同一 run 内跨 spec 泄漏；**不清 hooks 注入状态**（hooks.e2e.ts 依赖 ensureHooksInjected 幂等）；wdio.conf beforeSuite 与 resetProjects 成对调用 |
 | `__slterm_e2e_toggleSideView(id)` | 等价点击活动栏按钮，走 `store.toggleView(id)`（委托 `toggleViewPure`） |
 | `__slterm_e2e_moveSideViewButton(id, zone, index)` | 等价拖拽落点，走 `store.moveButton(id, zone, index)`（委托 `moveButtonPure`）。zone 为 `"top"` 或 `"bottom"` |
 | `__slterm_e2e_injectHooks` / `__slterm_e2e_uninstallHooks` / `__slterm_e2e_getHookInjectionStatus` | hooks 注入/卸载/状态三态。底层泛化命令 `agent_hooks_inject` / `agent_hooks_uninstall` / `agent_hooks_injection_status`（六命令全表），**cliId 实参固定 "claude"**——E2E 辅助属测试基建，字面量合法；随第二 CLI 接入再扩展 cliId 参数 |
@@ -99,6 +100,8 @@ E2E helpers 通过 `main.tsx` 中 `E2E_ENABLED`（`src/lib/e2eEnabled.ts`）条�
 
 还原语义：原文件存在 → 删 E2E 产物后 rename 备份回来；原文件不存在 → 删产物 + 残留 bak。
 
+> **恢复报告（TQ-E-06）**：exit 回调体抽为 `restoreAll(): string[]`——各段恢复失败收集为失败项描述而非吞错；有失败 → `console.error` 逐项输出 + `process.exitCode = 1`（恢复失败必须可观测——静默会污染 `~/.slterminal` 与 `~/.claude` 真实用户数据）；全部成功 → 输出「用户目录恢复完成」。人工验证点：本地故意占用 hooks 目录跑一次 `npm run wdio`，确认输出失败清单且 exit code 非 0。
+
 > **决策 4（multi-cli 重构）**：E2E-05 备份集合保持 claude 硬编码（`~/.claude/settings.json` 等不按 CLI 泛化）——规格「二选一」取后者降范围；`run-wdio.cjs` 对应注释「随第二 CLI 接入扩展」。
 
 > **AQ-4（fixture 缺失终止而非降级）**：`fixtures/claude-projects/` 缺失时 `run-wdio.cjs` 在 wdio 启动前以 `console.error` 明确文案 + `process.exit(1)` 终止——不设 `SLTERM_CLAUDE_PROJECTS_DIR` 会令后端回落真实 `~/.claude/projects`（生产默认），历史会话用例有触碰真实用户目录风险。禁止引入新降级路径（自动创建空 fixture、临时目录兜底等）。
@@ -107,7 +110,7 @@ E2E helpers 通过 `main.tsx` 中 `E2E_ENABLED`（`src/lib/e2eEnabled.ts`）条�
 
 **wdio 单 session 共享 app 实例**（见文件头注释）——前序 spec 的 `__slterm_e2e_createProject` 项目在 store 累积（一轮可 20+ 项目/30+ 页）。**S06 FE-36 后 `addPage` 按跨项目全局页数计数（`MAX_PAGES=20`）**——terminal spec（末位）的 `addPage` 被拒绝 → `switchToPageAndWait` 切换幽灵页超时（H6/E2E-04 回归根因，2026-08-22 实证）。
 
-**修复机制（wdio.conf `beforeSuite`）**：每个 spec 开始前 `__slterm_e2e_resetProjects()` 清空 store——粒度 = spec 级：先于 mocha `before()`（后者建的项目不被清）；**不用 `beforeTest`**（wdio 层在 mocha `before()` 之后执行，会清掉 `before()` 里的项目 + 破坏 editor 标题等依赖 spec 内累积的用例）。spec 内用例累积 ≤10 项目不触发上限；用例内多项目（agent R2 切项目往返）不受影响。
+**修复机制（wdio.conf `beforeSuite`）**：每个 spec 开始前 `__slterm_e2e_resetProjects()` 清空 store + `__slterm_e2e_resetSettings()`（TQ-E-08）重置 keybindings/sideBar/fontSize 内存态——粒度 = spec 级：先于 mocha `before()`（后者建的项目不被清）；**不用 `beforeTest`**（wdio 层在 mocha `before()` 之后执行，会清掉 `before()` 里的项目 + 破坏 editor 标题等依赖 spec 内累积的用例）。spec 内用例累积 ≤10 项目不触发上限；用例内多项目（agent R2 切项目往返）不受影响。resetSettings 不得清 hooks 注入状态（hooks.e2e.ts 依赖 ensureHooksInjected 幂等）。
 
 配套改动：`helpers.__slterm_e2e_addPage` 在 store 拒绝时返回 `null`（spec 侧 `specUtils.addPage` 提前抛「无法创建页面」而非隐性超时）；`src/stores/projects.ts` 的 `addPage` 返回 `boolean`；`App.tsx` E2E 构建（`import.meta.env.VITE_E2E === "1"` 内联门控）跳过 `loadAllProjects`（防御启动恢复）。
 
@@ -150,3 +153,5 @@ embedded WDIO 驱动**无法把 OS 级按键（`browser.keys`）投递进 WebVie
 | `E2E_ENABLED=false` 生产分支 | L2 恒 true，编译期字面量 DCE 结构性缺口 | CI 生产 dist grep 守卫 + `e2e-build-config.test.ts` 字面量断言（IHE-04） |
 
 **视觉回归基线（E2E-04，M2 人工验证点）**：`terminal.e2e.ts` 全屏 TUI 大负载 + 切页签往返用例断言内容完整性与渲染器存活，但"WebGL→DOM 回退不白屏"属视觉判定——Stage 16 收尾时人工确认截图/渲染基线，此后回归由该用例持续守卫。
+
+**editor dirty→clean 用例环境级故障（2026-08-23 实证登记）**：`editor.e2e.ts`「外部修改 → auto-reload → Ctrl+S 保存」用例依赖后端 notify watcher → `fs-event` 全链路。2026-08-23 该用例在 E2E 应用进程内**稳定收不到 fs-event**（页面内 `plugin:event|listen` 探针计数 0）——即使应用进程内手动 `notify_watch` 成功（无错误）+ 页面内 `fs_write_file` 写入也不产生事件；同机 L1 notify 测试（`cargo test` 进程内真实目录 + 写文件）通过。**结论：Windows notify（ReadDirectoryChangesW）在 E2E 应用进程内的事件投递故障，属环境级问题，非代码缺陷**（src-tauri 回退二分排除与本计划改动关联）。兜底：reload 逻辑由 L2 `editor-confirm.test.ts` 覆盖；修复环境（排查 Windows 服务/杀软对 ReadDirectoryChangesW 的影响，或重启后复跑）后以 `npm run e2e` 复跑验收。

@@ -162,6 +162,8 @@ llvm-cov 的 Functions 口径统计编译器生成物（闭包/async 状态机�
 
 复测命令：`cargo llvm-cov --html --manifest-path src-tauri/Cargo.toml -- --test-threads=1`。
 
+**死函数清理结果留痕（TQ-COV-06）**：llvm-cov 未执行函数清单 grep 全仓定位——未发现无调用方死函数可删（e55b02e 零删行）；缺口全为命令壳（mock State 补测）与不可达分支（既有豁免表）。
+
 ### status_to_str 表驱动测试（12 用例）
 
 纯函数映射 `git2::Status` → `&str`，每个状态标志一条用例：

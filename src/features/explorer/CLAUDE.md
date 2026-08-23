@@ -91,7 +91,7 @@ Explorer 的键盘快捷键遵循与 terminal/editor 相同的模式：
 |------|------|
 | `ExplorerPanel.tsx` | React 容器组件：活跃项目推导、文件树渲染、CRUD 事件处理、`handleOpenFile` 面板分派（FileViewerRegistry）、**选中模型** + **焦点管理**（tabIndex={-1} + usePanelFocus("explorer")）+ **active pointer 集成**。**watcher 管理已上提至 Workspace 项目激活层**（SEC-01 effect）——本组件仅消费 `onFsEvent` 增量刷新，不再 startWatch/stopWatch（E2E editor auto-reload 根因修复） |
 | `useFileTree.ts` | 文件树数据 hook：`loadRoot` / `loadDirectory` / `toggleExpand` / `refreshExpanded`（经 `reloadPreservingExpanded` 递归重载保留展开状态）/ **FE-15 已知路径子树刷新（file-saved 300ms debounce + 最近展开祖先定位）** / generation 取消 |
-| `FileTree.tsx` | 树组件：**手实现窗口化虚拟化（FE-30，零新依赖）**——扁平化可见节点数组 + 固定行高（24px——UI-305 紧凑列表档登记）+ overscan 滚动窗口（`scrollTop`/容器高度计算可见切片，`paddingTop/Bottom` 占位保持滚动条），DOM 节点数与可见行数同量级；保持键盘导航/右键菜单/选中模型行为；git 状态着色、右键菜单、**单击选中（VS Code 风格高亮）** + **renamingPath 状态上提**（由 ExplorerPanel 管理） |
+| `FileTree.tsx` | 树组件：**手实现窗口化虚拟化（FE-30，零新依赖）**——扁平化可见节点数组 + 固定行高（24px——UI-305 紧凑列表档登记）+ overscan 滚动窗口（`scrollTop`/容器高度计算可见切片，`paddingTop/Bottom` 占位保持滚动条），DOM 节点数与可见行数同量级；保持键盘导航/右键菜单/选中模型行为；git 状态着色、右键菜单、**单击选中（VS Code 风格高亮）** + **renamingPath 状态上提**（由 ExplorerPanel 管理）。**测试锚点 testid（TQ-B-01/17）**：TreeNodeRow 根 div 带 `data-testid="tree-node-row"`（虚拟化/行断言锚点），内联输入框带 `data-testid="explorer-inline-input"`（根级新建 + 行内新建/重命名共用）——测试禁止再以 `closest("div")`/`querySelectorAll("input")` 取最后一个定位 |
 | `FileIcon.tsx` | 文件图标映射（UI-602：emoji → 描边 SVG 重构）——文件夹 = `lib/icons.tsx` 的 IconFolder（IC-01 图标单点）；文件 = 描边 + 左缘小色块自绘 SVG（轮廓/折角描边色 = 当前色（git 状态色，无则 `EXPLORER_COLORS.fg`），色块 fill = 扩展名映射色**六色盘**（ts/tsx 蓝、js/jsx/mjs/cjs 黄、py 绿、rs 红、md 紫、html 青、css/scss/less 蓝、配置类灰青、默认无色块）；git 状态色与类型色块分层叠加互不遮蔽）。**六色盘硬编码例外（IC-04 契约登记）**：色值写死于本文件 `FILE_COLORS` 常量（UI-602 checklist 指定色），NavProjectRow 文件夹蓝同规格例外 |
 | `activeExplorer.ts` | 模块级"聚焦 explorer"指针（createActivePointer 模式，同 activeTerminal/activeEditor） |
 | `keyboard.ts` | 快捷键命令工厂：`createExplorerShortcuts()` → 3 条命令（delete/open/rename），在 App.tsx 一次性注册 |
@@ -189,7 +189,7 @@ function renderFileTree(nodes: TreeNode[], overrides = {}) {
 - 触发：`fireEvent.contextMenu(element)` 找目标元素
 - 菜单项定位：`getAllByText("标签名")`，注意 StrictMode 双渲染导致重复元素
 - 点击菜单项：`fireEvent.click(items[0])`
-- 内联输入框定位：`document.querySelectorAll('input')` 取最后一个（无 role/label）
+- 内联输入框定位：`document.querySelector('[data-testid="explorer-inline-input"]')`（TQ-B-17 后不再 `querySelectorAll('input')` 取最后一个）
 
 ### 异步断言
 

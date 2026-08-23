@@ -293,6 +293,11 @@ assert_eq!(
 - **容量超限 kill 清理**（spawn.rs:1307-1315）：`pty_spawn` 命中会话上限时显式 kill 已 spawn 子进程（child.kill + sessions 写锁编排）——依赖真实 ConPTY spawn 的 PtySession，无法在 L1 不 spawn 子进程覆盖，登记豁免（inventory 豁免表同步由 Stage 10 统一处理）。兜底层级：BE-01 判定语义由 `pty_capacity_*` 纯函数三用例锁死（31 放行 / 32、64 拒绝）+ Job Object KILL_ON_JOB_CLOSE 兜底。
 - **conpty_api vendor 提取/加载回退残余 Win32 分支**：`load_bundled`/`get_proc` 的 LoadLibraryW/GetProcAddress 失败静默回退系统 ConPTY——依赖真实 DLL 加载行为，L1 无法注入，登记豁免（inventory 豁免表同步由 Stage 10 统一处理）。兜底层级：ADR-0005 Win10 实机人工验证 + `ensure_extracted` 提取幂等用例。
 
+### Mutex 中毒分支与 vendor 大小判定豁免登记（TQ-L1-04/06）
+
+- **Mutex 中毒分支无回归用例**（TQ-L1-04）：spawn.rs/settings.rs/state.rs 的 `.lock().map_err` 中毒路径按「临界区无 panic、中毒不可达」决策不设回归用例；临界区未来引入可 panic 代码时须补中毒场景测试或改不中毒原语。
+- **vendor 升级大小判定假设**（TQ-L1-06）：`write_if_size_differs` 仅以文件大小判定覆盖——假设「不同 vendor 版本大小必然不同」（嵌入内容编译期固定，同内容同大小必相同，故无漏更新风险）；若未来 vendor 来源改为外部可变文件，须改内容哈希判定并同步 `write_if_size_differs_overwrites_only_on_size_mismatch` 用例。
+
 ### 集成测试（tests/pty_integration_tests.rs）
 
 真实 spawn `cmd.exe`，端到端验证 PTY 通信：

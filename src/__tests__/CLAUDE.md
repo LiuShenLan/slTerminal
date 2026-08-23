@@ -100,6 +100,16 @@ Stage 01–07 产生的测试文件更名/合并登记。旧名全部退役、�
 | `testMocks/xterm.ts` | xterm.js 共享 mock 工厂：createTerminalMock / createFitAddonMock / createWebglAddonMock（~6 文件复用，vi.mock 回调内正常 import） |
 | `setup.ts` | 全局环境：共享工厂经 globalThis 暴露（`__createFsMocks`/`__createGitMocks`/`__createNotifyMocks`）+ 全局 vi.mock（`../ipc/notify`、`../ipc/agentHooks`（onAgentEvent 等，D-01 路径）、`@tauri-apps/api/window`）+ jsdom 补齐（getContext/crypto/ResizeObserver/matchMedia/document.fonts）。⚠️ vi.mock 遮蔽真实实现——需真实 ipc 的测试须在自身文件内 importOriginal 覆盖（照 ipc-contract.test.ts 先例） |
 
+## 全局 mock 清单（setup.ts，TQ-CI-05）
+
+| mock 目标 | 默认桩行为 | opt-out 方式 |
+|-----------|-----------|--------------|
+| `../ipc/notify` | onFsEvent 返回 no-op 取消函数 | importOriginal 覆盖 |
+| `../ipc/agentHooks` | inject 恒 notInjected / onAgentEvent no-op | importOriginal 覆盖 |
+| `@tauri-apps/api/window` | getCurrentWindow 桩 | importOriginal 覆盖 |
+
+新增全局 mock 必须登记本表；测试依赖真实契约时禁用默认桩。
+
 ## 测试文件对应源码
 
 | 测试文件 | 被测模块 |

@@ -12,13 +12,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **链式调用 + 短路**：多个策略按 `addStrategy` 顺序依次调用 `resolve()`，首个非 null 结果立即返回，后续策略不执行。所有策略返回 null 时回退默认编辑器。
 
-**模块级单例**：`fileViewerRegistry` 全局唯一实例（同 `ShortcutRegistry` / `titleManager` 模式），预注册 `html`/`htm` → `"htmlviewer"`。
+**模块级单例**：`fileViewerRegistry` 全局唯一实例（同 `ShortcutRegistry` / `titleManager` 模式），预注册 `html`/`htm` → `"htmlviewer"`。默认注册抽为 `registerDefaultViewers(strategy)` 导出（TQ-B-11）——生产模块级初始化与测试 `_reset()` 后恢复共用同一真值源，扩展名映射变更时测试自动跟随。
 
 ## 文件
 
 | 文件 | 职责 |
 |------|------|
-| `FileViewerRegistry.ts` | 策略接口 + ExtensionBasedViewerStrategy + FileViewerRegistry + fileViewerRegistry 单例 |
+| `FileViewerRegistry.ts` | 策略接口 + ExtensionBasedViewerStrategy + FileViewerRegistry + fileViewerRegistry 单例 + `registerDefaultViewers`（默认扩展名→面板映射导出，TQ-B-11） |
 | `index.ts` | barrel export |
 
 ## 扩展新文件类型
