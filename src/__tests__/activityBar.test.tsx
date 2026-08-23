@@ -133,11 +133,16 @@ function getZoneContainer(zone: Zone): Element {
   return el;
 }
 
-/** 安装 getBoundingClientRect spy——按钮 + bottom zone 统一返回模拟矩形 */
+/**
+ * 安装 getBoundingClientRect spy（TQ-B-07 收窄）——仅 mock 活动栏根容器与按钮，
+ * 其他元素（zone 容器/wrapper/配置钮）回退原实现：组件级拖拽只消费根容器与
+ * 按钮几何（resolveTargetZone 读根容器、getButtonRects 读按钮），不再让
+ * 全局几何测量统一走 mock 实现。
+ */
 function installRectSpy(
   buttonRects: Record<string, { top: number; height: number }>,
-  bottomZoneTop: number = 800,
 ) {
+  const originalGetBoundingClientRect = HTMLElement.prototype.getBoundingClientRect;
   return vi
     .spyOn(HTMLElement.prototype, "getBoundingClientRect")
     .mockImplementation(function (this: HTMLElement) {
@@ -145,18 +150,12 @@ function installRectSpy(
       if (this.getAttribute("data-e2e") === "activity-bar") {
         return { top: 0, bottom: 600, height: 600, left: 0, right: 40, width: 40, x: 0, y: 0, toJSON: () => ({}) } as DOMRect;
       }
-      if (this.getAttribute("data-zone") === "bottom") {
-        return { top: bottomZoneTop, bottom: bottomZoneTop, height: 0, left: 0, right: 40, width: 40, x: 0, y: bottomZoneTop, toJSON: () => ({}) } as DOMRect;
-      }
-      if (this.getAttribute("data-zone") === "top") {
-        return { top: 0, bottom: 0, height: 0, left: 0, right: 40, width: 40, x: 0, y: 0, toJSON: () => ({}) } as DOMRect;
-      }
       const id = this.getAttribute("data-view-id");
       if (id && buttonRects[id]) {
         const r = buttonRects[id];
         return { top: r.top, bottom: r.top + r.height, height: r.height, left: 0, right: 40, width: 40, x: 0, y: r.top, toJSON: () => ({}) } as DOMRect;
       }
-      return { top: 0, bottom: 0, height: 0, left: 0, right: 0, width: 0, x: 0, y: 0, toJSON: () => ({}) } as DOMRect;
+      return originalGetBoundingClientRect.call(this);
     });
 }
 
@@ -274,7 +273,7 @@ describe("ActivityBar", () => {
 
   it("SB-19.10 dragOver 调用 preventDefault 并设置 dropEffect（向外层容器派发）", () => {
     render(<ActivityBar />);
-    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } }, 800);
+    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } });
     const dt = createMockDataTransfer();
     dispatchDragEvent(getActivityBar(), "dragover", dt, 25);
     expect(dt.dropEffect).toBe("move");
@@ -283,7 +282,7 @@ describe("ActivityBar", () => {
 
   it("SB-19.11 dragOver 更新 dropIndicator——指示线渲染在落点按钮前方（向外层容器派发）", () => {
     render(<ActivityBar />);
-    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } }, 800);
+    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } });
     const bar = getActivityBar();
     const dt = createMockDataTransfer();
     expect(() => dispatchDragEvent(bar, "dragover", dt, 25)).not.toThrow();
@@ -305,7 +304,7 @@ describe("ActivityBar", () => {
 
   it("SB-19.12 drop 调用 moveButton——同 zone（向外层容器派发）", () => {
     render(<ActivityBar />);
-    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } }, 800);
+    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } });
     const moveSpy = vi.spyOn(useSideBar.getState(), "moveButton");
     const dt = createMockDataTransfer({ "application/x-side-view-id": "explorer" });
     const bar = getActivityBar();
@@ -383,7 +382,7 @@ describe("ActivityBar", () => {
   it("SB-19.17 拖拽 explorer 从 top 到空 bottom → moveButton(targetZone='bottom')", () => {
     render(<ActivityBar />);
     // boundary = max(projects.bottom=50, explorer.bottom=90) = 90
-    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } }, 100);
+    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } });
     const moveSpy = vi.spyOn(useSideBar.getState(), "moveButton");
     const dt = createMockDataTransfer({ "application/x-side-view-id": "explorer" });
     const bar = getActivityBar();
@@ -402,7 +401,7 @@ describe("ActivityBar", () => {
     useSideBar.setState({ zones: { top: [], bottom: ["nav", "explorer"] }, open: { top: null, bottom: null } });
     render(<ActivityBar />);
     // top zone 空 → boundary = container midpoint = 300（空上区回退）；clientY=10 < 300 → "top"
-    const spy = installRectSpy({ nav: { top: 90, height: 40 }, explorer: { top: 130, height: 40 } }, 90);
+    const spy = installRectSpy({ nav: { top: 90, height: 40 }, explorer: { top: 130, height: 40 } });
     const moveSpy = vi.spyOn(useSideBar.getState(), "moveButton");
     const dt = createMockDataTransfer({ "application/x-side-view-id": "nav" });
     const bar = getActivityBar();
@@ -420,7 +419,7 @@ describe("ActivityBar", () => {
     useSideBar.setState({ zones: { top: ["explorer"], bottom: ["nav", "search"] }, open: { top: null, bottom: null } });
     render(<ActivityBar />);
     // boundary = explorer.bottom = 50; bottomZoneTop=90
-    const spy = installRectSpy({ explorer: { top: 10, height: 40 }, nav: { top: 90, height: 40 }, search: { top: 130, height: 40 } }, 90);
+    const spy = installRectSpy({ explorer: { top: 10, height: 40 }, nav: { top: 90, height: 40 }, search: { top: 130, height: 40 } });
     const moveSpy = vi.spyOn(useSideBar.getState(), "moveButton");
     const dt = createMockDataTransfer({ "application/x-side-view-id": "explorer" });
     const bar = getActivityBar();
@@ -437,7 +436,7 @@ describe("ActivityBar", () => {
   it("SB-19.20 同区拖拽排序（top zone）→ zone 不变", () => {
     render(<ActivityBar />);
     // boundary=90, clientY=70 < 90 → zone="top"
-    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } }, 800);
+    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } });
     const moveSpy = vi.spyOn(useSideBar.getState(), "moveButton");
     const dt = createMockDataTransfer({ "application/x-side-view-id": "nav" });
     const bar = getActivityBar();
@@ -453,7 +452,7 @@ describe("ActivityBar", () => {
     useSideBar.setState({ zones: { top: [], bottom: ["nav", "explorer", "search"] }, open: { top: null, bottom: null } });
     render(<ActivityBar />);
     // top 空, midpoint=300; clientY=400 > 300 → zone="bottom"
-    const spy = installRectSpy({ nav: { top: 90, height: 40 }, explorer: { top: 130, height: 40 }, search: { top: 170, height: 40 } }, 90);
+    const spy = installRectSpy({ nav: { top: 90, height: 40 }, explorer: { top: 130, height: 40 }, search: { top: 170, height: 40 } });
     const moveSpy = vi.spyOn(useSideBar.getState(), "moveButton");
     const dt = createMockDataTransfer({ "application/x-side-view-id": "search" });
     const bar = getActivityBar();
@@ -471,7 +470,7 @@ describe("ActivityBar", () => {
     useSideBar.setState({ zones: { top: ["nav"], bottom: ["explorer"] }, open: { top: null, bottom: null } });
     render(<ActivityBar />);
     // boundary = projects.bottom = 50
-    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 90, height: 40 } }, 90);
+    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 90, height: 40 } });
     const moveSpy = vi.spyOn(useSideBar.getState(), "moveButton");
     const dt = createMockDataTransfer({ "application/x-side-view-id": "explorer" });
     const bar = getActivityBar();
@@ -488,7 +487,7 @@ describe("ActivityBar", () => {
     useSideBar.setState({ zones: { top: ["nav"], bottom: ["explorer"] }, open: { top: null, bottom: null } });
     render(<ActivityBar />);
     // boundary = projects.bottom = 50
-    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 90, height: 40 } }, 90);
+    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 90, height: 40 } });
     const moveSpy = vi.spyOn(useSideBar.getState(), "moveButton");
     const dt = createMockDataTransfer({ "application/x-side-view-id": "nav" });
     const bar = getActivityBar();
@@ -506,7 +505,7 @@ describe("ActivityBar", () => {
     render(<ActivityBar />);
     // top 空 → boundary ~0; clientY=110 > 0 → "bottom"
     // projects mid=110, explorer mid=150; clientY=110 >=110 → index after projects
-    const spy = installRectSpy({ nav: { top: 90, height: 40 }, explorer: { top: 130, height: 40 } }, 90);
+    const spy = installRectSpy({ nav: { top: 90, height: 40 }, explorer: { top: 130, height: 40 } });
     const moveSpy = vi.spyOn(useSideBar.getState(), "moveButton");
     const dt = createMockDataTransfer({ "application/x-side-view-id": "search" });
     const bar = getActivityBar();
@@ -524,7 +523,7 @@ describe("ActivityBar", () => {
   it("SB-19.25 dragOver 跨 zone 时 indicator.zone 切换", () => {
     useSideBar.setState({ zones: { top: ["nav"], bottom: ["explorer"] }, open: { top: null, bottom: null } });
     render(<ActivityBar />);
-    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 90, height: 40 } }, 90);
+    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 90, height: 40 } });
     const dropTargetSpy = vi.spyOn(dropTargetModule, "computeDropTarget");
     const dt = createMockDataTransfer();
     const bar = getActivityBar();
@@ -550,7 +549,7 @@ describe("ActivityBar", () => {
 
   it("SB-19.26 onDragLeave 离开活动栏 → dropIndicator 清 null（指示线样式移除）", () => {
     render(<ActivityBar />);
-    const spy = installRectSpy({ nav: { top: 10, height: 40 } }, 800);
+    const spy = installRectSpy({ nav: { top: 10, height: 40 } });
     const dt = createMockDataTransfer();
     const bar = getActivityBar();
     // 指示线渲染产物——height 2px 的 div（与 SB-19.39 计数口径一致）
@@ -574,7 +573,7 @@ describe("ActivityBar", () => {
   it("SB-19.27 drop 后 opacity 恢复 + dragEnd 幂等清理", () => {
     useSideBar.setState({ zones: { top: ["nav"], bottom: ["explorer"] }, open: { top: null, bottom: null } });
     render(<ActivityBar />);
-    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 90, height: 40 } }, 90);
+    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 90, height: 40 } });
     const moveSpy = vi.spyOn(useSideBar.getState(), "moveButton");
     const dt = createMockDataTransfer({ "application/x-side-view-id": "nav" });
     const bar = getActivityBar();
@@ -597,7 +596,7 @@ describe("ActivityBar", () => {
 
   it("SB-19.28 onDragLeave 子元素间转移不触发清理", () => {
     render(<ActivityBar />);
-    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } }, 800);
+    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } });
     const dt = createMockDataTransfer();
     const bar = getActivityBar();
     dispatchDragEvent(bar, "dragover", dt, 20);
@@ -615,7 +614,7 @@ describe("ActivityBar", () => {
 
   it("SB-19.29 落点在按钮上半 → moveButton index 为该按钮前方（0）", () => {
     render(<ActivityBar />);
-    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } }, 800);
+    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } });
     const moveSpy = vi.spyOn(useSideBar.getState(), "moveButton");
     const dt = createMockDataTransfer({ "application/x-side-view-id": "explorer" });
     const bar = getActivityBar();
@@ -631,7 +630,7 @@ describe("ActivityBar", () => {
 
   it("SB-19.30 落点在按钮下半 → moveButton index 为该按钮后方（1）", () => {
     render(<ActivityBar />);
-    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } }, 800);
+    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } });
     const moveSpy = vi.spyOn(useSideBar.getState(), "moveButton");
     const dt = createMockDataTransfer({ "application/x-side-view-id": "explorer" });
     const bar = getActivityBar();
@@ -648,7 +647,7 @@ describe("ActivityBar", () => {
 
   it("SB-19.31 clientY 恰好等于容器中点（300）→ zone='bottom'（>= 边界）", () => {
     render(<ActivityBar />);
-    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } }, 800);
+    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } });
     const moveSpy = vi.spyOn(useSideBar.getState(), "moveButton");
     const dt = createMockDataTransfer({ "application/x-side-view-id": "explorer" });
     const bar = getActivityBar();
@@ -663,7 +662,7 @@ describe("ActivityBar", () => {
 
   it("SB-19.32 clientY 为中点 -1（299）→ zone='top'（< 边界）", () => {
     render(<ActivityBar />);
-    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } }, 800);
+    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } });
     const moveSpy = vi.spyOn(useSideBar.getState(), "moveButton");
     const dt = createMockDataTransfer({ "application/x-side-view-id": "explorer" });
     const bar = getActivityBar();
@@ -726,7 +725,7 @@ describe("ActivityBar", () => {
 
   it("SB-19.39 容器→子元素转移 dragleave 不清指示线；真正离开容器才清（FE-23）", () => {
     render(<ActivityBar />);
-    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } }, 800);
+    const spy = installRectSpy({ nav: { top: 10, height: 40 }, explorer: { top: 50, height: 40 } });
     const dt = createMockDataTransfer();
     const bar = getActivityBar();
     dispatchDragEvent(bar, "dragover", dt, 20); // → dropIndicator { top, 0 }（nav 前指示线）

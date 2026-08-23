@@ -7,7 +7,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { clearMocks } from "@tauri-apps/api/mocks";
-import { renderHook, waitFor, act, cleanup } from "@testing-library/react";
+import { renderHook, render, fireEvent, waitFor, act, cleanup } from "@testing-library/react";
 
 // ─── 共享 mock 工厂 ───
 import { mockEntry, makeVfs } from "./helpers/vfs";
@@ -75,6 +75,9 @@ vi.mock("../ipc/notify", () => ({
 }));
 
 import { useFileTree } from "../features/explorer/useFileTree";
+import { ExplorerPanel } from "../features/explorer/ExplorerPanel";
+import { useProjects } from "../stores/projects";
+import { useLayout } from "../stores/layout";
 import type { DirEntry } from "../types/fs";
 
 // ─── 辅助 ───
@@ -312,6 +315,87 @@ describe("DBG-10: ExplorerPanel setProjectRoot 沙箱竞态", () => {
       const sprCallOrder = mocks.mockSetProjectRoot.mock.invocationCallOrder[0];
       const rdCallOrder = mocks.mockReadDir.mock.invocationCallOrder[0];
       expect(sprCallOrder).toBeLessThan(rdCallOrder);
+    });
+
+    it("DBG-10 真竞态：setProjectRoot pending 期间 mount ExplorerPanel → readDir 先于 resolve 到达被沙箱拒绝，resolve 后重试成功", async () => {
+      // 种子：活跃页面 cwd=/proj，ExplorerPanel 据此推导 rootPath（邻近 explorer 测试同模式）
+      useProjects.setState({
+        projects: {
+          "proj-1": {
+            projectId: "proj-1",
+            name: "测试项目",
+            rootPath: "/proj",
+            pages: [
+              {
+                pageId: "page-1",
+                name: "操作页面 1",
+                layout: {},
+                cwd: "/proj",
+                createdAt: 1,
+                lastAccessedAt: 1,
+              },
+            ],
+            activePageId: "page-1",
+            version: 1,
+          },
+        },
+      });
+      useLayout.setState({ activePageId: "page-1" });
+
+      mocks.resetDeferred();
+
+      makeVfs(mocks.mockReadDir, {
+        "/proj": [mockEntry("main.ts", false, "/proj/main.ts")],
+      });
+      // 以 setProjectRoot resolve 为边界包装 readDir：pending 窗口抛「沙箱拒绝」——
+      // 模拟真实后端路径沙箱语义（DBG-10 故障机制：readDir 先于 setProjectRoot 到达即被拒）。
+      // 观察到的实际行为：useFileTree 不感知 setProjectRoot 状态，rootPath 就位即发 readDir，
+      // 故防线不在组件层（调用方 switchToPageShared 先 await setProjectRoot 再 setActivePage）；
+      // 本用例把防线语义落到 mock 沙箱，锁死「成功读取不得早于 resolve」的时序因果。
+      const vfsImpl = mocks.mockReadDir.getMockImplementation() as (
+        p: string,
+      ) => Promise<DirEntry[]>;
+      let sprResolved = false;
+      mocks.mockReadDir.mockImplementation(async (p: string) => {
+        if (!sprResolved) throw new Error("路径沙箱拒绝：project_root 未就绪");
+        return vfsImpl(p);
+      });
+
+      // 不 await——setProjectRoot 保持 pending，模拟 effect 子先于父的窗口
+      mocks.mockSetProjectRoot("/proj");
+      render(<ExplorerPanel />);
+
+      // pending 窗口内 readDir 已发出（useFileTree effect 立即触发）但被沙箱拒绝
+      await waitFor(() => {
+        expect(mocks.mockReadDir).toHaveBeenCalledWith("/proj");
+      }, { timeout: 3000 });
+      // 失败路径可观测：渲染错误占位而非文件树
+      await waitFor(() => {
+        expect(document.querySelector('[data-testid="explorer-load-error"]')).not.toBeNull();
+      }, { timeout: 3000 });
+      expect(document.body.textContent).not.toContain("main.ts");
+
+      // 防线正确时序：resolve 完成才授权沙箱（set_project_root 落库后路径才放行）
+      sprResolved = true;
+      mocks.resolveSetProjectRoot();
+
+      // 点击重试（refresh）→ readDir 成功 → 文件树正常渲染
+      const retry = document.querySelector('[data-testid="explorer-load-retry"]') as HTMLButtonElement;
+      fireEvent.click(retry);
+      await waitFor(() => {
+        expect(document.querySelector('[data-testid="explorer-load-error"]')).toBeNull();
+      }, { timeout: 3000 });
+      await waitFor(() => {
+        expect(document.body.textContent).toContain("main.ts");
+      }, { timeout: 3000 });
+
+      // 时序约束：仅两次读取（先败后成），成功调用必然晚于 resolve——
+      // 若未来防线改为「组件层等待 setProjectRoot」，pending 窗口 readDir 不发出，
+      // 本用例的失败占位断言即红，需按新行为重定断言（禁止放宽到时序无约束）
+      expect(mocks.mockReadDir.mock.calls.length).toBe(2);
+      const sprCallOrder = mocks.mockSetProjectRoot.mock.invocationCallOrder[0];
+      const rdFailCallOrder = mocks.mockReadDir.mock.invocationCallOrder[0];
+      expect(sprCallOrder).toBeLessThan(rdFailCallOrder);
     });
   });
 

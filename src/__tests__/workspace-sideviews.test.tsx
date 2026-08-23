@@ -1,7 +1,7 @@
 // workspace-sideviews.test.tsx — Workspace 集成：侧栏视图三栏结构验证
 //
 // 验证 Workspace 三栏改造后 Allotment 的 pane 结构：
-// - pane1 活动栏 40px 固定（preferredSize/minSize/maxSize）
+// - pane1 活动栏 46px 固定（以 ACTIVITY_BAR_SIZE 为准，preferredSize/minSize/maxSize）
 // - pane2 侧栏区 visible=anyOpen + width 驱动
 // - pane3 主区 minSize 保持
 // - 外层 onChange → setWidth、switchToPage 透传 SideBarArea
@@ -197,8 +197,8 @@ describe("Workspace 侧栏视图集成", () => {
     sideBarAreaCapture.reset();
   });
 
-  describe("SB-24.1: 活动栏 pane 40px 固定", () => {
-    it("pane1 preferredSize === ACTIVITY_BAR_SIZE (40)", () => {
+  describe("SB-24.1: 活动栏 pane 46px 固定", () => {
+    it("pane1 preferredSize === ACTIVITY_BAR_SIZE (46)", () => {
       seedProjectAndPage();
       render(React.createElement(Workspace));
       expect(getPane(0)?.preferredSize).toBe(ACTIVITY_BAR_SIZE);

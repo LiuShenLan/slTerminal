@@ -10,6 +10,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { createGlobalShortcuts } from "../features/shortcuts/globalCommands";
 import type { DockviewApi, IDockviewPanel } from "dockview-react";
+import { makeKeydown } from "./helpers/keyboard";
 
 /** 构造 DockviewApi stub */
 function dockviewApiStub(opts?: { activePanel?: Partial<IDockviewPanel> | null }): DockviewApi {
@@ -77,12 +78,7 @@ describe("createGlobalShortcuts", () => {
       const api = dockviewApiStub({ activePanel: panel as unknown as IDockviewPanel });
       const cmds = createGlobalShortcuts(() => api);
 
-      const event = new KeyboardEvent("keydown", {
-        ctrlKey: true,
-        code: "KeyW",
-        bubbles: true,
-        cancelable: true,
-      });
+      const event = makeKeydown({ ctrlKey: true, code: "KeyW" });
       const result = cmds[0].handler(event);
 
       expect(panel.api.close).toHaveBeenCalledOnce();
@@ -97,7 +93,7 @@ describe("createGlobalShortcuts", () => {
       const cmds = createGlobalShortcuts(() => currentApi);
 
       // 第一次调用 → 使用 api1
-      cmds[0].handler(new KeyboardEvent("keydown", { ctrlKey: true, code: "KeyW" }));
+      cmds[0].handler(makeKeydown({ ctrlKey: true, code: "KeyW" }));
       expect(panel1.api.close).toHaveBeenCalledOnce();
 
       // 模拟页面切换，getDockviewApi 现在返回不同的 api
@@ -106,7 +102,7 @@ describe("createGlobalShortcuts", () => {
       currentApi = api2;
 
       // 第二次调用 → 使用 api2
-      cmds[0].handler(new KeyboardEvent("keydown", { ctrlKey: true, code: "KeyW" }));
+      cmds[0].handler(makeKeydown({ ctrlKey: true, code: "KeyW" }));
       expect(panel2.api.close).toHaveBeenCalledOnce();
     });
   });
@@ -118,12 +114,7 @@ describe("createGlobalShortcuts", () => {
       const api = dockviewApiStub({ activePanel: null });
       const cmds = createGlobalShortcuts(() => api);
 
-      const event = new KeyboardEvent("keydown", {
-        ctrlKey: true,
-        code: "KeyW",
-        bubbles: true,
-        cancelable: true,
-      });
+      const event = makeKeydown({ ctrlKey: true, code: "KeyW" });
       const result = cmds[0].handler(event);
 
       expect(result).toBe(false);
@@ -133,12 +124,7 @@ describe("createGlobalShortcuts", () => {
     it("getDockviewApi 返回 undefined → 安全返回 false", () => {
       const cmds = createGlobalShortcuts(() => undefined);
 
-      const event = new KeyboardEvent("keydown", {
-        ctrlKey: true,
-        code: "KeyW",
-        bubbles: true,
-        cancelable: true,
-      });
+      const event = makeKeydown({ ctrlKey: true, code: "KeyW" });
       const result = cmds[0].handler(event);
 
       expect(result).toBe(false);
@@ -154,7 +140,7 @@ describe("createGlobalShortcuts", () => {
       const api = dockviewApiStub({ activePanel: panel as unknown as IDockviewPanel });
       const cmds = createGlobalShortcuts(() => api);
 
-      const event = new KeyboardEvent("keydown", { ctrlKey: true, code: "KeyW" });
+      const event = makeKeydown({ ctrlKey: true, code: "KeyW" });
 
       expect(() => {
         cmds[0].handler(event);
@@ -173,7 +159,7 @@ describe("createGlobalShortcuts", () => {
 
       // 真调 handler：getDockviewApi 在 handler 内被调用（非注册时缓存），
       // 源码无 try/catch——异常向上传播给调用方（ShortcutRegistry.handleKeyDown），由调用链处理
-      const event = new KeyboardEvent("keydown", { ctrlKey: true, code: "KeyW" });
+      const event = makeKeydown({ ctrlKey: true, code: "KeyW" });
       expect(() => cmds[0].handler(event)).toThrow("unexpected");
     });
   });

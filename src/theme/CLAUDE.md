@@ -11,7 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### schemes/ 值文件（定义层）
 
 - **`types.ts`**：`ColorScheme` / `UiTokens` / `TerminalPalette` / `EditorScheme` / `LibraryOverrides` 接口定义。每个槽位带**区域级消费注释**（语义 + 消费区域/组件，行号不入注释，决策 D8）——**权威消费注释**，新方案值文件对象标注 `: ColorScheme` 后编辑器 hover 即显示 JSDoc，新方案零注释负担。**fail-safe 交叉引用**：内置默认方案 `linear.ts` 文件头登记启动链静态硬编码色（types.ts 为权威，两者保持一致）。
-- **`linear.ts`**：内置默认方案（id `"linear"`，即 settings.json `colorScheme` 段缺省/未知值回退目标，2026-08 Stage 01 起替换原默认方案）。四段全量值：**ui 段** 6 组（gitFile 7 / gitGutter 3 / explorer 5 / sidebar 8 / agentStatusUsage 4（low/medium/high/critical——四档分级 ≥90/≥70/≥50）/ errorBanner 3）+ **26 标量**（23 既有 + 3 新增：`accentFg` 强调派生前景/`selectionHoverBg` 选中行 hover/`titlebarBg` 自绘标题栏底）；**terminal 段** 25 键（前景/背景/光标/选区 + ANSI 16 色 + 滚动条滑块，ITheme 兼容）；**editor 段** = oneDark 直 import 透出（决策 D6）+ overrides（lint 7 键 / searchMatch 4 键 / **syntax 9 键**（property/string/number/keyword/function/type/operator/punctuation/comment）/ **plainText 3 键**（plainText/lineNumber/lineNumberActive）/ background）；**libraries 段** = dockview 20 条 CSS 变量 + allotment 2 键（独立硬编码字面值，有意与 ui 段解耦）。linear 为用户定制方案（值契约锚点 = `.claude/adr.md` ADR-0003 定稿），值可随意图演进。
+- **`linear.ts`**：内置默认方案（id `"linear"`，即 settings.json `colorScheme` 段缺省/未知值回退目标，2026-08 Stage 01 起替换原默认方案）。四段全量值：**ui 段** 6 组（gitFile 7 / gitGutter 3 / explorer 5 / sidebar 8 / agentStatusUsage 4（low/medium/high/critical——四档分级 ≥90/≥70/≥50）/ errorBanner 3）+ **27 标量**（23 既有 + 4 新增：`accentFg` 强调派生前景/`selectionHoverBg` 选中行 hover/`titlebarBg` 自绘标题栏底/`titlebarCloseHover` 关闭钮 hover）；**terminal 段** 25 键（前景/背景/光标/选区 + ANSI 16 色 + 滚动条滑块，ITheme 兼容）；**editor 段** = oneDark 直 import 透出（决策 D6）+ overrides（lint 7 键 / searchMatch 4 键 / **syntax 9 键**（property/string/number/keyword/function/type/operator/punctuation/comment）/ **plainText 3 键**（plainText/lineNumber/lineNumberActive）/ background）；**libraries 段** = dockview 20 条 CSS 变量 + allotment 2 键（独立硬编码字面值，有意与 ui 段解耦）。linear 为用户定制方案（值契约锚点 = `.claude/adr.md` ADR-0003 定稿），值可随意图演进。
 - **`index.ts`**：side-effect 注册文件（照 `sideViewDefs.ts` 模式）——import 时 `schemeRegistry.register(linear)`。新增方案在此追加。
 
 ### SchemeRegistry 注册表（`schemeRegistry.ts`）
@@ -74,7 +74,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `colors.ts` | facade（代理 active 方案 ui 段，34 导出名；`ROOT_CSS_VARS` 供 main.tsx 注入根 CSS 变量） |
 | `index.ts` | barrel export：colors.ts 34 导出 + schemeRegistry/SchemeRegistry + schemes（linear + ColorScheme 等类型）+ overrides 五导出 |
 | `schemes/types.ts` | 接口定义（ColorScheme/UiTokens/TerminalPalette/EditorScheme/LibraryOverrides），槽位区域级消费注释（D8）；overrides 段含 syntax 9 键 + plainText 3 键新槽位 |
-| `schemes/linear.ts` | 内置默认方案（id linear）全量值：ui 6 组 + 26 标量 / terminal 25 键 / editor oneDark 透出 + overrides / libraries dockview 20 + allotment 2；文件头 fail-safe 交叉引用 |
+| `schemes/linear.ts` | 内置默认方案（id linear）全量值：ui 6 组 + 27 标量 / terminal 25 键 / editor oneDark 透出 + overrides / libraries dockview 20 + allotment 2；文件头 fail-safe 交叉引用 |
 | `schemes/index.ts` | side-effect 注册文件：`schemeRegistry.register(linear)`；新增方案在此追加 |
 | `schemeRegistry.ts` | SchemeRegistry 模块级单例（七方法，未知 id 回退 linear + console.warn，`_reset` 仅测试） |
 | `overrides.ts` | 五导出：`dockviewVarStyle` / `allotmentVarStyle` / `editorTheme` / `editorColorOverrides` / `editorSyntaxHighlight` |
@@ -90,7 +90,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 > 用例数为快照，最新计数以 `.claude/test-inventory.md` 为准。
 
-- **`scheme-registry.test.ts`**（18 用例）：register/get/getAll/getDefaultId、setActive 已知 id、setActive 未知 id 回退 linear + console.warn、getActive 默认 linear、重复注册覆盖、`_reset` 隔离、linear 四段完整性（ui 6 组键数 7/3/5/8/3/3 + 26 标量、terminal 25 键、editor oneDark 透出非 undefined + overrides 全槽位（含 syntax 9 键/plainText 3 键）、libraries dockview 20 条 + allotment 2 键）
+- **`scheme-registry.test.ts`**（18 用例）：register/get/getAll/getDefaultId、setActive 已知 id、setActive 未知 id 回退 linear + console.warn、getActive 默认 linear、重复注册覆盖、`_reset` 隔离、linear 四段完整性（ui 6 组键数 7/3/5/8/3/4 + 27 标量、terminal 25 键、editor oneDark 透出非 undefined + overrides 全槽位（含 syntax 9 键/plainText 3 键）、libraries dockview 20 条 + allotment 2 键）
 - **`overrides.test.ts`**（11 用例）：dockviewVarStyle 键集合 20 条且值为 active 方案色、allotmentVarStyle 2 键、editorTheme === active 方案 editor 段、editorColorOverrides 返回 CM6 扩展（lint/searchMatch/background/正文行号键生效）、**「层叠胜出（ACC-05 修复守卫）」——断言 background/正文行号规则选择器为 `/^\.ͼ[0-9a-z]+\.cm-editor/` 形态、searchMatch 选择器带 `.cm-editor ` 前缀 + 负断言无裸平级选择器（防回归写回）**、两连调用规则值同源（editor.overrides 全 12 值）、**`editorSyntaxHighlight`（TH-07）：导出存在且为函数 + 返回合法 CM6 扩展（EditorState.create 可消费）**、setActive 后函数形导出跟随切换（editorTheme 常量契约不重绑定）。注意：jsdom 的 `getComputedStyle` 不支持 `<style>` 规则层叠，守卫用规则文本/选择器形态断言而非 computed
 - **facade/消费方断言**：`colors.test.ts`（13 用例）守 token 集合（含 3 新标量）与 ROOT_CSS_VARS 键集合；token 值正确性由消费方测试断言（如 `git-gutter.test.ts` 的 GutterMarker DOM 颜色断言、`explorer-git-status.test.tsx` 着色断言）。新增 token 时同步更新消费方断言
 

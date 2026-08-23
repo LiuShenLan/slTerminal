@@ -8,6 +8,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { EditorState } from "@codemirror/state";
+// vi.mock("@codemirror/view") hoisted——此处拿到 MockEditorView（static theme 为 spy）
+import { EditorView } from "@codemirror/view";
 
 // ─── Hoisted mocks ───
 // FE-01: confirmDialog/toast 为应用内浮层（模块级 mock，替代 window.alert/confirm spy）
@@ -137,6 +139,17 @@ function createContainer(): HTMLDivElement {
   return el;
 }
 
+/** 提取全部 EditorView.theme 调用产生的字号 spec——createEditorFontExtension 是唯一
+ *  带 fontSize 键的调用点（EDITOR_FONT_THEME/height:100%/colorOverrides 均无此键） */
+function fontThemeSizes(): string[] {
+  return vi
+    .mocked(EditorView.theme)
+    .mock.calls.map(
+      ([spec]) => (spec as { ".cm-scroller"?: { fontSize?: string } })?.[".cm-scroller"]?.fontSize,
+    )
+    .filter((size): size is string => size !== undefined);
+}
+
 // ─── 测试套件 ───
 
 describe("useCodeMirror 字体大小", () => {
@@ -153,22 +166,25 @@ describe("useCodeMirror 字体大小", () => {
     container.innerHTML = "";
   });
 
-  it("1. fontSize 传入 EditorState extensions", () => {
+  it("1. fontSize 传入 EditorState extensions", async () => {
     renderHook(() =>
       useCodeMirror({ container, filePath: "/test/file.js", panelId: "p1", fontSize: 18 }),
     );
 
-    // EditorState.create 被调用
-    expect(capturedStateExtensions).toBeDefined();
+    // 等待 EditorView 初始化（MockEditorView 构造器写入 capturedStateExtensions）
+    await waitFor(() => expect(capturedStateExtensions).not.toBeNull(), { timeout: 3000 });
+    // 行为断言：字号主题 spec 携带 fontSize:18px——值真实进入扩展链，而非仅工厂存在
+    expect(fontThemeSizes()).toContain("18px");
   });
 
-  it("2. 不传 fontSize 时使用默认 14", () => {
+  it("2. 不传 fontSize 时使用默认 14", async () => {
     renderHook(() =>
       useCodeMirror({ container, filePath: "/test/file.js", panelId: "p2" }),
     );
 
-    // 没有报错即通过
-    expect(capturedStateExtensions).toBeDefined();
+    await waitFor(() => expect(capturedStateExtensions).not.toBeNull(), { timeout: 3000 });
+    // 缺省 fontSize → 默认 14px 生效（而非 undefined 空值）
+    expect(fontThemeSizes()).toContain("14px");
   });
 
   it("3. fontSize 变化触发 dispatch + reconfigure", async () => {
@@ -180,7 +196,7 @@ describe("useCodeMirror 字体大小", () => {
 
     // 等待 EditorView 初始化（readFile mock 立即 resolve）
     await waitFor(() => {
-      expect(capturedStateExtensions).toBeDefined();
+      expect(capturedStateExtensions).not.toBeNull();
     }, { timeout: 3000 });
 
     mockDispatch.mockClear();
@@ -192,6 +208,8 @@ describe("useCodeMirror 字体大小", () => {
     }, { timeout: 3000 });
     // reconfigure 被调用
     expect(mockReconfigure).toHaveBeenCalled();
+    // 行为断言：reconfigure 的扩展源 = createEditorFontExtension(20)——20px 字号 spec 已生成
+    expect(fontThemeSizes()).toContain("20px");
   });
 
   it("4. fontSize 不变时不 dispatch", async () => {
@@ -202,7 +220,7 @@ describe("useCodeMirror 字体大小", () => {
     );
 
     await waitFor(() => {
-      expect(capturedStateExtensions).toBeDefined();
+      expect(capturedStateExtensions).not.toBeNull();
     }, { timeout: 3000 });
 
     mockDispatch.mockClear();
@@ -338,7 +356,7 @@ describe("useCodeMirror 字体大小", () => {
     renderHook(() =>
       useCodeMirror({ container, filePath: "/test/file.js", panelId: "p11" }),
     );
-    await waitFor(() => expect(capturedStateExtensions).toBeDefined(), { timeout: 3000 });
+    await waitFor(() => expect(capturedStateExtensions).not.toBeNull(), { timeout: 3000 });
 
     const { keymap } = await import("@codemirror/view"); // mock 的 keymap.of
     const { indentWithTab } = await import("@codemirror/commands"); // 真实引用
@@ -359,7 +377,7 @@ describe("useCodeMirror 字体大小", () => {
     );
 
     // 等待异步 initEditor 完成（EditorView 创建 → viewRef.current 就位）
-    await waitFor(() => expect(capturedStateExtensions).toBeDefined(), { timeout: 3000 });
+    await waitFor(() => expect(capturedStateExtensions).not.toBeNull(), { timeout: 3000 });
 
     // mockUsePanelFocus 被 hook 调用，第 3 个参数是 activate 回调
     const activateCall = mockUsePanelFocus.mock.calls[mockUsePanelFocus.mock.calls.length - 1];
@@ -373,7 +391,7 @@ describe("useCodeMirror 字体大小", () => {
     renderHook(() =>
       useCodeMirror({ container, filePath: "/test/file.js", panelId: "p12" }),
     );
-    await waitFor(() => expect(capturedStateExtensions).toBeDefined(), { timeout: 3000 });
+    await waitFor(() => expect(capturedStateExtensions).not.toBeNull(), { timeout: 3000 });
 
     // Compartment.of 被调用多次（font、lang、wrap），wrap 的初始化参数为 []
     // mockReconfigure 在初始化阶段不应被调用（of 不触发 reconfigure）
@@ -468,7 +486,7 @@ describe("useCodeMirror 字体大小", () => {
       useCodeMirror({ container, filePath: "/test/file.js", panelId: "p19" }),
     );
 
-    await waitFor(() => expect(capturedStateExtensions).toBeDefined(), { timeout: 3000 });
+    await waitFor(() => expect(capturedStateExtensions).not.toBeNull(), { timeout: 3000 });
 
     // 通过 activate 拿到 editorActions
     const activateCall = mockUsePanelFocus.mock.calls[mockUsePanelFocus.mock.calls.length - 1];
@@ -523,7 +541,7 @@ describe("handleSave 保存逻辑", () => {
     );
 
     // 等待异步 initEditor 完成（EditorView 创建 → viewRef.current 就位）
-    await waitFor(() => expect(capturedStateExtensions).toBeDefined(), { timeout: 3000 });
+    await waitFor(() => expect(capturedStateExtensions).not.toBeNull(), { timeout: 3000 });
 
     // 通过 mockUsePanelFocus 的 activate 回调设置 activeEditor
     const activateCall = mockUsePanelFocus.mock.calls[mockUsePanelFocus.mock.calls.length - 1];
@@ -757,7 +775,7 @@ describe("FE-01 文件切换竞态", () => {
 
     // B 的 readFile 立即 resolve → EditorView 被创建
     await waitFor(() => {
-      expect(capturedStateExtensions).toBeDefined();
+      expect(capturedStateExtensions).not.toBeNull();
     }, { timeout: 3000 });
 
     // 只有 B 的 EditorView 在 DOM 中
@@ -811,7 +829,7 @@ describe("FE-01 文件切换竞态", () => {
     // B 先完成
     resolveB!("// content B");
     await waitFor(() => {
-      expect(capturedStateExtensions).toBeDefined();
+      expect(capturedStateExtensions).not.toBeNull();
     }, { timeout: 3000 });
 
     // B 的 view 在 DOM 中
@@ -846,7 +864,7 @@ describe("FE-01 文件切换竞态", () => {
 
     // A 快速完成 → view 创建
     await waitFor(() => {
-      expect(capturedStateExtensions).toBeDefined();
+      expect(capturedStateExtensions).not.toBeNull();
     }, { timeout: 3000 });
 
     // 切换到 B：cleanup 同步销毁 A
@@ -856,7 +874,7 @@ describe("FE-01 文件切换竞态", () => {
 
     // B 创建
     await waitFor(() => {
-      expect(capturedStateExtensions).toBeDefined();
+      expect(capturedStateExtensions).not.toBeNull();
     }, { timeout: 3000 });
 
     // B 随后被卸载销毁
@@ -882,7 +900,7 @@ describe("FE-19 handleSave repoDir 计算", () => {
       }),
     );
 
-    await waitFor(() => expect(capturedStateExtensions).toBeDefined(), { timeout: 3000 });
+    await waitFor(() => expect(capturedStateExtensions).not.toBeNull(), { timeout: 3000 });
 
     const activateCall = mockUsePanelFocus.mock.calls[mockUsePanelFocus.mock.calls.length - 1];
     const activateFn = activateCall?.[2] as (() => void) | undefined;
@@ -972,7 +990,7 @@ describe("EDF-03 大文件分支与保存失败", () => {
       }),
     );
 
-    await waitFor(() => expect(capturedStateExtensions).toBeDefined(), { timeout: 3000 });
+    await waitFor(() => expect(capturedStateExtensions).not.toBeNull(), { timeout: 3000 });
 
     const activateCall = mockUsePanelFocus.mock.calls[mockUsePanelFocus.mock.calls.length - 1];
     const activateFn = activateCall?.[2] as (() => void) | undefined;

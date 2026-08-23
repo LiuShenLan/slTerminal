@@ -6,10 +6,8 @@
 // 缺省回退经 profiles/claude 导出的常量引用（CLAUDE_CLI_ID / SESSION_END_EVENT
 // / EXIT_EVENT，MC-205/313 豁免写法）。
 //
-// 扫描范围（通用层八路径）：src/lib、src/panels/terminal、
-// src/features/agentStatus、src/features/agentHistory、src/features/notifications、
-// src/ipc、src/types、src/features/cliProfiles。守卫自身用 fs 枚举目录递归扫描
-// .ts/.tsx，新增文件自动纳入。
+// 扫描范围（TQ-C-04 扩全 src）：src/ 全量递归（readdirSync recursive）扫描
+// .ts/.tsx——白名单制会让新增通用目录逃脱，全量扫描后新目录自动纳入。
 // 目录级豁免（CS-2）：src/features/cliProfiles/profiles/claude/ 是 claude 合法领地
 // （MC-213/223）——claude 知识唯一合法聚居地，整目录不参与扫描；豁免按相对路径
 // 前缀匹配（正斜杠归一），拼写错会静默空扫，由自检用例守住。
@@ -39,24 +37,32 @@ import { fileURLToPath } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "../..");
 
-/** AC-5 扫描范围：通用层八路径（相对 repoRoot；CS-2 追加 cliProfiles） */
-const SCAN_DIRS = [
-  "src/lib",
-  "src/panels/terminal",
-  "src/features/agentStatus",
-  "src/features/agentHistory",
-  "src/features/notifications",
-  "src/ipc",
-  "src/types",
-  "src/features/cliProfiles",
+/** AC-5 扫描范围：全 src 递归，仅排除豁免目录（TQ-C-04——白名单制会让新增通用目录逃脱） */
+const SCAN_ROOT = "src";
+
+/** 目录级豁免：claude 合法领地（身份域），整目录不参与扫描 */
+const EXEMPT_DIRS = [
+  // MC-213/223：claude CLI 身份域（CLAUDE_CLI_ID 等常量/事件名/路径唯一合法聚居地）
+  "src/features/cliProfiles/profiles/claude",
+  // claude hooks 配置面板专属（MC-504 下移）：hub 经 configEditor 分派的 claude 专属编辑器
+  // （KZ-7 mockcli 用桩编辑器不共用），eventsCatalog = 官方 schema 提取的 claude hooks
+  // 事件目录，提示文案含 ~/.claude 路径——TQ-C-04 全量扫描判定的身份域漏标，豁免并注释
+  "src/panels/hooksConfig",
+  // 测试夹具域：模拟 claude CLI 身份/事件名/~/.claude 路径的样例数据，
+  // 验证身份域行为之必需，非生产通用层——守卫目标 = 生产源码（TQ-C-04 判定）
+  "src/__tests__",
 ];
 
-/** 目录级豁免（CS-2）：claude 合法领地（MC-213/223），整目录不参与扫描 */
-const EXEMPT_DIR_REL = "src/features/cliProfiles/profiles/claude";
+/** 文件级豁免：本守卫自身 */
+const EXEMPT_FILES = [
+  "src/__tests__/no-claude-literals.test.ts",
+];
 
-/** 豁免判定：相对路径按正斜杠归一后匹配豁免目录前缀（拼写错会静默空扫，自检用例守住） */
-function isExemptRel(fileRel: string): boolean {
-  return fileRel.replace(/\\/g, "/").startsWith(EXEMPT_DIR_REL + "/");
+/** 豁免判定：目录级按前缀、文件级精确匹配（正斜杠归一；拼写错会静默空扫，自检用例守住） */
+function isExempt(fileRel: string): boolean {
+  const rel = fileRel.replace(/\\/g, "/");
+  if (EXEMPT_FILES.includes(rel)) return true;
+  return EXEMPT_DIRS.some((dir) => rel.startsWith(dir + "/"));
 }
 
 /** 禁止作为字符串字面量出现的 claude 事件名（claude 协议知识专属 profiles/claude/） */
@@ -197,18 +203,20 @@ function classifyLiteral(value: string): Violation["kind"] | null {
   return null;
 }
 
-/** 全量扫描：收集三类违规（八路径 × 全部 .ts/.tsx，豁免目录除外） */
+/** 全量扫描：收集三类违规（全 src 递归 × .ts/.tsx，豁免目录/文件除外） */
 function scanViolations(): { violations: Violation[]; files: string[] } {
   const violations: Violation[] = [];
   const files: string[] = [];
-  for (const rel of SCAN_DIRS) {
-    const abs = resolve(repoRoot, rel);
-    // CS-2：目录级豁免 claude 合法领地（profiles/claude/）——不参与违规收集
-    files.push(
-      ...collectTsFiles(abs)
-        .map((f) => relative(repoRoot, f))
-        .filter((f) => !isExemptRel(f)),
-    );
+  // Node 22 readdirSync recursive 全量递归——新增目录自动纳入，无法再逃脱（TQ-C-04）
+  for (const entry of readdirSync(resolve(repoRoot, SCAN_ROOT), {
+    recursive: true,
+    withFileTypes: true,
+  })) {
+    if (!entry.isFile() || !/\.tsx?$/.test(entry.name)) continue;
+    const fileRel = relative(repoRoot, join(entry.parentPath, entry.name));
+    // CS-2：目录级豁免 claude 合法领地（profiles/claude/）+ 文件级豁免——不参与违规收集
+    if (isExempt(fileRel)) continue;
+    files.push(fileRel);
   }
   for (const file of files) {
     const src = readFileSync(resolve(repoRoot, file), "utf8");
@@ -240,12 +248,13 @@ describe("AC-5 字面量守卫（通用层八路径不出现 claude 字面量；
     ({ violations, files } = scanViolations());
   });
 
-  it("扫描范围完整性：八路径均存在且枚举到 .ts(x) 文件（防路径拼写错致静默空扫）", () => {
-    // relative() 在 Windows 返回反斜杠路径，统一归一正斜杠后比较前缀
+  it("扫描范围完整性：全 src 递归枚举到 .ts(x) 文件（防静默空扫；白名单制已废，TQ-C-04）", () => {
+    expect(files.length, "全 src 未枚举到任何 .ts/.tsx 文件").toBeGreaterThan(0);
+    // 抽检此前白名单外的目录已纳入——新增通用目录无法再逃脱扫描（TQ-C-04）
     const normalized = files.map((f) => f.replace(/\\/g, "/"));
-    for (const rel of SCAN_DIRS) {
-      const matches = normalized.filter((f) => f.startsWith(rel + "/"));
-      expect(matches.length, `${rel} 未枚举到任何 .ts/.tsx 文件`).toBeGreaterThan(0);
+    for (const dir of ["src/features", "src/workspace", "src/stores", "src/panels", "src/theme"]) {
+      const matches = normalized.filter((f) => f.startsWith(dir + "/"));
+      expect(matches.length, `${dir} 未枚举到任何 .ts/.tsx 文件`).toBeGreaterThan(0);
     }
   });
 
@@ -277,11 +286,11 @@ describe("AC-5 字面量守卫（通用层八路径不出现 claude 字面量；
 
   it("CS-2 自检：profiles/claude 目录存在且被目录级豁免（豁免路径拼写错会静默空扫）", () => {
     // 存在性防线：豁免目录拼写错 → 不存在即暴露，claude 领地会被误扫
-    const exemptDirAbs = resolve(repoRoot, EXEMPT_DIR_REL);
-    expect(existsSync(exemptDirAbs), `豁免目录不存在：${EXEMPT_DIR_REL}`).toBe(true);
+    const exemptDirAbs = resolve(repoRoot, EXEMPT_DIRS[0]);
+    expect(existsSync(exemptDirAbs), `豁免目录不存在：${EXEMPT_DIRS[0]}`).toBe(true);
     // 非空豁免防线：该目录确有 .ts/.tsx 被枚举到（否则豁免形同虚设）
     expect(collectTsFiles(exemptDirAbs).length).toBeGreaterThan(0);
     // 豁免生效防线：该目录下样例路径不参与违规收集（files 即实际扫描集）
-    expect(files.some((f) => isExemptRel(f))).toBe(false);
+    expect(files.some((f) => isExempt(f))).toBe(false);
   });
 });

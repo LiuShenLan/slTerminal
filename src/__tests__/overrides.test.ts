@@ -17,6 +17,9 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { EditorState, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
+import { readFileSync } from "node:fs";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
 // side-effect：注册内置 linear（必须先于 overrides 求值）
 import "../theme/schemes";
@@ -30,6 +33,9 @@ import {
   editorColorOverrides,
   editorSyntaxHighlight,
 } from "../theme/overrides";
+
+/** 仓库根（ACC-05 消费点顺序断言读生产源码用；照 no-claude-literals.test.ts 先例） */
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
 /** 提取 CM6 主题扩展编译后的 CSS 规则文本——EditorState.create 验证 + styleModule facet 读取 */
 function themeRules(ext: Extension): string {
@@ -194,6 +200,38 @@ describe("overrides", () => {
       expect(() => {
         EditorState.create({ extensions: [ext] });
       }).not.toThrow();
+    });
+
+    it("syntax 9 组 tag→color 映射全部来自 active 方案 overrides.syntax", () => {
+      // syntaxHighlighting 将 HighlightStyle.module 挂入 EditorView.styleModule facet——
+      // themeRules 提取编译后规则文本，逐组断言色值来自 active 方案 syntax 段
+      const syntax = schemeRegistry.getActive().editor.overrides.syntax;
+      const rules = themeRules(editorSyntaxHighlight());
+      // 9 组键：property/string/number/keyword/function/type/operator/punctuation/comment
+      expect(Object.keys(syntax)).toHaveLength(9);
+      for (const [tag, color] of Object.entries(syntax)) {
+        expect(rules, `syntax.${tag} → ${color}`).toContain(color);
+      }
+      // 每组 spec 独立编译为一条 .ͼx {color:...} 规则（type/operator 同值但规则各自存在）
+      expect(rules.match(/\{color:/g) ?? []).toHaveLength(9);
+    });
+
+    it("ACC-05：syntax 规则在消费点扩展数组中先于 editorTheme（数组顺序决胜）", () => {
+      // HighlightStyle 与 oneDark HighlightStyle 是同机制竞争（同特异性），只能靠扩展
+      // 数组顺序决胜——syntax 须先于 editorTheme 声明（mountStyles reverse 后 syntax
+      // 规则在 <style> 内排最后=恒胜）。按生产装配点 useCodeMirror.ts 的 extensions
+      // 数组固化顺序，防止把 editorSyntaxHighlight() 挪到 editorTheme 之后破坏层叠。
+      const src = readFileSync(resolve(repoRoot, "src/panels/editor/useCodeMirror.ts"), "utf8");
+      // lastIndexOf：save 对话框 filters 段（"extensions: [\"*\"]"）同名，取 EditorView
+      // 扩展装配点（全文件唯一，且位于 handleSave 之后）
+      const arrStart = src.lastIndexOf("extensions: [");
+      expect(arrStart).toBeGreaterThanOrEqual(0);
+      const extArr = src.slice(arrStart, src.indexOf("]", arrStart));
+      const syntaxIdx = extArr.indexOf("editorSyntaxHighlight(),");
+      const themeIdx = extArr.indexOf("editorTheme,");
+      expect(syntaxIdx).toBeGreaterThanOrEqual(0);
+      expect(themeIdx).toBeGreaterThanOrEqual(0);
+      expect(syntaxIdx).toBeLessThan(themeIdx);
     });
   });
 

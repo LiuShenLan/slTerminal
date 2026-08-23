@@ -163,6 +163,13 @@ vi.mock("../panels/terminal/TerminalRegistry", () => ({
 // 导入被测模块（mocks 就绪后）
 import { useXterm } from "../panels/terminal/useXterm";
 import { usePtyOutput } from "../panels/terminal/usePtyOutput";
+// 生产阈值常量（TQ-A-06：测试魔数改 import 生产常量，杜绝双维护）
+import {
+  DIRECT_WRITE_THRESHOLD,
+  IDLE_FLUSH_MS,
+  MAX_PENDING_BYTES,
+  E2E_BUFFER_MAX_LINES,
+} from "../panels/terminal/usePtyOutput";
 import { pty } from "../ipc";
 import {
   createContainer,
@@ -352,8 +359,8 @@ describe("直写阈值 256 字节路由", () => {
 
     capturedTerminal!.write.mockClear();
 
-    // 255 字节 <= 阈值 256 → 直写
-    ptyOut.sendPtyOutput(new Array(255).fill(88)); // 'X'
+    // DIRECT_WRITE_THRESHOLD - 1 字节 <= 阈值 → 直写
+    ptyOut.sendPtyOutput(new Array(DIRECT_WRITE_THRESHOLD - 1).fill(88)); // 'X'
 
     expect(capturedTerminal!.write).toHaveBeenCalledTimes(1);
   });
@@ -369,8 +376,8 @@ describe("直写阈值 256 字节路由", () => {
 
     capturedTerminal!.write.mockClear();
 
-    // 256 字节 = 阈值 256 → 直写（契约：<=256B 直接写）
-    ptyOut.sendPtyOutput(new Array(256).fill(89)); // 'Y'
+    // DIRECT_WRITE_THRESHOLD 字节 = 阈值 → 直写（契约：<=256B 直接写）
+    ptyOut.sendPtyOutput(new Array(DIRECT_WRITE_THRESHOLD).fill(89)); // 'Y'
 
     expect(capturedTerminal!.write).toHaveBeenCalledTimes(1);
     // 直写不含 DEC 2026 包裹
@@ -389,8 +396,8 @@ describe("直写阈值 256 字节路由", () => {
 
     capturedTerminal!.write.mockClear();
 
-    // 257 字节 > 阈值 256 → 合帧
-    ptyOut.sendPtyOutput(new Array(257).fill(90)); // 'Z'
+    // DIRECT_WRITE_THRESHOLD + 1 字节 > 阈值 → 合帧
+    ptyOut.sendPtyOutput(new Array(DIRECT_WRITE_THRESHOLD + 1).fill(90)); // 'Z'
 
     // idle timer 未触发 → write 不应被调用
     expect(capturedTerminal!.write).not.toHaveBeenCalled();
@@ -489,8 +496,8 @@ describe("Idle+Max 双定时器合帧", () => {
     // idle timer 被每次输出重置 → 不立即 flush
     expect(capturedTerminal!.write).not.toHaveBeenCalled();
 
-    // TE-11: 推进假定时器 5ms → 最后一次后 2ms idle timer 触发
-    vi.advanceTimersByTime(5);
+    // TE-11: 推进假定时器 IDLE_FLUSH_MS + 3 ms（> IDLE_FLUSH_MS 且 < MAX_FLUSH_MS）→ 最后一次后 idle timer 触发
+    vi.advanceTimersByTime(IDLE_FLUSH_MS + 3);
     expect(capturedTerminal!.write).toHaveBeenCalledTimes(1);
   });
 
@@ -1077,7 +1084,7 @@ describe("cancelPendingFlush", () => {
 describe("usePtyOutput 缓冲上限与退出码（直接驱动）", () => {
   // usePtyOutput 零运行时依赖（仅类型导入），直接 renderHook 驱动即可，
   // 不经过 useXterm 编排层——专注测试 64KB 淘汰 / 退出码透传 / E2E 缓冲截断逻辑。
-  const MAX_PENDING_BYTES = 65536;
+  // （MAX_PENDING_BYTES 经 import 引用生产常量，TQ-A-06）
 
   beforeEach(() => {
     // 假定时器：防止 idle/max 定时器在测试期间真实触发 flush 干扰缓冲断言
@@ -1117,7 +1124,7 @@ describe("usePtyOutput 缓冲上限与退出码（直接驱动）", () => {
     result.current.handlePtyOutput({ type: "output", data: { bytes: half } });
     result.current.handlePtyOutput({ type: "output", data: { bytes: half } });
 
-    // 32768+32768 = 65536，未超过上限 → 两块全保留
+    // 32768+32768 = MAX_PENDING_BYTES，未超过上限 → 两块全保留
     expect(result.current.getPendingBuffer()).toHaveLength(2);
   });
 
@@ -1129,7 +1136,7 @@ describe("usePtyOutput 缓冲上限与退出码（直接驱动）", () => {
     result.current.handlePtyOutput({ type: "output", data: { bytes: chunkA } });
     result.current.handlePtyOutput({ type: "output", data: { bytes: chunkB } });
 
-    // 40960+40960 > 65536 → 淘汰最旧 40KB，仅剩新块
+    // 40960+40960 > MAX_PENDING_BYTES → 淘汰最旧 40KB，仅剩新块
     const buffer = result.current.getPendingBuffer();
     expect(buffer).toHaveLength(1);
     expect(decodeChunk(buffer[0])).toBe("B".repeat(40960));
@@ -1143,7 +1150,7 @@ describe("usePtyOutput 缓冲上限与退出码（直接驱动）", () => {
     result.current.handlePtyOutput({ type: "output", data: { bytes: chunk20k() } });
     result.current.handlePtyOutput({ type: "output", data: { bytes: chunk20k() } });
     result.current.handlePtyOutput({ type: "output", data: { bytes: chunk20k() } });
-    // 61440+30720 > 65536 → 先淘汰 2 块旧数据（20480×2），剩余 20480+30720=51200 ≤ 65536
+    // 61440+30720 > MAX_PENDING_BYTES → 先淘汰 2 块旧数据（20480×2），剩余 20480+30720=51200 ≤ MAX_PENDING_BYTES
     result.current.handlePtyOutput({ type: "output", data: { bytes: chunkG } });
 
     const buffer = result.current.getPendingBuffer();
@@ -1167,8 +1174,8 @@ describe("usePtyOutput 缓冲上限与退出码（直接驱动）", () => {
     const e2eBuffer = { current: [] as string[] };
     const { result } = renderPtyOutput(true, e2eBuffer);
 
-    // 推送 1005 行（每行 1 字节、内容按序变化，便于区分哪行被丢弃）
-    for (let i = 1; i <= 1005; i++) {
+    // 推送 E2E_BUFFER_MAX_LINES + 5 行（每行 1 字节、内容按序变化，便于区分哪行被丢弃）
+    for (let i = 1; i <= E2E_BUFFER_MAX_LINES + 5; i++) {
       result.current.handlePtyOutput({
         type: "output",
         data: { bytes: [(i % 26) + 65] },
@@ -1176,11 +1183,11 @@ describe("usePtyOutput 缓冲上限与退出码（直接驱动）", () => {
     }
 
     // 截断无条件生效（每事件累积后超限即删最旧）——测试对齐当前实现
-    expect(e2eBuffer.current.length).toBe(1000);
+    expect(e2eBuffer.current.length).toBe(E2E_BUFFER_MAX_LINES);
     // 最旧 5 行被丢弃：buffer[0] 为第 6 行（i=6 → 'G'）
     expect(e2eBuffer.current[0]).toBe("G");
-    // 末尾保持最新行（i=1005 → 'R'）
-    expect(e2eBuffer.current[999]).toBe("R");
+    // 末尾保持最新行（i=E2E_BUFFER_MAX_LINES + 5 → 'R'）
+    expect(e2eBuffer.current[E2E_BUFFER_MAX_LINES - 1]).toBe("R");
   });
 
   it("DSP1: dispose 清除 idle/max 定时器并清空待输出缓冲（FE-18）", () => {

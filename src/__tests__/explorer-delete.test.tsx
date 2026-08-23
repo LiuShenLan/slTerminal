@@ -6,7 +6,8 @@
 //   E3 组：ExplorerPanel 集成 — deleteEntry → refresh 链路
 //   E4 组：边界条件 — 右键菜单包含"删除"项
 //   E5 组：操作失败 UI 通知 — 失败 → 内联错误横幅 + 横幅 dismiss/自动消失/卸载清理（EXP-04）
-//   E6 组：键盘 Del 删除 — ShortcutRegistry 路径（编号 17-22 与全文连续，EXP-11）
+//   E6 组：键盘 Del 删除 — ShortcutRegistry 路径（编号 17-22 与全文连续，EXP-11；E6-集成 用例经真实
+//   focusin 焦点链路触发，TQ-B-08）
 //   E7 组：右键菜单视觉规格（UI-802）— 项 28px/圆角 5/hover token/危险项 ERROR_FG
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
@@ -106,6 +107,7 @@ import type { ExplorerActions } from "../features/explorer/activeExplorer";
 import { getShortcutRegistry } from "../features/shortcuts/ShortcutRegistry";
 import { setActiveExplorer, clearActiveExplorer, getActiveExplorer } from "../features/explorer/activeExplorer";
 import { createExplorerShortcuts } from "../features/explorer/keyboard";
+import { makeKeydown } from "./helpers/keyboard";
 
 // ─── 辅助函数 ───
 
@@ -682,15 +684,6 @@ describe("ExplorerPanel 操作失败 UI 通知", () => {
 // E6 组：键盘 Del 删除 — ShortcutRegistry 路径
 // =====================================================================
 
-function makeKeyboardEvent(code: string): KeyboardEvent {
-  return new KeyboardEvent("keydown", {
-    code,
-    key: code,
-    bubbles: true,
-    cancelable: true,
-  });
-}
-
 function makeExplorerActions(overrides: Partial<ExplorerActions> = {}): ExplorerActions {
   return {
     getSelectedPath: () => "/a/test.ts",
@@ -727,7 +720,7 @@ describe("键盘 Del 删除 (ShortcutRegistry)", () => {
     setActiveExplorer(actions);
     getShortcutRegistry().pushContext("explorer");
 
-    const event = makeKeyboardEvent("Delete");
+    const event = makeKeydown({ code: "Delete" });
     window.dispatchEvent(event);
 
     expect(actions.deleteSelected).toHaveBeenCalledOnce();
@@ -741,7 +734,7 @@ describe("键盘 Del 删除 (ShortcutRegistry)", () => {
     setActiveExplorer(actions);
     getShortcutRegistry().pushContext("explorer");
 
-    const event = makeKeyboardEvent("Delete");
+    const event = makeKeydown({ code: "Delete" });
     window.dispatchEvent(event);
 
     expect(actions.deleteSelected).toHaveBeenCalledOnce();
@@ -752,7 +745,7 @@ describe("键盘 Del 删除 (ShortcutRegistry)", () => {
     setActiveExplorer(actions);
     // 不 pushContext("explorer")
 
-    const event = makeKeyboardEvent("Delete");
+    const event = makeKeydown({ code: "Delete" });
     window.dispatchEvent(event);
 
     expect(actions.deleteSelected).not.toHaveBeenCalled();
@@ -763,7 +756,7 @@ describe("键盘 Del 删除 (ShortcutRegistry)", () => {
     setActiveExplorer(actions);
     getShortcutRegistry().pushContext("explorer");
 
-    const event = makeKeyboardEvent("Delete");
+    const event = makeKeydown({ code: "Delete" });
     window.dispatchEvent(event);
 
     expect(actions.deleteSelected).not.toHaveBeenCalled();
@@ -774,9 +767,38 @@ describe("键盘 Del 删除 (ShortcutRegistry)", () => {
     setActiveExplorer(actions);
     getShortcutRegistry().pushContext("explorer");
 
-    const event = makeKeyboardEvent("KeyA");
+    const event = makeKeydown({ code: "KeyA" });
     window.dispatchEvent(event);
 
     expect(actions.deleteSelected).not.toHaveBeenCalled();
+  });
+
+  it("E6-集成：点击文件行聚焦 ExplorerPanel 后按 Delete → deleteSelected 经真实焦点链路触发", async () => {
+    // 真实链路：单击行 → handleSelect（选中 + container.focus()）→ 容器 focusin →
+    // usePanelFocus pushContext("explorer") + setActiveExplorer —— 不经手动 pushContext（TQ-B-08）
+    mocks.mockReadDir.mockResolvedValue([
+      { name: "locked.ts", path: "C:/test-project/locked.ts", isDir: false, size: 32, modified: 1 },
+    ]);
+    seedProject();
+
+    const { getAllByText } = renderExplorerPanel();
+
+    await waitFor(() => {
+      expect(getAllByText("locked.ts").length).toBeGreaterThan(0);
+    }, { timeout: 3000 });
+
+    fireEvent.click(getAllByText("locked.ts")[0]); // 单击行 → 选中 + 容器聚焦（生产 handleSelect 路径）
+
+    // 容器 tabIndex={-1} 可聚焦——显式 focusIn 触发 usePanelFocus 监听（防 jsdom 聚焦时序差异，双保险）
+    const treeContainer = document.querySelector('[data-e2e="explorer-tree-container"]');
+    expect(treeContainer).toBeTruthy();
+    fireEvent.focusIn(treeContainer as Element);
+
+    fireEvent.keyDown(window, { key: "Delete", code: "Delete" });
+
+    // deleteSelected → handleDeleteSelected 首步即 confirmDialog——命中即证明焦点链路已建立
+    await waitFor(() => {
+      expect(mocks.mockConfirmDialog).toHaveBeenCalled();
+    }, { timeout: 3000 });
   });
 });

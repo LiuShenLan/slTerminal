@@ -290,6 +290,9 @@ describe("useCodeMirror fs-event 集成", () => {
         changes: { from: 0, to: 0, insert: "// modified content" },
       });
     }, { timeout: 3000 });
+
+    // 重载路径磁盘读取恰好一次（确认后触发重新读取；此前 mockClear 已清空初始化读取）
+    expect(h.mockReadFile).toHaveBeenCalledTimes(1);
   });
 
   // ── E8: Modify + dirty + confirmDialog=false → 不重载 ──

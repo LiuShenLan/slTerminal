@@ -18,16 +18,16 @@ const DEC2026_PREFIX = "\x1b[?2026h";
 const DEC2026_SUFFIX = "\x1b[?2026l";
 
 /** 合帧分流阈值（字节）：小于等于此值直写终端，大于此值走合帧 + DEC 2026 路径（FE-18：64→256，后端已合并小写） */
-const DIRECT_WRITE_THRESHOLD = 256;
+export const DIRECT_WRITE_THRESHOLD = 256;
 
 /** Idle 定时器间隔（毫秒）：2ms 无新数据则 flush，适应 Ink 高频 burst 输出 */
-const IDLE_FLUSH_MS = 2;
+export const IDLE_FLUSH_MS = 2;
 /** Max 定时器间隔（毫秒）：最多 16ms 强制 flush 一次，防止饥饿 */
-const MAX_FLUSH_MS = 16;
+export const MAX_FLUSH_MS = 16;
 /** 非焦点终端待输出数据量上限（字节），防止内存无限增长 */
-const MAX_PENDING_BYTES = 65536; // 64KB
+export const MAX_PENDING_BYTES = 65536; // 64KB
 /** E2E 测试文本缓冲行数上限 */
-const E2E_BUFFER_MAX_LINES = 1000;
+export const E2E_BUFFER_MAX_LINES = 1000;
 
 /** usePtyOutput hook 返回类型 */
 export interface UsePtyOutputReturn {

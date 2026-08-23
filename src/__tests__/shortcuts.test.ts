@@ -17,29 +17,7 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { getShortcutRegistry } from "../features/shortcuts/ShortcutRegistry";
 import type { Command } from "../features/shortcuts/types";
-
-/** 派发 keydown 事件到 window，返回事件对象供断言 */
-function dispatchKeydown(opts: {
-  ctrlKey?: boolean;
-  shiftKey?: boolean;
-  altKey?: boolean;
-  metaKey?: boolean;
-  code?: string;
-  isComposing?: boolean;
-}): KeyboardEvent {
-  const event = new KeyboardEvent("keydown", {
-    ctrlKey: opts.ctrlKey ?? false,
-    shiftKey: opts.shiftKey ?? false,
-    altKey: opts.altKey ?? false,
-    metaKey: opts.metaKey ?? false,
-    code: opts.code ?? "",
-    isComposing: opts.isComposing ?? false,
-    bubbles: true,
-    cancelable: true,
-  });
-  window.dispatchEvent(event);
-  return event;
-}
+import { dispatchKeydown, makeKeydown } from "./helpers/keyboard";
 
 /** 构造测试命令 */
 function cmd(overrides: Partial<Command> = {}): Command {
@@ -615,7 +593,7 @@ describe("ShortcutRegistry", () => {
   describe("resolve", () => {
     const ctrlG = { ctrlKey: true, shiftKey: false, altKey: false, metaKey: false, code: "KeyG" } as const;
     function ev() {
-      return new KeyboardEvent("keydown", { ctrlKey: true, code: "KeyG", bubbles: true, cancelable: true });
+      return makeKeydown({ ctrlKey: true, code: "KeyG" });
     }
 
     it("无 forceContext：依赖 contextStack", () => {
@@ -821,11 +799,7 @@ describe("ShortcutRegistry", () => {
       unregs.push(unreg);
 
       // 不 pushContext，用 forceContext
-      const event = new KeyboardEvent("keydown", {
-        code: "Delete",
-        bubbles: true,
-        cancelable: true,
-      });
+      const event = makeKeydown({ code: "Delete" });
       const consumed = registry.resolve(event, "explorer");
       expect(consumed).toBe(true);
       expect(handler).toHaveBeenCalledOnce();

@@ -150,6 +150,33 @@ describeIpcContract("deleteHistorySession 合约（agent_history_delete）", [
     mockThrow: "会话不存在",
     expectReject: "会话不存在",
   },
+  // 维度 5：SEC-05 非法 sessionId 负例（后端 validate_session_id 前置拒绝；
+  // mockThrow/expectReject 透传后端消息形态「非法 sessionId: <id>」——
+  // 与 src-tauri/src/agent_history/claude/ops.rs 一致；payload 键集合保持精确）
+  {
+    name: "SEC-05：空 sessionId 后端拒绝 → 异常透传",
+    cmd: "agent_history_delete",
+    call: () => agentHistory.deleteHistorySession(CLI_ID, ""),
+    mockThrow: "非法 sessionId: ",
+    expectReject: "非法 sessionId",
+    expectExactKeys: ["cliId", "sessionId"],
+  },
+  {
+    name: "SEC-05：路径穿越 sessionId 后端拒绝 → 异常透传",
+    cmd: "agent_history_delete",
+    call: () => agentHistory.deleteHistorySession(CLI_ID, "../etc/passwd"),
+    mockThrow: "非法 sessionId: ../etc/passwd",
+    expectReject: "非法 sessionId",
+    expectExactKeys: ["cliId", "sessionId"],
+  },
+  {
+    name: "SEC-05：非 UUID sessionId 后端拒绝 → 异常透传",
+    cmd: "agent_history_delete",
+    call: () => agentHistory.deleteHistorySession(CLI_ID, "not-a-uuid"),
+    mockThrow: "非法 sessionId: not-a-uuid",
+    expectReject: "非法 sessionId",
+    expectExactKeys: ["cliId", "sessionId"],
+  },
 ]);
 
 describeIpcContract("readHistoryTitle 合约（agent_history_read_title，人工验证问题 3）", [
@@ -184,6 +211,15 @@ describeIpcContract("readHistoryTitle 合约（agent_history_read_title，人工
     call: () => agentHistory.readHistoryTitle(CLI_ID, SESSION_ID),
     mockThrow: "未知 cliId",
     expectReject: "未知 cliId",
+  },
+  // 维度 5：SEC-05 非法 sessionId 负例（read_title 同受 validate_session_id 强制前置）
+  {
+    name: "SEC-05：非 UUID sessionId 后端拒绝 → 异常透传",
+    cmd: "agent_history_read_title",
+    call: () => agentHistory.readHistoryTitle(CLI_ID, "not-a-uuid"),
+    mockThrow: "非法 sessionId: not-a-uuid",
+    expectReject: "非法 sessionId",
+    expectExactKeys: ["cliId", "sessionId"],
   },
 ]);
 

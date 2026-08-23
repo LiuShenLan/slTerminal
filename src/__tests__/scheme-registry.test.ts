@@ -150,8 +150,8 @@ describe("SchemeRegistry", () => {
       expect(Object.keys(linear.ui.sidebar).length).toBe(8);
       expect(Object.keys(linear.ui.errorBanner).length).toBe(3);
       expect(Object.keys(linear.ui.agentStatusUsage).length).toBe(4);
-      // 27 标量（23 既有 + accentFg/selectionHoverBg/titlebarBg/titlebarCloseHover 4 新增；
-      // 标量均为 string，组为嵌套对象）
+      // 27 标量（23 既有 + accentFg/selectionHoverBg/titlebarBg/titlebarCloseHover 4 新增，
+      // 以 linear.ts ui 段实际键数为准——文档口径冲突时改文档不改断言，TQ-C-03）
       const scalarCount = (Object.keys(linear.ui) as Array<keyof typeof linear.ui>).filter(
         (k) => typeof linear.ui[k] === "string",
       ).length;

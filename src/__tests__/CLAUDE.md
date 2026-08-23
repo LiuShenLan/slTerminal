@@ -94,6 +94,7 @@ Stage 01–07 产生的测试文件更名/合并登记。旧名全部退役、�
 | `helpers/workspace-setup.ts` | store 重置 + 种子数据工厂：populateStore / resetStore / seedProject / setupTwoPages（explorer/workspace ~7 文件复用） |
 | `helpers/xterm-test-utils.ts` | useXterm 测试工厂：rAF mock / 容器创建 / PTY output spy / ResizeObserver mock / 微任务 flush（use-xterm-* 复用） |
 | `helpers/ipc-contract.ts` | IPC 契约共享工厂（IHE-06）：`describeIpcContract` 声明式驱动四维断言（命令名/参数结构/正常返回/异常传播），供 ipc-contract / ipc-hooks-config-contract / ipc-agent-hooks-contract / ipc-agent-history-contract 复用 |
+| `helpers/keyboard.ts` | 键盘事件共享 helper（TQ-B-12）：`makeKeydown` 统一 keydown 构造默认值（修饰键 false / key 回退 code / bubbles+cancelable）+ `dispatchKeydown` 派发到 window——shortcuts / global-commands / explorer-delete 复用，消除各文件各自 `new KeyboardEvent` 的默认字段不一致 |
 | `helpers/mockCliProfile.ts` | mockcli 夹具（见上节登记） |
 | `testMocks/explorerMocks.ts` | 文件浏览器 mock 接口定义（实现注册于 setup.ts 全局函数 `__createFsMocks` 等，供 vi.hoisted 使用） |
 | `testMocks/xterm.ts` | xterm.js 共享 mock 工厂：createTerminalMock / createFitAddonMock / createWebglAddonMock（~6 文件复用，vi.mock 回调内正常 import） |
