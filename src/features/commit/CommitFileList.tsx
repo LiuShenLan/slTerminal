@@ -112,6 +112,7 @@ const ContextMenu: React.FC<{
   return (
     <div
       ref={menuRef}
+      data-testid="commit-context-menu"
       style={{
         position: "fixed",
         left: state.x,

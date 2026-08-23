@@ -191,6 +191,8 @@ const TreeNodeRow: React.FC<{
 
   return (
     <div
+      // 行容器 testid——虚拟化/行断言锚点（TQ-B-01）
+      data-testid="tree-node-row"
       onClick={() => {
         onSelect(entry.path);
         if (entry.isDir) {
@@ -550,6 +552,8 @@ export const FileTree: React.FC<FileTreeProps> = ({
           }}
         >
           <input
+            // 内联输入框 testid（TQ-B-17）
+            data-testid="explorer-inline-input"
             placeholder="文件名"
             onBlur={(e) => confirmNewFile(rootPath, e.target.value)}
             onKeyDown={(e) => {
@@ -573,6 +577,8 @@ export const FileTree: React.FC<FileTreeProps> = ({
           }}
         >
           <input
+            // 内联输入框 testid（TQ-B-17）
+            data-testid="explorer-inline-input"
             placeholder="文件夹名"
             onBlur={(e) =>
               confirmNewFolder(rootPath, e.target.value)
@@ -681,6 +687,8 @@ export const FileTree: React.FC<FileTreeProps> = ({
           }}
         >
           <input
+            // 内联输入框 testid（TQ-B-17）
+            data-testid="explorer-inline-input"
             placeholder={isFile ? "文件名" : "文件夹名"}
             onBlur={(e) => confirm(row.parentPath!, e.target.value)}
             onKeyDown={(e) => {
@@ -707,6 +715,8 @@ export const FileTree: React.FC<FileTreeProps> = ({
           }}
         >
           <input
+            // 内联输入框 testid（TQ-B-17）
+            data-testid="explorer-inline-input"
             ref={renameInputRef}
             defaultValue={renameValue}
             onBlur={confirmRename}

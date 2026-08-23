@@ -127,10 +127,13 @@ async function renderReady(entries: ReturnType<typeof makeEntry>[]) {
   return { container };
 }
 
-/** 定位当前弹出的右键菜单（position: fixed 浮层） */
+/** 定位当前弹出的右键菜单（data-testid 锚定，TQ-B-13 替代 position:fixed 全局选择器） */
 function getMenuEl(): HTMLDivElement {
-  const menus = document.querySelectorAll('div[style*="position: fixed"]');
-  return menus[menus.length - 1] as HTMLDivElement;
+  const el = document.querySelector(
+    '[data-testid="commit-context-menu"]',
+  );
+  if (!el) throw new Error("commit 右键菜单未显示");
+  return el as HTMLDivElement;
 }
 
 describe("CommitFileList 右键菜单", () => {
@@ -164,8 +167,9 @@ describe("CommitFileList 右键菜单", () => {
     fireEvent.contextMenu(item, { clientX: 100, clientY: 200 });
 
     // ContextMenu 不应出现
-    const menus = document.querySelectorAll('div[style*="position: fixed"]');
-    expect(menus.length).toBe(0);
+    expect(
+      document.querySelector('[data-testid="commit-context-menu"]'),
+    ).toBeNull();
   });
 
   it("菜单外点击关闭 ContextMenu", async () => {
@@ -181,20 +185,16 @@ describe("CommitFileList 右键菜单", () => {
     fireEvent.contextMenu(item, { clientX: 100, clientY: 200 });
 
     // 菜单出现
-    const menusBefore = document.querySelectorAll(
-      'div[style*="position: fixed"]',
-    );
-    expect(menusBefore.length).toBeGreaterThan(0);
+    expect(getMenuEl()).toBeTruthy();
 
     // 点击 document 外部
     fireEvent.mouseDown(document.body);
 
     // 菜单消失
     await waitFor(() => {
-      const menusAfter = document.querySelectorAll(
-        'div[style*="position: fixed"]',
-      );
-      expect(menusAfter.length).toBe(0);
+      expect(
+        document.querySelector('[data-testid="commit-context-menu"]'),
+      ).toBeNull();
     });
   });
 
@@ -212,19 +212,16 @@ describe("CommitFileList 右键菜单", () => {
     fireEvent.contextMenu(item, { clientX: 100, clientY: 200 });
 
     // 点击菜单项
-    const menuItem = document.querySelector(
-      'div[style*="position: fixed"] div',
-    )!;
+    const menuItem = getMenuEl().querySelector("div")!;
     fireEvent.click(menuItem);
 
     expect(mockAction).toHaveBeenCalledTimes(1);
 
     // 菜单应关闭
     await waitFor(() => {
-      const menusAfter = document.querySelectorAll(
-        'div[style*="position: fixed"]',
-      );
-      expect(menusAfter.length).toBe(0);
+      expect(
+        document.querySelector('[data-testid="commit-context-menu"]'),
+      ).toBeNull();
     });
   });
 
@@ -240,9 +237,7 @@ describe("CommitFileList 右键菜单", () => {
     const item = container.querySelector('[data-e2e="commit-file-item"]')!;
     fireEvent.contextMenu(item, { clientX: 100, clientY: 200 });
 
-    const menuItem = document.querySelector(
-      'div[style*="position: fixed"] div',
-    ) as HTMLDivElement;
+    const menuItem = getMenuEl().querySelector("div") as HTMLDivElement;
     // hover → SIDEBAR_COLORS.hover（#222227，UI-802；jsdom 转 rgb 形态）
     fireEvent.mouseEnter(menuItem);
     expect(menuItem.style.background).toBe("rgb(34, 34, 39)");
@@ -263,9 +258,7 @@ describe("CommitFileList 右键菜单", () => {
     const item = container.querySelector('[data-e2e="commit-file-item"]')!;
     fireEvent.contextMenu(item, { clientX: 100, clientY: 200 });
 
-    const menuItem = document.querySelector(
-      'div[style*="position: fixed"] div',
-    ) as HTMLDivElement;
+    const menuItem = getMenuEl().querySelector("div") as HTMLDivElement;
     expect(menuItem.style.height).toBe("28px");
     expect(menuItem.style.borderRadius).toBe("5px");
   });
@@ -282,9 +275,7 @@ describe("CommitFileList 右键菜单", () => {
     const item = container.querySelector('[data-e2e="commit-file-item"]')!;
     fireEvent.contextMenu(item, { clientX: 100, clientY: 200 });
 
-    const menuItem = document.querySelector(
-      'div[style*="position: fixed"] div',
-    ) as HTMLDivElement;
+    const menuItem = getMenuEl().querySelector("div") as HTMLDivElement;
     // 危险项 → ERROR_FG（#d9706b，UI-802；jsdom 转 rgb 形态）
     expect(menuItem.style.color).toBe("rgb(217, 112, 107)");
 
@@ -296,9 +287,9 @@ describe("CommitFileList 右键菜单", () => {
     // 重新打开菜单（state 更新后再查当前菜单项）
     fireEvent.mouseDown(document.body);
     fireEvent.contextMenu(item, { clientX: 100, clientY: 200 });
-    const normalItem = Array.from(
-      document.querySelectorAll('div[style*="position: fixed"] div'),
-    ).find((el) => el.textContent === "普通项") as HTMLDivElement;
+    const normalItem = Array.from(getMenuEl().querySelectorAll("div")).find(
+      (el) => el.textContent === "普通项",
+    ) as HTMLDivElement;
     expect(normalItem.style.color).toBe("rgb(236, 233, 228)");
   });
 

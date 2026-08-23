@@ -10,7 +10,8 @@ import {
   FileViewerRegistry,
   ExtensionBasedViewerStrategy,
   fileViewerRegistry,
-} from "../features/fileViewers";
+  registerDefaultViewers,
+} from "../features/fileViewers/FileViewerRegistry";
 
 // 每个测试使用独立实例，避免单例状态污染
 let strategy: ExtensionBasedViewerStrategy;
@@ -207,8 +208,7 @@ describe("fileViewerRegistry 单例", () => {
    *  否则同文件后续用例（及依赖单例语义的断言）读到空注册表（EXP-12）。 */
   function restoreDefaultRegistry() {
     const es = new ExtensionBasedViewerStrategy();
-    es.register("html", "htmlviewer");
-    es.register("htm", "htmlviewer");
+    registerDefaultViewers(es); // 与生产初始化同一真值源（TQ-B-11）
     fileViewerRegistry.addStrategy(es);
   }
 

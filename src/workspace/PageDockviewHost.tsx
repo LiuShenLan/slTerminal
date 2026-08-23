@@ -75,8 +75,8 @@ export interface PageDockviewProps {
 
 // ---- 工厂函数 ----
 
-/** 创建 Watermark 组件（捕获 pageId + cwd 闭包） */
-function createWatermark(
+/** 创建 Watermark 组件（捕获 pageId + cwd 闭包；导出供 L2 测试直测——TQ-A-04） */
+export function createWatermark(
   nextPanelId: () => string,
   pageId: string,
   cwd: string | undefined,

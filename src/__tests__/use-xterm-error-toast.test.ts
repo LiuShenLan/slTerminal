@@ -185,10 +185,15 @@ vi.mock("../features/cliProfiles", () => ({
 
 // FE-08: mock 应用内浮层 toast + getErrorMessage（子路径 ../lib/useFontSizeWheel、
 // ../lib/e2eEnabled 不受 barrel mock 影响）
-vi.mock("../lib", () => ({
-  toast: { show: mockToastShow },
-  getErrorMessage: mockGetErrorMessage,
-}));
+// TQ-A-05: importOriginal 保留 barrel 其余真实导出——新增 ../lib 引用即自动获得真实现，不再 undefined
+vi.mock("../lib", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib")>();
+  return {
+    ...actual,
+    toast: { ...actual.toast, show: mockToastShow },
+    getErrorMessage: mockGetErrorMessage,
+  };
+});
 
 // ─── 导入被测模块 ───
 import { useXterm } from "../panels/terminal/useXterm";

@@ -103,10 +103,10 @@ function seedProject(rootPath: string = "C:/test-project") {
 
 /** 当前行背景色（非选中行透明） */
 function rowBackground(fileName: string): string {
-  const spans = document.querySelectorAll("span");
-  const span = Array.from(spans).find((s) => s.textContent === fileName);
-  if (!span) throw new Error(`找不到行文本: ${fileName}`);
-  const row = span.closest("div") as HTMLElement;
+  // 按行容器 testid 限定（虚拟化 DOM 下 closest("div") 可能取到包裹层——TQ-B-05）
+  const rows = document.querySelectorAll<HTMLElement>('[data-testid="tree-node-row"]');
+  const row = Array.from(rows).find((r) => r.textContent?.includes(fileName));
+  if (!row) throw new Error(`找不到行: ${fileName}`);
   return row.style.background;
 }
 
@@ -189,11 +189,12 @@ describe("ExplorerPanel 重命名成功路径", () => {
     // 右键 → 重命名 → 输入框出现
     fireEvent.contextMenu(getAllByText("old.ts")[0]);
     fireEvent.click(getAllByText("重命名")[0]);
-    expect(document.querySelectorAll("input").length).toBe(1);
+    expect(document.querySelectorAll('[data-testid="explorer-inline-input"]').length).toBe(1);
 
-    // 修改名称并回车确认
-    const inputs = document.querySelectorAll("input");
-    const renameInput = inputs[inputs.length - 1] as HTMLInputElement;
+    // 修改名称并回车确认（testid 定位——querySelectorAll('input') 取最后一个不可靠，TQ-B-17）
+    const renameInput = document.querySelector(
+      '[data-testid="explorer-inline-input"]',
+    ) as HTMLInputElement;
     fireEvent.change(renameInput, { target: { value: "new-name.ts" } });
     fireEvent.keyDown(renameInput, { key: "Enter" });
 
@@ -210,8 +211,8 @@ describe("ExplorerPanel 重命名成功路径", () => {
       expect(mocks.mockReadDir).toHaveBeenCalledTimes(2);
     }, { timeout: 3000 });
 
-    // renamingPath 清空：输入框消失
-    expect(document.querySelectorAll("input").length).toBe(0);
+    // renamingPath 清空：输入框消失（TQ-B-17 testid 计数）
+    expect(document.querySelectorAll('[data-testid="explorer-inline-input"]').length).toBe(0);
     // 无错误横幅
     expect(document.querySelector('[data-testid="explorer-error-banner"]')).toBeNull();
   });
@@ -241,8 +242,9 @@ describe("ExplorerPanel 新建文件成功路径", () => {
     );
     fireEvent.click(newFileItems!);
 
-    const inputs = document.querySelectorAll("input");
-    const newFileInput = inputs[inputs.length - 1] as HTMLInputElement;
+    const newFileInput = document.querySelector(
+      '[data-testid="explorer-inline-input"]',
+    ) as HTMLInputElement;
     fireEvent.change(newFileInput, { target: { value: "newfile.ts" } });
     fireEvent.keyDown(newFileInput, { key: "Enter" });
 
@@ -256,8 +258,8 @@ describe("ExplorerPanel 新建文件成功路径", () => {
       expect(mocks.mockReadDir).toHaveBeenCalledTimes(2);
     }, { timeout: 3000 });
 
-    // newFileName 清空：输入框消失
-    expect(document.querySelectorAll("input").length).toBe(0);
+    // newFileName 清空：输入框消失（TQ-B-17 testid 计数）
+    expect(document.querySelectorAll('[data-testid="explorer-inline-input"]').length).toBe(0);
     expect(document.querySelector('[data-testid="explorer-error-banner"]')).toBeNull();
   });
 });
@@ -286,8 +288,9 @@ describe("ExplorerPanel 新建文件夹成功路径", () => {
     );
     fireEvent.click(newFolderItems!);
 
-    const inputs = document.querySelectorAll("input");
-    const newFolderInput = inputs[inputs.length - 1] as HTMLInputElement;
+    const newFolderInput = document.querySelector(
+      '[data-testid="explorer-inline-input"]',
+    ) as HTMLInputElement;
     fireEvent.change(newFolderInput, { target: { value: "src" } });
     fireEvent.keyDown(newFolderInput, { key: "Enter" });
 
@@ -300,8 +303,8 @@ describe("ExplorerPanel 新建文件夹成功路径", () => {
       expect(mocks.mockReadDir).toHaveBeenCalledTimes(2);
     }, { timeout: 3000 });
 
-    // newFolderName 清空：输入框消失
-    expect(document.querySelectorAll("input").length).toBe(0);
+    // newFolderName 清空：输入框消失（TQ-B-17 testid 计数）
+    expect(document.querySelectorAll('[data-testid="explorer-inline-input"]').length).toBe(0);
     expect(document.querySelector('[data-testid="explorer-error-banner"]')).toBeNull();
   });
 });

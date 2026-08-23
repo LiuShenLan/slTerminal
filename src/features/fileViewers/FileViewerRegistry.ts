@@ -84,13 +84,18 @@ export class FileViewerRegistry {
 
 // ---- 初始化全局单例 ----
 
+/** 默认扩展名→面板映射（生产模块级调用 + 测试 _reset 后恢复共用，TQ-B-11） */
+export function registerDefaultViewers(strategy: ExtensionBasedViewerStrategy): void {
+  strategy.register("html", "htmlviewer");
+  strategy.register("htm", "htmlviewer");
+  // 后续扩展示例:
+  // strategy.register("md", "markdownviewer");
+  // strategy.register("pdf", "pdfviewer");
+  // strategy.register("png", "imageviewer");
+}
+
 const extensionStrategy = new ExtensionBasedViewerStrategy();
-extensionStrategy.register("html", "htmlviewer");
-extensionStrategy.register("htm", "htmlviewer");
-// 后续扩展示例:
-// extensionStrategy.register("md", "markdownviewer");
-// extensionStrategy.register("pdf", "pdfviewer");
-// extensionStrategy.register("png", "imageviewer");
+registerDefaultViewers(extensionStrategy);
 
 /** 全局文件查看器注册表单例 */
 export const fileViewerRegistry = new FileViewerRegistry();

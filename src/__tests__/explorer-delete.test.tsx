@@ -483,9 +483,10 @@ describe("ExplorerPanel 操作失败 UI 通知", () => {
     fireEvent.contextMenu(getAllByText("locked.ts")[0]);
     fireEvent.click(getAllByText("重命名")[0]);
 
-    // 内联输入框出现，修改文件名并回车确认
-    const inputs = document.querySelectorAll('input');
-    const renameInput = inputs[inputs.length - 1] as HTMLInputElement;
+    // 内联输入框出现，修改文件名并回车确认（testid 定位——TQ-B-17）
+    const renameInput = document.querySelector(
+      '[data-testid="explorer-inline-input"]',
+    ) as HTMLInputElement;
     fireEvent.change(renameInput, { target: { value: "new-name.ts" } });
     fireEvent.keyDown(renameInput, { key: "Enter" });
 
@@ -516,9 +517,10 @@ describe("ExplorerPanel 操作失败 UI 通知", () => {
     fireEvent.contextMenu(getAllByText("src")[0]);
     fireEvent.click(getAllByText("新建文件")[0]);
 
-    // 内联输入框出现，输入文件名并回车确认
-    const inputs = document.querySelectorAll('input');
-    const newFileInput = inputs[inputs.length - 1] as HTMLInputElement;
+    // 内联输入框出现，输入文件名并回车确认（testid 定位——TQ-B-17）
+    const newFileInput = document.querySelector(
+      '[data-testid="explorer-inline-input"]',
+    ) as HTMLInputElement;
     fireEvent.change(newFileInput, { target: { value: "newfile.ts" } });
     fireEvent.keyDown(newFileInput, { key: "Enter" });
 
@@ -550,8 +552,9 @@ describe("ExplorerPanel 操作失败 UI 通知", () => {
     fireEvent.click(getAllByText("新建文件夹")[0]);
 
     // 内联输入框出现，输入文件夹名并回车确认
-    const inputs = document.querySelectorAll('input');
-    const newFolderInput = inputs[inputs.length - 1] as HTMLInputElement;
+    const newFolderInput = document.querySelector(
+      '[data-testid="explorer-inline-input"]',
+    ) as HTMLInputElement;
     fireEvent.change(newFolderInput, { target: { value: "newfolder" } });
     fireEvent.keyDown(newFolderInput, { key: "Enter" });
 

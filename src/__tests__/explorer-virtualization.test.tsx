@@ -63,9 +63,9 @@ function renderFileTree(
   );
 }
 
-/** 当前渲染的节点行数（按文件名 span 文本正则计数，不依赖行 DOM 结构） */
+/** 当前渲染的节点行数（按行容器 testid 计数——getAllByText 在 StrictMode 双渲染下计数虚高，TQ-B-01） */
 function renderedRowCount(): number {
-  return screen.getAllByText(/^f\d+\.ts$/).length;
+  return document.querySelectorAll('[data-testid="tree-node-row"]').length;
 }
 
 /**
@@ -111,7 +111,9 @@ describe("FileTree 虚拟化（FE-30）", () => {
   it("容器高度未测得（clientHeight=0）→ 全量渲染兜底", () => {
     // 不 mock 高度：jsdom 默认 clientHeight=0，窗口退化全量
     renderFileTree(makeTree(120));
-    expect(renderedRowCount()).toBe(120);
+    // 按行容器 testid 断言行数 === 输入节点数 且无重复 key（TQ-B-01）
+    const rows = document.querySelectorAll('[data-testid="tree-node-row"]');
+    expect(rows.length).toBe(120);
   });
 
   it("滚动后窗口平移：顶部行卸载、中部行进入窗口", () => {

@@ -10,7 +10,7 @@
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import React from "react";
-import { render, fireEvent, within } from "@testing-library/react";
+import { render, fireEvent, within, screen } from "@testing-library/react";
 import { titleManager } from "../workspace/titleManager";
 import { TerminalRegistry } from "../panels/terminal/TerminalRegistry";
 import { DIM_FG } from "../theme";
@@ -18,6 +18,7 @@ import {
   createRightHeader,
   createGetContextMenu,
 } from "../workspace/Workspace";
+import { createWatermark } from "../workspace/PageDockviewHost";
 
 // ---- 辅助 ----
 
@@ -354,43 +355,22 @@ describe("createGetContextMenu", () => {
 // ============================================================
 
 describe("Watermark 回归", () => {
-  function renderWatermark(pageId: string, cwd: string) {
+  /** 渲染生产 createWatermark 组件（TQ-A-04：删除手写模拟，直测生产实现） */
+  function renderRealWatermark(pageId: string, cwd: string) {
     const nextId = makeNextPanelId(pageId);
     const addPanelSpy = vi.fn();
-
-    // Watermark 等价于：createWatermark(nextId, pageId, cwd)
-    const Watermark: React.FC<any> = ({ containerApi }) => (
-      <div>
-        <button
-          onClick={() => {
-            const id = nextId();
-            const title = titleManager.getTerminalTitle(pageId);
-            containerApi.addPanel({
-              id, component: "terminal", title,
-              params: { panelId: id, cwd }, renderer: "always",
-            });
-          }}
-        >新建终端</button>
-      </div>
-    );
-
-    const result = render(
-      React.createElement(Watermark, {
-        containerApi: { addPanel: addPanelSpy },
-      } as any),
-    );
-
-    // StrictMode 双渲染：取最后一个元素
+    const Watermark = createWatermark(nextId, pageId, cwd);
+    render(<Watermark containerApi={{ addPanel: addPanelSpy } as never} />);
+    // StrictMode 双渲染：取最后一个按钮实例
     const clickBtn = () => {
-      const btns = result.getAllByText("新建终端");
+      const btns = screen.getAllByRole("button", { name: "新建终端" });
       fireEvent.click(btns[btns.length - 1]);
     };
-
-    return { ...result, addPanelSpy, clickBtn };
+    return { addPanelSpy, clickBtn };
   }
 
   it("W1: Watermark addPanel 不传 position", () => {
-    const { addPanelSpy, clickBtn } = renderWatermark("p1", "/test");
+    const { addPanelSpy, clickBtn } = renderRealWatermark("p1", "/test");
     clickBtn();
 
     const options = addPanelSpy.mock.calls[0][0];
@@ -398,7 +378,7 @@ describe("Watermark 回归", () => {
   });
 
   it("W2: Watermark 仍然正常调用 addPanel", () => {
-    const { addPanelSpy, clickBtn } = renderWatermark("p1", "/home/user");
+    const { addPanelSpy, clickBtn } = renderRealWatermark("p1", "/home/user");
     clickBtn();
 
     expect(addPanelSpy).toHaveBeenCalledTimes(1);
@@ -409,34 +389,8 @@ describe("Watermark 回归", () => {
   });
 
   it("W3: Watermark 传入 group=undefined 时不崩溃", () => {
-    const nextId = makeNextPanelId("p1");
-    const addPanelSpy = vi.fn();
-    const Watermark: React.FC<any> = ({ containerApi }) => (
-      <div>
-        <button
-          onClick={() => {
-            const id = nextId();
-            containerApi.addPanel({
-              id, component: "terminal",
-              title: titleManager.getTerminalTitle("p1"),
-              params: { panelId: id, cwd: "/test" }, renderer: "always",
-            });
-          }}
-        >新建终端</button>
-      </div>
-    );
-
-    const { getAllByText } = render(
-      React.createElement(Watermark, {
-        containerApi: { addPanel: addPanelSpy },
-        group: undefined,
-      } as any),
-    );
-
-    expect(() =>
-      // StrictMode 双渲染：取最后一个元素
-      fireEvent.click(getAllByText("新建终端").slice(-1)[0]),
-    ).not.toThrow();
+    const { addPanelSpy, clickBtn } = renderRealWatermark("p1", "/test");
+    expect(() => clickBtn()).not.toThrow();
     expect(addPanelSpy).toHaveBeenCalledTimes(1);
   });
 });

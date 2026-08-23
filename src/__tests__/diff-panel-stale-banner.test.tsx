@@ -55,11 +55,16 @@ vi.mock("../lib/useFontSizeWheel", () => ({
   useFontSizeWheel: mockUseFontSizeWheel,
 }));
 
-vi.mock("../lib", () => ({
-  confirmDialog: mockConfirmDialog,
-  toast: { show: mockToastShow },
-  getErrorMessage: mockGetErrorMessage,
-}));
+// TQ-A-05: importOriginal 保留 barrel 其余真实导出——新增 ../lib 引用即自动获得真实现，不再 undefined
+vi.mock("../lib", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib")>();
+  return {
+    ...actual,
+    confirmDialog: mockConfirmDialog,
+    toast: { ...actual.toast, show: mockToastShow },
+    getErrorMessage: mockGetErrorMessage,
+  };
+});
 
 vi.mock("../stores/fontSize", () => ({
   FONT_SIZE_MIN: 8,
