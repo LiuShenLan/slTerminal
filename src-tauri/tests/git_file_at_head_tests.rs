@@ -175,3 +175,39 @@ fn git_file_at_head_command_non_repo_error_contract() {
         "错误消息应含'打开仓库失败'，实际: {err}"
     );
 }
+
+/// TQ-COV-06：broken HEAD（HEAD 指向 blob）→ peel_to_tree 失败 → 命令层
+/// 错误契约"获取 HEAD tree 失败"（行 455 map_err 闭包）
+#[test]
+fn git_file_at_head_broken_head_peel_tree_err() {
+    let (_dir, path) = init_temp_repo();
+    commit_file(&path, "f.txt", "x\n");
+    let blob = Command::new("git")
+        .args(["hash-object", "-w", "f.txt"])
+        .current_dir(&path)
+        .output()
+        .unwrap();
+    let blob_sha = String::from_utf8(blob.stdout).unwrap().trim().to_string();
+    Command::new("git")
+        .args(["tag", "blobtag", &blob_sha])
+        .current_dir(&path)
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["symbolic-ref", "HEAD", "refs/tags/blobtag"])
+        .current_dir(&path)
+        .output()
+        .unwrap();
+
+    let app = make_app_state(Some(path.clone()));
+    let err = block_on(git_file_at_head_impl(
+        &app,
+        &path.to_string_lossy(),
+        &path.join("f.txt").to_string_lossy(),
+    ))
+    .unwrap_err();
+    assert!(
+        err.to_string().contains("获取 HEAD tree 失败"),
+        "broken HEAD 应报'获取 HEAD tree 失败'，实际: {err}"
+    );
+}

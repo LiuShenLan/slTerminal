@@ -1,4 +1,16 @@
 fn main() {
+    // TQ-COV-06：测试二进制嵌入 comctl32 v6 manifest（SxS 激活）。
+    // 链接 tauri（tao/muda 菜单代码）的测试二进制静态导入 comctl32 v6 符号
+    // （TaskDialogIndirect 等），无 manifest 激活时系统 comctl32.dll 仅 v5 导出
+    // → 启动即 0xc0000139（STATUS_ENTRYPOINT_NOT_FOUND）；主应用由 tauri 生成
+    // manifest 激活 v6 故正常。rustc-link-arg-tests 仅作用于测试目标，
+    // 不影响 bin/lib 构建。
+    println!("cargo:rustc-link-arg-tests=/MANIFEST:EMBED");
+    println!(
+        "cargo:rustc-link-arg-tests=/MANIFESTINPUT:{}",
+        concat!(env!("CARGO_MANIFEST_DIR"), "\\tests-comctl6.manifest")
+    );
+
     // SEC-07：自定义命令白名单化——为每条命令生成 allow-<cmd> 权限，
     // capabilities/default.json 据此逐条 allow（未列出的命令将被拒绝调用）。
     // 清单须与 lib.rs 的 generate_handler! 注册保持一致（当前 34 条）。

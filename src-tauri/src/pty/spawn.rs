@@ -2018,7 +2018,9 @@ mod tests {
         drop(child_guard);
     }
 
-    // ─── BE-01: PTY 会话总数上限测试 ───
+    // ─── BE-01: PTY 会话总数上限测试（TQ-COV-03 复核：边界已全覆盖，不重复补）───
+    // 三档覆盖：0/MAX-1 放行、MAX 拒绝（AppError::Validation + 消息含上限值）、
+    // MAX+1/usize::MAX 拒绝（防溢出回绕）。
 
     /// 上限内放行（边界 31 / 空会话 0）
     #[test]
@@ -2095,19 +2097,28 @@ mod tests {
         }
     }
 
-    // ─── BE-06: join_with_timeout 测试 ───
+    // ─── BE-06: join_with_timeout 测试（TQ-COV-03 复核增强）───
+    // TQ-COV-03：既有用例已覆盖 true/false 分支，按 checklist 命名对齐并增强——
+    // finished 用例补「快速（<1s）」时间断言；blocked 用例改 park 线程（精确阻塞，
+    // 不依赖睡眠计时），timeout=50ms 注入短超时测 false 分支。
 
     #[test]
-    fn join_with_timeout_fast_thread_returns_true() {
-        // 快速退出线程：超时前完成 join，返回 true
+    fn join_with_timeout_finished_handle_returns_true() {
+        // 立即结束的线程：超时前完成 join，返回 true 且快速（<1s）
+        let start = std::time::Instant::now();
         let handle = std::thread::spawn(|| {});
         assert!(join_with_timeout(handle, Duration::from_millis(200)));
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "已结束线程的 join 应立即返回，实际耗时 {:?}",
+            start.elapsed()
+        );
     }
 
     #[test]
-    fn join_with_timeout_slow_thread_times_out() {
-        // 慢线程 + 短超时 → 返回 false（调用方记 warn，线程随 Drop 兜底）
-        let handle = std::thread::spawn(|| std::thread::sleep(Duration::from_millis(500)));
+    fn join_with_timeout_blocked_thread_returns_false() {
+        // park 的线程 + 短超时（50ms）→ 返回 false（调用方记 warn，线程随 Drop 兜底）
+        let handle = std::thread::spawn(|| std::thread::park());
         assert!(!join_with_timeout(handle, Duration::from_millis(50)));
     }
 

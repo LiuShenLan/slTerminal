@@ -1004,4 +1004,37 @@ mod tests {
         );
         assert_eq!(reloaded["env"]["FOO"], "bar", "merge 应保留原文件其他字段");
     }
+
+    // ── SEC-17 审计日志断言（TQ-COV-05：tracing-test 捕获 warn 日志） ──
+
+    #[test]
+    #[tracing_test::traced_test]
+    fn user_layer_write_emits_audit_log() {
+        // SEC-17：user 层写入必须留审计日志（TQ-COV-05——豁免理由「L1 不可断言」翻案，
+        // 由 tracing-test 捕获 tracing::warn!(target: "audit") 断言）
+        let home = tempfile::tempdir().unwrap();
+        let home_path = home.path().to_path_buf();
+        config_write_sync("user", serde_json::json!({}), None, &None, move || {
+            Some(home_path.clone())
+        })
+        .unwrap();
+        assert!(logs_contain("hooks user 层配置写入"));
+    }
+
+    #[test]
+    #[tracing_test::traced_test]
+    fn project_layer_write_no_audit_log() {
+        // SEC-17 逆断言：非 user 层（project）写入不触发 user 层审计日志
+        let dir = tempfile::tempdir().unwrap();
+        let proj = dir.path().to_path_buf();
+        config_write_sync(
+            "project",
+            serde_json::json!({}),
+            Some(proj.to_str().unwrap()),
+            &Some(proj.clone()),
+            || None,
+        )
+        .unwrap();
+        assert!(!logs_contain("hooks user 层配置写入"));
+    }
 }

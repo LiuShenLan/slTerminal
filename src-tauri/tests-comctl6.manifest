@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <!-- TQ-COV-06：测试二进制（链接 tauri → tao/muda → comctl32 v6 API）加载
+       失败 0xc0000139——SxS 未激活时系统 comctl32.dll 仅 v5 符号（无
+       TaskDialogIndirect 等）。主应用由 tauri 生成 manifest 激活 v6，
+       测试二进制无 manifest → 启动即崩。本文件经 build.rs
+       cargo:rustc-link-arg-tests 嵌入全部测试目标。 -->
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls"
+                        version="6.0.0.0" processorArchitecture="*"
+                        publicKeyToken="6595b64144ccf1df" language="*"/>
+    </dependentAssembly>
+  </dependency>
+</assembly>

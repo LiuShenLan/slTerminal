@@ -409,6 +409,28 @@ mod tests {
         assert!(!missing.exists());
     }
 
+    /// 读失败分支（目录路径触发，TQ-COV-04）：metadata 成功（目录非 symlink、len 不超限）
+    /// 但 read_to_string 对目录必然失败 → emit 零调用、不 panic、
+    /// 目录不被删除（remove_file 对目录失败仅 warn）
+    #[test]
+    fn process_read_failure_on_directory_no_panic() {
+        let dir = tempfile::tempdir().unwrap();
+        let emitted = std::sync::atomic::AtomicUsize::new(0);
+        process_signal_file_with(dir.path(), |_| {
+            emitted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        });
+        assert_eq!(
+            emitted.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "读失败不应触发 emit"
+        );
+        assert!(
+            dir.path().exists(),
+            "目录不应被删除（remove_file 对目录失败仅 warn）"
+        );
+    }
+
     /// AQ-2 超限防护：>1MB 信号文件 → emit 闭包零调用 + 文件已删除
     #[test]
     fn process_oversized_signal_skips_emit_and_deletes() {

@@ -288,6 +288,11 @@ assert_eq!(
 - 普通文本含 `[c` 不误触发
 - XTVERSION `ESC[>0q]` 不触发
 
+### spawn.rs 残余 I/O 豁免登记（TQ-COV-03）
+
+- **容量超限 kill 清理**（spawn.rs:1307-1315）：`pty_spawn` 命中会话上限时显式 kill 已 spawn 子进程（child.kill + sessions 写锁编排）——依赖真实 ConPTY spawn 的 PtySession，无法在 L1 不 spawn 子进程覆盖，登记豁免（inventory 豁免表同步由 Stage 10 统一处理）。兜底层级：BE-01 判定语义由 `pty_capacity_*` 纯函数三用例锁死（31 放行 / 32、64 拒绝）+ Job Object KILL_ON_JOB_CLOSE 兜底。
+- **conpty_api vendor 提取/加载回退残余 Win32 分支**：`load_bundled`/`get_proc` 的 LoadLibraryW/GetProcAddress 失败静默回退系统 ConPTY——依赖真实 DLL 加载行为，L1 无法注入，登记豁免（inventory 豁免表同步由 Stage 10 统一处理）。兜底层级：ADR-0005 Win10 实机人工验证 + `ensure_extracted` 提取幂等用例。
+
 ### 集成测试（tests/pty_integration_tests.rs）
 
 真实 spawn `cmd.exe`，端到端验证 PTY 通信：

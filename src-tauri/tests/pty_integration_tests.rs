@@ -1,9 +1,13 @@
-/// PTY 集成测试
+//! PTY 集成测试（Windows-only：硬编码 cmd.exe / ConPTY 语义）
+#![cfg(windows)]
 use portable_pty::{native_pty_system, Child, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use std::io::{Read, Write};
 use std::sync::Mutex;
 use std::time::Duration;
 
+/// 【锁边界声明】本锁仅隔离测试进程自身的并发 spawn（ConPTY 并发 spawn 死锁红线）。
+/// 不验证生产 AppState.pty.spawn_lock 的串行化范围——生产锁语义由
+/// spawn.rs 内 pty_capacity_* / validate_spawn_request 等用例与 BE-01/BE-12 注释锁死。
 static SPAWN_LOCK: Mutex<()> = Mutex::new(());
 
 /// 启动 cmd.exe 返回 PTY 句柄

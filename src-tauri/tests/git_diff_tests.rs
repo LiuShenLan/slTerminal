@@ -799,3 +799,63 @@ fn diff_hunk_serializes_camelcase() {
         "应包含 camelCase 字段 newLines: {json}"
     );
 }
+
+// ---- TQ-COV-06：compute_diff_hunks 错误分支闭包补测 ----
+
+/// broken HEAD（HEAD 指向 blob，非 tree）→ peel_to_tree 失败 → AppError::Git
+/// （行 293 map_err 闭包；UnbornBranch 场景已有用例走 tree=None 分支）
+#[test]
+fn compute_diff_hunks_broken_head_peel_tree_err() {
+    let (_dir, path) = init_temp_repo();
+    commit_file(&path, "f.txt", "x\n");
+    // blob → tag → HEAD symbolic 指向 blob（git 拒绝把非 commit 写入 branch ref，
+    // tag 可指向任意对象）
+    let blob = Command::new("git")
+        .args(["hash-object", "-w", "f.txt"])
+        .current_dir(&path)
+        .output()
+        .unwrap();
+    let blob_sha = String::from_utf8(blob.stdout).unwrap().trim().to_string();
+    Command::new("git")
+        .args(["tag", "blobtag", &blob_sha])
+        .current_dir(&path)
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["symbolic-ref", "HEAD", "refs/tags/blobtag"])
+        .current_dir(&path)
+        .output()
+        .unwrap();
+
+    let repo = git2::Repository::open(&path).unwrap();
+    assert!(
+        repo.head().is_ok(),
+        "前置：HEAD 引用应存在（指向 blob tag）"
+    );
+    let err = compute_diff_hunks(&repo, &path.join("f.txt")).unwrap_err();
+    assert!(
+        err.to_string().contains("获取 HEAD tree 失败"),
+        "broken HEAD 应报'获取 HEAD tree 失败'，实际: {err}"
+    );
+}
+
+/// bare repo（无 workdir）→ ok_or_else 闭包 → "仓库无工作目录"
+/// （行 302；bare repo 的 HEAD 指向不存在的 ref → UnbornBranch → tree=None 先行）
+#[test]
+fn compute_diff_hunks_bare_repo_no_workdir() {
+    let dir = tempfile::tempdir().unwrap();
+    // 无参 `git init --bare` 将当前目录初始化为裸仓库（bare repo 无 workdir）
+    Command::new("git")
+        .args(["init", "--bare"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let bare = dir.path().to_path_buf();
+
+    let repo = git2::Repository::open(&bare).unwrap();
+    let err = compute_diff_hunks(&repo, &bare.join("f.txt")).unwrap_err();
+    assert!(
+        err.to_string().contains("仓库无工作目录"),
+        "bare repo 应报'仓库无工作目录'，实际: {err}"
+    );
+}

@@ -642,6 +642,37 @@ fn git_status_command_old_path_field_contract() {
     assert_eq!(renamed.path, format!("{workdir_str}/old_name.txt"));
 }
 
+/// TQ-COV-06：命令层 WT_RENAMED 分支（git/mod.rs 行 186-191 index_to_workdir
+/// 闭包）——`git mv` 走 INDEX_RENAMED（head_to_index 分支，上方契约测试已覆盖），
+/// 工作区直接 rename（blob 相同、未入 index）才触发 WT_RENAMED（index_to_workdir
+/// 分支），补此分支后 old_path 提取两分支均被命令层覆盖。
+#[test]
+fn git_status_command_wt_renamed_old_path() {
+    let (_dir, path) = init_temp_repo();
+    commit_file(&path, "a.txt", "identical content");
+    // 工作区直接重命名（不使用 git mv → index 未更新 → 仅 WT_RENAMED）
+    std::fs::rename(path.join("a.txt"), path.join("b.txt")).unwrap();
+
+    let app = make_app_state(Some(path.clone()));
+    let entries = block_on(git_status_impl(&app, &path.to_string_lossy())).unwrap();
+
+    let renamed = entries
+        .iter()
+        .find(|e| e.status == "renamed")
+        .expect("工作区 rename（blob 相同）应检测为 renamed 条目");
+    let workdir_str = path.to_string_lossy().replace('\\', "/");
+    assert_eq!(
+        renamed.old_path.as_deref(),
+        Some(format!("{workdir_str}/a.txt").as_str()),
+        "WT_RENAMED 条目 oldPath 应为旧绝对路径，实际: {:?}",
+        renamed.old_path
+    );
+    // path 字段 = 旧路径（同 INDEX_RENAMED 契约：StatusEntry::path_bytes()
+    // 对 renamed 条目返回 delta.old_file.path——与 old_path 同源，见上方
+    // git_status_command_old_path_field_contract 注释）
+    assert_eq!(renamed.path, format!("{workdir_str}/a.txt"));
+}
+
 // ---- serde CamelCase 序列化（GitStatusEntry DTO） ----
 
 #[test]
@@ -1027,4 +1058,33 @@ fn git_status_command_non_repo_error_contract() {
         err.to_string().contains("打开仓库失败"),
         "错误消息应含'打开仓库失败'，实际: {err}"
     );
+}
+
+/// TQ-COV-06：缓存命中后仓库目录被删除 → 重新 open 失败（行 100 map_err 闭包）。
+/// 缓存 key 前缀匹配不检查存在性，命中后 Repository::open(&wd) 因目录已删失败。
+#[test]
+fn get_or_open_repo_cache_hit_but_dir_deleted() {
+    let (dir, path) = init_temp_repo();
+    commit_file(&path, "test.txt", "hello");
+    // project_root 用 tempdir 父目录（init_temp_repo 的仓库即 tempdir 根，
+    // 删除仓库会连带删除 tempdir——root 必须存活，沙箱校验才可上溯通过）
+    let root = dunce::canonicalize(dir.path().parent().unwrap()).unwrap();
+
+    let cache = std::sync::Mutex::new(GitRepoCache::new(GIT_REPO_CACHE_CAPACITY));
+    // 首次访问 → 缓存
+    let result1 = get_or_open_repo(&cache, &path.to_string_lossy(), &Some(root.clone()));
+    assert!(result1.is_ok(), "首次访问应成功");
+
+    // 删除仓库目录（含 .git）→ 缓存仍命中（字符串前缀匹配），open 失败
+    std::fs::remove_dir_all(&path).unwrap();
+
+    let err = match get_or_open_repo(&cache, &path.to_string_lossy(), &Some(root.clone())) {
+        Ok(_) => panic!("目录已删后应失败"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("打开仓库失败"),
+        "缓存命中但目录已删应报'打开仓库失败'，实际: {err}"
+    );
+    drop(dir); // 显式 drop 避免 tempdir 清理告警（目录已删）
 }

@@ -416,6 +416,10 @@ mod tests {
     /// 瞬时句柄占用（或杀软扫描）会导致 persist 偶发 PermissionDenied（os error 5）
     /// ——对 Err 做有限重试（5 次 × 50ms）后仍失败才返回最后一个错误（真失败暴露）。
     /// 生产代码不重试（SPE-05 已覆盖 persist 失败映射，由前端层处理）。
+    /// 【容忍度声明】本重试仅容忍 Windows 杀软/索引扫描占用文件的瞬时窗口，
+    /// 不代替生产锁语义——生产 save_settings 无重试（单次 persist 失败即 Err）。
+    /// 若 SETTINGS_SAVE_LOCK 被移除/失效，本测试可能假绿，锁语义由
+    /// pty/模块并发用例与 code review 兜底。
     fn run_save_with_retry(settings: serde_json::Value) -> Result<(), AppError> {
         let mut last_err: Option<AppError> = None;
         for _ in 0..5 {

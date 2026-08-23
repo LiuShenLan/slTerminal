@@ -71,3 +71,16 @@ lto = "thin"
 codegen-units = 1
 strip = "symbols"
 panic = "abort"
+
+# TQ-COV-05：SEC-17 审计日志 L1 断言（tracing-test 捕获 warn 日志）。
+# no-env-filter：SEC-17 的审计事件带显式 target "audit"（tracing::warn!(target: "audit")），
+# 而 tracing-test 默认 env_filter = "<crate>=trace"（按 target 前缀过滤，未命中即丢弃）——
+# "audit" 不以 crate 名开头故被过滤，断言恒失败。no-env-filter 使 filter 变 "trace" 全放行
+# （官方跨 crate target 捕获开关），audit 事件进入捕获 buffer；本项目仅 2 条 traced_test
+# 用例且断言子串独特，无跨依赖日志误命中风险。
+# TQ-COV-06：tauri test feature——dev-dependencies 开启 `tauri::test` 模块
+# （mock_builder/mock_context），供命令壳测试构造 State<'_, AppState>。
+# feature 仅在测试编译时生效（feature unification），release/debug 构建零影响。
+[dev-dependencies]
+tracing-test = { version = "0.2", features = ["no-env-filter"] }
+tauri = { version = "2.11.5", features = ["test"] }

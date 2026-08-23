@@ -19,6 +19,25 @@ pub use state::PtyState;
 pub use state::GIT_REPO_CACHE_CAPACITY;
 use tauri_plugin_prevent_default::{Builder as PreventDefaultBuilder, Flags, PlatformOptions};
 
+/// 安装 panic hook：panic 信息写 exe 同级 crash.log（诊断用，TQ-COV-01）。
+/// 写文件失败回退 eprintln（不 panic——hook 内再 panic 会二次崩溃）。
+pub fn install_panic_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        let dir = std::env::current_dir().unwrap_or_else(|_| ".".into());
+        let message = format!("PANIC: {:?}", info);
+        if write_crash_log(&dir, &message).is_err() {
+            eprintln!("{}", message);
+        }
+    }));
+}
+
+/// 写 crash.log（目录参数化以便 L1 测试）——返回 io 结果供 hook 决定回退
+fn write_crash_log(dir: &std::path::Path, message: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut f = std::fs::File::create(dir.join("crash.log"))?;
+    writeln!(f, "{}", message)
+}
+
 /// ping 命令 — 占位，用于验证 IPC 链路和测试基建
 #[tauri::command]
 fn ping() -> Result<String, AppError> {
@@ -127,6 +146,29 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// crash.log 写入成功：tempdir 目录参数化后文件存在且含消息（TQ-COV-01）
+    #[test]
+    fn write_crash_log_writes_file() {
+        let dir = tempfile::tempdir().unwrap();
+        write_crash_log(dir.path(), "PANIC: test").unwrap();
+        let content = std::fs::read_to_string(dir.path().join("crash.log")).unwrap();
+        assert!(
+            content.contains("PANIC: test"),
+            "crash.log 应含消息，实际: {content}"
+        );
+    }
+
+    /// 不可写目录（不存在的嵌套路径）→ 返回 Err 且不 panic（TQ-COV-01）
+    #[test]
+    fn write_crash_log_err_on_unwritable_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("no_such_dir").join("deeper");
+        assert!(
+            write_crash_log(&missing, "PANIC: test").is_err(),
+            "不存在的目录下创建文件应返回 Err"
+        );
+    }
 
     #[test]
     fn test_ping_returns_pong() {

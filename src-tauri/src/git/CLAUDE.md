@@ -16,6 +16,7 @@ Git 版本控制模块——基于 `git2` crate，封装 `git_status`（文件�
 | `tests/git_file_at_head_tests.rs` | HEAD 内容 + 错误契约（8 用例） |
 | `tests/git_rollback_tests.rs` | 回滚 + autocrlf 三方一致（10 用例） |
 | `tests/git_unstage_tests.rs` | 取消暂存（6 用例） |
+| `tests/git_command_shell_tests.rs` | 5 条 Tauri 命令壳测试（TQ-COV-06，见测试模式） |
 | `tests/ci_config_tests.rs` | CI L1 单线程锁死（1 用例） |
 | `tests/common/mod.rs` | 共享测试工厂（init_temp_repo/commit_file/git_add/make_app_state/block_on） |
 
@@ -84,10 +85,10 @@ GIT-12 将原 `git/mod.rs` 的 88 条 `#[cfg(test)] mod tests`（Rust 端最大�
 
 | 文件 | 用例数 | 覆盖范围 |
 |------|--------|---------|
-| `tests/git_status_tests.rs` | 41 | status_to_str 映射、git_status 状态行为、include_ignored 行为、绝对路径格式、递归未跟踪目录、renamed oldPath + git2 底层原语（dunce/discover/**get_or_open_repo LRU 缓存断言——S13 BE-09 适配：缓存命中/淘汰语义）** |
-| `tests/git_diff_tests.rs` | 32 | git_diff hunk 收集与 diff 行为 |
-| `tests/git_file_at_head_tests.rs` | 8 | HEAD 文件内容读取 + UnbornBranch/不存在错误契约（GIT-09 直测命令） |
-| `tests/git_rollback_tests.rs` | 10 | 回滚行为 + autocrlf 仓库三方一致 |
+| `tests/git_status_tests.rs` | 43 | status_to_str 映射、git_status 状态行为、include_ignored 行为、绝对路径格式、递归未跟踪目录、renamed oldPath（含 WT_RENAMED 命令层分支，TQ-COV-06）+ git2 底层原语（dunce/discover/**get_or_open_repo LRU 缓存断言——S13 BE-09 适配：缓存命中/淘汰语义 + 缓存命中目录已删错误分支**） |
+| `tests/git_diff_tests.rs` | 34 | git_diff hunk 收集与 diff 行为 + broken HEAD/bare repo 错误分支（TQ-COV-06） |
+| `tests/git_file_at_head_tests.rs` | 9 | HEAD 文件内容读取 + UnbornBranch/不存在错误契约（GIT-09 直测命令）+ broken HEAD peel_to_tree 失败（TQ-COV-06） |
+| `tests/git_rollback_tests.rs` | 11 | 回滚行为 + autocrlf 仓库三方一致 + broken HEAD peel_to_tree 失败（TQ-COV-06） |
 | `tests/git_unstage_tests.rs` | 6 | 取消暂存行为 |
 | `tests/ci_config_tests.rs` | 1 | `ci_l1_uses_single_test_thread`（GIT-11 领域污染迁移，锁死 CI L1 的 `--test-threads=1`） |
 
@@ -120,9 +121,46 @@ pub fn block_on<F: std::future::Future>(f: F) -> F::Output { /* tokio Runtime bl
 
 > **8.3 短名坑（CI 必踩）**：GitHub runner 用户 `runneradmin` 的 `%TEMP%` 是短名 `RUNNER~1`，git2 `repo.workdir()` 解析为长名，直接 `strip_prefix`/断言比较会全部失败（曾致 L1 22 个 git 测试红、E2E 被 skipped）。规避两手：① `init_temp_repo` 对返回路径 `dunce::canonicalize`（短名→长名）；② 裸 `repo.workdir()` 的 strip_prefix 站点统一包 `dunce::simplified(...)`（剥 verbatim）。守卫测试 `init_temp_repo_path_canonicalized_and_strips` / `get_or_open_repo_workdir_equals_canonical_path` 锁死此不变量。
 
+### 命令壳测试（TQ-COV-06：tauri::test mock State）
+
+`tests/git_command_shell_tests.rs`（5 用例）覆盖 5 个 `#[tauri::command]` 命令壳
+（git_status/git_diff/git_file_at_head/git_rollback/git_unstage）——llvm-cov 函数覆盖
+37.14% 的缺口即命令壳（`State<'_, AppState>` 注入，命令层测试只测 `git_*_impl` 内核）。
+用 `tauri::test::mock_builder` 构造 mock App（`manage` 注入最小 AppState）→
+`app.state::<AppState>()` 取 State → `block_on` await 命令壳，验证壳层转发契约。
+
+**Windows 前置（0xc0000139 坑）**：链接 tauri 的测试二进制静态导入 comctl32 v6 符号
+（tao/muda 菜单代码，TaskDialogIndirect 等），无 manifest 激活时系统 comctl32.dll 仅 v5
+导出 → 测试二进制启动即 `0xc0000139`（STATUS_ENTRYPOINT_NOT_FOUND）；主应用由 tauri
+生成 manifest 激活 v6 故正常。修复：`build.rs` 对测试目标注入
+`cargo:rustc-link-arg-tests=/MANIFEST:EMBED` + `/MANIFESTINPUT:tests-comctl6.manifest`
+（SxS v6 激活，仅测试目标生效，不影响 bin/lib）。改动测试目标链接行为时注意此机制。
+前置：dev-dependencies 的 `tauri = { features = ["test"] }`（`tauri::test` 模块需
+`feature = "test"` 门控，仅测试编译生效，release/debug 构建零影响）。
+
 ### 命令层测试（GIT-01：最小 AppState + block_on await 真实命令）
 
 五命令均抽 `git_*_impl` 命令内核（`git_status_impl`/`git_diff_impl`/`git_file_at_head_impl`/`git_rollback_impl`/`git_unstage_impl`，async 函数，root 从 `State` 提取后传入）。命令层测试用 `make_app_state` 构造最小 AppState（project_root 注入）后经 `common::block_on` await 真实命令实现，覆盖 State 注入、路径沙箱拒绝、`spawn_blocking`、错误消息契约（"HEAD 中不存在"）。其余直接调用 git2 API 的测试为**底层原语**行为验证（非命令层）。
+
+### 函数覆盖口径与残余豁免（TQ-COV-06）
+
+llvm-cov 复测 git/mod.rs：Functions 61.43% (43/70)、Region 89.40%、Line 87.92%
+（基线 37.14% / 77.75% / 79.09%）。**源码函数级 13/13 = 100% 覆盖**——5 个
+`#[tauri::command]` 命令壳经 mock State 测试覆盖（见上节），8 个内核/纯函数
+由命令层与底层原语测试覆盖。
+
+llvm-cov 的 Functions 口径统计编译器生成物（闭包/async 状态机的跨线程实例），
+剩余 27 个 MISS 均为不可达分支或生成物计数缺失，逐类登记豁免：
+
+| 类别 | 数量 | 行号 | 豁免原因 |
+|------|------|------|---------|
+| spawn_blocking move 闭包生成物（00B7_） | 5 | 143/238/437/520/622 | 闭包实际执行（Line 87.92% 佐证，impl 与命令壳测试均走主路径）——llvm-cov 对跨线程闭包实例计数缺失，工具限制非测试缺口 |
+| 命令壳 await 行状态机生成物（runs0_*） | 5 | 215/269/496/599/668 | 命令壳测试已执行（纯名函数 EXEC）——状态机实例计数缺失，同上 |
+| git2 API 失败 map_err 闭包 | 13 | 161/313/414/479/481/565/567/571/577/580/583/643/652 | 依赖 libgit2 内部 API 失败（statuses/diff 生成/foreach/to_object/peel_to_blob/index/add_path/write），L1 无法注入；remove_path 失败分支实测为静默成功（无 Err 路径） |
+| get_or_open_repo 锁失败 | 1 | 94 | Mutex 中毒不可达（仓库纪律：锁内无 panic 路径，见 ../CLAUDE.md「Mutex 中毒保持现状」） |
+| get_or_open_repo 重开失败 | 2 | 119/125 | 119 为 LRU insert 生成物（工具计数）；125 discover 成功同调用内 open 必成功（竞态窗口不可注入） |
+
+复测命令：`cargo llvm-cov --html --manifest-path src-tauri/Cargo.toml -- --test-threads=1`。
 
 ### status_to_str 表驱动测试（12 用例）
 
