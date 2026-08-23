@@ -2,249 +2,109 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## 职责
+## 存在理由
 
-工作区布局管理——多 Dockview 实例、布局序列化/反序列化、面板类型注册、**页签标题集中管理**。
+`src/workspace` 管理工作区布局骨架：多 Dockview 实例、布局序列化/反序列化、面板类型注册、页签标题集中管理。Dockview 只提供分屏/拖拽/页签容器，本层决定页面生命周期、跨页终端存活策略、布局持久化路径与全局标题契约。
 
-## 架构决策
+## 关键约束与决策
 
-**多 Dockview 实例（非单实例 + tab 切换）**：每个操作页面拥有独立 `<DockviewReact>` 实例。页面切换通过 CSS `display:none/block`，终端不销毁。根因：xterm.js 不支持二次 `open()`（Issue #4978），此架构从根本上解决 H6（终端跨页面存活）。
+### 多 Dockview 实例（H6）
 
-**FE-01 豁免登记（多实例内存/DOM 线性增长的既定接受）**：保持多实例架构不变（H6 终端跨页面存活 + xterm.js 不可二次 `open()` 是硬约束），仅加**页面总数上限 `MAX_PAGES = 20`**（`stores/projects.ts`，`addPage` 超限拒绝 + toast 告警）缓解无界增长。豁免登记见 ADR-0001 配套豁免表，改动架构前必读。
+每个操作页面拥有独立 `<DockviewReact>` 实例。页面切换通过 CSS `display:none/block`，终端不销毁。根因：xterm.js 不支持二次 `open()`（Issue #4978）。
+
+**FE-01 豁免登记**：多实例架构不变（H6 + xterm #4978 是硬约束），仅加**页面总数上限 `MAX_PAGES = 20`**（`stores/projects.ts`，`addPage` 超限拒绝 + toast 告警）缓解无界增长。豁免登记见 ADR-0001 配套豁免表。
 
 **惰性页面初始化**：`initializedPages` Set 控制哪些页面挂载了 `PageDockview`。未初始化的页面不渲染 DOM，切换到新页面时才触发 `ensurePageInitialized`。
 
-**fromJSON 恢复守卫**：`restoreGuardRef` 阻止 `onDidLayoutChange` 在程序化恢复布局时向 store 写回。`onDidLayoutFromJSON` 事件中置 true，`setTimeout(0)` 异步复位——因为 Dockview 会在 JSON 恢复后立即触发 layout change。
+### 布局恢复与变更守卫
 
-**不自动创建默认终端**：`handleReady` 在布局恢复失败（空布局 `{}` 或损坏数据）时不再兜底创建终端面板。空白页面由 Watermark 组件接管显示，用户通过 Watermark 按钮或页签 "+" 按钮手动创建终端。新建页面的空布局由 `NavTree.makeEmptyLayout()` 提供（迁自 SidebarTree，NAV-06）。已有页面布局恢复路径不变。
+- **fromJSON 恢复守卫**：`restoreGuardRef` 阻止 `onDidLayoutChange` 在程序化恢复布局时向 store 写回。`onDidLayoutFromJSON` 事件中置 true，`setTimeout(0)` 异步复位——Dockview 会在 JSON 恢复后立即触发 layout change。
+- **不自动创建默认终端**：`handleReady` 在布局恢复失败（空布局 `{}` 或损坏数据）时不再兜底创建终端面板。空白页面由 Watermark 组件接管，用户手动创建终端。
+- **布局单点（#7）**：操作页面布局只经 `layoutSerde.ts` 存取。`PageDockview.onDidLayoutChange` → `saveLayout()` → `handlePageLayoutChange()` → `useProjects.updatePageLayout()`。
 
-### DefaultTab 页签形态（UI 重设计 TAB-01/02/03，IC-03）
+### DefaultTab 页签形态（TAB-01/02/03，IC-03，F9）
 
-`DefaultTab` 为扁平化页签（不再有 tabIcon emoji/img 分支——**`params.tabIcon` 已退役，IC-03 改 `params.tabStatus` 状态圆点**）：
+`DefaultTab` 为扁平化页签（`params.tabIcon` 已退役）：
 
-- **状态圆点**：`params.tabStatus`（`AgentStatus | null`，由 TerminalPanel 经 `updateParameters` 写入，IC-03）→ 渲染 `StatusDot` 圆点（working 绿/attention 黄/done 灰/error 红）；null 不渲染
-- **CLI 品牌 logo**：`params.tabLogo`（F9 行为修订：**跟随页签名显示**，不依赖 tabStatus——圆点缺席时 logo 顶到标题前）；tabLogo 由 TerminalPanel 会话绑定写入（见 @../panels/CLAUDE.md）
-- **文件型页签图标**（TAB-03）：`params.filePath` 存在（FILE_PANEL_TYPES 面板才携带）→ 渲染 `FileIcon` 彩色图标（六色盘按扩展名取色，`features/explorer/FileIcon.tsx`）——与终端分支（圆点/logo）互斥
-- **激活指示条**（TAB-01）：`isActive && isGroupActive` 时渲染**底部 2px 指示条**（absolute 锚定 `.dv-tab` 底边，色 FOCUS_BORDER，pointerEvents none）——只给聚焦组的激活页签（非聚焦组可见页签已有实底）；hover 时未激活页签文字变 fg-1（底不变）
-- **hover 关闭 ×**（TAB-02）：× 默认不可见（opacity 0 + pointerEvents none），hover 页签时显现（opacity 显隐保布局稳定，条件渲染会致宽度跳动）；自身 hover 底 = `--dv-icon-hover-background-color`（linear 库变量，不新造色值）；点击 `stopPropagation` + `api.close()`
-- **标题**：13px，订阅 `onDidTitleChange`（回调接收 `TitleEvent` → `event.title`）
-
-**RightHeader「+」钮（TAB-04）**：扁平图标钮——去边框、22×22 圆角 4、fg-3（DIM_FG）、hover 底 `ui.secondaryBg`、`title="新建终端"`；点击 = `containerApi.addPanel`（`position: { referenceGroup: group }` 在点击的分屏新建）。
-
-> **关键坑**：Dockview `PanelApi.onDidParametersChange` 类型为 `Event<Parameters>`，回调直接接收 `Parameters` 对象（扁平 key-value），不是 `{ params: Parameters }` 包裹结构。错误写成 `event.params.tabStatus` 会导致始终读到 `undefined`。
+- **状态圆点**：`params.tabStatus`（`AgentStatus | null`）→ 渲染 `StatusDot` 圆点（working 绿/attention 黄/done 灰/error 红）；null 不渲染。
+- **CLI 品牌 logo**：`params.tabLogo`（F9 行为修订：**跟随页签名显示**，不依赖 tabStatus）由 TerminalPanel 会话绑定写入。
+- **文件型页签图标**（TAB-03）：`params.filePath` 存在（FILE_PANEL_TYPES）→ 渲染 `FileIcon` 彩色图标；与终端分支互斥。
+- **激活指示条**（TAB-01）：`isActive && isGroupActive` 时渲染底部 2px 指示条（absolute 锚定 `.dv-tab` 底边，色 `FOCUS_BORDER`，`pointerEvents: none`）。
+- **hover 关闭 ×**（TAB-02）：× 默认不可见（opacity 0 + pointerEvents none），hover 时显现。
 
 ### Watermark 空态规范（GL-05/UI-806）
 
-空白页面（空布局 `{}`）由 `createWatermark` 组件接管：**15px 线性图标（IconEmptyBox）fg-4 + 说明文字 13px fg-3（「打开终端或编辑器开始工作」）+ 可选次按钮「新建终端」**（SECONDARY_BG 底 + SEPARATOR_BG 描边，点击 = `containerApi.addPanel` 终端，`renderer: "always"`）——与空文件树/无搜索结果统一空态规范。
+空白页面由 `createWatermark` 组件接管：**15px 线性图标 + 说明文字 13px + 可选「新建终端」次按钮**（SECONDARY_BG 底 + SEPARATOR_BG 描边，点击 addPanel 终端，`renderer: "always"`）。
 
-**setProjectRoot 前置为页面切换前置条件**：`project_root` 是 `activePageId` 生效的前提，不是它的副作用。`switchToPage`（`Workspace.tsx`）改为 async——先 `await setProjectRoot(rootPath)` 再 `setActivePage(pageId)`。`App.tsx` 启动恢复 `lastPage` 同样先 `await setProjectRoot`。SEC-01 effect（`Workspace.tsx`）保留兜底（服务于 `pty_spawn` 等其它消费者 + E2E helper 直设 `activePageId` 的路径）。根因：React 同一 commit 的 passive effect 子组件先于父组件执行——旧代码中 `setProjectRoot` 在父 effect 执行时，子组件（ExplorerPanel）的 `fs_read_dir` 已因 `project_root=None` 被路径沙箱拒绝（`loadDirectory` catch 静默吞错 → 文件树恒"空目录"，确定性失败）。
+### 项目切换前置：setProjectRoot 先于 activePageId（DBG-5/SEC-01）
 
-**文件监听跟随项目激活（watcher 上提）**：SEC-01 effect 同时承担 `startWatch(rootPath)`/`stopWatch(prev)`——watcher 宿主从 ExplorerPanel 上提到项目激活层：编辑器外部修改 reload / commit 面板刷新等 fs-event 消费方不依赖 explorer 视图是否打开（E2E editor auto-reload 失败根因修复）。ExplorerPanel 不再管理 watcher（防双管理互停）；App 关闭时 watcher 由后端 AppState drop 兜底清理。**activePageId 置 null → stopWatch（BE-10）**：SEC-01 effect 在 activePageId 置 null（删除末页/移除活跃项目两条链：onDeletePage 删末页、NavTree removeProject）时对 `prevRootRef.current` 调 `stopWatch` 并清 ref——防 OS 句柄残留至 LRU 淘汰。
+`project_root` 是 `activePageId` 生效的前提，不是副作用。`switchToPage` 改为 async——先 `await setProjectRoot(rootPath)` 再 `setActivePage(pageId)`。`App.tsx` 启动恢复 `lastPage` 同样先 await 再切页。SEC-01 effect 保留兜底。
 
-## 文件
+根因：React 同一 commit 的 passive effect 子组件先于父组件执行——旧代码中 `setProjectRoot` 在父 effect 执行时，子组件（ExplorerPanel）的 `fs_read_dir` 已因 `project_root=None` 被路径沙箱拒绝。
 
-| 文件 | 职责 |
-|------|------|
-| `index.ts` | 公共 API 出口：Workspace 组件；`panelRegistry`/`PANEL_TYPES`/`PANEL_TERMINAL`/`PANEL_EDITOR`/`PANEL_HTML_VIEWER`/`FILE_PANEL_TYPES`/`isValidPanelType`/`isAlwaysRenderPanel` + `PanelType` 类型（重导出自 `../panelRegistry`）；`saveLayout`/`loadLayout`（重导出自 `./layoutSerde`） |
-| `Workspace.tsx` | 主组件：三栏布局（Allotment）容器——活动栏(**46px 固定**)+侧栏区(visible=anyOpen)+主区 + 页面生命周期管理（`ensurePageInitialized`/`pageCallbacksRef`），单页渲染委托 PageDockviewHost；`import sideViewDefs` 触发 side-effect 注册 |
-| `PageDockviewHost.tsx` | 单页面 Dockview 实例宿主组件（React.memo 包裹）：**DefaultTab（扁平页签，TAB-01/02/03）**、**Watermark（空态统一，GL-05）**、**RightHeader（「+」钮 22px，TAB-04）**、ContextMenu（UI-802 视觉统一：项 28px 圆角 5/hover SECONDARY_BG/危险项 ERROR_FG/容器 SIDEBAR_BG + 0.09 描边 `<style>` 注入）、布局恢复 |
-| `layoutSerde.ts` | 布局序列化/反序列化：`saveLayout`（`api.toJSON()`）、`loadLayout`（`api.fromJSON()` + 旧格式修补 + 白名单过滤） |
-| `titleManager.ts` | 页签标题集中管理：terminal-N 编号、文件标题冲突检测、handleSaveAs、onDeletePage(pageId)：清理该页面 registry 和 counters 条目 |
-| `pageApis.ts` | 页面 API 注册表 + 共享切换：模块级 `Map<pageId, DockviewApi>` + `registerPageApi`/`unregisterPageApi`/`getPageApi` + `switchToPageShared(pageId)`（setProjectRoot 前置→setActivePage→重指向 `__dockviewApi`）+ `switchToPageAndFocus(pageId, panelId, signal?)`（切换后轮询聚焦面板；**FE-26：可选 `AbortSignal`**——中止后轮询静默退出（不 focus 不 warn），导航树会话行点击传 NavTree 模块级 Controller（再次点击/卸载 abort））+ `openHooksConfigPanel(pageId)`（轮询 API 就绪 → 同页单例 addPanel，C13-7；活动栏「配置」钮经 `hooksConfig/openHooksConfig.ts` 消费，先切页后调用）+ `findPanelForSession(cliId, sessionId)`/`findPageIdForPanelId(panelId)`（FE-09 会话/面板反查：复合键 `cliId\|sessionId` 精确匹配 → 终端面板；panelId → 属主 pageId，B14 前缀匹配 + parseTerminalPageId 兜底） |
-| `TerminalRenameDialog.tsx` | 终端页签重命名弹窗（F8）：自绘模态（照 SessionActionDialog 模式）——遮罩 + 居中卡片 + 输入框 + 确定/取消；Enter 确认（trim）/空名行内错误拒绝/Esc/遮罩/取消按钮；纯受控展示组件，零 IPC |
+### 文件监听上提到项目激活层
 
-> **panelRegistry.ts 已提取到 `src/panelRegistry.ts`（已提取为共享配置层）**：面板注册表是全局架构组件，被 workspace、explorer、测试等多方引用，不应埋于 workspace 子路径。
+SEC-01 effect 同时承担 `startWatch(rootPath)` / `stopWatch(prev)`——watcher 宿主从 ExplorerPanel 上提到项目激活层：编辑器外部修改 reload / commit 面板刷新等 fs-event 消费方不依赖 explorer 视图是否打开。`activePageId` 置 null（删除末页/移除活跃项目）时对 `prevRootRef.current` 调 `stopWatch` 并清 ref，防 OS 句柄残留至 LRU 淘汰。
 
-## 硬约束
+### 面板注册表已提取到 `src/panelRegistry.ts`
 
-- **#5 面板封闭**：新增面板类型 → 在 `panels/` 下创建目录 → 在 `src/panelRegistry.ts` 注册 → `PANEL_TYPES` 数组追加类型名
-- **#7 布局单点**：操作页面布局只经 `layoutSerde.ts` 存取。`PageDockview.onDidLayoutChange` → `saveLayout()` → `handlePageLayoutChange()` → `useProjects.updatePageLayout()`
-- **#8 会话元数据单点**：终端 PTY 会话只在面板内管理（`panels/terminal/`），Workspace 不持有会话引用
+`panelRegistry` / `PANEL_TYPES` / `FILE_PANEL_TYPES` / `isAlwaysRenderPanel` 是全局架构组件，被 workspace、explorer、测试等多方引用，不应埋于 workspace 子路径。新增面板类型仍按 #5 流程：创建目录 → 注册 → 追加 `PANEL_TYPES`。
 
-## 数据流
+### 终端页签自定义重命名（F8）
 
-```
-用户拖拽/分屏 → Dockview onDidLayoutChange
-  → restoreGuardRef? (跳过程序化恢复)
-  → saveLayout(api) → toJSON()
-  → handlePageLayoutChange(pageId, layout)
-  → useProjects.updatePageLayout(projId, pageId, layout)
-  → Zustand subscribe → 2s debounce → saveToDisk
-```
+- **入口**：右键菜单对终端面板（判据 `panel.view.contentComponent === "terminal"`，`panel.component` 不存在）插入「重命名」项；claude 运行中（`TerminalRegistry.get(panel.id)?.agentSession != null`）→ `disabled` 置灰。
+- **存储单一真值源**：`params.customTitle`（随布局 JSON 持久化）。`applyRename` 纯函数 = `updateParameters({ customTitle })` + `setTitle` + **显式 `onLayoutChange(saveLayout(api))`**——`setTitle`/`updateParameters` 均不触发 `onDidLayoutChange`，须显式保存。
+- **恢复链路**：`rebuildAndRecomputeTitles` 重算编辑器标题 + **终端标题**——无 customTitle 的终端面板用 `titleManager.getTerminalTitle(pageId)` 重算（持久化 title 可能是瞬态值），customTitle 保留不重算。
+- **约束**：`titleManager` 计数器不动（F8 不占用编号）；编辑器等非终端面板菜单无「重命名」。
 
-页面切换流：
-```
-NavTree.switchToPage(projectId, pageId)
-  → 查 useProjects.getState() 获取 pageId 所属项目 rootPath
-  → await setProjectRoot(rootPath)  // 路径沙箱前置条件（失败 console.error 降级，仍继续切换）
-  → ensurePageInitialized(pageId)   // 首次切换时挂载 PageDockview
-  → 委托 switchToPageShared(pageId) // pageApis.ts 共享切换函数
-  → useLayout.setActivePage(pageId)
-  → React 重渲染，目标页面 display:block，其余 display:none
-  → window.__dockviewApi 重指向活跃页面（handlePageApiReady 兜底未初始化页面）
+### 页签标题集中管理（`titleManager.ts`）
 
-// toast/导航树会话行点击等调用方走 switchToPageAndFocus(pageId, panelId, signal?)
-// → switchToPageShared → 有限轮询（100ms×50，FE-26：signal.aborted 即停）等待面板挂载 → panel.focus()
-// 活动栏「配置」钮 → openHooksConfigFromActivityBar → switchToPageShared → openHooksConfigPanel(pageId)
-// → 轮询 getPageApi 就绪 → getPanel 查重 focus / addPanel（C13-7 同页单例）
-```
+- 终端页签 = `terminal-N`（每页独立从 0 开始，关闭不重算；恢复布局同样经 `getTerminalTitle` 消费编号）。
+- 编辑器页签 = 文件名；同名冲突 → 相对路径（相对 `Project.rootPath`）。
+- 布局持久化时忽略保存的 `title`，从 `params.filePath` 重新计算。
+- Save-As 通过 `slterm:file-saved-as` CustomEvent 通知 Workspace 层重算标题。
+- 重复文件打开：`findExistingEditor` 查重 → 聚焦已有面板。
+- **suffix 字段**：`EditorEntry` 含 `suffix`（如 `(git diff)`）。`findExistingEditor(pageId, filePath, suffix?)` 按 suffix 匹配，保证普通编辑器与 git 页签互不误聚焦（B10）。
 
-> **`__dockviewApi` 重指三站点不变量**：`window.__dockviewApi` 重指向只允许出现在三个位置——`switchToPageShared`（页面切换时立即重指已初始化页面）、`Workspace.handlePageApiReady`（页面首次初始化时重指）、`Workspace.onDeletePage`（删除页面后重指次页）。其他代码点通过 `getPageApi(pageId)` 访问指定页面的 API，不假设 `__dockviewApi` 恰好指向目标页。
->
-> **DBG-5**: `switchToPage` 改为 async——`setProjectRoot` 必须在 `setActivePage` 之前完成，确保子组件 effect 中的 `fs_read_dir`/`git_status`/`notify_watch` 等 IPC 调用在后端 `project_root` 就绪后通过路径沙箱校验。
+### Dockview 事件结构注意事项
 
-## 布局架构（三栏 Allotment）
+- `api.onDidTitleChange`：回调接收 `TitleEvent { title: string }` → `event.title`。
+- **`api.onDidParametersChange`**：回调直接接收 `Parameters` 对象（`Record<string, unknown>`），**不是** `{ params: Parameters }` 包裹 → `event.tabStatus`，**非** `event.params.tabStatus`。
 
-Workspace 使用 Allotment 实现三栏布局（旧为常驻四栏，侧栏视图系统引入后改造；NAV-05 活动栏 40 → 46px）：
+### `__dockviewApi` 重指不变量
 
-```
-┌──────────┬──────────────────┬─────────────────────────┐
-│ 活动栏    │ 侧栏区            │ 主区                     │
-│ 46px 固定 │ visible=anyOpen  │ Dockview（flex:1）       │
-│          │ ┌──────────────┐ │                         │
-│ ◧ 导航    │ │ 上半区视图槽   │ │                         │
-│ ◧ 文件    │ │ (display:none │ │  page1 display:block    │
-│ ◧ 提交    │ │  保挂载)      │ │  page2 display:none     │
-│          │ ├──────────────┤ │                         │
-│          │ │ 下半区视图槽   │ │                         │
-│          │ │ (splitRatio) │ │                         │
-│ ⚙ 配置    │ └──────────────┘ │                         │
-└──────────┴──────────────────┴─────────────────────────┘
-```
+`window.__dockviewApi` 重指向只允许出现在三个位置：`switchToPageShared`（页面切换时立即重指已初始化页面）、`Workspace.handlePageApiReady`（页面首次初始化时重指）、`Workspace.onDeletePage`（删除页面后重指次页）。其他代码点通过 `getPageApi(pageId)` 访问指定页面的 API。
 
-- **pane1（活动栏）**：`preferredSize=46 minSize=46 maxSize=46`（`ACTIVITY_BAR_SIZE` 常量，`features/sideViews/sideBarState.ts`），渲染 `<ActivityBar />`（上区三视图按钮组 + 底部固定「配置」钮）
-- **pane2（侧栏区）**：`preferredSize=width minSize=WIDTH_MIN maxSize=WIDTH_MAX visible=anyOpen`，渲染 `<SideBarArea />`（内含垂直 Allotment 上下半区）。宽度经外层 Allotment `onChange` 同步到 `sideBar` store 持久化（`settings.json` 的 `sideBar.width` 段）
-- **pane3（主区）**：`minSize=200`，多 Dockview 实例按 `activePageId` 做 CSS `display:none/block` 显隐
-- **anyOpen**：由 `deriveLayout(open)` 纯推导——`hidden`→`false`，其余三态（single-top/single-bottom/split）→`true`
-- **侧栏区上下分割比例**：`splitRatio` 持久化于 `settings.json` 的 `sideBar.splitRatio` 段，由 `SideBarArea` 内垂直 Allotment 的 `onChange` 同步
-- 已删除旧六常量 `SIDEBAR_*`/`EXPLORER_*`，尺寸常量统一在 `src/features/sideViews/sideBarState.ts`
+### E2E 测试支持
 
-## 关键集成点
+- `window.__slterm_e2e_workspaceReady`：Workspace 挂载时同步设置（渲染阶段，非 `useEffect`），WDIO 轮询等待就绪。
+- `window.__dockviewApi`：始终指向当前活跃页面的 DockviewApi。
 
-- **`useLayout`** (`stores/layout.ts`)：只跟踪 `activePageId`，不持有布局数据
-- **`useProjects`** (`stores/projects.ts`)：Project → OperationPage 二级模型，持有布局和 cwd
-- **`useSideBar`** (`stores/sideBar.ts`)：侧栏视图状态（zones/open/width/splitRatio，NAV-07 默认三槽），Workspace 订阅 `open`/`width` 控制 pane2 可见性和宽度
-- **`panelRegistry`**：被 Workspace 传给 DockviewReact 的 `components` prop
-- **`ActivityBar`** (`features/sideViews/ActivityBar.tsx`)：活动栏组件，渲染于 pane1，消费 `sideViewRegistry` + `useSideBar`
-- **`SideBarArea`** (`features/sideViews/SideBarArea.tsx`)：侧栏区组件，渲染于 pane2，通过 `sideViewDefs` 注册的三条视图（nav/explorer/commit）**按需挂载切换（FE-21：隐藏视图卸载不保挂载，状态丢失语义 ADR-0001 已接受）**
-- **NavTree**（`features/navTree/NavTree.tsx`）：统一导航树（项目/页面/活跃会话/历史折叠节点），注册为 `nav` 视图（NAV-05）；页面切换入口 + CRUD 迁自 SidebarTree（NAV-06）
-- **ExplorerPanel**（文件浏览器）：活跃项目的文件树，注册为 `explorer` 视图。按钮跨区拖拽导致视图跨 pane 移动时组件重建（ADR-0001）
+### 旧格式兼容
 
-## E2E 测试支持
+`layoutSerde.ts` 的 `patchLegacyLayout` 处理早期布局缺失字段：
+- `component` → `contentComponent` 迁移
+- `grid.orientation` 缺失 → 默认 `"HORIZONTAL"`
+- `leaf.data.id` 缺失 → 从 `views[0]` 生成
+- 顶层 `activeGroup` 缺失 → 用第一个 leaf 的 id
 
-- `window.__slterm_e2e_workspaceReady`：Workspace 挂载时同步设置（渲染阶段，非 `useEffect`），WDIO 脚本轮询此标志等待就绪
-- `window.__dockviewApi`：始终指向当前活跃页面的 DockviewApi，E2E 脚本通过它创建面板/执行操作
+## 外部坑/红线
 
-## 终端页签自定义重命名（F8，右键菜单）
-
-- **入口**：`createGetContextMenu` 对终端面板（`panel.view.contentComponent === "terminal"`——**`panel.component` 不存在**；`view.contentComponent` 为 dockview 公开类型成员 `IDockviewPanelModel.contentComponent`，VER-01 核实）插入「重命名」项（7 项结构 `[新建终端, sep, 重命名, sep, close, closeOthers, closeAll]`）；claude 运行中（`TerminalRegistry.get(panel.id)?.agentSession != null`，菜单每次右键重新构建判断实时）→ `disabled` 置灰（dockview 原生支持）；菜单项视觉 = 自定义 `TabContextMenuItem`（UI-802：项 28px 圆角 5/hover SECONDARY_BG/危险项 ERROR_FG），容器样式经 `<style>` 注入（token 驱动）
-- **存储单一真值源**：`params.customTitle`（随布局 JSON 持久化，照 editor filePath 先例）。`applyRename(api, panel, newTitle, onLayoutChange)` 导出纯函数 = `updateParameters({...params, customTitle})` + `setTitle` + **显式 `onLayoutChange(saveLayout(api))`**——`setTitle`/`updateParameters` 均不触发 `onDidLayoutChange`（dockviewPanel.js:84-95），须显式保存
-- **恢复链路**：Dockview `toJSON` 输出 title + params、`fromJSON` 恢复；`rebuildAndRecomputeTitles` 重算编辑器标题 + **终端标题（B12 扩展）**——**无 customTitle 的终端面板用 `titleManager.getTerminalTitle(pageId)` 重算**（持久化 title 可能是瞬态值如 claude 运行中退出保存的 "claude"，重开页签必须回 terminal-N），customTitle 保留不重算 → 自定义名跨重启存活。`TerminalPanel` 挂载 `originalTitleRef = params.customTitle ?? api.title ?? "terminal"`（customTitle 优先）并订阅 `onDidParametersChange`（customTitle 同步）+ `onDidTitleChange`（**B12：重算标题同步——customTitle 存在或 agentSession 非空（命令运行中）时不捕获**）——OSC 133 D / 真退出信号恢复标题时用自定义名或重算名
-- **约束**：`titleManager` 计数器不动（新建终端仍按 `terminal-N` 递增，F8 不占用编号）；编辑器等非终端面板菜单无「重命名」
-
-## 页签标题集中管理（`titleManager.ts`）
-
-- 终端页签 = `terminal-N`（每页独立从 0 开始，关闭不重算；B12 后恢复的布局终端面板同样经 `getTerminalTitle` 消费编号——重启后从 0 重排与首开一致）
-- 编辑器页签 = 文件名；同名冲突 → 相对路径（相对 `Project.rootPath`）
-- 布局持久化时忽略保存的 `title`，从 `params.filePath` 重新计算
-- Save-As 通过 `slterm:file-saved-as` CustomEvent 通知 Workspace 层重算标题
-- 重复文件打开：`findExistingEditor` 查重 → 聚焦已有面板（不改布局）
-- `onDidRemovePanel` 监听面板关闭 → 注销 + 重算剩余面板标题
-- `onDeletePage` 在页面删除时清理该页所有标题注册和计数器
-- **页签状态图标**：`DefaultTab` 经 `params.tabStatus`（由 `TerminalPanel` 经 `api.updateParameters` 设置）渲染状态圆点（StatusDot，IC-03——原 `params.tabIcon` emoji/img 分支已退役）；`params.tabLogo`（F9 行为修订）在圆点后渲染 CLI 品牌 logo（跟随页签名显示，不依赖圆点）；文件型面板（editor/htmlviewer/gitshow/diff）经 `params.filePath` 渲染 FileIcon 彩色图标。非以上面板不设置此字段，无图标
-- **页签后缀（suffix）**：`EditorEntry` 含 `suffix?: string` 字段。`registerEditor(pageId, panelId, filePath?, suffix?)` 注册时传入后缀（如 `(git diff)`），`getFileEditorTitle` 和 `recomputeTitles` 在标题末尾拼接 suffix（拼接格式 `basename{suffix}`，无空格）。**suffix 保留**：冲突重算只改变 basename→相对路径，后缀保持不变（如 `index.ts(git diff)` → `src/index.ts(git diff)`）。**去重语义**：`findExistingEditor(pageId, filePath, suffix?)`——suffix 传入时仅匹配同 suffix 条目，不传时仅匹配无 suffix 条目（保证普通编辑器与 git 页签互不误聚焦，B10）
-
-## Dockview 事件结构注意事项
-
-- `api.onDidTitleChange`：回调接收 `TitleEvent { title: string }` → `event.title`
-- **`api.onDidParametersChange`**：回调直接接收 `Parameters` 对象（`Record<string, unknown>`），**不是** `{ params: Parameters }` 包裹 → `event.tabStatus`，**非** `event.params.tabStatus`
+- **xterm.js 不可二次 `open()`**：多实例架构因此不可改为单实例 + tab 切换。
+- **Dockview `onDidParametersChange` 扁平结构**：回调直接是 `Parameters`，不要写成 `event.params.xxx`。
+- **`panel.component` 不存在**：判断面板类型用 `panel.view.contentComponent`。
+- **新建终端编号延迟分配（FE-04）**：`nextPanelId()` 在菜单 action 执行时才调用，菜单构建期不消耗编号。
+- **重命名必须显式保存布局**：`setTitle`/`updateParameters` 不触发 `onDidLayoutChange`，须手动 `onLayoutChange(saveLayout(api))`。
+- **删除页面时 stopWatch**：`activePageId` 置 null 必须释放 watcher，否则 OS 句柄残留。
+- **renderer="always" 白名单**：仅 `terminal` 和 `htmlviewer`。editor/gitshow/diff 故意排除——CM6 重建无视觉闪屏，且大文件编辑器若始终挂载会显著增加内存开销。
 
 ## 测试模式
 
-测试文件位于 `src/__tests__/`：`layout-serde.test.ts`、`default-layout-format.test.ts`、`panel-registry.test.ts`、`title-manager.test.ts`、`pageapis.test.ts`、`workspace-page-dockview.test.tsx`、`workspace-defaulttab.test.tsx`、`workspace-header-actions.test.tsx`、`workspace-file-panel-types.test.ts`、`layout-switch.test.ts`、`startup-restore.test.ts`、`workspace*.test.tsx`。
-
-### 技术栈
-
-- Vitest（jsdom）+ React Testing Library
-- Dockview 组件全量 mock：`vi.mock("dockview-react", () => ({ DockviewReact: vi.fn(() => null) }))`
-- Allotment 布局容器 mock
-- Zustand stores 使用真实实现 + `beforeEach` 种子数据
-
-### 布局序列化测试
-
-`layout-serde.test.ts`（26 用例）：
-- **旧格式修补**：`patchLegacyLayout` 处理 `component`→`contentComponent` 迁移、缺失 `grid.orientation` 默认值、`leaf.data.id` 缺失生成、`activeGroup` 缺失填充
-- **白名单过滤**：`PANEL_TYPES` 外类型的面板不被恢复（mock `isValidPanelType` 对齐真实 `PANEL_TYPES`）
-- **深拷贝验证**：`toJSON` 输出不与输入共享引用
-- 纯函数测试，无需 React 渲染环境
-
-`default-layout-format.test.ts`（10 用例）：
-- `makeEmptyLayout` 空布局验证：返回 `{}`、独立对象、JSON 往返一致性、纯对象检查
-
-### 面板注册表测试
-
-`panel-registry.test.ts`（29 用例）：
-- 三个面板注册验证（terminal/editor/htmlviewer）
-- `PANEL_TYPES` 常量完整性 + `isValidPanelType` type predicate（大小写敏感）
-- `FILE_PANEL_TYPES` Set 语义（编辑器 + 文件预览面板）
-
-### 页签标题测试
-
-`title-manager.test.ts`（47 用例）：
-- `createTitleManager` 工厂，验证终端 `terminal-N` 递增、编辑器 basename/同名冲突相对路径
-- `findExistingEditor` 查重、`registerAndRecompute` 重算、`handleSaveAs` 路径变更
-
-### 页面 API 与 PageDockviewHost 测试（WRK-01/02）
-
-`pageapis.test.ts`（19 用例）：
-- `registerPageApi`/`unregisterPageApi`/`getPageApi` 注册表 + `switchToPageShared`（setProjectRoot 前置）重指向不变量 + `switchToPageAndFocus` 轮询聚焦（**FE-26：AbortSignal 中止轮询**、FE-09 会话反查）
-
-`workspace-callback-cache.test.tsx`（3 用例，FE-33）：
-- `pageCallbacksRef` 按 pageId 惰性创建 + 缓存（getOrCreate）——同一 pageId 跨渲染回调引用不变，不同 pageId 隔离，页面增删不影响既有回调引用
-
-`workspace-page-dockview.test.tsx`（7 用例，WRK-01）：
-- 渲染真实 `PageDockviewHost`（非 stub）：`handleReady` 布局恢复、restoreGuardRef 写回抑制、onDidRemovePanel 清理
-
-`workspace-file-panel-types.test.ts`（14 用例）：
-- `FILE_PANEL_TYPES` 与 `isAlwaysRenderPanel` 分派矩阵（htmlviewer 等预览面板 renderer="always"）
-
-`workspace-header-actions.test.tsx`（23 用例）：
-- 分屏 + 按钮 & 右键菜单 addPanel 行为：非聚焦分屏点击 + 按钮或右键"新建终端"时，新面板创建在点击的分屏而非聚焦分屏。直测 `createRightHeader`/`createGetContextMenu` 工厂函数，不渲染完整 Dockview 树；C5-C10 覆盖重命名项（F8：终端 7 项结构/非终端 5 项/action 派发 `onRenameRequest(panel)`/agentSession 存在 disabled，`TerminalRegistry._reset()` 隔离）；C11 覆盖 FE-04（连续两次构建菜单不消耗编号——执行新建仍从 terminal-p1-0 起，连续递增不重复）
-
-新增测试文件（F8）：`terminal-rename-apply.test.ts`（5 用例，直测 `applyRename` 纯函数）+ `terminal-rename-dialog.test.tsx`（14 用例，照 agent-history-action-dialog 模式）
-
-`layout-switch.test.ts`（7 用例）+ `startup-restore.test.ts`（8 用例）：
-- 页面切换/启动恢复流程（`App.tsx` 启动恢复 lastPage：先 `await setProjectRoot` 再 `setActivePage`，DBG-6）
-
-### 多实例与 E2E 标记测试
-
-`workspace-multi-instance.test.tsx`（6 用例，WRK-09）：
-- 多页面切换时 Dockview 实例各自存活（不销毁重建，实例 identity 断言）
-- CSS 显隐控制 + `initializedPages` 惰性初始化
-- 断言使用 `not.toMatch(/terminal-/)`（面板 ID 格式 `terminal-{pageId}-{seq}`，pageId 以字母开头——早期 `/terminal-\d/` 要求数字紧跟在 terminal- 后，永不匹配）
-- 需种子 `useProjects`（多个页面）+ `useLayout`（活跃页面 ID）
-
-`workspace-e2e-ready.test.tsx`（4 用例）：
-- `window.__slterm_e2e_workspaceReady` 在渲染阶段（非 `useEffect`）同步设置
-- 未挂载不存在、卸载保留、mock 全部子组件
-
-`workspace-switch-order.test.tsx`（14 用例，DBG-9）：
-- `switchToPage` 时序契约：`setProjectRoot` 先于 `setActivePage` 生效
-- `setProjectRoot` 失败时降级（`console.error` + 仍完成切换）
-- SEC-01 effect 兜底验证 + 现有测试兼容性排查
-
-`workspace.test.tsx`（4 用例）：
-- Workspace 根组件三栏布局渲染（Allotment 结构 + pane 尺寸约束）
-
-### DefaultTab 测试（UI 重设计 TAB-01/02/03）
-
-`workspace-defaulttab.test.tsx`（34 用例，WRK-05）：
-- 渲染**生产 `DefaultTab`**（非手写 Mock，经 `PageDockviewHost.tsx` 导出）：**`tabStatus` 状态圆点（IC-03：StatusDot 按状态渲染——working 绿/attention 黄/done 灰/error 红，null 不渲染）**、**FileIcon 文件型页签（TAB-03：filePath 存在即渲染，按扩展名取色；与圆点/logo 互斥）**、`onDidParametersChange` 事件结构回归（回调直接接收扁平 `Parameters`，`event.tabStatus` 而非 `event.params.tabStatus`——漂移即失败）、`onDidTitleChange` 标题更新、**关闭按钮 hover 显隐（TAB-02：opacity 0 + pointerEvents none → hover 显现）**、**激活指示条（TAB-01：isActive && isGroupActive 底部 2px FOCUS_BORDER）**、**tabLogo 跟随页签名渲染（F9 行为修订：tabStatus null 仍渲染/仅 tabLogo 动态出现）**
-
-## 旧格式兼容
-
-`layoutSerde.ts` 的 `patchLegacyLayout` 处理早期 `makeDefaultLayout` 产出的缺失字段：
-- `component` → `contentComponent` 迁移
-- `grid.orientation` 缺失 → 默认 `"HORIZONTAL"`
-- `leaf.data.id` 缺失 → 从 `views[0]` 生成 `group-{view}`
-- 顶层 `activeGroup` 缺失 → 用第一个 leaf 的 id
+- 测试文件位于 `src/__tests__/`：`layout-serde.test.ts`、`default-layout-format.test.ts`、`panel-registry.test.ts`、`title-manager.test.ts`、`pageapis.test.ts`、`workspace*.test.tsx`。
+- **Dockview 全量 mock**：`vi.mock("dockview-react", () => ({ DockviewReact: vi.fn(() => null) }))`。
+- **Allotment 布局容器 mock**；Zustand stores 使用真实实现 + `beforeEach` 种子数据。
+- **布局序列化**：`layout-serde.test.ts` 测旧格式修补、白名单过滤、深拷贝。
+- **页签标题**：`title-manager.test.ts` 测 terminal-N 递增、basename/冲突相对路径、suffix 匹配。
+- **多实例**：`workspace-multi-instance.test.tsx` 测 Dockview 实例各自存活、CSS 显隐、`initializedPages` 惰性初始化。
+- **DefaultTab**：`workspace-defaulttab.test.tsx` 渲染生产 `DefaultTab`（非 mock），重点断言 `tabStatus` 圆点、`tabLogo` 跟随页签名、`onDidParametersChange` 扁平事件结构。
+- **切换时序**：`workspace-switch-order.test.tsx` 测 `setProjectRoot` 先于 `setActivePage` 生效。
