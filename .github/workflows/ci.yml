@@ -10,6 +10,8 @@ on:
 jobs:
   build-and-test:
     runs-on: windows-latest
+    # TQ-CI-06：job 级兜底超时（全步骤聚合最长路径：L1 + E2E 构建 + L4）
+    timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@v5
@@ -18,6 +20,8 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version: '22'
+          # TQ-CI-07：npm 缓存（lockfile 在仓根 package-lock.json，setup-node 默认识别）
+          cache: 'npm'
 
       - name: Setup Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -25,7 +29,13 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
 
+      # TQ-CI-03：rustfmt 门禁（setup-rust-toolchain 默认安装 rustfmt，无需额外步骤）
+      - name: Rustfmt check
+        timeout-minutes: 15
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+
       - name: Clippy check
+        timeout-minutes: 15
         run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
 
       # Rust 依赖漏洞审计（D10/TE-13）：advisory-db 由 CI 网络拉取，本地网络受限时跳过。
@@ -43,12 +53,15 @@ jobs:
 
       # 死代码门禁（D10/TE-13）：基于 S01 所建 knip.json 检查未使用依赖与导出。
       - name: Dead code check (knip)
+        timeout-minutes: 15
         run: npx knip --production
 
       - name: Lint check
+        timeout-minutes: 15
         run: npx eslint src/
 
       - name: TypeScript type-check
+        timeout-minutes: 15
         run: npx tsc --noEmit
 
       - name: Frontend build
@@ -69,9 +82,11 @@ jobs:
           Write-Host "OK: 生产 dist 不含 E2E helper"
 
       - name: Frontend unit tests (L2)
+        timeout-minutes: 20
         run: npm test
 
       - name: Terminal render tests (L3)
+        timeout-minutes: 20
         run: npm run test:l3
 
       - name: Backend build
@@ -80,13 +95,54 @@ jobs:
 
       - name: Backend tests (L1)
         working-directory: src-tauri
+        timeout-minutes: 30 # TQ-CI-06：ConPTY 死锁红线保护（--test-threads=1 串行跑得久）
         run: cargo test -- --test-threads=1
 
       # E2E 二进制：设 VITE_E2E=1 使前端 vite build 保留 E2E helper（否则 wdio 卡"Workspace 未就绪"）
       - name: Tauri debug build (E2E-enabled)
+        timeout-minutes: 60
         run: npm run tauri build -- --debug --no-bundle
         env:
           VITE_E2E: '1'
 
       - name: E2E tests (L4)
+        timeout-minutes: 60
         run: npm run wdio
+
+  # flakiness 观察面（TQ-E-09）——WDIO_RETRIES=0 关闭用例级重试，暴露真实 flakiness；
+  # continue-on-error 不阻断合并，失败人工巡检。构建段复用 build-and-test（checkout/node/rust/缓存/npm ci/tauri build）。
+  e2e-flakiness-probe:
+    runs-on: windows-latest
+    continue-on-error: true
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      # E2E 二进制：设 VITE_E2E=1 使前端 vite build 保留 E2E helper（否则 wdio 卡"Workspace 未就绪"）
+      - name: Tauri debug build (E2E-enabled)
+        timeout-minutes: 60
+        run: npm run tauri build -- --debug --no-bundle
+        env:
+          VITE_E2E: '1'
+
+      - name: E2E tests (L4, no retries)
+        timeout-minutes: 60
+        run: npm run wdio
+        env:
+          WDIO_RETRIES: '0'

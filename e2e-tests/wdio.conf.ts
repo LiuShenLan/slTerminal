@@ -36,10 +36,11 @@ export const config: WebdriverIO.Config = {
     ui: 'bdd',
     timeout: 60000,
     // E2E-15：用例级重试（mocha --retries），单条 flaky 不拖垮整轮。
-    // 同一 session 内重跑失败用例（成本最低）；E2E-12 杀 app 用例在用例内
-    // this.retries(0) 显式关闭（重试时 session/app 已不可用）。
+    // 默认 1；WDIO_RETRIES=0 时关闭——CI 观察面 job（e2e-flakiness-probe）用它暴露
+    // 真实 flakiness（TQ-E-09）。同一 session 内重跑失败用例（成本最低）；E2E-12 杀 app
+    // 用例在用例内 this.retries(0) 显式关闭（重试时 session/app 已不可用）。
     // 不用 specFileRetries（整文件重跑成本高，且与 E2E-12 杀 app 语义冲突）。
-    retries: 1,
+    retries: Number(process.env.WDIO_RETRIES ?? "1"),
   },
 
   // 每个 spec 开始前清空项目 store——单 session 共享 app 实例（见文件头注释），
