@@ -19,7 +19,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **浅合并**：`save_settings` 只写前端传入的顶层 slice，后端浅合并 top-level 键，各 store 各写各的互不覆盖；
 - **`SETTINGS_SAVE_LOCK`**：前端三 store 启动时几乎同时触发 debounced 保存，`spawn_blocking` 闭包持锁串行化读-合并-写，避免 Windows persist rename 时句柄占用导致 PermissionDenied（SPE-06）；
-- **SEC-11**：顶层键白名单 `["fontSize", "keybindings", "sideBar", "colorScheme"]` + 序列化后大小上限 1MB。
+- **SEC-11**：顶层键白名单 `["fontSize", "keybindings", "sideBar", "colorScheme", "planBalance"]` + 序列化后大小上限 1MB。`planBalance` 为 F10 轮询间隔键（手改文件，读取侧在 plan_balance 模块 `resolve_poll_interval`，默认 60，越界/缺失/损坏回退 60s）。
 
 ### projects.rs — exe 同级 JSON 绕过沙箱
 

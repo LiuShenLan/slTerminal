@@ -21,7 +21,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Event 模式
 
-`onFsEvent` / `onAgentEvent` 封装 Tauri `listen(...)`，返回 unsubscribe 函数。调用方负责在卸载时取消订阅。
+`onFsEvent` / `onAgentEvent` / `onPlanBalanceUpdated` 封装 Tauri `listen(...)`，返回 unsubscribe 函数。调用方负责在卸载时取消订阅。
 
 ### PTY 命令归属校验（SEC-08）
 
@@ -45,6 +45,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `hooksConfig.ts`：C13-1 配置编辑（`agent_hooks_config_read` / `agent_hooks_config_write`）。
 
 `writeHooksConfig` 传 hooks 子树，后端 **read-modify-write merge**（替换/插入 hooks 键，保留 permissions/env 等其他字段）。user 层不传 `projectPath`；project/local 层必须传（后端沙箱校验后拼接 `.claude/settings.json` / `.claude/settings.local.json`）。
+
+### planBalance 命令（F10）
+
+- `getPlanBalance`：挂载时拉取当前快照（后端尚未有快照 → 空数组）。
+- `refreshPlanBalance`：执行一轮拉取，**恒 Ok 返回最新快照**——单来源失败按规格 §6 保留旧值不整体 Err，仅后端 spawn_blocking join 失败才 Err（D6）。
+- `onPlanBalanceUpdated`：订阅 `plan-balance-updated` 事件；后端快照**有变化才推送**（整体 PartialEq 比较，含 updated_at——成功查询必刷新 updated_at 即视为变化；失败保留旧值不推送，D5）。
 
 ### agent history 命令（MC-303/306）
 

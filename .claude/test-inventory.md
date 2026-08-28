@@ -2,13 +2,13 @@
 
 > **本文档是项目用例数唯一真值源。** 所有 CLAUDE.md、README、CI 配置中引用的用例数均以此文件为准。更新测试后必须同步本文档。
 
-全量 **3634** 用例（Rust 742 + 前端 2710 + L3 142 + E2E 40），2026-08-23 校准。
+全量 **3731** 用例（Rust 794 + 前端 2755 + L3 142 + E2E 40），2026-08-28 校准。
 
 > **登记纪律（TQ-CI-01）**：改测试后同步本文件——L1 以 `cargo test` 实跑总数 + `grep -c '#[test]'` 双核对；L2 以 `npm test` 实跑（Vitest 报告）为准；段小计 = 段内行级用例数之和（逐段核对 it.each/工厂展开）。三处（表头/段头/段小计）必须一致。
 
 > **计数口径**：
-> - L1 以 `grep -c '#[test]'` 统计的 `#[test]` 属性数为准（34 文件 742）。
-> - L2 以 `npm test` 实跑（Vitest 报告）为准，it.each/describeIpcContract 工厂按展开后计入（156 文件 2710）。
+> - L1 以 `grep -c '#[test]'` 统计的 `#[test]` 属性数为准（39 文件 794）。
+> - L2 以 `npm test` 实跑（Vitest 报告）为准，it.each/describeIpcContract 工厂按展开后计入（159 文件 2755）。
 > - L3 以 `npm run test:l3` 实跑为准（8 文件 142）。
 > - L4 以 spec 内 `it(`/`it.skip(` 计数为准（9 spec，40 用例，38 active + 2 skip）。
 > - L2 与 L3 独立运行：`vitest.config.ts` include 仅 `src/__tests__/**`，L3 走 `vitest.l3.config.ts`。
@@ -32,6 +32,7 @@
 | `spawn.rs` 容量超限 kill 清理与 `conpty_api.rs` vendor 提取/加载回退的残余 Win32 分支 | 清理段为 I/O + 平台 API 组合，不可纯函数化；上限判定已由 `pty_capacity_*` 用例锁死 | L1 `pty_capacity_*` 3 例 + `join_with_timeout` 3 例 + `pty_integration_tests` 真实 ConPTY 往返 | TQ-COV-03 |
 | `editor.e2e.ts` dirty→clean 用例（外部写盘 → watcher → 编辑器 auto-reload） | Windows notify 环境级故障（2026-08-23 实证，非代码缺陷）：同机 L1 notify 测试通过，页面内写入不产生 fs-event | reload 逻辑由 L2 `editor-confirm.test.ts` + `use-code-mirror-reload-error.test.ts` 覆盖；修复环境后复跑验收 | 2026-08-23 实证登记 |
 | Rust 行覆盖 88.20%（llvm-cov 含测试代码口径） | 目标 90% 差 1.8pp；残余缺口集中 PTY Win32 分支 + main.rs 结构性零覆盖 + 编译器生成物计数缺失 | 重点文件已达标或逐条登记豁免（TQ-COV-01/03/06 + git/CLAUDE.md 豁免表） | TQ-COV 收尾登记 |
+| plan_balance 真实 HTTP 查询（ureq fetch）与 tokio 轮询任务本体 | 真实外部 API 依赖 + Tauri 运行时（规格 §3 不做 L4） | 解析与状态机 L1 全覆盖（罐装 JSON/参数化编排）+ L2 UI 四场景 + 人工实测（真实账号一轮） | F10 |
 
 > 原豁免表中 `FileWatcher::start`/`notify_watch` 与 `claude_history` 命令包装两项已按 D6 从豁免重分类为补测，不再列入豁免表。  
 > **SEC-17 豁免已撤销（TQ-COV-05 翻案）**：`tracing::warn!(target: "audit")` 已由 `tracing-test` 断言锁死，豁免行删除。
@@ -54,7 +55,7 @@
 | ⑤ | L2 | **E2E helper 行为契约**——验证 `__slterm_e2e_createProject` 等 helper 的契约，非真实 App 初始化逻辑 | 13 P-14 |
 | ⑥ | L2 | **浅层组件定位**——`editor.test.tsx` mock `useCodeMirror`，定位为组件集成契约测试，真实编辑器行为由 `use-code-mirror.test.ts` 等覆盖 | 07 G1/G2 |
 
-## L1 — Rust 单元/集成测试（34 文件 / 742 用例）
+## L1 — Rust 单元/集成测试（39 文件 / 794 用例）
 
 运行：`cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1`
 
@@ -83,7 +84,7 @@
 | `src-tauri/src/hooks/claude/config.rs` | 51 | Layer 枚举/hooks 子树形态/语义校验/审计日志；BE-18/SEC-05/SEC-17/TQ-COV-05 |
 | `src-tauri/src/hooks/claude/mod.rs` | 2 | HomeDirGuard/B15 reinject 路径正确性 |
 | `src-tauri/src/app_dir.rs` | 7 | 应用数据目录解析/LoadResult 形态/测试守卫；BE-14/BE-16 |
-| `src-tauri/src/settings.rs` | 25 | 设置持久化/浅合并/并发/大小校验；SPE-01/SPE-05/SPE-06/BE-14/SEC-11 |
+| `src-tauri/src/settings.rs` | 26 | 设置持久化/浅合并/并发/大小校验/planBalance 键放行；SPE-01/SPE-05/SPE-06/BE-14/SEC-11/F10 |
 | `src-tauri/src/projects.rs` | 21 | 项目数据持久化/ID/路径校验；SPE-02/BE-14/SEC-11 |
 | `src-tauri/src/error.rs` | 9 | AppError 序列化/Display/From/ConfigParse；SPE-03/BE-13/BE-15 |
 | `src-tauri/src/lib.rs` | 4 | ping/build number/panic hook 写日志；TQ-COV-01 |
@@ -93,6 +94,11 @@
 | `src-tauri/src/agent_history/mod.rs` | 21 | DTO serde/聚合/命令包装/force 通道；MC-302/303/304/BE-19 |
 | `src-tauri/src/agent_history/claude/mod.rs` | 4 | TitleSource serde/ScanRootGuard |
 | `src-tauri/src/agent_history/provider.rs` | 2 | CliHistoryProvider trait/注册表；MC-303/304 |
+| `src-tauri/src/plan_balance/mod.rs` | 18 | DTO serde 键集合/merge_slot/poll_once 编排/轮询间隔/命令核心；F10 |
+| `src-tauri/src/plan_balance/source.rs` | 8 | resolve_env 纯函数/命令层 home 注入；F10 |
+| `src-tauri/src/plan_balance/query.rs` | 9 | URL 归一化/匹配查找/注册表序；F10 |
+| `src-tauri/src/plan_balance/deepseek.rs` | 6 | 响应解析纯函数（罐装 JSON）；F10 |
+| `src-tauri/src/plan_balance/kimi.rs` | 10 | 双窗解析/触顶/全有或全无；F10 |
 | `src-tauri/tests/pty_integration_tests.rs` | 7 | 真实 ConPTY 往返/OSC cwd/resize/kill/自定义 spawn/隔离/env |
 
 > `pty/mod.rs`、`pty/win_build.rs`、`main.rs` 不含 `#[test]`。git/mod.rs 测试已按 GIT-12 全量拆出至 `tests/`。env 测试依赖 `--test-threads=1`。
@@ -105,11 +111,11 @@
 
 本地开发机（已开开发者模式）为真实覆盖来源；CI runner 未开权限时上述分支覆盖记为「不确定」。
 
-## L2 — 前端单元/集成测试（156 文件 / 2710 用例）
+## L2 — 前端单元/集成测试（159 文件 / 2755 用例）
 
 运行：`npm test`
 
-### IPC 层（8 文件 / 171 用例）
+### IPC 层（9 文件 / 183 用例）
 
 | 文件 | 用例 | 覆盖要点 |
 |------|------|---------|
@@ -121,6 +127,7 @@
 | `src/__tests__/ipc-ping.test.ts` | 2 | `ping()` wrapper |
 | `src/__tests__/notification.test.ts` | 9 | toast 通知静默/权限；IHE-02 |
 | `src/__tests__/app-error.test.ts` | 26 | `parseAppError`/`getErrorMessage` 全变体；FE-02/BE-15 |
+| `src/__tests__/ipc-plan-balance-contract.test.ts` | 12 | planBalance 两命令四维契约/onPlanBalanceUpdated 解包/DTO 键集合；F10 |
 
 ### 终端面板（17 文件 / 282 用例）
 
@@ -229,13 +236,15 @@
 | `src/__tests__/explorer-virtualization.test.tsx` | 8 | FileTree 虚拟化/滚动跟随；FE-30/FE-40/TQ-B-01 |
 | `src/__tests__/explorer-keyboard-panel.test.tsx` | 6 | ExplorerPanel 键盘动作链路；TQ-COV-09 |
 
-### 导航树（3 文件 / 72 用例）
+### 导航树（5 文件 / 105 用例）
 
 | 文件 | 用例 | 覆盖要点 |
 |------|------|---------|
 | `src/__tests__/nav-tree.test.tsx` | 45 | 统一导航树层级/选中/搜索/右键菜单/hover；NAV-01~04/09/FE-03/TQ-COV-09/10 |
 | `src/__tests__/nav-history-row.test.tsx` | 16 | 历史行渲染/状态/logo/hover；FE-25/MC-311/UI-501 |
 | `src/__tests__/nav-tree-history.test.tsx` | 11 | 历史折叠节点/归属/恢复；NAV-03/08/FE-16/FE-19 |
+| `src/__tests__/plan-balance-model.test.ts` | 22 | 货币符号/logo 路径/重置时间格式化/行文案四场景/tooltip；F10 |
+| `src/__tests__/plan-balance-footer.test.tsx` | 11 | footer 四场景渲染/隐藏态/初始拉取/事件订阅/点击节流/logo onError/tooltip；F10 |
 
 ### 侧栏视图（7 文件 / 161 用例）
 
@@ -422,3 +431,4 @@ embedded WDIO 无法投递 OS 级按键；所有键盘用例改用页面内 disp
 ## 版本校准
 
 - 2026-08-23：全量 3634（Rust 742 + 前端 2710 + L3 142 + E2E 40）。历史变更日志已移除，旧版本变更详见 git log。
+- 2026-08-28：全量 3731（Rust 794 + 前端 2755 + L3 142 + E2E 40）。F10 新增 plan_balance 五文件 51 例 + settings.rs +1、前端三文件 45 例。
