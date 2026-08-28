@@ -93,6 +93,8 @@ description: 当需要对代码仓做系统性审查并制定分阶段变更计�
 
 输入为故障分析报告（而非全量 review）时，除逐故障修复项外，清单必须含以下五类项（本次 DBG-1~11 实证，缺一则同类故障必复发）：
 
+**根因实证前置**（输入为故障现象描述而非已定位报告时的先行条件）：列清单前必须实证复现故障 + 实证验证修复假设（最小命令级实验），复现/验证命令与关键输出写进清单根因节。实证：B17——win11 CondaError 本机逐字复现、win10 静默经 `conda.bat` 源码实读 + PATH 收窄实验复现、修复方案 pwsh/powershell 双路径预验证，计划一次通过零返工。
+
 1. **波及面全量调用点**：从分析报告精确引用全部调用点（含边缘调用点，如 `App.tsx` 关窗清理 kill），逐项成清单条目，verify 逐点机械断言（DBG-2 = 8 处调用点逐一列出）。不接受"大致位置"。
 2. **契约守卫测试**：跨边界契约（IPC 命令/参数、DTO 字段）变更必配 payload **键集合精确匹配**测试（DBG-4）——存在性断言防不住字段增删漂移。
 3. **mock 边界盲区认知**：mockIPC 只守 JS 侧形状——后端必填参数缺失时 invoke 必 reject 且被 `.catch` 吞掉 = 运行时静默失败、测试全绿（故障B 正是如此漏过四级测试）。契约类清单项的 verify 不得仅以 mock 层测试通过为据。
@@ -139,6 +141,7 @@ description: 当需要对代码仓做系统性审查并制定分阶段变更计�
 8. 同一参数取值跨文件只在一处定义——execution-plan 等引用脚本头注释，不复制值（实证：fix-loop constraints 三处矛盾）
 9. 无法自动化验证的假设已标人工验证点 + 收尾实测项
 10. 偏离规则处已写明豁免/替代理由
+11. markdown 产物内无反斜杠+反引号转义残留（grep 零命中——转义纪律仅限 JS 模板字符串，md 禁转义）
 
 #### Step 4.5: 计划评审（review）处理
 
@@ -160,6 +163,7 @@ Stage 脚本与 verify 文件是本 skill 的最终产物，编写时遵守以�
 - **路径约定一次写对**：脚本与 verify 文件统一落盘 `docs/<task>/workflows/`（复数），所有文档/脚本内引用一律写仓根相对全路径 `docs/<task>/workflows/...`——禁止单数 `docs/workflow/`、禁止裸相对 `workflows/`（实证：按单数落盘后统一改名，牵连 26 处 JS 引用 + 9 处计划文档引用全量替换）
 - 脚本落盘为文件（`docs/<task>/workflows/stage-NN-*.js`），用 `Workflow({ scriptPath })` 调用，不内联——便于预检与 resume
 - **prompt 模板字符串内的 Markdown 行内代码反引号必须转义**（`\``）——未转义反引号会终止 JS 模板字符串（实证：stage-07 脚本内未转义的 `` `#[test]` `` 报 `SyntaxError: Invalid or unexpected token`，预检首轮 7/8 抓出）
+- **转义纪律仅限 JS 模板字符串**——markdown 产物（checklist/stages/verify/*.md）内反引号直接书写，禁止转义（实证：B17 计划期把 JS 转义习惯带入 checklist.md，产出字面反斜杠转义，自查修正）；md 产物落盘后 grep 反斜杠+反引号应零命中
 - 首次调用前**语法预检**：Workflow 运行时允许顶层 `return`，标准 `node --check` 误判非法——用 `new Function` 包 async 函数体仅编译不执行。**照抄以下命令（`*` 通配各任务目录，一条命令覆盖全部任务脚本），不凭印象重写**（转写漏步实证两次 SyntaxError：漏"剥 export"→`Unexpected token 'export'`（`new Function` 不认 ESM）；漏"包 async 函数体"→`await is only valid in async functions`）：
   ```bash
   for f in docs/*/workflows/*.js; do

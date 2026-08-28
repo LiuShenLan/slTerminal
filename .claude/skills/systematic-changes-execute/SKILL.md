@@ -52,7 +52,7 @@ Workflow 返回后，主 agent 检查 `verifyResult.allFixed`：
 
 - `git add` 路径限定：从 execution-plan.md 读取本任务的枚举清单（其由 plan 阶段自 config.json `gitAddPaths` 写入，含 `.claude/` 精确文件——文档 Stage 会改根 CLAUDE.md），不用 `-A`；commit 前 `git status` 甄别预期外改动
 - commit message 以 stages 文档各 Stage 原文为准（文档 Stage 是 `docs:` 前缀，非一律 `refactor:`）
-- 时间盒：后台运行期间每 15-20 分钟查 /workflows；单 Stage 超 60 分钟无进展 → `TaskStop` + 报告用户
+- 时间盒：Workflow 完成有 harness 自动通知，等待期间无需轮询/定时提醒（实证：B17 执行期设 cron 提醒完全多余，workflow 数分钟内完成自动通知）；仅在通知迟迟未到、单 Stage 超 60 分钟无进展时查 /workflows 后 `TaskStop` + 报告用户
 - 文档同步类 agent 必须先读 `git log`/diff 再动笔，禁凭记忆写文档
 
 #### 5.7 执行期工具故障降级（实证）
@@ -70,6 +70,8 @@ Workflow 返回后，主 agent 检查 `verifyResult.allFixed`：
 
 所有 Stage 完成后：
 - 最终全量构建验证（含 L3/L4，不只每 Stage 的 L1/L2 门禁）
+- **全量验证命令日志落盘**：长输出命令（e2e/wdio 等）完整输出重定向到日志文件再提取摘要——禁止 `cmd 2>&1 | tail` 裸管道（管道末命令遮蔽真实退出码 + 截断丢失败摘要。实证：B17 收尾 `npm run e2e 2>&1 | tail -40` 报 exit 0 但实际 1 failed，失败详情被截断，被迫重跑 wdio 三分钟）
+- **失败三分支判定**：收尾遇测试失败先定性再行动——① 重跑判定 flaky（wait-for 超时类，实证：B17 收尾 L2 首跑 1 例超时重跑全绿）；② 失败面与变更面相关性（本变更零前端代码 → 前端单测失败必非本次回归）；③ L4 失败先对照 `.claude/test-inventory.md` 豁免表——已登记环境故障不算回归（实证：editor.e2e.ts dirty→clean 命中 2026-08-23 Windows notify 豁免行）
 - 抽查根 CLAUDE.md 与最终代码一致性
 - 归档 commit：review 报告 + 计划文档一并提交
 - 输出收尾报告：Stage commit 列表、最终测试用例数、未修复项（若有，含原因）
@@ -86,3 +88,4 @@ Workflow 返回后，主 agent 检查 `verifyResult.allFixed`：
 - 对已正常结束的 run 用 `resumeFromRunId` 救 no-return——全命中缓存死循环；verify 阶段改 inline spawn
 - `git add -A`——必须路径限定，且枚举含 `.claude/` 精确文件
 - 并行 agent 各自跑资源共享型测试（如含 PTY spawn 的 `cargo test`）——跨进程并发死锁；脚本 prompt 已含此纪律，主 agent 不得另行指示
+- 门禁/全量验证用 `cmd 2>&1 | tail` 裸管道——末命令遮蔽真实退出码（实证：wdio 1 failed 报 exit 0）；日志落盘文件再提取摘要
