@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 存在理由
 
-`src-tauri/src/plan_balance` 是 F10 编码套餐余量查询模块：读 user 层 `~/.claude/settings.json` 的 env 判定套餐（当前 deepseek/kimi 两家的 Anthropic 兼容端点），定时轮询外部 API，把余量快照推给前端。外部 API 语义（两套餐响应结构差异、kimi 月限额触顶态、全有或全无解析）、token 安全红线与轮询编排口径无法从代码自证，必须文档化。
+`src-tauri/src/plan_balance` 是 F10 编码套餐余量查询模块：读 user 层 `~/.claude/settings.json` 的 env 判定套餐（当前 deepseek/kimi 两家的 Anthropic 兼容端点），定时轮询外部 API，把余量快照推给前端。外部 API 语义（两套餐响应结构差异、kimi 配额耗尽冻结态、全有或全无解析、2026-08 实证修正的字段漂移）、token 安全红线与轮询编排口径无法从代码自证，必须文档化。
 
 ## 关键约束与决策
 
@@ -40,15 +40,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **token 不出后端**：DTO 六键 serde 键集合精确匹配测试锁死（无 token 字段）；本模块所有 tracing!/Err 构造消息禁止插值 token 与 Authorization 头（ureq 错误 Display 不含请求头，构造错误消息时禁止自行拼接）。
 - **URL 归一化只小写化 + 去尾斜杠**（规格字面）：不加 trim，`trim_end_matches('/')` 不处理空白。
-- **kimi 数值字段按字符串解析**（规格 §5.2 口径）：`used`/`limit`/`totalQuota.used` 均按字符串读——实证偏差（如 API 返回数字）走人工实测确认，不擅自放宽。
-- **kimi 全有或全无**：非触顶时任一窗口解析失败 → 整体 Err（防窗口重置瞬间 limits 不完整致 5h 段丢失）。
-- **kimi 触顶判定**：`totalQuota.used == "1"`（字符串比较）→ frozen=true，不要求窗口解析成功。
+- **kimi 结构实证（2026-08-28 curl 实测 + 社区审计，修正规格 §5.2 假定）**：`GET /coding/v1/usages` + `Authorization: Bearer`（非 X-Kimi-Authorization）；5h 窗数值（`used`/`limit`/`remaining`/`resetTime`）承载于 **`limits[i].detail` 内层**（外层无）；7d 窗为顶层 `usage` 对象；`remaining` 恒在、`used` 可缺（两种账号形态均实证）→ 剩余百分比 **remaining 优先**、used 回退；`totalQuota` **无 `used` 字段**（实测可为空对象 `{}`）。真实响应快照锚点：`kimi.rs::parse_real_response_snapshot`。
+- **kimi 数值字段按字符串解析**（实证口径）：`used`/`limit`/`remaining` 均为字符串，`.as_str()` 读取——若 API 返回数字形态，须先实测确认再放宽。
+- **kimi 全有或全无**：非冻结时任一窗口解析失败 → 整体 Err（防窗口重置瞬间 limits 不完整致 5h 段丢失）。
+- **kimi 冻结判定（实证修正）**：`totalQuota.remaining` 字符串 parse 后 ≤ 0 → frozen=true（配额耗尽冻结）；totalQuota 缺失/空对象/remaining 非数字或非 0 → 未冻结；冻结时不要求窗口解析成功（windows=None 仍 Ok）。
 - **fetch 必须 spawn_blocking**：ureq 是纯阻塞 HTTP，硬约束 #3。
 
 ## 测试模式
 
 - `merge_slot` / `poll_once_with` / `resolve_poll_interval` 全部参数化/注入，L1 不触网不触盘：`poll_once_with` 的 resolve/fetch 闭包注入；`resolve_poll_interval` 经 `AppDataDirGuard` 注入 tempdir。
-- 解析纯函数（`parse_deepseek_balance` / `parse_kimi_usages` / `resolve_env`）罐装 JSON 全测。
+- 解析纯函数（`parse_deepseek_balance` / `parse_kimi_usages` / `resolve_env`）罐装 JSON 全测。kimi 解析含真实响应快照锚点（`parse_real_response_snapshot`，防下次 API 漂移）+ 双形态变体（detail 含/不含 used、totalQuota 缺失/空对象/非数字）。
 - serde 键集合精确匹配（照 hooks/mod.rs `assert_status_key_set` 先例）——token 红线守卫。
 - `get_plan_balance` 命令核心经 current_thread runtime block_on 直测（照 hooks/mod.rs:443 先例）。
 

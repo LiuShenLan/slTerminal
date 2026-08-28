@@ -15,7 +15,13 @@ use tempfile::NamedTempFile;
 /// planBalance——F10 轮询间隔，手改文件，读取侧在 plan_balance 模块。
 /// 契约断链先例：fontSize store 曾发平铺 terminalFontSize/editorFontSize 顶层键被拒，
 /// 已改段形态并用双侧测试锁死——前端 payload 键集合精确断言 + 后端平铺拒绝用例）
-const SETTINGS_ALLOWED_KEYS: [&str; 5] = ["fontSize", "keybindings", "sideBar", "colorScheme", "planBalance"];
+const SETTINGS_ALLOWED_KEYS: [&str; 5] = [
+    "fontSize",
+    "keybindings",
+    "sideBar",
+    "colorScheme",
+    "planBalance",
+];
 
 /// save_settings 进程内互斥（SPE-06 场景转正修复）：
 /// 前端三 store（fontSize/keybindings/sideBar）启动时几乎同时各触发一次 debounced 保存，

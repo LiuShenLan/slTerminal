@@ -1,9 +1,9 @@
 //! deepseek 套餐（规格 §5.1）：GET /user/balance，取 balance_infos[0]
 
-use std::time::Duration;
-use crate::error::AppError;
 use super::query::{http_agent, query_err, PlanQuery};
 use super::{AmountInfo, FetchOutcome};
+use crate::error::AppError;
+use std::time::Duration;
 
 #[derive(Debug)]
 pub struct DeepSeekQuery;
@@ -11,8 +11,12 @@ pub struct DeepSeekQuery;
 const TIMEOUT: Duration = Duration::from_secs(5);
 
 impl PlanQuery for DeepSeekQuery {
-    fn plan_id(&self) -> &'static str { "deepseek" }
-    fn base_urls(&self) -> &'static [&'static str] { &["https://api.deepseek.com/anthropic"] }
+    fn plan_id(&self) -> &'static str {
+        "deepseek"
+    }
+    fn base_urls(&self) -> &'static [&'static str] {
+        &["https://api.deepseek.com/anthropic"]
+    }
     fn fetch(&self, token: &str) -> Result<FetchOutcome, AppError> {
         let resp = http_agent(TIMEOUT)
             .get("https://api.deepseek.com/user/balance")
@@ -36,13 +40,20 @@ pub(crate) fn parse_deepseek_balance(body: &serde_json::Value) -> Result<FetchOu
         .and_then(|v| v.as_array())
         .and_then(|a| a.first())
         .ok_or_else(|| AppError::Unknown("deepseek 响应缺 balance_infos[0]".into()))?;
-    let value = first.get("total_balance").and_then(|v| v.as_str())
+    let value = first
+        .get("total_balance")
+        .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::Unknown("deepseek 响应缺 total_balance".into()))?;
-    let currency = first.get("currency").and_then(|v| v.as_str())
+    let currency = first
+        .get("currency")
+        .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::Unknown("deepseek 响应缺 currency".into()))?;
     Ok(FetchOutcome {
         frozen: false,
-        amount: Some(AmountInfo { value: value.into(), currency: currency.into() }),
+        amount: Some(AmountInfo {
+            value: value.into(),
+            currency: currency.into(),
+        }),
         windows: None,
     })
 }
@@ -61,7 +72,13 @@ mod tests {
         let json = r#"{"is_available":true,"balance_infos":[{"currency":"CNY","total_balance":"12.34","granted_balance":"0.00","topped_up_balance":"12.34"}]}"#;
         let o = parse(json).unwrap();
         assert!(!o.frozen);
-        assert_eq!(o.amount, Some(AmountInfo { value: "12.34".into(), currency: "CNY".into() }));
+        assert_eq!(
+            o.amount,
+            Some(AmountInfo {
+                value: "12.34".into(),
+                currency: "CNY".into()
+            })
+        );
         assert!(o.windows.is_none());
     }
 
@@ -70,7 +87,13 @@ mod tests {
     fn parse_ok_usd() {
         let json = r#"{"balance_infos":[{"currency":"USD","total_balance":"5.00"}]}"#;
         let o = parse(json).unwrap();
-        assert_eq!(o.amount, Some(AmountInfo { value: "5.00".into(), currency: "USD".into() }));
+        assert_eq!(
+            o.amount,
+            Some(AmountInfo {
+                value: "5.00".into(),
+                currency: "USD".into()
+            })
+        );
     }
 
     /// 空 balance_infos 数组 → Err
@@ -101,7 +124,13 @@ mod tests {
     fn parse_multi_currency_takes_first() {
         let json = r#"{"balance_infos":[{"currency":"USD","total_balance":"1.00"},{"currency":"CNY","total_balance":"2.00"}]}"#;
         let o = parse(json).unwrap();
-        assert_eq!(o.amount, Some(AmountInfo { value: "1.00".into(), currency: "USD".into() }));
+        assert_eq!(
+            o.amount,
+            Some(AmountInfo {
+                value: "1.00".into(),
+                currency: "USD".into()
+            })
+        );
     }
 
     // 注：fetch 真实 HTTP 查询登记 test-inventory 既定豁免（真实外部 API 依赖，

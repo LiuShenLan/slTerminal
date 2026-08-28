@@ -7,7 +7,7 @@
 > **登记纪律（TQ-CI-01）**：改测试后同步本文件——L1 以 `cargo test` 实跑总数 + `grep -c '#[test]'` 双核对；L2 以 `npm test` 实跑（Vitest 报告）为准；段小计 = 段内行级用例数之和（逐段核对 it.each/工厂展开）。三处（表头/段头/段小计）必须一致。
 
 > **计数口径**：
-> - L1 以 `grep -c '#[test]'` 统计的 `#[test]` 属性数为准（39 文件 794）。
+> - L1 以 `grep -c '#[test]'` 统计的 `#[test]` 属性数为准（39 文件 808）。
 > - L2 以 `npm test` 实跑（Vitest 报告）为准，it.each/describeIpcContract 工厂按展开后计入（159 文件 2755）。
 > - L3 以 `npm run test:l3` 实跑为准（8 文件 142）。
 > - L4 以 spec 内 `it(`/`it.skip(` 计数为准（9 spec，40 用例，38 active + 2 skip）。
@@ -55,7 +55,7 @@
 | ⑤ | L2 | **E2E helper 行为契约**——验证 `__slterm_e2e_createProject` 等 helper 的契约，非真实 App 初始化逻辑 | 13 P-14 |
 | ⑥ | L2 | **浅层组件定位**——`editor.test.tsx` mock `useCodeMirror`，定位为组件集成契约测试，真实编辑器行为由 `use-code-mirror.test.ts` 等覆盖 | 07 G1/G2 |
 
-## L1 — Rust 单元/集成测试（39 文件 / 794 用例）
+## L1 — Rust 单元/集成测试（39 文件 / 808 用例）
 
 运行：`cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1`
 
@@ -98,7 +98,7 @@
 | `src-tauri/src/plan_balance/source.rs` | 8 | resolve_env 纯函数/命令层 home 注入；F10 |
 | `src-tauri/src/plan_balance/query.rs` | 9 | URL 归一化/匹配查找/注册表序；F10 |
 | `src-tauri/src/plan_balance/deepseek.rs` | 6 | 响应解析纯函数（罐装 JSON）；F10 |
-| `src-tauri/src/plan_balance/kimi.rs` | 10 | 双窗解析/触顶/全有或全无；F10 |
+| `src-tauri/src/plan_balance/kimi.rs` | 24 | 双窗解析（remaining 优先/detail 内层/真实响应快照锚点）/配额耗尽冻结/全有或全无；F10 |
 | `src-tauri/tests/pty_integration_tests.rs` | 7 | 真实 ConPTY 往返/OSC cwd/resize/kill/自定义 spawn/隔离/env |
 
 > `pty/mod.rs`、`pty/win_build.rs`、`main.rs` 不含 `#[test]`。git/mod.rs 测试已按 GIT-12 全量拆出至 `tests/`。env 测试依赖 `--test-threads=1`。
@@ -432,3 +432,4 @@ embedded WDIO 无法投递 OS 级按键；所有键盘用例改用页面内 disp
 
 - 2026-08-23：全量 3634（Rust 742 + 前端 2710 + L3 142 + E2E 40）。历史变更日志已移除，旧版本变更详见 git log。
 - 2026-08-28：全量 3731（Rust 794 + 前端 2755 + L3 142 + E2E 40）。F10 新增 plan_balance 五文件 51 例 + settings.rs +1、前端三文件 45 例。
+- 2026-08-29：全量 3745（Rust 808 + 前端 2755 + L3 142 + E2E 40）。kimi.rs 解析实测修正（remaining 优先 + detail 内层 + 冻结判定）→ kimi.rs 10→24 例（+14）。

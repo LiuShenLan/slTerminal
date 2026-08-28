@@ -48,7 +48,7 @@ pub struct WindowsInfo {
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WindowInfo {
-    pub remaining_percent: u8, // 剩余 = 100 - 已用
+    pub remaining_percent: u8,     // 剩余 = 100 - 已用
     pub resets_at: Option<String>, // ISO 字符串，可缺失
 }
 
@@ -91,14 +91,22 @@ pub(crate) fn merge_slot(
     let retained = old.filter(|o| o.plan_id == plan_id); // planId 变化 → 丢弃
     match result {
         Ok(o) => PlanBalanceInfo {
-            source_id: source_id.into(), plan_id: plan_id.into(),
-            frozen: o.frozen, amount: o.amount, windows: o.windows, updated_at: now,
+            source_id: source_id.into(),
+            plan_id: plan_id.into(),
+            frozen: o.frozen,
+            amount: o.amount,
+            windows: o.windows,
+            updated_at: now,
         },
         Err(e) => {
             tracing::warn!(source = source_id, plan = plan_id, error = %e, "套餐余量查询失败，保留旧值");
             retained.cloned().unwrap_or(PlanBalanceInfo {
-                source_id: source_id.into(), plan_id: plan_id.into(),
-                frozen: false, amount: None, windows: None, updated_at: 0,
+                source_id: source_id.into(),
+                plan_id: plan_id.into(),
+                frozen: false,
+                amount: None,
+                windows: None,
+                updated_at: 0,
             })
         }
     }
@@ -115,12 +123,19 @@ pub(crate) fn poll_once_with(
     let mut out = Vec::new();
     for source in SOURCES {
         // 来源消失（settings 缺失/env 缺失/token 空）→ 本轮从数组移除（§8.3）
-        let Some((base_url, token)) = resolve(*source) else { continue };
+        let Some((base_url, token)) = resolve(*source) else {
+            continue;
+        };
         // 未命中任何套餐 → 静默降级（§4.2）
-        let Some(q) = find_query_by_url(&base_url, QUERIES) else { continue };
+        let Some(q) = find_query_by_url(&base_url, QUERIES) else {
+            continue;
+        };
         out.push(merge_slot(
             old.iter().find(|i| i.source_id == source.source_id()),
-            source.source_id(), q.plan_id(), fetch(q, &token), now,
+            source.source_id(),
+            q.plan_id(),
+            fetch(q, &token),
+            now,
         ));
     }
     out
@@ -193,7 +208,9 @@ pub async fn get_plan_balance() -> Result<Vec<PlanBalanceInfo>, AppError> {
 
 /// 立即刷新（D6）：执行一轮拉取，更新快照并按 D5 判定 emit，恒返回最新快照
 #[tauri::command]
-pub async fn refresh_plan_balance(app_handle: tauri::AppHandle) -> Result<Vec<PlanBalanceInfo>, AppError> {
+pub async fn refresh_plan_balance(
+    app_handle: tauri::AppHandle,
+) -> Result<Vec<PlanBalanceInfo>, AppError> {
     let now = unix_now();
     let new = tokio::task::spawn_blocking(move || poll_once_production(now))
         .await
@@ -220,12 +237,7 @@ mod tests {
     fn sorted_keys<T: serde::Serialize>(v: &T) -> Vec<String> {
         let json = serde_json::to_string(v).unwrap();
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
-        let mut keys: Vec<String> = value
-            .as_object()
-            .unwrap()
-            .keys()
-            .cloned()
-            .collect();
+        let mut keys: Vec<String> = value.as_object().unwrap().keys().cloned().collect();
         keys.sort();
         keys
     }
@@ -237,23 +249,42 @@ mod tests {
             source_id: "claude".into(),
             plan_id: "deepseek".into(),
             frozen: false,
-            amount: Some(AmountInfo { value: "12.34".into(), currency: "CNY".into() }),
+            amount: Some(AmountInfo {
+                value: "12.34".into(),
+                currency: "CNY".into(),
+            }),
             windows: Some(WindowsInfo {
-                five_hour: WindowInfo { remaining_percent: 24, resets_at: None },
-                seven_day: WindowInfo { remaining_percent: 42, resets_at: None },
+                five_hour: WindowInfo {
+                    remaining_percent: 24,
+                    resets_at: None,
+                },
+                seven_day: WindowInfo {
+                    remaining_percent: 42,
+                    resets_at: None,
+                },
             }),
             updated_at: 1700000000,
         };
         assert_eq!(
             sorted_keys(&info),
-            ["amount", "frozen", "planId", "sourceId", "updatedAt", "windows"]
+            [
+                "amount",
+                "frozen",
+                "planId",
+                "sourceId",
+                "updatedAt",
+                "windows"
+            ]
         );
     }
 
     /// AmountInfo 键集合 = ["currency","value"]
     #[test]
     fn amount_info_serde_key_set() {
-        let a = AmountInfo { value: "12.34".into(), currency: "CNY".into() };
+        let a = AmountInfo {
+            value: "12.34".into(),
+            currency: "CNY".into(),
+        };
         assert_eq!(sorted_keys(&a), ["currency", "value"]);
     }
 
@@ -261,8 +292,14 @@ mod tests {
     #[test]
     fn windows_info_serde_key_set() {
         let w = WindowsInfo {
-            five_hour: WindowInfo { remaining_percent: 1, resets_at: None },
-            seven_day: WindowInfo { remaining_percent: 2, resets_at: None },
+            five_hour: WindowInfo {
+                remaining_percent: 1,
+                resets_at: None,
+            },
+            seven_day: WindowInfo {
+                remaining_percent: 2,
+                resets_at: None,
+            },
         };
         assert_eq!(sorted_keys(&w), ["fiveHour", "sevenDay"]);
     }
@@ -270,7 +307,10 @@ mod tests {
     /// WindowInfo 键集合 = ["remainingPercent","resetsAt"]
     #[test]
     fn window_info_serde_key_set() {
-        let w = WindowInfo { remaining_percent: 24, resets_at: Some("2026-08-28T15:00:00Z".into()) };
+        let w = WindowInfo {
+            remaining_percent: 24,
+            resets_at: Some("2026-08-28T15:00:00Z".into()),
+        };
         assert_eq!(sorted_keys(&w), ["remainingPercent", "resetsAt"]);
     }
 
@@ -279,7 +319,10 @@ mod tests {
     fn outcome() -> FetchOutcome {
         FetchOutcome {
             frozen: false,
-            amount: Some(AmountInfo { value: "1.00".into(), currency: "USD".into() }),
+            amount: Some(AmountInfo {
+                value: "1.00".into(),
+                currency: "USD".into(),
+            }),
             windows: None,
         }
     }
@@ -289,7 +332,10 @@ mod tests {
             source_id: "claude".into(),
             plan_id: plan_id.into(),
             frozen: false,
-            amount: Some(AmountInfo { value: "9.99".into(), currency: "USD".into() }),
+            amount: Some(AmountInfo {
+                value: "9.99".into(),
+                currency: "USD".into(),
+            }),
             windows: None,
             updated_at,
         }
@@ -309,7 +355,13 @@ mod tests {
     #[test]
     fn merge_slot_failure_retains_same_plan() {
         let old = old_entry("deepseek", 500);
-        let slot = merge_slot(Some(&old), "claude", "deepseek", Err(AppError::Unknown("模拟失败".into())), 1000);
+        let slot = merge_slot(
+            Some(&old),
+            "claude",
+            "deepseek",
+            Err(AppError::Unknown("模拟失败".into())),
+            1000,
+        );
         assert_eq!(slot, old, "失败应原样保留同 planId 旧值");
     }
 
@@ -317,7 +369,13 @@ mod tests {
     #[test]
     fn merge_slot_plan_change_discards_old() {
         let old = old_entry("deepseek", 500);
-        let slot = merge_slot(Some(&old), "claude", "kimi", Err(AppError::Unknown("模拟失败".into())), 1000);
+        let slot = merge_slot(
+            Some(&old),
+            "claude",
+            "kimi",
+            Err(AppError::Unknown("模拟失败".into())),
+            1000,
+        );
         assert_eq!(slot.plan_id, "kimi");
         assert_eq!(slot.updated_at, 0);
         assert!(slot.amount.is_none());
@@ -328,7 +386,13 @@ mod tests {
     /// 失败 + 无旧值 → 占位（updated_at=0 + 全 None + frozen=false）
     #[test]
     fn merge_slot_failure_no_old_gives_placeholder() {
-        let slot = merge_slot(None, "claude", "kimi", Err(AppError::Unknown("模拟失败".into())), 1000);
+        let slot = merge_slot(
+            None,
+            "claude",
+            "kimi",
+            Err(AppError::Unknown("模拟失败".into())),
+            1000,
+        );
         assert_eq!(slot.source_id, "claude");
         assert_eq!(slot.plan_id, "kimi");
         assert_eq!(slot.updated_at, 0);
@@ -340,13 +404,21 @@ mod tests {
     // ── poll_once_with（5 例，resolve/fetch 参数化注入，不触网不触盘，F10） ──
 
     fn resolve_some() -> Option<(String, String)> {
-        Some(("https://api.deepseek.com/anthropic".into(), "sk-test".into()))
+        Some((
+            "https://api.deepseek.com/anthropic".into(),
+            "sk-test".into(),
+        ))
     }
 
     /// 来源消失（resolve None）→ 本轮从数组移除 → 空数组（§8.3）
     #[test]
     fn poll_once_resolve_none_removes_source() {
-        let out = poll_once_with(&[], |_| None, |_, _| unreachable!("resolve None 不应触 fetch"), 1000);
+        let out = poll_once_with(
+            &[],
+            |_| None,
+            |_, _| unreachable!("resolve None 不应触 fetch"),
+            1000,
+        );
         assert!(out.is_empty());
     }
 
@@ -386,7 +458,10 @@ mod tests {
             1000,
         );
         assert_eq!(out.len(), 1);
-        assert_eq!(out[0].plan_id, "kimi", "planId 切换后不应残留 deepseek 旧值");
+        assert_eq!(
+            out[0].plan_id, "kimi",
+            "planId 切换后不应残留 deepseek 旧值"
+        );
         assert_eq!(out[0].updated_at, 0);
         assert!(out[0].amount.is_none());
     }
@@ -445,7 +520,11 @@ mod tests {
                 format!(r#"{{"planBalance":{{"intervalSec":{v}}}}}"#),
             )
             .unwrap();
-            assert_eq!(resolve_poll_interval(), Duration::from_secs(60), "越界 {v} 应回退默认");
+            assert_eq!(
+                resolve_poll_interval(),
+                Duration::from_secs(60),
+                "越界 {v} 应回退默认"
+            );
         }
     }
 

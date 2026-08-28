@@ -24,7 +24,9 @@ static CLAUDE_USER_SOURCE: ClaudeUserSettingsSource = ClaudeUserSettingsSource;
 pub(crate) static SOURCES: &[&dyn PlanSource] = &[&CLAUDE_USER_SOURCE];
 
 impl PlanSource for ClaudeUserSettingsSource {
-    fn source_id(&self) -> &'static str { "claude" }
+    fn source_id(&self) -> &'static str {
+        "claude"
+    }
     fn resolve(&self) -> Option<(String, String)> {
         resolve_env(&claude_settings_content()?)
     }
@@ -47,7 +49,9 @@ fn resolve_env(content: &str) -> Option<(String, String)> {
     let env = root.get("env")?;
     let base_url = env.get("ANTHROPIC_BASE_URL")?.as_str()?;
     let token = env.get("ANTHROPIC_AUTH_TOKEN")?.as_str()?;
-    if token.is_empty() { return None; }
+    if token.is_empty() {
+        return None;
+    }
     Some((base_url.to_string(), token.to_string()))
 }
 
@@ -67,7 +71,9 @@ impl HomeDirGuard {
 }
 #[cfg(test)]
 impl Drop for HomeDirGuard {
-    fn drop(&mut self) { *HOME_DIR_OVERRIDE.lock().unwrap() = self.0.clone(); }
+    fn drop(&mut self) {
+        *HOME_DIR_OVERRIDE.lock().unwrap() = self.0.clone();
+    }
 }
 fn home_dir() -> Option<PathBuf> {
     #[cfg(test)]
@@ -123,7 +129,8 @@ mod tests {
     /// token 空串 → None（红线：空 token 不发起请求）
     #[test]
     fn resolve_env_empty_token_returns_none() {
-        let content = r#"{"env":{"ANTHROPIC_BASE_URL":"https://api.example.com","ANTHROPIC_AUTH_TOKEN":""}}"#;
+        let content =
+            r#"{"env":{"ANTHROPIC_BASE_URL":"https://api.example.com","ANTHROPIC_AUTH_TOKEN":""}}"#;
         assert!(resolve_env(content).is_none());
     }
 
@@ -155,7 +162,9 @@ mod tests {
             serde_json::to_string(&settings).unwrap(),
         )
         .unwrap();
-        let (base_url, token) = CLAUDE_USER_SOURCE.resolve().expect("落盘合法 settings 应解析成功");
+        let (base_url, token) = CLAUDE_USER_SOURCE
+            .resolve()
+            .expect("落盘合法 settings 应解析成功");
         assert_eq!(base_url, "https://api.deepseek.com/anthropic");
         assert_eq!(token, "sk-secret-xyz");
     }

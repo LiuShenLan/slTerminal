@@ -1,7 +1,7 @@
 //! 套餐查询注册表（规格 §4.2/§10）：URL 匹配集 + fetch trait；静态切片（U2）
 
-use crate::error::AppError;
 use super::FetchOutcome;
+use crate::error::AppError;
 
 /// 套餐查询 trait：新增套餐 = 新实现 + QUERIES 一行注册
 pub trait PlanQuery: Send + Sync + std::fmt::Debug {
@@ -30,7 +30,10 @@ pub(crate) fn find_query_by_url<'a>(
     queries: &'a [&'a dyn PlanQuery],
 ) -> Option<&'a dyn PlanQuery> {
     let normalized = normalize_base_url(base_url);
-    queries.iter().copied().find(|q| q.base_urls().contains(&normalized.as_str()))
+    queries
+        .iter()
+        .copied()
+        .find(|q| q.base_urls().contains(&normalized.as_str()))
 }
 
 /// ureq agent 工厂（D10）：timeout_global 覆盖连接/读写全程；4xx/5xx 默认即 Err
@@ -70,13 +73,19 @@ mod tests {
     /// 单尾斜杠 → 去除
     #[test]
     fn normalize_strips_single_trailing_slash() {
-        assert_eq!(normalize_base_url("https://api.kimi.com/coding/"), "https://api.kimi.com/coding");
+        assert_eq!(
+            normalize_base_url("https://api.kimi.com/coding/"),
+            "https://api.kimi.com/coding"
+        );
     }
 
     /// 多尾斜杠 → 全部去除
     #[test]
     fn normalize_strips_all_trailing_slashes() {
-        assert_eq!(normalize_base_url("https://api.kimi.com/coding///"), "https://api.kimi.com/coding");
+        assert_eq!(
+            normalize_base_url("https://api.kimi.com/coding///"),
+            "https://api.kimi.com/coding"
+        );
     }
 
     /// 已归一形态 → 保持不变
