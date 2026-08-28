@@ -11,10 +11,11 @@ use std::io::Write as _;
 use tempfile::NamedTempFile;
 
 /// 设置顶层键白名单（SEC-11）：前端各 store 只允许写这些键
-/// （fontSize/keybindings/sideBar/colorScheme——与 stores 模块持久化键一一对应。
+/// （fontSize/keybindings/sideBar/colorScheme——与 stores 模块持久化键一一对应；
+/// planBalance——F10 轮询间隔，手改文件，读取侧在 plan_balance 模块。
 /// 契约断链先例：fontSize store 曾发平铺 terminalFontSize/editorFontSize 顶层键被拒，
 /// 已改段形态并用双侧测试锁死——前端 payload 键集合精确断言 + 后端平铺拒绝用例）
-const SETTINGS_ALLOWED_KEYS: [&str; 4] = ["fontSize", "keybindings", "sideBar", "colorScheme"];
+const SETTINGS_ALLOWED_KEYS: [&str; 5] = ["fontSize", "keybindings", "sideBar", "colorScheme", "planBalance"];
 
 /// save_settings 进程内互斥（SPE-06 场景转正修复）：
 /// 前端三 store（fontSize/keybindings/sideBar）启动时几乎同时各触发一次 debounced 保存，
@@ -554,6 +555,19 @@ mod tests {
         run(save_settings(settings.clone())).unwrap();
         let loaded = run(load_settings()).unwrap();
         assert_eq!(loaded.data, Some(settings), "fontSize 段应完整往返一致");
+        assert!(!loaded.corrupted);
+    }
+
+    /// F10 白名单第 5 键：planBalance 段放行且 save/load 往返一致（防白名单回归）
+    #[test]
+    fn save_accepts_plan_balance_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = AppDataDirGuard::set(dir.path());
+
+        let settings = serde_json::json!({ "planBalance": { "intervalSec": 120 } });
+        run(save_settings(settings.clone())).unwrap();
+        let loaded = run(load_settings()).unwrap();
+        assert_eq!(loaded.data, Some(settings), "planBalance 段应完整往返一致");
         assert!(!loaded.corrupted);
     }
 

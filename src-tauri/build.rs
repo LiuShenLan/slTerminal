@@ -13,7 +13,7 @@ fn main() {
 
     // SEC-07：自定义命令白名单化——为每条命令生成 allow-<cmd> 权限，
     // capabilities/default.json 据此逐条 allow（未列出的命令将被拒绝调用）。
-    // 清单须与 lib.rs 的 generate_handler! 注册保持一致（当前 34 条）。
+    // 清单须与 lib.rs 的 generate_handler! 注册保持一致（当前 36 条）。
     let manifest = tauri_build::AppManifest::new().commands(&[
         "ping",
         "get_windows_build_number",
@@ -49,6 +49,8 @@ fn main() {
         "agent_history_scan",
         "agent_history_delete",
         "agent_history_read_title",
+        "get_plan_balance",
+        "refresh_plan_balance",
     ]);
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest))
         .expect("tauri-build 失败");

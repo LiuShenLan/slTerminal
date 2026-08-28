@@ -48,6 +48,8 @@
     "allow-agent-hooks-config-write",
     "allow-agent-history-scan",
     "allow-agent-history-delete",
-    "allow-agent-history-read-title"
+    "allow-agent-history-read-title",
+    "allow-get-plan-balance",
+    "allow-refresh-plan-balance"
   ]
 }

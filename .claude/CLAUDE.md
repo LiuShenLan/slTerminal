@@ -132,6 +132,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | src-tauri/src/fs | ../src-tauri/src/fs/CLAUDE.md |
 | src-tauri/src/git | ../src-tauri/src/git/CLAUDE.md |
 | src-tauri/src/notify | ../src-tauri/src/notify/CLAUDE.md |
+| src-tauri/src/plan_balance | ../src-tauri/src/plan_balance/CLAUDE.md |
 | src-tauri/src/hooks | ../src-tauri/src/hooks/CLAUDE.md |
 | src-tauri/src/agent_history | ../src-tauri/src/agent_history/CLAUDE.md |
 | src-tauri/src 顶层单文件模块（lib/app_dir/settings/projects/state/error） | ../src-tauri/src/CLAUDE.md |

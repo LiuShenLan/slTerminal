@@ -6,6 +6,7 @@ pub mod git;
 mod hooks;
 mod notify;
 mod projects;
+mod plan_balance;
 pub mod pty;
 mod settings;
 mod state;
@@ -95,6 +96,7 @@ pub fn run() {
             // 启动自动重注入：上次关闭时已恢复 statusline 桥接（备份保留），
             // 检测备份 + 当前为原配置 → 重新注入（失败仅 warn，不阻断启动）
             hooks::reinject_statusline_on_startup();
+            plan_balance::start_plan_balance_poller(app.handle().clone()); // F10 套餐余量轮询
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -132,6 +134,8 @@ pub fn run() {
             agent_history::agent_history_scan,
             agent_history::agent_history_delete,
             agent_history::agent_history_read_title,
+            plan_balance::get_plan_balance,
+            plan_balance::refresh_plan_balance,
         ])
         .run(tauri::generate_context!())
     {

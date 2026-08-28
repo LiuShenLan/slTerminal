@@ -41,7 +41,8 @@ tauri-plugin-prevent-default = { version = "5", features = ["platform-windows"] 
 tauri-plugin-clipboard-manager = "2"
 anyhow = "1"
 # SEC-16: sync feature 提供 tokio::sync::Mutex（set_project_root 串行化锁）
-tokio = { version = "1", features = ["rt", "sync"] }
+# F10: time feature 提供 tokio::time::interval（套餐余量轮询）
+tokio = { version = "1", features = ["rt", "sync", "time"] }
 base64 = "0.22"
 tempfile = "3"
 dirs = "6"
@@ -52,6 +53,8 @@ notify-debouncer-full = "0.8.0-rc.2"
 dunce = "1"
 # SEC-13：脚本状态检测 SHA-256 哈希比对（模板 vs 磁盘脚本防首行伪造；lock 树已有 0.10.x 传递版本）
 sha2 = "0.10"
+# F10 套餐余量查询（纯阻塞 HTTP，spawn_blocking 调用）
+ureq = { version = "3", features = ["json"] }
 
 [target.'cfg(windows)'.dependencies]
 nt_version = "0.1"
