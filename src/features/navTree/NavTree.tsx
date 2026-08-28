@@ -40,6 +40,7 @@ import { NavPageRow } from "./NavPageRow";
 import { NavSessionRow } from "./NavSessionRow";
 import { NavHistoryNode } from "./NavHistoryNode";
 import { NavHistoryRow } from "./NavHistoryRow";
+import { PlanBalanceFooter } from "./PlanBalanceFooter";
 import { NavContextMenu } from "./NavContextMenu";
 import type { NavMenuState } from "./NavContextMenu";
 import { open } from "../../ipc/dialog";
@@ -651,6 +652,9 @@ export const NavTree: React.FC<NavTreeProps> = ({ switchToPage, onDeletePage }) 
           visibleProjects.map((model) => renderProject(model))
         )}
       </div>
+
+      {/* F10 套餐余量 footer（树与添加项目钮之间；无命中来源整块不渲染） */}
+      <PlanBalanceFooter />
 
       {/* 底部「添加项目」钮（CRUD 迁移自 SidebarTree 工具栏按钮） */}
       <div

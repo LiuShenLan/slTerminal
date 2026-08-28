@@ -109,6 +109,14 @@ vi.mock("../ipc/agentHooks", () => ({
   restoreStatusline: () => Promise.resolve(),
 }));
 
+// 全局 mock：ipc/planBalance（F10——NavTree footer 挂载即 invoke/listen，
+// 避免既有 nav-tree 等测试触发真实 IPC）
+vi.mock("../ipc/planBalance", () => ({
+  getPlanBalance: () => Promise.resolve([]),
+  refreshPlanBalance: () => Promise.resolve([]),
+  onPlanBalanceUpdated: () => () => {},
+}));
+
 // 全局 mock：@tauri-apps/api/window（App useEffect 中 getCurrentWindow/onFocusChanged 依赖）
 vi.mock("@tauri-apps/api/window", () => {
   const UserAttentionType = { Critical: 1, Informational: 2 } as const;

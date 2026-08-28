@@ -44,8 +44,8 @@ npx tsc --noEmit && npx eslint src/ && cargo clippy --manifest-path src-tauri/Ca
 
 | Stage | 状态 | verify 结果 | fix 轮次 | commit hash |
 |-------|------|------------|---------|-------------|
-| 01 后端 | 未开始 | — | 0 | — |
-| 02 前端 | 未开始 | — | 0 | — |
+| 01 后端 | 已完成 | 全绿（PB-BE-06-b clippy 修复后） | 1 | 4cf7bd1 |
+| 02 前端 | 进行中 | — | 0 | — |
 | 03 文档 | 未开始 | — | 0 | — |
 
 ## 收尾
