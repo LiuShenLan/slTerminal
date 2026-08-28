@@ -144,8 +144,8 @@ describe("rowTooltip（§8.2 四场景）", () => {
       updatedAt: UPDATED_SEC,
     });
     const tooltip = rowTooltip(info, NOW);
-    expect(tooltip).toContain("5h 42m 后重置");
-    expect(tooltip).toContain("7d 9月3日 14:00 重置");
+    expect(tooltip).toContain("5h 窗（42m 后重置）");
+    expect(tooltip).toContain("7d 窗（9月3日 14:00 重置）");
     expect(tooltip).toContain("上次更新 14:03:05");
   });
 
@@ -160,7 +160,7 @@ describe("rowTooltip（§8.2 四场景）", () => {
     });
     const tooltip = rowTooltip(info, NOW);
     expect(tooltip).not.toContain("5h");
-    expect(tooltip).toContain("7d 1m 后重置");
+    expect(tooltip).toContain("7d 窗（1m 后重置）");
     expect(tooltip).toContain("上次更新 14:03:05");
   });
 

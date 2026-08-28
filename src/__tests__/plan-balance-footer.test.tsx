@@ -210,8 +210,8 @@ describe("logo 与 tooltip", () => {
     const row = (await screen.findByText("5h 62% · 7d 45%")).closest(
       '[data-e2e="plan-balance-row"]',
     ) as HTMLElement;
-    expect(row.title).toContain("5h 42m 后重置");
-    expect(row.title).toContain("7d 20h 30m 后重置");
+    expect(row.title).toContain("5h 窗（42m 后重置）");
+    expect(row.title).toContain("7d 窗（20h 30m 后重置）");
     expect(row.title).toContain("上次更新 14:03:05");
   });
 });

@@ -57,7 +57,8 @@ export function rowText(info: PlanBalanceInfo): string {
   return "--";
 }
 
-/** tooltip 文案（§8.2）：kimi 双窗重置段（缺失省略）+ 上次更新；frozen/无数据固定文案 */
+/** tooltip 文案（§8.2）：kimi 双窗重置段（缺失省略）+ 上次更新；frozen/无数据固定文案。
+ * 窗口段格式 `5h 窗（28m 后重置）`——「窗」字 + 括号把窗长与重置时间分离，防 h/m 混读 */
 export function rowTooltip(info: PlanBalanceInfo, nowMs: number): string {
   if (info.frozen) return "月限额触顶，Kimi Code 已冻结";
   if (!info.amount && !info.windows) return "查询中 / 查询失败重试中";
@@ -65,8 +66,8 @@ export function rowTooltip(info: PlanBalanceInfo, nowMs: number): string {
   if (info.windows) {
     const f = formatResetTime(info.windows.fiveHour.resetsAt, nowMs);
     const s = formatResetTime(info.windows.sevenDay.resetsAt, nowMs);
-    if (f) parts.push(`5h ${f}`);
-    if (s) parts.push(`7d ${s}`);
+    if (f) parts.push(`5h 窗（${f}）`);
+    if (s) parts.push(`7d 窗（${s}）`);
   }
   const updated = formatUpdatedAt(info.updatedAt);
   if (updated) parts.push(`上次更新 ${updated}`);
