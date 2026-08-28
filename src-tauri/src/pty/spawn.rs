@@ -311,9 +311,9 @@ pub mod conpty_custom {
     /// BE-05: 克隆 ConPTY 输出读端并构造微批续读检查器（PtyReaderInput）
     ///
     /// - reader: 输出管道读端（阻塞 read，供 reader_loop 主循环与微批续读）
-    /// - pending: 非阻塞「管道是否有可读数据」检测——WaitForSingleObject(handle, 0)：
-    ///   signaled（WAIT_OBJECT_0）= 有数据或对端已关闭（后者由后续阻塞 read 返回
-    ///   Ok(0) EOF 兜底）；其余 = 无数据。供 reader_loop 微批续读决策（BE-05：
+    /// - pending: 非阻塞「管道是否有可读数据」检测——PeekNamedPipe 查询当前可读
+    ///   字节数，> 0 才有数据（对端关闭时 Peek 返回 0，由后续阻塞 read 返回
+    ///   Ok(0) EOF 兜底）。供 reader_loop 微批续读决策（BE-05：
     ///   「读到即续读」非定时器，无数据时不空等）。
     ///
     /// 须在 conpty_master 装箱（Box<dyn MasterPty>）前调用——内部字段对上层不可见。

@@ -3,7 +3,7 @@
 /// E1: Channel 断开时不退出，写入 ring buffer 等待 reattach。
 ///
 /// BE-05 微批（I/O 编排）：read 成功后非阻塞续读（Windows 上基于
-/// WaitForSingleObject(handle, 0) 检测管道可读），累积至 MICRO_BATCH_MAX（64KB）
+/// PeekNamedPipe 查询管道可读字节数），累积至 MICRO_BATCH_MAX（64KB）
 /// 或无可读数据后，再一次批量 Channel::send + ring buffer append（BE-12）。
 /// 「读到即续读」非定时器——不引入固定延迟；首块经过 ConPTY 启动序列剥离，
 /// 续读块在首块真实数据出现后原样透传（BE-13 跨 16KB 边界残留由首块剥离状态机处理）。
@@ -36,7 +36,7 @@ pub const MICRO_BATCH_MAX: usize = 65536;
 ///
 /// - reader: PTY 输出读端（阻塞 read，供主循环与微批续读）
 /// - pending: 非阻塞「管道是否有可读数据」检查——Windows 上由 spawn.rs 构造
-///   （WaitForSingleObject(handle, 0)），非 Windows 恒 false（微批退化为每轮一次 read）
+///   （PeekNamedPipe 可读字节数 > 0），非 Windows 恒 false（微批退化为每轮一次 read）
 pub struct PtyReaderInput {
     reader: Box<dyn Read + Send>,
     pending: Box<dyn Fn() -> bool + Send>,
@@ -58,7 +58,7 @@ impl Read for PtyReaderInput {
 /// reader 线程主循环（E1: 支持重连）
 ///
 /// - input: PtyReaderInput——阻塞读取 + BE-05 微批续读检查（pending 非阻塞
-///   「管道是否有未读数据」；Windows = WaitForSingleObject(handle, 0)（spawn.rs
+///   「管道是否有未读数据」；Windows = PeekNamedPipe 可读字节数 > 0（spawn.rs
 ///   构造），非 Windows = 恒 false）
 /// - channel: 可替换的 Channel 引用，pty_reattach 通过写锁替换
 /// - ring: ring buffer，总是缓存最近输出供 reattach 回放
@@ -207,8 +207,8 @@ pub fn reader_loop(
 /// - 达到 `limit` 或 pending 返回 false：正常返回 false
 ///
 /// 关键语义：pending 为 true 后 `read` 才被调用——Windows 上 pending 基于
-/// WaitForSingleObject(handle, 0) 非阻塞检测（有数据或对端关闭才为 true），
-/// 因此 read 不会空等，「读到即续读」而非定时器轮询。
+/// PeekNamedPipe 非阻塞查询可读字节数（> 0 才为 true；对端关闭时 Peek 返回 0，
+/// 由后续 read Ok(0) EOF 兜底），因此 read 不会空等，「读到即续读」而非定时器轮询。
 fn micro_batch_tail(input: &mut PtyReaderInput, buf: &mut [u8], limit: usize) -> (Vec<u8>, bool) {
     let mut tail: Vec<u8> = Vec::new();
     while tail.len() < limit && (input.pending)() {
