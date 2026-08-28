@@ -3,6 +3,8 @@
 /// shell 选择策略：pwsh.exe → powershell.exe → cmd.exe 回退。
 /// PowerShell 通过 -EncodedCommand（UTF-16LE Base64）内联集成脚本，
 /// 消除 %APPDATA% 文件写入——避免 AMSI/ASR 误杀。
+/// 禁止 -NoProfile（B17）：用户 profile 必须先于集成脚本原生加载，
+/// 否则 conda init 等 profile 钩子失效（conda activate 报错或静默空转）。
 use base64::Engine;
 use portable_pty::CommandBuilder;
 
@@ -149,7 +151,7 @@ fn normalize_for_compare(p: &str) -> String {
 /// 解析 shell 程序，返回已配置好参数的基础 CommandBuilder
 ///
 /// 用户指定则直接使用；否则按 pwsh → powershell → cmd 顺序检测。
-/// PowerShell 自动加入 -NoProfile -NoLogo -EncodedCommand <base64> 参数。
+/// PowerShell 自动加入 -NoLogo -NoExit -EncodedCommand <base64> 参数（禁止 -NoProfile，B17）。
 #[allow(dead_code)] // 保留供非 Windows 平台 fallback
 pub fn resolve_shell(user_shell: Option<&str>) -> Result<CommandBuilder, AppError> {
     if let Some(shell) = user_shell {
@@ -214,13 +216,13 @@ pub fn resolve_shell_info(user_shell: Option<&str>) -> Result<ShellInfo, AppErro
     Ok(info)
 }
 
-/// 为 PowerShell 构建带 profile 注入的 CommandBuilder
+/// 为 PowerShell 构建带集成脚本的 CommandBuilder
 ///
-/// 使用 -NoProfile -NoLogo -EncodedCommand <base64(UTF-16LE script)> 启动。
+/// 使用 -NoLogo -NoExit -EncodedCommand <base64(UTF-16LE script)> 启动。
 /// 脚本通过 include_str! 嵌入，不写磁盘。
+/// 禁止 -NoProfile（B17）：用户 profile 必须先于集成脚本原生加载。
 fn build_pwsh_command(pwsh: &str) -> CommandBuilder {
     let mut cmd = CommandBuilder::new(pwsh);
-    cmd.arg("-NoProfile");
     cmd.arg("-NoLogo");
     cmd.arg("-NoExit");
     cmd.arg("-EncodedCommand");
@@ -230,11 +232,11 @@ fn build_pwsh_command(pwsh: &str) -> CommandBuilder {
 
 /// 为 PowerShell 构建 ShellInfo（不依赖 portable-pty）
 /// pwsh 参数为完整路径（由 which_full_path 解析）
+/// 禁止 -NoProfile（B17）：用户 profile 必须先于集成脚本原生加载。
 fn build_pwsh_info(pwsh_path: &str) -> ShellInfo {
     ShellInfo {
         program: pwsh_path.to_string(),
         args: vec![
-            "-NoProfile".to_string(),
             "-NoLogo".to_string(),
             "-NoExit".to_string(),
             "-EncodedCommand".to_string(),
@@ -735,6 +737,37 @@ mod tests {
             let expect = dir.path().join("pwsh.exe");
             assert_eq!(info.program, expect.to_string_lossy().as_ref());
         }
+    }
+
+    // ── PTY-10：resolve_shell 回退顺序 + 白名单 PATH 解析后仍拒绝 ──
+
+    #[test]
+    fn test_pwsh_args_no_noprofile_b17() {
+        // B17 防复发：-NoProfile 致 conda activate 失效
+        //（win11 CondaError / win10 conda.bat 静默空转）——
+        // 自动检测命中 pwsh 时，两条构建路径的 args 均不得含 -NoProfile
+        let dir = tempfile::tempdir().unwrap();
+        fake_exe(dir.path(), "pwsh.exe");
+        let _guard = set_test_path(&[dir.path()]);
+
+        let info = resolve_shell_info(None).expect("应命中 pwsh");
+        assert!(
+            !info.args.iter().any(|a| a == "-NoProfile"),
+            "resolve_shell_info 的 pwsh args 不得含 -NoProfile（B17），实际: {:?}",
+            info.args
+        );
+        assert!(
+            info.args.contains(&"-EncodedCommand".to_string()),
+            "pwsh 仍应携带集成脚本参数"
+        );
+
+        let cmd = resolve_shell(None).expect("resolve_shell 应命中 pwsh");
+        let argv = cmd.get_argv();
+        assert!(
+            !argv.iter().any(|a| a == "-NoProfile"),
+            "resolve_shell 的 pwsh argv 不得含 -NoProfile（B17），实际: {:?}",
+            argv
+        );
     }
 
     // ── PTY-10：resolve_shell 回退顺序 + 白名单 PATH 解析后仍拒绝 ──
