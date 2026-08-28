@@ -237,6 +237,22 @@ _Avoid_: 终端行
 
 ---
 
+## 套餐余量（F10）
+
+**编码套餐**（Coding Plan）：
+编码 CLI 背后的计费订阅方（deepseek、kimi）。由 user 层 settings.json 的 `env.ANTHROPIC_BASE_URL` 归一化后命中套餐 URL 匹配集判定；一个套餐可有多个 URL 别名。
+
+**套餐余量**（Plan Balance）：
+套餐当前剩余可用量。两种形态：金额余额 / 时间窗用量。展示于导航树视图底部固定区。
+
+**用量窗口**（Usage Window）：
+时间窗计费套餐的限流窗口（5 小时滚动窗 / 7 天窗），含剩余百分比与重置时间。
+
+**余量来源**（Plan Source）：
+判定套餐的配置文件来源（v1 为 claude user 层 settings.json 的 env 段）。可扩展——未来其他编码 CLI 的配置文件可作为新来源。
+
+---
+
 ## 配色
 
 **配色 token**（Color Token）：

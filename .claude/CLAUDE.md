@@ -190,5 +190,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | F7 | 特性 | 历史会话查询与恢复（扫描/恢复/删除 + 四步恢复编排；重命名已移除） |
 | F8 | 特性 | 终端页签自定义重命名（customTitle 随布局持久化；claude 运行中禁用；不影响 terminal-N 递增） |
 | F9 | 特性 | 终端页签/侧栏 CLI 品牌 logo（按命令行首 token 匹配 profile.iconSrc；页签 logo 会话绑定，侧栏行存在即显示） |
+| F10 | 特性 | 编码套餐余量展示（导航树底部；user 层 settings.json env 判定套餐 → 后端定时查询推送；规格 → docs/coding-plan-balance-spec.md） |
 
 > 测试策略概览见上方「测试策略」章节；完整用例清单见 `.claude/test-inventory.md`。
