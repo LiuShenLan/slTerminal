@@ -38,7 +38,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 外部坑/红线
 
-- **token 不出后端**：DTO 六键 serde 键集合精确匹配测试锁死（无 token 字段）；本模块所有 tracing!/Err 构造消息禁止插值 token 与 Authorization 头（ureq 错误 Display 不含请求头，构造错误消息时禁止自行拼接）。
+- **token 不出后端**：DTO 六键 serde 键集合精确匹配测试锁死（无 token 字段）；本模块所有 tracing!/Err 构造消息禁止插值 token 与 Authorization 头（ureq 错误 Display 不含请求头，构造错误消息时禁止自行拼接）。测试夹具 token 一律假值占位符（`sk-test` 形态，SEC-18）；真实凭据只经 `source.rs` 读 user 层 `~/.claude/settings.json`（仓库外），禁止以真实值替换夹具或写入任何 git 追踪文件。
 - **URL 归一化只小写化 + 去尾斜杠**（规格字面）：不加 trim，`trim_end_matches('/')` 不处理空白。
 - **kimi 结构实证（2026-08-28 curl 实测 + 社区审计，修正规格 §5.2 假定）**：`GET /coding/v1/usages` + `Authorization: Bearer`（非 X-Kimi-Authorization）；5h 窗数值（`used`/`limit`/`remaining`/`resetTime`）承载于 **`limits[i].detail` 内层**（外层无）；7d 窗为顶层 `usage` 对象；`remaining` 恒在、`used` 可缺（两种账号形态均实证）→ 剩余百分比 **remaining 优先**、used 回退；`totalQuota` **无 `used` 字段**（实测可为空对象 `{}`）。真实响应快照锚点：`kimi.rs::parse_real_response_snapshot`。
 - **kimi 数值字段按字符串解析**（实证口径）：`used`/`limit`/`remaining` 均为字符串，`.as_str()` 读取——若 API 返回数字形态，须先实测确认再放宽。

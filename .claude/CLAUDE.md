@@ -47,6 +47,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 11. **测试覆盖**: 改动的代码可自动化部分必须添加全量自动化测试用例覆盖；不可自动化部分（平台 API 直调、真实 ConPTY/OS 交互、人工实测场景等）须在 `.claude/test-inventory.md` 既定豁免清单登记，注明豁免原因与当前兜底层级（L1/L4 集成用例、人工验证手册等），禁止未登记豁免。
 12. **store 纯状态**：`src/stores/` 只存状态与状态转换，不存业务逻辑（校验/映射/编排放注册表、纯函数或上层组件）；持久化一律经 `src/ipc/` 对应领域函数（settings 类经 ipc/settings、项目数据经 ipc/projects），禁止在 store 内直接调用 `invoke`；禁止跨 store 隐式依赖——store 间协调在上层组件/命令中完成（详见 ../src/stores/CLAUDE.md）。
 13. **注册表家族通用契约**：注册表类模块统一形态——模块级单例（模块内实例化并导出，或 getXxxRegistry() 惰性获取）、`register(...)` / `getAll()`（按注册序）接口、`_reset()`（仅测试用，清空全部条目）；注册经 side-effect import 触发（import 即注册，触发点登记于所属模块 CLAUDE.md，禁止隐式初始化）；测试在 beforeEach/afterEach 调 `_reset()` 保证用例隔离。先例：panelRegistry / SchemeRegistry / FileViewerRegistry / ShortcutRegistry / SideViewRegistry / CliProfileRegistry / TerminalRegistry。
+14. **git 追踪文件凭据红线（SEC-18）**：真实凭据值（API token/key、Authorization 头实际值）禁止写入任何 git 追踪文件——代码、测试夹具、文档、脚本一律不行；测试与文档仅允许假值占位符（`sk-test` 形态）。真实凭据只存 user 层 `~/.claude/settings.json`（仓库外，读取侧在 plan_balance/source.rs）。自查：`git grep -nE "sk-[A-Za-z0-9_-]{16,}"` 应零命中（2026-08-29 全仓排查实证）。
 
 ## Windows 关键坑
 
@@ -174,6 +175,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | SEC-15 | 安全 | shell 白名单 fallback 收窄——双侧 canonicalize 均失败才回退归一化字符串比较，单侧失败即拒绝 |
 | SEC-16 | 安全 | set_project_root 经 tokio Mutex 串行化——慢 canonicalize 不得后写覆盖 |
 | SEC-17 | 安全 | hooks user 层写入后端审计日志（`tracing::warn! target:"audit"`）兜底 |
+| SEC-18 | 安全 | git 追踪文件禁止真实凭据值——测试/文档仅允许假值占位符（sk-test 形态）；真实凭据只存 user 层 settings.json（仓库外） |
 | DBG-6 | 调试调查 | 启动恢复 lastPage 先 await setProjectRoot 再 setActivePage |
 | B10 | 缺陷 | 编辑器去重聚焦须匹配 suffix（普通编辑器与 git 页签互不误聚焦） |
 | B11 | 缺陷 | statusline 注入须递归解包自有脚本包裹；桥接脚本容忍引号 + 剥引号后 ~ 展开 + 透传失败 stdout 占位 |
