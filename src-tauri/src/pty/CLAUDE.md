@@ -74,7 +74,7 @@ spawn 阶段统一注入：
 - PATH 不可解析时 `%SystemRoot%\System32` 兜底；
 - 双侧 `canonicalize` 均失败时回退归一字符串比对（alias/Store 版 pwsh 兼容），单侧失败即拒绝。
 
-PowerShell 通过 `-EncodedCommand` 内联 `shell-integration.ps1`，避免 `%APPDATA%` 文件写入触发 AMSI/ASR。
+PowerShell 通过 `-EncodedCommand` 内联 `shell-integration.ps1`，避免 `%APPDATA%` 文件写入触发 AMSI/ASR。启动参数固定 `-NoLogo -NoExit -EncodedCommand`，**禁止 `-NoProfile`**——用户 profile 必须先于集成脚本原生加载（B17，守卫用例 `test_pwsh_args_no_noprofile_b17`）。
 
 ### 启动序列剥离
 
@@ -97,6 +97,7 @@ spawn 后立即向 stdin 写 `\x1b[1;1R`，补偿 ConPTY `VtIo::StartIfNeeded()`
 - **改 flags 必须实测真实 claude 滚轮**：自动化无法守卫 PASSTHROUGH 0x8 回归。
 - **Win10 捆绑 conhost 改动必须实机验证**：鼠标转发、键盘/IME/kitty、resize 无法靠 CI 守卫。
 - **永不启用 0x8**。
+- **PowerShell 交互 shell 禁止 `-NoProfile`**：用户 profile（conda init 钩子等）必须原生加载——缺钩子则 `conda activate` 失效（win11 CondaError / win10 conda.bat 静默空转，B17）。
 - **不要把 `#[cfg(windows)]` 放到本模块外**。
 - **不要 drop stdin writer**。
 - **不要 stop/start 轮换 watcher**（见 @../notify/CLAUDE.md），与 pty 无关但常被误用。

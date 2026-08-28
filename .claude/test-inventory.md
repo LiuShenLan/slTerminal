@@ -2,12 +2,12 @@
 
 > **本文档是项目用例数唯一真值源。** 所有 CLAUDE.md、README、CI 配置中引用的用例数均以此文件为准。更新测试后必须同步本文档。
 
-全量 **3731** 用例（Rust 794 + 前端 2755 + L3 142 + E2E 40），2026-08-28 校准。
+全量 **3746** 用例（Rust 809 + 前端 2755 + L3 142 + E2E 40），2026-08-29 校准。
 
 > **登记纪律（TQ-CI-01）**：改测试后同步本文件——L1 以 `cargo test` 实跑总数 + `grep -c '#[test]'` 双核对；L2 以 `npm test` 实跑（Vitest 报告）为准；段小计 = 段内行级用例数之和（逐段核对 it.each/工厂展开）。三处（表头/段头/段小计）必须一致。
 
 > **计数口径**：
-> - L1 以 `grep -c '#[test]'` 统计的 `#[test]` 属性数为准（39 文件 808）。
+> - L1 以 `grep -c '#[test]'` 统计的 `#[test]` 属性数为准（39 文件 809）。
 > - L2 以 `npm test` 实跑（Vitest 报告）为准，it.each/describeIpcContract 工厂按展开后计入（159 文件 2755）。
 > - L3 以 `npm run test:l3` 实跑为准（8 文件 142）。
 > - L4 以 spec 内 `it(`/`it.skip(` 计数为准（9 spec，40 用例，38 active + 2 skip）。
@@ -33,6 +33,7 @@
 | `editor.e2e.ts` dirty→clean 用例（外部写盘 → watcher → 编辑器 auto-reload） | Windows notify 环境级故障（2026-08-23 实证，非代码缺陷）：同机 L1 notify 测试通过，页面内写入不产生 fs-event | reload 逻辑由 L2 `editor-confirm.test.ts` + `use-code-mirror-reload-error.test.ts` 覆盖；修复环境后复跑验收 | 2026-08-23 实证登记 |
 | Rust 行覆盖 88.20%（llvm-cov 含测试代码口径） | 目标 90% 差 1.8pp；残余缺口集中 PTY Win32 分支 + main.rs 结构性零覆盖 + 编译器生成物计数缺失 | 重点文件已达标或逐条登记豁免（TQ-COV-01/03/06 + git/CLAUDE.md 豁免表） | TQ-COV 收尾登记 |
 | plan_balance 真实 HTTP 查询（ureq fetch）与 tokio 轮询任务本体 | 真实外部 API 依赖 + Tauri 运行时（规格 §3 不做 L4） | 解析与状态机 L1 全覆盖（罐装 JSON/参数化编排）+ L2 UI 四场景 + 人工实测（真实账号一轮） | F10 |
+| win11/win10 真实终端 conda 激活实测（profile 加载链路 + conda 钩子 + prompt 包装链） | 依赖真实 conda/miniforge 环境与交互会话，CI 无此环境 | L1 B17 参数守卫（`test_pwsh_args_no_noprofile_b17`）+ 双系统 debug build 人工实测 | B17 |
 
 > 原豁免表中 `FileWatcher::start`/`notify_watch` 与 `claude_history` 命令包装两项已按 D6 从豁免重分类为补测，不再列入豁免表。  
 > **SEC-17 豁免已撤销（TQ-COV-05 翻案）**：`tracing::warn!(target: "audit")` 已由 `tracing-test` 断言锁死，豁免行删除。
@@ -55,7 +56,7 @@
 | ⑤ | L2 | **E2E helper 行为契约**——验证 `__slterm_e2e_createProject` 等 helper 的契约，非真实 App 初始化逻辑 | 13 P-14 |
 | ⑥ | L2 | **浅层组件定位**——`editor.test.tsx` mock `useCodeMirror`，定位为组件集成契约测试，真实编辑器行为由 `use-code-mirror.test.ts` 等覆盖 | 07 G1/G2 |
 
-## L1 — Rust 单元/集成测试（39 文件 / 808 用例）
+## L1 — Rust 单元/集成测试（39 文件 / 809 用例）
 
 运行：`cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1`
 
@@ -71,7 +72,7 @@
 | `src-tauri/src/pty/reader.rs` | 42 | 启动序列剥离/DA1 检测/微批/EOF 退出码/join 超时；BE-05/BE-06 |
 | `src-tauri/src/pty/spawn.rs` | 60 | ConPTY flags 三态/命令行/环境块/容量/所有权/Job Object/pty_kill_all；BE-01/BE-08/SEC-08 |
 | `src-tauri/src/pty/conpty_api.rs` | 5 | 嵌入捆绑 ConPTY 提取/加载/回退；ADR-0005 |
-| `src-tauri/src/pty/shell.rs` | 32 | shell 发现与回退/白名单/alias 兼容；SEC-01/SEC-15 |
+| `src-tauri/src/pty/shell.rs` | 33 | shell 发现与回退/白名单/alias 兼容/B17 profile 加载守卫；SEC-01/SEC-15 |
 | `src-tauri/src/state.rs` | 43 | ring buffer/路径沙箱/project_root 切换/git 缓存；BE-04/BE-09/SEC-16 |
 | `src-tauri/src/fs/mod.rs` | 43 | fs 命令层；分块读取；路径上下文；BE-03/BE-13 |
 | `src-tauri/src/notify/mod.rs` | 45 | watcher 生命周期/事件分类/排除/symlink/合并；BE-02/BE-07/SEC-08 |
@@ -432,4 +433,4 @@ embedded WDIO 无法投递 OS 级按键；所有键盘用例改用页面内 disp
 
 - 2026-08-23：全量 3634（Rust 742 + 前端 2710 + L3 142 + E2E 40）。历史变更日志已移除，旧版本变更详见 git log。
 - 2026-08-28：全量 3731（Rust 794 + 前端 2755 + L3 142 + E2E 40）。F10 新增 plan_balance 五文件 51 例 + settings.rs +1、前端三文件 45 例。
-- 2026-08-29：全量 3745（Rust 808 + 前端 2755 + L3 142 + E2E 40）。kimi.rs 解析实测修正（remaining 优先 + detail 内层 + 冻结判定）→ kimi.rs 10→24 例（+14）。
+- 2026-08-29：全量 **3746**（Rust 809 + 前端 2755 + L3 142 + E2E 40）。B17 新增 `test_pwsh_args_no_noprofile_b17` 1 例（shell.rs 32→33），kimi.rs 解析实测修正（+14）已于同日校准。

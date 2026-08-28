@@ -184,6 +184,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | B14 | 缺陷 | panelId 生成/解析单点收口（makeTerminalPanelId/parseTerminalPageId 成对）；恢复面板 id 不含 Date.now 段 |
 | B15 | 缺陷 | reinject_statusline 须传 statusline_script_path() 作桥接路径（误传 reporter 路径致重启后空白行） |
 | B16 | 缺陷 | 桥接 .sh 经 bashCandidates 试错定位（PATH→where git 上溯→固定路径）+ 反斜杠转正斜杠 |
+| B17 | 缺陷 | spawn PowerShell 携带 -NoProfile 致用户 profile 不加载——conda activate 失效（win11 CondaError / win10 conda.bat 静默空转）；修复 = 删 -NoProfile 恢复 profile 原生加载 |
 | ADR-0001 | 架构决策 | 侧栏视图换区重建丢失组件内部状态（已确认接受）（→ .claude/adr.md） |
 | ADR-0003 | 架构决策 | UI 全面重设计「Linear 极黑克制」（→ .claude/adr.md） |
 | F2 | 特性 | hooks 注入入口（F6 面板工具栏并入；与功能键 F2 区分） |
