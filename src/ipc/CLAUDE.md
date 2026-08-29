@@ -46,11 +46,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `writeHooksConfig` 传 hooks 子树，后端 **read-modify-write merge**（替换/插入 hooks 键，保留 permissions/env 等其他字段）。user 层不传 `projectPath`；project/local 层必须传（后端沙箱校验后拼接 `.claude/settings.json` / `.claude/settings.local.json`）。
 
-### planBalance 命令（F10）
+### planBalance 命令（F10/F11）
 
 - `getPlanBalance`：挂载时拉取当前快照（后端尚未有快照 → 空数组）。
 - `refreshPlanBalance`：执行一轮拉取，**恒 Ok 返回最新快照**——单来源失败按规格 §6 保留旧值不整体 Err，仅后端 spawn_blocking join 失败才 Err（D6）。
 - `onPlanBalanceUpdated`：订阅 `plan-balance-updated` 事件；后端快照**有变化才推送**（整体 PartialEq 比较，含 updated_at——成功查询必刷新 updated_at 即视为变化；失败保留旧值不推送，D5）。
+- `setPlanBalanceInterval(intervalSec)`（F11）：**设置轮询间隔写通道**——后端 `plan_balance_set_interval` 校验 10–3600（越界 → Validation 拒绝且磁盘/内存均不变）→ 复用 settings 写通道落盘 → 更新内存值（POLL_INTERVAL_SEC，poller 每轮读取，改值后下一轮即按新间隔）。设置页提交成功后再 `refreshPlanBalance()` 作生效反馈闭环；Err → toast + 输入框保留用户值。
 
 ### agent history 命令（MC-303/306）
 

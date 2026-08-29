@@ -28,13 +28,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `source.rs` 自建 `home_dir()` + `HomeDirGuard`（照抄 `hooks/claude/mod.rs` 模式），**禁止跨模块调用** `hooks::claude`——硬约束 #2 模块不穿透；应用 settings 读取经 `crate::app_dir::app_data_dir()`（顶层共享件，不构成穿透，D3）。
 
-### 轮询间隔与轮询任务
+### 轮询间隔：动态内存原子量（F11 决策，SC-BE-01/02）
 
-`resolve_poll_interval` 读应用 settings.json 的 `planBalance.intervalSec`：默认 60，合法 10–3600，越界/缺失/损坏回退默认。`start_plan_balance_poller` 由 lib.rs setup 调用，`tokio::time::interval` 首次 tick 立即执行第一轮（D8）；随进程退出结束，单实例无生命周期管理。
+`resolve_poll_interval` 读应用 settings.json 的 `planBalance.intervalSec`：默认 60，合法 10–3600，越界/缺失/损坏回退默认。**运行期可改**（F11）：`POLL_INTERVAL_SEC` 模块级 `AtomicU64` 与 SNAPSHOT 同置（照 hooks WATCHER 先例，仅本模块读写，不入 AppState）；poller 启动时从磁盘初始化内存值，**每轮末按当前内存值 sleep**（interval period 不可变故弃 ticker；首轮立即执行语义 D8 保留）——`plan_balance_set_interval` 改值后下一轮即按新间隔，立即生效。
 
-### 轮询间隔键须在白名单
+`plan_balance_set_interval(interval_sec)`（F11 后端消费型配置写通道）：校验 10–3600（越界 → Validation 拒绝且磁盘/内存均不变）→ **复用 settings.rs 写通道落盘**（白名单/浅合并/原子写/.bak/SETTINGS_SAVE_LOCK，禁止自建第二写通道）→ 更新内存值。顺序写死：校验 → 落盘 → 内存——落盘失败内存不变，磁盘/内存恒一致。
 
-`planBalance` 为 settings 白名单第 5 键（SEC-11，settings.rs）——手改文件，读取侧在本模块，白名单回归由 settings.rs `save_accepts_plan_balance_key` 守卫。
+### 轮询间隔键归域 + 白名单
+
+`SETTINGS_KEY`（= "planBalance"）`pub(crate)` 归本模块，settings.rs 白名单与命令 payload 均经此常量引用（防字面量漂移，SC-BE-04）；段内键 `INTERVAL_SEC_KEY`（= "intervalSec"）模块内私有。白名单回归由 settings.rs `save_accepts_plan_balance_key` + 本模块 `settings_key_constants_value` 双侧守卫。
 
 ## 外部坑/红线
 

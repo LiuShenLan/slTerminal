@@ -24,7 +24,7 @@ Dockview 布局中可托管的最小 UI 单元。每个面板属于一种面板�
 _Avoid_: 窗格, 视图
 
 **面板类型**（Panel Type）：
-面板的分类。当前有 6 种：terminal / editor / htmlviewer / gitshow / diff / hooksConfig（注册 id 与 `panelRegistry.ts` 一致）。新增面板类型需在面板注册表中显式注册。布局恢复时会过滤掉未注册的面板类型。
+面板的分类。当前有 6 种：terminal / editor / htmlviewer / gitshow / diff / settings（注册 id 与 `panelRegistry.ts` 一致）。新增面板类型需在面板注册表中显式注册。布局恢复时会过滤掉未注册的面板类型（旧 `hooksConfig` 面板即被此机制静默丢弃）。
 
 **面板实例**（Panel Instance）：
 具体的一个面板，有唯一标识符，可被创建、关闭、拖拽分屏。
@@ -41,6 +41,29 @@ Dockview 标签页上显示的文字。终端为 `terminal-N`（每页独立编�
 **文件查看器注册表**（FileViewerRegistry）：
 策略模式单例，根据文件扩展名决定用哪种面板类型打开文件。命中即返回，未命中回退编辑器面板；当前注册 `.html`/`.htm` → HTML 预览面板。由文件浏览器和 Commit 视图共用（详见 fileViewers 模块文档）。
 _Avoid_: 文件类型映射
+
+---
+
+## 设置中心（F11）
+
+**设置中心**（Settings Center）：
+本应用统一配置入口的 Dockview 面板（面板类型 `settings`）。左导航（全局/项目两组）+ 右侧配置页槽位，经 SettingsPageRegistry 分派渲染；「配置」钮为唯一入口（无项目点击 → toast「请先创建项目」）。
+_Avoid_: 配置面板, 设置面板
+
+**配置页**（Settings Page）：
+设置中心内的注册单元，一个配置域一个页。新增配置页 = 实现组件 + 注册一条，框架零改动。
+
+**全局组**：
+应用级单例配置，无需项目上下文即可编辑（快捷键、套餐余量查询频率）。
+
+**项目组**：
+需活跃项目上下文才能编辑的配置（Hooks 配置）；无项目时入口被 toast 拦截，页不可达。
+
+**前端消费型配置**：
+消费侧在前端（store/注册表）的配置域，后端纯透传存储（fontSize/keybindings/sideBar/colorScheme）。写通道 = 通用 `save_settings` 段写。
+
+**后端消费型配置**：
+消费侧在后端的配置域（planBalance.intervalSec）。写通道 = 域模块专用命令（校验 + 内存态 + 落盘一体）。
 
 ---
 
@@ -99,7 +122,7 @@ FIFO 字节队列。前端 Channel 断开时缓存 PTY 最新输出，重连时�
 ## 侧栏
 
 **活动栏**（Activity Bar）：
-应用最左侧的窄条（46px），容纳侧栏视图按钮。按钮可通过鼠标左键拖拽在上区/下区之间移动，决定对应视图的展示半区。底部固定「配置」钮——hooks 配置面板的唯一入口（不入视图注册表，不参与拖拽/持久化）。
+应用最左侧的窄条（46px），容纳侧栏视图按钮。按钮可通过鼠标左键拖拽在上区/下区之间移动，决定对应视图的展示半区。底部固定「配置」钮——设置中心的唯一入口（无项目点击 → toast「请先创建项目」；不入视图注册表，不参与拖拽/持久化）。
 
 **侧栏视图**（Side View）：
 活动栏按钮对应的可开关内容视图（导航树视图、文件浏览器视图、Commit 视图）。点击按钮开关视图；视图在侧栏区中展示。
@@ -225,7 +248,7 @@ pty_spawn 时注入子进程环境块的环境变量。经 shell → claude → 
 CC settings.json 的三个编辑层级——user（`~/.claude/settings.json`）、project（`.claude/settings.json`）、local（`.claude/settings.local.json`）。优先级 local > project > user。
 
 **双模式面板**：
-hooks 配置编辑面板的两种编辑模式——GUI 表单（Master-Detail）与 JSON 编辑器（CM6 + Schema 校验），顶部切换、实时同步编辑同一份配置。
+设置中心「Hooks 配置」页（项目组）内 hooks 编辑器的两种编辑模式——GUI 表单（Master-Detail）与 JSON 编辑器（CM6 + Schema 校验），顶部切换、实时同步编辑同一份配置。
 
 **Agent Status 视图**：
 ~~侧栏视图（id `agent-status`），一屏总览当前活跃项目所有运行中的编码 CLI 会话。~~ **已退役（2026-08）**：视图并入统一导航树（NavTree 活跃会话区，UI 重设计 ADR-0003），`useAgentStatus` 数据层留存供导航树消费（详见 agentStatus 模块文档）。

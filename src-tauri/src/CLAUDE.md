@@ -19,7 +19,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **浅合并**：`save_settings` 只写前端传入的顶层 slice，后端浅合并 top-level 键，各 store 各写各的互不覆盖；
 - **`SETTINGS_SAVE_LOCK`**：前端三 store 启动时几乎同时触发 debounced 保存，`spawn_blocking` 闭包持锁串行化读-合并-写，避免 Windows persist rename 时句柄占用导致 PermissionDenied（SPE-06）；
-- **SEC-11**：顶层键白名单 `["fontSize", "keybindings", "sideBar", "colorScheme", "planBalance"]` + 序列化后大小上限 1MB。`planBalance` 为 F10 轮询间隔键（手改文件，读取侧在 plan_balance 模块 `resolve_poll_interval`，默认 60，越界/缺失/损坏回退 60s）。
+- **SEC-11**：顶层键白名单（数组仍 5 项）`["fontSize", "keybindings", "sideBar", "colorScheme", plan_balance::SETTINGS_KEY]` + 序列化后大小上限 1MB。**键名聚合决策（F11）**：前端消费型四键（fontSize/keybindings/sideBar/colorScheme）无后端模块可归，键名集中于此字面量；后端消费型域键名归域模块——`planBalance` 经 `crate::plan_balance::SETTINGS_KEY` 引用（契约断链先例：fontSize store 曾发平铺键被拒，已改段形态双侧锁死）。`planBalance` 段 = F10 轮询间隔（默认 60，越界/缺失/损坏回退 60s）；F11 起写入侧除手改文件外新增专用命令通道 `plan_balance_set_interval`（复用本模块 save_settings 写通道：白名单/浅合并/原子写/.bak/SETTINGS_SAVE_LOCK——禁止自建第二写通道）。
 
 ### projects.rs — exe 同级 JSON 绕过沙箱
 

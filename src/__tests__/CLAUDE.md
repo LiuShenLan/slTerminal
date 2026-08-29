@@ -56,6 +56,18 @@ Stage 01–07 产生的测试文件更名/合并。旧名全部退役、磁盘�
 | `claude-history-view.test.tsx` | `agent-history-view.test.tsx` |
 | `claude-history-action-dialog.test.tsx` | `agent-history-action-dialog.test.tsx` |
 
+### F11 设置中心——测试文件迁移映射（SC-FE-05/06）
+
+hubs 配置面板迁入设置中心产生的测试文件更名/删除/新增。旧名退役、磁盘零残留；语义逐项并入新文件。编辑器组件测试（hooks-config-*）import 路径同步改 `features/cliProfiles/profiles/claude/configEditor/`。
+
+| 旧文件（退役） | 新文件（现行） |
+|----------------|----------------|
+| `open-hooks-config.test.ts` | `open-settings.test.ts`（无项目 toast 等新语义） |
+| `open-hooks-config-panel.test.ts` | `open-settings-panel.test.ts` |
+| `hooks-config-panel.test.tsx` | `settings-hooks-page.test.tsx`（hub 43 例 → SettingsPageProps 形态 37 例） |
+
+新增：`settings-page-registry.test.ts` / `settings-panel.test.tsx` / `settings-plan-balance.test.tsx` / `settings-dirty-registry.test.ts` / `settings-panel-dirty.test.tsx` / `settings-keybindings.test.tsx` / `settings-panel-autoclose.test.tsx`（完整用例数见 `.claude/test-inventory.md`）。
+
 ### AC-4 / AC-5
 
 - **AC-4**：`mock-cli-profile.test.tsx` 覆盖 mockcli 全链路契约（OSC 133 命中、eventToStatus 调用、历史聚合、hub 双向分派、恢复注入）。mock 夹具与桩编辑器位于 `helpers/mockCliProfile.ts`。

@@ -31,6 +31,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **文件型页签图标**（TAB-03）：`params.filePath` 存在（FILE_PANEL_TYPES）→ 渲染 `FileIcon` 彩色图标；与终端分支互斥。
 - **激活指示条**（TAB-01）：`isActive && isGroupActive` 时渲染底部 2px 指示条（absolute 锚定 `.dv-tab` 底边，色 `FOCUS_BORDER`，`pointerEvents: none`）。
 - **hover 关闭 ×**（TAB-02）：× 默认不可见（opacity 0 + pointerEvents none），hover 时显现。
+- **× 关闭守卫（F11 登记，SC-FE-07）**：settings 面板且 dirty → `confirmDialog` 确认才 `api.close()`。判据 = `params.panelId` 的 `settings-` 前缀（DefaultTab 拿不到 panel——dockview 8.1.0 `IDockviewPanelProps` 无 panel 属性，`panel.view.contentComponent` 红线不适用该场景）；该前缀与 dirtyRegistry 键同源（SettingsPanel 以同一 params.panelId 注册），无漂移；非 settings 面板 / 非 dirty 直关（行为零回归）。
 
 ### Watermark 空态规范（GL-05/UI-806）
 
@@ -48,7 +49,11 @@ SEC-01 effect 同时承担 `startWatch(rootPath)` / `stopWatch(prev)`——watch
 
 ### 面板注册表已提取到 `src/panelRegistry.ts`
 
-`panelRegistry` / `PANEL_TYPES` / `FILE_PANEL_TYPES` / `isAlwaysRenderPanel` 是全局架构组件，被 workspace、explorer、测试等多方引用，不应埋于 workspace 子路径。新增面板类型仍按 #5 流程：创建目录 → 注册 → 追加 `PANEL_TYPES`。
+`panelRegistry` / `PANEL_TYPES` / `FILE_PANEL_TYPES` / `isAlwaysRenderPanel` 是全局架构组件，被 workspace、explorer、测试等多方引用，不应埋于 workspace 子路径。新增面板类型仍按 #5 流程：创建目录 → 注册 → 追加 `PANEL_TYPES`。`isAlwaysRenderPanel` **不含 settings**（决策写死，SC-FE-06）：重建无视觉闪屏、状态在 params/store，未保存 dirty 随卸载丢失与旧 hooksConfig 行为一致继承。
+
+### openSettingsPanel 同页单例（F11，SC-FE-02）
+
+`openSettingsPanel(pageId, settingsPageId?)` 在 pageApis.ts——面板 id = `settings-{pageId}`；getPanel 命中 → focus 返回 true（同页单例），未命中 → addPanel（component "settings"，settingsPageId 深链注入 params.selectedPage）；100ms×50 轮询 getPageApi 就绪，超时 console.warn 降级返回 false。**调用方须先切到目标页**（本函数不切页）——编排见 `features/settingsCenter/openSettings.ts`（无项目 toast 拦截在编排层，R1）。
 
 ### 终端页签自定义重命名（F8）
 

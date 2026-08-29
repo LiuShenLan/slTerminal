@@ -47,9 +47,15 @@ CLI profile 注册表（MC-1/101~108）——编码 CLI 身份域与能力策略
 
 `profiles/claude/` 是 claude 身份域与 hooks/history 策略实现点——claude 字面量（id/命令名/事件名/`~/.claude` 路径）只允许出现在此目录；通用层经注册表/常量消费。
 
-### features→panels 依赖方向合法化（KZ-1）
+### 编辑器归域 `configEditor/`（KZ-1，F11 收编）
 
-`profiles/claude/index.ts` import `panels/hooksConfig/ClaudeHooksConfigEditor` 并挂入 `capabilities.hooks.configEditor`——features/cliProfiles → panels 新方向合法化理由：`profiles/claude/` 是 claude 合法领地，编辑器组件是 claude 专属资产；hub 经 profile 的 `configEditor` 字段分派渲染。`types.ts` 仅类型 import，运行期擦除，不构成运行循环。
+claude 专属 hooks 编辑器（ClaudeHooksConfigEditor + 10 文件 + schema/）**归域 `profiles/claude/configEditor/`**——不再位于 panels、不再跨模块引用（F11 迁移后 cliProfiles 零外部面板依赖）。`profiles/claude/index.ts` import `./configEditor/ClaudeHooksConfigEditor` 挂入 `capabilities.hooks.configEditor`；设置中心 Hooks 配置页（`panels/settings/pages/HooksSettingsPage`）经该字段分派渲染，hub 零直接引用（KZ-1 依赖方向不变，只是编辑器资产物理归域）。`types.ts` 仅类型 import，运行期擦除，不构成运行循环。
+
+**schema 单点（MC-223/P3-FE-07/TE-09/TE-15）**：`configEditor/schema/` 承载 SchemaStore 官方 claude-code-settings schema 内嵌 + hooks 子 schema 提取（`properties.hooks` + 依赖 `$defs` 子集，不含 permissions 专用 permissionRule）+ Draft07 校验单例。协议知识只属于 claude profile 域，**不抽象**为通用能力——面板选择行允许其他 CLI 挂载自有编辑器，但本 schema 单点仍是 claude 专属资产。
+
+- 升级方式：整文件替换 `configEditor/schema/claude-code-settings.json` 即可，离线可用、无网络请求（自包含性已核实：无远程 `$ref`，35 个本地 `$ref` 全指向 `#/$defs/*`）。
+- `compileSchema(schema, { draft: "draft-07" })` 单例（json-schema-library 11.x）——schema 固定不变，复用避免重复编译；本 schema 无 `$schema` 字段，缺省会选 draft-2020-12，**必须显式 `draft-07` 保持旧语义**（TE-09）。
+- **TE-15 债务登记（ADR-0010）**：json-schema-library 9.x/11.x 双 major 并存——codemirror-json-schema@0.8.1 锁 9.x（上游约束），主声明 11.6.2；运行时两实例并存无冲突，待上游升级消解。
 
 ### 注册触发点（side-effect import）
 

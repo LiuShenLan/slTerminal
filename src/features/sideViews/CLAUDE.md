@@ -37,7 +37,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 默认按钮归属（`DEFAULT_ZONES`）：**top = `["nav", "explorer", "commit"]`，bottom = `[]`**；`DEFAULT_OPEN.top = "nav"`（默认打开导航树）。**活动栏固定宽度 `ACTIVITY_BAR_SIZE = 46`**（NAV-05/GL-04：40 → 46，Workspace 同步引用）。
 
-**「配置」钮（NAV-05 例外）**：id `config`、图标 IconConfig——**固定渲染于活动栏底部，不入 SideViewRegistry**（不参与拖拽/换区/持久化），点击 = `openHooksConfigFromActivityBar()`。决策 4 入口唯一化：目标项目 = 活跃页面所属优先兜底第一个；先 `switchToPageShared` 再 `openHooksConfigPanel`。
+**「配置」钮（NAV-05 例外）**：id `config`、图标 IconConfig——**固定渲染于活动栏底部，不入 SideViewRegistry**（不参与拖拽/换区/持久化），点击 = `openSettings()`（设置中心唯一入口，F11，取代旧 openHooksConfigFromActivityBar）。编排：目标项目 = 活跃页面所属优先兜底第一个；无项目 → toast「请先创建项目」（R1：设置面板无 Dockview 宿主可挂，静默不可感知）；先 `switchToPageShared` 再 `openSettingsPanel`（同页单例语义继承 C13-7）。编排细节见 `features/settingsCenter/CLAUDE.md`。
 
 ### HTML5 拖拽——外层容器统一处理 + 容器中点 zone 判定
 

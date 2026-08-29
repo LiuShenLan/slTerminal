@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 存在理由
 
-`src/panels` 是 Dockview 面板的实现层，承担所有可托管到工作区布局的渲染容器（terminal/editor/html/gitshow/diff/hooksConfig）。Dockview 只负责布局骨架，面板内部状态、渲染生命周期与平台 API 调用全收敛在本层，使前端其他区域无需关心终端实例、CodeMirror 编辑器、iframe 沙箱等复杂生命周期。
+`src/panels` 是 Dockview 面板的实现层，承担所有可托管到工作区布局的渲染容器（terminal/editor/html/gitshow/diff/settings）。Dockview 只负责布局骨架，面板内部状态、渲染生命周期与平台 API 调用全收敛在本层，使前端其他区域无需关心终端实例、CodeMirror 编辑器、iframe 沙箱等复杂生命周期。
 
 ## 关键约束与决策
 
@@ -73,14 +73,16 @@ WebView2 sandboxed iframe 中 `#fragment`/`:target` 彻底失效，且 `allow-sc
 - **CSS flexbox `min-width: auto` 修复**：DOM 层级为双层 flex 嵌套，CM6 `.cm-content`（`flex-shrink: 0`，`white-space: pre`）会随长行横向扩展撑开 flex 子项，导致分界线偏离 50%。四个 flex 子项均加 `minWidth: 0` 显式覆盖。`overflow: clip` 保留——裁剪溢出但不吸收滚轮事件。
 - **容器 ref 桥接**：DiffPanel 三态中容器 div 仅在 `"ready"` 态挂载。`renderKey` state + `bridgedRef` guard + `useEffect([state.kind])` 在 commit 后触发额外渲染，确保 `useFontSizeWheel` / `usePanelFocus` 在容器就绪后收到非 null DOM 元素。
 
-### hooksConfig：hub 容器 + CLI 专属编辑器分派（KZ-1）
+### settings：设置中心壳 + 配置页注册表分派（F11）
 
-`HooksConfigPanel`（F6）为 **hub 容器**：顶部 CLI 选择行 + 编辑器槽。编辑器槽通过 `selectedProfile?.capabilities?.hooks?.configEditor` 分派渲染——hub 不直接引用任何具体 CLI 编辑器，新增 CLI 自带编辑器组件挂入 profile 即接入。
+`SettingsPanel`（F11）为**壳容器**：左导航（组序 global→project，固定 180px）+ 右配置页槽位，槽位经 `SettingsPageRegistry`（features/settingsCenter）分派渲染 `page.component`（`key={selectedPage}` 强制重挂载——ADR-0001 先例，页内状态随卸载丢弃）。配置页注册集中在 `features/settingsCenter/pages.ts`（side-effect import 触发点：SettingsPanel 顶部 import 即注册全部配置页），壳零直接引用任何具体配置页组件，新增配置页 = pages.ts 追加一条 register。
 
-- 选中态 `params.selectedCli` 随布局 JSON 持久化（`api.updateParameters` + 显式 `onLayoutChange(saveLayout(api))`）。
-- 切换 CLI = 卸载当前编辑器并重挂载目标编辑器（ADR-0001 先例）。
-- dirty 时 `confirmDialog` 确认丢弃（`src/lib/ConfirmDialog`，UI-801/803；askGuard 防循环）。
-- claude 专属编辑器实现位于 `features/cliProfiles/profiles/claude/`，经 profile 的 `configEditor` 字段引用，hub 零直接引用。
+- **壳是 params 持久化单点**：选中切换与 `onPageParamsChange`（pageParams[selectedPage] 槽 merge patch）统一经 `persistParams`（`api.updateParameters` + 显式 `onLayoutChange(saveLayout)` + 按 `settings-` 前缀解析 pageId → `updatePageLayout`）——updateParameters 不触发 onDidLayoutChange，必须显式保存（F8 先例）。
+- **dirty 汇聚（SC-FE-07）**：页组件经 `SettingsPageProps.onDirtyChange` 上报 → 壳维护 dirtyMap（导航项 7px 中性色圆点，不用 F3 四态色防语义混淆）+ 同步 `dirtyRegistry`（与 DefaultTab × 关闭拦截共享同一真值源，防两处状态漂移）。切配置页时当前页 dirty → `confirmDialog` 确认丢弃（askGuard 500ms 防循环，照 hub 先例）；× 关闭拦截在 workspace 层（见 workspace/CLAUDE.md）。
+- **切项目自动关闭（SC-FE-08）**：订阅 activePageId 所属项目 ≠ 面板所属项目 → 关闭。初始评估（布局恢复挂载即不一致，新挂载不可能 dirty）静默关；变化触发 dirty 守卫 confirmDialog，取消则不关（面板暂留非活跃项目，尊重用户选择）；`activePageId === null` 不动（删除末页/启动瞬态，防连锁误关）。
+- **isAlwaysRenderPanel 不加入 settings（决策写死，SC-FE-06）**：同 editor/gitshow/diff——重建无视觉闪屏，状态在 params/store；未保存 dirty 随卸载丢失与旧 hooksConfig 面板行为一致继承，不新增 always 内存开销。
+- **corrupted 警示条**：挂载 `loadSettings()` → corrupted → 顶部警示条（× 可关，`data-e2e="settings-corrupted-banner"`，不阻塞）。L2 覆盖（loadSettings mock），L4 豁免登记——写坏文件需沙箱外写，无命令通道。
+- claude 专属 hooks 编辑器归域 `features/cliProfiles/profiles/claude/configEditor/`（KZ-1，见 cliProfiles/CLAUDE.md），经 profile 的 `configEditor` 字段挂入；本面板经 HooksSettingsPage 页组件接入，不再跨 features 引用。
 
 ### Ctrl+C 保留为中断
 
@@ -198,7 +200,6 @@ Claude Code 在用户主动 Ctrl+C 中断时不发射任何 hook 事件。四态
 ## 添加新面板类型的步骤
 
 1. 在 `src/panels/` 下创建 `newtype/` 目录，含 `index.ts`、`NewTypePanel.tsx` 和必要的 hooks。
-2. 在 `src/panels/index.ts` 添加 `export { NewTypePanel } from "./newtype";`。
-3. 在 `src/panelRegistry.ts` 注册组件映射。
-4. 在 `PANEL_TYPES` 数组中追加 `"newtype"`。
-5. 如涉及新 IPC 命令，在 `src-tauri/capabilities/` 显式放行。
+2. 在 `src/panelRegistry.ts` 注册组件映射（**无 `src/panels/index.ts` barrel**——各面板经 `panelRegistry.ts` 顶部逐文件 import 直连）。
+3. 在 `PANEL_TYPES` 数组中追加 `"newtype"`。
+4. 如涉及新 IPC 命令，在 `src-tauri/capabilities/` 显式放行。

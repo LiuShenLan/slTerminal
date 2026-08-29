@@ -2,15 +2,15 @@
 
 > **本文档是项目用例数唯一真值源。** 所有 CLAUDE.md、README、CI 配置中引用的用例数均以此文件为准。更新测试后必须同步本文档。
 
-全量 **3746** 用例（Rust 809 + 前端 2755 + L3 142 + E2E 40），2026-08-29 校准。
+全量 **3846** 用例（Rust 815 + 前端 2839 + L3 142 + E2E 50），2026-08-30 校准。
 
 > **登记纪律（TQ-CI-01）**：改测试后同步本文件——L1 以 `cargo test` 实跑总数 + `grep -c '#[test]'` 双核对；L2 以 `npm test` 实跑（Vitest 报告）为准；段小计 = 段内行级用例数之和（逐段核对 it.each/工厂展开）。三处（表头/段头/段小计）必须一致。
 
 > **计数口径**：
-> - L1 以 `grep -c '#[test]'` 统计的 `#[test]` 属性数为准（39 文件 809）。
-> - L2 以 `npm test` 实跑（Vitest 报告）为准，it.each/describeIpcContract 工厂按展开后计入（159 文件 2755）。
+> - L1 以 `grep -c '#[test]'` 统计的 `#[test]` 属性数为准（39 文件 815）。
+> - L2 以 `npm test` 实跑（Vitest 报告）为准，it.each/describeIpcContract 工厂按展开后计入（166 文件 2839）。
 > - L3 以 `npm run test:l3` 实跑为准（8 文件 142）。
-> - L4 以 spec 内 `it(`/`it.skip(` 计数为准（9 spec，40 用例，38 active + 2 skip）。
+> - L4 以 spec 内 `it(`/`it.skip(` 计数为准（10 spec，50 用例，48 active + 2 skip）。
 > - L2 与 L3 独立运行：`vitest.config.ts` include 仅 `src/__tests__/**`，L3 走 `vitest.l3.config.ts`。
 
 ## 既定豁免清单（DOC-01）
@@ -32,8 +32,9 @@
 | `spawn.rs` 容量超限 kill 清理与 `conpty_api.rs` vendor 提取/加载回退的残余 Win32 分支 | 清理段为 I/O + 平台 API 组合，不可纯函数化；上限判定已由 `pty_capacity_*` 用例锁死 | L1 `pty_capacity_*` 3 例 + `join_with_timeout` 3 例 + `pty_integration_tests` 真实 ConPTY 往返 | TQ-COV-03 |
 | `editor.e2e.ts` dirty→clean 用例（外部写盘 → watcher → 编辑器 auto-reload） | Windows notify 环境级故障（2026-08-23 实证，非代码缺陷）：同机 L1 notify 测试通过，页面内写入不产生 fs-event | reload 逻辑由 L2 `editor-confirm.test.ts` + `use-code-mirror-reload-error.test.ts` 覆盖；修复环境后复跑验收 | 2026-08-23 实证登记 |
 | Rust 行覆盖 88.20%（llvm-cov 含测试代码口径） | 目标 90% 差 1.8pp；残余缺口集中 PTY Win32 分支 + main.rs 结构性零覆盖 + 编译器生成物计数缺失 | 重点文件已达标或逐条登记豁免（TQ-COV-01/03/06 + git/CLAUDE.md 豁免表） | TQ-COV 收尾登记 |
-| plan_balance 真实 HTTP 查询（ureq fetch）与 tokio 轮询任务本体 | 真实外部 API 依赖 + Tauri 运行时（规格 §3 不做 L4） | 解析与状态机 L1 全覆盖（罐装 JSON/参数化编排）+ L2 UI 四场景 + 人工实测（真实账号一轮） | F10 |
+| plan_balance 真实 HTTP 查询（ureq fetch）与 tokio 轮询任务本体（含动态间隔内存读取 POLL_INTERVAL_SEC 与 set_interval 落盘/内存一致链，F11 扩注） | 真实外部 API 依赖 + Tauri 运行时（规格 §3 不做 L4） | 解析与状态机 L1 全覆盖（罐装 JSON/参数化编排 + 间隔内存默认值/四维 set_interval 直调用例）+ L2 UI 四场景 + L4 频率页真实后端落盘（settings.e2e.ts ④⑤）+ 人工实测（真实账号一轮） | F10/F11 |
 | win11/win10 真实终端 conda 激活实测（profile 加载链路 + conda 钩子 + prompt 包装链） | 依赖真实 conda/miniforge 环境与交互会话，CI 无此环境 | L1 B17 参数守卫（`test_pwsh_args_no_noprofile_b17`）+ 双系统 debug build 人工实测 | B17 |
+| settings.json corrupted 警示条（L4） | 写坏 settings.json 需沙箱外写文件（E2E 无命令通道），真实损坏无法在 E2E 会话内构造 | L2 覆盖（`settings-panel.test.tsx` loadSettings mock 渲染/关闭）+ 人工实测（手改文件损坏重启） | SC-E2E-02 |
 
 > 原豁免表中 `FileWatcher::start`/`notify_watch` 与 `claude_history` 命令包装两项已按 D6 从豁免重分类为补测，不再列入豁免表。  
 > **SEC-17 豁免已撤销（TQ-COV-05 翻案）**：`tracing::warn!(target: "audit")` 已由 `tracing-test` 断言锁死，豁免行删除。
@@ -56,7 +57,7 @@
 | ⑤ | L2 | **E2E helper 行为契约**——验证 `__slterm_e2e_createProject` 等 helper 的契约，非真实 App 初始化逻辑 | 13 P-14 |
 | ⑥ | L2 | **浅层组件定位**——`editor.test.tsx` mock `useCodeMirror`，定位为组件集成契约测试，真实编辑器行为由 `use-code-mirror.test.ts` 等覆盖 | 07 G1/G2 |
 
-## L1 — Rust 单元/集成测试（39 文件 / 809 用例）
+## L1 — Rust 单元/集成测试（39 文件 / 815 用例）
 
 运行：`cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1`
 
@@ -95,7 +96,7 @@
 | `src-tauri/src/agent_history/mod.rs` | 21 | DTO serde/聚合/命令包装/force 通道；MC-302/303/304/BE-19 |
 | `src-tauri/src/agent_history/claude/mod.rs` | 4 | TitleSource serde/ScanRootGuard |
 | `src-tauri/src/agent_history/provider.rs` | 2 | CliHistoryProvider trait/注册表；MC-303/304 |
-| `src-tauri/src/plan_balance/mod.rs` | 18 | DTO serde 键集合/merge_slot/poll_once 编排/轮询间隔/命令核心；F10 |
+| `src-tauri/src/plan_balance/mod.rs` | 24 | DTO serde 键集合/merge_slot/poll_once 编排/轮询间隔/命令核心/set_interval 四维/键名常量；F10/F11 |
 | `src-tauri/src/plan_balance/source.rs` | 8 | resolve_env 纯函数/命令层 home 注入；F10 |
 | `src-tauri/src/plan_balance/query.rs` | 9 | URL 归一化/匹配查找/注册表序；F10 |
 | `src-tauri/src/plan_balance/deepseek.rs` | 6 | 响应解析纯函数（罐装 JSON）；F10 |
@@ -112,11 +113,11 @@
 
 本地开发机（已开开发者模式）为真实覆盖来源；CI runner 未开权限时上述分支覆盖记为「不确定」。
 
-## L2 — 前端单元/集成测试（159 文件 / 2755 用例）
+## L2 — 前端单元/集成测试（166 文件 / 2839 用例）
 
 运行：`npm test`
 
-### IPC 层（9 文件 / 183 用例）
+### IPC 层（9 文件 / 187 用例）
 
 | 文件 | 用例 | 覆盖要点 |
 |------|------|---------|
@@ -128,7 +129,7 @@
 | `src/__tests__/ipc-ping.test.ts` | 2 | `ping()` wrapper |
 | `src/__tests__/notification.test.ts` | 9 | toast 通知静默/权限；IHE-02 |
 | `src/__tests__/app-error.test.ts` | 26 | `parseAppError`/`getErrorMessage` 全变体；FE-02/BE-15 |
-| `src/__tests__/ipc-plan-balance-contract.test.ts` | 12 | planBalance 两命令四维契约/onPlanBalanceUpdated 解包/DTO 键集合；F10 |
+| `src/__tests__/ipc-plan-balance-contract.test.ts` | 16 | planBalance 三命令四维契约（含 setPlanBalanceInterval payload 键集合）/onPlanBalanceUpdated 解包/DTO 键集合；F10/F11 |
 
 ### 终端面板（17 文件 / 282 用例）
 
@@ -176,14 +177,14 @@
 | `src/__tests__/active-editor.test.ts` | 5 | active 指针 |
 | `src/__tests__/use-code-mirror-reload-error.test.ts` | 3 | 外部重载失败提示；FE-10 |
 
-### 工作区/布局/页签（18 文件 / 301 用例）
+### 工作区/布局/页签（17 文件 / 300 用例）
 
 | 文件 | 用例 | 覆盖要点 |
 |------|------|---------|
 | `src/__tests__/title-manager.test.ts` | 47 | terminal-N/标题冲突/suffix；B10 |
-| `src/__tests__/layout-serde.test.ts` | 26 | 布局序列化/旧格式修补/白名单；WRK-07 |
+| `src/__tests__/layout-serde.test.ts` | 27 | 布局序列化/旧格式修补/白名单（含旧 hooksConfig 面板被过滤）；WRK-07/SC-FE-06 |
 | `src/__tests__/panel-registry.test.ts` | 26 | 面板注册表/错误边界；FE-22/FE-35 |
-| `src/__tests__/workspace-defaulttab.test.tsx` | 34 | 页签形态/状态圆点/logo/关闭 hover；IC-03/TAB-01/TAB-02/F9 |
+| `src/__tests__/workspace-defaulttab.test.tsx` | 38 | 页签形态/状态圆点/logo/关闭 hover/× 关闭守卫；IC-03/TAB-01/TAB-02/F9/SC-FE-07 |
 | `src/__tests__/workspace-page-dockview.test.tsx` | 33 | PageDockview/右键菜单/重命名/关闭/visible；B12/TAB-03/TAB-04/TE-06/TQ-COV-08 |
 | `src/__tests__/pageapis.test.ts` | 20 | pageApis/会话反查/AbortSignal；FE-09/FE-26/BE-23 |
 | `src/__tests__/workspace-header-actions.test.tsx` | 23 | 页签操作/重命名菜单；F8/MC-405/TAB-04/FE-04 |
@@ -195,7 +196,6 @@
 | `src/__tests__/default-layout-format.test.ts` | 10 | makeEmptyLayout/NavTree 使用；WRK-11/NAV-06 |
 | `src/__tests__/layout-switch.test.ts` | 7 | 页面切换集成 |
 | `src/__tests__/workspace-multi-instance.test.tsx` | 6 | 多 Dockview 实例/H6；WRK-09 |
-| `src/__tests__/open-hooks-config-panel.test.ts` | 6 | hooksConfig 面板打开；HKC-09 |
 | `src/__tests__/workspace-e2e-ready.test.tsx` | 4 | E2E workspace ready 标记 |
 | `src/__tests__/workspace.test.tsx` | 4 | Dockview 初始化/项目页面关联 |
 
@@ -247,7 +247,7 @@
 | `src/__tests__/plan-balance-model.test.ts` | 22 | 货币符号/logo 路径/重置时间格式化/行文案四场景/tooltip；F10 |
 | `src/__tests__/plan-balance-footer.test.tsx` | 11 | footer 四场景渲染/隐藏态/初始拉取/事件订阅/点击节流/logo onError/tooltip；F10 |
 
-### 侧栏视图（7 文件 / 161 用例）
+### 侧栏视图（6 文件 / 156 用例）
 
 | 文件 | 用例 | 覆盖要点 |
 |------|------|---------|
@@ -257,7 +257,6 @@
 | `src/__tests__/sideBarArea.test.tsx` | 17 | 侧栏区布局/卸载/比例；SVC-07/FE-19/FE-21/TH-10 |
 | `src/__tests__/workspace-sideviews.test.tsx` | 13 | Workspace 三栏集成；SVC-10/NAV-05 |
 | `src/__tests__/sideViewRegistry.test.ts` | 8 | 侧栏视图注册表；NAV-05/TQ-COV-10 |
-| `src/__tests__/open-hooks-config.test.ts` | 5 | 配置钮入口；NAV-05 |
 
 ### Commit 视图（6 文件 / 64 用例）
 
@@ -270,13 +269,13 @@
 | `src/__tests__/commit-view-status.test.ts` | 7 | 状态机四态 |
 | `src/__tests__/commit-view.test.tsx` | 4 | 主干渲染/提示色 |
 
-### hooks 配置面板（11 文件 / 233 用例）
+### hooks 配置编辑器（11 文件 / 227 用例）
 
 | 文件 | 用例 | 覆盖要点 |
 |------|------|---------|
 | `src/__tests__/hooks-config-handlerform.test.tsx` | 40 | HandlerForm 字段矩阵/切换/编辑；HKC-04 |
 | `src/__tests__/hooks-config-gui.test.tsx` | 28 | Master-Detail 渲染/增删；HKC-05 |
-| `src/__tests__/hooks-config-panel.test.tsx` | 43 | 面板三态/hub 选择行/分派/持久化；MC-502~507/KZ-1/KZ-4/MC-503/HKC-03/07/09/10/OV-02 |
+| `src/__tests__/settings-hooks-page.test.tsx` | 37 | 设置中心内 Hooks 页三态/CLI 选择行/分派/持久化（SettingsPageProps 形态）；MC-502~507/KZ-1/KZ-4/MC-503/HKC-03/07/09/10/OV-02/SC-FE-05 |
 | `src/__tests__/hooks-config-jsonmode.test.tsx` | 18 | JSON 编辑器/schema/校验；HKC-01 |
 | `src/__tests__/hooks-config-matcher.test.ts` | 21 | `matchHook` 全分支 |
 | `src/__tests__/hooks-config-catalog.test.ts` | 19 | eventsCatalog 元数据 |
@@ -285,6 +284,20 @@
 | `src/__tests__/hooks-config-schema.test.ts` | 10 | `validateHooksJson` 边界；HKC-08 |
 | `src/__tests__/hooks-config-sync.test.tsx` | 15 | 双模式同步/user 层二次确认；MC-220/KZ-4/FE-25/SEC-05 |
 | `src/__tests__/statusline-bridge-behavior.test.ts` | 10 | statusline 桥接脚本行为；B11/B16 |
+
+### 设置中心（9 文件 / 88 用例）
+
+| 文件 | 用例 | 覆盖要点 |
+|------|------|---------|
+| `src/__tests__/settings-page-registry.test.ts` | 7 | 注册表注册/getAll 分组过滤/order 排序/重复 id 覆盖/_reset；SC-FE-01 |
+| `src/__tests__/open-settings.test.ts` | 6 | 无项目 toast 且不切页/活跃项目优先/兜底第一个项目/切页先于开面板；SC-FE-02 |
+| `src/__tests__/open-settings-panel.test.ts` | 7 | addPanel 参数精确/单例 focus 不新建/深链 selectedPage/5s 超时降级；SC-FE-02 |
+| `src/__tests__/settings-panel.test.tsx` | 13 | 导航组序/选中渲染/切换 persist/corrupted 警示条/pageParams 透传/空态；SC-FE-03 |
+| `src/__tests__/settings-plan-balance.test.tsx` | 16 | 频率页显示回退/合法提交调命令+refresh/非法行内红字/Err toast+保留输入；SC-FE-04 |
+| `src/__tests__/settings-dirty-registry.test.ts` | 5 | set/is/clear 真值源；SC-FE-07 |
+| `src/__tests__/settings-panel-dirty.test.tsx` | 6 | 切页 confirm 确认/取消/非 dirty 直切/圆点显隐；SC-FE-07 |
+| `src/__tests__/settings-keybindings.test.tsx` | 20 | 分组渲染/override 高亮/未绑定占位/录制 Esc/Backspace 解绑/保留键拒绝/冲突放行/卸载清 suspended；SC-FE-09 |
+| `src/__tests__/settings-panel-autoclose.test.tsx` | 8 | 切项目自动关闭/同项目不关/初始不一致静默关/activePageId null 不关/dirty confirm 取消不关；SC-FE-08 |
 
 ### Diff/GitShow 面板（4 文件 / 87 用例）
 
@@ -295,11 +308,11 @@
 | `src/__tests__/diff-alignment.test.ts` | 18 | `computeAlignment` 纯函数；EDF-06 |
 | `src/__tests__/diff-panel-stale-banner.test.tsx` | 4 | 内容过时提示条；FE-10 |
 
-### 快捷键/命令系统（7 文件 / 129 用例）
+### 快捷键/命令系统（7 文件 / 131 用例）
 
 | 文件 | 用例 | 覆盖要点 |
 |------|------|---------|
-| `src/__tests__/shortcuts.test.ts` | 54 | 注册/注销/上下文/重绑/IME；STS-03 |
+| `src/__tests__/shortcuts.test.ts` | 56 | 注册/注销/上下文/重绑/IME/录制态屏蔽；STS-03/SC-FE-09 |
 | `src/__tests__/keystroke.test.ts` | 26 | keystroke 格式化与解析 |
 | `src/__tests__/global-commands.test.ts` | 13 | 全局快捷键命令；STS-02 |
 | `src/__tests__/command-catalog.test.ts` | 18 | 命令目录/参数化遍历；STS-08/SEC-04 |
@@ -355,13 +368,13 @@
 | `src/__tests__/file-viewer-registry.test.ts` | 31 | 扩展名策略链；EXP-12 |
 | `src/__tests__/csp-config.test.ts` | 7 | tauri.conf.json CSP 不变量；IHE-07④ |
 
-### E2E 辅助/门控测试（7 文件 / 36 用例）
+### E2E 辅助/门控测试（7 文件 / 38 用例）
 
 | 文件 | 用例 | 覆盖要点 |
 |------|------|---------|
 | `src/__tests__/e2e-build-config.test.ts` | 8 | VITE_E2E 配置/E2E_ENABLED 字面量；IHE-04 |
 | `src/__tests__/e2e-enabled.test.ts` | 9 | E2E_ENABLED 真值表 |
-| `src/__tests__/app.test.tsx` | 5 | E2E helper 契约；DOC-02⑤ |
+| `src/__tests__/app.test.tsx` | 7 | E2E helper 契约（含设置中心 helper 存在性）；DOC-02⑤/SC-E2E-01 |
 | `src/__tests__/error-boundary.test.tsx` | 6 | ErrorBoundary inline 重试；IHE-05/FE-46 |
 | `src/__tests__/e2e-clipboard-helper.test.ts` | 3 | helper 函数可用性 |
 | `src/__tests__/e2e-create-project.test.ts` | 3 | E2E helper 契约；DOC-02⑤ |
@@ -393,7 +406,7 @@
 | `test/terminal/shortcut-dispatch.test.ts` | 4 | 生产按键分发链路（TQ-E-02） |
 | `test/terminal/negative-ansi.test.ts` | 9 | 反向/异常 ANSI（E2E-14） |
 
-## L4 — E2E 端到端测试（9 spec / 40 用例，38 active + 2 skip）
+## L4 — E2E 端到端测试（10 spec / 50 用例，48 active + 2 skip）
 
 运行：`npm run e2e`（= `npm run build:e2e` + `npm run wdio`）  
 技术栈：WDIO + `@wdio/tauri-service` 1.1.0 + embedded driver；specs 通配 `./*.e2e.ts`，单 worker 顺序执行。
@@ -411,6 +424,7 @@
 | `sidebar.e2e.ts` | 2 | 2 active | 侧栏视图开关/跨区状态机 |
 | `commit.e2e.ts` | 2 | 2 active | 变更列表/双击 modified 打开 diff |
 | `mockcli.e2e.ts` | 3 | 3 active | mock profile 冒烟/CS-3 agent-event/hub 分派 |
+| `settings.e2e.ts` | 10 | 10 active | 配置钮打开/单例/切页持久化/频率页真实后端落盘/非法不落盘/录制落盘/切项目自动关闭/同项目保留/hooks 页冒烟/dirty 切页守卫 |
 
 ### 用户目录隔离机制（FIX-TE-04 + E2E-05 扩展）
 
@@ -434,3 +448,4 @@ embedded WDIO 无法投递 OS 级按键；所有键盘用例改用页面内 disp
 - 2026-08-23：全量 3634（Rust 742 + 前端 2710 + L3 142 + E2E 40）。历史变更日志已移除，旧版本变更详见 git log。
 - 2026-08-28：全量 3731（Rust 794 + 前端 2755 + L3 142 + E2E 40）。F10 新增 plan_balance 五文件 51 例 + settings.rs +1、前端三文件 45 例。
 - 2026-08-29：全量 **3746**（Rust 809 + 前端 2755 + L3 142 + E2E 40）。B17 新增 `test_pwsh_args_no_noprofile_b17` 1 例（shell.rs 32→33），kimi.rs 解析实测修正（+14）已于同日校准。
+- 2026-08-30：全量 **3846**（Rust 815 + 前端 2839 + L3 142 + E2E 50）。F11 设置中心：plan_balance/mod.rs +6（set_interval 四维/内存默认/键名常量）；L2 +9 文件 -2 文件净 +7 文件 +84（设置中心 9 文件 88 例，settings-hooks-page 替代 hooks-config-panel 37，open-settings 两文件取代 open-hooks-config 两文件，ipc-plan-balance-contract +4、workspace-defaulttab +4、shortcuts +2、layout-serde +1、app +2）；L4 +settings.e2e.ts 10 例。

@@ -60,7 +60,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### 前向接口
 
 - `exportContextBindings(context)`：导出某 context 当前生效绑定（含 global，排除解绑），供 HtmlPanel postMessage 键盘转发动态比对全局快捷键用。
-- `listCommands()`：列出已注册命令元数据，供将来可视化设置 UI 枚举用。
+- `listCommands()`：列出已注册命令元数据，供可视化设置 UI（快捷键设置页 KeybindingsPage，F11）枚举用。
+- `getEffectiveKeystroke(id)`（F11 登记）：**生效键查询**——设置页显示与运行期同源，防显示/运行漂移；`null` = 解绑或无默认键。含用户 overrides 语义（有键→合法用之/非法回退默认/null 解绑），设置页直接用它渲染每行当前生效键。
+- `setCaptureSuspended(suspended)`（F11 登记）：**录制态屏蔽**——true 时 `handleKeyDown`/`resolve` 起始即不消费任何按键，快捷键设置页录制期间置位，防录制键触发命令（如录 Ctrl+Shift+C 真执行复制）；录制结束/取消/卸载必须复位（`_reset()` 亦清）。
 
 ### 指纹索引 + 引用计数
 
@@ -101,11 +103,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `context: "global"`，在 `App.tsx` 中一次性注册；overrides 经 `wireKeybindings(getShortcutRegistry(), useKeybindings)` 持续同步。优先级 0-99，面板级可覆盖。
 
-**Hooks 配置入口为活动栏底部「配置」钮**（原 `global.openHooksConfig` Ctrl+Shift+H 命令已删除；SidebarTree 右键菜单随其退役）：`openHooksConfigFromActivityBar()` → 先 `switchToPageShared` 切页 → `openHooksConfigPanel(pageId)`（同页单例语义 C13-7 不变）。
+**「配置」钮 = 设置中心唯一入口（F11）**（原 `global.openHooksConfig` Ctrl+Shift+H 命令已删除；SidebarTree 右键菜单随其退役）：`openSettings()` → 先 `switchToPageShared` 切页 → `openSettingsPanel(pageId)`（同页单例语义继承 C13-7，面板 id `settings-` 前缀）。无项目 → toast「请先创建项目」。编排细节见 `features/settingsCenter/CLAUDE.md`。
 
 ### 用户自定义重绑定
 
-覆盖层存 `~/.slterminal/settings.json` 的 `keybindings` 段（`{ commandId: "Ctrl+Alt+KeyC" | null }`），由 `stores/keybindings.ts` 管理（sanitize + loaded 守卫 + debounce）。后端 `save_settings` 浅合并，不擦其他段。本期仅数据模型 + 文件配置，可视化 UI 为后续 feature。
+覆盖层存 `~/.slterminal/settings.json` 的 `keybindings` 段（`{ commandId: "Ctrl+Alt+KeyC" | null }`），由 `stores/keybindings.ts` 管理（sanitize + loaded 守卫 + debounce）。后端 `save_settings` 浅合并，不擦其他段。
+
+**可视化 UI 已落地（F11）**：快捷键设置页（`panels/settings/pages/KeybindingsPage`）——`listCommands()` 按 category 分组渲染，行显生效键（override 高亮 + ↺ 回默认 + 默认键小字；`getEffectiveKeystroke` null → 「未绑定」占位）；录制期间 `setCaptureSuspended(true)` 屏蔽全局派发，`isReserved` 拒绝保留键、`findConflict` 同 context 冲突警告放行写入。测试 `settings-keybindings.test.tsx` + `shortcuts.test.ts`（suspended 两例）。
 
 ## HTML iframe 全局键转发
 

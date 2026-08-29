@@ -123,7 +123,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | src/features/commit | ../src/features/commit/CLAUDE.md |
 | src/features/agentStatus | ../src/features/agentStatus/CLAUDE.md |
 | src/features/notifications | ../src/features/notifications/CLAUDE.md |
-| src/features/hooksConfig | ../src/features/hooksConfig/CLAUDE.md |
+| src/features/settingsCenter | ../src/features/settingsCenter/CLAUDE.md |
 | src/features/cliProfiles | ../src/features/cliProfiles/CLAUDE.md |
 | src/features/agentHistory | ../src/features/agentHistory/CLAUDE.md |
 | src/__tests__ | ../src/__tests__/CLAUDE.md |
@@ -195,5 +195,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | F8 | 特性 | 终端页签自定义重命名（customTitle 随布局持久化；claude 运行中禁用；不影响 terminal-N 递增） |
 | F9 | 特性 | 终端页签/侧栏 CLI 品牌 logo（按命令行首 token 匹配 profile.iconSrc；页签 logo 会话绑定，侧栏行存在即显示） |
 | F10 | 特性 | 编码套餐余量展示（导航树底部；user 层 settings.json env 判定套餐 → 后端定时查询推送；规格与计划产物已随实施完毕归档删除） |
+| F11 | 特性 | 设置中心（统一配置入口：Dockview 面板 `settings` + SettingsPageRegistry 分派；Hooks 迁入/频率/快捷键三配置页；后端键名归域 + 专用命令轻量收口） |
 
 > 测试策略概览见上方「测试策略」章节；完整用例清单见 `.claude/test-inventory.md`。
