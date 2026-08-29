@@ -11,7 +11,8 @@
  * - CS-3 用例 ①（agent-event 注入）：Node 侧原子写信号文件（cliId="mockcli"，
  *   事件经桩 eventToStatus 恒等映射 working）→ 页签 ⚡ + 导航树活跃区建行
  *   （真实 watcher → agent-event → resolvePayloadCliId 三级解析 → 桩策略全链路真实）。
- * - CS-3 用例 ②（hub 分派 + 保存 cliId 透传）：hooksConfig 面板选择行渲染 mockcli
+ * - CS-3 用例 ②（hub 分派 + 保存 cliId 透传）：设置中心 hooks 配置页（settings 组件
+ *   + 深链 selectedPage="hooks"，SC-E2E-02 适配）选择行渲染 mockcli
  *   按钮（hasConfigEditor=true 过滤命中）→ 点击 → mock 编辑器桩渲染
  *   （data-e2e="mockcli-config-editor"）→ 桩内保存触发真实 writeHooksConfig
  *   ("mockcli", ...) → 后端「未知 cliId: mockcli」错误透传展示。
@@ -309,7 +310,7 @@ describe("mockcli 关键路径（CS-3：agent-event 注入 + hub 分派/保存 c
   });
 
   /**
-   * CS-3 用例 ②（hub 分派 + 保存 cliId 透传）：打开 hooksConfig 面板 → 选择行渲染
+   * CS-3 用例 ②（hub 分派 + 保存 cliId 透传）：打开设置中心面板（hooks 配置页）→ 选择行渲染
    * mockcli 按钮（hasConfigEditor=true 过滤命中）→ 点击 → mock 编辑器桩渲染
    * （data-e2e="mockcli-config-editor"）→ 桩内保存动作触发真实
    * writeHooksConfig("mockcli", ...) → 后端「未知 cliId: mockcli」错误透传展示
@@ -323,28 +324,29 @@ describe("mockcli 关键路径（CS-3：agent-event 注入 + hub 分派/保存 c
       await registerMockCliProfile();
       await waitForDockviewApi();
 
-      // 0b. 关闭前序用例遗留的 hooksConfig 面板（mocha retries:1 重跑时旧面板残留 →
+      // 0b. 关闭前序用例遗留的设置面板（mocha retries:1 重跑时旧面板残留 →
       //     多面板并存让首匹配断言命中间态面板——先关后开保证唯一，照 hooks.e2e.ts 先例）
       await browser.execute(() => {
         for (const p of window.__dockviewApi!.panels) {
-          if (p.component === "hooksConfig") p.api.close();
+          if (p.component === "settings") p.api.close();
         }
       });
 
-      // 1. 程序化打开 hooksConfig 面板（hub 容器 = 选择行 + 编辑器槽）
-      const panelId = "hooksConfig-e2e-mockcli-" + Date.now();
+      // 1. 程序化打开设置中心面板（设置中心形态，SC-E2E-02：settings 组件 + 深链
+      //    selectedPage="hooks"；hub 容器 = 选择行 + 编辑器槽）
+      const panelId = "settings-e2e-mockcli-" + Date.now();
       await browser.execute((pid: string) => {
         window.__dockviewApi!.addPanel({
           id: pid,
-          component: "hooksConfig",
-          title: "Hooks 配置",
-          params: { panelId: pid },
+          component: "settings",
+          title: "设置",
+          params: { panelId: pid, selectedPage: "hooks" },
         });
       }, panelId);
       await browser.waitUntil(
         async () =>
           (await browser.execute(() => !!document.querySelector('[data-e2e="hooks-config-panel"]'))) === true,
-        { timeout: 15000, timeoutMsg: "hooksConfig 面板未就绪" },
+        { timeout: 15000, timeoutMsg: "hooks 配置页未就绪" },
       );
 
       // 2. 选择行渲染 mockcli 按钮（hasConfigEditor=true 过滤命中——claude + mockcli
@@ -399,12 +401,12 @@ describe("mockcli 关键路径（CS-3：agent-event 注入 + hub 分派/保存 c
         { timeout: 15000, timeoutMsg: "桩保存未透传后端「未知 cliId: mockcli」错误" },
       );
     } finally {
-      // 回收本用例打开的 hooksConfig 面板（照 hooks.e2e.ts 先例——重跑/后续用例
+      // 回收本用例打开的设置面板（照 hooks.e2e.ts 先例——重跑/后续用例
       // 从零开始）
       try {
         await browser.execute(() => {
           for (const p of window.__dockviewApi!.panels) {
-            if (p.component === "hooksConfig") p.api.close();
+            if (p.component === "settings") p.api.close();
           }
         });
       } catch { /* 忽略 */ }

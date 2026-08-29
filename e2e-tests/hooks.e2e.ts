@@ -227,7 +227,8 @@ describe("hooks 状态可视化", () => {
 
 // ── hooks 配置面板保存链路（P3-TE-18） ──
 //
-// 场景：tempdir 项目 → 打开 hooksConfig 面板 → 切 project 层 → JSON 模式经
+// 场景：tempdir 项目 → 打开设置中心面板（settings 组件，深链 selectedPage="hooks"，
+// SC-E2E-02 适配）→ 切 project 层 → JSON 模式经
 // __slterm_e2e_setHooksConfigJson 注入合法 hooks 配置 → 点击保存 →
 // 断言 <tempdir>/.claude/settings.json 真实写盘。
 // 断言三件事：① mtime 更新；② hooks 内容正确（写入的事件/handler 存在，且
@@ -306,31 +307,34 @@ describe("hooks 配置面板保存链路 (P3-TE-18)", () => {
       // 3. 等待 Dockview API
       await waitForDockviewApi();
 
-      // 3b. 关闭前序用例遗留的 hooksConfig 面板（本用例保存后面板未关；mocha retries:1
+      // 3b. 关闭前序用例遗留的设置面板（本用例保存后面板未关；mocha retries:1
       //     重跑时旧面板残留 → addPanel 叠加出多个面板 → hub 选择行 logo 全页计数
       //     断言（logoCount/rowButtonCount）命中间态面板——先关后开保证唯一，
       //     照 :454 it 的既有先例）
       await browser.execute(() => {
         for (const p of window.__dockviewApi!.panels) {
-          if (p.component === "hooksConfig") p.api.close();
+          if (p.component === "settings") p.api.close();
         }
       });
 
-      // 4. 打开 hooksConfig 面板（经 __dockviewApi.addPanel；唯一 id 不与同页单例约定冲突）
-      const panelId = "hooksConfig-e2e-" + Date.now();
+      // 4. 打开设置中心面板（F11 形态，SC-E2E-02：组件 "settings" + 深链
+      //    selectedPage="hooks"——hooks 页迁入设置中心后的打开方式；面板 id 用
+      //    settings-e2e- 前缀——壳按 settings- 解析 pageId 查不到项目 → 不触发
+      //    切项目自动关闭，靠 finally 手动回收；唯一 id 不与同页单例约定冲突）
+      const panelId = "settings-e2e-hookscfg-" + Date.now();
       await browser.execute((pid: string) => {
         window.__dockviewApi!.addPanel({
           id: pid,
-          component: "hooksConfig",
-          title: "Hooks 配置",
-          params: { panelId: pid },
+          component: "settings",
+          title: "设置",
+          params: { panelId: pid, selectedPage: "hooks" },
         });
       }, panelId);
       // 面板容器仅在非 loading/error 态渲染——存在即表示首次加载（user 层）完成
       await browser.waitUntil(
         async () =>
           (await browser.execute(() => !!document.querySelector('[data-e2e="hooks-config-panel"]'))) === true,
-        { timeout: 15000, timeoutMsg: "hooksConfig 面板未就绪" },
+        { timeout: 15000, timeoutMsg: "hooks 配置页未就绪" },
       );
 
       // 4b. hub 选择行断言（D-14 Stage 06 段）：选择行位于编辑器上方（编辑器下移一层后的
@@ -342,7 +346,7 @@ describe("hooks 配置面板保存链路 (P3-TE-18)", () => {
       //     pty.write 注入 claude --resume 命令 → useCommandDetection 命中 → 终端
       //     页签渲染 claude 16×16 logo；页面多 Dockview 实例 + CSS 显隐，隐藏页面板
       //     不卸载仍留 DOM）不在面板容器内，全页计数会被污染（Stage 03 fix-loop 仅
-      //     覆盖 hooksConfig 面板残留来源，未覆盖终端页签 logo 来源）。
+      //     覆盖设置面板残留来源，未覆盖终端页签 logo 来源）。
       const hubRow = await browser.execute(() => {
         const panel = document.querySelector('[data-e2e="hooks-config-panel"]');
         const imgs = panel
@@ -459,14 +463,14 @@ describe("hooks 配置面板保存链路 (P3-TE-18)", () => {
       expect(saved.env).toEqual(preseed.env);
       expect(saved.$schema).toBe(preseed.$schema);
     } finally {
-      // 回收本用例打开的 hooksConfig 面板（保存用例面板未关；mocha retries:1 重跑时
+      // 回收本用例打开的设置面板（保存用例面板未关；mocha retries:1 重跑时
       // 旧面板残留在上一页 dockview——页面用多 Dockview 实例 + CSS 显隐，隐藏页面板
       // 不卸载仍留 DOM，全页 logo 计数断言（logoCount/rowButtonCount）会命中旧面板。
       // 此时当前页仍活跃，__dockviewApi 正指向本页 dockview，关闭可达；照 :454 it
       // 「先关后开保证唯一」先例，用例结束时回收，重跑/后续用例从零开始）
       await browser.execute(() => {
         for (const p of window.__dockviewApi!.panels) {
-          if (p.component === "hooksConfig") p.api.close();
+          if (p.component === "settings") p.api.close();
         }
       });
       rmSync(tempDir, { recursive: true, force: true });
@@ -486,29 +490,30 @@ describe("hooks 配置面板保存链路 (P3-TE-18)", () => {
     await waitForWorkspaceReady();
     await waitForDockviewApi();
 
-    // 1. 关闭前序用例遗留的 hooksConfig 面板（保存用例面板未关；document.querySelector
+    // 1. 关闭前序用例遗留的设置面板（保存用例面板未关；document.querySelector
     //    取首匹配元素，多面板并存会让状态条/按钮断言命中间态面板——先关后开保证唯一）
     await browser.execute(() => {
       for (const p of window.__dockviewApi!.panels) {
-        if (p.component === "hooksConfig") p.api.close();
+        if (p.component === "settings") p.api.close();
       }
     });
 
-    // 2. 程序化打开 hooksConfig 面板（hub 容器 = 选择行 + claude 编辑器槽）
-    const panelId = "hooksConfig-e2e-inject-" + Date.now();
+    // 2. 程序化打开设置中心面板（设置中心形态，SC-E2E-02：settings 组件 + 深链
+    //    selectedPage="hooks"；hub 容器 = 选择行 + claude 编辑器槽）
+    const panelId = "settings-e2e-inject-" + Date.now();
     await browser.execute((pid: string) => {
       window.__dockviewApi!.addPanel({
         id: pid,
-        component: "hooksConfig",
-        title: "Hooks 配置",
-        params: { panelId: pid },
+        component: "settings",
+        title: "设置",
+        params: { panelId: pid, selectedPage: "hooks" },
       });
     }, panelId);
     // 注入状态条在编辑器工具栏——仅非 loading/error 态渲染（编辑器下移一层后同语义）
     await browser.waitUntil(
       async () =>
         (await browser.execute(() => !!document.querySelector('[data-e2e="hooks-injection-status"]'))) === true,
-      { timeout: 15000, timeoutMsg: "hooksConfig 面板未就绪（注入状态条未出现）" },
+      { timeout: 15000, timeoutMsg: "hooks 配置页未就绪（注入状态条未出现）" },
     );
 
     // 3. 状态条文案读取 + 三态其一等待（初始异步查询未完成时为 "注入状态：--"，非三态）

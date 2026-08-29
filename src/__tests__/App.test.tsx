@@ -157,3 +157,37 @@ describe("__slterm_e2e_createProject", () => {
     }
   });
 });
+
+// ─── 设置中心面板 helper 契约（SC-E2E-01）───
+describe("设置中心面板 helper 契约（SC-E2E-01）", () => {
+  beforeEach(() => {
+    // 清空项目 store——否则前序 describe 残留项目会把 openSettings 引向
+    // 5s 页面 api 轮询路径（超时而非走无项目 toast 快路径）
+    resetStores();
+    localStorage.clear();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (window as any).__slterm_e2e_openSettings;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (window as any).__slterm_e2e_getSettingsPanelState;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (window as any).__slterm_e2e_getSettingsPanelCount;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (window as any).__slterm_e2e_switchSettingsPage;
+    installAllE2eHelpers();
+  });
+
+  it("installAllE2eHelpers 挂载 4 个设置中心面板 helper（均为函数）", () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const w = window as any;
+    expect(typeof w.__slterm_e2e_openSettings).toBe("function");
+    expect(typeof w.__slterm_e2e_getSettingsPanelState).toBe("function");
+    expect(typeof w.__slterm_e2e_getSettingsPanelCount).toBe("function");
+    expect(typeof w.__slterm_e2e_switchSettingsPage).toBe("function");
+  });
+
+  it("无项目时 __slterm_e2e_openSettings 不抛异常（toast 降级路径）", async () => {
+    // 空 store 下调用 → openSettings 内部 toast「请先创建项目」后 return，不抛
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await expect((window as any).__slterm_e2e_openSettings()).resolves.toBeUndefined();
+  });
+});

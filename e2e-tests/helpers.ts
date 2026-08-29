@@ -22,6 +22,7 @@ import { useLayout } from "../src/stores/layout";
 import { makeEmptyLayout } from "../src/features/navTree/NavTree";
 import { titleManager } from "../src/workspace/titleManager";
 import { switchToPageShared } from "../src/workspace/pageApis";
+import { openSettings } from "../src/features/settingsCenter/openSettings";
 import { useFontSize, FONT_SIZE_DEFAULT } from "../src/stores/fontSize";
 import { useKeybindings } from "../src/stores/keybindings";
 import { useSideBar } from "../src/stores/sideBar";
@@ -74,6 +75,11 @@ declare global {
     __slterm_e2e_getHooksConfigJson?: () => string | null;
     // mockcli 测试 profile 注册（Stage 07 AC-4：L4 经 E2E helper 注册）
     __slterm_e2e_registerMockCliProfile?: () => void;
+    // 设置中心面板（F11，SC-E2E-01）
+    __slterm_e2e_openSettings?: () => Promise<void>;
+    __slterm_e2e_getSettingsPanelState?: () => { selectedPage: string | null } | null;
+    __slterm_e2e_getSettingsPanelCount?: () => number;
+    __slterm_e2e_switchSettingsPage?: (id: string) => boolean;
   }
 }
 
@@ -94,6 +100,7 @@ export function installAllE2eHelpers(): void {
   installShortcutDebug();
   installProjectHelpers();
   installSettingsHelpers();
+  installSettingsPanelHelpers();
   installTitleHelpers();
   installSideBarHelpers();
   installHookHelpers();
@@ -279,6 +286,61 @@ function installSettingsHelpers(): void {
       terminalFontSize: FONT_SIZE_DEFAULT,
       editorFontSize: FONT_SIZE_DEFAULT,
     });
+  };
+}
+
+/**
+ * __slterm_e2e_openSettings / __slterm_e2e_getSettingsPanelState /
+ * __slterm_e2e_getSettingsPanelCount / __slterm_e2e_switchSettingsPage
+ *
+ * 设置中心面板 E2E 后门（F11，SC-E2E-01）：
+ * - openSettings 直接复用生产编排（无项目 toast / 目标页面选择 / 切页 →
+ *   openSettingsPanel 同页单例），等价活动栏配置钮点击
+ * - 面板状态/计数经 window.__dockviewApi（活跃页面实例）查 settings- 前缀面板
+ *   （panelId 契约 SC-FE-02：settings-{pageId}）读 params.selectedPage——
+ *   选中配置页随布局持久化的真值源
+ * - 切配置页走 DOM 点击 data-e2e="settings-nav-{id}"（与真实用户同路径，
+ *   触发 handlePageSelect 全链：dirty 守卫 → persistParams）
+ */
+function installSettingsPanelHelpers(): void {
+  // __slterm_e2e_openSettings —— 打开设置中心面板（Promise<void>，失败不抛，
+  // 内部 openSettingsPanel 超时 console.warn 降级）
+  window.__slterm_e2e_openSettings = () => openSettings();
+
+  // __slterm_e2e_getSettingsPanelState —— 活跃页面 api 中 settings- 面板的
+  // 选中配置页；无 api / 无面板返回 null
+  window.__slterm_e2e_getSettingsPanelState = () => {
+    const api = window.__dockviewApi;
+    if (!api) return null;
+    for (const panel of api.panels) {
+      if (panel.id.startsWith("settings-")) {
+        const params = panel.params as { selectedPage?: string } | undefined;
+        return { selectedPage: params?.selectedPage ?? null };
+      }
+    }
+    return null;
+  };
+
+  // __slterm_e2e_getSettingsPanelCount —— 活跃页面 api 中 settings- 面板总数
+  // （同页单例断言用：正常 ≤1；无 api 返回 0）
+  window.__slterm_e2e_getSettingsPanelCount = () => {
+    const api = window.__dockviewApi;
+    if (!api) return 0;
+    let count = 0;
+    for (const panel of api.panels) {
+      if (panel.id.startsWith("settings-")) count += 1;
+    }
+    return count;
+  };
+
+  // __slterm_e2e_switchSettingsPage —— 经 DOM 点击左导航配置页项
+  // （data-e2e="settings-nav-{id}"）。返回是否点击成功（导航项不存在返回 false，
+  // 供 spec 侧提前失败而非隐性超时）
+  window.__slterm_e2e_switchSettingsPage = (id: string): boolean => {
+    const el = document.querySelector(`[data-e2e="settings-nav-${id}"]`);
+    if (!(el instanceof HTMLElement)) return false;
+    el.click();
+    return true;
   };
 }
 
