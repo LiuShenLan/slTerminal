@@ -20,11 +20,13 @@ import type { SettingsPage, SettingsPageGroup } from "../../features/settingsCen
 import {
   setSettingsDirty,
   clearSettingsDirty,
+  isSettingsDirty,
 } from "../../features/settingsCenter/dirtyRegistry";
 import { confirmDialog } from "../../lib";
 import { loadSettings } from "../../ipc/settings";
 import { saveLayout } from "../../workspace/layoutSerde";
 import { useProjects } from "../../stores/projects";
+import { useLayout } from "../../stores/layout";
 import {
   PANEL_BG,
   SECONDARY_BG,
@@ -199,6 +201,17 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
   // 切页确认弹窗守卫：弹窗打开期间 + 关闭后短暂窗口内抑制回归触发的重读（防循环，
   // 照 hub askGuard 先例，SC-FE-07）
   const askGuardRef = useRef(false);
+  // 切项目自动关闭守卫状态（SC-FE-08）：isFirstRunRef 区分「初始评估」与「变化触发」——
+  // 挂载时布局恢复场景静默关（新挂载不可能 dirty，无守卫必要）；closedRef 防重复 close
+  // （close 后组件卸载前 effect 重跑）；closeGuardRef 关闭确认弹窗期间防 effect 重入
+  const isFirstRunRef = useRef(true);
+  const closedRef = useRef(false);
+  const closeGuardRef = useRef(false);
+
+  // 切项目自动关闭数据源订阅（SC-FE-08）：activePageId = 当前活跃页面；
+  // projects = 全部项目（ownProjectId / activeProjectId 反查基准）
+  const activePageId = useLayout((s) => s.activePageId);
+  const projects = useProjects((s) => s.projects);
 
   // corrupted 警示条（挂载 loadSettings；× 可关，不阻塞）
   const [corrupted, setCorrupted] = useState(false);
@@ -323,6 +336,66 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
     setSettingsDirty(panelId, false);
     return () => clearSettingsDirty(panelId);
   }, [params?.panelId]);
+
+  // 切项目自动关闭（SC-FE-08）：订阅 activePageId 所属项目，与面板自身所属项目不同 → 关闭。
+  // - ownProjectId：panelId 去 `settings-` 前缀（SC-FE-02 panelId 契约）后反查 projects；
+  //   activeProjectId：activePageId 反查。两者均非空且不同才动作——归属解析失败不误关。
+  // - activePageId === null → 不动（删除末页/启动瞬态，防连锁误关）。
+  // - 初始评估：挂载时 activeProjectId 已定且不一致（布局恢复场景）→ 直接 api.close() 静默
+  //   ——新挂载不可能 dirty（壳挂载注册 false），无守卫必要。
+  // - 变化触发：dirty 守卫——isSettingsDirty → confirmDialog 确认才关；取消则不关，
+  //   面板暂留非活跃项目（尊重用户选择，文档注明）。非 dirty 直关。
+  // - closedRef 防重复 close（close 后组件卸载前 effect 重跑兜底）；
+  //   closeGuardRef 弹窗期间防重入（projects 异步变化会重跑 effect，弹窗不得堆叠）。
+  useEffect(() => {
+    const panelId = params?.panelId;
+    if (!panelId?.startsWith("settings-")) return;
+    const ownPageId = panelId.slice("settings-".length);
+    const findProjectId = (pageId: string): string | null => {
+      for (const [projId, proj] of Object.entries(projects)) {
+        if (proj.pages.some((p) => p.pageId === pageId)) return projId;
+      }
+      return null;
+    };
+    const ownProjectId = findProjectId(ownPageId);
+    const activeProjectId = activePageId === null ? null : findProjectId(activePageId);
+    // 初始评估标记：无论本轮是否动作，首轮过后「初始评估」语义即失效（后续均为变化触发）
+    const firstRun = isFirstRunRef.current;
+    isFirstRunRef.current = false;
+    if (closedRef.current || closeGuardRef.current) return;
+    if (activeProjectId === null || ownProjectId === null) return;
+    if (activeProjectId === ownProjectId) return;
+    if (firstRun) {
+      // 布局恢复场景：挂载即静默关（新挂载不可能 dirty，见上方注释）
+      closedRef.current = true;
+      api.close();
+      return;
+    }
+    void (async () => {
+      if (!isSettingsDirty(panelId)) {
+        closedRef.current = true;
+        api.close();
+        return;
+      }
+      // 弹窗期间置位防重入（照 SC-FE-07 askGuard 先例，弹窗关闭后短暂窗口抑制回归重读）
+      closeGuardRef.current = true;
+      let ok: boolean;
+      try {
+        ok = await confirmDialog({
+          title: "未保存的修改",
+          message: "当前配置页有未保存的修改，关闭将丢弃这些修改。",
+          kind: "warning",
+        });
+      } finally {
+        setTimeout(() => {
+          closeGuardRef.current = false;
+        }, ASK_GUARD_MS);
+      }
+      if (!ok) return; // 取消则不关——面板暂留非活跃项目，尊重用户选择
+      closedRef.current = true;
+      api.close();
+    })();
+  }, [activePageId, projects, api, params?.panelId]);
 
   // corrupted 警示条检测（挂载一次；不阻塞面板渲染）
   useEffect(() => {
