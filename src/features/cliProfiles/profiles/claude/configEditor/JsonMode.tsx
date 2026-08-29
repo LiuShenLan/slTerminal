@@ -4,7 +4,7 @@
 //       右 = CM6 编辑器（上）+ MatcherTester 内联试测工具（下）。
 // CM6 扩展：@codemirror/lang-json 语言 + codemirror-json-schema
 // （jsonSchemaHover 悬停 + jsonSchemaLinter 波浪线，
-//  schema 用 hooks 子 schema——src/features/hooksConfig/schema）+ jsonParseLinter 语法波浪线。
+//  schema 用 hooks 子 schema——./schema（同目录））+ jsonParseLinter 语法波浪线。
 // 无自动补全（Ctrl+Space）——验收后决策删除（2026-08-01）。
 // 校验：非法 JSON / schema 违规经 onValidationChange(isValid, diagnostics) 通知父组件
 // （与 Stage 06 保存校验共用 validateHooksJson）。
@@ -27,7 +27,7 @@ import {
   hooksSubSchema,
   validateHooksJson,
   type JsonDiagnostic,
-} from "../../features/hooksConfig/schema";
+} from "./schema";
 import { getGroups, getEventsByGroup } from "./eventsCatalog";
 import MatcherTester from "./MatcherTester";
 import {
@@ -41,7 +41,7 @@ import {
   editorTheme,
   editorColorOverrides,
   editorSyntaxHighlight,
-} from "../../theme";
+} from "../../../../../theme";
 
 /** JsonMode props：value/onChange/onValidationChange（外部驱动 + 校验上报） */
 export interface JsonModeProps {

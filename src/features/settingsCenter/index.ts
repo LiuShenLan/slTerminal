@@ -5,3 +5,9 @@
 
 export type { SettingsPage, SettingsPageGroup, SettingsPageProps } from "./types";
 export { getSettingsPageRegistry } from "./SettingsPageRegistry";
+// dirty 汇聚真值源（SC-FE-07）：壳与 DefaultTab × 关闭守卫共享——跨模块公共 API
+export {
+  setSettingsDirty,
+  isSettingsDirty,
+  clearSettingsDirty,
+} from "./dirtyRegistry";

@@ -29,12 +29,12 @@ vi.mock("../ipc/settings", () => ({
   loadSettings: mockLoadSettings,
 }));
 
-// 配置钮入口 mock（NAV-05：点击 = openHooksConfigFromActivityBar——入口唯一化）
-const { mockOpenHooksConfigFromActivityBar } = vi.hoisted(() => ({
-  mockOpenHooksConfigFromActivityBar: vi.fn(() => Promise.resolve()),
+// 配置钮入口 mock（NAV-05：点击 = openSettings——设置中心入口唯一化）
+const { mockOpenSettings } = vi.hoisted(() => ({
+  mockOpenSettings: vi.fn(() => Promise.resolve()),
 }));
-vi.mock("../features/hooksConfig/openHooksConfig", () => ({
-  openHooksConfigFromActivityBar: mockOpenHooksConfigFromActivityBar,
+vi.mock("../features/settingsCenter/openSettings", () => ({
+  openSettings: mockOpenSettings,
 }));
 
 // 阻断 side-effect 注册：真实 nav/explorer/commit 视图不得混入本文件的
@@ -706,13 +706,13 @@ describe("ActivityBar", () => {
     expect([...zones.top, ...zones.bottom]).not.toContain("config");
   });
 
-  it("SB-19.37 点击配置钮 → openHooksConfigFromActivityBar（入口唯一化）", () => {
+  it("SB-19.37 点击配置钮 → openSettings（入口唯一化）", () => {
     render(<ActivityBar />);
     const config = document.querySelector(
       '[data-e2e="activity-btn-config"]',
     ) as HTMLElement;
     fireEvent.click(config);
-    expect(mockOpenHooksConfigFromActivityBar).toHaveBeenCalledTimes(1);
+    expect(mockOpenSettings).toHaveBeenCalledTimes(1);
   });
 
   // ═══ FE-17/23：UI-110 无动效 + dragleave relatedTarget 判定 ═══

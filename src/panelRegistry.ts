@@ -9,7 +9,7 @@ import { EditorPanel } from "./panels/editor";
 import { HtmlPanel } from "./panels/html";
 import { GitShowPanel } from "./panels/gitshow";
 import { DiffPanel } from "./panels/diff";
-import { HooksConfigPanel } from "./panels/hooksConfig";
+import { SettingsPanel } from "./panels/settings";
 import { ErrorBoundary } from "./lib";
 
 /** 终端面板类型标识 */
@@ -37,7 +37,7 @@ export function withPanelBoundary<P extends object>(Component: React.FC<P>): Rea
       children: React.createElement(Component, props),
     });
   // FE-22: displayName 改惰性 getter——模块顶层立即读取 Component.displayName 会在
-  // 循环依赖（HooksConfigPanel → layoutSerde → panelRegistry → HooksConfigPanel TDZ）中
+  // 循环依赖（SettingsPanel → layoutSerde → panelRegistry → SettingsPanel TDZ）中
   // 抛 ReferenceError 致三个 suite 加载崩溃；getter 在访问时（渲染/devtools/测试断言，
   // 此时全部模块已加载完成）才读取，TDZ 安全且 displayName 前缀断言（/^Boundary\(/）不变
   Object.defineProperty(Wrapped, "displayName", {
@@ -64,7 +64,7 @@ export const panelRegistry = {
   diff: withPanelBoundary(DiffPanel as React.FC<{
     params: { panelId: string; filePath: string; oldPath?: string; repoPath: string };
   }>),
-  hooksConfig: withPanelBoundary(HooksConfigPanel as React.FC<{
+  settings: withPanelBoundary(SettingsPanel as React.FC<{
     params: { panelId: string };
   }>),
 };
@@ -76,7 +76,7 @@ export const PANEL_TYPES = [
   PANEL_HTML_VIEWER,
   "gitshow",
   "diff",
-  "hooksConfig",
+  "settings",
 ] as const;
 export type PanelType = (typeof PANEL_TYPES)[number];
 

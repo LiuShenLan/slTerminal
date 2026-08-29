@@ -2,13 +2,13 @@
 //
 // 模块级 Map<pageId, DockviewApi>，管理每个页面的 DockviewApi 实例。
 // 提供 register/unregister/get 操作，以及共享切换函数 switchToPageShared /
-// switchToPageAndFocus / openHooksConfigPanel / openSettingsPanel，外加会话/面板反查
+// switchToPageAndFocus / openSettingsPanel，外加会话/面板反查
 // findPanelForSession / findPageIdForPanelId（FE-09 自 NavTree 上提）。
 //
 // 不变量：window.__dockviewApi 重指向只允许出现在三站点——
 //   switchToPageShared（本文件）、Workspace.onDeletePage、Workspace.handlePageApiReady
 //
-// 契约要点见 src/features/hooksConfig/CLAUDE.md（openHooksConfigPanel 同页单例 C13-7）
+// 契约要点见 src/features/settingsCenter/CLAUDE.md（openSettingsPanel 同页单例）
 
 import type { DockviewApi } from "dockview-react";
 import { useLayout } from "../stores/layout";
@@ -116,47 +116,7 @@ export async function switchToPageAndFocus(
 }
 
 /**
- * 打开 hooks 配置面板（同页单例，契约 C13-7）——调用方须先切到目标页（本函数不切页）。
- *
- * 面板只能在活跃页面打开（useHooksConfig 经 activePageId 推导 rootPath），
- * 故调用方须先 switchToPage 再调用本函数（见 SidebarTree「打开 Hooks 配置」菜单 action）。
- *
- * 轮询 getPageApi(pageId) 就绪——首次挂载页面的 Dockview API 在 React commit 后
- * 经 Workspace.handlePageApiReady 异步注册，100ms×50=5s 上限（照 switchToPageAndFocus）。
- * 就绪后 getPanel 查重（同页单例：命中 focus、未命中 addPanel）。
- * 超时 console.warn 降级（不抛异常）。
- * @returns 面板打开成功与否（超时返回 false）
- */
-export async function openHooksConfigPanel(pageId: string): Promise<boolean> {
-  const panelId = `hooksConfig-${pageId}`;
-  for (let i = 0; i < 50; i++) {
-    const api = getPageApi(pageId);
-    if (api) {
-      const existing = api.getPanel(panelId);
-      if (existing) {
-        // 面板对象可能缺失 focus（Dockview 边界场景）——`?.()` 降级静默跳过，
-        // 视为已打开（不新建面板、不抛错）。HKC-09 守卫此降级行为
-        existing.focus?.();
-        return true;
-      }
-      api.addPanel({
-        id: panelId,
-        component: "hooksConfig",
-        title: "Hooks 配置",
-        params: { panelId },
-      });
-      return true;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  console.warn(
-    `[slTerminal] 页面 ${pageId} 的 DockviewApi 在 5s 内未就绪，无法打开 Hooks 配置`,
-  );
-  return false;
-}
-
-/**
- * 打开设置中心面板（同页单例，照 openHooksConfigPanel 模式）——调用方须先切到目标页
+ * 打开设置中心面板（同页单例）——调用方须先切到目标页
  * （本函数不切页，见 features/settingsCenter/openSettings.ts 编排）。
  *
  * 面板 id = `settings-{pageId}`；getPanel 命中 → focus（`?.()` 降级静默跳过，

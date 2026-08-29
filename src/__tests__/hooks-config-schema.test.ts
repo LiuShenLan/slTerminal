@@ -9,7 +9,7 @@
 // 纯函数测试：无 mock、无 jsdom、无 React，直接调用断言（照 path.test.ts 模式）。
 
 import { describe, it, expect } from "vitest";
-import { validateHooksJson } from "../features/hooksConfig/schema";
+import { validateHooksJson } from "../features/cliProfiles/profiles/claude/configEditor/schema";
 
 /** 基线合法 hooks 子树（command handler） */
 const VALID_CONFIG = {

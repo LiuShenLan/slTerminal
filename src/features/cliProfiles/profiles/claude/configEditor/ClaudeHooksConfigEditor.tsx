@@ -34,18 +34,18 @@ import {
   inject,
   uninstall,
   getInjectionStatus,
-} from "../../ipc/agentHooks";
-import type { AgentHookInjectionStatus } from "../../types/agent";
+} from "../../../../../ipc/agentHooks";
+import type { AgentHookInjectionStatus } from "../../../../../types/agent";
 import type { HooksConfigGui as ConfigGui } from "./configModel";
-import type { HooksConfigJson, HooksLayer } from "../../types/hooksConfig";
-import type { CodingCliProfile } from "../../features/cliProfiles";
+import type { HooksConfigJson, HooksLayer } from "../../../../../types/hooksConfig";
+import type { CodingCliProfile } from "../../..";
 import {
   PANEL_BG,
   ERROR_FG,
   HTML_PANEL_LOADING_FG,
   INPUT_BORDER,
   SIDEBAR_FG,
-} from "../../theme";
+} from "../../../../../theme";
 
 /** claude hooks 配置编辑器 props */
 export interface ClaudeHooksConfigEditorProps {

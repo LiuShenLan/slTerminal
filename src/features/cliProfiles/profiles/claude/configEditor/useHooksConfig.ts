@@ -23,13 +23,13 @@
 //   语义）→ toast.show("error")（OV-02 执行期决策）
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { readHooksConfig, writeHooksConfig } from "../../ipc/hooksConfig";
+import { readHooksConfig, writeHooksConfig } from "../../../../../ipc/hooksConfig";
 // FE-25: 错误消息统一经 getErrorMessage（契约：src/ipc/appError.ts，src/lib re-export）
-import { confirmDialog, toast, getErrorMessage } from "../../lib";
-import { useProjects } from "../../stores/projects";
-import { useLayout } from "../../stores/layout";
-import type { HooksLayer, HooksConfigJson, HooksConfigGui } from "../../types/hooksConfig";
-import { validateHooksJson } from "../../features/hooksConfig/schema";
+import { confirmDialog, toast, getErrorMessage } from "../../../../../lib";
+import { useProjects } from "../../../../../stores/projects";
+import { useLayout } from "../../../../../stores/layout";
+import type { HooksLayer, HooksConfigJson, HooksConfigGui } from "../../../../../types/hooksConfig";
+import { validateHooksJson } from "./schema";
 import {
   jsonToGui,
   guiToJson,

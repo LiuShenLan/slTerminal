@@ -19,6 +19,8 @@ import {
   type IWatermarkPanelProps,
 } from "dockview-react";
 import { panelRegistry, PANEL_TERMINAL } from "../panelRegistry";
+import { isSettingsDirty } from "../features/settingsCenter/dirtyRegistry";
+import { confirmDialog } from "../lib";
 import { FileIcon } from "../features/explorer/FileIcon";
 import { saveLayout, loadLayout } from "./layoutSerde";
 import { makeTerminalPanelId, advanceTerminalPanelSeq } from "../lib/panelId";
@@ -455,7 +457,27 @@ export const DefaultTab: React.FC<IDockviewPanelProps> = (props) => {
         color: tabHovered && !isActive ? SIDEBAR_FG : undefined,
       }}>{title}</span>
       <button
-        onClick={(e) => { e.stopPropagation(); api.close(); }}
+        onClick={(e) => {
+          e.stopPropagation();
+          // SC-FE-07 × 关闭守卫：settings 面板且 dirty → confirmDialog 确认才关。
+          // 判据 = params.panelId 的 settings- 前缀（DefaultTab 拿不到 panel——
+          // dockview 8.1.0 IDockviewPanelProps 无 panel 属性，context menu 场景的
+          // panel.view.contentComponent 红线不适用）；该前缀与 dirtyRegistry 键
+          // 同源（SettingsPanel 以同一 params.panelId 注册），无漂移；
+          // 非 settings 面板 / 非 dirty 直关（行为零回归）
+          const panelId = tabParams?.panelId;
+          void (async () => {
+            if (panelId?.startsWith("settings-") && isSettingsDirty(panelId)) {
+              const ok = await confirmDialog({
+                title: "未保存的修改",
+                message: "当前配置页有未保存的修改，关闭将丢弃这些修改。",
+                kind: "warning",
+              });
+              if (!ok) return;
+            }
+            api.close();
+          })();
+        }}
         onMouseEnter={() => setCloseHovered(true)}
         onMouseLeave={() => setCloseHovered(false)}
         style={{

@@ -9,7 +9,7 @@ import {
   guiToJson,
   isSltermManaged,
   type HooksConfigGui,
-} from "../panels/hooksConfig/configModel";
+} from "../features/cliProfiles/profiles/claude/configEditor/configModel";
 
 describe("jsonToGui：空配置与非法输入降级", () => {
   it("null / undefined / 非对象 / 数组 → 空模型，不抛错", () => {

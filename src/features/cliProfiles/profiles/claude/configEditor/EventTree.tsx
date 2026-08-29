@@ -19,7 +19,7 @@ import {
   ACTIVE_SELECTION_BG,
   ERROR_FG,
   INPUT_BORDER,
-} from "../../theme";
+} from "../../../../../theme";
 
 /** 事件树 props */
 export interface EventTreeProps {

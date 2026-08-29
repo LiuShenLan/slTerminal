@@ -6,7 +6,7 @@
 //   2. 页面保障：项目 pages 为空则 addPage（「页面-N」+ makeEmptyLayout 空布局，照 handleNewPage 模式）
 //   3. 页面切换：switchToPageShared(pages[0].pageId)——setProjectRoot 前置 await 由其内部保证（DBG-5）；
 //      新建页面由 Workspace 的 activePageId effect 触发惰性初始化，Dockview API 在 onReady 后注册
-//   4. 终端恢复：轮询 getPageApi（100ms×50，照 openHooksConfigPanel）→ addPanel(terminal，
+//   4. 终端恢复：轮询 getPageApi（100ms×50，照 openSettingsPanel）→ addPanel(terminal，
 //      title = profile.tabTitle) → 轮询 TerminalRegistry 注册 → pty.write 注入
 //      profile.history.buildRestoreInput(session, { fork })（MC-315 委托——注入内容
 //      含 fork 追加与 \r 结尾，由各 CLI 的 history 能力实现负责）
@@ -26,7 +26,7 @@ import { makeTerminalPanelId } from "../../lib/panelId";
 import { cliProfileRegistry } from "../cliProfiles";
 import type { AgentHistorySession } from "../../types/agentHistory";
 
-/** 轮询上限：100ms × 50 = 5s（照 openHooksConfigPanel / switchToPageAndFocus 模式） */
+/** 轮询上限：100ms × 50 = 5s（照 openSettingsPanel / switchToPageAndFocus 模式） */
 const POLL_COUNT = 50;
 const POLL_INTERVAL_MS = 100;
 

@@ -3,8 +3,8 @@
 // 注册独立于面板的全局快捷键（context: "global"），
 // 在 App.tsx 挂载时注册一次，整个应用生命周期有效。
 // 元数据（默认键/优先级）来自 commandCatalog，本文件只提供 handler。
-// 全局命令仅 global.closeTab——Hooks 配置入口已迁移到侧栏右键菜单
-// （SidebarTree「打开 Hooks 配置」→ openHooksConfigPanel，见 workspace/pageApis）。
+// 全局命令仅 global.closeTab——Hooks 配置入口已迁移到活动栏「配置」钮
+// （openSettings，见 features/settingsCenter/openSettings.ts）。
 
 import type { Command } from "./types";
 import { commandFromMeta } from "./commandCatalog";

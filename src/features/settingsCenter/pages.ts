@@ -7,6 +7,7 @@
 
 import { getSettingsPageRegistry } from "./SettingsPageRegistry";
 import PlanBalancePage from "../../panels/settings/pages/PlanBalancePage";
+import HooksSettingsPage from "../../panels/settings/pages/HooksSettingsPage";
 
 getSettingsPageRegistry().register({
   id: "planBalance",
@@ -14,4 +15,13 @@ getSettingsPageRegistry().register({
   group: "global",
   component: PlanBalancePage,
   order: 20,
+});
+
+// hooks 配置页（F6 hub 迁入设置中心，SC-FE-05）——project 组（需项目上下文）
+getSettingsPageRegistry().register({
+  id: "hooks",
+  title: "Hooks 配置",
+  group: "project",
+  component: HooksSettingsPage,
+  order: 100,
 });

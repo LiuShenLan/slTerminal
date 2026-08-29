@@ -6,7 +6,7 @@
 //   非法正则防御。每分支至少 2 条用例。
 
 import { describe, it, expect } from "vitest";
-import { matchHook } from "../panels/hooksConfig/matcherEngine";
+import { matchHook } from "../features/cliProfiles/profiles/claude/configEditor/matcherEngine";
 
 describe("全匹配（* / 空串 / 省略）", () => {
   it('"*" 匹配任意目标', () => {

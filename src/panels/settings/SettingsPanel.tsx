@@ -17,6 +17,11 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import "../../features/settingsCenter/pages";
 import { getSettingsPageRegistry } from "../../features/settingsCenter";
 import type { SettingsPage, SettingsPageGroup } from "../../features/settingsCenter";
+import {
+  setSettingsDirty,
+  clearSettingsDirty,
+} from "../../features/settingsCenter/dirtyRegistry";
+import { confirmDialog } from "../../lib";
 import { loadSettings } from "../../ipc/settings";
 import { saveLayout } from "../../workspace/layoutSerde";
 import { useProjects } from "../../stores/projects";
@@ -54,6 +59,10 @@ const GROUP_ORDER: Array<{ group: SettingsPageGroup; title: string }> = [
   { group: "global", title: "全局" },
   { group: "project", title: "项目" },
 ];
+
+/** confirmDialog 弹窗关闭后守卫窗口（ms）——期间内的回归触发的重读被抑制（防循环，
+    照 HooksConfigPanel/hub ASK_GUARD_MS 同常量，SC-FE-07） */
+const ASK_GUARD_MS = 500;
 
 /** 面板根容器样式 */
 const containerStyle: React.CSSProperties = {
@@ -184,6 +193,12 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
 
   // 页 dirty 汇聚（导航项 dirty 圆点数据源；SC-FE-07 增强 dirtyRegistry 同步与切页守卫）
   const [dirtyMap, setDirtyMap] = useState<Record<string, boolean>>({});
+  // dirtyMap ref 镜像：切页守卫异步闭包内读取最新值（照 selectedPageRef 先例）
+  const dirtyMapRef = useRef(dirtyMap);
+  dirtyMapRef.current = dirtyMap;
+  // 切页确认弹窗守卫：弹窗打开期间 + 关闭后短暂窗口内抑制回归触发的重读（防循环，
+  // 照 hub askGuard 先例，SC-FE-07）
+  const askGuardRef = useRef(false);
 
   // corrupted 警示条（挂载 loadSettings；× 可关，不阻塞）
   const [corrupted, setCorrupted] = useState(false);
@@ -217,23 +232,58 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
     [api, containerApi, handleLayoutPersist],
   );
 
-  /** 导航切换（选中态经 persistParams 随布局 JSON 持久化） */
+  /** 导航切换（选中态经 persistParams 随布局 JSON 持久化；SC-FE-07 切页守卫：
+      当前页 dirty → confirmDialog 确认丢弃；取消不切换，确认清 dirty 后切换） */
   const handlePageSelect = useCallback(
     (pageId: string) => {
       if (pageId === selectedPageRef.current) return;
-      setSelectedPage(pageId);
-      persistParams({ selectedPage: pageId });
+      void (async () => {
+        const currentPageId = selectedPageRef.current;
+        const currentDirty =
+          currentPageId !== null && dirtyMapRef.current[currentPageId] === true;
+        if (currentDirty) {
+          // 守卫前置：弹窗开/关伴随回归触发，无守卫将再弹窗（防循环，照 hub 先例）
+          askGuardRef.current = true;
+          let ok: boolean;
+          try {
+            ok = await confirmDialog({
+              title: "未保存的修改",
+              message: "当前配置页有未保存的修改，切换将丢弃这些修改。",
+              kind: "warning",
+            });
+          } finally {
+            setTimeout(() => {
+              askGuardRef.current = false;
+            }, ASK_GUARD_MS);
+          }
+          if (!ok) return;
+          // 确认丢弃：清当前页 dirty（圆点 + dirtyRegistry 同步）再切换
+          setDirtyMap((prev) => ({
+            ...prev,
+            [currentPageId as string]: false,
+          }));
+          if (paramsRef.current?.panelId) {
+            setSettingsDirty(paramsRef.current.panelId, false);
+          }
+        }
+        setSelectedPage(pageId);
+        persistParams({ selectedPage: pageId });
+      })();
     },
     [persistParams],
   );
 
-  /** 页组件 dirty 上报（SC-FE-03 圆点槽；SC-FE-07 接入 dirtyRegistry 与守卫） */
+  /** 页组件 dirty 上报（SC-FE-03 圆点槽；SC-FE-07 同步 dirtyRegistry 真值源——
+      DefaultTab × 关闭守卫与壳共享同一 dirty，防两处状态漂移） */
   const handleDirtyChange = useCallback((dirty: boolean) => {
     setDirtyMap((prev) => {
       const pageId = selectedPageRef.current;
       if (pageId === null) return prev;
       return { ...prev, [pageId]: dirty };
     });
+    if (paramsRef.current?.panelId) {
+      setSettingsDirty(paramsRef.current.panelId, dirty);
+    }
   }, []);
 
   /** 页内参数 patch 通道（壳是 params 持久化单点）：pageParams[selectedPage] 槽 merge patch */
@@ -264,6 +314,15 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
     });
     return () => d.dispose();
   }, [api]);
+
+  // dirtyRegistry 挂载注册/卸载 clear（SC-FE-07）：面板存活期间 × 关闭守卫可查；
+  // 卸载即清除——面板关闭后不存在「未保存修改」（新挂载不可能 dirty）
+  useEffect(() => {
+    const panelId = params?.panelId;
+    if (!panelId) return;
+    setSettingsDirty(panelId, false);
+    return () => clearSettingsDirty(panelId);
+  }, [params?.panelId]);
 
   // corrupted 警示条检测（挂载一次；不阻塞面板渲染）
   useEffect(() => {

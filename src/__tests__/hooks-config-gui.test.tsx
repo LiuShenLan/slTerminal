@@ -10,10 +10,10 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import React, { useState } from "react";
 import { render, cleanup, fireEvent } from "@testing-library/react";
-import GuiMode from "../panels/hooksConfig/GuiMode";
-import type { HooksConfigGui, HookEventGui, HookHandlerGui } from "../panels/hooksConfig/configModel";
-import { UNKNOWN_EVENT_GROUP } from "../panels/hooksConfig/configModel";
-import { EVENT_GROUPS, getEventMeta, getSupportedHandlerTypes } from "../panels/hooksConfig/eventsCatalog";
+import GuiMode from "../features/cliProfiles/profiles/claude/configEditor/GuiMode";
+import type { HooksConfigGui, HookEventGui, HookHandlerGui } from "../features/cliProfiles/profiles/claude/configEditor/configModel";
+import { UNKNOWN_EVENT_GROUP } from "../features/cliProfiles/profiles/claude/configEditor/configModel";
+import { EVENT_GROUPS, getEventMeta, getSupportedHandlerTypes } from "../features/cliProfiles/profiles/claude/configEditor/eventsCatalog";
 import { ACTIVE_SELECTION_BG, FOCUS_BORDER, INPUT_BORDER } from "../theme";
 
 /** 色值 → jsdom 归一化形态（#hex → "rgb(r, g, b)"；rgba 输入补空格 → "rgba(r, g, b, a)"，照 activityBar.test.tsx 先例） */

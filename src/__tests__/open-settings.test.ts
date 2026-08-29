@@ -1,6 +1,6 @@
 // open-settings.test.ts — 活动栏「配置」钮公共编排 L2 测试（F11 / R1）
 //
-// openSettings 迁移自 openHooksConfigFromActivityBar 编排：
+// openSettings 迁移自活动栏配置钮旧编排：
 //   - 无项目 → toast「请先创建项目」+ return，不切页（R1 修订：取代原静默 return）
 //   - 目标项目：当前活跃页面所属项目优先，兜底第一个项目
 //   - 目标页面：已有操作页面 → pages[0]；无 → 新建空布局页面

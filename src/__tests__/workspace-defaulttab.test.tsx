@@ -25,11 +25,25 @@
 // 「根内绝对定位子 div（JSX 末尾）」两形态；findIndicator 兼容两者，
 // 且不与现有子元素顺序断言冲突（默认 isGroupActive=false 不渲染指示条）。
 
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import React from "react";
-import { render, act, cleanup, fireEvent } from "@testing-library/react";
+import { render, act, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { DefaultTab } from "../workspace/PageDockviewHost";
 import type { AgentStatus } from "../lib/agentStatus";
+import {
+  setSettingsDirty,
+  clearSettingsDirty,
+} from "../features/settingsCenter/dirtyRegistry";
+
+// ── vi.hoisted：mock 状态在模块级 vi.mock 执行前就绪 ──
+const { mockConfirmDialog } = vi.hoisted(() => ({
+  mockConfirmDialog: vi.fn(async () => true),
+}));
+
+// mock ConfirmDialog —— × 关闭守卫确认弹窗（SC-FE-07：settings 面板 dirty 拦截）
+vi.mock("../lib/ConfirmDialog", () => ({
+  confirmDialog: mockConfirmDialog,
+}));
 
 // StatusDot 由 icon-base agent 并行实现（IC-02）——本文件 mock 为可识别 span
 // （data-testid="status-dot"，文本 = status 值）。注意：不能用 importOriginal
@@ -75,6 +89,8 @@ function renderTab(init: {
   filePath?: string | null;
   /** 组激活态（TAB-01 指示条数据源）；默认 false 不渲染指示条 */
   isGroupActive?: boolean;
+  /** params.panelId（× 关闭守卫判据：settings- 前缀 + dirtyRegistry 查询键） */
+  panelId?: string;
 }) {
   const listeners: TabListeners = { title: [], params: [], groupActive: [] };
   const api = {
@@ -99,6 +115,7 @@ function renderTab(init: {
   if (init.tabStatus !== undefined) params.tabStatus = init.tabStatus;
   if (init.tabLogo !== undefined) params.tabLogo = init.tabLogo;
   if (init.filePath !== undefined) params.filePath = init.filePath;
+  if (init.panelId !== undefined) params.panelId = init.panelId;
 
   const result = render(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -474,6 +491,63 @@ describe("DefaultTab（生产组件）", () => {
       });
       expect((fileIcon() as HTMLElement)?.textContent).toBe("a.txt");
       expect(statusDot()?.textContent).toBe("attention");
+    });
+  });
+
+  describe("× 关闭守卫（SC-FE-07：settings 面板 dirty 拦截，判据 params.panelId settings- 前缀）", () => {
+    beforeEach(() => {
+      mockConfirmDialog.mockReset();
+      mockConfirmDialog.mockResolvedValue(true);
+      clearSettingsDirty("settings-page-a");
+    });
+
+    afterEach(() => {
+      clearSettingsDirty("settings-page-a");
+    });
+
+    it("settings 面板 dirty → confirm 取消 → 不关闭", async () => {
+      setSettingsDirty("settings-page-a", true);
+      mockConfirmDialog.mockResolvedValue(false); // 用户取消丢弃
+      const { api, root, closeBtn } = renderTab({ panelId: "settings-page-a" });
+      fireEvent.mouseEnter(root as HTMLElement);
+      act(() => {
+        closeBtn()?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+      await waitFor(() => expect(mockConfirmDialog).toHaveBeenCalled());
+      await waitFor(() => expect(api.close).not.toHaveBeenCalled());
+    });
+
+    it("settings 面板 dirty → confirm 确认 → 关闭", async () => {
+      setSettingsDirty("settings-page-a", true);
+      mockConfirmDialog.mockResolvedValue(true); // 确认丢弃
+      const { api, root, closeBtn } = renderTab({ panelId: "settings-page-a" });
+      fireEvent.mouseEnter(root as HTMLElement);
+      act(() => {
+        closeBtn()?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+      await waitFor(() => expect(api.close).toHaveBeenCalledTimes(1));
+    });
+
+    it("settings 面板非 dirty → 不经守卫直关", async () => {
+      clearSettingsDirty("settings-page-a");
+      const { api, root, closeBtn } = renderTab({ panelId: "settings-page-a" });
+      fireEvent.mouseEnter(root as HTMLElement);
+      act(() => {
+        closeBtn()?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+      await waitFor(() => expect(api.close).toHaveBeenCalledTimes(1));
+      expect(mockConfirmDialog).not.toHaveBeenCalled();
+    });
+
+    it("非 settings 面板（无 settings- 前缀）→ 不经守卫直关（无关 dirty 不影响）", async () => {
+      setSettingsDirty("settings-page-a", true); // 他面板 dirty 不拦截 terminal
+      const { api, root, closeBtn } = renderTab({ panelId: "terminal-page1-0" });
+      fireEvent.mouseEnter(root as HTMLElement);
+      act(() => {
+        closeBtn()?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+      await waitFor(() => expect(api.close).toHaveBeenCalledTimes(1));
+      expect(mockConfirmDialog).not.toHaveBeenCalled();
     });
   });
 });

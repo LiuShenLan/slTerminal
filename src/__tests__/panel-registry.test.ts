@@ -10,8 +10,8 @@ import {
 } from "../panelRegistry";
 
 describe("panelRegistry", () => {
-  // 1. panelRegistry 包含 terminal、editor、htmlviewer、gitshow、diff、hooksConfig 六个键
-  it("包含 terminal、editor、htmlviewer、gitshow、diff、hooksConfig 六个键", () => {
+  // 1. panelRegistry 包含 terminal、editor、htmlviewer、gitshow、diff、settings 六个键
+  it("包含 terminal、editor、htmlviewer、gitshow、diff、settings 六个键", () => {
     const keys = Object.keys(panelRegistry);
     expect(keys).toHaveLength(6);
     expect(keys).toContain("terminal");
@@ -19,7 +19,7 @@ describe("panelRegistry", () => {
     expect(keys).toContain("htmlviewer");
     expect(keys).toContain("gitshow");
     expect(keys).toContain("diff");
-    expect(keys).toContain("hooksConfig");
+    expect(keys).toContain("settings");
   });
 
   // 2. terminal 注册项的 component 是 TerminalPanel
@@ -52,23 +52,23 @@ describe("panelRegistry", () => {
     expect(typeof entry).toBe("function");
   });
 
-  // 新增：hooksConfig 注册项为函数组件
-  it("hooksConfig 注册项为函数组件", () => {
-    const entry = panelRegistry.hooksConfig;
+  // 新增：settings 注册项为函数组件
+  it("settings 注册项为函数组件", () => {
+    const entry = panelRegistry.settings;
     expect(typeof entry).toBe("function");
   });
 });
 
 describe("PANEL_TYPES", () => {
-  // 6. PANEL_TYPES 包含 ["terminal", "editor", "htmlviewer", "gitshow", "diff", "hooksConfig"]
-  it('包含 ["terminal", "editor", "htmlviewer", "gitshow", "diff", "hooksConfig"]', () => {
+  // 6. PANEL_TYPES 包含 ["terminal", "editor", "htmlviewer", "gitshow", "diff", "settings"]
+  it('包含 ["terminal", "editor", "htmlviewer", "gitshow", "diff", "settings"]', () => {
     expect(PANEL_TYPES).toEqual([
       "terminal",
       "editor",
       "htmlviewer",
       "gitshow",
       "diff",
-      "hooksConfig",
+      "settings",
     ]);
   });
 
@@ -83,7 +83,7 @@ describe("PANEL_TYPES", () => {
     expect(PANEL_TYPES[2]).toBe("htmlviewer");
     expect(PANEL_TYPES[3]).toBe("gitshow");
     expect(PANEL_TYPES[4]).toBe("diff");
-    expect(PANEL_TYPES[5]).toBe("hooksConfig");
+    expect(PANEL_TYPES[5]).toBe("settings");
   });
 });
 
@@ -113,9 +113,9 @@ describe("isValidPanelType", () => {
     expect(isValidPanelType("diff")).toBe(true);
   });
 
-  // 新增：isValidPanelType("hooksConfig") → true
-  it('"hooksConfig" 返回 true', () => {
-    expect(isValidPanelType("hooksConfig")).toBe(true);
+  // 新增：isValidPanelType("settings") → true
+  it('"settings" 返回 true', () => {
+    expect(isValidPanelType("settings")).toBe(true);
   });
 
   // 9. isValidPanelType("unknown") → false

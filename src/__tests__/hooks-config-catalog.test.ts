@@ -17,7 +17,7 @@ import {
   getEventsByGroup,
   getGroups,
   RESTRICTED_MATCHER_CHARSET_EVENTS,
-} from "../panels/hooksConfig/eventsCatalog";
+} from "../features/cliProfiles/profiles/claude/configEditor/eventsCatalog";
 
 describe("事件目录完整性", () => {
   it("30 事件齐全且唯一", () => {

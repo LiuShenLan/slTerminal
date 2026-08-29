@@ -26,7 +26,7 @@ import {
   INPUT_BORDER,
   FOCUS_BORDER,
   SECONDARY_BG,
-} from "../../theme";
+} from "../../../../../theme";
 
 /** GuiMode props：GUI 模型 + 变更回调（外部驱动，父层负责转换/持久化） */
 export interface GuiModeProps {

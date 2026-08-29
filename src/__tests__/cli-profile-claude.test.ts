@@ -31,7 +31,7 @@ import {
   buildResumeCommand,
   buildRestoreInput,
 } from "../features/cliProfiles/profiles/claude/strategies";
-import ClaudeHooksConfigEditor from "../panels/hooksConfig/ClaudeHooksConfigEditor";
+import ClaudeHooksConfigEditor from "../features/cliProfiles/profiles/claude/configEditor/ClaudeHooksConfigEditor";
 import { cliProfileRegistry } from "../features/cliProfiles/cliProfileRegistry";
 import type { AgentStatus } from "../lib/agentStatus";
 import type { AgentEventPayload } from "../types/agent";

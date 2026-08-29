@@ -7,7 +7,7 @@
 // - HTML5 原生拖拽（零依赖）：上区 ↔ 下区换区 + 半区内排序
 // - 拖拽落点指示线（computeDropTarget 纯函数）
 // - 底部「配置」钮（NAV-05）：id config、IconConfig、data-e2e=activity-btn-config、
-//   点击 = openHooksConfigFromActivityBar——不入 SideViewRegistry、不参与拖拽/持久化
+//   点击 = openSettings（设置中心）——不入 SideViewRegistry、不参与拖拽/持久化
 //
 // 规格（NAV-05/GL-04）：栏宽 46px（ACTIVITY_BAR_SIZE 常量，Workspace 同步引用）；
 // 按钮 34×34 圆角 6；激活态 = ACTIVE_SELECTION_BG（accent-dim）底 +
@@ -23,7 +23,7 @@ import { computeDropTarget } from "./dropTarget";
 import { ACTIVITY_BAR_SIZE } from "./sideBarState";
 import type { Zone } from "./sideBarState";
 import type { ButtonRect } from "./dropTarget";
-import { openHooksConfigFromActivityBar } from "../hooksConfig/openHooksConfig";
+import { openSettings } from "../settingsCenter/openSettings";
 import { IconConfig } from "../../lib/icons";
 import {
   PANEL_BG,
@@ -256,7 +256,7 @@ export function ActivityBar() {
           color: hoveredId === "config" ? SIDEBAR_FG : DIM_FG,
         }}
         onClick={() => {
-          void openHooksConfigFromActivityBar();
+          void openSettings();
         }}
         onMouseEnter={() => setHoveredId("config")}
         onMouseLeave={() => {

@@ -8,7 +8,7 @@
 import React, { useMemo, useState } from "react";
 import { matchHook } from "./matcherEngine";
 import { HOOK_EVENTS, hasRestrictedMatcherCharset, getEventMeta } from "./eventsCatalog";
-import { PANEL_BG, INPUT_BORDER, SIDEBAR_FG, ERROR_FG, HTML_PANEL_LOADING_FG } from "../../theme";
+import { PANEL_BG, INPUT_BORDER, SIDEBAR_FG, ERROR_FG, HTML_PANEL_LOADING_FG } from "../../../../../theme";
 
 /** 匹配模式显示文案映射 */
 const MODE_LABEL: Record<string, string> = {

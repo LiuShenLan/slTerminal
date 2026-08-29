@@ -102,10 +102,10 @@ vi.mock("codemirror-json-schema", () => ({
 
 import React from "react";
 import { render, cleanup, fireEvent, act } from "@testing-library/react";
-import JsonMode, { findEventPosition } from "../panels/hooksConfig/JsonMode";
-import MatcherTester from "../panels/hooksConfig/MatcherTester";
-import { HOOK_EVENTS, EVENT_GROUPS, getGroups, getEventsByGroup } from "../panels/hooksConfig/eventsCatalog";
-import { hooksSubSchema } from "../features/hooksConfig/schema";
+import JsonMode, { findEventPosition } from "../features/cliProfiles/profiles/claude/configEditor/JsonMode";
+import MatcherTester from "../features/cliProfiles/profiles/claude/configEditor/MatcherTester";
+import { HOOK_EVENTS, EVENT_GROUPS, getGroups, getEventsByGroup } from "../features/cliProfiles/profiles/claude/configEditor/eventsCatalog";
+import { hooksSubSchema } from "../features/cliProfiles/profiles/claude/configEditor/schema";
 
 /** mock EditorView 挂载形态（经 parent._cmView 访问） */
 interface MockEditorViewInstance {

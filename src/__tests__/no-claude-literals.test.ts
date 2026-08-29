@@ -44,10 +44,6 @@ const SCAN_ROOT = "src";
 const EXEMPT_DIRS = [
   // MC-213/223：claude CLI 身份域（CLAUDE_CLI_ID 等常量/事件名/路径唯一合法聚居地）
   "src/features/cliProfiles/profiles/claude",
-  // claude hooks 配置面板专属（MC-504 下移）：hub 经 configEditor 分派的 claude 专属编辑器
-  // （KZ-7 mockcli 用桩编辑器不共用），eventsCatalog = 官方 schema 提取的 claude hooks
-  // 事件目录，提示文案含 ~/.claude 路径——TQ-C-04 全量扫描判定的身份域漏标，豁免并注释
-  "src/panels/hooksConfig",
   // 测试夹具域：模拟 claude CLI 身份/事件名/~/.claude 路径的样例数据，
   // 验证身份域行为之必需，非生产通用层——守卫目标 = 生产源码（TQ-C-04 判定）
   "src/__tests__",

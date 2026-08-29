@@ -43,7 +43,8 @@ import { NavSessionRow } from "../features/navTree/NavSessionRow";
 import { NavHistoryRow } from "../features/navTree/NavHistoryRow";
 import { useAgentNotifications } from "../features/notifications/useAgentNotifications";
 import { restoreHistorySession } from "../features/agentHistory/restoreSession";
-import HooksConfigPanel from "../panels/hooksConfig/HooksConfigPanel";
+// SC-FE-05：hub 迁入设置中心为 HooksSettingsPage（SettingsPageProps 形态）
+import HooksSettingsPage from "../panels/settings/pages/HooksSettingsPage";
 import { cliProfileRegistry } from "../features/cliProfiles";
 import {
   claudeProfile,
@@ -103,7 +104,10 @@ const h = vi.hoisted(() => {
     mockSwitchToPageAndFocus: vi.fn(),
     mockFit: vi.fn(),
     mockProposeDimensions: vi.fn(),
-    // hub Dockview props mock（照 hooks-config-panel.test.tsx 先例）
+    // 壳 patch 通道 mock（SettingsPageProps.onPageParamsChange，SC-FE-05 迁壳——
+    // selectedCli 持久化断言目标）
+    mockOnPageParamsChange: vi.fn(),
+    // 遗留 Dockview props mock（保留定义；HooksSettingsPage 不再消费）
     mockApi: {
       updateParameters: vi.fn(),
       onDidParametersChange: vi.fn(() => ({ dispose: vi.fn() })),
@@ -253,7 +257,7 @@ vi.mock("../ipc/settings", () => ({
   saveSettings: vi.fn(async () => {}),
 }));
 
-vi.mock("../panels/hooksConfig/JsonMode", () => ({
+vi.mock("../features/cliProfiles/profiles/claude/configEditor/JsonMode", () => ({
   default: h.mockJsonMode,
 }));
 
@@ -367,14 +371,15 @@ function hexToRgb(hex: string): string {
   return hex;
 }
 
-/** 渲染 hub 面板（Dockview content component props 经强转传入 mock） */
-function renderPanel(params?: Record<string, unknown>) {
+/** 渲染 hooks 配置页（SettingsPageProps 形态——pageParams 即测试传入参数，
+    selectedCli 持久化经 h.mockOnPageParamsChange 捕获断言，SC-FE-05） */
+function renderPanel(pageParams?: Record<string, unknown>) {
   return render(
-    React.createElement(HooksConfigPanel, {
-      api: h.mockApi,
-      containerApi: h.mockContainerApi,
-      params,
-    } as unknown as React.ComponentProps<typeof HooksConfigPanel>),
+    React.createElement(HooksSettingsPage, {
+      onDirtyChange: vi.fn(),
+      pageParams,
+      onPageParamsChange: h.mockOnPageParamsChange,
+    } as unknown as React.ComponentProps<typeof HooksSettingsPage>),
   );
 }
 
@@ -658,6 +663,7 @@ describe("AC-4④ hub 选择行", () => {
     h.mockApi.updateParameters.mockReset();
     h.mockApi.getParameters.mockReset().mockReturnValue({});
     h.mockContainerApi.toJSON.mockReset().mockReturnValue({ mockLayout: true });
+    h.mockOnPageParamsChange.mockReset();
     resetStores();
     registerOnly([claudeProfile, mockCliProfile]);
   });
@@ -675,17 +681,16 @@ describe("AC-4④ hub 选择行", () => {
     expect(getByRole("button", { name: mockCliProfile.displayName })).toBeTruthy();
   });
 
-  it("点击切换 → mock 桩编辑器渲染（双向分派）+ selectedCli 持久化（updateParameters + 显式布局保存）", async () => {
+  it("点击切换 → mock 桩编辑器渲染（双向分派）+ selectedCli 持久化（onPageParamsChange 回调）", async () => {
     h.mockReadHooksConfig.mockResolvedValue({});
-    const { getByRole, container } = renderPanel({ panelId: "hooksConfig-page-1" });
+    const { getByRole, container } = renderPanel();
     // 初始缺省回退首个有能力 CLI = claude → claude 编辑器渲染（JsonMode 被调用）
     await waitFor(() => expect(h.mockJsonMode.mock.calls.length).toBeGreaterThan(0));
     expect(h.mockReadHooksConfig.mock.calls[0][0]).toBe(CLAUDE_CLI_ID);
     // 双向分派（claude 方向）：桩标记不存在
     expect(container.querySelector('[data-e2e="mockcli-config-editor"]')).toBeNull();
-    h.mockApi.updateParameters.mockClear();
-    h.mockContainerApi.toJSON.mockClear();
     h.mockJsonMode.mockClear();
+    h.mockOnPageParamsChange.mockClear();
 
     // 点击 mockcli → 编辑器槽按 profile.configEditor 分派 = mock 桩组件
     fireEvent.click(getByRole("button", { name: mockCliProfile.displayName }));
@@ -696,20 +701,15 @@ describe("AC-4④ hub 选择行", () => {
     );
     // 双向分派（mockcli 方向）：桩渲染 → claude 编辑器（JsonMode）零调用
     expect(h.mockJsonMode.mock.calls.length).toBe(0);
-    // MC-503: updateParameters 写入 params.selectedCli
-    expect(h.mockApi.updateParameters).toHaveBeenCalledWith({
-      panelId: "hooksConfig-page-1",
+    // MC-503 迁壳（SC-FE-05）：选中态经 onPageParamsChange({ selectedCli }) 交壳持久化
+    expect(h.mockOnPageParamsChange).toHaveBeenCalledWith({
       selectedCli: mockCliProfile.id,
     });
-    // 显式 onLayoutChange(saveLayout(containerApi))——updateParameters 不触发
-    // onDidLayoutChange，必须显式保存（toJSON 被调用即 saveLayout 序列化执行）
-    expect(h.mockContainerApi.toJSON).toHaveBeenCalled();
   });
 
-  it("持久化恢复：params.selectedCli=mockcli 挂载恢复选中 + 高亮 + 桩渲染", async () => {
+  it("持久化恢复：pageParams.selectedCli=mockcli 挂载恢复选中 + 高亮 + 桩渲染", async () => {
     h.mockReadHooksConfig.mockResolvedValue({});
     const { getByRole, container } = renderPanel({
-      panelId: "hooksConfig-page-1",
       selectedCli: mockCliProfile.id,
     });
     // 挂载即选中 mockcli → 编辑器槽按 mockcli 分派 = 桩组件（非默认回退 claude）
@@ -731,7 +731,6 @@ describe("AC-4④ hub 选择行", () => {
   it("选中 claude → claude 编辑器渲染（JsonMode 被调用）+ 桩标记不存在 + 保存透传", async () => {
     h.mockReadHooksConfig.mockResolvedValue({});
     const { container } = renderPanel({
-      panelId: "hooksConfig-page-1",
       // 显式选中 claude（非 mockcli）——claude 编辑器 = ClaudeHooksConfigEditor
       selectedCli: CLAUDE_CLI_ID,
     });

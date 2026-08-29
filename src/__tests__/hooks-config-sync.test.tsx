@@ -44,7 +44,7 @@ const {
   mockJsonMode,
   mockGuiMode,
   mockApi,
-  mockContainerApi,
+  mockOnPageParamsChange,
 } = vi.hoisted(() => ({
   mockReadHooksConfig: vi.fn(),
   mockWriteHooksConfig: vi.fn().mockResolvedValue(undefined),
@@ -53,7 +53,10 @@ const {
   // JsonMode/GuiMode mock 组件：渲染 null，测试经 mock 调用参数断言 props 传递与回调
   mockJsonMode: vi.fn(() => null),
   mockGuiMode: vi.fn(() => null),
-  // hub 面板 Dockview props mock（照 panel 测试）：selectedCli 持久化经 updateParameters 写入
+  // 壳 patch 通道 mock（SettingsPageProps.onPageParamsChange，SC-FE-05 迁壳）
+  mockOnPageParamsChange: vi.fn(),
+  // 遗留 Dockview props mock（保留定义；HooksSettingsPage 不再消费——选中态持久化经
+  // onPageParamsChange 交壳单点）
   mockApi: {
     updateParameters: vi.fn(),
     onDidParametersChange: vi.fn(() => ({ dispose: vi.fn() })),
@@ -61,9 +64,6 @@ const {
     toJSON: vi.fn(() => ({ mockPanel: true })),
     title: "Hooks 配置",
     close: vi.fn(),
-  },
-  mockContainerApi: {
-    toJSON: vi.fn(() => ({ mockLayout: true })),
   },
 }));
 
@@ -84,13 +84,15 @@ vi.mock("../lib/toast", () => ({
 }));
 
 // mock JsonMode/GuiMode —— 隔离 CM6/schema 与表单树（各自测试见对应文件）
-vi.mock("../panels/hooksConfig/JsonMode", () => ({ default: mockJsonMode }));
-vi.mock("../panels/hooksConfig/GuiMode", () => ({ default: mockGuiMode }));
+vi.mock("../features/cliProfiles/profiles/claude/configEditor/JsonMode", () => ({ default: mockJsonMode }));
+vi.mock("../features/cliProfiles/profiles/claude/configEditor/GuiMode", () => ({ default: mockGuiMode }));
 
 import React from "react";
 import { render, fireEvent, waitFor, act, cleanup, renderHook } from "@testing-library/react";
-import { HooksConfigPanel } from "../panels/hooksConfig";
-import { useHooksConfig } from "../panels/hooksConfig/useHooksConfig";
+// SC-FE-05：hub 迁入设置中心为 HooksSettingsPage（SettingsPageProps 形态）；
+// useHooksConfig 随编辑器归域 configEditor/
+import HooksSettingsPage from "../panels/settings/pages/HooksSettingsPage";
+import { useHooksConfig } from "../features/cliProfiles/profiles/claude/configEditor/useHooksConfig";
 import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
 import type { HooksConfigJson } from "../types/hooksConfig";
@@ -155,14 +157,15 @@ function guiProps(): GuiModePropsLike {
   return calls[calls.length - 1][0];
 }
 
-/** 渲染面板（调用方随后 await waitFor(mockJsonMode 已调用) 等待加载完成）。
-    hub 化后面板为 Dockview content component——props 经强转传 mock api/containerApi */
+/** 渲染配置页（调用方随后 await waitFor(mockJsonMode 已调用) 等待加载完成）。
+    SC-FE-05：SettingsPageProps 形态——壳透传 onDirtyChange/pageParams/onPageParamsChange */
 function renderLoadedPanel() {
   return render(
-    React.createElement(HooksConfigPanel, {
-      api: mockApi,
-      containerApi: mockContainerApi,
-    } as unknown as React.ComponentProps<typeof HooksConfigPanel>),
+    React.createElement(HooksSettingsPage, {
+      onDirtyChange: vi.fn(),
+      pageParams: {},
+      onPageParamsChange: mockOnPageParamsChange,
+    } as unknown as React.ComponentProps<typeof HooksSettingsPage>),
   );
 }
 

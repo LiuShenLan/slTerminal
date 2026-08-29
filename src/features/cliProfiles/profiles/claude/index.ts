@@ -6,14 +6,15 @@
 // 缺省回退 import（AC-5 字面量守卫兼容——通用层禁写 "claude" 字面量，一律
 // import 本常量）。
 //
-// 依赖方向合法化（KZ-1）：本文件 import panels/hooksConfig/ClaudeHooksConfigEditor
-// （features/cliProfiles → panels 新方向）——profiles/claude/ 是 claude 合法领地，
+// 依赖方向合法化（KZ-1，SC-FE-05 迁移后重写）：本文件 import ./configEditor/
+// ClaudeHooksConfigEditor（configEditor/ 归域于 profiles/claude/ 领地内，SC-FE-05）——
 // 编辑器组件是 claude 专属资产（MC-223 决策 2），hub 经本 profile 的 configEditor
-// 字段分派渲染；types.ts 仅类型 import（运行期擦除）不构成运行循环。
+// 字段分派渲染；不再跨 panels 引用，无新依赖方向；types.ts 仅类型 import（运行期
+// 擦除）不构成运行循环。
 
 import { cliProfileRegistry } from "../../cliProfileRegistry";
 import type { CodingCliProfile } from "../../types";
-import ClaudeHooksConfigEditor from "../../../../panels/hooksConfig/ClaudeHooksConfigEditor";
+import ClaudeHooksConfigEditor from "./configEditor/ClaudeHooksConfigEditor";
 import {
   buildResumeCommand,
   buildRestoreInput,
@@ -56,7 +57,7 @@ export const claudeProfile: CodingCliProfile = {
       computeUsagePercent,
       restartHint: "hooks 改动需重启 claude 会话生效",
       hasConfigEditor: true,
-      // KZ-1：hub 编辑器槽分派数据源——claude 专属编辑器（panels/hooksConfig/
+      // KZ-1：hub 编辑器槽分派数据源——claude 专属编辑器（configEditor/
       // ClaudeHooksConfigEditor，依赖方向合法化见本文件头注释）
       configEditor: ClaudeHooksConfigEditor,
       // KZ-4：hooks 配置分层声明（编辑器层切换器数据源）——三层值 + label/hint

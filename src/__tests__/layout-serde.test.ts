@@ -309,7 +309,7 @@ describe("loadLayout — 返回值 + 白名单校验", () => {
         h1: { id: "h1", contentComponent: "htmlviewer" },
         g1: { id: "g1", contentComponent: "gitshow" },
         d1: { id: "d1", contentComponent: "diff" },
-        c1: { id: "c1", contentComponent: "hooksConfig" },
+        c1: { id: "c1", contentComponent: "settings" },
       },
       activeGroup: "g3",
     };
@@ -323,13 +323,13 @@ describe("loadLayout — 返回值 + 白名单校验", () => {
       h1: { contentComponent: "htmlviewer" },
       g1: { contentComponent: "gitshow" },
       d1: { contentComponent: "diff" },
-      c1: { contentComponent: "hooksConfig" },
+      c1: { contentComponent: "settings" },
     });
     // 6 种面板类型恰好与真实注册表一致（mock 漂移守卫）
     expect(PANEL_TYPES).toHaveLength(6);
   });
 
-  it("9b. WRK-07: gitshow/diff/hooksConfig 单独验证白名单放行", () => {
+  it("9b. WRK-07: gitshow/diff/settings 单独验证白名单放行", () => {
     const layout = {
       grid: {
         root: {
@@ -345,7 +345,7 @@ describe("loadLayout — 返回值 + 白名单校验", () => {
       panels: {
         g1: { id: "g1", contentComponent: "gitshow" },
         d1: { id: "d1", contentComponent: "diff" },
-        c1: { id: "c1", contentComponent: "hooksConfig" },
+        c1: { id: "c1", contentComponent: "settings" },
       },
       activeGroup: "g4",
     };
@@ -356,6 +356,32 @@ describe("loadLayout — 返回值 + 白名单校验", () => {
     expect(callArg.panels.g1).toBeDefined();
     expect(callArg.panels.d1).toBeDefined();
     expect(callArg.panels.c1).toBeDefined();
+  });
+
+  it("9c. SC-FE-06: 旧 hooksConfig 面板被白名单过滤（退役后不再放行）", () => {
+    const layout = {
+      grid: {
+        root: {
+          type: "branch",
+          data: [{
+            type: "leaf",
+            data: { views: ["old"], activeView: "old", id: "g5" },
+            size: 100,
+          }],
+          size: 100,
+        },
+      },
+      panels: {
+        old: { id: "old", contentComponent: "hooksConfig" },
+      },
+      activeGroup: "g5",
+    };
+
+    loadLayout(api, layout);
+
+    // 旧 hooksConfig 面板不在 PANEL_TYPES 白名单——fromJSON 参数中该面板已删除
+    const callArg = (api.fromJSON as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(callArg.panels.old).toBeUndefined();
   });
 
   it("10. fromJSON 抛异常 → 返回 false", () => {

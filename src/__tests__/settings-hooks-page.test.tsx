@@ -1,28 +1,31 @@
-// hooks-config-panel.test.tsx — hooks 配置面板 L2 测试（P3-TE-08 + P3-FE-21/22 + Stage 06 hub）
+// settings-hooks-page.test.tsx — 设置中心 hooks 配置页 L2 测试（P3-TE-08 + P3-FE-21/22
+// + Stage 06 hub，SC-FE-05 迁入设置中心）
 //
-// 覆盖：PANEL_TYPES 包含 hooksConfig / isValidPanelType 识别 /
-// HooksConfigPanel（hub 容器）三态渲染（loading / content / 损坏错误态）/
+// 覆盖：HooksSettingsPage（hub 容器）三态渲染（loading / content / 损坏错误态）/
 // 层级切换器存在与禁用逻辑（rootPath 为空 project/local 禁用）/
 // 保存按钮初始禁用 / 页面重新可见（visibilitychange）轻量重读 / JsonMode 接入（P3-FE-11）/
 // F2 注入/卸载按钮与注入状态条（P3-FE-21/22：三态显示、注入/卸载后刷新状态 + 重读 user 层）/
 // hub CLI 选择行（MC-502~507）：能力过滤 / logo+displayName / 选中高亮 token / 单 CLI 也渲染 /
-// 点击切换 → 编辑器重挂载且 IPC 携新 cliId / selectedCli 持久化（updateParameters + 显式保存）/
-// 挂载恢复 / 失效回退首个有能力 CLI / dirty 守卫 confirmDialog 确认与取消 / 非 dirty 直接切换 /
+// 点击切换 → 编辑器重挂载且 IPC 携新 cliId / selectedCli 持久化（onPageParamsChange 回调，
+// 壳单点持久化）/
+// 挂载恢复（pageParams.selectedCli）/ 失效回退首个有能力 CLI / dirty 守卫 confirmDialog
+// 确认与取消 / 非 dirty 直接切换 /
 // 空态「无可配置 CLI」/ restartHint 由 profile 驱动。
 //
-// 面板 props 经强转传入 mock api/containerApi（hub 化后面板为 Dockview content component，
-// 测试照 terminal.test.tsx mockApi 模式）；注册表用 _reset + 重注册隔离
-// （claude profile 为 side-effect 注册，测试内自管基线）。
+// 配置页 props 为 SettingsPageProps 形态（onDirtyChange/pageParams/onPageParamsChange，
+// 壳透传）；注册表用 _reset + 重注册隔离（claude profile 为 side-effect 注册，测试内自管基线）。
 
 import { describe, it, expect, afterEach, vi, beforeEach } from "vitest";
 
 // ── vi.hoisted：mock 状态在模块级 vi.mock 执行前就绪 ──
-const { mockReadHooksConfig, mockWriteHooksConfig, mockConfirmDialog, mockJsonMode } = vi.hoisted(() => ({
+const { mockReadHooksConfig, mockWriteHooksConfig, mockConfirmDialog, mockJsonMode, mockOnPageParamsChange } = vi.hoisted(() => ({
   mockReadHooksConfig: vi.fn(),
   mockWriteHooksConfig: vi.fn(),
   mockConfirmDialog: vi.fn(async () => true),
   // JsonMode mock 组件：渲染 null，测试经 mockJsonMode.mock.calls 断言 props 传递
   mockJsonMode: vi.fn(() => null),
+  // 壳 patch 通道（SettingsPageProps.onPageParamsChange）：selectedCli 持久化断言目标
+  mockOnPageParamsChange: vi.fn(),
 }));
 
 // mock IPC hooks —— F2 注入/卸载/状态查询（P3-FE-21/22；本地覆盖 setup.ts 全局 mock 以便断言调用）
@@ -32,9 +35,8 @@ const { mockInject, mockUninstall, mockGetInjectionStatus } = vi.hoisted(() => (
   mockGetInjectionStatus: vi.fn(),
 }));
 
-// hub 面板 Dockview props mock（照 terminal.test.tsx mockApi 模式）：
-// - api（DockviewPanelApi）：selectedCli 持久化经 updateParameters 写入 params
-// - containerApi（DockviewApi）：saveLayout 序列化委托 toJSON（显式布局保存路径）
+// 壳 patch 通道 mock（SettingsPageProps.onPageParamsChange）：selectedCli 持久化断言目标
+// （SC-FE-05：hub 改造为设置页，不再自持 updateParameters/saveLayout——壳单点持久化）
 const { mockApi, mockContainerApi } = vi.hoisted(() => ({
   mockApi: {
     updateParameters: vi.fn(),
@@ -62,8 +64,9 @@ vi.mock("../ipc/agentHooks", () => ({
   getInjectionStatus: mockGetInjectionStatus,
 }));
 
-// mock JsonMode —— 隔离 CM6/schema（JsonMode 自身测试见 hooks-config-jsonmode.test.tsx）
-vi.mock("../panels/hooksConfig/JsonMode", () => ({
+// mock JsonMode —— 隔离 CM6/schema（JsonMode 自身测试见 hooks-config-jsonmode.test.tsx；
+// 编辑器随 SC-FE-05 归域 configEditor/）
+vi.mock("../features/cliProfiles/profiles/claude/configEditor/JsonMode", () => ({
   default: mockJsonMode,
 }));
 
@@ -81,15 +84,15 @@ vi.mock("../ipc/settings", () => ({
 
 import React from "react";
 import { render, cleanup, fireEvent, waitFor, act } from "@testing-library/react";
-// HooksConfigPanel 经 barrel（面板注册表消费同路径）；persistSelectedCli 为组件文件导出的
-// 纯函数（MC-503，照 F8 applyRename 先例——barrel 零改动，MC-508）
-import HooksConfigPanel, { persistSelectedCli } from "../panels/hooksConfig/HooksConfigPanel";
-import { PANEL_TYPES, isValidPanelType } from "../panelRegistry";
+// HooksSettingsPage 为设置中心配置页（SettingsPageProps 形态——selectedCli 持久化经
+// onPageParamsChange 交壳，SC-FE-05）
+import HooksSettingsPage from "../panels/settings/pages/HooksSettingsPage";
+import type { SettingsPageProps } from "../features/settingsCenter/types";
 import { useProjects } from "../stores/projects";
 import { cliProfileRegistry } from "../features/cliProfiles";
 import { claudeProfile, CLAUDE_CLI_ID } from "../features/cliProfiles/profiles/claude";
 import type { CodingCliProfile, HooksConfigEditorProps } from "../features/cliProfiles/types";
-import ClaudeHooksConfigEditor from "../panels/hooksConfig/ClaudeHooksConfigEditor";
+import ClaudeHooksConfigEditor from "../features/cliProfiles/profiles/claude/configEditor/ClaudeHooksConfigEditor";
 import { useLayout } from "../stores/layout";
 import { EXPLORER_SELECTION_BG } from "../theme";
 
@@ -258,14 +261,15 @@ function hexToRgb(hex: string): string {
   return hex;
 }
 
-/** 渲染 hub 面板（Dockview content component props 经强转传入 mock——hub 化后需要 api/containerApi） */
-function renderPanel(params?: Record<string, unknown>) {
+/** 渲染 hooks 配置页（SettingsPageProps 形态——pageParams 即测试传入参数，
+    selectedCli 持久化经 mockOnPageParamsChange 捕获断言，SC-FE-05） */
+function renderPanel(pageParams?: Record<string, unknown>) {
   return render(
-    React.createElement(HooksConfigPanel, {
-      api: mockApi,
-      containerApi: mockContainerApi,
-      params,
-    } as unknown as React.ComponentProps<typeof HooksConfigPanel>),
+    React.createElement(HooksSettingsPage, {
+      onDirtyChange: vi.fn(),
+      pageParams,
+      onPageParamsChange: mockOnPageParamsChange,
+    } as SettingsPageProps),
   );
 }
 
@@ -280,18 +284,7 @@ function dispatchVisibilityChange() {
   fireEvent(document, new Event("visibilitychange"));
 }
 
-describe("PANEL_TYPES / isValidPanelType", () => {
-  it('PANEL_TYPES 包含 "hooksConfig"（末尾追加）', () => {
-    expect(PANEL_TYPES).toContain("hooksConfig");
-    expect(PANEL_TYPES[PANEL_TYPES.length - 1]).toBe("hooksConfig");
-  });
-
-  it('isValidPanelType("hooksConfig") 返回 true', () => {
-    expect(isValidPanelType("hooksConfig")).toBe(true);
-  });
-});
-
-describe("HooksConfigPanel 渲染", () => {
+describe("HooksSettingsPage 渲染", () => {
   beforeEach(() => {
     mockReadHooksConfig.mockReset();
     mockWriteHooksConfig.mockReset();
@@ -308,6 +301,7 @@ describe("HooksConfigPanel 渲染", () => {
     mockApi.getParameters.mockReset();
     mockApi.getParameters.mockReturnValue({});
     mockContainerApi.toJSON.mockReset();
+    mockOnPageParamsChange.mockReset();
     mockContainerApi.toJSON.mockReturnValue({ mockLayout: true });
     resetStores();
     registerOnly([claudeProfile]);
@@ -710,6 +704,7 @@ describe("hub CLI 选择行", () => {
     mockApi.getParameters.mockReset();
     mockApi.getParameters.mockReturnValue({});
     mockContainerApi.toJSON.mockReset();
+    mockOnPageParamsChange.mockReset();
     mockContainerApi.toJSON.mockReturnValue({ mockLayout: true });
     resetStores();
     registerOnly([claudeProfile]);
@@ -784,31 +779,26 @@ describe("hub CLI 选择行", () => {
     await waitFor(() => expect(mockJsonMode.mock.calls.length).toBeGreaterThan(jsonModeCallsBefore));
   });
 
-  it("selectedCli 持久化：updateParameters 写入 + 显式布局保存（MC-503）", async () => {
+  it("selectedCli 持久化：onPageParamsChange 回调写入（MC-503 迁壳，SC-FE-05）", async () => {
     registerOnly([claudeProfile, TEST_PROFILE]);
     mockReadHooksConfig.mockResolvedValue({});
-    const { getByRole } = renderPanel({ panelId: "hooksConfig-page-1" });
+    const { getByRole } = renderPanel();
     await waitFor(() => expect(mockReadHooksConfig.mock.calls.length).toBe(1));
-    mockApi.updateParameters.mockClear();
-    mockContainerApi.toJSON.mockClear();
-    // 点击切换 → ① updateParameters 展开保留原键并写入 selectedCli
+    mockOnPageParamsChange.mockClear();
+    // 点击切换 → 选中态经 onPageParamsChange({ selectedCli }) 交壳持久化
+    // （壳是 params 持久化单点，hub 不再自持 updateParameters/saveLayout）
     fireEvent.click(getByRole("button", { name: "testcli" }));
     await waitFor(() =>
-      expect(mockApi.updateParameters).toHaveBeenCalledWith({
-        panelId: "hooksConfig-page-1",
+      expect(mockOnPageParamsChange).toHaveBeenCalledWith({
         selectedCli: TEST_PROFILE.id,
       }),
     );
-    // ② 显式布局保存：updateParameters 不触发 onDidLayoutChange——必须显式
-    //    onLayoutChange(saveLayout(containerApi))（MC-503，F8 先例）；saveLayout 委托
-    //    containerApi.toJSON 序列化——断言 toJSON 被调用（直测见 persistSelectedCli describe）
-    expect(mockContainerApi.toJSON).toHaveBeenCalled();
   });
 
-  it("挂载恢复：params.selectedCli 恢复选中态（MC-503）", async () => {
+  it("挂载恢复：pageParams.selectedCli 恢复选中态（MC-503 迁壳）", async () => {
     registerOnly([claudeProfile, TEST_PROFILE]);
     mockReadHooksConfig.mockResolvedValue({});
-    const { getByRole } = renderPanel({ panelId: "hooksConfig-page-1", selectedCli: "testcli" });
+    const { getByRole } = renderPanel({ selectedCli: "testcli" });
     // 挂载即选中 testcli → 编辑器加载携 testcli（非默认回退 claude）
     await waitFor(() => expect(mockReadHooksConfig.mock.calls.length).toBe(1));
     expect(mockReadHooksConfig.mock.calls[0][0]).toBe(TEST_PROFILE.id);
@@ -819,10 +809,10 @@ describe("hub CLI 选择行", () => {
     expect(claudeBtn.style.background).toBe("transparent");
   });
 
-  it("失效回退：params.selectedCli 未注册 → 首个有能力 CLI（MC-503）", async () => {
+  it("失效回退：pageParams.selectedCli 未注册 → 首个有能力 CLI（MC-503）", async () => {
     registerOnly([claudeProfile, TEST_PROFILE]);
     mockReadHooksConfig.mockResolvedValue({});
-    const { getByRole } = renderPanel({ panelId: "hooksConfig-page-1", selectedCli: "ghostcli" });
+    const { getByRole } = renderPanel({ selectedCli: "ghostcli" });
     // ghostcli 未注册 → 回退注册序首个 hasConfigEditor profile = claude
     await waitFor(() => expect(mockReadHooksConfig.mock.calls.length).toBe(1));
     expect(mockReadHooksConfig.mock.calls[0][0]).toBe(CLAUDE_CLI_ID);
@@ -870,14 +860,15 @@ describe("hub CLI 选择行", () => {
         JSON.stringify({ PreToolUse: [{ hooks: [{ type: "command", command: "x" }] }] }),
       );
     });
-    // 点击切换 → confirmDialog 确认，用户取消 → 不切换（选中态保持 claude，IPC 不携新 cliId）
+    // 点击切换 → confirmDialog 确认，用户取消 → 不切换（选中态保持 claude，IPC 不携新 cliId，
+    // 壳 patch 通道零调用）
     fireEvent.click(getByRole("button", { name: "testcli" }));
     await waitFor(() => expect(mockConfirmDialog).toHaveBeenCalled());
     await new Promise((r) => setTimeout(r, 20));
     expect(mockReadHooksConfig.mock.calls[mockReadHooksConfig.mock.calls.length - 1][0]).toBe(
       CLAUDE_CLI_ID,
     );
-    expect(mockApi.updateParameters).not.toHaveBeenCalled();
+    expect(mockOnPageParamsChange).not.toHaveBeenCalled();
   });
 
   it("非 dirty 直接切换（不弹 confirmDialog，MC-505）", async () => {
@@ -951,7 +942,6 @@ describe("hub CLI 选择行", () => {
     mockReadHooksConfig.mockResolvedValue({});
     // 挂载选中 layerscli（configLayers = project/local 两层）→ 层按钮 = profile 声明层
     const { getByRole, queryByRole } = renderPanel({
-      panelId: "hooksConfig-page-1",
       selectedCli: LAYERS_PROFILE.id,
     });
     await waitFor(() => expect(getByRole("button", { name: "Project" })).toBeTruthy());
@@ -967,7 +957,7 @@ describe("hub CLI 选择行", () => {
     registerOnly([claudeProfile, TEST_PROFILE]);
     mockReadHooksConfig.mockResolvedValue({});
     // 挂载选中 testcli（restartHint = "testcli 专属提示"，区别于 claude 文案）
-    const { container } = renderPanel({ panelId: "hooksConfig-page-1", selectedCli: "testcli" });
+    const { container } = renderPanel({ selectedCli: "testcli" });
     await waitFor(() => expect(mockReadHooksConfig.mock.calls.length).toBe(1));
     // 合法编辑 → 保存成功 → 提示条文案 = testcli profile 的 restartHint
     act(() => {
@@ -998,65 +988,6 @@ describe("hub CLI 选择行", () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════
-// persistSelectedCli 纯函数直测（MC-503，照 F8 applyRename 先例 terminal-rename-apply.test.ts）
+// persistSelectedCli 纯函数已随 SC-FE-05 删除——selectedCli 持久化迁壳单点
+// （SettingsPanel persistParams），经 onPageParamsChange 断言（见「selectedCli 持久化」用例）。
 // ═══════════════════════════════════════════════════════════════════
-describe("persistSelectedCli", () => {
-  function makeContainerApi() {
-    return { toJSON: () => ({ mockLayout: true }) };
-  }
-
-  it("updateParameters 展开保留原键并写入 selectedCli", () => {
-    const api = { updateParameters: vi.fn() };
-    persistSelectedCli(
-      api as never,
-      makeContainerApi() as never,
-      { panelId: "hooksConfig-page-1", cwd: "D:/repo" },
-      "testcli",
-      vi.fn(),
-    );
-    expect(api.updateParameters).toHaveBeenCalledWith({
-      panelId: "hooksConfig-page-1",
-      cwd: "D:/repo",
-      selectedCli: "testcli",
-    });
-  });
-
-  it("onLayoutChange 收到 saveLayout(containerApi) 结果（toJSON 值，显式保存）", () => {
-    const api = { updateParameters: vi.fn() };
-    const onLayoutChange = vi.fn();
-    persistSelectedCli(
-      api as never,
-      makeContainerApi() as never,
-      { panelId: "hooksConfig-page-1" },
-      "testcli",
-      onLayoutChange,
-    );
-    expect(onLayoutChange).toHaveBeenCalledTimes(1);
-    expect(onLayoutChange).toHaveBeenCalledWith({ mockLayout: true });
-  });
-
-  it("原 params 对象不被修改（展开复制语义）", () => {
-    const api = { updateParameters: vi.fn() };
-    const originalParams = { panelId: "hooksConfig-page-1" };
-    persistSelectedCli(api as never, makeContainerApi() as never, originalParams, "testcli", vi.fn());
-    expect(originalParams).toEqual({ panelId: "hooksConfig-page-1" });
-    expect(originalParams).not.toHaveProperty("selectedCli");
-  });
-
-  it("selectedCli 与当前一致时组件侧已短路（纯函数自身无守卫，只负责写入）", () => {
-    // 契约边界：handleCliSelect 内 cliId === selectedCliRef.current 直接 return——
-    // 纯函数不重复写入（组件侧守卫，MC-505）；此处锁死纯函数行为 = 无条件写入
-    const api = { updateParameters: vi.fn() };
-    persistSelectedCli(
-      api as never,
-      makeContainerApi() as never,
-      { panelId: "hooksConfig-page-1", selectedCli: "testcli" },
-      "testcli",
-      vi.fn(),
-    );
-    expect(api.updateParameters).toHaveBeenCalledWith({
-      panelId: "hooksConfig-page-1",
-      selectedCli: "testcli",
-    });
-  });
-});

@@ -1,7 +1,7 @@
 // eventsCatalog.ts — 事件元数据单点（P3-FE-26）
 //
 // 真值源：本文件事件元数据全表（30 事件 x 10 组，自官方 schema 提取，
-// 见 src/features/hooksConfig/CLAUDE.md 文件表）。
+// 见 src/features/cliProfiles/CLAUDE.md 文件表）。
 // 本文件为纯数据 + 纯查询函数，零 DOM/React 依赖，供 EventTree / HandlerForm /
 // JsonMode 导航 / MatcherTester 共用。
 

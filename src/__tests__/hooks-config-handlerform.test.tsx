@@ -8,9 +8,9 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import React from "react";
 import { render, cleanup, fireEvent } from "@testing-library/react";
-import { HandlerForm, switchHandlerType } from "../panels/hooksConfig/HandlerForm";
-import { HANDLER_TYPES } from "../panels/hooksConfig/eventsCatalog";
-import type { HookHandlerGui } from "../panels/hooksConfig/configModel";
+import { HandlerForm, switchHandlerType } from "../features/cliProfiles/profiles/claude/configEditor/HandlerForm";
+import { HANDLER_TYPES } from "../features/cliProfiles/profiles/claude/configEditor/eventsCatalog";
+import type { HookHandlerGui } from "../features/cliProfiles/profiles/claude/configEditor/configModel";
 
 // ── 测试辅助 ──────────────────────────────────────────────
 

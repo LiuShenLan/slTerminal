@@ -32,7 +32,7 @@ import {
   ERROR_FG,
   SEPARATOR_BG,
   DIM_FG,
-} from "../../theme";
+} from "../../../../../theme";
 
 /** HandlerForm props——handler + 所属事件 + 变更回调 */
 export interface HandlerFormProps {
