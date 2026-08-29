@@ -138,6 +138,45 @@ describeIpcContract("refreshPlanBalance 合约（refresh_plan_balance，无参�
 ]);
 
 // ═══════════════════════════════════════════════════════════════════
+// plan_balance_set_interval（F11 设置轮询间隔：校验 10–3600 → 落盘 → 内存，立即生效）
+// ═══════════════════════════════════════════════════════════════════
+
+describeIpcContract("setPlanBalanceInterval 合约（plan_balance_set_interval，带参）", [
+  // 维度 1：命令名（snake_case 逐字）
+  {
+    name: "应调用 plan_balance_set_interval 命令（非驼峰）",
+    cmd: "plan_balance_set_interval",
+    call: () => planBalance.setPlanBalanceInterval(120),
+    respond: undefined,
+  },
+  // 维度 2：payload 键集合精确 {intervalSec: 120}（防单边字段漂移）
+  {
+    name: "payload 键集合精确 { intervalSec: 120 }",
+    cmd: "plan_balance_set_interval",
+    call: () => planBalance.setPlanBalanceInterval(120),
+    respond: undefined,
+    expectArgs: { intervalSec: 120 },
+    expectExactKeys: ["intervalSec"],
+  },
+  // 维度 3：正常返回透传（void 命令 resolve undefined）
+  {
+    name: "正常返回透传（void 命令 resolve undefined）",
+    cmd: "plan_balance_set_interval",
+    call: () => planBalance.setPlanBalanceInterval(120),
+    respond: undefined,
+    expectUndefined: true,
+  },
+  // 维度 4：异常传播（越界 → 后端 Validation Err → reject）
+  {
+    name: "invoke 失败时异常应传播给调用方",
+    cmd: "plan_balance_set_interval",
+    call: () => planBalance.setPlanBalanceInterval(5),
+    mockThrow: "设置轮询间隔失败: 须为 10–3600 秒，实际 5",
+    expectReject: "设置轮询间隔失败",
+  },
+]);
+
+// ═══════════════════════════════════════════════════════════════════
 // onPlanBalanceUpdated（事件订阅封装）——wrapper 行为契约（IHE-01②）
 //
 // listen 封装的回调解包（event.payload）不在 mockIPC 层验证——Tauri 的

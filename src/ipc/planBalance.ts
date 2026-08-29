@@ -27,3 +27,8 @@ export function onPlanBalanceUpdated(
     unlisten.then((fn) => fn());
   };
 }
+
+/** 设置轮询间隔秒（F11）：后端校验 10–3600 → 落盘 + 更新内存值，立即生效 */
+export function setPlanBalanceInterval(intervalSec: number): Promise<void> {
+  return invoke("plan_balance_set_interval", { intervalSec });
+}
