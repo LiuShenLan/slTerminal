@@ -51,6 +51,7 @@ fn main() {
         "agent_history_read_title",
         "get_plan_balance",
         "refresh_plan_balance",
+        "plan_balance_set_interval",
     ]);
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest))
         .expect("tauri-build 失败");

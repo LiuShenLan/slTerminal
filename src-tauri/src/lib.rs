@@ -136,6 +136,7 @@ pub fn run() {
             agent_history::agent_history_read_title,
             plan_balance::get_plan_balance,
             plan_balance::refresh_plan_balance,
+            plan_balance::plan_balance_set_interval,
         ])
         .run(tauri::generate_context!())
     {

@@ -10,9 +10,9 @@ use crate::error::{io_error, AppError};
 use std::io::Write as _;
 use tempfile::NamedTempFile;
 
-/// 设置顶层键白名单（SEC-11）：前端各 store 只允许写这些键
-/// （fontSize/keybindings/sideBar/colorScheme——与 stores 模块持久化键一一对应；
-/// planBalance——F10 轮询间隔，手改文件，读取侧在 plan_balance 模块。
+/// 设置顶层键白名单（SEC-11）：前端各 store 只允许写这些键。
+/// 前端消费型四键（fontSize/keybindings/sideBar/colorScheme）无后端模块可归，键名集中于此；
+/// 后端消费型域键名归域模块（plan_balance::SETTINGS_KEY 先例）。
 /// 契约断链先例：fontSize store 曾发平铺 terminalFontSize/editorFontSize 顶层键被拒，
 /// 已改段形态并用双侧测试锁死——前端 payload 键集合精确断言 + 后端平铺拒绝用例）
 const SETTINGS_ALLOWED_KEYS: [&str; 5] = [
@@ -20,7 +20,7 @@ const SETTINGS_ALLOWED_KEYS: [&str; 5] = [
     "keybindings",
     "sideBar",
     "colorScheme",
-    "planBalance",
+    crate::plan_balance::SETTINGS_KEY,
 ];
 
 /// save_settings 进程内互斥（SPE-06 场景转正修复）：

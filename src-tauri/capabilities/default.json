@@ -50,6 +50,7 @@
     "allow-agent-history-delete",
     "allow-agent-history-read-title",
     "allow-get-plan-balance",
-    "allow-refresh-plan-balance"
+    "allow-refresh-plan-balance",
+    "allow-plan-balance-set-interval"
   ]
 }
