@@ -805,4 +805,38 @@ describe("ShortcutRegistry", () => {
       expect(handler).toHaveBeenCalledOnce();
     });
   });
+
+  // ---- 13. 录制态屏蔽（setCaptureSuspended，F11 SC-FE-09） ----
+
+  describe("录制态屏蔽（setCaptureSuspended）", () => {
+    const ctrlA = { ctrlKey: true, shiftKey: false, altKey: false, metaKey: false, code: "KeyA" } as const;
+
+    it("suspended 时 handleKeyDown 不消费任何按键", () => {
+      const unreg = registry.register([
+        cmd({ id: "x", defaultKey: ctrlA, handler: () => true }),
+      ]);
+      handlers.push(unreg);
+
+      registry.setCaptureSuspended(true);
+      const e = dispatchKeydown({ ctrlKey: true, code: "KeyA" });
+      expect(e.defaultPrevented).toBe(false);
+
+      // 复位后恢复消费
+      registry.setCaptureSuspended(false);
+      expect(dispatchKeydown({ ctrlKey: true, code: "KeyA" }).defaultPrevented).toBe(true);
+    });
+
+    it("suspended 时 resolve 返回 false", () => {
+      const unreg = registry.register([
+        cmd({ id: "x", context: "terminal", defaultKey: ctrlA, handler: () => true }),
+      ]);
+      handlers.push(unreg);
+
+      registry.setCaptureSuspended(true);
+      expect(registry.resolve(makeKeydown({ ctrlKey: true, code: "KeyA" }), "terminal")).toBe(false);
+
+      registry.setCaptureSuspended(false);
+      expect(registry.resolve(makeKeydown({ ctrlKey: true, code: "KeyA" }), "terminal")).toBe(true);
+    });
+  });
 });

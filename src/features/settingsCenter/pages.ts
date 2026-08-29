@@ -8,6 +8,16 @@
 import { getSettingsPageRegistry } from "./SettingsPageRegistry";
 import PlanBalancePage from "../../panels/settings/pages/PlanBalancePage";
 import HooksSettingsPage from "../../panels/settings/pages/HooksSettingsPage";
+import KeybindingsPage from "../../panels/settings/pages/KeybindingsPage";
+
+// 快捷键页（F11，SC-FE-09）——global 组（应用级单例）
+getSettingsPageRegistry().register({
+  id: "keybindings",
+  title: "快捷键",
+  group: "global",
+  component: KeybindingsPage,
+  order: 10,
+});
 
 getSettingsPageRegistry().register({
   id: "planBalance",

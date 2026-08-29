@@ -52,6 +52,10 @@ class ShortcutRegistry implements ShortcutRegistryAPI {
   /** 是否已向 window 添加 keydown 监听器 */
   private installed = false;
 
+  /** 录制态屏蔽（F11，SC-FE-09）：true 时 handleKeyDown/resolve 不消费任何按键——
+      快捷键设置页录制期间置位，防录制键触发命令（如录 Ctrl+Shift+C 真执行复制） */
+  private captureSuspended = false;
+
   /** 已注册命令总数（= commands.size），归零时移除监听器 */
   private refCount = 0;
 
@@ -143,6 +147,7 @@ class ShortcutRegistry implements ShortcutRegistryAPI {
    * 返回是否被命令消费；不调用 preventDefault（调用方自行处理）。
    */
   resolve(event: KeyboardEvent, forceContext?: ShortcutContext): boolean {
+    if (this.captureSuspended) return false; // 录制态屏蔽（SC-FE-09）
     const winner = this.findWinner(event, forceContext);
     return winner ? winner.handler(event) : false;
   }
@@ -198,6 +203,25 @@ class ShortcutRegistry implements ShortcutRegistryAPI {
     return cmd.defaultKey;
   }
 
+  /**
+   * 设置录制态屏蔽（F11，SC-FE-09）：true 时 handleKeyDown/resolve 不消费任何按键——
+   * 快捷键设置页录制期间置位，防录制键触发命令（如录 Ctrl+Shift+C 真执行复制）。
+   */
+  setCaptureSuspended(suspended: boolean): void {
+    this.captureSuspended = suspended;
+  }
+
+  /**
+   * 生效键查询（设置页显示与运行期同源，防显示/运行漂移）：null=解绑或无默认键。
+   * 无该命令 → null；解绑（覆盖 null）或无默认键 → null；否则返回格式化生效键。
+   */
+  getEffectiveKeystroke(id: string): string | null {
+    const cmd = this.commands.get(id);
+    if (!cmd) return null;
+    const ks = this.effectiveKeystroke(cmd);
+    return ks ? formatKeystroke(ks) : null;
+  }
+
   /** 重建指纹索引（按有效键） */
   private rebuildIndex(): void {
     this.fingerprintIndex.clear();
@@ -250,6 +274,7 @@ class ShortcutRegistry implements ShortcutRegistryAPI {
 
   /** 全局 keydown 处理器（箭头函数属性，确保 this 绑定） */
   private handleKeyDown = (e: KeyboardEvent): void => {
+    if (this.captureSuspended) return; // 录制态屏蔽（SC-FE-09）：不消费任何按键
     const winner = this.findWinner(e);
     if (winner && winner.handler(e)) {
       e.preventDefault();
@@ -275,6 +300,7 @@ class ShortcutRegistry implements ShortcutRegistryAPI {
     this.fingerprintIndex.clear();
     this.contextStack = [];
     this.overrides = {};
+    this.captureSuspended = false;
     this.ensureListenerRemoved();
     this.refCount = 0;
   }
