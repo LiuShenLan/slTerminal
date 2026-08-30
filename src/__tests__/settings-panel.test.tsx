@@ -247,7 +247,7 @@ describe("pageParams 透传与持久化", () => {
 
   it("onPageParamsChange → updateParameters 写 pageParams[selectedPage] 槽（merge patch 不丢既有键）", () => {
     registerStubs();
-    const { api } = renderPanel({
+    const { api, containerApi } = renderPanel({
       panelId: "settings-page-a",
       selectedPage: "stub-a",
       pageParams: { "stub-a": { x: 1 } },
@@ -259,6 +259,8 @@ describe("pageParams 透传与持久化", () => {
       selectedPage: "stub-a",
       pageParams: { "stub-a": { x: 1, y: 2 } },
     });
+    // 落盘断言：persistParams 显式 saveLayout（toJSON）——params 变更必须落盘，防「只改不存」假绿
+    expect(containerApi.toJSON).toHaveBeenCalled();
     // 连续 patch：合并基准不丢前次结果
     fireEvent.click(document.querySelector('[data-e2e="stub-page-a-patch"]')!);
     expect(api.updateParameters).toHaveBeenCalledTimes(2);
@@ -267,6 +269,28 @@ describe("pageParams 透传与持久化", () => {
       selectedPage: "stub-a",
       pageParams: { "stub-a": { x: 1, y: 2 } },
     });
+  });
+
+  it("onPageParamsChange 合并既有 params 且不修改原对象", () => {
+    registerStubs();
+    // 原槽对象引用留档——断言 patch 后引用未被改写（spread 合并，非原地修改）
+    const stubASlot = { x: 1 };
+    const initialParams: SettingsPanelParams = {
+      panelId: "settings-page-a",
+      selectedPage: "stub-a",
+      pageParams: { "stub-a": stubASlot },
+    };
+    const { api } = renderPanel(initialParams);
+    fireEvent.click(document.querySelector('[data-e2e="stub-page-a-patch"]')!);
+    // 合并结果含原键：selectedPage 保留 + 槽内原 x 保留 + 新 y 合入
+    expect(api.updateParameters).toHaveBeenCalledWith({
+      panelId: "settings-page-a",
+      selectedPage: "stub-a",
+      pageParams: { "stub-a": { x: 1, y: 2 } },
+    });
+    // 原 params 对象未被改写：槽对象仍是原引用且值不变
+    expect(initialParams.pageParams?.["stub-a"]).toBe(stubASlot);
+    expect(stubASlot).toEqual({ x: 1 });
   });
 
   it("切换页后 pageParams 跟随新选中页槽透传", () => {

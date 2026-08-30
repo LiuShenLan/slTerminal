@@ -43,7 +43,6 @@ const {
   mockToastShow,
   mockJsonMode,
   mockGuiMode,
-  mockApi,
   mockOnPageParamsChange,
 } = vi.hoisted(() => ({
   mockReadHooksConfig: vi.fn(),
@@ -55,16 +54,6 @@ const {
   mockGuiMode: vi.fn(() => null),
   // 壳 patch 通道 mock（SettingsPageProps.onPageParamsChange，SC-FE-05 迁壳）
   mockOnPageParamsChange: vi.fn(),
-  // 遗留 Dockview props mock（保留定义；HooksSettingsPage 不再消费——选中态持久化经
-  // onPageParamsChange 交壳单点）
-  mockApi: {
-    updateParameters: vi.fn(),
-    onDidParametersChange: vi.fn(() => ({ dispose: vi.fn() })),
-    getParameters: vi.fn(() => ({})),
-    toJSON: vi.fn(() => ({ mockPanel: true })),
-    title: "Hooks 配置",
-    close: vi.fn(),
-  },
 }));
 
 // mock IPC hooksConfig —— 三层 hooks 子树读写
@@ -183,9 +172,6 @@ describe("P3-TE-13 双模式同步", () => {
     mockConfirmDialog.mockResolvedValue(true);
     mockJsonMode.mockClear();
     mockGuiMode.mockClear();
-    mockApi.updateParameters.mockReset();
-    mockApi.getParameters.mockReset();
-    mockApi.getParameters.mockReturnValue({});
     resetStores();
   });
 
@@ -294,9 +280,6 @@ describe("P3-TE-14 保存拒绝与提示", () => {
     mockToastShow.mockReset();
     mockJsonMode.mockClear();
     mockGuiMode.mockClear();
-    mockApi.updateParameters.mockReset();
-    mockApi.getParameters.mockReset();
-    mockApi.getParameters.mockReturnValue({});
     resetStores();
   });
 
@@ -514,7 +497,6 @@ describe("HKC-02 load() generation 竞态取消", () => {
     mockReadHooksConfig.mockReset();
     mockConfirmDialog.mockReset();
     mockConfirmDialog.mockResolvedValue(true);
-    mockApi.updateParameters.mockReset();
     resetStores();
   });
 

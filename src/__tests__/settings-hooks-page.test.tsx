@@ -35,22 +35,6 @@ const { mockInject, mockUninstall, mockGetInjectionStatus } = vi.hoisted(() => (
   mockGetInjectionStatus: vi.fn(),
 }));
 
-// 壳 patch 通道 mock（SettingsPageProps.onPageParamsChange）：selectedCli 持久化断言目标
-// （SC-FE-05：hub 改造为设置页，不再自持 updateParameters/saveLayout——壳单点持久化）
-const { mockApi, mockContainerApi } = vi.hoisted(() => ({
-  mockApi: {
-    updateParameters: vi.fn(),
-    onDidParametersChange: vi.fn(() => ({ dispose: vi.fn() })),
-    getParameters: vi.fn(() => ({})),
-    toJSON: vi.fn(() => ({ mockPanel: true })),
-    title: "Hooks 配置",
-    close: vi.fn(),
-  },
-  mockContainerApi: {
-    toJSON: vi.fn(() => ({ mockLayout: true })),
-  },
-}));
-
 // mock IPC hooksConfig —— 三层 hooks 子树读写
 vi.mock("../ipc/hooksConfig", () => ({
   readHooksConfig: mockReadHooksConfig,
@@ -296,13 +280,8 @@ describe("HooksSettingsPage 渲染", () => {
     mockUninstall.mockReset();
     mockGetInjectionStatus.mockReset();
     mockGetInjectionStatus.mockResolvedValue({ status: "notInjected", version: null });
-    // hub props mock 重置 + 显式保存 mock 恢复默认值
-    mockApi.updateParameters.mockReset();
-    mockApi.getParameters.mockReset();
-    mockApi.getParameters.mockReturnValue({});
-    mockContainerApi.toJSON.mockReset();
+    // 壳 patch 通道 mock 重置（selectedCli 持久化断言目标）
     mockOnPageParamsChange.mockReset();
-    mockContainerApi.toJSON.mockReturnValue({ mockLayout: true });
     resetStores();
     registerOnly([claudeProfile]);
   });
@@ -536,7 +515,6 @@ describe("F2 注入/卸载与注入状态条（P3-FE-21/22）", () => {
     mockUninstall.mockReset();
     mockGetInjectionStatus.mockReset();
     mockGetInjectionStatus.mockResolvedValue({ status: "notInjected", version: null });
-    mockApi.updateParameters.mockReset();
     resetStores();
     registerOnly([claudeProfile]);
   });
@@ -700,12 +678,7 @@ describe("hub CLI 选择行", () => {
     mockUninstall.mockReset();
     mockGetInjectionStatus.mockReset();
     mockGetInjectionStatus.mockResolvedValue({ status: "notInjected", version: null });
-    mockApi.updateParameters.mockReset();
-    mockApi.getParameters.mockReset();
-    mockApi.getParameters.mockReturnValue({});
-    mockContainerApi.toJSON.mockReset();
     mockOnPageParamsChange.mockReset();
-    mockContainerApi.toJSON.mockReturnValue({ mockLayout: true });
     resetStores();
     registerOnly([claudeProfile]);
   });
@@ -793,6 +766,20 @@ describe("hub CLI 选择行", () => {
         selectedCli: TEST_PROFILE.id,
       }),
     );
+  });
+
+  it("点击当前已选中 CLI → 短路不触发 onPageParamsChange（HooksSettingsPage.tsx:132 短路）", async () => {
+    registerOnly([claudeProfile]);
+    mockReadHooksConfig.mockResolvedValue({});
+    const { getByRole } = renderPanel({ selectedCli: CLAUDE_CLI_ID });
+    // 挂载恢复选中 claude → 点击同一 CLI：handleCliSelect 短路直接 return
+    // （不重读、不触发壳 patch 通道）
+    await waitFor(() => expect(mockReadHooksConfig.mock.calls.length).toBe(1));
+    mockOnPageParamsChange.mockClear();
+    fireEvent.click(getByRole("button", { name: "claude" }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(mockOnPageParamsChange).not.toHaveBeenCalled();
+    expect(mockReadHooksConfig.mock.calls.length).toBe(1); // 短路连重读都不触发
   });
 
   it("挂载恢复：pageParams.selectedCli 恢复选中态（MC-503 迁壳）", async () => {
