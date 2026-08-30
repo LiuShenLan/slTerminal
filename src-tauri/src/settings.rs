@@ -1,4 +1,4 @@
-/// 设置持久化模块 — save/load settings 到 ~/.slterminal/settings.json
+/// 设置持久化模块 — save/load settings 到 exe 同级 settings.json（BE-16 便携化后实际位置）
 ///
 /// 原子写入（tempfile）+ .bak 备份兜底。
 /// - BE-14/D11：load 返回 `{ data, corrupted }`——无文件 data:null/corrupted:false；

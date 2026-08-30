@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### app_dir.rs — 应用数据目录单点（BE-16）
 
-`app_data_dir`/`resolve_app_data_dir` 上提至本模块，settings 与 projects 均从这里导入，避免跨模块直接引用。数据目录为 exe 同级（便携分发语义）。同模块承载：
+`app_data_dir`/`resolve_app_data_dir` 上提至本模块，settings 与 projects 均从这里导入，避免跨模块直接引用。数据目录为 exe 同级（便携分发语义）。**数据目录三级来源**：测试 guard（`cfg(test)`，生产零编译）> `SLTERM_DATA_DIR` env（E2E 隔离，空串视为未设置）> exe 同级推导。同模块承载：
 - `LoadResult<T>`：`{ data, corrupted }`，无文件时 `data:null, corrupted:false`；损坏回退默认值或 `.bak` 命中时 `corrupted:true`（BE-14/D11）；
 - `MAX_PERSIST_BYTES = 1MB`：save 侧大小上限，settings/projects 共用（SEC-11）；
 - `AppDataDirGuard`：测试用 RAII 注入覆盖应用目录（SPE-04）。

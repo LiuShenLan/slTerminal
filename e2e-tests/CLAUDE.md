@@ -31,10 +31,14 @@ E2E helper 由 `E2E_ENABLED`（`src/lib/e2eEnabled.ts`）门控。`tauri build` 
 
 两套命名反映挂载位置不同，禁止把 `__e2e_*` 当 window 全局使用。
 
-### 用户目录隔离（FIX-TE-04 + E2E-05）
+helper 清单（window 全局）：
+- `__slterm_e2e_setSettingsDirty(panelId, dirty)`：测试后门，直接置设置面板 dirty 态（供 × 关闭守卫用例绕过真实编辑，settings.e2e.ts 用例⑪）。
 
-`run-wdio.cjs` 启动时备份，exit 时同步还原：
-- `~/.slterminal/settings.json`
+### 用户目录隔离（FIX-TE-04 + E2E-05 + BE-01）
+
+**数据目录隔离（SLTERM_DATA_DIR）**：`run-wdio.cjs` 启动时注入 `SLTERM_DATA_DIR = <os.tmpdir()>/slterm-e2e-data`（env 链式继承：run-wdio → npx wdio → tauri driver → slterminal.exe），应用全部数据写入（settings.json / slterminal-projects.json 等）落在临时目录，与日常使用数据完全隔离；退出时清理临时目录。应用数据备份（~/.slterminal/settings.json / projects.json / .bak）已被此机制取代，不再备份。
+
+其余用户目录 exit 时同步还原：
 - `~/.claude/settings.json`
 - `~/.slterminal/hooks/`
 - `~/.slterminal/statusline-backup.json`
@@ -53,6 +57,7 @@ wdio 单 session 共享 app 实例。`wdio.conf.ts` 的 `beforeSuite` 调 `__slt
 ## 外部坑/红线
 
 - **禁止直接 `tauri build --debug` 跑 E2E**：必须 `VITE_E2E=1`。
+- **target/debug 的 exe 可能是 E2E 构建**：`npm run e2e` 覆盖构建产物（`VITE_E2E=1`，helper 被 tree-shake 与否以产物为准），日常使用该 exe 会跳过项目加载且带 E2E 后门——日常使用前须以普通 `npx tauri build --debug --no-bundle` 覆盖。
 - **禁止 build:e2e 与 wdio 并行**：cargo 无法覆写运行中的 exe。
 - **fixture 缺失必须终止**：`fixtures/claude-projects/` 缺失时 `run-wdio.cjs` 直接 `process.exit(1)`，禁止自动兜底到真实 `~/.claude/projects`。
 - **DOM 选择器必须用 `data-e2e`**：禁止 CSS 内联样式选择器。

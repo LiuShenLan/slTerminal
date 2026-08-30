@@ -2,15 +2,15 @@
 
 > **本文档是项目用例数唯一真值源。** 所有 CLAUDE.md、README、CI 配置中引用的用例数均以此文件为准。更新测试后必须同步本文档。
 
-全量 **3846** 用例（Rust 815 + 前端 2839 + L3 142 + E2E 50），2026-08-30 校准。
+全量 **3863** 用例（Rust 818 + 前端 2852 + L3 142 + E2E 51），2026-08-30 实跑确认。
 
 > **登记纪律（TQ-CI-01）**：改测试后同步本文件——L1 以 `cargo test` 实跑总数 + `grep -c '#[test]'` 双核对；L2 以 `npm test` 实跑（Vitest 报告）为准；段小计 = 段内行级用例数之和（逐段核对 it.each/工厂展开）。三处（表头/段头/段小计）必须一致。
 
 > **计数口径**：
-> - L1 以 `grep -c '#[test]'` 统计的 `#[test]` 属性数为准（39 文件 815）。
-> - L2 以 `npm test` 实跑（Vitest 报告）为准，it.each/describeIpcContract 工厂按展开后计入（166 文件 2839）。
+> - L1 以 `grep -c '#[test]'` 统计的 `#[test]` 属性数为准（39 文件 818）。
+> - L2 以 `npm test` 实跑（Vitest 报告）为准，it.each/describeIpcContract 工厂按展开后计入（167 文件 2852）。
 > - L3 以 `npm run test:l3` 实跑为准（8 文件 142）。
-> - L4 以 spec 内 `it(`/`it.skip(` 计数为准（10 spec，50 用例，48 active + 2 skip）。
+> - L4 以 spec 内 `it(`/`it.skip(` 计数为准（10 spec，51 用例，49 active + 2 skip）。
 > - L2 与 L3 独立运行：`vitest.config.ts` include 仅 `src/__tests__/**`，L3 走 `vitest.l3.config.ts`。
 
 ## 既定豁免清单（DOC-01）
@@ -57,7 +57,7 @@
 | ⑤ | L2 | **E2E helper 行为契约**——验证 `__slterm_e2e_createProject` 等 helper 的契约，非真实 App 初始化逻辑 | 13 P-14 |
 | ⑥ | L2 | **浅层组件定位**——`editor.test.tsx` mock `useCodeMirror`，定位为组件集成契约测试，真实编辑器行为由 `use-code-mirror.test.ts` 等覆盖 | 07 G1/G2 |
 
-## L1 — Rust 单元/集成测试（39 文件 / 815 用例）
+## L1 — Rust 单元/集成测试（39 文件 / 818 用例）
 
 运行：`cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1`
 
@@ -85,7 +85,7 @@
 | `src-tauri/src/hooks/claude/inject.rs` | 67 | 注入/卸载/状态/statusline 桥接/包裹解包/可疑模式/哈希；B11/B15/B16/SEC-12/SEC-13/MC-215 |
 | `src-tauri/src/hooks/claude/config.rs` | 51 | Layer 枚举/hooks 子树形态/语义校验/审计日志；BE-18/SEC-05/SEC-17/TQ-COV-05 |
 | `src-tauri/src/hooks/claude/mod.rs` | 2 | HomeDirGuard/B15 reinject 路径正确性 |
-| `src-tauri/src/app_dir.rs` | 7 | 应用数据目录解析/LoadResult 形态/测试守卫；BE-14/BE-16 |
+| `src-tauri/src/app_dir.rs` | 10 | 应用数据目录解析/LoadResult 形态/测试守卫/SLTERM_DATA_DIR env 覆盖三例；BE-14/BE-16/BE-01 |
 | `src-tauri/src/settings.rs` | 26 | 设置持久化/浅合并/并发/大小校验/planBalance 键放行；SPE-01/SPE-05/SPE-06/BE-14/SEC-11/F10 |
 | `src-tauri/src/projects.rs` | 21 | 项目数据持久化/ID/路径校验；SPE-02/BE-14/SEC-11 |
 | `src-tauri/src/error.rs` | 9 | AppError 序列化/Display/From/ConfigParse；SPE-03/BE-13/BE-15 |
@@ -113,7 +113,7 @@
 
 本地开发机（已开开发者模式）为真实覆盖来源；CI runner 未开权限时上述分支覆盖记为「不确定」。
 
-## L2 — 前端单元/集成测试（166 文件 / 2839 用例）
+## L2 — 前端单元/集成测试（167 文件 / 2852 用例）
 
 运行：`npm test`
 
@@ -199,11 +199,11 @@
 | `src/__tests__/workspace-e2e-ready.test.tsx` | 4 | E2E workspace ready 标记 |
 | `src/__tests__/workspace.test.tsx` | 4 | Dockview 初始化/项目页面关联 |
 
-### Store 状态管理（4 文件 / 94 用例）
+### Store 状态管理（4 文件 / 99 用例）
 
 | 文件 | 用例 | 覆盖要点 |
 |------|------|---------|
-| `src/__tests__/projects.test.ts` | 50 | Project/Page CRUD/全局页数上限/corrupted；FE-01/FE-36/FE-11 |
+| `src/__tests__/projects.test.ts` | 55 | Project/Page CRUD/全局页数上限/corrupted/loadSucceeded 空写守卫；FE-01/FE-36/FE-11 |
 | `src/__tests__/font-size.test.ts` | 21 | fontSize 加载/持久化/段形态；FE-09/FE-11/SVC-02 |
 | `src/__tests__/keybindings.test.ts` | 19 | 快捷键绑定/持久化；FE-09/FE-11/SVC-02 |
 | `src/__tests__/layout.test.ts` | 4 | activePageId 状态 |
@@ -269,13 +269,13 @@
 | `src/__tests__/commit-view-status.test.ts` | 7 | 状态机四态 |
 | `src/__tests__/commit-view.test.tsx` | 4 | 主干渲染/提示色 |
 
-### hooks 配置编辑器（11 文件 / 227 用例）
+### hooks 配置编辑器（11 文件 / 228 用例）
 
 | 文件 | 用例 | 覆盖要点 |
 |------|------|---------|
 | `src/__tests__/hooks-config-handlerform.test.tsx` | 40 | HandlerForm 字段矩阵/切换/编辑；HKC-04 |
 | `src/__tests__/hooks-config-gui.test.tsx` | 28 | Master-Detail 渲染/增删；HKC-05 |
-| `src/__tests__/settings-hooks-page.test.tsx` | 37 | 设置中心内 Hooks 页三态/CLI 选择行/分派/持久化（SettingsPageProps 形态）；MC-502~507/KZ-1/KZ-4/MC-503/HKC-03/07/09/10/OV-02/SC-FE-05 |
+| `src/__tests__/settings-hooks-page.test.tsx` | 38 | 设置中心内 Hooks 页三态/CLI 选择行/分派/持久化/点击已选中 CLI 短路（SettingsPageProps 形态）；MC-502~507/KZ-1/KZ-4/MC-503/HKC-03/07/09/10/OV-02/SC-FE-05 |
 | `src/__tests__/hooks-config-jsonmode.test.tsx` | 18 | JSON 编辑器/schema/校验；HKC-01 |
 | `src/__tests__/hooks-config-matcher.test.ts` | 21 | `matchHook` 全分支 |
 | `src/__tests__/hooks-config-catalog.test.ts` | 19 | eventsCatalog 元数据 |
@@ -285,19 +285,20 @@
 | `src/__tests__/hooks-config-sync.test.tsx` | 15 | 双模式同步/user 层二次确认；MC-220/KZ-4/FE-25/SEC-05 |
 | `src/__tests__/statusline-bridge-behavior.test.ts` | 10 | statusline 桥接脚本行为；B11/B16 |
 
-### 设置中心（9 文件 / 88 用例）
+### 设置中心（10 文件 / 91 用例）
 
 | 文件 | 用例 | 覆盖要点 |
 |------|------|---------|
 | `src/__tests__/settings-page-registry.test.ts` | 7 | 注册表注册/getAll 分组过滤/order 排序/重复 id 覆盖/_reset；SC-FE-01 |
+| `src/__tests__/settings-pages-registration.test.ts` | 1 | 真实 pages 注册/getAll 精确三条断言（不 mock pages）；SC-FE-01/TE-04 |
 | `src/__tests__/open-settings.test.ts` | 6 | 无项目 toast 且不切页/活跃项目优先/兜底第一个项目/切页先于开面板；SC-FE-02 |
 | `src/__tests__/open-settings-panel.test.ts` | 7 | addPanel 参数精确/单例 focus 不新建/深链 selectedPage/5s 超时降级；SC-FE-02 |
-| `src/__tests__/settings-panel.test.tsx` | 13 | 导航组序/选中渲染/切换 persist/corrupted 警示条/pageParams 透传/空态；SC-FE-03 |
+| `src/__tests__/settings-panel.test.tsx` | 14 | 导航组序/选中渲染/切换 persist/corrupted 警示条/pageParams 透传/saveLayout 落盘/不可变合并/空态；SC-FE-03/TE-06 |
 | `src/__tests__/settings-plan-balance.test.tsx` | 16 | 频率页显示回退/合法提交调命令+refresh/非法行内红字/Err toast+保留输入；SC-FE-04 |
 | `src/__tests__/settings-dirty-registry.test.ts` | 5 | set/is/clear 真值源；SC-FE-07 |
 | `src/__tests__/settings-panel-dirty.test.tsx` | 6 | 切页 confirm 确认/取消/非 dirty 直切/圆点显隐；SC-FE-07 |
 | `src/__tests__/settings-keybindings.test.tsx` | 20 | 分组渲染/override 高亮/未绑定占位/录制 Esc/Backspace 解绑/保留键拒绝/冲突放行/卸载清 suspended；SC-FE-09 |
-| `src/__tests__/settings-panel-autoclose.test.tsx` | 8 | 切项目自动关闭/同项目不关/初始不一致静默关/activePageId null 不关/dirty confirm 取消不关；SC-FE-08 |
+| `src/__tests__/settings-panel-autoclose.test.tsx` | 9 | 切项目自动关闭/同项目不关/未水合首轮不消费 firstRun/初始不一致静默关/activePageId null 不关/dirty confirm 取消不关；SC-FE-08 |
 
 ### Diff/GitShow 面板（4 文件 / 87 用例）
 
@@ -349,12 +350,12 @@
 | `src/__tests__/agent-history-restore.test.ts` | 13 | 四步恢复/防重入/abort；F7/NAH-07/ZQ-4/MC-315/FE-27/48 |
 | `src/__tests__/agent-history-action-dialog.test.tsx` | 8 | SessionActionDialog；NAH-11/FE-12 |
 
-### 启动/关闭（5 文件 / 35 用例）
+### 启动/关闭（5 文件 / 38 用例）
 
 | 文件 | 用例 | 覆盖要点 |
 |------|------|---------|
 | `src/__tests__/close-handler.test.ts` | 19 | 关闭序列/ptyKillAll 兜底；WRK-08/BE-08/FE-47 |
-| `src/__tests__/startup-restore.test.ts` | 8 | 启动恢复/setProjectRoot 时序；WRK-03/DBG-6/FE-06/10 |
+| `src/__tests__/startup-restore.test.ts` | 11 | 启动恢复/加载失败错误页/重试/空状态继续/setProjectRoot 时序；WRK-03/DBG-6/FE-02/FE-06/10 |
 | `src/__tests__/bootstrap.test.ts` | 5 | `__TAURI_INTERNALS__` 轮询；FE-03 |
 | `src/__tests__/main-bootstrap.test.tsx` | 1 | main.tsx init 失败；WRK-10 |
 | `src/__tests__/startup-store-fail-warn.test.tsx` | 2 | store 加载失败可感知；FE-03/20 |
@@ -406,7 +407,7 @@
 | `test/terminal/shortcut-dispatch.test.ts` | 4 | 生产按键分发链路（TQ-E-02） |
 | `test/terminal/negative-ansi.test.ts` | 9 | 反向/异常 ANSI（E2E-14） |
 
-## L4 — E2E 端到端测试（10 spec / 50 用例，48 active + 2 skip）
+## L4 — E2E 端到端测试（10 spec / 51 用例，49 active + 2 skip）
 
 运行：`npm run e2e`（= `npm run build:e2e` + `npm run wdio`）  
 技术栈：WDIO + `@wdio/tauri-service` 1.1.0 + embedded driver；specs 通配 `./*.e2e.ts`，单 worker 顺序执行。
@@ -424,7 +425,7 @@
 | `sidebar.e2e.ts` | 2 | 2 active | 侧栏视图开关/跨区状态机 |
 | `commit.e2e.ts` | 2 | 2 active | 变更列表/双击 modified 打开 diff |
 | `mockcli.e2e.ts` | 3 | 3 active | mock profile 冒烟/CS-3 agent-event/hub 分派 |
-| `settings.e2e.ts` | 10 | 10 active | 配置钮打开/单例/切页持久化/频率页真实后端落盘/非法不落盘/录制落盘/切项目自动关闭/同项目保留/hooks 页冒烟/dirty 切页守卫 |
+| `settings.e2e.ts` | 11 | 11 active | 配置钮打开/单例/切页持久化/频率页真实后端落盘/非法不落盘/录制落盘/切项目自动关闭/同项目保留/hooks 页冒烟/dirty 切页守卫/× 关闭 dirty 守卫 |
 
 ### 用户目录隔离机制（FIX-TE-04 + E2E-05 扩展）
 
@@ -449,3 +450,4 @@ embedded WDIO 无法投递 OS 级按键；所有键盘用例改用页面内 disp
 - 2026-08-28：全量 3731（Rust 794 + 前端 2755 + L3 142 + E2E 40）。F10 新增 plan_balance 五文件 51 例 + settings.rs +1、前端三文件 45 例。
 - 2026-08-29：全量 **3746**（Rust 809 + 前端 2755 + L3 142 + E2E 40）。B17 新增 `test_pwsh_args_no_noprofile_b17` 1 例（shell.rs 32→33），kimi.rs 解析实测修正（+14）已于同日校准。
 - 2026-08-30：全量 **3846**（Rust 815 + 前端 2839 + L3 142 + E2E 50）。F11 设置中心：plan_balance/mod.rs +6（set_interval 四维/内存默认/键名常量）；L2 +9 文件 -2 文件净 +7 文件 +84（设置中心 9 文件 88 例，settings-hooks-page 替代 hooks-config-panel 37，open-settings 两文件取代 open-hooks-config 两文件，ipc-plan-balance-contract +4、workspace-defaulttab +4、shortcuts +2、layout-serde +1、app +2）；L4 +settings.e2e.ts 10 例。
+- 2026-08-30（实跑确认）：全量 **3863**（Rust 818 + 前端 2852 + L3 142 + E2E 51）。settings-center-fixes 修复链实跑增量：L1 +3（BE-01 app_dir 三例）；L2 +13（FE-01 projects +5、FE-02 startup-restore 净 +3、FE-03 autoclose +1、TE-04 settings-pages-registration 新文件 +1、TE-05 hooks-page +1、TE-06 settings-panel +1、FE-04 适配 0）；L4 +1（TE-03 settings.e2e.ts 用例⑪ × 关闭 dirty 守卫）。

@@ -167,7 +167,7 @@
 
 - **嵌套分派不动**：hooks 配置页组件 = 现有 hub 内容（CLI 选择行 + `profile.configEditor` 分派）原样迁入；SettingsPageRegistry 不感知 CLI 层，新 CLI 自带编辑器仍走 profile 挂载（KZ-1）。
 - **页内状态持久化命名空间**：面板 params 结构 `{ selectedPage, pageParams: { hooks: { selectedCli } } }`——各页状态挂自己命名空间下（hooks 页 `selectedCli` 先例平移），壳层不感知内容。
-- 面板封闭（硬约束 #5）：新增面板类型 `settings` 走既定五步（目录 → panels/index → panelRegistry → PANEL_TYPES → capabilities）；`hooksConfig` 类型从注册表与 PANEL_TYPES 移除。
+- 面板封闭（硬约束 #5）：新增面板类型 `settings` 走「目录 → panelRegistry.ts 注册 → PANEL_TYPES 追加；如涉及新 IPC 命令再追加 capabilities」；`hooksConfig` 类型从注册表与 PANEL_TYPES 移除。
 
 ### 5.2 后端：轻量收口三段式
 
@@ -186,7 +186,7 @@
 
 - `src/features/settingsCenter/`：SettingsPageRegistry + `openSettings` 编排（泛化取代 `features/hooksConfig/openHooksConfig.ts`）。
 - `src/panels/settings/`：设置中心面板与各配置页组件（hooks 页组件迁入）。
-- `src/features/hooksConfig/`：schema 单点保留（claude 专属资产，MC-223 语义不变），`openHooksConfig.ts` 删除。
+- `src/features/hooksConfig/`：已整体删除；schema 单点迁入 `src/features/cliProfiles/profiles/claude/configEditor/schema/`（MC-223 语义不变）。
 
 ### 5.4 既有红线引用（实施时遵守，不展开）
 

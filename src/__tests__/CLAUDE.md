@@ -66,7 +66,7 @@ hubs 配置面板迁入设置中心产生的测试文件更名/删除/新增。�
 | `open-hooks-config-panel.test.ts` | `open-settings-panel.test.ts` |
 | `hooks-config-panel.test.tsx` | `settings-hooks-page.test.tsx`（hub 43 例 → SettingsPageProps 形态 37 例） |
 
-新增：`settings-page-registry.test.ts` / `settings-panel.test.tsx` / `settings-plan-balance.test.tsx` / `settings-dirty-registry.test.ts` / `settings-panel-dirty.test.tsx` / `settings-keybindings.test.tsx` / `settings-panel-autoclose.test.tsx`（完整用例数见 `.claude/test-inventory.md`）。
+新增：`settings-page-registry.test.ts` / `settings-panel.test.tsx` / `settings-plan-balance.test.tsx` / `settings-dirty-registry.test.ts` / `settings-panel-dirty.test.tsx` / `settings-keybindings.test.tsx` / `settings-panel-autoclose.test.tsx` / `open-settings.test.ts` / `open-settings-panel.test.ts` / `settings-hooks-page.test.tsx` / `settings-pages-registration.test.ts`（完整用例数见 `.claude/test-inventory.md`）。
 
 ### AC-4 / AC-5
 

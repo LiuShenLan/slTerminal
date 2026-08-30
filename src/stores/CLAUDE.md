@@ -21,6 +21,7 @@ settings 类三 store 与 `projects` 均遵循同一模式：
 - 启动时 `loadFromDisk()` 恢复；`loaded` 守卫防止加载阶段触发空写。
 - 变更后 Zustand `subscribe` + 2s debounce 自动保存。
 - `markPersistenceReady()`（projects）/ `loaded = true`（settings）在加载完成后置位。
+- **projects 持久化防线**：`loadFromDisk` 成功置 `loadSucceeded`；未成功加载且 store 空时 `saveToDisk` 拒写（防空写覆盖磁盘）；显式放行经 `markLoadSucceeded()`（E2E 分支/用户选择空状态继续）。
 - `cancelPendingSave()` 供关闭钩子冲刷未落盘的 timer。
 
 ### 段形态契约（断链修复）

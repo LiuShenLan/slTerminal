@@ -56,3 +56,4 @@
 2. **diff-panel.test.tsx:482 既有 flaky**：外部 Modify 自动重载用例未等右栏 view 就绪即触发 fsEventCb，与设置中心零相关；已两次复跑全绿确认，未动该文件（surgical changes 纪律）。
 3. **× 关闭守卫判据偏差（已登记）**：dockview-react 8.1.0 `IDockviewPanelProps` 无 `panel` 属性（计划假设 `panel.view.contentComponent` 只在 context menu 场景成立）——实现改用 `params.panelId` 的 `settings-` 前缀判据（与 dirtyRegistry 键同源），workspace/CLAUDE.md 已按此登记。
 4. **keystroke 规范格式含 Key 前缀**：`Ctrl+Shift+KeyC` 形态（修饰键 + event.code），e2e 断言曾误写 `Ctrl+W`。
+5. **`__slterm_e2e_getSettingsPanelCount` 计数范围收窄（已登记）**：checklist 约定「全部页面」，实现只计活跃页面 api——设置中心为全局单例，活跃页面计数即可等价覆盖功能断言，本修复计划已收口径（DOC-04）。

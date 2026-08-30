@@ -13,6 +13,7 @@ export type SettingsPageGroup = "global" | "project";
 export interface SettingsPageProps {
   onDirtyChange?: (dirty: boolean) => void;
   pageParams?: Record<string, unknown>;
+  /** 约定：组件 mount/首渲染期禁止调用（仅响应用户交互调用）——mount 期调用会误触发布局保存 */
   onPageParamsChange?: (patch: Record<string, unknown>) => void;
 }
 /** 配置页注册项 */
