@@ -8,7 +8,6 @@
   ],
   "ignore": [
     "src/__tests__/**",
-    "docs/**",
     ".claude/**",
     "src-tauri/**"
   ],
