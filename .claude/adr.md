@@ -286,3 +286,31 @@
 - **`hooksConfig` 面板类型退役**：注册表与 PANEL_TYPES 移除，老布局由恢复白名单过滤静默丢弃（无迁移映射）；hub 改造为 HooksSettingsPage 迁入设置中心项目组，编辑器归域 `cliProfiles/profiles/claude/configEditor/`。
 - **F10 豁免口径更新**：套餐余量轮询间隔从「启动时读一次」改为运行期可改（plan_balance 模块级 static 原子量 + 专用命令写入，每轮末按内存值 sleep），F10 相关豁免登记随之修订。
 - 第一期三配置页：Hooks 配置（项目组，迁入）、套餐余量查询频率（全局组）、快捷键（全局组）。
+
+## 0013 后台定时任务双端抽象（任务元数据单点在后端 + 配置单写通道）
+
+**Status**: accepted（2026-08-30，F12 规格期决策；实施细节以 `docs/background-tasks-spec.md` 为准）
+
+**上下文**：套餐余量查询（F10 后端 tokio poller）之后新增第二个后台定时任务「session 历史刷新」。两任务执行位置本质不同——套餐余量需后端 OS/网络能力且快照预热语义在后端；session 刷新必须与手动刷新钮严格同一代码路径（前端 `scan(true)`），而两任务配置又需统一管理与展示。浅合并写通道（settings.rs 顶层键粒度）下两任务共用 `backgroundTasks` 一段会产生写覆盖冲突（前端写整体替换顶层键，丢对方子键）。
+
+**决策**：
+
+- **双端各自抽象，不设跨端统一调度器**：后端泛化 plan_balance 通用件（间隔内存原子量/每轮末 sleep/读盘初始化/set 命令）为任务骨架（静态切片注册表，照 `SOURCES`/`QUERIES` 先例）；前端新建 backgroundTasks 调度器（#13 注册表家族：全局单例、订阅者计数启停、首轮立即执行、tick 防重入、triggerNow）。
+- **任务元数据单点 = 后端注册表**（含前端任务的代管：执行体字段 None 即前端任务，后端只管 id/标题/边界/默认值与配置读写）；设置页经 `background_tasks_list()` 纯渲染，新增任务设置页零改动。taskId 合法值集前后端同步测试锁死（HooksLayer ↔ `Layer` 枚举先例，硬约束 #4）。
+- **配置单写通道 = 后端 `background_tasks_set_config` 命令**（taskId 子键读-改-写合并 → 复用 settings.rs 写通道），前端任务的配置也经此命令代管落盘——杜绝浅合并顶层键互覆；前端消费型 `save_settings` 段写不适用于本段。
+- **配置结构**：统一顶层段 `backgroundTasks.{taskId}.{enabled,intervalSec}`；白名单 `planBalance` 键替换为 `backgroundTasks`（仍 5 键）；单用户不做旧键迁移。
+- **session 刷新 = 扫描执行体单一化**：手动刷新（刷新钮/triggerNow）与定时 tick 同一执行体（遍历全部已注册 history provider 逐个 `scan(true)` 聚合），仅失败处理按触发来源分化（tick 静默 / manual 置 error）；`useAgentHistory` 的 sessions/state 真值源上移调度器快照，hook 退为订阅方。
+
+**被否决的备选**：
+
+- **全收敛前端统一调度器**（套餐余量改前端定时调 `refresh_plan_balance`，删后端 poller）：丢启动预热语义、动 F10 已稳定的轮询编排与测试基座，违反「已有功能不受影响」红线。
+- **拆两顶层键各走各写通道**（planBalance 专用命令 + sessionRefresh 通用段写）：无冲突但白名单随任务数膨胀、两任务配置模型不统一，与「统一管理」目标相悖。
+- **通用 save_settings 段写 + 后端每轮读盘**：丢运行期立改语义且每轮读盘，劣于内存原子量方案。
+- **session 刷新放后端 poller + emit 推送**：与刷新钮成两套通道（invoke vs 事件），违背「同一套逻辑」红线，且 useAgentHistory 订阅模型需重写。
+
+**后果**：
+
+- 新增后端任务 = 注册表一条元数据 + 执行体闭包；新增前端任务 = 后端一条元数据（执行体 None）+ 前端调度器 register 一条；设置页/写通道/调度框架零改动。
+- `plan_balance_set_interval` 命令退役；套餐余量新增 enabled 语义（停轮询 + footer 隐藏 + 快照保留），默认间隔 60 → 10s。
+- 前端调度器与 UI 解耦：NavTree 换区重建（ADR-0001）不影响定时刷新；无订阅者不空转扫盘。
+- settings.rs 浅合并语义不变，跨任务写冲突由「单写通道 + 子键合并」在命令层消化。
