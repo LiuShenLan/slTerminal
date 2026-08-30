@@ -3,20 +3,23 @@
 // Mock localStorage + stores + Workspace，渲染 <App /> 验证启动恢复路径：
 // 1. localStorage 有记录 → 恢复 activePageId
 // 2. localStorage 为空 → 静默降级
-// 3. loadAllProjects 异常 → 不阻塞启动
+// 3. loadAllProjects 异常 → 阻断启动渲染错误页（FE-02：不 ready / 不 markPersistenceReady）
+// 9-11. 错误页交互（FE-02）：两按钮渲染 / 点重试成功进 ready / 点「以空状态继续」放行写盘进 ready
 // 4. ready 状态切换：加载中 → 就绪
 // 5. DBG-6：setProjectRoot 先于 setActivePage（D7 时序断言，WRK-03）
 // 6. requestUserAttention reject → 静默 catch（WRK-03）
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import React from "react";
-import { render, waitFor } from "@testing-library/react";
+import { render, waitFor, fireEvent } from "@testing-library/react";
 
 // ─── Hoisted mocks ───
 const mocks = vi.hoisted(() => {
   const mockLoadAllProjects = vi.fn().mockResolvedValue(undefined);
   const mockSaveAllProjects = vi.fn().mockResolvedValue(undefined);
   const mockMarkPersistenceReady = vi.fn();
+  /** FE-01：markLoadSucceeded（「以空状态继续」显式放行写盘） */
+  const mockMarkLoadSucceeded = vi.fn();
   const mockSetActivePage = vi.fn();
   const mockSetProjectRoot = vi.fn().mockResolvedValue(undefined);
   const mockRequestUserAttention = vi.fn().mockResolvedValue(undefined);
@@ -29,6 +32,7 @@ const mocks = vi.hoisted(() => {
     mockLoadAllProjects,
     mockSaveAllProjects,
     mockMarkPersistenceReady,
+    mockMarkLoadSucceeded,
     mockSetActivePage,
     mockSetProjectRoot,
     mockRequestUserAttention,
@@ -48,6 +52,7 @@ const mocks = vi.hoisted(() => {
       mockLoadAllProjects.mockClear();
       mockSaveAllProjects.mockClear();
       mockMarkPersistenceReady.mockClear();
+      mockMarkLoadSucceeded.mockClear();
       mockSetActivePage.mockClear();
       mockSetProjectRoot.mockClear();
       mockRequestUserAttention.mockClear();
@@ -121,6 +126,7 @@ vi.mock("../stores/projects", () => {
     saveAllProjects: mocks.mockSaveAllProjects,
     cancelPendingSave: vi.fn(),
     markPersistenceReady: mocks.mockMarkPersistenceReady,
+    markLoadSucceeded: mocks.mockMarkLoadSucceeded,
   };
 });
 
@@ -183,25 +189,90 @@ describe("S4 启动恢复", () => {
     expect(mocks.mockSetActivePage).not.toHaveBeenCalled();
   });
 
-  it("3. loadAllProjects 异常 → console.warn 带模块名 + 静默降级，应用仍进入 ready 状态", async () => {
+  it("3. loadAllProjects 异常 → 阻断启动：错误页渲染（projects-load-error），不 ready / markPersistenceReady 未调 / console.error 被调", async () => {
     mocks.mockLoadAllProjects.mockRejectedValueOnce(new Error("文件损坏"));
     setLastActivePage(null);
 
-    const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    render(React.createElement(App));
+    const { container } = render(React.createElement(App));
 
-    // 不应崩溃；ready 仍为 true（Workspace 被渲染）
+    // FE-02：失败不再静默降级——错误页渲染（阻断 ready）
     await waitFor(() => {
-      expect(mocks.mockMarkPersistenceReady).toHaveBeenCalled();
+      expect(container.querySelector('[data-e2e="projects-load-error"]')).toBeTruthy();
     }, { timeout: 3000 });
-    // FE-03：启动链 catch 不再静默——console.warn 带模块名 [App] + 原始错误
-    expect(consoleWarnSpy).toHaveBeenCalledWith(
+    // 不 ready：Workspace 未被渲染
+    expect(container.querySelector('[data-testid="workspace"]')).toBeNull();
+    // 写门控：markPersistenceReady 不被调用（防空写覆盖磁盘）
+    expect(mocks.mockMarkPersistenceReady).not.toHaveBeenCalled();
+    // FE-02：失败改 console.error（原 console.warn 静默降级语义已反转）
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
       expect.stringContaining("[App] 加载项目数据失败"),
       expect.any(Error),
     );
 
-    consoleWarnSpy.mockRestore();
+    consoleErrorSpy.mockRestore();
+  });
+
+  it("9. 错误页两按钮渲染（projects-load-retry / projects-load-continue-empty）", async () => {
+    mocks.mockLoadAllProjects.mockRejectedValueOnce(new Error("文件损坏"));
+    setLastActivePage(null);
+
+    const { container } = render(React.createElement(App));
+
+    await waitFor(() => {
+      expect(container.querySelector('[data-e2e="projects-load-error"]')).toBeTruthy();
+    }, { timeout: 3000 });
+    // FE-02 契约 data-e2e 三值：错误页容器 + 重试 + 空状态继续
+    expect(container.querySelector('[data-e2e="projects-load-retry"]')).toBeTruthy();
+    expect(container.querySelector('[data-e2e="projects-load-continue-empty"]')).toBeTruthy();
+    // 按钮文案（checklist FE-02 固定）——经 data-e2e 定位按钮再断言文本：
+    // 错误页描述文案含「重试」子串，getByText 会命中多元素（歧义）
+    expect(container.querySelector('[data-e2e="projects-load-retry"]')?.textContent).toBe("重试");
+    expect(container.querySelector('[data-e2e="projects-load-continue-empty"]')?.textContent).toBe("以空状态继续");
+  });
+
+  it("10. 错误页点「重试」→ loadAllProjects 重跑成功 → 进 ready", async () => {
+    // 首次加载失败（进错误页）；重试时 loadAllProjects 改 mockResolvedValue（FE-02 retryProjectsLoad 重跑全链）
+    mocks.mockLoadAllProjects
+      .mockRejectedValueOnce(new Error("文件损坏"))
+      .mockResolvedValueOnce(undefined);
+    setLastActivePage(null);
+
+    const { container } = render(React.createElement(App));
+
+    await waitFor(() => {
+      expect(container.querySelector('[data-e2e="projects-load-error"]')).toBeTruthy();
+    }, { timeout: 3000 });
+
+    fireEvent.click(container.querySelector('[data-e2e="projects-load-retry"]') as HTMLElement);
+
+    // 重试成功 → 进 ready：Workspace 渲染 + 错误页消失 + markPersistenceReady 被调
+    await waitFor(() => {
+      expect(container.querySelector('[data-testid="workspace"]')).toBeTruthy();
+    }, { timeout: 3000 });
+    expect(container.querySelector('[data-e2e="projects-load-error"]')).toBeNull();
+    expect(mocks.mockMarkPersistenceReady).toHaveBeenCalled();
+  });
+
+  it("11. 错误页点「以空状态继续」→ 进 ready 且 markLoadSucceeded + markPersistenceReady 被调", async () => {
+    mocks.mockLoadAllProjects.mockRejectedValueOnce(new Error("文件损坏"));
+    setLastActivePage(null);
+
+    const { container } = render(React.createElement(App));
+
+    await waitFor(() => {
+      expect(container.querySelector('[data-e2e="projects-load-error"]')).toBeTruthy();
+    }, { timeout: 3000 });
+
+    fireEvent.click(container.querySelector('[data-e2e="projects-load-continue-empty"]') as HTMLElement);
+
+    // 用户显式选择空状态：markLoadSucceeded（FE-01 空写守卫显式放行）+ markPersistenceReady + 进 ready
+    await waitFor(() => {
+      expect(mocks.mockMarkLoadSucceeded).toHaveBeenCalled();
+      expect(mocks.mockMarkPersistenceReady).toHaveBeenCalled();
+      expect(container.querySelector('[data-testid="workspace"]')).toBeTruthy();
+    }, { timeout: 3000 });
   });
 
   it("4. 启动时显示 Loading → 数据就绪后消失（ready 状态切换）", async () => {

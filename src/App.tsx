@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { registerCloseHandler, onFocusChanged, requestUserAttention } from "./ipc/window";
 import { Workspace } from "./workspace";
 import {
-  loadAllProjects, markPersistenceReady, saveAllProjects, cancelPendingSave,
+  loadAllProjects, markLoadSucceeded, markPersistenceReady, saveAllProjects, cancelPendingSave,
   useProjects,
 } from "./stores/projects";
 import { useLayout } from "./stores/layout";
@@ -22,7 +22,7 @@ import { createEditorShortcuts } from "./panels/editor/keyboard";
 import { createExplorerShortcuts } from "./features/explorer/keyboard";
 import { NotificationListener } from "./features/notifications";
 import { TitleBar } from "./features/titleBar/TitleBar";
-import { PANEL_BG, DIM_FG, APP_BG } from "./theme";
+import { PANEL_BG, SECONDARY_BG, SEPARATOR_BG, DIM_FG, APP_BG } from "./theme";
 import "dockview-react/dist/styles/dockview.css";
 // App.css 从 main.tsx 移此（BOOT-02）：dockview.css 先、App.css 后，CSS 变量覆盖语义正确
 import "./App.css";
@@ -35,8 +35,84 @@ const LS_LAST_ACTIVE_PAGE_KEY = "slterm-last-active-page";
 function App() {
   /** S4-D1: 数据就绪后才渲染 Workspace，消除启动竞态 */
   const [ready, setReady] = useState(false);
+  /** FE-02: 项目数据加载失败信息（非 null = 加载失败，渲染错误页阻断启动） */
+  const [projectsLoadError, setProjectsLoadError] = useState<string | null>(null);
 
-  // S4-D1: 启动加载（单一时序：loadAllProjects → 恢复 activePageId → setReady → 渲染 Workspace）
+  // FE-02: 项目数据加载 + 启动恢复（从 init 抽取）——
+  // 成功路径 markPersistenceReady() + lastPage 恢复原样保留（DBG-6 顺序不动：
+  // 先 await setProjectRoot 再 setActivePage）；失败阻断 ready 与写门控（不
+  // markPersistenceReady、不 setReady），经 projectsLoadError 渲染错误页
+  const loadProjectsAndRestore = async () => {
+    try {
+      // P2-07: loadAllProjects 内部 JSON.parse 当前数据量小无影响，
+      // 若未来项目数据文件膨胀到 MB 级，可改为流式解析或 IndexedDB 存储。
+      // E2E 构建（VITE_E2E=1）跳过项目数据恢复：前序 spec 的项目经
+      // slterminal-projects.json 恢复进 store（一轮可累积 20+ 页），FE-36
+      // 全局页数上限会拒绝后续 addPage（H6/E2E-04 回归根因）；且恢复与
+      // __slterm_e2e_createProject 的清空存在竞态（IPC 慢时恢复覆盖）。
+      // 内联表达式门控（引用 E2E_ENABLED 常量会使 helpers chunk 残留
+      // 生产 dist，CI 守卫 fail——见 main.tsx:77-81）。
+      if (import.meta.env.VITE_E2E !== "1") {
+        await loadAllProjects();
+      } else {
+        // FE-02：E2E 构建跳过磁盘恢复——显式放行写盘（防空写守卫误拒 E2E 保存）
+        markLoadSucceeded();
+      }
+    } catch (err) {
+      // FE-02：加载失败阻断启动——不 markPersistenceReady、不 setReady（防空写覆盖磁盘数据）
+      console.error("[App] 加载项目数据失败:", err);
+      setProjectsLoadError(err instanceof Error ? err.message : String(err));
+      return;
+    }
+    markPersistenceReady();
+
+    // 数据就绪后恢复上次 activePageId（确保 pageId 对应的项目数据已加载）
+    // E2E 模式跳过：__slterm_e2e_createProject 已设 window.__slterm_e2e_projectPending=true
+    try {
+      if (!window.__slterm_e2e_projectPending) {
+        const lastPage = localStorage.getItem(LS_LAST_ACTIVE_PAGE_KEY);
+        if (lastPage) {
+          // DBG-6: setActivePage 前先同步项目根路径到后端（路径沙箱前置条件）
+          const { projects: currentProjects } = useProjects.getState();
+          for (const [, proj] of Object.entries(currentProjects)) {
+            if (proj.pages.some((p) => p.pageId === lastPage)) {
+              if (proj.rootPath) {
+                try {
+                  await setProjectRoot(proj.rootPath);
+                } catch (err) {
+                  console.error("[slTerminal] 启动恢复—设置项目根路径失败:", err);
+                  // FE-04（D7）：失败仍继续恢复流程，toast 告警可感知
+                  toast.show("warning", "项目根路径设置失败，文件操作可能被拒绝");
+                }
+              }
+              break;
+            }
+          }
+          useLayout.getState().setActivePage(lastPage);
+        }
+      }
+    } catch {
+      // localStorage 不可用时静默失败
+    }
+
+    setReady(true);
+  };
+
+  // FE-02: 重试项目数据加载——清错误态后重跑启动链，成功经 loadProjectsAndRestore 置 ready
+  const retryProjectsLoad = () => {
+    setProjectsLoadError(null);
+    void loadProjectsAndRestore();
+  };
+
+  // FE-02: 以空项目状态继续——用户显式选择空状态，放行写盘（防空写守卫不拦截后续保存）
+  const continueWithEmptyProjects = () => {
+    markLoadSucceeded();
+    markPersistenceReady();
+    setReady(true);
+  };
+
+  // S4-D1: 启动加载（单一时序：loadProjectsAndRestore → setReady → 渲染 Workspace；
+  // 项目数据加载失败时经 projectsLoadError 渲染错误页阻断启动，见 FE-02）
   useEffect(() => {
     const init = async () => {
       // FE-20：字体/快捷键/侧栏三 store loadFromDisk 改 Promise.all 并行加载——
@@ -72,54 +148,7 @@ function App() {
         })(),
       ]);
 
-      try {
-        // P2-07: loadAllProjects 内部 JSON.parse 当前数据量小无影响，
-        // 若未来项目数据文件膨胀到 MB 级，可改为流式解析或 IndexedDB 存储。
-        // E2E 构建（VITE_E2E=1）跳过项目数据恢复：前序 spec 的项目经
-        // slterminal-projects.json 恢复进 store（一轮可累积 20+ 页），FE-36
-        // 全局页数上限会拒绝后续 addPage（H6/E2E-04 回归根因）；且恢复与
-        // __slterm_e2e_createProject 的清空存在竞态（IPC 慢时恢复覆盖）。
-        // 内联表达式门控（引用 E2E_ENABLED 常量会使 helpers chunk 残留
-        // 生产 dist，CI 守卫 fail——见 main.tsx:77-81）。
-        if (import.meta.env.VITE_E2E !== "1") {
-          await loadAllProjects();
-        }
-      } catch (err) {
-        // FE-03：启动链失败不再静默——降级兜底不变（保持空状态）；损坏经 corrupted 通道 toast 在 S09
-        console.warn("[App] 加载项目数据失败，保持空状态:", err);
-      }
-      markPersistenceReady();
-
-      // 数据就绪后恢复上次 activePageId（确保 pageId 对应的项目数据已加载）
-      // E2E 模式跳过：__slterm_e2e_createProject 已设 window.__slterm_e2e_projectPending=true
-      try {
-        if (!window.__slterm_e2e_projectPending) {
-          const lastPage = localStorage.getItem(LS_LAST_ACTIVE_PAGE_KEY);
-          if (lastPage) {
-            // DBG-6: setActivePage 前先同步项目根路径到后端（路径沙箱前置条件）
-            const { projects: currentProjects } = useProjects.getState();
-            for (const [, proj] of Object.entries(currentProjects)) {
-              if (proj.pages.some((p) => p.pageId === lastPage)) {
-                if (proj.rootPath) {
-                  try {
-                    await setProjectRoot(proj.rootPath);
-                  } catch (err) {
-                    console.error("[slTerminal] 启动恢复—设置项目根路径失败:", err);
-                    // FE-04（D7）：失败仍继续恢复流程，toast 告警可感知
-                    toast.show("warning", "项目根路径设置失败，文件操作可能被拒绝");
-                  }
-                }
-                break;
-              }
-            }
-            useLayout.getState().setActivePage(lastPage);
-          }
-        }
-      } catch {
-        // localStorage 不可用时静默失败
-      }
-
-      setReady(true);
+      await loadProjectsAndRestore();
     };
     init();
   }, []);
@@ -257,21 +286,78 @@ function App() {
   if (!ready) {
     return (
       <ErrorBoundary>
-        <div
-          style={{
-            width: "100vw",
-            height: "100vh",
-            background: PANEL_BG,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            color: DIM_FG, // FE-10：说明文字 fg-3 档（UI-104，原误用输入框边框色）
-            fontSize: 13, // UI-204：正文 13px
-            fontFamily: '"JetBrains Mono", "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace', // UI-201：全局字体栈
-          }}
-        >
-          slTerminal 启动中…
-        </div>
+        {projectsLoadError === null ? (
+          <div
+            style={{
+              width: "100vw",
+              height: "100vh",
+              background: PANEL_BG,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color: DIM_FG, // FE-10：说明文字 fg-3 档（UI-104，原误用输入框边框色）
+              fontSize: 13, // UI-204：正文 13px
+              fontFamily: '"JetBrains Mono", "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace', // UI-201：全局字体栈
+            }}
+          >
+            slTerminal 启动中…
+          </div>
+        ) : (
+          // FE-02：项目数据加载失败错误页——重试 / 以空状态继续
+          // （样式经 theme token：PANEL_BG 底 + SECONDARY_BG 按钮底 + SEPARATOR_BG 边框 + DIM_FG 13px，禁止硬编码颜色）
+          <div
+            data-e2e="projects-load-error"
+            style={{
+              width: "100vw",
+              height: "100vh",
+              background: PANEL_BG,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 12,
+              color: DIM_FG, // FE-10：说明文字 fg-3 档（UI-104，原误用输入框边框色）
+              fontSize: 13, // UI-204：正文 13px
+              fontFamily: '"JetBrains Mono", "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace', // UI-201：全局字体栈
+            }}
+          >
+            <div>项目数据加载失败</div>
+            <div>{projectsLoadError}</div>
+            <div>可选择重试，或以空项目状态继续（磁盘上的项目数据不会被覆盖）</div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                data-e2e="projects-load-retry"
+                onClick={retryProjectsLoad}
+                style={{
+                  background: SECONDARY_BG, // 按钮底
+                  border: `1px solid ${SEPARATOR_BG}`, // 1px 边框
+                  color: DIM_FG,
+                  fontSize: 13,
+                  fontFamily: "inherit",
+                  padding: "6px 16px",
+                  cursor: "pointer",
+                }}
+              >
+                重试
+              </button>
+              <button
+                data-e2e="projects-load-continue-empty"
+                onClick={continueWithEmptyProjects}
+                style={{
+                  background: SECONDARY_BG, // 按钮底
+                  border: `1px solid ${SEPARATOR_BG}`, // 1px 边框
+                  color: DIM_FG,
+                  fontSize: 13,
+                  fontFamily: "inherit",
+                  padding: "6px 16px",
+                  cursor: "pointer",
+                }}
+              >
+                以空状态继续
+              </button>
+            </div>
+          </div>
+        )}
       </ErrorBoundary>
     );
   }

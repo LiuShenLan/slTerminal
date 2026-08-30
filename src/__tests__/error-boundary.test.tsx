@@ -21,6 +21,7 @@ vi.mock("../workspace", () => ({
 vi.mock("../stores/projects", () => ({
   loadAllProjects: vi.fn().mockResolvedValue(undefined),
   markPersistenceReady: vi.fn(),
+  markLoadSucceeded: vi.fn(),
   saveAllProjects: vi.fn().mockResolvedValue(undefined),
   cancelPendingSave: vi.fn(),
   useProjects: Object.assign(vi.fn(() => ({})), {

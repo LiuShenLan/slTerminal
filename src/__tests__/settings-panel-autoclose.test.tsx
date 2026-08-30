@@ -206,6 +206,25 @@ describe("SettingsPanel 切项目自动关闭（SC-FE-08）", () => {
     await waitFor(() => expect(mockApi.close).toHaveBeenCalledTimes(1));
   });
 
+  it("空 projects（未水合）首轮评估不关闭不消费 firstRun；水合后重跑走初始评估静默关闭", async () => {
+    // 未水合：projects 空 + activePageId 已定（布局恢复场景）→ 首轮被水合门控拦截
+    useProjects.setState({ projects: {} });
+    useLayout.setState({ activePageId: "page-a" });
+    const { container } = renderPanel();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(mockApi.close).not.toHaveBeenCalled();
+    // 证明首轮未消费 firstRun：置 dirty 后水合 + 切项目——若首轮已消费（isFirstRunRef=false），
+    // 本轮将走变化触发（dirty → confirmDialog）；仍走初始评估则无视 dirty 静默关（confirmDialog 不弹）
+    fireEvent.click(byE2e(container, "p1-dirty") as HTMLElement);
+    await waitFor(() => expect(isSettingsDirty(PANEL_ID)).toBe(true));
+    act(() => {
+      seedProjects(); // 水合：projects 非空，门控放行
+      useLayout.setState({ activePageId: "page-b" }); // 他项目 → 触发关闭评估
+    });
+    await waitFor(() => expect(mockApi.close).toHaveBeenCalledTimes(1));
+    expect(mockConfirmDialog).not.toHaveBeenCalled();
+  });
+
   it("面板归属解析失败（panelId 无 settings- 前缀）→ 不动作，不误关", async () => {
     renderPanel({ panelId: "odd-panel-id" } as unknown as Record<string, unknown>);
     act(() => useLayout.setState({ activePageId: "page-b" }));

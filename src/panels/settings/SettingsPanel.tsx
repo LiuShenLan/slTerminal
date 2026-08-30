@@ -359,6 +359,9 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
     };
     const ownProjectId = findProjectId(ownPageId);
     const activeProjectId = activePageId === null ? null : findProjectId(activePageId);
+    // ownProjectId===null && projects 空 = 未水合，保留 firstRun 待重跑
+    // （防误消费为「变化触发」致 dirty 分支误弹窗）
+    if (ownProjectId === null && Object.keys(projects).length === 0) return;
     // 初始评估标记：无论本轮是否动作，首轮过后「初始评估」语义即失效（后续均为变化触发）
     const firstRun = isFirstRunRef.current;
     isFirstRunRef.current = false;

@@ -173,6 +173,7 @@ vi.mock("../stores/projects", () => {
     saveAllProjects: mocks.mockSaveAllProjects,
     cancelPendingSave: vi.fn(),
     markPersistenceReady: mocks.mockMarkPersistenceReady,
+    markLoadSucceeded: vi.fn(),
   };
 });
 

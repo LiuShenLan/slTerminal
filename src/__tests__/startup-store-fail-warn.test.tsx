@@ -97,6 +97,7 @@ vi.mock("../stores/projects", () => {
     saveAllProjects: vi.fn().mockResolvedValue(undefined),
     cancelPendingSave: vi.fn(),
     markPersistenceReady: mocks.mockMarkPersistenceReady,
+    markLoadSucceeded: vi.fn(),
   };
 });
 

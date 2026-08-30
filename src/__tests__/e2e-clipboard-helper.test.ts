@@ -43,6 +43,7 @@ vi.mock("../stores/layout", () => ({
 vi.mock("../stores/projects", () => ({
   loadAllProjects: vi.fn().mockResolvedValue(undefined),
   markPersistenceReady: vi.fn(),
+  markLoadSucceeded: vi.fn(),
   saveAllProjects: vi.fn().mockResolvedValue(undefined),
   cancelPendingSave: vi.fn(),
   createProjectId: vi.fn(() => "test-proj-id"),
