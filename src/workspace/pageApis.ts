@@ -38,6 +38,11 @@ export function getPageApi(pageId: string): DockviewApi | undefined {
   return pageApiMap.get(pageId);
 }
 
+/** 遍历全部页面 DockviewApi（含隐藏页面——E2E 兜底清理隐藏页面残留面板用） */
+export function getAllPageApis(): DockviewApi[] {
+  return Array.from(pageApiMap.values());
+}
+
 /**
  * 切换活跃页面——setProjectRoot 前置 await → setActivePage → 重指向 __dockviewApi。
  *

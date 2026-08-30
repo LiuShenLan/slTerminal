@@ -6,7 +6,7 @@
  * 「命令未注册被前端 catch 吞 = 测试全绿但运行时静默失败」盲区）、快捷键录制（合成
  * KeyboardEvent 全链路：录制态 → setBinding → 2s debounce 落盘）、切项目自动关闭、
  * 同项目切页保留、hooks 页迁入冒烟（设置中心内 CLI 选择行渲染）、dirty 切页守卫
- * （confirmDialog 取消不切换）。
+ * （confirmDialog 取消不切换）、× 关闭 dirty 守卫（取消保留 / 确认关闭）。
  *
  * corrupted 警示条不做 L4（L2 覆盖 loadSettings mock；无沙箱外写坏文件通道——
  * 豁免登记归 Stage 07 test-inventory 同步）。
@@ -46,9 +46,11 @@ declare global {
   interface Window {
     __dockviewApi?: any;
     __slterm_e2e_openSettings?: () => Promise<void>;
-    __slterm_e2e_getSettingsPanelState?: () => { selectedPage: string | null } | null;
+    __slterm_e2e_getSettingsPanelState?: () => { selectedPage: string | null; panelId: string } | null;
     __slterm_e2e_getSettingsPanelCount?: () => number;
     __slterm_e2e_switchSettingsPage?: (id: string) => boolean;
+    __slterm_e2e_setSettingsDirty?: (panelId: string, dirty: boolean) => void;
+    __slterm_e2e_closeAllSettingsPanels?: () => void;
     __slterm_e2e_setHooksConfigJson?: (text: string) => boolean;
     __slterm_e2e_getHooksConfigJson?: () => string | null;
     __slterm_e2e_getSideBarState?: () => {
@@ -60,8 +62,13 @@ declare global {
 
 // ── 持久化文件路径（与后端契约同源） ──
 
-/** 后端 settings.json：exe 同级（app_dir.rs 便携分发；wdio.conf application 同基准） */
-const settingsJsonPath = join(process.cwd(), "src-tauri", "target", "debug", "settings.json");
+/** 后端 settings.json：exe 同级（app_dir.rs 便携分发；wdio.conf application 同基准）。
+    优先经 SLTERM_DATA_DIR 推导（跨 agent 契约，隔离测试数据目录），无 env 时回退
+    exe 同级默认路径（直跑 wdio 兜底）。 */
+const settingsJsonPath = join(
+  process.env.SLTERM_DATA_DIR ?? join(process.cwd(), "src-tauri", "target", "debug"),
+  "settings.json",
+);
 /** user 层 ~/.claude/settings.json（plan_balance source.rs 余量来源契约） */
 const claudeSettingsPath = join(homedir(), ".claude", "settings.json");
 
@@ -94,13 +101,10 @@ async function openSettingsCenter(): Promise<void> {
   await waitForSettingsPanel();
 }
 
-/** 关闭全部 settings 面板（活跃页面 api；用例清理/重试隔离用） */
+/** 关闭全部 settings 面板（遍历全部页面 api——含隐藏页面残留面板，
+    活跃页面 __dockviewApi 清理不到，TE-03 泄漏根因；用例清理/重试隔离用） */
 async function closeSettingsPanels(): Promise<void> {
-  await browser.execute(() => {
-    for (const p of window.__dockviewApi!.panels) {
-      if (p.component === "settings") p.api.close();
-    }
-  });
+  await browser.execute(() => (window as any).__slterm_e2e_closeAllSettingsPanels?.());
 }
 
 /** 经 DOM 点击左导航切配置页（settings-nav-{id}），等待 params.selectedPage 生效 */
@@ -586,6 +590,14 @@ describe("设置中心 (F11, SC-E2E-02)", () => {
       await openSettingsCenter();
       await switchSettingsPage("planBalance");
 
+      // 面板 id 契约 SC-FE-02：settings-{pageId}（切页前后恒为 page1 的面板）
+      const panelId = `settings-${pageIdA}`;
+      const stateBefore = await browser.execute(
+        () => (window as any).__slterm_e2e_getSettingsPanelState?.() ?? null,
+      );
+      expect(stateBefore?.panelId).toBe(panelId);
+      expect(stateBefore?.selectedPage).toBe("planBalance");
+
       // 同项目内切页（activePageId 变化但项目不变 → 自动关闭效应不触发）
       await switchToPageAndWait(pageIdB);
       // 面板仍挂载（隐藏页面板不卸载——DOM 级断言，活跃 api 已指向 page2 读不到）
@@ -599,6 +611,7 @@ describe("设置中心 (F11, SC-E2E-02)", () => {
         () => (window as any).__slterm_e2e_getSettingsPanelState?.() ?? null,
       );
       expect(state?.selectedPage).toBe("planBalance");
+      expect(state?.panelId).toBe(panelId);
     } finally {
       try { await closeSettingsPanels(); } catch { /* 忽略 */ }
       try { rmSync(tempDir, { recursive: true, force: true }); } catch { /* 忽略 */ }
@@ -720,6 +733,91 @@ describe("设置中心 (F11, SC-E2E-02)", () => {
         () => (window as any).__slterm_e2e_getHooksConfigJson?.() ?? null,
       );
       expect(doc).toContain("e2e-dirty-marker");
+    } finally {
+      try { await closeSettingsPanels(); } catch { /* 忽略 */ }
+      try { rmSync(tempDir, { recursive: true, force: true }); } catch { /* 忽略 */ }
+    }
+  });
+
+  /** 用例 ⑪：× 关闭 dirty 守卫（后门置 dirty → × → confirm 弹窗 → cancel 面板保留
+      → 再 × → ok 面板关闭；DefaultTab 拦截经 dirtyRegistry 真值源） */
+  it("⑪ × 关闭 dirty 守卫：confirm-cancel 面板保留 / confirm-ok 面板关闭", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "slterm-e2e-settings-close-dirty-"));
+    try {
+      await waitForWorkspaceReady();
+      const pageId = await createProject(tempDir);
+      await waitForDockviewApi();
+      // 兜底清理前序用例/重试残留的 settings 面板（含隐藏页面——全局遍历，
+      // 防泄漏污染本用例 DOM 计数断言）
+      await closeSettingsPanels();
+      await openSettingsCenter();
+      const panelId = `settings-${pageId}`; // 面板 id 契约 SC-FE-02：settings-{pageId}
+
+      // 后门 helper 已注入 + 直接置 dirty（绕过真实编辑——dirtyRegistry 真值源）
+      expect(await browser.execute(
+        () => typeof (window as any).__slterm_e2e_setSettingsDirty === "function",
+      )).toBe(true);
+      await browser.execute(
+        (pid: string) => (window as any).__slterm_e2e_setSettingsDirty?.(pid, true),
+        panelId,
+      );
+
+      // 点 ×（FE-04 契约选择器 data-e2e="tab-close-{panelId}"）→ dirty 守卫 → confirm 弹窗
+      const clicked = await browser.execute((pid: string) => {
+        const btn = document.querySelector(`[data-e2e="tab-close-${pid}"]`) as HTMLElement | null;
+        btn?.click();
+        return btn !== null;
+      }, panelId);
+      expect(clicked).toBe(true);
+      await browser.waitUntil(
+        async () =>
+          (await browser.execute(() => !!document.querySelector('[data-e2e="confirm-dialog"]'))) === true,
+        { timeout: 8000, timeoutMsg: "× 关闭 dirty 面板未弹确认框（守卫未触发）" },
+      );
+
+      // 取消 → 弹窗关闭、面板保留（dirty 未清——取消不丢修改）
+      await browser.execute(() => {
+        const btn = document.querySelector('[data-e2e="confirm-cancel"]') as HTMLElement | null;
+        btn?.click();
+      });
+      await browser.waitUntil(
+        async () =>
+          (await browser.execute(() => !document.querySelector('[data-e2e="confirm-dialog"]'))) === true,
+        { timeout: 8000, timeoutMsg: "确认弹窗未关闭" },
+      );
+      // 面板保留断言按 panelId 精确归属（不用全局 DOM 计数——隐藏页面残留
+      // 面板会污染全量计数，TE-03；本用例开头已兜底清理，归属断言隔离泄漏）
+      const kept = await browser.execute(
+        () => (window as any).__slterm_e2e_getSettingsPanelState?.() ?? null,
+      );
+      expect(kept?.panelId).toBe(panelId);
+      expect(await browser.execute(
+        () => (window as any).__slterm_e2e_getSettingsPanelCount?.() ?? 0,
+      )).toBe(1);
+
+      // 再点 × → confirm-ok → 面板关闭（壳卸载清 dirty）
+      await browser.execute((pid: string) => {
+        const btn = document.querySelector(`[data-e2e="tab-close-${pid}"]`) as HTMLElement | null;
+        btn?.click();
+      }, panelId);
+      await browser.waitUntil(
+        async () =>
+          (await browser.execute(() => !!document.querySelector('[data-e2e="confirm-dialog"]'))) === true,
+        { timeout: 8000, timeoutMsg: "第二次 × 未弹确认框" },
+      );
+      await browser.execute(() => {
+        const btn = document.querySelector('[data-e2e="confirm-ok"]') as HTMLElement | null;
+        btn?.click();
+      });
+      // 关闭断言走活跃页面 api 计数（全局 DOM 计数受隐藏页面残留面板干扰，
+      // 不可用；本用例面板在活跃页面上，stateCount 归零即关闭成功）
+      await browser.waitUntil(
+        async () =>
+          (await browser.execute(
+            () => (window as any).__slterm_e2e_getSettingsPanelCount?.() ?? 0,
+          )) === 0,
+        { timeout: 8000, timeoutMsg: "confirm-ok 后设置面板未关闭" },
+      );
     } finally {
       try { await closeSettingsPanels(); } catch { /* 忽略 */ }
       try { rmSync(tempDir, { recursive: true, force: true }); } catch { /* 忽略 */ }

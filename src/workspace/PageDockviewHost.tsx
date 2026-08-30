@@ -420,7 +420,7 @@ export const DefaultTab: React.FC<IDockviewPanelProps> = (props) => {
     };
   }, [api]);
   // TAB-03: 文件型页签判据 = params.filePath 存在（只有 FILE_PANEL_TYPES
-  // ——editor/htmlviewer/gitshow/diff——的面板携带 filePath；terminal/hooksConfig
+  // ——editor/htmlviewer/gitshow/diff——的面板携带 filePath；terminal/settings
   // 恒不设置，见 panelRegistry.ts），命中即渲染 FileIcon 彩色图标（按扩展名取色；
   // gitshow/diff 标题含 suffix 不影响图标）
   // 文件名 = 路径 basename（兼容 \ 与 / 分隔）
@@ -457,6 +457,9 @@ export const DefaultTab: React.FC<IDockviewPanelProps> = (props) => {
         color: tabHovered && !isActive ? SIDEBAR_FG : undefined,
       }}>{title}</span>
       <button
+        // FE-04: E2E 关闭按钮选择器——panelId 存在时 `tab-close-{panelId}`，
+        // 否则 "tab-close"（模板字符串，供 wdio 精确定位）
+        data-e2e={tabParams?.panelId ? `tab-close-${tabParams?.panelId}` : "tab-close"}
         onClick={(e) => {
           e.stopPropagation();
           // SC-FE-07 × 关闭守卫：settings 面板且 dirty → confirmDialog 确认才关。

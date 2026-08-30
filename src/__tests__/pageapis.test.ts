@@ -13,6 +13,7 @@ import {
   switchToPageAndFocus,
   registerPageApi,
   unregisterPageApi,
+  getAllPageApis,
   findPanelForSession,
   findPageIdForPanelId,
 } from "../workspace/pageApis";
@@ -256,6 +257,23 @@ describe("switchToPageShared", () => {
 
     expect(window.__dockviewApi).toBeUndefined();
     expect(useLayout.getState().activePageId).toBe(pageB);
+  });
+
+  it("getAllPageApis 遍历全部已注册页面 api（含隐藏页面；E2E 兜底清理用）", async () => {
+    const { pageA, pageB } = seedTwoPageProject();
+    const apiA = castFakeApi(makeFakeApi());
+    const apiB = castFakeApi(makeFakeApi());
+    registerPageApi(pageA, apiA);
+    registerPageApi(pageB, apiB);
+
+    const apis = getAllPageApis();
+    expect(apis).toContain(apiA);
+    expect(apis).toContain(apiB);
+
+    unregisterPageApi(pageA);
+    unregisterPageApi(pageB);
+    expect(getAllPageApis()).not.toContain(apiA);
+    expect(getAllPageApis()).not.toContain(apiB);
   });
 
   it("rootPath 为空 → 跳过 setProjectRoot，直接切换", async () => {

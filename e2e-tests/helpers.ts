@@ -21,8 +21,9 @@ import type { OperationPage, Project } from "../src/stores/projects";
 import { useLayout } from "../src/stores/layout";
 import { makeEmptyLayout } from "../src/features/navTree/NavTree";
 import { titleManager } from "../src/workspace/titleManager";
-import { switchToPageShared } from "../src/workspace/pageApis";
+import { switchToPageShared, getAllPageApis } from "../src/workspace/pageApis";
 import { openSettings } from "../src/features/settingsCenter/openSettings";
+import { setSettingsDirty } from "../src/features/settingsCenter/dirtyRegistry";
 import { useFontSize, FONT_SIZE_DEFAULT } from "../src/stores/fontSize";
 import { useKeybindings } from "../src/stores/keybindings";
 import { useSideBar } from "../src/stores/sideBar";
@@ -77,9 +78,13 @@ declare global {
     __slterm_e2e_registerMockCliProfile?: () => void;
     // 设置中心面板（F11，SC-E2E-01）
     __slterm_e2e_openSettings?: () => Promise<void>;
-    __slterm_e2e_getSettingsPanelState?: () => { selectedPage: string | null } | null;
+    __slterm_e2e_getSettingsPanelState?: () => { selectedPage: string | null; panelId: string } | null;
     __slterm_e2e_getSettingsPanelCount?: () => number;
     __slterm_e2e_switchSettingsPage?: (id: string) => boolean;
+    /** 测试后门：直接置设置面板 dirty 态（供 × 关闭守卫用例绕过真实编辑） */
+    __slterm_e2e_setSettingsDirty?: (panelId: string, dirty: boolean) => void;
+    /** 关闭全部 settings 面板（含隐藏页面残留面板——全量页面 api 遍历） */
+    __slterm_e2e_closeAllSettingsPanels?: () => void;
   }
 }
 
@@ -308,14 +313,14 @@ function installSettingsPanelHelpers(): void {
   window.__slterm_e2e_openSettings = () => openSettings();
 
   // __slterm_e2e_getSettingsPanelState —— 活跃页面 api 中 settings- 面板的
-  // 选中配置页；无 api / 无面板返回 null
+  // 选中配置页与面板 id；无 api / 无面板返回 null
   window.__slterm_e2e_getSettingsPanelState = () => {
     const api = window.__dockviewApi;
     if (!api) return null;
     for (const panel of api.panels) {
       if (panel.id.startsWith("settings-")) {
         const params = panel.params as { selectedPage?: string } | undefined;
-        return { selectedPage: params?.selectedPage ?? null };
+        return { selectedPage: params?.selectedPage ?? null, panelId: panel.id };
       }
     }
     return null;
@@ -341,6 +346,23 @@ function installSettingsPanelHelpers(): void {
     if (!(el instanceof HTMLElement)) return false;
     el.click();
     return true;
+  };
+
+  // __slterm_e2e_setSettingsDirty —— 测试后门：直接置设置面板 dirty 态
+  // （供 × 关闭 dirty 守卫用例绕过真实编辑；dirty 真值源 dirtyRegistry）
+  window.__slterm_e2e_setSettingsDirty = (panelId: string, dirty: boolean): void => {
+    setSettingsDirty(panelId, dirty);
+  };
+
+  // __slterm_e2e_closeAllSettingsPanels —— 遍历全部页面（含隐藏页面）api 关闭
+  // settings 面板。spec 侧兜底清理用：活跃页面 api 清理不到隐藏页面残留面板
+  // （同项目切页面板保留不卸载，TE-03 泄漏根因），须走 pageApiMap 全量遍历
+  window.__slterm_e2e_closeAllSettingsPanels = (): void => {
+    for (const api of getAllPageApis()) {
+      for (const panel of api.panels) {
+        if (panel.id.startsWith("settings-")) panel.api.close();
+      }
+    }
   };
 }
 

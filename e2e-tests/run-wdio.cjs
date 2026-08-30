@@ -2,11 +2,15 @@
  * WDIO 兼容启动器：Node 26 的 undici 8 与 webdriverio 不兼容，
  * 自动下载便携 Node 22 运行。CI 环境（Node 22）直接运行。
  *
- * 备份/还原（E2E-05 扩展）：E2E 运行会真实写盘三处用户配置——
- * ① ~/.slterminal/settings.json（侧栏视图状态等，FIX-TE-04 原有）
- * ② ~/.claude/settings.json（agent_hooks_inject 注入 slterm matcher + statusLine 桥接，E2E-05 新增）
- * ③ ~/.slterminal/hooks/（注入的 reporter + statusline 桥接脚本，E2E-05 新增）
- * ④ ~/.slterminal/statusline-backup.json（注入的原 statusLine 备份，statusline 桥接新增）
+ * 数据隔离（BE-01/TE-02）：应用全部数据写入（settings.json / 项目持久化文件
+ * 等）经 SLTERM_DATA_DIR 指向 os.tmpdir()/slterm-e2e-data 临时目录，与日常使用数据
+ * 完全隔离——不再备份/还原 ~/.slterminal/settings.json 与 exe 同级项目数据。
+ * 临时目录启动时清空重建，exit 时删除。
+ *
+ * 备份/还原（E2E-05）：E2E 运行会真实写盘以下用户配置——
+ * ① ~/.claude/settings.json（agent_hooks_inject 注入 slterm matcher + statusLine 桥接，E2E-05 新增）
+ * ② ~/.slterminal/hooks/（注入的 reporter + statusline 桥接脚本，E2E-05 新增）
+ * ③ ~/.slterminal/statusline-backup.json（注入的原 statusLine 备份，statusline 桥接新增）
  * 启动时备份（存在时），exit 时同步还原；~/.slterminal/hooks-events/
  * 为运行时信号文件目录（无用户价值），exit 时直接清理。
  * 三启动路径（node22 直跑 / 便携下载 / fallback）均在同一主进程内
@@ -18,7 +22,16 @@ const fs = require('fs');
 const os = require('os');
 const https = require('https');
 
-// ── 配置备份/还原（FIX-TE-04 + E2E-05） ──
+// ── E2E 数据目录隔离（BE-01/TE-02） ──
+// 应用全部数据写入（settings.json / 项目持久化文件等）经 SLTERM_DATA_DIR
+// 指向临时目录，与日常使用数据完全隔离。位置必须在 spawn wdio 之前——
+// env 链式继承：run-wdio → npx wdio → tauri driver → slterminal.exe。
+const e2eDataDir = path.join(os.tmpdir(), 'slterm-e2e-data');
+fs.rmSync(e2eDataDir, { recursive: true, force: true });
+fs.mkdirSync(e2eDataDir, { recursive: true });
+process.env.SLTERM_DATA_DIR = e2eDataDir;
+
+// ── 配置备份/还原（E2E-05） ──
 
 /** 备份单个文件：存在时复制为 .e2e-bak，返回是否备份 */
 function backupFile(filePath) {
@@ -67,9 +80,6 @@ function restoreFile(filePath, existed) {
   }
 }
 
-const settingsPath = path.join(os.homedir(), '.slterminal', 'settings.json');
-const settingsExisted = backupFile(settingsPath);
-
 // ~/.claude/settings.json（hooks 注入污染防护，E2E-05）：
 // E2E-05 用户目录隔离备份集合保持 claude 硬编码——随第二 CLI 接入扩展（决策 4）
 const claudeSettingsPath = path.join(os.homedir(), '.claude', 'settings.json');
@@ -101,25 +111,6 @@ if (hooksExisted) {
 // ~/.slterminal/hooks-events/（信号文件运行时目录）：不做备份，exit 时直接清理
 const hooksEventsDir = path.join(os.homedir(), '.slterminal', 'hooks-events');
 
-// slterminal-projects.json（exe 同级项目数据，E2E-16 新增）：
-// 导航树按项目归属渲染——项目持久化跨 run 累积（实测 160+）会拖垮导航树
-// （展开全部行渲染爆炸 + execute 超时）。启动时备份后删除（E2E 从空项目开始），
-// exit 时还原用户项目数据（照 settings.json 备份/还原模式）。
-// 注意：后端 load_from_dir 有 .bak 恢复——主文件删除后从 .bak 读回旧数据，
-// 必须连 .bak 一并备份/清空/还原（E2E-16 实测：只清主文件 → .bak 恢复 200+ 项目）。
-const projectsJsonPath = path.join(__dirname, '..', 'src-tauri', 'target', 'debug', 'slterminal-projects.json');
-const projectsBakPath = projectsJsonPath + '.bak';
-const projectsJsonExisted = backupFile(projectsJsonPath);
-const projectsBakExisted = fs.existsSync(projectsBakPath);
-if (fs.existsSync(projectsBakPath)) {
-  try { fs.copyFileSync(projectsBakPath, projectsBakPath + '.e2e-bak'); } catch { /* 忽略 */ }
-}
-if (projectsJsonExisted) {
-  try { fs.rmSync(projectsJsonPath, { force: true }); } catch { /* 忽略 */ }
-  try { fs.rmSync(projectsBakPath, { force: true }); } catch { /* 忽略 */ }
-  console.log('[wdio-launcher] 已清空 E2E 项目数据（slterminal-projects.json + .bak，exit 时还原）');
-}
-
 /**
  * exit 时统一恢复用户目录（单一恢复点——三启动路径均在同一主进程 exit，有意设计见文件头）。
  * 返回失败项描述数组：恢复失败必须可观测——静默会污染 ~/.slterminal 与 ~/.claude
@@ -132,27 +123,6 @@ function restoreAll() {
     failures.push(err && err.message ? `${desc}: ${err.message}` : desc);
   };
 
-  // slterminal-projects.json 还原（E2E-16——E2E 期间累积的测试项目数据丢弃）
-  if (!restoreFile(projectsJsonPath, projectsJsonExisted)) {
-    failures.push(`还原 ${projectsJsonPath} 失败（3 次重试）`);
-  }
-  // .bak 还原（.e2e-bak 命名——restoreFile 的 bakPath 约定不一致，直接 rename）
-  if (projectsBakExisted) {
-    try {
-      fs.rmSync(projectsBakPath, { force: true });
-      fs.renameSync(projectsBakPath + '.e2e-bak', projectsBakPath);
-    } catch (err) {
-      fail(`还原 ${projectsBakPath} 失败`, err);
-    }
-  } else {
-    try { fs.rmSync(projectsBakPath + '.e2e-bak', { force: true }); } catch (err) {
-      fail(`清理残留备份 ${projectsBakPath}.e2e-bak 失败`, err);
-    }
-  }
-  // settings.json 还原（FIX-TE-04）
-  if (!restoreFile(settingsPath, settingsExisted)) {
-    failures.push(`还原 ${settingsPath} 失败（3 次重试）`);
-  }
   // ~/.claude/settings.json 还原（E2E-05——agent_hooks_inject 会真实写 slterm matcher）
   if (!restoreFile(claudeSettingsPath, claudeSettingsExisted)) {
     failures.push(`还原 ${claudeSettingsPath} 失败（3 次重试）`);
@@ -204,6 +174,8 @@ process.on('exit', () => {
   } else {
     console.log('[wdio-launcher] 用户目录恢复完成（全部成功）');
   }
+  // E2E 临时数据目录清理（best-effort——残留由下次运行启动时 rmSync 兜底）
+  try { fs.rmSync(e2eDataDir, { recursive: true, force: true }); } catch { /* 忽略 */ }
 });
 
 // ── Claude 历史会话 fixture 副本 + env 注入（TE-02，SEC-02 安全红线） ──
