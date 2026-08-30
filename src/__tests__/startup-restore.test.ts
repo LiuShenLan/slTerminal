@@ -5,6 +5,7 @@
 // 2. localStorage 为空 → 静默降级
 // 3. loadAllProjects 异常 → 阻断启动渲染错误页（FE-02：不 ready / 不 markPersistenceReady）
 // 9-11. 错误页交互（FE-02）：两按钮渲染 / 点重试成功进 ready / 点「以空状态继续」放行写盘进 ready
+// 12-13. 错误页标题栏（复用 TitleBar）：渲染 + 三窗口按钮存在 / 点关闭调 closeWindow（关窗链入口）
 // 4. ready 状态切换：加载中 → 就绪
 // 5. DBG-6：setProjectRoot 先于 setActivePage（D7 时序断言，WRK-03）
 // 6. requestUserAttention reject → 静默 catch（WRK-03）
@@ -20,6 +21,10 @@ const mocks = vi.hoisted(() => {
   const mockMarkPersistenceReady = vi.fn();
   /** FE-01：markLoadSucceeded（「以空状态继续」显式放行写盘） */
   const mockMarkLoadSucceeded = vi.fn();
+  /** 标题栏三窗口按钮（错误页标题栏复用 TitleBar——窗口控制入口，用例 12/13） */
+  const mockMinimizeWindow = vi.fn().mockResolvedValue(undefined);
+  const mockToggleMaximizeWindow = vi.fn().mockResolvedValue(undefined);
+  const mockCloseWindow = vi.fn().mockResolvedValue(undefined);
   const mockSetActivePage = vi.fn();
   const mockSetProjectRoot = vi.fn().mockResolvedValue(undefined);
   const mockRequestUserAttention = vi.fn().mockResolvedValue(undefined);
@@ -33,6 +38,9 @@ const mocks = vi.hoisted(() => {
     mockSaveAllProjects,
     mockMarkPersistenceReady,
     mockMarkLoadSucceeded,
+    mockMinimizeWindow,
+    mockToggleMaximizeWindow,
+    mockCloseWindow,
     mockSetActivePage,
     mockSetProjectRoot,
     mockRequestUserAttention,
@@ -53,6 +61,9 @@ const mocks = vi.hoisted(() => {
       mockSaveAllProjects.mockClear();
       mockMarkPersistenceReady.mockClear();
       mockMarkLoadSucceeded.mockClear();
+      mockMinimizeWindow.mockClear();
+      mockToggleMaximizeWindow.mockClear();
+      mockCloseWindow.mockClear();
       mockSetActivePage.mockClear();
       mockSetProjectRoot.mockClear();
       mockRequestUserAttention.mockClear();
@@ -70,6 +81,10 @@ vi.mock("../ipc/window", () => ({
     return () => {};
   }),
   requestUserAttention: mocks.mockRequestUserAttention,
+  // 错误页标题栏复用 TitleBar——三窗口按钮 wrapper（用例 12/13）
+  minimizeWindow: mocks.mockMinimizeWindow,
+  toggleMaximizeWindow: mocks.mockToggleMaximizeWindow,
+  closeWindow: mocks.mockCloseWindow,
 }));
 
 // App.tsx 启动恢复链路依赖 setProjectRoot（DBG-6 时序断言需 spy）
@@ -273,6 +288,40 @@ describe("S4 启动恢复", () => {
       expect(mocks.mockMarkPersistenceReady).toHaveBeenCalled();
       expect(container.querySelector('[data-testid="workspace"]')).toBeTruthy();
     }, { timeout: 3000 });
+  });
+
+  it("12. 错误页显示标题栏：TitleBar 渲染 + 三窗口按钮存在（decorations:false 下窗口控制入口）", async () => {
+    mocks.mockLoadAllProjects.mockRejectedValueOnce(new Error("文件损坏"));
+    setLastActivePage(null);
+
+    const { container } = render(React.createElement(App));
+
+    await waitFor(() => {
+      expect(container.querySelector('[data-e2e="projects-load-error"]')).toBeTruthy();
+    }, { timeout: 3000 });
+    // 错误页复用 TitleBar：左段 slTerminal 标识 + 三窗口按钮（拖拽区/最小化/最大化/关闭）
+    // container 限定查询（screen 会撞历史用例残留 DOM）
+    expect(container.querySelector('[data-tauri-drag-region="deep"]')?.textContent).toContain("slTerminal");
+    expect(container.querySelector('[aria-label="最小化"]')).toBeTruthy();
+    expect(container.querySelector('[aria-label="最大化/还原"]')).toBeTruthy();
+    expect(container.querySelector('[aria-label="关闭"]')).toBeTruthy();
+  });
+
+  it("13. 错误页点标题栏关闭按钮 → closeWindow 被调（P1-19 关窗链入口）", async () => {
+    mocks.mockLoadAllProjects.mockRejectedValueOnce(new Error("文件损坏"));
+    setLastActivePage(null);
+
+    const { container } = render(React.createElement(App));
+
+    await waitFor(() => {
+      expect(container.querySelector('[data-e2e="projects-load-error"]')).toBeTruthy();
+    }, { timeout: 3000 });
+
+    fireEvent.click(container.querySelector('[aria-label="关闭"]') as HTMLElement);
+    expect(mocks.mockCloseWindow).toHaveBeenCalled();
+    // 其余两钮不受影响
+    expect(mocks.mockMinimizeWindow).not.toHaveBeenCalled();
+    expect(mocks.mockToggleMaximizeWindow).not.toHaveBeenCalled();
   });
 
   it("4. 启动时显示 Loading → 数据就绪后消失（ready 状态切换）", async () => {

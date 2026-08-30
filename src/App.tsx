@@ -286,78 +286,94 @@ function App() {
   if (!ready) {
     return (
       <ErrorBoundary>
-        {projectsLoadError === null ? (
-          <div
-            style={{
-              width: "100vw",
-              height: "100vh",
-              background: PANEL_BG,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              color: DIM_FG, // FE-10：说明文字 fg-3 档（UI-104，原误用输入框边框色）
-              fontSize: 13, // UI-204：正文 13px
-              fontFamily: '"JetBrains Mono", "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace', // UI-201：全局字体栈
-            }}
-          >
-            slTerminal 启动中…
-          </div>
-        ) : (
-          // FE-02：项目数据加载失败错误页——重试 / 以空状态继续
-          // （样式经 theme token：PANEL_BG 底 + SECONDARY_BG 按钮底 + SEPARATOR_BG 边框 + DIM_FG 13px，禁止硬编码颜色）
-          <div
-            data-e2e="projects-load-error"
-            style={{
-              width: "100vw",
-              height: "100vh",
-              background: PANEL_BG,
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 12,
-              color: DIM_FG, // FE-10：说明文字 fg-3 档（UI-104，原误用输入框边框色）
-              fontSize: 13, // UI-204：正文 13px
-              fontFamily: '"JetBrains Mono", "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace', // UI-201：全局字体栈
-            }}
-          >
-            <div>项目数据加载失败</div>
-            <div>{projectsLoadError}</div>
-            <div>可选择重试，或以空项目状态继续（磁盘上的项目数据不会被覆盖）</div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button
-                data-e2e="projects-load-retry"
-                onClick={retryProjectsLoad}
-                style={{
-                  background: SECONDARY_BG, // 按钮底
-                  border: `1px solid ${SEPARATOR_BG}`, // 1px 边框
-                  color: DIM_FG,
-                  fontSize: 13,
-                  fontFamily: "inherit",
-                  padding: "6px 16px",
-                  cursor: "pointer",
-                }}
-              >
-                重试
-              </button>
-              <button
-                data-e2e="projects-load-continue-empty"
-                onClick={continueWithEmptyProjects}
-                style={{
-                  background: SECONDARY_BG, // 按钮底
-                  border: `1px solid ${SEPARATOR_BG}`, // 1px 边框
-                  color: DIM_FG,
-                  fontSize: 13,
-                  fontFamily: "inherit",
-                  padding: "6px 16px",
-                  cursor: "pointer",
-                }}
-              >
-                以空状态继续
-              </button>
+        {/* 启动骨架：错误页时首行渲染标题栏（复用 TitleBar）——decorations:false 无系统标题栏，
+            阻塞态下提供拖拽 / 双击最大化 / 最小化最大化关闭；加载页保持无标题栏（过渡态，极短） */}
+        <div
+          style={{
+            width: "100vw",
+            height: "100vh",
+            background: PANEL_BG,
+            display: "flex",
+            flexDirection: "column",
+          }}
+        >
+          {projectsLoadError === null ? null : (
+            <ErrorBoundary variant="inline">
+              <TitleBar />
+            </ErrorBoundary>
+          )}
+          {projectsLoadError === null ? (
+            <div
+              style={{
+                width: "100vw",
+                height: "100vh",
+                background: PANEL_BG,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: DIM_FG, // FE-10：说明文字 fg-3 档（UI-104，原误用输入框边框色）
+                fontSize: 13, // UI-204：正文 13px
+                fontFamily: '"JetBrains Mono", "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace', // UI-201：全局字体栈
+              }}
+            >
+              slTerminal 启动中…
             </div>
-          </div>
-        )}
+          ) : (
+            // FE-02：项目数据加载失败错误页——重试 / 以空状态继续
+            // （样式经 theme token：PANEL_BG 底 + SECONDARY_BG 按钮底 + SEPARATOR_BG 边框 + DIM_FG 13px，禁止硬编码颜色）
+            <div
+              data-e2e="projects-load-error"
+              style={{
+                flex: 1,
+                minHeight: 0,
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 12,
+                color: DIM_FG, // FE-10：说明文字 fg-3 档（UI-104，原误用输入框边框色）
+                fontSize: 13, // UI-204：正文 13px
+                fontFamily: '"JetBrains Mono", "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace', // UI-201：全局字体栈
+              }}
+            >
+              <div>项目数据加载失败</div>
+              <div>{projectsLoadError}</div>
+              <div>可选择重试，或以空项目状态继续（磁盘上的项目数据不会被覆盖）</div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  data-e2e="projects-load-retry"
+                  onClick={retryProjectsLoad}
+                  style={{
+                    background: SECONDARY_BG, // 按钮底
+                    border: `1px solid ${SEPARATOR_BG}`, // 1px 边框
+                    color: DIM_FG,
+                    fontSize: 13,
+                    fontFamily: "inherit",
+                    padding: "6px 16px",
+                    cursor: "pointer",
+                  }}
+                >
+                  重试
+                </button>
+                <button
+                  data-e2e="projects-load-continue-empty"
+                  onClick={continueWithEmptyProjects}
+                  style={{
+                    background: SECONDARY_BG, // 按钮底
+                    border: `1px solid ${SEPARATOR_BG}`, // 1px 边框
+                    color: DIM_FG,
+                    fontSize: 13,
+                    fontFamily: "inherit",
+                    padding: "6px 16px",
+                    cursor: "pointer",
+                  }}
+                >
+                  以空状态继续
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       </ErrorBoundary>
     );
   }

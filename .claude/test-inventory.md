@@ -2,13 +2,13 @@
 
 > **本文档是项目用例数唯一真值源。** 所有 CLAUDE.md、README、CI 配置中引用的用例数均以此文件为准。更新测试后必须同步本文档。
 
-全量 **3863** 用例（Rust 818 + 前端 2852 + L3 142 + E2E 51），2026-08-30 实跑确认。
+全量 **3865** 用例（Rust 818 + 前端 2854 + L3 142 + E2E 51），2026-08-30 实跑确认。
 
 > **登记纪律（TQ-CI-01）**：改测试后同步本文件——L1 以 `cargo test` 实跑总数 + `grep -c '#[test]'` 双核对；L2 以 `npm test` 实跑（Vitest 报告）为准；段小计 = 段内行级用例数之和（逐段核对 it.each/工厂展开）。三处（表头/段头/段小计）必须一致。
 
 > **计数口径**：
 > - L1 以 `grep -c '#[test]'` 统计的 `#[test]` 属性数为准（39 文件 818）。
-> - L2 以 `npm test` 实跑（Vitest 报告）为准，it.each/describeIpcContract 工厂按展开后计入（167 文件 2852）。
+> - L2 以 `npm test` 实跑（Vitest 报告）为准，it.each/describeIpcContract 工厂按展开后计入（167 文件 2854）。
 > - L3 以 `npm run test:l3` 实跑为准（8 文件 142）。
 > - L4 以 spec 内 `it(`/`it.skip(` 计数为准（10 spec，51 用例，49 active + 2 skip）。
 > - L2 与 L3 独立运行：`vitest.config.ts` include 仅 `src/__tests__/**`，L3 走 `vitest.l3.config.ts`。
@@ -113,7 +113,7 @@
 
 本地开发机（已开开发者模式）为真实覆盖来源；CI runner 未开权限时上述分支覆盖记为「不确定」。
 
-## L2 — 前端单元/集成测试（167 文件 / 2852 用例）
+## L2 — 前端单元/集成测试（167 文件 / 2854 用例）
 
 运行：`npm test`
 
@@ -350,12 +350,12 @@
 | `src/__tests__/agent-history-restore.test.ts` | 13 | 四步恢复/防重入/abort；F7/NAH-07/ZQ-4/MC-315/FE-27/48 |
 | `src/__tests__/agent-history-action-dialog.test.tsx` | 8 | SessionActionDialog；NAH-11/FE-12 |
 
-### 启动/关闭（5 文件 / 38 用例）
+### 启动/关闭（5 文件 / 40 用例）
 
 | 文件 | 用例 | 覆盖要点 |
 |------|------|---------|
 | `src/__tests__/close-handler.test.ts` | 19 | 关闭序列/ptyKillAll 兜底；WRK-08/BE-08/FE-47 |
-| `src/__tests__/startup-restore.test.ts` | 11 | 启动恢复/加载失败错误页/重试/空状态继续/setProjectRoot 时序；WRK-03/DBG-6/FE-02/FE-06/10 |
+| `src/__tests__/startup-restore.test.ts` | 13 | 启动恢复/加载失败错误页/重试/空状态继续/错误页标题栏（复用 TitleBar，三钮渲染+关闭调 closeWindow）/setProjectRoot 时序；WRK-03/DBG-6/FE-02/FE-06/10 |
 | `src/__tests__/bootstrap.test.ts` | 5 | `__TAURI_INTERNALS__` 轮询；FE-03 |
 | `src/__tests__/main-bootstrap.test.tsx` | 1 | main.tsx init 失败；WRK-10 |
 | `src/__tests__/startup-store-fail-warn.test.tsx` | 2 | store 加载失败可感知；FE-03/20 |
@@ -450,4 +450,4 @@ embedded WDIO 无法投递 OS 级按键；所有键盘用例改用页面内 disp
 - 2026-08-28：全量 3731（Rust 794 + 前端 2755 + L3 142 + E2E 40）。F10 新增 plan_balance 五文件 51 例 + settings.rs +1、前端三文件 45 例。
 - 2026-08-29：全量 **3746**（Rust 809 + 前端 2755 + L3 142 + E2E 40）。B17 新增 `test_pwsh_args_no_noprofile_b17` 1 例（shell.rs 32→33），kimi.rs 解析实测修正（+14）已于同日校准。
 - 2026-08-30：全量 **3846**（Rust 815 + 前端 2839 + L3 142 + E2E 50）。F11 设置中心：plan_balance/mod.rs +6（set_interval 四维/内存默认/键名常量）；L2 +9 文件 -2 文件净 +7 文件 +84（设置中心 9 文件 88 例，settings-hooks-page 替代 hooks-config-panel 37，open-settings 两文件取代 open-hooks-config 两文件，ipc-plan-balance-contract +4、workspace-defaulttab +4、shortcuts +2、layout-serde +1、app +2）；L4 +settings.e2e.ts 10 例。
-- 2026-08-30（实跑确认）：全量 **3863**（Rust 818 + 前端 2852 + L3 142 + E2E 51）。settings-center-fixes 修复链实跑增量：L1 +3（BE-01 app_dir 三例）；L2 +13（FE-01 projects +5、FE-02 startup-restore 净 +3、FE-03 autoclose +1、TE-04 settings-pages-registration 新文件 +1、TE-05 hooks-page +1、TE-06 settings-panel +1、FE-04 适配 0）；L4 +1（TE-03 settings.e2e.ts 用例⑪ × 关闭 dirty 守卫）。
+- 2026-08-30（实跑确认）：全量 **3865**（Rust 818 + 前端 2854 + L3 142 + E2E 51）。settings-center-fixes 修复链实跑增量：L1 +3（BE-01 app_dir 三例）；L2 +15（FE-01 projects +5、FE-02 startup-restore 净 +3、FE-03 autoclose +1、TE-04 settings-pages-registration 新文件 +1、TE-05 hooks-page +1、TE-06 settings-panel +1、FE-04 适配 0、错误页标题栏 startup-restore +2）；L4 +1（TE-03 settings.e2e.ts 用例⑪ × 关闭 dirty 守卫）。
