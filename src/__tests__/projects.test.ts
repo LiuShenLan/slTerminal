@@ -18,6 +18,7 @@ import {
   loadAllProjects,
   saveAllProjects,
   markPersistenceReady,
+  markLoadSucceeded,
   _resetPersistence,
   MAX_PAGES,
 } from "../stores/projects";
@@ -594,6 +595,9 @@ describe("projects store", () => {
   });
 
   it("saveToDisk save_projects 失败 → 异常传播", async () => {
+    // FE-01：空写守卫拦截空 store 直调——显式放行，聚焦「写盘失败异常传播」语义
+    markLoadSucceeded();
+
     mockIPC((cmd) => {
       if (cmd === "save_projects") throw new Error("disk full");
     });
@@ -659,6 +663,9 @@ describe("projects store", () => {
   });
 
   it("saveAllProjects 写入失败 → console.error", async () => {
+    // FE-01：空写守卫拦截空 store 直调——显式放行，聚焦「写盘失败 console.error」语义
+    markLoadSucceeded();
+
     mockIPC((cmd) => {
       if (cmd === "save_projects") throw new Error("permission denied");
     });
@@ -881,5 +888,88 @@ describe("projects store", () => {
     // 缺失字段走 ?? {} 默认值
     expect(expandedNodes).toEqual({});
     expect(deletionLock).toEqual({ pendingDelete: null, acquiredAt: null });
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // FE-01: loadSucceeded 数据防线（空写守卫 / 异常上抛 / 结构校验）
+  // ═══════════════════════════════════════════════════════════
+
+  it("FE-01: loadFromDisk IPC 失败 → 异常上抛且 loadSucceeded 未置位（后续空写被拒）", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "load_projects") throw new Error("ipc error");
+    });
+
+    const { loadFromDisk, saveToDisk } = useProjects.getState();
+    // 异常上抛（不再被吞）
+    await expect(loadFromDisk()).rejects.toThrow("ipc error");
+
+    // loadSucceeded 未置位 + store 空 → 空写被拒，磁盘无写入调用
+    const writeSpy = vi.fn();
+    mockIPC((cmd, args) => {
+      writeSpy(cmd, args);
+    });
+    await saveToDisk();
+    expect(writeSpy).not.toHaveBeenCalled();
+  });
+
+  it("FE-01: loadFromDisk 返回 projects 非对象 → throw 格式异常", async () => {
+    // 三种非法形态：数字 / null / 数组（数组 typeof 也是 object，须 Array.isArray 识别）
+    const illegalPayloads = [
+      JSON.stringify({ projects: 1 }),
+      JSON.stringify({ projects: null }),
+      JSON.stringify({ projects: [] }),
+    ];
+
+    const { loadFromDisk } = useProjects.getState();
+    for (const payload of illegalPayloads) {
+      mockIPC((cmd) => {
+        if (cmd === "load_projects") return { data: payload, corrupted: false };
+      });
+      await expect(loadFromDisk()).rejects.toThrow("项目数据格式异常：projects 字段不是对象");
+    }
+  });
+
+  it("FE-01: loadFromDisk 成功 → saveAllProjects 空状态正常写盘", async () => {
+    // 首次启动 data:"{}" 加载成功 → loadSucceeded 置位 → 空 store 写盘放行
+    mockIPC((cmd) => {
+      if (cmd === "load_projects") return { data: "{}", corrupted: false };
+    });
+    const { loadFromDisk } = useProjects.getState();
+    await loadFromDisk();
+
+    const writeSpy = vi.fn();
+    mockIPC((cmd, args) => {
+      writeSpy(cmd, args);
+    });
+    await saveAllProjects();
+
+    const call = writeSpy.mock.calls.find(([cmd]) => cmd === "save_projects");
+    expect(call).toBeDefined();
+  });
+
+  it("FE-01: 未加载成功时空写被拒且磁盘无写入调用", async () => {
+    // beforeEach 已 _resetPersistence（loadSucceeded=false）且 store 为空
+    const writeSpy = vi.fn();
+    mockIPC((cmd, args) => {
+      writeSpy(cmd, args);
+    });
+
+    await saveAllProjects();
+
+    expect(writeSpy).not.toHaveBeenCalled();
+  });
+
+  it("FE-01: markLoadSucceeded() 后空状态写盘放行", async () => {
+    // E2E 分支/「以空状态继续」显式放行路径
+    markLoadSucceeded();
+
+    const writeSpy = vi.fn();
+    mockIPC((cmd, args) => {
+      writeSpy(cmd, args);
+    });
+    await saveAllProjects();
+
+    const call = writeSpy.mock.calls.find(([cmd]) => cmd === "save_projects");
+    expect(call).toBeDefined();
   });
 });

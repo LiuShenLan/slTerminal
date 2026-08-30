@@ -231,33 +231,44 @@ export const useProjects = create<ProjectsState>()((set, get) => ({
       // ── 磁盘持久化 ──────────────────────────────────────
 
       loadFromDisk: async () => {
-        try {
-          const { data: raw, corrupted } = await projectsIpc.loadProjects();
-          // FE-11：损坏时后端已回退默认数据（data 为默认形态），toast 告警
-          if (corrupted) {
-            toast.show("warning", "配置已损坏，已回退默认值");
-          }
-          const data: {
-            projects?: Record<string, Project>;
-            deletionLock?: DeletionLock;
-            expandedNodes?: Record<string, boolean>;
-          } = JSON.parse(raw);
-          set({
-            projects: data.projects ?? {},
-            deletionLock: data.deletionLock ?? {
-              pendingDelete: null,
-              acquiredAt: null,
-            },
-            expandedNodes: data.expandedNodes ?? {},
-          });
-        } catch (err) {
-          // 首次启动或 IPC 失败，保持默认状态
-          console.warn("[slTerminal] projects loadFromDisk 失败:", err);
+        // FE-01：不再吞异常——IPC 失败/格式异常一律上抛，由启动链（App.tsx）决策
+        const { data: raw, corrupted } = await projectsIpc.loadProjects();
+        // FE-11：损坏时后端已回退默认数据（data 为默认形态），toast 告警
+        if (corrupted) {
+          toast.show("warning", "配置已损坏，已回退默认值");
         }
+        const data: {
+          projects?: Record<string, Project>;
+          deletionLock?: DeletionLock;
+          expandedNodes?: Record<string, boolean>;
+        } = JSON.parse(raw);
+        // 结构校验：projects 字段存在时必须是对象（防损坏数据进 store）
+        if (
+          data.projects !== undefined &&
+          (typeof data.projects !== "object" ||
+            data.projects === null ||
+            Array.isArray(data.projects))
+        ) {
+          throw new Error("项目数据格式异常：projects 字段不是对象");
+        }
+        set({
+          projects: data.projects ?? {},
+          deletionLock: data.deletionLock ?? {
+            pendingDelete: null,
+            acquiredAt: null,
+          },
+          expandedNodes: data.expandedNodes ?? {},
+        });
+        loadSucceeded = true;
       },
 
       saveToDisk: async () => {
         const { projects, deletionLock, expandedNodes } = get();
+        // 空写守卫：未成功加载且当前为空时拒写，防加载失败路径空写覆盖磁盘数据
+        if (!loadSucceeded && Object.keys(projects).length === 0) {
+          console.warn("[slTerminal] 拒绝空写：项目数据未成功加载且当前为空（防覆盖磁盘数据）");
+          return;
+        }
         await projectsIpc.saveProjects(
           JSON.stringify({ projects, deletionLock, expandedNodes }, null, 2),
         );
@@ -270,12 +281,8 @@ export const useProjects = create<ProjectsState>()((set, get) => ({
 
 /** 启动加载：从磁盘恢复项目数据 */
 export async function loadAllProjects(): Promise<void> {
-  try {
-    await useProjects.getState().loadFromDisk();
-  } catch (err) {
-    // 首次启动或文件损坏，保持默认空状态
-    console.warn("[slTerminal] loadAllProjects loadFromDisk 失败:", err);
-  }
+  // FE-01：删除静默 catch，异常直传——由启动链（App.tsx）决策重试/以空状态继续
+  await useProjects.getState().loadFromDisk();
 }
 
 /** 保存全部项目数据到磁盘 */
@@ -290,10 +297,17 @@ export async function saveAllProjects(): Promise<void> {
 // 变更即保存（2s debounce）—— 唯一抵抗 taskkill/关机的手段
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let initialized = false;
+// FE-01 数据防线：loadFromDisk 成功置位；未成功加载且 store 空时 saveToDisk 拒写（防空写覆盖磁盘数据）
+let loadSucceeded = false;
 
 // 标记初始化完成（loadFromDisk 调用后），避免首次加载触发保存
 export function markPersistenceReady(): void {
   initialized = true;
+}
+
+// FE-01：显式放行空写——E2E 分支与「以空状态继续」跳过加载仍可写盘（loadFromDisk 成功路径自动置位）
+export function markLoadSucceeded(): void {
+  loadSucceeded = true;
 }
 
 /** 取消待执行的 debounced 保存（关闭钩子中避免竞态） */
@@ -304,13 +318,14 @@ export function cancelPendingSave(): void {
   }
 }
 
-/** 仅测试用：重置持久化状态（清 timer + 重置 initialized 标记） */
+/** 仅测试用：重置持久化状态（清 timer + 重置 initialized/loadSucceeded 标记） */
 export function _resetPersistence(): void {
   if (saveTimer !== null) {
     clearTimeout(saveTimer);
     saveTimer = null;
   }
   initialized = false;
+  loadSucceeded = false;
 }
 
 useProjects.subscribe(() => {

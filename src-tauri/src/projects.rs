@@ -63,27 +63,40 @@ fn load_from_dir(app_dir: &Path) -> LoadResult<String> {
             data: content,
             corrupted: false,
         },
-        Ok(_) => match restore_from_bak(&projects_path, &bak) {
-            // BE-14：bak 命中也算 corrupted（数据来自备份）
-            Some(bak_content) => LoadResult {
-                data: bak_content,
-                corrupted: true,
-            },
-            None => LoadResult {
-                data: "{}".to_string(),
-                corrupted: true,
-            },
-        },
-        Err(_) => match restore_from_bak(&projects_path, &bak) {
-            Some(bak_content) => LoadResult {
-                data: bak_content,
-                corrupted: true,
-            },
-            None => LoadResult {
-                data: "{}".to_string(),
-                corrupted: false,
-            },
-        },
+        Ok(_) => {
+            // BE-02：主文件存在但 JSON 非法——记录日志后尝试 .bak
+            tracing::warn!(path = %projects_path.display(), "projects 主文件 JSON 非法，尝试 .bak");
+            match restore_from_bak(&projects_path, &bak) {
+                // BE-14：bak 命中也算 corrupted（数据来自备份）
+                Some(bak_content) => LoadResult {
+                    data: bak_content,
+                    corrupted: true,
+                },
+                None => {
+                    tracing::error!(path = %projects_path.display(), "projects 主文件损坏且 .bak 未命中，回退空数据");
+                    LoadResult {
+                        data: "{}".to_string(),
+                        corrupted: true,
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            // BE-02：读失败非 NotFound（IO/权限错误）——记录日志后尝试 .bak；NotFound 属正常首启，静默
+            if e.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(error = %e, path = %projects_path.display(), "projects 读取失败，尝试 .bak");
+            }
+            match restore_from_bak(&projects_path, &bak) {
+                Some(bak_content) => LoadResult {
+                    data: bak_content,
+                    corrupted: true,
+                },
+                None => LoadResult {
+                    data: "{}".to_string(),
+                    corrupted: false,
+                },
+            }
+        }
     }
 }
 

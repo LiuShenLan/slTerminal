@@ -14,6 +14,9 @@ use std::path::PathBuf;
 /// 持久化文件大小上限（SEC-11）：1MB，超限拒绝保存
 pub(crate) const MAX_PERSIST_BYTES: usize = 1024 * 1024;
 
+/// 数据目录环境变量覆盖键（BE-01）：E2E 测试/日常数据隔离经此显式指定
+const DATA_DIR_ENV: &str = "SLTERM_DATA_DIR";
+
 /// 加载结果 DTO（BE-14/D11）：`{ data, corrupted }`——前端据此区分
 /// 「无数据」（corrupted=false）与「配置损坏已回退默认值」（corrupted=true，
 /// 含 .bak 兜底命中——数据来自备份同样视为损坏态）。
@@ -76,6 +79,11 @@ pub(crate) fn app_data_dir() -> Result<PathBuf, AppError> {
         if let Some(dir) = APP_DATA_DIR_OVERRIDE.lock().unwrap().clone() {
             return Ok(dir);
         }
+    }
+    // E2E 隔离：环境变量显式指定数据目录（空串视为未设置）
+    // 优先级语义：测试 guard（cfg(test)，生产零编译）> 环境变量 > exe 同级推导
+    if let Some(dir) = std::env::var_os(DATA_DIR_ENV).filter(|v| !v.is_empty()) {
+        return Ok(PathBuf::from(dir));
     }
     resolve_app_data_dir(std::env::current_exe())
 }
@@ -166,6 +174,50 @@ mod tests {
             app_data_dir().unwrap(),
             dir.path(),
             "守卫应覆盖 app_data_dir 返回值"
+        );
+    }
+
+    // ── BE-01: SLTERM_DATA_DIR 环境变量覆盖（E2E/日常数据隔离） ──
+    // 优先级语义：测试 guard > 环境变量 > exe 同级推导；每例结束 remove_var
+    // 清理（L1 强制 --test-threads=1 无跨用例竞态）。
+
+    /// ① SLTERM_DATA_DIR 生效：返回环境变量显式指定的目录
+    #[test]
+    fn app_data_dir_honors_env_override() {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var(DATA_DIR_ENV, dir.path());
+        let result = app_data_dir();
+        std::env::remove_var(DATA_DIR_ENV);
+        assert_eq!(result.unwrap(), dir.path(), "环境变量指定目录应生效");
+    }
+
+    /// ② 空串视为未设置：忽略并回落 exe 同级推导
+    #[test]
+    fn app_data_dir_ignores_empty_env() {
+        std::env::set_var(DATA_DIR_ENV, "");
+        let result = app_data_dir();
+        std::env::remove_var(DATA_DIR_ENV);
+        let exe_dir = std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        assert_eq!(result.unwrap(), exe_dir, "空串应忽略并回落 exe 同级推导");
+    }
+
+    /// ③ 测试 guard 优先于 env：guard 与 env 同设时返回 guard 值
+    #[test]
+    fn app_data_dir_guard_beats_env() {
+        let guard_dir = tempfile::tempdir().unwrap();
+        let env_dir = tempfile::tempdir().unwrap();
+        std::env::set_var(DATA_DIR_ENV, env_dir.path());
+        let _guard = AppDataDirGuard::set(guard_dir.path());
+        let result = app_data_dir();
+        std::env::remove_var(DATA_DIR_ENV);
+        assert_eq!(
+            result.unwrap(),
+            guard_dir.path(),
+            "测试 guard 应优先于环境变量"
         );
     }
 
