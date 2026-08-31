@@ -21,3 +21,4 @@
 4. `npm test`
 5. `cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1`
 6. （环境豁免，2026-08-31 登记）命令 5 预期 exit 127：本机 rustc 1.94~1.96 下测试二进制链接 tauri 栈代码后 0xC0000139 启动崩溃（Windows 加载器边界 bug，见 .claude/test-inventory.md 豁免表）；测试类断言以「测试存在性 grep + `cargo check --tests` 编译级 + clippy」为兜底。
+7. （跨 Stage 中间态，2026-08-31 登记）命令 1 tsc 预期失败：`src/panels/settings/pages/PlanBalancePage.tsx` 引用已移除的 `setPlanBalanceInterval`（FE-02 删导出），该文件是 Stage 04（FE-07）git rm 对象——tsc 在 Stage 04 删除后收敛；本 Stage 判定以「除 PlanBalancePage.tsx 及其级联错误（TS7006）外零错误」为准，不判 not_fixed。

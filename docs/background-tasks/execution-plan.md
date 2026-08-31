@@ -41,7 +41,7 @@ Stage 05 补充说明：e2e-tests/ 不在根 tsconfig include（include = src + 
 
 | Stage | 状态 | 全量测试 | verify | commit |
 |---|---|---|---|---|
-| 01 后端骨架 | 未开始 | - | - | - |
+| 01 后端骨架 | 完成 | 4/5 全过 + cargo test 环境豁免（0xC0000139 登记，cargo check --tests 编译级兜底） | 全过（BE-01~05 代码项全 fixed；测试存在性 grep 证实） | cbb48f8 |
 | 02 前端基建 | 未开始 | - | - | - |
 | 03 消费改造 | 未开始 | - | - | - |
 | 04 设置中心页 | 未开始 | - | - | - |

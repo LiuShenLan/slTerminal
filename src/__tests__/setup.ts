@@ -117,6 +117,17 @@ vi.mock("../ipc/planBalance", () => ({
   onPlanBalanceUpdated: () => () => {},
 }));
 
+// 全局 mock：ipc/backgroundTasks（F12——清单返回两任务默认配置，set resolve []，事件订阅 no-op）
+// 下游 nav-tree 等测试经真实 useAgentHistory → 调度器 activate 会触达 listBackgroundTasks
+vi.mock("../ipc/backgroundTasks", () => ({
+  listBackgroundTasks: vi.fn().mockResolvedValue([
+    { taskId: "planBalance", title: "套餐余量查询", enabled: true, intervalSec: 10, intervalMin: 10, intervalMax: 3600 },
+    { taskId: "sessionRefresh", title: "会话历史刷新", enabled: true, intervalSec: 3, intervalMin: 2, intervalMax: 300 },
+  ]),
+  setBackgroundTaskConfig: vi.fn().mockResolvedValue([]),
+  onBackgroundTasksUpdated: vi.fn(() => () => {}),
+}));
+
 // 全局 mock：@tauri-apps/api/window（App useEffect 中 getCurrentWindow/onFocusChanged 依赖）
 vi.mock("@tauri-apps/api/window", () => {
   const UserAttentionType = { Critical: 1, Informational: 2 } as const;

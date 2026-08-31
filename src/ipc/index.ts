@@ -15,6 +15,7 @@ export * as hooksConfig from "./hooksConfig";
 export * as agentHistory from "./agentHistory";
 export * as notification from "./notification";
 export * as planBalance from "./planBalance";
+export * as backgroundTasks from "./backgroundTasks";
 
 /** 测试专用——验证 IPC 链路（仅 src/__tests__/ipc-ping.test.ts 与 ipc-contract.test.ts 消费，生产零消费，FE-35 保留） */
 export async function ping(): Promise<string> {
