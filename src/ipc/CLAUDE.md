@@ -51,7 +51,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `getPlanBalance`：挂载时拉取当前快照（后端尚未有快照 → 空数组）。
 - `refreshPlanBalance`：执行一轮拉取，**恒 Ok 返回最新快照**——单来源失败按规格 §6 保留旧值不整体 Err，仅后端 spawn_blocking join 失败才 Err（D6）。
 - `onPlanBalanceUpdated`：订阅 `plan-balance-updated` 事件；后端快照**有变化才推送**（整体 PartialEq 比较，含 updated_at——成功查询必刷新 updated_at 即视为变化；失败保留旧值不推送，D5）。
-- `setPlanBalanceInterval(intervalSec)`（F11）：**设置轮询间隔写通道**——后端 `plan_balance_set_interval` 校验 10–3600（越界 → Validation 拒绝且磁盘/内存均不变）→ 复用 settings 写通道落盘 → 更新内存值（POLL_INTERVAL_SEC，poller 每轮读取，改值后下一轮即按新间隔）。设置页提交成功后再 `refreshPlanBalance()` 作生效反馈闭环；Err → toast + 输入框保留用户值。
+- **`setPlanBalanceInterval` 已退役（F12）**：轮询间隔配置改走 `backgroundTasks.setBackgroundTaskConfig`（planBalance 任务），前端 wrapper 与设置页频率入口一并删除。
+
+### backgroundTasks 命令（F12）
+
+- `listBackgroundTasks`：**读通道**——`background_tasks_list`（无参），返回全部任务元数据 + 当前生效配置（后端内存值）。footer（usePlanBalance）与调度器 activate、设置页挂载共用此读通道。
+- `setBackgroundTaskConfig(taskId, { enabled?, intervalSec? })`：**配置写通道**——`background_tasks_set_config`；后端校验顺序写死：taskId 白名单 → 频率越界（Validation，磁盘/内存均不变）→ 复用 settings.rs 写通道落盘（`backgroundTasks` 段子键合并）→ 更新内存 → emit 变更事件 → 返回完整清单。**只发送提供的键**（undefined 不入 payload，契约键集合精确断言依赖此行为）；enabled/intervalSec 均缺省 → 后端 Validation。
+- `onBackgroundTasksUpdated`：订阅 `background-tasks-updated` 事件——set_config 成功后后端推送完整清单（footer 与设置页的 enabled/配置感知通道；list 不 emit）。
 
 ### agent history 命令（MC-303/306）
 
@@ -93,7 +99,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 测试模式
 
-- 测试文件位于 `src/__tests__/`：`ipc-contract.test.ts`、`ipc-ping.test.ts`、`app-error.test.ts`、`clipboard-guard.test.ts`、`ipc-agent-hooks-contract.test.ts`、`ipc-hooks-config-contract.test.ts`、`ipc-agent-history-contract.test.ts`、`ipc-window-contract.test.ts`、`notification.test.ts`。
+- 测试文件位于 `src/__tests__/`：`ipc-contract.test.ts`、`ipc-ping.test.ts`、`app-error.test.ts`、`clipboard-guard.test.ts`、`ipc-agent-hooks-contract.test.ts`、`ipc-hooks-config-contract.test.ts`、`ipc-agent-history-contract.test.ts`、`ipc-plan-balance-contract.test.ts`、`ipc-background-tasks-contract.test.ts`、`ipc-window-contract.test.ts`、`notification.test.ts`。
 - **契约四维验证**：命令名、参数结构、正常返回、异常传播。共享工厂 `helpers/ipc-contract.ts` 以声明式 schema 驱动。
 - **Channel 绑定验证**：PTY spawn / fs read 用 `assertArgs` 断言 `Channel.onmessage` 绑定到传入回调。
 - **Uint8Array 序列化验证**：`pty.write()` 用例断言参数为 `number[]` 而非 `Uint8Array`。

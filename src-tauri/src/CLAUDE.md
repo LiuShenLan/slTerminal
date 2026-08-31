@@ -19,7 +19,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **浅合并**：`save_settings` 只写前端传入的顶层 slice，后端浅合并 top-level 键，各 store 各写各的互不覆盖；
 - **`SETTINGS_SAVE_LOCK`**：前端三 store 启动时几乎同时触发 debounced 保存，`spawn_blocking` 闭包持锁串行化读-合并-写，避免 Windows persist rename 时句柄占用导致 PermissionDenied（SPE-06）；
-- **SEC-11**：顶层键白名单（数组仍 5 项）`["fontSize", "keybindings", "sideBar", "colorScheme", plan_balance::SETTINGS_KEY]` + 序列化后大小上限 1MB。**键名聚合决策（F11）**：前端消费型四键（fontSize/keybindings/sideBar/colorScheme）无后端模块可归，键名集中于此字面量；后端消费型域键名归域模块——`planBalance` 经 `crate::plan_balance::SETTINGS_KEY` 引用（契约断链先例：fontSize store 曾发平铺键被拒，已改段形态双侧锁死）。`planBalance` 段 = F10 轮询间隔（默认 60，越界/缺失/损坏回退 60s）；F11 起写入侧除手改文件外新增专用命令通道 `plan_balance_set_interval`（复用本模块 save_settings 写通道：白名单/浅合并/原子写/.bak/SETTINGS_SAVE_LOCK——禁止自建第二写通道）。
+- **SEC-11**：顶层键白名单（数组仍 5 项）`["fontSize", "keybindings", "sideBar", "colorScheme", background_tasks::SETTINGS_KEY]` + 序列化后大小上限 1MB。**键名聚合决策（F11）**：前端消费型四键（fontSize/keybindings/sideBar/colorScheme）无后端模块可归，键名集中于此字面量；后端消费型域键名归域模块——`backgroundTasks` 段经 `crate::background_tasks::SETTINGS_KEY` 引用（契约断链先例：fontSize store 曾发平铺键被拒，已改段形态双侧锁死）。`backgroundTasks` 段 = F12 后台定时任务配置（子键 per taskId：enabled/intervalSec）；写入侧除手改文件外专用命令通道 `background_tasks_set_config`（校验 → 读-改-写子键合并 → 本模块写通道落盘——禁止自建第二写通道）。
+- **`save_settings_blocking` 同步写通道（F12 抽取）**：校验（白名单 + 大小上限）→ 浅合并 → 原子写 + .bak，供 async `save_settings` 命令与 `background_tasks::set_config_core`（spawn_blocking 内，跨 await 持 MutexGuard 不可行）共用——全仓唯一 settings.json 写通道，禁止另建。
 
 ### projects.rs — exe 同级 JSON 绕过沙箱
 

@@ -17,6 +17,7 @@ DTO 类型定义层（硬约束 #4）。`src/types/` ↔ Rust 模块 DTO 一一�
 - `agent.ts` ↔ `src-tauri/src/hooks/`
 - `hooksConfig.ts` ↔ `src-tauri/src/hooks/config.rs`
 - `agentHistory.ts` ↔ `src-tauri/src/agent_history/mod.rs`
+- `backgroundTasks.ts` ↔ `src-tauri/src/background_tasks/mod.rs`
 
 字段级映射见源文件对照；关键语义收窄：
 
@@ -24,6 +25,7 @@ DTO 类型定义层（硬约束 #4）。`src/types/` ↔ Rust 模块 DTO 一一�
 - `AgentEventPayload` 含可选 `cliId` / `usageSourcePath` / `usedPercentage`（ContextUsage 官方口径）。
 - `AgentHistorySession` 八字段含 `cliId`（provider 打标）。
 - `AgentHistoryTitle` 两字段 `title` / `titleSource`，`TitleSource` 为开放字符串。
+- `BackgroundTaskInfo` 六键契约（taskId/title/enabled/intervalSec/intervalMin/intervalMax）**无 default 字段**——默认值单点在后端注册表，前端行内提示只写范围不写默认值；`BACKGROUND_TASK_IDS` 值集 `["planBalance", "sessionRefresh"]` 与后端 registry TASKS 键集双侧字面量测试锁死（硬约束 #4）。
 
 ### 命名与序列化
 

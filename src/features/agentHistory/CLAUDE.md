@@ -23,14 +23,15 @@ Agent 历史会话查询与恢复（CLI 无关聚合，MC-310 泛化）。**宿�
 
 导航树历史行 = 单行 30px：`StatusDot` + CLI logo 14px（按 `session.cliId` 查 `profile.iconSrc`，未注册不报错）+ 标题 + 右侧相对时间。prompt 预览 → 原生 `title` tooltip（双行式行2 退役）。
 
-### 数据流与刷新时机（FE-04/FE-19/NAV-10）
+### 数据流与刷新时机（FE-04/FE-19/NAV-10，F12 订阅化）
 
-`useAgentHistory` 状态机 `idle | loading | ready | error`（初始 idle 未扫描），消费方 = `useNavTree`：
+`useAgentHistory` 状态机 `idle | loading | ready | error`（初始 idle 未扫描）——**sessions/state 真值源已上移 `backgroundTaskScheduler`（F12）**：本 hook 只订阅 `sessionRefresh` 任务快照（`TaskSnapshot<AgentHistorySession[]>`），状态机语义不变：
 
-- **scan(force?) 触发时机**：导航树挂载即扫描；展开不再重复 scan；手动刷新钮 = `scan(true)` 强制重扫。
-- **单 CLI 扫描**：`scan(force?)` 调 `scanAgentHistory(CLAUDE_CLI_ID, force)`——后端 provider REGISTRY 当前仅 claude，单 cliId 扫描即全量；第二后端 provider 接入时重评估。
-- **BE-19 缓存语义**：后端按 `(目录 mtime, 文件数)` 进程内缓存——目录内会话文件增删不影响根键，由前端显式刷新（force=true）兜底。
-- `removeLocal` 纯本地即时刷新，不触发重扫。
+- **触发时机**：首个订阅者出现 → 立即执行一轮（接管「挂载即扫」语义）+ 按配置频率（`backgroundTasks.sessionRefresh.intervalSec`）定时刷新；最后订阅者退订 → 停 interval（调度器全局单例与 UI 解耦，NavTree 卸载无碍，ADR-0001）。
+- **手动刷新** = `triggerNow()`（刷新钮）——与 tick 共用同一扫描执行体（规格 §1 单一执行体），仅失败处理策略不同（manual 失败置 error）。
+- **force 恒 true**：扫描执行体（`sessionRefreshTask.ts`）遍历全部已注册 history provider 逐个 `scanAgentHistory(cliId, true)` 聚合——后端 `(目录 mtime, 文件数)` 缓存对进行中会话不敏感，手动与定时必须同一口径绕过缓存（空结果永久命中场景必须 bypass）。
+- **scan 已退役**：`scan(force?)` 从 hook 返回面移除（无参导出早于 F12 已删），历史引用全部改 `triggerNow()`。
+- `removeLocal` 经调度器 `applyLocal` 透传（删除会话后本地移除列表项，不重扫）。
 - `activeStatuses` 经 `TerminalRegistry.subscribe` 实时跟随。
 - `rootPath` 推导：activePageId → 所属 project；rootPath 变化不自动重扫。
 
@@ -92,7 +93,7 @@ Agent 历史会话查询与恢复（CLI 无关聚合，MC-310 泛化）。**宿�
 L2 测试位于 `src/__tests__/`：`agent-history-*.test.ts(x)` + `ipc-agent-history-contract.test.ts`。
 
 - `agent-history-model.test.ts`：纯函数全分支（含复合键构造/解析、四态派生）。
-- `agent-history-hook.test.tsx`：状态机、scan、removeLocal、subscribe 驱动 activeStatuses。
+- `agent-history-hook.test.tsx`：状态机、订阅首轮自动执行（挂载即扫语义）、triggerNow、removeLocal、subscribe 驱动 activeStatuses。
 - `agent-history-restore.test.ts`：四步编排、可取消、防重入、失败 toast、无 history 能力防御。
 - `agent-history-action-dialog.test.tsx`：SessionActionDialog 弹窗行为。
 - `ipc-agent-history-contract.test.ts`：两命令 × 四维契约验证，经 `helpers/ipc-contract.ts` 共享工厂。

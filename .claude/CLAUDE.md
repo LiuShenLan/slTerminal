@@ -126,6 +126,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | src/features/settingsCenter | ../src/features/settingsCenter/CLAUDE.md |
 | src/features/cliProfiles | ../src/features/cliProfiles/CLAUDE.md |
 | src/features/agentHistory | ../src/features/agentHistory/CLAUDE.md |
+| src/features/backgroundTasks | ../src/features/backgroundTasks/CLAUDE.md |
 | src/__tests__ | ../src/__tests__/CLAUDE.md |
 | src/panelRegistry.ts（共享配置层，硬约束 #5） | — |
 | test/（L3 headless） | — |
@@ -136,6 +137,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | src-tauri/src/plan_balance | ../src-tauri/src/plan_balance/CLAUDE.md |
 | src-tauri/src/hooks | ../src-tauri/src/hooks/CLAUDE.md |
 | src-tauri/src/agent_history | ../src-tauri/src/agent_history/CLAUDE.md |
+| src-tauri/src/background_tasks | ../src-tauri/src/background_tasks/CLAUDE.md |
 | src-tauri/src 顶层单文件模块（lib/app_dir/settings/projects/state/error） | ../src-tauri/src/CLAUDE.md |
 | e2e-tests | ../e2e-tests/CLAUDE.md |
 

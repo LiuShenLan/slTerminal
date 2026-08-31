@@ -2,15 +2,15 @@
 
 > **本文档是项目用例数唯一真值源。** 所有 CLAUDE.md、README、CI 配置中引用的用例数均以此文件为准。更新测试后必须同步本文档。
 
-全量 **3865** 用例（Rust 818 + 前端 2854 + L3 142 + E2E 51），2026-08-30 实跑确认。
+全量 **3905** 用例（Rust 827 + 前端 2879 + L3 142 + E2E 57），2026-08-31 实跑确认。
 
 > **登记纪律（TQ-CI-01）**：改测试后同步本文件——L1 以 `cargo test` 实跑总数 + `grep -c '#[test]'` 双核对；L2 以 `npm test` 实跑（Vitest 报告）为准；段小计 = 段内行级用例数之和（逐段核对 it.each/工厂展开）。三处（表头/段头/段小计）必须一致。
 
 > **计数口径**：
-> - L1 以 `grep -c '#[test]'` 统计的 `#[test]` 属性数为准（39 文件 818）。
-> - L2 以 `npm test` 实跑（Vitest 报告）为准，it.each/describeIpcContract 工厂按展开后计入（167 文件 2854）。
+> - L1 以 `grep -c '#[test]'` 统计的 `#[test]` 属性数为准（41 文件 827；2026-08-31 实跑 `cargo test --lib` 711 例 + 集成测试 116 例双核对）。
+> - L2 以 `npm test` 实跑（Vitest 报告）为准，it.each/describeIpcContract 工厂按展开后计入（170 文件 2879）。
 > - L3 以 `npm run test:l3` 实跑为准（8 文件 142）。
-> - L4 以 spec 内 `it(`/`it.skip(` 计数为准（10 spec，51 用例，49 active + 2 skip）。
+> - L4 以 spec 内 `it(`/`it.skip(` 计数为准（11 spec，57 用例，55 active + 2 skip）。
 > - L2 与 L3 独立运行：`vitest.config.ts` include 仅 `src/__tests__/**`，L3 走 `vitest.l3.config.ts`。
 
 ## 既定豁免清单（DOC-01）
@@ -35,7 +35,9 @@
 | plan_balance 真实 HTTP 查询（ureq fetch）与 tokio 轮询任务本体（含动态间隔内存读取 POLL_INTERVAL_SEC 与 set_interval 落盘/内存一致链，F11 扩注） | 真实外部 API 依赖 + Tauri 运行时（规格 §3 不做 L4） | 解析与状态机 L1 全覆盖（罐装 JSON/参数化编排 + 间隔内存默认值/四维 set_interval 直调用例）+ L2 UI 四场景 + L4 频率页真实后端落盘（settings.e2e.ts ④⑤）+ 人工实测（真实账号一轮） | F10/F11 |
 | win11/win10 真实终端 conda 激活实测（profile 加载链路 + conda 钩子 + prompt 包装链） | 依赖真实 conda/miniforge 环境与交互会话，CI 无此环境 | L1 B17 参数守卫（`test_pwsh_args_no_noprofile_b17`）+ 双系统 debug build 人工实测 | B17 |
 | settings.json corrupted 警示条（L4） | 写坏 settings.json 需沙箱外写文件（E2E 无命令通道），真实损坏无法在 E2E 会话内构造 | L2 覆盖（`settings-panel.test.tsx` loadSettings mock 渲染/关闭）+ 人工实测（手改文件损坏重启） | SC-E2E-02 |
-| `cargo test` 门禁（F12 起，含 background_tasks 引用的测试二进制） | rustc 1.94~1.96 环境级加载器 bug（2026-08-31 实证，非代码缺陷）：测试二进制一旦链接 tauri 栈代码（TaskDef 静态含 `fn(tauri::AppHandle)` 字段被测试引用即触发）→ lld 布局触发 Windows 加载器边界 → 进程启动即 0xC0000139 零输出崩溃。HEAD 基线无此形态故不崩；opt-level 0/1/2/3、codegen-units、debuginfo=0、link.exe、非增量、旧工具链 1.94/1.95 全组合实测均复现；`cargo check --tests` 编译级全绿 | `cargo check --tests`（编译级）+ `cargo clippy --tests` + 测试存在性 grep 断言 + verify agent 逐条核实 + 人工实测；rustc 升级后复跑解除豁免 | 2026-08-31 实证登记 |
+| ~~`cargo test` 门禁（F12 起）~~ **已修复（2026-08-31 当日翻案）** | 初判环境 bug；当日定位真根因：测试二进制无 manifest → SxS 未激活 comctl32 v6 → 系统解析到 v5 → tauri 栈静态导入的 `TaskDialogIndirect`（v6 导出）缺入口 → 0xC0000139 零输出崩溃（与 TQ-COV-06 8-23 预防性登记同因，彼时 `rustc-link-arg-tests` 对默认 lib test 目标不生效故从未真正激活）。修复：Cargo.toml `[lib] test = false` + 显式 `[[test]] lib_tests`（path = src/lib.rs）——使 `cargo:rustc-link-arg-tests`（存量 build.rs）真正作用于 lib 单测目标，manifest 嵌入生效 | 全量 `cargo test -- --test-threads=1` 实测 827 例全绿（711 lib + 116 集成，2026-08-31） | 2026-08-31 实证登记 → 当日翻案 |
+| background_tasks spawn/emit 包装层（`spawn_poller` 循环本体与 `background_tasks_set_config` 命令包装层的 emit/重 spawn 分支） | 需 `AppHandle` 与 tauri runtime（async_runtime spawn/事件发射），L1 无法直测；可测部分（`set_config_core` 校验→落盘→内存链、registry 解析钳制）已 L1 全覆盖 | L4 勾选启停端到端（`background-tasks.e2e.ts` C）+ 人工实测（运行中改配置观察 poller 生效） | BE-02 |
+| tick 失败静默 E2E 豁免（E2E-03 用例 G） | tick 失败需后端扫描故障注入通道，E2E 沙箱内无可控注入手段 | 调度器 L2 用例（`background-tasks-scheduler.test.ts` 失败处理：tick 失败快照不变/manual 失败置 error）+ 人工观察 | E2E-03 |
 
 > 原豁免表中 `FileWatcher::start`/`notify_watch` 与 `claude_history` 命令包装两项已按 D6 从豁免重分类为补测，不再列入豁免表。  
 > **SEC-17 豁免已撤销（TQ-COV-05 翻案）**：`tracing::warn!(target: "audit")` 已由 `tracing-test` 断言锁死，豁免行删除。
@@ -58,7 +60,7 @@
 | ⑤ | L2 | **E2E helper 行为契约**——验证 `__slterm_e2e_createProject` 等 helper 的契约，非真实 App 初始化逻辑 | 13 P-14 |
 | ⑥ | L2 | **浅层组件定位**——`editor.test.tsx` mock `useCodeMirror`，定位为组件集成契约测试，真实编辑器行为由 `use-code-mirror.test.ts` 等覆盖 | 07 G1/G2 |
 
-## L1 — Rust 单元/集成测试（39 文件 / 818 用例）
+## L1 — Rust 单元/集成测试（41 文件 / 827 用例）
 
 运行：`cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1`
 
@@ -87,7 +89,7 @@
 | `src-tauri/src/hooks/claude/config.rs` | 51 | Layer 枚举/hooks 子树形态/语义校验/审计日志；BE-18/SEC-05/SEC-17/TQ-COV-05 |
 | `src-tauri/src/hooks/claude/mod.rs` | 2 | HomeDirGuard/B15 reinject 路径正确性 |
 | `src-tauri/src/app_dir.rs` | 10 | 应用数据目录解析/LoadResult 形态/测试守卫/SLTERM_DATA_DIR env 覆盖三例；BE-14/BE-16/BE-01 |
-| `src-tauri/src/settings.rs` | 26 | 设置持久化/浅合并/并发/大小校验/planBalance 键放行；SPE-01/SPE-05/SPE-06/BE-14/SEC-11/F10 |
+| `src-tauri/src/settings.rs` | 27 | 设置持久化/浅合并/并发/大小校验/backgroundTasks 键放行 + planBalance 键拒绝（save_rejects_plan_balance_key，旧键退役防回归）；SPE-01/SPE-05/SPE-06/BE-14/SEC-11/F10/F12 |
 | `src-tauri/src/projects.rs` | 21 | 项目数据持久化/ID/路径校验；SPE-02/BE-14/SEC-11 |
 | `src-tauri/src/error.rs` | 9 | AppError 序列化/Display/From/ConfigParse；SPE-03/BE-13/BE-15 |
 | `src-tauri/src/lib.rs` | 4 | ping/build number/panic hook 写日志；TQ-COV-01 |
@@ -97,7 +99,9 @@
 | `src-tauri/src/agent_history/mod.rs` | 21 | DTO serde/聚合/命令包装/force 通道；MC-302/303/304/BE-19 |
 | `src-tauri/src/agent_history/claude/mod.rs` | 4 | TitleSource serde/ScanRootGuard |
 | `src-tauri/src/agent_history/provider.rs` | 2 | CliHistoryProvider trait/注册表；MC-303/304 |
-| `src-tauri/src/plan_balance/mod.rs` | 24 | DTO serde 键集合/merge_slot/poll_once 编排/轮询间隔/命令核心/set_interval 四维/键名常量；F10/F11 |
+| `src-tauri/src/plan_balance/mod.rs` | 14 | DTO serde 键集合/merge_slot/poll_once 编排/命令核心/`poll_once_executor` 执行体；F10/F11（轮询间隔与 set_interval 通用件已上提 background_tasks，F12 删 10 例） |
+| `src-tauri/src/background_tasks/mod.rs` | 9 | DTO serde 键集合/命令核心（list/set_config 校验→落盘→内存一致链）/子键合并不互踩/未知任务/空提交拒绝；F12/BE-02 |
+| `src-tauri/src/background_tasks/registry.rs` | 9 | TASKS 键集与边界表锁死/RUNTIMES 等长守卫/find 命中与缺失/配置读取钳制六分支；F12/BE-01 |
 | `src-tauri/src/plan_balance/source.rs` | 8 | resolve_env 纯函数/命令层 home 注入；F10 |
 | `src-tauri/src/plan_balance/query.rs` | 9 | URL 归一化/匹配查找/注册表序；F10 |
 | `src-tauri/src/plan_balance/deepseek.rs` | 6 | 响应解析纯函数（罐装 JSON）；F10 |
@@ -114,11 +118,11 @@
 
 本地开发机（已开开发者模式）为真实覆盖来源；CI runner 未开权限时上述分支覆盖记为「不确定」。
 
-## L2 — 前端单元/集成测试（167 文件 / 2854 用例）
+## L2 — 前端单元/集成测试（170 文件 / 2879 用例）
 
 运行：`npm test`
 
-### IPC 层（9 文件 / 187 用例）
+### IPC 层（10 文件 / 196 用例）
 
 | 文件 | 用例 | 覆盖要点 |
 |------|------|---------|
@@ -130,7 +134,8 @@
 | `src/__tests__/ipc-ping.test.ts` | 2 | `ping()` wrapper |
 | `src/__tests__/notification.test.ts` | 9 | toast 通知静默/权限；IHE-02 |
 | `src/__tests__/app-error.test.ts` | 26 | `parseAppError`/`getErrorMessage` 全变体；FE-02/BE-15 |
-| `src/__tests__/ipc-plan-balance-contract.test.ts` | 16 | planBalance 三命令四维契约（含 setPlanBalanceInterval payload 键集合）/onPlanBalanceUpdated 解包/DTO 键集合；F10/F11 |
+| `src/__tests__/ipc-plan-balance-contract.test.ts` | 12 | planBalance 两命令（get/refresh）四维契约/onPlanBalanceUpdated 解包；F10（setPlanBalanceInterval 四维已删，F12） |
+| `src/__tests__/ipc-background-tasks-contract.test.ts` | 13 | backgroundTasks 两命令四维契约（list 无参 / set 键集合精确两形态）/onBackgroundTasksUpdated 解包/BackgroundTaskInfo 六键集合/BACKGROUND_TASK_IDS 值集锁死；F12/FE-02 |
 
 ### 终端面板（17 文件 / 282 用例）
 
@@ -238,7 +243,7 @@
 | `src/__tests__/explorer-virtualization.test.tsx` | 8 | FileTree 虚拟化/滚动跟随；FE-30/FE-40/TQ-B-01 |
 | `src/__tests__/explorer-keyboard-panel.test.tsx` | 6 | ExplorerPanel 键盘动作链路；TQ-COV-09 |
 
-### 导航树（5 文件 / 105 用例）
+### 导航树（5 文件 / 108 用例）
 
 | 文件 | 用例 | 覆盖要点 |
 |------|------|---------|
@@ -246,7 +251,7 @@
 | `src/__tests__/nav-history-row.test.tsx` | 16 | 历史行渲染/状态/logo/hover；FE-25/MC-311/UI-501 |
 | `src/__tests__/nav-tree-history.test.tsx` | 11 | 历史折叠节点/归属/恢复；NAV-03/08/FE-16/FE-19 |
 | `src/__tests__/plan-balance-model.test.ts` | 22 | 货币符号/logo 路径/重置时间格式化/行文案四场景/tooltip；F10 |
-| `src/__tests__/plan-balance-footer.test.tsx` | 11 | footer 四场景渲染/隐藏态/初始拉取/事件订阅/点击节流/logo onError/tooltip；F10 |
+| `src/__tests__/plan-balance-footer.test.tsx` | 14 | footer 四场景渲染/隐藏态/初始拉取/事件订阅/点击节流/logo onError/tooltip/enabled=false 整块隐藏/事件推送启停重显/list 失败按启用；F10/F12 |
 
 ### 侧栏视图（6 文件 / 156 用例）
 
@@ -286,7 +291,7 @@
 | `src/__tests__/hooks-config-sync.test.tsx` | 15 | 双模式同步/user 层二次确认；MC-220/KZ-4/FE-25/SEC-05 |
 | `src/__tests__/statusline-bridge-behavior.test.ts` | 10 | statusline 桥接脚本行为；B11/B16 |
 
-### 设置中心（10 文件 / 91 用例）
+### 设置中心（9 文件 / 86 用例）
 
 | 文件 | 用例 | 覆盖要点 |
 |------|------|---------|
@@ -295,7 +300,7 @@
 | `src/__tests__/open-settings.test.ts` | 6 | 无项目 toast 且不切页/活跃项目优先/兜底第一个项目/切页先于开面板；SC-FE-02 |
 | `src/__tests__/open-settings-panel.test.ts` | 7 | addPanel 参数精确/单例 focus 不新建/深链 selectedPage/5s 超时降级；SC-FE-02 |
 | `src/__tests__/settings-panel.test.tsx` | 14 | 导航组序/选中渲染/切换 persist/corrupted 警示条/pageParams 透传/saveLayout 落盘/不可变合并/空态；SC-FE-03/TE-06 |
-| `src/__tests__/settings-plan-balance.test.tsx` | 16 | 频率页显示回退/合法提交调命令+refresh/非法行内红字/Err toast+保留输入；SC-FE-04 |
+| `src/__tests__/settings-background-tasks.test.tsx` | 11 | 通用任务行两任务渲染/勾选提交（planBalance 调 set + refresh 闭环、sessionRefresh 调 applyConfig）/频率非法行内红字不提交/合法提交规范化回显/set reject toast+保留输入；F12/FE-07 |
 | `src/__tests__/settings-dirty-registry.test.ts` | 5 | set/is/clear 真值源；SC-FE-07 |
 | `src/__tests__/settings-panel-dirty.test.tsx` | 6 | 切页 confirm 确认/取消/非 dirty 直切/圆点显隐；SC-FE-07 |
 | `src/__tests__/settings-keybindings.test.tsx` | 20 | 分组渲染/override 高亮/未绑定占位/录制 Esc/Backspace 解绑/保留键拒绝/冲突放行/卸载清 suspended；SC-FE-09 |
@@ -342,14 +347,16 @@
 | `src/__tests__/agent-status-hook.test.ts` | 49 | useAgentStatus 行建模/ContextUsage/标题订阅；F5/MC-205/313/NAH-01/08/ZQ-2/3 |
 | `src/__tests__/notifications.test.ts` | 49 | 去重缓存/通知调度/窗口失焦；NAH-04/MC-420/ZQ-2 |
 
-### Agent 历史会话（4 文件 / 83 用例）
+### Agent 历史会话（6 文件 / 101 用例）
 
 | 文件 | 用例 | 覆盖要点 |
 |------|------|---------|
 | `src/__tests__/agent-history-model.test.ts` | 47 | 纯函数/复合键/keyOf；MC-313/ZQ-1/7/NAH-01 |
-| `src/__tests__/agent-history-hook.test.tsx` | 15 | useAgentHistory 状态机/scan generation；MC-313/NAH-08 |
+| `src/__tests__/agent-history-hook.test.tsx` | 12 | useAgentHistory 状态机/订阅首轮自动执行（挂载即扫语义）/triggerNow/manual 失败置 error/removeLocal 不重扫/rootPath 推导；MC-313/NAH-08/F12 |
 | `src/__tests__/agent-history-restore.test.ts` | 13 | 四步恢复/防重入/abort；F7/NAH-07/ZQ-4/MC-315/FE-27/48 |
 | `src/__tests__/agent-history-action-dialog.test.tsx` | 8 | SessionActionDialog；NAH-11/FE-12 |
+| `src/__tests__/background-tasks-scheduler.test.ts` | 16 | 注册表契约/subscribe 激活（读配置+立即一轮）/订阅者计数启停/tick 防重入/失败策略（tick 静默 vs manual error）/applyConfig 运行期生效与无订阅者不空转/applyLocal；F12/FE-03 |
+| `src/__tests__/background-tasks-session-refresh.test.ts` | 5 | 扫描执行体：多 provider 聚合/无 history 能力跳过/部分失败隔离（旧数据保留）/全部失败按触发来源/force 恒 true；F12/FE-03 |
 
 ### 启动/关闭（5 文件 / 40 用例）
 
@@ -408,7 +415,7 @@
 | `test/terminal/shortcut-dispatch.test.ts` | 4 | 生产按键分发链路（TQ-E-02） |
 | `test/terminal/negative-ansi.test.ts` | 9 | 反向/异常 ANSI（E2E-14） |
 
-## L4 — E2E 端到端测试（10 spec / 51 用例，49 active + 2 skip）
+## L4 — E2E 端到端测试（11 spec / 57 用例，55 active + 2 skip）
 
 运行：`npm run e2e`（= `npm run build:e2e` + `npm run wdio`）  
 技术栈：WDIO + `@wdio/tauri-service` 1.1.0 + embedded driver；specs 通配 `./*.e2e.ts`，单 worker 顺序执行。
@@ -426,7 +433,8 @@
 | `sidebar.e2e.ts` | 2 | 2 active | 侧栏视图开关/跨区状态机 |
 | `commit.e2e.ts` | 2 | 2 active | 变更列表/双击 modified 打开 diff |
 | `mockcli.e2e.ts` | 3 | 3 active | mock profile 冒烟/CS-3 agent-event/hub 分派 |
-| `settings.e2e.ts` | 11 | 11 active | 配置钮打开/单例/切页持久化/频率页真实后端落盘/非法不落盘/录制落盘/切项目自动关闭/同项目保留/hooks 页冒烟/dirty 切页守卫/× 关闭 dirty 守卫 |
+| `settings.e2e.ts` | 11 | 11 active | 配置钮打开/单例/切页持久化/「后台定时任务」页真实后端落盘/非法不落盘/录制落盘/切项目自动关闭/同项目保留/hooks 页冒烟/dirty 切页守卫/× 关闭 dirty 守卫 |
+| `background-tasks.e2e.ts` | 6 | 6 active | 页渲染两行齐备/改频率端到端落盘/footer 勾选启停联动（事件驱动隐藏与重显）/非法频率行内红字不落盘/定时刷新自动出现新会话（真实 tick）/禁用 sessionRefresh 不自动出现+启用立即出现 |
 
 ### 用户目录隔离机制（FIX-TE-04 + E2E-05 扩展）
 
@@ -452,3 +460,4 @@ embedded WDIO 无法投递 OS 级按键；所有键盘用例改用页面内 disp
 - 2026-08-29：全量 **3746**（Rust 809 + 前端 2755 + L3 142 + E2E 40）。B17 新增 `test_pwsh_args_no_noprofile_b17` 1 例（shell.rs 32→33），kimi.rs 解析实测修正（+14）已于同日校准。
 - 2026-08-30：全量 **3846**（Rust 815 + 前端 2839 + L3 142 + E2E 50）。F11 设置中心：plan_balance/mod.rs +6（set_interval 四维/内存默认/键名常量）；L2 +9 文件 -2 文件净 +7 文件 +84（设置中心 9 文件 88 例，settings-hooks-page 替代 hooks-config-panel 37，open-settings 两文件取代 open-hooks-config 两文件，ipc-plan-balance-contract +4、workspace-defaulttab +4、shortcuts +2、layout-serde +1、app +2）；L4 +settings.e2e.ts 10 例。
 - 2026-08-30（实跑确认）：全量 **3865**（Rust 818 + 前端 2854 + L3 142 + E2E 51）。settings-center-fixes 修复链实跑增量：L1 +3（BE-01 app_dir 三例）；L2 +15（FE-01 projects +5、FE-02 startup-restore 净 +3、FE-03 autoclose +1、TE-04 settings-pages-registration 新文件 +1、TE-05 hooks-page +1、TE-06 settings-panel +1、FE-04 适配 0、错误页标题栏 startup-restore +2）；L4 +1（TE-03 settings.e2e.ts 用例⑪ × 关闭 dirty 守卫）。
+- 2026-08-31（实跑确认）：全量 **3905**（Rust 827 + 前端 2879 + L3 142 + E2E 57）。F12 后台定时任务：L1 +9（background_tasks 新模块 mod.rs 9 + registry.rs 9，settings.rs 26→27 净 +1，plan_balance/mod.rs 24→14 删 10——`cargo test --lib` 实跑 711 + 集成 116）；L2 +25（新文件 background-tasks-scheduler 16 + background-tasks-session-refresh 5 + ipc-background-tasks-contract 13 + settings-background-tasks 11；退役 settings-plan-balance −16；ipc-plan-balance-contract 16→12 −4；agent-history-hook 15→12 −3；plan-balance-footer 11→14 +3——`npm test` 实跑 170 文件）；L4 +6（background-tasks.e2e.ts 新 spec A–F，settings.e2e.ts 适配零增删）。

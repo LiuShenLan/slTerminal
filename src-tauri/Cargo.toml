@@ -13,6 +13,16 @@ edition = "2021"
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "slterminal_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+test = false
+# F12 环境修复（2026-08-31 实证）：lib 单测经显式 [[test]] 目标承载——
+# cargo 的 rustc-link-arg-tests 只对显式 test target 生效，默认 lib test
+# 目标收不到 → manifest 无法嵌入 → comctl32 v5 缺 TaskDialogIndirect →
+# 0xC0000139 启动崩溃。test=false + [[test]] lib_tests 等效原单测（--test
+# lib_tests 定向跑；门禁 cargo test 全量含之）。
+
+[[test]]
+name = "lib_tests"
+path = "src/lib.rs"
 
 [build-dependencies]
 tauri-build = { version = "2.6.3", features = [] }

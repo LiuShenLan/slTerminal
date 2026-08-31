@@ -29,11 +29,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 原 `isCwdUnderProject` 纯函数 O(N×M) 逐会话前缀匹配已删除。现 `rootPathIndex` Map 规范化 rootPath → projectId 一次建表，`projectIdForCwd` 沿 cwd 逐级上溯查表，最深前缀命中（嵌套项目归子项）。`useMemo` 依赖精确化——只依赖 sessions + 索引，项目页增删不重算归组。
 
-### FE-19 历史扫描时机
+### FE-19 历史扫描时机（F12 订阅化）
 
-- 挂载即扫描历史一次（计数 pill 首屏可见）。
-- 展开历史节点不重复 scan——BE-19 后端 `(目录 mtime, 文件数)` 缓存命中复用不重复读盘。
-- 刷新钮 = `history.scan(true)`（force=true 绕过后端缓存强制重扫，空结果永久命中场景必须 bypass）。
+- 挂载即扫描语义由**订阅首轮**接管：`useAgentHistory` 订阅 `sessionRefresh` 任务，首个订阅者出现即立即执行一轮（计数 pill 首屏可见）。
+- 展开历史节点不重复扫描——扫描执行体由调度器节流（interval 周期 + 防重入闸门），展开仅触发渲染。
+- 刷新钮 = `history.triggerNow()`（手动触发）——与定时 tick 共用同一扫描执行体；force=true 在执行体内恒定（绕过后端缓存，空结果永久命中场景必须 bypass）。
 
 ### CRUD 迁移承接（NAV-06）与入口唯一化
 
@@ -51,7 +51,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 页面行：`IconPage` 14px fg-3 图标；chevron 点击仅切换会话展开；行点击 = 切换页面 + 切换展开；选中 = 活跃页面。
 - 活跃会话行：`StatusDot`（F3 四态）+ CLI logo 14px（按 `row.cliId` 查 `profile.iconSrc`）+ 标题 + 迷你用量条 pill + 百分比；点击行聚焦对应终端页签。
 - 历史行：`StatusDot` 恒渲染（运行中按实际态，无运行状态 → done 灰档）+ logo + 标题 + 相对时间 + `title` tooltip；双击恢复三分支（运行中 → SessionActionDialog / 孤儿无 cwd → 无操作 / 普通 → `restoreHistorySession(..., { fork: false })`）。
-- 套餐余量 footer（F10）：树滚动区与添加项目钮之间固定区（U1）；每来源一行 28px fg-3，logo 14px 缺失 onError 隐藏；全部来源无展示整块不渲染（含发丝线）；行点击 = 立即刷新（前端节流 5s）；颜色全 token 无例外。
+- 套餐余量 footer（F10）：树滚动区与添加项目钮之间固定区（U1）；每来源一行 28px fg-3，logo 14px 缺失 onError 隐藏；全部来源无展示整块不渲染（含发丝线）；**enabled=false 不渲染（F12）**——经 `background_tasks_list` 读取 + `background-tasks-updated` 事件订阅感知 planBalance 任务启停，禁用即整块隐藏（快照保留，重启用即重显最后快照）；行点击 = 立即刷新（前端节流 5s）；颜色全 token 无例外。
 
 ## 硬约束
 
@@ -61,7 +61,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 测试模式
 
-- L2 测试：`nav-tree.test.tsx` + `nav-tree-history.test.tsx` + `plan-balance-model.test.ts` / `plan-balance-footer.test.tsx` / `ipc-plan-balance-contract.test.ts`（F10）。
+- L2 测试：`nav-tree.test.tsx` + `nav-tree-history.test.tsx` + `plan-balance-model.test.ts` / `plan-balance-footer.test.tsx` / `ipc-plan-balance-contract.test.ts`（F10）+ `background-tasks-scheduler.test.ts` / `background-tasks-session-refresh.test.ts`（F12，消费链经真实 useAgentHistory → 调度器激活）。
 - **NAV-10 契约辅助**：测试按点击展开驱动（`expandTo`），断言基于最终渲染而非内部状态。
 - **数据属性契约（写死）**：容器 `data-e2e="nav-tree"`；行 `data-e2e="nav-row-project"` / `"nav-row-page"` / `"nav-row-session"`；历史节点 `data-e2e="nav-history-node"`；余量 footer `data-e2e="plan-balance-footer"`（容器）/ `"plan-balance-row"`（行，F10）。
 

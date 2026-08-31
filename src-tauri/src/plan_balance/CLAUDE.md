@@ -28,15 +28,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `source.rs` 自建 `home_dir()` + `HomeDirGuard`（照抄 `hooks/claude/mod.rs` 模式），**禁止跨模块调用** `hooks::claude`——硬约束 #2 模块不穿透；应用 settings 读取经 `crate::app_dir::app_data_dir()`（顶层共享件，不构成穿透，D3）。
 
-### 轮询间隔：动态内存原子量（F11 决策，SC-BE-01/02）
+### 轮询编排已上提 background_tasks（F12），本模块保留执行体
 
-`resolve_poll_interval` 读应用 settings.json 的 `planBalance.intervalSec`：默认 60，合法 10–3600，越界/缺失/损坏回退默认。**运行期可改**（F11）：`POLL_INTERVAL_SEC` 模块级 `AtomicU64` 与 SNAPSHOT 同置（照 hooks WATCHER 先例，仅本模块读写，不入 AppState）；poller 启动时从磁盘初始化内存值，**每轮末按当前内存值 sleep**（interval period 不可变故弃 ticker；首轮立即执行语义 D8 保留）——`plan_balance_set_interval` 改值后下一轮即按新间隔，立即生效。
+轮询通用件（间隔内存原子量/首轮立即执行/每轮末按当前内存间隔 sleep/读盘钳制初始化）随 F12 上提 `src-tauri/src/background_tasks` 骨架，本模块只保留套餐语义执行体 `poll_once_executor`（一轮拉取 + 快照应用，resolve/fetch/merge/emit 口径含 updated_at 比较不变）与快照存储。配置机制随之变化：
 
-`plan_balance_set_interval(interval_sec)`（F11 后端消费型配置写通道）：校验 10–3600（越界 → Validation 拒绝且磁盘/内存均不变）→ **复用 settings.rs 写通道落盘**（白名单/浅合并/原子写/.bak/SETTINGS_SAVE_LOCK，禁止自建第二写通道）→ 更新内存值。顺序写死：校验 → 落盘 → 内存——落盘失败内存不变，磁盘/内存恒一致。
+- `plan_balance_set_interval` 命令退役——间隔/enabled 统一经 `background_tasks_set_config` 写通道配置（注册表元数据：默认 10s，合法 10–3600，默认启用，见 `registry.rs` TASKS）；
+- enabled=false 停轮询：poller 轮首检查退出循环，**快照保留**（前端 footer 经 `background-tasks-updated` 事件感知隐藏；重启用即重显最后快照）；
+- 默认间隔 60 → 10s（骨架注册表值，越界/缺失/损坏钳制回退默认随之）；
+- 行为不变：每轮末按当前内存间隔 sleep，运行期改值下一轮即生效。
 
-### 轮询间隔键归域 + 白名单
+### 配置键归域已上提 background_tasks
 
-`SETTINGS_KEY`（= "planBalance"）`pub(crate)` 归本模块，settings.rs 白名单与命令 payload 均经此常量引用（防字面量漂移，SC-BE-04）；段内键 `INTERVAL_SEC_KEY`（= "intervalSec"）模块内私有。白名单回归由 settings.rs `save_accepts_plan_balance_key` + 本模块 `settings_key_constants_value` 双侧守卫。
+`SETTINGS_KEY`（= "backgroundTasks"）随 F12 上提 `background_tasks::registry`，settings.rs 白名单第 5 键经 `crate::background_tasks::SETTINGS_KEY` 常量引用（防字面量漂移）；白名单守卫由 settings.rs `save_accepts_background_tasks_key`（放行）与 `save_rejects_plan_balance_key`（旧 `planBalance` 键退役防回归）承担。本模块不再持有任何 settings 键常量。
 
 ## 外部坑/红线
 
@@ -50,7 +53,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 测试模式
 
-- `merge_slot` / `poll_once_with` / `resolve_poll_interval` 全部参数化/注入，L1 不触网不触盘：`poll_once_with` 的 resolve/fetch 闭包注入；`resolve_poll_interval` 经 `AppDataDirGuard` 注入 tempdir。
+- `merge_slot` / `poll_once_with` 全部参数化/注入，L1 不触网不触盘：`poll_once_with` 的 resolve/fetch 闭包注入。执行体 `poll_once_executor` 与轮询循环本体由 background_tasks 骨架驱动（emit 在 `apply_snapshot` 内，需 AppHandle），其 L1 豁免登记于 background_tasks/CLAUDE.md。
 - 解析纯函数（`parse_deepseek_balance` / `parse_kimi_usages` / `resolve_env`）罐装 JSON 全测。kimi 解析含真实响应快照锚点（`parse_real_response_snapshot`，防下次 API 漂移）+ 双形态变体（detail 含/不含 used、totalQuota 缺失/空对象/非数字）。
 - serde 键集合精确匹配（照 hooks/mod.rs `assert_status_key_set` 先例）——token 红线守卫。
 - `get_plan_balance` 命令核心经 current_thread runtime block_on 直测（照 hooks/mod.rs:443 先例）。
@@ -59,4 +62,4 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 | 豁免项 | 原因 | 当前兜底 |
 |--------|------|---------|
-| plan_balance 真实 HTTP 查询（ureq fetch）与 tokio 轮询任务本体 | 真实外部 API 依赖 + Tauri 运行时（规格 §3 不做 L4） | 解析与状态机 L1 全覆盖（罐装 JSON/参数化编排）+ L2 UI 四场景 + 人工实测（真实账号一轮）——登记于 test-inventory（F10） |
+| plan_balance 真实 HTTP 查询（ureq fetch） | 真实外部 API 依赖（规格 §3 不做 L4） | 解析与状态机 L1 全覆盖（罐装 JSON/参数化编排）+ L2 UI 四场景 + 人工实测（真实账号一轮）——登记于 test-inventory（F10） |

@@ -287,7 +287,7 @@
 - **F10 豁免口径更新**：套餐余量轮询间隔从「启动时读一次」改为运行期可改（plan_balance 模块级 static 原子量 + 专用命令写入，每轮末按内存值 sleep），F10 相关豁免登记随之修订。
 - 第一期三配置页：Hooks 配置（项目组，迁入）、套餐余量查询频率（全局组）、快捷键（全局组）。
 
-## 0013 后台定时任务双端抽象（任务元数据单点在后端 + 配置单写通道）
+## 0013 后台定时任务双端抽象（ADR-0013：任务元数据单点在后端 + 配置单写通道）
 
 **Status**: accepted（2026-08-30，F12 规格期决策；实施细节以 `docs/background-tasks-spec.md` 为准）
 
@@ -296,9 +296,10 @@
 **决策**：
 
 - **双端各自抽象，不设跨端统一调度器**：后端泛化 plan_balance 通用件（间隔内存原子量/每轮末 sleep/读盘初始化/set 命令）为任务骨架（静态切片注册表，照 `SOURCES`/`QUERIES` 先例）；前端新建 backgroundTasks 调度器（#13 注册表家族：全局单例、订阅者计数启停、首轮立即执行、tick 防重入、triggerNow）。
-- **任务元数据单点 = 后端注册表**（含前端任务的代管：执行体字段 None 即前端任务，后端只管 id/标题/边界/默认值与配置读写）；设置页经 `background_tasks_list()` 纯渲染，新增任务设置页零改动。taskId 合法值集前后端同步测试锁死（HooksLayer ↔ `Layer` 枚举先例，硬约束 #4）。
+- **任务元数据单点 = 后端注册表**（含前端任务的代管：执行体字段 None 即前端任务，后端只管 id/标题/边界/默认值与配置读写）；设置页与前端调度器统一经 `background_tasks_list()` 读通道取数，前端不复制边界/默认值——DTO `BackgroundTaskInfo` 六键**无 default 字段**（FR-2 写死）的直接后果：行内提示只写范围不写默认值，默认值变更只动后端注册表。taskId 合法值集前后端同步测试锁死（HooksLayer ↔ `Layer` 枚举先例，硬约束 #4）。
 - **配置单写通道 = 后端 `background_tasks_set_config` 命令**（taskId 子键读-改-写合并 → 复用 settings.rs 写通道），前端任务的配置也经此命令代管落盘——杜绝浅合并顶层键互覆；前端消费型 `save_settings` 段写不适用于本段。
 - **配置结构**：统一顶层段 `backgroundTasks.{taskId}.{enabled,intervalSec}`；白名单 `planBalance` 键替换为 `backgroundTasks`（仍 5 键）；单用户不做旧键迁移。
+- **配置变更前端感知 = 后端 emit 事件，不建前端总线**：`background_tasks_set_config` 成功后 emit `background-tasks-updated`（payload = 完整 `BackgroundTaskInfo[]`），footer/设置页订阅即知；`background_tasks_list` 只作读通道不 emit。后端单写通道是配置真值源，前端自建总线会造成双真值源脱节。
 - **session 刷新 = 扫描执行体单一化**：手动刷新（刷新钮/triggerNow）与定时 tick 同一执行体（遍历全部已注册 history provider 逐个 `scan(true)` 聚合），仅失败处理按触发来源分化（tick 静默 / manual 置 error）；`useAgentHistory` 的 sessions/state 真值源上移调度器快照，hook 退为订阅方。
 
 **被否决的备选**：

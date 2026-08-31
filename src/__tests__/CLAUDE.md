@@ -16,6 +16,7 @@ L2 前端单元/集成测试集中目录。本文件只记录测试架构层面�
 - `../ipc/agentHooks`：`onAgentEvent` no-op；`inject`/`getInjectionStatus` 返回未注入状态。
 - `@tauri-apps/api/window`：`getCurrentWindow` 返回单例 mock，含 `onFocusChanged` / `requestUserAttention`。
 - `../ipc/planBalance`：`getPlanBalance`/`refreshPlanBalance` resolve 空数组，`onPlanBalanceUpdated` 返回 no-op 取消函数（F10）。
+- `../ipc/backgroundTasks`：`listBackgroundTasks` resolve 两任务默认配置（planBalance/sessionRefresh 全六键），`setBackgroundTaskConfig` resolve `[]`，`onBackgroundTasksUpdated` 返回 no-op 取消函数（F12——下游 nav-tree/agent-history-hook 测试经真实 useAgentHistory → 调度器 activate 会触达 `listBackgroundTasks`，全局 mock 必须先于消费到位）。
 
 需要真实实现的测试须在文件顶部用 `vi.mock("...", async (importOriginal) => importOriginal<...>())` 覆盖（参考 `ipc-contract.test.ts` 先例）。
 
@@ -67,6 +68,16 @@ hubs 配置面板迁入设置中心产生的测试文件更名/删除/新增。�
 | `hooks-config-panel.test.tsx` | `settings-hooks-page.test.tsx`（hub 43 例 → SettingsPageProps 形态 37 例） |
 
 新增：`settings-page-registry.test.ts` / `settings-panel.test.tsx` / `settings-plan-balance.test.tsx` / `settings-dirty-registry.test.ts` / `settings-panel-dirty.test.tsx` / `settings-keybindings.test.tsx` / `settings-panel-autoclose.test.tsx` / `open-settings.test.ts` / `open-settings-panel.test.ts` / `settings-hooks-page.test.tsx` / `settings-pages-registration.test.ts`（完整用例数见 `.claude/test-inventory.md`）。
+
+### F12 后台定时任务——测试文件迁移映射（FE-02/03/07）
+
+settings-plan-balance 退役、背景任务测试落地产生的更名/删除/新增。旧名退役、磁盘零残留。
+
+| 旧文件（退役） | 新文件（现行） |
+|----------------|----------------|
+| `settings-plan-balance.test.tsx` | `settings-background-tasks.test.tsx`（通用任务行两任务形态） |
+
+新增：`background-tasks-scheduler.test.ts` / `background-tasks-session-refresh.test.ts` / `ipc-background-tasks-contract.test.ts` / `settings-background-tasks.test.tsx`；`ipc-plan-balance-contract.test.ts` 删 setPlanBalanceInterval 四维段（16 → 12 例）。settings-pages-registration.test.ts 断言改 backgroundTasks 页（计数 1 不变）。
 
 ### AC-4 / AC-5
 

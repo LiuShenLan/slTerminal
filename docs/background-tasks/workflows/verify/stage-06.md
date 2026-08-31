@@ -25,4 +25,4 @@
 3. `cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings`
 4. `npm test`
 5. `cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1`
-6. （环境豁免，2026-08-31 登记）命令 5 预期 exit 127：本机 rustc 1.94~1.96 下测试二进制链接 tauri 栈代码后 0xC0000139 启动崩溃（Windows 加载器边界 bug，见 .claude/test-inventory.md 豁免表）；测试类断言以「测试存在性 grep + `cargo check --tests` 编译级 + clippy」为兜底。
+6. （已修复，2026-08-31 当日翻案）命令 5 原环境豁免（0xC0000139）已定位并修复：根因 = 测试二进制缺 comctl32 v6 manifest（tauri 栈静态导入 TaskDialogIndirect，无 manifest 激活时解析到 v5 缺导出）；修复 = Cargo.toml `[lib] test = false` + 显式 `[[test]] lib_tests` 使 `rustc-link-arg-tests` 生效。实测全量 827 例全绿（711 lib + 116 集成）。命令 5 现预期 exit 0，测试类断言以全量测试 agent 输出为准。

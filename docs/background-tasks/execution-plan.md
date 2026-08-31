@@ -45,7 +45,7 @@ Stage 05 补充说明：e2e-tests/ 不在根 tsconfig include（include = src + 
 | 02 前端基建 | 完成 | 4/5 全过 + cargo test 环境豁免；tsc 预期失败（PlanBalancePage 为 Stage 04 git rm 对象，中间态登记） | 全过（FE-01/02/03 fixed；FE-02 残留仅限 Stage 04 删除对象） | c5ea0ac |
 | 03 消费改造 | 完成 | 3/5 全过 + tsc/cargo test 双豁免（均登记） | 全过（FE-04/05/06 fixed，allFixed=true） | 9253fbb |
 | 04 设置中心页 | 完成 | 5/5 全过（tsc 由此收敛，2879 例 npm test 绿）+ cargo test 环境豁免 | 全过（FE-07/08 fixed；注释残留已修，文档迁移表归 Stage 06 边界登记） | 284c632 |
-| 05 E2E | 未开始 | - | - | - |
+| 05 E2E | 完成 | 5/5 全过（tsc/eslint/clippy/npm test 2879 例绿 + cargo test 环境豁免） | 全过（E2E-01/02/03 fixed；wdio 实跑 = 收尾人工验证点） | 38037b1 |
 | 06 文档 | 未开始 | - | - | - |
 
 ## 收尾（全部 Stage 完成后，人工）
