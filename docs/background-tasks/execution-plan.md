@@ -42,8 +42,8 @@ Stage 05 补充说明：e2e-tests/ 不在根 tsconfig include（include = src + 
 | Stage | 状态 | 全量测试 | verify | commit |
 |---|---|---|---|---|
 | 01 后端骨架 | 完成 | 4/5 全过 + cargo test 环境豁免（0xC0000139 登记，cargo check --tests 编译级兜底） | 全过（BE-01~05 代码项全 fixed；测试存在性 grep 证实） | cbb48f8 |
-| 02 前端基建 | 未开始 | - | - | - |
-| 03 消费改造 | 未开始 | - | - | - |
+| 02 前端基建 | 完成 | 4/5 全过 + cargo test 环境豁免；tsc 预期失败（PlanBalancePage 为 Stage 04 git rm 对象，中间态登记） | 全过（FE-01/02/03 fixed；FE-02 残留仅限 Stage 04 删除对象） | c5ea0ac |
+| 03 消费改造 | 完成 | 3/5 全过 + tsc/cargo test 双豁免（均登记） | 全过（FE-04/05/06 fixed，allFixed=true） | 9253fbb |
 | 04 设置中心页 | 未开始 | - | - | - |
 | 05 E2E | 未开始 | - | - | - |
 | 06 文档 | 未开始 | - | - | - |

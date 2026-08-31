@@ -6,7 +6,7 @@
 // - data-e2e 系列：settings-background-tasks-page / settings-background-tasks-row-{taskId} /
 //   settings-background-tasks-enabled-{taskId} / settings-background-tasks-interval-{taskId} /
 //   settings-background-tasks-error-{taskId}；footer 既有 plan-balance-footer / plan-balance-row 不动
-// - 行内提示文案只写范围 ${intervalMin}–${intervalMax} 秒（DTO 无 default 字段，不写默认值）
+// - 行内提示文案只写范围 \${intervalMin}–\${intervalMax} 秒（DTO 无 default 字段，不写默认值）
 // - 提交闭环：set_config 返回完整清单 → 更新行；sessionRefresh 直调 backgroundTaskScheduler.applyConfig；
 //   planBalance 调 refreshPlanBalance()（反馈闭环先例）
 // - 退役：settings 页 id "planBalance" / settings-plan-balance-* 选择器 / PlanBalancePage.tsx 全删（src/ 内）
@@ -36,7 +36,7 @@ const parallelAgents = [
 
 【FE-07】设置中心「后台定时任务」页替换：
 - 3.1 src/features/settingsCenter/pages.ts：删 PlanBalancePage import 与注册段（:9, :22-28），替换为 BackgroundTasksPage import + 注册段（id "backgroundTasks" / title "后台定时任务" / group "global" / order 20，照 checklist 3.1 代码块）；头注释「Stage 02 仅注册 planBalance 一页」过时表述改写为现行三页口径。
-- 3.2 新建 src/panels/settings/pages/BackgroundTasksPage.tsx（照 checklist 3.2 完整代码块）：TaskRow 通用行组件（纯渲染——listBackgroundTasks 返回清单 map 渲染，新增任务自动出现）；勾选立即提交 setBackgroundTaskConfig(taskId, { enabled })；频率失焦/回车提交，非法（非数/非整数/越界/空串）→ 行内红字 = rangeHint（${intervalMin}–${intervalMax} 秒，无默认值）不提交不 toast；后端拒绝 → toast + 保留输入；afterCommitted 公共收尾（返回清单更新行 + sessionRefresh 调 backgroundTaskScheduler.applyConfig + planBalance 调 refreshPlanBalance() 反馈闭环）；data-e2e 五系列选择器逐字照抄；配色 import 自 ../../../theme（PANEL_BG/SIDEBAR_FG/DIM_FG/INPUT_BG/INPUT_BORDER/FOCUS_BORDER/ERROR_FG）。
+- 3.2 新建 src/panels/settings/pages/BackgroundTasksPage.tsx（照 checklist 3.2 完整代码块）：TaskRow 通用行组件（纯渲染——listBackgroundTasks 返回清单 map 渲染，新增任务自动出现）；勾选立即提交 setBackgroundTaskConfig(taskId, { enabled })；频率失焦/回车提交，非法（非数/非整数/越界/空串）→ 行内红字 = rangeHint（\${intervalMin}–\${intervalMax} 秒，无默认值）不提交不 toast；后端拒绝 → toast + 保留输入；afterCommitted 公共收尾（返回清单更新行 + sessionRefresh 调 backgroundTaskScheduler.applyConfig + planBalance 调 refreshPlanBalance() 反馈闭环）；data-e2e 五系列选择器逐字照抄；配色 import 自 ../../../theme（PANEL_BG/SIDEBAR_FG/DIM_FG/INPUT_BG/INPUT_BORDER/FOCUS_BORDER/ERROR_FG）。
 - 3.3 git rm src/panels/settings/pages/PlanBalancePage.tsx 与 src/__tests__/settings-plan-balance.test.tsx。
 - 3.4 src/__tests__/settings-pages-registration.test.ts：mock 路径 ../panels/settings/pages/PlanBalancePage 改 ../panels/settings/pages/BackgroundTasksPage；断言数组 { id: "planBalance", group: "global", order: 20 } 改 { id: "backgroundTasks", group: "global", order: 20 }（断言计数不变 3 条）。
 - 3.5 新建 src/__tests__/settings-background-tasks.test.tsx（照 settings-plan-balance.test.tsx 模式）：mock ../ipc/backgroundTasks（list/set hoisted 可控）+ ../ipc/planBalance（refreshPlanBalance）+ ../lib 仅替换 toast + mock ../features/backgroundTasks（backgroundTaskScheduler.applyConfig hoisted spy——避免真实调度器）。用例：挂载渲染两行（任务标题 + 勾选态 + 频率输入回显 + 范围提示「10–3600 秒」「2–300 秒」）；list 失败空态不崩 + console.error；勾选 planBalance → setBackgroundTaskConfig("planBalance", { enabled: false }) + 成功后行更新 + refreshPlanBalance 被调；勾选 sessionRefresh → applyConfig 被调且参数为返回清单新值；频率非法（非数/小数/越界/空串）→ 行内红字 = 范围文案 + 不提交不 toast + 输入保留；频率合法 → setBackgroundTaskConfig + 规范化回显；set reject → toast warning + 输入保留。

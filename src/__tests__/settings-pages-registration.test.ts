@@ -10,7 +10,7 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 
 // 页面组件实现不属本测试面——整模块 mock 为空组件桩，避免拉入真实组件依赖链
 vi.mock("../panels/settings/pages/KeybindingsPage", () => ({ default: () => null }));
-vi.mock("../panels/settings/pages/PlanBalancePage", () => ({ default: () => null }));
+vi.mock("../panels/settings/pages/BackgroundTasksPage", () => ({ default: () => null }));
 vi.mock("../panels/settings/pages/HooksSettingsPage", () => ({ default: () => null }));
 
 import { getSettingsPageRegistry } from "../features/settingsCenter/SettingsPageRegistry";
@@ -32,7 +32,7 @@ describe("配置页真实注册（pages.ts side-effect import）", () => {
 
     expect(pages).toEqual([
       { id: "keybindings", group: "global", order: 10 },
-      { id: "planBalance", group: "global", order: 20 },
+      { id: "backgroundTasks", group: "global", order: 20 },
       { id: "hooks", group: "project", order: 100 },
     ]);
   });
