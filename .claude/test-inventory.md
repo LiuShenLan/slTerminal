@@ -6,6 +6,8 @@
 
 > **登记纪律（TQ-CI-01）**：改测试后同步本文件——L1 以 `cargo test` 实跑总数 + `grep -c '#[test]'` 双核对；L2 以 `npm test` 实跑（Vitest 报告）为准；段小计 = 段内行级用例数之和（逐段核对 it.each/工厂展开）。三处（表头/段头/段小计）必须一致。
 
+> **覆盖纪律（硬约束 #11）**：改动的代码可自动化部分必须添加全量自动化测试用例覆盖；不可自动化部分须在本文件既定豁免清单登记，注明豁免原因与当前兜底层级，禁止未登记豁免。
+
 > **计数口径**：
 > - L1 以 `grep -c '#[test]'` 统计的 `#[test]` 属性数为准（41 文件 827；2026-08-31 实跑 `cargo test --lib` 711 例 + 集成测试 116 例双核对）。
 > - L2 以 `npm test` 实跑（Vitest 报告）为准，it.each/describeIpcContract 工厂按展开后计入（170 文件 2879）。
@@ -128,7 +130,7 @@
 |------|------|---------|
 | `src/__tests__/ipc-contract.test.ts` | 80 | pty/fs/settings/projects/notify/git 全模块四维契约；IHE-06/DBG-4 |
 | `src/__tests__/ipc-agent-hooks-contract.test.ts` | 21 | agent hooks 四命令/ContextUsage/AgentEventPayload/onAgentEvent；MC-212 |
-| `src/__tests__/ipc-agent-history-contract.test.ts` | 18 | agent_history scan/delete/read_title 四维契约；F7/MC-306/BE-19/TQ-C-02 |
+| `src/__tests__/ipc-agent-history-contract.test.ts` | 18 | agent_history scan/delete/read_title 四维契约；MC-306/BE-19/TQ-C-02 |
 | `src/__tests__/ipc-window-contract.test.ts` | 9 | `registerCloseHandler` 生命周期；WRK-04/FE-26 |
 | `src/__tests__/ipc-window.test.ts` | 6 | window 三 wrapper；TQ-COV-10 |
 | `src/__tests__/ipc-ping.test.ts` | 2 | `ping()` wrapper |
@@ -353,7 +355,7 @@
 |------|------|---------|
 | `src/__tests__/agent-history-model.test.ts` | 47 | 纯函数/复合键/keyOf；MC-313/ZQ-1/7/NAH-01 |
 | `src/__tests__/agent-history-hook.test.tsx` | 12 | useAgentHistory 状态机/订阅首轮自动执行（挂载即扫语义）/triggerNow/manual 失败置 error/removeLocal 不重扫/rootPath 推导；MC-313/NAH-08/F12 |
-| `src/__tests__/agent-history-restore.test.ts` | 13 | 四步恢复/防重入/abort；F7/NAH-07/ZQ-4/MC-315/FE-27/48 |
+| `src/__tests__/agent-history-restore.test.ts` | 13 | 四步恢复/防重入/abort；NAH-07/ZQ-4/MC-315/FE-27/48 |
 | `src/__tests__/agent-history-action-dialog.test.tsx` | 8 | SessionActionDialog；NAH-11/FE-12 |
 | `src/__tests__/background-tasks-scheduler.test.ts` | 16 | 注册表契约/subscribe 激活（读配置+立即一轮）/订阅者计数启停/tick 防重入/失败策略（tick 静默 vs manual error）/applyConfig 运行期生效与无订阅者不空转/applyLocal；F12/FE-03 |
 | `src/__tests__/background-tasks-session-refresh.test.ts` | 5 | 扫描执行体：多 provider 聚合/无 history 能力跳过/部分失败隔离（旧数据保留）/全部失败按触发来源/force 恒 true；F12/FE-03 |

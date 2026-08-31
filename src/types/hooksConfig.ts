@@ -1,4 +1,4 @@
-// hooks 配置 DTO — 阶段 3 配置面板（F6）类型定义
+// hooks 配置 DTO — 阶段 3 配置面板类型定义
 //
 // 原始 JSON 类型对应 settings.json 的 hooks 子树（契约 C13-1 编辑范围），
 // GUI 模型为面板展示/编辑用（EventTree / HandlerForm 数据源）。

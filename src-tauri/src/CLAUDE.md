@@ -8,6 +8,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 关键约束与决策
 
+**模块间不互相穿透（硬约束 #2）**：功能子模块之间禁止互相引用，共享只经 `state.rs` 的 `AppState`；本层顶层单文件模块承担全局支撑件。
+
 ### app_dir.rs — 应用数据目录单点（BE-16）
 
 `app_data_dir`/`resolve_app_data_dir` 上提至本模块，settings 与 projects 均从这里导入，避免跨模块直接引用。数据目录为 exe 同级（便携分发语义）。**数据目录三级来源**：测试 guard（`cfg(test)`，生产零编译）> `SLTERM_DATA_DIR` env（E2E 隔离，空串视为未设置）> exe 同级推导。同模块承载：
@@ -46,6 +48,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## 外部坑/红线
 
 - **新增命令必须三处注册**：`lib.rs` 的 `generate_handler!`、`build.rs` 的 `AppManifest::new().commands(...)`、`capabilities/default.json` 的 `allow-<cmd>`（SEC-07），缺一即 invoke reject。
+- **阻塞 I/O 一律 `spawn_blocking`**：不得在 async 命令体直接跑阻塞 I/O（硬约束 #3）。
+- **capabilities/ 只管插件权限**：Tauri 2 自定义命令默认放行，`capabilities/` 只列插件权限，不追加通配 `*`（硬约束 #10）。
 - **改 DTO 必须双边同步**：Rust `snake_case` ↔ JS `camelCase`，改一边必须改另一边（硬约束 #4）。
 - **`project_root_lock` 必须覆盖 canonicalize+apply 全程**：不要拆锁，否则有慢路径覆盖风险（SEC-16）。
 - **不要在持锁临界区引入 panic**：保持 Mutex 中毒不可达纪律。
@@ -53,6 +57,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 测试模式
 
+- 测试 `#[cfg(windows)]` 原则上改运行时 `cfg!(windows)` 分支；依赖 Windows 编译期 API（symlink 等）无法运行时区分的例外保留 cfg，须在所属模块 CLAUDE.md 登记豁免（硬约束 #9）。
 - `state.rs` `#[cfg(test)]`：路径沙箱校验（含 symlink 特权豁免）+ `GitRepoCache` LRU 纯逻辑。
 - `app_dir.rs` `#[cfg(test)]`：`resolve_app_data_dir` 三分支 + `LoadResult` serde + `AppDataDirGuard` 注入/恢复。
 - settings/projects 命令层测试经 `AppDataDirGuard` 注入 tempdir（SPE-04）。

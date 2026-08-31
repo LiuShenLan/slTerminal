@@ -1,6 +1,6 @@
 // HooksSettingsPage — hooks 配置页（设置中心 hub 容器，F11，SC-FE-05）
 //
-// HooksConfigPanel（F6 hub）迁移改造为设置中心配置页：
+// HooksConfigPanel（hooks 双模式配置面板 hub）迁移改造为设置中心配置页：
 // - CLI 选择行 + 编辑器槽分派逻辑照搬原 hub（MC-502~507）：遍历 cliProfileRegistry
 //   getAll() 过滤 capabilities.hooks?.hasConfigEditor===true 渲染按钮（iconSrc 16×16
 //   logo + displayName）；选中态背景高亮走 theme token（硬约束 #6）；点击切换下方编辑器；

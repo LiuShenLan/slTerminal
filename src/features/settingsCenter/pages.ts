@@ -28,7 +28,7 @@ getSettingsPageRegistry().register({
   order: 20,
 });
 
-// hooks 配置页（F6 hub 迁入设置中心，SC-FE-05）——project 组（需项目上下文）
+// hooks 配置页（hooks 双模式面板 hub 迁入设置中心，SC-FE-05）——project 组（需项目上下文）
 getSettingsPageRegistry().register({
   id: "hooks",
   title: "Hooks 配置",

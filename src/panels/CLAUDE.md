@@ -151,6 +151,8 @@ xterm.js 6.0.0 原生支持 OSC 8 解析渲染。`useXterm.ts` 在 `term.open()`
 
 **B14 visible 前缀匹配**：`activePageId != null && panelId.startsWith(`terminal-${activePageId}-`)`。旧恢复格式含 Date.now 数字段，正则/切分解析会吞掉多余数字段得到错误 pageId → visible 恒 false → 非焦点降频永不 flush（历史恢复黑屏根因）。
 
+**会话元数据单点（硬约束 #8）**：PTY 进程映射仅在 `panels/terminal/TerminalRegistry`（模块级 Map）管理，前端会话元数据已合并入 registry；面板只订阅，不自存。
+
 **仅限于 pwsh/powershell**——shell integration 脚本仅在 PowerShell 注入，cmd.exe 无此能力。
 
 ### F3 页签四态指示
@@ -185,7 +187,8 @@ Claude Code 在用户主动 Ctrl+C 中断时不发射任何 hook 事件。四态
 - **CSP 全局放宽**：srcdoc iframe 继承父窗口 CSP，必须主窗口 `script-src 'self' 'unsafe-inline'` + `dangerousDisableAssetCspModification: ["script-src"]`。收紧会静默破坏 HTML 预览。
 - **CM6 `readOnly` vs `editable`**：gitshow/diff 左栏只能用 `EditorState.readOnly`，不能用 `EditorView.editable`，否则编辑器不可聚焦、快捷键失效。
 - **DiffPanel flexbox 撑开**：CM6 `.cm-content` 的 `flex-shrink: 0` + `white-space: pre` 会撑开双层 flex，必须所有 flex 子项设 `minWidth: 0`。
-- **ConPTY 并发 spawn 死锁**：PTY spawn 由后端 `SPAWN_LOCK` 串行化（根文件 Windows 关键坑），前端不直接处理，但 L1 测试必须 `--test-threads=1`。
+- **ConPTY 并发 spawn 死锁**：PTY spawn 由后端 `SPAWN_LOCK` 串行化（详见 ../src-tauri/src/pty/CLAUDE.md），前端不直接处理，但 L1 测试必须 `--test-threads=1`。
+- **中文 IME 合成要尽早实测**：键盘/IME 改动后须尽早用真实 WebView2 环境验证中文输入合成，避免合成路径破坏积累。
 - **PowerShell 是 OSC 133 唯一注入目标**：cmd.exe 无 shell integration，标题/状态/命令边界检测对 cmd 会话不可用。
 
 ## 测试模式

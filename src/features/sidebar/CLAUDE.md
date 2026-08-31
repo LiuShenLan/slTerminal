@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 模块状态：已退役（NAV-06，2026-08）
 
-`src/features/sidebar/` 目录仅剩本文件——`SidebarTree.tsx` 及其配套已于 NAV-06 整体删除。本目录待清理：目录删除时本文件一并删除（登记于 `.claude/CLAUDE.md` 模块索引）。
+`src/features/sidebar/` 目录仅剩本文件——`SidebarTree.tsx` 及其配套已于 NAV-06 整体删除。本目录待清理：目录删除时本文件一并删除。
 
 ## 历史职责与迁移去向
 
