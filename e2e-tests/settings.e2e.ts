@@ -1,8 +1,8 @@
 /**
  * 设置中心（F11）L4 spec（SC-E2E-02）：
  *
- * 覆盖设置中心面板全链路：配置钮打开/单例、选中配置页 params 持久化、套餐余量频率页
- * 真实后端落盘（plan_balance_set_interval 命令真实 invoke——L4 兜底 SC-BE-03
+ * 覆盖设置中心面板全链路：配置钮打开/单例、选中配置页 params 持久化、后台定时任务页
+ * 真实后端落盘（background_tasks_set_config 命令真实 invoke——L4 兜底 SC-BE-03
  * 「命令未注册被前端 catch 吞 = 测试全绿但运行时静默失败」盲区）、快捷键录制（合成
  * KeyboardEvent 全链路：录制态 → setBinding → 2s debounce 落盘）、切项目自动关闭、
  * 同项目切页保留、hooks 页迁入冒烟（设置中心内 CLI 选择行渲染）、dirty 切页守卫
@@ -17,7 +17,7 @@
  *   __dockviewApi（活跃页面 api）settings- 前缀面板 params.selectedPage。
  * - 后端 settings.json 在 exe 同级（app_dir.rs 便携分发契约）——落盘断言直接
  *   Node 侧读文件（与 loadSettings 同一真值源），原子写中间态自动重试。
- * - 用例写盘（④ planBalance 段 / ⑥ keybindings 段 / ④ 假 env 注入 user 层
+ * - 用例写盘（④ backgroundTasks.planBalance 子键 / ⑥ keybindings 段 / ④ 假 env 注入 user 层
  *   ~/.claude/settings.json）由 suite before/after 快照还原，防污染用户数据
  *   （run-wdio.cjs 备份集合不覆盖 exe 同级 settings.json）。
  * - 余量刷新闭环（④）：假 env 注入 user 层 settings.json（SEC-18 假值占位符，
@@ -214,7 +214,7 @@ function writeFakePlanEnv(): void {
 }
 
 describe("设置中心 (F11, SC-E2E-02)", () => {
-  // 用例真实写盘两处：exe 同级 settings.json（④ planBalance 段 / ⑥ keybindings 段）、
+  // 用例真实写盘两处：exe 同级 settings.json（④ backgroundTasks.planBalance 子键 / ⑥ keybindings 段）、
   // user 层 ~/.claude/settings.json（④ 假 env）。run-wdio.cjs 备份集合不覆盖
   // exe 同级 settings.json——suite 级快照还原防污染用户数据。
   let settingsSnapshot: { existed: boolean; content: string | null };
@@ -260,19 +260,21 @@ describe("设置中心 (F11, SC-E2E-02)", () => {
       await clickConfigButton();
       await waitForSettingsPanel();
 
-      // 默认全局组第一页 = keybindings（pages.ts order 10 < planBalance order 20）
+      // 默认全局组第一页 = keybindings（pages.ts order 10 < backgroundTasks order 20）
       const state = await browser.execute(() => {
         const page = document.querySelector('[data-e2e="settings-keybindings-page"]');
         return {
           kbPage: !!page,
           navKb: !!document.querySelector('[data-e2e="settings-nav-keybindings"]'),
-          navPlanBalance: !!document.querySelector('[data-e2e="settings-nav-planBalance"]'),
+          navBackgroundTasks: !!document.querySelector(
+            '[data-e2e="settings-nav-backgroundTasks"]',
+          ),
           groupGlobal: !!document.querySelector('[data-e2e="settings-nav-group-global"]'),
         };
       });
       expect(state.kbPage).toBe(true);
       expect(state.navKb).toBe(true);
-      expect(state.navPlanBalance).toBe(true);
+      expect(state.navBackgroundTasks).toBe(true);
       expect(state.groupGlobal).toBe(true);
     } finally {
       try { await closeSettingsPanels(); } catch { /* 忽略 */ }
@@ -326,15 +328,15 @@ describe("设置中心 (F11, SC-E2E-02)", () => {
       await waitForDockviewApi();
       await openSettingsCenter();
 
-      // DOM 点击左导航（settings-nav-planBalance）→ 壳 persistParams 写 params
-      await switchSettingsPage("planBalance");
+      // DOM 点击左导航（settings-nav-backgroundTasks）→ 壳 persistParams 写 params
+      await switchSettingsPage("backgroundTasks");
       const state = await browser.execute(
         () => (window as any).__slterm_e2e_getSettingsPanelState?.() ?? null,
       );
-      expect(state?.selectedPage).toBe("planBalance");
+      expect(state?.selectedPage).toBe("backgroundTasks");
       // 右侧槽位渲染对应配置页
       expect(await browser.execute(
-        () => !!document.querySelector('[data-e2e="settings-plan-balance-page"]'),
+        () => !!document.querySelector('[data-e2e="settings-background-tasks-page"]'),
       )).toBe(true);
     } finally {
       try { await closeSettingsPanels(); } catch { /* 忽略 */ }
@@ -342,45 +344,47 @@ describe("设置中心 (F11, SC-E2E-02)", () => {
     }
   });
 
-  /** 用例 ④：频率页 120 失焦 → 真实后端落盘（loadSettings 读段 120）+ 余量刷新 */
-  it("④ 频率页 120 失焦 → 真实后端落盘（settings.json planBalance=120）+ 余量刷新闭环", async () => {
+  /** 用例 ④：频率行 120 失焦 → 真实后端落盘（loadSettings 读段 120）+ 余量刷新 */
+  it("④ 频率行 120 失焦 → 真实后端落盘（settings.json backgroundTasks.planBalance=120）+ 余量刷新闭环", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "slterm-e2e-settings-freq-"));
     try {
       await waitForWorkspaceReady();
       await createProject(tempDir);
       await waitForDockviewApi();
       await openSettingsCenter();
-      await switchSettingsPage("planBalance");
+      await switchSettingsPage("backgroundTasks");
       await browser.waitUntil(
         async () =>
           (await browser.execute(
-            () => !!document.querySelector('[data-e2e="settings-plan-balance-page"]'),
+            () => !!document.querySelector('[data-e2e="settings-background-tasks-page"]'),
           )) === true,
-        { timeout: 10000, timeoutMsg: "套餐余量配置页未渲染" },
+        { timeout: 10000, timeoutMsg: "后台定时任务配置页未渲染" },
       );
 
       // 假 env 注入（余量刷新闭环前置——见文件头注释）
       writeFakePlanEnv();
 
       // 设 120 → 失焦提交（React 受控 input 原生 setter + input/focusout 事件）
-      expect(await setInputValue('[data-e2e="settings-plan-balance-input"]', "120")).toBe(true);
-      expect(await blurInput('[data-e2e="settings-plan-balance-input"]')).toBe(true);
+      expect(await setInputValue('[data-e2e="settings-background-tasks-interval-planBalance"]', "120")).toBe(true);
+      expect(await blurInput('[data-e2e="settings-background-tasks-interval-planBalance"]')).toBe(true);
 
-      // 真实后端落盘：plan_balance_set_interval → settings.rs 写通道 → exe 同级文件
+      // 真实后端落盘：background_tasks_set_config → settings.rs 写通道 → exe 同级文件
       await waitForSettingsFile(
         (root) => {
-          const pb = root.planBalance as { intervalSec?: unknown } | undefined;
-          return pb?.intervalSec === 120;
+          const bt = root.backgroundTasks as
+            | { planBalance?: { intervalSec?: unknown } }
+            | undefined;
+          return bt?.planBalance?.intervalSec === 120;
         },
         10000,
-        "planBalance.intervalSec 未在 10s 内落盘为 120（命令 invoke 失败或未注册）",
+        "backgroundTasks.planBalance.intervalSec 未在 10s 内落盘为 120（命令 invoke 失败或未注册）",
       );
       // 无行内红字 + 输入框规范化回显
       expect(await browser.execute(
-        () => !!document.querySelector('[data-e2e="settings-plan-balance-error"]'),
+        () => !!document.querySelector('[data-e2e="settings-background-tasks-error-planBalance"]'),
       )).toBe(false);
       expect(await browser.execute(
-        () => (document.querySelector('[data-e2e="settings-plan-balance-input"]') as HTMLInputElement | null)?.value ?? null,
+        () => (document.querySelector('[data-e2e="settings-background-tasks-interval-planBalance"]') as HTMLInputElement | null)?.value ?? null,
       )).toBe("120");
 
       // 余量刷新闭环：提交成功 → refreshPlanBalance 真实 invoke → 后端一轮拉取 →
@@ -397,36 +401,36 @@ describe("设置中心 (F11, SC-E2E-02)", () => {
     }
   });
 
-  /** 用例 ⑤：频率页 5 → 行内红字 + 文件未变 */
-  it("⑤ 频率页 5 → 行内红字 + 文件未变（非法值不提交不落盘）", async () => {
+  /** 用例 ⑤：频率行 5 → 行内红字 + 文件未变 */
+  it("⑤ 频率行 5 → 行内红字 + 文件未变（非法值不提交不落盘）", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "slterm-e2e-settings-invalid-"));
     try {
       await waitForWorkspaceReady();
       await createProject(tempDir);
       await waitForDockviewApi();
       await openSettingsCenter();
-      await switchSettingsPage("planBalance");
+      await switchSettingsPage("backgroundTasks");
       await browser.waitUntil(
         async () =>
           (await browser.execute(
-            () => !!document.querySelector('[data-e2e="settings-plan-balance-page"]'),
+            () => !!document.querySelector('[data-e2e="settings-background-tasks-page"]'),
           )) === true,
-        { timeout: 10000, timeoutMsg: "套餐余量配置页未渲染" },
+        { timeout: 10000, timeoutMsg: "后台定时任务配置页未渲染" },
       );
 
       // 写前快照（前序用例写盘已 settle；原子写保证读到的必是完整内容；
       // null = 文件尚不存在——「未变」断言即仍不存在）
       const before = readSettingsRaw();
 
-      // 非法值 5（< MIN_INTERVAL_SEC=10）→ 失焦 → 行内红字，不提交不 toast
-      expect(await setInputValue('[data-e2e="settings-plan-balance-input"]', "5")).toBe(true);
-      expect(await blurInput('[data-e2e="settings-plan-balance-input"]')).toBe(true);
+      // 非法值 5（< planBalance 下限 10）→ 失焦 → 行内红字，不提交不 toast
+      expect(await setInputValue('[data-e2e="settings-background-tasks-interval-planBalance"]', "5")).toBe(true);
+      expect(await blurInput('[data-e2e="settings-background-tasks-interval-planBalance"]')).toBe(true);
       await browser.waitUntil(
         async () => {
           const text = await browser.execute(
-            () => document.querySelector('[data-e2e="settings-plan-balance-error"]')?.textContent ?? null,
+            () => document.querySelector('[data-e2e="settings-background-tasks-error-planBalance"]')?.textContent ?? null,
           );
-          return text !== null && text.includes("10–3600 秒，默认 60");
+          return text !== null && text.includes("10–3600 秒");
         },
         { timeout: 8000, timeoutMsg: "非法提交未显示行内红字提示" },
       );
@@ -588,7 +592,7 @@ describe("设置中心 (F11, SC-E2E-02)", () => {
       if (!pageIdB) throw new Error("addPage 返回 null（页面数上限或项目缺失）");
 
       await openSettingsCenter();
-      await switchSettingsPage("planBalance");
+      await switchSettingsPage("backgroundTasks");
 
       // 面板 id 契约 SC-FE-02：settings-{pageId}（切页前后恒为 page1 的面板）
       const panelId = `settings-${pageIdA}`;
@@ -596,7 +600,7 @@ describe("设置中心 (F11, SC-E2E-02)", () => {
         () => (window as any).__slterm_e2e_getSettingsPanelState?.() ?? null,
       );
       expect(stateBefore?.panelId).toBe(panelId);
-      expect(stateBefore?.selectedPage).toBe("planBalance");
+      expect(stateBefore?.selectedPage).toBe("backgroundTasks");
 
       // 同项目内切页（activePageId 变化但项目不变 → 自动关闭效应不触发）
       await switchToPageAndWait(pageIdB);
@@ -605,12 +609,12 @@ describe("设置中心 (F11, SC-E2E-02)", () => {
         () => document.querySelectorAll('[data-e2e="settings-panel"]').length,
       )).toBe(1);
 
-      // 切回 page1 → helper 读 params.selectedPage 仍为 planBalance（随布局 JSON 持久化）
+      // 切回 page1 → helper 读 params.selectedPage 仍为 backgroundTasks（随布局 JSON 持久化）
       await switchToPageAndWait(pageIdA);
       const state = await browser.execute(
         () => (window as any).__slterm_e2e_getSettingsPanelState?.() ?? null,
       );
-      expect(state?.selectedPage).toBe("planBalance");
+      expect(state?.selectedPage).toBe("backgroundTasks");
       expect(state?.panelId).toBe(panelId);
     } finally {
       try { await closeSettingsPanels(); } catch { /* 忽略 */ }
@@ -699,10 +703,10 @@ describe("设置中心 (F11, SC-E2E-02)", () => {
         { timeout: 8000, timeoutMsg: "hooks 页 dirty 圆点未出现（dirty 未上报壳）" },
       );
 
-      // 切配置页（planBalance）→ dirty 守卫 → confirmDialog
+      // 切配置页（backgroundTasks）→ dirty 守卫 → confirmDialog
       await browser.execute(() => {
         const nav = document.querySelector(
-          '[data-e2e="settings-nav-planBalance"]',
+          '[data-e2e="settings-nav-backgroundTasks"]',
         ) as HTMLElement | null;
         nav?.click();
       });
