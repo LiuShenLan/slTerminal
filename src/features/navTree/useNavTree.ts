@@ -3,7 +3,7 @@
 // 数据源（全部只读引用既有数据层，零新增订阅）：
 //   - 项目/页面树：useProjects（照 SidebarTree 订阅形态）
 //   - 活跃会话：useAgentStatus（rows——panelId/pageId/projectId/cliId/title/status/usage）
-//   - 历史会话：useAgentHistory（sessions + activeStatuses + scan/removeLocal）
+//   - 历史会话：useAgentHistory（sessions + activeStatuses + triggerNow/removeLocal）
 //
 // 归属规则（决策 5）：
 //   - 活跃会话挂页面下：row.pageId（useAgentStatus 内部已按 parseTerminalPageId 解析）
@@ -17,7 +17,7 @@
 // 搜索（NAV-04）：query 子串不区分大小写过滤项目/页面/会话名；
 // 父节点因子命中而显示（match 链）；查询非空时命中链自动展开（searching 覆盖手动展开态）。
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useProjects } from "../../stores/projects";
 import type { OperationPage, Project } from "../../stores/projects";
 import { useLayout } from "../../stores/layout";
@@ -83,9 +83,9 @@ export interface UseNavTreeResult {
   activePageId: string | null;
   /** 历史扫描状态（useAgentHistory 透传） */
   historyState: AgentHistoryState;
-  /** 刷新（重扫历史会话——「导航」头刷新钮；force=true 绕过后端 (mtime, 文件数)
-   *  缓存强制重扫——缓存空结果可被永久命中（目录内会话增删不改根键），
-   *  显式刷新必须 bypass） */
+  /** 刷新（「导航」头刷新钮）——手动触发（triggerNow）与定时 tick 同一扫描执行体；
+   *  force=true 在执行体内恒定，绕过后端 (mtime, 文件数) 缓存——缓存空结果可被
+   *  永久命中（目录内会话增删不改根键），显式刷新必须 bypass */
   refresh(): void;
   /** 删除历史会话后的即时局部刷新（不重扫） */
   removeLocal(sessionId: string): void;
@@ -192,13 +192,6 @@ export function useNavTree(): UseNavTreeResult {
 
   const searching = query.trim().length > 0;
 
-  // 挂载即扫描历史一次（NAV-10 契约：计数 pill 与历史行在首屏可见——历史折叠节点
-  // 常驻项目下，计数需要数据；FE-19：展开历史节点不再重复 scan——BE-19 后端
-  // (目录 mtime, 文件数) 缓存命中复用不重复读盘，显式刷新/恢复完成走 force=true）
-  useEffect(() => {
-    void history.scan();
-  }, [history.scan]);
-
   // 树模型派生：搜索过滤（NAV-04）+ 归属归组（决策 5）
   const tree = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -258,10 +251,11 @@ export function useNavTree(): UseNavTreeResult {
     toggleHist,
     activePageId,
     historyState: history.state,
-    // 刷新钮 = 显式重扫：force=true 绕过后端缓存（空结果永久命中场景必须 bypass）
+    // 刷新钮 = 手动触发（与定时 tick 同一扫描执行体；force=true 在执行体内恒定，
+    // 绕过后端缓存——空结果永久命中场景必须 bypass）
     refresh: useCallback(() => {
-      void history.scan(true);
-    }, [history.scan]),
+      history.triggerNow();
+    }, [history.triggerNow]),
     removeLocal: history.removeLocal,
     activeStatuses: history.activeStatuses,
   };

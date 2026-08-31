@@ -18,12 +18,17 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 // ─── Hoisted mocks ───
-const { mockUseAgentStatus, mockScanHistory, mockRestoreHistorySession } =
-  vi.hoisted(() => ({
-    mockUseAgentStatus: vi.fn(),
-    mockScanHistory: vi.fn(),
-    mockRestoreHistorySession: vi.fn(() => Promise.resolve()),
-  }));
+const {
+  mockUseAgentStatus,
+  mockScanHistory,
+  mockListBackgroundTasks,
+  mockRestoreHistorySession,
+} = vi.hoisted(() => ({
+  mockUseAgentStatus: vi.fn(),
+  mockScanHistory: vi.fn(),
+  mockListBackgroundTasks: vi.fn(),
+  mockRestoreHistorySession: vi.fn(() => Promise.resolve()),
+}));
 
 vi.mock("../features/agentStatus/useAgentStatus", () => ({
   useAgentStatus: () => mockUseAgentStatus(),
@@ -33,6 +38,15 @@ vi.mock("../features/agentStatus/useAgentStatus", () => ({
 vi.mock("../ipc/agentHistory", () => ({
   scanAgentHistory: mockScanHistory,
   deleteHistorySession: vi.fn(),
+}));
+
+// F12：调度器 activate 读配置——文件级 mock 覆盖 setup.ts 全局 mock
+// （listBackgroundTasks 恒返回 sessionRefresh enabled=true intervalSec=300——
+// 大间隔防 tick 干扰断言；set/onUpdated 防御 stub）
+vi.mock("../ipc/backgroundTasks", () => ({
+  listBackgroundTasks: mockListBackgroundTasks,
+  setBackgroundTaskConfig: vi.fn().mockResolvedValue([]),
+  onBackgroundTasksUpdated: vi.fn(() => () => {}),
 }));
 
 // useAgentHistory 订阅 TerminalRegistry——空实现即可（历史数据不依赖注册表）
@@ -67,10 +81,25 @@ import { NavTree } from "../features/navTree/NavTree";
 import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
 import type { AgentHistorySession } from "../types/agentHistory";
-import { CLAUDE_CLI_ID } from "../features/cliProfiles/profiles/claude";
+import { CLAUDE_CLI_ID, claudeProfile } from "../features/cliProfiles/profiles/claude";
+import { cliProfileRegistry } from "../features/cliProfiles/cliProfileRegistry";
+import { backgroundTaskScheduler } from "../features/backgroundTasks/scheduler";
+import { runSessionRefresh } from "../features/backgroundTasks/sessionRefreshTask";
+import "../features/backgroundTasks/tasks"; // 注册触发点（side-effect import，硬约束 #13）
+import { SESSION_REFRESH_TASK_ID } from "../types/backgroundTasks";
 import { SIDEBAR_BG, PLACEHOLDER_FG } from "../theme/colors";
 
 // ── 测试辅助 ──
+
+/** sessionRefresh 任务配置（大间隔防 tick 干扰断言——300s 远超用例时长） */
+const SESSION_REFRESH_CONFIG = {
+  taskId: "sessionRefresh",
+  title: "会话历史刷新",
+  enabled: true,
+  intervalSec: 300,
+  intervalMin: 2,
+  intervalMax: 300,
+};
 
 /** #hex → jsdom rgb() 规范化形态 */
 function hexToRgb(hex: string): string {
@@ -175,11 +204,19 @@ function resetAll(): void {
   });
   mockScanHistory.mockReset();
   mockScanHistory.mockResolvedValue([]);
+  mockListBackgroundTasks.mockReset();
+  mockListBackgroundTasks.mockResolvedValue([SESSION_REFRESH_CONFIG]);
   mockRestoreHistorySession.mockReset();
   mockRestoreHistorySession.mockResolvedValue(undefined);
 }
 
+// F12：调度器/注册表每用例重置 + 任务重注册（_reset 清空后恢复——runSessionRefresh
+// 导出供测试重注册，注册触发点仍收敛 tasks.ts）+ claude profile（history 能力参与扫描）
 beforeEach(() => {
+  backgroundTaskScheduler._reset();
+  backgroundTaskScheduler.register({ id: SESSION_REFRESH_TASK_ID, run: runSessionRefresh });
+  cliProfileRegistry._reset();
+  cliProfileRegistry.register(claudeProfile);
   resetAll();
 });
 
@@ -292,8 +329,9 @@ describe("历史会话项目归属（cwd 前缀匹配）", () => {
     expect(nodeA.textContent).not.toContain("无归属会话");
 
     // 展开 projB 历史 → 无历史行（s-2 不归属）
-    // FE-19：展开历史节点不重复 scan——扫描次数恒为 1（挂载即扫一次，NAV-10 契约
-    // useNavTree mount effect），展开/折叠任何历史节点均不再触发 scan
+    // FE-19：展开历史节点不重复 scan——扫描次数恒为 1（订阅首轮即扫一次，NAV-10
+    // 契约——useAgentHistory 首个订阅者立即执行一轮，接管「挂载即扫」语义），
+    // 展开/折叠任何历史节点均不再触发 scan
     expect(mockScanHistory).toHaveBeenCalledTimes(1);
     fireEvent.click(nodeB);
     await waitFor(() => {
@@ -475,11 +513,11 @@ describe("历史行交互", () => {
 });
 
 // ═══════════════════════════════════════════════════════════════
-// FE-19：扫描时机——挂载一次，展开不重复 scan，刷新钮显式重扫
+// FE-19：扫描时机——订阅首轮一次，展开不重复 scan，刷新钮 triggerNow 显式重扫
 // ═══════════════════════════════════════════════════════════════
 
-describe("历史扫描时机（FE-19：挂载一次 + 展开不重复 scan + 刷新钮显式重扫）", () => {
-  it("挂载即扫一次；展开/折叠历史节点不触发第二次 scan", async () => {
+describe("历史扫描时机（FE-19：订阅首轮 + 展开不重复 scan + 刷新钮 triggerNow）", () => {
+  it("订阅首轮即扫一次（挂载即扫语义）；展开/折叠历史节点不触发第二次 scan", async () => {
     seedProject("C:/projA", "proj-A", "项目A", [
       { pageId: "pageA", name: "页面 A" },
     ]);
@@ -487,7 +525,7 @@ describe("历史扫描时机（FE-19：挂载一次 + 展开不重复 scan + 刷
     mockScanHistory.mockResolvedValue([makeHistorySession()]);
 
     const { container } = render(<NavTree />);
-    // 挂载即扫（useNavTree mount effect）——等 scan 落地
+    // 订阅首轮（useAgentHistory 首个订阅者立即执行一轮）——等 scan 落地
     await waitFor(() => {
       expect(mockScanHistory).toHaveBeenCalledTimes(1);
     });
@@ -517,7 +555,7 @@ describe("历史扫描时机（FE-19：挂载一次 + 展开不重复 scan + 刷
     expect(mockScanHistory).toHaveBeenCalledTimes(1);
   });
 
-  it("「导航」头刷新钮 → 显式重扫（scan 再触发一次，force=true 绕缓存）", async () => {
+  it("「导航」头刷新钮 → triggerNow 手动重扫（scan 第二次调用且 force=true）", async () => {
     seedProject("C:/projA", "proj-A", "项目A", [
       { pageId: "pageA", name: "页面 A" },
     ]);
@@ -528,10 +566,11 @@ describe("历史扫描时机（FE-19：挂载一次 + 展开不重复 scan + 刷
     await waitFor(() => {
       expect(mockScanHistory).toHaveBeenCalledTimes(1);
     });
-    // 挂载首扫：按 CLAUDE_CLI_ID、force 缺省 undefined（后端缓存路径）
-    expect(mockScanHistory).toHaveBeenCalledWith("claude", undefined);
+    // 订阅首轮：按 CLAUDE_CLI_ID 扫描，force 恒 true（执行体内恒定，规格 §8）
+    expect(mockScanHistory).toHaveBeenCalledWith("claude", true);
 
-    // 新会话落盘 → 点刷新钮重扫（force=true 绕过 BE-19 缓存——契约断链接线回归）
+    // 新会话落盘 → 点刷新钮 → triggerNow 手动重扫（与定时 tick 同一执行体，
+    // force=true 绕过 BE-19 缓存——契约断链接线回归）
     mockScanHistory.mockResolvedValue([makeHistorySession()]);
     const refreshBtn = container.querySelector(
       'button[aria-label="刷新"]',

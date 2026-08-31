@@ -29,6 +29,7 @@ const {
   mockUseAgentStatus,
   mockSwitchToPageAndFocus,
   mockScanHistory,
+  mockListBackgroundTasks,
   mockWriteText,
   mockSendToast,
   mockTerminalGetAll,
@@ -38,6 +39,7 @@ const {
   mockUseAgentStatus: vi.fn(),
   mockSwitchToPageAndFocus: vi.fn(),
   mockScanHistory: vi.fn(),
+  mockListBackgroundTasks: vi.fn(),
   mockWriteText: vi.fn(() => Promise.resolve()),
   mockSendToast: vi.fn(),
   mockTerminalGetAll: vi.fn(() => new Map()),
@@ -54,6 +56,15 @@ vi.mock("../features/agentStatus/useAgentStatus", () => ({
 vi.mock("../ipc/agentHistory", () => ({
   scanAgentHistory: mockScanHistory,
   deleteHistorySession: vi.fn(),
+}));
+
+// F12：调度器 activate 读配置——文件级 mock 覆盖 setup.ts 全局 mock
+// （listBackgroundTasks 恒返回 sessionRefresh enabled=true intervalSec=300——
+// 大间隔防 tick 干扰断言；set/onUpdated 防御 stub）
+vi.mock("../ipc/backgroundTasks", () => ({
+  listBackgroundTasks: mockListBackgroundTasks,
+  setBackgroundTaskConfig: vi.fn().mockResolvedValue([]),
+  onBackgroundTasksUpdated: vi.fn(() => () => {}),
 }));
 
 // FE-09：findPanelForSession/findPageIdForPanelId 已上提 pageApis——用真实实现
@@ -125,7 +136,12 @@ import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
 import { resetProjectStores } from "./helpers/workspace-setup";
 import type { AgentSessionRow } from "../features/agentStatus/useAgentStatus";
-import { CLAUDE_CLI_ID } from "../features/cliProfiles/profiles/claude";
+import { CLAUDE_CLI_ID, claudeProfile } from "../features/cliProfiles/profiles/claude";
+import { cliProfileRegistry } from "../features/cliProfiles/cliProfileRegistry";
+import { backgroundTaskScheduler } from "../features/backgroundTasks/scheduler";
+import { runSessionRefresh } from "../features/backgroundTasks/sessionRefreshTask";
+import "../features/backgroundTasks/tasks"; // 注册触发点（side-effect import，硬约束 #13）
+import { SESSION_REFRESH_TASK_ID } from "../types/backgroundTasks";
 import {
   ACTIVE_SELECTION_BG,
   SELECTION_HOVER_BG,
@@ -141,6 +157,16 @@ import {
 import type { AgentHistorySession } from "../types/agentHistory";
 
 // ── 测试辅助 ──
+
+/** sessionRefresh 任务配置（大间隔防 tick 干扰断言——300s 远超用例时长） */
+const SESSION_REFRESH_CONFIG = {
+  taskId: "sessionRefresh",
+  title: "会话历史刷新",
+  enabled: true,
+  intervalSec: 300,
+  intervalMin: 2,
+  intervalMax: 300,
+};
 
 /** 色值 → jsdom 归一化形态（#hex → "rgb(r, g, b)"；rgba 去除内空白后比对） */
 function hexToRgb(hex: string): string {
@@ -241,6 +267,8 @@ function resetAll(): void {
   mockSwitchToPageAndFocus.mockReset();
   mockScanHistory.mockReset();
   mockScanHistory.mockResolvedValue([]);
+  mockListBackgroundTasks.mockReset();
+  mockListBackgroundTasks.mockResolvedValue([SESSION_REFRESH_CONFIG]);
   mockWriteText.mockReset();
   mockSendToast.mockReset();
   mockTerminalGetAll.mockReset();
@@ -251,7 +279,13 @@ function resetAll(): void {
   mockConfirmDialog.mockResolvedValue(false);
 }
 
+// F12：调度器/注册表每用例重置 + 任务重注册（_reset 清空后恢复——runSessionRefresh
+// 导出供测试重注册，注册触发点仍收敛 tasks.ts）+ claude profile（history 能力参与扫描）
 beforeEach(() => {
+  backgroundTaskScheduler._reset();
+  backgroundTaskScheduler.register({ id: SESSION_REFRESH_TASK_ID, run: runSessionRefresh });
+  cliProfileRegistry._reset();
+  cliProfileRegistry.register(claudeProfile);
   resetAll();
 });
 

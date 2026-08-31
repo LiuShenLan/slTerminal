@@ -41,8 +41,9 @@ const PlanBalanceRow: React.FC<{ info: PlanBalanceInfo; onRefresh: () => void }>
 };
 
 export const PlanBalanceFooter: React.FC = () => {
-  const { items, refresh } = usePlanBalance();
-  if (items.length === 0) return null; // §8.3：整块（含发丝线）不渲染
+  const { items, refresh, enabled } = usePlanBalance();
+  // 禁用即整块不渲染（F12 enabled 语义：禁用即不关注，快照保留——重启用即重显最后快照）
+  if (enabled !== true || items.length === 0) return null; // §8.3：整块（含发丝线）不渲染
   return (
     <div
       data-e2e="plan-balance-footer"

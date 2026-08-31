@@ -1,23 +1,23 @@
-// useAgentHistory.ts — agent 历史会话数据 hook（FE-04）
+// useAgentHistory.ts — agent 历史会话数据 hook（FE-04；F12 订阅化改造）
 //
-// 返回形状契约（跨 Stage 契约写死，Stage 05 消费）：
-//   { state, sessions, activeStatuses, rootPath, scan, removeLocal }
+// 返回形状契约（跨 Stage 契约写死）：
+//   { state, sessions, activeStatuses, rootPath, triggerNow, removeLocal }
 //
 // 设计要点：
-// - 状态机 idle | loading | ready | error，初始 idle（未扫描）
-// - scan(force?) 由导航树挂载与手动刷新按钮触发（规格 4.3.5）——按 CLAUDE_CLI_ID
-//   单 CLI 扫描（后端 provider REGISTRY 当前仅 claude，单 cliId 扫描即全量，
-//   MC-312 聚合语义收敛到后端 cliId 分发；第二后端 provider 接入时重评估前端
-//   聚合）；force=true 绕过 BE-19 缓存强制重扫（显式刷新按钮，缓存空结果可
-//   被永久命中——目录内会话增删不改根键）
-// - removeLocal 纯本地即时刷新，不触发重扫（删除 IPC 由调用方先执行）
+// - sessions/state 真值源上移 backgroundTaskScheduler（F12）：本 hook 订阅
+//   sessionRefresh 任务快照（状态机 idle|loading|ready|error 语义不变）；
+//   首个订阅者出现 → 立即执行一轮（接管「挂载即扫」语义）+ 按配置频率定时刷新；
+//   最后订阅者退订 → 停 interval（调度器全局单例与 UI 解耦，NavTree 卸载无碍，ADR-0001）
+// - triggerNow() = 手动刷新（刷新钮）——与 tick 共用同一扫描执行体（规格 §1 单一执行体）
+// - removeLocal 经调度器 applyLocal 透传（删除会话后本地移除列表项不重扫）
 // - activeStatuses 实时跟随 TerminalRegistry（register/remove/sessionChange），
-//   不重扫（规格 4.5）——Map<cliId|sessionId, 四态 status>，历史区行显示与活跃区一致（问题 2）
-// - rootPath 变化不自动重扫——历史区数据与项目弱相关（checklist FE-04）
+//   不重扫；rootPath 推导保持 hook 本地不变（activePageId → 所属 project）
 
-import { useState, useEffect, useRef, useCallback } from "react";
-import { scanAgentHistory } from "../../ipc/agentHistory";
-import { CLAUDE_CLI_ID } from "../cliProfiles/profiles/claude";
+import { useState, useEffect, useCallback } from "react";
+import { backgroundTaskScheduler } from "../backgroundTasks";
+import "../backgroundTasks/tasks"; // side-effect：任务注册触发点之一（硬约束 #13）
+import type { TaskSnapshot } from "../backgroundTasks";
+import { SESSION_REFRESH_TASK_ID } from "../../types/backgroundTasks";
 import { useProjects } from "../../stores/projects";
 import { useLayout } from "../../stores/layout";
 import { TerminalRegistry } from "../../panels/terminal/TerminalRegistry";
@@ -44,37 +44,38 @@ export function useAgentHistory() {
     }
   }
 
-  const [state, setState] = useState<AgentHistoryState>("idle");
-  const [sessions, setSessions] = useState<AgentHistorySession[]>([]);
-  const [activeStatuses, setActiveStatuses] = useState<
-    Map<string, AgentStatus>
-  >(() => deriveActiveSessionStatuses());
-  const genRef = useRef(0);
+  // 订阅调度器快照（首个订阅者 → 立即执行一轮 + 启动定时刷新；卸载退订）
+  const [snapshot, setSnapshot] = useState<TaskSnapshot<AgentHistorySession[]>>({
+    state: "idle",
+    data: undefined,
+  });
+  useEffect(
+    () =>
+      backgroundTaskScheduler.subscribe<AgentHistorySession[]>(
+        SESSION_REFRESH_TASK_ID,
+        setSnapshot,
+      ),
+    [],
+  );
 
-  /** 扫描历史会话——generation 防竞：进行中再次触发，旧结果丢弃（照 useFileTree genRef 模式） */
-  const scan = useCallback(async (force?: boolean) => {
-    const gen = ++genRef.current;
-    setState("loading");
-    try {
-      const result = await scanAgentHistory(CLAUDE_CLI_ID, force);
-      if (gen !== genRef.current) return; // 过期结果丢弃
-      // 契约返回 AgentHistorySession[]——非数组（后端异常/测试环境 null）回退空表防渲染崩溃
-      setSessions(Array.isArray(result) ? result : []);
-      setState("ready");
-    } catch (err) {
-      console.error("[slTerminal] 历史扫描失败:", err);
-      if (gen !== genRef.current) return;
-      setState("error");
-    }
+  const [activeStatuses, setActiveStatuses] = useState<Map<string, AgentStatus>>(
+    () => deriveActiveSessionStatuses(),
+  );
+
+  /** 手动刷新（刷新钮）——与 tick 同一执行体，仅触发来源不同（manual 失败置 error 态） */
+  const triggerNow = useCallback(() => {
+    void backgroundTaskScheduler.triggerNow(SESSION_REFRESH_TASK_ID);
   }, []);
 
   /** 局部删除：调用方已执行删除 IPC，此处仅即时移除列表项（不重扫） */
   const removeLocal = useCallback((sessionId: string) => {
-    setSessions((prev) => prev.filter((s) => s.sessionId !== sessionId));
+    backgroundTaskScheduler.applyLocal<AgentHistorySession[]>(
+      SESSION_REFRESH_TASK_ID,
+      (prev) => (prev ?? []).filter((s) => s.sessionId !== sessionId),
+    );
   }, []);
 
   // 订阅 TerminalRegistry：register/remove/sessionChange 任一事件 → 重算四态映射
-  // （订阅回调只触发重算，不重扫；卸载时取消订阅）
   useEffect(() => {
     const unsubscribe = TerminalRegistry.subscribe(() => {
       setActiveStatuses(deriveActiveSessionStatuses());
@@ -82,5 +83,12 @@ export function useAgentHistory() {
     return unsubscribe;
   }, []);
 
-  return { state, sessions, activeStatuses, rootPath, scan, removeLocal };
+  return {
+    state: snapshot.state,
+    sessions: snapshot.data ?? [],
+    activeStatuses,
+    rootPath,
+    triggerNow,
+    removeLocal,
+  };
 }
