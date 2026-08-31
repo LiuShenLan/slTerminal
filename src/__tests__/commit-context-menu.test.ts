@@ -38,8 +38,8 @@ vi.mock("../lib", () => ({
 import { getContextMenuItems } from "../features/commit/commitContextMenu";
 import type { CommitMenuItem } from "../features/commit/commitContextMenu";
 
-function makeEntry(path: string, status: string) {
-  return { path, status, oldPath: null };
+function makeEntry(path: string, status: string, oldPath: string | null = null) {
+  return { path, status, oldPath };
 }
 
 beforeEach(() => {
@@ -150,6 +150,27 @@ describe("getContextMenuItems action 执行流程", () => {
       mockRefresh,
     );
     expect(items[0].danger).toBe(true);
+  });
+
+  it("回滚(renamed): 以 oldPath 定位 HEAD 侧（git status 语义 path=当前路径后 HEAD 文件在旧路径）", async () => {
+    // 防复发：修复前回滚传 entry.path（旧路径）；path 语义修复后传 path=新路径
+    // 会命中后端「HEAD 中不存在」，必须传 oldPath
+    const action = getFirstAction(makeEntry("C:/repo/ren.ts", "renamed", "C:/repo/old.ts"));
+    expect(action).not.toBeNull();
+
+    await action!();
+
+    expect(mockGitRollback).toHaveBeenCalledWith("C:/repo", "C:/repo/old.ts");
+    expect(mockRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("回滚(renamed, 无 oldPath 兜底): 以 path 调用", async () => {
+    const action = getFirstAction(makeEntry("C:/repo/ren.ts", "renamed"));
+    expect(action).not.toBeNull();
+
+    await action!();
+
+    expect(mockGitRollback).toHaveBeenCalledWith("C:/repo", "C:/repo/ren.ts");
   });
 
   it("删除(added): confirmDialog → gitUnstage → deleteEntry → refresh", async () => {

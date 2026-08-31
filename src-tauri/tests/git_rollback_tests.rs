@@ -13,6 +13,7 @@
 
 mod common;
 
+use std::fs;
 use std::path::Path;
 use std::process::Command;
 
@@ -289,5 +290,42 @@ fn git_rollback_broken_head_peel_tree_err() {
     assert!(
         err.to_string().contains("获取 HEAD tree 失败"),
         "broken HEAD 应报'获取 HEAD tree 失败'，实际: {err}"
+    );
+}
+
+/// renamed 回滚（前端 commitContextMenu 对 renamed 传 oldPath——git status 语义
+/// path=当前路径后，HEAD 侧文件位于旧路径）：以旧路径回滚 → 旧路径文件恢复
+/// HEAD 内容、新路径文件残留 untracked（等价 `git checkout HEAD -- <旧路径>`）
+#[test]
+fn git_rollback_renamed_restores_old_path() {
+    let (_dir, path) = init_temp_repo();
+    commit_file(&path, "a.txt", "HEAD 内容");
+    // 工作区 rename（后端 fs_rename 同款）→ git 检测为 renamed：path=b.txt、old_path=a.txt
+    std::fs::rename(path.join("a.txt"), path.join("b.txt")).unwrap();
+
+    // 前端对 renamed 传 oldPath（a.txt）回滚
+    rollback(&path, &path.join("a.txt")).unwrap();
+
+    // 旧路径文件恢复 HEAD 内容
+    assert_eq!(
+        fs::read_to_string(path.join("a.txt")).unwrap(),
+        "HEAD 内容",
+        "回滚后旧路径文件应恢复 HEAD 内容"
+    );
+    // 新路径文件残留（untracked——git status 不再有 a 的条目，b 为未跟踪）
+    assert!(
+        path.join("b.txt").exists(),
+        "新路径文件应保留（untracked 残留）"
+    );
+
+    let app = make_app_state(Some(path.clone()));
+    let statuses = block_on(slterminal_lib::git::git_status_impl(
+        &app,
+        &path.to_string_lossy(),
+    ))
+    .unwrap();
+    assert!(
+        !statuses.iter().any(|e| e.path.ends_with("/a.txt")),
+        "回滚后旧路径不应再有任何状态条目"
     );
 }

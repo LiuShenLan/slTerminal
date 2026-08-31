@@ -28,6 +28,7 @@ import { usePanelFocus } from "../shortcuts/usePanelFocus";
 import { setActiveExplorer, clearActiveExplorer } from "./activeExplorer";
 import { basename } from "../../lib/path";
 import { confirmDialog } from "../../lib/ConfirmDialog";
+import { getErrorMessage } from "../../lib";
 import { IconClose, IconEmptyBox, IconAlertTriangle } from "../../lib/icons";
 
 /** 操作失败错误提示自动消失时间（ms） */
@@ -120,7 +121,7 @@ export const ExplorerPanel: React.FC = () => {
       refresh();
     } catch (err) {
       console.error("删除失败:", err);
-      showError(`删除失败: ${err instanceof Error ? err.message : String(err)}`);
+      showError(`删除失败: ${getErrorMessage(err)}`);
     }
   }, [refresh, showError]);
 
@@ -290,6 +291,15 @@ export const ExplorerPanel: React.FC = () => {
           ? oldPath.slice(0, oldPath.lastIndexOf("/"))
           : "";
       const newPath = parentDir ? `${parentDir}/${newName}` : newName;
+      // 兜底短路：新旧路径相同（防未来其他调用方直传原名）→ 静默退出编辑态，
+      // 不发 IPC——同名提交会触发后端 src==dst 覆盖分支误删源文件。
+      // 正常同名已由 FileTree.confirmRename 拦截，此处为防御层（不调 refresh，
+      // 磁盘未变；不引 handleRenameCancel——其定义在本函数之后，闭包有 TDZ 风险）。
+      if (oldPath === newPath) {
+        setRenamingPath(null);
+        setRenameValue("");
+        return;
+      }
       try {
         await rename(oldPath, newPath);
         setRenamingPath(null);
@@ -297,7 +307,7 @@ export const ExplorerPanel: React.FC = () => {
         refresh();
       } catch (err) {
         console.error("重命名失败:", err);
-        showError(`重命名失败: ${err instanceof Error ? err.message : String(err)}`);
+        showError(`重命名失败: ${getErrorMessage(err)}`);
       }
     },
     [refresh, showError],
@@ -318,7 +328,7 @@ export const ExplorerPanel: React.FC = () => {
         refresh();
       } catch (err) {
         console.error("删除失败:", err);
-        showError(`删除失败: ${err instanceof Error ? err.message : String(err)}`);
+        showError(`删除失败: ${getErrorMessage(err)}`);
       }
     },
     [refresh, showError, selectedPath],
@@ -332,7 +342,7 @@ export const ExplorerPanel: React.FC = () => {
         refresh();
       } catch (err) {
         console.error("新建文件失败:", err);
-        showError(`新建文件失败: ${err instanceof Error ? err.message : String(err)}`);
+        showError(`新建文件失败: ${getErrorMessage(err)}`);
       }
     },
     [refresh, showError],
@@ -346,7 +356,7 @@ export const ExplorerPanel: React.FC = () => {
         refresh();
       } catch (err) {
         console.error("新建文件夹失败:", err);
-        showError(`新建文件夹失败: ${err instanceof Error ? err.message : String(err)}`);
+        showError(`新建文件夹失败: ${getErrorMessage(err)}`);
       }
     },
     [refresh, showError],

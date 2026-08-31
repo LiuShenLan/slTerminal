@@ -216,6 +216,40 @@ describe("ExplorerPanel 重命名成功路径", () => {
     // 无错误横幅
     expect(document.querySelector('[data-testid="explorer-error-banner"]')).toBeNull();
   });
+
+  it("C5: 重命名不改名直接 Enter → rename 不被调用 + 输入框消失 + 无错误横幅", async () => {
+    // 防复发：修复前同名提交会经 fs_rename(src==dst) 触发后端覆盖分支误删源文件，
+    // mockRename 被以 (old.ts, "old.ts") 即 src==dst 调用；修复后应静默取消。
+    const fileEntry = { name: "old.ts", path: "C:/test-project/old.ts", isDir: false, size: 32, modified: 1 };
+    mocks.mockReadDir.mockResolvedValue([fileEntry]);
+
+    seedProject();
+    const { getAllByText } = render(React.createElement(ExplorerPanel));
+
+    await waitFor(() => {
+      expect(getAllByText("old.ts").length).toBeGreaterThan(0);
+    }, { timeout: 3000 });
+
+    // 右键 → 重命名 → 输入框出现
+    fireEvent.contextMenu(getAllByText("old.ts")[0]);
+    fireEvent.click(getAllByText("重命名")[0]);
+    expect(document.querySelectorAll('[data-testid="explorer-inline-input"]').length).toBe(1);
+
+    // 不改值直接 Enter（非受控 input，defaultValue 即原名）
+    const renameInput = document.querySelector(
+      '[data-testid="explorer-inline-input"]',
+    ) as HTMLInputElement;
+    fireEvent.keyDown(renameInput, { key: "Enter" });
+
+    // 同名视为取消：rename IPC 绝不调用
+    await waitFor(() => {
+      expect(mocks.mockRename).not.toHaveBeenCalled();
+    }, { timeout: 3000 });
+    // 退出编辑态：输入框消失
+    expect(document.querySelectorAll('[data-testid="explorer-inline-input"]').length).toBe(0);
+    // 无错误横幅
+    expect(document.querySelector('[data-testid="explorer-error-banner"]')).toBeNull();
+  });
 });
 
 // =====================================================================

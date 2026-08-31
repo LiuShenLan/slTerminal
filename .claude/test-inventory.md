@@ -2,14 +2,14 @@
 
 > **本文档是项目用例数唯一真值源。** 所有 CLAUDE.md、README、CI 配置中引用的用例数均以此文件为准。更新测试后必须同步本文档。
 
-全量 **3905** 用例（Rust 827 + 前端 2879 + L3 142 + E2E 57），2026-08-31 实跑确认。
+全量 **3923** 用例（Rust 836 + 前端 2890 + L3 142 + E2E 57），2026-08-31 实跑确认。
 
 > **登记纪律（TQ-CI-01）**：改测试后同步本文件——L1 以 `cargo test` 实跑总数 + `grep -c '#[test]'` 双核对；L2 以 `npm test` 实跑（Vitest 报告）为准；段小计 = 段内行级用例数之和（逐段核对 it.each/工厂展开）。三处（表头/段头/段小计）必须一致。
 
 > **覆盖纪律（硬约束 #11）**：改动的代码可自动化部分必须添加全量自动化测试用例覆盖；不可自动化部分须在本文件既定豁免清单登记，注明豁免原因与当前兜底层级，禁止未登记豁免。
 
 > **计数口径**：
-> - L1 以 `grep -c '#[test]'` 统计的 `#[test]` 属性数为准（41 文件 827；2026-08-31 实跑 `cargo test --lib` 711 例 + 集成测试 116 例双核对）。
+> - L1 以 `grep -c '#[test]'` 统计的 `#[test]` 属性数为准（41 文件 830；2026-08-31 实跑 `cargo test` 714 例 + 集成测试 116 例双核对）。
 > - L2 以 `npm test` 实跑（Vitest 报告）为准，it.each/describeIpcContract 工厂按展开后计入（170 文件 2879）。
 > - L3 以 `npm run test:l3` 实跑为准（8 文件 142）。
 > - L4 以 spec 内 `it(`/`it.skip(` 计数为准（11 spec，57 用例，55 active + 2 skip）。
@@ -40,6 +40,7 @@
 | ~~`cargo test` 门禁（F12 起）~~ **已修复（2026-08-31 当日翻案）** | 初判环境 bug；当日定位真根因：测试二进制无 manifest → SxS 未激活 comctl32 v6 → 系统解析到 v5 → tauri 栈静态导入的 `TaskDialogIndirect`（v6 导出）缺入口 → 0xC0000139 零输出崩溃（与 TQ-COV-06 8-23 预防性登记同因，彼时 `rustc-link-arg-tests` 对默认 lib test 目标不生效故从未真正激活）。修复：Cargo.toml `[lib] test = false` + 显式 `[[test]] lib_tests`（path = src/lib.rs）——使 `cargo:rustc-link-arg-tests`（存量 build.rs）真正作用于 lib 单测目标，manifest 嵌入生效 | 全量 `cargo test -- --test-threads=1` 实测 827 例全绿（711 lib + 116 集成，2026-08-31） | 2026-08-31 实证登记 → 当日翻案 |
 | background_tasks spawn/emit 包装层（`spawn_poller` 循环本体与 `background_tasks_set_config` 命令包装层的 emit/重 spawn 分支） | 需 `AppHandle` 与 tauri runtime（async_runtime spawn/事件发射），L1 无法直测；可测部分（`set_config_core` 校验→落盘→内存链、registry 解析钳制）已 L1 全覆盖 | L4 勾选启停端到端（`background-tasks.e2e.ts` C）+ 人工实测（运行中改配置观察 poller 生效） | BE-02 |
 | tick 失败静默 E2E 豁免（E2E-03 用例 G） | tick 失败需后端扫描故障注入通道，E2E 沙箱内无可控注入手段 | 调度器 L2 用例（`background-tasks-scheduler.test.ts` 失败处理：tick 失败快照不变/manual 失败置 error）+ 人工观察 | E2E-03 |
+| `ExplorerPanel.handleRename` 同名兜底短路分支（oldPath === newPath） | UI 不可达——同名已在 `FileTree.confirmRename` 拦截（比较 basename），测试无法直传同名进入 onRename；属防御层死代码 | confirmRename 同名短路 L2 用例（explorer-rename-state 3 例）+ 后端 src==dst 幂等 L1 用例（`test_fs_rename_src_equals_dst_*` 2 例）双边锁死同层语义 | 修复「重命名取消误删文件」登记 |
 
 > 原豁免表中 `FileWatcher::start`/`notify_watch` 与 `claude_history` 命令包装两项已按 D6 从豁免重分类为补测，不再列入豁免表。  
 > **SEC-17 豁免已撤销（TQ-COV-05 翻案）**：`tracing::warn!(target: "audit")` 已由 `tracing-test` 断言锁死，豁免行删除。
@@ -62,15 +63,15 @@
 | ⑤ | L2 | **E2E helper 行为契约**——验证 `__slterm_e2e_createProject` 等 helper 的契约，非真实 App 初始化逻辑 | 13 P-14 |
 | ⑥ | L2 | **浅层组件定位**——`editor.test.tsx` mock `useCodeMirror`，定位为组件集成契约测试，真实编辑器行为由 `use-code-mirror.test.ts` 等覆盖 | 07 G1/G2 |
 
-## L1 — Rust 单元/集成测试（41 文件 / 827 用例）
+## L1 — Rust 单元/集成测试（41 文件 / 836 用例）
 
 运行：`cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1`
 
 | 文件 | 用例 | 覆盖要点 |
 |------|------|---------|
-| `src-tauri/tests/git_status_tests.rs` | 43 | git_status 命令层；状态/oldPath/ignore；TQ-COV-06 |
-| `src-tauri/tests/git_diff_tests.rs` | 34 | git_diff 命令层；compute_diff_hunks 边界；serde；TQ-COV-06 |
-| `src-tauri/tests/git_rollback_tests.rs` | 11 | git_rollback 命令层；TQ-COV-06 |
+| `src-tauri/tests/git_status_tests.rs` | 47 | git_status 命令层；状态/oldPath/ignore；renamed path=当前路径（防复发）/各状态 path 语义；TQ-COV-06 |
+| `src-tauri/tests/git_diff_tests.rs` | 35 | git_diff 命令层；compute_diff_hunks 边界；untracked 全量新增 hunk；serde；TQ-COV-06 |
+| `src-tauri/tests/git_rollback_tests.rs` | 12 | git_rollback 命令层；renamed 旧路径回滚；TQ-COV-06 |
 | `src-tauri/tests/git_file_at_head_tests.rs` | 9 | git_file_at_head 命令层；TQ-COV-06 |
 | `src-tauri/tests/git_unstage_tests.rs` | 6 | git_unstage 命令层 |
 | `src-tauri/tests/ci_config_tests.rs` | 1 | `ci_l1_uses_single_test_thread` |
@@ -80,7 +81,7 @@
 | `src-tauri/src/pty/conpty_api.rs` | 5 | 嵌入捆绑 ConPTY 提取/加载/回退；ADR-0005 |
 | `src-tauri/src/pty/shell.rs` | 33 | shell 发现与回退/白名单/alias 兼容/B17 profile 加载守卫；SEC-01/SEC-15 |
 | `src-tauri/src/state.rs` | 43 | ring buffer/路径沙箱/project_root 切换/git 缓存；BE-04/BE-09/SEC-16 |
-| `src-tauri/src/fs/mod.rs` | 43 | fs 命令层；分块读取；路径上下文；BE-03/BE-13 |
+| `src-tauri/src/fs/mod.rs` | 46 | fs 命令层；分块读取；路径上下文；重命名幂等 src==dst/覆盖兜底；BE-03/BE-13/SEC-04 |
 | `src-tauri/src/notify/mod.rs` | 45 | watcher 生命周期/事件分类/排除/symlink/合并；BE-02/BE-07/SEC-08 |
 | `src-tauri/src/notify/pool.rs` | 15 | LruWatcherPool 缓存/LRU/暂停/替换；BE-10/BE-11 |
 | `src-tauri/src/hooks/mod.rs` | 19 | 命令层泛化/cliId 透传；MC-211 |
@@ -120,7 +121,7 @@
 
 本地开发机（已开开发者模式）为真实覆盖来源；CI runner 未开权限时上述分支覆盖记为「不确定」。
 
-## L2 — 前端单元/集成测试（170 文件 / 2879 用例）
+## L2 — 前端单元/集成测试（170 文件 / 2890 用例）
 
 运行：`npm test`
 
@@ -216,12 +217,12 @@
 | `src/__tests__/keybindings.test.ts` | 19 | 快捷键绑定/持久化；FE-09/FE-11/SVC-02 |
 | `src/__tests__/layout.test.ts` | 4 | activePageId 状态 |
 
-### 资源管理器（24 文件 / 309 用例）
+### 资源管理器（24 文件 / 318 用例）
 
 | 文件 | 用例 | 覆盖要点 |
 |------|------|---------|
 | `src/__tests__/explorer-git-status.test.tsx` | 32 | git 状态着色；TH-10 |
-| `src/__tests__/explorer-delete.test.tsx` | 26 | 删除确认/菜单/横幅；EXP-04/EXP-11/UI-802/TQ-B-08 |
+| `src/__tests__/explorer-delete.test.tsx` | 31 | 删除确认/菜单/横幅；EXP-04/EXP-11/UI-802/TQ-B-08；E8 AppError 形态错误横幅 |
 | `src/__tests__/file-icon.test.tsx` | 44 | 文件图标六色盘/目录 git 着色；IC-04/FE-20 |
 | `src/__tests__/explorer-file-viewer.test.tsx` | 21 | 打开文件面板分派；EXP-10 |
 | `src/__tests__/explorer-refresh-preserve.test.tsx` | 23 | 增量刷新/去抖/子树范围；FE-15 |
@@ -232,14 +233,14 @@
 | `src/__tests__/explorer-sandbox-race.test.tsx` | 14 | setProjectRoot 竞态；DBG-10/TQ-B-03 |
 | `src/__tests__/explorer-notify.test.tsx` | 6 | useFileTree 加载交互残余 |
 | `src/__tests__/explorer-input-boundary.test.tsx` | 10 | 内联输入框边界；EXP-06 |
-| `src/__tests__/explorer-rename-state.test.tsx` | 8 | 重命名状态上提 |
+| `src/__tests__/explorer-rename-state.test.tsx` | 11 | 重命名状态上提/同名短路取消 |
 | `src/__tests__/explorer-open-in-terminal.test.tsx` | 7 | 在终端中打开；EXP-01 |
 | `src/__tests__/explorer-race-cleanup.test.tsx` | 6 | useFileTree 竞态清理；EXP-07 |
 | `src/__tests__/activeExplorer.test.ts` | 6 | active 指针 |
 | `src/__tests__/explorer-rootpath-clear.test.tsx` | 6 | rootPath 变化清空 |
 | `src/__tests__/explorer-focus.test.tsx` | 6 | 焦点管理；EXP-04 |
 | `src/__tests__/explorer-rename-keyboard.test.tsx` | 5 | F2 重命名 |
-| `src/__tests__/explorer-crud-success.test.tsx` | 4 | CRUD 成功路径；EXP-02 |
+| `src/__tests__/explorer-crud-success.test.tsx` | 5 | CRUD 成功路径；EXP-02；C5 同名不改名不调 IPC |
 | `src/__tests__/explorer-error-placeholder.test.tsx` | 5 | 加载错误占位；FE-07 |
 | `src/__tests__/dir-entry-null.test.tsx` | 3 | DirEntry null 适配；FE-12 |
 | `src/__tests__/explorer-virtualization.test.tsx` | 8 | FileTree 虚拟化/滚动跟随；FE-30/FE-40/TQ-B-01 |
@@ -266,12 +267,12 @@
 | `src/__tests__/workspace-sideviews.test.tsx` | 13 | Workspace 三栏集成；SVC-10/NAV-05 |
 | `src/__tests__/sideViewRegistry.test.ts` | 8 | 侧栏视图注册表；NAV-05/TQ-COV-10 |
 
-### Commit 视图（6 文件 / 64 用例）
+### Commit 视图（6 文件 / 66 用例）
 
 | 文件 | 用例 | 覆盖要点 |
 |------|------|---------|
 | `src/__tests__/commit-open-file.test.ts` | 17 | 双击分派/去重；SVC-04/11/B10 |
-| `src/__tests__/commit-context-menu.test.ts` | 17 | 右键菜单/action；SVC-09/UI-802 |
+| `src/__tests__/commit-context-menu.test.ts` | 19 | 右键菜单/action；renamed 回滚 oldPath；SVC-09/UI-802 |
 | `src/__tests__/commit-view-list.test.tsx` | 9 | 列表渲染/去抖/空态；SVC-03/SVC-12 |
 | `src/__tests__/commit-context-menu-ui.test.tsx` | 10 | 菜单 UI/危险项；UI-802 |
 | `src/__tests__/commit-view-status.test.ts` | 7 | 状态机四态 |

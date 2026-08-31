@@ -17,7 +17,11 @@ use tauri::State;
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitStatusEntry {
-    /// 文件绝对路径（repo_path + git2 相对路径，与 fs_read_dir 的 DirEntry.path 格式一致）
+    /// 文件绝对路径（与 fs_read_dir 的 DirEntry.path 格式一致）= 当前工作区路径。
+    /// 语义对齐 git status：modified/added/untracked/conflict 为当前路径，
+    /// deleted 为被删路径（git status 显示语义），renamed 为**新路径**
+    /// （旧路径见 old_path——git2-rs 的 entry.path() 对 renamed 返回旧路径，
+    /// 命令层必须改取 delta.new_file().path()）
     pub path: String,
     /// git 状态：modified | added | deleted | renamed | untracked | conflict | ignored
     pub status: String,
@@ -164,15 +168,50 @@ pub async fn git_status_impl(
         // 确保与 fs_read_dir 返回的 DirEntry.path 格式一致。
         let mut entries: Vec<GitStatusEntry> = Vec::new();
         for entry in statuses.iter() {
-            let rel = entry.path().unwrap_or("").to_string().replace('\\', "/");
-            // 拼接为绝对路径：workdir + "/" + rel
-            let path = workdir.join(&rel).to_string_lossy().replace('\\', "/");
-
             let status_flag = entry.status();
             let status_str = match status_to_str(status_flag) {
                 Some(s) => s,
                 None => continue, // 跳过 Current（无变更）
             };
+
+            // path 语义对齐 git status：path = 当前工作区路径（与 fs_read_dir 的
+            // DirEntry.path 同规格，前端 gitStatusMap/commit 列表均按此定位）。
+            //
+            // git2-rs 的 StatusEntry::path_bytes()（git2-0.21.0/src/status.rs）
+            // 两个分支均返回 delta.old_file.path——对 renamed 条目即「旧路径」，
+            // 新文件名会缺失于 git_status 结果（回归根因：rename 后新文件无
+            // git 着色、commit 列表显示旧文件名）。故 renamed 必须改取
+            // delta.new_file().path()（同为相对 workdir 路径）。
+            //
+            // 各状态语义（libgit2 单路径 delta 两侧同填当前路径）：
+            // - 非 renamed（modified/added/untracked/conflict/ignored）：
+            //   entry.path() 已等于当前路径 → 保持；
+            // - deleted：entry.path() = 被删路径，即 git status 显示语义 → 保持；
+            // - renamed：delta 中 old_file=旧路径、new_file=新路径 → 取 new_file。
+            //   同条目双 RENAMED 标志的罕见场景 INDEX_RENAMED 优先——与 libgit2
+            //   status.c 及 path_bytes() 的 head_to_index 优先级一致。
+            let rel = if status_flag.contains(git2::Status::INDEX_RENAMED) {
+                entry.head_to_index().and_then(|delta| {
+                    delta
+                        .new_file()
+                        .path()
+                        .map(|p| p.to_string_lossy().replace('\\', "/"))
+                })
+            } else if status_flag.contains(git2::Status::WT_RENAMED) {
+                entry.index_to_workdir().and_then(|delta| {
+                    delta
+                        .new_file()
+                        .path()
+                        .map(|p| p.to_string_lossy().replace('\\', "/"))
+                })
+            } else {
+                None
+            }
+            // 非 renamed 兜底（含 delta 异常缺失）：回退 entry.path()
+            .unwrap_or_else(|| entry.path().unwrap_or("").to_string().replace('\\', "/"));
+
+            // 拼接为绝对路径：workdir + "/" + rel
+            let path = workdir.join(&rel).to_string_lossy().replace('\\', "/");
 
             // 提取重命名条目的旧路径（绝对路径，\\→/ 规范化）
             let old_path = if status_flag.contains(git2::Status::INDEX_RENAMED) {
@@ -297,6 +336,10 @@ pub fn compute_diff_hunks(
     };
 
     let mut opts = git2::DiffOptions::new();
+    // renamed 文件的工作区新路径不在 HEAD/index（git 视角为 untracked）——
+    // 不含 untracked 则其 diff 恒为空（行内 diff 高亮缺失）。开启后
+    // untracked/renamed 新路径文件以「全量新增」形态参与（old_lines=0）。
+    opts.include_untracked(true);
     let workdir = dunce::simplified(
         repo.workdir()
             .ok_or_else(|| AppError::Git("仓库无工作目录（可能为 bare repo）".to_string()))?,
@@ -371,10 +414,22 @@ pub fn compute_diff_hunks(
 
     let mut prev_was_del = false; // 上一行是否为 '-'，用于检测 '-→+' 修改模式
 
+    // untracked delta 不产生行级回调（无 HEAD baseline）——file callback 收集
+    // 其路径，foreach 结束后手动构造全量新增 hunk（renamed 文件工作区新路径、
+    // 编辑器内 untracked 文件均走此形态）
+    let mut untracked_paths: Vec<std::path::PathBuf> = Vec::new();
+
     diff.foreach(
-        &mut |_delta, _num| true, // file callback
-        None,                     // binary callback
-        None,                     // hunk callback
+        &mut |delta, _num| {
+            if delta.status() == git2::Delta::Untracked {
+                if let Some(p) = delta.new_file().path() {
+                    untracked_paths.push(p.to_path_buf());
+                }
+            }
+            true
+        },
+        None, // binary callback
+        None, // hunk callback
         Some(&mut |_delta, _hunk, line| {
             let c = line.origin();
             if c == '+' {
@@ -415,6 +470,24 @@ pub fn compute_diff_hunks(
 
     // flush 末尾残留组
     flush_pending(del_start, del_count, add_start, add_count);
+
+    // untracked delta 无行级回调 → 手动构造全量新增 hunk（old 侧 0 行）。
+    // 行数 = 工作区文件内容行数；读失败（竞态删除等）或空文件 → 跳过。
+    for p in untracked_paths {
+        let abs = workdir.join(&p);
+        let Ok(content) = std::fs::read(&abs) else {
+            continue;
+        };
+        let line_count = content.iter().filter(|b| **b == b'\n').count() as u32;
+        if line_count > 0 {
+            hunks.push(DiffHunk {
+                old_start: 0,
+                old_lines: 0,
+                new_start: 1,
+                new_lines: line_count,
+            });
+        }
+    }
 
     Ok(hunks)
 }

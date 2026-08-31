@@ -634,12 +634,12 @@ fn git_status_command_old_path_field_contract() {
         "renamed 条目 oldPath 应为旧绝对路径，实际: {:?}",
         renamed.old_path
     );
-    // renamed 条目的 path 字段 = 旧绝对路径：git2-rs StatusEntry::path_bytes()
-    // （0.20.4 status.rs）对 head_to_index 非空的条目返回 delta.old_file.path——
-    // rename 场景下即旧路径（vendored-libgit2 已锁版本，行为固定）。故命令层
-    // path 与 old_path 同源（均取自 old_file）；前端 renamed 分派经 filePath +
-    // oldPath 双参定位工作区/HEAD 两侧。
-    assert_eq!(renamed.path, format!("{workdir_str}/old_name.txt"));
+    // renamed 条目的 path 字段 = 新绝对路径（对齐 git status 语义 path=当前工作区
+    // 路径）：git2-rs StatusEntry::path_bytes() 对 head_to_index 非空的条目返回
+    // delta.old_file.path（旧路径），命令层已改取 delta.new_file().path()——
+    // 前端 gitStatusMap/commit 列表按 path 定位当前文件（回归修复：rename 后
+    // 新文件须有 git 着色、commit 列表须显示新文件名）。
+    assert_eq!(renamed.path, format!("{workdir_str}/new_name.txt"));
 }
 
 /// TQ-COV-06：命令层 WT_RENAMED 分支（git/mod.rs 行 186-191 index_to_workdir
@@ -667,10 +667,11 @@ fn git_status_command_wt_renamed_old_path() {
         "WT_RENAMED 条目 oldPath 应为旧绝对路径，实际: {:?}",
         renamed.old_path
     );
-    // path 字段 = 旧路径（同 INDEX_RENAMED 契约：StatusEntry::path_bytes()
-    // 对 renamed 条目返回 delta.old_file.path——与 old_path 同源，见上方
+    // path 字段 = 新路径（同 INDEX_RENAMED 契约：StatusEntry::path_bytes() 对
+    // renamed 条目返回 delta.old_file.path（旧路径），命令层已改取
+    // index_to_workdir().new_file().path()——见上方
     // git_status_command_old_path_field_contract 注释）
-    assert_eq!(renamed.path, format!("{workdir_str}/a.txt"));
+    assert_eq!(renamed.path, format!("{workdir_str}/b.txt"));
 }
 
 // ---- serde CamelCase 序列化（GitStatusEntry DTO） ----
@@ -1087,4 +1088,152 @@ fn get_or_open_repo_cache_hit_but_dir_deleted() {
         "缓存命中但目录已删应报'打开仓库失败'，实际: {err}"
     );
     drop(dir); // 显式 drop 避免 tempdir 清理告警（目录已删）
+}
+
+// ===== renamed path 语义回归（修复：path=当前工作区路径，对齐 git status） =====
+// 防复发：git2-rs StatusEntry::path_bytes() 对 renamed 返回 delta.old_file.path
+// （旧路径），命令层改取 new_file().path() 后新文件名才进入 git_status 结果。
+
+#[test]
+fn git_status_command_index_renamed_path_is_new_path() {
+    let (_dir, path) = init_temp_repo();
+    commit_file(&path, "old_name.txt", "identical content");
+    Command::new("git")
+        .args(["mv", "old_name.txt", "new_name.txt"])
+        .current_dir(&path)
+        .output()
+        .unwrap();
+
+    let app = make_app_state(Some(path.clone()));
+    let entries = block_on(git_status_impl(&app, &path.to_string_lossy())).unwrap();
+
+    let renamed = entries
+        .iter()
+        .find(|e| e.status == "renamed")
+        .expect("git mv 应检测为 renamed 条目");
+    let workdir_str = path.to_string_lossy().replace('\\', "/");
+    assert_eq!(
+        renamed.path,
+        format!("{workdir_str}/new_name.txt"),
+        "INDEX_RENAMED 条目 path 应为新路径（对齐 git status），实际: {}",
+        renamed.path
+    );
+    assert_eq!(
+        renamed.old_path.as_deref(),
+        Some(format!("{workdir_str}/old_name.txt").as_str()),
+        "INDEX_RENAMED 条目 oldPath 应为旧路径"
+    );
+}
+
+#[test]
+fn git_status_command_wt_renamed_path_is_new_path() {
+    // 用户实测场景：文件浏览器重命名（后端 fs_rename）→ 工作区直接 rename
+    let (_dir, path) = init_temp_repo();
+    commit_file(&path, "a.txt", "identical content");
+    std::fs::rename(path.join("a.txt"), path.join("b.txt")).unwrap();
+
+    let app = make_app_state(Some(path.clone()));
+    let entries = block_on(git_status_impl(&app, &path.to_string_lossy())).unwrap();
+
+    let renamed = entries
+        .iter()
+        .find(|e| e.status == "renamed")
+        .expect("工作区 rename 应检测为 renamed 条目");
+    let workdir_str = path.to_string_lossy().replace('\\', "/");
+    assert_eq!(
+        renamed.path,
+        format!("{workdir_str}/b.txt"),
+        "WT_RENAMED 条目 path 应为新路径（对齐 git status），实际: {}",
+        renamed.path
+    );
+    assert_eq!(
+        renamed.old_path.as_deref(),
+        Some(format!("{workdir_str}/a.txt").as_str()),
+        "WT_RENAMED 条目 oldPath 应为旧路径"
+    );
+}
+
+#[test]
+fn git_status_command_double_stage_rename_paths() {
+    // 双阶段 rename：git mv a b（INDEX_RENAMED，staged）后工作区 mv b c（WT_RENAMED）——
+    // 产生两条条目，每条目 path 必须为其当前路径（b 与 c）
+    let (_dir, path) = init_temp_repo();
+    commit_file(&path, "a.txt", "identical content");
+    Command::new("git")
+        .args(["mv", "a.txt", "b.txt"])
+        .current_dir(&path)
+        .output()
+        .unwrap();
+    std::fs::rename(path.join("b.txt"), path.join("c.txt")).unwrap();
+
+    let app = make_app_state(Some(path.clone()));
+    let entries = block_on(git_status_impl(&app, &path.to_string_lossy())).unwrap();
+    let workdir_str = path.to_string_lossy().replace('\\', "/");
+
+    let renamed: Vec<_> = entries.iter().filter(|e| e.status == "renamed").collect();
+    assert!(
+        renamed.len() >= 1,
+        "双阶段 rename 应产生 renamed 条目，实际: {renamed:?}"
+    );
+    for e in &renamed {
+        // 核心断言：每条 renamed 条目的 path 都必须是「当前存在的路径」
+        // （旧路径文件已不存在——修复前 path 取旧路径时会指向不存在的文件）
+        let p = e.path.replace('\\', "/");
+        assert!(
+            p == format!("{workdir_str}/b.txt") || p == format!("{workdir_str}/c.txt"),
+            "renamed 条目 path 应为其当前路径（b 或 c），实际: {p}"
+        );
+    }
+}
+
+#[test]
+fn git_status_command_all_statuses_path_semantics() {
+    // 全状态 path 语义排查（决策：所有状态对齐 git status = 当前工作区路径）
+    let (_dir, path) = init_temp_repo();
+    // ① modified：修改已跟踪文件
+    commit_file(&path, "mod.txt", "v1");
+    fs::write(path.join("mod.txt"), "v2").unwrap();
+    // ② deleted：删除已跟踪文件（先 commit，避免后续 git add 被吞）
+    commit_file(&path, "del.txt", "gone");
+    fs::remove_file(path.join("del.txt")).unwrap();
+    // ③ renamed：工作区 rename（内容相同 → libgit2 识别为 WT_RENAMED）
+    commit_file(&path, "old.txt", "identical");
+    std::fs::rename(path.join("old.txt"), path.join("new.txt")).unwrap();
+    // ④ untracked：未跟踪新文件
+    fs::write(path.join("untracked.txt"), "new").unwrap();
+    // ⑤ added：git add 新文件（最后执行——commit 会提交 index 全部 staged 内容）
+    fs::write(path.join("added.txt"), "new").unwrap();
+    git_add(&path, "added.txt");
+
+    let app = make_app_state(Some(path.clone()));
+    let entries = block_on(git_status_impl(&app, &path.to_string_lossy())).unwrap();
+    let workdir_str = path.to_string_lossy().replace('\\', "/");
+
+    // 逐状态断言 path = 当前路径（deleted 即被删路径，git status 显示语义）
+    let find = |s: &str| {
+        entries.iter().find(|e| e.status == s).unwrap_or_else(|| {
+            panic!(
+                "应有 {s} 条目，实际: {:?}",
+                entries.iter().map(|e| &e.status).collect::<Vec<_>>()
+            )
+        })
+    };
+    assert_eq!(find("modified").path, format!("{workdir_str}/mod.txt"));
+    assert_eq!(find("added").path, format!("{workdir_str}/added.txt"));
+    assert_eq!(find("deleted").path, format!("{workdir_str}/del.txt"));
+    assert_eq!(
+        find("untracked").path,
+        format!("{workdir_str}/untracked.txt")
+    );
+    let renamed = find("renamed");
+    assert_eq!(renamed.path, format!("{workdir_str}/new.txt"));
+    assert_eq!(
+        renamed.old_path.as_deref(),
+        Some(format!("{workdir_str}/old.txt").as_str())
+    );
+
+    // old_path 仅 renamed 非 null
+    for e in entries.iter().filter(|e| e.status != "renamed") {
+        assert_eq!(e.old_path, None, "{} 条目 oldPath 应为 null", e.status);
+    }
 }

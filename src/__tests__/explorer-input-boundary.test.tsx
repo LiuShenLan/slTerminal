@@ -97,15 +97,18 @@ describe("重命名输入框边界", () => {
     expect(onRenameCancel).toHaveBeenCalledTimes(1);
   });
 
-  it("R4: 重名为当前同名（重名）→ onRename 仍提交（无重名拦截逻辑）", () => {
+  it("R4: 重名为当前同名（重名）→ 视为取消（同名短路，不发 IPC）", () => {
+    // 防复发：修复前同名提交会触发后端 src==dst 覆盖分支误删源文件；
+    // 现语义 = 名字未变即取消（与 Escape 同路径）
     const onRename = vi.fn();
-    const { input } = renderRenaming({ onRename });
+    const onRenameCancel = vi.fn();
+    const { input } = renderRenaming({ onRename, onRenameCancel });
 
     // 不改名直接 Enter（value 即原文件名）
     fireEvent.keyDown(input, { key: "Enter" });
 
-    expect(onRename).toHaveBeenCalledWith("/a/test.ts", "test.ts");
-    expect(onRename).toHaveBeenCalledTimes(1);
+    expect(onRename).not.toHaveBeenCalled();
+    expect(onRenameCancel).toHaveBeenCalledTimes(1);
   });
 
   it("R5: Escape → 调 onRenameCancel，不调 onRename", () => {

@@ -9,6 +9,8 @@
 //   E6 组：键盘 Del 删除 — ShortcutRegistry 路径（编号 17-22 与全文连续，EXP-11；E6-集成 用例经真实
 //   focusin 焦点链路触发，TQ-B-08）
 //   E7 组：右键菜单视觉规格（UI-802）— 项 28px/圆角 5/hover token/危险项 ERROR_FG
+//   E8 组：AppError 序列化形态错误横幅（编号 27-31）— 后端对象 reject → getErrorMessage
+//   提取真实 message 而非 [object Object]（FE-02 防复发，覆盖全部 5 个错误拼接站点）
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import React from "react";
@@ -799,6 +801,186 @@ describe("键盘 Del 删除 (ShortcutRegistry)", () => {
     // deleteSelected → handleDeleteSelected 首步即 confirmDialog——命中即证明焦点链路已建立
     await waitFor(() => {
       expect(mocks.mockConfirmDialog).toHaveBeenCalled();
+    }, { timeout: 3000 });
+  });
+});
+
+// =====================================================================
+// E8 组：AppError 序列化形态错误横幅（FE-02 getErrorMessage 回归）
+// 后端 AppError 经 serde 序列化为单键对象 { ioKind: { kind, message } }，非 Error 实例。
+// 修复前 ExplorerPanel 用 String(err) 兜底显示 [object Object]；修复后 getErrorMessage
+// 提取真实 message。mock 用对象 reject 而非 new Error——Error 形态修复前后都显示正常，
+// 不能做防复发回归（覆盖全部 5 个错误拼接站点）。
+// =====================================================================
+
+describe("ExplorerPanel AppError 序列化形态错误横幅", () => {
+  beforeEach(() => {
+    getShortcutRegistry()._reset();
+    getShortcutRegistry().register(createExplorerShortcuts());
+    const a = getActiveExplorer();
+    if (a) clearActiveExplorer(a);
+  });
+
+  afterEach(() => {
+    getShortcutRegistry()._reset();
+    const a = getActiveExplorer();
+    if (a) clearActiveExplorer(a);
+  });
+
+  it("27. 重命名失败（AppError 形态）→ 横幅显示真实 message 而非 [object Object]", async () => {
+    mocks.mockRename.mockRejectedValue({ ioKind: { kind: "NotFound", message: "源文件不存在" } });
+    mocks.mockReadDir.mockResolvedValue([
+      { name: "old.ts", path: "C:/test-project/old.ts", isDir: false, size: 32, modified: 1 },
+    ]);
+
+    seedProject();
+
+    const { getAllByText, getByTestId } = renderExplorerPanel();
+
+    await waitFor(() => {
+      expect(getAllByText("old.ts").length).toBeGreaterThan(0);
+    }, { timeout: 3000 });
+
+    // 右键 → 重命名 → 改名提交
+    fireEvent.contextMenu(getAllByText("old.ts")[0]);
+    fireEvent.click(getAllByText("重命名")[0]);
+    const renameInput = document.querySelector(
+      '[data-testid="explorer-inline-input"]',
+    ) as HTMLInputElement;
+    fireEvent.change(renameInput, { target: { value: "new-name.ts" } });
+    fireEvent.keyDown(renameInput, { key: "Enter" });
+
+    await waitFor(() => {
+      const banner = getByTestId("explorer-error-banner");
+      expect(banner.textContent).toContain("重命名失败");
+      expect(banner.textContent).toContain("源文件不存在");
+      expect(banner.textContent).not.toContain("[object Object]");
+    }, { timeout: 3000 });
+  });
+
+  it("28. 新建文件失败（AppError 形态）→ 横幅显示真实 message", async () => {
+    mocks.mockWriteFile.mockRejectedValue({ ioKind: { kind: "Io", message: "磁盘空间不足" } });
+    mocks.mockReadDir.mockResolvedValue([
+      { name: "src", path: "C:/test-project/src", isDir: true, size: undefined, modified: undefined },
+    ]);
+    mocks.mockConfirmDialog.mockResolvedValue(false);
+
+    seedProject();
+
+    const { getAllByText, getByTestId } = renderExplorerPanel();
+
+    await waitFor(() => {
+      expect(getAllByText("src").length).toBeGreaterThan(0);
+    }, { timeout: 3000 });
+
+    fireEvent.contextMenu(getAllByText("src")[0]);
+    fireEvent.click(getAllByText("新建文件")[0]);
+    const newFileInput = document.querySelector(
+      '[data-testid="explorer-inline-input"]',
+    ) as HTMLInputElement;
+    fireEvent.change(newFileInput, { target: { value: "newfile.ts" } });
+    fireEvent.keyDown(newFileInput, { key: "Enter" });
+
+    await waitFor(() => {
+      const banner = getByTestId("explorer-error-banner");
+      expect(banner.textContent).toContain("新建文件失败");
+      expect(banner.textContent).toContain("磁盘空间不足");
+      expect(banner.textContent).not.toContain("[object Object]");
+    }, { timeout: 3000 });
+  });
+
+  it("29. 新建文件夹失败（AppError 形态）→ 横幅显示真实 message", async () => {
+    mocks.mockCreateDir.mockRejectedValue({ ioKind: { kind: "Io", message: "目录名非法" } });
+    mocks.mockReadDir.mockResolvedValue([
+      { name: "lib", path: "C:/test-project/lib", isDir: true, size: undefined, modified: undefined },
+    ]);
+    mocks.mockConfirmDialog.mockResolvedValue(false);
+
+    seedProject();
+
+    const { getAllByText, getByTestId } = renderExplorerPanel();
+
+    await waitFor(() => {
+      expect(getAllByText("lib").length).toBeGreaterThan(0);
+    }, { timeout: 3000 });
+
+    fireEvent.contextMenu(getAllByText("lib")[0]);
+    fireEvent.click(getAllByText("新建文件夹")[0]);
+    const newFolderInput = document.querySelector(
+      '[data-testid="explorer-inline-input"]',
+    ) as HTMLInputElement;
+    fireEvent.change(newFolderInput, { target: { value: "newfolder" } });
+    fireEvent.keyDown(newFolderInput, { key: "Enter" });
+
+    await waitFor(() => {
+      const banner = getByTestId("explorer-error-banner");
+      expect(banner.textContent).toContain("新建文件夹失败");
+      expect(banner.textContent).toContain("目录名非法");
+      expect(banner.textContent).not.toContain("[object Object]");
+    }, { timeout: 3000 });
+  });
+
+  it("30. 删除失败（右键路径，AppError 形态）→ 横幅显示真实 message", async () => {
+    mocks.mockConfirmDialog.mockResolvedValue(true);
+    mocks.mockDeleteEntry.mockRejectedValue({ ioKind: { kind: "Io", message: "权限不足" } });
+    mocks.mockReadDir.mockResolvedValue([
+      { name: "readonly.txt", path: "C:/test-project/readonly.txt", isDir: false, size: 32, modified: 1 },
+    ]);
+
+    seedProject();
+
+    const { getAllByText, getByTestId } = renderExplorerPanel();
+
+    await waitFor(() => {
+      expect(getAllByText("readonly.txt").length).toBeGreaterThan(0);
+    }, { timeout: 3000 });
+
+    fireEvent.contextMenu(getAllByText("readonly.txt")[0]);
+    fireEvent.click(getAllByText("删除")[0]);
+
+    await waitFor(() => {
+      const banner = getByTestId("explorer-error-banner");
+      expect(banner.textContent).toContain("删除失败");
+      expect(banner.textContent).toContain("权限不足");
+      expect(banner.textContent).not.toContain("[object Object]");
+    }, { timeout: 3000 });
+  });
+
+  it("31. 删除失败（Del 快捷键路径，AppError 形态）→ 横幅显示真实 message", async () => {
+    // 覆盖 handleDeleteSelected（键盘删除）错误拼接站点
+    mocks.mockConfirmDialog.mockResolvedValue(true);
+    mocks.mockDeleteEntry.mockRejectedValue({ ioKind: { kind: "Io", message: "权限不足" } });
+    mocks.mockReadDir.mockResolvedValue([
+      { name: "locked.ts", path: "C:/test-project/locked.ts", isDir: false, size: 32, modified: 1 },
+    ]);
+
+    seedProject();
+
+    const { getAllByText, getByTestId } = renderExplorerPanel();
+
+    await waitFor(() => {
+      expect(getAllByText("locked.ts").length).toBeGreaterThan(0);
+    }, { timeout: 3000 });
+
+    // 单击行聚焦（E6-集成同款真实焦点链路）
+    fireEvent.click(getAllByText("locked.ts")[0]);
+    const treeContainer = document.querySelector('[data-e2e="explorer-tree-container"]');
+    fireEvent.focusIn(treeContainer as Element);
+    fireEvent.keyDown(window, { key: "Delete", code: "Delete" });
+
+    // 链路逐步定位：焦点建立 → confirmDialog → deleteEntry（reject）→ banner
+    await waitFor(() => {
+      expect(mocks.mockConfirmDialog).toHaveBeenCalled();
+    }, { timeout: 3000 });
+    await waitFor(() => {
+      expect(mocks.mockDeleteEntry).toHaveBeenCalled();
+    }, { timeout: 3000 });
+
+    await waitFor(() => {
+      const banner = getByTestId("explorer-error-banner");
+      expect(banner.textContent).toContain("删除失败");
+      expect(banner.textContent).toContain("权限不足");
+      expect(banner.textContent).not.toContain("[object Object]");
     }, { timeout: 3000 });
   });
 });

@@ -60,7 +60,13 @@ export function getContextMenuItems(
         });
         if (!ok) return;
         try {
-          await gitRollback(rootPath, entry.path);
+          // renamed：HEAD 侧文件位于旧路径（git status 语义 path=当前路径）。
+          // 若传 entry.path（现为新路径），git_rollback_impl 会报「HEAD 中不存在」——
+          // 回滚须以 oldPath 定位 HEAD 内容（等价 `git checkout HEAD -- <旧路径>`；
+          // 新路径文件残留为 untracked，与 git CLI 行为一致）。
+          const rollbackPath =
+            entry.status === "renamed" && entry.oldPath ? entry.oldPath : entry.path;
+          await gitRollback(rootPath, rollbackPath);
           onRefresh();
         } catch (err) {
           console.error("[slTerminal] 回滚文件失败:", entry.path, err);

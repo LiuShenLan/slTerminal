@@ -859,3 +859,39 @@ fn compute_diff_hunks_bare_repo_no_workdir() {
         "bare repo 应报'仓库无工作目录'，实际: {err}"
     );
 }
+
+/// renamed 文件 diff（前端 renamed 分派传 filePath=新路径，queryPath=oldPath 查
+/// HEAD 内容）——diff 无 rename detection，对工作区新路径 diff 呈「全量新增」
+/// 形态（old_lines==0）且不报错（修复前传旧路径 pathspec 只匹配 DELETED 侧，
+/// 形态为全量删除；修复后传新路径，行为固化）
+#[test]
+fn git_diff_renamed_file_returns_hunks() {
+    let (_dir, path) = init_temp_repo();
+    commit_file(&path, "a.txt", "line1\nline2\nline3\n");
+
+    // 工作区 rename（后端 fs_rename 同款）→ git 检测为 renamed
+    std::fs::rename(path.join("a.txt"), path.join("b.txt")).unwrap();
+
+    let app = make_app_state(Some(path.clone()));
+    // 传新路径（git status 修复后 renamed 条目的 path 字段）
+    let hunks = block_on(git_diff_impl(
+        &app,
+        &path.to_string_lossy(),
+        &path.join("b.txt").to_string_lossy(),
+    ))
+    .unwrap();
+
+    assert!(
+        !hunks.is_empty(),
+        "renamed 文件 diff 应返回 hunks（全量新增形态）"
+    );
+    // 全量新增：HEAD 侧 0 行、工作区侧 3 行（git diff 对 renamed 无 rename detection）
+    assert_eq!(
+        hunks[0].old_lines, 0,
+        "renamed 全量新增形态 old_lines 应为 0"
+    );
+    assert_eq!(
+        hunks[0].new_lines, 3,
+        "renamed 全量新增形态 new_lines 应为文件行数"
+    );
+}

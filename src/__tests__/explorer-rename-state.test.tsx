@@ -84,6 +84,60 @@ describe("重命名状态上提", () => {
     expect(onRenameCancel).toHaveBeenCalled();
   });
 
+  // 同名短路（修复「不改名提交 → 后端 src==dst 误删源文件」）：名字未变时
+  // Enter/blur 均视为取消，不发 IPC（防复发——修复前 onRename 会被以同名调用）
+  it("input Enter 且名字未变 → onRenameCancel 调用、onRename 不调用", () => {
+    const onRename = vi.fn();
+    const onRenameCancel = vi.fn();
+    const props = baseProps({
+      renamingPath: "/a/test.ts",
+      renameValue: "test.ts",
+      onRename,
+      onRenameCancel,
+    });
+    const { container } = render(React.createElement(FileTree, props));
+    const input = container.querySelector("input")!;
+    // 不改值直接 Enter
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onRename).not.toHaveBeenCalled();
+    expect(onRenameCancel).toHaveBeenCalled();
+  });
+
+  it("input blur 且名字未变 → onRenameCancel 调用、onRename 不调用", () => {
+    const onRename = vi.fn();
+    const onRenameCancel = vi.fn();
+    const props = baseProps({
+      renamingPath: "/a/test.ts",
+      renameValue: "test.ts",
+      onRename,
+      onRenameCancel,
+    });
+    const { container } = render(React.createElement(FileTree, props));
+    const input = container.querySelector("input")!;
+    // 不改值点击别处（blur 提交）
+    fireEvent.blur(input);
+    expect(onRename).not.toHaveBeenCalled();
+    expect(onRenameCancel).toHaveBeenCalled();
+  });
+
+  it("input 值 trim 后与原名相同 → 视为取消", () => {
+    const onRename = vi.fn();
+    const onRenameCancel = vi.fn();
+    const props = baseProps({
+      renamingPath: "/a/test.ts",
+      renameValue: "test.ts",
+      onRename,
+      onRenameCancel,
+    });
+    const { container } = render(React.createElement(FileTree, props));
+    const input = container.querySelector("input")!;
+    // 前后带空格，trim 后仍为原名 → 取消
+    (input as HTMLInputElement).value = "  test.ts  ";
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onRename).not.toHaveBeenCalled();
+    expect(onRenameCancel).toHaveBeenCalled();
+  });
+
   it("renameValue 初始值 = 文件名（由 ExplorerPanel 传入）", () => {
     const props = baseProps({ renamingPath: "/a/test.ts", renameValue: "test.ts" });
     const { container } = render(React.createElement(FileTree, props));

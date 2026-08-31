@@ -33,6 +33,7 @@ import {
   CONTEXT_MENU_BORDER,
 } from "../../theme";
 import { confirmDialog } from "../../lib/ConfirmDialog";
+import { basename } from "../../lib/path";
 import {
   IconChevronRight,
   IconChevronDown,
@@ -491,6 +492,13 @@ export const FileTree: React.FC<FileTreeProps> = ({
   const confirmRename = useCallback(() => {
     const newName = renameInputRef.current?.value.trim();
     if (renamingPath && newName) {
+      // 取消语义：名字未变（Enter/blur 直接确认，trim 后相等也视为未变）→ 与
+      // Escape 同路径退出编辑态，不发 IPC——旧逻辑同名提交会触发后端
+      // src==dst 覆盖分支，先删源文件再 rename 失败，导致文件被误删
+      if (newName === basename(renamingPath)) {
+        onRenameCancel();
+        return;
+      }
       onRename(renamingPath, newName);
     } else {
       onRenameCancel();

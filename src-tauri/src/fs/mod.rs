@@ -365,7 +365,11 @@ async fn fs_delete_impl(path: String, root: Option<PathBuf>) -> Result<(), AppEr
 
 /// 重命名/移动文件或目录
 ///
-/// 目标为已存在文件时覆盖（先删除再 rename，Windows 兼容），目标为已存在目录时返回错误。
+/// - src == dst（前端改名未变直传原名）→ 幂等成功，不产生任何文件操作；
+/// - 目标为已存在文件时覆盖：优先直接 rename（Windows 上 std::fs::rename 底层为
+///   MoveFileExW 带 MOVEFILE_REPLACE_EXISTING，通常直接覆盖成功），失败时才兜底
+///   删除目标后重试——不再「先删目标再 rename」（先删后改失败会永久丢失目标）；
+/// - 目标为已存在目录时返回错误（防静默递归删除）。
 #[tauri::command]
 pub async fn fs_rename(
     src: String,
@@ -376,7 +380,7 @@ pub async fn fs_rename(
     fs_rename_impl(src, dst, extract_root(&state)?).await
 }
 
-/// fs_rename 命令内核：路径 sandbox 校验 + 覆盖已有文件/拒绝已有目录语义
+/// fs_rename 命令内核：路径 sandbox 校验 + 幂等短路 + 覆盖已有文件/拒绝已有目录语义
 async fn fs_rename_impl(src: String, dst: String, root: Option<PathBuf>) -> Result<(), AppError> {
     // 路径 sandbox 校验（源路径必须存在，目标路径验证父目录——目标可能尚不存在）
     validate_path_within_root(&root, Path::new(&src))?;
@@ -384,20 +388,46 @@ async fn fs_rename_impl(src: String, dst: String, root: Option<PathBuf>) -> Resu
     validate_path_within_root(&root, dst_parent)?;
 
     spawn_blocking_task(move || {
-        // 目标为已存在目录 → 拒绝覆盖（防止静默递归删除）
-        let dst_path = PathBuf::from(&dst);
-        if dst_path.exists() {
-            if dst_path.is_dir() {
-                return Err(AppError::IoKind {
-                    kind: "path".into(),
-                    message: format!("目标路径是已有目录，无法覆盖: {dst}"),
-                });
-            }
-            // 目标为已存在文件 → 先删除再 rename（Windows 上 std::fs::rename 不覆盖已有文件）
-            std::fs::remove_file(&dst_path).map_err(|e| io_error("删除目标文件", &dst_path, e))?;
+        // 幂等短路：src == dst 直接视为成功（改名未变时前端直传原名。旧逻辑先
+        // remove_file 再 rename：src==dst 时先真删源文件，随后 rename 因源不存在
+        // 失败——文件永久丢失，本次修复的根因之一）。置于沙箱校验之后：不因
+        // 短路跳过 validate_path_within_root（沙箱优先）。
+        if src == dst {
+            return Ok(());
         }
-        std::fs::rename(&src, &dst).map_err(|e| io_error("重命名", Path::new(&src), e))?;
-        Ok(())
+
+        let src_path = PathBuf::from(&src);
+        let dst_path = PathBuf::from(&dst);
+
+        // 优先直接 rename：Windows 上 std::fs::rename 底层为 MoveFileExW 且带
+        // MOVEFILE_REPLACE_EXISTING，目标为已存在文件时通常直接覆盖成功，无需
+        // 先删目标。此顺序同时消除「先删目标后 rename 失败 → 目标永久丢失」窗口
+        // ——只有首个 rename 失败时才可能动目标。
+        match std::fs::rename(&src_path, &dst_path) {
+            Ok(()) => Ok(()),
+            Err(first_err) => {
+                // 目标为已存在目录 → 拒绝覆盖（防静默递归删除，语义与旧实现一致）。
+                // is_dir() 对不存在路径返回 false，无需先判 exists()。
+                if dst_path.is_dir() {
+                    return Err(AppError::IoKind {
+                        kind: "path".into(),
+                        message: format!("目标路径是已有目录，无法覆盖: {dst}"),
+                    });
+                }
+                if dst_path.exists() {
+                    // 目标为已存在文件 → 删除目标后重试（兜底分支：Windows 上首个
+                    // rename 已直接覆盖文件目标，走到这里是其余平台/异常形态）
+                    std::fs::remove_file(&dst_path)
+                        .map_err(|e| io_error("删除目标文件", &dst_path, e))?;
+                    std::fs::rename(&src_path, &dst_path)
+                        .map_err(|e| io_error("重命名", &src_path, e))?;
+                    Ok(())
+                } else {
+                    // 其它失败（源不存在/权限等）→ 原样返回首个错误，不删任何目标
+                    Err(io_error("重命名", &src_path, first_err))
+                }
+            }
+        }
     })
     .await
 }
@@ -971,6 +1001,66 @@ mod command_wrapper_tests {
             Some(root.path().to_path_buf()),
         ));
         assert!(result.is_err(), "目标路径在根外应被沙箱拒绝");
+    }
+
+    // ===== 重命名幂等短路（src == dst，修复「改名未变直传原名 → 先删源文件再 rename 失败」） =====
+
+    #[test]
+    fn test_fs_rename_src_equals_dst_file_is_noop() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("keep.txt");
+        std::fs::write(&src, "keep me").unwrap();
+
+        run(fs_rename_impl(
+            src.to_string_lossy().to_string(),
+            src.to_string_lossy().to_string(),
+            Some(dir.path().to_path_buf()),
+        ))
+        .unwrap();
+        assert!(
+            src.exists(),
+            "src == dst 时源文件应保留（修复前先删源文件再 rename 失败）"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&src).unwrap(),
+            "keep me",
+            "src == dst 时文件内容应不变"
+        );
+    }
+
+    #[test]
+    fn test_fs_rename_src_equals_dst_dir_is_noop() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path().join("keep_dir");
+        std::fs::create_dir(&d).unwrap();
+
+        run(fs_rename_impl(
+            d.to_string_lossy().to_string(),
+            d.to_string_lossy().to_string(),
+            Some(dir.path().to_path_buf()),
+        ))
+        .unwrap();
+        assert!(d.is_dir(), "src == dst 时目录应保留");
+    }
+
+    #[test]
+    fn test_fs_rename_missing_source_returns_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("ghost.txt");
+        let dst = dir.path().join("dst.txt");
+
+        let result = run(fs_rename_impl(
+            src.to_string_lossy().to_string(),
+            dst.to_string_lossy().to_string(),
+            Some(dir.path().to_path_buf()),
+        ));
+        let err = result.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("重命名失败") && msg.contains(&src.to_string_lossy().to_string()),
+            "源不存在时应原样返回 rename 错误（含路径），实际: {msg}"
+        );
+        assert!(!dst.exists(), "rename 失败时不应触碰/创建目标");
     }
 
     // ===== BE-13: 错误消息含路径上下文 =====

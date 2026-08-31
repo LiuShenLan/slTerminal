@@ -24,6 +24,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `StatusOptions` 开启 `.renames_head_to_index(true)` 与 `.renames_index_to_workdir(true)`，否则 `INDEX_RENAMED`/`WT_RENAMED` 不置位、`oldPath` 恒 null。
 
+### `GitStatusEntry.path` 语义 = 当前工作区路径（对齐 git status）
+
+git2-rs 的 `StatusEntry::path_bytes()` 两个分支均返回 `delta.old_file.path`——对 renamed 条目即旧路径。命令层必须对 renamed 改取 `delta.new_file().path()`（INDEX_RENAMED → head_to_index，WT_RENAMED → index_to_workdir，双标志 INDEX 优先），非 renamed 保持 `entry.path()`。`old_path` 恒取 `old_file().path()`。前端 gitStatusMap / commit 列表 / DiffPanel（`oldPath ?? filePath` 查 HEAD 侧）均按此契约设计。
+
 ### `git_rollback` 不用 checkout API
 
 `checkout_head`/`checkout_index`/`reset_default` 在 Windows `core.autocrlf=true` 仓库中对单文件的 index 持久化行为不一致，实测回滚后 `statuses()` 仍报告 dirty。当前实现：
