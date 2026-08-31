@@ -198,6 +198,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | F9 | 特性 | 终端页签/侧栏 CLI 品牌 logo（按命令行首 token 匹配 profile.iconSrc；页签 logo 会话绑定，侧栏行存在即显示） |
 | F10 | 特性 | 编码套餐余量展示（导航树底部；user 层 settings.json env 判定套餐 → 后端定时查询推送；规格与计划产物已随实施完毕归档删除） |
 | F11 | 特性 | 设置中心（统一配置入口：Dockview 面板 `settings` + SettingsPageRegistry 分派；Hooks 迁入/频率/快捷键三配置页；后端键名归域 + 专用命令轻量收口） |
-| F12 | 特性 | 后台定时任务（双端抽象：后端任务骨架 + 前端调度器注册表；任务元数据单点在后端注册表；配置统一 `backgroundTasks` 段 + 后端单写通道命令；session 历史定时刷新与刷新钮单一执行体；设置中心「后台定时任务」页）——规格见 `docs/background-tasks-spec.md`，决策见 ADR-0013 |
+| F12 | 特性 | 后台定时任务（双端抽象：后端任务骨架 + 前端调度器注册表；任务元数据单点在后端注册表；配置统一 `backgroundTasks` 段 + 后端单写通道命令；session 历史定时刷新与刷新钮单一执行体；设置中心「后台定时任务」页）——规格与人工验证手册已随实施完毕归档删除，决策见 ADR-0013 |
 
 > 测试策略概览见上方「测试策略」章节；完整用例清单见 `.claude/test-inventory.md`。
