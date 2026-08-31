@@ -1,4 +1,5 @@
-//! 套餐余量模块（F10）——读 user 层 settings.json 判定套餐 → 轮询查询 → 事件推送
+//! 套餐余量模块（F10）——读 user 层 settings.json 判定套餐 → 查询 → 事件推送
+//! 轮询编排骨架已上提 background_tasks（F12），本模块保留套餐语义执行体与快照存储。
 //!
 //! 红线：token 不出后端——DTO 无 token 字段；本模块 tracing/错误消息禁止插值
 //! token 与 Authorization 头（ureq 错误 Display 不含请求头，构造错误消息时禁止自行拼接）。
@@ -8,12 +9,9 @@ pub mod kimi;
 pub mod query;
 pub mod source;
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
-use std::time::Duration;
 use tauri::Emitter;
 
-use crate::app_dir::app_data_dir;
 use crate::error::AppError;
 use query::{find_query_by_url, PlanQuery, QUERIES};
 use source::{PlanSource, SOURCES};
@@ -66,17 +64,9 @@ pub struct FetchOutcome {
 
 static SNAPSHOT: Mutex<Option<Vec<PlanBalanceInfo>>> = Mutex::new(None);
 
-/// 当前轮询间隔秒数（F11：set_interval 命令写入、poller 每轮读取——运行期可改）
-static POLL_INTERVAL_SEC: AtomicU64 = AtomicU64::new(DEFAULT_INTERVAL_SEC);
-
 #[cfg(test)]
 pub(crate) fn reset_snapshot_for_test() {
     let _ = SNAPSHOT.lock().unwrap().take();
-}
-
-#[cfg(test)]
-pub(crate) fn reset_poll_interval_for_test() {
-    POLL_INTERVAL_SEC.store(DEFAULT_INTERVAL_SEC, Ordering::Relaxed);
 }
 
 fn unix_now() -> u64 {
@@ -86,7 +76,7 @@ fn unix_now() -> u64 {
         .unwrap_or(0)
 }
 
-// ── 快照合并与轮询编排（纯函数/参数化，L1 全测） ──
+// ── 快照合并与单轮拉取编排（纯函数/参数化，L1 全测） ──
 
 /// 快照槽合并（规格 §6）：planId 变化丢弃旧值；查询失败保留同 planId 旧值；
 /// 成功采用新值；失败且无旧值 → 占位（updated_at=0，前端显 --）
@@ -170,53 +160,11 @@ fn apply_snapshot(app_handle: &tauri::AppHandle, new: Vec<PlanBalanceInfo>) {
     }
 }
 
-// ── 轮询间隔（规格 §9）：应用 settings.json 的 planBalance.intervalSec；
-//    默认 60，合法 10–3600，越界/缺失/损坏回退默认 ──
-
-// ── 域键名归域（F11）：后端消费型键名常量归本模块——settings.rs 白名单
-//    与 plan_balance_set_interval 命令 payload 均经此引用，防字面量漂移 ──
-
-/// settings.json 顶层键（白名单第 5 键，SEC-11；settings.rs 白名单引用此常量）
-pub(crate) const SETTINGS_KEY: &str = "planBalance";
-/// planBalance 段内轮询间隔键
-const INTERVAL_SEC_KEY: &str = "intervalSec";
-
-const DEFAULT_INTERVAL_SEC: u64 = 60;
-const MIN_INTERVAL_SEC: u64 = 10;
-const MAX_INTERVAL_SEC: u64 = 3600;
-
-pub(crate) fn resolve_poll_interval() -> Duration {
-    let read = || -> Option<u64> {
-        let path = app_data_dir().ok()?.join("settings.json");
-        let content = std::fs::read_to_string(path).ok()?;
-        let root: serde_json::Value = serde_json::from_str(&content).ok()?;
-        root.get(SETTINGS_KEY)?.get(INTERVAL_SEC_KEY)?.as_u64()
-    };
-    match read() {
-        Some(v) if (MIN_INTERVAL_SEC..=MAX_INTERVAL_SEC).contains(&v) => Duration::from_secs(v),
-        _ => Duration::from_secs(DEFAULT_INTERVAL_SEC),
-    }
-}
-
-// ── 轮询任务（lib.rs setup 调用；随进程退出结束，单实例无生命周期管理） ──
-
-pub fn start_plan_balance_poller(app_handle: tauri::AppHandle) {
-    // 启动时从磁盘初始化内存间隔（resolve_poll_interval 钳制兜底：越界/损坏 → 60）
-    POLL_INTERVAL_SEC.store(resolve_poll_interval().as_secs(), Ordering::Relaxed);
-    tauri::async_runtime::spawn(async move {
-        loop {
-            // 首轮立即执行（D8 语义保留）；此后每轮末按当前内存间隔 sleep——
-            // set_interval 命令改值后下一轮即按新间隔（F11 立即生效）
-            let now = unix_now();
-            let handle = app_handle.clone();
-            match tokio::task::spawn_blocking(move || poll_once_production(now)).await {
-                Ok(new) => apply_snapshot(&handle, new),
-                Err(e) => tracing::warn!(error = %e, "套餐余量轮询任务异常"),
-            }
-            let secs = POLL_INTERVAL_SEC.load(Ordering::Relaxed);
-            tokio::time::sleep(Duration::from_secs(secs)).await;
-        }
-    });
+/// 后台任务执行体（F12）：background_tasks poller 骨架每轮 spawn_blocking 调用——
+/// 一轮拉取 + 快照应用（行为不变：resolve/fetch/merge/emit 口径含 updated_at 比较）
+pub fn poll_once_executor(app_handle: tauri::AppHandle) {
+    let new = poll_once_production(unix_now());
+    apply_snapshot(&app_handle, new);
 }
 
 // ── 命令（三处注册：lib.rs + build.rs + capabilities，D11） ──
@@ -239,28 +187,9 @@ pub async fn refresh_plan_balance(
     Ok(new)
 }
 
-/// 设置轮询间隔（F11 后端消费型配置写通道：校验 → 复用 settings 写通道落盘 → 更新内存值）
-/// 越界 → Validation 拒绝且磁盘/内存均不变
-#[tauri::command]
-pub async fn plan_balance_set_interval(interval_sec: u64) -> Result<(), AppError> {
-    if !(MIN_INTERVAL_SEC..=MAX_INTERVAL_SEC).contains(&interval_sec) {
-        return Err(AppError::Validation(format!(
-            "设置轮询间隔失败: 须为 {MIN_INTERVAL_SEC}–{MAX_INTERVAL_SEC} 秒，实际 {interval_sec}"
-        )));
-    }
-    // 复用 settings.rs 写通道（白名单/浅合并/原子写/.bak/SETTINGS_SAVE_LOCK）——禁止自建第二写通道
-    crate::settings::save_settings(serde_json::json!({
-        SETTINGS_KEY: { INTERVAL_SEC_KEY: interval_sec }
-    }))
-    .await?;
-    POLL_INTERVAL_SEC.store(interval_sec, Ordering::Relaxed);
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app_dir::AppDataDirGuard;
 
     /// 手动 current_thread runtime 驱动 async 命令（照 hooks/mod.rs:443 先例）
     fn block_on<F: std::future::Future>(future: F) -> F::Output {
@@ -524,57 +453,6 @@ mod tests {
         assert_eq!(out[0].amount, outcome().amount);
     }
 
-    // ── resolve_poll_interval（4 例，AppDataDirGuard 注入 tempdir，F10） ──
-
-    /// 无 settings.json → 默认 60s
-    #[test]
-    fn resolve_poll_interval_default_when_missing() {
-        let dir = tempfile::tempdir().unwrap();
-        let _guard = AppDataDirGuard::set(dir.path());
-        assert_eq!(resolve_poll_interval(), Duration::from_secs(60));
-    }
-
-    /// 合法值 → 采用（120s）
-    #[test]
-    fn resolve_poll_interval_valid_value() {
-        let dir = tempfile::tempdir().unwrap();
-        let _guard = AppDataDirGuard::set(dir.path());
-        std::fs::write(
-            dir.path().join("settings.json"),
-            r#"{"planBalance":{"intervalSec":120}}"#,
-        )
-        .unwrap();
-        assert_eq!(resolve_poll_interval(), Duration::from_secs(120));
-    }
-
-    /// 越界（5 与 9999）→ 回退默认 60s
-    #[test]
-    fn resolve_poll_interval_out_of_range_falls_back() {
-        let dir = tempfile::tempdir().unwrap();
-        let _guard = AppDataDirGuard::set(dir.path());
-        for v in [5u64, 9999] {
-            std::fs::write(
-                dir.path().join("settings.json"),
-                format!(r#"{{"planBalance":{{"intervalSec":{v}}}}}"#),
-            )
-            .unwrap();
-            assert_eq!(
-                resolve_poll_interval(),
-                Duration::from_secs(60),
-                "越界 {v} 应回退默认"
-            );
-        }
-    }
-
-    /// 损坏 JSON → 回退默认 60s
-    #[test]
-    fn resolve_poll_interval_corrupt_json_falls_back() {
-        let dir = tempfile::tempdir().unwrap();
-        let _guard = AppDataDirGuard::set(dir.path());
-        std::fs::write(dir.path().join("settings.json"), "not json {{{").unwrap();
-        assert_eq!(resolve_poll_interval(), Duration::from_secs(60));
-    }
-
     // ── get_plan_balance 命令（1 例，F10） ──
 
     /// reset 后命令核心返回空数组（无成功快照前）
@@ -584,114 +462,5 @@ mod tests {
         let out = block_on(get_plan_balance()).unwrap();
         assert!(out.is_empty(), "初始快照应为空数组");
         reset_snapshot_for_test();
-    }
-
-    // ── POLL_INTERVAL_SEC 内存值（1 例 + 各命令用例首行 reset，F11） ──
-
-    /// 内存间隔初值 = 默认 60（静态初值兜底；启动时由 resolve_poll_interval 覆盖）
-    #[test]
-    fn poll_interval_memory_default_is_60() {
-        reset_poll_interval_for_test();
-        assert_eq!(POLL_INTERVAL_SEC.load(Ordering::Relaxed), 60);
-    }
-
-    // ── plan_balance_set_interval 命令（4 例，AppDataDirGuard 注入 tempdir 直调，F11） ──
-
-    /// 合法值 120 → 磁盘落盘 + 内存更新双断言
-    #[test]
-    fn set_interval_valid_persists_and_updates_memory() {
-        reset_poll_interval_for_test();
-        let dir = tempfile::tempdir().unwrap();
-        let _guard = AppDataDirGuard::set(dir.path());
-
-        block_on(plan_balance_set_interval(120)).unwrap();
-        let loaded = block_on(crate::settings::load_settings()).unwrap();
-        assert_eq!(
-            loaded.data.unwrap()[SETTINGS_KEY][INTERVAL_SEC_KEY],
-            120,
-            "磁盘应持久化 intervalSec=120"
-        );
-        assert_eq!(
-            POLL_INTERVAL_SEC.load(Ordering::Relaxed),
-            120,
-            "内存间隔应更新为 120"
-        );
-    }
-
-    /// 越界 5 → Validation 拒绝：磁盘无文件 + 内存不变
-    #[test]
-    fn set_interval_below_min_rejected() {
-        reset_poll_interval_for_test();
-        let dir = tempfile::tempdir().unwrap();
-        let _guard = AppDataDirGuard::set(dir.path());
-
-        let err = block_on(plan_balance_set_interval(5)).unwrap_err();
-        match err {
-            AppError::Validation(msg) => {
-                assert!(
-                    msg.contains("设置轮询间隔失败"),
-                    "越界应提示业务语义，实际: {msg}"
-                );
-            }
-            other => panic!("越界应返回 Validation，实际: {other:?}"),
-        }
-        assert!(
-            !dir.path().join("settings.json").exists(),
-            "被拒保存不应落盘"
-        );
-        assert_eq!(
-            POLL_INTERVAL_SEC.load(Ordering::Relaxed),
-            DEFAULT_INTERVAL_SEC,
-            "越界写入不应改动内存间隔"
-        );
-    }
-
-    /// 越界 9999 → 同 below：Validation + 磁盘无文件 + 内存不变
-    #[test]
-    fn set_interval_above_max_rejected() {
-        reset_poll_interval_for_test();
-        let dir = tempfile::tempdir().unwrap();
-        let _guard = AppDataDirGuard::set(dir.path());
-
-        let err = block_on(plan_balance_set_interval(9999)).unwrap_err();
-        assert!(
-            matches!(err, AppError::Validation(_)),
-            "越界应返回 Validation，实际: {err:?}"
-        );
-        assert!(
-            !dir.path().join("settings.json").exists(),
-            "被拒保存不应落盘"
-        );
-        assert_eq!(
-            POLL_INTERVAL_SEC.load(Ordering::Relaxed),
-            DEFAULT_INTERVAL_SEC,
-            "越界写入不应改动内存间隔"
-        );
-    }
-
-    /// 合法写后磁盘值 == 内存值（落盘成功才更新内存，恒一致）
-    #[test]
-    fn set_interval_disk_memory_consistent() {
-        reset_poll_interval_for_test();
-        let dir = tempfile::tempdir().unwrap();
-        let _guard = AppDataDirGuard::set(dir.path());
-
-        block_on(plan_balance_set_interval(300)).unwrap();
-        let loaded = block_on(crate::settings::load_settings()).unwrap();
-        let disk = loaded.data.unwrap()[SETTINGS_KEY][INTERVAL_SEC_KEY]
-            .as_u64()
-            .unwrap();
-        let mem = POLL_INTERVAL_SEC.load(Ordering::Relaxed);
-        assert_eq!(disk, mem, "磁盘值与内存值应一致");
-        assert_eq!(mem, 300);
-    }
-
-    // ── 域键名常量（1 例，F11） ──
-
-    /// 常量值锁定（防字面量漂移——settings.rs 白名单与命令 payload 经此引用）
-    #[test]
-    fn settings_key_constants_value() {
-        assert_eq!(SETTINGS_KEY, "planBalance");
-        assert_eq!(INTERVAL_SEC_KEY, "intervalSec");
     }
 }

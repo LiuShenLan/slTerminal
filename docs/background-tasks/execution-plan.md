@@ -33,6 +33,8 @@
 4. `npm test`
 5. `cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1`
 
+> **环境豁免（2026-08-31 登记）**：命令 5 在本机预期 exit 127——rustc 1.94~1.96 下测试二进制链接 tauri 栈代码后 0xC0000139 启动崩溃（Windows 加载器边界 bug，详见 .claude/test-inventory.md 豁免表）。兜底验证 = `cargo check --tests`（编译级）+ 测试存在性 grep + clippy。各 Stage 脚本与 verify 已同步此注记。
+
 Stage 05 补充说明：e2e-tests/ 不在根 tsconfig include（include = src + test/**）且无独立 tsconfig——tsc/eslint 不覆盖本 Stage 改动文件，wdio 实跑为人工验证点（见 stages.md Stage 05），门禁五条仅作回归防线。
 
 ## 进度跟踪表

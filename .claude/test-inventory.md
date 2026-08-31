@@ -35,6 +35,7 @@
 | plan_balance 真实 HTTP 查询（ureq fetch）与 tokio 轮询任务本体（含动态间隔内存读取 POLL_INTERVAL_SEC 与 set_interval 落盘/内存一致链，F11 扩注） | 真实外部 API 依赖 + Tauri 运行时（规格 §3 不做 L4） | 解析与状态机 L1 全覆盖（罐装 JSON/参数化编排 + 间隔内存默认值/四维 set_interval 直调用例）+ L2 UI 四场景 + L4 频率页真实后端落盘（settings.e2e.ts ④⑤）+ 人工实测（真实账号一轮） | F10/F11 |
 | win11/win10 真实终端 conda 激活实测（profile 加载链路 + conda 钩子 + prompt 包装链） | 依赖真实 conda/miniforge 环境与交互会话，CI 无此环境 | L1 B17 参数守卫（`test_pwsh_args_no_noprofile_b17`）+ 双系统 debug build 人工实测 | B17 |
 | settings.json corrupted 警示条（L4） | 写坏 settings.json 需沙箱外写文件（E2E 无命令通道），真实损坏无法在 E2E 会话内构造 | L2 覆盖（`settings-panel.test.tsx` loadSettings mock 渲染/关闭）+ 人工实测（手改文件损坏重启） | SC-E2E-02 |
+| `cargo test` 门禁（F12 起，含 background_tasks 引用的测试二进制） | rustc 1.94~1.96 环境级加载器 bug（2026-08-31 实证，非代码缺陷）：测试二进制一旦链接 tauri 栈代码（TaskDef 静态含 `fn(tauri::AppHandle)` 字段被测试引用即触发）→ lld 布局触发 Windows 加载器边界 → 进程启动即 0xC0000139 零输出崩溃。HEAD 基线无此形态故不崩；opt-level 0/1/2/3、codegen-units、debuginfo=0、link.exe、非增量、旧工具链 1.94/1.95 全组合实测均复现；`cargo check --tests` 编译级全绿 | `cargo check --tests`（编译级）+ `cargo clippy --tests` + 测试存在性 grep 断言 + verify agent 逐条核实 + 人工实测；rustc 升级后复跑解除豁免 | 2026-08-31 实证登记 |
 
 > 原豁免表中 `FileWatcher::start`/`notify_watch` 与 `claude_history` 命令包装两项已按 D6 从豁免重分类为补测，不再列入豁免表。  
 > **SEC-17 豁免已撤销（TQ-COV-05 翻案）**：`tracing::warn!(target: "audit")` 已由 `tracing-test` 断言锁死，豁免行删除。

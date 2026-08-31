@@ -49,8 +49,9 @@
     "allow-agent-history-scan",
     "allow-agent-history-delete",
     "allow-agent-history-read-title",
+    "allow-background-tasks-list",
+    "allow-background-tasks-set-config",
     "allow-get-plan-balance",
-    "allow-refresh-plan-balance",
-    "allow-plan-balance-set-interval"
+    "allow-refresh-plan-balance"
   ]
 }

@@ -3,7 +3,7 @@
 /// 原子写入（tempfile）+ .bak 备份兜底。
 /// - BE-14/D11：load 返回 `{ data, corrupted }`——无文件 data:null/corrupted:false；
 ///   损坏回退默认值 corrupted:true；.bak 命中也算 corrupted:true（数据来自备份）。
-/// - SEC-11：save 校验顶层键白名单（fontSize/keybindings/sideBar/colorScheme）+ 大小上限 1MB。
+/// - SEC-11：save 校验顶层键白名单（fontSize/keybindings/sideBar/colorScheme/backgroundTasks）+ 大小上限 1MB。
 /// - BE-16：应用数据目录解析/测试守卫/共享 DTO 自 app_dir 模块导入。
 use crate::app_dir::{app_data_dir, LoadResult, MAX_PERSIST_BYTES};
 use crate::error::{io_error, AppError};
@@ -12,7 +12,7 @@ use tempfile::NamedTempFile;
 
 /// 设置顶层键白名单（SEC-11）：前端各 store 只允许写这些键。
 /// 前端消费型四键（fontSize/keybindings/sideBar/colorScheme）无后端模块可归，键名集中于此；
-/// 后端消费型域键名归域模块（plan_balance::SETTINGS_KEY 先例）。
+/// 后端消费型域键名归域模块（background_tasks::SETTINGS_KEY 先例）。
 /// 契约断链先例：fontSize store 曾发平铺 terminalFontSize/editorFontSize 顶层键被拒，
 /// 已改段形态并用双侧测试锁死——前端 payload 键集合精确断言 + 后端平铺拒绝用例）
 const SETTINGS_ALLOWED_KEYS: [&str; 5] = [
@@ -20,7 +20,7 @@ const SETTINGS_ALLOWED_KEYS: [&str; 5] = [
     "keybindings",
     "sideBar",
     "colorScheme",
-    crate::plan_balance::SETTINGS_KEY,
+    crate::background_tasks::SETTINGS_KEY,
 ];
 
 /// save_settings 进程内互斥（SPE-06 场景转正修复）：
@@ -61,59 +61,54 @@ fn merge_settings(existing: serde_json::Value, incoming: serde_json::Value) -> s
     }
 }
 
-/// 持久化设置（读现有 → 浅合并 top-level 键 → 原子写入：tempfile → flush → persist，.bak 备份兜底）
-///
-/// SEC-11 保存校验：顶层键白名单（spawn_blocking 前快速失败）+ 序列化后大小上限 1MB。
-#[tauri::command]
-pub async fn save_settings(settings: serde_json::Value) -> Result<(), AppError> {
-    // SEC-11：顶层键白名单校验（纯内存操作，spawn_blocking 前快速失败）
+/// 同步写通道（F12 抽取）：校验（白名单 + 大小上限）→ 浅合并 → 原子写 + .bak。
+/// 供 async save_settings 与 background_tasks::set_config_core（spawn_blocking 内）共用——
+/// 全仓唯一 settings.json 写通道，禁止另建。
+pub(crate) fn save_settings_blocking(settings: serde_json::Value) -> Result<(), AppError> {
     validate_settings_input(&settings)?;
-
     let app_dir = app_data_dir()?;
     let settings_path = app_dir.join("settings.json");
-
-    match tokio::task::spawn_blocking(move || -> Result<(), AppError> {
-        // SETTINGS_SAVE_LOCK：串行化并发保存（见锁定义注释——三 store 启动并发写竞态）
-        let _guard = SETTINGS_SAVE_LOCK
-            .lock()
-            .map_err(|_| AppError::Unknown("settings 保存锁中毒".into()))?;
-        // BE-05: create_dir_all 移入 spawn_blocking 闭包内部，避免异步上下文阻塞 I/O
-        // 保存链 io 错误统一经 io_error 语义化（BE-15）：用户可见「保存设置失败 + 路径」，
-        // 原始 io 错误文本进 tracing 日志
-        std::fs::create_dir_all(&app_dir).map_err(|e| io_error("保存设置", &app_dir, e))?;
-        // 读现有 settings.json（不存在/损坏视作 Null），与 incoming 浅合并
-        let existing = std::fs::read_to_string(&settings_path)
-            .ok()
-            .and_then(|c| serde_json::from_str::<serde_json::Value>(&c).ok())
-            .unwrap_or(serde_json::Value::Null);
-        let merged = merge_settings(existing, settings);
-
-        let json = serde_json::to_string_pretty(&merged)?;
-        // SEC-11：序列化后大小上限（含合并进现有文件的部分）
-        if json.len() > MAX_PERSIST_BYTES {
-            return Err(AppError::Validation("保存设置失败: 数据超过 1MB 上限".into()));
+    // 以下为原 save_settings spawn_blocking 闭包本体，逐行平移（SETTINGS_SAVE_LOCK
+    // 持锁串行化读-合并-写全程，语义不变）
+    let _guard = SETTINGS_SAVE_LOCK
+        .lock()
+        .map_err(|_| AppError::Unknown("settings 保存锁中毒".into()))?;
+    std::fs::create_dir_all(&app_dir).map_err(|e| io_error("保存设置", &app_dir, e))?;
+    let existing = std::fs::read_to_string(&settings_path)
+        .ok()
+        .and_then(|c| serde_json::from_str::<serde_json::Value>(&c).ok())
+        .unwrap_or(serde_json::Value::Null);
+    let merged = merge_settings(existing, settings);
+    let json = serde_json::to_string_pretty(&merged)?;
+    // SEC-11：序列化后大小上限（含合并进现有文件的部分）
+    if json.len() > MAX_PERSIST_BYTES {
+        return Err(AppError::Validation("保存设置失败: 数据超过 1MB 上限".into()));
+    }
+    let mut tmp =
+        NamedTempFile::new_in(&app_dir).map_err(|e| io_error("保存设置", &app_dir, e))?;
+    tmp.write_all(json.as_bytes())
+        .map_err(|e| io_error("保存设置", &settings_path, e))?;
+    tmp.flush().map_err(|e| io_error("保存设置", &settings_path, e))?;
+    if settings_path.exists() {
+        let bak = app_dir.join("settings.json.bak");
+        if let Err(e) = std::fs::copy(&settings_path, &bak) {
+            tracing::warn!(error = %e, path = %settings_path.display(), "settings .bak 备份失败");
         }
-        let mut tmp =
-            NamedTempFile::new_in(&app_dir).map_err(|e| io_error("保存设置", &app_dir, e))?;
-        tmp.write_all(json.as_bytes())
-            .map_err(|e| io_error("保存设置", &settings_path, e))?;
-        tmp.flush().map_err(|e| io_error("保存设置", &settings_path, e))?;
-        if settings_path.exists() {
-            let bak = app_dir.join("settings.json.bak");
-            if let Err(e) = std::fs::copy(&settings_path, &bak) {
-                tracing::warn!(error = %e, path = %settings_path.display(), "settings .bak 备份失败");
-            }
-        }
-        tmp.persist(&settings_path)
-            .map_err(|e| io_error("保存设置", &settings_path, e.error))?;
-        Ok(())
-    })
-    .await
-    {
+    }
+    tmp.persist(&settings_path)
+        .map_err(|e| io_error("保存设置", &settings_path, e.error))?;
+    Ok(())
+}
+
+/// 持久化设置（读现有 → 浅合并 top-level 键 → 原子写入：tempfile → flush → persist，.bak 备份兜底）
+///
+/// SEC-11 保存校验：顶层键白名单 + 序列化后大小上限 1MB（校验在写通道 save_settings_blocking 内）。
+#[tauri::command]
+pub async fn save_settings(settings: serde_json::Value) -> Result<(), AppError> {
+    match tokio::task::spawn_blocking(move || save_settings_blocking(settings)).await {
         Ok(inner) => inner,
         Err(e) => Err(AppError::TaskJoin(e.to_string())),
-    }?;
-    Ok(())
+    }
 }
 
 /// 加载持久化设置（BE-14/D11）：返回 `{ data, corrupted }`
@@ -564,17 +559,41 @@ mod tests {
         assert!(!loaded.corrupted);
     }
 
-    /// F10 白名单第 5 键：planBalance 段放行且 save/load 往返一致（防白名单回归）
+    /// F12 白名单第 5 键：backgroundTasks 段放行且 save/load 往返一致（防白名单回归）
     #[test]
-    fn save_accepts_plan_balance_key() {
+    fn save_accepts_background_tasks_key() {
         let dir = tempfile::tempdir().unwrap();
         let _guard = AppDataDirGuard::set(dir.path());
 
-        let settings = serde_json::json!({ "planBalance": { "intervalSec": 120 } });
+        let settings = serde_json::json!({
+            "backgroundTasks": { "planBalance": { "enabled": true, "intervalSec": 120 } }
+        });
         run(save_settings(settings.clone())).unwrap();
         let loaded = run(load_settings()).unwrap();
-        assert_eq!(loaded.data, Some(settings), "planBalance 段应完整往返一致");
+        assert_eq!(loaded.data, Some(settings), "backgroundTasks 段应完整往返一致");
         assert!(!loaded.corrupted);
+    }
+
+    /// 契约断链防复发：F10 旧顶层键 planBalance 退役 → Validation 拒绝且不落盘（换键防回归）
+    #[test]
+    fn save_rejects_plan_balance_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = AppDataDirGuard::set(dir.path());
+
+        let err = run(save_settings(
+            serde_json::json!({ "planBalance": { "intervalSec": 120 } }),
+        ))
+        .unwrap_err();
+        match err {
+            AppError::Validation(msg) => {
+                assert!(msg.contains("白名单"), "旧 planBalance 键应提示白名单，实际: {msg}");
+            }
+            other => panic!("旧 planBalance 键应返回 Validation，实际: {other:?}"),
+        }
+        assert!(
+            !dir.path().join("settings.json").exists(),
+            "被拒保存不应落盘"
+        );
     }
 
     /// 契约断链防复发②：平铺 terminalFontSize/editorFontSize 顶层键 → Validation 拒绝
