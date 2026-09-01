@@ -105,11 +105,10 @@ SEC-01 effect 同时承担 `startWatch(rootPath)` / `stopWatch(prev)`——watch
 
 ## 测试模式
 
-- 测试文件位于 `src/__tests__/`：`layout-serde.test.ts`、`default-layout-format.test.ts`、`panel-registry.test.ts`、`title-manager.test.ts`、`pageapis.test.ts`、`workspace*.test.tsx`。
 - **Dockview 全量 mock**：`vi.mock("dockview-react", () => ({ DockviewReact: vi.fn(() => null) }))`。
 - **Allotment 布局容器 mock**；Zustand stores 使用真实实现 + `beforeEach` 种子数据。
-- **布局序列化**：`layout-serde.test.ts` 测旧格式修补、白名单过滤、深拷贝。
-- **页签标题**：`title-manager.test.ts` 测 terminal-N 递增、basename/冲突相对路径、suffix 匹配。
-- **多实例**：`workspace-multi-instance.test.tsx` 测 Dockview 实例各自存活、CSS 显隐、`initializedPages` 惰性初始化。
-- **DefaultTab**：`workspace-defaulttab.test.tsx` 渲染生产 `DefaultTab`（非 mock），重点断言 `tabStatus` 圆点、`tabLogo` 跟随页签名、`onDidParametersChange` 扁平事件结构。
-- **切换时序**：`workspace-switch-order.test.tsx` 测 `setProjectRoot` 先于 `setActivePage` 生效。
+- **布局序列化**：测旧格式修补、白名单过滤、深拷贝。
+- **页签标题**：测 terminal-N 递增、basename/冲突相对路径、suffix 匹配。
+- **多实例**：测 Dockview 实例各自存活、CSS 显隐、`initializedPages` 惰性初始化。
+- **DefaultTab**：渲染生产 `DefaultTab`（非 mock），重点断言 `tabStatus` 圆点、`tabLogo` 跟随页签名、`onDidParametersChange` 扁平事件结构。
+- **切换时序**：测 `setProjectRoot` 先于 `setActivePage` 生效。

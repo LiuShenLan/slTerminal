@@ -93,7 +93,6 @@ ExplorerPanel 经 `src/features/sideViews/sideViewDefs.ts` 注册为 `explorer` 
 
 ## 测试模式
 
-- 测试文件位于 `src/__tests__/`，命名规则 `explorer-*.test.ts(x)`。
 - **必须 mock 三个 IPC 模块**：`../ipc/fs`、``../ipc/git``、`../ipc/notify`。
 - `vi.hoisted()` 创建 mock 状态，确保模块级 `vi.mock()` 执行前就绪。
 - **共享工厂**：`testMocks/explorerMocks.ts`（接口）、`helpers/vfs.ts`（虚拟文件系统）、`helpers/workspace-setup.ts`（store 种子）。

@@ -65,7 +65,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 测试模式
 
-- **L2**：`scheme-registry.test.ts` 守注册/切换/降级/完整性；`overrides.test.ts` 守 CM6 层叠选择器形态（ACC-05 防回归）；`colors.test.ts` 守 token 集合。
+- **L2**：守注册/切换/降级/完整性；守 CM6 层叠选择器形态（ACC-05 防回归）；守 token 集合。
 - jsdom 的 `getComputedStyle` 不支持 `<style>` 规则层叠，断言用规则文本/选择器形态而非 computed。
 - token 值正确性由消费方测试断言（如 git-gutter / explorer-git-status）。
 

@@ -44,8 +44,6 @@ claude 类别规则（实现于 `profiles/claude/strategies.ts`）：
 
 ## 测试模式
 
-L2 测试位于 `src/__tests__/`：
-
-- `notifications.test.ts`（P2-TE-04）：失焦 + 三类事件 → toast + 任务栏闪烁、聚焦时不通知、toast 正文含项目名 + 类别、classifyEvent 类别判定委托 profile 分支。
-- `notification.test.ts`：`src/ipc/notification.ts` 封装分支覆盖（IHE-02）。
-- `cli-profile-claude.test.ts`：覆盖 claude `classifyNotification` 五映射纯函数层。
+- 失焦 + 三类事件 → toast + 任务栏闪烁、聚焦时不通知、toast 正文含项目名 + 类别、classifyEvent 类别判定委托 profile 分支（P2-TE-04）。
+- `src/ipc/notification.ts` 封装分支覆盖（IHE-02）。
+- 覆盖 claude `classifyNotification` 五映射纯函数层。

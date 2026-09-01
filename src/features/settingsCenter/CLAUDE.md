@@ -38,4 +38,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 测试模式
 
-L2 测试位于 `src/__tests__/`：`settings-page-registry.test.ts`（注册/getAll 分组过滤/order 排序/重复 id 覆盖/_reset 隔离）；`open-settings.test.ts`（无项目 toast 且不切页/活跃项目优先/兜底第一个项目/切页先于开面板）；`open-settings-panel.test.ts`（addPanel 参数精确/单例 focus 不新建/深链 selectedPage/5s 超时降级）。壳与页组件测试见 `src/panels/CLAUDE.md`。
+- 注册表：注册/getAll 分组过滤/order 排序/重复 id 覆盖/_reset 隔离。
+- openSettings：无项目 toast 且不切页/活跃项目优先/兜底第一个项目/切页先于开面板。
+- openSettingsPanel：addPanel 参数精确/单例 focus 不新建/深链 selectedPage/5s 超时降级。
+- 壳与页组件测试见 `src/panels/CLAUDE.md`。

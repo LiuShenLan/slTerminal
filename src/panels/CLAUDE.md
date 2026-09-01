@@ -193,8 +193,7 @@ Claude Code 在用户主动 Ctrl+C 中断时不发射任何 hook 事件。四态
 
 ## 测试模式
 
-- **L2（jsdom）**：`src/__tests__/terminal*.test.ts(x)`、`editor*.test.ts(x)`、`html-panel.test.tsx`、`keyboard.test.ts`。
-- **L3（node + `@xterm/headless`）**：`test/terminal/**/*.test.ts`。L3 用 `@xterm/headless` 验证网格状态，Kitty 编码/亮色渲染依赖 DOM/渲染器层由 L4 验收。
+- **L3（node + `@xterm/headless`）**：用 `@xterm/headless` 验证网格状态，Kitty 编码/亮色渲染依赖 DOM/渲染器层由 L4 验收。
 - **useXterm 是编排层**：mock 6 个子 hook 才能隔离测试（`useTerminalInstance` / `usePtyOutput` / `usePtyResize` / `useClipboardHandler` / `useCommandDetection` / `webgl`）。共享测试工厂见 `src/__tests__/helpers/xterm-test-utils.ts`。
 - **L3 复用生产实现**：`oscHandlers.ts`（TQ-E-01）与 `keyEventHandler.ts`（TQ-E-02）抽为纯函数后，L3 `production-osc.test.ts` / `shortcut-dispatch.test.ts` 直接复用生产真值源，不再复刻。
 - **HTML 面板 postMessage**：jsdom 不强制 CSP，L2 校验四层校验逻辑；真实 WebView2 行为由 L4 验收。

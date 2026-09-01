@@ -92,7 +92,6 @@ PTY spawn 时注入 `SLTERM_PANEL_ID`（见 @../pty/CLAUDE.md）。reporter 读�
 
 ## 测试模式
 
-- 测试位于 `hooks/mod.rs`、`provider.rs`、`signal.rs`、`watcher.rs`、`claude/mod.rs`、`claude/inject.rs`、`claude/config.rs` 的 `#[cfg(test)]` 模块。
 - **HomeDirGuard 注入**：`claude/mod.rs` 用模块级 `HOME_DIR_OVERRIDE` 让 L1 在 tempdir 中测试，不碰真实 `~/.claude/settings.json`。
 - **watcher 手动构造**：`HookSignalWatcher` 需要 `AppHandle`，L1 通过直接构造结构体 + 手动线程桩测试 stop 幂等/Drop 清理。
 - **信号处理注入 emit 闭包**：`process_signal_file_with` 把 `emit("agent-event")` 抽为参数，L1 无需真实 AppHandle。

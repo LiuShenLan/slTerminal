@@ -40,6 +40,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 测试模式
 
-- `agent-status-hook.test.ts`：useAgentStatus sessionId 字段、行建模通道（F5）+ ContextUsage 信号分支。
-- `nav-tree.test.tsx`：NavSessionRow 消费（活跃会话按页面归组/单行渲染/StatusDot/迷你用量条/logo）。
-- `terminal-registry.test.ts` / `use-xterm-lifecycle.test.ts`：agentSession sessionId/status 存储与 hook 事件写入（HUK1-9）。
+- useAgentStatus sessionId 字段、行建模通道（F5）+ ContextUsage 信号分支。
+- NavSessionRow 消费（活跃会话按页面归组/单行渲染/StatusDot/迷你用量条/logo）。
+- agentSession sessionId/status 存储与 hook 事件写入（HUK1-9）。

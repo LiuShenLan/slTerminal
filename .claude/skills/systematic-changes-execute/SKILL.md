@@ -74,7 +74,7 @@ Workflow 返回后，主 agent 检查 `verifyResult.allFixed`：
 - **失败三分支判定**：收尾遇测试失败先定性再行动——① 重跑判定 flaky（wait-for 超时类，实证：B17 收尾 L2 首跑 1 例超时重跑全绿）；② 失败面与变更面相关性（本变更零前端代码 → 前端单测失败必非本次回归）；③ L4 失败先对照 `.claude/test-exemptions.md` 豁免表——已登记环境故障不算回归（实证：editor.e2e.ts dirty→clean 命中 2026-08-23 Windows notify 豁免行）
 - 抽查根 CLAUDE.md 与最终代码一致性
 - 归档 commit：review 报告 + 计划文档一并提交
-- 输出收尾报告：Stage commit 列表、最终测试用例数、未修复项（若有，含原因）
+- 输出收尾报告：Stage commit 列表、未修复项（若有，含原因）
 - 计划标注过「人工验证点」的项逐项实测（规范推断/平台行为/渲染/视觉/滚动效果类），结果写入收尾报告
 
 ## 注意事项

@@ -58,11 +58,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## 测试模式
 
 - 测试 `#[cfg(windows)]` 原则上改运行时 `cfg!(windows)` 分支；依赖 Windows 编译期 API（symlink 等）无法运行时区分的例外保留 cfg，须在所属模块 CLAUDE.md 登记豁免（硬约束 #9）。
-- `state.rs` `#[cfg(test)]`：路径沙箱校验（含 symlink 特权豁免）+ `GitRepoCache` LRU 纯逻辑。
-- `app_dir.rs` `#[cfg(test)]`：`resolve_app_data_dir` 三分支 + `LoadResult` serde + `AppDataDirGuard` 注入/恢复。
-- settings/projects 命令层测试经 `AppDataDirGuard` 注入 tempdir（SPE-04）。
-- `error.rs`：AppError serde camelCase 序列化断言。
-- 命令注册完整性由 `src/__tests__/ipc-*-contract.test.ts` 间接守护。
+- 命令注册完整性由 L2 IPC 契约测试间接守护。
 
 ### 既定豁免
 

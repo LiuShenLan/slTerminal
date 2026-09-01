@@ -31,9 +31,6 @@ E2E helper 由 `E2E_ENABLED`（`src/lib/e2eEnabled.ts`）门控。`tauri build` 
 
 两套命名反映挂载位置不同，禁止把 `__e2e_*` 当 window 全局使用。
 
-helper 清单（window 全局）：
-- `__slterm_e2e_setSettingsDirty(panelId, dirty)`：测试后门，直接置设置面板 dirty 态（供 × 关闭守卫用例绕过真实编辑，settings.e2e.ts 用例⑪）。
-
 ### 用户目录隔离（FIX-TE-04 + E2E-05 + BE-01）
 
 **数据目录隔离（SLTERM_DATA_DIR）**：`run-wdio.cjs` 启动时注入 `SLTERM_DATA_DIR = <os.tmpdir()>/slterm-e2e-data`（env 链式继承：run-wdio → npx wdio → tauri driver → slterminal.exe），应用全部数据写入（settings.json / slterminal-projects.json 等）落在临时目录，与日常使用数据完全隔离；退出时清理临时目录。应用数据备份（~/.slterminal/settings.json / projects.json / .bak）已被此机制取代，不再备份。

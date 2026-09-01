@@ -52,7 +52,6 @@ claude provider 定位与会话目录删除时：一级子目录、命中 jsonl 
 
 ## 测试模式
 
-- 测试位于 `agent_history/mod.rs`、`provider.rs`、`claude/mod.rs`、`claude/scan.rs`、`claude/jsonl.rs`、`claude/ops.rs` 的 `#[cfg(test)]` 模块。
 - **`ScanRootGuard`**：RAII 注入 `SLTERM_CLAUDE_PROJECTS_DIR` env，Drop 恢复；依赖 `--test-threads=1` 门禁。
 - **provider 桩注入**：`mod.rs` 用 `RecordingStub` 验证 delete/read_title 的 validate 前置。
 

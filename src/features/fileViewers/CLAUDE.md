@@ -27,5 +27,5 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 测试模式
 
-- `file-viewer-registry.test.ts`：注册/解析全分支、链式短路、隐藏文件排除、大小写不敏感、无扩展名边界、`_reset` 后预注册恢复（EXP-12）。
-- `explorer-file-viewer.test.tsx`：`handleOpenFile` 命中策略面板 / 回退 `"editor"`。
+- 注册/解析全分支、链式短路、隐藏文件排除、大小写不敏感、无扩展名边界、`_reset` 后预注册恢复（EXP-12）。
+- `handleOpenFile` 命中策略面板 / 回退 `"editor"`。

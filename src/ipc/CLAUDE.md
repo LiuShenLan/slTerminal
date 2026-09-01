@@ -99,7 +99,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 测试模式
 
-- 测试文件位于 `src/__tests__/`：`ipc-contract.test.ts`、`ipc-ping.test.ts`、`app-error.test.ts`、`clipboard-guard.test.ts`、`ipc-agent-hooks-contract.test.ts`、`ipc-hooks-config-contract.test.ts`、`ipc-agent-history-contract.test.ts`、`ipc-plan-balance-contract.test.ts`、`ipc-background-tasks-contract.test.ts`、`ipc-window-contract.test.ts`、`notification.test.ts`。
 - **契约四维验证**：命令名、参数结构、正常返回、异常传播。共享工厂 `helpers/ipc-contract.ts` 以声明式 schema 驱动。
 - **Channel 绑定验证**：PTY spawn / fs read 用 `assertArgs` 断言 `Channel.onmessage` 绑定到传入回调。
 - **Uint8Array 序列化验证**：`pty.write()` 用例断言参数为 `number[]` 而非 `Uint8Array`。

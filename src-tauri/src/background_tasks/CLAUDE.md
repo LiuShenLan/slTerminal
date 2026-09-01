@@ -36,8 +36,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 测试模式
 
-- `registry.rs`：`tasks_registry_key_set_locked` / `runtimes_same_length_as_tasks` / `find_hit_and_miss` / `resolve_task_config_*` 6 例（AppDataDirGuard 注入 tempdir，逐字段独立钳制）。
-- `mod.rs`：`background_task_info_serde_key_set`（六键精确）/ `list_returns_registry_order_with_defaults` / `set_config_core` 7 例（校验/落盘/合并/一致性）——每例首行 `reset_runtimes_for_test()` 重置内存值（--test-threads=1 门禁保证无并发干扰），current_thread runtime block_on 驱动 async 命令。
+- `registry.rs`：`tasks_registry_key_set_locked` / `runtimes_same_length_as_tasks` / `find_hit_and_miss` / `resolve_task_config_*`（AppDataDirGuard 注入 tempdir，逐字段独立钳制）。
+- `mod.rs`：`background_task_info_serde_key_set`（六键精确）/ `list_returns_registry_order_with_defaults` / `set_config_core`（校验/落盘/合并/一致性）——每例首行 `reset_runtimes_for_test()` 重置内存值（--test-threads=1 门禁保证无并发干扰），current_thread runtime block_on 驱动 async 命令。
 - 键集前后端双边锁：本模块 serde 断言 ↔ `src/__tests__/ipc-background-tasks-contract.test.ts`（键集合 + 值集）↔ `src/__tests__/background-tasks-scheduler.test.ts`（值集断言）。
 
 ### 既定豁免

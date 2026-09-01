@@ -68,9 +68,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 测试模式
 
-- 测试文件位于 `src/__tests__/`：`sideBarState.test.ts`、`sideViewRegistry.test.ts`、`sideBar.test.ts`、`activityBar.test.tsx`、`sideBarArea.test.tsx`、`workspace-sideviews.test.tsx`。
-- **纯函数层**：`sideBarState.test.ts` 覆盖 `toggleViewPure`/`moveButtonPure`/`deriveLayout`/`reconcileZones`/`sanitizeSideBar` 全分支 + S1-S6 场景序列。
-- **Store 层**：`sideBar.test.ts` 覆盖默认值、toggle/move 委托纯函数、width/splitRatio clamp、loadFromDisk sanitize、2s debounce 持久化。
-- **拖拽测试**：`activityBar.test.tsx` 必须 mock `getBoundingClientRect` 为按钮 + 容器提供模拟矩形；drag 事件向外层容器 `[data-e2e="activity-bar"]` 派发（非 zone div）。
-- **视图槽条件渲染**：`sideBarArea.test.tsx` 验证 FE-21 仅挂载当前打开视图，隐藏槽不渲染；换区后旧区卸载、新区挂载。
-- **Workspace 集成**：`workspace-sideviews.test.tsx` 验证活动栏 pane 46px 固定、侧栏区 pane visible=anyOpen、主区 minSize=200。
+- **纯函数层**：覆盖 `toggleViewPure`/`moveButtonPure`/`deriveLayout`/`reconcileZones`/`sanitizeSideBar` 全分支 + S1-S6 场景序列。
+- **Store 层**：覆盖默认值、toggle/move 委托纯函数、width/splitRatio clamp、loadFromDisk sanitize、2s debounce 持久化。
+- **拖拽测试**：必须 mock `getBoundingClientRect` 为按钮 + 容器提供模拟矩形；drag 事件向外层容器 `[data-e2e="activity-bar"]` 派发（非 zone div）。
+- **视图槽条件渲染**：验证 FE-21 仅挂载当前打开视图，隐藏槽不渲染；换区后旧区卸载、新区挂载。
+- **Workspace 集成**：验证活动栏 pane 46px 固定、侧栏区 pane visible=anyOpen、主区 minSize=200。

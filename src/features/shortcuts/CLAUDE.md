@@ -121,8 +121,7 @@ HTML 面板内容在 `<iframe sandbox="allow-scripts" srcDoc={...}>` 中（不�
 
 ## 测试模式
 
-- 测试文件位于 `src/__tests__/`：`keystroke.test.ts`、`reserved.test.ts`、`command-catalog.test.ts`、`shortcuts.test.ts`、`wire-keybindings.test.ts`、`use-panel-focus.test.ts`、`global-commands.test.ts`。
-- `shortcuts.test.ts` 是核心：注册/注销、引用计数、上下文栈竞态、匹配排序、IME 透传、setOverrides 重绑/解绑/降级/冲突、resolve/forceContext、exportContextBindings。
-- `command-catalog.test.ts` 守卫默认键非保留、id 唯一、命令齐全。
-- `use-panel-focus.test.ts` 测 focusin→pushContext+onActivate、focusout(离子树)→popContext+onDeactivate、内部焦点转移不触发、卸载清理。
+- **核心**：注册/注销、引用计数、上下文栈竞态、匹配排序、IME 透传、setOverrides 重绑/解绑/降级/冲突、resolve/forceContext、exportContextBindings。
+- **命令目录守卫**：默认键非保留、id 唯一、命令齐全。
+- **usePanelFocus**：focusin→pushContext+onActivate、focusout（离子树）→popContext+onDeactivate、内部焦点转移不触发、卸载清理。
 - 各面板 keyboard 测试测命令经 active 指针派发、无 active 透传、Ctrl+C 不注册。

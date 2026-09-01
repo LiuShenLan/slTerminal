@@ -38,52 +38,7 @@ L2 前端单元/集成测试集中目录。本文件只记录测试架构层面�
 
 ## 编号登记
 
-### MC-8 多 CLI profile 重构——测试文件更名映射
-
-Stage 01–07 产生的测试文件更名/合并。旧名全部退役、磁盘零残留；语义逐项并入新文件。
-
-| 旧文件（退役） | 新文件（现行） |
-|----------------|----------------|
-| `tab-title-registry.test.ts` | `cli-profile-registry.test.ts` |
-| `tab-rules.test.ts` | `cli-profile-claude.test.ts` |
-| `cli-icons.test.ts` | `cli-profile-registry.test.ts` + `cli-profile-claude.test.ts` |
-| `claude-status.test.ts` | `agent-status-lib.test.ts` + `cli-profile-claude.test.ts` |
-| `ipc-hooks-contract.test.ts` | `ipc-agent-hooks-contract.test.ts` |
-| `ipc-claude-history-contract.test.ts` | `ipc-agent-history-contract.test.ts` |
-| `claude-history-model.test.ts` | `agent-history-model.test.ts` |
-| `claude-history-hook.test.tsx` | `agent-history-hook.test.tsx` |
-| `claude-history-restore.test.ts` | `agent-history-restore.test.ts` |
-| `claude-history-row.test.tsx` | `agent-history-row.test.tsx` |
-| `claude-history-view.test.tsx` | `agent-history-view.test.tsx` |
-| `claude-history-action-dialog.test.tsx` | `agent-history-action-dialog.test.tsx` |
-
-### F11 设置中心——测试文件迁移映射（SC-FE-05/06）
-
-hubs 配置面板迁入设置中心产生的测试文件更名/删除/新增。旧名退役、磁盘零残留；语义逐项并入新文件。编辑器组件测试（hooks-config-*）import 路径同步改 `features/cliProfiles/profiles/claude/configEditor/`。
-
-| 旧文件（退役） | 新文件（现行） |
-|----------------|----------------|
-| `open-hooks-config.test.ts` | `open-settings.test.ts`（无项目 toast 等新语义） |
-| `open-hooks-config-panel.test.ts` | `open-settings-panel.test.ts` |
-| `hooks-config-panel.test.tsx` | `settings-hooks-page.test.tsx`（hub 43 例 → SettingsPageProps 形态 37 例） |
-
-新增：`settings-page-registry.test.ts` / `settings-panel.test.tsx` / `settings-plan-balance.test.tsx` / `settings-dirty-registry.test.ts` / `settings-panel-dirty.test.tsx` / `settings-keybindings.test.tsx` / `settings-panel-autoclose.test.tsx` / `open-settings.test.ts` / `open-settings-panel.test.ts` / `settings-hooks-page.test.tsx` / `settings-pages-registration.test.ts`。
-
-### F12 后台定时任务——测试文件迁移映射（FE-02/03/07）
-
-settings-plan-balance 退役、背景任务测试落地产生的更名/删除/新增。旧名退役、磁盘零残留。
-
-| 旧文件（退役） | 新文件（现行） |
-|----------------|----------------|
-| `settings-plan-balance.test.tsx` | `settings-background-tasks.test.tsx`（通用任务行两任务形态） |
-
-新增：`background-tasks-scheduler.test.ts` / `background-tasks-session-refresh.test.ts` / `ipc-background-tasks-contract.test.ts` / `settings-background-tasks.test.tsx`；`ipc-plan-balance-contract.test.ts` 删 setPlanBalanceInterval 四维段（16 → 12 例）。settings-pages-registration.test.ts 断言改 backgroundTasks 页（计数 1 不变）。
-
 ### AC-4 / AC-5
 
-- **AC-4**：`mock-cli-profile.test.tsx` 覆盖 mockcli 全链路契约（OSC 133 命中、eventToStatus 调用、历史聚合、hub 双向分派、恢复注入）。mock 夹具与桩编辑器位于 `helpers/mockCliProfile.ts`。
-- **AC-5**：`no-claude-literals.test.ts` 对通用层八路径执行字面量守卫，禁止硬编码 `"claude"` 字符串、claude 事件名、`~/.claude` 路径。合法引用只能经 `profiles/claude/` 导出常量，且 `src/features/cliProfiles/profiles/claude/` 整目录为目录级豁免。
-
-### TQ-CI-05
-
-全局 mock 清单变更须同步登记「全局 mock 清单」小节；新增测试依赖真实 IPC 时须按 opt-out 方式覆盖。
+- **AC-4**：mock profile 全链路契约（OSC 133 命中、eventToStatus 调用、历史聚合、hub 双向分派、恢复注入）。mock 夹具与桩编辑器位于 `helpers/mockCliProfile.ts`。
+- **AC-5**：通用层八路径字面量守卫，禁止硬编码 `"claude"` 字符串、claude 事件名、`~/.claude` 路径。合法引用只能经 `profiles/claude/` 导出常量，且 `src/features/cliProfiles/profiles/claude/` 整目录为目录级豁免。

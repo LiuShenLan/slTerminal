@@ -51,7 +51,6 @@ L1 用 send 回调注入收集，无需构造 `tauri::ipc::Channel`。
 
 ## 测试模式
 
-- 测试位于 `fs/mod.rs` 的 `#[cfg(test)]` 模块：`read_dir_tests`、`write_file_tests`、`command_wrapper_tests`。
 - **命令内核直测**：`fs_*_impl` 接收 `Option<PathBuf>` 根路径，用 `tokio Runtime::block_on` await，无需构造 `tauri::State`。
 - **分块读取注入 send 回调**：L1 直接调用 `read_file_chunked(path, |chunk| { ... })` 收集块。
 - **tempfile 隔离**：每个测试用 `tempfile::tempdir()`，结束时自动清理。

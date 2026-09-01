@@ -59,8 +59,8 @@ export const E2E_ENABLED =
 
 ## 测试模式
 
-- **纯函数测试**：`path.test.ts`、`panelId.test.ts`、`inject-script.test.ts` 无 mock/jsdom/React。
-- **E2E 门控**：`e2e-enabled.test.ts` 断言真值表 + 常量与纯函数一致性；`e2e-build-config.test.ts` AST/正则断言 `E2E_ENABLED` 内联定义。
+- **纯函数测试**：无 mock/jsdom/React 依赖。
+- **E2E 门控**：断言真值表 + 常量与纯函数一致性；AST/正则断言 `E2E_ENABLED` 内联定义。
 - **浮层单例**：ConfirmDialog/Toast 模块级单槽，测试经 `_reset` 隔离。
 
 ## 运行

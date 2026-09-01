@@ -17,7 +17,6 @@ SidebarTree 曾是左侧项目/操作页面二级树组件（项目 CRUD、操�
 | `makeEmptyLayout()` | `navTree/NavTree.tsx` 导出（restoreSession 等消费点改引用，NAV-06 承接约定） |
 | 宿主（sideViewDefs `projects` 视图） | sideViews 三槽重组——`projects` 视图注销，`nav` 视图注册（NAV-05） |
 | 右键菜单「打开 Hooks 配置」 | 决策 4 入口唯一化——菜单项删除，配置钮移至活动栏底部 |
-| 相关测试 | `sidebar-actions.test.ts` 语义迁入 `nav-tree.test.tsx` / `nav-tree-history.test.tsx`（NAV-08 测试迁移） |
 
 ## 防误用提示
 

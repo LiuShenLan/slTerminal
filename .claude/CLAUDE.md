@@ -64,8 +64,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **隔离优先**：L1 用 `tempfile::tempdir()` 隔离文件系统、`SPAWN_LOCK` 串行化 PTY；L2 用 `vi.mock()` 隔离 IPC/终端库；L4 用 embedded driver 隔离浏览器依赖
 - **L1/L2 覆盖所有 PR**，L3/L4 覆盖关键路径变更
 - **bugfix 须附防复发测试**：修复缺陷时除对改动代码添加全量测试外，还须对照修复前老代码补回归用例，防旧问题复现
-- **用例清单同步**：新增/修改/删除用例须同步更新 `.claude/test-inventory.md`
 - **模块测试模式见各子路径 CLAUDE.md**，不在根文件展开
+
+### 测试命名约定
+
+- **文件级（kebab-case）**：L2/L3 测试文件名 = 「领域对象-能力行为」（如 editor-keyboard.test.ts、theme-colors.test.ts）；禁止裸通用词（keyboard/path/colors/osc 等必须带领域对象）；成对文件用维度后缀消歧（如 main-bootstrap-poll / main-bootstrap-ipc-timeout）；L4 spec = 「领域.e2e.ts」且须登记 e2e-tests/wdio.conf.ts 显式 specs 数组（顺序即执行序，terminal.e2e.ts 末位承载杀 app 用例）；L1 tests/ 集成测试 = `<cmd>_tests.rs`（snake_case，如 git_status_tests.rs）
+- **L1 内嵌测试（src-tauri/src/ 源文件内）**：测试模块全部领域具名 `mod <领域>_tests`（如 reader_tests、spawn_tests；一文件多测试模块用功能具名）；测试函数 = 「对象_行为_场景」snake_case 裸名（如 micro_batch_stops_at_limit、pwsh_args_no_noprofile_b17），禁止 test_ 前缀与规格编号前缀
 
 静态检查门禁：
 - TypeScript：`npx tsc --noEmit`

@@ -47,8 +47,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 测试模式
 
-L2 测试（`src/__tests__/`）：
-
-- `background-tasks-scheduler.test.ts`：调度器行为——fake timers 断言 interval 按 `intervalSec` 触发/退订停止/重订阅不重复读配置；`../ipc/backgroundTasks` hoisted mock（`listBackgroundTasks` 可控）驱动 activate 分支（enabled 真/假/list 失败）；每用例 `backgroundTaskScheduler._reset()`。
-- `background-tasks-session-refresh.test.ts`：执行体聚合——mock `../ipc/agentHistory`（`scanAgentHistory` hoisted 可控）+ `../ipc/backgroundTasks`（list 恒返回 sessionRefresh 配置防 activate 真实 invoke）；文件顶部 `import "../features/backgroundTasks/tasks"` 注册；beforeEach `_reset()` 双注册表（调度器 + cliProfileRegistry）。
-- 两文件均依赖 `setup.ts` 全局 mock 的 `../ipc/backgroundTasks`（默认两任务清单 + set resolve [] + 事件订阅 no-op）作为兜底。
+- **调度器行为**：fake timers 断言 interval 按 `intervalSec` 触发/退订停止/重订阅不重复读配置；`../ipc/backgroundTasks` hoisted mock（`listBackgroundTasks` 可控）驱动 activate 分支（enabled 真/假/list 失败）；每用例 `backgroundTaskScheduler._reset()`。
+- **执行体聚合**：mock `../ipc/agentHistory`（`scanAgentHistory` hoisted 可控）+ `../ipc/backgroundTasks`（list 恒返回 sessionRefresh 配置防 activate 真实 invoke）；文件顶部 `import "../features/backgroundTasks/tasks"` 注册；beforeEach `_reset()` 双注册表（调度器 + cliProfileRegistry）。
+- 均依赖 `setup.ts` 全局 mock 的 `../ipc/backgroundTasks`（默认两任务清单 + set resolve [] + 事件订阅 no-op）作为兜底。

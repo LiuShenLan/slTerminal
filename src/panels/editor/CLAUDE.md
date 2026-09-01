@@ -53,9 +53,8 @@ CM6 编辑器主题来源 = `editorTheme`（active 方案 `editor.theme`）+ `ed
 
 ## 测试模式
 
-- 测试文件位于 `src/__tests__/`，命名规则 `editor*.test.ts(x)`。
-- `editor.test.tsx` 为浅层组件定位：仅验证 prop 透传与容器 `overflow: clip` 样式契约，真实编辑器行为由 `use-code-mirror.test.ts` 等覆盖。
-- `use-code-mirror.test.ts` 覆盖字体扩展、Compartment reconfigure、保存链路、大文件拒绝/警告。
-- `git-gutter.test.ts` 覆盖 StateEffect → RangeSet 映射、GutterMarker DOM、SpacerMarker 宽度一致性。
-- `language-mapping.test.ts` 覆盖扩展名→语言扩展全表。
-- `editor-keyboard.test.ts` / `active-editor.test.ts` 覆盖命令派发与聚焦指针竞态。
+- **浅层组件定位**：仅验证 prop 透传与容器 `overflow: clip` 样式契约，真实编辑器行为由 hook 层测试覆盖。
+- **编辑器核心**：字体扩展、Compartment reconfigure、保存链路、大文件拒绝/警告。
+- **git gutter**：StateEffect → RangeSet 映射、GutterMarker DOM、SpacerMarker 宽度一致性。
+- **语言映射**：扩展名→语言扩展全表。
+- **命令派发**：覆盖命令派发与聚焦指针竞态。

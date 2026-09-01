@@ -68,7 +68,6 @@ git2-rs 的 `StatusEntry::path_bytes()` 两个分支均返回 `delta.old_file.pa
 
 ## 测试模式
 
-- **集成测试位于 `src-tauri/tests/`**：`git_status_tests.rs`、`git_diff_tests.rs`、`git_file_at_head_tests.rs`、`git_rollback_tests.rs`、`git_unstage_tests.rs`、`git_command_shell_tests.rs`、`ci_config_tests.rs`。
 - **共享工厂 `tests/common/mod.rs`**：`init_temp_repo`、`commit_file`、`git_add`、`make_app_state`、`block_on`。
 - **每个测试独立 `tempdir` + `git init`**，不共享仓库。
 - **命令层测试**：直接 await `git_*_impl(&app, ...)`，用 `make_app_state` 注入最小 `AppState`。

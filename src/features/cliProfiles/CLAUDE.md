@@ -64,12 +64,10 @@ claude 专属 hooks 编辑器（ClaudeHooksConfigEditor + 10 文件 + schema/）
 
 ## 测试模式
 
-L2 测试位于 `src/__tests__/`：
-
-- `cli-profile-registry.test.ts`：注册表行为全分支 + logo 资源守卫（MC-108 泛化：遍历注册表断言 iconSrc 磁盘存在 + PNG 魔数）。
-- `cli-profile-claude.test.ts`：claude 身份域字段 + 常量一致性 + side-effect 注册 + hooks/history 策略输出。
-- `mock-cli-profile.test.tsx`：AC-4 mock profile 全链路验收（OSC 133 命中 / hooks 能力真实调用 / 历史聚合 UI / hub 选择行 / 恢复注入）。
-- `no-claude-literals.test.ts`：AC-5 字面量守卫（通用层七路径扫描 "claude" 字符串/事件名/`~/.claude` 路径零残留）。
+- 注册表行为全分支 + logo 资源守卫（MC-108 泛化：遍历注册表断言 iconSrc 磁盘存在 + PNG 魔数）。
+- claude 身份域字段 + 常量一致性 + side-effect 注册 + hooks/history 策略输出。
+- AC-4 mock profile 全链路验收（OSC 133 命中 / hooks 能力真实调用 / 历史聚合 UI / hub 选择行 / 恢复注入）。
+- AC-5 字面量守卫（通用层七路径扫描 "claude" 字符串/事件名/`~/.claude` 路径零残留）。
 
 ## 新增 CLI 步骤
 
