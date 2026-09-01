@@ -4,7 +4,7 @@
  * 使用 @wdio/tauri-service + driverProvider: 'embedded'，Tauri 内嵌 WebDriver 直接驱动 WebView2。
  * 本地用 Node 22 便携版自动切换（Node 26 undici 8 与 webdriverio 不兼容），CI 固定 Node 22。
  *
- * specs 通配（E2E-09）：按领域拆分后的 *.e2e.ts 自动纳入，新增 spec 无需改配置。
+ * specs 显式数组（E2E-09）：新增 spec 须加入下方显式数组。
  * 同一 worker 顺序执行（maxInstances=1，单 session）——spec 间共享 app 实例，
  * 与拆分前单文件语义一致；字母序即执行序（terminal.e2e.ts 末位承载 E2E-12 杀 app 用例）。
  */
@@ -13,7 +13,19 @@ import type { TauriDriverOptions } from '@wdio/tauri-plugin';
 export const config: WebdriverIO.Config = {
   runner: 'local',
 
-  specs: ['./*.e2e.ts'],
+  specs: [
+    './agent.e2e.ts',
+    './background-tasks.e2e.ts',
+    './commit.e2e.ts',
+    './editor.e2e.ts',
+    './history.e2e.ts',
+    './hooks.e2e.ts',
+    './html.e2e.ts',
+    './mockcli.e2e.ts',
+    './settings.e2e.ts',
+    './sidebar.e2e.ts',
+    './terminal.e2e.ts',
+  ],
 
   maxInstances: 1,
 
