@@ -335,7 +335,7 @@ pub fn ring_buffer_append(ring: &Mutex<VecDeque<u8>>, data: &[u8]) -> Result<(),
 }
 
 #[cfg(test)]
-mod tests {
+mod state_tests {
     use super::*;
 
     #[test]
