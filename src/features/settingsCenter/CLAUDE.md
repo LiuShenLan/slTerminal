@@ -34,7 +34,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **壳是 params 持久化单点**：页组件不得自行 updateParameters/onLayoutChange，页内参数一律经 `onPageParamsChange` patch → 壳 persistParams（settings 页随布局 JSON 持久化）。
 - **组序 global→project 固定**：规格 §4.3 组序「全局」在上、「项目」在下；注册时 group 归错会破坏导航组序。
-- **corrupted 警示条 L4 豁免**：写坏 settings.json 需沙箱外写文件，无命令通道——L2 覆盖（loadSettings mock），L4 豁免登记于 test-inventory。
+- **corrupted 警示条 L4 豁免**：写坏 settings.json 需沙箱外写文件，无命令通道——L2 覆盖（loadSettings mock），L4 豁免登记于 test-exemptions。
 
 ## 测试模式
 

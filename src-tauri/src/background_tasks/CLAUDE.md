@@ -44,4 +44,4 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 | 豁免项 | 原因 | 当前兜底 |
 |--------|------|---------|
-| spawn_poller 循环本体与命令包装层（emit/重 spawn） | 需 AppHandle/tauri runtime，L1 无法直测 | L4 勾选启停端到端 + 人工实测——登记于 test-inventory（F12） |
+| spawn_poller 循环本体与命令包装层（emit/重 spawn） | 需 AppHandle/tauri runtime，L1 无法直测 | L4 勾选启停端到端 + 人工实测——登记于 test-exemptions（F12） |

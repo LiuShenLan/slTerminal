@@ -62,4 +62,4 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 | 豁免项 | 原因 | 当前兜底 |
 |--------|------|---------|
-| plan_balance 真实 HTTP 查询（ureq fetch） | 真实外部 API 依赖（规格 §3 不做 L4） | 解析与状态机 L1 全覆盖（罐装 JSON/参数化编排）+ L2 UI 四场景 + 人工实测（真实账号一轮）——登记于 test-inventory（F10） |
+| plan_balance 真实 HTTP 查询（ureq fetch） | 真实外部 API 依赖（规格 §3 不做 L4） | 解析与状态机 L1 全覆盖（罐装 JSON/参数化编排）+ L2 UI 四场景 + 人工实测（真实账号一轮）——登记于 test-exemptions（F10） |

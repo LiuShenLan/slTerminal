@@ -78,4 +78,4 @@ L2 测试位于 `src/__tests__/`：
 3. `profiles/index.ts` 追加 import。
 4. **后端 hooks provider**：实现 `CliHooksProvider` trait 并在 `src-tauri/src/hooks/provider.rs` 的 `REGISTRY` 注册 cliId 条目（无 hooks 能力 → 注册 `None` 条目）。
 5. **后端 history provider**：实现 `CliHistoryProvider` trait 并在 `src-tauri/src/agent_history/provider.rs` 的 `REGISTRY` 注册 cliId 条目（delete 前必过 `validate_session_id`，SEC-05 等价）。
-6. 对应 cli-profile 测试登记字段与策略用例 + `.claude/test-inventory.md` 同步。
+6. 对应 cli-profile 测试登记字段与策略用例 + `.claude/test-exemptions.md` 同步。

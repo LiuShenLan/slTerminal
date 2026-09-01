@@ -109,7 +109,7 @@ spawn 后立即向 stdin 写 `\x1b[1;1R`，补偿 ConPTY `VtIo::StartIfNeeded()`
 - **L1 测试分布**：`reader.rs`、`spawn.rs`、`shell.rs`、`conpty_api.rs` 各自的 `#[cfg(test)]`，以及 `tests/pty_integration_tests.rs`。
 - **集成测试**：真实 spawn `cmd.exe`，仅 Windows CI runner 上运行。
 
-### 既定豁免（已在 `.claude/test-inventory.md` 登记）
+### 既定豁免（已在 `.claude/test-exemptions.md` 登记）
 
 | 豁免项 | 原因 | 当前兜底 |
 |--------|------|---------|

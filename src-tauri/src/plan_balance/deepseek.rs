@@ -133,6 +133,6 @@ mod deepseek_tests {
         );
     }
 
-    // 注：fetch 真实 HTTP 查询登记 test-inventory 既定豁免（真实外部 API 依赖，
+    // 注：fetch 真实 HTTP 查询登记 test-exemptions 既定豁免（真实外部 API 依赖，
     // 解析纯函数已全量覆盖，fetch 仅薄封装）。
 }

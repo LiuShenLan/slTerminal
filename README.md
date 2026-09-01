@@ -17,7 +17,7 @@
 
 ## 测试
 
-四级测试金字塔（完整用例清单见 `.claude/test-inventory.md`）：
+四级测试金字塔（豁免登记与测试定位见 `.claude/test-exemptions.md`）：
 
 | 层级 | 内容 | 命令 |
 |------|------|------|
@@ -33,4 +33,4 @@
 - `.claude/CLAUDE.md` — 项目根指令：硬性开发约束、命令与测试策略（子模块指令经各目录 CLAUDE.md 渐进式披露）
 - `CONTEXT.md` — 领域术语表（项目/操作页面/面板/会话等概念的定义与同义词避讳）
 - `.claude/adr.md` — 架构决策记录（ADR-0001~0009）
-- `.claude/test-inventory.md` — 测试用例清单（四级测试全量登记 + 既定豁免清单）
+- `.claude/test-exemptions.md` — 自动化测试豁免与定位（豁免登记 + 定位声明 + 条件跳过）

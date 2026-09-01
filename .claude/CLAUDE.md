@@ -18,7 +18,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **收录判定**：跨 ≥2 个模块适用、或每次会话必需的指令入根文件；仅触碰某模块才需要的归该模块子路径 CLAUDE.md。记录规则/说明/条件/经验/踩坑等文本内容时同样按此归位，注意精简/下沉。
 - **子文件维护**：新建模块目录时同步创建该路径 CLAUDE.md（模板结构读任一现有子文件即知，不在此复述）；改动约定/决策/红线时同步对应 CLAUDE.md——只改实现不改约定时无需动文档。
 - **短标识符解码**：代码注释中的短标识符（SEC-*/B*/FE-*/IC-* 等）就近在所属模块 CLAUDE.md 定义，根文件不设编号索引。
-- 配套文档：领域术语表 `@../CONTEXT.md`；架构决策记录 `@.claude/adr.md`；测试用例清单 `@.claude/test-inventory.md`。
+- 配套文档：领域术语表 `@../CONTEXT.md`；架构决策记录 `@.claude/adr.md`；自动化测试豁免与定位 `@.claude/test-exemptions.md`。
 
 ## 架构（两进程模型）
 
@@ -38,7 +38,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 8. **会话元数据单点**：PTY 进程映射仅在 `panels/terminal/TerminalRegistry`（模块级 Map）管理；面板只订阅，不自存（→ ../src/panels/CLAUDE.md）。
 9. **平台分支收敛**：业务 `#[cfg(windows)]` 仅允许出现在 pty 模块，业务逻辑不撒 cfg；测试 `#[cfg(windows)]` 原则上改运行时 `cfg!(windows)` 分支（→ ../src-tauri/src/pty/CLAUDE.md）。
 10. **权限最小化**：Tauri 2 自定义命令默认放行，`capabilities/` 只管插件权限；不追加通配 `*`（→ ../src-tauri/src/CLAUDE.md）。
-11. **测试覆盖**：改动的代码可自动化部分必须添加全量自动化测试用例覆盖；不可自动化部分须在 `.claude/test-inventory.md` 既定豁免清单登记，注明豁免原因与当前兜底层级，禁止未登记豁免。
+11. **测试覆盖**：改动的代码可自动化部分必须添加全量自动化测试用例覆盖；不可自动化部分须在 `.claude/test-exemptions.md` 既定豁免清单登记，注明豁免原因与当前兜底层级，禁止未登记豁免。
 12. **store 纯状态**：`src/stores/` 只存状态与状态转换，不存业务逻辑（校验/映射/编排放注册表、纯函数或上层组件）；持久化一律经 `src/ipc/` 对应领域函数，禁止在 store 内直接调用 `invoke`；禁止跨 store 隐式依赖（→ ../src/stores/CLAUDE.md）。
 13. **注册表家族通用契约**：注册表类模块统一形态——模块级单例、`register(...)` / `getAll()` 接口、`_reset()`（仅测试用）；注册经 side-effect import 触发；测试 beforeEach/afterEach 调 `_reset()` 保证用例隔离（→ ../src/features/settingsCenter/CLAUDE.md）。
 14. **git 追踪文件凭据红线（SEC-18）**：真实凭据值（API token/key、Authorization 头实际值）禁止写入任何 git 追踪文件——代码、测试夹具、文档、脚本一律不行；测试与文档仅允许假值占位符（`sk-test` 形态）。真实凭据只存 user 层 `~/.claude/settings.json`（仓库外）（→ ../src-tauri/src/plan_balance/CLAUDE.md）。
@@ -51,7 +51,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 测试策略
 
-四级测试金字塔，按执行速度和隔离度分层。完整用例清单 → `@.claude/test-inventory.md`。
+四级测试金字塔，按执行速度和隔离度分层。豁免登记与测试定位 → `@.claude/test-exemptions.md`。
 
 | 层级 | 名称 | 技术栈 | 运行命令 |
 |------|------|--------|----------|

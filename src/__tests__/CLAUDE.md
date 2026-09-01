@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 存在理由
 
-L2 前端单元/集成测试集中目录。本文件只记录测试架构层面的约定、mock 策略与编号登记；具体用例数与测试文件清单以 `.claude/test-inventory.md` 为准。
+L2 前端单元/集成测试集中目录。本文件只记录测试架构层面的约定、mock 策略与编号登记；豁免登记见 `.claude/test-exemptions.md`。
 
 ## 关键约定
 
@@ -67,7 +67,7 @@ hubs 配置面板迁入设置中心产生的测试文件更名/删除/新增。�
 | `open-hooks-config-panel.test.ts` | `open-settings-panel.test.ts` |
 | `hooks-config-panel.test.tsx` | `settings-hooks-page.test.tsx`（hub 43 例 → SettingsPageProps 形态 37 例） |
 
-新增：`settings-page-registry.test.ts` / `settings-panel.test.tsx` / `settings-plan-balance.test.tsx` / `settings-dirty-registry.test.ts` / `settings-panel-dirty.test.tsx` / `settings-keybindings.test.tsx` / `settings-panel-autoclose.test.tsx` / `open-settings.test.ts` / `open-settings-panel.test.ts` / `settings-hooks-page.test.tsx` / `settings-pages-registration.test.ts`（完整用例数见 `.claude/test-inventory.md`）。
+新增：`settings-page-registry.test.ts` / `settings-panel.test.tsx` / `settings-plan-balance.test.tsx` / `settings-dirty-registry.test.ts` / `settings-panel-dirty.test.tsx` / `settings-keybindings.test.tsx` / `settings-panel-autoclose.test.tsx` / `open-settings.test.ts` / `open-settings-panel.test.ts` / `settings-hooks-page.test.tsx` / `settings-pages-registration.test.ts`。
 
 ### F12 后台定时任务——测试文件迁移映射（FE-02/03/07）
 

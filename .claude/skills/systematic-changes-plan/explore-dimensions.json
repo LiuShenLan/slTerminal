@@ -53,9 +53,9 @@
         "测试辅助工具的复用情况",
         "重复测试、脆弱测试、缺失边界测试",
         "CI 配置与测试策略对齐",
-        "test-inventory.md 的准确性"
+        "test-exemptions.md 的准确性"
       ],
-      "files": ["src/__tests__/", "src-tauri/src/**/mod.rs", "src-tauri/tests/", "test/terminal/", "e2e-tests/", ".github/workflows/ci.yml", ".claude/test-inventory.md"]
+      "files": ["src/__tests__/", "src-tauri/src/**/mod.rs", "src-tauri/tests/", "test/terminal/", "e2e-tests/", ".github/workflows/ci.yml", ".claude/test-exemptions.md"]
     },
     {
       "id": "05-performance-maintainability",
