@@ -214,6 +214,46 @@ describe("DiffPanel", () => {
     );
   });
 
+  it("renamed（oldPath 存在）真实修改 hunk → 左 HEAD gutter 有 marker 且双侧零占位", async () => {
+    // 防复发契约：后端修复后 renamed 返回真实 hunk（old 侧=旧文件行号）。
+    // 修复前返回全量新增 hunk（old_lines=0）→ 左栏顶部插占位、HEAD gutter
+    // 被 gitGutter 跳过——本用例锁定前端对真实形态的正确渲染。
+    const params = makeParams({
+      oldPath: "D:/repo/src/old.ts",
+      filePath: "D:/repo/src/new.ts",
+    });
+    // 内容两侧各 3 行（默认 mock 内容），改第 2 行
+    mockGitDiff.mockResolvedValue([
+      { oldStart: 2, oldLines: 1, newStart: 2, newLines: 1 },
+    ]);
+
+    const { container } = render(
+      React.createElement(DiffPanel, { params }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector('[data-e2e="diff-left"]')).toBeTruthy();
+      expect(container.querySelector('[data-e2e="diff-right"]')).toBeTruthy();
+    });
+
+    // gitDiff 以新路径调用（renamed 条目 path 语义 = 当前工作区路径）
+    expect(mockGitDiff).toHaveBeenCalledWith(
+      params.repoPath,
+      "D:/repo/src/new.ts",
+    );
+
+    // 真实 hunk：左栏 HEAD gutter 有 marker（old 侧行号映射）
+    await waitFor(() => {
+      const leftView = getDiffView(container, "diff-left");
+      expect(leftView!.state.field(headDiffMarkersField).size).toBeGreaterThan(0);
+    });
+
+    // 等行修改（old_lines === new_lines）→ 双侧零占位、自然对齐
+    await waitFor(() => {
+      expect(placeholderCount(getDiffView(container, "diff-left"))).toBe(0);
+      expect(placeholderCount(getDiffView(container, "diff-right"))).toBe(0);
+    });
+  });
+
   // ── 保存链验证 ──────────────────────────────────────
 
   it("保存→ writeFile 写盘 + gitDiff 重调 + 双侧 gutter/占位刷新全链", async () => {

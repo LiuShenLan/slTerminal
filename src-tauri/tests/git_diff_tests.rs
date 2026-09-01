@@ -860,20 +860,25 @@ fn compute_diff_hunks_bare_repo_no_workdir() {
     );
 }
 
-/// renamed 文件 diff（前端 renamed 分派传 filePath=新路径，queryPath=oldPath 查
-/// HEAD 内容）——diff 无 rename detection，对工作区新路径 diff 呈「全量新增」
-/// 形态（old_lines==0）且不报错（修复前传旧路径 pathspec 只匹配 DELETED 侧，
-/// 形态为全量删除；修复后传新路径，行为固化）
+// ---- renamed diff 修复（find_similar + for_untracked + 命令层过滤）----
+//
+// 修复前：diff 无 rename detection + pathspec 在生成期过滤 DELETED → 工作区
+// rename 新路径呈「全量新增 hunk」（old_lines=0）→ 前端左栏（旧路径 HEAD 全文）
+// 顶部插占位 → 双栏错位。修复后：find_similar(renames + for_untracked) 合并为
+// Renamed delta，纯 rename 0 hunk（对齐 git diff 语义）、rename+改内容返回
+// 真实 hunk（old 侧 = 旧文件行号）；真 untracked 仍走全量新增（manual 保留）。
+
+/// 防复发①：纯工作区 rename（内容未变）→ 0 hunk（修复前为全量新增 hunk）
 #[test]
-fn git_diff_renamed_file_returns_hunks() {
+fn git_diff_renamed_pure_rename_zero_hunks() {
     let (_dir, path) = init_temp_repo();
     commit_file(&path, "a.txt", "line1\nline2\nline3\n");
 
-    // 工作区 rename（后端 fs_rename 同款）→ git 检测为 renamed
+    // 工作区 rename（后端 fs_rename 同款）→ find_similar 合并为 Renamed(a→b)
     std::fs::rename(path.join("a.txt"), path.join("b.txt")).unwrap();
 
     let app = make_app_state(Some(path.clone()));
-    // 传新路径（git status 修复后 renamed 条目的 path 字段）
+    // 传新路径（git status 语义：renamed 条目 path = 当前工作区路径）
     let hunks = block_on(git_diff_impl(
         &app,
         &path.to_string_lossy(),
@@ -882,16 +887,244 @@ fn git_diff_renamed_file_returns_hunks() {
     .unwrap();
 
     assert!(
-        !hunks.is_empty(),
-        "renamed 文件 diff 应返回 hunks（全量新增形态）"
+        hunks.is_empty(),
+        "纯 rename 应 0 hunk（内容未变，对齐 git diff 语义），实际: {hunks:?}"
     );
-    // 全量新增：HEAD 侧 0 行、工作区侧 3 行（git diff 对 renamed 无 rename detection）
+}
+
+/// 防复发②：rename + 改第 2 行 → 真实 hunk，old 侧为旧文件行号
+/// （修复前返回全量新增 old_lines=0，前端左栏错位）
+#[test]
+fn git_diff_renamed_with_modify_returns_real_hunks() {
+    let (_dir, path) = init_temp_repo();
+    commit_file(&path, "a.txt", "line1\nline2\nline3\n");
+    std::fs::rename(path.join("a.txt"), path.join("b.txt")).unwrap();
+    std::fs::write(path.join("b.txt"), "line1\nline2 MODIFIED\nline3\n").unwrap();
+
+    let app = make_app_state(Some(path.clone()));
+    let hunks = block_on(git_diff_impl(
+        &app,
+        &path.to_string_lossy(),
+        &path.join("b.txt").to_string_lossy(),
+    ))
+    .unwrap();
+
+    assert_eq!(
+        hunks.len(),
+        1,
+        "rename+改 1 行应恰好 1 个 hunk，实际: {hunks:?}"
+    );
+    assert_eq!(hunks[0].old_start, 2, "old_start 应为真实旧文件行号 2");
+    assert_eq!(
+        hunks[0].old_lines, 1,
+        "old_lines 应 >0（修复前为 0 全量新增）"
+    );
+    assert_eq!(hunks[0].new_start, 2);
+    assert_eq!(hunks[0].new_lines, 1);
+}
+
+/// 防复发：staged rename（git mv）纯 rename → 0 hunk（find_similar 合并
+/// tree→index 的 DELETED+ADDED）
+#[test]
+fn git_diff_renamed_staged_pure_rename_zero_hunks() {
+    let (_dir, path) = init_temp_repo();
+    commit_file(&path, "a.txt", "line1\nline2\nline3\n");
+    Command::new("git")
+        .args(["mv", "a.txt", "b.txt"])
+        .current_dir(&path)
+        .output()
+        .unwrap();
+
+    let app = make_app_state(Some(path.clone()));
+    let hunks = block_on(git_diff_impl(
+        &app,
+        &path.to_string_lossy(),
+        &path.join("b.txt").to_string_lossy(),
+    ))
+    .unwrap();
+
+    assert!(
+        hunks.is_empty(),
+        "staged 纯 rename 应 0 hunk，实际: {hunks:?}"
+    );
+}
+
+/// 防复发：staged rename + 工作区改内容 → 真实 hunk（old 侧 = index 中 blob）
+#[test]
+fn git_diff_renamed_staged_with_modify_returns_real_hunks() {
+    let (_dir, path) = init_temp_repo();
+    commit_file(&path, "a.txt", "line1\nline2\nline3\n");
+    Command::new("git")
+        .args(["mv", "a.txt", "b.txt"])
+        .current_dir(&path)
+        .output()
+        .unwrap();
+    std::fs::write(path.join("b.txt"), "line1\nline2 MODIFIED\nline3\n").unwrap();
+
+    let app = make_app_state(Some(path.clone()));
+    let hunks = block_on(git_diff_impl(
+        &app,
+        &path.to_string_lossy(),
+        &path.join("b.txt").to_string_lossy(),
+    ))
+    .unwrap();
+
+    assert_eq!(
+        hunks.len(),
+        1,
+        "staged rename+改 1 行应 1 个 hunk，实际: {hunks:?}"
+    );
+    assert_eq!(hunks[0].old_start, 2);
+    assert_eq!(hunks[0].old_lines, 1);
+    assert_eq!(hunks[0].new_lines, 1);
+}
+
+/// 防回归：真 untracked 新文件（无 rename 配对）→ 仍全量新增形态（manual 构造保留）
+#[test]
+fn git_diff_untracked_new_file_full_add_guard() {
+    let (_dir, path) = init_temp_repo();
+    commit_file(&path, "a.txt", "line1\nline2\nline3\n");
+    std::fs::write(path.join("new.txt"), "n1\nn2\nn3\n").unwrap();
+
+    let app = make_app_state(Some(path.clone()));
+    let hunks = block_on(git_diff_impl(
+        &app,
+        &path.to_string_lossy(),
+        &path.join("new.txt").to_string_lossy(),
+    ))
+    .unwrap();
+
+    assert_eq!(
+        hunks.len(),
+        1,
+        "untracked 应 1 个全量新增 hunk，实际: {hunks:?}"
+    );
+    assert_eq!(hunks[0].old_lines, 0, "untracked 应保持 old_lines=0");
+    assert_eq!(hunks[0].new_start, 1);
+    assert_eq!(hunks[0].new_lines, 3);
+}
+
+/// 边界固化：低相似度 rename（内容重写 >50%）→ find_similar 不合并 →
+/// 仍 untracked 全量新增（与 git status 语义一致）
+#[test]
+fn git_diff_renamed_low_similarity_stays_untracked() {
+    let (_dir, path) = init_temp_repo();
+    let content: String = (1..=60).map(|i| format!("line{i}\n")).collect();
+    commit_file(&path, "a.txt", &content);
+    std::fs::rename(path.join("a.txt"), path.join("b.txt")).unwrap();
+    let rewritten: String = (1..=30).map(|i| format!("zzz-{i}\n")).collect();
+    std::fs::write(path.join("b.txt"), &rewritten).unwrap();
+
+    let app = make_app_state(Some(path.clone()));
+    let hunks = block_on(git_diff_impl(
+        &app,
+        &path.to_string_lossy(),
+        &path.join("b.txt").to_string_lossy(),
+    ))
+    .unwrap();
+
+    assert_eq!(hunks.len(), 1, "低相似度应仍 1 个 hunk，实际: {hunks:?}");
     assert_eq!(
         hunks[0].old_lines, 0,
-        "renamed 全量新增形态 old_lines 应为 0"
+        "低相似度应保持 untracked 全量新增形态"
     );
+    assert_eq!(hunks[0].new_lines, 30);
+}
+
+/// 边界固化：空文件 rename → 0 hunk（内容为空，非 diffable）
+#[test]
+fn git_diff_empty_file_rename_zero_hunks() {
+    let (_dir, path) = init_temp_repo();
+    commit_file(&path, "a.txt", "");
+    std::fs::rename(path.join("a.txt"), path.join("b.txt")).unwrap();
+
+    let app = make_app_state(Some(path.clone()));
+    let hunks = block_on(git_diff_impl(
+        &app,
+        &path.to_string_lossy(),
+        &path.join("b.txt").to_string_lossy(),
+    ))
+    .unwrap();
+
+    assert!(hunks.is_empty(), "空文件 rename 应 0 hunk，实际: {hunks:?}");
+}
+
+/// 边界固化：双阶段 rename 链（git mv a b + 工作区 mv b c）→ 合并为
+/// Renamed(a→c)；纯链 0 hunk，改内容返回真实 hunk
+#[test]
+fn git_diff_double_stage_rename_chain() {
+    let (_dir, path) = init_temp_repo();
+    commit_file(&path, "a.txt", "line1\nline2\nline3\n");
+    Command::new("git")
+        .args(["mv", "a.txt", "b.txt"])
+        .current_dir(&path)
+        .output()
+        .unwrap();
+    std::fs::rename(path.join("b.txt"), path.join("c.txt")).unwrap();
+
+    let app = make_app_state(Some(path.clone()));
+    let hunks = block_on(git_diff_impl(
+        &app,
+        &path.to_string_lossy(),
+        &path.join("c.txt").to_string_lossy(),
+    ))
+    .unwrap();
+    assert!(
+        hunks.is_empty(),
+        "双阶段纯 rename 链 c 应 0 hunk，实际: {hunks:?}"
+    );
+
+    // 链末端改第 2 行 → 真实 hunk（old 侧 = HEAD 内容行号）
+    std::fs::write(path.join("c.txt"), "line1\nline2 MODIFIED\nline3\n").unwrap();
+    let hunks = block_on(git_diff_impl(
+        &app,
+        &path.to_string_lossy(),
+        &path.join("c.txt").to_string_lossy(),
+    ))
+    .unwrap();
+    assert_eq!(hunks.len(), 1, "链+改内容应 1 个 hunk，实际: {hunks:?}");
+    assert_eq!(hunks[0].old_start, 2);
+    assert_eq!(hunks[0].old_lines, 1);
+    assert_eq!(hunks[0].new_lines, 1);
+}
+
+/// 防回归：多文件各有删除 → hunk 独立不跨文件合并（命令层路径过滤守卫：
+/// 去 pathspec 后 line callback 若不按 delta 过滤，两文件删除会串线合并）
+#[test]
+fn git_diff_multi_file_no_cross_delta_merge() {
+    let (_dir, path) = init_temp_repo();
+    commit_file(&path, "a.txt", "a1\na2\na3\na4\n");
+    commit_file(&path, "b.txt", "b1\nb2\nb3\nb4\n");
+    // 两文件各删第 2 行
+    std::fs::write(path.join("a.txt"), "a1\na3\na4\n").unwrap();
+    std::fs::write(path.join("b.txt"), "b1\nb3\nb4\n").unwrap();
+
+    let app = make_app_state(Some(path.clone()));
+    let hunks_a = block_on(git_diff_impl(
+        &app,
+        &path.to_string_lossy(),
+        &path.join("a.txt").to_string_lossy(),
+    ))
+    .unwrap();
     assert_eq!(
-        hunks[0].new_lines, 3,
-        "renamed 全量新增形态 new_lines 应为文件行数"
+        hunks_a.len(),
+        1,
+        "a.txt 应恰好 1 个 hunk，实际: {hunks_a:?}"
     );
+    assert_eq!(hunks_a[0].old_start, 2);
+    assert_eq!(hunks_a[0].old_lines, 1);
+
+    let hunks_b = block_on(git_diff_impl(
+        &app,
+        &path.to_string_lossy(),
+        &path.join("b.txt").to_string_lossy(),
+    ))
+    .unwrap();
+    assert_eq!(
+        hunks_b.len(),
+        1,
+        "b.txt 应恰好 1 个 hunk，实际: {hunks_b:?}"
+    );
+    assert_eq!(hunks_b[0].old_start, 2);
+    assert_eq!(hunks_b[0].old_lines, 1);
 }

@@ -24,6 +24,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `StatusOptions` 开启 `.renames_head_to_index(true)` 与 `.renames_index_to_workdir(true)`，否则 `INDEX_RENAMED`/`WT_RENAMED` 不置位、`oldPath` 恒 null。
 
+`compute_diff_hunks`（git_diff）侧：`DiffOptions` **不用 pathspec**——libgit2 在生成期即按 pathspec 过滤 delta，DELETED(旧路径) 在 `find_similar` 前被剔除，工作区 rename 无法合并。改为生成后命令层按 `delta.new_file().path()` 过滤（renamed 的 new 侧 = 工作区新路径）。过滤前必须先 `diff.find_similar(renames(true) + for_untracked(true))`：两者缺一不可——`renames(true)` 置位后 libgit2 跳过 repo config `diff.renames` 读取（行为确定；**勿调 `by_config()`**，其清 flags 恢复 config 读取）；`for_untracked(true)` 允许 untracked delta 作 rename 目标（工作区 rename 的新文件在 git 视角为 untracked，默认不参与合并，探针实证）。纯 rename（内容未变）合并后 0 hunk——对齐 git diff 语义。低相似度（<50%）不合并，仍走 untracked 全量新增，与 git status 一致。
+
 ### `GitStatusEntry.path` 语义 = 当前工作区路径（对齐 git status）
 
 git2-rs 的 `StatusEntry::path_bytes()` 两个分支均返回 `delta.old_file.path`——对 renamed 条目即旧路径。命令层必须对 renamed 改取 `delta.new_file().path()`（INDEX_RENAMED → head_to_index，WT_RENAMED → index_to_workdir，双标志 INDEX 优先），非 renamed 保持 `entry.path()`。`old_path` 恒取 `old_file().path()`。前端 gitStatusMap / commit 列表 / DiffPanel（`oldPath ?? filePath` 查 HEAD 侧）均按此契约设计。

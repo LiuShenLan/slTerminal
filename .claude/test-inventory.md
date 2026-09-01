@@ -63,14 +63,14 @@
 | ⑤ | L2 | **E2E helper 行为契约**——验证 `__slterm_e2e_createProject` 等 helper 的契约，非真实 App 初始化逻辑 | 13 P-14 |
 | ⑥ | L2 | **浅层组件定位**——`editor.test.tsx` mock `useCodeMirror`，定位为组件集成契约测试，真实编辑器行为由 `use-code-mirror.test.ts` 等覆盖 | 07 G1/G2 |
 
-## L1 — Rust 单元/集成测试（41 文件 / 836 用例）
+## L1 — Rust 单元/集成测试（41 文件 / 844 用例）
 
 运行：`cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1`
 
 | 文件 | 用例 | 覆盖要点 |
 |------|------|---------|
 | `src-tauri/tests/git_status_tests.rs` | 47 | git_status 命令层；状态/oldPath/ignore；renamed path=当前路径（防复发）/各状态 path 语义；TQ-COV-06 |
-| `src-tauri/tests/git_diff_tests.rs` | 35 | git_diff 命令层；compute_diff_hunks 边界；untracked 全量新增 hunk；serde；TQ-COV-06 |
+| `src-tauri/tests/git_diff_tests.rs` | 43 | git_diff 命令层；compute_diff_hunks 边界；untracked 全量新增 hunk；renamed 真实 hunk/纯 rename 0 hunk/staged rename/低相似度/双阶段链/多文件隔离（防复发）；serde；TQ-COV-06 |
 | `src-tauri/tests/git_rollback_tests.rs` | 12 | git_rollback 命令层；renamed 旧路径回滚；TQ-COV-06 |
 | `src-tauri/tests/git_file_at_head_tests.rs` | 9 | git_file_at_head 命令层；TQ-COV-06 |
 | `src-tauri/tests/git_unstage_tests.rs` | 6 | git_unstage 命令层 |
@@ -121,7 +121,7 @@
 
 本地开发机（已开开发者模式）为真实覆盖来源；CI runner 未开权限时上述分支覆盖记为「不确定」。
 
-## L2 — 前端单元/集成测试（170 文件 / 2890 用例）
+## L2 — 前端单元/集成测试（170 文件 / 2891 用例）
 
 运行：`npm test`
 
@@ -309,11 +309,11 @@
 | `src/__tests__/settings-keybindings.test.tsx` | 20 | 分组渲染/override 高亮/未绑定占位/录制 Esc/Backspace 解绑/保留键拒绝/冲突放行/卸载清 suspended；SC-FE-09 |
 | `src/__tests__/settings-panel-autoclose.test.tsx` | 9 | 切项目自动关闭/同项目不关/未水合首轮不消费 firstRun/初始不一致静默关/activePageId null 不关/dirty confirm 取消不关；SC-FE-08 |
 
-### Diff/GitShow 面板（4 文件 / 87 用例）
+### Diff/GitShow 面板（4 文件 / 88 用例）
 
 | 文件 | 用例 | 覆盖要点 |
 |------|------|---------|
-| `src/__tests__/diff-panel.test.tsx` | 40 | diff 双栏/保存刷新/脏确认；EDF-01/02/07/FE-02/43 |
+| `src/__tests__/diff-panel.test.tsx` | 41 | diff 双栏/保存刷新/脏确认/renamed 真实 hunk 渲染（防复发）；EDF-01/02/07/FE-02/43 |
 | `src/__tests__/gitshow-panel.test.tsx` | 25 | gitshow 三态/大文件/只读；EDF-04/09/FE-18/TQ-COV-10 |
 | `src/__tests__/diff-alignment.test.ts` | 18 | `computeAlignment` 纯函数；EDF-06 |
 | `src/__tests__/diff-panel-stale-banner.test.tsx` | 4 | 内容过时提示条；FE-10 |

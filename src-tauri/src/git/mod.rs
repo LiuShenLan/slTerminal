@@ -336,9 +336,10 @@ pub fn compute_diff_hunks(
     };
 
     let mut opts = git2::DiffOptions::new();
-    // renamed 文件的工作区新路径不在 HEAD/index（git 视角为 untracked）——
-    // 不含 untracked 则其 diff 恒为空（行内 diff 高亮缺失）。开启后
-    // untracked/renamed 新路径文件以「全量新增」形态参与（old_lines=0）。
+    // 不含 untracked 则工作区新文件（renamed 新路径 / 真 untracked）的 diff
+    // 恒为空（行内 diff 高亮缺失）。开启后其 delta 进入 diff；配合下方
+    // find_similar 的 for_untracked，工作区 rename 被合并为 Renamed delta
+    // （old = 旧路径 HEAD blob），产生真实行级 diff（old 侧 = 旧文件行号）。
     opts.include_untracked(true);
     let workdir = dunce::simplified(
         repo.workdir()
@@ -349,11 +350,27 @@ pub fn compute_diff_hunks(
         .unwrap_or(file_path)
         .to_string_lossy()
         .replace('\\', "/");
-    opts.pathspec(&rel);
 
-    let diff = repo
+    // 注意：不用 opts.pathspec(&rel)——libgit2 在生成期即按 pathspec 过滤 delta
+    // （diff_generate.c diff_pathspec_match），DELETED(旧路径) 在 find_similar
+    // 前已被剔除，工作区 rename 无法合并为 Renamed。改为生成后命令层按 rel 过滤
+    // （见下方 matches_rel，renamed 的 new 侧即工作区新路径）。
+    let mut diff = repo
         .diff_tree_to_workdir_with_index(tree.as_ref(), Some(&mut opts))
         .map_err(|e| AppError::Git(format!("生成 diff 失败: {e}")))?;
+
+    // 开启 rename detection：显式 renames(true) 置位 GIT_DIFF_FIND_RENAMES 后
+    // libgit2 跳过 repo config diff.renames 读取（normalize_find_opts：
+    // flags & 0xff != 0 即不读 config）——行为确定。for_untracked(true) 允许
+    // untracked delta 作为 rename 目标：工作区 rename 的新文件（git 视角
+    // untracked）默认不参与合并（探针实证），缺此 flag 则工作区 rename 检测
+    // 无效。勿调 by_config()（其清 flags 恢复 config 读取，方向相反）。
+    diff.find_similar(Some(
+        &mut git2::DiffFindOptions::new()
+            .renames(true)
+            .for_untracked(true),
+    ))
+    .map_err(|e| AppError::Git(format!("rename detection 失败: {e}")))?;
 
     // 行级回调收集 hunks（合并连续的 '-' 和 '+' 为 modified hunk）
     let mut hunks: Vec<DiffHunk> = Vec::new();
@@ -414,14 +431,24 @@ pub fn compute_diff_hunks(
 
     let mut prev_was_del = false; // 上一行是否为 '-'，用于检测 '-→+' 修改模式
 
+    // 命令层路径过滤（替代 pathspec 语义）：renamed 的 new 侧 = 工作区新路径；
+    // deleted/untracked 单侧 delta 两侧同路径。大小写不敏感保留 Windows 语义。
+    let matches_rel = |delta: &git2::DiffDelta| -> bool {
+        delta.new_file().path().is_some_and(|p| {
+            let p = p.to_string_lossy();
+            p == rel || p.eq_ignore_ascii_case(&rel)
+        })
+    };
+
     // untracked delta 不产生行级回调（无 HEAD baseline）——file callback 收集
-    // 其路径，foreach 结束后手动构造全量新增 hunk（renamed 文件工作区新路径、
-    // 编辑器内 untracked 文件均走此形态）
+    // 其路径（仅限目标文件），foreach 结束后手动构造全量新增 hunk。真 untracked
+    // （无旧路径配对、未合并为 renamed）仍走此形态；工作区 rename 已被
+    // find_similar 合并为 Renamed，不再落入。
     let mut untracked_paths: Vec<std::path::PathBuf> = Vec::new();
 
     diff.foreach(
         &mut |delta, _num| {
-            if delta.status() == git2::Delta::Untracked {
+            if delta.status() == git2::Delta::Untracked && matches_rel(&delta) {
                 if let Some(p) = delta.new_file().path() {
                     untracked_paths.push(p.to_path_buf());
                 }
@@ -430,7 +457,12 @@ pub fn compute_diff_hunks(
         },
         None, // binary callback
         None, // hunk callback
-        Some(&mut |_delta, _hunk, line| {
+        Some(&mut |delta, _hunk, line| {
+            // 非目标 delta 不累积——去 pathspec 后 diff 含全工作区 delta，
+            // 不按 delta 过滤则多文件的删除/新增会串线合并为跨文件假 hunk
+            if !matches_rel(&delta) {
+                return true;
+            }
             let c = line.origin();
             if c == '+' {
                 let n = line.new_lineno().unwrap_or(0);
@@ -471,8 +503,9 @@ pub fn compute_diff_hunks(
     // flush 末尾残留组
     flush_pending(del_start, del_count, add_start, add_count);
 
-    // untracked delta 无行级回调 → 手动构造全量新增 hunk（old 侧 0 行）。
-    // 行数 = 工作区文件内容行数；读失败（竞态删除等）或空文件 → 跳过。
+    // 真 untracked（无 rename 配对）delta 无行级回调 → 手动构造全量新增
+    // hunk（old 侧 0 行）。行数 = 工作区文件内容行数；读失败（竞态删除等）
+    // 或空文件 → 跳过。
     for p in untracked_paths {
         let abs = workdir.join(&p);
         let Ok(content) = std::fs::read(&abs) else {
