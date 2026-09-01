@@ -156,7 +156,7 @@ pub async fn load_projects() -> Result<LoadResult<String>, AppError> {
 // ── 测试 ──
 
 #[cfg(test)]
-mod tests {
+mod projects_tests {
     use super::*;
 
     /// 创建 tokio runtime 并 block_on 调真实 Tauri 命令（与 fs/settings 模块命令层测试同模式）

@@ -216,7 +216,7 @@ fn try_bundle() -> Result<Backend, Error> {
 }
 
 #[cfg(test)]
-mod tests {
+mod conpty_api_tests {
     use super::*;
 
     // T1: 决策分叉——仅 Win10 尝试捆绑

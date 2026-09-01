@@ -168,7 +168,7 @@ impl CliHooksProvider for ClaudeHooksProvider {
 }
 
 #[cfg(test)]
-mod tests {
+mod claude_tests {
     use super::*;
 
     // ── home_dir 覆盖守卫（L1 隔离纪律：命令层测试经守卫注入 tempdir） ──

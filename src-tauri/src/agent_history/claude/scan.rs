@@ -209,7 +209,7 @@ fn file_mtime_ms(path: &Path) -> u64 {
 }
 
 #[cfg(test)]
-mod tests {
+mod scan_tests {
     use super::*;
     use crate::agent_history::claude::{ScanRootGuard, TitleSource};
     use std::io::Write;

@@ -110,9 +110,10 @@ pub(crate) fn resolve_task_config(def: &TaskDef) -> ResolvedConfig {
 }
 
 #[cfg(test)]
-mod tests {
+mod registry_tests {
     use super::*;
     use crate::app_dir::AppDataDirGuard;
+    use crate::background_tasks::reset_runtimes_for_test;
     use std::sync::atomic::Ordering;
 
     /// TASKS 键集精确 == ["planBalance","sessionRefresh"] + 两任务逐字段断言（边界表锁死）
@@ -151,6 +152,7 @@ mod tests {
     /// TASKS 与 RUNTIMES 等长守卫 + 静态初值 == 对应 def 默认值
     #[test]
     fn runtimes_same_length_as_tasks() {
+        reset_runtimes_for_test();
         assert_eq!(
             TASKS.len(),
             RUNTIMES.len(),

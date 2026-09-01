@@ -111,7 +111,7 @@ impl Drop for ScanRootGuard {
 }
 
 #[cfg(test)]
-mod tests {
+mod claude_tests {
     use super::*;
 
     // ── TitleSource serde camelCase 五变体（claude 值集） ──

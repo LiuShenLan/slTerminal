@@ -237,7 +237,7 @@ pub fn resolve_title(
 }
 
 #[cfg(test)]
-mod tests {
+mod jsonl_tests {
     use super::*;
     use std::io::Write;
 

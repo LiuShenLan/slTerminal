@@ -89,7 +89,7 @@ pub(crate) fn app_data_dir() -> Result<PathBuf, AppError> {
 }
 
 #[cfg(test)]
-mod tests {
+mod app_dir_tests {
     use super::*;
 
     // ── SPE-04: app_data_dir() 错误分支（路径解析纯函数注入可失败点） ──

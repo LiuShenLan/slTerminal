@@ -74,7 +74,7 @@ spawn 阶段统一注入：
 - PATH 不可解析时 `%SystemRoot%\System32` 兜底；
 - 双侧 `canonicalize` 均失败时回退归一字符串比对（alias/Store 版 pwsh 兼容），单侧失败即拒绝。
 
-PowerShell 通过 `-EncodedCommand` 内联 `shell-integration.ps1`，避免 `%APPDATA%` 文件写入触发 AMSI/ASR。启动参数固定 `-NoLogo -NoExit -EncodedCommand`，**禁止 `-NoProfile`**——用户 profile 必须先于集成脚本原生加载（B17，守卫用例 `test_pwsh_args_no_noprofile_b17`）。
+PowerShell 通过 `-EncodedCommand` 内联 `shell-integration.ps1`，避免 `%APPDATA%` 文件写入触发 AMSI/ASR。启动参数固定 `-NoLogo -NoExit -EncodedCommand`，**禁止 `-NoProfile`**——用户 profile 必须先于集成脚本原生加载（B17，守卫用例 `pwsh_args_no_noprofile_b17`）。
 
 ### 启动序列剥离
 

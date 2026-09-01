@@ -83,7 +83,7 @@ pub(crate) fn lookup_provider<'a>(
 }
 
 #[cfg(test)]
-mod tests {
+mod provider_tests {
     use super::*;
 
     // ── 注册表 get（L1 新增：resolve_provider 命中/未命中） ──

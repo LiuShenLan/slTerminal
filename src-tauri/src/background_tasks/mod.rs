@@ -196,7 +196,7 @@ pub(crate) fn reset_runtimes_for_test() {
 }
 
 #[cfg(test)]
-mod tests {
+mod background_tasks_tests {
     use super::*;
     use crate::app_dir::AppDataDirGuard;
 

@@ -120,7 +120,7 @@ pub(crate) fn read_session_title(session_id: &str) -> Result<AgentHistoryTitle, 
 }
 
 #[cfg(test)]
-mod tests {
+mod ops_tests {
     use super::*;
     use crate::AppError;
 

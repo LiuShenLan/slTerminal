@@ -299,7 +299,7 @@ pub(crate) fn config_write_sync(
 }
 
 #[cfg(test)]
-mod tests {
+mod config_tests {
     use super::*;
 
     // ── parse_layer（P3-BE-08 非法 layer → Validation） ──

@@ -188,7 +188,7 @@ pub async fn refresh_plan_balance(
 }
 
 #[cfg(test)]
-mod tests {
+mod plan_balance_tests {
     use super::*;
 
     /// 手动 current_thread runtime 驱动 async 命令（照 hooks/mod.rs:443 先例）

@@ -489,7 +489,7 @@ fn classify_by_kind(kind: &notify::EventKind, paths: Vec<String>) -> FsEventPayl
 }
 
 #[cfg(test)]
-mod tests {
+mod notify_tests {
     use super::*;
     use notify::event::{
         AccessKind, AccessMode, CreateKind, DataChange, ModifyKind, RemoveKind, RenameMode,

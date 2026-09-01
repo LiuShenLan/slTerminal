@@ -214,7 +214,7 @@ fn run_one_tick(signal_dir: &Path, stop_rx: &mpsc::Receiver<()>, process: impl F
 }
 
 #[cfg(test)]
-mod tests {
+mod watcher_tests {
     use super::*;
 
     // ── is_signal_file ──

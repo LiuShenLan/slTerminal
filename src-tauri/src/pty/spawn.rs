@@ -571,7 +571,7 @@ pub mod conpty_custom {
 
     // ─── 测试 ───
     #[cfg(test)]
-    mod tests {
+    mod conpty_custom_tests {
         use super::*;
 
         // T1: compute_conpty_flags（7 条）——三态：捆绑恒 0x7（新 conhost 完整支持
@@ -677,7 +677,7 @@ pub mod conpty_custom {
         // 验证 pty_spawn 注入的三个终端能力环境变量正确编码到 ConPTY 环境块
 
         #[test]
-        fn test_build_env_block_terminal_env_vars_included() {
+        fn build_env_block_terminal_env_vars_included() {
             let extra = vec![
                 ("COLORTERM".into(), "truecolor".into()),
                 ("TERM".into(), "xterm-256color".into()),
@@ -700,7 +700,7 @@ pub mod conpty_custom {
         }
 
         #[test]
-        fn test_build_env_block_extra_overrides_existing() {
+        fn build_env_block_extra_overrides_existing() {
             // 取一个已知存在的 Windows 环境变量做覆盖测试
             let extra = vec![("COMPUTERNAME".into(), "TEST_OVERRIDE_VALUE".into())];
             let block = build_env_block(&extra);
@@ -718,7 +718,7 @@ pub mod conpty_custom {
         }
 
         #[test]
-        fn test_build_env_block_preserves_inherited_vars() {
+        fn build_env_block_preserves_inherited_vars() {
             let extra = vec![("SLTERM_TEST_DUMMY".into(), "dummy_value".into())];
             let block = build_env_block(&extra);
             let text = String::from_utf16_lossy(&block);
@@ -736,7 +736,7 @@ pub mod conpty_custom {
         }
 
         #[test]
-        fn test_build_env_block_double_null_terminated() {
+        fn build_env_block_double_null_terminated() {
             let extra = vec![("A".into(), "B".into())];
             let block = build_env_block(&extra);
             // 环境块应以双 null 结尾（\0\0）
@@ -754,7 +754,7 @@ pub mod conpty_custom {
         // 验证 spawn_conpty_child 中 cwd.replace('/', '\\') 的编码正确性
 
         #[test]
-        fn test_cwd_forward_slash_to_backslash_encoding() {
+        fn cwd_forward_slash_to_backslash_encoding() {
             // 调用真实 build_cwd_wide（PTY-08 抽取的 cwd 宽字符串构造纯函数）：
             // 正斜杠→反斜杠 + UTF-16LE 编码 + null 终止
             let wide = build_cwd_wide("C:/Users/test/project");
@@ -769,7 +769,7 @@ pub mod conpty_custom {
         }
 
         #[test]
-        fn test_cwd_no_trailing_slash_unchanged() {
+        fn cwd_no_trailing_slash_unchanged() {
             // 不含正斜杠的路径无需转换（build_cwd_wide 原样编码）
             let wide = build_cwd_wide("C:\\Users\\test");
             let text = String::from_utf16_lossy(&wide[..wide.len() - 1]);
@@ -777,7 +777,7 @@ pub mod conpty_custom {
         }
 
         #[test]
-        fn test_cwd_mixed_slashes_normalized() {
+        fn cwd_mixed_slashes_normalized() {
             // 混合斜杠：只有 / 转为 \（build_cwd_wide 内部规范化）
             let wide = build_cwd_wide("C:/Users\\test/project\\sub");
             let text = String::from_utf16_lossy(&wide[..wide.len() - 1]);
@@ -788,13 +788,13 @@ pub mod conpty_custom {
         }
 
         #[test]
-        fn test_to_wide_null_empty_string() {
+        fn to_wide_null_empty_string() {
             let wide = to_wide_null("");
             assert_eq!(wide, vec![0], "空字符串编码为仅含 null 终止符");
         }
 
         #[test]
-        fn test_to_wide_null_ascii() {
+        fn to_wide_null_ascii() {
             let wide = to_wide_null("hello");
             assert_eq!(wide.len(), 6, "5 字符 + 1 null = 6 个 u16");
             assert_eq!(wide[0], b'h' as u16);
@@ -1659,7 +1659,7 @@ unsafe fn create_and_assign_job(pid: u32, job_name_wide: &[u16]) -> Result<JobHa
 // ─── spawn.rs 模块级测试：ring buffer 回放 + session 隔离 ───
 
 #[cfg(test)]
-mod tests {
+mod spawn_tests {
     use super::*;
     use crate::state::PtyState;
     use portable_pty::MasterPty;
@@ -1668,7 +1668,7 @@ mod tests {
 
     /// ring buffer drain 回放：drain 后内容正确回放，buffer 清零，后续写入正常
     #[test]
-    fn test_ring_buffer_replay_drain_and_continue() {
+    fn ring_buffer_replay_drain_and_continue() {
         let ring = Arc::new(Mutex::new(VecDeque::new()));
 
         // 阶段 1: 模拟 Channel 断开时 reader 线程向 ring buffer 写数据
@@ -1694,7 +1694,7 @@ mod tests {
 
     /// ring buffer 空 buffer drain 不会 panic（防御性验证）
     #[test]
-    fn test_ring_buffer_empty_drain_no_panic() {
+    fn ring_buffer_empty_drain_no_panic() {
         let ring = Arc::new(Mutex::new(VecDeque::new()));
         let drained: Vec<u8> = ring.lock().unwrap().drain(..).collect();
         assert!(drained.is_empty());
@@ -1703,7 +1703,7 @@ mod tests {
 
     /// ring buffer 部分 drain 只移除指定范围
     #[test]
-    fn test_ring_buffer_partial_drain() {
+    fn ring_buffer_partial_drain() {
         let ring = Arc::new(Mutex::new(VecDeque::new()));
         ring.lock().unwrap().extend(b"0123456789");
         // drain 前 5 字节
@@ -1716,7 +1716,7 @@ mod tests {
     /// 验证 PtyState session 移除不级联：移除一个 session 不影响其他 session
     #[cfg(windows)]
     #[test]
-    fn test_session_removal_does_not_cascade() {
+    fn session_removal_does_not_cascade() {
         let pty_state = PtyState::new();
 
         // 创建三个独立 PTY session
@@ -1764,7 +1764,7 @@ mod tests {
     /// 同 panel_id 的不同 session 可独立存在与移除
     #[cfg(windows)]
     #[test]
-    fn test_sessions_with_same_panel_id_independent() {
+    fn sessions_with_same_panel_id_independent() {
         let pty_state = PtyState::new();
         let s1 = make_test_session("panel-x");
         let s2 = make_test_session("panel-x"); // 同 panel_id
@@ -1803,7 +1803,7 @@ mod tests {
     /// 移除不存在的 session 返回 None，不影响已有 session
     #[cfg(windows)]
     #[test]
-    fn test_remove_nonexistent_session_no_side_effect() {
+    fn remove_nonexistent_session_no_side_effect() {
         let pty_state = PtyState::new();
         let s = make_test_session("panel-y");
         pty_state

@@ -93,11 +93,11 @@ pub(crate) fn io_error(action: &str, path: &Path, e: std::io::Error) -> AppError
 }
 
 #[cfg(test)]
-mod tests {
+mod error_tests {
     use super::*;
 
     #[test]
-    fn test_app_error_serialization() {
+    fn app_error_serialization() {
         let err = AppError::IoKind {
             kind: "NotFound".into(),
             message: "测试错误".into(),
@@ -109,7 +109,7 @@ mod tests {
 
     /// 确保所有变体的 Display 不 panic 且输出非空
     #[test]
-    fn test_all_error_variants_display() {
+    fn all_error_variants_display() {
         let errors: Vec<AppError> = vec![
             AppError::IoKind {
                 kind: "Other".into(),
@@ -134,7 +134,7 @@ mod tests {
 
     /// 验证 From<std::io::Error> 转换为 IoKind 变体并保留 ErrorKind
     #[test]
-    fn test_from_io_error() {
+    fn from_io_error() {
         let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "文件不存在");
         let app_err: AppError = io_err.into();
         match app_err {
@@ -154,7 +154,7 @@ mod tests {
 
     /// 验证 SessionNotFound 的 JSON 序列化包含 sessionId（camelCase）
     #[test]
-    fn test_session_not_found_serialization() {
+    fn session_not_found_serialization() {
         let err = AppError::SessionNotFound("test-session-456".to_string());
         let json = serde_json::to_string(&err).unwrap();
         assert!(
@@ -170,7 +170,7 @@ mod tests {
     /// ConfigParse 序列化形态——与前端 parseAppError（FE-02）契约对齐：
     /// camelCase 变体名 `configParse` + 消息原文保留（变体总数 10+1=11）
     #[test]
-    fn test_config_parse_serialization() {
+    fn config_parse_serialization() {
         let err = AppError::ConfigParse("配置文件 JSON 损坏".to_string());
         let json = serde_json::to_string(&err).unwrap();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -183,7 +183,7 @@ mod tests {
     /// io_error 辅助（BE-13/BE-15）：消息 = 业务动作 + 路径；kind 保留 ErrorKind；
     /// 原始 io 错误文本只进 tracing，不进用户可见消息
     #[test]
-    fn test_io_error_helper_injects_path_context() {
+    fn io_error_helper_injects_path_context() {
         let path = Path::new("C:\\data\\settings.json");
         let io_err =
             std::io::Error::new(std::io::ErrorKind::PermissionDenied, "拒绝访问（技术细节）");
@@ -208,7 +208,7 @@ mod tests {
 
     /// serde_json::Error → AppError::Serde 转换（变体 + 消息原样保留）
     #[test]
-    fn test_from_serde_json_error() {
+    fn from_serde_json_error() {
         let serde_err = serde_json::from_str::<serde_json::Value>("not json").unwrap_err();
         let expected = serde_err.to_string();
         let app_err: AppError = serde_err.into();
@@ -226,7 +226,7 @@ mod tests {
 
     /// git2::Error → AppError::Git 转换（变体 + 消息原样保留）
     #[test]
-    fn test_from_git2_error() {
+    fn from_git2_error() {
         let git_err = git2::Error::from_str("模拟 git 错误");
         let expected = git_err.to_string();
         let app_err: AppError = git_err.into();
@@ -244,7 +244,7 @@ mod tests {
 
     /// tokio::task::JoinError → AppError::TaskJoin 转换（变体 + 消息原样保留）
     #[test]
-    fn test_from_join_error() {
+    fn from_join_error() {
         // 用 spawn_blocking 内 panic 构造真实 JoinError（panic 被 JoinError 捕获，不扩散到测试线程）
         // 注意：spawn_blocking 必须先在 runtime 上下文内执行——Rust 求值顺序是
         // 先求值 block_on 的参数表达式，若参数直接写 spawn_blocking(...)，

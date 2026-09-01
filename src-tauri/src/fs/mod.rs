@@ -445,7 +445,7 @@ mod read_dir_tests {
     }
 
     #[test]
-    fn test_fs_read_dir_lists_children() {
+    fn fs_read_dir_lists_children() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("a.txt"), "a").unwrap();
         std::fs::write(dir.path().join("b.txt"), "b").unwrap();
@@ -478,7 +478,7 @@ mod read_dir_tests {
     }
 
     #[test]
-    fn test_fs_read_dir_filters_dotgit() {
+    fn fs_read_dir_filters_dotgit() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join(".git")).unwrap();
         std::fs::write(dir.path().join("visible.txt"), "ok").unwrap();
@@ -493,7 +493,7 @@ mod read_dir_tests {
     }
 
     #[test]
-    fn test_fs_read_dir_shows_node_modules() {
+    fn fs_read_dir_shows_node_modules() {
         // node_modules 不再硬编码过滤——子树懒加载保证性能，目录条目可见无影响
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("node_modules")).unwrap();
@@ -517,7 +517,7 @@ mod read_dir_tests {
     }
 
     #[test]
-    fn test_fs_read_dir_shows_large_build_dirs() {
+    fn fs_read_dir_shows_large_build_dirs() {
         // target/build/dist 等构建产物目录不硬编码过滤，依赖懒加载控制性能
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("target")).unwrap();
@@ -545,7 +545,7 @@ mod read_dir_tests {
     }
 
     #[test]
-    fn test_fs_read_dir_empty_dir_returns_empty() {
+    fn fs_read_dir_empty_dir_returns_empty() {
         let dir = tempfile::tempdir().unwrap();
         let entries = run(fs_read_dir_impl(
             dir.path().to_string_lossy().to_string(),
@@ -556,7 +556,7 @@ mod read_dir_tests {
     }
 
     #[test]
-    fn test_fs_read_dir_shows_dotclaude() {
+    fn fs_read_dir_shows_dotclaude() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join(".claude")).unwrap();
         std::fs::write(dir.path().join("visible.txt"), "ok").unwrap();
@@ -573,7 +573,7 @@ mod read_dir_tests {
     }
 
     #[test]
-    fn test_fs_create_dir_creates() {
+    fn fs_create_dir_creates() {
         let base = tempfile::tempdir().unwrap();
         let new_dir = base.path().join("new_folder");
 
@@ -594,7 +594,7 @@ mod read_dir_tests {
     }
 
     #[test]
-    fn test_fs_create_dir_parent_creation() {
+    fn fs_create_dir_parent_creation() {
         let base = tempfile::tempdir().unwrap();
         let nested = base.path().join("a").join("b").join("c");
 
@@ -607,7 +607,7 @@ mod read_dir_tests {
     }
 
     #[test]
-    fn test_fs_delete_file_removes() {
+    fn fs_delete_file_removes() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("to_delete.txt");
         std::fs::write(&file, "delete me").unwrap();
@@ -618,7 +618,7 @@ mod read_dir_tests {
     }
 
     #[test]
-    fn test_fs_delete_dir_recursive() {
+    fn fs_delete_dir_recursive() {
         let dir = tempfile::tempdir().unwrap();
         let sub = dir.path().join("to_delete_dir");
         std::fs::create_dir(&sub).unwrap();
@@ -629,7 +629,7 @@ mod read_dir_tests {
     }
 
     #[test]
-    fn test_fs_rename_moves_file() {
+    fn fs_rename_moves_file() {
         let dir = tempfile::tempdir().unwrap();
         let src = dir.path().join("old.txt");
         let dst = dir.path().join("new.txt");
@@ -800,7 +800,7 @@ mod command_wrapper_tests {
     }
 
     #[test]
-    fn test_fs_read_file_returns_content() {
+    fn fs_read_file_returns_content() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("read.txt");
         std::fs::write(&file, "hello world").unwrap();
@@ -825,7 +825,7 @@ mod command_wrapper_tests {
     }
 
     #[test]
-    fn test_fs_read_file_not_found_error() {
+    fn fs_read_file_not_found_error() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("ghost.txt");
 
@@ -837,7 +837,7 @@ mod command_wrapper_tests {
     }
 
     #[test]
-    fn test_fs_read_file_outside_root_rejected() {
+    fn fs_read_file_outside_root_rejected() {
         let root = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
         let file = outside.path().join("secret.txt");
@@ -853,7 +853,7 @@ mod command_wrapper_tests {
     // ===== fs_write_file =====
 
     #[test]
-    fn test_fs_write_file_writes_content() {
+    fn fs_write_file_writes_content() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("output.txt");
 
@@ -868,7 +868,7 @@ mod command_wrapper_tests {
     }
 
     #[test]
-    fn test_fs_write_file_outside_root_rejected() {
+    fn fs_write_file_outside_root_rejected() {
         let root = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
         let file = outside.path().join("evil.txt");
@@ -884,7 +884,7 @@ mod command_wrapper_tests {
     // ===== fs_read_dir =====
 
     #[test]
-    fn test_fs_read_dir_returns_entries() {
+    fn fs_read_dir_returns_entries() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("a.txt"), "a").unwrap();
 
@@ -898,7 +898,7 @@ mod command_wrapper_tests {
     }
 
     #[test]
-    fn test_fs_read_dir_not_found_error() {
+    fn fs_read_dir_not_found_error() {
         let dir = tempfile::tempdir().unwrap();
         let nonexistent = dir.path().join("ghost_dir");
 
@@ -910,7 +910,7 @@ mod command_wrapper_tests {
     }
 
     #[test]
-    fn test_fs_read_dir_outside_root_rejected() {
+    fn fs_read_dir_outside_root_rejected() {
         let root = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
 
@@ -924,7 +924,7 @@ mod command_wrapper_tests {
     // ===== fs_rename（SEC-04：覆盖文件 / 拒绝目录） =====
 
     #[test]
-    fn test_fs_rename_overwrites_existing_file() {
+    fn fs_rename_overwrites_existing_file() {
         let dir = tempfile::tempdir().unwrap();
         let src = dir.path().join("src.txt");
         let dst = dir.path().join("dst.txt");
@@ -946,7 +946,7 @@ mod command_wrapper_tests {
     }
 
     #[test]
-    fn test_fs_rename_rejects_existing_directory() {
+    fn fs_rename_rejects_existing_directory() {
         let dir = tempfile::tempdir().unwrap();
         let src = dir.path().join("file.txt");
         let dst = dir.path().join("existing_dir");
@@ -969,7 +969,7 @@ mod command_wrapper_tests {
     }
 
     #[test]
-    fn test_fs_rename_source_outside_root_rejected() {
+    fn fs_rename_source_outside_root_rejected() {
         let root = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
         let src = outside.path().join("file.txt");
@@ -985,7 +985,7 @@ mod command_wrapper_tests {
     }
 
     #[test]
-    fn test_fs_rename_dest_outside_root_rejected() {
+    fn fs_rename_dest_outside_root_rejected() {
         let root = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
         let src = root.path().join("src.txt");
@@ -1006,7 +1006,7 @@ mod command_wrapper_tests {
     // ===== 重命名幂等短路（src == dst，修复「改名未变直传原名 → 先删源文件再 rename 失败」） =====
 
     #[test]
-    fn test_fs_rename_src_equals_dst_file_is_noop() {
+    fn fs_rename_src_equals_dst_file_is_noop() {
         let dir = tempfile::tempdir().unwrap();
         let src = dir.path().join("keep.txt");
         std::fs::write(&src, "keep me").unwrap();
@@ -1029,7 +1029,7 @@ mod command_wrapper_tests {
     }
 
     #[test]
-    fn test_fs_rename_src_equals_dst_dir_is_noop() {
+    fn fs_rename_src_equals_dst_dir_is_noop() {
         let dir = tempfile::tempdir().unwrap();
         let d = dir.path().join("keep_dir");
         std::fs::create_dir(&d).unwrap();
@@ -1044,7 +1044,7 @@ mod command_wrapper_tests {
     }
 
     #[test]
-    fn test_fs_rename_missing_source_returns_error() {
+    fn fs_rename_missing_source_returns_error() {
         let dir = tempfile::tempdir().unwrap();
         let src = dir.path().join("ghost.txt");
         let dst = dir.path().join("dst.txt");
@@ -1067,7 +1067,7 @@ mod command_wrapper_tests {
 
     /// 读取不存在的文件 → 错误消息含完整路径
     #[test]
-    fn test_fs_read_file_error_message_contains_path() {
+    fn fs_read_file_error_message_contains_path() {
         let dir = tempfile::tempdir().unwrap();
         let ghost = dir.path().join("ghost.txt");
 
@@ -1085,7 +1085,7 @@ mod command_wrapper_tests {
 
     /// 读取不存在的目录 → 错误消息含完整路径
     #[test]
-    fn test_fs_read_dir_error_message_contains_path() {
+    fn fs_read_dir_error_message_contains_path() {
         let dir = tempfile::tempdir().unwrap();
         let ghost = dir.path().join("ghost_dir");
 
@@ -1103,7 +1103,7 @@ mod command_wrapper_tests {
 
     /// 父路径为文件（create_dir_all 失败）→ 错误消息含业务语义「创建目录失败」+ 路径
     #[test]
-    fn test_fs_write_file_error_message_contains_path() {
+    fn fs_write_file_error_message_contains_path() {
         let dir = tempfile::tempdir().unwrap();
         let blocker = dir.path().join("blocker.txt");
         std::fs::write(&blocker, "x").unwrap();
@@ -1125,7 +1125,7 @@ mod command_wrapper_tests {
 
     /// 重命名不存在的源 → 错误消息含完整路径
     #[test]
-    fn test_fs_rename_error_message_contains_path() {
+    fn fs_rename_error_message_contains_path() {
         let dir = tempfile::tempdir().unwrap();
         let src = dir.path().join("missing.txt");
         let dst = dir.path().join("new.txt");
@@ -1147,7 +1147,7 @@ mod command_wrapper_tests {
 
     /// fs_delete 删除不存在的路径 → 返回错误（不静默成功）
     #[test]
-    fn test_fs_delete_nonexistent_returns_error() {
+    fn fs_delete_nonexistent_returns_error() {
         let dir = tempfile::tempdir().unwrap();
         let ghost = dir.path().join("ghost.txt");
         assert!(!ghost.exists(), "前置：文件不存在");
@@ -1165,7 +1165,7 @@ mod command_wrapper_tests {
 
     /// fs_create_dir 目标在 root 外 → 沙箱拒绝（目录不被创建）
     #[test]
-    fn test_fs_create_dir_outside_root_rejected() {
+    fn fs_create_dir_outside_root_rejected() {
         let root = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
         let target = outside.path().join("evil_dir");
@@ -1180,7 +1180,7 @@ mod command_wrapper_tests {
 
     /// fs_delete 目标在 root 外 → 沙箱拒绝（文件不被删除）
     #[test]
-    fn test_fs_delete_outside_root_rejected() {
+    fn fs_delete_outside_root_rejected() {
         let root = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
         let file = outside.path().join("secret.txt");
@@ -1196,7 +1196,7 @@ mod command_wrapper_tests {
 
     /// spawn_blocking 闭包 panic → JoinError → 统一映射为 AppError::TaskJoin
     #[test]
-    fn test_spawn_blocking_panic_maps_to_task_join() {
+    fn spawn_blocking_panic_maps_to_task_join() {
         // 闭包内 panic 经 spawn_blocking 捕获为 JoinError，命令内核统一映射为 TaskJoin
         let result = run(spawn_blocking_task(|| -> Result<(), AppError> {
             panic!("模拟阻塞任务 panic");
@@ -1242,7 +1242,7 @@ mod read_file_chunked_tests {
 
     /// 多块文件：分块拼接还原一致 + 发送序列契约（数据块 done:false，终态恰一个且 data 空）
     #[test]
-    fn test_read_file_chunked_multi_chunk_joins_correctly() {
+    fn read_file_chunked_multi_chunk_joins_correctly() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("multi.txt");
         // 600KB ASCII——超过一块（256KB），至少 2 个数据块
@@ -1276,7 +1276,7 @@ mod read_file_chunked_tests {
 
     /// 多字节字符跨界：3 字节汉字「界」(E7 95 8C) 从 256KB 边界前 1 字节开始——首块切点落在字符中部
     #[test]
-    fn test_read_file_chunked_utf8_boundary_not_split() {
+    fn read_file_chunked_utf8_boundary_not_split() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("utf8.txt");
         let mut content = vec![b'a'; READ_CHUNK_BYTES - 1];
@@ -1303,7 +1303,7 @@ mod read_file_chunked_tests {
 
     /// 4 字节 emoji「😀」(F0 9F 98 80) 从 256KB 边界前 2 字节开始——首块切点落在字符中部
     #[test]
-    fn test_read_file_chunked_utf8_4byte_boundary_not_split() {
+    fn read_file_chunked_utf8_4byte_boundary_not_split() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("utf8_4b.txt");
         let mut content = vec![b'x'; READ_CHUNK_BYTES - 2];
@@ -1322,7 +1322,7 @@ mod read_file_chunked_tests {
 
     /// 超限拒绝：>10MB 文件 metadata 校验即 Err，不发送任何块
     #[test]
-    fn test_read_file_chunked_over_limit_rejected() {
+    fn read_file_chunked_over_limit_rejected() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("big.txt");
         // 稀疏文件 10MB+1 字节——不写内容，metadata 长度即超限
@@ -1342,7 +1342,7 @@ mod read_file_chunked_tests {
 
     /// 恰好 10MB：允许读取，全量拼接还原
     #[test]
-    fn test_read_file_chunked_at_limit_allowed() {
+    fn read_file_chunked_at_limit_allowed() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("limit.txt");
         // 稀疏文件恰好 10MB——读出全 NUL（合法 UTF-8 的 U+0000）
@@ -1363,7 +1363,7 @@ mod read_file_chunked_tests {
 
     /// 空文件：直接终态（{data:"", done:true}），无数据块
     #[test]
-    fn test_read_file_chunked_empty_file_terminal_only() {
+    fn read_file_chunked_empty_file_terminal_only() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("empty.txt");
         std::fs::write(&file, "").unwrap();
@@ -1382,7 +1382,7 @@ mod read_file_chunked_tests {
 
     /// 非法 UTF-8（含非法字节）：拒绝且不发送终态（行为同旧 read_to_string）
     #[test]
-    fn test_read_file_chunked_invalid_utf8_rejected() {
+    fn read_file_chunked_invalid_utf8_rejected() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("binary.txt");
         // 0xFF/0xFE 为非法 UTF-8 字节
@@ -1399,7 +1399,7 @@ mod read_file_chunked_tests {
 
     /// 残缺多字节尾部到文件结尾（不完整字符）：拒绝（行为同旧 read_to_string）
     #[test]
-    fn test_read_file_chunked_incomplete_tail_rejected() {
+    fn read_file_chunked_incomplete_tail_rejected() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("truncated.txt");
         // 3 字节汉字只有前 2 字节，文件即以残缺序列结尾

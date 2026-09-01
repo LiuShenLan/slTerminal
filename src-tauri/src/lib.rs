@@ -151,7 +151,7 @@ pub fn run() {
 }
 
 #[cfg(test)]
-mod tests {
+mod lib_tests {
     use super::*;
 
     /// crash.log 写入成功：tempdir 目录参数化后文件存在且含消息（TQ-COV-01）
@@ -178,14 +178,14 @@ mod tests {
     }
 
     #[test]
-    fn test_ping_returns_pong() {
+    fn ping_returns_pong() {
         let result = ping();
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "pong".to_string());
     }
 
     #[test]
-    fn test_get_windows_build_number_returns_number() {
+    fn get_windows_build_number_returns_number() {
         let result = crate::pty::win_build::get_windows_build_number();
         // 运行时平台分支（BE-17/D5）：两分支均无平台专属 API，编译期同时可见
         if cfg!(windows) {

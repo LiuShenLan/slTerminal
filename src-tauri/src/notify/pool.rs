@@ -139,7 +139,7 @@ impl Drop for LruWatcherPool {
 }
 
 #[cfg(test)]
-mod tests {
+mod pool_tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{mpsc, Arc, Mutex};
@@ -189,14 +189,14 @@ mod tests {
     // ── 基础操作 ──
 
     #[test]
-    fn p1_new_creates_empty_pool() {
+    fn new_creates_empty_pool() {
         let pool = LruWatcherPool::new(5);
         assert_eq!(pool.len(), 0);
         assert!(pool.is_empty());
     }
 
     #[test]
-    fn p2_insert_and_get_hit() {
+    fn insert_and_get_hit() {
         let mut pool = LruWatcherPool::new(WATCHER_POOL_CAPACITY);
         let path = PathBuf::from("/test/project-a");
         pool.insert(path.clone(), make_test_watcher("a"));
@@ -206,7 +206,7 @@ mod tests {
     }
 
     #[test]
-    fn p3_get_updates_last_used_reordering_lru() {
+    fn get_updates_last_used_reordering_lru() {
         let mut pool = LruWatcherPool::new(WATCHER_POOL_CAPACITY);
         let a = PathBuf::from("/test/a");
         let b = PathBuf::from("/test/b");
@@ -242,7 +242,7 @@ mod tests {
     }
 
     #[test]
-    fn p4_insert_at_capacity_evicts_lru() {
+    fn insert_at_capacity_evicts_lru() {
         let mut pool = LruWatcherPool::new(WATCHER_POOL_CAPACITY);
         for name in &["a", "b", "c", "d", "e", "f", "g", "h"] {
             pool.insert(
@@ -269,7 +269,7 @@ mod tests {
     }
 
     #[test]
-    fn p5_pause_all_except_target_resumed_others_paused() {
+    fn pause_all_except_target_resumed_others_paused() {
         let mut pool = LruWatcherPool::new(WATCHER_POOL_CAPACITY);
         let a = PathBuf::from("/test/a");
         let b = PathBuf::from("/test/b");
@@ -289,7 +289,7 @@ mod tests {
     }
 
     #[test]
-    fn p6_pause_all_except_empty_pool_no_panic() {
+    fn pause_all_except_empty_pool_no_panic() {
         let mut pool = LruWatcherPool::new(WATCHER_POOL_CAPACITY);
         let path = PathBuf::from("/test/not-exist");
         // 空池不应 panic
@@ -298,7 +298,7 @@ mod tests {
     }
 
     #[test]
-    fn p7_remove_stops_and_returns_watcher() {
+    fn remove_stops_and_returns_watcher() {
         let mut pool = LruWatcherPool::new(WATCHER_POOL_CAPACITY);
         let path = PathBuf::from("/test/a");
         pool.insert(path.clone(), make_test_watcher("a"));
@@ -314,7 +314,7 @@ mod tests {
     }
 
     #[test]
-    fn p8_stop_all_clears_pool() {
+    fn stop_all_clears_pool() {
         let mut pool = LruWatcherPool::new(WATCHER_POOL_CAPACITY);
         for name in &["a", "b", "c"] {
             pool.insert(
@@ -330,7 +330,7 @@ mod tests {
     }
 
     #[test]
-    fn p9_drop_stops_all_watchers() {
+    fn drop_stops_all_watchers() {
         let mut pool = LruWatcherPool::new(WATCHER_POOL_CAPACITY);
         let mut exit_flags = Vec::new();
         for i in 0..3 {
@@ -354,7 +354,7 @@ mod tests {
     }
 
     #[test]
-    fn p10_insert_same_path_replaces_old_watcher() {
+    fn insert_same_path_replaces_old_watcher() {
         let mut pool = LruWatcherPool::new(WATCHER_POOL_CAPACITY);
         let path = PathBuf::from("/test/a");
 
@@ -379,7 +379,7 @@ mod tests {
     }
 
     #[test]
-    fn p11_pause_and_resume_is_paused_toggles() {
+    fn pause_and_resume_is_paused_toggles() {
         let w = make_test_watcher("toggle");
         assert!(!w.is_paused());
 
@@ -391,7 +391,7 @@ mod tests {
     }
 
     #[test]
-    fn p12_paused_watcher_does_not_process_events() {
+    fn paused_watcher_does_not_process_events() {
         // 验证 pause/resume 机制：paused 标记正确切换
         let w = make_test_watcher("paused-test");
 
@@ -403,7 +403,7 @@ mod tests {
     }
 
     #[test]
-    fn p13_stop_sets_is_running_false() {
+    fn stop_sets_is_running_false() {
         let mut w = make_test_watcher("stop-test");
         assert!(w.is_running(), "创建后应运行中");
         w.stop();
@@ -414,7 +414,7 @@ mod tests {
     }
 
     #[test]
-    fn p14_remove_nonexistent_returns_none() {
+    fn remove_nonexistent_returns_none() {
         let mut pool = LruWatcherPool::new(WATCHER_POOL_CAPACITY);
         pool.insert(PathBuf::from("/test/a"), make_test_watcher("a"));
         // 移除不存在的 path（notify_stop_watch 幂等契约）：返回 None，池不受影响

@@ -794,7 +794,7 @@ pub(crate) fn injection_status_impl(
 // ── 测试 ──
 
 #[cfg(test)]
-mod tests {
+mod inject_tests {
     use super::*;
 
     // ── template_version ──

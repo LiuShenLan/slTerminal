@@ -390,7 +390,7 @@ fn mirror_da1_query(data: &[u8]) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+mod reader_tests {
     use super::*;
 
     // ─── M11: reader_loop 主循环纯函数化分析 ───
@@ -438,55 +438,55 @@ mod tests {
     // 新增 pending 检查——决策已抽为 micro_batch_tail）：豁免表同步在 S19。
 
     #[test]
-    fn test_strip_osc_title_bel() {
+    fn strip_osc_title_bel() {
         let input = b"\x1b]0;pwsh\x07";
         assert_eq!(strip_conpty_startup(input), b"");
     }
 
     #[test]
-    fn test_strip_clear_screen() {
+    fn strip_clear_screen() {
         let input = b"\x1b[2J";
         assert_eq!(strip_conpty_startup(input), b"");
     }
 
     #[test]
-    fn test_strip_clear_screen_3j() {
+    fn strip_clear_screen_3j() {
         // PTY-04: CSI 3J（清屏含滚动缓冲）与 2J 一并剥离
         assert_eq!(strip_conpty_startup(b"\x1b[3J"), b"");
     }
 
     #[test]
-    fn test_strip_cursor_home() {
+    fn strip_cursor_home() {
         let input = b"\x1b[H";
         assert_eq!(strip_conpty_startup(input), b"");
     }
 
     #[test]
-    fn test_strip_dsr() {
+    fn strip_dsr() {
         let input = b"\x1b[6n";
         assert_eq!(strip_conpty_startup(input), b"");
     }
 
     #[test]
-    fn test_strip_cursor_visibility() {
+    fn strip_cursor_visibility() {
         assert_eq!(strip_conpty_startup(b"\x1b[?25h"), b"");
         assert_eq!(strip_conpty_startup(b"\x1b[?25l"), b"");
     }
 
     #[test]
-    fn test_preserve_normal_text() {
+    fn preserve_normal_text() {
         let input = b"PS C:\\Users\\test> ";
         assert_eq!(strip_conpty_startup(input), input);
     }
 
     #[test]
-    fn test_strip_startup_preserve_shell_output() {
+    fn strip_startup_preserve_shell_output() {
         let input = b"\x1b]0;pwsh\x07\x1b[2J\x1b[HPS C:\\> ";
         assert_eq!(strip_conpty_startup(input), b"PS C:\\> ");
     }
 
     #[test]
-    fn test_preserve_osc7_cwd() {
+    fn preserve_osc7_cwd() {
         let input = b"\x1b]7;file:///C:/Users\x1b\\";
         assert_eq!(strip_conpty_startup(input), input);
     }

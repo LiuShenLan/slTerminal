@@ -339,7 +339,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_pty_state_new_empty() {
+    fn pty_state_new_empty() {
         let pty = PtyState::new();
         assert!(
             pty.sessions.read().unwrap().is_empty(),
@@ -348,7 +348,7 @@ mod tests {
     }
 
     #[test]
-    fn test_app_state_new() {
+    fn app_state_new() {
         let state = AppState::new();
         assert!(
             state.pty.sessions.read().unwrap().is_empty(),
@@ -369,7 +369,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ring_buffer_append_fifo() {
+    fn ring_buffer_append_fifo() {
         let ring = Mutex::new(VecDeque::new());
         let data: Vec<u8> = (0..255).collect(); // 255 bytes
         ring_buffer_append(&ring, &data).unwrap();
@@ -379,7 +379,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ring_buffer_eviction() {
+    fn ring_buffer_eviction() {
         let ring = Mutex::new(VecDeque::new());
         // 写 280KB 数据（超过 256KB 容量），应触发淘汰
         let data: Vec<u8> = vec![b'A'; 286720]; // 280KB
@@ -392,7 +392,7 @@ mod tests {
 
     /// P2-47: 淘汰时以 \\n 为边界，不截断行
     #[test]
-    fn test_ring_buffer_eviction_at_newline_boundary() {
+    fn ring_buffer_eviction_at_newline_boundary() {
         let ring = Mutex::new(VecDeque::new());
         // 每行 100 字节 + \\n，填到超过容量
         let line = [b'X'; 100];
@@ -410,7 +410,7 @@ mod tests {
 
     /// PTY-05: 无换行长行淘汰边界①——淘汰量恰好 1024（map_or 的 or 分支原量淘汰）
     #[test]
-    fn test_ring_buffer_eviction_long_line_exact_1024() {
+    fn ring_buffer_eviction_long_line_exact_1024() {
         let ring = Mutex::new(VecDeque::new());
         // 单条无换行超长行：容量 + 恰好 1024 字节
         // 1024 字节窗口内无换行 → drain_len = drain_target = 1024，一轮淘汰后恰好回落到容量
@@ -427,7 +427,7 @@ mod tests {
 
     /// PTY-05: 无换行长行淘汰边界②——超 1024 且不能整除（多轮原量淘汰）
     #[test]
-    fn test_ring_buffer_eviction_long_line_exceed_1024() {
+    fn ring_buffer_eviction_long_line_exceed_1024() {
         let ring = Mutex::new(VecDeque::new());
         // 单条无换行超长行：容量 + 5000 字节（5000 = 4×1024 + 904）
         // 无换行时每轮按 1024 原量淘汰：4 轮后剩 904 仍超容量 → 第 5 轮再淘汰 1024，回落至容量 - 120
@@ -449,7 +449,7 @@ mod tests {
 
     /// PTY-05: 无换行长行淘汰边界③——数据中含换行（rposition 分支按行对齐，超长行不截断）
     #[test]
-    fn test_ring_buffer_eviction_long_line_with_newline() {
+    fn ring_buffer_eviction_long_line_with_newline() {
         let ring = Mutex::new(VecDeque::new());
         // 先铺满短行（101 字节/行：100 字节 X + 换行），再追加一条 3000 字节无换行超长行
         // 淘汰窗口（1024 字节）内存在换行 → drain_len = 最后一个 \n 位置 + 1（10 整行 1010 字节）

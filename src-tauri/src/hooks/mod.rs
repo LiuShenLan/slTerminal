@@ -254,7 +254,7 @@ pub async fn agent_hooks_config_write(
 }
 
 #[cfg(test)]
-mod tests {
+mod hooks_tests {
     use super::*;
     use crate::hooks::claude::HomeDirGuard;
 

@@ -86,7 +86,7 @@ fn home_dir() -> Option<PathBuf> {
 }
 
 #[cfg(test)]
-mod tests {
+mod source_tests {
     use super::*;
 
     // ── resolve_env 纯函数（6 例，F10） ──

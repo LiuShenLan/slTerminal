@@ -302,11 +302,11 @@ fn get_shell_integration_script() -> &'static str {
 }
 
 #[cfg(test)]
-mod tests {
+mod shell_tests {
     use super::*;
 
     #[test]
-    fn test_which_full_path_finds_pwsh_or_powershell() {
+    fn which_full_path_finds_pwsh_or_powershell() {
         let found = which_full_path("pwsh.exe").or_else(|| which_full_path("powershell.exe"));
         assert!(found.is_some(), "至少 pwsh 或 powershell 应存在");
         let path = found.unwrap();
@@ -318,12 +318,12 @@ mod tests {
     }
 
     #[test]
-    fn test_which_full_path_nonexistent() {
+    fn which_full_path_nonexistent() {
         assert!(which_full_path("__nonexistent_xyz__.exe").is_none());
     }
 
     #[test]
-    fn test_resolve_shell_info_returns_full_path() {
+    fn resolve_shell_info_returns_full_path() {
         let info = if which_full_path("pwsh.exe").is_some()
             || which_full_path("powershell.exe").is_some()
         {
@@ -342,14 +342,14 @@ mod tests {
     }
 
     #[test]
-    fn test_shell_integration_script_embedded() {
+    fn shell_integration_script_embedded() {
         let script = get_shell_integration_script();
         assert!(!script.is_empty(), "集成脚本不应为空");
         assert!(script.contains("OSC"), "脚本应定义 OSC 序列");
     }
 
     #[test]
-    fn test_resolve_shell_accepts_env_vars() {
+    fn resolve_shell_accepts_env_vars() {
         // 验证 resolve_shell 返回的 CommandBuilder 支持 .env() 调用
         // 这是 pty_spawn 中注入 COLORTERM/TERM/TERM_PROGRAM 的前提条件
         let mut cmd = resolve_shell(Some("cmd.exe")).expect("resolve_shell 应成功");
@@ -360,7 +360,7 @@ mod tests {
     }
 
     #[test]
-    fn test_build_pwsh_command_accepts_env_vars() {
+    fn build_pwsh_command_accepts_env_vars() {
         // pwsh 路径的 CommandBuilder 同样支持 .env()
         let mut cmd = if which_exists("pwsh.exe") {
             resolve_shell(None).expect("resolve_shell 应成功")
@@ -373,7 +373,7 @@ mod tests {
     }
 
     #[test]
-    fn test_encode_utf16le_base64_roundtrip() {
+    fn encode_utf16le_base64_roundtrip() {
         let original = "Write-Host 'hello'";
         let encoded = encode_utf16le_base64(original);
         // 解码验证（PowerShell 接受的格式）
@@ -392,28 +392,28 @@ mod tests {
     // ── validate_shell_allowlist 测试 ──
 
     #[test]
-    fn test_allowlist_cmd_exe_passes() {
+    fn allowlist_cmd_exe_passes() {
         validate_shell_allowlist("cmd.exe").expect("cmd.exe 应在白名单内");
     }
 
     #[test]
-    fn test_allowlist_pwsh_exe_passes() {
+    fn allowlist_pwsh_exe_passes() {
         validate_shell_allowlist("pwsh.exe").expect("pwsh.exe 应在白名单内");
     }
 
     #[test]
-    fn test_allowlist_powershell_exe_passes() {
+    fn allowlist_powershell_exe_passes() {
         validate_shell_allowlist("powershell.exe").expect("powershell.exe 应在白名单内");
     }
 
     #[test]
-    fn test_allowlist_case_insensitive() {
+    fn allowlist_case_insensitive() {
         validate_shell_allowlist("CMD.EXE").expect("大写 CMD.EXE 应在白名单内");
         validate_shell_allowlist("PwSh.ExE").expect("大小写混合应通过");
     }
 
     #[test]
-    fn test_allowlist_full_path_passes() {
+    fn allowlist_full_path_passes() {
         // SEC-01 修订：完整路径仅当与 PATH 解析结果一致时才放行
         //（旧语义「任意完整路径按文件名放行」正是被修复的绕过点）
         if let Some(resolved) = which_full_path("cmd.exe") {
@@ -422,7 +422,7 @@ mod tests {
     }
 
     #[test]
-    fn test_allowlist_rejects_unknown_shell() {
+    fn allowlist_rejects_unknown_shell() {
         let result = validate_shell_allowlist("evil.exe");
         assert!(result.is_err(), "evil.exe 不在白名单中，应拒绝");
         let msg = result.unwrap_err().to_string();
@@ -430,13 +430,13 @@ mod tests {
     }
 
     #[test]
-    fn test_allowlist_rejects_path_not_in_allowlist() {
+    fn allowlist_rejects_path_not_in_allowlist() {
         let result = validate_shell_allowlist(r"C:\evil\fake-shell.exe");
         assert!(result.is_err(), "fake-shell.exe 不在白名单中，应拒绝");
     }
 
     #[test]
-    fn test_allowlist_resolves_via_path() {
+    fn allowlist_resolves_via_path() {
         // cmd.exe 可通过 which_full_path 解析
         let resolved = which_full_path("cmd.exe");
         if let Some(path) = resolved {
@@ -447,7 +447,7 @@ mod tests {
     // ── SEC-01：含路径分隔符的 shell 输入——只信任 PATH 解析出的真实路径 ──
 
     #[test]
-    fn test_allowlist_accepts_path_resolved_from_path() {
+    fn allowlist_accepts_path_resolved_from_path() {
         // PATH 解析出的合法绝对路径放行
         let dir = tempfile::tempdir().unwrap();
         fake_exe(dir.path(), "cmd.exe");
@@ -457,10 +457,10 @@ mod tests {
     }
 
     #[test]
-    fn test_allowlist_accepts_system32_cmd_when_path_lacks_system32() {
+    fn allowlist_accepts_system32_cmd_when_path_lacks_system32() {
         // SEC-01 回归守卫：PATH 不含 System32 时，resolve_shell_info 的 cmd 回退
         // 使用 %SystemRoot%\System32\cmd.exe——校验必须放行，否则合法回退被确定性拒绝
-        //（test_resolve_shell_info_fallback_order 场景 3 回归）。
+        //（resolve_shell_info_fallback_order 场景 3 回归）。
         let dir = tempfile::tempdir().unwrap();
         let _guard = set_test_path(&[dir.path()]);
         let system_cmd =
@@ -469,7 +469,7 @@ mod tests {
     }
 
     #[test]
-    fn test_allowlist_rejects_forged_absolute_path() {
+    fn allowlist_rejects_forged_absolute_path() {
         // 伪造绝对路径拒绝：目录中自建 cmd.exe（白名单文件名）但 PATH 解析不出 → 拒绝
         let dir = tempfile::tempdir().unwrap();
         fake_exe(dir.path(), "cmd.exe");
@@ -482,7 +482,7 @@ mod tests {
     }
 
     #[test]
-    fn test_allowlist_rejects_absolute_path_not_in_path() {
+    fn allowlist_rejects_absolute_path_not_in_path() {
         // 白名单文件名 + 用户目录不在 PATH：即使 PATH 中存在同名文件
         //（解析结果指向另一目录），用户路径与 PATH 解析结果不一致 → 拒绝
         let user_dir = tempfile::tempdir().unwrap();
@@ -520,7 +520,7 @@ mod tests {
     // 不依赖文件系统权限）。单侧失败用例：一侧真实存在、一侧不存在 → 拒绝。
 
     #[test]
-    fn test_paths_match_canonical_equal() {
+    fn paths_match_canonical_equal() {
         // canonicalize 双成功 → 精确比较：同一文件大小写变体相等
         let dir = tempfile::tempdir().unwrap();
         fake_exe(dir.path(), "cmd.exe");
@@ -534,7 +534,7 @@ mod tests {
     }
 
     #[test]
-    fn test_paths_match_canonical_unequal() {
+    fn paths_match_canonical_unequal() {
         // 两个不同 tempdir 文件 → false
         let d1 = tempfile::tempdir().unwrap();
         let d2 = tempfile::tempdir().unwrap();
@@ -546,7 +546,7 @@ mod tests {
     }
 
     #[test]
-    fn test_paths_match_fallback_case_insensitive() {
+    fn paths_match_fallback_case_insensitive() {
         // canonicalize 双失败（应用执行别名场景等价）→ fallback 忽略大小写
         let alias = r"C:\Users\x\AppData\Local\Microsoft\WindowsApps\pwsh.exe";
         let lower = r"c:\users\x\appdata\local\microsoft\windowsapps\pwsh.exe";
@@ -557,7 +557,7 @@ mod tests {
     }
 
     #[test]
-    fn test_paths_match_fallback_separator_normalization() {
+    fn paths_match_fallback_separator_normalization() {
         // 分隔符归一：/ 与 \ 写法指向同一路径；尾部分隔符容忍
         let a = r"C:/no-such-dir-x/cmd.exe";
         let b = r"C:\no-such-dir-x\cmd.exe";
@@ -566,7 +566,7 @@ mod tests {
     }
 
     #[test]
-    fn test_paths_match_fallback_unequal() {
+    fn paths_match_fallback_unequal() {
         // 两个不同的不存在路径 → false（伪造路径仍拒绝）
         assert!(!paths_match(r"C:\a\b\cmd.exe", r"C:\a\c\cmd.exe"));
     }
@@ -601,7 +601,7 @@ mod tests {
     // ── validate_shell_allowlist alias 兼容集成测试 ──
 
     #[test]
-    fn test_allowlist_nonexistent_absolute_path_rejects_with_unified_message() {
+    fn allowlist_nonexistent_absolute_path_rejects_with_unified_message() {
         // canonicalize 失败 + fallback 不匹配 → Err 且消息为「不允许的 shell 程序」
         //（钉死新错误契约：canonicalize 失败不再产出「shell 路径解析失败」文案）
         let result = validate_shell_allowlist(r"C:\Windows\System32\__nope__\cmd.exe");
@@ -629,7 +629,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn test_allowlist_accepts_real_alias_when_present() {
+    fn allowlist_accepts_real_alias_when_present() {
         use std::path::PathBuf;
 
         let alias_dir = std::env::var("LOCALAPPDATA")
@@ -689,7 +689,7 @@ mod tests {
     // ── PTY-06：resolve_shell_info 自动检测回退顺序 ──
 
     #[test]
-    fn test_resolve_shell_info_fallback_order() {
+    fn resolve_shell_info_fallback_order() {
         let dir = tempfile::tempdir().unwrap();
 
         // 场景 1：只有 pwsh → 命中 pwsh（完整路径 + 集成脚本参数）
@@ -742,7 +742,7 @@ mod tests {
     // ── PTY-10：resolve_shell 回退顺序 + 白名单 PATH 解析后仍拒绝 ──
 
     #[test]
-    fn test_pwsh_args_no_noprofile_b17() {
+    fn pwsh_args_no_noprofile_b17() {
         // B17 防复发：-NoProfile 致 conda activate 失效
         //（win11 CondaError / win10 conda.bat 静默空转）——
         // 自动检测命中 pwsh 时，两条构建路径的 args 均不得含 -NoProfile
@@ -773,7 +773,7 @@ mod tests {
     // ── PTY-10：resolve_shell 回退顺序 + 白名单 PATH 解析后仍拒绝 ──
 
     #[test]
-    fn test_resolve_shell_fallback_order() {
+    fn resolve_shell_fallback_order() {
         let dir = tempfile::tempdir().unwrap();
 
         // 场景 1：只有 pwsh → 命中 pwsh（argv[0] + 集成脚本参数）
@@ -805,7 +805,7 @@ mod tests {
     }
 
     #[test]
-    fn test_allowlist_rejects_path_resolved_non_allowlisted() {
+    fn allowlist_rejects_path_resolved_non_allowlisted() {
         // 用户指定 shell 经 PATH 解析成功（文件真实存在）但非白名单 → 仍拒绝
         let dir = tempfile::tempdir().unwrap();
         fake_exe(dir.path(), "fake-shell.exe");
@@ -831,7 +831,7 @@ mod tests {
     // ── PTY-13③：which_full_path PATH 顺序与大小写边界 ──
 
     #[test]
-    fn test_which_full_path_first_match_in_path_order() {
+    fn which_full_path_first_match_in_path_order() {
         // PATH 多目录时返回第一个匹配目录的完整路径（目录顺序优先）
         let dir1 = tempfile::tempdir().unwrap();
         let dir2 = tempfile::tempdir().unwrap();
@@ -847,7 +847,7 @@ mod tests {
     }
 
     #[test]
-    fn test_which_full_path_case_sensitivity() {
+    fn which_full_path_case_sensitivity() {
         // 大小写边界：目录中文件名大小写与查询名不同
         let dir = tempfile::tempdir().unwrap();
         fake_exe(dir.path(), "PwSh.ExE");

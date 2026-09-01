@@ -59,7 +59,7 @@ pub(crate) fn parse_deepseek_balance(body: &serde_json::Value) -> Result<FetchOu
 }
 
 #[cfg(test)]
-mod tests {
+mod deepseek_tests {
     use super::*;
 
     fn parse(json: &str) -> Result<FetchOutcome, AppError> {

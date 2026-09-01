@@ -62,7 +62,7 @@ pub(crate) fn resolve_provider(cli_id: &str) -> Result<&'static dyn CliHistoryPr
 }
 
 #[cfg(test)]
-mod tests {
+mod provider_tests {
     use super::*;
 
     // ── 注册表 resolve（L1 新增：命中/未命中） ──

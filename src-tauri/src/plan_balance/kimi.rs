@@ -131,7 +131,7 @@ pub(crate) fn parse_kimi_usages(body: &serde_json::Value) -> Result<FetchOutcome
 }
 
 #[cfg(test)]
-mod tests {
+mod kimi_tests {
     use super::*;
 
     fn parse(json: &str) -> Result<FetchOutcome, AppError> {

@@ -186,7 +186,7 @@ pub(crate) async fn run_read_title(
 }
 
 #[cfg(test)]
-mod tests {
+mod agent_history_tests {
     use super::*;
     use crate::agent_history::claude::ScanRootGuard;
     use std::sync::atomic::{AtomicBool, Ordering};

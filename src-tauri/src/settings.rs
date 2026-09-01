@@ -82,13 +82,15 @@ pub(crate) fn save_settings_blocking(settings: serde_json::Value) -> Result<(), 
     let json = serde_json::to_string_pretty(&merged)?;
     // SEC-11：序列化后大小上限（含合并进现有文件的部分）
     if json.len() > MAX_PERSIST_BYTES {
-        return Err(AppError::Validation("保存设置失败: 数据超过 1MB 上限".into()));
+        return Err(AppError::Validation(
+            "保存设置失败: 数据超过 1MB 上限".into(),
+        ));
     }
-    let mut tmp =
-        NamedTempFile::new_in(&app_dir).map_err(|e| io_error("保存设置", &app_dir, e))?;
+    let mut tmp = NamedTempFile::new_in(&app_dir).map_err(|e| io_error("保存设置", &app_dir, e))?;
     tmp.write_all(json.as_bytes())
         .map_err(|e| io_error("保存设置", &settings_path, e))?;
-    tmp.flush().map_err(|e| io_error("保存设置", &settings_path, e))?;
+    tmp.flush()
+        .map_err(|e| io_error("保存设置", &settings_path, e))?;
     if settings_path.exists() {
         let bak = app_dir.join("settings.json.bak");
         if let Err(e) = std::fs::copy(&settings_path, &bak) {
@@ -165,7 +167,7 @@ pub async fn load_settings() -> Result<LoadResult<Option<serde_json::Value>>, Ap
 
 /// 验证设置加载/保存逻辑
 #[cfg(test)]
-mod tests {
+mod settings_tests {
     use super::*;
     use crate::app_dir::AppDataDirGuard;
 
@@ -570,7 +572,11 @@ mod tests {
         });
         run(save_settings(settings.clone())).unwrap();
         let loaded = run(load_settings()).unwrap();
-        assert_eq!(loaded.data, Some(settings), "backgroundTasks 段应完整往返一致");
+        assert_eq!(
+            loaded.data,
+            Some(settings),
+            "backgroundTasks 段应完整往返一致"
+        );
         assert!(!loaded.corrupted);
     }
 
@@ -586,7 +592,10 @@ mod tests {
         .unwrap_err();
         match err {
             AppError::Validation(msg) => {
-                assert!(msg.contains("白名单"), "旧 planBalance 键应提示白名单，实际: {msg}");
+                assert!(
+                    msg.contains("白名单"),
+                    "旧 planBalance 键应提示白名单，实际: {msg}"
+                );
             }
             other => panic!("旧 planBalance 键应返回 Validation，实际: {other:?}"),
         }
@@ -662,7 +671,7 @@ mod tests {
 
     /// 合并保留 existing 中 incoming 未涉及的 top-level 键
     #[test]
-    fn test_merge_preserves_foreign_keys() {
+    fn merge_preserves_foreign_keys() {
         let existing = serde_json::json!({ "terminalFontSize": 14, "editorFontSize": 16 });
         let incoming = serde_json::json!({ "keybindings": { "terminal.copy": "Ctrl+Alt+KeyC" } });
         let merged = merge_settings(existing, incoming);
@@ -673,7 +682,7 @@ mod tests {
 
     /// 合并时 incoming 覆盖 existing 的同名键
     #[test]
-    fn test_merge_overwrites_same_key() {
+    fn merge_overwrites_same_key() {
         let existing = serde_json::json!({ "a": 1, "b": 2 });
         let incoming = serde_json::json!({ "a": 99 });
         let merged = merge_settings(existing, incoming);
@@ -683,7 +692,7 @@ mod tests {
 
     /// existing 为 Null（文件缺失/损坏）时用 incoming 初始化
     #[test]
-    fn test_merge_null_existing_initializes_with_incoming() {
+    fn merge_null_existing_initializes_with_incoming() {
         let merged = merge_settings(
             serde_json::Value::Null,
             serde_json::json!({ "keybindings": {} }),
@@ -693,7 +702,7 @@ mod tests {
 
     /// incoming 非对象时整体替换（极端兜底）
     #[test]
-    fn test_merge_non_object_incoming_replaces() {
+    fn merge_non_object_incoming_replaces() {
         let existing = serde_json::json!({ "a": 1 });
         let incoming = serde_json::json!("scalar");
         let merged = merge_settings(existing, incoming);
@@ -702,7 +711,7 @@ mod tests {
 
     /// 嵌套 JSON 对象的浅合并保留未涉及键
     #[test]
-    fn te14_merge_preserves_nested_keys() {
+    fn merge_preserves_nested_keys() {
         let existing = serde_json::json!({
             "fontSize": 14,
             "keybindings": {

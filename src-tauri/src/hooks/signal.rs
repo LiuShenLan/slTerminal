@@ -135,7 +135,7 @@ pub(crate) fn process_signal_file_with(
 }
 
 #[cfg(test)]
-mod tests {
+mod signal_tests {
     use super::*;
 
     /// 合法完整 JSON → 返回 Some

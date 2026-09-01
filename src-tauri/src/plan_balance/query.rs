@@ -56,7 +56,7 @@ pub(crate) fn query_err(plan_id: &str, e: ureq::Error) -> AppError {
 }
 
 #[cfg(test)]
-mod tests {
+mod query_tests {
     use super::*;
 
     // ── normalize_base_url（4 例，F10；规格字面：仅小写 + 去尾斜杠，不加 trim） ──
