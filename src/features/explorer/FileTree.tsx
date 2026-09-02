@@ -33,6 +33,7 @@ import {
   CONTEXT_MENU_BORDER,
 } from "../../theme";
 import { confirmDialog } from "../../lib/ConfirmDialog";
+import { copyRelativePath } from "../../lib/copyRelativePath";
 import { basename } from "../../lib/path";
 import {
   IconChevronRight,
@@ -160,7 +161,10 @@ interface FileTreeProps {
   onDelete: (path: string) => void;
   onNewFile: (parentPath: string) => void;
   onNewFolder: (parentPath: string) => void;
-  rootPath?: string; // 项目根路径，用于根级空白区域右键创建文件/文件夹
+  /** 项目根路径——「复制相对路径」基准。与浏览根 rootPath 不同:rootPath 可为页面 cwd 子目录 */
+  projectRootPath?: string;
+  /** 文件树浏览根路径,用于根级空白区域右键创建文件/文件夹 */
+  rootPath?: string;
   // 选中模型（由 ExplorerPanel 管理）
   selectedPath: string | null;
   onSelect: (path: string | null) => void;
@@ -365,6 +369,7 @@ export const FileTree: React.FC<FileTreeProps> = ({
   onDelete,
   onNewFile,
   onNewFolder,
+  projectRootPath,
   rootPath,
   selectedPath,
   onSelect,
@@ -399,6 +404,10 @@ export const FileTree: React.FC<FileTreeProps> = ({
         y: e.clientY,
         items: [
           {
+            label: "复制相对路径",
+            action: () => copyRelativePath(node.entry.path, projectRootPath),
+          },
+          {
             label: "打开",
             action: () => onOpenFile(node.entry.path),
           },
@@ -430,7 +439,7 @@ export const FileTree: React.FC<FileTreeProps> = ({
         ],
       });
     },
-    [onOpenFile, onOpenInTerminal, onDelete, onRenameStart],
+    [onOpenFile, onOpenInTerminal, onDelete, onRenameStart, projectRootPath],
   );
 
   /** 构建文件夹右键菜单 */
@@ -443,6 +452,10 @@ export const FileTree: React.FC<FileTreeProps> = ({
         x: e.clientX,
         y: e.clientY,
         items: [
+          {
+            label: "复制相对路径",
+            action: () => copyRelativePath(node.entry.path, projectRootPath),
+          },
           {
             label: node.expanded ? "折叠" : "展开",
             action: () => onToggleExpand(node.entry.path),
@@ -483,7 +496,7 @@ export const FileTree: React.FC<FileTreeProps> = ({
         ],
       });
     },
-    [onToggleExpand, onOpenInTerminal, onDelete, onRenameStart],
+    [onToggleExpand, onOpenInTerminal, onDelete, onRenameStart, projectRootPath],
   );
 
   // rename input ref——读取用户实际输入值（renameValue prop 仅作 defaultValue，不追踪变化）

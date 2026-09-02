@@ -500,6 +500,7 @@ export const ExplorerPanel: React.FC = () => {
           ) : (
             <FileTree
               rootPath={rootPath}
+              projectRootPath={projectRootPath ?? undefined}
               nodes={rootNodes}
               depth={0}
               gitStatusMap={gitStatusMap}
