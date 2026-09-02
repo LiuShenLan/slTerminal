@@ -13,7 +13,8 @@
  * - 用例 E：sessionRefresh 频率改 2s → Node 侧往 SLTERM_CLAUDE_PROJECTS_DIR 副本写
  *   归属 E2E 项目的新会话 jsonl → 真实 tick 扫描 → 导航树历史节点计数 pill N+1
  *   （全程无手动刷新点击——调度器定时执行体驱动，规格 §1 单一执行体）。
- * - 用例 F：禁用 sessionRefresh → 新会话不自动出现；重新启用 → 立即一轮 → 计数 +1。
+ * - 用例 F：禁用 sessionRefresh → 新会话不自动出现；重新启用 → 立即一轮 → 计数 +1
+ *   （基线取 pill 收敛值——E 删会话后遗留 tick 重扫未落地会读到陈旧值，R2a 竞态修复）。
  * - 用例 G（tick 失败静默）不写 spec：无可控故障注入通道（需后端扫描故障注入，
  *   无沙箱内通道）——降级为调度器 L2 用例 + 人工观察，豁免登记由 Stage 06 DOC-02
  *   完成（checklist E2E-03）。
@@ -298,6 +299,37 @@ async function readHistoryCountPill(): Promise<number | null> {
     }
     return null;
   }, projName);
+}
+
+/**
+ * 等待历史计数 pill 收敛到稳定值（R2a 基线竞态修复）。
+ * E 用例 finally 删除会话 601 后，E 结束→F 开始仅 ~200ms（< 遗留 scheduler 的 2s
+ * tick 周期），「删除后重扫」未落地，pill 仍持陈旧值——若此时直接取基线会得到错误
+ * n，启用后断言 n+1 永不可达。收敛判据：轮询间隔约 1s、同值持续 ≥3s（覆盖一个
+ * tick 周期 + 扫描余量）才判收敛，总上限 6s——「连续两次相同」不足以排除陈旧值
+ * （两次读取可都落在重扫前）。超时抛错（基线不可靠则后续断言必败，提前报因）。
+ */
+async function waitForHistoryPillSettled(timeoutMs = 6000): Promise<number> {
+  const start = Date.now();
+  let runValue: number | null = null;
+  let runStart = 0;
+  while (Date.now() - start < timeoutMs) {
+    const v = await readHistoryCountPill();
+    if (v !== null && v > 0) {
+      if (runValue !== null && v === runValue) {
+        if (Date.now() - runStart >= 3000) return v; // 同值持续 ≥3s → 收敛
+      } else {
+        runValue = v;
+        runStart = Date.now();
+      }
+    } else {
+      runValue = null; // 节点未渲染/读不到 → 重置连续段
+    }
+    await browser.pause(1000);
+  }
+  throw new Error(
+    `历史计数 pill 未在 ${timeoutMs}ms 内收敛（陈旧基线未落地重扫，基线不可靠）`,
+  );
 }
 
 /**
@@ -639,19 +671,11 @@ describe("后台定时任务 (F12, E2E-02/E2E-03)", () => {
     try {
       await waitForWorkspaceReady();
       await openNavView();
-      // E2E 项目由 E 用例创建（同 spec 内 store 累积）——等其计数 pill 就绪
-      let n = 0;
-      await browser.waitUntil(
-        async () => {
-          const v = await readHistoryCountPill();
-          if (v !== null && v > 0) {
-            n = v;
-            return true;
-          }
-          return false;
-        },
-        { timeout: 20000, timeoutMsg: "E2E 项目历史计数 pill 未出现（依赖 E 用例前置）" },
-      );
+      // E2E 项目由 E 用例创建（同 spec 内 store 累积）。基线必须取 pill 收敛值
+      // （R2a）：E 用例 finally 删除 601 后遗留 scheduler 2s tick 的重扫尚未落地
+      // （E 结束→F 开始仅 ~200ms），立即读会命中陈旧值 5（真实 4）→ 基线错误 →
+      // 启用后 n+1 断言永不可达。收敛后 n = 4（fixture 归属会话数，601 已删）。
+      const n = await waitForHistoryPillSettled();
 
       // 1. 禁用 sessionRefresh（取消勾选 → applyConfig 停 timer）→ 磁盘 enabled=false
       await openSettingsCenter();
@@ -691,6 +715,7 @@ describe("后台定时任务 (F12, E2E-02/E2E-03)", () => {
         "backgroundTasks.sessionRefresh.enabled 未落盘回 true",
       );
       await waitForCheckboxState("sessionRefresh", true);
+      // 禁用→启用立即一轮扫描 = 4 fixture + 602 = 5 = n+1（基线 n 已收敛为 4）
       await browser.waitUntil(
         async () => (await readHistoryCountPill()) === n + 1,
         { timeout: 20000, timeoutMsg: `重新启用后历史计数 pill 未变为 ${n + 1}` },
