@@ -7,7 +7,7 @@
 // - 新增/删除页面后既有页面回调引用不变
 //
 // 策略：mock PageDockviewHost 整模块（Workspace.tsx 尾部 re-export 自该模块，
-// mock 必须同步提供 createRightHeader/createGetContextMenu/applyRename），
+// mock 必须同步提供 createRightHeader/createTabMenuItems/applyRename），
 // 捕获每个 pageId 最近一次收到的 onReady/onLayoutChange 引用做 identity 断言。
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
@@ -42,7 +42,7 @@ vi.mock("../workspace/PageDockviewHost", () => ({
   default: mocks.MockPageDockview,
   // Workspace.tsx 尾部 `export { ... } from "./PageDockviewHost"`——mock 必须提供
   createRightHeader: vi.fn(),
-  createGetContextMenu: vi.fn(),
+  createTabMenuItems: vi.fn(),
   applyRename: vi.fn(),
 }));
 

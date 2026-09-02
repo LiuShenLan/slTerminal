@@ -7,13 +7,15 @@
 // - Watermark 按钮 addPanel（终端 id 递增、title 由 titleManager 分配）
 // - RightHeader "+" 按钮 addPanel（同 group）
 // - onSaveAs（slterm:file-saved-as 事件）→ handleSaveAs → 重算标题 → 真实 setTitle
+// - 页签右键菜单（自研 TabMenuPopup）：对 .dv-tab 真实派发 contextmenu 驱动生产链路
+//   （dockview 8.1 free core 无 contextMenuService，不依赖探针）——菜单项/坐标/关闭
+//   手势/复制相对路径等断言
 //
-// 注：jsdom 中真实 Dockview 的 addPanel/setTitle/fromJSON 均可用（探针验证）。
+// 注：jsdom 中真实 Dockview 的 addPanel/setTitle/fromJSON 均可用（集成验证）。
 
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from "vitest";
 import { mockIPC, clearMocks } from "@tauri-apps/api/mocks";
 import React from "react";
-import * as ReactDOM from "react-dom/client";
 import { render, act, fireEvent, cleanup } from "@testing-library/react";
 
 // Mock @xterm/xterm — xterm.js 6.1+ 渲染器初始化在 jsdom 中抛异常（同 workspace 测试）
@@ -41,6 +43,23 @@ vi.mock("@xterm/addon-fit", () => ({
     this.dispose = vi.fn();
     return this;
   }),
+}));
+
+// ─── Hoisted clipboard mock（「复制相对路径」用例断言写剪贴板）───
+const mocks = vi.hoisted(() => {
+  const mockWriteText = vi.fn();
+  return {
+    mockWriteText,
+    resetClipboard() {
+      mockWriteText.mockReset();
+      mockWriteText.mockResolvedValue(undefined);
+    },
+  };
+});
+
+vi.mock("../ipc/clipboard", () => ({
+  writeText: mocks.mockWriteText,
+  readText: vi.fn().mockResolvedValue(""),
 }));
 
 // 模块级 stub 须 afterAll 恢复——防同 worker 后续文件被污染（TQ-A-02）
@@ -142,6 +161,7 @@ beforeEach(() => {
   resetTerminalPanelSeq();
   // TQ-COV-08: 右键菜单「重命名」disabled 判据经 TerminalRegistry 会话状态
   TerminalRegistry._reset();
+  mocks.resetClipboard();
 });
 
 afterEach(() => {
@@ -149,8 +169,8 @@ afterEach(() => {
   // 污染按钮查询与全局事件监听，必须显式清理
   cleanup();
   clearMocks();
-  // TQ-COV-08: 清掉 fake 右键菜单残留的 body 挂载节点（未点击关闭项的用例兜底）
-  document.querySelectorAll("[data-menu='host']").forEach((el) => el.remove());
+  // 注：页签菜单自研渲染于容器内（无 body 挂载残留），cleanup() 已随组件卸载
+  // 清除其 document/window 关闭监听
 });
 
 /** 等待 Dockview 渲染 settle（onReady → watermark/header 渲染为异步） */
@@ -203,55 +223,40 @@ function clickButton(container: HTMLElement, text: string): void {
   fireEvent.click(btns[btns.length - 1]);
 }
 
-// ---- TQ-COV-08：fake contextMenuService（测试探针，仅本文件使用）----
+// ---- 页签右键菜单（自研真触发）----
 //
-// dockview-core 8.1.0 的 ContextMenu 模块是 enterprise 实现（free core 不注册
-// contextMenuService——`api.component._moduleRegistry._services` 无该项），真实
-// DockviewReact 的页签 contextmenu 监听因 `?.` 静默短路，jsdom 中右键不出菜单。
-// 本探针在 live DockviewComponent 上安装最小 contextMenuService：右键页签 →
-// 真实 `getTabContextMenuItems` 构建菜单项 → 真实 TabContextMenuItem 组件渲染到
-// body（照 dockview-react ReactContextMenuItemPart 的 props 形态：close +
-// componentProps）→ 点击驱动真实 action（新建终端/重命名/关闭/关闭其他/关闭全部）。
-// 由此覆盖生产右键菜单全链路（openRenameDialog → TerminalRenameDialog →
-// handleRenameConfirm → applyRename），不改动生产代码。
+// dockview-core 8.1.0 的 ContextMenu 是 enterprise 模块（free core 不注册
+// contextMenuService，「getTabContextMenuItems」路径恒短路）——生产右键菜单由
+// DefaultTab onContextMenu → PageDockview 状态 → TabMenuPopup 自绘（见
+// workspace/CLAUDE.md）。本测试对 .dv-tab 真实派发 contextmenu 驱动生产链路，
+// 无需 fake service 探针：菜单渲染于 PageDockview 容器内，[role="menuitem"] 查询。
 
-/** 安装 fake contextMenuService 并返回菜单项查询函数 */
-function installFakeContextMenu(api: AnyApi): () => Element[] {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const comp = api.component as any;
-  comp._moduleRegistry._services.contextMenuService = {
-    show: (panel: unknown, group: unknown, event: unknown) => {
-      const menuHost = document.createElement("div");
-      menuHost.dataset.menu = "host";
-      document.body.appendChild(menuHost);
-      const root = ReactDOM.createRoot(menuHost);
-      const items = comp.options.getTabContextMenuItems({ panel, group, api: comp.api, event });
-      const els: React.ReactNode[] = [];
-      let key = 0;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      for (const item of items as any[]) {
-        if (item === "separator") continue;
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const C = item.component as React.ComponentType<any>;
-        els.push(React.createElement(C, {
-          key: key++,
-          panel, group, api: comp.api,
-          close: () => root.unmount(),
-          componentProps: item.componentProps,
-        }));
-      }
-      root.render(React.createElement(React.Fragment, null, els));
-    },
-  };
-  return () => Array.from(document.body.querySelectorAll("[role='menuitem']"));
+/** 查询当前打开的页签右键菜单项（自研 TabMenuPopup 渲染于 dockview 容器内） */
+function getMenuItemsIn(container: HTMLElement): () => Element[] {
+  return () => Array.from(container.querySelectorAll("[role='menuitem']"));
 }
 
-/** 右键第一个页签触发菜单（真实 contextmenu 事件 → 真实 getTabContextMenuItems） */
-async function openTabContextMenu(): Promise<void> {
+/** 右键第一个页签（真实 contextmenu 事件 → DefaultTab onContextMenu → TabMenuPopup）。
+    坐标可传入，供菜单 fixed 定位断言。
+    注：右键派发目标必须是 DefaultTab 内容根——.dv-tab 是 DefaultTab div 的父级，
+    对 .dv-tab 自身派发冒泡向上不经过 DefaultTab div（生产用户点击命中的是页签内容区，
+    即 data-e2e=tab-close 按钮的父级） */
+async function openTabContextMenuAt(x = 120, y = 80, tabIndex = 0): Promise<void> {
   await act(async () => {
-    fireEvent.contextMenu(document.querySelector(".dv-tab") as Element);
+    const tab = document.querySelectorAll(".dv-tab")[tabIndex] as Element | undefined;
+    const closeBtn = tab?.querySelector("[data-e2e^='tab-close']");
+    const target = (closeBtn?.parentElement ?? tab) as Element;
+    fireEvent.contextMenu(target, {
+      clientX: x,
+      clientY: y,
+    });
     await new Promise((r) => setTimeout(r, 0));
   });
+}
+
+/** 右键第一个页签（默认坐标） */
+async function openTabContextMenu(): Promise<void> {
+  await openTabContextMenuAt();
 }
 
 // FileIcon 独有特征（features/explorer/FileIcon.tsx 自绘坐标——区分于
@@ -446,10 +451,10 @@ describe("PageDockview 真实组件", () => {
   describe("页签右键菜单（TQ-COV-08）", () => {
     it("右键终端页签 → 真实菜单构建渲染 5 项（新建终端/重命名/关闭/关闭其他/关闭全部）", async () => {
       mockIPC(() => null);
-      const { api, container } = await renderDock();
+      const { container } = await renderDock();
       await act(async () => { clickButton(container, "新建终端"); });
       await settle();
-      const getItems = installFakeContextMenu(api);
+      const getItems = getMenuItemsIn(container);
       await openTabContextMenu();
       // 用户可见：菜单项渲染于 DOM（7 项结构 minus 分隔线）
       expect(getItems().map((m) => m.textContent)).toEqual([
@@ -463,7 +468,7 @@ describe("PageDockview 真实组件", () => {
       await act(async () => { clickButton(container, "新建终端"); });
       await settle();
       const panelId = `terminal-${PAGE_ID}-0`;
-      const getItems = installFakeContextMenu(api);
+      const getItems = getMenuItemsIn(container);
       await openTabContextMenu();
       const rename = getItems().find((m) => m.textContent === "重命名") as Element;
       await act(async () => { fireEvent.click(rename); });
@@ -504,7 +509,7 @@ describe("PageDockview 真实组件", () => {
       });
       const panelId = "terminal-page-dock-0";
       expect(api.getPanel(panelId).api.title).toBe("我的终端");
-      const getItems = installFakeContextMenu(api);
+      const getItems = getMenuItemsIn(container);
       await openTabContextMenu();
       const rename = getItems().find((m) => m.textContent === "重命名") as Element;
       await act(async () => { fireEvent.click(rename); });
@@ -532,8 +537,8 @@ describe("PageDockview 真实组件", () => {
 
     it("点击「关闭」→ 右键面板关闭（其余保留）", async () => {
       mockIPC(() => null);
-      const { api } = await twoTerminals();
-      const getItems = installFakeContextMenu(api);
+      const { api, container } = await twoTerminals();
+      const getItems = getMenuItemsIn(container);
       await openTabContextMenu();
       const close = getItems().find((m) => m.textContent === "关闭") as Element;
       await act(async () => { fireEvent.click(close); });
@@ -544,8 +549,8 @@ describe("PageDockview 真实组件", () => {
 
     it("点击「关闭其他」→ 仅保留右键面板", async () => {
       mockIPC(() => null);
-      const { api } = await twoTerminals();
-      const getItems = installFakeContextMenu(api);
+      const { api, container } = await twoTerminals();
+      const getItems = getMenuItemsIn(container);
       await openTabContextMenu();
       const closeOthers = getItems().find((m) => m.textContent === "关闭其他") as Element;
       await act(async () => { fireEvent.click(closeOthers); });
@@ -556,7 +561,7 @@ describe("PageDockview 真实组件", () => {
     it("点击「关闭全部」→ 面板清空 + Watermark 空态回归", async () => {
       mockIPC(() => null);
       const { api, container } = await twoTerminals();
-      const getItems = installFakeContextMenu(api);
+      const getItems = getMenuItemsIn(container);
       await openTabContextMenu();
       const closeAll = getItems().find((m) => m.textContent === "关闭全部") as Element;
       await act(async () => { fireEvent.click(closeAll); });
@@ -568,10 +573,10 @@ describe("PageDockview 真实组件", () => {
 
     it("菜单项 hover → SECONDARY_BG 底；危险项（关闭类）ERROR_FG 字（UI-802）", async () => {
       mockIPC(() => null);
-      const { api, container } = await renderDock();
+      const { container } = await renderDock();
       await act(async () => { clickButton(container, "新建终端"); });
       await settle();
-      const getItems = installFakeContextMenu(api);
+      const getItems = getMenuItemsIn(container);
       await openTabContextMenu();
       const newTerminal = getItems().find((m) => m.textContent === "新建终端") as HTMLElement;
       // 用户可见：hover 菜单项 → ui.secondaryBg 底（#222227 → rgb(34, 34, 39)）
@@ -591,7 +596,7 @@ describe("PageDockview 真实组件", () => {
       await act(async () => { clickButton(container, "新建终端"); });
       await settle();
       const panelId = `terminal-${PAGE_ID}-0`;
-      const getItems = installFakeContextMenu(api);
+      const getItems = getMenuItemsIn(container);
       await openTabContextMenu();
       const rename = getItems().find((m) => m.textContent === "重命名") as Element;
       await act(async () => { fireEvent.click(rename); });
@@ -614,7 +619,7 @@ describe("PageDockview 真实组件", () => {
 
     it("claude 运行中（agentSession 存在）→ 重命名项 disabled：置灰 + 点击不弹窗", async () => {
       mockIPC(() => null);
-      const { api, container } = await renderDock();
+      const { container } = await renderDock();
       await act(async () => { clickButton(container, "新建终端"); });
       await settle();
       const panelId = `terminal-${PAGE_ID}-0`;
@@ -622,7 +627,7 @@ describe("PageDockview 真实组件", () => {
       TerminalRegistry.register(panelId, {} as any);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       TerminalRegistry.setAgentSession(panelId, { sessionId: "s1" } as any);
-      const getItems = installFakeContextMenu(api);
+      const getItems = getMenuItemsIn(container);
       await openTabContextMenu();
       const rename = getItems().find((m) => m.textContent === "重命名") as HTMLElement;
       // 用户可见：disabled 置灰样式（opacity 0.4 + pointerEvents none）
@@ -632,6 +637,96 @@ describe("PageDockview 真实组件", () => {
       await settle();
       // 点击无响应：弹窗不出现
       expect(container.querySelector("input")).toBeNull();
+    });
+
+    it("恢复编辑器布局 → 右键文件页签菜单含「复制相对路径」（无重命名），点击 → 剪贴板相对路径", async () => {
+      mockIPC(() => null);
+      const { container } = await renderDock({ savedLayout: EDITOR_LAYOUT });
+      // renderDock 默认 rootPath "C:\\root"，filePath "C:\\root\\a.txt" → 相对 "a.txt"
+      // （反斜杠经 relativePath 归一化）
+      const getItems = getMenuItemsIn(container);
+      await openTabContextMenu();
+      expect(getItems().map((m) => m.textContent)).toEqual([
+        "复制相对路径", "新建终端", "关闭", "关闭其他", "关闭全部",
+      ]);
+      const copy = getItems().find((m) => m.textContent === "复制相对路径") as Element;
+      await act(async () => { fireEvent.click(copy); });
+      expect(mocks.mockWriteText).toHaveBeenCalledTimes(1);
+      expect(mocks.mockWriteText).toHaveBeenCalledWith("a.txt");
+    });
+
+    it("文件页签目标在项目根外 → 点击「复制相对路径」兜底写完整绝对路径", async () => {
+      mockIPC(() => null);
+      const outsideLayout: AnyApi = {
+        ...EDITOR_LAYOUT,
+        panels: {
+          "editor-1": {
+            ...EDITOR_LAYOUT.panels["editor-1"],
+            params: { panelId: "editor-1", filePath: "C:/outside/b.txt" },
+          },
+        },
+      };
+      const { container } = await renderDock({ savedLayout: outsideLayout });
+      const getItems = getMenuItemsIn(container);
+      await openTabContextMenu();
+      const copy = getItems().find((m) => m.textContent === "复制相对路径") as Element;
+      await act(async () => { fireEvent.click(copy); });
+      expect(mocks.mockWriteText).toHaveBeenCalledWith("C:/outside/b.txt");
+    });
+
+    it("菜单 fixed 定位在右键坐标处（容器 + left/top + zIndex）", async () => {
+      mockIPC(() => null);
+      const { container } = await renderDock();
+      await act(async () => { clickButton(container, "新建终端"); });
+      await settle();
+      await openTabContextMenuAt(333, 222);
+      const menu = container.querySelector("[data-e2e='tab-menu']") as HTMLElement;
+      expect(menu).toBeTruthy();
+      expect(menu.style.position).toBe("fixed");
+      expect(menu.style.left).toBe("333px");
+      expect(menu.style.top).toBe("222px");
+      expect(menu.style.zIndex).toBe("1000");
+    });
+
+    it("点击菜单外区域 → 菜单关闭（document mousedown）", async () => {
+      mockIPC(() => null);
+      const { container } = await renderDock();
+      await act(async () => { clickButton(container, "新建终端"); });
+      await settle();
+      await openTabContextMenu();
+      expect(container.querySelector("[data-e2e='tab-menu']")).toBeTruthy();
+      // 点在菜单容器外的 root（PageDockview 根是菜单容器祖先，contains 不成立）
+      await act(async () => { fireEvent.mouseDown(container); });
+      expect(container.querySelector("[data-e2e='tab-menu']")).toBeNull();
+    });
+
+    it("Escape → 菜单关闭", async () => {
+      mockIPC(() => null);
+      const { container } = await renderDock();
+      await act(async () => { clickButton(container, "新建终端"); });
+      await settle();
+      await openTabContextMenu();
+      expect(container.querySelector("[data-e2e='tab-menu']")).toBeTruthy();
+      await act(async () => {
+        fireEvent.keyDown(window, { key: "Escape" });
+      });
+      expect(container.querySelector("[data-e2e='tab-menu']")).toBeNull();
+    });
+
+    it("不关闭旧菜单直接右键另一页签 → 菜单重开且无残留（单份渲染）", async () => {
+      mockIPC(() => null);
+      const { api, container } = await twoTerminals();
+      expect(api.panels.length).toBe(2);
+      const getItems = getMenuItemsIn(container);
+      await openTabContextMenuAt(40, 40, 0);
+      expect(getItems().length).toBe(5);
+      // 直接右键第二个页签（不点关闭）——旧菜单被替换而非叠加
+      await openTabContextMenuAt(220, 160, 1);
+      expect(container.querySelectorAll("[data-e2e='tab-menu']").length).toBe(1);
+      expect(getItems().length).toBe(5);
+      const menu = container.querySelector("[data-e2e='tab-menu']") as HTMLElement;
+      expect(menu.style.left).toBe("220px");
+      expect(menu.style.top).toBe("160px");
     });
   });
 

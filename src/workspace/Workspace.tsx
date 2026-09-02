@@ -322,5 +322,5 @@ const Workspace: React.FC = () => {
 
 export default Workspace;
 
-// 向后兼容：测试从 Workspace.tsx 导入 createRightHeader / createGetContextMenu
-export { createRightHeader, createGetContextMenu, applyRename } from "./PageDockviewHost";
+// 向后兼容：测试从 Workspace.tsx 导入 createRightHeader / createTabMenuItems
+export { createRightHeader, createTabMenuItems, applyRename } from "./PageDockviewHost";

@@ -34,6 +34,7 @@ L2 前端单元/集成测试集中目录。本文件只记录测试架构层面�
 - **FileTree 独立渲染**：直接传 `nodes` / `gitStatusMap` props，不依赖 IPC。
 - **useXterm**：编排层，需 mock 6 个子 hook 才能隔离测试（`useTerminalInstance` / `usePtyOutput` / `usePtyResize` / `useClipboardHandler` / `useCommandDetection` / webgl）。共享工厂见 `helpers/xterm-test-utils.ts`。
 - **右键菜单**：`fireEvent.contextMenu` 触发；StrictMode 双渲染会导致重复元素，取 `getAllByText` 首个。
+- **页签右键菜单（自研，无探针）**：目标 = `.dv-tab` 内 `data-e2e="tab-close-*"` 按钮的父级（DefaultTab 内容根——它是 `.dv-tab` 的子级，对 `.dv-tab` 自身派发冒泡不经过 DefaultTab div）；菜单渲染于容器内，`[role="menuitem"]` 查询。dockview 8.1 free core 无 contextMenuService，勿再引入 fake service 探针（workspace/CLAUDE.md「页签右键菜单自研」）。
 - **fake timers**：`fs-event` 200ms / `file-saved` 300ms debounce 需 fake timers 跨过。
 
 ## 编号登记

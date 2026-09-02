@@ -1,7 +1,7 @@
 // workspace-header-actions.test.tsx — 分屏 + 按钮 & 右键菜单 addPanel 行为测试
 //
 // 验证：非聚焦分屏点击 + 按钮或右键"新建终端"时，新面板创建在点击的分屏
-// 而非聚焦分屏。直接测试 createRightHeader/createGetContextMenu 工厂函数，
+// 而非聚焦分屏。直接测试 createRightHeader/createTabMenuItems 工厂函数，
 // 不渲染完整 Dockview 树。
 //
 // React StrictMode 双渲染导致 getByText/getByTitle 找到多个元素，
@@ -11,12 +11,30 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import React from "react";
 import { render, fireEvent, within, screen } from "@testing-library/react";
+
+// ─── Hoisted clipboard mock（「复制相对路径」用例断言写剪贴板）───
+const mocks = vi.hoisted(() => {
+  const mockWriteText = vi.fn();
+  return {
+    mockWriteText,
+    resetClipboard() {
+      mockWriteText.mockReset();
+      mockWriteText.mockResolvedValue(undefined);
+    },
+  };
+});
+
+vi.mock("../ipc/clipboard", () => ({
+  writeText: mocks.mockWriteText,
+  readText: vi.fn().mockResolvedValue(""),
+}));
+
 import { titleManager } from "../workspace/titleManager";
 import { TerminalRegistry } from "../panels/terminal/TerminalRegistry";
 import { DIM_FG } from "../theme";
 import {
   createRightHeader,
-  createGetContextMenu,
+  createTabMenuItems,
 } from "../workspace/Workspace";
 import { createWatermark } from "../workspace/PageDockviewHost";
 
@@ -78,6 +96,7 @@ function renderHeader(pageId: string, cwd: string, groupId: string) {
 beforeEach(() => {
   titleManager.reset();
   TerminalRegistry._reset();
+  mocks.resetClipboard();
 });
 
 // ============================================================
@@ -187,36 +206,45 @@ describe("createRightHeader", () => {
 });
 
 // ============================================================
-// createGetContextMenu — 右键菜单"新建终端"
+// createTabMenuItems — 右键菜单"新建终端"
 // ============================================================
 
-describe("createGetContextMenu", () => {
+describe("createTabMenuItems", () => {
   function callMenu(
     pageId: string,
     groupId: string,
-    options?: { panelComponent?: string; apiSpy?: ReturnType<typeof vi.fn> },
+    options?: {
+      panelComponent?: string;
+      apiSpy?: ReturnType<typeof vi.fn>;
+      /** 文件页签参数（params.filePath 判文件型） */
+      filePath?: string;
+      /** 工厂第 4 参（项目根,「复制相对路径」基准） */
+      rootPath?: string;
+    },
   ) {
     const onRenameRequestSpy = vi.fn();
-    const getMenu = createGetContextMenu(
-      makeNextPanelId(pageId), pageId, onRenameRequestSpy,
-    );
     const addPanelSpy = options?.apiSpy ?? vi.fn();
     const mockGroup = makeFakeGroup(groupId);
-    // fake 面板：id 与 TerminalRegistry 种子键一致；view.contentComponent 判终端
+    // 自研菜单形态：工厂收 (nextPanelId, pageId, onRenameRequest, getApi, projectRootPath)，
+    // 返回 (panel) => items 构建器（getApi 供「新建终端」action 取 dockview api）
+    const getMenu = createTabMenuItems(
+      makeNextPanelId(pageId), pageId, onRenameRequestSpy,
+      () => ({ addPanel: addPanelSpy }) as any, options?.rootPath,
+    );
+    // fake 面板：id 与 TerminalRegistry 种子键一致；view.contentComponent 判终端；
+    // api.group 供 referenceGroup/关闭族（组快照取自右键传入面板结构）
     const fakePanel = {
       id: `terminal-${pageId}-0`,
       title: "terminal-0",
-      params: {},
+      params: options?.filePath ? { filePath: options.filePath } : {},
       view: { contentComponent: options?.panelComponent ?? "terminal" },
-      api: { setTitle: vi.fn(), updateParameters: vi.fn() },
+      api: {
+        setTitle: vi.fn(), updateParameters: vi.fn(),
+        close: vi.fn(), group: mockGroup,
+      },
     };
 
-    const items = getMenu({
-      panel: fakePanel as any,
-      group: mockGroup as any,
-      api: { addPanel: addPanelSpy } as any,
-      event: new MouseEvent("contextmenu"),
-    });
+    const items = getMenu(fakePanel as any);
 
     const newTerminalItem = items.find(
       (item) => typeof item === "object" && item.label === "新建终端",
@@ -267,9 +295,9 @@ describe("createGetContextMenu", () => {
     expect(items[1]).toBe("separator");
     expect((items[2] as any).label).toBe("重命名");
     expect(items[3]).toBe("separator");
-    expect((items[4] as any).componentProps).toMatchObject({ label: "关闭", danger: true });
-    expect((items[5] as any).componentProps).toMatchObject({ label: "关闭其他", danger: true });
-    expect((items[6] as any).componentProps).toMatchObject({ label: "关闭全部", danger: true });
+    expect((items[4] as any)).toMatchObject({ label: "关闭", danger: true });
+    expect((items[5] as any)).toMatchObject({ label: "关闭其他", danger: true });
+    expect((items[6] as any)).toMatchObject({ label: "关闭全部", danger: true });
   });
 
   it("C6: 非终端面板菜单无重命名项（结构保持 5 项）", () => {
@@ -278,9 +306,9 @@ describe("createGetContextMenu", () => {
     });
     expect(renameItem).toBeUndefined();
     expect(items).toHaveLength(5);
-    expect((items[2] as any).componentProps).toMatchObject({ label: "关闭", danger: true });
-    expect((items[3] as any).componentProps).toMatchObject({ label: "关闭其他", danger: true });
-    expect((items[4] as any).componentProps).toMatchObject({ label: "关闭全部", danger: true });
+    expect((items[2] as any)).toMatchObject({ label: "关闭", danger: true });
+    expect((items[3] as any)).toMatchObject({ label: "关闭其他", danger: true });
+    expect((items[4] as any)).toMatchObject({ label: "关闭全部", danger: true });
   });
 
   it("C7: 重命名项 action 调 onRenameRequest(panel)", () => {
@@ -314,7 +342,9 @@ describe("createGetContextMenu", () => {
     // FE-04 回归：nextPanelId() 延迟到「新建终端」action 执行时才分配——
     // 右键弹菜单（构建菜单）不点击不消耗编号，两次构建后再点仍从 terminal-p1-0 起
     const nextId = makeNextPanelId("p1");
-    const getMenu = createGetContextMenu(nextId, "p1", vi.fn());
+    const getMenu = createTabMenuItems(
+      nextId, "p1", vi.fn(), () => ({ addPanel: addPanelSpy }) as any,
+    );
     const addPanelSpy = vi.fn();
     const mockGroup = makeFakeGroup("group-alpha");
     const fakePanel = {
@@ -322,20 +352,17 @@ describe("createGetContextMenu", () => {
       title: "terminal-0",
       params: {},
       view: { contentComponent: "terminal" },
-      api: { setTitle: vi.fn(), updateParameters: vi.fn() },
-    };
-    const menuParams = {
-      panel: fakePanel as any,
-      group: mockGroup as any,
-      api: { addPanel: addPanelSpy } as any,
-      event: new MouseEvent("contextmenu"),
+      api: {
+        setTitle: vi.fn(), updateParameters: vi.fn(),
+        close: vi.fn(), group: mockGroup,
+      },
     };
     const findNewTerminal = (items: ReturnType<typeof getMenu>) =>
       items.find((item) => typeof item === "object" && item.label === "新建终端") as any;
 
     // 连续两次构建菜单（右键弹菜单但不点击）
-    const firstItems = getMenu(menuParams);
-    const secondItems = getMenu(menuParams);
+    const firstItems = getMenu(fakePanel as any);
+    const secondItems = getMenu(fakePanel as any);
 
     // 执行第二次构建的菜单——编号不因两次构建而跳号
     findNewTerminal(secondItems).action();
@@ -347,6 +374,74 @@ describe("createGetContextMenu", () => {
     findNewTerminal(firstItems).action();
     expect(addPanelSpy).toHaveBeenCalledTimes(2);
     expect(addPanelSpy.mock.calls[1][0].id).toBe("terminal-p1-1");
+  });
+
+  it("C12: 文件页签右键菜单结构——头部「复制相对路径」+separator，其余项保持", () => {
+    const { items } = callMenu("p1", "group-alpha", {
+      panelComponent: "editor",
+      filePath: "C:/proj/src/a.ts",
+      rootPath: "C:/proj",
+    });
+    // 文件结构：[复制相对路径, separator, 新建终端, separator, 关闭, 关闭其他, 关闭全部]
+    expect(items).toHaveLength(7);
+    expect((items[0] as any)).toMatchObject({ label: "复制相对路径" });
+    expect(items[1]).toBe("separator");
+    expect((items[2] as any).label).toBe("新建终端");
+    expect(items[3]).toBe("separator");
+    expect((items[4] as any)).toMatchObject({ label: "关闭", danger: true });
+    expect((items[5] as any)).toMatchObject({ label: "关闭其他", danger: true });
+    expect((items[6] as any)).toMatchObject({ label: "关闭全部", danger: true });
+  });
+
+  it("C13: 点击「复制相对路径」→ writeText(相对项目根路径)", () => {
+    const { items } = callMenu("p1", "group-alpha", {
+      panelComponent: "editor",
+      filePath: "C:/proj/src/a.ts",
+      rootPath: "C:/proj",
+    });
+    (items[0] as any).action();
+    expect(mocks.mockWriteText).toHaveBeenCalledTimes(1);
+    expect(mocks.mockWriteText).toHaveBeenCalledWith("src/a.ts");
+  });
+
+  it("C14: 文件在项目根外 → 点击兜底 writeText(完整绝对路径)", () => {
+    const { items } = callMenu("p1", "group-alpha", {
+      panelComponent: "gitshow",
+      filePath: "C:/else/a.ts",
+      rootPath: "C:/proj",
+    });
+    (items[0] as any).action();
+    expect(mocks.mockWriteText).toHaveBeenCalledWith("C:/else/a.ts");
+  });
+
+  it("C15: 工厂未传项目根（第 4 参缺省）→ 点击兜底绝对路径，不抛异常", () => {
+    const { items } = callMenu("p1", "group-alpha", {
+      panelComponent: "editor",
+      filePath: "C:/proj/a.ts",
+    });
+    expect(() => {
+      (items[0] as any).action();
+    }).not.toThrow();
+    expect(mocks.mockWriteText).toHaveBeenCalledWith("C:/proj/a.ts");
+  });
+
+  it("C16: writeText 被拒 → 仅 console.error，无未处理拒绝", async () => {
+    const consoleErrorSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    mocks.mockWriteText.mockRejectedValueOnce(new Error("clipboard denied"));
+    const { items } = callMenu("p1", "group-alpha", {
+      panelComponent: "editor",
+      filePath: "C:/proj/a.ts",
+      rootPath: "C:/proj",
+    });
+    (items[0] as any).action();
+
+    await vi.waitFor(() => {
+      expect(consoleErrorSpy).toHaveBeenCalled();
+    });
+    expect(consoleErrorSpy.mock.calls[0][0]).toContain("复制相对路径失败");
+    consoleErrorSpy.mockRestore();
   });
 });
 

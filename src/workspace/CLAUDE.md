@@ -55,9 +55,21 @@ SEC-01 effect 同时承担 `startWatch(rootPath)` / `stopWatch(prev)`——watch
 
 `openSettingsPanel(pageId, settingsPageId?)` 在 pageApis.ts——面板 id = `settings-{pageId}`；getPanel 命中 → focus 返回 true（同页单例），未命中 → addPanel（component "settings"，settingsPageId 深链注入 params.selectedPage）；100ms×50 轮询 getPageApi 就绪，超时 console.warn 降级返回 false。**调用方须先切到目标页**（本函数不切页）——编排见 `features/settingsCenter/openSettings.ts`（无项目 toast 拦截在编排层，R1）。
 
+### 页签右键菜单自研（dockview 8.1 enterprise 缺位修复）
+
+dockview 8.1.0 free core 的页签右键菜单(ContextMenu)是 **enterprise 模块**——`.dv-tab` 的 contextmenu 监听为 `contextMenuService?.show(...)`，该服务仅在商业付费包 `dockview-enterprise`（license key 激活）import 自注册时存在；free core 恒短路、事件不 preventDefault。**所有环境一致（非 jsdom 现象）**。6.6.1 → 8.1.0 升级（2026-08-18）后生产页签右键菜单从不弹出，曾以 jsdom fake contextMenuService 探针测试自证而滞留两周。
+
+**因此页签右键菜单自研**（`createTabMenuItems` 纯函数 + `TabMenuPopup`），dockview 菜单形态代码（`getTabContextMenuItems` prop / `TabContextMenuItem` / `TAB_CONTEXT_MENU_CSS`）已删除：
+
+- **触发**：DefaultTab 内容根 `onContextMenu`（preventDefault + stopPropagation 拦 WebView 原生菜单与库内死监听）。右键目标 = DefaultTab 渲染的 div——它是 `.dv-tab` 的**子级**，事件从 `.dv-tab` 自身派发冒泡不会经过它（测试须右键 DefaultTab 内容根，非 `.dv-tab`）。
+- **上报链路**：DefaultTab 广播 `TAB_CONTEXT_MENU_EVENT`（`slterm:tab-context-menu`，window CustomEvent 协议，detail 带 panelId/x/y）——dockview-react 渲染 framework part 不经 React 子树，context 方案不可靠；各 PageDockview 实例均监听，经自身 `apiRef.getPanel(panelId)` 解析（panelId 全局唯一），**仅拥有该面板的页面命中**，天然多实例路由，无需 pageId 过滤。
+- **状态单点**：菜单 state（x/y/items）在 PageDockview；`createTabMenuItems(nextPanelId, pageId, onRenameRequest, getApi, projectRootPath?)` 为纯函数导出供 L2 直测（终端判据 `view.contentComponent`、claudeRunning disabled、文件型 `params.filePath` 头部「复制相对路径」、关闭族 danger、separator 令牌位置——与 dockview 6.6.1 原生菜单行为零漂移）。action 内面板/组引用取右键瞬间快照，`referenceGroup` 经 `panel.api.group`。
+- **渲染**：`TabMenuPopup` fixed 定位（zIndex 1000），UI-802 规格内联 token（项 28px/hover SECONDARY_BG/danger ERROR_FG/disabled 0.4 + pointerEvents none），外点 mousedown / Escape / 点击项关闭；`visible → false`（切页）effect 清菜单。
+- **能力边界**：DefaultTab 的 `IDockviewPanelProps` 无 panel 对象——面板经 `containerApi`/事件 detail 的 panelId 反查 `getPanel(id)`（`IDockviewPanel.group`、`group.panels` 均可达，结构兼容子集类型 `TabMenuPanel`）。
+
 ### 终端页签自定义重命名（F8）
 
-- **入口**：右键菜单对终端面板（判据 `panel.view.contentComponent === "terminal"`，`panel.component` 不存在）插入「重命名」项；claude 运行中（`TerminalRegistry.get(panel.id)?.agentSession != null`）→ `disabled` 置灰。
+- **入口**：页签右键菜单（见上「页签右键菜单自研」）对终端面板（判据 `panel.view.contentComponent === "terminal"`，`panel.component` 不存在）构建「重命名」项；claude 运行中（`TerminalRegistry.get(panel.id)?.agentSession != null`）→ `disabled` 置灰。
 - **存储单一真值源**：`params.customTitle`（随布局 JSON 持久化）。`applyRename` 纯函数 = `updateParameters({ customTitle })` + `setTitle` + **显式 `onLayoutChange(saveLayout(api))`**——`setTitle`/`updateParameters` 均不触发 `onDidLayoutChange`，须显式保存。
 - **恢复链路**：`rebuildAndRecomputeTitles` 重算编辑器标题 + **终端标题**——无 customTitle 的终端面板用 `titleManager.getTerminalTitle(pageId)` 重算（持久化 title 可能是瞬态值），customTitle 保留不重算。
 - **约束**：`titleManager` 计数器不动（F8 不占用编号）；编辑器等非终端面板菜单无「重命名」。
@@ -111,4 +123,5 @@ SEC-01 effect 同时承担 `startWatch(rootPath)` / `stopWatch(prev)`——watch
 - **页签标题**：测 terminal-N 递增、basename/冲突相对路径、suffix 匹配。
 - **多实例**：测 Dockview 实例各自存活、CSS 显隐、`initializedPages` 惰性初始化。
 - **DefaultTab**：渲染生产 `DefaultTab`（非 mock），重点断言 `tabStatus` 圆点、`tabLogo` 跟随页签名、`onDidParametersChange` 扁平事件结构。
+- **页签右键菜单**：对 `.dv-tab` 内 `data-e2e=tab-close-*` 按钮的**父级**（DefaultTab 内容根）`fireEvent.contextMenu` 真触发（探针已删除）→ 容器内 `[role="menuitem"]` 查询断言；集成用例覆盖坐标 fixed 定位、外点/Escape/重开替换、重命名弹窗链、复制相对路径。
 - **切换时序**：测 `setProjectRoot` 先于 `setActivePage` 生效。

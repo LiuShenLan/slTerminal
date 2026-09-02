@@ -24,6 +24,7 @@ export const config: WebdriverIO.Config = {
     './mockcli.e2e.ts',
     './settings.e2e.ts',
     './sidebar.e2e.ts',
+    './tab-menu.e2e.ts',
     './terminal.e2e.ts',
   ],
 
