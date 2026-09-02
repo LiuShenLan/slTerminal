@@ -8,6 +8,7 @@
 use crate::app_dir::{app_data_dir, LoadResult, MAX_PERSIST_BYTES};
 use crate::error::{io_error, AppError};
 use std::io::Write as _;
+use std::path::Path;
 use tempfile::NamedTempFile;
 
 /// 设置顶层键白名单（SEC-11）：前端各 store 只允许写这些键。
@@ -47,7 +48,8 @@ fn validate_settings_input(settings: &serde_json::Value) -> Result<(), AppError>
 }
 
 /// 浅合并：incoming 的 top-level 键覆盖 existing。
-/// 两者均为 JSON 对象时逐键合并；否则 incoming 整体胜出（兼容缺失/损坏/非对象设置）。
+/// 两者均为 JSON 对象时逐键合并；否则 incoming 整体胜出（兼容文件缺失/非对象设置——
+/// 损坏在读侧已报错中止，不会走到本函数）。
 fn merge_settings(existing: serde_json::Value, incoming: serde_json::Value) -> serde_json::Value {
     match (existing, incoming) {
         (serde_json::Value::Object(mut base), serde_json::Value::Object(inc)) => {
@@ -56,8 +58,30 @@ fn merge_settings(existing: serde_json::Value, incoming: serde_json::Value) -> s
             }
             serde_json::Value::Object(base)
         }
-        // existing 非对象（缺失/损坏 → Null）或 incoming 非对象：用 incoming 整体
+        // existing 非对象（文件缺失 → Null）或 incoming 非对象：用 incoming 整体
         (_, incoming) => incoming,
+    }
+}
+
+/// 读现有 settings.json 为 JSON 值（save 路径读法，settings.rs 与 background_tasks
+/// set_config_core 共用——R2b 窗口 A/B 修复）：
+/// - 文件不存在（NotFound）→ `Ok(Null)`——首次启动合法，调用方按空数据合并；
+/// - 读失败（IO/权限等）→ Err 传播——不落盘，防静默覆盖现有配置；
+/// - 内容解析失败 → Err 传播——损坏文件禁止被 incoming 整体覆盖（顶层键全丢仍写成功）。
+///
+/// 与 load_settings 的读法刻意不同：load 侧损坏走 .bak 回退 + corrupted 标记
+/// （用户可感知警示条），save 侧损坏直接拒绝写入（用户确认语义）。
+pub(crate) fn read_existing_settings(settings_path: &Path) -> Result<serde_json::Value, AppError> {
+    match std::fs::read_to_string(settings_path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(serde_json::Value::Null),
+        Err(e) => Err(io_error("读取设置", settings_path, e)),
+        Ok(content) => serde_json::from_str::<serde_json::Value>(&content).map_err(|e| {
+            tracing::warn!(path = %settings_path.display(), error = %e, "settings.json 解析失败，保存中止（不覆盖现有配置）");
+            AppError::ConfigParse(format!(
+                "读取设置失败: {} 损坏，保存中止",
+                settings_path.display()
+            ))
+        }),
     }
 }
 
@@ -74,10 +98,9 @@ pub(crate) fn save_settings_blocking(settings: serde_json::Value) -> Result<(), 
         .lock()
         .map_err(|_| AppError::Unknown("settings 保存锁中毒".into()))?;
     std::fs::create_dir_all(&app_dir).map_err(|e| io_error("保存设置", &app_dir, e))?;
-    let existing = std::fs::read_to_string(&settings_path)
-        .ok()
-        .and_then(|c| serde_json::from_str::<serde_json::Value>(&c).ok())
-        .unwrap_or(serde_json::Value::Null);
+    // 窗口 A（R2b）：读失败/解析失败 → Err 传播且不落盘——旧 `.ok()` 吞错走 Null
+    // 覆盖会令 incoming 整体胜出（顶层键全丢仍写成功）；仅文件不存在属首次启动合法
+    let existing = read_existing_settings(&settings_path)?;
     let merged = merge_settings(existing, settings);
     let json = serde_json::to_string_pretty(&merged)?;
     // SEC-11：序列化后大小上限（含合并进现有文件的部分）
@@ -386,31 +409,78 @@ mod settings_tests {
     }
 
     // ── SPE-05: persist 失败映射 ──
+    // 注（R2b）：原「目标为已存在目录」冲突注入被读侧先行拦截（读目录必败）——
+    // 读失败映射由下节 save_read_failure_returns_err_and_preserves_disk 覆盖；
+    // Windows 上 persist 替换失败映射由 save_over_readonly_file 持续锁定
+    // （只读目标可正常读、MoveFileExW 替换必败）；Unix 上 persist 失败结构性
+    // 不可达（temp 创建与 persist 同目录，权限问题在 temp 创建先暴露）。
 
-    /// persist 目标为已存在目录（冲突构造）→ 映射为 AppError::IoKind（消息含「保存设置失败」+ 路径）
+    // ── R2b: 读失败/解析失败传播（不再 `.ok()` 吞错走 Null 覆盖） ──
+
+    /// 读失败（settings.json 路径为已存在目录 → read_to_string 报错）→ Err 传播
+    /// + 不落盘不覆盖（旧语义吞错 → Null → incoming 整体胜出 → 顶层键全丢仍写成功）
     #[test]
-    fn save_persist_failure_maps_to_io_error() {
+    fn save_read_failure_returns_err_and_preserves_disk() {
         let dir = tempfile::tempdir().unwrap();
-        // 目标路径 settings.json 为已存在目录 → rename 替换必然失败
+        // 目标路径为已存在目录 → 读必然失败（Windows: PermissionDenied；Unix: IsADirectory）
         let settings_path = dir.path().join("settings.json");
         std::fs::create_dir(&settings_path).unwrap();
         let _guard = AppDataDirGuard::set(dir.path());
 
-        let err = run(save_settings(serde_json::json!({"fontSize": 1}))).unwrap_err();
+        let err = run(save_settings(serde_json::json!({"fontSize": 14}))).unwrap_err();
         match err {
             AppError::IoKind { kind, message } => {
                 assert!(!kind.is_empty(), "kind 不应为空");
                 assert!(
-                    message.contains("保存设置失败"),
-                    "消息应含业务语义 '保存设置失败'，实际: {message}"
+                    message.contains("读取设置失败"),
+                    "消息应含业务语义 '读取设置失败'，实际: {message}"
                 );
                 assert!(
                     message.contains(&settings_path.to_string_lossy().to_string()),
                     "消息应含设置文件路径，实际: {message}"
                 );
             }
-            other => panic!("persist 失败应映射为 AppError::IoKind，实际: {other:?}"),
+            other => panic!("读失败应映射为 AppError::IoKind，实际: {other:?}"),
         }
+        assert!(
+            settings_path.is_dir(),
+            "读失败后不应有写盘动作（settings.json 仍是目录）"
+        );
+        assert!(
+            !dir.path().join("settings.json.bak").exists(),
+            "读失败不应产生 .bak（未进入写通道）"
+        );
+    }
+
+    /// 现有 settings.json 为损坏 JSON → Err 传播 + 磁盘原样保留（旧语义损坏 →
+    /// Null 覆盖顶层键全丢且写成功——锁死新语义防回归）
+    #[test]
+    fn save_corrupt_existing_returns_err_and_preserves_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let corrupt = "not valid json {{{broken";
+        std::fs::write(dir.path().join("settings.json"), corrupt).unwrap();
+        let _guard = AppDataDirGuard::set(dir.path());
+
+        let err = run(save_settings(serde_json::json!({"fontSize": 14}))).unwrap_err();
+        match err {
+            AppError::ConfigParse(msg) => {
+                assert!(
+                    msg.contains("读取设置失败"),
+                    "消息应含业务语义 '读取设置失败'，实际: {msg}"
+                );
+                assert!(msg.contains("损坏"), "消息应提示损坏，实际: {msg}");
+            }
+            other => panic!("损坏 JSON 应返回 ConfigParse，实际: {other:?}"),
+        }
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("settings.json")).unwrap(),
+            corrupt,
+            "损坏文件应原样保留，禁止被覆盖"
+        );
+        assert!(
+            !dir.path().join("settings.json.bak").exists(),
+            "保存中止不应产生 .bak"
+        );
     }
 
     // ── SPE-06: 边界用例（可行范围内） ──
@@ -690,7 +760,7 @@ mod settings_tests {
         assert_eq!(merged["b"], 2);
     }
 
-    /// existing 为 Null（文件缺失/损坏）时用 incoming 初始化
+    /// existing 为 Null（文件缺失——损坏已在读侧报错，不走 merge）时用 incoming 初始化
     #[test]
     fn merge_null_existing_initializes_with_incoming() {
         let merged = merge_settings(

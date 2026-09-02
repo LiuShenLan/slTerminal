@@ -18,7 +18,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### 单写通道 = 复用 settings.rs，禁止第二通道；锁序单向
 
-落盘复用 `settings.rs` 的 `save_settings_blocking` 同步写通道（白名单/浅合并/原子写/.bak/SETTINGS_SAVE_LOCK 全套），**禁止自建第二写通道**（防 SPE-06 并发写竞态回归）；前端消费型 `save_settings` 段写不适用于本段（顶层键浅合并会互覆任务子键）。并发 set_config 的读-改-写跨子键合并必须互斥（否则后写覆盖前写的其他任务子键）——`CONFIG_WRITE_LOCK` 持锁串行化整个 core，其内部再入 `SETTINGS_SAVE_LOCK`（save_settings_blocking 内）。**锁序单向：CONFIG_WRITE_LOCK → SETTINGS_SAVE_LOCK，无环。**
+落盘复用 `settings.rs` 的 `save_settings_blocking` 同步写通道（白名单/浅合并/原子写/.bak/SETTINGS_SAVE_LOCK 全套），**禁止自建第二写通道**（防 SPE-06 并发写竞态回归）；前端消费型 `save_settings` 段写不适用于本段（顶层键浅合并会互覆任务子键）。并发 set_config 的读-改-写跨子键合并必须互斥（否则后写覆盖前写的其他任务子键）——`CONFIG_WRITE_LOCK` 持锁串行化整个 core，其内部再入 `SETTINGS_SAVE_LOCK`（save_settings_blocking 内）。**锁序单向：CONFIG_WRITE_LOCK → SETTINGS_SAVE_LOCK，无环。** 读侧（R2b）：`set_config_core` 读现有 `backgroundTasks` 段经 `settings::read_existing_settings`——文件不存在 → 空段（首次写入合法）；读失败/解析失败 → Err 传播且不落盘（曾吞错视作空段致兄弟子键丢失仍写成功，已修复）。
 
 ### 配置变更感知 = emit 事件（后端单写通道真值源）
 

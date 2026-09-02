@@ -115,11 +115,14 @@ pub(crate) fn set_config_core(
     let _guard = CONFIG_WRITE_LOCK
         .lock()
         .map_err(|_| AppError::Unknown("后台任务配置锁中毒".into()))?;
-    // 读现有 backgroundTasks 段（损坏/非对象视作空段——照 save_settings 合并读法口径）
-    let section = std::fs::read_to_string(crate::app_dir::app_data_dir()?.join("settings.json"))
-        .ok()
-        .and_then(|c| serde_json::from_str::<serde_json::Value>(&c).ok())
-        .and_then(|root| root.get(registry::SETTINGS_KEY).cloned())
+    // 读现有 backgroundTasks 段（窗口 B，R2b）：读失败/解析失败 → Err 传播且不落盘
+    // （旧 `.ok()` 吞错视作空段——兄弟子键丢失仍写成功）；仅文件不存在 → 空段
+    // （首次写入合法）；段非对象视作空段（结构兜底，照旧语义）
+    let settings_path = crate::app_dir::app_data_dir()?.join("settings.json");
+    let root = crate::settings::read_existing_settings(&settings_path)?;
+    let section = root
+        .get(registry::SETTINGS_KEY)
+        .cloned()
         .filter(|v| v.is_object())
         .unwrap_or_else(|| serde_json::json!({}));
     // 子键合并：只改本任务子对象，其他任务子键原样保留
@@ -411,5 +414,70 @@ mod background_tasks_tests {
         let mem = RUNTIMES[0].interval_sec.load(Ordering::Relaxed);
         assert_eq!(disk, mem, "磁盘值与内存值应一致");
         assert_eq!(mem, 300);
+    }
+
+    // ── R2b: 读失败/解析失败传播（不再空段吞错） ──
+
+    /// 现有 settings.json 损坏 → Err 传播 + 内存未变 + 磁盘原样（旧语义空段吞错
+    /// 会丢兄弟子键仍写成功——锁死新语义防回归）
+    #[test]
+    fn set_config_corrupt_settings_returns_err_memory_unchanged() {
+        reset_runtimes_for_test();
+        let dir = tempfile::tempdir().unwrap();
+        let corrupt = "not valid json {{{";
+        std::fs::write(dir.path().join("settings.json"), corrupt).unwrap();
+        let _guard = AppDataDirGuard::set(dir.path());
+
+        let err = set_config_core("planBalance", None, Some(120)).unwrap_err();
+        match err {
+            AppError::ConfigParse(msg) => {
+                assert!(
+                    msg.contains("读取设置失败"),
+                    "消息应含业务语义 '读取设置失败'，实际: {msg}"
+                );
+            }
+            other => panic!("损坏 JSON 应返回 ConfigParse，实际: {other:?}"),
+        }
+        assert_eq!(
+            RUNTIMES[0].interval_sec.load(Ordering::Relaxed),
+            10,
+            "解析失败不应改动内存间隔"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("settings.json")).unwrap(),
+            corrupt,
+            "损坏文件应原样保留，禁止被覆盖"
+        );
+    }
+
+    /// settings.json 路径为已存在目录 → 读失败 Err 传播 + 内存未变（不落盘）
+    #[test]
+    fn set_config_read_failure_returns_err_memory_unchanged() {
+        reset_runtimes_for_test();
+        let dir = tempfile::tempdir().unwrap();
+        let settings_path = dir.path().join("settings.json");
+        std::fs::create_dir(&settings_path).unwrap();
+        let _guard = AppDataDirGuard::set(dir.path());
+
+        let err = set_config_core("planBalance", None, Some(120)).unwrap_err();
+        match err {
+            AppError::IoKind { kind, message } => {
+                assert!(!kind.is_empty(), "kind 不应为空");
+                assert!(
+                    message.contains("读取设置失败"),
+                    "消息应含业务语义 '读取设置失败'，实际: {message}"
+                );
+            }
+            other => panic!("读失败应映射为 AppError::IoKind，实际: {other:?}"),
+        }
+        assert_eq!(
+            RUNTIMES[0].interval_sec.load(Ordering::Relaxed),
+            10,
+            "读失败不应改动内存间隔"
+        );
+        assert!(
+            settings_path.is_dir(),
+            "读失败后不应有写盘动作（settings.json 仍是目录）"
+        );
     }
 }
