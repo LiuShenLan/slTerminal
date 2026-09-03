@@ -32,40 +32,42 @@ impl PlanQuery for KimiQuery {
     }
 }
 
-/// 剩余百分比：remaining 优先（remaining/limit），used 回退（(1-used/limit)*100）；
-/// 数值字段为字符串（实证口径），limit 缺失/为 0 → None（该窗口失败）。
-/// 实证（2026-08 实测 + 社区审计）：remaining 恒在、used 可缺 → remaining 优先天然覆盖两种形态
-fn remaining_percent(
-    remaining: Option<&str>,
-    used: Option<&str>,
-    limit: Option<&str>,
-) -> Option<u8> {
+/// 已用百分比（2026-09 起，用户偏好展示已用量）：used 优先（used/limit×100），
+/// remaining 换算回退（(limit-remaining)/limit×100）；数值字段为字符串（实证口径），
+/// limit 缺失/为 0/不可解析 → None（该窗口失败）。
+/// 实证（2026-08 实测 + 社区审计）：remaining 恒在、used 可缺——used 优先下，
+/// remaining 恒在保证换算回退必成功；used 不可解析等同缺失（落换算回退）。
+fn used_percent(used: Option<&str>, remaining: Option<&str>, limit: Option<&str>) -> Option<u8> {
     let limit: f64 = limit?.parse().ok()?;
     if limit <= 0.0 {
         return None;
     }
-    if let Some(r) = remaining.and_then(|v| v.parse::<f64>().ok()) {
-        return Some((r / limit * 100.0).round().clamp(0.0, 100.0) as u8);
+    if let Some(u) = used.and_then(|v| v.parse::<f64>().ok()) {
+        return Some((u / limit * 100.0).round().clamp(0.0, 100.0) as u8);
     }
-    let used: f64 = used?.parse().ok()?;
-    Some(((1.0 - used / limit) * 100.0).round().clamp(0.0, 100.0) as u8)
+    let remaining: f64 = remaining?.parse().ok()?;
+    Some(
+        ((limit - remaining) / limit * 100.0)
+            .round()
+            .clamp(0.0, 100.0) as u8,
+    )
 }
 
-/// 单窗口解析：detail 内 remaining/used/limit/resetTime 直接取值（实证：5h 窗
+/// 单窗口解析：detail 内 used/limit/remaining/resetTime 直接取值（实证：5h 窗
 /// 数值承载于 limits[i].detail 内层，7d 窗为顶层 usage——两者均直接含 resetTime）
 fn parse_window(detail: &serde_json::Value) -> Result<WindowInfo, AppError> {
-    let percent = remaining_percent(
-        detail.get("remaining").and_then(|v| v.as_str()),
+    let percent = used_percent(
         detail.get("used").and_then(|v| v.as_str()),
+        detail.get("remaining").and_then(|v| v.as_str()),
         detail.get("limit").and_then(|v| v.as_str()),
     )
-    .ok_or_else(|| AppError::Unknown("kimi 窗口 remaining/used/limit 解析失败".into()))?;
+    .ok_or_else(|| AppError::Unknown("kimi 窗口 used/remaining/limit 解析失败".into()))?;
     let resets_at = detail
         .get("resetTime")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
     Ok(WindowInfo {
-        remaining_percent: percent,
+        used_percent: percent,
         resets_at,
     })
 }
@@ -138,7 +140,8 @@ mod kimi_tests {
         parse_kimi_usages(&serde_json::from_str(json).unwrap())
     }
 
-    /// 双窗正常（真实响应数字）：5h 99% / 7d 77%，resetTime 透传（F10 修复后口径）
+    /// 双窗正常（真实响应数字，2026-09 起已用口径）：5h 1%（used 1/100）、
+    /// 7d 23%（used 23/100），resetTime 透传
     #[test]
     fn parse_ok_both_windows() {
         let json = r#"{
@@ -152,27 +155,22 @@ mod kimi_tests {
         let o = parse(json).unwrap();
         assert!(!o.frozen);
         let w = o.windows.unwrap();
-        assert_eq!(
-            w.five_hour.remaining_percent, 99,
-            "5h 窗 remaining 优先：99/100"
-        );
+        assert_eq!(w.five_hour.used_percent, 1, "5h 窗 used 直读：1/100");
         assert_eq!(
             w.five_hour.resets_at.as_deref(),
             Some("2026-08-28T22:18:45Z")
         );
-        assert_eq!(
-            w.seven_day.remaining_percent, 77,
-            "7d 窗 remaining 优先：77/100"
-        );
+        assert_eq!(w.seven_day.used_percent, 23, "7d 窗 used 直读：23/100");
         assert_eq!(
             w.seven_day.resets_at.as_deref(),
             Some("2026-09-04T00:18:45Z")
         );
     }
 
-    /// remaining 与 used 并存且不一致 → remaining 优先（used 推算 99，remaining 50）
+    /// used 与 remaining 并存且不一致 → used 直读（used 99 / remaining 50——
+    /// 矛盾夹具即防回归探针：若改回 remaining 优先，本用例立即失败）
     #[test]
-    fn parse_remaining_preferred_over_used() {
+    fn parse_used_preferred_over_remaining() {
         let json = r#"{
             "usage": {"limit": "100", "used": "99", "remaining": "50"},
             "limits": [
@@ -182,16 +180,13 @@ mod kimi_tests {
         }"#;
         let o = parse(json).unwrap();
         let w = o.windows.unwrap();
-        assert_eq!(
-            w.five_hour.remaining_percent, 50,
-            "应取 remaining 而非 used 推算"
-        );
-        assert_eq!(w.seven_day.remaining_percent, 50);
+        assert_eq!(w.five_hour.used_percent, 99, "应取 used 直读而非 remaining");
+        assert_eq!(w.seven_day.used_percent, 99);
     }
 
-    /// remaining 缺失 → 回退 used 推算（detail 仅 {limit, used}）
+    /// remaining 缺失无碍 → used 直读主路径（detail 仅 {limit, used}）
     #[test]
-    fn parse_missing_remaining_falls_back_used() {
+    fn parse_used_direct_remaining_missing() {
         let json = r#"{
             "usage": {"limit": "100", "used": "25"},
             "limits": [
@@ -201,13 +196,13 @@ mod kimi_tests {
         }"#;
         let o = parse(json).unwrap();
         let w = o.windows.unwrap();
-        assert_eq!(w.five_hour.remaining_percent, 99, "(1-1/100) 推算");
-        assert_eq!(w.seven_day.remaining_percent, 75, "(1-25/100) 推算");
+        assert_eq!(w.five_hour.used_percent, 1, "used 直读 1/100");
+        assert_eq!(w.seven_day.used_percent, 25, "used 直读 25/100");
     }
 
-    /// remaining 非数字串 → 回退 used 推算
+    /// remaining 垃圾值被忽略 → used 直读成功（1/2）
     #[test]
-    fn parse_remaining_non_numeric_falls_back_used() {
+    fn parse_used_wins_over_unparsable_remaining() {
         let json = r#"{
             "usage": {"limit": "2", "used": "1", "remaining": "abc"},
             "limits": [
@@ -218,14 +213,14 @@ mod kimi_tests {
         let o = parse(json).unwrap();
         let w = o.windows.unwrap();
         assert_eq!(
-            w.five_hour.remaining_percent, 50,
-            "remaining 不可解析 → used 推算"
+            w.five_hour.used_percent, 50,
+            "used 直读 1/2，remaining 不可解析被忽略"
         );
     }
 
-    /// remaining 与 used 均缺失 → 窗口失败 → 整体 Err
+    /// used 与 remaining 均缺失 → 窗口失败 → 整体 Err
     #[test]
-    fn parse_missing_remaining_and_used_errors() {
+    fn parse_missing_used_and_remaining_errors() {
         let json = r#"{
             "usage": {"limit": "100"},
             "limits": [
@@ -234,10 +229,11 @@ mod kimi_tests {
             ]
         }"#;
         let err = parse(json).unwrap_err();
-        assert!(err.to_string().contains("remaining/used/limit 解析失败"));
+        assert!(err.to_string().contains("used/remaining/limit 解析失败"));
     }
 
-    /// 300min 优先：数组含 60min 与 300min 两条 → 选 300min（优先规则不变）
+    /// 300min 优先：数组含 60min 与 300min 两条 → 选 300min（窗口选择规则不变，
+    /// 命中后 used 直读 1/100）
     #[test]
     fn parse_prefers_300min_window() {
         let json = r#"{
@@ -252,12 +248,12 @@ mod kimi_tests {
         let o = parse(json).unwrap();
         let w = o.windows.unwrap();
         assert_eq!(
-            w.five_hour.remaining_percent, 24,
-            "应命中 300min 窗口而非 limits[0]"
+            w.five_hour.used_percent, 1,
+            "应命中 300min 窗口而非 limits[0]，used 直读 1/100"
         );
     }
 
-    /// 无 300min 窗口 → 回退 limits[0]
+    /// 无 300min 窗口 → 回退 limits[0]（used 直读 1/2）
     #[test]
     fn parse_falls_back_to_limits_first() {
         let json = r#"{
@@ -269,7 +265,10 @@ mod kimi_tests {
         }"#;
         let o = parse(json).unwrap();
         let w = o.windows.unwrap();
-        assert_eq!(w.five_hour.remaining_percent, 50, "应回退 limits[0]：1/2");
+        assert_eq!(
+            w.five_hour.used_percent, 50,
+            "应回退 limits[0]：used 直读 1/2"
+        );
     }
 
     /// limits 空数组 → 整体 Err
@@ -304,7 +303,7 @@ mod kimi_tests {
             ]
         }"#;
         let err = parse(json).unwrap_err();
-        assert!(err.to_string().contains("remaining/used/limit 解析失败"));
+        assert!(err.to_string().contains("used/remaining/limit 解析失败"));
     }
 
     /// 5h limit 缺失 → 整体 Err
@@ -318,7 +317,7 @@ mod kimi_tests {
             ]
         }"#;
         let err = parse(json).unwrap_err();
-        assert!(err.to_string().contains("remaining/used/limit 解析失败"));
+        assert!(err.to_string().contains("used/remaining/limit 解析失败"));
     }
 
     /// 7d limit 缺失 → 整体 Err
@@ -332,7 +331,7 @@ mod kimi_tests {
             ]
         }"#;
         let err = parse(json).unwrap_err();
-        assert!(err.to_string().contains("remaining/used/limit 解析失败"));
+        assert!(err.to_string().contains("used/remaining/limit 解析失败"));
     }
 
     /// 冻结：totalQuota.remaining="0" → frozen=true，窗口缺失仍 Ok
@@ -432,26 +431,27 @@ mod kimi_tests {
         assert!(err.to_string().contains("缺 usage"));
     }
 
-    /// resetTime 缺失 → resets_at=None（窗口值保留，仅省略重置段）
+    /// resetTime 缺失 → resets_at=None（窗口值保留，仅省略重置段；
+    /// 5h 走 used 直读 1/100，7d 无 used 走 remaining 换算 50/100）
     #[test]
     fn parse_missing_reset_time_yields_none() {
         let json = r#"{
             "usage": {"limit": "100", "remaining": "50"},
             "limits": [
                 {"window": {"duration": 300, "timeUnit": "TIME_UNIT_MINUTE"},
-                 "detail": {"limit": "100", "used": "1", "remaining": "50"}}
+                 "detail": {"limit": "100", "used": "1", "remaining": "99"}}
             ]
         }"#;
         let o = parse(json).unwrap();
         let w = o.windows.unwrap();
-        assert_eq!(w.five_hour.remaining_percent, 50);
+        assert_eq!(w.five_hour.used_percent, 1);
         assert!(w.five_hour.resets_at.is_none());
         assert!(w.seven_day.resets_at.is_none());
     }
 
-    /// used>limit（无 remaining）→ (1-used/limit) 为负 → clamp 0
+    /// used>limit（无 remaining）→ 已用 6000/5000=120% → clamp 100
     #[test]
-    fn parse_used_over_limit_clamps_zero() {
+    fn parse_used_over_limit_clamps_hundred() {
         let json = r#"{
             "usage": {"limit": "5000", "used": "6000"},
             "limits": [
@@ -461,12 +461,12 @@ mod kimi_tests {
         }"#;
         let o = parse(json).unwrap();
         let w = o.windows.unwrap();
-        assert_eq!(w.five_hour.remaining_percent, 0);
+        assert_eq!(w.five_hour.used_percent, 100);
     }
 
-    /// remaining>limit（不一致场景）→ 超 100 → clamp 100
+    /// remaining>limit（不一致场景，used 缺）→ 换算 (5000-6000)/5000=-20% → clamp 0
     #[test]
-    fn parse_remaining_over_limit_clamps_hundred() {
+    fn parse_remaining_over_limit_fallback_clamps_zero() {
         let json = r#"{
             "usage": {"limit": "5000", "remaining": "6000"},
             "limits": [
@@ -476,15 +476,13 @@ mod kimi_tests {
         }"#;
         let o = parse(json).unwrap();
         let w = o.windows.unwrap();
-        assert_eq!(
-            w.five_hour.remaining_percent, 100,
-            "6000/5000=120 → clamp 100"
-        );
+        assert_eq!(w.five_hour.used_percent, 0, "换算差为负 → clamp 0");
     }
 
-    /// vibeusage 实测形态：detail 无 used 仅 {limit, remaining, resetTime} → remaining 优先成功
+    /// 实测形态：detail 无 used 仅 {limit, remaining, resetTime} → remaining 换算回退
+    /// ((100-91)/100=9%——91 与 9 差异显著，防"直接拿 remaining 当结果"回归)
     #[test]
-    fn parse_detail_without_used_uses_remaining() {
+    fn parse_detail_without_used_falls_back_remaining_convert() {
         let json = r#"{
             "usage": {"limit": "100", "remaining": "91", "resetTime": "2026-02-25T04:01:38Z"},
             "limits": [
@@ -494,12 +492,13 @@ mod kimi_tests {
         }"#;
         let o = parse(json).unwrap();
         let w = o.windows.unwrap();
-        assert_eq!(w.five_hour.remaining_percent, 91);
-        assert_eq!(w.seven_day.remaining_percent, 91);
+        assert_eq!(w.five_hour.used_percent, 9);
+        assert_eq!(w.seven_day.used_percent, 9);
     }
 
     /// 真实响应固化（2026-08-28 curl 实测原样；user/boosterWallet/authentication
-    /// 等解析器不读字段已裁剪）——防下次 API 漂移的回归锚点
+    /// 等解析器不读字段已裁剪）——防下次 API 漂移的回归锚点；2026-09 起口径：
+    /// 快照双含 used+remaining → 锚定 used 直读路径（5h 1/100、7d 23/100）
     #[test]
     fn parse_real_response_snapshot() {
         let json = r#"{
@@ -514,16 +513,81 @@ mod kimi_tests {
         let o = parse(json).unwrap();
         assert!(!o.frozen, "totalQuota 空对象 → 未冻结");
         let w = o.windows.unwrap();
-        assert_eq!(w.five_hour.remaining_percent, 99);
+        assert_eq!(w.five_hour.used_percent, 1);
         assert_eq!(
             w.five_hour.resets_at.as_deref(),
             Some("2026-08-28T22:18:45.334657Z")
         );
-        assert_eq!(w.seven_day.remaining_percent, 77);
+        assert_eq!(w.seven_day.used_percent, 23);
         assert_eq!(
             w.seven_day.resets_at.as_deref(),
             Some("2026-09-04T00:18:45.334657Z")
         );
+    }
+
+    /// used 不可解析（"abc"）等同缺失 → remaining 换算回退 ((100-80)/100=20%)
+    #[test]
+    fn parse_used_non_numeric_falls_back_remaining() {
+        let json = r#"{
+            "usage": {"limit": "100", "used": "abc", "remaining": "80"},
+            "limits": [
+                {"window": {"duration": 300, "timeUnit": "TIME_UNIT_MINUTE"},
+                 "detail": {"limit": "100", "used": "abc", "remaining": "80"}}
+            ]
+        }"#;
+        let o = parse(json).unwrap();
+        let w = o.windows.unwrap();
+        assert_eq!(w.five_hour.used_percent, 20, "换算回退 20/100");
+        assert_eq!(w.seven_day.used_percent, 20, "换算回退 20/100");
+    }
+
+    /// 双窗形态各一（5h detail 无 used 走换算 9、7d usage used 直读 23）——
+    /// 双窗独立取数互不污染
+    #[test]
+    fn parse_mixed_window_used_absent_one_side() {
+        let json = r#"{
+            "usage": {"limit": "100", "used": "23", "remaining": "77"},
+            "limits": [
+                {"window": {"duration": 300, "timeUnit": "TIME_UNIT_MINUTE"},
+                 "detail": {"limit": "100", "remaining": "91"}}
+            ]
+        }"#;
+        let o = parse(json).unwrap();
+        let w = o.windows.unwrap();
+        assert_eq!(
+            w.five_hour.used_percent, 9,
+            "5h used 缺 → 换算 (100-91)/100"
+        );
+        assert_eq!(w.seven_day.used_percent, 23, "7d used 直读 23/100");
+    }
+
+    /// limit 非数字串（used/remaining 均在）→ 该窗失败 → 整体 Err
+    #[test]
+    fn parse_limit_non_numeric_errors() {
+        let json = r#"{
+            "usage": {"limit": "abc", "used": "5", "remaining": "95"},
+            "limits": [
+                {"window": {"duration": 300, "timeUnit": "TIME_UNIT_MINUTE"},
+                 "detail": {"limit": "100", "used": "1", "remaining": "99"}}
+            ]
+        }"#;
+        let err = parse(json).unwrap_err();
+        assert!(err.to_string().contains("used/remaining/limit 解析失败"));
+    }
+
+    /// remaining 为负（used 缺）→ 换算 (100-(-5))/100=105% → clamp 100
+    #[test]
+    fn parse_remaining_negative_clamps_hundred() {
+        let json = r#"{
+            "usage": {"limit": "100", "remaining": "-5"},
+            "limits": [
+                {"window": {"duration": 300, "timeUnit": "TIME_UNIT_MINUTE"},
+                 "detail": {"limit": "100", "remaining": "-5"}}
+            ]
+        }"#;
+        let o = parse(json).unwrap();
+        let w = o.windows.unwrap();
+        assert_eq!(w.five_hour.used_percent, 100, "105% → clamp 100");
     }
 
     // 注：fetch 真实 HTTP 查询登记 test-exemptions 既定豁免（真实外部 API 依赖，

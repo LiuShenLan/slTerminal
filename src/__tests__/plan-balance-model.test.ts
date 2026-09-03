@@ -112,12 +112,12 @@ describe("rowText（§8.2 四场景）", () => {
     expect(rowText(info)).toBe("¥12.34");
   });
 
-  it("双窗 → 5h X% · 7d Y%", () => {
+  it("双窗 → 5h X% · 7d Y%（2026-09 起 X/Y = 已用百分比，值不透明透传）", () => {
     const info = makeInfo({
       planId: "kimi",
       windows: {
-        fiveHour: { remainingPercent: 62, resetsAt: null },
-        sevenDay: { remainingPercent: 45, resetsAt: null },
+        fiveHour: { usedPercent: 62, resetsAt: null },
+        sevenDay: { usedPercent: 45, resetsAt: null },
       },
     });
     expect(rowText(info)).toBe("5h 62% · 7d 45%");
@@ -138,8 +138,8 @@ describe("rowTooltip（§8.2 四场景）", () => {
     const info = makeInfo({
       planId: "kimi",
       windows: {
-        fiveHour: { remainingPercent: 62, resetsAt: iso(NOW + 42 * 60_000) },
-        sevenDay: { remainingPercent: 45, resetsAt: iso(NOW + 86_400_000) },
+        fiveHour: { usedPercent: 62, resetsAt: iso(NOW + 42 * 60_000) },
+        sevenDay: { usedPercent: 45, resetsAt: iso(NOW + 86_400_000) },
       },
       updatedAt: UPDATED_SEC,
     });
@@ -153,8 +153,8 @@ describe("rowTooltip（§8.2 四场景）", () => {
     const info = makeInfo({
       planId: "kimi",
       windows: {
-        fiveHour: { remainingPercent: 62, resetsAt: null },
-        sevenDay: { remainingPercent: 45, resetsAt: iso(NOW + 60_000) },
+        fiveHour: { usedPercent: 62, resetsAt: null },
+        sevenDay: { usedPercent: 45, resetsAt: iso(NOW + 60_000) },
       },
       updatedAt: UPDATED_SEC,
     });

@@ -47,7 +47,7 @@ pub struct WindowsInfo {
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WindowInfo {
-    pub remaining_percent: u8,     // 剩余 = 100 - 已用
+    pub used_percent: u8, // 已用百分比 = used/limit×100（used 缺失经 remaining 换算回退）
     pub resets_at: Option<String>, // ISO 字符串，可缺失
 }
 
@@ -222,11 +222,11 @@ mod plan_balance_tests {
             }),
             windows: Some(WindowsInfo {
                 five_hour: WindowInfo {
-                    remaining_percent: 24,
+                    used_percent: 24,
                     resets_at: None,
                 },
                 seven_day: WindowInfo {
-                    remaining_percent: 42,
+                    used_percent: 42,
                     resets_at: None,
                 },
             }),
@@ -260,25 +260,25 @@ mod plan_balance_tests {
     fn windows_info_serde_key_set() {
         let w = WindowsInfo {
             five_hour: WindowInfo {
-                remaining_percent: 1,
+                used_percent: 1,
                 resets_at: None,
             },
             seven_day: WindowInfo {
-                remaining_percent: 2,
+                used_percent: 2,
                 resets_at: None,
             },
         };
         assert_eq!(sorted_keys(&w), ["fiveHour", "sevenDay"]);
     }
 
-    /// WindowInfo 键集合 = ["remainingPercent","resetsAt"]
+    /// WindowInfo 键集合 = ["usedPercent","resetsAt"]
     #[test]
     fn window_info_serde_key_set() {
         let w = WindowInfo {
-            remaining_percent: 24,
+            used_percent: 24,
             resets_at: Some("2026-08-28T15:00:00Z".into()),
         };
-        assert_eq!(sorted_keys(&w), ["remainingPercent", "resetsAt"]);
+        assert_eq!(sorted_keys(&w), ["resetsAt", "usedPercent"]);
     }
 
     // ── merge_slot（4 例，F10） ──

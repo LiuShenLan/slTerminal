@@ -85,8 +85,8 @@ function kimiInfo(): PlanBalanceInfo {
   return makeInfo({
     planId: "kimi",
     windows: {
-      fiveHour: { remainingPercent: 62, resetsAt: null },
-      sevenDay: { remainingPercent: 45, resetsAt: null },
+      fiveHour: { usedPercent: 62, resetsAt: null },
+      sevenDay: { usedPercent: 45, resetsAt: null },
     },
     updatedAt: Math.floor(Date.now() / 1000),
   });
@@ -267,12 +267,12 @@ describe("logo 与 tooltip", () => {
       planId: "kimi",
       windows: {
         fiveHour: {
-          remainingPercent: 62,
+          usedPercent: 62,
           resetsAt: new Date(now + 42 * 60_000).toISOString(),
         },
         // 20h30m（远离整小时边界——Date.now 微秒差会把 21h0m 抖成 20h 60m）
         sevenDay: {
-          remainingPercent: 45,
+          usedPercent: 45,
           resetsAt: new Date(now + 20 * 3_600_000 + 30 * 60_000).toISOString(),
         },
       },

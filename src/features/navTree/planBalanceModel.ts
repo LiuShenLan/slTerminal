@@ -52,7 +52,9 @@ export function rowText(info: PlanBalanceInfo): string {
   if (info.frozen) return "已冻结";
   if (info.amount) return `${currencySymbol(info.amount.currency)}${info.amount.value}`;
   if (info.windows) {
-    return `5h ${info.windows.fiveHour.remainingPercent}% · 7d ${info.windows.sevenDay.remainingPercent}%`;
+    // 两值 = 已用百分比（usedPercent = used/limit，2026-09 起非剩余）——
+    // 语义由后端解析保证（used 缺失经 remaining 换算回退），本层不透明透传
+    return `5h ${info.windows.fiveHour.usedPercent}% · 7d ${info.windows.sevenDay.usedPercent}%`;
   }
   return "--";
 }

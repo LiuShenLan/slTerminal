@@ -76,7 +76,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 核心原则：
 - **隔离优先**：L1 用 `tempfile::tempdir()` 隔离文件系统、`SPAWN_LOCK` 串行化 PTY；L2 用 `vi.mock()` 隔离 IPC/终端库；L4 用 embedded driver 隔离浏览器依赖
 - **L1/L2 覆盖所有 PR**，L3/L4 覆盖关键路径变更
-- **bugfix 须附防复发测试**：修复缺陷时除对改动代码添加全量测试外，还须对照修复前老代码补回归用例，防旧问题复现
+- **bugfix 须附防复发测试**：修复缺陷或优化历史功能时，除对改动代码添加全量测试外，还须对照改动前老代码补回归用例，防旧问题复现
 - **模块测试模式见各子路径 CLAUDE.md**，不在根文件展开
 
 ### 测试命名约定

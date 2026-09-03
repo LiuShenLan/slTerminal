@@ -45,7 +45,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **token 不出后端**：DTO 六键 serde 键集合精确匹配测试锁死（无 token 字段）；本模块所有 tracing!/Err 构造消息禁止插值 token 与 Authorization 头（ureq 错误 Display 不含请求头，构造错误消息时禁止自行拼接）。测试夹具 token 一律假值占位符（`sk-test` 形态，SEC-18）；真实凭据只经 `source.rs` 读 user 层 `~/.claude/settings.json`（仓库外），禁止以真实值替换夹具或写入任何 git 追踪文件。
 - **URL 归一化只小写化 + 去尾斜杠**（规格字面）：不加 trim，`trim_end_matches('/')` 不处理空白。
-- **kimi 结构实证（2026-08-28 curl 实测 + 社区审计，修正规格 §5.2 假定）**：`GET /coding/v1/usages` + `Authorization: Bearer`（非 X-Kimi-Authorization）；5h 窗数值（`used`/`limit`/`remaining`/`resetTime`）承载于 **`limits[i].detail` 内层**（外层无）；7d 窗为顶层 `usage` 对象；`remaining` 恒在、`used` 可缺（两种账号形态均实证）→ 剩余百分比 **remaining 优先**、used 回退；`totalQuota` **无 `used` 字段**（实测可为空对象 `{}`）。真实响应快照锚点：`kimi.rs::parse_real_response_snapshot`。
+- **kimi 结构实证（2026-08-28 curl 实测 + 社区审计，修正规格 §5.2 假定）**：`GET /coding/v1/usages` + `Authorization: Bearer`（非 X-Kimi-Authorization）；5h 窗数值（`used`/`limit`/`remaining`/`resetTime`）承载于 **`limits[i].detail` 内层**（外层无）；7d 窗为顶层 `usage` 对象；`remaining` 恒在、`used` 可缺（两种账号形态均实证，事实不变）→ **展示口径 = 已用百分比（2026-09 起，用户偏好展示已用量而非剩余）：`used` 优先**（used/limit×100）、**remaining 换算回退**（(limit−remaining)/limit×100）——回退路径可行恰因「remaining 恒在」实证；`.round()` + clamp 0–100 保留；limit 缺失/≤0/不可解析 → 该窗口失败（全有或全无）。`totalQuota` **无 `used` 字段**（实测可为空对象 `{}`）。真实响应快照锚点：`kimi.rs::parse_real_response_snapshot`。
 - **kimi 数值字段按字符串解析**（实证口径）：`used`/`limit`/`remaining` 均为字符串，`.as_str()` 读取——若 API 返回数字形态，须先实测确认再放宽。
 - **kimi 全有或全无**：非冻结时任一窗口解析失败 → 整体 Err（防窗口重置瞬间 limits 不完整致 5h 段丢失）。
 - **kimi 冻结判定（实证修正）**：`totalQuota.remaining` 字符串 parse 后 ≤ 0 → frozen=true（配额耗尽冻结）；totalQuota 缺失/空对象/remaining 非数字或非 0 → 未冻结；冻结时不要求窗口解析成功（windows=None 仍 Ok）。

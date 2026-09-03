@@ -22,6 +22,6 @@ export interface WindowsInfo {
 }
 
 export interface WindowInfo {
-  remainingPercent: number; // 剩余 = 100 - 已用
+  usedPercent: number; // 已用百分比 = used/limit×100（used 缺失经 remaining 换算回退）
   resetsAt: string | null; // ISO 字符串，可缺失
 }

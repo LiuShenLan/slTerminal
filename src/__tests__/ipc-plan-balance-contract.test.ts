@@ -202,8 +202,8 @@ describe("PlanBalanceInfo 键集合（与后端 serde 测试互为双边锁）",
       frozen: false,
       amount: { value: "12.34", currency: "CNY" },
       windows: {
-        fiveHour: { remainingPercent: 62, resetsAt: "2026-09-02T06:00:00Z" },
-        sevenDay: { remainingPercent: 45, resetsAt: null },
+        fiveHour: { usedPercent: 62, resetsAt: "2026-09-02T06:00:00Z" },
+        sevenDay: { usedPercent: 45, resetsAt: null },
       },
       updatedAt: 1_752_500_000,
     };
