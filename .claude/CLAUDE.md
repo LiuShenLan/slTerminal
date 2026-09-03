@@ -74,6 +74,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | L4 | 端到端 (E2E) | WDIO + embedded driver | `npm run e2e`（= `build:e2e` + `wdio`） |
 
 核心原则：
+- **L1 定向测试红线（TQ-COV-06，8-31 翻案登记，出处 `.claude/test-exemptions.md`）**：`cargo test` 带 filter 或 `--lib` 会绕过 `[lib] test=false` 重建默认 lib 单测 target——该 target 收不到 build.rs `rustc-link-arg-tests` 的 comctl32 v6 manifest（SxS），静态导入的 `TaskDialogIndirect` 解析到 v5 → 启动即 0xc0000139（与代码/环境无关，复现即此因，勿再排查）。定向测试一律 `cargo test --test lib_tests <filter> -- --test-threads=1`（lib_tests = src/lib.rs 显式 test target，721 例等价覆盖 --lib）
 - **隔离优先**：L1 用 `tempfile::tempdir()` 隔离文件系统、`SPAWN_LOCK` 串行化 PTY；L2 用 `vi.mock()` 隔离 IPC/终端库；L4 用 embedded driver 隔离浏览器依赖
 - **L1/L2 覆盖所有 PR**，L3/L4 覆盖关键路径变更
 - **bugfix 须附防复发测试**：修复缺陷或优化历史功能时，除对改动代码添加全量测试外，还须对照改动前老代码补回归用例，防旧问题复现
