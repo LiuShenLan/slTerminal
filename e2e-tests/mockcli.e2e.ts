@@ -215,7 +215,8 @@ describe("mockcli 关键路径（CS-3：agent-event 注入 + hub 分派/保存 c
           if (!proj) return false;
           const container = proj.parentElement as HTMLElement | null;
           if (!container) return false;
-          if (container.children.length <= 2) {
+          // NAV-10 修订：项目收起 = 容器仅项目行 1 子级（历史节点随项目展开渲染）
+          if (container.children.length <= 1) {
             (proj as HTMLElement).click();
             any = true;
           }

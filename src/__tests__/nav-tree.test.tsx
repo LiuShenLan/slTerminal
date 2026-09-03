@@ -1041,16 +1041,27 @@ describe("历史节点（NAV-03）", () => {
     return container;
   }
 
-  it("历史折叠节点常驻项目下：计数 pill + 展开渲染历史行（StatusDot + logo + 标题 + 相对时间）", async () => {
-    const container = renderWithHistory([makeHistorySession("s1")]);
-
-    // 历史节点常驻（不随项目展开态隐藏——NAV-10 契约）；
-    // 计数 pill 显示会话数（挂载即 scan 为 async——等待落地）
+  /** NAV-10 修订 2026-09-03：历史节点随项目展开态渲染——先展开项目行，
+   *  再等待 scan 落地节点出现（计数 pill「1」落地 = total>0 就绪） */
+  async function expandToHistoryNode(container: HTMLElement): Promise<HTMLElement> {
+    const projRow = getRows(container, "nav-row-project")[0];
+    expect(projRow).toBeTruthy();
+    fireEvent.click(projRow);
     const node = await waitFor(() => {
-      const el = container.querySelector('[data-e2e="nav-history-node"]');
+      const el = container.querySelector(
+        '[data-e2e="nav-history-node"]',
+      ) as HTMLElement | null;
       expect(el?.textContent).toContain("1");
       return el as HTMLElement;
     });
+    return node;
+  }
+
+  it("历史折叠节点随项目展开显示：计数 pill + 展开渲染历史行（StatusDot + logo + 标题 + 相对时间）", async () => {
+    const container = renderWithHistory([makeHistorySession("s1")]);
+
+    // NAV-10 修订：节点随项目展开态渲染——先展开项目行；计数 pill 显示会话数
+    const node = await expandToHistoryNode(container);
 
     // 展开 → 历史行渲染（标题 + logo + title tooltip = prompt 预览）
     // 行内容断言与行渲染同处 waitFor——重渲染可能未稳定
@@ -1064,52 +1075,43 @@ describe("历史节点（NAV-03）", () => {
     });
   });
 
-  it("历史session 节点与操作页面同级缩进（childrenStyle 容器）且恒位于页面容器之后", async () => {
+  it("历史session 节点随项目展开显示、位于页面行之后（最下方）；收起即隐藏（NAV-10 修订）", async () => {
     const container = renderWithHistory([makeHistorySession("s1")]);
     const projRow = getRows(container, "nav-row-project")[0];
     const projectContainer = projRow.parentElement as HTMLElement;
 
-    // 项目收起（默认态）：容器 children = [项目行, 历史容器]——历史常驻
-    let children = Array.from(projectContainer.children);
-    expect(children).toHaveLength(2);
-    const collapsedHistoryWrap = children[1] as HTMLElement;
-    expect(
-      collapsedHistoryWrap.querySelector('[data-e2e="nav-history-node"]'),
-    ).toBeTruthy();
+    // 项目收起（默认态）：容器仅项目行——历史节点不渲染（不再常驻外露）
+    expect(Array.from(projectContainer.children)).toHaveLength(1);
+    expect(projectContainer.querySelector('[data-e2e="nav-history-node"]')).toBeNull();
 
-    // 展开项目 → [项目行, 页面容器, 历史容器]——历史恒位于末位（最下方）
-    // 结构与缩进样式断言与行渲染同处 waitFor——重渲染可能未稳定
+    // 展开项目 → 单一 childrenStyle 子容器（页面行 + 历史节点）——与页面同级缩进
     fireEvent.click(projRow);
-    await waitFor(() => {
+    const historyNode = await waitFor(() => {
       expect(getRows(container, "nav-row-page").length).toBe(1);
-      children = Array.from(projectContainer.children);
-      expect(children.length).toBeGreaterThanOrEqual(3);
-      const historyWrap = children[children.length - 1] as HTMLElement;
-      expect(historyWrap.querySelector('[data-e2e="nav-history-node"]')).toBeTruthy();
-      // 同级缩进：与页面容器同规格 childrenStyle（marginLeft 15 + 1px 发丝引导线）
-      const pagesWrap = children[1] as HTMLElement;
-      expect(historyWrap.style.marginLeft).toBe("15px");
-      expect(historyWrap.style.marginLeft).toBe(pagesWrap.style.marginLeft);
-      expect(historyWrap.style.borderLeft).toBe(pagesWrap.style.borderLeft);
-      expect(historyWrap.style.borderLeft).toContain("1px solid");
+      const sub = projectContainer.children[1] as HTMLElement;
+      expect(sub.style.marginLeft).toBe("15px"); // childrenStyle 缩进（15px + 发丝引导线）
+      const node = sub.querySelector('[data-e2e="nav-history-node"]') as HTMLElement | null;
+      expect(node).toBeTruthy();
+      // 恒置最下方：历史节点是子容器最后一个元素（页面行 div 之后）
+      expect(sub.children[sub.children.length - 1]).toBe(node);
+      return node as HTMLElement;
     });
+    expect(historyNode.textContent).toContain("1");
 
-    // 再次收起 → 历史容器仍存在（NAV-10 常驻契约不破）
+    // 再次收起 → 历史节点随展开容器整体消失
     fireEvent.click(projRow);
     await waitFor(() => {
-      expect(getRows(container, "nav-row-page").length).toBe(0);
-      expect(
-        (projRow.parentElement as HTMLElement).querySelector(
-          '[data-e2e="nav-history-node"]',
-        ),
-      ).toBeTruthy();
+      expect(projectContainer.querySelector('[data-e2e="nav-history-node"]')).toBeNull();
+      expect(Array.from(projectContainer.children)).toHaveLength(1);
     });
   });
 
   it("双击普通历史行 → restoreHistorySession(session, { fork: false })", async () => {
     const session = makeHistorySession("s1");
     const container = renderWithHistory([session]);
-    fireEvent.click(container.querySelector('[data-e2e="nav-history-node"]') as HTMLElement);
+    // NAV-10 修订：节点随项目展开态渲染——先展开项目行再展开节点
+    const node = await expandToHistoryNode(container);
+    fireEvent.click(node);
     await waitFor(() => expect(getRows(container, "nav-row-session").length).toBe(1));
     fireEvent.doubleClick(getRows(container, "nav-row-session")[0]);
     await waitFor(() => {
@@ -1132,7 +1134,9 @@ describe("历史节点（NAV-03）", () => {
         },
       },
     });
-    fireEvent.click(container.querySelector('[data-e2e="nav-history-node"]') as HTMLElement);
+    // NAV-10 修订：先展开项目行再展开节点（节点随项目展开态渲染）
+    const node = await expandToHistoryNode(container);
+    fireEvent.click(node);
     await waitFor(() => expect(getRows(container, "nav-row-session").length).toBe(1));
 
     fireEvent.doubleClick(getRows(container, "nav-row-session")[0]);
@@ -1161,7 +1165,9 @@ describe("历史节点（NAV-03）", () => {
   it("历史行右键菜单：复制恢复命令 / 分支恢复 / 删除（danger）", async () => {
     const session = makeHistorySession("s1");
     const container = renderWithHistory([session]);
-    fireEvent.click(container.querySelector('[data-e2e="nav-history-node"]') as HTMLElement);
+    // NAV-10 修订：节点随项目展开态渲染——先展开项目行再展开节点
+    const node = await expandToHistoryNode(container);
+    fireEvent.click(node);
     await waitFor(() => expect(getRows(container, "nav-row-session").length).toBe(1));
 
     fireEvent.contextMenu(getRows(container, "nav-row-session")[0]);
@@ -1191,12 +1197,15 @@ describe("历史节点（NAV-03）", () => {
     });
   });
 
-  it("无历史会话 → 展开显示空态「暂无历史会话」", async () => {
+  it("无历史会话项目 → 项目展开后无 nav-history-node（total=0 隐藏——NAV-10 修订）", async () => {
     const container = renderWithHistory([]);
-    fireEvent.click(container.querySelector('[data-e2e="nav-history-node"]') as HTMLElement);
-    await waitFor(() => {
-      expect(container.textContent).toContain("暂无历史会话");
-    });
+    const projRow = getRows(container, "nav-row-project")[0];
+    fireEvent.click(projRow);
+    await waitFor(() => expect(getRows(container, "nav-row-page").length).toBe(1));
+    // scan 空落地（total=0）后节点恒不渲染；空态文案已随死代码删除
+    await waitFor(() => expect(mockScanHistory).toHaveBeenCalled());
+    expect(container.querySelector('[data-e2e="nav-history-node"]')).toBeNull();
+    expect(container.textContent).not.toContain("暂无历史会话");
   });
 });
 

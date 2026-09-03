@@ -22,7 +22,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### 展开/折叠与搜索（NAV-01/04/10）
 
 - 展开状态组件内维护（`expanded` / `expandedHist` 两个 Set），**默认空 = 全部收起**。
-- **NAV-10 契约**：历史节点常驻项目下（不随项目展开态隐藏），计数 pill 与历史行入口恒可见；外包 `childrenStyle` 容器与操作页面同级缩进，位于页面容器之后恒置最下方。
+- **NAV-10 契约（2026-09-03 修订）**：历史节点随项目展开态显示——渲染在 NavTree `renderProject` 的 `expanded &&` 展开容器内（`renderHistory` 返回值，外包 `childrenStyle` 容器与操作页面同级缩进），位于页面容器之后恒置最下方；项目行收起即整体隐藏（不再常驻项目下外露，原「不随项目展开态隐藏」语义废除）；无历史会话项目（total=0）不渲染节点（`renderHistory` 最前显式判定——非搜索态 match 恒 true 必须显式判）。
 - 搜索：query 子串不区分大小写过滤项目/页面/会话名；父节点因子命中而显示；查询非空时命中链自动展开。
 
 ### FE-16 历史归属索引

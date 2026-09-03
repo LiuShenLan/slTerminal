@@ -48,8 +48,9 @@ describe("Agent 会话视图与 toast 通知", () => {
    * 展开导航树到会话行可见（幂等，遍历全部项目/页面行）：
    * 项目持久化累积（slterminal-projects.json 跨 run 保留）——目标项目可能位于
    * 导航树任意位置，必须展开全部未展开行。
-   * 展开态判定（DOM 结构）：项目行父容器 = [项目行, 历史节点常驻, 展开时 +子级容器]
-   *   → children > 2 即展开；页面行父容器 = [页面行, 展开时 +子级容器] → children > 1 即展开。
+   * 展开态判定（DOM 结构）：项目行父容器 = [项目行, 展开时 +子级容器（页面行 +
+   *   历史节点随项目展开渲染其中——NAV-10 修订 2026-09-03）] → children > 1 即展开；
+   *   页面行父容器 = [页面行, 展开时 +子级容器] → children > 1 即展开。
    * 页面行点击 = 切换展开 + 切页（switchPage 幂等，切页不碍行归属渲染）。
    * NavTree 展开态组件内维护，nav 视图 display:none 保挂载不丢。
    */
@@ -67,8 +68,8 @@ describe("Agent 会话视图与 toast 通知", () => {
         if (!proj) return false;
         const container = proj.parentElement as HTMLElement | null;
         if (!container) return false;
-        // 项目行未展开（容器 children ≤ 2：项目行 + 历史节点常驻）→ 点击展开
-        if (container.children.length <= 2) {
+        // 项目行未展开（容器仅项目行 1 子级——历史节点随项目展开渲染，NAV-10 修订）→ 点击展开
+        if (container.children.length <= 1) {
           (proj as HTMLElement).click();
           any = true;
         }

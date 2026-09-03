@@ -276,9 +276,11 @@ function writeFakePlanEnv(): void {
 /**
  * 读 E2E 项目历史节点计数 pill。
  * 定位：nav-row-project 文本同时含项目名（SLTERM_E2E_PROJECT_DIR 末段）与「当前」
- * pill（E/F 用例中 E2E 项目恒为活跃项目——创建后无切页动作）→ 其兄弟
- * nav-history-node（NavTree 结构：项目容器 = 项目行 + 历史节点同级）→ 头部行
- * 末位 span 即计数 pill。双条件锚定防重试残留的同名旧项目误读。无节点返回 null。
+ * pill（E/F 用例中 E2E 项目恒为活跃项目——创建后无切页动作）→ 父容器内
+ * nav-history-node（NAV-10 修订 2026-09-03：节点随项目展开态渲染——项目行收起
+ * 时先点击展开，React 异步渲染本轮返回 null，调用方 waitUntil 轮询下一轮读到）
+ * → 头部行末位 span 即计数 pill。双条件锚定防重试残留的同名旧项目误读。
+ * 无节点返回 null。
  */
 async function readHistoryCountPill(): Promise<number | null> {
   const projName = e2eProjectDir.split(/[/\\]/).pop() ?? "";
@@ -287,7 +289,14 @@ async function readHistoryCountPill(): Promise<number | null> {
     for (const r of rows) {
       const text = r.textContent ?? "";
       if (text.includes(name) && text.includes("当前")) {
-        const node = r.parentElement?.querySelector('[data-e2e="nav-history-node"]');
+        const container = r.parentElement as HTMLElement | null;
+        if (!container) return null;
+        // 项目收起（容器仅项目行 1 子级）→ 点击展开（幂等：展开后不再点击防误折叠）
+        if (container.children.length <= 1) {
+          (r as HTMLElement).click();
+          return null;
+        }
+        const node = container.querySelector('[data-e2e="nav-history-node"]');
         if (!node) return null;
         const headRow = node.children[0];
         const spans = headRow ? Array.from(headRow.querySelectorAll("span")) : [];

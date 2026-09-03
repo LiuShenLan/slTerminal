@@ -6,9 +6,10 @@
 // 「历史」→「历史session」，并与操作页面同级（NavTree 外包 childrenStyle 容器）。
 // 结构（NAV-10 契约：历史行须嵌套于 nav-history-node 元素内——测试经
 // node.querySelectorAll 定位行内容）：外层容器承载 data-e2e 与整体点击，
-// 内层头部行持行样式，展开时在头部下渲染子级容器（历史行/空态）。
+// 内层头部行持行样式，展开时在头部下渲染子级容器（历史行）。
 // 子级容器点击 stopPropagation——行内点击不误触发节点折叠。
-// 节点常驻项目下（不随项目展开态隐藏，NAV-10 契约）。
+// 节点随项目展开态显示（NAV-10 修订 2026-09-03：收进 NavTree 项目展开容器，
+// 不再常驻项目下外露——详见 NavTree.tsx renderProject 注释）。
 
 import React, { useState } from "react";
 import type { ReactNode } from "react";

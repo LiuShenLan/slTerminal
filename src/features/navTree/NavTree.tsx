@@ -26,7 +26,9 @@
 //
 // 展开/折叠默认收起（NAV-10 契约：测试辅助按点击展开驱动；行点击 = 切换展开 +
 // 行为委托：页面行点击同时切换页面——照 SidebarTree 切换语义）。
-// 历史节点常驻项目下（不随项目展开态隐藏）——计数 pill 与历史行入口恒可见（NAV-10 契约）。
+// 历史节点随项目展开态显示（NAV-10 修订 2026-09-03：收进项目展开容器，不再常驻
+//   项目下外露）——位于该项目所有操作页面之后恒置最下方；无历史会话的项目
+//   （total=0）不渲染节点。
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
@@ -62,7 +64,6 @@ import {
 } from "../../workspace/pageApis";
 import {
   IconEmptyBox,
-  IconHistory,
   IconPlus,
   IconRefresh,
   IconSearch,
@@ -484,7 +485,10 @@ export const NavTree: React.FC<NavTreeProps> = ({ switchToPage, onDeletePage }) 
 
   const renderHistory = (model: NavProjectModel) => {
     const projId = model.project.projectId;
-    // 搜索中仅当有会话行命中时显示历史节点；非搜索态常驻（NAV-10 契约）
+    // 无历史会话的项目不渲染节点（NAV-10 修订 2026-09-03：total=0 隐藏——
+    // 非搜索态 match 恒 true，必须显式判定）
+    if (model.history.total === 0) return null;
+    // 搜索中仅当有会话行命中时显示历史节点（NAV-04 搜索过滤：命中才显示）
     if (nav.searching && !model.history.match) return null;
     // 展开判定：搜索中命中链自动展开，否则跟随手动展开态（默认收起）
     const expanded = nav.searching
@@ -501,20 +505,17 @@ export const NavTree: React.FC<NavTreeProps> = ({ switchToPage, onDeletePage }) 
           nav.toggleHist(projId);
         }}
       >
-        {model.history.sessions.length === 0 ? (
-          // 空历史空态（NAV-03：15px 线性图标 fg-4 + 说明 fg-3）
-          <EmptyState icon={<IconHistory size={15} />} text="暂无历史会话" />
-        ) : (
-          model.history.sessions.map((session) => (
-            <NavHistoryRow
-              key={keyOf(session.cliId, session.sessionId)}
-              session={session}
-              status={nav.activeStatuses.get(keyOf(session.cliId, session.sessionId))}
-              onDoubleClick={handleHistoryDoubleClick}
-              onContextMenu={handleHistoryContextMenu}
-            />
-          ))
-        )}
+        {/* total>0 时 sessions 恒非空——空态「暂无历史会话」随 total=0 节点隐藏而
+            成死代码，已删除（NAV-10 修订 2026-09-03） */}
+        {model.history.sessions.map((session) => (
+          <NavHistoryRow
+            key={keyOf(session.cliId, session.sessionId)}
+            session={session}
+            status={nav.activeStatuses.get(keyOf(session.cliId, session.sessionId))}
+            onDoubleClick={handleHistoryDoubleClick}
+            onContextMenu={handleHistoryContextMenu}
+          />
+        ))}
       </NavHistoryNode>
     );
   };
@@ -564,12 +565,12 @@ export const NavTree: React.FC<NavTreeProps> = ({ switchToPage, onDeletePage }) 
         {expanded && (
           <div style={childrenStyle}>
             {model.pages.map((pageModel) => renderPage(model, pageModel))}
+            {/* 历史节点随项目展开态显示（NAV-10 修订 2026-09-03：收进展开容器，不再
+                常驻项目下外露）——与操作页面同级缩进（15px + 发丝引导线），位于页面
+                容器之后恒置最下方；无历史项目（total=0）由 renderHistory 返回 null */}
+            {renderHistory(model)}
           </div>
         )}
-        {/* 历史节点常驻项目下（不随项目展开态隐藏——NAV-10 契约）；外包
-            childrenStyle 容器与操作页面同级缩进（15px + 发丝引导线），
-            位于 pages 容器之后恒置最下方（人工验证问题 2 修订） */}
-        <div style={childrenStyle}>{renderHistory(model)}</div>
       </div>
     );
   };

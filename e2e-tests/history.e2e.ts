@@ -71,59 +71,85 @@ describe("Claude 历史会话视图", () => {
   /** 展开「当前活跃项目」的行（活跃会话行挂页面下——四态用例需行可见）。
    *  只处理当前项目容器内的行（含「当前」pill）——页面行点击 = 切页 + 初始化
    *  Dockview，点击其它项目的页面行会把 activePageId 切走（useAgentStatus 只建
-   *  活跃项目行）；用例面板页面即活跃页面。 */
+   *  活跃项目行）；用例面板页面即活跃页面。
+   *  NAV-10 修订（2026-09-03）后注意：页面行无活跃会话时不渲染子级容器
+   *  （DOM 无法区分展开/收起）——「每行至多点击一次」进入展开稳态，禁止循环内
+   *  反复 toggle 判定（奇偶翻转会回到收起）。前提 = 页面行初始收起（本 spec 各
+   *  用例新建/新切页面行且此前未点过）；同一 NavTree 挂载内勿重复调用本函数。 */
   async function ensureProjectPagesExpanded(): Promise<void> {
-    for (let i = 0; i < 6; i++) {
+    // 1. 项目行：收起（容器仅项目行 1 子级——历史节点随项目展开渲染）才点击展开；
+    //    等待页面行渲染提交后再处理页面行
+    for (let i = 0; i < 3; i++) {
       const clicked = await browser.execute(() => {
-        let any = false;
         const proj = Array.from(
           document.querySelectorAll('[data-e2e="nav-row-project"]'),
         ).find((p) => (p.textContent ?? "").includes("当前"));
         if (!proj) return false;
         const container = proj.parentElement as HTMLElement | null;
-        if (!container) return false;
-        if (container.children.length <= 2) {
-          (proj as HTMLElement).click();
-          any = true;
-        }
-        const pages = container.querySelectorAll(
-          '[data-e2e="nav-row-page"]',
-        );
-        for (const pg of pages) {
-          if ((pg.parentElement?.children.length ?? 0) <= 1) {
-            (pg as HTMLElement).click();
-            any = true;
-          }
-        }
-        return any;
+        if (!container || container.children.length > 1) return false;
+        (proj as HTMLElement).click();
+        return true;
       });
-      if (!clicked) return;
-      // 条件等待展开结果出现（替代固定 350ms sleep——TQ-E-03）：
-      // 条件 = 当前项目容器已展开（nav-row-page 已渲染）——本轮点击的 React 提交
-      // 落地后，下一轮判定（querySelectorAll nav-row-page）与后续会话行断言才基于
-      // 新 DOM。页面行无会话时展开不渲染子级容器（DOM 无变化），故以项目展开为统一
-      // 收敛点；toggleExpand 为 functional setState 逐次生效，每轮点击各自提交后
-      // 奇数次翻转必然到达展开稳态。
+      if (!clicked) break;
       await browser.waitUntil(
         async () =>
           await browser.execute(() => {
             const proj = Array.from(
               document.querySelectorAll('[data-e2e="nav-row-project"]'),
             ).find((p) => (p.textContent ?? "").includes("当前"));
-            if (!proj) return false;
-            const container = proj.parentElement as HTMLElement | null;
-            if (!container) return false;
-            // 展开结果：项目容器内已渲染页面行（收起态无页面容器）
-            return container.querySelectorAll('[data-e2e="nav-row-page"]').length > 0;
+            return !!proj?.parentElement?.querySelector('[data-e2e="nav-row-page"]');
           }),
-        { timeout: 5000, interval: 100, timeoutMsg: "树节点展开超时" },
+        { timeout: 5000, interval: 100, timeoutMsg: "项目行展开超时" },
+      );
+    }
+    // 2. 页面行：单轮对当前项目容器内全部页面行各点击一次（toggle 一次 → 展开稳态）。
+    //    无会话页面展开不产生子容器，不可用 DOM 收敛判定；项目内多页面行会依次切页，
+    //    最终活跃页 = 容器内最后一个页面行（本 spec 用例项目均单页面，无碍）。
+    await browser.execute(() => {
+      const proj = Array.from(
+        document.querySelectorAll('[data-e2e="nav-row-project"]'),
+      ).find((p) => (p.textContent ?? "").includes("当前"));
+      if (!proj) return;
+      const container = proj.parentElement as HTMLElement | null;
+      if (!container) return;
+      const pages = container.querySelectorAll('[data-e2e="nav-row-page"]');
+      for (const pg of pages) (pg as HTMLElement).click();
+    });
+  }
+
+  /** 展开全部项目行至子容器可见（NAV-10 修订 2026-09-03：历史节点随项目展开态
+   *  渲染——项目收起时无 nav-history-node，须先展开项目行。幂等多轮收敛：
+   *  已展开（容器 children>1）不重复点击，防 toggle 误折叠未渲染项目。 */
+  async function ensureAllProjectsExpanded(): Promise<void> {
+    for (let i = 0; i < 6; i++) {
+      const clicked = await browser.execute(() => {
+        let any = false;
+        for (const proj of Array.from(
+          document.querySelectorAll('[data-e2e="nav-row-project"]'),
+        ) as HTMLElement[]) {
+          const container = proj.parentElement as HTMLElement | null;
+          if (!container || container.children.length > 1) continue; // 已展开跳过
+          proj.click();
+          any = true;
+        }
+        return any;
+      });
+      if (!clicked) return;
+      await browser.waitUntil(
+        async () =>
+          await browser.execute(() =>
+            Array.from(document.querySelectorAll('[data-e2e="nav-row-project"]')).some(
+              (p) => ((p.parentElement as HTMLElement | null)?.children.length ?? 0) > 1,
+            ),
+          ),
+        { timeout: 5000, interval: 100, timeoutMsg: "项目行展开超时" },
       );
     }
   }
 
   /**
    * 通用前置：创建 E2E 项目（fixture 507 会话 cwd 归属项目——导航树历史节点
-   * 只显示归属会话）→ 打开 nav 视图 → 展开历史节点（展开触发重扫）。
+   * 只显示归属会话）→ 打开 nav 视图 → 展开全部项目行 + 历史节点（展开触发重扫）。
    */
   async function openHistoryWithFreshScan(): Promise<void> {
     await waitForWorkspaceReady();
@@ -138,6 +164,7 @@ describe("Claude 历史会话视图", () => {
       );
     }
     await openNavView();
+    await ensureAllProjectsExpanded();
     await ensureHistoryExpanded();
     await waitHistoryRows();
   }
