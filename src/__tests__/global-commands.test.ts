@@ -2,15 +2,31 @@
 //
 // 覆盖路径：
 //   1. 命令结构验证（id、keystroke、context、priority）
-//   2. handler：活跃面板存在 → close() 被调用 + 返回 true（阻止默认）
-//   3. handler：无活跃面板 → close() 不调用 + 返回 false（透传）
+//   2. handler：活跃面板存在 → 经 closeTabGuarded 守卫关闭 + 返回 true（阻止默认）
+//   3. handler：无活跃面板 → closeTabGuarded 不调用 + 返回 false（透传）
 //   4. handler：getDockviewApi() 返回 undefined → 安全返回 false
 //   5. handler：activePanel 为 undefined → 安全返回 false
+// 守卫本身（settings dirty 分支、confirmDialog 交互）在 tab-close.test.ts 单测——
+// 本文件 mock tabClose 模块，只锁 handler 与守卫的接线契约（FE-49）
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { createGlobalShortcuts } from "../features/shortcuts/globalCommands";
 import type { DockviewApi, IDockviewPanel } from "dockview-react";
 import { makeKeydown } from "./helpers/keyboard";
+
+// FE-49: Ctrl+W 经共享守卫 closeTabGuarded——接线断言（mock 守卫，防本文件
+// 触达 confirmDialog/dirtyRegistry 真实现）
+vi.mock("../workspace/tabClose", () => ({ closeTabGuarded: vi.fn() }));
+import { closeTabGuarded } from "../workspace/tabClose";
+
+// vi.mocked：把 vi.mock 工厂产物的类型收窄为 Mock 实例（否则 TS 保留模块真实签名，
+// mockClear/toHaveBeenCalled 不存在）
+const mockCloseTabGuarded = vi.mocked(closeTabGuarded);
+
+// mock 调用计数跨用例隔离（工厂 mock 不自动 reset——vitest 配置未开 mockReset）
+afterEach(() => {
+  mockCloseTabGuarded.mockClear();
+});
 
 /** 构造 DockviewApi stub */
 function dockviewApiStub(opts?: { activePanel?: Partial<IDockviewPanel> | null }): DockviewApi {
@@ -19,9 +35,12 @@ function dockviewApiStub(opts?: { activePanel?: Partial<IDockviewPanel> | null }
   } as unknown as DockviewApi;
 }
 
-/** 构造 activePanel stub */
-function activePanelStub(): { api: { close: ReturnType<typeof vi.fn> } } {
-  return { api: { close: vi.fn() } };
+/** 构造 activePanel stub（id 供守卫第一参校验——守卫以 (api, id) 接线） */
+function activePanelStub(id = "panel-test"): {
+  id: string;
+  api: { close: ReturnType<typeof vi.fn> };
+} {
+  return { id, api: { close: vi.fn() } };
 }
 
 describe("createGlobalShortcuts", () => {
@@ -70,10 +89,10 @@ describe("createGlobalShortcuts", () => {
     });
   });
 
-  // ---- 2. handler: 活跃面板存在 → 关闭 ----
+  // ---- 2. handler: 活跃面板存在 → 守卫关闭 ----
 
   describe("handler 关闭活跃面板", () => {
-    it("活跃面板存在 → 调用 activePanel.api.close() 并返回 true", () => {
+    it("活跃面板存在 → 经 closeTabGuarded(activePanel.api, activePanel.id) 守卫并返回 true", () => {
       const panel = activePanelStub();
       const api = dockviewApiStub({ activePanel: panel as unknown as IDockviewPanel });
       const cmds = createGlobalShortcuts(() => api);
@@ -81,12 +100,27 @@ describe("createGlobalShortcuts", () => {
       const event = makeKeydown({ ctrlKey: true, code: "KeyW" });
       const result = cmds[0].handler(event);
 
-      expect(panel.api.close).toHaveBeenCalledOnce();
+      expect(mockCloseTabGuarded).toHaveBeenCalledOnce();
+      expect(mockCloseTabGuarded).toHaveBeenCalledWith(panel.api, panel.id);
       expect(result).toBe(true);
     });
 
+    it("守卫为异步调用（void 挂起）——handler 同步返回 true，不等待守卫决议", async () => {
+      const panel = activePanelStub();
+      const api = dockviewApiStub({ activePanel: panel as unknown as IDockviewPanel });
+      const cmds = createGlobalShortcuts(() => api);
+
+      const result = cmds[0].handler(makeKeydown({ ctrlKey: true, code: "KeyW" }));
+
+      // handler 返回后守卫已发起（microtask 挂起）；await 让 mock resolve，确认
+      // 守卫确被异步执行而非同步短路
+      expect(result).toBe(true);
+      expect(mockCloseTabGuarded).toHaveBeenCalledOnce();
+      await Promise.resolve();
+    });
+
     it("getDockviewApi 在每次 handler 调用时重新获取（不是注册时缓存）", () => {
-      const panel1 = activePanelStub();
+      const panel1 = activePanelStub("panel-1");
       const api1 = dockviewApiStub({ activePanel: panel1 as unknown as IDockviewPanel });
 
       let currentApi: DockviewApi | undefined = api1;
@@ -94,23 +128,25 @@ describe("createGlobalShortcuts", () => {
 
       // 第一次调用 → 使用 api1
       cmds[0].handler(makeKeydown({ ctrlKey: true, code: "KeyW" }));
-      expect(panel1.api.close).toHaveBeenCalledOnce();
+      expect(mockCloseTabGuarded).toHaveBeenLastCalledWith(panel1.api, panel1.id);
 
       // 模拟页面切换，getDockviewApi 现在返回不同的 api
-      const panel2 = activePanelStub();
+      const panel2 = activePanelStub("panel-2");
       const api2 = dockviewApiStub({ activePanel: panel2 as unknown as IDockviewPanel });
       currentApi = api2;
 
       // 第二次调用 → 使用 api2
       cmds[0].handler(makeKeydown({ ctrlKey: true, code: "KeyW" }));
-      expect(panel2.api.close).toHaveBeenCalledOnce();
+      expect(mockCloseTabGuarded).toHaveBeenLastCalledWith(panel2.api, panel2.id);
+      expect(mockCloseTabGuarded).toHaveBeenCalledTimes(2);
     });
   });
 
   // ---- 3. handler: 无活跃面板 → 透传 ----
 
   describe("handler 无活跃面板透传", () => {
-    it("activePanel 为 undefined → 返回 false（事件透传）", () => {
+    it("activePanel 为 undefined → 返回 false 且守卫不调用（事件透传）", () => {
+      mockCloseTabGuarded.mockClear();
       const api = dockviewApiStub({ activePanel: null });
       const cmds = createGlobalShortcuts(() => api);
 
@@ -119,9 +155,11 @@ describe("createGlobalShortcuts", () => {
 
       expect(result).toBe(false);
       expect(event.defaultPrevented).toBe(false);
+      expect(mockCloseTabGuarded).not.toHaveBeenCalled();
     });
 
-    it("getDockviewApi 返回 undefined → 安全返回 false", () => {
+    it("getDockviewApi 返回 undefined → 安全返回 false 且守卫不调用", () => {
+      mockCloseTabGuarded.mockClear();
       const cmds = createGlobalShortcuts(() => undefined);
 
       const event = makeKeydown({ ctrlKey: true, code: "KeyW" });
@@ -129,6 +167,7 @@ describe("createGlobalShortcuts", () => {
 
       expect(result).toBe(false);
       expect(event.defaultPrevented).toBe(false);
+      expect(mockCloseTabGuarded).not.toHaveBeenCalled();
     });
   });
 

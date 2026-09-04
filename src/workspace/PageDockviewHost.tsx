@@ -17,9 +17,8 @@ import {
   type IWatermarkPanelProps,
 } from "dockview-react";
 import { panelRegistry, PANEL_TERMINAL } from "../panelRegistry";
-import { isSettingsDirty } from "../features/settingsCenter/dirtyRegistry";
-import { confirmDialog } from "../lib";
 import { FileIcon } from "../features/explorer/FileIcon";
+import { closeTabGuarded } from "./tabClose";
 import { saveLayout, loadLayout } from "./layoutSerde";
 import { makeTerminalPanelId, advanceTerminalPanelSeq } from "../lib/panelId";
 import { StatusDot } from "../lib/StatusDot";
@@ -274,7 +273,16 @@ export function createTabMenuItems(
     items.push(
       item("关闭", {
         danger: true,
-        action: () => panel.api.close(),
+        // FE-49: 单面板「关闭」与 ×/Ctrl+W/中键同走共享守卫 closeTabGuarded——
+        // panelId 取 params（判据同 DefaultTab 的 settings- 前缀，同源无漂移）；
+        // 批量关闭族（关闭其他/关闭全部）维持直关（批量确认交互未定义，遗留见
+        // workspace/CLAUDE.md）
+        action: () => {
+          void closeTabGuarded(
+            panel.api,
+            (panel.params as TabParams | undefined)?.panelId,
+          );
+        },
       }),
       item("关闭其他", {
         danger: true,
@@ -428,6 +436,18 @@ export const DefaultTab: React.FC<IDockviewPanelProps> = (props) => {
           { detail: { panelId, x: e.clientX, y: e.clientY } },
         ));
       }}
+      onAuxClick={(e) => {
+        // FE-49 鼠标中键关闭页签：auxclick = 完整点击语义（auxclick 仅在同元素
+        // 完成按下+弹起时触发——按下后拖离再弹起即天然取消）；目标 = 本页签自身
+        // api，无需聚焦/激活（对比 Ctrl+W 的 activePanel 语义）。中键不触发 × 的
+        // onClick（click 仅主键），× 上的中键经冒泡同样走本路径关闭（浏览器惯例）。
+        // autoscroll 预防已由 PageDockview 容器 capture mousedown 单点拦截；
+        // auxclick 无库内默认动作，preventDefault 仅防御（dockview 对 auxclick
+        // 零消费，无需 stopPropagation）
+        if (e.button !== 1) return;
+        e.preventDefault();
+        void closeTabGuarded(api, tabParams?.panelId);
+      }}
       style={{
         display: "flex", alignItems: "center", height: "100%",
         padding: "0 8px", gap: 6, userSelect: "none",
@@ -459,24 +479,10 @@ export const DefaultTab: React.FC<IDockviewPanelProps> = (props) => {
         data-e2e={tabParams?.panelId ? `tab-close-${tabParams?.panelId}` : "tab-close"}
         onClick={(e) => {
           e.stopPropagation();
-          // SC-FE-07 × 关闭守卫：settings 面板且 dirty → confirmDialog 确认才关。
-          // 判据 = params.panelId 的 settings- 前缀（DefaultTab 拿不到 panel——
-          // dockview 8.1.0 IDockviewPanelProps 无 panel 属性，context menu 场景的
-          // panel.view.contentComponent 红线不适用）；该前缀与 dirtyRegistry 键
-          // 同源（SettingsPanel 以同一 params.panelId 注册），无漂移；
-          // 非 settings 面板 / 非 dirty 直关（行为零回归）
-          const panelId = tabParams?.panelId;
-          void (async () => {
-            if (panelId?.startsWith("settings-") && isSettingsDirty(panelId)) {
-              const ok = await confirmDialog({
-                title: "未保存的修改",
-                message: "当前配置页有未保存的修改，关闭将丢弃这些修改。",
-                kind: "warning",
-              });
-              if (!ok) return;
-            }
-            api.close();
-          })();
+          // SC-FE-07 × 关闭守卫：判据与确认逻辑已统一迁至 tabClose.ts 的
+          // closeTabGuarded（FE-49）——× / Ctrl+W / 鼠标中键 / 右键菜单「关闭」
+          // 四路共用同一入口，防多路守卫漂移（语义沿革见 tabClose.ts 头注释）
+          void closeTabGuarded(api, tabParams?.panelId);
         }}
         onMouseEnter={() => setCloseHovered(true)}
         onMouseLeave={() => setCloseHovered(false)}
@@ -518,6 +524,8 @@ const PageDockview: React.FC<PageDockviewProps> = React.memo(({
   const restoreGuardRef = useRef(false);
   /** 收集 handleReady 内注册的三个 disposable（onDidLayoutFromJSON/onDidLayoutChange/onDidRemovePanel） */
   const disposablesRef = useRef<Array<{ dispose(): void }>>([]);
+  /** FE-49: 容器根 ref——页签条防 autoscroll 捕获监听的挂载点（见下方 effect） */
+  const containerRef = useRef<HTMLDivElement>(null);
 
   // F2: savedLayout 通过 useRef 读取，不进入 handleReady 的 useCallback deps
   const savedLayoutRef = useRef(savedLayout);
@@ -586,6 +594,27 @@ const PageDockview: React.FC<PageDockviewProps> = React.memo(({
     window.addEventListener(TAB_CONTEXT_MENU_EVENT, onTabContextMenu);
     return () => window.removeEventListener(TAB_CONTEXT_MENU_EVENT, onTabContextMenu);
   }, [buildTabMenuItems]);
+
+  // FE-49: 页签条防 autoscroll 捕获监听——dockview 页签列表 .dv-tabs-container 为
+  // overflow:auto（可横向滚动），中键按下会启动 Chromium autoscroll（滚动光标+
+  // 随拖动滚动）；capture 挂本容器根，单点覆盖所有分屏组 header（含页签缝隙、
+  // void 空白、actions 区）。只 preventDefault 消默认动作、不做关闭——关闭在
+  // auxclick 弹起路径（DefaultTab 内处理），且 mousedown preventDefault 不影响
+  // auxclick 触发；preventDefault 不拦传播，dockview 自身 pointerdown 对
+  // button!==0 本就 no-op，无冲突。页面 display:none 时事件不达，多页实例无需
+  // 额外开关；卸载 effect 清理
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const onMiddleDown = (e: MouseEvent) => {
+      if (e.button !== 1) return;
+      if ((e.target as Element | null)?.closest?.(".dv-tabs-and-actions-container")) {
+        e.preventDefault();
+      }
+    };
+    el.addEventListener("mousedown", onMiddleDown, { capture: true });
+    return () => el.removeEventListener("mousedown", onMiddleDown, { capture: true });
+  }, []);
 
   // F2: savedLayout 已从 deps 移除——通过 savedLayoutRef.current 读取
   const handleReady = useCallback((event: { api: DockviewApi }) => {
@@ -685,7 +714,7 @@ const PageDockview: React.FC<PageDockviewProps> = React.memo(({
   }, [pageId, rootPath]);
 
   return (
-    <div style={{
+    <div ref={containerRef} style={{
       // dockview CSS 变量（20 条，active 方案 libraries.dockview）内联注入，
       // 替代主题类暗色常量；className="dockview-theme-dark" 保留供布局样式
       ...dockviewVarStyle(),

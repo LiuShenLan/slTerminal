@@ -9,6 +9,10 @@
 import type { Command } from "./types";
 import { commandFromMeta } from "./commandCatalog";
 import type { DockviewApi } from "dockview-react";
+// 页签关闭守卫统一入口（FE-49）：Ctrl+W 曾直调 activePanel.api.close() 绕过
+// settings dirty 确认（× 守卫 F11/SC-FE-07 登记的不对称）——现与 ×/中键/右键
+// 菜单「关闭」同走 closeTabGuarded；tabClose 无 React 依赖，shortcuts 层可安全引用
+import { closeTabGuarded } from "../../workspace/tabClose";
 
 /**
  * 创建全局快捷键命令列表。
@@ -22,7 +26,9 @@ export function createGlobalShortcuts(
       const api = getDockviewApi();
       const activePanel = api?.activePanel;
       if (activePanel) {
-        activePanel.api.close();
+        // 守卫（确认）为异步：handler 仍同步消费按键（返回 true），关闭动作
+        // 在 guard 决议后执行——非 dirty 面板零延迟差异（microtask 边界）
+        void closeTabGuarded(activePanel.api, activePanel.id);
         return true;
       }
       // 无活跃面板 → 透传（xterm.js 可接收 \x17 用于 bash readline）

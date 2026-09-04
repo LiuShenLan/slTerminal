@@ -110,6 +110,11 @@ describe("页签右键菜单（tab-menu）", () => {
     );
   }
 
+  /** 当前激活面板 id（中键「不扰动激活」断言） */
+  async function activePanelId(): Promise<string> {
+    return browser.execute(() => window.__dockviewApi!.activePanel!.id);
+  }
+
   /** 新增编辑器面板（editor.e2e.ts 先例：无需文件在盘，filePath 驱动标题/路径） */
   async function addEditorPanel(filePath: string): Promise<string> {
     const panelId = `e2e-menu-editor-${Date.now()}`;
@@ -228,5 +233,40 @@ describe("页签右键菜单（tab-menu）", () => {
       { timeout: 8000, timeoutMsg: "剪贴板读取失败" },
     );
     expect(clip).toBe("src/a.ts");
+  });
+
+  it("鼠标中键（合成 auxclick）非激活页签 → 该页签关闭，激活页签不受扰（FE-49）", async () => {
+    const aId = await addEditorPanel(
+      join(rootDir, "mb-a.txt").replace(/\\/g, "/"),
+    );
+    const bId = await addEditorPanel(
+      join(rootDir, "mb-b.txt").replace(/\\/g, "/"),
+    );
+    // 后添加者为激活
+    expect(await activePanelId()).toBe(bId);
+
+    // 中键完整点击（auxclick button 1）非激活页签 aId——embedded 驱动无法
+    // OS 级中键投递，合成事件（同右键合成先例，半端到端边界见 e2e-tests/CLAUDE.md）；
+    // 目标 = data-e2e=tab-close 按钮父级（DefaultTab 内容根，同右键派发约定）
+    const ok = await browser.execute((pid: string) => {
+      const btn = document.querySelector(`[data-e2e="tab-close-${pid}"]`);
+      if (!btn) return false;
+      (btn.parentElement as HTMLElement).dispatchEvent(
+        new MouseEvent("auxclick", {
+          bubbles: true,
+          cancelable: true,
+          button: 1,
+        }),
+      );
+      return true;
+    }, aId);
+    expect(ok).toBe(true);
+    await browser.waitUntil(
+      async () => !(await panelIds()).includes(aId),
+      { timeout: 5000, timeoutMsg: "中键未关闭非激活页签" },
+    );
+    // 无需聚焦语义：激活页签保留且不被扰动
+    expect(await panelIds()).toContain(bId);
+    expect(await activePanelId()).toBe(bId);
   });
 });

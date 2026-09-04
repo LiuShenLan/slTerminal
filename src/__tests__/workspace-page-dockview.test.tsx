@@ -730,6 +730,104 @@ describe("PageDockview 真实组件", () => {
     });
   });
 
+  // ---- 鼠标中键关闭（FE-49）+ autoscroll 预防 ----
+  //
+  // 中键关闭 = auxclick button 1 完整点击（DefaultTab onAuxClick → closeTabGuarded），
+  // 派发目标约定同右键：DefaultTab 内容根（data-e2e=tab-close 按钮的父级——它是
+  // .dv-tab 的子级，对 .dv-tab 自身派发冒泡不经过 DefaultTab div）。
+  // autoscroll 预防 = PageDockview 容器 capture mousedown（页签条 .dv-tabs-container
+  // overflow:auto 可滚动，中键按住会启动 Chromium autoscroll）。
+
+  /** 对第 tabIndex 个页签派发中键完整点击（auxclick button 1 bubbles） */
+  async function middleClickTab(tabIndex: number): Promise<void> {
+    await act(async () => {
+      const tab = document.querySelectorAll(".dv-tab")[tabIndex] as Element | undefined;
+      const closeBtn = tab?.querySelector("[data-e2e^='tab-close']");
+      const target = (closeBtn?.parentElement ?? tab) as Element;
+      target.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true }));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+  }
+
+  describe("鼠标中键关闭 + autoscroll 预防（FE-49）", () => {
+    it("中键点击非激活页签 → 该页签关闭，激活页签保留且不扰动（无需聚焦）", async () => {
+      mockIPC(() => null);
+      const { api } = await twoTerminals();
+      // twoTerminals：watermark「新建终端」建 terminal-0 →「+」建 terminal-1（激活）
+      expect(api.activePanel.id).toBe(`terminal-${PAGE_ID}-1`);
+      await middleClickTab(0); // 浏览器式：点哪个关哪个（terminal-0 非激活）
+      await settle();
+      expect(api.panels.map((p: AnyApi) => p.id)).toEqual([`terminal-${PAGE_ID}-1`]);
+      // 非激活页签被关不扰动焦点
+      expect(api.activePanel.id).toBe(`terminal-${PAGE_ID}-1`);
+    });
+
+    it("中键关闭激活页签 → 同 Ctrl+W 语义：余下面板经 dockview MRU 接任激活", async () => {
+      mockIPC(() => null);
+      const { api } = await twoTerminals();
+      await middleClickTab(1); // 激活的 terminal-1
+      await settle();
+      expect(api.panels.map((p: AnyApi) => p.id)).toEqual([`terminal-${PAGE_ID}-0`]);
+      expect(api.activePanel.id).toBe(`terminal-${PAGE_ID}-0`);
+    });
+
+    it("中键关闭最后一个页签 → 组移除 + Watermark 空态回归", async () => {
+      mockIPC(() => null);
+      const { api, container } = await renderDock();
+      await act(async () => { clickButton(container, "新建终端"); });
+      await settle();
+      expect(api.panels.length).toBe(1);
+      await middleClickTab(0);
+      await settle();
+      expect(api.panels.length).toBe(0);
+      expect(container.textContent).toContain("打开终端或编辑器开始工作");
+    });
+
+    it("autoscroll 预防：页签条区域内中键 mousedown → preventDefault（页签本体与容器空白/缝隙均命中）", async () => {
+      mockIPC(() => null);
+      const { container } = await renderDock();
+      await act(async () => { clickButton(container, "新建终端"); });
+      await settle();
+      // document 冒泡尾段记录 defaultPrevented——capture 监听（PageDockview 根）
+      // 先行 preventDefault，冒泡到 document 时已置位
+      const fired: boolean[] = [];
+      const spy = (e: MouseEvent) => fired.push(e.defaultPrevented);
+      document.addEventListener("mousedown", spy);
+      try {
+        // 页签本体（.dv-tab 在 .dv-tabs-and-actions-container 内）
+        const tab = container.querySelector(".dv-tab") as Element;
+        // cancelable:true——真实 mousedown 可取消（jsdom MouseEvent 默认
+        // cancelable:false，preventDefault 不会置位，伪失败/伪绿）
+        await act(async () => {
+          tab.dispatchEvent(
+            new MouseEvent("mousedown", { button: 1, bubbles: true, cancelable: true }),
+          );
+        });
+        expect(fired[fired.length - 1]).toBe(true);
+        // header 容器自身（页签缝隙/void 空白/actions 区形态）
+        const header = container.querySelector(".dv-tabs-and-actions-container") as Element;
+        await act(async () => {
+          header.dispatchEvent(
+            new MouseEvent("mousedown", { button: 1, bubbles: true, cancelable: true }),
+          );
+        });
+        expect(fired[fired.length - 1]).toBe(true);
+      } finally {
+        document.removeEventListener("mousedown", spy);
+      }
+    });
+
+    it("autoscroll 范围守卫：页签条之外（容器根/内容区）中键 mousedown 不 preventDefault", async () => {
+      mockIPC(() => null);
+      const { container } = await renderDock();
+      const ev = new MouseEvent("mousedown", {
+        button: 1, bubbles: true, cancelable: true,
+      });
+      container.dispatchEvent(ev);
+      expect(ev.defaultPrevented).toBe(false);
+    });
+  });
+
   describe("页签/按钮 hover（TQ-COV-08）", () => {
     it("× 关闭钮 hover → 背景 var(--dv-icon-hover-background-color)（TAB-02）", async () => {
       mockIPC(() => null);

@@ -31,7 +31,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **文件型页签图标**（TAB-03）：`params.filePath` 存在（FILE_PANEL_TYPES）→ 渲染 `FileIcon` 彩色图标；与终端分支互斥。
 - **激活指示条**（TAB-01）：`isActive && isGroupActive` 时渲染底部 2px 指示条（absolute 锚定 `.dv-tab` 底边，色 `FOCUS_BORDER`，`pointerEvents: none`）。
 - **hover 关闭 ×**（TAB-02）：× 默认不可见（opacity 0 + pointerEvents none），hover 时显现。
-- **× 关闭守卫（F11 登记，SC-FE-07）**：settings 面板且 dirty → `confirmDialog` 确认才 `api.close()`。判据 = `params.panelId` 的 `settings-` 前缀（DefaultTab 拿不到 panel——dockview 8.1.0 `IDockviewPanelProps` 无 panel 属性，`panel.view.contentComponent` 红线不适用该场景）；该前缀与 dirtyRegistry 键同源（SettingsPanel 以同一 params.panelId 注册），无漂移；非 settings 面板 / 非 dirty 直关（行为零回归）。
+- **共享关闭守卫（FE-49，SC-FE-07 语义统一）**：`tabClose.ts` 的 `closeTabGuarded(api, panelId)`——settings 面板且 dirty → `confirmDialog` 确认才 `api.close()`，其余直关。**× / Ctrl+W / 鼠标中键 / 右键菜单「关闭」四路共用同一入口**（Ctrl+W 曾直调 `api.close()` 绕过守卫——F11 登记的不对称，FE-49 修复）；「关闭其他/关闭全部」批量路径仍直关（批量确认交互未定义，遗留）。判据 = panelId 的 `settings-` 前缀（DefaultTab 拿不到 panel——dockview 8.1.0 `IDockviewPanelProps` 无 panel 属性，`panel.view.contentComponent` 红线不适用该场景）；该前缀与 dirtyRegistry 键同源（SettingsPanel 以同一 params.panelId 注册），无漂移。`confirmDialog` 为 `src/lib` 命令式全局契约（无 React 依赖）——shortcuts 层可安全引用本模块。
+- **鼠标中键关闭页签（FE-49）**：浏览器式交互——auxclick（完整按下+弹起，按下后拖离弹起即天然取消）在 DefaultTab 内容根触发，`e.button === 1` 判中键，目标 = 本页签自身 `api`（无需聚焦/激活，对比 Ctrl+W 的 activePanel 语义）；× 上的中键经冒泡同样关闭（click 仅主键，两路径互斥）。**autoscroll 预防**：dockview `.dv-tabs-container` 为 `overflow:auto`（可横向滚动），中键按住会启动 Chromium autoscroll——PageDockview 容器根挂 capture mousedown 单点 `preventDefault`（覆盖所有分屏组 header 含缝隙/void 空白；只消默认动作不拦传播，dockview pointerdown 对 button!==0 本就 no-op）；关闭仍走 auxclick（mousedown preventDefault 不影响其触发）。dockview 8.1.0 对中键/auxclick 零消费，无冲突。
 
 ### Watermark 空态规范（GL-05/UI-806）
 

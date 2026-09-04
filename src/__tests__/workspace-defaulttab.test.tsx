@@ -15,6 +15,8 @@
 // - onDidParametersChange 事件结构（回调直接接收扁平 Parameters 对象，
 //   event.tabStatus 而非 event.params.tabStatus——漂移即失败）
 // - onDidTitleChange 标题更新、关闭按钮 api.close
+// - 鼠标中键关闭（FE-49：auxclick 完整点击，目标 = 本页签自身 api 无需聚焦；
+//   守卫与 × 同走真实 closeTabGuarded——settings dirty 拦截经 confirmDialog mock）
 //
 // 事件结构说明（Workspace/CLAUDE.md「Dockview 事件结构注意事项」）：
 // Dockview PanelApi.onDidParametersChange 类型为 Event<Parameters>，
@@ -548,6 +550,66 @@ describe("DefaultTab（生产组件）", () => {
       });
       await waitFor(() => expect(api.close).toHaveBeenCalledTimes(1));
       expect(mockConfirmDialog).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("鼠标中键关闭（FE-49：auxclick 完整点击语义，目标 = 本页签自身，无需聚焦）", () => {
+    beforeEach(() => {
+      mockConfirmDialog.mockReset();
+      mockConfirmDialog.mockResolvedValue(true);
+      clearSettingsDirty("settings-page-a");
+    });
+
+    afterEach(() => {
+      clearSettingsDirty("settings-page-a");
+    });
+
+    /** 中键完整点击：auxclick button 1（真实浏览器只在同元素完成按下+弹起时触发；
+        target 缺省 = DefaultTab 根 div——生产 onAuxClick 挂点） */
+    const middleClick = (target: HTMLElement | null): void => {
+      act(() => {
+        target?.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true }));
+      });
+    };
+
+    it("非 settings 页签中键 → 经守卫直关（无需聚焦/激活——目标即自身 api）", async () => {
+      const { api, root } = renderTab({ panelId: "terminal-page1-0" });
+      middleClick(root);
+      await waitFor(() => expect(api.close).toHaveBeenCalledTimes(1));
+      expect(mockConfirmDialog).not.toHaveBeenCalled();
+    });
+
+    it("settings 面板 dirty + 取消 → 中键不关闭（与 × 同守卫拦截）", async () => {
+      setSettingsDirty("settings-page-a", true);
+      mockConfirmDialog.mockResolvedValue(false);
+      const { api, root } = renderTab({ panelId: "settings-page-a" });
+      middleClick(root);
+      await waitFor(() => expect(mockConfirmDialog).toHaveBeenCalled());
+      await waitFor(() => expect(api.close).not.toHaveBeenCalled());
+    });
+
+    it("settings 面板 dirty + 确认 → 中键关闭", async () => {
+      setSettingsDirty("settings-page-a", true);
+      mockConfirmDialog.mockResolvedValue(true);
+      const { api, root } = renderTab({ panelId: "settings-page-a" });
+      middleClick(root);
+      await waitFor(() => expect(api.close).toHaveBeenCalledTimes(1));
+    });
+
+    it("× 按钮上的中键 → 经冒泡同样关闭（浏览器惯例；click 仅主键，× onClick 不触发）", async () => {
+      const { api, root, closeBtn } = renderTab({ panelId: "terminal-page1-0" });
+      fireEvent.mouseEnter(root as HTMLElement);
+      middleClick(closeBtn());
+      await waitFor(() => expect(api.close).toHaveBeenCalledTimes(1));
+    });
+
+    it("非中键的 auxclick（button 0——浏览器不产生，防御锁 e.button!==1 守卫）→ 不关闭", async () => {
+      const { api, root } = renderTab({ panelId: "terminal-page1-0" });
+      act(() => {
+        root?.dispatchEvent(new MouseEvent("auxclick", { button: 0, bubbles: true }));
+      });
+      await waitFor(() => expect(mockConfirmDialog).not.toHaveBeenCalled());
+      expect(api.close).not.toHaveBeenCalled();
     });
   });
 });
