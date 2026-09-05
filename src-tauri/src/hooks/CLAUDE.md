@@ -14,7 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### claude provider 内部是 claude 合法领地（MC-213）
 
-`hooks/claude/` 保留全部 claude 命名、官方事件、settings.json 结构、statusline 协议、`SCRIPT_VERSION` 检测与 reporter/桥接脚本模板。`ClaudeHooksProvider` 实现 trait 七方法；home 解析统一走 `home_dir()`，测试经 `HomeDirGuard` 注入覆盖。
+`hooks/claude/` 保留全部 claude 命名、官方事件、settings.json 结构、statusline 协议、`SCRIPT_VERSION` 检测与 reporter/桥接脚本模板。`ClaudeHooksProvider` 实现 trait 七方法；home 解析统一经 `crate::home::home_dir()`（顶层共享件，ADR-0016——守卫已收编顶层，本模块不自建），测试经 `crate::home::HomeDirGuard` 注入覆盖。
 
 ### reporter 归 claude provider 资产（MC-215）
 
@@ -92,7 +92,7 @@ PTY spawn 时注入 `SLTERM_PANEL_ID`（见 @../pty/CLAUDE.md）。reporter 读�
 
 ## 测试模式
 
-- **HomeDirGuard 注入**：`claude/mod.rs` 用模块级 `HOME_DIR_OVERRIDE` 让 L1 在 tempdir 中测试，不碰真实 `~/.claude/settings.json`。
+- **HomeDirGuard 注入**：守卫收编于 `crate::home::HomeDirGuard`（顶层共享，home.rs）——L1 测试经它把 home 指向 tempdir，不碰真实 `~/.claude/settings.json`（claude/mod.rs、hooks/mod.rs、watcher 信号目录用例共用）。
 - **watcher 手动构造**：`HookSignalWatcher` 需要 `AppHandle`，L1 通过直接构造结构体 + 手动线程桩测试 stop 幂等/Drop 清理。
 - **信号处理注入 emit 闭包**：`process_signal_file_with` 把 `emit("agent-event")` 抽为参数，L1 无需真实 AppHandle。
 

@@ -483,7 +483,8 @@ describe("hooks 配置面板保存链路 (P3-TE-18)", () => {
    * 经 hub 面板真实按钮链路流转：「注入 Hooks」/「卸载 Hooks」onClick →
    * agent_hooks_inject/uninstall（cliId 实参 = hub 选中态，E2E 构建仅 claude 一个
    * hasConfigEditor CLI，选中态即 claude）。链路末尾恢复「已注入」，不污染后续用例；
-   * run-wdio.cjs 对 ~/.claude/settings.json 亦有备份还原兜底（E2E-05）。
+   * 注入/卸载作用于假屋（ADR-0016：run-wdio 以 USERPROFILE 隔离用户目录），
+   * 真实 ~/.claude/settings.json 零接触。
    */
   it("hub 注入按钮三态：状态条随注入/卸载链路流转并恢复", async () => {
     // 0. 等待 Workspace 就绪 + Dockview API

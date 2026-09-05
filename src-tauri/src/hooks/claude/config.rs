@@ -102,8 +102,9 @@ fn layer_file_name(layer: Layer) -> &'static str {
 
 /// 解析三层配置路径（纯函数，不做文件 IO）
 ///
-/// - user 层：home_dir 解析闭包（生产传 dirs::home_dir；测试注入 tempdir，
-///   杜绝真实 home 依赖，HUK-07）/.claude/settings.json，命令体内不调用沙箱校验
+/// - user 层：home_dir 解析闭包（生产传 `crate::home::home_dir`——顶层共享解析，
+///   ADR-0016；测试注入 tempdir，杜绝真实 home 依赖，HUK-07）/.claude/settings.json，
+///   命令体内不调用沙箱校验
 ///   （P3-BE-06）；闭包返回 None → IoKind（home_dir 解析失败分支）
 /// - project/local 层：project_path 缺失 → Validation；经 validate_path_within_root
 ///   沙箱校验，未通过 → PathNotAllowed；通过后拼接 .claude/ 下的配置文件名（P3-BE-07）

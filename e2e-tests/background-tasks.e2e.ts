@@ -23,7 +23,8 @@
  * - 后端 settings.json 在 exe 同级（app_dir.rs 便携分发契约）——落盘断言直接
  *   Node 侧读文件（与 loadSettings 同一真值源），原子写中间态自动重试。
  * - 用例写盘（B/C/E/F backgroundTasks 段 + C 假 env 注入 user 层 ~/.claude/settings.json）
- *   由 suite before/after 快照还原，防污染用户数据。
+ *   由 suite before/after 快照还原，防跨 spec 残留（user 层文件在假屋内——
+ *   ADR-0016：run-wdio 以 USERPROFILE 隔离，真实屋零接触）。
  * - 会话数据隔离（SEC-02）：用例 E/F 只写 run-wdio.cjs 重建的 claude-projects 副本
  *   （SLTERM_CLAUDE_PROJECTS_DIR），新会话 cwd = SLTERM_E2E_PROJECT_DIR（E2E 项目
  *   根目录）→ 导航树归属（决策 5：cwd 前缀匹配项目 rootPath）；用例 finally 删除
@@ -361,8 +362,9 @@ function writeTickSession(uuid: string, title: string): string {
 
 describe("后台定时任务 (F12, E2E-02/E2E-03)", () => {
   // 用例真实写盘两处：exe 同级 settings.json（B/C/E/F backgroundTasks 段）、
-  // user 层 ~/.claude/settings.json（C 假 env）。run-wdio.cjs 备份集合不覆盖
-  // exe 同级 settings.json——suite 级快照还原防污染用户数据（照 settings.e2e.ts 先例）。
+  // user 层 ~/.claude/settings.json（C 假 env，假屋隔离——ADR-0016）。
+  // exe 同级 settings.json 在 SLTERM_DATA_DIR 临时目录；user 层文件在假屋——
+  // suite 级快照还原防跨 spec 残留（照 settings.e2e.ts 先例）。
   let settingsSnapshot: { existed: boolean; content: string | null };
   let claudeSnapshot: { existed: boolean; content: string | null };
 

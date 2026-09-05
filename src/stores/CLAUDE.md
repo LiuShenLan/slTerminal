@@ -11,18 +11,20 @@ Zustand 全局状态真值来源。每个 store 覆盖一类状态域，面板�
 ### Store 纯状态（硬约束 #12）
 
 - `src/stores/` 只存状态与状态转换，不存业务逻辑（校验/映射/编排放到注册表、纯函数或上层组件）。
-- 持久化一律经 `src/ipc/` 对应领域函数：settings 类（`fontSize` / `keybindings` / `sideBar`）走 `src/ipc/settings`；项目数据（`projects`）走 `src/ipc/projects`。
+- 持久化一律经 `src/ipc/` 对应领域函数：settings 类（`fontSize` / `keybindings` / `sideBar` / `cliAliases`）走 `src/ipc/settings`；项目数据（`projects`）走 `src/ipc/projects`。
 - 禁止在 store 内直接调用 Tauri `invoke`；禁止跨 store 隐式依赖，store 间协调在上层组件/命令中完成。
 
 ### 持久化模式
 
-settings 类三 store 与 `projects` 均遵循同一模式：
+settings 类四 store 与 `projects` 均遵循同一模式：
 
 - 启动时 `loadFromDisk()` 恢复；`loaded` 守卫防止加载阶段触发空写。
 - 变更后 Zustand `subscribe` + 2s debounce 自动保存。
 - `markPersistenceReady()`（projects）/ `loaded = true`（settings）在加载完成后置位。
 - **projects 持久化防线**：`loadFromDisk` 成功置 `loadSucceeded`；未成功加载且 store 空时 `saveToDisk` 拒写（防空写覆盖磁盘）；显式放行经 `markLoadSucceeded()`（E2E 分支/用户选择空状态继续）。
 - `cancelPendingSave()` 供关闭钩子冲刷未落盘的 timer。
+
+`cliAliases`（CLI 别名）store 为硬约束 #12 边界的现行示例：**校验不进 store**——语法与 D3 全命名空间唯一性校验/加载净化收在 cliProfiles 域纯函数模块 `features/cliProfiles/aliasValidation.ts`（参数注入、零 store/注册表 import），store 只存 `aliases`（cliId → 数组）与增删转换；消费编排（快照 → 注册表）在 App.tsx 组合层。loadFromDisk 的 sanitize 需 profile 已注册（孤儿 cliId 判定），依赖 App 启动 import 链时序（见文件头注释）。
 
 ### 段形态契约（断链修复）
 

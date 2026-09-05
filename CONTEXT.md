@@ -96,7 +96,10 @@ FIFO 字节队列。前端 Channel 断开时缓存 PTY 最新输出，重连时�
 以命令行形态运行的 AI 编码代理程序（如 claude、codex、aider）。slTerminal 对其提供专门优化（状态可视化、历史会话、hooks 配置等），经 CLI profile 抽象实现可插拔支持。
 
 **CLI profile**（编码 CLI Profile）：
-一个编码 CLI 的完整能力描述与注册单元——身份识别（commands 匹配集 + 品牌 logo）+ 分域能力声明（hooks 注入/事件状态映射/通知分类/历史 provider/用量百分比策略/配置编辑器），能力可选（未声明即该域不可用）。前端为统一的 CliProfileRegistry；后端按能力拆分为 hooks/history 两个 cliId 键注册表（分别见 hooks/provider.rs 与 agent_history/provider.rs）。
+一个编码 CLI 的完整能力描述与注册单元——身份识别（commands 内置命令集 + 品牌 logo）+ 分域能力声明（hooks 注入/事件状态映射/通知分类/历史 provider/用量百分比策略/配置编辑器），能力可选（未声明即该域不可用）。前端为统一的 CliProfileRegistry；后端按能力拆分为 hooks/history 两个 cliId 键注册表（分别见 hooks/provider.rs 与 agent_history/provider.rs）。commands 为**内置静态声明**（D3 命名空间计算的唯一真值源）；用户别名独立存 `cliAliases` 段，**不**并入 commands。
+
+**CLI 别名**（CLI Alias）：
+用户经设置中心「CLI 别名」页为某编码 CLI 追加配置的启动命令名（如 `cc` → claude），运行时经注册表别名快照并入该 CLI 的 OSC 133 C 匹配键集——别名命中与内置命令命中完全等价（页签改名/logo/session 全链路）。存应用 settings.json `cliAliases` 段（cliId → 别名数组），纯透传校验在前端；全命名空间唯一（不得撞任何 profile 内置命令或其它别名，D3），大小写敏感精确匹配（D2）。与套餐「URL 别名」（F10，计费来源判定）不同域。语义细节见 aliasValidation.ts 与 cliProfiles/CLAUDE.md、ADR-0014/0015。
 
 **应用运行期**：
 应用进程的一次运行——ID 生成等"单运行期内唯一"语义的准确表述。

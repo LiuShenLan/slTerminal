@@ -31,7 +31,7 @@ claude provider 定位与会话目录删除时：一级子目录、命中 jsonl 
 
 ### env 覆盖留在 provider 内部（MC-305）
 
-`SLTERM_CLAUDE_PROJECTS_DIR` 仅用于测试隔离，生产不设置。命名与解析留在 `claude/scan.rs` 的 `resolve_projects_root` 内部，不上提聚合层。
+`SLTERM_CLAUDE_PROJECTS_DIR` 仅用于测试隔离，生产不设置。命名与解析留在 `claude/scan.rs` 的 `resolve_projects_root` 内部，不上提聚合层。fallback 解析经 `crate::home::home_dir()`（顶层共享件，ADR-0016——E2E 假 home 隔离下 fallback 落假屋空目录而非真实用户历史；env 重定向优先级恒高于共享 home）。
 
 ### DTO 字段
 

@@ -142,6 +142,75 @@ describe("CliProfileRegistry", () => {
     });
   });
 
+  describe("别名快照匹配（setAliases / matchByCommand 别名回退）", () => {
+    it("setAliases 后别名命中返回映射 profile（全字段语义同内置命中）", () => {
+      registry.register(makeProfile("claude", ["claude"]));
+      registry.setAliases({ claude: ["cc"] });
+      const profile = registry.matchByCommand("cc --flag");
+      expect(profile).not.toBeNull();
+      expect(profile!.id).toBe("claude");
+      expect(profile!.tabTitle).toBe("claude");
+    });
+
+    it("多 cli 各自别名互不串扰（cc→claude / xx→codex 各自命中）", () => {
+      registry.register(makeProfile("claude"));
+      registry.register(makeProfile("codex"));
+      registry.setAliases({ claude: ["cc"], codex: ["xx"] });
+      expect(registry.matchByCommand("cc")!.id).toBe("claude");
+      expect(registry.matchByCommand("xx")!.id).toBe("codex");
+    });
+
+    it("内置命令优先于别名（同名时内置语义不可被遮蔽，防御分支）", () => {
+      registry.register(makeProfile("claude", ["claude"]));
+      registry.register(makeProfile("codex"));
+      // D3 禁止此配置；此处锁死同名时的保守方向（内置优先）
+      registry.setAliases({ codex: ["claude"] });
+      expect(registry.matchByCommand("claude")!.id).toBe("claude");
+    });
+
+    it("别名映射到未注册 cliId → null（防御分支）", () => {
+      registry.register(makeProfile("claude"));
+      registry.setAliases({ ghost: ["cc"] });
+      expect(registry.matchByCommand("cc")).toBeNull();
+    });
+
+    it("大小写敏感（别名 cc 不命中 CC）", () => {
+      registry.register(makeProfile("claude"));
+      registry.setAliases({ claude: ["cc"] });
+      expect(registry.matchByCommand("CC")).toBeNull();
+    });
+
+    it("setAliases 全量替换——再次调用覆盖旧快照", () => {
+      registry.register(makeProfile("claude"));
+      registry.register(makeProfile("codex"));
+      registry.setAliases({ claude: ["cc"], codex: ["xx"] });
+      registry.setAliases({ codex: ["cc"] }); // cc 归属迁移
+      expect(registry.matchByCommand("cc")!.id).toBe("codex");
+      expect(registry.matchByCommand("xx")).toBeNull();
+    });
+
+    it("setAliases({}) 清空全部别名", () => {
+      registry.register(makeProfile("claude"));
+      registry.setAliases({ claude: ["cc"] });
+      registry.setAliases({});
+      expect(registry.matchByCommand("cc")).toBeNull();
+    });
+
+    it("_reset 连带清空别名快照", () => {
+      registry.register(makeProfile("claude"));
+      registry.setAliases({ claude: ["cc"] });
+      registry._reset();
+      registry.register(makeProfile("claude"));
+      expect(registry.matchByCommand("cc")).toBeNull();
+    });
+
+    it("未 setAliases 时回退为空表——既有 match 行为零影响", () => {
+      registry.register(makeProfile("claude"));
+      expect(registry.matchByCommand("claude")!.id).toBe("claude");
+      expect(registry.matchByCommand("cc")).toBeNull();
+    });
+  });
+
   describe("生命周期", () => {
     it("_reset 清空 → get/getAll/matchByCommand 全空", () => {
       registry.register(makeProfile("claude"));

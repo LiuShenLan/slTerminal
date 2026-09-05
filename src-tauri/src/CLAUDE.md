@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 存在理由
 
-`src-tauri/src/` 顶层单文件模块承载各功能子模块共享的全局支撑件：应用数据目录、settings/projects 持久化、全局 `AppState`、路径沙箱、统一错误类型。这些模块的跨模块契约（数据目录、持久化格式、沙箱语义、错误消息约定）需要在顶层文档化，避免各子模块重复解释或相互穿透。
+`src-tauri/src/` 顶层单文件模块承载各功能子模块共享的全局支撑件：应用数据目录、用户 home 目录、settings/projects 持久化、全局 `AppState`、路径沙箱、统一错误类型。这些模块的跨模块契约（数据目录、home 解析、持久化格式、沙箱语义、错误消息约定）需要在顶层文档化，避免各子模块重复解释或相互穿透。
 
 ## 关键约束与决策
 
@@ -17,11 +17,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `MAX_PERSIST_BYTES = 1MB`：save 侧大小上限，settings/projects 共用（SEC-11）；
 - `AppDataDirGuard`：测试用 RAII 注入覆盖应用目录（SPE-04）。
 
+### home.rs — 用户 home 目录解析单点（ADR-0016，E2E 假 home 隔离键）
+
+- **home 解析统一经 `crate::home::home_dir()`**：优先级 = cfg(test) `HomeDirGuard` > env `USERPROFILE`（非空，空串视为未设置）> `dirs::home_dir()`。
+- **Windows 事实（勿改，ADR-0016）**：dirs 6.0.0 / dirs-sys 0.5.0 的 `home_dir()` 走 `SHGetKnownFolderPath`，**完全不读 USERPROFILE/HOME env**——生产代码禁止裸 `dirs::home_dir()`（grep 收敛纪律，仅 cfg(test) 上下文允许；曾有两份照抄守卫复制 + watcher 一处裸调用，已全部收敛于此）。
+- 消费点：hooks/claude（路径辅助/注入/statusline 备份）、hooks/watcher（信号目录——跨进程一致性承重墙）、plan_balance（余量来源）、agent_history/claude/scan.rs（fallback；`SLTERM_CLAUDE_PROJECTS_DIR` env 覆盖留 provider 内部，优先级高于 home）。
+- 与 `app_dir.rs`（应用数据目录 = exe 同级/SLTERM_DATA_DIR）是两个不同概念目录：app_dir 管应用自身持久化，home 管用户配置（`~/.claude`、`~/.slterminal`）。
+
 ### settings.rs — 浅合并 + 保存互斥 + 白名单
 
 - **浅合并**：`save_settings` 只写前端传入的顶层 slice，后端浅合并 top-level 键，各 store 各写各的互不覆盖；
 - **`SETTINGS_SAVE_LOCK`**：前端三 store 启动时几乎同时触发 debounced 保存，`spawn_blocking` 闭包持锁串行化读-合并-写，避免 Windows persist rename 时句柄占用导致 PermissionDenied（SPE-06）；
-- **SEC-11**：顶层键白名单（数组仍 5 项）`["fontSize", "keybindings", "sideBar", "colorScheme", background_tasks::SETTINGS_KEY]` + 序列化后大小上限 1MB。**键名聚合决策（F11）**：前端消费型四键（fontSize/keybindings/sideBar/colorScheme）无后端模块可归，键名集中于此字面量；后端消费型域键名归域模块——`backgroundTasks` 段经 `crate::background_tasks::SETTINGS_KEY` 引用（契约断链先例：fontSize store 曾发平铺键被拒，已改段形态双侧锁死）。`backgroundTasks` 段 = F12 后台定时任务配置（子键 per taskId：enabled/intervalSec）；写入侧除手改文件外专用命令通道 `background_tasks_set_config`（校验 → 读-改-写子键合并 → 本模块写通道落盘——禁止自建第二写通道）。
+- **SEC-11**：顶层键白名单（数组共 6 项）`["fontSize", "keybindings", "sideBar", "colorScheme", background_tasks::SETTINGS_KEY, "cliAliases"]` + 序列化后大小上限 1MB。**键名聚合决策（F11）**：前端消费型五键（fontSize/keybindings/sideBar/colorScheme/cliAliases）无后端模块可归，键名集中于此字面量；后端消费型域键名归域模块——`backgroundTasks` 段经 `crate::background_tasks::SETTINGS_KEY` 引用（契约断链先例：fontSize store 曾发平铺键被拒，已改段形态双侧锁死）。`backgroundTasks` 段 = F12 后台定时任务配置（子键 per taskId：enabled/intervalSec）；写入侧除手改文件外专用命令通道 `background_tasks_set_config`（校验 → 读-改-写子键合并 → 本模块写通道落盘——禁止自建第二写通道）。`cliAliases` 段 = CLI 启动别名配置（子键 per cliId：别名数组，如 `{"claude":["cc"]}`）——**纯透传段**：语法与全命名空间唯一性校验全在前端 cliProfiles 域（`aliasValidation.ts`），本层不设专用命令/DTO（前端 profile 注册表是内置命令名唯一知识源，Rust 复刻即双源漂移，ADR-0014）。
 - **`save_settings_blocking` 同步写通道（F12 抽取）**：校验（白名单 + 大小上限）→ 浅合并 → 原子写 + .bak，供 async `save_settings` 命令与 `background_tasks::set_config_core`（spawn_blocking 内，跨 await 持 MutexGuard 不可行）共用——全仓唯一 settings.json 写通道，禁止另建。**读侧语义（R2b）**：读现有文件经 `read_existing_settings` 共用读法——文件不存在（NotFound）→ 按空数据合并（首次启动合法）；读失败/解析失败 → Err 传播且不落盘（曾 `.ok()` 吞错走 Null 覆盖致顶层键全丢仍写成功，已修复）——与 load 侧损坏 `.bak` 回退语义刻意不同。
 
 ### projects.rs — exe 同级 JSON 绕过沙箱

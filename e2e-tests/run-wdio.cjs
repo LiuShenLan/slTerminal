@@ -3,24 +3,29 @@
  * 自动下载便携 Node 22 运行。CI 环境（Node 22）直接运行。
  *
  * 数据隔离（BE-01/TE-02）：应用全部数据写入（settings.json / 项目持久化文件
- * 等）经 SLTERM_DATA_DIR 指向 os.tmpdir()/slterm-e2e-data 临时目录，与日常使用数据
- * 完全隔离——不再备份/还原 ~/.slterminal/settings.json 与 exe 同级项目数据。
- * 临时目录启动时清空重建，exit 时删除。
+ * 等）经 SLTERM_DATA_DIR 指向 os.tmpdir()/slterm-e2e-data 临时目录，与日常使用
+ * 数据完全隔离。临时目录启动时清空重建，exit 时删除。
  *
- * 备份/还原（E2E-05）：E2E 运行会真实写盘以下用户配置——
- * ① ~/.claude/settings.json（agent_hooks_inject 注入 slterm matcher + statusLine 桥接，E2E-05 新增）
- * ② ~/.slterminal/hooks/（注入的 reporter + statusline 桥接脚本，E2E-05 新增）
- * ③ ~/.slterminal/statusline-backup.json（注入的原 statusLine 备份，statusline 桥接新增）
- * 启动时备份（存在时），exit 时同步还原；~/.slterminal/hooks-events/
- * 为运行时信号文件目录（无用户价值），exit 时直接清理。
- * 三启动路径（node22 直跑 / 便携下载 / fallback）均在同一主进程内
- * exit——单一 process.on('exit') 钩子天然全覆盖。
+ * 假 home 隔离（ADR-0016，替代原 E2E-05 备份/还原机制）：E2E 运行会真实写盘
+ * 用户 home 配置（~/.claude/settings.json 的 hooks matcher/statusLine 桥接/假 env、
+ * ~/.slterminal/hooks 脚本等——窗口期污染真实 claude 会话曾致 API token 事故），
+ * 备份/还原只能保证 run 后恢复、窗口期与残留固化均无法消除。改为：启动时建
+ * 临时假 home（os.tmpdir()/slterm-e2e-home）并把 USERPROFILE 指向它——Node
+ * os.homedir()（libuv，每调重读）与 Rust 侧 crate::home 共享解析（env-first）
+ * 全链跟随，e2e 全部用户目录写入落假屋，真实用户目录零接触。
+ *
+ * 防复发校验：覆盖 USERPROFILE 前对真实屋（~/.claude/settings.json、
+ * ~/.slterminal/statusline-backup.json、~/.slterminal/hooks/）做存在性 + sha256
+ * 快照，exit 时逐项比对——任何泄漏（Rust 侧收敛遗漏/未来新消费点裸 dirs）都会
+ * 在退出时独立报红（exitCode=1，TQ-E-06 可观测纪律）。hooks-events 目录仅在
+ * 启动时不存在才校验「exit 仍不存在」（存在 = 用户会话在用，跳过防误报）。
  */
 const { execSync, spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const https = require('https');
+const crypto = require('crypto');
 
 // ── E2E 数据目录隔离（BE-01/TE-02） ──
 // 应用全部数据写入（settings.json / 项目持久化文件等）经 SLTERM_DATA_DIR
@@ -31,151 +36,139 @@ fs.rmSync(e2eDataDir, { recursive: true, force: true });
 fs.mkdirSync(e2eDataDir, { recursive: true });
 process.env.SLTERM_DATA_DIR = e2eDataDir;
 
-// ── 配置备份/还原（E2E-05） ──
+// ── 假 home 隔离（ADR-0016，见文件头） ──
+// 假屋目录每次运行唯一（pid 后缀）：IME/遥测组件（搜狗输入法等）经 e2e 进程链
+// （WebView2 激活）拉起后继承假 USERPROFILE，会把自身 AppData 数据写进假屋且
+// 长驻句柄——固定名假屋的启动清空必撞 EPERM。唯一名免清空；exit 清理 best-effort，
+// 残留目录留在 tmp 由 OS 回收（无害——隔离目标已达成，真实屋零接触）。
+const fakeHomeDir = path.join(os.tmpdir(), `slterm-e2e-home-${process.pid}`);
 
-/** 备份单个文件：存在时复制为 .e2e-bak，返回是否备份 */
-function backupFile(filePath) {
-  const bakPath = filePath + '.e2e-bak';
-  if (fs.existsSync(filePath)) {
-    fs.copyFileSync(filePath, bakPath);
-    console.log(`[wdio-launcher] 已备份 ${filePath} → .e2e-bak`);
-    return true;
+/** 忙等（exit 钩子内无法用 setTimeout——E2E-16 模式） */
+function busyWait(ms) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) { /* 忙等 */ }
+}
+
+/** rmSync 带重试：slterminal.exe/IME 组件退出异步，假屋文件可能被句柄占用（E2E-16） */
+function rmSyncRetry(p, opts) {
+  for (let i = 0; i < 5; i++) {
+    try {
+      fs.rmSync(p, opts);
+      return true;
+    } catch {
+      if (i < 4) busyWait(1000);
+    }
   }
-  console.log(`[wdio-launcher] ${filePath} 不存在，跳过备份`);
   return false;
 }
 
-/** 还原单个文件：原存在 → 先删产物再 rename 备份回来；原不存在 → 删产物 + 残留 bak。
- *  rename 失败重试（E2E-16：slterminal.exe 退出异步，exit 钩子执行时文件可能仍被
- *  占用——重试 3 次 × 500ms；仍失败 warn 明示——残留 bak 会在下次运行备份时覆盖）
- *  返回是否还原成功——false 由调用方 restoreAll 收集上报（TQ-E-06，静默会污染用户数据） */
-function restoreFile(filePath, existed) {
-  const bakPath = filePath + '.e2e-bak';
-  // E2E-13②：还原前先 rmSync 原路径（防 E2E 期间文件被删/损坏导致 rename/copy 失败、
-  // 残留 bak 影响下次运行判定），再 rename 备份回来（同卷原子移动）
-  try { fs.rmSync(filePath, { force: true }); } catch { /* 忽略 */ }
-  if (existed) {
-    let ok = false;
-    for (let i = 0; i < 3 && !ok; i++) {
-      try {
-        fs.renameSync(bakPath, filePath);
-        ok = true;
-      } catch (err) {
-        if (i < 2) {
-          const waitMs = 500 * (i + 1);
-          const end = Date.now() + waitMs;
-          while (Date.now() < end) { /* 忙等——exit 钩子内无法用 setTimeout */ }
-        } else {
-          console.warn(`[wdio-launcher] 还原 ${filePath} 失败（3 次重试）:`, err.message);
-        }
+/** 单文件快照：{ exists, sha256|null }（读失败视为不存在——文件被并发删等瞬态） */
+function snapFile(p) {
+  try {
+    return {
+      exists: true,
+      sha256: crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex'),
+    };
+  } catch {
+    return { exists: false, sha256: null };
+  }
+}
+
+/** 目录树快照：相对路径 → sha256 列表（目录不存在/不可读 → null） */
+function snapDir(p) {
+  const out = [];
+  const walk = (base, rel) => {
+    for (const entry of fs.readdirSync(base, { withFileTypes: true })) {
+      const abs = path.join(base, entry.name);
+      const relName = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        walk(abs, relName);
+      } else {
+        out.push([relName, snapFile(abs).sha256 ?? '']);
       }
     }
-    return ok;
-  }
-  try {
-    fs.rmSync(bakPath, { force: true });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// ~/.claude/settings.json（hooks 注入污染防护，E2E-05）：
-// E2E-05 用户目录隔离备份集合保持 claude 硬编码——随第二 CLI 接入扩展（决策 4）
-const claudeSettingsPath = path.join(os.homedir(), '.claude', 'settings.json');
-const claudeSettingsExisted = backupFile(claudeSettingsPath);
-
-// ~/.slterminal/statusline-backup.json（statusline 桥接注入的原配置备份）：
-// 注入/卸载会写删此文件——与 hooks 目录同批备份/还原
-const statuslineBackupPath = path.join(os.homedir(), '.slterminal', 'statusline-backup.json');
-const statuslineBackupExisted = backupFile(statuslineBackupPath);
-
-// ~/.slterminal/hooks/（reporter 脚本目录，E2E-05）：
-// 用户可能已有注入——目录整体备份/还原（cpSync 复制，rename 对占用目录易失败）；
-// 原本不存在时 exit 删除 E2E 注入产物。
-const hooksDir = path.join(os.homedir(), '.slterminal', 'hooks');
-const hooksDirBak = hooksDir + '.e2e-bak';
-const hooksExisted = fs.existsSync(hooksDir);
-let hooksBackedUp = false;
-if (hooksExisted) {
-  try {
-    fs.cpSync(hooksDir, hooksDirBak, { recursive: true });
-    hooksBackedUp = true;
-    console.log('[wdio-launcher] 已备份 ~/.slterminal/hooks/ → hooks.e2e-bak');
-  } catch (err) {
-    // 备份失败（目录被占用等）：降级——exit 时不动用户目录，仅清 bak
-    console.warn('[wdio-launcher] hooks 目录备份失败，exit 时跳过还原:', err.message);
-  }
-}
-
-// ~/.slterminal/hooks-events/（信号文件运行时目录）：不做备份，exit 时直接清理
-const hooksEventsDir = path.join(os.homedir(), '.slterminal', 'hooks-events');
-
-/**
- * exit 时统一恢复用户目录（单一恢复点——三启动路径均在同一主进程 exit，有意设计见文件头）。
- * 返回失败项描述数组：恢复失败必须可观测——静默会污染 ~/.slterminal 与 ~/.claude
- * 真实用户数据（TQ-E-06）。恢复动作本身与改造前一致，仅 catch 时 push 失败描述而非吞掉。
- */
-function restoreAll() {
-  const failures = [];
-  // 收集失败描述：带 err 时附加 message，便于定位根因
-  const fail = (desc, err) => {
-    failures.push(err && err.message ? `${desc}: ${err.message}` : desc);
   };
+  if (!fs.existsSync(p)) return null;
+  try {
+    walk(p, '');
+    return out;
+  } catch {
+    return null;
+  }
+}
 
-  // ~/.claude/settings.json 还原（E2E-05——agent_hooks_inject 会真实写 slterm matcher）
-  if (!restoreFile(claudeSettingsPath, claudeSettingsExisted)) {
-    failures.push(`还原 ${claudeSettingsPath} 失败（3 次重试）`);
+/** 真实屋快照——必须在 USERPROFILE 覆盖之前调用（真实路径计算） */
+function snapshotUserHome(realHome) {
+  return {
+    claudeSettings: snapFile(path.join(realHome, '.claude', 'settings.json')),
+    statuslineBackup: snapFile(path.join(realHome, '.slterminal', 'statusline-backup.json')),
+    hooksDir: snapDir(path.join(realHome, '.slterminal', 'hooks')),
+    hooksEventsExisted: fs.existsSync(path.join(realHome, '.slterminal', 'hooks-events')),
+  };
+}
+
+/** exit 校验：真实屋零接触。返回差异描述数组（空 = 通过） */
+function verifyRealHomeUnchanged(realHome, snap) {
+  const problems = [];
+  const expectFile = (label, cur, before) => {
+    if (JSON.stringify(cur) !== JSON.stringify(before)) {
+      problems.push(`${label} 在 E2E 期间被修改（泄漏）——启动时 ${before.exists ? before.sha256?.slice(0, 12) ?? '存在' : '不存在'}，当前 ${cur.exists ? cur.sha256?.slice(0, 12) ?? '存在' : '不存在'}`);
+    }
+  };
+  expectFile(
+    `真实屋 ${path.join(realHome, '.claude', 'settings.json')}`,
+    snapFile(path.join(realHome, '.claude', 'settings.json')),
+    snap.claudeSettings,
+  );
+  expectFile(
+    `真实屋 ${path.join(realHome, '.slterminal', 'statusline-backup.json')}`,
+    snapFile(path.join(realHome, '.slterminal', 'statusline-backup.json')),
+    snap.statuslineBackup,
+  );
+  const hooksDir = path.join(realHome, '.slterminal', 'hooks');
+  const hooksNow = snapDir(hooksDir);
+  if (JSON.stringify(hooksNow) !== JSON.stringify(snap.hooksDir)) {
+    problems.push(`真实屋 ${hooksDir} 内容在 E2E 期间被修改（泄漏）`);
   }
-  // statusline 备份文件还原（statusline 桥接注入/卸载会写删）
-  if (!restoreFile(statuslineBackupPath, statuslineBackupExisted)) {
-    failures.push(`还原 ${statuslineBackupPath} 失败（3 次重试）`);
+  // hooks-events 降噪：启动时不存在才校验 exit 仍不存在（存在 = 用户会话在用）
+  const eventsDir = path.join(realHome, '.slterminal', 'hooks-events');
+  if (!snap.hooksEventsExisted && fs.existsSync(eventsDir)) {
+    problems.push(`真实屋 ${eventsDir} 在 E2E 期间被创建（泄漏——E2E 信号文件必须落假屋）`);
   }
-  // hooks-events 清理（E2E-05——信号文件目录，watcher 消费后残留兜底删除）
-  try { fs.rmSync(hooksEventsDir, { recursive: true, force: true }); } catch (err) {
-    fail(`清理 ${hooksEventsDir} 失败`, err);
-  }
-  // hooks 目录还原/清理（E2E-05）
-  if (hooksBackedUp) {
-    // 还原：删 E2E 产物 → 从备份复制回来 → 清 bak
-    try { fs.rmSync(hooksDir, { recursive: true, force: true }); } catch (err) {
-      fail(`删除 E2E hooks 产物失败（${hooksDir}）`, err);
-    }
-    try { fs.cpSync(hooksDirBak, hooksDir, { recursive: true }); } catch (err) {
-      fail(`从备份还原 ${hooksDir} 失败`, err);
-    }
-    try { fs.rmSync(hooksDirBak, { recursive: true, force: true }); } catch (err) {
-      fail(`清理 hooks 备份 ${hooksDirBak} 失败`, err);
-    }
-  } else if (hooksExisted) {
-    // 备份失败降级：无法还原原状——保留用户目录（启动时已 warn），仅清 bak
-    try { fs.rmSync(hooksDirBak, { recursive: true, force: true }); } catch (err) {
-      fail(`清理 hooks 备份 ${hooksDirBak} 失败`, err);
-    }
-  } else {
-    // 原本不存在 → 删除 E2E 注入产物 + 残留 bak
-    try { fs.rmSync(hooksDir, { recursive: true, force: true }); } catch (err) {
-      fail(`清理 E2E hooks 产物失败（${hooksDir}）`, err);
-    }
-    try { fs.rmSync(hooksDirBak, { recursive: true, force: true }); } catch (err) {
-      fail(`清理残留 hooks 备份失败（${hooksDirBak}）`, err);
-    }
-  }
-  return failures;
+  return problems;
+}
+
+// 覆盖 USERPROFILE 之前：记录真实 home 并做零接触快照
+const realHome = os.homedir();
+const homeSnapshot = snapshotUserHome(realHome);
+
+// 假屋：唯一名目录 + USERPROFILE 注入（Node os.homedir / Rust crate::home 全链跟随）
+fs.mkdirSync(fakeHomeDir, { recursive: true });
+process.env.USERPROFILE = fakeHomeDir;
+console.log(`[wdio-launcher] 假 home 隔离: ${realHome} → ${fakeHomeDir}`);
+// sanity：env 链断裂则 fail-fast（断链 = 整轮在真实屋上裸奔，静默不可接受）
+if (os.homedir() !== fakeHomeDir) {
+  console.error('[wdio-launcher] USERPROFILE 注入未生效（os.homedir 未跟随），E2E 终止——防在真实用户目录裸奔');
+  process.exit(1);
 }
 
 process.on('exit', () => {
-  const failures = restoreAll();
-  if (failures.length > 0) {
-    // 恢复失败必须可观测——静默会污染 ~/.slterminal 与 ~/.claude 真实用户数据（TQ-E-06）
-    console.error(`[wdio-launcher] 用户目录恢复失败 ${failures.length} 项:`);
-    for (const f of failures) console.error(`  - ${f}`);
+  // 真实屋零接触校验（防复发——任何 Rust 收敛遗漏/新裸 dirs 消费点在此独立报红）
+  const problems = verifyRealHomeUnchanged(realHome, homeSnapshot);
+  if (problems.length > 0) {
+    console.error(`[wdio-launcher] 真实用户目录校验失败 ${problems.length} 项（疑似泄漏）:`);
+    for (const p of problems) console.error(`  - ${p}`);
+    console.error('[wdio-launcher] 排查方向：Rust 侧 home 解析是否收敛到 crate::home（禁裸 dirs::home_dir）');
     process.exitCode = 1;
   } else {
-    console.log('[wdio-launcher] 用户目录恢复完成（全部成功）');
+    console.log('[wdio-launcher] 真实用户目录校验通过（零接触）');
   }
-  // E2E 临时数据目录清理（best-effort——残留由下次运行启动时 rmSync 兜底）
-  try { fs.rmSync(e2eDataDir, { recursive: true, force: true }); } catch { /* 忽略 */ }
+  // E2E 临时目录清理（best-effort——IME/遥测组件句柄可能导致假屋删不净，
+  // 残留于 tmp 无害且 OS 可回收；固定名 e2eDataDir 残留由下次启动 rmSync 兜底）
+  rmSyncRetry(e2eDataDir, { recursive: true, force: true });
+  if (!rmSyncRetry(fakeHomeDir, { recursive: true, force: true })) {
+    console.warn(`[wdio-launcher] 假屋清理失败（第三方组件句柄占用）→ 残留 ${fakeHomeDir}，无害可手动删`);
+  }
 });
 
 // ── Claude 历史会话 fixture 副本 + env 注入（TE-02，SEC-02 安全红线） ──

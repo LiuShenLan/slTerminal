@@ -22,14 +22,15 @@ use crate::agent_history::{is_uuid_filename, AgentHistorySession};
 /// 扫描根解析单点（SEC-02/BE-06，MC-305：env 覆盖留 provider 内部）
 ///
 /// 解析顺序：`SLTERM_CLAUDE_PROJECTS_DIR` env 非空 → 用之；
-/// 否则 `dirs::home_dir()/.claude/projects`。
+/// 否则 `crate::home::home_dir()/.claude/projects`（顶层共享 home 解析——
+/// E2E 假 home 隔离下 fallback 落假屋空目录，不会静默扫真实用户历史）。
 /// 每次调用时读取 env（不缓存）——E2E 进程继承 env 即可生效。
 /// **生产不设置此 env，仅测试用途**（E2E fixture 隔离，防止测试触碰真实用户数据）。
 pub fn resolve_projects_root() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("SLTERM_CLAUDE_PROJECTS_DIR").filter(|s| !s.is_empty()) {
         return Some(PathBuf::from(dir));
     }
-    dirs::home_dir().map(|home| home.join(".claude").join("projects"))
+    crate::home::home_dir().map(|home| home.join(".claude").join("projects"))
 }
 
 /// 遍历扫描根一级子目录，收集其中 UUID 形态的顶层 *.jsonl 会话（trait 路径入口）
@@ -261,24 +262,36 @@ mod scan_tests {
 
     #[test]
     fn resolve_root_empty_env_falls_back_to_home() {
-        // env 为空串 → 回退 home/.claude/projects（依赖 --test-threads=1 门禁）
+        // env 为空串 → 回退 crate::home/.claude/projects（双守卫：ScanRootGuard("")
+        // 清 env + HomeDirGuard 注入假 home——E2E 假 home 隔离下 fallback 语义）
         let _guard = ScanRootGuard::set("");
-        let expected = dirs::home_dir()
-            .map(|h| h.join(".claude").join("projects"))
-            .unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let _home_guard = crate::home::HomeDirGuard::set(home.path());
         let root = resolve_projects_root().unwrap();
-        assert_eq!(root, expected);
+        assert_eq!(root, home.path().join(".claude").join("projects"));
     }
 
     #[test]
     fn resolve_root_default_without_env() {
-        // 未设 env → home/.claude/projects（guard 移除 env 并保证测毕恢复）
+        // 未设 env → crate::home/.claude/projects（双守卫同上一例，unset 变体）
         let _guard = ScanRootGuard::unset();
-        let expected = dirs::home_dir()
-            .map(|h| h.join(".claude").join("projects"))
-            .unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let _home_guard = crate::home::HomeDirGuard::set(home.path());
         let root = resolve_projects_root().unwrap();
-        assert_eq!(root, expected);
+        assert_eq!(root, home.path().join(".claude").join("projects"));
+    }
+
+    #[test]
+    fn resolve_root_env_beats_userprofile() {
+        // 优先级契约（防回归）：SLTERM_CLAUDE_PROJECTS_DIR env 恒胜于
+        // USERPROFILE 假 home——E2E fixture 副本重定向不被假屋吞掉
+        let dir = tempfile::tempdir().unwrap();
+        let canon = dunce::canonicalize(dir.path()).unwrap();
+        let _guard = ScanRootGuard::set(&canon);
+        let home = tempfile::tempdir().unwrap();
+        let _home_guard = crate::home::HomeDirGuard::set(home.path());
+        let root = resolve_projects_root().unwrap();
+        assert_eq!(root, canon, "env 重定向应优先于共享 home 解析");
     }
 
     // ── scan_sessions：排除规则 ──

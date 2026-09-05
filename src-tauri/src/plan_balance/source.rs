@@ -1,10 +1,10 @@
 //! 余量来源（规格 §4.1/§10）：trait + 静态切片注册表（U2：照 hooks/provider.rs
 //! 先例，偏离 #13 可变单例——Rust 无 side-effect import，测试经参数化注入）
 //!
-//! home 解析照 hooks/claude/mod.rs home_dir()/HomeDirGuard 模式自建（D2：
-//! 硬约束 #2 模块不穿透，不跨模块调用 hooks::claude）
+//! home 解析经顶层共享件 `crate::home::home_dir()`（D2：模块不穿透——共享
+//! 只经顶层单文件模块，不再自建；应用 settings 读取经 app_dir 同理）
 
-use std::path::PathBuf;
+use crate::home::home_dir;
 
 /// 余量来源 trait：输入 = 无，输出 = Option<(baseUrl, token)>；解析格式由各来源自定
 pub trait PlanSource: Send + Sync + std::fmt::Debug {
@@ -55,39 +55,10 @@ fn resolve_env(content: &str) -> Option<(String, String)> {
     Some((base_url.to_string(), token.to_string()))
 }
 
-// ── home 解析（照 hooks/claude/mod.rs 先例模式，cfg(test) 注入守卫） ──
-#[cfg(test)]
-static HOME_DIR_OVERRIDE: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
-#[cfg(test)]
-pub(crate) struct HomeDirGuard(Option<PathBuf>);
-#[cfg(test)]
-impl HomeDirGuard {
-    pub(crate) fn set(dir: &std::path::Path) -> Self {
-        let mut slot = HOME_DIR_OVERRIDE.lock().unwrap();
-        let prev = slot.clone();
-        *slot = Some(dir.to_path_buf());
-        HomeDirGuard(prev)
-    }
-}
-#[cfg(test)]
-impl Drop for HomeDirGuard {
-    fn drop(&mut self) {
-        *HOME_DIR_OVERRIDE.lock().unwrap() = self.0.clone();
-    }
-}
-fn home_dir() -> Option<PathBuf> {
-    #[cfg(test)]
-    {
-        if let Some(d) = HOME_DIR_OVERRIDE.lock().unwrap().clone() {
-            return Some(d);
-        }
-    }
-    dirs::home_dir()
-}
-
 #[cfg(test)]
 mod source_tests {
     use super::*;
+    use crate::home::HomeDirGuard;
 
     // ── resolve_env 纯函数（6 例，F10） ──
 

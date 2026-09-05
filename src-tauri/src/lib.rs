@@ -4,6 +4,7 @@ mod background_tasks;
 mod error;
 mod fs;
 pub mod git;
+mod home;
 mod hooks;
 mod notify;
 mod plan_balance;

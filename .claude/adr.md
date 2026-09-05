@@ -316,3 +316,79 @@
 - `plan_balance_set_interval` 命令退役；套餐余量新增 enabled 语义（停轮询 + footer 隐藏 + 快照保留），默认间隔 60 → 10s。
 - 前端调度器与 UI 解耦：NavTree 换区重建（ADR-0001）不影响定时刷新；无订阅者不空转扫盘。
 - settings.rs 浅合并语义不变，跨任务写冲突由「单写通道 + 子键合并」在命令层消化。
+
+## 0014 CLI 别名持久化走通用 save_settings 段透传（ADR-0014：校验全前端，Rust 白名单加键）
+
+**Status**: accepted（2026-09-05，CLI 别名功能规格期决策；实施细节以代码与 aliasValidation.ts 为准）
+
+**上下文**：CLI 别名（claude 等编码 CLI 的用户自定义启动命令名）需持久化到 settings.json。settings 模块既有两条路径：① 通用 `save_settings` 浅合并顶层段透传（fontSize/keybindings/sideBar 先例，Rust 仅白名单校验）；② 域模块专用命令（backgroundTasks 先例，Rust 端持有任务注册表故校验/合并/emit 收后端）。别名域的语法与 D3「全命名空间唯一」（不得撞任何 profile 内置命令或其它别名）判定需要「全部 CLI 内置命令名集合」——该知识只存在于前端 CliProfileRegistry（注册表 + profiles/* 静态声明），Rust 侧仅有 hooks/history 两个 cliId 键 provider 注册表（无 commands 概念）。若仿 backgroundTasks 走专用命令，Rust 必须复刻一份 CLI 内置命令名单——双源漂移：新增 CLI 需三处同步（前端 profile、hooks provider、history provider）变四处，违背注意 1 的高内聚要求。
+
+**决策**：
+
+- 别名配置存 settings.json `cliAliases` 段（cliId → 别名数组），Rust `SETTINGS_ALLOWED_KEYS` 白名单加键（5→6），内容**纯透传**：不设专用命令/DTO/emit，语法与唯一性校验全前端（cliProfiles 域纯函数 `aliasValidation.ts`），存储走通用 `save_settings` 段写 + 2s debounce（stores/cliAliases.ts，keybindings 模式同构）。
+- 手改文件/版本残留产生违例数据 → 前端 loadFromDisk sanitize 兜底（孤儿 cliId 键丢弃、语法不过丢弃、撞内置/重复先到先占）；运行期磁盘改不改内存快照（与 keybindings 行为一致，接受）。
+- 未消费方模型：别名运行时经 App 组合层注入注册表别名快照（ADR-0015），后端零感知。
+
+**被否决的备选**：
+
+- **Rust 专用命令校验**（backgroundTasks 形态）：Rust 无 CLI commands 知识源，需复刻注册表或至少内置命令名单 → 知识双源、新 CLI 四处注册，且唯一性跨 cli 判定的真值源（前端注册表）与校验执行地（Rust）分离会随时间漂移。
+- **别名并入 profile.commands 静态字段**：见 ADR-0015（独立成案）。
+- **后端校验 + 前端注册表推送名单**：为低价值校验域引入跨端同步协议，复杂化无收益。
+
+**后果**：
+
+- 新增 CLI 的步骤不变（前端 profile + 三处后端 provider），别名能力对新 CLI 自动适用（UI 注册表驱动分区）。
+- 白名单 6 键需前端 store 与后端双侧测试锁死（save_accepts_cli_aliases_key + 段形态契约）。
+- 逆转触发点：未来别名需要后端参与（如 shell 层展开/注入）或出现第二个前端外知识源时，重估专用命令方案。
+
+## 0015 CLI 别名不进 profile.commands，注册表持独立别名快照（ADR-0015：matchByCommand 内置 → 别名回退）
+
+**Status**: accepted（2026-09-05，CLI 别名功能规格期决策；实施以 cliProfileRegistry.ts 为准）
+
+**上下文**：CodingCliProfile.commands 是「首 token 精确匹配键集」静态声明（types.ts 注释支持 ["claude","cc"] 多首词形态）。用户别名需求出现后，最直觉的落点是往 commands 数组追加——但 commands 承担三个不允许被污染的职责：① D3 命名空间计算的真值源（内置命令名集合 = `getAll().flatMap(commands)`，用户别名混入后无法区分来源）；② `register` 同 id 覆盖语义（静态覆盖 vs 用户配置生命周期不同）；③ 遍历 profile 的消费方（logo 资源守卫等）对 commands 的静态假设。且别名须运行时增删即时生效（D4），改静态字段需重注册/重遍历。
+
+**决策**：
+
+- `CliProfileRegistry` 增加旁路别名快照：`aliasByToken`（别名 token → cliId 逆映射平铺）+ `setAliases(byCliId)`（全量替换，单一写点，低频）。`register/get/getAll` 契约零改动。
+- `matchByCommand` 保持全仓唯一首 token 解析点（MC-102）原样，内置 `profile.commands` 查表未中后回退 `aliasByToken` 查表 → 返回映射 profile 或 null。匹配顺序「内置 → 别名」：D3 保证两空间无交；手改文件绕过 sanitize 产生违例时内置优先为保守方向（内置命令语义不可被别名遮蔽）。
+- 消费方零改动：别名命中返回与内置完全相同的 profile 对象，oscHandlers → TerminalRegistry.setAgentSession(cliId) → 页签标题/logo/侧栏 session 全链路自动一致（matchedCommand 记 cliId 而非原始 token，与内置命中同语义）。
+- `_reset()` 契约扩为清全部注册态（profile + 别名快照）。
+- 快照写入编排在 App.tsx 组合层（loaded 守卫 + store subscribe → setAliases，仿 wireKeybindings），别名数据状态在 stores/cliAliases.ts。
+
+**被否决的备选**：
+
+- **别名直接并入 `profile.commands`（注册时拼接/动态改数组）**：破坏内置命令名计算（D3 判定、跨 cli 冲突识别全失真）；`register` 覆盖语义与 profile 类型契约（types.ts，跨边界 spec 00 §3.1）被破坏；logo 守卫等遍历消费方污染；别名「当前 CLI 配置」与「CLI 自身静态身份」生命周期耦合。
+- **matchByCommand 参数注入别名集 / 检测层组合查询**：检测链（oscHandlers → useCommandDetection）持注册表方法引用惰性注入，改组合层需自解析首 token 或外迁 MC-102 解析点，违背单点化契约；mock 调用面全量波及。
+- **注册表外建第二解析点（useCommandDetection 先查别名再调注册表）**：两处首 token 解析 = MC-102 回归。
+
+**后果**：
+
+- commands 字段语义收窄为「内置命令静态声明」，注释无需修改（其多首词描述针对未来 CLI 自身多命令名场景，仍正确）。
+- D3 唯一性查询无需注册表新 API（内置集合就地 flatMap，别名集合读 store），API 不膨胀。
+- 新 CLI profile 注册流程零变化，别名能力自动覆盖；别名与内置的命名空间冲突在 UI 校验层消化（aliasValidation）。
+
+## 0016 E2E 假 home 隔离（ADR-0016：USERPROFILE 指向临时假屋，替代备份/还原）
+
+**Status**: accepted（2026-09-05，事故后修复决策；实施以 run-wdio.cjs 与 src-tauri/src/home.rs 为准）
+
+**上下文**：E2E 会真实写盘用户 home 配置——`settings.e2e.ts`/`background-tasks.e2e.ts` 的 `writeFakePlanEnv` 把 `~/.claude/settings.json` 的 env 键覆写为 `sk-test-e2e` 假值（suite 末才还原，窗口分钟级）；agent.e2e 起 `ensureHooksInjected` 注入 hooks matcher + statusLine 桥接，跨整个 run（10+ 分钟）。2026-09-05 事故实证：假值窗口内真实 claude 会话启动读到假 token → API 401「no token found」。旧备份/还原机制（run-wdio `.e2e-bak`）只能保证 run 后恢复，**窗口期污染与 kill 残留固化均无法消除**——且 e2e app 的 plan_balance poller 全程用真实 home env 打真实 API（真实 token 副作用）。
+
+**决策**：
+
+- **假 home 隔离**：run-wdio.cjs 建临时假屋（`<tmp>/slterm-e2e-home-<pid>`）并把 `USERPROFILE` 指向它——Node `os.homedir()`（libuv uv_os_homedir，每调用重读 USERPROFILE）全链跟随（spec 9+ 引用、注入 JS 脚本、tauri driver、PTY 子进程），e2e 全部用户目录写入落假屋，**真实用户目录零接触**。假屋目录每次运行唯一（pid 后缀）：IME/遥测组件（搜狗输入法等经 WebView2 激活拉起、继承假 env）会把自身 AppData 数据写进假屋并长驻句柄——固定名假屋启动清空必撞 EPERM（实证），唯一名免清空，exit 清理 best-effort。
+- **Rust 侧代码收敛（硬前提）**：dirs 6.0.0 / dirs-sys 0.5.0 的 `home_dir()` 走 `SHGetKnownFolderPath(known_folder_profile)`，**完全不读 USERPROFILE/HOME env**（dirs-sys 0.5.0 源码实证）——纯 env 注入只能隔离 Node/子进程，Rust 4 个消费点（hooks/claude、hooks/watcher 信号目录、plan_balance、agent_history fallback）必须统一到新建顶层共享件 `crate::home::home_dir()`：cfg(test) `HomeDirGuard` > env `USERPROFILE`（非空）> `dirs::home_dir()`。两处照抄守卫（hooks/claude、plan_balance）收编删除；生产代码禁裸 `dirs::home_dir()`（grep 收敛纪律）。`SLTERM_CLAUDE_PROJECTS_DIR`（history fixture 副本）保持独立且优先级高于 home。
+- **备份/还原机制整体退役**：run-wdio 约 145 行备份/还原死代码删除；`SLTERM_DATA_DIR` 应用数据隔离保留。
+- **防复发校验**：覆盖 USERPROFILE 前对真实屋（`~/.claude/settings.json`、`~/.slterminal/statusline-backup.json`、`~/.slterminal/hooks/`）做存在性 + sha256 快照，exit 逐项比对——任何泄漏（未来新裸 dirs 消费点/Rust 收敛遗漏）独立报红 `exitCode=1`。`hooks-events` 仅当启动时不存在才校验（存在 = 用户会话在用，防误报）。校验失败同时可能是外部进程并发写真实屋（如用户同时开 claude）——错误消息列排查方向。
+
+**被否决的备选**：
+
+- **保留备份/还原 + 缩短 spec 污染窗口**（writeFakePlanEnv 收敛到用例级 try/finally + 残留自检）：hooks 注入宽窗口（跨整 run 改 statusLine）仍在；kill 残留固化的根因未除（下次 run 备份坏值再还原坏值）；「e2e 必须写真实用户配置」的错误前提未推翻。
+- **仅 Node/子进程层 USERPROFILE 注入、Rust 不动**：dirs 6.0 Windows 不读 env → Rust 侧仍读写真实屋，隔离名存实亡。
+- **假屋固定名 + 启动强删**：第三方组件（IME 等）长驻句柄 → EPERM fail（实证），除非杀用户进程（不可接受）。
+
+**后果**：
+
+- e2e 期间用户可安全使用真实 claude/slterminal（真实屋零接触）；planBalance 不再用真实 token 打真实 API。
+- 真实屋零接触承诺范围 = `~/.claude` + `~/.slterminal`；`%LOCALAPPDATA%` WebView2 数据不在承诺内（环境变量未动，与手动运行一致）。
+- 残留假屋目录（IME 句柄删不净）留在 tmp 无害，OS 可回收；`.e2e-bak` 旧残留由一次性人工清理。
+- 逆转触发点：未来出现不经 `crate::home` 的 home 消费点时由 grep 纪律 + exit 校验双兜底报红；恢复备份/还原机制需重估隔离键选择。

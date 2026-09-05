@@ -24,9 +24,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `refresh_plan_balance` 恒返回 `Ok(最新快照)`：单来源失败按 §6 保留旧值，不整体 Err；仅 spawn_blocking join 失败才 Err。前端用返回值直接更新，事件通道照常。
 
-### home 解析自建不跨模块（D2）
+### home 解析经顶层共享件（D2）
 
-`source.rs` 自建 `home_dir()` + `HomeDirGuard`（照抄 `hooks/claude/mod.rs` 模式），**禁止跨模块调用** `hooks::claude`——硬约束 #2 模块不穿透；应用 settings 读取经 `crate::app_dir::app_data_dir()`（顶层共享件，不构成穿透，D3）。
+`source.rs` 的 home 解析统一经 `crate::home::home_dir()`（顶层共享件，ADR-0016——守卫/解析已收编 `home.rs`，本模块不再自建，曾照抄 hooks/claude 的两份复制已收敛）；硬约束 #2 模块不穿透，禁止跨模块调用 `hooks::claude`；应用 settings 读取经 `crate::app_dir::app_data_dir()`（顶层共享件，不构成穿透，D3）。
 
 ### 轮询编排已上提 background_tasks（F12），本模块保留执行体
 

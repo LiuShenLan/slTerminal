@@ -21,12 +21,22 @@ CLI profile 注册表（MC-1/101~108）——编码 CLI 身份域与能力策略
 - `register(profile)`：注册（同 id 覆盖旧条目，注册序不变）
 - `get(id)`：按 cliId 精确查询
 - `getAll()`：全部 profile，按注册序
-- `matchByCommand(commandLine)`：首 token 匹配，未命中返回 null
-- `_reset()`：清空全部（仅测试）
+- `setAliases(byCliId)`：全量替换别名快照（空对象 = 清空；低频，store 变更时调用）
+- `matchByCommand(commandLine)`：内置 commands 精确查表 → 未中查别名快照回退 → 未命中返回 null
+- `_reset()`：清空全部注册态（profile + 别名快照；仅测试）
+
+### 别名快照（CLI aliases，ADR-0015）
+
+用户别名（settings `cliAliases` 段）**不进 `profile.commands` 静态字段**，以旁路快照（`aliasByToken` 逆映射，别名 token → cliId）参与匹配：
+
+- **why**：commands 是 D3 命名空间计算（内置命令名集合 = `getAll().flatMap(commands)`）与 register 同 id 覆盖语义的真值源；别名混入会破坏两者并污染遍历 profile 的消费方（logo 资源守卫等）。types.ts:70 的 `["claude","cc"]` 多首词形态注释描述的是静态声明能力（未来 CLI 自身支持多命令名时用），语义不变。
+- **匹配顺序**：内置表 → 别名表（D3 保证两空间无交，顺序无观测差异；手改文件绕过 sanitize 产生违例时内置优先为保守方向）。
+- **写入编排**：快照同步在 App.tsx（loaded 守卫 + store subscribe → setAliases，仿 wireKeybindings）——alias 命中返回映射 profile 对象，消费方按 cliId 归位，与内置命中零差异（oscHandlers → TerminalRegistry → 页签/侧栏全链路无需改动）。
+- 别名校验/净化纯函数在 `aliasValidation.ts`（参数注入，零 import 本注册表）；别名数据状态在 `src/stores/cliAliases.ts`。
 
 ### 首 token 解析单点化（MC-102）
 
-`trim().split(/\s+/)[0]` 全仓唯一实现——`matchByCommand` 对 `profile.commands` 逐键精确查表，覆盖带参变体；空命令行/仅空白 → null；**不 toLowerCase**；同首 token 多 profile 冲突时先注册者优先。
+`trim().split(/\s+/)[0]` 全仓唯一实现——`matchByCommand` 对 `profile.commands` 逐键精确查表，内置未中再查别名快照（`aliasByToken`），覆盖带参变体；空命令行/仅空白 → null；**不 toLowerCase**；同首 token 多 profile 冲突时先注册者优先（别名查询不走注册序——D3 保证别名在命名空间内唯一，无同 token 多归属）。
 
 ### profile 接口契约（`types.ts`，spec 00 §3.1）
 

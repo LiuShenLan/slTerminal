@@ -31,17 +31,17 @@ E2E helper 由 `E2E_ENABLED`（`src/lib/e2eEnabled.ts`）门控。`tauri build` 
 
 两套命名反映挂载位置不同，禁止把 `__e2e_*` 当 window 全局使用。
 
-### 用户目录隔离（FIX-TE-04 + E2E-05 + BE-01）
+### 用户目录隔离（ADR-0016：假 home，替代 FIX-TE-04/E2E-05 备份/还原）
 
-**数据目录隔离（SLTERM_DATA_DIR）**：`run-wdio.cjs` 启动时注入 `SLTERM_DATA_DIR = <os.tmpdir()>/slterm-e2e-data`（env 链式继承：run-wdio → npx wdio → tauri driver → slterminal.exe），应用全部数据写入（settings.json / slterminal-projects.json 等）落在临时目录，与日常使用数据完全隔离；退出时清理临时目录。应用数据备份（~/.slterminal/settings.json / projects.json / .bak）已被此机制取代，不再备份。
+**数据目录隔离（SLTERM_DATA_DIR）**：`run-wdio.cjs` 启动时注入 `SLTERM_DATA_DIR = <os.tmpdir()>/slterm-e2e-data`（env 链式继承：run-wdio → npx wdio → tauri driver → slterminal.exe），应用全部数据写入（settings.json / slterminal-projects.json 等）落在临时目录，与日常使用数据完全隔离；退出时清理临时目录。
 
-其余用户目录 exit 时同步还原：
-- `~/.claude/settings.json`
-- `~/.slterminal/hooks/`
-- `~/.slterminal/statusline-backup.json`
-- `~/.slterminal/hooks-events/`（exit 时直接清理）
+**假 home 隔离（USERPROFILE）**：E2E 会真实写盘用户 home 配置（hooks 注入 / statusLine 桥接 / 假 env），旧「备份 → run 后还原」机制存在窗口期污染（真实 claude 会话启动即读假 token，曾致 API 401 事故）与残留固化风险。现改为 `run-wdio.cjs` 建临时假屋 `<os.tmpdir()>/slterm-e2e-home` 并把 `USERPROFILE` 指向它——Node `os.homedir()`（libuv，每调重读）与 Rust 侧 `crate::home` 共享解析（env-first；dirs 6.0 Windows **不读 env**，收敛纪律见 src-tauri 侧文档）全链跟随，**真实用户目录零接触**，窗口期污染在机制层面消失。
 
-恢复失败收集为清单并设 `process.exitCode = 1`，禁止静默吞错。
+**防复发校验**：覆盖 USERPROFILE 前对真实屋（`~/.claude/settings.json`、`~/.slterminal/statusline-backup.json`、`~/.slterminal/hooks/`）做存在性 + sha256 快照，exit 时逐项比对——任何泄漏（Rust 收敛遗漏/新裸 `dirs::home_dir()` 消费点）独立报红并 `exitCode = 1`。`~/.slterminal/hooks-events/` 仅当启动时不存在才校验 exit 仍不存在（存在 = 用户会话在用，跳过防误报）。
+
+**真实屋零接触承诺范围** = `~/.claude` + `~/.slterminal`（假屋机制覆盖）。`%LOCALAPPDATA%` 的 WebView2 数据不在此承诺内（环境变量未动，与手动运行行为一致）。
+
+**已知并发误报面**：开发者跑 e2e 的同时自己开真实 claude/slterminal 会合法改写 `~/.claude/settings.json` → exit 校验报红。属真实告警（提示「外部进程并发写真实屋」），错误消息列排查方向，不静默。
 
 ### Spec 级项目/设置重置（TQ-E-08）
 

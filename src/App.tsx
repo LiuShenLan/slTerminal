@@ -9,6 +9,9 @@ import { useLayout } from "./stores/layout";
 import { useFontSize, cancelPendingSave as cancelFontSizeSave } from "./stores/fontSize";
 import { useKeybindings, cancelPendingSave as cancelKeybindingsSave } from "./stores/keybindings";
 import { useSideBar, cancelPendingSave as cancelSideBarSave } from "./stores/sideBar";
+import { useCliAliases, cancelPendingSave as cancelCliAliasesSave } from "./stores/cliAliases";
+import type { CliAliasesState } from "./stores/cliAliases";
+import { cliProfileRegistry } from "./features/cliProfiles/cliProfileRegistry";
 import { saveLayout } from "./workspace/layoutSerde";
 import { pty } from "./ipc";
 import * as agentHooks from "./ipc/agentHooks";
@@ -146,6 +149,16 @@ function App() {
             console.warn("[App] 加载侧栏设置失败，保持默认值:", err);
           }
         })(),
+        (async () => {
+          try {
+            // 加载 CLI 别名——sanitize 需 profile 已注册（孤儿判定），模块 import 链
+            // 先于本 effect 完成注册（Workspace → profiles/index.ts 静态注册），时序安全
+            await useCliAliases.getState().loadFromDisk();
+          } catch (err) {
+            // FE-03：启动链失败不再静默——降级兜底不变（保持默认空别名），仅告警记录
+            console.warn("[App] 加载 CLI 别名设置失败，保持默认空别名:", err);
+          }
+        })(),
       ]);
 
       await loadProjectsAndRestore();
@@ -227,6 +240,7 @@ function App() {
         cancelFontSizeSave();
         cancelKeybindingsSave();
         cancelSideBarSave();
+        cancelCliAliasesSave();
         await Promise.race([
           saveAllProjects(),
           new Promise<void>((resolve) => setTimeout(resolve, SHUTDOWN_TIMEOUT_MS)),
@@ -265,6 +279,17 @@ function App() {
   // 将用户自定义绑定（覆盖层）持续同步到注册表
   useEffect(() => {
     return wireKeybindings(getShortcutRegistry(), useKeybindings);
+  }, []);
+
+  // 将 CLI 别名快照持续同步到 profile 注册表（仿 wireKeybindings 编排）：
+  // loaded 守卫跳过加载前空态；store 每次变更同步重建快照（Zustand 同步回调），
+  // 下一次回车即按新键集匹配（D4 即时生效，不依赖 debounce 落盘或 effect 重跑）
+  useEffect(() => {
+    const apply = (state: CliAliasesState) => {
+      if (state.loaded) cliProfileRegistry.setAliases(state.aliases);
+    };
+    apply(useCliAliases.getState());
+    return useCliAliases.subscribe(apply);
   }, []);
 
   // P2-FE-04：窗口焦点监听——供通知调度门控使用

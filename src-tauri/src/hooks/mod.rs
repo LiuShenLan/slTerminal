@@ -256,7 +256,7 @@ pub async fn agent_hooks_config_write(
 #[cfg(test)]
 mod hooks_tests {
     use super::*;
-    use crate::hooks::claude::HomeDirGuard;
+    use crate::home::HomeDirGuard;
 
     // ── AgentInjectionStatus / AgentHookInjectionStatus serde（HUK-09：roundtrip + 键集合精确匹配） ──
 

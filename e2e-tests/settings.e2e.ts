@@ -18,8 +18,8 @@
  * - 后端 settings.json 在 exe 同级（app_dir.rs 便携分发契约）——落盘断言直接
  *   Node 侧读文件（与 loadSettings 同一真值源），原子写中间态自动重试。
  * - 用例写盘（④ backgroundTasks.planBalance 子键 / ⑥ keybindings 段 / ④ 假 env 注入 user 层
- *   ~/.claude/settings.json）由 suite before/after 快照还原，防污染用户数据
- *   （run-wdio.cjs 备份集合不覆盖 exe 同级 settings.json）。
+ *   ~/.claude/settings.json）由 suite before/after 快照还原，防跨 spec 残留
+ *   （user 层文件在假屋内——ADR-0016：run-wdio 以 USERPROFILE 隔离，真实屋零接触）。
  * - 余量刷新闭环（④）：假 env 注入 user 层 settings.json（SEC-18 假值占位符，
  *   deepseek URL 命中 QUERIES 匹配集）→ 提交 120 → refreshPlanBalance 真实 invoke →
  *   后端一轮拉取（假 token 必 401/超时 → merge_slot 占位行）→ 快照变化 emit →
@@ -215,8 +215,9 @@ function writeFakePlanEnv(): void {
 
 describe("设置中心 (F11, SC-E2E-02)", () => {
   // 用例真实写盘两处：exe 同级 settings.json（④ backgroundTasks.planBalance 子键 / ⑥ keybindings 段）、
-  // user 层 ~/.claude/settings.json（④ 假 env）。run-wdio.cjs 备份集合不覆盖
-  // exe 同级 settings.json——suite 级快照还原防污染用户数据。
+  // user 层 ~/.claude/settings.json（④ 假 env，假屋隔离——ADR-0016）。
+  // exe 同级 settings.json 在 SLTERM_DATA_DIR 临时目录；user 层文件在假屋——
+  // suite 级快照还原防跨 spec 残留（防 after 失败后残留假 env 影响后续 spec）。
   let settingsSnapshot: { existed: boolean; content: string | null };
   let claudeSnapshot: { existed: boolean; content: string | null };
 

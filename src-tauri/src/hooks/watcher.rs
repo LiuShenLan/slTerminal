@@ -146,8 +146,10 @@ impl Drop for HookSignalWatcher {
 }
 
 /// 获取信号目录路径（~/.slterminal/hooks-events/）
+/// home 解析经 crate::home 共享件（E2E 假 home 隔离：env USERPROFILE 跟随——
+/// 信号链路跨进程一致性的承重墙：spec Node 侧写假屋、本 watcher 必须读同一假屋）
 fn get_signal_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
-    dirs::home_dir()
+    crate::home::home_dir()
         .ok_or_else(|| "无法获取用户 home 目录".into())
         .map(|h| h.join(".slterminal").join("hooks-events"))
 }
@@ -216,6 +218,23 @@ fn run_one_tick(signal_dir: &Path, stop_rx: &mpsc::Receiver<()>, process: impl F
 #[cfg(test)]
 mod watcher_tests {
     use super::*;
+    use crate::home::HomeDirGuard;
+
+    // ── get_signal_dir（防回归裸 dirs——信号链路跨进程一致性承重墙） ──
+
+    /// HomeDirGuard 注入后信号目录指向 假屋/.slterminal/hooks-events
+    /// （E2E 假 home 隔离：spec Node 侧写假屋，watcher 必须读同一假屋——
+    /// 裸 dirs::home_dir 会无视 USERPROFILE 导致信号链路断开）
+    #[test]
+    fn get_signal_dir_follows_home_guard() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = HomeDirGuard::set(home.path());
+        assert_eq!(
+            get_signal_dir().unwrap(),
+            home.path().join(".slterminal").join("hooks-events"),
+            "信号目录应经共享 home 解析（env/守卫跟随）"
+        );
+    }
 
     // ── is_signal_file ──
 

@@ -56,9 +56,9 @@
 
 ## L4 运行机制
 
-### 用户目录隔离机制（FIX-TE-04 + E2E-05 扩展）
+### 用户目录隔离机制（ADR-0016 假 home，替代 FIX-TE-04 + E2E-05 备份/还原）
 
-`run-wdio.cjs` 启动时备份 `~/.slterminal/settings.json`、`~/.claude/settings.json`、`~/.slterminal/hooks/`（`.e2e-bak`），exit 时还原；`~/.slterminal/hooks-events/` 直接清理。E2E 不触碰真实 `~/.claude/projects/`（`SLTERM_CLAUDE_PROJECTS_DIR` 指向临时副本）。详见 `e2e-tests/CLAUDE.md`。
+`run-wdio.cjs` 建临时假屋（`<tmp>/slterm-e2e-home-<pid>`）并注入 `USERPROFILE`——e2e 全部用户目录写入（hooks 注入/statusLine 桥接/假 env/信号文件）落假屋，真实 `~/.claude` 与 `~/.slterminal` 零接触；exit 时对真实屋做存在性 + sha256 快照比对（任何泄漏独立报红 exitCode=1）。旧备份/还原机制（`.e2e-bak`）已退役。E2E 不触碰真实 `~/.claude/projects/`（`SLTERM_CLAUDE_PROJECTS_DIR` 指向临时副本）。详见 `e2e-tests/CLAUDE.md`。
 
 ### E2E 键盘输入限制（半端到端，TE-17）
 
