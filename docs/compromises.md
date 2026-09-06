@@ -78,6 +78,10 @@
   来源:`src/ipc/CLAUDE.md`。当时理由:mockIPC 只守 JS 侧形状,真实序列化契约由 L4 兜底。问题本质:前后端 DTO 契约漂移在单元层不可见,失败信号被前端 catch 吞成静默——契约一致性(硬约束 #4)缺一层类型/运行时双端核对机制。
 - [ ] **CP-028 · e2e 导航树展开辅助 children 计数循环对无会话页面行不收敛(奇偶翻转风险)**
   来源:`e2e-tests/history.e2e.ts` ensureProjectPagesExpanded(2026-09-03 已改单次点击版)、`e2e-tests/agent.e2e.ts` ensureTreeExpanded、`e2e-tests/mockcli.e2e.ts` 同构展开循环。当时理由:页面行无活跃会话时不渲染子级容器,DOM 无法区分展开/收起——以「每轮 children 计数判定,奇数次翻转必然到达展开稳态」假设收敛;2026-09-03 历史节点收进项目展开容器后,四态用例项目行被前置展开、6 轮循环全被页面行 toggle 消耗(偶数翻转终态收起)暴露缺陷,history spec 处已改「每行至多点击一次」,agent/mockcli 同构循环**暂时保留**(仅靠「每用例新建项目、项目行收起起点消耗首轮」巧合通过)。问题本质:DOM 无状态可判据时用计数循环赌奇偶,语义脆弱——统一方案 = 展开判定不依赖 DOM(测试侧记录点击态或组件暴露展开探针),合适时机与 agent/mockcli 循环一并修改。
+- [ ] **CP-029 · editor.e2e.ts auto-reload 用例多轮确定性失败(既存)**
+  来源:`e2e-tests/editor.e2e.ts` "should persist modified content to disk after external change triggers reload then Ctrl+S save"(2026-09-06 连续 5+ 轮复现,基线轮同败,与 cli-aliases 修复无关)。当时理由:本次修复范围外,未排查。问题本质:外部文件修改 → fs-event → 编辑器 auto-reload 链路在 E2E 环境确定性失败——待专项排查区分测试环境(watcher 时序/文件事件丢失)与产品缺陷,再排期修复。
+- [ ] **CP-030 · embedded tauri-service 焦点检查令 `$` 命令 5s+ 延迟,无失败语义且吞归因(既存)**
+  来源:`@wdio/tauri-service` focusCommands(`$`/`$$`/`findElement`/`elementClick`/`getTitle`)每命令 `ensureActiveWindowFocus` → core.invoke 查窗口状态,不可用时 WARN + 5s 超时,实测每命令 10-15s;表现:cli-aliases 真实手势驱动(4 focus 命令)长链用例被拖出 mocha 60s 上限多轮失败,且 background-tasks/commit/mockcli 各轮交替失败漂移。当时理由(2026-09-06):cli-aliases spec 回退合成 click 驱动绕开(项目立场:helper 非用户路径,交互时序归 L2),真实手势的 E2E 断言暂不保留。问题本质:测试基建在窗口状态查询不可用环境静默降级为每命令 +5-15s 惩罚——无失败语义、无运行前提校验(窗口须前台聚焦),长链 spec 在高延迟环境必超时;叠加 mocha retry 吞首跑错误进一步掩盖归因;应显式校验 E2E 运行前提或改进驱动降级策略后重估真实输入驱动可行性。
 
 ## 六、遗留清理与同步点
 

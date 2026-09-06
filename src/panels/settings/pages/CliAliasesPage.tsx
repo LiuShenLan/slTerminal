@@ -7,9 +7,11 @@
 //   - 添加行（input + 按钮，Enter/点击提交）。
 // 提交（立即提交型，无 dirty 暂存，照 BackgroundTasksPage 先例注释）：
 //   校验（aliasValidation.validateCliAlias：语法 + D3 全命名空间唯一）失败 → 行内红字
-//   保留 input 文本可改（别名是离散添加操作，误 blur 提交比误丢失成本高——刻意不走
-//   BackgroundTasksPage 的 blur 提交语义，注释差异理由）；成功 → store.addAlias 即时生效
-//   （App 快照同步 effect 注入注册表，D4）；blur 清空 input 与错误（不提交）。
+//   保留 input 文本可改；成功 → store.addAlias 即时生效（App 快照同步 effect 注入注册表，
+//   D4）→ handleSubmit 清空 input 与错误。blur 保留草稿与错误（不清空、不提交）——别名是
+//   离散添加操作，误 blur 提交比误丢失成本高，刻意不走 BackgroundTasksPage 的 blur 提交语义；
+//   且点「添加别名」按钮时 mousedown 先使 input 失焦，blur 若清空则 click 提交必读空串失败
+//   （FC-01 曾声称修复此竞态，实际从未落地，故 blur 一律保留草稿，配回归测试防复发）。
 // 消费方无需本页感知后端——持久化由 store debounce 落盘。
 
 import React, { useCallback, useState } from "react";
@@ -171,9 +173,9 @@ const CliAliasesPage: React.FC<SettingsPageProps> = () => {
                   }}
                   onBlur={(e) => {
                     e.currentTarget.style.borderColor = INPUT_BORDER;
-                    // blur 不提交：别名是离散添加操作，误 blur 提交比误丢失成本高
-                    setInputs((prev) => ({ ...prev, [cliId]: "" }));
-                    setErrors((prev) => ({ ...prev, [cliId]: null }));
+                    // blur 不清空、不提交（别名是离散添加操作，误 blur 提交比误丢失成本高——
+                    // 但仍不清空草稿：真实鼠标点「添加别名」时 mousedown 先使 input 失焦，
+                    // 清空会让随后的 click 提交读到空串而失败；误点失焦也不丢输入）
                   }}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") handleSubmit(cliId);

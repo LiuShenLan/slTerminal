@@ -36,6 +36,7 @@ L2 前端单元/集成测试集中目录。本文件只记录测试架构层面�
 - **右键菜单**：`fireEvent.contextMenu` 触发；StrictMode 双渲染会导致重复元素，取 `getAllByText` 首个。
 - **页签右键菜单（自研，无探针）**：目标 = `.dv-tab` 内 `data-e2e="tab-close-*"` 按钮的父级（DefaultTab 内容根——它是 `.dv-tab` 的子级，对 `.dv-tab` 自身派发冒泡不经过 DefaultTab div）；菜单渲染于容器内，`[role="menuitem"]` 查询。dockview 8.1 free core 无 contextMenuService，勿再引入 fake service 探针（workspace/CLAUDE.md「页签右键菜单自研」）。
 - **fake timers**：`fs-event` 200ms / `file-saved` 300ms debounce 需 fake timers 跨过。
+- **blur/焦点时序竞态复现（FC-01 先例）**：jsdom 无真实焦点管理——`fireEvent.click` 不转移焦点、不产 blur，会掩盖「blur 先于 click」类竞态（blur 清空 state → 随后 click 闭包读到空值）。测按钮路径的失焦交互须手动编排完整手势序列：`fireEvent.focus(input)` → `fireEvent.change(input, value)` → `fireEvent.blur(input)` → `fireEvent.click(button)`（React 18 离散事件同步 flush，blur 的 setState 在 click 前已完成重渲染）。凡组件 onBlur 含清空/提交逻辑，按钮路径测试一律带 blur 前置（settings-cli-aliases.test.tsx 首条用例先例）。另：组件语义注释（如「blur 清空」）必须由测试断言锁定，防注释/提交信息与真实行为三方漂移（FC-01 教训——提交信息声称已修、代码注释与测试反把 bug 行为固化为期望语义）。
 
 ## 编号登记
 

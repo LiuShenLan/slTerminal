@@ -3,8 +3,10 @@
 // mock 策略：真实 store + 真实校验纯函数 + 真实注册表（beforeEach 注册 light fake
 // profile claude/codex 两分区，afterEach 隔离）。store loaded 守卫默认 false——
 // addAlias/removeAlias 不触发 debounce 落盘（零 IPC，照 settings-keybindings.test.tsx 先例）。
-// 覆盖：分区渲染 / 内置 chip 只读 / 别名 chip 增删 / Enter 与按钮提交 / 校验失败行内红字
-// 保留输入 / blur 清空 / 跨 cli 冲突文案 / 空注册表空态。
+// 覆盖：分区渲染 / 内置 chip 只读 / 别名 chip 增删 / Enter 与按钮提交（按钮用例走真实
+// 鼠标手势序列：focus→输入→blur→click——blur 先于 click 是按钮路径的真实时序，见
+// CliAliasesPage blur 语义）/ 校验失败行内红字保留输入 / blur 保留草稿与错误 /
+// 跨 cli 冲突文案 / 空注册表空态。
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { render, cleanup, fireEvent } from "@testing-library/react";
@@ -76,10 +78,14 @@ describe("分区渲染", () => {
 });
 
 describe("添加别名", () => {
-  it("输入 + 按钮提交 → store 追加 + input 清空", () => {
+  it("真实鼠标手势点按钮（mousedown 失焦 blur 先于 click）→ 添加成功不被清空草稿所败", () => {
     render(<CliAliasesPage />);
     const input = byE2e("cli-aliases-input-claude");
+    // 真实手势序列：mousedown 转移焦点先触发 input blur，随后 mouseup/click 触发提交。
+    // 回归防护：blur 曾无条件清空草稿 → click 提交空串报「别名不能为空」添加失败（FC-01）
+    fireEvent.focus(input);
     fireEvent.change(input, { target: { value: "cc" } });
+    fireEvent.blur(input);
     fireEvent.click(byE2e("cli-aliases-add-claude"));
     expect(useCliAliases.getState().aliases).toEqual({ claude: ["cc"] });
     expect((byE2e("cli-aliases-input-claude") as HTMLInputElement).value).toBe("");
@@ -134,14 +140,16 @@ describe("添加别名", () => {
     expect(useCliAliases.getState().aliases).toEqual({ claude: ["cc"] });
   });
 
-  it("blur 清空 input 与错误（不提交）", () => {
+  it("blur 保留 input 草稿与错误（不提交，FC-01 防复发）", () => {
     render(<CliAliasesPage />);
     fireEvent.change(byE2e("cli-aliases-input-claude"), { target: { value: "claude" } });
     fireEvent.keyDown(byE2e("cli-aliases-input-claude"), { key: "Enter" });
     expect(byE2e("cli-aliases-error-claude")).not.toBeNull();
     fireEvent.blur(byE2e("cli-aliases-input-claude"));
-    expect((byE2e("cli-aliases-input-claude") as HTMLInputElement).value).toBe("");
-    expect(document.querySelector("[data-e2e='cli-aliases-error-claude']")).toBeNull();
+    // 反向断言：blur 不清空草稿（输入可继续改）、不清错误、不提交——曾无条件清空致
+    // 按钮点击先失焦后提交必败（FC-01），此三条断言即防该回归
+    expect((byE2e("cli-aliases-input-claude") as HTMLInputElement).value).toBe("claude");
+    expect(byE2e("cli-aliases-error-claude")).not.toBeNull();
     expect(useCliAliases.getState().aliases).toEqual({});
   });
 });

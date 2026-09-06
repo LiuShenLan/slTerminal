@@ -59,6 +59,8 @@ wdio 单 session 共享 app 实例。`wdio.conf.ts` 的 `beforeSuite` 调 `__slt
 - **fixture 缺失必须终止**：`fixtures/claude-projects/` 缺失时 `run-wdio.cjs` 直接 `process.exit(1)`，禁止自动兜底到真实 `~/.claude/projects`。
 - **DOM 选择器必须用 `data-e2e`**：禁止 CSS 内联样式选择器。
 - **helper 是测试后门而非用户路径**：真实用户交互由对应 L2 组件测试覆盖。
+- **`$()`/elementClick 触发 tauri-service 焦点检查（focusCommands）**：`$`/`$$`/`findElement`/`findElements`/`elementClick`/`getTitle` 命令前 `ensureActiveWindowFocus` 经 core.invoke 查窗口状态，查询不可用（WARN "core.invoke not available after 5s timeout"）时每命令 +5-15s（2026-09-06 实测：cli-aliases 真实手势版步骤 2 四个 focus 命令吃 40-60s，长链用例被拖出 mocha 60s 上限多轮失败）；executeScript **豁免**不触发。spec 编写优先 execute 内 helper；新引入 `$()` 元素命令前评估焦点检查成本。
+- **合成 JS click 无焦点语义**：`browser.execute(() => el.click())` 不转移焦点、不触发 blur，测不到焦点转移类竞态；embedded driver 唯一真实输入 = elementClick（同受 focusCommands 惩罚）。交互时序断言（blur→click 竞态等）归 L2——jsdom `fireEvent` 可编排完整手势序列，见 `src/__tests__/CLAUDE.md`「blur/焦点时序竞态复现」。
 
 ## 测试模式
 
@@ -67,6 +69,11 @@ wdio 单 session 共享 app 实例。`wdio.conf.ts` 的 `beforeSuite` 调 `__slt
 - **选择器**：`data-e2e` 属性。
 - **通信**：测试代码在 Node 进程，通过 `browser.execute()` 调用应用侧注入的 window/容器全局 helper。
 - **重试**：`WDIO_RETRIES` 环境变量控制，默认 1。
+
+### 失败排查提示（2026-09-06 实证）
+
+- **mocha retry 吞首跑错误**：默认 `WDIO_RETRIES=1` 下报告只显示重跑失败的最后一个错误——重跑叠加首跑残留态（面板/别名/项目），错误行号与消息往往 ≠ 首跑真实失败点，会误导归因。暴露首跑真实错误用 `WDIO_RETRIES=0` 跑一轮（与 TQ-E-09 观察面同法）。
+- **裸 "Error: Timeout"（@wdio/utils `executeAsync`）≠ waitUntil 超时**：前者是 mocha runnable 超时包装（`runnableTimeout - TIME_BUFFER` 后 reject），= 用例总时长超限（命令堆积/环境延迟），无 timeoutMsg；waitUntil 超时必带 timeoutMsg。长链用例按需 `(this as any).timeout(N)` 放宽（function 声明取 this，先例 E2E-12 `this.retries(0)`）。
 
 ### 半端到端边界声明（DOC-02）
 
