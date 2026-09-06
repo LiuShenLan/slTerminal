@@ -1,6 +1,6 @@
 # 妥协问题清单
 
-依据 `.claude/CLAUDE.md`「开发取向(未来最优)」原则对存量登记的盘点(2026-09-02)。
+依据 `.claude/CLAUDE.md`「开发取向(未来最优)」原则对存量登记的盘点(2026-09-02 首版;2026-09-06 全量核查重生成:31 条全数核实仍存在,9 条描述修正,新增 15 条 CP-032~046——其中 CP-038~046 由「存疑待议」复核转入,无剔除)。
 
 **收录判据**:以「成本不抵收益 / 动现状风险大 / 接受次优」为由关闭的成本型妥协与工程债务——未来最优原则下可重新评估修复。
 
@@ -10,86 +10,122 @@
 - 外部依赖节奏约束(xterm beta、notify RC——上游无稳定版可升,升级触发条件已登记)→ ADR-0007 / ADR-0008
 - 平台/浏览器能力边界(cmd.exe 无 shell integration、Tauri 通知无点击路由等)→ 所属模块 CLAUDE.md
 
-**用法**:逐条修复,完成后勾选销项。条目格式:来源(登记点)→ 当时理由 → 问题本质。修复若触及登记点原文(ADR / 模块 CLAUDE.md),须同步更新,勿留失真登记。
+**用法**:逐条修复,完成后勾选销项。条目格式:来源(登记点)→ 当时理由 → 问题本质 → 修改方向(2~3 句,到模块/契约/约束级,非实施计划)。修复若触及登记点原文(ADR / 模块 CLAUDE.md),须同步更新,勿留失真登记。
 
 ---
 
 ## 一、依赖与技术选型
 
 - [ ] **CP-001 · 双 TS 并存**(TS6 包装器 + `@typescript/native` TS7 别名)
-  来源:ADR-0010 TE-07。当时理由:typescript-eslint 8.67.0 peer 依赖全系拒绝 TS7(加载期硬校验),三支 fallback 走尽后正式化妥协。问题本质:类型检查(TS7)与 ESLint 消费(TS6)各走一套编译器,依赖版本矩阵双轨;消除依赖上游 issue #10940 闭环 + TS7.1 发布。
+  来源:ADR-0010 TE-07。当时理由:typescript-eslint 8.67.0 peer 依赖全系拒绝 TS7(加载期硬校验),三支 fallback 走尽后正式化妥协。问题本质:类型检查(TS7)与 ESLint 消费(TS6)各走一套编译器,依赖版本矩阵双轨;消除依赖上游 issue #10940 闭环 + TS7.1 发布。2026-09-06 核查实证:peer `>=4.8.4 <6.1.0` 仍拒 TS7(package-lock.json),#10940 仍 open,TS7.1 未发布——双触发条件均未达成。**修改方向**:维持双轨至双条件达成,届时删 TS6 包装器与别名、`"typescript"` 直改 `^7.1.0`;触发条件可写成可机检形式(issue 状态 + npm dist-tag)防登记休眠。
 - [ ] **CP-002 · json-schema-library 9.x / 11.x 双 major 并存**
-  来源:ADR-0010 TE-15、`src/features/cliProfiles/CLAUDE.md`。当时理由:codemirror-json-schema@0.8.1 锁 9.x(上游约束),主声明 11.6.2;运行时两实例无冲突。问题本质:同一库双实例并行,体积与语义双份,待上游升级消解——评估是否有替代方案不再经 codemirror-json-schema 引 9.x。
-- [ ] **CP-003 · E2E 工具链版本妥协(便携 Node 22 启动器)**
-  来源:`e2e-tests/CLAUDE.md`。当时理由:Node≥26 自带 undici 8 与 webdriverio 不兼容,自动下载便携 Node 22 兜底。问题本质:测试运行时依赖自动下载第三方二进制,版本矩阵游离于主 toolchain;评估升级 webdriverio 或固定受控 Node 版本纳入 npm scripts。
+  来源:ADR-0010 TE-15、`src/features/cliProfiles/CLAUDE.md`。当时理由:codemirror-json-schema@0.8.1 锁 9.x(上游约束),主声明 11.6.2;运行时两实例无冲突。问题本质:同一库双实例并行,体积与语义双份。2026-09-06 核查实证:lockfile 双实例(嵌套 9.3.5 + 顶层 11.6.2)原样,上游最新仍 0.8.1,锁定未解。**修改方向**:「待上游」短期无望,转向替代评估——自绘 JSON lint 提示摘除 codemirror-json-schema 依赖,或评估 @invopop fork 的库版本;维持现状则把「待上游」改为显式定期复查节点,防登记永久休眠。
+- [ ] **CP-003 · E2E 工具链版本妥协(便携 Node 22 启动器)**【2026-09-06 核查修正:当时理由已失真】
+  来源:`e2e-tests/CLAUDE.md`。当时理由:Node≥26 自带 undici 8 与 webdriverio 不兼容,自动下载便携 Node 22 兜底。**核查修正**:webdriverio#15265 已在 9.30.0 修复(官方 #15363 明示),项目已解析 9.30.1——「不兼容」对当前依赖树不成立,消除条件达成而启动器(run-wdio.cjs:246-288)未跟进。问题本质:测试运行时依赖自动下载第三方二进制,版本矩阵游离于主 toolchain;上游修复后妥协进入「无人触发的死兜底」形态。**修改方向**:实机用 Node 26 直跑全量 e2e 验证;通过后删自动下载分支(保留显式预置约定),Node 版本约束以 engines 纳入主 toolchain,同步修订 e2e-tests/CLAUDE.md:23-25;若验证暴露 tauri-service 链路仍有 Node 26 问题,把新证据登记为触发条件。附带修正:`@types/node ^26.2.0`(package.json:68)类型锚定 Node 26 而 e2e 实际跑便携 Node 22,类型/运行时错位,随本条下线自动对齐。
+- [ ] **CP-032 · wdio 家族版本矩阵经 overrides 强扭,各 override 成因无登记**(2026-09-06 核查新增)
+  来源:package.json:92-100(overrides 段)、ADR-0006(仅登记「overrides 段保持现状」,无成因)。当时理由(无登记,本次挖掘):@wdio/tauri-service@1.3.0 硬钉 webdriverio 9.30.0 / @wdio/globals 9.29.1,与主声明 ^9.30.1/^9.31.0 冲突,靠 overrides 强扭对齐,家族实际混跑 9.29.1/9.30.0/9.30.1/9.31.x;serialize-javascript/deepmerge-ts/@puppeteer/browsers/glob 四项成因全仓无登记。问题本质:e2e 版本真值源分裂——上游硬钉与主声明靠 overrides 粘合,随 `^` 浮动游离于版本评审;tauri-service 或 wdio 升 major 时 override 需手工重对齐,缺登记即缺同步点。**修改方向**:在 e2e-tests/CLAUDE.md 登记各 override 成因与「谁钉谁」对齐契约(tauri-service 升级时同步重估);评估 @wdio/* 全家跟随 tauri-service 锁定节奏统一升降,或上游放开硬钉后去 overrides 化。
+- [ ] **CP-033 · KaTeX 字体构建期内联产物入库**(2026-09-06 核查新增,ADR-0018 接受次优未入册)
+  来源:ADR-0018、src/panels/markdown/CLAUDE.md:23、scripts/gen-katex-inline.mjs、src/panels/markdown/generated/katexInlineCss.ts。当时理由:运行时经 asset 协议取字体的 CORS 行为未实证,不冒险→构建期生成物(~360KB)提交入库。问题本质:字体资源管理转为源码树生成物——katex 升级须重跑脚本 + git diff 人工审阅,防漏跑仅靠「勿手改」注释,无 CI 守卫;字体通道双轨(构建期内联 vs 运行时 asset,仅 md 面板走内联)。**修改方向**:实证 asset 协议/convertFileSrc 在 opaque origin iframe 的字体 CORS 行为(ADR-0018 被否决项重估),通过后改运行时取字体并删除生成物;维持期间给 gen 脚本加 CI diff 守卫(katex 升级漏跑即红)。
+- [ ] **CP-038 · `@types/markdown-it` 精确 pin 偏离 ADR-0006 依赖版本策略**(2026-09-06 存疑复核转入)
+  来源:package.json:67(`"@types/markdown-it": "14.2.0"` 精确 pin,无登记理由)、ADR-0006(.claude/adr.md:153,devDependencies 全 `^`)。当时理由:无登记——可能是疏忽而非有意妥协。问题本质:依赖版本策略出现无登记的破口,同类偏离无防漂移守卫,后续者无从判断该 pin 是兼容规避还是手滑。**修改方向**:确认 pin 成因——若曾有兼容问题,在 ADR-0006 或 package.json 注释补登记;若无,改回 `^14.2.0` 并回归 L2 验证。
 
 ## 二、后端架构与平台
 
 - [ ] **CP-004 · 多 Dockview 实例架构 + `MAX_PAGES=20` 上限缓解**
-  来源:ADR-0009 FE-01(含 FE-36 跨项目全局计数修订)、`src/workspace/CLAUDE.md`、`src/stores/CLAUDE.md`。当时理由:H6 终端跨页面存活 + xterm 实例约束,架构上每页一 Dockview 实例,以页数上限防内存/DOM 线性增长。问题本质:缓解阀而非根治——实例数仍随页面线性增长,容器/渲染管线重复;未来最优应为共享宿主或虚拟化面板池。
+  来源:ADR-0009 FE-01(含 FE-36 跨项目全局计数修订)、`src/workspace/CLAUDE.md`、`src/stores/CLAUDE.md`。当时理由:H6 终端跨页面存活 + xterm 实例约束,架构上每页一 Dockview 实例,以页数上限防内存/DOM 线性增长。问题本质:缓解阀而非根治——实例数仍随页面线性增长,容器/渲染管线重复。2026-09-06 核查实证:MAX_PAGES=20(projects.ts:15)、每页一 DockviewReact + CSS 显隐切换原样;登记点有一处笔误——workspace/CLAUDE.md:15 把豁免登记误引 ADR-0001,实为 ADR-0009。**修改方向**:根治方向不变——共享 Dockview 宿主 + 页面级分组模型,或面板池虚拟化;上限随多实例架构重设计一并消亡。顺带修正登记点笔误。
 - [ ] **CP-005 · 后端 `std::sync::Mutex` 中毒保持现状**
-  来源:ADR-0009 09#14、`src-tauri/src/CLAUDE.md`、`src-tauri/src/pty/CLAUDE.md`、`src-tauri/src/git/CLAUDE.md`(仓库缓存)。当时理由:临界区短小无 panic,中毒不可达,parking_lot 换装零收益。问题本质:以「当前无 panic」论证原语次优性,未消除「未来锁内引入 panic → 等待方连锁 panic」的架构脆弱点;换原语或 catch_unwind 仅作预案而未决。
+  来源:ADR-0009 09#14、`src-tauri/src/CLAUDE.md`、`src-tauri/src/pty/CLAUDE.md`、`src-tauri/src/git/CLAUDE.md`(仓库缓存)。当时理由:临界区短小无 panic,中毒不可达,parking_lot 换装零收益。问题本质:以「当前无 panic」论证原语次优性,未消除「未来锁内引入 panic → 等待方连锁 panic」的架构脆弱点。2026-09-06 核查实证:8 处生产使用点,`lock().unwrap()`(中毒即 panic)与 map_err 降级两种形态并存,无统一纪律,Cargo.toml 无 parking_lot。**修改方向**:换装 parking_lot 一行依赖即可消除全部 unwrap 站点,或至少统一 map_err 降级形态;原语升级把「锁内不 panic」从人肉纪律变成结构性保证。
 - [ ] **CP-006 · `fs_read_dir` 返回整目录列表不分页**
-  来源:ADR-0009 BE-21、`src-tauri/src/fs/CLAUDE.md`(红线「禁止加分页」)。当时理由:改分页 = IPC 契约破坏性变更,收益不抵成本;懒加载 + FileTree 虚拟化(FE-30)覆盖渲染侧。问题本质:IPC 契约形态被现状成本冻结——大目录单次返回整表的内存峰值与首帧延迟仍在,契约应按理想终态(分页/游标)重设计并同步迁移前端。
-- [ ] **CP-007 · session 扫描缓存目录级粗粒度失效键**
-  来源:`src-tauri/src/agent_history/CLAUDE.md`(BE-19,红线「缓存键语义勿改」)。当时理由:失效键为 `(mtime, file_count)` 目录级粒度,目录内增删不失效,由前端 `force` 兜底。问题本质:缓存正确性依赖上层强制刷新,弱一致窗口客观存在;应评估文件级指纹或目录内容哈希的失效精度。
+  来源:ADR-0009 BE-21、`src-tauri/src/fs/CLAUDE.md`(红线「禁止加分页」)。当时理由:改分页 = IPC 契约破坏性变更,收益不抵成本;懒加载 + FileTree 虚拟化(FE-30)覆盖渲染侧。问题本质:IPC 契约形态被现状成本冻结——大目录单次返回整表的内存峰值与首帧延迟仍在。2026-09-06 核查实证:fs_read_dir_impl(fs/mod.rs:348-405)整表返回,签名无分页/游标参数。**修改方向**:契约按理想终态重设计(游标/分页参数 + 增量推送),FileTree 虚拟化层天然适配窗口式取数;红线与契约同步迁移。
+- [ ] **CP-007 · session 扫描缓存目录级粗粒度失效键**【2026-09-06 核查修正:缓存已被架空为死机制】
+  来源:`src-tauri/src/agent_history/CLAUDE.md`(BE-19,红线「缓存键语义勿改」)。当时理由:失效键为 `(mtime, file_count)` 目录级粒度,目录内增删不失效,由前端 `force` 兜底。**核查修正**:F12(ADR-0013)后前端唯一生产调用点恒 `force=true`(sessionRefreshTask.ts:27)——「弱一致窗口依赖 force 兜底」已过时,BE-19 缓存层在生产路径成为永不命中的死机制;真实成本从「弱一致性」转为「死契约 + 死缓存 + 每次扫描全量读盘」。**修改方向**:二选一收编:① 提升失效精度(目录内容哈希/文件级指纹)使缓存真正可用;② 承认扫描必须全量,删除缓存层与 force 参数、简化 IPC 契约。现状是两种成本同时支付。
 - [ ] **CP-008 · `git_status` 切除被忽略文件扫描 + `is_ignored()` 死代码滞留**
-  来源:`src-tauri/src/git/CLAUDE.md`(红线「不要恢复 include_ignored」)。当时理由:50K+ ignored 文件致数秒 I/O 阻塞,切除后 `is_ignored()` 分支保留为「无害死代码」防回潮。问题本质:以红线 + 死码双锁固化的性能取舍——功能语义(git_status 不看 ignored)与渲染需求是否真正对齐未验证,死代码增加静态分析噪音。
+  来源:`src-tauri/src/git/CLAUDE.md`(红线「不要恢复 include_ignored」)。当时理由:50K+ ignored 文件致数秒 I/O 阻塞,切除后 `is_ignored()` 分支保留为「无害死代码」防回潮。问题本质:以红线 + 死码双锁固化的性能取舍——功能语义与渲染需求是否真正对齐未验证,死代码增加静态分析噪音。2026-09-06 核查实证:死分支不可达确认(git/mod.rs:68-69,唯一调用方路径下 ignored 标志永不置位)。**修改方向**:语义对齐验证(前端是否曾消费 ignored 态)+ 删除死分支;未来若确需 ignored 感知,走独立轻量通道(.gitignore 判定而非全量扫描)。
 - [ ] **CP-009 · PASSTHROUGH_MODE(0x8)永久禁用**
-  来源:`src-tauri/src/pty/CLAUDE.md`。当时理由:0x8 致 claude 全屏 TUI 滚轮失效,为兼容牺牲该输入模式能力。问题本质:一个输入模式为单一兼容场景整体废弃,claude 上游行为演进后无自动恢复路径;模式能力矩阵应可配置/可回归验证而非二值禁用。
+  来源:`src-tauri/src/pty/CLAUDE.md`。当时理由:0x8 致 claude 全屏 TUI 滚轮失效,为兼容牺牲该输入模式能力。问题本质:一个输入模式为单一兼容场景整体废弃,claude 上游行为演进后无自动恢复路径。2026-09-06 核查实证:三态 flags 恒不含 0x8(spawn.rs:80-87);claude 侧行为是否演进未能证实(闭源,无公开渠道)。**修改方向**:模式能力矩阵可配置化(设置项 + 真实 claude 滚轮实测门禁);任何重开须先经 ADR-0007 审批门禁第 3 条。
 - [ ] **CP-010 · Win10 捆绑 conpty 提取/加载失败静默回退系统 conhost(0x3)**
-  来源:ADR-0005、`src-tauri/src/pty/CLAUDE.md`。当时理由:部署形态(exe+dll 两文件)红线优先,回退不阻断使用;失败仅 `tracing::warn!`。问题本质:降级不透明——用户无感知落入无鼠标滚轮转发(0x3)的老 conhost 路径;失败应具可观测性(UI 警示或状态暴露),而非静默劣化。
-- [ ] **CP-011 · `pty_kill` 3s 超时放弃 join 仅 warn**
-  来源:`src-tauri/src/pty/CLAUDE.md`。当时理由:ClosePseudoConsole 在 pre-24H2 可永久阻塞,容忍超时降级。问题本质:进程销毁路径存在无界阻塞风险以超时妥协——平台缺陷修正前,超时后的残留句柄/进程清理策略缺失。
+  来源:ADR-0005、`src-tauri/src/pty/CLAUDE.md`。当时理由:部署形态(exe+dll 两文件)红线优先,回退不阻断使用;失败仅 `tracing::warn!`。问题本质:降级不透明——用户无感知落入无鼠标滚轮转发(0x3)的老 conhost 路径。2026-09-06 核查实证:conpty_api.rs:196-207 仍仅 warn,捆绑/回退状态无任何前端暴露通道。**修改方向**:新增一次性 conpty 状态查询命令(或经现有事件通道)暴露「捆绑成功/回退」给前端,启动时 toast 提示降级后果;与 ADR-0005 部署形态红线不冲突(仅观测性增强)。
+- [ ] **CP-011 · `pty_kill` 3s 超时放弃 join 仅 warn**【2026-09-06 核查修正:注释失真 + 上游已证实】
+  来源:`src-tauri/src/pty/CLAUDE.md`。当时理由:ClosePseudoConsole 在 pre-24H2 可永久阻塞,容忍超时降级。**核查修正**:① 「线程随 PtySession Drop 兜底」注释失真——超时路径 JoinHandle 按值 drop 实为 detach,state.rs:38-44 的无超时 join 不可达,真实兜底只有进程退出;② 超时后 master drop → ClosePseudoConsole(spawn.rs:1470)不受任何超时保护,而 3s 超时恰是 reader 卡死(管道未排空)的高危窗口;③ 上游已证实:ClosePseudoConsole 阻塞等待自 Win11 24H2 移除,Win10 永不修复(microsoft/terminal Discussion #17716)——妥协对 Win10 是永久形态。问题本质:进程销毁路径存在无界阻塞风险以超时妥协,超时后的残留句柄/进程清理策略缺失。**修改方向**:超时后显式清理——detach reader 前先关输出管道句柄(上游维护者建议:先关管再 ClosePseudoConsole 即不阻塞),或把 master drop 移入带超时的监督路径;转向应用侧规避而非等平台。
+- [ ] **CP-034 · E1 Channel 可替换 + ring buffer 回放机制对外命令已删、机制半死保留**(2026-09-06 核查新增)
+  来源:`src-tauri/src/pty/CLAUDE.md:58`(「该机制保留于内部,对外重连命令已随 SEC-03 删除」)、reader.rs:58-66。当时理由:SEC-03 删除对外重连命令后,以「动现状风险大」保留整套机制于内部。问题本质:RwLock 替换层 + 256KB ring + 回放语义服务于一个无入口的能力——Channel 断开时 reader 不退出持续写 ring 永不回放,回放路径唯一消费者是测试;机制活着但无人受益,纯维护成本与误读源(reader.rs 注释全在描述不存在的外部触发点)。**修改方向**:确认无未来 reattach 规划后,删 RwLock 替换层与 ring 回放,reader_loop 收敛为「Channel 直写 + 断开退出」单路径;若保留断线缓冲语义,应明确唯一消费场景(如 webview 重建重连)并补回触发点,不留无入口机制。
 
 ## 三、安全放宽
 
 - [ ] **CP-012 · CSP `script-src 'unsafe-inline'` + `dangerousDisableAssetCspModification` 放宽**
-  来源:ADR-0009 SEC-09、`src/panels/CLAUDE.md`(红线勿收紧)。当时理由:srcdoc iframe 继承父 CSP(W3C 行为),HTML 预览注入脚本必须内联,移除即破坏预览。问题本质:主应用失去 script nonce 加固,`default-src 'self'` 为唯一远程脚本防线——预览通道与主应用共享同一 CSP 宽松度,隔离(独立 webview / 沙箱化 iframe 资源域)未做。
+  来源:ADR-0009 SEC-09、`src/panels/CLAUDE.md`(红线勿收紧)。当时理由:srcdoc iframe 继承父 CSP(W3C 行为),HTML 预览注入脚本必须内联,移除即破坏预览。问题本质:主应用失去 script nonce 加固,`default-src 'self'` 为唯一远程脚本防线——预览通道与主应用共享同一 CSP 宽松度,隔离未做。2026-09-06 核查实证:tauri.conf.json:25-26、srcdoc+内联注入路径、L2 守卫全部原样;ADR-0018 已在同一份 CSP 上第二次扩张(见 CP-035)。**修改方向**:预览渲染迁出主窗口 CSP 域(独立 webview 或独立资源域),主窗口回收 script-src 'unsafe-inline';维持同态架构则至少把「CSP 依赖」从全局红线降级为「预览注入面」局部约束,防止后续需求继续向全局 CSP 要宽放。
 - [ ] **CP-013 · HTML 预览 nonce 可被注入脚本内部伪造(威胁模型登记)**
-  来源:ADR-0010 D16/SEC-04、`src/panels/CLAUDE.md`。当时理由:不防预览 HTML 内联脚本内部伪造,接受,以 global 命令集最小化兜底。问题本质:nonce 机制对「同源注入脚本」威胁的防护形同虚设——真正的边界应是把预览内容与宿主 global 上下文隔离(命令面收窄到最小暴露)。
+  来源:ADR-0010 D16/SEC-04、`src/panels/CLAUDE.md`。当时理由:不防预览 HTML 内联脚本内部伪造,接受,以 global 命令集最小化兜底。问题本质:nonce 机制对「同源注入脚本」威胁的防护形同虚设——真正的边界应是把预览内容与宿主 global 上下文隔离。2026-09-06 核查实证:D16 注释随迁 buildInjectedScript.ts:58-63 原文保留,global 命令集恒为 [global.closeTab](L2 守卫锁死),无新增隔离。**修改方向**:iframe 上行命令面收窄为零(去掉 global 重放通道)或改面板白名单分发(消息→面板→面板自有命令);postMessage 消息集只承载渲染态(zoom/scroll),命令重放须显式过面板守卫。
 - [ ] **CP-014 · shell 路径比对双侧 canonicalize 失败回退归一字符串(SEC-15 残余风险)**
-  来源:ADR-0010 D15/SEC-15、`src-tauri/src/pty/CLAUDE.md`。当时理由:alias/Store 版 pwsh 兼容保留;收窄为「两侧均失败且归一化字符串完全相同」才放行。问题本质:残余的字符串级放行路径仍是伪安全比对(不解析真实文件身份),alias 场景的合法用例与绕过手段在该路径下不可区分。
-- [ ] **CP-015 · hooks 卸载时非法 JSON 静默跳过配置清理仍删目录**
-  来源:`src-tauri/src/hooks/CLAUDE.md`。当时理由:部分清理降级——配置解析失败不阻断目录删除。问题本质:破坏性操作在数据未确认清理时照常执行,错误静默;非法配置应显式上报后再决定是否继续删目录。
+  来源:ADR-0010 D15/SEC-15、`src-tauri/src/pty/CLAUDE.md`。当时理由:alias/Store 版 pwsh 兼容保留;收窄为「两侧均失败且归一化字符串完全相同」才放行。问题本质:残余的字符串级放行路径仍是伪安全比对(不解析真实文件身份),alias 合法用例与绕过手段在该路径下不可区分。2026-09-06 核查实证:shell.rs:109-138 三分支原样,alias 兼容测试在位。**修改方向**:回退路径以真实文件身份比对替代字符串比对——Win32 句柄级解析(CreateFile 打开 + 信息查询,alias reparse point 可解析出真实目标);SEC-15 收窄语义(单侧失败拒绝)保留为纵深一层。
+- [x] **CP-015 · hooks 卸载时非法 JSON 静默跳过配置清理仍删目录**【2026-09-06 修复销项：uninstall_impl 翻案为原子语义——read/parse 失败返回 `AppError` 且目录全保留，防 dangling matcher；外部删除路径由启动对账 reconcile（补缺失脚本）兜底；登记点 hooks/CLAUDE.md 契约行已同步】
+  来源:`src-tauri/src/hooks/CLAUDE.md`。当时理由:部分清理降级——配置解析失败不阻断目录删除。问题本质:破坏性操作在数据未确认清理时照常执行,错误静默。2026-09-06 核查实证:inject.rs:648/691/702-714 实现未变,卸载路径全函数零 tracing(对比注入路径有 audit warn),测试锁死该行为。**修改方向**:uninstall 返回部分失败语义(如 `skippedConfigCleanup: true`)由调用方/前端决定继续或中止;最小修复 = 非法 JSON 分支补 `tracing::warn!(target: "audit")` + 错误返回,让「配置未清理但目录已删」从静默变可观测。
+- [ ] **CP-035 · CSP img-src/font-src `data:` 放行(ADR-0018 新增宽放未入册)**(2026-09-06 核查新增)
+  来源:ADR-0018、tauri.conf.json:25、csp-config.test.ts:89-103。当时理由:Tauri asset protocol 静态 scope 无法跟随动态项目根 + blob: URL 无生命周期管理点,两个边界下选择向全局 CSP 追加 `data:` 放行;ADR 自带逆转触发点(动态 asset scope 出现时重估)。问题本质:与 CP-012 同一结构性问题(预览通道与主应用共享 CSP 宽松度)的第二次扩张——沙箱内任意二进制经 data: 进渲染面,svg 安全性依赖「`<img>` 惰性上下文内嵌 script 不执行」这一 W3C 行为单点兜底。**修改方向**:随 CP-012 的解耦方向一并回收主窗口 data: 放行;维持同态架构则评估 svg data: 处置从「惰性上下文依赖」升级为显式净化/禁用,并复用 csp-config.test.ts 锁「data: 仅限预览必需」的不变量。
+- [ ] **CP-043 · SEC-12 statusline 原命令审查仅 warn 不阻断**(2026-09-06 存疑复核转入)
+  来源:`src-tauri/src/hooks/CLAUDE.md:78-80`。当时理由:可疑模式(curl/wget/Invoke-Expression)命中仍注入——攻击面论证(能改 settings.json 的攻击者可直接写恶意 statusLine,阻断只给合法用户加摩擦),判据边缘。问题本质:审查机制有名无实——命中即放行使「审查」退化为日志,合法用户误配可疑命令时无任何拦截层,安全语义依赖用户自查 warn 日志。**修改方向**:命中升级为用户可见确认(注入前展示可疑命令,用户确认才注入),或提供严格模式设置项;至少保证 warn 进了可观测的审计通道而非普通日志。
+- [ ] **CP-044 · postMessage targetOrigin 恒 `"*"`**(2026-09-06 存疑复核转入)
+  来源:`src/panels/docViewer/CLAUDE.md:19`、`buildInjectedScript.ts:16-17`、`PreviewFrame.tsx:140-143`。当时理由:SEC-03 实证 opaque origin 下传具体 origin 会被 Chromium 静默丢弃,`"*"` 是当前唯一可行形态——无更优方案可权衡。问题本质:预览 iframe 与宿主间消息无 origin 收敛,防护全押在 nonce + global 命令集最小化单点上;与 CP-012/CP-013 同根(预览通道与宿主共享上下文),同态架构下无独立修复面。**修改方向**:随 CP-012 预览通道解耦(独立 webview/资源域)时重估 origin 语义——独立域下 targetOrigin 可收敛;同态维持期间保留 `"*"` 登记并把防护不变量(nonce 校验 + 命令集白名单)锁进 L2 守卫。
 
 ## 四、前端架构
 
 - [ ] **CP-016 · 侧栏视图换区重建,组件内部状态丢失**
-  来源:ADR-0001(已确认接受)、`src/features/sideViews/CLAUDE.md`、`src/features/explorer/CLAUDE.md`(展开状态)等多登记点。当时理由:换区低频(设定一次后不改),重建成本低于跨父节点保持实例的架构复杂度。问题本质:状态(展开树/rootNodes/滚动)与挂载父节点耦合,跨区即丢——状态应上移(由视图注册表或 store 持有)而非绑死在组件实例上。
-- [ ] **CP-017 · settings 面板不入 `isAlwaysRenderPanel`,dirty 随卸载丢失**
-  来源:`src/workspace/CLAUDE.md`(SC-FE-06,决策写死)。当时理由:与旧 hooksConfig 行为一致继承,不新增 always 渲染内存开销。问题本质:脏表单状态随面板卸载静默丢失(未保存修改),「行为一致继承」延续了旧缺陷而非修正;dirty 状态应持久于壳层而非组件。
+  来源:ADR-0001(已确认接受)、`src/features/sideViews/CLAUDE.md`、`src/features/explorer/CLAUDE.md`(展开状态)等多登记点。当时理由:换区低频(设定一次后不改),重建成本低于跨父节点保持实例的架构复杂度。问题本质:状态(展开树/rootNodes/滚动)与挂载父节点耦合,跨区即丢。2026-09-06 核查实证:SideBarArea 条件渲染 + explorer rootNodes 存组件内 state(useFileTree.ts:36)未变。**修改方向**:视图状态上移——由视图注册表或专用 store 以视图 id 为键持有,SideBarArea 改受控组件消费外部状态;契约级变化在 sideViewRegistry(新增状态槽)与 useFileTree(改订阅外部真值源)。
+- [ ] **CP-017 · settings 面板不入 `isAlwaysRenderPanel`,dirty 随卸载丢失**【2026-09-06 核查修正:破口范围已收窄】
+  来源:`src/workspace/CLAUDE.md`(SC-FE-06,决策写死)。当时理由:与旧 hooksConfig 行为一致继承,不新增 always 渲染内存开销。问题本质:脏表单状态随面板卸载静默丢失。**核查修正**:FE-49 已为单面板关闭四路(×/Ctrl+W/中键/右键关闭)加确认守卫(tabClose.ts:19-32),「静默丢失」范围收窄;残余破口 = 批量关闭族直关(见 CP-036)与页删除等绕过 closeTabGuarded 的卸载路径。**修改方向**:治本不变——dirty 真值源脱离壳生命周期(持久于 store/注册表),settings 纳入 always-render 或等价保活;治标的批量路径收口见 CP-036。
 - [ ] **CP-018 · WebGL 检测不带 `failIfMajorPerformanceCaveat`**
-  来源:`src/panels/CLAUDE.md`(FE-26)。当时理由:blocklist 场景会连同软件渲染拒绝 → DOM renderer 快滚掉帧;SwiftShader 远快于 DOM 全帧重建,接受软件渲染。问题本质:GPU blocklist 机器落入慢速软件渲染且无回退提示——渲染路径选择对硬件能力检测粗糙,未给用户任何降级信号。
+  来源:`src/panels/CLAUDE.md`(FE-26)。当时理由:blocklist 场景会连同软件渲染拒绝 → DOM renderer 快滚掉帧;SwiftShader 远快于 DOM 全帧重建,接受软件渲染。问题本质:GPU blocklist 机器落入慢速软件渲染且无回退提示。2026-09-06 核查实证:webgl.ts:34-44 单参 getContext 原样,仍无任何降级信号,L2 锁死该行为。**修改方向**:检测区分硬件 GPU 与 SwiftShader(WEBGL_debug_renderer_info / UNMASKED_RENDERER_WEBGL),对后者给一次性 toast/状态条降级提示;不改检测契约本身。
 - [ ] **CP-019 · PTY spawn 布局等待 30 帧/500ms 超时回退 80×24**
-  来源:`src/panels/CLAUDE.md`。当时理由:极端场景降级尺寸。问题本质:超时后以默认尺寸建立终端,若真实布局稍后到达产生 resize 抖动;等待与回退策略是计时猜测而非事件驱动(布局就绪即建)。
+  来源:`src/panels/CLAUDE.md`。当时理由:极端场景降级尺寸。问题本质:超时后以默认尺寸建立终端,真实布局稍后到达产生 resize 抖动;等待与回退策略是计时猜测而非事件驱动。2026-09-06 核查实证:useXterm.ts:307-384 数值与轮询实现原样。**修改方向**:等待改事件驱动——容器尺寸就绪经 ResizeObserver 首帧回调或 Dockview onDidLayoutChange 显式信号驱动 spawn;超时回退保留作防御底线。
 - [ ] **CP-020 · Ctrl+C 中断滞留 `working` 状态已知行为(登记不修)**
-  来源:`src/panels/CLAUDE.md`。当时理由:CC 中断不发射 hook 事件,状态机无中断出边,滞留至下一事件/60s idle_prompt 转 attention。问题本质:用户按下中断后 UI 长时间保持「working」假象——状态机缺「中断」事件源,以上游事件缺失为由接受误导性 UI。
-- [ ] **CP-021 · 历史区相对时间无 ticker,不自动刷新**
-  来源:`src/features/agentHistory/CLAUDE.md`(MC-318,「视为可接受,不修」)。当时理由:渲染时计算,等其它状态变更触发重渲染。问题本质:页面静止时相对时间戳(「5 分钟前」)随时间腐化失真,以「等其它变更」为托辞——最低成本是订阅级 tick 刷新渲染。
-- [ ] **CP-022 · CodeMirror 大文件不虚拟化,10MB 硬上限**
-  来源:ADR-0009 FE-31、`src/panels/editor/CLAUDE.md`。当时理由:CM6 文档模型不支持部分加载;分块 + 10MB 上限 + 1MB 警告三层防线削峰。问题本质:编辑器能力以 10MB 为界被框架冻结,超限文件直接拒开——若大文件场景必要,需虚拟化/只读分片浏览路径而非依赖上游。
+  来源:`src/panels/CLAUDE.md`。当时理由:CC 中断不发射 hook 事件,状态机无中断出边,滞留至下一事件/60s idle_prompt 转 attention。问题本质:用户按下中断后 UI 长时间保持「working」假象——状态机缺「中断」事件源。2026-09-06 核查实证:keyboard.ts Ctrl+C 不注册命令(前端无中断事件源)、状态机无中断出边,原样。**修改方向**:前端自建中断事件源——ShortcutRegistry 对 terminal 上下文 Ctrl+C(保留键)派发本地 interrupt 动作,将该面板 tabStatus 由 working 置 attention(或新增 interrupted 态);不依赖 claude 上游发事件,60s 兜底语义保留。
+- [ ] **CP-021 · 历史区相对时间无 ticker,不自动刷新**【2026-09-06 核查修正:刷新寄生数据快照节奏】
+  来源:`src/features/agentHistory/CLAUDE.md`(MC-318,「视为可接受,不修」)。当时理由:渲染时计算,等其它状态变更触发重渲染。**核查修正**:F12 后历史数据经 backgroundTaskScheduler 定时广播快照(默认 3s,可配 2-300s、可禁用)间接驱动重渲染——「不自动刷新」失真;但渲染层无自主 ticker 的本质未变:禁用 sessionRefresh 或调至慢档时,相对时间仍冻结失真。**修改方向**:NavHistoryRow 或 navTree 宿主挂 60s 级 ticker(照 useAgentStatus.ts:92 的 60s ticker 先例)驱动渲染层重算,与数据层节奏解耦。
+- [ ] **CP-022 · CodeMirror 大文件不虚拟化,10MB 硬上限**【2026-09-06 核查修正:「只能依赖上游」不成立】
+  来源:ADR-0009 FE-31、`src/panels/editor/CLAUDE.md`。当时理由:CM6 文档模型不支持部分加载;分块 + 10MB 上限 + 1MB 警告三层防线削峰。**核查修正**:CM6 核心不支持部分加载属实(2026 年仍如此),但生态已有分片/虚拟化只读方案,「只能依赖上游」不成立。上限语义已在 gitshow/diff 面板家族固化(复用同阈值)。**修改方向**:10MB 可编辑上限不变,补超限文件的只读分片浏览路径(虚拟化行窗口 + 按需 range 读块);编辑器与 gitshow/diff 的超限拒绝语义改引导到只读浏览。
 - [ ] **CP-031 · 宿主内联 `<script>` 被 `escapeScriptClose` 转义破坏——预览 HTML 自带 JS 静态化**
-  来源:`src/panels/CLAUDE.md`「HTML 内联脚本/事件执行」节(2026-09-06 实证登记)、`src/lib/injectScript.ts`、`e2e-tests/html.e2e.ts`(fixture 触发通道注释)。当时理由(本次未修):缺陷单独立于 Ctrl+滚轮缩放需求——2026-09-06 E2E 首轮失败归因链末端发现,`injectScript` 为防宿主 `</script>` 提前闭合注入脚本,把宿主内**所有** `</script>`(含正常闭合标签)转义为 `<\/script>`;Chromium 不视 `<\/script>` 为结束标签 → 宿主 script 吞到 EOF 混入 HTML 标记 → SyntaxError 永不执行(headless Edge 复测 + WebView2 E2E 探针矩阵一致)。影响:HtmlPanel 预览中 HTML 自带的交互 JS 从不运行(Ctrl+W 转发/Ctrl+滚轮缩放等注入脚本自身正常——注入脚本闭合不受转义,故缩放功能不受影响);E2E fixture 因此不能经宿主 script 触发,已改用 `<body onload>` 内联事件属性(不含 `</script>` 不被转义,实证正常执行)。问题本质:转义目标应为「注入点之前的宿主」(策略 3/4 追加注入场景防提前闭合注入脚本),实现却无差别作用于注入点之后全部宿主——正常宿主脚本闭合被误伤,预览 JS 能力整体静默缺失;修复方向 = `escapeScriptClose` 仅转义注入点之前部分,修复后 html.e2e 中「内联 script 执行」skip 用例可取消 skip 恢复验证。
+  来源:`src/panels/CLAUDE.md`「HTML 内联脚本/事件执行」节(2026-09-06 实证登记)、`src/lib/injectScript.ts`、`e2e-tests/html.e2e.ts`。当时理由(登记未修):`injectScript` 为防宿主 `</script>` 提前闭合注入脚本,把宿主内**所有** `</script>` 转义为 `<\/script>`;Chromium 不视其为结束标签 → 宿主 script 吞到 EOF → SyntaxError 永不执行,预览 HTML 自带交互 JS 整体静默缺失(注入脚本自身不受影响)。2026-09-06 核查实证:injectScript.ts:12-14 无差别转义未动,html.e2e.ts:87 仍 skip,fixture 仍走 `<body onload>` 通道。**修改方向**:转义收窄为「仅注入点之前的宿主部分」——先定位插入点(</head>/<body/策略 3/4),前段转义后拼接未转义后段 + 注入脚本;修后取消 html.e2e.ts:87 skip 恢复验证。
+- [ ] **CP-036 · 批量关闭族(关闭其他/关闭全部)绕过 dirty 守卫直关**(2026-09-06 核查新增)
+  来源:`src/workspace/CLAUDE.md:39`(「批量路径仍直关(批量确认交互未定义,遗留)」)、PageDockviewHost.tsx:276-303。当时理由:FE-49 修单条关闭守卫时,以「批量确认交互未定义」登记遗留、接受直关。问题本质:同一 dirty 语义在批量路径下无确认即丢弃——守卫单点(closeTabGuarded)被调用方绕过,语义不对称随新关闭入口增殖;与 CP-017 同族但机制独立(守卫破口而非渲染策略)。**修改方向**:批量路径接入 closeTabGuarded 家族——一次性定义批量确认交互(含 dirty 面板列表 + 单次确认),两菜单 action 改调统一入口;或显式声明批量关闭不守卫并转产品决策(则本项移出清单)。
+- [ ] **CP-037 · markdownviewer preview-only 卸载 CM,回 edit 丢光标/undo 栈**(2026-09-06 核查新增)
+  来源:`src/panels/CLAUDE.md:36`、`src/panels/markdown/CLAUDE.md:15`(均登记为「已知行为」)。当时理由:「快照回填免二次读盘」的挂载策略选择,接受切 preview 再回 edit 时编辑现场(光标位置 + undo 历史)丢失。问题本质:同面板 edit↔split 已用「CM pane 恒挂载」保活 undo——preview-only 不保是显式取舍而非能力边界;同一编辑会话的连续性被视图形态切分,状态存活与否取决于路径而非语义。**修改方向**:preview-only 改 CM 隐藏保活(display:none,照 edit↔split 先例),代价是 preview 常驻一个 CM 实例内存;若不接受内存代价,升级为显式决策并评估只保光标的低成本快照回填。
+- [ ] **CP-039 · editorTheme 常量化,方案切换须重载窗口才生效**(2026-09-06 存疑复核转入)
+  来源:`src/theme/CLAUDE.md:33,65`、ADR-0002(运行期即时切换被否决)。当时理由:ADR-0002 以复杂度为由否决运行期即时切换,editorTheme 在模块加载期固化为常量——切换方案须重载窗口,覆盖全方案而非单点。问题本质:「仅暗色模式」不等于「仅一套方案」——主题系统支持多 scheme 但编辑器族(CM)主题掉队,切换体验断裂为「部分即时、部分重载」;ADR 否决的是全量即时切换,editorTheme 常量化是其系统性后果中未被单独审视的一块。**修改方向**:editorTheme 改为订阅方案注册表响应式取色(CM 主题经 Compartment 重配置,编辑器不重建),消除重载要求;若维持重载,在方案切换动作处显式提示「编辑器主题需重载生效」。
+- [ ] **CP-042 · `openSettingsPanel` 100ms×50 轮询就绪,超时仅 console.warn 静默降级**(2026-09-06 存疑复核转入)
+  来源:`src/workspace/CLAUDE.md:62`、`src/features/settingsCenter/CLAUDE.md`。当时理由:防御性超时的低成本实现,与 CP-019 同族的计时猜测模式。问题本质:用户点配置入口可能无面板出现且无任何提示(仅 console.warn)——轮询赌时序,超时路径对用户完全静默;计时猜测型降级的第二处实例,与 CP-019 共享「应事件驱动」的根治方向。**修改方向**:面板就绪改显式信号/事件驱动(参考 CP-019 方向);超时降级至少经 toast 可观测化,不留静默失败路径。
 
 ## 五、测试覆盖缺口
 
 - [ ] **CP-023 · Rust 行覆盖 88.20%,距 90% 目标差 1.8pp 收尾登记**
-  来源:`.claude/test-exemptions.md` TQ-COV 收尾。当时理由:残余缺口集中 PTY Win32 分支 + main.rs 结构性零覆盖 + 编译器生成物计数缺失。问题本质:覆盖目标以登记收尾而非达成——缺口处正是平台耦合最深的代码,可测化重构(抽取纯逻辑/依赖注入)可系统性收敛。
+  来源:`.claude/test-exemptions.md` TQ-COV 收尾。当时理由:残余缺口集中 PTY Win32 分支 + main.rs 结构性零覆盖 + 编译器生成物计数缺失。问题本质:覆盖目标以登记收尾而非达成——缺口处正是平台耦合最深的代码。2026-09-06 核查实证:豁免表原文未变,main.rs 仍 3 行结构性零覆盖(未实跑覆盖率,以登记 + 代码结构对照为准)。**修改方向**:pty 模块依赖注入/纯逻辑抽取(build_cmdline/build_env_block 已有先例)系统性收敛缺口;覆盖率口径从「含测试代码」改为生产代码口径后重定目标,而非继续豁免表堆叠。
 - [ ] **CP-024 · IPC 后端必填缺失 → invoke reject 被调用方 catch 吞 = 契约绿但运行时静默失败**
-  来源:`src/ipc/CLAUDE.md`。当时理由:mockIPC 只守 JS 侧形状,真实序列化契约由 L4 兜底。问题本质:前后端 DTO 契约漂移在单元层不可见,失败信号被前端 catch 吞成静默——契约一致性(硬约束 #4)缺一层类型/运行时双端核对机制。
+  来源:`src/ipc/CLAUDE.md`。当时理由:mockIPC 只守 JS 侧形状,真实序列化契约由 L4 兜底。问题本质:前后端 DTO 契约漂移在单元层不可见,失败信号被前端 catch 吞成静默。2026-09-06 核查实证:登记原文未变,全仓无新增双端核对机制(无 zod/共享 schema)。**修改方向**:DTO 定义单源化(ts-rs 或共享 schema 生成),或至少后端 DTO 反序列化失败路径的前端可观测化——统一错误面已有 parseAppError 基建,可延伸到 invoke 包装层必填预检。
 - [ ] **CP-028 · e2e 导航树展开辅助 children 计数循环对无会话页面行不收敛(奇偶翻转风险)**
-  来源:`e2e-tests/history.e2e.ts` ensureProjectPagesExpanded(2026-09-03 已改单次点击版)、`e2e-tests/agent.e2e.ts` ensureTreeExpanded、`e2e-tests/mockcli.e2e.ts` 同构展开循环。当时理由:页面行无活跃会话时不渲染子级容器,DOM 无法区分展开/收起——以「每轮 children 计数判定,奇数次翻转必然到达展开稳态」假设收敛;2026-09-03 历史节点收进项目展开容器后,四态用例项目行被前置展开、6 轮循环全被页面行 toggle 消耗(偶数翻转终态收起)暴露缺陷,history spec 处已改「每行至多点击一次」,agent/mockcli 同构循环**暂时保留**(仅靠「每用例新建项目、项目行收起起点消耗首轮」巧合通过)。问题本质:DOM 无状态可判据时用计数循环赌奇偶,语义脆弱——统一方案 = 展开判定不依赖 DOM(测试侧记录点击态或组件暴露展开探针),合适时机与 agent/mockcli 循环一并修改。
-- [ ] **CP-029 · editor.e2e.ts auto-reload 用例多轮确定性失败(既存)**
-  来源:`e2e-tests/editor.e2e.ts` "should persist modified content to disk after external change triggers reload then Ctrl+S save"(2026-09-06 连续 5+ 轮复现,基线轮同败,与 cli-aliases 修复无关)。当时理由:本次修复范围外,未排查。问题本质:外部文件修改 → fs-event → 编辑器 auto-reload 链路在 E2E 环境确定性失败——待专项排查区分测试环境(watcher 时序/文件事件丢失)与产品缺陷,再排期修复。
+  来源:`e2e-tests/history.e2e.ts` ensureProjectPagesExpanded(已改单次点击版)、`e2e-tests/agent.e2e.ts` ensureTreeExpanded、`e2e-tests/mockcli.e2e.ts` 同构展开循环。当时理由:DOM 无法区分展开/收起,以「奇数次翻转必然到达展开稳态」假设收敛;agent/mockcli 同构循环暂时保留,仅靠「每用例新建项目、项目行收起起点消耗首轮」巧合通过。2026-09-06 核查实证:history 单次点击版在,agent.e2e.ts:57-110 与 mockcli.e2e.ts:209-249 两处 6 轮计数循环原样。**修改方向**:展开判定不依赖 DOM(测试侧记录点击态,或 NavTree 暴露展开态探针/aria-expanded),三处循环一处收敛;任何用例结构变动(多页面行、复用项目)即可能复现偶数翻转终态收起。
+- [ ] **CP-029 · editor.e2e.ts auto-reload 用例多轮确定性失败(既存)**【2026-09-06 核查补记:两处登记归因口径冲突】
+  来源:`e2e-tests/editor.e2e.ts` "should persist modified content to disk after external change triggers reload then Ctrl+S save"(2026-09-06 连续 5+ 轮复现)。当时理由:本次修复范围外,未排查。**核查补记**:豁免表(test-exemptions.md:24)定性「Windows notify 环境级故障,非代码缺陷」,本条定性「待专项排查」——归因矛盾,且豁免承诺「修复环境后复跑验收」未兑现(用例保持启用、每轮确定性失败并消耗 mocha retry);本条口径为准,修复时同步修订豁免表。**修改方向**:先二分定责——L1 notify 同机通过 + 「页面内写入不产生 fs-event」,则嫌疑集中于 E2E 环境 WebView2 进程的文件监听投递链(run-wdio 假 home/SLTERM_DATA_DIR 注入是否影响 watcher 注册),而非编辑器逻辑;定责后或修环境或修产品。
 - [ ] **CP-030 · embedded tauri-service 焦点检查令 `$` 命令 5s+ 延迟,无失败语义且吞归因(既存)**
-  来源:`@wdio/tauri-service` focusCommands(`$`/`$$`/`findElement`/`elementClick`/`getTitle`)每命令 `ensureActiveWindowFocus` → core.invoke 查窗口状态,不可用时 WARN + 5s 超时,实测每命令 10-15s;表现:cli-aliases 真实手势驱动(4 focus 命令)长链用例被拖出 mocha 60s 上限多轮失败,且 background-tasks/commit/mockcli 各轮交替失败漂移。当时理由(2026-09-06):cli-aliases spec 回退合成 click 驱动绕开(项目立场:helper 非用户路径,交互时序归 L2),真实手势的 E2E 断言暂不保留。问题本质:测试基建在窗口状态查询不可用环境静默降级为每命令 +5-15s 惩罚——无失败语义、无运行前提校验(窗口须前台聚焦),长链 spec 在高延迟环境必超时;叠加 mocha retry 吞首跑错误进一步掩盖归因;应显式校验 E2E 运行前提或改进驱动降级策略后重估真实输入驱动可行性。
+  来源:`@wdio/tauri-service` focusCommands 每命令 `ensureActiveWindowFocus` 查窗口状态,不可用时 WARN + 5s 超时;cli-aliases spec 已回退合成 click 驱动绕开。2026-09-06 核查实证:tauri-service 1.3.0 本地源码逐点吻合(focusCommands 名单、core.invoke 查询、纯 WARN 无失败语义);上游核查 1.3.0 即最新版(2026-08-03 发布),「上游已修」未能证实。**修改方向**:① 驱动层——显式校验 E2E 运行前提(窗口须前台聚焦,beforeSuite 探针失败即 fast-fail)或 fork/补丁 focusCommands 白名单;② 断言层——前提修复后真实手势驱动回归 cli-aliases 长链用例,恢复当时回退掉的交互时序断言。
+- [ ] **CP-040 · TQ-COV-06 残余:默认 lib test target 0xc0000139 根因未修,以 test target 重组规避**(2026-09-06 存疑复核转入)
+  来源:`.claude/test-exemptions.md:29`、根 CLAUDE.md「L1 定向测试红线」。当时理由:cargo 不将 build.rs `rustc-link-arg-tests` 作用于默认 lib test target(缺 comctl32 v6 manifest → 启动即 0xc0000139),以 `[lib] test=false` + 显式 `[[test]] lib_tests` 重组 + 红线路标收尾。问题本质:规避而非修复——`cargo test` 带 filter 或 `--lib` 的默认工具链形态永久不可用,红线靠文档与人肉维持,新人/CI 脚本随时踩雷。**修改方向**:改经不依赖 `rustc-link-arg-tests` 的通道注入 manifest(如 `.cargo/config.toml` 链接参数或构建期 embed manifest),恢复默认 target 可用后拆除红线与重组结构;或向上游 cargo 报 issue 确认行为并登记触发条件。
+- [ ] **CP-041 · mockcli 无后端 provider,L4 历史链路两豁免以「无 provider」登记**(2026-09-06 存疑复核转入)
+  来源:`.claude/test-exemptions.md:21-22`(历史展示/双击恢复注入两豁免,原因「mockcli 无后端 provider」)。当时理由:为 mockcli 补测试基建的成本高于豁免登记。问题本质:豁免表用「基建缺口」当豁免理由——缺口不补,历史链路(展示/恢复注入)长期无 L4 覆盖,豁免随时间固化为永久盲区。**修改方向**:为 mockcli 补后端 history provider(或 L4 专用测试 provider),解除两条豁免;补齐后豁免表对应行销项。
+- [ ] **CP-045 · e2e 假屋清理 best-effort,IME/遥测句柄占用致残留**(2026-09-06 存疑复核转入)
+  来源:`e2e-tests/run-wdio.cjs:166-171`。当时理由:tmp 目录残留无害,下次启动 rmSync 兜底,接受残留。问题本质:清理语义是「尽力而为」——句柄占用根因未查(IME/遥测进程谁持有未定位),残留累积依赖下次启动兜底,CI/并行跑场景下可能互相踩踏。**修改方向**:定位句柄持有方并在退出路径显式关闭/终结;或假屋目录改为按运行实例唯一命名,残留即无害隔离,清理兜底保留。
+- [ ] **CP-046 · e2e 真实屋校验并发误报面,guard 无并发区分手段**(2026-09-06 存疑复核转入)
+  来源:`e2e-tests/CLAUDE.md`「已知并发误报面」。当时理由:开发者并发使用真实 claude/slterminal 会合法改写 `~/.claude/settings.json` 致 exit 校验报红,接受误报成本。问题本质:校验以整文件前后 diff 判定,无法区分「本测试写入」与「外部并发合法修改」——误报腐蚀校验信号,报红被习惯性忽略后真回归也会被放过。**修改方向**:校验收窄为键级断言(只校验本测试应写入的键存在且值正确),不做整文件 diff;或 guard 记录测试窗口外的外部修改并豁免。
 
 ## 六、遗留清理与同步点
 
 - [ ] **CP-025 · 退役模块目录遗留(sidebar)**
-  来源:`src/features/sidebar/CLAUDE.md`(NAV-06)。当时理由:「本目录待清理:目录删除时本文件一并删除」。问题本质:退役代码与文档滞留仓库,目录与根索引/引用形成误导(存在即被读)。
-- [ ] **CP-026 · `useAgentStatus` 数据 hook 留存(视图已退役)**
-  来源:`src/features/agentStatus/CLAUDE.md`。当时理由:数据层为导航树保留,组件层删除。问题本质:消费方仅剩导航树但 hook 仍驻退役模块目录——归属错位,应迁移至实际消费模块或并入导航树数据层后清理。
+  来源:`src/features/sidebar/CLAUDE.md`(NAV-06)。当时理由:「本目录待清理:目录删除时本文件一并删除」。问题本质:退役代码与文档滞留仓库,存在即被读。2026-09-06 核查实证:目录仅剩 CLAUDE.md,无活代码消费;「误导」已有活实证——agent-history-restore.test.ts:4 注释仍把 makeEmptyLayout 记到 sidebar 名下(实际 mock navTree)。**修改方向**:目录物理删除(连同 CLAUDE.md),消费/引用已全部归零;顺带修正该测试注释。删除动作本身即闭合。
+- [ ] **CP-026 · `useAgentStatus` 数据 hook 留存(视图已退役)**【2026-09-06 核查加重:返回面含死字段】
+  来源:`src/features/agentStatus/CLAUDE.md`。当时理由:数据层为导航树保留,组件层删除。**核查加重**:hook 不只驻错目录——唯一生产消费方 useNavTree.ts:99 只解构 `rows`,返回面 `state`/`currentProjectName`/`now` 是已退役视图时代的死面(生产零消费,唯一「消费方」是测试 mock 形状)。**修改方向**:useAgentStatus.ts 迁入 navTree(唯一消费模块),返回类型收窄为导航树所需(行数组 + 行类型);agentStatus 目录随之删除,其 CLAUDE.md 仍有效的约束(行建模双/三通道、MC-205、FE-23 等)随迁入 navTree CLAUDE.md。
 - [ ] **CP-027 · 启动链 fail-safe 三处静态色硬编码,手动同步**
-  来源:ADR-0002、`src/theme/CLAUDE.md`(改 linear 值须同步 index.html/tauri.conf.json/main.tsx)。当时理由:静态层(index.html/tauri.conf.json)无法用 TS token,收编被否决,注释交叉引用兜底。问题本质:配色单点(硬约束 #6)在此三处破口,人工同步是腐化源——评估构建期注入(打包脚本改写 / 运行时早期读取)闭合缺口。
+  来源:ADR-0002、`src/theme/CLAUDE.md`(改 linear 值须同步 index.html/tauri.conf.json/main.tsx)。当时理由:静态层无法用 TS token,收编被否决,注释交叉引用兜底。问题本质:配色单点(硬约束 #6)在此三处破口,人工同步是腐化源。2026-09-06 核查实证:三处硬编码与 linear.ts 现值一致,交叉引用注释、四处登记全部在位。**修改方向**:构建期注入闭合——index.html 的 body 底色与 tauri.conf.json 的 backgroundColor 由打包脚本从 linear.ts(或抽出的单一色源)生成/改写;main.tsx 超时页远晚于 index.html 渲染,可直接改读方案注册表或单一常量模块;闭合后删除三处「既定例外」登记与交叉引用注释,硬约束 #6 回归无例外。
+
+---
+
+## 本次核查剔除项(2026-09-06)
+
+无。31 条原条目全数核实仍存在;其中 9 条描述修正/加重已并入正文(CP-003、CP-007、CP-011、CP-017、CP-021、CP-022、CP-026、CP-029 及 CP-004 登记点笔误补记)。「存疑待议」复核结论:9 项转入正册(CP-038~046),`@types/node` 与 e2e Node 22 错位并入 CP-003;3 项经复核确认非妥协不收——`git_rollback` 手写两阶段(有明确正确性理由,src-tauri/src/git/CLAUDE.md:33-39)、`MAX_PTY_SESSIONS=32`(资源上限属正确设计)、GLYPH repaintGuard(平台边界应对,自带撤销条件与像素防复发测试)。
