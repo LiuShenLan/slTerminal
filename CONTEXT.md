@@ -50,8 +50,11 @@ _Avoid_: 文件类型映射
 _Avoid_: 模式（与四态/编辑模式语义撞车）
 
 **形态切换条**（ModeSwitcher）：
-docViewer 共享的右上角悬浮切换条组件（常驻半透明胶囊，单选高亮当前查看形态）。
+docViewer 共享的切换条组件（常驻半透明胶囊，单选高亮当前查看形态）；定位恒经右上悬浮区承载。
 _Avoid_: 悬浮窗
+
+**右上悬浮区**（FloatingArea）：
+docViewer 面板根右上角悬浮 UI 单点承载——形态切换条（上）与缩放 HUD 气泡（下）纵向列排，html/md 全形态同构；缩放 HUD 状态机（useZoomHud）经 PreviewFrame zoom 上行驱动、重置经其 ref 下行（2026-09-06 收敛，见 docViewer/CLAUDE.md）。
 
 **文档真值源**（docRef）：
 文档面板的草稿优先文档模型——磁盘读入与编辑内容统一存放（面板级 docRef），预览渲染永以 docRef 为准而非磁盘；形态切换草稿保留（preview-only 卸载编辑器、快照回填；光标/undo 重置为登记已知行为）。

@@ -17,7 +17,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### 渲染管线分层
 
-- **mdPipeline（同步纯函数）**：markdown-it（html:true 透传信任模型 ADR-0017 / linkify / GFM 表删除线 / task-lists / texmath-katex dollars 就地渲染 throwOnError=false / hljs 白名单语言静态 import 高亮别名归一）+ 资源收集（<img>/<source> src 后处理，markdown 图片语法产物同被扫到）+ mermaid fence 占位（randomHex 防碰撞）+ buildPreviewDocument（完整文档 head：暗色排版 + hljs 主题 + KaTeX 内联字体）。模块级单例解析器可复用于多渲染。
+- **mdPipeline（同步纯函数）**：markdown-it（html:true 透传信任模型 ADR-0017 / linkify / GFM 表删除线 / task-lists / texmath-katex dollars 就地渲染 throwOnError=false / hljs 白名单语言静态 import 高亮别名归一）+ 资源收集（<img>/<source> src 后处理，markdown 图片语法产物同被扫到）+ mermaid fence 占位（randomHex 防碰撞）+ buildPreviewDocument（完整文档 head：排版 CSS 经 buildMdPreviewStyleCss 同源装配 + KaTeX 内联字体）。模块级单例解析器可复用于多渲染。
 - **mdRenderAsync（异步编排）**：资源 data: URL 替换（LRU 50 缓存；失败回退原 src 不阻塞）/ mermaid 渲染替换 / isCancelled 丢弃。
 - **mermaidHost**：dynamic import 单例（vite 分包 2MB 不进主包）+ 按 code Promise 缓存 + 失败占位卡；宿主侧渲染成 SVG 字符串注入（iframe 零重排版、CSP 零新增）。
 - **KaTeX 字体**：generated/katexInlineCss.ts 为构建产物（scripts/gen-katex-inline.mjs 生成，woff2 data: 内联，woff/ttf 回退剔除）——katex 升级重跑脚本 + git diff 审阅，勿手改产物。
@@ -31,9 +31,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 slterm_nav 上行 → classifyLink（linkPolicy 纯函数）：external（http/https/mailto/tel）→ shell.openUrl（opener）；local（相对/盘符绝对）→ openFileInActivePage（workspace 共享打开链路，复用双击分发；失败静默）；fragment/ignored 忽略（markdown-it 标题无锚点 id，本地文档内 # 不可达）。
 
-### 预览框参数
+### 预览框参数与悬浮区
 
-PreviewFrame segments=[linkRouter, scrollReport]、keepZoom + keepScrollRatio（iframe 重建恢复）、dataE2ePrefix="markdown"；切换条由面板根渲染（overlayBarStyle——PreviewFrame 在 allotment pane 内，overlay 槽坐标系错位不可用）。
+PreviewFrame segments=[linkRouter, scrollReport]、keepZoom + keepScrollRatio（iframe 重建恢复）、onZoomChange={zoomHud.report} / onZoomReset={zoomHud.hide}（悬浮区显示层）。右上悬浮区（FloatingArea）恒面板根——切换条上 / 缩放 HUD 下列排，edit 态无缩放源传 hud=null；重置链 = PreviewFrame ref.resetZoom + zoomHud.hide（2026-09-06 收敛，docViewer/CLAUDE.md）。
+
+### 预览配色单点（2026-09-06 收编）
+
+md 预览经 srcdoc iframe 渲染无法引用宿主 CSS 变量，但配色值一律以 active 方案驱动：mdPreviewStyle 的 buildMdPreviewStyleCss() 每次渲染现拼——正文/底色 = editor.overrides.plainText/background、代码语法 = syntax 9 键（hljs 12 类映射）、结构色 = editor.overrides.preview 组（新增键在 schemes/types.ts 注释登记）、复选框强调引 ui.focusBorder、mermaid 错误文案引 ui.errorFg。改主题即跟随（比 CM editorTheme 常量更活）；**禁止在此手抄色值**（曾以字面量双轨登记豁免，已撤销）。
 
 ### 测试模式
 

@@ -28,6 +28,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `editorTheme`：模块级常量 = active 方案 `editor.theme`（linear 为 oneDark 直 import 透出）。
 - `editorColorOverrides()`：active 方案 `editor.overrides` → CM6 `EditorView.theme` 扩展。
 - `editorSyntaxHighlight()`：active 方案 `editor.overrides.syntax` → CM6 `syntaxHighlighting` 扩展。
+- **iframe 文档 CSS 生成先例（2026-09-06）**：opaque origin 内文档无法引用宿主 CSS 变量，但颜色值仍单点于方案——`panels/markdown/mdPreviewStyle.ts` 的 `buildMdPreviewStyleCss()` 每次渲染取 active 方案现拼字符串 CSS（正文/底色/syntax 直引 editor.overrides；结构色 = overrides.preview 组——CM 无对应槽位的文档排版色集中于此，见 types.ts 槽位注释）。非组件代码不经 colors.ts facade、直取 schemeRegistry（同 overrides.ts 函数形导出先例）；新增文档结构色一律入 editor.overrides.preview，禁止字面量双轨（曾登记豁免已撤销）。
 
 函数形导出支持 D2 热切换；`editorTheme` 为常量，新窗口重载生效。
 
