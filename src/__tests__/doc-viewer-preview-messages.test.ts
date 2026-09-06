@@ -1,7 +1,8 @@
-// html-zoom-math.test.ts — htmlviewer 缩放协议常量与纯数学函数测试
+// doc-viewer-preview-messages.test.ts — docViewer 预览框消息协议常量与守卫测试
 //
+// 原 html-zoom-math.test.ts 随 zoomMath → docViewer/previewMessages 迁入。
 // 纯函数测试：无 mock/jsdom/React 依赖（与 zoomRuntime 的行为级测试互补——
-// 本文件锁常量值与边界数学，html-zoom-runtime.test.ts 锁注入执行行为）。
+// 本文件锁常量值与边界数学，doc-viewer-zoom-runtime.test.ts 锁注入执行行为）。
 
 import { describe, it, expect } from "vitest";
 import {
@@ -17,9 +18,9 @@ import {
   isFiniteZoom,
   buildZoomReport,
   buildResetRequest,
-} from "../panels/html/zoomMath";
+} from "../panels/docViewer/previewMessages";
 
-describe("zoomMath 常量", () => {
+describe("previewMessages zoom 常量", () => {
   it("协议类型与既有 slterm_key 命名风格同构（平铺字符串）", () => {
     expect(ZOOM_MSG_TYPE).toBe("slterm_zoom");
     expect(RESET_MSG_TYPE).toBe("slterm_reset");

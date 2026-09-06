@@ -1,8 +1,9 @@
 // zoomRuntime.ts — iframe 文档内 Ctrl+滚轮缩放的注入脚本源码生成器
 //
-// HtmlPanel 的 iframe 为 opaque origin（sandbox 无 allow-same-origin），父窗口
-// 不可触达其内部 DOM——缩放的执行逻辑必须以注入脚本形式运行在 iframe 文档内。
-// 本文件把该逻辑生成为「参数化匿名函数表达式」源码：
+// docViewer 预览框（PreviewFrame）的 iframe 为 opaque origin（sandbox 无
+// allow-same-origin），父窗口不可触达其内部 DOM——缩放的执行逻辑必须以注入
+// 脚本形式运行在 iframe 文档内。本文件把该逻辑生成为「参数化匿名函数表达式」
+// 源码：
 //   - 生产端：buildInjectedScript 拼入，以 sltermZoom(document, window) 挂载；
 //   - 测试端：new Function 取回函数后在桩 doc/win 上真实执行——突破 jsdom
 //     不执行 srcdoc iframe 脚本的缺口，使注入核心获得 L2 行为级覆盖。
@@ -17,7 +18,7 @@
 //   3. 缩放状态存闭包 + documentElement.style.zoom（CSS zoom，Chromium 系
 //      非标准属性但 WebView2 成立）——随 iframe 文档存亡 = 页签会话级记忆
 //      （dockview always renderer 下切走切回文档存活、关页签销毁归 100%）。
-//   4. 仅 zoom 实际变化才 postMessage 上行（防回声风暴）；下行复位经
+//   4. 仅 zoom 实际变化才 postMessage 上行（防回声风暴）；下行复位/设值经
 //      source===parent + nonce + type 三重校验。
 //   5. postMessage targetOrigin 一律 "*"（2026-09-06 实证）：targetOrigin 必须匹配
 //      【接收方】窗口 origin——iframe 为 opaque origin 只影响消息到达父后的
@@ -36,7 +37,7 @@ import {
   ZOOM_ROUND,
   ZOOM_MSG_TYPE,
   RESET_MSG_TYPE,
-} from "./zoomMath";
+} from "./previewMessages";
 
 /**
  * 生成缩放运行时匿名函数源码：返回的函数签名 function(doc, win)，

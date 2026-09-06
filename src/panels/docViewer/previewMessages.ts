@@ -1,9 +1,12 @@
-// zoomMath.ts — htmlviewer Ctrl+滚轮缩放的协议常量单点 + 纯数学函数
+// previewMessages.ts — docViewer 预览框 iframe 消息协议常量单点 + 纯函数守卫
 //
-// 服务三方：注入脚本代码生成（zoomRuntime 插值）、HtmlPanel 消息处理、L2 测试。
+// 原 panels/html/zoomMath.ts 迁入（htmlviewer Ctrl+滚轮缩放协议），扩展承接
+// docViewer 预览家族（htmlviewer/markdownviewer）的 iframe ↔ 父窗口消息类型：
+// 上行 slterm_key / slterm_zoom /（slterm_scroll），下行 slterm_reset /
+// （slterm_zoom_set / slterm_scroll_set）。服务三方：注入脚本代码生成
+// （zoomRuntime/scrollRuntime 插值）、PreviewFrame 消息处理、L2 测试。
 // 消息载荷与既有 slterm_key 平铺结构同构（{type, nonce, ...}），不引入包装层；
-// 上行 slterm_zoom 复用父窗口四层校验链，下行 slterm_reset 由 iframe 侧
-// （source===parent + nonce + type）校验。
+// 上行复用父窗口四层校验链，下行由 iframe 侧（source===parent + nonce + type）校验。
 
 /** iframe → 父窗口：缩放变更上报消息类型（上行） */
 export const ZOOM_MSG_TYPE = "slterm_zoom";

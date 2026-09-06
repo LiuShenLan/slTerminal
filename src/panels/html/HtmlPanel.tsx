@@ -33,8 +33,8 @@ import {
   isFiniteZoom,
   formatPercent,
   buildResetRequest,
-} from "./zoomMath";
-import { buildZoomRuntimeSource } from "./zoomRuntime";
+} from "../docViewer/previewMessages";
+import { buildZoomRuntimeSource } from "../docViewer/zoomRuntime";
 
 /** HtmlPanel 接收的面板参数 */
 interface HtmlPanelProps {

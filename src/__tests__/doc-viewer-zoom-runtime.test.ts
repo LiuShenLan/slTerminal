@@ -1,5 +1,6 @@
-// html-zoom-runtime.test.ts — htmlviewer 注入缩放运行时行为级测试
+// doc-viewer-zoom-runtime.test.ts — docViewer 注入缩放运行时行为级测试
 //
+// 原 html-zoom-runtime.test.ts 随 zoomRuntime → docViewer/ 迁入。
 // jsdom 不执行 srcdoc iframe 内脚本（既有测试靠字符串/正则断言注入逻辑）。
 // 本文件把 zoomRuntime 生成的匿名函数源码经 new Function 取回，在桩 doc/win
 // 上真实执行——注入核心获得 L2 行为级覆盖（真实 WebView2 由 L4/手工验收）。
@@ -10,8 +11,13 @@
 // 事件对象一律工厂构造，杜绝跨用例共享可变状态。
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { buildZoomRuntimeSource } from "../panels/html/zoomRuntime";
-import { ZOOM_MSG_TYPE, RESET_MSG_TYPE, ZOOM_MAX, ZOOM_MIN } from "../panels/html/zoomMath";
+import { buildZoomRuntimeSource } from "../panels/docViewer/zoomRuntime";
+import {
+  ZOOM_MSG_TYPE,
+  RESET_MSG_TYPE,
+  ZOOM_MAX,
+  ZOOM_MIN,
+} from "../panels/docViewer/previewMessages";
 
 /** 测试 nonce（hex，符合 createNonce 形态） */
 const NONCE = "00ff00ff00ff00ff00ff00ff00ff00ff";
