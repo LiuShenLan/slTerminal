@@ -27,49 +27,15 @@ xterm.js 不支持 `term.open()` 二次调用（GitHub Issue #4978）。因此�
 
 `term.options.windowsPty = { backend: "conpty", buildNumber: clampWindowsBuildForXterm(真实值) }`——钳制至 xterm.js ConPTY 兼容阈值下界 `XTERM_CONPTY_MIN_BUILD = 21376`。低于该值 xterm 启用 wrapping 启发式，claude 全屏高频重绘下误判致 buffer 错乱（Win10 四症状）。钳制使 Win10 与 Win11 行为对齐，连带启用 resize reflow。**真实 build 号获取链不动**，钳制收口 useXterm 两处 windowsPty 写入点；spawn 请求不带 buildNumber，后端不受影响。xterm.js 升级时须重评估此钳制点。
 
-### HTML 面板：iframe 键盘桥、片段拦截与 Ctrl+滚轮缩放
+### 预览面板家族（docViewer 共享层）
 
-HTML 内容通过 `<iframe sandbox="allow-scripts" srcDoc={...}>` 渲染（**不含 `allow-same-origin`**）。注入脚本实现四段功能：
+htmlviewer / markdownviewer 等「文档型预览面板」共享 `src/panels/docViewer`——iframe 容器（PreviewFrame）、注入脚本组装、postMessage 总线、缩放/滚动运行时、形态切换条（ModeSwitcher）全部单点收容于此。**安全红线（SEC-03/04 校验链、sandbox 无 allow-same-origin、targetOrigin "\*"、注入拼接纪律、CSP 依赖）已随迁 docViewer/CLAUDE.md 与 previewMessages.ts 单点登记**，改本家族行为前必读。信任模型延续（md/html 同态、宿主 script 静态化继承、global 命令集不扩）见 ADR-0017；本地资源通道（fs_read_resource + data: URL + CSP data: 放行）见 ADR-0018。
 
-1. **CSS 注入**：`.slterm-target` 作为 `:target` 伪类的 JS 替代。
-2. **键盘转发**：`keydown` capture → `window.parent.postMessage({type:"slterm_key", ...}, "*")`。
-3. **片段链接拦截**：`click` capture → 检测 `<a href="#...">` → `preventDefault` + `scrollIntoView` + class 切换模拟 `:target`。
-4. **Ctrl+滚轮缩放**（zoomRuntime）：`wheel` capture（挂参数化函数 `function(doc,win)`）→ Ctrl/⌘+滚轮时 `preventDefault + stopImmediatePropagation`（面板接管，同 document 后注册的页面监听被阻断），delta 累计 100px/格等比 ×/÷1.1，clamp [25%, 400%] → 改写 `documentElement.style.zoom`（CSS zoom 为 Chromium 私有但 WebView2 成立）；仅实际变化才上行 `slterm_zoom`。
-
-WebView2 sandboxed iframe 中 `#fragment`/`:target` 彻底失效，且 `allow-scripts` + `allow-same-origin` 是已知危险组合（Tauri CVE-2024-35222），Tauri 会向同源 iframe 注入 App JS bundle 导致片段导航被 React Router 劫持。去掉 `allow-same-origin` 后 iframe 为 opaque origin，Tauri 不再注入。
-
-**缩放状态与生命周期**：zoom 闭包状态 + `style.zoom` 存于 iframe 文档内。htmlviewer 为 dockview `always` renderer——切走切回 iframe 文档存活，缩放保留（页签会话级）；关页签/iframe 销毁即归 100%；srcDoc 重建（filePath 变更）文档内已归 1，父侧 `onLoad` 同步清 HUD 残留。**不做跨会话持久化**。
-
-**缩放 HUD（瞬态）**：zoom 变化 → 渲染区右上角气泡显示当前百分比 +「重置」按钮（Chrome 缩放气泡语义）；~3s 无缩放操作自动消失、期间缩放续期；回落 100% 仍显示至超时；点「重置」→ 下行复位 + 立即隐藏（等值 zoom=1 回声不复活气泡）。HUD 透明层 `pointerEvents: none` 不挡 iframe 交互。缩放**无键盘快捷键**（Ctrl+滚轮即入口），不注册 ShortcutRegistry 命令（无 Ctrl+0）。
-
-### postMessage 校验（SEC-03/SEC-04）
-
-`HtmlPanel.handleMessage` 对来自 iframe 的 `postMessage` 实施公共校验（origin/source）后按 type 分派两条上行通道：`slterm_key` 键盘转发 / `slterm_zoom` 缩放上报。上行校验：
-
-| 校验层 | 机制 | 防御目标 |
-|--------|------|---------|
-| origin | `e.origin === "null"`（srcdoc iframe 为 opaque origin） | 阻止任意 origin 页面伪造 |
-| source | `e.source === iframeRef.current.contentWindow` | 阻止同进程内其他 iframe/窗口伪装 |
-| nonce（SEC-04） | 面板挂载期 `crypto.getRandomValues` 生成 128 位 nonce，拼入注入脚本；父窗口校验 `e.data.nonce` | 阻止不知密钥的外部伪造 |
-| 信任标记 | 合成 `KeyboardEvent` 上定义 `__slterm_postMessage = true` | 预留：未来可区分物理按键与 postMessage 重放 |
-
-**下行（父 → iframe）`slterm_reset`**：唯一触发源 = HUD「重置」按钮；校验方向反转——iframe 注入脚本侧 `e.source === parent` + nonce + type 三重校验；targetOrigin 一律 `"*"`。
-
-**【SEC-03 修订，2026-09-06 实证】postMessage targetOrigin 与 `e.origin` 是两回事**：发送方 `targetOrigin` 参数必须匹配【接收方】窗口 origin——iframe 为 opaque origin 只影响消息到达父窗口后 `e.origin` 序列化为 `"null"`，与发送端参数无关。曾误把两处概念混同：所有 iframe → 父上行 postMessage 用 `"null"` 作 targetOrigin，与父窗口 origin（`http://tauri.localhost`）不匹配被 Chromium **静默丢弃**——HtmlPanel 键盘转发（Ctrl+W）、注入脚本缩放上行全灭（L4 探针矩阵 A/B/C 全空实证）。修复 = 全部发送 targetOrigin 改 `"*"`（父侧 origin/source/nonce 四层校验兜底，无额外风险）。接收侧校验 `e.origin === "null"` 语义不变、仍正确。
-
-**威胁模型**：被预览 HTML 的自身内联脚本可读取注入脚本中的 nonce 并伪造消息，故 nonce 不防内部伪造。防线分层：nonce = 外部防线；伪造 `slterm_zoom` 后果仅 HUD 百分比误导（低危，等值/数值守卫已收）；键盘转发由 global 命令集最小化兜底——当前 global context 仅 `global.closeTab`（低风险）。扩充 global 命令前须重评估本威胁模型。
-
-`e.origin === "null"` 由 WHATWG HTML 规范推断，未在真实 WebView2 环境单独实测，正确性由 L4 真实 WebView2 中 postMessage 往返验收。
-
-### HTML 内联脚本/事件执行（CSP 放行 + 宿主 script 转义缺陷）
-
-依赖全局 Tauri CSP 含 `script-src 'self' 'unsafe-inline'` **且** `dangerousDisableAssetCspModification: ["script-src"]`：
-
-- `<iframe srcDoc>` 加载的 `about:srcdoc` 继承父窗口 CSP，子策略只能收紧不能放宽，故必须放宽主窗口 CSP。
-- 只加 `'unsafe-inline'` 而不关 nonce 注入时，Tauri 注入的 nonce 会使 `'unsafe-inline'` 被浏览器忽略，srcdoc 内联脚本仍被拦。
-- 代价是主应用全局失去 script 的 nonce 加固（`default-src 'self'` 仍拦远程脚本加载）。面板仅用于预览可信本地 HTML。**勿收紧回严格 script-src——会静默破坏预览**。
-
-**【存量缺陷登记，2026-09-06 实证】宿主内联 `<script>` 不执行（被 escapeScriptClose 转义破坏）**：`injectScript` 会把宿主 HTML 内**所有** `</script>`（含正常闭合）转义为 `<\/script>`；Chromium 不将 `<\/script>` 视为结束标签 → 宿主 script 吞到 EOF（内容混入 HTML 标记）→ SyntaxError，脚本永不执行（headless Edge 复测 + WebView2 E2E 探针一致：注入脚本正常闭合不受影响、宿主 script 全灭；HtmlPanel 键盘转发/Ctrl+滚轮缩放等**注入脚本自身功能不受影响**，仅预览 HTML 自带的 JS 静态化）。CSP 放行语义（'unsafe-inline'）本身成立——内联**事件属性**（如 `<body onload>`）不含 `</script>` 不被转义、正常执行（E2E fixture 触发通道即此）。修复方向 = `escapeScriptClose` 仅转义注入点之前的宿主部分（策略 3/4 追加注入场景才需要转义防提前闭合），属独立缺陷单，本次未修（E2E 缩放用例已改用事件属性触发，不依赖宿主 script）。
+- **htmlviewer**（`panels/html/HtmlPanel`）：二态 render（默认）/ edit 源码（CM6 lang-html）；草稿快照往返 docRef。
+- **markdownviewer**（`panels/markdown/MarkdownPanel`）：三态 edit（默认）/ split（allotment 拖拽，比例持久化）/ preview；渲染管线/资源/链接分派见 markdown/CLAUDE.md。
+- 文档真值源 = 面板 docRef（草稿优先磁盘）；preview-only 卸载 CM（快照回填，光标/undo 重置登记已知行为）；edit↔split CM pane 保活不卸载（allotment CM pane 恒 index 0）。
+- **宿主内联 `<script>` 不执行（escapeScriptClose 转义存量缺陷登记，2026-09-06 实证，跨家族继承为预期行为）**：`injectScript` 把宿主 HTML 内所有 `</script>` 转义为 `<\/script>` → 宿主 script 吞到 EOF 致 SyntaxError；注入脚本自身不受影响；内联**事件属性**（onload/onerror 等）不含 `</script>` 不被转义、正常执行——e2e 触发通道即此（html.e2e/markdown.e2e fixture）。修复方向 = escapeScriptClose 仅转义注入点前宿主部分（独立缺陷单）。
+- markdownviewer 纳入 `renderer="always"` 白名单（iframe 与 CM 编辑实例切走切回不重建——决策 #17）。
 
 ### gitshow：只读但可聚焦
 
@@ -208,7 +174,7 @@ Claude Code 在用户主动 Ctrl+C 中断时不发射任何 hook 事件。四态
 - **useXterm 是编排层**：mock 6 个子 hook 才能隔离测试（`useTerminalInstance` / `usePtyOutput` / `usePtyResize` / `useClipboardHandler` / `useCommandDetection` / `webgl`）。共享测试工厂见 `src/__tests__/helpers/xterm-test-utils.ts`。
 - **L3 复用生产实现**：`oscHandlers.ts`（TQ-E-01）与 `keyEventHandler.ts`（TQ-E-02）抽为纯函数后，L3 `production-osc.test.ts` / `shortcut-dispatch.test.ts` 直接复用生产真值源，不再复刻。
 - **HTML 面板 postMessage**：jsdom 不强制 CSP，L2 校验四层校验逻辑；真实 WebView2 行为由 L4 验收。
-- **注入脚本缩放运行时（zoomRuntime）**：jsdom 不执行 srcdoc 内脚本——zoomRuntime 生成参数化函数源码（`function(doc,win)`），L2 经 `new Function` 在桩 doc/win 上真实执行（行为级，html-zoom-runtime.test.ts）；物理滚轮设备与悬停语义由 L4 fixture 合成事件 + 手工验收（豁免登记见 `.claude/test-exemptions.md`）。
+- **注入脚本缩放/滚动运行时（zoomRuntime/scrollRuntime）**：jsdom 不执行 srcdoc 内脚本——运行时生成参数化函数源码（`function(doc,win)`），L2 经 `new Function` 在桩 doc/win 上真实执行（行为级，doc-viewer-zoom-runtime.test.ts / doc-viewer-injection.test.ts）；物理滚轮设备与悬停语义由 L4 fixture 合成事件 + 手工验收（豁免登记见 `.claude/test-exemptions.md`）。
 - **编辑器测试模式**见 `@editor/CLAUDE.md`。
 
 ## 添加新面板类型的步骤

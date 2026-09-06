@@ -235,15 +235,17 @@ const MarkdownPanel: React.FC<MarkdownPanelProps> = ({
     }, PREVIEW_DEBOUNCE_MS);
   }, [runRender]);
 
-  // 形态切换：split/preview 若 stale（含首入）立即渲染一次
-  //（runRender 引用稳定——useCallback 空依赖；仅形态切换触发，防抖击键路径
-  // 由 scheduleRender 负责）
+  // 形态切换/文档就绪：split/preview 且 doc 就绪后若 stale（含首入）立即渲染
+  // 一次。loadState.kind 门控关键——直 preview 恢复场景 mount 首帧 effect 跑在
+  // 读盘 resolve 前（doc 仍空），无门控会先渲染空文档并覆盖后续正确产物
+  //（flaky 实证：直 preview 偶发产物为空）。runRender 引用稳定（useCallback
+  // 空依赖）；防抖击键路径由 scheduleRender 负责。
   useEffect(() => {
-    if (mode === "edit") return;
+    if (loadState.kind !== "ready" || mode === "edit") return;
     if (staleRef.current || previewHtml === null) {
       void runRender();
     }
-  }, [mode, runRender, previewHtml]);
+  }, [mode, loadState.kind, runRender, previewHtml]);
 
   // 卸载清理防抖计时器
   useEffect(() => {

@@ -12,6 +12,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 文件扩展名 → `getLanguageExtension()` 返回对应 CM6 语言扩展。语言扩展通过 `Compartment.reconfigure()` 热切换，不丢失文档状态。`Alt+Z` 触发 `editor.toggleWordWrap`，通过 `wrapCompartment` 热切换 `EditorView.lineWrapping`，同样不丢失文档状态。默认关闭，每实例独立，不持久化（同 VS Code 行为）。
 
+### docViewer 面板选项（S3 扩展，EditorPanel 默认行为零变化）
+
+`UseCodeMirrorOptions` 新增三项，供 htmlviewer/markdownviewer 的编辑形态使用（消费点见 docViewer 家族文档）：
+
+- **`initialDoc`**：有值（含空串）则跳过磁盘读取直接以快照建缓冲（草稿回填免二次 IPC）。只在 effect 执行瞬间消费（经 initialDocRef）——**不入 effect deps**：重建由 container 变化驱动（形态切换卸载/重挂），面板读盘完成回填 doc 若入 deps 会触发无谓重建（闪烁+光标重置）。
+- **`onDocContent(text, source)`**：三源回传（init = 缓冲建立 / edit = 每次 docChanged / reload = 外部修改重载成功），经 ref 转发防闭包过期；**仅在传入时挂载**——EditorPanel 不传则 updateListener 零额外开销（无 toString 成本）。
+- **`gitGutterEnabled`**：默认 true（EditorPanel/DiffPanel 现状）；docViewer 预览面板传 false——不加载 diff gutter 扩展、不读 git、保存后不刷新 gutter。
+
+**容器 ref 时序红线**：hook 消费方在 render 阶段读 ref 得 null（commit 后赋值）——edit 容器首挂需 commit 后 bump 重渲染（HtmlPanel/MarkdownPanel bumpFrame 桥接，DiffPanel 先例），否则 view 永不创建。
+
 ### 大文件不虚拟化（FE-31 登记，D3 关闭）
 
 CodeMirror 6 不支持部分文档模型，大文件编辑**不虚拟化**——按 D3 方案以三层防线削峰：

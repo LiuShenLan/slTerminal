@@ -22,6 +22,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **不自动创建默认终端**：`handleReady` 在布局恢复失败（空布局 `{}` 或损坏数据）时不再兜底创建终端面板。空白页面由 Watermark 组件接管，用户手动创建终端。
 - **布局单点（#7）**：操作页面布局只经 `layoutSerde.ts` 存取。`PageDockview.onDidLayoutChange` → `saveLayout()` → `handlePageLayoutChange()` → `useProjects.updatePageLayout()`。
 
+### 共享打开链路与面板 params 持久化（docViewer 面板）
+
+- **openFile.ts**：文件打开核心链路（守卫/去重聚焦/resolve ?? editor/renderer always/addPanel/registerEditor/recomputeTitles）由 ExplorerPanel.handleOpenFile 抽取的 workspace 单点——文件浏览器双击与预览链接点击（`openFileInActivePage` 便捷入口现取 stores + `__dockviewApi`）共用同一分发，复制即双源漂移（注册表家族契约）。ExplorerPanel 委托之（canOpenFile re-export 兼容导出面）。失败语义：守卫/异常返回 false 不弹错。
+- **persistPanelParams.ts**：SettingsPanel.persistParams 先例通用化——`updateParameters(patch)` + 显式布局落盘（updateParameters 不触发 onDidLayoutChange，F8 先例）；pageId 从 useLayout.activePageId 现取（文件面板 panelId 无 settings- 前缀；交互必在活跃页）。viewMode/splitRatio（docViewer 面板形态）持久化走此辅助。
+
 ### DefaultTab 页签形态（TAB-01/02/03，IC-03，F9）
 
 `DefaultTab` 为扁平化页签（`params.tabIcon` 已退役）：
@@ -114,7 +119,7 @@ dockview 8.1.0 free core 的页签右键菜单(ContextMenu)是 **enterprise 模�
 - **新建终端编号延迟分配（FE-04）**：`nextPanelId()` 在菜单 action 执行时才调用，菜单构建期不消耗编号。
 - **重命名必须显式保存布局**：`setTitle`/`updateParameters` 不触发 `onDidLayoutChange`，须手动 `onLayoutChange(saveLayout(api))`。
 - **删除页面时 stopWatch**：`activePageId` 置 null 必须释放 watcher，否则 OS 句柄残留。
-- **renderer="always" 白名单**：仅 `terminal` 和 `htmlviewer`。editor/gitshow/diff 故意排除——CM6 重建无视觉闪屏，且大文件编辑器若始终挂载会显著增加内存开销。
+- **renderer="always" 白名单**：仅 `terminal`、`htmlviewer` 与 `markdownviewer`（panelRegistry.ts 单点）。editor/gitshow/diff 故意排除——CM6 重建无视觉闪屏，且大文件编辑器若始终挂载会显著增加内存开销；markdownviewer 纳入因 iframe browsing context 与 CM 编辑实例切走切回不重建（草稿/缩放保活，决策 #17）。
 
 ## 测试模式
 

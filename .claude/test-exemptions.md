@@ -33,6 +33,10 @@
 | `ExplorerPanel.handleRename` 同名兜底短路分支（oldPath === newPath） | UI 不可达——同名已在 `FileTree.confirmRename` 拦截（比较 basename），测试无法直传同名进入 onRename；属防御层死代码 | confirmRename 同名短路 L2 用例（explorer-rename-state 3 例）+ 后端 src==dst 幂等 L1 用例（`fs_rename_src_equals_dst_*` 2 例）双边锁死同层语义 | 修复「重命名取消误删文件」登记 |
 | 应用图标视觉质量（1024 母版构图/16px 降采样可辨性/icon.ico 嵌入正确性） | 纯资源替换无可自动化代码逻辑；视觉呈现依赖人眼判定 | 生成脚本 `gen-app-icon.ps1` 后置像素断言（脚本内几何可复算）+ 构建产物人工检查清单（exe 图标属性/任务栏/Alt-Tab 目测，路径 `src-tauri\assets\app-icon\app-icon.png` 与 32px 抽样） | 2026-09-06 图标替换登记 |
 | HTML 面板 Ctrl+滚轮缩放的物理滚轮事件与悬停语义（真实 OS 滚轮 delta 设备 / WebView2 物理 wheel / preventDefault 对浏览器缩放的实际效果） | embedded WDIO 无法投递 OS 滚轮；缩放核心行为已由 L2 行为级覆盖（zoomRuntime 桩执行 15 例）与 L4 fixture 合成事件全链路覆盖，物理输入路径无法自动化 | L2 `html-zoom-runtime.test.ts`（new Function 桩 doc/win 行为级）+ L4 `html.e2e.ts` Ctrl+滚轮缩放 describe（fixture 合成 WheelEvent → 注入接管 → HUD）+ 下述手工验证清单（build 产物实测：悬停缩放/HUD 续期/重置/切走切回保留/终端 Ctrl+滚轮字号互不干扰/整窗缩放不被触发） | 2026-09-06 htmlviewer 缩放登记 |
+| mermaid 图布局与 KaTeX 字形渲染视觉质量（真实 DOM 布局/字体度量） | mermaid v11 渲染与 KaTeX 字体加载依赖真实浏览器布局与字体测量（jsdom 无）；自动断言止于 DOM 存在性 | L2 编排 mock（`markdown-mermaid.test.ts` / `markdown-render-pipeline.test.ts` KaTeX 标记断言）+ L4 `markdown.e2e.ts`（mermaid SVG / KaTeX 类与内联字体 data 前缀）+ 手工视觉清单（图表配色/公式字形/暗色协调） | ADR-0018 预览渲染登记 |
+| md 预览物理滚轮与 iframe 重建滚动比例近似误差 | 承接 HTML 缩放豁免语义（同注入接管机制）；滚动恢复为近似语义（文档高度变化后按比例，编辑点恰在视口上方时位置可跳变）——行为级验证上限 | L2 `scrollRuntime` 桩执行（节流上行/下行校验负面）+ L4 `markdown.e2e.ts` 事件属性通道缩放 + 手工清单（编辑预览滚动/重建位置近似） | ADR-0018 预览渲染登记 |
+| 大 md 文件渲染性能预算（300ms 防抖下逐键 doc.toString + 渲染主线程占用） | 性能预算需真实 WebView2 计时（jsdom 不具代表性） | 长度守卫登记为 P1 增强（>1MB 关闭 live 刷新）；首次渲染预算 ≤300ms（markdown-it 单趟线性）；真实计时人工清单项 | ADR-0018 预览渲染登记 |
+| md 预览 iframe 内 <script> 执行与 html 同态静态化 | 存量缺陷（escapeScriptClose 转义破坏宿主 </script>）跨面板继承即预期行为（信任模型 = 与 htmlviewer 同态，ADR-0017）；事件属性不受转义正常执行 | L2 `markdown-render-pipeline.test.ts` raw HTML 透传断言 + L4 `markdown.e2e.ts` 事件属性通道（img onerror 触发缩放）实证 | ADR-0017 信任模型登记 |
 
 > 原豁免表中 `FileWatcher::start`/`notify_watch` 与 `claude_history` 命令包装两项已按 D6 从豁免重分类为补测，不再列入豁免表。  
 > **SEC-17 豁免已撤销（TQ-COV-05 翻案）**：`tracing::warn!(target: "audit")` 已由 `tracing-test` 断言锁死，豁免行删除。

@@ -20,6 +20,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **扩展名大小写不敏感**：注册和解析时统一 `toLowerCase()`。
 - **隐藏文件排除**：`.` 开头的文件名不参与扩展名匹配（如 `.gitignore`）。
 - **路径分隔符处理**：支持 `/` 和 `\`，取最后一个分隔符之后的文件名部分。
+- **默认注册**：`.html`/`.htm` → htmlviewer（渲染预览）；`.md`/`.markdown` → markdownviewer（三形态文档面板）。命中面板由 `isAlwaysRenderPanel` 决定 renderer（panelRegistry 单点）。
 
 ### 测试隔离
 

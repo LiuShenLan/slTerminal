@@ -21,6 +21,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 L1 用 send 回调注入收集，无需构造 `tauri::ipc::Channel`。
 
+### `fs_read_resource` 二进制资源通道（ADR-0018）
+
+docViewer 预览（md/html 本地相对图片等 data: URL 内联）按路径读任意二进制的通道：
+
+- 沙箱与上限同 `fs_read_file`（`extract_root` + `validate_path_within_root` + 10MB）；
+- 原字节按 `READ_CHUNK_BYTES` 分块 **base64 编码**推送（UTF-8 安全、二进制不受文本编码校验限制）；复用 `FsReadChunk` 载荷形态（data = base64 文本）；
+- 发送序列契约同 fs_read_file；空文件直接终态；
+- 不做 UTF-8 校验——与 fs_read_file 的文本语义刻意区分（`read_resource_base64_chunked` 独立核心）；
+- MIME 推断在前端扩展名白名单（后端保持「读字节」单一职责）。
+
 ### CRLF 行尾保持
 
 `fs_write_file` 写盘前检测原文件样本（前 `CRLF_SAMPLE_MAX_BYTES` 字节）：

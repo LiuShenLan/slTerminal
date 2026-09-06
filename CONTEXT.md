@@ -24,7 +24,7 @@ Dockview 布局中可托管的最小 UI 单元。每个面板属于一种面板�
 _Avoid_: 窗格, 视图
 
 **面板类型**（Panel Type）：
-面板的分类。当前有 6 种：terminal / editor / htmlviewer / gitshow / diff / settings（注册 id 与 `panelRegistry.ts` 一致）。新增面板类型需在面板注册表中显式注册。布局恢复时会过滤掉未注册的面板类型（旧 `hooksConfig` 面板即被此机制静默丢弃）。
+面板的分类。当前有 7 种：terminal / editor / htmlviewer / markdownviewer / gitshow / diff / settings（注册 id 与 `panelRegistry.ts` 一致）。新增面板类型需在面板注册表中显式注册。布局恢复时会过滤掉未注册的面板类型（旧 `hooksConfig` 面板即被此机制静默丢弃）。
 
 **面板实例**（Panel Instance）：
 具体的一个面板，有唯一标识符，可被创建、关闭、拖拽分屏。
@@ -39,8 +39,25 @@ CodeMirror 6 驱动的文件编辑器面板。
 Dockview 标签页上显示的文字。终端为 `terminal-N`（每页独立编号），编辑器为文件名（冲突时用相对路径）。
 
 **文件查看器注册表**（FileViewerRegistry）：
-策略模式单例，根据文件扩展名决定用哪种面板类型打开文件。命中即返回，未命中回退编辑器面板；当前注册 `.html`/`.htm` → HTML 预览面板。由文件浏览器和 Commit 视图共用（详见 fileViewers 模块文档）。
+策略模式单例，根据文件扩展名决定用哪种面板类型打开文件。命中即返回，未命中回退编辑器面板；当前注册 `.html`/`.htm` → htmlviewer、`.md`/`.markdown` → markdownviewer（docViewer 预览家族）。由文件浏览器和 Commit 视图共用（详见 fileViewers 模块文档）。
 _Avoid_: 文件类型映射
+
+**docViewer 预览家族**：
+共享 `src/panels/docViewer` 基础设施的文档型预览面板（htmlviewer/markdownviewer）——iframe 预览容器、注入桥、postMessage 总线、缩放/滚动恢复、形态切换条单点收容（红线登记 docViewer/CLAUDE.md；信任模型/资源通道 ADR-0017/0018）。
+
+**查看形态**（View Mode）：
+文档面板的显示形态。markdownviewer 三态：edit / split（左右分栏拖拽）/ preview；htmlviewer 二态：render / edit。右上角常驻半透明切换条单选切换，形态随面板 params 持久化（跨会话恢复）。
+_Avoid_: 模式（与四态/编辑模式语义撞车）
+
+**形态切换条**（ModeSwitcher）：
+docViewer 共享的右上角悬浮切换条组件（常驻半透明胶囊，单选高亮当前查看形态）。
+_Avoid_: 悬浮窗
+
+**文档真值源**（docRef）：
+文档面板的草稿优先文档模型——磁盘读入与编辑内容统一存放（面板级 docRef），预览渲染永以 docRef 为准而非磁盘；形态切换草稿保留（preview-only 卸载编辑器、快照回填；光标/undo 重置为登记已知行为）。
+
+**文档预览渲染管线**（mdPipeline）：
+markdown-it 组合（GFM/任务列表/KaTeX/代码高亮/mermaid 宿主渲染/本地相对资源 data: URL 内联）的同步纯函数主体 + 异步编排（mdRenderAsync），产物为完整 HTML 文档注入 PreviewFrame。
 
 ---
 

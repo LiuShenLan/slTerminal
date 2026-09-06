@@ -392,3 +392,52 @@
 - 真实屋零接触承诺范围 = `~/.claude` + `~/.slterminal`；`%LOCALAPPDATA%` WebView2 数据不在承诺内（环境变量未动，与手动运行一致）。
 - 残留假屋目录（IME 句柄删不净）留在 tmp 无害，OS 可回收；`.e2e-bak` 旧残留由一次性人工清理。
 - 逆转触发点：未来出现不经 `crate::home` 的 home 消费点时由 grep 纪律 + exit 校验双兜底报红；恢复备份/还原机制需重估隔离键选择。
+
+## 0017 预览容器信任模型延续：md/html 同态渲染（ADR-0017：sandbox 无 allow-same-origin + global 命令集不扩 + 宿主 script 静态化继承）
+
+**Status**: accepted（2026-09-06，.md 文档面板需求期决策；实施以 docViewer 共享层与 markdown 渲染管线为准）
+
+**上下文**：为 .md 新增预览能力时，渲染容器选型存在两条路：① 与 htmlviewer 同款的 sandbox iframe（opaque origin，注入桥 + postMessage 总线——SEC-03/04 校验体系、zoomRuntime/键转发/HUD 全现成）；② 宿主 DOM 直接注入（dangerouslySetInnerHTML，样式隔离自理）。容器选择连带决定信任模型：md 渲染产物含 raw HTML（用户 md 内嵌 <details>/<table>/<script> 等），htmlviewer 的既有语义是「本地文件全信任」（CSP 'unsafe-inline' + 无消毒，Tauri CVE-2024-35222 红线排除了 allow-same-origin）。跨 html/md/workspace/shortcuts 四模块、与 SEC-03/04 及既有 CVE 决策直接勾连，需要决策记录锚点。
+
+**决策**：
+
+- **md 预览与 html 渲染同态**：iframe sandbox="allow-scripts"（无 allow-same-origin，Tauri CVE-2024-35222）、注入桥（键转发/缩放/滚动/链接路由）与四层 postMessage 校验（origin="null" + source + nonce + type）收 docViewer/PreviewFrame 单点（复用不复制）；raw HTML 透传（markdown-it html:true），事件属性执行、宿主 `<script>` 因 escapeScriptClose 转义纪律与 htmlviewer 同态静态化——**行为继承即预期，不修复存量缺陷**。
+- **global 命令集不因 md 扩充**：预览 iframe 键转发只重放 global context 命令（当前仅 global.closeTab，command-catalog.test.ts 锁死）——面板级命令在 iframe 内不可达，扩充须先重评 SEC-04 威胁模型（nonce 明文内联于 srcdoc，防外部伪造不防预览内容自身）。
+- **链接分派收父侧**：linkRouter 段仅上行 href（slterm_nav），分类（external → 系统浏览器 opener / local → 应用内打开链路）在面板侧 linkPolicy 纯函数做——iframe 内不做任何打开决策。
+- **缩放/滚动恢复语义**：keepZoom/keepScrollRatio 重建下行恢复（钳制/比例近似，登记已知行为），缩放状态不跨会话持久化（html 现状语义继承）。
+
+**被否决的备选**：
+
+- **宿主 DOM 直接注入 md 渲染产物**：与 htmlviewer 形成两套渲染面（沙箱/信任/键桥/缩放全复制或抽象重建）；宿主权限执行预览内容扩大信任面；相对资源/CSS 隔离/闪白需自研全套——安全红线登记（SEC-03/04）与威胁模型将分叉。
+- **md 渲染做消毒管线（DOMPurify）**：用户需求确认信任边界 = 与 html 渲染同等（md 是用户本地文件，非第三方内容）；消毒引入「html 可显示 md 不可显示」的双轨行为与额外依赖面。
+
+**后果**：
+
+- 新预览型文件（未来 pdf/png 等）扩展路径 = 面板目录 + docViewer 注入段/回调组合，安全面不新开。
+- iframe 内宿主 script 静态化为登记存量缺陷的继承行为（不另立缺陷单）；扩充 global 命令前必读本 ADR。
+- 逆转触发点：出现预览不可信第三方内容需求（届时重新评估消毒/隔离）；或 escapeScriptClose 存量缺陷修复（宿主 script 恢复执行——需重审 md 侧是否同步放开）。
+
+## 0018 本地资源通道：项目根只读 + data: 内联（ADR-0018：沙箱内二进制入渲染面首例）
+
+**Status**: accepted（2026-09-06，.md 文档面板需求期决策；实施以 fs_read_resource 与 CSP 放行为准）
+
+**上下文**：md/html 预览的本地相对资源（图片等）首次需要「按路径读任意二进制进渲染面」。既有 fs_read_file 只读 UTF-8 文本（编码校验）；iframe 为 opaque origin（无相对路径/asset 协议可达性，CSP font-src 无 data: 放行）。候选通道：① Tauri asset protocol（convertFileSrc）——静态 scope 无法跟随动态项目根，违背「仅项目根沙箱内」用户决策；② blob: URL——无生命周期管理点（iframe 重建即失效需 revoke，CSP 需放行 blob:）；③ 新后端命令 + data: URL 内联。全局 CSP 变更（首个 data: 放行）与「沙箱内二进制入渲染面」通道形态影响所有未来预览型面板，需决策记录锚点。
+
+**决策**：
+
+- **新命令 fs_read_resource（项目根只读通道）**：复用 extract_root 沙箱（root=None 拒绝）+ validate_path_within_root + 10MB 上限（复用 fs_read_file 常量）+ spawn_blocking；256KB 原字节分块 base64 Channel 推送（UTF-8 安全、削峰同 BE-03）；前端 readResourceBase64 聚合，MIME 推断在前端扩展名白名单（png/jpg/jpeg/gif/webp/avif/svg/bmp/ico）——后端保持「读字节」单一职责。三处注册（lib.rs/build.rs/capabilities）。
+- **data: URL 内联（非 blob:）**：渲染产物替换为 data: URL——字符串可比（重建去重）、无 revoke 生命周期、CSP 面最小（img-src/font-src 追加 data:，不放行 blob:）；svg 经 `<img>` 惰性上下文加载（内嵌 script 不执行）；资源读取失败回退原 src（缺口不阻塞整篇）；LRU 缓存（50 项）防逐字重渲染反复读盘。
+- **KaTeX 字体构建期内联**：katex.min.css woff2 url → data:font/woff2;base64（scripts/gen-katex-inline.mjs 产物提交入库 ~360KB，woff/ttf 回退剔除）；katex 升级重跑脚本 + git diff 审阅——运行时经 asset 协议取字体 CORS 行为未实证，不冒险。
+- **渲染执行分层**：mermaid 宿主侧渲染（dynamic import + 按 code Promise 缓存）成 SVG 字符串注入——iframe 内零重排版、CSP 零新增、2MB 库不进主包；暗色主题变量映射 linear 内容色。
+
+**被否决的备选**：
+
+- **Tauri asset protocol + convertFileSrc**：assetProtocol scope 静态配置无法跟随 set_project_root 动态根（静态大 scope 违背最小沙箱）；字体/资源跨源 CORS 在 opaque origin 行为未实证。
+- **blob: URL + 逐轮 revoke**：生命周期管理点缺失（iframe 重建竞态）、CSP 需放行 blob:、字符串不可比（无法跳过等值重建）。
+- **mermaid 运行时注入 iframe**：2MB+ 源码进注入串违反无 `</script>` 字面量纪律（库内必然出现，需逃逸变换——html 宿主转义缺陷同坑）；300ms 防抖每轮重建全量初始化，成本为宿主渲染数量级倍数。
+
+**后果**：
+
+- 「沙箱内二进制入渲染面」有了统一通道（html/md 预览共用；html 相对图片顺带可用）；未来新资源类型走 MIME 白名单扩展。
+- CSP 增两 data: 放行（csp-config.test.ts 守卫）；blob:/connect-src/worker-src 不放行；script-src 政策不变（'unsafe-inline' + nonce 注入关闭为 htmlviewer 既有前置，ADR-0017 继承）。
+- 逆转触发点：动态 asset scope 出现（Tauri 支持跟随项目根时重估协议通道）；或需读 >10MB 资源/任意沙箱外路径（重估上限与边界）。
