@@ -115,7 +115,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 HTML 面板内容在 `<iframe sandbox="allow-scripts" srcDoc={...}>` 中（不含 `allow-same-origin`），iframe 内 keydown 不冒泡到父 window。
 
-**注入脚本 postMessage 路径**：`HtmlPanel.tsx` 注入脚本在 iframe 内 `keydown` capture → `window.parent.postMessage({type:"slterm_key", fingerprint, ...}, "null")`。父窗口 `handleMessage` 监听 `"message"`：校验 `e.origin === "null"` + `e.source === iframe.contentWindow` → `exportContextBindings("global")` 动态比对 → 命中则 `window.dispatchEvent(合成KeyboardEvent)`（附带 `__slterm_postMessage` 信任标记）→ ShortcutRegistry 正常分发。
+**注入脚本 postMessage 路径**：`HtmlPanel.tsx` 注入脚本在 iframe 内 `keydown` capture → `window.parent.postMessage({type:"slterm_key", fingerprint, ...}, "*")`。父窗口 `handleMessage` 监听 `"message"`：校验 `e.origin === "null"` + `e.source === iframe.contentWindow` → `exportContextBindings("global")` 动态比对 → 命中则 `window.dispatchEvent(合成KeyboardEvent)`（附带 `__slterm_postMessage` 信任标记）→ ShortcutRegistry 正常分发。
+
+**【2026-09-06 实证】发送 targetOrigin 必须用 `"*"`**：postMessage 第二参匹配【接收方】窗口 origin；iframe 的 opaque origin 只决定到达父后 `e.origin === "null"`（接收侧校验仍正确）。此前误用 `"null"` 作发送 targetOrigin，与父窗口 origin 不匹配被 Chromium 静默丢弃，Ctrl+W 从 iframe 关闭页签全灭——改动注入脚本 targetOrigin 后须在真实 WebView2 复验键盘转发（L4 半端到端 + 手工）。
 
 旧 `forwardGlobalShortcuts.ts` 已删除：原方案需 `allow-same-origin` 才能访问 `iframe.contentDocument`，与 sandbox 安全策略冲突；postMessage 方案无需同源。
 

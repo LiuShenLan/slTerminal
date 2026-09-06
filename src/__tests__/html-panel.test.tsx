@@ -11,7 +11,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import React from "react";
-import { render, cleanup, waitFor } from "@testing-library/react";
+import { render, cleanup, waitFor, fireEvent, act } from "@testing-library/react";
 
 // ─── Hoisted mocks ───
 const mocks = vi.hoisted(() => {
@@ -321,10 +321,17 @@ describe("HtmlPanel", () => {
     // CSS 注入
     expect(doc).toContain("createElement");
     expect(doc).toContain("slterm-target");
-    // 两个 addEventListener
+    // 四个 addEventListener：keydown/click（转发与拦截）+ wheel/message（缩放运行时）
     const matches = doc.match(/addEventListener/g);
     expect(matches).not.toBeNull();
-    expect(matches!.length).toBe(2);
+    expect(matches!.length).toBe(4);
+    // 缩放运行时（第 4 段）：wheel 捕获 + 下行 message 监听 + 挂载调用
+    // （运行时为参数化函数 function(doc,win)，wheel/message 挂参数对象上）
+    expect(doc).toContain('doc.addEventListener("wheel"');
+    expect(doc).toContain('win.addEventListener("message"');
+    expect(doc).toContain("sltermZoom(document,window)");
+    expect(doc).toContain("slterm_zoom");
+    expect(doc).toContain("slterm_reset");
   });
 
   it("H6: 注入后原始可见内容保留", async () => {
@@ -332,6 +339,19 @@ describe("HtmlPanel", () => {
     const { getByTitle } = renderHtmlPanel("C:/test/a.html");
     const iframe = await waitForLoaded(getByTitle, "C:/test/a.html");
     expect(iframe.getAttribute("srcDoc")).toContain("<h1>Hello World</h1>");
+  });
+
+  it("H7: 注入脚本整段可被 JS 解析（防拼接边界 SyntaxError 类回归）", async () => {
+    // 2026-09-06 实证：click 段原为 script 末语句无分号，追加第 4 段（zoom 运行时）后
+    // 同串拼接 "},true)var sltermZoom" 无分隔 → 整段注入脚本 SyntaxError —— L2 全绿、
+    // 仅 L4 真实 iframe 执行暴露（HUD 永不出现）。本用例把注入脚本体经 new Function
+    // 做 parse-only 校验，锁死拼接边界。
+    mocks.mockReadFile.mockResolvedValue("<p>test</p>");
+    const { getByTitle } = renderHtmlPanel("C:/test/a.html");
+    const doc = (await waitForLoaded(getByTitle, "C:/test/a.html")).getAttribute("srcDoc")!;
+    const scriptBody = /<script>([\s\S]*?)<\/script>/.exec(doc)?.[1];
+    expect(scriptBody).toBeDefined();
+    expect(() => new Function(scriptBody!)).not.toThrow();
   });
 
   // ==========================================================================
@@ -348,13 +368,13 @@ describe("HtmlPanel", () => {
     const doc = (await waitForLoaded(getByTitle, "C:/test/a.html")).getAttribute("srcDoc")!;
     // 监听绑定：document 级 keydown + 第三参数 true（capture phase，先于页面内脚本拦截）
     expect(doc).toMatch(/document\.addEventListener\("keydown",function\(e\)\{/);
-    expect(doc).toMatch(/key:e\.key\},"null"\)\},true\)/);
+    expect(doc).toMatch(/key:e\.key\},\"\*\"\)\},true\)/);
     // postMessage 消息体：type + fingerprint 合成表达式（修饰键条件拼接后接 code）
     const pmStart = doc.indexOf("window.parent.postMessage({");
     expect(pmStart).toBeGreaterThan(-1);
-    const pmEnd = doc.indexOf('key:e.key},"null")', pmStart);
+    const pmEnd = doc.indexOf('key:e.key},"*")', pmStart);
     expect(pmEnd).toBeGreaterThan(-1);
-    const pmBody = doc.slice(pmStart, pmEnd + 'key:e.key},"null")'.length);
+    const pmBody = doc.slice(pmStart, pmEnd + 'key:e.key},"*")'.length);
     expect(pmBody).toContain('type:"slterm_key"');
     expect(pmBody).toContain(
       'fingerprint:(e.ctrlKey?"Ctrl+":"")+(e.shiftKey?"Shift+":"")' +
@@ -364,8 +384,9 @@ describe("HtmlPanel", () => {
       "ctrlKey:e.ctrlKey,shiftKey:e.shiftKey,altKey:e.altKey," +
         "metaKey:e.metaKey,code:e.code,key:e.key",
     );
-    // postMessage 目标 origin："null"（srcdoc opaque origin 序列化，父窗口据此校验）
-    expect(pmBody).toContain('},"null")');
+    // postMessage targetOrigin "*"（2026-09-06 实证：须匹配接收方窗口 origin；
+    // opaque 源只影响父侧 e.origin 序列化 "null"，与发送 targetOrigin 无关）
+    expect(pmBody).toContain('},"*")');
   });
 
   it("控制流: click capture 监听 + closest/href 守卫 → preventDefault → scrollIntoView", async () => {
@@ -374,7 +395,7 @@ describe("HtmlPanel", () => {
     const doc = (await waitForLoaded(getByTitle, "C:/test/a.html")).getAttribute("srcDoc")!;
     // 监听绑定：document 级 click + capture phase（事件委托，iframe 内任意深度元素可达）
     expect(doc).toMatch(/document\.addEventListener\("click",function\(e\)\{/);
-    expect(doc).toMatch(/\},true\)<\/script>/);
+    expect(doc).toMatch(/\},true\);var sltermZoom=/);
     // 守卫顺序：非 <a> 或 href 非 "#" 开头 → 直接 return（不 preventDefault）
     expect(doc).toMatch(
       /closest\("a"\);if\(!a\)return;var h=a\.getAttribute\("href"\);if\(!h\|\|h\.charAt\(0\)!=="#"\)return;/,
@@ -486,12 +507,12 @@ describe("HtmlPanel", () => {
     ).length;
   }
 
-  /** 等待 iframe 渲染后获取其 DOM 元素 */
+  /** 等待 iframe 渲染后获取其 DOM 元素（含 container/unmount 供 HUD 用例） */
   async function getRenderedIframe(filePath = "C:/test/a.html") {
     mocks.mockReadFile.mockResolvedValue("<p>test</p>");
-    const { getByTitle } = renderHtmlPanel(filePath);
+    const { container, getByTitle, unmount } = renderHtmlPanel(filePath);
     const iframe = await waitForLoaded(getByTitle, filePath);
-    return { iframe, getByTitle };
+    return { container, iframe, getByTitle, unmount };
   }
 
   it("postMessage 命中全局快捷键 → 派发 KeyboardEvent", async () => {
@@ -826,5 +847,182 @@ describe("HtmlPanel", () => {
     expect(extractNonce(iframeA)).toMatch(/^[0-9a-f]{32}$/);
     expect(extractNonce(iframeB)).toMatch(/^[0-9a-f]{32}$/);
     expect(extractNonce(iframeA)).not.toBe(extractNonce(iframeB));
+  });
+
+  // ==========================================================================
+  // Ctrl+滚轮缩放 HUD（瞬态缩放指示器）
+  //
+  // iframe 文档内缩放执行由注入脚本完成（html-zoom-runtime.test.ts 桩执行覆盖）；
+  // 本小节锁父窗口侧：slterm_zoom 上行的 HUD 显示/隐藏/续期/复位下行/重建复位。
+  // 缩放值的等比步进/clamp 属 zoomRuntime（注入侧），此处只喂可信消息断言 UI。
+  // ==========================================================================
+
+  /** 构造通过 origin + source + nonce 校验的 slterm_zoom 上行消息 */
+  function dispatchZoom(
+    iframe: HTMLIFrameElement,
+    zoom: number,
+    nonceOverride?: string | "omit",
+  ) {
+    dispatchTrustedKey(iframe, { type: "slterm_zoom", zoom }, nonceOverride);
+  }
+
+  /** 查询 HUD 气泡元素（data-e2e） */
+  function queryHud(container: HTMLElement): HTMLElement | null {
+    return container.querySelector('[data-e2e="html-zoom-hud"]');
+  }
+
+  it("HUD: 默认无缩放时气泡不显示", async () => {
+    const { container, getByTitle } = renderHtmlPanel("C:/test/a.html");
+    await waitForLoaded(getByTitle, "C:/test/a.html");
+    expect(queryHud(container)).toBeNull();
+  });
+
+  it("HUD: 可信 slterm_zoom 上报 → 气泡显示百分比与重置按钮", async () => {
+    const { container, iframe } = await getRenderedIframe();
+    act(() => dispatchZoom(iframe, 1.1));
+    const hud = queryHud(container);
+    expect(hud).not.toBeNull();
+    expect(hud!.textContent).toContain("110%");
+    expect(hud!.querySelector('[data-e2e="html-zoom-reset"]')).not.toBeNull();
+  });
+
+  it("HUD: 百分比取整显示（zoom 1.234 → 123%）", async () => {
+    const { container, iframe } = await getRenderedIframe();
+    act(() => dispatchZoom(iframe, 1.234));
+    expect(queryHud(container)!.textContent).toContain("123%");
+  });
+
+  it("HUD: 回落 100% 的变化消息仍显示气泡（Chrome 语义——超时才消失）", async () => {
+    const { container, iframe } = await getRenderedIframe();
+    act(() => dispatchZoom(iframe, 1.5));
+    expect(queryHud(container)!.textContent).toContain("150%");
+    act(() => dispatchZoom(iframe, 1.0));
+    expect(queryHud(container)).not.toBeNull();
+    expect(queryHud(container)!.textContent).toContain("100%");
+  });
+
+  it("HUD: 等值 zoom 消息不续期隐藏计时（防重复上报造成僵尸气泡）", async () => {
+    const { container, iframe } = await getRenderedIframe();
+    // 渲染完成后才启用假时钟（waitForLoaded 依赖真实 timer）
+    vi.useFakeTimers();
+    try {
+      act(() => dispatchZoom(iframe, 1.1));
+      expect(queryHud(container)).not.toBeNull();
+      // 2.5s 时收到等值重复上报（文档内 zoom 未变，正常不发送；恶意/自身脚本兜底防御）
+      act(() => vi.advanceTimersByTime(2500));
+      expect(queryHud(container)).not.toBeNull();
+      act(() => dispatchZoom(iframe, 1.1));
+      // 等值消息若续期计时 → 此时仍显示；不续期 → 首条后 3s 已隐藏
+      act(() => vi.advanceTimersByTime(600));
+      expect(queryHud(container)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("HUD: 3s 无缩放操作自动消失；期间续期", async () => {
+    const { container, iframe } = await getRenderedIframe();
+    vi.useFakeTimers();
+    try {
+      act(() => dispatchZoom(iframe, 1.1));
+      // 2.9s 内仍在（未到 3s）
+      act(() => vi.advanceTimersByTime(2900));
+      expect(queryHud(container)).not.toBeNull();
+      // 续期：新变化消息重置 3s 计时
+      act(() => dispatchZoom(iframe, 1.2));
+      act(() => vi.advanceTimersByTime(2900));
+      expect(queryHud(container)).not.toBeNull();
+      // 距最后消息超过 3s → 消失
+      act(() => vi.advanceTimersByTime(200));
+      expect(queryHud(container)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("HUD: SEC-04 负面——伪造/缺失 nonce、非数值 zoom 不弹气泡", async () => {
+    const { container, iframe } = await getRenderedIframe();
+    // 缺失 nonce
+    act(() => dispatchZoom(iframe, 1.5, "omit"));
+    expect(queryHud(container)).toBeNull();
+    // 伪造 nonce
+    act(() => dispatchZoom(iframe, 1.5, "00000000000000000000000000000000"));
+    expect(queryHud(container)).toBeNull();
+    // 非数值 zoom（字符串/NaN）——isFiniteZoom 拒绝
+    dispatchTrustedKey(iframe, { type: "slterm_zoom", zoom: "1.5" });
+    expect(queryHud(container)).toBeNull();
+    dispatchTrustedKey(iframe, { type: "slterm_zoom", zoom: NaN });
+    expect(queryHud(container)).toBeNull();
+  });
+
+  it("HUD: SEC-03 负面——伪造 origin / 非本 iframe source 的 zoom 消息不弹", async () => {
+    const { container, iframe } = await getRenderedIframe();
+    const nonce = extractNonce(iframe);
+    // 伪造 origin
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        origin: "http://evil.com",
+        source: iframe.contentWindow,
+        data: { type: "slterm_zoom", nonce, zoom: 1.5 },
+      }),
+    );
+    expect(queryHud(container)).toBeNull();
+    // 非本 iframe source
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        origin: "null",
+        source: window,
+        data: { type: "slterm_zoom", nonce, zoom: 1.5 },
+      }),
+    );
+    expect(queryHud(container)).toBeNull();
+  });
+
+  it("HUD: 点重置 → 下行 slterm_reset + 立即隐藏 + 回声不复活", async () => {
+    const { container, iframe } = await getRenderedIframe();
+    act(() => dispatchZoom(iframe, 1.3));
+    expect(queryHud(container)).not.toBeNull();
+
+    // spy 下行 postMessage（jsdom 无真实跨窗派发，拦截原实现防 NotImplemented 风险）
+    const postSpy = vi
+      .spyOn(iframe.contentWindow!, "postMessage")
+      .mockImplementation(() => {});
+    fireEvent.click(queryHud(container)!.querySelector('[data-e2e="html-zoom-reset"]')!);
+    // 断言须先于 mockRestore（restore 会清调用记录）
+    // 下行载荷：slterm_reset + 面板 nonce，targetOrigin "*"（与上行同因，见 keydown 段注释）
+    expect(postSpy).toHaveBeenCalledTimes(1);
+    expect(postSpy).toHaveBeenCalledWith(
+      { type: "slterm_reset", nonce: extractNonce(iframe) },
+      "*",
+    );
+    postSpy.mockRestore();
+    // 立即隐藏（不等回声）
+    expect(queryHud(container)).toBeNull();
+    // 复位回声 zoom=1 与基准等值 → 不复活
+    act(() => dispatchZoom(iframe, 1.0));
+    expect(queryHud(container)).toBeNull();
+  });
+
+  it("HUD: iframe 重建（srcDoc 重载）→ 气泡清空归位", async () => {
+    const { container, iframe } = await getRenderedIframe();
+    act(() => dispatchZoom(iframe, 1.7));
+    expect(queryHud(container)).not.toBeNull();
+    // 模拟文档重载完成的 load 事件（新文档内 zoom 已归 1）
+    fireEvent.load(iframe);
+    expect(queryHud(container)).toBeNull();
+  });
+
+  it("HUD: 卸载后隐藏计时器不泄漏（advance 不抛错）", async () => {
+    const { container, iframe, unmount } = await getRenderedIframe();
+    vi.useFakeTimers();
+    try {
+      act(() => dispatchZoom(iframe, 1.1));
+      expect(queryHud(container)).not.toBeNull();
+      unmount();
+      // 卸载后推进计时器不抛异常（timer 已清理）
+      expect(() => act(() => vi.advanceTimersByTime(5000))).not.toThrow();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

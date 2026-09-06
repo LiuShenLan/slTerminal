@@ -69,6 +69,8 @@
   来源:`src/features/agentHistory/CLAUDE.md`(MC-318,「视为可接受,不修」)。当时理由:渲染时计算,等其它状态变更触发重渲染。问题本质:页面静止时相对时间戳(「5 分钟前」)随时间腐化失真,以「等其它变更」为托辞——最低成本是订阅级 tick 刷新渲染。
 - [ ] **CP-022 · CodeMirror 大文件不虚拟化,10MB 硬上限**
   来源:ADR-0009 FE-31、`src/panels/editor/CLAUDE.md`。当时理由:CM6 文档模型不支持部分加载;分块 + 10MB 上限 + 1MB 警告三层防线削峰。问题本质:编辑器能力以 10MB 为界被框架冻结,超限文件直接拒开——若大文件场景必要,需虚拟化/只读分片浏览路径而非依赖上游。
+- [ ] **CP-031 · 宿主内联 `<script>` 被 `escapeScriptClose` 转义破坏——预览 HTML 自带 JS 静态化**
+  来源:`src/panels/CLAUDE.md`「HTML 内联脚本/事件执行」节(2026-09-06 实证登记)、`src/lib/injectScript.ts`、`e2e-tests/html.e2e.ts`(fixture 触发通道注释)。当时理由(本次未修):缺陷单独立于 Ctrl+滚轮缩放需求——2026-09-06 E2E 首轮失败归因链末端发现,`injectScript` 为防宿主 `</script>` 提前闭合注入脚本,把宿主内**所有** `</script>`(含正常闭合标签)转义为 `<\/script>`;Chromium 不视 `<\/script>` 为结束标签 → 宿主 script 吞到 EOF 混入 HTML 标记 → SyntaxError 永不执行(headless Edge 复测 + WebView2 E2E 探针矩阵一致)。影响:HtmlPanel 预览中 HTML 自带的交互 JS 从不运行(Ctrl+W 转发/Ctrl+滚轮缩放等注入脚本自身正常——注入脚本闭合不受转义,故缩放功能不受影响);E2E fixture 因此不能经宿主 script 触发,已改用 `<body onload>` 内联事件属性(不含 `</script>` 不被转义,实证正常执行)。问题本质:转义目标应为「注入点之前的宿主」(策略 3/4 追加注入场景防提前闭合注入脚本),实现却无差别作用于注入点之后全部宿主——正常宿主脚本闭合被误伤,预览 JS 能力整体静默缺失;修复方向 = `escapeScriptClose` 仅转义注入点之前部分,修复后 html.e2e 中「内联 script 执行」skip 用例可取消 skip 恢复验证。
 
 ## 五、测试覆盖缺口
 
