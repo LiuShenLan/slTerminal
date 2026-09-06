@@ -55,6 +55,7 @@ CM6 编辑器主题来源 = `editorTheme`（active 方案 `editor.theme`）+ `ed
 
 ## 外部坑/红线
 
+- **WebView2/Chromium 陈旧光栅（GLYPH bug，2026-09-06 取证）**：CM6 文本行跨帧多次独立输入后部分字形「存在但未绘制」（DOM/几何/字色完整，仅像素缺失；选中强制重绘恢复）。取证：GPU 合成/光栅/全软渲染关闭均复现、CSS 层提升与 containment 无效、@codemirror/view 6.43.11 仍复现、面板结构无关（txt 面板同丢）→ 引擎 paint 缓存陈旧缺陷，无上游修复。规避 = `repaintGuard()` 扩展（repaintGuard.ts，全部 CM6 宿主 useCodeMirror/JsonMode/DiffPanel/gitshow 注入）：docChanged 后对光标行 display 往返强制整行重绘（同宏任务，不触碰 text node/selection/装饰结构）。像素防复发锚 = e2e-tests/glyph-repro.e2e.ts（GLYPH_E2E=1，真实 GPU 环境截图字形位判读）。**撤销条件：WebView2/Chromium 引擎修复后复核移除**（测试红线：repaint-guard.test.ts 注入契约用例会红）。
 - **CM6 `mountStyles()` reverse 注入**：扩展数组顺序会被反转，覆盖规则必须靠特异性（`&.cm-editor` 前缀）取胜，不能依赖声明顺序。
 - **容器 `overflow` 选择**：编辑器面板容器必须用 `overflow: clip`。`hidden` 会吸收滚轮事件；`auto`/`scroll` 会把外层 div 变成滚动容器，导致横向滚动条沉底。
 - **Compartment 不可跨 view 共享**：每个 `Compartment` 绑定到特定 `EditorState`，`diff` 左右栏必须各自独立创建 font/wrap Compartment。

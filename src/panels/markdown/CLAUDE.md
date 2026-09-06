@@ -35,6 +35,10 @@ slterm_nav 上行 → classifyLink（linkPolicy 纯函数）：external（http/h
 
 PreviewFrame segments=[linkRouter, scrollReport]、keepZoom + keepScrollRatio（iframe 重建恢复）、onZoomChange={zoomHud.report} / onZoomReset={zoomHud.hide}（悬浮区显示层）。右上悬浮区（FloatingArea）恒面板根——切换条上 / 缩放 HUD 下列排，edit 态无缩放源传 hud=null；重置链 = PreviewFrame ref.resetZoom + zoomHud.hide（2026-09-06 收敛，docViewer/CLAUDE.md）。
 
+### 编辑字号语义（2026-09-06 接线）
+
+md/html 编辑形态字号 = 共享 `editorFontSize` store（Ctrl+滚轮缩放，EditorPanel 同款接线：useCodeMirror 的 fontSize/onFontSizeChange props——wheel 由 hook 无条件挂载，缺 props 会吞事件无效果）。原「恒锁默认 14」行为已变更：从此与 txt 编辑器同源（范围 [8,32] clamp、2s debounce 持久化）。split 态左 pane 滚轮=字号、右 iframe 滚轮=预览 zoom（pane 边界即语义边界，iframe 事件宿主侧物理不可达无冲突）。
+
 ### 预览配色单点（2026-09-06 收编）
 
 md 预览经 srcdoc iframe 渲染无法引用宿主 CSS 变量，但配色值一律以 active 方案驱动：mdPreviewStyle 的 buildMdPreviewStyleCss() 每次渲染现拼——正文/底色 = editor.overrides.plainText/background、代码语法 = syntax 9 键（hljs 12 类映射）、结构色 = editor.overrides.preview 组（新增键在 schemes/types.ts 注释登记）、复选框强调引 ui.focusBorder、mermaid 错误文案引 ui.errorFg。改主题即跟随（比 CM editorTheme 常量更活）；**禁止在此手抄色值**（曾以字面量双轨登记豁免，已撤销）。

@@ -31,7 +31,7 @@ xterm.js 不支持 `term.open()` 二次调用（GitHub Issue #4978）。因此�
 
 htmlviewer / markdownviewer 等「文档型预览面板」共享 `src/panels/docViewer`——iframe 容器（PreviewFrame）、注入脚本组装、postMessage 总线、缩放/滚动运行时、形态切换条（ModeSwitcher）全部单点收容于此。**安全红线（SEC-03/04 校验链、sandbox 无 allow-same-origin、targetOrigin "\*"、注入拼接纪律、CSP 依赖）已随迁 docViewer/CLAUDE.md 与 previewMessages.ts 单点登记**，改本家族行为前必读。信任模型延续（md/html 同态、宿主 script 静态化继承、global 命令集不扩）见 ADR-0017；本地资源通道（fs_read_resource + data: URL + CSP data: 放行）见 ADR-0018。
 
-- **htmlviewer**（`panels/html/HtmlPanel`）：二态 render（默认）/ edit 源码（CM6 lang-html）；草稿快照往返 docRef。
+- **htmlviewer**（`panels/html/HtmlPanel`）：二态 render（默认）/ edit 源码（CM6 lang-html）；草稿快照往返 docRef。edit 形态字号 = 共享 editorFontSize store（Ctrl+滚轮，EditorPanel 同款接线——2026-09-06，原恒 14 语义变更，见 markdown/CLAUDE.md「编辑字号语义」）。
 - **markdownviewer**（`panels/markdown/MarkdownPanel`）：三态 edit（默认）/ split（allotment 拖拽，比例持久化）/ preview；渲染管线/资源/链接分派见 markdown/CLAUDE.md。
 - 文档真值源 = 面板 docRef（草稿优先磁盘）；preview-only 卸载 CM（快照回填，光标/undo 重置登记已知行为）；edit↔split CM pane 保活不卸载（allotment CM pane 恒 index 0）。
 - **宿主内联 `<script>` 不执行（escapeScriptClose 转义存量缺陷登记，2026-09-06 实证，跨家族继承为预期行为）**：`injectScript` 把宿主 HTML 内所有 `</script>` 转义为 `<\/script>` → 宿主 script 吞到 EOF 致 SyntaxError；注入脚本自身不受影响；内联**事件属性**（onload/onerror 等）不含 `</script>` 不被转义、正常执行——e2e 触发通道即此（html.e2e/markdown.e2e fixture）。修复方向 = escapeScriptClose 仅转义注入点前宿主部分（独立缺陷单）。

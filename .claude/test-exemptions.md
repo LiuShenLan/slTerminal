@@ -37,6 +37,8 @@
 | md 预览物理滚轮与 iframe 重建滚动比例近似误差 | 承接 HTML 缩放豁免语义（同注入接管机制）；滚动恢复为近似语义（文档高度变化后按比例，编辑点恰在视口上方时位置可跳变）——行为级验证上限 | L2 `scrollRuntime` 桩执行（节流上行/下行校验负面）+ L4 `markdown.e2e.ts` 事件属性通道缩放 + 手工清单（编辑预览滚动/重建位置近似） | ADR-0018 预览渲染登记 |
 | 大 md 文件渲染性能预算（300ms 防抖下逐键 doc.toString + 渲染主线程占用） | 性能预算需真实 WebView2 计时（jsdom 不具代表性） | 长度守卫登记为 P1 增强（>1MB 关闭 live 刷新）；首次渲染预算 ≤300ms（markdown-it 单趟线性）；真实计时人工清单项 | ADR-0018 预览渲染登记 |
 | md 预览 iframe 内 <script> 执行与 html 同态静态化 | 存量缺陷（escapeScriptClose 转义破坏宿主 </script>）跨面板继承即预期行为（信任模型 = 与 htmlviewer 同态，ADR-0017）；事件属性不受转义正常执行 | L2 `markdown-render-pipeline.test.ts` raw HTML 透传断言 + L4 `markdown.e2e.ts` 事件属性通道（img onerror 触发缩放）实证 | ADR-0017 信任模型登记 |
+| CM 字形光栅丢失（GLYPH）的像素断言环境依赖 | 缺陷仅在真实合成/光栅渲染路径与真实截图通道可判（embedded WDIO 无 OS 按键通道、输入走 execCommand；软渲染/非整数 DPI 环境差异会假阴性） | `GLYPH_E2E=1` 像素断言 spec（glyph-repro.e2e.ts：md5-frame/md10/html10/txt10 字形位 PNG 判读全命中）+ L2 repaintGuard 原语/注入契约测试（repaint-guard.test.ts）+ 人工基线（150%/225% 双档 debug build 复现矩阵：5 连输/追加 10/前缀矩阵/选中恢复） | 2026-09-06 GLYPH 取证登记 |
+| md/html 编辑 pane Ctrl+滚轮字号的物理滚轮与 split 双通道共存语义 | embedded WDIO 无法投递 OS 滚轮（承接 htmlviewer 缩放豁免 2026-09-06 行）；iframe 内 zoom 与 CM pane 字号双通道的物理合成交互需人手 | L2 字号接线闭环用例（markdown/html-panel.test）+ L4 合成 WheelEvent 字号用例（markdown/html e2e，.cm-scroller 字号 14→15）+ 手工清单（split 态左 pane 字号/右 iframe zoom 互不干扰、整窗缩放不被触发） | 2026-09-06 GLYPH 取证登记 |
 
 > 原豁免表中 `FileWatcher::start`/`notify_watch` 与 `claude_history` 命令包装两项已按 D6 从豁免重分类为补测，不再列入豁免表。  
 > **SEC-17 豁免已撤销（TQ-COV-05 翻案）**：`tracing::warn!(target: "audit")` 已由 `tracing-test` 断言锁死，豁免行删除。
