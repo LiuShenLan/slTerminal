@@ -4,8 +4,9 @@
 //   - edit：CM6 编辑全宽（lang-markdown）
 //   - split：左编辑右预览（allotment 拖拽分栏，比例随 params 持久化）
 //   - preview：渲染只读全宽
-// 右上角悬浮切换条常驻（面板根定位——PreviewFrame 位于 allotment pane 内，
-// overlay 槽坐标系不一致，恒由本面板根渲染）。
+// 右上悬浮区（FloatingArea）常驻面板根：切换条上 / 缩放 HUD 下恒列排——
+// PreviewFrame 只上报 zoom 变化（onZoomChange）+ 承接重置命令（ref），
+// HUD 显示不随 pane 坐标（2026-09-06 收敛，docViewer/CLAUDE.md）。
 //
 // 文档真值源 = 面板 docRef（草稿优先磁盘）：
 //   - 磁盘读入 → doc；CM 击键经 onDocContent 即时写回；
@@ -26,13 +27,10 @@ import type { DockviewPanelApi, DockviewApi } from "dockview-react";
 import { Allotment } from "allotment";
 import "allotment/dist/style.css";
 import { fs, shell } from "../../ipc";
-import {
-  PANEL_BG,
-  ERROR_FG,
-  HTML_PANEL_LOADING_FG,
-  HTML_PANEL_IFRAME_BG,
-} from "../../theme";
-import { PreviewFrame, overlayBarStyle } from "../docViewer/PreviewFrame";
+import { PANEL_BG, ERROR_FG, HTML_PANEL_LOADING_FG } from "../../theme";
+import { PreviewFrame, type PreviewFrameHandle } from "../docViewer/PreviewFrame";
+import { FloatingArea } from "../docViewer/FloatingArea";
+import { useZoomHud } from "../docViewer/useZoomHud";
 import { ModeSwitcher } from "../docViewer/ModeSwitcher";
 import { useCodeMirror } from "../editor/useCodeMirror";
 import { renderMarkdownDocument } from "./mdRenderAsync";
@@ -172,6 +170,9 @@ const MarkdownPanel: React.FC<MarkdownPanelProps> = ({
 
   // CM 容器（edit/split 的 allotment CM pane 内）
   const cmContainerRef = useRef<HTMLDivElement | null>(null);
+  // 预览框命令句柄（悬浮区重置缩放下行）+ 缩放 HUD 状态机（悬浮区显示）
+  const frameRef = useRef<PreviewFrameHandle | null>(null);
+  const zoomHud = useZoomHud();
   const [, bumpFrame] = useState(0);
 
   // ── 磁盘读取（cancelled 竞态；docDir 同步推出）──
@@ -298,6 +299,12 @@ const MarkdownPanel: React.FC<MarkdownPanelProps> = ({
     }
   };
 
+  /** 悬浮区重置链：下行复位 + 立即隐藏（iframe 归 1 回声由 report 等值忽略） */
+  const handleHudReset = () => {
+    frameRef.current?.resetZoom();
+    zoomHud.hide();
+  };
+
   /** 分栏拖拽结束：比例持久化（拖拽过程不落盘） */
   const handleDragEnd = useCallback(
     (sizes: number[]) => {
@@ -357,13 +364,14 @@ const MarkdownPanel: React.FC<MarkdownPanelProps> = ({
             <div style={previewAreaStyle}>
               {previewHtml !== null ? (
                 <PreviewFrame
+                  ref={frameRef}
                   html={previewHtml}
                   title={`Markdown 预览: ${params.filePath}`}
                   segments={[{ kind: "linkRouter" }, { kind: "scrollReport" }]}
                   keepZoom
                   keepScrollRatio
-                  iframeBg={HTML_PANEL_IFRAME_BG}
-                  dataE2ePrefix="markdown"
+                  onZoomChange={zoomHud.report}
+                  onZoomReset={zoomHud.hide}
                   onNav={handleNav}
                 />
               ) : (
@@ -377,7 +385,20 @@ const MarkdownPanel: React.FC<MarkdownPanelProps> = ({
           </Allotment.Pane>
         )}
       </Allotment>
-      <div style={overlayBarStyle}>{switcher}</div>
+      {/* 悬浮区：切换条上 / 缩放 HUD 下恒列排（面板根，不受 allotment pane 裁剪） */}
+      <FloatingArea
+        switcher={switcher}
+        hud={
+          mode !== "edit"
+            ? {
+                zoom: zoomHud.hud.zoom,
+                visible: zoomHud.hud.visible,
+                onReset: handleHudReset,
+              }
+            : null
+        }
+        dataE2ePrefix="markdown"
+      />
     </div>
   );
 };

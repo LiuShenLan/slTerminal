@@ -2,7 +2,8 @@
 //
 // 形态（viewMode，随 params 持久化，默认 render）：
 //   - render：PreviewFrame 渲染（htmlviewer 传统行为——iframe srcDoc + 缩放/
-//     键转发/HUD/片段拦截，注入与总线在 docViewer 共享层）
+//     键转发/片段拦截，注入与总线在 docViewer 共享层；HUD 与切换条在面板根
+//     FloatingArea，2026-09-06 悬浮区收敛）
 //   - edit：CodeMirror 6 源码编辑（lang-html；editor context 注册 Ctrl+S，
 //     保存链路复用 useCodeMirror.handleSave）
 //
@@ -23,7 +24,9 @@ import {
   HTML_PANEL_LOADING_FG,
   HTML_PANEL_IFRAME_BG,
 } from "../../theme";
-import { PreviewFrame, overlayBarStyle } from "../docViewer/PreviewFrame";
+import { PreviewFrame, type PreviewFrameHandle } from "../docViewer/PreviewFrame";
+import { FloatingArea } from "../docViewer/FloatingArea";
+import { useZoomHud } from "../docViewer/useZoomHud";
 import { ModeSwitcher } from "../docViewer/ModeSwitcher";
 import { useCodeMirror } from "../editor/useCodeMirror";
 import { persistPanelParams } from "../../workspace/persistPanelParams";
@@ -99,6 +102,15 @@ const HtmlPanel: React.FC<HtmlPanelProps> = ({ api, containerApi, params }) => {
     setMode(normalizeViewMode(params.viewMode));
   }, [params.viewMode]);
 
+  // ── 预览框命令句柄（悬浮区重置缩放下行）+ 缩放 HUD 状态机（悬浮区显示）──
+  const frameRef = useRef<PreviewFrameHandle | null>(null);
+  const zoomHud = useZoomHud();
+  /** 悬浮区重置链：下行复位 + 立即隐藏（iframe 归 1 回声由 report 等值忽略） */
+  const handleHudReset = () => {
+    frameRef.current?.resetZoom();
+    zoomHud.hide();
+  };
+
   // ── 编辑态 CM 容器 ──
   const editContainerRef = useRef<HTMLDivElement | null>(null);
   // 容器 ref 桥接（DiffPanel 先例，panels/CLAUDE.md）：edit 容器首次挂载的
@@ -165,7 +177,7 @@ const HtmlPanel: React.FC<HtmlPanelProps> = ({ api, containerApi, params }) => {
     }
   };
 
-  /** 悬浮切换条（两形态共用；render 态进 PreviewFrame overlay 槽，edit 态面板根定位） */
+  /** 形态切换条（两形态共用；恒经面板根悬浮区 FloatingArea 承载） */
   const switcher = (
     <ModeSwitcher
       modes={MODES}
@@ -197,22 +209,33 @@ const HtmlPanel: React.FC<HtmlPanelProps> = ({ api, containerApi, params }) => {
     return (
       <div style={rootStyle}>
         <PreviewFrame
+          ref={frameRef}
           html={doc}
           title={`HTML 预览: ${params.filePath}`}
           segments={[{ kind: "fragmentNav" }]}
           iframeBg={HTML_PANEL_IFRAME_BG}
+          onZoomChange={zoomHud.report}
+          onZoomReset={zoomHud.hide}
+        />
+        {/* 悬浮区：切换条上 / 缩放 HUD 下（与 edit 形态同结构，坐标协调单点） */}
+        <FloatingArea
+          switcher={switcher}
+          hud={{
+            zoom: zoomHud.hud.zoom,
+            visible: zoomHud.hud.visible,
+            onReset: handleHudReset,
+          }}
           dataE2ePrefix="html"
-          overlay={switcher}
         />
       </div>
     );
   }
 
-  // edit 形态：CM 全宽 + 面板根悬浮切换条（无 PreviewFrame，同坐标渲染）
+  // edit 形态：CM 全宽 + 悬浮区仅切换条（无 PreviewFrame 无缩放源，hud=null）
   return (
     <div style={rootStyle}>
       <div ref={editContainerRef} style={editAreaStyle} />
-      <div style={overlayBarStyle}>{switcher}</div>
+      <FloatingArea switcher={switcher} dataE2ePrefix="html" />
     </div>
   );
 };

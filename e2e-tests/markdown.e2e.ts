@@ -76,15 +76,14 @@ async function waitPreviewContains(fileName: string, text: string): Promise<void
   );
 }
 
-/** 读本面板 HUD 文本（PreviewFrame wrapper 内 iframe 兄弟节点） */
-async function readPanelHud(fileName: string): Promise<string | null> {
+/**
+ * 读 HUD 文本。悬浮区收敛后 HUD 在面板根 FloatingArea（iframe 的祖先更上层，
+ * 不在 frame.parentElement 内）——全局查询；残留面板 HUD 恒隐藏（visible 才渲染）
+ * 不在 DOM，缩放用例中全局唯一激活无歧义（html.e2e 同风格）。
+ */
+async function readPanelHud(_fileName: string): Promise<string | null> {
   return browser.execute(
-    (q: string) => {
-      const frame = eval(q) as HTMLIFrameElement | null;
-      if (!frame || !frame.parentElement) return null;
-      return frame.parentElement.querySelector('[data-e2e="markdown-zoom-hud"]')?.textContent ?? null;
-    },
-    frameQuery(fileName),
+    () => document.querySelector('[data-e2e="markdown-zoom-hud"]')?.textContent ?? null,
   );
 }
 

@@ -1,8 +1,9 @@
 // ModeSwitcher.tsx — 形态切换条（docViewer 共享悬浮 UI）
 //
 // 文档面板（htmlviewer 二态 / markdownviewer 三态）右上角常驻半透明切换条：
-// 受控组件（value/onChange），单选高亮当前查看形态。定位由宿主负责
-// （PreviewFrame overlay 槽 / 面板根），本组件不持有绝对定位。
+// 受控组件（value/onChange），单选高亮当前查看形态。定位由宿主负责——恒经
+// 面板根悬浮区 FloatingArea 承载（切换条上 / 缩放 HUD 下列排），本组件不持有
+// 绝对定位（2026-09-06 收敛，docViewer/CLAUDE.md）。
 //
 // 配色全走 theme facade token（硬约束 #6）：SECONDARY_BG 半透明底 +
 // SEPARATOR_BG 描边；激活项 ACTIVE_SELECTION_BG 底 + ACCENT_FG 文字。
