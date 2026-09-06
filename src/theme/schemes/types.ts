@@ -202,6 +202,24 @@ export interface EditorScheme {
       /** 标点 */ punctuation: string;
       /** 注释 */ comment: string;
     };
+    /** md 预览文档排版结构色——CM 无对应槽位的文档结构色（mdPreviewStyle 生成 CSS 引用；
+     *  正文/语法/底色直引本段 syntax/plainText/background——同段同源，防手抄双轨） */
+    preview: {
+      /** 标题文字（h1-h6 + 表格表头） */ heading: string;
+      /** 超链接文字 */ link: string;
+      /** 引用块文字 */ quoteText: string;
+      /** 引用块左侧强调竖线（focusBorder 家族半透明） */ quoteBorder: string;
+      /** 代码文字（行内码 + 代码块） */ codeText: string;
+      /** 行内码底 */ inlineCodeBg: string;
+      /** 代码块底 */ codeBlockBg: string;
+      /** 表头底 */ tableHeaderBg: string;
+      /** 表格隔行斑马底 */ zebraBg: string;
+      /** 低强调边框/分割线（标题下边线/hr/pre 边框） */ borderLow: string;
+      /** 表格单元格边框 */ tableBorder: string;
+      /** 滚动条滑块（与壳滚动条同语义：hover 变亮） */ scrollbarThumb: string;
+      /** 滚动条滑块 hover */ scrollbarThumbHover: string;
+      /** 删除文本（hljs deletion） */ deletion: string;
+    };
     /** 正文前景色——editorColorOverrides .cm-content 规则 */
     plainText: string;
     /** 行号前景色——editorColorOverrides gutter 规则 */

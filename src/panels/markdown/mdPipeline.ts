@@ -32,7 +32,7 @@ import sql from "highlight.js/lib/languages/sql";
 import yaml from "highlight.js/lib/languages/yaml";
 import diff from "highlight.js/lib/languages/diff";
 import markdownLang from "highlight.js/lib/languages/markdown";
-import { MD_PREVIEW_CSS, MD_HLJS_CSS } from "./mdPreviewStyle";
+import { buildMdPreviewStyleCss } from "./mdPreviewStyle";
 import { KATEX_INLINE_CSS } from "./generated/katexInlineCss";
 import { mimeForPath, isLocalRef, absolutizeRef } from "./assets";
 
@@ -233,11 +233,11 @@ export function renderMarkdownPlan(markdown: string, docDir: string | null): MdR
   return { bodyHtml, images, mermaid: mermaidCollector };
 }
 
-/** 装配完整预览文档（head：暗色排版 + hljs 主题 + KaTeX 内联字体） */
+/** 装配完整预览文档（head：暗色排版 + hljs 主题 + KaTeX 内联字体；排版 CSS 每次渲染现拼取 active 方案） */
 export function buildPreviewDocument(bodyHtml: string): string {
   return (
     `<!doctype html><html><head><meta charset="utf-8">` +
-    `<style>${MD_PREVIEW_CSS}${MD_HLJS_CSS}${KATEX_INLINE_CSS}</style>` +
+    `<style>${buildMdPreviewStyleCss()}${KATEX_INLINE_CSS}</style>` +
     `</head><body>${bodyHtml}</body></html>`
   );
 }

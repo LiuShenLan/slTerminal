@@ -11,6 +11,9 @@ import {
   buildPreviewDocument,
   _getParserConfig,
 } from "../panels/markdown/mdPipeline";
+import { linear } from "../theme/schemes/linear";
+import { schemeRegistry } from "../theme/schemeRegistry";
+import type { ColorScheme } from "../theme/schemes/types";
 
 describe("markdown 渲染管线", () => {
   it("解析器配置：html 透传 + linkify（信任模型锚点）", () => {
@@ -130,15 +133,53 @@ describe("markdown 渲染管线", () => {
     const doc = buildPreviewDocument("<h1>t</h1>");
     expect(doc.startsWith("<!doctype html>")).toBe(true);
     expect(doc).toContain("<style>");
-    // 暗色排版（body 色值锚点）
-    expect(doc).toContain("#b3aea6");
-    // hljs 主题
+    // 排版 CSS 同源引用 active 方案 editor.overrides（配色单点——防手抄双轨）：
+    // 正文色 = plainText、body 深底 = background、结构色 = preview 组
+    const { overrides } = linear.editor;
+    expect(doc).toContain(`color: ${overrides.plainText}`);
+    expect(doc).toContain(`background: ${overrides.background}`);
+    expect(doc).toContain(`color: ${overrides.preview.heading}`);
+    expect(doc).toContain(`color: ${overrides.preview.link}`);
+    // hljs 主题同源：语法色 = syntax 9 键（keyword 锚点）
     expect(doc).toContain(".hljs-keyword");
+    expect(doc).toContain(`color: ${overrides.syntax.keyword}`);
     // KaTeX 内联字体（data:font/woff2——ADR-0018 产物）
     expect(doc).toContain("data:font/woff2;base64,");
     expect(doc).toContain("KaTeX_Main");
     expect(doc).toContain("<h1>t</h1>");
     // 无相对 url(fonts 残留（未内联的字体引用）
     expect(doc).not.toContain("url(fonts/");
+  });
+
+  it("预览 CSS 配色跟随 active 方案（同源单点——切换临时方案 CSS 值即变）", () => {
+    // 临时方案：linear 基础上改 editor.overrides 正文/结构/语法各一
+    const testScheme: ColorScheme = {
+      ...linear,
+      id: "md-preview-src-test",
+      label: "Md Preview Src Test",
+      editor: {
+        ...linear.editor,
+        overrides: {
+          ...linear.editor.overrides,
+          plainText: "#112233",
+          preview: { ...linear.editor.overrides.preview, heading: "#445566" },
+          syntax: { ...linear.editor.overrides.syntax, keyword: "#778899" },
+        },
+      },
+    };
+    schemeRegistry.register(testScheme);
+    schemeRegistry.setActive("md-preview-src-test");
+    try {
+      const doc = buildPreviewDocument("<h1>t</h1>");
+      expect(doc).toContain("color: #112233");
+      expect(doc).toContain("color: #445566");
+      expect(doc).toContain("color: #778899");
+      // 未改动的键仍随临时方案（同 linear 值）——linear 原值不再出现于被改槽位
+      expect(doc).not.toContain(`color: ${linear.editor.overrides.plainText}`);
+    } finally {
+      // 还原：清空注册表 + active 复位 linear（theme-overrides 先例）
+      schemeRegistry._reset();
+      schemeRegistry.register(linear);
+    }
   });
 });

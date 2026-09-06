@@ -172,6 +172,24 @@ export const linear: ColorScheme = {
         punctuation: "#7d7871", // 标点
         comment: "#6b675f",   // 注释
       },
+      // md 预览文档排版结构色（mdPreviewStyle 生成 CSS 引用——值 = 收编前字面量原样，
+      // 与 editor 段同源：正文/语法/底色引 syntax/plainText/background，杜绝手抄双轨）
+      preview: {
+        heading: "#ece9e4",                              // 标题文字（h1-h6 + 表头）
+        link: "#8fb4f5",                                 // 超链接文字
+        quoteText: "#8a857d",                            // 引用块文字
+        quoteBorder: "rgba(110,159,242,0.55)",           // 引用块左侧强调竖线
+        codeText: "#cfcac1",                             // 代码文字（行内码 + 代码块）
+        inlineCodeBg: "rgba(255,255,255,0.06)",          // 行内码底
+        codeBlockBg: "rgba(255,255,255,0.045)",          // 代码块底
+        tableHeaderBg: "rgba(255,255,255,0.05)",         // 表头底
+        zebraBg: "rgba(255,255,255,0.02)",               // 表格隔行斑马底
+        borderLow: "rgba(255,255,255,0.055)",            // 低强调边框/分割线
+        tableBorder: "rgba(255,255,255,0.1)",            // 表格单元格边框
+        scrollbarThumb: "rgba(255,255,255,0.10)",        // 滚动条滑块
+        scrollbarThumbHover: "rgba(255,255,255,0.20)",   // 滚动条滑块 hover
+        deletion: "#d9706b",                             // 删除文本（hljs deletion）
+      },
       plainText: "#b3aea6", // 正文前景色
       lineNumber: "#6b675f", // 行号前景色
       lineNumberActive: "#b3aea6", // 活跃行行号前景色
