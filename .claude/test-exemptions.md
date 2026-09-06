@@ -31,6 +31,7 @@
 | tick 失败静默 E2E 豁免（E2E-03 用例 G） | tick 失败需后端扫描故障注入通道，E2E 沙箱内无可控注入手段 | 调度器 L2 用例（`background-tasks-scheduler.test.ts` 失败处理：tick 失败快照不变/manual 失败置 error）+ 人工观察 | E2E-03 |
 | ~~background-tasks.e2e.ts 用例 F 真实 tick 时序豁免（E2E-03）~~ **已修复（2026-09-02 R2a 翻案）** | 根因实证（D1）：E 用例 finally 删除会话 601 后，E 结束→F 开始仅 ~200ms（< E 遗留 scheduler 的 2s tick），删除后重扫未落地，pill 持陈旧值 5（真实 4）→ F 基线取到错误 n=5 → 启用后扫描 = 4 fixture + 602 = 5，断言 n+1=6 永不可达 → 20s 超时。修复：F 取基线前轮询 pill 直至同值持续 ≥3s（覆盖一个 tick 周期，间隔约 1s，上限 6s），以收敛值作基线（n=4），断言目标回归 n+1=5 | 修复后 F 全程真实链路断言（收敛等待 + 落盘 10s / 计数 20s / 勾选态 8s 窗口远超实际 tick 周期）；2026-09-02 单跑与全量 e2e 各 1 次 F 连续通过 | E2E-03 |
 | `ExplorerPanel.handleRename` 同名兜底短路分支（oldPath === newPath） | UI 不可达——同名已在 `FileTree.confirmRename` 拦截（比较 basename），测试无法直传同名进入 onRename；属防御层死代码 | confirmRename 同名短路 L2 用例（explorer-rename-state 3 例）+ 后端 src==dst 幂等 L1 用例（`fs_rename_src_equals_dst_*` 2 例）双边锁死同层语义 | 修复「重命名取消误删文件」登记 |
+| 应用图标视觉质量（1024 母版构图/16px 降采样可辨性/icon.ico 嵌入正确性） | 纯资源替换无可自动化代码逻辑；视觉呈现依赖人眼判定 | 生成脚本 `gen-app-icon.ps1` 后置像素断言（脚本内几何可复算）+ 构建产物人工检查清单（exe 图标属性/任务栏/Alt-Tab 目测，路径 `src-tauri\assets\app-icon\app-icon.png` 与 32px 抽样） | 2026-09-06 图标替换登记 |
 
 > 原豁免表中 `FileWatcher::start`/`notify_watch` 与 `claude_history` 命令包装两项已按 D6 从豁免重分类为补测，不再列入豁免表。  
 > **SEC-17 豁免已撤销（TQ-COV-05 翻案）**：`tracing::warn!(target: "audit")` 已由 `tracing-test` 断言锁死，豁免行删除。

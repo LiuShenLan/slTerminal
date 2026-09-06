@@ -5,6 +5,10 @@ fn main() {
     // → 启动即 0xc0000139（STATUS_ENTRYPOINT_NOT_FOUND）；主应用由 tauri 生成
     // manifest 激活 v6 故正常。rustc-link-arg-tests 仅作用于测试目标，
     // 不影响 bin/lib 构建。
+    // 图标变更触发重嵌入：icons/ 由 tauri icon 全量覆盖（含 icon.ico，tauri-build
+    // 经 tauri-winres 嵌入 exe 资源）。cargo 默认不追踪 icons/ 变化，无此声明时
+    // 改图标后增量构建不重跑本脚本 → exe 残留旧图标（2026-09-06 实证）。
+    println!("cargo:rerun-if-changed=icons");
     println!("cargo:rustc-link-arg-tests=/MANIFEST:EMBED");
     println!(
         "cargo:rustc-link-arg-tests=/MANIFESTINPUT:{}",
