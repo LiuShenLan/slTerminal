@@ -20,6 +20,7 @@ import {
 } from "../editor/useCodeMirror";
 import { useFontSize } from "../../stores";
 import { useFontSizeWheel } from "../../lib/useFontSizeWheel";
+import { repaintGuard } from "../editor/repaintGuard";
 import { IconAlertTriangle } from "../../lib";
 import { FONT_SIZE_MIN, FONT_SIZE_MAX } from "../../stores/fontSize";
 import { usePanelFocus } from "../../features/shortcuts";
@@ -208,6 +209,8 @@ const GitShowPanel: React.FC<GitShowPanelProps> = ({ params }) => {
           // 进而 CM6 键绑定（Ctrl+F/G）和 usePanelFocus（Alt+Z）全部失效）
           EditorState.readOnly.of(true),
           getLanguageExtension(params.filePath),
+          // WebView2 陈旧光栅规避（见 panels/editor/repaintGuard.ts）
+          repaintGuard(),
         ],
       }),
       parent: container,

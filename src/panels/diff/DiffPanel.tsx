@@ -46,6 +46,7 @@ import { usePanelFocus } from "../../features/shortcuts";
 import { setActiveEditor, clearActiveEditor, type EditorActions } from "../editor/activeEditor";
 import { useFontSize } from "../../stores";
 import { useFontSizeWheel } from "../../lib/useFontSizeWheel";
+import { repaintGuard } from "../editor/repaintGuard";
 // FE-10: 错误消息统一经 getErrorMessage（契约：src/ipc/appError.ts，src/lib re-export）
 import { confirmDialog, toast, getErrorMessage } from "../../lib";
 import { IconAlertTriangle } from "../../lib/icons";
@@ -557,6 +558,8 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ params }) => {
           getLanguageExtension(filePath),
           headDiffGutter(),
           placeholderField,
+          // WebView2 陈旧光栅规避（见 panels/editor/repaintGuard.ts）
+          repaintGuard(),
         ],
       }),
       parent: container,
@@ -608,6 +611,8 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ params }) => {
           getLanguageExtension(filePath),
           diffGutter(),
           placeholderField,
+          // WebView2 陈旧光栅规避（见 panels/editor/repaintGuard.ts）
+          repaintGuard(),
         ],
       }),
       parent: container,

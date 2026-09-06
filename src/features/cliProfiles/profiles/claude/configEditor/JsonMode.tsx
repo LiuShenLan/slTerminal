@@ -42,6 +42,7 @@ import {
   editorColorOverrides,
   editorSyntaxHighlight,
 } from "../../../../../theme";
+import { repaintGuard } from "../../../../../panels/editor/repaintGuard";
 
 /** JsonMode props：value/onChange/onValidationChange（外部驱动 + 校验上报） */
 export interface JsonModeProps {
@@ -165,6 +166,8 @@ const JsonMode: React.FC<JsonModeProps> = ({ value, onChange, onValidationChange
           editorTheme,
           editorColorOverrides(),
           EditorView.updateListener.of(handleDocChanged),
+          // WebView2 陈旧光栅规避（见 panels/editor/repaintGuard.ts）
+          repaintGuard(),
         ],
       }),
       parent: container,

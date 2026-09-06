@@ -49,6 +49,7 @@ vi.mock("../panels/editor/useCodeMirror", () => ({
 }));
 
 import { HtmlPanel } from "../panels/html";
+import { useFontSize } from "../stores/fontSize";
 
 function renderHtmlPanel(filePath: string | undefined) {
   return render(
@@ -1130,6 +1131,33 @@ describe("HtmlPanel viewMode 形态切换", () => {
     // 磁盘内容已就绪 → initialDoc 快照回填（免二次读盘）
     expect(call.initialDoc).toContain("<h1>Disk</h1>");
     expect(call.gitGutterEnabled).toBe(false);
+  });
+
+  it("edit 态编辑字号接线：store→useCodeMirror props 闭环（Ctrl+滚轮缩放语义，EditorPanel 同款）", async () => {
+    useFontSize.setState({ editorFontSize: 14 });
+    const { getByTitle, container } = renderHtmlPanelWithMode(undefined);
+    await waitForLoaded(getByTitle, "C:/test/index.html");
+    mocks.mockUseCodeMirror.mockClear();
+    await act(async () => {
+      fireEvent.click(container.querySelector('[data-e2e="html-mode-edit"]')!);
+    });
+    // 接线：hook 收到 store 初值字号与 setter（wheel 被 hook 无条件挂载，
+    // 缺 props 会吞事件无效果——此断言防接线被删）
+    const cmCalls = mocks.mockUseCodeMirror.mock.calls;
+    const call = cmCalls[cmCalls.length - 1]![0] as {
+      fontSize?: number;
+      onFontSizeChange?: (size: number) => void;
+    };
+    expect(call.fontSize).toBe(14);
+    expect(typeof call.onFontSizeChange).toBe("function");
+    // 闭环：hook 侧滚轮回调（onFontSizeChange(20)）→ store 更新 → 重渲染回传
+    await act(async () => {
+      call.onFontSizeChange?.(20);
+    });
+    expect(useFontSize.getState().editorFontSize).toBe(20);
+    const after = mocks.mockUseCodeMirror.mock.calls;
+    const last = after[after.length - 1]![0] as { fontSize?: number };
+    expect(last.fontSize).toBe(20);
   });
 
   it("形态切换持久化：api.updateParameters 收到 viewMode patch", async () => {

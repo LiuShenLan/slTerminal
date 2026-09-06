@@ -95,6 +95,8 @@ vi.mock("@codemirror/view", () => {
   };
   return {
     EditorView: MockEditorView,
+    // repaintGuard 扩展（panels/editor/repaintGuard）消费 ViewPlugin——桩防 undefined
+    ViewPlugin: { fromClass: vi.fn(() => ({})) },
     keymap: { of: vi.fn((x: unknown) => x) },
     // FE-18：大文件警告 widget 装饰相关导出（Decoration.widget 仅在 StateField.create 中调用，
     // mock EditorState 不驱动 field，桩仅防 undefined；WidgetType 为空基类供组件 extends）

@@ -33,6 +33,7 @@ import { normalizePath } from "../../lib/path";
 import { confirmDialog, toast, getErrorMessage } from "../../lib";
 import { fs } from "../../ipc";
 import { diffGutter, updateDiffGutter, clearDiffGutter } from "./gitGutter";
+import { repaintGuard } from "./repaintGuard";
 import { onFsEvent } from "../../ipc/notify";
 import { gitDiff } from "../../ipc/git";
 import { usePanelFocus } from "../../features/shortcuts";
@@ -359,6 +360,8 @@ export function useCodeMirror({
             langCompartment.current.of(getLanguageExtension(filePath)),
             // gitGutterEnabled=false（docViewer 预览面板）不加载 diff gutter 扩展
             ...(gitGutterEnabledRef.current ? [diffGutter()] : []),
+            // WebView2 陈旧光栅规避（见 repaintGuard.ts——引擎缺陷，撤销须复核）
+            repaintGuard(),
           ],
         }),
         parent: container,

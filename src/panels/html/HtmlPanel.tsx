@@ -29,6 +29,7 @@ import { FloatingArea } from "../docViewer/FloatingArea";
 import { useZoomHud } from "../docViewer/useZoomHud";
 import { ModeSwitcher } from "../docViewer/ModeSwitcher";
 import { useCodeMirror } from "../editor/useCodeMirror";
+import { useFontSize } from "../../stores";
 import { persistPanelParams } from "../../workspace/persistPanelParams";
 
 /** HtmlPanel 接收的面板参数（viewMode 随布局 params 持久化） */
@@ -159,6 +160,9 @@ const HtmlPanel: React.FC<HtmlPanelProps> = ({ api, containerApi, params }) => {
   // 快照回填：docRef 非空（磁盘已读/草稿）→ initialDoc 免二次读盘；直接恢复
   // edit 形态的布局恢复场景 doc 为空 → useCodeMirror 自行读盘（语言扩展依赖
   // filePath 的 .html 判定，必须保留 filePath）
+  // 字号 = 共享 editorFontSize store（Ctrl+滚轮缩放接线——EditorPanel 同款范本）
+  const editorFontSize = useFontSize((s) => s.editorFontSize);
+  const setEditorFontSize = useFontSize((s) => s.setEditorFontSize);
   useCodeMirror({
     container: mode === "edit" ? editContainerRef.current : null,
     filePath: params.filePath,
@@ -167,6 +171,8 @@ const HtmlPanel: React.FC<HtmlPanelProps> = ({ api, containerApi, params }) => {
     onDocContent: (text) => setDoc(text),
     // 预览面板免 git gutter / git 读取（S3 useCodeMirror 扩展）
     gitGutterEnabled: false,
+    fontSize: editorFontSize,
+    onFontSizeChange: setEditorFontSize,
   });
 
   /** 形态切换：更新本地态 + params 持久化（api 缺省 = 单测环境，跳过落盘） */

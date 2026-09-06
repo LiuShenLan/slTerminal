@@ -66,6 +66,8 @@ vi.mock("@codemirror/view", () => {
   };
   return {
     EditorView: MockEditorView,
+    // repaintGuard 扩展（panels/editor/repaintGuard）消费 ViewPlugin——桩防 undefined
+    ViewPlugin: { fromClass: vi.fn(() => ({})) },
     hoverTooltip: mockHoverTooltip,
   };
 });

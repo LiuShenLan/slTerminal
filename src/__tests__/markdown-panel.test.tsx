@@ -88,6 +88,7 @@ vi.mock("../workspace/openFile", () => ({
 }));
 
 import { MarkdownPanel } from "../panels/markdown";
+import { useFontSize } from "../stores/fontSize";
 
 function renderPanel(opts: {
   viewMode?: string;
@@ -165,6 +166,32 @@ describe("MarkdownPanel", () => {
 
   afterEach(() => {
     cleanup();
+  });
+
+  it("编辑字号接线：store→useCodeMirror props 闭环（Ctrl+滚轮缩放语义，EditorPanel 同款）", async () => {
+    useFontSize.setState({ editorFontSize: 14 });
+    mocks.mockReadFile.mockResolvedValue("# 标题\n\n正文");
+    const { container } = renderPanel({});
+    await waitForCmMounted(container);
+
+    // 接线：hook 收到 store 初值字号与 setter（wheel 事件被 hook 无条件挂载，
+    // 缺 props 会吞事件无效果——此断言防接线被删）
+    const cmCalls = mocks.mockUseCodeMirror.mock.calls;
+    const call = cmCalls[cmCalls.length - 1]![0] as {
+      fontSize?: number;
+      onFontSizeChange?: (size: number) => void;
+    };
+    expect(call.fontSize).toBe(14);
+    expect(typeof call.onFontSizeChange).toBe("function");
+
+    // 闭环：hook 侧滚轮回调（onFontSizeChange(20)）→ store 更新 → 重渲染回传
+    await act(async () => {
+      call.onFontSizeChange?.(20);
+    });
+    expect(useFontSize.getState().editorFontSize).toBe(20);
+    const after = mocks.mockUseCodeMirror.mock.calls;
+    const last = after[after.length - 1]![0] as { fontSize?: number };
+    expect(last.fontSize).toBe(20);
   });
 
   it("默认形态 edit：切换条三态 + 无预览（CM 桥挂载）", async () => {

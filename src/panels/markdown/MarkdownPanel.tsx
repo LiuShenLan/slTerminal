@@ -33,6 +33,7 @@ import { FloatingArea } from "../docViewer/FloatingArea";
 import { useZoomHud } from "../docViewer/useZoomHud";
 import { ModeSwitcher } from "../docViewer/ModeSwitcher";
 import { useCodeMirror } from "../editor/useCodeMirror";
+import { useFontSize } from "../../stores";
 import { renderMarkdownDocument } from "./mdRenderAsync";
 import { classifyLink } from "./linkPolicy";
 import { persistPanelParams } from "../../workspace/persistPanelParams";
@@ -267,6 +268,10 @@ const MarkdownPanel: React.FC<MarkdownPanelProps> = ({
   }, [loadState.kind, mode]);
 
   // ── 编辑桥（edit/split 挂载；preview 卸载——快照在 doc state，回填免读盘）──
+  // 字号 = 共享 editorFontSize store（Ctrl+滚轮缩放接线——wheel 由 hook 无条件
+  // 挂载，缺 props 会吞事件无效果；EditorPanel 同款接线范本）
+  const editorFontSize = useFontSize((s) => s.editorFontSize);
+  const setEditorFontSize = useFontSize((s) => s.setEditorFontSize);
   useCodeMirror({
     container: mode !== "preview" ? cmContainerRef.current : null,
     filePath: params.filePath,
@@ -277,6 +282,8 @@ const MarkdownPanel: React.FC<MarkdownPanelProps> = ({
       scheduleRender();
     },
     gitGutterEnabled: false,
+    fontSize: editorFontSize,
+    onFontSizeChange: setEditorFontSize,
   });
 
   // ── 链接点击（slterm_nav 上行 → 分类分派）──
