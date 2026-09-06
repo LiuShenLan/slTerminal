@@ -17,12 +17,17 @@ import { render, cleanup, waitFor, fireEvent, act } from "@testing-library/react
 const mocks = vi.hoisted(() => {
   const mockReadFile = vi.fn();
   const mockExportContextBindings = vi.fn<() => { keystroke: string }[]>(() => []);
+  // useCodeMirror mock：捕获调用参数（面板层逻辑真实，CM 层隔离——edit 击键
+  // 经捕获的 onDocContent 手动驱动，见「viewMode 形态切换」describe）
+  const mockUseCodeMirror = vi.fn();
   return {
     mockReadFile,
     mockExportContextBindings,
+    mockUseCodeMirror,
     resetAll() {
       mockReadFile.mockReset();
       mockExportContextBindings.mockReset();
+      mockUseCodeMirror.mockReset();
       mockExportContextBindings.mockReturnValue([]);
     },
   };
@@ -36,6 +41,11 @@ vi.mock("../features/shortcuts/ShortcutRegistry", () => ({
   getShortcutRegistry: () => ({
     exportContextBindings: mocks.mockExportContextBindings,
   }),
+}));
+
+// S4: HtmlPanel 编辑态经 useCodeMirror 桥接——mock 隔离 CM 实现
+vi.mock("../panels/editor/useCodeMirror", () => ({
+  useCodeMirror: (opts: unknown) => mocks.mockUseCodeMirror(opts),
 }));
 
 import { HtmlPanel } from "../panels/html";
@@ -1037,5 +1047,155 @@ describe("HtmlPanel", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// S4: viewMode 形态切换（render ↔ edit）+ 草稿快照往返
+//
+// CM 实现经 mock 隔离；面板层逻辑真实：
+//   - useCodeMirror 调用参数（container 随形态 null/div、initialDoc 快照回填、
+//     gitGutterEnabled=false）
+//   - edit 击键经捕获的 onDocContent 手动驱动 → 断言 render 态 srcDoc 展示草稿
+// ═══════════════════════════════════════════════════════════════════
+
+function renderHtmlPanelWithMode(mode?: string) {
+  return render(
+    React.createElement(HtmlPanel, {
+      api: { updateParameters: vi.fn() } as never,
+      containerApi: {} as never,
+      params: {
+        panelId: "test-panel-1",
+        filePath: "C:/test/index.html",
+        viewMode: mode as never,
+      },
+    }),
+  );
+}
+
+describe("HtmlPanel viewMode 形态切换", () => {
+  beforeEach(() => {
+    mocks.resetAll();
+    mocks.mockReadFile.mockResolvedValue("<h1>Disk</h1>");
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("默认形态 render：渲染 iframe + 悬浮切换条（渲染/编辑 两钮）", async () => {
+    const { getByTitle, container } = renderHtmlPanelWithMode(undefined);
+    await waitForLoaded(getByTitle, "C:/test/index.html");
+    const switcher = container.querySelector('[data-e2e="html-mode-switcher"]');
+    expect(switcher).not.toBeNull();
+    // 两按钮文案 + 当前态高亮 render
+    expect(switcher!.textContent).toContain("渲染");
+    expect(switcher!.textContent).toContain("编辑");
+    const renderBtn = container.querySelector('[data-e2e="html-mode-render"]') as HTMLButtonElement;
+    expect(renderBtn.style.background).not.toBe("none");
+    // render 态 CM 不挂载（container=null）
+    expect(mocks.mockUseCodeMirror).toHaveBeenCalled();
+    const calls = mocks.mockUseCodeMirror.mock.calls;
+    const lastCall = calls[calls.length - 1]![0] as { container: unknown };
+    expect(lastCall.container).toBeNull();
+  });
+
+  it("非法 viewMode 回退 render（布局 JSON 旧值容错）", async () => {
+    const { getByTitle, container } = renderHtmlPanelWithMode("preview" as never);
+    await waitForLoaded(getByTitle, "C:/test/index.html");
+    expect(container.querySelector('[data-e2e="html-mode-render"]')).not.toBeNull();
+  });
+
+  it("点「编辑」→ edit 形态：CM 容器出现 + useCodeMirror 参数（filePath/initialDoc 快照/gitGutterEnabled=false）", async () => {
+    const { getByTitle, container } = renderHtmlPanelWithMode(undefined);
+    await waitForLoaded(getByTitle, "C:/test/index.html");
+    mocks.mockUseCodeMirror.mockClear();
+
+    await act(async () => {
+      fireEvent.click(container.querySelector('[data-e2e="html-mode-edit"]')!);
+    });
+
+    // edit 形态渲染 CM 容器 div（无 iframe）
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(mocks.mockUseCodeMirror).toHaveBeenCalled();
+    const cmCalls = mocks.mockUseCodeMirror.mock.calls;
+    const call = cmCalls[cmCalls.length - 1]![0] as {
+      filePath?: string;
+      initialDoc?: string;
+      gitGutterEnabled?: boolean;
+      container: unknown;
+    };
+    expect(call.container).not.toBeNull();
+    expect(call.filePath).toBe("C:/test/index.html");
+    // 磁盘内容已就绪 → initialDoc 快照回填（免二次读盘）
+    expect(call.initialDoc).toContain("<h1>Disk</h1>");
+    expect(call.gitGutterEnabled).toBe(false);
+  });
+
+  it("形态切换持久化：api.updateParameters 收到 viewMode patch", async () => {
+    const updateParameters = vi.fn();
+    const { getByTitle, container } = render(
+      React.createElement(HtmlPanel, {
+        api: { updateParameters } as never,
+        containerApi: { toJSON: () => ({}) } as never,
+        params: {
+          panelId: "tp",
+          filePath: "C:/test/index.html",
+          viewMode: "render" as never,
+        },
+      }),
+    );
+    await waitForLoaded(getByTitle, "C:/test/index.html");
+    await act(async () => {
+      fireEvent.click(container.querySelector('[data-e2e="html-mode-edit"]')!);
+    });
+    expect(updateParameters).toHaveBeenCalledWith(
+      expect.objectContaining({ viewMode: "edit" }),
+    );
+  });
+
+  it("edit 击键草稿 → 切回 render → srcDoc 展示草稿（非磁盘内容）", async () => {
+    const { getByTitle, container } = renderHtmlPanelWithMode(undefined);
+    await waitForLoaded(getByTitle, "C:/test/index.html");
+
+    // 切 edit 并捕获 useCodeMirror 的 onDocContent，模拟击键
+    await act(async () => {
+      fireEvent.click(container.querySelector('[data-e2e="html-mode-edit"]')!);
+    });
+    const cmCalls = mocks.mockUseCodeMirror.mock.calls;
+    const call = cmCalls[cmCalls.length - 1]![0] as {
+      onDocContent?: (text: string, source: string) => void;
+    };
+    expect(call.onDocContent).toBeDefined();
+    await act(async () => {
+      call.onDocContent!("<h1>Draft Edit</h1>", "edit");
+    });
+
+    // 切回 render → iframe srcDoc 为草稿内容
+    await act(async () => {
+      fireEvent.click(container.querySelector('[data-e2e="html-mode-render"]')!);
+    });
+    const iframe = await waitForLoaded(getByTitle, "C:/test/index.html");
+    expect(iframe.getAttribute("srcDoc")).toContain("<h1>Draft Edit</h1>");
+    // 读盘不重复（草稿快照回填路径）
+    expect(mocks.mockReadFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("viewMode=edit 布局恢复：直接 edit 形态（无 iframe），读盘一次后快照回填 CM", async () => {
+    const { container } = renderHtmlPanelWithMode("edit");
+    // edit div 仅 ready 后渲染——loading 期间无 iframe 也无 CM 容器
+    expect(container.querySelector("iframe")).toBeNull();
+    // 等桥接渲染完成：useCodeMirror 以非 null 容器调用且 initialDoc = 磁盘快照
+    await waitFor(() => {
+      const cmCalls = mocks.mockUseCodeMirror.mock.calls;
+    const call = cmCalls[cmCalls.length - 1]![0] as {
+        container: unknown;
+        initialDoc?: string;
+      };
+      expect(call.container).not.toBeNull();
+      expect(call.initialDoc).toContain("<h1>Disk</h1>");
+    }, { timeout: 3000 });
+    // 面板层读盘一次（快照回填，CM 不自读盘——无重复读）
+    expect(mocks.mockReadFile).toHaveBeenCalledTimes(1);
   });
 });

@@ -401,8 +401,10 @@ export function useCodeMirror({
       };
       cleanup();
     };
-    // initialDoc 值变化（docViewer 快照恢复语义）→ 重建缓冲
-  }, [container, filePath, initialDoc]);
+    // 重建由 container 变化驱动（docViewer 形态切换卸载/重挂同 hook 实例时 ref
+    // 初值即最新快照）；initialDoc 不入 deps——面板层读盘完成回填会导致值变化
+    // 触发无谓重建（闪烁+光标重置），快照只在 effect 执行瞬间消费（initialDocRef）
+  }, [container, filePath]);
 
   // D3: filePath 变化时重新配置语言扩展（Compartment.reconfigure 不丢失文档状态）
   useEffect(() => {

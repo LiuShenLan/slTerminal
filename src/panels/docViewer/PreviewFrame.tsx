@@ -76,8 +76,9 @@ const iframeStyle: React.CSSProperties = {
 /** 缩放 HUD 隐藏延迟（毫秒）：无缩放操作即消失（Chrome 缩放气泡语义） */
 const HUD_HIDE_MS = 3000;
 
-/** overlay 槽位（切换条等）——absolute 右上角，位于 HUD 上方 zIndex */
-const overlayStyle: React.CSSProperties = {
+/** overlay 槽位（切换条等）——absolute 右上角，位于 HUD 上方 zIndex。
+ *  导出供面板在无 PreviewFrame 形态（如 edit 态）以同坐标渲染悬浮切换条。 */
+export const overlayBarStyle: React.CSSProperties = {
   position: "absolute",
   top: 8,
   right: 8,
@@ -306,7 +307,7 @@ export const PreviewFrame: React.FC<PreviewFrameProps> = ({
   return (
     // 宿主 wrapper：overlay/HUD 透明层的定位锚（iframe 自身仍是渲染区唯一交互面）
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
-      {overlay !== undefined && <div style={overlayStyle}>{overlay}</div>}
+      {overlay !== undefined && <div style={overlayBarStyle}>{overlay}</div>}
       <iframe
         ref={iframeRef}
         sandbox={SANDBOX_FLAGS}
