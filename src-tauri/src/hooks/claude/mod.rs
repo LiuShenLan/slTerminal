@@ -114,6 +114,30 @@ impl CliHooksProvider for ClaudeHooksProvider {
         )
     }
 
+    /// 启动对账（9-6，MC-213）：意图信号（matcher 残留或 statusline 还原态）存在时
+    /// 补写缺失脚本——外部删除 `~/.slterminal/hooks` 后自愈，防 dangling matcher
+    /// 致 claude 每事件 MODULE_NOT_FOUND 刷错（补写日志在此层记录，bool 不外泄）
+    fn ensure_hooks_scripts(&self) -> Result<(), AppError> {
+        let script_dir = match hooks_dir() {
+            Some(d) => d,
+            None => return Ok(()), // home 缺失 → 无可对账路径（reinject 同口径跳过）
+        };
+        let settings_path = claude_settings_path();
+        let backup_path = inject::statusline_backup_path(home_dir());
+        let wrote = inject::ensure_scripts_impl(
+            settings_path.as_deref(),
+            backup_path.as_deref(),
+            &script_dir,
+        )?;
+        if wrote {
+            tracing::info!(
+                "启动对账：已补写缺失的 claude hook 脚本（{}）",
+                script_dir.display()
+            );
+        }
+        Ok(())
+    }
+
     fn config_read(
         &self,
         layer: &str,

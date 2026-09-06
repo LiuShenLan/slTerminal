@@ -1,7 +1,8 @@
 //! CLI hooks provider 注册表 —— trait + 以 cliId 为键的静态注册表
 //!
 //! 跨边界契约（PREAMBLE 契约段 4）：
-//! - `CliHooksProvider` trait 七方法，签名写死
+//! - `CliHooksProvider` trait 八方法——七方法签名写死 + `ensure_hooks_scripts`
+//!   带默认实现（9-6 启动对账钩子，既有实现零改动）
 //! - 注册表 = cliId 键静态映射；claude 为首个实现（行为零改动）
 //!
 //! 错误语义（MC-211）：
@@ -17,7 +18,7 @@ use crate::error::AppError;
 use super::claude::ClaudeHooksProvider;
 use super::AgentHookInjectionStatus;
 
-/// CLI hooks 能力 trait（七方法，跨边界契约签名写死）
+/// CLI hooks 能力 trait（八方法——七方法签名写死 + ensure_hooks_scripts 默认钩子）
 ///
 /// 实现均为同步阻塞（含 IO）——命令层经 `spawn_blocking` 串行化（硬约束 #3）。
 /// 仅 hooks 能力的 CLI 在此实现；无 hooks 能力的 CLI 不实现本 trait
@@ -35,6 +36,12 @@ pub trait CliHooksProvider: Send + Sync + std::fmt::Debug {
     /// 启动重注入 statusline：备份存在 + 当前配置等于备份原配置 → 重新注入桥接；
     /// 无备份 / 已是桥接 / 用户已改过 → no-op。
     fn reinject_statusline(&self) -> Result<(), AppError>;
+    /// 启动对账：意图信号存在时补写缺失的 hook 脚本（9-6——外部删除脚本目录后
+    /// 自愈，防 settings 残留 matcher 致 claude 刷 MODULE_NOT_FOUND）。
+    /// 默认 no-op：仅「脚本落盘型」provider（当前 claude）override。
+    fn ensure_hooks_scripts(&self) -> Result<(), AppError> {
+        Ok(())
+    }
     /// 读取指定层 hooks 配置子树（project/local 层经 project_root 路径沙箱校验）
     fn config_read(
         &self,

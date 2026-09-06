@@ -95,9 +95,10 @@ pub fn run() {
         .manage(AppState::new())
         .setup(|app| {
             hooks::start_signal_watcher(app.handle().clone());
-            // 启动自动重注入：上次关闭时已恢复 statusline 桥接（备份保留），
-            // 检测备份 + 当前为原配置 → 重新注入（失败仅 warn，不阻断启动）
-            hooks::reinject_statusline_on_startup();
+            // 启动对账（9-6）：意图信号存在时补写缺失 hook 脚本（外部删除自愈，
+            // 防 dangling matcher 致 claude 刷 MODULE_NOT_FOUND）→ 重注入 statusline
+            // 桥接（失败仅 warn，不阻断启动）
+            hooks::reconcile_hooks_on_startup();
             background_tasks::start_background_tasks(app.handle().clone()); // F12 后台定时任务骨架（含套餐余量 poller）
             Ok(())
         })

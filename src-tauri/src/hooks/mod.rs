@@ -202,10 +202,16 @@ pub async fn agent_hooks_restore_statusline(cli_id: String) -> Result<(), AppErr
     run_agent_hooks_restore_statusline(cli_id).await
 }
 
-/// 启动自动重注入：对注册表全部已注册 provider 调 reinject_statusline（失败仅 warn 不阻断启动）
-pub fn reinject_statusline_on_startup() {
+/// 启动对账（9-6 防复发）：先按意图信号补写缺失的 hook 脚本——外部删除
+/// `~/.slterminal/hooks` 后 settings 残留 matcher 会致 claude 每事件跑缺失脚本
+/// MODULE_NOT_FOUND 刷错（补写见 provider.ensure_hooks_scripts）——再重注入
+/// statusline 桥接（reinject 的脚本缺失守卫由前一步解除）。失败仅 warn 不阻断启动。
+pub fn reconcile_hooks_on_startup() {
     for (cli_id, entry) in provider::REGISTRY {
         let Some(p) = entry else { continue };
+        if let Err(e) = p.ensure_hooks_scripts() {
+            tracing::warn!("启动对账补写脚本失败（cliId {cli_id}）: {e}");
+        }
         if let Err(e) = p.reinject_statusline() {
             tracing::warn!("启动重注入 statusline 失败（cliId {cli_id}）: {e}");
         }
@@ -507,6 +513,28 @@ mod hooks_tests {
             settings.get("statusLine").is_none(),
             "无原配置时恢复后 statusLine 键应移除"
         );
+    }
+
+    #[test]
+    fn reconcile_hooks_on_startup_restores_deleted_scripts() {
+        // 9-6 编排防复发：注入 → 外部删除 hooks 目录（matcher 残留）→ 启动对账
+        // 补写两脚本 + reinject → 状态回到 Injected
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = HomeDirGuard::set(dir.path());
+        block_on(run_agent_hooks_inject("claude".into())).unwrap();
+        let hooks_dir = dir.path().join(".slterminal").join("hooks");
+        std::fs::remove_dir_all(&hooks_dir).unwrap(); // 模拟外部删除
+        reconcile_hooks_on_startup();
+        assert!(
+            hooks_dir.join("slterm-hook-reporter.js").is_file(),
+            "reporter 应被启动对账补写"
+        );
+        assert!(
+            hooks_dir.join("slterm-statusline.js").is_file(),
+            "桥接脚本应被启动对账补写"
+        );
+        let status = block_on(run_agent_hooks_injection_status("claude".into())).unwrap();
+        assert_eq!(status.status, AgentInjectionStatus::Injected);
     }
 
     #[test]

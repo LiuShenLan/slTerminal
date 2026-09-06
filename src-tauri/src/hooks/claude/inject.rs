@@ -9,6 +9,9 @@
 //!   原 statusLine 备份到 ~/.slterminal/statusline-backup.json
 //! - restore（客户端关闭清理）：statusLine 为桥接 → 还原备份，备份保留（供重开重注入）
 //! - reinject（启动自动重注入）：备份存在 + 当前等于备份原配置 → 重新注入桥接；用户已改过 → 尊重跳过
+//! - reconcile（启动对账，9-6 防复发）：意图信号（settings 含 slterm matcher，或备份在且
+//!   statusLine == 备份原值）存在时补写缺失的 reporter/桥接脚本（已存在不覆盖）——
+//!   外部删除 hooks 目录后自愈，防 dangling matcher 致 claude 刷 MODULE_NOT_FOUND
 //! - uninstall：statusLine 为桥接 → 还原备份（备份缺失 → 移除键），删备份
 
 use crate::error::AppError;
@@ -25,7 +28,9 @@ const HOOK_SCRIPT_TEMPLATE: &str = include_str!("slterm-hook-reporter.js");
 /// 内嵌 statusline 桥接脚本模板（编译期嵌入；与 reporter 同批注入，版本同号）
 const STATUSLINE_SCRIPT_TEMPLATE: &str = include_str!("slterm-statusline.js");
 
-/// statusline 桥接脚本文件名
+/// reporter 脚本文件名（9-6：reconcile/注入单点收敛，禁止硬编码重复）
+pub(crate) const REPORTER_SCRIPT_NAME: &str = "slterm-hook-reporter.js";
+
 /// statusline 桥接脚本文件名（B15：mod.rs 的 reinject 单点引用，禁止硬编码重复）
 pub(crate) const STATUSLINE_SCRIPT_NAME: &str = "slterm-statusline.js";
 
@@ -359,29 +364,22 @@ pub(crate) fn inject_impl(
     script_dir: &std::path::Path,
 ) -> Result<AgentHookInjectionStatus, AppError> {
     // 1. 确保脚本目录存在并原子写 reporter + statusline 桥接脚本
+    //    （覆盖写——升级场景须刷新磁盘脚本到新模板版本；reconcile 才是「缺失才补」）
     std::fs::create_dir_all(script_dir)?;
-
-    let script_path = script_dir.join("slterm-hook-reporter.js");
-    let mut tmp_script = NamedTempFile::new_in(script_dir)?;
-    tmp_script.write_all(HOOK_SCRIPT_TEMPLATE.as_bytes())?;
-    tmp_script.flush()?;
-    tmp_script
-        .persist(&script_path)
-        .map_err(|e| AppError::IoKind {
-            kind: format!("{:?}", e.error.kind()),
-            message: format!("脚本写入失败: {e}"),
-        })?;
-
+    write_script_atomic(
+        script_dir,
+        REPORTER_SCRIPT_NAME,
+        HOOK_SCRIPT_TEMPLATE,
+        "脚本",
+    )?;
+    write_script_atomic(
+        script_dir,
+        STATUSLINE_SCRIPT_NAME,
+        STATUSLINE_SCRIPT_TEMPLATE,
+        "statusline 桥接脚本",
+    )?;
+    let script_path = script_dir.join(REPORTER_SCRIPT_NAME);
     let statusline_script_path = script_dir.join(STATUSLINE_SCRIPT_NAME);
-    let mut tmp_sl = NamedTempFile::new_in(script_dir)?;
-    tmp_sl.write_all(STATUSLINE_SCRIPT_TEMPLATE.as_bytes())?;
-    tmp_sl.flush()?;
-    tmp_sl
-        .persist(&statusline_script_path)
-        .map_err(|e| AppError::IoKind {
-            kind: format!("{:?}", e.error.kind()),
-            message: format!("statusline 桥接脚本写入失败: {e}"),
-        })?;
 
     // 2. 读 settings.json
     let mut settings: Value = if settings_path.exists() {
@@ -628,9 +626,92 @@ pub(crate) fn reinject_statusline_impl(
     Ok(())
 }
 
+/// 原子写单个 hook 脚本（NamedTempFile + persist，注入/对账共用）
+fn write_script_atomic(
+    script_dir: &std::path::Path,
+    file_name: &str,
+    template: &str,
+    label: &str,
+) -> Result<(), AppError> {
+    let script_path = script_dir.join(file_name);
+    let mut tmp = NamedTempFile::new_in(script_dir)?;
+    tmp.write_all(template.as_bytes())?;
+    tmp.flush()?;
+    tmp.persist(&script_path).map_err(|e| AppError::IoKind {
+        kind: format!("{:?}", e.error.kind()),
+        message: format!("{label}写入失败: {e}"),
+    })?;
+    Ok(())
+}
+
+/// 启动对账（reconcile）：补写缺失的 hook 脚本（9-6 防复发）。
+///
+/// 背景：脚本只在手动「注入 Hooks」时落盘；外部删除 `~/.slterminal/hooks` 后，
+/// settings.json 残留 matcher 使 claude 每事件执行缺失脚本 → MODULE_NOT_FOUND 刷错，
+/// 而既有启动重注入只补 statusline 桥接、且桥接脚本缺失时 no-op——死配置无人自愈。
+///
+/// 意图信号（任一命中即补写）：
+/// ① settings.json（可解析）含 slterm matcher——注入曾被完成且未被合法卸载
+///   （合法卸载必清 matcher），脚本缺失只能是外部删除 → 恢复注入 = 还原用户意图；
+/// ② statusline 备份在且当前 statusLine == 备份原值——关闭还原态，
+///   reinject 即将生效，需桥接脚本在盘（否则 reinject 的脚本缺失守卫断链）。
+/// 仅补缺失文件，已存在不覆盖（保留 SEC-13「磁盘脚本被替换 → Outdated 提示」审计路径）。
+/// settings read/parse 失败/非法 → 该信号视为无（不碰损坏文件，与注入纪律一致）。
+/// 返回是否发生补写（供启动日志）。
+pub(crate) fn ensure_scripts_impl(
+    settings_path: Option<&std::path::Path>,
+    backup_path: Option<&std::path::Path>,
+    script_dir: &std::path::Path,
+) -> Result<bool, AppError> {
+    // 解析 settings（缺失/空/非法/read 失败 → None）
+    let settings_val = settings_path.and_then(|p| {
+        let content = std::fs::read_to_string(p).ok()?;
+        let trimmed = content.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        serde_json::from_str::<Value>(trimmed).ok()
+    });
+    // 信号①：settings 含 slterm matcher
+    let matcher_intent = settings_val.as_ref().is_some_and(has_slterm_matchers);
+    // 信号②：备份在 + 当前 statusLine == 备份原值（全值比较，reinject 同口径）
+    let backup_intent = match (
+        backup_path.and_then(read_backup),
+        settings_val.as_ref().and_then(|s| s.get("statusLine")),
+    ) {
+        (Some(backup), Some(current)) => current == &backup,
+        _ => false,
+    };
+    if !matcher_intent && !backup_intent {
+        return Ok(false);
+    }
+    // 补写缺失脚本（两脚本同批原则与注入一致）
+    std::fs::create_dir_all(script_dir)?;
+    let mut wrote = false;
+    for (name, template, label) in [
+        (REPORTER_SCRIPT_NAME, HOOK_SCRIPT_TEMPLATE, "reporter 脚本"),
+        (
+            STATUSLINE_SCRIPT_NAME,
+            STATUSLINE_SCRIPT_TEMPLATE,
+            "statusline 桥接脚本",
+        ),
+    ] {
+        if !script_dir.join(name).is_file() {
+            write_script_atomic(script_dir, name, template, label)?;
+            wrote = true;
+        }
+    }
+    Ok(wrote)
+}
+
 /// agent_hooks_uninstall（claude）实现：移除配置段 + 删脚本目录 + 清信号目录（C6/C9）
 ///
-/// 安全策略：settings.json 非法时仅跳过配置清理（不损坏用户文件），但仍删除目录。
+/// 原子性（9-6 翻案，废止原「非法 JSON 仅跳过配置清理但仍删目录」）：
+/// settings.json read/parse 失败 → 返回错误且目录全保留——「要么全清、要么全不清」。
+/// 旧语义会制造 dangling matcher（matcher 残留 + 脚本目录已删）：claude 每次事件
+/// 按 matcher 执行缺失脚本 → MODULE_NOT_FOUND 刷错且无人能自愈（启动只补 statusline
+/// 桥接且脚本缺失时 no-op）。config 无法清理时保留目录则无此害——脚本存在时
+/// 无 SLTERM_PANEL_ID 即 exit 0（C10），待用户修复 settings.json 后重试卸载。
 pub(crate) fn uninstall_impl(
     settings_path: Option<&std::path::Path>,
     script_dir: Option<&std::path::Path>,
@@ -642,53 +723,46 @@ pub(crate) fn uninstall_impl(
         .and_then(|p| read_backup(&p));
     if let Some(settings_path) = settings_path {
         if settings_path.exists() {
-            if let Ok(content) = std::fs::read_to_string(settings_path) {
-                let trimmed = content.trim();
-                if !trimmed.is_empty() {
-                    if let Ok(mut settings) = serde_json::from_str::<Value>(&content) {
-                        let mut changed = false;
-                        if let Some(hooks) =
-                            settings.get_mut("hooks").and_then(|h| h.as_object_mut())
-                        {
-                            if remove_slterm_matchers(hooks) {
-                                changed = true;
-                            }
-                            // hooks 段全空 → 移除整个 "hooks" 键
-                            if hooks.is_empty() {
-                                if let Some(root) = settings.as_object_mut() {
-                                    root.remove("hooks");
-                                }
-                            }
+            let content = std::fs::read_to_string(settings_path).map_err(|e| {
+                crate::error::io_error("读取 ~/.claude/settings.json", settings_path, e)
+            })?;
+            let trimmed = content.trim();
+            if !trimmed.is_empty() {
+                // parse 失败 → Err 且目录保留（原子性翻案见函数 doc）——不损坏用户文件
+                let mut settings: Value =
+                    serde_json::from_str(&content).map_err(|e| AppError::IoKind {
+                        kind: "parse".into(),
+                        message: format!("~/.claude/settings.json 格式错误，请先修复后再卸载: {e}"),
+                    })?;
+                let mut changed = false;
+                if let Some(hooks) = settings.get_mut("hooks").and_then(|h| h.as_object_mut()) {
+                    if remove_slterm_matchers(hooks) {
+                        changed = true;
+                    }
+                    // hooks 段全空 → 移除整个 "hooks" 键
+                    if hooks.is_empty() {
+                        if let Some(root) = settings.as_object_mut() {
+                            root.remove("hooks");
                         }
-                        // statusLine 桥接 → 还原备份（备份缺失 → 移除键，用户原本无 statusLine）；
-                        // 用户已改过（非桥接）→ 保留不动
-                        if settings.get("statusLine").is_some_and(statusline_is_bridge) {
-                            changed = true;
-                            if let Some(root) = settings.as_object_mut() {
-                                match backup_value {
-                                    Some(ref backup) => {
-                                        root.insert("statusLine".into(), backup.clone());
-                                    }
-                                    None => {
-                                        root.remove("statusLine");
-                                    }
-                                }
+                    }
+                }
+                // statusLine 桥接 → 还原备份（备份缺失 → 移除键，用户原本无 statusLine）；
+                // 用户已改过（非桥接）→ 保留不动
+                if settings.get("statusLine").is_some_and(statusline_is_bridge) {
+                    changed = true;
+                    if let Some(root) = settings.as_object_mut() {
+                        match backup_value {
+                            Some(ref backup) => {
+                                root.insert("statusLine".into(), backup.clone());
                             }
-                        }
-                        if changed {
-                            if let Some(parent) = settings_path.parent() {
-                                let json_str = serde_json::to_string_pretty(&settings)?;
-                                let mut tmp = NamedTempFile::new_in(parent)?;
-                                tmp.write_all(json_str.as_bytes())?;
-                                tmp.flush()?;
-                                tmp.persist(settings_path).map_err(|e| AppError::IoKind {
-                                    kind: format!("{:?}", e.error.kind()),
-                                    message: format!("settings.json 写入失败: {e}"),
-                                })?;
+                            None => {
+                                root.remove("statusLine");
                             }
                         }
                     }
-                    // JSON 非法 → 静默跳过配置清理，仍删目录
+                }
+                if changed {
+                    atomic_write_settings(settings_path, &settings)?;
                 }
             }
         }
@@ -1455,8 +1529,10 @@ mod inject_tests {
     }
 
     #[test]
-    fn uninstall_impl_illegal_json_skips_config_but_deletes_dirs() {
-        // 非法 JSON → 静默跳过配置清理（文件原样），目录仍删除
+    fn uninstall_impl_illegal_json_keeps_dirs_and_errors() {
+        // 9-6 翻案防复发：非法 JSON → 返回错误，配置原样，目录全保留（原子性——
+        // 旧语义「跳过配置清理仍删目录」制造 dangling matcher：matcher 残留 + 脚本
+        // 目录已删 → claude 每事件按 matcher 跑缺失脚本 MODULE_NOT_FOUND 刷错）
         let (_dir, settings_path, script_dir) = make_inject_env();
         std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
         let original = b"{ invalid !!".to_vec();
@@ -1464,14 +1540,39 @@ mod inject_tests {
         std::fs::create_dir_all(&script_dir).unwrap();
         let events_dir = script_dir.parent().unwrap().join("hooks-events");
         std::fs::create_dir_all(&events_dir).unwrap();
-        uninstall_impl(Some(&settings_path), Some(&script_dir), Some(&events_dir)).unwrap();
+        let err =
+            uninstall_impl(Some(&settings_path), Some(&script_dir), Some(&events_dir)).unwrap_err();
+        match err {
+            AppError::IoKind { kind, message } => {
+                assert!(kind.contains("parse"), "应报 parse 错误: {kind}");
+                assert!(
+                    message.contains("请先修复后再卸载"),
+                    "消息应提示修复 settings.json: {message}"
+                );
+            }
+            other => panic!("非法 JSON 应返回 IoKind，实际: {other:?}"),
+        }
         assert_eq!(
             std::fs::read(&settings_path).unwrap(),
             original,
-            "非法 JSON 时配置清理应跳过"
+            "非法 JSON 时配置文件应原样"
         );
-        assert!(!script_dir.exists(), "脚本目录仍应删除");
-        assert!(!events_dir.exists(), "信号目录仍应删除");
+        assert!(script_dir.exists(), "脚本目录应保留（防 dangling matcher）");
+        assert!(events_dir.exists(), "信号目录应保留");
+    }
+
+    #[test]
+    fn uninstall_impl_empty_settings_removes_dirs() {
+        // 空 settings（无 matcher 风险）→ 目录正常删除，无错误
+        let (_dir, settings_path, script_dir) = make_inject_env();
+        std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+        std::fs::write(&settings_path, "").unwrap();
+        std::fs::create_dir_all(&script_dir).unwrap();
+        let events_dir = script_dir.parent().unwrap().join("hooks-events");
+        std::fs::create_dir_all(&events_dir).unwrap();
+        uninstall_impl(Some(&settings_path), Some(&script_dir), Some(&events_dir)).unwrap();
+        assert!(!script_dir.exists(), "空 settings 卸载应删除脚本目录");
+        assert!(!events_dir.exists(), "空 settings 卸载应删除信号目录");
     }
 
     #[test]
@@ -2139,6 +2240,105 @@ mod inject_tests {
         )
         .unwrap();
         assert_eq!(std::fs::read_to_string(&settings_path).unwrap(), before);
+    }
+
+    // ── 启动对账 ensure_scripts_impl（9-6 防复发：外部删除 hooks 目录后自愈） ──
+
+    #[test]
+    fn ensure_scripts_matchers_present_scripts_missing_writes_both() {
+        // 9-6 防复发主场景：注入后 hooks 目录被外部删除（matcher 残留）→ 对账补写两脚本
+        let (_dir, settings_path, script_dir) = make_inject_env();
+        inject_impl(&settings_path, &script_dir).unwrap();
+        let settings_before = std::fs::read_to_string(&settings_path).unwrap();
+        std::fs::remove_dir_all(&script_dir).unwrap(); // 模拟外部删除
+        let wrote = ensure_scripts_impl(Some(&settings_path), None, &script_dir).unwrap();
+        assert!(wrote, "脚本缺失时应发生补写");
+        assert_eq!(
+            std::fs::read_to_string(script_dir.join(REPORTER_SCRIPT_NAME)).unwrap(),
+            HOOK_SCRIPT_TEMPLATE,
+            "reporter 应补写为内嵌模板"
+        );
+        assert_eq!(
+            std::fs::read_to_string(script_dir.join(STATUSLINE_SCRIPT_NAME)).unwrap(),
+            STATUSLINE_SCRIPT_TEMPLATE,
+            "桥接脚本应补写为内嵌模板"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&settings_path).unwrap(),
+            settings_before,
+            "对账只补脚本，不改动 settings.json"
+        );
+    }
+
+    #[test]
+    fn ensure_scripts_no_intent_does_nothing() {
+        // 无意图信号（无 matcher、无备份）→ 零写盘，不创建脚本目录
+        let (_dir, settings_path, script_dir) = make_inject_env();
+        std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+        std::fs::write(&settings_path, r#"{"permissions":{}}"#).unwrap();
+        let wrote = ensure_scripts_impl(Some(&settings_path), None, &script_dir).unwrap();
+        assert!(!wrote, "无意图信号不应补写");
+        assert!(!script_dir.exists(), "无意图信号不应创建脚本目录");
+    }
+
+    #[test]
+    fn ensure_scripts_illegal_json_does_nothing() {
+        // settings 非法 JSON → 零写盘、文件原样（不碰损坏文件，与注入纪律一致）
+        let (_dir, settings_path, script_dir) = make_inject_env();
+        std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+        let original = b"{ invalid !!".to_vec();
+        std::fs::write(&settings_path, &original).unwrap();
+        let wrote = ensure_scripts_impl(Some(&settings_path), None, &script_dir).unwrap();
+        assert!(!wrote, "非法 JSON 不应补写");
+        assert!(!script_dir.exists(), "非法 JSON 不应创建脚本目录");
+        assert_eq!(std::fs::read(&settings_path).unwrap(), original);
+    }
+
+    #[test]
+    fn ensure_scripts_existing_files_not_overwritten() {
+        // 已存在脚本不被覆盖（保留 SEC-13 审计路径：磁盘脚本被替换 → Outdated 提示）
+        let (_dir, settings_path, script_dir) = make_inject_env();
+        inject_impl(&settings_path, &script_dir).unwrap();
+        let custom = "// 用户自定义替换内容\n";
+        std::fs::write(script_dir.join(REPORTER_SCRIPT_NAME), custom).unwrap();
+        std::fs::write(script_dir.join(STATUSLINE_SCRIPT_NAME), custom).unwrap();
+        let wrote = ensure_scripts_impl(Some(&settings_path), None, &script_dir).unwrap();
+        assert!(!wrote, "脚本齐备时不应补写");
+        assert_eq!(
+            std::fs::read_to_string(script_dir.join(REPORTER_SCRIPT_NAME)).unwrap(),
+            custom,
+            "已存在脚本不得被覆盖（保留 Outdated 审计路径）"
+        );
+    }
+
+    #[test]
+    fn ensure_scripts_backup_intent_writes() {
+        // 信号②：备份在 + statusLine == 备份原值（关闭还原态）→ 补写，解除 reinject 断链
+        let (_dir, settings_path, script_dir) = make_inject_env();
+        let backup_path = backup_path_from_script_dir(&script_dir).unwrap();
+        std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+        let original =
+            serde_json::json!({"type": "command", "command": "~/.claude/statusline-user.sh"});
+        std::fs::write(
+            &settings_path,
+            serde_json::to_string(&serde_json::json!({
+                "statusLine": original,
+                "hooks": {} // 无 slterm matcher——意图仅来自备份信号
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::create_dir_all(backup_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &backup_path,
+            serde_json::to_string_pretty(&original).unwrap(),
+        )
+        .unwrap();
+        let wrote =
+            ensure_scripts_impl(Some(&settings_path), Some(&backup_path), &script_dir).unwrap();
+        assert!(wrote, "备份意图信号存在时应补写");
+        assert!(script_dir.join(REPORTER_SCRIPT_NAME).is_file());
+        assert!(script_dir.join(STATUSLINE_SCRIPT_NAME).is_file());
     }
 
     #[test]

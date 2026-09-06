@@ -30,7 +30,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **B16 bash 分支**：`.sh` 原命令不依赖 PATH 有 bash，用 `bashCandidates` 试错定位（PATH bash → git 目录上溯 → 固定路径），且反斜杠路径转正斜杠后再传给 bash。
 - **C10 契约**：reporter 与桥接脚本任何路径必须 `process.exit(0)`，不写 stderr。
 - **关闭恢复**：App.tsx 关闭序列调 `agent_hooks_restore_statusline`——当前为桥接则还原备份（备份保留供下次重注入）。
-- **启动重注入**：`lib.rs` `.setup()` 调 `reinject_statusline_on_startup` 遍历注册表；仅当「备份存在 + 当前 statusLine 等于备份原配置」时才重新注入桥接。
+- **启动对账 reconcile**（9-6 起，替代纯重注入）：`lib.rs` `.setup()` 调 `reconcile_hooks_on_startup` 遍历注册表——先按意图信号补写缺失脚本（settings 含 slterm matcher，或备份在 + statusLine == 备份原值；仅补缺失、已存在不覆盖——保 SEC-13 Outdated 审计路径），再仅当「备份存在 + 当前 statusLine 等于备份原配置」时重注入桥接。
 
 ### notify + 3s 轮询双通道（win10 实证修复）
 
@@ -53,7 +53,7 @@ PTY spawn 时注入 `SLTERM_PANEL_ID`（见 @../pty/CLAUDE.md）。reporter 读�
 ### settings.json 注入/卸载规则
 
 - **merge 策略**：读现有 settings → 移除旧 slterm matcher → 10 事件每事件追加 slterm handler → 原子写回；用户其他字段保留。
-- **非法 JSON 中止**：注入时格式错误返回 `AppError`，不改动文件；卸载时非法 JSON 静默跳过配置清理但仍删目录。
+- **非法 JSON 中止**：注入时格式错误返回 `AppError`，不改动文件；卸载时（9-6 翻案，废止「静默跳过配置清理但仍删目录」）read/parse 失败返回 `AppError` 且目录全保留——「要么全清、要么全不清」，防「matcher 残留 + 脚本已删」dangling 态刷 claude 错误；修复 settings.json 后重试卸载。
 - **卸载粒度**：handler 级剔除含 slterm 子串的条目，不连带删除同 matcher 组内的用户 handler。
 - **10 事件**：`SessionStart`、`SessionEnd`、`UserPromptSubmit`、`Stop`、`StopFailure`、`PreToolUse`、`PostToolUse`、`PostToolUseFailure`、`Notification`、`PermissionRequest`。
 
@@ -88,7 +88,8 @@ PTY spawn 时注入 `SLTERM_PANEL_ID`（见 @../pty/CLAUDE.md）。reporter 读�
 - **bash 路径转正斜杠**：Windows 原生 PATH 通常无 bash，定位逻辑和斜杠转换缺一不可（B16）。
 - **信号目录为空是正常**：持续残留才说明 watcher 失效。
 - **symlink 信号文件只删不读**（SEC-02）。
-- **新增 provider 须静态注册**：`provider.rs` 的 `REGISTRY`，trait 签名勿改。
+- **新增 provider 须静态注册**：`provider.rs` 的 `REGISTRY`，trait 七方法签名勿改；新增能力走带默认实现的方法（9-6 `ensure_hooks_scripts` 先例——脚本落盘型 provider override，既有实现零改动）。
+- **claude 会话启动时加载 hooks 配置**：注入/修复/卸载后须重启 claude 会话才生效（9-6 事故：hooks 目录被外部删除后，运行中会话仍按内存 matcher 跑缺失脚本刷 MODULE_NOT_FOUND——启动对账只保证此后新会话不再触发）。
 
 ## 测试模式
 
