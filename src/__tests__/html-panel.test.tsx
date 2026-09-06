@@ -383,7 +383,7 @@ describe("HtmlPanel", () => {
     const doc = (await waitForLoaded(getByTitle, "C:/test/a.html")).getAttribute("srcDoc")!;
     // 监听绑定：document 级 keydown + 第三参数 true（capture phase，先于页面内脚本拦截）
     expect(doc).toMatch(/document\.addEventListener\("keydown",function\(e\)\{/);
-    expect(doc).toMatch(/key:e\.key\},\"\*\"\)\},true\)/);
+    expect(doc).toMatch(/key:e\.key\},"\*"\)\},true\)/);
     // postMessage 消息体：type + fingerprint 合成表达式（修饰键条件拼接后接 code）
     const pmStart = doc.indexOf("window.parent.postMessage({");
     expect(pmStart).toBeGreaterThan(-1);

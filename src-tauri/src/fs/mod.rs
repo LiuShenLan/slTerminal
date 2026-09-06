@@ -1548,7 +1548,9 @@ mod resource_read_tests {
         let mut rng = 1u64;
         let mut content: Vec<u8> = Vec::with_capacity(600 * 1024);
         for _ in 0..(600 * 1024) {
-            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            rng = rng
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             content.push((rng >> 33) as u8);
         }
         std::fs::write(&file, &content).unwrap();
@@ -1618,7 +1620,11 @@ mod resource_read_tests {
         let (bytes, terminal, result) = collect_bytes(&file);
         result.unwrap();
         assert!(terminal);
-        assert_eq!(bytes.len() as u64, MAX_FILE_SIZE_BYTES, "恰好 10MB 应完整读出");
+        assert_eq!(
+            bytes.len() as u64,
+            MAX_FILE_SIZE_BYTES,
+            "恰好 10MB 应完整读出"
+        );
     }
 }
 
@@ -1632,11 +1638,7 @@ mod read_resource_impl_tests {
     }
 
     fn run_impl(path: String, root: Option<PathBuf>) -> Result<(), AppError> {
-        run(fs_read_resource_impl(
-            path,
-            |_chunk| Ok(()),
-            root,
-        ))
+        run(fs_read_resource_impl(path, |_chunk| Ok(()), root))
     }
 
     #[test]
