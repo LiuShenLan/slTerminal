@@ -39,10 +39,14 @@ import {
 } from "./buildInjectedScript";
 import {
   ZOOM_MSG_TYPE,
+  SCROLL_MSG_TYPE,
+  NAV_MSG_TYPE,
   isFiniteZoom,
+  isFiniteRatio,
   formatPercent,
   buildResetRequest,
   buildZoomSetRequest,
+  buildScrollSetRequest,
 } from "./previewMessages";
 
 /** PreviewFrame 接收的面板参数 */
@@ -55,12 +59,16 @@ export interface PreviewFrameProps {
   segments?: readonly InjectedSegment[];
   /** srcDoc 重建后是否按父侧镜像恢复缩放（md 开 / html 关） */
   keepZoom?: boolean;
+  /** srcDoc 重建后是否按比例恢复滚动（md 开——scrollReport 段须同传） */
+  keepScrollRatio?: boolean;
   /** iframe 背景色（压重建闪白用；缺省透明） */
   iframeBg?: string;
   /** 悬浮切换条等 UI 的承载位（渲染于右上角，HUD 下移避让） */
   overlay?: React.ReactNode;
   /** e2e 探针前缀（默认 "html"——既有 html-zoom-hud 断言兼容） */
   dataE2ePrefix?: string;
+  /** 链接点击透传（linkRouter 段上行 slterm_nav 校验后回调——分类/打开在面板侧） */
+  onNav?: (href: string) => void;
 }
 
 /** iframe sandbox 权限：仅允许脚本执行，不含 allow-same-origin（防止 Tauri 注入 App JS） */
@@ -142,9 +150,11 @@ export const PreviewFrame: React.FC<PreviewFrameProps> = ({
   title,
   segments,
   keepZoom = false,
+  keepScrollRatio = false,
   iframeBg,
   overlay,
   dataE2ePrefix = "html",
+  onNav,
 }) => {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   // SEC-04：面板生命周期绑定的随机 nonce——挂载期生成一次（惰性初始化 ref，
@@ -168,6 +178,11 @@ export const PreviewFrame: React.FC<PreviewFrameProps> = ({
   });
   const hudZoomRef = useRef(1);
   const hideTimerRef = useRef<number | null>(null);
+  /** 滚动比例父侧镜像（keepScrollRatio 重建恢复取值源；等值上报不重复处理） */
+  const lastScrollRatioRef = useRef(0);
+  /** onNav ref——回调经 ref 转发（handleMessage 空依赖 effect 内读取最新） */
+  const onNavRef = useRef(onNav);
+  onNavRef.current = onNav;
 
   /** 立即隐藏 HUD 并复位 zoom 基准（重置点击 / iframe 重建） */
   const hideHud = () => {
@@ -213,6 +228,8 @@ export const PreviewFrame: React.FC<PreviewFrameProps> = ({
         type?: unknown;
         nonce?: unknown;
         zoom?: unknown;
+        ratio?: unknown;
+        href?: unknown;
         fingerprint?: unknown;
         ctrlKey?: unknown;
         shiftKey?: unknown;
@@ -243,6 +260,24 @@ export const PreviewFrame: React.FC<PreviewFrameProps> = ({
           hideTimerRef.current = null;
           setHud((prev) => (prev.visible ? { ...prev, visible: false } : prev));
         }, HUD_HIDE_MS);
+        return;
+      }
+
+      // ── 滚动上行：父侧镜像（keepScrollRatio 重建恢复的取值源）──
+      if (data.type === SCROLL_MSG_TYPE) {
+        // SEC-04：nonce 校验同缩放通道。伪造滚动上报后果仅恢复位置偏差（低危）
+        if (typeof data.nonce !== "string" || data.nonce !== nonceRef.current) return;
+        const ratio = data.ratio;
+        if (!isFiniteRatio(ratio)) return;
+        lastScrollRatioRef.current = ratio;
+        return;
+      }
+
+      // ── 链接点击上行：校验后透传面板（分类/打开在面板侧 linkPolicy）──
+      if (data.type === NAV_MSG_TYPE) {
+        if (typeof data.nonce !== "string" || data.nonce !== nonceRef.current) return;
+        if (typeof data.href !== "string" || data.href.length === 0) return;
+        onNavRef.current?.(data.href);
         return;
       }
 
@@ -292,13 +327,22 @@ export const PreviewFrame: React.FC<PreviewFrameProps> = ({
    * - keepZoom：先取父侧镜像再 hideHud（hideHud 会复位基准），镜像非 1 则下行
    *   slterm_zoom_set 恢复（iframe 侧钳制 [ZOOM_MIN, ZOOM_MAX] 后应用并上行，
    *   上行值驱动 HUD 显示——恢复即反馈）
+   * - keepScrollRatio：按比例下行恢复（iframe 侧 60ms 延时等布局收敛——
+   *   滚动为近似语义，登记已知行为）
    */
   const handleLoad = () => {
     const prevZoom = hudZoomRef.current;
+    const prevRatio = lastScrollRatioRef.current;
     hideHud();
     if (keepZoom && prevZoom !== 1) {
       iframeRef.current?.contentWindow?.postMessage(
         buildZoomSetRequest(nonce, prevZoom),
+        "*",
+      );
+    }
+    if (keepScrollRatio && prevRatio > 0) {
+      iframeRef.current?.contentWindow?.postMessage(
+        buildScrollSetRequest(nonce, prevRatio),
         "*",
       );
     }

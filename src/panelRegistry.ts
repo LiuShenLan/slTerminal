@@ -7,6 +7,7 @@ import React from "react";
 import { TerminalPanel } from "./panels/terminal";
 import { EditorPanel } from "./panels/editor";
 import { HtmlPanel } from "./panels/html";
+import { MarkdownPanel } from "./panels/markdown";
 import { GitShowPanel } from "./panels/gitshow";
 import { DiffPanel } from "./panels/diff";
 import { SettingsPanel } from "./panels/settings";
@@ -18,6 +19,8 @@ export const PANEL_TERMINAL = "terminal" as const;
 export const PANEL_EDITOR = "editor" as const;
 /** HTML 预览面板类型标识 */
 export const PANEL_HTML_VIEWER = "htmlviewer" as const;
+/** Markdown 文档面板类型标识 */
+export const PANEL_MARKDOWN_VIEWER = "markdownviewer" as const;
 // PANEL_GIT_SHOW/PANEL_DIFF/PANEL_HOOKS_CONFIG 已删除（FE-35）——
 // 全仓零外部消费（grep 无 import），内部 PANEL_TYPES/FILE_PANEL_TYPES 改字面量。
 
@@ -58,6 +61,9 @@ export const panelRegistry = {
   htmlviewer: withPanelBoundary(HtmlPanel as React.FC<{
     params: { panelId: string; filePath?: string };
   }>),
+  markdownviewer: withPanelBoundary(MarkdownPanel as React.FC<{
+    params: { panelId: string; filePath?: string };
+  }>),
   gitshow: withPanelBoundary(GitShowPanel as React.FC<{
     params: { panelId: string; filePath: string; oldPath?: string; repoPath: string };
   }>),
@@ -74,6 +80,7 @@ export const PANEL_TYPES = [
   PANEL_TERMINAL,
   PANEL_EDITOR,
   PANEL_HTML_VIEWER,
+  PANEL_MARKDOWN_VIEWER,
   "gitshow",
   "diff",
   "settings",
@@ -84,6 +91,7 @@ export type PanelType = (typeof PANEL_TYPES)[number];
 export const FILE_PANEL_TYPES: ReadonlySet<string> = new Set([
   PANEL_EDITOR,
   PANEL_HTML_VIEWER,
+  PANEL_MARKDOWN_VIEWER,
   "gitshow",
   "diff",
 ]);
@@ -95,9 +103,15 @@ export function isValidPanelType(type: string): type is PanelType {
 
 /**
  * 检查面板是否应使用 renderer="always" 模式。
- * 显式白名单：terminal（保持 PTY 存活）+ htmlviewer（避免 iframe browsing context 销毁重建导致白屏）。
+ * 显式白名单：terminal（保持 PTY 存活）+ htmlviewer/markdownviewer（避免 iframe
+ * browsing context 销毁重建导致白屏 + CM 编辑实例切走切回不重建——草稿与缩放
+ * 状态保活，决策 #17）。
  * editor / gitshow / diff 故意排除——CM6 重建无视觉闪屏，且大文件编辑器若始终挂载会显著增加内存开销。
  */
 export function isAlwaysRenderPanel(type: string): boolean {
-  return type === PANEL_TERMINAL || type === PANEL_HTML_VIEWER;
+  return (
+    type === PANEL_TERMINAL ||
+    type === PANEL_HTML_VIEWER ||
+    type === PANEL_MARKDOWN_VIEWER
+  );
 }

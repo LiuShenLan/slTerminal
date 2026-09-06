@@ -88,8 +88,9 @@ export class FileViewerRegistry {
 export function registerDefaultViewers(strategy: ExtensionBasedViewerStrategy): void {
   strategy.register("html", "htmlviewer");
   strategy.register("htm", "htmlviewer");
+  strategy.register("md", "markdownviewer");
+  strategy.register("markdown", "markdownviewer");
   // 后续扩展示例:
-  // strategy.register("md", "markdownviewer");
   // strategy.register("pdf", "pdfviewer");
   // strategy.register("png", "imageviewer");
 }

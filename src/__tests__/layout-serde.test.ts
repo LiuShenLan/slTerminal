@@ -286,7 +286,7 @@ describe("loadLayout — 返回值 + 白名单校验", () => {
     expect(callArg.panels.invalid).toBeUndefined();
   });
 
-  it("9a. WRK-07: 白名单使用真实 PANEL_TYPES——全部 6 种面板类型不被过滤", () => {
+  it("9a. WRK-07: 白名单使用真实 PANEL_TYPES——全部 7 种面板类型不被过滤", () => {
     const layout = {
       grid: {
         root: {
@@ -294,7 +294,7 @@ describe("loadLayout — 返回值 + 白名单校验", () => {
           data: [{
             type: "leaf",
             data: {
-              views: ["t1", "e1", "h1", "g1", "d1", "c1"],
+              views: ["t1", "e1", "h1", "m1", "g1", "d1", "c1"],
               activeView: "t1",
               id: "g3",
             },
@@ -307,6 +307,7 @@ describe("loadLayout — 返回值 + 白名单校验", () => {
         t1: { id: "t1", contentComponent: "terminal" },
         e1: { id: "e1", contentComponent: "editor" },
         h1: { id: "h1", contentComponent: "htmlviewer" },
+        m1: { id: "m1", contentComponent: "markdownviewer" },
         g1: { id: "g1", contentComponent: "gitshow" },
         d1: { id: "d1", contentComponent: "diff" },
         c1: { id: "c1", contentComponent: "settings" },
@@ -321,12 +322,13 @@ describe("loadLayout — 返回值 + 白名单校验", () => {
       t1: { contentComponent: "terminal" },
       e1: { contentComponent: "editor" },
       h1: { contentComponent: "htmlviewer" },
+      m1: { contentComponent: "markdownviewer" },
       g1: { contentComponent: "gitshow" },
       d1: { contentComponent: "diff" },
       c1: { contentComponent: "settings" },
     });
-    // 6 种面板类型恰好与真实注册表一致（mock 漂移守卫）
-    expect(PANEL_TYPES).toHaveLength(6);
+    // 7 种面板类型恰好与真实注册表一致（mock 漂移守卫）
+    expect(PANEL_TYPES).toHaveLength(7);
   });
 
   it("9b. WRK-07: gitshow/diff/settings 单独验证白名单放行", () => {

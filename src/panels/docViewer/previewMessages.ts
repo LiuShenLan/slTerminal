@@ -17,6 +17,16 @@ export const RESET_MSG_TYPE = "slterm_reset";
 /** 父窗口 → iframe：设值请求消息类型（下行，iframe 重建后恢复缩放——keepZoom） */
 export const ZOOM_SET_MSG_TYPE = "slterm_zoom_set";
 
+/** iframe → 父窗口：滚动比例上报消息类型（上行，scrollReport 段节流） */
+export const SCROLL_MSG_TYPE = "slterm_scroll";
+
+/** 父窗口 → iframe：滚动比例恢复消息类型（下行，keepScrollRatio） */
+export const SCROLL_SET_MSG_TYPE = "slterm_scroll_set";
+
+/** iframe → 父窗口：链接点击消息类型（上行，linkRouter 段——http(s)/本地路径
+ *  分类在父侧面板做：外部 → 系统浏览器，本地 → 应用内打开） */
+export const NAV_MSG_TYPE = "slterm_nav";
+
 /** 缩放下限（25%） */
 export const ZOOM_MIN = 0.25;
 
@@ -64,6 +74,28 @@ export interface ZoomSetRequest {
   zoom: number;
 }
 
+/** 上行滚动上报消息 */
+export interface ScrollReport {
+  type: typeof SCROLL_MSG_TYPE;
+  nonce: string;
+  /** 滚动比例 [0,1]（scrollTop / (scrollHeight - clientHeight)） */
+  ratio: number;
+}
+
+/** 下行滚动恢复消息 */
+export interface ScrollSetRequest {
+  type: typeof SCROLL_SET_MSG_TYPE;
+  nonce: string;
+  ratio: number;
+}
+
+/** 上行链接点击消息 */
+export interface NavReport {
+  type: typeof NAV_MSG_TYPE;
+  nonce: string;
+  href: string;
+}
+
 /** 构造上行缩放上报消息 */
 export function buildZoomReport(nonce: string, zoom: number): ZoomReport {
   return { type: ZOOM_MSG_TYPE, nonce, zoom };
@@ -77,6 +109,26 @@ export function buildResetRequest(nonce: string): ResetRequest {
 /** 构造下行设值请求消息（iframe 重建后按父侧镜像恢复缩放） */
 export function buildZoomSetRequest(nonce: string, zoom: number): ZoomSetRequest {
   return { type: ZOOM_SET_MSG_TYPE, nonce, zoom };
+}
+
+/** 构造上行滚动上报消息 */
+export function buildScrollReport(nonce: string, ratio: number): ScrollReport {
+  return { type: SCROLL_MSG_TYPE, nonce, ratio };
+}
+
+/** 构造下行滚动恢复消息 */
+export function buildScrollSetRequest(nonce: string, ratio: number): ScrollSetRequest {
+  return { type: SCROLL_SET_MSG_TYPE, nonce, ratio };
+}
+
+/** 构造上行链接点击消息 */
+export function buildNavReport(nonce: string, href: string): NavReport {
+  return { type: NAV_MSG_TYPE, nonce, href };
+}
+
+/** 滚动比例守卫：仅接受 [0,1] 有限 number */
+export function isFiniteRatio(v: unknown): v is number {
+  return typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 1;
 }
 
 /** 消息数值守卫：仅接受有限 number（拒绝 NaN/Infinity/非 number） */

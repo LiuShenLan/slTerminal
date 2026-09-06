@@ -31,6 +31,11 @@ describe("FILE_PANEL_TYPES", () => {
     expect(FILE_PANEL_TYPES.has("diff")).toBe(true);
   });
 
+  // markdownviewer 参与标题计算（.md 文档面板，有 filePath）
+  it("markdownviewer 在集合中", () => {
+    expect(FILE_PANEL_TYPES.has("markdownviewer")).toBe(true);
+  });
+
   // 58. terminal 不参与文件标题计算
   it("terminal 不在集合中", () => {
     expect(FILE_PANEL_TYPES.has("terminal")).toBe(false);
@@ -42,8 +47,8 @@ describe("FILE_PANEL_TYPES", () => {
   });
 
   // 补充：size 正确
-  it("集合大小为 4", () => {
-    expect(FILE_PANEL_TYPES.size).toBe(4);
+  it("集合大小为 5", () => {
+    expect(FILE_PANEL_TYPES.size).toBe(5);
   });
 
   // 补充：未知面板类型不在集合中

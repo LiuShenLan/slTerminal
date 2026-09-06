@@ -22,6 +22,7 @@ export const config: WebdriverIO.Config = {
     './history.e2e.ts',
     './hooks.e2e.ts',
     './html.e2e.ts',
+    './markdown.e2e.ts',
     './mockcli.e2e.ts',
     './settings.e2e.ts',
     './sidebar.e2e.ts',

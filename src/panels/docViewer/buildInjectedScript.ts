@@ -23,6 +23,7 @@
 // 控制流断言正则 /\},true\);var sltermZoom=/ 锁死该衔接，勿调换次序。
 
 import { buildZoomRuntimeSource } from "./zoomRuntime";
+import { buildScrollRuntimeSource } from "./scrollRuntime";
 
 /** 注入脚本的信任标记，ShortcutRegistry 分发前可识别 postMessage 重放事件 */
 export const TRUSTED_MARKER = "__slterm_postMessage";
@@ -89,6 +90,17 @@ export function buildInjectedScript(
         `if(_h){var o=document.getElementById(_h);if(o)o.classList.remove("slterm-target")}` +
         `var el=document.getElementById(id);if(el){el.classList.add("slterm-target");el.scrollIntoView({behavior:"smooth"});document.documentElement.dataset.sltermHash=id;_h=id}` +
         `},true);`;
+    } else if (seg.kind === "linkRouter") {
+      // 链接点击路由（md 预览）：非 # 链接一律拦截上行 slterm_nav（href 原样——
+      // http(s)/本地路径分类在父侧面板做；# 锚点在 md 渲染无目标 id，静默忽略）
+      out +=
+        `document.addEventListener("click",function(e){var a=e.target.closest("a");if(!a)return;var h=a.getAttribute("href");if(!h||h.charAt(0)==="#")return;` +
+        `e.preventDefault();` +
+        `window.parent.postMessage({type:"slterm_nav",nonce:"${nonce}",href:h},"*");` +
+        `},true);`;
+    } else if (seg.kind === "scrollReport") {
+      // 滚动比例上报 + 下行恢复（keepScrollRatio）——scrollRuntime，逻辑见 scrollRuntime.ts
+      out += `var sltermScroll=(${buildScrollRuntimeSource(nonce)});sltermScroll(document,window);`;
     }
   }
 

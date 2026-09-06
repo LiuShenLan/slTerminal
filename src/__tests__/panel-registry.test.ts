@@ -10,13 +10,14 @@ import {
 } from "../panelRegistry";
 
 describe("panelRegistry", () => {
-  // 1. panelRegistry 包含 terminal、editor、htmlviewer、gitshow、diff、settings 六个键
-  it("包含 terminal、editor、htmlviewer、gitshow、diff、settings 六个键", () => {
+  // 1. panelRegistry 包含 terminal、editor、htmlviewer、markdownviewer、gitshow、diff、settings 七个键
+  it("包含 terminal、editor、htmlviewer、markdownviewer、gitshow、diff、settings 七个键", () => {
     const keys = Object.keys(panelRegistry);
-    expect(keys).toHaveLength(6);
+    expect(keys).toHaveLength(7);
     expect(keys).toContain("terminal");
     expect(keys).toContain("editor");
     expect(keys).toContain("htmlviewer");
+    expect(keys).toContain("markdownviewer");
     expect(keys).toContain("gitshow");
     expect(keys).toContain("diff");
     expect(keys).toContain("settings");
@@ -57,23 +58,30 @@ describe("panelRegistry", () => {
     const entry = panelRegistry.settings;
     expect(typeof entry).toBe("function");
   });
+
+  // 新增：markdownviewer 注册项为函数组件
+  it("markdownviewer 注册项为函数组件", () => {
+    const entry = panelRegistry.markdownviewer;
+    expect(typeof entry).toBe("function");
+  });
 });
 
 describe("PANEL_TYPES", () => {
-  // 6. PANEL_TYPES 包含 ["terminal", "editor", "htmlviewer", "gitshow", "diff", "settings"]
-  it('包含 ["terminal", "editor", "htmlviewer", "gitshow", "diff", "settings"]', () => {
+  // 6. PANEL_TYPES 包含 7 种面板类型（markdownviewer = .md 文档面板）
+  it('包含 ["terminal", "editor", "htmlviewer", "markdownviewer", "gitshow", "diff", "settings"]', () => {
     expect(PANEL_TYPES).toEqual([
       "terminal",
       "editor",
       "htmlviewer",
+      "markdownviewer",
       "gitshow",
       "diff",
       "settings",
     ]);
   });
 
-  it("长度为 6", () => {
-    expect(PANEL_TYPES).toHaveLength(6);
+  it("长度为 7", () => {
+    expect(PANEL_TYPES).toHaveLength(7);
   });
 
   it("as const 只读，元素类型为字面量", () => {
@@ -81,9 +89,10 @@ describe("PANEL_TYPES", () => {
     expect(PANEL_TYPES[0]).toBe("terminal");
     expect(PANEL_TYPES[1]).toBe("editor");
     expect(PANEL_TYPES[2]).toBe("htmlviewer");
-    expect(PANEL_TYPES[3]).toBe("gitshow");
-    expect(PANEL_TYPES[4]).toBe("diff");
-    expect(PANEL_TYPES[5]).toBe("settings");
+    expect(PANEL_TYPES[3]).toBe("markdownviewer");
+    expect(PANEL_TYPES[4]).toBe("gitshow");
+    expect(PANEL_TYPES[5]).toBe("diff");
+    expect(PANEL_TYPES[6]).toBe("settings");
   });
 });
 
