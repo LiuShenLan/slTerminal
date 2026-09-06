@@ -221,3 +221,74 @@ describe("HTML 面板 Ctrl+滚轮缩放", () => {
     }
   });
 });
+
+describe("HTML 面板 edit 态 Ctrl+滚轮字号", () => {
+  it("render→edit 切换后：合成 WheelEvent → .cm-scroller 字号 14→15（EditorPanel 同语义）", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "slterm-e2e-html-fontsize-"));
+    const htmlPath = join(tempDir, "page.html");
+    writeFileSync(htmlPath, "<h1>e2e 字号</h1>", "utf8");
+    try {
+      await waitForWorkspaceReady();
+      await createProject(tempDir);
+      await waitForDockviewApi();
+      const panelId = "e2e-html-fs-" + Date.now();
+      await browser.execute(
+        (args: { pid: string; path: string }) => {
+          window.__dockviewApi!.addPanel({
+            id: args.pid,
+            component: "htmlviewer",
+            params: { panelId: args.pid, filePath: args.path },
+          });
+        },
+        { pid: panelId, path: htmlPath },
+      );
+      // 切 edit 形态 → CM 挂载
+      await browser.waitUntil(
+        async () =>
+          await browser.execute(
+            () =>
+              Array.from(
+                document.querySelectorAll<HTMLButtonElement>('[data-e2e="html-mode-edit"]'),
+              ).some((el) => el.getClientRects().length > 0),
+          ),
+        { timeout: 15000, timeoutMsg: "html 切换条未出现" },
+      );
+      // 只点「可见」切换按钮——跨用例同页面残留面板（display:none）会遮蔽
+      // querySelector 首元素（markdown.e2e 头注释实证；隐藏元素 click 无效）
+      await browser.execute(() => {
+        const btn = Array.from(
+          document.querySelectorAll<HTMLButtonElement>('[data-e2e="html-mode-edit"]'),
+        ).find((el) => el.getClientRects().length > 0);
+        btn?.click();
+      });
+      await browser.waitUntil(
+        async () =>
+          await browser.execute(
+            () =>
+              Array.from(document.querySelectorAll(".cm-content")).some(
+                (el) => el.getClientRects().length > 0,
+              ),
+          ),
+        { timeout: 15000, timeoutMsg: "html edit 编辑器未挂载" },
+      );
+      await browser.execute(() => {
+        const cm = Array.from(document.querySelectorAll(".cm-content")).find(
+          (el) => el.getClientRects().length > 0,
+        );
+        cm?.dispatchEvent(
+          new WheelEvent("wheel", { deltaY: -120, ctrlKey: true, cancelable: true, bubbles: true }),
+        );
+      });
+      await browser.waitUntil(
+        async () =>
+          (await browser.execute(() => {
+            const scroller = document.querySelector(".cm-scroller");
+            return scroller ? getComputedStyle(scroller).fontSize : null;
+          })) === "15px",
+        { timeout: 10000, timeoutMsg: "html 编辑 Ctrl+滚轮未生效（字号未 14→15）" },
+      );
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+});

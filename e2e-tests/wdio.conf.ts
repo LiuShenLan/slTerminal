@@ -19,6 +19,7 @@ export const config: WebdriverIO.Config = {
     './cli-aliases.e2e.ts',
     './commit.e2e.ts',
     './editor.e2e.ts',
+    './glyph-repro.e2e.ts',
     './history.e2e.ts',
     './hooks.e2e.ts',
     './html.e2e.ts',

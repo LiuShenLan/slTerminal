@@ -229,11 +229,14 @@ if (fs.existsSync(fixturesDir)) {
 
 const major = parseInt(process.version.slice(1).split('.')[0], 10);
 const wdioConfig = path.resolve(__dirname, 'wdio.conf.ts');
+// 命令行参数透传（如 --spec glyph-repro.e2e.ts）：取证期单 spec 运行——
+// glyph-repro 门控用例 GLYPH_E2E=1 配套使用（e2e-tests/CLAUDE.md 运行节登记）
+const cliArgs = process.argv.slice(2).join(' ');
 
 function runWdio(nodeBin) {
   const wdioCli = path.resolve(__dirname, '..', 'node_modules', '@wdio', 'cli', 'bin', 'wdio.js');
   try {
-    execSync(`"${nodeBin}" "${wdioCli}" run "${wdioConfig}"`, { stdio: 'inherit' });
+    execSync(`"${nodeBin}" "${wdioCli}" run "${wdioConfig}" ${cliArgs}`, { stdio: 'inherit' });
     return true;
   } catch (e) {
     process.exit(e.status || 1);
@@ -285,7 +288,8 @@ if (major >= 26) {
 }
 
 function fallback() {
-  const wdio = spawn('npx', ['wdio', 'run', wdioConfig], {
+  const args = ['wdio', 'run', wdioConfig, ...process.argv.slice(2)];
+  const wdio = spawn('npx', args, {
     stdio: 'inherit',
     shell: true,
   });

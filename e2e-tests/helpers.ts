@@ -85,7 +85,38 @@ declare global {
     __slterm_e2e_setSettingsDirty?: (panelId: string, dirty: boolean) => void;
     /** 关闭全部 settings 面板（含隐藏页面残留面板——全量页面 api 遍历） */
     __slterm_e2e_closeAllSettingsPanels?: () => void;
+    // CM 字形取证（glyph-repro spec；GLYPH_E2E 门控——无 OS 按键通道下以
+    // execCommand("insertText") 走 CM6 正常输入事务，见 e2e-tests/CLAUDE.md）
+    __slterm_e2e_cmTypeText?: (
+      marker: string, text: string, mode?: "char" | "batch" | "char-fix",
+    ) => { found: boolean; docAfter: string | null };
+    __slterm_e2e_cmLineForensics?: (
+      marker: string, contains: string,
+    ) => CmLineForensics | null;
   }
+}
+
+/** CM 行 DOM 取证快照（JSON 序列化安全；rect 为 getBoundingClientRect 原值） */
+export interface CmLineForensics {
+  /** 含 marker 的可见 .cm-content 定位结果 */
+  found: boolean;
+  /** 该编辑器中含 contains 的最后一行文本（null = 行缺失——DOM 层证据） */
+  lineText: string | null;
+  /** 目标行几何（含 0 尺寸=行未布局） */
+  lineRect: { x: number; y: number; width: number; height: number } | null;
+  /** 行文字计算样式颜色 */
+  color: string | null;
+  /** .cm-content 背景色 */
+  bg: string | null;
+  /** 行内子节点结构快照（text node / span 分类 + 几何 + class） */
+  nodes: Array<{
+    kind: string;
+    text?: string;
+    cls?: string;
+    rect: { x: number; y: number; width: number; height: number } | null;
+  }>;
+  /** 可见 .cm-content 总数（定位歧义度 sanity） */
+  visibleCount: number;
 }
 
 /** useSideBar.getState() 的纯数据快照（去函数键，供 browser.execute 序列化） */
@@ -111,6 +142,7 @@ export function installAllE2eHelpers(): void {
   installHookHelpers();
   installHooksConfigHelpers();
   installMockCliProfile();
+  installCmGlyphHelpers();
 
   // 标记 Workspace 就绪（Workspace 组件渲染时同步设置）
   window.__slterm_e2e_workspaceReady = false;
@@ -580,5 +612,118 @@ function installMockCliProfile(): void {
   };
   window.__slterm_e2e_registerMockCliProfile = () => {
     cliProfileRegistry.register(mockCliProfile);
+  };
+}
+
+// ── CM 字形取证 helper（glyph-repro spec，GLYPH_E2E=1 启用） ──
+
+/**
+ * 安装 CM 键入/DOM 取证 helper。定位策略：可见 .cm-content 集合中 textContent
+ * 含 marker 者（marker 空串 = 取可见集首个——空文档场景）；「可见」以
+ * getClientRects 过滤——workspace 多 Dockview 实例 display:none 显隐，隐藏页
+ * 残留编辑器不得命中（e2e-tests/CLAUDE.md 隔离纪律）。
+ *
+ * 键入通道：逐字符 document.execCommand("insertText")——Chromium 会为
+ * execCommand 派发 beforeinput/input，CM6 走正常输入事务（embedded WDIO 无
+ * OS 按键通道，承接既有豁免 13 P-15；execCommand 触发与否本身即取证证据）。
+ */
+function installCmGlyphHelpers(): void {
+  const visibleCmContents = (marker: string): HTMLElement[] => {
+    const all = Array.from(document.querySelectorAll<HTMLElement>(".cm-content"));
+    const vis = all.filter((el) => el.getClientRects().length > 0);
+    if (marker === "") return vis;
+    return vis.filter((el) => (el.textContent ?? "").includes(marker));
+  };
+
+  const snapRect = (el: Element | null) => {
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { x: r.x, y: r.y, width: r.width, height: r.height };
+  };
+
+  // mode：char = 逐字符独立事务（每字符一次 DOM 同步）；batch = 整串单事务
+  //（一次 beforeinput insertText）——连续键入渲染合并的近似（见 glyph spec 头）；
+  // char-fix = 逐字符事务 + 每字符后同步 display:none 往返（同宏任务强制行
+  // 布局失效——帧渲染的必是刚重建的行，规避 Chromium 陈旧光栅；不触碰 text
+  // node/selection 结构，生产实现 = src/panels/editor/repaintGuard.ts 同原语）
+  const refreshLineByToggle = (cm: HTMLElement): void => {
+    const line = cm.querySelector(".cm-line");
+    if (!(line instanceof HTMLElement)) return;
+    line.style.display = "none";
+    void line.offsetHeight; // 强制同步 reflow（display none 生效）
+    line.style.display = "";
+  };
+
+  window.__slterm_e2e_cmTypeText = (marker, text, mode) => {
+    const target = visibleCmContents(marker)[0];
+    if (!target) return { found: false, docAfter: null };
+    target.focus();
+    if (mode === "batch") {
+      document.execCommand("insertText", false, text);
+    } else {
+      for (const ch of text) {
+        document.execCommand("insertText", false, ch);
+        if (mode === "char-fix") refreshLineByToggle(target);
+      }
+    }
+    return { found: true, docAfter: target.textContent ?? "" };
+  };
+
+  window.__slterm_e2e_cmLineForensics = (marker, contains) => {
+    const vis = visibleCmContents(marker);
+    const cm = vis[0];
+    if (!cm) {
+      return {
+        found: false,
+        lineText: null,
+        lineRect: null,
+        color: null,
+        bg: null,
+        nodes: [],
+        visibleCount: vis.length,
+      };
+    }
+    // 目标行 = 该编辑器内含 contains 的最后一行（键入在 doc 尾追加场景即尾行）
+    const lines = Array.from(cm.querySelectorAll<HTMLElement>(".cm-line"));
+    const hit = lines
+      .filter((l) => (l.textContent ?? "").includes(contains))
+      .pop();
+    if (!hit) {
+      return {
+        found: true,
+        lineText: null,
+        lineRect: null,
+        color: null,
+        bg: null,
+        nodes: [],
+        visibleCount: vis.length,
+      };
+    }
+    const color = getComputedStyle(hit).color;
+    const bg = getComputedStyle(cm).backgroundColor;
+    const nodes = Array.from(hit.childNodes).map((n) => {
+      if (n.nodeType === Node.TEXT_NODE) {
+        return {
+          kind: "text",
+          text: n.textContent ?? "",
+          rect: snapRect(n.parentElement),
+        };
+      }
+      const el = n as HTMLElement;
+      return {
+        kind: "el",
+        cls: el.className ? String(el.className) : undefined,
+        rect: snapRect(el),
+      };
+    });
+    return {
+      found: true,
+      lineText: hit.textContent ?? "",
+      lineRect: snapRect(hit),
+      color,
+      bg,
+      nodes,
+      visibleCount: vis.length,
+    };
   };
 }

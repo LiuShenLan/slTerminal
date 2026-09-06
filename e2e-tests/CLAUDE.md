@@ -31,6 +31,16 @@ E2E helper 由 `E2E_ENABLED`（`src/lib/e2eEnabled.ts`）门控。`tauri build` 
 
 两套命名反映挂载位置不同，禁止把 `__e2e_*` 当 window 全局使用。
 
+### glyph-repro 门控 spec 与参数透传（2026-09-06）
+
+`glyph-repro.e2e.ts` 是 CM 字形绘制丢失取证/防复发 spec——现象只发生在真实 GPU 合成渲染路径（非整数 DPI 场景），默认套件**跳过**（`describe.skip`），取证/回归期显式启用：
+
+```
+GLYPH_E2E=1 node e2e-tests/run-wdio.cjs --spec glyph-repro.e2e.ts
+```
+
+`run-wdio.cjs` 支持把 CLI 参数透传 wdio（`--spec` 等）——单 spec 运行必须经启动器（Node 26→便携 22 切换兜底，裸 `npx wdio` 会踩版本坑）。启用时先读 spec 文件头注释（取证通道/断言层/环境探针语义——"e2e 不复现 ≠ 修复完成"的裁量依据）。
+
 ### 用户目录隔离（ADR-0016：假 home，替代 FIX-TE-04/E2E-05 备份/还原）
 
 **数据目录隔离（SLTERM_DATA_DIR）**：`run-wdio.cjs` 启动时注入 `SLTERM_DATA_DIR = <os.tmpdir()>/slterm-e2e-data`（env 链式继承：run-wdio → npx wdio → tauri driver → slterminal.exe），应用全部数据写入（settings.json / slterminal-projects.json 等）落在临时目录，与日常使用数据完全隔离；退出时清理临时目录。

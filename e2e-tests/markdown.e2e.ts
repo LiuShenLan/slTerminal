@@ -81,7 +81,7 @@ async function waitPreviewContains(fileName: string, text: string): Promise<void
  * 不在 frame.parentElement 内）——全局查询；残留面板 HUD 恒隐藏（visible 才渲染）
  * 不在 DOM，缩放用例中全局唯一激活无歧义（html.e2e 同风格）。
  */
-async function readPanelHud(_fileName: string): Promise<string | null> {
+async function readPanelHud(): Promise<string | null> {
   return browser.execute(
     () => document.querySelector('[data-e2e="markdown-zoom-hud"]')?.textContent ?? null,
   );
@@ -237,8 +237,49 @@ describe("Markdown 面板三形态", () => {
       await waitForPreviewFrame(fileName);
       // 2 格等比 ×1.1² ≈ 1.21 → 本面板 markdown HUD 121%
       await browser.waitUntil(
-        async () => (await readPanelHud(fileName))?.includes("121%") ?? false,
+        async () => (await readPanelHud())?.includes("121%") ?? false,
         { timeout: 20000, timeoutMsg: "markdown 预览缩放 HUD 未达 121%" },
+      );
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("edit 态 Ctrl+滚轮缩放编辑器字号：合成 WheelEvent → 字号 14→15（EditorPanel 同语义）", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "slterm-e2e-md-fontsize-"));
+    const fileName = `doc-${Date.now()}.md`;
+    const mdPath = join(tempDir, fileName);
+    writeFileSync(mdPath, `# 字号 ${fileName}\n\nmarker`, "utf8");
+    try {
+      await spawnMarkdownPanel(tempDir, mdPath, fileName);
+      // 可见 .cm-content 挂载（默认 edit 形态）
+      await browser.waitUntil(
+        async () =>
+          await browser.execute(
+            () =>
+              Array.from(document.querySelectorAll(".cm-content")).some(
+                (el) => el.getClientRects().length > 0,
+              ),
+          ),
+        { timeout: 15000, timeoutMsg: "md edit 编辑器未挂载" },
+      );
+      // 合成 Ctrl+wheel 一格（deltaY -120）到 .cm-content——wheel 由 useCodeMirror
+      // 挂载于 CM 容器（capture），命中即调共享 editorFontSize store setter
+      await browser.execute(() => {
+        const cm = Array.from(document.querySelectorAll(".cm-content")).find(
+          (el) => el.getClientRects().length > 0,
+        );
+        cm?.dispatchEvent(
+          new WheelEvent("wheel", { deltaY: -120, ctrlKey: true, cancelable: true, bubbles: true }),
+        );
+      });
+      await browser.waitUntil(
+        async () =>
+          (await browser.execute(() => {
+            const scroller = document.querySelector(".cm-scroller");
+            return scroller ? getComputedStyle(scroller).fontSize : null;
+          })) === "15px",
+        { timeout: 10000, timeoutMsg: "md 编辑 Ctrl+滚轮未生效（字号未 14→15）" },
       );
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
