@@ -111,6 +111,7 @@ pub fn run() {
             pty::spawn::pty_kill,
             pty::spawn::pty_kill_all,
             fs::fs_read_file,
+            fs::fs_read_resource,
             fs::fs_write_file,
             fs::fs_read_dir,
             fs::fs_create_dir,

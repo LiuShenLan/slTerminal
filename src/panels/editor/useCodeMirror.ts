@@ -74,6 +74,23 @@ export interface UseCodeMirrorOptions {
   fontSize?: number;
   /** 字体大小变更回调（Ctrl+Wheel 触发） */
   onFontSizeChange?: (size: number) => void;
+  /**
+   * 初始文档快照（草稿回填，docViewer 面板形态切换恢复用）：有值则跳过磁盘
+   * 读取直接以此建缓冲（免二次 IPC）。缺省走 filePath 读盘（EditorPanel 行为不变）。
+   */
+  initialDoc?: string;
+  /**
+   * 文档内容变更回调（三源：init = 缓冲建立完成 / edit = 每次 docChanged /
+   * reload = 外部修改重载成功）——面板级 docRef 真值源同步用。
+   * 回调仅在传入时挂载（EditorPanel 不传 → updateListener 零额外开销）。
+   */
+  onDocContent?: (text: string, source: "init" | "edit" | "reload") => void;
+  /**
+   * git diff gutter（默认 true = EditorPanel/DiffPanel 现行行为）。
+   * docViewer 预览面板（md/html 编辑源码态）传 false：不加载 diff gutter
+   * 扩展、不读 git、保存后不刷新 gutter。
+   */
+  gitGutterEnabled?: boolean;
 }
 
 /** 根据文件扩展名返回对应的 CodeMirror 语言扩展 */
@@ -128,7 +145,16 @@ function getParentDir(filePath: string): string | null {
   return parent;
 }
 
-export function useCodeMirror({ container, filePath, panelId, fontSize, onFontSizeChange }: UseCodeMirrorOptions) {
+export function useCodeMirror({
+  container,
+  filePath,
+  panelId,
+  fontSize,
+  onFontSizeChange,
+  initialDoc,
+  onDocContent,
+  gitGutterEnabled = true,
+}: UseCodeMirrorOptions) {
   const viewRef = useRef<EditorView | null>(null);
   const filePathRef = useRef<string | undefined>(filePath);
   const langCompartment = useRef(new Compartment());
@@ -140,6 +166,15 @@ export function useCodeMirror({ container, filePath, panelId, fontSize, onFontSi
   const wordWrapRef = useRef(false);
   /** 字体大小 ref —— wheel handler 中读取，避免闭包捕获过时值 */
   const fontSizeRef = useRef<number>(fontSize ?? 14);
+  /** onDocContent ref —— 回调经 ref 转发，防 effect 闭包过期（fontSizeRef 同模式） */
+  const onDocContentRef = useRef(onDocContent);
+  onDocContentRef.current = onDocContent;
+  /** gitGutterEnabled ref —— 保存刷新/加载分支经 ref 读取，不扩 effect 依赖 */
+  const gitGutterEnabledRef = useRef(gitGutterEnabled);
+  gitGutterEnabledRef.current = gitGutterEnabled;
+  /** initialDoc ref —— effect 读取（依赖数组含 initialDoc，切换时重建缓冲） */
+  const initialDocRef = useRef(initialDoc);
+  initialDocRef.current = initialDoc;
   // 保存后按文件路径抑制 fs-event auto-reload，避免将自己的写入误判为外部改动、
   // 执行全量文档替换从而破坏 diff gutter 的标记（RangeSet.map 会把所有 marker 清空）
   // Set<string> 按路径去重：多编辑器同时保存时 boolean 标记会被他人清空，Set 各自独立
@@ -182,10 +217,10 @@ export function useCodeMirror({ container, filePath, panelId, fontSize, onFontSi
       return;
     }
 
-    // P13: 保存后刷新 diff gutter
+    // P13: 保存后刷新 diff gutter（gitGutterEnabled=false 的预览面板跳过）
     const normalizedPath = normalizePath(path);
     const repoDir = getParentDir(normalizedPath);
-    if (repoDir) {
+    if (repoDir && gitGutterEnabledRef.current) {
       gitDiff(repoDir, normalizedPath)
         .then((hunks) => {
           if (hunks.length > 0) {
@@ -254,7 +289,12 @@ export function useCodeMirror({ container, filePath, panelId, fontSize, onFontSi
       mountedRef.current = true;
       let doc = "";
 
-      if (filePath) {
+      // initialDoc 快照（docViewer 草稿回填）：跳过磁盘读取（免二次 IPC）；无快照
+      // 且无 filePath = 空白缓冲。大文件检查仅适用磁盘读取路径（快照已过检/回填源）
+      const useSnapshot = initialDocRef.current !== undefined;
+      if (useSnapshot) {
+        doc = initialDocRef.current ?? "";
+      } else if (filePath) {
         try {
           doc = await fs.readFile(filePath);
           // generation 检查：filePath 已切换则丢弃过期结果
@@ -307,12 +347,18 @@ export function useCodeMirror({ container, filePath, panelId, fontSize, onFontSi
             keymap.of([...searchKeymap]),
             // Tab 缩进 / Shift+Tab 反缩进（basicSetup 出于无障碍默认不绑 Tab，此处显式启用）
             keymap.of([indentWithTab]),
-            // D3: 跟踪文档修改
+            // D3: 跟踪文档修改 + docRef 真值源回传（仅 onDocContent 挂载时付
+            // toString 成本——EditorPanel 等不传回调的消费方零额外开销）
             EditorView.updateListener.of((update) => {
-              if (update.docChanged) dirtyRef.current = true;
+              if (update.docChanged) {
+                dirtyRef.current = true;
+                const cb = onDocContentRef.current;
+                if (cb) cb(update.state.doc.toString(), "edit");
+              }
             }),
             langCompartment.current.of(getLanguageExtension(filePath)),
-            diffGutter(),
+            // gitGutterEnabled=false（docViewer 预览面板）不加载 diff gutter 扩展
+            ...(gitGutterEnabledRef.current ? [diffGutter()] : []),
           ],
         }),
         parent: container,
@@ -320,8 +366,12 @@ export function useCodeMirror({ container, filePath, panelId, fontSize, onFontSi
 
       viewRef.current = view;
 
+      // 缓冲建立完成 → init 源回传（面板 docRef 初始化/草稿回填确认）
+      const cb = onDocContentRef.current;
+      if (cb) cb(view.state.doc.toString(), "init");
+
       // D1: 文件打开后加载 diff 边栏
-      if (filePath) {
+      if (filePath && gitGutterEnabledRef.current) {
         const normalizedPath = normalizePath(filePath);
         const repoDir = getParentDir(normalizedPath);
         if (repoDir) {
@@ -351,7 +401,8 @@ export function useCodeMirror({ container, filePath, panelId, fontSize, onFontSi
       };
       cleanup();
     };
-  }, [container, filePath]);
+    // initialDoc 值变化（docViewer 快照恢复语义）→ 重建缓冲
+  }, [container, filePath, initialDoc]);
 
   // D3: filePath 变化时重新配置语言扩展（Compartment.reconfigure 不丢失文档状态）
   useEffect(() => {
@@ -413,6 +464,9 @@ export function useCodeMirror({ container, filePath, panelId, fontSize, onFontSi
               },
             });
             dirtyRef.current = false;
+            // docRef 真值源同步（reload 源）
+            const cb = onDocContentRef.current;
+            if (cb) cb(content, "reload");
           // P2-16: 外部修改重载失败时 console.warn
           // FE-10: + toast 提示——重载失败意味着编辑器内容可能过时，用户可感知
           }).catch((err) => {
@@ -431,6 +485,9 @@ export function useCodeMirror({ container, filePath, panelId, fontSize, onFontSi
               insert: content,
             },
           });
+          // docRef 真值源同步（reload 源）
+          const cb = onDocContentRef.current;
+          if (cb) cb(content, "reload");
           // P2-16: 外部修改重载失败时 console.warn
           // FE-10: + toast 提示——重载失败意味着编辑器内容可能过时，用户可感知
         }).catch((err) => {

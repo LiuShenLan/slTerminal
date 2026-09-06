@@ -86,6 +86,22 @@ describe("tauri.conf.json CSP 不变量", () => {
     expect(directives["img-src"]).toContain("https://asset.localhost");
   });
 
+  it("img-src 放行 data:（docViewer 预览本地相对资源内联，ADR-0018）", () => {
+    // 预览 iframe（opaque origin）无法加载 file:// 或 asset: 相对资源——md/html 内
+    // 相对图片经后端沙箱读入前端拼 data: URL 注入 srcDoc。svg 经 <img> 惰性上下文
+    // 加载（内嵌 script 不执行），data: 不承载脚本。收紧会静默断预览图片。
+    expect(directives["img-src"]).toContain("data:");
+    expect(directives["img-src"]).not.toContain("blob:");
+  });
+
+  it("font-src 放行同源 + data:（docViewer KaTeX 内联字体，ADR-0018）", () => {
+    // 现无 font-src 时回退 default-src 'self'——KaTeX 数学字体内联 data: font 后
+    // 必须显式放行；App 自身 @fontsource 走 'self' 不受影响。
+    expect(directives["font-src"]).toBeDefined();
+    expect(directives["font-src"]).toContain("'self'");
+    expect(directives["font-src"]).toContain("data:");
+  });
+
   it("connect-src 未显式声明——回退 default-src 'self'（快照）", () => {
     // Tauri 2 IPC 走自定义协议（ipc:），不经过 CSP connect-src 约束；
     // 无显式 connect-src = 回退 default-src 'self' = 禁外部网络连出。

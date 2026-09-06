@@ -28,6 +28,7 @@ fn main() {
         "pty_kill",
         "pty_kill_all",
         "fs_read_file",
+        "fs_read_resource",
         "fs_write_file",
         "fs_read_dir",
         "fs_create_dir",

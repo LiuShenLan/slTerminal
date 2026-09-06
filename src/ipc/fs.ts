@@ -38,6 +38,33 @@ export async function readFile(path: string): Promise<string> {
   return content;
 }
 
+/**
+ * 读取资源文件（任意二进制）并返回 base64 串
+ *
+ * docViewer 预览的本地相对资源（图片等）通道：后端按 256KB 原字节块 base64
+ * 编码经 onChunk Channel 推送，此处累积拼接为完整 base64 串后 resolve
+ * （UTF-8 安全，不做文本解码）；沙箱外/超 10MB 等后端校验失败直接 reject。
+ * MIME 推断由调用方按扩展名白名单完成——本 wrapper 只取字节。
+ */
+export async function readResourceBase64(path: string): Promise<string> {
+  const onChunk = new Channel<FsReadChunk>();
+  const chunks: string[] = [];
+  const content = new Promise<string>((resolve) => {
+    onChunk.onmessage = (chunk) => {
+      if (chunk.done) {
+        // 终态：拼接全部数据块后 resolve（终态块 data 恒为空串，不入累积）
+        resolve(chunks.join(""));
+      } else {
+        chunks.push(chunk.data);
+      }
+    };
+  });
+
+  // 先 await invoke：后端校验失败时异常直接传播给调用方
+  await invoke("fs_read_resource", { path, onChunk });
+  return content;
+}
+
 /** 写入文件内容（覆盖模式，UTF-8） */
 export async function writeFile(
   path: string,

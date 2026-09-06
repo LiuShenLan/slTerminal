@@ -373,6 +373,57 @@ describe('fs readFile Channel 合约（BE-03）', () => {
   });
 });
 
+// ── readResourceBase64（docViewer 本地资源通道）——wrapper 行为契约 ──
+// 与 readFile 同 Channel 分块形态，但块内为 base64 文本（二进制资源，UTF-8 安全）；
+// resolve 值由 done 序列驱动，mockIPC 只守 JS 侧形状（真实序列化由 L4 E2E 守卫）。
+
+describe('fs readResourceBase64 Channel 合约（docViewer 资源）', () => {
+  it('应调用 fs_read_resource 命令，payload 为 path + onChunk Channel，按 done 序列拼接 base64', async () => {
+    const spy = vi.fn();
+    mockIPC((cmd, args) => {
+      spy(cmd, args);
+      return undefined;
+    });
+
+    const promise = fs.readResourceBase64('C:\\img.png');
+    expect(spy).toHaveBeenCalledTimes(1);
+    const [cmd, args] = spy.mock.calls[0] as [string, Record<string, unknown>];
+    expect(cmd).toBe('fs_read_resource');
+    expect(args.path).toBe('C:\\img.png');
+    expect(args.onChunk).toBeInstanceOf(Channel);
+    // payload 键恰好为 path/onChunk（防单边字段漂移）
+    expect(Object.keys(args).sort()).toEqual(['onChunk', 'path']);
+
+    // 驱动分块序列：若干 done:false（base64 块原样累积）+ 终态
+    const channel = args.onChunk as Channel<fs.FsReadChunk>;
+    channel.onmessage({ data: 'aGVs', done: false });
+    channel.onmessage({ data: 'bG8=', done: false });
+    channel.onmessage({ data: '', done: true });
+
+    await expect(promise).resolves.toBe('aGVsbG8=');
+  });
+
+  it('readResourceBase64: 空资源（直接终态）返回空串', async () => {
+    let channel: Channel<fs.FsReadChunk> | null = null;
+    mockIPC((_cmd, args) => {
+      channel = (args as Record<string, unknown>).onChunk as Channel<fs.FsReadChunk>;
+      return undefined;
+    });
+    const promise = fs.readResourceBase64('C:\\empty.bin');
+    channel!.onmessage({ data: '', done: true });
+    await expect(promise).resolves.toBe('');
+  });
+
+  it('readResourceBase64: invoke 失败时异常应传播（沙箱外/超限）', async () => {
+    mockIPC(() => {
+      throw new Error('路径在项目根之外');
+    });
+    await expect(fs.readResourceBase64('C:\\secret.bin')).rejects.toThrow(
+      '路径在项目根之外',
+    );
+  });
+});
+
 // ═══════════════════════════════════════════════════════════════════
 // Settings IPC
 // ═══════════════════════════════════════════════════════════════════

@@ -13,6 +13,7 @@ import { createDir, deleteEntry, rename, writeFile } from "../../ipc/fs";
 import { useProjects } from "../../stores/projects";
 import { useLayout } from "../../stores/layout";
 import { titleManager } from "../../workspace/titleManager";
+import { openFileInPage } from "../../workspace/openFile";
 import {
   EXPLORER_COLORS,
   SEPARATOR_BG,
@@ -22,8 +23,7 @@ import {
   ERROR_BANNER_BORDER,
   ERROR_BANNER_FG,
 } from "../../theme";
-import { PANEL_TERMINAL, PANEL_EDITOR, isAlwaysRenderPanel } from "../../panelRegistry";
-import { fileViewerRegistry } from "../fileViewers";
+import { PANEL_TERMINAL } from "../../panelRegistry";
 import { usePanelFocus } from "../shortcuts/usePanelFocus";
 import { setActiveExplorer, clearActiveExplorer } from "./activeExplorer";
 import { basename } from "../../lib/path";
@@ -35,15 +35,10 @@ import { IconClose, IconEmptyBox, IconAlertTriangle } from "../../lib/icons";
 const ERROR_AUTO_DISMISS_MS = 5000;
 
 /**
- * handleOpenFile 前置守卫：无活跃操作页或无 Dockview API 时禁止打开面板。
- * 导出供单测直测——UI 路径上 activePageId 为 null 时 rootPath 亦为 null、
- * FileTree 不渲染，双击路径不可达（防御性代码仍需锁定行为）。
- * type predicate 使调用处 activePageId 自动收窄为非 null。
+ * canOpenFile re-export：打开链路单点已迁 src/workspace/openFile.ts
+ * （explorer/index.ts 导出面与既有单测兼容，勿在此另定义）。
  */
-export const canOpenFile = (
-  activePageId: string | null,
-  dockviewApi: unknown,
-): activePageId is string => !!activePageId && !!dockviewApi;
+export { canOpenFile } from "../../workspace/openFile";
 
 export const ExplorerPanel: React.FC = () => {
   const projects = useProjects((s) => s.projects);
@@ -189,70 +184,18 @@ export const ExplorerPanel: React.FC = () => {
     setRenamingPath(null);
   }, [rootPath]);
 
-  /** 双击文件 → 打开编辑器面板 */
+  /** 双击文件 → 打开面板（委托 workspace 共享打开链路 openFileInPage） */
   const handleOpenFile = useCallback(
     (filePath: string) => {
-      const dockApi = window.__dockviewApi;
-      // 前置守卫：无活跃操作页或无 Dockview API 时直接返回
-      //（canOpenFile 导出供单测直测，predicate 收窄 activePageId 非 null）
-      if (!dockApi) return;
-      if (!canOpenFile(activePageId, dockApi)) return;
-
-      // 去重：相同文件路径不重复打开，聚焦已有面板
-      const existingPanelId = titleManager.findExistingEditor(
-        activePageId,
+      openFileInPage(
+        {
+          activePageId,
+          dockApi: window.__dockviewApi,
+          rootPath,
+          projectRootPath,
+        },
         filePath,
       );
-      if (existingPanelId) {
-        const existingPanel = dockApi.getPanel(existingPanelId);
-        if (existingPanel) {
-          existingPanel.focus();
-          return;
-        }
-      }
-
-      // 通过 FileViewerRegistry 决定面板类型（未知类型回退 editor）
-      const panelType = fileViewerRegistry.resolve(filePath) ?? PANEL_EDITOR;
-
-      // 计算标题（无闪烁——addPanel 时直接传入）
-      const root = projectRootPath || rootPath || "";
-      const title = root
-        ? titleManager.getFileEditorTitle(activePageId, root, filePath)
-        : titleManager.getFileEditorTitle(activePageId, "", filePath);
-
-      const panelId = `${panelType}-${Date.now()}`;
-      // 文件预览类面板（htmlviewer 等）使用 renderer: "always" 保持 iframe/canvas
-      // browsing context 存活，避免页签切换/分屏时 DOM 移除导致白屏闪屏
-      const renderer = isAlwaysRenderPanel(panelType) ? ("always" as const) : undefined;
-
-      // addPanel 可能抛异常（如布局状态不一致），try-catch 防止 titleManager 状态污染
-      try {
-        dockApi.addPanel({
-          id: panelId,
-          component: panelType,
-          title,
-          params: { panelId, filePath },
-          ...(renderer ? { renderer } : {}),
-        });
-      } catch {
-        // 面板创建失败，跳过标题注册（titleManager 与 DOM 保持无孤记录）
-        return;
-      }
-
-      // 仅在 addPanel 成功后注册到标题管理器（保持两状态一致）
-      titleManager.registerEditor(activePageId, panelId, filePath);
-
-      // 新文件打开后重算整个页面标题（可能触发既有面板的冲突更新）
-      if (root) {
-        const apiForUpdates = window.__dockviewApi;
-        if (apiForUpdates) {
-          const updates = titleManager.recomputeTitles(activePageId, root);
-          for (const { panelId: pid, title: t } of updates) {
-            const p = apiForUpdates.getPanel(pid);
-            if (p) p.api.setTitle(t);
-          }
-        }
-      }
     },
     [activePageId, projectRootPath, rootPath],
   );

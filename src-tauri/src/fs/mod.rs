@@ -60,10 +60,14 @@ const READ_CHUNK_BYTES: usize = 256 * 1024;
 const MAX_FILE_SIZE_BYTES: u64 = 10 * 1024 * 1024;
 
 /// 文件分块读取块（Channel 推送，camelCase 与前端对齐）
+///
+/// 双通道共用同一载荷形态：
+/// - fs_read_file：data 为 UTF-8 文本（多字节字符跨块不切散）；
+/// - fs_read_resource：data 为原字节 base64 串（二进制资源，UTF-8 安全）。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FsReadChunk {
-    /// 分块数据（UTF-8 文本，多字节字符跨块不切散）
+    /// 分块数据（文本或 base64，语义由通道决定）
     pub data: String,
     /// 是否终态（终态 data 恒为空串，表示发送序列结束）
     pub done: bool,
@@ -170,6 +174,96 @@ where
             }
             break;
         }
+    }
+
+    // 终态：空数据 + done:true
+    send(FsReadChunk {
+        data: String::new(),
+        done: true,
+    })?;
+    Ok(())
+}
+
+/// 读取任意资源文件（二进制，base64 分块推送）
+///
+/// docViewer 预览（md/html 本地相对图片等）经此前端内联 data: URL：
+/// - 路径沙箱与大小上限（10MB）同 fs_read_file；
+/// - 原字节按 READ_CHUNK_BYTES 分块 base64 编码推送（UTF-8 安全、Channel 削峰），
+///   单块 ~341KB 文本；不做 UTF-8 校验（二进制资源语义，与 fs_read_file 区分）；
+/// - 发送序列 = 若干 {data, done:false} + 终态 {data:"", done:true}。
+#[tauri::command]
+pub async fn fs_read_resource(
+    path: String,
+    on_chunk: Channel<FsReadChunk>,
+    state: State<'_, AppState>,
+) -> Result<(), AppError> {
+    // State 仅做提取，业务逻辑在 fs_read_resource_impl（测试直接调内核）
+    fs_read_resource_impl(
+        path,
+        move |chunk| {
+            on_chunk.send(chunk).map_err(|e| {
+                tracing::warn!(error = %e, "fs_read_resource 分块推送失败");
+                AppError::IoKind {
+                    kind: "ipc".into(),
+                    message: "读取资源失败".into(),
+                }
+            })
+        },
+        extract_root(&state)?,
+    )
+    .await
+}
+
+/// fs_read_resource 命令内核：路径 sandbox 校验 + spawn_blocking 包裹 base64 分块读取
+async fn fs_read_resource_impl<F>(
+    path: String,
+    send: F,
+    root: Option<PathBuf>,
+) -> Result<(), AppError>
+where
+    F: FnMut(FsReadChunk) -> Result<(), AppError> + Send + 'static,
+{
+    // 路径 sandbox 校验（与全部 fs 命令共享项目根沙箱）
+    validate_path_within_root(&root, Path::new(&path))?;
+
+    spawn_blocking_task(move || read_resource_base64_chunked(&path, send)).await
+}
+
+/// base64 分块读取文件并通过 send 推送（块 = READ_CHUNK_BYTES 原字节）
+///
+/// 发送序列 = 若干 {data, done:false} + 终态 {data:"", done:true}；
+/// 空文件直接发终态；超限（>10MB）Err 且零发送（保护内存，同 fs_read_file）。
+fn read_resource_base64_chunked<F>(path: &str, mut send: F) -> Result<(), AppError>
+where
+    F: FnMut(FsReadChunk) -> Result<(), AppError>,
+{
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine as _;
+
+    // 先 metadata 校验大小上限——超限 Err，避免大文件全量读入
+    let meta = std::fs::metadata(path).map_err(|e| io_error("读取资源", Path::new(path), e))?;
+    if meta.len() > MAX_FILE_SIZE_BYTES {
+        return Err(AppError::IoKind {
+            kind: "size".into(),
+            message: format!("文件过大（超过 10MB 上限），已拒绝读取以保护内存: {path}"),
+        });
+    }
+
+    use std::io::Read;
+    let mut file =
+        std::fs::File::open(path).map_err(|e| io_error("读取资源", Path::new(path), e))?;
+    let mut buf = vec![0u8; READ_CHUNK_BYTES];
+
+    loop {
+        let n = file
+            .read(&mut buf)
+            .map_err(|e| io_error("读取资源", Path::new(path), e))?;
+        if n == 0 {
+            break; // EOF
+        }
+        // base64 编码原字节——文本块不切 UTF-8 字符（编码与字符边界无关）
+        let data = STANDARD.encode(&buf[..n]);
+        send(FsReadChunk { data, done: false })?;
     }
 
     // 终态：空数据 + done:true
@@ -1412,5 +1506,172 @@ mod read_file_chunked_tests {
             "错误消息应说明编码问题，实际: {err}"
         );
         assert!(!chunks.iter().any(|c| c.done), "编码错误时不得发送终态");
+    }
+}
+
+/// fs_read_resource base64 分块读取核心测试：还原一致性 / 空文件终态 / 超限拒绝
+///
+/// 直接测同步核心 read_resource_base64_chunked（send 回调注入收集——L1 无
+/// tauri::ipc::Channel 上下文，与 read_file_chunked 同测试模式）。
+#[cfg(test)]
+mod resource_read_tests {
+    use super::*;
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine as _;
+
+    /// 收集分块并拼接还原为原字节
+    fn collect_bytes(path: &Path) -> (Vec<u8>, bool, Result<(), AppError>) {
+        let mut chunks: Vec<FsReadChunk> = Vec::new();
+        let result = read_resource_base64_chunked(&path.to_string_lossy(), |chunk| {
+            chunks.push(chunk);
+            Ok(())
+        });
+        let mut bytes: Vec<u8> = Vec::new();
+        let mut terminal = false;
+        for c in &chunks {
+            if c.done {
+                terminal = true;
+                assert!(c.data.is_empty(), "终态块 data 应为空串");
+            } else {
+                bytes.extend_from_slice(&STANDARD.decode(&c.data).unwrap());
+            }
+        }
+        (bytes, terminal, result)
+    }
+
+    /// 二进制随机字节多块文件：base64 分块还原与原文字节一致 + 序列契约
+    #[test]
+    fn read_resource_base64_multi_chunk_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("img.bin");
+        // 600KB 全字节随机（含非法 UTF-8）——超过单块，至少 2 个数据块
+        let mut rng = 1u64;
+        let mut content: Vec<u8> = Vec::with_capacity(600 * 1024);
+        for _ in 0..(600 * 1024) {
+            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            content.push((rng >> 33) as u8);
+        }
+        std::fs::write(&file, &content).unwrap();
+
+        let (bytes, terminal, result) = collect_bytes(&file);
+        result.unwrap();
+        assert!(terminal, "应有终态块");
+        assert_eq!(bytes, content, "base64 分块拼接解码后应与原文字节一致");
+    }
+
+    /// 空文件：直接终态，无数据块
+    #[test]
+    fn read_resource_base64_empty_file_terminal_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("empty.bin");
+        std::fs::write(&file, []).unwrap();
+
+        let (chunks, result) = {
+            let mut chunks: Vec<FsReadChunk> = Vec::new();
+            let result = read_resource_base64_chunked(&file.to_string_lossy(), |chunk| {
+                chunks.push(chunk);
+                Ok(())
+            });
+            (chunks, result)
+        };
+        result.unwrap();
+        assert_eq!(chunks.len(), 1, "空文件应只发终态块");
+        assert!(chunks[0].done, "终态块 done 应为 true");
+    }
+
+    /// 超限拒绝：>10MB 稀疏文件 metadata 校验即 Err，零发送
+    #[test]
+    fn read_resource_base64_over_limit_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("big.bin");
+        std::fs::File::create(&file)
+            .unwrap()
+            .set_len(MAX_FILE_SIZE_BYTES + 1)
+            .unwrap();
+
+        let (chunks, result) = {
+            let mut chunks: Vec<FsReadChunk> = Vec::new();
+            let result = read_resource_base64_chunked(&file.to_string_lossy(), |chunk| {
+                chunks.push(chunk);
+                Ok(())
+            });
+            (chunks, result)
+        };
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("10MB"),
+            "超限错误消息应含 10MB 上限，实际: {err}"
+        );
+        assert!(chunks.is_empty(), "超限拒绝不应发送任何块");
+    }
+
+    /// 恰好 10MB：允许读取，全量还原
+    #[test]
+    fn read_resource_base64_at_limit_allowed() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("limit.bin");
+        std::fs::File::create(&file)
+            .unwrap()
+            .set_len(MAX_FILE_SIZE_BYTES)
+            .unwrap();
+
+        let (bytes, terminal, result) = collect_bytes(&file);
+        result.unwrap();
+        assert!(terminal);
+        assert_eq!(bytes.len() as u64, MAX_FILE_SIZE_BYTES, "恰好 10MB 应完整读出");
+    }
+}
+
+/// fs_read_resource 命令内核测试：沙箱校验分支（root 边界 + root=None 拒绝）
+#[cfg(test)]
+mod read_resource_impl_tests {
+    use super::*;
+
+    fn run<F: std::future::Future>(f: F) -> F::Output {
+        tokio::runtime::Runtime::new().unwrap().block_on(f)
+    }
+
+    fn run_impl(path: String, root: Option<PathBuf>) -> Result<(), AppError> {
+        run(fs_read_resource_impl(
+            path,
+            |_chunk| Ok(()),
+            root,
+        ))
+    }
+
+    #[test]
+    fn read_resource_inside_root_succeeds() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("img.png");
+        std::fs::write(&file, b"\x89PNG\x0d\x0a\x1a\x0a").unwrap();
+        run_impl(
+            file.to_string_lossy().to_string(),
+            Some(dir.path().to_path_buf()),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn read_resource_outside_root_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let file = outside.path().join("secret.png");
+        std::fs::write(&file, b"secret").unwrap();
+
+        let result = run_impl(
+            file.to_string_lossy().to_string(),
+            Some(root.path().to_path_buf()),
+        );
+        assert!(result.is_err(), "根外路径应被沙箱拒绝");
+    }
+
+    #[test]
+    fn read_resource_without_root_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a.png");
+        std::fs::write(&file, b"x").unwrap();
+
+        let result = run_impl(file.to_string_lossy().to_string(), None);
+        assert!(result.is_err(), "project_root 未设置应拒绝");
     }
 }
