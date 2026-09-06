@@ -37,6 +37,7 @@ import {
   ZOOM_ROUND,
   ZOOM_MSG_TYPE,
   RESET_MSG_TYPE,
+  ZOOM_SET_MSG_TYPE,
 } from "./previewMessages";
 
 /**
@@ -54,6 +55,7 @@ export function buildZoomRuntimeSource(nonce: string): string {
   const round = ZOOM_ROUND;
   const msgType = JSON.stringify(ZOOM_MSG_TYPE);
   const resetType = JSON.stringify(RESET_MSG_TYPE);
+  const setType = JSON.stringify(ZOOM_SET_MSG_TYPE);
   const nc = JSON.stringify(nonce);
 
   return (
@@ -77,12 +79,17 @@ export function buildZoomRuntimeSource(nonce: string): string {
     `if(n>max)n=max;if(n<min)n=min;n=Math.round(n*r)/r;` +
     `if(n!==zoom)apply(n);` +
     `},true);` +
-    // 下行复位：source===parent + type + nonce 三重校验
+    // 下行复位/设值：source===parent + type + nonce 三重校验
+    // 复位 = 归 1；设值（slterm_zoom_set，keepZoom 恢复）钳制到 [min,max] 后应用
     `win.addEventListener("message",function(e){` +
     `if(e.source!==win.parent)return;` +
     `var d=e.data;` +
-    `if(!d||d.type!==${resetType}||d.nonce!==${nc})return;` +
-    `if(zoom!==1)apply(1);` +
+    `if(!d||typeof d.type!=="string"||d.nonce!==${nc})return;` +
+    `if(d.type===${resetType}){if(zoom!==1)apply(1);return;}` +
+    `if(d.type!==${setType})return;` +
+    `var v=d.zoom;if(typeof v!=="number"||!isFinite(v))return;` +
+    `if(v>max)v=max;if(v<min)v=min;v=Math.round(v*r)/r;` +
+    `if(v!==zoom)apply(v);` +
     `},false);` +
     `}`
   );

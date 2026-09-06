@@ -14,6 +14,9 @@ export const ZOOM_MSG_TYPE = "slterm_zoom";
 /** 父窗口 → iframe：复位请求消息类型（下行） */
 export const RESET_MSG_TYPE = "slterm_reset";
 
+/** 父窗口 → iframe：设值请求消息类型（下行，iframe 重建后恢复缩放——keepZoom） */
+export const ZOOM_SET_MSG_TYPE = "slterm_zoom_set";
+
 /** 缩放下限（25%） */
 export const ZOOM_MIN = 0.25;
 
@@ -54,6 +57,13 @@ export interface ResetRequest {
   nonce: string;
 }
 
+/** 下行设值请求消息（keepZoom 恢复） */
+export interface ZoomSetRequest {
+  type: typeof ZOOM_SET_MSG_TYPE;
+  nonce: string;
+  zoom: number;
+}
+
 /** 构造上行缩放上报消息 */
 export function buildZoomReport(nonce: string, zoom: number): ZoomReport {
   return { type: ZOOM_MSG_TYPE, nonce, zoom };
@@ -62,6 +72,11 @@ export function buildZoomReport(nonce: string, zoom: number): ZoomReport {
 /** 构造下行复位请求消息 */
 export function buildResetRequest(nonce: string): ResetRequest {
   return { type: RESET_MSG_TYPE, nonce };
+}
+
+/** 构造下行设值请求消息（iframe 重建后按父侧镜像恢复缩放） */
+export function buildZoomSetRequest(nonce: string, zoom: number): ZoomSetRequest {
+  return { type: ZOOM_SET_MSG_TYPE, nonce, zoom };
 }
 
 /** 消息数值守卫：仅接受有限 number（拒绝 NaN/Infinity/非 number） */
