@@ -20,7 +20,7 @@ import type { DockviewPanelApi } from "dockview-react";
 /** 加载遮罩兜底超时（ms）——首帧数据未到达时自动隐藏 */
 const LOADING_MASK_TIMEOUT_MS = 1500;
 
-interface TerminalPanelProps {
+export interface TerminalPanelProps {
   /** Dockview 传入的面板 API */
   api: DockviewPanelApi;
   /** Dockview 传入的面板参数 */
@@ -101,6 +101,14 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ api, params }) => {
     }
   }, [api]);
 
+  // CP-020:本地中断事件源——claude 上游中断不发 hook 事件,状态机无中断出边,
+  // 前端自建:仅当页签当前 working 时置 attention(幂等;window capture 与 xterm
+  // attachCustomKeyEventHandler 委托双路径各调一次,第二次为 no-op)
+  const handleInterrupt = useCallback(() => {
+    if (latestParamsRef.current.tabStatus !== "working") return;
+    api.updateParameters({ ...latestParamsRef.current, tabStatus: "attention" });
+  }, [api]);
+
   // F9 行为修订：页签 logo 会话绑定——agentSession 存在即显示 logo（按 cliId 查
   // profile.iconSrc，与 agent 侧栏行同源），会话结束（删行）即消失。
   // register 事件同样触发同步：重启恢复时 agentSession 未设置 → 清布局 JSON
@@ -169,6 +177,7 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ api, params }) => {
     fontSize: terminalFontSize,
     onFontSizeChange: setTerminalFontSize,
     onTabStateChange: handleTabStateChange,
+    onInterrupt: handleInterrupt,
   });
 
   // 首帧数据到达时隐藏加载遮罩

@@ -16,7 +16,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### SchemeRegistry
 
-模块级单例，与 `CliProfileRegistry` 等同模式。`setActive` 未知 id 时 `console.warn` + 回退 `linear`（ACC-04 降级冒烟）。`getActive()` 回退语义依赖 `linear` 恒已注册。
+模块级单例，与 `CliProfileRegistry` 等同模式。`setActive` 未知 id 时 `console.warn` + 回退 `linear`（ACC-04 降级冒烟）。`getActive()` 回退语义依赖 `linear` 恒已注册。`onDidChange(listener)` 订阅 active 切换（返回取消函数）——editorTheme 热切换槽等消费方经它即时响应（CP-039）。
 
 ### colors.ts facade
 
@@ -25,21 +25,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### overrides.ts 五导出
 
 - `dockviewVarStyle()` / `allotmentVarStyle()`：active 方案 libraries 段 → CSS 变量 style 对象。
-- `editorTheme`：模块级常量 = active 方案 `editor.theme`（linear 为 oneDark 直 import 透出）。
+- `getEditorTheme()`：函数形 = 当前 active 方案 `editor.theme`（linear 为 oneDark 直 import 透出）。
 - `editorColorOverrides()`：active 方案 `editor.overrides` → CM6 `EditorView.theme` 扩展。
 - `editorSyntaxHighlight()`：active 方案 `editor.overrides.syntax` → CM6 `syntaxHighlighting` 扩展。
 - **iframe 文档 CSS 生成先例（2026-09-06）**：opaque origin 内文档无法引用宿主 CSS 变量，但颜色值仍单点于方案——`panels/markdown/mdPreviewStyle.ts` 的 `buildMdPreviewStyleCss()` 每次渲染取 active 方案现拼字符串 CSS（正文/底色/syntax 直引 editor.overrides；结构色 = overrides.preview 组——CM 无对应槽位的文档排版色集中于此，见 types.ts 槽位注释）。非组件代码不经 colors.ts facade、直取 schemeRegistry（同 overrides.ts 函数形导出先例）；新增文档结构色一律入 editor.overrides.preview，禁止字面量双轨（曾登记豁免已撤销）。
 
-函数形导出支持 D2 热切换；`editorTheme` 为常量，新窗口重载生效。
+函数形导出支持 D2 热切换；`getEditorTheme()` 随 active 方案响应式取色——消费点经 `editorThemeSlot.ts`（Compartment + `schemeRegistry.onDidChange`）热重配置，编辑器不重建，方案切换即时生效（CP-039）。
 
 ### CM6 层叠陷阱（ACC-05）
 
 `@codemirror/view` 的 `mountStyles()` 将 styleModule facet 数组 `concat(baseTheme)` 后 **`reverse()`** 再注入 `<style>` 标签——先声明的主题规则排最后，同特异性下恒胜。
 
 - **`editorColorOverrides`** 靠选择器特异性决胜：规则前缀 `"&.cm-editor"` / `"&.cm-editor .cm-content"` / `"&.cm-editor .cm-gutters"` 等，使 compiled 选择器特异性高于 oneDark。
-- **`editorSyntaxHighlight`** 与 oneDark 的 HighlightStyle 是同机制竞争，无法靠选择器前缀决胜——消费点扩展数组必须置于 `editorTheme` 之前（`[editorSyntaxHighlight(), editorTheme, editorColorOverrides(), ...]`）。
+- **`editorSyntaxHighlight`** 与 oneDark 的 HighlightStyle 是同机制竞争，无法靠选择器前缀决胜——消费点必须以 `editorThemeSlot` 主题槽接入（槽内 `editorThemeBundle()` 单点固化 `[editorSyntaxHighlight(), getEditorTheme(), editorColorOverrides()]` 顺序，syntax 先于 theme，CP-039）；禁止绕过槽在消费点裸拼三项。
 
-**改覆盖前必读**：与 oneDark 同值时不暴露、改值即暴露；平级选择器会因 reverse 层叠恒输。新增 syntax 映射只能靠数组顺序，不得后置 `editorTheme`。
+**改覆盖前必读**：与 oneDark 同值时不暴露、改值即暴露；平级选择器会因 reverse 层叠恒输。新增 syntax 映射只能靠数组顺序，槽内顺序不得后置 theme。
 
 ### 启动链时序（main.tsx）
 
@@ -62,7 +62,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **`startupColors.ts` 为生成物禁手改**：改 linear 三槽位后须 `npm run sync:startup-colors`。
 - **CM6 reverse 层叠**：新增 overrides 覆盖必须验证选择器特异性；syntax HighlightStyle 只能靠扩展数组顺序。
 - **colors.ts 不定义颜色值**：所有消费只引用 facade token；禁止硬编码颜色。
-- **editorTheme 常量**：D2 切换不生效，需重载窗口。
+- **onDidChange 订阅契约（CP-039）**：`schemeRegistry.onDidChange(listener)` 返回取消函数；`setActive` 已知/未知 id 两分支与 `_reset` 均触发通知，监听器集合不被 `_reset` 清。红线：监听方必须在 view 销毁前调取消函数（editorThemeSlot 的 bind 取消即此语义）——销毁后 dispatch 会抛错。
 
 ## 测试模式
 

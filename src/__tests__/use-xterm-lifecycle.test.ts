@@ -1472,7 +1472,7 @@ describe("attachCustomKeyEventHandler", () => {
     const handler = await mountAndGetKeyHandler();
     mockResolve.mockReturnValue(false);
 
-    const event = makeKeyEvent({ ctrlKey: true, code: "KeyC" }); // Ctrl+C 不注册 → 透传
+    const event = makeKeyEvent({ ctrlKey: true, code: "KeyC" }); // Ctrl+C：真实命中 terminal.interrupt 亦返回 false 透传（CP-020）
     const result = handler(event);
 
     expect(result).toBe(true); // 交给 xterm.js（编码 \x03 到 PTY）
@@ -2682,6 +2682,10 @@ describe("terminal actions 链路 + 卸载清理错误分支（TQ-COV-07）", ()
     expect(capturedTerminal!.getSelection).toHaveBeenCalled();
     actions!.paste("粘贴文本");
     expect(capturedTerminal!.paste).toHaveBeenCalledWith("粘贴文本");
+
+    // CP-020:interrupt 动作存在——本用例未传 onInterrupt → 经 ref 转发为 no-op 不抛
+    expect(typeof actions!.interrupt).toBe("function");
+    expect(() => actions!.interrupt?.()).not.toThrow();
 
     // writeToPty 无 sessionId（spawn 未完成）→ 短路不调 IPC（防御分支）
     actions!.writeToPty(new Uint8Array([72, 73]));

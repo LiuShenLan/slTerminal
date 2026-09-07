@@ -7,6 +7,7 @@
 
 import { Terminal } from "@xterm/xterm";
 import { WebglAddon } from "@xterm/addon-webgl";
+import { toast } from "../../lib";
 
 // ---- 常量 ----
 
@@ -48,6 +49,44 @@ export function resetWebglCache(): void {
   webglCache = null;
 }
 
+// ---- SwiftShader(软件渲染)判定(CP-018) ----
+
+/** SwiftShader(软件渲染)判定缓存——模块级,一次检测全生命周期复用 */
+let swiftShaderCache: boolean | null = null;
+/** 软件渲染 toast 是否已提示(CP-018:全生命周期一次性) */
+let swiftShaderNotified = false;
+
+/**
+ * 判定当前 WebGL2 渲染器是否软件渲染(SwiftShader)。
+ * 经 WEBGL_debug_renderer_info 扩展读 UNMASKED_RENDERER_WEBGL;扩展缺失或
+ * 读取出错时保守返回 false(不提示——避免误报)。不改 detectWebgl 检测契约。
+ */
+export function isSwiftShaderRenderer(): boolean {
+  if (swiftShaderCache !== null) return swiftShaderCache;
+  try {
+    const canvas = document.createElement("canvas");
+    const gl = canvas.getContext("webgl2");
+    if (!gl) {
+      swiftShaderCache = false;
+    } else {
+      const ext = gl.getExtension("WEBGL_debug_renderer_info");
+      const renderer = ext
+        ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL))
+        : "";
+      swiftShaderCache = /swiftshader/i.test(renderer);
+    }
+  } catch {
+    swiftShaderCache = false;
+  }
+  return swiftShaderCache;
+}
+
+/** 重置 SwiftShader 判定缓存与通知旗标(仅测试使用) */
+export function resetSwiftShaderCache(): void {
+  swiftShaderCache = null;
+  swiftShaderNotified = false;
+}
+
 // ---- WebGL 加载与重试 ----
 
 /**
@@ -86,6 +125,13 @@ export function setupWebglWithRetry(
       currentAddon = webglAddon;
       term.loadAddon(webglAddon);
       onSuccess(webglAddon);
+
+      // CP-018:软件渲染一次性降级提示——GPU blocklist 机器落入 SwiftShader 时
+      // 用户无任何感知(FE-26 接受软件渲染的前提是「远快于 DOM」,但仍慢于硬件 GPU)
+      if (isSwiftShaderRenderer() && !swiftShaderNotified) {
+        swiftShaderNotified = true;
+        toast.show("warning", "当前终端使用软件渲染(SwiftShader),滚动性能可能下降");
+      }
 
       // context loss 时自动 dispose + 指数退避重试
       webglAddon.onContextLoss(() => {

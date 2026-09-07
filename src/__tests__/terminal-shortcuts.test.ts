@@ -1,7 +1,7 @@
 // keyboard.test.ts — 终端快捷键命令工厂单元测试
 //
 // 工厂 createTerminalShortcuts() 无参，handler 经 getActiveTerminal() 派发到聚焦终端。
-// 覆盖：命令结构、copy/paste/newline 派发到 active、无 active 时返回 false 透传。
+// 覆盖：命令结构、copy/paste/newline/interrupt 派发到 active、无 active 时返回 false 透传。
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createTerminalShortcuts } from "../panels/terminal/keyboard";
@@ -79,22 +79,25 @@ describe("createTerminalShortcuts", () => {
   // ---- 1. 命令结构 ----
 
   describe("命令结构", () => {
-    it("返回三个命令：terminal.copy / terminal.paste / terminal.newline", () => {
-      expect(cmds).toHaveLength(3);
+    it("返回四个命令：terminal.copy / terminal.paste / terminal.newline / terminal.interrupt", () => {
+      expect(cmds).toHaveLength(4);
       expect(findCommand(cmds, "terminal.copy")).toBeDefined();
       expect(findCommand(cmds, "terminal.paste")).toBeDefined();
       expect(findCommand(cmds, "terminal.newline")).toBeDefined();
+      expect(findCommand(cmds, "terminal.interrupt")).toBeDefined();
     });
 
     it("命令 context 为 terminal", () => {
       for (const cmd of cmds) expect(cmd.context).toBe("terminal");
     });
 
-    it("Ctrl+C 未注册为命令（自然透传）", () => {
+    it("Ctrl+C 注册为 terminal.interrupt（CP-020 本地中断命令，handler 返回 false 透传）", () => {
       const ctrlC = cmds.filter(
         (c) => c.defaultKey?.code === "KeyC" && c.defaultKey?.ctrlKey && !c.defaultKey?.shiftKey,
       );
-      expect(ctrlC).toHaveLength(0);
+      expect(ctrlC).toHaveLength(1);
+      expect(ctrlC[0]!.id).toBe("terminal.interrupt");
+      expect(ctrlC[0]!.handler(keyEvent({ ctrlKey: true, code: "KeyC" }))).toBe(false);
     });
   });
 
@@ -155,6 +158,29 @@ describe("createTerminalShortcuts", () => {
       expect(result).toBe(true);
       expect(writeSpy).toHaveBeenCalledTimes(1);
       expect(Array.from(writeSpy.mock.calls[0][0] as Uint8Array)).toEqual([0x0a]);
+    });
+  });
+
+  // ---- 2b. CP-020 terminal.interrupt 本地中断（派发 interrupt + 恒返回 false 透传） ----
+
+  describe("CP-020 terminal.interrupt", () => {
+    it("① 有 active 且 interrupt 存在 → 返回 false 且 interrupt 被调一次（\x03 仍透传）", () => {
+      const interruptSpy = vi.fn();
+      setActive(makeActive({ interrupt: interruptSpy }));
+      const result = findCommand(cmds, "terminal.interrupt")!.handler(keyEvent({ ctrlKey: true, code: "KeyC" }));
+      expect(result).toBe(false); // 关键：透传——SIGINT 字节仍由 xterm 自然发送
+      expect(interruptSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("② 无 active → 返回 false（透传），不抛", () => {
+      const result = findCommand(cmds, "terminal.interrupt")!.handler(keyEvent({ ctrlKey: true, code: "KeyC" }));
+      expect(result).toBe(false);
+    });
+
+    it("③ active 无 interrupt 字段（旧实例）→ 返回 false 不抛", () => {
+      setActive(makeActive()); // 不提供 interrupt
+      const result = findCommand(cmds, "terminal.interrupt")!.handler(keyEvent({ ctrlKey: true, code: "KeyC" }));
+      expect(result).toBe(false);
     });
   });
 

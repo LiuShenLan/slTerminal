@@ -1,13 +1,14 @@
 // hooks-config-jsonmode.test.tsx — JsonMode / MatcherTester L2 测试（P3-TE-09 / P3-TE-10）
 //
 // TE-09（JSON 模式渲染与 Schema 校验）：CM6 EditorView 创建、schema 扩展注册
-// （jsonSchemaHover/jsonSchemaLinter + hooks 子 schema + height theme）、
+// （自绘 jsonSchemaCm 层 sentinel + height theme）、
 // 非法 JSON 触发 onValidationChange(false)、外部 value 同步、MatcherTester 试测。
 // TE-10（事件导航）：十大分组事件名渲染、点击后选区跳到对应事件键位置。
 //
 // mock 策略：照 gitshow-panel.test.tsx 先例——jsdom 无布局引擎，mock CM6 模块，
 // 捕获 EditorState.create 的 extensions 与 updateListener 回调手动驱动。
-// schema 模块保持真实（validateHooksJson 与 hooksSubSchema 是测试目标）。
+// schema 模块保持真实（validateHooksJson 是测试目标）；jsonSchemaCm 自绘层 mock
+// （sentinel 断言注册，纯函数行为由 hooks-json-schema-cm.test.ts 直测——CP-002）。
 
 import { describe, it, expect, afterEach, vi, beforeEach } from "vitest";
 
@@ -17,10 +18,8 @@ const {
   mockScrollIntoView,
   mockUpdateListenerOf,
   mockEditorViewTheme,
-  mockJsonSchemaHover,
-  mockJsonSchemaLinter,
-  mockStateExtensions,
-  mockHandleRefresh,
+  mockHooksSchemaLinter,
+  mockHooksSchemaHover,
   mockLinter,
   mockHoverTooltip,
   mockJsonParseLinter,
@@ -34,10 +33,8 @@ const {
     mockScrollIntoView,
     mockUpdateListenerOf: vi.fn((cb: unknown) => ({ __listener: cb })),
     mockEditorViewTheme: vi.fn(() => []),
-    mockJsonSchemaHover: vi.fn(() => [{ __schemaHover: true }]),
-    mockJsonSchemaLinter: vi.fn((opts: unknown) => [{ __schemaLinter: opts }]),
-    mockStateExtensions: vi.fn((schema: unknown) => [{ __stateExt: schema }]),
-    mockHandleRefresh: vi.fn(),
+    mockHooksSchemaLinter: vi.fn(() => [{ __schemaLinter: true }]),
+    mockHooksSchemaHover: vi.fn(() => [{ __schemaHover: true }]),
     mockLinter: vi.fn((x: unknown) => x),
     mockHoverTooltip: vi.fn((x: unknown) => x),
     mockJsonParseLinter: vi.fn(() => ({ __parseLinter: true })),
@@ -72,13 +69,22 @@ vi.mock("@codemirror/view", () => {
   };
 });
 
-// @codemirror/state mock —— 捕获 EditorState.create 的 doc/extensions
+// @codemirror/state mock —— 捕获 EditorState.create 的 doc/extensions；
+// Compartment 桩（CP-039 主题槽消费：of 透传扩展、reconfigure 返回 effects 桩）
 vi.mock("@codemirror/state", () => ({
   EditorState: {
     create(config: { doc?: string; extensions?: unknown[] }) {
       capturedEditorStateConfig.push({ doc: config.doc, extensions: config.extensions });
       return { doc: config.doc ?? "" };
     },
+  },
+  Compartment: class {
+    of(ext: unknown) {
+      return ext;
+    }
+    reconfigure() {
+      return [];
+    }
   },
 }));
 
@@ -94,12 +100,11 @@ vi.mock("@codemirror/lang-json", () => ({
 // @codemirror/lint mock
 vi.mock("@codemirror/lint", () => ({ linter: mockLinter }));
 
-// codemirror-json-schema mock —— schema 扩展注册 spy（schema 参数 = hooks 子 schema）
-vi.mock("codemirror-json-schema", () => ({
-  jsonSchemaHover: mockJsonSchemaHover,
-  jsonSchemaLinter: mockJsonSchemaLinter,
-  stateExtensions: mockStateExtensions,
-  handleRefresh: mockHandleRefresh,
+// 自绘 schema 层 mock（CP-002：第三方 schema 扩展摘除后改自绘层）——两扩展返回 sentinel，
+// 组件侧只断言「已注册」；真实 lint/hover 行为由 hooks-json-schema-cm.test.ts 直测纯函数
+vi.mock("../features/cliProfiles/profiles/claude/configEditor/jsonSchemaCm", () => ({
+  hooksSchemaLinter: mockHooksSchemaLinter,
+  hooksSchemaHover: mockHooksSchemaHover,
 }));
 
 import React from "react";
@@ -107,7 +112,8 @@ import { render, cleanup, fireEvent, act } from "@testing-library/react";
 import JsonMode, { findEventPosition } from "../features/cliProfiles/profiles/claude/configEditor/JsonMode";
 import MatcherTester from "../features/cliProfiles/profiles/claude/configEditor/MatcherTester";
 import { HOOK_EVENTS, EVENT_GROUPS, getGroups, getEventsByGroup } from "../features/cliProfiles/profiles/claude/configEditor/eventsCatalog";
-import { hooksSubSchema } from "../features/cliProfiles/profiles/claude/configEditor/schema";
+import { schemeRegistry } from "../theme/schemeRegistry";
+import { linear } from "../theme/schemes/linear";
 
 /** mock EditorView 挂载形态（经 parent._cmView 访问） */
 interface MockEditorViewInstance {
@@ -133,9 +139,8 @@ function renderJsonMode(value: string, onChange = vi.fn(), onValidationChange = 
 describe("P3-TE-09 JSON 模式渲染与 Schema 校验", () => {
   beforeEach(() => {
     capturedEditorStateConfig.length = 0;
-    mockJsonSchemaHover.mockClear();
-    mockJsonSchemaLinter.mockClear();
-    mockStateExtensions.mockClear();
+    mockHooksSchemaLinter.mockClear();
+    mockHooksSchemaHover.mockClear();
     mockLinter.mockClear();
     mockHoverTooltip.mockClear();
     mockJsonParseLinter.mockClear();
@@ -157,35 +162,51 @@ describe("P3-TE-09 JSON 模式渲染与 Schema 校验", () => {
     expect(capturedEditorStateConfig[0].doc).toBe('{"PreToolUse": []}');
   });
 
-  it("schema 扩展注册：jsonSchemaHover / jsonSchemaLinter + hooks 子 schema + height theme", () => {
+  it("schema 扩展注册：自绘 hooksSchemaLinter/HooksSchemaHover sentinel + height theme", () => {
     renderJsonMode("{}");
-    // schema 扩展均被调用
-    expect(mockJsonSchemaHover).toHaveBeenCalledTimes(1);
-    expect(mockJsonSchemaLinter).toHaveBeenCalledTimes(1);
-    // stateExtensions 收到 hooks 子 schema（对齐 hooks 子树编辑范围）
-    expect(mockStateExtensions).toHaveBeenCalledTimes(1);
-    expect(mockStateExtensions.mock.calls[0][0]).toBe(hooksSubSchema);
-    // jsonSchemaLinter 无参注册，needsRefresh 配置在外层 linter() 包装上
-    expect(mockJsonSchemaLinter).toHaveBeenCalledTimes(1);
-    expect(mockLinter).toHaveBeenCalledTimes(2);
-    const linterCalls = mockLinter.mock.calls as unknown as [
-      [unknown, unknown],
-      [unknown, unknown],
-    ];
-    expect(linterCalls[0][1]).toEqual({ delay: 300 });
-    expect(linterCalls[1][1]).toEqual({ needsRefresh: mockHandleRefresh });
-    // 包装顺序锁定（HKC-01）：[0] = jsonParseLinter（语法波浪线）、[1] = jsonSchemaLinter
-    //（schema 波浪线）。身份断言防交换——若交换，语法错误会先经 schema linter 误报误导。
-    expect(linterCalls[0][0]).toBe(mockJsonParseLinter.mock.results[0].value);
-    expect(linterCalls[1][0]).toBe(mockJsonSchemaLinter.mock.results[0].value);
+    // 自绘层两扩展均被调用（sentinel 值即扩展数组元素）
+    expect(mockHooksSchemaLinter).toHaveBeenCalledTimes(1);
+    expect(mockHooksSchemaHover).toHaveBeenCalledTimes(1);
+    expect(mockLinter).toHaveBeenCalledTimes(1);
+    const linterCall = mockLinter.mock.calls[0] as unknown as [unknown, unknown];
+    // 唯一 linter 包装 = jsonParseLinter（语法波浪线，delay 300ms）——自绘 schema
+    // linter 的 delay 300ms 配置下沉 jsonSchemaCm 内部（CP-002，由
+    // hooks-json-schema-cm.test.ts 直测 hooksSchemaLinter 承接）
+    expect(linterCall[1]).toEqual({ delay: 300 });
+    expect(linterCall[0]).toBe(mockJsonParseLinter.mock.results[0].value);
+    // 悬停包装不再经组件 hoverTooltip（已下沉自绘层 jsonSchemaCm，CP-002）
+    expect(mockHoverTooltip).not.toHaveBeenCalled();
     // 语言 + 语法 linter 注册
     expect(mockJson).toHaveBeenCalledTimes(1);
     expect(mockJsonParseLinter).toHaveBeenCalledTimes(1);
-    // schema hover 触发（HKC-10）：jsonSchemaHover 的返回值被 hoverTooltip 包装（身份锁定）
-    expect(mockHoverTooltip).toHaveBeenCalledTimes(1);
-    expect(mockHoverTooltip.mock.calls[0][0]).toBe(mockJsonSchemaHover.mock.results[0].value);
+    // 扩展数组含两个 sentinel（身份锁定——captured extensions 与 mock 返回值同引用）
+    const exts = capturedEditorStateConfig[0].extensions as unknown[];
+    expect(exts).toContainEqual(mockHooksSchemaLinter.mock.results[0].value);
+    expect(exts).toContainEqual(mockHooksSchemaHover.mock.results[0].value);
     // height:100% theme（.cm-editor 确定高度 → 竖向滚动条，验收 1.3）
     expect(mockEditorViewTheme).toHaveBeenCalledWith({ "&": { height: "100%" } });
+  });
+
+  it("CP-039：schemeRegistry.setActive 后 view.dispatch 携 Compartment 效果被调（主题热切换）", () => {
+    const { unmount, view } = renderJsonMode("{}");
+    expect(mockEditorViewDestroy).not.toHaveBeenCalled();
+    view.dispatch.mockClear();
+    // 注册临时方案并切换——挂载 effect 已 bind 主题槽订阅（真实 schemeRegistry）
+    schemeRegistry.register({ ...linear, id: "jsonmode-theme", label: "JsonMode Theme" });
+    act(() => {
+      schemeRegistry.setActive("jsonmode-theme");
+    });
+    // Compartment mock reconfigure 返回 []——dispatch 以 effects 被调
+    expect(view.dispatch).toHaveBeenCalledTimes(1);
+    expect(view.dispatch).toHaveBeenCalledWith({ effects: [] });
+    // 防复发：方案切换不重建 EditorView（无 destroy 调用）
+    expect(mockEditorViewDestroy).not.toHaveBeenCalled();
+    unmount();
+    // 还原注册表（防污染后续用例）
+    act(() => {
+      schemeRegistry._reset();
+    });
+    schemeRegistry.register(linear);
   });
 
   it("非法 JSON 触发 onValidationChange(false) + onChange 透传", () => {

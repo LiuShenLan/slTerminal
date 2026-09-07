@@ -65,7 +65,7 @@ claude 专属 hooks 编辑器（ClaudeHooksConfigEditor + 10 文件 + schema/）
 
 - 升级方式：整文件替换 `configEditor/schema/claude-code-settings.json` 即可，离线可用、无网络请求（自包含性已核实：无远程 `$ref`，35 个本地 `$ref` 全指向 `#/$defs/*`）。
 - `compileSchema(schema, { draft: "draft-07" })` 单例（json-schema-library 11.x）——schema 固定不变，复用避免重复编译；本 schema 无 `$schema` 字段，缺省会选 draft-2020-12，**必须显式 `draft-07` 保持旧语义**（TE-09）。
-- **TE-15 债务登记（ADR-0010）**：json-schema-library 9.x/11.x 双 major 并存——codemirror-json-schema@0.8.1 锁 9.x（上游约束），主声明 11.6.2；运行时两实例并存无冲突，待上游升级消解。
+- **TE-15 已消解（CP-002）**：json-schema 扩展（原锁 9.x 双 major 并存源）已摘除，自绘 lint/hover 层（`configEditor/jsonSchemaCm.ts`）直接消费本模块 11.x 编译单例；json-schema-library 全仓单实例，katex 式「待上游」债务形态不再保留。
 
 ### 注册触发点（side-effect import）
 

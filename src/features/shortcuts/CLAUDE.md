@@ -44,7 +44,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### resolve 委托 + 无双触发
 
-终端 `useXterm.ts` 的 `attachCustomKeyEventHandler` 委托进 `resolve(event, "terminal")`。正常路径：window capture 命中即 `stopPropagation`，事件到不了 xterm，委托层不触发。仅当 capture 路径因 xterm 6.1 focusin 未冒泡而失效时，委托层用 forceContext 兜底命中。透传命令（handler 返回 false）两路径都不产生副作用。
+终端 `useXterm.ts` 的 `attachCustomKeyEventHandler` 委托进 `resolve(event, "terminal")`。正常路径：window capture 命中即 `stopPropagation`，事件到不了 xterm，委托层不触发。仅当 capture 路径因 xterm 6.1 focusin 未冒泡而失效时，委托层用 forceContext 兜底命中。透传命令（handler 返回 false）两路径都不产生副作用——CP-020 例外：`terminal.interrupt` 的 handler 因不拦截事件会在双路径各调一次，依赖 TerminalPanel.handleInterrupt 的 working 守卫幂等（第二次 no-op）。
 
 ### 校验 + 静默降级（`reserved.ts` + `effectiveKeystroke`）
 
@@ -82,7 +82,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   - 运行时级硬编码：`Ctrl+W`（窗口关闭被禁用，事件可穿透 DOM）。
   - `tauri-plugin-prevent-default`：`Ctrl+P`、`Ctrl+R`、F12（`Ctrl+F` 已排除）。
   - 应用 ShortcutRegistry：前端 capture-phase keydown。
-- **Ctrl+C 保留为中断**：终端 `Ctrl+C` 通过**不注册命令**实现；`isReserved` 将 `Ctrl+KeyC` 在 terminal/global 标记为保留键，**用户覆盖也无法绑到它**。勿在任何地方注册 Ctrl+C 命令。
+- **Ctrl+C 保留为中断（CP-020）**：终端 `Ctrl+C` 注册为 `terminal.interrupt` 命令——handler 派发本地中断提示（页签 working→attention）后**必须返回 false 透传**，`\x03` 仍由 xterm.js 自然发送到 PTY（SIGINT 语义不变）；任何新增 terminal context 命令不得拦截 Ctrl+C 透传语义。`isReserved` 将 `Ctrl+KeyC` 在 terminal/global 标记为保留键，**用户覆盖也无法绑到它**（代码默认键绑保留键为 CP-020 显式豁免，command-catalog.test 同步守卫）。
 - **handler 必须返回布尔**：返回 `true` → 消费并阻止默认/冒泡；返回 `false` → 透传。无聚焦实例必须返回 `false`。
 - **禁止命令 handler 闭包捕获实例**：多实例下必须经 active 指针派发。
 - **同一 `id` 重复注册幂等覆盖**，`refCount` 不变；注销不存在的 `id` 不抛异常；`_reset()` 仅测试用。
@@ -126,4 +126,4 @@ HTML 面板内容在 `<iframe sandbox="allow-scripts" srcDoc={...}>` 中（不�
 - **核心**：注册/注销、引用计数、上下文栈竞态、匹配排序、IME 透传、setOverrides 重绑/解绑/降级/冲突、resolve/forceContext、exportContextBindings。
 - **命令目录守卫**：默认键非保留、id 唯一、命令齐全。
 - **usePanelFocus**：focusin→pushContext+onActivate、focusout（离子树）→popContext+onDeactivate、内部焦点转移不触发、卸载清理。
-- 各面板 keyboard 测试测命令经 active 指针派发、无 active 透传、Ctrl+C 不注册。
+- 各面板 keyboard 测试测命令经 active 指针派发、无 active 透传、Ctrl+C 注册为 terminal.interrupt（CP-020：handler 恒返回 false 透传 + interrupt 幂等派发）。

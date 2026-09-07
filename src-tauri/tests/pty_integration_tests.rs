@@ -133,11 +133,15 @@ fn pty_kill_no_orphan() {
 #[cfg(windows)]
 #[test]
 fn pty_spawn_custom_conpty() {
-    use slterminal_lib::pty::{shell, spawn::conpty_custom};
+    use slterminal_lib::pty::{
+        shell,
+        spawn::{conpty_custom, ConptyInputModes},
+    };
 
     let shell_info = shell::resolve_shell_info(Some("cmd.exe")).expect("resolve_shell_info 应成功");
     let (hpc, master) =
-        conpty_custom::create_conpty_pair(80, 24, 26100).expect("create_conpty_pair 应成功");
+        conpty_custom::create_conpty_pair(80, 24, 26100, &ConptyInputModes::default())
+            .expect("create_conpty_pair 应成功");
 
     // CPR 注入
     let mut writer = master.take_writer().expect("take_writer 应成功");
@@ -202,13 +206,17 @@ fn osc_cwd_venv_parsed() {
 #[test]
 fn pty_session_isolation() {
     let _lock = SPAWN_LOCK.lock();
-    use slterminal_lib::pty::{shell, spawn::conpty_custom};
+    use slterminal_lib::pty::{
+        shell,
+        spawn::{conpty_custom, ConptyInputModes},
+    };
     use std::io::Write as _;
 
     // Session A
     let shell_info = shell::resolve_shell_info(Some("cmd.exe")).expect("resolve_shell_info 应成功");
     let (hpc_a, master_a) =
-        conpty_custom::create_conpty_pair(80, 24, 26100).expect("create_conpty_pair A 应成功");
+        conpty_custom::create_conpty_pair(80, 24, 26100, &ConptyInputModes::default())
+            .expect("create_conpty_pair A 应成功");
     let mut writer_a = master_a.take_writer().expect("take_writer A 应成功");
     writer_a.write_all(b"\x1b[1;1R").unwrap();
     writer_a.flush().unwrap();
@@ -223,7 +231,8 @@ fn pty_session_isolation() {
     let shell_info_b =
         shell::resolve_shell_info(Some("cmd.exe")).expect("resolve_shell_info B 应成功");
     let (hpc_b, master_b) =
-        conpty_custom::create_conpty_pair(80, 24, 26100).expect("create_conpty_pair B 应成功");
+        conpty_custom::create_conpty_pair(80, 24, 26100, &ConptyInputModes::default())
+            .expect("create_conpty_pair B 应成功");
     let mut writer_b = master_b.take_writer().expect("take_writer B 应成功");
     writer_b.write_all(b"\x1b[1;1R").unwrap();
     writer_b.flush().unwrap();
@@ -282,12 +291,16 @@ fn pty_session_isolation() {
 #[test]
 fn pty_env_injects_slterm_panel_id() {
     let _lock = SPAWN_LOCK.lock();
-    use slterminal_lib::pty::{shell, spawn::conpty_custom};
+    use slterminal_lib::pty::{
+        shell,
+        spawn::{conpty_custom, ConptyInputModes},
+    };
     use std::io::Write as _;
 
     let shell_info = shell::resolve_shell_info(Some("cmd.exe")).expect("resolve_shell_info 应成功");
     let (hpc, master) =
-        conpty_custom::create_conpty_pair(80, 24, 26100).expect("create_conpty_pair 应成功");
+        conpty_custom::create_conpty_pair(80, 24, 26100, &ConptyInputModes::default())
+            .expect("create_conpty_pair 应成功");
 
     // CPR 注入（对齐生产代码 pty_spawn）
     let mut writer = master.take_writer().expect("take_writer 应成功");

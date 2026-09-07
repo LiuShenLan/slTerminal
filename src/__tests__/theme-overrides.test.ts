@@ -3,9 +3,9 @@
 // 测试策略：
 // - 真实 schemeRegistry 单例 + 真实 linear 方案；beforeEach 经 _reset() + register(linear)
 //   还原隔离（照 tab-title-registry.test.ts 先例，_reset 仅测试用）
-// - 模块加载序：side-effect import "../theme/schemes" 必须先于 "../theme/overrides" 求值——
-//   editorTheme 为模块级常量（overrides.ts 头注释契约），加载时读取 getActive()，
-//   依赖 linear 已注册（照 colors.ts 内部 import "./schemes" 的同一保护模式）
+// - 模块加载序：side-effect import "../theme/schemes" 先行注册内置方案——
+//   CP-039 后 editorTheme 改函数形 getEditorTheme()（每次调用取 active，不再依赖
+//   加载时序），colors.ts 内部 import "./schemes" 的保护模式不变
 // - editorColorOverrides 用真实 @codemirror/view：EditorState.create 消费扩展后经
 //   EditorView.styleModule facet 取 StyleModule，getRules() 断言规则值来自 active 方案
 //   （style-mod 编译后值原样保留，实测验证；选择器前缀每次调用随机生成，故只按值断言）
@@ -29,7 +29,7 @@ import type { ColorScheme } from "../theme/schemes/types";
 import {
   dockviewVarStyle,
   allotmentVarStyle,
-  editorTheme,
+  getEditorTheme,
   editorColorOverrides,
   editorSyntaxHighlight,
 } from "../theme/overrides";
@@ -94,11 +94,27 @@ describe("overrides", () => {
     });
   });
 
-  describe("editorTheme", () => {
-    it("引用 === active 方案 editor 段 theme（linear = oneDark 透出）", () => {
-      expect(editorTheme).toBe(schemeRegistry.getActive().editor.theme);
-      expect(editorTheme).toBe(linear.editor.theme);
-      expect(editorTheme).toBeTruthy();
+  describe("getEditorTheme", () => {
+    it("每次调用返回当前 active 方案 editor 段 theme（linear = oneDark 透出）", () => {
+      expect(getEditorTheme()).toBe(schemeRegistry.getActive().editor.theme);
+      expect(getEditorTheme()).toBe(linear.editor.theme);
+      expect(getEditorTheme()).toBeTruthy();
+    });
+
+    it("setActive 切换后再次调用跟随新方案（响应式取色，CP-039 函数形契约）", () => {
+      // 临时方案改 editor.theme 为独立扩展引用——与 linear 的 oneDark 透出可区分
+      const testTheme = EditorView.theme({ "&": { color: "#112233" } });
+      const testScheme: ColorScheme = {
+        ...linear,
+        id: "get-theme-follow",
+        label: "Get Theme Follow",
+        editor: { ...linear.editor, theme: testTheme },
+      };
+      schemeRegistry.register(testScheme);
+      expect(getEditorTheme()).toBe(linear.editor.theme);
+      schemeRegistry.setActive("get-theme-follow");
+      expect(getEditorTheme()).toBe(testTheme);
+      expect(getEditorTheme()).toBe(schemeRegistry.getActive().editor.theme);
     });
   });
 
@@ -216,28 +232,48 @@ describe("overrides", () => {
       expect(rules.match(/\{color:/g) ?? []).toHaveLength(9);
     });
 
-    it("ACC-05：syntax 规则在消费点扩展数组中先于 editorTheme（数组顺序决胜）", () => {
-      // HighlightStyle 与 oneDark HighlightStyle 是同机制竞争（同特异性），只能靠扩展
-      // 数组顺序决胜——syntax 须先于 editorTheme 声明（mountStyles reverse 后 syntax
-      // 规则在 <style> 内排最后=恒胜）。按生产装配点 useCodeMirror.ts 的 extensions
-      // 数组固化顺序，防止把 editorSyntaxHighlight() 挪到 editorTheme 之后破坏层叠。
+    it("ACC-05：主题扩展由 editorThemeSlot 槽单点装配（syntax 先于 theme 顺序槽内固化，CP-039）", () => {
+      // 消费点（useCodeMirror.ts）扩展数组现以 themeSlotRef.current.extension 单槽接入——
+      // syntax→theme→overrides 顺序与「syntax 先于 theme」契约由 editorThemeBundle()
+      // 单点锁死。双重守卫：① 消费点不再直拼三项（防绕过槽裸拼破坏层叠）；
+      // ② editorThemeSlot.ts 槽内顺序 syntax < theme < overrides（HighlightStyle 与
+      // oneDark 同机制竞争只能靠数组顺序决胜，mountStyles reverse 后 syntax 排最后=恒胜）。
       const src = readFileSync(resolve(repoRoot, "src/panels/editor/useCodeMirror.ts"), "utf8");
       // lastIndexOf：save 对话框 filters 段（"extensions: [\"*\"]"）同名，取 EditorView
       // 扩展装配点（全文件唯一，且位于 handleSave 之后）
       const arrStart = src.lastIndexOf("extensions: [");
       expect(arrStart).toBeGreaterThanOrEqual(0);
       const extArr = src.slice(arrStart, src.indexOf("]", arrStart));
-      const syntaxIdx = extArr.indexOf("editorSyntaxHighlight(),");
-      const themeIdx = extArr.indexOf("editorTheme,");
+      expect(extArr.indexOf("themeSlotRef.current!.extension,")).toBeGreaterThanOrEqual(0);
+      expect(extArr.indexOf("editorSyntaxHighlight()")).toBe(-1);
+
+      const slotSrc = readFileSync(resolve(repoRoot, "src/theme/editorThemeSlot.ts"), "utf8");
+      const bundleStart = slotSrc.indexOf("editorThemeBundle");
+      expect(bundleStart).toBeGreaterThanOrEqual(0);
+      // 切片须从函数体 return [ 起——函数签名返回类型 Extension[] 自身含 []，从函数名
+      // 后首个 [ 切会命中返回类型（切出空串，三项 indexOf 全 -1，守卫失效）
+      const retStart = slotSrc.indexOf("return [", bundleStart);
+      expect(retStart).toBeGreaterThanOrEqual(0);
+      const bundleArr = slotSrc.slice(
+        slotSrc.indexOf("[", retStart),
+        slotSrc.indexOf("]", retStart),
+      );
+      const syntaxIdx = bundleArr.indexOf("editorSyntaxHighlight()");
+      const themeIdx = bundleArr.indexOf("getEditorTheme()");
+      const overridesIdx = bundleArr.indexOf("editorColorOverrides()");
       expect(syntaxIdx).toBeGreaterThanOrEqual(0);
       expect(themeIdx).toBeGreaterThanOrEqual(0);
+      expect(overridesIdx).toBeGreaterThanOrEqual(0);
       expect(syntaxIdx).toBeLessThan(themeIdx);
+      expect(themeIdx).toBeLessThan(overridesIdx);
     });
   });
 
   describe("setActive 切换", () => {
-    it("切换后函数形导出跟随 active 方案（editorTheme 常量契约不重绑定）", () => {
-      // 临时方案：linear 基础上改三处单色（dockview 1 条 / allotment 1 键 / editor background）
+    it("切换后函数形导出跟随 active 方案（含 getEditorTheme 响应式取色，CP-039）", () => {
+      // 临时方案：linear 基础上改三处单色（dockview 1 条 / allotment 1 键 / editor
+      // background）+ theme 独立引用（与 oneDark 透出可区分）
+      const testTheme = EditorView.theme({ "&": { color: "#010101" } });
       const testScheme: ColorScheme = {
         ...linear,
         id: "overrides-test",
@@ -250,7 +286,11 @@ describe("overrides", () => {
           },
           allotment: { ...linear.libraries.allotment, separatorBorder: "#654321" },
         },
-        editor: { ...linear.editor, overrides: { ...linear.editor.overrides, background: "#010203" } },
+        editor: {
+          ...linear.editor,
+          theme: testTheme,
+          overrides: { ...linear.editor.overrides, background: "#010203" },
+        },
       };
       schemeRegistry.register(testScheme);
       schemeRegistry.setActive("overrides-test");
@@ -259,17 +299,16 @@ describe("overrides", () => {
       expect(dockviewVarStyle()["--dv-group-view-background-color"]).toBe("#123456");
       expect(allotmentVarStyle()["--separator-border"]).toBe("#654321");
       expect(themeRules(editorColorOverrides())).toContain("#010203");
-
-      // editorTheme 为模块级常量（加载时求值，main.tsx 启动序列保证），不随 setActive 重绑定；
-      // 临时方案 editor.theme 与 linear 同一引用（spread），两态下引用相等断言均成立
-      expect(editorTheme).toBe(schemeRegistry.getActive().editor.theme);
-      expect(editorTheme).toBe(linear.editor.theme);
+      // getEditorTheme 函数形跟随 active（原常量契约 = 不重绑定，CP-039 消除该系统性后果）
+      expect(getEditorTheme()).toBe(testTheme);
+      expect(getEditorTheme()).toBe(schemeRegistry.getActive().editor.theme);
 
       // _reset 还原：清空注册表 + active 复位 linear + 重注册
       schemeRegistry._reset();
       schemeRegistry.register(linear);
       expect(schemeRegistry.getActive().id).toBe("linear");
       expect(dockviewVarStyle()).toEqual(linear.libraries.dockview);
+      expect(getEditorTheme()).toBe(linear.editor.theme);
     });
   });
 });

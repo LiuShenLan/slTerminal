@@ -2,32 +2,22 @@
 //
 // 布局：左 = 事件导航侧栏（30 事件按 eventsCatalog 十组渲染），
 //       右 = CM6 编辑器（上）+ MatcherTester 内联试测工具（下）。
-// CM6 扩展：@codemirror/lang-json 语言 + codemirror-json-schema
-// （jsonSchemaHover 悬停 + jsonSchemaLinter 波浪线，
-//  schema 用 hooks 子 schema——./schema（同目录））+ jsonParseLinter 语法波浪线。
+// CM6 扩展：@codemirror/lang-json 语言 + 自绘 schema 层（jsonSchemaCm.ts——
+// hooksSchemaLinter 波浪线 + hooksSchemaHover 悬停，直接消费 json-schema-library
+// 11.x 编译单例，CP-002 摘除第三方 schema 扩展）+ jsonParseLinter 语法波浪线。
 // 无自动补全（Ctrl+Space）——验收后决策删除（2026-08-01）。
 // 校验：非法 JSON / schema 违规经 onValidationChange(isValid, diagnostics) 通知父组件
 // （与 Stage 06 保存校验共用 validateHooksJson）。
 // 事件导航：点击事件名 → 简单文本搜索 `"EventName"` 定位 → setSelection + scrollIntoView。
 
 import React, { useCallback, useEffect, useRef } from "react";
-import { EditorView, hoverTooltip } from "@codemirror/view";
+import { EditorView } from "@codemirror/view";
 import { EditorState } from "@codemirror/state";
 import { basicSetup } from "codemirror";
 import { json, jsonParseLinter } from "@codemirror/lang-json";
 import { linter } from "@codemirror/lint";
-import {
-  jsonSchemaHover,
-  jsonSchemaLinter,
-  stateExtensions,
-  handleRefresh,
-} from "codemirror-json-schema";
-import type { JSONSchema7 } from "json-schema";
-import {
-  hooksSubSchema,
-  validateHooksJson,
-  type JsonDiagnostic,
-} from "./schema";
+import { hooksSchemaHover, hooksSchemaLinter } from "./jsonSchemaCm";
+import { validateHooksJson, type JsonDiagnostic } from "./schema";
 import { getGroups, getEventsByGroup } from "./eventsCatalog";
 import MatcherTester from "./MatcherTester";
 import {
@@ -38,10 +28,11 @@ import {
   FOCUS_BORDER,
   HTML_PANEL_LOADING_FG,
   ON_ACCENT_FG,
-  editorTheme,
-  editorColorOverrides,
-  editorSyntaxHighlight,
 } from "../../../../../theme";
+import {
+  createEditorThemeSlot,
+  type EditorThemeSlot,
+} from "../../../../../theme/editorThemeSlot";
 import { repaintGuard } from "../../../../../panels/editor/repaintGuard";
 
 /** JsonMode props：value/onChange/onValidationChange（外部驱动 + 校验上报） */
@@ -125,6 +116,9 @@ const dividerStyle: React.CSSProperties = {
 const JsonMode: React.FC<JsonModeProps> = ({ value, onChange, onValidationChange }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
+  // CP-039: 主题热切换槽——view 存活期方案切换经 Compartment 重配置，不重建编辑器
+  const themeSlotRef = useRef<EditorThemeSlot | null>(null);
+  if (themeSlotRef.current === null) themeSlotRef.current = createEditorThemeSlot();
   // ref 镜像：updateListener 闭包永不重建，回调读取最新引用（照 useXterm handleSaveRef 模式）
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
@@ -144,8 +138,8 @@ const JsonMode: React.FC<JsonModeProps> = ({ value, onChange, onValidationChange
   );
 
   // 挂载：创建 EditorView（StrictMode 双挂载由 effect cleanup destroy 正确兜底）
-  // 扩展：语言 + jsonSchemaHover 悬停 + jsonSchemaLinter 波浪线（hooks 子 schema）
-  // + jsonParseLinter 语法波浪线 + 暗色主题扩展 + height:100% theme
+  // 扩展：语言 + 自绘 schema 层（hooksSchemaLinter 波浪线 + hooksSchemaHover 悬停，
+  // hooks 子 schema） + jsonParseLinter 语法波浪线 + 主题槽 + height:100% theme
   //（.cm-editor 确定高度 → .cm-scroller 内容溢出 → 竖向滚动条出现，照编辑器滚动委托决策）
   useEffect(() => {
     const container = containerRef.current;
@@ -157,14 +151,12 @@ const JsonMode: React.FC<JsonModeProps> = ({ value, onChange, onValidationChange
           basicSetup,
           json(),
           linter(jsonParseLinter(), { delay: 300 }),
-          linter(jsonSchemaLinter(), { needsRefresh: handleRefresh }),
-          hoverTooltip(jsonSchemaHover()),
-          stateExtensions(hooksSubSchema as unknown as JSONSchema7),
+          hooksSchemaLinter(),
+          hooksSchemaHover(),
           EditorView.theme({ "&": { height: "100%" } }),
-          // 语法高亮置于 editorTheme 之前（reverse 层叠后自定义规则排最后=恒胜，ACC-05）
-          editorSyntaxHighlight(),
-          editorTheme,
-          editorColorOverrides(),
+          // 主题热切换槽（CP-039）：槽内 editorThemeBundle() 固化 [syntax, theme,
+          // overrides] 顺序（ACC-05——syntax 先于 theme，reverse 层叠后自定义规则排最后=恒胜）
+          themeSlotRef.current!.extension,
           EditorView.updateListener.of(handleDocChanged),
           // WebView2 陈旧光栅规避（见 panels/editor/repaintGuard.ts）
           repaintGuard(),
@@ -173,7 +165,11 @@ const JsonMode: React.FC<JsonModeProps> = ({ value, onChange, onValidationChange
       parent: container,
     });
     viewRef.current = view;
+    // CP-039: 订阅方案变更——切换即 Compartment 重配置主题（view 存活期热切换）
+    const unbindTheme = themeSlotRef.current!.bind(view);
     return () => {
+      // CP-039: 先取消主题订阅再销毁 view——销毁后 dispatch 会抛错
+      unbindTheme();
       view.destroy();
       viewRef.current = null;
     };

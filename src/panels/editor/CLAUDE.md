@@ -41,11 +41,11 @@ CodeMirror 6 不支持部分文档模型，大文件编辑**不虚拟化**——
 
 ### CM6 主题扩展与层叠（ACC-05）
 
-CM6 编辑器主题来源 = `editorTheme`（active 方案 `editor.theme`）+ `editorColorOverrides()`（active 方案 `editor.overrides`）+ `editorSyntaxHighlight()`（active 方案 `editor.overrides.syntax`）。消费点须注意顺序：
+CM6 编辑器主题来源 = `editorThemeSlot` 主题热切换槽（CP-039）：`createEditorThemeSlot()` 一次、每 EditorView 一槽，槽内 `editorThemeBundle()` 单点固化 `[editorSyntaxHighlight(), getEditorTheme(), editorColorOverrides()]` 三项（均随 active 方案响应式取色）。**一个 EditorView 一个槽**（Compartment 不可跨 view 共享——diff 双栏各自建槽）；view 创建后 `slot.bind(view)` 订阅 `schemeRegistry.onDidChange`，方案切换即 Compartment 重配置（编辑器不重建），卸载 cleanup 先调 bind 返回的取消函数再 `view.destroy()`。层叠要点：
 
 - `@codemirror/view` 的 `mountStyles()` 会把 styleModule facet 数组 **reverse()** 后挂载。
-- 扩展数组 `[editorTheme, editorColorOverrides(), editorSyntaxHighlight()]` 编译后 oneDark 规则排在 overrides 之后——同特异性下后声明者胜，导致覆盖全失效。
-- 解决方案：覆盖选择器带 `&.cm-editor` 前缀提升特异性，使胜负与数组顺序无关。
+- 槽内顺序契约：syntax 必须先于 theme（`[editorSyntaxHighlight(), getEditorTheme(), editorColorOverrides()]`）——`editorSyntaxHighlight` 与 oneDark 的 HighlightStyle 是同机制竞争，只能靠数组顺序决胜；`editorColorOverrides` 则靠 `&.cm-editor` 前缀提升特异性，顺序无关。
+- 消费点扩展数组只出现 `themeSlotRef.current.extension` 单槽项——禁止绕过槽裸拼三项（ACC-05 顺序由槽单点锁死）。
 
 改动覆盖规则前必读 `@../../theme/CLAUDE.md`「editorColorOverrides 的 CM6 层叠」。
 

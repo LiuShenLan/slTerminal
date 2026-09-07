@@ -20,12 +20,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 绕过 `portable-pty` 以控制 `CreatePseudoConsole` 的 `dwFlags`。动机：portable-pty 0.9.0 硬编码 flags=0x7，不暴露参数；保留自定义路径用于 flags 完全控制与 Win10 conhost 捆绑。
 
-### flags 三态
+### flags 模式能力矩阵（CP-009；默认矩阵 = 旧三态，零默认漂移）
 
-`compute_conpty_flags(build, bundled)`：
-- 捆绑新 conhost（仅 Win10）→ `0x7`
-- 系统 conhost + Win11（≥`CONPTY_WIN11_MIN_BUILD`）→ `0x7`
-- 系统 conhost + Win10 回退 → `0x3`
+`compute_conpty_flags(build, bundled, modes)`——modes = `ConptyInputModes` 能力矩阵
+（设置键 `conptyInputModes`，spawn 时读段；缺失/解析失败回退默认矩阵不阻塞 spawn）。
+逐位取矩阵，默认矩阵输出与旧三态恒等：
+- 0x1/0x2 直取矩阵位；
+- 0x4 维持 build 门控：捆绑新 conhost（仅 Win10）或系统 conhost + Win11
+  （≥`CONPTY_WIN11_MIN_BUILD`）才置位；系统 conhost + Win10 回退不置位 → `0x3`；
+- 0x8 为末行矩阵位，默认矩阵不含 0x8。
+
+默认矩阵三态等价守卫：`conpty_flags_default_matrix_matches_legacy_tristate`
+（三输入 × 默认矩阵 → `0x7`/`0x7`/`0x3`）——任何默认矩阵位翻转（含 0x8 默认置位）即红。
 
 阈值 21376 与前端 xterm 钳制（ADR-0004）同源。
 
@@ -35,9 +41,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 回退状态经 `pty_conpty_status` 一次性查询暴露，启动 toast 提示降级后果（CP-010）；warn 日志与 `fallback_reason` 同源（同一 `format!("{e:#}")` 变量，零漂移）。
 
-### PASSTHROUGH_MODE (0x8) 永久禁用
+### PASSTHROUGH_MODE (0x8) 默认禁用 + 能力矩阵可配置化（CP-009）
 
-0x8 会让 claude 等全屏 TUI 的鼠标滚轮完全失效。该问题无法被最小实验或自动化测试守卫（假阴性），改 flags 必须实测真实 claude 滚轮。
+0x8 会让 claude 等全屏 TUI 的鼠标滚轮完全失效（2026-07 Win11 build 26200 双向实测，
+阻断条件仅真实 claude 场景复现——最小实验假阴性）。矩阵化后 0x8 仍默认关闭，经设置
+页「终端输入模式」的 passthrough 开关（旁常驻警示文案）可显式启用——启用/默认翻转
+都须过 ADR-0007 门禁第 3 条人工实测（真实 claude 全屏滚轮），无实测记录禁合入。
 
 ### cwd 反斜杠规范化
 
@@ -92,9 +101,8 @@ spawn 后立即向 stdin 写 `\x1b[1;1R`，补偿 ConPTY `VtIo::StartIfNeeded()`
 
 ## 外部坑/红线
 
-- **改 flags 必须实测真实 claude 滚轮**：自动化无法守卫 PASSTHROUGH 0x8 回归。
+- **默认矩阵不含 0x8**：任何 0x8 启用/默认矩阵位翻转须过 ADR-0007 门禁第 3 条人工实测（真实 claude 全屏 TUI 滚轮滚动），无实测记录禁合入；自动化守卫 = `conpty_flags_default_matrix_matches_legacy_tristate` 用例绿 + 默认矩阵等价断言。
 - **Win10 捆绑 conhost 改动必须实机验证**：鼠标转发、键盘/IME/kitty、resize 无法靠 CI 守卫。
-- **永不启用 0x8**。
 - **PowerShell 交互 shell 禁止 `-NoProfile`**：用户 profile（conda init 钩子等）必须原生加载——缺钩子则 `conda activate` 失效（win11 CondaError / win10 conda.bat 静默空转，B17）。
 - **不要把 `#[cfg(windows)]` 放到本模块外**。
 - **不要 drop stdin writer**。

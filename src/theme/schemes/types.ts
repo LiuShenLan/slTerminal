@@ -19,7 +19,7 @@ export interface ColorScheme {
   ui: UiTokens;
   /** xterm 调色板 25 键——经 panels/terminal/theme.ts adapter 展开进 xterm ITheme */
   terminal: TerminalPalette;
-  /** CM 主题引用 + 覆盖——经 overrides.ts editorTheme/editorColorOverrides 应用 */
+  /** CM 主题引用 + 覆盖——经 overrides.ts getEditorTheme/editorColorOverrides 应用（editorThemeSlot 槽装配，CP-039） */
   editor: EditorScheme;
   /** 三方库 CSS 变量覆盖——经 overrides.ts dockviewVarStyle/allotmentVarStyle 内联注入 */
   libraries: LibraryOverrides;
@@ -165,7 +165,7 @@ export interface TerminalPalette {
   brightWhite: string;
 }
 
-/** CM 主题引用 + 覆盖——4 个 oneDark 导入点经 overrides.ts 替换为 editorTheme + editorColorOverrides() */
+/** CM 主题引用 + 覆盖——4 个 oneDark 导入点经 overrides.ts 替换为 getEditorTheme() + editorColorOverrides()（editorThemeSlot 槽装配，CP-039） */
 export interface EditorScheme {
   /** CM 基础主题引用——linear = oneDark（@codemirror/theme-one-dark 直 import 透出，D6） */
   theme: Extension;

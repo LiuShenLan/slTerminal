@@ -25,7 +25,11 @@ import { IconAlertTriangle } from "../../lib";
 import { FONT_SIZE_MIN, FONT_SIZE_MAX } from "../../stores/fontSize";
 import { usePanelFocus } from "../../features/shortcuts";
 import { setActiveEditor, clearActiveEditor, type EditorActions } from "../editor/activeEditor";
-import { EDITOR_BG, ERROR_FG, GIT_FILE_COLORS, HTML_PANEL_LOADING_FG, PANEL_BG, editorTheme, editorColorOverrides, editorSyntaxHighlight } from "../../theme";
+import { EDITOR_BG, ERROR_FG, GIT_FILE_COLORS, HTML_PANEL_LOADING_FG, PANEL_BG } from "../../theme";
+import {
+  createEditorThemeSlot,
+  type EditorThemeSlot,
+} from "../../theme/editorThemeSlot";
 
 /** GitShowPanel 接收的面板参数 */
 interface GitShowPanelProps {
@@ -132,6 +136,9 @@ const GitShowPanel: React.FC<GitShowPanelProps> = ({ params }) => {
   const fontCompartment = useRef(new Compartment());
   const wrapCompartment = useRef(new Compartment());
   const wordWrapRef = useRef(false);
+  // CP-039: 主题热切换槽——view 存活期方案切换经 Compartment 重配置，不重建编辑器
+  const themeSlotRef = useRef<EditorThemeSlot | null>(null);
+  if (themeSlotRef.current === null) themeSlotRef.current = createEditorThemeSlot();
 
   // 加载 HEAD 文件内容
   useEffect(() => {
@@ -189,10 +196,9 @@ const GitShowPanel: React.FC<GitShowPanelProps> = ({ params }) => {
         doc: displayText,
         extensions: [
           basicSetup,
-          // 语法高亮置于 editorTheme 之前（reverse 层叠后自定义规则排最后=恒胜，ACC-05）
-          editorSyntaxHighlight(),
-          editorTheme,
-          editorColorOverrides(),
+          // 主题热切换槽（CP-039）：槽内 editorThemeBundle() 固化 [syntax, theme,
+          // overrides] 顺序（ACC-05——syntax 先于 theme，reverse 层叠后自定义规则排最后=恒胜）
+          themeSlotRef.current!.extension,
           // 大文件警告：行首图标 widget（仅警告分支非 null）
           ...(warnField ? [warnField] : []),
           // .cm-editor 高度→.cm-scroller height:100%约束→溢出→滚动条（同 editor）
@@ -217,8 +223,12 @@ const GitShowPanel: React.FC<GitShowPanelProps> = ({ params }) => {
     });
 
     viewRef.current = newView;
+    // CP-039: 订阅方案变更——切换即 Compartment 重配置主题（view 存活期热切换）
+    const unbindTheme = themeSlotRef.current!.bind(newView);
 
     return () => {
+      // CP-039: 先取消主题订阅再销毁 view——销毁后 dispatch 会抛错
+      unbindTheme();
       newView.destroy();
       viewRef.current = null;
     };

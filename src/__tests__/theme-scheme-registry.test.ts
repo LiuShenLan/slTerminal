@@ -90,6 +90,57 @@ describe("SchemeRegistry", () => {
     });
   });
 
+  describe("onDidChange 订阅（CP-039）", () => {
+    it("注册监听 → setActive 已知 id 触发回调", () => {
+      const custom = makeScheme("custom", "Custom");
+      schemeRegistry.register(linear);
+      schemeRegistry.register(custom);
+      const listener = vi.fn();
+      schemeRegistry.onDidChange(listener);
+      schemeRegistry.setActive("custom");
+      expect(listener).toHaveBeenCalledTimes(1);
+    });
+
+    it("setActive 未知 id 回退分支同样触发回调", () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      schemeRegistry.register(linear);
+      const listener = vi.fn();
+      schemeRegistry.onDidChange(listener);
+      schemeRegistry.setActive("not-exist");
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(schemeRegistry.getActive()).toBe(linear);
+      warnSpy.mockRestore();
+    });
+
+    it("取消函数后不再触发", () => {
+      schemeRegistry.register(linear);
+      const listener = vi.fn();
+      const cancel = schemeRegistry.onDidChange(listener);
+      cancel();
+      schemeRegistry.setActive("linear");
+      expect(listener).not.toHaveBeenCalled();
+    });
+
+    it("_reset 触发回调（测试隔离一致性）", () => {
+      schemeRegistry.register(linear);
+      const listener = vi.fn();
+      schemeRegistry.onDidChange(listener);
+      schemeRegistry._reset();
+      expect(listener).toHaveBeenCalledTimes(1);
+    });
+
+    it("多监听全触发", () => {
+      schemeRegistry.register(linear);
+      const a = vi.fn();
+      const b = vi.fn();
+      schemeRegistry.onDidChange(a);
+      schemeRegistry.onDidChange(b);
+      schemeRegistry.setActive("linear");
+      expect(a).toHaveBeenCalledTimes(1);
+      expect(b).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe("重复注册覆盖", () => {
     it("同 id 重复注册后 get 返回新方案（取最后一条）", () => {
       const v1 = makeScheme("custom", "v1");

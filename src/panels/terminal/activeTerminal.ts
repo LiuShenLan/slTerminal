@@ -11,6 +11,8 @@ export interface TerminalActions {
   getSelection: () => string | undefined;
   paste: (text: string) => void;
   writeToPty: (data: Uint8Array) => void;
+  /** CP-020:本地中断提示回调——实现须幂等（window capture 与 xterm 委托双路径各调一次，第二次 no-op） */
+  interrupt?: () => void;
 }
 
 const ptr = createActivePointer<TerminalActions>();

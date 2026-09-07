@@ -5,16 +5,18 @@
 //     CSS 变量，键为变量名原样（如 --dv-group-view-background-color），供 React style 内联注入
 //   allotmentVarStyle(): Record<string, string>   2 键（--separator-border / --focus-border，
 //     --sash-size 等尺寸变量不动）
-//   editorTheme: Extension                        = schemeRegistry.getActive().editor.theme
-//     （linear 为 oneDark 底座直 import 透出）
+//   getEditorTheme(): Extension                    = 当前 active 方案 editor.theme
+//     （linear 为 oneDark 底座直 import 透出；函数形响应式取色，消费点经
+//     editorThemeSlot.ts 的 Compartment 热重配置——CP-039）
 //   editorColorOverrides(): Extension             active 方案 editor.overrides → CM6
 //     EditorView.theme 扩展（lint 7 键 / searchMatch 4 键 / background / 正文与行号）
 //   editorSyntaxHighlight(): Extension            active 方案 editor.overrides.syntax → CM6
 //     syntaxHighlighting 扩展（9 组 tag → 色映射），消费点须置于 editorTheme 之前
 //     （mountStyles reverse 层叠——后声明的自定义规则排最后=恒胜，ACC-05）
 //
-// 函数形导出每次调用取当前 active 方案（支持 D2 热切换）；editorTheme 为模块级常量
-// （求值时机由 main.tsx 启动序列保证）。
+// 函数形导出每次调用取当前 active 方案（支持 D2 热切换）；editorTheme 原为模块级
+// 常量（CP-039 改函数形 getEditorTheme），消费点经 theme 槽订阅 schemeRegistry
+// onDidChange 做 Compartment 重配置——方案切换即时生效，编辑器不重建。
 
 import { EditorView } from "@codemirror/view";
 import type { Extension } from "@codemirror/state";
@@ -36,8 +38,11 @@ export function allotmentVarStyle(): Record<string, string> {
   };
 }
 
-/** CM 主题扩展透出（= active 方案 editor.theme，linear 为 oneDark 底座） */
-export const editorTheme: Extension = schemeRegistry.getActive().editor.theme;
+/** CM 主题扩展透出（= 当前 active 方案 editor.theme）——CP-039：函数形导出，
+ *  消费点经 theme Compartment 重配置实现热切换（编辑器不重建） */
+export function getEditorTheme(): Extension {
+  return schemeRegistry.getActive().editor.theme;
+}
 
 /** active 方案 editor.overrides → CM6 EditorView.theme 扩展（lint 7 键 / searchMatch 4 键 / background / 正文与行号 4 键） */
 export function editorColorOverrides(): Extension {
@@ -108,7 +113,8 @@ export function editorColorOverrides(): Extension {
  * 消费点必须在扩展数组中置于 editorTheme 之前——mountStyles reverse 层叠下，
  * 后声明的自定义规则在 <style> 标签内排最后=恒胜（ACC-05，与 editorColorOverrides 相反：
  * 后者靠 &.cm-editor 前缀提升特异性，本扩展与 oneDark 的 HighlightStyle 是同机制竞争，
- * 只能靠数组顺序决胜）。
+ * 只能靠数组顺序决胜）。该顺序现由 editorThemeSlot.ts 的 editorThemeBundle() 单点固化
+ * （槽内 [syntax, theme, overrides]，CP-039）。
  */
 export function editorSyntaxHighlight(): Extension {
   const { syntax } = schemeRegistry.getActive().editor.overrides;

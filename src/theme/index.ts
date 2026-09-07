@@ -58,7 +58,7 @@ export type {
 export {
   dockviewVarStyle,
   allotmentVarStyle,
-  editorTheme,
+  getEditorTheme,
   editorColorOverrides,
   editorSyntaxHighlight,
 } from "./overrides";

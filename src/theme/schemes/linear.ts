@@ -132,7 +132,7 @@ export const linear: ColorScheme = {
   },
   // editor 段：CM6 编辑器配色（theme 仅作底座，语法色经 overrides.syntax 覆盖）
   //   theme → CM6 基础主题（oneDark 透出：语法高亮底座 + 编辑器底色）
-  //   overrides → 编辑器颜色覆盖（overrides.ts editorTheme/editorColorOverrides 应用，层叠规则见 theme/CLAUDE.md）
+  //   overrides → 编辑器颜色覆盖（overrides.ts getEditorTheme/editorColorOverrides 应用，editorThemeSlot 槽装配，层叠规则见 theme/CLAUDE.md）
   editor: {
     theme: oneDark,
     overrides: {

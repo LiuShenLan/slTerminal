@@ -1,6 +1,7 @@
 // commandCatalog.test.ts — 命令目录单元测试
 //
-// 覆盖：9 条命令齐全 + 元数据正确、id 唯一、defaultKey 合法且对自身 context 非保留、
+// 覆盖：10 条命令齐全 + 元数据正确、id 唯一、defaultKey 合法且对自身 context 非保留
+//       （terminal.interrupt 为 CP-020 显式豁免——保留键守卫改豁免形态）、
 //       COMMAND_META_BY_ID 查找、commandFromMeta 合并 handler + 未知 id 抛错。
 
 import { describe, it, expect, vi } from "vitest";
@@ -13,6 +14,7 @@ const EXPECTED_IDS = [
   "terminal.copy",
   "terminal.paste",
   "terminal.newline",
+  "terminal.interrupt",
   "editor.save",
   "editor.toggleWordWrap",
   "explorer.delete",
@@ -41,8 +43,14 @@ describe("COMMAND_CATALOG", () => {
     }
   });
 
-  it("每条 defaultKey 对自身 context 非保留（不与锁定键冲突）", () => {
+  it("每条 defaultKey 对自身 context 非保留；terminal.interrupt 为 CP-020 显式豁免", () => {
     for (const m of COMMAND_CATALOG) {
+      if (m.id === "terminal.interrupt") {
+        // CP-020 显式豁免：Ctrl+KeyC 是保留键（isReserved 仍拦用户覆盖——无法改绑/解绑），
+        // 但命令代码默认键绑定它——interrupt 必须先于 \x03 占住 Ctrl+C 才能置状态再透传
+        expect(isReserved(m.defaultKey!, m.context)).toBe(true);
+        continue;
+      }
       expect(isReserved(m.defaultKey!, m.context)).toBe(false);
     }
   });
@@ -87,7 +95,7 @@ describe("commandFromMeta", () => {
     const meta = COMMAND_META_BY_ID.get(id);
     expect(meta).toBeDefined();
     const cmd = commandFromMeta(id, handler);
-    // 统一断言 id/context/defaultKey/handler 四要素（STS-08：全 9 条参数化遍历）
+    // 统一断言 id/context/defaultKey/handler 四要素（STS-08：全 10 条参数化遍历）
     expect(cmd.id).toBe(id);
     expect(cmd.context).toBe(meta!.context);
     expect(cmd.defaultKey).toEqual(meta!.defaultKey);

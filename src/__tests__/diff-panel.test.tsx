@@ -98,6 +98,9 @@ import { act } from "@testing-library/react";
 import { EditorView } from "@codemirror/view";
 import { diffMarkersField, headDiffMarkersField } from "../panels/editor/gitGutter";
 import { MAX_FILE_SIZE_BYTES, LARGE_FILE_WARN_BYTES } from "../panels/editor/useCodeMirror";
+// CP-039: 主题热切换用例直驱真实注册表单例
+import { schemeRegistry } from "../theme/schemeRegistry";
+import { linear } from "../theme/schemes/linear";
 
 /** 构造测试参数 */
 function makeParams(overrides: Partial<{
@@ -1108,5 +1111,47 @@ describe("DiffPanel", () => {
     // 内层 flex 容器
     expect(leftWrapper.style.display).toBe("flex");
     expect(rightWrapper.style.display).toBe("flex");
+  });
+
+  // ── CP-039: 主题热切换（左右栏独立槽——Compartment 不可跨 view 共享）──
+
+  it("setActive 后左右两 view.dispatch 均携 reconfigure 效果且 EditorView 不重建", async () => {
+    const { container } = render(
+      React.createElement(DiffPanel, { params: makeParams() }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector('[data-e2e="diff-left"]')).toBeTruthy();
+      expect(container.querySelector('[data-e2e="diff-right"]')).toBeTruthy();
+    });
+    const leftView = getDiffView(container, "diff-left");
+    const rightView = getDiffView(container, "diff-right");
+    expect(leftView).not.toBeNull();
+    expect(rightView).not.toBeNull();
+    const leftDispatch = vi.spyOn(leftView!, "dispatch");
+    const rightDispatch = vi.spyOn(rightView!, "dispatch");
+
+    // 真实 Compartment reconfigure——effects 为单个 StateEffect（@codemirror/state 的
+    // reconfigure() 返回单效果而非数组；项目 dispatch 惯例为单效果形态，checklist
+    // CP-039 骨架同。truthy 即证明 reconfigure 效果已被装配进本次 dispatch）
+    const testScheme = { ...linear, id: "diff-theme", label: "Diff Theme" };
+    schemeRegistry.register(testScheme);
+    act(() => {
+      schemeRegistry.setActive("diff-theme");
+    });
+    expect(leftDispatch).toHaveBeenCalledTimes(1);
+    expect(rightDispatch).toHaveBeenCalledTimes(1);
+    const leftEffects = (leftDispatch.mock.calls[0][0] as { effects?: unknown }).effects;
+    const rightEffects = (rightDispatch.mock.calls[0][0] as { effects?: unknown }).effects;
+    expect(leftEffects).toBeTruthy();
+    expect(rightEffects).toBeTruthy();
+    // 防复发：方案切换不重建 EditorView（DOM 反查实例引用不变）
+    expect(getDiffView(container, "diff-left")).toBe(leftView);
+    expect(getDiffView(container, "diff-right")).toBe(rightView);
+
+    leftDispatch.mockRestore();
+    rightDispatch.mockRestore();
+    // 还原注册表（防污染同文件后续用例）
+    schemeRegistry._reset();
+    schemeRegistry.register(linear);
   });
 });

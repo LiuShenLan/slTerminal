@@ -10,6 +10,7 @@ import { useFontSize, cancelPendingSave as cancelFontSizeSave } from "./stores/f
 import { useKeybindings, cancelPendingSave as cancelKeybindingsSave } from "./stores/keybindings";
 import { useSideBar, cancelPendingSave as cancelSideBarSave } from "./stores/sideBar";
 import { useCliAliases, cancelPendingSave as cancelCliAliasesSave } from "./stores/cliAliases";
+import { useConptyInputModes, cancelPendingSave as cancelConptyModesSave } from "./stores/conptyInputModes";
 import type { CliAliasesState } from "./stores/cliAliases";
 import { cliProfileRegistry } from "./features/cliProfiles/cliProfileRegistry";
 import { saveLayout } from "./workspace/layoutSerde";
@@ -159,6 +160,15 @@ function App() {
             console.warn("[App] 加载 CLI 别名设置失败，保持默认空别名:", err);
           }
         })(),
+        (async () => {
+          try {
+            // 加载 ConPTY 输入模式能力矩阵（CP-009）——设置页开关显示 + 关闭前冲刷
+            await useConptyInputModes.getState().loadFromDisk();
+          } catch (err) {
+            // FE-03：启动链失败不再静默——降级兜底不变（保持默认矩阵），仅告警记录
+            console.warn("[App] 加载 ConPTY 输入模式设置失败，保持默认矩阵:", err);
+          }
+        })(),
       ]);
 
       await loadProjectsAndRestore();
@@ -257,6 +267,7 @@ function App() {
         cancelKeybindingsSave();
         cancelSideBarSave();
         cancelCliAliasesSave();
+        cancelConptyModesSave();
         await Promise.race([
           saveAllProjects(),
           new Promise<void>((resolve) => setTimeout(resolve, SHUTDOWN_TIMEOUT_MS)),

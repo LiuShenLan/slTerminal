@@ -17,6 +17,7 @@ xterm.js 不支持 `term.open()` 二次调用（GitHub Issue #4978）。因此�
 `detectWebgl()` 预检 WebGL2 可用性：可用则加载 WebglAddon，不可用则 DOM renderer 兜底。焦点终端持有 WebGL context，`onContextLoss` 触发后释放 addon 资源。
 
 - **检测不带 `failIfMajorPerformanceCaveat`（FE-26）**：该标志在 Chromium GPU blocklist 场景会连同软件渲染一并拒绝 → DOM renderer 回退 → 快滚整屏重绘掉帧（Win10 + UHD 630 实机症状）。SwiftShader 软件渲染仍远快于 DOM renderer 全帧重建，故不加回该标志。
+- **SwiftShader 识别 + 一次性降级提示（CP-018）**：`tryLoad` 成功路径经 `isSwiftShaderRenderer()` 判软件渲染（经 `WEBGL_debug_renderer_info` 扩展读 `UNMASKED_RENDERER_WEBGL`，模块级缓存一次检测全生命周期复用）——落入 SwiftShader 时 `toast.show("warning")` 降级提示一次（`swiftShaderNotified` 旗标全生命周期防重；扩展缺失/读取出错保守返回 false 不提示）。`detectWebgl` 检测契约不变（FE-26 注释保留）。
 - **加载时序约束（FE-34）**：`setupWebglWithRetry` 必须在 `term.open(container)` 之后调用。WebGL 渲染器需要挂载后的 canvas；先加载会绑定空 canvas → 静默黑渲染且不触发 context loss 兜底（win10 终端纯黑屏根因）。
 
 ### PTY spawn 等待布局就绪（CP-019 事件驱动）
@@ -61,9 +62,9 @@ htmlviewer / markdownviewer 等「文档型预览面板」共享 `src/panels/doc
 - **corrupted 警示条**：挂载 `loadSettings()` → corrupted → 顶部警示条（× 可关，`data-e2e="settings-corrupted-banner"`，不阻塞）。L2 覆盖（loadSettings mock），L4 豁免登记——写坏文件需沙箱外写，无命令通道。
 - claude 专属 hooks 编辑器归域 `features/cliProfiles/profiles/claude/configEditor/`（KZ-1，见 cliProfiles/CLAUDE.md），经 profile 的 `configEditor` 字段挂入；本面板经 HooksSettingsPage 页组件接入，不再跨 features 引用。
 
-### Ctrl+C 保留为中断
+### Ctrl+C 保留为中断（CP-020）
 
-`keyboard.ts` 的 `createTerminalShortcuts` 不注册 Ctrl+C 命令——ShortcutRegistry 无匹配即透传，xterm.js 自然发送 `\x03` 到 PTY，claude 用它取消操作。
+`keyboard.ts` 的 `createTerminalShortcuts` 注册 `terminal.interrupt` 命令——handler 经 active 指针派发本地中断提示（页签 working→attention）后**必须返回 false 透传**，`\x03` 仍由 xterm.js 自然发送到 PTY，claude 用它取消操作（SIGINT 语义不变）。任何新增 terminal context 命令不得拦截 Ctrl+C 透传语义；`isReserved` 仍拦用户覆盖（保留键语义不变，代码默认键绑保留键为 CP-020 显式豁免）。
 
 ### 输出合帧策略（终端平台能力）
 
@@ -103,7 +104,7 @@ term.attachCustomKeyEventHandler((event) => {
 });
 ```
 
-`terminal.copy`/`terminal.paste`/`terminal.newline` 均为可重绑的注册命令，handler 经 `getActiveTerminal()` 派发到聚焦终端。window capture 命中即 `stopPropagation`，事件到不了 xterm；仅 capture 失效时委托层兜底。
+`terminal.copy`/`terminal.paste`/`terminal.newline`/`terminal.interrupt`（CP-020）均为可重绑的注册命令，handler 经 `getActiveTerminal()` 派发到聚焦终端。window capture 命中即 `stopPropagation`，事件到不了 xterm；仅 capture 失效时委托层兜底。interrupt 是唯一返回 false 的注册命令——透传语义使 \x03 双路径各触发一次 handler，由 working 守卫幂等去重。
 
 ### Kitty 键盘协议被动启用
 
@@ -152,7 +153,7 @@ xterm.js 6.0.0 原生支持 OSC 8 解析渲染。`useXterm.ts` 在 `term.open()`
 
 ### 中断场景已知行为（Ctrl+C）
 
-Claude Code 在用户主动 Ctrl+C 中断时不发射任何 hook 事件。四态状态机 `working` 无中断出边——中断后页签滞留 `working` 直至下一事件覆盖。下一事件（UserPromptSubmit/Stop 等）会自动覆盖；中断回提示符约 60s 无操作 → `idle_prompt` Notification → 自动转 `attention`。
+Claude Code 在用户主动 Ctrl+C 中断时不发射任何 hook 事件。CP-020 起由前端本地中断命令（`terminal.interrupt`）在 `\x03` 透传前显式将 `working` 页签置 `attention`——幂等设计：window capture 与 xterm 委托双路径各触发一次 handler，第二次为 no-op（见 TerminalPanel.handleInterrupt）。60s 兜底语义保留：中断回提示符后长时间无操作 → `idle_prompt` Notification → 自动转 `attention`。
 
 ## 外部坑/红线
 

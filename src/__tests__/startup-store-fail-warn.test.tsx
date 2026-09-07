@@ -1,8 +1,10 @@
-// startup-store-fail-warn.test.tsx — App 启动链四 store loadFromDisk 失败告警（FE-03）
+// startup-store-fail-warn.test.tsx — App 启动链 store loadFromDisk 失败告警（FE-03）
 //
-// 四个 settings 类 store（fontSize/keybindings/sideBar/cliAliases）的 loadFromDisk
-// 内部自行吞错，App 外层 catch 为防御性兜底——本测试 mock 四个 store 使其 reject，
-// 断言 App 启动链各 catch 均 console.warn 带模块名 [App]（降级兜底逻辑不动）。
+// settings 类 store 的 loadFromDisk 内部自行吞错，App 外层 catch 为防御性兜底——
+// 本测试 mock fontSize/keybindings/sideBar/cliAliases 四 store 使其 reject，断言 App
+// 启动链各 catch 均 console.warn 带模块名 [App]（降级兜底逻辑不动）。CP-009 后启动
+// 链新增第 5 个 store（conptyInputModes），mock 为加载成功——计数口径保持四 store
+// 失败各一次（照 CP-010 为 getConptyStatus 补 mock 的先例）。
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import React from "react";
@@ -14,6 +16,11 @@ const mocks = vi.hoisted(() => {
   const mockKeybindingsLoad = vi.fn().mockRejectedValue(new Error("keybindings 读取失败"));
   const mockSideBarLoad = vi.fn().mockRejectedValue(new Error("sideBar 读取失败"));
   const mockCliAliasesLoad = vi.fn().mockRejectedValue(new Error("cliAliases 读取失败"));
+  // CP-009: 第 5 个 settings 类 store（conptyInputModes）mock 为加载成功——
+  // 本文件聚焦 FE-03 四 store 失败告警计数，真实 loadFromDisk 在 jsdom 无 IPC
+  // 后端下 reject → store 内 catch + App 外层 catch 双 warn，干扰 4 次断言
+  // （照 CP-010 为 getConptyStatus 补 mock 的先例）
+  const mockConptyModesLoad = vi.fn().mockResolvedValue(undefined);
   const mockLoadAllProjects = vi.fn().mockResolvedValue(undefined);
   const mockMarkPersistenceReady = vi.fn();
   const mockSetActivePage = vi.fn();
@@ -24,6 +31,7 @@ const mocks = vi.hoisted(() => {
     mockKeybindingsLoad,
     mockSideBarLoad,
     mockCliAliasesLoad,
+    mockConptyModesLoad,
     mockLoadAllProjects,
     mockMarkPersistenceReady,
     mockSetActivePage,
@@ -33,6 +41,7 @@ const mocks = vi.hoisted(() => {
       mockKeybindingsLoad.mockClear();
       mockSideBarLoad.mockClear();
       mockCliAliasesLoad.mockClear();
+      mockConptyModesLoad.mockClear();
       mockLoadAllProjects.mockClear();
       mockMarkPersistenceReady.mockClear();
       mockSetActivePage.mockClear();
@@ -151,6 +160,15 @@ vi.mock("../stores/cliAliases", () => ({
     }),
     // App 别名快照同步 effect 经 store.subscribe 持续同步——mock 返回空取消函数
     subscribe: vi.fn(() => () => {}),
+  },
+  cancelPendingSave: vi.fn(),
+}));
+
+// CP-009: App 启动链第 5 个 store 加载（conptyInputModes）——mock 加载成功（resolve
+// 不产 warn）。测试目标仍是「四 store 失败各 warn 一次」，计数口径不含第 5 个
+vi.mock("../stores/conptyInputModes", () => ({
+  useConptyInputModes: {
+    getState: () => ({ loadFromDisk: mocks.mockConptyModesLoad }),
   },
   cancelPendingSave: vi.fn(),
 }));

@@ -4,7 +4,8 @@
 // handler 经 getActiveTerminal() 派发到**当前聚焦**终端——多终端下始终作用于聚焦实例。
 // 元数据（默认键/优先级）来自 commandCatalog，本文件只提供 handler。
 //
-// Ctrl+C 明确不注册为命令——xterm.js 自然发送 \x03 到 PTY，供 claude 取消操作。
+// Ctrl+C 注册为 terminal.interrupt 命令（CP-020）：handler 派发本地中断提示后返回 false 透传，
+// xterm.js 仍自然发送 \x03 到 PTY（SIGINT 语义不变）。
 
 import type { Command } from "../../features/shortcuts";
 import { commandFromMeta } from "../../features/shortcuts";
@@ -46,6 +47,13 @@ export function createTerminalShortcuts(): Command[] {
       t.writeToPty(new Uint8Array([0x0a]));
       return true;
     }),
-    // Ctrl+C 不注册命令 → 自然透传，xterm.js 发送 \x03 到 PTY
+    // CP-020:Ctrl+C 本地中断提示——派发 interrupt 后置 attention,再返回 false 透传,
+    // xterm.js 仍发送 \x03 到 PTY(SIGINT 语义不变)
+    commandFromMeta("terminal.interrupt", () => {
+      const t = getActiveTerminal();
+      if (!t?.interrupt) return false; // 无聚焦终端/旧实例 → 透传
+      t.interrupt();
+      return false; // 关键:透传——中断字节仍由 xterm 自然发送
+    }),
   ];
 }

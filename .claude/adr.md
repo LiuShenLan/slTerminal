@@ -61,6 +61,7 @@
 - 新增方案 = schemes/ 新文件 + register 一行，消费方/测试守卫零改动。
 - 注释单点在 types.ts 接口槽位（消费位置与方案无关），新方案零注释负担。
 - main.tsx 静态 import 图收敛为 react/react-dom/lib/e2eEnabled/theme/startupColors(零依赖常量模块,不触发 facade 求值)；E2E helpers 与 ROOT_CSS_VARS 注入保持原相对顺序。
+- **2026-09 CP-039 修订（编辑器侧消除常量化）**：`editorTheme` 模块级常量改 `getEditorTheme()` 函数形，消费点改 `editorThemeSlot`（Compartment + `schemeRegistry.onDidChange` 订阅热重配置）——CM 主题随方案切换即时生效、编辑器不重建（文档/光标/undo 保留）。运行期整体即时切换（壳层 token 全面响应式）仍否决；editorTheme 常量化这一系统性后果已消除，为将来运行期切换移除最后一块编辑器侧障碍。
 
 ## 0003 UI 全面重设计（Linear 极黑克制）
 
@@ -175,6 +176,7 @@
 
 - 版本变更必须显式改 package.json 精确版本号，变更本身即触发审批流程。
 - 上游发布稳定版时按上述门禁评估升级；发布「新 beta」同样须走审批（不得经 `^` 浮动自动引入）。
+- CP-009（2026-09-08）追加口径：PASSTHROUGH_MODE（0x8）由「永久禁用」改为「默认禁用 + 能力矩阵可配置化」（ConptyInputModes 矩阵经 `conptyInputModes` 设置段暴露，设置页开关可启用）——任何 0x8 启用或默认矩阵位翻转同样须过本 ADR 门禁第 3 条（真实 claude 实机滚轮：全屏 TUI + 滚轮滚动）+ 第 4 条（Win10 21376 阈值核对），且 `conpty_flags_default_matrix_matches_legacy_tristate` 守卫用例须绿；无实测记录禁合入。
 
 ## 0008 notify RC 保持（9.0.0-rc.4 / notify-debouncer-full 0.8.0-rc.2）
 
@@ -202,7 +204,7 @@
 | FE-01 | Workspace 多 Dockview 实例**保持**（H6 终端跨页面存活 + xterm 实例限制，D1）；以页面总数上限 `MAX_PAGES = 20`（src/stores/projects.ts，超限 addPage 拒绝 + toast「页面数已达上限」）防内存/DOM 线性增长。**2026-08-22 FE-36 语义修订：页面总数上限改为跨项目全局计数**（原按项目计数——多项目下 Dockview 实例仍可无界增长；`Object.values(projects).flatMap(p => p.pages).length` 全局判定，L2 跨项目用例锁死） | src/workspace/CLAUDE.md、src/stores/CLAUDE.md |
 | SEC-09 | CSP `script-src 'unsafe-inline'` **保留**（D4）：srcdoc iframe 继承父 CSP（W3C 行为），HTML 预览注入脚本（锚点拦截/键盘转发/nonce）必须内联，移除即破坏预览。现状 = tauri.conf.json `script-src 'self' 'unsafe-inline'` + `dangerousDisableAssetCspModification: ["script-src"]` | src-tauri/tauri.conf.json 注释 |
 | SEC-06 | 剪贴板读权限 `clipboard-manager:allow-read-text` **保留**（D6）：唯一消费点为 keyboard.ts 的 Ctrl+Shift+V 显式手势，改后端命令不缩小攻击面（前端上下文被注入时同样能 invoke）；grep 级守卫测试锁消费点集合 | src/ipc/CLAUDE.md |
-| BE-21 | `fs_read_dir` 返回整目录列表**不分页**（登记豁免）：懒加载按目录分层 + FileTree 虚拟化（FE-30）覆盖渲染侧，单层万级文件罕见；改分页 = IPC 契约破坏性变更，收益不抵成本 | src-tauri/src/fs/CLAUDE.md |
+| BE-21 | `fs_read_dir` 返回整目录列表**不分页**（登记豁免）~~已作废~~：**CP-006 已改游标分页（2026-09）**——`(path, cursor?, limit?)` 默认 500/上限 1000，过滤排序后切片、游标 opaque，前端续页拼接；FileTree 虚拟化（FE-30）渲染侧保留 | src-tauri/src/fs/CLAUDE.md |
 | FE-31 | CodeMirror 大文件**不虚拟化**（按 D3 关闭）：fs_read_file Channel 分块（BE-03）削峰 + 10MB 上限 + 1MB 警告已覆盖峰值；CM6 文档模型不支持部分加载 | src/panels/editor/CLAUDE.md |
 | 09#14 | 后端 Mutex **已换装 parking_lot**（CP-005，2026-09）：中毒攻击面结构性消除，原「保持现状」登记作废 | src-tauri/src/CLAUDE.md |
 | TE-03 | xterm 三件套 beta 保留 + 升级审批门禁（L3 + E2E + 真实 claude 实机滚轮 + Win10 21376 阈值核对） | ADR-0007（本文件） |
@@ -237,7 +239,7 @@
 
 **TE-07 执行结果（S02 妥协背书）**：主 typescript 直改 ^7.0.2 **不可行**，D14 三支 fallback 实测走尽（typescript-eslint 最新 8.67.0 peerDependencies `typescript: '>=4.8.4 <6.1.0'` 全系拒绝 TS7、且模块加载期硬校验 `ts.versionMajorMinor >= 7` 崩在加载期，与 type-aware 规则开关无关；overrides 钉兼容组合与根依赖 `^7.0.2` 冲突不可行）。**正式化妥协：双 TS 并存（side-by-side）**——`"typescript": "npm:@typescript/typescript6@^6.0.2"`（TS6 包装器，供 typescript-eslint 8.67.0 消费）+ `"@typescript/native": "npm:typescript@^7.0.2"`（tsc bin = TS7，`npx tsc --version` 7.0.2）。该形态全门禁绿。**升级触发条件(机检,`scripts/check-ts7-trigger.mjs`,CP-001 登记硬化)**:`node scripts/check-ts7-trigger.mjs` 退出码 0 即双条件达成——① issue #10940 `state=closed` ② `typescript` dist-tags.latest = 7.1.x 稳定版;退出码 1 = 未达成,退出码 2 = 查询失败(未知态)。触发后删 TS6 包装器与 `@typescript/native` 别名,`"typescript"` 直改 `^7.1.0`。
 
-**TE-15 工程债务（已知债务登记，代码零改动）**：json-schema-library 9.x/11.x 双 major 并存——codemirror-json-schema@0.8.1 锁 9.x（上游约束），主声明 11.6.2；运行时两实例并存无冲突（JSON Schema 校验各自独立），待上游升级消解（TE-15）。
+**TE-15 工程债务（已知债务登记，代码零改动）**：json-schema-library 9.x/11.x 双 major 并存——codemirror-json-schema@0.8.1 锁 9.x（上游约束），主声明 11.6.2；运行时两实例并存无冲突（JSON Schema 校验各自独立），待上游升级消解（TE-15）。**消解记录（CP-002，2026-09-08）**：codemirror-json-schema 已摘除，自绘 lint/hover 层（jsonSchemaCm.ts）直消费 11.x 编译单例，双 major 并存消亡。
 
 **FE-31 登记点确认**：ADR-0009 表 FE-31 行登记点链接已指向 `src/panels/editor/CLAUDE.md`（新建文件存在，编辑器专属决策已迁入，S10 核对通过）。**FE-36 语义修订**已顺带补入 ADR-0009 表 FE-01 行（MAX_PAGES 跨项目全局计数）。
 

@@ -2,8 +2,8 @@
 //
 // 被测：src/features/settingsCenter/pages.ts 的 side-effect 注册（硬约束 #13：
 // 注册经 side-effect import 触发，禁止隐式初始化）。本文件不 mock pages 自身，
-// 仅把四个页面组件模块 mock 为 () => null（组件实现不属本测试面），
-// import 真实 pages.ts 触发注册后，断言注册表精确包含四条 {id, group, order}。
+// 仅把五个页面组件模块 mock 为 () => null（组件实现不属本测试面），
+// import 真实 pages.ts 触发注册后，断言注册表精确包含五条 {id, group, order}。
 // afterEach 调 _reset() 保证用例隔离（注册表家族契约）。
 
 import { describe, it, expect, afterEach, vi } from "vitest";
@@ -12,6 +12,7 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 vi.mock("../panels/settings/pages/KeybindingsPage", () => ({ default: () => null }));
 vi.mock("../panels/settings/pages/BackgroundTasksPage", () => ({ default: () => null }));
 vi.mock("../panels/settings/pages/CliAliasesPage", () => ({ default: () => null }));
+vi.mock("../panels/settings/pages/ConptyInputModesPage", () => ({ default: () => null }));
 vi.mock("../panels/settings/pages/HooksSettingsPage", () => ({ default: () => null }));
 
 import { getSettingsPageRegistry } from "../features/settingsCenter/SettingsPageRegistry";
@@ -24,7 +25,7 @@ describe("配置页真实注册（pages.ts side-effect import）", () => {
     getSettingsPageRegistry()._reset();
   });
 
-  it("pages.ts import 后注册表精确包含四条配置页（id/group/order 逐一核对）", () => {
+  it("pages.ts import 后注册表精确包含五条配置页（id/group/order 逐一核对）", () => {
     const pages = getSettingsPageRegistry().getAll().map((p) => ({
       id: p.id,
       group: p.group,
@@ -34,6 +35,7 @@ describe("配置页真实注册（pages.ts side-effect import）", () => {
     expect(pages).toEqual([
       { id: "keybindings", group: "global", order: 10 },
       { id: "backgroundTasks", group: "global", order: 20 },
+      { id: "conptyInputModes", group: "global", order: 25 }, // CP-009 终端输入模式页
       { id: "cliAliases", group: "global", order: 30 },
       { id: "hooks", group: "project", order: 100 },
     ]);

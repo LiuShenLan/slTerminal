@@ -40,7 +40,10 @@ import { usePanelFocus } from "../../features/shortcuts";
 import { setActiveEditor, clearActiveEditor, type EditorActions } from "./activeEditor";
 import { useFontSizeWheel } from "../../lib/useFontSizeWheel";
 import { FONT_SIZE_MIN, FONT_SIZE_MAX } from "../../stores/fontSize";
-import { editorTheme, editorColorOverrides, editorSyntaxHighlight } from "../../theme";
+import {
+  createEditorThemeSlot,
+  type EditorThemeSlot,
+} from "../../theme/editorThemeSlot";
 
 /** 文件大小上限（字节）——超过此值拒绝打开，保护内存 */
 export const MAX_FILE_SIZE_BYTES = 10_000_000;
@@ -184,6 +187,9 @@ export function useCodeMirror({
   const langCompartment = useRef(new Compartment());
   /** 字体 Compartment —— 热切换字体大小不丢文档状态 */
   const fontCompartment = useRef(new Compartment());
+  /** CP-039：主题热切换槽——view 存活期方案切换经 Compartment 重配置，不重建编辑器 */
+  const themeSlotRef = useRef<EditorThemeSlot | null>(null);
+  if (themeSlotRef.current === null) themeSlotRef.current = createEditorThemeSlot();
   /** 自动换行 Compartment —— Alt+Z 热切换，默认关闭 */
   const wrapCompartment = useRef(new Compartment());
   /** 自动换行当前状态 ref —— toggle 读取，避免 jsdom 中 view.lineWrapping 不可靠 */
@@ -308,6 +314,9 @@ export function useCodeMirror({
     const gen = ++genRef.current;
     // CP-029(S03): 打开后核对定时器（cleanup 清除；见 initEditor 内调度点）
     let recheckTimer: ReturnType<typeof setTimeout> | undefined;
+    // CP-039: 主题槽订阅取消函数——view 在 async initEditor 内创建，须以 effect 作用域
+    // 变量桥接进 return cleanup（订阅先于 destroy 取消，防对已销毁 view dispatch）
+    let unbindTheme: (() => void) | undefined;
 
     // 异步加载文件内容
     // P1-17: fire-and-forget async，开头标记 mounted，await 后检查标记再操作 DOM
@@ -359,10 +368,10 @@ export function useCodeMirror({
           doc,
           extensions: [
             basicSetup,
-            // 语法高亮置于 editorTheme 之前（reverse 层叠后自定义规则排最后=恒胜，ACC-05）
-            editorSyntaxHighlight(),
-            editorTheme,
-            editorColorOverrides(),
+            // 主题热切换槽（CP-039）：syntax→theme→overrides 三扩展经槽内
+            // editorThemeBundle() 单点固化顺序（ACC-05——syntax 先于 theme，
+            // reverse 层叠后自定义规则排最后=恒胜）；方案切换 Compartment 重配置不重建
+            themeSlotRef.current!.extension,
             // .cm-editor 高度→.cm-scroller height:100%约束→溢出→滚动条。
             // 如缺失，.cm-editor height:auto(=内容高)→scroller=内容高→无溢出→无滚动条。
             EditorView.theme({ "&": { height: "100%" } }),
@@ -393,6 +402,9 @@ export function useCodeMirror({
       });
 
       viewRef.current = view;
+      // CP-039: 订阅方案变更——切换即 Compartment 重配置主题（view 存活期热切换）
+      //（ref 惰性建槽于 render 期，effect/initEditor 运行时恒非空）
+      unbindTheme = themeSlotRef.current!.bind(view);
 
       // 缓冲建立完成 → init 源回传（面板 docRef 初始化/草稿回填确认）
       const cb = onDocContentRef.current;
@@ -448,6 +460,8 @@ export function useCodeMirror({
       mountedRef.current = false;
       // CP-029: 打开后核对随卸载/重建取消
       if (recheckTimer !== undefined) clearTimeout(recheckTimer);
+      // CP-039: 先取消主题订阅再销毁 view——销毁后 dispatch 会抛错
+      unbindTheme?.();
       // 箭头函数调 destroy，防止 this 丢失
       const cleanup = () => {
         viewRef.current?.destroy();

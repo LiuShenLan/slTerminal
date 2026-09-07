@@ -134,6 +134,9 @@ import { getActiveEditor } from "../panels/editor/activeEditor";
 import { fs } from "../ipc";
 import { gitDiff } from "../ipc/git";
 import { updateDiffGutter, clearDiffGutter } from "../panels/editor/gitGutter";
+// CP-039: setActive 驱动用例直驱真实注册表单例（editorThemeSlot 模块内已含注册副作用）
+import { schemeRegistry } from "../theme/schemeRegistry";
+import { linear } from "../theme/schemes/linear";
 
 // ─── 辅助函数 ───
 
@@ -1219,5 +1222,88 @@ describe("EDF-08 justSavedRef 多实例语义", () => {
     await waitFor(() => {
       expect(readFileMock.mock.calls.length).toBe(baseAfterSettle + 1);
     }, { timeout: 3000 });
+  });
+});
+
+describe("useCodeMirror 主题热切换（CP-039）", () => {
+  let container: HTMLDivElement;
+  const createCalls = () =>
+    (EditorState.create as unknown as ReturnType<typeof vi.fn>).mock.calls.length;
+
+  beforeEach(() => {
+    container = createContainer();
+    capturedStateExtensions = null;
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    container.innerHTML = "";
+  });
+
+  it("setActive 后 view.dispatch 携 Compartment reconfigure 效果被调且 EditorView 不重建", async () => {
+    const { unmount } = renderHook(() =>
+      useCodeMirror({ container, filePath: "/test/file.js", panelId: "p-theme" }),
+    );
+    // 等待 EditorView 初始化（挂载 effect 已完成 themeSlot bind 订阅）
+    await waitFor(() => expect(capturedStateExtensions).not.toBeNull(), { timeout: 3000 });
+    const viewCreateCount = createCalls();
+    mockDispatch.mockClear();
+    mockReconfigure.mockClear();
+
+    // 注册临时方案并 setActive——触发槽监听（真实 schemeRegistry 单例）。
+    // 注意：本文件前序用例的 hook 均未卸载（共享 mockDispatch 的存活 view 也会响应），
+    // 故用「至少一次携 effects」+ reconfigure 相对计数断言，不做全局精确次数断言
+    schemeRegistry.register({
+      ...linear,
+      id: "ucm-theme-test",
+      label: "UCM Theme Test",
+    });
+    const reconfigureBefore = mockReconfigure.mock.calls.length;
+    await act(async () => {
+      schemeRegistry.setActive("ucm-theme-test");
+    });
+
+    // Compartment mock reconfigure 返回 []——dispatch 携 effects 被调
+    expect(mockDispatch).toHaveBeenCalledWith({ effects: [] });
+    expect(mockReconfigure.mock.calls.length).toBeGreaterThan(reconfigureBefore);
+    // 防复发：方案切换不重建 EditorView（EditorState.create 计数不变）
+    expect(createCalls()).toBe(viewCreateCount);
+
+    unmount();
+    // 还原注册表（防污染同文件后续用例）
+    await act(async () => {
+      schemeRegistry._reset();
+    });
+    schemeRegistry.register(linear);
+  });
+
+  it("卸载后本实例主题订阅取消——同次 setActive 的 dispatch 数减一（unbind 生效）", async () => {
+    const { unmount } = renderHook(() =>
+      useCodeMirror({ container, filePath: "/test/file.js", panelId: "p-theme2" }),
+    );
+    await waitFor(() => expect(capturedStateExtensions).not.toBeNull(), { timeout: 3000 });
+    const testScheme = {
+      ...linear,
+      id: "ucm-theme-test2",
+      label: "UCM Theme Test2",
+    };
+    schemeRegistry.register(testScheme);
+    // 首次 setActive：全部存活监听（含本实例）dispatch——记基数为 K
+    await act(async () => {
+      schemeRegistry.setActive("ucm-theme-test2");
+    });
+    const k = mockDispatch.mock.calls.length;
+    expect(k).toBeGreaterThanOrEqual(1);
+    // 卸载本实例（effect cleanup unbindTheme 生效）→ 存活监听减一
+    unmount();
+    mockDispatch.mockClear();
+    await act(async () => {
+      schemeRegistry.setActive("ucm-theme-test2");
+    });
+    expect(mockDispatch.mock.calls.length).toBe(k - 1);
+    await act(async () => {
+      schemeRegistry._reset();
+    });
+    schemeRegistry.register(linear);
   });
 });

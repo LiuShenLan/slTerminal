@@ -27,11 +27,73 @@ use uuid::Uuid;
 /// BE-01: PTY 会话总数上限——防止会话无上限堆积耗尽 ConPTY/进程句柄
 const MAX_PTY_SESSIONS: usize = 32;
 
+/// CP-009: ConPTY 输入模式能力矩阵设置键(段形态,照 background_tasks::SETTINGS_KEY 先例——
+/// 后端消费型域键名归域模块;默认矩阵 = 现状三态,零默认漂移)
+pub const SETTINGS_KEY: &str = "conptyInputModes";
+/// 模式矩阵 DTO(serde + ts-rs 双边,字段缺省走 Default)
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, ts_rs::TS, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+#[ts(export, export_to = "../../src/types/pty.ts")]
+pub struct ConptyInputModes {
+    pub inherit_cursor: bool,   // 0x1
+    pub resize_quirk: bool,     // 0x2
+    pub win32_input_mode: bool, // 0x4
+    pub passthrough_mode: bool, // 0x8——默认 false,启用须过 ADR-0007 门禁第 3 条
+}
+impl Default for ConptyInputModes {
+    fn default() -> Self {
+        Self {
+            inherit_cursor: true,
+            resize_quirk: true,
+            win32_input_mode: true,
+            passthrough_mode: false,
+        }
+    }
+}
+
+/// 读 conptyInputModes 设置段(CP-009)——缺失/整文件读失败/段解析失败一律回退
+/// 默认矩阵并记 debug 日志,**不阻塞 spawn**(读侧损坏走默认而非 .bak 恢复——
+/// 恢复是 load_settings 用户可感知路径的语义,spawn 路径不引爆炸弹)。
+/// 仅 Windows spawn 路径消费;非 Windows 平台无 ConPTY flags,不编译本函数
+#[cfg(windows)]
+fn read_conpty_input_modes_setting() -> ConptyInputModes {
+    use crate::settings::read_existing_settings;
+    let path = match crate::app_dir::app_data_dir() {
+        Ok(dir) => dir.join("settings.json"),
+        Err(e) => {
+            tracing::debug!(error = %e, "conptyInputModes: 应用数据目录解析失败,走默认矩阵");
+            return ConptyInputModes::default();
+        }
+    };
+    match read_existing_settings(&path) {
+        Ok(root) => {
+            let section = root.get(SETTINGS_KEY);
+            // root.get 返回 Option<&Value>——from_value 需所有权,克隆后反序列化
+            match section.map(|v| serde_json::from_value::<ConptyInputModes>(v.clone())) {
+                // 段缺失 → 默认矩阵(首次启动零漂移)
+                None => ConptyInputModes::default(),
+                Some(Ok(modes)) => modes,
+                // 段形态/字段非法 → 默认矩阵(解析失败不阻断 spawn)
+                Some(Err(e)) => {
+                    tracing::debug!(error = %e, "conptyInputModes: 段解析失败,走默认矩阵");
+                    ConptyInputModes::default()
+                }
+            }
+        }
+        // 整文件读失败/损坏(读侧 Err) → 默认矩阵,不阻塞 spawn
+        Err(e) => {
+            tracing::debug!(error = %e, "conptyInputModes: 设置读取失败,走默认矩阵");
+            ConptyInputModes::default()
+        }
+    }
+}
+
 // ─── ConPTY flag 常量（绕过 portable-pty 直接调 Win32 API）───
 //
 // portable-pty 0.9.0 硬编码 flags=0x7（INHERIT_CURSOR|RESIZE_QUIRK|WIN32_INPUT_MODE），
 // 不暴露 CreatePseudoConsole dwFlags 参数。此处绕过 openpty()，直接调用 windows crate
-// 的 CreatePseudoConsole，完全控制 flags（当前固定 0x7，见 compute_conpty_flags 注释）。
+// 的 CreatePseudoConsole，完全控制 flags（默认矩阵 = 现状 0x7/0x3 三态，
+// 见 compute_conpty_flags 注释与 CP-009——矩阵可配置化，非固定 0x7）。
 
 #[cfg(windows)]
 pub mod conpty_custom {
@@ -53,26 +115,28 @@ pub mod conpty_custom {
         PROCESS_CREATION_FLAGS, PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOEXW,
     };
 
-    // ─── flag 常量（windows crate 仅定义 PSEUDOCONSOLE_INHERIT_CURSOR）───
+    // ─── flag 常量（windows crate 仅定义 PSEUDOCONSOLE_INHERIT_CURSOR=0x1）───
     const FLAG_RESIZE_QUIRK: u32 = 0x2;
     const FLAG_WIN32_INPUT_MODE: u32 = 0x4;
+    const FLAG_PASSTHROUGH_MODE: u32 = 0x8;
 
     const PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE: usize = 0x00020016;
     const CREATE_UNICODE_ENVIRONMENT: u32 = 0x00000400;
 
-    /// 计算 ConPTY flags（三态）：
+    /// 计算 ConPTY flags（CP-009 模式能力矩阵——默认矩阵与旧三态恒等，零漂移）：
     ///
-    /// - **捆绑新 conhost**（仅 Win10 尝试，见 conpty_api ADR-0005）：恒 0x7——
-    ///   新版完整支持 0x4（修复 microsoft/terminal#376 的 PR #4856 即在新版）
-    /// - 系统 conhost + Win11（build >= 21376）：0x7
-    /// - 系统 conhost + Win10（build < 21376）：0x3——**回退路径**。0x3 未修复滚轮
-    ///   （0x3/0x7 均实测失效，根因是老 conhost 不转发鼠标 VT 序列，#376），仅因
-    ///   键盘/IME 已实测正常而保留，防回退场景无谓启用 0x4。
+    /// 逐位取矩阵：0x1/0x2 直取矩阵位；0x4（WIN32_INPUT_MODE）维持原门控——
+    /// **捆绑新 conhost**（仅 Win10 尝试，见 conpty_api ADR-0005）恒启用（新版完整
+    /// 支持 0x4，修复 microsoft/terminal#376 的 PR #4856 即在新版）；系统 conhost
+    /// 仅 Win11（build >= 21376）启用；系统 conhost + Win10（build < 21376）0x4
+    /// 不置位——**回退路径**。0x3 未修复滚轮（0x3/0x7 均实测失效，根因是老 conhost
+    /// 不转发鼠标 VT 序列，#376），仅因键盘/IME 已实测正常而保留，防回退场景无谓
+    /// 启用 0x4。0x8（PASSTHROUGH_MODE）为末行矩阵位：默认矩阵不含 0x8。
     ///
     /// 阈值 21376 与前端 xterm 钳制（ADR-0004，XTERM_CONPTY_MIN_BUILD）同源——
     /// 同为 xterm.js 的 ConPTY 兼容分界，Win10/Win11 分叉共用。
     ///
-    /// **勿启用 PASSTHROUGH_MODE (0x8)**：0x8 下 claude 等全屏 TUI（v2.1.89+ 默认
+    /// **默认矩阵不含 0x8**：0x8 下 claude 等全屏 TUI（v2.1.89+ 默认
     /// alt buffer + mouse tracking）的鼠标滚轮完全失效。2026-07 在 Win11 build 26200
     /// 真实 app 双向实测：0xF 时 xterm 的 SGR wheel report（`\x1b[<64/65;x;yM`）完整写入
     /// ConPTY stdin 但 claude 无反应，去掉 0x8 后滚轮恢复，输出流畅度无肉眼可见退化。
@@ -80,14 +144,30 @@ pub mod conpty_custom {
     /// mouse mode（microsoft/terminal#376、PR #9970）——但**最小复现实验失败**：node 直接
     /// 子进程（DECSET 1002/1003/1006 + alt buffer + 60fps 负载）在 0xF 下 stdin 的 SGR
     /// report 仍原样透传，阻断条件仅真实 claude 场景（pwsh→claude 进程树 + kitty 协议）
-    /// 复现。因此**验证本函数改动必须实测真实 claude 滚轮**，勿以最小实验/单测绿为依据。
-    pub fn compute_conpty_flags(build_number: u32, bundled: bool) -> u32 {
-        let base = PSEUDOCONSOLE_INHERIT_CURSOR | FLAG_RESIZE_QUIRK;
-        if bundled || build_number >= CONPTY_WIN11_MIN_BUILD {
-            base | FLAG_WIN32_INPUT_MODE
+    /// 复现。因此任何 0x8 启用/默认矩阵位翻转必须实测真实 claude 滚轮（ADR-0007
+    /// 门禁第 3 条人工实测 + `conpty_flags_default_matrix_matches_legacy_tristate`
+    /// 守卫用例绿），勿以最小实验/单测绿为依据。
+    pub fn compute_conpty_flags(
+        build_number: u32,
+        bundled: bool,
+        modes: &super::ConptyInputModes,
+    ) -> u32 {
+        let mut flags = if modes.inherit_cursor {
+            PSEUDOCONSOLE_INHERIT_CURSOR
         } else {
-            base // 系统老 conhost 回退：去 WIN32_INPUT_MODE
+            0
+        };
+        if modes.resize_quirk {
+            flags |= FLAG_RESIZE_QUIRK;
         }
+        if modes.win32_input_mode && (bundled || build_number >= CONPTY_WIN11_MIN_BUILD) {
+            flags |= FLAG_WIN32_INPUT_MODE;
+        }
+        // 末行矩阵位:默认矩阵恒 false——启用须过 ADR-0007 门禁第 3 条人工实测
+        if modes.passthrough_mode {
+            flags |= FLAG_PASSTHROUGH_MODE;
+        }
+        flags
     }
 
     /// 将 UTF-8 字符串编码为以 null 结尾的 UTF-16LE 向量
@@ -433,17 +513,19 @@ pub mod conpty_custom {
     /// 返回 (HPCON, ConPtyMaster) 供后续 spawn 和 session 注册。
     /// HPCON 单独返回是因为 spawn_conpty_child 需要直接引用它
     /// （ProcThreadAttributeList::set_pty 需要 HPCON 值）。
+    /// modes：ConPTY 输入模式能力矩阵（CP-009，来自设置段 conptyInputModes）
     pub fn create_conpty_pair(
         cols: u16,
         rows: u16,
         build_number: u32,
+        modes: &super::ConptyInputModes,
     ) -> Result<(HPCON, ConPtyMaster), Error> {
         let stdin_pipe = Pipe::new()?;
         let stdout_pipe = Pipe::new()?;
 
         // Win10 尝试捆绑新 conhost（ADR-0005），失败静默回退系统；Win11 恒系统
         let api = resolve_conpty_api(build_number);
-        let flags = compute_conpty_flags(build_number, api.is_bundled());
+        let flags = compute_conpty_flags(build_number, api.is_bundled(), modes);
         let size = COORD {
             X: cols as i16,
             Y: rows as i16,
@@ -554,43 +636,112 @@ pub mod conpty_custom {
     mod conpty_custom_tests {
         use super::*;
 
-        // T1: compute_conpty_flags（7 条）——三态：捆绑恒 0x7（新 conhost 完整支持
-        // 0x4）；系统按 build 分叉（Win10 0x3 为回退路径——0x3/0x7 均实测滚轮失效，
-        // 根因在老 conhost 不转发鼠标，见 conpty_api ADR-0005）；回归守卫：任何组合
-        // 都不启用 PASSTHROUGH_MODE 0x8（passthrough 会吞 terminal→child 的 SGR mouse report）
+        use crate::pty::spawn::ConptyInputModes;
+
+        // T1: compute_conpty_flags（默认矩阵注入下 7 条三态用例——期望输出与旧三态
+        // 恒等,零默认漂移）——捆绑恒 0x7（新 conhost 完整支持 0x4）；系统按 build
+        // 分叉（Win10 0x3 为回退路径——0x3/0x7 均实测滚轮失效，根因在老 conhost
+        // 不转发鼠标，见 conpty_api ADR-0005）；默认矩阵回归守卫：默认组合不含
+        // PASSTHROUGH_MODE 0x8（passthrough 会吞 terminal→child 的 SGR mouse report），
+        // 与旧「任何组合都不启用 0x8」语义的差异经 conpty_flags_default_matrix_matches_legacy_tristate
+        // 锁死——矩阵化后 0x8 仅显式 passthrough_mode=true 才置位（须过人工门禁）
         #[test]
         fn flags_win10_19041_system_returns_0x3() {
-            assert_eq!(compute_conpty_flags(19041, false), 0x3);
+            assert_eq!(
+                compute_conpty_flags(19041, false, &ConptyInputModes::default()),
+                0x3
+            );
         }
 
         #[test]
         fn flags_below_threshold_21375_system_returns_0x3() {
-            assert_eq!(compute_conpty_flags(21375, false), 0x3);
+            assert_eq!(
+                compute_conpty_flags(21375, false, &ConptyInputModes::default()),
+                0x3
+            );
         }
 
         #[test]
         fn flags_threshold_21376_system_returns_0x7() {
-            assert_eq!(compute_conpty_flags(21376, false), 0x7);
+            assert_eq!(
+                compute_conpty_flags(21376, false, &ConptyInputModes::default()),
+                0x7
+            );
         }
 
         #[test]
         fn flags_win11_21h2_system_returns_0x7() {
-            assert_eq!(compute_conpty_flags(22000, false), 0x7);
+            assert_eq!(
+                compute_conpty_flags(22000, false, &ConptyInputModes::default()),
+                0x7
+            );
         }
 
         #[test]
         fn flags_win11_22h2_system_returns_0x7() {
-            assert_eq!(compute_conpty_flags(22621, false), 0x7);
+            assert_eq!(
+                compute_conpty_flags(22621, false, &ConptyInputModes::default()),
+                0x7
+            );
         }
 
         #[test]
         fn flags_win11_24h2_system_returns_0x7() {
-            assert_eq!(compute_conpty_flags(26100, false), 0x7);
+            assert_eq!(
+                compute_conpty_flags(26100, false, &ConptyInputModes::default()),
+                0x7
+            );
         }
 
         #[test]
         fn flags_win10_bundled_returns_0x7() {
-            assert_eq!(compute_conpty_flags(19041, true), 0x7);
+            assert_eq!(
+                compute_conpty_flags(19041, true, &ConptyInputModes::default()),
+                0x7
+            );
+        }
+
+        // CP-009 防复发主用例:三输入 × 默认矩阵 → 与旧三态恒等(0x7/0x7/0x3)——
+        // 默认矩阵零漂移守卫;任何默认矩阵位翻转(含 0x8 默认置位)此处即红
+        #[test]
+        fn conpty_flags_default_matrix_matches_legacy_tristate() {
+            assert_eq!(
+                compute_conpty_flags(19041, true, &ConptyInputModes::default()),
+                0x7
+            );
+            assert_eq!(
+                compute_conpty_flags(26100, false, &ConptyInputModes::default()),
+                0x7
+            );
+            assert_eq!(
+                compute_conpty_flags(19041, false, &ConptyInputModes::default()),
+                0x3
+            );
+        }
+
+        // passthrough_mode=true → 0x8 置位（矩阵末行位生效）
+        #[test]
+        fn conpty_flags_passthrough_mode_adds_0x8() {
+            let modes = ConptyInputModes {
+                passthrough_mode: true,
+                ..ConptyInputModes::default()
+            };
+            assert_eq!(compute_conpty_flags(26100, false, &modes), 0x7 | 0x8);
+        }
+
+        // win32_input_mode=true + Win10 回退(系统 conhost,build < 21376)→ 0x4 不置位
+        // (门控维持 bundled || build >= CONPTY_WIN11_MIN_BUILD,矩阵位不能绕过)
+        #[test]
+        fn conpty_flags_win32_input_still_gated_by_build() {
+            let modes = ConptyInputModes {
+                win32_input_mode: true,
+                ..ConptyInputModes::default()
+            };
+            assert_eq!(
+                compute_conpty_flags(19041, false, &modes),
+                0x3,
+                "Win10 回退下 0x4 不得置位"
+            );
         }
 
         // T3: 常量值验证（3 条）
@@ -612,28 +763,32 @@ pub mod conpty_custom {
         // T2: ConPtyMaster MasterPty trait（4 条，依赖实际 Pipe 创建）
         #[test]
         fn master_get_size_initial() {
-            let (_hpc, master) = create_conpty_pair(80, 24, 26100).unwrap();
+            let (_hpc, master) =
+                create_conpty_pair(80, 24, 26100, &ConptyInputModes::default()).unwrap();
             assert_eq!(master.get_size().unwrap().cols, 80);
             assert_eq!(master.get_size().unwrap().rows, 24);
         }
 
         #[test]
         fn master_take_writer_first_succeeds() {
-            let (_hpc, master) = create_conpty_pair(80, 24, 26100).unwrap();
+            let (_hpc, master) =
+                create_conpty_pair(80, 24, 26100, &ConptyInputModes::default()).unwrap();
             let writer = master.take_writer();
             assert!(writer.is_ok());
         }
 
         #[test]
         fn master_take_writer_second_fails() {
-            let (_hpc, master) = create_conpty_pair(80, 24, 26100).unwrap();
+            let (_hpc, master) =
+                create_conpty_pair(80, 24, 26100, &ConptyInputModes::default()).unwrap();
             assert!(master.take_writer().is_ok(), "第一次 take_writer 应成功");
             assert!(master.take_writer().is_err(), "第二次 take_writer 应失败");
         }
 
         #[test]
         fn master_try_clone_reader_succeeds() {
-            let (_hpc, master) = create_conpty_pair(80, 24, 26100).unwrap();
+            let (_hpc, master) =
+                create_conpty_pair(80, 24, 26100, &ConptyInputModes::default()).unwrap();
             let reader = master.try_clone_reader();
             assert!(reader.is_ok());
         }
@@ -1128,7 +1283,9 @@ pub async fn pty_spawn(
                 tracing::warn!("无法获取 Windows build 号: {}", e);
                 0
             });
-            conpty_custom::create_conpty_pair(cols, rows, build)
+            // CP-009: 读 conptyInputModes 设置段（缺失/解析失败 → 默认矩阵，不阻塞 spawn）
+            let modes = read_conpty_input_modes_setting();
+            conpty_custom::create_conpty_pair(cols, rows, build, &modes)
                 .map_err(|e| AppError::Pty(e.to_string()))?
         };
         // BE-05: 克隆 reader + 微批续读检查器（Windows 专用）——必须在 conpty_master
@@ -1967,7 +2124,8 @@ mod spawn_tests {
         let shell_info = crate::pty::shell::resolve_shell_info(Some("cmd.exe"))
             .expect("resolve_shell_info 应成功");
         let (hpc, conpty_master) =
-            conpty_custom::create_conpty_pair(80, 24, 26100).expect("create_conpty_pair 应成功");
+            conpty_custom::create_conpty_pair(80, 24, 26100, &ConptyInputModes::default())
+                .expect("create_conpty_pair 应成功");
         // CPR 注入（对齐生产代码 pty_spawn 行为）
         let mut w = conpty_master.take_writer().expect("take_writer 应成功");
         use std::io::Write as _;

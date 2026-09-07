@@ -92,6 +92,8 @@ export interface UseXtermOptions {
   onFontSizeChange?: (size: number) => void;
   /** 命令运行状态变更回调（OSC 133 检测到注册命令启动/退出时触发） */
   onTabStateChange?: (state: TabState) => void;
+  /** CP-020:本地中断提示回调——terminal.interrupt 命令命中时经 TerminalActions.interrupt 触发 */
+  onInterrupt?: () => void;
 }
 
 /** useXterm hook 返回类型 */
@@ -137,7 +139,7 @@ export function canFit(
 export function useXterm({
   container, panelId,
   windowsBuildNumber, cwd, visible, fontSize,
-  onFontSizeChange, onTabStateChange,
+  onFontSizeChange, onTabStateChange, onInterrupt,
 }: UseXtermOptions): UseXtermReturn {
 
   // ═══════════════════════════════════════════════════════════════
@@ -217,11 +219,15 @@ export function useXterm({
     }
   }, [panelId, handleWriteError]);
 
+  // CP-020:onInterrupt 经 ref 转发——terminalActions 不随回调身份变化重建
+  const onInterruptRef = useRef(onInterrupt);
+  onInterruptRef.current = onInterrupt;
   const terminalActions = useMemo<TerminalActions>(
     () => ({
       getSelection: () => terminalRef.current?.getSelection(),
       paste: (text: string) => terminalRef.current?.paste(text),
       writeToPty,
+      interrupt: () => onInterruptRef.current?.(),
     }),
     [writeToPty],
   );

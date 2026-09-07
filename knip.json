@@ -27,6 +27,9 @@
       "exports",
       "types"
     ],
+    "src/features/cliProfiles/profiles/claude/configEditor/jsonSchemaCm.ts": [
+      "exports"
+    ],
     "src/features/cliProfiles/profiles/claude/index.ts": [
       "exports"
     ],
@@ -151,36 +154,6 @@
     "src/panels/gitshow/GitShowPanel.tsx": [
       "exports"
     ],
-    "src/panels/hooksConfig/ClaudeHooksConfigEditor.tsx": [
-      "types"
-    ],
-    "src/panels/hooksConfig/EventTree.tsx": [
-      "exports",
-      "types"
-    ],
-    "src/panels/hooksConfig/GuiMode.tsx": [
-      "types"
-    ],
-    "src/panels/hooksConfig/HandlerForm.tsx": [
-      "exports"
-    ],
-    "src/panels/hooksConfig/HooksConfigPanel.tsx": [
-      "exports"
-    ],
-    "src/panels/hooksConfig/JsonMode.tsx": [
-      "exports",
-      "types"
-    ],
-    "src/panels/hooksConfig/configModel.ts": [
-      "types"
-    ],
-    "src/panels/hooksConfig/eventsCatalog.ts": [
-      "exports",
-      "types"
-    ],
-    "src/panels/hooksConfig/useHooksConfig.ts": [
-      "exports"
-    ],
     "src/panels/terminal/useTerminalInstance.ts": [
       "exports"
     ],
@@ -188,6 +161,9 @@
       "exports"
     ],
     "src/panels/terminal/webgl.ts": [
+      "exports"
+    ],
+    "src/stores/conptyInputModes.ts": [
       "exports"
     ],
     "src/stores/fontSize.ts": [
@@ -201,6 +177,9 @@
       "exports"
     ],
     "src/theme/colors.ts": [
+      "exports"
+    ],
+    "src/theme/editorThemeSlot.ts": [
       "exports"
     ],
     "src/theme/index.ts": [

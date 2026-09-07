@@ -194,6 +194,9 @@ import React from "react";
 import { render, cleanup, act } from "@testing-library/react";
 import GitShowPanel, { LargeFileWarnWidget } from "../panels/gitshow/GitShowPanel";
 import { GIT_FILE_COLORS } from "../theme";
+// CP-039: 主题热切换用例直驱真实注册表单例
+import { schemeRegistry } from "../theme/schemeRegistry";
+import { linear } from "../theme/schemes/linear";
 // 从 mock 导入以获取 vi.fn() 引用（供断言调用次数/参数）
 import { createEditorFontExtension } from "../panels/editor/useCodeMirror";
 // TQ-COV-10：StateField spec 经 hoisted mockStateFieldDefine 获取（不直接 import 被 mock 的模块路径）
@@ -737,5 +740,56 @@ it("Alt+Z 自动换行：激活编辑器后 toggleWordWrap 经 wrapCompartment �
   expect(secondArgs).toEqual([]);
   // dispatch 携带 reconfigure 结果（effects 热切换）
   expect(mockGitshowDispatch.mock.calls[0][0]).toEqual({ effects: [] });
+});
+
+// ── CP-039: 主题热切换（themeSlot 订阅 schemeRegistry.onDidChange）──
+
+it("schemeRegistry.setActive 后 dispatch 携 Compartment reconfigure 效果且 EditorView 不重建", async () => {
+  mockGitFileAtHead.mockResolvedValue("theme content");
+  const { unmount } = render(
+    React.createElement(GitShowPanel, { params: DEFAULT_PARAMS }),
+  );
+  await vi.waitFor(() => {
+    expect(capturedEditorStateConfig.length).toBeGreaterThan(0);
+  });
+  const viewCountBefore = capturedEditorViews.length;
+  mockGitshowDispatch.mockClear();
+  mockCompartmentReconfigure.mockClear();
+
+  schemeRegistry.register({ ...linear, id: "gitshow-theme", label: "GitShow Theme" });
+  act(() => {
+    schemeRegistry.setActive("gitshow-theme");
+  });
+
+  // Compartment mock reconfigure 返回 []——dispatch 携 effects 被调
+  expect(mockGitshowDispatch).toHaveBeenCalledWith({ effects: [] });
+  expect(mockCompartmentReconfigure).toHaveBeenCalled();
+  // 防复发：方案切换不重建 EditorView（实例计数不变）
+  expect(capturedEditorViews.length).toBe(viewCountBefore);
+
+  unmount();
+  schemeRegistry._reset();
+  schemeRegistry.register(linear);
+});
+
+it("卸载后主题订阅取消——再 setActive 不 dispatch（unbind 先于 destroy）", async () => {
+  mockGitFileAtHead.mockResolvedValue("theme content 2");
+  const { unmount } = render(
+    React.createElement(GitShowPanel, { params: DEFAULT_PARAMS }),
+  );
+  await vi.waitFor(() => {
+    expect(capturedEditorStateConfig.length).toBeGreaterThan(0);
+  });
+  const testScheme = { ...linear, id: "gitshow-theme2", label: "GitShow Theme2" };
+  schemeRegistry.register(testScheme);
+  // 卸载触发 effect cleanup：unbindTheme 先于 view.destroy
+  unmount();
+  mockGitshowDispatch.mockClear();
+  act(() => {
+    schemeRegistry.setActive("gitshow-theme2");
+  });
+  expect(mockGitshowDispatch).not.toHaveBeenCalled();
+  schemeRegistry._reset();
+  schemeRegistry.register(linear);
 });
 });

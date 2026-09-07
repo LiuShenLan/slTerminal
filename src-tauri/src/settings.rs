@@ -3,7 +3,7 @@
 /// 原子写入（tempfile）+ .bak 备份兜底。
 /// - BE-14/D11：load 返回 `{ data, corrupted }`——无文件 data:null/corrupted:false；
 ///   损坏回退默认值 corrupted:true；.bak 命中也算 corrupted:true（数据来自备份）。
-/// - SEC-11：save 校验顶层键白名单（fontSize/keybindings/sideBar/colorScheme/backgroundTasks/cliAliases）+ 大小上限 1MB。
+/// - SEC-11：save 校验顶层键白名单（fontSize/keybindings/sideBar/colorScheme/backgroundTasks/cliAliases/conptyInputModes）+ 大小上限 1MB。
 /// - BE-16：应用数据目录解析/测试守卫/共享 DTO 自 app_dir 模块导入。
 use crate::app_dir::{app_data_dir, LoadResult, MAX_PERSIST_BYTES};
 use crate::error::{io_error, AppError};
@@ -13,19 +13,21 @@ use tempfile::NamedTempFile;
 
 /// 设置顶层键白名单（SEC-11）：前端各 store 只允许写这些键。
 /// 前端消费型五键（fontSize/keybindings/sideBar/colorScheme/cliAliases）无后端模块可归，
-/// 键名集中于此；后端消费型域键名归域模块（background_tasks::SETTINGS_KEY 先例）。
+/// 键名集中于此；后端消费型域键名归域模块（background_tasks::SETTINGS_KEY /
+/// pty::spawn::SETTINGS_KEY 两个先例——键名不在此字面量出现，防双源漂移）。
 /// cliAliases 段 = CLI 启动别名配置（子键 per cliId：别名字符串数组，如 {"claude":["cc"]}），
 /// 纯透传段——语法与全命名空间唯一性校验全在前端 cliProfiles 域（aliasValidation.ts），
 /// 本层不设专用命令/DTO（前端注册表是内置命令名唯一知识源，重复即双源漂移）。
 /// 契约断链先例：fontSize store 曾发平铺 terminalFontSize/editorFontSize 顶层键被拒，
 /// 已改段形态并用双侧测试锁死——前端 payload 键集合精确断言 + 后端平铺拒绝用例）
-const SETTINGS_ALLOWED_KEYS: [&str; 6] = [
+const SETTINGS_ALLOWED_KEYS: [&str; 7] = [
     "fontSize",
     "keybindings",
     "sideBar",
     "colorScheme",
     crate::background_tasks::SETTINGS_KEY,
     "cliAliases",
+    crate::pty::spawn::SETTINGS_KEY, // CP-009 第 7 键：ConPTY 输入模式能力矩阵
 ];
 
 /// save_settings 进程内互斥（SPE-06 场景转正修复）：
@@ -665,6 +667,31 @@ mod settings_tests {
         run(save_settings(settings.clone())).unwrap();
         let loaded = run(load_settings()).unwrap();
         assert_eq!(loaded.data, Some(settings), "cliAliases 段应完整往返一致");
+        assert!(!loaded.corrupted);
+    }
+
+    /// 白名单第 7 键：conptyInputModes 段放行且 save/load 往返一致（CP-009——
+    /// 键名经 crate::pty::spawn::SETTINGS_KEY 引用，防字面量双源漂移）
+    #[test]
+    fn save_accepts_conpty_input_modes_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = AppDataDirGuard::set(dir.path());
+
+        let settings = serde_json::json!({
+            "conptyInputModes": {
+                "inheritCursor": true,
+                "resizeQuirk": true,
+                "win32InputMode": true,
+                "passthroughMode": false
+            }
+        });
+        run(save_settings(settings.clone())).unwrap();
+        let loaded = run(load_settings()).unwrap();
+        assert_eq!(
+            loaded.data,
+            Some(settings),
+            "conptyInputModes 段应完整往返一致"
+        );
         assert!(!loaded.corrupted);
     }
 

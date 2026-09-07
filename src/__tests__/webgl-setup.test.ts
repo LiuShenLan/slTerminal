@@ -7,12 +7,18 @@
 // - 重试耗尽 → onFail 回退 DOM
 // - cancel() → 清除定时器 + dispose 当前 addon + cancelled 守卫
 // - loadAddon 抛异常 → 同样退避重试
+// - SwiftShader 软件渲染 → 成功加载 toast 降级提示仅一次（CP-018）
 //
 // L4 真实 context loss 场景归 E2E-04（本 Stage 不做）。
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { Terminal } from "@xterm/xterm";
-import { detectWebgl, resetWebglCache, setupWebglWithRetry } from "../panels/terminal/webgl";
+import {
+  detectWebgl,
+  resetSwiftShaderCache,
+  resetWebglCache,
+  setupWebglWithRetry,
+} from "../panels/terminal/webgl";
 
 // ─── Hoisted mock：WebglAddon 实例可控（onContextLoss 回调捕获 + 实例列表） ───
 const mocks = vi.hoisted(() => {
@@ -39,6 +45,13 @@ vi.mock("@xterm/addon-webgl", () => ({
   WebglAddon: mocks.WebglAddonMock,
 }));
 
+// CP-018:toast 经 lib barrel mock（成功路径软件渲染提示断言——真实现依赖 ToastHost 渲染）
+const { toastShowMock } = vi.hoisted(() => ({
+  toastShowMock: vi.fn(),
+}));
+
+vi.mock("../lib", () => ({ toast: { show: toastShowMock } }));
+
 /** 构造最小 Terminal stub */
 function makeTerm(): Terminal {
   return { loadAddon: vi.fn() } as unknown as Terminal;
@@ -49,6 +62,8 @@ describe("setupWebglWithRetry", () => {
 
   beforeEach(() => {
     resetWebglCache();
+    resetSwiftShaderCache(); // CP-018:SwiftShader 判定缓存/通知旗标逐例复位
+    toastShowMock.mockReset();
     // 默认 WebGL2 可用（测试 1 单独覆盖不可用分支）
     getContextSpy = vi
       .spyOn(HTMLCanvasElement.prototype, "getContext")
@@ -191,6 +206,37 @@ describe("setupWebglWithRetry", () => {
     // 重试成功 → onSuccess
     expect(mocks.addons).toHaveLength(2);
     expect(onSuccess).toHaveBeenCalledTimes(1);
+    expect(onFail).not.toHaveBeenCalled();
+  });
+
+  it("8. SwiftShader 软件渲染 → context loss 重建成功也只 toast 提示一次（CP-018 一次性降级提示）", () => {
+    // WebGL2 context 桩：SwiftShader 软件渲染（ANGLE 实际 GPU renderer 串）
+    const gl = {
+      getExtension: () => ({ UNMASKED_RENDERER_WEBGL: 0x9246 }),
+      getParameter: () =>
+        "ANGLE (Intel, SwiftShader Device (D3D11 via ANGLE) (0x0000C0DE))",
+    };
+    getContextSpy.mockReturnValue(gl as unknown as RenderingContext);
+
+    const term = makeTerm();
+    const onSuccess = vi.fn();
+    const onFail = vi.fn();
+    setupWebglWithRetry(term, onSuccess, onFail);
+
+    // 首次成功加载 → 软件渲染降级提示一次
+    expect(onSuccess).toHaveBeenCalledTimes(1);
+    expect(toastShowMock).toHaveBeenCalledTimes(1);
+    expect(toastShowMock).toHaveBeenCalledWith(
+      "warning",
+      expect.stringContaining("SwiftShader"),
+    );
+
+    // context loss → 1000ms 退避重建成功 → 连续第二次成功回调仍仅一次提示
+    mocks.addons[0]._lossCb!();
+    vi.advanceTimersByTime(1000);
+    expect(mocks.addons).toHaveLength(2);
+    expect(onSuccess).toHaveBeenCalledTimes(2);
+    expect(toastShowMock).toHaveBeenCalledTimes(1);
     expect(onFail).not.toHaveBeenCalled();
   });
 });

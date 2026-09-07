@@ -22,7 +22,8 @@ function key(
   };
 }
 
-/** 全部可重绑命令的元数据。id 唯一。默认键对自身 context 必须非保留（有 commandCatalog.test 守卫）。 */
+/** 全部可重绑命令的元数据。id 唯一。默认键对自身 context 必须非保留
+ *  （terminal.interrupt 为 CP-020 显式豁免——见其条目注释；commandCatalog.test 守卫同步豁免形态）。 */
 export const COMMAND_CATALOG: readonly CommandMeta[] = [
   {
     id: "global.closeTab",
@@ -54,6 +55,17 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
     category: "terminal",
     context: "terminal",
     defaultKey: key("Enter", { ctrl: true }),
+    priority: 100,
+  },
+  {
+    // CP-020:Ctrl+C 本地中断事件源——派发本地 interrupt 后置 attention,再透传 \x03。
+    // 保留键语义不变:isReserved 仍拦用户覆盖(用户无法改绑/解绑此键);
+    // 代码默认键绑保留键为 CP-020 显式豁免(command-catalog.test 同步)。
+    id: "terminal.interrupt",
+    title: "中断(本地状态提示)",
+    category: "terminal",
+    context: "terminal",
+    defaultKey: key("KeyC", { ctrl: true }),
     priority: 100,
   },
   {

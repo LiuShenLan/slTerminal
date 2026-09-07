@@ -52,7 +52,11 @@ import { confirmDialog, toast, getErrorMessage } from "../../lib";
 import { IconAlertTriangle } from "../../lib/icons";
 import { FONT_SIZE_MIN, FONT_SIZE_MAX } from "../../stores/fontSize";
 import { computeAlignment } from "./alignment";
-import { EDITOR_BG, ERROR_BANNER_BG, ERROR_BANNER_BORDER, ERROR_BANNER_FG, ERROR_FG, HTML_PANEL_LOADING_FG, PANEL_BG, SEPARATOR_BG, editorTheme, editorColorOverrides, editorSyntaxHighlight } from "../../theme";
+import { EDITOR_BG, ERROR_BANNER_BG, ERROR_BANNER_BORDER, ERROR_BANNER_FG, ERROR_FG, HTML_PANEL_LOADING_FG, PANEL_BG, SEPARATOR_BG } from "../../theme";
+import {
+  createEditorThemeSlot,
+  type EditorThemeSlot,
+} from "../../theme/editorThemeSlot";
 
 // ── 占位行 Widget ─────────────────────────────────────────────
 
@@ -183,6 +187,12 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ params }) => {
   const rightFontCompartment = useRef(new Compartment());
   const leftWrapCompartment = useRef(new Compartment());
   const rightWrapCompartment = useRef(new Compartment());
+  // CP-039: 主题热切换槽——左右栏各独立槽（Compartment 不可跨 view 共享红线）；
+  // view 存活期方案切换经 Compartment 重配置，不重建编辑器
+  const leftThemeSlotRef = useRef<EditorThemeSlot | null>(null);
+  if (leftThemeSlotRef.current === null) leftThemeSlotRef.current = createEditorThemeSlot();
+  const rightThemeSlotRef = useRef<EditorThemeSlot | null>(null);
+  if (rightThemeSlotRef.current === null) rightThemeSlotRef.current = createEditorThemeSlot();
   const wordWrapRef = useRef(false);
 
   // renderKey 桥接：容器 div 在 "ready" 态才挂载，DOM commit 后 ref 才非 null。
@@ -544,10 +554,9 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ params }) => {
         doc: headContent,
         extensions: [
           basicSetup,
-          // 语法高亮置于 editorTheme 之前（reverse 层叠后自定义规则排最后=恒胜，ACC-05）
-          editorSyntaxHighlight(),
-          editorTheme,
-          editorColorOverrides(),
+          // 主题热切换槽（CP-039）：槽内 editorThemeBundle() 固化 [syntax, theme,
+          // overrides] 顺序（ACC-05——syntax 先于 theme，reverse 层叠后自定义规则排最后=恒胜）
+          leftThemeSlotRef.current!.extension,
           EditorView.theme({ "&": { height: "100%" } }),
           leftFontCompartment.current.of(createEditorFontExtension(editorFontSize)),
           leftWrapCompartment.current.of([]),
@@ -566,6 +575,8 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ params }) => {
     });
 
     leftViewRef.current = leftView;
+    // CP-039: 订阅方案变更——切换即 Compartment 重配置主题（view 存活期热切换）
+    const unbindLeftTheme = leftThemeSlotRef.current!.bind(leftView);
 
     // 初始应用 HEAD gutter
     if (hunksRef.current.length > 0) {
@@ -573,6 +584,8 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ params }) => {
     }
 
     return () => {
+      // CP-039: 先取消主题订阅再销毁 view——销毁后 dispatch 会抛错
+      unbindLeftTheme();
       leftView.destroy();
       leftViewRef.current = null;
     };
@@ -594,10 +607,9 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ params }) => {
         doc: workdirContent,
         extensions: [
           basicSetup,
-          // 语法高亮置于 editorTheme 之前（reverse 层叠后自定义规则排最后=恒胜，ACC-05）
-          editorSyntaxHighlight(),
-          editorTheme,
-          editorColorOverrides(),
+          // 主题热切换槽（CP-039）：槽内 editorThemeBundle() 固化 [syntax, theme,
+          // overrides] 顺序（ACC-05——syntax 先于 theme，reverse 层叠后自定义规则排最后=恒胜）
+          rightThemeSlotRef.current!.extension,
           EditorView.theme({ "&": { height: "100%" } }),
           rightFontCompartment.current.of(createEditorFontExtension(editorFontSize)),
           rightWrapCompartment.current.of([]),
@@ -619,6 +631,8 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ params }) => {
     });
 
     rightViewRef.current = rightView;
+    // CP-039: 订阅方案变更——切换即 Compartment 重配置主题（view 存活期热切换）
+    const unbindRightTheme = rightThemeSlotRef.current!.bind(rightView);
 
     // 初始应用 workdir gutter + 占位
     if (hunksRef.current.length > 0) {
@@ -632,6 +646,8 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ params }) => {
 
     return () => {
       clearTimeout(timer);
+      // CP-039: 先取消主题订阅再销毁 view——销毁后 dispatch 会抛错
+      unbindRightTheme();
       rightView.destroy();
       rightViewRef.current = null;
     };

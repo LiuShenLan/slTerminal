@@ -10,8 +10,8 @@
 // done→灰/error→红），本文件仅保留四态类型契约。
 //
 // 已知行为假设（无法自动化验证）：
-// - Ctrl+C 用户主动中断不发射任何 hook 事件（完成/错误事件为预期语义），
-//   working 无中断出边为预期行为，依赖下一事件覆盖或空闲提示(~60s) 衰减转 attention
+// - Ctrl+C 用户主动中断不发 hook 事件——CP-020 起由前端本地中断命令（terminal.interrupt）
+//   显式将 working 置 attention；60s idle_prompt 兜底语义保留
 
 /** 编码 CLI 会话状态（四态 + null 表示无状态无图标） */
 export type AgentStatus = "working" | "attention" | "done" | "error" | null;

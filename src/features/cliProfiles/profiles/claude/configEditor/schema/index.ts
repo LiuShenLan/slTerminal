@@ -7,21 +7,20 @@
 // 【自包含性核实结论（2026-08-01）】
 // 全 schema 无远程 $ref：35 个本地 $ref 全部指向 `#/$defs/*`
 // （$defs 仅 permissionRule / hookCommand / hookMatcher 三键，hookMatcher → hookCommand）。
-// codemirror-json-schema / json-schema-library 仅支持本地 $ref，无需预打包展开远程引用。
+// 本地引用为全部形态，无需预打包展开远程引用。
 //
 // hooks 子 schema 提取策略：`properties.hooks` + 打包其依赖的 $defs 子集
 // （hookMatcher + hookCommand，不含 permissions 专用的 permissionRule），
 // 保证 `#/$defs/hookMatcher` 本地引用在独立 schema 中可解析。
-// 供 JsonMode（悬停/波浪线）与 Stage 06 保存校验共用——对齐 hooks 子树编辑范围。
+// 供 jsonSchemaCm（悬停/波浪线自绘层）与 Stage 06 保存校验共用——对齐 hooks 子树编辑范围。
 
 // TE-09：json-schema-library 9.x → 11.x（跨 2 major，完整重写）。
 // 旧 API `new Draft07(schema).validate(data) → JsonError[]` 已移除；
 // 新 API = `compileSchema(schema, { draft }).validate(data) → { valid, errors }`。
 // 本 schema 无 $schema 字段，compileSchema 缺省会选 draft-2020-12——显式
 // `draft: "draft-07"` 保持旧 Draft07 语义（实测九边界全等价，含 anyOf 消息形态）。
-// 去重评估结论（S19 登记）：codemirror-json-schema 0.8.1（npm 最新）内部
-// `import { Draft04 } from "json-schema-library"` 深度绑定 9.x API，11.x 无
-// Draft04/Draft07 构造函数——无法统一，保留双库（11.6.2 直接依赖 + 9.3.5 嵌套副本）。
+// 去重评估（S19）已消解（CP-002）：自绘 lint/hover 层（jsonSchemaCm.ts）直接消费
+// 本模块 11.x 编译单例，json-schema-library 全仓单实例（TE-15 消解）。
 import { compileSchema } from "json-schema-library";
 import type { JsonSchema } from "json-schema-library";
 import claudeCodeSettingsSchema from "./claude-code-settings.json";
