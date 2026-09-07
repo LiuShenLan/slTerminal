@@ -4,7 +4,7 @@
 // 本文件使用真实 Terminal/FitAddon 和真实子 hook，仅 mock IPC 层。
 //
 // 覆盖：
-// - INT-1: rAF 轮询容器宽度为 0 → 超时回退 80×24
+// - INT-1: ResizeObserver 事件驱动 spawn（CP-019）——尺寸为 0 → 500ms 超时回退 80×24
 // - INT-2: term.onData → pty.write 调用链
 // - INT-3: visible 切换 → WebGL addon 释放/重建
 
@@ -250,6 +250,28 @@ vi.mock("../panels/terminal/webgl", () => ({
 import { useXterm } from "../panels/terminal/useXterm";
 import { TerminalRegistry } from "../panels/terminal/TerminalRegistry";
 
+// ─── ResizeObserver mock（CP-019：PTY spawn 事件驱动首帧信号）───
+// 生产 useXterm 不再 rAF 轮询——spawn 由 ResizeObserver 首帧回调驱动。
+// jsdom 无布局引擎且 setup.ts 全局桩不回调，本文件级 mock 在 observe() 后
+// 经 queueMicrotask 补发一次首帧回调（近似浏览器 observe 后首帧送达）——
+// INT-2 起各套件 mountAndWait 即完成 spawn 链路，不再空等 500ms 超时兜底。
+// INT-1（spawn 时序精确控制）在 describe 内自行替换为手动 mock，afterEach 恢复。
+class FileResizeObserver {
+  private readonly cb: ResizeObserverCallback;
+
+  constructor(cb: ResizeObserverCallback) {
+    this.cb = cb;
+  }
+
+  observe(): void {
+    queueMicrotask(() => this.cb([], {} as ResizeObserver));
+  }
+
+  unobserve(): void {}
+  disconnect(): void {}
+}
+globalThis.ResizeObserver = FileResizeObserver as unknown as typeof ResizeObserver;
+
 // ═══════════════════════════════════════════════════════════════
 // 辅助函数
 // ═══════════════════════════════════════════════════════════════
@@ -324,64 +346,88 @@ beforeEach(() => {
 });
 
 // ═══════════════════════════════════════════════════════════════
-// INT-1: rAF 轮询容器宽度失败回退 80×24
+// INT-1: RO 事件驱动 spawn（CP-019）——尺寸为 0 → 500ms 超时回退 80×24
 // ═══════════════════════════════════════════════════════════════
 
-describe("INT-1: rAF 轮询容器宽度失败回退", () => {
-  let raf: ReturnType<typeof installRafMock>;
+describe("INT-1: ResizeObserver 事件驱动 spawn（CP-019）", () => {
+  const origRO = globalThis.ResizeObserver;
+  /** 记录各 RO 实例回调（手动触发——spawn 时序需要精确断言） */
+  let roCbs: Array<ResizeObserverCallback>;
 
-  afterEach(() => {
-    raf?.cleanup();
+  beforeEach(() => {
+    roCbs = [];
+    globalThis.ResizeObserver = class {
+      constructor(cb: ResizeObserverCallback) {
+        roCbs.push(cb);
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    } as unknown as typeof ResizeObserver;
   });
 
-  it("INT-1.1: 容器 offsetWidth=0 → 30 帧后回退 80×24 调用 pty.spawn", () => {
-    raf = installRafMock();
+  afterEach(() => {
+    globalThis.ResizeObserver = origRO;
+  });
+
+  /** 手动触发全部已记录 RO 回调（模拟浏览器 observe 后的首帧投递） */
+  function fireResizeObservers() {
+    for (const cb of roCbs) {
+      cb([], {} as ResizeObserver);
+    }
+  }
+
+  it("INT-1.1: 容器 offsetWidth=0 → RO 首帧不 spawn → 500ms 超时回退 80×24", async () => {
     const container = createContainer(0, 0);
 
     renderHook(() =>
       useXterm({ container, cols: 80, rows: 24, panelId: "int-1-1" }),
     );
 
-    // 前 29 帧内不应 spawn
-    raf.advanceFrames(29, 16);
+    // RO 首帧回调送达但容器尺寸为 0 → 尺寸守卫把门，不 spawn
+    fireResizeObservers();
     expect(mockPtySpawn).not.toHaveBeenCalled();
 
-    // 第 30 帧触发超时回退（帧数条件满足）
-    raf.advanceFrames(1, 16);
-    expect(mockPtySpawn).toHaveBeenCalledTimes(1);
+    // 500ms 超时兜底 → 回退 80×24
+    await waitFor(() => {
+      expect(mockPtySpawn).toHaveBeenCalledTimes(1);
+    }, { timeout: 1500 });
     expect(mockPtySpawn).toHaveBeenCalledWith(
       expect.objectContaining({ cols: 80, rows: 24, panelId: "int-1-1" }),
       expect.any(Function),
     );
   });
 
-  it("INT-1.2: 超过 500ms 后无论帧数是否达 30 都回退 80×24", () => {
-    raf = installRafMock();
+  it("INT-1.2: 尺寸恒 0 且多次 RO 回调 → 不提前 spawn，仅 500ms 超时兜底一次", async () => {
     const container = createContainer(0, 0);
 
     renderHook(() =>
       useXterm({ container, cols: 80, rows: 24, panelId: "int-1-2" }),
     );
 
-    // 仅 10 帧，但每帧 51ms → 总耗时 510ms > 500ms → 触发时间超时
-    raf.advanceFrames(10, 51);
+    // 多次 RO 回调（模拟布局阶段反复通知）→ 尺寸守卫持续拦截，不提前 spawn
+    fireResizeObservers();
+    fireResizeObservers();
+    expect(mockPtySpawn).not.toHaveBeenCalled();
 
+    await waitFor(() => {
+      expect(mockPtySpawn).toHaveBeenCalledTimes(1);
+    }, { timeout: 1500 });
     expect(mockPtySpawn).toHaveBeenCalledWith(
       expect.objectContaining({ cols: 80, rows: 24, panelId: "int-1-2" }),
       expect.any(Function),
     );
   });
 
-  it("INT-1.3: 容器有效尺寸 → 首帧 fit + proposeDimensions → spawn(真实尺寸)", () => {
-    raf = installRafMock();
+  it("INT-1.3: 容器有效尺寸 → RO 首帧 fit + proposeDimensions → spawn(真实尺寸)", () => {
     const container = createContainer(800, 600);
 
     renderHook(() =>
       useXterm({ container, cols: 80, rows: 24, panelId: "int-1-3" }),
     );
 
-    // 首帧检测到有效尺寸 → fit → proposeDimensions → spawn
-    raf.advanceFrames(1, 16);
+    // RO 首帧检测到有效尺寸 → fit → proposeDimensions → spawn
+    fireResizeObservers();
 
     expect(mockPtySpawn).toHaveBeenCalledTimes(1);
     const spawnArgs = mockPtySpawn.mock.calls[0][0];
@@ -389,7 +435,8 @@ describe("INT-1: rAF 轮询容器宽度失败回退", () => {
     expect(spawnArgs.cols).toBeGreaterThan(0);
     expect(spawnArgs.rows).toBeGreaterThan(0);
     expect(spawnArgs.panelId).toBe("int-1-3");
-    // spawn 后不再调度新 rAF 帧
+    // spawn 后 spawned 守卫 → RO 再回调不触发二次 spawn
+    fireResizeObservers();
     expect(mockPtySpawn).toHaveBeenCalledTimes(1);
   });
 });

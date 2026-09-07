@@ -77,6 +77,17 @@ describe("isAlwaysRenderPanel", () => {
     expect(isAlwaysRenderPanel("terminal")).toBe(true);
   });
 
+  // markdownviewer 需要 renderer="always"（iframe/CM 编辑实例保活，决策 #17）
+  it("markdownviewer 返回 true", () => {
+    expect(isAlwaysRenderPanel("markdownviewer")).toBe(true);
+  });
+
+  // CP-017: settings 纳入 always-render（dirty 真值源脱离壳生命周期——壳不随
+  // 页签切换卸载，dirtyRegistry 条目跨切签存活）
+  it("settings 返回 true", () => {
+    expect(isAlwaysRenderPanel("settings")).toBe(true);
+  });
+
   // 未知类型不在 PANEL_TYPES 中 → false
   it("未知类型返回 false", () => {
     expect(isAlwaysRenderPanel("unknown")).toBe(false);

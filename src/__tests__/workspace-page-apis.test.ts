@@ -16,6 +16,7 @@ import {
   getAllPageApis,
   findPanelForSession,
   findPageIdForPanelId,
+  PAGE_API_READY_EVENT,
 } from "../workspace/pageApis";
 import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
@@ -475,5 +476,23 @@ describe("findPageIdForPanelId", () => {
     seedTwoPageProject();
     expect(findPageIdForPanelId("foo-1")).toBeNull();
     expect(findPageIdForPanelId("")).toBeNull();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// registerPageApi 事件派发（CP-042——openSettingsPanel 事件驱动等待的就绪信号源）
+// ═══════════════════════════════════════════════════════════════
+
+describe("registerPageApi 事件派发", () => {
+  it("注册后 window 收到 slterm:page-api-ready 且 detail === pageId", () => {
+    const listener = vi.fn();
+    window.addEventListener(PAGE_API_READY_EVENT, listener);
+    const pageId = "page-ready-event";
+    registerPageApi(pageId, castFakeApi(makeFakeApi()));
+    expect(listener).toHaveBeenCalledTimes(1);
+    const event = listener.mock.calls[0][0] as CustomEvent<string>;
+    expect(event.detail).toBe(pageId);
+    window.removeEventListener(PAGE_API_READY_EVENT, listener);
+    unregisterPageApi(pageId);
   });
 });

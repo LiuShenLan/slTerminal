@@ -12,8 +12,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - 形态 viewMode ∈ edit/split/preview（默认 edit；非法回退；随 params 持久化跨会话恢复）。splitRatio（allotment 拖拽比例）同样随 params 持久化（onDragEnd 才落盘，拖拽过程高频不写）。
 - **文档真值源 = 面板 docRef**（草稿优先磁盘；预览永不直读磁盘）。CM 击键经 onDocContent 即时写回（S3 useCodeMirror 扩展 edit 源）。
-- **CM 仅 edit/split 挂载**：allotment 双 pane 条件渲染——edit↔split 的 CM pane 恒 index 0（React 位置保活，undo/光标保留）；preview-only 卸载（快照在 doc，回 edit 经 initialDoc 回填免二次读盘；**光标回文件头/undo 栈清空为登记已知行为**）。
-- **preview 内容变化驱动**：onDocContent 标 stale + 300ms 防抖（仅 split/preview 启动计时）；切形态时 stale/首入立即渲染；异步渲染产物经 gen 丢弃（编辑继续时过期产物不落地）。外部修改 reload（CM 挂载时 useCodeMirror 内置）经 reload 源同步 doc；preview-only 不监听（与 htmlviewer 现状语义一致）。
+- **CM 恒挂载（CP-037）**：allotment CM pane 恒 index 0 且全形态挂载——preview 态以 `visible=false` 隐藏保活（allotment 收拢不占空间，display:none 照 edit↔split 先例），undo/光标跨 edit/split/preview 全形态保留，回 edit/split 免 initialDoc 快照回填重建；代价 preview 常驻一个 CM 实例内存，已接受。原「preview-only 卸载（快照回填，光标/undo 重置）」登记行为随 CP-037 撤销。
+- **preview 内容变化驱动**：onDocContent 标 stale + 300ms 防抖（仅 split/preview 启动计时）；切形态时 stale/首入立即渲染；异步渲染产物经 gen 丢弃（编辑继续时过期产物不落地）。外部修改 reload（useCodeMirror 内建 fs-event 链，view 存活即生效）经 reload 源同步 doc；CM 恒挂载后 preview 态与 edit/split 同路径（含脏文件确认弹窗），原「preview-only 不监听」句随 CP-037 撤销。
 
 ### 渲染管线分层
 

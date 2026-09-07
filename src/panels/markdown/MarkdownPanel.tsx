@@ -10,9 +10,9 @@
 //
 // 文档真值源 = 面板 docRef（草稿优先磁盘）：
 //   - 磁盘读入 → doc；CM 击键经 onDocContent 即时写回；
-//   - CM 仅 edit/split 挂载（allotment CM pane）；preview-only 卸载——快照在 doc，
-//     回 edit/split 经 initialDoc 回填免二次读盘（光标/undo 重置为登记已知行为）；
-//     edit↔split CM pane 不卸载（React 位置保活），undo/光标保留；
+//   - CM 恒挂载（CP-037：preview 态 allotment visible=false 隐藏保活——undo/光标跨形态
+//     保留，照 edit↔split 先例）；回 edit/split 免 initialDoc 回填重建；preview 态
+//     onDocContent 仍写回 doc（预览渲染源）；
 //   - 预览渲染源 = doc（草稿优先）：300ms 防抖（仅 split/preview 启动），切形态
 //     时 stale 立即渲染；异步管线 gen 丢弃过期产物；外部修改 reload（CM 挂载时）
 //     同步 doc 并触发刷新。
@@ -169,7 +169,7 @@ const MarkdownPanel: React.FC<MarkdownPanelProps> = ({
   // 相对资源解析基（读盘时由 filePath 推出）
   const docDirRef = useRef<string | null>(null);
 
-  // CM 容器（edit/split 的 allotment CM pane 内）
+  // CM 容器（恒挂载 allotment CM pane 内——preview 态隐藏保活）
   const cmContainerRef = useRef<HTMLDivElement | null>(null);
   // 预览框命令句柄（悬浮区重置缩放下行）+ 缩放 HUD 状态机（悬浮区显示）
   const frameRef = useRef<PreviewFrameHandle | null>(null);
@@ -259,21 +259,24 @@ const MarkdownPanel: React.FC<MarkdownPanelProps> = ({
     };
   }, []);
 
-  // 容器 ref 桥接（HtmlPanel/DiffPanel 先例）：ready + 非 preview 时 CM pane
-  // 首挂 render 阶段 ref 未赋值——commit 后 bump 一次，hook 收到非 null 容器
+  // 容器 ref 桥接（HtmlPanel/DiffPanel 先例）：CM pane 首挂（ready 首次渲染）render
+  // 阶段 ref 未赋值——commit 后 bump 一次让 hook 收到非 null 容器；preview 直入场景
+  // 由渲染管线回填 previewHtml 的后续 render 天然覆盖（CM pane 恒挂载，CP-037）
   useEffect(() => {
     if (loadState.kind === "ready" && mode !== "preview") {
       bumpFrame((f) => f + 1);
     }
   }, [loadState.kind, mode]);
 
-  // ── 编辑桥（edit/split 挂载；preview 卸载——快照在 doc state，回填免读盘）──
+  // ── 编辑桥（CM 恒挂载全形态——preview 态隐藏保活，onDocContent 仍写回 doc）──
   // 字号 = 共享 editorFontSize store（Ctrl+滚轮缩放接线——wheel 由 hook 无条件
   // 挂载，缺 props 会吞事件无效果；EditorPanel 同款接线范本）
   const editorFontSize = useFontSize((s) => s.editorFontSize);
   const setEditorFontSize = useFontSize((s) => s.setEditorFontSize);
   useCodeMirror({
-    container: mode !== "preview" ? cmContainerRef.current : null,
+    // CP-037：container 恒传（mode 切换不再使容器在元素/null 间跳变——EditorView
+    // 实例跨 edit/split/preview 全形态存活，光标/undo 栈保留）
+    container: cmContainerRef.current,
     filePath: params.filePath,
     panelId: params.panelId,
     initialDoc: docRef.current,
@@ -361,11 +364,11 @@ const MarkdownPanel: React.FC<MarkdownPanelProps> = ({
         onDragEnd={handleDragEnd}
         minSize={0}
       >
-        {mode !== "preview" && (
-          <Allotment.Pane minSize={160}>
-            <div ref={cmContainerRef} style={cmAreaStyle} />
-          </Allotment.Pane>
-        )}
+        {/* CM pane 恒挂载（CP-037：preview-only 改 display:none 保活——undo/光标跨形态保留，
+            照 edit↔split 先例）；visible=false 时 allotment 收拢不占空间 */}
+        <Allotment.Pane minSize={160} visible={mode !== "preview"}>
+          <div ref={cmContainerRef} style={cmAreaStyle} />
+        </Allotment.Pane>
         {mode !== "edit" && (
           <Allotment.Pane minSize={120}>
             <div style={previewAreaStyle}>

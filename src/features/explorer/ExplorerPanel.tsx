@@ -25,6 +25,7 @@ import {
 } from "../../theme";
 import { PANEL_TERMINAL } from "../../panelRegistry";
 import { usePanelFocus } from "../shortcuts/usePanelFocus";
+import type { SideViewComponentProps } from "../sideViews/sideViewRegistry";
 import { setActiveExplorer, clearActiveExplorer } from "./activeExplorer";
 import { basename } from "../../lib/path";
 import { confirmDialog } from "../../lib/ConfirmDialog";
@@ -40,7 +41,10 @@ const ERROR_AUTO_DISMISS_MS = 5000;
  */
 export { canOpenFile } from "../../workspace/openFile";
 
-export const ExplorerPanel: React.FC = () => {
+export const ExplorerPanel: React.FC<SideViewComponentProps> = ({
+  viewState,
+  onViewStateChange,
+}) => {
   const projects = useProjects((s) => s.projects);
   const activePageId = useLayout((s) => s.activePageId);
 
@@ -60,7 +64,11 @@ export const ExplorerPanel: React.FC = () => {
     }
   }
 
-  const { rootNodes, gitStatusMap, rootError, toggleExpand, refresh } = useFileTree({ rootPath });
+  const { rootNodes, gitStatusMap, rootError, toggleExpand, refresh } = useFileTree({
+    rootPath,
+    viewState,
+    onViewStateChange,
+  });
 
   // --- 选中模型 ---
   const [selectedPath, setSelectedPath] = useState<string | null>(null);

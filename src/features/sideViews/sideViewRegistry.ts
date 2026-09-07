@@ -16,6 +16,10 @@ export interface SideViewComponentProps {
   switchToPage: (projectId: string, pageId: string) => Promise<void>;
   /** 删除指定操作页面 */
   onDeletePage: (projectId: string, pageId: string) => void;
+  /** 视图恢复状态（CP-016：槽位切换/换区重建后由注册表状态槽回填；无历史状态则 undefined） */
+  viewState?: unknown;
+  /** 视图状态上呼（组件内部状态变化时持久化；模块级存活，跨挂载不丢） */
+  onViewStateChange?: (state: unknown) => void;
 }
 
 /** 侧栏视图定义 */
@@ -33,6 +37,8 @@ export interface SideViewDef {
 /** 侧栏视图注册表——模块级单例 */
 export class SideViewRegistry {
   private defs: Map<string, SideViewDef> = new Map();
+  /** 视图状态槽（CP-016）：以视图 id 为键持有跨挂载状态——与 defs 同生命周期（模块级） */
+  private viewStates: Map<string, unknown> = new Map();
 
   /** 注册一条侧栏视图定义（同 id 覆盖） */
   register(def: SideViewDef): void {
@@ -49,9 +55,20 @@ export class SideViewRegistry {
     return this.defs.get(id);
   }
 
-  /** 清空所有定义（仅测试用） */
+  /** 读取视图恢复状态（无条目返回 undefined） */
+  getViewState<T>(id: string): T | undefined {
+    return this.viewStates.get(id) as T | undefined;
+  }
+
+  /** 写入视图状态（组件经 onViewStateChange 上呼；同 id 覆盖） */
+  setViewState(id: string, state: unknown): void {
+    this.viewStates.set(id, state);
+  }
+
+  /** 清空所有定义 + 视图状态（仅测试用） */
   _reset(): void {
     this.defs.clear();
+    this.viewStates.clear();
   }
 }
 

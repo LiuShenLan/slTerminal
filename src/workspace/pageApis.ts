@@ -23,9 +23,15 @@ import { keyOf } from "../features/agentHistory/historyModel";
 /** 模块级页面 API 注册表 */
 const pageApiMap = new Map<string, DockviewApi>();
 
-/** 注册页面 DockviewApi */
+/** 页面 DockviewApi 就绪事件名（CP-042：openSettingsPanel 事件驱动等待；detail = pageId） */
+export const PAGE_API_READY_EVENT = "slterm:page-api-ready";
+
+/** 注册页面 DockviewApi（就绪时派发 window CustomEvent——事件驱动替代轮询） */
 export function registerPageApi(pageId: string, api: DockviewApi): void {
   pageApiMap.set(pageId, api);
+  window.dispatchEvent(
+    new CustomEvent(PAGE_API_READY_EVENT, { detail: pageId }),
+  );
 }
 
 /** 注销页面 DockviewApi */
@@ -124,11 +130,12 @@ export async function switchToPageAndFocus(
  * 打开设置中心面板（同页单例）——调用方须先切到目标页
  * （本函数不切页，见 features/settingsCenter/openSettings.ts 编排）。
  *
- * 面板 id = `settings-{pageId}`；getPanel 命中 → focus（`?.()` 降级静默跳过，
- * 视为已打开）返回 true，未命中 → addPanel（component "settings"；settingsPageId
- * 深链时注入 params.selectedPage）。轮询 getPageApi(pageId) 就绪——首次挂载页面的
- * Dockview API 在 React commit 后经 Workspace.handlePageApiReady 异步注册，
- * 100ms×50=5s 上限。超时 console.warn 降级（不抛异常）。
+ * 面板 id = `settings-{pageId}`；getPanel 命中 → focus 返回 true（同页单例），
+ * 未命中 → addPanel（component "settings"，renderer "always"——CP-017；
+ * settingsPageId 深链时注入 params.selectedPage）。
+ * 页面 api 就绪改事件驱动等待（CP-042）：registerPageApi 派发
+ * `slterm:page-api-ready`，5s 超时仅作防御底线——超时经 toast 可观测化
+ * （原仅 console.warn 静默降级），返回 false 不抛异常。
  * @param settingsPageId 可选深链目标配置页 id（壳据此选中该配置页）
  * @returns 面板打开成功与否（超时返回 false）
  */
@@ -137,30 +144,52 @@ export async function openSettingsPanel(
   settingsPageId?: string,
 ): Promise<boolean> {
   const panelId = `settings-${pageId}`;
-  for (let i = 0; i < 50; i++) {
-    const api = getPageApi(pageId);
-    if (api) {
-      const existing = api.getPanel(panelId);
-      if (existing) {
-        // 面板对象可能缺失 focus（Dockview 边界场景）——`?.()` 降级静默跳过，
-        // 视为已打开（不新建面板、不抛错）
-        existing.focus?.();
-        return true;
-      }
-      api.addPanel({
-        id: panelId,
-        component: "settings",
-        title: "设置",
-        params: { panelId, ...(settingsPageId ? { selectedPage: settingsPageId } : {}) },
-      });
-      return true;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 100));
+  const api = await waitPageApi(pageId, 5000);
+  if (!api) {
+    console.warn(
+      `[slTerminal] 页面 ${pageId} 的 DockviewApi 在 5s 内未就绪，无法打开设置中心`,
+    );
+    toast.show("warning", "设置中心打开失败:操作页面尚未就绪,请重试");
+    return false;
   }
-  console.warn(
-    `[slTerminal] 页面 ${pageId} 的 DockviewApi 在 5s 内未就绪，无法打开设置中心`,
-  );
-  return false;
+  const existing = api.getPanel(panelId);
+  if (existing) {
+    existing.focus?.();
+    return true;
+  }
+  api.addPanel({
+    id: panelId,
+    component: "settings",
+    title: "设置",
+    renderer: "always",
+    params: { panelId, ...(settingsPageId ? { selectedPage: settingsPageId } : {}) },
+  });
+  return true;
+}
+
+/** 等待页面 DockviewApi 注册——事件驱动（PAGE_API_READY_EVENT）+ 超时防御底线 */
+function waitPageApi(
+  pageId: string,
+  timeoutMs: number,
+): Promise<DockviewApi | undefined> {
+  const existing = getPageApi(pageId);
+  if (existing) return Promise.resolve(existing);
+  return new Promise((resolve) => {
+    const onReady = (e: Event) => {
+      if ((e as CustomEvent<string>).detail !== pageId) return;
+      cleanup();
+      resolve(getPageApi(pageId));
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve(undefined);
+    }, timeoutMs);
+    const cleanup = () => {
+      clearTimeout(timer);
+      window.removeEventListener(PAGE_API_READY_EVENT, onReady);
+    };
+    window.addEventListener(PAGE_API_READY_EVENT, onReady);
+  });
 }
 
 // ---- 会话/面板反查（FE-09 自 NavTree 上提——双击弹窗「切换到该会话操作页面」用） ----

@@ -179,6 +179,29 @@ import {
   flushMicrotasks,
 } from "./helpers/xterm-test-utils";
 
+// ─── ResizeObserver mock（CP-019：PTY spawn 事件驱动首帧信号）───
+// 生产 useXterm 依赖 ResizeObserver 首帧回调完成 spawn——jsdom 无布局引擎且
+// setup.ts 的全局桩不回调，本文件级 mock 在 observe() 后补发一次首帧回调
+// （queueMicrotask，近似浏览器 observe 后首帧送达）。测试挂载后经既有的
+// raf.flush() + flushMicrotasks() 等待点即完成 spawn 链路。
+// 需要手动控制回调时机的用例（cancelPendingFlush 描述族）经
+// mockResizeObserver() 在 beforeEach 覆盖本 mock，afterEach cleanup 恢复。
+class FileResizeObserver {
+  private readonly cb: ResizeObserverCallback;
+
+  constructor(cb: ResizeObserverCallback) {
+    this.cb = cb;
+  }
+
+  observe(): void {
+    queueMicrotask(() => this.cb([], {} as ResizeObserver));
+  }
+
+  unobserve(): void {}
+  disconnect(): void {}
+}
+globalThis.ResizeObserver = FileResizeObserver as unknown as typeof ResizeObserver;
+
 // ─── 全局 beforeEach：清空 mock Registry 状态（约束 #8：仅 register 后 get 才返回 entry） ───
 beforeEach(() => {
   mockRegistryMap.clear();

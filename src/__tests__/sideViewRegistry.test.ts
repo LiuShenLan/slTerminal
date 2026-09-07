@@ -133,6 +133,54 @@ describe("SideViewRegistry", () => {
     });
   });
 
+  describe("CP-016 视图状态槽", () => {
+    it("setViewState/getViewState 同 id 覆盖", () => {
+      registry.setViewState("explorer", {
+        rootPath: "C:/project-a",
+        expandedPaths: [],
+      });
+      registry.setViewState("explorer", {
+        rootPath: "C:/project-b",
+        expandedPaths: ["C:/project-b/src"],
+      });
+
+      expect(registry.getViewState("explorer")).toEqual({
+        rootPath: "C:/project-b",
+        expandedPaths: ["C:/project-b/src"],
+      });
+    });
+
+    it("setViewState 不同 id 相互隔离", () => {
+      registry.setViewState("nav", { rootPath: null, expandedPaths: [] });
+
+      expect(registry.getViewState("nav")).toEqual({
+        rootPath: null,
+        expandedPaths: [],
+      });
+      expect(registry.getViewState("explorer")).toBeUndefined();
+    });
+
+    it("getViewState 无条目返回 undefined", () => {
+      expect(registry.getViewState("explorer")).toBeUndefined();
+    });
+
+    it("_reset 清空状态槽（与 defs 同生命周期）", () => {
+      registry.setViewState("explorer", {
+        rootPath: "C:/project",
+        expandedPaths: ["C:/project/src"],
+      });
+      registry._reset();
+
+      expect(registry.getViewState("explorer")).toBeUndefined();
+      // 清空后仍可再写入
+      registry.setViewState("explorer", { rootPath: null, expandedPaths: [] });
+      expect(registry.getViewState("explorer")).toEqual({
+        rootPath: null,
+        expandedPaths: [],
+      });
+    });
+  });
+
   describe("单例", () => {
     it("全局单例存在且为 SideViewRegistry 实例", () => {
       expect(sideViewRegistry).toBeDefined();

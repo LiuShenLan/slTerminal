@@ -16,6 +16,8 @@ const mocks = vi.hoisted(() => {
 
   let mockReadDirImpl: (path: string) => Promise<DirEntry[]> = () => Promise.resolve([]);
   let mockGitStatusImpl: (path: string) => Promise<GitStatusEntry[]> = () => Promise.resolve([]);
+  // CP-016：捕获 onFsEvent 处理器——测试可手动触发 fs-event（200ms 去抖 → refreshExpanded）
+  let fsEventHandler: (() => void) | null = null;
 
   // CP-006：mock 兑现分页契约——便利接口（整表 DirEntry[]）结果作为末页单页返回
   const mockReadDir = vi
@@ -34,11 +36,23 @@ const mocks = vi.hoisted(() => {
     modified: isDir ? null : 1234567890,
   });
 
+  /** onFsEvent 注册处理器捕获（CP-016 场景④手动触发） */
+  const mockOnFsEvent = vi.fn((handler: () => void) => {
+    fsEventHandler = handler;
+    return () => {};
+  });
+
   return {
     mockReadDir,
     mockGitStatus,
+    mockOnFsEvent,
     makeEntry,
+    /** 手动触发一次 fs-event（hooks 挂载时注册的处理器） */
+    fireFsEvent() {
+      fsEventHandler?.();
+    },
     resetAll() {
+      fsEventHandler = null;
       mockReadDir.mockClear();
       mockGitStatus.mockClear();
       mockReadDirImpl = () => Promise.resolve([
@@ -81,11 +95,12 @@ vi.mock("../ipc/git", () => ({
 
 vi.mock("../ipc/notify", () => ({
   startWatch: vi.fn().mockResolvedValue(undefined),
-  onFsEvent: () => () => {},
+  onFsEvent: mocks.mockOnFsEvent,
 }));
 
 // 真实模块导入（mock 之后）
 import { useFileTree } from "../features/explorer/useFileTree";
+import type { FileTreeViewState } from "../features/explorer/useFileTree";
 
 // ============================================================
 // F1: 消除重复 IPC 调用
@@ -97,7 +112,12 @@ describe("useFileTree — F1 消除重复 IPC", () => {
 
   it("F1-1: rootPath 变化时 loadRoot 只调用一次 readDir", async () => {
     const { rerender } = renderHook(
-      ({ rootPath }) => useFileTree({ rootPath: rootPath as string | null }),
+      ({ rootPath }) =>
+        useFileTree({
+          rootPath: rootPath as string | null,
+          viewState: undefined,
+          onViewStateChange: undefined,
+        }),
       { initialProps: { rootPath: null as string | null } },
     );
 
@@ -121,7 +141,12 @@ describe("useFileTree — F1 消除重复 IPC", () => {
 
   it("F1-2: rootPath 从 null 变为有效路径时正确加载", async () => {
     const { result, rerender } = renderHook(
-      ({ rootPath }) => useFileTree({ rootPath: rootPath as string | null }),
+      ({ rootPath }) =>
+        useFileTree({
+          rootPath: rootPath as string | null,
+          viewState: undefined,
+          onViewStateChange: undefined,
+        }),
       { initialProps: { rootPath: null as string | null } },
     );
 
@@ -137,7 +162,12 @@ describe("useFileTree — F1 消除重复 IPC", () => {
 
   it("F1-3: rootPath 从有效路径变为 null 时清空", async () => {
     const { result, rerender } = renderHook(
-      ({ rootPath }) => useFileTree({ rootPath: rootPath as string | null }),
+      ({ rootPath }) =>
+        useFileTree({
+          rootPath: rootPath as string | null,
+          viewState: undefined,
+          onViewStateChange: undefined,
+        }),
       { initialProps: { rootPath: "C:/project" as string | null } },
     );
 
@@ -161,7 +191,12 @@ describe("useFileTree — F1 消除重复 IPC", () => {
     });
 
     const { result, rerender } = renderHook(
-      ({ rootPath }) => useFileTree({ rootPath: rootPath as string | null }),
+      ({ rootPath }) =>
+        useFileTree({
+          rootPath: rootPath as string | null,
+          viewState: undefined,
+          onViewStateChange: undefined,
+        }),
       { initialProps: { rootPath: "C:/project-a" as string | null } },
     );
 
@@ -178,7 +213,12 @@ describe("useFileTree — F1 消除重复 IPC", () => {
 
   it("F1-5: 重命名文件后 refresh 重新调用 readDir", async () => {
     const { result } = renderHook(
-      ({ rootPath }) => useFileTree({ rootPath: rootPath as string | null }),
+      ({ rootPath }) =>
+        useFileTree({
+          rootPath: rootPath as string | null,
+          viewState: undefined,
+          onViewStateChange: undefined,
+        }),
       { initialProps: { rootPath: "C:/project" as string | null } },
     );
 
@@ -196,7 +236,12 @@ describe("useFileTree — F1 消除重复 IPC", () => {
 
   it("F1-6: 删除文件后 refresh 重新调用 readDir", async () => {
     const { result } = renderHook(
-      ({ rootPath }) => useFileTree({ rootPath: rootPath as string | null }),
+      ({ rootPath }) =>
+        useFileTree({
+          rootPath: rootPath as string | null,
+          viewState: undefined,
+          onViewStateChange: undefined,
+        }),
       { initialProps: { rootPath: "C:/project" as string | null } },
     );
 
@@ -215,7 +260,12 @@ describe("useFileTree — F1 消除重复 IPC", () => {
 
   it("F1-7: 新建文件后 refresh 重新调用 readDir", async () => {
     const { result } = renderHook(
-      () => useFileTree({ rootPath: "C:/project" }),
+      () =>
+        useFileTree({
+          rootPath: "C:/project",
+          viewState: undefined,
+          onViewStateChange: undefined,
+        }),
     );
 
     await waitFor(() => {
@@ -231,7 +281,12 @@ describe("useFileTree — F1 消除重复 IPC", () => {
 
   it("F1-8: 新建文件夹后 refresh 重新调用 readDir", async () => {
     const { result } = renderHook(
-      () => useFileTree({ rootPath: "C:/project" }),
+      () =>
+        useFileTree({
+          rootPath: "C:/project",
+          viewState: undefined,
+          onViewStateChange: undefined,
+        }),
     );
 
     await waitFor(() => {
@@ -275,7 +330,13 @@ describe("useFileTree — CP-006 首帧续页拼接", () => {
       },
     );
 
-    const { result } = renderHook(() => useFileTree({ rootPath: "C:/project" }));
+    const { result } = renderHook(() =>
+      useFileTree({
+        rootPath: "C:/project",
+        viewState: undefined,
+        onViewStateChange: undefined,
+      }),
+    );
 
     // 首帧 500 条先落地（不等续页——超大目录首屏不阻塞）
     await waitFor(() => {
@@ -298,7 +359,13 @@ describe("useFileTree — CP-006 首帧续页拼接", () => {
   });
 
   it("P2: 首页即末页（nextCursor null）→ 不发起续页调用", async () => {
-    const { result } = renderHook(() => useFileTree({ rootPath: "C:/project" }));
+    const { result } = renderHook(() =>
+      useFileTree({
+        rootPath: "C:/project",
+        viewState: undefined,
+        onViewStateChange: undefined,
+      }),
+    );
 
     await waitFor(() => {
       expect(result.current.rootNodes.length).toBe(3);
@@ -333,7 +400,12 @@ describe("useFileTree — F3 Generation 取消机制", () => {
     });
 
     const { result, rerender } = renderHook(
-      ({ rootPath }) => useFileTree({ rootPath: rootPath as string | null }),
+      ({ rootPath }) =>
+        useFileTree({
+          rootPath: rootPath as string | null,
+          viewState: undefined,
+          onViewStateChange: undefined,
+        }),
       { initialProps: { rootPath: null as string | null } },
     );
 
@@ -365,7 +437,12 @@ describe("useFileTree — F3 Generation 取消机制", () => {
     });
 
     const { result, rerender } = renderHook(
-      ({ rootPath }) => useFileTree({ rootPath: rootPath as string | null }),
+      ({ rootPath }) =>
+        useFileTree({
+          rootPath: rootPath as string | null,
+          viewState: undefined,
+          onViewStateChange: undefined,
+        }),
       { initialProps: { rootPath: null as string | null } },
     );
 
@@ -392,7 +469,12 @@ describe("useFileTree — F3 Generation 取消机制", () => {
     });
 
     const { result, rerender } = renderHook(
-      ({ rootPath }) => useFileTree({ rootPath: rootPath as string | null }),
+      ({ rootPath }) =>
+        useFileTree({
+          rootPath: rootPath as string | null,
+          viewState: undefined,
+          onViewStateChange: undefined,
+        }),
       { initialProps: { rootPath: null as string | null } },
     );
 
@@ -412,7 +494,12 @@ describe("useFileTree — F3 Generation 取消机制", () => {
 
   it("F3-4: 同 rootPath 不触发取消（正常流程）", async () => {
     const { result } = renderHook(
-      () => useFileTree({ rootPath: "C:/project" }),
+      () =>
+        useFileTree({
+          rootPath: "C:/project",
+          viewState: undefined,
+          onViewStateChange: undefined,
+        }),
     );
 
     await vi.waitFor(() => {
@@ -432,7 +519,12 @@ describe("useFileTree — F3 Generation 取消机制", () => {
 
   it("F3-5: generation 在多次切换后正确递增", async () => {
     const { rerender } = renderHook(
-      ({ rootPath }) => useFileTree({ rootPath: rootPath as string | null }),
+      ({ rootPath }) =>
+        useFileTree({
+          rootPath: rootPath as string | null,
+          viewState: undefined,
+          onViewStateChange: undefined,
+        }),
       { initialProps: { rootPath: null as string | null } },
     );
 
@@ -452,7 +544,12 @@ describe("useFileTree — F3 Generation 取消机制", () => {
 
   it("F3-6: loadRoot 返回后 generation 匹配，数据正常更新", async () => {
     const { result } = renderHook(
-      () => useFileTree({ rootPath: "C:/project" }),
+      () =>
+        useFileTree({
+          rootPath: "C:/project",
+          viewState: undefined,
+          onViewStateChange: undefined,
+        }),
     );
 
     await vi.waitFor(() => {
@@ -476,7 +573,12 @@ describe("useFileTree — F3 Generation 取消机制", () => {
     });
 
     const { result, rerender } = renderHook(
-      ({ rootPath }) => useFileTree({ rootPath: rootPath as string | null }),
+      ({ rootPath }) =>
+        useFileTree({
+          rootPath: rootPath as string | null,
+          viewState: undefined,
+          onViewStateChange: undefined,
+        }),
       { initialProps: { rootPath: "C:/project-a" as string | null } },
     );
 
@@ -516,7 +618,12 @@ describe("useFileTree — F3 Generation 取消机制", () => {
     );
 
     const { result, rerender } = renderHook(
-      ({ rootPath }) => useFileTree({ rootPath: rootPath as string | null }),
+      ({ rootPath }) =>
+        useFileTree({
+          rootPath: rootPath as string | null,
+          viewState: undefined,
+          onViewStateChange: undefined,
+        }),
       { initialProps: { rootPath: "C:/project-a" as string | null } },
     );
 
@@ -560,7 +667,12 @@ describe("useFileTree — FE-41 目标已删目录行移除", () => {
     });
 
     const { result } = renderHook(
-      () => useFileTree({ rootPath: "C:/project" }),
+      () =>
+        useFileTree({
+          rootPath: "C:/project",
+          viewState: undefined,
+          onViewStateChange: undefined,
+        }),
     );
 
     await waitFor(() => {
@@ -597,5 +709,214 @@ describe("useFileTree — FE-41 目标已删目录行移除", () => {
     expect(result.current.rootNodes.map((n) => n.entry.path)).toEqual([
       "C:/project/a.ts",
     ]);
+  });
+});
+
+// ============================================================
+// CP-016: 展开态真值源外移——注册表状态槽恢复/提交
+// ============================================================
+describe("useFileTree — CP-016 恢复与提交", () => {
+  beforeEach(() => {
+    mocks.resetAll();
+  });
+
+  /** 最近一次上呼 payload（onViewStateChange 末次调用参数；lib=ES2020 无 Array.at） */
+  const lastPayload = (spy: ReturnType<typeof vi.fn>) => {
+    const calls = spy.mock.calls;
+    const last = calls[calls.length - 1];
+    return last?.[0] as FileTreeViewState | undefined;
+  };
+
+  it("CP-016-1: 匹配 rootPath 的 expandedPaths 恢复展开且子节点已加载", async () => {
+    // vfs：根含 a.ts + src 目录（src 含 b.ts）——恢复需 src 子项加载
+    makeVfs(mocks.mockReadDir, {
+      "C:/project": [
+        mockEntry("a.ts", false, "C:/project/a.ts"),
+        mockEntry("src", true, "C:/project/src"),
+      ],
+      "C:/project/src": [mockEntry("b.ts", false, "C:/project/src/b.ts")],
+    });
+    const onViewStateChange = vi.fn();
+
+    const { result } = renderHook(() =>
+      useFileTree({
+        rootPath: "C:/project",
+        viewState: {
+          rootPath: "C:/project",
+          expandedPaths: ["C:/project/src"],
+        },
+        onViewStateChange,
+      }),
+    );
+
+    // 初始加载完成后恢复展开（含异步加载子节点 b.ts）
+    await waitFor(() => {
+      const src = result.current.rootNodes.find(
+        (n) => n.entry.path === "C:/project/src",
+      );
+      expect(src?.expanded).toBe(true);
+    }, { timeout: 3000 });
+    await waitFor(() => {
+      const src = result.current.rootNodes.find(
+        (n) => n.entry.path === "C:/project/src",
+      );
+      expect(src?.children.map((c) => c.entry.name)).toContain("b.ts");
+    }, { timeout: 3000 });
+    // 恢复完成的提交集含该路径（渲染落定后的最新提交）
+    await waitFor(() => {
+      expect(lastPayload(onViewStateChange)?.expandedPaths).toContain(
+        "C:/project/src",
+      );
+    }, { timeout: 3000 });
+  });
+
+  it("CP-016-2: viewState.rootPath 与当前不符 → 不恢复（域键作废）", async () => {
+    makeVfs(mocks.mockReadDir, {
+      "C:/project": [
+        mockEntry("a.ts", false, "C:/project/a.ts"),
+        mockEntry("src", true, "C:/project/src"),
+      ],
+      "C:/project/src": [mockEntry("b.ts", false, "C:/project/src/b.ts")],
+    });
+    const onViewStateChange = vi.fn();
+
+    const { result } = renderHook(() =>
+      useFileTree({
+        rootPath: "C:/project",
+        viewState: {
+          rootPath: "C:/other-project", // 域键不符——整份作废不恢复
+          expandedPaths: ["C:/project/src"],
+        },
+        onViewStateChange,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(result.current.rootNodes.length).toBe(2);
+    }, { timeout: 3000 });
+
+    const src = result.current.rootNodes.find(
+      (n) => n.entry.path === "C:/project/src",
+    );
+    expect(src?.expanded).toBe(false);
+    expect(src?.children.length).toBe(0);
+    // 提交集不包含失效恢复路径
+    expect(lastPayload(onViewStateChange)?.expandedPaths).not.toContain(
+      "C:/project/src",
+    );
+  });
+
+  it("CP-016-3: toggleExpand 后上呼含新展开路径，折叠后移除", async () => {
+    makeVfs(mocks.mockReadDir, {
+      "C:/project": [
+        mockEntry("a.ts", false, "C:/project/a.ts"),
+        mockEntry("src", true, "C:/project/src"),
+      ],
+      "C:/project/src": [mockEntry("b.ts", false, "C:/project/src/b.ts")],
+    });
+    const onViewStateChange = vi.fn();
+
+    const { result } = renderHook(() =>
+      useFileTree({
+        rootPath: "C:/project",
+        viewState: undefined,
+        onViewStateChange,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(result.current.rootNodes.length).toBe(2);
+    }, { timeout: 3000 });
+    onViewStateChange.mockClear();
+
+    // 展开 → 上呼含新展开路径
+    await act(async () => {
+      await result.current.toggleExpand("C:/project/src");
+    });
+    await waitFor(() => {
+      const src = result.current.rootNodes.find(
+        (n) => n.entry.path === "C:/project/src",
+      );
+      expect(src?.expanded).toBe(true);
+    }, { timeout: 3000 });
+    await waitFor(() => {
+      expect(lastPayload(onViewStateChange)?.expandedPaths).toContain(
+        "C:/project/src",
+      );
+    }, { timeout: 3000 });
+
+    // 折叠 → 上呼移除该路径
+    await act(async () => {
+      await result.current.toggleExpand("C:/project/src");
+    });
+    await waitFor(() => {
+      expect(lastPayload(onViewStateChange)?.expandedPaths).not.toContain(
+        "C:/project/src",
+      );
+    }, { timeout: 3000 });
+  });
+
+  it("CP-016-4: 磁盘删除已展开目录经 fs-event 刷新后提交集收缩", async () => {
+    vi.useFakeTimers();
+    try {
+      const vfs = makeVfs(mocks.mockReadDir, {
+        "C:/project": [
+          mockEntry("a.ts", false, "C:/project/a.ts"),
+          mockEntry("src", true, "C:/project/src"),
+        ],
+        "C:/project/src": [mockEntry("b.ts", false, "C:/project/src/b.ts")],
+      });
+      const onViewStateChange = vi.fn();
+
+      const { result } = renderHook(() =>
+        useFileTree({
+          rootPath: "C:/project",
+          viewState: {
+            rootPath: "C:/project",
+            expandedPaths: ["C:/project/src"],
+          },
+          onViewStateChange,
+        }),
+      );
+
+      // 先恢复展开 src
+      await vi.waitFor(() => {
+        const src = result.current.rootNodes.find(
+          (n) => n.entry.path === "C:/project/src",
+        );
+        expect(src?.expanded).toBe(true);
+      }, { timeout: 3000 });
+      onViewStateChange.mockClear();
+
+      // 磁盘删除 src + 手动 fs-event → 200ms 去抖 → refreshExpanded
+      // （reloadPreservingExpanded 重建后 src 消失）→ 提交集收缩
+      // 完整模拟磁盘删除：既删目录自身键（子目录 readDir → ENOENT），
+      // 也从父层列表移除条目（父层 readDir 不再返回该项——行才真正消失，
+      // 见 explorer/CLAUDE.md「已展开目录被磁盘删除 → 父层 readDir 不再返回该项」）
+      vfs.set(
+        "C:/project",
+        (vfs.get("C:/project") ?? []).filter(
+          (e) => e.path !== "C:/project/src",
+        ),
+      );
+      vfs.delete("C:/project/src");
+      await act(async () => {
+        mocks.fireFsEvent();
+        await vi.advanceTimersByTimeAsync(300);
+      });
+
+      await vi.waitFor(() => {
+        expect(
+          result.current.rootNodes.find(
+            (n) => n.entry.path === "C:/project/src",
+          ),
+        ).toBeUndefined();
+      }, { timeout: 3000 });
+      expect(lastPayload(onViewStateChange)?.expandedPaths).not.toContain(
+        "C:/project/src",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

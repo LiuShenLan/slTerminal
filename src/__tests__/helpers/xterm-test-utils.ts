@@ -85,7 +85,7 @@ export function ptyOutputSpy(): PtyOutputSpy {
 // ─── ResizeObserver mock ───
 
 export interface ResizeObserverMock {
-  /** 触发 ResizeObserver 回调（模拟容器尺寸变化） */
+  /** 触发 ResizeObserver 回调（模拟容器尺寸变化——目标为最后构造的实例，与既有用例口径一致） */
   trigger: () => void;
   /** 恢复原始 ResizeObserver */
   cleanup: () => void;
@@ -94,22 +94,36 @@ export interface ResizeObserverMock {
 /**
  * 替换 globalThis.ResizeObserver，返回可手动触发的 trigger。
  * 调用方在 afterEach 中必须调用 cleanup()。
+ *
+ * CP-019：observe() 后经 queueMicrotask 补发一次首帧回调（近似浏览器 observe 后
+ * 的异步首帧投递）——事件驱动 spawn（useXterm 的 ResizeObserver 首帧信号）依赖该
+ * 投递完成 PTY spawn；手动 trigger() 保留，供「容器尺寸变化 → fit + pty.resize」
+ * 用例模拟后续尺寸变化。
  */
 export function mockResizeObserver(): ResizeObserverMock {
-  let triggerFn: () => void = () => {};
+  let lastFire: (() => void) | null = null;
   const OrigRO = globalThis.ResizeObserver;
 
   globalThis.ResizeObserver = class {
+    private readonly fire: () => void;
+
     constructor(cb: (entries: unknown[], observer: unknown) => void) {
-      triggerFn = () => cb([], this as unknown as ResizeObserver);
+      const fire = () => cb([], this as unknown as ResizeObserver);
+      this.fire = fire;
+      // 手动 trigger 的目标 = 最后构造的实例（挂载完成后最后构造的是
+      // usePtyResize 的 resize observer——尺寸变化用例的既有口径）
+      lastFire = fire;
     }
-    observe() {}
+    observe() {
+      // CP-019：异步首帧投递（空 entries——回调不依赖条目内容，靠 offsetWidth 守卫）
+      queueMicrotask(() => this.fire());
+    }
     unobserve() {}
     disconnect() {}
   } as unknown as typeof ResizeObserver;
 
   return {
-    trigger: () => triggerFn(),
+    trigger: () => lastFire?.(),
     cleanup() {
       globalThis.ResizeObserver = OrigRO;
     },

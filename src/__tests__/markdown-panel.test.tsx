@@ -2,7 +2,8 @@
 //
 // 面板层逻辑真实（mock 外围：CM 桥/渲染管线资源/mermaid/allotment 布局）：
 //   1. 默认 edit + 悬浮切换条三态
-//   2. edit ↔ split ↔ preview 形态切换与布局（preview-only CM 卸载、快照回填）
+//   2. edit ↔ split ↔ preview 形态切换与布局（CP-037：CM 恒挂载、preview 态
+//      visible=false 隐藏保活——undo/光标跨形态保留）
 //   3. 草稿防抖渲染（fake timers 300ms）与切形态 stale 立即渲染
 //   4. viewMode/splitRatio params 恢复与非法回退
 //   5. 链接 slterm_nav 上行 → external 系统浏览器 / local 应用内打开
@@ -73,11 +74,21 @@ vi.mock("mermaid", () => ({
     render: mocks.mockMermaidRender,
   },
 }));
+// allotment mock：Pane 透传 visible 为 data-pane-visible（真实 allotment 的
+// visible=false 只收拢尺寸不卸载 children——CP-037 隐藏保活依赖此契约，见
+// allotment Pane 实现；data 属性供 DOM 断言锁死）
 vi.mock("allotment", () => ({
   Allotment: Object.assign(
     ({ children }: { children?: React.ReactNode }) =>
       React.createElement("div", { "data-testid": "allotment" }, children),
-    { Pane: ({ children }: { children?: React.ReactNode }) => React.createElement("div", null, children) },
+    {
+      Pane: ({ children, visible }: { children?: React.ReactNode; visible?: boolean }) =>
+        React.createElement(
+          "div",
+          { "data-pane-visible": visible === undefined ? "absent" : String(visible) },
+          children,
+        ),
+    },
   ),
 }));
 vi.mock("../workspace/persistPanelParams", () => ({
@@ -134,6 +145,31 @@ async function waitForCmMounted(container: HTMLElement | null = null) {
     expect(last.container).not.toBeNull();
   }, { timeout: 3000 });
   return container;
+}
+
+/** 取各次 useCodeMirror 调用传入的 container 序列 */
+function cmContainerSeq(): unknown[] {
+  return mocks.mockUseCodeMirror.mock.calls.map(
+    (c) => (c[0] as { container: unknown }).container,
+  );
+}
+
+/** CP-037 防复发代理：EditorView 卸载重建次数 ≈ container 参数「非 null → null →
+ * 非 null」的 null→非 null 迁移计数——真实 useCodeMirror 以 container effect 驱动
+ * new EditorView（useCodeMirror.ts 容器 effect 先例），container 每从元素跳 null 再
+ * 跳回即一次重建；mock 层无真实 EditorView，故以该迁移数作为构造 spy */
+function countCmRebuilds(): number {
+  let rebuilds = 0;
+  let alive = false;
+  for (const container of cmContainerSeq()) {
+    if (container == null) {
+      alive = false;
+    } else if (!alive) {
+      alive = true;
+      rebuilds += 1;
+    }
+  }
+  return rebuilds;
 }
 
 /** 派发通过 origin/source 校验的消息（iframe 内容上行模拟） */
@@ -210,7 +246,7 @@ describe("MarkdownPanel", () => {
     expect(last.gitGutterEnabled).toBe(false);
   });
 
-  it("切 preview → allotment 只渲染 PreviewFrame；渲染管线产物入 srcDoc", async () => {
+  it("切 preview → CM pane 隐藏保活（container 恒非 null）；渲染管线产物入 srcDoc", async () => {
     const { container, getByTitle } = renderPanel();
     await waitForCmMounted();
 
@@ -223,10 +259,11 @@ describe("MarkdownPanel", () => {
     const doc = iframe.getAttribute("srcDoc")!;
     expect(doc).toContain("<h1>磁盘内容</h1>");
     expect(doc.startsWith("<!doctype html>")).toBe(true);
-    // preview-only：CM 卸载（container=null）
+    // CP-037 翻转：preview 不再卸载 CM——container 恒传 cmContainerRef.current
+    //（CM pane 恒挂载，仅 allotment visible=false 隐藏）
     const cmCalls = mocks.mockUseCodeMirror.mock.calls;
     const last = cmCalls[cmCalls.length - 1]![0] as { container: unknown };
-    expect(last.container).toBeNull();
+    expect(last.container).not.toBeNull();
   });
 
   it("形态切换持久化 viewMode", async () => {
@@ -285,13 +322,14 @@ describe("MarkdownPanel", () => {
     }, { timeout: 3000 });
   });
 
-  it("preview 切回 edit：initialDoc 快照回填（免二次读盘）", async () => {
+  it("preview 切回 edit：CM 恒挂载不重建（免快照回填/免二次读盘）", async () => {
     const { container } = renderPanel();
     await waitForCmMounted();
     await act(async () => {
       fireEvent.click(container.querySelector('[data-e2e="markdown-mode-preview"]')!);
     });
-    // preview 期间 CM 卸载——其 initialDoc 快照 = 当前 doc
+    // CP-037：preview 态 CM pane 隐藏保活——切回 edit 不卸载重建、不经 initialDoc
+    // 快照回填（doc 全程经 onDocContent 持续同步，initialDoc 恒为当前 doc）
     await act(async () => {
       fireEvent.click(container.querySelector('[data-e2e="markdown-mode-edit"]')!);
     });
@@ -302,7 +340,10 @@ describe("MarkdownPanel", () => {
     };
     expect(last.container).not.toBeNull();
     expect(last.initialDoc).toContain("磁盘内容");
-    // 读盘仅一次（快照回填不重复 IPC）
+    // 防复发锚（翻转自「preview 卸载 CM」断言）：全程仅初始挂载一次构造——
+    // 卸载重建（container null→非 null 迁移）在 preview 往返中不再发生
+    expect(countCmRebuilds()).toBe(1);
+    // 读盘仅一次（内容经 onDocContent 同步回 doc state，不重复 IPC）
     expect(mocks.mockReadFile).toHaveBeenCalledTimes(1);
   });
 
@@ -381,6 +422,111 @@ describe("MarkdownPanel", () => {
     const cmCalls = mocks.mockUseCodeMirror.mock.calls;
     const last = cmCalls[cmCalls.length - 1]![0] as { container: unknown };
     expect(last.container).not.toBeNull();
+  });
+
+  describe("CP-037 preview 隐藏保活（防复发组）", () => {
+    it("① edit 输入 → preview 往返 → EditorView 构造仅一次（无卸载重建）", async () => {
+      const { container, getByTitle } = renderPanel();
+      await waitForCmMounted();
+
+      // edit 态输入草稿（带内容跨形态往返的前置）
+      const cmCalls = mocks.mockUseCodeMirror.mock.calls;
+      const editCall = cmCalls[cmCalls.length - 1]![0] as {
+        onDocContent?: (text: string, source: string) => void;
+      };
+      await act(async () => {
+        editCall.onDocContent!("# 草稿标题\n\n新内容", "edit");
+      });
+
+      // preview → edit 往返
+      await act(async () => {
+        fireEvent.click(container.querySelector('[data-e2e="markdown-mode-preview"]')!);
+      });
+      await waitForFrame(getByTitle);
+      await act(async () => {
+        fireEvent.click(container.querySelector('[data-e2e="markdown-mode-edit"]')!);
+      });
+      await waitForCmMounted();
+
+      // EditorView 构造 spy（container null→非 null 迁移代理，见 countCmRebuilds）
+      // 全流程仅初始挂载 1 次；修复前（preview 卸载 CM）此场景回 edit 会重建 → 2 次
+      expect(countCmRebuilds()).toBe(1);
+    });
+
+    it("② preview 态 CM pane 仍在 DOM（visible=false 隐藏而非卸载）", async () => {
+      const { container, getByTitle } = renderPanel();
+      await waitForCmMounted();
+      await act(async () => {
+        fireEvent.click(container.querySelector('[data-e2e="markdown-mode-preview"]')!);
+      });
+      await waitForFrame(getByTitle);
+
+      // CM pane（恒 index 0）+ 预览 pane 并存——隐藏保活而非条件卸载（修复前仅 1 个）
+      const allotment = container.querySelector('[data-testid="allotment"]')!;
+      expect(allotment.childElementCount).toBe(2);
+      const cmPane = allotment.firstElementChild as HTMLElement;
+      expect(cmPane.getAttribute("data-pane-visible")).toBe("false");
+      const cmDiv = cmPane.firstElementChild;
+      expect(cmDiv).not.toBeNull(); // CM 容器元素仍在 DOM
+
+      // 回 edit：visible 翻转为 true，容器仍是原 DOM 节点（未卸载重建）
+      await act(async () => {
+        fireEvent.click(container.querySelector('[data-e2e="markdown-mode-edit"]')!);
+      });
+      const cmPaneBack = container
+        .querySelector('[data-testid="allotment"]')!
+        .firstElementChild as HTMLElement;
+      expect(cmPaneBack.getAttribute("data-pane-visible")).toBe("true");
+      expect(cmPaneBack.firstElementChild).toBe(cmDiv);
+    });
+
+    it("③ preview 态 onDocContent 驱动链不断（doc 同步 → 回 edit 内容一致）", async () => {
+      const { container, getByTitle } = renderPanel();
+      await waitForCmMounted();
+      await act(async () => {
+        fireEvent.click(container.querySelector('[data-e2e="markdown-mode-preview"]')!);
+      });
+      const iframe = await waitForFrame(getByTitle);
+
+      // preview 态 CM 恒挂载——捕获其 onDocContent（隐藏态仍写回 doc）
+      const cmCalls = mocks.mockUseCodeMirror.mock.calls;
+      const previewCall = cmCalls[cmCalls.length - 1]![0] as {
+        container: unknown;
+        onDocContent?: (text: string, source: string) => void;
+      };
+      expect(previewCall.container).not.toBeNull();
+      expect(previewCall.onDocContent).toBeDefined();
+
+      // preview 态模拟击键 → 驱动链（onDocContent → doc state → 预览重渲染）不断
+      vi.useFakeTimers();
+      try {
+        await act(async () => {
+          previewCall.onDocContent!("# 草稿标题\n\n新内容", "edit");
+        });
+        // 跨过 300ms 防抖（fake timers 下 waitFor 冻结——act 内 flush 微任务链）
+        await act(async () => {
+          vi.advanceTimersByTime(350);
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+      await waitFor(() => {
+        expect(iframe.getAttribute("srcDoc")).toContain("草稿标题");
+      }, { timeout: 3000 });
+
+      // 回 edit：内容一致（doc 全程经 onDocContent 同步，无磁盘/快照回填）
+      await act(async () => {
+        fireEvent.click(container.querySelector('[data-e2e="markdown-mode-edit"]')!);
+      });
+      const cmAfter = mocks.mockUseCodeMirror.mock.calls;
+      const lastEdit = cmAfter[cmAfter.length - 1]![0] as {
+        initialDoc?: string;
+        container: unknown;
+      };
+      expect(lastEdit.container).not.toBeNull();
+      expect(lastEdit.initialDoc).toContain("草稿标题");
+      expect(mocks.mockReadFile).toHaveBeenCalledTimes(1);
+    });
   });
 });
 

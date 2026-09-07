@@ -69,13 +69,13 @@
 
 ## 四、前端架构
 
-- [ ] **CP-016 · 侧栏视图换区重建,组件内部状态丢失**
+- [x] **CP-016 · 侧栏视图换区重建,组件内部状态丢失**【2026-09-08 修复销项：视图状态上移——sideViewRegistry 增 viewStates 状态槽（getViewState/setViewState），SideBarArea 改受控消费，useFileTree 展开态 {rootPath 域键 + expandedPaths} 经槽跨挂载恢复（渲染落定队列消费修复 restore 竞态）；ADR-0001 状态丢失登记作废】
   来源:ADR-0001(已确认接受)、`src/features/sideViews/CLAUDE.md`、`src/features/explorer/CLAUDE.md`(展开状态)等多登记点。当时理由:换区低频(设定一次后不改),重建成本低于跨父节点保持实例的架构复杂度。问题本质:状态(展开树/rootNodes/滚动)与挂载父节点耦合,跨区即丢。2026-09-06 核查实证:SideBarArea 条件渲染 + explorer rootNodes 存组件内 state(useFileTree.ts:36)未变。**修改方向**:视图状态上移——由视图注册表或专用 store 以视图 id 为键持有,SideBarArea 改受控组件消费外部状态;契约级变化在 sideViewRegistry(新增状态槽)与 useFileTree(改订阅外部真值源)。
-- [ ] **CP-017 · settings 面板不入 `isAlwaysRenderPanel`,dirty 随卸载丢失**【2026-09-06 核查修正:破口范围已收窄】
+- [x] **CP-017 · settings 面板不入 `isAlwaysRenderPanel`,dirty 随卸载丢失**【2026-09-08 修复销项：settings 纳入 isAlwaysRenderPanel 白名单 + dirty 真值源脱离壳生命周期（条目注册/清理只在确认守卫分支），SC-FE-08 确认分支与 closeTabGuarded 同步补 clearSettingsDirty；SC-FE-06 决策翻案】
   来源:`src/workspace/CLAUDE.md`(SC-FE-06,决策写死)。当时理由:与旧 hooksConfig 行为一致继承,不新增 always 渲染内存开销。问题本质:脏表单状态随面板卸载静默丢失。**核查修正**:FE-49 已为单面板关闭四路(×/Ctrl+W/中键/右键关闭)加确认守卫(tabClose.ts:19-32),「静默丢失」范围收窄;残余破口 = 批量关闭族直关(见 CP-036)与页删除等绕过 closeTabGuarded 的卸载路径。**修改方向**:治本不变——dirty 真值源脱离壳生命周期(持久于 store/注册表),settings 纳入 always-render 或等价保活;治标的批量路径收口见 CP-036。
 - [ ] **CP-018 · WebGL 检测不带 `failIfMajorPerformanceCaveat`**
   来源:`src/panels/CLAUDE.md`(FE-26)。当时理由:blocklist 场景会连同软件渲染拒绝 → DOM renderer 快滚掉帧;SwiftShader 远快于 DOM 全帧重建,接受软件渲染。问题本质:GPU blocklist 机器落入慢速软件渲染且无回退提示。2026-09-06 核查实证:webgl.ts:34-44 单参 getContext 原样,仍无任何降级信号,L2 锁死该行为。**修改方向**:检测区分硬件 GPU 与 SwiftShader(WEBGL_debug_renderer_info / UNMASKED_RENDERER_WEBGL),对后者给一次性 toast/状态条降级提示;不改检测契约本身。
-- [ ] **CP-019 · PTY spawn 布局等待 30 帧/500ms 超时回退 80×24**
+- [x] **CP-019 · PTY spawn 布局等待 30 帧/500ms 超时回退 80×24**【2026-09-08 修复销项：等待改事件驱动——ResizeObserver 首帧回调（尺寸就绪 + canFit 真尺寸 / NaN 回退 80×24）驱动 spawnWithFit，spawned 守卫单次 + 500ms 超时防御底线 + 卸载 cleanup；rAF 轮询删除】
   来源:`src/panels/CLAUDE.md`。当时理由:极端场景降级尺寸。问题本质:超时后以默认尺寸建立终端,真实布局稍后到达产生 resize 抖动;等待与回退策略是计时猜测而非事件驱动。2026-09-06 核查实证:useXterm.ts:307-384 数值与轮询实现原样。**修改方向**:等待改事件驱动——容器尺寸就绪经 ResizeObserver 首帧回调或 Dockview onDidLayoutChange 显式信号驱动 spawn;超时回退保留作防御底线。
 - [ ] **CP-020 · Ctrl+C 中断滞留 `working` 状态已知行为(登记不修)**
   来源:`src/panels/CLAUDE.md`。当时理由:CC 中断不发射 hook 事件,状态机无中断出边,滞留至下一事件/60s idle_prompt 转 attention。问题本质:用户按下中断后 UI 长时间保持「working」假象——状态机缺「中断」事件源。2026-09-06 核查实证:keyboard.ts Ctrl+C 不注册命令(前端无中断事件源)、状态机无中断出边,原样。**修改方向**:前端自建中断事件源——ShortcutRegistry 对 terminal 上下文 Ctrl+C(保留键)派发本地 interrupt 动作,将该面板 tabStatus 由 working 置 attention(或新增 interrupted 态);不依赖 claude 上游发事件,60s 兜底语义保留。
@@ -85,13 +85,13 @@
   来源:ADR-0009 FE-31、`src/panels/editor/CLAUDE.md`。当时理由:CM6 文档模型不支持部分加载;分块 + 10MB 上限 + 1MB 警告三层防线削峰。**核查修正**:CM6 核心不支持部分加载属实(2026 年仍如此),但生态已有分片/虚拟化只读方案,「只能依赖上游」不成立。上限语义已在 gitshow/diff 面板家族固化(复用同阈值)。**修改方向**:10MB 可编辑上限不变,补超限文件的只读分片浏览路径(虚拟化行窗口 + 按需 range 读块);编辑器与 gitshow/diff 的超限拒绝语义改引导到只读浏览。
 - [ ] **CP-031 · 宿主内联 `<script>` 被 `escapeScriptClose` 转义破坏——预览 HTML 自带 JS 静态化**
   来源:`src/panels/CLAUDE.md`「HTML 内联脚本/事件执行」节(2026-09-06 实证登记)、`src/lib/injectScript.ts`、`e2e-tests/html.e2e.ts`。当时理由(登记未修):`injectScript` 为防宿主 `</script>` 提前闭合注入脚本,把宿主内**所有** `</script>` 转义为 `<\/script>`;Chromium 不视其为结束标签 → 宿主 script 吞到 EOF → SyntaxError 永不执行,预览 HTML 自带交互 JS 整体静默缺失(注入脚本自身不受影响)。2026-09-06 核查实证:injectScript.ts:12-14 无差别转义未动,html.e2e.ts:87 仍 skip,fixture 仍走 `<body onload>` 通道。**修改方向**:转义收窄为「仅注入点之前的宿主部分」——先定位插入点(</head>/<body/策略 3/4),前段转义后拼接未转义后段 + 注入脚本;修后取消 html.e2e.ts:87 skip 恢复验证。
-- [ ] **CP-036 · 批量关闭族(关闭其他/关闭全部)绕过 dirty 守卫直关**(2026-09-06 核查新增)
+- [x] **CP-036 · 批量关闭族(关闭其他/关闭全部)绕过 dirty 守卫直关**【2026-09-08 修复销项：closeTabsGuarded 批量统一入口（dirty 列表 + 单次确认 → 确认后清条目再全关），PageDockviewHost 两 action 改走守卫；页删除路径显式不守卫登记（整页销毁语义，残留条目有界可接受）】
   来源:`src/workspace/CLAUDE.md:39`(「批量路径仍直关(批量确认交互未定义,遗留)」)、PageDockviewHost.tsx:276-303。当时理由:FE-49 修单条关闭守卫时,以「批量确认交互未定义」登记遗留、接受直关。问题本质:同一 dirty 语义在批量路径下无确认即丢弃——守卫单点(closeTabGuarded)被调用方绕过,语义不对称随新关闭入口增殖;与 CP-017 同族但机制独立(守卫破口而非渲染策略)。**修改方向**:批量路径接入 closeTabGuarded 家族——一次性定义批量确认交互(含 dirty 面板列表 + 单次确认),两菜单 action 改调统一入口;或显式声明批量关闭不守卫并转产品决策(则本项移出清单)。
-- [ ] **CP-037 · markdownviewer preview-only 卸载 CM,回 edit 丢光标/undo 栈**(2026-09-06 核查新增)
+- [x] **CP-037 · markdownviewer preview-only 卸载 CM,回 edit 丢光标/undo 栈**【2026-09-08 修复销项：CM pane 恒挂载保活（Allotment visible 切换，container 不再元素/null 跳变），edit↔split↔preview 全形态 EditorView 存活光标/undo 保留；S10 预览迁 webview 后保活形态复核登记于 S10】
   来源:`src/panels/CLAUDE.md:36`、`src/panels/markdown/CLAUDE.md:15`(均登记为「已知行为」)。当时理由:「快照回填免二次读盘」的挂载策略选择,接受切 preview 再回 edit 时编辑现场(光标位置 + undo 历史)丢失。问题本质:同面板 edit↔split 已用「CM pane 恒挂载」保活 undo——preview-only 不保是显式取舍而非能力边界;同一编辑会话的连续性被视图形态切分,状态存活与否取决于路径而非语义。**修改方向**:preview-only 改 CM 隐藏保活(display:none,照 edit↔split 先例),代价是 preview 常驻一个 CM 实例内存;若不接受内存代价,升级为显式决策并评估只保光标的低成本快照回填。
 - [ ] **CP-039 · editorTheme 常量化,方案切换须重载窗口才生效**(2026-09-06 存疑复核转入)
   来源:`src/theme/CLAUDE.md:33,65`、ADR-0002(运行期即时切换被否决)。当时理由:ADR-0002 以复杂度为由否决运行期即时切换,editorTheme 在模块加载期固化为常量——切换方案须重载窗口,覆盖全方案而非单点。问题本质:「仅暗色模式」不等于「仅一套方案」——主题系统支持多 scheme 但编辑器族(CM)主题掉队,切换体验断裂为「部分即时、部分重载」;ADR 否决的是全量即时切换,editorTheme 常量化是其系统性后果中未被单独审视的一块。**修改方向**:editorTheme 改为订阅方案注册表响应式取色(CM 主题经 Compartment 重配置,编辑器不重建),消除重载要求;若维持重载,在方案切换动作处显式提示「编辑器主题需重载生效」。
-- [ ] **CP-042 · `openSettingsPanel` 100ms×50 轮询就绪,超时仅 console.warn 静默降级**(2026-09-06 存疑复核转入)
+- [x] **CP-042 · `openSettingsPanel` 100ms×50 轮询就绪,超时仅 console.warn 静默降级**【2026-09-08 修复销项：面板就绪改事件驱动——registerPageApi 派发 PAGE_API_READY_EVENT，openSettingsPanel 经 waitPageApi(5s 超时) 唤醒 + 超时 toast 可观测化（warn + toast.show 返回 false）；轮询仅剩 switchToPageAndFocus 一处】
   来源:`src/workspace/CLAUDE.md:62`、`src/features/settingsCenter/CLAUDE.md`。当时理由:防御性超时的低成本实现,与 CP-019 同族的计时猜测模式。问题本质:用户点配置入口可能无面板出现且无任何提示(仅 console.warn)——轮询赌时序,超时路径对用户完全静默;计时猜测型降级的第二处实例,与 CP-019 共享「应事件驱动」的根治方向。**修改方向**:面板就绪改显式信号/事件驱动(参考 CP-019 方向);超时降级至少经 toast 可观测化,不留静默失败路径。
 
 ## 五、测试覆盖缺口

@@ -105,13 +105,15 @@ export function isValidPanelType(type: string): type is PanelType {
  * 检查面板是否应使用 renderer="always" 模式。
  * 显式白名单：terminal（保持 PTY 存活）+ htmlviewer/markdownviewer（避免 iframe
  * browsing context 销毁重建导致白屏 + CM 编辑实例切走切回不重建——草稿与缩放
- * 状态保活，决策 #17）。
+ * 状态保活，决策 #17）+ settings（CP-017：dirty 真值源脱离壳生命周期——壳不随
+ * 页签切换卸载，dirtyMap/dirtyRegistry 条目跨切签存活）。
  * editor / gitshow / diff 故意排除——CM6 重建无视觉闪屏，且大文件编辑器若始终挂载会显著增加内存开销。
  */
 export function isAlwaysRenderPanel(type: string): boolean {
   return (
     type === PANEL_TERMINAL ||
     type === PANEL_HTML_VIEWER ||
-    type === PANEL_MARKDOWN_VIEWER
+    type === PANEL_MARKDOWN_VIEWER ||
+    type === "settings"
   );
 }

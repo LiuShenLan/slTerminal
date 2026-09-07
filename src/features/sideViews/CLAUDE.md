@@ -30,7 +30,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **新增侧栏视图只需两步**：
 
-1. 实现 ViewComponent（接受 `SideViewComponentProps = { switchToPage, onDeletePage }`）。
+1. 实现 ViewComponent（接受 `SideViewComponentProps = { switchToPage, onDeletePage, viewState?, onViewStateChange? }`——CP-016 起后两槽位为跨挂载状态受控消费接口：`viewState` 挂载时回填、`onViewStateChange` 状态变化时上呼）。
 2. 在 `sideViewDefs.ts` 加一行 `sideViewRegistry.register({ id, title, icon, component })`。
 
 框架自动处理：活动栏按钮渲染与开关、上区/下区拖拽归属、槽位 display:none/flex 切换、持久化。
@@ -52,18 +52,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 执行：`onDrop` → `useSideBar.getState().moveButton(id, zone, index)`。
 - 拖拽仅活动栏内有效：外部不监听 drop，按钮不能拖出活动栏。
 
-### 关闭语义——按需卸载（FE-21）+ 换区重建
+### 关闭语义——按需卸载（FE-21）+ 状态槽回填（CP-016）
 
-- **槽位内切换（FE-21 按需卸载）**：同一半区内切换视图时**旧视图组件卸载**（条件渲染仅挂载当前打开视图），隐藏视图不保挂载——DOM/订阅随卸载释放。状态丢失语义 ADR-0001 已接受。
-- **换区重建（已知行为）**：按钮被拖拽跨区时，zones 变化导致视图组件从上区 pane 移入下区 pane。React 将其视为不同父节点下的组件，触发卸载+重建——组件内部状态丢失。ADR-0001 已确认接受。
+- **槽位内切换（FE-21 按需卸载）**：同一半区内切换视图时**旧视图组件卸载**（条件渲染仅挂载当前打开视图），隐藏视图不保挂载——DOM/订阅随卸载释放。跨挂载状态经注册表状态槽存活，卸载不再等于丢状态（见下）。
+- **状态槽回填（CP-016）**：视图跨挂载状态经 `sideViewRegistry` 状态槽（`getViewState`/`setViewState`，`_reset` 同清）以视图 id 为键持久——SideBarArea 向视图透传 `viewState={sideViewRegistry.getViewState(def.id)}` 与 `onViewStateChange`（上呼写回槽位，组件经 `SideViewComponentProps.viewState/onViewStateChange` 受控消费）。槽位切换/换区卸载重建后由回填恢复，不再依赖组件内部 state。
 - **首次双开 splitRatio 回退（FE-19）**：从单视图过渡到双视图时，`SideBarArea` 的 `useEffect` 仅当 `splitRatio` 为默认值或越界（出 [0.1,0.9]）才回退 0.5；用户调节过的合法比例在单↔双切换中保留。
 
 ## 外部坑/红线
 
 - **空 zone div 不接收 drag 事件**：Chromium hit-test 跳过零高度元素，必须把 `onDragOver`/`onDrop` 挂在外层全高容器。
 - **配置钮不入注册表**：`SideViewRegistry` 操作（拖拽/换区/持久化/注册表对齐）均不处理 `config`，ActivityBar 单独渲染。
-- **换区重建丢失状态**：跨区拖拽会卸载并重建视图组件，导航树滚动位置、文件树展开状态等都会丢失。ADR-0001 已接受。
-- **FE-21 隐藏视图卸载**：同一槽位切换时旧视图完全卸载，不能假设隐藏视图仍在 DOM 或保留订阅。
+- **换区重建（状态槽已覆盖，勿回退丢状态口径）**：跨区拖拽仍会卸载并重建视图组件（渲染形态不变），但跨挂载状态经注册表状态槽回填恢复——视图不得再以组件内部 state 承载展开集等跨挂载状态，否则重建即丢。
+- **FE-21 隐藏视图卸载 + 新视图须自消费状态槽**：同一槽位切换时旧视图完全卸载，不能假设隐藏视图仍在 DOM 或保留订阅；新增侧栏视图若持有跨挂载状态（展开集等），须经 viewState/onViewStateChange 上移注册表状态槽（照 explorer/useFileTree 模式），否则切换仍丢状态（视图自身负责）。
 - **配色全部走 token**：ActivityBar 全部颜色引用 `theme/colors.ts`，禁止硬编码（硬约束 #6）。
 
 ## 测试模式

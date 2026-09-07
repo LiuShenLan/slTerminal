@@ -62,6 +62,20 @@ vi.mock("../ipc/clipboard", () => ({
   readText: vi.fn().mockResolvedValue(""),
 }));
 
+// CP-036: tabClose 模块 mock——批量关闭族（关闭其他/关闭全部）断言统一走
+// closeTabsGuarded 统一入口。mock 默认实现保留「关闭」行为（守卫决策逻辑本身在
+// tab-close.test.ts 直测，不在此复刻）；「防复发」用例以「守卫未放行 → 面板不关」
+// 证明批量路径不再直关。
+const { closeTabGuardedMock, closeTabsGuardedMock } = vi.hoisted(() => ({
+  closeTabGuardedMock: vi.fn(),
+  closeTabsGuardedMock: vi.fn(),
+}));
+
+vi.mock("../workspace/tabClose", () => ({
+  closeTabGuarded: closeTabGuardedMock,
+  closeTabsGuarded: closeTabsGuardedMock,
+}));
+
 // 模块级 stub 须 afterAll 恢复——防同 worker 后续文件被污染（TQ-A-02）
 const originalResizeObserver = global.ResizeObserver;
 global.ResizeObserver = class ResizeObserver {
@@ -162,6 +176,16 @@ beforeEach(() => {
   // TQ-COV-08: 右键菜单「重命名」disabled 判据经 TerminalRegistry 会话状态
   TerminalRegistry._reset();
   mocks.resetClipboard();
+  // CP-036: 守卫 mock 默认实现 = 照生产「非 dirty 直关」语义执行 close（批量断言
+  // 只验证入口调用形态，guard 决策逻辑由 tab-close.test.ts 覆盖）
+  closeTabGuardedMock.mockReset().mockImplementation(
+    async (api: { close(): void }) => { api.close(); },
+  );
+  closeTabsGuardedMock.mockReset().mockImplementation(
+    async (tabs: Array<{ api: { close(): void } }>) => {
+      for (const t of tabs) t.api.close();
+    },
+  );
 });
 
 afterEach(() => {
@@ -547,7 +571,7 @@ describe("PageDockview 真实组件", () => {
       expect(api.panels.map((p: AnyApi) => p.id)).toEqual([`terminal-${PAGE_ID}-1`]);
     });
 
-    it("点击「关闭其他」→ 仅保留右键面板", async () => {
+    it("点击「关闭其他」→ 仅保留右键面板（批量路径经 closeTabsGuarded）", async () => {
       mockIPC(() => null);
       const { api, container } = await twoTerminals();
       const getItems = getMenuItemsIn(container);
@@ -555,10 +579,20 @@ describe("PageDockview 真实组件", () => {
       const closeOthers = getItems().find((m) => m.textContent === "关闭其他") as Element;
       await act(async () => { fireEvent.click(closeOthers); });
       await settle();
+      // 用户可见：右键面板保留，其余关闭
       expect(api.panels.map((p: AnyApi) => p.id)).toEqual([`terminal-${PAGE_ID}-0`]);
+      // CP-036: 批量路径经 closeTabsGuarded 统一入口——参数形态 = 数组含
+      // api/panelId/title（dirty 判据与确认列表展示的数据源）
+      expect(closeTabsGuardedMock).toHaveBeenCalledTimes(1);
+      const tabs = closeTabsGuardedMock.mock.calls[0][0] as Array<{
+        api: { close(): void }; panelId: string; title: string;
+      }>;
+      expect(tabs.map((t) => t.panelId)).toEqual([`terminal-${PAGE_ID}-1`]);
+      expect(typeof tabs[0].api.close).toBe("function");
+      expect(typeof tabs[0].title).toBe("string");
     });
 
-    it("点击「关闭全部」→ 面板清空 + Watermark 空态回归", async () => {
+    it("点击「关闭全部」→ 面板清空 + Watermark 空态回归（批量路径经 closeTabsGuarded）", async () => {
       mockIPC(() => null);
       const { api, container } = await twoTerminals();
       const getItems = getMenuItemsIn(container);
@@ -569,6 +603,30 @@ describe("PageDockview 真实组件", () => {
       // 用户可见：面板全关 + 空白页由 Watermark 接管
       expect(api.panels.length).toBe(0);
       expect(container.textContent).toContain("打开终端或编辑器开始工作");
+      // CP-036: 全组面板（含右键面板自身）一并入 closeTabsGuarded 参数数组
+      expect(closeTabsGuardedMock).toHaveBeenCalledTimes(1);
+      const tabs = closeTabsGuardedMock.mock.calls[0][0] as Array<{
+        api: { close(): void }; panelId: string; title: string;
+      }>;
+      expect(tabs.map((t) => t.panelId).sort()).toEqual([
+        `terminal-${PAGE_ID}-0`, `terminal-${PAGE_ID}-1`,
+      ]);
+    });
+
+    it("防复发：批量路径不再直关——守卫未放行时「关闭全部」一个都不关（CP-036）", async () => {
+      mockIPC(() => null);
+      const { api, container } = await twoTerminals();
+      const getItems = getMenuItemsIn(container);
+      await openTabContextMenu();
+      // 守卫 mock 本轮不执行 close（模拟取消/拦截）——若批量 action 残留直关
+      // forEach（旧实现 p.api.close() 绕过守卫），面板仍会被逐个关掉；断言全部
+      // 保留 = 关闭只可能经 closeTabsGuarded 统一入口发生
+      closeTabsGuardedMock.mockResolvedValueOnce(undefined);
+      const closeAll = getItems().find((m) => m.textContent === "关闭全部") as Element;
+      await act(async () => { fireEvent.click(closeAll); });
+      await settle();
+      expect(closeTabsGuardedMock).toHaveBeenCalledTimes(1);
+      expect(api.panels.map((p: AnyApi) => p.id)).toHaveLength(2);
     });
 
     it("菜单项 hover → SECONDARY_BG 底；危险项（关闭类）ERROR_FG 字（UI-802）", async () => {

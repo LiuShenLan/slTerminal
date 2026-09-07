@@ -18,7 +18,7 @@ import {
 } from "dockview-react";
 import { panelRegistry, PANEL_TERMINAL } from "../panelRegistry";
 import { FileIcon } from "../features/explorer/FileIcon";
-import { closeTabGuarded } from "./tabClose";
+import { closeTabGuarded, closeTabsGuarded } from "./tabClose";
 import { saveLayout, loadLayout } from "./layoutSerde";
 import { makeTerminalPanelId, advanceTerminalPanelSeq } from "../lib/panelId";
 import { StatusDot } from "../lib/StatusDot";
@@ -274,9 +274,7 @@ export function createTabMenuItems(
       item("关闭", {
         danger: true,
         // FE-49: 单面板「关闭」与 ×/Ctrl+W/中键同走共享守卫 closeTabGuarded——
-        // panelId 取 params（判据同 DefaultTab 的 settings- 前缀，同源无漂移）；
-        // 批量关闭族（关闭其他/关闭全部）维持直关（批量确认交互未定义，遗留见
-        // workspace/CLAUDE.md）
+        // panelId 取 params（判据同 DefaultTab 的 settings- 前缀，同源无漂移）
         action: () => {
           void closeTabGuarded(
             panel.api,
@@ -286,20 +284,34 @@ export function createTabMenuItems(
       }),
       item("关闭其他", {
         danger: true,
+        // CP-036：批量路径接入 closeTabsGuarded——dirty 面板列表 + 单次确认统一入口
         action: () => {
           const group = panel.api.group;
           if (!group) return;
-          group.panels
-            .filter((p) => p !== panel)
-            .forEach((p) => p.api.close());
+          void closeTabsGuarded(
+            group.panels
+              .filter((p) => p !== panel)
+              .map((p) => ({
+                api: p.api,
+                panelId: (p.params as TabParams | undefined)?.panelId,
+                title: p.title ?? "",
+              })),
+          );
         },
       }),
       item("关闭全部", {
         danger: true,
+        // CP-036：同「关闭其他」——不过滤自身，组内全部面板经统一入口
         action: () => {
           const group = panel.api.group;
           if (!group) return;
-          [...group.panels].forEach((p) => p.api.close());
+          void closeTabsGuarded(
+            [...group.panels].map((p) => ({
+              api: p.api,
+              panelId: (p.params as TabParams | undefined)?.panelId,
+              title: p.title ?? "",
+            })),
+          );
         },
       }),
     );

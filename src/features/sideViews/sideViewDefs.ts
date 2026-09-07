@@ -9,7 +9,6 @@
 // 底部「配置」钮（NAV-05）：不入本注册表——不参与拖拽/持久化，
 // 由 ActivityBar 底部固定渲染（id config，点击 = 打开 hooksConfig 面板）。
 
-import React from "react";
 import { NavTree } from "../navTree";
 import { ExplorerPanel } from "../explorer";
 import { CommitView } from "../commit/CommitView";
@@ -28,13 +27,13 @@ sideViewRegistry.register({
   component: NavTree,
 });
 
-// 注册文件浏览器视图
-// ExplorerPanel 不接受 props，箭头包装忽略 SideViewComponentProps
+// 注册文件浏览器视图（CP-016：ExplorerPanel 自接收 SideViewComponentProps——经
+// viewState/onViewStateChange 受控消费注册表状态槽，展开态跨挂载不丢，见 useFileTree.ts）
 sideViewRegistry.register({
   id: "explorer",
   title: "文件浏览器",
   icon: IconFiles,
-  component: () => React.createElement(ExplorerPanel),
+  component: ExplorerPanel,
 });
 
 // 注册 commit 视图
@@ -42,5 +41,5 @@ sideViewRegistry.register({
   id: "commit",
   title: "Commit",
   icon: IconCommit,
-  component: () => React.createElement(CommitView),
+  component: CommitView,
 });

@@ -19,9 +19,9 @@ xterm.js 不支持 `term.open()` 二次调用（GitHub Issue #4978）。因此�
 - **检测不带 `failIfMajorPerformanceCaveat`（FE-26）**：该标志在 Chromium GPU blocklist 场景会连同软件渲染一并拒绝 → DOM renderer 回退 → 快滚整屏重绘掉帧（Win10 + UHD 630 实机症状）。SwiftShader 软件渲染仍远快于 DOM renderer 全帧重建，故不加回该标志。
 - **加载时序约束（FE-34）**：`setupWebglWithRetry` 必须在 `term.open(container)` 之后调用。WebGL 渲染器需要挂载后的 canvas；先加载会绑定空 canvas → 静默黑渲染且不触发 context loss 兜底（win10 终端纯黑屏根因）。
 
-### PTY spawn 等待布局就绪
+### PTY spawn 等待布局就绪（CP-019 事件驱动）
 
-`useXterm` 挂载后不立即 spawn PTY，而是 rAF 轮询容器 `offsetWidth > 0`（最多 30 帧 / 500ms），然后 fit + proposeDimensions 获取真实字符尺寸，以真实 `cols × rows` 调用 `pty.spawn()`。超时回退 80×24。
+`useXterm` 挂载后不立即 spawn PTY：ResizeObserver 首帧回调确认容器尺寸就绪（`offsetWidth/offsetHeight > 0`，CP-019 事件驱动）→ fit + proposeDimensions 取真实字符尺寸 → `pty.spawn(真实 cols×rows)`。500ms 超时仅作防御底线（回退 80×24）——正常路径不再有时序猜测轮询；`spawned` 守卫保证 RO 回调与超时两者只 spawn 一次，卸载清理断开 observer 并清除超时。
 
 ### windowsPty buildNumber 钳制（ADR-0004）
 
@@ -33,7 +33,7 @@ htmlviewer / markdownviewer 等「文档型预览面板」共享 `src/panels/doc
 
 - **htmlviewer**（`panels/html/HtmlPanel`）：二态 render（默认）/ edit 源码（CM6 lang-html）；草稿快照往返 docRef。edit 形态字号 = 共享 editorFontSize store（Ctrl+滚轮，EditorPanel 同款接线——2026-09-06，原恒 14 语义变更，见 markdown/CLAUDE.md「编辑字号语义」）。
 - **markdownviewer**（`panels/markdown/MarkdownPanel`）：三态 edit（默认）/ split（allotment 拖拽，比例持久化）/ preview；渲染管线/资源/链接分派见 markdown/CLAUDE.md。
-- 文档真值源 = 面板 docRef（草稿优先磁盘）；preview-only 卸载 CM（快照回填，光标/undo 重置登记已知行为）；edit↔split CM pane 保活不卸载（allotment CM pane 恒 index 0）。
+- 文档真值源 = 面板 docRef（草稿优先磁盘）；**markdownviewer CM 恒挂载（CP-037）**：preview-only 改隐藏保活（display:none 照 edit↔split 先例，allotment CM pane 恒 index 0）——undo/光标跨 edit/split/preview 保留，代价 preview 常驻一个 CM 实例内存，已接受（htmlviewer 仍 edit 态挂载、render 卸载，不在此例）。
 - **宿主内联 `<script>` 不执行（escapeScriptClose 转义存量缺陷登记，2026-09-06 实证，跨家族继承为预期行为）**：`injectScript` 把宿主 HTML 内所有 `</script>` 转义为 `<\/script>` → 宿主 script 吞到 EOF 致 SyntaxError；注入脚本自身不受影响；内联**事件属性**（onload/onerror 等）不含 `</script>` 不被转义、正常执行——e2e 触发通道即此（html.e2e/markdown.e2e fixture）。修复方向 = escapeScriptClose 仅转义注入点前宿主部分（独立缺陷单）。
 - markdownviewer 纳入 `renderer="always"` 白名单（iframe 与 CM 编辑实例切走切回不重建——决策 #17）。
 
@@ -57,7 +57,7 @@ htmlviewer / markdownviewer 等「文档型预览面板」共享 `src/panels/doc
 - **壳是 params 持久化单点**：选中切换与 `onPageParamsChange`（pageParams[selectedPage] 槽 merge patch）统一经 `persistParams`（`api.updateParameters` + 显式 `onLayoutChange(saveLayout)` + 按 `settings-` 前缀解析 pageId → `updatePageLayout`）——updateParameters 不触发 onDidLayoutChange，必须显式保存（F8 先例）。
 - **dirty 汇聚（SC-FE-07）**：页组件经 `SettingsPageProps.onDirtyChange` 上报 → 壳维护 dirtyMap（导航项 7px 中性色圆点，不用 F3 四态色防语义混淆）+ 同步 `dirtyRegistry`（与 DefaultTab × 关闭拦截共享同一真值源，防两处状态漂移）。切配置页时当前页 dirty → `confirmDialog` 确认丢弃（askGuard 500ms 防循环，照 hub 先例）；× 关闭拦截在 workspace 层（见 workspace/CLAUDE.md）。
 - **切项目自动关闭（SC-FE-08）**：订阅 activePageId 所属项目 ≠ 面板所属项目 → 关闭。初始评估（布局恢复挂载即不一致，新挂载不可能 dirty）静默关；变化触发 dirty 守卫 confirmDialog，取消则不关（面板暂留非活跃项目，尊重用户选择）；`activePageId === null` 不动（删除末页/启动瞬态，防连锁误关）。
-- **isAlwaysRenderPanel 不加入 settings（决策写死，SC-FE-06）**：同 editor/gitshow/diff——重建无视觉闪屏，状态在 params/store；未保存 dirty 随卸载丢失与旧 hooksConfig 面板行为一致继承，不新增 always 内存开销。
+- **settings 已纳入 renderer="always"（SC-FE-06 翻案，CP-017）**：dirty 真值源（dirtyRegistry）脱离壳生命周期——壳不随页签切换卸载，dirtyMap/dirtyRegistry 条目跨切签存活（壳卸载不再 clear，条目收口到「确认丢弃关闭」动作点）。
 - **corrupted 警示条**：挂载 `loadSettings()` → corrupted → 顶部警示条（× 可关，`data-e2e="settings-corrupted-banner"`，不阻塞）。L2 覆盖（loadSettings mock），L4 豁免登记——写坏文件需沙箱外写，无命令通道。
 - claude 专属 hooks 编辑器归域 `features/cliProfiles/profiles/claude/configEditor/`（KZ-1，见 cliProfiles/CLAUDE.md），经 profile 的 `configEditor` 字段挂入；本面板经 HooksSettingsPage 页组件接入，不再跨 features 引用。
 

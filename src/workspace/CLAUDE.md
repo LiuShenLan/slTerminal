@@ -36,7 +36,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **文件型页签图标**（TAB-03）：`params.filePath` 存在（FILE_PANEL_TYPES）→ 渲染 `FileIcon` 彩色图标；与终端分支互斥。
 - **激活指示条**（TAB-01）：`isActive && isGroupActive` 时渲染底部 2px 指示条（absolute 锚定 `.dv-tab` 底边，色 `FOCUS_BORDER`，`pointerEvents: none`）。
 - **hover 关闭 ×**（TAB-02）：× 默认不可见（opacity 0 + pointerEvents none），hover 时显现。
-- **共享关闭守卫（FE-49，SC-FE-07 语义统一）**：`tabClose.ts` 的 `closeTabGuarded(api, panelId)`——settings 面板且 dirty → `confirmDialog` 确认才 `api.close()`，其余直关。**× / Ctrl+W / 鼠标中键 / 右键菜单「关闭」四路共用同一入口**（Ctrl+W 曾直调 `api.close()` 绕过守卫——F11 登记的不对称，FE-49 修复）；「关闭其他/关闭全部」批量路径仍直关（批量确认交互未定义，遗留）。判据 = panelId 的 `settings-` 前缀（DefaultTab 拿不到 panel——dockview 8.1.0 `IDockviewPanelProps` 无 panel 属性，`panel.view.contentComponent` 红线不适用该场景）；该前缀与 dirtyRegistry 键同源（SettingsPanel 以同一 params.panelId 注册），无漂移。`confirmDialog` 为 `src/lib` 命令式全局契约（无 React 依赖）——shortcuts 层可安全引用本模块。
+- **共享关闭守卫（FE-49，SC-FE-07 语义统一，CP-036 批量接入）**：`tabClose.ts` 的 `closeTabGuarded(api, panelId)`（单面板）——settings 面板且 dirty → `confirmDialog` 确认才 `api.close()`，其余直关；确认丢弃即清除 dirtyRegistry 条目（CP-017 契约）。**× / Ctrl+W / 鼠标中键 / 右键菜单「关闭」四路共用同一入口**（Ctrl+W 曾直调 `api.close()` 绕过守卫——F11 登记的不对称，FE-49 修复）；「关闭其他/关闭全部」批量路径经 `closeTabsGuarded` 统一入口（CP-036）：dirty 面板列表 + 单次确认，确认后清除 dirtyRegistry 条目再全部 close；无 dirty 零交互直关（非 settings 面板行为零回归）。**页删除路径（Workspace 删页 → Dockview 实例销毁）显式不守卫登记（CP-036 收尾复核结论）**：整页销毁语义——连同运行中终端 PTY 一并 kill，页面删除即用户放弃页上一切，不做面板级 dirty 确认；被删页的 dirtyRegistry 条目随之滞留（pageId 不再复用，无查询命中面，有界可接受）。判据 = panelId 的 `settings-` 前缀（DefaultTab 拿不到 panel——dockview 8.1.0 `IDockviewPanelProps` 无 panel 属性，`panel.view.contentComponent` 红线不适用该场景）；该前缀与 dirtyRegistry 键同源（SettingsPanel 以同一 params.panelId 注册），无漂移。`confirmDialog` 为 `src/lib` 命令式全局契约（无 React 依赖）——shortcuts 层可安全引用本模块。
 - **鼠标中键关闭页签（FE-49）**：浏览器式交互——auxclick（完整按下+弹起，按下后拖离弹起即天然取消）在 DefaultTab 内容根触发，`e.button === 1` 判中键，目标 = 本页签自身 `api`（无需聚焦/激活，对比 Ctrl+W 的 activePanel 语义）；× 上的中键经冒泡同样关闭（click 仅主键，两路径互斥）。**autoscroll 预防**：dockview `.dv-tabs-container` 为 `overflow:auto`（可横向滚动），中键按住会启动 Chromium autoscroll——PageDockview 容器根挂 capture mousedown 单点 `preventDefault`（覆盖所有分屏组 header 含缝隙/void 空白；只消默认动作不拦传播，dockview pointerdown 对 button!==0 本就 no-op）；关闭仍走 auxclick（mousedown preventDefault 不影响其触发）。dockview 8.1.0 对中键/auxclick 零消费，无冲突。
 
 ### Watermark 空态规范（GL-05/UI-806）
@@ -55,11 +55,11 @@ SEC-01 effect 同时承担 `startWatch(rootPath)` / `stopWatch(prev)`——watch
 
 ### 面板注册表已提取到 `src/panelRegistry.ts`
 
-`panelRegistry` / `PANEL_TYPES` / `FILE_PANEL_TYPES` / `isAlwaysRenderPanel` 是全局架构组件，被 workspace、explorer、测试等多方引用，不应埋于 workspace 子路径。新增面板类型仍按 #5 流程：创建目录 → 注册 → 追加 `PANEL_TYPES`。`isAlwaysRenderPanel` **不含 settings**（决策写死，SC-FE-06）：重建无视觉闪屏、状态在 params/store，未保存 dirty 随卸载丢失与旧 hooksConfig 行为一致继承。
+`panelRegistry` / `PANEL_TYPES` / `FILE_PANEL_TYPES` / `isAlwaysRenderPanel` 是全局架构组件，被 workspace、explorer、测试等多方引用，不应埋于 workspace 子路径。新增面板类型仍按 #5 流程：创建目录 → 注册 → 追加 `PANEL_TYPES`。`isAlwaysRenderPanel` **已纳入 settings**（SC-FE-06 翻案，CP-017）：dirty 真值源（dirtyRegistry）脱离壳生命周期——壳不随页签切换卸载，dirtyMap/dirtyRegistry 条目跨切签存活。
 
-### openSettingsPanel 同页单例（F11，SC-FE-02）
+### openSettingsPanel 同页单例（F11，SC-FE-02，CP-042 事件驱动）
 
-`openSettingsPanel(pageId, settingsPageId?)` 在 pageApis.ts——面板 id = `settings-{pageId}`；getPanel 命中 → focus 返回 true（同页单例），未命中 → addPanel（component "settings"，settingsPageId 深链注入 params.selectedPage）；100ms×50 轮询 getPageApi 就绪，超时 console.warn 降级返回 false。**调用方须先切到目标页**（本函数不切页）——编排见 `features/settingsCenter/openSettings.ts`（无项目 toast 拦截在编排层，R1）。
+`openSettingsPanel(pageId, settingsPageId?)` 在 pageApis.ts——面板 id = `settings-{pageId}`；getPanel 命中 → focus 返回 true（同页单例），未命中 → addPanel（component "settings"，**renderer "always"（CP-017）**，settingsPageId 深链注入 params.selectedPage）；页面 api 就绪改**事件驱动等待 `slterm:page-api-ready`**（registerPageApi 派发，CP-042），5s 超时仅作防御底线——超时经 toast 可观测化后返回 false（原仅 console.warn 静默降级）。**调用方须先切到目标页**（本函数不切页）——编排见 `features/settingsCenter/openSettings.ts`（无项目 toast 拦截在编排层，R1）。
 
 ### 页签右键菜单自研（dockview 8.1 enterprise 缺位修复）
 
@@ -119,7 +119,7 @@ dockview 8.1.0 free core 的页签右键菜单(ContextMenu)是 **enterprise 模�
 - **新建终端编号延迟分配（FE-04）**：`nextPanelId()` 在菜单 action 执行时才调用，菜单构建期不消耗编号。
 - **重命名必须显式保存布局**：`setTitle`/`updateParameters` 不触发 `onDidLayoutChange`，须手动 `onLayoutChange(saveLayout(api))`。
 - **删除页面时 stopWatch**：`activePageId` 置 null 必须释放 watcher，否则 OS 句柄残留。
-- **renderer="always" 白名单**：仅 `terminal`、`htmlviewer` 与 `markdownviewer`（panelRegistry.ts 单点）。editor/gitshow/diff 故意排除——CM6 重建无视觉闪屏，且大文件编辑器若始终挂载会显著增加内存开销；markdownviewer 纳入因 iframe browsing context 与 CM 编辑实例切走切回不重建（草稿/缩放保活，决策 #17）。
+- **renderer="always" 白名单**：`terminal`、`htmlviewer`、`markdownviewer` 与 `settings`（panelRegistry.ts 单点）。editor/gitshow/diff 故意排除——CM6 重建无视觉闪屏，且大文件编辑器若始终挂载会显著增加内存开销；markdownviewer 纳入因 iframe browsing context 与 CM 编辑实例切走切回不重建（草稿/缩放保活，决策 #17）；settings 纳入因 dirty 真值源脱离壳生命周期（CP-017）。
 
 ## 测试模式
 

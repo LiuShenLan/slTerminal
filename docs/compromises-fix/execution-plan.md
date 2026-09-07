@@ -84,7 +84,7 @@ Workflow({
 | S03 | 已完成 | 0c840df | 2026-09-07 | 7 项全绿（fix-loop 1 轮：CP-028 helper 逐层推进、CP-030 双确定性缺陷真修、CP-029 收口）；人工点登记：CP-003 Node 26 全量 e2e（.temp/node22.bak 待删）、CP-046 负向验证、CP-029 定责复核 |
 | S04 | 已完成 | ce1acb1 | 2026-09-08 | 7 项全绿（fix-loop 1 轮：CP-014 AEL reparse 条目身份回归修复 + CP-005 测试名去 poison + CP-010/043 fmt 与 mock）；人工点登记：CP-010 Win10 toast 实测 |
 | S05 | 已完成 | 1e97cc1 | 2026-09-08 | 6 项断言全绿（verify agent 测试结果缺口由主 agent 补跑闭环：cargo 785/L2 3163/L3 142 全绿）；执行期破「import 零改动」前提（12 处 import 源改指顶层）已留痕 commit body |
-| S06 | 未开始 | — | — | CP-007 门槛结论记此 |
+| S06 | 已完成 | 872e2ee | 2026-09-08 | CP-007 门槛结论：实测中位 180.33ms 越 50ms → 指纹分支（数字入 commit body）；fix-loop 1 轮（CP-006-b 三 L2 契约缺口 + CP-007-a 基准防 flaky 加固）；人工点登记：CP-007 数字合理性确认 |
 | S07 | 未开始 | — | — | |
 | S08 | 未开始 | — | — | |
 | S09 | 未开始 | — | — | |

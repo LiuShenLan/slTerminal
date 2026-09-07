@@ -304,15 +304,6 @@ export function useXterm({
       });
     }
 
-    // ── PTY spawn ──
-    // rAF 轮询容器就绪 → fit → proposeDimensions → pty.spawn(真实尺寸)
-    // 30 帧 / 500ms 上限，超时回退 80×24
-    let fitRafId: number | null = null;
-    let fitFrames = 0;
-    const MAX_FRAMES = 30;
-    const FIT_TIMEOUT = 500;
-    const fitStartTime = performance.now();
-
     const doSpawn = (realCols: number, realRows: number) => {
       const cols = Number.isFinite(realCols) ? realCols : DEFAULT_COLS;
       const rows = Number.isFinite(realRows) ? realRows : DEFAULT_ROWS;
@@ -352,36 +343,34 @@ export function useXterm({
     // 暴露 doSpawn 供 usePtyOutput 的 setupRetry 通过 doSpawnRef 触发
     doSpawnRef.current = doSpawn;
 
-    const pollFitAndSpawn = () => {
-      fitFrames++;
-      const elapsed = performance.now() - fitStartTime;
-
-      if (container.offsetWidth > 0 && container.offsetHeight > 0) {
-        if (canFit(term, fitAddon, container, isDisposedRef)) {
-          try {
-            fitAddon.fit();
-            const dims = fitAddon.proposeDimensions();
-            if (dims && Number.isFinite(dims.cols) && Number.isFinite(dims.rows)) {
-              doSpawn(dims.cols, dims.rows);
-              return;
-            }
-          } catch {
-            // fit 失败 → 回退
+    // ── PTY spawn(CP-019:事件驱动)──
+    // ResizeObserver 首帧回调确认容器尺寸就绪 → fit → proposeDimensions →
+    // pty.spawn(真实尺寸);500ms 超时仅作防御底线(回退 80×24,原 FIT_TIMEOUT 语义)
+    let spawned = false;
+    const spawnWithFit = () => {
+      if (spawned) return;
+      spawned = true;
+      spawnObserver.disconnect();
+      window.clearTimeout(spawnTimeoutId);
+      if (canFit(term, fitAddon, container, isDisposedRef)) {
+        try {
+          fitAddon.fit();
+          const dims = fitAddon.proposeDimensions();
+          if (dims && Number.isFinite(dims.cols) && Number.isFinite(dims.rows)) {
+            doSpawn(dims.cols, dims.rows);
+            return;
           }
+        } catch {
+          // fit 失败 → 回退
         }
-        doSpawn(DEFAULT_COLS, DEFAULT_ROWS);
-        return;
       }
-
-      if (fitFrames >= MAX_FRAMES || elapsed >= FIT_TIMEOUT) {
-        doSpawn(DEFAULT_COLS, DEFAULT_ROWS);
-        return;
-      }
-
-      fitRafId = requestAnimationFrame(pollFitAndSpawn);
+      doSpawn(DEFAULT_COLS, DEFAULT_ROWS);
     };
-
-    fitRafId = requestAnimationFrame(pollFitAndSpawn);
+    const spawnObserver = new ResizeObserver(() => {
+      if (container.offsetWidth > 0 && container.offsetHeight > 0) spawnWithFit();
+    });
+    spawnObserver.observe(container);
+    const spawnTimeoutId = window.setTimeout(spawnWithFit, 500);
 
     // 终端输入 → 后端
     term.onData((data) => {
@@ -518,9 +507,8 @@ export function useXterm({
     return () => {
       unsubscribeAgentEvent();
       isDisposedRef.current = true;
-      if (fitRafId !== null) {
-        cancelAnimationFrame(fitRafId);
-      }
+      spawnObserver.disconnect();
+      window.clearTimeout(spawnTimeoutId);
 
       // FE-18: 先清理输出合帧——清除 idle/max 定时器 + 丢弃待 flush 缓冲（防卸载后定时器回调泄漏）
       dispose();

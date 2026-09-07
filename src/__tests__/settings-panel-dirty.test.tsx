@@ -131,9 +131,10 @@ describe("SettingsPanel dirty 汇聚守卫（SC-FE-07）", () => {
     const { container, unmount } = renderPanel();
     fireEvent.click(byE2e(container, "p1-dirty") as HTMLElement);
     await waitFor(() => expect(isSettingsDirty(PANEL_ID)).toBe(true));
-    // 卸载 → clearSettingsDirty（面板关闭后无「未保存修改」）
+    // CP-017: 壳卸载不再 clear 条目——条目生命周期脱离壳，跨挂载存活
+    //（清除收口到「确认丢弃关闭」动作点：tabClose.ts 守卫 / SC-FE-08 守卫）
     unmount();
-    expect(isSettingsDirty(PANEL_ID)).toBe(false);
+    expect(isSettingsDirty(PANEL_ID)).toBe(true);
   });
 
   it("dirty 切页 → confirmDialog 确认 → 切换 + 清当前页圆点 + dirtyRegistry 同步", async () => {

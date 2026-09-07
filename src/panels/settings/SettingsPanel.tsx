@@ -328,14 +328,9 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
     return () => d.dispose();
   }, [api]);
 
-  // dirtyRegistry 挂载注册/卸载 clear（SC-FE-07）：面板存活期间 × 关闭守卫可查；
-  // 卸载即清除——面板关闭后不存在「未保存修改」（新挂载不可能 dirty）
-  useEffect(() => {
-    const panelId = params?.panelId;
-    if (!panelId) return;
-    setSettingsDirty(panelId, false);
-    return () => clearSettingsDirty(panelId);
-  }, [params?.panelId]);
+  // CP-017：dirty 真值源（dirtyRegistry）脱离壳生命周期——不再随壳挂载注册/卸载清除。
+  // 条目生命周期收口到「确认丢弃关闭」动作点（tabClose.ts closeTabGuarded /
+  // closeTabsGuarded 与壳内 SC-FE-08 项目切换守卫），壳只负责读写，不拥有条目。
 
   // 切项目自动关闭（SC-FE-08）：订阅 activePageId 所属项目，与面板自身所属项目不同 → 关闭。
   // - ownProjectId：panelId 去 `settings-` 前缀（SC-FE-02 panelId 契约）后反查 projects；
@@ -395,6 +390,9 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
         }, ASK_GUARD_MS);
       }
       if (!ok) return; // 取消则不关——面板暂留非活跃项目，尊重用户选择
+      // CP-017：确认丢弃 = 真值源条目唯一清除点之一（与 tabClose.ts 守卫同契约；
+      // 壳卸载钩子已移除，条目跨切签存活直到此处或关闭守卫清除）
+      clearSettingsDirty(panelId);
       closedRef.current = true;
       api.close();
     })();

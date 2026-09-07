@@ -1,10 +1,13 @@
-// open-settings-panel.test.ts — openSettingsPanel 单元测试（F11）
+// open-settings-panel.test.ts — openSettingsPanel 单元测试（F11，CP-042 事件驱动）
 //
 // 覆盖：面板 id = settings-{pageId}、addPanel 参数精确（component "settings"、
-//       title "设置"、params.panelId）、同页单例（命中 focus / 未命中 addPanel）、
-//       pageId 变化 panelId 跟随、深链 settingsPageId 注入 params.selectedPage、
-//       getPageApi 延迟就绪轮询命中、5s 超时降级。
-// 真实 pageApis（不 mock），用 registerPageApi/unregisterPageApi 控制模块级 pageApiMap。
+//       title "设置"、renderer "always"（CP-017 接线点）、params.panelId）、同页
+//       单例（命中 focus / 未命中 addPanel）、pageId 变化 panelId 跟随、深链
+//       settingsPageId 注入 params.selectedPage、API 延迟注册（registerPageApi
+//       派发事件立即唤醒——原 100ms×50 轮询已删）、事件 detail 非目标页不唤醒、
+//       5s 超时降级（返回 false + console.warn + toast.show 各一次，可观测化）。
+// 真实 pageApis（不 mock），用 registerPageApi/unregisterPageApi 控制模块级
+// pageApiMap；toast 经 lib mock（超时 toast 断言——真实现依赖 ToastHost 渲染）。
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
@@ -13,6 +16,12 @@ import {
   unregisterPageApi,
 } from "../workspace/pageApis";
 import type { DockviewApi } from "dockview-react";
+
+const { toastShowMock } = vi.hoisted(() => ({
+  toastShowMock: vi.fn(),
+}));
+
+vi.mock("../lib", () => ({ toast: { show: toastShowMock } }));
 
 /** DockviewApi stub：getPanel/addPanel 共享内部 Map（照 open-hooks-config-panel 测试模式） */
 function dockviewApiStub(): DockviewApi {
@@ -32,6 +41,7 @@ describe("openSettingsPanel", () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
+    toastShowMock.mockReset();
     // 清理模块级 pageApiMap 跨用例残留
     unregisterPageApi("page-a");
     unregisterPageApi("page-b");
@@ -44,7 +54,7 @@ describe("openSettingsPanel", () => {
     unregisterPageApi("page-b");
   });
 
-  it("API 已注册 → 立即 addPanel + 参数精确（单例 id 规则锁定）", async () => {
+  it("API 已注册 → 立即 addPanel + 参数精确（renderer always——CP-017 接线点）", async () => {
     registerPageApi("page-a", api);
     const ok = await openSettingsPanel("page-a");
     expect(ok).toBe(true);
@@ -52,6 +62,7 @@ describe("openSettingsPanel", () => {
       id: "settings-page-a",
       component: "settings",
       title: "设置",
+      renderer: "always",
       params: { panelId: "settings-page-a" },
     });
   });
@@ -69,22 +80,44 @@ describe("openSettingsPanel", () => {
     expect(panel.focus).toHaveBeenCalled();
   });
 
-  it("API 延迟注册（首次挂载页面）→ 轮询命中后 addPanel", async () => {
-    const p = openSettingsPanel("page-a"); // 未注册 → 挂起 100ms 轮询
-    registerPageApi("page-a", api);
-    await vi.advanceTimersByTimeAsync(100);
+  it("API 延迟注册（首次挂载页面）→ registerPageApi 派发事件立即唤醒 addPanel（CP-042）", async () => {
+    const p = openSettingsPanel("page-a"); // 未注册 → 事件监听挂起（无轮询）
+    registerPageApi("page-a", api); // 就绪事件 → 立即唤醒
     const ok = await p;
     expect(ok).toBe(true);
-    expect(api.addPanel).toHaveBeenCalled();
+    expect(api.addPanel).toHaveBeenCalledTimes(1);
+    expect(api.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "settings-page-a", renderer: "always" }),
+    );
   });
 
-  it("API 永不注册 → 5s 超时降级（返回 false + console.warn）", async () => {
+  it("事件 detail 非目标 pageId 不唤醒（CP-042 事件过滤）", async () => {
+    const p = openSettingsPanel("page-a");
+    // 他页就绪（page-b 派发事件）→ detail 过滤，监听不唤醒
+    registerPageApi("page-b", api);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(api.addPanel).not.toHaveBeenCalled();
+    // 目标页注册 → 事件驱动唤醒
+    registerPageApi("page-a", api);
+    const ok = await p;
+    expect(ok).toBe(true);
+    expect(api.addPanel).toHaveBeenCalledTimes(1);
+  });
+
+  it("API 永不注册 → 5s 超时降级（返回 false + console.warn + toast.show 各一次）", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const p = openSettingsPanel("page-a");
-    await vi.advanceTimersByTimeAsync(5100); // 50 次 × 100ms
+    await vi.advanceTimersByTimeAsync(5000); // 超时防御底线（原 50 次 × 100ms 轮询）
     const ok = await p;
     expect(ok).toBe(false);
-    expect(warnSpy).toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0][0]).toContain("5s 内未就绪");
+    // CP-042: 超时经 toast 可观测化（原仅 console.warn 静默降级）
+    expect(toastShowMock).toHaveBeenCalledTimes(1);
+    expect(toastShowMock).toHaveBeenCalledWith(
+      "warning",
+      expect.stringContaining("设置中心打开失败"),
+    );
     warnSpy.mockRestore();
   });
 
@@ -105,6 +138,7 @@ describe("openSettingsPanel", () => {
       id: "settings-page-a",
       component: "settings",
       title: "设置",
+      renderer: "always",
       params: { panelId: "settings-page-a", selectedPage: "hooks" },
     });
   });

@@ -74,6 +74,28 @@ vi.mock("../ipc", () => ({
 
 import { useXterm } from "../panels/terminal/useXterm";
 
+// ─── ResizeObserver mock（CP-019：PTY spawn 事件驱动首帧信号）───
+// 生产 useXterm 不再 rAF 轮询——spawn 由 ResizeObserver 首帧回调驱动。
+// jsdom 无布局引擎且 setup.ts 全局桩不回调，本文件级 mock 在 observe() 后
+// 经 queueMicrotask 补发一次首帧回调；StrictMode 双重挂载下 mount#1 的回调
+// 在 fake-unmount 的 cleanup 之后送达——spawnWithFit 的 spawned 守卫保证
+// 全程只 spawn 一次（与本文件「仅 1 次 spawn」防御口径一致）。
+class FileResizeObserver {
+  private readonly cb: ResizeObserverCallback;
+
+  constructor(cb: ResizeObserverCallback) {
+    this.cb = cb;
+  }
+
+  observe(): void {
+    queueMicrotask(() => this.cb([], {} as ResizeObserver));
+  }
+
+  unobserve(): void {}
+  disconnect(): void {}
+}
+globalThis.ResizeObserver = FileResizeObserver as unknown as typeof ResizeObserver;
+
 function containerStub(): HTMLElement {
   const el = document.createElement("div");
   Object.defineProperty(el, "offsetWidth", { value: 800, writable: true, configurable: true });

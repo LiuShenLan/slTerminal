@@ -1,9 +1,9 @@
 // SideBarArea — 侧栏区组件
 //
 // 活动栏与主区之间的共享展示区域，垂直划分为上区与下区两个半区。
-// 每半区一槽位，视图通过条件渲染切换（FE-21）：仅渲染当前打开的视图，
-// 切换即卸载旧视图组件——状态丢失语义 ADR-0001 已接受（导航树滚动位置等
-// 轻状态不保活）；换区重建亦为已知行为（组件随 zones 跨 pane 移动即卸载重建）。
+// 每半区一槽位，视图经条件渲染切换（FE-21）。视图跨挂载状态（展开集等）上移
+// sideViewRegistry 状态槽（CP-016）——以视图 id 为键，组件经 viewState/onViewStateChange
+// 受控消费；换区/槽位切换重建后由回填恢复，不再依赖组件内部 state。
 
 import React, { useEffect, useRef } from "react";
 import { Allotment } from "allotment";
@@ -111,13 +111,17 @@ export const SideBarArea: React.FC<SideBarAreaProps> = ({
                   <def.component
                     switchToPage={switchToPage}
                     onDeletePage={onDeletePage}
+                    viewState={sideViewRegistry.getViewState(def.id)}
+                    onViewStateChange={(state) =>
+                      sideViewRegistry.setViewState(def.id, state)
+                    }
                   />
                 </div>
               ))}
           </div>
         </Allotment.Pane>
 
-        {/* 下区 pane — FE-21：同上一区，切换即卸载旧视图组件 */}
+        {/* 下区 pane — FE-21：同上一区，切换即卸载旧视图组件（状态经注册表状态槽回填恢复） */}
         <Allotment.Pane
           visible={bottomOpen}
           preferredSize={(1 - splitRatio) * 100}
@@ -134,6 +138,10 @@ export const SideBarArea: React.FC<SideBarAreaProps> = ({
                   <def.component
                     switchToPage={switchToPage}
                     onDeletePage={onDeletePage}
+                    viewState={sideViewRegistry.getViewState(def.id)}
+                    onViewStateChange={(state) =>
+                      sideViewRegistry.setViewState(def.id, state)
+                    }
                   />
                 </div>
               ))}

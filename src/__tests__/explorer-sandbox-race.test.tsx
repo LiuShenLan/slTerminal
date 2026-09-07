@@ -363,7 +363,11 @@ describe("DBG-10: ExplorerPanel setProjectRoot 沙箱竞态", () => {
 
       // 不 await——setProjectRoot 保持 pending，模拟 effect 子先于父的窗口
       mocks.mockSetProjectRoot("/proj");
-      render(<ExplorerPanel />);
+      render(
+        // CP-016：ExplorerPanel 自接收 SideViewComponentProps——本用例不消费
+        // switchToPage/onDeletePage，传 stub 满足类型（viewState 槽位缺省 undefined）
+        <ExplorerPanel switchToPage={vi.fn()} onDeletePage={vi.fn()} />,
+      );
 
       // pending 窗口内 readDir 已发出（useFileTree effect 立即触发）但被沙箱拒绝
       await waitFor(() => {

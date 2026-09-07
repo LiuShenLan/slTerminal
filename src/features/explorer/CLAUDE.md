@@ -76,11 +76,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **为何需要 ref 模式**：`selectedPath` 是 React state，直接闭包捕获会导致 `explorerActions` 持有旧值。`activeExplorer` 指针仅通过 DOM `focusin` 事件更新，容器已聚焦后再点击不触发 `focusin`，指针永远指向首次聚焦时的旧对象。ref 绕过此限制。
 
-### 宿主变更（ADR-0001）
+### 宿主变更（ADR-0001）+ 展开态槽位契约（CP-016）
 
-ExplorerPanel 经 `src/features/sideViews/sideViewDefs.ts` 注册为 `explorer` 视图，由 `SideBarArea` 经 `display:none/flex` 切换渲染。
+ExplorerPanel 经 `src/features/sideViews/sideViewDefs.ts` 注册为 `explorer` 视图，由 `SideBarArea` 条件渲染（FE-21 按需卸载）。ExplorerPanel 自接收 `SideViewComponentProps`，不消费 `switchToPage`/`onDeletePage`（保持不析取），仅经 `viewState`/`onViewStateChange` 两槽位与注册表状态槽通信。
 
-**已知行为：换区重建丢失展开状态**。当用户从活动栏拖拽 `explorer` 按钮跨区（上→下或下→上），React 将组件从旧 pane 卸载、在新 pane 重新挂载——ExplorerPanel 内部状态（文件树展开状态、`rootNodes`）全部丢失。此行为在 ADR-0001 中已确认接受。
+**展开态跨挂载契约（CP-016，取代 ADR-0001「换区重建丢展开状态」已知行为）**：展开态真值源在 `useFileTree` 内部 state（`rootNodes`），跨挂载快照经注册表状态槽持久：
+
+- **快照结构**：`FileTreeViewState = { rootPath: string | null; expandedPaths: string[] }`（expandedPaths 自 `rootNodes` 树遍历派生，提交时展开目录行集合）。
+- **域键**：快照以 `rootPath` 为域键——与当前项目根路径不一致的整份快照作废（项目间不复用）。
+- **提交时机**：每次 `rootNodes` 渲染落定后统一上呼提交（覆盖展开/折叠、fs-event 刷新重建收缩、增删改刷新）——渲染期提交保证派生集与界面一致；恢复期间经 restoringRef 抑制逐层提交。
+- **恢复时机**：挂载后首次加载完成时消费一次（`viewState` prop 挂载快照，不入 deps）——槽位切换/换区重建由 SideBarArea 回填后触发，rootPath 域匹配 + 存在性守卫（磁盘已删目录跳过）逐层展开恢复。
+
+槽位切换/换区仍会卸载重建（FE-21 渲染形态不变），但展开态经槽位回填恢复，不再丢失。
 
 ## 外部坑/红线
 
@@ -102,3 +109,4 @@ ExplorerPanel 经 `src/features/sideViews/sideViewDefs.ts` 注册为 `explorer` 
 - **右键菜单**：`fireEvent.contextMenu(element)` 触发；StrictMode 双渲染会导致重复元素，取 `getAllByText` 首个。
 - **刷新保留展开状态**：用 `renderHook(useFileTree)` 直接驱动，`makeVfs` 构造虚拟文件系统，`triggerFsEvent` 手动触发事件，`vi.useFakeTimers()` 跨过 debounce。
 - **rootPath 变化清空**：`renderHook(useFileTree)` + `rerender` 驱动 `rootPath` 变化，验证 gen 丢弃旧结果。
+- **CP-016 恢复用例组**：`renderHook(useFileTree)` 传 `viewState`（rootPath 匹配恢复展开/域键不符不恢复两分支）+ `onViewStateChange` spy——断言上呼提交集含新展开路径、折叠后移除、fs-event 刷新后收缩；侧栏槽位透传与重建回填见 `sidebar-area-viewstate.test.tsx`（SideBarArea 层，照 `sideBarArea.test.tsx` mock 模式）。

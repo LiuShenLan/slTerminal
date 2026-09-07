@@ -1,7 +1,8 @@
 // use-xterm-lifecycle.test.ts — useXterm 生命周期测试
 //
-// 覆盖 PTY spawn/exit、快捷键集成、rAF 轮询、ResizeObserver 尺寸变化、
-// 字体大小调节、OSC 52/133 协议处理器、OSC 8 linkHandler、键盘委托、
+// 覆盖 PTY spawn/exit、快捷键集成、ResizeObserver 事件驱动 spawn（CP-019：
+// 首帧信号 + 500ms 超时兜底）、ResizeObserver 尺寸变化、字体大小调节、
+// OSC 52/133 协议处理器、OSC 8 linkHandler、键盘委托、
 // doSpawn 失败重试、setupRetry Enter 重连。
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -277,6 +278,29 @@ import {
   flushMicrotasks,
 } from "./helpers/xterm-test-utils";
 
+// ─── ResizeObserver mock（CP-019：PTY spawn 事件驱动首帧信号）───
+// 生产 useXterm 依赖 ResizeObserver 首帧回调完成 spawn——jsdom 无布局引擎且
+// setup.ts 的全局桩不回调，本文件级 mock 在 observe() 后补发一次首帧回调
+// （queueMicrotask，近似浏览器 observe 后首帧送达）：容器已非零尺寸的用例
+// 立即完成 spawn 链路，无需空等 500ms 超时兜底；尺寸为 0 时生产守卫不 spawn。
+// 需要精确控制回调时机的用例（T1-T5 系列、ResizeObserver 尺寸变化系列）
+// 自行替换 globalThis.ResizeObserver 手动触发，afterEach 恢复本 mock。
+class FileResizeObserver {
+  private readonly cb: ResizeObserverCallback;
+
+  constructor(cb: ResizeObserverCallback) {
+    this.cb = cb;
+  }
+
+  observe(): void {
+    queueMicrotask(() => this.cb([], {} as ResizeObserver));
+  }
+
+  unobserve(): void {}
+  disconnect(): void {}
+}
+globalThis.ResizeObserver = FileResizeObserver as unknown as typeof ResizeObserver;
+
 /** 构造 matchByCommand 返回的 profile（CodingCliProfile 最小合法形态，跨边界契约） */
 function makeCliProfile(id: string, iconSrc: string) {
   return {
@@ -342,52 +366,36 @@ describe("useXterm 快捷键集成", () => {
   });
 });
 
-// ─── pollFitAndSpawn rAF 轮询测试 ───
-describe("pollFitAndSpawn rAF 轮询", () => {
+// ─── ResizeObserver 事件驱动 spawn 测试（CP-019，取代原 pollFitAndSpawn rAF 轮询）───
+describe("PTY spawn ResizeObserver 事件驱动（CP-019）", () => {
   let container: HTMLDivElement;
-  let rafCallbacks: Array<FrameRequestCallback>;
-  let rafIdCounter: number;
-  let perfNowValue: number;
+  /** 记录各 RO 实例回调（本地 mock 不自动触发——回调时机由用例手动控制） */
+  let roCbs: Array<ResizeObserverCallback>;
 
-  const origRAF = globalThis.requestAnimationFrame;
-  const origCAF = globalThis.cancelAnimationFrame;
+  const origRO = globalThis.ResizeObserver;
 
   beforeEach(() => {
-    rafCallbacks = [];
-    rafIdCounter = 0;
-    perfNowValue = 0;
-
-    // mock rAF：存储回调但不同步执行，由 advanceFrames 手动推进
-    globalThis.requestAnimationFrame = vi.fn(
-      (cb: FrameRequestCallback) => {
-        const id = ++rafIdCounter;
-        rafCallbacks.push(cb);
-        return id;
-      },
-    );
-    globalThis.cancelAnimationFrame = vi.fn();
-    // spy performance.now：控制 elapsed 时间推进
-    vi.spyOn(performance, "now").mockImplementation(() => perfNowValue);
-
     vi.clearAllMocks();
     // 重置 proposeDimensions 默认返回值
     mockProposeDimensions.mockReturnValue({ cols: 80, rows: 24 });
+    container = createContainerWithSize(0, 0);
+    roCbs = [];
+    globalThis.ResizeObserver = class {
+      constructor(cb: ResizeObserverCallback) {
+        roCbs.push(cb);
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    } as unknown as typeof ResizeObserver;
   });
 
   afterEach(() => {
-    globalThis.requestAnimationFrame = origRAF;
-    globalThis.cancelAnimationFrame = origCAF;
+    globalThis.ResizeObserver = origRO;
+    // 防御：断言失败跳过 useRealTimers 时不把假定时器泄漏给后续用例（T3 依赖）
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
-
-  /** 推进 N 帧，每帧经过 elapsedPerFrame ms */
-  function advanceFrames(n: number, elapsedPerFrame = 16) {
-    for (let i = 0; i < n && rafCallbacks.length > 0; i++) {
-      perfNowValue += elapsedPerFrame;
-      const cb = rafCallbacks.shift()!;
-      cb(perfNowValue);
-    }
-  }
 
   /** 创建指定 offsetWidth/offsetHeight 的容器 */
   function createContainerWithSize(w: number, h: number): HTMLDivElement {
@@ -403,40 +411,44 @@ describe("pollFitAndSpawn rAF 轮询", () => {
     return el;
   }
 
+  /** 手动触发全部已记录 RO 回调（模拟浏览器首帧/尺寸变化信号） */
+  function fireResizeObservers() {
+    for (const cb of roCbs) {
+      cb([], {} as ResizeObserver);
+    }
+  }
+
   // ────────────────────────────────────────────────
   // T1：offsetWidth=0 场景
   // ────────────────────────────────────────────────
-  it("T1: 容器 offsetWidth=0 时启动 rAF 轮询，不立即 spawn", () => {
-    container = createContainerWithSize(0, 0);
-
-    renderHook(() =>
+  it("T1: 容器 offsetWidth=0 时触发 RO 回调 → 不 spawn", () => {
+    const { unmount } = renderHook(() =>
       useXterm({ container, cols: 80, rows: 24, panelId: "poll-1" }),
     );
 
-    // rAF 已调度（pollFitAndSpawn 注册为回调）
-    expect(rafCallbacks.length).toBe(1);
-    // PTY 未 spawn（容器尺寸为 0，轮询中）
+    // RO 首帧回调送达（容器尺寸为 0）→ 尺寸守卫把门，PTY 不 spawn
+    fireResizeObservers();
     expect(pty.spawn).not.toHaveBeenCalled();
+
+    unmount();
   });
 
   // ────────────────────────────────────────────────
-  // T2：轮询后获得尺寸 → fit → proposeDimensions → spawn
+  // T2：RO 回调时容器已有尺寸 → fit → proposeDimensions → spawn
   // ────────────────────────────────────────────────
-  it("T2: rAF 轮询后容器获得尺寸 → fit → proposeDimensions → spawn", () => {
-    container = createContainerWithSize(0, 0);
+  it("T2: RO 回调触发时容器非零尺寸 → fit → proposeDimensions → spawn", () => {
     // 模拟 proposeDimensions 返回非默认值，验证真实尺寸传递
     mockProposeDimensions.mockReturnValue({ cols: 100, rows: 40 });
 
-    renderHook(() =>
+    const { unmount } = renderHook(() =>
       useXterm({ container, cols: 80, rows: 24, panelId: "poll-2" }),
     );
 
-    // 第一帧：尺寸仍为 0 → 继续轮询
-    advanceFrames(1, 16);
+    // 容器尺寸为 0 时先触发一次 → 不 spawn
+    fireResizeObservers();
     expect(pty.spawn).not.toHaveBeenCalled();
-    expect(rafCallbacks.length).toBe(1); // 下一帧已调度
 
-    // 容器获得尺寸（模拟布局完成）
+    // 容器获得尺寸（模拟布局完成）→ 再触发 RO 回调 → spawnWithFit 链路
     Object.defineProperty(container, "offsetWidth", {
       value: 800,
       configurable: true,
@@ -445,9 +457,7 @@ describe("pollFitAndSpawn rAF 轮询", () => {
       value: 600,
       configurable: true,
     });
-
-    // 第二帧：检测到有效尺寸 → fit → proposeDimensions → doSpawn
-    advanceFrames(1, 16);
+    fireResizeObservers();
 
     expect(mockFit).toHaveBeenCalled();
     expect(mockProposeDimensions).toHaveBeenCalled();
@@ -455,65 +465,48 @@ describe("pollFitAndSpawn rAF 轮询", () => {
       expect.objectContaining({ cols: 100, rows: 40, panelId: "poll-2" }),
       expect.any(Function),
     );
-    // spawn 后不再调度新帧
-    expect(rafCallbacks.length).toBe(0);
+
+    unmount();
   });
 
   // ────────────────────────────────────────────────
-  // T3：30 帧超时回退 80x24
+  // T3：500ms 超时兜底（原 T3 帧数上限 + T4 时间上限合并——事件驱动后只剩
+  //     单一超时语义：尺寸恒 0 → 500ms 回退 80x24）
   // ────────────────────────────────────────────────
-  it("T3: 30 帧内 offsetWidth 一直为 0 → 超时回退 80x24", () => {
-    container = createContainerWithSize(0, 0);
-
-    renderHook(() =>
+  it("T3: 尺寸恒 0 → 推进假定时器 500ms → 超时兜底回退 80x24", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    const { unmount } = renderHook(() =>
       useXterm({ container, cols: 80, rows: 24, panelId: "poll-3" }),
     );
 
-    // 推进 30 帧（每帧 16ms → 总耗时 480ms < 500ms，纯帧数触发超时）
-    advanceFrames(30, 16);
+    // RO 回调送达（尺寸恒 0）→ 不 spawn；spawn 由 500ms 超时兜底承担
+    fireResizeObservers();
+    expect(pty.spawn).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(500);
 
     expect(pty.spawn).toHaveBeenCalledWith(
       expect.objectContaining({ cols: 80, rows: 24 }),
       expect.any(Function),
     );
-    // spawn 后不再调度新帧
-    expect(rafCallbacks.length).toBe(0);
+
+    unmount();
   });
 
   // ────────────────────────────────────────────────
-  // T4：500ms 超时（帧数未达 30 但时间到）
+  // T4：NaN 守卫（原 T5）
   // ────────────────────────────────────────────────
-  it("T4: 超过 500ms 后无论帧数是否达 30 都会回退 80x24", () => {
-    container = createContainerWithSize(0, 0);
-
-    renderHook(() =>
-      useXterm({ container, cols: 80, rows: 24, panelId: "poll-4" }),
-    );
-
-    // 仅 10 帧，但每帧 51ms → 总耗时 510ms → 触发时间超时
-    advanceFrames(10, 51);
-
-    expect(pty.spawn).toHaveBeenCalledWith(
-      expect.objectContaining({ cols: 80, rows: 24 }),
-      expect.any(Function),
-    );
-    expect(rafCallbacks.length).toBe(0);
-  });
-
-  // ────────────────────────────────────────────────
-  // T5：NaN 守卫
-  // ────────────────────────────────────────────────
-  it("T5: proposeDimensions 返回 NaN 时使用默认值 80x24", () => {
+  it("T4: proposeDimensions 返回 NaN 时使用默认值 80x24", () => {
     // 容器有有效尺寸
     container = createContainerWithSize(800, 600);
     mockProposeDimensions.mockReturnValue({ cols: NaN, rows: NaN });
 
-    renderHook(() =>
+    const { unmount } = renderHook(() =>
       useXterm({ container, cols: 80, rows: 24, panelId: "poll-5" }),
     );
 
-    // 第一帧即检测到尺寸，但 proposeDimensions 返回 NaN → 回退 80x24
-    advanceFrames(1, 16);
+    // RO 回调触发时检测到尺寸，但 proposeDimensions 返回 NaN → 回退 80x24
+    fireResizeObservers();
 
     expect(mockFit).toHaveBeenCalled();
     expect(mockProposeDimensions).toHaveBeenCalled();
@@ -522,7 +515,8 @@ describe("pollFitAndSpawn rAF 轮询", () => {
       expect.objectContaining({ cols: 80, rows: 24 }),
       expect.any(Function),
     );
-    expect(rafCallbacks.length).toBe(0);
+
+    unmount();
   });
 });
 
@@ -553,7 +547,8 @@ describe("ResizeObserver 尺寸变化 → fit → pty.resize 链路", () => {
       useXterm({ container, cols: 80, rows: 24, panelId: "resize-1" }),
     );
 
-    // 等待 PTY spawn 完成（rAF 首帧检测到尺寸 → fit → proposeDimensions → spawn）
+    // 等待 PTY spawn 完成（本描述用手动 RO mock，不自动回调——经 500ms 超时兜底
+    // spawnWithFit：fit → proposeDimensions → spawn）
     await waitFor(() => {
       expect(pty.spawn).toHaveBeenCalled();
     }, { timeout: 3000 });
@@ -635,7 +630,7 @@ describe("ResizeObserver 尺寸变化 → fit → pty.resize 链路", () => {
     // TE-11: 切换到假定时器
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
 
-    // 此时 rAF 轮询因为尺寸为 0 持续，spawn 未发生
+    // 容器尺寸为 0 → spawn RO 尺寸守卫 + resize canFit 均把门，spawn 未发生
     // 触发 ResizeObserver
     ro.trigger();
     vi.advanceTimersByTime(150);

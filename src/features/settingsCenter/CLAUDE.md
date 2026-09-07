@@ -20,15 +20,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `openSettings(settingsPageId?)` 照旧 openHooksConfigFromActivityBar 编排：目标项目 = 活跃页面所属项目优先，兜底第一个项目；目标页面 = 已有操作页面取 pages[0]，无 → 新建空布局页；`await switchToPageShared(pageId)`（内部完成 setProjectRoot 前置，DBG-5）→ `openSettingsPanel(pageId, settingsPageId)`。
 
-**无项目 → `toast.show("warning", "请先创建项目")` + return（R1 修订）**：原编排静默 return 不可感知，但设置面板无 Dockview 宿主可挂（无项目 = 无页面），必须 toast 显式提示。面板打开失败（页面 DockviewApi 5s 未就绪）由 openSettingsPanel 内部 console.warn 降级，本函数 fire-and-forget 不抛异常。
+**无项目 → `toast.show("warning", "请先创建项目")` + return（R1 修订）**：原编排静默 return 不可感知，但设置面板无 Dockview 宿主可挂（无项目 = 无页面），必须 toast 显式提示。面板打开失败（页面 DockviewApi 5s 未就绪）由 openSettingsPanel 内部 console.warn + toast 提示可观测化（CP-042），本函数 fire-and-forget 不抛异常。
 
-### openSettingsPanel 同页单例（workspace/pageApis.ts）
+### openSettingsPanel 同页单例（workspace/pageApis.ts，CP-042 事件驱动）
 
-面板 id = `settings-{pageId}`；getPanel 命中 → focus 返回 true，未命中 → addPanel（component "settings"，settingsPageId 深链注入 params.selectedPage）；100ms×50 轮询 getPageApi 就绪，超时 console.warn 降级返回 false。调用方须先切到目标页（本函数不切页）。
+面板 id = `settings-{pageId}`；getPanel 命中 → focus 返回 true，未命中 → addPanel（component "settings"，renderer "always"——CP-017，settingsPageId 深链注入 params.selectedPage）；页面 api 就绪等待事件驱动（registerPageApi 派发 `slterm:page-api-ready`，CP-042），5s 超时防御底线——超时经 toast 可观测化后返回 false（原仅 console.warn 静默降级）。调用方须先切到目标页（本函数不切页）。
 
-### dirtyRegistry 真值源（SC-FE-07）
+### dirtyRegistry 真值源（SC-FE-07，CP-017 翻案）
 
-`Map<panelId, boolean>`：`setSettingsDirty(panelId, dirty)` / `isSettingsDirty(panelId)` / `clearSettingsDirty(panelId)`。壳挂载注册 false、卸载 clear（面板关闭后不存在「未保存修改」——新挂载不可能 dirty）；DefaultTab × 关闭拦截与壳共享同一真值源，防两处状态漂移。判据为 `settings-` 前缀（DefaultTab 拿不到 panel，`panel.view.contentComponent` 红线不适用该场景），与壳以同一 params.panelId 注册，无漂移。
+`Map<panelId, boolean>`：`setSettingsDirty(panelId, dirty)` / `isSettingsDirty(panelId)` / `clearSettingsDirty(panelId)`。壳与关闭守卫共享同一真值源，防两处状态漂移。**CP-017 后条目生命周期脱离壳**：不写挂载注册、不做卸载 clear；条目生命周期收口到「确认丢弃关闭」动作点——tabClose.ts 单面板守卫 `closeTabGuarded` 确认分支、批量守卫 `closeTabsGuarded`（CP-036，确认后统一清除）、壳内 SC-FE-08 守卫确认分支——壳只负责读写，不拥有条目。判据为 `settings-` 前缀（关闭守卫拿不到 panel，`panel.view.contentComponent` 红线不适用该场景），与壳以同一 params.panelId 注册，无漂移。
 
 ## 外部坑/红线
 
