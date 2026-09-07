@@ -19,11 +19,13 @@
 
 pub mod claude;
 pub mod provider;
+// CP-041:mockcli 为 crate 内私有测试 provider(env 门控注册),不对 crate 外暴露
+mod mock;
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
-use provider::{resolve_provider, CliHistoryProvider, REGISTRY};
+use provider::{registry, resolve_provider, CliHistoryProvider};
 
 /// 历史会话元数据 DTO（IPC 契约八字段，serde camelCase，硬约束 #4）
 ///
@@ -121,9 +123,9 @@ pub(crate) fn run_scan(
     provider.scan()
 }
 
-/// provider 是否注册表 claude 实例（数据指针身份比对——REGISTRY 静态实例）
+/// provider 是否注册表 claude 实例（数据指针身份比对——registry() 静态实例）
 fn is_claude_provider(provider: &'static dyn CliHistoryProvider) -> bool {
-    let claude = REGISTRY
+    let claude = registry()
         .iter()
         .find(|(id, _)| *id == "claude")
         .map(|(_, p)| *p)

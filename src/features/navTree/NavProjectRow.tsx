@@ -46,6 +46,7 @@ export const NavProjectRow: React.FC<NavProjectRowProps> = ({
   return (
     <div
       data-e2e="nav-row-project"
+      aria-expanded={expanded}
       onClick={onToggle}
       onContextMenu={onContextMenu}
       onMouseEnter={() => setHovered(true)}

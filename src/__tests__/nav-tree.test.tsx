@@ -391,6 +391,26 @@ describe("三级层级渲染（项目→页面→会话）", () => {
 
     expect(getRows(container, "nav-row-session").length).toBe(0);
   });
+
+  it("行根 aria-expanded 探针：初始 \"false\"，点击展开后 \"true\"（CP-028 E2E 契约）", () => {
+    seedProject("C:/test", "proj-1", "测试项目", [
+      { pageId: "page1", name: "页面 1" },
+    ]);
+    seedActivePage("page1");
+
+    const { container } = render(<NavTree />);
+    // 挂载默认全收起（expanded/expandedHist 两 Set 默认空）→ 探针属性如实反映
+    const projRow = getRows(container, "nav-row-project")[0];
+    expect(projRow).toHaveAttribute("aria-expanded", "false");
+
+    fireEvent.click(projRow);
+    expect(projRow).toHaveAttribute("aria-expanded", "true");
+
+    const pageRow = getRows(container, "nav-row-page")[0];
+    expect(pageRow).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(pageRow);
+    expect(pageRow).toHaveAttribute("aria-expanded", "true");
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════

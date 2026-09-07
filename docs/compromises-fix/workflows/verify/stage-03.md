@@ -2,7 +2,7 @@
 
 > stage-03 脚本与 fix-loop 的 verify agent 均以本文件为准。
 > 方法：用 Grep/Read 逐条核实，给出证据（文件+行号）；全量测试任一命令失败则相关项判 not_fixed。
-> 本 Stage 起 L1 定向命令 = `cargo test <filter> -- --test-threads=1`（S02 已拆红线）。
+> 本 Stage 起 L1 定向命令维持旧形态 = `cargo test --test lib_tests <filter> -- --test-threads=1`（**S02 未拆红线**：embed-manifest 通道实测失实转登记，2026-09-07 执行期翻案）；文中裸 `cargo test <filter>` 断言按此形态执行或以全量（无 filter）覆盖判定。
 
 ## 断言清单
 

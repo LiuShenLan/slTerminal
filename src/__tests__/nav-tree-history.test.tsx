@@ -334,6 +334,27 @@ describe("历史折叠节点渲染", () => {
     });
   });
 
+  it("nav-history-node 根 aria-expanded 探针：初始 \"false\"，点击展开后 \"true\"（CP-028 E2E 契约）", async () => {
+    seedProject("C:/projA", "proj-A", "项目A", [
+      { pageId: "pageA", name: "页面 A" },
+    ]);
+    seedActivePage("pageA");
+    mockScanHistory.mockResolvedValue([makeHistorySession({ cwd: "C:/projA" })]);
+
+    const { container } = render(<NavTree />);
+    // 节点随项目展开态渲染——先展开项目行（挂载默认收起），scan 落地后节点出现
+    await expandProjects(container);
+    const node = await waitFor(() => {
+      const el = getRows(container, "nav-history-node")[0];
+      expect(el).toBeTruthy();
+      return el as HTMLElement;
+    });
+    // 挂载默认全收起（expandedHist Set 默认空）→ 探针属性如实反映；点击后展开
+    expect(node).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(node);
+    expect(node).toHaveAttribute("aria-expanded", "true");
+  });
+
   it("展开后历史节点位于页面行之后（同 childrenStyle 容器末位——恒置最下方）", async () => {
     seedProject("C:/projA", "proj-A", "项目A", [
       { pageId: "pageA1", name: "页面 A1" },

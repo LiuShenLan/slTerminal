@@ -68,6 +68,7 @@ export const NavPageRow: React.FC<NavPageRowProps> = ({
   return (
     <div
       data-e2e="nav-row-page"
+      aria-expanded={expanded}
       onClick={isRenaming ? undefined : onClick}
       onContextMenu={onContextMenu}
       onMouseEnter={() => setHovered(true)}

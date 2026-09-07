@@ -23,6 +23,14 @@
  *
  * mockcli 是测试夹具而非真实 CLI——仅测试环境注册（E2E helper），生产二进制
  * 无此 profile（E2E_ENABLED 内联字面量门控红线，见 e2e-tests/CLAUDE.md）。
+ *
+ * - 第三 describe「mockcli 历史链路（CP-041 L4：展示 + 双击恢复注入）」：数据
+ *   隔离语义——mockcli provider 扫描根 = run-wdio.cjs 每次重建的
+ *   e2e-tests/.tmp-mockcli-projects 副本（SLTERM_MOCKCLI_PROJECTS_DIR 注入），
+ *   不触真实 ~/.claude/projects；fixture 会话 cwd = E2E 临时项目目录
+ *   （SLTERM_E2E_PROJECT_DIR 注入，占位符 __E2E_PROJECT_DIR__ 复制时替换），
+ *   归属导航树 E2E 项目历史节点。fixture 与 UUID 常量逐字对应
+ *   fixtures/mockcli-projects/（601 会话）。
  */
 
 import { expect, browser } from "@wdio/globals";
@@ -38,6 +46,7 @@ import {
   writeSignalFile,
   waitForSignalConsumed,
   waitForPanelTabStatus,
+  getActivePageInfo,
 } from "./specUtils";
 
 // ── 共享 helper（两个 describe 共用） ──
@@ -194,65 +203,83 @@ describe("mockcli 关键路径（CS-3：agent-event 注入 + hub 分派/保存 c
     const eventsDir = join(homedir(), ".slterminal", "hooks-events");
     const signalFiles: string[] = [];
     try {
-      // 1. 打开 nav 视图（NAV-08：活跃会话行承接方 = 导航树）
-      await browser.execute(() => {
-        (window as any).__slterm_e2e_toggleSideView?.("nav");
-      });
+      // 1. 打开 nav 视图（NAV-08：活跃会话行承接方 = 导航树）。幂等打开——盲 toggle
+      //    在 nav 已打开时会关闭（R2），而套件起始 beforeSuite resetSettings 已把
+      //    sideBar 置回 DEFAULT_OPEN（top:"nav"）→ 盲 toggle 令 nav-tree 10s 不渲染
+      //    （2026-09-08 CP-041 探针定责：suite 起始 nav 恒开）。照 history/agent
+      //    spec 的 openNavView 形态改状态判定后打开。
+      const navState = await browser.execute(
+        () => (window as any).__slterm_e2e_getSideBarState?.() ?? null,
+      );
+      if (navState?.open?.top !== "nav") {
+        await browser.execute(() => {
+          (window as any).__slterm_e2e_toggleSideView?.("nav");
+        });
+      }
       await browser.waitUntil(
         async () =>
           await browser.execute(() => !!document.querySelector('[data-e2e="nav-tree"]')),
         { timeout: 10000, timeoutMsg: "nav 视图未渲染" },
       );
-      // 展开「当前活跃项目」的行到会话行可见（含「当前」pill 的项目容器内——
-      // 页面行点击 = 切页 + 初始化 Dockview，点击其它项目页面行会把 activePageId
-      // 切走致信号建行被拒；多轮收敛：单轮内点击不触发 React 重渲染，判定失真）
-      for (let i = 0; i < 6; i++) {
-        const clicked = await browser.execute(() => {
-          let any = false;
-          const proj = Array.from(
-            document.querySelectorAll('[data-e2e="nav-row-project"]'),
-          ).find((p) => (p.textContent ?? "").includes("当前"));
-          if (!proj) return false;
-          const container = proj.parentElement as HTMLElement | null;
-          if (!container) return false;
-          // NAV-10 修订：项目收起 = 容器仅项目行 1 子级（历史节点随项目展开渲染）
-          if (container.children.length <= 1) {
-            (proj as HTMLElement).click();
-            any = true;
+      // 展开「当前活跃项目」行到会话行可见（CP-028 aria-expanded 探针单次确定性，
+      // 两段式——2026-09-08 定责修正）：页面行随项目展开才渲染（React 异步提交），
+      // 单 execute 内「展开项目行后立即遍历页面行」会拿到空容器（页面行从未被点击，
+      // aria 恒 false → 树节点展开超时）。先展开项目行 + 等页面行渲染，再对容器内
+      // 页面行各点击一次（每行至多一次点击，无奇偶翻转窗口；前提 = 行初始收起且
+      // 同一 NavTree 挂载内不重复展开）。
+      await browser.execute(() => {
+        const proj = Array.from(
+          document.querySelectorAll('[data-e2e="nav-row-project"]'),
+        ).find((p) => (p.textContent ?? "").includes("当前"));
+        if (!proj) return;
+        if (proj.getAttribute("aria-expanded") !== "true") {
+          (proj as HTMLElement).click();
+        }
+      });
+      await browser.waitUntil(
+        async () =>
+          await browser.execute(() => {
+            const proj = Array.from(
+              document.querySelectorAll('[data-e2e="nav-row-project"]'),
+            ).find((p) => (p.textContent ?? "").includes("当前"));
+            if (!proj) return false;
+            if (proj.getAttribute("aria-expanded") !== "true") return false;
+            return !!proj.parentElement?.querySelector(
+              '[data-e2e="nav-row-page"]',
+            );
+          }),
+        { timeout: 5000, interval: 100, timeoutMsg: "项目行展开超时" },
+      );
+      await browser.execute(() => {
+        const proj = Array.from(
+          document.querySelectorAll('[data-e2e="nav-row-project"]'),
+        ).find((p) => (p.textContent ?? "").includes("当前"));
+        const container = proj?.parentElement as HTMLElement | null;
+        if (!container) return;
+        for (const pg of Array.from(
+          container.querySelectorAll('[data-e2e="nav-row-page"]'),
+        )) {
+          if (pg.getAttribute("aria-expanded") !== "true") {
+            (pg as HTMLElement).click();
           }
-          const pages = container.querySelectorAll(
-            '[data-e2e="nav-row-page"]',
-          );
-          for (const pg of pages) {
-            if ((pg.parentElement?.children.length ?? 0) <= 1) {
-              (pg as HTMLElement).click();
-              any = true;
-            }
-          }
-          return any;
-        });
-        if (!clicked) break;
-        // 条件等待展开结果出现（替代固定 350ms sleep——TQ-E-03）：
-        // 条件 = 当前项目容器已展开（nav-row-page 已渲染）——本轮点击的 React 提交
-        // 落地后，下一轮判定（querySelectorAll nav-row-page）与后续会话行断言才基于
-        // 新 DOM。页面行无会话时展开不渲染子级容器（DOM 无变化），故以项目展开为统一
-        // 收敛点；toggleExpand 为 functional setState 逐次生效，每轮点击各自提交后
-        // 奇数次翻转必然到达展开稳态。
-        await browser.waitUntil(
-          async () =>
-            await browser.execute(() => {
-              const proj = Array.from(
-                document.querySelectorAll('[data-e2e="nav-row-project"]'),
-              ).find((p) => (p.textContent ?? "").includes("当前"));
-              if (!proj) return false;
-              const container = proj.parentElement as HTMLElement | null;
-              if (!container) return false;
-              // 展开结果：项目容器内已渲染页面行（收起态无页面容器）
-              return container.querySelectorAll('[data-e2e="nav-row-page"]').length > 0;
-            }),
-          { timeout: 5000, interval: 100, timeoutMsg: "树节点展开超时" },
-        );
-      }
+        }
+      });
+      await browser.waitUntil(
+        async () =>
+          await browser.execute(() => {
+            const proj = Array.from(
+              document.querySelectorAll('[data-e2e="nav-row-project"]'),
+            ).find((p) => (p.textContent ?? "").includes("当前"));
+            if (!proj) return false;
+            const container = proj.parentElement as HTMLElement | null;
+            if (!container) return false;
+            if (proj.getAttribute("aria-expanded") !== "true") return false;
+            return Array.from(
+              container.querySelectorAll('[data-e2e="nav-row-page"]'),
+            ).every((pg) => pg.getAttribute("aria-expanded") === "true");
+          }),
+        { timeout: 5000, interval: 100, timeoutMsg: "树节点展开超时" },
+      );
 
       // 2. 确保信号目录存在 + 原子写信号文件（9 字段契约，cliId 显式 "mockcli"——
       //    与既有 claude 系用例的信号构造同构，仅 cliId 键不同）
@@ -413,5 +440,239 @@ describe("mockcli 关键路径（CS-3：agent-event 注入 + hub 分派/保存 c
       } catch { /* 忽略 */ }
       rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("mockcli 历史链路（CP-041 L4：展示 + 双击恢复注入）", () => {
+  // fixture 会话 UUID / 标题（与 fixtures/mockcli-projects/ 逐字对应）
+  const MOCK_FIXTURE_UUID = "11111111-2222-4333-8444-555555555601";
+  const MOCK_FIXTURE_TITLE = "mockcli 恢复目标会话";
+
+  // run-wdio.cjs 注入：mockcli provider 扫描根副本 + E2E 临时项目目录
+  // （数据隔离语义：扫描根 = .tmp-mockcli-projects 副本，不触真实 ~/.claude）
+  const mockProjectsDir = process.env.SLTERM_MOCKCLI_PROJECTS_DIR;
+  const e2eProjectDir = process.env.SLTERM_E2E_PROJECT_DIR;
+
+  /** 打开 nav 视图（幂等：已打开不重复 toggle，防 R2 关闭）——照 history.e2e.ts */
+  async function openNavView(): Promise<void> {
+    const s = await browser.execute(
+      () => (window as any).__slterm_e2e_getSideBarState?.() ?? null,
+    );
+    if (s?.open.top !== "nav") {
+      await browser.execute(() =>
+        (window as any).__slterm_e2e_toggleSideView?.("nav"),
+      );
+    }
+    await browser.waitUntil(
+      async () =>
+        await browser.execute(() => !!document.querySelector('[data-e2e="nav-tree"]')),
+      { timeout: 10000, timeoutMsg: "nav 视图未渲染" },
+    );
+  }
+
+  /**
+   * 展开全部项目行至子容器可见（单次确定性，CP-028 同口径）：aria-expanded
+   * 探针——只点击 aria-expanded !== "true" 的项目行，每行至多一次点击后
+   * waitUntil 全展开，无奇偶翻转窗口。历史节点收在项目展开容器内（NAV-10），
+   * 项目行收起时无 nav-history-node，须先展开。
+   */
+  async function expandAllProjectRows(): Promise<void> {
+    await browser.execute(() => {
+      for (const proj of Array.from(
+        document.querySelectorAll('[data-e2e="nav-row-project"]'),
+      ) as HTMLElement[]) {
+        if (proj.getAttribute("aria-expanded") !== "true") {
+          proj.click();
+        }
+      }
+    });
+    await browser.waitUntil(
+      async () =>
+        await browser.execute(() =>
+          Array.from(document.querySelectorAll('[data-e2e="nav-row-project"]')).every(
+            (p) => p.getAttribute("aria-expanded") === "true",
+          ),
+        ),
+      { timeout: 5000, interval: 100, timeoutMsg: "项目行展开超时" },
+    );
+  }
+
+  /**
+   * 轮询展开全部未展开历史节点（aria-expanded 探针 + dataset 点击标记防
+   * React 提交竞态双 toggle）并返回含指定标题的历史行快照（未命中 null）。
+   * 历史节点仅当项目 total>0 渲染——数据未到前无节点，轮询天然等待扫描落地。
+   */
+  async function findHistoryRow(
+    title: string,
+  ): Promise<{ text: string; hasMockIcon: boolean } | null> {
+    return browser.execute((t: string) => {
+      const nodes = document.querySelectorAll(
+        '[data-e2e="nav-history-node"]',
+      ) as NodeListOf<HTMLElement>;
+      for (const n of nodes) {
+        if (n.getAttribute("aria-expanded") !== "true" && !n.dataset.e2eClicked) {
+          n.dataset.e2eClicked = "1";
+          n.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        }
+      }
+      const rows = document.querySelectorAll(
+        '[data-e2e="nav-history-node"] [data-e2e="nav-row-session"]',
+      ) as NodeListOf<HTMLElement>;
+      for (const r of rows) {
+        if ((r.textContent ?? "").includes(t)) {
+          return {
+            text: r.textContent ?? "",
+            hasMockIcon: Array.from(r.querySelectorAll("img")).some(
+              (i) => (i.getAttribute("src") ?? "").includes("/cli-icons/mockcli.png"),
+            ),
+          };
+        }
+      }
+      return null;
+    }, title);
+  }
+
+  /**
+   * 等 mockcli fixture 行出现：先被动等（依赖既有扫描数据），超时点 nav 头
+   * 「刷新」钮（triggerNow 手动重扫——与定时 tick 共用同一执行体）后再等一轮。
+   * 展开历史节点不触发扫描（FE-19），刷新钮是显式重扫的唯一入口。
+   */
+  async function waitForMockRow(): Promise<{ text: string; hasMockIcon: boolean }> {
+    for (let phase = 0; phase < 2; phase++) {
+      if (phase === 1) {
+        // 首轮超时 → 点 nav 头「刷新」钮（triggerNow 手动重扫，FE-19：展开
+        // 历史节点不触发扫描，刷新钮 = 显式重扫唯一入口）后再等一轮
+        const clicked = await browser.execute(() => {
+          const btn = document.querySelector(
+            '[aria-label="刷新"]',
+          ) as HTMLElement | null;
+          btn?.click();
+          return btn !== null;
+        });
+        expect(clicked).toBe(true);
+      }
+      const row = await browser
+        .waitUntil(
+          async () => (await findHistoryRow(MOCK_FIXTURE_TITLE)) as
+            | { text: string; hasMockIcon: boolean }
+            | undefined,
+          {
+            timeout: 15000,
+            interval: 200,
+            timeoutMsg: `mockcli 历史行「${MOCK_FIXTURE_TITLE}」未出现（扫描未落地或副本未就绪）`,
+          },
+        )
+        .catch(() => undefined);
+      if (row) return row;
+    }
+    throw new Error(
+      `mockcli 历史行「${MOCK_FIXTURE_TITLE}」未出现（刷新重扫后仍未落地）`,
+    );
+  }
+
+  /** 通用前置：注册 mockcli + 建 E2E 项目（fixture cwd 归属）+ nav 展开 */
+  async function openMockHistoryView(): Promise<void> {
+    await waitForWorkspaceReady();
+    await registerMockCliProfile();
+    if (!mockProjectsDir || !e2eProjectDir) {
+      throw new Error(
+        "SLTERM_MOCKCLI_PROJECTS_DIR / SLTERM_E2E_PROJECT_DIR 未注入——必须经 run-wdio.cjs 启动",
+      );
+    }
+    const proj = await browser.execute((dir: string) => {
+      return (window as any).__slterm_e2e_createProject?.(dir);
+    }, e2eProjectDir);
+    // 创建失败立即 fail——后续展示/恢复断言不得基于不存在的状态（TQ-E-04）
+    if (!proj) {
+      throw new Error(
+        `__slterm_e2e_createProject 返回空（dir=${e2eProjectDir}）——helper 未就绪或创建失败`,
+      );
+    }
+    await openNavView();
+    await expandAllProjectRows();
+  }
+
+  it("mockcli 历史条目展示：provider 打标条目渲染于导航树历史节点（cliId=mockcli）", async () => {
+    await openMockHistoryView();
+
+    // 断言：nav-history-node 内行文本含 fixture 标题 + 行内 img src 含
+    // "/cli-icons/mockcli.png"（NavHistoryRow 按 session.cliId 查 profile.iconSrc，
+    // MC-311——mockcli profile 已注册，claude fixture 行图标不匹配不误中）
+    const row = await waitForMockRow();
+    expect(row.text).toContain(MOCK_FIXTURE_TITLE);
+    expect(row.hasMockIcon).toBe(true);
+  });
+
+  it("mockcli 双击恢复：恢复编排 → 终端注入 `mockcli --resume <id>`（部分端到端，E2E-11）", async () => {
+    await openMockHistoryView();
+    await waitForMockRow();
+
+    // 双击 fixture 行（普通行：cwd = E2E 临时项目目录，cwdExists=true）→
+    // restoreHistorySession 四步编排（doRestore：项目匹配复用 → 页面切换 →
+    // addPanel terminal → pty.write buildRestoreInput 注入）
+    const dbl = await browser.execute((t: string) => {
+      const rows = document.querySelectorAll(
+        '[data-e2e="nav-history-node"] [data-e2e="nav-row-session"]',
+      ) as NodeListOf<HTMLElement>;
+      for (const r of rows) {
+        if ((r.textContent ?? "").includes(t)) {
+          r.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+          return true;
+        }
+      }
+      return false;
+    }, MOCK_FIXTURE_TITLE);
+    expect(dbl).toBe(true);
+
+    // 1. 页面切换：activePage rootPath === fixture cwd（E2E 临时项目目录——
+    //    restoreHistorySession 步骤 3 switchToPageShared）
+    const info = await browser.waitUntil(
+      async () => {
+        const i = await getActivePageInfo();
+        return i?.rootPath === e2eProjectDir ? i : false;
+      },
+      { timeout: 15000, timeoutMsg: "恢复后活跃页面 rootPath 未指向 E2E 项目目录" },
+    );
+    expect(info).not.toBeNull();
+
+    // 2. 终端容器就绪（步骤 4 addPanel terminal → PTY session spawn）
+    await browser.waitUntil(
+      async () =>
+        await browser.execute(() => {
+          const containers = document.querySelectorAll(
+            '[data-e2e="terminal-container"]',
+          );
+          for (const c of containers) {
+            if ((c as any).__e2e_sessionReady) return true;
+          }
+          return false;
+        }),
+      { timeout: 25000, timeoutMsg: "恢复终端 PTY session 未就绪" },
+    );
+
+    // 3. 终端缓冲含注入命令（pty.write `mockcli --resume <id>\r`，pwsh 回显
+    //    输入行——buildRestoreInput 桩输出，helpers.ts：608）
+    await browser.waitUntil(
+      async () =>
+        await browser.execute((id: string) => {
+          const containers = document.querySelectorAll(
+            '[data-e2e="terminal-container"]',
+          );
+          for (const c of containers) {
+            const el = c as any;
+            if (
+              typeof el.__e2e_getTerminalText === "function" &&
+              el.__e2e_getTerminalText().includes(`mockcli --resume ${id}`)
+            ) {
+              return true;
+            }
+          }
+          return false;
+        }, MOCK_FIXTURE_UUID),
+      { timeout: 25000, timeoutMsg: "终端缓冲未含 mockcli --resume 注入命令" },
+    );
+
+    // 4. 部分端到端：断言到「注入 + 编排」为止（E2E-11 标注）——mockcli 非真实
+    //    CLI，不断言真实会话进入（真实恢复成功属人工验证，与 claude 系用例同边界）
   });
 });

@@ -74,7 +74,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## 测试模式
 
 - **NAV-10 契约辅助**：测试按点击展开驱动（`expandTo`），断言基于最终渲染而非内部状态。
-- **数据属性契约（写死）**：容器 `data-e2e="nav-tree"`；行 `data-e2e="nav-row-project"` / `"nav-row-page"` / `"nav-row-session"`；历史节点 `data-e2e="nav-history-node"`；余量 footer `data-e2e="plan-balance-footer"`（容器）/ `"plan-balance-row"`（行，F10）。
+- **数据属性契约（写死）**：容器 `data-e2e="nav-tree"`；行 `data-e2e="nav-row-project"` / `"nav-row-page"` / `"nav-row-session"`；历史节点 `data-e2e="nav-history-node"`；余量 footer `data-e2e="plan-balance-footer"`（容器）/ `"plan-balance-row"`（行，F10）。行根/历史节点根挂 `aria-expanded`（展开态探针，与 chevron 同源，E2E 契约 CP-028）——值 ∈ "true"/"false"，禁移除。
 
 ## 运行
 

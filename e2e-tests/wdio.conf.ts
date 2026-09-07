@@ -2,7 +2,7 @@
  * L4 E2E 配置 — slTerminal
  *
  * 使用 @wdio/tauri-service + driverProvider: 'embedded'，Tauri 内嵌 WebDriver 直接驱动 WebView2。
- * 本地用 Node 22 便携版自动切换（Node 26 undici 8 与 webdriverio 不兼容），CI 固定 Node 22。
+ * Node >= 22 直跑（run-wdio.cjs，webdriverio 9.30.0+ 修复 Node 26 兼容），CI 固定 Node 22。
  *
  * specs 显式数组（E2E-09）：新增 spec 须加入下方显式数组。
  * 同一 worker 顺序执行（maxInstances=1，单 session）——spec 间共享 app 实例，
@@ -67,6 +67,15 @@ export const config: WebdriverIO.Config = {
   // 里建的项目，且 editor 标题等用例依赖 spec 内累积状态）。
   // spec 内用例累积 ≤10 项目不触发 20 页上限；用例内多项目（agent R2）不受影响。
   beforeSuite: async function () {
+    // TQ-E-10(CP-030):窗口前台聚焦 fast-fail 探针——$ 元素命令族(findElement/
+    // $/elementClick 等)触发 tauri-service ensureActiveWindowFocus,窗口未聚焦时
+    // 每命令 +5s 且交互时序断言失真。探针失败即报错退出,不静默吃延迟。
+    const focused = await browser.execute(() => document.hasFocus());
+    if (focused !== true) {
+      throw new Error(
+        "[wdio] 应用窗口未前台聚焦——E2E 运行前提不满足(TQ-E-10 探针)。请先聚焦 slTerminal 窗口再跑 npm run e2e;CI 环境请确认 embedded driver 启动后窗口置前。",
+      );
+    }
     await browser.execute(() => {
       const w = window as unknown as {
         __slterm_e2e_resetProjects?: () => void;

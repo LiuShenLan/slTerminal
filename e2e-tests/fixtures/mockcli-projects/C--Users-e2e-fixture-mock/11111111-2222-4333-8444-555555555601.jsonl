@@ -1,0 +1,3 @@
+{"type":"summary","summary":"mockcli 恢复目标会话","leafUuid":"x"}
+{"type":"user","cwd":"__E2E_PROJECT_DIR__","message":{"content":"mockcli fixture 首条提问"}}
+// [CP-041 mockcli fixture] summary 首行 → 标题回退落 summary;cwd 占位符由 run-wdio.cjs 复制时替换为 E2E 临时项目真实路径(归属匹配)

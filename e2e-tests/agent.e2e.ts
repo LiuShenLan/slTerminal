@@ -44,69 +44,70 @@ describe("Agent 会话视图与 toast 通知", () => {
     );
   }
 
-  /**
-   * 展开导航树到会话行可见（幂等，遍历全部项目/页面行）：
-   * 项目持久化累积（slterminal-projects.json 跨 run 保留）——目标项目可能位于
-   * 导航树任意位置，必须展开全部未展开行。
-   * 展开态判定（DOM 结构）：项目行父容器 = [项目行, 展开时 +子级容器（页面行 +
-   *   历史节点随项目展开渲染其中——NAV-10 修订 2026-09-03）] → children > 1 即展开；
-   *   页面行父容器 = [页面行, 展开时 +子级容器] → children > 1 即展开。
-   * 页面行点击 = 切换展开 + 切页（switchPage 幂等，切页不碍行归属渲染）。
-   * NavTree 展开态组件内维护，nav 视图 display:none 保挂载不丢。
-   */
+  /** 展开「当前」项目行及其下页面行到会话行可见(逐层推进,CP-028):aria-expanded
+   *  探针——先展开项目行并等其 aria-expanded === "true"(页面行随项目展开才挂载,
+   *  NavTree 懒挂载,同一 execute 内点完项目行立即查页面行必为空),再重新查询容器
+   *  内页面行逐行展开并等全部 === "true";每层点击后都等 React 提交完成再进下一
+   *  层(防提交前重复点击的奇偶翻转),点击后每轮重新查询不持旧 DOM 引用,已展开
+   *  行直接跳过——可重复调用(waitForSessionRow 轮询内逐轮调用安全)。 */
   async function ensureTreeExpanded(): Promise<void> {
-    // 只展开「当前活跃项目」（含「当前」pill）的行——页面行点击 = 切页 + 初始化
-    // Dockview，点击其它项目的页面行会把 activePageId 切走（useAgentStatus 只建
-    // 活跃项目行，切走后信号建行被拒——实测根因）。多轮收敛（React 重渲染异步——
-    // 单轮内判定基于旧 DOM，已展开行会被误判折叠）。
-    for (let i = 0; i < 6; i++) {
-      const clicked = await browser.execute(() => {
-        let any = false;
-        const proj = Array.from(
-          document.querySelectorAll('[data-e2e="nav-row-project"]'),
-        ).find((p) => (p.textContent ?? "").includes("当前"));
-        if (!proj) return false;
-        const container = proj.parentElement as HTMLElement | null;
-        if (!container) return false;
-        // 项目行未展开（容器仅项目行 1 子级——历史节点随项目展开渲染，NAV-10 修订）→ 点击展开
-        if (container.children.length <= 1) {
-          (proj as HTMLElement).click();
-          any = true;
+    // 第一层:展开「当前」项目行(行不存在即跳过——项目行初始收起)
+    await browser.execute(() => {
+      const proj = Array.from(
+        document.querySelectorAll('[data-e2e="nav-row-project"]'),
+      ).find((p) => (p.textContent ?? "").includes("当前"));
+      if (!proj) return;
+      if (proj.getAttribute("aria-expanded") !== "true") {
+        (proj as HTMLElement).click();
+      }
+    });
+    await browser.waitUntil(
+      async () =>
+        await browser.execute(() => {
+          const proj = Array.from(
+            document.querySelectorAll('[data-e2e="nav-row-project"]'),
+          ).find((p) => (p.textContent ?? "").includes("当前"));
+          if (!proj) return false;
+          if (proj.getAttribute("aria-expanded") !== "true") return false;
+          // 项目行展开提交后子容器同帧挂载——页面行出现才算第一层收敛
+          return !!proj.parentElement?.querySelector(
+            '[data-e2e="nav-row-page"]',
+          );
+        }),
+      { timeout: 5000, interval: 100, timeoutMsg: "项目行展开超时" },
+    );
+    // 第二层:展开「当前」项目容器内全部未展开页面行(展开后重新查询,每轮每行至多
+    // 一次点击——提交前重复点击同一行会奇偶翻转)
+    await browser.execute(() => {
+      const proj = Array.from(
+        document.querySelectorAll('[data-e2e="nav-row-project"]'),
+      ).find((p) => (p.textContent ?? "").includes("当前"));
+      const container = proj?.parentElement as HTMLElement | null;
+      if (!container) return;
+      for (const pg of Array.from(
+        container.querySelectorAll('[data-e2e="nav-row-page"]'),
+      )) {
+        if (pg.getAttribute("aria-expanded") !== "true") {
+          (pg as HTMLElement).click();
         }
-        // 仅当前项目容器内的页面行（点击 = 切换展开 + 切页——当前项目即活跃页所属，幂等）
-        const pages = container.querySelectorAll(
-          '[data-e2e="nav-row-page"]',
-        );
-        for (const pg of pages) {
-          if ((pg.parentElement?.children.length ?? 0) <= 1) {
-            (pg as HTMLElement).click();
-            any = true;
-          }
-        }
-        return any;
-      });
-      if (!clicked) return;
-      // 条件等待展开结果出现（替代固定 350ms sleep——TQ-E-03）：
-      // 条件 = 当前项目容器已展开（nav-row-page 已渲染）——本轮点击的 React 提交
-      // 落地后，下一轮判定（querySelectorAll nav-row-page）与后续会话行断言才基于
-      // 新 DOM。页面行无会话时展开不渲染子级容器（DOM 无变化），故以项目展开为统一
-      // 收敛点；toggleExpand 为 functional setState 逐次生效，每轮点击各自提交后
-      // 奇数次翻转必然到达展开稳态。
-      await browser.waitUntil(
-        async () =>
-          await browser.execute(() => {
-            const proj = Array.from(
-              document.querySelectorAll('[data-e2e="nav-row-project"]'),
-            ).find((p) => (p.textContent ?? "").includes("当前"));
-            if (!proj) return false;
-            const container = proj.parentElement as HTMLElement | null;
-            if (!container) return false;
-            // 展开结果：项目容器内已渲染页面行（收起态无页面容器）
-            return container.querySelectorAll('[data-e2e="nav-row-page"]').length > 0;
-          }),
-        { timeout: 5000, interval: 100, timeoutMsg: "树节点展开超时" },
-      );
-    }
+      }
+    });
+    await browser.waitUntil(
+      async () =>
+        await browser.execute(() => {
+          const proj = Array.from(
+            document.querySelectorAll('[data-e2e="nav-row-project"]'),
+          ).find((p) => (p.textContent ?? "").includes("当前"));
+          if (!proj) return false;
+          const container = proj.parentElement as HTMLElement | null;
+          if (!container) return false;
+          if (proj.getAttribute("aria-expanded") !== "true") return false;
+          return Array.from(
+            container.querySelectorAll('[data-e2e="nav-row-page"]'),
+          ).every((pg) => pg.getAttribute("aria-expanded") === "true");
+        }),
+      { timeout: 5000, interval: 100, timeoutMsg: "树节点展开超时" },
+    );
   }
 
   /**

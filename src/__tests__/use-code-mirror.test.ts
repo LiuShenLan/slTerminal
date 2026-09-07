@@ -1,5 +1,9 @@
 // useCodeMirror.test.ts — useCodeMirror hook 字体大小调节测试
 //
+// CP-029: 打开后核对（OPEN_RECHECK_DELAY_MS=1500 真实计时，单次）会在文件打开
+// 1.5s 后追加一次读盘——readFile 精确计数断言处须先 settleRecheck() 跨过该读盘
+// （核对补偿的专项用例见 use-code-mirror-reload-error.test.ts K 系列）
+//
 // 测试策略：EditorView 在 jsdom 不可用，mock EditorView + Compartment
 // - 通过 mockDispatch 捕获 dispatch 调用，验证 Compartment.reconfigure
 // - 通过 container 分发 WheelEvent 测试 Ctrl+Wheel
@@ -123,6 +127,7 @@ import {
   useCodeMirror,
   MAX_FILE_SIZE_BYTES,
   LARGE_FILE_WARN_BYTES,
+  OPEN_RECHECK_DELAY_MS,
 } from "../panels/editor/useCodeMirror";
 import { getActiveEditor } from "../panels/editor/activeEditor";
 // 导入 mocked 模块，供 handleSave 测试验证 IPC 调用
@@ -1100,7 +1105,7 @@ describe("EDF-08 justSavedRef 多实例语义", () => {
   let containerA: HTMLDivElement;
   let containerB: HTMLDivElement;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     containerA = createContainer();
     containerB = createContainer();
     capturedStateExtensions = null;
@@ -1109,12 +1114,26 @@ describe("EDF-08 justSavedRef 多实例语义", () => {
     (fs.writeFile as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
     (fs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue("// content a.ts");
     (gitDiff as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    // CP-029: 排空前序 suite 残留挂载 hook 的打开后核对定时器（其 +1.5s 读盘可能
+    // 落入本 suite 的精确计数窗口——等待超过一个核对周期即全部触发完毕）
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, OPEN_RECHECK_DELAY_MS + 150));
+    });
   });
 
   afterEach(() => {
     containerA.innerHTML = "";
     containerB.innerHTML = "";
   });
+
+  /** CP-029: 跨过打开后核对（OPEN_RECHECK_DELAY_MS 后单次读盘）——计数断言前
+   *  调用，使后续 readFile 计数进入稳定态（核对补偿专项用例见
+   *  use-code-mirror-reload-error.test.ts K 系列） */
+  async function settleRecheck(): Promise<void> {
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, OPEN_RECHECK_DELAY_MS + 150));
+    });
+  }
 
   it("1. 双实例同文件：A 保存后跳过自身事件，B 未保存仍执行自动重载", async () => {
     const { onFsEvent } = await import("../ipc/notify");
@@ -1125,7 +1144,12 @@ describe("EDF-08 justSavedRef 多实例语义", () => {
     renderHook(() => useCodeMirror({ container: containerA, filePath: "/test/a.ts", panelId: "A" }));
     renderHook(() => useCodeMirror({ container: containerB, filePath: "/test/a.ts", panelId: "B" }));
 
-    await waitFor(() => expect(readFileMock).toHaveBeenCalledTimes(2), { timeout: 3000 });
+    // ≥2 而非恰 2：慢机下打开后核对(CP-029,1.5s 定时)可能已先行触发追加读盘
+    await waitFor(() => expect(readFileMock.mock.calls.length).toBeGreaterThanOrEqual(2), {
+      timeout: 3000,
+    });
+    // CP-029: 跨过两实例的打开后核对读盘（单次 1.5s 定时），进入稳定计数态
+    await settleRecheck();
 
     expect(onFsEventMock).toHaveBeenCalledTimes(2);
     const cbA = onFsEventMock.mock.calls[0][0] as (event: { paths: string[]; kind: string }) => void;
@@ -1166,7 +1190,11 @@ describe("EDF-08 justSavedRef 多实例语义", () => {
 
     renderHook(() => useCodeMirror({ container: containerA, filePath: "/test/a.ts", panelId: "A" }));
     renderHook(() => useCodeMirror({ container: containerB, filePath: "/test/a.ts", panelId: "B" }));
-    await waitFor(() => expect(readFileMock).toHaveBeenCalledTimes(2), { timeout: 3000 });
+    await waitFor(() => expect(readFileMock.mock.calls.length).toBeGreaterThanOrEqual(2), {
+      timeout: 3000,
+    });
+    // CP-029: 跨过两实例的打开后核对读盘（单次 1.5s 定时），进入稳定计数态
+    await settleRecheck();
 
     const cbA = onFsEventMock.mock.calls[0][0] as (event: { paths: string[]; kind: string }) => void;
 
@@ -1175,18 +1203,21 @@ describe("EDF-08 justSavedRef 多实例语义", () => {
     getActiveEditor()!.save();
     await waitFor(() => expect(fs.writeFile).toHaveBeenCalled(), { timeout: 3000 });
 
-    // 第一次事件：Set 命中 → 跳过并删除路径
+    // CP-029: 基线 = 两实例 init 读盘 + 两实例打开后核对读盘（计数稳定态）
+    const baseAfterSettle = readFileMock.mock.calls.length; // 4
+
+    // 第一次事件：Set 命中 → 跳过并删除路径（计数不变）
     await act(async () => {
       cbA({ paths: ["/test/a.ts"], kind: "Modify" });
     });
-    expect(readFileMock.mock.calls.length).toBe(2);
+    expect(readFileMock.mock.calls.length).toBe(baseAfterSettle);
 
-    // 第二次事件：Set 已消费删除 → A 恢复自动重载
+    // 第二次事件：Set 已消费删除 → A 恢复自动重载（恰一次读盘）
     await act(async () => {
       cbA({ paths: ["/test/a.ts"], kind: "Modify" });
     });
     await waitFor(() => {
-      expect(readFileMock.mock.calls.length).toBe(3);
+      expect(readFileMock.mock.calls.length).toBe(baseAfterSettle + 1);
     }, { timeout: 3000 });
   });
 });

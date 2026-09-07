@@ -8,9 +8,13 @@
 //
 // 与旧版手动模拟 handler 逻辑不同，本文件通过 renderHook(useCodeMirror)
 // 真实驱动 hook，mock onFsEvent 捕获回调后手动触发 fs-event 验证行为。
+//
+// CP-029: 打开后核对（OPEN_RECHECK_DELAY_MS=1500 真实计时，单次）会在文件打开
+// 1.5s 后追加一次读盘——readFile 精确计数断言处须先 settleRecheck() 跨过
+// （核对补偿专项用例见 use-code-mirror-reload-error.test.ts K 系列）
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { renderHook, waitFor } from "@testing-library/react";
+import { renderHook, waitFor, act } from "@testing-library/react";
 
 // ─── Hoisted mocks（getter/setter 不能解构，保留对象引用） ───
 const h = vi.hoisted(() => {
@@ -119,7 +123,7 @@ vi.mock("../features/shortcuts", async (importOriginal) => {
 });
 
 // ─── 导入被测模块 ───
-import { useCodeMirror } from "../panels/editor/useCodeMirror";
+import { useCodeMirror, OPEN_RECHECK_DELAY_MS } from "../panels/editor/useCodeMirror";
 
 // ─── 辅助函数 ───
 
@@ -146,6 +150,17 @@ async function renderAndWait(props?: Partial<Parameters<typeof useCodeMirror>[0]
     expect(capturedStateExtensions).toBeDefined();
   }, { timeout: 3000 });
   return { result, container };
+}
+
+/**
+ * CP-029: 跨过打开后核对（OPEN_RECHECK_DELAY_MS 后单次读盘）——readFile 精确
+ * 计数断言前调用，使计数进入稳定态（核对补偿专项用例见
+ * use-code-mirror-reload-error.test.ts K 系列）
+ */
+async function settleRecheck(): Promise<void> {
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, OPEN_RECHECK_DELAY_MS + 150));
+  });
 }
 
 // ─── 测试套件 ───
@@ -273,6 +288,8 @@ describe("useCodeMirror fs-event 集成", () => {
   it("E7. 用户确认重载 → readFile + dispatch，dirty 复位", async () => {
     const { result } = await renderAndWait({ filePath: "/test/main.ts" });
 
+    // CP-029: 先跨过打开后核对读盘（否则 1.5s 定时可能在断言窗口内追加读盘）
+    await settleRecheck();
     result.result.current.markDirty();
     h.mockReadFile.mockClear();
     h.mockDispatch.mockClear();

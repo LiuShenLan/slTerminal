@@ -18,10 +18,7 @@
 | L3 生产 WebGL renderer / mouse tracking | headless 不跑 GPU；PASSTHROUGH_MODE 滚轮回归无法自动化（行为级测试假阴性） | L4 全屏 TUI 视觉回归（M2 人工确认）+ `compute_conpty_flags` 4 条守卫锁 0x7 + 文档红线 | 15-#16 |
 | L4 真实 OS 级按键 | embedded WDIO 无法投递 `browser.keys` 到 WebView2 页面 | 合成事件 + 页面内 dispatch 全链路；terminal.e2e.ts 粘贴用例 = E2E helper 写读往返；Ctrl+Shift+V 消费链路由 L2 keyboard.test.ts + L3 shortcut-dispatch.test.ts（TQ-E-02）覆盖 | 13 P-15 |
 | HTML postMessage 真实 WebView2 行为（opaque origin 序列化 / CSP 强制） | jsdom 无法模拟 opaque origin 与 WebView2 CSP；`e.origin === "null"` 为 WHATWG 规范推断 | L4 `html.e2e.ts` Ctrl+W postMessage 往返 + L2 四负面用例（IHE-03） | 13 P-5 |
-| mockcli 历史条目展示（L4） | 历史条目由后端 provider 打标产出，生产二进制仅 claude provider | L2 AC-4③（mock-cli-profile.test.tsx 历史聚合 UI） | CS-3 |
-| mockcli 双击恢复注入（L4） | 恢复编排注入内容由 claude provider buildRestoreInput 产出，mockcli 无后端 provider | L2 AC-4⑤（mock-cli-profile.test.tsx 恢复注入） | CS-3 |
 | `spawn.rs` 容量超限 kill 清理与 `conpty_api.rs` vendor 提取/加载回退的残余 Win32 分支 | 清理段为 I/O + 平台 API 组合，不可纯函数化；上限判定已由 `pty_capacity_*` 用例锁死 | L1 `pty_capacity_*` 3 例 + `join_with_timeout` 3 例 + `pty_integration_tests` 真实 ConPTY 往返 | TQ-COV-03 |
-| `editor.e2e.ts` dirty→clean 用例（外部写盘 → watcher → 编辑器 auto-reload） | Windows notify 环境级故障（2026-08-23 实证，非代码缺陷）：同机 L1 notify 测试通过，页面内写入不产生 fs-event | reload 逻辑由 L2 `editor-confirm.test.ts` + `use-code-mirror-reload-error.test.ts` 覆盖；修复环境后复跑验收 | 2026-08-23 实证登记 |
 | Rust 行覆盖 88.20%（llvm-cov 含测试代码口径） | 目标 90% 差 1.8pp；残余缺口集中 PTY Win32 分支 + main.rs 结构性零覆盖 + 编译器生成物计数缺失 | 重点文件已达标或逐条登记豁免（TQ-COV-01/03/06 + git/CLAUDE.md 豁免表） | TQ-COV 收尾登记 |
 | plan_balance 真实 HTTP 查询（ureq fetch）与 tokio 轮询任务本体（含动态间隔内存读取 POLL_INTERVAL_SEC 与 set_interval 落盘/内存一致链，F11 扩注） | 真实外部 API 依赖 + Tauri 运行时（规格 §3 不做 L4） | 解析与状态机 L1 全覆盖（罐装 JSON/参数化编排 + 间隔内存默认值/四维 set_interval 直调用例）+ L2 UI 四场景 + L4 频率页真实后端落盘（settings.e2e.ts ④⑤）+ 人工实测（真实账号一轮） | F10/F11 |
 | win11/win10 真实终端 conda 激活实测（profile 加载链路 + conda 钩子 + prompt 包装链） | 依赖真实 conda/miniforge 环境与交互会话，CI 无此环境 | L1 B17 参数守卫（`pwsh_args_no_noprofile_b17`）+ 双系统 debug build 人工实测 | B17 |
@@ -39,6 +36,7 @@
 | md 预览 iframe 内 <script> 执行与 html 同态静态化 | 存量缺陷（escapeScriptClose 转义破坏宿主 </script>）跨面板继承即预期行为（信任模型 = 与 htmlviewer 同态，ADR-0017）；事件属性不受转义正常执行 | L2 `markdown-render-pipeline.test.ts` raw HTML 透传断言 + L4 `markdown.e2e.ts` 事件属性通道（img onerror 触发缩放）实证 | ADR-0017 信任模型登记 |
 | CM 字形光栅丢失（GLYPH）的像素断言环境依赖 | 缺陷仅在真实合成/光栅渲染路径与真实截图通道可判（embedded WDIO 无 OS 按键通道、输入走 execCommand；软渲染/非整数 DPI 环境差异会假阴性） | `GLYPH_E2E=1` 像素断言 spec（glyph-repro.e2e.ts：md5-frame/md10/html10/txt10 字形位 PNG 判读全命中）+ L2 repaintGuard 原语/注入契约测试（repaint-guard.test.ts）+ 人工基线（150%/225% 双档 debug build 复现矩阵：5 连输/追加 10/前缀矩阵/选中恢复） | 2026-09-06 GLYPH 取证登记 |
 | md/html 编辑 pane Ctrl+滚轮字号的物理滚轮与 split 双通道共存语义 | embedded WDIO 无法投递 OS 滚轮（承接 htmlviewer 缩放豁免 2026-09-06 行）；iframe 内 zoom 与 CM pane 字号双通道的物理合成交互需人手 | L2 字号接线闭环用例（markdown/html-panel.test）+ L4 合成 WheelEvent 字号用例（markdown/html e2e，.cm-scroller 字号 14→15）+ 手工清单（split 态左 pane 字号/右 iframe zoom 互不干扰、整窗缩放不被触发） | 2026-09-06 GLYPH 取证登记 |
+| run-wdio.cjs 启动器分支（Node 版本选择/便携预置/键级校验） | 进程编排壳（spawn 外部进程行为不可 jsdom 化），无单测锚点 | L4 全量 e2e（Node 26 直跑）兜底 | CP-003/046 登记 |
 
 > 原豁免表中 `FileWatcher::start`/`notify_watch` 与 `claude_history` 命令包装两项已按 D6 从豁免重分类为补测，不再列入豁免表。  
 > **SEC-17 豁免已撤销（TQ-COV-05 翻案）**：`tracing::warn!(target: "audit")` 已由 `tracing-test` 断言锁死，豁免行删除。

@@ -17,6 +17,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 注册表是 cliId 键静态映射；未知 cliId → `Validation`。
 
+**注册表 env 门控扩展（CP-041）**：`registry()` 为当前生效表，`SLTERM_MOCKCLI_PROJECTS_DIR` 存在时追加 mockcli 条目——L4 专用测试 provider，env 命名/解析自管（MC-305 先例，run-wdio.cjs 注入）。生产/日常二进制无该 env → `registry()` = 基础表（与 CP-041 前逐字一致），mockcli 恒「未知 cliId」。
+
+**provider 身份盒（CP-041 防 ZST 地址共享）**：claude/mockcli provider 均为单元结构体；裸 ZST static 不保证地址互异（实测可共享），mod.rs `run_scan` 的 claude 身份比对（数据指针相等）会因此把 mockcli force 扫描误判进 claude 缓存通道。两 provider 经非 ZST 元组盒（`CLAUDE_BOX`/`MOCK_BOX`）装载，注册表条目引用盒字段——保持盒形态，勿改回裸 ZST static（L1 `provider_identity_boxes_have_distinct_addresses` 锁死）。
+
 ### 扫描缓存 + force 通道（BE-19）
 
 claude provider 的扫描结果按 `ScanCacheKey = (目录 mtime, 文件数)` 进程内缓存。键不变时复用缓存；键变化或 `force=true` 时重扫。这是目录级粗粒度失效——目录内会话文件增删改不会使缓存失效，由前端显式 `force` 兜底。

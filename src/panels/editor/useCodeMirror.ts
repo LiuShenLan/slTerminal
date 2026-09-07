@@ -47,6 +47,20 @@ export const MAX_FILE_SIZE_BYTES = 10_000_000;
 /** 大文件警告阈值（字节）——超过此值弹窗确认 */
 export const LARGE_FILE_WARN_BYTES = 1_000_000;
 
+/**
+ * CP-029(S03): 打开后磁盘核对延迟——外部修改事件补偿窗口。
+ * 定责取证(2026-09-07 E2E dirty→clean 用例二分定责)：两条事件丢失机制会让
+ * 「打开后立即被外部改写」的文件停留在陈旧内容且无后续事件可触发 reload——
+ * ① SEC-01 项目激活 → 后端 watcher 注册完成的空窗（双 setProjectRoot 串行 +
+ * spawn_blocking 注册链实测约 50-200ms），空窗内写盘零事件；
+ * ② notify-debouncer-full 对同路径 Create 后 300ms 去抖窗口内的 Modify 吞并不发
+ * （crate 文档明示 "Doesn't emit Modify events after a Create event"，实测 259ms
+ * 间隔 Create+Modify 只发 Create）。故编辑器打开磁盘文件后延迟复核一次磁盘内容，
+ * 不一致即走与 fs-event 相同重载路径——事件到达时核对幂等（内容已一致则跳过）。
+ * 取值须 > 注册链上限 + 去抖窗口(300ms) 的余量；过大会延迟补偿呈现。
+ */
+export const OPEN_RECHECK_DELAY_MS = 1500;
+
 /** 编辑器字体 CSS spec —— 可独立测试 */
 export const EDITOR_FONT_SPEC = {
   ".cm-scroller": { fontFamily: `"JetBrains Mono", "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace` },
@@ -62,6 +76,15 @@ export function createEditorFontExtension(fontSize: number): Extension {
       fontSize: `${fontSize}px`,
     },
   });
+}
+
+/** 缓冲全文安全读取（CP-029；测试桩等非标准 doc 形态 toString 可能缺失/抛错） */
+function safeDocText(view: EditorView): string {
+  try {
+    return view.state.doc.toString();
+  } catch {
+    return "";
+  }
 }
 
 export interface UseCodeMirrorOptions {
@@ -283,6 +306,8 @@ export function useCodeMirror({
 
     filePathRef.current = filePath;
     const gen = ++genRef.current;
+    // CP-029(S03): 打开后核对定时器（cleanup 清除；见 initEditor 内调度点）
+    let recheckTimer: ReturnType<typeof setTimeout> | undefined;
 
     // 异步加载文件内容
     // P1-17: fire-and-forget async，开头标记 mounted，await 后检查标记再操作 DOM
@@ -373,6 +398,30 @@ export function useCodeMirror({
       const cb = onDocContentRef.current;
       if (cb) cb(view.state.doc.toString(), "init");
 
+      // CP-029(S03): 打开后磁盘核对（外部修改事件补偿，见 OPEN_RECHECK_DELAY_MS
+      // 注释——watcher 注册空窗/去抖窗口吞并会让打开瞬间的外部写盘零事件，编辑器
+      // 停留在陈旧内容）。延迟复核磁盘与「打开时读到内容」的差异——baseline 比对：
+      // 用户打字（doc≠baseline）而磁盘未变的常态不误报；磁盘真变了 → 走与 fs-event
+      // 相同的重载/确认路径。仅磁盘读取路径生效（initialDoc 快照 = 草稿优先，跳过
+      // 核对避免草稿被磁盘旧内容覆盖）；大文件拒绝/取消已清 filePathRef → 自动取消。
+      if (!useSnapshot && filePath) {
+        const openedPath = filePath;
+        const baselineContent = doc; // 打开时读到的磁盘内容（含读失败占位文本）
+        recheckTimer = setTimeout(() => {
+          void (async () => {
+            // 已切换文件（gen 变化）/已卸载/大文件拒绝或取消（ref 已清）→ 放弃核对
+            if (genRef.current !== gen || !mountedRef.current) return;
+            if (filePathRef.current !== openedPath) return;
+            // 核对是静默补偿探测：读盘失败只 warn 不 toast（与事件路径区分）
+            await applyExternalChangeRef.current(openedPath, {
+              mode: "recheck",
+              toastOnError: false,
+              baseline: baselineContent,
+            });
+          })();
+        }, OPEN_RECHECK_DELAY_MS);
+      }
+
       // D1: 文件打开后加载 diff 边栏
       if (filePath && gitGutterEnabledRef.current) {
         const normalizedPath = normalizePath(filePath);
@@ -397,6 +446,8 @@ export function useCodeMirror({
     return () => {
       // P1-17: 标记组件已卸载，阻止 pending async 操作 DOM
       mountedRef.current = false;
+      // CP-029: 打开后核对随卸载/重建取消
+      if (recheckTimer !== undefined) clearTimeout(recheckTimer);
       // 箭头函数调 destroy，防止 this 丢失
       const cleanup = () => {
         viewRef.current?.destroy();
@@ -422,6 +473,80 @@ export function useCodeMirror({
   // D3: 脏状态跟踪
   const dirtyRef = useRef(false);
 
+  // CP-029(S03): 外部内容变更落盘 → 缓冲刷新（fs-event 触发与打开后核对共用）。
+  // 仅依赖 refs 与模块函数——经 ref 转发保最新实现（onDocContentRef 同模式，
+  // 规避 effect 闭包捕获过期函数）。
+  // 两调用方语义差异（定责取证 2026-09-07 后定稿）：
+  // - mode "event"（fs-event = 权威外部变更信号）：脏文件先弹确认（取消 → 零读盘，
+  //   历史语义不变）；干净文件读盘后与缓冲内容判等短路（touch/元数据 Modify 不做
+  //   同内容替换——同内容 dispatch 会产生 docChanged 误标 dirty）。
+  // - mode "recheck"（打开后核对 = 补偿探测，见 OPEN_RECHECK_DELAY_MS 注释）：先读
+  //   盘与「打开时读到内容(baseline)」判变——用户开始打字（doc≠baseline）而磁盘
+  //   未变的常态不误报；磁盘真变了才可能弹确认。
+  const applyExternalChangeRef = useRef<
+    (
+      path: string,
+      opts: { mode: "event" | "recheck"; toastOnError: boolean; baseline?: string },
+    ) => Promise<void>
+  >(async () => {});
+  applyExternalChangeRef.current = async (path, opts) => {
+    const dirty = dirtyRef.current;
+    // 事件路径脏分支：确认弹窗先行（取消 → 不读盘，E6/E8 语义锁死）
+    if (opts.mode === "event" && dirty) {
+      // FE-01: 有未保存修改 → 弹窗选择（确认=重载/取消=保留）
+      const choice = await confirmDialog({
+        title: "外部修改",
+        message: `文件 "${path}" 已被外部修改。当前编辑器有未保存的修改。确认将重载并丢弃本地修改，取消将保留当前内容。`,
+        confirmText: "重载",
+      });
+      if (!choice) return;
+    }
+    let content: string;
+    try {
+      content = await fs.readFile(path);
+    } catch (err) {
+      // P2-16/FE-10: 读盘失败 console.warn；事件路径补 toast（用户可感知），
+      // 打开后核对属静默补偿探测——只 warn 不打扰
+      const msg = getErrorMessage(err);
+      console.warn("[slTerminal] 外部修改重载失败:", msg);
+      if (opts.toastOnError) toast.show("error", `外部修改重载失败: ${msg}`);
+      return;
+    }
+    // await 后重取（期间可能已卸载/重建/切文件）
+    const view = viewRef.current;
+    if (!view) return;
+    // 与打开时基线比较（recheck）：磁盘未变 = 无外部修改（用户打字常态不误报）
+    if (opts.mode === "recheck" && content === opts.baseline) return;
+    // 事件路径 + 干净文件：同内容 Modify（touch）短路——磁盘内容与缓冲一致无需重载
+    if (opts.mode === "event" && !dirty && content === safeDocText(view)) return;
+    // recheck 路径脏分支此时才弹确认（先判变后弹窗，避免打字常态弹窗打扰）
+    if (opts.mode === "recheck" && dirty) {
+      const choice = await confirmDialog({
+        title: "外部修改",
+        message: `文件 "${path}" 已被外部修改。当前编辑器有未保存的修改。确认将重载并丢弃本地修改，取消将保留当前内容。`,
+        confirmText: "重载",
+      });
+      if (!choice) return;
+    }
+    // 重载（view 可能在 confirm 等待期间被销毁 → 重取防御）
+    const live = viewRef.current;
+    if (!live) return;
+    // 幂等：决策期间事件路径已把缓冲刷新到与磁盘一致 → 跳过（同内容 dispatch 会
+    // 产生 docChanged 误标 dirty + 无谓 edit 回传）
+    if (content === safeDocText(live)) return;
+    live.dispatch({
+      changes: {
+        from: 0,
+        to: live.state.doc.length,
+        insert: content,
+      },
+    });
+    dirtyRef.current = false;
+    // docRef 真值源同步（reload 源）
+    const cb = onDocContentRef.current;
+    if (cb) cb(content, "reload");
+  };
+
   // D3: 监听外部文件改动
   useEffect(() => {
     // FE-01: 回调改 async——脏文件分支需 await confirmDialog（确认=重载/取消=保留）
@@ -445,62 +570,14 @@ export function useCodeMirror({
       );
       if (!affected) return;
 
-      // 仅处理 Modify 事件
+      // 仅处理 Modify 事件（Create/Remove/Rescan 不触发 reload——事件源语义；
+      // CP-029 打开后核对补偿 Create 吞并 Modify 的窗口）
       if (event.kind !== "Modify") return;
 
-      const view = viewRef.current;
-      if (!view) return;
-
-      if (dirtyRef.current) {
-        // 有未保存修改 → 弹窗选择（FE-01: confirm → confirmDialog，确认=重载/取消=保留）
-        const choice = await confirmDialog({
-          title: "外部修改",
-          message: `文件 "${currentPath}" 已被外部修改。当前编辑器有未保存的修改。确认将重载并丢弃本地修改，取消将保留当前内容。`,
-          confirmText: "重载",
-        });
-        if (choice) {
-          // 重载
-          fs.readFile(currentPath).then((content) => {
-            view.dispatch({
-              changes: {
-                from: 0,
-                to: view.state.doc.length,
-                insert: content,
-              },
-            });
-            dirtyRef.current = false;
-            // docRef 真值源同步（reload 源）
-            const cb = onDocContentRef.current;
-            if (cb) cb(content, "reload");
-          // P2-16: 外部修改重载失败时 console.warn
-          // FE-10: + toast 提示——重载失败意味着编辑器内容可能过时，用户可感知
-          }).catch((err) => {
-            const msg = getErrorMessage(err);
-            console.warn("[slTerminal] 外部修改重载失败:", msg);
-            toast.show("error", `外部修改重载失败: ${msg}`);
-          });
-        }
-      } else {
-        // 无修改 → 自动重载
-        fs.readFile(currentPath).then((content) => {
-          view.dispatch({
-            changes: {
-              from: 0,
-              to: view.state.doc.length,
-              insert: content,
-            },
-          });
-          // docRef 真值源同步（reload 源）
-          const cb = onDocContentRef.current;
-          if (cb) cb(content, "reload");
-          // P2-16: 外部修改重载失败时 console.warn
-          // FE-10: + toast 提示——重载失败意味着编辑器内容可能过时，用户可感知
-        }).catch((err) => {
-          const msg = getErrorMessage(err);
-          console.warn("[slTerminal] 外部修改重载失败:", msg);
-          toast.show("error", `外部修改重载失败: ${msg}`);
-        });
-      }
+      await applyExternalChangeRef.current(currentPath, {
+        mode: "event",
+        toastOnError: true,
+      });
     });
 
     return () => {

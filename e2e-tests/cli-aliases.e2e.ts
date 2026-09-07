@@ -16,7 +16,7 @@
  * run-wdio 临时目录）——suite 级快照还原 + 用例内删除别名自净，双保险。
  */
 
-import { expect, browser } from "@wdio/globals";
+import { $, expect, browser } from "@wdio/globals";
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -72,19 +72,6 @@ async function openCliAliasesPage(): Promise<void> {
       )) === true,
     { timeout: 10000, timeoutMsg: "CLI 别名配置页未渲染" },
   );
-}
-
-/** React 受控 input 设值（原生 value setter + input 事件） */
-async function setInputValue(sel: string, value: string): Promise<boolean> {
-  return browser.execute((s: string, v: string) => {
-    const input = document.querySelector(s) as HTMLInputElement | null;
-    if (!input) return false;
-    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
-    if (!setter) return false;
-    setter.call(input, v);
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    return true;
-  }, sel, value);
 }
 
 /** 读取面板标题与页签参数（tabStatus/tabLogo——undefined 归一 null） */
@@ -158,7 +145,12 @@ async function waitForAliasOnDisk(
   );
 }
 
-describe("CLI 别名（cliAliases 段，D9 冒烟）", () => {
+describe("CLI 别名（cliAliases 段，D9 冒烟）", function () {
+  // 长链用例放宽 mocha 预算（suite 级，须在用例执行前生效——@wdio/utils executeAsync
+  // 于用例体开始前采样 runnable 超时，体内 this.timeout() 无效，2026-09-08 实测）：
+  // 真实手势每 $/click 触发 tauri-service 窗口态查询，查询通道在本 app 构建不可用 →
+  // 每 focus 命令确定性 +5s，默认 60s 预算不足
+  this.timeout(120000);
   // suite 级快照还原（真实写盘 exe 同级 settings.json——见文件头注释）
   let settingsSnapshot: { existed: boolean; content: string | null };
 
@@ -187,8 +179,11 @@ describe("CLI 别名（cliAliases 段，D9 冒烟）", () => {
     try {
       // ── 1. 打开 CLI 别名设置页（真实用户入口 + 注册表驱动分区渲染） ──
       await waitForWorkspaceReady();
-      await waitForDockviewApi();
+      // 先建项目再等 Dockview API：空数据目录启动无默认项目/页面 → Dockview 不挂载、
+      // __dockviewApi 恒 undefined（2026-09-08 CP-030 排查实证；agent/mockcli 均按
+      // createProject 在前、waitForDockviewApi 在后的序排）——页面随项目创建而挂载
       await createProject(tempDir);
+      await waitForDockviewApi();
       await openCliAliasesPage();
       await browser.waitUntil(
         async () =>
@@ -199,12 +194,12 @@ describe("CLI 别名（cliAliases 段，D9 冒烟）", () => {
       );
 
       // ── 2. 添加别名 cc（输入 + 添加按钮）→ chip 即时出现（内存态） ──
-      expect(
-        await setInputValue('[data-e2e="cli-aliases-input-claude"]', "cc"),
-      ).toBe(true);
-      await browser.execute(() => {
-        (document.querySelector('[data-e2e="cli-aliases-add-claude"]') as HTMLElement | null)?.click();
-      });
+      await $('[data-e2e="cli-aliases-input-claude"]').setValue("cc");
+      await $('[data-e2e="cli-aliases-add-claude"]').click();
+      // 交互时序断言(CP-030 回归):真实指针序列(mousedown→input blur→mouseup→click)
+      // 驱动——blur 不清空(CliAliasesPage blur 语义)+ 成功提交清空输入两语义同时落位。
+      const inputAfterAdd = await $('[data-e2e="cli-aliases-input-claude"]');
+      expect(await inputAfterAdd.getValue()).toBe("");
       await browser.waitUntil(
         async () =>
           (await browser.execute(
@@ -257,9 +252,7 @@ describe("CLI 别名（cliAliases 段，D9 冒烟）", () => {
     } finally {
       // ── 自净：删除别名 + 等待落盘清空（防残留污染后续 spec） ──
       try {
-        await browser.execute(() => {
-          (document.querySelector('[data-e2e="cli-aliases-remove-claude-cc"]') as HTMLElement | null)?.click();
-        });
+        await $('[data-e2e="cli-aliases-remove-claude-cc"]').click();
         await waitForAliasOnDisk(
           (aliases) => aliases === undefined || !aliases.includes("cc"),
           10000,

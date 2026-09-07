@@ -20,9 +20,9 @@ E2E helper 由 `E2E_ENABLED`（`src/lib/e2eEnabled.ts`）门控。`tauri build` 
 
 `npm run e2e` 的 `&&` 已保证串行。手动或 CI 并行会导致 cargo 无法覆写被 wdio 占用的 `slterminal.exe`（os error 5），wdio 实际跑在旧二进制上（ACC-05 实证）。
 
-### Node 版本兼容启动器
+### Node 版本（CP-003）
 
-`npm run wdio` 实际由 `run-wdio.cjs` 启动。Node >= 26 时自动下载便携 Node 22（undici 8 与 webdriverio 不兼容），Node 22 直接运行。
+`npm run wdio` 由 `run-wdio.cjs` 启动，Node >= 22 直跑（webdriverio 9.30.0+ 已修复 Node 26 undici 8 兼容，webdriverio#15265）；`.temp/node22` 显式预置便携 Node 22 时优先使用（不自动下载，预置方法自行从 nodejs.org 取 node.exe 放入）。版本约束经根 package.json `engines.node ">=22"` 纳入主 toolchain。
 
 ### wdio 版本矩阵与 overrides 对齐契约（CP-032）
 
@@ -60,19 +60,21 @@ E2E helper 由 `E2E_ENABLED`（`src/lib/e2eEnabled.ts`）门控。`tauri build` 
 GLYPH_E2E=1 node e2e-tests/run-wdio.cjs --spec glyph-repro.e2e.ts
 ```
 
-`run-wdio.cjs` 支持把 CLI 参数透传 wdio（`--spec` 等）——单 spec 运行必须经启动器（Node 26→便携 22 切换兜底，裸 `npx wdio` 会踩版本坑）。启用时先读 spec 文件头注释（取证通道/断言层/环境探针语义——"e2e 不复现 ≠ 修复完成"的裁量依据）。
+`run-wdio.cjs` 支持把 CLI 参数透传 wdio（`--spec` 等）——单 spec 运行必须经启动器（Node >= 22 直跑，裸 `npx wdio` 缺启动器的数据/假屋隔离链（SLTERM_DATA_DIR/USERPROFILE），禁止绕过启动器）。启用时先读 spec 文件头注释（取证通道/断言层/环境探针语义——"e2e 不复现 ≠ 修复完成"的裁量依据）。
 
 ### 用户目录隔离（ADR-0016：假 home，替代 FIX-TE-04/E2E-05 备份/还原）
 
 **数据目录隔离（SLTERM_DATA_DIR）**：`run-wdio.cjs` 启动时注入 `SLTERM_DATA_DIR = <os.tmpdir()>/slterm-e2e-data`（env 链式继承：run-wdio → npx wdio → tauri driver → slterminal.exe），应用全部数据写入（settings.json / slterminal-projects.json 等）落在临时目录，与日常使用数据完全隔离；退出时清理临时目录。
 
-**假 home 隔离（USERPROFILE）**：E2E 会真实写盘用户 home 配置（hooks 注入 / statusLine 桥接 / 假 env），旧「备份 → run 后还原」机制存在窗口期污染（真实 claude 会话启动即读假 token，曾致 API 401 事故）与残留固化风险。现改为 `run-wdio.cjs` 建临时假屋 `<os.tmpdir()>/slterm-e2e-home` 并把 `USERPROFILE` 指向它——Node `os.homedir()`（libuv，每调重读）与 Rust 侧 `crate::home` 共享解析（env-first；dirs 6.0 Windows **不读 env**，收敛纪律见 src-tauri 侧文档）全链跟随，**真实用户目录零接触**，窗口期污染在机制层面消失。
+**假 home 隔离（USERPROFILE）**：E2E 会真实写盘用户 home 配置（hooks 注入 / statusLine 桥接 / 假 env），旧「备份 → run 后还原」机制存在窗口期污染（真实 claude 会话启动即读假 token，曾致 API 401 事故）与残留固化风险。现改为 `run-wdio.cjs` 建临时假屋 `<os.tmpdir()>/slterm-e2e-home-<pid>`（per-pid 唯一名，免启动清空——句柄占用残留无害，OS 回收）并把 `USERPROFILE` 指向它——Node `os.homedir()`（libuv，每调重读）与 Rust 侧 `crate::home` 共享解析（env-first；dirs 6.0 Windows **不读 env**，收敛纪律见 src-tauri 侧文档）全链跟随，**真实用户目录零接触**，窗口期污染在机制层面消失。
 
-**防复发校验**：覆盖 USERPROFILE 前对真实屋（`~/.claude/settings.json`、`~/.slterminal/statusline-backup.json`、`~/.slterminal/hooks/`）做存在性 + sha256 快照，exit 时逐项比对——任何泄漏（Rust 收敛遗漏/新裸 `dirs::home_dir()` 消费点）独立报红并 `exitCode = 1`。`~/.slterminal/hooks-events/` 仅当启动时不存在才校验 exit 仍不存在（存在 = 用户会话在用，跳过防误报）。
+**防复发校验（CP-046 键级断言）**：覆盖 USERPROFILE 前对真实屋快照——`~/.claude/settings.json` 取哨兵键（`hooks`/`statusLine`，本套件唯一可能写入的键）做存在性 + 值快照，exit 时键级比对，不做整文件 diff；`~/.slterminal/statusline-backup.json` 维持文件 sha256、`~/.slterminal/hooks/` 维持整树快照、`~/.slterminal/hooks-events/` 仅当启动时不存在才校验 exit 仍不存在（存在 = 用户会话在用，跳过防误报）。任何泄漏（Rust 收敛遗漏/新裸 `dirs::home_dir()` 消费点）独立报红并 `exitCode = 1`。哨兵键集合 = run-wdio.cjs `SETTINGS_SENTINEL_KEYS`——新增 settings.json 消费点时须同步向该数组加键（登记进本防复发节口径）。
+
+**历史会话扫描根隔离（fixture 通道）**：run-wdio.cjs 每次运行从 `fixtures/claude-projects/`、`fixtures/mockcli-projects/`（CP-041 起）重建 `e2e-tests/.tmp-claude-projects/`、`e2e-tests/.tmp-mockcli-projects/` 副本，并把后端历史扫描根 env（`SLTERM_CLAUDE_PROJECTS_DIR` / `SLTERM_MOCKCLI_PROJECTS_DIR`——mockcli 为注册表 env 门控，仅 E2E 注入）指向副本——历史会话用例只触碰副本，不触真实 `~/.claude/projects`。fixture 会话 cwd 占位符 `__E2E_PROJECT_DIR__` 复制时替换为 E2E 临时项目目录（`SLTERM_E2E_PROJECT_DIR`，归属匹配）。fixture 维护说明与 UUID 常量同步纪律见各 fixture README。
 
 **真实屋零接触承诺范围** = `~/.claude` + `~/.slterminal`（假屋机制覆盖）。`%LOCALAPPDATA%` 的 WebView2 数据不在此承诺内（环境变量未动，与手动运行行为一致）。
 
-**已知并发误报面**：开发者跑 e2e 的同时自己开真实 claude/slterminal 会合法改写 `~/.claude/settings.json` → exit 校验报红。属真实告警（提示「外部进程并发写真实屋」），错误消息列排查方向，不静默。
+**已知并发误报面（已收窄，CP-046）**：开发者跑 e2e 的同时自己开真实 claude/slterminal 会合法改写 `~/.claude/settings.json` 的非哨兵键（env/permissions/用户配置）→ 键级校验放行，不再报红。并发 hooks 注入/卸载（写 `hooks`/`statusLine` 键）仍会命中哨兵键报红——属真实泄漏信号，排查方向照旧（Rust 侧 home 解析收敛），不静默。
 
 ### Spec 级项目/设置重置（TQ-E-08）
 
@@ -87,11 +89,11 @@ wdio 单 session 共享 app 实例。`wdio.conf.ts` 的 `beforeSuite` 调 `__slt
 - **禁止直接 `tauri build --debug` 跑 E2E**：必须 `VITE_E2E=1`。
 - **target/debug 的 exe 可能是 E2E 构建**：`npm run e2e` 覆盖构建产物（`VITE_E2E=1`，helper 被 tree-shake 与否以产物为准），日常使用该 exe 会跳过项目加载且带 E2E 后门——日常使用前须以普通 `npx tauri build --debug --no-bundle` 覆盖。
 - **禁止 build:e2e 与 wdio 并行**：cargo 无法覆写运行中的 exe。
-- **fixture 缺失必须终止**：`fixtures/claude-projects/` 缺失时 `run-wdio.cjs` 直接 `process.exit(1)`，禁止自动兜底到真实 `~/.claude/projects`。
+- **fixture 缺失必须终止**：`fixtures/claude-projects/`、`fixtures/mockcli-projects/`（CP-041）缺失时 `run-wdio.cjs` 直接 `process.exit(1)`，禁止自动兜底——claude 兜底 = 回落真实 `~/.claude/projects`；mockcli 兜底 = provider 不注册（env 门控），mockcli 历史链路用例整组静默失效。
 - **DOM 选择器必须用 `data-e2e`**：禁止 CSS 内联样式选择器。
 - **helper 是测试后门而非用户路径**：真实用户交互由对应 L2 组件测试覆盖。
-- **`$()`/elementClick 触发 tauri-service 焦点检查（focusCommands）**：`$`/`$$`/`findElement`/`findElements`/`elementClick`/`getTitle` 命令前 `ensureActiveWindowFocus` 经 core.invoke 查窗口状态，查询不可用（WARN "core.invoke not available after 5s timeout"）时每命令 +5-15s（2026-09-06 实测：cli-aliases 真实手势版步骤 2 四个 focus 命令吃 40-60s，长链用例被拖出 mocha 60s 上限多轮失败）；executeScript **豁免**不触发。spec 编写优先 execute 内 helper；新引入 `$()` 元素命令前评估焦点检查成本。
-- **合成 JS click 无焦点语义**：`browser.execute(() => el.click())` 不转移焦点、不触发 blur，测不到焦点转移类竞态；embedded driver 唯一真实输入 = elementClick（同受 focusCommands 惩罚）。交互时序断言（blur→click 竞态等）归 L2——jsdom `fireEvent` 可编排完整手势序列，见 `src/__tests__/CLAUDE.md`「blur/焦点时序竞态复现」。
+- **`$()`/elementClick 触发 tauri-service 焦点检查（focusCommands）**：`$`/`$$`/`findElement`/`findElements`/`elementClick`/`getTitle` 命令前 `ensureActiveWindowFocus` 经 core.invoke 查窗口状态，查询不可用（WARN "core.invoke not available after 5s timeout"）时每命令 +5-15s（2026-09-06 实测：cli-aliases 真实手势版步骤 2 四个 focus 命令吃 40-60s，长链用例被拖出 mocha 60s 上限多轮失败）；executeScript **豁免**不触发。spec 编写优先 execute 内 helper；新引入 `$()` 元素命令前评估焦点检查成本。运行前提 = 窗口前台聚焦——wdio.conf beforeSuite TQ-E-10 探针 fast-fail 保证（失焦即报错退出，不静默吃延迟）；前提满足后 `$` 族命令正常速度，cli-aliases 已回归真实手势（CP-030）。**2026-09-08 排查修正**：聚焦前提满足（TQ-E-10 通过）时窗口态查询通道仍可能不可用——本 app 构建页面 `__TAURI_INTERNALS__` 无 `.core` 成员，tauri-service 以 `__TAURI_INTERNALS__.core.invoke("plugin:wdio|get_window_states")` 查询恒失败（实测 TypeError + 5s 超时 WARN），每 focus 命令确定性 +5s、与窗口是否聚焦无关；cli-aliases 真实手势长链实测单轮 13 次 WARN（含 suite 清理）≈ +65s，经 suite 级 `this.timeout(120000)` 放宽预算（见失败排查提示节 timeout 生效形态）。新增含 `$`/click 的长链 spec 须照此预算。
+- **合成 JS click 无焦点语义**：`browser.execute(() => el.click())` 不转移焦点、不触发 blur，测不到焦点转移类竞态；embedded driver 唯一真实输入 = elementClick（同受 focusCommands 惩罚）。交互时序断言（blur→click 竞态等）归 L2——jsdom `fireEvent` 可编排完整手势序列，见 `src/__tests__/CLAUDE.md`「blur/焦点时序竞态复现」。alias 添加链例外——blur→click 竞态经真实 elementClick 覆盖（CP-030），其余焦点类竞态仍归 L2。
 
 ## 测试模式
 
@@ -104,7 +106,8 @@ wdio 单 session 共享 app 实例。`wdio.conf.ts` 的 `beforeSuite` 调 `__slt
 ### 失败排查提示（2026-09-06 实证）
 
 - **mocha retry 吞首跑错误**：默认 `WDIO_RETRIES=1` 下报告只显示重跑失败的最后一个错误——重跑叠加首跑残留态（面板/别名/项目），错误行号与消息往往 ≠ 首跑真实失败点，会误导归因。暴露首跑真实错误用 `WDIO_RETRIES=0` 跑一轮（与 TQ-E-09 观察面同法）。
-- **裸 "Error: Timeout"（@wdio/utils `executeAsync`）≠ waitUntil 超时**：前者是 mocha runnable 超时包装（`runnableTimeout - TIME_BUFFER` 后 reject），= 用例总时长超限（命令堆积/环境延迟），无 timeoutMsg；waitUntil 超时必带 timeoutMsg。长链用例按需 `(this as any).timeout(N)` 放宽（function 声明取 this，先例 E2E-12 `this.retries(0)`）。
+- **裸 "Error: Timeout"（@wdio/utils `executeAsync`）≠ waitUntil 超时**：前者是 mocha runnable 超时包装（`runnableTimeout - TIME_BUFFER` 后 reject），= 用例总时长超限（命令堆积/环境延迟），无 timeoutMsg；waitUntil 超时必带 timeoutMsg。长链用例放宽须在 **suite 级**设 `this.timeout(N)`（describe 回调内、用例执行前生效）；**用例体内 `this.timeout()` 无效**——@wdio/utils `executeAsync` 在用例体开始前一次性采样 runnable 超时并单独立竞时定时器，体内延长不改变该定时器（2026-09-08 实测，先例 E2E-12 `this.retries(0)` 同理须在 runnable 创建时生效）。
+- **空数据目录启动无默认项目/页面 → Dockview 不挂载（2026-09-08 实证）**：`window.__dockviewApi` 恒指向活跃页面的 Dockview API；run-wdio 每轮清空数据目录，启动后须先创建项目/页面才挂载。`waitForDockviewApi()` 必须排在 `createProject()` 之后（先例 agent/mockcli；cli-aliases 2026-09-08 修正前在 createProject 前等待 → 确定性 20s 超时「Dockview API 未就绪」）。
 
 ### 半端到端边界声明（DOC-02）
 

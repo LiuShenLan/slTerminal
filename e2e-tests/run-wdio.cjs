@@ -1,6 +1,7 @@
 /**
- * WDIO 兼容启动器：Node 26 的 undici 8 与 webdriverio 不兼容，
- * 自动下载便携 Node 22 运行。CI 环境（Node 22）直接运行。
+ * WDIO 启动器（CP-003）：webdriverio 9.30.0 已修复 Node 26 undici 8 兼容
+ * （webdriverio#15265），Node >= 22 直跑；.temp/node22 显式预置便携 Node 22 时优先。
+ * CI 固定 Node 22（见 ci.yml）。
  *
  * 数据隔离（BE-01/TE-02）：应用全部数据写入（settings.json / 项目持久化文件
  * 等）经 SLTERM_DATA_DIR 指向 os.tmpdir()/slterm-e2e-data 临时目录，与日常使用
@@ -10,21 +11,26 @@
  * 用户 home 配置（~/.claude/settings.json 的 hooks matcher/statusLine 桥接/假 env、
  * ~/.slterminal/hooks 脚本等——窗口期污染真实 claude 会话曾致 API token 事故），
  * 备份/还原只能保证 run 后恢复、窗口期与残留固化均无法消除。改为：启动时建
- * 临时假 home（os.tmpdir()/slterm-e2e-home）并把 USERPROFILE 指向它——Node
+ * 临时假屋（os.tmpdir()/slterm-e2e-home-<pid>，per-pid 唯一——IME/遥测句柄占用
+ * 根因见 :39-43 注释）并把 USERPROFILE 指向它——Node
  * os.homedir()（libuv，每调重读）与 Rust 侧 crate::home 共享解析（env-first）
  * 全链跟随，e2e 全部用户目录写入落假屋，真实用户目录零接触。
  *
- * 防复发校验：覆盖 USERPROFILE 前对真实屋（~/.claude/settings.json、
- * ~/.slterminal/statusline-backup.json、~/.slterminal/hooks/）做存在性 + sha256
- * 快照，exit 时逐项比对——任何泄漏（Rust 侧收敛遗漏/未来新消费点裸 dirs）都会
- * 在退出时独立报红（exitCode=1，TQ-E-06 可观测纪律）。hooks-events 目录仅在
- * 启动时不存在才校验「exit 仍不存在」（存在 = 用户会话在用，跳过防误报）。
+ * 防复发校验：覆盖 USERPROFILE 前对真实屋做快照——settings.json 键级哨兵
+ * （hooks/statusLine，CP-046——外部并发改写其它键属合法面，不做整文件 diff）、
+ * statusline-backup.json 文件 sha256、~/.slterminal/hooks/ 整树、hooks-events
+ * 存在性，exit 时逐项比对——任何泄漏（Rust 侧收敛遗漏/未来新消费点裸 dirs）
+ * 都会在退出时独立报红（exitCode=1，TQ-E-06 可观测纪律）。hooks-events 目录
+ * 仅在启动时不存在才校验「exit 仍不存在」（存在 = 用户会话在用，跳过防误报）。
+ *
+ * mockcli history provider 扫描根 env：SLTERM_MOCKCLI_PROJECTS_DIR 恒指向
+ * e2e-tests/.tmp-mockcli-projects 副本（fixtures/mockcli-projects，CP-041——
+ * 后端注册表 env 门控，仅 E2E 注入该 env）。
  */
 const { execSync, spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const https = require('https');
 const crypto = require('crypto');
 
 // ── E2E 数据目录隔离（BE-01/TE-02） ──
@@ -74,6 +80,28 @@ function snapFile(p) {
   }
 }
 
+/** 本套件泄漏判定哨兵键——E2E 唯一可能写入真实屋 settings.json 的键
+ *  (hooks 注入 matcher / statusLine 桥接;其余键(env/permissions/用户配置)
+ *  外部并发修改合法,不做整文件 diff——CP-046 键级断言口径) */
+const SETTINGS_SENTINEL_KEYS = ["hooks", "statusLine"];
+
+/** settings.json 哨兵键快照:{ [key]: { existed: boolean, json: unknown } }
+ *  (文件不存在/解析失败 → 全键 { existed: false, json: null }) */
+function snapSettingsSentinels(p) {
+  let parsed = null;
+  try {
+    parsed = JSON.parse(fs.readFileSync(p, "utf8"));
+  } catch {
+    // 不存在/损坏:按全键不存在处理
+  }
+  const out = {};
+  for (const k of SETTINGS_SENTINEL_KEYS) {
+    const has = parsed !== null && typeof parsed === "object" && k in parsed;
+    out[k] = has ? { existed: true, json: parsed[k] ?? null } : { existed: false, json: null };
+  }
+  return out;
+}
+
 /** 目录树快照：相对路径 → sha256 列表（目录不存在/不可读 → null） */
 function snapDir(p) {
   const out = [];
@@ -97,10 +125,12 @@ function snapDir(p) {
   }
 }
 
-/** 真实屋快照——必须在 USERPROFILE 覆盖之前调用（真实路径计算） */
+/** 真实屋快照——必须在 USERPROFILE 覆盖之前调用（真实路径计算）。
+ *  claudeSettings 走键级哨兵快照（CP-046——外部并发改写其它键合法放行），
+ *  statuslineBackup/hooksDir/hooksEvents 非用户高频并发改写面，维持文件级/目录级。 */
 function snapshotUserHome(realHome) {
   return {
-    claudeSettings: snapFile(path.join(realHome, '.claude', 'settings.json')),
+    claudeSettings: snapSettingsSentinels(path.join(realHome, '.claude', 'settings.json')),
     statuslineBackup: snapFile(path.join(realHome, '.slterminal', 'statusline-backup.json')),
     hooksDir: snapDir(path.join(realHome, '.slterminal', 'hooks')),
     hooksEventsExisted: fs.existsSync(path.join(realHome, '.slterminal', 'hooks-events')),
@@ -110,16 +140,24 @@ function snapshotUserHome(realHome) {
 /** exit 校验：真实屋零接触。返回差异描述数组（空 = 通过） */
 function verifyRealHomeUnchanged(realHome, snap) {
   const problems = [];
+  // settings.json 键级校验（CP-046）：只比对哨兵键——本测试应写入的键存在且值
+  // 与启动快照一致;外部并发改写其它键合法放行。
+  const settingsPath = path.join(realHome, '.claude', 'settings.json');
+  const curSentinels = snapSettingsSentinels(settingsPath);
+  for (const k of SETTINGS_SENTINEL_KEYS) {
+    const before = snap.claudeSettings[k];
+    const cur = curSentinels[k];
+    if (before.existed !== cur.existed) {
+      problems.push(`真实屋 ${settingsPath} 哨兵键 "${k}" 存在性变化(启动 ${before.existed ? '存在' : '不存在'} → 当前 ${cur.existed ? '存在' : '不存在'})——疑似 E2E 泄漏`);
+    } else if (cur.existed && JSON.stringify(cur.json) !== JSON.stringify(before.json)) {
+      problems.push(`真实屋 ${settingsPath} 哨兵键 "${k}" 值在 E2E 期间被修改(泄漏)`);
+    }
+  }
   const expectFile = (label, cur, before) => {
     if (JSON.stringify(cur) !== JSON.stringify(before)) {
       problems.push(`${label} 在 E2E 期间被修改（泄漏）——启动时 ${before.exists ? before.sha256?.slice(0, 12) ?? '存在' : '不存在'}，当前 ${cur.exists ? cur.sha256?.slice(0, 12) ?? '存在' : '不存在'}`);
     }
   };
-  expectFile(
-    `真实屋 ${path.join(realHome, '.claude', 'settings.json')}`,
-    snapFile(path.join(realHome, '.claude', 'settings.json')),
-    snap.claudeSettings,
-  );
   expectFile(
     `真实屋 ${path.join(realHome, '.slterminal', 'statusline-backup.json')}`,
     snapFile(path.join(realHome, '.slterminal', 'statusline-backup.json')),
@@ -227,6 +265,28 @@ if (fs.existsSync(fixturesDir)) {
   process.exit(1);
 }
 
+// ── mockcli 历史会话 fixture 副本 + env 注入（CP-041） ──
+// 后端 mockcli provider 扫描根（注册表 env 门控——仅 E2E 注入该 env）。
+// 每次运行从 fixtures/mockcli-projects/ 重建 e2e-tests/.tmp-mockcli-projects/ 副本
+// （防用例间污染；删除/注入用例只动副本）。占位符 __E2E_PROJECT_DIR__ 替换同
+// claude 通道（JSON 字符串内反斜杠转义 \\）。缺失同 claude 通道硬失败
+// （红线条款「fixture 缺失必须终止」扩列 mockcli——不设 env 即 mockcli
+// provider 不注册，mockcli 历史链路用例将整组失效而非显式报因）。
+const mockFixturesDir = path.join(__dirname, 'fixtures', 'mockcli-projects');
+const tmpMockProjectsDir = path.join(__dirname, '.tmp-mockcli-projects');
+if (!fs.existsSync(mockFixturesDir)) {
+  console.error('[wdio-launcher] fixtures/mockcli-projects 缺失，E2E 终止（mockcli provider fixture 必须存在）');
+  process.exit(1);
+}
+copyFixtureTree(
+  mockFixturesDir,
+  tmpMockProjectsDir,
+  '__E2E_PROJECT_DIR__',
+  e2eProjectDir.replace(/\\/g, '\\\\'),
+);
+process.env.SLTERM_MOCKCLI_PROJECTS_DIR = tmpMockProjectsDir;
+console.log(`[wdio-launcher] 已重建 mockcli-projects 副本 → ${tmpMockProjectsDir}`);
+
 const major = parseInt(process.version.slice(1).split('.')[0], 10);
 const wdioConfig = path.resolve(__dirname, 'wdio.conf.ts');
 // 命令行参数透传（如 --spec glyph-repro.e2e.ts）：取证期单 spec 运行——
@@ -247,8 +307,9 @@ if (major >= 26) {
   const nodeDir = path.resolve(__dirname, '..', '.temp', 'node22');
   const node22 = path.join(nodeDir, 'node.exe');
 
-  // E2E-13①：便携 Node 22 预置 .temp/node22 或 CI 固定 Node 22 时跳过外网下载。
-  // 判活：文件存在且大小 > 1MB（防下载中断残留的空/损坏文件被误判可用）
+  // 显式预置约定(E2E-13①):.temp/node22 存在且 > 1MB 时强制切便携 Node 22
+  // (判活只看大小,防中断残留的损坏文件被误用);不自动下载——
+  // webdriverio 9.30.0 已修复 Node 26 undici 8 兼容(webdriverio#15265,CP-003)。
   if (fs.existsSync(node22)) {
     let size = 0;
     try { size = fs.statSync(node22).size; } catch { size = 0; }
@@ -257,35 +318,10 @@ if (major >= 26) {
       runWdio(node22);
       process.exit(0);
     }
-    console.warn('[wdio-launcher] 便携 Node 22 文件不完整（<1MB），重新下载');
+    console.warn('[wdio-launcher] 便携 Node 22 文件不完整(<1MB),改用当前 Node');
   }
-
-  // 自动下载便携 Node 22
-  console.log('[wdio-launcher] 下载便携 Node 22 (约 30MB)...');
-  fs.mkdirSync(nodeDir, { recursive: true });
-
-  const url = 'https://nodejs.org/dist/v22.21.1/win-x64/node.exe';
-  const file = fs.createWriteStream(node22);
-  https.get(url, (res) => {
-    if (res.statusCode === 302 || res.statusCode === 301) {
-      https.get(res.headers.location, (r2) => r2.pipe(file));
-    } else {
-      res.pipe(file);
-    }
-    file.on('finish', () => {
-      file.close();
-      console.log('[wdio-launcher] Node 22 就绪，启动 WDIO...');
-      runWdio(node22);
-    });
-  }).on('error', (err) => {
-    fs.unlink(node22, () => {});
-    console.error('[wdio-launcher] 下载失败:', err.message);
-    console.warn('[wdio-launcher] 尝试用当前 Node 运行（可能因 undici 8 失败）');
-    fallback();
-  });
-} else {
-  fallback();
 }
+fallback();
 
 function fallback() {
   const args = ['wdio', 'run', wdioConfig, ...process.argv.slice(2)];

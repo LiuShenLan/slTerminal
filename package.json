@@ -19,6 +19,9 @@
     "predev": "npm run sync:startup-colors",
     "prebuild": "npm run sync:startup-colors"
   },
+  "engines": {
+    "node": ">=22"
+  },
   "dependencies": {
     "@codemirror/commands": "6.10.3",
     "@codemirror/lang-css": "6.3.1",

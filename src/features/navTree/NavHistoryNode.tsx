@@ -37,6 +37,7 @@ export const NavHistoryNode: React.FC<NavHistoryNodeProps> = ({
   return (
     <div
       data-e2e="nav-history-node"
+      aria-expanded={expanded}
       onClick={onToggle}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}

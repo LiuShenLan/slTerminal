@@ -259,7 +259,12 @@ const Workspace: React.FC = () => {
           setProjectRoot(targetRoot)
             .then(() => {
               if (prevRootRef.current !== targetRoot) return;
-              void startWatch(targetRoot);
+              // CP-029(S03): startWatch 失败不再静默（曾无 .catch → unhandled
+              // rejection，E2E 假项目根等场景 watcher 缺失无任何可见信号，
+              // 干扰 auto-reload 类问题定责）；错误可视化，不阻断切换
+              void startWatch(targetRoot).catch((err: unknown) => {
+                console.error("[slTerminal] 文件监听启动失败:", String(err));
+              });
             })
             .catch((err) => {
               console.error("[slTerminal] 设置项目根路径失败:", err);

@@ -118,33 +118,29 @@ describe("Claude 历史会话视图", () => {
   }
 
   /** 展开全部项目行至子容器可见（NAV-10 修订 2026-09-03：历史节点随项目展开态
-   *  渲染——项目收起时无 nav-history-node，须先展开项目行。幂等多轮收敛：
-   *  已展开（容器 children>1）不重复点击，防 toggle 误折叠未渲染项目。 */
+   *  渲染——项目收起时无 nav-history-node，须先展开项目行。单次确定性（CP-028
+   *  附注顺手项同口径）：aria-expanded 探针——只点击 aria-expanded !== "true"
+   *  的项目行（已展开不重复点击），每行至多一次点击后 waitUntil 全展开，无奇偶
+   *  翻转窗口。 */
   async function ensureAllProjectsExpanded(): Promise<void> {
-    for (let i = 0; i < 6; i++) {
-      const clicked = await browser.execute(() => {
-        let any = false;
-        for (const proj of Array.from(
-          document.querySelectorAll('[data-e2e="nav-row-project"]'),
-        ) as HTMLElement[]) {
-          const container = proj.parentElement as HTMLElement | null;
-          if (!container || container.children.length > 1) continue; // 已展开跳过
+    await browser.execute(() => {
+      for (const proj of Array.from(
+        document.querySelectorAll('[data-e2e="nav-row-project"]'),
+      ) as HTMLElement[]) {
+        if (proj.getAttribute("aria-expanded") !== "true") {
           proj.click();
-          any = true;
         }
-        return any;
-      });
-      if (!clicked) return;
-      await browser.waitUntil(
-        async () =>
-          await browser.execute(() =>
-            Array.from(document.querySelectorAll('[data-e2e="nav-row-project"]')).some(
-              (p) => ((p.parentElement as HTMLElement | null)?.children.length ?? 0) > 1,
-            ),
+      }
+    });
+    await browser.waitUntil(
+      async () =>
+        await browser.execute(() =>
+          Array.from(document.querySelectorAll('[data-e2e="nav-row-project"]')).every(
+            (p) => p.getAttribute("aria-expanded") === "true",
           ),
-        { timeout: 5000, interval: 100, timeoutMsg: "项目行展开超时" },
-      );
-    }
+        ),
+      { timeout: 5000, interval: 100, timeoutMsg: "项目行展开超时" },
+    );
   }
 
   /**
