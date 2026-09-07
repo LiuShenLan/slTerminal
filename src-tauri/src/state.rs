@@ -195,6 +195,35 @@ fn canonicalize_or_ancestor(target: &Path) -> std::io::Result<PathBuf> {
     }
 }
 
+/// 测试强制校验开关：cfg!(test) 下 project_root=None 默认放行（豁免），
+/// guard 置位期间走真实拒绝路径——供「root 未设置应拒绝」回归用例使用。
+#[cfg(test)]
+static ENFORCE_ROOT_CHECK: AtomicBool = AtomicBool::new(false);
+
+#[cfg(test)]
+fn root_check_enforced() -> bool {
+    ENFORCE_ROOT_CHECK.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// RAII：enforce() 至 drop 期间 validate_path_within_root 对 None 强制校验（测试用）。
+#[cfg(test)]
+pub(crate) struct EnforceRootCheckGuard;
+
+#[cfg(test)]
+impl EnforceRootCheckGuard {
+    pub(crate) fn enforce() -> Self {
+        ENFORCE_ROOT_CHECK.store(true, std::sync::atomic::Ordering::Relaxed);
+        EnforceRootCheckGuard
+    }
+}
+
+#[cfg(test)]
+impl Drop for EnforceRootCheckGuard {
+    fn drop(&mut self) {
+        ENFORCE_ROOT_CHECK.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 /// 验证目标路径是否在项目根目录子树内（路径 sandbox）
 ///
 /// 相对路径先以 project_root 为基准 join 成绝对路径，再 dunce::canonicalize。
@@ -207,8 +236,10 @@ pub fn validate_path_within_root(
     let root = match root_opt {
         Some(r) => r,
         None => {
-            // 测试豁免：project_root 未设置时放行
-            if cfg!(test) {
+            // 测试豁免：project_root 未设置时默认放行（避免每个测试都需设置 project_root）；
+            // EnforceRootCheckGuard 置位期间强制校验（None 拒绝回归用例用）
+            #[cfg(test)]
+            if !root_check_enforced() {
                 return Ok(());
             }
             return Err(AppError::IoKind {

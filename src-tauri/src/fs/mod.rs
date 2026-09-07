@@ -1669,6 +1669,8 @@ mod read_resource_impl_tests {
 
     #[test]
     fn read_resource_without_root_rejected() {
+        // cfg!(test) 豁免默认放行 None，guard 置位强制校验以测真实拒绝路径
+        let _guard = crate::state::EnforceRootCheckGuard::enforce();
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("a.png");
         std::fs::write(&file, b"x").unwrap();
