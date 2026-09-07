@@ -84,7 +84,7 @@ import HooksSettingsPage from "../panels/settings/pages/HooksSettingsPage";
 import { useHooksConfig } from "../features/cliProfiles/profiles/claude/configEditor/useHooksConfig";
 import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
-import type { HooksConfigJson } from "../types/hooksConfig";
+import type { HooksConfigJson } from "../types";
 import { CLAUDE_CLI_ID } from "../features/cliProfiles/profiles/claude";
 
 /** 基线合法 hooks 子树（通过 schema 校验） */

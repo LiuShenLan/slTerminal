@@ -18,11 +18,19 @@ use std::collections::BTreeMap;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
+use ts_rs::TS;
 
 /// hooks 配置层级（BE-18：serde 枚举 DTO——snake_case ↔ 前端 `HooksLayer` 字面量值集
 /// `"user" | "project" | "local"`，硬约束 #4 双边对应）
-#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+///
+/// CP-024：ts-rs 导出命名对齐前端消费名 `HooksLayer`（Rust 名 Layer 为内部实现名）。
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(
+    rename = "HooksLayer",
+    export,
+    export_to = "../../src/types/hooksConfig.ts"
+)]
 enum Layer {
     /// 用户全局层 `~/.claude/settings.json`
     User,
@@ -47,17 +55,23 @@ fn parse_layer(layer: &str) -> Result<Layer, AppError> {
 // ═══════════════════════════════════════════════════════════════════
 // hooks 子树结构体（BE-18：serde 反序列化形态校验骨架）
 //
-// 对应前端 `src/types/hooksConfig.ts` 的 `HooksConfigJson`（契约 C13-1 编辑范围）：
-// JSON 根即事件名键 → matcher 组数组 → handler 数组。本结构只做形态校验
-// （类型 / 嵌套层级），不加载验规则——事件名白名单（HOOK_EVENTS 10 事件）、
-// handler type 白名单（"command"）、command 非空字符串审查由 S17 SEC-05
-// 语义校验层基于本结构实现。serde 默认忽略未知字段：官方 handler 字段矩阵
-// （C13-3 的 args/async/timeout 等）不属于校验点，未知事件名容忍。
+// 形态对应前端 `src/types/local.ts` 的 `HooksConfigJson`（契约 C13-1 编辑范围，
+// CP-024：flatten 形态不可 ts-rs 导出，组合别名落 local.ts 并引用本文件生成的
+// MatcherGroupJson）：JSON 根即事件名键 → matcher 组数组 → handler 数组。
+// 本结构只做形态校验（类型 / 嵌套层级），不加载验规则——事件名白名单
+// （HOOK_EVENTS 10 事件）、handler type 白名单（"command"）、command 非空字符串
+// 审查由 S17 SEC-05 语义校验层基于本结构实现。serde 默认忽略未知字段：
+// 官方 handler 字段矩阵（C13-3 的 args/async/timeout 等）不属于校验点，
+// 未知事件名容忍。
 // ═══════════════════════════════════════════════════════════════════
 
 /// claude settings.json 的 hooks 子树（事件名 → matcher 组数组）
 ///
-/// 形态校验（BE-18）+ 语义校验（S17 SEC-05：validate_hooks_semantics 消费）
+/// 形态校验（BE-18）+ 语义校验（S17 SEC-05：validate_hooks_semantics 消费）。
+/// CP-024：本结构不导出——serde flatten 的 map 字段为 ts-rs 10.1 能力边界
+/// （map 的 inline_flattened/decl 直接 panic,无法生成顶层 Record 别名）；
+/// 前端消费名 `HooksConfigJson`（Record<事件名, MatcherGroupJson[]> 组合别名）
+/// 由 local.ts 引用生成物 MatcherGroupJson 承载(见 src/types/CLAUDE.md 残面清单)。
 #[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 pub struct HooksSubtree {
     /// 事件名 → matcher 组数组（serde flatten——根对象键即事件名）
@@ -67,11 +81,19 @@ pub struct HooksSubtree {
 
 /// matcher 组：matcher 匹配串（省略 = 全匹配，C13-5）+ handler 数组
 ///
-/// 形态校验（BE-18）+ 语义校验（S17 SEC-05）消费
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+/// 形态校验（BE-18）+ 语义校验（S17 SEC-05）消费。
+/// CP-024：ts-rs 导出命名对齐前端消费名 `MatcherGroupJson`。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(
+    rename = "MatcherGroupJson",
+    export,
+    export_to = "../../src/types/hooksConfig.ts"
+)]
 pub struct MatcherGroup {
     /// matcher 匹配串（省略 = 全匹配）
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub matcher: Option<String>,
     /// handler 数组（必填键——形态校验拒绝缺失）
     pub hooks: Vec<HookHandler>,
@@ -79,17 +101,91 @@ pub struct MatcherGroup {
 
 /// 单个 hook handler（SEC-05 校验点：type 白名单 + command 非空审查）
 ///
-/// 只承载校验所需字段（C13-3 字段矩阵的其余字段不属于校验点，反序列化时
-/// serde 默认忽略未知键，不断言其类型）；type/command 缺失容忍为默认值，
-/// 语义审查（type 是否白名单、command 是否非空）由 S17 SEC-05 校验层执行。
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+/// CP-024 扩至 C13-3 全字段矩阵（原只承载校验所需 type+command 两字段，前端
+/// 手写面 HookHandlerJson 宽于 Rust 面——单源化前置扩 DTO）。校验语义不变：
+/// type/command 缺失容忍为默认值，语义审查（type 白名单 / command 非空）
+/// 由 S17 SEC-05 校验层执行；其余字段仅形态承载（反序列化 round-trip 保留，
+/// 不再丢未知键）。
+/// CP-024：ts-rs 导出命名对齐前端消费名 `HookHandlerJson`。
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(
+    rename = "HookHandlerJson",
+    export,
+    export_to = "../../src/types/hooksConfig.ts"
+)]
 pub struct HookHandler {
     /// handler 类型（官方值集 command/http/mcp_tool/prompt/agent）
     #[serde(default)]
     pub r#type: String,
     /// 命令串（type=command 时必填，非空审查归 SEC-05）
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub command: Option<String>,
+    /// 命令参数数组（command 型）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub args: Option<Vec<String>>,
+    /// 是否异步执行（command 型）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub r#async: Option<bool>,
+    /// 唤醒后重新异步执行（command 型）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub async_rewake: Option<bool>,
+    /// 执行命令所用 shell（command 型）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub shell: Option<String>,
+    /// http 目标 URL（http 型）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub url: Option<String>,
+    /// http 请求头（http 型）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub headers: Option<BTreeMap<String, String>>,
+    /// 允许透传的环境变量名（http 型）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub allowed_env_vars: Option<Vec<String>>,
+    /// mcp 服务器名（mcp_tool 型）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub server: Option<String>,
+    /// mcp 工具名（mcp_tool 型）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub tool: Option<String>,
+    /// mcp_tool 入参 JSON（mcp_tool 型）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "Record<string, unknown>")]
+    pub input: Option<serde_json::Value>,
+    /// prompt 内容（prompt/agent 型）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub prompt: Option<String>,
+    /// 目标模型名（prompt/agent 型）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub model: Option<String>,
+    /// 阻断时是否继续（prompt/agent 型）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub continue_on_block: Option<bool>,
+    /// 条件表达式（仅工具事件求值）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub r#if: Option<String>,
+    /// 超时秒数（通用）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub timeout: Option<u64>,
+    /// 执行状态消息（通用）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub status_message: Option<String>,
 }
 
 /// 各层配置文件名（project 与 user 同名，local 独立）
@@ -378,17 +474,16 @@ mod config_tests {
         assert_eq!(start[0].matcher.as_deref(), Some(""));
         assert_eq!(start[0].hooks[0].r#type, "command");
         assert_eq!(start[0].hooks[0].command.as_deref(), Some("node x"));
-        // matcher 省略 → None；未知 handler 字段（timeout）形态容忍
+        // matcher 省略 → None；handler 的 timeout 字段现为已知字段（CP-024 扩至
+        // C13-3 全矩阵），round-trip 保留而非丢弃
         let stop = &tree.events["Stop"];
         assert_eq!(stop[0].matcher, None);
         assert_eq!(stop[0].hooks[0].command.as_deref(), Some("echo s"));
-        // 序列化形态一致（无 timeout/matcher 省略键不回写）
+        assert_eq!(stop[0].hooks[0].timeout, Some(5));
+        // 序列化形态一致（matcher 省略键不回写；timeout 等字段 round-trip 保真）
         let out = serde_json::to_value(&tree).unwrap();
         assert_eq!(out["SessionStart"], json["SessionStart"]);
-        assert_eq!(
-            out["Stop"],
-            serde_json::json!([{"hooks": [{"type": "command", "command": "echo s"}]}])
-        );
+        assert_eq!(out["Stop"], json["Stop"]);
     }
 
     #[test]
@@ -608,6 +703,7 @@ mod config_tests {
                     hooks: vec![HookHandler {
                         r#type: "command".into(),
                         command: Some("echo hi".into()),
+                        ..Default::default()
                     }],
                 }],
             )]),
@@ -615,6 +711,98 @@ mod config_tests {
         assert_eq!(
             serde_json::to_value(&tree).unwrap(),
             serde_json::json!({"Stop": [{"hooks": [{"type": "command", "command": "echo hi"}]}]})
+        );
+    }
+
+    #[test]
+    fn hook_handler_full_matrix_roundtrip() {
+        // CP-024:扩至 C13-3 全字段矩阵后,全 17 可选字段序列化/反序列化逐字段断言
+        // 锁死矩阵(类型+缺省语义)。type 为必填 String;其余字段 None 时省略键、
+        // Some 时按 camelCase 键 round-trip 保真(SEC-05 校验语义只看 type/command,
+        // 本用例锁定其余字段的形态承载不丢失)。
+        let full = serde_json::json!({
+            "type": "command",
+            "command": "node x",
+            "args": ["a", "b"],
+            "async": true,
+            "asyncRewake": false,
+            "shell": "pwsh",
+            "url": "https://example.com/hook",
+            "headers": {"X-Test": "v"},
+            "allowedEnvVars": ["PATH"],
+            "server": "my-server",
+            "tool": "my-tool",
+            "input": {"arg": 1, "nested": {"ok": true}},
+            "prompt": "请总结",
+            "model": "claude-sonnet-4-5",
+            "continueOnBlock": true,
+            "if": "true",
+            "timeout": 30,
+            "statusMessage": "working"
+        });
+        let h: HookHandler = serde_json::from_value(full.clone()).unwrap();
+        // 逐字段断言(全部字段逐个点名,防矩阵字段漏网)
+        assert_eq!(h.r#type, "command");
+        assert_eq!(h.command.as_deref(), Some("node x"));
+        assert_eq!(
+            h.args.as_deref(),
+            Some(&["a".to_string(), "b".to_string()][..])
+        );
+        assert_eq!(h.r#async, Some(true));
+        assert_eq!(h.async_rewake, Some(false));
+        assert_eq!(h.shell.as_deref(), Some("pwsh"));
+        assert_eq!(h.url.as_deref(), Some("https://example.com/hook"));
+        assert_eq!(
+            h.headers.as_ref().map(|m| m.get("X-Test")),
+            Some(Some(&"v".to_string()))
+        );
+        assert_eq!(
+            h.allowed_env_vars.as_deref(),
+            Some(&["PATH".to_string()][..])
+        );
+        assert_eq!(h.server.as_deref(), Some("my-server"));
+        assert_eq!(h.tool.as_deref(), Some("my-tool"));
+        assert_eq!(
+            h.input.as_ref().and_then(|v| v.get("nested")),
+            Some(&serde_json::json!({"ok": true}))
+        );
+        assert_eq!(h.prompt.as_deref(), Some("请总结"));
+        assert_eq!(h.model.as_deref(), Some("claude-sonnet-4-5"));
+        assert_eq!(h.continue_on_block, Some(true));
+        assert_eq!(h.r#if.as_deref(), Some("true"));
+        assert_eq!(h.timeout, Some(30));
+        assert_eq!(h.status_message.as_deref(), Some("working"));
+        // round-trip 序列化键集合与原始 JSON 全等(无字段丢失)
+        assert_eq!(serde_json::to_value(&h).unwrap(), full);
+    }
+
+    #[test]
+    fn hook_handler_default_fields_omit_keys() {
+        // CP-024:全字段缺省形态——type 恒有值,其余 17 可选字段 None 时序列化省略键
+        // (skip_serializing_if),与既有两字段时代输出形态兼容(SEC-05 形态校验面零变化)
+        let h: HookHandler =
+            serde_json::from_value(serde_json::json!({"type": "command"})).unwrap();
+        assert_eq!(h.r#type, "command");
+        assert!(h.command.is_none());
+        assert!(h.args.is_none());
+        assert!(h.r#async.is_none());
+        assert!(h.async_rewake.is_none());
+        assert!(h.shell.is_none());
+        assert!(h.url.is_none());
+        assert!(h.headers.is_none());
+        assert!(h.allowed_env_vars.is_none());
+        assert!(h.server.is_none());
+        assert!(h.tool.is_none());
+        assert!(h.input.is_none());
+        assert!(h.prompt.is_none());
+        assert!(h.model.is_none());
+        assert!(h.continue_on_block.is_none());
+        assert!(h.r#if.is_none());
+        assert!(h.timeout.is_none());
+        assert!(h.status_message.is_none());
+        assert_eq!(
+            serde_json::to_value(&h).unwrap(),
+            serde_json::json!({"type": "command"})
         );
     }
 

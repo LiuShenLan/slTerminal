@@ -17,7 +17,7 @@ import { useState, useEffect, useCallback } from "react";
 import { backgroundTaskScheduler } from "../backgroundTasks";
 import "../backgroundTasks/tasks"; // side-effect：任务注册触发点之一（硬约束 #13）
 import type { TaskSnapshot } from "../backgroundTasks";
-import { SESSION_REFRESH_TASK_ID } from "../../types/backgroundTasks";
+import { SESSION_REFRESH_TASK_ID } from "../../types";
 import { useProjects } from "../../stores/projects";
 import { useLayout } from "../../stores/layout";
 import { TerminalRegistry } from "../../panels/terminal/TerminalRegistry";

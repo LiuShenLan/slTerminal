@@ -12,7 +12,7 @@ import {
   listBackgroundTasks,
   onBackgroundTasksUpdated,
 } from "../../ipc/backgroundTasks";
-import { PLAN_BALANCE_TASK_ID } from "../../types/backgroundTasks";
+import { PLAN_BALANCE_TASK_ID } from "../../types";
 
 /** 点击刷新节流窗口（规格 §6：连点在窗口内忽略） */
 export const REFRESH_THROTTLE_MS = 5_000;

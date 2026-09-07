@@ -95,7 +95,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 外部坑/红线
 
-- **mockIPC 不验证真实序列化**：契约测试用 `mockIPC` 只守 JS 侧形状（命令名、payload 字段名/类型、返回透传、异常传播）。camelCase↔snake_case 真实字段转换、Channel 序列化、Uint8Array↔number[]、listen 回调运行时解包由 L4 E2E 守卫。
+- **mockIPC 不验证真实序列化**：契约测试用 `mockIPC` 只守 JS 侧形状（命令名、payload 字段名/类型、返回透传、异常传播）。camelCase↔snake_case 真实字段转换、Channel 序列化、Uint8Array↔number[]、listen 回调运行时解包由 L4 E2E 守卫。DTO 形状真值源 = Rust ts-rs 生成（`src/types/` 9 域文件，CP-024），JS 侧不得另造结构——形状之争一律回 Rust derive。
 - **后端必填参数缺失时 invoke 必 reject 且被调用方 catch 吞 = 契约绿但运行时静默失败**：此场景由 L4 兜底。
 - **PTY `onOutput` 必须绑定到 `Channel.onmessage`**：spawn wrapper 负责把回调挂到 Channel，测试需断言此绑定。
 - **`dialog.ask` 不存在**：任何确认需求改走 `src/lib/ConfirmDialog`。

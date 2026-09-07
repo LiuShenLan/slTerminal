@@ -14,8 +14,8 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { clearMocks } from "@tauri-apps/api/mocks";
 import { describeIpcContract } from "./helpers/ipc-contract";
-import { BACKGROUND_TASK_IDS } from "../types/backgroundTasks";
-import type { BackgroundTaskInfo } from "../types/backgroundTasks";
+import { BACKGROUND_TASK_IDS } from "../types";
+import type { BackgroundTaskInfo } from "../types";
 
 // 覆盖 setup.ts 全局 mock——导入原始 ../ipc/backgroundTasks 模块以测试真实 IPC 合约
 vi.mock("../ipc/backgroundTasks", async (importOriginal) => {

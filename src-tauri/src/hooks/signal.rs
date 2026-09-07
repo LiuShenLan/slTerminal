@@ -23,20 +23,23 @@ const MAX_SIGNAL_FILE_BYTES: u64 = 1024 * 1024;
 /// 旧键（transcriptPath）信号降级 None——仅丢该事件用量拉取（决策 1）。
 /// usedPercentage 为可选（serde default）：ContextUsage 信号携带官方 context 用量百分比
 /// （claude statusline `context_window.used_percentage` 桥接），旧信号缺键降级 None。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/types/agent.ts")]
 pub struct AgentEventPayload {
     /// 页签路由标识（环境变量 SLTERM_PANEL_ID）
     pub panel_id: String,
     /// 事件名（C9 10 事件之一）
     pub event: String,
     /// 时间戳（毫秒）
+    #[ts(type = "number")]
     pub timestamp: u64,
     /// 会话标识
     pub session_id: String,
     /// 用量来源文件路径（可选，serde default）：旧信号缺键降级 None，仅丢该事件用量拉取；
     /// 路径语义由具体 CLI 解释（claude = transcript JSONL）
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub usage_source_path: Option<String>,
     /// 当前工作目录
     pub cwd: String,
@@ -46,10 +49,12 @@ pub struct AgentEventPayload {
     pub notification_type: Option<String>,
     /// CLI 标识（可选，serde default；旧信号缺省 → 前端按 claude 兼容）
     #[serde(default)]
+    #[ts(optional)]
     pub cli_id: Option<String>,
     /// context 用量百分比（可选，serde default）：ContextUsage 信号字段——
     /// 官方口径 used_percentage（0–100 float），前端经 profile 策略取整钳位
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub used_percentage: Option<f64>,
 }
 

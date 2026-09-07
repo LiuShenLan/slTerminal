@@ -14,7 +14,7 @@ import { cliProfileRegistry } from "../features/cliProfiles/cliProfileRegistry";
 import { backgroundTaskScheduler } from "../features/backgroundTasks/scheduler";
 import { runSessionRefresh } from "../features/backgroundTasks/sessionRefreshTask";
 import "../features/backgroundTasks/tasks"; // 注册触发点（side-effect import，禁止隐式初始化）
-import { SESSION_REFRESH_TASK_ID } from "../types/backgroundTasks";
+import { SESSION_REFRESH_TASK_ID } from "../types";
 import type { CodingCliProfile } from "../features/cliProfiles/types";
 import type { AgentHistorySession } from "../types/agentHistory";
 import type { TaskSnapshot } from "../features/backgroundTasks/types";

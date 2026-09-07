@@ -34,7 +34,7 @@ import {
   EXIT_EVENT,
 } from "../cliProfiles/profiles/claude";
 import type { AgentStatus } from "../../lib/agentStatus";
-import type { AgentEventPayload, ContextUsageSignal } from "../../types/agent";
+import type { AgentEventPayload, ContextUsageSignal } from "../../types";
 
 // ---- 类型定义 ----
 

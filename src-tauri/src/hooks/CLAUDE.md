@@ -63,7 +63,7 @@ PTY spawn 时注入 `SLTERM_PANEL_ID`（见 @../pty/CLAUDE.md）。reporter 读�
 - `project` → `<projectPath>/.claude/settings.json`
 - `local` → `<projectPath>/.claude/settings.local.json`
 
-`Layer` 枚举（`rename_all = "snake_case"`）与前端 `HooksLayer` 字面量联合双边对应（硬约束 #4）。
+`Layer` 枚举（`rename_all = "snake_case"`）经 ts-rs 生成前端 `HooksLayer` 字面量联合（CP-024 单源，`config.rs` 内 `#[ts(rename = "HooksLayer")]`；值集锁死用例 `layer_serde_*`）。
 
 ### 写入语义校验（SEC-05 / SEC-17）
 

@@ -944,8 +944,11 @@ pub mod conpty_custom {
 }
 
 /// PTY 输出事件 — 通过 Channel 推送到前端
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+///
+/// CP-024：ts-rs 生成 `src/types/pty.ts`（tag/content 判别联合与手写面等价）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 #[serde(tag = "type", content = "data", rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/types/pty.ts")]
 pub enum PtyEvent {
     /// 终端输出数据（原始字节）
     Output { bytes: Vec<u8> },
@@ -995,8 +998,11 @@ impl JobHandle {
 }
 
 /// spawn 参数
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+///
+/// CP-024：ts-rs 生成 `src/types/pty.ts`。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/types/pty.ts")]
 pub struct SpawnRequest {
     /// 前端生成的 panel ID
     pub panel_id: String,
@@ -1005,8 +1011,10 @@ pub struct SpawnRequest {
     /// 终端行数（BE-14: 反序列化后校验 ≤ i16::MAX）
     pub rows: u16,
     /// 工作目录（可选，默认用户主目录；SEC-02: 经 validate_path_within_root 校验）
+    #[ts(optional)]
     pub cwd: Option<String>,
     /// shell 程序路径（可选，自动检测 pwsh→powershell→cmd；SEC-02: 经 validate_shell_allowlist 校验）
+    #[ts(optional)]
     pub shell: Option<String>,
 }
 

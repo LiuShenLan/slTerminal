@@ -14,8 +14,11 @@ use std::path::{Path, PathBuf};
 use tauri::State;
 
 /// 文件 git 状态条目
-#[derive(Debug, Clone, Serialize)]
+///
+/// CP-024:ts-rs 生成 `src/types/git.ts`。
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/types/git.ts")]
 pub struct GitStatusEntry {
     /// 文件绝对路径（与 fs_read_dir 的 DirEntry.path 格式一致）= 当前工作区路径。
     /// 语义对齐 git status：modified/added/untracked/conflict 为当前路径，
@@ -30,8 +33,11 @@ pub struct GitStatusEntry {
 }
 
 /// diff hunk 信息（old = HEAD, new = 工作区）
-#[derive(Debug, Clone, Serialize)]
+///
+/// CP-024:ts-rs 生成 `src/types/git.ts`。
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/types/git.ts")]
 pub struct DiffHunk {
     /// HEAD 侧起始行号（1-based）
     pub old_start: u32,

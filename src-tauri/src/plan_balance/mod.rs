@@ -18,8 +18,9 @@ use source::{PlanSource, SOURCES};
 
 // ── DTO（规格 §7；serde camelCase ↔ src/types/planBalance.ts，硬约束 #4） ──
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/types/planBalance.ts")]
 pub struct PlanBalanceInfo {
     pub source_id: String, // v1 恒 "claude"
     pub plan_id: String,   // "deepseek" | "kimi"
@@ -27,25 +28,29 @@ pub struct PlanBalanceInfo {
     pub amount: Option<AmountInfo>,
     pub windows: Option<WindowsInfo>,
     /// 最近成功查询 unix 秒；0 = 尚无成功值（前端渲染 --）
+    #[ts(type = "number")]
     pub updated_at: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/types/planBalance.ts")]
 pub struct AmountInfo {
     pub value: String, // 原样透传 total_balance
     pub currency: String,
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/types/planBalance.ts")]
 pub struct WindowsInfo {
     pub five_hour: WindowInfo,
     pub seven_day: WindowInfo,
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/types/planBalance.ts")]
 pub struct WindowInfo {
     pub used_percent: u8, // 已用百分比 = used/limit×100（used 缺失经 remaining 换算回退）
     pub resets_at: Option<String>, // ISO 字符串，可缺失

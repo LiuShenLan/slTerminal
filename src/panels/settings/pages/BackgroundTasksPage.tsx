@@ -20,7 +20,7 @@ import {
   PLAN_BALANCE_TASK_ID,
   SESSION_REFRESH_TASK_ID,
   type BackgroundTaskInfo,
-} from "../../../types/backgroundTasks";
+} from "../../../types";
 import { backgroundTaskScheduler } from "../../../features/backgroundTasks";
 import "../../../features/backgroundTasks/tasks"; // side-effect：applyConfig 目标注册保障
 import { toast, getErrorMessage } from "../../../lib";

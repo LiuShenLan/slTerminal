@@ -141,7 +141,7 @@ import { cliProfileRegistry } from "../features/cliProfiles/cliProfileRegistry";
 import { backgroundTaskScheduler } from "../features/backgroundTasks/scheduler";
 import { runSessionRefresh } from "../features/backgroundTasks/sessionRefreshTask";
 import "../features/backgroundTasks/tasks"; // 注册触发点（side-effect import，硬约束 #13）
-import { SESSION_REFRESH_TASK_ID } from "../types/backgroundTasks";
+import { SESSION_REFRESH_TASK_ID } from "../types";
 import {
   ACTIVE_SELECTION_BG,
   SELECTION_HOVER_BG,

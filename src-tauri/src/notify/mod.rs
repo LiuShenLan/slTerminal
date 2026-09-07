@@ -49,8 +49,11 @@ pub const FS_EVENT_PATH_BATCH_LIMIT: usize = 100;
 // 评估结论登记在 S19（文档同步）。
 
 /// 发送到前端的文件系统事件载荷
-#[derive(Debug, Clone, Serialize)]
+///
+/// CP-024:ts-rs 生成 `src/types/notify.ts`。
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/types/notify.ts")]
 pub struct FsEventPayload {
     /// 受影响的路径列表
     pub paths: Vec<String>,

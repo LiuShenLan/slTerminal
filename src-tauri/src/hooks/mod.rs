@@ -28,8 +28,11 @@ use crate::state::AppState;
 pub use signal::AgentEventPayload;
 
 /// 注入状态枚举（C6 契约；决策 3 更名 AgentInjectionStatus；CP-043 增待确认态）
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+///
+/// CP-024:ts-rs 生成 `src/types/agent.ts`。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/types/agent.ts")]
 pub enum AgentInjectionStatus {
     /// 已注入且版本匹配
     Injected,
@@ -44,8 +47,10 @@ pub enum AgentInjectionStatus {
 /// Agent 注入状态 DTO（C6 契约；决策 3 更名 AgentHookInjectionStatus）
 ///
 /// PartialEq 供 serde 往返精确断言测试使用（HUK-09）。
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+/// CP-024:ts-rs 生成 `src/types/agent.ts`。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/types/agent.ts")]
 pub struct AgentHookInjectionStatus {
     /// 注入状态
     pub status: AgentInjectionStatus,
@@ -54,6 +59,7 @@ pub struct AgentHookInjectionStatus {
     /// 待确认的可疑 statusline 原命令原文（仅 pendingConfirmation 时存在；
     /// skip_serializing_if 保证其余状态序列化键集合不变——HUK-09 契约兼容）
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub suspicious_command: Option<String>,
 }
 

@@ -37,8 +37,12 @@ type FnClose = unsafe extern "system" fn(isize);
 type FnResize = unsafe extern "system" fn(isize, COORD) -> HRESULT;
 
 /// ConPTY 后端状态(CP-010:一次性查询,启动 toast 数据源)
-#[derive(Debug, Clone, serde::Serialize)]
+///
+/// CP-024:ts-rs 一并导出至 pty.ts(清单外追加——手写 pty.ts 含本类型,
+/// 生成物物理覆盖后需保留消费面)。
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/types/pty.ts")]
 pub struct ConptyStatus {
     /// 是否尝试捆绑(仅 Win10 build < 21376)
     pub attempted: bool,

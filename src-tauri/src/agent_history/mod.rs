@@ -32,8 +32,9 @@ use provider::{registry, resolve_provider, CliHistoryProvider};
 /// `title_source` 为开放字符串（MC-302）：claude 值集
 /// `customTitle`/`aiTitle`/`summary`/`firstPrompt`/`none`，UI 不消费具体值。
 /// `cli_id` 由 provider 打标（claude provider 产出 `"claude"`）。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/types/agentHistory.ts")]
 pub struct AgentHistorySession {
     /// 会话 ID（claude：文件名主干 = UUID）
     pub session_id: String,
@@ -46,6 +47,7 @@ pub struct AgentHistorySession {
     /// 首条可见 user prompt（≤200 字符）
     pub first_prompt: Option<String>,
     /// 文件修改时间（毫秒时间戳）
+    #[ts(type = "number")]
     pub mtime_ms: u64,
     /// cwd 目录当前是否存在（cwd 为 null 时恒 false）
     pub cwd_exists: bool,
@@ -58,8 +60,9 @@ pub struct AgentHistorySession {
 /// 供运行中会话页签/导航树行取与历史 session 同源的标题
 /// （`agent_history_read_title`——人工验证问题 3）。`title` 为 None 表示回退链
 /// 四路全无（文件缺失/无任何标题数据）——前端兜底 CLI 名（claude 等）。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/types/agentHistory.ts")]
 pub struct AgentHistoryTitle {
     /// 标题（回退链合成结果；全无时为 None）
     pub title: Option<String>,

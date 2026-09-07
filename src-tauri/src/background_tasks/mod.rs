@@ -19,14 +19,18 @@ use registry::{TaskDef, TaskRuntime, RUNTIMES, TASKS};
 
 // ── DTO（serde camelCase ↔ src/types/backgroundTasks.ts，硬约束 #4） ──
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/types/backgroundTasks.ts")]
 pub struct BackgroundTaskInfo {
     pub task_id: String,
     pub title: String,
     pub enabled: bool,
+    #[ts(type = "number")]
     pub interval_sec: u64,
+    #[ts(type = "number")]
     pub interval_min: u64,
+    #[ts(type = "number")]
     pub interval_max: u64,
 }
 

@@ -10,7 +10,7 @@
 
 import { cliProfileRegistry } from "../cliProfiles/cliProfileRegistry";
 import { scanAgentHistory } from "../../ipc/agentHistory";
-import { SESSION_REFRESH_TASK_ID } from "../../types/backgroundTasks";
+import { SESSION_REFRESH_TASK_ID } from "../../types";
 import type { AgentHistorySession } from "../../types/agentHistory";
 import type { TriggerSource } from "./types";
 import { backgroundTaskScheduler } from "./scheduler";

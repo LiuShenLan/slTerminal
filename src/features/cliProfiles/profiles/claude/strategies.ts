@@ -12,7 +12,7 @@
 // 点 = cwd 单引号转义（AQ-1 修复，见 buildResumeCommand 注释）。
 
 import type { AgentStatus } from "../../../../lib/agentStatus";
-import type { AgentEventPayload, ContextUsageSignal } from "../../../../types/agent";
+import type { AgentEventPayload, ContextUsageSignal } from "../../../../types";
 import type { AgentHistorySession } from "../../../../types/agentHistory";
 
 /** Notification 事件中需要用户处理的子类型 */

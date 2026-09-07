@@ -41,7 +41,7 @@ import {
 } from "../../../../../ipc/agentHooks";
 import type { AgentHookInjectionStatus } from "../../../../../types/agent";
 import type { HooksConfigGui as ConfigGui } from "./configModel";
-import type { HooksConfigJson, HooksLayer } from "../../../../../types/hooksConfig";
+import type { HooksConfigJson, HooksLayer } from "../../../../../types";
 import type { CodingCliProfile } from "../../..";
 import {
   PANEL_BG,

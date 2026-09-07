@@ -98,7 +98,7 @@
 
 - [ ] **CP-023 · Rust 行覆盖 88.20%,距 90% 目标差 1.8pp 收尾登记**
   来源:`.claude/test-exemptions.md` TQ-COV 收尾。当时理由:残余缺口集中 PTY Win32 分支 + main.rs 结构性零覆盖 + 编译器生成物计数缺失。问题本质:覆盖目标以登记收尾而非达成——缺口处正是平台耦合最深的代码。2026-09-06 核查实证:豁免表原文未变,main.rs 仍 3 行结构性零覆盖(未实跑覆盖率,以登记 + 代码结构对照为准)。**修改方向**:pty 模块依赖注入/纯逻辑抽取(build_cmdline/build_env_block 已有先例)系统性收敛缺口;覆盖率口径从「含测试代码」改为生产代码口径后重定目标,而非继续豁免表堆叠。
-- [ ] **CP-024 · IPC 后端必填缺失 → invoke reject 被调用方 catch 吞 = 契约绿但运行时静默失败**
+- [x] **CP-024 · IPC 后端必填缺失 → invoke reject 被调用方 catch 吞 = 契约绿但运行时静默失败**【2026-09-08 修复销项：DTO 单源化——Rust #[derive(TS)] 经 ts-rs 生成 src/types/ 9 域文件（禁手改），导出测试 + git diff --exit-code 漂移守卫入门禁，mockIPC 红线改「形状真值源 = Rust 生成」；硬约束 #4 改写为单源口径；HookHandler 扩至全 18 键矩阵（ts-rs 10.1 serde-compat 仅解析五键等坑登记 src/types/CLAUDE.md）】
   来源:`src/ipc/CLAUDE.md`。当时理由:mockIPC 只守 JS 侧形状,真实序列化契约由 L4 兜底。问题本质:前后端 DTO 契约漂移在单元层不可见,失败信号被前端 catch 吞成静默。2026-09-06 核查实证:登记原文未变,全仓无新增双端核对机制(无 zod/共享 schema)。**修改方向**:DTO 定义单源化(ts-rs 或共享 schema 生成),或至少后端 DTO 反序列化失败路径的前端可观测化——统一错误面已有 parseAppError 基建,可延伸到 invoke 包装层必填预检。
 - [x] **CP-028 · e2e 导航树展开辅助 children 计数循环对无会话页面行不收敛(奇偶翻转风险)**【2026-09-07 修复销项：NavTree 行根挂 aria-expanded（与 chevron 同源探针）+ 展开辅助改逐层推进（点击→waitUntil 提交挂载→重查下一层），三处 6 轮计数循环一处收敛；agent/mockcli.e2e.ts 修复后 WDIO_RETRIES=0 三轮全绿】
   来源:`e2e-tests/history.e2e.ts` ensureProjectPagesExpanded(已改单次点击版)、`e2e-tests/agent.e2e.ts` ensureTreeExpanded、`e2e-tests/mockcli.e2e.ts` 同构展开循环。当时理由:DOM 无法区分展开/收起,以「奇数次翻转必然到达展开稳态」假设收敛;agent/mockcli 同构循环暂时保留,仅靠「每用例新建项目、项目行收起起点消耗首轮」巧合通过。2026-09-06 核查实证:history 单次点击版在,agent.e2e.ts:57-110 与 mockcli.e2e.ts:209-249 两处 6 轮计数循环原样。**修改方向**:展开判定不依赖 DOM(测试侧记录点击态,或 NavTree 暴露展开态探针/aria-expanded),三处循环一处收敛;任何用例结构变动(多页面行、复用项目)即可能复现偶数翻转终态收起。

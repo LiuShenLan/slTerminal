@@ -13,8 +13,11 @@ use tauri::State;
 const CRLF_SAMPLE_MAX_BYTES: usize = 65536;
 
 /// 目录条目
-#[derive(Debug, Clone, Serialize)]
+///
+/// CP-024:ts-rs 生成 `src/types/fs.ts`。
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/types/fs.ts")]
 pub struct DirEntry {
     /// 文件/目录名
     pub name: String,
@@ -23,8 +26,10 @@ pub struct DirEntry {
     /// 是否为目录
     pub is_dir: bool,
     /// 文件大小（字节），仅文件时有值
+    #[ts(type = "number | null")]
     pub size: Option<u64>,
     /// 最后修改时间（Unix 毫秒），仅文件时有值
+    #[ts(type = "number | null")]
     pub modified: Option<u64>,
 }
 

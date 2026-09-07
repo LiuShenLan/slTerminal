@@ -51,7 +51,7 @@ claude provider 定位与会话目录删除时：一级子目录、命中 jsonl 
 - **SEC-05 不可削弱**：delete/read_title 必须先 validate_sessionId；claude provider 用 UUID 形态 + 遍历定位，禁止信任前端路径。
 - **不要跟随 symlink**：定位与删除路径均显式拒绝 symlink。
 - **env 命名不上提**：未来 CLI 的 projects 目录 env 由各 provider 自管。
-- **DTO 字段双边同步**：改后端 `AgentHistorySession` / `AgentHistoryTitle` 须同步 `src/types/agentHistory.ts`。
+- **DTO 单源生成（CP-024）**：`AgentHistorySession` / `AgentHistoryTitle` 经 `#[derive(TS)]` 生成 `src/types/agentHistory.ts`（禁手改）——改字段后跑 `cargo test --test lib_tests export_bindings -- --test-threads=1` + `git diff --exit-code -- src/types` 守卫。
 - **缓存键语义勿改**：`(mtime, file_count)` 是目录级粗粒度键，依赖前端 `force` 兜底。
 
 ## 测试模式

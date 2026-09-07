@@ -5,7 +5,7 @@
 // AgentEventPayload / HistorySession 随 Stage 03/04 更名时同步。
 
 import type { AgentStatus } from "../../lib/agentStatus";
-import type { AgentEventPayload, ContextUsageSignal } from "../../types/agent";
+import type { AgentEventPayload, ContextUsageSignal } from "../../types";
 import type { AgentHistorySession } from "../../types/agentHistory";
 // React 仅类型 import（KZ-1：类型引用 ComponentType/MutableRefObject，运行期擦除——
 // 不构成 features/cliProfiles → panels 的运行期依赖，防循环依赖）

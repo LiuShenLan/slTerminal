@@ -28,7 +28,7 @@ import { readHooksConfig, writeHooksConfig } from "../../../../../ipc/hooksConfi
 import { confirmDialog, toast, getErrorMessage } from "../../../../../lib";
 import { useProjects } from "../../../../../stores/projects";
 import { useLayout } from "../../../../../stores/layout";
-import type { HooksLayer, HooksConfigJson, HooksConfigGui } from "../../../../../types/hooksConfig";
+import type { HooksLayer, HooksConfigJson, HooksConfigGui } from "../../../../../types";
 import { validateHooksJson } from "./schema";
 import {
   jsonToGui,
