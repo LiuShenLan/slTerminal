@@ -29,17 +29,20 @@ export function mockEntry(name: string, isDir: boolean, path: string): DirEntry 
 
 /**
  * 虚拟文件系统：Map<dirPath, DirEntry[]>。
- * 将 mockReadDir 实现绑定到 Map，按传入 dirPath 分派对应子项；
+ * 将 readDirPage mock 实现绑定到 Map，按传入 dirPath 分派对应子项；
  * 测试可动态增删 entries 模拟磁盘变更。
+ *
+ * CP-006：mock 的返回契约 = FsReadDirPage——绑定目录的整表作为**末页单页**
+ * 返回（entries 全量 + nextCursor: null），与旧整表 mock 的断言习惯等价。
  */
 export function makeVfs(
-  mockReadDir: ReturnType<typeof import("vitest").vi.fn>,
+  mockReadDirPage: ReturnType<typeof import("vitest").vi.fn>,
   initial: Record<string, DirEntry[]>,
 ): Map<string, DirEntry[]> {
   const vfs = new Map<string, DirEntry[]>(Object.entries(initial));
-  mockReadDir.mockImplementation(async (dirPath: string) => {
+  mockReadDirPage.mockImplementation(async (dirPath: string) => {
     if (!vfs.has(dirPath)) throw new Error(`ENOENT: ${dirPath}`);
-    return vfs.get(dirPath)!;
+    return { entries: vfs.get(dirPath)!, nextCursor: null };
   });
   return vfs;
 }

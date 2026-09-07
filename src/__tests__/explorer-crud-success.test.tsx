@@ -37,7 +37,7 @@ const mocks = vi.hoisted(() => {
       mockCreateDir.mockReset();
       mockRename.mockReset();
       mockWriteFile.mockReset();
-      mockReadDir.mockResolvedValue([]);
+      mockReadDir.mockResolvedValue({ entries: [], nextCursor: null });
       mockGitStatus.mockResolvedValue([]);
       mockStartWatch.mockResolvedValue(undefined);
       mockDeleteEntry.mockResolvedValue(undefined);
@@ -53,7 +53,7 @@ vi.mock("../lib/ConfirmDialog", () => ({
 }));
 
 vi.mock("../ipc/fs", () => ({
-  readDir: mocks.mockReadDir,
+  readDirPage: mocks.mockReadDir,
   createDir: mocks.mockCreateDir,
   deleteEntry: mocks.mockDeleteEntry,
   rename: mocks.mockRename,
@@ -137,7 +137,7 @@ describe("ExplorerPanel 删除成功路径", () => {
   it("C1: 删除成功 → deleteEntry 调用 + refresh（readDir 二次）+ 选中态清空", async () => {
     mocks.mockConfirmDialog.mockResolvedValue(true);
     const fileEntry = { name: "config.json", path: "C:/test-project/config.json", isDir: false, size: 64, modified: 1 };
-    mocks.mockReadDir.mockResolvedValue([fileEntry]);
+    mocks.mockReadDir.mockResolvedValue({ entries: [fileEntry], nextCursor: null });
 
     seedProject();
     const { getAllByText } = render(React.createElement(ExplorerPanel));
@@ -177,7 +177,7 @@ describe("ExplorerPanel 删除成功路径", () => {
 describe("ExplorerPanel 重命名成功路径", () => {
   it("C2: 重命名成功 → rename 调用 + refresh + renamingPath 清空（输入框消失）", async () => {
     const fileEntry = { name: "old.ts", path: "C:/test-project/old.ts", isDir: false, size: 32, modified: 1 };
-    mocks.mockReadDir.mockResolvedValue([fileEntry]);
+    mocks.mockReadDir.mockResolvedValue({ entries: [fileEntry], nextCursor: null });
 
     seedProject();
     const { getAllByText } = render(React.createElement(ExplorerPanel));
@@ -221,7 +221,7 @@ describe("ExplorerPanel 重命名成功路径", () => {
     // 防复发：修复前同名提交会经 fs_rename(src==dst) 触发后端覆盖分支误删源文件，
     // mockRename 被以 (old.ts, "old.ts") 即 src==dst 调用；修复后应静默取消。
     const fileEntry = { name: "old.ts", path: "C:/test-project/old.ts", isDir: false, size: 32, modified: 1 };
-    mocks.mockReadDir.mockResolvedValue([fileEntry]);
+    mocks.mockReadDir.mockResolvedValue({ entries: [fileEntry], nextCursor: null });
 
     seedProject();
     const { getAllByText } = render(React.createElement(ExplorerPanel));
@@ -258,7 +258,7 @@ describe("ExplorerPanel 重命名成功路径", () => {
 
 describe("ExplorerPanel 新建文件成功路径", () => {
   it("C3: 新建文件成功 → writeFile 调用 + refresh + 输入框消失", async () => {
-    mocks.mockReadDir.mockResolvedValue([]);
+    mocks.mockReadDir.mockResolvedValue({ entries: [], nextCursor: null });
     mocks.mockWriteFile.mockResolvedValue(undefined);
 
     seedProject();
@@ -304,7 +304,7 @@ describe("ExplorerPanel 新建文件成功路径", () => {
 
 describe("ExplorerPanel 新建文件夹成功路径", () => {
   it("C4: 新建文件夹成功 → createDir 调用 + refresh + 输入框消失", async () => {
-    mocks.mockReadDir.mockResolvedValue([]);
+    mocks.mockReadDir.mockResolvedValue({ entries: [], nextCursor: null });
     mocks.mockCreateDir.mockResolvedValue(undefined);
 
     seedProject();

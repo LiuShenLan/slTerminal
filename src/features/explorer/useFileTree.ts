@@ -1,7 +1,7 @@
 // useFileTree.ts — 文件树数据 hook
 //
 // 职责：
-// - 调用 fs_read_dir 获取目录内容
+// - 经 readDirPage（CP-006 游标分页）获取目录内容——首帧拉首页、续页按游标拼接
 // - 订阅 "fs-event" 进行增量刷新（200ms 去抖）
 // - 订阅 slterm:file-saved 保存事件（300ms 去抖——FE-15：已知路径只刷新受影响子树）
 // - 调用 git_status 获取 git 文件状态
@@ -9,9 +9,9 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { onFsEvent } from "../../ipc/notify";
-import { readDir } from "../../ipc/fs";
+import { readDirPage } from "../../ipc/fs";
 import { gitStatus } from "../../ipc/git";
-import type { DirEntry } from "../../types/fs";
+import type { DirEntry, FsReadDirPage } from "../../types/fs";
 // FE-07: 错误消息统一经 getErrorMessage（契约：src/ipc/appError.ts，src/lib re-export）
 import { getErrorMessage } from "../../lib";
 import { normalizePath } from "../../lib/path";
@@ -27,6 +27,15 @@ export interface TreeNode {
   children: TreeNode[];
   loading: boolean;
 }
+
+/** DirEntry[] → TreeNode[]（初始折叠、children 空、非加载中） */
+const toTreeNodes = (entries: DirEntry[]): TreeNode[] =>
+  entries.map((entry) => ({
+    entry,
+    expanded: false,
+    children: [],
+    loading: false,
+  }));
 
 interface UseFileTreeOptions {
   rootPath: string | null;
@@ -52,11 +61,28 @@ export function useFileTree({ rootPath }: UseFileTreeOptions) {
   // generation 计数器：rootPath 每次变化时递增，异步回调中检查以丢弃旧请求
   const genRef = useRef(0);
 
+  /** 分页聚合：顺序拉取全部页拼接为整层条目（CP-006——后端跨页排序稳定，
+   *  直接按页序 append；错误向上传播，由调用方按各自容错语义处理） */
+  const collectDirEntries = useCallback(async (dirPath: string): Promise<DirEntry[]> => {
+    const all: DirEntry[] = [];
+    let cursor: string | null = null;
+    do {
+      // 首帧省略 cursor（单参）；续页携带上一页游标
+      const page: FsReadDirPage =
+        cursor === null
+          ? await readDirPage(dirPath)
+          : await readDirPage(dirPath, cursor);
+      all.push(...page.entries);
+      cursor = page.nextCursor;
+    } while (cursor !== null);
+    return all;
+  }, []);
+
   /** 读取目录内容并转换为 TreeNode。失败时记录按路径错误并返回 []（子目录容错不冒泡） */
   const loadDirectory = useCallback(
     async (dirPath: string): Promise<TreeNode[]> => {
       try {
-        const entries = await readDir(dirPath);
+        const entries = await collectDirEntries(dirPath);
         // 读取成功 → 清除该路径的加载错误
         setDirErrors((prev) => {
           if (!prev.has(dirPath)) return prev;
@@ -64,14 +90,9 @@ export function useFileTree({ rootPath }: UseFileTreeOptions) {
           next.delete(dirPath);
           return next;
         });
-        return entries.map((entry) => ({
-          entry,
-          expanded: false,
-          children: [],
-          loading: false,
-        }));
+        return toTreeNodes(entries);
       } catch (err) {
-        console.error("[slTerminal] readDir 失败:", dirPath, err);
+        console.error("[slTerminal] readDirPage 失败:", dirPath, err);
         // FE-07: 错误按路径记录（不再伪装空目录），ExplorerPanel 据此渲染错误占位
         const msg = getErrorMessage(err);
         setDirErrors((prev) => {
@@ -82,20 +103,55 @@ export function useFileTree({ rootPath }: UseFileTreeOptions) {
         return [];
       }
     },
-    [],
+    [collectDirEntries],
   );
 
-  /** 加载根目录。gen 参数用于 rootPath 变化时丢弃旧请求的过期结果 */
-  const loadRoot = useCallback(async (gen?: number) => {
-    if (!rootPath) {
-      if (gen === undefined || gen === genRef.current) setRootNodes([]);
-      return;
-    }
-    const nodes = await loadDirectory(rootPath);
-    // generation 检查：如果 gen 不匹配，说明 rootPath 已变化，丢弃此结果
-    if (gen !== undefined && gen !== genRef.current) return;
-    setRootNodes(nodes);
-  }, [rootPath, loadDirectory]);
+  /** 加载根目录。gen 参数用于 rootPath 变化时丢弃旧请求的过期结果。
+   *  CP-006：首帧拉首页（默认页 500）立即渲染，nextCursor 非空则后台续页拼接——
+   *  超大目录首屏不等全量；每页回来校验 gen（rootPath 切换即丢弃旧代际续页）。 */
+  const loadRoot = useCallback(
+    async (gen?: number) => {
+      const rp = rootPath;
+      if (!rp) {
+        if (gen === undefined || gen === genRef.current) setRootNodes([]);
+        return;
+      }
+      try {
+        const first = await readDirPage(rp);
+        // generation 检查：如果 gen 不匹配，说明 rootPath 已变化，丢弃此结果
+        if (gen !== undefined && gen !== genRef.current) return;
+        setDirErrors((prev) => {
+          if (!prev.has(rp)) return prev;
+          const next = new Map(prev);
+          next.delete(rp);
+          return next;
+        });
+        setRootNodes(toTreeNodes(first.entries));
+        // 后台续页：游标逐页拉取，尾接已渲染节点（函数式 set 保留首帧后的展开交互）
+        let cursor = first.nextCursor;
+        while (cursor !== null) {
+          const page = await readDirPage(rp, cursor);
+          if (gen !== undefined && gen !== genRef.current) return;
+          const extra = toTreeNodes(page.entries);
+          if (extra.length > 0) {
+            setRootNodes((prev) => [...prev, ...extra]);
+          }
+          cursor = page.nextCursor;
+        }
+      } catch (err) {
+        // FE-07: 根目录加载失败按路径记录错误（首帧失败 → 错误占位；续页失败 → 可重试）
+        console.error("[slTerminal] readDirPage 失败:", rp, err);
+        const msg = getErrorMessage(err);
+        setDirErrors((prev) => {
+          const next = new Map(prev);
+          next.set(rp, msg);
+          return next;
+        });
+        if (gen === undefined || gen === genRef.current) setRootNodes([]);
+      }
+    },
+    [rootPath],
+  );
 
   /** 加载子目录 */
   const loadChildren = useCallback(
@@ -255,18 +311,14 @@ export function useFileTree({ rootPath }: UseFileTreeOptions) {
       }
 
       // 重载目标目录一层，原位合并（保留子节点展开态与子树）
-      // FE-41：直调 readDir 以区分「目标目录已删除」（readDir 抛错）与「空目录」（返回 []）——
-      // loadDirectory 容错返回 [] 无法区分两者；目标已删时须从父层移除该目录行
+      // FE-41：直调 collectDirEntries（分页聚合）以区分「目标目录已删除」（抛错）
+      // 与「空目录」（返回 []）——loadDirectory 容错返回 [] 无法区分两者；
+      // 目标已删时须从父层移除该目录行
       let fresh: TreeNode[];
       let targetMissing = false;
       try {
-        const entries = await readDir(targetPath);
-        fresh = entries.map((entry) => ({
-          entry,
-          expanded: false,
-          children: [],
-          loading: false,
-        }));
+        const entries = await collectDirEntries(targetPath);
+        fresh = toTreeNodes(entries);
       } catch {
         targetMissing = true;
         fresh = [];
@@ -324,7 +376,7 @@ export function useFileTree({ rootPath }: UseFileTreeOptions) {
       });
       return true;
     },
-    [loadDirectory],
+    [collectDirEntries],
   );
 
   // 根路径变更时重新加载

@@ -21,12 +21,12 @@ const mocks = vi.hoisted(() => {
   return {
     get mockStartWatch() { return startWatch; },
     get mockStopWatch() { return stopWatch; },
-    get mockReadDir() { return fs.readDir; },
+    get mockReadDir() { return fs.readDirPage; },
     get mockGitStatus() { return git.gitStatus; },
     resetAll() {
       startWatch.mockClear();
       stopWatch.mockClear();
-      fs.readDir.mockClear();
+      fs.readDirPage.mockClear();
       git.gitStatus.mockClear();
     },
   };
@@ -39,7 +39,7 @@ vi.mock("../ipc/notify", () => ({
 }));
 
 vi.mock("../ipc/fs", () => ({
-  readDir: mocks.mockReadDir,
+  readDirPage: mocks.mockReadDir,
   createDir: vi.fn(),
   deleteEntry: vi.fn(),
   rename: vi.fn(),
@@ -70,11 +70,10 @@ describe("useFileTree 状态转换", () => {
     mocks.mockReadDir.mockReset();
     mocks.mockGitStatus.mockReset();
     // 默认 mock：返回 3 个根条目（2 目录 + 1 文件）
-    mocks.mockReadDir.mockResolvedValue([
+    mocks.mockReadDir.mockResolvedValue({ entries: [
       mockEntry("src", true, "/test/src"),
       mockEntry("docs", true, "/test/docs"),
-      mockEntry("README.md", false, "/test/README.md"),
-    ]);
+      mockEntry("README.md", false, "/test/README.md"),], nextCursor: null });
     mocks.mockGitStatus.mockResolvedValue([]);
     vi.useFakeTimers();
   });
@@ -130,10 +129,9 @@ describe("useFileTree 状态转换", () => {
 
       // 变更 rootPath
       mocks.resetAll();
-      mocks.mockReadDir.mockResolvedValue([
+      mocks.mockReadDir.mockResolvedValue({ entries: [
         mockEntry("lib", true, "/other/lib"),
-        mockEntry("main.ts", false, "/other/main.ts"),
-      ]);
+        mockEntry("main.ts", false, "/other/main.ts"),], nextCursor: null });
 
       rerender({ rootPath: "/other" });
 
@@ -146,17 +144,17 @@ describe("useFileTree 状态转换", () => {
 
   describe("toggleExpand 状态转换", () => {
     it("10. 点击展开目录 → expanded=true → 加载子节点 → loading=false", async () => {
-      // 子目录内容
+      // 子目录内容（readDirPage 分页契约形状：entries + nextCursor，不可裸返数组）
       mocks.mockReadDir
-        .mockResolvedValueOnce([
+        .mockResolvedValueOnce({ entries: [
           mockEntry("src", true, "/test/src"),
           mockEntry("docs", true, "/test/docs"),
           mockEntry("README.md", false, "/test/README.md"),
-        ])
-        .mockResolvedValueOnce([
+    ], nextCursor: null })
+        .mockResolvedValueOnce({ entries: [
           mockEntry("index.ts", false, "/test/src/index.ts"),
           mockEntry("lib.ts", false, "/test/src/lib.ts"),
-        ]);
+        ], nextCursor: null });
 
       const { result } = renderHook(() => useFileTree({ rootPath: "/test" }));
 
@@ -194,15 +192,15 @@ describe("useFileTree 状态转换", () => {
       // toggleExpand 总是调用 loadChildren(nodePath)，不限展开/折叠
       // 因此需要 3 个 once：根加载 + 展开加载 + 折叠时的 re-load
       mocks.mockReadDir
-        .mockResolvedValueOnce([
+        .mockResolvedValueOnce({ entries: [
           mockEntry("src", true, "/test/src"),
-        ])
-        .mockResolvedValueOnce([
+    ], nextCursor: null })
+        .mockResolvedValueOnce({ entries: [
           mockEntry("index.ts", false, "/test/src/index.ts"),
-        ])
-        .mockResolvedValueOnce([
+        ], nextCursor: null })
+        .mockResolvedValueOnce({ entries: [
           mockEntry("index.ts", false, "/test/src/index.ts"),
-        ]);
+        ], nextCursor: null });
 
       const { result } = renderHook(() => useFileTree({ rootPath: "/test" }));
 

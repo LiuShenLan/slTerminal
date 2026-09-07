@@ -83,7 +83,7 @@ Workflow({
 | S02 | 回退预案 | 无 commit（零实现） | 2026-09-07 | CP-040 通道失实：embed-manifest 为 bins-only build.rs 库够不到 test target（E0433 实测）；cargo 1.96 --lib 0xc0000139 复现根因未自愈 → 维持 test=false+[[test]]+红线，L1 定向命令**维持旧形态**（全册影响，S03 起 verify 按旧形态执行） |
 | S03 | 已完成 | 0c840df | 2026-09-07 | 7 项全绿（fix-loop 1 轮：CP-028 helper 逐层推进、CP-030 双确定性缺陷真修、CP-029 收口）；人工点登记：CP-003 Node 26 全量 e2e（.temp/node22.bak 待删）、CP-046 负向验证、CP-029 定责复核 |
 | S04 | 已完成 | ce1acb1 | 2026-09-08 | 7 项全绿（fix-loop 1 轮：CP-014 AEL reparse 条目身份回归修复 + CP-005 测试名去 poison + CP-010/043 fmt 与 mock）；人工点登记：CP-010 Win10 toast 实测 |
-| S05 | 未开始 | — | — | |
+| S05 | 已完成 | 1e97cc1 | 2026-09-08 | 6 项断言全绿（verify agent 测试结果缺口由主 agent 补跑闭环：cargo 785/L2 3163/L3 142 全绿）；执行期破「import 零改动」前提（12 处 import 源改指顶层）已留痕 commit body |
 | S06 | 未开始 | — | — | CP-007 门槛结论记此 |
 | S07 | 未开始 | — | — | |
 | S08 | 未开始 | — | — | |

@@ -20,7 +20,7 @@ const mocks = vi.hoisted(() => {
     { name: "README.md", path: "C:/project/README.md", isDir: false, size: 50, modified: 3 },
   ];
 
-  const mockReadDir = vi.fn().mockResolvedValue(mockEntries);
+  const mockReadDir = vi.fn().mockResolvedValue({ entries: mockEntries, nextCursor: null });
   const mockGitStatus = vi.fn().mockResolvedValue([
     { path: "C:/project/src/main.tsx", status: "modified" },
     { path: "C:/project/src/lib.rs", status: "untracked" },
@@ -37,7 +37,7 @@ const mocks = vi.hoisted(() => {
       mockReadDir.mockClear();
       mockGitStatus.mockClear();
       mockStartWatch.mockClear();
-      mockReadDir.mockResolvedValue(mockEntries);
+      mockReadDir.mockResolvedValue({ entries: mockEntries, nextCursor: null });
       mockGitStatus.mockResolvedValue([
         { path: "C:/project/src/main.tsx", status: "modified" },
         { path: "C:/project/src/lib.rs", status: "untracked" },
@@ -48,7 +48,7 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock("../ipc/fs", () => ({
-  readDir: mocks.mockReadDir,
+  readDirPage: mocks.mockReadDir,
   createDir: vi.fn(),
   deleteEntry: vi.fn(),
   rename: vi.fn(),
@@ -374,11 +374,14 @@ describe("explorer git 状态 — B 组：FileTree 渲染时查表", () => {
     // Mock 子目录内容
     mocks.mockReadDir.mockImplementation(async (dirPath: string) => {
       if (dirPath.includes("components")) {
-        return [
-          { name: "Button.tsx", path: "C:/project/src/components/Button.tsx", isDir: false, size: 300, modified: 4 },
-        ];
+        return {
+          entries: [
+            { name: "Button.tsx", path: "C:/project/src/components/Button.tsx", isDir: false, size: 300, modified: 4 },
+          ],
+          nextCursor: null,
+        };
       }
-      return mocks.mockEntries;
+      return { entries: mocks.mockEntries, nextCursor: null };
     });
     mocks.mockGitStatus.mockResolvedValue([
       { path: "C:/project/src/main.tsx", status: "modified" },

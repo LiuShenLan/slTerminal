@@ -2,7 +2,8 @@
 //
 // 扫描执行体 = 历史会话扫描唯一执行路径：遍历 cliProfileRegistry 中声明 history
 // 能力的 profile 逐个 scanAgentHistory(cliId, true) 聚合为扁平列表（恒 force=true——
-// 后端 (目录 mtime, 文件数) 缓存对进行中会话不敏感，手动与定时同，规格 §8）。
+// 后端 force 通道为显式直扫、不读键不回填缓存（CP-007：键收集成本与重扫同量级），
+// 手动与定时同口径，规格 §8）。
 // 多 provider 失败隔离：单 provider 失败 → 该 provider 保留旧数据、其余采用新值；
 // 全部失败 → throw（调度器按触发来源走规格 §7）。
 //

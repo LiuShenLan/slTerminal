@@ -79,7 +79,7 @@ const mocks = vi.hoisted(() => {
   const mockToast = { show: vi.fn() };
 
   return {
-    get mockReadDir() { return fs.readDir; },
+    get mockReadDir() { return fs.readDirPage; },
     get mockGitStatus() { return git.gitStatus; },
     get mockSetProjectRoot() { return wrappedSetProjectRoot; },
     get resolveSetProjectRoot() { return () => { resolveSPR(); }; },
@@ -90,7 +90,7 @@ const mocks = vi.hoisted(() => {
     resetDeferred() { resetDeferred(); calledCount = 0; wrappedSetProjectRoot.mockClear(); },
     get calledCount() { return calledCount; },
     resetAll() {
-      fs.readDir.mockReset();
+      fs.readDirPage.mockReset();
       git.gitStatus.mockReset();
       notify.startWatch.mockReset();
       notify.stopWatch.mockReset();
@@ -102,7 +102,7 @@ const mocks = vi.hoisted(() => {
 
 // Mock ../ipc/fs：setProjectRoot 为手动控制 promise，其余为 stub
 vi.mock("../ipc/fs", () => ({
-  readDir: mocks.mockReadDir,
+  readDirPage: mocks.mockReadDir,
   readFile: vi.fn(),
   writeFile: vi.fn(),
   createDir: vi.fn(),
@@ -177,7 +177,7 @@ describe("DBG-9: switchToPage 时序", () => {
     cleanup();
     mocks.resetAll();
     mocks.mockGitStatus.mockResolvedValue([]);
-    mocks.mockReadDir.mockResolvedValue([]);
+    mocks.mockReadDir.mockResolvedValue({ entries: [], nextCursor: null });
 
     useProjects.setState({
       projects: {},

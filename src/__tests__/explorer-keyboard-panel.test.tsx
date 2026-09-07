@@ -57,7 +57,7 @@ const mocks = vi.hoisted(() => {
       mockCreateDir.mockReset();
       mockConfirmDialog.mockReset();
       mockAddPanel.mockReset();
-      mockReadDir.mockResolvedValue([]);
+      mockReadDir.mockResolvedValue({ entries: [], nextCursor: null });
       mockGitStatus.mockResolvedValue([]);
       mockStartWatch.mockResolvedValue(undefined);
       mockDeleteEntry.mockResolvedValue(undefined);
@@ -74,7 +74,7 @@ vi.mock("../lib/ConfirmDialog", () => ({
 }));
 
 vi.mock("../ipc/fs", () => ({
-  readDir: mocks.mockReadDir,
+  readDirPage: mocks.mockReadDir,
   createDir: mocks.mockCreateDir,
   deleteEntry: mocks.mockDeleteEntry,
   rename: mocks.mockRename,
@@ -171,7 +171,7 @@ describe("键盘 Delete 动作链路（handleDeleteSelected）", () => {
   it("确认删除 → deleteEntry 调用 + 选中清空 + refresh（readDir 二次）", async () => {
     mocks.mockConfirmDialog.mockResolvedValue(true);
     const fileEntry = { name: "target.ts", path: "C:/test-project/target.ts", isDir: false, size: 64, modified: 1 };
-    mocks.mockReadDir.mockResolvedValue([fileEntry]);
+    mocks.mockReadDir.mockResolvedValue({ entries: [fileEntry], nextCursor: null });
 
     seedProject();
     const rowSpan = await renderAndFindRow("target.ts");
@@ -199,7 +199,7 @@ describe("键盘 Delete 动作链路（handleDeleteSelected）", () => {
     mocks.mockConfirmDialog.mockResolvedValue(true);
     mocks.mockDeleteEntry.mockRejectedValue(new Error("permission denied"));
     const fileEntry = { name: "locked.ts", path: "C:/test-project/locked.ts", isDir: false, size: 64, modified: 1 };
-    mocks.mockReadDir.mockResolvedValue([fileEntry]);
+    mocks.mockReadDir.mockResolvedValue({ entries: [fileEntry], nextCursor: null });
 
     seedProject();
     const rowSpan = await renderAndFindRow("locked.ts");
@@ -233,7 +233,7 @@ describe("键盘 Delete 动作链路（handleDeleteSelected）", () => {
 describe("键盘 Enter 动作链路（handleOpenSelected）", () => {
   it("选中文件 Enter → addPanel（editor + params.filePath）", async () => {
     const fileEntry = { name: "app.ts", path: "C:/test-project/app.ts", isDir: false, size: 200, modified: 1 };
-    mocks.mockReadDir.mockResolvedValue([fileEntry]);
+    mocks.mockReadDir.mockResolvedValue({ entries: [fileEntry], nextCursor: null });
 
     seedProject();
     const rowSpan = await renderAndFindRow("app.ts");
@@ -256,9 +256,9 @@ describe("键盘 Enter 动作链路（handleOpenSelected）", () => {
     const srcDir = { name: "src", path: "C:/test-project/src", isDir: true, size: null, modified: 1 };
     const innerFile = { name: "inner.ts", path: "C:/test-project/src/inner.ts", isDir: false, size: 10, modified: 1 };
     mocks.mockReadDir.mockImplementation((dirPath: string) => {
-      if (dirPath === "C:/test-project") return Promise.resolve([srcDir]);
-      if (dirPath === "C:/test-project/src") return Promise.resolve([innerFile]);
-      return Promise.resolve([]);
+      if (dirPath === "C:/test-project") return Promise.resolve({ entries: [srcDir], nextCursor: null });
+      if (dirPath === "C:/test-project/src") return Promise.resolve({ entries: [innerFile], nextCursor: null });
+      return Promise.resolve({ entries: [], nextCursor: null });
     });
 
     seedProject();
@@ -318,8 +318,8 @@ describe("键盘 Enter 动作链路（handleOpenSelected）", () => {
     const oldEntry = { name: "old.ts", path: "C:/test-project/old.ts", isDir: false, size: 32, modified: 1 };
     const newEntry = { name: "renamed.ts", path: "C:/test-project/renamed.ts", isDir: false, size: 32, modified: 1 };
     mocks.mockReadDir
-      .mockResolvedValueOnce([oldEntry]) // 初始加载
-      .mockResolvedValueOnce([newEntry]); // 重命名后 refresh
+      .mockResolvedValueOnce({ entries: [oldEntry], nextCursor: null }) // 初始加载
+      .mockResolvedValueOnce({ entries: [newEntry], nextCursor: null }); // 重命名后 refresh
 
     seedProject();
     const rowSpan = await renderAndFindRow("old.ts");
@@ -362,7 +362,7 @@ describe("键盘 Enter 动作链路（handleOpenSelected）", () => {
 describe("键盘 F2 动作链路（handleRenameSelected / handleRenameCancel）", () => {
   it("F2 → 重命名 input 预填 basename；Escape → 取消（input 消失）", async () => {
     const fileEntry = { name: "app.ts", path: "C:/test-project/app.ts", isDir: false, size: 200, modified: 1 };
-    mocks.mockReadDir.mockResolvedValue([fileEntry]);
+    mocks.mockReadDir.mockResolvedValue({ entries: [fileEntry], nextCursor: null });
 
     seedProject();
     const rowSpan = await renderAndFindRow("app.ts");

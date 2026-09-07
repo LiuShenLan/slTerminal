@@ -21,9 +21,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **provider 身份盒（CP-041 防 ZST 地址共享）**：claude/mockcli provider 均为单元结构体；裸 ZST static 不保证地址互异（实测可共享），mod.rs `run_scan` 的 claude 身份比对（数据指针相等）会因此把 mockcli force 扫描误判进 claude 缓存通道。两 provider 经非 ZST 元组盒（`CLAUDE_BOX`/`MOCK_BOX`）装载，注册表条目引用盒字段——保持盒形态，勿改回裸 ZST static（L1 `provider_identity_boxes_have_distinct_addresses` 锁死）。
 
-### 扫描缓存 + force 通道（BE-19）
+### 扫描缓存 + force 通道（BE-19，CP-007 指纹口径）
 
-claude provider 的扫描结果按 `ScanCacheKey = (目录 mtime, 文件数)` 进程内缓存。键不变时复用缓存；键变化或 `force=true` 时重扫。这是目录级粗粒度失效——目录内会话文件增删改不会使缓存失效，由前端显式 `force` 兜底。
+claude provider 的扫描结果按目录内容指纹进程内缓存：`ScanCacheKey = FNV-1a 64(一级目录名清单 + 会话文件 (file_name, mtime_ms, len)，两级排序混合 + 条目数)`。键不变时复用缓存；键变化 → 失效重扫。失效精度 = 目录内容级——会话文件增删改（文件 mtime/len 或文件集合变化）→ 自动失效。**失效单位取文件级属性而非目录 mtime**：Windows 下 Rust 读目录自身 mtime 对子文件增删的更新不可靠（9-8 实测 ≥800ms 不刷新、目录 len 恒 0），目录级信号漏检（原目录级粗粒度键对目录内变更不敏感、曾由前端恒 `force` 兜底；CP-007 实测 1000 会话全扫 debug 中位 180ms 不达标后改指纹口径锁死失效精度）。`force=true` 为显式直扫通道、**不读键不回填缓存**（键收集 = 两级 read_dir + 全量文件 stat，与重扫同量级成本——sessionRefreshTask 每 tick 恒 force 承担不起；不回填无碍正确性：内容变则键必变，后续非 force 调用自愈重扫）；指纹毫秒截断下的同毫秒变更由下轮扫描检出（规格 §8 手动与定时同口径）。
 
 ### SEC-05 校验前置
 
@@ -52,7 +52,7 @@ claude provider 定位与会话目录删除时：一级子目录、命中 jsonl 
 - **不要跟随 symlink**：定位与删除路径均显式拒绝 symlink。
 - **env 命名不上提**：未来 CLI 的 projects 目录 env 由各 provider 自管。
 - **DTO 单源生成（CP-024）**：`AgentHistorySession` / `AgentHistoryTitle` 经 `#[derive(TS)]` 生成 `src/types/agentHistory.ts`（禁手改）——改字段后跑 `cargo test --test lib_tests export_bindings -- --test-threads=1` + `git diff --exit-code -- src/types` 守卫。
-- **缓存键语义勿改**：`(mtime, file_count)` 是目录级粗粒度键，依赖前端 `force` 兜底。
+- **指纹算法勿改（CP-007 重登记）**：缓存键 = 目录内容指纹（一级目录名清单 + 会话文件 (file_name/mtime_ms/len)，两级排序后 FNV-1a 64 + 条目数；失效单位 = 文件级，勿改回目录 mtime——Windows 实测目录 mtime 对子文件增删更新不可靠）——失效精度承重，改动须同步 `scan_cache_key_tracks_dir_content_fingerprint` 等失效精度用例口径。
 
 ## 测试模式
 

@@ -8,9 +8,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 关键约束与决策
 
-### `fs_read_dir` 不分页（BE-21）
+### `fs_read_dir` 游标分页（CP-006，2026-09；替代旧 BE-21「不分页整表返回」）
 
-返回整个目录列表，无分页。收益：FileTree 虚拟化在渲染侧处理万级节点；改分页会破 IPC 契约。如评估 FE-30 失效场景再议。
+`fs_read_dir(path, cursor?, limit?)` 返回 `FsReadDirPage { entries, nextCursor }`：
+
+- `limit` 缺省 500 / 上限 1000，越界钳制 `[1, 1000]`；
+- 游标 = 排序后整表起始序号的 base64（`encode_page_cursor`/`decode_page_cursor`）——**opaque**：客户端只回传不解读，解码失败返回 `Validation`；
+- `.git` 过滤与排序（文件夹→文件、同类型小写名称序）在整表收集**完成后**执行再切片——排序契约跨页稳定，按页序拼接即全量（无重复无遗漏）；
+- `nextCursor: null` = 末页；游标越界（目录已缩水）→ 空页 + null。
+
+增量拉取由前端续页拼接（loadRoot 首帧拉首页 + 后台续页；展开/刷新路径聚合读取），**不采用 Channel 推送**——拉取式分页已削峰，推送式增加前端状态机复杂度。FileTree 虚拟化（FE-30）渲染侧承接窗口数据，对分页契约透明。
 
 ### `fs_read_file` Channel 分块推送（BE-03）
 
@@ -54,7 +61,7 @@ docViewer 预览（md/html 本地相对图片等 data: URL 内联）按路径读
 
 ## 外部坑/红线
 
-- **禁止给 `fs_read_dir` 加分页**：除非同步改前端 FileTree 虚拟化与 IPC 契约。
+- **禁止无游标全量返回**：新增目录读取通道必须走游标分页契约（`fs_read_dir` 自 CP-006 起即游标形态）。
 - **不要降低 10MB 上限或改分块大小**：前端 `readFile` Promise 拼接假设块大小与序列语义。
 - **写文件必须保持原行尾**：否则每次保存都会把 CRLF 仓库刷成 LF。
 - **新增文件系统命令必须走 `validate_path_within_root`**：所有命令共享路径沙箱。

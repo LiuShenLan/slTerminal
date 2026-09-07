@@ -6,24 +6,24 @@
 //
 // 用法：
 //   const mocks = vi.hoisted(() => {
-//     const fs = __createFsMocks();      // readDir 默认 mockResolvedValue([])
+//     const fs = __createFsMocks();      // readDirPage 默认 mockResolvedValue({ entries: [], nextCursor: null })
 //     const git = __createGitMocks();    // gitStatus 默认 mockResolvedValue([])
 //     const notify = __createNotifyMocks(); // startWatch/stopWatch 默认 mockResolvedValue(undefined)
 //     return {
-//       get mockReadDir() { return fs.readDir; },
+//       get mockReadDir() { return fs.readDirPage; },   // 局部名保持 mockReadDir——目标键 = readDirPage（CP-006）
 //       get mockGitStatus() { return git.gitStatus; },
 //       get mockOnFsEvent() { return notify.onFsEvent; },
 //       get triggerFsEvent() { return notify.triggerFsEvent; },
-//       resetAll() { fs.readDir.mockReset(); git.gitStatus.mockReset(); notify.onFsEvent.mockClear(); },
+//       resetAll() { fs.readDirPage.mockReset(); git.gitStatus.mockReset(); notify.onFsEvent.mockClear(); },
 //     };
 //   });
 //
-//   vi.mock("../ipc/fs", () => ({ readDir: mocks.mockReadDir, createDir: vi.fn(), ... }));
+//   vi.mock("../ipc/fs", () => ({ readDirPage: mocks.mockReadDir, createDir: vi.fn(), ... }));
 //   vi.mock("../ipc/git", () => ({ gitStatus: mocks.mockGitStatus }));
 //   vi.mock("../ipc/notify", () => ({ startWatch: vi.fn().mockResolvedValue(undefined), stopWatch: vi.fn().mockResolvedValue(undefined), onFsEvent: mocks.mockOnFsEvent }));
 //
-// 如需自定义 mock 行为（如特定文件系统的 readDir 实现），在 beforeEach/it 中调用：
-//   - makeVfs(mocks.mockReadDir, { "/root": [...] })  — 绑定虚拟文件系统
+// 如需自定义 mock 行为（如特定文件系统的 readDirPage 实现），在 beforeEach/it 中调用：
+//   - makeVfs(mocks.mockReadDir, { "/root": [...] })  — 绑定虚拟文件系统（整表 → 单页末页返回）
 //   - mocks.mockReadDir.mockRejectedValue(new Error("..."))
 //   - mocks.mockGitStatus.mockResolvedValue([...])
 //
@@ -34,7 +34,7 @@ import { vi } from "vitest";
 // ─── FS mocks ───
 
 export interface FsMockOverrides {
-  readDir?: ReturnType<typeof vi.fn>;
+  readDirPage?: ReturnType<typeof vi.fn>;
   readFile?: ReturnType<typeof vi.fn>;
   createDir?: ReturnType<typeof vi.fn>;
   deleteEntry?: ReturnType<typeof vi.fn>;
@@ -42,10 +42,15 @@ export interface FsMockOverrides {
   writeFile?: ReturnType<typeof vi.fn>;
 }
 
-/** 创建 fs IPC mock 函数集。readDir 默认返回 [] 以避免 ExplorerPanel 挂载时未设置 mock 抛错。 */
+/**
+ * 创建 fs IPC mock 函数集。readDirPage 默认返回空页（nextCursor: null = 末页）
+ * 以避免 ExplorerPanel 挂载时未设置 mock 抛错（CP-006 分页契约形状）。
+ */
 export function createFsMocks(overrides?: FsMockOverrides) {
   return {
-    readDir: overrides?.readDir ?? vi.fn().mockResolvedValue([]),
+    readDirPage:
+      overrides?.readDirPage ??
+      vi.fn().mockResolvedValue({ entries: [], nextCursor: null }),
     readFile: overrides?.readFile ?? vi.fn(),
     createDir: overrides?.createDir ?? vi.fn(),
     deleteEntry: overrides?.deleteEntry ?? vi.fn(),

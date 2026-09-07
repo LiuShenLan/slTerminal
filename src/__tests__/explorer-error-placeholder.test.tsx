@@ -28,7 +28,7 @@ const mocks = vi.hoisted(() => {
       mockReadDir.mockReset();
       mockGitStatus.mockReset();
       mockStartWatch.mockReset();
-      mockReadDir.mockResolvedValue([]);
+      mockReadDir.mockResolvedValue({ entries: [], nextCursor: null });
       mockGitStatus.mockResolvedValue([]);
       mockStartWatch.mockResolvedValue(undefined);
     },
@@ -40,7 +40,7 @@ vi.mock("../lib/ConfirmDialog", () => ({
 }));
 
 vi.mock("../ipc/fs", () => ({
-  readDir: mocks.mockReadDir,
+  readDirPage: mocks.mockReadDir,
   createDir: vi.fn(),
   deleteEntry: vi.fn(),
   rename: vi.fn(),
@@ -133,7 +133,7 @@ describe("ExplorerPanel 加载错误占位（FE-07）", () => {
 
     // 第二次 readDir 成功（返回文件条目）
     const fileEntry = { name: "main.ts", path: "C:/test-project/main.ts", isDir: false, size: 64, modified: 1 };
-    mocks.mockReadDir.mockResolvedValueOnce([fileEntry]);
+    mocks.mockReadDir.mockResolvedValueOnce({ entries: [fileEntry], nextCursor: null });
 
     fireEvent.click(await findByTestId("explorer-load-retry"));
 
@@ -175,9 +175,8 @@ describe("useFileTree rootError（FE-07）", () => {
     expect(result.current.rootNodes).toEqual([]);
 
     // 磁盘恢复 → refresh 成功后错误清除
-    mocks.mockReadDir.mockResolvedValueOnce([
-      { name: "a.ts", path: "C:/proj/a.ts", isDir: false, size: 10, modified: 1 },
-    ]);
+    mocks.mockReadDir.mockResolvedValueOnce({ entries: [
+      { name: "a.ts", path: "C:/proj/a.ts", isDir: false, size: 10, modified: 1 },], nextCursor: null });
     await act(async () => {
       await result.current.refresh();
     });
@@ -189,14 +188,17 @@ describe("useFileTree rootError（FE-07）", () => {
     // 根目录成功；src 子目录 readDir 失败
     mocks.mockReadDir.mockImplementation((dirPath: string) => {
       if (dirPath === "C:/proj") {
-        return Promise.resolve([
-          { name: "src", path: "C:/proj/src", isDir: true, size: null, modified: 1 },
-        ]);
+        return Promise.resolve({
+          entries: [
+            { name: "src", path: "C:/proj/src", isDir: true, size: null, modified: 1 },
+          ],
+          nextCursor: null,
+        });
       }
       if (dirPath === "C:/proj/src") {
         return Promise.reject(new Error("subdir error"));
       }
-      return Promise.resolve([]);
+      return Promise.resolve({ entries: [], nextCursor: null });
     });
 
     const { result } = renderHook(() => useFileTree({ rootPath: "C:/proj" }));

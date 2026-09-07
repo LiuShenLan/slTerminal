@@ -5,7 +5,7 @@
 //! - `is_uuid_filename`：UUID 形态纯校验（可复用工具，provider 共用）
 //! - `provider.rs`：`CliHistoryProvider` trait + cliId 键静态注册表
 //! - `claude/`：claude history provider（scan/jsonl/ops 整体下沉，行为零改动；
-//!   scan 带 BE-19 进程内缓存——键 (目录 mtime, 文件数)）
+//!   scan 带 BE-19 进程内缓存——键 = 一级目录内容指纹，CP-007）
 //! - 泛化命令：`agent_history_scan(cliId, force)`（按 cliId 分发 + force 绕过缓存）/
 //!   `agent_history_delete(cliId, sessionId)` / `agent_history_read_title(cliId, sessionId)`
 //!
@@ -580,7 +580,8 @@ mod agent_history_tests {
 
     #[test]
     fn command_scan_force_true_bypasses_cache() {
-        // BE-19 契约：默认走进程内缓存（键不变命中复用，不重复读盘）；force=true 绕过强制重扫
+        // BE-19 契约（指纹口径，CP-007）：默认走进程内缓存（键 = 一级目录内容指纹，
+        // 命中复用不重复读盘）；force=true 绕过强制重扫
         let (_dir, root, proj) = make_scan_root();
         write_valid_session(&proj, UUID);
         let _guard = ScanRootGuard::set(&root);
@@ -589,12 +590,17 @@ mod agent_history_tests {
         let first = block_on(agent_history_scan("claude".to_string(), None)).unwrap();
         assert_eq!(first.len(), 1);
 
-        // 删除会话文件（根键不变：目录 mtime/一级条目数均未变）→ 默认走缓存 → 仍返回旧结果
+        // 删除会话文件 → 指纹变化 → 默认扫（无 force）也失效重扫得空——
+        // 旧键 (mtime, 文件数) 目录级失效做不到，曾由前端恒 force=true 兜底
+        std::thread::sleep(std::time::Duration::from_millis(5)); // 目录 mtime 跨毫秒
         std::fs::remove_file(proj.join(format!("{UUID}.jsonl"))).unwrap();
-        let cached = block_on(agent_history_scan("claude".to_string(), None)).unwrap();
-        assert_eq!(cached.len(), 1, "键不变缓存命中——不重复读盘");
+        let rescanned = block_on(agent_history_scan("claude".to_string(), None)).unwrap();
+        assert!(
+            rescanned.is_empty(),
+            "指纹失效应自动重扫——不返回删除前旧结果"
+        );
 
-        // force=true → 绕过缓存强制重扫 → 文件已删 → 空
+        // force=true → 绕过缓存强制重扫 → 文件已删 → 空（显式通道保留）
         let forced = block_on(agent_history_scan("claude".to_string(), Some(true))).unwrap();
         assert!(forced.is_empty(), "force=true 应绕过缓存强制重扫");
     }

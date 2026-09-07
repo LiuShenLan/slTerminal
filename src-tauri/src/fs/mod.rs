@@ -33,6 +33,40 @@ pub struct DirEntry {
     pub modified: Option<u64>,
 }
 
+/// 目录分页读取结果（CP-006：游标契约）
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/types/fs.ts")]
+pub struct FsReadDirPage {
+    /// 本页条目（排序与过滤语义同旧整表契约）
+    pub entries: Vec<DirEntry>,
+    /// 下一页游标；None = 无更多（末页）
+    pub next_cursor: Option<String>,
+}
+
+/// 单页默认/上限条目数（CP-006 写死）
+const READ_DIR_PAGE_DEFAULT: u32 = 500;
+const READ_DIR_PAGE_MAX: u32 = 1000;
+
+/// 分页游标编解码（CP-006）
+///
+/// 游标 = 排序后全量列表起始序号的十进制文本经 base64——opaque：客户端只回传
+/// 不解读，仅本模块可解析；跨页排序契约稳定，续页无重复无遗漏。
+fn encode_page_cursor(start: usize) -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(start.to_string())
+}
+
+fn decode_page_cursor(cursor: &str) -> Result<usize, AppError> {
+    use base64::Engine as _;
+    let invalid = || AppError::Validation(format!("无效目录分页游标（opaque 契约）: {cursor}"));
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(cursor)
+        .map_err(|_| invalid())?;
+    let text = String::from_utf8(bytes).map_err(|_| invalid())?;
+    text.parse::<usize>().map_err(|_| invalid())
+}
+
 /// 在 spawn_blocking 中执行阻塞任务，统一将 JoinError（含闭包 panic）映射为 AppError::TaskJoin
 async fn spawn_blocking_task<F, R>(f: F) -> Result<R, AppError>
 where
@@ -330,25 +364,48 @@ async fn fs_write_file_impl(
     .await
 }
 
-/// 递归读取目录内容
+/// 分页读取目录内容
 ///
-/// 过滤 `.git/`、`node_modules/`（重型目录，非用户编辑文件）。
-/// 结果按文件夹→文件排序，同类型按名称字母排序。
+/// 过滤 `.git/`（重型目录，非用户编辑文件），结果按文件夹→文件排序、同类型按名称
+/// 字母排序——过滤与排序在**全量完成后**进行（CP-006），排序契约跨页稳定。
 #[tauri::command]
 pub async fn fs_read_dir(
     path: String,
+    cursor: Option<String>,
+    limit: Option<u32>,
     state: State<'_, AppState>,
-) -> Result<Vec<DirEntry>, AppError> {
+) -> Result<FsReadDirPage, AppError> {
     // State 仅做提取，业务逻辑在 fs_read_dir_impl（测试直接调内核）
-    fs_read_dir_impl(path, extract_root(&state)?).await
+    fs_read_dir_impl(path, cursor, limit, extract_root(&state)?).await
 }
 
-/// fs_read_dir 命令内核：路径 sandbox 校验 + 阻塞列目录
-async fn fs_read_dir_impl(path: String, root: Option<PathBuf>) -> Result<Vec<DirEntry>, AppError> {
+/// fs_read_dir 命令内核：路径 sandbox 校验 + 阻塞列目录 + 过滤排序后游标切片
+///
+/// 分页语义（CP-006）：`.git` 过滤与排序在整表收集完成后执行，再按游标切片
+/// （游标 = 排序后起始序号的 base64，opaque——由 [`encode_page_cursor`] 编码、
+/// [`decode_page_cursor`] 解码）；`limit` 钳制 `[1, READ_DIR_PAGE_MAX]`，缺省
+/// `READ_DIR_PAGE_DEFAULT`。增量拉取由前端续页拼接，本命令不采用 Channel 推送。
+async fn fs_read_dir_impl(
+    path: String,
+    cursor: Option<String>,
+    limit: Option<u32>,
+    root: Option<PathBuf>,
+) -> Result<FsReadDirPage, AppError> {
     // 路径 sandbox 校验
     validate_path_within_root(&root, Path::new(&path))?;
 
     spawn_blocking_task(move || {
+        // limit 越界钳制（下界 1、上界 MAX），缺省用默认页大小
+        let limit = limit
+            .map(|l| l.clamp(1, READ_DIR_PAGE_MAX))
+            .unwrap_or(READ_DIR_PAGE_DEFAULT) as usize;
+        // 游标解码（None/首帧 = 从 0 开始）
+        let start = cursor
+            .as_deref()
+            .map(decode_page_cursor)
+            .transpose()?
+            .unwrap_or(0);
+
         let mut entries: Vec<DirEntry> = Vec::new();
         let dir =
             std::fs::read_dir(&path).map_err(|e| io_error("读取目录", Path::new(&path), e))?;
@@ -391,14 +448,27 @@ async fn fs_read_dir_impl(path: String, root: Option<PathBuf>) -> Result<Vec<Dir
             });
         }
 
-        // 按文件夹→文件排序，同类型按名称字母排序
+        // 按文件夹→文件排序，同类型按名称字母排序（语义与旧整表契约零变更）
         entries.sort_by(|a, b| {
             b.is_dir
                 .cmp(&a.is_dir)
                 .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
         });
 
-        Ok(entries)
+        // 排序完成后按游标切片——排序契约跨页稳定，续页拼接无重复无遗漏
+        let end = start.saturating_add(limit).min(entries.len());
+        let page = if start >= entries.len() {
+            Vec::new()
+        } else {
+            entries[start..end].to_vec()
+        };
+        // 切片未到末尾 → 下一页游标（末尾游标起点）；到末尾 → None（末页）
+        let next_cursor = (end < entries.len()).then(|| encode_page_cursor(end));
+
+        Ok(FsReadDirPage {
+            entries: page,
+            next_cursor,
+        })
     })
     .await
 }
@@ -537,6 +607,30 @@ mod read_dir_tests {
         tokio::runtime::Runtime::new().unwrap().block_on(f)
     }
 
+    /// 测试辅助：分页遍历聚合全部条目（CP-006 契约——单目录全量 = 各页顺序拼接）
+    ///
+    /// 供断言「整表语义」的既有用例复用：排序/过滤语义与旧整表契约一致，
+    /// 聚合结果可直接当整表断言。
+    pub(super) async fn collect_dir_entries(
+        path: String,
+        root: Option<PathBuf>,
+    ) -> Result<Vec<DirEntry>, AppError> {
+        let mut all: Vec<DirEntry> = Vec::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let page = fs_read_dir_impl(path.clone(), cursor, None, root.clone()).await?;
+            // 防御：游标契约异常导致空页循环时直接返回已聚合结果（不无限循环）
+            if page.entries.is_empty() {
+                return Ok(all);
+            }
+            all.extend(page.entries);
+            match page.next_cursor {
+                Some(next) => cursor = Some(next),
+                None => return Ok(all),
+            }
+        }
+    }
+
     #[test]
     fn fs_read_dir_lists_children() {
         let dir = tempfile::tempdir().unwrap();
@@ -544,7 +638,7 @@ mod read_dir_tests {
         std::fs::write(dir.path().join("b.txt"), "b").unwrap();
         std::fs::create_dir(dir.path().join("sub")).unwrap();
 
-        let entries = run(fs_read_dir_impl(
+        let entries = run(collect_dir_entries(
             dir.path().to_string_lossy().to_string(),
             None,
         ))
@@ -576,7 +670,7 @@ mod read_dir_tests {
         std::fs::create_dir(dir.path().join(".git")).unwrap();
         std::fs::write(dir.path().join("visible.txt"), "ok").unwrap();
 
-        let entries = run(fs_read_dir_impl(
+        let entries = run(collect_dir_entries(
             dir.path().to_string_lossy().to_string(),
             None,
         ))
@@ -593,7 +687,7 @@ mod read_dir_tests {
         std::fs::create_dir(dir.path().join(".git")).unwrap();
         std::fs::write(dir.path().join("visible.txt"), "ok").unwrap();
 
-        let entries = run(fs_read_dir_impl(
+        let entries = run(collect_dir_entries(
             dir.path().to_string_lossy().to_string(),
             None,
         ))
@@ -619,7 +713,7 @@ mod read_dir_tests {
         std::fs::create_dir(dir.path().join("node_modules")).unwrap();
         std::fs::create_dir(dir.path().join(".git")).unwrap();
 
-        let entries = run(fs_read_dir_impl(
+        let entries = run(collect_dir_entries(
             dir.path().to_string_lossy().to_string(),
             None,
         ))
@@ -640,7 +734,7 @@ mod read_dir_tests {
     #[test]
     fn fs_read_dir_empty_dir_returns_empty() {
         let dir = tempfile::tempdir().unwrap();
-        let entries = run(fs_read_dir_impl(
+        let entries = run(collect_dir_entries(
             dir.path().to_string_lossy().to_string(),
             None,
         ))
@@ -654,7 +748,7 @@ mod read_dir_tests {
         std::fs::create_dir(dir.path().join(".claude")).unwrap();
         std::fs::write(dir.path().join("visible.txt"), "ok").unwrap();
 
-        let entries = run(fs_read_dir_impl(
+        let entries = run(collect_dir_entries(
             dir.path().to_string_lossy().to_string(),
             None,
         ))
@@ -663,6 +757,185 @@ mod read_dir_tests {
         assert!(names.contains(&".claude"), ".claude 目录应显示");
         assert!(names.contains(&"visible.txt"), "visible.txt 应显示");
         assert_eq!(entries.len(), 2, ".claude 和 visible.txt 均应显示");
+    }
+
+    // ── CP-006 游标分页用例 ──
+
+    /// 建 n 个文件（f0000.txt 风格）到目录——分页用例夹具
+    fn seed_files(dir: &std::path::Path, n: usize) {
+        for i in 0..n {
+            std::fs::write(dir.join(format!("f{i:04}.txt")), "x").unwrap();
+        }
+    }
+
+    /// 超过单页默认上限（500）→ 首页恰满 500 且带 next_cursor（可续页）
+    #[test]
+    fn read_dir_first_page_has_cursor_when_overflow() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_files(dir.path(), 520);
+
+        let page = run(fs_read_dir_impl(
+            dir.path().to_string_lossy().to_string(),
+            None,
+            None,
+            None,
+        ))
+        .unwrap();
+        assert_eq!(
+            page.entries.len(),
+            READ_DIR_PAGE_DEFAULT as usize,
+            "首页应恰为默认页大小（500）"
+        );
+        assert!(
+            page.next_cursor.is_some(),
+            "超过默认页大小时首页应带续页游标"
+        );
+    }
+
+    /// 目录总量不超过单页上限 → 首页即末页，next_cursor = None
+    #[test]
+    fn read_dir_last_page_null_cursor() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.txt"), "a").unwrap();
+        std::fs::write(dir.path().join("b.txt"), "b").unwrap();
+
+        let page = run(fs_read_dir_impl(
+            dir.path().to_string_lossy().to_string(),
+            None,
+            None,
+            None,
+        ))
+        .unwrap();
+        assert_eq!(page.entries.len(), 2, "小目录一页即全量");
+        assert!(page.next_cursor.is_none(), "末页游标应为 None");
+    }
+
+    /// 第二页接续第一页：无重复无遗漏（分页拼接整体 = 旧整表语义）
+    #[test]
+    fn read_dir_cursor_resume_mid_list() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_files(dir.path(), 601);
+        let path = dir.path().to_string_lossy().to_string();
+
+        let page1 = run(fs_read_dir_impl(path.clone(), None, None, None)).unwrap();
+        assert_eq!(page1.entries.len(), READ_DIR_PAGE_DEFAULT as usize);
+        let cursor = page1.next_cursor.clone().expect("非末页应带游标");
+
+        let page2 = run(fs_read_dir_impl(path.clone(), Some(cursor), None, None)).unwrap();
+        assert_eq!(page2.entries.len(), 101, "第二页应为剩余 101 条");
+        assert!(page2.next_cursor.is_none(), "第二页即末页，游标应为 None");
+
+        // 无重复无遗漏：分页拼接应与整表聚合逐条一致
+        let resumed: Vec<DirEntry> = page1.entries.into_iter().chain(page2.entries).collect();
+        let all = run(collect_dir_entries(path, None)).unwrap();
+        assert_eq!(resumed.len(), all.len(), "分页拼接应覆盖全量");
+        assert!(
+            resumed
+                .iter()
+                .zip(all.iter())
+                .all(|(a, b)| a.name == b.name),
+            "分页拼接应与整表逐条一致（无重复无遗漏）"
+        );
+    }
+
+    /// limit 越界（>上限）→ 钳制到 READ_DIR_PAGE_MAX
+    #[test]
+    fn read_dir_page_limit_clamped_to_max() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_files(dir.path(), 1005);
+
+        let page = run(fs_read_dir_impl(
+            dir.path().to_string_lossy().to_string(),
+            None,
+            Some(5000),
+            None,
+        ))
+        .unwrap();
+        assert_eq!(
+            page.entries.len(),
+            READ_DIR_PAGE_MAX as usize,
+            "limit=5000 应钳制到 1000"
+        );
+        assert!(page.next_cursor.is_some(), "仍有剩余时应带续页游标");
+    }
+
+    /// 排序契约跨页稳定：跨页拼接整体序 = 文件夹→文件 + 同类型小写名称序
+    #[test]
+    fn read_dir_sort_order_stable_across_pages() {
+        let dir = tempfile::tempdir().unwrap();
+        // 40 目录 + 490 文件（>500 → 多页，分页边界落在文件区内）
+        for i in 0..40 {
+            std::fs::create_dir(dir.path().join(format!("dir{i:02}"))).unwrap();
+        }
+        seed_files(dir.path(), 490);
+        let path = dir.path().to_string_lossy().to_string();
+
+        // 三页逐页拉取（limit=250：页 1 = 40 目录 + 210 文件）
+        let page1 = run(fs_read_dir_impl(path.clone(), None, Some(250), None)).unwrap();
+        assert_eq!(page1.entries.len(), 250);
+        let page2 = run(fs_read_dir_impl(
+            path.clone(),
+            page1.next_cursor.clone(),
+            Some(250),
+            None,
+        ))
+        .unwrap();
+        let page3 = run(fs_read_dir_impl(
+            path.clone(),
+            page2.next_cursor.clone(),
+            Some(250),
+            None,
+        ))
+        .unwrap();
+        assert!(page3.next_cursor.is_none(), "第三页应即末页");
+
+        let joined: Vec<&str> = page1
+            .entries
+            .iter()
+            .chain(page2.entries.iter())
+            .chain(page3.entries.iter())
+            .map(|e| e.name.as_str())
+            .collect();
+
+        // 参考整体序：文件夹 → 文件，同类型小写名称序（与后端排序契约同规则独立构造）
+        let mut expected: Vec<String> = (0..40).map(|i| format!("dir{i:02}")).collect();
+        expected.sort_by_key(|n| n.to_lowercase());
+        let mut files: Vec<String> = (0..490).map(|i| format!("f{i:04}.txt")).collect();
+        files.sort_by_key(|n| n.to_lowercase());
+        expected.extend(files);
+
+        assert_eq!(
+            joined, expected,
+            "跨页拼接整体序应与排序契约一致（锁死跨页稳定）"
+        );
+    }
+
+    /// .git 过滤在分页后仍生效（任一页不出现 .git）
+    #[test]
+    fn read_dir_git_filter_still_applied() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".git")).unwrap();
+        seed_files(dir.path(), 501); // 501 文件 + .git → 强制两页
+        let path = dir.path().to_string_lossy().to_string();
+
+        let page1 = run(fs_read_dir_impl(path.clone(), None, None, None)).unwrap();
+        assert_eq!(page1.entries.len(), READ_DIR_PAGE_DEFAULT as usize);
+        let page2 = run(fs_read_dir_impl(
+            path.clone(),
+            page1.next_cursor.clone(),
+            None,
+            None,
+        ))
+        .unwrap();
+
+        let mut total = 0;
+        for page in [&page1, &page2] {
+            for e in &page.entries {
+                assert_ne!(e.name, ".git", "任一页均不得出现 .git");
+                total += 1;
+            }
+        }
+        assert_eq!(total, 501, ".git 过滤后应剩 501 条（跨页合计）");
     }
 
     #[test]
@@ -677,8 +950,8 @@ mod read_dir_tests {
         .unwrap();
         assert!(new_dir.exists(), "目录应被创建");
 
-        // 通过 fs_read_dir 验证目录存在
-        let entries = run(fs_read_dir_impl(
+        // 通过 fs_read_dir 验证目录存在（分页聚合遍历）
+        let entries = run(collect_dir_entries(
             base.path().to_string_lossy().to_string(),
             None,
         ))
@@ -738,7 +1011,7 @@ mod read_dir_tests {
         assert!(dst.exists(), "新路径应存在");
 
         // 通过 fs_read_dir 验证
-        let entries = run(fs_read_dir_impl(
+        let entries = run(collect_dir_entries(
             dir.path().to_string_lossy().to_string(),
             None,
         ))
@@ -982,7 +1255,8 @@ mod command_wrapper_tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("a.txt"), "a").unwrap();
 
-        let entries = run(fs_read_dir_impl(
+        // 分页聚合遍历（CP-006：整表断言改分页遍历聚合）
+        let entries = run(super::read_dir_tests::collect_dir_entries(
             dir.path().to_string_lossy().to_string(),
             Some(dir.path().to_path_buf()),
         ))
@@ -998,6 +1272,8 @@ mod command_wrapper_tests {
 
         let result = run(fs_read_dir_impl(
             nonexistent.to_string_lossy().to_string(),
+            None,
+            None,
             Some(dir.path().to_path_buf()),
         ));
         assert!(result.is_err(), "不存在的目录应返回错误");
@@ -1010,6 +1286,8 @@ mod command_wrapper_tests {
 
         let result = run(fs_read_dir_impl(
             outside.path().to_string_lossy().to_string(),
+            None,
+            None,
             Some(root.path().to_path_buf()),
         ));
         assert!(result.is_err(), "根外路径应被沙箱拒绝");
@@ -1185,6 +1463,8 @@ mod command_wrapper_tests {
 
         let err = run(fs_read_dir_impl(
             ghost.to_string_lossy().to_string(),
+            None,
+            None,
             Some(dir.path().to_path_buf()),
         ))
         .unwrap_err();

@@ -28,7 +28,7 @@ const mocks = vi.hoisted(() => {
       mockStartWatch.mockReset();
       mockAddPanel.mockReset();
       mockGetPanel.mockReset();
-      mockReadDir.mockResolvedValue([]);
+      mockReadDir.mockResolvedValue({ entries: [], nextCursor: null });
       mockGitStatus.mockResolvedValue([]);
       mockStartWatch.mockResolvedValue(undefined);
     },
@@ -36,7 +36,7 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock("../ipc/fs", () => ({
-  readDir: mocks.mockReadDir,
+  readDirPage: mocks.mockReadDir,
   createDir: vi.fn(),
   deleteEntry: vi.fn(),
   rename: vi.fn(),
@@ -183,9 +183,8 @@ describe("FileTree 右键菜单「在终端中打开」", () => {
 
 describe("ExplorerPanel 在终端中打开 — addPanel 参数", () => {
   it("O3: 文件 → cwd 取父目录，component=terminal，renderer=always，panelId 格式 terminal-open-*", async () => {
-    mocks.mockReadDir.mockResolvedValue([
-      { name: "config.json", path: "C:/test-project/config.json", isDir: false, size: 64, modified: 1 },
-    ]);
+    mocks.mockReadDir.mockResolvedValue({ entries: [
+      { name: "config.json", path: "C:/test-project/config.json", isDir: false, size: 64, modified: 1 },], nextCursor: null });
     seedProject();
 
     const { getAllByText } = render(React.createElement(ExplorerPanel));
@@ -217,9 +216,8 @@ describe("ExplorerPanel 在终端中打开 — addPanel 参数", () => {
     // `lastIndexOf("/")` 前的父级——文件夹 "C:/test-project/src" 的 cwd 实际为
     // 其父目录 "C:/test-project"。checklist EXP-01 语义为「文件取父目录」，
     // 文件夹自身即目录，语义上应打开在文件夹内（待产品决策，本用例锁当前行为）。
-    mocks.mockReadDir.mockResolvedValue([
-      { name: "src", path: "C:/test-project/src", isDir: true, size: undefined, modified: undefined },
-    ]);
+    mocks.mockReadDir.mockResolvedValue({ entries: [
+      { name: "src", path: "C:/test-project/src", isDir: true, size: undefined, modified: undefined },], nextCursor: null });
     seedProject();
 
     const { getAllByText } = render(React.createElement(ExplorerPanel));
@@ -241,9 +239,8 @@ describe("ExplorerPanel 在终端中打开 — addPanel 参数", () => {
   });
 
   it("O5: 无斜杠路径（根级单名文件）→ cwd 取路径自身", async () => {
-    mocks.mockReadDir.mockResolvedValue([
-      { name: "readme.txt", path: "readme.txt", isDir: false, size: 10, modified: 1 },
-    ]);
+    mocks.mockReadDir.mockResolvedValue({ entries: [
+      { name: "readme.txt", path: "readme.txt", isDir: false, size: 10, modified: 1 },], nextCursor: null });
     seedProject("C:/test-project");
 
     const { getAllByText } = render(React.createElement(ExplorerPanel));
@@ -265,9 +262,8 @@ describe("ExplorerPanel 在终端中打开 — addPanel 参数", () => {
   });
 
   it("O6: 标题使用 getTerminalTitle（活跃页存在时）", async () => {
-    mocks.mockReadDir.mockResolvedValue([
-      { name: "a.ts", path: "C:/test-project/a.ts", isDir: false, size: 10, modified: 1 },
-    ]);
+    mocks.mockReadDir.mockResolvedValue({ entries: [
+      { name: "a.ts", path: "C:/test-project/a.ts", isDir: false, size: 10, modified: 1 },], nextCursor: null });
     seedProject();
 
     const { getAllByText } = render(React.createElement(ExplorerPanel));
@@ -289,9 +285,8 @@ describe("ExplorerPanel 在终端中打开 — addPanel 参数", () => {
   });
 
   it("O7: 重复「在终端中打开」→ 每次均 addPanel（终端打开无去重语义）", async () => {
-    mocks.mockReadDir.mockResolvedValue([
-      { name: "a.ts", path: "C:/test-project/a.ts", isDir: false, size: 10, modified: 1 },
-    ]);
+    mocks.mockReadDir.mockResolvedValue({ entries: [
+      { name: "a.ts", path: "C:/test-project/a.ts", isDir: false, size: 10, modified: 1 },], nextCursor: null });
     seedProject();
 
     const { getAllByText } = render(React.createElement(ExplorerPanel));

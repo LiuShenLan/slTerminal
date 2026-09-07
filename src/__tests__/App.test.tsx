@@ -43,7 +43,7 @@ vi.mock("../features/navTree/NavTree", () => ({
 
 vi.mock("../ipc/fs", () => ({
   setProjectRoot: vi.fn(() => Promise.resolve()),
-  readDir: vi.fn(() => Promise.resolve([])),
+  readDirPage: vi.fn(() => Promise.resolve({ entries: [], nextCursor: null })),
   readFile: vi.fn(() => Promise.resolve("")),
   writeFile: vi.fn(() => Promise.resolve()),
   createDir: vi.fn(() => Promise.resolve()),

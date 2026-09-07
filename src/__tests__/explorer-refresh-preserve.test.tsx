@@ -22,12 +22,12 @@ const mocks = vi.hoisted(() => {
   const notify = __createNotifyMocks();
 
   return {
-    get mockReadDir() { return fs.readDir; },
+    get mockReadDir() { return fs.readDirPage; },
     get mockGitStatus() { return git.gitStatus; },
     get mockOnFsEvent() { return notify.onFsEvent; },
     get triggerFsEvent() { return notify.triggerFsEvent; },
     resetAll() {
-      fs.readDir.mockReset();
+      fs.readDirPage.mockReset();
       git.gitStatus.mockReset();
       notify.onFsEvent.mockClear();
     },
@@ -35,7 +35,7 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock("../ipc/fs", () => ({
-  readDir: mocks.mockReadDir,
+  readDirPage: mocks.mockReadDir,
   createDir: vi.fn(),
   deleteEntry: vi.fn(),
   rename: vi.fn(),
@@ -280,7 +280,7 @@ describe("useFileTree 刷新保留展开状态", () => {
     mocks.mockReadDir.mockImplementation(async (dirPath: string) => {
       if (dirPath === "/proj/src") throw new Error("EACCES");
       if (!vfs.has(dirPath)) throw new Error(`ENOENT: ${dirPath}`);
-      return vfs.get(dirPath)!;
+      return { entries: vfs.get(dirPath)!, nextCursor: null };
     });
 
     await act(async () => {

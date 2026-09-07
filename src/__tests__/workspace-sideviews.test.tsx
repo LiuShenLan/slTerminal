@@ -92,7 +92,7 @@ vi.mock("../features/explorer", () => ({
 }));
 
 vi.mock("../ipc/fs", () => ({
-  readDir: vi.fn(),
+  readDirPage: vi.fn().mockResolvedValue({ entries: [], nextCursor: null }),
   readFile: vi.fn(),
   writeFile: vi.fn(),
   createDir: vi.fn(),

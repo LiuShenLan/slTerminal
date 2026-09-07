@@ -20,12 +20,12 @@ const mocks = vi.hoisted(() => {
   const notify = __createNotifyMocks();
 
   return {
-    get mockReadDir() { return fs.readDir; },
+    get mockReadDir() { return fs.readDirPage; },
     get mockGitStatus() { return git.gitStatus; },
     get mockOnFsEvent() { return notify.onFsEvent; },
     get triggerFsEvent() { return notify.triggerFsEvent; },
     resetAll() {
-      fs.readDir.mockReset();
+      fs.readDirPage.mockReset();
       git.gitStatus.mockReset();
       notify.onFsEvent.mockClear();
     },
@@ -33,7 +33,7 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock("../ipc/fs", () => ({
-  readDir: mocks.mockReadDir,
+  readDirPage: mocks.mockReadDir,
   createDir: vi.fn(),
   deleteEntry: vi.fn(),
   rename: vi.fn(),
@@ -68,7 +68,7 @@ function deferred<T>() {
 beforeEach(() => {
   cleanup();
   mocks.resetAll();
-  mocks.mockReadDir.mockResolvedValue([]);
+  mocks.mockReadDir.mockResolvedValue({ entries: [], nextCursor: null });
   mocks.mockGitStatus.mockResolvedValue([]);
 });
 
@@ -82,7 +82,7 @@ afterEach(() => {
 
 describe("useFileTree 竞态清理 — G1 loadRoot 过期回调", () => {
   it("G1: rootPath 切 null 后旧 loadRoot 回调 resolve → 丢弃不抛错、树保持空", async () => {
-    const d = deferred<DirEntry[]>();
+    const d = deferred<{ entries: DirEntry[]; nextCursor: string | null }>();
     mocks.mockReadDir.mockImplementation(() => d.promise);
 
     const { result, rerender } = renderHook(
@@ -99,7 +99,7 @@ describe("useFileTree 竞态清理 — G1 loadRoot 过期回调", () => {
 
     // 旧回调此刻才 resolve：gen 已过期 → 结果被丢弃，不 setState、不抛错
     await act(async () => {
-      d.resolve([mockEntry("stale.ts", false, "/proj-a/stale.ts")]);
+      d.resolve({ entries: [mockEntry("stale.ts", false, "/proj-a/stale.ts")], nextCursor: null });
     });
 
     expect(result.current.rootNodes).toEqual([]);

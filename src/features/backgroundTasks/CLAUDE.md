@@ -38,7 +38,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### 扫描执行体 force 恒 true
 
-`runSessionRefresh` 遍历 `cliProfileRegistry` 中声明 history 能力的 profile 逐个 `scanAgentHistory(cliId, true)` 聚合为扁平列表。**恒 `force=true`**：后端 `(目录 mtime, 文件数)` 缓存对进行中会话不敏感（规格 §8）——目录内会话文件增删不影响根键，手动与定时必须同一口径绕过缓存，否则空结果永久命中场景无法恢复。
+`runSessionRefresh` 遍历 `cliProfileRegistry` 中声明 history 能力的 profile 逐个 `scanAgentHistory(cliId, true)` 聚合为扁平列表。**恒 `force=true`**：显式直扫，手动与定时同口径（规格 §8）。后端 force 通道不读键、不回填缓存（CP-007：缓存键收集 = 两级 read_dir + 全量文件 stat，与重扫同量级成本，每 tick 承担不起）；后端目录内容指纹缓存只服务非 force 调用方（未来消费方），会话文件增删改自动失效。
 
 ### 与后端任务的分工
 

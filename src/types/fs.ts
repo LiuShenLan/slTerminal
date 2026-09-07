@@ -26,3 +26,16 @@ size: number | null,
  * 最后修改时间（Unix 毫秒），仅文件时有值
  */
 modified: number | null, };
+
+/**
+ * 目录分页读取结果（CP-006：游标契约）
+ */
+export type FsReadDirPage = { 
+/**
+ * 本页条目（排序与过滤语义同旧整表契约）
+ */
+entries: Array<DirEntry>, 
+/**
+ * 下一页游标；None = 无更多（末页）
+ */
+nextCursor: string | null, };

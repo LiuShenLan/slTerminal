@@ -2,7 +2,7 @@
 // invoke 只允许在本文件出现（硬约束 #1）
 
 import { invoke, Channel } from "@tauri-apps/api/core";
-import type { DirEntry } from "../types/fs";
+import type { FsReadDirPage } from "../types/fs";
 
 /** fs_read_file 分块推送的单块载荷（BE-03）——后端按 256KB 块经 onChunk Channel 推送 */
 export interface FsReadChunk {
@@ -73,9 +73,27 @@ export async function writeFile(
   await invoke("fs_write_file", { path, content });
 }
 
-/** 读取目录内容 */
-export async function readDir(path: string): Promise<DirEntry[]> {
-  return invoke<DirEntry[]>("fs_read_dir", { path });
+/**
+ * 分页读取目录内容（CP-006 游标契约，fs_read_dir）
+ *
+ * - path：目录路径（沙箱校验）；
+ * - cursor：上一页返回的 nextCursor（首帧省略）——opaque，只回传不解读；
+ * - limit：单页上限 [1, 1000]，缺省 500（越界由后端钳制）。
+ *
+ * 返回本页条目 + 下一页游标（null = 末页）。后端过滤（.git）与排序（文件夹→文件、
+ * 小写名称序）在整表完成后切片——跨页整体序稳定，消费方按页顺序拼接即全量。
+ */
+export async function readDirPage(
+  path: string,
+  cursor?: string,
+  limit?: number,
+): Promise<FsReadDirPage> {
+  // 只发送提供的键：cursor/limit 未提供时不入 payload（undefined 不入 payload
+  // 是本仓约定，ipc-contract 测试对键集合做精确断言，缺省调用仅含 path）
+  const payload: Record<string, unknown> = { path };
+  if (cursor !== undefined) payload.cursor = cursor;
+  if (limit !== undefined) payload.limit = limit;
+  return invoke<FsReadDirPage>("fs_read_dir", payload);
 }
 
 /** 创建目录（递归创建父目录） */

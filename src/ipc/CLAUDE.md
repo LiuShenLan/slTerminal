@@ -12,6 +12,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `invoke` 调用只出现在本目录文件内。新增系统调用必须先在此封装，禁止组件直接调用 Tauri API。
 
+### 目录分页读取（CP-006）
+
+`fs.readDirPage(path, cursor?, limit?)` → `fs_read_dir`（返回 `FsReadDirPage`，生成自 `src/types/fs.ts`）：后端 `.git` 过滤与排序（文件夹→文件、小写名序）整表完成后切片——跨页整体序稳定，消费方按页序拼接即全量；`nextCursor: null` = 末页。`cursor` 为 opaque（上一页回传值，只回传不解读）；`limit` 缺省 500、上限 1000（越界后端钳制）。FileTree 侧 `useFileTree` loadRoot 首帧拉首页 + 后台续页拼接，展开/刷新路径（loadDirectory/collectDirEntries）聚合读取。
+
 ### Channel 模式
 
 流式数据通过 `Channel<T>` 推送，调用方传入 `onOutput`/`onChunk` 回调。典型用例：
@@ -65,7 +69,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### agent history 命令（MC-303/306）
 
-- `scanAgentHistory(cliId, force?)`：后端按 (目录 mtime, 文件数) 进程内缓存，`force=true` 绕过缓存。**无参导出已删除**——后端 `cli_id` 必填。
+- `scanAgentHistory(cliId, force?)`：后端按目录内容指纹（一级目录名清单 + 会话文件 file_name/mtime/len，FNV-1a 排序混合）进程内缓存，会话文件增删改自动失效重扫（CP-007 指纹口径）；`force=true` 显式直扫——不读键、不回填缓存（键收集成本与重扫同量级，刷新路径承担不起），内容变则键必变，非 force 调用自愈。**无参导出已删除**——后端 `cli_id` 必填。
 - `deleteHistorySession(cliId, sessionId)`：后端按 cliId 路由 provider，delete 前经该 provider `validate_session_id` 前置校验（前端不传路径，仅传 cliId + sessionId，SEC-05 等价强制）。
 - `readHistoryTitle(cliId, sessionId)`：回退链与历史扫描同源，会话文件不存在 → `title: null`（非 Err）。
 

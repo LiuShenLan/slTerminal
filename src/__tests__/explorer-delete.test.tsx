@@ -82,7 +82,7 @@ vi.mock("../lib/ConfirmDialog", () => ({
 
 // Mock ipc/fs
 vi.mock("../ipc/fs", () => ({
-  readDir: mocks.mockReadDir,
+  readDirPage: mocks.mockReadDir,
   createDir: mocks.mockCreateDir,
   deleteEntry: mocks.mockDeleteEntry,
   rename: mocks.mockRename,
@@ -190,7 +190,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.resetAll();
   mocks.mockConfirmDialog.mockResolvedValue(false); // 默认取消
-  mocks.mockReadDir.mockResolvedValue([]);
+  mocks.mockReadDir.mockResolvedValue({ entries: [], nextCursor: null });
   mocks.mockGitStatus.mockResolvedValue([]);
   mocks.mockStartWatch.mockResolvedValue(undefined);
   cleanup();
@@ -331,9 +331,8 @@ describe("ExplorerPanel 删除集成", () => {
     mocks.mockConfirmDialog.mockResolvedValue(true);
     mocks.mockDeleteEntry.mockResolvedValue(undefined);
     // readDir 返回一个文件节点，供 FileTree 渲染
-    mocks.mockReadDir.mockResolvedValue([
-      { name: "config.json", path: "C:/test-project/config.json", isDir: false, size: 64, modified: 1 },
-    ]);
+    mocks.mockReadDir.mockResolvedValue({ entries: [
+      { name: "config.json", path: "C:/test-project/config.json", isDir: false, size: 64, modified: 1 },], nextCursor: null });
 
     seedProject();
 
@@ -362,9 +361,8 @@ describe("ExplorerPanel 删除集成", () => {
     mocks.mockConfirmDialog.mockResolvedValue(true);
     mocks.mockDeleteEntry.mockRejectedValue(new Error("权限不足"));
 
-    mocks.mockReadDir.mockResolvedValue([
-      { name: "readonly.txt", path: "C:/test-project/readonly.txt", isDir: false, size: 32, modified: 1 },
-    ]);
+    mocks.mockReadDir.mockResolvedValue({ entries: [
+      { name: "readonly.txt", path: "C:/test-project/readonly.txt", isDir: false, size: 32, modified: 1 },], nextCursor: null });
 
     seedProject();
 
@@ -471,9 +469,8 @@ describe("FileTree 右键菜单视觉规格（UI-802）", () => {
 describe("ExplorerPanel 操作失败 UI 通知", () => {
   it("11. 重命名失败 → UI 错误横幅显示", async () => {
     mocks.mockRename.mockRejectedValue(new Error("文件被锁定"));
-    mocks.mockReadDir.mockResolvedValue([
-      { name: "locked.ts", path: "C:/test-project/locked.ts", isDir: false, size: 32, modified: 1 },
-    ]);
+    mocks.mockReadDir.mockResolvedValue({ entries: [
+      { name: "locked.ts", path: "C:/test-project/locked.ts", isDir: false, size: 32, modified: 1 },], nextCursor: null });
 
     seedProject();
 
@@ -504,9 +501,8 @@ describe("ExplorerPanel 操作失败 UI 通知", () => {
 
   it("12. 新建文件失败 → UI 错误横幅显示", async () => {
     mocks.mockWriteFile.mockRejectedValue(new Error("磁盘空间不足"));
-    mocks.mockReadDir.mockResolvedValue([
-      { name: "src", path: "C:/test-project/src", isDir: true, size: undefined, modified: undefined },
-    ]);
+    mocks.mockReadDir.mockResolvedValue({ entries: [
+      { name: "src", path: "C:/test-project/src", isDir: true, size: undefined, modified: undefined },], nextCursor: null });
     mocks.mockConfirmDialog.mockResolvedValue(false);
 
     seedProject();
@@ -538,9 +534,8 @@ describe("ExplorerPanel 操作失败 UI 通知", () => {
 
   it("13. 新建文件夹失败 → UI 错误横幅显示", async () => {
     mocks.mockCreateDir.mockRejectedValue(new Error("权限不足"));
-    mocks.mockReadDir.mockResolvedValue([
-      { name: "lib", path: "C:/test-project/lib", isDir: true, size: undefined, modified: undefined },
-    ]);
+    mocks.mockReadDir.mockResolvedValue({ entries: [
+      { name: "lib", path: "C:/test-project/lib", isDir: true, size: undefined, modified: undefined },], nextCursor: null });
     mocks.mockConfirmDialog.mockResolvedValue(false);
 
     seedProject();
@@ -573,9 +568,8 @@ describe("ExplorerPanel 操作失败 UI 通知", () => {
   it("14. 错误横幅 × 按钮点击 → 横幅立即消失", async () => {
     mocks.mockConfirmDialog.mockResolvedValue(true);
     mocks.mockDeleteEntry.mockRejectedValue(new Error("权限不足"));
-    mocks.mockReadDir.mockResolvedValue([
-      { name: "readonly.txt", path: "C:/test-project/readonly.txt", isDir: false, size: 32, modified: 1 },
-    ]);
+    mocks.mockReadDir.mockResolvedValue({ entries: [
+      { name: "readonly.txt", path: "C:/test-project/readonly.txt", isDir: false, size: 32, modified: 1 },], nextCursor: null });
 
     seedProject();
 
@@ -605,9 +599,8 @@ describe("ExplorerPanel 操作失败 UI 通知", () => {
     try {
       mocks.mockConfirmDialog.mockResolvedValue(true);
       mocks.mockDeleteEntry.mockRejectedValue(new Error("权限不足"));
-      mocks.mockReadDir.mockResolvedValue([
-        { name: "readonly.txt", path: "C:/test-project/readonly.txt", isDir: false, size: 32, modified: 1 },
-      ]);
+      mocks.mockReadDir.mockResolvedValue({ entries: [
+        { name: "readonly.txt", path: "C:/test-project/readonly.txt", isDir: false, size: 32, modified: 1 },], nextCursor: null });
 
       seedProject();
       const { getAllByText, getByTestId, queryByTestId } = renderExplorerPanel();
@@ -648,9 +641,8 @@ describe("ExplorerPanel 操作失败 UI 通知", () => {
     try {
       mocks.mockConfirmDialog.mockResolvedValue(true);
       mocks.mockDeleteEntry.mockRejectedValue(new Error("权限不足"));
-      mocks.mockReadDir.mockResolvedValue([
-        { name: "readonly.txt", path: "C:/test-project/readonly.txt", isDir: false, size: 32, modified: 1 },
-      ]);
+      mocks.mockReadDir.mockResolvedValue({ entries: [
+        { name: "readonly.txt", path: "C:/test-project/readonly.txt", isDir: false, size: 32, modified: 1 },], nextCursor: null });
 
       seedProject();
       const { getAllByText, getByTestId, unmount } = renderExplorerPanel();
@@ -778,9 +770,8 @@ describe("键盘 Del 删除 (ShortcutRegistry)", () => {
   it("E6-集成：点击文件行聚焦 ExplorerPanel 后按 Delete → deleteSelected 经真实焦点链路触发", async () => {
     // 真实链路：单击行 → handleSelect（选中 + container.focus()）→ 容器 focusin →
     // usePanelFocus pushContext("explorer") + setActiveExplorer —— 不经手动 pushContext（TQ-B-08）
-    mocks.mockReadDir.mockResolvedValue([
-      { name: "locked.ts", path: "C:/test-project/locked.ts", isDir: false, size: 32, modified: 1 },
-    ]);
+    mocks.mockReadDir.mockResolvedValue({ entries: [
+      { name: "locked.ts", path: "C:/test-project/locked.ts", isDir: false, size: 32, modified: 1 },], nextCursor: null });
     seedProject();
 
     const { getAllByText } = renderExplorerPanel();
@@ -829,9 +820,8 @@ describe("ExplorerPanel AppError 序列化形态错误横幅", () => {
 
   it("27. 重命名失败（AppError 形态）→ 横幅显示真实 message 而非 [object Object]", async () => {
     mocks.mockRename.mockRejectedValue({ ioKind: { kind: "NotFound", message: "源文件不存在" } });
-    mocks.mockReadDir.mockResolvedValue([
-      { name: "old.ts", path: "C:/test-project/old.ts", isDir: false, size: 32, modified: 1 },
-    ]);
+    mocks.mockReadDir.mockResolvedValue({ entries: [
+      { name: "old.ts", path: "C:/test-project/old.ts", isDir: false, size: 32, modified: 1 },], nextCursor: null });
 
     seedProject();
 
@@ -860,9 +850,8 @@ describe("ExplorerPanel AppError 序列化形态错误横幅", () => {
 
   it("28. 新建文件失败（AppError 形态）→ 横幅显示真实 message", async () => {
     mocks.mockWriteFile.mockRejectedValue({ ioKind: { kind: "Io", message: "磁盘空间不足" } });
-    mocks.mockReadDir.mockResolvedValue([
-      { name: "src", path: "C:/test-project/src", isDir: true, size: undefined, modified: undefined },
-    ]);
+    mocks.mockReadDir.mockResolvedValue({ entries: [
+      { name: "src", path: "C:/test-project/src", isDir: true, size: undefined, modified: undefined },], nextCursor: null });
     mocks.mockConfirmDialog.mockResolvedValue(false);
 
     seedProject();
@@ -891,9 +880,8 @@ describe("ExplorerPanel AppError 序列化形态错误横幅", () => {
 
   it("29. 新建文件夹失败（AppError 形态）→ 横幅显示真实 message", async () => {
     mocks.mockCreateDir.mockRejectedValue({ ioKind: { kind: "Io", message: "目录名非法" } });
-    mocks.mockReadDir.mockResolvedValue([
-      { name: "lib", path: "C:/test-project/lib", isDir: true, size: undefined, modified: undefined },
-    ]);
+    mocks.mockReadDir.mockResolvedValue({ entries: [
+      { name: "lib", path: "C:/test-project/lib", isDir: true, size: undefined, modified: undefined },], nextCursor: null });
     mocks.mockConfirmDialog.mockResolvedValue(false);
 
     seedProject();
@@ -923,9 +911,8 @@ describe("ExplorerPanel AppError 序列化形态错误横幅", () => {
   it("30. 删除失败（右键路径，AppError 形态）→ 横幅显示真实 message", async () => {
     mocks.mockConfirmDialog.mockResolvedValue(true);
     mocks.mockDeleteEntry.mockRejectedValue({ ioKind: { kind: "Io", message: "权限不足" } });
-    mocks.mockReadDir.mockResolvedValue([
-      { name: "readonly.txt", path: "C:/test-project/readonly.txt", isDir: false, size: 32, modified: 1 },
-    ]);
+    mocks.mockReadDir.mockResolvedValue({ entries: [
+      { name: "readonly.txt", path: "C:/test-project/readonly.txt", isDir: false, size: 32, modified: 1 },], nextCursor: null });
 
     seedProject();
 
@@ -950,9 +937,8 @@ describe("ExplorerPanel AppError 序列化形态错误横幅", () => {
     // 覆盖 handleDeleteSelected（键盘删除）错误拼接站点
     mocks.mockConfirmDialog.mockResolvedValue(true);
     mocks.mockDeleteEntry.mockRejectedValue({ ioKind: { kind: "Io", message: "权限不足" } });
-    mocks.mockReadDir.mockResolvedValue([
-      { name: "locked.ts", path: "C:/test-project/locked.ts", isDir: false, size: 32, modified: 1 },
-    ]);
+    mocks.mockReadDir.mockResolvedValue({ entries: [
+      { name: "locked.ts", path: "C:/test-project/locked.ts", isDir: false, size: 32, modified: 1 },], nextCursor: null });
 
     seedProject();
 

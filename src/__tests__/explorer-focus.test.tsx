@@ -25,7 +25,7 @@ vi.mock("../ipc/fs", () => ({
   deleteEntry: vi.fn(),
   rename: vi.fn(),
   writeFile: vi.fn(),
-  readDir: vi.fn().mockResolvedValue([]),
+  readDirPage: vi.fn().mockResolvedValue({ entries: [], nextCursor: null }),
 }));
 
 vi.mock("../ipc/notify", () => ({
@@ -150,10 +150,13 @@ describe("ExplorerPanel 焦点上下文链路（EXP-04）", () => {
     });
     useLayout.setState({ activePageId: "page-1" });
 
-    // readDir mock 返回文件行（覆盖上方 vi.mock 默认空数组）
-    (fsMock.readDir as ReturnType<typeof vi.fn>).mockResolvedValue([
-      { name: "a.ts", path: "C:/test-project/a.ts", isDir: false, size: 10, modified: 1 },
-    ]);
+    // readDirPage mock 返回文件行（覆盖上方 vi.mock 默认空页）
+    (fsMock.readDirPage as ReturnType<typeof vi.fn>).mockResolvedValue({
+      entries: [
+        { name: "a.ts", path: "C:/test-project/a.ts", isDir: false, size: 10, modified: 1 },
+      ],
+      nextCursor: null,
+    });
 
     const { getAllByText } = render(React.createElement(ExplorerPanel));
 

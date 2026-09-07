@@ -46,7 +46,7 @@ const mocks = vi.hoisted(() => {
       mockGitStatus.mockReset();
       mockStartWatch.mockReset();
       mockReadFile.mockReset();
-      mockReadDir.mockResolvedValue(mockEntries);
+      mockReadDir.mockResolvedValue({ entries: mockEntries, nextCursor: null });
       mockGitStatus.mockResolvedValue([]);
       mockStartWatch.mockResolvedValue(undefined);
     },
@@ -54,7 +54,7 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock("../ipc/fs", () => ({
-  readDir: mocks.mockReadDir,
+  readDirPage: mocks.mockReadDir,
   createDir: vi.fn(),
   deleteEntry: vi.fn(),
   rename: vi.fn(),

@@ -36,7 +36,7 @@ const mocks = vi.hoisted(() => {
   });
 
   return {
-    get mockReadDir() { return fs.readDir; },
+    get mockReadDir() { return fs.readDirPage; },
     get mockGitStatus() { return git.gitStatus; },
     get mockOnFsEvent() { return notify.onFsEvent; },
     get triggerFsEvent() { return notify.triggerFsEvent; },
@@ -45,7 +45,7 @@ const mocks = vi.hoisted(() => {
     get rejectSetProjectRoot() { return (err?: unknown) => { rejectSPR(err); }; },
     resetDeferred() { resetDeferred(); mockSetProjectRoot.mockClear(); },
     resetAll() {
-      fs.readDir.mockReset();
+      fs.readDirPage.mockReset();
       git.gitStatus.mockReset();
       notify.onFsEvent.mockClear();
       mockSetProjectRoot.mockClear();
@@ -56,7 +56,7 @@ const mocks = vi.hoisted(() => {
 
 // Mock ../ipc/fs：setProjectRoot 为手动控制 promise，readDir 为 spy
 vi.mock("../ipc/fs", () => ({
-  readDir: mocks.mockReadDir,
+  readDirPage: mocks.mockReadDir,
   readFile: vi.fn(),
   writeFile: vi.fn(),
   createDir: vi.fn(),
@@ -354,7 +354,7 @@ describe("DBG-10: ExplorerPanel setProjectRoot 沙箱竞态", () => {
       // 本用例把防线语义落到 mock 沙箱，锁死「成功读取不得早于 resolve」的时序因果。
       const vfsImpl = mocks.mockReadDir.getMockImplementation() as (
         p: string,
-      ) => Promise<DirEntry[]>;
+      ) => Promise<{ entries: DirEntry[]; nextCursor: string | null }>;
       let sprResolved = false;
       mocks.mockReadDir.mockImplementation(async (p: string) => {
         if (!sprResolved) throw new Error("路径沙箱拒绝：project_root 未就绪");

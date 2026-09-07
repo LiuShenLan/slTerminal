@@ -29,7 +29,7 @@ Agent 历史会话查询与恢复（CLI 无关聚合，MC-310 泛化）。**宿�
 
 - **触发时机**：首个订阅者出现 → 立即执行一轮（接管「挂载即扫」语义）+ 按配置频率（`backgroundTasks.sessionRefresh.intervalSec`）定时刷新；最后订阅者退订 → 停 interval（调度器全局单例与 UI 解耦，NavTree 卸载无碍，ADR-0001）。
 - **手动刷新** = `triggerNow()`（刷新钮）——与 tick 共用同一扫描执行体（规格 §1 单一执行体），仅失败处理策略不同（manual 失败置 error）。
-- **force 恒 true**：扫描执行体（`sessionRefreshTask.ts`）遍历全部已注册 history provider 逐个 `scanAgentHistory(cliId, true)` 聚合——后端 `(目录 mtime, 文件数)` 缓存对进行中会话不敏感，手动与定时必须同一口径绕过缓存（空结果永久命中场景必须 bypass）。
+- **force 恒 true**：扫描执行体（`sessionRefreshTask.ts`）遍历全部已注册 history provider 逐个 `scanAgentHistory(cliId, true)` 聚合——显式直扫，手动与定时同口径（规格 §8）；后端 force 通道不读键、不回填缓存（CP-007：键收集成本与重扫同量级），目录内容指纹缓存只服务非 force 调用方。
 - **scan 已退役**：`scan(force?)` 从 hook 返回面移除（无参导出早于 F12 已删），历史引用全部改 `triggerNow()`。
 - `removeLocal` 经调度器 `applyLocal` 透传（删除会话后本地移除列表项，不重扫）。
 - `activeStatuses` 经 `TerminalRegistry.subscribe` 实时跟随。

@@ -44,7 +44,7 @@ vi.mock("../lib/ConfirmDialog", () => ({
 
 // Mock ipc/fs
 vi.mock("../ipc/fs", () => ({
-  readDir: mocks.mockReadDir,
+  readDirPage: mocks.mockReadDir,
   createDir: mocks.mockCreateDir,
   deleteEntry: vi.fn(),
   rename: vi.fn(),
@@ -155,7 +155,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.resetAll();
   mocks.mockConfirmDialog.mockResolvedValue(false);
-  mocks.mockReadDir.mockResolvedValue([]);
+  mocks.mockReadDir.mockResolvedValue({ entries: [], nextCursor: null });
   mocks.mockGitStatus.mockResolvedValue([]);
   mocks.mockStartWatch.mockResolvedValue(undefined);
   cleanup();
@@ -429,9 +429,8 @@ describe("FileTree 根菜单不影响已有右键菜单", () => {
 describe("ExplorerPanel 根级重命名失败", () => {
   it("R14: 空白区域右键新建文件失败 → 错误横幅显示", async () => {
     mocks.mockWriteFile.mockRejectedValue(new Error("磁盘空间不足"));
-    mocks.mockReadDir.mockResolvedValue([
-      { name: "existing.txt", path: "C:/test-project/existing.txt", isDir: false, size: 32, modified: 1 },
-    ]);
+    mocks.mockReadDir.mockResolvedValue({ entries: [
+      { name: "existing.txt", path: "C:/test-project/existing.txt", isDir: false, size: 32, modified: 1 },], nextCursor: null });
     mocks.mockConfirmDialog.mockResolvedValue(false);
 
     seedProject();

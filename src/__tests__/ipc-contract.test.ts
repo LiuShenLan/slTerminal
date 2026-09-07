@@ -231,10 +231,14 @@ describe('pty.spawn cols/rows 前置校验（FE-14）', () => {
 // ═══════════════════════════════════════════════════════════════════
 
 // FE-12：DirEntry.size/modified 契约 = number | null，目录条目恒为 null（与 Rust serde 输出一致）
-const READ_DIR_RESULT = [
-  { name: 'src', path: 'C:/test/src', isDir: true, size: null, modified: null },
-  { name: 'README.md', path: 'C:/test/README.md', isDir: false, size: 1024, modified: 1700000000000 },
-];
+// CP-006：fs_read_dir 返回契约 = FsReadDirPage（entries + nextCursor，ts-rs 生成形状）
+const READ_DIR_PAGE_RESULT = {
+  entries: [
+    { name: 'src', path: 'C:/test/src', isDir: true, size: null, modified: null },
+    { name: 'README.md', path: 'C:/test/README.md', isDir: false, size: 1024, modified: 1700000000000 },
+  ],
+  nextCursor: null,
+};
 
 describeIpcContract('fs IPC 合约', [
   {
@@ -251,19 +255,27 @@ describeIpcContract('fs IPC 合约', [
     mockThrow: 'disk full',
     expectReject: 'disk full',
   },
-  // ── 目录操作 ──────────────────────────────────────────────
+  // ── 目录操作（CP-006 游标分页） ──────────────────────────────
   {
-    name: 'readDir: 应调用 fs_read_dir 命令，参数包含 path',
+    name: 'readDirPage: 应调用 fs_read_dir 命令，缺省参数仅含 path（cursor/limit 省略不入 payload）',
     cmd: 'fs_read_dir',
-    call: () => fs.readDir('C:\\test'),
-    respond: READ_DIR_RESULT,
-    expectArgs: { path: 'C:\\test' },
-    expectResult: READ_DIR_RESULT,
+    call: () => fs.readDirPage('C:\\test'),
+    respond: READ_DIR_PAGE_RESULT,
+    expectExactKeys: ['path'],
+    expectResult: READ_DIR_PAGE_RESULT,
   },
   {
-    name: 'readDir: invoke 失败时异常应传播',
+    name: 'readDirPage: 全参（path + cursor + limit）键集合精确断言',
     cmd: 'fs_read_dir',
-    call: () => fs.readDir('C:\\nope'),
+    call: () => fs.readDirPage('C:\\test', 'c1', 100),
+    respond: READ_DIR_PAGE_RESULT,
+    expectArgs: { path: 'C:\\test', cursor: 'c1', limit: 100 },
+    expectExactKeys: ['path', 'cursor', 'limit'],
+  },
+  {
+    name: 'readDirPage: invoke 失败时异常应传播',
+    cmd: 'fs_read_dir',
+    call: () => fs.readDirPage('C:\\nope'),
     mockThrow: 'path not found',
     expectReject: 'path not found',
   },

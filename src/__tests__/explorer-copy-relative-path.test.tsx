@@ -35,7 +35,7 @@ const mocks = vi.hoisted(() => {
       mockStartWatch.mockReset();
       mockAddPanel.mockReset();
       mockGetPanel.mockReset();
-      mockReadDir.mockResolvedValue([]);
+      mockReadDir.mockResolvedValue({ entries: [], nextCursor: null });
       mockGitStatus.mockResolvedValue([]);
       mockStartWatch.mockResolvedValue(undefined);
     },
@@ -48,7 +48,7 @@ vi.mock("../ipc/clipboard", () => ({
 }));
 
 vi.mock("../ipc/fs", () => ({
-  readDir: mocks.mockReadDir,
+  readDirPage: mocks.mockReadDir,
   createDir: vi.fn(),
   deleteEntry: vi.fn(),
   rename: vi.fn(),
@@ -295,9 +295,8 @@ describe("边界", () => {
 
 describe("ExplorerPanel 集成", () => {
   it("C9: 页面 cwd 为项目根子目录时，复制结果仍相对项目根（含子目录前缀）", async () => {
-    mocks.mockReadDir.mockResolvedValue([
-      { name: "a.ts", path: "C:/proj/sub/a.ts", isDir: false, size: 64, modified: 1 },
-    ]);
+    mocks.mockReadDir.mockResolvedValue({ entries: [
+      { name: "a.ts", path: "C:/proj/sub/a.ts", isDir: false, size: 64, modified: 1 },], nextCursor: null });
     useProjects.setState({
       projects: {
         "proj-1": {

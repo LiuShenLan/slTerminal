@@ -15,12 +15,12 @@ const mocks = vi.hoisted(() => {
   const notify = __createNotifyMocks();
 
   return {
-    get mockReadDir() { return fs.readDir; },
+    get mockReadDir() { return fs.readDirPage; },
     get mockGitStatus() { return git.gitStatus; },
     get mockOnFsEvent() { return notify.onFsEvent; },
     get triggerFsEvent() { return notify.triggerFsEvent; },
     resetAll() {
-      fs.readDir.mockReset();
+      fs.readDirPage.mockReset();
       git.gitStatus.mockReset();
       notify.onFsEvent.mockClear();
     },
@@ -28,7 +28,7 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock("../ipc/fs", () => ({
-  readDir: mocks.mockReadDir,
+  readDirPage: mocks.mockReadDir,
   createDir: vi.fn(),
   deleteEntry: vi.fn(),
   rename: vi.fn(),

@@ -4,8 +4,10 @@
 //! - `resolve_projects_root()`：扫描根单点（SEC-02 约束面 / BE-06 实现面，MC-305）
 //! - `scan_sessions()`：遍历扫描根一级子目录收集会话元数据（provider impl 调用，
 //!   命令 `agent_history_scan` 在聚合层 mod.rs 按 cliId 分发）
-//! - BE-19 缓存：扫描结果按 `(目录 mtime, 文件数)` 进程内缓存（键不变命中则复用，
-//!   不重复读盘）；`scan_sessions_with_force(force)` 供命令层 force 通道强制重扫
+//! - BE-19 缓存：扫描结果按目录内容指纹进程内缓存——键不变命中则复用，不重复读盘；
+//!   会话文件增删改（文件 mtime/len 或文件集合变化）→ 指纹变化 → 自动失效
+//!   （CP-007 指纹口径，失效单位 = 会话文件）。`scan_sessions_with_force(force)`
+//!   供命令层 force 通道强制直扫（不触缓存）
 //!
 //! 排除规则（规格 3.1）：`agent-*.jsonl` 平铺形态、文件名主干非 UUID 者；
 //! 不递归子目录（`<id>/subagents/` 天然不命中）。
@@ -36,40 +38,54 @@ pub fn resolve_projects_root() -> Option<PathBuf> {
 
 /// 遍历扫描根一级子目录，收集其中 UUID 形态的顶层 *.jsonl 会话（trait 路径入口）
 ///
-/// BE-19 缓存：扫描结果按 `(目录 mtime, 文件数)` 进程内缓存——键不变命中则复用，
-/// 不重复读盘；键变化（新增/删除/改名一级编码目录）自动失效重扫。
-/// 目录内会话文件的增删改不改变根键——由前端显式刷新（force=true）兜底（FE-19 联动）。
+/// BE-19 缓存：扫描结果按目录内容指纹进程内缓存——键不变命中则复用，不重复读盘；
+/// 会话文件增删改（文件 mtime/len 或文件集合变化）→ 指纹变化 → 自动失效重扫
+/// （CP-007 指纹口径：失效单位 = 会话文件）。
 pub(crate) fn scan_sessions() -> Vec<AgentHistorySession> {
-    cached_scan(false)
+    cached_scan()
 }
 
-/// 扫描入口（BE-19 契约 force 通道）：`force=true` 绕过缓存强制重扫
+/// 扫描入口（BE-19 契约 force 通道）：`force=true` 显式全量直扫
 ///
 /// 命令层 `agent_history_scan(cliId, force)` 的 force 经 mod.rs `run_scan` 分发至此；
 /// trait `scan()` 无 force 参数（注册表路径恒走 `scan_sessions()`）。
+/// force 路径不读键、不回填缓存：键收集 = 两级 read_dir + 全量文件 stat（与重扫
+/// 同量级成本），前端每 tick 恒 force（sessionRefreshTask），承担不起——CP-007
+/// 实测该键成本后 force 与缓存解耦；不回填无碍正确性：内容变则键必变（文件级
+/// mtime/len），后续非 force 调用自愈重扫。
 pub(crate) fn scan_sessions_with_force(force: bool) -> Vec<AgentHistorySession> {
-    cached_scan(force)
+    if force {
+        let Some(root) = resolve_projects_root() else {
+            return Vec::new(); // 无法解析扫描根（无 home 目录）
+        };
+        if !root.is_dir() {
+            return Vec::new(); // 扫描根不存在（新机无 claude 数据）→ 空
+        }
+        return scan_sessions_uncached(&root); // 显式直扫，不触缓存
+    }
+    cached_scan()
 }
 
 // ── BE-19 进程内扫描缓存 ──
 
-/// 缓存键 = (目录 mtime, 文件数)（BE-19 契约键）
+/// 缓存键 = root 目录内容指纹（CP-007 指纹口径，失效单位 = 会话文件）
 ///
-/// 目录级粗粒度失效：新增/删除/改名一级编码目录 → mtime 或条目数变化 → 缓存失效；
-/// 目录内会话文件的增删改不影响根键——由前端显式刷新（force=true）兜底。
+/// 收集 root 一级目录名清单 + 各一级目录内会话文件条目的 `(file_name, mtime_ms,
+/// len)` → 两级排序 → FNV-1a 64 位哈希 + 两级条目数。失效精度 = 目录内容级：
+/// 一级目录增删/改名、目录内会话文件增删改均改变指纹 → 缓存自动失效。旧键
+/// (目录 mtime, 文件数) 对目录内变更不敏感（曾由前端恒 force=true 兜底）——
+/// CP-007 实测 1000 会话全扫不达标后改指纹口径，锁死失效精度。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ScanCacheKey {
-    /// 扫描根目录修改时间（毫秒时间戳）
-    pub(crate) dir_mtime_ms: u64,
-    /// 扫描根一级条目数（编码目录数）
-    pub(crate) file_count: u64,
+    /// root 目录内容指纹（FNV-1a 64 位，含两级条目数）
+    pub(crate) fingerprint: u64,
 }
 
 /// 缓存条目（单槽：键含 root，不同扫描根互不冲突，换根即重扫回填）
 struct ScanCacheEntry {
     /// 扫描根（条目归属，防不同根串扰）
     root: PathBuf,
-    /// 契约键（目录 mtime + 文件数）
+    /// 契约键（目录内容指纹）
     key: ScanCacheKey,
     /// 缓存扫描结果
     sessions: Vec<AgentHistorySession>,
@@ -80,9 +96,10 @@ static SCAN_CACHE: OnceLock<Mutex<Option<ScanCacheEntry>>> = OnceLock::new();
 
 /// 带缓存的扫描核心（BE-19）
 ///
-/// 键不变命中则复用缓存结果（不重复读盘）；键变化或 `force=true` → 全量重扫并回填。
+/// 键不变命中则复用缓存结果（不重复读盘）；键变化 → 全量重扫并回填。
+/// `force=true` 走显式直扫路径（见 `scan_sessions_with_force`），不触缓存。
 /// 扫描根缺失/不可读不写缓存，保持既有降级语义（空 Vec）。
-fn cached_scan(force: bool) -> Vec<AgentHistorySession> {
+fn cached_scan() -> Vec<AgentHistorySession> {
     let Some(root) = resolve_projects_root() else {
         return Vec::new(); // 无法解析扫描根（无 home 目录）
     };
@@ -94,11 +111,9 @@ fn cached_scan(force: bool) -> Vec<AgentHistorySession> {
     };
     let cache = SCAN_CACHE.get_or_init(|| Mutex::new(None));
     let mut guard = cache.lock();
-    if !force {
-        if let Some(entry) = guard.as_ref() {
-            if entry.root == root && entry.key == key {
-                return entry.sessions.clone(); // 缓存命中：不重复读盘
-            }
+    if let Some(entry) = guard.as_ref() {
+        if entry.root == root && entry.key == key {
+            return entry.sessions.clone(); // 缓存命中：不重复读盘
         }
     }
     let sessions = scan_sessions_uncached(&root);
@@ -110,19 +125,76 @@ fn cached_scan(force: bool) -> Vec<AgentHistorySession> {
     sessions
 }
 
-/// 计算契约缓存键 = (目录 mtime, 文件数)（BE-19）
+/// 计算契约缓存键 = root 目录内容指纹（CP-007 指纹口径，失效单位 = 会话文件）
+///
+/// 收集 root 一级目录名清单 + 各一级目录内会话文件条目的 `(file_name, mtime_ms,
+/// len)`，两级均排序后经 FNV-1a 64 位逐项混合 + 两级条目数。失效精度 = 目录内容级：
+/// 一级目录增删/改名、目录内会话文件增删改均改变指纹（文件删除/新增即时反映于
+/// read_dir 列表；内容修改即时反映于文件自身 mtime/len——parse 侧既有用例依赖）。
+/// 文件级而非目录级属性：Windows 下 Rust 读目录自身 mtime 对子文件增删的更新
+/// 不可靠（9-8 实测 ≥800ms 不刷新、目录 len 恒 0），目录级信号会漏检失效。
+/// 键计算成本 = read_dir(root + 各一级目录) + 文件 metadata（无 jsonl 打开/解析）。
+/// 单条目读取失败（并发删除/mtime 竞态）跳过——指纹变化方向偏失效重扫，绝不让
+/// 单条目异常把整条扫描降级为空；根目录不可读 → None（调用方降级空 Vec）。
 fn cache_key_of(root: &Path) -> Option<ScanCacheKey> {
-    let meta = std::fs::metadata(root).ok()?;
-    let mtime_ms = meta
-        .modified()
-        .ok()?
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()?
-        .as_millis() as u64;
-    let file_count = std::fs::read_dir(root).ok()?.count() as u64;
-    Some(ScanCacheKey {
-        dir_mtime_ms: mtime_ms,
-        file_count,
+    let mut dirs: Vec<Vec<u8>> = Vec::new();
+    let mut files: Vec<(Vec<u8>, u64, u64)> = Vec::new();
+    for entry in std::fs::read_dir(root).ok()?.flatten() {
+        let dir_path = entry.path();
+        if !dir_path.is_dir() {
+            continue; // 扫描口径：仅一级目录承载会话
+        }
+        let dir_name = entry
+            .file_name()
+            .to_string_lossy()
+            .into_owned()
+            .into_bytes();
+        dirs.push(dir_name);
+        let Ok(sub_entries) = std::fs::read_dir(&dir_path) else {
+            continue; // 目录不可读视为空（指纹变 → 失效重扫，不降级整条为空）
+        };
+        for file in sub_entries.flatten() {
+            let file_path = file.path();
+            if !is_session_jsonl(&file_path) {
+                continue; // 指纹口径 = 会话内容（非会话文件变化不失效，与扫描一致）
+            }
+            let Ok(meta) = file.metadata() else {
+                continue; // 读取失败视为该文件缺席（指纹变 → 失效重扫）
+            };
+            let mtime_ms = match meta.modified() {
+                Ok(t) => t
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0), // epoch 前时钟边界 → 0（照 file_mtime_ms 先例）
+                Err(_) => continue, // mtime 不可读同视为文件缺席
+            };
+            files.push((
+                file.file_name().to_string_lossy().into_owned().into_bytes(),
+                mtime_ms,
+                meta.len(),
+            ));
+        }
+    }
+    dirs.sort();
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325; // FNV-1a 64 offset basis
+    for name in &dirs {
+        hash = fnv1a64(name, hash);
+    }
+    for (name, mtime_ms, len) in &files {
+        hash = fnv1a64(name, hash);
+        hash = fnv1a64(&mtime_ms.to_le_bytes(), hash);
+        hash = fnv1a64(&len.to_le_bytes(), hash);
+    }
+    hash = fnv1a64(&(dirs.len() as u64).to_le_bytes(), hash); // 一级目录数入指纹
+    hash = fnv1a64(&(files.len() as u64).to_le_bytes(), hash); // 会话文件数入指纹
+    Some(ScanCacheKey { fingerprint: hash })
+}
+
+/// FNV-1a 64 位哈希单步混合（缓存指纹混合原语，CP-007）
+fn fnv1a64(bytes: &[u8], hash: u64) -> u64 {
+    bytes.iter().fold(hash, |h, &b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
     })
 }
 
@@ -566,12 +638,13 @@ mod scan_tests {
         assert_eq!(s.title_source, TitleSource::CustomTitle.as_str());
     }
 
-    // ── BE-19 进程内缓存（键 = (目录 mtime, 文件数)；force=true 绕过） ──
+    // ── BE-19 进程内缓存（键 = 目录内容指纹 CP-007；force=true 绕过） ──
 
     #[test]
-    fn scan_cache_hit_returns_stale_without_reread() {
-        // 缓存命中不重复读盘：删除会话文件（根键不变——目录 mtime/一级条目数均未变）
-        // → 默认扫描仍返回缓存旧结果，证明未重读磁盘
+    fn scan_cache_invalidated_when_session_file_deleted() {
+        // 指纹口径（CP-007）：目录内会话文件删除 → 文件从指纹清单消失 → 指纹变
+        // → 缓存失效 → 重扫立即反映删除。旧键 (mtime, file_count) 做不到（目录级
+        // 失效，删除文件不影响根键——曾由前端恒 force=true 兜底，见 CP-007）。
         let (_dir, root, proj) = make_scan_root();
         let uuid = "123e4567-e89b-12d3-a456-426614174000";
         write_valid_session(&proj, uuid);
@@ -581,16 +654,16 @@ mod scan_tests {
         assert_eq!(first.len(), 1);
         assert_eq!(first[0].session_id, uuid);
 
-        // 目录内文件删除不影响根键 → 命中缓存，返回删除前的旧结果
+        // 删除会话文件（文件从指纹清单消失）→ 缓存失效重扫为空
+        std::thread::sleep(std::time::Duration::from_millis(5)); // 跨毫秒保险（时序稳健）
         std::fs::remove_file(proj.join(format!("{uuid}.jsonl"))).unwrap();
-        let cached = scan_sessions();
-        assert_eq!(cached.len(), 1, "键不变应缓存命中（未重复读盘）");
-        assert_eq!(cached[0].session_id, uuid);
+        let second = scan_sessions();
+        assert!(second.is_empty(), "文件删除应使指纹变化 → 缓存失效重扫为空");
     }
 
     #[test]
     fn scan_cache_invalidated_when_file_count_changes() {
-        // 新增编码目录（根条目数与 mtime 均变化）→ 键变化 → 缓存失效 → 重扫全量
+        // 新增一级编码目录（条目数 +1 入指纹）→ 指纹变化 → 缓存失效 → 重扫全量
         let (_dir, root, proj) = make_scan_root();
         let uuid1 = "123e4567-e89b-12d3-a456-426614174001";
         write_valid_session(&proj, uuid1);
@@ -608,7 +681,57 @@ mod scan_tests {
         let second = scan_sessions();
         let mut ids: Vec<&str> = second.iter().map(|s| s.session_id.as_str()).collect();
         ids.sort();
-        assert_eq!(ids, [uuid1, uuid2], "键变化应失效缓存并重扫全量");
+        assert_eq!(ids, [uuid1, uuid2], "指纹变化应失效缓存并重扫全量");
+    }
+
+    #[test]
+    fn scan_cache_invalidated_when_session_file_modified() {
+        // 指纹口径新增用例（CP-007）：目录内会话文件内容修改（追加 custom-title）→
+        // 文件自身 mtime/len 变化 → 指纹变 → 缓存失效 → 重扫取到新标题。旧键对目录内
+        // 变更不敏感（曾由前端恒 force=true 兜底），此用例锁死失效精度提升。
+        let (_dir, root, proj) = make_scan_root();
+        let uuid = "123e4567-e89b-12d3-a456-426614174000";
+        write_valid_session(&proj, uuid);
+        let _guard = ScanRootGuard::set(&root);
+
+        let first = scan_sessions();
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].title.as_deref(), Some("修复登录 bug"));
+
+        // 追加 custom-title（尾部 last-wins 覆写摘要标题）——文件 mtime 需跨毫秒
+        // 才保证键变化（首扫键采集时刻与追加时刻不得同毫秒）。夹具末行无收尾
+        // 换行——先补换行再追加，防两行粘连成损坏行
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let path = proj.join(format!("{uuid}.jsonl"));
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        f.write_all(b"\n").unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"custom-title","customTitle":"重命名后的标题","sessionId":"{uuid}"}}"#
+        )
+        .unwrap();
+        f.flush().unwrap();
+        // 元数据提交可能滞后于读（杀软/高负载下实测可至数十 ms）——轮询 len 变化
+        // 等落定（append 只增不减，len 必变；干净环境首次检查即过，最多等 500ms）
+        let base_len = std::fs::metadata(&path).unwrap().len();
+        for _ in 0..50 {
+            if std::fs::metadata(&path).unwrap().len() != base_len {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5)); // 跨毫秒保险
+
+        let second = scan_sessions();
+        assert_eq!(
+            second[0].title.as_deref(),
+            Some("重命名后的标题"),
+            "会话文件修改应使指纹变化 → 缓存失效重扫取到新标题"
+        );
+        assert_eq!(second[0].title_source, TitleSource::CustomTitle.as_str());
     }
 
     #[test]
@@ -629,31 +752,41 @@ mod scan_tests {
     }
 
     #[test]
-    fn scan_cache_key_tracks_dir_mtime_and_file_count() {
-        // 契约键 = (目录 mtime, 文件数)：改名一级目录 → mtime 变、条目数不变；
-        // 新增目录 → 条目数变。两半均为失效依据。
+    fn scan_cache_key_tracks_dir_content_fingerprint() {
+        // 契约键 = 目录内容指纹（CP-007）：root 一级目录名清单 + 会话文件条目的
+        // (file_name, mtime_ms, len)，排序后 FNV-1a 64 + 条目数。失效精度核心用例——
+        // 目录内会话文件增删改亦改变指纹，这是旧键 (mtime, file_count) 目录级失效
+        // 做不到的（旧键只读 root 自身 mtime，目录内变更不敏感）。
         let (_dir, root, proj) = make_scan_root();
         let key1 = cache_key_of(&root).unwrap();
 
-        // 改名：根条目数不变，根 mtime 变化（目录条目增删）。
-        // Windows NTFS 目录 mtime 精度 100ns，但 as_millis() 截断到毫秒——若 rename
-        // 与上次目录修改（create_dir_all）落在同一毫秒，两键 mtime 同值导致 flaky。
-        // sleep 须在 rename 之前：键值记录的是修改发生时刻的墙钟，睡眠后再 rename
-        // 保证修改时刻跨入新毫秒（rename 后 sleep 对键值无影响）。
+        // 目录内追加会话文件：文件清单 +1 条目 → 指纹变（文件级 mtime/len 入键）。
+        // Windows NTFS 时间精度 100ns，as_millis() 截断到毫秒——sleep 保证键采集
+        // 与文件写入跨毫秒，规避同毫秒截断偶合
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        write_valid_session(&proj, "123e4567-e89b-12d3-a456-426614174001");
+        let key2 = cache_key_of(&root).unwrap();
+        assert_ne!(
+            key1.fingerprint, key2.fingerprint,
+            "目录内文件新增应改变指纹（文件条目入键）"
+        );
+
+        // 改名一级目录：file_name 入指纹 → 指纹变（条目数不变也失效）
         std::thread::sleep(std::time::Duration::from_millis(5));
         let proj2 = root.join("D--renamed");
         std::fs::rename(&proj, &proj2).unwrap();
-        let key2 = cache_key_of(&root).unwrap();
-        assert_eq!(key1.file_count, key2.file_count, "改名不改变一级条目数");
-        assert_ne!(
-            key1.dir_mtime_ms, key2.dir_mtime_ms,
-            "改名应改变根 mtime → 失效"
-        );
-
-        // 新增目录：条目数 +1（mtime 亦变）
-        std::fs::create_dir_all(root.join("E--new-app")).unwrap();
         let key3 = cache_key_of(&root).unwrap();
-        assert_eq!(key2.file_count + 1, key3.file_count, "新增目录应 +1 条目数");
+        assert_ne!(key2.fingerprint, key3.fingerprint, "改名应改变指纹");
+
+        // 新增一级目录：条目数 +1（混入指纹）→ 指纹变
+        let key4 = cache_key_of(&root).unwrap();
+        std::fs::create_dir_all(root.join("E--new-app")).unwrap();
+        let key5 = cache_key_of(&root).unwrap();
+        assert_ne!(key4.fingerprint, key5.fingerprint, "新增目录应改变指纹");
+
+        // 指纹稳定：内容无变化时重复计算同值（命中前提）
+        let key6 = cache_key_of(&root).unwrap();
+        assert_eq!(key5.fingerprint, key6.fingerprint, "内容未变指纹应稳定");
     }
 
     #[test]
@@ -684,5 +817,82 @@ mod scan_tests {
         let a2 = scan_sessions();
         assert_eq!(a2[0].session_id, uuid_a);
         drop(g3);
+    }
+}
+
+// ── CP-007 全扫性能基准（决策门槛写死处；两分支共有，常驻全量门禁） ──
+
+#[cfg(test)]
+mod scan_bench {
+    use super::*;
+    use crate::agent_history::claude::ScanRootGuard;
+    use std::time::{Duration, Instant};
+
+    /// CP-007: 1000 会话目录全扫性能门槛——写死,防「无缓存」回归慢化
+    ///
+    /// 构造:1000 个编码目录 × 每目录 1 个 UUID jsonl(head+tail 真实内容,
+    /// 照 write_valid_session 夹具形态);样本 20 次取中位。
+    /// 门槛演进(留痕,CP-007 决策档):9-8 首测 debug 全扫中位 180.33ms / max
+    /// 186.32ms,越原决策门槛(中位 < 50ms)→ 红 → 走指纹分支(缓存保留,键改目录
+    /// 内容指纹)。决策门槛使命完成后常驻门槛放宽:中位 < 200ms(依据 180.33ms)。
+    /// flaky 处置(9-8 全量门禁再留痕):与 clippy 并行抢 CPU 时段样本中位
+    /// 184.9ms 稳过、但 max 249.65ms 越旧 max < 200ms 尾部门槛 → 红——max 对
+    /// 机器负载敏感(定向复测 max 184.9/185.6ms),故 max 不作硬断言,仅报告
+    /// 留档;中位稳定(180-185ms)是唯一硬门槛——任何进一步放宽须留数字依据;
+    /// 若直扫成本经优化回落 < 50ms,应重评估删除分支(CP-007)。
+    #[test]
+    fn scan_bench_1000_sessions_median_under_200ms() {
+        // 夹具:1000 编码目录 × 1 会话文件(内容照 write_valid_session:summary 首行 +
+        // user prompt 行——头部/尾部两窗口真实解析形态)。夹具构造耗时不计样本。
+        let dir = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(dir.path()).unwrap();
+        for i in 0..1000 {
+            let proj = root.join(format!("D--bench-{i:04}"));
+            std::fs::create_dir_all(&proj).unwrap();
+            let uuid = format!("123e4567-e89b-12d3-a456-{i:012x}");
+            write_bench_session(&proj, &uuid);
+        }
+        let _guard = ScanRootGuard::set(&root);
+
+        // 预热一轮(OS/进程缓存落位),不计入样本
+        let warm = scan_sessions_with_force(true);
+        assert_eq!(warm.len(), 1000, "夹具应全量命中 1000 会话");
+
+        // 样本 20 次:每次强制全量直扫(与前端恒 force 刷新同口径)
+        let mut samples: Vec<Duration> = Vec::with_capacity(20);
+        for _ in 0..20 {
+            let t0 = Instant::now();
+            let sessions = scan_sessions_with_force(true);
+            samples.push(t0.elapsed());
+            assert_eq!(sessions.len(), 1000, "每次样本应全量命中 1000 会话");
+        }
+        samples.sort();
+        let median = samples[9]; // 20 样本取低中位(第 10 小)
+        let max = samples[19];
+        // max 仅报告不作硬断言:对机器负载敏感(9-8 全量门禁与 clippy 并行时
+        // max 249.65ms 但中位 184.9ms 稳过),中位门槛已兜回归——报告留档
+        eprintln!("CP-007 基准: 样本=20 中位={median:?} max={max:?}(每样本 = 1000 会话全扫)");
+        assert!(
+            median < Duration::from_millis(200),
+            "全扫中位 {median:?} 越常驻门槛 200ms(依据 9-8 实测 180.33ms)——若回落 <50ms 重评估删除分支,放宽须留数字依据(CP-007)"
+        );
+    }
+
+    /// 写一个有效会话文件(UUID 文件名 + summary 首行 + user prompt 行,照 write_valid_session 形态)
+    fn write_bench_session(proj: &std::path::Path, uuid: &str) {
+        let content = serde_json::json!({
+            "type": "summary",
+            "summary": "基准会话",
+            "leafUuid": "x",
+        })
+        .to_string()
+            + "\n"
+            + &serde_json::json!({
+                "type": "user",
+                "cwd": "C:\\bench\\app",
+                "message": { "content": "帮我修 bug" },
+            })
+            .to_string();
+        std::fs::write(proj.join(format!("{uuid}.jsonl")), content).unwrap();
     }
 }

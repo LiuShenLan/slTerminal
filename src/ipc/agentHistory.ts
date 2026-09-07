@@ -8,9 +8,11 @@ import type { AgentHistorySession, AgentHistoryTitle } from "../types/agentHisto
 /**
  * 扫描历史会话（BE-19 契约：cliId + force）
  *
- * force 语义：后端按 (目录 mtime, 文件数) 做进程内缓存——缺省命中复用不重复读盘；
- * force=true 绕过缓存强制重扫（显式刷新/恢复完成场景）。
- * 后端遍历全部已注册 provider 串行聚合，单 provider 失败不阻塞其他；
+ * force 语义：后端按目录内容指纹（一级目录名清单 + 会话文件 file_name/mtime/len，
+ * FNV-1a 排序混合）做进程内缓存——会话文件增删改自动失效重扫（CP-007 指纹口径）；
+ * force=true 显式直扫：不读键、不回填缓存（键收集成本与重扫同量级，刷新路径
+ * 承担不起），内容变则键必变，非 force 调用自愈。
+ * 后端按 cliId 分发单 provider 扫描；单 provider 失败不报错（provider 内部降级）；
  * 全部为空 → 空数组；单文件解析失败降级条目（均非 Err）。
  */
 export async function scanAgentHistory(

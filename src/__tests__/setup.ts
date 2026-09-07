@@ -9,12 +9,15 @@ import { vi, beforeAll, afterAll } from 'vitest';
 type Fn = ReturnType<typeof vi.fn>;
 
 interface FsMockOverrides {
-  readDir?: Fn; readFile?: Fn; createDir?: Fn; deleteEntry?: Fn; rename?: Fn; writeFile?: Fn;
+  readDirPage?: Fn; readFile?: Fn; createDir?: Fn; deleteEntry?: Fn; rename?: Fn; writeFile?: Fn;
 }
 
 function createFsMocks(overrides?: FsMockOverrides) {
   return {
-    readDir: overrides?.readDir ?? vi.fn().mockResolvedValue([]),
+    // CP-006：readDirPage 分页契约——默认空页（末页无游标），避免未设置 mock 抛错
+    readDirPage:
+      overrides?.readDirPage ??
+      vi.fn().mockResolvedValue({ entries: [], nextCursor: null }),
     readFile: overrides?.readFile ?? vi.fn(),
     createDir: overrides?.createDir ?? vi.fn(),
     deleteEntry: overrides?.deleteEntry ?? vi.fn(),

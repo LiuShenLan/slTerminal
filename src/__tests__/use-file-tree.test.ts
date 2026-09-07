@@ -12,10 +12,18 @@ const mocks = vi.hoisted(() => {
   type DirEntry = { name: string; path: string; isDir: boolean; size: number | null; modified: number | null };
   type GitStatusEntry = { path: string; status: string };
 
+  type ReadDirPage = { entries: DirEntry[]; nextCursor: string | null };
+
   let mockReadDirImpl: (path: string) => Promise<DirEntry[]> = () => Promise.resolve([]);
   let mockGitStatusImpl: (path: string) => Promise<GitStatusEntry[]> = () => Promise.resolve([]);
 
-  const mockReadDir = vi.fn<(path: string) => Promise<DirEntry[]>>().mockImplementation((path) => mockReadDirImpl(path));
+  // CP-006：mock 兑现分页契约——便利接口（整表 DirEntry[]）结果作为末页单页返回
+  const mockReadDir = vi
+    .fn<(path: string, cursor?: string | null) => Promise<ReadDirPage>>()
+    .mockImplementation(async (path) => {
+      const entries = await mockReadDirImpl(path);
+      return { entries, nextCursor: null };
+    });
   const mockGitStatus = vi.fn<(path: string) => Promise<GitStatusEntry[]>>().mockImplementation((path) => mockGitStatusImpl(path));
 
   const makeEntry = (name: string, isDir = false): DirEntry => ({
@@ -39,12 +47,18 @@ const mocks = vi.hoisted(() => {
       mockGitStatusImpl = () => Promise.resolve([
         { path: "C:/project/a.ts", status: "modified" },
       ]);
-      mockReadDir.mockImplementation((path) => mockReadDirImpl(path));
+      mockReadDir.mockImplementation(async (path) => {
+        const entries = await mockReadDirImpl(path);
+        return { entries, nextCursor: null };
+      });
       mockGitStatus.mockImplementation((path) => mockGitStatusImpl(path));
     },
     setReadDirImpl(fn: (path: string) => Promise<DirEntry[]>) {
       mockReadDirImpl = fn;
-      mockReadDir.mockImplementation((path) => mockReadDirImpl(path));
+      mockReadDir.mockImplementation(async (path) => {
+        const entries = await mockReadDirImpl(path);
+        return { entries, nextCursor: null };
+      });
     },
     setGitStatusImpl(fn: (path: string) => Promise<GitStatusEntry[]>) {
       mockGitStatusImpl = fn;
@@ -54,7 +68,7 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock("../ipc/fs", () => ({
-  readDir: mocks.mockReadDir,
+  readDirPage: mocks.mockReadDir,
   createDir: vi.fn(),
   deleteEntry: vi.fn(),
   rename: vi.fn(),
@@ -229,6 +243,68 @@ describe("useFileTree — F1 消除重复 IPC", () => {
     });
 
     expect(mocks.mockReadDir).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ============================================================
+// CP-006: loadRoot 首帧 + 游标续页拼接
+// ============================================================
+describe("useFileTree — CP-006 首帧续页拼接", () => {
+  beforeEach(() => {
+    mocks.resetAll();
+  });
+
+  it("P1: 首页超限时首帧渲染首页，随后按游标续页拼接为全量", async () => {
+    // 仿后端分页：首帧 500 条 + nextCursor，续页 1 条即末页。
+    // 续页门闩延迟 resolve（两阶段）——若两页即时返回，后台续页会在 waitFor
+    // 首帧轮询前拼入（瞬态 500 不可观察），断言失去意义
+    let releasePage2: (() => void) | undefined;
+    const page2Gate = new Promise<void>((resolve) => {
+      releasePage2 = resolve;
+    });
+    mocks.mockReadDir.mockImplementation(
+      async (_path: string, cursor?: string | null) => {
+        if (cursor) {
+          await page2Gate; // 挂起至首帧 500 断言完成，再由 act 放行
+          return { entries: [mocks.makeEntry("z-last.ts")], nextCursor: null };
+        }
+        const entries = Array.from({ length: 500 }, (_, i) =>
+          mocks.makeEntry(`f${i}.ts`),
+        );
+        return { entries, nextCursor: "c1" };
+      },
+    );
+
+    const { result } = renderHook(() => useFileTree({ rootPath: "C:/project" }));
+
+    // 首帧 500 条先落地（不等续页——超大目录首屏不阻塞）
+    await waitFor(() => {
+      expect(result.current.rootNodes.length).toBe(500);
+    }, { timeout: 3000 });
+
+    // 续页请求已在首帧后即时发起（mock 挂起等门闩）——调用序列契约先行断言：
+    // 首帧仅 path（cursor 省略）；续页带上一页返回的游标
+    expect(mocks.mockReadDir).toHaveBeenNthCalledWith(1, "C:/project");
+    expect(mocks.mockReadDir).toHaveBeenNthCalledWith(2, "C:/project", "c1");
+
+    // 放行续页：拼接后 = 501 条（首页 + 末页），末位 = 续页条目
+    await act(async () => {
+      releasePage2?.();
+    });
+    await waitFor(() => {
+      expect(result.current.rootNodes.length).toBe(501);
+    }, { timeout: 3000 });
+    expect(result.current.rootNodes[500].entry.name).toBe("z-last.ts");
+  });
+
+  it("P2: 首页即末页（nextCursor null）→ 不发起续页调用", async () => {
+    const { result } = renderHook(() => useFileTree({ rootPath: "C:/project" }));
+
+    await waitFor(() => {
+      expect(result.current.rootNodes.length).toBe(3);
+    }, { timeout: 3000 });
+    // resetAll 默认 mock：整表一页返回——仅 1 次 readDirPage 调用（无续页）
+    expect(mocks.mockReadDir).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -414,6 +490,50 @@ describe("useFileTree — F3 Generation 取消机制", () => {
     // 推进时间触发慢 gitStatus
     await vi.advanceTimersByTimeAsync(300);
     expect(result.current.gitStatusMap.get("C:/project-a/x.ts")).toBeUndefined();
+  });
+
+  it("F3-8: rootPath 切换后，旧代际的续页结果被丢弃（CP-006 续页 gen 校验）", async () => {
+    // project-a：首帧带游标、续页延迟 200ms；project-b：立即末页
+    mocks.mockReadDir.mockImplementation(
+      async (path: string, cursor?: string | null) => {
+        if (path === "C:/project-b") {
+          return { entries: [mocks.makeEntry("b.ts")], nextCursor: null };
+        }
+        if (!cursor) {
+          return { entries: [mocks.makeEntry("a1.ts")], nextCursor: "c1" };
+        }
+        return new Promise((resolve) =>
+          setTimeout(
+            () =>
+              resolve({
+                entries: [mocks.makeEntry("a2.ts")],
+                nextCursor: null,
+              }),
+            200,
+          ),
+        );
+      },
+    );
+
+    const { result, rerender } = renderHook(
+      ({ rootPath }) => useFileTree({ rootPath: rootPath as string | null }),
+      { initialProps: { rootPath: "C:/project-a" as string | null } },
+    );
+
+    // 先让 a 的首帧渲染，随后立即切到 b（a 的续页尚在等待）
+    await vi.waitFor(() => {
+      expect(result.current.rootNodes[0]?.entry.name).toBe("a1.ts");
+    }, { timeout: 3000 });
+    rerender({ rootPath: "C:/project-b" });
+
+    await vi.waitFor(() => {
+      expect(result.current.rootNodes[0]?.entry.name).toBe("b.ts");
+    }, { timeout: 3000 });
+
+    // 推进时间触发旧代际续页返回 → gen 校验丢弃，不污染新树
+    await vi.advanceTimersByTimeAsync(300);
+    expect(result.current.rootNodes.length).toBe(1);
+    expect(result.current.rootNodes[0].entry.name).toBe("b.ts");
   });
 });
 
