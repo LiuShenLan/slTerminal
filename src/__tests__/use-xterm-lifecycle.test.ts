@@ -189,6 +189,7 @@ vi.mock("../ipc", () => ({
 // 本地覆盖 setup.ts 全局 mock 以捕获回调供测试手动触发
 vi.mock("../ipc/agentHooks", () => ({
   onAgentEvent: mockOnAgentEvent,
+  confirmInject: () => Promise.resolve({ status: "notInjected", version: null }),
 }));
 
 // useXterm.ts import { readHistoryTitle } from "../../ipc/agentHistory"（人工验证问题 3）

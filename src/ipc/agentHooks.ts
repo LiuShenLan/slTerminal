@@ -1,8 +1,9 @@
 // Agent hooks IPC — 注入/卸载/状态查询 + agent-event 事件订阅 + 关闭 statusline 恢复（MC-212 泛化）
 //
-// wrapper 全部加 cliId 首参（6 命令全表：agent_hooks_inject / agent_hooks_uninstall /
-// agent_hooks_injection_status / agent_hooks_restore_statusline / agent_hooks_config_read /
-// agent_hooks_config_write——后两条在 hooksConfig.ts）。未知 cliId → 后端 Validation。
+// wrapper 全部加 cliId 首参（7 命令全表：agent_hooks_inject / agent_hooks_uninstall /
+// agent_hooks_injection_status / agent_hooks_restore_statusline / agent_hooks_confirm_inject
+// / agent_hooks_config_read / agent_hooks_config_write——confirm_inject 为 CP-043
+// 确认注入（用户确认可疑命令后二次调用），后两条在 hooksConfig.ts）。未知 cliId → 后端 Validation。
 // 原 agent_context_usage（transcript token 扫描）已整体移除——百分比经 ContextUsage
 // 信号（statusline 桥接）走 agent-event 通道推送。
 import { invoke } from "@tauri-apps/api/core";
@@ -18,6 +19,11 @@ export type { AgentHookInjectionStatus } from "../types/agent";
 /** 注入 hook 脚本到 claude settings.json，返回注入后状态 */
 export async function inject(cliId: string): Promise<AgentHookInjectionStatus> {
   return invoke("agent_hooks_inject", { cliId });
+}
+
+/** CP-043 确认注入：用户确认可疑命令后二次调用，跳过审查完成注入 */
+export async function confirmInject(cliId: string): Promise<AgentHookInjectionStatus> {
+  return invoke("agent_hooks_confirm_inject", { cliId });
 }
 
 /** 卸载 hook：移除配置段 + 删脚本目录 + 清信号目录 */

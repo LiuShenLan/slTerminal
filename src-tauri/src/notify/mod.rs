@@ -7,10 +7,11 @@
 //!
 //! 技术栈：notify = "9.0.0-rc.4" + notify-debouncer-full = "0.8.0-rc.2"
 
+use parking_lot::Mutex;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use notify::event::{CreateKind, ModifyKind, RemoveKind};
@@ -210,14 +211,13 @@ fn is_excluded_path(path: &Path) -> bool {
 
 /// 下发 Rescan 载荷（need_rescan 溢出 / BE-07 批量合并共用）——携带监听根路径
 fn emit_rescan_overflow(emitter: &dyn EventEmitter, wps: &Mutex<Vec<PathBuf>>) {
-    match wps.lock() {
-        Ok(guard) => emitter.emit_fs_event(FsEventPayload {
-            paths: guard.iter().map(|p| p.display().to_string()).collect(),
-            kind: "Rescan".to_string(),
-            detail: "Overflow".to_string(),
-        }),
-        Err(e) => tracing::error!("fs-watcher 锁获取失败: {e}"),
-    }
+    // CP-005: parking_lot 锁无中毒分支——直接取守卫（旧 match Err 分支删除）
+    let guard = wps.lock();
+    emitter.emit_fs_event(FsEventPayload {
+        paths: guard.iter().map(|p| p.display().to_string()).collect(),
+        kind: "Rescan".to_string(),
+        detail: "Overflow".to_string(),
+    });
 }
 
 /// SEC-08：事件路径（或其任一祖先分量）是否为符号链接
@@ -362,10 +362,7 @@ pub async fn notify_watch(
     // 路径前置校验（存在性 + 沙箱），短暂持有 project_root 锁取快照；
     // BE-22: 校验本身（exists/canonicalize 磁盘 I/O）移入 spawn_blocking，不占 IPC worker
     let root_snapshot = {
-        let root = state
-            .project_root
-            .read()
-            .map_err(|e| AppError::Notify(format!("获取 project_root 锁失败: {e}")))?;
+        let root = state.project_root.read();
         root.clone()
     };
     let watch_path_for_validate = watch_path.clone();
@@ -380,10 +377,7 @@ pub async fn notify_watch(
 
     // 阶段 1：持池锁 → pause_all_except + 缓存检查
     {
-        let mut pool = state
-            .file_watchers
-            .lock()
-            .map_err(|e| AppError::Notify(format!("获取 file_watchers 锁失败: {e}")))?;
+        let mut pool = state.file_watchers.lock();
         if notify_watch_phase1(&mut pool, &watch_path) {
             return Ok(());
         }
@@ -408,10 +402,7 @@ pub async fn notify_watch(
 
     // 阶段 3：短暂持锁插入池（处理可能的竞态——另一线程可能已为同一路径创建 watcher）
     {
-        let mut pool = state
-            .file_watchers
-            .lock()
-            .map_err(|e| AppError::Notify(format!("获取 file_watchers 锁失败: {e}")))?;
+        let mut pool = state.file_watchers.lock();
         notify_watch_phase3(&mut pool, &watch_path, watcher)?;
     }
     Ok(())
@@ -428,10 +419,7 @@ pub async fn notify_stop_watch(
     state: tauri::State<'_, AppState>,
 ) -> Result<(), AppError> {
     let watch_path = dunce::simplified(std::path::Path::new(&path)).to_path_buf();
-    let mut pool = state
-        .file_watchers
-        .lock()
-        .map_err(|e| AppError::Notify(format!("获取 file_watchers 锁失败: {e}")))?;
+    let mut pool = state.file_watchers.lock();
     pool.remove(&watch_path);
     Ok(())
 }
@@ -754,7 +742,7 @@ mod notify_tests {
                     Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 }
             }
-            let mut r = running_clone.lock().unwrap();
+            let mut r = running_clone.lock();
             *r = false;
         });
 
@@ -769,7 +757,7 @@ mod notify_tests {
         // Drop 内部已 join 线程；此处轮询线程退出标志（2s 超时）兜底断言，替代固定 sleep 消除慢 CI 抖动（HFN-07）
         let deadline = std::time::Instant::now() + Duration::from_secs(2);
         loop {
-            if !*running.lock().unwrap() {
+            if !*running.lock() {
                 break;
             }
             assert!(
@@ -884,24 +872,24 @@ mod notify_tests {
 
     impl EventEmitter for MockEmitter {
         fn emit_fs_event(&self, payload: FsEventPayload) {
-            self.emitted.lock().unwrap().push(payload);
+            self.emitted.lock().push(payload);
         }
     }
 
     /// Arc 包装也实现 trait，便于 Box<Arc<MockEmitter>> 传入 start_with_emitter
     impl EventEmitter for Arc<MockEmitter> {
         fn emit_fs_event(&self, payload: FsEventPayload) {
-            self.emitted.lock().unwrap().push(payload);
+            self.emitted.lock().push(payload);
         }
     }
 
     impl MockEmitter {
         fn count(&self) -> usize {
-            self.emitted.lock().unwrap().len()
+            self.emitted.lock().len()
         }
 
         fn last(&self) -> Option<FsEventPayload> {
-            self.emitted.lock().unwrap().last().cloned()
+            self.emitted.lock().last().cloned()
         }
     }
 
@@ -1016,11 +1004,7 @@ mod notify_tests {
     fn event_loop_rescan_emits_overflow_payload_with_watch_paths() {
         let emitter = Arc::new(MockEmitter::default());
         let harness = LoopHarness::start(emitter.clone());
-        harness
-            .wps
-            .lock()
-            .unwrap()
-            .push(PathBuf::from("/project/root"));
+        harness.wps.lock().push(PathBuf::from("/project/root"));
 
         harness
             .event_tx
@@ -1082,11 +1066,7 @@ mod notify_tests {
     fn event_loop_merges_oversized_batch_to_rescan() {
         let emitter = Arc::new(MockEmitter::default());
         let harness = LoopHarness::start(emitter.clone());
-        harness
-            .wps
-            .lock()
-            .unwrap()
-            .push(PathBuf::from("/project/root"));
+        harness.wps.lock().push(PathBuf::from("/project/root"));
 
         // 超限批：LIMIT + 1 个路径的单事件
         let paths: Vec<PathBuf> = (0..=FS_EVENT_PATH_BATCH_LIMIT)
@@ -1144,11 +1124,7 @@ mod notify_tests {
     fn event_loop_rescan_bypasses_exclusion_filter() {
         let emitter = Arc::new(MockEmitter::default());
         let harness = LoopHarness::start(emitter.clone());
-        harness
-            .wps
-            .lock()
-            .unwrap()
-            .push(PathBuf::from("/project/root"));
+        harness.wps.lock().push(PathBuf::from("/project/root"));
 
         // 同一批：排除路径事件 + need_rescan——rescan 分支在排除过滤之前，不受影响
         harness

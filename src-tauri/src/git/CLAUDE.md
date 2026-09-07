@@ -18,7 +18,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### `git_status` 不再扫描被忽略文件
 
-`StatusOptions` 已移除 `.include_ignored(true)`，仅返回 tracked + untracked。原因：大项目中 50K+ 被忽略文件会导致数秒 I/O 阻塞和数 MB JSON 主线程卡顿。`status_to_str` 的 `is_ignored()` 分支保留为无害死代码。
+`StatusOptions` 已移除 `.include_ignored(true)`，仅返回 tracked + untracked。原因：大项目中 50K+ 被忽略文件会导致数秒 I/O 阻塞和数 MB JSON 主线程卡顿。`status_to_str` 无 ignored 分支（CP-008 已删——include_ignored 恒关，ignored 永不置位）；未来若确需 ignored 感知，走独立轻量通道（.gitignore 判定），**禁止**恢复全量扫描。
 
 ### rename 检测必须开启
 
@@ -62,7 +62,7 @@ git2-rs 的 `StatusEntry::path_bytes()` 两个分支均返回 `delta.old_file.pa
 
 - **8.3 短名坑（CI 必踩）**：GitHub runner 的 `%TEMP%` 是短名 `RUNNER~1`，git2 workdir 返回长名，直接 `strip_prefix` 会失败。`tests/common/mod.rs` 的 `init_temp_repo` 用 `dunce::canonicalize` 把 tempdir 转长名；所有 strip_prefix 站点消费 `dunce::simplified` 后的路径。
 - **git CLI 最低 2.28**：`init_temp_repo` 用 `git -c init.defaultBranch=main init`，该配置 2.28 引入；早期版本会静默忽略并默认 `master`。
-- **不要恢复 `include_ignored(true)`**：会重新引入大项目扫描阻塞。
+- **不要恢复 `include_ignored(true)`**：会重新引入大项目扫描阻塞。未来若确需 ignored 感知，走独立轻量通道（.gitignore 判定），**禁止**恢复全量扫描（同「git_status 不再扫描被忽略文件」节末句，CP-008）。
 - **不要改用 checkout API 做 rollback**：Windows autocrlf 场景会导致 index 不一致。
 - **测试二进制 comctl32 v6 激活**：链接 tauri 的测试目标需要 SxS v6 manifest，否则启动即 `0xc0000139`（`STATUS_ENTRYPOINT_NOT_FOUND`）。`build.rs` 对测试目标注入 `/MANIFEST:EMBED` + `/MANIFESTINPUT:tests-comctl6.manifest`。
 
@@ -79,5 +79,4 @@ git2-rs 的 `StatusEntry::path_bytes()` 两个分支均返回 `delta.old_file.pa
 | 豁免项 | 原因 | 当前兜底 |
 |--------|------|---------|
 | git2 API 失败 map_err 分支 | 依赖 libgit2 内部 API 失败，L1 无法注入 | 核心路径已由真实仓库操作覆盖 |
-| 仓库缓存 Mutex 中毒分支 | 锁内无 panic 路径 | 未来引入锁内 panic 时须换原语或补测试 |
 | `get_or_open_repo` discover 成功后的 open 失败 | 竞态窗口不可注入 | 正常路径已由集成测试覆盖 |

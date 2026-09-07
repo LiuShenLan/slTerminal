@@ -1,13 +1,14 @@
-use std::collections::{HashMap, VecDeque};
+use parking_lot::{Mutex, RwLock};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::Arc;
 use std::thread::JoinHandle;
-use tauri::{ipc::Channel, State};
+use tauri::State;
 
 use crate::error::AppError;
 use crate::notify::pool::{LruWatcherPool, WATCHER_POOL_CAPACITY};
-use crate::pty::spawn::PtyEvent;
+use crate::pty::reader::{join_with_timeout, KILL_JOIN_TIMEOUT};
 
 /// PTY 会话 — 持有 master（读写/缩放）、子进程、writer 和 reader 线程句柄
 pub struct PtySession {
@@ -18,13 +19,9 @@ pub struct PtySession {
     pub child: Arc<Mutex<Box<dyn portable_pty::Child + Send>>>,
     /// 共享 writer — take_writer 仅一次，Arc<Mutex> 供所有 pty_write 共享
     pub writer: Arc<Mutex<Box<dyn std::io::Write + Send>>>,
-    /// reader 线程句柄，pty_kill 时 join 回收
+    /// reader 线程句柄，pty_kill 时 join 回收（超时/监督语义见 spawn.rs CP-011）
     pub reader_handle: Option<JoinHandle<()>>,
-    /// 可替换 Channel（E1: pty_reattach 时替换）
-    pub channel: Arc<RwLock<Option<Channel<PtyEvent>>>>,
-    /// 输出回放缓冲区（E1: 256KB FIFO，Channel 断开后缓存最近输出）
-    pub output_ring: Arc<Mutex<VecDeque<u8>>>,
-    /// P2-42: 子进程退出码（reader 线程在 EOF/错误时设置，pty_reattach 检测后发送 Exit）
+    /// P2-42: 子进程退出码（reader 线程在 EOF/错误时设置并记录）
     pub exit_code: Arc<Mutex<Option<i32>>>,
     /// DA1 注入防重复标志（同一会话只注入一次 ESC[?64;22c 响应）
     pub da1_injected: Arc<AtomicBool>,
@@ -37,8 +34,13 @@ pub struct PtySession {
 
 impl Drop for PtySession {
     fn drop(&mut self) {
+        // CP-011: 无超时 join 失真修正——本 Drop 仅在 reader_handle 未被
+        // pty_kill/pty_kill_all take 时可达（如进程退出清空 sessions）；
+        // 可达场景同样禁止无界阻塞：带超时 join，超时 detach（进程退出时 OS 回收）。
         if let Some(handle) = self.reader_handle.take() {
-            let _ = handle.join();
+            if !join_with_timeout(handle, KILL_JOIN_TIMEOUT) {
+                tracing::warn!("PtySession drop: reader 未退出,detach(进程退出回收)");
+            }
         }
     }
 }
@@ -321,47 +323,12 @@ fn apply_project_root(
         Ok(c) => c,
         Err(e) => {
             // SEC-14: 失败时清空旧 root，防止沙箱继续放行已失效的旧路径
-            match project_root.write() {
-                Ok(mut root) => *root = None,
-                // BE-24：锁中毒时旧 root 无法清空——接受语义偏差但可观测化（登记见 src-tauri/CLAUDE.md）
-                Err(lock_err) => {
-                    tracing::warn!("project_root 写锁中毒，旧 root 未能清空: {lock_err}");
-                }
-            }
+            //（CP-005: parking_lot 写锁无中毒——旧 root 恒可清空，BE-24 语义消亡）
+            *project_root.write() = None;
             return Err(e);
         }
     };
-    let mut root = project_root.write().map_err(|e| AppError::IoKind {
-        kind: "lock".into(),
-        message: format!("获取 project_root 锁失败: {e}"),
-    })?;
-    *root = Some(canonical);
-    Ok(())
-}
-
-/// ring buffer 最大容量（256KB，保留最近约 4000+ 行终端输出）
-const RING_BUFFER_CAPACITY: usize = 262144; // 256KB
-
-/// 向 ring buffer 追加数据，超过容量时从头部丢弃旧数据
-/// P2-47: 淘汰到 \\n 边界，避免行内 UTF-8 序列截断
-pub fn ring_buffer_append(ring: &Mutex<VecDeque<u8>>, data: &[u8]) -> Result<(), AppError> {
-    let mut buf = ring
-        .lock()
-        .map_err(|e| AppError::Pty(format!("锁获取失败: {e}")))?;
-    buf.extend(data);
-    // FIFO: 超过容量时从头部以行为粒度丢弃
-    while buf.len() > RING_BUFFER_CAPACITY {
-        let drain_target = 1024usize.min(buf.len());
-        // 在 drain_target 范围内找最后一个 \\n，对齐行边界
-        let prefix: Vec<u8> = buf.iter().take(drain_target).copied().collect();
-        let drain_len = prefix
-            .iter()
-            .rposition(|&b| b == b'\n')
-            .map_or(drain_target, |pos| pos + 1); // 包括 \\n 本身；无换行时按原量淘汰（罕见，仅超长行）
-        for _ in 0..drain_len {
-            buf.pop_front();
-        }
-    }
+    *project_root.write() = Some(canonical);
     Ok(())
 }
 
@@ -373,7 +340,7 @@ mod state_tests {
     fn pty_state_new_empty() {
         let pty = PtyState::new();
         assert!(
-            pty.sessions.read().unwrap().is_empty(),
+            pty.sessions.read().is_empty(),
             "新建 PtyState 的 sessions 应为空"
         );
     }
@@ -382,128 +349,21 @@ mod state_tests {
     fn app_state_new() {
         let state = AppState::new();
         assert!(
-            state.pty.sessions.read().unwrap().is_empty(),
+            state.pty.sessions.read().is_empty(),
             "AppState::new() 应成功创建并持有空的 PtyState"
         );
         assert!(
-            state.file_watchers.lock().unwrap().is_empty(),
+            state.file_watchers.lock().is_empty(),
             "AppState::new() 初始时 file_watchers 池应为空"
         );
         assert!(
-            state.project_root.read().unwrap().is_none(),
+            state.project_root.read().is_none(),
             "AppState::new() 初始时 project_root 应为 None"
         );
         assert!(
-            state.git_repo_cache.lock().unwrap().is_empty(),
+            state.git_repo_cache.lock().is_empty(),
             "AppState::new() 初始时 git_repo_cache 应为空"
         );
-    }
-
-    #[test]
-    fn ring_buffer_append_fifo() {
-        let ring = Mutex::new(VecDeque::new());
-        let data: Vec<u8> = (0..255).collect(); // 255 bytes
-        ring_buffer_append(&ring, &data).unwrap();
-        let buf = ring.lock().unwrap();
-        assert_eq!(buf.len(), 255);
-        assert_eq!(buf[0], 0);
-    }
-
-    #[test]
-    fn ring_buffer_eviction() {
-        let ring = Mutex::new(VecDeque::new());
-        // 写 280KB 数据（超过 256KB 容量），应触发淘汰
-        let data: Vec<u8> = vec![b'A'; 286720]; // 280KB
-        ring_buffer_append(&ring, &data).unwrap();
-        let buf = ring.lock().unwrap();
-        assert!(buf.len() <= RING_BUFFER_CAPACITY);
-        // 缓冲区应包含最近写入的数据（尾部是 A）
-        assert_eq!(buf[buf.len() - 1], b'A');
-    }
-
-    /// P2-47: 淘汰时以 \\n 为边界，不截断行
-    #[test]
-    fn ring_buffer_eviction_at_newline_boundary() {
-        let ring = Mutex::new(VecDeque::new());
-        // 每行 100 字节 + \\n，填到超过容量
-        let line = [b'X'; 100];
-        let mut total = 0usize;
-        while total < RING_BUFFER_CAPACITY + 10240 {
-            ring_buffer_append(&ring, &line).unwrap();
-            ring_buffer_append(&ring, b"\n").unwrap();
-            total += 101;
-        }
-        let buf = ring.lock().unwrap();
-        assert!(buf.len() <= RING_BUFFER_CAPACITY);
-        // 淘汰后第一个字节应是完整行起始 'X'（非截断的中间字节）
-        assert_eq!(buf[0], b'X', "淘汰后应以完整行起始，避免截断");
-    }
-
-    /// PTY-05: 无换行长行淘汰边界①——淘汰量恰好 1024（map_or 的 or 分支原量淘汰）
-    #[test]
-    fn ring_buffer_eviction_long_line_exact_1024() {
-        let ring = Mutex::new(VecDeque::new());
-        // 单条无换行超长行：容量 + 恰好 1024 字节
-        // 1024 字节窗口内无换行 → drain_len = drain_target = 1024，一轮淘汰后恰好回落到容量
-        let data = vec![b'A'; RING_BUFFER_CAPACITY + 1024];
-        ring_buffer_append(&ring, &data).unwrap();
-        let buf = ring.lock().unwrap();
-        assert_eq!(
-            buf.len(),
-            RING_BUFFER_CAPACITY,
-            "淘汰量恰好 1024 时应恰好回落到容量"
-        );
-        assert_eq!(buf[buf.len() - 1], b'A', "剩余尾部应为最新写入字节");
-    }
-
-    /// PTY-05: 无换行长行淘汰边界②——超 1024 且不能整除（多轮原量淘汰）
-    #[test]
-    fn ring_buffer_eviction_long_line_exceed_1024() {
-        let ring = Mutex::new(VecDeque::new());
-        // 单条无换行超长行：容量 + 5000 字节（5000 = 4×1024 + 904）
-        // 无换行时每轮按 1024 原量淘汰：4 轮后剩 904 仍超容量 → 第 5 轮再淘汰 1024，回落至容量 - 120
-        let data = vec![b'B'; RING_BUFFER_CAPACITY + 5000];
-        ring_buffer_append(&ring, &data).unwrap();
-        let buf = ring.lock().unwrap();
-        assert!(
-            buf.len() <= RING_BUFFER_CAPACITY,
-            "淘汰后长度不应超过容量，实际 {}",
-            buf.len()
-        );
-        assert_eq!(
-            buf.len(),
-            RING_BUFFER_CAPACITY - 120,
-            "无换行超长行应按 1024 原量多轮淘汰"
-        );
-        assert_eq!(buf[buf.len() - 1], b'B', "剩余尾部应为最新写入字节");
-    }
-
-    /// PTY-05: 无换行长行淘汰边界③——数据中含换行（rposition 分支按行对齐，超长行不截断）
-    #[test]
-    fn ring_buffer_eviction_long_line_with_newline() {
-        let ring = Mutex::new(VecDeque::new());
-        // 先铺满短行（101 字节/行：100 字节 X + 换行），再追加一条 3000 字节无换行超长行
-        // 淘汰窗口（1024 字节）内存在换行 → drain_len = 最后一个 \n 位置 + 1（10 整行 1010 字节）
-        // 超长行整体保留在尾部，不被截断
-        let line = [b'X'; 100];
-        let mut total = 0usize;
-        while total + 101 <= RING_BUFFER_CAPACITY {
-            ring_buffer_append(&ring, &line).unwrap();
-            ring_buffer_append(&ring, b"\n").unwrap();
-            total += 101;
-        }
-        let long_line = vec![b'Y'; 3000];
-        ring_buffer_append(&ring, &long_line).unwrap();
-        let buf = ring.lock().unwrap();
-        assert!(
-            buf.len() <= RING_BUFFER_CAPACITY,
-            "淘汰后长度不应超过容量，实际 {}",
-            buf.len()
-        );
-        assert_eq!(buf[0], b'X', "淘汰后应以完整行起始（行边界对齐）");
-        // 尾部无换行超长行应完整保留（未被截断）
-        let mut tail = buf.iter().skip(buf.len() - 3000);
-        assert!(tail.all(|&b| b == b'Y'), "尾部无换行超长行应完整保留");
     }
 }
 
@@ -899,7 +759,7 @@ mod project_root_tests {
             ))
             .unwrap();
 
-        let root = app_state.project_root.read().unwrap().clone().unwrap();
+        let root = app_state.project_root.read().clone().unwrap();
         let expected = dunce::canonicalize(dir.path()).unwrap();
         assert_eq!(
             root, expected,
@@ -923,7 +783,7 @@ mod project_root_tests {
             ))
             .unwrap();
         assert!(
-            app_state.project_root.read().unwrap().is_some(),
+            app_state.project_root.read().is_some(),
             "前置：旧 root 应存在"
         );
 
@@ -944,7 +804,7 @@ mod project_root_tests {
 
         assert!(result.is_err(), "不存在路径应返回 Err");
         assert!(
-            app_state.project_root.read().unwrap().is_none(),
+            app_state.project_root.read().is_none(),
             "失败后旧 root 应被清空（防沙箱误放行旧路径）"
         );
     }
@@ -996,7 +856,7 @@ mod project_root_tests {
                 first.to_string_lossy().to_string(),
             ))
             .unwrap();
-        let root = app_state.project_root.read().unwrap().clone().unwrap();
+        let root = app_state.project_root.read().clone().unwrap();
         assert_eq!(
             root,
             dunce::canonicalize(&first).unwrap(),
@@ -1035,7 +895,7 @@ mod project_root_tests {
         assert!(result_a.is_ok(), "并发 A 调用应 Ok");
         assert!(result_b.is_ok(), "并发 B 调用应 Ok");
         // 串行化保证 root 为 A/B 之一（非交错写回产物），且非 None
-        let root = app_state.project_root.read().unwrap().clone().unwrap();
+        let root = app_state.project_root.read().clone().unwrap();
         let canonical_a = dunce::canonicalize(dir_a.path()).unwrap();
         let canonical_b = dunce::canonicalize(dir_b.path()).unwrap();
         assert!(
@@ -1052,7 +912,7 @@ mod project_root_tests {
                 path_b,
             ))
             .unwrap();
-        let root = app_state.project_root.read().unwrap().clone().unwrap();
+        let root = app_state.project_root.read().clone().unwrap();
         assert_eq!(root, canonical_b, "顺序调用 B 后 root 应为 B");
     }
 }

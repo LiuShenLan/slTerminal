@@ -343,14 +343,13 @@ mod watcher_tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("a.json"), "{}").unwrap();
         std::fs::write(dir.path().join("b.json"), "{}").unwrap();
-        let processed = std::sync::Mutex::new(Vec::new());
+        let processed = parking_lot::Mutex::new(Vec::new());
         poll_once(dir.path(), |p| {
             processed
                 .lock()
-                .unwrap()
                 .push(p.file_name().unwrap().to_string_lossy().to_string());
         });
-        let got = processed.lock().unwrap();
+        let got = processed.lock();
         assert_eq!(got.len(), 2);
         assert!(got.contains(&"a.json".to_string()));
         assert!(got.contains(&"b.json".to_string()));
@@ -471,15 +470,14 @@ mod watcher_tests {
         std::fs::write(dir.path().join("a.json"), "{}").unwrap();
         std::fs::write(dir.path().join("b.json"), "{}").unwrap();
         let (_stop_tx, stop_rx) = mpsc::channel();
-        let processed = std::sync::Mutex::new(Vec::new());
+        let processed = parking_lot::Mutex::new(Vec::new());
         let stopped = run_one_tick(dir.path(), &stop_rx, |p| {
             processed
                 .lock()
-                .unwrap()
                 .push(p.file_name().unwrap().to_string_lossy().to_string());
         });
         assert!(!stopped, "无停止信号时不应退出");
-        let got = processed.lock().unwrap();
+        let got = processed.lock();
         assert_eq!(got.len(), 2, "残留 .json 应全部被消费");
         assert!(got.contains(&"a.json".to_string()));
         assert!(got.contains(&"b.json".to_string()));
@@ -544,11 +542,11 @@ mod watcher_tests {
                 Instant::now(),
             ),
         ];
-        let processed = std::sync::Mutex::new(Vec::new());
+        let processed = parking_lot::Mutex::new(Vec::new());
         handle_notify_events(&events, |p| {
-            processed.lock().unwrap().push(p.to_path_buf());
+            processed.lock().push(p.to_path_buf());
         });
-        let got = processed.lock().unwrap();
+        let got = processed.lock();
         assert_eq!(got.len(), 1, "仅 .json 信号文件应交给 process");
         assert_eq!(got[0], json_path);
     }

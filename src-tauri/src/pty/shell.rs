@@ -73,7 +73,8 @@ pub(crate) fn validate_shell_allowlist(program: &str) -> Result<(), AppError> {
     // SEC-01: 含路径分隔符——只信任 PATH 解析出的真实路径。
     // canonicalize 用户路径后与 which_full_path(文件名) 解析结果比对，一致才放行；
     // canonicalize 失败（应用执行别名/特殊 ACL——CreateProcess 可运行但普通文件
-    // API 打开失败，os error 1920 场景）回退归一字符串比对，不因此拒绝合法 shell。
+    // API 打开失败，os error 1920 场景）回退 Win32 句柄级文件身份比对，
+    // 不因此拒绝合法 shell（alias 两侧同一条目，reparse 条目身份相等）。
     let resolved = match which_full_path(filename) {
         Some(path) => path,
         // 系统目录兜底：PATH 解析失败时，%SystemRoot%\System32\<文件名> 放行——
@@ -97,15 +98,105 @@ pub(crate) fn validate_shell_allowlist(program: &str) -> Result<(), AppError> {
     Ok(())
 }
 
+/// Win32 句柄级文件身份（SEC-15 根治：替代 D15 字符串回退比对）
+///
+/// 身份 = (volume serial number, file index)——同一卷上唯一标识一个文件。
+/// 普通打开（不带 FILE_FLAG_OPEN_REPARSE_POINT）跟随 symlink 等 reparse point
+/// 到真实目标，取得目标文件身份。
+/// 注意：应用执行别名（APPEXECLINK）无法被普通 CreateFileW 打开——实测
+/// os error 1920（ERROR_CANT_ACCESS_FILE）——本函数对 alias 恒 None；alias 的
+/// 身份证据经 reparse_entry_identity 补充路径获取（fallback_identity_match 内
+/// or_else 接线，两侧证据口径一致才可比）。
+/// 任一侧打开/查询失败 → None：句柄级证据缺失即整体拒绝，绝不降级字符串比对。
+#[cfg(windows)]
+fn file_identity(path: &str) -> Option<(u32, u64)> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::Storage::FileSystem::{
+        CreateFileW, GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_NORMAL,
+        FILE_GENERIC_READ, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    };
+
+    let wide: Vec<u16> = std::ffi::OsStr::new(path)
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    unsafe {
+        let handle = CreateFileW(
+            windows::core::PCWSTR(wide.as_ptr()),
+            FILE_GENERIC_READ.0, // windows 0.61 常量强类型化（FILE_ACCESS_RIGHTS），形参为裸 u32
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            None,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            None,
+        )
+        .ok()?;
+        let queried = GetFileInformationByHandle(handle, &mut info).is_ok();
+        let _ = CloseHandle(handle);
+        if !queried {
+            return None;
+        }
+    }
+    let index = ((info.nFileIndexHigh as u64) << 32) | (info.nFileIndexLow as u64);
+    Some((info.dwVolumeSerialNumber, index))
+}
+
+/// Win32 reparse 点文件条目身份（AEL alias 场景的补充证据路径，CP-014）
+///
+/// 应用执行别名（APPEXECLINK reparse point）无法被普通 CreateFileW 打开
+/// （实测 os error 1920，file_identity 恒 None）；但 alias 文件条目本身可经
+/// FILE_FLAG_OPEN_REPARSE_POINT + FILE_READ_ATTRIBUTES 打开（GetFileInformationByHandle
+/// 正常）——条目身份 = (volume serial, file index)，两侧指向同一 alias 条目时
+/// 必然相等，构成不依赖字符串的句柄级证据（真实路径两侧相同 ⇔ 条目身份相同，
+/// 大小写/格式差异被身份口径吸收）。
+/// 不存在路径/连属性都不可读（权限拒绝）→ 打开失败 → None → 整体拒绝。
+#[cfg(windows)]
+fn reparse_entry_identity(path: &str) -> Option<(u32, u64)> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::Storage::FileSystem::{
+        CreateFileW, GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_NORMAL,
+        FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
+        FILE_SHARE_WRITE, OPEN_EXISTING,
+    };
+
+    let wide: Vec<u16> = std::ffi::OsStr::new(path)
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    unsafe {
+        let handle = CreateFileW(
+            windows::core::PCWSTR(wide.as_ptr()),
+            FILE_READ_ATTRIBUTES.0, // 仅属性访问——AEL 拒绝数据打开，属性打开可用
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            None,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, // 不跟随 reparse，取条目本身
+            None,
+        )
+        .ok()?;
+        let queried = GetFileInformationByHandle(handle, &mut info).is_ok();
+        let _ = CloseHandle(handle);
+        if !queried {
+            return None;
+        }
+    }
+    let index = ((info.nFileIndexHigh as u64) << 32) | (info.nFileIndexLow as u64);
+    Some((info.dwVolumeSerialNumber, index))
+}
+
 /// 比较 program 与 PATH 解析结果是否指向同一可执行文件（SEC-01 判定核心）
 ///
-/// 优先 canonicalize 精确比较（拉平 8.3 短名/`..`/symlink 差异）；
-/// 双侧 canonicalize 均失败（应用执行别名/特殊 ACL——CreateProcess 可运行但
-/// 普通文件 API 打开失败，os error 1920 场景；alias 两侧指向同一路径）
-/// 才回退归一字符串比较（残余风险登记：此时仅剩字符串证据，理论上可构造
-/// 同名字符串绕过——alias 兼容与风险的权衡，D15 决策，SEC-15）；
-/// 单侧失败即拒绝（SEC-15 收窄：字符串比对无法证明文件身份，
-/// reparse point/执行别名组合可绕过，从严）。
+/// 1) canonicalize 双成功 → 精确比较（拉平 8.3 短名/`..`/symlink 差异）；
+/// 2) 双侧均失败（应用执行别名/特殊 ACL——CreateProcess 可运行但普通文件
+///    API 打开失败，os error 1920 场景）→ Win32 句柄级文件身份比对
+///    （volume serial + file index；真实文件取普通句柄身份，alias 类 reparse
+///    条目取条目身份——SEC-15 根治，替代 D15 字符串回退；两侧证据齐且相等
+///    才放行，任一侧证据缺失即拒绝，不降级字符串）；
+/// 3) 单侧失败即拒绝（SEC-15 收窄保留为纵深一层）。
 fn paths_match(program: &str, resolved: &str) -> bool {
     match (
         std::fs::canonicalize(program),
@@ -120,32 +211,43 @@ fn paths_match(program: &str, resolved: &str) -> bool {
                 cp == cr
             }
         }
-        // 2) 双侧均失败（应用执行别名/特殊 ACL——CreateProcess 可运行但普通文件
-        //    API 打开失败，os error 1920 场景；alias 两侧指向同一路径）→ 回退归一字符串比较
-        (Err(_), Err(_)) => {
-            let a = normalize_for_compare(program);
-            let b = normalize_for_compare(resolved);
-            if cfg!(windows) {
-                a.eq_ignore_ascii_case(&b)
-            } else {
-                a == b
-            }
-        }
+        // 2) 双侧均失败 → Win32 句柄级文件身份比对（SEC-15 根治）
+        (Err(_), Err(_)) => fallback_identity_match(program, resolved),
         // 3) SEC-15：单侧失败即拒绝——字符串比对无法证明文件身份，
         //    reparse point/执行别名组合可绕过，从严
         _ => false,
     }
 }
 
-/// 路径归一化（canonicalize 失败时的字符串比对用）：`/`→`\`、去尾分隔符
-fn normalize_for_compare(p: &str) -> String {
-    if cfg!(windows) {
-        p.replace('/', "\\")
-            .trim_end_matches(['\\', '/'])
-            .to_string()
-    } else {
-        p.trim_end_matches('/').to_string()
+/// 双侧 canonicalize 失败的回退比对（SEC-15 根治）
+///
+/// Windows：句柄级文件身份——每侧证据 = 普通句柄身份优先（真实文件/硬链接），
+/// 普通打开失败（AEL alias 类条目，实测 os error 1920）补 reparse 条目身份
+/// （FILE_FLAG_OPEN_REPARSE_POINT 打开条目本身，file_identity 与
+/// reparse_entry_identity 对同一条目给出同一身份，口径一致）；两侧证据齐且
+/// 相等才放行——合法 alias 用例两侧同一条目身份必然相等；同名不同条目身份
+/// 不等、不存在路径两侧证据皆缺，一律拒绝（字符串永不构成证据，D15 语义作废）。
+/// 非 Windows：保留原归一字符串比对（无 Win32 API，仅编译兜底；生产目标 Windows）。
+#[cfg(windows)]
+fn fallback_identity_match(program: &str, resolved: &str) -> bool {
+    let identity = |p: &str| file_identity(p).or_else(|| reparse_entry_identity(p));
+    match (identity(program), identity(resolved)) {
+        (Some(a), Some(b)) => a == b,
+        // 任一侧无证据 → 句柄级证据缺失 → 拒绝（不降级字符串比对）
+        _ => false,
     }
+}
+
+/// 非 Windows 平台编译兜底：维持原归一字符串比对
+#[cfg(not(windows))]
+fn fallback_identity_match(program: &str, resolved: &str) -> bool {
+    normalize_for_compare(program) == normalize_for_compare(resolved)
+}
+
+/// 路径归一化（仅非 Windows 平台字符串比对兜底用；Windows 走句柄级身份比对）
+#[cfg(not(windows))]
+fn normalize_for_compare(p: &str) -> String {
+    p.trim_end_matches('/').to_string()
 }
 
 /// 解析 shell 程序，返回已配置好参数的基础 CommandBuilder
@@ -511,13 +613,14 @@ mod shell_tests {
         validate_shell_allowlist(&legit).expect("与 PATH 解析结果一致的绝对路径应放行");
     }
 
-    // ── paths_match 纯函数测试（SEC-01 alias 兼容修复 + SEC-15 收窄）──
+    // ── paths_match 纯函数测试（SEC-01 alias 兼容修复 + SEC-15 根治）──
     //
     // paths_match 三层判定：canonicalize 双成功 → 精确比较；双侧失败 →
-    // 归一字符串比较；单侧失败 → 拒绝（SEC-15）。fallback 用例用「不存在的
-    // 路径」构造 canonicalize 双失败（alias 场景等价——alias 文件 exists 为真
-    // 但普通文件 API 打开失败，canonicalize 同失败，代码路径一致；纯函数层
-    // 不依赖文件系统权限）。单侧失败用例：一侧真实存在、一侧不存在 → 拒绝。
+    // Win32 句柄级文件身份比对（fallback_identity_match，SEC-15 根治，
+    // 替代 D15 字符串回退）；单侧失败 → 拒绝（SEC-15 纵深）。fallback 用例
+    // 用「不存在的路径」构造 canonicalize 双失败——两侧都打不开即拒绝，
+    // 同名同串也不再构成放行依据。单侧失败用例：一侧真实存在、一侧不存在 → 拒绝。
+    // file_identity_* 三例共同锁死「绕过需两侧同 volume serial + file index」。
 
     #[test]
     fn paths_match_canonical_equal() {
@@ -546,29 +649,79 @@ mod shell_tests {
     }
 
     #[test]
-    fn paths_match_fallback_case_insensitive() {
-        // canonicalize 双失败（应用执行别名场景等价）→ fallback 忽略大小写
-        let alias = r"C:\Users\x\AppData\Local\Microsoft\WindowsApps\pwsh.exe";
-        let lower = r"c:\users\x\appdata\local\microsoft\windowsapps\pwsh.exe";
+    fn fallback_both_unopenable_rejected() {
+        // 双侧 canonicalize 均失败 → 回退句柄级身份比对：两侧都打不开
+        // （无句柄级证据）即拒绝。同名同串也拒绝——字符串不再构成放行依据
+        // （SEC-15 字符串回退已销；防回归锚点：绕过需两侧同 volume serial
+        // + file index）
+        let missing = r"C:\no-such-dir-x\cmd.exe";
+        // 前提守卫：该路径确实不存在（存在则 canonicalize 成功，用例前提失效）
         assert!(
-            paths_match(alias, lower),
-            "fallback 应忽略大小写（Windows 大小写不敏感文件系统）"
+            !std::path::Path::new(missing).exists(),
+            "前提：不存在路径不应存在"
+        );
+        assert!(
+            !paths_match(missing, missing),
+            "双侧均打不开应拒绝——同名同串也不例外（SEC-15）"
         );
     }
 
+    // ── file_identity 句柄级身份测试（Windows 条件编译）──
+    //
+    // file_identity 为 #[cfg(windows)] 编译期 API（CreateFileW 等 Win32 调用），
+    // 无法用运行时 cfg!(windows) 区分（非 Windows 构建下函数不存在即编译失败），
+    // 故用例保留 #[cfg(windows)]（同 allowlist_accepts_real_alias_when_present）。
+
+    #[cfg(windows)]
     #[test]
-    fn paths_match_fallback_separator_normalization() {
-        // 分隔符归一：/ 与 \ 写法指向同一路径；尾部分隔符容忍
-        let a = r"C:/no-such-dir-x/cmd.exe";
-        let b = r"C:\no-such-dir-x\cmd.exe";
-        assert!(paths_match(a, b), "fallback 应归一化路径分隔符");
-        assert!(paths_match(r"C:\no-such-dir-x\cmd.exe\", b));
+    fn file_identity_same_file_via_hardlink_equal() {
+        // 硬链接 = 同一文件的两个目录项 → volume serial + file index 相同
+        let dir = tempfile::tempdir().unwrap();
+        let original = dir.path().join("a.exe");
+        let link = dir.path().join("b.exe");
+        std::fs::write(&original, b"x").expect("写原文件失败");
+        std::fs::hard_link(&original, &link).expect("tempdir 内建硬链接应成功（NTFS）");
+        let a = original.to_string_lossy().into_owned();
+        let b = link.to_string_lossy().into_owned();
+        assert_eq!(
+            file_identity(&a),
+            file_identity(&b),
+            "硬链接两侧应具同一文件身份"
+        );
+        assert!(
+            fallback_identity_match(&a, &b),
+            "同一文件的两个目录项应放行（合法 alias 两侧等价场景）"
+        );
     }
 
+    #[cfg(windows)]
     #[test]
-    fn paths_match_fallback_unequal() {
-        // 两个不同的不存在路径 → false（伪造路径仍拒绝）
-        assert!(!paths_match(r"C:\a\b\cmd.exe", r"C:\a\c\cmd.exe"));
+    fn file_identity_distinct_files_unequal() {
+        // 两个不同文件 → file index 不同，身份不等——同名字符串不能伪造放行
+        let dir = tempfile::tempdir().unwrap();
+        let p1 = dir.path().join("a.exe");
+        let p2 = dir.path().join("b.exe");
+        std::fs::write(&p1, b"x").unwrap();
+        std::fs::write(&p2, b"y").unwrap();
+        let a = p1.to_string_lossy().into_owned();
+        let b = p2.to_string_lossy().into_owned();
+        assert_ne!(file_identity(&a), file_identity(&b), "不同文件身份应不等");
+        assert!(
+            !fallback_identity_match(&a, &b),
+            "身份不等不应放行（SEC-15 防回归）"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn file_identity_missing_file_none() {
+        // 打不开的路径 → 无句柄级证据 → None（任一侧 None 即整体拒绝）
+        let missing = r"C:\__slterm_no_such_dir__\cmd.exe";
+        assert!(
+            !std::path::Path::new(missing).exists(),
+            "前提：不存在路径不应存在"
+        );
+        assert_eq!(file_identity(missing), None, "打不开的路径应返回 None");
     }
 
     #[test]
@@ -624,8 +777,9 @@ mod shell_tests {
     // 锁定文件无法触发失败）。改用真实环境条件测试：本机装有 Store 版应用
     // （如 MSIX 安装的 PowerShell 7）时 `%LOCALAPPDATA%\Microsoft\WindowsApps\`
     // 下的 pwsh.exe 即真实 alias——PATH 收敛到该目录后，which_full_path 命中
-    // alias → canonicalize 失败 → fallback 字符串比对放行。无 alias 的机器
-    // （如 CI runner）条件不满足，用例空跑不失败。
+    // alias → canonicalize 失败 → 句柄级身份比对放行（两侧同一 alias 条目：
+    // 普通打开失败（1920）→ 走 reparse 条目身份，两侧条目身份必然相等）。
+    // 无 alias 的机器（如 CI runner）条件不满足，用例空跑不失败。
 
     #[cfg(windows)]
     #[test]
@@ -647,10 +801,11 @@ mod shell_tests {
                 Some(a.to_str().expect("alias 路径为 UTF-8")),
                 "PATH 收敛后应命中 alias"
             );
-            // canonicalize(alias) 失败（os error 1920）→ fallback 字符串比对放行
+            // canonicalize(alias) 失败（os error 1920）→ 句柄级身份比对放行
+            //（普通打开失败 → 两侧同一 alias 条目的 reparse 条目身份相等）
             let s = a.to_string_lossy().into_owned();
             validate_shell_allowlist(&s)
-                .expect("真实 alias 路径应放行（canonicalize 失败 fallback）");
+                .expect("真实 alias 路径应放行（canonicalize 失败 → 句柄级身份放行）");
         }
     }
 

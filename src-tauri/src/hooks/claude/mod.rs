@@ -61,7 +61,16 @@ impl CliHooksProvider for ClaudeHooksProvider {
     fn inject(&self) -> Result<AgentHookInjectionStatus, AppError> {
         let script_dir = hooks_dir().ok_or_else(home_dir_err)?;
         let settings_path = claude_settings_path().ok_or_else(home_dir_err)?;
-        inject::inject_impl(&settings_path, &script_dir)
+        // false = 常规注入路径：命中可疑模式返回 PendingConfirmation（CP-043）
+        inject::inject_impl(&settings_path, &script_dir, false)
+    }
+
+    /// 确认注入（CP-043）：前端展示可疑命令原文、用户确认后二次调用——
+    /// true 跳过可疑审查完成注入
+    fn confirm_inject(&self) -> Result<AgentHookInjectionStatus, AppError> {
+        let script_dir = hooks_dir().ok_or_else(home_dir_err)?;
+        let settings_path = claude_settings_path().ok_or_else(home_dir_err)?;
+        inject::inject_impl(&settings_path, &script_dir, true)
     }
 
     fn uninstall(&self) -> Result<(), AppError> {
@@ -82,6 +91,7 @@ impl CliHooksProvider for ClaudeHooksProvider {
                 return Ok(AgentHookInjectionStatus {
                     status: AgentInjectionStatus::NotInjected,
                     version: None,
+                    suspicious_command: None,
                 });
             }
         };
@@ -91,6 +101,7 @@ impl CliHooksProvider for ClaudeHooksProvider {
                 return Ok(AgentHookInjectionStatus {
                     status: AgentInjectionStatus::NotInjected,
                     version: None,
+                    suspicious_command: None,
                 });
             }
         };

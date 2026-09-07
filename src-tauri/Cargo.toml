@@ -65,6 +65,9 @@ dunce = "1"
 sha2 = "0.10"
 # F10 套餐余量查询（纯阻塞 HTTP，spawn_blocking 调用）
 ureq = { version = "3", features = ["json"] }
+# CP-005: 消除 std Mutex 中毒攻击面——锁内 panic 不再连锁 panic 等待方;
+# parking_lot lock() 无 Result,全仓 map_err/unwrap/match 降级站点一并清除
+parking_lot = "0.12"
 
 [target.'cfg(windows)'.dependencies]
 nt_version = "0.1"
@@ -76,6 +79,7 @@ windows = { version = "0.61", features = [
   "Win32_System_Console",
   "Win32_Foundation",
   "Win32_Security",
+  "Win32_Storage_FileSystem",
   "Win32_System_Pipes",
 ] }
 

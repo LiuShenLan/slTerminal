@@ -1,10 +1,10 @@
-/// PTY reader 线程 — 阻塞读取 PTY 输出 → 微批聚合 → Channel 推送 PtyEvent
+/// PTY reader 线程 — 阻塞读取 PTY 输出 → 微批聚合 → Channel 直写 PtyEvent
 ///
-/// E1: Channel 断开时不退出，写入 ring buffer 等待 reattach。
+/// CP-034: Channel 直写 + 断开退出，单路径——断开（send 失败）即退出，不缓冲。
 ///
 /// BE-05 微批（I/O 编排）：read 成功后非阻塞续读（Windows 上基于
 /// PeekNamedPipe 查询管道可读字节数），累积至 MICRO_BATCH_MAX（64KB）
-/// 或无可读数据后，再一次批量 Channel::send + ring buffer append（BE-12）。
+/// 或无可读数据后，再一次批量 Channel::send（BE-12）。
 /// 「读到即续读」非定时器——不引入固定延迟；首块经过 ConPTY 启动序列剥离，
 /// 续读块在首块真实数据出现后原样透传（BE-13 跨 16KB 边界残留由首块剥离状态机处理）。
 /// DOC-01 豁免项 1（reader_loop 残余 I/O 编排分支）随微批变动——豁免表同步在 S19，
@@ -16,11 +16,11 @@
 /// （OSC 标题含 BEL→蜂鸣、清屏/归位→首字符被覆盖、DSR/光标查询），
 /// 后续读取原样透传。
 use crate::pty::spawn::PtyEvent;
-use crate::state::ring_buffer_append;
-use std::collections::VecDeque;
+use parking_lot::Mutex;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::Arc;
+use std::time::Duration;
 use tauri::ipc::Channel;
 
 /// reader 线程读取缓冲区大小
@@ -28,7 +28,7 @@ use tauri::ipc::Channel;
 pub const READER_BUF_SIZE: usize = 16384;
 
 /// BE-05: 微批续读上限（64KB）——read 成功后非阻塞续读，累积至此或无可读
-/// 数据再一次 Channel::send + ring buffer append（BE-12）。首块最多
+/// 数据再一次 Channel::send（BE-12）。首块最多
 /// READER_BUF_SIZE，续读约 3 块满上限。契约：64KB（S06 跨边界写死）。
 pub const MICRO_BATCH_MAX: usize = 65536;
 
@@ -55,22 +55,20 @@ impl Read for PtyReaderInput {
     }
 }
 
-/// reader 线程主循环（E1: 支持重连）
+/// reader 线程主循环（CP-034: Channel 直写 + 断开退出，单路径）
 ///
 /// - input: PtyReaderInput——阻塞读取 + BE-05 微批续读检查（pending 非阻塞
 ///   「管道是否有未读数据」；Windows = PeekNamedPipe 可读字节数 > 0（spawn.rs
 ///   构造），非 Windows = 恒 false）
-/// - channel: 可替换的 Channel 引用，pty_reattach 通过写锁替换
-/// - ring: ring buffer，总是缓存最近输出供 reattach 回放
+/// - channel: Channel 直写（无替换层）；send 失败（前端已卸载）→ 退出
 /// - child: P2-11 子进程句柄，EOF 时调用 wait() 获取真实退出码
-/// - exit_code: P2-42 退出状态共享，reader 设置后 pty_reattach 检测
+/// - exit_code: P2-42 退出状态共享，reader 设置后记录
 /// - 循环读取 PTY 输出，微批聚合后通过 Channel 发送 Output 事件（BE-05）
 /// - Ok(0) = EOF → 发 Exit 事件 → 退出
 /// - Windows 首轮读取剥离 ConPTY 启动注入序列
 pub fn reader_loop(
     mut input: PtyReaderInput,
-    channel: Arc<RwLock<Option<Channel<PtyEvent>>>>,
-    ring: Arc<Mutex<VecDeque<u8>>>,
+    channel: Channel<PtyEvent>, // 直写，无替换层
     child: Arc<Mutex<Box<dyn portable_pty::Child + Send>>>,
     exit_code: Arc<Mutex<Option<i32>>>,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
@@ -84,38 +82,26 @@ pub fn reader_loop(
             Ok(0) => {
                 // EOF — 子进程已退出
                 // P2-11: 从 child.wait() 获取真实退出码而非硬编码 0
-                // 锁/等待失败 → 退出码未知（None），不硬编码 0（降级决策见 eof_exit_code）
-                let wait_outcome: Result<Result<i32, ()>, ()> = match child.lock() {
-                    Ok(mut c) => match c.wait() {
+                // CP-005: parking_lot 锁无失败路径——仅 child.wait() 失败 →
+                // 退出码未知（None），不硬编码 0（降级决策见 eof_exit_code）
+                let wait_outcome: Result<Result<i32, ()>, ()> = {
+                    let mut c = child.lock();
+                    match c.wait() {
                         Ok(status) => Ok(Ok(status.exit_code() as i32)),
                         Err(e) => {
                             tracing::warn!("child.wait() 失败: {e}");
                             Ok(Err(()))
                         }
-                    },
-                    Err(e) => {
-                        tracing::error!("reader_loop child 锁获取失败: {e}");
-                        Err(())
                     }
                 };
                 let code = eof_exit_code(wait_outcome);
 
-                // P2-42: 记录退出码到共享状态，供 pty_reattach 检测
-                if let Ok(mut ec) = exit_code.lock() {
-                    *ec = code;
-                }
+                // P2-42: 记录退出码到共享状态
+                let mut ec = exit_code.lock();
+                *ec = code;
 
-                let ch = match channel.read() {
-                    Ok(c) => c,
-                    Err(e) => {
-                        tracing::error!("reader_loop channel 锁获取失败: {e}");
-                        break;
-                    }
-                };
-                if let Some(ref c) = *ch {
-                    if let Err(e) = c.send(PtyEvent::Exit { code }) {
-                        tracing::debug!("Channel send 失败（前端可能已断开）: {}", e);
-                    }
+                if let Err(e) = channel.send(PtyEvent::Exit { code }) {
+                    tracing::debug!("Channel send 失败（前端已断开）,reader 退出: {e}");
                 }
                 break;
             }
@@ -142,7 +128,7 @@ pub fn reader_loop(
 
                 // BE-05: 微批——read 成功后非阻塞续读（「读到即续读」，非定时器），
                 // 累积至 MICRO_BATCH_MAX（64KB）或无可读数据，再一次批量
-                // Channel::send + ring buffer append。续读遇 EOF/错误时立即停止
+                // Channel::send。续读遇 EOF/错误时立即停止
                 // （tail 已含数据照常 flush，下一轮主循环 read 走 EOF/Err 分支，
                 // 无数据丢失）；续读块不再过启动序列剥离（startup_drained 已置 true）。
                 let mut batch: Vec<u8> = Vec::with_capacity(READER_BUF_SIZE * 2);
@@ -153,47 +139,69 @@ pub fn reader_loop(
                 maybe_inject_da1(&da1_injected, &writer, &tail);
                 batch.extend_from_slice(&tail);
 
-                let ch = match channel.read() {
-                    Ok(c) => c,
-                    Err(e) => {
-                        tracing::error!("reader_loop channel 锁获取失败: {e}");
-                        break;
-                    }
-                };
-                // P2-46: 总是先缓存到 ring buffer（不 clone），再 send 消耗 batch
-                // 成功路径零 clone，失败路径（Channel 断连）ring buffer 已有数据
-                // BE-12: 批量 append——合并后 append 调用点仅此一处（每微批一次，
-                // 锁竞争随 send 频次同步下降），不引入无锁结构
-                if let Err(e) = ring_buffer_append(&ring, &batch) {
-                    tracing::warn!("ring buffer 写入失败: {e}");
-                }
-                if let Some(ref c) = *ch {
-                    if let Err(e) = c.send(PtyEvent::Output { bytes: batch }) {
-                        tracing::debug!("Channel send 失败（前端可能已断开）: {}", e);
-                    }
+                if let Err(e) = channel.send(PtyEvent::Output { bytes: batch }) {
+                    // CP-034: Channel 断开（前端已卸载）——单路径语义:退出,不缓冲
+                    tracing::debug!("Channel send 失败(前端已断开),reader 退出: {e}");
+                    break;
                 }
             }
             Err(e) => {
                 tracing::warn!("PTY reader 错误: {e}");
                 // P2-42: 记录错误退出码到共享状态
-                if let Ok(mut ec) = exit_code.lock() {
-                    *ec = Some(-1);
-                }
-                let ch = match channel.read() {
-                    Ok(c) => c,
-                    Err(e) => {
-                        tracing::error!("reader_loop channel 锁获取失败: {e}");
-                        break;
-                    }
-                };
-                if let Some(ref c) = *ch {
-                    if let Err(e) = c.send(PtyEvent::Exit { code: Some(-1) }) {
-                        tracing::debug!("Channel send 失败（前端可能已断开）: {}", e);
-                    }
+                let mut ec = exit_code.lock();
+                *ec = Some(-1);
+                if let Err(e) = channel.send(PtyEvent::Exit { code: Some(-1) }) {
+                    tracing::debug!("Channel send 失败(前端已断开),reader 退出: {e}");
                 }
                 break;
             }
         }
+    }
+}
+
+/// BE-06/CP-011: reader 线程 join 超时——3s 后按清理计划处理（上提自 spawn.rs，
+/// 纯常量无状态；state.rs PtySession::drop 与 spawn.rs pty_kill 共用）
+pub(crate) const KILL_JOIN_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// BE-06: join 超时轮询间隔（10ms，轻量轮询，避免忙等）
+pub(crate) const KILL_JOIN_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+/// BE-06: 带超时的线程 join——轮询 `is_finished` 至 deadline，避免无限期阻塞
+///
+/// 返回 false = 超时未完成（调用方按 `plan_cleanup_after_join_timeout` 决策：
+/// reader detach + session 移交监督线程，CP-011）。
+/// 轮询到 is_finished 后调用 join() 回收线程资源（立即返回）。
+/// 纯逻辑 + 标准库线程，可 L1 单测（不依赖 PTY）。
+pub(crate) fn join_with_timeout(handle: std::thread::JoinHandle<()>, timeout: Duration) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if handle.is_finished() {
+            let _ = handle.join();
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(KILL_JOIN_POLL_INTERVAL);
+    }
+}
+
+/// CP-011: reader join 超时后的清理决策（纯函数，L1 锁死两分支）
+pub(crate) enum CleanupPlan {
+    /// reader 已退出——正常路径，session 就地 drop
+    NormalDrop,
+    /// reader 超时未退出——reader detach，session 移交监督线程执行 drop
+    /// （ConPtyInner::drop → ClosePseudoConsole 不在调用线程执行）
+    DetachReaderSupervisedDrop,
+}
+
+/// CP-011: reader join 超时后的清理决策（照 `eof_exit_code` 先例抽纯函数，
+/// 由 pty_kill/pty_kill_all 注入 join 结果并据此分支）
+pub(crate) fn plan_cleanup_after_join_timeout(reader_finished: bool) -> CleanupPlan {
+    if reader_finished {
+        CleanupPlan::NormalDrop
+    } else {
+        CleanupPlan::DetachReaderSupervisedDrop
     }
 }
 
@@ -234,21 +242,21 @@ fn maybe_inject_da1(da1_injected: &AtomicBool, writer: &Mutex<Box<dyn Write + Se
         return;
     }
     da1_injected.store(true, Ordering::Relaxed);
-    // 向子进程 stdin 注入 DA1 响应（不阻塞 reader 线程）
-    if let Ok(mut w) = writer.lock() {
-        if let Err(e) = w.write_all(b"\x1b[?64;22c") {
-            tracing::warn!("DA1 响应注入失败: {}", e);
-        }
-        if let Err(e) = w.flush() {
-            tracing::warn!("DA1 响应注入失败: {}", e);
-        }
+    // 向子进程 stdin 注入 DA1 响应（不阻塞 reader 线程；CP-005: 锁无失败分支）
+    let mut w = writer.lock();
+    if let Err(e) = w.write_all(b"\x1b[?64;22c") {
+        tracing::warn!("DA1 响应注入失败: {}", e);
+    }
+    if let Err(e) = w.flush() {
+        tracing::warn!("DA1 响应注入失败: {}", e);
     }
 }
 
 /// EOF 退出码降级决策（P2-11/P2-42）
 ///
-/// 输入为 reader_loop 的 lock/wait 两级结果：外层 Err = child 句柄锁获取失败，
-/// 内层 Err = `child.wait()` 失败。任一失败 → `None`（退出码未知，不硬编码 0——
+/// 输入为 reader_loop 的 lock/wait 两级结果（CP-005: parking_lot 锁无失败路径，
+/// 外层 Err 恒不可达——保留两级形态以维持纯函数签名与既有测试）；
+/// 内层 Err = `child.wait()` 失败 → `None`（退出码未知，不硬编码 0——
 /// P2-11 明确弃用旧"硬编码 0"行为）；两级均 Ok → 真实退出码。
 /// 纯函数，由 reader_loop 注入结果，测试直接构造三种输入。
 fn eof_exit_code(wait_outcome: Result<Result<i32, ()>, ()>) -> Option<i32> {
@@ -401,9 +409,9 @@ mod reader_tests {
     //    - eof_exit_code()       → ✅ 已抽取为纯函数（PTY-12）：lock/wait 两级
     //                              失败 → None（不硬编码 0），成功 → 真实退出码
     //    - child.wait()          → portable_pty::Child::wait() 是系统调用（Windows WaitForSingleObject），I/O
-    //    - exit_code.lock()       → std::sync::Mutex，运行时同步原语
-    //    - channel.read()         → std::sync::RwLock，运行时同步原语
-    //    - c.send(PtyEvent::Exit) → Tauri IPC Channel::send()，I/O
+    //    - exit_code.lock()      → parking_lot::Mutex，运行时同步原语
+    //    - channel.send(Exit)    → Tauri IPC Channel::send()，I/O（CP-034: 直写无锁层，
+    //                              断开即退出）
     //
     // 2. Ok(n) — 数据分支（BE-05 微批后形态）：
     //    - apply_startup_strip()  → ✅ 已抽取为纯函数（Phase 2）
@@ -411,31 +419,25 @@ mod reader_tests {
     //                               续读累积（read 为系统调用，决策已抽，调用不可抽）
     //    - should_inject_da1()    → ✅ 已抽取为纯函数（Phase 2）
     //    - maybe_inject_da1()     → 注入动作（writer.lock() + 管道 I/O），检测决策已抽
-    //    - channel.read()         → RwLock
-    //    - ring_buffer_append()   → Mutex + VecDeque 状态变更（BE-12: 批量 append，
-    //                               每微批一次，调用点仅此一处）
-    //    - c.send(PtyEvent::Output) → Channel::send()，I/O
+    //    - channel.send(Output)   → Channel::send()，I/O
     //
     // 3. Err(e) — 读错误分支：
     //    - tracing::warn!()       → 日志宏，I/O
     //    - exit_code.lock()       → Mutex
-    //    - channel.read()         → RwLock
-    //    - c.send(PtyEvent::Exit) → Channel::send()，I/O
+    //    - channel.send(Exit)     → Channel::send()，I/O
     //
-    // 三个分支中重复出现的 "read channel → if Some → send event" 模式
-    // 需要 Arc<RwLock<Option<Channel<PtyEvent>>>> —— 真正的同步原语，
-    // 无法在不引入运行时依赖的前提下构造测试输入。
-    //
-    // 结论：reader_loop 中剩余的所有分支决策均依赖同步原语或系统调用，
-    // 无法进一步抽取为纯函数。apply_startup_strip / should_inject_da1 /
-    // eof_exit_code / micro_batch_tail 已覆盖主循环中全部可纯函数化的决策逻辑。
+    // 结论：reader_loop 中剩余的所有分支决策均依赖锁/系统调用或 IPC send，
+    // 无法在不引入运行时依赖的前提下构造测试输入，无法进一步抽取为纯函数。
+    // apply_startup_strip / should_inject_da1 / eof_exit_code / micro_batch_tail
+    // 已覆盖主循环中全部可纯函数化的决策逻辑。
     //
     // M11 状态：已尽力——剩余均为 I/O 编排无法纯函数化。
     // PTY-12 评估产出：残余不可抽分支明细 + 豁免理由见
     // src-tauri/src/pty/CLAUDE.md「reader_loop I/O 编排残余豁免（草稿）」
     // （Stage 17 统一收编为豁免表，DOC-01 引用）。
-    // DOC-01 豁免项 1 随 BE-05 微批变动（ring buffer 写入/send 次数降为每微批一次，
-    // 新增 pending 检查——决策已抽为 micro_batch_tail）：豁免表同步在 S19。
+    // DOC-01 豁免项 1 随 BE-05 微批变动（send 次数降为每微批一次，
+    // 新增 pending 检查——决策已抽为 micro_batch_tail）；CP-034 后 Channel 直写
+    // （无替换层与回放层）——豁免表同步在 S19/CP-034。
 
     #[test]
     fn strip_osc_title_bel() {
@@ -875,5 +877,33 @@ mod reader_tests {
         // 模拟首块 3000B 后剩余额度 = 7000 - 3000 = 4000
         let (tail, _eof) = micro_batch_tail(&mut input, &mut buf, 4000);
         assert_eq!(tail.len(), 4096); // 4000 额度 + 一个块粒度 = 4096
+    }
+
+    // ─── CP-011: plan_cleanup_after_join_timeout / join_with_timeout ───
+
+    #[test]
+    fn cleanup_plan_finished_reader_normal_drop() {
+        // reader 已退出 → 正常 drop（session 就地销毁）
+        assert!(matches!(
+            plan_cleanup_after_join_timeout(true),
+            CleanupPlan::NormalDrop
+        ));
+    }
+
+    #[test]
+    fn cleanup_plan_timeout_reader_supervised_drop() {
+        // reader join 超时 → detach + 监督线程 drop 分支
+        assert!(matches!(
+            plan_cleanup_after_join_timeout(false),
+            CleanupPlan::DetachReaderSupervisedDrop
+        ));
+    }
+
+    #[test]
+    fn join_with_timeout_timeout_returns_false() {
+        // 永不结束的线程（park 永不 unpark）+ 10ms 短超时 → 返回 false；
+        // park 不依赖真实时钟计时，超时窗口充裕防 flaky
+        let handle = std::thread::spawn(|| std::thread::park());
+        assert!(!join_with_timeout(handle, Duration::from_millis(10)));
     }
 }

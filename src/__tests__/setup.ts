@@ -104,6 +104,7 @@ vi.mock("../ipc/notify", () => ({
 vi.mock("../ipc/agentHooks", () => ({
   onAgentEvent: () => () => {},
   inject: () => Promise.resolve({ status: "notInjected", version: null }),
+  confirmInject: () => Promise.resolve({ status: "notInjected", version: null }),
   uninstall: () => Promise.resolve(),
   getInjectionStatus: () => Promise.resolve({ status: "notInjected", version: null }),
   restoreStatusline: () => Promise.resolve(),

@@ -10,7 +10,7 @@ DTO 类型定义层（硬约束 #4）。`src/types/` ↔ Rust 模块 DTO 一一�
 
 ### 双边对应契约
 
-- `pty.ts` ↔ `src-tauri/src/pty/spawn.rs`
+- `pty.ts` ↔ `src-tauri/src/pty/spawn.rs`；`ConptyStatus`（CP-010 一次性状态查询 DTO，三键 attempted/bundled/fallbackReason）↔ `conpty_api.rs`
 - `fs.ts` ↔ `src-tauri/src/fs/mod.rs`
 - `git.ts` ↔ `src-tauri/src/git/mod.rs`
 - `notify.ts` ↔ `src-tauri/src/notify/mod.rs`
@@ -23,6 +23,7 @@ DTO 类型定义层（硬约束 #4）。`src/types/` ↔ Rust 模块 DTO 一一�
 
 - `HooksLayer` 值集 `"user" | "project" | "local"`（FE-14），后端 `parse_layer` 只认这三值。
 - `AgentEventPayload` 含可选 `cliId` / `usageSourcePath` / `usedPercentage`（ContextUsage 官方口径）。
+- `AgentInjectionStatus` 值集四态 `"injected" | "notInjected" | "outdated" | "pendingConfirmation"`（CP-043：pendingConfirmation = 命中可疑 statusline 命令暂停注入待确认）；`AgentHookInjectionStatus` 可选字段 `suspiciousCommand` 仅 pendingConfirmation 态存在（Rust `skip_serializing_if`，其余状态序列化缺键）。
 - `AgentHistorySession` 八字段含 `cliId`（provider 打标）。
 - `AgentHistoryTitle` 两字段 `title` / `titleSource`，`TitleSource` 为开放字符串。
 - `BackgroundTaskInfo` 六键契约（taskId/title/enabled/intervalSec/intervalMin/intervalMax）**无 default 字段**——默认值单点在后端注册表，前端行内提示只写范围不写默认值；`BACKGROUND_TASK_IDS` 值集 `["planBalance", "sessionRefresh"]` 与后端 registry TASKS 键集双侧字面量测试锁死（硬约束 #4）。

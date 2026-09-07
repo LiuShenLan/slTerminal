@@ -48,9 +48,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 技术细节进 `tracing`，不暴露给前端；
 - 带路径的 IO 错误用 `io_error(...)` 辅助函数，避免直接 `?` 走 `From<std::io::Error>` 丢失上下文。
 
-### std Mutex 中毒保持现状（DOC-10）
+### parking_lot 换装（CP-005）
 
-`state.rs` 等处的 `Arc<Mutex>` 保持标准库 `std::sync::Mutex`。持锁临界区均为短小无 panic 路径，中毒实际不可达，换 `parking_lot` 是零收益依赖变更。新建持锁临界区时保持「锁内不做可能 panic 的工作」纪律。
+`state.rs` 等全部持锁站点用 `parking_lot::Mutex/RwLock`，中毒攻击面消除（锁内 panic 不再连锁 panic 等待方）；新建持锁临界区一律 parking_lot，禁止再引入 `std::sync::Mutex/RwLock`（grep 守卫）。
 
 ## 外部坑/红线
 
@@ -59,7 +59,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **capabilities/ 只管插件权限**：Tauri 2 自定义命令默认放行，`capabilities/` 只列插件权限，不追加通配 `*`（硬约束 #10）。
 - **改 DTO 必须双边同步**：Rust `snake_case` ↔ JS `camelCase`，改一边必须改另一边（硬约束 #4）。
 - **`project_root_lock` 必须覆盖 canonicalize+apply 全程**：不要拆锁，否则有慢路径覆盖风险（SEC-16）。
-- **不要在持锁临界区引入 panic**：保持 Mutex 中毒不可达纪律。
+- **不要在持锁临界区引入 panic**：parking_lot 无中毒（守卫 Drop 自动释放），但临界区仍保持短小无 panic 纪律（CP-005）。
 - **settings 顶层键白名单勿擅自扩充**：前端各 store 独立写入依赖此白名单。
 
 ## 测试模式
@@ -72,4 +72,3 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | 豁免项 | 原因 | 当前兜底 |
 |--------|------|---------|
 | Windows symlink 特权测试 | 创建 symlink 需管理员/developer mode | `#[cfg(windows)]` 保留；失败时 skip |
-| Mutex 中毒分支 | 临界区无 panic | 未来锁内引入 panic 代码时须换原语或补测试 |

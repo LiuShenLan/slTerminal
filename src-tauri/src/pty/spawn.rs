@@ -7,16 +7,19 @@
 /// - stdin drop：Windows 绝对不能 drop stdin（立即杀子进程）
 /// - 孤儿进程：每个子进程放入 Job Object，JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
 use crate::error::AppError;
+use crate::pty::reader::{
+    join_with_timeout, plan_cleanup_after_join_timeout, CleanupPlan, KILL_JOIN_TIMEOUT,
+};
 use crate::pty::shell;
 use crate::state::{self as app_state, AppState, PtySession, PtyState};
+use parking_lot::Mutex;
 #[cfg(not(windows))]
 use portable_pty::native_pty_system;
 use portable_pty::PtySize;
-use std::collections::VecDeque;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::Arc;
 use std::time::Duration;
 use tauri::ipc::Channel;
 use uuid::Uuid;
@@ -35,11 +38,12 @@ pub mod conpty_custom {
     use crate::pty::conpty_api::{resolve_conpty_api, CONPTY_WIN11_MIN_BUILD};
     use anyhow::{bail, ensure, Error};
     use filedescriptor::{FileDescriptor, Pipe};
+    use parking_lot::Mutex;
     use portable_pty::{Child, ChildKiller, MasterPty, PtySize};
     use std::io::{Read, Write};
     use std::mem;
     use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
     use windows::core::{PCWSTR, PWSTR};
     use windows::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
     use windows::Win32::System::Console::{COORD, HPCON, PSEUDOCONSOLE_INHERIT_CURSOR};
@@ -228,10 +232,7 @@ pub mod conpty_custom {
 
     impl MasterPty for ConPtyMaster {
         fn resize(&self, size: PtySize) -> Result<(), Error> {
-            let mut inner = self
-                .inner
-                .lock()
-                .map_err(|e| anyhow::anyhow!("ConPtyInner lock poisoned: {e}"))?;
+            let mut inner = self.inner.lock();
             // 检查 HPCON 有效性（初始化或已关闭时为 INVALID_HANDLE_VALUE）
             if inner.hpc.is_invalid() {
                 inner.size = size;
@@ -248,32 +249,20 @@ pub mod conpty_custom {
         }
 
         fn get_size(&self) -> Result<PtySize, Error> {
-            Ok(self
-                .inner
-                .lock()
-                .map_err(|e| anyhow::anyhow!("ConPtyInner lock poisoned: {e}"))?
-                .size)
+            let inner = self.inner.lock();
+            Ok(inner.size)
         }
 
         fn try_clone_reader(&self) -> Result<Box<dyn Read + Send>, Error> {
-            Ok(Box::new(
-                self.inner
-                    .lock()
-                    .map_err(|e| anyhow::anyhow!("ConPtyInner lock poisoned: {e}"))?
-                    .readable
-                    .try_clone()?,
-            ))
+            let inner = self.inner.lock();
+            Ok(Box::new(inner.readable.try_clone()?))
         }
 
         fn take_writer(&self) -> Result<Box<dyn Write + Send>, Error> {
-            Ok(Box::new(
-                self.inner
-                    .lock()
-                    .map_err(|e| anyhow::anyhow!("ConPtyInner lock poisoned: {e}"))?
-                    .writable
-                    .take()
-                    .ok_or_else(|| anyhow::anyhow!("writer 已被取走（仅允许 take 一次）"))?,
-            ))
+            let mut inner = self.inner.lock();
+            Ok(Box::new(inner.writable.take().ok_or_else(|| {
+                anyhow::anyhow!("writer 已被取走（仅允许 take 一次）")
+            })?))
         }
     }
 
@@ -320,10 +309,7 @@ pub mod conpty_custom {
     pub fn clone_reader_with_pending_check(
         master: &ConPtyMaster,
     ) -> Result<crate::pty::reader::PtyReaderInput, Error> {
-        let inner = master
-            .inner
-            .lock()
-            .map_err(|e| anyhow::anyhow!("ConPtyInner lock poisoned: {e}"))?;
+        let inner = master.inner.lock();
         let read_end = inner.readable.try_clone()?;
         // raw 指针需 Send 包装才能跨线程（HANDLE 未实现 Send）；经方法调用捕获
         // 整个包装（路径捕获 handle.0 会退化为捕获 raw 指针本身）
@@ -353,9 +339,7 @@ pub mod conpty_custom {
     impl ChildKiller for RawChild {
         fn kill(&mut self) -> std::io::Result<()> {
             use windows::Win32::System::Threading::TerminateProcess;
-            let proc = self.proc_handle.lock().map_err(|e| {
-                std::io::Error::other(format!("RawChild proc_handle lock poisoned: {e}"))
-            })?;
+            let proc = self.proc_handle.lock();
             // SAFETY: TerminateProcess 是 Win32 API；HANDLE 来自 CreateProcessW 创建的有效子进程句柄
             unsafe {
                 TerminateProcess(HANDLE(proc.as_raw_handle()), 1).map_err(std::io::Error::other)?;
@@ -378,9 +362,7 @@ pub mod conpty_custom {
             use windows::Win32::Foundation::WAIT_OBJECT_0;
             use windows::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject};
 
-            let proc = self.proc_handle.lock().map_err(|e| {
-                std::io::Error::other(format!("RawChild proc_handle lock poisoned: {e}"))
-            })?;
+            let proc = self.proc_handle.lock();
             // SAFETY: WaitForSingleObject 和 GetExitCodeProcess 是 Win32 API；HANDLE 来自 CreateProcessW 创建的有效子进程句柄
             unsafe {
                 let result = WaitForSingleObject(HANDLE(proc.as_raw_handle()), 0);
@@ -407,9 +389,7 @@ pub mod conpty_custom {
             use windows::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject};
             const INFINITE: u32 = 0xFFFF_FFFF;
 
-            let proc = self.proc_handle.lock().map_err(|e| {
-                std::io::Error::other(format!("RawChild proc_handle lock poisoned: {e}"))
-            })?;
+            let proc = self.proc_handle.lock();
             // SAFETY: WaitForSingleObject 和 GetExitCodeProcess 是 Win32 API；HANDLE 来自 CreateProcessW 创建的有效子进程句柄
             unsafe {
                 let result = WaitForSingleObject(HANDLE(proc.as_raw_handle()), INFINITE);
@@ -431,8 +411,8 @@ pub mod conpty_custom {
         }
 
         fn as_raw_handle(&self) -> Option<std::os::windows::raw::HANDLE> {
-            // 锁中毒时返回 None（句柄已不可靠）
-            let proc = self.proc_handle.lock().ok()?;
+            // CP-005: parking_lot 锁无中毒——守卫恒可取（旧 .ok()? 降级形态删除）
+            let proc = self.proc_handle.lock();
             Some(proc.as_raw_handle() as std::os::windows::raw::HANDLE)
         }
     }
@@ -1090,10 +1070,7 @@ pub async fn pty_spawn(
     // 注意：RwLockReadGuard 非 Send——须在块内 clone 出 Option<PathBuf> 后立即释放读锁，
     // 否则 guard 跨 await 存活导致 pty_spawn future 不满足 Send
     let project_root = {
-        let guard = state
-            .project_root
-            .read()
-            .map_err(|e| AppError::Pty(format!("获取 project_root 锁失败: {}", e)))?;
+        let guard = state.project_root.read();
         (*guard).clone()
     };
     validate_spawn_request(&request, &project_root)?;
@@ -1117,12 +1094,7 @@ pub async fn pty_spawn(
     // spawn_blocking 闭包为 'static，无法借用 state.pty.sessions，故先取读锁快照
     // 传入闭包；判定在闭包内锁后、ConPTY 创建前执行（与 spawn 原子化）。
     // 快照至插入间的并发窗口由下方插入点 sessions 写锁内原子复查兜底。
-    let active_sessions = state
-        .pty
-        .sessions
-        .read()
-        .map_err(|e| AppError::Pty(format!("获取 sessions 锁失败: {}", e)))?
-        .len();
+    let active_sessions = state.pty.sessions.read().len();
 
     // BE-01: clone spawn_lock Arc 移送 spawn_blocking 内获取
     let spawn_lock = state.pty.spawn_lock.clone();
@@ -1135,9 +1107,7 @@ pub async fn pty_spawn(
 
     let session = tokio::task::spawn_blocking(move || -> Result<PtySession, AppError> {
         // BE-12: SPAWN_LOCK 仅保护 create_conpty_pair + spawn_conpty_child
-        let _lock = spawn_lock
-            .lock()
-            .map_err(|e| AppError::Pty(format!("锁获取失败: {}", e)))?;
+        let _lock = spawn_lock.lock();
 
         // BE-01: 会话上限检查（SPAWN_LOCK 区间内，判定与 spawn 原子化）
         ensure_pty_capacity(active_sessions)?;
@@ -1210,9 +1180,7 @@ pub async fn pty_spawn(
         // 补偿 ConPTY VtIo::StartIfNeeded() DSR 握手。
         #[cfg(windows)]
         {
-            let mut w = writer
-                .lock()
-                .map_err(|e| AppError::Pty(format!("锁获取失败: {}", e)))?;
+            let mut w = writer.lock();
             w.write_all(b"\x1b[1;1R")?;
             w.flush()?;
         }
@@ -1235,11 +1203,6 @@ pub async fn pty_spawn(
         #[cfg(not(windows))]
         let job_handle: Option<JobHandle> = Some(JobHandle::new_dummy());
 
-        // E1: 创建可替换 Channel 和 ring buffer
-        let channel: Arc<RwLock<Option<Channel<PtyEvent>>>> =
-            Arc::new(RwLock::new(Some(on_output)));
-        let output_ring: Arc<Mutex<VecDeque<u8>>> = Arc::new(Mutex::new(VecDeque::new()));
-
         // P2-11: child 包装为 Arc<Mutex<>>，reader 线程通过 clone 获取真实退出码
         let child: Arc<Mutex<Box<dyn portable_pty::Child + Send>>> = Arc::new(Mutex::new(child));
 
@@ -1253,8 +1216,6 @@ pub async fn pty_spawn(
             // 非 Windows 无 ConPTY 管道非阻塞检查能力：微批退化为每轮一次 read（行为同现状）
             crate::pty::reader::PtyReaderInput::new(r, Box::new(|| false))
         };
-        let reader_channel = channel.clone();
-        let reader_ring = output_ring.clone();
         let reader_child = child.clone();
         // P2-13: reader 线程通过此 Arc 回写真实退出码，同时也是 session 的 exit_code
         let exit_code_slot: Arc<Mutex<Option<i32>>> = Arc::new(Mutex::new(None));
@@ -1269,8 +1230,7 @@ pub async fn pty_spawn(
         let reader_handle = std::thread::spawn(move || {
             crate::pty::reader::reader_loop(
                 input,
-                reader_channel,
-                reader_ring,
+                on_output,
                 reader_child,
                 reader_exit_code,
                 writer_reader,
@@ -1283,8 +1243,6 @@ pub async fn pty_spawn(
             child,
             writer,
             reader_handle: Some(reader_handle),
-            channel,
-            output_ring,
             exit_code: exit_code_slot,
             da1_injected,
             job_object: job_handle,
@@ -1299,15 +1257,11 @@ pub async fn pty_spawn(
     //（前序 spawn 的插入尚未完成时快照偏旧），杜绝并发超发。命中上限时显式
     // kill 已 spawn 的子进程：kill 后 ConPTY 输出端关闭 → reader 退出 →
     // PtySession drop 时 join 正常返回；Job Object KILL_ON_JOB_CLOSE 兜底。
-    let mut sessions = state
-        .pty
-        .sessions
-        .write()
-        .map_err(|e| AppError::Pty(format!("获取 sessions 锁失败: {}", e)))?;
+    let mut sessions = state.pty.sessions.write();
     if sessions.len() >= MAX_PTY_SESSIONS {
-        if let Ok(mut child) = session.child.lock() {
-            let _ = child.kill();
-        }
+        // CP-005: 锁无中毒分支——child 守卫直接取（旧 if-let Ok 降级形态删除）
+        let mut child = session.child.lock();
+        let _ = child.kill();
         return Err(AppError::Validation(format!(
             "PTY 会话数已达上限 {}，请先关闭部分终端",
             MAX_PTY_SESSIONS
@@ -1344,11 +1298,7 @@ pub async fn pty_write(
     data: Vec<u8>,
 ) -> Result<(), AppError> {
     let writer = {
-        let sessions = state
-            .pty
-            .sessions
-            .read()
-            .map_err(|e| AppError::Pty(format!("锁获取失败: {}", e)))?;
+        let sessions = state.pty.sessions.read();
         let session = sessions
             .get(&session_id)
             .ok_or_else(|| AppError::SessionNotFound(session_id.clone()))?;
@@ -1358,9 +1308,7 @@ pub async fn pty_write(
     };
 
     tokio::task::spawn_blocking(move || -> Result<(), AppError> {
-        let mut w = writer
-            .lock()
-            .map_err(|e| AppError::Pty(format!("锁获取失败: {}", e)))?;
+        let mut w = writer.lock();
         w.write_all(&data)?;
         w.flush()?;
         Ok(())
@@ -1385,11 +1333,7 @@ pub async fn pty_resize(
     rows: u16,
 ) -> Result<(), AppError> {
     let master = {
-        let sessions = state
-            .pty
-            .sessions
-            .read()
-            .map_err(|e| AppError::Pty(format!("锁获取失败: {}", e)))?;
+        let sessions = state.pty.sessions.read();
         let session = sessions
             .get(&session_id)
             .ok_or_else(|| AppError::SessionNotFound(session_id.clone()))?;
@@ -1399,9 +1343,7 @@ pub async fn pty_resize(
     };
 
     tokio::task::spawn_blocking(move || -> Result<(), AppError> {
-        let m = master
-            .lock()
-            .map_err(|e| AppError::Pty(format!("锁获取失败: {}", e)))?;
+        let m = master.lock();
         m.resize(PtySize {
             rows,
             cols,
@@ -1418,11 +1360,13 @@ pub async fn pty_resize(
 /// 销毁 PTY 会话 — 杀子进程 → 回收 reader 线程 → 从 PtyState 移除
 ///
 /// G1b: async + spawn_blocking。先提取 session 后释放 RwLock 写锁，
-/// 再在 spawn_blocking 中执行 kill+join+drop（ClosePseudoConsole 在 pre-Win11 24H2 上永久阻塞），
+/// 再在 spawn_blocking 中执行 kill+join（ClosePseudoConsole 在 pre-Win11 24H2 上
+/// 可能永久阻塞，正常路径随闭包尾 drop 时执行，见 CP-011），
 /// 避免持锁阻塞导致后续命令级联卡死。
 /// BE-06: kill 返回值检查（失败 warn 继续——Job Object KILL_ON_JOB_CLOSE 兜底杀子进程）；
-/// reader join 带 3s 超时（KILL_JOIN_TIMEOUT 轮询 is_finished，超时放弃 join 记 warn，
-/// 线程随 PtySession Drop 兜底）。
+/// reader join 带 3s 超时（KILL_JOIN_TIMEOUT 轮询 is_finished）——超时路径
+/// reader detach、session 移交监督线程执行 drop（master drop → ClosePseudoConsole
+/// 在监督线程内执行，CP-011）。
 /// SEC-08: 校验 panel_id 与 session 归属一致后再移除。
 #[tauri::command]
 pub async fn pty_kill(
@@ -1432,11 +1376,7 @@ pub async fn pty_kill(
 ) -> Result<(), AppError> {
     // 提取 session 后释放写锁（锁在此 scope 结束时释放，<1ms）
     let session = {
-        let mut sessions = state
-            .pty
-            .sessions
-            .write()
-            .map_err(|e| AppError::Pty(format!("锁获取失败: {}", e)))?;
+        let mut sessions = state.pty.sessions.write();
         // SEC-08: 先校验归属再 remove
         let stored = sessions
             .get(&session_id)
@@ -1447,13 +1387,11 @@ pub async fn pty_kill(
             .ok_or_else(|| AppError::SessionNotFound(session_id.clone()))?
     };
 
-    // blocking 线程中执行 kill+join+drop，不阻塞 IPC worker
+    // blocking 线程中执行 kill+join，不阻塞 IPC worker；正常路径 session drop
+    // 随闭包尾执行，超时路径见下监督线程——本线程不执行 ClosePseudoConsole
     tokio::task::spawn_blocking(move || -> Result<(), AppError> {
         let mut session = session;
-        let mut child = session
-            .child
-            .lock()
-            .map_err(|e| AppError::Pty(format!("锁获取失败: {}", e)))?;
+        let mut child = session.child.lock();
         // BE-06: 检查 kill 返回值——失败仅告警并继续（Job Object
         // KILL_ON_JOB_CLOSE 兜底杀子进程；kill 失败不阻塞销毁流程）
         if let Err(e) = child.kill() {
@@ -1461,13 +1399,36 @@ pub async fn pty_kill(
         }
         drop(child);
         if let Some(handle) = session.reader_handle.take() {
-            // BE-06: join 带 3s 超时（轮询 is_finished）——超时放弃 join 记 warn，
-            // 线程随 PtySession Drop（state.rs Drop join）兜底
-            if !join_with_timeout(handle, KILL_JOIN_TIMEOUT) {
-                tracing::warn!("pty_kill: reader 线程 3s 内未退出，放弃 join（随 Drop 兜底）");
+            let reader_finished = join_with_timeout(handle, KILL_JOIN_TIMEOUT);
+            // CP-011: 清理决策为纯函数（L1 锁死两分支），超时路径按下执行监督线程
+            if let CleanupPlan::DetachReaderSupervisedDrop =
+                plan_cleanup_after_join_timeout(reader_finished)
+            {
+                // CP-011: reader 未退出（管道未排空高危窗口）——禁止无界阻塞 IPC 线程。
+                // reader detach（随进程退出回收）；session 移入监督线程执行 drop：
+                // ConPtyInner::drop 先关 writer 再 ClosePseudoConsole，监督超时则清理线程一并 detach。
+                tracing::warn!("pty_kill: reader 线程 3s 内未退出,detach 并移交监督线程清理");
+                let session = session; // move 入监督线程
+                match std::thread::Builder::new()
+                    .name("pty-cleaner".into())
+                    .spawn(move || drop(session))
+                {
+                    Ok(cleaner) => {
+                        if !join_with_timeout(cleaner, CLOSE_PSEUDO_CONSOLE_TIMEOUT) {
+                            // JoinHandle 按值 drop = detach:ClosePseudoConsole 永久阻塞仅泄漏一线程,
+                            // 进程退出时 OS 回收全部句柄（Job Object 已保证子进程先死）
+                            tracing::error!(
+                                "pty_kill: ClosePseudoConsole 监督超时,清理线程 detach(OS 兜底回收)"
+                            );
+                        }
+                    }
+                    Err(e) => tracing::error!(
+                        "pty_kill: 监督线程启动失败,session 就地 drop(可能阻塞): {e}"
+                    ),
+                }
             }
         }
-        // session drop → master drop → ClosePseudoConsole
+        // session drop → master drop → ClosePseudoConsole（正常路径；超时路径见上监督线程）
         Ok(())
     })
     .await
@@ -1478,8 +1439,8 @@ pub async fn pty_kill(
 ///
 /// 前端关闭序列：先前端 TerminalRegistry 快速 kill，再调用本命令兜底——
 /// 前后端 session 不一致（前端 Registry 缺失条目）时防止后端 session 泄漏。
-/// 遍历 sessions 全部 kill + join（超时语义同 BE-06：KILL_JOIN_TIMEOUT 轮询
-/// is_finished，超时放弃 join 记 warn，线程随 PtySession Drop 兜底），
+/// 遍历 sessions 全部 kill + join（超时语义同 pty_kill：KILL_JOIN_TIMEOUT 轮询
+/// is_finished，超时路径 reader detach、session 移交监督线程执行 drop，CP-011），
 /// 返回成功 kill 数。
 #[tauri::command]
 pub async fn pty_kill_all(state: tauri::State<'_, AppState>) -> Result<u32, AppError> {
@@ -1489,26 +1450,21 @@ pub async fn pty_kill_all(state: tauri::State<'_, AppState>) -> Result<u32, AppE
 /// pty_kill_all 命令内核（BE-08，供 L1 直接调用，无需构造 tauri::State）
 ///
 /// 先 drain 提取全部 session（清空 sessions map）后释放写锁，再在 spawn_blocking
-/// 中执行 kill+join+drop（ClosePseudoConsole 在 pre-Win11 24H2 上永久阻塞，
-/// 避免持锁阻塞后续命令；同 pty_kill 的 G1b 语义）。
+/// 中执行 kill+join（ClosePseudoConsole 在 pre-Win11 24H2 上可能永久阻塞，
+/// 避免持锁阻塞后续命令；同 pty_kill 的 G1b 语义 + CP-011 监督线程）。
 async fn pty_kill_all_impl(pty: &PtyState) -> Result<u32, AppError> {
     // 提取全部 session 后释放写锁（锁在此 scope 结束时释放，<1ms）
     let sessions: Vec<PtySession> = {
-        let mut guard = pty
-            .sessions
-            .write()
-            .map_err(|e| AppError::Pty(format!("获取 sessions 锁失败: {e}")))?;
+        let mut guard = pty.sessions.write();
         guard.drain().map(|(_, s)| s).collect()
     };
 
-    // blocking 线程中逐个 kill+join+drop，不阻塞 IPC worker
+    // blocking 线程中逐个 kill+join，不阻塞 IPC worker；正常路径 session drop
+    // 随闭包尾执行，超时路径见下监督线程——本线程不执行 ClosePseudoConsole
     tokio::task::spawn_blocking(move || -> Result<u32, AppError> {
         let mut killed = 0u32;
         for mut session in sessions {
-            let mut child = session
-                .child
-                .lock()
-                .map_err(|e| AppError::Pty(format!("锁获取失败: {e}")))?;
+            let mut child = session.child.lock();
             // BE-06 同款语义：检查 kill 返回值——失败仅告警并继续
             // （Job Object KILL_ON_JOB_CLOSE 兜底杀子进程）
             match child.kill() {
@@ -1517,15 +1473,35 @@ async fn pty_kill_all_impl(pty: &PtyState) -> Result<u32, AppError> {
             }
             drop(child);
             if let Some(handle) = session.reader_handle.take() {
-                // BE-06 同款：join 带 3s 超时（轮询 is_finished）——超时放弃
-                // join 记 warn，线程随 PtySession Drop（state.rs Drop join）兜底
-                if !join_with_timeout(handle, KILL_JOIN_TIMEOUT) {
+                let reader_finished = join_with_timeout(handle, KILL_JOIN_TIMEOUT);
+                // CP-011 同款：reader 未退出 → session 移交监督线程执行 drop
+                if let CleanupPlan::DetachReaderSupervisedDrop =
+                    plan_cleanup_after_join_timeout(reader_finished)
+                {
                     tracing::warn!(
-                        "pty_kill_all: reader 线程 3s 内未退出，放弃 join（随 Drop 兜底）"
+                        "pty_kill_all: reader 线程 3s 内未退出,detach 并移交监督线程清理"
                     );
+                    let session = session; // move 入监督线程
+                    match std::thread::Builder::new()
+                        .name("pty-cleaner".into())
+                        .spawn(move || drop(session))
+                    {
+                        Ok(cleaner) => {
+                            if !join_with_timeout(cleaner, CLOSE_PSEUDO_CONSOLE_TIMEOUT) {
+                                // JoinHandle 按值 drop = detach:ClosePseudoConsole 永久阻塞
+                                // 仅泄漏一线程,进程退出时 OS 回收全部句柄（Job Object 兜底）
+                                tracing::error!(
+                                    "pty_kill_all: ClosePseudoConsole 监督超时,清理线程 detach(OS 兜底回收)"
+                                );
+                            }
+                        }
+                        Err(e) => tracing::error!(
+                            "pty_kill_all: 监督线程启动失败,session 就地 drop(可能阻塞): {e}"
+                        ),
+                    }
                 }
             }
-            // session drop → master drop → ClosePseudoConsole
+            // session drop → master drop → ClosePseudoConsole（正常路径；超时路径见上监督线程）
         }
         Ok(killed)
     })
@@ -1533,31 +1509,11 @@ async fn pty_kill_all_impl(pty: &PtyState) -> Result<u32, AppError> {
     .map_err(|e| AppError::Pty(format!("pty_kill_all join error: {e}")))?
 }
 
-/// BE-06: pty_kill 等待 reader 线程退出的超时——3s 后放弃 join，
-/// 线程随 PtySession Drop / 进程退出兜底
-const KILL_JOIN_TIMEOUT: Duration = Duration::from_secs(3);
-
-/// BE-06: join 超时轮询间隔（10ms，轻量轮询，避免忙等）
-const KILL_JOIN_POLL_INTERVAL: Duration = Duration::from_millis(10);
-
-/// BE-06: 带超时的线程 join——轮询 `is_finished` 至 deadline，避免无限期阻塞
-///
-/// 返回 false = 超时未完成（调用方记 warn 后放弃，线程随 Drop 兜底）。
-/// 轮询到 is_finished 后调用 join() 回收线程资源（立即返回）。
-/// 纯逻辑 + 标准库线程，可 L1 单测（不依赖 PTY）。
-fn join_with_timeout(handle: std::thread::JoinHandle<()>, timeout: Duration) -> bool {
-    let deadline = std::time::Instant::now() + timeout;
-    loop {
-        if handle.is_finished() {
-            let _ = handle.join();
-            return true;
-        }
-        if std::time::Instant::now() >= deadline {
-            return false;
-        }
-        std::thread::sleep(KILL_JOIN_POLL_INTERVAL);
-    }
-}
+/// CP-011: 监督线程执行 session drop（内含 ConPtyInner::drop → ClosePseudoConsole）
+/// 的超时——3s。上游 Discussion #17716:ClosePseudoConsole 在 pre-Win11 24H2 上
+/// 可永久阻塞、Win10 永不修复;超时后清理线程一并 detach,进程退出时 OS 回收句柄
+/// （Job Object 已保证子进程先死）。
+const CLOSE_PSEUDO_CONSOLE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Windows Job Object — 将子进程与父进程生命周期绑定，防止孤儿进程
 ///
@@ -1656,62 +1612,14 @@ unsafe fn create_and_assign_job(pid: u32, job_name_wide: &[u16]) -> Result<JobHa
     Ok(JobHandle::new(job))
 }
 
-// ─── spawn.rs 模块级测试：ring buffer 回放 + session 隔离 ───
+// ─── spawn.rs 模块级测试：session 隔离 + Job Object 纯函数 ───
 
 #[cfg(test)]
 mod spawn_tests {
     use super::*;
     use crate::state::PtyState;
     use portable_pty::MasterPty;
-    use std::collections::VecDeque;
     use std::sync::atomic::AtomicBool;
-
-    /// ring buffer drain 回放：drain 后内容正确回放，buffer 清零，后续写入正常
-    #[test]
-    fn ring_buffer_replay_drain_and_continue() {
-        let ring = Arc::new(Mutex::new(VecDeque::new()));
-
-        // 阶段 1: 模拟 Channel 断开时 reader 线程向 ring buffer 写数据
-        ring.lock().unwrap().extend(b"LINE_A\n");
-        ring.lock().unwrap().extend(b"LINE_B\n");
-        ring.lock().unwrap().extend(b"LINE_C\n");
-        assert_eq!(ring.lock().unwrap().len(), 21); // 3 × 7 bytes
-
-        // 阶段 2: reattach 时 drain 回放 ring buffer 全部内容
-        let replay: Vec<u8> = ring.lock().unwrap().drain(..).collect();
-        let text = String::from_utf8_lossy(&replay);
-        assert!(text.contains("LINE_A"), "回放数据应含 LINE_A");
-        assert!(text.contains("LINE_B"), "回放数据应含 LINE_B");
-        assert!(text.contains("LINE_C"), "回放数据应含 LINE_C");
-
-        // 阶段 3: drain 后 buffer 必须为空（避免 reattach 后重复回放）
-        assert!(ring.lock().unwrap().is_empty(), "drain 后 buffer 应为空");
-
-        // 阶段 4: reattach 后新输出继续写入 ring buffer
-        ring.lock().unwrap().extend(b"POST_D\n");
-        assert_eq!(ring.lock().unwrap().len(), 7, "新数据应正常写入");
-    }
-
-    /// ring buffer 空 buffer drain 不会 panic（防御性验证）
-    #[test]
-    fn ring_buffer_empty_drain_no_panic() {
-        let ring = Arc::new(Mutex::new(VecDeque::new()));
-        let drained: Vec<u8> = ring.lock().unwrap().drain(..).collect();
-        assert!(drained.is_empty());
-        assert!(ring.lock().unwrap().is_empty());
-    }
-
-    /// ring buffer 部分 drain 只移除指定范围
-    #[test]
-    fn ring_buffer_partial_drain() {
-        let ring = Arc::new(Mutex::new(VecDeque::new()));
-        ring.lock().unwrap().extend(b"0123456789");
-        // drain 前 5 字节
-        let front: Vec<u8> = ring.lock().unwrap().drain(0..5).collect();
-        assert_eq!(front, b"01234");
-        assert_eq!(ring.lock().unwrap().len(), 5);
-        assert_eq!(ring.lock().unwrap()[0], b'5');
-    }
 
     /// 验证 PtyState session 移除不级联：移除一个 session 不影响其他 session
     #[cfg(windows)]
@@ -1725,20 +1633,20 @@ mod spawn_tests {
         let sc = make_test_session("panel-c");
 
         {
-            let mut sessions = pty_state.sessions.write().unwrap();
+            let mut sessions = pty_state.sessions.write();
             sessions.insert("sid-a".into(), sa);
             sessions.insert("sid-b".into(), sb);
             sessions.insert("sid-c".into(), sc);
         }
-        assert_eq!(pty_state.sessions.read().unwrap().len(), 3);
+        assert_eq!(pty_state.sessions.read().len(), 3);
 
         // 移除中间 session（sid-b）
-        let removed = pty_state.sessions.write().unwrap().remove("sid-b");
+        let removed = pty_state.sessions.write().remove("sid-b");
         assert!(removed.is_some(), "sid-b 应存在且可移除");
 
         // 验证 sid-a 和 sid-c 仍存在
         {
-            let sessions = pty_state.sessions.read().unwrap();
+            let sessions = pty_state.sessions.read();
             assert!(
                 sessions.contains_key("sid-a"),
                 "移除 sid-b 后 sid-a 应仍存在——不得级联删除"
@@ -1769,25 +1677,17 @@ mod spawn_tests {
         let s1 = make_test_session("panel-x");
         let s2 = make_test_session("panel-x"); // 同 panel_id
 
-        pty_state
-            .sessions
-            .write()
-            .unwrap()
-            .insert("sid-1".into(), s1);
-        pty_state
-            .sessions
-            .write()
-            .unwrap()
-            .insert("sid-2".into(), s2);
-        assert_eq!(pty_state.sessions.read().unwrap().len(), 2);
+        pty_state.sessions.write().insert("sid-1".into(), s1);
+        pty_state.sessions.write().insert("sid-2".into(), s2);
+        assert_eq!(pty_state.sessions.read().len(), 2);
 
         // 移除 sid-1，sid-2 应不受影响
-        let removed = pty_state.sessions.write().unwrap().remove("sid-1");
+        let removed = pty_state.sessions.write().remove("sid-1");
         assert!(removed.is_some());
         // 显式 drop removed 以释放锁引用
         drop(removed);
 
-        let sessions = pty_state.sessions.read().unwrap();
+        let sessions = pty_state.sessions.read();
         assert!(!sessions.contains_key("sid-1"));
         assert!(
             sessions.contains_key("sid-2"),
@@ -1806,23 +1706,15 @@ mod spawn_tests {
     fn remove_nonexistent_session_no_side_effect() {
         let pty_state = PtyState::new();
         let s = make_test_session("panel-y");
-        pty_state
-            .sessions
-            .write()
-            .unwrap()
-            .insert("sid-y".into(), s);
-        assert_eq!(pty_state.sessions.read().unwrap().len(), 1);
+        pty_state.sessions.write().insert("sid-y".into(), s);
+        assert_eq!(pty_state.sessions.read().len(), 1);
 
         // 移除不存在的 key
-        let result = pty_state
-            .sessions
-            .write()
-            .unwrap()
-            .remove("sid-nonexistent");
+        let result = pty_state.sessions.write().remove("sid-nonexistent");
         assert!(result.is_none(), "移除不存在的 session 应返回 None");
 
         // 已有 session 不受影响
-        let sessions = pty_state.sessions.read().unwrap();
+        let sessions = pty_state.sessions.read();
         assert_eq!(sessions.len(), 1);
         assert!(sessions.contains_key("sid-y"));
         drop(sessions);
@@ -1996,7 +1888,7 @@ mod spawn_tests {
         );
         // 清理：杀子进程防残留（session 未入 pty_state，需手动 kill）
         // 显式 let + drop 释放 MutexGuard，避免借用跨 session drop（E0713）
-        let mut child_guard = session.child.lock().unwrap();
+        let mut child_guard = session.child.lock();
         let _ = child_guard.kill();
         drop(child_guard);
     }
@@ -2013,7 +1905,7 @@ mod spawn_tests {
         );
         // 清理：杀子进程防残留
         // 显式 let + drop 释放 MutexGuard，避免借用跨 session drop（E0713）
-        let mut child_guard = session.child.lock().unwrap();
+        let mut child_guard = session.child.lock();
         let _ = child_guard.kill();
         drop(child_guard);
     }
@@ -2053,10 +1945,10 @@ mod spawn_tests {
     /// PTY-13①: 抽取自三处重复清理块
     #[cfg(windows)]
     fn cleanup_session(pty_state: &PtyState, sid: &str) {
-        if let Some(s) = pty_state.sessions.write().unwrap().remove(sid) {
-            if let Ok(mut c) = s.child.lock() {
-                let _ = c.kill();
-            }
+        if let Some(s) = pty_state.sessions.write().remove(sid) {
+            // CP-005: 锁无中毒分支——child 守卫直接取（旧 if-let Ok 降级形态删除）
+            let mut c = s.child.lock();
+            let _ = c.kill();
         };
     }
 
@@ -2088,8 +1980,6 @@ mod spawn_tests {
             child: Arc::new(Mutex::new(Box::new(child))),
             writer,
             reader_handle: None,
-            channel: Arc::new(RwLock::new(None)),
-            output_ring: Arc::new(Mutex::new(VecDeque::new())),
             exit_code: Arc::new(Mutex::new(None)),
             da1_injected: Arc::new(AtomicBool::new(false)),
             job_object: None,
@@ -2098,9 +1988,9 @@ mod spawn_tests {
     }
 
     // ─── BE-06: join_with_timeout 测试（TQ-COV-03 复核增强）───
-    // TQ-COV-03：既有用例已覆盖 true/false 分支，按 checklist 命名对齐并增强——
-    // finished 用例补「快速（<1s）」时间断言；blocked 用例改 park 线程（精确阻塞，
-    // 不依赖睡眠计时），timeout=50ms 注入短超时测 false 分支。
+    // 函数本体上提 reader.rs（CP-011），此处经顶层 use 引用；用例覆盖 true/false
+    // 分支——finished 用例补「快速（<1s）」时间断言；blocked 用例改 park 线程
+    // （精确阻塞，不依赖睡眠计时），timeout=50ms 注入短超时测 false 分支。
 
     #[test]
     fn join_with_timeout_finished_handle_returns_true() {
@@ -2117,7 +2007,8 @@ mod spawn_tests {
 
     #[test]
     fn join_with_timeout_blocked_thread_returns_false() {
-        // park 的线程 + 短超时（50ms）→ 返回 false（调用方记 warn，线程随 Drop 兜底）
+        // park 的线程 + 短超时（50ms）→ 返回 false（调用方按 CP-011 决策:
+        // detach reader + 监督线程 drop）
         let handle = std::thread::spawn(|| std::thread::park());
         assert!(!join_with_timeout(handle, Duration::from_millis(50)));
     }
@@ -2141,7 +2032,7 @@ mod spawn_tests {
             .block_on(pty_kill_all_impl(&pty))
             .unwrap();
         assert_eq!(killed, 0, "空会话应返回 0");
-        assert!(pty.sessions.read().unwrap().is_empty(), "sessions 保持为空");
+        assert!(pty.sessions.read().is_empty(), "sessions 保持为空");
     }
 
     /// 多会话：全部 kill 成功（计数 = 会话数），sessions 清空
@@ -2151,13 +2042,11 @@ mod spawn_tests {
         let pty = PtyState::new();
         pty.sessions
             .write()
-            .unwrap()
             .insert("sid-a".into(), make_test_session("panel-a"));
         pty.sessions
             .write()
-            .unwrap()
             .insert("sid-b".into(), make_test_session("panel-b"));
-        assert_eq!(pty.sessions.read().unwrap().len(), 2);
+        assert_eq!(pty.sessions.read().len(), 2);
 
         let killed = tokio::runtime::Runtime::new()
             .unwrap()
@@ -2165,7 +2054,7 @@ mod spawn_tests {
             .unwrap();
         assert_eq!(killed, 2, "两个真实 session 都应 kill 成功");
         assert!(
-            pty.sessions.read().unwrap().is_empty(),
+            pty.sessions.read().is_empty(),
             "kill_all 后 sessions 应清空（关闭序列兜底语义）"
         );
     }

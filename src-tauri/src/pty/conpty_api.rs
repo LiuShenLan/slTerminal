@@ -11,6 +11,7 @@
 // 自动化无法守卫真实鼠标转发（先例同 PASSTHROUGH_MODE/0x3）——改动必须 Win10
 // 实机验证真实 claude 滚轮 + 键盘/IME/kitty。
 
+use crate::error::AppError;
 use anyhow::Error;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
@@ -34,6 +35,48 @@ const OPENCONSOLE_EXE_BYTES: &[u8] = include_bytes!("../../vendor/conpty/OpenCon
 type FnCreate = unsafe extern "system" fn(COORD, HANDLE, HANDLE, u32, *mut isize) -> HRESULT;
 type FnClose = unsafe extern "system" fn(isize);
 type FnResize = unsafe extern "system" fn(isize, COORD) -> HRESULT;
+
+/// ConPTY 后端状态(CP-010:一次性查询,启动 toast 数据源)
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConptyStatus {
+    /// 是否尝试捆绑(仅 Win10 build < 21376)
+    pub attempted: bool,
+    /// 实际是否走捆绑 conhost
+    pub bundled: bool,
+    /// 回退原因(attempted && !bundled 时有值,与 warn 日志同源)
+    pub fallback_reason: Option<String>,
+}
+
+/// 状态记录槽(CP-010)。生产形态 OnceLock:resolve_conpty_api 的 API OnceLock 保证
+/// build_conpty_api 进程级恰好执行一次 → 此处恰好一次 set。单元测试直连
+/// build_conpty_api 会跨用例重复写同一槽,OnceLock 无法重置,故测试构建改走可覆盖
+/// parking_lot Mutex 槽(--test-threads=1 串行执行,无并发竞争;生产零编译)。
+#[cfg(not(test))]
+static STATUS: std::sync::OnceLock<ConptyStatus> = std::sync::OnceLock::new();
+#[cfg(test)]
+static STATUS: parking_lot::Mutex<Option<ConptyStatus>> = parking_lot::Mutex::new(None);
+
+/// 防御兜底状态(记录槽未初始化时返回):「未尝试」。仅取 build 号失败(非 Windows)
+/// 等理论场景可达——resolve 路径必先 record,此处保证查询永不 panic。
+static CONPTY_STATUS_DEFAULT: ConptyStatus = ConptyStatus {
+    attempted: false,
+    bundled: false,
+    fallback_reason: None,
+};
+
+/// 记录状态(build_conpty_api 每个形态调用一次)
+fn record_status(status: ConptyStatus) {
+    #[cfg(not(test))]
+    {
+        // 生产单次 set;重复 set(理论不可达)返回 Err 忽略,不 panic
+        let _ = STATUS.set(status);
+    }
+    #[cfg(test)]
+    {
+        *STATUS.lock() = Some(status);
+    }
+}
 
 /// ConPTY API 抽象：系统路径（windows crate 直接链接）或捆绑路径（动态加载）
 pub struct ConptyApi {
@@ -192,15 +235,37 @@ fn get_proc<T>(module: HMODULE, name: &[u8]) -> Result<T, Error> {
     Ok(unsafe { std::mem::transmute_copy::<unsafe extern "system" fn() -> isize, T>(&addr) })
 }
 
-/// 按 build 构建 API：Win10 提取 + 加载捆绑，任一环节失败回退系统（行为 = 现状）
+/// 按 build 构建 API：Win10 提取 + 加载捆绑，任一环节失败回退系统（行为 = 现状）；
+/// 每形态同步记录 ConptyStatus（CP-010：状态可观测，warn 与 fallback_reason 同源）
 fn build_conpty_api(build_number: u32) -> ConptyApi {
     if !should_bundle(build_number) {
+        // Win11/未尝试：attempted=false（不弹 toast 的形态）
+        record_status(ConptyStatus {
+            attempted: false,
+            bundled: false,
+            fallback_reason: None,
+        });
         return ConptyApi::system();
     }
     match try_bundle() {
-        Ok(backend) => ConptyApi { backend },
+        Ok(backend) => {
+            record_status(ConptyStatus {
+                attempted: true,
+                bundled: true,
+                fallback_reason: None,
+            });
+            ConptyApi { backend }
+        }
         Err(e) => {
-            tracing::warn!("Win10 捆绑 ConPTY 加载失败，回退系统 conhost（滚轮不可用）: {e:#}");
+            // CP-010：warn 文案与 fallback_reason 同一 format!("{e:#}") 变量——
+            // 日志与命令暴露同源零漂移
+            let reason = format!("{e:#}");
+            tracing::warn!("Win10 捆绑 ConPTY 加载失败，回退系统 conhost（滚轮不可用）: {reason}");
+            record_status(ConptyStatus {
+                attempted: true,
+                bundled: false,
+                fallback_reason: Some(reason),
+            });
             ConptyApi::system()
         }
     }
@@ -213,6 +278,43 @@ fn try_bundle() -> Result<Backend, Error> {
     let dir = extraction_dir_from(&base);
     ensure_extracted(&dir)?;
     load_bundled(&dir)
+}
+
+/// 查询 ConPTY 后端状态(CP-010:一次性查询,启动 toast 数据源)
+///
+/// conpty 解析(提取 + LoadLibraryW)在首次 spawn 懒触发;启动序列的查询早于首次
+/// spawn → 防御分支按真实 build 主动触发一次 resolve——API OnceLock 单次语义,与
+/// 首 spawn 同值,Win10 回退自启动即可观测(而非等第一个终端)。
+#[cfg(not(test))]
+pub fn conpty_status() -> &'static ConptyStatus {
+    if STATUS.get().is_none() {
+        if let Ok(build) = crate::pty::win_build::get_windows_build_number() {
+            resolve_conpty_api(build);
+        }
+    }
+    // 兜底:仅取 build 号失败(非 Windows 等)可达,回退「未尝试」默认,不 panic
+    STATUS.get().unwrap_or(&CONPTY_STATUS_DEFAULT)
+}
+
+#[cfg(test)]
+pub fn conpty_status() -> &'static ConptyStatus {
+    // 测试构建:读可覆盖槽(OnceLock 无法跨用例重置)。Box::leak 换 'static——
+    // 单测进程内量级可忽略的泄漏,仅测试构建存在
+    let snapshot = STATUS
+        .lock()
+        .as_ref()
+        .cloned()
+        .unwrap_or_else(|| CONPTY_STATUS_DEFAULT.clone());
+    Box::leak(Box::new(snapshot))
+}
+
+/// 查询 ConPTY 后端状态(CP-010:Win10 回退可观测)
+///
+/// 命令注册(lib.rs generate_handler! / build.rs AppManifest / capabilities
+/// 三处, SEC-07)由收口阶段统一办理,本文件仅承载命令本体。
+#[tauri::command]
+pub async fn pty_conpty_status() -> Result<ConptyStatus, AppError> {
+    Ok(conpty_status().clone())
 }
 
 #[cfg(test)]
@@ -273,5 +375,78 @@ mod conpty_api_tests {
         std::fs::write(&p2, b"same-len-123").unwrap();
         write_if_size_differs(&p2, b"same-len-456").unwrap();
         assert_eq!(std::fs::read(&p2).unwrap(), b"same-len-123");
+    }
+
+    // CP-010:状态记录三用例。STATUS 单例跨用例污染按防御口径处理:测试构建的记录槽
+    // 为可覆盖 Mutex(cfg(test) 分支,见模块顶 STATUS 注释),每用例独立场景重复
+    // 记录互不污染;场景注入经 LocalAppDataGuard 临时改写 LOCALAPPDATA(串行
+    // --test-threads=1 无并发),Drop 还原,不污染其他套件。
+
+    /// 场景注入守卫:临时改写 LOCALAPPDATA 指向受控路径,drop 时还原原值
+    struct LocalAppDataGuard(Option<std::ffi::OsString>);
+
+    impl LocalAppDataGuard {
+        fn set(dir: &Path) -> Self {
+            let prev = std::env::var_os("LOCALAPPDATA");
+            std::env::set_var("LOCALAPPDATA", dir);
+            Self(prev)
+        }
+    }
+
+    impl Drop for LocalAppDataGuard {
+        fn drop(&mut self) {
+            match &self.0 {
+                Some(v) => std::env::set_var("LOCALAPPDATA", v),
+                None => std::env::remove_var("LOCALAPPDATA"),
+            }
+        }
+    }
+
+    // T5: Win11(≥ 21376)→ 未尝试(attempted=false,启动 toast 静默形态)
+    #[test]
+    fn conpty_status_win11_not_attempted() {
+        build_conpty_api(CONPTY_WIN11_MIN_BUILD);
+        let s = conpty_status();
+        assert!(!s.attempted, "Win11 不尝试捆绑");
+        assert!(!s.bundled);
+        assert!(s.fallback_reason.is_none());
+    }
+
+    // T6: Win10 + 捆绑成功(tempdir 注入提取 + 真实 LoadLibraryW)→ 全量真实路径
+    #[test]
+    fn conpty_status_bundled_on_win10() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _guard = LocalAppDataGuard::set(tmp.path());
+        build_conpty_api(19041);
+        let s = conpty_status();
+        assert!(s.attempted, "Win10 应尝试捆绑");
+        assert!(s.bundled, "提取 + 加载成功应走捆绑 conhost");
+        assert!(s.fallback_reason.is_none());
+    }
+
+    // T7: Win10 + 加载失败注入(LOCALAPPDATA 指向已存在文件 → 提取路径不可建)
+    //     → fallback_reason=Some 且与 warn 文案同源(与直跑 try_bundle 的 {:#} 派生一致)
+    #[test]
+    fn conpty_status_fallback_reason_matches_warn() {
+        // LOCALAPPDATA 指向文件:create_dir_all(其下 slterminal/conpty)必经非目录
+        // 节点 → 提取环节稳定失败注入(注入点照 ensure_extracted 幂等用例先例)
+        let blocker = tempfile::tempdir().unwrap();
+        let file_path = blocker.path().join("blocker-file");
+        std::fs::write(&file_path, b"not-a-dir").unwrap();
+        let _guard = LocalAppDataGuard::set(&file_path);
+
+        // 同注入点直跑 try_bundle 取权威错误,{:#} 派生期望文案
+        // (warn 与 fallback_reason 同用单变量的结构性证明)
+        let expected = match try_bundle() {
+            Ok(_) => panic!("注入点应稳定失败(文件占用路径必使提取失败)"),
+            Err(e) => format!("{e:#}"),
+        };
+
+        build_conpty_api(19041);
+        let s = conpty_status();
+        assert!(s.attempted, "Win10 应尝试捆绑");
+        assert!(!s.bundled, "提取失败应回退系统");
+        let reason = s.fallback_reason.as_deref().expect("回退必有原因");
+        assert_eq!(reason, expected);
     }
 }

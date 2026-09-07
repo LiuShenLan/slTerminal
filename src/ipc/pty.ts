@@ -2,7 +2,7 @@
 // invoke 只允许在本文件出现（硬约束 #1）
 
 import { invoke, Channel } from "@tauri-apps/api/core";
-import type { PtyEvent, SpawnRequest } from "../types/pty";
+import type { ConptyStatus, PtyEvent, SpawnRequest } from "../types/pty";
 
 /** PTY 尺寸合法下界（ConPTY 最小 1 列/行） */
 const MIN_PTY_DIM = 1;
@@ -114,4 +114,14 @@ export async function getWindowsBuildNumber(): Promise<number> {
   } catch {
     return 21376;
   }
+}
+
+/**
+ * 查询 ConPTY 后端状态（CP-010：Win10 回退可观测，启动 toast 数据源）
+ *
+ * 一次性查询：`attempted && !bundled` → 已回退系统 conhost（滚轮转发不可用），
+ * 由 App 启动序列据此弹 toast；bundled/未尝试静默。无参命令。
+ */
+export async function getConptyStatus(): Promise<ConptyStatus> {
+  return await invoke<ConptyStatus>("pty_conpty_status");
 }

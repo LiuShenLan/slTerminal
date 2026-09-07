@@ -86,7 +86,7 @@ pub fn start_background_tasks(app: tauri::AppHandle) {
 /// set_config 读-改-写串行化（SETTINGS_SAVE_LOCK 先例）：并发 set_config 的
 /// 读-改-写跨子键合并必须互斥，否则后写覆盖前写的其他子键。
 /// 锁序单向：CONFIG_WRITE_LOCK → SETTINGS_SAVE_LOCK（save_settings_blocking 内部），无环。
-static CONFIG_WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static CONFIG_WRITE_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 
 /// set_config 核心（同步，spawn_blocking 内执行；L1 直测）——顺序写死：
 /// taskId 白名单校验 → 边界校验（越界 → Validation，磁盘/内存均不变）→
@@ -112,9 +112,7 @@ pub(crate) fn set_config_core(
             )));
         }
     }
-    let _guard = CONFIG_WRITE_LOCK
-        .lock()
-        .map_err(|_| AppError::Unknown("后台任务配置锁中毒".into()))?;
+    let _guard = CONFIG_WRITE_LOCK.lock();
     // 读现有 backgroundTasks 段（窗口 B，R2b）：读失败/解析失败 → Err 传播且不落盘
     // （旧 `.ok()` 吞错视作空段——兄弟子键丢失仍写成功）；仅文件不存在 → 空段
     // （首次写入合法）；段非对象视作空段（结构兜底，照旧语义）

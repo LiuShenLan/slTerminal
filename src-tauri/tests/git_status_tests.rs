@@ -45,7 +45,7 @@ fn test_status_to_str_all_flags() {
         (git2::Status::INDEX_DELETED, Some("deleted")),
         (git2::Status::INDEX_RENAMED, Some("renamed")),
         (git2::Status::WT_RENAMED, Some("renamed")),
-        (git2::Status::IGNORED, Some("ignored")),
+        (git2::Status::IGNORED, None),
         // GIT-04：conflict 分支（status.is_conflicted() → "conflict"）
         (git2::Status::CONFLICTED, Some("conflict")),
         (git2::Status::CURRENT, None),
@@ -53,6 +53,17 @@ fn test_status_to_str_all_flags() {
     for (flags, expected) in cases {
         assert_eq!(status_to_str(flags), expected);
     }
+}
+
+#[test]
+fn status_to_str_ignored_returns_none() {
+    // CP-008 防复发：is_ignored 死分支已删——IGNORED 标志落入末支 None
+    //（StatusOptions 无 include_ignored → 生产永不置位，与 Current 同语义跳过）
+    assert_eq!(
+        status_to_str(git2::Status::IGNORED),
+        None,
+        "IGNORED 应映射为 None（无 ignored 语义值）"
+    );
 }
 
 /// 底层原语：git2::Repository::open 对非 git 目录返回 Err
@@ -848,7 +859,7 @@ fn get_or_open_repo_cache_miss() {
     let (_dir, path) = init_temp_repo();
     commit_file(&path, "test.txt", "hello");
 
-    let cache = std::sync::Mutex::new(GitRepoCache::new(GIT_REPO_CACHE_CAPACITY));
+    let cache = parking_lot::Mutex::new(GitRepoCache::new(GIT_REPO_CACHE_CAPACITY));
     let result = get_or_open_repo(&cache, &path.to_string_lossy(), &Some(path.clone()));
     assert!(
         result.is_ok(),
@@ -887,7 +898,7 @@ fn init_temp_repo_path_canonicalized_and_strips() {
 fn get_or_open_repo_workdir_equals_canonical_path() {
     let (_dir, path) = init_temp_repo();
     commit_file(&path, "t.txt", "x");
-    let cache = std::sync::Mutex::new(GitRepoCache::new(GIT_REPO_CACHE_CAPACITY));
+    let cache = parking_lot::Mutex::new(GitRepoCache::new(GIT_REPO_CACHE_CAPACITY));
     let (_repo, workdir) =
         get_or_open_repo(&cache, &path.to_string_lossy(), &Some(path.clone())).unwrap();
     assert_eq!(
@@ -901,7 +912,7 @@ fn get_or_open_repo_cache_hit() {
     let (_dir, path) = init_temp_repo();
     commit_file(&path, "test.txt", "hello");
 
-    let cache = std::sync::Mutex::new(GitRepoCache::new(GIT_REPO_CACHE_CAPACITY));
+    let cache = parking_lot::Mutex::new(GitRepoCache::new(GIT_REPO_CACHE_CAPACITY));
     // 首次访问 → 缓存
     let result1 = get_or_open_repo(&cache, &path.to_string_lossy(), &Some(path.clone()));
     assert!(result1.is_ok(), "首次访问应成功");
@@ -949,7 +960,7 @@ fn get_or_open_repo_cache_no_false_hit_for_subrepo() {
         .output()
         .unwrap();
 
-    let cache = std::sync::Mutex::new(GitRepoCache::new(GIT_REPO_CACHE_CAPACITY));
+    let cache = parking_lot::Mutex::new(GitRepoCache::new(GIT_REPO_CACHE_CAPACITY));
 
     // 先访问子目录 → 缓存子仓库 workdir
     let result_sub = get_or_open_repo(&cache, &sub.to_string_lossy(), &Some(path.clone()));
@@ -968,7 +979,7 @@ fn get_or_open_repo_cache_no_false_hit_for_subrepo() {
     );
 
     // 缓存中应有父子两个仓库各自的工作目录
-    let cache_guard = cache.lock().unwrap();
+    let cache_guard = cache.lock();
     assert_eq!(cache_guard.len(), 2, "缓存中应有父子两个仓库");
 }
 
@@ -979,7 +990,7 @@ fn get_or_open_repo_discover_failure() {
     let non_repo = tmp.path().join("not_a_repo");
     std::fs::create_dir_all(&non_repo).unwrap();
 
-    let cache = std::sync::Mutex::new(GitRepoCache::new(GIT_REPO_CACHE_CAPACITY));
+    let cache = parking_lot::Mutex::new(GitRepoCache::new(GIT_REPO_CACHE_CAPACITY));
     let result = get_or_open_repo(&cache, &non_repo.to_string_lossy(), &Some(non_repo.clone()));
     assert!(result.is_err(), "非 git 目录 discover 应失败");
 }
@@ -991,7 +1002,7 @@ fn get_or_open_repo_bare_repo_returns_err() {
     let bare_path = tmp.path().join("bare.git");
     git2::Repository::init_bare(&bare_path).unwrap();
 
-    let cache = std::sync::Mutex::new(GitRepoCache::new(GIT_REPO_CACHE_CAPACITY));
+    let cache = parking_lot::Mutex::new(GitRepoCache::new(GIT_REPO_CACHE_CAPACITY));
     let result = get_or_open_repo(
         &cache,
         &bare_path.to_string_lossy(),
@@ -1020,6 +1031,36 @@ fn git_status_command_modified_happy_path() {
     );
     assert_eq!(entries[0].status, "modified");
     assert_eq!(entries[0].old_path, None);
+}
+
+/// CP-008 防复发（命令层锁死）：仓库含 .gitignore 忽略文件 → git_status_impl
+/// 结果不含 ignored 条目（StatusOptions 无 include_ignored，ignored 永不置位）
+#[test]
+fn git_status_ignored_file_never_emitted() {
+    let (_dir, path) = init_temp_repo();
+    // .gitignore 先提交（避免其自身以 untracked 混入结果）；ignore 规则须落盘——
+    // 命令内部经 get_or_open_repo 另开 Repository 实例，内存 add_ignore_rule 不可达
+    commit_file(&path, ".gitignore", "*.log\n");
+    fs::write(path.join("test.log"), "ignored content").unwrap();
+    fs::write(path.join("visible.txt"), "untracked content").unwrap();
+
+    let app = make_app_state(Some(path.clone()));
+    let entries = block_on(git_status_impl(&app, &path.to_string_lossy())).unwrap();
+
+    // 命令正常工作：未被忽略的未跟踪文件照常上报（仅此 1 条）
+    assert_eq!(entries.len(), 1, "应仅 1 条条目，实际: {entries:?}");
+    assert_eq!(entries[0].status, "untracked");
+    assert!(
+        entries[0].path.ends_with("visible.txt"),
+        "条目应为 visible.txt，实际: {}",
+        entries[0].path
+    );
+    // 被忽略的 test.log 不产生 ignored 条目
+    assert!(
+        entries.iter().all(|e| e.status != "ignored"),
+        "结果不应含 ignored 条目: {:?}",
+        entries.iter().map(|e| &e.status).collect::<Vec<_>>()
+    );
 }
 
 /// 沙箱拒绝（SEC-01 / GIT-10）：repo_path 在 project_root 外 → 拒绝，不改磁盘
@@ -1071,7 +1112,7 @@ fn get_or_open_repo_cache_hit_but_dir_deleted() {
     // 删除仓库会连带删除 tempdir——root 必须存活，沙箱校验才可上溯通过）
     let root = dunce::canonicalize(dir.path().parent().unwrap()).unwrap();
 
-    let cache = std::sync::Mutex::new(GitRepoCache::new(GIT_REPO_CACHE_CAPACITY));
+    let cache = parking_lot::Mutex::new(GitRepoCache::new(GIT_REPO_CACHE_CAPACITY));
     // 首次访问 → 缓存
     let result1 = get_or_open_repo(&cache, &path.to_string_lossy(), &Some(root.clone()));
     assert!(result1.is_ok(), "首次访问应成功");

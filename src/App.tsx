@@ -162,6 +162,22 @@ function App() {
       ]);
 
       await loadProjectsAndRestore();
+
+      // CP-010: Win10 ConPTY 回退一次性 toast——紧随启动链调用一次(useEffect []
+      // 单次,不重复弹)。attempted && !bundled = 已回退系统 conhost → 提示降级后果
+      // (鼠标滚轮转发不可用);bundled/未尝试(非 Win10)静默,仅 debug 日志。
+      // 查询失败(命令注册缺失/后端异常)catch 降级不阻断启动;toast 队列为模块级,
+      // 早于 ToastHost 挂载的条目在 ready 渲染后照常展示(4s 窗口内,相邻时序安全)。
+      try {
+        const conpty = await pty.getConptyStatus();
+        if (conpty.attempted && !conpty.bundled) {
+          toast.show("warning", "终端已回退到系统控制台,鼠标滚轮转发不可用");
+        } else {
+          console.debug("[App] ConPTY 后端状态:", conpty);
+        }
+      } catch (err) {
+        console.warn("[App] 查询 ConPTY 状态失败(启动 toast 跳过):", err);
+      }
     };
     init();
   }, []);

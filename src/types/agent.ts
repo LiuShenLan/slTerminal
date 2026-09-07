@@ -33,11 +33,18 @@ export interface AgentEventPayload {
   usedPercentage?: number | null;
 }
 
-/** 注入状态枚举（契约 C6，对应 Rust AgentInjectionStatus） */
-export type AgentInjectionStatus = "injected" | "notInjected" | "outdated";
+/** 注入状态枚举（契约 C6，对应 Rust AgentInjectionStatus；CP-043 增待确认态） */
+export type AgentInjectionStatus =
+  | "injected"
+  | "notInjected"
+  | "outdated"
+  | "pendingConfirmation";
 
-/** 注入状态 DTO（契约 C6，对应 Rust AgentHookInjectionStatus，camelCase 三态契约不变） */
+/** 注入状态 DTO（契约 C6，对应 Rust AgentHookInjectionStatus，camelCase；suspiciousCommand
+ *  仅 pendingConfirmation 时存在——Rust skip_serializing_if 缺省，其余状态无此键） */
 export interface AgentHookInjectionStatus {
   status: AgentInjectionStatus;
   version: number | null;
+  /** 待确认的可疑 statusline 原命令原文（仅 pendingConfirmation 态下发） */
+  suspiciousCommand?: string;
 }

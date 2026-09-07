@@ -326,14 +326,14 @@ mod signal_tests {
         let path = dir.path().join("evt.json");
         std::fs::write(&path, VALID_SIGNAL_JSON).unwrap();
 
-        let emitted = std::sync::Mutex::new(Vec::new());
+        let emitted = parking_lot::Mutex::new(Vec::new());
         process_signal_file_with(&path, |payload| {
-            emitted.lock().unwrap().push(payload.clone());
+            emitted.lock().push(payload.clone());
             Ok(())
         });
 
         // 读 → parse → emit 全流程
-        let got = emitted.lock().unwrap();
+        let got = emitted.lock();
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].panel_id, "p1");
         assert_eq!(got[0].event, "PreToolUse");

@@ -32,7 +32,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **`save_settings_blocking` 是唯二消费点**：全仓唯一 settings.json 写通道，消费方 = settings.rs `save_settings` 命令 + 本模块 `set_config_core` 两处；改动它必须先查两处调用（`background_tasks::SETTINGS_KEY` 为 settings.rs 白名单第 5 键引用，防字面量漂移）。
 - **spawn/emit 包装层 L1 豁免**：`background_tasks_set_config` 命令包装层（spawn_blocking / 重 spawn / emit）与 `spawn_poller` 循环本体需 AppHandle/tauri runtime，无法 L1 直测——既定豁免登记（见下）。
-- **锁内不做可能 panic 的工作**：Mutex 中毒不可达纪律（照 src-tauri/src/CLAUDE.md）。
+- **持锁临界区一律 parking_lot（CP-005）**：无中毒攻击面（守卫 Drop 自动释放）；锁内仍保持短小无 panic 纪律（照 src-tauri/src/CLAUDE.md）。
 
 ## 测试模式
 

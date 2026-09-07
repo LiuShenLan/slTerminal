@@ -17,7 +17,7 @@ fn main() {
 
     // SEC-07：自定义命令白名单化——为每条命令生成 allow-<cmd> 权限，
     // capabilities/default.json 据此逐条 allow（未列出的命令将被拒绝调用）。
-    // 清单须与 lib.rs 的 generate_handler! 注册保持一致（当前 37 条）。
+    // 清单须与 lib.rs 的 generate_handler! 注册保持一致（当前 41 条）。
     let manifest = tauri_build::AppManifest::new().commands(&[
         "ping",
         "get_windows_build_number",
@@ -27,6 +27,7 @@ fn main() {
         "pty_resize",
         "pty_kill",
         "pty_kill_all",
+        "pty_conpty_status",
         "fs_read_file",
         "fs_read_resource",
         "fs_write_file",
@@ -46,6 +47,7 @@ fn main() {
         "notify_watch",
         "notify_stop_watch",
         "agent_hooks_inject",
+        "agent_hooks_confirm_inject",
         "agent_hooks_uninstall",
         "agent_hooks_injection_status",
         "agent_hooks_restore_statusline",

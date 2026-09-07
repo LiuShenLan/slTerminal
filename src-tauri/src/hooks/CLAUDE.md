@@ -10,11 +10,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### `CliHooksProvider` trait + cliId 注册表（MC-210）
 
-能力按 cliId 静态注册（`provider.rs`）。未知 cliId → `Validation`；已注册但无 hooks 能力 → `Validation`（预留分支）。trait 七方法签名是跨边界契约，命令层经 `spawn_blocking` 串行化（硬约束 #3）。
+能力按 cliId 静态注册（`provider.rs`）。未知 cliId → `Validation`；已注册但无 hooks 能力 → `Validation`（预留分支）。trait 七方法签名是跨边界契约（另有 `ensure_hooks_scripts`/`confirm_inject` 两带默认实现方法，见外部坑红线），命令层经 `spawn_blocking` 串行化（硬约束 #3）。
 
 ### claude provider 内部是 claude 合法领地（MC-213）
 
-`hooks/claude/` 保留全部 claude 命名、官方事件、settings.json 结构、statusline 协议、`SCRIPT_VERSION` 检测与 reporter/桥接脚本模板。`ClaudeHooksProvider` 实现 trait 七方法；home 解析统一经 `crate::home::home_dir()`（顶层共享件，ADR-0016——守卫已收编顶层，本模块不自建），测试经 `crate::home::HomeDirGuard` 注入覆盖。
+`hooks/claude/` 保留全部 claude 命名、官方事件、settings.json 结构、statusline 协议、`SCRIPT_VERSION` 检测与 reporter/桥接脚本模板。`ClaudeHooksProvider` 实现 trait 签名方法 + override 两带默认实现方法（`ensure_hooks_scripts`、`confirm_inject`）；home 解析统一经 `crate::home::home_dir()`（顶层共享件，ADR-0016——守卫已收编顶层，本模块不自建），测试经 `crate::home::HomeDirGuard` 注入覆盖。
 
 ### reporter 归 claude provider 资产（MC-215）
 
@@ -74,10 +74,11 @@ PTY spawn 时注入 `SLTERM_PANEL_ID`（见 @../pty/CLAUDE.md）。reporter 读�
 `Injected`：脚本存在 + settings.json 含 slterm matcher + 磁盘 `SCRIPT_VERSION` 与模板一致 + 磁盘脚本 SHA-256 与模板一致。
 `Outdated`：含 matcher 但版本或哈希不匹配。
 `NotInjected`：脚本不存在、matcher 缺失或 settings 解析失败。
+（CP-043 起 `AgentInjectionStatus` 枚举另含 `pendingConfirmation`——仅 inject/confirm 返回值，非本查询路径结果；序列化契约见 hooks/mod.rs DTO。）
 
-### statusline 原命令审查（SEC-12）
+### statusline 原命令审查（SEC-12，CP-043 起命中即暂停）
 
-原命令来自用户配置，后端仅检测可疑模式（`curl`/`wget`/`Invoke-Expression` 等）并 `tracing::warn!`；命中不阻断注入。
+原命令来自用户配置，后端检测可疑模式（`curl`/`wget`/`Invoke-Expression` 等）——**命中即暂停注入**：inject 返回 `pendingConfirmation` + 可疑命令原文（`suspiciousCommand`），settings.json 零写盘；审计进 `target: "audit"` 通道。前端展示命令原文，用户确认后经 `agent_hooks_confirm_inject` 二次调用（跳过审查）完成注入；拒绝/不处理则保持未注入。启动重注入（reinject）路径命中 → 跳过 + 审计，不改写用户配置（无用户交互可用）。
 
 ## 外部坑/红线
 
@@ -88,7 +89,7 @@ PTY spawn 时注入 `SLTERM_PANEL_ID`（见 @../pty/CLAUDE.md）。reporter 读�
 - **bash 路径转正斜杠**：Windows 原生 PATH 通常无 bash，定位逻辑和斜杠转换缺一不可（B16）。
 - **信号目录为空是正常**：持续残留才说明 watcher 失效。
 - **symlink 信号文件只删不读**（SEC-02）。
-- **新增 provider 须静态注册**：`provider.rs` 的 `REGISTRY`，trait 七方法签名勿改；新增能力走带默认实现的方法（9-6 `ensure_hooks_scripts` 先例——脚本落盘型 provider override，既有实现零改动）。
+- **新增 provider 须静态注册**：`provider.rs` 的 `REGISTRY`，trait 七方法签名勿改；新增能力走带默认实现的方法——9-6 `ensure_hooks_scripts` 先例（脚本落盘型 provider override）后，`confirm_inject`（CP-043，默认 Validation「该 CLI 不支持确认注入」）为第二个带默认实现的方法，claude override = `inject_impl(..., true)`，既有实现零改动。
 - **claude 会话启动时加载 hooks 配置**：注入/修复/卸载后须重启 claude 会话才生效（9-6 事故：hooks 目录被外部删除后，运行中会话仍按内存 matcher 跑缺失脚本刷 MODULE_NOT_FOUND——启动对账只保证此后新会话不再触发）。
 
 ## 测试模式

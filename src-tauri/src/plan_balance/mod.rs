@@ -9,7 +9,7 @@ pub mod kimi;
 pub mod query;
 pub mod source;
 
-use std::sync::Mutex;
+use parking_lot::Mutex;
 use tauri::Emitter;
 
 use crate::error::AppError;
@@ -66,7 +66,7 @@ static SNAPSHOT: Mutex<Option<Vec<PlanBalanceInfo>>> = Mutex::new(None);
 
 #[cfg(test)]
 pub(crate) fn reset_snapshot_for_test() {
-    let _ = SNAPSHOT.lock().unwrap().take();
+    let _ = SNAPSHOT.lock().take();
 }
 
 fn unix_now() -> u64 {
@@ -143,7 +143,7 @@ pub(crate) fn poll_once_with(
 /// 生产一轮拉取（spawn_blocking 内调用）
 fn poll_once_production(now: u64) -> Vec<PlanBalanceInfo> {
     poll_once_with(
-        &SNAPSHOT.lock().unwrap().clone().unwrap_or_default(),
+        &SNAPSHOT.lock().clone().unwrap_or_default(),
         |s| s.resolve(),
         |q, token| q.fetch(token),
         now,
@@ -153,7 +153,7 @@ fn poll_once_production(now: u64) -> Vec<PlanBalanceInfo> {
 /// 应用新快照：变化才 emit（含 updated_at 参与比较——成功查询必刷新
 /// updated_at 即视为变化；失败保留旧值不变不 emit；D5）
 fn apply_snapshot(app_handle: &tauri::AppHandle, new: Vec<PlanBalanceInfo>) {
-    let mut guard = SNAPSHOT.lock().unwrap();
+    let mut guard = SNAPSHOT.lock();
     if guard.as_ref() != Some(&new) {
         *guard = Some(new.clone());
         let _ = app_handle.emit("plan-balance-updated", new);
@@ -171,7 +171,7 @@ pub fn poll_once_executor(app_handle: tauri::AppHandle) {
 
 #[tauri::command]
 pub async fn get_plan_balance() -> Result<Vec<PlanBalanceInfo>, AppError> {
-    Ok(SNAPSHOT.lock().unwrap().clone().unwrap_or_default())
+    Ok(SNAPSHOT.lock().clone().unwrap_or_default())
 }
 
 /// 立即刷新（D6）：执行一轮拉取，更新快照并按 D5 判定 emit，恒返回最新快照

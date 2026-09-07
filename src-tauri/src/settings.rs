@@ -33,8 +33,8 @@ const SETTINGS_ALLOWED_KEYS: [&str; 6] = [
 /// 并发对同一 settings.json 读-合并-写（NamedTempFile persist rename + .bak copy）时，
 /// Windows 上另一线程的瞬时句柄占用会导致 persist 偶发 PermissionDenied（os error 5）——
 /// 持锁串行化「读-合并-写」全程，并发冲突消除（杀软实时扫描窗口为残余偶发源）。
-/// 持锁临界区均为无 panic 路径（读/合并/serde/写），中毒不可达；map_err 兜底防御。
-static SETTINGS_SAVE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+/// CP-005: 换装 parking_lot——lock() 无 Result，无中毒攻击面（锁内 panic 不再连锁 panic 等待方）
+static SETTINGS_SAVE_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 
 /// SEC-11：校验设置保存输入——须为 JSON 对象且顶层键 ∈ 白名单
 fn validate_settings_input(settings: &serde_json::Value) -> Result<(), AppError> {
@@ -98,9 +98,7 @@ pub(crate) fn save_settings_blocking(settings: serde_json::Value) -> Result<(), 
     let settings_path = app_dir.join("settings.json");
     // 以下为原 save_settings spawn_blocking 闭包本体，逐行平移（SETTINGS_SAVE_LOCK
     // 持锁串行化读-合并-写全程，语义不变）
-    let _guard = SETTINGS_SAVE_LOCK
-        .lock()
-        .map_err(|_| AppError::Unknown("settings 保存锁中毒".into()))?;
+    let _guard = SETTINGS_SAVE_LOCK.lock();
     std::fs::create_dir_all(&app_dir).map_err(|e| io_error("保存设置", &app_dir, e))?;
     // 窗口 A（R2b）：读失败/解析失败 → Err 传播且不落盘——旧 `.ok()` 吞错走 Null
     // 覆盖会令 incoming 整体胜出（顶层键全丢仍写成功）；仅文件不存在属首次启动合法

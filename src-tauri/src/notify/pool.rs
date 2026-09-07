@@ -141,8 +141,9 @@ impl Drop for LruWatcherPool {
 #[cfg(test)]
 mod pool_tests {
     use super::*;
+    use parking_lot::Mutex;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{mpsc, Arc, Mutex};
+    use std::sync::{mpsc, Arc};
     use std::time::Duration;
 
     /// 创建测试用 FileWatcher（不监听实际目录，线程真实监听 stop_rx）

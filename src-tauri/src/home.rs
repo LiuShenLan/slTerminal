@@ -18,7 +18,7 @@ const USER_PROFILE_ENV: &str = "USERPROFILE";
 
 /// 测试用：home_dir() 覆盖注入槽（仅测试编译，生产零行为变更）
 #[cfg(test)]
-static HOME_DIR_OVERRIDE: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+static HOME_DIR_OVERRIDE: parking_lot::Mutex<Option<PathBuf>> = parking_lot::Mutex::new(None);
 
 /// 测试用 RAII 守卫：把 home_dir() 指向指定目录，Drop 时恢复原值
 /// （防测试 panic 残留覆盖污染后续用例；与 app_dir::AppDataDirGuard 静态互异、
@@ -29,7 +29,7 @@ pub(crate) struct HomeDirGuard(Option<PathBuf>);
 #[cfg(test)]
 impl HomeDirGuard {
     pub(crate) fn set(dir: &std::path::Path) -> Self {
-        let mut slot = HOME_DIR_OVERRIDE.lock().unwrap();
+        let mut slot = HOME_DIR_OVERRIDE.lock();
         let prev = slot.clone();
         *slot = Some(dir.to_path_buf());
         HomeDirGuard(prev)
@@ -39,7 +39,7 @@ impl HomeDirGuard {
 #[cfg(test)]
 impl Drop for HomeDirGuard {
     fn drop(&mut self) {
-        *HOME_DIR_OVERRIDE.lock().unwrap() = self.0.clone();
+        *HOME_DIR_OVERRIDE.lock() = self.0.clone();
     }
 }
 
@@ -51,7 +51,7 @@ pub(crate) fn home_dir() -> Option<PathBuf> {
     // 测试注入覆盖（仅测试编译，生产恒走 env/dirs 路径）
     #[cfg(test)]
     {
-        if let Some(dir) = HOME_DIR_OVERRIDE.lock().unwrap().clone() {
+        if let Some(dir) = HOME_DIR_OVERRIDE.lock().clone() {
             return Some(dir);
         }
     }

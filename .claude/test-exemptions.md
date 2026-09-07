@@ -10,7 +10,8 @@
 
 | 项目 | 豁免原因 | 当前兜底层级 | 来源 |
 |------|----------|--------------|------|
-| `reader_loop` 残余 I/O 编排分支（channel 锁/send 失败/EOF `child.wait()`/DA1 注入动作/微批续读循环/ring buffer 批量写入/日志告警/读错误常量） | 依赖 Mutex/RwLock/Channel/系统调用无法纯函数化（决策点已抽 `apply_startup_strip`/`should_inject_da1`/`eof_exit_code`/`micro_batch_tail` 补测） | `pty_integration_tests`（真实 ConPTY 往返 7 条）+ L4 PTY 通信/强杀残留用例；微批上限 64KB 与「读到即续读」语义由 L1 `micro_batch_*` 6 条纯函数用例 + 前端直写阈值 256B（FE-18）双边锁死 | PTY-12 |
+| `reader_loop` 残余 I/O 编排分支（send 失败/EOF `child.wait()`/DA1 注入动作/微批续读循环/日志告警/读错误常量） | 依赖 Mutex/RwLock/Channel/系统调用无法纯函数化（决策点已抽 `apply_startup_strip`/`should_inject_da1`/`eof_exit_code`/`micro_batch_tail` 补测） | `pty_integration_tests`（真实 ConPTY 往返 7 条）+ L4 PTY 通信/强杀残留用例；微批上限 64KB 与「读到即续读」语义由 L1 `micro_batch_*` 6 条纯函数用例 + 前端直写阈值 256B（FE-18）双边锁死 | PTY-12 |
+| `pty_kill` 超时→监督线程真实阻塞路径 | Win32 阻塞不可注入（`ClosePseudoConsole` 永久阻塞无法在 L1 构造）——兜底 = `plan_cleanup_after_join_timeout` 决策用例 + pty 集成 kill 用例 + Win10 实机人工验证点（杀会话后应用无挂起） | 清理决策由 L1 `plan_cleanup_after_join_timeout` 2 例锁死（reader.rs）+ `join_with_timeout` 4 例 + `pty_integration_tests` kill 用例 + Win10 实机人工验证点（杀会话后应用无挂起、3s 内 IPC 返回） | CP-011 |
 | `spawn_conpty_child` 纯 Win32 调用部分（AttrList set_pty → CreateProcessW） | Win32 API 组合，参数错误无单测定位价值；可纯化部分已抽 `build_cmdline`/`build_env_block` 补测 | `pty_spawn_custom_conpty` 集成测试 + Windows CI runner | PTY-08 |
 | `lib.rs` `run()` | Tauri 运行时胶水，L1 无法直接启动完整应用 | L4 `terminal.e2e.ts` 启动标题等用例 + setup 两副作用各自的 L1 锁死（`start_signal_watcher_impl` 4 例 / `reinject_statusline` B15 用例）——setup 本体保持豁免（TQ-COV-02） | SPE-06② |
 | ActivityBar 拖拽 mock 理想化（`getBoundingClientRect` mock + 合成 DragEvent） | jsdom 无法模拟真实 DnD hit-test 与布局矩形 | `activityBar.test.tsx` L2 拖拽全链路 + L4 `sidebar.e2e.ts` 跨区状态机 | SVC-14 |

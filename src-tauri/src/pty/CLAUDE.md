@@ -33,6 +33,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 老 Win10（build < 21376）in-box conhost 不转发鼠标 VT 序列。`vendor/conpty/` 的 conpty.dll + OpenConsole.exe 经 `include_bytes!` 嵌入，仅 Win10 在首次 spawn 前提取到 `%LOCALAPPDATA%\slterminal\conpty\` 并 `LoadLibraryW` 加载。加载/提取失败静默回退系统 ConPTY；Win11 零变化。vendor 更新后必须 Win10 实机验证。
 
+回退状态经 `pty_conpty_status` 一次性查询暴露，启动 toast 提示降级后果（CP-010）；warn 日志与 `fallback_reason` 同源（同一 `format!("{e:#}")` 变量，零漂移）。
+
 ### PASSTHROUGH_MODE (0x8) 永久禁用
 
 0x8 会让 claude 等全屏 TUI 的鼠标滚轮完全失效。该问题无法被最小实验或自动化测试守卫（假阴性），改 flags 必须实测真实 claude 滚轮。
@@ -51,11 +53,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### pty_kill 异步销毁
 
-`ClosePseudoConsole` 在 pre-Win11 24H2 上可能永久阻塞。`pty_kill` 先提取 session 释放写锁，再在 `spawn_blocking` 中执行 `kill → join reader → drop master`。`KILL_JOIN_TIMEOUT = 3s` 轮询 `is_finished`，超时放弃 join 并记 warn。
-
-### Channel 可替换 + ring buffer 回放（E1）
-
-`reader_loop` 通过 `Arc<RwLock<Option<Channel>>>` 引用 Channel。Channel 断开时写入 256KB ring buffer；重连时替换 Channel 并回放。该机制保留于内部，对外重连命令已随 SEC-03 删除。
+`ClosePseudoConsole` 在 pre-Win11 24H2 上可能永久阻塞（上游 Discussion #17716，Win10 永不修复）。`pty_kill` 先提取 session 释放写锁，再在 `spawn_blocking` 中执行 `kill → join reader(3s)`：正常路径随闭包尾 drop；超时路径 reader detach、session 移入监督线程执行 drop（关 writer + ClosePseudoConsole），监督 3s 超时则清理线程 detach，进程退出时 OS 回收句柄（Job Object 保证子进程先死）。`PtySession::drop`（state.rs）同样只做带超时 join（CP-011）。
 
 ### 终端能力环境变量
 
@@ -72,7 +70,7 @@ spawn 阶段统一注入：
 仅允许 `pwsh.exe` / `powershell.exe` / `cmd.exe`。用户传入含路径分隔符的 shell 时：
 - `which_full_path` 解析真实路径，与用户路径比对，一致才放行；
 - PATH 不可解析时 `%SystemRoot%\System32` 兜底；
-- 双侧 `canonicalize` 均失败时回退归一字符串比对（alias/Store 版 pwsh 兼容），单侧失败即拒绝。
+- 双侧 `canonicalize` 均失败时回退 Win32 句柄级文件身份比对（volume serial + file index）：真实文件取普通句柄身份；应用执行别名（AEL，普通 `CreateFileW` 实测 os error 1920 打不开）经 `FILE_FLAG_OPEN_REPARSE_POINT` 打开条目本身取 reparse 条目身份——两侧同一条目身份必然相等；两侧证据齐且相等才放行，任一侧证据缺失即拒绝，不降级字符串；单侧失败即拒绝。
 
 PowerShell 通过 `-EncodedCommand` 内联 `shell-integration.ps1`，避免 `%APPDATA%` 文件写入触发 AMSI/ASR。启动参数固定 `-NoLogo -NoExit -EncodedCommand`，**禁止 `-NoProfile`**——用户 profile 必须先于集成脚本原生加载（B17，守卫用例 `pwsh_args_no_noprofile_b17`）。
 
@@ -112,7 +110,7 @@ spawn 后立即向 stdin 写 `\x1b[1;1R`，补偿 ConPTY `VtIo::StartIfNeeded()`
 
 | 豁免项 | 原因 | 当前兜底 |
 |--------|------|---------|
-| `reader_loop` 残余 I/O 编排 | 依赖 `RwLock<Option<Channel>>`/Mutex/管道系统调用，无法在 L1 构造输入 | 可纯函数化部分（`apply_startup_strip`/`should_inject_da1`/`eof_exit_code`/`micro_batch_tail`）已由 L1 覆盖 |
+| `reader_loop` 残余 I/O 编排 | 依赖 Channel/管道系统调用，无法在 L1 构造输入（CP-034: Channel 直写，无锁层） | 可纯函数化部分（`apply_startup_strip`/`should_inject_da1`/`eof_exit_code`/`micro_batch_tail`）已由 L1 覆盖 |
+| `pty_kill` 超时→监督线程真实阻塞路径 | Win32 阻塞不可注入（ClosePseudoConsole 永久阻塞无法在 L1 构造） | 清理决策由 L1 `plan_cleanup_after_join_timeout` 2 例锁死 + pty 集成 kill 用例 + Win10 实机人工验证点（杀会话后应用无挂起） |
 | 容量超限 kill 清理 | 命中上限后 kill 已 spawn 子进程依赖真实 PtySession | BE-01 判定语义由纯函数用例锁死 + Job Object 兜底 |
-| `conpty_api` vendor 提取/加载回退 | 依赖真实 DLL 加载行为 | ADR-0005 Win10 实机人工验证 + `ensure_extracted` 幂等用例 |
-| Mutex 中毒分支 | 临界区无 panic，中毒不可达 | 未来引入锁内 panic 代码时须补测试或换原语 |
+| `conpty_api` vendor 提取/加载回退 | 依赖真实 DLL 加载行为 | ADR-0005 Win10 实机人工验证 + `ensure_extracted` 幂等用例 + 回退状态可观测（`pty_conpty_status` + 启动 toast） |

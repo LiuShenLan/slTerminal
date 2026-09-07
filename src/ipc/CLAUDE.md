@@ -27,6 +27,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `pty.write` / `pty.resize` / `pty.kill` 三 wrapper 签名均含 `panelId`，invoke payload 同步传 `panelId`（JS `panelId` ↔ Rust `panel_id` 由 Tauri 自动转换）。后端凭此校验面板归属。
 
+### ConPTY 状态查询（CP-010）
+
+`getConptyStatus()` 无参 wrapper → `pty_conpty_status`，返回 `ConptyStatus`（三键 attempted/bundled/fallbackReason，双边 = `src/types/pty.ts` ↔ `src-tauri/src/pty/conpty_api.rs`）。App 启动序列一次性调用：`attempted && !bundled`（Win10 回退系统 conhost）→ toast 提示降级后果（滚轮转发不可用）；bundled/未尝试静默；invoke 失败由调用方 catch 降级，不阻断启动。
+
 ### 文件监听成对（BE-10）
 
 `notify.startWatch` / `notify.stopWatch` 必须成对调用——项目移除/切换时调用 `stopWatch` 释放后端 watcher，防占用至 LRU 淘汰。`onFsEvent` 是全局事件监听，不成对。
@@ -37,7 +41,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### agent hooks 泛化命令（MC-211）
 
-`agentHooks.ts` 所有 wrapper 加 `cliId` 首参：`inject(cliId)` / `uninstall(cliId)` / `getInjectionStatus(cliId)` / `restoreStatusline(cliId)`。未知 cliId → 后端 Validation。
+`agentHooks.ts` 所有 wrapper 加 `cliId` 首参（7 命令全表：`agent_hooks_inject` / `agent_hooks_uninstall` / `agent_hooks_injection_status` / `agent_hooks_restore_statusline` / `agent_hooks_confirm_inject` / `agent_hooks_config_read` / `agent_hooks_config_write`——后两条在 hooksConfig.ts）。未知 cliId → 后端 Validation。`confirmInject(cliId)` 为 CP-043 确认注入：inject 命中可疑 statusline 命令返回 `pendingConfirmation` 时，前端展示命令原文、用户确认后二次调用（跳过审查完成注入）。
 
 ### hooks 配置命令与 hooks 注入命令分离
 

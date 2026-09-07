@@ -52,6 +52,17 @@ vi.mock("../ipc/fs", () => ({
   setProjectRoot: mocks.mockSetProjectRoot,
 }));
 
+// CP-010: App 启动链紧随 store 加载后调一次 getConptyStatus（回退 toast 数据源）。
+// 本文件聚焦 FE-03 四 store 失败告警计数——mock 为 resolve(未尝试回退),否则
+// jsdom 无 IPC 后端 → invoke reject → catch 产出第 5 条 warn 干扰 4 次断言
+vi.mock("../ipc/pty", () => ({
+  getConptyStatus: vi.fn().mockResolvedValue({
+    attempted: false,
+    bundled: false,
+    fallbackReason: null,
+  }),
+}));
+
 vi.mock("../workspace", () => ({
   Workspace: () => React.createElement("div", { "data-testid": "workspace" }),
 }));

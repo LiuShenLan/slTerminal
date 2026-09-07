@@ -13,8 +13,9 @@
 //! env 覆盖 `SLTERM_CLAUDE_PROJECTS_DIR` 留 provider 内部（MC-305：聚合层不假设
 //! env 命名——未来 `SLTERM_<CLI>_PROJECTS_DIR` 同款模式自管）。
 
+use parking_lot::Mutex;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 
 use crate::agent_history::claude::jsonl;
 use crate::agent_history::{is_uuid_filename, AgentHistorySession};
@@ -92,7 +93,7 @@ fn cached_scan(force: bool) -> Vec<AgentHistorySession> {
         return Vec::new(); // 根目录不可读 → 空（降级语义与既有 scan 一致）
     };
     let cache = SCAN_CACHE.get_or_init(|| Mutex::new(None));
-    let mut guard = cache.lock().unwrap();
+    let mut guard = cache.lock();
     if !force {
         if let Some(entry) = guard.as_ref() {
             if entry.root == root && entry.key == key {

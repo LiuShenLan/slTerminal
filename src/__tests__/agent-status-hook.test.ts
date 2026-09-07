@@ -130,6 +130,8 @@ vi.mock("../ipc/agentHooks", () => ({
       capturedCallback.current = null;
     };
   }),
+  confirmInject: () =>
+    Promise.resolve({ status: "notInjected" as const, version: null }),
   inject: () =>
     Promise.resolve({ status: "notInjected" as const, version: null }),
   uninstall: () => Promise.resolve(),

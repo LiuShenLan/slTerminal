@@ -15,6 +15,9 @@
 // F2 注入（P3-FE-21/22）：工具栏「注入 Hooks」/「卸载 Hooks」按钮调用 src/ipc/agentHooks 的
 // inject()/uninstall()（cliId 实参 = hub 选中态 profile.id——Stage 03 中间态已回收）；
 // 注入状态条显示 getInjectionStatus() 三态（已注入/未注入/版本过旧，数据源 = 选中态 cliId，MC-506）；
+// CP-043 确认流：inject 命中可疑 statusline 命令返回 pendingConfirmation → 内联确认条
+// 展示命令原文 + [确认注入]/[取消]（settings.json 零写盘）；确认 → confirmInject 二次注入，
+// 取消 → 清空待确认态；
 // 注入/卸载完成后刷新状态 + 自动重读 user 层配置
 // （操作改写 ~/.claude/settings.json，C13-8——当前层为 user 直接 reload，非 user 切到 user 层）。
 // 配色全部引用 theme/colors.ts token（硬约束 #6）。
@@ -32,6 +35,7 @@ import JsonMode from "./JsonMode";
 import GuiMode from "./GuiMode";
 import {
   inject,
+  confirmInject,
   uninstall,
   getInjectionStatus,
 } from "../../../../../ipc/agentHooks";
@@ -115,7 +119,8 @@ const modeContainerStyle: React.CSSProperties = {
   minHeight: 0,
 };
 
-/** 注入状态显示文案（P3-FE-22）：null = 未查询/查询中；三态照契约 C6 status 枚举 */
+/** 注入状态显示文案（P3-FE-22）：null = 未查询/查询中；状态照契约 C6 status 枚举
+    （pendingConfirmation = CP-043 暂停注入待确认——命中即暂停，不落盘） */
 function injectionStatusText(status: AgentHookInjectionStatus | null): string {
   if (status === null) return "--";
   switch (status.status) {
@@ -125,13 +130,15 @@ function injectionStatusText(status: AgentHookInjectionStatus | null): string {
       return "未注入";
     case "outdated":
       return "版本过旧";
+    case "pendingConfirmation":
+      return "待确认";
   }
 }
 
-/** 注入状态显示颜色（硬约束 #6 token）：已注入正常色 / 未注入次要灰 / 版本过旧警示色 */
+/** 注入状态显示颜色（硬约束 #6 token）：已注入正常色 / 未注入次要灰 / 版本过旧与待确认警示色 */
 function injectionStatusColor(status: AgentHookInjectionStatus | null): string {
   if (status === null || status.status === "notInjected") return HTML_PANEL_LOADING_FG;
-  if (status.status === "outdated") return ERROR_FG;
+  if (status.status === "outdated" || status.status === "pendingConfirmation") return ERROR_FG;
   return SIDEBAR_FG;
 }
 
@@ -235,6 +242,9 @@ const ClaudeHooksConfigEditor: React.FC<ClaudeHooksConfigEditorProps> = ({
   const [injectionBusy, setInjectionBusy] = useState(false);
   // 注入/卸载失败提示（如 ~/.claude/settings.json 为非法 JSON 被后端拒绝）
   const [injectionError, setInjectionError] = useState<string | null>(null);
+  // CP-043 待确认态：inject 命中可疑模式返回 pendingConfirmation → 内联确认条
+  // 展示 suspiciousCommand 原文 + 确认/取消（settings.json 未被改写）；null = 无待确认
+  const [pendingConfirm, setPendingConfirm] = useState<AgentHookInjectionStatus | null>(null);
 
   /** 刷新注入状态（挂载 / 注入 / 卸载后调用，数据源 = 选中态 cliId，MC-506）；
       查询失败 console.warn 降级，状态条保持上次值 */
@@ -262,12 +272,21 @@ const ClaudeHooksConfigEditor: React.FC<ClaudeHooksConfigEditorProps> = ({
     }
   }, [layer, reload, setLayer]);
 
-  /** 注入：成功后用返回值刷新状态 + 重读 user 层配置；失败显示错误提示（保留 dirty 不丢用户修改） */
+  /** 注入（CP-043 确认流）：injected 直接完成；pendingConfirmation 进入待确认态
+      展示可疑命令原文（settings.json 未被改写，不重读）；确认 → confirmInject 二次调用
+      完成注入；取消 → 清空待确认态。失败显示错误提示（保留 dirty 不丢用户修改） */
   const handleInject = useCallback(async () => {
     setInjectionBusy(true);
     setInjectionError(null);
     try {
-      setInjectionStatus(await inject(cliId));
+      const result = await inject(cliId);
+      if (result.status === "pendingConfirmation") {
+        // 命中可疑模式：暂停注入，UI 展示 result.suspiciousCommand 原文 + 确认/取消
+        setPendingConfirm(result);
+        return;
+      }
+      setPendingConfirm(null);
+      setInjectionStatus(result);
       reloadUserConfig();
     } catch (err) {
       console.error("[slTerminal] hooks 注入失败:", err);
@@ -276,6 +295,28 @@ const ClaudeHooksConfigEditor: React.FC<ClaudeHooksConfigEditorProps> = ({
       setInjectionBusy(false);
     }
   }, [cliId, reloadUserConfig]);
+
+  /** 用户确认可疑命令 → confirmInject 二次调用（跳过审查）完成注入 */
+  const handleConfirmInject = useCallback(async () => {
+    setInjectionBusy(true);
+    setInjectionError(null);
+    try {
+      const result = await confirmInject(cliId);
+      setPendingConfirm(null);
+      setInjectionStatus(result);
+      reloadUserConfig();
+    } catch (err) {
+      console.error("[slTerminal] hooks 确认注入失败:", err);
+      setInjectionError("确认注入失败，请检查 ~/.claude/settings.json");
+    } finally {
+      setInjectionBusy(false);
+    }
+  }, [cliId, reloadUserConfig]);
+
+  /** 用户取消确认 → 清空待确认态（settings.json 未被改写，保持未注入） */
+  const handleCancelConfirm = useCallback(() => {
+    setPendingConfirm(null);
+  }, []);
 
   /** 卸载：成功后重新查询状态（uninstall 返回 void）+ 重读 user 层配置；失败显示错误提示 */
   const handleUninstall = useCallback(async () => {
@@ -435,6 +476,77 @@ const ClaudeHooksConfigEditor: React.FC<ClaudeHooksConfigEditorProps> = ({
           保存
         </button>
       </div>
+      {/* CP-043 待确认内联确认条：inject 命中可疑模式（pendingConfirmation）时整条展示——
+          命令原文等宽字体完整展示不截断（悬停/折行可读全文）；[确认注入] 二次调用
+          confirmInject；[取消] 清空待确认态（settings.json 未被改写） */}
+      {pendingConfirm && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "6px 10px",
+            borderBottom: `1px solid ${INPUT_BORDER}`,
+            background: PANEL_BG,
+            fontSize: 12,
+          }}
+          data-e2e="hooks-confirm-bar"
+        >
+          <span style={{ color: ERROR_FG, whiteSpace: "nowrap", flexShrink: 0 }}>
+            检测到可疑 statusline 命令，注入已暂停：
+          </span>
+          <code
+            style={{
+              color: SIDEBAR_FG,
+              fontFamily: "Consolas, 'Courier New', monospace",
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-all",
+              flex: 1,
+              minWidth: 0,
+            }}
+            data-e2e="hooks-confirm-command"
+            title={pendingConfirm.suspiciousCommand}
+          >
+            {pendingConfirm.suspiciousCommand ?? ""}
+          </code>
+          <button
+            type="button"
+            data-e2e="hooks-confirm-inject"
+            disabled={injectionBusy}
+            onClick={() => void handleConfirmInject()}
+            style={{
+              padding: "3px 12px",
+              fontSize: 12,
+              cursor: injectionBusy ? "default" : "pointer",
+              flexShrink: 0,
+              background: INPUT_BORDER,
+              color: SIDEBAR_FG,
+              border: `1px solid ${INPUT_BORDER}`,
+              borderRadius: 6,
+            }}
+          >
+            确认注入
+          </button>
+          <button
+            type="button"
+            data-e2e="hooks-cancel-confirm"
+            disabled={injectionBusy}
+            onClick={handleCancelConfirm}
+            style={{
+              padding: "3px 12px",
+              fontSize: 12,
+              cursor: injectionBusy ? "default" : "pointer",
+              flexShrink: 0,
+              background: "transparent",
+              color: SIDEBAR_FG,
+              border: `1px solid ${INPUT_BORDER}`,
+              borderRadius: 6,
+            }}
+          >
+            取消
+          </button>
+        </div>
+      )}
       {/* 模式渲染容器（JSON = JsonMode；GUI = GuiMode）——onChange 均接入 useHooksConfig setter（P3-FE-16） */}
       <div style={modeContainerStyle} data-e2e="hooks-mode-container">
         {mode === "gui" ? (

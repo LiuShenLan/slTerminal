@@ -42,14 +42,8 @@ where
 
 /// 从 State 提取 project_root（仅命令包装层使用——内核直接接收 root，测试无需构造 State）
 fn extract_root(state: &State<'_, AppState>) -> Result<Option<PathBuf>, AppError> {
-    // 锁错误为内部不变量错误：用户可见消息保留语义，poisoning 技术细节进 tracing（BE-15）
-    let guard = state.project_root.read().map_err(|e| {
-        tracing::warn!(error = %e, "获取 project_root 读锁失败");
-        AppError::IoKind {
-            kind: "lock".into(),
-            message: "获取 project_root 锁失败".into(),
-        }
-    })?;
+    // CP-005: parking_lot 读锁无 Result/无中毒——直接取守卫 clone（旧 BE-15 锁错误映射随中毒消亡）
+    let guard = state.project_root.read();
     Ok((*guard).clone())
 }
 
@@ -869,7 +863,8 @@ mod write_file_tests {
 #[cfg(test)]
 mod command_wrapper_tests {
     use super::*;
-    use std::sync::{Arc, Mutex};
+    use parking_lot::Mutex;
+    use std::sync::Arc;
 
     fn run<F: std::future::Future>(f: F) -> F::Output {
         tokio::runtime::Runtime::new().unwrap().block_on(f)
@@ -884,12 +879,12 @@ mod command_wrapper_tests {
         run(fs_read_file_impl(
             path,
             move |chunk| {
-                collector.lock().unwrap().push(chunk);
+                collector.lock().push(chunk);
                 Ok(())
             },
             root,
         ))?;
-        let collected = chunks.lock().unwrap().clone();
+        let collected = chunks.lock().clone();
         Ok(collected)
     }
 

@@ -131,6 +131,7 @@ vi.mock("../ipc", () => ({
 
 vi.mock("../ipc/agentHooks", () => ({
   onAgentEvent: mockOnAgentEvent,
+  confirmInject: () => Promise.resolve({ status: "notInjected", version: null }),
 }));
 
 vi.mock("../ipc/agentHistory", () => ({

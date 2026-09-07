@@ -85,7 +85,7 @@ pub fn git_add(repo_path: &Path, filename: &str) {
 /// 构造带指定 project_root 的最小 AppState（命令层测试用）
 pub fn make_app_state(root: Option<std::path::PathBuf>) -> slterminal_lib::AppState {
     let app = slterminal_lib::AppState::new();
-    *app.project_root.write().unwrap() = root;
+    *app.project_root.write() = root;
     app
 }
 

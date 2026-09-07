@@ -4,7 +4,7 @@
 export interface GitStatusEntry {
   /** 文件绝对路径（与 fs_read_dir 的 DirEntry.path 格式一致） */
   path: string;
-  /** git 状态：modified | added | deleted | renamed | untracked | conflict | ignored */
+  /** git 状态：modified | added | deleted | renamed | untracked | conflict */
   status: string;
   /**
    * 重命名前的旧绝对路径（仅 status === "renamed" 时有值，其它状态为 null）

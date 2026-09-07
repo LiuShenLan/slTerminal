@@ -23,7 +23,7 @@ pub struct GitStatusEntry {
     /// （旧路径见 old_path——git2-rs 的 entry.path() 对 renamed 返回旧路径，
     /// 命令层必须改取 delta.new_file().path()）
     pub path: String,
-    /// git 状态：modified | added | deleted | renamed | untracked | conflict | ignored
+    /// git 状态：modified | added | deleted | renamed | untracked | conflict
     pub status: String,
     /// 重命名前的旧绝对路径（仅 renamed 条目有值，camelCase 序列化为 oldPath）
     pub old_path: Option<String>,
@@ -46,6 +46,7 @@ pub struct DiffHunk {
 /// 将 git2::Status flags 映射为前端状态字符串
 ///
 /// 返回 None 表示无变更（Current），调用方跳过该条目。
+/// `IGNORED` 落入 None：include_ignored 恒关，永不置位（CP-008 删死分支）。
 /// pub：GIT-12 拆分后供集成测试（tests/git_status_tests.rs）直接调用。
 pub fn status_to_str(status: git2::Status) -> Option<&'static str> {
     if status.is_conflicted() {
@@ -65,8 +66,6 @@ pub fn status_to_str(status: git2::Status) -> Option<&'static str> {
         || status.contains(git2::Status::INDEX_MODIFIED)
     {
         Some("modified")
-    } else if status.is_ignored() {
-        Some("ignored")
     } else if status.contains(git2::Status::WT_NEW) {
         // 纯 WT_NEW（无 INDEX_NEW）→ untracked
         Some("untracked")
@@ -85,7 +84,7 @@ pub fn status_to_str(status: git2::Status) -> Option<&'static str> {
 /// 超容量淘汰最久未用，替代原无上限 HashMap。
 /// pub：GIT-12 拆分后供集成测试（tests/ 下 git 测试文件）直接调用。
 pub fn get_or_open_repo(
-    cache: &std::sync::Mutex<GitRepoCache>,
+    cache: &parking_lot::Mutex<GitRepoCache>,
     search_path: &str,
     project_root: &Option<PathBuf>,
 ) -> Result<(git2::Repository, PathBuf), AppError> {
@@ -93,9 +92,7 @@ pub fn get_or_open_repo(
 
     // 缓存命中检测：仅 search 在 workdir 子树内时命中（不含反向匹配，防子仓库误命中）
     {
-        let mut cache_guard = cache
-            .lock()
-            .map_err(|e| AppError::Git(format!("获取 git_repo_cache 锁失败: {e}")))?;
+        let mut cache_guard = cache.lock();
         if let Some(wd) = cache_guard.find_workdir(&search) {
             drop(cache_guard);
             // 验证缓存的 workdir 仍在 project_root 内
@@ -118,9 +115,7 @@ pub fn get_or_open_repo(
     validate_path_within_root(project_root, &workdir)?;
 
     // 存入缓存（保留 repo 句柄标记此 workdir 可达；超容量自动淘汰 LRU）
-    let mut cache_guard = cache
-        .lock()
-        .map_err(|e| AppError::Git(format!("获取 git_repo_cache 锁失败: {e}")))?;
+    let mut cache_guard = cache.lock();
     cache_guard.insert(workdir.clone(), repo);
     drop(cache_guard);
 
@@ -141,10 +136,7 @@ pub async fn git_status_impl(
 ) -> Result<Vec<GitStatusEntry>, AppError> {
     // 块作用域限界：RwLockReadGuard 非 Send，必须在 .await 前 drop
     let (repo, workdir) = {
-        let root = app
-            .project_root
-            .read()
-            .map_err(|e| AppError::Git(format!("获取 project_root 锁失败: {e}")))?;
+        let root = app.project_root.read();
         // 路径沙箱校验
         validate_path_within_root(&root, Path::new(repo_path))?;
         // 从缓存获取/创建 Repository
@@ -271,10 +263,7 @@ pub async fn git_diff_impl(
 ) -> Result<Vec<DiffHunk>, AppError> {
     // 块作用域限界：RwLockReadGuard 非 Send，必须在 .await 前 drop
     let (repo, _workdir) = {
-        let root = app
-            .project_root
-            .read()
-            .map_err(|e| AppError::Git(format!("获取 project_root 锁失败: {e}")))?;
+        let root = app.project_root.read();
         // 路径沙箱校验
         if !repo_path.is_empty() {
             validate_path_within_root(&root, Path::new(repo_path))?;
@@ -537,10 +526,7 @@ pub async fn git_file_at_head_impl(
 ) -> Result<String, AppError> {
     // 块作用域限界：RwLockReadGuard 非 Send，必须在 .await 前 drop
     let (repo, workdir) = {
-        let root = app
-            .project_root
-            .read()
-            .map_err(|e| AppError::Git(format!("获取 project_root 锁失败: {e}")))?;
+        let root = app.project_root.read();
         // 路径沙箱校验
         validate_path_within_root(&root, Path::new(file_path))?;
         // 从缓存获取/创建 Repository
@@ -620,10 +606,7 @@ pub async fn git_rollback_impl(
 ) -> Result<(), AppError> {
     // 块作用域限界：RwLockReadGuard 非 Send，必须在 .await 前 drop
     let (repo, workdir) = {
-        let root = app
-            .project_root
-            .read()
-            .map_err(|e| AppError::Git(format!("获取 project_root 锁失败: {e}")))?;
+        let root = app.project_root.read();
         validate_path_within_root(&root, Path::new(file_path))?;
         let search_path = if !repo_path.is_empty() {
             repo_path
@@ -722,10 +705,7 @@ pub async fn git_unstage_impl(
     file_path: &str,
 ) -> Result<(), AppError> {
     let (repo, workdir) = {
-        let root = app
-            .project_root
-            .read()
-            .map_err(|e| AppError::Git(format!("获取 project_root 锁失败: {e}")))?;
+        let root = app.project_root.read();
         validate_path_within_root(&root, Path::new(file_path))?;
         let search_path = if !repo_path.is_empty() {
             repo_path

@@ -1,8 +1,8 @@
 //! PTY 集成测试（Windows-only：硬编码 cmd.exe / ConPTY 语义）
 #![cfg(windows)]
+use parking_lot::Mutex;
 use portable_pty::{native_pty_system, Child, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use std::io::{Read, Write};
-use std::sync::Mutex;
 use std::time::Duration;
 
 /// 【锁边界声明】本锁仅隔离测试进程自身的并发 spawn（ConPTY 并发 spawn 死锁红线）。
@@ -17,7 +17,7 @@ fn spawn_cmd() -> (
     Box<dyn Read + Send>,
     Box<dyn Write + Send>,
 ) {
-    let _lock = SPAWN_LOCK.lock().unwrap();
+    let _lock = SPAWN_LOCK.lock();
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -201,7 +201,7 @@ fn osc_cwd_venv_parsed() {
 #[cfg(windows)]
 #[test]
 fn pty_session_isolation() {
-    let _lock = SPAWN_LOCK.lock().unwrap();
+    let _lock = SPAWN_LOCK.lock();
     use slterminal_lib::pty::{shell, spawn::conpty_custom};
     use std::io::Write as _;
 
@@ -281,7 +281,7 @@ fn pty_session_isolation() {
 #[cfg(windows)]
 #[test]
 fn pty_env_injects_slterm_panel_id() {
-    let _lock = SPAWN_LOCK.lock().unwrap();
+    let _lock = SPAWN_LOCK.lock();
     use slterminal_lib::pty::{shell, spawn::conpty_custom};
     use std::io::Write as _;
 

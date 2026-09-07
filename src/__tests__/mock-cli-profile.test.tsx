@@ -97,6 +97,7 @@ const h = vi.hoisted(() => {
     mockWriteHooksConfig: vi.fn(),
     mockJsonMode: vi.fn(() => null),
     mockInject: vi.fn(),
+    mockConfirmInject: vi.fn(),
     mockUninstall: vi.fn(),
     mockGetInjectionStatus: vi.fn(),
     mockSwitchToPageShared: vi.fn(),
@@ -221,6 +222,7 @@ vi.mock("../ipc/pty", () => ({
 vi.mock("../ipc/agentHooks", () => ({
   onAgentEvent: h.mockOnAgentEvent,
   inject: h.mockInject,
+  confirmInject: h.mockConfirmInject,
   uninstall: h.mockUninstall,
   getInjectionStatus: h.mockGetInjectionStatus,
 }));
@@ -657,6 +659,7 @@ describe("AC-4④ hub 选择行", () => {
     h.mockConfirmDialog.mockReset().mockResolvedValue(true);
     h.mockJsonMode.mockClear();
     h.mockInject.mockReset();
+    h.mockConfirmInject.mockReset();
     h.mockUninstall.mockReset();
     h.mockGetInjectionStatus
       .mockReset()

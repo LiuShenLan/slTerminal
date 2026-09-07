@@ -48,6 +48,7 @@ vi.mock("../ipc/agentHooks", () => ({
     mockOnAgentEventCallback.cb = cb;
     return () => {};
   }),
+  confirmInject: () => Promise.resolve({ status: "notInjected", version: null }),
 }));
 
 vi.mock("@tauri-apps/api/window", () => ({

