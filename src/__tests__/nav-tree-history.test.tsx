@@ -32,7 +32,7 @@ const {
   mockRestoreHistorySession: vi.fn(() => Promise.resolve()),
 }));
 
-vi.mock("../features/agentStatus/useAgentStatus", () => ({
+vi.mock("../features/navTree/useAgentStatus", () => ({
   useAgentStatus: () => mockUseAgentStatus(),
 }));
 
@@ -78,7 +78,7 @@ vi.mock("../lib/StatusDot", async () => {
   };
 });
 
-import { render, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { render, cleanup, fireEvent, waitFor, act } from "@testing-library/react";
 import { NavTree } from "../features/navTree/NavTree";
 import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
@@ -207,12 +207,7 @@ function resetAll(): void {
   });
   useLayout.setState({ activePageId: null });
   mockUseAgentStatus.mockReset();
-  mockUseAgentStatus.mockReturnValue({
-    state: { kind: "ready" },
-    rows: [],
-    currentProjectName: null,
-    now: Date.now(),
-  });
+  mockUseAgentStatus.mockReturnValue([]);
   mockScanHistory.mockReset();
   mockScanHistory.mockResolvedValue([]);
   mockListBackgroundTasks.mockReset();
@@ -728,5 +723,55 @@ describe("历史节点与搜索", () => {
     });
     // 历史标题未命中 → 历史节点不显示
     expect(getRows(container, "nav-history-node")).toHaveLength(0);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// CP-021：宿主 60s ticker——历史区相对时间由 NavTree 宿主驱动重算
+// （渲染层与数据层节奏解耦；now 经 prop 注入 NavHistoryRow）
+// ═══════════════════════════════════════════════════════════════
+
+describe("CP-021 宿主 60s ticker（渲染层与数据层节奏解耦）", () => {
+  it("CP-021:历史行相对时间随宿主 ticker 跨 60s 自动刷新(fake timers)", async () => {
+    vi.useFakeTimers();
+    try {
+      const base = Date.now();
+      seedProject("C:/projA", "proj-A", "项目A", [
+        { pageId: "pageA", name: "页面 A" },
+      ]);
+      seedActivePage("pageA");
+      mockScanHistory.mockResolvedValue([
+        makeHistorySession({ mtimeMs: base - 5 * 60_000 }), // 5 分钟前
+      ]);
+      const { container } = render(<NavTree />);
+      // fake timers 下 RTL waitFor 的微任务 flush 会挂在被假定的 setTimeout 上
+      // （仓库先例：commit-view-status 等一律用 advanceTimersByTimeAsync/纯微任务 flush）——
+      // 扫描链（list resolve → 首轮执行 → sessions 落地）全部为 promise，async act flush 一次即收敛
+      await act(async () => {
+        for (let i = 0; i < 20; i++) await Promise.resolve();
+      });
+      // 展开项目行（历史节点随项目展开态渲染）→ 展开历史节点 → 历史行渲染
+      const projRow = getRows(container, "nav-row-project")[0];
+      expect(projRow).toBeTruthy();
+      fireEvent.click(projRow);
+      const node = getRows(container, "nav-history-node")[0];
+      expect(node).toBeTruthy();
+      fireEvent.click(node);
+      expect(node.textContent).toContain("5 分钟前");
+
+      // 59s：未跨档，文本不变（防误刷新）
+      act(() => {
+        vi.advanceTimersByTime(59_000);
+      });
+      expect(node.textContent).toContain("5 分钟前");
+
+      // 再 1s（累计 60s）：宿主 ticker 触发，now 推进 → 6 分钟档
+      act(() => {
+        vi.advanceTimersByTime(1_000);
+      });
+      expect(node.textContent).toContain("6 分钟前");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

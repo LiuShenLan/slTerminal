@@ -11,7 +11,7 @@
 // 点击行 → 聚焦对应终端页签（onFocus 委托 NavTree，B14 前缀解析兜底）。
 
 import React, { useCallback, useState } from "react";
-import type { AgentSessionRow } from "../agentStatus/useAgentStatus";
+import type { AgentSessionRow } from "./useAgentStatus";
 import { StatusDot } from "../../lib/StatusDot";
 import { cliProfileRegistry } from "../cliProfiles";
 import {

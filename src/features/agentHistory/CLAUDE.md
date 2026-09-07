@@ -84,9 +84,9 @@ Agent 历史会话查询与恢复（CLI 无关聚合，MC-310 泛化）。**宿�
 
 「切换到该会话操作页面」= 反查 `TerminalRegistry.getAll()`（`findPanelForSession`：复合键精确匹配）→ `findPageIdForPanelId`（B14：先按 `useProjects` 已知页面集合前缀匹配，兜底 `parseTerminalPageId`）→ `switchToPageAndFocus(pageId, panelId)`。
 
-### 已知限制（MC-318）
+### 历史区相对时间刷新（MC-318，CP-021 已修）
 
-1. **历史区相对时间无 ticker**：`formatRelativeTime` 在渲染时计算，历史区无定时重渲染机制——挂起的历史区相对时间文本不自动刷新，直至其他状态变更触发重渲染（视为可接受，不修）。
+1. **历史区相对时间刷新（CP-021 已修）**：`formatRelativeTime` 渲染时计算，相对时间基准 `now` 由 navTree 宿主 60s ticker 驱动重算——与 sessionRefresh 数据层节奏解耦，禁用/慢档不冻结。
 
 ## 测试模式
 

@@ -49,7 +49,6 @@
     "src/features/explorer/CLAUDE.md",
     "src/features/fileViewers/CLAUDE.md",
     "src/features/shortcuts/CLAUDE.md",
-    "src/features/sidebar/CLAUDE.md",
     "src-tauri/src/pty/CLAUDE.md",
     "src-tauri/src/hooks/CLAUDE.md",
     "src-tauri/src/notify/CLAUDE.md",

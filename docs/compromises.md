@@ -16,17 +16,17 @@
 
 ## 一、依赖与技术选型
 
-- [ ] **CP-001 · 双 TS 并存**(TS6 包装器 + `@typescript/native` TS7 别名)
-  来源:ADR-0010 TE-07。当时理由:typescript-eslint 8.67.0 peer 依赖全系拒绝 TS7(加载期硬校验),三支 fallback 走尽后正式化妥协。问题本质:类型检查(TS7)与 ESLint 消费(TS6)各走一套编译器,依赖版本矩阵双轨;消除依赖上游 issue #10940 闭环 + TS7.1 发布。2026-09-06 核查实证:peer `>=4.8.4 <6.1.0` 仍拒 TS7(package-lock.json),#10940 仍 open,TS7.1 未发布——双触发条件均未达成。**修改方向**:维持双轨至双条件达成,届时删 TS6 包装器与别名、`"typescript"` 直改 `^7.1.0`;触发条件可写成可机检形式(issue 状态 + npm dist-tag)防登记休眠。
+- [x] **CP-001 · 双 TS 并存**(TS6 包装器 + `@typescript/native` TS7 别名)【2026-09-07 修复销项：触发条件硬化为机检 scripts/check-ts7-trigger.mjs(退出码 0/1/2 语义) + ADR-0010 TE-07 与本文同步改写 + 五用例锁死，双轨维持为登记受控态】
+  来源:ADR-0010 TE-07。当时理由:typescript-eslint 8.67.0 peer 依赖全系拒绝 TS7(加载期硬校验),三支 fallback 走尽后正式化妥协。问题本质:类型检查(TS7)与 ESLint 消费(TS6)各走一套编译器,依赖版本矩阵双轨;消除依赖上游 issue #10940 闭环 + TS7.1 发布。2026-09-06 核查实证:peer `>=4.8.4 <6.1.0` 仍拒 TS7(package-lock.json),#10940 仍 open,TS7.1 未发布——双触发条件均未达成。**修改方向**:维持双轨不动依赖;触发条件已硬化为机检脚本 `scripts/check-ts7-trigger.mjs`(退出码 0 = 双条件达成,退出码 1 = 未达成,退出码 2 = 查询失败),登记同步 ADR-0010 TE-07。脚本退出码 0 时执行解除:删 TS6 包装器与别名、`"typescript"` 直改 `^7.1.0`。
 - [ ] **CP-002 · json-schema-library 9.x / 11.x 双 major 并存**
   来源:ADR-0010 TE-15、`src/features/cliProfiles/CLAUDE.md`。当时理由:codemirror-json-schema@0.8.1 锁 9.x(上游约束),主声明 11.6.2;运行时两实例无冲突。问题本质:同一库双实例并行,体积与语义双份。2026-09-06 核查实证:lockfile 双实例(嵌套 9.3.5 + 顶层 11.6.2)原样,上游最新仍 0.8.1,锁定未解。**修改方向**:「待上游」短期无望,转向替代评估——自绘 JSON lint 提示摘除 codemirror-json-schema 依赖,或评估 @invopop fork 的库版本;维持现状则把「待上游」改为显式定期复查节点,防登记永久休眠。
 - [ ] **CP-003 · E2E 工具链版本妥协(便携 Node 22 启动器)**【2026-09-06 核查修正:当时理由已失真】
   来源:`e2e-tests/CLAUDE.md`。当时理由:Node≥26 自带 undici 8 与 webdriverio 不兼容,自动下载便携 Node 22 兜底。**核查修正**:webdriverio#15265 已在 9.30.0 修复(官方 #15363 明示),项目已解析 9.30.1——「不兼容」对当前依赖树不成立,消除条件达成而启动器(run-wdio.cjs:246-288)未跟进。问题本质:测试运行时依赖自动下载第三方二进制,版本矩阵游离于主 toolchain;上游修复后妥协进入「无人触发的死兜底」形态。**修改方向**:实机用 Node 26 直跑全量 e2e 验证;通过后删自动下载分支(保留显式预置约定),Node 版本约束以 engines 纳入主 toolchain,同步修订 e2e-tests/CLAUDE.md:23-25;若验证暴露 tauri-service 链路仍有 Node 26 问题,把新证据登记为触发条件。附带修正:`@types/node ^26.2.0`(package.json:68)类型锚定 Node 26 而 e2e 实际跑便携 Node 22,类型/运行时错位,随本条下线自动对齐。
-- [ ] **CP-032 · wdio 家族版本矩阵经 overrides 强扭,各 override 成因无登记**(2026-09-06 核查新增)
+- [x] **CP-032 · wdio 家族版本矩阵经 overrides 强扭,各 override 成因无登记**【2026-09-07 修复销项：e2e-tests/CLAUDE.md 新增「wdio 版本矩阵与 overrides 对齐契约」节(七 override 成因表 + 谁钉谁契约)，ADR-0006 同步补登记；实查 tauri-service latest=1.4.0 仍精确硬钉→维持不动作分支，契约第 1 条成为后续同步点】
   来源:package.json:92-100(overrides 段)、ADR-0006(仅登记「overrides 段保持现状」,无成因)。当时理由(无登记,本次挖掘):@wdio/tauri-service@1.3.0 硬钉 webdriverio 9.30.0 / @wdio/globals 9.29.1,与主声明 ^9.30.1/^9.31.0 冲突,靠 overrides 强扭对齐,家族实际混跑 9.29.1/9.30.0/9.30.1/9.31.x;serialize-javascript/deepmerge-ts/@puppeteer/browsers/glob 四项成因全仓无登记。问题本质:e2e 版本真值源分裂——上游硬钉与主声明靠 overrides 粘合,随 `^` 浮动游离于版本评审;tauri-service 或 wdio 升 major 时 override 需手工重对齐,缺登记即缺同步点。**修改方向**:在 e2e-tests/CLAUDE.md 登记各 override 成因与「谁钉谁」对齐契约(tauri-service 升级时同步重估);评估 @wdio/* 全家跟随 tauri-service 锁定节奏统一升降,或上游放开硬钉后去 overrides 化。
 - [ ] **CP-033 · KaTeX 字体构建期内联产物入库**(2026-09-06 核查新增,ADR-0018 接受次优未入册)
   来源:ADR-0018、src/panels/markdown/CLAUDE.md:23、scripts/gen-katex-inline.mjs、src/panels/markdown/generated/katexInlineCss.ts。当时理由:运行时经 asset 协议取字体的 CORS 行为未实证,不冒险→构建期生成物(~360KB)提交入库。问题本质:字体资源管理转为源码树生成物——katex 升级须重跑脚本 + git diff 人工审阅,防漏跑仅靠「勿手改」注释,无 CI 守卫;字体通道双轨(构建期内联 vs 运行时 asset,仅 md 面板走内联)。**修改方向**:实证 asset 协议/convertFileSrc 在 opaque origin iframe 的字体 CORS 行为(ADR-0018 被否决项重估),通过后改运行时取字体并删除生成物;维持期间给 gen 脚本加 CI diff 守卫(katex 升级漏跑即红)。
-- [ ] **CP-038 · `@types/markdown-it` 精确 pin 偏离 ADR-0006 依赖版本策略**(2026-09-06 存疑复核转入)
+- [x] **CP-038 · `@types/markdown-it` 精确 pin 偏离 ADR-0006 依赖版本策略**【2026-09-07 修复销项：pin 改回 `^14.2.0` 走无成因正常路径(tsc 零新错)，无需 ADR-0006 例外登记】
   来源:package.json:67(`"@types/markdown-it": "14.2.0"` 精确 pin,无登记理由)、ADR-0006(.claude/adr.md:153,devDependencies 全 `^`)。当时理由:无登记——可能是疏忽而非有意妥协。问题本质:依赖版本策略出现无登记的破口,同类偏离无防漂移守卫,后续者无从判断该 pin 是兼容规避还是手滑。**修改方向**:确认 pin 成因——若曾有兼容问题,在 ADR-0006 或 package.json 注释补登记;若无,改回 `^14.2.0` 并回归 L2 验证。
 
 ## 二、后端架构与平台
@@ -79,7 +79,7 @@
   来源:`src/panels/CLAUDE.md`。当时理由:极端场景降级尺寸。问题本质:超时后以默认尺寸建立终端,真实布局稍后到达产生 resize 抖动;等待与回退策略是计时猜测而非事件驱动。2026-09-06 核查实证:useXterm.ts:307-384 数值与轮询实现原样。**修改方向**:等待改事件驱动——容器尺寸就绪经 ResizeObserver 首帧回调或 Dockview onDidLayoutChange 显式信号驱动 spawn;超时回退保留作防御底线。
 - [ ] **CP-020 · Ctrl+C 中断滞留 `working` 状态已知行为(登记不修)**
   来源:`src/panels/CLAUDE.md`。当时理由:CC 中断不发射 hook 事件,状态机无中断出边,滞留至下一事件/60s idle_prompt 转 attention。问题本质:用户按下中断后 UI 长时间保持「working」假象——状态机缺「中断」事件源。2026-09-06 核查实证:keyboard.ts Ctrl+C 不注册命令(前端无中断事件源)、状态机无中断出边,原样。**修改方向**:前端自建中断事件源——ShortcutRegistry 对 terminal 上下文 Ctrl+C(保留键)派发本地 interrupt 动作,将该面板 tabStatus 由 working 置 attention(或新增 interrupted 态);不依赖 claude 上游发事件,60s 兜底语义保留。
-- [ ] **CP-021 · 历史区相对时间无 ticker,不自动刷新**【2026-09-06 核查修正:刷新寄生数据快照节奏】
+- [x] **CP-021 · 历史区相对时间无 ticker,不自动刷新**【2026-09-07 修复销项：相对时间基准 now 经 navTree 宿主 60s ticker 注入 NavHistoryRow 重算(prop 必填)，与数据层快照节奏解耦，禁用/慢档不冻结；agentHistory/CLAUDE.md MC-318 已改写为已修口径】
   来源:`src/features/agentHistory/CLAUDE.md`(MC-318,「视为可接受,不修」)。当时理由:渲染时计算,等其它状态变更触发重渲染。**核查修正**:F12 后历史数据经 backgroundTaskScheduler 定时广播快照(默认 3s,可配 2-300s、可禁用)间接驱动重渲染——「不自动刷新」失真;但渲染层无自主 ticker 的本质未变:禁用 sessionRefresh 或调至慢档时,相对时间仍冻结失真。**修改方向**:NavHistoryRow 或 navTree 宿主挂 60s 级 ticker(照 useAgentStatus.ts:92 的 60s ticker 先例)驱动渲染层重算,与数据层节奏解耦。
 - [ ] **CP-022 · CodeMirror 大文件不虚拟化,10MB 硬上限**【2026-09-06 核查修正:「只能依赖上游」不成立】
   来源:ADR-0009 FE-31、`src/panels/editor/CLAUDE.md`。当时理由:CM6 文档模型不支持部分加载;分块 + 10MB 上限 + 1MB 警告三层防线削峰。**核查修正**:CM6 核心不支持部分加载属实(2026 年仍如此),但生态已有分片/虚拟化只读方案,「只能依赖上游」不成立。上限语义已在 gitshow/diff 面板家族固化(复用同阈值)。**修改方向**:10MB 可编辑上限不变,补超限文件的只读分片浏览路径(虚拟化行窗口 + 按需 range 读块);编辑器与 gitshow/diff 的超限拒绝语义改引导到只读浏览。
@@ -117,11 +117,11 @@
 
 ## 六、遗留清理与同步点
 
-- [ ] **CP-025 · 退役模块目录遗留(sidebar)**
+- [x] **CP-025 · 退役模块目录遗留(sidebar)**【2026-09-07 修复销项：目录物理删除，agent-history-restore.test.ts:4 误导注释修正，skills config.json 悬空登记清除】
   来源:`src/features/sidebar/CLAUDE.md`(NAV-06)。当时理由:「本目录待清理:目录删除时本文件一并删除」。问题本质:退役代码与文档滞留仓库,存在即被读。2026-09-06 核查实证:目录仅剩 CLAUDE.md,无活代码消费;「误导」已有活实证——agent-history-restore.test.ts:4 注释仍把 makeEmptyLayout 记到 sidebar 名下(实际 mock navTree)。**修改方向**:目录物理删除(连同 CLAUDE.md),消费/引用已全部归零;顺带修正该测试注释。删除动作本身即闭合。
-- [ ] **CP-026 · `useAgentStatus` 数据 hook 留存(视图已退役)**【2026-09-06 核查加重:返回面含死字段】
+- [x] **CP-026 · `useAgentStatus` 数据 hook 留存(视图已退役)**【2026-09-07 修复销项：hook 迁入 navTree(唯一消费模块)、返回面收窄为 AgentSessionRow[] 死面删除，agentStatus 目录随之删除，有效约束随迁 navTree/CLAUDE.md】
   来源:`src/features/agentStatus/CLAUDE.md`。当时理由:数据层为导航树保留,组件层删除。**核查加重**:hook 不只驻错目录——唯一生产消费方 useNavTree.ts:99 只解构 `rows`,返回面 `state`/`currentProjectName`/`now` 是已退役视图时代的死面(生产零消费,唯一「消费方」是测试 mock 形状)。**修改方向**:useAgentStatus.ts 迁入 navTree(唯一消费模块),返回类型收窄为导航树所需(行数组 + 行类型);agentStatus 目录随之删除,其 CLAUDE.md 仍有效的约束(行建模双/三通道、MC-205、FE-23 等)随迁入 navTree CLAUDE.md。
-- [ ] **CP-027 · 启动链 fail-safe 三处静态色硬编码,手动同步**
+- [x] **CP-027 · 启动链 fail-safe 三处静态色硬编码,手动同步**【2026-09-07 修复销项：构建期注入闭合——scripts/sync-startup-colors.mjs 自 linear.ts 提取改写 index.html/tauri.conf.json/main.tsx(常量模块)，三处「既定例外」登记与交叉引用删除，硬约束 #6 回归无例外；startupColors.ts 为生成物禁手改】
   来源:ADR-0002、`src/theme/CLAUDE.md`(改 linear 值须同步 index.html/tauri.conf.json/main.tsx)。当时理由:静态层无法用 TS token,收编被否决,注释交叉引用兜底。问题本质:配色单点(硬约束 #6)在此三处破口,人工同步是腐化源。2026-09-06 核查实证:三处硬编码与 linear.ts 现值一致,交叉引用注释、四处登记全部在位。**修改方向**:构建期注入闭合——index.html 的 body 底色与 tauri.conf.json 的 backgroundColor 由打包脚本从 linear.ts(或抽出的单一色源)生成/改写;main.tsx 超时页远晚于 index.html 渲染,可直接改读方案注册表或单一常量模块;闭合后删除三处「既定例外」登记与交叉引用注释,硬约束 #6 回归无例外。
 
 ---

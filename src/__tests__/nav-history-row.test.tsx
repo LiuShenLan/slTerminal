@@ -74,17 +74,20 @@ function hexToRgb(hex: string): string {
   return `rgb(${r}, ${g}, ${b})`;
 }
 
-/** 渲染行组件，返回根元素与 mock 回调（status 缺省 undefined = 无运行状态） */
+/** 渲染行组件，返回根元素与 mock 回调（status 缺省 undefined = 无运行状态；
+ *  now 缺省 = Date.now()——CP-021 后行内无自主 Date.now，基准经 prop 注入） */
 function renderRow(
   session: AgentHistorySession,
-  props: { status?: AgentStatus | null } = {},
+  props: { status?: AgentStatus | null; now?: number } = {},
 ) {
   const onDoubleClick = vi.fn();
   const onContextMenu = vi.fn();
+  const now = props.now ?? Date.now();
   const utils = render(
     <NavHistoryRow
       session={session}
       status={props.status}
+      now={now}
       onDoubleClick={onDoubleClick}
       onContextMenu={onContextMenu}
     />,
@@ -92,19 +95,20 @@ function renderRow(
   const row = utils.container.querySelector(
     '[data-e2e="nav-row-session"]',
   ) as HTMLElement;
-  return { ...utils, row, onDoubleClick, onContextMenu };
+  return { ...utils, row, onDoubleClick, onContextMenu, now };
 }
 
 describe("NavHistoryRow 渲染", () => {
   it("单行式：标题 + 右侧相对时间（11px），行高 30px（NAV-03 单行化）", () => {
     const session = makeSession();
-    const { getByText, row } = renderRow(session);
+    const { getByText, row, now } = renderRow(session);
 
     // 标题渲染 + 字号继承自行容器 12.5px（NAV-03 单行规范，nameStyle 无内联字号）
     expect(getByText("修复登录 bug 的会话")).toBeTruthy();
     expect(row.style.fontSize).toBe("12.5px");
-    // 相对时间（与 historyModel 同源函数计算期望值），时间 span 11px fg-4
-    const timeEl = getByText(formatRelativeTime(session.mtimeMs, Date.now()));
+    // 相对时间（与 historyModel 同源函数计算期望值——renderRow 注入的 now 基准），
+    // 时间 span 11px fg-4
+    const timeEl = getByText(formatRelativeTime(session.mtimeMs, now));
     expect(timeEl.style.fontSize).toBe("11px");
     // 单行结构：行高 30px（SESSION_ROW_HEIGHT 契约）
     expect(row.style.height).toBe(`${SESSION_ROW_HEIGHT}px`);
@@ -179,7 +183,7 @@ describe("NavHistoryRow 状态标记（NAV-10：圆点恒渲染）", () => {
 
   it("单行子元素序：状态圆点 → CLI logo → 标题 → 相对时间（NAV-03 结构契约）", () => {
     const session = makeSession();
-    const { row } = renderRow(session, { status: "working" });
+    const { row, now } = renderRow(session, { status: "working" });
 
     const logoImg = row.querySelector('img[alt="CLI 图标"]');
     expect(logoImg).toBeTruthy();
@@ -187,10 +191,27 @@ describe("NavHistoryRow 状态标记（NAV-10：圆点恒渲染）", () => {
     expect(children[0].getAttribute("data-testid")).toBe("status-dot");
     expect(children[0].textContent).toBe("working");
     expect(children[1]).toBe(logoImg);
-    // 最后一项为相对时间 span
+    // 最后一项为相对时间 span（期望值用 renderRow 注入的 now）
     const last = children[children.length - 1] as HTMLElement;
-    expect(last.textContent).toBe(
-      formatRelativeTime(session.mtimeMs, Date.now()),
+    expect(last.textContent).toBe(formatRelativeTime(session.mtimeMs, now));
+  });
+
+  it("rerender 传 now+60s → 相对时间文本随 prop 重算（无内部 Date.now）", () => {
+    const session = makeSession({ mtimeMs: Date.now() - 60_000 });
+    const { row, now, rerender } = renderRow(session);
+    expect(row.textContent).toContain(formatRelativeTime(session.mtimeMs, now));
+    const later = now + 60_000;
+    rerender(
+      <NavHistoryRow
+        session={session}
+        status={undefined}
+        now={later}
+        onDoubleClick={vi.fn()}
+        onContextMenu={vi.fn()}
+      />,
+    );
+    expect(row.textContent).toContain(
+      formatRelativeTime(session.mtimeMs, later),
     );
   });
 });

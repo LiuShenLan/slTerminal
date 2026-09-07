@@ -9,7 +9,8 @@
   "ignore": [
     "src/__tests__/**",
     ".claude/**",
-    "src-tauri/**"
+    "src-tauri/**",
+    "scripts/**"
   ],
   "ignoreIssues": {
     "src/features/agentHistory/historyModel.ts": [
@@ -18,9 +19,6 @@
     ],
     "src/features/agentHistory/restoreSession.ts": [
       "exports"
-    ],
-    "src/features/agentStatus/useAgentStatus.ts": [
-      "types"
     ],
     "src/features/cliProfiles/cliProfileRegistry.ts": [
       "exports"

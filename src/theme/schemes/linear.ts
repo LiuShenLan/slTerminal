@@ -3,12 +3,6 @@
 // 值契约锚点 = .claude/adr.md ADR-0003（执行 agent 只准照抄本文件现有值，禁止自估色值）。
 // 消费注释权威在 types.ts 各槽位 JSDoc（决策 D8）——本文件只含 fail-safe 交叉引用。
 //
-// 交叉引用（启动链 fail-safe）：React 挂载前的静态硬编码色不在方案系统内，
-// 改本文件对应 ui 值时必须手动同步——
-//   ui.appBgPrimary (#0a0a0b) ↔ index.html:10 body background
-//   ui.appBgPrimary (#0a0a0b) ↔ src-tauri/tauri.conf.json:21 window backgroundColor
-//   ui.panelBg (#0a0a0b) / ui.errorFg (#d9706b) ↔ src/main.tsx:28 超时错误页（文字 #ece9e4）
-//
 // linear 为 UI 重设计定稿方案，值以附录 A 为契约随意图演进。
 
 import { oneDark } from "@codemirror/theme-one-dark";
@@ -71,7 +65,7 @@ const ui: UiTokens = {
   sidebarBg: "#1a1a1e",                  // 右键菜单/弹窗底色
   secondaryBg: "#222227",                // 页签按钮/弹窗次级背景
   appBg: "#0a0a0b",                      // App 根容器背景（窗口最底层）
-  appBgPrimary: "#0a0a0b",               // 全局背景 → --sl-bg-primary（防白闪底色，见文件头 fail-safe 交叉引用）
+  appBgPrimary: "#0a0a0b",               // 全局背景 → --sl-bg-primary（防白闪底色；另为启动链 fail-safe 构建期色源,CP-027）
   appFg: "#b3aea6",                      // 全局默认文字色 → --sl-fg-primary
   editorBg: "#0a0a0b",                   // 编辑器类面板容器背景（编辑器/gitshow/diff/JsonMode 容器）
   sidebarFg: "#ece9e4",                  // 侧栏/hooks 配置面板主要文字

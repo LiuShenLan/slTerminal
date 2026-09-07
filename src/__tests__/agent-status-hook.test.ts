@@ -141,7 +141,7 @@ vi.mock("../ipc/agentHooks", () => ({
 import { renderHook, act, cleanup } from "@testing-library/react";
 import { useLayout } from "../stores/layout";
 import { useProjects } from "../stores/projects";
-import { useAgentStatus } from "../features/agentStatus/useAgentStatus";
+import { useAgentStatus } from "../features/navTree/useAgentStatus";
 import { TerminalRegistry } from "../panels/terminal/TerminalRegistry";
 import { onAgentEvent } from "../ipc/agentHooks";
 import { CLAUDE_CLI_ID } from "../features/cliProfiles/profiles/claude";
@@ -303,87 +303,41 @@ describe("useAgentStatus（行建模新语义）", () => {
   });
 
   // ──────────────────────────────────────────────────
-  // 状态机派生
+  // 状态机派生（CP-026 收窄后 = 行数组；state 死面已删）
   // ──────────────────────────────────────────────────
 
-  it("无活跃项目时返回 no-root 态且 rows 为空", () => {
+  it("无活跃项目时返回空行数组", () => {
     const { result } = renderHook(() => useAgentStatus());
 
-    expect(result.current.state).toEqual({ kind: "no-root" });
-    expect(result.current.rows).toEqual([]);
+    expect(result.current).toEqual([]);
   });
 
-  it("有项目但无终端时返回 empty 态", () => {
+  it("有项目但无终端时返回空行数组", () => {
     seedProject();
 
     const { result } = renderHook(() => useAgentStatus());
 
-    expect(result.current.state).toEqual({ kind: "empty" });
-    expect(result.current.rows).toEqual([]);
+    expect(result.current).toEqual([]);
   });
 
-  it("有项目且终端全为纯 shell（agentSession 为 null）→ 返回 empty 态", () => {
+  it("有项目且终端全为纯 shell（agentSession 为 null）→ 返回空行数组", () => {
     seedProject();
     registerTerminal("terminal-page1-0", null); // 纯 shell，无 agent 会话
 
     const { result } = renderHook(() => useAgentStatus());
 
-    expect(result.current.state).toEqual({ kind: "empty" });
-    expect(result.current.rows).toEqual([]);
+    expect(result.current).toEqual([]);
   });
 
-  // ──────────────────────────────────────────────────
-  // now ticker（问题 1b 修复：idle 会话无 hook 事件时时间文本冻结，60s 定时重算）
-  // ──────────────────────────────────────────────────
-
-  it("now：初始存在且返回形状含 now 字段（契约）", () => {
+  // 返回面收窄回归（CP-026）：防复发对照——修复前该 hook 返回对象四面
+  // （state/rows/currentProjectName/now），修复后为数组本体
+  it("返回面收窄：结果为数组，不含 state/currentProjectName/now 死面（契约）", () => {
     seedProject();
-
     const { result } = renderHook(() => useAgentStatus());
-
-    expect(typeof result.current.now).toBe("number");
-    expect(result.current.now).toBeGreaterThan(0);
-    expect(Math.abs(result.current.now - Date.now())).toBeLessThan(100);
-  });
-
-  it("now ticker：推进 <60s 不变，推进到 60s 更新 +60000", () => {
-    vi.useFakeTimers();
-    try {
-      seedProject();
-      const { result } = renderHook(() => useAgentStatus());
-      const initial = result.current.now;
-
-      // 59s → 未到 tick，不变
-      act(() => {
-        vi.advanceTimersByTime(59_000);
-      });
-      expect(result.current.now).toBe(initial);
-
-      // 再 1s（累计 60s）→ interval 触发，now 推进
-      act(() => {
-        vi.advanceTimersByTime(1_000);
-      });
-      expect(result.current.now).toBe(initial + 60_000);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("now ticker：unmount 后 interval 清理（advance 不再更新）", () => {
-    vi.useFakeTimers();
-    try {
-      seedProject();
-      const { result, unmount } = renderHook(() => useAgentStatus());
-      const initial = result.current.now;
-
-      unmount();
-      act(() => {
-        vi.advanceTimersByTime(120_000);
-      });
-      expect(result.current.now).toBe(initial);
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(Array.isArray(result.current)).toBe(true);
+    expect("state" in result.current).toBe(false);
+    expect("now" in result.current).toBe(false);
+    expect("currentProjectName" in result.current).toBe(false);
   });
 
   // ──────────────────────────────────────────────────
@@ -399,16 +353,15 @@ describe("useAgentStatus（行建模新语义）", () => {
 
     const { result } = renderHook(() => useAgentStatus());
 
-    expect(result.current.rows).toHaveLength(1);
-    expect(result.current.rows[0].panelId).toBe("terminal-page1-0");
-    expect(result.current.rows[0].pageId).toBe(pageId);
-    expect(result.current.rows[0].projectId).toBe("proj-1");
-    expect(result.current.rows[0].status).toBe("attention");
-    expect(result.current.rows[0].sessionId).toBe("s1");
-    expect(result.current.rows[0].lastEventAt).toBe(1000);
+    expect(result.current).toHaveLength(1);
+    expect(result.current[0].panelId).toBe("terminal-page1-0");
+    expect(result.current[0].pageId).toBe(pageId);
+    expect(result.current[0].projectId).toBe("proj-1");
+    expect(result.current[0].status).toBe("attention");
+    expect(result.current[0].sessionId).toBe("s1");
+    expect(result.current[0].lastEventAt).toBe(1000);
     // 行 cliId：agentSession.cliId 缺省（makeSession 未设）→ 兜底 CLAUDE_CLI_ID
-    expect(result.current.rows[0].cliId).toBe(CLAUDE_CLI_ID);
-    expect(result.current.state).toEqual({ kind: "ready" });
+    expect(result.current[0].cliId).toBe(CLAUDE_CLI_ID);
   });
 
   it("初始扫描：matchedCommand-only（无 sessionId）→ 行 sessionId 缺省不报错", () => {
@@ -417,8 +370,8 @@ describe("useAgentStatus（行建模新语义）", () => {
 
     const { result } = renderHook(() => useAgentStatus());
 
-    expect(result.current.rows).toHaveLength(1);
-    expect(result.current.rows[0].sessionId).toBeUndefined();
+    expect(result.current).toHaveLength(1);
+    expect(result.current[0].sessionId).toBeUndefined();
   });
 
   it("初始扫描：混合终端——纯 shell 不建行，活会话建行", () => {
@@ -429,8 +382,8 @@ describe("useAgentStatus（行建模新语义）", () => {
 
     const { result } = renderHook(() => useAgentStatus());
 
-    expect(result.current.rows).toHaveLength(1);
-    expect(result.current.rows[0].panelId).toBe("terminal-page1-0");
+    expect(result.current).toHaveLength(1);
+    expect(result.current[0].panelId).toBe("terminal-page1-0");
   });
 
   it("初始扫描过滤非当前项目的 panelId", () => {
@@ -440,8 +393,8 @@ describe("useAgentStatus（行建模新语义）", () => {
 
     const { result } = renderHook(() => useAgentStatus());
 
-    expect(result.current.rows).toHaveLength(1);
-    expect(result.current.rows[0].panelId).toBe("terminal-page1-0");
+    expect(result.current).toHaveLength(1);
+    expect(result.current[0].panelId).toBe("terminal-page1-0");
   });
 
   it("FE-23: 快速连续切项目 A→B→C——最终 rows 只反映 C（gen 检查丢弃过期扫描）", () => {
@@ -452,8 +405,8 @@ describe("useAgentStatus（行建模新语义）", () => {
     registerTerminal("terminal-pageB-0", makeSession({ lastEventAt: 2000 }));
 
     const { result, rerender } = renderHook(() => useAgentStatus());
-    expect(result.current.rows).toHaveLength(1);
-    expect(result.current.rows[0].panelId).toBe("terminal-pageA-0");
+    expect(result.current).toHaveLength(1);
+    expect(result.current[0].panelId).toBe("terminal-pageA-0");
 
     // 切到 B（含 B 的终端）→ rows 切换为 B 的会话行
     useProjects.setState({
@@ -472,8 +425,8 @@ describe("useAgentStatus（行建模新语义）", () => {
     });
     useLayout.setState({ activePageId: "pageB" });
     rerender();
-    expect(result.current.rows).toHaveLength(1);
-    expect(result.current.rows[0].panelId).toBe("terminal-pageB-0");
+    expect(result.current).toHaveLength(1);
+    expect(result.current[0].panelId).toBe("terminal-pageB-0");
 
     // 再切到 C（无终端）→ B 的行不残留（最终态 = 空）
     useProjects.setState({
@@ -492,8 +445,7 @@ describe("useAgentStatus（行建模新语义）", () => {
     });
     useLayout.setState({ activePageId: "pageC" });
     rerender();
-    expect(result.current.rows).toHaveLength(0);
-    expect(result.current.state).toEqual({ kind: "empty" });
+    expect(result.current).toHaveLength(0);
   });
 
   // ──────────────────────────────────────────────────
@@ -505,7 +457,7 @@ describe("useAgentStatus（行建模新语义）", () => {
     registerTerminal("terminal-page1-0", null); // 先注册为纯 shell
 
     const { result } = renderHook(() => useAgentStatus());
-    expect(result.current.rows).toHaveLength(0); // 纯 shell 无行
+    expect(result.current).toHaveLength(0); // 纯 shell 无行
 
     // sessionChange 触发——设置 agentSession 非 null
     act(() => {
@@ -517,10 +469,10 @@ describe("useAgentStatus（行建模新语义）", () => {
       });
     });
 
-    expect(result.current.rows).toHaveLength(1);
-    expect(result.current.rows[0].panelId).toBe("terminal-page1-0");
-    expect(result.current.rows[0].status).toBe("attention");
-    expect(result.current.rows[0].sessionId).toBe("s1");
+    expect(result.current).toHaveLength(1);
+    expect(result.current[0].panelId).toBe("terminal-page1-0");
+    expect(result.current[0].status).toBe("attention");
+    expect(result.current[0].sessionId).toBe("s1");
   });
 
   it("sessionChange 建行携 cliId（OSC 133 通道：agentSession.cliId 自然驱动，MC-410）", () => {
@@ -528,7 +480,7 @@ describe("useAgentStatus（行建模新语义）", () => {
     registerTerminal("terminal-page1-0", null); // 先注册为纯 shell
 
     const { result } = renderHook(() => useAgentStatus());
-    expect(result.current.rows).toHaveLength(0);
+    expect(result.current).toHaveLength(0);
 
     // OSC 133 命中后 setAgentSession 携 cliId（MC-107 写入 profile.id）
     act(() => {
@@ -539,8 +491,8 @@ describe("useAgentStatus（行建模新语义）", () => {
       });
     });
 
-    expect(result.current.rows).toHaveLength(1);
-    expect(result.current.rows[0].cliId).toBe(CLAUDE_CLI_ID);
+    expect(result.current).toHaveLength(1);
+    expect(result.current[0].cliId).toBe(CLAUDE_CLI_ID);
   });
 
   it("sessionChange 建行幂等——行已存在时跳过不建重复行", () => {
@@ -548,7 +500,7 @@ describe("useAgentStatus（行建模新语义）", () => {
     registerTerminal("terminal-page1-0", makeSession({ lastEventAt: 1000 }));
 
     const { result } = renderHook(() => useAgentStatus());
-    expect(result.current.rows).toHaveLength(1);
+    expect(result.current).toHaveLength(1);
 
     // 再次 sessionChange（同一 panelId）——不应建重复行
     act(() => {
@@ -558,7 +510,7 @@ describe("useAgentStatus（行建模新语义）", () => {
       });
     });
 
-    expect(result.current.rows).toHaveLength(1);
+    expect(result.current).toHaveLength(1);
   });
 
   // ──────────────────────────────────────────────────
@@ -569,14 +521,14 @@ describe("useAgentStatus（行建模新语义）", () => {
     seedProject();
 
     const { result } = renderHook(() => useAgentStatus());
-    expect(result.current.rows).toHaveLength(0);
+    expect(result.current).toHaveLength(0);
 
     act(() => {
       registerTerminalWithNotify("terminal-page1-0", null);
     });
 
     // register 事件不建行——建行由 sessionChange（非 null）负责
-    expect(result.current.rows).toHaveLength(0);
+    expect(result.current).toHaveLength(0);
   });
 
   // ──────────────────────────────────────────────────
@@ -588,7 +540,7 @@ describe("useAgentStatus（行建模新语义）", () => {
     // 不预注册 terminal——hook 事件独立建行
 
     const { result } = renderHook(() => useAgentStatus());
-    expect(result.current.rows).toHaveLength(0);
+    expect(result.current).toHaveLength(0);
 
     act(() => {
       capturedCallback.current?.(
@@ -601,12 +553,12 @@ describe("useAgentStatus（行建模新语义）", () => {
       );
     });
 
-    expect(result.current.rows).toHaveLength(1);
-    expect(result.current.rows[0].panelId).toBe("terminal-page1-0");
-    expect(result.current.rows[0].status).toBe("attention");
-    expect(result.current.rows[0].sessionId).toBe("hook-s1");
+    expect(result.current).toHaveLength(1);
+    expect(result.current[0].panelId).toBe("terminal-page1-0");
+    expect(result.current[0].status).toBe("attention");
+    expect(result.current[0].sessionId).toBe("hook-s1");
     // 行 cliId（MC-410）：缺省分支——payload 无 cliId + registry 无 agentSession → CLAUDE_CLI_ID
-    expect(result.current.rows[0].cliId).toBe(CLAUDE_CLI_ID);
+    expect(result.current[0].cliId).toBe(CLAUDE_CLI_ID);
   });
 
   it("hook 事件建行携 cliId（MC-205 显式分支：payload.cliId 经可选字段注入）", () => {
@@ -624,8 +576,8 @@ describe("useAgentStatus（行建模新语义）", () => {
       );
     });
 
-    expect(result.current.rows).toHaveLength(1);
-    expect(result.current.rows[0].cliId).toBe(CLAUDE_CLI_ID);
+    expect(result.current).toHaveLength(1);
+    expect(result.current[0].cliId).toBe(CLAUDE_CLI_ID);
   });
 
   it("hook 事件建行携 cliId（MC-205 反查分支：agentSession.cliId 优先于缺省）", () => {
@@ -637,7 +589,7 @@ describe("useAgentStatus（行建模新语义）", () => {
     );
 
     const { result } = renderHook(() => useAgentStatus());
-    expect(result.current.rows).toHaveLength(1);
+    expect(result.current).toHaveLength(1);
 
     // SessionEnd 删行（hook 事件通道；registry agentSession 仍存在）
     act(() => {
@@ -645,7 +597,7 @@ describe("useAgentStatus（行建模新语义）", () => {
         makePayload({ event: "SessionEnd", timestamp: 2000 }),
       );
     });
-    expect(result.current.rows).toHaveLength(0);
+    expect(result.current).toHaveLength(0);
 
     // 新事件 → 建行 → cliId 反查 agentSession.cliId
     act(() => {
@@ -653,8 +605,8 @@ describe("useAgentStatus（行建模新语义）", () => {
         makePayload({ event: "SessionStart", timestamp: 3000 }),
       );
     });
-    expect(result.current.rows).toHaveLength(1);
-    expect(result.current.rows[0].cliId).toBe(CLAUDE_CLI_ID);
+    expect(result.current).toHaveLength(1);
+    expect(result.current[0].cliId).toBe(CLAUDE_CLI_ID);
   });
 
   it("hook 事件建行携 cliId（ZQ-2：空串/仅空白 cliId 与 null/undefined 同等回退缺省）", () => {
@@ -672,9 +624,9 @@ describe("useAgentStatus（行建模新语义）", () => {
       );
     });
 
-    expect(result.current.rows).toHaveLength(1);
+    expect(result.current).toHaveLength(1);
     // 空串 cliId 不短路：回退缺省 CLAUDE_CLI_ID（原 ?? 链遇空串会解析出空串 profile 导致跳过）
-    expect(result.current.rows[0].cliId).toBe(CLAUDE_CLI_ID);
+    expect(result.current[0].cliId).toBe(CLAUDE_CLI_ID);
   });
 
   it("null 映射事件首达建行 status=null 无图标（ZQ-3 决策 2）——SessionStart 丢失场景感知存活", () => {
@@ -685,7 +637,7 @@ describe("useAgentStatus（行建模新语义）", () => {
     // 不预注册 terminal——hook 事件独立建行
 
     const { result } = renderHook(() => useAgentStatus());
-    expect(result.current.rows).toHaveLength(0);
+    expect(result.current).toHaveLength(0);
 
     act(() => {
       capturedCallback.current?.(
@@ -698,10 +650,10 @@ describe("useAgentStatus（行建模新语义）", () => {
     });
 
     // 建行：会话感知存活
-    expect(result.current.rows).toHaveLength(1);
-    expect(result.current.rows[0].panelId).toBe("terminal-page1-0");
+    expect(result.current).toHaveLength(1);
+    expect(result.current[0].panelId).toBe("terminal-page1-0");
     // status null = 无状态（StatusDot 不渲染圆点）——不误标 attention
-    expect(result.current.rows[0].status).toBeNull();
+    expect(result.current[0].status).toBeNull();
   });
 
   it("未知 cliId（未注册）→ console.warn + 跳过（不建行，MC-206）", () => {
@@ -717,7 +669,7 @@ describe("useAgentStatus（行建模新语义）", () => {
       });
 
       // 跳过：不建行 + console.warn（不抛异常）
-      expect(result.current.rows).toHaveLength(0);
+      expect(result.current).toHaveLength(0);
       expect(warnSpy).toHaveBeenCalled();
     } finally {
       warnSpy.mockRestore();
@@ -729,7 +681,7 @@ describe("useAgentStatus（行建模新语义）", () => {
     registerTerminal("terminal-page1-0", makeSession({ lastEventAt: 500 }));
 
     const { result } = renderHook(() => useAgentStatus());
-    expect(result.current.rows).toHaveLength(1);
+    expect(result.current).toHaveLength(1);
 
     act(() => {
       capturedCallback.current?.(
@@ -740,9 +692,9 @@ describe("useAgentStatus（行建模新语义）", () => {
       );
     });
 
-    expect(result.current.rows).toHaveLength(1);
-    expect(result.current.rows[0].status).toBe("working"); // 更新为 working
-    expect(result.current.rows[0].lastEventAt).toBe(1000);
+    expect(result.current).toHaveLength(1);
+    expect(result.current[0].status).toBe("working"); // 更新为 working
+    expect(result.current[0].lastEventAt).toBe(1000);
   });
 
   // ──────────────────────────────────────────────────
@@ -754,15 +706,14 @@ describe("useAgentStatus（行建模新语义）", () => {
     registerTerminal("terminal-page1-0", makeSession({ lastEventAt: 1000 }));
 
     const { result } = renderHook(() => useAgentStatus());
-    expect(result.current.rows).toHaveLength(1);
+    expect(result.current).toHaveLength(1);
 
     act(() => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (TerminalRegistry as any).setAgentSession("terminal-page1-0", null);
     });
 
-    expect(result.current.rows).toHaveLength(0);
-    expect(result.current.state).toEqual({ kind: "empty" });
+    expect(result.current).toHaveLength(0);
   });
 
   it("SessionEnd hook 事件 → 删行", () => {
@@ -770,7 +721,7 @@ describe("useAgentStatus（行建模新语义）", () => {
     registerTerminal("terminal-page1-0", makeSession({ lastEventAt: 1000 }));
 
     const { result } = renderHook(() => useAgentStatus());
-    expect(result.current.rows).toHaveLength(1);
+    expect(result.current).toHaveLength(1);
 
     act(() => {
       capturedCallback.current?.(
@@ -778,7 +729,7 @@ describe("useAgentStatus（行建模新语义）", () => {
       );
     });
 
-    expect(result.current.rows).toHaveLength(0);
+    expect(result.current).toHaveLength(0);
   });
 
   it("Exit hook 事件 → 删行", () => {
@@ -786,7 +737,7 @@ describe("useAgentStatus（行建模新语义）", () => {
     registerTerminal("terminal-page1-0", makeSession({ lastEventAt: 1000 }));
 
     const { result } = renderHook(() => useAgentStatus());
-    expect(result.current.rows).toHaveLength(1);
+    expect(result.current).toHaveLength(1);
 
     act(() => {
       capturedCallback.current?.(
@@ -794,7 +745,7 @@ describe("useAgentStatus（行建模新语义）", () => {
       );
     });
 
-    expect(result.current.rows).toHaveLength(0);
+    expect(result.current).toHaveLength(0);
   });
 
   it("remove 事件 → 删行（deps [] 稳定订阅——remove 事件不丢失，R4 根因修复）", () => {
@@ -802,14 +753,14 @@ describe("useAgentStatus（行建模新语义）", () => {
     registerTerminal("terminal-page1-0", makeSession({ lastEventAt: 1000 }));
 
     const { result } = renderHook(() => useAgentStatus());
-    expect(result.current.rows).toHaveLength(1);
+    expect(result.current).toHaveLength(1);
 
     act(() => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (TerminalRegistry as any).remove("terminal-page1-0");
     });
 
-    expect(result.current.rows).toHaveLength(0);
+    expect(result.current).toHaveLength(0);
   });
 
   it("SessionEnd 到达时行不存在（hook 事件建的行）→ 无副作用", () => {
@@ -827,7 +778,7 @@ describe("useAgentStatus（行建模新语义）", () => {
         }),
       );
     });
-    expect(result.current.rows).toHaveLength(1);
+    expect(result.current).toHaveLength(1);
 
     // SessionEnd 删行
     act(() => {
@@ -840,7 +791,7 @@ describe("useAgentStatus（行建模新语义）", () => {
       );
     });
 
-    expect(result.current.rows).toHaveLength(0);
+    expect(result.current).toHaveLength(0);
   });
 
   // ──────────────────────────────────────────────────
@@ -852,7 +803,7 @@ describe("useAgentStatus（行建模新语义）", () => {
     registerTerminal("terminal-page1-0", makeSession({ lastEventAt: 1000 }));
 
     const { result } = renderHook(() => useAgentStatus());
-    expect(result.current.rows).toHaveLength(1);
+    expect(result.current).toHaveLength(1);
 
     // 发送 page2 的事件（page2 不在当前项目）
     act(() => {
@@ -865,8 +816,8 @@ describe("useAgentStatus（行建模新语义）", () => {
       );
     });
 
-    expect(result.current.rows).toHaveLength(1);
-    expect(result.current.rows[0].panelId).toBe("terminal-page1-0");
+    expect(result.current).toHaveLength(1);
+    expect(result.current[0].panelId).toBe("terminal-page1-0");
   });
 
   it("sessionChange 来自其他项目 → 不进入当前项目 rows", () => {
@@ -874,7 +825,7 @@ describe("useAgentStatus（行建模新语义）", () => {
     registerTerminal("terminal-page2-0", makeSession({ lastEventAt: 1000 }));
 
     const { result } = renderHook(() => useAgentStatus());
-    expect(result.current.rows).toHaveLength(0);
+    expect(result.current).toHaveLength(0);
 
     // sessionChange 对 page2——不建行
     act(() => {
@@ -884,7 +835,7 @@ describe("useAgentStatus（行建模新语义）", () => {
       });
     });
 
-    expect(result.current.rows).toHaveLength(0);
+    expect(result.current).toHaveLength(0);
   });
 
   // ──────────────────────────────────────────────────
@@ -897,7 +848,7 @@ describe("useAgentStatus（行建模新语义）", () => {
     registerTerminal("terminal-pageA-0", makeSession({ lastEventAt: 1000 }));
 
     const { result, rerender } = renderHook(() => useAgentStatus());
-    expect(result.current.rows).toHaveLength(1);
+    expect(result.current).toHaveLength(1);
 
     // 切换到项目 B（无 pageA 的终端）
     useProjects.setState({
@@ -917,9 +868,8 @@ describe("useAgentStatus（行建模新语义）", () => {
     useLayout.setState({ activePageId: "pageB" });
     rerender();
 
-    // 项目 B 无终端 → empty
-    expect(result.current.rows).toHaveLength(0);
-    expect(result.current.state).toEqual({ kind: "empty" });
+    // 项目 B 无终端 → 空行
+    expect(result.current).toHaveLength(0);
   });
 
   // ──────────────────────────────────────────────────
@@ -932,13 +882,13 @@ describe("useAgentStatus（行建模新语义）", () => {
     registerTerminal("terminal-page1-1", makeSession({ lastEventAt: 2000 }));
 
     const { result } = renderHook(() => useAgentStatus());
-    expect(result.current.rows).toHaveLength(2);
+    expect(result.current).toHaveLength(2);
 
     // 倒序：较晚时间在前
-    expect(result.current.rows[0].panelId).toBe("terminal-page1-1");
-    expect(result.current.rows[0].lastEventAt).toBe(2000);
-    expect(result.current.rows[1].panelId).toBe("terminal-page1-0");
-    expect(result.current.rows[1].lastEventAt).toBe(1000);
+    expect(result.current[0].panelId).toBe("terminal-page1-1");
+    expect(result.current[0].lastEventAt).toBe(2000);
+    expect(result.current[1].panelId).toBe("terminal-page1-0");
+    expect(result.current[1].lastEventAt).toBe(1000);
   });
 
   // ──────────────────────────────────────────────────
@@ -950,7 +900,7 @@ describe("useAgentStatus（行建模新语义）", () => {
     registerTerminal("terminal-page1-0", makeSession({ lastEventAt: 1000 }));
 
     const { result } = renderHook(() => useAgentStatus());
-    expect(result.current.rows[0].usage).toBeUndefined();
+    expect(result.current[0].usage).toBeUndefined();
 
     act(() => {
       capturedCallback.current?.(
@@ -962,10 +912,10 @@ describe("useAgentStatus（行建模新语义）", () => {
       );
     });
 
-    expect(result.current.rows[0].usage).toEqual({ usedPercentage: 23.6 });
+    expect(result.current[0].usage).toEqual({ usedPercentage: 23.6 });
     // 不动状态/时间（usage 更新不视为会话活动）
-    expect(result.current.rows[0].status).toBe("attention");
-    expect(result.current.rows[0].lastEventAt).toBe(1000);
+    expect(result.current[0].status).toBe("attention");
+    expect(result.current[0].lastEventAt).toBe(1000);
   });
 
   it("ContextUsage 信号 → 行不存在时不建行（先于建行到达时忽略）", () => {
@@ -973,7 +923,7 @@ describe("useAgentStatus（行建模新语义）", () => {
     // 不注册终端——无行
 
     const { result } = renderHook(() => useAgentStatus());
-    expect(result.current.rows).toHaveLength(0);
+    expect(result.current).toHaveLength(0);
 
     act(() => {
       capturedCallback.current?.(
@@ -985,8 +935,7 @@ describe("useAgentStatus（行建模新语义）", () => {
     });
 
     // 不建行（usage 事件不是建行通道）
-    expect(result.current.rows).toHaveLength(0);
-    expect(result.current.state).toEqual({ kind: "empty" });
+    expect(result.current).toHaveLength(0);
   });
 
   it("ContextUsage 信号字段缺失（usedPercentage undefined）→ 忽略不更新", () => {
@@ -1004,8 +953,8 @@ describe("useAgentStatus（行建模新语义）", () => {
       );
     });
 
-    expect(result.current.rows[0].usage).toBeUndefined();
-    expect(result.current.rows).toHaveLength(1);
+    expect(result.current[0].usage).toBeUndefined();
+    expect(result.current).toHaveLength(1);
   });
 
   it("ContextUsage 信号不触发删除（非 SessionEnd/Exit 通道）", () => {
@@ -1013,7 +962,7 @@ describe("useAgentStatus（行建模新语义）", () => {
     registerTerminal("terminal-page1-0", makeSession({ lastEventAt: 1000 }));
 
     const { result } = renderHook(() => useAgentStatus());
-    expect(result.current.rows).toHaveLength(1);
+    expect(result.current).toHaveLength(1);
 
     act(() => {
       capturedCallback.current?.(
@@ -1024,7 +973,7 @@ describe("useAgentStatus（行建模新语义）", () => {
       );
     });
 
-    expect(result.current.rows).toHaveLength(1);
+    expect(result.current).toHaveLength(1);
   });
 
   // ──────────────────────────────────────────────────
@@ -1050,9 +999,9 @@ describe("useAgentStatus（行建模新语义）", () => {
     });
 
     // 应只有一行（同一 panelId），状态和时间戳已更新
-    expect(result.current.rows).toHaveLength(1);
-    expect(result.current.rows[0].status).toBe("working");
-    expect(result.current.rows[0].lastEventAt).toBe(2000);
+    expect(result.current).toHaveLength(1);
+    expect(result.current[0].status).toBe("working");
+    expect(result.current[0].lastEventAt).toBe(2000);
   });
 
   it("Stop 后新事件也能更新该行", () => {
@@ -1067,7 +1016,7 @@ describe("useAgentStatus（行建模新语义）", () => {
         makePayload({ event: "Stop", timestamp: 1000 }),
       );
     });
-    expect(result.current.rows[0].status).toBe("done");
+    expect(result.current[0].status).toBe("done");
 
     // 新事件 → 更新为 working
     act(() => {
@@ -1075,9 +1024,9 @@ describe("useAgentStatus（行建模新语义）", () => {
         makePayload({ event: "PreToolUse", timestamp: 2000 }),
       );
     });
-    expect(result.current.rows).toHaveLength(1);
-    expect(result.current.rows[0].status).toBe("working");
-    expect(result.current.rows[0].lastEventAt).toBe(2000);
+    expect(result.current).toHaveLength(1);
+    expect(result.current[0].status).toBe("working");
+    expect(result.current[0].lastEventAt).toBe(2000);
   });
 
   // ──────────────────────────────────────────────────
@@ -1096,7 +1045,7 @@ describe("useAgentStatus（行建模新语义）", () => {
         makePayload({ event: "PreToolUse", timestamp: 1000 }),
       );
     });
-    expect(result.current.rows[0].status).toBe("working");
+    expect(result.current[0].status).toBe("working");
 
     // Notification(auth_success) → eventToStatus 返回 null
     act(() => {
@@ -1110,8 +1059,8 @@ describe("useAgentStatus（行建模新语义）", () => {
     });
 
     // 状态应保持 working，不被 null 覆盖
-    expect(result.current.rows[0].status).toBe("working");
-    expect(result.current.rows[0].lastEventAt).toBe(2000);
+    expect(result.current[0].status).toBe("working");
+    expect(result.current[0].lastEventAt).toBe(2000);
   });
 
   it("未知事件（eventToStatus 返回 null）不覆盖状态", () => {
@@ -1119,7 +1068,7 @@ describe("useAgentStatus（行建模新语义）", () => {
     registerTerminal("terminal-page1-0", makeSession({ lastEventAt: 1000 }));
 
     const { result } = renderHook(() => useAgentStatus());
-    expect(result.current.rows[0].status).toBe("attention");
+    expect(result.current[0].status).toBe("attention");
 
     act(() => {
       capturedCallback.current?.(
@@ -1131,8 +1080,8 @@ describe("useAgentStatus（行建模新语义）", () => {
     });
 
     // 状态保持 attention，不被 null 覆盖
-    expect(result.current.rows[0].status).toBe("attention");
-    expect(result.current.rows[0].lastEventAt).toBe(2000);
+    expect(result.current[0].status).toBe("attention");
+    expect(result.current[0].lastEventAt).toBe(2000);
   });
 
   // ──────────────────────────────────────────────────
@@ -1162,7 +1111,7 @@ describe("useAgentStatus（行建模新语义）", () => {
 
     // onAgentEvent 不应被重新调用（handleHookEvent deps [] 稳定）
     expect((onAgentEvent as ReturnType<typeof vi.fn>).mock.calls.length).toBe(callCountBefore);
-    expect(result.current.rows).toHaveLength(1);
+    expect(result.current).toHaveLength(1);
   });
 
   // ──────────────────────────────────────────────────
@@ -1182,7 +1131,7 @@ describe("useAgentStatus（行建模新语义）", () => {
 
     const { result } = renderHook(() => useAgentStatus());
 
-    expect(result.current.rows[0].title).toBe("我的终端");
+    expect(result.current[0].title).toBe("我的终端");
   });
 
   it("getPageApi 返回 undefined → 回退标题 终端 {pageId}", () => {
@@ -1193,7 +1142,7 @@ describe("useAgentStatus（行建模新语义）", () => {
 
     const { result } = renderHook(() => useAgentStatus());
 
-    expect(result.current.rows[0].title).toBe("终端 page1");
+    expect(result.current[0].title).toBe("终端 page1");
   });
 
   // ──────────────────────────────────────────────────
@@ -1264,20 +1213,20 @@ describe("useAgentStatus（行建模新语义）", () => {
       });
     });
 
-    expect(result.current.rows).toHaveLength(3);
+    expect(result.current).toHaveLength(3);
     expect(disposeFns).toHaveLength(3);
 
     // 触发 page1-0 的标题变化 → 仅该行 title 更新，其余行保持快照
     act(() => {
       titleCbs.get("terminal-page1-0")?.({ title: "新标题0" });
     });
-    const row0 = result.current.rows.find(
+    const row0 = result.current.find(
       (r) => r.panelId === "terminal-page1-0",
     );
-    const row1 = result.current.rows.find(
+    const row1 = result.current.find(
       (r) => r.panelId === "terminal-page1-1",
     );
-    const row2 = result.current.rows.find(
+    const row2 = result.current.find(
       (r) => r.panelId === "terminal-page1-2",
     );
     expect(row0?.title).toBe("新标题0");
@@ -1335,7 +1284,7 @@ describe("useAgentStatus（行建模新语义）", () => {
       (TerminalRegistry as any).remove("terminal-page1-2");
     });
     expect(disposeFns[2]).toHaveBeenCalledTimes(1);
-    expect(result.current.rows).toHaveLength(0);
+    expect(result.current).toHaveLength(0);
   });
 
   it("项目切换 → 旧订阅全量取消（cleanup + 无项目分支双保险）", () => {
@@ -1375,7 +1324,7 @@ describe("useAgentStatus（行建模新语义）", () => {
     useLayout.setState({ activePageId: "pageC" });
     rerender();
     expect(disposeFns[0]).toHaveBeenCalledTimes(1);
-    expect(result.current.rows).toHaveLength(0);
+    expect(result.current).toHaveLength(0);
   });
 
   it("面板 api 不可用（无 onDidTitleChange / getPanel 抛错）→ 行保持快照标题不崩", () => {
@@ -1390,7 +1339,7 @@ describe("useAgentStatus（行建模新语义）", () => {
     registerTerminal("terminal-page1-0", makeSession({ lastEventAt: 1000 }));
 
     const { result } = renderHook(() => useAgentStatus());
-    expect(result.current.rows[0].title).toBe("我的终端");
+    expect(result.current[0].title).toBe("我的终端");
 
     // 变体 2：getPanel 抛错 → resolveTitle catch 兜底 + 订阅静默跳过，不崩
     mockGetPageApi.mockImplementation(() => ({
@@ -1403,7 +1352,7 @@ describe("useAgentStatus（行建模新语义）", () => {
         capturedCallback.current?.(makePayload({ panelId: "terminal-page1-1" }));
       });
     }).not.toThrow();
-    const row1 = result.current.rows.find(
+    const row1 = result.current.find(
       (r) => r.panelId === "terminal-page1-1",
     );
     expect(row1?.title).toBe("终端 page1"); // resolveTitle catch 兜底
@@ -1417,7 +1366,7 @@ describe("useAgentStatus（行建模新语义）", () => {
     registerTerminal("terminal-page1-0", null);
 
     const { result } = renderHook(() => useAgentStatus());
-    expect(result.current.rows).toHaveLength(0);
+    expect(result.current).toHaveLength(0);
 
     act(() => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1425,7 +1374,7 @@ describe("useAgentStatus（行建模新语义）", () => {
         sessionId: "s1",
       });
     });
-    expect(result.current.rows).toHaveLength(1);
+    expect(result.current).toHaveLength(1);
     expect(disposeFns).toHaveLength(1);
 
     // 第二次 sessionChange（行已存在 → setRows 内跳过，但订阅幂等先清旧再建新）
@@ -1438,7 +1387,7 @@ describe("useAgentStatus（行建模新语义）", () => {
     });
     expect(disposeFns).toHaveLength(2); // 旧 dispose + 新订阅
     expect(disposeFns[0]).toHaveBeenCalledTimes(1);
-    expect(result.current.rows).toHaveLength(1); // 行不重复
+    expect(result.current).toHaveLength(1); // 行不重复
   });
 
   it("卸载（unmount）→ 全量取消订阅", () => {

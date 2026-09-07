@@ -191,6 +191,14 @@ const addButtonStyle: CSSProperties = {
 
 export const NavTree: React.FC<NavTreeProps> = ({ switchToPage, onDeletePage }) => {
   const nav = useNavTree();
+  // CP-021:历史区相对时间 60s ticker——navTree 宿主单点持有,渲染层与数据层节奏解耦
+  // (sessionRefresh 禁用/慢档时相对时间仍自动刷新);ticker 随 CP-026 返回面收窄
+  // 自 useAgentStatus 移交至此
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, []);
   const renamePage = useProjects((s) => s.renamePage);
 
   /** 当前正在内联重命名的页面 ID（null = 无） */
@@ -512,6 +520,7 @@ export const NavTree: React.FC<NavTreeProps> = ({ switchToPage, onDeletePage }) 
             key={keyOf(session.cliId, session.sessionId)}
             session={session}
             status={nav.activeStatuses.get(keyOf(session.cliId, session.sessionId))}
+            now={now}
             onDoubleClick={handleHistoryDoubleClick}
             onContextMenu={handleHistoryContextMenu}
           />

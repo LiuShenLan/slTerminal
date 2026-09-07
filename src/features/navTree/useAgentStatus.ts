@@ -1,29 +1,32 @@
-// useAgentStatus.ts — Agent 状态 hook
+// useAgentStatus.ts —— 活跃会话行数据 hook(CP-026 自 agentStatus(原目录已删)迁入 navTree)
 //
-// 行 = 运行中的编码 CLI 会话（非全部终端）。
-// 建行双通道：sessionChange（session 非 null）∨ hook 事件（非 SessionEnd/Exit 且行不存在）——两通道独立幂等。
-// 删行三通道：sessionChange（session 为 null）∨ SessionEnd/Exit hook 事件 ∨ remove 事件。
+// 行 = 运行中的编码 CLI 会话(非全部终端)。
+// 建行双通道:sessionChange(session 非 null)∨ hook 事件(非 SessionEnd/Exit 且行不存在)——两通道独立幂等。
+// 删行三通道:sessionChange(session 为 null)∨ SessionEnd/Exit hook 事件 ∨ remove 事件。
 // 初始扫描只建 agentSession 非 null 的行。usage 数据源 = ContextUsage 信号事件
-// （statusline 桥接通道，官方 used_percentage 口径——行存在才更新，不建行/删行/不动状态）。
-// #5 竞态双保险：① registry/agent-event 双 listener 经 ref 读最新状态，effect deps [] 订阅永不重建；
-// ② 初始扫描按注册表现值对账（agentSession 非 null 才建行），兜底任何事件丢失。
+// (statusline 桥接通道,官方 used_percentage 口径——行存在才更新,不建行/删行/不动状态)。
+// #5 竞态双保险:① registry/agent-event 双 listener 经 ref 读最新状态,effect deps [] 订阅永不重建;
+// ② 初始扫描按注册表现值对账(agentSession 非 null 才建行),兜底任何事件丢失。
 //
-// 行 cliId（MC-410）：hook 事件通道建行按 MC-205 三级解析
-// （payload.cliId → TerminalRegistry.get(panelId)?.agentSession?.cliId → CLAUDE_CLI_ID）写入；
-// OSC 133 通道建行经 setAgentSession 的 sessionChange 自然驱动（cliId 取 agentSession.cliId，缺省兜底）。
+// 行 cliId(MC-410):hook 事件通道建行按 MC-205 三级解析
+// (payload.cliId → TerminalRegistry.get(panelId)?.agentSession?.cliId → CLAUDE_CLI_ID)写入;
+// OSC 133 通道建行经 setAgentSession 的 sessionChange 自然驱动(cliId 取 agentSession.cliId,缺省兜底)。
+//
+// CP-026:返回面收窄为 AgentSessionRow[]——state/项目名/now 为已退役视图时代
+// 死面,删除;相对时间 60s ticker 移交 NavTree 宿主(CP-021),now 经 prop 注入 NavHistoryRow。
 
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useLayout } from "../../stores/layout";
 import { useProjects } from "../../stores/projects";
 import { TerminalRegistry } from "../../panels/terminal/TerminalRegistry";
-// ZQ-2: 来源 CLI 标识三级解析单点（契约 4）——空串/空白 cliId 同等回退
+// ZQ-2: 来源 CLI 标识三级解析单点(契约 4)——空串/空白 cliId 同等回退
 import { resolvePayloadCliId } from "../../panels/terminal/resolvePayloadCliId";
 import { onAgentEvent } from "../../ipc/agentHooks";
 import { parseTerminalPageId } from "../../lib/panelId";
 import { getPageApi } from "../../workspace/pageApis";
 import { cliProfileRegistry } from "../cliProfiles";
-// AC-5: 事件名字面量只允许出现在 profiles/claude/（claude 合法领地）——
-// SessionEnd/Exit/ContextUsage 判定一律引用本常量，不写字面量
+// AC-5: 事件名字面量只允许出现在 profiles/claude/(claude 合法领地)——
+// SessionEnd/Exit/ContextUsage 判定一律引用本常量,不写字面量
 import {
   CLAUDE_CLI_ID,
   CONTEXT_USAGE_EVENT,
@@ -40,36 +43,21 @@ export interface AgentSessionRow {
   panelId: string;
   pageId: string;
   projectId: string;
-  /** 会话所属 CLI 标识（hook 事件通道 = 三级解析结果；OSC 133 通道 = agentSession.cliId）——供行 logo 查 profile */
+  /** 会话所属 CLI 标识(hook 事件通道 = 三级解析结果;OSC 133 通道 = agentSession.cliId)——供行 logo 查 profile */
   cliId: string;
-  /** 会话 UUID（hook 事件 payload.sessionId；matchedCommand-only 会话缺省）——供视图层标题覆盖匹配 */
+  /** 会话 UUID(hook 事件 payload.sessionId;matchedCommand-only 会话缺省)——供视图层标题覆盖匹配 */
   sessionId?: string;
   title: string;
   status: AgentStatus;
   lastEventAt: number;
   usageSourcePath?: string;
-  /** context 用量信号（ContextUsage 事件推送——官方 used_percentage 口径；未收到 → undefined） */
+  /** context 用量信号(ContextUsage 事件推送——官方 used_percentage 口径;未收到 → undefined) */
   usage?: ContextUsageSignal | null;
-}
-
-/** 视图状态机 */
-export type AgentStatusState =
-  | { kind: "no-root" }
-  | { kind: "empty" }
-  | { kind: "ready" };
-
-/** hook 返回值 */
-export interface AgentStatusResult {
-  state: AgentStatusState;
-  rows: AgentSessionRow[];
-  currentProjectName: string | null;
-  /** 相对时间基准（60s ticker 驱动重算——idle 会话无 hook 事件时时间文本冻结，问题 1b 修复） */
-  now: number;
 }
 
 // ---- 辅助函数 ----
 
-/** 根据 panelId 查找页签标题，无 dockviewApi 或面板时回退 */
+/** 根据 panelId 查找页签标题,无 dockviewApi 或面板时回退 */
 function resolveTitle(panelId: string, pageId: string): string {
   try {
     const api = getPageApi(pageId);
@@ -83,21 +71,12 @@ function resolveTitle(panelId: string, pageId: string): string {
 
 // ---- Hook ----
 
-export function useAgentStatus(): AgentStatusResult {
+export function useAgentStatus(): AgentSessionRow[] {
   const activePageId = useLayout((s) => s.activePageId);
   const projects = useProjects((s) => s.projects);
   const [rows, setRows] = useState<AgentSessionRow[]>([]);
-  const [now, setNow] = useState(() => Date.now());
 
-  // 相对时间定时刷新（问题 1b 修复）：formatRelativeTime 渲染时计算，
-  // 无 hook 事件时组件不重渲染 → 时间文本永久冻结；60s ticker 强制重算
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 60_000);
-    return () => clearInterval(timer);
-  }, []);
-
-
-  // 跟踪事件回调引用（避免 onAgentEvent 重建订阅）
+  // 跟踪事件回调引用(避免 onAgentEvent 重建订阅)
   const rowsRef = useRef(rows);
   rowsRef.current = rows;
 
@@ -106,7 +85,6 @@ export function useAgentStatus(): AgentStatusResult {
   const activeProject = projectList.find((p) =>
     p.pages.some((pg) => pg.pageId === activePageId),
   );
-  const currentProjectName = activeProject?.name ?? null;
 
   const projectPageIds = useMemo(
     () => new Set(activeProject?.pages.map((pg) => pg.pageId) ?? []),
@@ -115,11 +93,11 @@ export function useAgentStatus(): AgentStatusResult {
 
   const projectRoot = activeProject?.rootPath ?? null;
 
-  // generation 计数器（照 useFileTree 先例）：项目切换时递增，
+  // generation 计数器(照 useFileTree 先例):项目切换时递增,
   // 初始扫描 setRows 前检查——快速切项目时丢弃过期扫描结果
   const genRef = useRef(0);
 
-  // ref 副本供稳定订阅（dept []）回调读取最新值，防 R4 竞态（remove 事件丢失）
+  // ref 副本供稳定订阅(dept [])回调读取最新值,防 R4 竞态(remove 事件丢失)
   const projectRootRef = useRef(projectRoot);
   projectRootRef.current = projectRoot;
   const projectPageIdsRef = useRef(projectPageIds);
@@ -127,35 +105,35 @@ export function useAgentStatus(): AgentStatusResult {
   const activeProjectRef = useRef(activeProject);
   activeProjectRef.current = activeProject;
 
-  // ---- 面板标题订阅（行 title 动态跟随页签，人工验证问题 3 一致化） ----
-  // 行 title 是建行时刻的面板标题快照（resolveTitle）——页签异步标题覆盖
-  // （useXterm refreshSessionTitle → api.setTitle）后行不更新（/resume 侧栏
-  // 固定 claude 根因）。订阅面板 onDidTitleChange → 行 title 实时同步；
-  // 订阅失败（页面 api 未就绪/面板已卸载）→ 静默跳过，行保持快照标题。
+  // ---- 面板标题订阅(行 title 动态跟随页签,人工验证问题 3 一致化) ----
+  // 行 title 是建行时刻的面板标题快照(resolveTitle)——页签异步标题覆盖
+  // (useXterm refreshSessionTitle → api.setTitle)后行不更新(/resume 侧栏
+  // 固定 claude 根因)。订阅面板 onDidTitleChange → 行 title 实时同步;
+  // 订阅失败(页面 api 未就绪/面板已卸载)→ 静默跳过,行保持快照标题。
   const panelTitleSubsRef = useRef<Map<string, () => void>>(new Map());
 
-  /** 取消单个面板标题订阅（幂等：不存在条目零操作；删行时调用） */
+  /** 取消单个面板标题订阅(幂等:不存在条目零操作;删行时调用) */
   const unsubscribePanelTitle = useCallback((panelId: string) => {
     panelTitleSubsRef.current.get(panelId)?.();
     panelTitleSubsRef.current.delete(panelId);
   }, []);
 
-  /** 全量取消（项目切换/无项目/卸载——初始扫描 effect cleanup） */
+  /** 全量取消(项目切换/无项目/卸载——初始扫描 effect cleanup) */
   const unsubscribeAllPanelTitles = useCallback(() => {
     for (const dispose of panelTitleSubsRef.current.values()) dispose();
     panelTitleSubsRef.current.clear();
   }, []);
 
-  /** 建行时订阅面板 onDidTitleChange → 行 title 实时更新（幂等先清旧订阅） */
+  /** 建行时订阅面板 onDidTitleChange → 行 title 实时更新(幂等先清旧订阅) */
   const subscribePanelTitle = useCallback(
     (pageId: string, panelId: string) => {
       unsubscribePanelTitle(panelId); // StrictMode 双渲染/重复建行安全
       try {
-        // 必须用行所在页面的 api（跨页 panelId 不混用）
+        // 必须用行所在页面的 api(跨页 panelId 不混用)
         const panel = getPageApi(pageId)?.getPanel(panelId);
         if (!panel?.api?.onDidTitleChange) return; // 未就绪 → 静默不订阅
         const disposable = panel.api.onDidTitleChange((e) => {
-          // e.title 为 TitleEvent.title（dockviewPanelApi.d.ts，TerminalPanel:152 先例）
+          // e.title 为 TitleEvent.title(dockviewPanelApi.d.ts,TerminalPanel:152 先例)
           setRows((prev) =>
             prev.map((r) =>
               r.panelId === panelId ? { ...r, title: e.title } : r,
@@ -164,13 +142,13 @@ export function useAgentStatus(): AgentStatusResult {
         });
         panelTitleSubsRef.current.set(panelId, () => disposable.dispose());
       } catch {
-        // 面板 api 获取异常 → 不订阅（行保持快照标题，resolveTitle 兜底不变）
+        // 面板 api 获取异常 → 不订阅(行保持快照标题,resolveTitle 兜底不变)
       }
     },
     [unsubscribePanelTitle],
   );
 
-  // ---- hook 事件处理（deps []——所有数据经 ref 读取，回调永不重建） ----
+  // ---- hook 事件处理(deps []——所有数据经 ref 读取,回调永不重建) ----
   const handleHookEvent = useCallback(
     (payload: AgentEventPayload) => {
       const projRoot = projectRootRef.current;
@@ -182,8 +160,8 @@ export function useAgentStatus(): AgentStatusResult {
       const pageIds = projectPageIdsRef.current;
       if (!pageIds.has(pageId)) return;
 
-      // ContextUsage 信号：行存在才更新 usage（不建行/删行/不动状态——事件先于
-      // 建行到达时忽略；桥接脚本 1s 节流保证行建立后很快有数据）；字段缺失 → 忽略
+      // ContextUsage 信号:行存在才更新 usage(不建行/删行/不动状态——事件先于
+      // 建行到达时忽略;桥接脚本 1s 节流保证行建立后很快有数据);字段缺失 → 忽略
       if (payload.event === CONTEXT_USAGE_EVENT) {
         if (typeof payload.usedPercentage === "number") {
           const pct = payload.usedPercentage;
@@ -201,12 +179,12 @@ export function useAgentStatus(): AgentStatusResult {
       const proj = activeProjectRef.current;
       if (!proj) return;
 
-      // MC-205 三级解析单点（ZQ-2，契约 4）：payload.cliId（trim 后非空）→ 注册表
-      // agentSession.cliId（反查）→ CLAUDE_CLI_ID（缺省兼容旧信号）；
-      // 空串/仅空白与 null/undefined 同等回退（原 ?? 链遇空串短路失效）
+      // MC-205 三级解析单点(ZQ-2,契约 4):payload.cliId(trim 后非空)→ 注册表
+      // agentSession.cliId(反查)→ CLAUDE_CLI_ID(缺省兼容旧信号);
+      // 空串/仅空白与 null/undefined 同等回退(原 ?? 链遇空串短路失效)
       const cliId = resolvePayloadCliId(payload);
       const profile = cliProfileRegistry.get(cliId);
-      // MC-206：未知 cliId（未注册）或无 hooks 能力 → console.warn + 跳过（不建行/不置图标/不通知），不抛异常
+      // MC-206:未知 cliId(未注册)或无 hooks 能力 → console.warn + 跳过(不建行/不置图标/不通知),不抛异常
       if (!profile?.capabilities?.hooks) {
         console.warn(
           `未知 cliId ${cliId} 的 hook 事件已跳过——未注册或缺少 hooks 能力`,
@@ -219,7 +197,7 @@ export function useAgentStatus(): AgentStatusResult {
         payload.notificationType,
       );
 
-      // SessionEnd / Exit → 删行（同步取消面板标题订阅防泄漏）
+      // SessionEnd / Exit → 删行(同步取消面板标题订阅防泄漏)
       if (payload.event === SESSION_END_EVENT || payload.event === EXIT_EVENT) {
         unsubscribePanelTitle(payload.panelId);
         setRows((prev) => {
@@ -255,11 +233,11 @@ export function useAgentStatus(): AgentStatusResult {
           return next;
         }
 
-        // 建新行：hook 事件通道（非 SessionEnd/Exit 且行不存在——与 sessionChange 通道独立幂等）
-        // ZQ-3 决策 2：null 映射事件建行但 status null（无图标）——感知存活
-        // （SessionStart 丢失场景：事件到达即会话存在，行必须出现）且不误标
-        // attention（null 状态表示「无状态」，与 deriveActiveSessionStatuses
-        // 「status 为 null 不产出键」语义一致）
+        // 建新行:hook 事件通道(非 SessionEnd/Exit 且行不存在——与 sessionChange 通道独立幂等)
+        // ZQ-3 决策 2:null 映射事件建行但 status null(无图标)——感知存活
+        // (SessionStart 丢失场景:事件到达即会话存在,行必须出现)且不误标
+        // attention(null 状态表示「无状态」,与 deriveActiveSessionStatuses
+        // 「status 为 null 不产出键」语义一致)
         const row: AgentSessionRow = {
           panelId: payload.panelId,
           pageId,
@@ -277,13 +255,13 @@ export function useAgentStatus(): AgentStatusResult {
         next.sort((a, b) => b.lastEventAt - a.lastEventAt);
         return next;
       });
-      // 建行后订阅面板标题——行 title 随页签标题演进（异步覆盖通道）
+      // 建行后订阅面板标题——行 title 随页签标题演进(异步覆盖通道)
       subscribePanelTitle(pageId, payload.panelId);
     },
-    [], // deps []——所有动态数据经 ref 读取，回调永不重建
+    [], // deps []——所有动态数据经 ref 读取,回调永不重建
   );
 
-  // 订阅 onAgentEvent（deps [handleHookEvent]，handleHookEvent deps [] 故永不重建）
+  // 订阅 onAgentEvent(deps [handleHookEvent],handleHookEvent deps [] 故永不重建)
   useEffect(() => {
     const unlisten = onAgentEvent(handleHookEvent);
     return () => {
@@ -291,9 +269,9 @@ export function useAgentStatus(): AgentStatusResult {
     };
   }, [handleHookEvent]);
 
-  // ---- TerminalRegistry 订阅：sessionChange 建/删行 + remove 删行 ----
-  // deps []——订阅永不重建，remove 事件永不丢失（根除 R4 根因：同 commit passive destroy
-  // 顺序 SideBarArea 先于主区，旧 deps 重订阅窗口内 remove 丢失）
+  // ---- TerminalRegistry 订阅:sessionChange 建/删行 + remove 删行 ----
+  // deps []——订阅永不重建,remove 事件永不丢失(根除 R4 根因:同 commit passive destroy
+  // 顺序 SideBarArea 先于主区,旧 deps 重订阅窗口内 remove 丢失)
   useEffect(() => {
     const unsub = TerminalRegistry.subscribe((event) => {
       const pageIds = projectPageIdsRef.current;
@@ -309,10 +287,10 @@ export function useAgentStatus(): AgentStatusResult {
         if (!entry) return;
 
         if (entry.agentSession && entry.agentSession !== null) {
-          // OSC 133 通道建行的行 cliId：agentSession.cliId（MC-107 命中时写入），缺省兜底防旧数据/mock
+          // OSC 133 通道建行的行 cliId:agentSession.cliId(MC-107 命中时写入),缺省兜底防旧数据/mock
           const rowCliId = entry.agentSession.cliId ?? CLAUDE_CLI_ID;
 
-          // session 非 null → 建行（幂等：行已存在则跳过）
+          // session 非 null → 建行(幂等:行已存在则跳过)
           setRows((prev) => {
             if (prev.some((r) => r.panelId === event.panelId)) return prev;
             const row: AgentSessionRow = {
@@ -329,10 +307,10 @@ export function useAgentStatus(): AgentStatusResult {
             };
             return [...prev, row].sort((a, b) => b.lastEventAt - a.lastEventAt);
           });
-          // 建行后订阅面板标题（幂等：重复建行先清旧订阅）
+          // 建行后订阅面板标题(幂等:重复建行先清旧订阅)
           subscribePanelTitle(pageId, event.panelId);
         } else {
-          // session 为 null → 删行（同步取消面板标题订阅）
+          // session 为 null → 删行(同步取消面板标题订阅)
           unsubscribePanelTitle(event.panelId);
           setRows((prev) => {
             const idx = prev.findIndex((r) => r.panelId === event.panelId);
@@ -343,7 +321,7 @@ export function useAgentStatus(): AgentStatusResult {
           });
         }
       } else if (event.type === "remove") {
-        // remove → 删行（同步取消面板标题订阅）
+        // remove → 删行(同步取消面板标题订阅)
         unsubscribePanelTitle(event.panelId);
         setRows((prev) => {
           const idx = prev.findIndex((r) => r.panelId === event.panelId);
@@ -353,25 +331,25 @@ export function useAgentStatus(): AgentStatusResult {
           return next;
         });
       }
-      // register 事件不建行——建行由 sessionChange（非 null）和 hook 事件双通道负责
+      // register 事件不建行——建行由 sessionChange(非 null)和 hook 事件双通道负责
     });
 
     return unsub;
   }, []); // deps []——订阅永不重建
 
-  // ---- 初始扫描 + 项目切换（只建 agentSession 非 null 的行；携 usageSourcePath 主动拉 usage） ----
+  // ---- 初始扫描 + 项目切换(只建 agentSession 非 null 的行;携 usageSourcePath 主动拉 usage) ----
   useEffect(() => {
-    // FE-23: generation 递增——本项目扫描结果的 setRows 前检查，
-    // 快速切项目时旧扫描（理论上的慢 resolveTitle 等异步延伸）不覆盖新状态
+    // FE-23: generation 递增——本项目扫描结果的 setRows 前检查,
+    // 快速切项目时旧扫描(理论上的慢 resolveTitle 等异步延伸)不覆盖新状态
     const gen = ++genRef.current;
     if (!projectRoot || !activeProject) {
-      // 无项目 → 清行 + 全量取消面板标题订阅（防跨项目残留监听）
+      // 无项目 → 清行 + 全量取消面板标题订阅(防跨项目残留监听)
       unsubscribeAllPanelTitles();
       setRows([]);
       return;
     }
 
-    // 遍历 TerminalRegistry，只建 agentSession 非 null 的行
+    // 遍历 TerminalRegistry,只建 agentSession 非 null 的行
     const allTerminals = TerminalRegistry.getAll();
     const initialRows: AgentSessionRow[] = [];
 
@@ -382,7 +360,7 @@ export function useAgentStatus(): AgentStatusResult {
       if (!pageId) continue;
       if (!projectPageIds.has(pageId)) continue;
 
-      // 初始扫描建行的行 cliId：agentSession.cliId，缺省兜底防旧数据/mock
+      // 初始扫描建行的行 cliId:agentSession.cliId,缺省兜底防旧数据/mock
       const rowCliId = entry.agentSession.cliId ?? CLAUDE_CLI_ID;
 
       initialRows.push({
@@ -403,22 +381,12 @@ export function useAgentStatus(): AgentStatusResult {
     // FE-23: generation 过期检查——项目已切换则丢弃本次扫描结果
     if (gen !== genRef.current) return;
     setRows(initialRows);
-    // 扫描建行后逐行订阅面板标题（subscription 在 cleanup 全清，无残留）
+    // 扫描建行后逐行订阅面板标题(subscription 在 cleanup 全清,无残留)
     for (const row of initialRows) subscribePanelTitle(row.pageId, row.panelId);
 
-    // 项目切换/卸载 → 全量取消面板标题订阅（行随下轮扫描重建）
+    // 项目切换/卸载 → 全量取消面板标题订阅(行随下轮扫描重建)
     return () => unsubscribeAllPanelTitles();
   }, [projectRoot, activeProject?.projectId]);
 
-  // 派生视图状态
-  let state: AgentStatusState;
-  if (!projectRoot) {
-    state = { kind: "no-root" };
-  } else if (rows.length === 0) {
-    state = { kind: "empty" };
-  } else {
-    state = { kind: "ready" };
-  }
-
-  return { state, rows, currentProjectName, now };
+  return rows;
 }

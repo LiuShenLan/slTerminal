@@ -1,7 +1,8 @@
 // agent-history-restore.test.ts — FE-06 四步恢复编排测试（L2）
 //
 // mock 边界（只守 JS 侧形状，真实编排由 Stage 06 E2E 兜底）：
-//   stores/projects（useProjects.getState + ID 生成）、features/sidebar（makeEmptyLayout）、
+//   stores/projects(useProjects.getState + ID 生成)、features/navTree(makeEmptyLayout,
+//   NAV-06 随 SidebarTree 退役迁入——mock 目标即 ../features/navTree/NavTree)、
 //   workspace/pageApis（switchToPageShared/getPageApi）、ipc/pty（write）、
 //   panels/terminal/TerminalRegistry（get）、ipc/notification（sendToastNotification）
 // 全部 mock 经 vi.hoisted() 创建，确保模块级 vi.mock 执行前就绪（项目测试惯例）。

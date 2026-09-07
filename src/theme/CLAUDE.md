@@ -51,7 +51,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 4. E2E helpers
 5. `import("./App")` + render
 
-**启动链 fail-safe 三处静态色**（先于方案加载，不随方案切换，改 linear 对应 ui 值须手动同步）：`index.html` body background、`tauri.conf.json` window backgroundColor、`main.tsx` 超时错误页。交叉引用登记于 `schemes/linear.ts` 文件头注释。
+**启动链 fail-safe 三处静态色**（先于方案加载，不随方案切换）：色源 = `schemes/linear.ts`（`appBgPrimary`/`sidebarFg`/`errorFg`），构建期由 `scripts/sync-startup-colors.mjs` 提取改写 `index.html` body background、`tauri.conf.json` backgroundColor、`src/theme/startupColors.ts`（生成物，勿手改）；`main.tsx` 超时错误页读 `startupColors.ts` 常量（零依赖模块，不触发 facade 求值）。接线 = package.json `predev`/`prebuild`——硬约束 #6 自此无例外。
 
 ### 终端 adapter
 
@@ -59,7 +59,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 外部坑/红线
 
-- **启动链 fail-safe 三处静态色**：改 linear 对应 ui 值后必须手动同步三处硬编码。
+- **`startupColors.ts` 为生成物禁手改**：改 linear 三槽位后须 `npm run sync:startup-colors`。
 - **CM6 reverse 层叠**：新增 overrides 覆盖必须验证选择器特异性；syntax HighlightStyle 只能靠扩展数组顺序。
 - **colors.ts 不定义颜色值**：所有消费只引用 facade token；禁止硬编码颜色。
 - **editorTheme 常量**：D2 切换不生效，需重载窗口。

@@ -55,12 +55,12 @@
 **被否决的备选**：
 - 运行期即时切换（token 全面响应式）：369 处常量消费 + xterm/CM 创建期消费需全量改造，代价 vs 暗色系低频切换收益不成比例。
 - oneDark 完全 token 化自绘语法色板：每方案需 10+ 语法色定义，工作量与审美风险大；editor 段引用已预留未来自定义。
-- 启动链 fail-safe 收编：index.html/tauri.conf.json 为静态层无法用 TS token，保持硬编码 + 注释交叉引用。
+- 启动链 fail-safe 收编(运行期通道,被否决):index.html/tauri.conf.json 为静态层无法用 TS token。**2026-09 CP-027 修订**:构建期通道成立——`scripts/sync-startup-colors.mjs` 从 linear.ts 提取改写三处消费点,运行期仍不经 facade。
 
 **后果**：
 - 新增方案 = schemes/ 新文件 + register 一行，消费方/测试守卫零改动。
 - 注释单点在 types.ts 接口槽位（消费位置与方案无关），新方案零注释负担。
-- main.tsx 静态 import 图收敛为 react/react-dom/lib/e2eEnabled；E2E helpers 与 ROOT_CSS_VARS 注入保持原相对顺序。
+- main.tsx 静态 import 图收敛为 react/react-dom/lib/e2eEnabled/theme/startupColors(零依赖常量模块,不触发 facade 求值)；E2E helpers 与 ROOT_CSS_VARS 注入保持原相对顺序。
 
 ## 0003 UI 全面重设计（Linear 极黑克制）
 
@@ -77,7 +77,7 @@
 - 装饰图标全部单色线性 SVG（15px/1.5px 描边/currentColor）；状态 emoji → **状态圆点**（绿/黄/灰，语义来源 F3 不变）；CLI 品牌 logo 保留彩色。
 - 交付物：`design.md`（设计方案）、`requirements.md`（UI-xxx 编号需求 + 可测验收 + P0/P1 + 对比度自检附录）、`final-mockup.html`（主界面 + 组件集双页静态稿）。
 
-**与 theme 系统对接**（后续实现期）：全部色值经 ADR-0002 配色方案单点落位——新增 scheme 文件替换 darcula 内置方案，需求规格每条色值标注 types.ts 槽位；启动链 fail-safe 三处静态色手动同步 `#0a0a0b`；多主题切换机制不建（硬约束）。
+**与 theme 系统对接**（后续实现期）：全部色值经 ADR-0002 配色方案单点落位——新增 scheme 文件替换 darcula 内置方案，需求规格每条色值标注 types.ts 槽位；启动链 fail-safe 静态色经 sync 脚本从 linear.ts 构建期注入(CP-027)；多主题切换机制不建（硬约束）。
 
 **被否决的备选**：
 - 候选 B（Zed 实体边框感）/ C（最暖+大圆角）：骨架内变体，层级靠边框/温度而非纯明度差，不如 A 的「界面消失」感。
@@ -150,7 +150,7 @@
 
 - **dependencies（生产运行时）全精确版本**（无 `^`，锁死当前解析版本）：浮动的任何升级都必须显式改 package.json，进入评审流程。
 - **devDependencies（开发工具）全 `^`**：开发工具升级风险低、频次高，允许 minor 浮动。
-- **overrides 段保持现状**（`^`），不随本策略调整。
+- **overrides 段保持现状**（`^`），不随本策略调整。成因与『谁钉谁』对齐契约登记于 `e2e-tests/CLAUDE.md`(CP-032);上游放开硬钉后逐条去 overrides 化。
 - 精确版本一律以 package-lock.json 当前解析版本为准（pin 不改解析版本本身，`npm install` 刷新 lock）。
 
 **后果**：
@@ -235,7 +235,7 @@
 
 **核验留痕（计划期已实读全部修复点代码原文）**：FE-39 经实查 `nav-tree-history.test.tsx:302-336` 已含嵌套最深前缀用例（Phase 2 04 报告此项失实）——降为「验证已固化，零改动」。FE-45 实查为 **5 处** catch{}（05 报告列 3 处，projects.ts 有 2 处：:254 与 :275）。
 
-**TE-07 执行结果（S02 妥协背书）**：主 typescript 直改 ^7.0.2 **不可行**，D14 三支 fallback 实测走尽（typescript-eslint 最新 8.67.0 peerDependencies `typescript: '>=4.8.4 <6.1.0'` 全系拒绝 TS7、且模块加载期硬校验 `ts.versionMajorMinor >= 7` 崩在加载期，与 type-aware 规则开关无关；overrides 钉兼容组合与根依赖 `^7.0.2` 冲突不可行）。**正式化妥协：双 TS 并存（side-by-side）**——`"typescript": "npm:@typescript/typescript6@^6.0.2"`（TS6 包装器，供 typescript-eslint 8.67.0 消费）+ `"@typescript/native": "npm:typescript@^7.0.2"`（tsc bin = TS7，`npx tsc --version` 7.0.2）。该形态全门禁绿。**升级触发条件（同时满足）**：① typescript-eslint issue #10940 闭环（发布支持 TS7 版本）② TS7.1 稳定发布；触发后删 TS6 包装器与 `@typescript/native` 别名，`"typescript"` 直改 `^7.1.0`。
+**TE-07 执行结果（S02 妥协背书）**：主 typescript 直改 ^7.0.2 **不可行**，D14 三支 fallback 实测走尽（typescript-eslint 最新 8.67.0 peerDependencies `typescript: '>=4.8.4 <6.1.0'` 全系拒绝 TS7、且模块加载期硬校验 `ts.versionMajorMinor >= 7` 崩在加载期，与 type-aware 规则开关无关；overrides 钉兼容组合与根依赖 `^7.0.2` 冲突不可行）。**正式化妥协：双 TS 并存（side-by-side）**——`"typescript": "npm:@typescript/typescript6@^6.0.2"`（TS6 包装器，供 typescript-eslint 8.67.0 消费）+ `"@typescript/native": "npm:typescript@^7.0.2"`（tsc bin = TS7，`npx tsc --version` 7.0.2）。该形态全门禁绿。**升级触发条件(机检,`scripts/check-ts7-trigger.mjs`,CP-001 登记硬化)**:`node scripts/check-ts7-trigger.mjs` 退出码 0 即双条件达成——① issue #10940 `state=closed` ② `typescript` dist-tags.latest = 7.1.x 稳定版;退出码 1 = 未达成,退出码 2 = 查询失败(未知态)。触发后删 TS6 包装器与 `@typescript/native` 别名,`"typescript"` 直改 `^7.1.0`。
 
 **TE-15 工程债务（已知债务登记，代码零改动）**：json-schema-library 9.x/11.x 双 major 并存——codemirror-json-schema@0.8.1 锁 9.x（上游约束），主声明 11.6.2；运行时两实例并存无冲突（JSON Schema 校验各自独立），待上游升级消解（TE-15）。
 

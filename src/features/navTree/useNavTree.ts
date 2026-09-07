@@ -21,8 +21,8 @@ import { useCallback, useMemo, useState } from "react";
 import { useProjects } from "../../stores/projects";
 import type { OperationPage, Project } from "../../stores/projects";
 import { useLayout } from "../../stores/layout";
-import { useAgentStatus } from "../agentStatus/useAgentStatus";
-import type { AgentSessionRow } from "../agentStatus/useAgentStatus";
+import { useAgentStatus } from "./useAgentStatus";
+import type { AgentSessionRow } from "./useAgentStatus";
 import { useAgentHistory } from "../agentHistory/useAgentHistory";
 import type { AgentHistoryState } from "../agentHistory/useAgentHistory";
 import type { AgentHistorySession } from "../../types/agentHistory";
@@ -96,7 +96,7 @@ export interface UseNavTreeResult {
 export function useNavTree(): UseNavTreeResult {
   const projects = useProjects((s) => s.projects);
   const activePageId = useLayout((s) => s.activePageId);
-  const { rows } = useAgentStatus();
+  const rows = useAgentStatus();
   const history = useAgentHistory();
 
   const [query, setQuery] = useState("");

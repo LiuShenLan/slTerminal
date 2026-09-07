@@ -24,6 +24,27 @@ E2E helper 由 `E2E_ENABLED`（`src/lib/e2eEnabled.ts`）门控。`tauri build` 
 
 `npm run wdio` 实际由 `run-wdio.cjs` 启动。Node >= 26 时自动下载便携 Node 22（undici 8 与 webdriverio 不兼容），Node 22 直接运行。
 
+### wdio 版本矩阵与 overrides 对齐契约（CP-032）
+
+真值源：主声明在根 package.json devDependencies（@wdio/* `^9.30.1`、@wdio/globals `^9.31.0`、expect-webdriverio `^6.0.5`）；`@wdio/tauri-service@1.3.0` **硬钉** @wdio/* `9.29.1` + webdriverio `9.30.0`（package-lock 实测，上游约束）；overrides 段把家族强扭到主声明线——e2e 版本真值源 = 主声明 + overrides 两处，缺一即漂移。
+
+各 override 成因（2026-09-06 挖掘补登记，来源 git log -S）：
+
+| override | 成因 | 引入提交 |
+|---|---|---|
+| `serialize-javascript` `^7.0.5` | 消 mocha 传递依赖 RCE（npm audit high 阻断），经 @wdio/mocha-framework 传递 | a027b17（TE-01 批） |
+| `deepmerge-ts` `^8.0.1` | @wdio/config/@wdio/utils/webdriver 传递依赖版本统一（dedupe） | a027b17 |
+| `@puppeteer/browsers` `^3.2.1` | @wdio/utils 传递依赖版本统一（dedupe） | a027b17 |
+| `glob` `^10.5.0` | @wdio/config/mocha/archiver-utils 传递依赖版本统一（dedupe） | a027b17 |
+| `@wdio/globals` `^9.31.0` | 对齐 tauri-service 硬钉 9.29.1 → 主声明 | 1233336（TE-06/07/14） |
+| `expect-webdriverio` `^6.0.5` | dedupe 对齐主声明 | 1233336 |
+| `webdriverio` `^9.30.1` | 对齐 tauri-service 硬钉 9.30.0 → 主声明 | 1233336 |
+
+**对齐契约**：
+1. 升 `@wdio/tauri-service` 或任一 `@wdio/*` 主声明时，先 `npm view @wdio/tauri-service@latest dependencies` 查新版硬钉；硬钉与主声明不一致 → 更新 overrides 对应条目保持家族单实例；一致 → 删对应 override 条目（去 overrides 化）。
+2. 版本评审看两处：主声明 `^` 浮动结果 + overrides 是否仍与主声明同线；`npm ls webdriverio @wdio/globals` 输出单实例即健康态。
+3. 前 4 项（serialize-javascript/deepmerge-ts/@puppeteer/browsers/glob）为传递依赖治理，与 tauri-service 无关——wdio 升 major 时逐条重估是否仍需。
+
 ### E2E helper 命名与挂载位置
 
 - `__slterm_e2e_*`：挂载在 `window` 全局；

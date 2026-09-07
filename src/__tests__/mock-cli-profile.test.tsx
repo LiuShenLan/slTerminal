@@ -631,6 +631,7 @@ describe("AC-4③ 历史聚合 UI", () => {
       React.createElement(NavHistoryRow, {
         session: sessions[0],
         status: undefined,
+        now: Date.now(), // CP-021：相对时间基准必填 prop
         onDoubleClick: () => {},
         onContextMenu: () => {},
       }),

@@ -48,7 +48,7 @@ const {
 }));
 
 // useAgentStatus 数据层 mock（NAV-02 数据源——rows 由各测试显式注入）
-vi.mock("../features/agentStatus/useAgentStatus", () => ({
+vi.mock("../features/navTree/useAgentStatus", () => ({
   useAgentStatus: () => mockUseAgentStatus(),
 }));
 
@@ -135,7 +135,7 @@ import { NavContextMenu } from "../features/navTree/NavContextMenu";
 import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
 import { resetProjectStores } from "./helpers/workspace-setup";
-import type { AgentSessionRow } from "../features/agentStatus/useAgentStatus";
+import type { AgentSessionRow } from "../features/navTree/useAgentStatus";
 import { CLAUDE_CLI_ID, claudeProfile } from "../features/cliProfiles/profiles/claude";
 import { cliProfileRegistry } from "../features/cliProfiles/cliProfileRegistry";
 import { backgroundTaskScheduler } from "../features/backgroundTasks/scheduler";
@@ -258,12 +258,7 @@ function makeRow(overrides: Partial<AgentSessionRow> = {}): AgentSessionRow {
 function resetAll(): void {
   resetProjectStores(); // 共享重置：projects/layout/sideBar/keybindings 全量（TQ-B-10）
   mockUseAgentStatus.mockReset();
-  mockUseAgentStatus.mockReturnValue({
-    state: { kind: "ready" },
-    rows: [],
-    currentProjectName: null,
-    now: Date.now(),
-  });
+  mockUseAgentStatus.mockReturnValue([]);
   mockSwitchToPageAndFocus.mockReset();
   mockScanHistory.mockReset();
   mockScanHistory.mockResolvedValue([]);
@@ -304,12 +299,7 @@ describe("三级层级渲染（项目→页面→会话）", () => {
       { pageId: "page2", name: "页面 2" },
     ]);
     seedActivePage("page1");
-    mockUseAgentStatus.mockReturnValue({
-      state: { kind: "ready" },
-      rows: [makeRow()],
-      currentProjectName: "测试项目",
-      now: Date.now(),
-    });
+    mockUseAgentStatus.mockReturnValue([makeRow()]);
 
     const { container } = render(<NavTree />);
     expandTo(container, '[data-e2e="nav-row-session"]');
@@ -349,14 +339,9 @@ describe("三级层级渲染（项目→页面→会话）", () => {
       { pageId: "page2", name: "页面 2" },
     ]);
     seedActivePage("page1");
-    mockUseAgentStatus.mockReturnValue({
-      state: { kind: "ready" },
-      rows: [
-        makeRow({ panelId: "terminal-page2-0", pageId: "page2", title: "终端 page2" }),
-      ],
-      currentProjectName: "测试项目",
-      now: Date.now(),
-    });
+    mockUseAgentStatus.mockReturnValue([
+      makeRow({ panelId: "terminal-page2-0", pageId: "page2", title: "终端 page2" }),
+    ]);
 
     const { container } = render(<NavTree />);
     expandTo(container, '[data-e2e="nav-row-session"]');
@@ -394,12 +379,7 @@ describe("三级层级渲染（项目→页面→会话）", () => {
       { pageId: "page1", name: "页面 1" },
     ]);
     seedActivePage("page1");
-    mockUseAgentStatus.mockReturnValue({
-      state: { kind: "ready" },
-      rows: [makeRow()],
-      currentProjectName: "测试项目",
-      now: Date.now(),
-    });
+    mockUseAgentStatus.mockReturnValue([makeRow()]);
 
     const { container } = render(<NavTree />);
     expandTo(container, '[data-e2e="nav-row-session"]');
@@ -424,12 +404,7 @@ describe("行高规格与选中态 token", () => {
       { pageId: "page2", name: "页面 2" },
     ]);
     seedActivePage("page1");
-    mockUseAgentStatus.mockReturnValue({
-      state: { kind: "ready" },
-      rows: [makeRow()],
-      currentProjectName: "测试项目",
-      now: Date.now(),
-    });
+    mockUseAgentStatus.mockReturnValue([makeRow()]);
     const { container } = render(<NavTree />);
     expandTo(container, '[data-e2e="nav-row-session"]');
     return container;
@@ -545,12 +520,7 @@ describe("活跃会话行构成", () => {
       { pageId: "page1", name: "页面 1" },
     ]);
     seedActivePage("page1");
-    mockUseAgentStatus.mockReturnValue({
-      state: { kind: "ready" },
-      rows: [makeRow(overrides)],
-      currentProjectName: "测试项目",
-      now: Date.now(),
-    });
+    mockUseAgentStatus.mockReturnValue([makeRow(overrides)]);
     const { container } = render(<NavTree />);
     expandTo(container, '[data-e2e="nav-row-session"]');
     return getRows(container, "nav-row-session")[0];
@@ -736,12 +706,7 @@ describe("搜索过滤", () => {
       { pageId: "page1", name: "页面 1" },
     ]);
     seedActivePage("page1");
-    mockUseAgentStatus.mockReturnValue({
-      state: { kind: "ready" },
-      rows: [makeRow({ title: "重构导航树" })],
-      currentProjectName: "测试项目",
-      now: Date.now(),
-    });
+    mockUseAgentStatus.mockReturnValue([makeRow({ title: "重构导航树" })]);
     const { container } = render(<NavTree />);
 
     fireEvent.change(container.querySelector("input") as HTMLInputElement, {
@@ -982,12 +947,7 @@ describe("data-e2e 选择器与视图骨架", () => {
       { pageId: "page1", name: "页面 1" },
     ]);
     seedActivePage("page1");
-    mockUseAgentStatus.mockReturnValue({
-      state: { kind: "ready" },
-      rows: [makeRow()],
-      currentProjectName: "测试项目",
-      now: Date.now(),
-    });
+    mockUseAgentStatus.mockReturnValue([makeRow()]);
 
     const { container } = render(<NavTree />);
     expandTo(container, '[data-e2e="nav-row-session"]');
@@ -1323,12 +1283,7 @@ describe("操作页面行交互（内联重命名 / chevron，TQ-COV-09）", () 
       { pageId: "page1", name: "页面 1" },
     ]);
     seedActivePage("page1");
-    mockUseAgentStatus.mockReturnValue({
-      state: { kind: "ready" },
-      rows: [makeRow()],
-      currentProjectName: "测试项目",
-      now: Date.now(),
-    });
+    mockUseAgentStatus.mockReturnValue([makeRow()]);
     const { container } = render(<NavTree />);
     expandTo(container, '[data-e2e="nav-row-session"]');
     expect(getRows(container, "nav-row-session")).toHaveLength(1);
@@ -1355,18 +1310,13 @@ describe("操作页面行交互（内联重命名 / chevron，TQ-COV-09）", () 
       { pageId: "page2", name: "页面 2" },
     ]);
     seedActivePage("page1");
-    mockUseAgentStatus.mockReturnValue({
-      state: { kind: "ready" },
-      rows: [
-        makeRow({
-          panelId: "terminal-page2-0",
-          pageId: "page2",
-          title: "终端 page2",
-        }),
-      ],
-      currentProjectName: "测试项目",
-      now: Date.now(),
-    });
+    mockUseAgentStatus.mockReturnValue([
+      makeRow({
+        panelId: "terminal-page2-0",
+        pageId: "page2",
+        title: "终端 page2",
+      }),
+    ]);
     const { container } = render(<NavTree />);
     expandTo(container, '[data-e2e="nav-row-page"]');
 

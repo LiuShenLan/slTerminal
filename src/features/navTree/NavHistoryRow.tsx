@@ -22,6 +22,8 @@ interface NavHistoryRowProps {
   session: AgentHistorySession;
   /** 运行中会话四态（activeStatuses 复合键查询；null → 无圆点） */
   status?: AgentStatus | null;
+  /** 相对时间基准（navTree 宿主 60s ticker 注入——CP-021，替换原组件内部自计时） */
+  now: number;
   onDoubleClick(session: AgentHistorySession): void;
   onContextMenu(session: AgentHistorySession, pos: { x: number; y: number }): void;
 }
@@ -29,13 +31,14 @@ interface NavHistoryRowProps {
 export const NavHistoryRow: React.FC<NavHistoryRowProps> = ({
   session,
   status,
+  now,
   onDoubleClick,
   onContextMenu,
 }) => {
   const [hovered, setHovered] = useState(false);
 
   const title = session.title ?? session.sessionId.slice(0, 8);
-  const timeStr = formatRelativeTime(session.mtimeMs, Date.now());
+  const timeStr = formatRelativeTime(session.mtimeMs, now);
   // 行 logo（MC-311）：按 session.cliId 查 profile.iconSrc；未注册 → 无 logo 不报错
   const logoSrc = cliProfileRegistry.get(session.cliId)?.iconSrc;
   // 恒渲染圆点：无运行状态 → done 灰档（mockup .dot.idle，NAV-10 契约）

@@ -19,6 +19,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   - 活跃会话挂页面下（`row.pageId`——`useAgentStatus` 内部已按 `parseTerminalPageId` 解析）。
   - 历史会话挂项目下：`session.cwd` 前缀匹配项目 `rootPath`（规范化 + 忽略大小写 + 段边界守卫），最深前缀命中；无归属项目不展示。
 
+### 活跃会话行数据 hook（useAgentStatus，CP-026 自 agentStatus 迁入）
+
+- **行建模**：行 = 运行中的编码 CLI 会话（agentSession 为 null 的纯 shell 不建行）。建行双通道幂等（sessionChange 非 null ∨ hook 事件非 SessionEnd/Exit 且行不存在）；删行三通道（sessionChange null ∨ SessionEnd/Exit ∨ remove）。初始扫描只建 agentSession 非 null 的行。
+- **行 cliId（MC-410/MC-205/ZQ-2）**：hook 事件通道经 resolvePayloadCliId 三级解析单点（payload.cliId trim 非空 → 注册表反查 → CLAUDE_CLI_ID 缺省；空串/空白同等回退）；OSC 133 通道取 agentSession.cliId；未知 cliId/无 hooks 能力 → console.warn + 跳过（MC-206）。
+- **建行 status（ZQ-3 决策 2）**：hook 通道建行 status 原样写入（null 映射事件建行但 status null 无图标——感知存活且不误标 attention）；更新已有行 null 不覆盖旧值。
+- **ContextUsage 信号分支（AC-5）**：行存在才更新 usage（usedPercentage 数字校验），不建行/删行/不动状态；事件名一律经 profiles/claude 导出常量，禁字面量。
+- **行 title 动态跟随页签**：建行三通道订阅面板 onDidTitleChange → 行 title 实时同步；订阅表 Map<panelId, dispose>，删行三通道/项目切换/卸载时取消。
+- **FE-23 generation 防竞**：照 useFileTree 先例——项目切换递增 genRef，初始扫描 setRows 前检查。
+- **项目域过滤**：hook 内部按活跃项目过滤（projectPageIds/projectRoot 经 ref 供稳定订阅读取）。
+- **返回面契约**：useAgentStatus 返回 AgentSessionRow[]（CP-026 收窄——state/currentProjectName/now 死面已删，不得回加）；相对时间 60s ticker 由 NavTree 宿主单点持有（CP-021），数据 hook 不自建 ticker。
+
 ### 展开/折叠与搜索（NAV-01/04/10）
 
 - 展开状态组件内维护（`expanded` / `expandedHist` 两个 Set），**默认空 = 全部收起**。
@@ -58,7 +69,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **#6 配色单点**：全部颜色引用 `theme/colors.ts` token；唯一例外 = 项目行彩色文件夹图标六色盘蓝（NavProjectRow 内登记，IC-04）。
 - **#1 前端不碰 OS**：IPC（dialog.open / deleteHistorySession / 写剪贴板）全部经 `src/ipc/` 调用。
-- **数据 hook 不自建订阅**：活跃会话/历史数据一律经 `useAgentStatus` / `useAgentHistory` 获取；运行中会话反查经 `workspace/pageApis` 调用，本组件不再直接引用 `TerminalRegistry`。
+- **数据 hook 不自建订阅**：活跃会话/历史数据一律经 `useAgentStatus` / `useAgentHistory` 获取；运行中会话反查经 `workspace/pageApis` 调用，本组件不再直接引用 `TerminalRegistry`。相对时间 60s ticker 由 NavTree 宿主单点持有（CP-021，now 经 prop 注入 NavHistoryRow），数据 hook 不自建 ticker。
 
 ## 测试模式
 

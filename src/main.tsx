@@ -3,6 +3,14 @@ import ReactDOM from "react-dom/client";
 import "@fontsource/jetbrains-mono/400.css"; // FT-01: JetBrains Mono 400 字重随产物打包（断网可用）
 import "@fontsource/jetbrains-mono/500.css"; // FT-01: JetBrains Mono 500 字重随产物打包（断网可用）
 
+// CP-027:fail-safe 静态色读构建期生成常量(色源 = linear.ts;本模块零依赖,
+// 不触发 theme facade 求值——启动链静态 import 面约束不破)
+import {
+  STARTUP_FAIL_SAFE_BG,
+  STARTUP_FAIL_SAFE_ERROR_FG,
+  STARTUP_FAIL_SAFE_FG,
+} from "./theme/startupColors";
+
 // 等待 Tauri IPC 就绪后再挂载 React（WebView2 注入 window.__TAURI_INTERNALS__ 是异步的）
 async function bootstrap() {
   // ① IPC 就绪等待 + fail-safe
@@ -27,20 +35,21 @@ async function bootstrap() {
       console.error("[slTerminal]", msg);
       // SEC-10：fail-safe 页不再用字符串拼接注入消息（msg 为运行时变量，可能含路径/任意文本）——
       // 改 createElement + textContent + style 赋值，textContent 天然转义，杜绝 HTML 注入。
-      // 视觉效果与原模板逐项一致（深色底 + 居中 + 错误红；色值属启动链 fail-safe 既定例外）。
+      // 视觉效果与原模板逐项一致(深色底 + 居中 + 错误红;色值经 startupColors 常量,
+      // 构建期自 linear.ts 注入——CP-027)。
       const container = document.createElement("div");
       container.style.display = "flex";
       container.style.alignItems = "center";
       container.style.justifyContent = "center";
       container.style.height = "100vh";
-      container.style.background = "#0a0a0b";
-      container.style.color = "#ece9e4";
+      container.style.background = STARTUP_FAIL_SAFE_BG;
+      container.style.color = STARTUP_FAIL_SAFE_FG;
       container.style.fontFamily =
         "'JetBrains Mono','Cascadia Mono',Consolas,'Microsoft YaHei UI',monospace";
       container.style.fontSize = "14px";
       container.style.padding = "20px";
       const messageSpan = document.createElement("span");
-      messageSpan.style.color = "#d9706b";
+      messageSpan.style.color = STARTUP_FAIL_SAFE_ERROR_FG;
       messageSpan.textContent = msg;
       container.appendChild(messageSpan);
       // 等价于原 body 整体替换（React 尚未挂载，body 仅含 #root）
