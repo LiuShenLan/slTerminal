@@ -31,7 +31,7 @@
 
 ## 二、后端架构与平台
 
-- [ ] **CP-004 · 多 Dockview 实例架构 + `MAX_PAGES=20` 上限缓解**
+- [x] **CP-004 · 多 Dockview 实例架构 + `MAX_PAGES=20` 上限缓解**【2026-09-08 修复销项：共享 Dockview 宿主 + 页组模型落地（pageGroups 纯函数族 + panelId 页前缀协议 + enforcePanelGroupMembership 回迁守卫 + maximizePageGroup 可见性单点 + patchLegacyLayout 旧格式迁移）——多实例架构取代、MAX_PAGES 消亡（页面上限语义由「不设限」替代，守卫测试改写承载）；ADR-0009 FE-01 登记作废 + 笔误 ADR-0001→ADR-0009 顺带修正；e2e harness 收敛（页前缀 id 全量适配，fix-loop 1 轮）】
   来源:ADR-0009 FE-01(含 FE-36 跨项目全局计数修订)、`src/workspace/CLAUDE.md`、`src/stores/CLAUDE.md`。当时理由:H6 终端跨页面存活 + xterm 实例约束,架构上每页一 Dockview 实例,以页数上限防内存/DOM 线性增长。问题本质:缓解阀而非根治——实例数仍随页面线性增长,容器/渲染管线重复。2026-09-06 核查实证:MAX_PAGES=20(projects.ts:15)、每页一 DockviewReact + CSS 显隐切换原样;登记点有一处笔误——workspace/CLAUDE.md:15 把豁免登记误引 ADR-0001,实为 ADR-0009。**修改方向**:根治方向不变——共享 Dockview 宿主 + 页面级分组模型,或面板池虚拟化;上限随多实例架构重设计一并消亡。顺带修正登记点笔误。
 - [x] **CP-005 · 后端 `std::sync::Mutex` 中毒保持现状**【2026-09-08 修复销项：全仓换装 parking_lot 0.12（29 文件），lock() 直接取 guard——map_err/match/unwrap 降级三形态清除，中毒攻击面结构性消除，原 ADR-0009 09#14 保持现状登记作废】
   来源:ADR-0009 09#14、`src-tauri/src/CLAUDE.md`、`src-tauri/src/pty/CLAUDE.md`、`src-tauri/src/git/CLAUDE.md`(仓库缓存)。当时理由:临界区短小无 panic,中毒不可达,parking_lot 换装零收益。问题本质:以「当前无 panic」论证原语次优性,未消除「未来锁内引入 panic → 等待方连锁 panic」的架构脆弱点。2026-09-06 核查实证:8 处生产使用点,`lock().unwrap()`(中毒即 panic)与 map_err 降级两种形态并存,无统一纪律,Cargo.toml 无 parking_lot。**修改方向**:换装 parking_lot 一行依赖即可消除全部 unwrap 站点,或至少统一 map_err 降级形态;原语升级把「锁内不 panic」从人肉纪律变成结构性保证。

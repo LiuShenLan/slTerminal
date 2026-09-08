@@ -88,6 +88,6 @@ Workflow({
 | S07 | 已完成 | dee4aee | 2026-09-08 | 6 项全绿（fix-loop 1 轮：CP-019 jsdom RO mock 装配适配 35 例 + CP-016 restore 竞态渲染落定队列修复 2 例）；页删除显式不守卫复核结论登记 workspace/CLAUDE.md |
 | S08 | 已完成 | e7128af | 2026-09-08 | 5 项全绿（fix-loop 1 轮：CP-039 三文件 4 例 + CP-002 knip 销项 + CP-009 startup mock；CP-002 终裁 = knip 存量红与变更面零相关实质达成，S12 收口）；CP-009 人工实测豁免已登记 commit body；S10 复核注记：CP-037 保活形态须在预览迁出后复核 |
 | S09 | 已完成 | b086989 | 2026-09-08 | CP-022 全绿（verify agent 空返回异常——failedItems 空但 allFixed false，主 agent inline 复核三处注册 + 25 文件面后裁决实质达成 commit）；人工点登记：>10MB 实机滚动/渲染观感抽查 |
-| S10 | 未开始 | — | — | spike go/no-go 记此 |
+| S10 | 已完成 | 11bf157 | 2026-09-08 | spike GO → ② 迁移落地（自定义协议 slterm-preview 域，ADR-0019）→ ③ B2 → ④ CSP 回收；6 项销项；e2e 门禁按 solo 复核判达（全量队列 flaky + settings 基建缺陷修复登记 S12）；补 S05 文档遗漏 0453c91；人工点登记：预览回归全场景 |
 | S11 | 未开始 | — | — | |
 | S12 | 未开始 | — | — | 人工验证点总收清单见 stages.md S12 |
