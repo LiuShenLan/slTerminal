@@ -24,6 +24,8 @@ import {
   waitForWorkspaceReady,
   waitForDockviewApi,
   createProject,
+  activatePanel,
+  clickInPanel,
   waitPreviewDocContains,
   switchToMainWindow,
   previewWindowLabel,
@@ -100,10 +102,10 @@ describe("Markdown 面板三形态", () => {
       expect(switcherText).toContain("预览");
       expect((await browser.getWindowHandles()).includes(previewWindowLabel(panelId))).toBe(false);
 
-      // 切预览 → 预览窗口渲染管线产物（宿主页 iframe srcdoc 可读）
-      await browser.execute(() => {
-        document.querySelector<HTMLButtonElement>('[data-e2e="markdown-mode-preview"]')?.click();
-      });
+      // 切预览 → 预览窗口渲染管线产物（宿主页 iframe srcdoc 可读）。
+      // CP-004 单宿主契约：clickInPanel 以本面板页签为锚点组内点击（残留面板
+      // 切换条同 DOM 并存，全局 querySelector 首元素命中不可靠）
+      expect(await clickInPanel(panelId, '[data-e2e="markdown-mode-preview"]')).toBe(true);
       await waitPreviewDocContains(panelId, "<h1>E2E 标题</h1>");
       await waitPreviewDocContains(panelId, "<table>");
       await waitPreviewDocContains(panelId, "hljs-keyword");
@@ -152,9 +154,14 @@ describe("Markdown 面板三形态", () => {
       await waitPreviewDocContains(panelId, "关闭测试");
       // S10-②：键盘不跨窗口（预览窗口 focusable=false）——预览态下主窗口
       // ShortcutRegistry 仍持焦点，合成 Ctrl+W → global.closeTab → 关闭活跃
-      // 面板（md 面板为活跃面板）；面板卸载 → 预览窗口随之销毁
+      // 面板；面板卸载 → 预览窗口随之销毁。CP-004 单宿主契约：先显式激活本
+      // 面板再派发（dockview 活跃面板不随 addPanel 归属——残留面板同宿主并存）
+      expect(await activatePanel(panelId)).toBe(true);
+      // 轮询派发 Ctrl+W 直到面板消失且连续 3 次采样保持消失（间隔 100ms）——
+      // 多页组并存时关闭「页组唯一面板」触发 dockview 组移除 + 宿主页组同步链，
+      // 存在瞬态抖动面；连续消失判定过滤抖动（单次采样判定会撞复活窗口）
       await browser.waitUntil(
-        async () =>
+        async () => {
           await browser.execute(
             (pid: string) => {
               window.dispatchEvent(
@@ -166,11 +173,23 @@ describe("Markdown 面板三形态", () => {
                   cancelable: true,
                 }),
               );
-              return window.__dockviewApi?.getPanel(pid) === undefined;
+              return pid;
             },
             panelId,
-          ),
-        { timeout: 10000, timeoutMsg: "markdown 面板未被主窗口 Ctrl+W 快捷键关闭" },
+          );
+          let gone = 0;
+          for (let i = 0; i < 3; i++) {
+            await browser.pause(100);
+            const has = await browser.execute(
+              (pid: string) => !!window.__dockviewApi?.getPanel(pid),
+              panelId,
+            );
+            if (!has) gone += 1;
+            else break;
+          }
+          return gone === 3;
+        },
+        { timeout: 15000, timeoutMsg: "markdown 面板未被主窗口 Ctrl+W 快捷键关闭" },
       );
       const closed = await browser.execute(
         (pid: string) => window.__dockviewApi?.getPanel(pid) === undefined,
@@ -222,28 +241,45 @@ describe("Markdown 面板三形态", () => {
     const mdPath = join(tempDir, "doc.md");
     writeFileSync(mdPath, "# 字号\n\nmarker", "utf8");
     try {
-      await spawnMarkdownPanel(tempDir, mdPath);
-      // 可见 .cm-content 挂载（默认 edit 形态）
+      const panelId = await spawnMarkdownPanel(tempDir, mdPath);
+      // 本面板组内容树内的可见 .cm-content 挂载（默认 edit 形态——CP-004 单宿主
+      // 契约：残留面板 DOM 并存且隐藏页组可测矩形，锚定本面板过滤）
       await browser.waitUntil(
         async () =>
           await browser.execute(
-            () =>
-              Array.from(document.querySelectorAll(".cm-content")).some(
-                (el) => el.getClientRects().length > 0,
-              ),
+            (pid: string) => {
+              const anchor = document.querySelector(`[data-e2e="tab-close-${pid}"]`);
+              if (!anchor) return false;
+              let el: HTMLElement | null = anchor.parentElement;
+              while (el) {
+                const cm = el.querySelector(".cm-content");
+                if (cm && cm.getClientRects().length > 0) return true;
+                el = el.parentElement;
+              }
+              return false;
+            },
+            panelId,
           ),
         { timeout: 15000, timeoutMsg: "md edit 编辑器未挂载" },
       );
-      // 合成 Ctrl+wheel 一格（deltaY -120）到 .cm-content——wheel 由 useCodeMirror
-      // 挂载于 CM 容器（capture），命中即调共享 editorFontSize store setter
-      await browser.execute(() => {
-        const cm = Array.from(document.querySelectorAll(".cm-content")).find(
-          (el) => el.getClientRects().length > 0,
-        );
-        cm?.dispatchEvent(
-          new WheelEvent("wheel", { deltaY: -120, ctrlKey: true, cancelable: true, bubbles: true }),
-        );
-      });
+      // 合成 Ctrl+wheel 一格（deltaY -120）到本面板 .cm-content——wheel 由
+      // useCodeMirror 挂载于 CM 容器（capture），命中即调共享 editorFontSize
+      // store setter（editorFontSize 为共享 store——只对本面板派发防污染残留面板字号）
+      await browser.execute((pid: string) => {
+        const anchor = document.querySelector(`[data-e2e="tab-close-${pid}"]`);
+        if (!anchor) return;
+        let el: HTMLElement | null = anchor.parentElement;
+        while (el) {
+          const cm = el.querySelector(".cm-content");
+          if (cm && cm.getClientRects().length > 0) {
+            cm.dispatchEvent(
+              new WheelEvent("wheel", { deltaY: -120, ctrlKey: true, cancelable: true, bubbles: true }),
+            );
+            return;
+          }
+          el = el.parentElement;
+        }
+      }, panelId);
       await browser.waitUntil(
         async () =>
           (await browser.execute(() => {

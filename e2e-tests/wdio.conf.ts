@@ -10,6 +10,10 @@
  */
 import type { TauriDriverOptions } from '@wdio/tauri-plugin';
 
+// 主窗口 label（tauri.conf.json windows[0] 未命名 → 默认 "main"，与
+// src-tauri/src/preview.rs MAIN_WINDOW_LABEL 对应）——spec 会话归位目标
+const MAIN_WINDOW_LABEL = 'main';
+
 export const config: WebdriverIO.Config = {
   runner: 'local',
 
@@ -67,6 +71,14 @@ export const config: WebdriverIO.Config = {
   // 里建的项目，且 editor 标题等用例依赖 spec 内累积状态）。
   // spec 内用例累积 ≤10 项目不触发 20 页上限；用例内多项目（agent R2）不受影响。
   beforeSuite: async function () {
+    // 2026-09-08 归因（S11 e2e 门禁级联根因）：每 spec 新 WebDriver session 的
+    // 默认窗口 = tauri webview_windows() HashMap first()（无序）——前序 spec
+    // 残留预览窗口（html/markdown 预览按产品语义保活常驻，卸载前不销毁）时，
+    // 默认上下文落非 main 预览宿主页（html 泄漏 4-5 窗时概率 5/6）：宿主页无
+    // e2e helpers → 本 suite 探针/reset/workspaceReady/全部用例静默失效级联。
+    // 此处先归位 main（helpers 挂载处）再执行探针——main 失联（异常销毁等）时
+    // switchToWindow 快速诚实报错，不静默吃延迟。
+    await browser.switchToWindow(MAIN_WINDOW_LABEL);
     // TQ-E-10(CP-030):窗口前台聚焦 fast-fail 探针——$ 元素命令族(findElement/
     // $/elementClick 等)触发 tauri-service ensureActiveWindowFocus,窗口未聚焦时
     // 每命令 +5s 且交互时序断言失真。探针失败即报错退出,不静默吃延迟。

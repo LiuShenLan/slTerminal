@@ -22,11 +22,74 @@ import {
   waitForWorkspaceReady,
   waitForDockviewApi,
   createProject,
+  activatePanel,
+  clickInPanel,
   waitPreviewDocContains,
   waitForPreviewWindow,
   switchToMainWindow,
   previewWindowLabel,
 } from "./specUtils";
+
+/**
+ * 等待窗口句柄「连续多次采样」不在集合（销毁验证诚实化——2026-09-08）：
+ * destroy 为异步（注册表滞后瞬时残影），且修复 D 落定前「销毁后复活」僵尸
+ * （迟到 sync 重建）会让窗口在 ~100ms 后再次入列——单次采样缺席可能命中
+ * 瞬态误判通过；连续缺席采样（间隔 ~150ms，≥3 次）跨过复活窗口期，
+ * 窗口稳定出列才算通过。
+ */
+async function waitWindowGoneFromHandles(label: string, timeout = 10000): Promise<void> {
+  let absentStreak = 0;
+  await browser.waitUntil(
+    async () => {
+      const present = (await browser.getWindowHandles()).includes(label);
+      absentStreak = present ? 0 : absentStreak + 1;
+      return absentStreak >= 3;
+    },
+    { timeout, interval: 150, timeoutMsg: `预览窗口未稳定出列（${label}）` },
+  );
+}
+
+/**
+ * 关闭 dockview 面板（重试直至面板消失，2026-09-08 实测语义）：CP-004 共享
+ * 宿主下 dockview close 存在瞬态抖动面——面板挂载/页组最大化等布局 mutation
+ * 未收敛时首轮 api.close 被吞（面板仍在，400ms 后重试即成功）；Ctrl+W 用例
+ * 「轮询派发直到消失」同型自我修复（md 关闭用例注释同口径）。面板不存在时
+ * 安全 no-op。返回面板是否已消失。
+ */
+async function closePanelRetryGone(panelId: string): Promise<boolean> {
+  await switchToMainWindow();
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const gone = await browser.execute((pid: string) => {
+      const panel = window.__dockviewApi?.getPanel(pid);
+      if (!panel) return true;
+      panel.api.close();
+      return false;
+    }, panelId);
+    if (gone) return true;
+    await browser.pause(300);
+  }
+  // 重试耗尽——末轮 close 后最终确认一次（面板可能已消失）
+  return browser.execute((pid: string) => !window.__dockviewApi?.getPanel(pid), panelId);
+}
+
+/**
+ * 用例终局卫生（2026-09-08 修复 A）：预览窗口按产品语义保活常驻（面板卸载
+ * 才销毁）——html spec 各缩放/字号用例自建 dockview 面板但从不关闭，spec
+ * 结束残留 5 个预览 WebviewWindow；每 spec 新 WebDriver session 默认窗口 =
+ * 后端 webview_windows() HashMap first()（无序），残留窗致后续 spec 会话落
+ * 非 main 上下文（无 helpers → 探针/reset 级联失效，wdio.conf beforeSuite
+ * 已归位 main 兜底）。面板关闭走 dockview api.close（各用例独立建项目/页，
+ * close 安全）；面板不存在时 no-op。卫生清理失败不掩盖用例本体结果。
+ * （模块顶层导出——缩放与字号两个 describe 共用，勿下移入 describe 作用域）
+ */
+async function closePanelAndWaitGone(panelId: string): Promise<void> {
+  try {
+    await closePanelRetryGone(panelId);
+    await waitWindowGoneFromHandles(previewWindowLabel(panelId));
+  } catch {
+    /* 卫生清理失败不掩盖用例本体结果 */
+  }
+}
 
 describe("HTML 面板主窗口快捷键关闭（Ctrl+W）", () => {
   // S10-②：预览内容迁独立 webview（focusable=false，焦点恒在主窗口）——键盘
@@ -59,7 +122,9 @@ describe("HTML 面板主窗口快捷键关闭（Ctrl+W）", () => {
       await waitPreviewDocContains(panelId, "e2e html");
 
       // 主窗口合成 Ctrl+W（ShortcutRegistry window capture 消费 → global.closeTab
-      // → 活跃面板关闭——html 面板为活跃面板）
+      // → 活跃面板关闭——CP-004 单宿主契约：多页组面板并存时 dockview 活跃面板
+      // 不随 addPanel 归属，先显式激活本面板再派发，杜绝关闭残留面板）
+      expect(await activatePanel(panelId)).toBe(true);
       await browser.waitUntil(
         async () =>
           await browser.execute(
@@ -163,11 +228,14 @@ describe("HTML 面板 Ctrl+滚轮缩放", () => {
     const tempDir = mkdtempSync(join(tmpdir(), "slterm-e2e-html-zoom-"));
     const htmlPath = join(tempDir, "zoom.html");
     writeFileSync(htmlPath, stagedFixture(400, 3, 99999, 0), "utf8");
+    let panelId: string | undefined;
     try {
-      await spawnZoomPanel(tempDir, htmlPath);
+      panelId = await spawnZoomPanel(tempDir, htmlPath);
       // 等比 ×1.1³ ≈ 1.331 → "133%"
       await waitHudText("133%");
     } finally {
+      // 面板关闭卫生——防残留预览窗口污染后续 spec 会话默认窗口（见 closePanelAndWaitGone）
+      if (panelId) await closePanelAndWaitGone(panelId);
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
@@ -178,8 +246,9 @@ describe("HTML 面板 Ctrl+滚轮缩放", () => {
     // 阶段 A：onload 立即 2 格 → 121%；阶段 B：3500ms 后 2 格（供重置后二次断言——
     // 迁移 webview 后首轮 HUD/重置链路耗时更长，B 需晚于重置完成）
     writeFileSync(htmlPath, stagedFixture(400, 2, 3500, 2), "utf8");
+    let panelId: string | undefined;
     try {
-      await spawnZoomPanel(tempDir, htmlPath);
+      panelId = await spawnZoomPanel(tempDir, htmlPath);
       // 轮 1：2 格 → 121%
       await waitHudText("121%");
       // 点重置（主窗 HUD 按钮 → 下行事件 → 宿主 → iframe 归 1，真实 WebView2 往返）
@@ -194,6 +263,7 @@ describe("HTML 面板 Ctrl+滚轮缩放", () => {
       // 轮 2：下行成功（iframe 内归 1）→ 再次 121%；下行失败则从 1.21 继续 → 146%
       await waitHudText("121%");
     } finally {
+      if (panelId) await closePanelAndWaitGone(panelId);
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
@@ -203,12 +273,14 @@ describe("HTML 面板 Ctrl+滚轮缩放", () => {
     const htmlPath = join(tempDir, "zoom.html");
     // 阶段 A：onload 立即 2 格 → 121%；阶段 B：2200ms 后 1 格
     writeFileSync(htmlPath, stagedFixture(400, 2, 2200, 1), "utf8");
+    let panelId: string | undefined;
     try {
-      await spawnZoomPanel(tempDir, htmlPath);
+      panelId = await spawnZoomPanel(tempDir, htmlPath);
       await waitHudText("121%");
       // 文档存活时闭包 zoom 保留：+1 格 → ×1.1 → 133%（若 iframe 重建归 1 则 110%）
       await waitHudText("133%");
     } finally {
+      if (panelId) await closePanelAndWaitGone(panelId);
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
@@ -234,11 +306,14 @@ describe("HTML 面板 Ctrl+滚轮缩放", () => {
         `<body><h1>script fixture</h1><script>${scriptBody}</script></body></html>`,
       "utf8",
     );
+    let panelId: string | undefined;
     try {
-      await spawnZoomPanel(tempDir, htmlPath, "script fixture");
+      panelId = await spawnZoomPanel(tempDir, htmlPath, "script fixture");
       // 2 格 ×1.1² → 121%——宿主内联 <script> 不执行则永无缩放上行（超时失败）
       await waitHudText("121%");
     } finally {
+      // 面板关闭卫生——防残留预览窗口污染后续 spec 会话默认窗口（见 closePanelAndWaitGone）
+      if (panelId) await closePanelAndWaitGone(panelId);
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
@@ -266,14 +341,14 @@ describe("HTML 面板 Ctrl+滚轮缩放", () => {
       const label = previewWindowLabel(panelId);
       expect((await browser.getWindowHandles()).includes(label)).toBe(true);
 
-      // 经 dockview 关闭面板 → PreviewFrame 卸载 → 预览窗口销毁（异步——轮询出列）
-      await browser.execute((pid: string) => {
-        window.__dockviewApi?.getPanel(pid)?.api.close();
-      }, panelId);
-      await browser.waitUntil(
-        async () => !(await browser.getWindowHandles()).includes(label),
-        { timeout: 10000, timeoutMsg: "关闭面板后预览窗口未出列" },
-      );
+      // 经 dockview 关闭面板（重试至面板消失——首轮 close 可能被布局 mutation
+      // 瞬态吞掉，见 closePanelRetryGone）→ PreviewFrame 卸载 → 预览窗口销毁
+      // （异步——轮询出列）。销毁验证须跨瞬态（诚实化，2026-09-08）：单次采样
+      // 缺席可能命中 destroy 后注册表滞后瞬态——通过的是瞬态，窗口 100ms 后
+      // 复活入列会再次出现；连续多次采样缺席才算稳定出列（修复 D 落定后复活
+      // 不再发生，连续采样语义保留防误判）
+      expect(await closePanelRetryGone(panelId)).toBe(true);
+      await waitWindowGoneFromHandles(label);
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
@@ -285,11 +360,12 @@ describe("HTML 面板 edit 态 Ctrl+滚轮字号", () => {
     const tempDir = mkdtempSync(join(tmpdir(), "slterm-e2e-html-fontsize-"));
     const htmlPath = join(tempDir, "page.html");
     writeFileSync(htmlPath, "<h1>e2e 字号</h1>", "utf8");
+    let panelId: string | undefined;
     try {
       await waitForWorkspaceReady();
       await createProject(tempDir);
       await waitForDockviewApi();
-      const panelId = "e2e-html-fs-" + Date.now();
+      panelId = "e2e-html-fs-" + Date.now();
       await browser.execute(
         (args: { pid: string; path: string }) => {
           window.__dockviewApi!.addPanel({
@@ -300,26 +376,13 @@ describe("HTML 面板 edit 态 Ctrl+滚轮字号", () => {
         },
         { pid: panelId, path: htmlPath },
       );
-      // 切 edit 形态 → CM 挂载（工具条带内切换条——切换即预览窗口销毁）
+      // 切 edit 形态 → CM 挂载（工具条带内切换条——切换即预览窗口销毁）。
+      // CP-004 单宿主契约：残留页组面板仍留 DOM 且 getClientRects > 0，旧
+      // 「只点可见切换按钮」过滤失效——clickInPanel 以本面板页签为锚点，在
+      // 本面板组内容树内点击（杜绝命中残留面板的切换条切错对象）
       await waitForPreviewWindow(panelId, 20000);
-      await browser.waitUntil(
-        async () =>
-          await browser.execute(
-            () =>
-              Array.from(
-                document.querySelectorAll<HTMLButtonElement>('[data-e2e="html-mode-edit"]'),
-              ).some((el) => el.getClientRects().length > 0),
-          ),
-        { timeout: 15000, timeoutMsg: "html 切换条未出现" },
-      );
-      // 只点「可见」切换按钮——跨用例同页面残留面板（display:none）会遮蔽
-      // querySelector 首元素（markdown.e2e 头注释实证；隐藏元素 click 无效）
-      await browser.execute(() => {
-        const btn = Array.from(
-          document.querySelectorAll<HTMLButtonElement>('[data-e2e="html-mode-edit"]'),
-        ).find((el) => el.getClientRects().length > 0);
-        btn?.click();
-      });
+      const clicked = await clickInPanel(panelId, '[data-e2e="html-mode-edit"]');
+      expect(clicked).toBe(true);
       // 预览窗口随 render 形态退出销毁（PreviewFrame 卸载）
       await browser.waitUntil(
         async () => !(await browser.getWindowHandles()).includes(previewWindowLabel(panelId)),
@@ -328,21 +391,39 @@ describe("HTML 面板 edit 态 Ctrl+滚轮字号", () => {
       await browser.waitUntil(
         async () =>
           await browser.execute(
-            () =>
-              Array.from(document.querySelectorAll(".cm-content")).some(
-                (el) => el.getClientRects().length > 0,
-              ),
+            (pid: string) => {
+              // 本面板内容树内的 CM（跨用例残留面板 CM 同样留 DOM——锚定过滤）
+              const anchor = document.querySelector(`[data-e2e="tab-close-${pid}"]`);
+              if (!anchor) return false;
+              let el: HTMLElement | null = anchor.parentElement;
+              while (el) {
+                const cm = el.querySelector(".cm-content");
+                if (cm && cm.getClientRects().length > 0) return true;
+                el = el.parentElement;
+              }
+              return false;
+            },
+            panelId,
           ),
         { timeout: 15000, timeoutMsg: "html edit 编辑器未挂载" },
       );
-      await browser.execute(() => {
-        const cm = Array.from(document.querySelectorAll(".cm-content")).find(
-          (el) => el.getClientRects().length > 0,
-        );
-        cm?.dispatchEvent(
-          new WheelEvent("wheel", { deltaY: -120, ctrlKey: true, cancelable: true, bubbles: true }),
-        );
-      });
+      await browser.execute((pid: string) => {
+        // 合成 Ctrl+wheel 到本面板 CM（锚定同上——editorFontSize 为共享 store，
+        // 只对本面板内容派发防污染其它面板字号断言）
+        const anchor = document.querySelector(`[data-e2e="tab-close-${pid}"]`);
+        if (!anchor) return;
+        let el: HTMLElement | null = anchor.parentElement;
+        while (el) {
+          const cm = el.querySelector(".cm-content");
+          if (cm && cm.getClientRects().length > 0) {
+            cm.dispatchEvent(
+              new WheelEvent("wheel", { deltaY: -120, ctrlKey: true, cancelable: true, bubbles: true }),
+            );
+            return;
+          }
+          el = el.parentElement;
+        }
+      }, panelId);
       await browser.waitUntil(
         async () =>
           (await browser.execute(() => {
@@ -352,6 +433,9 @@ describe("HTML 面板 edit 态 Ctrl+滚轮字号", () => {
         { timeout: 10000, timeoutMsg: "html 编辑 Ctrl+滚轮未生效（字号未 14→15）" },
       );
     } finally {
+      // 面板关闭卫生——本用例预览窗口已随 edit 切换销毁，关闭面板防残留
+      // dockview 面板 + 潜在预览窗口污染后续 spec（见 closePanelAndWaitGone）
+      if (panelId) await closePanelAndWaitGone(panelId);
       rmSync(tempDir, { recursive: true, force: true });
       await switchToMainWindow();
     }

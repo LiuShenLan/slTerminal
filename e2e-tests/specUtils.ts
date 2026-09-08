@@ -154,6 +154,44 @@ export async function addTerminalPanel(panelId: string): Promise<void> {
 }
 
 /**
+ * 激活指定面板（dockview panel.api.setActive——CP-004 单宿主契约：
+ * 隐藏页组面板仍留 DOM/可交互，旧「可见即活跃」假设失效——关闭类快捷键
+ * （Ctrl+W 等）以 activePanel 为目标，须先显式激活目标面板再派发）。
+ */
+export async function activatePanel(panelId: string): Promise<boolean> {
+  return browser.execute((pid: string) => {
+    const panel = (window as any).__dockviewApi?.getPanel(pid);
+    if (!panel) return false;
+    panel.api.setActive();
+    return true;
+  }, panelId);
+}
+
+/**
+ * 在指定面板的内容 DOM 内点击目标选择器（CP-004 单宿主契约：多页组面板
+ * 同 DOM 并存且隐藏组 getClientRects 仍 >0，旧「首个可见元素」过滤失效——
+ * 以面板页签（tab-close-{panelId}）为锚点向上定位所属组容器，再在组内容
+ * 树内查询点击，杜绝命中残留面板的同类控件）。
+ */
+export async function clickInPanel(panelId: string, selector: string): Promise<boolean> {
+  return browser.execute((args: { pid: string; sel: string }) => {
+    const anchor = document.querySelector(`[data-e2e="tab-close-${args.pid}"]`);
+    if (!anchor) return false;
+    // 自页签向上找「含目标选择器」的最近祖先（tab 与面板内容同属一个组容器）
+    let el: HTMLElement | null = anchor.parentElement;
+    while (el) {
+      const hit = el.querySelector<HTMLElement>(args.sel);
+      if (hit) {
+        hit.click();
+        return true;
+      }
+      el = el.parentElement;
+    }
+    return false;
+  }, { pid: panelId, sel: selector });
+}
+
+/**
  * 等待「最新」terminal-container 的 PTY session 就绪；存在 __e2e_error 时抛出原因。
  * CP-004 单宿主适配：历史页组的容器仍留 DOM（隐藏组不卸载）——「任一容器就绪」
  * 会被陈旧终端抢先满足；语义改为最近创建的容器（DOM 序末位 = 各套件刚 add 的
@@ -372,7 +410,9 @@ export async function withProjectAndTerminal(opts: { hooks?: boolean } = {}): Pr
     await waitForDockviewApi();
     const projectId = (await getProjectIdForPage(pageId)) ?? "";
     if (!projectId) throw new Error(`无法获取 projectId（pageId=${pageId}）`);
-    const panelId = `terminal-${pageId}-0`;
+    // CP-004 panelId 页前缀协议形态（旧 terminal-{pageId}-0 无 ":" → pageOfPanelId
+    // 解析 null，终端可见判定等按页归属消费点失效）
+    const panelId = `${pageId}:terminal-0`;
     await addTerminalPanel(panelId);
     // CP-004: 精确锁定本面板容器就绪(全局"任一就绪"会被历史页组陈旧终端抢先)
     await waitForPtySessionReady(25000, panelId);

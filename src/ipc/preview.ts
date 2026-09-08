@@ -48,7 +48,10 @@ export function makePreviewLabel(panelId: string): string {
 }
 
 /** 创建/更新预览窗口几何与显隐（幂等——窗口不存在则创建；x/y/w/h 为面板内容
- *  区在 CSS 视口坐标；后端换算物理屏幕坐标并驱动位置/尺寸/显隐） */
+ *  区在 CSS 视口坐标；后端换算物理屏幕坐标并驱动位置/尺寸/显隐）。
+ *  token = 挂载期随机串（PreviewFrame 每轮生命周期 effect 生成）——后端会话
+ *  守卫凭它拒绝「close 后同 token 迟到 sync」的重建（销毁后复活僵尸根因，
+ *  2026-09-08 归因）；sync/close 必须同传同值 */
 export function previewSync(
   label: string,
   x: number,
@@ -56,13 +59,15 @@ export function previewSync(
   width: number,
   height: number,
   visible: boolean,
+  token: string,
 ): Promise<void> {
-  return invoke("preview_sync", { label, x, y, width, height, visible });
+  return invoke("preview_sync", { label, x, y, width, height, visible, token });
 }
 
-/** 销毁预览窗口并清空其渲染内容（面板卸载/预览形态退出时） */
-export function previewClose(label: string): Promise<void> {
-  return invoke("preview_close", { label });
+/** 销毁预览窗口并清空其渲染内容（面板卸载/预览形态退出时）；token 同上——
+ *  与最近一次 previewSync 同传（异 token 的迟到 close 后端拒绝受理） */
+export function previewClose(label: string, token: string): Promise<void> {
+  return invoke("preview_close", { label, token });
 }
 
 /** 推送渲染内容（最终注入产物文档——injectScript 装配后的完整 srcdoc 串）；

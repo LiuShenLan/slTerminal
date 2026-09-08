@@ -183,6 +183,14 @@ export const PreviewFrame: React.FC<PreviewFrameProps> = ({
 
   // ── 窗口生命周期 + 几何同步（轮询 + 主窗移动即时触发）──
   useEffect(() => {
+    // 挂载期随机 token（随 previewSync/previewClose 请求传递）——后端按 label
+    // 记录当前 token 与 closed 态：close 后同 token 迟到 sync 拒绝重建（销毁后
+    // 复活僵尸根因，2026-09-08 归因——in-flight sync 与卸载 cleanup 的 close
+    // 并发，destroy 落主线程后迟到 sync 无条件按 visible 重建）；新 token = 真
+    // 重挂载放行。每轮 effect 执行生成新 token：React StrictMode 开发双跑
+    // （setup→cleanup→setup）下第二轮按新 token 视作重挂载，不被首轮 cleanup
+    // 的 close 拒绝。
+    const token = createNonce();
     let disposed = false;
     let lastX = NaN;
     let lastY = NaN;
@@ -213,7 +221,7 @@ export const PreviewFrame: React.FC<PreviewFrameProps> = ({
       lastW = rw;
       lastH = rh;
       lastVis = visible;
-      void previewSync(label, x, y, rw, rh, visible).catch(() => {
+      void previewSync(label, x, y, rw, rh, visible, token).catch(() => {
         /* 窗口域异常——轮询下轮自愈 */
       });
     };
@@ -230,8 +238,9 @@ export const PreviewFrame: React.FC<PreviewFrameProps> = ({
       disposed = true;
       window.clearInterval(timer);
       offMove();
-      // 面板卸载 → 销毁预览窗口（缩放/滚动态随窗口销毁——与旧 iframe 关页签销毁同语义）
-      void previewClose(label).catch(() => {
+      // 面板卸载 → 销毁预览窗口（缩放/滚动态随窗口销毁——与旧 iframe 关页签销毁同语义；
+      // token 同传——后端会话守卫以同 token 记录 closed，迟到的本轮 sync 不再重建）
+      void previewClose(label, token).catch(() => {
         /* 窗口已不存在——幂等 */
       });
     };

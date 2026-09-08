@@ -39,8 +39,10 @@ describe("页签标题", () => {
 
     const { pageId, rootPath } = await requireActivePageInfo();
 
-    // 创建编辑器面板（带文件路径）
-    const panelId = "e2e-title-editor-" + Date.now();
+    // 创建编辑器面板（带文件路径）——CP-004 panelId 页前缀协议：直插 id 与
+    // params.panelId 均须 "{pageId}:{localId}" 形态（无前缀面板 pageOfPanelId
+    // 解析为 null，标题注册/关闭重算链路全部失效）
+    const panelId = `${pageId}:e2e-title-editor-${Date.now()}`;
     const testFilePath = "C:\\e2e-title-test\\src\\main.ts";
 
     await browser.execute(
@@ -81,8 +83,8 @@ describe("页签标题", () => {
 
     const { pageId, rootPath } = await requireActivePageInfo();
 
-    // 创建第一个编辑器（src/index.ts）
-    const pid1 = "e2e-conflict-1-" + Date.now();
+    // 创建第一个编辑器（src/index.ts）——id 页前缀协议形态（CP-004）
+    const pid1 = `${pageId}:e2e-conflict-1-${Date.now()}`;
     const path1 = "C:\\e2e-title-test\\src\\index.ts";
     await browser.execute(
       (args: { pid: string; path: string; pageId: string; root: string }) => {
@@ -97,8 +99,8 @@ describe("页签标题", () => {
       { pid: pid1, path: path1, pageId, root: rootPath },
     );
 
-    // 创建第二个编辑器（lib/index.ts）—— 同名不同路径
-    const pid2 = "e2e-conflict-2-" + Date.now();
+    // 创建第二个编辑器（lib/index.ts）—— 同名不同路径（id 页前缀协议形态，CP-004）
+    const pid2 = `${pageId}:e2e-conflict-2-${Date.now()}`;
     const path2 = "C:\\e2e-title-test\\lib\\index.ts";
     await browser.execute(
       (args: { pid: string; path: string; pageId: string; root: string }) => {
@@ -125,9 +127,10 @@ describe("页签标题", () => {
 
     const { pageId, rootPath } = await requireActivePageInfo();
 
-    // 创建两个同名编辑器
-    const pid1 = "e2e-reclose-1-" + Date.now();
-    const pid2 = "e2e-reclose-2-" + Date.now();
+    // 创建两个同名编辑器（id 页前缀协议形态——无前缀时关闭面板的
+    // onDidRemovePanel 重算链（pageOfPanelId 解析）断裂，标题永不切回 basename）
+    const pid1 = `${pageId}:e2e-reclose-1-${Date.now()}`;
+    const pid2 = `${pageId}:e2e-reclose-2-${Date.now()}`;
     const path1 = "C:\\e2e-title-test\\a\\utils.ts";
     const path2 = "C:\\e2e-title-test\\b\\utils.ts";
 
@@ -187,13 +190,13 @@ describe("编辑器保存 (Ctrl+S)", () => {
       await waitForWorkspaceReady();
 
       // 2. 程序化创建项目（根 = 临时目录）
-      await createProject(tempDir);
+      const pageId = await createProject(tempDir);
 
       // 3. 等待 Dockview API
       await waitForDockviewApi();
 
-      // 4. 打开编辑器面板（加载临时文件）
-      const panelId = "e2e-save-editor-" + Date.now();
+      // 4. 打开编辑器面板（加载临时文件）——id 页前缀协议形态（CP-004）
+      const panelId = `${pageId}:e2e-save-editor-${Date.now()}`;
       await browser.execute(
         (args: { pid: string; path: string }) => {
           window.__dockviewApi!.addPanel({
@@ -291,11 +294,11 @@ describe("编辑器 dirty→clean 保存", () => {
     try {
       // 1-3. 等待就绪 + 创建项目 + Dockview API
       await waitForWorkspaceReady();
-      await createProject(tempDir);
+      const pageId = await createProject(tempDir);
       await waitForDockviewApi();
 
-      // 4. 打开编辑器面板
-      const panelId = "e2e-dirty-save-" + Date.now();
+      // 4. 打开编辑器面板——id 页前缀协议形态（CP-004）
+      const panelId = `${pageId}:e2e-dirty-save-${Date.now()}`;
       await browser.execute(
         (args: { pid: string; path: string }) => {
           window.__dockviewApi!.addPanel({

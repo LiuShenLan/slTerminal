@@ -182,7 +182,7 @@ describe("CLI 别名（cliAliases 段，D9 冒烟）", function () {
       // 先建项目再等 Dockview API：空数据目录启动无默认项目/页面 → Dockview 不挂载、
       // __dockviewApi 恒 undefined（2026-09-08 CP-030 排查实证；agent/mockcli 均按
       // createProject 在前、waitForDockviewApi 在后的序排）——页面随项目创建而挂载
-      await createProject(tempDir);
+      const pageId = await createProject(tempDir);
       await waitForDockviewApi();
       await openCliAliasesPage();
       await browser.waitUntil(
@@ -215,8 +215,10 @@ describe("CLI 别名（cliAliases 段，D9 冒烟）", function () {
       );
 
       // ── 4. 终端面板：OSC 133 C 别名命中（注册表快照实时生效，无需重启） ──
+      // CP-004 panelId 页前缀协议：直插 id 与 params.panelId 均为 "{pageId}:{localId}"
+      // 形态——无前缀面板 pageOfPanelId=null，终端可见判定/面板归属链全部失效
       await closeSettingsPanels();
-      pid = `terminal-${Date.now()}`;
+      pid = `${pageId}:terminal-${Date.now()}`;
       await addTerminalPanel(pid);
       await waitForPtySessionReady();
       await waitForPanelPtyReady(pid);

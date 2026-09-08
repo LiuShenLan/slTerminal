@@ -80,6 +80,113 @@ struct StoredContent {
 static CONTENT_STORE: LazyLock<Mutex<HashMap<String, StoredContent>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// 预览窗口会话态（label → 会话）：「销毁后复活」僵尸的守卫状态——
+/// 2026-09-08 归因：PreviewFrame 200ms 几何轮询的 in-flight previewSync 与
+/// 卸载 cleanup 的 previewClose 并发——destroy 落主线程后迟到的 sync 命中
+/// 「窗口不存在 + visible → 无条件重建」分支（2026-09-08 前实现）→ 僵尸孤儿
+/// 窗口复活入列（e2e 句柄集 100ms 后复见）。修：前端挂载期生成随机 token 随
+/// sync/close 请求传递，后端按 label 记录当前 token 与 closed 态——close 后
+/// 同 token 迟到 sync 拒绝重建；新 token（真重挂载）放行。
+struct WindowSession {
+    /// 当前受理挂载的 token
+    token: String,
+    /// 当前 token 是否已 close（close 后同 token 迟到 sync 拒绝重建）
+    closed: bool,
+    /// 已退役 token（受理过 close / 被新挂载取代的旧 token）——迟到 sync
+    /// 一律拒绝，防跨命令乱序下旧挂载的迟到 sync 复活/劫持新会话窗口
+    /// （IPC 通道同 webview FIFO，正常时序到不了此面；保留为防御纵深）
+    retired: Vec<String>,
+}
+
+/// 会话态退役 token 保留上限（防无界增长——每 label 仅存最近几代）
+const MAX_RETIRED_TOKENS: usize = 4;
+
+static SESSION_STATE: LazyLock<Mutex<HashMap<String, WindowSession>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// sync 放行判定（纯逻辑——命令与 L1 测试共用）。须在窗口域操作闭包
+/// （run_on_main 主线程临界）内调用——与建窗/销毁同临界，防与 close 交错：
+/// - 同 token 已 close / 已退役 token → 拒绝（迟到 sync，不重建窗口）
+/// - 同 token 未 close → 放行（常规几何/显隐同步）
+/// - 异 token（新挂载，旧会话被取代）→ 退役旧 token、登记并放行
+fn session_sync_allowed(
+    state: &mut HashMap<String, WindowSession>,
+    label: &str,
+    token: &str,
+) -> bool {
+    let entry = state.entry(label.to_string()).or_insert(WindowSession {
+        token: token.to_string(),
+        closed: false,
+        retired: Vec::new(),
+    });
+    if entry.retired.iter().any(|t| t == token) {
+        // 已退役 token：旧挂载的迟到 sync——拒绝（防复活/劫持）
+        return false;
+    }
+    if entry.token == token {
+        // 当前会话：close 后迟到 sync 拒绝；未 close 放行
+        return !entry.closed;
+    }
+    // 新挂载：退役旧 token 并接管会话
+    entry.retired.push(entry.token.clone());
+    if entry.retired.len() > MAX_RETIRED_TOKENS {
+        entry
+            .retired
+            .drain(..entry.retired.len() - MAX_RETIRED_TOKENS);
+    }
+    entry.token = token.to_string();
+    entry.closed = false;
+    true
+}
+
+/// close 受理判定（纯逻辑——命令与 L1 测试共用）。同样须在窗口域操作闭包内
+/// 调用：同 token → 标记 closed 并受理（销毁 + 清内容）；未知会话 → 登记
+/// closed 并受理（防御：从未 sync 直接 close 的形态）；异 token（旧会话迟到
+/// close 或新挂载被其取代后）→ 拒绝（不破坏已取代它的新会话窗口与内容）。
+fn session_close_claim(
+    state: &mut HashMap<String, WindowSession>,
+    label: &str,
+    token: &str,
+) -> bool {
+    match state.get_mut(label) {
+        Some(s) if s.token == token => {
+            s.closed = true;
+            true
+        }
+        Some(s) => {
+            // 异 token 的迟到 close：登记其 token 为已退役（连带拒其迟到 sync），
+            // 不触碰当前会话
+            if !s.retired.iter().any(|t| t == token) {
+                s.retired.push(token.to_string());
+                if s.retired.len() > MAX_RETIRED_TOKENS {
+                    s.retired.drain(..s.retired.len() - MAX_RETIRED_TOKENS);
+                }
+            }
+            false
+        }
+        None => {
+            state.insert(
+                label.to_string(),
+                WindowSession {
+                    token: token.to_string(),
+                    closed: true,
+                    retired: Vec::new(),
+                },
+            );
+            true
+        }
+    }
+}
+
+/// token 格式校验：非空 + ≤96 字符（语义 = 前端挂载期随机 hex 串；后端只做
+/// 存在性/长度防御——空 token 会破坏「新挂载 ≠ 旧会话」判定）
+fn validate_token(token: &str) -> Result<(), AppError> {
+    if token.is_empty() || token.len() > 96 {
+        return Err(AppError::Validation("非法预览会话 token".into()));
+    }
+    Ok(())
+}
+
 /// 查找（或创建）预览窗口——统一入口，所有命令共用
 fn webview_window(app: &tauri::AppHandle, label: &str) -> Option<WebviewWindow> {
     app.get_webview_window(label)
@@ -164,6 +271,11 @@ fn run_on_main<T: Send + 'static>(
 }
 
 /// 创建或更新预览窗口几何/显隐（前端每帧感知变化后调用；幂等）
+///
+/// token = 前端挂载期随机串（随 preview_close 同传）——会话守卫见
+/// session_sync_allowed：close 后同 token 迟到 sync 在此拒绝重建（防僵尸）。
+/// 参数数量为 IPC 契约形态（几何五元 + 守卫 token），不可折叠。
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn preview_sync(
     app: tauri::AppHandle,
@@ -173,12 +285,19 @@ pub async fn preview_sync(
     width: f64,
     height: f64,
     visible: bool,
+    token: String,
 ) -> Result<(), AppError> {
     validate_label(&label)?;
+    validate_token(&token)?;
     // 防御：尺寸非法/过小按隐藏处理
     let visible = visible && width >= 1.0 && height >= 1.0;
     let app_owned = app.clone();
     run_on_main(&app, move || {
+        // 会话守卫（与建窗/销毁同主线程临界）：close 后同 token 迟到 sync 拒绝
+        // 重建——僵尸复活根因的守卫落点
+        if !session_sync_allowed(&mut SESSION_STATE.lock(), &label, &token) {
+            return Ok(());
+        }
         let (ox, oy, scale) = main_window_geometry(&app_owned)?;
         let px = to_physical(x, ox, scale);
         let py = to_physical(y, oy, scale);
@@ -214,12 +333,25 @@ pub async fn preview_sync(
 }
 
 /// 关闭预览窗口并清除内容（面板卸载/预览形态退出时调用）
+///
+/// token = 与 preview_sync 同传的挂载期随机串——会话守卫见 session_close_claim：
+/// 异 token（旧会话迟到的 close）拒绝受理，不破坏已取代它的新会话窗口。
 #[tauri::command]
-pub async fn preview_close(app: tauri::AppHandle, label: String) -> Result<(), AppError> {
+pub async fn preview_close(
+    app: tauri::AppHandle,
+    label: String,
+    token: String,
+) -> Result<(), AppError> {
     validate_label(&label)?;
-    CONTENT_STORE.lock().remove(&label);
+    validate_token(&token)?;
     let app_owned = app.clone();
     run_on_main(&app, move || {
+        // 会话守卫（与销毁同主线程临界）：异 token = 旧会话迟到 close——不破坏
+        // 已取代它的新会话窗口与内容
+        if !session_close_claim(&mut SESSION_STATE.lock(), &label, &token) {
+            return Ok(());
+        }
+        CONTENT_STORE.lock().remove(&label);
         if let Some(win) = webview_window(&app_owned, &label) {
             win.destroy()
                 .map_err(|e| AppError::Unknown(format!("销毁预览窗口失败: {e}")))?;
@@ -496,5 +628,83 @@ mod preview_tests {
             None
         )
         .is_err());
+    }
+
+    /// 会话守卫核心竞态：close 后同 token 迟到 sync 拒绝（销毁后复活僵尸根因）
+    #[test]
+    fn session_gate_rejects_late_sync_after_close() {
+        let mut state = HashMap::new();
+        // 挂载 sync 放行并登记当前会话
+        assert!(session_sync_allowed(&mut state, "preview-p1", "tok-a"));
+        // 面板卸载 close 受理（标记 closed）
+        assert!(session_close_claim(&mut state, "preview-p1", "tok-a"));
+        // 同 token 迟到 sync 拒绝——窗口不得按 visible 重建（preview_sync 的
+        // 会话守卫即拦截于此，不落「窗口不存在 + visible → 建窗」分支）
+        assert!(!session_sync_allowed(&mut state, "preview-p1", "tok-a"));
+        // 重复 close 幂等受理（已 closed 再受理无副作用）
+        assert!(session_close_claim(&mut state, "preview-p1", "tok-a"));
+        assert!(!session_sync_allowed(&mut state, "preview-p1", "tok-a"));
+    }
+
+    /// 会话守卫：close 后新 token sync 放行（真重挂载——形态切换/重开面板往返）；
+    /// 且被取代的旧 token 迟到 sync 不复活（退役登记生效）
+    #[test]
+    fn session_gate_allows_new_mount_after_close() {
+        let mut state = HashMap::new();
+        assert!(session_sync_allowed(&mut state, "preview-p1", "tok-a"));
+        assert!(session_close_claim(&mut state, "preview-p1", "tok-a"));
+        // 新挂载（异 token）→ 放行并接管会话（closed 复位）
+        assert!(session_sync_allowed(&mut state, "preview-p1", "tok-b"));
+        // 新会话 close 后：自身迟到 sync 拒绝
+        assert!(session_close_claim(&mut state, "preview-p1", "tok-b"));
+        assert!(!session_sync_allowed(&mut state, "preview-p1", "tok-b"));
+        // 旧 token（tok-a，已退役）迟到 sync 同样拒绝——不得复活旧挂载
+        assert!(!session_sync_allowed(&mut state, "preview-p1", "tok-a"));
+    }
+
+    /// 会话守卫：异 token 迟到 close 拒绝——不破坏已取代它的新会话窗口
+    #[test]
+    fn session_gate_rejects_stale_close_after_supersede() {
+        let mut state = HashMap::new();
+        assert!(session_sync_allowed(&mut state, "preview-p1", "tok-a"));
+        // 新挂载取代旧会话（同一 label 重开面板）
+        assert!(session_sync_allowed(&mut state, "preview-p1", "tok-b"));
+        // 旧挂载迟到 close → 拒绝（不得销毁新会话窗口/内容）
+        assert!(!session_close_claim(&mut state, "preview-p1", "tok-a"));
+        // 新会话不受扰动：close 自身仍受理、其迟到 sync 仍拒绝
+        assert!(session_close_claim(&mut state, "preview-p1", "tok-b"));
+        assert!(!session_sync_allowed(&mut state, "preview-p1", "tok-b"));
+    }
+
+    /// 会话守卫：同 token 常规双 sync 幂等放行（几何轮询多拍不重置会话）
+    #[test]
+    fn session_gate_same_token_sync_stays_open() {
+        let mut state = HashMap::new();
+        assert!(session_sync_allowed(&mut state, "preview-p1", "tok-a"));
+        assert!(session_sync_allowed(&mut state, "preview-p1", "tok-a"));
+        // 多代挂载退役列表有界（MAX_RETIRED_TOKENS 裁剪生效）
+        for i in 0..10 {
+            let t = format!("tok-{i}");
+            assert!(session_sync_allowed(&mut state, "preview-p2", &t));
+        }
+        let entry = state.get("preview-p2").expect("应有会话");
+        assert!(entry.retired.len() <= MAX_RETIRED_TOKENS);
+    }
+
+    /// 会话守卫：close 落在未知会话（从未 sync）→ 受理并登记 closed（防御形态）
+    #[test]
+    fn session_gate_close_unknown_session_registers_closed() {
+        let mut state = HashMap::new();
+        assert!(session_close_claim(&mut state, "preview-p1", "tok-a"));
+        assert!(!session_sync_allowed(&mut state, "preview-p1", "tok-a"));
+    }
+
+    /// token 校验：空/超长拒绝，常规挂载串放行
+    #[test]
+    fn token_rejects_empty_and_oversize() {
+        assert!(validate_token("").is_err());
+        assert!(validate_token(&"a".repeat(97)).is_err());
+        assert!(validate_token(&"a".repeat(96)).is_ok());
+        assert!(validate_token("0123456789abcdef0123456789abcdef").is_ok());
     }
 }

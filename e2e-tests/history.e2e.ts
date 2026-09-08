@@ -144,20 +144,38 @@ describe("Claude 历史会话视图", () => {
   }
 
   /**
-   * 通用前置：创建 E2E 项目（fixture 507 会话 cwd 归属项目——导航树历史节点
-   * 只显示归属会话）→ 打开 nav 视图 → 展开全部项目行 + 历史节点（展开触发重扫）。
+   * 通用前置：创建（或复用）E2E 项目（fixture 507 会话 cwd 归属项目——导航树
+   * 历史节点只显示归属会话）→ 打开 nav 视图 → 展开全部项目行 + 历史节点
+   * （展开触发重扫）。
+   *
+   * 2026-09-08 同 root 项目去重（修复 E）：restoreHistorySession 步骤 1 按
+   * rootPath 匹配「首个」项目（restoreSession.ts Object.values find，决策 24）
+   * ——每用例无条件 __slterm_e2e_createProject(e2eProjectDir) 会累积同 root
+   * 重复项目，恢复编排按 rootPath 匹配到最早用例的空项目页 → 恢复编排断言
+   * 断链。首用例新建后记录其 pageId，后续用例切换复用（switchToPageShared
+   * 内含 setProjectRoot，与新建路径的 activePage 语义一致），全 spec 单实例
+   * 同 root 项目。
    */
+  let e2eProjectPageId: string | null = null;
   async function openHistoryWithFreshScan(): Promise<void> {
     await waitForWorkspaceReady();
-    // 507 会话 cwd = e2eProjectDir——项目存在且 rootPath 精确匹配才归属（决策 5）
-    const proj = await browser.execute((dir: string) => {
-      return (window as any).__slterm_e2e_createProject?.(dir);
-    }, e2eProjectDir);
-    // 创建失败立即 fail——后续扫描/恢复/删除断言不得基于不存在的状态（TQ-E-04）
-    if (!proj) {
-      throw new Error(
-        `__slterm_e2e_createProject 返回空（dir=${e2eProjectDir}）——helper 未就绪或创建失败`,
-      );
+    if (e2eProjectPageId === null) {
+      // 507 会话 cwd = e2eProjectDir——项目存在且 rootPath 精确匹配才归属（决策 5）
+      const proj = await browser.execute((dir: string) => {
+        return (window as any).__slterm_e2e_createProject?.(dir);
+      }, e2eProjectDir);
+      // 创建失败立即 fail——后续扫描/恢复/删除断言不得基于不存在的状态（TQ-E-04）
+      if (!proj) {
+        throw new Error(
+          `__slterm_e2e_createProject 返回空（dir=${e2eProjectDir}）——helper 未就绪或创建失败`,
+        );
+      }
+      e2eProjectPageId = proj;
+    } else {
+      // 同 root 项目已存在：切回其页面复用（不重复建项目/页面）
+      await browser.execute((pid: string) => {
+        (window as any).__slterm_e2e_switchToPage?.(pid);
+      }, e2eProjectPageId);
     }
     await openNavView();
     await ensureAllProjectsExpanded();
@@ -593,11 +611,15 @@ describe("Claude 历史会话视图", () => {
 
       // 4. B14 真实渲染断言（修复脱靶盲区：e2eTextBuffer 在 visible 门控之前填充，
       //    黑屏 bug 下文本断言全绿——此处补「主区正常 + 恢复面板可见」断言）
-      // 4a. 主区 dockview 中存在本页 terminal-{pageId}- 前缀面板（非幽灵页面导航）
+      // 4a. 主区 dockview 中存在本页页前缀协议面板 {pageId}:terminal-N（非幽灵
+      //    页面导航——CP-004 后 panelId = "{pageId}:terminal-{seq}"（pageGroups
+      //    panelIdInPage 单点，restoreSession 经 makeTerminalIdInPage 同源）；
+      //    旧前缀 "terminal-{pageId}-" 为多实例时代形态，CP-004 迁移遗漏致
+      //    found 恒 false（2026-09-08 修正）
       const pageId = info.pageId;
       const renderState = await browser.execute((pid: string) => {
         const api = (window as any).__dockviewApi;
-        const prefix = `terminal-${pid}-`;
+        const prefix = `${pid}:terminal-`;
         const panel = (api?.panels ?? []).find((p: { id: string }) =>
           p.id.startsWith(prefix),
         );
