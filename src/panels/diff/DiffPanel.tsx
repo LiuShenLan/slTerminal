@@ -42,6 +42,7 @@ import {
   updateHeadDiffGutter,
   clearHeadDiffGutter,
 } from "../editor/gitGutter";
+import { LargeFileViewer } from "../editor/largeFileViewer/LargeFileViewer";
 import { usePanelFocus } from "../../features/shortcuts";
 import { setActiveEditor, clearActiveEditor, type EditorActions } from "../editor/activeEditor";
 import { useFontSize } from "../../stores";
@@ -158,7 +159,14 @@ interface DiffPanelProps {
 
 type PanelState =
   | { kind: "loading" }
-  | { kind: "ready"; headContent: string; workdirContent: string }
+  | {
+      /** 双侧就绪——>10MB 侧不再经 CM,改引导 LargeFileViewer（CP-022） */
+      kind: "ready";
+      headContent: string;
+      workdirContent: string;
+      headLarge: boolean;
+      workdirLarge: boolean;
+    }
   | { kind: "error"; message: string };
 
 /** 行高估值（字体大小 × 1.5） */
@@ -250,22 +258,28 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ params }) => {
 
         if (cancelled) return;
 
-        // 大文件检查
+        // CP-022 大文件检查: >10MB 侧改引导 LargeFileViewer（只读分片浏览）——
+        // 该侧内容不进 CM,对齐/滚动同步/占位对齐对只读浏览侧降级（渲染分支处理）;
+        // 1MB-10MB 警告 header 语义不变（仅非超限侧挂 header）
+        const headLarge = headContent.length > MAX_FILE_SIZE_BYTES;
         let displayHead = headContent;
-        if (headContent.length > MAX_FILE_SIZE_BYTES) {
-          displayHead = `// [slTerminal] 文件过大（约${(headContent.length / 1_000_000).toFixed(1)}MB），已拒绝打开以保护内存。`;
-        } else if (headContent.length > LARGE_FILE_WARN_BYTES) {
+        if (!headLarge && headContent.length > LARGE_FILE_WARN_BYTES) {
           displayHead = `// [slTerminal] 大文件（约${(headContent.length / 1_000_000).toFixed(1)}MB），只读查看。\n// 语法高亮和搜索可能影响性能。\n\n` + headContent;
         }
 
+        const workdirLarge = workdirContent.length > MAX_FILE_SIZE_BYTES;
         let displayWorkdir = workdirContent;
-        if (workdirContent.length > MAX_FILE_SIZE_BYTES) {
-          displayWorkdir = `// [slTerminal] 文件过大（约${(workdirContent.length / 1_000_000).toFixed(1)}MB），已拒绝打开以保护内存。`;
-        } else if (workdirContent.length > LARGE_FILE_WARN_BYTES) {
+        if (!workdirLarge && workdirContent.length > LARGE_FILE_WARN_BYTES) {
           displayWorkdir = `// [slTerminal] 大文件（约${(workdirContent.length / 1_000_000).toFixed(1)}MB），编辑可能影响性能。\n\n` + workdirContent;
         }
 
-        setState({ kind: "ready", headContent: displayHead, workdirContent: displayWorkdir });
+        setState({
+          kind: "ready",
+          headContent: displayHead,
+          workdirContent: displayWorkdir,
+          headLarge,
+          workdirLarge,
+        });
 
         // 异步加载 diff hunks（不阻塞渲染）
         try {
@@ -538,10 +552,11 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ params }) => {
 
   // ── CM6 编辑器挂载 ──────────────────────────────────────────
 
-  // 左侧只读 CM（HEAD）——内容变化时重建
+  // 左侧只读 CM（HEAD）——内容变化时重建;headLarge（>10MB 引导 LargeFileViewer）
+  // 时不创建 view（渲染分支显示只读浏览,对齐/滚动同步对该侧降级）
   useEffect(() => {
     const container = leftContainerRef.current;
-    if (!container || state.kind !== "ready") return;
+    if (!container || state.kind !== "ready" || state.headLarge) return;
 
     // 销毁旧 view
     leftViewRef.current?.destroy();
@@ -591,10 +606,11 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ params }) => {
     };
   }, [state.kind, state.kind === "ready" ? (state as { headContent: string }).headContent : null, filePath]);
 
-  // 右侧可编辑 CM（工作区）——内容变化时重建
+  // 右侧可编辑 CM（工作区）——内容变化时重建;workdirLarge（>10MB 引导
+  // LargeFileViewer）时不创建 view（该侧无编辑,保存路径经右侧 view 守卫自动降级）
   useEffect(() => {
     const container = rightContainerRef.current;
-    if (!container || state.kind !== "ready") return;
+    if (!container || state.kind !== "ready" || state.workdirLarge) return;
 
     // 销毁旧 view
     rightViewRef.current?.destroy();
@@ -707,18 +723,42 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ params }) => {
       )}
       <div style={{ flex: 1, display: "flex", flexDirection: "row", minHeight: 0 }}>
         <div style={{ flex: "50%", display: "flex", minWidth: 0, borderRight: `1px solid ${SEPARATOR_BG}` }}>
-          <div
-            data-e2e="diff-left"
-            ref={leftContainerRef}
-            style={{ flex: 1, background: EDITOR_BG, overflow: "clip", minWidth: 0 }}
-          />
+          {state.headLarge ? (
+            // CP-022: HEAD 侧 >10MB → 只读分片浏览（内容源 = 磁盘 filePath 分片,
+            // 与 HEAD blob 一致场景等价——差异/重命名场景为近似,口径登记 panels/CLAUDE.md）
+            <div data-e2e="diff-left" style={{ flex: 1, display: "flex", minWidth: 0 }}>
+              <LargeFileViewer
+                filePath={filePath}
+                fileSizeBytes={state.headContent.length}
+                sourceLabel="HEAD"
+              />
+            </div>
+          ) : (
+            <div
+              data-e2e="diff-left"
+              ref={leftContainerRef}
+              style={{ flex: 1, background: EDITOR_BG, overflow: "clip", minWidth: 0 }}
+            />
+          )}
         </div>
         <div style={{ flex: "50%", display: "flex", minWidth: 0 }}>
-          <div
-            data-e2e="diff-right"
-            ref={rightContainerRef}
-            style={{ flex: 1, background: EDITOR_BG, overflow: "clip", minWidth: 0 }}
-          />
+          {state.workdirLarge ? (
+            // CP-022: 工作区侧 >10MB → 只读分片浏览（无可编辑域——保存降级,
+            // 该侧 LargeFileViewer 仅为浏览,写回/对齐/滚动同步均不适用）
+            <div data-e2e="diff-right" style={{ flex: 1, display: "flex", minWidth: 0 }}>
+              <LargeFileViewer
+                filePath={filePath}
+                fileSizeBytes={state.workdirContent.length}
+                sourceLabel="工作区"
+              />
+            </div>
+          ) : (
+            <div
+              data-e2e="diff-right"
+              ref={rightContainerRef}
+              style={{ flex: 1, background: EDITOR_BG, overflow: "clip", minWidth: 0 }}
+            />
+          )}
         </div>
       </div>
     </div>

@@ -33,6 +33,12 @@ vi.mock("../ipc/git", () => ({
   gitFileAtHead: mockGitFileAtHead,
 }));
 
+// CP-022: >10MB 分支引导 LargeFileViewer——其按需读块经 ipc/fs.readFileRange
+const { mockReadFileRange } = vi.hoisted(() => ({ mockReadFileRange: vi.fn() }));
+vi.mock("../ipc", () => ({
+  fs: { readFileRange: mockReadFileRange },
+}));
+
 // mock CM6——jsdom 无布局引擎，EditorView 无法真实工作
 const {
   mockEditorViewDestroy,
@@ -171,12 +177,14 @@ vi.mock("../stores/fontSize", () => ({
   FONT_SIZE_MAX: 32,
 }));
 
-// mock useCodeMirror 导出——供 GitShowPanel import 复用
+// mock useCodeMirror 导出——供 GitShowPanel import 复用;
+// EDITOR_FONT_SPEC 为 LargeFileViewer 字体单点（CP-022 查看器复用）
 vi.mock("../panels/editor/useCodeMirror", () => ({
   getLanguageExtension: vi.fn(() => []),
   MAX_FILE_SIZE_BYTES: 10_000_000,
   LARGE_FILE_WARN_BYTES: 1_000_000,
   createEditorFontExtension: vi.fn(() => []),
+  EDITOR_FONT_SPEC: { ".cm-scroller": { fontFamily: "monospace" } },
 }));
 
 // mock stores/fontSize——select 解构需含 setEditorFontSize；editorFontSize 动态（EDF-09 字号热切换）
@@ -217,6 +225,9 @@ const DEFAULT_PARAMS = {
 
 beforeEach(() => {
   mockGitFileAtHead.mockReset();
+  mockReadFileRange.mockReset();
+  // 默认空块（= 后端 offset ≥ 文件长度 → 空串 EOF 语义;具体用例可覆盖）
+  mockReadFileRange.mockResolvedValue("");
   mockEditorViewDestroy.mockReset();
   capturedEditorStateConfig.length = 0;
   capturedEditorViews.length = 0;
@@ -345,21 +356,24 @@ describe("GitShowPanel", () => {
 
   // ── 大文件拒绝 / 警告（EDF-04：精确断言 doc 文案）──
 
-  it("内容超过 MAX_FILE_SIZE_BYTES 时渲染拒绝文案（全文被替换）", async () => {
-    const hugeContent = "x".repeat(10_000_001);
-    mockGitFileAtHead.mockResolvedValue(hugeContent);
+  it("内容超过 MAX_FILE_SIZE_BYTES 时引导 LargeFileViewer 只读浏览（原拒绝文案形态防复发）", async () => {
+    mockGitFileAtHead.mockResolvedValue("x".repeat(10_000_001));
     const { container } = render(
       React.createElement(GitShowPanel, { params: DEFAULT_PARAMS }),
     );
+    // data-e2e 锚: 只读分片浏览渲染（替代 CM6 容器）
     await vi.waitFor(() => {
-      const cmContainer = container.querySelector('div[style*="overflow: clip"]');
-      expect(cmContainer).toBeTruthy();
+      expect(container.querySelector('[data-e2e="large-file-viewer"]')).toBeTruthy();
     });
-    // 拒绝文案精确出现，原文被整体替换
-    const lastConfig = capturedEditorStateConfig[capturedEditorStateConfig.length - 1];
-    expect(lastConfig.doc).toContain("文件过大");
-    expect(lastConfig.doc).toContain("已拒绝打开以保护内存");
-    expect(lastConfig.doc).not.toContain(hugeContent.slice(0, 100));
+    // 信息条口径: 来源面板 + 只读浏览提示
+    const infoBar = container.querySelector('[data-e2e="lfv-info-bar"]');
+    expect(infoBar?.textContent).toContain("git show");
+    expect(infoBar?.textContent).toContain("只读浏览");
+    // CM6 容器不挂载（无拒绝文案 doc——EditorState.create 不被调用）
+    expect(container.querySelector('div[style*="overflow: clip"]')).toBeNull();
+    expect(capturedEditorStateConfig.length).toBe(0);
+    // 防复发（before 形态断言）: 拒绝文案永不出现
+    expect(container.textContent).not.toContain("已拒绝打开以保护内存");
   });
 
   it("内容超过 LARGE_FILE_WARN_BYTES（未超上限）时顶部插入警告 header，原文保留", async () => {

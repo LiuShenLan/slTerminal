@@ -1033,22 +1033,40 @@ describe("EDF-03 大文件分支与保存失败", () => {
     container.innerHTML = "";
   });
 
-  it("1. 打开 >10MB 文档 → 拒绝文案替换全文 + filePathRef 清空（保存弹另存为而非覆盖原文件）", async () => {
+  it("1. 打开 >10MB 文档 → 返回 largeFile 信号且 view 不创建（防误保存 + 原拒绝文案形态防复发）", async () => {
     (fs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue("x".repeat(MAX_FILE_SIZE_BYTES + 1));
 
-    await renderAndActivate();
+    // 渲染期捕获 hook 返回值（模块变量轮询——本文件既有惯例,不依赖 result.current 冲刷;
+    // holder 容器绕开 TS 对 let 的闭包收窄）
+    const holder: { cur: ReturnType<typeof useCodeMirror> | null } = { cur: null };
+    renderHook(() => {
+      holder.cur = useCodeMirror({
+        container,
+        filePath: "/test/huge.js",
+        panelId: "edf03",
+      });
+    });
 
-    // 文档被替换为拒绝文案
-    expect(lastCreatedDoc()).toContain("文件过大");
-
-    // filePathRef 被清空（undefined）→ save 不直接写原文件，而是弹另存为对话框
-    const editor = getActiveEditor()!;
-    editor.save();
-
+    // CP-022: 超限不再以拒绝文案替换全文——向上报告 largeFile 信号（宿主引导只读浏览）
     await waitFor(() => {
-      expect(mockDialogSave).toHaveBeenCalled();
+      expect(holder.cur?.largeFile).not.toBeNull();
     }, { timeout: 3000 });
+    expect(holder.cur?.largeFile).toEqual({
+      filePath: "/test/huge.js",
+      sizeBytes: MAX_FILE_SIZE_BYTES + 1,
+    });
+
+    // 防复发（before 形态断言）: view 不创建——拒绝文案 doc 永不出现
+    expect(capturedStateExtensions).toBeNull();
+    expect(EditorState.create).not.toHaveBeenCalled();
+
+    // 防误保存: filePathRef 已清 + 无编辑实例——save 无 view 可保存,不覆盖原文件
+    const activateCall = mockUsePanelFocus.mock.calls[mockUsePanelFocus.mock.calls.length - 1];
+    const activateFn = activateCall?.[2] as (() => void) | undefined;
+    activateFn?.();
+    getActiveEditor()?.save();
     expect(fs.writeFile).not.toHaveBeenCalled();
+    expect(mockDialogSave).not.toHaveBeenCalled();
   });
 
   it("2. 打开 >1MB 文档 + confirmDialog 返回 false → 取消文案替换全文 + filePathRef 清空", async () => {

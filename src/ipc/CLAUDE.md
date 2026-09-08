@@ -23,6 +23,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **PTY spawn**：`pty.spawn(request, onOutput)` 把 `Channel` 的 `onmessage` 绑定到回调。
 - **大文件读取（BE-03）**：`fs.readFile` 后端按 256KB 块经 `onChunk` Channel 推送，终态 `{ data: "", done: true }`；wrapper 聚合拼接后 resolve，削大文件内存/IPC 峰值。
 
+### 大文件区间读取（CP-022）
+
+`fs.readFileRange(filePath, offsetBytes, lengthBytes)` → `fs_read_file_range`（无 Channel 拉取式）：后端按字节区间读并钳制 EOF，返回文本**头尾对齐字符边界**（头回溯含跨区间整字符、尾裁到完整字符边界）——对同一文件按 256KB 块序递增请求时响应首尾相接、逐块拼接即原文。唯一消费方 = `panels/editor/largeFileViewer`（blockCache 按需读块，>10MB 只读分片浏览）；不经 10MB 全量上限。契约细节与测试真值在 src-tauri/src/fs/mod.rs 命令实现注释。
+
 ### Event 模式
 
 `onFsEvent` / `onAgentEvent` / `onPlanBalanceUpdated` 封装 Tauri `listen(...)`，返回 unsubscribe 函数。调用方负责在卸载时取消订阅。

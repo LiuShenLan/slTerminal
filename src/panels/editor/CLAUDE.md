@@ -22,15 +22,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **容器 ref 时序红线**：hook 消费方在 render 阶段读 ref 得 null（commit 后赋值）——edit 容器首挂需 commit 后 bump 重渲染（HtmlPanel/MarkdownPanel bumpFrame 桥接，DiffPanel 先例），否则 view 永不创建。
 
-### 大文件不虚拟化（FE-31 登记，D3 关闭）
+### 大文件四层防线（FE-31 登记 + CP-022 第四层，D3 关闭）
 
-CodeMirror 6 不支持部分文档模型，大文件编辑**不虚拟化**——按 D3 方案以三层防线削峰：
+CodeMirror 6 不支持部分文档模型，大文件编辑**不虚拟化**——此事实仍属实。防线分两层域：
+
+**可编辑域（≤10MB）三层防线削峰（D3 方案，语义不变）**：
 
 - **Channel 分块削峰（BE-03）**：`fs_read_file` 后端按 256KB 块经 `onChunk` Channel 推送，消除单次 IPC 大 payload 峰值。
-- **10MB 硬上限**：`MAX_FILE_SIZE_BYTES = 10_000_000`（`useCodeMirror.ts` 导出单点）——`sizeHint` 预检超限直接拒绝，doc 置错误提示并清 `filePathRef` 防误保存覆盖原文件。
-- **1MB 警告**：`LARGE_FILE_WARN_BYTES = 1_000_000`，超限 `confirmDialog` 弹窗警告（确认=继续/取消=中止），取消同样清 `filePathRef`。
+- **10MB 可编辑上限**：`MAX_FILE_SIZE_BYTES = 10_000_000`（`useCodeMirror.ts` 导出单点）——`sizeHint` 预检超限不再可编辑。
+- **1MB 警告**：`LARGE_FILE_WARN_BYTES = 1_000_000`，超限 `confirmDialog` 弹窗警告（确认=继续/取消=中止），取消清 `filePathRef`。
 
-阈值由 `useCodeMirror` 导出单点，`gitshow` 等面板禁止新造数值。
+**>10MB 只读分片浏览（CP-022 第四层，超限引导语义）**：`sizeHint > MAX_FILE_SIZE_BYTES` 不再以拒绝文案替换全文——`useCodeMirror` 返回 `largeFile: { filePath, sizeBytes } | null` 信号（文件切换渲染期自动清空），宿主面板检测后切换 `largeFileViewer/LargeFileViewer`（同面板内形态切换，不经 panelRegistry）：
+
+- 固定行高虚拟化行窗口（`LARGE_FILE_LINE_HEIGHT=20`，overscan 上下各 20 行，参照 FileTree 手实现先例）；行内经 `useLineIndex` 按需扩展索引、`blockCache`（LRU 32 块上限）缓存块文本，块经新命令 `fs_read_file_range` 按 256KB 区间读取（后端无 10MB 上限、头尾对齐字符边界——逐块拼接即原文，契约见 src-tauri/src/fs/mod.rs 命令注释）。
+- `filePathRef.current = undefined` 清空保留（防误保存覆盖原文件——大文件形态无 CM 编辑实例，Ctrl+S 无保存目标）。
+- 行文本前景色 = active 方案 `editor.overrides.plainText`，经 `schemeRegistry` 直取（mdPreviewStyle 先例；colors.ts facade 无编辑器正文 token——**硬约束 #6 新增例外登记，随本组件生效**）；字体复用 `EDITOR_FONT_SPEC`。
+
+超限引导消费点：EditorPanel（editor 形态）、GitShowPanel（sourceLabel="git show"）、DiffPanel（任一侧超限该侧引导、双侧超限分栏各自）——1MB-10MB 警告 header 语义在 gitshow/diff 不变。阈值仍由 `useCodeMirror` 导出单点，各面板禁止新造数值。
 
 ### 滚动委托 `.cm-scroller`
 
@@ -60,7 +68,7 @@ CM6 编辑器主题来源 = `editorThemeSlot` 主题热切换槽（CP-039）：`
 - **容器 `overflow` 选择**：编辑器面板容器必须用 `overflow: clip`。`hidden` 会吸收滚轮事件；`auto`/`scroll` 会把外层 div 变成滚动容器，导致横向滚动条沉底。
 - **Compartment 不可跨 view 共享**：每个 `Compartment` 绑定到特定 `EditorState`，`diff` 左右栏必须各自独立创建 font/wrap Compartment。
 - **保存后抑制 fs-event**：`justSavedRef` 用 `Set<string>` 按路径去重，避免把自己的写入误判为外部改动、执行全量文档替换从而清空 diff gutter 标记。
-- **大文件拒绝必须清 `filePathRef`**：超限拒绝或警告取消后若不清理 filePathRef，后续保存会覆盖原文件。
+- **大文件超限必须清 `filePathRef`**：>10MB 引导只读浏览（largeFile 信号）或 1MB 警告取消后若不清理 filePathRef，后续保存会覆盖原文件。
 
 ## 测试模式
 

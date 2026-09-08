@@ -25,6 +25,7 @@ import { IconAlertTriangle } from "../../lib";
 import { FONT_SIZE_MIN, FONT_SIZE_MAX } from "../../stores/fontSize";
 import { usePanelFocus } from "../../features/shortcuts";
 import { setActiveEditor, clearActiveEditor, type EditorActions } from "../editor/activeEditor";
+import { LargeFileViewer } from "../editor/largeFileViewer/LargeFileViewer";
 import { EDITOR_BG, ERROR_FG, GIT_FILE_COLORS, HTML_PANEL_LOADING_FG, PANEL_BG } from "../../theme";
 import {
   createEditorThemeSlot,
@@ -177,13 +178,16 @@ const GitShowPanel: React.FC<GitShowPanelProps> = ({ params }) => {
 
     const { text } = state;
 
-    // 大文件检查
+    // CP-022: >10MB 超限改引导 LargeFileViewer 只读分片浏览（渲染层分支,见 render）——
+    // 此处不再创建 CM6 实例（原「拒绝文案替换全文」语义废除,filePath 无编辑风险
+    // 本就无保存路径,无需清路径）
+    if (text.length > MAX_FILE_SIZE_BYTES) return;
+
+    // 大文件警告
     const sizeHint = text.length;
     let displayText = text;
     let warnField: Extension | null = null;
-    if (sizeHint > MAX_FILE_SIZE_BYTES) {
-      displayText = `// [slTerminal] 文件过大（约${(sizeHint / 1_000_000).toFixed(1)}MB），已拒绝打开以保护内存。`;
-    } else if (sizeHint > LARGE_FILE_WARN_BYTES) {
+    if (sizeHint > LARGE_FILE_WARN_BYTES) {
       // 大文件警告：在内容顶部插入注释提示（不弹窗——只读视图无保存风险）；
       // 行首图标经 largeFileWarnField 的 widget 装饰注入（FE-18：⚠ 字符已移除）
       const header = `// [slTerminal] 大文件（约${(sizeHint / 1_000_000).toFixed(1)}MB），只读查看。\n// 语法高亮和搜索可能影响性能。\n\n`;
@@ -287,6 +291,19 @@ const GitShowPanel: React.FC<GitShowPanelProps> = ({ params }) => {
           {HEAD_NOT_FOUND_TEXT}
         </span>
       </div>
+    );
+  }
+
+  // CP-022: >10MB 超限改引导 LargeFileViewer 只读分片浏览（sourceLabel="git show"）——
+  // 内容源 = 磁盘 filePath 分片（HEAD blob 与工作区一致场景内容等价;deleted 等磁盘
+  // 缺失场景由 LargeFileViewer 读取失败兜底提示,口径登记 panels/CLAUDE.md）
+  if (state.text.length > MAX_FILE_SIZE_BYTES) {
+    return (
+      <LargeFileViewer
+        filePath={params.filePath}
+        fileSizeBytes={state.text.length}
+        sourceLabel="git show"
+      />
     );
   }
 

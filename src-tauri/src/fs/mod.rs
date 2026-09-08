@@ -307,6 +307,120 @@ where
     Ok(())
 }
 
+// ═══ fs_read_file_range: 指定字节区间读取（CP-022 大文件只读分片浏览）═══
+
+/// 区间读取单次请求长度上限（10MB）——按 length 分配读缓冲，无上限则异常请求可拖垮
+/// 内存；大文件分片浏览按 READ_BLOCK_BYTES(256KB) 请求，远低于此值，上限只作防御。
+const RANGE_READ_MAX_BYTES: u64 = MAX_FILE_SIZE_BYTES;
+
+/// 读取文件指定字节区间（CP-022 大文件只读浏览通道）
+///
+/// - 不受 fs_read_file 10MB 全量上限约束——分片浏览按需小块读取，单次请求长度钳制
+///   在 [`RANGE_READ_MAX_BYTES`]（见下）；
+/// - spawn_blocking 读 [offset_bytes, offset_bytes + length_bytes) 并钳制到 EOF
+///   （offset 越过 EOF / 空区间 → 返回空串）；
+/// - UTF-8 边界安全：返回文本头尾均对齐完整字符边界——**头回溯**：请求起点落在
+///   多字节字符中段时，回溯到该字符首字节（最多 3 字节）整字符包含；**尾裁剪**：
+///   裁到最后一个完整字符边界。语义推论：对同一文件按块序递增请求时，各响应文本
+///   首尾相接、零间隙零重叠，逐块拼接即原文——多字节字符跨请求边界不被切散或丢失
+///   （LargeFileViewer 行索引的字节偏移累计依赖此契约）；
+/// - 文件含非法 UTF-8 字节段：返回该段前可解码前缀（浏览宽容语义，非校验通道——
+///   校验语义仍归 fs_read_file 全量读取）。
+#[tauri::command]
+pub async fn fs_read_file_range(
+    path: String,
+    offset_bytes: u64,
+    length_bytes: u64,
+    state: State<'_, AppState>,
+) -> Result<String, AppError> {
+    // State 仅做提取，业务逻辑在 fs_read_file_range_impl（测试直接调内核）
+    fs_read_file_range_impl(path, offset_bytes, length_bytes, extract_root(&state)?).await
+}
+
+/// fs_read_file_range 命令内核：路径 sandbox 校验 + spawn_blocking 包裹区间读取
+async fn fs_read_file_range_impl(
+    path: String,
+    offset_bytes: u64,
+    length_bytes: u64,
+    root: Option<PathBuf>,
+) -> Result<String, AppError> {
+    // 路径 sandbox 校验
+    validate_path_within_root(&root, Path::new(&path))?;
+
+    spawn_blocking_task(move || read_file_range(&path, offset_bytes, length_bytes)).await
+}
+
+/// 区间读取核心（同步可测）：返回文件字节区间内、头尾对齐字符边界的 UTF-8 文本
+///
+/// 对齐规则（与前端 LargeFileViewer 的字节偏移累计契约配套，见命令文档注释）：
+/// 请求 [offset, offset+length) 钳制 EOF 后，头部若落在字符中段则回溯包含整字符，
+/// 尾部裁到完整字符边界；多字节字符跨请求边界时归属含其首字节的请求。
+fn read_file_range(path: &str, offset_bytes: u64, length_bytes: u64) -> Result<String, AppError> {
+    // 空区间 / offset 越界：不触碰文件，直接返回空串
+    if length_bytes == 0 {
+        return Ok(String::new());
+    }
+    let meta = std::fs::metadata(path).map_err(|e| io_error("读取文件", Path::new(path), e))?;
+    if offset_bytes >= meta.len() {
+        return Ok(String::new());
+    }
+
+    // 单次请求长度钳制（异常大请求防御，见 RANGE_READ_MAX_BYTES）
+    let length = length_bytes.min(RANGE_READ_MAX_BYTES);
+    // 头回溯读起点：最多提前 3 字节——UTF-8 多字节字符最长 4 字节，请求起点落在
+    // 字符中段时，其首字节必在 [offset-3, offset) 内，提前读足以完整还原该字符
+    let read_start = offset_bytes.saturating_sub(3);
+    let head_back = (offset_bytes - read_start) as usize; // ≤ 3
+    let want = head_back + length.min(meta.len().saturating_sub(read_start)) as usize;
+
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file =
+        std::fs::File::open(path).map_err(|e| io_error("读取文件", Path::new(path), e))?;
+    file.seek(SeekFrom::Start(read_start))
+        .map_err(|e| io_error("读取文件", Path::new(path), e))?;
+    let mut buf = vec![0u8; want];
+    let n = file
+        .read(&mut buf)
+        .map_err(|e| io_error("读取文件", Path::new(path), e))?;
+    if n == 0 {
+        return Ok(String::new());
+    }
+    let raw = &buf[..n];
+
+    // 头对齐：请求起点（raw 内下标 = head_back）若为续字节（10xxxxxx）→ 位于多字节
+    // 字符中段，回溯到该字符首字节（引导字节，最多回 3 字节）；回溯越界/乱码（引导
+    // 字节不在窗口内）则保持原样，交给下方 from_utf8 错误路径处理（valid_up_to 为 0 → 空串）
+    let mut head = head_back;
+    if head < raw.len() && (raw[head] & 0xC0) == 0x80 {
+        // 从起点向前数续字节链：链首 = 引导字节
+        let mut s = head;
+        while s > 0 && (raw[s - 1] & 0xC0) == 0x80 {
+            s -= 1;
+        }
+        if s > 0 && (raw[s - 1] & 0xC0) == 0xC0 {
+            head = s - 1; // 回溯到引导字节（110/1110/11110 前缀）
+        }
+    }
+
+    // 尾对齐：自 head 起取合法前缀——裁到最后一个完整字符边界（含跨请求末端的半截
+    // 字符被裁掉，其剩余字节归属下一请求的头回溯）；文件含非法字节段时取段前前缀
+    let valid_len = std::str::from_utf8(&raw[head..])
+        .map(|s| s.len())
+        .unwrap_or_else(|e| e.valid_up_to());
+    if valid_len == 0 {
+        return Ok(String::new());
+    }
+    // 合法前缀 guaranteed valid（from_utf8 Ok 全段 / Err 的 valid_up_to 前缀）——
+    // map_err 分支理论上不可达，仅保持与 read_file_chunked 同款错误映射形态
+    String::from_utf8(raw[head..head + valid_len].to_vec()).map_err(|e| {
+        tracing::warn!(error = %e, "文件编码错误（非 UTF-8）: {path}");
+        AppError::IoKind {
+            kind: "utf8".into(),
+            message: format!("文件编码错误（非 UTF-8）: {path}"),
+        }
+    })
+}
+
 /// 写入文件内容（覆盖模式，UTF-8）
 ///
 /// 写入前检测原文件行尾风格（CRLF/LF），保持与源文件一致，
@@ -599,6 +713,10 @@ async fn fs_rename_impl(src: String, dst: String, root: Option<PathBuf>) -> Resu
 ///
 /// 测试直接调用命令内核（fs_*_impl）而非 tauri::State——内核接收 root: Option<PathBuf>，
 /// 消除 unsafe 内存转换构造 State 的 UB 风险与脆弱性（HFN-08）。
+/// fs_read_file_range 区间读取测试（CP-022）——独立测试文件承载
+#[cfg(test)]
+mod fs_read_file_range_tests;
+
 #[cfg(test)]
 mod read_dir_tests {
     use super::*;

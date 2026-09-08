@@ -35,6 +35,7 @@ htmlviewer / markdownviewer 等「文档型预览面板」共享 `src/panels/doc
 - **htmlviewer**（`panels/html/HtmlPanel`）：二态 render（默认）/ edit 源码（CM6 lang-html）；草稿快照往返 docRef。edit 形态字号 = 共享 editorFontSize store（Ctrl+滚轮，EditorPanel 同款接线——2026-09-06，原恒 14 语义变更，见 markdown/CLAUDE.md「编辑字号语义」）。
 - **markdownviewer**（`panels/markdown/MarkdownPanel`）：三态 edit（默认）/ split（allotment 拖拽，比例持久化）/ preview；渲染管线/资源/链接分派见 markdown/CLAUDE.md。
 - 文档真值源 = 面板 docRef（草稿优先磁盘）；**markdownviewer CM 恒挂载（CP-037）**：preview-only 改隐藏保活（display:none 照 edit↔split 先例，allotment CM pane 恒 index 0）——undo/光标跨 edit/split/preview 保留，代价 preview 常驻一个 CM 实例内存，已接受（htmlviewer 仍 edit 态挂载、render 卸载，不在此例）。
+- **大文件引导口径（CP-022）**：本家族 edit 形态经 `initialDoc` 快照建缓冲——快照路径**跳过**磁盘大文件检查与 largeFile 信号（useCodeMirror 语义：快照已过检/回填源），不消费 >10MB 只读分片浏览（该引导仅适用 EditorPanel 磁盘直读流；gitshow/diff 引导形态见对应小节）。
 - **宿主内联 `<script>` 不执行（escapeScriptClose 转义存量缺陷登记，2026-09-06 实证，跨家族继承为预期行为）**：`injectScript` 把宿主 HTML 内所有 `</script>` 转义为 `<\/script>` → 宿主 script 吞到 EOF 致 SyntaxError；注入脚本自身不受影响；内联**事件属性**（onload/onerror 等）不含 `</script>` 不被转义、正常执行——e2e 触发通道即此（html.e2e/markdown.e2e fixture）。修复方向 = escapeScriptClose 仅转义注入点前宿主部分（独立缺陷单）。
 - markdownviewer 纳入 `renderer="always"` 白名单（iframe 与 CM 编辑实例切走切回不重建——决策 #17）。
 
@@ -42,9 +43,13 @@ htmlviewer / markdownviewer 等「文档型预览面板」共享 `src/panels/doc
 
 `GitShowPanel` 用 `EditorState.readOnly.of(true)` 阻止编辑，**不使用** `EditorView.editable.of(false)`。后者设 `contentEditable=false` 会导致编辑器不可聚焦，CM6 内部键绑定和 ShortcutRegistry 全部失效。
 
+**>10MB 超限引导（CP-022）**：HEAD 内容超过 `MAX_FILE_SIZE_BYTES` 时改渲染 `LargeFileViewer`（`sourceLabel="git show"`，只读分片浏览替代 CM 拒绝文案）。**内容源近似口径**：查看器经磁盘 `filePath` 分片读取——与 HEAD blob 一致场景内容等价（未修改/普通场景）；工作区文件缺失（deleted 状态——本面板主要来源）或与 HEAD 差异大时，读块失败由查看器「部分内容读取失败」兜底提示或内容近似。1MB-10MB 警告 header 语义不变。
+
 ### diff：双栏占位对齐 + 滚动同步
 
 `DiffPanel` 横向均分两栏：左 = HEAD 只读 + HEAD gutter + 占位行，右 = 工作区可编辑 + workdir gutter + 占位行。
+
+**>10MB 超限引导（CP-022）**：任一侧内容超过 `MAX_FILE_SIZE_BYTES` → 该侧改渲染 `LargeFileViewer`（左 `sourceLabel="HEAD"`、右 `sourceLabel="工作区"`）；对齐/滚动同步/占位对齐装饰对该侧降级（view 缺失天然 no-op），另一侧 CM 行为不变；双侧超限分栏各自只读浏览。查看器内容源 = 磁盘 `filePath` 分片（HEAD 侧与工作区内容差异场景为近似口径，同 gitshow 登记）。1MB-10MB 警告 header 语义不变。
 
 - **占位对齐**：`computeAlignment(hunks)` 纯函数根据 DiffHunk[] 计算左右两侧需插入占位行的位置与数量——纯新增行左侧插占位，纯删除行右侧插占位，modified 行数不等时少的一侧插差值。通过 CM6 `Decoration.widget` 渲染块级占位行。
 - **垂直滚动同步**：一侧 `.cm-scroller` scroll → 另一侧 `scrollTop` 跟随（`syncingRef` 防循环）。水平滚动不同步。

@@ -113,6 +113,7 @@ pub fn run() {
             pty::spawn::pty_kill_all,
             pty::conpty_api::pty_conpty_status,
             fs::fs_read_file,
+            fs::fs_read_file_range,
             fs::fs_read_resource,
             fs::fs_write_file,
             fs::fs_read_dir,

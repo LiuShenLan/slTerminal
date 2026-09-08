@@ -8,7 +8,7 @@
 // - 监听外部文件改动（fs-event）→ 干净自动重载 / 脏弹窗选择
 // - cleanup 中 view.destroy()（箭头函数调，防 this 丢失）
 
-import { useEffect, useRef, useCallback, useMemo } from "react";
+import { useEffect, useRef, useCallback, useMemo, useState } from "react";
 import { EditorView, keymap } from "@codemirror/view";
 import {
   EditorState,
@@ -45,8 +45,17 @@ import {
   type EditorThemeSlot,
 } from "../../theme/editorThemeSlot";
 
-/** 文件大小上限（字节）——超过此值拒绝打开，保护内存 */
+/** 文件大小上限（字节）——超过此值不再可编辑，改只读分片浏览（CP-022 引导语义） */
 export const MAX_FILE_SIZE_BYTES = 10_000_000;
+
+/**
+ * 大文件信号（CP-022）——>10MB 文件向上报告,宿主面板据此以 LargeFileViewer
+ * 只读分片浏览替代 CM 编辑区（同面板内形态切换,不经 panelRegistry）。
+ */
+export interface LargeFileSignal {
+  filePath: string;
+  sizeBytes: number;
+}
 /** 大文件警告阈值（字节）——超过此值弹窗确认 */
 export const LARGE_FILE_WARN_BYTES = 1_000_000;
 
@@ -213,6 +222,17 @@ export function useCodeMirror({
   const mountedRef = useRef(false);
   // generation 计数器：filePath 每次变化时递增，异步回调中比对以丢弃过期结果
   const genRef = useRef(0);
+  /**
+   * 大文件信号（CP-022）: >10MB 文件不再以错误 doc 展示——向上报告,宿主面板切换
+   * LargeFileViewer 只读分片浏览（同面板内形态切换）。filePathRef 清空语义保留
+   * （防误保存覆盖原文件）。
+   */
+  const [largeFile, setLargeFile] = useState<LargeFileSignal | null>(null);
+  // 文件切换即清旧信号——独立于容器 effect（大文件形态下 CM 容器未挂载,容器驱动的
+  // initEditor 不会执行;宿主据此切回 CM 编辑形态后再按新 filePath 正常打开）
+  useEffect(() => {
+    setLargeFile((cur) => (cur === null || cur.filePath === filePath ? cur : null));
+  }, [filePath]);
 
   /** Ctrl+S 保存 — G3: 无 filePath 时弹出另存为对话框 */
   const handleSave = useCallback(async () => {
@@ -337,9 +357,12 @@ export function useCodeMirror({
           // P2-10: 大文件检查 — UTF-8 文本 length 近似文件字节数
           const sizeHint = doc.length;
           if (sizeHint > MAX_FILE_SIZE_BYTES) {
-            // >10MB：直接拒绝，将文档设为错误提示
-            doc = `// [slTerminal] 文件过大（约${(sizeHint / 1_000_000).toFixed(1)}MB），已拒绝打开以保护内存。`;
-            filePathRef.current = undefined; // 防止误保存覆盖原文件
+            // CP-022: >10MB 不再置错误 doc——向上报告 largeFile 信号,EditorPanel
+            // 检测后以 LargeFileViewer 只读分片浏览替代 CM 编辑区;filePathRef 清空
+            // 保留（防误保存覆盖原文件）。返回前不创建 EditorView（无编辑实例）。
+            filePathRef.current = undefined;
+            setLargeFile({ filePath, sizeBytes: sizeHint });
+            return;
           } else if (sizeHint > LARGE_FILE_WARN_BYTES) {
             // >1MB：弹窗警告，用户可选择继续或取消（FE-01: confirm → confirmDialog，确认=继续/取消=中止）
             const proceed = await confirmDialog({
@@ -618,6 +641,13 @@ export function useCodeMirror({
   });
 
   return {
+    /**
+     * 大文件信号（CP-022）: 打开的 >10MB 文件只读浏览信息——宿主（EditorPanel）
+     * 检测非 null 即切换 LargeFileViewer 形态;null = 正常 CM 编辑。切换文件后
+     * 经 [filePath] effect 自动清空（见状态定义处注释）。
+     */
+    largeFile,
+
     /** 获取当前编辑器内容 */
     getContent: useCallback((): string => {
       return viewRef.current?.state.doc.toString() ?? "";

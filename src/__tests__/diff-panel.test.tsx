@@ -10,7 +10,7 @@ import React from "react";
 
 // ── mock 状态（vi.hoisted 确保模块级 mock 前就绪） ─────────
 
-const { mockGitFileAtHead, mockGitDiff, mockReadFile, mockWriteFile, mockOnFsEvent,
+const { mockGitFileAtHead, mockGitDiff, mockReadFile, mockWriteFile, mockReadFileRange, mockOnFsEvent,
   mockUseFontSizeWheel, mockSetEditorFontSize, mockUsePanelFocus,
   mockSetActiveEditor, mockClearActiveEditor, mockConfirmDialog, mockToastShow,
   mockGetErrorMessage } = vi.hoisted(
@@ -19,6 +19,8 @@ const { mockGitFileAtHead, mockGitDiff, mockReadFile, mockWriteFile, mockOnFsEve
     mockGitDiff: vi.fn(),
     mockReadFile: vi.fn(),
     mockWriteFile: vi.fn(),
+    // CP-022: >10MB 侧引导 LargeFileViewer——按需读块经 ipc/fs.readFileRange
+    mockReadFileRange: vi.fn(),
     mockOnFsEvent: vi.fn(),
     mockUseFontSizeWheel: vi.fn(),
     mockSetEditorFontSize: vi.fn(),
@@ -45,6 +47,7 @@ vi.mock("../ipc", () => ({
   fs: {
     readFile: mockReadFile,
     writeFile: mockWriteFile,
+    readFileRange: mockReadFileRange,
   },
 }));
 
@@ -140,6 +143,8 @@ describe("DiffPanel", () => {
     vi.clearAllMocks();
     mockGitFileAtHead.mockResolvedValue("// HEAD\nline1\nline2\n");
     mockReadFile.mockResolvedValue("// workdir\nline1\nline2\n");
+    // 默认空块（后端 offset ≥ 文件长度 → 空串 EOF 语义;大文件用例按需覆盖）
+    mockReadFileRange.mockResolvedValue("");
     mockGitDiff.mockResolvedValue([]);
     mockOnFsEvent.mockReturnValue(() => {});
   });
@@ -729,16 +734,61 @@ describe("DiffPanel", () => {
 
   // ── 大文件阈值（EDF-02） ────────────────────────────────
 
-  it("workdir 超过 MAX_FILE_SIZE_BYTES → 拒绝打开提示", async () => {
+  it("workdir 超过 MAX_FILE_SIZE_BYTES → 右侧引导 LargeFileViewer（原拒绝文案形态防复发）", async () => {
     mockReadFile.mockResolvedValue("x".repeat(MAX_FILE_SIZE_BYTES + 1));
     const { container } = render(
       React.createElement(DiffPanel, { params: makeParams() }),
     );
+    // 右侧（diff-right 包裹层内）渲染只读浏览;左侧仍为 CM 双栏编辑形态
     await waitFor(() => {
-      expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
+      const right = container.querySelector('[data-e2e="diff-right"]');
+      expect(right?.querySelector('[data-e2e="large-file-viewer"]')).toBeTruthy();
     });
-    const rightView = getDiffView(container, "diff-right");
-    expect(rightView?.state.doc.toString()).toContain("已拒绝打开以保护内存");
+    const rightViewerInfo = container
+      .querySelector('[data-e2e="diff-right"]')!
+      .querySelector('[data-e2e="lfv-info-bar"]');
+    expect(rightViewerInfo?.textContent).toContain("工作区");
+    expect(rightViewerInfo?.textContent).toContain("只读浏览");
+    // 右栏 CM 不挂载;防复发: 拒绝文案不再出现
+    expect(getDiffView(container, "diff-right")).toBeNull();
+    expect(container.textContent).not.toContain("已拒绝打开以保护内存");
+    // 左栏不受影响（HEAD CM 渲染 + diff-left 锚在位）
+    await waitFor(() => {
+      expect(getDiffView(container, "diff-left")).toBeTruthy();
+    });
+  });
+
+  it("head 超过 MAX_FILE_SIZE_BYTES → 左侧引导 LargeFileViewer（HEAD 标签 + 右栏不受影响）", async () => {
+    mockGitFileAtHead.mockResolvedValue("y".repeat(MAX_FILE_SIZE_BYTES + 1));
+    const { container } = render(
+      React.createElement(DiffPanel, { params: makeParams() }),
+    );
+    await waitFor(() => {
+      const left = container.querySelector('[data-e2e="diff-left"]');
+      expect(left?.querySelector('[data-e2e="large-file-viewer"]')).toBeTruthy();
+    });
+    const leftViewerInfo = container
+      .querySelector('[data-e2e="diff-left"]')!
+      .querySelector('[data-e2e="lfv-info-bar"]');
+    expect(leftViewerInfo?.textContent).toContain("HEAD");
+    // 右栏正常 CM（只读浏览侧降级不影响另一侧编辑）
+    await waitFor(() => {
+      expect(getDiffView(container, "diff-right")).toBeTruthy();
+    });
+  });
+
+  it("双侧均超过 MAX_FILE_SIZE_BYTES → 分栏各自 LargeFileViewer（CM 双栏均不挂载）", async () => {
+    mockGitFileAtHead.mockResolvedValue("h".repeat(MAX_FILE_SIZE_BYTES + 1));
+    mockReadFile.mockResolvedValue("w".repeat(MAX_FILE_SIZE_BYTES + 1));
+    const { container } = render(
+      React.createElement(DiffPanel, { params: makeParams() }),
+    );
+    await waitFor(() => {
+      const viewers = container.querySelectorAll('[data-e2e="large-file-viewer"]');
+      expect(viewers.length).toBe(2);
+    });
+    expect(getDiffView(container, "diff-left")).toBeNull();
+    expect(getDiffView(container, "diff-right")).toBeNull();
   });
 
   it("head 超过 LARGE_FILE_WARN_BYTES → 大文件只读警告", async () => {

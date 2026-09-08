@@ -65,6 +65,21 @@ export async function readResourceBase64(path: string): Promise<string> {
   return content;
 }
 
+/**
+ * 分块读文件指定字节区间（CP-022 大文件只读浏览）——返回区间内完整 UTF-8 文本
+ *
+ * 不经 10MB 全量上限（后端按 [offsetBytes, offsetBytes+lengthBytes) 区间读,钳制到
+ * EOF;返回文本头尾对齐字符边界——头回溯含跨区间整字符、尾裁到完整字符边界）。
+ * 消费方（LargeFileViewer）按 256KB 块序递增请求,响应拼接即原文（契约见后端实现注释）。
+ */
+export function readFileRange(
+  filePath: string,
+  offsetBytes: number,
+  lengthBytes: number,
+): Promise<string> {
+  return invoke("fs_read_file_range", { filePath, offsetBytes, lengthBytes });
+}
+
 /** 写入文件内容（覆盖模式，UTF-8） */
 export async function writeFile(
   path: string,
