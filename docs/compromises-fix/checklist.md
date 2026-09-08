@@ -1982,7 +1982,7 @@ agent 分工:CP-025 独立;CP-026+CP-021 单 agent;CP-038+CP-027 单 agent;CP-03
    - `.claude/test-exemptions.md:25`——TQ-COV 收尾登记行(88.20% 含测试代码口径,目标 90% 差 1.8pp)
    - `src-tauri/src/main.rs:1-7`——可覆盖行 = 4/5/6 共 3 行(fn main 壳 + install_panic_hook + run 调用),结构性零覆盖
    - pty 模块既有纯逻辑抽取先例:`src-tauri/src/pty/spawn.rs:95`(`build_cmdline`)、`:121`(`build_env_block`)
-   - 测试模块分布(全部 `#[cfg(test)] mod <领域>_tests`,待加 `#[coverage(off)]`,约 40 处):home.rs / app_dir.rs / state.rs / settings.rs / fs/mod.rs(6 处)/ error.rs / hooks/{watcher,signal,provider,mod×2}.rs / hooks/claude/{config,mod×2,inject}.rs / agent_history/{provider,mod}.rs / agent_history/claude/{mod×4,scan,ops,jsonl}.rs / projects.rs / lib.rs(:157)/ pty/{spawn×2,shell,conpty_api,reader}.rs / background_tasks/{registry,mod×2}.rs / plan_balance/{deepseek,mod×2,kimi,query,source}.rs / notify/{mod,pool}.rs
+   - 测试模块分布(全部 `#[cfg(test)] mod <领域>_tests`,原案待加 `#[coverage(off)]`——**2026-09-08 执行期翻案:该属性在 stable rustc 1.94~1.98.1 实测仍 experimental(E0658,tracking #84605),本步作废走 A 分支**,见 verify/stage-12.md CP-023-a):home.rs / app_dir.rs / state.rs / settings.rs / fs/mod.rs(6 处)/ error.rs / hooks/{watcher,signal,provider,mod×2}.rs / hooks/claude/{config,mod×2,inject}.rs / agent_history/{provider,mod}.rs / agent_history/claude/{mod×4,scan,ops,jsonl}.rs / projects.rs / lib.rs(:157)/ pty/{spawn×2,shell,conpty_api,reader}.rs / background_tasks/{registry,mod×2}.rs / plan_balance/{deepseek,mod×2,kimi,query,source}.rs / notify/{mod,pool}.rs
 2. **现状**:test-exemptions.md:25 原文:「Rust 行覆盖 88.20%(llvm-cov 含测试代码口径)| 目标 90% 差 1.8pp;残余缺口集中 PTY Win32 分支 + main.rs 结构性零覆盖 + 编译器生成物计数缺失」;main.rs 全文 7 行,L1 无法启动 tauri 运行时,与豁免表 `lib.rs run()` 行(:15)同构;本机已装 cargo-llvm-cov 0.9.0,`--help` 仅有文件级 `--ignore-filename-regex`,无 cfg(test) 代码级排除开关——口径变更须走 Rust 侧 `#[coverage(off)]` 属性(rustc 1.96 已稳定支持,模块级生效)。
 3. **修复步骤**:
    1. **生产代码口径改造(机械批处理)**:对上述测试模块清单中每个**文件级** `#[cfg(test)] mod <名> {` 紧跟一行加 `#[coverage(off)]`(属性写在 mod 上,模块内全部测试代码退出计数;模块内 `#[cfg(test)]` 子项与内联 guard 不动)。示例:
@@ -2071,7 +2071,7 @@ agent 分工:CP-025 独立;CP-026+CP-021 单 agent;CP-038+CP-027 单 agent;CP-03
 5. CP-024 TitleSource 双边语义有意不一致:Rust 枚举 vs TS 开放字符串——保留 TS 别名于 local.ts,不生成。
 6. **CP-040 波及既有清单**:review-02/03/04 验证节多处 `cargo test --test lib_tests <filter>` 形态,S02 拆除后失效——后续 Stage 执行统一按 `cargo test <filter> -- --test-threads=1` 等价适配(本清单头部「验证命令形态注意」已统调)。
 7. CP-040 附加事实:`.cargo/config.toml` 不存在;src/lib.rs:157 存在内嵌 `mod lib_tests`(与 [[test]] 目标同名偶合,执行 agent 勿混淆——拆的是 Cargo.toml 目标,不是该模块);tauri-service 本地 dist 与 review 登记逐点吻合。
-8. CP-023 工具事实:cargo-llvm-cov 0.9.0 无 cfg(test) 代码级排除开关——生产口径只能走 `#[coverage(off)]`(rustc 1.96 稳定);llvm-cov 全量必须在 S02 之后跑。
+8. CP-023 工具事实:cargo-llvm-cov 0.9.0 无 cfg(test) 代码级排除开关——生产口径原案走 `#[coverage(off)]`;**2026-09-08 执行期翻案:rustc 1.96「已稳定支持」失实(E0658,1.94~1.98.1 全系实测失败)→ A 分支:现行口径重登记 88.83% + pty 缺口逐条登记 + main.rs 3 行豁免,口径措辞同步 test-exemptions**;llvm-cov 全量必须在 S02 之后跑。
 9. CP-029/041 事实补充:Workspace.tsx:235 注释指 SEC-01 上提(已完成但失败仍在);hooks 配置写命令的「未知 cliId」与 history 注册表相互独立(hooks/provider.rs:88),CP-041 不破坏 mockcli.e2e.ts 用例②。
 10. S03 编排线索已并入 S03 节头(CP-028/041 共改 mockcli.e2e.ts;CP-041/029 环境出口均触 run-wdio.cjs,并入合并体序列)。
 

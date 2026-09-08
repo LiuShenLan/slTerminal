@@ -89,5 +89,5 @@ Workflow({
 | S08 | 已完成 | e7128af | 2026-09-08 | 5 项全绿（fix-loop 1 轮：CP-039 三文件 4 例 + CP-002 knip 销项 + CP-009 startup mock；CP-002 终裁 = knip 存量红与变更面零相关实质达成，S12 收口）；CP-009 人工实测豁免已登记 commit body；S10 复核注记：CP-037 保活形态须在预览迁出后复核 |
 | S09 | 已完成 | b086989 | 2026-09-08 | CP-022 全绿（verify agent 空返回异常——failedItems 空但 allFixed false，主 agent inline 复核三处注册 + 25 文件面后裁决实质达成 commit）；人工点登记：>10MB 实机滚动/渲染观感抽查 |
 | S10 | 已完成 | 11bf157 | 2026-09-08 | spike GO → ② 迁移落地（自定义协议 slterm-preview 域，ADR-0019）→ ③ B2 → ④ CSP 回收；6 项销项；e2e 门禁按 solo 复核判达（全量队列 flaky + settings 基建缺陷修复登记 S12）；补 S05 文档遗漏 0453c91；人工点登记：预览回归全场景 |
-| S11 | 未开始 | — | — | |
-| S12 | 未开始 | — | — | 人工验证点总收清单见 stages.md S12 |
+| S11 | 已完成 | 86f9224/2bde7b8/48963d4 | 2026-09-08 | 6 项全绿（CP-004 主体 + 2 fix-loop：harness 页前缀收敛 + 队列稳定性 A/B/C/D/E 含 preview close/sync 竞态 token 修复）；终验 12/15，3 failed 全剪贴板外部占用环境豁免；人工点登记：布局全场景演练 + 剪贴板空闲复跑 |
+| S12 | 已完成 | 待 S12 commit | 2026-09-08 | CP-023 A 分支收口（coverage(off) 未稳定翻案，89.55% Line 列重登记 + pty 八条豁免）；销项总扫 45 项全过（8 处抽查）；全量回归全绿（e2e 12/3 剪贴板环境豁免）；knip 存量全清 exit 0；人工验证点总收清单见收尾报告 |

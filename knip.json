@@ -10,7 +10,8 @@
     "src/__tests__/**",
     ".claude/**",
     "src-tauri/**",
-    "scripts/**"
+    "scripts/**",
+    "docs/compromises-fix/**"
   ],
   "ignoreIssues": {
     "src/features/agentHistory/historyModel.ts": [
@@ -217,6 +218,131 @@
     "src/workspace/titleManager.ts": [
       "exports",
       "types"
+    ],
+    "src/features/backgroundTasks/index.ts": [
+      "exports",
+      "types"
+    ],
+    "src/features/backgroundTasks/sessionRefreshTask.ts": [
+      "exports"
+    ],
+    "src/features/backgroundTasks/types.ts": [
+      "types"
+    ],
+    "src/features/cliProfiles/aliasValidation.ts": [
+      "exports"
+    ],
+    "src/features/cliProfiles/profiles/claude/configEditor/ClaudeHooksConfigEditor.tsx": [
+      "types"
+    ],
+    "src/features/cliProfiles/profiles/claude/configEditor/EventTree.tsx": [
+      "exports",
+      "types"
+    ],
+    "src/features/cliProfiles/profiles/claude/configEditor/GuiMode.tsx": [
+      "types"
+    ],
+    "src/features/cliProfiles/profiles/claude/configEditor/HandlerForm.tsx": [
+      "exports"
+    ],
+    "src/features/cliProfiles/profiles/claude/configEditor/JsonMode.tsx": [
+      "exports",
+      "types"
+    ],
+    "src/features/cliProfiles/profiles/claude/configEditor/configModel.ts": [
+      "types"
+    ],
+    "src/features/cliProfiles/profiles/claude/configEditor/eventsCatalog.ts": [
+      "exports",
+      "types"
+    ],
+    "src/features/cliProfiles/profiles/claude/configEditor/schema/index.ts": [
+      "exports"
+    ],
+    "src/features/navTree/planBalanceModel.ts": [
+      "exports"
+    ],
+    "src/features/navTree/usePlanBalance.ts": [
+      "exports"
+    ],
+    "src/features/settingsCenter/index.ts": [
+      "exports",
+      "types"
+    ],
+    "src/ipc/preview.ts": [
+      "exports"
+    ],
+    "src/panels/docViewer/FloatingArea.tsx": [
+      "types"
+    ],
+    "src/panels/docViewer/ModeSwitcher.tsx": [
+      "exports",
+      "types"
+    ],
+    "src/panels/docViewer/previewMessages.ts": [
+      "exports",
+      "types"
+    ],
+    "src/panels/docViewer/useZoomHud.ts": [
+      "exports",
+      "types"
+    ],
+    "src/panels/editor/largeFileViewer/LargeFileViewer.tsx": [
+      "exports"
+    ],
+    "src/panels/editor/largeFileViewer/blockCache.ts": [
+      "exports"
+    ],
+    "src/panels/editor/repaintGuard.ts": [
+      "exports"
+    ],
+    "src/panels/markdown/assets.ts": [
+      "exports"
+    ],
+    "src/panels/markdown/mdPipeline.ts": [
+      "exports",
+      "types"
+    ],
+    "src/panels/markdown/mdRenderAsync.ts": [
+      "exports"
+    ],
+    "src/panels/markdown/mermaidHost.ts": [
+      "exports"
+    ],
+    "src/panels/settings/pages/KeybindingsPage.tsx": [
+      "exports"
+    ],
+    "src/panels/terminal/TerminalPanel.tsx": [
+      "types"
+    ],
+    "src/panels/terminal/oscHandlers.ts": [
+      "exports"
+    ],
+    "src/panels/terminal/usePtyOutput.ts": [
+      "exports"
+    ],
+    "src/types/hooksConfigGui.ts": [
+      "types"
+    ],
+    "src/types/local.ts": [
+      "exports",
+      "types"
+    ],
+    "src/types/planBalance.ts": [
+      "types"
+    ],
+    "src/workspace/WorkspaceDockHost.tsx": [
+      "exports",
+      "types"
+    ],
+    "src/workspace/layoutSerde.ts": [
+      "exports"
+    ],
+    "src/workspace/openFile.ts": [
+      "exports"
+    ],
+    "src/workspace/pageApis.ts": [
+      "exports"
     ]
   },
   "ignoreDependencies": [

@@ -116,9 +116,19 @@ spawn 后立即向 stdin 写 `\x1b[1;1R`，补偿 ConPTY `VtIo::StartIfNeeded()`
 
 ### 既定豁免（已在 `.claude/test-exemptions.md` 登记）
 
+> 下 4 行（既有）为 PTY-12/CP-011/PTY-08/TQ-COV-03 等历史登记；**再下 8 行 = TQ-COV 收尾 CP-023 追加（2026-09-08）**——pty 残余行覆盖缺口逐条三列入表（A 分支：`#[coverage(off)]` stable 未稳定，不引入属性）。
+
 | 豁免项 | 原因 | 当前兜底 |
 |--------|------|---------|
 | `reader_loop` 残余 I/O 编排 | 依赖 Channel/管道系统调用，无法在 L1 构造输入（CP-034: Channel 直写，无锁层） | 可纯函数化部分（`apply_startup_strip`/`should_inject_da1`/`eof_exit_code`/`micro_batch_tail`）已由 L1 覆盖 |
 | `pty_kill` 超时→监督线程真实阻塞路径 | Win32 阻塞不可注入（ClosePseudoConsole 永久阻塞无法在 L1 构造） | 清理决策由 L1 `plan_cleanup_after_join_timeout` 2 例锁死 + pty 集成 kill 用例 + Win10 实机人工验证点（杀会话后应用无挂起） |
 | 容量超限 kill 清理 | 命中上限后 kill 已 spawn 子进程依赖真实 PtySession | BE-01 判定语义由纯函数用例锁死 + Job Object 兜底 |
 | `conpty_api` vendor 提取/加载回退 | 依赖真实 DLL 加载行为 | ADR-0005 Win10 实机人工验证 + `ensure_extracted` 幂等用例 + 回退状态可观测（`pty_conpty_status` + 启动 toast） |
+| spawn.rs `pty_spawn`/`pty_write`/`pty_resize`/`pty_kill`/`pty_kill_all` 命令层 + PtySession 装配 + reader_loop 启动（约 :1226-1667） | Tauri State/Channel 运行时胶水（与 lib.rs run() 行同构） | L4 `terminal.e2e.ts` 真实 spawn/write/kill/杀 app 链 + `pty_integration_tests` |
+| spawn.rs `add_to_job_object`/`create_and_assign_job`（约 :1692-1778） | Win32 API 组合（CreateJobObjectW/SetInformationJobObject/OpenProcess/AssignProcessToJobObject + wide 编码） | `job_name`/`job_limits` 纯构件已抽单测 |
+| spawn.rs `conpty_custom` RawChild try_wait/wait/clone_killer/as_raw_handle/Debug + ConPtyMaster::resize 有效 hpc 路径（约 :320-328/412-414/430-497） | 依赖真实子进程句柄的 Win32 组合（集成测试只 kill 不 wait） | `pty_integration_tests` 真实会话兜底 |
+| spawn.rs AttrList/CreateProcessW 失败 bail（约 :260/617-618） | 失败注入不可行 | L1 其余分支覆盖 + 无失败注入通道登记 |
+| spawn.rs SendRawHandle pending 尾（约 :543） | 句柄发送协议尾 | 同上 |
+| shell.rs 白名单拒绝分支与 canonicalize/身份比对回退（约 :59/86-88/139/184/211/290） | 依赖真实 fs/别名身份判定分支 | shell.rs 行覆盖 95.87%（残余 ~10 生产行）+ allowlist 真机用例 |
+| conpty_api.rs Bundled fn 指针 create/close/resize 臂（约 :130-171） | vendor dll 函数指针错误臂（错误注入不可行） | T6/T7 真实 LoadLibraryW 用例 + 有效路径覆盖 |
+| conpty_api.rs 生产 conpty_status + pty_conpty_status 命令胶水（约 :293-322） | 命令胶水（lib.rs run() 同构） | L2 ipc-pty-contract + 启动链 toast 真实执行 |

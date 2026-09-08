@@ -147,15 +147,6 @@ function decodeAttr(s: string): string {
     .replace(/&#39;/g, "'");
 }
 
-/** HTML 属性转义（错误卡展示 mermaid 原码用） */
-export function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
 /** 模块级单例 md-it 实例（解析器无状态可复用于多次渲染） */
 type MarkdownItInstance = InstanceType<typeof MarkdownIt>;
 let mdIt: MarkdownItInstance | null = null;

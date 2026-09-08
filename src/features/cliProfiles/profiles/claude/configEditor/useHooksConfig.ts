@@ -37,9 +37,6 @@ import {
   type HooksConfigGui as ConfigGui,
 } from "./configModel";
 
-/** 配置损坏错误文案——read 返回 Err（与无配置返回 null 区分开） */
-export const CONFIG_CORRUPTED_TEXT = "配置文件损坏，请先修复";
-
 /** confirmDialog 弹窗关闭后守卫窗口（ms）——期间内的回归触发的重读被抑制（防循环） */
 const ASK_GUARD_MS = 500;
 

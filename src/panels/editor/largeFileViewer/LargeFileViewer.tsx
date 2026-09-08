@@ -197,5 +197,3 @@ export const LargeFileViewer: React.FC<LargeFileViewerProps> = ({
     </div>
   );
 };
-
-export default LargeFileViewer;

@@ -5,7 +5,7 @@
 
 ## 断言清单
 
-- **CP-023-a（口径改造）**：`grep -rn "#\[coverage(off)\]" src-tauri/src | wc -l` ≥ 40 且与文件级测试模块清单逐一对应（抽查 pty 5 文件 + lib.rs 必须命中）；`grep -rn "#\[cfg(test)\]" src-tauri/src | wc -l` 与改造前相同（改造只加属性不删模块）。
+- **CP-023-a（口径改造）**：**执行期翻案（2026-09-08）**——`#[coverage(off)]` 在 stable rustc（1.94/1.95/1.96/1.98.1 实测）仍为 experimental（E0658，tracking #84605），checklist「rustc 1.96 已稳定支持」前提失实（同 CP-040 先例，checklist.md 条目已补翻案注记）。走 A 分支：不引入属性（`rg "#[coverage(off)]" src-tauri/src` 零命中为预期）；pty 5 文件缺口按逐行映射逐条登记 pty/CLAUDE.md 豁免表（Read 确认逐条三列、非笼统「收尾」）；test-exemptions.md 含 main.rs 3 行豁免登记 + 现行口径新数字。
 - **CP-023-b（基线重测）**：`cargo llvm-cov -- --test-threads=1` 退出码 0（全绿才计数字）；摘要百分比 = test-exemptions.md 登记新值（±0.1pp）。
 - **CP-023-c（目标重定）**：P_new ≥ 90% → test-exemptions.md 原 :25 行已删且有销记；P_new < 90% → 该行改写为生产口径 + 残余缺口逐项登记（pty/CLAUDE.md 豁免表逐条三列，禁止笼统「收尾」登记，Read 确认）。
 - **CP-023-d（main.rs）**：`grep -c "main.rs" .claude/test-exemptions.md` ≥ 1（3 行胶水豁免行新增）；`src-tauri/src/main.rs` 未加 `#[coverage(off)]`（Read 确认——登记豁免更诚实）。
