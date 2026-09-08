@@ -44,7 +44,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 1. **前端绝不直接碰 OS/文件/进程**：`invoke` 只允许出现在 `src/ipc/`；其它文件只调用 `ipc/` 暴露的领域函数（→ ../src/ipc/CLAUDE.md）。
 2. **后端按功能分模块**：模块间不互相穿透，共享只经 `state.rs` 的 `AppState`（→ ../src-tauri/src/CLAUDE.md）。
 3. **命令统一注册**于 `lib.rs` 的 `generate_handler!`；一律返回 `Result<_, AppError>`；阻塞 I/O 用 `spawn_blocking`（→ ../src-tauri/src/CLAUDE.md）。
-4. **DTO 双边对应**：`src/types/` ↔ Rust 模块 DTO 一一对应；Rust `snake_case` ↔ JS `camelCase`，改一边必须改另一边。字段类型泛化后，其语义值集须在 CLI profile 与后端 provider 同步登记，并配合同步测试锁死一致性（→ ../src/types/CLAUDE.md）。
+4. **DTO 单源（CP-024）**：Rust `#[derive(TS)]` 经 ts-rs 生成 `src/types/` 对应文件（9 域文件为生成物，禁手改；改 DTO = 改 Rust → `cargo test --test lib_tests export_bindings -- --test-threads=1` → `git diff --exit-code -- src/types` 守卫）。Rust `snake_case` ↔ JS `camelCase`；前端专有形态（组合别名/常量族/GUI 模型）落 `local.ts`/`hooksConfigGui.ts` 残面。字段语义值集同步登记与双侧字面量测试契约不变（→ ../src/types/CLAUDE.md）。
 5. **面板封闭**：Dockview 面板只能是 `panels/` 下注册过的类型；新增类型 = 加目录 + 在 `panelRegistry.ts` 注册。合法形态含「hub 容器 + 注册表分派子编辑器」（→ ../src/panels/CLAUDE.md）。
 6. **配色单点**：颜色定义于 `theme/schemes/<scheme>.ts`，组件经 `theme/colors.ts` facade token 引用，禁止硬编码颜色；既定例外清单及新增例外须同步登记对应模块 CLAUDE.md（→ ../src/theme/CLAUDE.md）。
 7. **布局单点**：操作页面布局只经 `workspace/layoutSerde.ts` 用 Dockview `toJSON/fromJSON` 存取（→ ../src/workspace/CLAUDE.md）。
