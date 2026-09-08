@@ -5,7 +5,13 @@
 // 内无法解析（opaque origin 无相对资产路径）；iframe 继承宿主 CSP（font-src
 // 'self' data:），asset 协议跨源字体 CORS 行为未实证。故构建期把 katex.min.css
 // 内全部 woff2 url 替换为 data:font/woff2;base64, 内联，产物随源码提交
-// （~0.9MB 文本），katex 升级后重跑本脚本 + git diff 审阅。
+// （产物约 361KB（2026-09-06 实测），勿手改）——katex 升级后重跑本脚本
+// + git diff 审阅（CI 守卫 .github/workflows/ci.yml，CP-033）。
+//
+// 复核（2026-09-08 S10-③，ADR-0018「维持记录（CP-033）」）：预览迁独立
+// webview 后重实证——asset 响应 ACAO 恒为各 webview 自身 origin，与内容
+// iframe（opaque origin null）不匹配，运行时 asset 取字体仍不可行（B2）——
+// 内联形态长期维持，本脚本与 CI 守卫即兜底形态。
 //
 // 用法：node scripts/gen-katex-inline.mjs
 // 产物：src/panels/markdown/generated/katexInlineCss.ts（导出 KATEX_INLINE_CSS）
