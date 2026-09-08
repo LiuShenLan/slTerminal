@@ -16,6 +16,9 @@ import {
 } from "../panels/docViewer/previewMessages";
 
 const NONCE = "00ff00ff00ff00ff00ff00ff00ff00ff";
+// 已退役类型名（拼接构造——CP-013 验证 grep 该名于 src/ 须零命中，勿写成字面量）
+const RETIRED_KEY_TYPE = ["slterm", "key"].join("_");
+const RETIRED_MARKER = ["__slterm", "postMessage"].join("_");
 
 /** 取注入脚本体并 parse-only 校验（SyntaxError 防线） */
 function parseScript(script: string): void {
@@ -25,10 +28,15 @@ function parseScript(script: string): void {
 }
 
 describe("buildInjectedScript 段组合", () => {
-  it("基础段恒在：keydown 转发 + zoom 运行时（无 extra）", () => {
+  it("无 extra：zoom 运行时恒注入；keydown 转发段已退役（CP-013 零残留）", () => {
     const out = buildInjectedScript(NONCE, []);
-    expect(out).toContain("slterm_key");
     expect(out).toContain("sltermZoom(document,window)");
+    // S10-②：键盘不跨窗口（预览窗口 focusable=false）——keydown 转发/信任标记
+    // 整体删除，注入脚本上行仅渲染态（zoom/scroll/nav）
+    expect(out).not.toContain(RETIRED_KEY_TYPE);
+    expect(out).not.toContain(RETIRED_MARKER);
+    expect(out).not.toContain('addEventListener("keydown"');
+    expect(out).not.toContain("fingerprint");
     parseScript(out);
   });
 

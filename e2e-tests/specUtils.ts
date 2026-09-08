@@ -26,6 +26,69 @@ declare global {
 
 // ── 就绪等待 ──
 
+// ── 预览独立 webview 驱动（S10-② 契约，e2e-tests/CLAUDE.md「多 webview
+//   WDIO 可达性」节：句柄 = label = preview-<panelId>；execute-first；显式
+//   切换抑制焦点惩罚；预览相关用例结束前一律切回 main）──
+
+/** 主窗口 label（tauri.conf.json windows[0] 默认 "main"） */
+export const MAIN_WINDOW_LABEL = "main";
+
+/** 面板 panelId → 预览窗口 label/句柄 */
+export function previewWindowLabel(panelId: string): string {
+  return `preview-${panelId}`;
+}
+
+/** 等待预览窗口入列（创建为异步——句柄集轮询） */
+export async function waitForPreviewWindow(
+  panelId: string,
+  timeout = 20000,
+): Promise<void> {
+  const label = previewWindowLabel(panelId);
+  await browser.waitUntil(
+    async () => (await browser.getWindowHandles()).includes(label),
+    { timeout, timeoutMsg: `预览窗口未入列（${label}）` },
+  );
+}
+
+/** 切换到预览窗口上下文（句柄 = label） */
+export async function switchToPreviewWindow(panelId: string): Promise<void> {
+  await browser.switchToWindow(previewWindowLabel(panelId));
+}
+
+/** 切换回主窗口上下文（多 webview 用例结束前必须恢复） */
+export async function switchToMainWindow(): Promise<void> {
+  await browser.switchToWindow(MAIN_WINDOW_LABEL);
+}
+
+/**
+ * 等待预览窗口内 sandbox iframe 的 srcdoc 包含期望文本（内容渲染完成判定——
+ * 宿主页文档内 iframe srcdoc 属性可读，驱动可触达）。结束时切回主窗口。
+ */
+export async function waitPreviewDocContains(
+  panelId: string,
+  text: string,
+  timeout = 20000,
+): Promise<void> {
+  await waitForPreviewWindow(panelId, timeout);
+  await switchToPreviewWindow(panelId);
+  try {
+    await browser.waitUntil(
+      async () =>
+        await browser.execute(
+          (t: string) => {
+            const f = document.querySelector("iframe");
+            const srcDoc = f?.getAttribute("srcdoc") ?? "";
+            return srcDoc.includes(t);
+          },
+          text,
+        ),
+      { timeout, timeoutMsg: `预览 srcdoc 未包含 ${text}（${previewWindowLabel(panelId)}）` },
+    );
+  } finally {
+    await switchToMainWindow();
+  }
+}
+
 /** 等待 Workspace 就绪（__slterm_e2e_workspaceReady === true） */
 export async function waitForWorkspaceReady(timeout = 15000): Promise<void> {
   await browser.waitUntil(

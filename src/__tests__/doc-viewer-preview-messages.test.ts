@@ -8,6 +8,10 @@ import { describe, it, expect } from "vitest";
 import {
   ZOOM_MSG_TYPE,
   RESET_MSG_TYPE,
+  SCROLL_MSG_TYPE,
+  SCROLL_SET_MSG_TYPE,
+  ZOOM_SET_MSG_TYPE,
+  NAV_MSG_TYPE,
   ZOOM_MIN,
   ZOOM_MAX,
   ZOOM_STEP,
@@ -18,10 +22,14 @@ import {
   isFiniteZoom,
   buildZoomReport,
   buildResetRequest,
+  UPLINK_MSG_TYPES,
+  DOWNLINK_MSG_TYPES,
+  isUplinkType,
+  isDownlinkType,
 } from "../panels/docViewer/previewMessages";
 
 describe("previewMessages zoom 常量", () => {
-  it("协议类型与既有 slterm_key 命名风格同构（平铺字符串）", () => {
+  it("协议类型平铺字符串命名（slterm_ 前缀）", () => {
     expect(ZOOM_MSG_TYPE).toBe("slterm_zoom");
     expect(RESET_MSG_TYPE).toBe("slterm_reset");
     expect(ZOOM_MSG_TYPE.startsWith("slterm_")).toBe(true);
@@ -105,7 +113,7 @@ describe("isFiniteZoom", () => {
 });
 
 describe("消息载荷构造器", () => {
-  it("buildZoomReport 平铺结构与既有 slterm_key 同构", () => {
+  it("buildZoomReport 平铺结构（type + nonce + zoom）", () => {
     expect(buildZoomReport("abc123", 1.21)).toEqual({
       type: ZOOM_MSG_TYPE,
       nonce: "abc123",
@@ -118,5 +126,40 @@ describe("消息载荷构造器", () => {
       type: RESET_MSG_TYPE,
       nonce: "deadbeef",
     });
+  });
+});
+
+describe("上/下行类型白名单（S10-② 终态守卫，CP-013/CP-044）", () => {
+  it("上行消息类型白名单恰好为渲染态集合——无命令/按键重放通道", () => {
+    // CP-013 终态：上行仅 {slterm_zoom, slterm_scroll, slterm_nav}（旧键转发
+    // 通道随 webview 迁移整体退役）；任何新增上行类型必须显式过本守卫
+    expect([...UPLINK_MSG_TYPES].sort()).toEqual(
+      [ZOOM_MSG_TYPE, SCROLL_MSG_TYPE, NAV_MSG_TYPE].sort(),
+    );
+    // 显式锁死：不含 key/命令类消息（防改个名字复活重放通道）
+    for (const t of UPLINK_MSG_TYPES) {
+      expect(t).not.toMatch(/key|command/i);
+    }
+  });
+
+  it("下行消息类型白名单恰好为控制集合（reset/zoom_set/scroll_set）", () => {
+    expect([...DOWNLINK_MSG_TYPES].sort()).toEqual(
+      [RESET_MSG_TYPE, ZOOM_SET_MSG_TYPE, SCROLL_SET_MSG_TYPE].sort(),
+    );
+  });
+
+  it("isUplinkType/isDownlinkType 守卫按白名单收敛", () => {
+    // 已退役键转发类型（拼接构造——CP-013 grep 零命中纪律）
+    const retiredKeyType = ["slterm", "key"].join("_");
+    expect(isUplinkType(ZOOM_MSG_TYPE)).toBe(true);
+    expect(isUplinkType(NAV_MSG_TYPE)).toBe(true);
+    expect(isUplinkType(retiredKeyType)).toBe(false);
+    expect(isUplinkType("slterm_reset")).toBe(false);
+    expect(isUplinkType("other")).toBe(false);
+    expect(isUplinkType(123)).toBe(false);
+    expect(isDownlinkType(RESET_MSG_TYPE)).toBe(true);
+    expect(isDownlinkType(SCROLL_SET_MSG_TYPE)).toBe(true);
+    expect(isDownlinkType(ZOOM_MSG_TYPE)).toBe(false);
+    expect(isDownlinkType(undefined)).toBe(false);
   });
 });

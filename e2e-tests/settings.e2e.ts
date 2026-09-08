@@ -27,9 +27,9 @@
  */
 
 import { expect, browser } from "@wdio/globals";
-import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   waitForWorkspaceReady,
   waitForDockviewApi,
@@ -210,6 +210,9 @@ function writeFakePlanEnv(): void {
   env.ANTHROPIC_BASE_URL = "https://api.deepseek.com/anthropic";
   env.ANTHROPIC_AUTH_TOKEN = "sk-test-e2e"; // 假值占位符（SEC-18，非真实凭据）
   root.env = env;
+  // 假屋为 per-pid 唯一新目录——solo 跑时 .claude 未必存在，先建父目录（2026-09-08 实证：
+  // 全量队列中 hooks spec 先行建目录故既往全量绿、单 spec 独立假屋必 ENOENT）
+  mkdirSync(dirname(claudeSettingsPath), { recursive: true });
   writeFileSync(claudeSettingsPath, JSON.stringify(root, null, 2), "utf8");
 }
 

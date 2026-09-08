@@ -111,15 +111,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **可视化 UI 已落地（F11）**：快捷键设置页（`panels/settings/pages/KeybindingsPage`）——`listCommands()` 按 category 分组渲染，行显生效键（override 高亮 + ↺ 回默认 + 默认键小字；`getEffectiveKeystroke` null → 「未绑定」占位）；录制期间 `setCaptureSuspended(true)` 屏蔽全局派发，`isReserved` 拒绝保留键、`findConflict` 同 context 冲突警告放行写入。测试 `settings-keybindings.test.tsx` + `shortcuts.test.ts`（suspended 两例）。
 
-## HTML iframe 全局键转发
+## 预览渲染与全局键（S10-② 起：键盘不跨窗口）
 
-HTML 面板内容在 `<iframe sandbox="allow-scripts" srcDoc={...}>` 中（不含 `allow-same-origin`），iframe 内 keydown 不冒泡到父 window。
+预览内容现渲染于独立 webview（自定义协议宿主页内 sandbox iframe，ADR-0019），且预览窗口 **focusable(false)**——OS 键盘焦点恒在主窗口，ShortcutRegistry 的 window capture 路径天然覆盖预览态（无需任何键转发/重放：旧「iframe 内 keydown postMessage 转发」（slterm 键转发类型 + 信任标记）与旧 `forwardGlobalShortcuts.ts`（需 allow-same-origin）均已删除，注入脚本零键上行，CP-013）。
 
-**注入脚本 postMessage 路径**：`HtmlPanel.tsx` 注入脚本在 iframe 内 `keydown` capture → `window.parent.postMessage({type:"slterm_key", fingerprint, ...}, "*")`。父窗口 `handleMessage` 监听 `"message"`：校验 `e.origin === "null"` + `e.source === iframe.contentWindow` → `exportContextBindings("global")` 动态比对 → 命中则 `window.dispatchEvent(合成KeyboardEvent)`（附带 `__slterm_postMessage` 信任标记）→ ShortcutRegistry 正常分发。
-
-**【2026-09-06 实证】发送 targetOrigin 必须用 `"*"`**：postMessage 第二参匹配【接收方】窗口 origin；iframe 的 opaque origin 只决定到达父后 `e.origin === "null"`（接收侧校验仍正确）。此前误用 `"null"` 作发送 targetOrigin，与父窗口 origin 不匹配被 Chromium 静默丢弃，Ctrl+W 从 iframe 关闭页签全灭——改动注入脚本 targetOrigin 后须在真实 WebView2 复验键盘转发（L4 半端到端 + 手工）。
-
-旧 `forwardGlobalShortcuts.ts` 已删除：原方案需 `allow-same-origin` 才能访问 `iframe.contentDocument`，与 sandbox 安全策略冲突；postMessage 方案无需同源。
+- 预览聚焦语义：用户阅读预览时主窗口仍持焦点 → Ctrl+W（global.closeTab）等全局快捷键照常工作；**预览文档内键盘键入不可达**（表单/系统复制快捷键——已知行为登记，docViewer/CLAUDE.md）。
+- 预览窗口 focusable 决策若未来翻转（需预览内键盘输入），必须先解决「预览聚焦吞全局快捷键」问题（ADR-0019 逆转触发点）。
 
 ## 测试模式
 

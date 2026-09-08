@@ -13,7 +13,13 @@ describe("资源 MIME 白名单", () => {
   it("常见图片扩展名映射", () => {
     expect(ASSET_MIME_BY_EXT.png).toBe("image/png");
     expect(ASSET_MIME_BY_EXT.jpg).toBe("image/jpeg");
-    expect(ASSET_MIME_BY_EXT.svg).toBe("image/svg+xml");
+  });
+
+  it("svg MIME 不在资源内联白名单（image/svg+xml 显式禁用，CP-035）", () => {
+    // svg 载体可嵌脚本，预览域（无 CSP）内联风险面大——白名单剔除后本地
+    // .svg 引用不收集（与白名单外扩展同语义，src 原样 → 缺口语义）
+    expect(ASSET_MIME_BY_EXT.svg).toBeUndefined();
+    expect(mimeForPath("C:/a/icon.svg")).toBeNull();
   });
 
   it("mimeForPath：大小写不敏感；白名单外 null", () => {

@@ -20,11 +20,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **mdPipeline（同步纯函数）**：markdown-it（html:true 透传信任模型 ADR-0017 / linkify / GFM 表删除线 / task-lists / texmath-katex dollars 就地渲染 throwOnError=false / hljs 白名单语言静态 import 高亮别名归一）+ 资源收集（<img>/<source> src 后处理，markdown 图片语法产物同被扫到）+ mermaid fence 占位（randomHex 防碰撞）+ buildPreviewDocument（完整文档 head：排版 CSS 经 buildMdPreviewStyleCss 同源装配 + KaTeX 内联字体）。模块级单例解析器可复用于多渲染。
 - **mdRenderAsync（异步编排）**：资源 data: URL 替换（LRU 50 缓存；失败回退原 src 不阻塞）/ mermaid 渲染替换 / isCancelled 丢弃。
 - **mermaidHost**：dynamic import 单例（vite 分包 2MB 不进主包）+ 按 code Promise 缓存 + 失败占位卡；宿主侧渲染成 SVG 字符串注入（iframe 零重排版、CSP 零新增）。
-- **KaTeX 字体**：generated/katexInlineCss.ts 为构建产物（scripts/gen-katex-inline.mjs 生成，woff2 data: 内联，woff/ttf 回退剔除）——katex 升级重跑脚本 + git diff 审阅，勿手改产物。
+- **KaTeX 字体**：generated/katexInlineCss.ts 为构建产物（scripts/gen-katex-inline.mjs 生成，woff2 data: 内联，woff/ttf 回退剔除）——katex 升级重跑脚本 + git diff 审阅，勿手改产物；一致性由 CI diff 守卫（.github/workflows/ci.yml，CP-033）。
 
 ### 本地资源（决策 #9，ADR-0018）
 
 - 相对 src → 绝对化（assets.ts 纯函数：docDir join、盘符直用、`..` 不越盘符根）→ MIME 白名单收集 → fs.readResourceBase64（后端沙箱/10MB/base64 分块）→ data: URL。沙箱越界由后端拒绝（前端不预判）。
+- **svg 内联显式禁用（CP-035）**：MIME 白名单不含 image/svg+xml（assets.ts 注释登记理由）——本地 .svg 引用不收集，与白名单外扩展同语义（src 原样 → 缺口语义）；svg 载体可嵌脚本，预览域（无 CSP）内联风险面大，`<img>` 惰性上下文仅为 W3C 行为单点不作安全边界。恢复须重审并登记 ADR-0018/0019，L2 白名单断言锁死（markdown-assets.test.ts）。
+- **data: 渲染域口径（CP-035）**：主窗口 CSP 已回收 data:（img/font）；md 预览资源/字体以 data: 注入渲染文档，文档渲染于预览域（自定义协议宿主页 iframe，域无 CSP）——数据通道不受主窗口回收影响（③ CP-033 实证）。
 - 盘符绝对路径与协议同形（`C:` vs `http:`）——isLocalRef/classifyLink 先判盘符再判协议（顺序红线，测试锁死）。
 
 ### 链接点击（决策 #10）
@@ -33,25 +35,25 @@ slterm_nav 上行 → classifyLink（linkPolicy 纯函数）：external（http/h
 
 ### 预览框参数与悬浮区
 
-PreviewFrame segments=[linkRouter, scrollReport]、keepZoom + keepScrollRatio（iframe 重建恢复）、onZoomChange={zoomHud.report} / onZoomReset={zoomHud.hide}（悬浮区显示层）。右上悬浮区（FloatingArea）恒面板根——切换条上 / 缩放 HUD 下列排，edit 态无缩放源传 hud=null；重置链 = PreviewFrame ref.resetZoom + zoomHud.hide（2026-09-06 收敛，docViewer/CLAUDE.md）。
+PreviewFrame（S10-② 起编排独立预览 webview，见 docViewer/CLAUDE.md）segments=[linkRouter, scrollReport]、keepZoom + keepScrollRatio（内容重建后按镜像恢复——宿主 iframe-loaded 状态触发）、onZoomChange={zoomHud.report} / onZoomReset={zoomHud.hide}（悬浮区显示层）。悬浮区（FloatingArea，direction="row"）恒承载于面板根工具条带（40px，内容区上方）——edit 态无缩放源传 hud=null；重置链 = PreviewFrame ref.resetZoom + zoomHud.hide（2026-09-06 收敛，S10-② 条带化，docViewer/CLAUDE.md）。
 
 ### 编辑字号语义（2026-09-06 接线）
 
-md/html 编辑形态字号 = 共享 `editorFontSize` store（Ctrl+滚轮缩放，EditorPanel 同款接线：useCodeMirror 的 fontSize/onFontSizeChange props——wheel 由 hook 无条件挂载，缺 props 会吞事件无效果）。原「恒锁默认 14」行为已变更：从此与 txt 编辑器同源（范围 [8,32] clamp、2s debounce 持久化）。split 态左 pane 滚轮=字号、右 iframe 滚轮=预览 zoom（pane 边界即语义边界，iframe 事件宿主侧物理不可达无冲突）。
+md/html 编辑形态字号 = 共享 `editorFontSize` store（Ctrl+滚轮缩放，EditorPanel 同款接线：useCodeMirror 的 fontSize/onFontSizeChange props——wheel 由 hook 无条件挂载，缺 props 会吞事件无效果）。原「恒锁默认 14」行为已变更：从此与 txt 编辑器同源（范围 [8,32] clamp、2s debounce 持久化）。split 态左 pane 滚轮=字号、右预览窗口滚轮=预览 zoom（pane 边界即语义边界，预览内容在独立窗口内、主窗侧事件物理不可达无冲突）。
 
 ### 预览配色单点（2026-09-06 收编）
 
-md 预览经 srcdoc iframe 渲染无法引用宿主 CSS 变量，但配色值一律以 active 方案驱动：mdPreviewStyle 的 buildMdPreviewStyleCss() 每次渲染现拼——正文/底色 = editor.overrides.plainText/background、代码语法 = syntax 9 键（hljs 12 类映射）、结构色 = editor.overrides.preview 组（新增键在 schemes/types.ts 注释登记）、复选框强调引 ui.focusBorder、mermaid 错误文案引 ui.errorFg。改主题即跟随（CM 主题现经 editorThemeSlot 槽热重配置同样即时生效，CP-039）；**禁止在此手抄色值**（曾以字面量双轨登记豁免，已撤销）。
+md 预览内容经 sandbox iframe（预览域）渲染无法引用宿主 CSS 变量，但配色值一律以 active 方案驱动：mdPreviewStyle 的 buildMdPreviewStyleCss() 每次渲染现拼——正文/底色 = editor.overrides.plainText/background、代码语法 = syntax 9 键（hljs 12 类映射）、结构色 = editor.overrides.preview 组（新增键在 schemes/types.ts 注释登记）、复选框强调引 ui.focusBorder、mermaid 错误文案引 ui.errorFg。改主题即跟随（CM 主题现经 editorThemeSlot 槽热重配置同样即时生效，CP-039）；**禁止在此手抄色值**（曾以字面量双轨登记豁免，已撤销）。
 
 ### 测试模式
 
 - 纯管线直测（pipeline/assets/links/async 编排——mermaid 模块 mock，jsdom 无布局）。
-- 面板集成（markdown-panel.test.tsx）：mock CM 桥（onDocContent 手动驱动）/allotment（透传 children）/ShortcutRegistry；iframe 消息派发走 MessageEvent 构造（extractNonce from srcdoc）。
-- L4 markdown.e2e.ts：真实 WebView2 渲染产物/图片 data/mermaid SVG/Ctrl+W/缩放（事件属性通道——宿主 script 静态化存量缺陷，raw HTML 事件属性不受转义破坏）。
+- 面板集成（markdown-panel.test.tsx）：mock CM 桥（onDocContent 手动驱动）/allotment（透传 children）/ShortcutRegistry；预览编排与消息桥在 ipc/preview mock 边界驱动（装配产物捕获 + 事件订阅回调）。
+- L4 markdown.e2e.ts：真实 WebView2 渲染产物/图片 data/mermaid SVG/Ctrl+W/缩放（switchToWindow 驱动预览窗口，e2e-tests/CLAUDE.md「多 webview WDIO 可达性」节契约；事件属性通道在预览域无 CSP 下执行）。
 
 ## 外部坑/红线
 
-- **host 内联 `<script>` 不执行**（escapeScriptClose 转义存量缺陷继承，ADR-0017）——e2e 触发 md 行为用事件属性（img onerror 先例），不依赖宿主 script。
+- **host 内联 `<script>` 于预览域真实执行（S10-② 起，CP-031）**——raw HTML 内 `<script>` 与事件属性（img onerror 先例）同为可用执行通道；e2e 触发 md 行为两通道皆可。
 - **allotment 动态 pane**：CM pane 须恒 index 0 位置（保活依赖 React 位置协调，调换 pane 顺序会致 CM 卸载重建丢 undo）。
 - **fake timers 下 waitFor 冻结**（轮询 setTimeout 被 fake）——防抖断言先切回真实时钟再 waitFor。
 - hljs 语言经静态 import（非 require——ESM 项目无 require）；新增语言=HLJS_LANG_FNS 表 + import 一行。

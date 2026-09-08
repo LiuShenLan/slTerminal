@@ -49,14 +49,42 @@ export function editorColorOverrides(): Extension {
   const { overrides } = schemeRegistry.getActive().editor;
   return EditorView.theme(
     {
-      // lint 诊断波浪线——backgroundImage 复刻 @codemirror/lint baseTheme 的
-      // underline() 同款 SVG（width 6 height 3 波浪 path），仅色值参数化。
-      // 必须同形覆盖：若改用 backgroundColor，值=库默认时也会由
-      // underline 波浪线变为实心色块，违反 D1 零视觉变化。
-      ".cm-lintRange-error": { backgroundImage: lintUnderline(overrides.lint.error) },
-      ".cm-lintRange-warning": { backgroundImage: lintUnderline(overrides.lint.warning) },
-      ".cm-lintRange-info": { backgroundImage: lintUnderline(overrides.lint.info) },
-      ".cm-lintRange-hint": { backgroundImage: lintUnderline(overrides.lint.hint) },
+      // lint 诊断波浪线——上游 @codemirror/lint baseTheme 与本文件旧实现均以
+      // background-image url(data:image/svg+xml) 渲染波浪下划线（6×3 tile，
+      // 源码模板见其 dist/index.js:642-647）。主窗口 CSP 终态（CP-035）回收
+      // img-src data: 后 data: 背景图像被 CSP 拦截（静默不可见 + 违例刷屏）
+      // → 改 text-decoration wavy 技法：文本装饰非资源 fetch，零 CSP 指令
+      // 依赖；backgroundImage 显式 none 覆盖上游 baseTheme 的 data: svg
+      // （防残引）。色值仍单点于方案 lint 键；波形由 Chromium 绘制，与
+      // 6×3 tile 幅度略有差异（D1 已评估接受，视觉同为彩色波浪下划线）。
+      ".cm-lintRange-error": {
+        backgroundImage: "none",
+        textDecorationLine: "underline",
+        textDecorationStyle: "wavy",
+        textDecorationColor: overrides.lint.error,
+        textUnderlineOffset: "2px",
+      },
+      ".cm-lintRange-warning": {
+        backgroundImage: "none",
+        textDecorationLine: "underline",
+        textDecorationStyle: "wavy",
+        textDecorationColor: overrides.lint.warning,
+        textUnderlineOffset: "2px",
+      },
+      ".cm-lintRange-info": {
+        backgroundImage: "none",
+        textDecorationLine: "underline",
+        textDecorationStyle: "wavy",
+        textDecorationColor: overrides.lint.info,
+        textUnderlineOffset: "2px",
+      },
+      ".cm-lintRange-hint": {
+        backgroundImage: "none",
+        textDecorationLine: "underline",
+        textDecorationStyle: "wavy",
+        textDecorationColor: overrides.lint.hint,
+        textUnderlineOffset: "2px",
+      },
       ".cm-lintRange-active": { backgroundColor: overrides.lint.activeBackground },
       // lint tooltip——特异性（0,2,0）高于 oneDark 的 .cm-tooltip（0,1,0），
       // 背景与边框均由方案决定
@@ -131,11 +159,4 @@ export function editorSyntaxHighlight(): Extension {
       { tag: tags.comment, color: syntax.comment },
     ]),
   );
-}
-
-/** @codemirror/lint underline() 同款 SVG data URL（色值参数化），源码模板见其 dist/index.js:642-647 */
-function lintUnderline(color: string): string {
-  return `url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="6" height="3">${encodeURIComponent(
-    `<path d="m0 2.5 l2 -1.5 l1 0 l2 1.5 l1 0" stroke="${color}" fill="none" stroke-width=".7"/>`,
-  )}</svg>')`;
 }

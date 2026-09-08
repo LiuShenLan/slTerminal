@@ -131,8 +131,15 @@ describe("overrides", () => {
       // searchMatch 键（match 背景 + outline 描边）
       expect(rules).toContain(linear.editor.overrides.searchMatch.match);
       expect(rules).toContain(linear.editor.overrides.searchMatch.matchOutline);
-      // lint 键：波浪线 SVG 内色值经 encodeURIComponent 编码（# → %23）
-      expect(rules).toContain(encodeURIComponent(linear.editor.overrides.lint.error));
+      // lint 键：波浪线经 text-decoration 技法（CP-035 回收 img-src data: 后
+      // data: 背景图被 CSP 拦截）——色值以明文落在 textDecorationColor
+      for (const color of Object.values(linear.editor.overrides.lint)) {
+        expect(rules).toContain(color);
+      }
+      // 防回归：规则文本不得含 data: 图像 URL（主窗口零 data: 图像技法契约，
+      // CP-035——data: svg 波浪线实现若回潮立即红）
+      expect(rules).not.toContain("url('data:");
+      expect(rules).not.toContain("url(\"data:");
     });
 
     it("层叠胜出（ACC-05 修复守卫）：与 oneDark 竞争的规则选择器带 .cm-editor 前缀", () => {
@@ -181,6 +188,7 @@ describe("overrides", () => {
       // 选择器前缀每次调用随机生成（StyleModule.newName），值原样保留——只按值断言
       const assertAllOverrideValues = (rules: string) => {
         const { overrides } = linear.editor;
+        // lint 四键色值 CP-035 后以明文（textDecorationColor）呈现——不再编码
         const plain = [
           overrides.background,
           overrides.searchMatch.match,
@@ -190,14 +198,12 @@ describe("overrides", () => {
           overrides.lint.activeBackground,
           overrides.lint.tooltipBackground,
           overrides.lint.tooltipBorder,
-        ];
-        const encoded = [
           overrides.lint.error,
           overrides.lint.warning,
           overrides.lint.info,
           overrides.lint.hint,
-        ].map(encodeURIComponent);
-        for (const value of [...plain, ...encoded]) {
+        ];
+        for (const value of plain) {
           expect(rules).toContain(value);
         }
       };

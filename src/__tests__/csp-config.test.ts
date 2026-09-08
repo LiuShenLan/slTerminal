@@ -1,10 +1,12 @@
 // CSP 配置不变量测试（L2 回归守卫）
 //
-// 背景：HTML 预览面板用 <iframe srcDoc> 加载，about:srcdoc 按规范继承主窗口 CSP。
-// 若主窗口 CSP 缺 script-src 'unsafe-inline'（或 nonce 注入未关），srcdoc 内联脚本/
-// 事件属性会被静默拦截 —— 正是本次修复的目标。jsdom 不强制 CSP、无法验证真实执行，
-// 故本测试锁死 tauri.conf.json 的 CSP 决策，任何回退/收紧立即失败。
-// 真实执行行为由 L4 E2E（真实 WebView2 强制 CSP）验证。
+// 背景（S10-②/④，ADR-0019）：预览渲染已迁出主窗口（独立 webview + 自定义协议
+// 宿主页，域内无全局 CSP——注入机制与该域 data: 数据通道在域内宽松执行）。
+// 主窗口 CSP 终态 = 回收 script-src 'unsafe-inline' 与
+// dangerousDisableAssetCspModification（CP-012）+ 回收 img-src/font-src 的
+// data:（CP-035——data: 数据/字体仅存预览域渲染，主窗口零消费）。
+// jsdom 不强制 CSP、无法验证真实执行，故本测试锁死 tauri.conf.json 的 CSP 决策，
+// 任何回退/收紧立即失败。真实执行行为由 L4 E2E（真实 WebView2 强制 CSP）验证。
 
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
@@ -36,21 +38,21 @@ function parseDirectives(policy: string): Record<string, string[]> {
 describe("tauri.conf.json CSP 不变量", () => {
   const directives = parseDirectives(csp);
 
-  it("script-src 放行同源 + 内联脚本/事件", () => {
-    // 覆盖内联 <script> 与 onclick/onload 等内联事件属性
+  it("script-src 终态：恰好 = ['self']——回收内联脚本放行（CP-012）", () => {
+    // 预览迁独立 webview 后主窗口不再承载 srcdoc 内联注入——script-src 收为
+    // 纯同源；'unsafe-inline' 若回潮（重新放行内联）立即红
     expect(directives["script-src"]).toBeDefined();
-    expect(directives["script-src"]).toContain("'self'");
-    expect(directives["script-src"]).toContain("'unsafe-inline'");
-    // 正则冗余断言（容忍空格/顺序）
-    expect(csp).toMatch(/script-src[^;]*'self'/);
-    expect(csp).toMatch(/script-src[^;]*'unsafe-inline'/);
+    expect(directives["script-src"]).toEqual(["'self'"]);
+    // 正则冗余断言（防指令内混入写法绕过）
+    expect(csp).not.toMatch(/script-src[^;]*'unsafe-inline'/);
   });
 
-  it("关闭 script-src 的 nonce 注入（否则 unsafe-inline 被忽略）", () => {
-    // 缺此项时 Tauri 注入 nonce → 按 CSP3 规范 'unsafe-inline' 失效 → srcdoc 仍被拦
-    const flag = security.dangerousDisableAssetCspModification;
-    expect(Array.isArray(flag)).toBe(true);
-    expect(flag as string[]).toContain("script-src");
+  it("dangerousDisableAssetCspModification 键不存在（CP-012 删除整键）", () => {
+    // 键删除后 Tauri 资产页 CSP 恢复默认修改（nonce/哈希注入）——不再人为放宽
+    const flag = (
+      security as { dangerousDisableAssetCspModification?: unknown }
+    ).dangerousDisableAssetCspModification;
+    expect(flag).toBeUndefined();
   });
 
   it("default-src 保持严格同源（未被误放宽）", () => {
@@ -86,20 +88,30 @@ describe("tauri.conf.json CSP 不变量", () => {
     expect(directives["img-src"]).toContain("https://asset.localhost");
   });
 
-  it("img-src 放行 data:（docViewer 预览本地相对资源内联，ADR-0018）", () => {
-    // 预览 iframe（opaque origin）无法加载 file:// 或 asset: 相对资源——md/html 内
-    // 相对图片经后端沙箱读入前端拼 data: URL 注入 srcDoc。svg 经 <img> 惰性上下文
-    // 加载（内嵌 script 不执行），data: 不承载脚本。收紧会静默断预览图片。
-    expect(directives["img-src"]).toContain("data:");
+  it("img-src 终态：恰好 = ['self', 'asset:', 'https://asset.localhost']——data: 已回收（CP-035）", () => {
+    // 预览迁独立 webview 后主窗口不再承载预览文档（data: 图片内联消费仅存
+    // 预览域——该域无 CSP，天然放行）；主窗口 img-src 回收到恰好三项，
+    // data: 若回潮立即红。blob: 维持否定（无生命周期管理点的通道不放行）。
+    expect(directives["img-src"]).toBeDefined();
+    expect(directives["img-src"]).toEqual(["'self'", "asset:", "https://asset.localhost"]);
+    expect(directives["img-src"]).not.toContain("data:");
     expect(directives["img-src"]).not.toContain("blob:");
   });
 
-  it("font-src 放行同源 + data:（docViewer KaTeX 内联字体，ADR-0018）", () => {
-    // 现无 font-src 时回退 default-src 'self'——KaTeX 数学字体内联 data: font 后
-    // 必须显式放行；App 自身 @fontsource 走 'self' 不受影响。
+  it("font-src 终态：恰好 = ['self']——data: 已回收（CP-035）", () => {
+    // KaTeX 数学字体内联 data: font 仅装配于预览文档 head（预览域渲染，
+    // ③ CP-033 实证真实加载）；主窗口 App 自身 @fontsource 走 'self'。
     expect(directives["font-src"]).toBeDefined();
-    expect(directives["font-src"]).toContain("'self'");
-    expect(directives["font-src"]).toContain("data:");
+    expect(directives["font-src"]).toEqual(["'self'"]);
+  });
+
+  it("data: 不在主窗口任何指令（CP-035 全指令守卫）", () => {
+    // 主窗口 CSP 零 data:——任何指令（img/font/style/…）都不放行 data:；
+    // 需要 data: 的通道只存在于预览域（无 CSP），主窗口收紧不波及
+    for (const sources of Object.values(directives)) {
+      expect(sources).not.toContain("data:");
+    }
+    expect(csp).not.toContain("data:");
   });
 
   it("connect-src 未显式声明——回退 default-src 'self'（快照）", () => {

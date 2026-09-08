@@ -29,21 +29,37 @@ export interface FloatingAreaProps {
   switcher?: React.ReactNode;
   /** 缩放 HUD 数据（null = 无预览框形态无缩放源，仅切换条） */
   hud?: FloatingHud | null;
+  /** 排布方向（默认 "column" 上=切换条 下=HUD；S10-② 面板工具条带内用 "row"
+   *  侧排——HUD 与切换条同行，适配带高约束） */
+  direction?: "column" | "row";
   /** e2e 探针前缀（默认 "doc"） */
   dataE2ePrefix?: string;
 }
 
-/** 悬浮区容器：absolute 右上、纵向列排（上=切换条 下=HUD）、不拦交互 */
-const areaStyle: React.CSSProperties = {
+/** 悬浮区容器：absolute 右上、不拦交互（方向由 prop 决定：column 纵向列排 /
+   *  row 横向侧排——工具条带内承载形态） */
+const areaBaseStyle: React.CSSProperties = {
   position: "absolute",
   top: 8,
   right: 8,
   zIndex: 20,
   display: "flex",
-  flexDirection: "column",
-  alignItems: "flex-end",
+  alignItems: "center",
   gap: 6,
   pointerEvents: "none",
+};
+
+/** 悬浮区容器（纵向列排 variant：上=切换条 下=HUD） */
+const areaColumnStyle: React.CSSProperties = {
+  ...areaBaseStyle,
+  flexDirection: "column",
+  alignItems: "flex-end",
+};
+
+/** 悬浮区容器（横向侧排 variant：切换条与 HUD 同行） */
+const areaRowStyle: React.CSSProperties = {
+  ...areaBaseStyle,
+  flexDirection: "row",
 };
 
 /** HUD 气泡本体：百分比 + 重置按钮（瞬态，缩放停止 3s 后消失） */
@@ -73,9 +89,10 @@ const resetBtnStyle: React.CSSProperties = {
 export const FloatingArea: React.FC<FloatingAreaProps> = ({
   switcher,
   hud,
+  direction = "column",
   dataE2ePrefix = "doc",
 }) => (
-  <div style={areaStyle}>
+  <div style={direction === "row" ? areaRowStyle : areaColumnStyle}>
     {switcher !== undefined && <div style={{ pointerEvents: "auto" }}>{switcher}</div>}
     {hud !== null && hud !== undefined && hud.visible && (
       <div data-e2e={`${dataE2ePrefix}-zoom-hud`} style={hudChipStyle} title="缩放比例">

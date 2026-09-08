@@ -8,6 +8,7 @@ import { describe, it, expect, vi } from "vitest";
 import { COMMAND_CATALOG, COMMAND_META_BY_ID, commandFromMeta } from "../features/shortcuts/commandCatalog";
 import { formatKeystroke, isValidKeystrokeString } from "../features/shortcuts/keystroke";
 import { isReserved } from "../features/shortcuts/reserved";
+import { UPLINK_MSG_TYPES } from "../panels/docViewer/previewMessages";
 
 const EXPECTED_IDS = [
   "global.closeTab",
@@ -65,10 +66,20 @@ describe("COMMAND_CATALOG", () => {
     }
   });
 
-  // SEC-04（D16）：global context 命令集守卫——iframe 内脚本可提取 nonce 伪造
-  // 全局快捷键消息（HtmlPanel 威胁模型），global 命令集必须保持最小低风险；
-  // 扩充即红，迫使先评估威胁模型
-  it("global context 命令集恒为 [global.closeTab]", () => {
+  // S10-②（CP-013）：原 SEC-04（D16）「预览上行含 global 键转发重放」通道随
+  // webview 迁移整体退役（键盘不跨窗口）——守卫意图迁移为「预览消息通道不含
+  // 命令重放」：上行类型集合 = 渲染态白名单（previewMessages 单点），含 key/
+  // command 类即红；global 命令集仍保持最小低风险（其注册语义不受影响）
+  it("预览消息通道不含命令重放（上行 = 渲染态白名单，CP-013/CP-044）", () => {
+    // 恰好为渲染态集合（守卫详值断言在 doc-viewer-preview-messages.test.ts）
+    expect([...UPLINK_MSG_TYPES].sort()).toEqual(
+      ["slterm_zoom", "slterm_scroll", "slterm_nav"].sort(),
+    );
+    // 显式锁死：无 key/command 类消息（改名字复活重放通道即红）
+    for (const t of UPLINK_MSG_TYPES) {
+      expect(t).not.toMatch(/key|command/i);
+    }
+    // global 命令集仍最小（防回潮性扩充）
     const globals = COMMAND_CATALOG.filter((m) => m.context === "global").map((m) => m.id);
     expect(globals).toEqual(["global.closeTab"]);
   });

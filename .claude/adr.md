@@ -202,7 +202,7 @@
 | 标识 | 决策 | 登记点 |
 |------|------|--------|
 | FE-01 | Workspace 多 Dockview 实例**保持**（H6 终端跨页面存活 + xterm 实例限制，D1）；以页面总数上限 `MAX_PAGES = 20`（src/stores/projects.ts，超限 addPage 拒绝 + toast「页面数已达上限」）防内存/DOM 线性增长。**2026-08-22 FE-36 语义修订：页面总数上限改为跨项目全局计数**（原按项目计数——多项目下 Dockview 实例仍可无界增长；`Object.values(projects).flatMap(p => p.pages).length` 全局判定，L2 跨项目用例锁死） | src/workspace/CLAUDE.md、src/stores/CLAUDE.md |
-| SEC-09 | CSP `script-src 'unsafe-inline'` **保留**（D4）：srcdoc iframe 继承父 CSP（W3C 行为），HTML 预览注入脚本（锚点拦截/键盘转发/nonce）必须内联，移除即破坏预览。现状 = tauri.conf.json `script-src 'self' 'unsafe-inline'` + `dangerousDisableAssetCspModification: ["script-src"]` | src-tauri/tauri.conf.json 注释 |
+| SEC-09 | CSP `script-src 'unsafe-inline'` **保留**（D4）：srcdoc iframe 继承父 CSP（W3C 行为），HTML 预览注入脚本（锚点拦截/键盘转发/nonce）必须内联，移除即破坏预览。现状 = tauri.conf.json `script-src 'self' 'unsafe-inline'` + `dangerousDisableAssetCspModification: ["script-src"]`。**已被 ADR-0019 取代**（2026-09-08，S10-②：预览迁独立 webview 自定义协议域，主窗口回收 script-src 'unsafe-inline' 与 dangerousDisableAssetCspModification——CP-012） | src-tauri/tauri.conf.json 注释 |
 | SEC-06 | 剪贴板读权限 `clipboard-manager:allow-read-text` **保留**（D6）：唯一消费点为 keyboard.ts 的 Ctrl+Shift+V 显式手势，改后端命令不缩小攻击面（前端上下文被注入时同样能 invoke）；grep 级守卫测试锁消费点集合 | src/ipc/CLAUDE.md |
 | BE-21 | `fs_read_dir` 返回整目录列表**不分页**（登记豁免）~~已作废~~：**CP-006 已改游标分页（2026-09）**——`(path, cursor?, limit?)` 默认 500/上限 1000，过滤排序后切片、游标 opaque，前端续页拼接；FileTree 虚拟化（FE-30）渲染侧保留 | src-tauri/src/fs/CLAUDE.md |
 | FE-31 | CodeMirror 大文件**不虚拟化**（按 D3 关闭）：fs_read_file Channel 分块（BE-03）削峰 + 10MB 上限 + 1MB 警告已覆盖峰值；CM6 文档模型不支持部分加载 | src/panels/editor/CLAUDE.md |
@@ -229,7 +229,7 @@
 | D13 | TE-12 knip 门禁 | 方案 A：补 `entry`/`ignoreExports`/`ignoreFiles` 至 `npx knip --production` 退出码 0；不窄化 CI 口径 |
 | D14 | TE-07 TS7 声明失真 | 主 `typescript` 字段直改 `^7.0.2`，删 `@typescript/native` 别名与 TS6 包装器；执行前 `npm view typescript-eslint` 实查兼容版，不兼容则升级/overrides 统一或暂停 type-aware 规则并 ADR 登记（**执行结果见下节：三支 fallback 全走尽，妥协为双 TS 并存**） |
 | D15 | SEC-15 shell fallback | 收窄为「两侧 canonicalize 均失败且归一化字符串完全相同」才放行，单侧失败即拒绝；`pty/CLAUDE.md` 登记残余风险；补 L1 拒绝用例。不引入 Win32 文件身份比对。**alias 兼容保持**（Store 版 pwsh 场景两侧指向同一路径、双侧均失败，仍走 fallback 放行）。D15 残余风险已销(2026-09):字符串回退改 Win32 句柄级文件身份比对,SEC-15 单侧拒绝保留为纵深 |
-| D16 | SEC-04 nonce | 威胁模型登记（HtmlPanel 顶部注释 + `src/panels/CLAUDE.md` 修正失实描述）+ L2 守卫测试锁死 global context 命令集；不加 UI 提示、不移除 nonce |
+| D16 | SEC-04 nonce | 威胁模型登记（HtmlPanel 顶部注释 + `src/panels/CLAUDE.md` 修正失实描述）+ L2 守卫测试锁死 global context 命令集；不加 UI 提示、不移除 nonce。**威胁模型已消除，ADR-0019**（2026-09-08，S10-②：键转发/命令重放通道随 webview 迁移退役——上行终态 = 渲染态集合；nonce 保留为纵深） |
 | D17 | SEC-16 root 竞态 | 后端 `tokio::sync::Mutex` 串行化整个 `set_project_root_impl`（Cargo.toml tokio 补 `"sync"` feature）；前端零改动 |
 | D18 | FE-37 store IPC | `setProjectRoot` 调用上提调用方（store 纯状态化）；toast 由 `switchToPageShared` 承担（BE-23 同链修）；不登记豁免 |
 | D19 | FE-39 嵌套项目 | 接受「最深前缀」语义；实查测试已固化（`nav-tree-history.test.tsx:302-336`），零代码改动，仅 verify 断言确认存在 |
@@ -404,7 +404,7 @@
 **决策**：
 
 - **md 预览与 html 渲染同态**：iframe sandbox="allow-scripts"（无 allow-same-origin，Tauri CVE-2024-35222）、注入桥（键转发/缩放/滚动/链接路由）与四层 postMessage 校验（origin="null" + source + nonce + type）收 docViewer/PreviewFrame 单点（复用不复制）；raw HTML 透传（markdown-it html:true），事件属性执行、宿主 `<script>` 因 escapeScriptClose 转义纪律与 htmlviewer 同态静态化——**行为继承即预期，不修复存量缺陷**。
-- **global 命令集不因 md 扩充**：预览 iframe 键转发只重放 global context 命令（当前仅 global.closeTab，command-catalog.test.ts 锁死）——面板级命令在 iframe 内不可达，扩充须先重评 SEC-04 威胁模型（nonce 明文内联于 srcdoc，防外部伪造不防预览内容自身）。
+- **global 命令集不因 md 扩充**：预览 iframe 键转发只重放 global context 命令（当前仅 global.closeTab，command-catalog.test.ts 锁死）——面板级命令在 iframe 内不可达，扩充须先重评 SEC-04 威胁模型（nonce 明文内联于 srcdoc，防外部伪造不防预览内容自身）。**global 重放通道已退役，ADR-0019**（2026-09-08，S10-②：键盘不跨窗口——预览窗口 focusable=false，键转发通道整体删除；global 命令集保持最小的守卫意图迁移为「预览消息通道不含命令重放」）。
 - **链接分派收父侧**：linkRouter 段仅上行 href（slterm_nav），分类（external → 系统浏览器 opener / local → 应用内打开链路）在面板侧 linkPolicy 纯函数做——iframe 内不做任何打开决策。
 - **缩放/滚动恢复语义**：keepZoom/keepScrollRatio 重建下行恢复（钳制/比例近似，登记已知行为），缩放状态不跨会话持久化（html 现状语义继承）。
 
@@ -443,3 +443,61 @@
 - 「沙箱内二进制入渲染面」有了统一通道（html/md 预览共用；html 相对图片顺带可用）；未来新资源类型走 MIME 白名单扩展。
 - CSP 增两 data: 放行（csp-config.test.ts 守卫）；blob:/connect-src/worker-src 不放行；script-src 政策不变（'unsafe-inline' + nonce 注入关闭为 htmlviewer 既有前置，ADR-0017 继承）。
 - 逆转触发点：动态 asset scope 出现（Tauri 支持跟随项目根时重估协议通道）；或需读 >10MB 资源/任意沙箱外路径（重估上限与边界）。
+- **已回收（ADR-0019 终步，CP-035，S10-④）**：主窗口 img-src/font-src 的 data: 放行移除（csp-config.test.ts 锁终态）；KaTeX 字体经新预览上下文实证（③ CP-033）后在预览域（无 CSP）渲染；svg data: 显式禁用（markdown assets 白名单剔除 image/svg+xml——正文「svg 惰性上下文加载」论据随 data: 放行一并失效，处置见下「回收记录（CP-035）」节）。
+
+**维持记录（CP-033，2026-09-08 S10-③ 新 webview 上下文重实证——B2 分支）**：
+
+- **实证结论（数据通道在预览域真实可用）**：markdown.e2e 临时用例（真实 WebView2）渲染含行内 $x^2$ 与块级公式的 md——预览 webview 宿主页 srcdoc iframe 内宿主 `<script>`（CP-031 通道）读公式 DOM `getComputedStyle` font-family 命中 KaTeX 字体族、`document.fonts.check`（KaTeX_Main/Math/Size1）为真、字体集零 error 态 face，结果经 zoom 上行通道编码为主窗 HUD 121% 断言通过——构建期内联 data: 字体在新 webview 上下文真实加载渲染（非 serif 回退），原「opaque origin iframe 内行为未实证」缺口关闭。
+- **asset 通道维持否决（不可行证据，两源）**：① 源码实证 tauri 2.11.5 `protocol/asset.rs`：asset 协议所有响应恒带 `Access-Control-Allow-Origin: <webview window_origin>`（manager/webview.rs 按各 webview 自身 URL origin 注册；预览窗口 = `http://slterm-preview.localhost`）——预览内容渲染于 sandbox srcdoc iframe（opaque origin，ADR-0019 决策二），跨源字体/资源请求 Origin 序列化为 null，与 ACAO 固定值不匹配 → 运行时经 asset 协议取字体的 CORS 校验在内容域不可过。② 实测：iframe 内 cors fetch `https://asset.localhost/index.html`（fetch 与字体同为 cors-mode，ACAO 匹配语义一致）→ 拒绝（HUD 110% 证据，2026-09-08）。
+- **决策**：保留构建期内联产物（generated/katexInlineCss.ts）与 gen 脚本；CI diff 守卫（.github/workflows/ci.yml，CP-033）成为长期形态——katex 升级漏跑 gen 脚本即红。**S10-④ 执行口径登记**：预览域当前无局部 CSP（自定义协议响应无 CSP 头——ADR-0019）；④ CP-035 若建立预览域局部 CSP，font-src 必须放行 data:（每个渲染文档 head 内嵌 KaTeX data 字体串），主窗口 CSP 届时照 CP-035 回收。
+
+**回收记录（CP-035，S10-④，2026-09-08）**：
+
+- **前置闸判定**：③ B2 实证（KaTeX data 字体在预览域真实加载渲染 ×2 轮、asset 通道否决双证据）通过 → font-src 回收获实证许可——KaTeX 字体渲染只发生预览域（主窗口无 data: 字体消费），无需拆项登记 docs/compromises.md。
+- **主窗口 CSP 终态**：img-src `'self' asset: https://asset.localhost`（回收 data:）、font-src `'self'`（回收 data:）；style-src 'unsafe-inline' 保留（React inline style / CM6 注入样式，与本族无关）。csp-config.test.ts 三守卫锁死（img-src 恰好三项 / font-src 恰好 ['self'] / data: 不在主窗口任何指令）。
+- **执行期发现并处置（img-src data: 的主窗口唯一图像消费点）**：CM6 lint 诊断波浪线——上游 @codemirror/lint baseTheme 与本仓 theme/overrides.ts 旧实现均以 `background-image: url(data:image/svg+xml,…)` 渲染（JsonMode 语法/schema 波浪线，主窗口渲染）——img-src data: 回收会静默遮蔽 lint 波浪线。处置 = 改 text-decoration wavy 技法（非资源 fetch，零 CSP 指令依赖）+ backgroundImage 显式 none 覆盖上游 baseTheme data: svg；色值仍单点于方案 lint 键（波形由 Chromium 绘制，与 6×3 tile 幅度略有差异，D1 已评估接受）。theme-overrides.test.ts 加「规则文本零 data: url」防回潮断言。
+- **svg data: 显式禁用**：markdown assets.ts MIME 白名单剔除 image/svg+xml（本地 .svg 引用不再内联——缺口语义，与白名单外扩展同语义）；svg 载体可嵌脚本，预览域（无 CSP）内联风险面大，`<img>` 惰性上下文仅为 W3C 行为单点不作安全边界。html 侧无独立资源内联通道（仅 markdown 管线消费 assets.ts），同口径无代码落点。markdown-assets.test.ts 锁「svg MIME 不在白名单」。
+- **预览域 data: 放行口径**：预览 webview CSP 无代码落点——预览域 = 自定义协议宿主页（响应无 CSP 头，host page 无 CSP meta），content iframe（srcdoc）无从继承 → data: img/font 在预览域天然放行（③ 实证通道即此）；「若未来建立预览域局部 CSP，img/font-src 须放行 data:」维持为执行口径（本 ADR-0018 与 ADR-0019 逆转触发点同文登记）。
+- **主窗口消费面审计结论**：除 lint 波浪线外主窗口无其它 data: 图像/字体消费者（lucide 内联 svg 元素非 fetch、cli-icons/字体走 self、vite assetsInlineLimit 无 <4KB 资产内联风险）——回收后零静默断图/断字面。
+
+## 0019 预览渲染迁独立 webview（ADR-0019：S10-① spike + S10-② 迁移落地定稿）
+
+**Status**: accepted（2026-09-08。S10-① spike 四问实证（go）；S10-② 迁移落地（CP-012/013/031/044）后定稿；③④ 后续条目结果在逆转记录节追加）
+
+**上下文**：CP-012/013/035/044 同根（预览通道 iframe srcDoc 与主窗口共享 CSP/上下文，SEC-09 结构性问题）。修复方向 = 预览渲染迁出主窗口 CSP 域到独立 Tauri webview，但整个 S10 的 go/no-go 依赖「WDIO（embedded driver：tauri-plugin-wdio-webdriver 1.3.0 内嵌 WebDriver + tauri-service 1.3.0 JS 服务）能否枚举/驱动独立预览 webview」——此前零实证。
+
+**决策一（S10-① spike 实证，2026-09-08 主窗口 + 两个独立预览 WebviewWindow 实测，spike 代码不入库）**：
+
+1. **go——四问全 yes**：① 可枚举（`getWindowHandles()` = webview_windows label 全集，启动即入列、销毁后出列）；② execute 可达（switchToWindow 后 execute/`$` 作用于预览页上下文，含 asset 与 data: 双候选）；③ 焦点语义（driver 命令与 OS 前台焦点解耦，显式 switch 后 `$` 族无 +5s 惩罚）；④ 销毁语义（closeWindow 后句柄收缩、driver 存活，销毁异步需轮询）。
+2. **跨独立 WebviewWindow 无 window.postMessage 通道**（实测 main 收不到预览 postMessage）——**消息桥 = Tauri event/IPC**；CP-044 走「通道退役」备选结论分支：不引入 PREVIEW_ORIGIN，targetOrigin 议题随跨窗口 postMessage 退役（iframe ↔ 宿主页的窗口树内 postMessage 保留，targetOrigin "*" 语义不变）。
+3. **CSP 无 per-webview 覆盖**（tauri 2.11.5 builder API 无 csp 属性；CSP 为 app 级配置，数据页亦被注入全局 CSP meta——tauri 源码实证：Windows 资产响应带 CSP 头 + 静态内联脚本哈希化，运行时内联脚本在收紧后全灭）。
+4. **WDIO 驱动策略**：句柄 = label；`browser.switchToWindow(固定 label)` 切上下文（显式切换抑制焦点自动恢复）；每预览面板 = 独立 WebviewWindow + 固定 label（`preview-<panelId>`）；断言 execute-first、结束切回 `'main'`；TQ-E-10 焦点探针语义限单窗口。（策略全文见 e2e-tests/CLAUDE.md「多 webview WDIO 可达性」节。）
+
+**决策二（S10-② 迁移落地，2026-09-08）**：
+
+1. **预览承载域 = 自定义协议宿主页（② 落地面复核结论，修正 spike 的 asset 首选）**：预览窗口加载 Rust 注册的自定义协议 `slterm-preview`（Windows 映射 `http://slterm-preview.localhost/preview-host.html`，register_uri_scheme_protocol 文档实证；响应不带全局 CSP）。asset 协议页（http://tauri.localhost）恒被注入全局 CSP（响应的 CSP 头）——CP-012 主窗口收紧 script-src 后，资产域内运行时内联注入与宿主自带脚本全灭（静态内联脚本虽经构建期哈希放行，运行时注入产物不可哈希）——asset 候选否决，「预览 CSP 域」= 自定义协议域。
+2. **宿主页 = 固定桥接页**（src-tauri/src/preview.rs 内嵌 const）：建 sandbox iframe（allow-scripts、无 allow-same-origin——CVE-2024-35222 红线延续，iframe 无 Tauri IPC 注入——main_frame_only 实证）→ 内容经 `preview_render`（后端存储 + seq + 定向 ping）→ 宿主 `preview_pull` 拉取置 srcdoc → iframe 文档消息（zoom/scroll/nav 上行、reset/zoom_set/scroll_set 下行）经 Tauri event 与主窗中继；事件名单点登记 src/ipc/preview.ts（三处同步：TS / 宿主桥 / 守卫测试）。
+3. **注入机制原样迁入**：injectScript + buildInjectedScript + nonce 装配于主窗 PreviewFrame，产物推送预览域执行；**字符串级转义消亡**（escapeScriptClose 删除——宿主 `<script>` 不经转义进入渲染文档且真实执行，CP-031 判定一/二在 ② 达成，判定三由 html.e2e 宿主 script 用例在真实 WebView2 断言）。
+4. **上行命令面收窄为零（CP-013）**：keydown 转发段与信任标记整体退役（键盘不跨窗口——预览窗口 focusable(false)，焦点恒在主窗 ShortcutRegistry 域，全局快捷键在预览态可用）；上行终态集合 = {slterm_zoom, slterm_scroll, slterm_nav}（UPLINK_MSG_TYPES 白名单守卫锁死）；下行 = {reset, zoom_set, scroll_set}。
+5. **主窗口 CSP 终态（CP-012）**：`script-src 'self'` + 删除 dangerousDisableAssetCspModification 整键（img-src/font-src data: 回收归 CP-035）。
+6. **CP-037 复核结论**：预览迁出后 workspace 层 CSS 显隐保活对预览 webview 不适用——CM 保活（面板内 allotment visible=false 恒挂载）**维持**（edit/split/preview 形态往返仍须保留 undo/光标）；预览窗口保活另成机制：**隐藏保活 = 窗口 hide 不销毁**（面板/页面隐藏 → 几何归零 → preview_sync visible=false；恢复 → show）——缩放/滚动态随 iframe 文档存亡，跨显隐保留。两机制并行，各管各层。
+7. **面板形态（波及面）**：面板根改「40px 工具条带（切换条/HUD 悬浮带，FloatingArea direction="row"）+ 内容区（PreviewFrame 锚点）」列排——预览窗口几何 = 锚点矩形（主窗 inner 原点 + CSS × scale，PreviewFrame 200ms 轮询 + 主窗移动即时同步）；窗口 owned 无边框、focusable(false)、skip_taskbar；面板卸载 → 窗口销毁（缩放随窗口销毁 = 旧关页签语义）。
+8. **键盘边界已知行为（接受）**：预览窗口不可聚焦 → 预览文档内表单键入/系统复制快捷键不可达（鼠标滚动/点击/拖选不受影响）；主窗快捷键在预览态恒可用。若未来需表单键入，须先解决「预览聚焦吞全局快捷键」问题（本决策 4 的逆转触发点）。
+
+**被否决的备选**：
+
+- **同窗口 add_child 子 webview（多 webview-in-window）**：driver 不可枚举且宿主窗口整体消失（实测）——S10 架构不可选。
+- **data: URL 注入承载预览**：内容被全局 CSP meta 包裹改写 + opaque origin + 需 webview-data-url feature（实测）——否决。
+- **asset 协议宿主页承载预览（spike 期首选）**：CSP 无 per-webview 覆盖下资产域恒带全局 CSP 头 + 静态哈希——收紧后运行时注入/宿主脚本不可行（② 落地面复核否决，见决策二 1）。
+- **主窗侧保留 iframe + 运行时经 'self' 外部 js 注入（资产域候选路线）**：运行时代码须运行时生成（nonce/段型/内容变化），无法静态化；且宿主文档 `<script>` 永不可执行（CP-031 判定三不可达）、CP-033/035 的预览域 data: 放行无落点——否决。
+- **同态维持（no-go 出口）**：四问实证通过，go 成立——未触发。
+
+**后果**：
+
+- docViewer 六件 + 面板两件重构：PreviewFrame 改窗口编排/事件桥（无 iframe）；buildInjectedScript 去 keydown 段；injectScript 去转义；previewMessages 增白名单；ipc 新增 preview 域；HtmlPanel/MarkdownPanel 工具条带化 + FloatingArea row variant；Rust 新增 preview 模块（scheme 协议 + 4 命令 + 内容存储）与 preview 能力文件（最小权限：事件 + preview_pull）。
+- 命令三处注册（lib.rs/build.rs/capabilities）新增 4 条；capabilities 新增 preview.json（windows glob `preview-*`）。
+- E2E 可达性落地：html.e2e/markdown.e2e 经 label 切换驱动预览窗口；内容断言 = 宿主页读 iframe srcdoc；HUD 断言在主窗工具条带。
+- **已知行为登记**：预览键盘键入不可达（决策二 8）；预览窗口几何跟随为轮询驱动（拖拽期亚秒级滞后）；宿主脚本现可执行（信任模型 = 本地文件全信任延续，ADR-0017 同源）。
+- **逆转触发点**：driver 升级出现子 webview/帧级寻址时重估「独立 WebviewWindow」约束；Tauri 提供 per-webview CSP 时复核预览域选择（自定义协议 vs 资产域）；出现「预览内键盘输入」需求时重评 focusable 决策（须先解全局快捷键吞键问题）；CP-033/035（③④）结果在本节追加登记。
+- **CP-033（③）结果登记（2026-09-08）**：B2 维持分支——KaTeX data 内联经新 webview 上下文真实 WebView2 实证可用（字体族命中 + 字体真实加载）；asset 通道维持否决（响应 ACAO 固定 webview origin vs 内容 iframe opaque origin null，源码 + 实测双证据）。全文见 ADR-0018「维持记录（CP-033）」；④ 若建立预览域局部 CSP 须放行 font-src data:。
+- **CP-035（④）结果登记（2026-09-08，font-src 实证记录归档）**：③ B2 实证通过 → 主窗口 CSP 终态落地——img-src/font-src 双双回收 data:（tauri.conf.json + csp-config.test.ts 三守卫锁死），预览域维持无 CSP（data: img/font 天然放行，无代码落点）；执行期发现主窗口唯一 data: 图像消费点 = CM6 lint 波浪线 svg 背景（JsonMode），改 text-decoration wavy 技法消除（theme/overrides.ts）；svg data: 显式禁用（markdown assets 白名单剔除）。处置全文见 ADR-0018「回收记录（CP-035）」；本决策 5「img-src/font-src data: 回收归 CP-035」至此执行完毕。

@@ -1,8 +1,9 @@
-// scrollRuntime.ts — iframe 文档内滚动上报/恢复的注入脚本源码生成器
+// scrollRuntime.ts — 预览 iframe 文档内滚动上报/恢复的注入脚本源码生成器
 //
-// 与 zoomRuntime 同范式：md 预览 iframe（opaque origin）的滚动状态父窗口无法
-// 直读——文档滚动节流上行（slterm_scroll，120ms 防抖），iframe 重建（草稿防抖
-// 重渲染）后父侧经 slterm_scroll_set 下行按比例恢复（keepScrollRatio）。
+// 与 zoomRuntime 同范式：md 预览 iframe（opaque origin，位于预览 webview 宿主
+// 页内，S10-② 起 ADR-0019）的滚动状态宿主页无法直读——文档滚动节流上行
+// （slterm_scroll，120ms 防抖），iframe 重建（草稿防抖重渲染）后经 slterm_scroll_set
+// 下行按比例恢复（keepScrollRatio）。
 //
 // 比例语义 = scrollTop / (scrollHeight - clientHeight)，[0,1]；重建后文档高度
 // 变化时按比例近似恢复（编辑点恰在视口上方时位置可能跳变——登记已知行为）。
@@ -10,7 +11,8 @@
 // 60ms 延时提升命中率；内容异步加载完成无 scroll 事件，比例恢复为近似语义）。
 //
 // 拼接纪律同 zoomRuntime：无 "</script>" 字面量、语句分号收尾、targetOrigin
-// "*"、下行 source===parent + type + nonce 三重校验。
+// "*"（仅与宿主页窗口对话，不跨窗口）、下行 source===parent + type + nonce
+// 三重校验。
 
 import { SCROLL_MSG_TYPE, SCROLL_SET_MSG_TYPE } from "./previewMessages";
 

@@ -4,7 +4,8 @@ import { describe, it, expect } from "vitest";
 import { injectScript } from "../lib/injectScript";
 
 const SCRIPT = "<script>/* FORWARDER */</script>";
-const MARKER = "__slterm_key";
+// 幂等标记（buildInjectedScript 导出常量同值；测试用独立字面量防循环依赖）
+const MARKER = "__slterm_preview_test";
 
 describe("injectScript", () => {
   // ==========================================================================
@@ -92,41 +93,42 @@ describe("injectScript", () => {
   });
 
   // ==========================================================================
-  // FE-02: 宿主 HTML 含 </script> 被转义，防止提前闭合注入脚本
+  // FE-02（S10-② 修订，CP-031）：宿主 HTML 自带 <script> 不再经字符串级转义
+  // ——原存量转义函数把宿主 `</script>` 替换为 `<\/script>` 致宿主脚本
+  // 吞到 EOF 永不执行（存量缺陷登记）；现宿主脚本段原样进入渲染文档（新预览
+  // 域无全局 CSP），其闭合标签与注入脚本的标签互不干扰（注入段自身遵守
+  // 「不输出 </script> 字面量」拼接纪律）
   // ==========================================================================
 
-  it("宿主 HTML 含 </script> 被转义为 <\\/script>（大小写不敏感）", () => {
-    const html = "<html><head></head><body><p></script></p></body></html>";
+  it("宿主自带 <script> 块原样保留（闭合标签不转义，CP-031）", () => {
+    const html =
+      "<html><head></head><body><script>document.body.innerHTML='JS OK'</script></body></html>";
     const result = injectScript(html, SCRIPT, MARKER);
-    // 宿主 HTML 中的 </script> 被转义
-    expect(result).toContain("<\\/script>");
-    // 注入脚本标签自身的 </script> 不受影响
-    expect(result).toContain("<script>/* FORWARDER */</script>");
+    // 宿主脚本完整保留（不再出现 <\/script> 转义形态）
+    expect(result).toContain("<script>document.body.innerHTML='JS OK'</script>");
+    expect(result).not.toContain("<\\/script>");
+    // 注入脚本就位
+    expect(result).toContain(SCRIPT);
   });
 
-  it("宿主 HTML 含大写 </SCRIPT> 也被转义", () => {
+  it("宿主 HTML 含大小写混合 </SCRIPT> 也原样保留", () => {
     const html = "<html><head></head><body><pre></SCRIPT></pre></body></html>";
     const result = injectScript(html, SCRIPT, MARKER);
-    expect(result).toContain("<\\/script>");
-    expect(result).not.toContain("</SCRIPT>");
+    expect(result).toContain("</SCRIPT>");
+    expect(result).not.toContain("<\\/script>");
   });
 
-  it("宿主 HTML 含混合大小写 </Script> 也被转义", () => {
-    const html = "<html><head></head><body></Script></body></html>";
-    const result = injectScript(html, SCRIPT, MARKER);
-    expect(result).toContain("<\\/script>");
-  });
-
-  it("宿主 HTML 多处 </script> 全部转义", () => {
+  it("宿主 HTML 多处 </script>（自身多脚本块）原样保留", () => {
     const html =
-      "<html><head></head><body><div></script></div><span></script></span></body></html>";
+      "<html><head></head><body><div><script>a()</script></div><span><script>b()</script></span></body></html>";
     const result = injectScript(html, SCRIPT, MARKER);
-    // 注入脚本标签自身的 </script> 在注入脚本内，宿主部分的全部转义
-    const hostPart = result.split("/* FORWARDER */")[0];
-    expect(hostPart).not.toMatch("</script>");
+    expect(result).toContain("<div><script>a()</script></div>");
+    expect(result).toContain("<span><script>b()</script></span>");
+    expect(result).toContain(SCRIPT);
+    expect(result).not.toContain("<\\/script>");
   });
 
-  it("宿主 HTML 无 </script> 时不受影响（与旧行为一致）", () => {
+  it("宿主 HTML 无 </script> 时不受影响", () => {
     const html =
       "<html><head></head><body><p>Hello World</p></body></html>";
     const result = injectScript(html, SCRIPT, MARKER);

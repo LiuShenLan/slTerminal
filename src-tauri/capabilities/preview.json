@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "preview",
+  "description": "预览窗口（preview-*）最小权限声明：宿主页桥仅需事件收发（上行/下行中继 + 渲染通知）与内容拉取；doc 内容在 sandbox iframe 内（opaque origin，无 IPC 注入——main_frame_only，CVE-2024-35222 修复语义），不消费其它命令",
+  "windows": ["preview-*"],
+  "permissions": [
+    "core:event:default",
+    "allow-preview-pull"
+  ]
+}

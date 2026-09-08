@@ -45,6 +45,27 @@ E2E helper 由 `E2E_ENABLED`（`src/lib/e2eEnabled.ts`）门控。`tauri build` 
 2. 版本评审看两处：主声明 `^` 浮动结果 + overrides 是否仍与主声明同线；`npm ls webdriverio @wdio/globals` 输出单实例即健康态。
 3. 前 4 项（serialize-javascript/deepmerge-ts/@puppeteer/browsers/glob）为传递依赖治理，与 tauri-service 无关——wdio 升 major 时逐条重估是否仍需。
 
+### 多 webview WDIO 可达性（S10-① spike 结论，2026-09-08 实测）
+
+预览渲染迁独立 webview（CP-012 方向）的 E2E 可行性 spike 结论——embedded driver（tauri-plugin-wdio-webdriver 1.3.0 内嵌 WebDriver，会话/窗口模型 = app `webview_windows()` 注册表）对多窗口上下文的实测四问：
+
+| 问 | 结论 | 证据 |
+|---|---|---|
+| ① webview 可枚举 | **yes** | `getWindowHandles()` = webview_windows label 全集；独立预览 WebviewWindow 启动即入列、销毁后出列（句柄 = label，实时反映注册表） |
+| ② `browser.execute` 在预览上下文可达 | **yes** | `switchToWindow(preview-label)` 后 execute/`$` 作用于预览页上下文——asset 宿主页（href/title/内联脚本置位）与 data: 页均实测；预览页 `$('h1')` 取文 5ms |
+| ③ 焦点语义 | **yes（命令与 OS 前台焦点解耦）** | 预览窗口 show+set_focus 后前台在预览、main `document.hasFocus()=false`，主窗口 execute/getTitle 仍正常；显式 switch 后 `$` 族无 +5s 焦点惩罚（实测 findMs=5ms） |
+| ④ 销毁语义 | **yes** | `closeWindow(预览)` → 句柄集收缩、driver 存活；销毁为异步（注册表滞后瞬时，实测销毁后立即 enumerate 仍偶见残影）——后续命令先 `switchToWindow('main')` 即恢复，无挂死 |
+
+**加载方式结论：asset 协议宿主页为 spike 期首选，② 落地面复核后改走自定义协议域（S10-② 定稿，ADR-0019）**——asset 页（`http://tauri.localhost`）在 tauri 2.11 无 per-webview CSP 下恒被注入全局 CSP（响应的 CSP 头 + 静态脚本哈希化），主窗口收紧 script-src（CP-012）后运行时内联注入与宿主自带脚本在 asset 域全灭；故预览宿主页改由 Rust 注册的自定义协议 `slterm-preview`（Windows 实为 `http://slterm-preview.localhost/…`）承载——响应不带全局 CSP →「预览 CSP 域」成立（origin 仍确定，注入机制与宿主脚本在该域宽松执行）。**data: 注入否决**（三重：全局 CSP meta 包裹改写 / origin opaque / 需 webview-data-url feature）与**跨窗口无 postMessage** 结论不变。
+
+**架构约束（实测写死，S10-② 不得违背）**：
+- **预览必须是独立 WebviewWindow（label 即驱动句柄）**；同窗口 `add_child` 子 webview 不仅不可枚举，且实测把宿主窗口整体挤出 `webview_windows()`（t+60s add_child 后 handles 变 `[]`）——多 webview-in-window 形态驱动侧无解（另需 tauri "unstable" feature）。
+- **跨独立 WebviewWindow 无 window.postMessage 通道**（opener=null、无 WindowProxy，实测 main 收不到预览 postMessage）——消息桥只能走 Tauri event/IPC；CP-044 targetOrigin 议题随 postMessage 通道退役（备选结论分支落地，不引入 PREVIEW_ORIGIN）。
+- **CSP 无 per-webview 覆盖**：tauri 2.11.5 builder API 无 csp 属性（CSP 为 app 级配置，data: 页同样被注入全局 CSP meta）——② 落地面复核结论：预览宿主页改走自定义协议域（`http://slterm-preview.localhost`，响应无 CSP），注入机制原样迁入域内（ADR-0019），替代原「'self' 可加载外部 js（asset 同源）」路线。
+- **hasFocus 探针语义限单窗口**：`document.hasFocus()` 只反映被查窗口自身；预览可见/聚焦时 main 恒 false——TQ-E-10 类探针只适用于「将被真实交互的窗口」；预览相关用例一律 execute-first，不依赖探针。
+
+**WDIO selector/驱动策略（预览相关 spec 编写契约）**：句柄 = label（embedded 模式）；`browser.switchToWindow('<固定 label>')` 切上下文（用户显式切换 → 服务侧抑制焦点自动恢复 → `$` 族命令不再吃 +5s）；每个预览面板 = 独立 WebviewWindow + 固定 label（如 `preview-<panelId>`），断言 execute-first，操作完切回 `'main'`；销毁预览 = `closeWindow()` 后先切回 main 再继续；全程不做任何 OS 级聚焦操作。
+
 ### E2E helper 命名与挂载位置
 
 - `__slterm_e2e_*`：挂载在 `window` 全局；
@@ -99,6 +120,7 @@ wdio 单 session 共享 app 实例。`wdio.conf.ts` 的 `beforeSuite` 调 `__slt
 
 - **运行**：`npm run e2e`（= `build:e2e && wdio`）。
 - **单实例串行**：`maxInstances: 1`。
+- **定向运行官方形态 = 单 `--spec`**（2026-09-08 实证）：`run-wdio.cjs --spec a.e2e.ts --spec b.e2e.ts` 会为每个 spec 起独立 worker/独立应用实例——后起的应用实例在 Windows 前台锁定期内无法取得前台焦点，beforeSuite TQ-E-10 探针确定性快失败（与 spec 内容无关，换序后「谁在第 2 位谁失败」实证）；config `specs` 数组全量形态 = 单 worker 单 app 会话内顺序跑各 spec（无重启聚焦问题，S12 全量回归走此形态）。多 spec 验证请分次单 spec 调用。
 - **选择器**：`data-e2e` 属性。
 - **通信**：测试代码在 Node 进程，通过 `browser.execute()` 调用应用侧注入的 window/容器全局 helper。
 - **重试**：`WDIO_RETRIES` 环境变量控制，默认 1。
@@ -121,6 +143,6 @@ wdio 单 session 共享 app 实例。`wdio.conf.ts` 的 `beforeSuite` 调 `__slt
 | 豁免项 | 原因 | 当前兜底 |
 |--------|------|---------|
 | 真实 OS 级按键 | embedded WDIO 无法投递 `browser.keys` 到 WebView2 | 合成事件 + 页面内 dispatch 全链路 |
-| HTML postMessage 真实 WebView2 行为 | jsdom 无法模拟 opaque origin 与 CSP | `html.e2e.ts` 真实二进制往返 + L2 四负面用例 |
+| 预览渲染往返（窗口创建/宿主页桥/iframe 执行/事件中继） | jsdom 无窗口/CSP/真实 iframe 执行——L2 止于 ipc mock 边界 | `html.e2e.ts`/`markdown.e2e.ts` 真实二进制 + switchToWindow 预览窗口往返（S10-② 驱动契约）+ L2 负面用例 |
 | WebGL / mouse tracking 回归 | headless 不跑 GPU；PASSTHROUGH_MODE 滚轮自动化假阴性 | `terminal.e2e.ts` 全屏 TUI 视觉回归 + L1 flags 守卫 |
 | `E2E_ENABLED=false` 生产分支 | L2 恒 true，字面量 DCE 结构性缺口 | CI 生产 dist grep 守卫 + `e2e-build-config.test.ts` |

@@ -4,9 +4,10 @@
 //   - edit：CM6 编辑全宽（lang-markdown）
 //   - split：左编辑右预览（allotment 拖拽分栏，比例随 params 持久化）
 //   - preview：渲染只读全宽
-// 右上悬浮区（FloatingArea）常驻面板根：切换条上 / 缩放 HUD 下恒列排——
-// PreviewFrame 只上报 zoom 变化（onZoomChange）+ 承接重置命令（ref），
-// HUD 显示不随 pane 坐标（2026-09-06 收敛，docViewer/CLAUDE.md）。
+// 面板根 = 工具条带（40px，恒承载切换条/HUD——预览窗口锚定其下内容区，条带
+// 不落入窗口覆盖范围，交互可用；S10-② 预览迁独立 webview 后形态） + 内容区
+// （allotment）。PreviewFrame 只上报 zoom 变化（onZoomChange）+ 承接重置命令
+// （ref），HUD 显示不随 pane 坐标（2026-09-06 收敛，docViewer/CLAUDE.md）。
 //
 // 文档真值源 = 面板 docRef（草稿优先磁盘）：
 //   - 磁盘读入 → doc；CM 击键经 onDocContent 即时写回；
@@ -101,10 +102,36 @@ const cmAreaStyle: React.CSSProperties = {
   overflow: "clip",
 };
 
-/** 预览 pane 容器（PreviewFrame 自撑满） */
+/** 预览 pane 容器（PreviewFrame 锚点自撑满——预览窗口覆盖本矩形） */
 const previewAreaStyle: React.CSSProperties = {
   width: "100%",
   height: "100%",
+};
+
+/** 面板根（就绪态）：纵向列排——工具条带（上，定位锚） + 内容区（下） */
+const rootColumnStyle: React.CSSProperties = {
+  position: "relative",
+  width: "100%",
+  height: "100%",
+  display: "flex",
+  flexDirection: "column",
+  background: PANEL_BG,
+};
+
+/** 工具条带（S10-②：40px 常驻——切换条/HUD 悬浮带，预览窗口锚定其下，
+ *  不落入窗口覆盖范围） */
+const toolbarBandStyle: React.CSSProperties = {
+  position: "relative",
+  flex: "0 0 auto",
+  height: 40,
+  background: PANEL_BG,
+};
+
+/** 内容区容器（allotment 宿主） */
+const contentAreaStyle: React.CSSProperties = {
+  position: "relative",
+  flex: "1 1 auto",
+  minHeight: 0,
 };
 
 /** 渲染占位（首次渲染/渲染中——旧内容保留时以旧内容展示，不闪占位） */
@@ -114,13 +141,6 @@ const renderPlaceholderStyle: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  background: PANEL_BG,
-};
-
-const rootStyle: React.CSSProperties = {
-  position: "relative",
-  width: "100%",
-  height: "100%",
   background: PANEL_BG,
 };
 
@@ -357,58 +377,65 @@ const MarkdownPanel: React.FC<MarkdownPanelProps> = ({
   }
 
   return (
-    <div style={rootStyle}>
-      <Allotment
-        proportionalLayout
-        defaultSizes={splitRatio}
-        onDragEnd={handleDragEnd}
-        minSize={0}
-      >
-        {/* CM pane 恒挂载（CP-037：preview-only 改 display:none 保活——undo/光标跨形态保留，
-            照 edit↔split 先例）；visible=false 时 allotment 收拢不占空间 */}
-        <Allotment.Pane minSize={160} visible={mode !== "preview"}>
-          <div ref={cmContainerRef} style={cmAreaStyle} />
-        </Allotment.Pane>
-        {mode !== "edit" && (
-          <Allotment.Pane minSize={120}>
-            <div style={previewAreaStyle}>
-              {previewHtml !== null ? (
-                <PreviewFrame
-                  ref={frameRef}
-                  html={previewHtml}
-                  title={`Markdown 预览: ${params.filePath}`}
-                  segments={[{ kind: "linkRouter" }, { kind: "scrollReport" }]}
-                  keepZoom
-                  keepScrollRatio
-                  onZoomChange={zoomHud.report}
-                  onZoomReset={zoomHud.hide}
-                  onNav={handleNav}
-                />
-              ) : (
-                <div style={renderPlaceholderStyle}>
-                  <span style={{ color: HTML_PANEL_LOADING_FG, fontSize: 13 }}>
-                    渲染中...
-                  </span>
-                </div>
-              )}
-            </div>
+    <div style={rootColumnStyle}>
+      {/* 工具条带：切换条 + 缩放 HUD（40px 常驻——预览窗口锚定其下内容区，
+          条带不落入窗口覆盖范围，交互可用；悬浮区坐标协调单点语义不变） */}
+      <div style={toolbarBandStyle}>
+        <FloatingArea
+          direction="row"
+          switcher={switcher}
+          hud={
+            mode !== "edit"
+              ? {
+                  zoom: zoomHud.hud.zoom,
+                  visible: zoomHud.hud.visible,
+                  onReset: handleHudReset,
+                }
+              : null
+          }
+          dataE2ePrefix="markdown"
+        />
+      </div>
+      <div style={contentAreaStyle}>
+        <Allotment
+          proportionalLayout
+          defaultSizes={splitRatio}
+          onDragEnd={handleDragEnd}
+          minSize={0}
+        >
+          {/* CM pane 恒挂载（CP-037：preview-only 改 display:none 保活——undo/光标跨形态保留，
+              照 edit↔split 先例）；visible=false 时 allotment 收拢不占空间 */}
+          <Allotment.Pane minSize={160} visible={mode !== "preview"}>
+            <div ref={cmContainerRef} style={cmAreaStyle} />
           </Allotment.Pane>
-        )}
-      </Allotment>
-      {/* 悬浮区：切换条上 / 缩放 HUD 下恒列排（面板根，不受 allotment pane 裁剪） */}
-      <FloatingArea
-        switcher={switcher}
-        hud={
-          mode !== "edit"
-            ? {
-                zoom: zoomHud.hud.zoom,
-                visible: zoomHud.hud.visible,
-                onReset: handleHudReset,
-              }
-            : null
-        }
-        dataE2ePrefix="markdown"
-      />
+          {mode !== "edit" && (
+            <Allotment.Pane minSize={120}>
+              <div style={previewAreaStyle}>
+                {previewHtml !== null ? (
+                  <PreviewFrame
+                    ref={frameRef}
+                    panelId={params.panelId}
+                    html={previewHtml}
+                    title={`Markdown 预览: ${params.filePath}`}
+                    segments={[{ kind: "linkRouter" }, { kind: "scrollReport" }]}
+                    keepZoom
+                    keepScrollRatio
+                    onZoomChange={zoomHud.report}
+                    onZoomReset={zoomHud.hide}
+                    onNav={handleNav}
+                  />
+                ) : (
+                  <div style={renderPlaceholderStyle}>
+                    <span style={{ color: HTML_PANEL_LOADING_FG, fontSize: 13 }}>
+                      渲染中...
+                    </span>
+                  </div>
+                )}
+              </div>
+            </Allotment.Pane>
+          )}
+        </Allotment>
+      </div>
     </div>
   );
 };

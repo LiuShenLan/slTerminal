@@ -1,39 +1,58 @@
-// PreviewFrame.tsx — docViewer 共享预览框（iframe + srcDoc 渲染容器）
+// PreviewFrame.tsx — docViewer 共享预览宿主（主窗侧，S10-② 迁独立 webview）
 //
-// 由原 panels/html/HtmlPanel.tsx 的 iframe 渲染段迁出并参数化，docViewer 预览
-// 家族（htmlviewer / markdownviewer）共用同一 iframe 生命周期与 postMessage
-// 总线——iframe 沙箱与消息校验是安全红线最密集处（SEC-03/04），收敛单点是
-// 复用而不复制的唯一方式。
+// 由原 PreviewFrame（主窗口内 sandbox iframe + srcDoc + postMessage 总线）迁出：
+// 预览内容现在渲染于【独立 Tauri WebviewWindow】（label = preview-<panelId>，
+// 专用宿主页 + 宿主页内 sandbox iframe srcdoc，ADR-0019）——本组件是主窗侧
+// 对预览窗口的编排层：
 //
 // 职责：
-//   - iframe 生命周期：sandbox="allow-scripts"（不含 allow-same-origin——
-//     Tauri CVE-2024-35222 红线）+ srcDoc 注入（injectScript + buildInjectedScript）
-//   - SEC-04 nonce：面板挂载期 crypto.getRandomValues 生成一次（惰性 ref），
-//     拼入注入脚本；父窗口校验 e.data.nonce 一致才转发
-//   - postMessage 总线：上行 slterm_key（命中 global 命令才合成重放）/
-//     slterm_zoom（校验后经 onZoomChange 上报——显示层在面板根悬浮区
-//     FloatingArea/useZoomHud，2026-09-06 收敛）；下行 slterm_reset /
-//     slterm_zoom_set（keepZoom）
+//   - 窗口生命周期：面板内容区锚点（anchor）几何 → 经 ipc.preview 同步窗口
+//     位置/尺寸/显隐（轮询 + 主窗移动监听；面板隐藏/页面切换 → 窗口隐藏不
+//     销毁——缩放/滚动态保活，CP-037 复核语义）；卸载 → 销毁窗口
+//   - 内容装配：injectScript(html, buildInjectedScript(nonce, segments)) 原样
+//     装配（注入机制迁入预览 CSP 域——自定义协议宿主页，域内无全局 CSP，
+//     无差别字符串级转义已消亡，CP-031）；产物经 preview_render
+//     推送（后端存储 + 定向通知宿主拉取）
+//   - 消息桥（Tauri event，CP-044 通道退役分支）：上行 slterm_zoom /
+//     slterm_scroll / slterm_nav（经宿主桥转发）按 label 过滤 + nonce 校验 +
+//     类型白名单（UPLINK_MSG_TYPES，CP-013 终态集合——无按键重放分支，
+//     未知类型静默丢弃）；下行 reset/zoom_set/scroll_set 经事件注入宿主 →
+//     iframe（iframe 侧 source===parent + nonce 校验不变）
 //   - ref 命令接口（PreviewFrameHandle.resetZoom）：悬浮区重置按钮下行复位
-//   - keepZoom/keepScrollRatio：srcDoc 重建后按父侧镜像下行恢复（md 开；
-//     html 保持「重建归 100%」现状语义关）
+//   - keepZoom/keepScrollRatio：iframe 加载完成（宿主状态事件）后按父侧镜像
+//     下行恢复（md 开；html 保持「重建归 100%」现状语义关）
+//
+// 键盘语义：预览窗口 focusable=false——键盘焦点恒在主窗口 ShortcutRegistry
+// 域，全局快捷键（Ctrl+W 等）在预览聚焦时仍可用（CP-013 步骤 4 口径）；
+// 代价 = 预览文档内表单键入/原生复制快捷键不可达，登记已知行为
+// （docViewer/CLAUDE.md）。
 //
 // 不拥有：文件读取、loading/error 态（面板各自持有）、缩放 HUD 显示（面板经
 // useZoomHud 持有，本组件只上报 zoom 变化与承接复位命令）、业务链接策略
 // （html/md 各自的注入段由调用方传 segments）。
 //
-// 内部镜像 zoomRef 为 keepZoom 重建恢复的取值源：上行 zoom 变化时更新；
-// handleLoad 重建归 1（下行恢复走 zoom_set → iframe 回声上行 → 外层重新显示）。
+// 内部镜像 zoomRef/ratioRef 为 keepZoom/keepScrollRatio 重建恢复的取值源：
+// 上行变化时更新；iframe 加载完成重建归 1（下行恢复走 zoom_set → iframe 回声
+// 上行 → 外层重新显示）。
 
-import React, { useCallback, useEffect, useImperativeHandle, useRef } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+} from "react";
 import { injectScript } from "../../lib";
-import { getShortcutRegistry } from "../../features/shortcuts/ShortcutRegistry";
 import {
-  buildInjectedScript,
-  InjectedSegment,
-  INJECTED_MARKER,
-  TRUSTED_MARKER,
-} from "./buildInjectedScript";
+  emitPreviewDownlink,
+  makePreviewLabel,
+  onPreviewHostStatus,
+  onPreviewUplink,
+  previewClose,
+  previewRender,
+  previewSync,
+} from "../../ipc/preview";
+import { buildInjectedScript, InjectedSegment, INJECTED_MARKER } from "./buildInjectedScript";
 import {
   ZOOM_MSG_TYPE,
   SCROLL_MSG_TYPE,
@@ -44,6 +63,7 @@ import {
   buildZoomSetRequest,
   buildScrollSetRequest,
 } from "./previewMessages";
+import { onMainWindowMoved } from "../../ipc/window";
 
 /** PreviewFrame 命令接口（悬浮区重置按钮经 ref 调用下行复位） */
 export interface PreviewFrameHandle {
@@ -53,21 +73,23 @@ export interface PreviewFrameHandle {
 
 /** PreviewFrame 接收的面板参数 */
 export interface PreviewFrameProps {
+  /** 面板 panelId（预览窗口 label = preview-<panelId>——WDIO 驱动句柄契约） */
+  panelId: string;
   /** 注入前的原始 HTML 文档字符串（PreviewFrame 负责 injectScript + nonce 装配） */
   html: string;
-  /** iframe title（L2 按 title 查询 iframe，格式由调用方定） */
+  /** iframe title（保留——宿主/未来调试定位用） */
   title: string;
   /** 额外注入段（html 传 fragmentNav；md 传 linkRouter/scrollReport） */
   segments?: readonly InjectedSegment[];
-  /** srcDoc 重建后是否按父侧镜像恢复缩放（md 开 / html 关） */
+  /** 内容重建后是否按父侧镜像恢复缩放（md 开 / html 关） */
   keepZoom?: boolean;
-  /** srcDoc 重建后是否按比例恢复滚动（md 开——scrollReport 段须同传） */
+  /** 内容重建后是否按比例恢复滚动（md 开——scrollReport 段须同传） */
   keepScrollRatio?: boolean;
   /** iframe 背景色（压重建闪白用；缺省透明） */
   iframeBg?: string;
   /** 缩放变化上报（zoom !== 镜像时；含回落 100% 的变化——外层 HUD 状态机显示） */
   onZoomChange?: (zoom: number) => void;
-  /** iframe 重建归 1 通知（重建即静默复位——外层 HUD 直接隐藏，非「显示 100%」） */
+  /** 内容重建归 1 通知（重建即静默复位——外层 HUD 直接隐藏，非「显示 100%」） */
   onZoomReset?: () => void;
   /** 链接点击透传（linkRouter 段上行 slterm_nav 校验后回调——分类/打开在面板侧） */
   onNav?: (href: string) => void;
@@ -75,15 +97,8 @@ export interface PreviewFrameProps {
   ref?: React.Ref<PreviewFrameHandle>;
 }
 
-/** iframe sandbox 权限：仅允许脚本执行，不含 allow-same-origin（防止 Tauri 注入 App JS） */
-const SANDBOX_FLAGS = "allow-scripts";
-
-/** iframe 全容器样式（宽高撑满 + 无边框；背景由面板传 iframeBg 压闪白） */
-const iframeStyle: React.CSSProperties = {
-  width: "100%",
-  height: "100%",
-  border: "none",
-};
+/** 几何轮询间隔（ms）：面板显隐/尺寸变化（页面 CSS 切换无事件源）检测 */
+const GEOMETRY_POLL_MS = 200;
 
 /**
  * 生成面板生命周期绑定的随机 nonce（SEC-04）。
@@ -99,8 +114,8 @@ function createNonce(): string {
 }
 
 export const PreviewFrame: React.FC<PreviewFrameProps> = ({
+  panelId,
   html,
-  title,
   segments,
   keepZoom = false,
   keepScrollRatio = false,
@@ -110,11 +125,13 @@ export const PreviewFrame: React.FC<PreviewFrameProps> = ({
   onNav,
   ref,
 }) => {
-  const iframeRef = useRef<HTMLIFrameElement>(null);
+  // 预览窗口 label（WDIO 驱动句柄契约：句柄 = label）
+  const label = makePreviewLabel(panelId);
+
+  /** 锚点容器（面板内容区——预览窗口几何 = 其视口矩形） */
+  const anchorRef = useRef<HTMLDivElement | null>(null);
   // SEC-04：面板生命周期绑定的随机 nonce——挂载期生成一次（惰性初始化 ref，
-  // StrictMode 双渲染不重复生成），经注入脚本拼入 iframe 的 keydown postMessage；
-  // 父窗口校验消息 nonce 一致才转发。若每次渲染重新生成（useState 初始化器 /
-  // 直接调函数），注入脚本与校验值会漂移导致键盘转发失效。
+  // StrictMode 双渲染不重复生成），拼入注入脚本 + 上下行消息校验。
   const nonceRef = useRef<string | null>(null);
   if (nonceRef.current === null) {
     nonceRef.current = createNonce();
@@ -125,7 +142,7 @@ export const PreviewFrame: React.FC<PreviewFrameProps> = ({
   const zoomRef = useRef(1);
   /** 滚动比例父侧镜像（keepScrollRatio 重建恢复取值源；等值上报不重复处理） */
   const lastScrollRatioRef = useRef(0);
-  /** 上行回调 ref 转发（handleMessage/onLoad 内读取最新——onNav 同模式） */
+  /** 上行回调 ref 转发（事件处理器内读取最新——onNav 同模式） */
   const onZoomChangeRef = useRef(onZoomChange);
   onZoomChangeRef.current = onZoomChange;
   const onZoomResetRef = useRef(onZoomReset);
@@ -133,159 +150,186 @@ export const PreviewFrame: React.FC<PreviewFrameProps> = ({
   const onNavRef = useRef(onNav);
   onNavRef.current = onNav;
 
-  /** 重置缩放命令：下行复位请求 → iframe 内 zoom 归 1 并回声上报；镜像归 1（外层 HUD 经 onReset 链同步隐藏） */
+  /** 下行复位：事件 → 宿主 → iframe 内 zoom 归 1 并回声上报；镜像归 1 */
   const resetZoom = useCallback(() => {
-    iframeRef.current?.contentWindow?.postMessage(
-      buildResetRequest(nonce),
-      // targetOrigin 统一 "*"（2026-09-06 实证，与上行同因）：子侧 source===parent +
-      // nonce + type 三重校验保证安全，无需依赖 targetOrigin 收窄
-      "*",
-    );
+    void emitPreviewDownlink({
+      label,
+      type: buildResetRequest(nonce).type,
+      nonce,
+    });
     zoomRef.current = 1;
-  }, [nonce]);
+  }, [label, nonce]);
   useImperativeHandle(ref, () => ({ resetZoom }), [resetZoom]);
 
-  /**
-   * 监听 iframe 内 postMessage 发来的消息（slterm_key 键盘 / slterm_zoom 缩放上行）。
-   * 公共校验（两条通道一致）：
-   * - 校验 e.origin === "null"（srcdoc iframe 为 opaque origin，按规范序列化为 "null"）
-   *   【注意】e.origin === "null" 为 opaque origin 规范推断，未经真实 WebView2 实测，
-   *   正确性由收尾 L4 验证
-   * - 校验 e.source === 本面板 iframe.contentWindow（防止其他窗口伪装）
-   * - 校验 e.data.nonce === 面板挂载期生成的随机 nonce（SEC-04：防 iframe 内任意脚本伪造）
-   * slterm_key：命中全局快捷键 → 合成 keydown 在父 window 上重放 → ShortcutRegistry
-   *   正常分发；合成事件添加 __slterm_postMessage 信任标记，供 ShortcutRegistry 识别来源。
-   * slterm_zoom：缩放值上报（变化才通知——等值回声不打扰外层 HUD）→ 同步父侧镜像
-   *   （keepZoom 重建恢复的取值源）；显示层（HUD 气泡）在面板根悬浮区，经
-   *   onZoomChange 上行驱动。
-   */
-  useEffect(() => {
-    const handleMessage = (e: MessageEvent) => {
-      // 校验 origin：srcdoc iframe 为 opaque origin，序列化为 "null"
-      if (e.origin !== "null") return;
-      // 校验 source：仅接受本面板 iframe 发出的消息
-      if (e.source !== iframeRef.current?.contentWindow) return;
-      const data = e.data as {
-        type?: unknown;
-        nonce?: unknown;
-        zoom?: unknown;
-        ratio?: unknown;
-        href?: unknown;
-        fingerprint?: unknown;
-        ctrlKey?: unknown;
-        shiftKey?: unknown;
-        altKey?: unknown;
-        metaKey?: unknown;
-        code?: unknown;
-        key?: unknown;
-      } | null;
-      if (!data || typeof data.type !== "string") return;
+  // ── 内容装配（注入机制原样：injectScript + buildInjectedScript + nonce）──
+  const segKey = useMemo(
+    () => (segments ?? []).map((s) => s.kind).join(","),
+    [segments],
+  );
+  // segments 为调用方每渲染新建数组——以 kind 序列键做依赖（内容/段型变化即重建）
+  const srcDoc = useMemo(
+    () => injectScript(html, buildInjectedScript(nonce, segments), INJECTED_MARKER),
+    [html, nonce, segKey],
+  );
 
+  // ── 内容推送：装配产物变化 → preview_render（后端存储 + 定向通知宿主拉取；
+  //    窗口尚未创建/宿主未就绪时由宿主加载后主动拉取兜底）──
+  useEffect(() => {
+    void previewRender(label, srcDoc, iframeBg).catch(() => {
+      /* 后端拒绝/窗口域异常——预览不可用但不阻断面板（可观测性优先记录） */
+      console.warn("[slTerminal] 预览内容推送失败:", label);
+    });
+  }, [label, srcDoc, iframeBg]);
+
+  // ── 窗口生命周期 + 几何同步（轮询 + 主窗移动即时触发）──
+  useEffect(() => {
+    let disposed = false;
+    let lastX = NaN;
+    let lastY = NaN;
+    let lastW = NaN;
+    let lastH = NaN;
+    let lastVis: boolean | null = null;
+
+    /** 测量锚点矩形 → 变化时 preview_sync（CSS 视口坐标，后端换算物理屏幕坐标） */
+    const syncNow = () => {
+      if (disposed) return;
+      const el = anchorRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      const w = r.width;
+      const h = r.height;
+      const visible = w >= 1 && h >= 1;
+      // 亚像素抖动抑制：半像素粒度比较
+      const round2 = (v: number) => Math.round(v * 2) / 2;
+      const x = round2(r.x);
+      const y = round2(r.y);
+      const rw = round2(w);
+      const rh = round2(h);
+      if (x === lastX && y === lastY && rw === lastW && rh === lastH && visible === lastVis) {
+        return;
+      }
+      lastX = x;
+      lastY = y;
+      lastW = rw;
+      lastH = rh;
+      lastVis = visible;
+      void previewSync(label, x, y, rw, rh, visible).catch(() => {
+        /* 窗口域异常——轮询下轮自愈 */
+      });
+    };
+
+    syncNow();
+    const timer = window.setInterval(syncNow, GEOMETRY_POLL_MS);
+    // 主窗拖动/移动：几何换算基准变化——即时同步（轮询兜底防丢）
+    const offMove = onMainWindowMoved(() => {
+      // 移动事件高频——合并到下一帧/宏任务（防 invoke 风暴）
+      window.setTimeout(syncNow, 0);
+    });
+
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+      offMove();
+      // 面板卸载 → 销毁预览窗口（缩放/滚动态随窗口销毁——与旧 iframe 关页签销毁同语义）
+      void previewClose(label).catch(() => {
+        /* 窗口已不存在——幂等 */
+      });
+    };
+  }, [label]);
+
+  // ── 上行消息处理（Tauri event 桥；校验链 = 旧 iframe 通道同款：
+  //    label 归属 → 类型白名单 → nonce → 数值守卫）──
+  useEffect(() => {
+    const handleUplink = (msg: {
+      label: string;
+      type: string;
+      nonce?: unknown;
+      zoom?: unknown;
+      ratio?: unknown;
+      href?: unknown;
+    }) => {
+      // 载荷守卫：非对象/缺 label 静默丢弃（事件通道载荷不可信，防异常上行）
+      if (!msg || typeof msg.label !== "string") return;
+      // label 归属：仅接受本面板预览窗口（多预览面板并存互不干扰）
+      if (msg.label !== label) return;
+      const type = msg.type;
       // ── 缩放上行：父侧镜像更新 + 上报外层（HUD 显示在悬浮区）──
-      if (data.type === ZOOM_MSG_TYPE) {
-        // SEC-04：nonce 校验同 slterm_key 防线。iframe 内脚本可提取 nonce 伪造
-        //（见 buildInjectedScript 威胁模型）——伪造 zoom 上报后果仅 HUD 数值误导（低危）。
-        if (typeof data.nonce !== "string" || data.nonce !== nonceRef.current) return;
-        const zoom = data.zoom;
+      if (type === ZOOM_MSG_TYPE) {
+        // SEC-04：nonce 校验（预览内容与注入脚本同文档——内容可提取伪造，
+        // 伪造 zoom 上报后果仅 HUD 数值误导（低危），威胁模型见 buildInjectedScript）
+        if (typeof msg.nonce !== "string" || msg.nonce !== nonceRef.current) return;
+        const zoom = msg.zoom;
         if (!isFiniteZoom(zoom)) return;
-        // 等值消息（复位回声等）：镜像已同值——不重复上报外层（外层状态同步）
+        // 等值消息（复位回声等）：镜像已同值——不重复上报外层
         if (zoom === zoomRef.current) return;
         zoomRef.current = zoom;
         onZoomChangeRef.current?.(zoom);
         return;
       }
-
       // ── 滚动上行：父侧镜像（keepScrollRatio 重建恢复的取值源）──
-      if (data.type === SCROLL_MSG_TYPE) {
-        // SEC-04：nonce 校验同缩放通道。伪造滚动上报后果仅恢复位置偏差（低危）
-        if (typeof data.nonce !== "string" || data.nonce !== nonceRef.current) return;
-        const ratio = data.ratio;
+      if (type === SCROLL_MSG_TYPE) {
+        if (typeof msg.nonce !== "string" || msg.nonce !== nonceRef.current) return;
+        const ratio = msg.ratio;
         if (!isFiniteRatio(ratio)) return;
         lastScrollRatioRef.current = ratio;
         return;
       }
-
       // ── 链接点击上行：校验后透传面板（分类/打开在面板侧 linkPolicy）──
-      if (data.type === NAV_MSG_TYPE) {
-        if (typeof data.nonce !== "string" || data.nonce !== nonceRef.current) return;
-        if (typeof data.href !== "string" || data.href.length === 0) return;
-        onNavRef.current?.(data.href);
+      if (type === NAV_MSG_TYPE) {
+        if (typeof msg.nonce !== "string" || msg.nonce !== nonceRef.current) return;
+        if (typeof msg.href !== "string" || msg.href.length === 0) return;
+        onNavRef.current?.(msg.href);
         return;
       }
+      // 其余类型（含已退役的键转发类型与未知类型）静默丢弃——上行终态集合
+      // = 渲染态白名单（CP-013/044，UPLINK_MSG_TYPES 守卫测试锁死）
+    };
+    const offUplink = onPreviewUplink(handleUplink);
+    return offUplink;
+  }, [label]);
 
-      // ── 键盘转发：命中 global 命令才重放 ──
-      if (data.type !== "slterm_key") return;
-      // SEC-04：nonce 校验——注入脚本拼入的随机值（经 srcDoc 内联），不符静默丢弃。
-      // iframe 内脚本可提取 nonce 伪造（见上方威胁模型）——nonce 拦截外部伪造，
-      // 内部伪造由 global 命令集最小化兜底。
-      if (typeof data.nonce !== "string" || data.nonce !== nonceRef.current) return;
-      const fingerprint = data.fingerprint;
-      if (typeof fingerprint !== "string" || fingerprint.length === 0) return;
-      const registry = getShortcutRegistry();
-      const globalBindings = registry.exportContextBindings("global");
-      if (globalBindings.some((b) => b.keystroke === fingerprint)) {
-        const event = new KeyboardEvent("keydown", {
-          // 注入脚本只发 boolean/string 真值；收窄为 === true / typeof 守卫（防任意载荷）
-          ctrlKey: data.ctrlKey === true,
-          shiftKey: data.shiftKey === true,
-          altKey: data.altKey === true,
-          metaKey: data.metaKey === true,
-          code: typeof data.code === "string" ? data.code : "",
-          key: typeof data.key === "string" ? data.key : "",
-          bubbles: true,
-          cancelable: true,
+  // ── 宿主状态：iframe 加载完成 = 内容重建完成（旧 onLoad 语义随迁）──
+  useEffect(() => {
+    const handleHostStatus = (msg: { label: string; status: string }) => {
+      if (msg.label !== label) return;
+      if (msg.status !== "iframe-loaded") return;
+      // 内容重建后的处理（新文档内 zoom/滚动已归零）：
+      // - 镜像归 1 + 上报外层隐藏 HUD（防旧百分比误导至超时；html 现状语义）
+      // - keepZoom：镜像非 1 则下行 slterm_zoom_set 恢复（iframe 侧钳制后
+      //   应用并上行——恢复即反馈）
+      // - keepScrollRatio：按比例下行恢复（60ms 延时等布局收敛，近似语义）
+      const prevZoom = zoomRef.current;
+      const prevRatio = lastScrollRatioRef.current;
+      zoomRef.current = 1;
+      onZoomResetRef.current?.();
+      if (keepZoom && prevZoom !== 1) {
+        void emitPreviewDownlink({
+          label,
+          type: buildZoomSetRequest(nonce, prevZoom).type,
+          nonce,
+          zoom: prevZoom,
         });
-        // 信任标记——ShortcutRegistry 分发前可识别 postMessage 重放事件
-        Object.defineProperty(event, TRUSTED_MARKER, { value: true });
-        window.dispatchEvent(event);
+      }
+      if (keepScrollRatio && prevRatio > 0) {
+        void emitPreviewDownlink({
+          label,
+          type: buildScrollSetRequest(nonce, prevRatio).type,
+          nonce,
+          ratio: prevRatio,
+        });
       }
     };
-    window.addEventListener("message", handleMessage);
-    return () => window.removeEventListener("message", handleMessage);
-  }, []);
-
-  /**
-   * iframe srcDoc 重建（filePath 切换/内容变更/草稿刷新）后的处理：
-   * - 新文档内 zoom/滚动已归零——镜像归 1 + 上报外层隐藏 HUD（防旧百分比误导
-   *   至超时；html 现状语义）
-   * - keepZoom：镜像非 1 则下行 slterm_zoom_set 恢复（iframe 侧钳制
-   *   [ZOOM_MIN, ZOOM_MAX] 后应用并上行，上行值驱动外层 HUD 显示——恢复即反馈）
-   * - keepScrollRatio：按比例下行恢复（iframe 侧 60ms 延时等布局收敛——
-   *   滚动为近似语义，登记已知行为）
-   */
-  const handleLoad = () => {
-    const prevZoom = zoomRef.current;
-    const prevRatio = lastScrollRatioRef.current;
-    zoomRef.current = 1;
-    // 重建归 1 = 静默复位：通知外层隐藏 HUD（非「显示 100%」——onZoomChange
-    // 只承载真实缩放变化）；keepZoom 恢复走下方 zoom_set → iframe 回声上行
-    //（变化值）→ onZoomChange 重新显示——时序上先隐藏后恢复
-    onZoomResetRef.current?.();
-    if (keepZoom && prevZoom !== 1) {
-      iframeRef.current?.contentWindow?.postMessage(
-        buildZoomSetRequest(nonce, prevZoom),
-        "*",
-      );
-    }
-    if (keepScrollRatio && prevRatio > 0) {
-      iframeRef.current?.contentWindow?.postMessage(
-        buildScrollSetRequest(nonce, prevRatio),
-        "*",
-      );
-    }
-  };
+    const offStatus = onPreviewHostStatus(handleHostStatus);
+    return offStatus;
+    // keepZoom/keepScrollRatio 语义随 props 变化即时生效（re-render 重建 effect）
+  }, [label, nonce, keepZoom, keepScrollRatio]);
 
   return (
-    // 宿主 wrapper：iframe 渲染区定位锚（背景由 iframeBg 压闪白）
-    <div style={{ position: "relative", width: "100%", height: "100%" }}>
-      <iframe
-        ref={iframeRef}
-        sandbox={SANDBOX_FLAGS}
-        srcDoc={injectScript(html, buildInjectedScript(nonce, segments), INJECTED_MARKER)}
-        title={title}
-        style={iframeBg ? { ...iframeStyle, background: iframeBg } : iframeStyle}
-        onLoad={handleLoad}
-      />
-    </div>
+    // 锚点容器：面板内容区几何（预览窗口 = 覆盖本矩形的 owned 无边框窗口；
+    // 主窗口本区域不再有可见内容——FloatingArea 恒位于其上方工具条带内）
+    <div
+      ref={anchorRef}
+      style={{ position: "relative", width: "100%", height: "100%" }}
+    />
   );
 };

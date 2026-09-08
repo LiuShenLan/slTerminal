@@ -1,19 +1,39 @@
 /**
- * HTML 面板域 E2E spec（E2E-09 拆分）：iframe Ctrl+W postMessage 转发关闭、
- * Ctrl+滚轮缩放（注入接管 + 瞬态 HUD）。
+ * HTML 面板域 E2E spec（E2E-09 拆分，S10-② 预览迁独立 webview 后重写）：
+ * 主窗口快捷键关闭链路、Ctrl+滚轮缩放（注入运行时执行于预览窗口宿主页内
+ * sandbox iframe；HUD/工具条带在主窗口）、宿主内联 <script> 执行（CP-031
+ * 原 :87 skip 用例恢复）。
+ *
+ * 驱动契约（spike 结论 + e2e-tests/CLAUDE.md「多 webview WDIO 可达性」节）：
+ * 预览窗口句柄 = label = preview-<panelId>——内容断言 switchToWindow 后经
+ * 宿主页读 iframe srcdoc；HUD/面板断言在主窗口；execute-first，用例结束
+ * 前一律切回 main。
+ *
+ * 半端到端边界（DOC-02）：embedded 驱动无法投递 OS 键/滚轮——键盘走主窗口
+ * 合成 keydown dispatch（ShortcutRegistry capture 真实消费，editor.e2e
+ * Ctrl+S 先例）；缩放走 fixture 文档内合成 WheelEvent 派发（注入运行时接管）。
  */
 
 import { expect, browser } from "@wdio/globals";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { waitForWorkspaceReady, waitForDockviewApi, createProject } from "./specUtils";
+import {
+  waitForWorkspaceReady,
+  waitForDockviewApi,
+  createProject,
+  waitPreviewDocContains,
+  waitForPreviewWindow,
+  switchToMainWindow,
+  previewWindowLabel,
+} from "./specUtils";
 
-describe("HTML 面板 Ctrl+W 转发", () => {
-  // 焦点在 iframe 内时，全局键经注入脚本 postMessage 到父 window → global.closeTab 关活跃面板。
-  // embedded 驱动无法投递 OS 键，改由 window.postMessage 模拟注入脚本发送 Ctrl+W，
-  // 触发真实的父窗口 handler → ShortcutRegistry → 关面板全链路（真实二进制）。
-  it("iframe 内 Ctrl+W postMessage → 转发关闭该 HTML 页签", async () => {
+describe("HTML 面板主窗口快捷键关闭（Ctrl+W）", () => {
+  // S10-②：预览内容迁独立 webview（focusable=false，焦点恒在主窗口）——键盘
+  // 不跨窗口，旧「iframe 内 postMessage 转发」通道退役（CP-013）。本用例经
+  // 主窗口合成 keydown（ShortcutRegistry capture 真实消费，editor.e2e 先例）
+  // 验证 global.closeTab → closeTabGuarded 关闭活跃面板全链路（真实二进制）。
+  it("主窗口合成 Ctrl+W keydown → 关闭该 HTML 页签", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "slterm-e2e-html-"));
     const htmlPath = join(tempDir, "page.html");
     writeFileSync(htmlPath, "<h1>e2e html</h1>", "utf8");
@@ -35,38 +55,29 @@ describe("HTML 面板 Ctrl+W 转发", () => {
         { pid: panelId, path: htmlPath },
       );
 
-      // 等待 iframe 渲染
-      await browser.waitUntil(
-        async () => await browser.execute(() => !!document.querySelector("iframe")),
-        { timeout: 15000, timeoutMsg: "HTML iframe 未渲染" },
-      );
+      // 等待渲染内容推送并渲染（预览窗口就绪）
+      await waitPreviewDocContains(panelId, "e2e html");
 
-      // 发送合成 MessageEvent 模拟注入脚本发送 Ctrl+W（去掉 allow-same-origin 后不访问 contentDocument）。
-      // window.postMessage 从主窗口发送时 e.origin 为 Tauri 协议 origin（非 "null"字符串）
-      // 且 e.source 为 window（非 iframe.contentWindow），无法通过 HtmlPanel handleMessage 的
-      // origin/source 校验。改用 MessageEvent 构造函数显式设置 origin="null" + source=iframe.contentWindow。
-      // SEC-04：消息须携带面板注入的随机 nonce——从 iframe srcdoc 属性提取（父窗口可读该属性，
-      // sandbox 无 allow-same-origin 不访问 contentDocument），与注入脚本拼入的 32 位 hex 一致。
+      // 主窗口合成 Ctrl+W（ShortcutRegistry window capture 消费 → global.closeTab
+      // → 活跃面板关闭——html 面板为活跃面板）
       await browser.waitUntil(
         async () =>
-          await browser.execute((pid: string) => {
-            const iframe = document.querySelector("iframe");
-            const nonce = iframe?.getAttribute("srcdoc")?.match(/nonce:"([0-9a-f]{32})"/)?.[1] ?? "";
-            const msgEvent = new MessageEvent("message", {
-              data: {
-                type: "slterm_key",
-                nonce,
-                fingerprint: "Ctrl+KeyW",
-                ctrlKey: true, shiftKey: false, altKey: false, metaKey: false,
-                code: "KeyW", key: "w",
-              },
-              origin: "null",
-              source: iframe?.contentWindow ?? null,
-            });
-            window.dispatchEvent(msgEvent);
-            return window.__dockviewApi?.getPanel(pid) === undefined;
-          }, panelId),
-        { timeout: 10000, timeoutMsg: "HTML 面板未被 Ctrl+W 合成 MessageEvent 转发关闭" },
+          await browser.execute(
+            (pid: string) => {
+              window.dispatchEvent(
+                new KeyboardEvent("keydown", {
+                  ctrlKey: true,
+                  code: "KeyW",
+                  key: "w",
+                  bubbles: true,
+                  cancelable: true,
+                }),
+              );
+              return window.__dockviewApi?.getPanel(pid) === undefined;
+            },
+            panelId,
+          ),
+        { timeout: 10000, timeoutMsg: "HTML 面板未被主窗口 Ctrl+W 快捷键关闭" },
       );
 
       const closed = await browser.execute(
@@ -78,34 +89,16 @@ describe("HTML 面板 Ctrl+W 转发", () => {
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
-
-  // CSP 修复验证：主窗口 CSP 含 script-src 'unsafe-inline' + 关闭 script nonce 注入后，
-  // srcdoc 继承的策略放行内联 <script> 与内联事件属性。真实 WebView2 强制 CSP。
-  // 去掉 allow-same-origin 后不访问 contentDocument，HTML 内通过 postMessage 上报结果。
-  // 跳过：此用例依赖 CSP 'unsafe-inline' 放行内联脚本，修复需改动 src-tauri/tauri.conf.json。
-  // Stage 6 仅允许修改 e2e-tests/，待后续 Stage 或人工处理。
-  it.skip("内联 <script> 与内联事件属性在预览中执行", async () => {
-    // 保留用例结构供参考，CSP 修复后取消 skip 即可恢复
-  });
 });
 
 /**
  * HTML 面板 Ctrl+滚轮缩放（注入接管 + 瞬态 HUD）E2E。
  *
- * 背景：缩放运行时 = 注入 iframe 文档的 wheel capture（buildInjectedScript 第 4 段，
- * 语义与桩执行见 L2 html-zoom-runtime.test.ts）。embedded 驱动无法投递 OS 滚轮，
- * 且 iframe 为 opaque origin（父 execute 不可触达其文档）——故由 fixture HTML 用
- * `<body onload>` 内联事件属性合成 WheelEvent 派发到 document，触发注入接管 →
- * zoom → slterm_zoom 上行 → 父 HUD。缩放「悬停生效」为结构保证（wheel 只在鼠标
- * 位于 iframe 时送达文档），此处验收真实二进制内：注入执行 → postMessage →
- * 父状态 → HUD DOM 全链路。
- *
- * 【触发通道实证，2026-09-06】fixture 不能依赖宿主内联 <script>：injectScript 会把
- * 宿主 `</script>` 全部转义为 `<\/script>`，Chromium 不视其为结束标签 → 宿主 script
- * 吞到 EOF 含 HTML 标记 → SyntaxError 不执行（headless 复测与 WebView2 探针一致；
- * 存量缺陷——预览 HTML 自带 JS 静态化，登记于 src/panels/CLAUDE.md，不在本需求范围）。
- * `<body onload>` 内联事件属性不含 `</script>` 不受转义破坏，CSP 'unsafe-inline' 放行，
- * 且晚于注入脚本执行（注入先注册先执行的结构保证由此验证）。
+ * 背景：预览渲染于独立 webview 宿主页内 sandbox iframe（S10-②，ADR-0019）——
+ * 宿主页域（自定义协议）无全局 CSP，fixture 内联事件属性/脚本真实执行；
+ * 注入运行时（zoomRuntime wheel capture）先于 fixture 注册（注入段插于
+ * </head> 前）→ 合成 WheelEvent → zoom → 上行 → 主窗 HUD（工具条带）。
+ * embedded 驱动无法投递 OS 滚轮——fixture 自派发（行为同旧 iframe 通道）。
  */
 describe("HTML 面板 Ctrl+滚轮缩放", () => {
   /**
@@ -126,10 +119,11 @@ describe("HTML 面板 Ctrl+滚轮缩放", () => {
     );
   }
 
-  /** 建项目并打开 htmlviewer 面板，等待 iframe 渲染；返回 panelId */
+  /** 建项目并打开 htmlviewer 面板，等待预览窗口内容渲染；返回 panelId */
   async function spawnZoomPanel(
     projectDir: string,
     htmlPath: string,
+    marker = "zoom fixture",
   ): Promise<string> {
     await waitForWorkspaceReady();
     await createProject(projectDir);
@@ -145,14 +139,11 @@ describe("HTML 面板 Ctrl+滚轮缩放", () => {
       },
       { pid: panelId, path: htmlPath },
     );
-    await browser.waitUntil(
-      async () => await browser.execute(() => !!document.querySelector("iframe")),
-      { timeout: 15000, timeoutMsg: "HTML iframe 未渲染" },
-    );
+    await waitPreviewDocContains(panelId, marker);
     return panelId;
   }
 
-  /** 读 HUD 气泡文本（无气泡返回 null） */
+  /** 读主窗 HUD 气泡文本（无气泡返回 null） */
   async function readHudText(): Promise<string | null> {
     return browser.execute(() => {
       const el = document.querySelector('[data-e2e="html-zoom-hud"]');
@@ -160,7 +151,7 @@ describe("HTML 面板 Ctrl+滚轮缩放", () => {
     });
   }
 
-  /** 等待 HUD 文本包含期望百分比（等比 ×1.1：2 格 121%、3 格 133%） */
+  /** 等待主窗 HUD 文本包含期望百分比（等比 ×1.1：2 格 121%、3 格 133%） */
   async function waitHudText(expected: string): Promise<void> {
     await browser.waitUntil(
       async () => (await readHudText())?.includes(expected) ?? false,
@@ -184,22 +175,23 @@ describe("HTML 面板 Ctrl+滚轮缩放", () => {
   it("点重置 → 下行复位 → 再次缩放基于 100% 重算（下行往返验证）", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "slterm-e2e-html-zoom-"));
     const htmlPath = join(tempDir, "zoom.html");
-    // 阶段 A：onload 立即 2 格 → 121%；阶段 B：2000ms 后 2 格（供重置后二次断言）
-    writeFileSync(htmlPath, stagedFixture(400, 2, 2000, 2), "utf8");
+    // 阶段 A：onload 立即 2 格 → 121%；阶段 B：3500ms 后 2 格（供重置后二次断言——
+    // 迁移 webview 后首轮 HUD/重置链路耗时更长，B 需晚于重置完成）
+    writeFileSync(htmlPath, stagedFixture(400, 2, 3500, 2), "utf8");
     try {
       await spawnZoomPanel(tempDir, htmlPath);
       // 轮 1：2 格 → 121%
       await waitHudText("121%");
-      // 点重置（父按钮 → slterm_reset 下行 targetOrigin "*"，真实 WebView2 往返）
+      // 点重置（主窗 HUD 按钮 → 下行事件 → 宿主 → iframe 归 1，真实 WebView2 往返）
       await browser.execute(() => {
         document.querySelector<HTMLButtonElement>('[data-e2e="html-zoom-reset"]')?.click();
       });
-      // 父侧立即隐藏
+      // 主窗立即隐藏
       await browser.waitUntil(
         async () => (await readHudText()) === null,
         { timeout: 5000, timeoutMsg: "重置后 HUD 未消失" },
       );
-      // 轮 2：下行成功（iframe 内归 1）→ 再次 121%；下行失败则从 1.21 继续 → 146%，此处超时失败
+      // 轮 2：下行成功（iframe 内归 1）→ 再次 121%；下行失败则从 1.21 继续 → 146%
       await waitHudText("121%");
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
@@ -214,8 +206,74 @@ describe("HTML 面板 Ctrl+滚轮缩放", () => {
     try {
       await spawnZoomPanel(tempDir, htmlPath);
       await waitHudText("121%");
-      // 文档存活时闭包 zoom 保留：+1 格 → ×1.1 → 133%（若 iframe 重建归 1 则会显示 110%）
+      // 文档存活时闭包 zoom 保留：+1 格 → ×1.1 → 133%（若 iframe 重建归 1 则 110%）
       await waitHudText("133%");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  // ── 宿主内联 <script> 真实执行（CP-031 消亡判定三的 e2e 通道）──
+  // S10-② 前：injectScript escapeScriptClose 把宿主 `</script>` 全部转义 →
+  // 宿主 script 吞到 EOF 永不执行（存量缺陷，原 :87 skip 空壳登记的根因）；
+  // 且宿主文档继承主窗 CSP（'unsafe-inline' 依赖）。S10-② 后：宿主 <script> 段
+  // 不经字符串转义进入渲染文档（escapeScriptClose 消亡），且渲染于独立预览域
+  // （自定义协议宿主页 iframe，无全局 CSP）——内联 <script> 真实可执行。
+  // 本用例 = 原 :87 skip 用例恢复为真实断言：fixture 以 <script>（非事件属性）
+  // 派发合成滚轮 → zoom 上行 → 主窗 HUD 出现即证明宿主内联 <script> 已执行。
+  it("宿主内联 <script> 在预览中真实执行（CP-031，原 :87 skip 恢复）", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "slterm-e2e-html-script-"));
+    const htmlPath = join(tempDir, "script.html");
+    // 无任何内联事件属性——缩放派发只能来自 <script> 段执行
+    const scriptBody =
+      `setTimeout(function(){for(var i=0;i<2;i++){document.dispatchEvent(` +
+      `new WheelEvent('wheel',{deltaY:-120,ctrlKey:true,cancelable:true}))}},300)`;
+    writeFileSync(
+      htmlPath,
+      `<!DOCTYPE html><html><head><title>script-fixture</title></head>` +
+        `<body><h1>script fixture</h1><script>${scriptBody}</script></body></html>`,
+      "utf8",
+    );
+    try {
+      await spawnZoomPanel(tempDir, htmlPath, "script fixture");
+      // 2 格 ×1.1² → 121%——宿主内联 <script> 不执行则永无缩放上行（超时失败）
+      await waitHudText("121%");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("关闭 HTML 面板 → 预览窗口销毁出列（驱动句柄收缩）", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "slterm-e2e-html-close-"));
+    const htmlPath = join(tempDir, "close.html");
+    writeFileSync(htmlPath, "<h1>close fixture</h1>", "utf8");
+    try {
+      await waitForWorkspaceReady();
+      await createProject(tempDir);
+      await waitForDockviewApi();
+      const panelId = "e2e-html-close-" + Date.now();
+      await browser.execute(
+        (args: { pid: string; path: string }) => {
+          window.__dockviewApi!.addPanel({
+            id: args.pid,
+            component: "htmlviewer",
+            params: { panelId: args.pid, filePath: args.path },
+          });
+        },
+        { pid: panelId, path: htmlPath },
+      );
+      await waitPreviewDocContains(panelId, "close fixture");
+      const label = previewWindowLabel(panelId);
+      expect((await browser.getWindowHandles()).includes(label)).toBe(true);
+
+      // 经 dockview 关闭面板 → PreviewFrame 卸载 → 预览窗口销毁（异步——轮询出列）
+      await browser.execute((pid: string) => {
+        window.__dockviewApi?.getPanel(pid)?.api.close();
+      }, panelId);
+      await browser.waitUntil(
+        async () => !(await browser.getWindowHandles()).includes(label),
+        { timeout: 10000, timeoutMsg: "关闭面板后预览窗口未出列" },
+      );
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
@@ -242,7 +300,8 @@ describe("HTML 面板 edit 态 Ctrl+滚轮字号", () => {
         },
         { pid: panelId, path: htmlPath },
       );
-      // 切 edit 形态 → CM 挂载
+      // 切 edit 形态 → CM 挂载（工具条带内切换条——切换即预览窗口销毁）
+      await waitForPreviewWindow(panelId, 20000);
       await browser.waitUntil(
         async () =>
           await browser.execute(
@@ -261,6 +320,11 @@ describe("HTML 面板 edit 态 Ctrl+滚轮字号", () => {
         ).find((el) => el.getClientRects().length > 0);
         btn?.click();
       });
+      // 预览窗口随 render 形态退出销毁（PreviewFrame 卸载）
+      await browser.waitUntil(
+        async () => !(await browser.getWindowHandles()).includes(previewWindowLabel(panelId)),
+        { timeout: 10000, timeoutMsg: "切 edit 后预览窗口未销毁" },
+      );
       await browser.waitUntil(
         async () =>
           await browser.execute(
@@ -289,6 +353,7 @@ describe("HTML 面板 edit 态 Ctrl+滚轮字号", () => {
       );
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
+      await switchToMainWindow();
     }
   });
 });

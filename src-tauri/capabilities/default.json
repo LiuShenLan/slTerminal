@@ -56,6 +56,10 @@
     "allow-background-tasks-list",
     "allow-background-tasks-set-config",
     "allow-get-plan-balance",
-    "allow-refresh-plan-balance"
+    "allow-refresh-plan-balance",
+    "allow-preview-sync",
+    "allow-preview-close",
+    "allow-preview-render",
+    "allow-preview-pull"
   ]
 }

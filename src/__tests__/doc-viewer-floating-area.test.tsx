@@ -64,6 +64,24 @@ describe("FloatingArea 悬浮区列排", () => {
     fireEvent.click(resetBtn!);
     expect(onReset).toHaveBeenCalledTimes(1);
   });
+
+  it("direction=row（S10-② 工具条带内）：切换条与 HUD 同排渲染", () => {
+    const { container } = render(
+      <FloatingArea
+        dataE2ePrefix="test"
+        direction="row"
+        switcher={<div data-testid="fake-switcher" />}
+        hud={{ zoom: 1.21, visible: true, onReset: vi.fn() }}
+      />,
+    );
+    const hudEl = container.querySelector<HTMLElement>('[data-e2e="test-zoom-hud"]');
+    expect(hudEl).not.toBeNull();
+    expect(hudEl!.textContent).toContain("121%");
+    // 行排：切换条与 HUD 同 flex 行（条带高约束下不换行堆叠）
+    const area = hudEl!.parentElement!;
+    expect(getComputedStyle(area).flexDirection).toBe("row");
+    expect(area.children.length).toBe(2);
+  });
 });
 
 describe("useZoomHud 状态机", () => {

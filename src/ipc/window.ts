@@ -92,3 +92,20 @@ export async function closeWindow(): Promise<void> {
   const appWindow = getCurrentWindow();
   await appWindow.close();
 }
+
+/**
+ * 注册主窗口移动监听（S10-②：预览窗口几何 = 主窗坐标 + 面板矩形，主窗移动
+ * 即基准变化——PreviewFrame 据此即时重同步预览窗口位置；事件高频，调用方
+ * 自行合并）
+ */
+export function onMainWindowMoved(cb: () => void): () => void {
+  const appWindow = getCurrentWindow();
+  const unlisten = appWindow.onMoved(() => {
+    cb();
+  });
+  return () => {
+    unlisten.then((fn) => fn()).catch(() => {
+      // 窗口已销毁时 unlisten reject——兜底记录
+    });
+  };
+}

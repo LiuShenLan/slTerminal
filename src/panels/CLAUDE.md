@@ -30,13 +30,13 @@ xterm.js 不支持 `term.open()` 二次调用（GitHub Issue #4978）。因此�
 
 ### 预览面板家族（docViewer 共享层）
 
-htmlviewer / markdownviewer 等「文档型预览面板」共享 `src/panels/docViewer`——iframe 容器（PreviewFrame）、注入脚本组装、postMessage 总线、缩放/滚动运行时、形态切换条（ModeSwitcher）全部单点收容于此。**安全红线（SEC-03/04 校验链、sandbox 无 allow-same-origin、targetOrigin "\*"、注入拼接纪律、CSP 依赖）已随迁 docViewer/CLAUDE.md 与 previewMessages.ts 单点登记**，改本家族行为前必读。信任模型延续（md/html 同态、宿主 script 静态化继承、global 命令集不扩）见 ADR-0017；本地资源通道（fs_read_resource + data: URL + CSP data: 放行）见 ADR-0018。
+htmlviewer / markdownviewer 等「文档型预览面板」共享 `src/panels/docViewer`——预览窗口编排（PreviewFrame）、注入脚本组装、消息桥、缩放/滚动运行时、形态切换条（ModeSwitcher）全部单点收容于此。**S10-② 起（ADR-0019）预览渲染于独立 Tauri webview（label `preview-<panelId>`，自定义协议宿主页域）**：面板根 = 工具条带（切换条/HUD 悬浮带，40px）+ 内容区（预览窗口锚定其下矩形）；消息桥 = Tauri event/IPC（旧 iframe postMessage 通道退役，CP-044）；键盘焦点恒在主窗口（预览窗口 focusable=false——全局快捷键在预览态仍可用，CP-013）。安全红线（SEC-03/04 校验链、sandbox 无 allow-same-origin、注入拼接纪律）与消息协议已随迁 docViewer/CLAUDE.md、previewMessages.ts 与 src/ipc/preview.ts 单点登记，改本家族行为前必读。信任模型（md/html 同态、global 命令集不扩）见 ADR-0017；本地资源通道（fs_read_resource + data: URL 内联 + 预览 webview CSP data: 放行——主窗口已回收 data:，CP-035）见 ADR-0018。
 
 - **htmlviewer**（`panels/html/HtmlPanel`）：二态 render（默认）/ edit 源码（CM6 lang-html）；草稿快照往返 docRef。edit 形态字号 = 共享 editorFontSize store（Ctrl+滚轮，EditorPanel 同款接线——2026-09-06，原恒 14 语义变更，见 markdown/CLAUDE.md「编辑字号语义」）。
 - **markdownviewer**（`panels/markdown/MarkdownPanel`）：三态 edit（默认）/ split（allotment 拖拽，比例持久化）/ preview；渲染管线/资源/链接分派见 markdown/CLAUDE.md。
 - 文档真值源 = 面板 docRef（草稿优先磁盘）；**markdownviewer CM 恒挂载（CP-037）**：preview-only 改隐藏保活（display:none 照 edit↔split 先例，allotment CM pane 恒 index 0）——undo/光标跨 edit/split/preview 保留，代价 preview 常驻一个 CM 实例内存，已接受（htmlviewer 仍 edit 态挂载、render 卸载，不在此例）。
 - **大文件引导口径（CP-022）**：本家族 edit 形态经 `initialDoc` 快照建缓冲——快照路径**跳过**磁盘大文件检查与 largeFile 信号（useCodeMirror 语义：快照已过检/回填源），不消费 >10MB 只读分片浏览（该引导仅适用 EditorPanel 磁盘直读流；gitshow/diff 引导形态见对应小节）。
-- **宿主内联 `<script>` 不执行（escapeScriptClose 转义存量缺陷登记，2026-09-06 实证，跨家族继承为预期行为）**：`injectScript` 把宿主 HTML 内所有 `</script>` 转义为 `<\/script>` → 宿主 script 吞到 EOF 致 SyntaxError；注入脚本自身不受影响；内联**事件属性**（onload/onerror 等）不含 `</script>` 不被转义、正常执行——e2e 触发通道即此（html.e2e/markdown.e2e fixture）。修复方向 = escapeScriptClose 仅转义注入点前宿主部分（独立缺陷单）。
+- **宿主内联 `<script>` 真实执行（S10-② 起，CP-031 消亡判定达成）**：注入机制（injectScript + buildInjectedScript）原样迁入预览 CSP 域（自定义协议宿主页 iframe——域内无全局 CSP）；`injectScript` 不再做字符串级转义（存量缺陷转义函数已删）——宿主脚本段原样进入渲染文档并真实可执行，内联事件属性（onload/onerror）与 `<script>` 段同为执行通道（html.e2e 缩放 fixture 与宿主 script 用例双通道实证）。渲染与主窗口 CSP 隔离——收紧主窗口 CSP 不再影响预览。
 - markdownviewer 纳入 `renderer="always"` 白名单（iframe 与 CM 编辑实例切走切回不重建——决策 #17）。
 
 ### gitshow：只读但可聚焦
@@ -167,7 +167,7 @@ Claude Code 在用户主动 Ctrl+C 中断时不发射任何 hook 事件。CP-020
 - **WebGL 加载时序（FE-34）**：`setupWebglWithRetry` 必须在 `term.open(container)` 之后，否则 win10 纯黑屏。
 - **proposeDimensions NaN**（xtermjs#4338）：WebGL 未就绪时可能返回 NaN，必须 `Number.isFinite()` 守卫后再传 `pty.resize()`。
 - **iframe `allow-same-origin` 禁用**：与 `allow-scripts` 组合是已知危险组合（Tauri CVE-2024-35222），且会导致 Tauri 注入 App JS 劫持片段导航。
-- **CSP 全局放宽**：srcdoc iframe 继承父窗口 CSP，必须主窗口 `script-src 'self' 'unsafe-inline'` + `dangerousDisableAssetCspModification: ["script-src"]`。收紧会静默破坏 HTML 预览。
+- **主窗口 CSP 禁 script-src 'unsafe-inline'、禁 dangerousDisableAssetCspModification（S10-② 起，CP-012）**：预览渲染于独立 webview（自有 CSP 域——自定义协议宿主页，内联脚本仅该域放行）；srcdoc iframe 通道已退役。收紧主窗口 CSP 不再影响预览；回潮放宽即破 CP-012 终态（csp-config.test.ts 锁死）。**img-src/font-src 的 data: 亦已回收（CP-035）**——主窗口内任何 data: 图像/字体技法（如 CSS background url(data:)）都会被 CSP 拦截（CM6 lint 波浪线曾为此改为 text-decoration 技法，见 theme/overrides.ts 注释）；data: 数据通道仅存预览域（无 CSP），主窗口零放行由 csp-config.test.ts「data: 不在主窗口任何指令」守卫锁死。
 - **CM6 `readOnly` vs `editable`**：gitshow/diff 左栏只能用 `EditorState.readOnly`，不能用 `EditorView.editable`，否则编辑器不可聚焦、快捷键失效。
 - **DiffPanel flexbox 撑开**：CM6 `.cm-content` 的 `flex-shrink: 0` + `white-space: pre` 会撑开双层 flex，必须所有 flex 子项设 `minWidth: 0`。
 - **ConPTY 并发 spawn 死锁**：PTY spawn 由后端 `SPAWN_LOCK` 串行化（详见 ../src-tauri/src/pty/CLAUDE.md），前端不直接处理，但 L1 测试必须 `--test-threads=1`。

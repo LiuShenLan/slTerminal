@@ -56,6 +56,12 @@ jobs:
         timeout-minutes: 15
         run: npx knip --production
 
+      # KaTeX 内联产物 diff 守卫（CP-033）：katex 升级漏跑 gen 脚本即红
+      - name: Guard — KaTeX 内联产物与生成脚本一致
+        run: |
+          node scripts/gen-katex-inline.mjs
+          git diff --exit-code src/panels/markdown/generated/katexInlineCss.ts
+
       - name: Lint check
         timeout-minutes: 15
         run: npx eslint src/

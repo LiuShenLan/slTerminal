@@ -1,11 +1,15 @@
 // HtmlPanel — HTML 文件浏览器式预览面板（docViewer 预览家族，二态）
 //
 // 形态（viewMode，随 params 持久化，默认 render）：
-//   - render：PreviewFrame 渲染（htmlviewer 传统行为——iframe srcDoc + 缩放/
-//     键转发/片段拦截，注入与总线在 docViewer 共享层；HUD 与切换条在面板根
-//     FloatingArea，2026-09-06 悬浮区收敛）
+//   - render：PreviewFrame 编排独立预览 webview（S10-② 迁出主窗口 iframe——
+//     渲染内容在 preview-<panelId> WebviewWindow，注入/消息桥在 docViewer 共享
+//     层；面板根工具条带承载 HUD 与切换条，FloatingArea 2026-09-06 悬浮区收敛）
 //   - edit：CodeMirror 6 源码编辑（lang-html；editor context 注册 Ctrl+S，
 //     保存链路复用 useCodeMirror.handleSave）
+//
+// 面板根 = 工具条带（40px，恒承载切换条/HUD——预览窗口锚定其下内容区，条带
+// 不落入窗口覆盖范围，交互可用） + 内容区（render = PreviewFrame 锚点；edit =
+// CM 容器）。
 //
 // 文档真值源 = 面板级 docRef（草稿优先磁盘）：
 //   - 磁盘内容读入 → doc；edit 态击键经 onDocContent 即时写回 doc；
@@ -63,12 +67,31 @@ const editAreaStyle: React.CSSProperties = {
   overflow: "clip",
 };
 
-/** 面板根：悬浮切换条定位锚 + 形态内容区 */
-const rootStyle: React.CSSProperties = {
+/** 面板根（就绪态）：纵向列排——工具条带（上，定位锚） + 内容区（下） */
+const rootColumnStyle: React.CSSProperties = {
   position: "relative",
   width: "100%",
   height: "100%",
+  display: "flex",
+  flexDirection: "column",
   background: PANEL_BG,
+};
+
+/** 工具条带（S10-②：40px 常驻——切换条/HUD 悬浮带，预览窗口锚定其下，
+ *  不落入窗口覆盖范围） */
+const toolbarBandStyle: React.CSSProperties = {
+  position: "relative",
+  flex: "0 0 auto",
+  height: 40,
+  background: PANEL_BG,
+};
+
+/** 内容区容器（render = PreviewFrame 锚点 / edit = CM；预览窗口覆盖本矩形） */
+const contentAreaStyle: React.CSSProperties = {
+  position: "relative",
+  flex: "1 1 auto",
+  minHeight: 0,
+  overflow: "hidden",
 };
 
 /** 居中容器样式（loading/error） */
@@ -213,35 +236,46 @@ const HtmlPanel: React.FC<HtmlPanelProps> = ({ api, containerApi, params }) => {
 
   if (mode === "render") {
     return (
-      <div style={rootStyle}>
-        <PreviewFrame
-          ref={frameRef}
-          html={doc}
-          title={`HTML 预览: ${params.filePath}`}
-          segments={[{ kind: "fragmentNav" }]}
-          iframeBg={HTML_PANEL_IFRAME_BG}
-          onZoomChange={zoomHud.report}
-          onZoomReset={zoomHud.hide}
-        />
-        {/* 悬浮区：切换条上 / 缩放 HUD 下（与 edit 形态同结构，坐标协调单点） */}
-        <FloatingArea
-          switcher={switcher}
-          hud={{
-            zoom: zoomHud.hud.zoom,
-            visible: zoomHud.hud.visible,
-            onReset: handleHudReset,
-          }}
-          dataE2ePrefix="html"
-        />
+      <div style={rootColumnStyle}>
+        {/* 工具条带：切换条 + 缩放 HUD（40px 常驻——预览窗口锚定其下内容区，
+            条带不落入窗口覆盖范围，交互可用） */}
+        <div style={toolbarBandStyle}>
+          <FloatingArea
+            direction="row"
+            switcher={switcher}
+            hud={{
+              zoom: zoomHud.hud.zoom,
+              visible: zoomHud.hud.visible,
+              onReset: handleHudReset,
+            }}
+            dataE2ePrefix="html"
+          />
+        </div>
+        <div style={contentAreaStyle}>
+          <PreviewFrame
+            ref={frameRef}
+            panelId={params.panelId}
+            html={doc}
+            title={`HTML 预览: ${params.filePath}`}
+            segments={[{ kind: "fragmentNav" }]}
+            iframeBg={HTML_PANEL_IFRAME_BG}
+            onZoomChange={zoomHud.report}
+            onZoomReset={zoomHud.hide}
+          />
+        </div>
       </div>
     );
   }
 
-  // edit 形态：CM 全宽 + 悬浮区仅切换条（无 PreviewFrame 无缩放源，hud=null）
+  // edit 形态：CM 全宽 + 工具条带（无 PreviewFrame 无缩放源，hud=null）
   return (
-    <div style={rootStyle}>
-      <div ref={editContainerRef} style={editAreaStyle} />
-      <FloatingArea switcher={switcher} dataE2ePrefix="html" />
+    <div style={rootColumnStyle}>
+      <div style={toolbarBandStyle}>
+        <FloatingArea direction="row" switcher={switcher} dataE2ePrefix="html" />
+      </div>
+      <div style={contentAreaStyle}>
+        <div ref={editContainerRef} style={editAreaStyle} />
+      </div>
     </div>
   );
 };

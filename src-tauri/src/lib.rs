@@ -8,6 +8,7 @@ mod home;
 mod hooks;
 mod notify;
 mod plan_balance;
+mod preview;
 mod projects;
 pub mod pty;
 mod settings;
@@ -79,6 +80,12 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init());
 
+    // 预览渲染独立 webview 宿主页自定义协议（S10-②，ADR-0019）：自定义协议域
+    // 响应不带全局 CSP（tauri 无 per-webview CSP）——预览注入机制在该域内宽松执行；
+    // 注册须先于窗口创建（协议处理器按 scheme 全局生效）。
+    let builder =
+        builder.register_uri_scheme_protocol(preview::PREVIEW_SCHEME, preview::host_protocol);
+
     match builder
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(
@@ -145,6 +152,10 @@ pub fn run() {
             background_tasks::background_tasks_set_config,
             plan_balance::get_plan_balance,
             plan_balance::refresh_plan_balance,
+            preview::preview_sync,
+            preview::preview_close,
+            preview::preview_render,
+            preview::preview_pull,
         ])
         .run(tauri::generate_context!())
     {
