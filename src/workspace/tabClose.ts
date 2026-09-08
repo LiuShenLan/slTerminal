@@ -14,6 +14,7 @@ import {
   isSettingsDirty,
   clearSettingsDirty,
 } from "../features/settingsCenter/dirtyRegistry";
+import { isSettingsPanelId } from "./pageGroups";
 
 /**
  * 守卫关闭页签：settings 面板且 dirty → 确认才关闭；取消不关。
@@ -24,7 +25,7 @@ export async function closeTabGuarded(
   api: { close(): void },
   panelId: string | undefined,
 ): Promise<void> {
-  if (panelId?.startsWith("settings-") && isSettingsDirty(panelId)) {
+  if (isSettingsPanelId(panelId) && isSettingsDirty(panelId)) {
     const ok = await confirmDialog({
       title: "未保存的修改",
       message: "当前配置页有未保存的修改，关闭将丢弃这些修改。",
@@ -52,7 +53,7 @@ export async function closeTabsGuarded(
   }>,
 ): Promise<void> {
   const dirtyTabs = tabs.filter(
-    (t) => t.panelId?.startsWith("settings-") && isSettingsDirty(t.panelId),
+    (t) => isSettingsPanelId(t.panelId) && isSettingsDirty(t.panelId),
   );
   if (dirtyTabs.length > 0) {
     const ok = await confirmDialog({

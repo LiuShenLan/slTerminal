@@ -1,62 +1,118 @@
-// pageApis — 页面 API 注册表 + 共享页面切换
+// pageApis — 页面 API 注册表 + 共享页面切换（CP-004/S11 单宿主语义）
 //
-// 模块级 Map<pageId, DockviewApi>，管理每个页面的 DockviewApi 实例。
-// 提供 register/unregister/get 操作，以及共享切换函数 switchToPageShared /
-// switchToPageAndFocus / openSettingsPanel，外加会话/面板反查
-// findPanelForSession / findPageIdForPanelId（FE-09 自 NavTree 上提）。
+// 共享宿主架构下全局只存在一个 DockviewApi（单一 DockviewReact）；「页面 API」
+// 语义收敛为「宿主 API + 页组挂载标记」：
+// - registerHostApi：宿主 onReady 注册（宿主唯一，重复注册 = 重建/测试重置）；
+// - markPageGroupMounted(pageId) / 组移除注销：getPageApi(pageId) 仅在宿主就绪
+//   且该页页组已挂载时返回宿主 API（页未挂载 = 旧架构「页面未初始化」语义）。
+// - window.__dockviewApi 指向宿主（唯一，不再随切页重指）。
 //
-// 不变量：window.__dockviewApi 重指向只允许出现在三站点——
-//   switchToPageShared（本文件）、Workspace.onDeletePage、Workspace.handlePageApiReady
-//
-// 契约要点见 src/features/settingsCenter/CLAUDE.md（openSettingsPanel 同页单例）
+// 切页 = setProjectRoot 前置 → setActivePage → 页组可见性由 Workspace 宿主
+// 订阅 activePageId 统一刷新（页组 = 宿主内顶级组，切页即页组容器显隐——
+// dockview 叶可见性切换，见 workspace/CLAUDE.md「页组模型」节）。
 
 import type { DockviewApi } from "dockview-react";
+import { slicePageLayout } from "./layoutSerde";
+import { saveLayout as saveLayoutApi } from "./layoutSerde";
 import { useLayout } from "../stores/layout";
 import { useProjects } from "../stores/projects";
 import { setProjectRoot } from "../ipc/fs";
 import { toast } from "../lib";
 import { TerminalRegistry } from "../panels/terminal/TerminalRegistry";
-import { parseTerminalPageId } from "../lib/panelId";
 import { basename } from "../lib/path";
 import { keyOf } from "../features/agentHistory/historyModel";
+import { pageOfPanelId, pageGroupId, panelIdInPage } from "./pageGroups";
 
-/** 模块级页面 API 注册表 */
-const pageApiMap = new Map<string, DockviewApi>();
+/** 模块级宿主 API（单例——唯一 DockviewReact 实例就绪时注册） */
+let hostApi: DockviewApi | null = null;
 
-/** 页面 DockviewApi 就绪事件名（CP-042：openSettingsPanel 事件驱动等待；detail = pageId） */
+/** 已挂载页组集合（pageId——宿主就绪后逐页组标记，防「页未挂载即查询」竞态） */
+const mountedPageGroups = new Set<string>();
+
+/** 页面 DockviewApi 就绪事件名（CP-042 保留：页组挂载时派发；detail = pageId） */
 export const PAGE_API_READY_EVENT = "slterm:page-api-ready";
 
-/** 注册页面 DockviewApi（就绪时派发 window CustomEvent——事件驱动替代轮询） */
-export function registerPageApi(pageId: string, api: DockviewApi): void {
-  pageApiMap.set(pageId, api);
+/**
+ * 注册宿主 DockviewApi（Workspace 宿主 onReady 调用——唯一注册点；
+ * 宿主重建（测试/重挂载）时幂等覆盖）。
+ */
+export function registerHostApi(api: DockviewApi): void {
+  hostApi = api;
+}
+
+/** 标记页组已挂载（宿主 restore/页组并入后逐页调用）——派发就绪事件 */
+export function markPageGroupMounted(pageId: string): void {
+  mountedPageGroups.add(pageId);
   window.dispatchEvent(
     new CustomEvent(PAGE_API_READY_EVENT, { detail: pageId }),
   );
 }
 
-/** 注销页面 DockviewApi */
-export function unregisterPageApi(pageId: string): void {
-  pageApiMap.delete(pageId);
+/** 页组移除（页面删除）——同步注销挂载标记（与 mounted 对称） */
+export function unregisterPageGroup(pageId: string): void {
+  mountedPageGroups.delete(pageId);
 }
 
-/** 获取页面 DockviewApi */
-export function getPageApi(pageId: string): DockviewApi | undefined {
-  return pageApiMap.get(pageId);
+/** 注销宿主（宿主组件卸载——页面 API 层回到未就绪态） */
+export function unregisterHostApi(): void {
+  hostApi = null;
+  mountedPageGroups.clear();
 }
 
-/** 遍历全部页面 DockviewApi（含隐藏页面——E2E 兜底清理隐藏页面残留面板用） */
-export function getAllPageApis(): DockviewApi[] {
-  return Array.from(pageApiMap.values());
+/** 宿主是否已注册（Workspace 宿主 onReady 之前为 false） */
+export function isHostReady(): boolean {
+  return hostApi !== null;
 }
 
 /**
- * 切换活跃页面——setProjectRoot 前置 await → setActivePage → 重指向 __dockviewApi。
+ * 宿主全量布局 → store 各页切片写回（硬约束 #7 的宿主侧消费单点：
+ * saveLayout 全量 toJSON → slicePageLayout 逐页切分 → updatePageLayout，
+ * 切片无变化跳过——拖拽/缩放期间的 onDidLayoutChange 高频事件零冗余写）。
+ */
+export function syncHostLayoutToStore(api: DockviewApi): void {
+  const full = saveLayoutApi(api);
+  const { projects, updatePageLayout } = useProjects.getState();
+  for (const [projId, proj] of Object.entries(projects)) {
+    for (const page of proj.pages) {
+      const slice = slicePageLayout(page.pageId, full);
+      if (JSON.stringify(slice) !== JSON.stringify(page.layout)) {
+        updatePageLayout(projId, page.pageId, slice);
+      }
+    }
+  }
+}
+
+/**
+ * 获取页面 DockviewApi（旧「每页一实例注册表」语义的页组查询替代）：
+ * 宿主就绪且该页页组已挂载 → 宿主 API；否则 undefined（调用方轮询——与旧
+ * 惰性初始化页面「未就绪」语义等价）。
+ */
+export function getPageApi(pageId: string): DockviewApi | undefined {
+  return hostApi !== null && mountedPageGroups.has(pageId) ? hostApi : undefined;
+}
+
+/** 宿主 API 直取（无页挂载条件——宿主内部/遍历场景用） */
+export function getHostApi(): DockviewApi | null {
+  return hostApi;
+}
+
+/**
+ * 遍历全部页面 DockviewApi（单宿主 = [宿主]——调用方自行按面板过滤；
+ * E2E 兜底清理隐藏页面残留面板用：隐藏页组面板仍在宿主 panels 内）。
+ */
+export function getAllPageApis(): DockviewApi[] {
+  return hostApi !== null ? [hostApi] : [];
+}
+
+/**
+ * 切换活跃页面——setProjectRoot 前置 await → setActivePage（宿主订阅刷新
+ * 页组显隐）。window.__dockviewApi 已收敛为宿主常量，不再于本函数重指。
  *
  * - activePageId 已为目标 pageId 时直接返回（幂等）
- * - 经 useProjects.getState() 查 pageId 所属项目 rootPath，await setProjectRoot（失败 console.error 降级继续）
- * - useLayout.getState().setActivePage(pageId)
- * - getPageApi(pageId) 命中 → window.__dockviewApi = api
- *   （未初始化页面由 Workspace.handlePageApiReady 兜底重指向）
+ * - 经 useProjects.getState() 查 pageId 所属项目 rootPath，await setProjectRoot
+ *   （失败 console.error 降级继续）
+ * - useLayout.getState().setActivePage(pageId)——页组容器显隐/标题刷新生效点
+ *   在 Workspace 宿主订阅（本函数不直接触碰 dockview，切页编排单点不破）
  */
 export async function switchToPageShared(pageId: string): Promise<void> {
   const layoutStore = useLayout.getState();
@@ -80,10 +136,6 @@ export async function switchToPageShared(pageId: string): Promise<void> {
   }
 
   layoutStore.setActivePage(pageId);
-
-  // 已初始化页面的 DockviewApi 立即重指向（未初始化页面由 handlePageApiReady 兜底）
-  const api = getPageApi(pageId);
-  if (api) window.__dockviewApi = api;
 }
 
 /**
@@ -101,7 +153,7 @@ export async function switchToPageAndFocus(
 ): Promise<void> {
   await switchToPageShared(pageId);
 
-  // 轮询面板挂载——页面可能尚未初始化，等 handlePageApiReady 注册 api 后再查
+  // 轮询面板挂载——页组挂载标记就绪后宿主 API 可查，等面板渲染落定
   for (let i = 0; i < 50; i++) {
     if (signal?.aborted) return; // FE-26: abort 后停止轮询
     const panel = getPageApi(pageId)?.getPanel(panelId);
@@ -127,15 +179,15 @@ export async function switchToPageAndFocus(
 }
 
 /**
- * 打开设置中心面板（同页单例）——调用方须先切到目标页
+ * 打开设置中心面板（同页单例，F11 语义不变）——调用方须先切到目标页
  * （本函数不切页，见 features/settingsCenter/openSettings.ts 编排）。
  *
- * 面板 id = `settings-{pageId}`；getPanel 命中 → focus 返回 true（同页单例），
- * 未命中 → addPanel（component "settings"，renderer "always"——CP-017；
- * settingsPageId 深链时注入 params.selectedPage）。
- * 页面 api 就绪改事件驱动等待（CP-042）：registerPageApi 派发
- * `slterm:page-api-ready`，5s 超时仅作防御底线——超时经 toast 可观测化
- * （原仅 console.warn 静默降级），返回 false 不抛异常。
+ * 面板 id = panelIdInPage(pageId, "settings")（页前缀协议——每页一个设置面板，
+ * dirtyRegistry 键同 params.panelId）；getPanel 命中 → focus 返回 true（同页
+ * 单例），未命中 → addPanel（component "settings"，renderer "always"——
+ * CP-017；settingsPageId 深链时注入 params.selectedPage），显式落目标页组。
+ * 页面就绪改事件驱动等待（CP-042 保留）：页组挂载派发 `slterm:page-api-ready`，
+ * 5s 超时仅作防御底线——超时经 toast 可观测化后返回 false。
  * @param settingsPageId 可选深链目标配置页 id（壳据此选中该配置页）
  * @returns 面板打开成功与否（超时返回 false）
  */
@@ -143,7 +195,6 @@ export async function openSettingsPanel(
   pageId: string,
   settingsPageId?: string,
 ): Promise<boolean> {
-  const panelId = `settings-${pageId}`;
   const api = await waitPageApi(pageId, 5000);
   if (!api) {
     console.warn(
@@ -152,6 +203,9 @@ export async function openSettingsPanel(
     toast.show("warning", "设置中心打开失败:操作页面尚未就绪,请重试");
     return false;
   }
+  // 设置面板 id = {pageId}:settings（页前缀协议——每页一个设置面板的 F11
+  // 单例键；dirtyRegistry 键同 params.panelId；tabClose 守卫判据见 tabClose.ts）
+  const panelId = panelIdInPage(pageId, "settings");
   const existing = api.getPanel(panelId);
   if (existing) {
     existing.focus?.();
@@ -162,6 +216,7 @@ export async function openSettingsPanel(
     component: "settings",
     title: "设置",
     renderer: "always",
+    position: { referenceGroup: pageGroupId(pageId) },
     params: { panelId, ...(settingsPageId ? { selectedPage: settingsPageId } : {}) },
   });
   return true;
@@ -219,19 +274,31 @@ export function findPanelForSession(
 }
 
 /**
- * panelId → 属主 pageId（B14 防御分层）：先按已知页面集合做前缀匹配——旧恢复格式
- * （terminal-{pageId}-{Date.now}-{seq}）的 pageId 含数字段，语法切分会把 Date.now
- * 段误并入 pageId 得到幽灵页面；前缀匹配对旧格式可靠。兜底 parseTerminalPageId
- * （新格式）；均未命中 → null。
+ * panelId → 属主 pageId（CP-004 页前缀协议优先；旧恢复格式兜底）：
+ * 1. pageOfPanelId（协议 id "{pageId}:localId"——新形态快速路径）；
+ * 2. 已知页面集合前缀匹配——旧格式（terminal-{pageId}-{DateNow}-{seq} 等）
+ *    pageId 含数字段，语法切分不可靠，前缀匹配对旧格式可靠（布局迁移兜底
+ *    前的老面板）；均未命中 → null。
  */
 export function findPageIdForPanelId(panelId: string): string | null {
+  const fromProtocol = pageOfPanelId(panelId);
+  if (fromProtocol !== null) return fromProtocol;
   const { projects } = useProjects.getState();
   for (const project of Object.values(projects)) {
     for (const page of project.pages) {
-      if (panelId.startsWith(`terminal-${page.pageId}-`)) {
+      if (
+        panelId.startsWith(`terminal-${page.pageId}-`)
+        || panelId.startsWith(`settings-${page.pageId}`)
+      ) {
         return page.pageId;
       }
     }
   }
-  return parseTerminalPageId(panelId);
+  return null;
+}
+
+/** 测试专用：重置宿主/挂载集合（宿主级单例重置——用例隔离） */
+export function _resetHostApi(): void {
+  hostApi = null;
+  mountedPageGroups.clear();
 }

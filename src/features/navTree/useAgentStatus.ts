@@ -22,7 +22,7 @@ import { TerminalRegistry } from "../../panels/terminal/TerminalRegistry";
 // ZQ-2: 来源 CLI 标识三级解析单点(契约 4)——空串/空白 cliId 同等回退
 import { resolvePayloadCliId } from "../../panels/terminal/resolvePayloadCliId";
 import { onAgentEvent } from "../../ipc/agentHooks";
-import { parseTerminalPageId } from "../../lib/panelId";
+import { pageOfPanelId } from "../../workspace/pageGroups";
 import { getPageApi } from "../../workspace/pageApis";
 import { cliProfileRegistry } from "../cliProfiles";
 // AC-5: 事件名字面量只允许出现在 profiles/claude/(claude 合法领地)——
@@ -154,7 +154,7 @@ export function useAgentStatus(): AgentSessionRow[] {
       const projRoot = projectRootRef.current;
       if (!projRoot) return;
 
-      const pageId = parseTerminalPageId(payload.panelId);
+      const pageId = pageOfPanelId(payload.panelId);
       if (!pageId) return;
 
       const pageIds = projectPageIdsRef.current;
@@ -278,7 +278,7 @@ export function useAgentStatus(): AgentSessionRow[] {
       const proj = activeProjectRef.current;
       if (!proj) return;
 
-      const pageId = parseTerminalPageId(event.panelId);
+      const pageId = pageOfPanelId(event.panelId);
       if (!pageId) return;
       if (!pageIds.has(pageId)) return;
 
@@ -356,7 +356,7 @@ export function useAgentStatus(): AgentSessionRow[] {
     for (const [panelId, entry] of allTerminals) {
       if (!entry.agentSession) continue; // 纯 shell 终端不建行
 
-      const pageId = parseTerminalPageId(panelId);
+      const pageId = pageOfPanelId(panelId);
       if (!pageId) continue;
       if (!projectPageIds.has(pageId)) continue;
 

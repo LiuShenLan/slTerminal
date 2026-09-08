@@ -593,13 +593,13 @@ describe("设置中心 (F11, SC-E2E-02)", () => {
       const projectId = (await getProjectIdForPage(pageIdA)) ?? "";
       expect(projectId).not.toBe("");
       const pageIdB = await addPage(projectId, "page2", tempDir);
-      if (!pageIdB) throw new Error("addPage 返回 null（页面数上限或项目缺失）");
+      if (!pageIdB) throw new Error("addPage 返回 null（项目缺失）");
 
       await openSettingsCenter();
       await switchSettingsPage("backgroundTasks");
 
-      // 面板 id 契约 SC-FE-02：settings-{pageId}（切页前后恒为 page1 的面板）
-      const panelId = `settings-${pageIdA}`;
+      // 面板 id 契约 SC-FE-02（CP-004：{pageId}:settings——切页前后恒为 page1 的面板）
+      const panelId = `${pageIdA}:settings`;
       const stateBefore = await browser.execute(
         () => (window as any).__slterm_e2e_getSettingsPanelState?.() ?? null,
       );
@@ -608,7 +608,7 @@ describe("设置中心 (F11, SC-E2E-02)", () => {
 
       // 同项目内切页（activePageId 变化但项目不变 → 自动关闭效应不触发）
       await switchToPageAndWait(pageIdB);
-      // 面板仍挂载（隐藏页面板不卸载——DOM 级断言，活跃 api 已指向 page2 读不到）
+      // 面板仍挂载（隐藏页组面板不卸载——DOM 级断言，宿主可见性切换后读不到）
       expect(await browser.execute(
         () => document.querySelectorAll('[data-e2e="settings-panel"]').length,
       )).toBe(1);
@@ -759,7 +759,7 @@ describe("设置中心 (F11, SC-E2E-02)", () => {
       // 防泄漏污染本用例 DOM 计数断言）
       await closeSettingsPanels();
       await openSettingsCenter();
-      const panelId = `settings-${pageId}`; // 面板 id 契约 SC-FE-02：settings-{pageId}
+      const panelId = `${pageId}:settings`; // 面板 id 契约 SC-FE-02（CP-004 页前缀协议形态）
 
       // 后门 helper 已注入 + 直接置 dirty（绕过真实编辑——dirtyRegistry 真值源）
       expect(await browser.execute(

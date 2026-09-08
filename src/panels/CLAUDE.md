@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### 终端：每次挂载新建 Terminal 实例
 
-xterm.js 不支持 `term.open()` 二次调用（GitHub Issue #4978）。因此每次面板 mount 都创建新 Terminal 实例，卸载时 dispose。跨页面终端存活由 `workspace/` 层通过多 Dockview 实例 + CSS 显隐解决，本层不处理实例复用。
+xterm.js 不支持 `term.open()` 二次调用（GitHub Issue #4978）。因此每次面板 mount 都创建新 Terminal 实例，卸载时 dispose。跨页面终端存活由 `workspace/` 层通过共享宿主 + 页组模型解决（页组容器显隐，面板不随切页卸载重建——见 `workspace/CLAUDE.md`「共享宿主 + 页组模型」节），本层不处理实例复用。
 
 ### WebGL 优先 + DOM 兜底
 

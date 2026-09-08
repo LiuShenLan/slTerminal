@@ -134,7 +134,7 @@ describe("页签右键菜单（tab-menu）", () => {
   }
 
   it("终端页签右键 → 菜单弹出（新建终端/重命名/关闭族）；Escape 关闭", async () => {
-    const termId = `terminal-${pageId}-0`;
+    const termId = `${pageId}:terminal-0`;
     await addTerminalPanel(termId);
 
     await openTabMenu(termId);
@@ -156,7 +156,7 @@ describe("页签右键菜单（tab-menu）", () => {
     const editorId = await addEditorPanel(
       join(rootDir, "close-me.txt").replace(/\\/g, "/"),
     );
-    const termId = `terminal-${pageId}-0`; // 前置用例已建（describe 共享页面）
+    const termId = `${pageId}:terminal-0`; // 前置用例已建（describe 共享页面）
     expect(await panelIds()).toContain(editorId);
 
     await openTabMenu(editorId);
@@ -174,7 +174,7 @@ describe("页签右键菜单（tab-menu）", () => {
     const editorId = await addEditorPanel(
       join(rootDir, "keep-me.txt").replace(/\\/g, "/"),
     );
-    const termId = `terminal-${pageId}-0`;
+    const termId = `${pageId}:terminal-0`;
     expect(await panelIds()).toContain(termId);
 
     await openTabMenu(editorId);
@@ -194,12 +194,12 @@ describe("页签右键菜单（tab-menu）", () => {
       join(rootDir, "new-term-anchor.txt").replace(/\\/g, "/"),
     );
     expect(await panelIds()).toContain(editorId);
-    expect(await panelIds()).not.toContain(`terminal-${pageId}-0`);
+    expect(await panelIds()).not.toContain(`${pageId}:terminal-0`);
 
     await openTabMenu(editorId);
     await clickMenuByLabel("新建终端");
     // 新终端与右键编辑器同组出现（addTerminalPanel 未推进 seq → 编号续用 terminal-0）
-    await waitForPanelTitle(`terminal-${pageId}-0`, "terminal-0", 8000);
+    await waitForPanelTitle(`${pageId}:terminal-0`, "terminal-0", 8000);
     expect(await panelIds()).toContain(editorId);
   });
 

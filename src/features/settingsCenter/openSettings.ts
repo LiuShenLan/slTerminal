@@ -8,7 +8,7 @@
 //     （照 NavTree.handleNewPage 模式）
 //   - 先 switchToPageShared 切页（面板只能在活跃页面打开），再 openSettingsPanel
 //   - switchToPageShared 内部完成 setProjectRoot 前置（DBG-5）；目标页面从未初始化时，
-//     Workspace 的 activePageId effect 兜底 ensurePageInitialized，openSettingsPanel
+//     Workspace 宿主订阅 activePageId 刷新页组可见性，openSettingsPanel
 //     轮询 getPageApi 就绪（100ms×50）——与旧编排行为等价
 
 import { createPageId, useProjects } from "../../stores/projects";

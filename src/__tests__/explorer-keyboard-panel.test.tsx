@@ -248,7 +248,7 @@ describe("键盘 Enter 动作链路（handleOpenSelected）", () => {
     const call = mocks.mockAddPanel.mock.calls[0][0];
     expect(call.component).toBe("editor");
     expect(call.params.filePath).toBe("C:/test-project/app.ts");
-    expect(call.id).toMatch(/^editor-/);
+    expect(call.id).toMatch(/^page-1:editor-/);
   });
 
   it("选中目录 Enter → 仅切换展开（子树显隐），不触发 addPanel", async () => {

@@ -24,7 +24,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### openSettingsPanel 同页单例（workspace/pageApis.ts，CP-042 事件驱动）
 
-面板 id = `settings-{pageId}`；getPanel 命中 → focus 返回 true，未命中 → addPanel（component "settings"，renderer "always"——CP-017，settingsPageId 深链注入 params.selectedPage）；页面 api 就绪等待事件驱动（registerPageApi 派发 `slterm:page-api-ready`，CP-042），5s 超时防御底线——超时经 toast 可观测化后返回 false（原仅 console.warn 静默降级）。调用方须先切到目标页（本函数不切页）。
+面板 id = `{pageId}:settings`（CP-004 页前缀协议形态）；getPanel 命中 → focus 返回 true，未命中 → addPanel（component "settings"，renderer "always"——CP-017，settingsPageId 深链注入 params.selectedPage）；页面就绪 = 页组挂载事件驱动（markPageGroupMounted 派发 `slterm:page-api-ready`，CP-042），5s 超时防御底线——超时经 toast 可观测化后返回 false（原仅 console.warn 静默降级）。调用方须先切到目标页（本函数不切页）。
 
 ### dirtyRegistry 真值源（SC-FE-07，CP-017 翻案）
 

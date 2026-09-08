@@ -11,6 +11,7 @@ import { useLayout, useFontSize } from "../../stores";
 import { PANEL_BG, INPUT_BORDER } from "../../theme";
 import type { TabState } from "./useCommandDetection";
 import { TerminalRegistry } from "./TerminalRegistry";
+import { pageOfPanelId } from "../../workspace/pageGroups";
 import { cliProfileRegistry } from "../../features/cliProfiles";
 // AC-5: 事件名字面量只允许出现在 profiles/claude/（claude 合法领地）——
 // 缺省 cliId 兜底常量经 profiles/claude 导出（与 useAgentStatus 行建行口径一致）
@@ -59,13 +60,12 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ api, params }) => {
 
   const cwd = params.cwd;
 
-  // P1-13: 对比 activePageId 判断可见性（panelId 格式: terminal-{pageId}-{seq}）
-  // B14: 属主判定用前缀匹配——旧恢复格式曾含 Date.now 数字段，正则/切分解析
-  // 会吞掉多余数字段得到错误 pageId → visible 恒 false → 非焦点降频永不 flush
-  // （历史恢复黑屏根因）。本调用点持有正确 activePageId，直接前缀比对。
+  // P1-13: 对比 activePageId 判断可见性（CP-004: panelId 页前缀协议
+  // "{pageId}:terminal-N"——pageOfPanelId 单点解析属主页，无需前缀匹配；
+  // 非活跃页（隐藏页组）终端 visible=false → 非焦点降频永不 flush）
   const activePageId = useLayout((s) => s.activePageId);
   const visible =
-    activePageId != null && params.panelId.startsWith(`terminal-${activePageId}-`);
+    activePageId != null && pageOfPanelId(params.panelId) === activePageId;
 
   // 字体大小：从 store 订阅 + 通过 setter 回调变更
   const terminalFontSize = useFontSize((s) => s.terminalFontSize);

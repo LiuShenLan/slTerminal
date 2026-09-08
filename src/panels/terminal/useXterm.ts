@@ -552,7 +552,7 @@ export function useXterm({
   // GPU context 的重建延迟与首帧回退 DOM 闪烁。资源释放由两处兜底：
   // ① 面板卸载清理（useTerminalInstance performDispose → webglCancelRef → addon dispose）
   // ② context loss / 加载失败指数退避重试 → 耗尽回退 DOM renderer（webgl.ts）
-  // 压力评估（静态）：多面板（≤MAX_PAGES=20）各持 1 个 context，超 Chromium 上限
+  // 压力评估（静态）：每面板各持 1 个 context（CP-004 后页面不再成倍叠加实例——共享宿主下上限随活跃面板数，非页面数）
   // （约 16）时后续 WebglAddon 构造失败走退避 → DOM 兜底，不崩溃——潜在压力无实测
   // 证据，是否超限由人工验证点（chrome://gpu GPU 内存观察）兜底，若实测有压力再恢复释放
   useEffect(() => {

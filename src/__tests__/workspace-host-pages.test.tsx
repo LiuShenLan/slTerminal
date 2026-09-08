@@ -1,16 +1,17 @@
-// workspace-multi-instance.test.tsx — 多 Dockview 实例集成测试
+// workspace-host-pages.test.tsx — 共享宿主多页面集成测试（CP-004 替代原
+// workspace-multi-instance.test.tsx——多 Dockview 实例架构消亡，改页组语义）
 //
-// 验证多页面切换时 Dockview 实例各自存活、CSS 显隐正确、惰性初始化按需创建。
-// H6（终端跨页面存活）核心语义：页面切换通过 CSS display 显隐，实例不销毁重建——
-// 断言 getPageApi(pageId) 返回同一 api 对象（identity）+ 终端面板不 dispose（WRK-09）。
-// 注：jsdom 中 DockviewReact 的 onReady 会创建终端面板，React StrictMode 双重挂载
-// 会导致多个 Terminal 实例，测试仅验证架构层面的行为（panel ID 存在性 + DOM 结构）。
+// 验证多页面共存于单一宿主（每页一个顶级页组）时：各页组各自存活（同宿主
+// API 内可查）、页面切换不销毁面板（H6：终端跨页面存活——页组可见性切换，
+// 面板不卸载）、空页组由 Watermark 接管、无活跃页时宿主隐藏。
+// 注：jsdom 中真实 dockview 可跑（同 workspace-page-dockview 集成验证），
+// 测试仅验证架构层面行为（页组/面板存在性 + DOM 结构）。
 
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from "vitest";
 import { mockIPC, clearMocks } from "@tauri-apps/api/mocks";
 import { render, waitFor, act, fireEvent, cleanup } from "@testing-library/react";
 
-// Mock @xterm/xterm — xterm.js 6.1+ 渲染器初始化在 jsdom 中抛异常（WidthCache 需要真实 DOM 指标）
+// Mock @xterm/xterm — xterm.js 6.1+ 渲染器初始化在 jsdom 中抛异常
 vi.mock("@xterm/xterm", () => ({
   Terminal: vi.fn(function (this: Record<string, unknown>) {
     this.open = vi.fn();
@@ -53,9 +54,10 @@ import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
 import { useSideBar } from "../stores/sideBar";
 import { titleManager } from "../workspace/titleManager";
-import { getPageApi } from "../workspace/pageApis";
+import { getPageApi, getHostApi } from "../workspace/pageApis";
+import { resetTerminalPanelSeq } from "../lib/panelId";
 
-/** 构造带两页面的测试项目（展开态） */
+/** 构造带两页面的测试项目（展开态，空布局占位——宿主恢复时归空页组） */
 function setupTwoPages() {
   const projId = "proj-multi";
   const pageA = "page-alpha";
@@ -97,45 +99,49 @@ beforeEach(() => {
     loaded: true,
   });
   titleManager.reset();
+  resetTerminalPanelSeq();
+  window.__dockviewApi = undefined;
 });
 
 afterEach(() => {
-  // RTL 无 auto-cleanup——Dockview 实例跨测试残留会污染 DOM 断言（如 /terminal-/），
-  // 且新实例 onReady 会覆盖 pageApiMap 注册，必须显式卸载
   cleanup();
   clearMocks();
 });
 
-describe("多 Dockview 实例——架构验证", () => {
-  it("T21: 活跃页面 layout:{} → Watermark 显示（不自动创建终端）", () => {
+describe("共享宿主——多页组架构验证", () => {
+  it("T21: 活跃页面空布局 → Watermark 接管（不自动创建终端）", async () => {
     mockIPC(() => null);
 
     const { pageA } = setupTwoPages();
     useLayout.setState({ activePageId: pageA });
 
     const { container } = render(<Workspace />);
+    // 宿主就绪后：空页组由 Watermark 接管显示（页面切换可见性单点保证）
+    await waitFor(() => expect(getHostApi()).toBeTruthy());
     const text = container.textContent ?? "";
-    // Watermark 文本可见（空布局不创建默认终端）
     expect(text).toContain("打开终端或编辑器开始工作");
     // 不创建 terminal 面板
     expect(text).not.toMatch(/terminal-/);
   });
 
-  it("2. 无活跃页面时不应初始化任何 Dockview", () => {
+  it("2. 无活跃页面时宿主隐藏（display:none 空白主区——terminal 不卸载）", async () => {
     mockIPC(() => null);
 
     setupTwoPages();
     useLayout.setState({ activePageId: null });
 
     const { container } = render(<Workspace />);
+    await waitFor(() => expect(getHostApi()).toBeTruthy());
     const text = container.textContent ?? "";
     // 侧栏正常渲染
     expect(text).toContain("multi-test");
-    // 无 Dockview → 无终端面板（标题格式为 "terminal-N"）
-    expect(text).not.toMatch(/terminal-/);
+    // 无活跃页 → 宿主容器 display:none（无 Dockview 内容可见）
+    const host = container.querySelector(".slterm-dock-host") as HTMLElement | null;
+    expect(host).toBeTruthy();
+    expect(host!.style.display).toBe("none");
   });
 
-  it("3. 项目无页面时也不应创建 Dockview", () => {
+  it("3. 项目无页面时宿主隐藏（无页组可显）", async () => {
     mockIPC(() => null);
 
     useProjects.getState().addProject({
@@ -149,11 +155,12 @@ describe("多 Dockview 实例——架构验证", () => {
     useLayout.setState({ activePageId: null });
 
     const { container } = render(<Workspace />);
-
+    await waitFor(() => expect(getHostApi()).toBeTruthy());
     const text = container.textContent ?? "";
     expect(text).toContain("empty-project");
-    // 无页面 → 无 Dockview → 无 terminal
     expect(text).not.toContain("terminal-");
+    const host = container.querySelector(".slterm-dock-host") as HTMLElement | null;
+    expect(host!.style.display).toBe("none");
   });
 
   it("4. 删除活跃页面后，store 正确更新 activePageId", () => {
@@ -167,7 +174,7 @@ describe("多 Dockview 实例——架构验证", () => {
     expect(useProjects.getState().projects[projId].activePageId).toBe(pageB);
   });
 
-  it("H6 实例存活：切换页面后同一 pageId 返回同一 api 对象（不销毁重建）", async () => {
+  it("H6 宿主唯一：getPageApi 各页均返回同一宿主 api（页组挂载后）", async () => {
     mockIPC(() => null);
 
     const { pageA, pageB } = setupTwoPages();
@@ -175,37 +182,31 @@ describe("多 Dockview 实例——架构验证", () => {
 
     render(<Workspace />);
 
-    // A 页 onReady → registerPageApi + handlePageApiReady 重指 __dockviewApi
+    // 两页页组恢复后：getPageApi 均解析到同一宿主 API（多实例 map 消亡）
     await waitFor(() => expect(getPageApi(pageA)).toBeTruthy());
-    const apiA = getPageApi(pageA) as NonNullable<ReturnType<typeof getPageApi>>;
+    await waitFor(() => expect(getPageApi(pageB)).toBeTruthy());
+    const apiA = getPageApi(pageA)!;
+    const apiB = getPageApi(pageB)!;
+    expect(apiA).toBe(apiB);
+    expect(apiA).toBe(getHostApi());
+    // __dockviewApi 恒为宿主（重指不变量收敛——宿主唯一）
     expect(window.__dockviewApi).toBe(apiA);
 
-    // 切到 B 页（惰性初始化）
+    // 切页：宿主/API 引用不变（不销毁重建）
     act(() => { useLayout.setState({ activePageId: pageB }); });
-    await waitFor(() => expect(getPageApi(pageB)).toBeTruthy());
-    const apiB = getPageApi(pageB) as NonNullable<ReturnType<typeof getPageApi>>;
-
-    // H6 核心语义：A 实例未销毁（同一引用），B 是新实例
     expect(getPageApi(pageA)).toBe(apiA);
-    expect(apiB).not.toBe(apiA);
-    // handlePageApiReady 兜底重指活跃页
-    expect(window.__dockviewApi).toBe(apiB);
-
-    // 切回 A：仍是原实例
-    act(() => { useLayout.setState({ activePageId: pageA }); });
-    expect(getPageApi(pageA)).toBe(apiA);
+    expect(window.__dockviewApi).toBe(apiA);
   });
 
-  it("H6 终端不 dispose：页面切换往返后终端面板仍存活", async () => {
+  it("H6 终端不 dispose：页面切换往返后终端面板仍存活（页组可见性切换不卸载）", async () => {
     mockIPC(() => null);
 
     const { pageA, pageB } = setupTwoPages();
     useLayout.setState({ activePageId: pageA });
 
     const { container } = render(<Workspace />);
-
     await waitFor(() => expect(getPageApi(pageA)).toBeTruthy());
-    const apiA = getPageApi(pageA) as NonNullable<ReturnType<typeof getPageApi>>;
+    const hostApi = getHostApi()!;
 
     // 经 Watermark 按钮创建终端面板（真实 addPanel → TerminalPanel 挂载）
     const newTermBtn = Array.from(container.querySelectorAll("button")).find(
@@ -214,16 +215,16 @@ describe("多 Dockview 实例——架构验证", () => {
     expect(newTermBtn).toBeTruthy();
     act(() => { fireEvent.click(newTermBtn as HTMLButtonElement); });
 
-    const panelId = `terminal-${pageA}-0`;
-    expect(apiA.getPanel(panelId)).toBeTruthy();
+    // 页前缀协议面板 id（活跃页 page-alpha）
+    const panelId = `${pageA}:terminal-0`;
+    await waitFor(() => expect(hostApi.getPanel(panelId)).toBeTruthy());
 
-    // 切到 B 再切回 A
+    // 切到 B 再切回 A（页组可见性切换——面板不销毁）
     act(() => { useLayout.setState({ activePageId: pageB }); });
-    await waitFor(() => expect(getPageApi(pageB)).toBeTruthy());
     act(() => { useLayout.setState({ activePageId: pageA }); });
 
-    // 面板未销毁（H6：页面切换不杀 PTY/面板），实例未重建
-    expect(apiA.getPanel(panelId)).toBeTruthy();
-    expect(getPageApi(pageA)).toBe(apiA);
+    expect(hostApi.getPanel(panelId)).toBeTruthy();
+    // 面板仍在 page-alpha 页组（未跨页移动）
+    expect(hostApi.getPanel(panelId)!.group.id).toBe(`page-${pageA}`);
   });
 });

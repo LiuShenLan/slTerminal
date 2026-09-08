@@ -183,11 +183,11 @@ describe("restoreHistorySession 四步恢复编排", () => {
     // 人工验证问题 3：初始标题 = session.title（历史回退链合成结果））
     expect(apiStub.addPanel).toHaveBeenCalledTimes(1);
     expect(apiStub.addPanel).toHaveBeenCalledWith({
-      id: expect.stringMatching(/^terminal-page-restore-test-\d+$/),
+      id: expect.stringMatching(/^page-restore-test:terminal-\d+$/),
       component: "terminal",
       title: "测试会话",
       params: {
-        panelId: expect.stringMatching(/^terminal-page-restore-test-\d+$/),
+        panelId: expect.stringMatching(/^page-restore-test:terminal-\d+$/),
         cwd: "C:\\Users\\test\\proj",
       },
       renderer: "always",
@@ -198,7 +198,7 @@ describe("restoreHistorySession 四步恢复编排", () => {
     const [sessionId, panelId, data] = h.mockPtyWrite.mock
       .calls[0] as [string, string, Uint8Array];
     expect(sessionId).toBe("session-test-1");
-    expect(panelId).toMatch(/^terminal-page-restore-test-\d+$/);
+    expect(panelId).toMatch(/^page-restore-test:terminal-\d+$/);
     // 内容断言为准（vitest mock.calls 参数跨 realm，instanceof 不可靠）；
     // 注入内容 = claude profile.history.buildRestoreInput 输出（MC-315 委托，
     // 与迁出源 restoreSession.ts 字面量逐字一致——断言漂移即实现有误）
@@ -289,8 +289,8 @@ describe("restoreHistorySession 四步恢复编排", () => {
       (call) => (call[0] as { id: string }).id,
     );
     // 每页计数确定性递增：首次 terminal-{pageId}-0、二次 -1
-    expect(firstId).toBe("terminal-page-restore-test-0");
-    expect(secondId).toBe("terminal-page-restore-test-1");
+    expect(firstId).toBe("page-restore-test:terminal-0");
+    expect(secondId).toBe("page-restore-test:terminal-1");
   });
 
   it("防重入：恢复进行中并发调用直接返回、无副作用，完成后标记复位", async () => {

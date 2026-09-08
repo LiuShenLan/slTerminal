@@ -35,11 +35,11 @@ settings 类 store 保存时顶层键必须是段名（`fontSize` / `keybindings
 - **FE-09 保存失败**：`saveSettings` / `saveProjects` 失败统一 `toast.show("warning", "设置保存失败，重启后将丢失")`。
 - **FE-11 corrupted**：`loadSettings` / `loadProjects` 返回 `{ data, corrupted }`，`corrupted: true` 时 toast「配置已损坏，已回退默认值」。
 
-### FE-01 / FE-36 页面总数上限
+### 页面总数上限随多实例架构消亡（CP-004/S11）
 
-- `MAX_PAGES = 20`：多 Dockview 实例架构每页一实例，上限防内存/DOM 无界增长。
-- **FE-36 全局化**：按跨项目全局页面总数计数（`Object.values(projects).flatMap(p => p.pages).length`），项目自身未达上限也可能因其他项目占额而被拒绝。
-- 超限 `addPage` 返回 `false` + toast「页面数已达上限」。
+- **页面总数上限（原 FE-01/FE-36，旧常量值 20）已删除**：多 Dockview 实例架构退役（转共享宿主 + 页组模型——`src/workspace/CLAUDE.md`「共享宿主 + 页组模型」节）后，页面不再各持一实例，容器/渲染管线共享，内存/DOM 不再随页数线性增长——上限随之消亡。
+- `addPage` 拒绝条件只剩「项目不存在」；不再有「页面数已达上限」toast。
+- `OperationPage.layout` 字段语义 = 该页「页组子树切片」（宿主全量 JSON 按页切分），由 `workspace/layoutSerde.ts` 单点存取（硬约束 #7）。
 
 ### FE-37 switchToPage 纯状态转换
 

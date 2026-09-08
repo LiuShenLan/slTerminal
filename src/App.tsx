@@ -13,7 +13,7 @@ import { useCliAliases, cancelPendingSave as cancelCliAliasesSave } from "./stor
 import { useConptyInputModes, cancelPendingSave as cancelConptyModesSave } from "./stores/conptyInputModes";
 import type { CliAliasesState } from "./stores/cliAliases";
 import { cliProfileRegistry } from "./features/cliProfiles/cliProfileRegistry";
-import { saveLayout } from "./workspace/layoutSerde";
+import { syncHostLayoutToStore } from "./workspace/pageApis";
 import { pty } from "./ipc";
 import * as agentHooks from "./ipc/agentHooks";
 import { CLAUDE_CLI_ID } from "./features/cliProfiles/profiles/claude";
@@ -245,21 +245,9 @@ function App() {
           console.error("[slTerminal] 关闭兜底 pty_kill_all 失败:", err);
         }
 
-        // 1. flush dirty layout
-        const { activePageId } = useLayout.getState();
-        if (activePageId && window.__dockviewApi) {
-          const layout = saveLayout(window.__dockviewApi);
-          const { projects } = useProjects.getState();
-          for (const [, proj] of Object.entries(projects)) {
-            if (proj.pages.some((p) => p.pageId === activePageId)) {
-              useProjects.getState().updatePageLayout(
-                proj.projectId,
-                activePageId,
-                layout as Record<string, unknown>,
-              );
-              break;
-            }
-          }
+        // 1. flush dirty layout（CP-004 单宿主：全量 toJSON → 逐页切片写回 store）
+        if (window.__dockviewApi) {
+          syncHostLayoutToStore(window.__dockviewApi);
         }
         // 2. 同步保存到磁盘（清除各 store debounce 定时器 + 3s 超时防挂起）
         cancelPendingSave();
@@ -273,6 +261,7 @@ function App() {
           new Promise<void>((resolve) => setTimeout(resolve, SHUTDOWN_TIMEOUT_MS)),
         ]);
         // 3. 保存 activePageId
+        const { activePageId } = useLayout.getState();
         if (activePageId) {
           try {
             localStorage.setItem(LS_LAST_ACTIVE_PAGE_KEY, activePageId);

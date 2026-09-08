@@ -7,7 +7,6 @@ export { useFontSizeWheel } from "./useFontSizeWheel";
 export { E2E_ENABLED, computeE2eEnabled } from "./e2eEnabled";
 export { injectScript } from "./injectScript";
 export { type AgentStatus } from "./agentStatus";
-export { parseTerminalPageId } from "./panelId";
 export {
   parseAppError,
   getErrorMessage,

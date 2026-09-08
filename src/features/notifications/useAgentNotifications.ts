@@ -22,7 +22,7 @@ import {
   UserAttentionType,
 } from "../../ipc/window";
 import { useProjects } from "../../stores/projects";
-import { parseTerminalPageId } from "../../lib/panelId";
+import { pageOfPanelId } from "../../workspace/pageGroups";
 import { cliProfileRegistry } from "../cliProfiles";
 // ZQ-2: 来源 CLI 标识三级解析单点（契约 4）——空串/空白 cliId 同等回退
 // （TerminalRegistry 不 import notifications——classifyEvent 纯函数导入无循环）
@@ -136,7 +136,7 @@ export function useAgentNotifications(): void {
       }
 
       // 获取项目名：从 panelId 反查
-      const pageId = parseTerminalPageId(payload.panelId);
+      const pageId = pageOfPanelId(payload.panelId);
       let projectName = "";
       if (pageId) {
         const projectId = findProjectIdForPage(pageId);

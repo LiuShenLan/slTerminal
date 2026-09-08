@@ -6,6 +6,7 @@
 import { useProjects } from "../../stores/projects";
 import { useLayout } from "../../stores/layout";
 import { titleManager } from "../../workspace/titleManager";
+import { panelIdInPage, pageGroupId } from "../../workspace/pageGroups";
 
 /** 文件面板分派结果 */
 export interface PanelDispatch {
@@ -88,7 +89,9 @@ export function openCommitFile(
     suffix,
   );
 
-  const panelId = `${panelType}-${Date.now()}`;
+  // CP-004：面板 id 页前缀协议 + 显式落活跃页组（addPanel options.group 契约）
+  const localId = `${panelType}-${Date.now()}`;
+  const panelId = panelIdInPage(activePageId, localId);
 
   // 构造 params：renamed 时传 oldPath
   const params: Record<string, unknown> = {
@@ -107,6 +110,7 @@ export function openCommitFile(
       component: panelType,
       title,
       params,
+      position: { referenceGroup: pageGroupId(activePageId) },
     });
   } catch {
     return;

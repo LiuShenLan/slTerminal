@@ -12,6 +12,7 @@ import { FileTree } from "./FileTree";
 import { createDir, deleteEntry, rename, writeFile } from "../../ipc/fs";
 import { useProjects } from "../../stores/projects";
 import { useLayout } from "../../stores/layout";
+import { panelIdInPage, pageGroupId } from "../../workspace/pageGroups";
 import { titleManager } from "../../workspace/titleManager";
 import { openFileInPage } from "../../workspace/openFile";
 import {
@@ -218,16 +219,19 @@ export const ExplorerPanel: React.FC<SideViewComponentProps> = ({
           path.lastIndexOf("/") >= 0
             ? path.slice(0, path.lastIndexOf("/"))
             : path;
-        const panelId = `terminal-open-${Date.now()}`;
-        const title = activePageId
-          ? titleManager.getTerminalTitle(activePageId)
-          : "terminal";
+        if (!activePageId) return;
+        // CP-004：terminal localId 页前缀协议（terminal-open-{ts} 为免撞号 local
+        // 形态——不占页组 seq 计数）；显式落活跃页组
+        const localId = `terminal-open-${Date.now()}`;
+        const panelId = panelIdInPage(activePageId, localId);
+        const title = titleManager.getTerminalTitle(activePageId);
         dockApi.addPanel({
           id: panelId,
           component: PANEL_TERMINAL,
           title,
           params: { panelId, cwd: dir },
           renderer: "always",
+          position: { referenceGroup: pageGroupId(activePageId) },
         });
       }
     },

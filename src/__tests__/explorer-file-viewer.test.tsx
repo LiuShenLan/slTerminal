@@ -192,7 +192,7 @@ describe("ExplorerPanel + FileViewerRegistry 集成", () => {
     }, { timeout: 3000 });
 
     const call = mocks.mockAddPanel.mock.calls[0][0];
-    expect(call.id).toMatch(/^htmlviewer-/);
+    expect(call.id).toMatch(/^page-1:htmlviewer-/);
   });
 
   // 50. .ts 文件 panelId 前缀为 "editor-"
@@ -209,7 +209,7 @@ describe("ExplorerPanel + FileViewerRegistry 集成", () => {
     }, { timeout: 3000 });
 
     const call = mocks.mockAddPanel.mock.calls[0][0];
-    expect(call.id).toMatch(/^editor-/);
+    expect(call.id).toMatch(/^page-1:editor-/);
   });
 
   // 51. .htm 文件也走 htmlviewer

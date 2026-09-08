@@ -205,7 +205,7 @@ describe("ExplorerPanel 在终端中打开 — addPanel 参数", () => {
     // 文件 → cwd 取父目录
     expect(call.params.cwd).toBe("C:/test-project");
     // panelId 格式：terminal-open-{时间戳}
-    expect(call.id).toMatch(/^terminal-open-\d+$/);
+    expect(call.id).toMatch(/^page-1:terminal-open-\d+$/);
     expect(call.params.panelId).toBe(call.id);
     // renderer 恒为 "always"（页签切换终端不白屏）
     expect(call.renderer).toBe("always");

@@ -121,7 +121,7 @@ async function setupTerminal(): Promise<{ panelId: string; tempDir: string }> {
   const tempDir = mkdtempSync(join(tmpdir(), "slterm-e2e-mockcli-"));
   const pageId = await createProject(tempDir);
   await waitForDockviewApi();
-  const panelId = `terminal-${pageId}-0`;
+  const panelId = `${pageId}:terminal-0`;
   await addTerminalPanel(panelId);
   await waitForPtySessionReady();
   return { panelId, tempDir };

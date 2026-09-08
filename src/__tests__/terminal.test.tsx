@@ -314,15 +314,16 @@ describe("TerminalPanel", () => {
     expect(mocks.mockApi.setTitle).toHaveBeenLastCalledWith("terminal-0");
   });
 
-  it("B14: 旧恢复格式 panelId + activePageId 匹配 → visible 放行（PTY 输出直写防黑屏）", async () => {
+  it("B14: 页前缀协议 panelId 属主页 = activePageId → visible 放行（PTY 输出直写防黑屏）", async () => {
     vi.useFakeTimers();
-    // 旧恢复格式：terminal-{pageId}-{Date.now}-{seq}（pageId 本身含数字段——
-    // 贪婪正则/切分解析会吞掉 Date.now 段得到错误 pageId，visible 恒 false 黑屏）
+    // CP-004 页前缀协议：pageOfPanelId(panelId) === activePageId → visible；
+    // 旧格式（terminal-{pageId}-{Date.now}-{seq}）经布局迁移页前缀化，运行期
+    // 不再出现（pageOfPanelId 解析不出 → visible=false 属正确保守面）
     useLayout.setState({ activePageId: "page-restore-x" });
     try {
       render(React.createElement(TerminalPanel, {
         api: mocks.mockApi,
-        params: { panelId: "terminal-page-restore-x-1700000000000-1" },
+        params: { panelId: "page-restore-x:terminal-1" },
       }));
       await vi.runAllTimersAsync();
       expect(mocks.pty.spawn).toHaveBeenCalled();
@@ -335,7 +336,8 @@ describe("TerminalPanel", () => {
       act(() => {
         handlePtyOutput({ type: "output", data: { bytes: [104, 105] } }); // "hi"
       });
-      // 前缀匹配判定 visible=true → 直写终端（旧实现恒 false → 永不 flush 黑屏）
+      // 页前缀判定 visible=true → 直写终端（解析错位 → 永不 flush 黑屏的历史
+      // 根因由单一 pageOfPanelId 语义消除）
       expect(mocks.terminal.write).toHaveBeenCalled();
     } finally {
       useLayout.setState({ activePageId: null });

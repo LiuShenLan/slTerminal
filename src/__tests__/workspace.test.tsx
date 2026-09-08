@@ -1,4 +1,4 @@
-// L2 Workspace 测试 — 多 Dockview 实例架构
+// L2 Workspace 测试 — 共享宿主编排（CP-004 单宿主——多实例断言改宿主可见性语义）
 
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { mockIPC, clearMocks } from '@tauri-apps/api/mocks';
@@ -42,7 +42,7 @@ afterAll(() => {
   global.ResizeObserver = originalResizeObserver;
 });
 
-import { render } from '@testing-library/react';
+import { render, waitFor } from '@testing-library/react';
 import Workspace from '../workspace/Workspace';
 import { useProjects } from '../stores/projects';
 import { useLayout } from '../stores/layout';
@@ -72,19 +72,22 @@ afterEach(() => {
 });
 
 describe('Workspace', () => {
-  it('无项目时：只渲染侧栏空白态，不创建 Dockview', () => {
+  it('无项目时：只渲染侧栏空白态，宿主容器隐藏（无活跃页——display:none 空白主区）', async () => {
     mockIPC(() => null);
 
     const { container } = render(<Workspace />);
+    // 宿主就绪（单宿主恒挂载——dockview 不随页面数卸载）
+    await waitFor(() => expect(document.querySelector('.slterm-dock-host')).toBeTruthy());
 
     const text = container.textContent ?? '';
     // 侧栏渲染
     expect(text).toContain('添加项目');
-    // 无 Watermark（无 Dockview 实例因为无 active page）
-    expect(text).not.toContain('打开终端或编辑器开始工作');
+    // 无活跃页 → 宿主隐藏（空白主区语义——原「不创建 Dockview」的等价落点）
+    const host = container.querySelector('.slterm-dock-host') as HTMLElement | null;
+    expect(host!.style.display).toBe('none');
   });
 
-  it('有项目无页面时：侧栏渲染项目名，但不创建 Dockview', () => {
+  it('有项目无页面时：侧栏渲染项目名，宿主隐藏', async () => {
     mockIPC(() => null);
 
     useProjects.getState().addProject({
@@ -97,11 +100,13 @@ describe('Workspace', () => {
     });
 
     const { container } = render(<Workspace />);
+    await waitFor(() => expect(document.querySelector('.slterm-dock-host')).toBeTruthy());
 
     const text = container.textContent ?? '';
     expect(text).toContain('test-project-name');
-    // activePageId 为 null → 无 Dockview → 无 Watermark
-    expect(text).not.toContain('打开终端或编辑器开始工作');
+    // activePageId 为 null → 宿主隐藏（无页组可显）
+    const host = container.querySelector('.slterm-dock-host') as HTMLElement | null;
+    expect(host!.style.display).toBe('none');
   });
 
   it('T17: 活跃页面 + layout 为空 → Watermark 显示（不自动创建终端）', () => {

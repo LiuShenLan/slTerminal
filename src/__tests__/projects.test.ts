@@ -20,7 +20,6 @@ import {
   markPersistenceReady,
   markLoadSucceeded,
   _resetPersistence,
-  MAX_PAGES,
 } from "../stores/projects";
 import type { Project, OperationPage } from "../stores/projects";
 
@@ -354,65 +353,32 @@ describe("projects store", () => {
 
   // ── addPage activePageId 保留 ─────────────────────────────
 
-  // ── FE-01: 页面总数上限 MAX_PAGES ────────────────────────
+  // ── CP-004: addPage 无上限（上限随多实例架构消亡）────────────────
 
-  it("FE-01: MAX_PAGES 常量为 20（S12 跨边界契约）", () => {
-    expect(MAX_PAGES).toBe(20);
-  });
-
-  it("FE-01/FE-36: 全局页面数达 MAX_PAGES 上限 → addPage 拒绝 + toast 告警，状态不变", () => {
-    // FE-36：上限按跨项目全局计数——A 10 页 + B 10 页合计 20，B 再增被拒
-    const pagesA = Array.from({ length: MAX_PAGES / 2 }, (_, i) => makePage(`a-${i}`));
-    const projectA = makeProject({ pages: pagesA, activePageId: pagesA[0].pageId });
-    useProjects.getState().addProject(projectA);
-    const pagesB = Array.from({ length: MAX_PAGES / 2 }, (_, i) => makePage(`b-${i}`));
-    const projectB = makeProject({ pages: pagesB });
-    useProjects.getState().addProject(projectB);
-
-    // STS-11②：structuredClone 深拷贝快照——同引用 toEqual 无法验证不可变性
-    const stateBefore = structuredClone(useProjects.getState().projects);
-    const extra = makePage("extra");
-    useProjects.getState().addPage(projectB.projectId, extra);
-
-    // 拒绝新增：页面数不变、version 不递增、expandedNodes 不新增
-    expect(useProjects.getState().projects[projectB.projectId].pages).toHaveLength(MAX_PAGES / 2);
-    expect(useProjects.getState().projects).toEqual(stateBefore);
-    expect(useProjects.getState().expandedNodes[extra.pageId]).toBeUndefined();
-    // toast 告警（契约文案「页面数已达上限」）
-    expect(mockToastShow).toHaveBeenCalledWith("warning", "页面数已达上限");
-  });
-
-  it("FE-01/FE-36: 全局页面数恰为 MAX_PAGES-1 → addPage 正常新增（边界内不拒绝不告警）", () => {
-    // FE-36：跨项目边界——A 15 页 + B 4 页合计 19，B 再增 1 页成功
-    const pagesA = Array.from({ length: 15 }, (_, i) => makePage(`a-${i}`));
-    const projectA = makeProject({ pages: pagesA });
-    useProjects.getState().addProject(projectA);
-    const pagesB = Array.from({ length: MAX_PAGES - 16 }, (_, i) => makePage(`b-${i}`));
-    const projectB = makeProject({ pages: pagesB });
-    useProjects.getState().addProject(projectB);
-
-    useProjects.getState().addPage(projectB.projectId, makePage("last"));
-
-    expect(useProjects.getState().projects[projectB.projectId].pages).toHaveLength(MAX_PAGES - 15);
+  it("CP-004: 页面无上限——大量页面（超旧上限值 20）可连续新增", () => {
+    // 旧上限契约（FE-01/FE-36 跨项目全局计数=20）随多实例架构消亡——
+    // 单共享宿主下实例数不再随页线性增长。25 页连续新增全部成功、无 toast。
+    const project = makeProject({ pages: [] });
+    useProjects.getState().addProject(project);
+    for (let i = 0; i < 25; i++) {
+      const ok = useProjects.getState().addPage(project.projectId, makePage(`p-${i}`));
+      expect(ok).toBe(true);
+    }
+    expect(useProjects.getState().projects[project.projectId].pages).toHaveLength(25);
     expect(mockToastShow).not.toHaveBeenCalled();
   });
 
-  it("FE-36: 跨项目全局计数——项目 A 15 页 + 项目 B 5 页时，B addPage 拒绝 + toast", () => {
-    // 各项目单独未达上限（均 < MAX_PAGES），但全局合计 20 达上限——B 再增被拒
-    const pagesA = Array.from({ length: 15 }, (_, i) => makePage(`a-${i}`));
-    const projectA = makeProject({ pages: pagesA });
+  it("CP-004: 跨项目多页新增同样不受限（旧 FE-36 全局计数消亡）", () => {
+    const projectA = makeProject({ pages: Array.from({ length: 15 }, (_, i) => makePage(`a-${i}`)) });
+    const projectB = makeProject({ pages: Array.from({ length: 5 }, (_, i) => makePage(`b-${i}`)) });
     useProjects.getState().addProject(projectA);
-    const pagesB = Array.from({ length: 5 }, (_, i) => makePage(`b-${i}`));
-    const projectB = makeProject({ pages: pagesB });
     useProjects.getState().addProject(projectB);
 
-    const stateBefore = structuredClone(useProjects.getState().projects);
-    useProjects.getState().addPage(projectB.projectId, makePage("extra"));
-
-    // 拒绝新增：B 页面数不变、全局状态不变
-    expect(useProjects.getState().projects[projectB.projectId].pages).toHaveLength(5);
-    expect(useProjects.getState().projects).toEqual(stateBefore);
-    expect(mockToastShow).toHaveBeenCalledWith("warning", "页面数已达上限");
+    const ok = useProjects.getState().addPage(projectB.projectId, makePage("extra"));
+    // 成功新增（旧 FE-36 全局 20 上限在 A 15+B 5 时会拒绝——已消亡）
+    expect(ok).toBe(true);
+    expect(useProjects.getState().projects[projectB.projectId].pages).toHaveLength(6);
+    expect(mockToastShow).not.toHaveBeenCalled();
   });
 
   it("addPage 已有 activePageId 时不改变活跃页面", () => {

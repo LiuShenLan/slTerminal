@@ -58,7 +58,7 @@ Agent 历史会话查询与恢复（CLI 无关聚合，MC-310 泛化）。**宿�
 其他约束：
 
 - 初始标题 = `session.title ?? session.sessionId.slice(0, 8)`（人工验证问题 3）。
-- **B14**：panelId 经生成单点 `makeTerminalPanelId`（`terminal-{pageId}-{seq}`，模块级每页计数与 `PageDockviewHost` 共享）——旧格式含 Date.now 数字段破坏解析（visible 恒 false 黑屏 + 幽灵页面导航）。
+- **B14/CP-004**：panelId 经页前缀协议单点 `makeTerminalIdInPage`（`pageGroups.ts`——完整 id = `{pageId}:terminal-N`，local 计数模块级每页共享，与 workspace 各新建入口同源）——旧格式含 Date.now 数字段破坏解析，经布局迁移页前缀化后运行期不再产生。
 - **FE-27 可取消**：`waitFor` 接受 `AbortSignal`；模块级 `restoreAbortRef` Controller，新恢复发起时 abort 上一轮在途恢复。
 - 防重入：模块级 `restoring` 标记。
 - 失败：任何步骤异常 → `sendToastNotification("恢复会话失败", ...)` + console.error。

@@ -125,7 +125,7 @@ function makePayload(
   overrides: Partial<import("../types/agent").AgentEventPayload> = {},
 ): import("../types/agent").AgentEventPayload {
   return {
-    panelId: "terminal-p1-0",
+    panelId: "p1:terminal-0",
     event: "Stop",
     timestamp: Date.now(),
     sessionId: "s1",
@@ -301,7 +301,7 @@ describe("classifyEvent 类别判定委托 profile（MC-420）", () => {
   });
 
   it("反查分支：无 cliId 时经 TerminalRegistry.agentSession.cliId 解析", () => {
-    TerminalRegistry.register("terminal-p1-0", makeTerminalEntry({
+    TerminalRegistry.register("p1:terminal-0", makeTerminalEntry({
       agentSession: { cliId: "test-notify-cli", lastEventAt: Date.now() },
     }));
 
@@ -701,7 +701,7 @@ describe("F4 通知门控", () => {
     act(() => {
       mockOnAgentEventCallback.cb!(makePayload({
         event: "Stop",
-        panelId: "terminal-p1-0",
+        panelId: "p1:terminal-0",
       }));
     });
 
@@ -711,7 +711,7 @@ describe("F4 通知门控", () => {
     expect(options.body).toContain("测试项目");
     expect(options.body).toContain("任务完成");
     // 去路由化后 body 不再含 panelId/面板标题
-    expect(options.body).not.toContain("terminal-p1-0");
+    expect(options.body).not.toContain("p1:terminal-0");
   });
 
   it("sendToastNotification 仅接收两个参数（无 onClick）", () => {

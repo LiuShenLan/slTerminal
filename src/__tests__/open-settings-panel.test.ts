@@ -1,20 +1,23 @@
-// open-settings-panel.test.ts — openSettingsPanel 单元测试（F11，CP-042 事件驱动）
+// open-settings-panel.test.ts — openSettingsPanel 单元测试（F11，CP-042 事件驱动，
+// CP-004 单宿主语义适配）
 //
-// 覆盖：面板 id = settings-{pageId}、addPanel 参数精确（component "settings"、
-//       title "设置"、renderer "always"（CP-017 接线点）、params.panelId）、同页
-//       单例（命中 focus / 未命中 addPanel）、pageId 变化 panelId 跟随、深链
-//       settingsPageId 注入 params.selectedPage、API 延迟注册（registerPageApi
-//       派发事件立即唤醒——原 100ms×50 轮询已删）、事件 detail 非目标页不唤醒、
-//       5s 超时降级（返回 false + console.warn + toast.show 各一次，可观测化）。
-// 真实 pageApis（不 mock），用 registerPageApi/unregisterPageApi 控制模块级
-// pageApiMap；toast 经 lib mock（超时 toast 断言——真实现依赖 ToastHost 渲染）。
+// 覆盖：面板 id = panelIdInPage(pageId, "settings")（页前缀协议）、addPanel 参数
+// 精确（component "settings"、title "设置"、renderer "always"（CP-017 接线点）、
+// position.referenceGroup = 页组 id、params.panelId）、同页单例（命中 focus / 未命中
+// addPanel）、pageId 变化 panelId 跟随、深链 settingsPageId 注入 params.selectedPage、
+// 页组挂载事件驱动唤醒（markPageGroupMounted 派发）、事件 detail 非目标页不唤醒、
+// 5s 超时降级（返回 false + console.warn + toast.show 各一次，可观测化）。
+// 真实 pageApis（不 mock），用 registerHostApi/unregisterHostApi +
+// markPageGroupMounted 控制宿主/页组挂载态；toast 经 lib mock。
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   openSettingsPanel,
-  registerPageApi,
-  unregisterPageApi,
+  registerHostApi,
+  unregisterHostApi,
+  markPageGroupMounted,
 } from "../workspace/pageApis";
+import { pageGroupId } from "../workspace/pageGroups";
 import type { DockviewApi } from "dockview-react";
 
 const { toastShowMock } = vi.hoisted(() => ({
@@ -33,7 +36,14 @@ function dockviewApiStub(): DockviewApi {
       panels.set(params.id, panel);
       return panel;
     }),
+    getGroup: vi.fn(() => ({ id: "g" })),
   } as unknown as DockviewApi;
+}
+
+/** 测试装配：注册宿主 + 标记页组挂载（页面就绪语义——旧 registerPageApi 替代） */
+function markPageReady(pageId: string, api: DockviewApi): void {
+  registerHostApi(api);
+  markPageGroupMounted(pageId);
 }
 
 describe("openSettingsPanel", () => {
@@ -42,33 +52,31 @@ describe("openSettingsPanel", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     toastShowMock.mockReset();
-    // 清理模块级 pageApiMap 跨用例残留
-    unregisterPageApi("page-a");
-    unregisterPageApi("page-b");
+    unregisterHostApi();
     api = dockviewApiStub();
   });
 
   afterEach(() => {
     vi.useRealTimers();
-    unregisterPageApi("page-a");
-    unregisterPageApi("page-b");
+    unregisterHostApi();
   });
 
-  it("API 已注册 → 立即 addPanel + 参数精确（renderer always——CP-017 接线点）", async () => {
-    registerPageApi("page-a", api);
+  it("页组已挂载 → 立即 addPanel + 参数精确（页前缀协议 id + 显式页组 position）", async () => {
+    markPageReady("page-a", api);
     const ok = await openSettingsPanel("page-a");
     expect(ok).toBe(true);
     expect(api.addPanel).toHaveBeenCalledWith({
-      id: "settings-page-a",
+      id: "page-a:settings",
       component: "settings",
       title: "设置",
       renderer: "always",
-      params: { panelId: "settings-page-a" },
+      position: { referenceGroup: pageGroupId("page-a") },
+      params: { panelId: "page-a:settings" },
     });
   });
 
   it("面板已存在 → focus 不新建（同页单例）", async () => {
-    registerPageApi("page-a", api);
+    markPageReady("page-a", api);
     await openSettingsPanel("page-a");
     const addCalls = (api.addPanel as ReturnType<typeof vi.fn>).mock.calls.length;
     await openSettingsPanel("page-a");
@@ -80,31 +88,31 @@ describe("openSettingsPanel", () => {
     expect(panel.focus).toHaveBeenCalled();
   });
 
-  it("API 延迟注册（首次挂载页面）→ registerPageApi 派发事件立即唤醒 addPanel（CP-042）", async () => {
-    const p = openSettingsPanel("page-a"); // 未注册 → 事件监听挂起（无轮询）
-    registerPageApi("page-a", api); // 就绪事件 → 立即唤醒
+  it("页组延迟挂载（首次挂载页面）→ markPageGroupMounted 派发事件立即唤醒 addPanel（CP-042）", async () => {
+    const p = openSettingsPanel("page-a"); // 未挂载 → 事件监听挂起（无轮询）
+    markPageReady("page-a", api); // 就绪事件 → 立即唤醒
     const ok = await p;
     expect(ok).toBe(true);
     expect(api.addPanel).toHaveBeenCalledTimes(1);
     expect(api.addPanel).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "settings-page-a", renderer: "always" }),
+      expect.objectContaining({ id: "page-a:settings", renderer: "always" }),
     );
   });
 
   it("事件 detail 非目标 pageId 不唤醒（CP-042 事件过滤）", async () => {
     const p = openSettingsPanel("page-a");
     // 他页就绪（page-b 派发事件）→ detail 过滤，监听不唤醒
-    registerPageApi("page-b", api);
+    markPageReady("page-b", api);
     await vi.advanceTimersByTimeAsync(100);
     expect(api.addPanel).not.toHaveBeenCalled();
-    // 目标页注册 → 事件驱动唤醒
-    registerPageApi("page-a", api);
+    // 目标页挂载 → 事件驱动唤醒
+    markPageGroupMounted("page-a");
     const ok = await p;
     expect(ok).toBe(true);
     expect(api.addPanel).toHaveBeenCalledTimes(1);
   });
 
-  it("API 永不注册 → 5s 超时降级（返回 false + console.warn + toast.show 各一次）", async () => {
+  it("页面永不挂载 → 5s 超时降级（返回 false + console.warn + toast.show 各一次）", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const p = openSettingsPanel("page-a");
     await vi.advanceTimersByTimeAsync(5000); // 超时防御底线（原 50 次 × 100ms 轮询）
@@ -121,33 +129,34 @@ describe("openSettingsPanel", () => {
     warnSpy.mockRestore();
   });
 
-  it("pageId 变化 → panelId 跟随（每页独立单例）", async () => {
-    registerPageApi("page-a", api);
-    registerPageApi("page-b", api);
+  it("pageId 变化 → panelId 跟随（每页独立单例——页前缀协议）", async () => {
+    markPageReady("page-a", api);
+    markPageReady("page-b", api);
     await openSettingsPanel("page-a");
     await openSettingsPanel("page-b");
     const calls = (api.addPanel as ReturnType<typeof vi.fn>).mock.calls;
-    expect(calls[0][0].id).toBe("settings-page-a");
-    expect(calls[1][0].id).toBe("settings-page-b");
+    expect(calls[0][0].id).toBe("page-a:settings");
+    expect(calls[1][0].id).toBe("page-b:settings");
   });
 
   it("深链 settingsPageId → params.selectedPage 注入（未传则不注入）", async () => {
-    registerPageApi("page-a", api);
+    markPageReady("page-a", api);
     await openSettingsPanel("page-a", "hooks");
     expect(api.addPanel).toHaveBeenCalledWith({
-      id: "settings-page-a",
+      id: "page-a:settings",
       component: "settings",
       title: "设置",
       renderer: "always",
-      params: { panelId: "settings-page-a", selectedPage: "hooks" },
+      position: { referenceGroup: pageGroupId("page-a") },
+      params: { panelId: "page-a:settings", selectedPage: "hooks" },
     });
   });
 
   it("getPanel 命中但面板对象无 focus 方法 → 降级不抛错、addPanel 不再调用", async () => {
-    registerPageApi("page-a", api);
+    markPageReady("page-a", api);
     // 模拟 Dockview 边界：getPanel 返回无 focus 方法的面板对象（只有 id）
     (api.getPanel as ReturnType<typeof vi.fn>).mockReturnValue({
-      id: "settings-page-a",
+      id: "page-a:settings",
     } as unknown as { focus: ReturnType<typeof vi.fn> });
     const addSpy = api.addPanel as ReturnType<typeof vi.fn>;
     // 不抛错：视作已打开，返回 true

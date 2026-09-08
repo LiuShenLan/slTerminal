@@ -99,7 +99,7 @@ GLYPH_E2E=1 node e2e-tests/run-wdio.cjs --spec glyph-repro.e2e.ts
 
 ### Spec 级项目/设置重置（TQ-E-08）
 
-wdio 单 session 共享 app 实例。`wdio.conf.ts` 的 `beforeSuite` 调 `__slterm_e2e_resetProjects()` + `__slterm_e2e_resetSettings()`，防止跨 spec 累积触发 `MAX_PAGES=20` 上限。**不用 `beforeTest`**，否则会清掉 spec 内 `before()` 建的项目。`resetSettings` 不清 hooks 注入状态（hooks.e2e.ts 依赖 ensureHooksInjected 幂等）。
+wdio 单 session 共享 app 实例。`wdio.conf.ts` 的 `beforeSuite` 调 `__slterm_e2e_resetProjects()` + `__slterm_e2e_resetSettings()`——跨 spec 状态隔离（CP-004：页面总数上限已随共享宿主消亡，reset 语义为「用例间 store 清空防累积」，不再防上限触发）。**不用 `beforeTest`**，否则会清掉 spec 内 `before()` 建的项目。`resetSettings` 不清 hooks 注入状态（hooks.e2e.ts 依赖 ensureHooksInjected 幂等）。
 
 ### 用例级重试
 

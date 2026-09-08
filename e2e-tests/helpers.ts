@@ -22,6 +22,7 @@ import { useLayout } from "../src/stores/layout";
 import { makeEmptyLayout } from "../src/features/navTree/NavTree";
 import { titleManager } from "../src/workspace/titleManager";
 import { switchToPageShared, getAllPageApis } from "../src/workspace/pageApis";
+import { isSettingsPanelId, pageIdOfSettingsPanel } from "../src/workspace/pageGroups";
 import { openSettings } from "../src/features/settingsCenter/openSettings";
 import { setSettingsDirty } from "../src/features/settingsCenter/dirtyRegistry";
 import { useFontSize, FONT_SIZE_DEFAULT } from "../src/stores/fontSize";
@@ -254,9 +255,9 @@ function installProjectHelpers(): void {
 
   // __slterm_e2e_resetProjects —— 用例开始前清空项目 store（wdio beforeTest 调用）。
   // 单 session 共享 app 实例（wdio.conf 文件头注释）：前序 spec/用例的项目在
-  // store 累积（一轮可 20+ 项目/30+ 页），S06 FE-36 全局页数上限（MAX_PAGES=20）
-  // 会拒绝后续 addPage（H6/E2E-04 回归根因）。清空粒度 = 用例级——用例内
-  // 多项目累积不受影响（agent R2 切项目往返等）。
+  // store 累积（一轮可 20+ 项目/30+ 页）——reset 语义 = 跨 spec 状态隔离
+  // （CP-004：页面总数上限已随共享宿主消亡，不再防上限触发）。清空粒度 =
+  // 用例级——用例内多项目累积不受影响（agent R2 切项目往返等）。
   window.__slterm_e2e_resetProjects = () => {
     useProjects.setState({ projects: {}, expandedNodes: {} });
     // 同步清 activePageId——残留指向被清项目的 pageId 会使
@@ -275,8 +276,8 @@ function installProjectHelpers(): void {
     return null;
   };
 
-  // __slterm_e2e_addPage —— 在已有项目中新增操作页面（H6 跨页面存活测试）
-  // 返回 null 表示被 store 拒绝（项目不存在/页面总数超 MAX_PAGES 上限）——
+  // __slterm_e2e_addPage —— 在已有项目中新增操作页面（H6 跨页面存活测试；
+  // CP-004 后无页面总数上限——返回 null 仅表示项目不存在）
   // spec 侧 addPage 返回值断言可提前失败，避免切换幽灵页面的隐性超时
   window.__slterm_e2e_addPage = (projectId: string, name: string, rootPath: string) => {
     const pageId = createPageId();
@@ -344,28 +345,35 @@ function installSettingsPanelHelpers(): void {
   // 内部 openSettingsPanel 超时 console.warn 降级）
   window.__slterm_e2e_openSettings = () => openSettings();
 
-  // __slterm_e2e_getSettingsPanelState —— 活跃页面 api 中 settings- 面板的
-  // 选中配置页与面板 id；无 api / 无面板返回 null
+  // __slterm_e2e_getSettingsPanelState —— 活跃页 settings 面板的选中配置页与
+  // 面板 id；无 api / 无面板返回 null（CP-004：设置面板 id 页前缀协议形态
+  // "{pageId}:settings"——按活跃页过滤，同页单例判据不变）
   window.__slterm_e2e_getSettingsPanelState = () => {
     const api = window.__dockviewApi;
     if (!api) return null;
+    const activePageId = useLayout.getState().activePageId;
     for (const panel of api.panels) {
-      if (panel.id.startsWith("settings-")) {
-        const params = panel.params as { selectedPage?: string } | undefined;
-        return { selectedPage: params?.selectedPage ?? null, panelId: panel.id };
-      }
+      if (!isSettingsPanelId(panel.id)) continue;
+      const ownerPage = pageIdOfSettingsPanel(panel.id);
+      if (activePageId !== null && ownerPage !== null && ownerPage !== activePageId) continue;
+      const params = panel.params as { selectedPage?: string } | undefined;
+      return { selectedPage: params?.selectedPage ?? null, panelId: panel.id };
     }
     return null;
   };
 
-  // __slterm_e2e_getSettingsPanelCount —— 活跃页面 api 中 settings- 面板总数
-  // （同页单例断言用：正常 ≤1；无 api 返回 0）
+  // __slterm_e2e_getSettingsPanelCount —— 活跃页 settings 面板总数（同页单例
+  // 断言用：正常 ≤1；无 api 返回 0；CP-004 单宿主下按页前缀过滤）
   window.__slterm_e2e_getSettingsPanelCount = () => {
     const api = window.__dockviewApi;
     if (!api) return 0;
+    const activePageId = useLayout.getState().activePageId;
     let count = 0;
     for (const panel of api.panels) {
-      if (panel.id.startsWith("settings-")) count += 1;
+      if (!isSettingsPanelId(panel.id)) continue;
+      const ownerPage = pageIdOfSettingsPanel(panel.id);
+      if (activePageId !== null && ownerPage !== null && ownerPage !== activePageId) continue;
+      count += 1;
     }
     return count;
   };
@@ -386,13 +394,13 @@ function installSettingsPanelHelpers(): void {
     setSettingsDirty(panelId, dirty);
   };
 
-  // __slterm_e2e_closeAllSettingsPanels —— 遍历全部页面（含隐藏页面）api 关闭
-  // settings 面板。spec 侧兜底清理用：活跃页面 api 清理不到隐藏页面残留面板
-  // （同项目切页面板保留不卸载，TE-03 泄漏根因），须走 pageApiMap 全量遍历
+  // __slterm_e2e_closeAllSettingsPanels —— 关闭全部 settings 面板（含隐藏页组
+  // 残留——单宿主下面板不随切页卸载，TE-03 泄漏根因面仍在，须遍历宿主全量
+  // panels；CP-004 后经页前缀协议判据过滤）
   window.__slterm_e2e_closeAllSettingsPanels = (): void => {
     for (const api of getAllPageApis()) {
       for (const panel of api.panels) {
-        if (panel.id.startsWith("settings-")) panel.api.close();
+        if (isSettingsPanelId(panel.id)) panel.api.close();
       }
     }
   };

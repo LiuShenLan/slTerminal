@@ -107,7 +107,7 @@ describe("openFileInPage", () => {
       filePath: "C:/project/src/index.html",
     });
     expect(typeof call.params.panelId).toBe("string");
-    expect(call.params.panelId.startsWith("htmlviewer-")).toBe(true);
+    expect(call.params.panelId.startsWith("page-1:htmlviewer-")).toBe(true);
     expect(typeof call.title).toBe("string");
   });
 

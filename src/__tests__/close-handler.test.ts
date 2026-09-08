@@ -17,6 +17,8 @@ const mocks = vi.hoisted(() => {
   const mockMarkPersistenceReady = vi.fn();
   const mockUpdatePageLayout = vi.fn();
   const mockSetActivePage = vi.fn();
+  /** CP-004: 关闭 flush = syncHostLayoutToStore（全量 toJSON → 逐页切片写回） */
+  const mockSyncHostLayoutToStore = vi.fn();
   /** 关闭序列第 4 步：statusline 桥接恢复（备份还原，cliId 恒 claude） */
   const mockRestoreStatusline = vi.fn().mockResolvedValue(undefined);
   /** 可变 activePageId（test 3 设为 null 模拟无活跃页面） */
@@ -42,6 +44,7 @@ const mocks = vi.hoisted(() => {
     mockMarkPersistenceReady,
     mockUpdatePageLayout,
     mockSetActivePage,
+    mockSyncHostLayoutToStore,
     mockRestoreStatusline,
     mockErrorBoundaryVariants,
     /** 完整重置（beforeEach 调用） */
@@ -53,6 +56,7 @@ const mocks = vi.hoisted(() => {
       mockMarkPersistenceReady.mockClear();
       mockUpdatePageLayout.mockClear();
       mockSetActivePage.mockClear();
+      mockSyncHostLayoutToStore.mockClear();
       mockRestoreStatusline.mockClear();
       mockErrorBoundaryVariants.length = 0;
     },
@@ -85,6 +89,12 @@ vi.mock("../workspace", () => ({
 
 vi.mock("../workspace/layoutSerde", () => ({
   saveLayout: vi.fn(() => ({ panels: {}, grid: {} })),
+}));
+
+// CP-004: App 关闭 flush 改 syncHostLayoutToStore（单宿主全量 → 逐页切片）——
+// 本测试以 mock 断言调用形态（切片逻辑由 layoutSerde 单测覆盖）
+vi.mock("../workspace/pageApis", () => ({
+  syncHostLayoutToStore: mocks.mockSyncHostLayoutToStore,
 }));
 
 // P1-19: mock pty + TerminalRegistry（App 关闭时 kill 活跃 session）
@@ -250,12 +260,8 @@ describe("onCloseRequested 关闭钩子", () => {
     await handler();
 
     // 验证四步保存序列（preventDefault + destroy 由 registerCloseHandler 封装处理）
-    // flush: updatePageLayout 被调用
-    expect(mocks.mockUpdatePageLayout).toHaveBeenCalledWith(
-      "proj-1",
-      "test-page-1",
-      expect.any(Object),
-    );
+    // flush: syncHostLayoutToStore 收到宿主 api（CP-004 单宿主语义）
+    expect(mocks.mockSyncHostLayoutToStore).toHaveBeenCalledWith({ _mock: true });
     // save
     expect(mocks.mockSaveAllProjects).toHaveBeenCalled();
     // localStorage
@@ -272,18 +278,19 @@ describe("onCloseRequested 关闭钩子", () => {
     await handler();
 
     // 不应崩溃
-    expect(mocks.mockUpdatePageLayout).toHaveBeenCalled();
+    expect(mocks.mockSyncHostLayoutToStore).toHaveBeenCalled();
   });
 
-  it("3. 无 activePageId → 跳过 flush layout 和 localStorage，仅 saveAllProjects", async () => {
+  it("3. 无 activePageId → flush 仍全量同步（单宿主与活跃页解耦），仅跳过 localStorage", async () => {
     mocks.mockActivePageId = null;
     (window as unknown as Record<string, unknown>).__dockviewApi = { _mock: true };
 
     const handler = await renderAndCapture();
     await handler();
 
-    // flush 和 localStorage 应跳过
-    expect(mocks.mockUpdatePageLayout).not.toHaveBeenCalled();
+    // flush 与活跃页解耦（单宿主全量切片——含全部页面）→ 照常调用
+    expect(mocks.mockSyncHostLayoutToStore).toHaveBeenCalled();
+    // localStorage 跳过（无活跃页无从记忆）
     expect(localStorageStub.getItem("slterm-last-active-page")).toBeNull();
     // save 仍需调用
     expect(mocks.mockSaveAllProjects).toHaveBeenCalled();
@@ -296,7 +303,7 @@ describe("onCloseRequested 关闭钩子", () => {
     await handler();
 
     // flush 跳过（无 __dockviewApi）
-    expect(mocks.mockUpdatePageLayout).not.toHaveBeenCalled();
+    expect(mocks.mockSyncHostLayoutToStore).not.toHaveBeenCalled();
     // save + localStorage 仍需调用
     expect(mocks.mockSaveAllProjects).toHaveBeenCalled();
     expect(localStorageStub.getItem("slterm-last-active-page")).toBe("test-page-1");

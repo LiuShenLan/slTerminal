@@ -61,7 +61,7 @@ export const config: WebdriverIO.Config = {
 
   // 每个 spec 开始前清空项目 store——单 session 共享 app 实例（见文件头注释），
   // 前序 spec 的项目在 store 累积（一轮可 20+ 项目/30+ 页），S06 FE-36 全局
-  // 页数上限（MAX_PAGES=20）会拒绝后续 addPage（H6/E2E-04 回归根因）。
+  // 跨 spec 状态隔离（CP-004：页面总数上限已随共享宿主消亡——reset 防 store 累积）。
   // 粒度 = spec 级（beforeSuite 先于 mocha before()——后者建的项目不被清；
   // 不用 beforeTest：wdio 层在 mocha before() 之后执行，会清掉 before()
   // 里建的项目，且 editor 标题等用例依赖 spec 内累积状态）。

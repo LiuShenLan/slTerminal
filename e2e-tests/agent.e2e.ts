@@ -245,7 +245,7 @@ describe("Agent 会话视图与 toast 通知", () => {
       await waitForDockviewApi();
 
       // 1. 创建终端面板（纯 shell——不注入 hooks、不运行编码 CLI，agentSession 为 null）
-      const panelId = `terminal-${pageId}-0`;
+      const panelId = `${pageId}:terminal-0`;
       await addTerminalPanel(panelId);
 
       // 2. 等待 PTY session 就绪（TerminalRegistry 注册）
@@ -292,7 +292,7 @@ describe("Agent 会话视图与 toast 通知", () => {
       await waitForDockviewApi();
 
       // 1. 创建终端面板
-      const panelId = `terminal-${pageId}-0`;
+      const panelId = `${pageId}:terminal-0`;
       await addTerminalPanel(panelId);
 
       // 2. 等待 PTY session 就绪
@@ -577,7 +577,7 @@ describe("Agent 会话视图与 toast 通知", () => {
       await waitForDockviewApi();
 
       // 1. 创建终端面板
-      const panelId = `terminal-${pageId}-0`;
+      const panelId = `${pageId}:terminal-0`;
       await addTerminalPanel(panelId);
 
       // 2. 等待 PTY session 就绪

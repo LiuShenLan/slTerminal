@@ -15,6 +15,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 // side-effect import 注册触发点（SC-FE-04：import 即注册全部配置页）
 import "../../features/settingsCenter/pages";
+import { isSettingsPanelId, pageIdOfSettingsPanel } from "../../workspace/pageGroups";
 import { getSettingsPageRegistry } from "../../features/settingsCenter";
 import type { SettingsPage, SettingsPageGroup } from "../../features/settingsCenter";
 import {
@@ -217,13 +218,14 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
   const [corrupted, setCorrupted] = useState(false);
   const [bannerDismissed, setBannerDismissed] = useState(false);
 
-  /** 显式布局保存终点（照 HooksConfigPanel handleLayoutPersist 先例改 settings- 前缀）：
+  /** 显式布局保存终点（照 HooksConfigPanel handleLayoutPersist 先例改 settings 面板）：
       经 pageId 查 projId 写 store，等价于页面级 onLayoutChange 链 */
   const handleLayoutPersist = useCallback(
     (layout: Record<string, unknown>) => {
       const panelId = params?.panelId;
-      if (!panelId?.startsWith("settings-")) return;
-      const pageId = panelId.slice("settings-".length);
+      if (!isSettingsPanelId(panelId)) return;
+      const pageId = pageIdOfSettingsPanel(panelId);
+      if (pageId === null) return;
       const { projects } = useProjects.getState();
       for (const [projId, proj] of Object.entries(projects)) {
         if (proj.pages.some((p) => p.pageId === pageId)) {
@@ -344,8 +346,9 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
   //   closeGuardRef 弹窗期间防重入（projects 异步变化会重跑 effect，弹窗不得堆叠）。
   useEffect(() => {
     const panelId = params?.panelId;
-    if (!panelId?.startsWith("settings-")) return;
-    const ownPageId = panelId.slice("settings-".length);
+    if (!isSettingsPanelId(panelId)) return;
+    const ownPageId = pageIdOfSettingsPanel(panelId);
+    if (ownPageId === null) return;
     const findProjectId = (pageId: string): string | null => {
       for (const [projId, proj] of Object.entries(projects)) {
         if (proj.pages.some((p) => p.pageId === pageId)) return projId;

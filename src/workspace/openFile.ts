@@ -18,6 +18,7 @@ import type { DockviewApi } from "dockview-react";
 import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
 import { titleManager } from "./titleManager";
+import { panelIdInPage, pageGroupId } from "./pageGroups";
 import { PANEL_EDITOR, isAlwaysRenderPanel } from "../panelRegistry";
 import { fileViewerRegistry } from "../features/fileViewers";
 
@@ -94,18 +95,22 @@ export function openFileInPage(
     ? titleManager.getFileEditorTitle(activePageId, root, filePath)
     : titleManager.getFileEditorTitle(activePageId, "", filePath);
 
-  const panelId = `${panelType}-${Date.now()}`;
+  // CP-004：面板 id 页前缀协议（localId 免撞号——页前缀保证宿主内全局唯一）
+  const localId = `${panelType}-${Date.now()}`;
+  const panelId = panelIdInPage(activePageId, localId);
   // 文件预览类面板（htmlviewer 等）使用 renderer: "always" 保持 iframe/canvas
   // browsing context 存活，避免页签切换/分屏时 DOM 移除导致白屏闪屏
   const renderer = isAlwaysRenderPanel(panelType) ? ("always" as const) : undefined;
 
-  // addPanel 可能抛异常（如布局状态不一致），try-catch 防止 titleManager 状态污染
+  // addPanel 可能抛异常（如布局状态不一致），try-catch 防止 titleManager 状态污染；
+  // options.group 显式指定目标页组（生命周期契约）
   try {
     dockApi.addPanel({
       id: panelId,
       component: panelType,
       title,
       params: { panelId, filePath },
+      position: { referenceGroup: pageGroupId(activePageId) },
       ...(renderer ? { renderer } : {}),
     });
   } catch {

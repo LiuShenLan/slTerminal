@@ -1,26 +1,23 @@
-// PageDockviewHost — 单个操作页面的 Dockview 实例
+// PageDockviewHost — 共享宿主支持模块（CP-004/S11 改造：原「每页一实例组件」
+// 消亡——DockviewReact 渲染收敛 Workspace 单一宿主（WorkspaceDockHost.tsx），
+// 本文件只保留与实例无关的共享件：DefaultTab、Watermark、RightHeader、页签
+// 右键菜单（自研 TabMenuPopup + createTabMenuItems 纯函数）、标题应用辅助函数。
 //
-// 包含 PageDockview 组件及其依赖：DefaultTab、Watermark、RightHeader、页签右键菜单
-// （自研 TabMenuPopup + createTabMenuItems 纯函数）、标题应用辅助函数。
-// 从 Workspace.tsx 提取，Workspace.tsx 只保留编排层。
-//
-// F1: PageDockview 用 React.memo 包裹，配合稳定化 props 减少不必要的重渲染。
-// F2: savedLayout 通过 useRef 读取，不进入 handleReady 的 useCallback deps。
+// 页组语义：操作页面 = 宿主内顶级页组（pageGroups.ts 协议），面板 id 全量
+// 页前缀（{pageId}:localId）；本文件各工厂不再闭包页面实例，目标页在 action
+// 时点解析（panel 属主页 / 活跃页），跨实例假设清零。
 
-import React, { useCallback, useRef, useState, useMemo, useEffect } from "react";
+import React, { useMemo, useState, useEffect } from "react";
 import {
-  DockviewReact,
   type DockviewApi,
   type DockviewGroupPanel,
   type IDockviewPanelProps,
   type IDockviewHeaderActionsProps,
   type IWatermarkPanelProps,
 } from "dockview-react";
-import { panelRegistry, PANEL_TERMINAL } from "../panelRegistry";
+import { PANEL_TERMINAL } from "../panelRegistry";
 import { FileIcon } from "../features/explorer/FileIcon";
 import { closeTabGuarded, closeTabsGuarded } from "./tabClose";
-import { saveLayout, loadLayout } from "./layoutSerde";
-import { makeTerminalPanelId, advanceTerminalPanelSeq } from "../lib/panelId";
 import { StatusDot } from "../lib/StatusDot";
 import type { AgentStatus } from "../lib/agentStatus";
 import { titleManager } from "./titleManager";
@@ -31,6 +28,10 @@ import { copyRelativePath } from "../lib/copyRelativePath";
 import { TabMenuPopup } from "./TabMenuPopup";
 import type { TabMenuItem } from "./TabMenuPopup";
 import { IconEmptyBox } from "../lib/icons";
+import { pageOfPanelId, pageGroupId, pageIdOfGroupId, makeTerminalIdInPage } from "./pageGroups";
+import { useLayout } from "../stores/layout";
+import { useProjects } from "../stores/projects";
+import { saveLayout } from "./layoutSerde";
 import {
   SECONDARY_BG,
   PLACEHOLDER_FG,
@@ -75,95 +76,126 @@ export interface TabMenuPanel {
 }
 
 /**
- * DefaultTab → PageDockview 的右键上报事件（window CustomEvent 协议）。
- * dockview-react 渲染 DefaultTab 的 framework part 不在 PageDockview 的 React
- * 子树内（context 不传播），故走事件广播（slterm:file-saved-as 先例）：
- * 各 PageDockview 实例均监听，经自身 apiRef.getPanel(panelId) 解析——panelId
- * 全局唯一（每页自持 dockview），仅拥有该面板的页面命中并弹菜单，无需 pageId 过滤。
+ * DefaultTab → 宿主的右键上报事件（window CustomEvent 协议）。
+ * dockview-react 渲染 DefaultTab 的 framework part 不在 React 子树内（context
+ * 不传播），故走事件广播（slterm:file-saved-as 先例）：宿主（唯一）监听，
+ * 经 getPanel(panelId) 解析——panelId 页前缀全局唯一，命中即弹菜单。
  */
 export const TAB_CONTEXT_MENU_EVENT = "slterm:tab-context-menu";
 
-/** 事件 detail（panelId 全局唯一；x/y 为右键视口坐标，fixed 定位） */
+/** 事件 detail（panelId 页前缀全局唯一；x/y 为右键视口坐标，fixed 定位） */
 export interface TabContextMenuDetail {
   panelId: string;
   x: number;
   y: number;
 }
 
-export interface PageDockviewProps {
-  pageId: string;
-  cwd: string | undefined;
-  rootPath: string | undefined;
-  savedLayout: Record<string, unknown> | undefined;
-  visible: boolean;
-  onReady: (api: DockviewApi) => void;
-  onLayoutChange: (layout: Record<string, unknown>) => void;
+/** 目标页组解析（action 时点）：面板属主页组优先，兜底活跃页组 */
+function resolvePageId(panelId: string | undefined, fallbackPageId: string | null): string | null {
+  const owner = panelId !== undefined ? pageOfPanelId(panelId) : null;
+  return owner ?? fallbackPageId;
+}
+
+/**
+ * 新建终端面板（宿主内共享工厂——Watermark/RightHeader/右键菜单三入口合一）：
+ * addPanel 显式 position.referenceGroup = 目标页组（生命周期契约——新增面板
+ * options.group 显式指定，不随切页卸载；页组 id 字符串形态，组未挂载时
+ * dockview 抛错前先经 getGroup 守卫返回 null）。
+ */
+export function addTerminalPanel(
+  api: DockviewApi,
+  pageId: string,
+  cwd: string | undefined,
+): string | null {
+  const gid = pageGroupId(pageId);
+  if (!api.getGroup(gid)) return null;
+  const id = makeTerminalIdInPage(pageId);
+  api.addPanel({
+    id,
+    component: PANEL_TERMINAL,
+    title: titleManager.getTerminalTitle(pageId),
+    params: { panelId: id, cwd },
+    renderer: "always",
+    position: { referenceGroup: gid },
+  });
+  return id;
 }
 
 // ---- 工厂函数 ----
 
-/** 创建 Watermark 组件（捕获 pageId + cwd 闭包；导出供 L2 测试直测——TQ-A-04） */
+/**
+ * 创建 Watermark 组件（空页组接管——dockview 对空组渲染 watermarkComponent）。
+ * 目标页 = 点击时点活跃页（空页组即活跃页组；containerApi.addPanel 无
+ * position 落活跃组）。捕获 cwd 由活跃页上下文现取，不闭包页面实例。
+ */
 export function createWatermark(
-  nextPanelId: () => string,
-  pageId: string,
-  cwd: string | undefined,
+  getApi: () => DockviewApi | null,
 ): React.FC<IWatermarkPanelProps> {
-  const Watermark: React.FC<IWatermarkPanelProps> = ({ containerApi }) => (
-    <div
-      style={{
-        display: "flex", flexDirection: "column", alignItems: "center",
-        justifyContent: "center", height: "100%", // UI-204：正文 13px
-        userSelect: "none", gap: 12,
-      }}
-    >
-      {/* GL-05：空态统一——15px 线性图标 fg-4 + 说明文字 fg-3 */}
-      <span style={{ color: PLACEHOLDER_FG, display: "flex" }}>
-        <IconEmptyBox size={15} />
-      </span>
-      <span style={{ color: DIM_FG, fontSize: 13 }}>{WATERMARK_TEXT}</span>
-      <div style={{ display: "flex", gap: 8 }}>
-        <button
-          onClick={() => {
-            const id = nextPanelId();
-            const title = titleManager.getTerminalTitle(pageId);
-            containerApi.addPanel({
-              id, component: PANEL_TERMINAL, title,
-              params: { panelId: id, cwd }, renderer: "always",
-            });
-          }}
-          style={{
-            background: SECONDARY_BG, border: `1px solid ${SEPARATOR_BG}`, color: SIDEBAR_FG,
-            // FE-16: 圆角 6（UI-306 按钮档）
-            cursor: "pointer", fontSize: 13, padding: "4px 12px", borderRadius: 6,
-          }}
-        >新建终端</button>
+  const Watermark: React.FC<IWatermarkPanelProps> = () => {
+    const pageId = useLayout((s) => s.activePageId);
+    const cwd = useMemo(() => {
+      if (!pageId) return undefined;
+      const { projects } = useProjects.getState();
+      for (const [, proj] of Object.entries(projects)) {
+        const p = proj.pages.find((pg) => pg.pageId === pageId);
+        if (p) return p.cwd ?? proj.rootPath;
+      }
+      return undefined;
+    }, [pageId]);
+    return (
+      <div
+        style={{
+          display: "flex", flexDirection: "column", alignItems: "center",
+          justifyContent: "center", height: "100%", // UI-204：正文 13px
+          userSelect: "none", gap: 12,
+        }}
+      >
+        {/* GL-05：空态统一——15px 线性图标 fg-4 + 说明文字 fg-3 */}
+        <span style={{ color: PLACEHOLDER_FG, display: "flex" }}>
+          <IconEmptyBox size={15} />
+        </span>
+        <span style={{ color: DIM_FG, fontSize: 13 }}>{WATERMARK_TEXT}</span>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button
+            onClick={() => {
+              // 空页组 = 当前活跃页（可见性单点保证），落活跃页组
+              const api = getApi();
+              if (!api) return;
+              const target = useLayout.getState().activePageId;
+              if (target) void addTerminalPanel(api, target, cwd);
+            }}
+            style={{
+              background: SECONDARY_BG, border: `1px solid ${SEPARATOR_BG}`, color: SIDEBAR_FG,
+              // FE-16: 圆角 6（UI-306 按钮档）
+              cursor: "pointer", fontSize: 13, padding: "4px 12px", borderRadius: 6,
+            }}
+          >新建终端</button>
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
   return Watermark;
 }
 
-/** 创建 RightHeaderActions 组件（捕获 pageId + cwd 闭包） */
+/** 创建 RightHeaderActions 组件（组头 + 钮——新建终端落本组） */
 function createRightHeader(
-  nextPanelId: () => string,
-  pageId: string,
-  cwd: string | undefined,
+  getApi: () => DockviewApi | null,
 ): React.FC<IDockviewHeaderActionsProps> {
-  const Header: React.FC<IDockviewHeaderActionsProps> = ({ containerApi, group }) => {
+  const Header: React.FC<IDockviewHeaderActionsProps> = ({ group }) => {
     // TAB-04: + 钮 hover 状态（同 DefaultTab ×——inline style 无法表达 :hover，
     // 执行期定为 React 状态）
     const [hovered, setHovered] = useState(false);
+    const pageId = useLayout((s) => s.activePageId);
     return (
       <div style={{ display: "flex", alignItems: "center", height: "100%", paddingRight: 4 }}>
         <button
           onClick={() => {
-            const id = nextPanelId();
-            const title = titleManager.getTerminalTitle(pageId);
-            containerApi.addPanel({
-              id, component: PANEL_TERMINAL, title,
-              params: { panelId: id, cwd }, renderer: "always",
-              position: { referenceGroup: group },
-            });
+            // 目标页 = 组属主页（页组协议解析）兜底活跃页——页组可见性单点保证
+            // 非活跃页组不可见不可点，两值同页
+            const api = getApi();
+            if (!api || !pageId) return;
+            const ownerPage = pageIdOfGroupId(group.id) ?? pageId;
+            void addTerminalPanel(api, ownerPage, undefined);
           }}
           onMouseEnter={() => setHovered(true)}
           onMouseLeave={() => setHovered(false)}
@@ -207,21 +239,23 @@ export function applyRename(
 // ---- 页签右键菜单（自研——dockview 8.1 free core 无 contextMenuService，
 //      getTabContextMenuItems 路径恒短路，菜单机制自绘于 TabMenuPopup，见 workspace/CLAUDE.md）----
 
-/** 创建页签右键菜单项构建器（纯函数导出供 L2 直测）。捕获 nextPanelId/pageId/
-    onRenameRequest/getApi/projectRootPath 闭包；右键面板由调用方经
-    containerApi.getPanel(panelId) 反查后传入（dockview 真实 IDockviewPanel 结构
-    赋值给 TabMenuPanel 自动成立）。action 内面板/组引用取右键瞬间快照，行为与
-    dockview 6.6.1 原生菜单零漂移 */
+/**
+ * 创建页签右键菜单项构建器（纯函数导出供 L2 直测）。
+ * 单宿主下右键面板属主页 = 菜单目标页（页前缀协议解析，兜底入参 pageId）；
+ * action 内面板/组引用取右键瞬间快照，行为与 dockview 6.6.1 原生菜单零漂移。
+ * @param getApi 返回宿主 dockview api（宿主 onReady 后恒非空）
+ * @param pageId 菜单构建时已知页（panelId 无页前缀的测试/防御形态兜底）
+ */
 export function createTabMenuItems(
-  nextPanelId: () => string,
-  pageId: string,
-  onRenameRequest: (panel: TabMenuPanel) => void,
-  /** 返回当前 dockview api（PageDockview 传 () => apiRef.current；右键必在 onReady 后） */
   getApi: () => DockviewApi | null,
+  pageId: string | null,
+  onRenameRequest: (panel: TabMenuPanel) => void,
   /** 页面所属项目根——「复制相对路径」基准（区别于浏览 cwd，每页恒定） */
   projectRootPath?: string,
 ): (panel: TabMenuPanel) => TabMenuItem[] {
   return (panel: TabMenuPanel) => {
+    // 单宿主右键目标必在可见（活跃）页组；面板属主页解析（防御跨页组残留）
+    const menuPageId = resolvePageId(panel.id, pageId);
     // 仅终端面板显示「重命名」：判据为 view.contentComponent（panel.component 不存在）
     const isTerminal = panel.view.contentComponent === PANEL_TERMINAL;
     // claude 运行中（agentSession 存在即运行中，二态模型）→ 禁用重命名；
@@ -239,15 +273,10 @@ export function createTabMenuItems(
       item("新建终端", {
         action: () => {
           // FE-04: 点击时才分配编号（延迟到 action 执行，而非菜单构建时）
-          const newTerminalId = nextPanelId();
           const api = getApi();
-          if (!api) return; // 理论不可达——右键必在 onReady 之后
-          // 新面板入右键面板所在组；group 缺失（理论不可达）时省略 position 回退活跃组
-          const group = panel.api.group;
-          api.addPanel(
-            { id: newTerminalId, component: PANEL_TERMINAL, title: titleManager.getTerminalTitle(pageId),
-              params: { panelId: newTerminalId }, renderer: "always",
-              ...(group ? { position: { referenceGroup: group } } : {}) });
+          if (!api || !menuPageId) return; // 理论不可达——右键必在宿主就绪后
+          // 新面板落 menuPageId 页组（addTerminalPanel 显式 position referenceGroup）
+          void addTerminalPanel(api, menuPageId, undefined);
         },
       }),
       "separator",
@@ -274,7 +303,7 @@ export function createTabMenuItems(
       item("关闭", {
         danger: true,
         // FE-49: 单面板「关闭」与 ×/Ctrl+W/中键同走共享守卫 closeTabGuarded——
-        // panelId 取 params（判据同 DefaultTab 的 settings- 前缀，同源无漂移）
+        // panelId 取 params（判据同 DefaultTab 的 settings 面板形态，同源无漂移）
         action: () => {
           void closeTabGuarded(
             panel.api,
@@ -319,10 +348,10 @@ export function createTabMenuItems(
   };
 }
 
-// ---- 辅助函数 ----
+// ---- 辅助函数（宿主生命周期消费——WorkspaceDockHost） ----
 
 /** 将 TitleUpdate[] 应用到 DockviewApi（批量 setTitle） */
-function applyTitleUpdates(
+export function applyTitleUpdates(
   api: DockviewApi,
   updates: TitleUpdate[],
 ): void {
@@ -332,40 +361,39 @@ function applyTitleUpdates(
   }
 }
 
-/** 遍历 DockviewApi 中所有面板，重建 titleManager 注册表并重算标题 */
-function rebuildAndRecomputeTitles(
+/**
+ * 页布局恢复后重建标题注册表并重算（宿主 restore/页组并入后逐页调用）：
+ * - 终端 pass：恢复的终端面板（无 customTitle）用 titleManager 重算编号——
+ *   持久化 title 可能是瞬态值（如 claude 运行中退出保存的 "claude"），恢复后
+ *   必须回 terminal-N；F8 自定义名（customTitle）保留。
+ * - 编辑器注册：文件型面板（params.filePath）按页登记后重算冲突标题。
+ * @param panelIds 该页全部面板 id（panelsOfPage 输出）
+ */
+export function rebuildAndRecomputeTitles(
   api: DockviewApi,
   pageId: string,
   rootPath: string | undefined,
+  panelIds: string[],
 ): void {
-  // B12: 终端 pass——布局恢复的终端面板（无 customTitle）用 titleManager 重算编号。
-  // 持久化 title 可能是瞬态值（如 claude 运行中退出保存的 "claude"），恢复后
-  // 必须回 terminal-N；F8 自定义名（customTitle）保留。终端编号不依赖项目根，
-  // 此 pass 置于 rootPath 检查之前。
-  for (const panel of api.panels) {
-    const params = panel.params as { panelId?: string; customTitle?: string } | undefined;
+  for (const panelId of panelIds) {
+    const panel = api.getPanel(panelId);
+    if (!panel) continue;
+    const params = panel.params as TabParams | undefined;
     if (!params?.panelId) continue;
-    if (panel.view?.contentComponent !== PANEL_TERMINAL) continue;
-    if (params.customTitle !== undefined) continue;
-    panel.api.setTitle(titleManager.getTerminalTitle(pageId));
-  }
-
-  if (!rootPath) return;
-
-  // 遍历所有面板，重建编辑器注册表
-  for (const panel of api.panels) {
-    const params = panel.params as { panelId?: string; filePath?: string } | undefined;
-    if (!params?.panelId) continue;
-    // FE-22: 从 params 判断面板类型（替代 panel.view?.contentComponent 非公共 API）
-    // 文件型面板（editor/htmlviewer）的 params 携带 filePath
+    if (panel.view?.contentComponent === PANEL_TERMINAL) {
+      if (params.customTitle === undefined) {
+        panel.api.setTitle(titleManager.getTerminalTitle(pageId));
+      }
+      continue;
+    }
+    // 文件型面板（editor/htmlviewer 等）的 params 携带 filePath
     const filePath = params.filePath;
     if (filePath !== undefined) {
-      // 先注销旧条目（避免 fromJSON 重复注册）
-      titleManager.unregisterEditor(pageId, params.panelId);
-      titleManager.registerEditor(pageId, params.panelId, filePath);
+      titleManager.unregisterEditor(pageId, panelId);
+      titleManager.registerEditor(pageId, panelId, filePath);
     }
   }
-
+  if (!rootPath) return;
   const updates = titleManager.recomputeTitles(pageId, rootPath);
   applyTitleUpdates(api, updates);
 }
@@ -437,7 +465,7 @@ export const DefaultTab: React.FC<IDockviewPanelProps> = (props) => {
       onContextMenu={(e) => {
         // 自研页签右键菜单（dockview 8.1 free core 无 contextMenuService，库内路径恒短路）：
         // preventDefault/stopPropagation 拦 WebView 原生菜单与库内死监听，经 CustomEvent
-        // 上报各 PageDockview——拥有该 panelId 的页面解析并弹 TabMenuPopup。
+        // 上报宿主——宿主 getPanel(panelId) 解析命中后弹 TabMenuPopup。
         // 无 panelId（裸面板/直渲染测试）→ 不拦截不弹
         const panelId = tabParams?.panelId;
         if (!panelId) return;
@@ -453,7 +481,7 @@ export const DefaultTab: React.FC<IDockviewPanelProps> = (props) => {
         // 完成按下+弹起时触发——按下后拖离再弹起即天然取消）；目标 = 本页签自身
         // api，无需聚焦/激活（对比 Ctrl+W 的 activePanel 语义）。中键不触发 × 的
         // onClick（click 仅主键），× 上的中键经冒泡同样走本路径关闭（浏览器惯例）。
-        // autoscroll 预防已由 PageDockview 容器 capture mousedown 单点拦截；
+        // autoscroll 预防已由宿主容器 capture mousedown 单点拦截；
         // auxclick 无库内默认动作，preventDefault 仅防御（dockview 对 auxclick
         // 零消费，无需 stopPropagation）
         if (e.button !== 1) return;
@@ -523,238 +551,20 @@ export const DefaultTab: React.FC<IDockviewPanelProps> = (props) => {
   );
 };
 
-// ---- PageDockview（React.memo 包裹）----
-
 /**
- * 单个操作页面的 Dockview 实例。
- * F1: React.memo 包裹 + F2: savedLayout 经 useRef 去稳 handleReady。
+ * 宿主级 dockview 主题/容器样式（单宿主唯一实例挂载点共享——变量注入 +
+ * display:none 态：无活跃页（删除末页/项目移除）时整宿主隐藏，与旧
+ * 「各页实例级 display」的空白主区语义一致）。
  */
-const PageDockview: React.FC<PageDockviewProps> = React.memo(({
-  pageId, cwd, rootPath, savedLayout, visible, onReady: onApiReady, onLayoutChange,
-}) => {
-  const apiRef = useRef<DockviewApi | null>(null);
-  const restoreGuardRef = useRef(false);
-  /** 收集 handleReady 内注册的三个 disposable（onDidLayoutFromJSON/onDidLayoutChange/onDidRemovePanel） */
-  const disposablesRef = useRef<Array<{ dispose(): void }>>([]);
-  /** FE-49: 容器根 ref——页签条防 autoscroll 捕获监听的挂载点（见下方 effect） */
-  const containerRef = useRef<HTMLDivElement>(null);
+export function hostContainerStyle(visible: boolean): Record<string, string> {
+  return {
+    ...dockviewVarStyle(),
+    display: visible ? "block" : "none",
+    width: "100%",
+    height: "100%",
+  };
+}
 
-  // F2: savedLayout 通过 useRef 读取，不进入 handleReady 的 useCallback deps
-  const savedLayoutRef = useRef(savedLayout);
-  savedLayoutRef.current = savedLayout;
-
-  /** per-page 稳定 panel ID 生成器（B14：生成单点 makeTerminalPanelId，与
-   *  restoreSession 共享模块级每页计数——同页手动终端与恢复终端 id 互斥） */
-  const nextPanelId = useCallback((): string => {
-    return makeTerminalPanelId(pageId);
-  }, [pageId]);
-
-  // per-page 子组件（useMemo 防止每次渲染重建组件引用）
-  const Watermark = useMemo(
-    () => createWatermark(nextPanelId, pageId, cwd),
-    [nextPanelId, pageId, cwd],
-  );
-  const RightHeader = useMemo(
-    () => createRightHeader(nextPanelId, pageId, cwd),
-    [nextPanelId, pageId, cwd],
-  );
-  // 重命名弹窗目标面板（右键菜单「重命名」→ setRenameTarget → 渲染 TerminalRenameDialog）
-  const [renameTarget, setRenameTarget] = useState<{ panel: TabMenuPanel; initialTitle: string } | null>(null);
-  // ref 模式读取当前目标（handleRenameConfirm 保持稳定引用，照 ExplorerPanel actions 模式）
-  const renameTargetRef = useRef(renameTarget);
-  renameTargetRef.current = renameTarget;
-
-  /** 打开重命名弹窗（预填 customTitle 优先，避免预填运行中命令的瞬态标题） */
-  const openRenameDialog = useCallback((panel: TabMenuPanel) => {
-    const p = panel.params as TabParams | undefined;
-    setRenameTarget({ panel, initialTitle: p?.customTitle ?? panel.title ?? "" });
-  }, []);
-
-  /** 重命名确认：applyRename（写 customTitle + setTitle + 显式保存）后关闭弹窗 */
-  const handleRenameConfirm = useCallback((newTitle: string) => {
-    const target = renameTargetRef.current;
-    const api = apiRef.current;
-    if (target && api) {
-      applyRename(api, target.panel, newTitle, onLayoutChange);
-      setRenameTarget(null);
-    }
-  }, [onLayoutChange]);
-
-  // 页签右键菜单状态（自研：PageDockview 单点持有 x/y/items，DefaultTab 只上报意图）
-  const [tabMenu, setTabMenu] = useState<{ x: number; y: number; items: TabMenuItem[] } | null>(null);
-
-  /** 菜单项构建器（action 执行时经 getApi 取当前 dockview api——右键必在 onReady 后） */
-  const buildTabMenuItems = useMemo(
-    () => createTabMenuItems(nextPanelId, pageId, openRenameDialog, () => apiRef.current, rootPath),
-    [nextPanelId, pageId, openRenameDialog, rootPath],
-  );
-
-  const closeTabMenu = useCallback(() => setTabMenu(null), []);
-
-  // 页签右键事件监听：DefaultTab 广播 TAB_CONTEXT_MENU_EVENT（各页实例均收到），
-  // 经自身 apiRef.getPanel(panelId) 解析——panelId 全局唯一，仅拥有该面板的页面
-  // 命中并弹菜单；panelId 空/面板已关闭 → no-op 不弹
-  useEffect(() => {
-    const onTabContextMenu = (e: Event) => {
-      const detail = (e as CustomEvent<TabContextMenuDetail>).detail;
-      const api = apiRef.current;
-      if (!api || !detail?.panelId) return;
-      const panel = api.getPanel(detail.panelId);
-      if (!panel) return;
-      setTabMenu({ x: detail.x, y: detail.y, items: buildTabMenuItems(panel) });
-    };
-    window.addEventListener(TAB_CONTEXT_MENU_EVENT, onTabContextMenu);
-    return () => window.removeEventListener(TAB_CONTEXT_MENU_EVENT, onTabContextMenu);
-  }, [buildTabMenuItems]);
-
-  // FE-49: 页签条防 autoscroll 捕获监听——dockview 页签列表 .dv-tabs-container 为
-  // overflow:auto（可横向滚动），中键按下会启动 Chromium autoscroll（滚动光标+
-  // 随拖动滚动）；capture 挂本容器根，单点覆盖所有分屏组 header（含页签缝隙、
-  // void 空白、actions 区）。只 preventDefault 消默认动作、不做关闭——关闭在
-  // auxclick 弹起路径（DefaultTab 内处理），且 mousedown preventDefault 不影响
-  // auxclick 触发；preventDefault 不拦传播，dockview 自身 pointerdown 对
-  // button!==0 本就 no-op，无冲突。页面 display:none 时事件不达，多页实例无需
-  // 额外开关；卸载 effect 清理
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const onMiddleDown = (e: MouseEvent) => {
-      if (e.button !== 1) return;
-      if ((e.target as Element | null)?.closest?.(".dv-tabs-and-actions-container")) {
-        e.preventDefault();
-      }
-    };
-    el.addEventListener("mousedown", onMiddleDown, { capture: true });
-    return () => el.removeEventListener("mousedown", onMiddleDown, { capture: true });
-  }, []);
-
-  // F2: savedLayout 已从 deps 移除——通过 savedLayoutRef.current 读取
-  const handleReady = useCallback((event: { api: DockviewApi }) => {
-    const { api } = event;
-    apiRef.current = api;
-    onApiReady(api);
-
-    // FE-04: 先清理旧监听器（handleReady 重触发或页面重建时防泄漏）
-    disposablesRef.current.forEach((d) => d.dispose());
-    disposablesRef.current = [];
-
-    // 恢复保存的布局（无布局时留空，由 Watermark 组件接管显示）
-    const layout = savedLayoutRef.current;
-    let restored = false;
-    if (layout && Object.keys(layout).length > 0) {
-      restored = loadLayout(api, layout);
-    }
-    // 不创建默认终端——空白页面由 watermarkComponent 渲染
-    // "打开终端或编辑器开始工作"，用户可点击"新建终端"按钮
-
-    // 从保存布局恢复后，重建编辑器注册表并重算标题（忽略持久化的 title）
-    if (restored) {
-      // B14: 先把本页终端序号计数推进到现有面板 max+1——布局恢复的持久化
-      // 面板不占用计数，不推进则后续新建/恢复终端可能与已存在面板 id 重号
-      advanceTerminalPanelSeq(
-        pageId,
-        api.panels.map((p) => p.id),
-      );
-      rebuildAndRecomputeTitles(api, pageId, rootPath);
-    }
-
-    // fromJSON 恢复守卫 — 程序化恢复不触发布局保存
-    disposablesRef.current.push(
-      api.onDidLayoutFromJSON(() => {
-        restoreGuardRef.current = true;
-        setTimeout(() => { restoreGuardRef.current = false; }, 0);
-      }),
-    );
-
-    // 布局变更 → 保存到 store（硬约束 #7）
-    disposablesRef.current.push(
-      api.onDidLayoutChange(() => {
-        if (restoreGuardRef.current) return;
-        const layout = saveLayout(api);
-        onLayoutChange(layout as Record<string, unknown>);
-      }),
-    );
-
-    // 面板关闭 → 注销编辑器 + 重算剩余面板标题
-    disposablesRef.current.push(
-      api.onDidRemovePanel((panel) => {
-        const params = panel.params as { panelId?: string } | undefined;
-        if (params?.panelId) {
-          titleManager.unregisterEditor(pageId, params.panelId);
-        }
-        if (rootPath) {
-          const updates = titleManager.recomputeTitles(pageId, rootPath);
-          applyTitleUpdates(api, updates);
-        }
-      }),
-    );
-  }, [onApiReady, cwd, pageId, rootPath, nextPanelId, onLayoutChange]);
-  // 注意：savedLayout 已从 deps 移除——通过 savedLayoutRef 读取最新值
-
-  // FE-04: 组件卸载时清理所有 disposable（onDidLayoutFromJSON/onDidLayoutChange/onDidRemovePanel）
-  useEffect(() => {
-    return () => {
-      disposablesRef.current.forEach((d) => d.dispose());
-    };
-  }, []);
-
-  // 页面隐藏（切页 display:none）时清菜单——多页实例各自持菜单态，防回页旧菜单复活
-  useEffect(() => {
-    if (!visible) setTabMenu(null);
-  }, [visible]);
-
-  // 监听 slterm:file-saved-as 事件（Ctrl+S 另存为 / 首次保存后更新标题）
-  useEffect(() => {
-    const onSaveAs = (e: Event) => {
-      const detail = (e as CustomEvent).detail as {
-        panelId: string;
-        oldPath: string | null;
-        newPath: string;
-      };
-      if (!rootPath) return;
-      const updates = titleManager.handleSaveAs(
-        pageId, detail.panelId, detail.newPath, rootPath,
-      );
-      const api = apiRef.current;
-      if (api) applyTitleUpdates(api, updates);
-    };
-
-    window.addEventListener("slterm:file-saved-as", onSaveAs);
-    return () => {
-      window.removeEventListener("slterm:file-saved-as", onSaveAs);
-    };
-  }, [pageId, rootPath]);
-
-  return (
-    <div ref={containerRef} style={{
-      // dockview CSS 变量（20 条，active 方案 libraries.dockview）内联注入，
-      // 替代主题类暗色常量；className="dockview-theme-dark" 保留供布局样式
-      ...dockviewVarStyle(),
-      display: visible ? "block" : "none",
-      width: "100%", height: "100%",
-    }}>
-      <DockviewReact
-        className="dockview-theme-dark"
-        components={panelRegistry}
-        onReady={handleReady}
-        watermarkComponent={Watermark}
-        defaultTabComponent={DefaultTab}
-        rightHeaderActionsComponent={RightHeader}
-      />
-      {/* 页签右键菜单（自研 fixed 弹层，UI-802 规格在 TabMenuPopup）——随页面挂载，
-          切页 display:none 隐藏 + visible effect 清态 */}
-      <TabMenuPopup menu={tabMenu} onClose={closeTabMenu} />
-      {/* 重命名弹窗：仅活跃页可触发右键，页面可见性有保证；切页后随 display:none 隐藏 */}
-      {renameTarget && (
-        <TerminalRenameDialog
-          initialTitle={renameTarget.initialTitle}
-          onConfirm={handleRenameConfirm}
-          onCancel={() => setRenameTarget(null)}
-        />
-      )}
-    </div>
-  );
-});
-
-export default PageDockview;
+// 页签右键菜单组件（自研 fixed 弹层——宿主单点持有菜单态，渲染随宿主）
+export { TabMenuPopup, TerminalRenameDialog };
 export { createRightHeader };

@@ -11,9 +11,6 @@ import { toast } from "../lib";
 /** 持久化 debounce 间隔（毫秒），供 fontSize/keybindings 等 store 共用 */
 export const PERSIST_DEBOUNCE_MS = 2000;
 
-/** 页面总数上限（FE-01/D1 契约）——多 Dockview 实例架构每页一实例，上限防内存/DOM 线性增长 */
-export const MAX_PAGES = 20;
-
 // ── 数据模型 ──────────────────────────────────────────────
 
 export interface Project {
@@ -58,7 +55,8 @@ interface ProjectsState {
 
   addProject: (project: Project) => void;
   removeProject: (projectId: string) => void;
-  /** 新增操作页面——成功 true；项目不存在/超全局上限（FE-36）拒绝 false（供调用方可观测） */
+  /** 新增操作页面——成功 true；项目不存在拒绝 false（供调用方可观测；CP-004
+   *  后无页面总数上限——单共享宿主架构实例数不再随页线性增长） */
   addPage: (projectId: string, page: OperationPage) => boolean;
   removePage: (projectId: string, pageId: string) => void;
   switchToPage: (projectId: string, pageId: string) => void;
@@ -105,18 +103,11 @@ export const useProjects = create<ProjectsState>()((set, get) => ({
       // ── Page ─────────────────────────────────────────────
 
       addPage: (projectId, page) => {
-        // FE-01（D1 契约）：页面总数上限 MAX_PAGES——超限拒绝新增 + toast 告警。
-        // 多 Dockview 实例架构每页一实例，上限防内存/DOM 线性增长（豁免登记 S19）；
-        // FE-36 全局化：上限按跨项目全局页面总数计数（原按项目计数）
+        // CP-004（S11）：页面总数上限消亡——多 Dockview 实例架构退役后页不再
+        // 各持一实例，容器/渲染管线共享（单宿主页组模型），无内存/DOM 线性
+        // 增长源；上限判定与「页面数已达上限」toast 随之删除。
         const project = get().projects[projectId];
         if (!project) return false;
-        // FE-36（D1 契约名实相符）：页面总数上限 = 跨项目全局计数
-        // （原按项目计数——多项目下 Dockview 实例仍可无界增长）
-        const totalPages = Object.values(get().projects).flatMap((p) => p.pages).length;
-        if (totalPages >= MAX_PAGES) {
-          toast.show("warning", "页面数已达上限");
-          return false;
-        }
         set((state) => {
           const pages = [...project.pages, page];
           return {

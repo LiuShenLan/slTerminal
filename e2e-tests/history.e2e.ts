@@ -426,7 +426,7 @@ describe("Claude 历史会话视图", () => {
         async () => await browser.execute(() => typeof window.__dockviewApi !== "undefined"),
         { timeout: 20000, timeoutMsg: "Dockview API 未就绪" },
       );
-      const panelId = `terminal-${pageId}-0`;
+      const panelId = `${pageId}:terminal-0`;
       await browser.execute((pid: string) => {
         window.__dockviewApi!.addPanel({
           id: pid,

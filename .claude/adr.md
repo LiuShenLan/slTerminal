@@ -201,7 +201,7 @@
 
 | 标识 | 决策 | 登记点 |
 |------|------|--------|
-| FE-01 | Workspace 多 Dockview 实例**保持**（H6 终端跨页面存活 + xterm 实例限制，D1）；以页面总数上限 `MAX_PAGES = 20`（src/stores/projects.ts，超限 addPage 拒绝 + toast「页面数已达上限」）防内存/DOM 线性增长。**2026-08-22 FE-36 语义修订：页面总数上限改为跨项目全局计数**（原按项目计数——多项目下 Dockview 实例仍可无界增长；`Object.values(projects).flatMap(p => p.pages).length` 全局判定，L2 跨项目用例锁死） | src/workspace/CLAUDE.md、src/stores/CLAUDE.md |
+| FE-01 | Workspace 多 Dockview 实例**保持**（H6 终端跨页面存活 + xterm 实例限制，D1）；以页面总数上限 `MAX_PAGES = 20` 防内存/DOM 线性增长（FE-36 跨项目全局计数修订同列）。**已作废（CP-004/S11，2026-09-08）：多实例架构被共享宿主 + 页组模型取代**——单一 DockviewReact，每操作页面 = 宿主内顶级页组（pageGroups.ts 协议：组 id `page-{pageId}`、面板 id 页前缀 `{pageId}:localId`）；页面切换 = 页组容器显隐（dockview 叶可见性，终端不卸载，#4978 约束不变）；`MAX_PAGES` 与超限 toast 删除，上限随实例数线性增长源消亡 | src/workspace/CLAUDE.md、src/stores/CLAUDE.md、src/workspace/pageGroups.ts |
 | SEC-09 | CSP `script-src 'unsafe-inline'` **保留**（D4）：srcdoc iframe 继承父 CSP（W3C 行为），HTML 预览注入脚本（锚点拦截/键盘转发/nonce）必须内联，移除即破坏预览。现状 = tauri.conf.json `script-src 'self' 'unsafe-inline'` + `dangerousDisableAssetCspModification: ["script-src"]`。**已被 ADR-0019 取代**（2026-09-08，S10-②：预览迁独立 webview 自定义协议域，主窗口回收 script-src 'unsafe-inline' 与 dangerousDisableAssetCspModification——CP-012） | src-tauri/tauri.conf.json 注释 |
 | SEC-06 | 剪贴板读权限 `clipboard-manager:allow-read-text` **保留**（D6）：唯一消费点为 keyboard.ts 的 Ctrl+Shift+V 显式手势，改后端命令不缩小攻击面（前端上下文被注入时同样能 invoke）；grep 级守卫测试锁消费点集合 | src/ipc/CLAUDE.md |
 | BE-21 | `fs_read_dir` 返回整目录列表**不分页**（登记豁免）~~已作废~~：**CP-006 已改游标分页（2026-09）**——`(path, cursor?, limit?)` 默认 500/上限 1000，过滤排序后切片、游标 opaque，前端续页拼接；FileTree 虚拟化（FE-30）渲染侧保留 | src-tauri/src/fs/CLAUDE.md |

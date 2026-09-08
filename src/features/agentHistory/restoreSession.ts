@@ -22,7 +22,7 @@ import { TerminalRegistry } from "../../panels/terminal/TerminalRegistry";
 import { write as ptyWrite } from "../../ipc/pty";
 import { sendToastNotification } from "../../ipc/notification";
 import { normalizePath, basename } from "../../lib/path";
-import { makeTerminalPanelId } from "../../lib/panelId";
+import { makeTerminalIdInPage } from "../../workspace/pageGroups";
 import { cliProfileRegistry } from "../cliProfiles";
 import type { AgentHistorySession } from "../../types/agentHistory";
 
@@ -167,10 +167,9 @@ async function doRestore(
     `页面 ${targetPageId} 的 DockviewApi`,
     signal, // FE-27: 四步共享 Controller——页面切换/新恢复发起时中止轮询
   );
-  // B14: panelId 经生成单点 makeTerminalPanelId（terminal-{pageId}-{seq}，模块级
-  // 每页计数与 PageDockviewHost 共享）——旧格式含 Date.now 数字段，破坏贪婪正则/
-  // 切分解析（visible 恒 false 黑屏 + 幽灵页面导航根因）
-  const panelId = makeTerminalPanelId(targetPageId);
+  // CP-004: panelId 经页前缀协议单点 makeTerminalIdInPage（"{pageId}:terminal-N"，
+  // local 计数模块级每页共享——与 workspace 各新建入口同源，防同页 localId 碰撞）
+  const panelId = makeTerminalIdInPage(targetPageId);
   api.addPanel({
     id: panelId,
     component: "terminal",
