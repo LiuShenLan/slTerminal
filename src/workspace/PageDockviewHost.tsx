@@ -274,9 +274,13 @@ export function createTabMenuItems(
         action: () => {
           // FE-04: 点击时才分配编号（延迟到 action 执行，而非菜单构建时）
           const api = getApi();
-          if (!api || !menuPageId) return; // 理论不可达——右键必在宿主就绪后
-          // 新面板落 menuPageId 页组（addTerminalPanel 显式 position referenceGroup）
-          void addTerminalPanel(api, menuPageId, undefined);
+          if (!api) return; // 理论不可达——右键必在宿主就绪后
+          // 目标页 = 面板属主页（页前缀解析），无前缀面板（e2e 裸 id/防御形态）
+          // 兜底活跃页——右键必发生在可见（活跃）页组
+          const target = menuPageId ?? useLayout.getState().activePageId;
+          if (!target) return;
+          // 新面板落 target 页组（addTerminalPanel 显式 position referenceGroup）
+          void addTerminalPanel(api, target, undefined);
         },
       }),
       "separator",

@@ -153,19 +153,26 @@ export async function addTerminalPanel(panelId: string): Promise<void> {
   }, panelId);
 }
 
-/** 等待任一 terminal-container 的 PTY session 就绪；存在 __e2e_error 时抛出原因 */
-export async function waitForPtySessionReady(timeout = 25000): Promise<void> {
+/**
+ * 等待「最新」terminal-container 的 PTY session 就绪；存在 __e2e_error 时抛出原因。
+ * CP-004 单宿主适配：历史页组的容器仍留 DOM（隐藏组不卸载）——「任一容器就绪」
+ * 会被陈旧终端抢先满足；语义改为最近创建的容器（DOM 序末位 = 各套件刚 add 的
+ * 面板，与 addTerminalPanel 后立即调用的既有用法对齐）。panelId 传入时精确锁定
+ * 该面板的容器（withProjectAndTerminal 等已知 id 的编排用）。
+ */
+export async function waitForPtySessionReady(timeout = 25000, panelId?: string): Promise<void> {
   const state = await browser.waitUntil(
     async () => {
-      const result = await browser.execute(() => {
+      const result = await browser.execute((pid: string | undefined) => {
         const containers = document.querySelectorAll('[data-e2e="terminal-container"]');
         for (const c of containers) {
+          if (typeof pid === "string" && c.getAttribute("data-panel-id") !== pid) continue;
           const el = c as any;
           if (el.__e2e_sessionReady) return { ready: true };
           if (el.__e2e_error) return { error: el.__e2e_error };
         }
         return null;
-      });
+      }, panelId);
       return result;
     },
     { timeout, timeoutMsg: "PTY session 未就绪" },
@@ -175,7 +182,9 @@ export async function waitForPtySessionReady(timeout = 25000): Promise<void> {
   }
 }
 
-/** 向第一个可用终端容器的 __e2e_writeToPty 写入文本（返回是否命中容器） */
+/** 向「最新」可用终端容器的 __e2e_writeToPty 写入文本（返回是否命中容器）。
+ *  CP-004 单宿主适配：历史页组容器仍留 DOM——首容器命中会写到陈旧终端；
+ *  倒序遍历取最近创建者（各套件 addTerminalPanel 刚建的面板）。 */
 export async function writeToPty(text: string): Promise<boolean> {
   return browser.execute((data: string) => {
     const containers = document.querySelectorAll('[data-e2e="terminal-container"]');
@@ -190,7 +199,7 @@ export async function writeToPty(text: string): Promise<boolean> {
   }, text);
 }
 
-/** 读取第一个可用终端容器的缓冲文本（无容器返回 null） */
+/** 读取「最新」可用终端容器的缓冲文本（无容器返回 null）——CP-004 语义同 writeToPty */
 export async function getTerminalText(): Promise<string | null> {
   return browser.execute(() => {
     const containers = document.querySelectorAll('[data-e2e="terminal-container"]');
@@ -280,9 +289,12 @@ export async function ensureHooksInjected(timeout = 15000): Promise<void> {
 
 // ── 信号文件 ──
 
-/** 信号文件原子写（.tmp → rename .json，与 hook 脚本同款 C2 备选 A 模式），返回最终路径 */
+/** 信号文件原子写（.tmp → rename .json，与 hook 脚本同款 C2 备选 A 模式），返回最终路径。
+ *  panelId 含页前缀 ':'（CP-004 协议）——Windows 文件名禁 ':'，须与生产
+ *  slterm-hook-reporter.js 同款安全化（路由靠文件内容，文件名只承载唯一性）。 */
 export function writeSignalFile(eventsDir: string, payload: Record<string, unknown>): string {
-  const fileName = `${payload.panelId}-${payload.event}-${Date.now()}.json`;
+  const safePanelId = String(payload.panelId).replace(/[^a-zA-Z0-9_-]/g, "_");
+  const fileName = `${safePanelId}-${payload.event}-${Date.now()}.json`;
   const tmpPath = join(eventsDir, fileName + ".tmp");
   const filePath = join(eventsDir, fileName);
   writeFileSync(tmpPath, JSON.stringify(payload), "utf8");
@@ -362,7 +374,8 @@ export async function withProjectAndTerminal(opts: { hooks?: boolean } = {}): Pr
     if (!projectId) throw new Error(`无法获取 projectId（pageId=${pageId}）`);
     const panelId = `terminal-${pageId}-0`;
     await addTerminalPanel(panelId);
-    await waitForPtySessionReady();
+    // CP-004: 精确锁定本面板容器就绪(全局"任一就绪"会被历史页组陈旧终端抢先)
+    await waitForPtySessionReady(25000, panelId);
     return {
       panelId,
       pageId,

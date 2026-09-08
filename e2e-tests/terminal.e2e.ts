@@ -21,6 +21,7 @@ import {
   waitForPtySessionReady,
   writeToPty,
   waitForTerminalText,
+  getTerminalText,
   addPage,
   switchToPageAndWait,
   getProjectIdForPage,
@@ -347,17 +348,25 @@ describe("Job Object 孤儿防护（E2E-12）", () => {
     // 杀 app 用例不可 mocha 重试（重试时旧 session 已不可用，app 已死）
     (this as any).retries(0);
 
-    const { tempDir, cleanup } = await withProjectAndTerminal({});
+    const { tempDir, cleanup, panelId } = await withProjectAndTerminal({});
     const token = "SLTERM_E2E_JO_MARKER_" + Date.now();
 
     // 1. 注入持久 marker 进程：cmd /c "<token> & ping -t 127.0.0.1"
     //    cmd 找不到 <token> 命令（报错后继续），& 后 ping -t 无限挂起——
     //    进程树：slterminal → pwsh → cmd（CommandLine 含 token）→ ping
-    const injected = await writeToPty(`cmd /c "${token} & ping -t 127.0.0.1"\r\n`);
-    expect(injected).toBe(true);
-
-    // 2. 等待 marker 进程出现（Node 侧 PowerShell 按 CommandLine 过滤）
-    await waitForMarkerProcess(token, true, 15000);
+    //    CP-004 单宿主适配：精确写入本用例自己的面板（历史页组容器仍留 DOM，
+    //    全局首/末容器命中会把命令写进陈旧终端）
+    // 写入可能落在 pty 管道刚建立/后台负载窗口——连写两次（同 token，进程计数 ≥1 即过；
+    // 重复 cmd 只是多一个同 CommandLine 的进程，KILL_ON_JOB_CLOSE 断言不受影响）
+    let injected = await writeToPty(`cmd /c "${token} & ping -t 127.0.0.1"\r\n`, panelId);
+    if (!injected) {
+      // 理论不可达（withProjectAndTerminal 已等自身容器就绪）——防御性失败可见
+      throw new Error(`marker 写入未命中容器（panelId=${panelId}）`);
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+    await writeToPty(`cmd /c "${token} & ping -t 127.0.0.1"\r\n`, panelId);
+    // 2. 等待 marker 进程出现（Node 侧 PowerShell 按 CommandLine 过滤；30s 抗尾慢）
+    await waitForMarkerProcess(token, true, 30000);
 
     // 3. 显式结束 WDIO 会话（app 仍存活，DELETE /session 正常完成；
     //    之后 runner 收尾的 endSession/tauri-service afterSession 因 sessionId

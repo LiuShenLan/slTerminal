@@ -382,7 +382,7 @@ describe("Agent 会话视图与 toast 通知", () => {
       await waitForDockviewApi();
 
       // 1. 创建终端面板
-      const panelId = `terminal-${page1Id}-0`;
+      const panelId = `${page1Id}:terminal-0`;
       await addTerminalPanel(panelId);
 
       // 2. 等待 PTY session 就绪
@@ -484,7 +484,7 @@ describe("Agent 会话视图与 toast 通知", () => {
       await waitForDockviewApi();
 
       // 1. 创建终端面板
-      const panelId = `terminal-${page1Id}-0`;
+      const panelId = `${page1Id}:terminal-0`;
       await addTerminalPanel(panelId);
 
       // 2. 等待 PTY session 就绪
