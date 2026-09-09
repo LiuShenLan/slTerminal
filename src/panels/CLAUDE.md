@@ -43,13 +43,13 @@ htmlviewer / markdownviewer 等「文档型预览面板」共享 `src/panels/doc
 
 `GitShowPanel` 用 `EditorState.readOnly.of(true)` 阻止编辑，**不使用** `EditorView.editable.of(false)`。后者设 `contentEditable=false` 会导致编辑器不可聚焦，CM6 内部键绑定和 ShortcutRegistry 全部失效。
 
-**>10MB 超限引导（CP-022）**：HEAD 内容超过 `MAX_FILE_SIZE_BYTES` 时改渲染 `LargeFileViewer`（`sourceLabel="git show"`，只读分片浏览替代 CM 拒绝文案）。**内容源近似口径**：查看器经磁盘 `filePath` 分片读取——与 HEAD blob 一致场景内容等价（未修改/普通场景）；工作区文件缺失（deleted 状态——本面板主要来源）或与 HEAD 差异大时，读块失败由查看器「部分内容读取失败」兜底提示或内容近似。1MB-10MB 警告 header 语义不变。
+**>10MB 超限引导（CP-022）**：HEAD 内容超过 `MAX_FILE_SIZE_BYTES` 时改渲染 `LargeFileViewer`（`sourceLabel="git show"`，只读分片浏览替代 CM 拒绝文案）。**内容源近似口径**：查看器经磁盘 `filePath` 分片读取——与 HEAD blob 一致场景内容等价（未修改/普通场景）；工作区文件缺失（deleted 状态——本面板主要来源）或与 HEAD 差异大时，读块失败由查看器「部分内容读取失败」兜底提示或内容近似。**10MB 判定口径（FE-04 收窄登记）**：blob 侧用 `text.length` 近似字节数——HEAD blob 无磁盘 stat 通道（磁盘直读流如 EditorPanel 已改 `fs_stat` 真实字节）。1MB-10MB 警告 header 语义不变。
 
 ### diff：双栏占位对齐 + 滚动同步
 
 `DiffPanel` 横向均分两栏：左 = HEAD 只读 + HEAD gutter + 占位行，右 = 工作区可编辑 + workdir gutter + 占位行。
 
-**>10MB 超限引导（CP-022）**：任一侧内容超过 `MAX_FILE_SIZE_BYTES` → 该侧改渲染 `LargeFileViewer`（左 `sourceLabel="HEAD"`、右 `sourceLabel="工作区"`）；对齐/滚动同步/占位对齐装饰对该侧降级（view 缺失天然 no-op），另一侧 CM 行为不变；双侧超限分栏各自只读浏览。查看器内容源 = 磁盘 `filePath` 分片（HEAD 侧与工作区内容差异场景为近似口径，同 gitshow 登记）。1MB-10MB 警告 header 语义不变。
+**>10MB 超限引导（CP-022）**：任一侧内容超过 `MAX_FILE_SIZE_BYTES` → 该侧改渲染 `LargeFileViewer`（左 `sourceLabel="HEAD"`、右 `sourceLabel="工作区"`）；对齐/滚动同步/占位对齐装饰对该侧降级（view 缺失天然 no-op），另一侧 CM 行为不变；双侧超限分栏各自只读浏览。查看器内容源 = 磁盘 `filePath` 分片（HEAD 侧与工作区内容差异场景为近似口径，同 gitshow 登记）。**10MB 判定口径（FE-04 收窄登记）**：两侧均用 `headContent.length`/`workdirContent.length` 近似——HEAD blob 无磁盘 stat 通道（工作区侧为对称口径统一）。1MB-10MB 警告 header 语义不变。
 
 - **占位对齐**：`computeAlignment(hunks)` 纯函数根据 DiffHunk[] 计算左右两侧需插入占位行的位置与数量——纯新增行左侧插占位，纯删除行右侧插占位，modified 行数不等时少的一侧插差值。通过 CM6 `Decoration.widget` 渲染块级占位行。
 - **垂直滚动同步**：一侧 `.cm-scroller` scroll → 另一侧 `scrollTop` 跟随（`syncingRef` 防循环）。水平滚动不同步。

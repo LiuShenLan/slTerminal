@@ -28,6 +28,19 @@ size: number | null,
 modified: number | null, };
 
 /**
+ * 文件元数据（fs_stat）——真实字节数 + 修改时间（大文件信息条/失效比对基线）
+ */
+export type FsMetadata = { 
+/**
+ * 文件大小（真实字节数）
+ */
+sizeBytes: number, 
+/**
+ * 修改时间（Unix 毫秒）；文件系统不支持/早于 epoch → null
+ */
+mtimeMs: number | null, };
+
+/**
  * 目录分页读取结果（CP-006：游标契约）
  */
 export type FsReadDirPage = { 

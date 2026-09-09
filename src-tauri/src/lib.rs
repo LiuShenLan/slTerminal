@@ -125,6 +125,7 @@ pub fn run() {
             fs::fs_read_resource,
             fs::fs_write_file,
             fs::fs_read_dir,
+            fs::fs_stat,
             fs::fs_create_dir,
             fs::fs_delete,
             fs::fs_rename,

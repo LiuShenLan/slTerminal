@@ -40,6 +40,14 @@ docViewer 预览（md/html 本地相对图片等 data: URL 内联）按路径读
 - 不做 UTF-8 校验——与 fs_read_file 的文本语义刻意区分（`read_resource_base64_chunked` 独立核心）；
 - MIME 推断在前端扩展名白名单（后端保持「读字节」单一职责）。
 
+### `fs_stat` 文件元数据（BE-05）
+
+`fs_stat(path)` → `FsMetadata { sizeBytes, mtimeMs }`（ts-rs 生成 `src/types/fs.ts`）：
+
+- 真实字节数 + 修改时间（Unix 毫秒）；`mtimeMs: null` = 文件系统不支持/早于 epoch；
+- **无 10MB 上限**——stat 不读内容（大文件信息条真实大小、外部修改失效比对基线的通道）；
+- 沙箱校验目标路径（同 `fs_read_file`）。
+
 ### CRLF 行尾保持
 
 `fs_write_file` 写盘前检测原文件样本（前 `CRLF_SAMPLE_MAX_BYTES` 字节）：
@@ -49,7 +57,7 @@ docViewer 预览（md/html 本地相对图片等 data: URL 内联）按路径读
 
 ### 路径沙箱校验范围
 
-- `fs_read_file` / `fs_read_dir` / `fs_create_dir` / `fs_delete` / `fs_rename`：校验目标路径；
+- `fs_read_file` / `fs_read_dir` / `fs_stat` / `fs_create_dir` / `fs_delete` / `fs_rename`：校验目标路径；
 - `fs_write_file`：校验父目录（文件可能尚不存在）。
 
 ### 前端必须保证 `project_root` 已设置

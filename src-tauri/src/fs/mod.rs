@@ -44,6 +44,19 @@ pub struct FsReadDirPage {
     pub next_cursor: Option<String>,
 }
 
+/// 文件元数据（fs_stat）——真实字节数 + 修改时间（大文件信息条/失效比对基线）
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/types/fs.ts")]
+pub struct FsMetadata {
+    /// 文件大小（真实字节数）
+    #[ts(type = "number")]
+    pub size_bytes: u64,
+    /// 修改时间（Unix 毫秒）；文件系统不支持/早于 epoch → null
+    #[ts(type = "number | null")]
+    pub mtime_ms: Option<i64>,
+}
+
 /// 单页默认/上限条目数（CP-006 写死）
 const READ_DIR_PAGE_DEFAULT: u32 = 500;
 const READ_DIR_PAGE_MAX: u32 = 1000;
@@ -430,6 +443,40 @@ fn read_file_range(path: &str, offset_bytes: u64, length_bytes: u64) -> Result<S
             message: format!("文件编码错误（非 UTF-8）: {path}"),
         }
     })
+}
+
+// ═══ fs_stat: 文件元数据（真实字节数/mtime 通道）═══
+
+/// 读取文件元数据（真实字节数 + 修改时间）
+///
+/// stat 不读内容——不受 fs_read_file 的 10MB 全量上限约束（大文件信息条展示
+/// 真实字节数、外部修改失效比对基线的通道）。
+#[tauri::command]
+pub async fn fs_stat(path: String, state: State<'_, AppState>) -> Result<FsMetadata, AppError> {
+    // State 仅做提取，业务逻辑在 fs_stat_impl（测试直接调内核）
+    fs_stat_impl(path, extract_root(&state)?).await
+}
+
+/// fs_stat 命令内核：路径 sandbox 校验 + spawn_blocking 取元数据
+async fn fs_stat_impl(path: String, root: Option<PathBuf>) -> Result<FsMetadata, AppError> {
+    // 路径 sandbox 校验（与全部 fs 命令共享项目根沙箱）
+    validate_path_within_root(&root, Path::new(&path))?;
+
+    spawn_blocking_task(move || {
+        let meta = std::fs::metadata(&path)
+            .map_err(|e| io_error("读取文件元数据", Path::new(&path), e))?;
+        // mtime：文件系统不支持/早于 epoch → None（前端 mtimeMs: number | null）
+        let mtime_ms = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as i64);
+        Ok(FsMetadata {
+            size_bytes: meta.len(),
+            mtime_ms,
+        })
+    })
+    .await
 }
 
 /// 写入文件内容（覆盖模式，UTF-8）
@@ -2172,5 +2219,65 @@ mod read_resource_impl_tests {
 
         let result = run_impl(file.to_string_lossy().to_string(), None);
         assert!(result.is_err(), "project_root 未设置应拒绝");
+    }
+}
+
+/// fs_stat 命令内核测试（BE-05）：真实字节数/mtime / 缺失文件 / 沙箱边界
+#[cfg(test)]
+mod fs_stat_tests {
+    use super::*;
+
+    fn run<F: std::future::Future>(f: F) -> F::Output {
+        tokio::runtime::Runtime::new().unwrap().block_on(f)
+    }
+
+    /// 已知内容文件 → size_bytes 精确相等 + mtime_ms 非 None
+    #[test]
+    fn fs_stat_returns_size_and_mtime() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("meta.txt");
+        // 固定字节内容（含多字节字符——字节数口径，非 UTF-16 码元数）
+        let content = "hello 界";
+        std::fs::write(&file, content).unwrap();
+
+        let meta = run(fs_stat_impl(
+            file.to_string_lossy().to_string(),
+            Some(dir.path().to_path_buf()),
+        ))
+        .unwrap();
+        assert_eq!(
+            meta.size_bytes,
+            content.len() as u64,
+            "size_bytes 应为磁盘真实字节数"
+        );
+        assert!(meta.mtime_ms.is_some(), "mtime_ms 应非 None");
+    }
+
+    /// 不存在的路径 → Err
+    #[test]
+    fn fs_stat_missing_file_errs() {
+        let dir = tempfile::tempdir().unwrap();
+        let ghost = dir.path().join("ghost.txt");
+
+        let result = run(fs_stat_impl(
+            ghost.to_string_lossy().to_string(),
+            Some(dir.path().to_path_buf()),
+        ));
+        assert!(result.is_err(), "不存在的路径应返回错误");
+    }
+
+    /// 沙箱外路径 → Err（照现有沙箱用例形态）
+    #[test]
+    fn fs_stat_outside_root_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let file = outside.path().join("secret.txt");
+        std::fs::write(&file, "secret").unwrap();
+
+        let result = run(fs_stat_impl(
+            file.to_string_lossy().to_string(),
+            Some(root.path().to_path_buf()),
+        ));
+        assert!(result.is_err(), "根外路径应被沙箱拒绝");
     }
 }

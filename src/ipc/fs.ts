@@ -2,7 +2,7 @@
 // invoke 只允许在本文件出现（硬约束 #1）
 
 import { invoke, Channel } from "@tauri-apps/api/core";
-import type { FsReadDirPage } from "../types/fs";
+import type { FsMetadata, FsReadDirPage } from "../types/fs";
 
 /** fs_read_file 分块推送的单块载荷（BE-03）——后端按 256KB 块经 onChunk Channel 推送 */
 export interface FsReadChunk {
@@ -78,6 +78,11 @@ export function readFileRange(
   lengthBytes: number,
 ): Promise<string> {
   return invoke("fs_read_file_range", { filePath, offsetBytes, lengthBytes });
+}
+
+/** 文件元数据（fs_stat）——真实字节数 + 修改时间；沙箱校验同 readFile */
+export function statFile(path: string): Promise<FsMetadata> {
+  return invoke<FsMetadata>("fs_stat", { path });
 }
 
 /** 写入文件内容（覆盖模式，UTF-8） */

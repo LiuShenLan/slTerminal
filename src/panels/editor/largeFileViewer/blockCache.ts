@@ -47,13 +47,15 @@ export async function readBlock(filePath: string, blockIndex: number): Promise<s
   if (pending) return pending;
 
   const task = (async () => {
+    const gen = fileGen.get(filePath) ?? 0;
     const text = await fs.readFileRange(
       filePath,
       blockIndex * READ_BLOCK_BYTES,
       READ_BLOCK_BYTES,
     );
+    // 代际复核（FE-05）：读取途中文件已失效 → 本次结果不回填缓存（防脏写）；
     // 等待期间可能已被并发插入（读后复核,防重复块）
-    if (!cache.has(key)) {
+    if ((fileGen.get(filePath) ?? 0) === gen && !cache.has(key)) {
       cache.set(key, text);
       evictIfOverLimit();
     }
@@ -86,8 +88,23 @@ function evictIfOverLimit(): void {
   }
 }
 
+/** 文件代际（失效计数）——invalidateFile 递增；readBlock 在途任务写缓存前比对，
+ *  代际已推进（失效发生于读取途中）则旧代际结果不入缓存（防失效后脏回填） */
+const fileGen = new Map<string, number>();
+
+/** 失效指定文件的全部缓存块 + 推进代际（FE-05；inflight 保留——调用方仍收响应，
+ *  代际比对阻止其写缓存） */
+export function invalidateFile(filePath: string): void {
+  fileGen.set(filePath, (fileGen.get(filePath) ?? 0) + 1);
+  const prefix = `${filePath}${KEY_SEP}`;
+  for (const k of [...cache.keys()]) {
+    if (k.startsWith(prefix)) cache.delete(k);
+  }
+}
+
 /** 测试用: 清空块缓存与在途表（L2 用例隔离;生产零消费） */
 export function _resetBlockCache(): void {
   cache.clear();
   inflight.clear();
+  fileGen.clear();
 }

@@ -29,16 +29,17 @@ CodeMirror 6 不支持部分文档模型，大文件编辑**不虚拟化**——
 **可编辑域（≤10MB）三层防线削峰（D3 方案，语义不变）**：
 
 - **Channel 分块削峰（BE-03）**：`fs_read_file` 后端按 256KB 块经 `onChunk` Channel 推送，消除单次 IPC 大 payload 峰值。
-- **10MB 可编辑上限**：`MAX_FILE_SIZE_BYTES = 10_000_000`（`useCodeMirror.ts` 导出单点）——`sizeHint` 预检超限不再可编辑。
-- **1MB 警告**：`LARGE_FILE_WARN_BYTES = 1_000_000`，超限 `confirmDialog` 弹窗警告（确认=继续/取消=中止），取消清 `filePathRef`。
+- **10MB 可编辑上限**：`MAX_FILE_SIZE_BYTES = 10_000_000`（`useCodeMirror.ts` 导出单点）——读盘前 `fs_stat` 预检（FE-08）超限零读盘不再可编辑；读后 `doc.length > MAX` 复核保留为 TOCTOU 防线（stat 与读盘间文件长大场景）。
+- **1MB 警告**：`LARGE_FILE_WARN_BYTES = 1_000_000`，超限 `confirmDialog` 弹窗警告（确认=继续/取消=中止），取消清 `filePathRef`；文案用 stat 真实字节数（FE-08，原 UTF-16 码元近似对 CJK 文件系统性偏小）。
 
-**>10MB 只读分片浏览（CP-022 第四层，超限引导语义）**：`sizeHint > MAX_FILE_SIZE_BYTES` 不再以拒绝文案替换全文——`useCodeMirror` 返回 `largeFile: { filePath, sizeBytes } | null` 信号（文件切换渲染期自动清空），宿主面板检测后切换 `largeFileViewer/LargeFileViewer`（同面板内形态切换，不经 panelRegistry）：
+**>10MB 只读分片浏览（CP-022 第四层，超限引导语义）**：`fs_stat` 预检 `> MAX_FILE_SIZE_BYTES` 不再以拒绝文案替换全文——`useCodeMirror` 返回 `largeFile: { filePath } | null` 信号（文件切换渲染期自动清空；FE-04 起仅 filePath，真实大小由查看器挂载 `fs_stat` 自取），宿主面板检测后切换 `largeFileViewer/LargeFileViewer`（同面板内形态切换，不经 panelRegistry）：
 
 - 固定行高虚拟化行窗口（`LARGE_FILE_LINE_HEIGHT=20`，overscan 上下各 20 行，参照 FileTree 手实现先例）；行内经 `useLineIndex` 按需扩展索引、`blockCache`（LRU 32 块上限）缓存块文本，块经新命令 `fs_read_file_range` 按 256KB 区间读取（后端无 10MB 上限、头尾对齐字符边界——逐块拼接即原文，契约见 src-tauri/src/fs/mod.rs 命令注释）。
 - `filePathRef.current = undefined` 清空保留（防误保存覆盖原文件——大文件形态无 CM 编辑实例，Ctrl+S 无保存目标）。
-- 行文本前景色 = active 方案 `editor.overrides.plainText`，经 `schemeRegistry` 直取（mdPreviewStyle 先例；colors.ts facade 无编辑器正文 token——**硬约束 #6 新增例外登记，随本组件生效**）；字体复用 `EDITOR_FONT_SPEC`。
+- 行文本前景色 = active 方案 `editor.overrides.plainText`，渲染期 state + `schemeRegistry.onDidChange` 订阅响应式取色（FE-03，editorThemeSlot 先例；colors.ts facade 无编辑器正文 token——**硬约束 #6 新增例外登记，随本组件生效**）；字体复用 `EDITOR_FONT_SPEC`。
+- 外部修改失效：fs-event Modify + `fs_stat` 比对（mtime/size 变化 → 缓存整表失效 + 行索引复位重扫），静默重载（只读语义）；事件丢失残余窗口为已知边界（同 editor 域 fs-event 依赖）。
 
-超限引导消费点：EditorPanel（editor 形态）、GitShowPanel（sourceLabel="git show"）、DiffPanel（任一侧超限该侧引导、双侧超限分栏各自）——1MB-10MB 警告 header 语义在 gitshow/diff 不变。阈值仍由 `useCodeMirror` 导出单点，各面板禁止新造数值。
+超限引导消费点：EditorPanel（editor 形态）、GitShowPanel（sourceLabel="git show"）、DiffPanel（任一侧超限该侧引导、双侧超限分栏各自）——1MB-10MB 警告 header 语义在 gitshow/diff 不变。阈值仍由 `useCodeMirror` 导出单点，各面板禁止新造数值。查看器信息条大小 = `fs_stat` 真实字节（FE-04；stat 失败降级 `…`）；gitshow/diff 的 10MB 判定保留 `text.length` 近似（HEAD blob 无磁盘 stat 通道——FE-04 收窄登记）。
 
 ### 滚动委托 `.cm-scroller`
 

@@ -34,9 +34,13 @@ vi.mock("../ipc/git", () => ({
 }));
 
 // CP-022: >10MB 分支引导 LargeFileViewer——其按需读块经 ipc/fs.readFileRange
+// （FE-04：查看器另经 fs.statFile 自取真实大小填充信息条）
 const { mockReadFileRange } = vi.hoisted(() => ({ mockReadFileRange: vi.fn() }));
 vi.mock("../ipc", () => ({
-  fs: { readFileRange: mockReadFileRange },
+  fs: {
+    readFileRange: mockReadFileRange,
+    statFile: vi.fn().mockResolvedValue({ sizeBytes: 0, mtimeMs: null }),
+  },
 }));
 
 // mock CM6——jsdom 无布局引擎，EditorView 无法真实工作

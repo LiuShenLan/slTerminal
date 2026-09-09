@@ -48,6 +48,8 @@ vi.mock("../ipc", () => ({
     readFile: mockReadFile,
     writeFile: mockWriteFile,
     readFileRange: mockReadFileRange,
+    // FE-08: useCodeMirror 读盘前 stat 预检；FE-04: LargeFileViewer 信息条自取大小
+    statFile: vi.fn().mockResolvedValue({ sizeBytes: 0, mtimeMs: null }),
   },
 }));
 

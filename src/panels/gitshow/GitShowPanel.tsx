@@ -296,12 +296,12 @@ const GitShowPanel: React.FC<GitShowPanelProps> = ({ params }) => {
 
   // CP-022: >10MB 超限改引导 LargeFileViewer 只读分片浏览（sourceLabel="git show"）——
   // 内容源 = 磁盘 filePath 分片（HEAD blob 与工作区一致场景内容等价;deleted 等磁盘
-  // 缺失场景由 LargeFileViewer 读取失败兜底提示,口径登记 panels/CLAUDE.md）
+  // 缺失场景由 LargeFileViewer 读取失败兜底提示,口径登记 panels/CLAUDE.md）。
+  // 10MB 判定保留 text.length 近似（FE-04 收窄登记：HEAD blob 无磁盘 stat 通道）
   if (state.text.length > MAX_FILE_SIZE_BYTES) {
     return (
       <LargeFileViewer
         filePath={params.filePath}
-        fileSizeBytes={state.text.length}
         sourceLabel="git show"
       />
     );

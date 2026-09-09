@@ -9,9 +9,9 @@ const { mockUseCodeMirror, mockReadFileRange } = vi.hoisted(() => ({
 }));
 
 // CP-022: EditorPanel 从 useCodeMirror 解构 largeFile 信号——mock 须返回完整形状
-// （默认 null = 正常 CM 形态;超限用例用 mockReturnValueOnce 覆盖）
+// （默认 null = 正常 CM 形态;超限用例用 mockReturnValueOnce 覆盖；FE-04 起仅 filePath）
 const defaultHookResult = () => ({
-  largeFile: null as { filePath: string; sizeBytes: number } | null,
+  largeFile: null as { filePath: string } | null,
   getContent: vi.fn(() => ""),
   markClean: vi.fn(),
   markDirty: vi.fn(),
@@ -28,8 +28,12 @@ vi.mock("../panels/editor/useCodeMirror", () => ({
 }));
 
 // LargeFileViewer 经 blockCache → ipc/fs.readFileRange 按需读块——mock 防真实 invoke
+// （FE-04：查看器另经 fs.statFile 自取真实大小填充信息条）
 vi.mock("../ipc", () => ({
-  fs: { readFileRange: mockReadFileRange },
+  fs: {
+    readFileRange: mockReadFileRange,
+    statFile: vi.fn().mockResolvedValue({ sizeBytes: 0, mtimeMs: null }),
+  },
 }));
 
 import React from "react";
@@ -146,7 +150,7 @@ describe("EditorPanel", () => {
   it("largeFile 信号非空时渲染 LargeFileViewer（替代 CM 编辑区）", async () => {
     mockUseCodeMirror.mockReturnValueOnce({
       ...defaultHookResult(),
-      largeFile: { filePath: "C:/big/log.txt", sizeBytes: 12_000_000 },
+      largeFile: { filePath: "C:/big/log.txt" },
     });
     mockReadFileRange.mockResolvedValue("line1\nline2\n");
 
@@ -177,7 +181,7 @@ describe("EditorPanel", () => {
     mockUseCodeMirror
       .mockReturnValueOnce({
         ...defaultHookResult(),
-        largeFile: { filePath: "C:/big/b.log", sizeBytes: 11_000_000 },
+        largeFile: { filePath: "C:/big/b.log" },
       })
       .mockReturnValueOnce(defaultHookResult());
 

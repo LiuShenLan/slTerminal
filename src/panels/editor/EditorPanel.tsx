@@ -46,7 +46,6 @@ const EditorPanel: React.FC<EditorPanelProps> = ({ params }) => {
     return (
       <LargeFileViewer
         filePath={largeFile.filePath}
-        fileSizeBytes={largeFile.sizeBytes}
         sourceLabel=""
       />
     );

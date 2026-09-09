@@ -240,6 +240,10 @@ const READ_DIR_PAGE_RESULT = {
   nextCursor: null,
 };
 
+// BE-05：fs_stat 返回契约 = FsMetadata（sizeBytes 真实字节数 + mtimeMs Unix 毫秒/null，ts-rs 生成形状）
+const FS_METADATA_RESULT = { sizeBytes: 4096, mtimeMs: 1700000000000 };
+const FS_METADATA_NO_MTIME = { sizeBytes: 0, mtimeMs: null };
+
 describeIpcContract('fs IPC 合约', [
   {
     name: 'writeFile: 应调用 fs_write_file 命令，参数包含 path 和 content',
@@ -276,6 +280,30 @@ describeIpcContract('fs IPC 合约', [
     name: 'readDirPage: invoke 失败时异常应传播',
     cmd: 'fs_read_dir',
     call: () => fs.readDirPage('C:\\nope'),
+    mockThrow: 'path not found',
+    expectReject: 'path not found',
+  },
+  // ── fs_stat（BE-05 真实字节数/mtime 通道） ──────────────────
+  {
+    name: 'statFile: 应调用 fs_stat 命令，payload 仅含 path，返回 FsMetadata 透传',
+    cmd: 'fs_stat',
+    call: () => fs.statFile('C:\\test.txt'),
+    respond: FS_METADATA_RESULT,
+    expectExactKeys: ['path'],
+    expectResult: FS_METADATA_RESULT,
+  },
+  {
+    name: 'statFile: mtimeMs null 形态透传（文件系统不支持/早于 epoch）',
+    cmd: 'fs_stat',
+    call: () => fs.statFile('C:\\empty.txt'),
+    respond: FS_METADATA_NO_MTIME,
+    expectArgs: { path: 'C:\\empty.txt' },
+    expectResult: FS_METADATA_NO_MTIME,
+  },
+  {
+    name: 'statFile: invoke 失败时异常应传播（沙箱外/路径不存在）',
+    cmd: 'fs_stat',
+    call: () => fs.statFile('C:\\nope.txt'),
     mockThrow: 'path not found',
     expectReject: 'path not found',
   },

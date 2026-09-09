@@ -9,6 +9,9 @@
 
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useLineIndex } from "./useLineIndex";
+import { invalidateFile } from "./blockCache";
+import { fs } from "../../../ipc";
+import { onFsEvent } from "../../../ipc/notify";
 import { EDITOR_BG, ERROR_FG, PANEL_BG, DIM_FG, SEPARATOR_BG } from "../../../theme";
 import { schemeRegistry } from "../../../theme/schemeRegistry";
 import { EDITOR_FONT_SPEC } from "../useCodeMirror";
@@ -19,12 +22,6 @@ export const LARGE_FILE_LINE_HEIGHT = 20;
 /** 滚动窗口上下 overscan 行数（缓冲渲染,防快速滚动白屏——FileTree 先例为 8,此处放大） */
 const OVERSCAN = 20;
 
-/**
- * 行文本前景色 = active 方案 editor.overrides.plainText（与 CM6 .cm-content 正文同源）
- * ——viewer 非 CM 渲染器,经 schemeRegistry 直取（mdPreviewStyle 先例;colors.ts facade
- * 无编辑器正文 token）。例外登记: panels/editor/CLAUDE.md（CP-022 节）。
- */
-const LINE_TEXT_COLOR = schemeRegistry.getActive().editor.overrides.plainText;
 /** 行文本字体——复用编辑器同款字体族（EDITOR_FONT_SPEC 单点） */
 const LINE_FONT_FAMILY = EDITOR_FONT_SPEC[".cm-scroller"].fontFamily;
 
@@ -39,7 +36,6 @@ function formatSize(bytes: number): string {
 /** 大文件只读浏览宿主组件 */
 export interface LargeFileViewerProps {
   filePath: string;
-  fileSizeBytes: number;
   /** 来源面板展示用（editor/gitshow/diff） */
   sourceLabel: string;
 }
@@ -50,17 +46,83 @@ export interface LargeFileViewerProps {
  */
 export const LargeFileViewer: React.FC<LargeFileViewerProps> = ({
   filePath,
-  fileSizeBytes,
   sourceLabel,
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   // 滚动视口状态: scrollTop + 容器高度。
   // height === 0（jsdom 测试环境/布局异常）→ 窗口退化为全量渲染兜底
   const [viewport, setViewport] = useState({ scrollTop: 0, height: 0 });
-  const { lineCount, getLine, fullyIndexed, fatalError } = useLineIndex(
-    filePath,
-    fileSizeBytes,
+
+  // FE-03: 行文本色 = active 方案 editor.overrides.plainText——渲染期取值 +
+  // onDidChange 订阅响应式更新（editorThemeSlot 先例照抄；模块级 import 期快照已废）
+  const [lineTextColor, setLineTextColor] = useState(
+    () => schemeRegistry.getActive().editor.overrides.plainText,
   );
+  useEffect(
+    () =>
+      schemeRegistry.onDidChange(() =>
+        setLineTextColor(schemeRegistry.getActive().editor.overrides.plainText),
+      ),
+    [],
+  );
+
+  // FE-04/05: 真实文件元数据（fs_stat）——信息条大小展示 + 失效比对基线
+  const [fileMeta, setFileMeta] = useState<{ sizeBytes: number; mtimeMs: number | null } | null>(
+    null,
+  );
+  /** 失效比对基线（stat 基线 ref——首挂 stat 与 fs-event 重 stat 共用一份） */
+  const baseMetaRef = useRef<{ sizeBytes: number; mtimeMs: number | null } | null>(null);
+  /** 文件代际（FE-05）——外部修改命中递增，useLineIndex 按复合键复位重扫 */
+  const [fileRev, setFileRev] = useState(0);
+
+  const { lineCount, getLine, fullyIndexed, fatalError } = useLineIndex(filePath, fileRev);
+
+  // 挂载/换文件 stat 真实元数据（FE-04）：信息条大小展示 + FE-05 失效比对基线
+  useEffect(() => {
+    let cancelled = false;
+    // 换文件先清基线——防旧文件基线误比对新文件事件（stat resolve 前的事件窗口）
+    baseMetaRef.current = null;
+    fs.statFile(filePath)
+      .then((m) => {
+        if (cancelled) return;
+        baseMetaRef.current = { sizeBytes: m.sizeBytes, mtimeMs: m.mtimeMs };
+        setFileMeta({ sizeBytes: m.sizeBytes, mtimeMs: m.mtimeMs });
+      })
+      .catch((err) =>
+        console.warn("[slTerminal] statFile 失败（信息条大小暂缺）:", filePath, err),
+      );
+    return () => {
+      cancelled = true;
+    };
+  }, [filePath]);
+
+  // FE-05: 外部修改 → 缓存失效 + 行索引复位重扫（只读视图无 dirty，静默重载安全；
+  // 事件丢失残余窗口 = 与 editor 域同款 fs-event 依赖，登记 editor/CLAUDE.md）。
+  // 事件过滤/路径归一化比较形态照 useCodeMirror.ts:605-635 先例。
+  useEffect(() => {
+    const off = onFsEvent((event) => {
+      if (event.kind !== "Modify") return;
+      const normalized = filePath.replace(/\\/g, "/");
+      const hit = event.paths.some((p) => p.replace(/\\/g, "/") === normalized);
+      if (!hit) return;
+      void fs
+        .statFile(filePath)
+        .then((m) => {
+          const base = baseMetaRef.current;
+          // 基线未就绪（首挂 stat 未归）→ 跳过：下次事件或重挂基线兜底
+          if (base !== null && (m.mtimeMs !== base.mtimeMs || m.sizeBytes !== base.sizeBytes)) {
+            baseMetaRef.current = { sizeBytes: m.sizeBytes, mtimeMs: m.mtimeMs };
+            setFileMeta({ sizeBytes: m.sizeBytes, mtimeMs: m.mtimeMs });
+            invalidateFile(filePath);
+            setFileRev((r) => r + 1);
+          }
+        })
+        .catch(() => {
+          /* stat 失败（文件已删等）——读取路径自行兜底 fatalError */
+        });
+    });
+    return off;
+  }, [filePath]);
 
   // 初始同步测量 + ResizeObserver 跟踪容器高度变化;滚动事件内重测兜底
   useLayoutEffect(() => {
@@ -146,10 +208,10 @@ export const LargeFileViewer: React.FC<LargeFileViewerProps> = ({
         }}
       >
         {sourceLabel !== "" && (
-          <span style={{ color: LINE_TEXT_COLOR, opacity: 0.9 }}>{sourceLabel}</span>
+          <span style={{ color: lineTextColor, opacity: 0.9 }}>{sourceLabel}</span>
         )}
         <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
-          只读浏览（{formatSize(fileSizeBytes)}），可编辑上限 10MB
+          只读浏览（{fileMeta !== null ? formatSize(fileMeta.sizeBytes) : "…"}），可编辑上限 10MB
         </span>
         {fatalError !== null && (
           <span
@@ -186,7 +248,7 @@ export const LargeFileViewer: React.FC<LargeFileViewerProps> = ({
                 height: LARGE_FILE_LINE_HEIGHT,
                 lineHeight: `${LARGE_FILE_LINE_HEIGHT}px`,
                 whiteSpace: "pre",
-                color: LINE_TEXT_COLOR,
+                color: lineTextColor,
               }}
             >
               {getLine(i) ?? ""}

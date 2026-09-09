@@ -17,6 +17,8 @@ const h = vi.hoisted(() => {
     set mockOnFsCallback(cb: ((event: { paths: string[]; kind: string }) => void) | null) { _onFsCallback = cb; },
     mockReadFile: vi.fn().mockResolvedValue(""),
     mockWriteFile: vi.fn().mockResolvedValue(undefined),
+    // FE-08: stat 预检前置——默认小文件（0 字节）不触发警告/超限分支
+    mockStatFile: vi.fn().mockResolvedValue({ sizeBytes: 0, mtimeMs: null }),
     mockGitDiff: vi.fn().mockResolvedValue([]),
     mockUpdateDiffGutter: vi.fn(),
     mockClearDiffGutter: vi.fn(),
@@ -76,6 +78,7 @@ vi.mock("../ipc", () => ({
   fs: {
     readFile: h.mockReadFile,
     writeFile: h.mockWriteFile,
+    statFile: h.mockStatFile,
   },
   save: vi.fn(),
 }));

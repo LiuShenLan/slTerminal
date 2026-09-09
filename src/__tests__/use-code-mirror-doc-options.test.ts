@@ -22,6 +22,8 @@ const { mockReadFile, mockWriteFile, mockGitDiff } = vi.hoisted(() => ({
 vi.mock("../ipc/fs", () => ({
   readFile: mockReadFile,
   writeFile: mockWriteFile,
+  // FE-08: stat 预检前置——默认小文件（0 字节）不触发警告/超限分支
+  statFile: vi.fn().mockResolvedValue({ sizeBytes: 0, mtimeMs: null }),
 }));
 vi.mock("../ipc/git", () => ({ gitDiff: mockGitDiff }));
 vi.mock("../ipc/notify", () => ({

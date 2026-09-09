@@ -260,7 +260,8 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ params }) => {
 
         // CP-022 大文件检查: >10MB 侧改引导 LargeFileViewer（只读分片浏览）——
         // 该侧内容不进 CM,对齐/滚动同步/占位对齐对只读浏览侧降级（渲染分支处理）;
-        // 1MB-10MB 警告 header 语义不变（仅非超限侧挂 header）
+        // 1MB-10MB 警告 header 语义不变（仅非超限侧挂 header）。
+        // 10MB 判定保留 text.length 近似（FE-04 收窄登记：HEAD blob 无磁盘 stat 通道）
         const headLarge = headContent.length > MAX_FILE_SIZE_BYTES;
         let displayHead = headContent;
         if (!headLarge && headContent.length > LARGE_FILE_WARN_BYTES) {
@@ -729,7 +730,6 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ params }) => {
             <div data-e2e="diff-left" style={{ flex: 1, display: "flex", minWidth: 0 }}>
               <LargeFileViewer
                 filePath={filePath}
-                fileSizeBytes={state.headContent.length}
                 sourceLabel="HEAD"
               />
             </div>
@@ -748,7 +748,6 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ params }) => {
             <div data-e2e="diff-right" style={{ flex: 1, display: "flex", minWidth: 0 }}>
               <LargeFileViewer
                 filePath={filePath}
-                fileSizeBytes={state.workdirContent.length}
                 sourceLabel="工作区"
               />
             </div>

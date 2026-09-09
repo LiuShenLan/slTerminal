@@ -86,6 +86,8 @@ vi.mock("../ipc", () => ({
   fs: {
     readFile: vi.fn().mockResolvedValue(""),
     writeFile: vi.fn().mockResolvedValue(undefined),
+    // FE-08: stat 预检前置——默认小文件（0 字节），大文件用例按需覆盖
+    statFile: vi.fn().mockResolvedValue({ sizeBytes: 0, mtimeMs: null }),
   },
   save: vi.fn(),
 }));
@@ -814,10 +816,12 @@ describe("FE-01 文件切换竞态", () => {
     const deferredB = new Promise<string>((r) => { resolveB = r; });
 
     const readFileMock = fs.readFile as ReturnType<typeof vi.fn>;
-    // 第一次调用（A）→ deferredA；第二次（B）→ deferredB
-    readFileMock.mockImplementationOnce(() => deferredA);
-    readFileMock.mockImplementationOnce(() => deferredB);
-    // 后续调用回退默认（""），但本测试不会触发
+    // 按路径分发（FE-08 起 stat 预检先行：A 在 stat 后的 gen 检查即中止，不再消费
+    // readFile 调用序号——顺序型 mockImplementationOnce 会错位）
+    readFileMock.mockImplementation(async (path: string) => {
+      if (path === "/test/a.js") return deferredA;
+      return deferredB;
+    });
 
     mockDestroy.mockClear();
 
@@ -831,7 +835,7 @@ describe("FE-01 文件切换竞态", () => {
     // 切换到 B（cleanup: mountedRef=false, viewRef=null → no destroy）
     rerender({ fp: "/test/b.js" });
 
-    // 两个 readFile 都在挂起
+    // B 的 readFile 挂起中（FE-08 起 A 在 stat 后的 gen 检查即中止——A 不读盘）
     expect(capturedStateExtensions).toBeNull();
 
     // B 先完成
@@ -1027,6 +1031,8 @@ describe("EDF-03 大文件分支与保存失败", () => {
     // 关键：readFile 的 mockResolvedValue 是 default implementation，clearAllMocks 不清除。
     // 不在此显式重置会泄漏上一用例的大文件内容到本用例（大文件分支先于 writeFile 检查触发）。
     (fs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue("// normal content");
+    // FE-08: stat 预检默认小文件（0 字节）——大文件用例各自覆盖 statFile 返回值
+    (fs.statFile as ReturnType<typeof vi.fn>).mockResolvedValue({ sizeBytes: 0, mtimeMs: null });
   });
 
   afterEach(() => {
@@ -1034,6 +1040,11 @@ describe("EDF-03 大文件分支与保存失败", () => {
   });
 
   it("1. 打开 >10MB 文档 → 返回 largeFile 信号且 view 不创建（防误保存 + 原拒绝文案形态防复发）", async () => {
+    // FE-08: stat 预检前置——stat 报超限即返回，readFile 零调用（零读盘语义断言见下）
+    (fs.statFile as ReturnType<typeof vi.fn>).mockResolvedValue({
+      sizeBytes: MAX_FILE_SIZE_BYTES + 1,
+      mtimeMs: null,
+    });
     (fs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue("x".repeat(MAX_FILE_SIZE_BYTES + 1));
 
     // 渲染期捕获 hook 返回值（模块变量轮询——本文件既有惯例,不依赖 result.current 冲刷;
@@ -1051,10 +1062,11 @@ describe("EDF-03 大文件分支与保存失败", () => {
     await waitFor(() => {
       expect(holder.cur?.largeFile).not.toBeNull();
     }, { timeout: 3000 });
-    expect(holder.cur?.largeFile).toEqual({
-      filePath: "/test/huge.js",
-      sizeBytes: MAX_FILE_SIZE_BYTES + 1,
-    });
+    // FE-04: 信号仅 filePath（真实大小由查看器 fs_stat 自取）
+    expect(holder.cur?.largeFile).toEqual({ filePath: "/test/huge.js" });
+    // FE-08 零读盘语义锁死：stat 超限即返回——该文件的全量 readFile 从未被调用
+    // （按路径断言：前序用例遗留 hook 的 CP-029 核对定时器可能带来无关路径读盘）
+    expect(fs.readFile).not.toHaveBeenCalledWith("/test/huge.js");
 
     // 防复发（before 形态断言）: view 不创建——拒绝文案 doc 永不出现
     expect(capturedStateExtensions).toBeNull();
@@ -1070,12 +1082,16 @@ describe("EDF-03 大文件分支与保存失败", () => {
   });
 
   it("2. 打开 >1MB 文档 + confirmDialog 返回 false → 取消文案替换全文 + filePathRef 清空", async () => {
-    (fs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue("y".repeat(LARGE_FILE_WARN_BYTES + 1));
+    (fs.statFile as ReturnType<typeof vi.fn>).mockResolvedValue({
+      sizeBytes: LARGE_FILE_WARN_BYTES + 1,
+      mtimeMs: null,
+    });
     mockConfirmDialog.mockResolvedValue(false);
 
     await renderAndActivate();
 
     // FE-01: 断言 confirmDialog 调用参数（标题/正文/确认按钮文案）
+    // FE-08: 文案用 stat 真实字节数（1_000_001 → 约1.0MB）
     expect(mockConfirmDialog).toHaveBeenCalledWith(
       expect.objectContaining({
         title: "打开大文件",
@@ -1083,7 +1099,12 @@ describe("EDF-03 大文件分支与保存失败", () => {
         confirmText: "继续",
       }),
     );
+    expect(mockConfirmDialog).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("约1.0MB") }),
+    );
     expect(lastCreatedDoc()).toContain("用户取消打开大文件");
+    // 取消 → 不读盘（FE-08 预检拦截；按路径断言，隔离前序用例遗留 hook 的核对读盘）
+    expect(fs.readFile).not.toHaveBeenCalledWith("/test/huge.js");
 
     // filePathRef 被清空 → save 弹另存为，不覆盖原文件
     const editor = getActiveEditor()!;
@@ -1092,6 +1113,61 @@ describe("EDF-03 大文件分支与保存失败", () => {
       expect(mockDialogSave).toHaveBeenCalled();
     }, { timeout: 3000 });
     expect(fs.writeFile).not.toHaveBeenCalled();
+  });
+
+  it("2b. stat 预检 1MB-10MB → 弹窗文案用 stat 真实字节（非 doc.length 近似）", async () => {
+    // stat 报 3MB 真实字节，readFile 只返回 11 字节——文案含 3.0MB 即证明取自 stat
+    (fs.statFile as ReturnType<typeof vi.fn>).mockResolvedValue({
+      sizeBytes: 3_000_000,
+      mtimeMs: null,
+    });
+    (fs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue("// small");
+    mockConfirmDialog.mockResolvedValue(true);
+
+    await renderAndActivate();
+
+    expect(mockConfirmDialog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "打开大文件",
+        message: expect.stringContaining("约3.0MB"),
+        confirmText: "继续",
+      }),
+    );
+    // 用户确认继续 → 正常读盘建缓冲
+    expect(fs.readFile).toHaveBeenCalledWith("/test/huge.js");
+    expect(lastCreatedDoc()).toBe("// small");
+  });
+
+  it("2c. stat 与读盘间长大（TOCTOU）→ 读后复核仍引导只读浏览", async () => {
+    // stat 报小文件，readFile 返回超限内容（stat 后文件被长大）→ doc.length 复核兜底
+    (fs.statFile as ReturnType<typeof vi.fn>).mockResolvedValue({ sizeBytes: 1024, mtimeMs: null });
+    (fs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue("z".repeat(MAX_FILE_SIZE_BYTES + 1));
+
+    const holder: { cur: ReturnType<typeof useCodeMirror> | null } = { cur: null };
+    renderHook(() => {
+      holder.cur = useCodeMirror({
+        container,
+        filePath: "/test/grown.js",
+        panelId: "edf08-toctou",
+      });
+    });
+
+    await waitFor(() => {
+      expect(holder.cur?.largeFile).not.toBeNull();
+    }, { timeout: 3000 });
+    expect(holder.cur?.largeFile).toEqual({ filePath: "/test/grown.js" });
+    // 读后复核拦截 → 不创建 EditorView
+    expect(capturedStateExtensions).toBeNull();
+  });
+
+  it("2d. statFile reject（文件不存在/权限）→ 落 catch 读取失败占位，readFile 不调用", async () => {
+    (fs.statFile as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("文件不存在"));
+
+    await renderAndActivate();
+
+    // stat 失败即终止（readFile 必同败）——不进全量读盘（按路径断言，隔离遗留核对读盘）
+    expect(fs.readFile).not.toHaveBeenCalledWith("/test/huge.js");
+    expect(lastCreatedDoc()).toContain("读取失败");
   });
 
   it("3. fs.writeFile reject → toast 且不派发 slterm:file-saved/file-saved-as 保存事件", async () => {

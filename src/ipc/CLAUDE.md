@@ -27,6 +27,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `fs.readFileRange(filePath, offsetBytes, lengthBytes)` → `fs_read_file_range`（无 Channel 拉取式）：后端按字节区间读并钳制 EOF，返回文本**头尾对齐字符边界**（头回溯含跨区间整字符、尾裁到完整字符边界）——对同一文件按 256KB 块序递增请求时响应首尾相接、逐块拼接即原文。唯一消费方 = `panels/editor/largeFileViewer`（blockCache 按需读块，>10MB 只读分片浏览）；不经 10MB 全量上限。契约细节与测试真值在 src-tauri/src/fs/mod.rs 命令实现注释。
 
+### 文件元数据（BE-05）
+
+`fs.statFile(path)` → `fs_stat`，返回 `FsMetadata { sizeBytes, mtimeMs }`（真实字节数 + Unix 毫秒，`mtimeMs: null` = 文件系统不支持/早于 epoch）。无 10MB 上限——stat 不读内容。消费方 = LargeFileViewer（信息条真实大小 + 外部修改失效比对）。
+
 ### Event 模式
 
 `onFsEvent` / `onAgentEvent` / `onPlanBalanceUpdated` 封装 Tauri `listen(...)`，返回 unsubscribe 函数。调用方负责在卸载时取消订阅。

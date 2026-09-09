@@ -51,10 +51,11 @@ export const MAX_FILE_SIZE_BYTES = 10_000_000;
 /**
  * 大文件信号（CP-022）——>10MB 文件向上报告,宿主面板据此以 LargeFileViewer
  * 只读分片浏览替代 CM 编辑区（同面板内形态切换,不经 panelRegistry）。
+ * FE-04：仅 filePath——真实大小由查看器挂载 fs_stat 自取（原 sizeBytes 为
+ * UTF-16 码元近似，CJK 文件系统性偏小）。
  */
 export interface LargeFileSignal {
   filePath: string;
-  sizeBytes: number;
 }
 /** 大文件警告阈值（字节）——超过此值弹窗确认 */
 export const LARGE_FILE_WARN_BYTES = 1_000_000;
@@ -351,28 +352,44 @@ export function useCodeMirror({
         doc = initialDocRef.current ?? "";
       } else if (filePath) {
         try {
-          doc = await fs.readFile(filePath);
+          // FE-08: stat 预检前置——>10MB 零读盘直接引导只读浏览（原形态先全量读盘再拒绝,
+          // 内存保护不覆盖读盘一步）；stat 失败直接落 catch（文件不存在/权限——readFile 必同败）
+          const meta = await fs.statFile(filePath);
           // generation 检查：filePath 已切换则丢弃过期结果
           if (genRef.current !== gen) return;
-          // P2-10: 大文件检查 — UTF-8 文本 length 近似文件字节数
-          const sizeHint = doc.length;
-          if (sizeHint > MAX_FILE_SIZE_BYTES) {
+          if (meta.sizeBytes > MAX_FILE_SIZE_BYTES) {
             // CP-022: >10MB 不再置错误 doc——向上报告 largeFile 信号,EditorPanel
             // 检测后以 LargeFileViewer 只读分片浏览替代 CM 编辑区;filePathRef 清空
             // 保留（防误保存覆盖原文件）。返回前不创建 EditorView（无编辑实例）。
             filePathRef.current = undefined;
-            setLargeFile({ filePath, sizeBytes: sizeHint });
+            setLargeFile({ filePath });
             return;
-          } else if (sizeHint > LARGE_FILE_WARN_BYTES) {
+          } else if (meta.sizeBytes > LARGE_FILE_WARN_BYTES) {
             // >1MB：弹窗警告，用户可选择继续或取消（FE-01: confirm → confirmDialog，确认=继续/取消=中止）
+            // 文案用 stat 真实字节数（原 doc.length 为 UTF-16 码元近似，CJK 文件系统性偏小）
             const proceed = await confirmDialog({
               title: "打开大文件",
-              message: `文件较大（约${(sizeHint / 1_000_000).toFixed(1)}MB），打开可能影响性能。`,
+              message: `文件较大（约${(meta.sizeBytes / 1_000_000).toFixed(1)}MB），打开可能影响性能。`,
               confirmText: "继续",
             });
             if (!proceed) {
-              doc = `// [slTerminal] 用户取消打开大文件（约${(sizeHint / 1_000_000).toFixed(1)}MB）。`;
+              doc = `// [slTerminal] 用户取消打开大文件（约${(meta.sizeBytes / 1_000_000).toFixed(1)}MB）。`;
               filePathRef.current = undefined;
+            }
+          }
+          // FE-08: 预检拦截 / 用户取消（filePathRef.current === undefined——>MAX 分支
+          // 已在上方 return,取消分支已清 ref）→ 不读盘；取消场景以取消文案建缓冲
+          // （保留另存为出口,原语义）
+          const precheckBlocked = filePathRef.current === undefined;
+          if (!precheckBlocked) {
+            doc = await fs.readFile(filePath);
+            // generation 检查：filePath 已切换则丢弃过期结果
+            if (genRef.current !== gen) return;
+            // 读后复核（TOCTOU 防线）：stat 与读盘间文件长大超 10MB → 仍引导只读浏览
+            if (doc.length > MAX_FILE_SIZE_BYTES) {
+              filePathRef.current = undefined;
+              setLargeFile({ filePath });
+              return;
             }
           }
         } catch (err) {

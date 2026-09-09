@@ -29,6 +29,7 @@
     "allow-fs-read-resource",
     "allow-fs-write-file",
     "allow-fs-read-dir",
+    "allow-fs-stat",
     "allow-fs-create-dir",
     "allow-fs-delete",
     "allow-fs-rename",

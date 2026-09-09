@@ -71,9 +71,10 @@ function createWorkspace(): ScanWorkspace {
 /**
  * 行起始偏移索引——首块扫 \n 建初始索引,滚动至未索引区时按需向后扩展
  *
+ * fileRev（FE-05）: 文件代际——外部修改失效后由宿主递增,复合键变化即全量复位重扫。
  * 返回成员为契约骨架（CP-022）;fatalError 为附加成员（块读取失败的兜底提示）。
  */
-export function useLineIndex(filePath: string, fileSizeBytes: number): {
+export function useLineIndex(filePath: string, fileRev: number): {
   /** 总行数（索引未覆盖到 EOF 时为下界估计值） */
   lineCount: number;
   /** 取行文本（虚拟化窗口调用;行所在块未载入则同步触发读块后重渲染） */
@@ -83,13 +84,8 @@ export function useLineIndex(filePath: string, fileSizeBytes: number): {
   /** 读取失败兜底提示（文件缺失/删除等;null = 无故障） */
   fatalError: string | null;
 } {
-  // fileSizeBytes: 调用方（editor/gitshow/diff）以文本 length 近似字节数传入,
-  // 仅供宿主信息条展示;索引扩展与 EOF 判定由真实读块响应驱动（CJK 等 length<bytes
-  // 场景不受估算误差影响,真实文件长度在读空响应时精确获得）
-  void fileSizeBytes;
-
   const wsRef = useRef<ScanWorkspace>(createWorkspace());
-  const [fileKey, setFileKey] = useState(filePath);
+  const [fileKey, setFileKey] = useState(() => `${filePath}#${fileRev}`);
   // 渲染快照: 行结构与 EOF 镜像（rev 递增保证每次发布都产生新对象触发重渲染）
   const [snap, setSnap] = useState<{
     starts: number[];
@@ -103,9 +99,10 @@ export function useLineIndex(filePath: string, fileSizeBytes: number): {
     rev: 0,
   }));
 
-  // filePath 变化（查看器实例换文件,如 diff 切换目标文件）→ 全量复位
-  if (fileKey !== filePath) {
-    setFileKey(filePath);
+  // 文件变更（rev 递增,外部修改失效）或换文件 → 全量复位（索引/缓存基线一并重建）
+  const currentKey = `${filePath}#${fileRev}`;
+  if (fileKey !== currentKey) {
+    setFileKey(currentKey);
     wsRef.current = createWorkspace();
     setSnap({
       starts: wsRef.current.starts,
