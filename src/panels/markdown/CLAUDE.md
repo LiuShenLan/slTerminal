@@ -25,8 +25,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### 本地资源（决策 #9，ADR-0018）
 
 - 相对 src → 绝对化（assets.ts 纯函数：docDir join、盘符直用、`..` 不越盘符根）→ MIME 白名单收集 → fs.readResourceBase64（后端沙箱/10MB/base64 分块）→ data: URL。沙箱越界由后端拒绝（前端不预判）。
-- **svg 内联显式禁用（CP-035）**：MIME 白名单不含 image/svg+xml（assets.ts 注释登记理由）——本地 .svg 引用不收集，与白名单外扩展同语义（src 原样 → 缺口语义）；svg 载体可嵌脚本，预览域（无 CSP）内联风险面大，`<img>` 惰性上下文仅为 W3C 行为单点不作安全边界。恢复须重审并登记 ADR-0018/0019，L2 白名单断言锁死（markdown-assets.test.ts）。
-- **data: 渲染域口径（CP-035）**：主窗口 CSP 已回收 data:（img/font）；md 预览资源/字体以 data: 注入渲染文档，文档渲染于预览域（自定义协议宿主页 iframe，域无 CSP）——数据通道不受主窗口回收影响（③ CP-033 实证）。
+- **svg 内联显式禁用（CP-035）**：MIME 白名单不含 image/svg+xml（assets.ts 注释登记理由）——本地 .svg 引用不收集，与白名单外扩展同语义（src 原样 → 缺口语义）；svg 载体可嵌脚本，预览域（CSP meta 放行内联脚本）内联风险面大，`<img>` 惰性上下文仅为 W3C 行为单点不作安全边界。恢复须重审并登记 ADR-0018/0019，L2 白名单断言锁死（markdown-assets.test.ts）。
+- **data: 渲染域口径（CP-035）**：主窗口 CSP 已回收 data:（img/font）；md 预览资源/字体以 data: 注入渲染文档，文档渲染于预览域（自定义协议宿主页 iframe，CSP meta 放行 img/font data:）——数据通道不受主窗口回收影响（③ CP-033 实证）。
 - 盘符绝对路径与协议同形（`C:` vs `http:`）——isLocalRef/classifyLink 先判盘符再判协议（顺序红线，测试锁死）。
 
 ### 链接点击（决策 #10）
@@ -49,7 +49,7 @@ md 预览内容经 sandbox iframe（预览域）渲染无法引用宿主 CSS 变
 
 - 纯管线直测（pipeline/assets/links/async 编排——mermaid 模块 mock，jsdom 无布局）。
 - 面板集成（markdown-panel.test.tsx）：mock CM 桥（onDocContent 手动驱动）/allotment（透传 children）；预览编排与消息桥在 ipc/preview mock 边界驱动（装配产物捕获 + 事件订阅回调）。
-- L4 markdown.e2e.ts：真实 WebView2 渲染产物/图片 data/mermaid SVG/Ctrl+W/缩放（switchToWindow 驱动预览窗口，e2e-tests/CLAUDE.md「多 webview WDIO 可达性」节契约；事件属性通道在预览域无 CSP 下执行）。
+- L4 markdown.e2e.ts：真实 WebView2 渲染产物/图片 data/mermaid SVG/Ctrl+W/缩放（switchToWindow 驱动预览窗口，e2e-tests/CLAUDE.md「多 webview WDIO 可达性」节契约；事件属性通道在预览域（CSP meta 放行内联）执行）。
 
 ## 外部坑/红线
 

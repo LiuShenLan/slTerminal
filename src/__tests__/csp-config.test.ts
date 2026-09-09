@@ -1,7 +1,7 @@
 // CSP 配置不变量测试（L2 回归守卫）
 //
 // 背景（S10-②/④，ADR-0019）：预览渲染已迁出主窗口（独立 webview + 自定义协议
-// 宿主页，域内无全局 CSP——注入机制与该域 data: 数据通道在域内宽松执行）。
+// 宿主页，域级 CSP meta 放行内联脚本与 data: img/font——注入机制与数据通道在域内宽松执行）。
 // 主窗口 CSP 终态 = 回收 script-src 'unsafe-inline' 与
 // dangerousDisableAssetCspModification（CP-012）+ 回收 img-src/font-src 的
 // data:（CP-035——data: 数据/字体仅存预览域渲染，主窗口零消费）。
@@ -90,7 +90,7 @@ describe("tauri.conf.json CSP 不变量", () => {
 
   it("img-src 终态：恰好 = ['self', 'asset:', 'https://asset.localhost']——data: 已回收（CP-035）", () => {
     // 预览迁独立 webview 后主窗口不再承载预览文档（data: 图片内联消费仅存
-    // 预览域——该域无 CSP，天然放行）；主窗口 img-src 回收到恰好三项，
+    // 预览域——该域 CSP meta 放行 img/font data:）；主窗口 img-src 回收到恰好三项，
     // data: 若回潮立即红。blob: 维持否定（无生命周期管理点的通道不放行）。
     expect(directives["img-src"]).toBeDefined();
     expect(directives["img-src"]).toEqual(["'self'", "asset:", "https://asset.localhost"]);
@@ -107,7 +107,7 @@ describe("tauri.conf.json CSP 不变量", () => {
 
   it("data: 不在主窗口任何指令（CP-035 全指令守卫）", () => {
     // 主窗口 CSP 零 data:——任何指令（img/font/style/…）都不放行 data:；
-    // 需要 data: 的通道只存在于预览域（无 CSP），主窗口收紧不波及
+    // 需要 data: 的通道只存在于预览域（CSP meta 放行 img/font data:），主窗口收紧不波及
     for (const sources of Object.values(directives)) {
       expect(sources).not.toContain("data:");
     }

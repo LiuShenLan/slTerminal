@@ -9,7 +9,7 @@
 /** 资源 MIME 白名单（扩展名 → mime；白名单外资源不收集——保持 src 原样）
  *
  * svg 显式禁用（CP-035/S10-④）：image/svg+xml 不在白名单——svg 载体可嵌
- * 脚本，渲染域（预览 iframe，无 CSP）内联风险面大，<img> 惰性上下文仅为
+ * 脚本，渲染域（预览 iframe，CSP meta 放行内联脚本）内联风险面大，<img> 惰性上下文仅为
  * W3C 行为单点，不做安全边界依据；本地 .svg 引用与白名单外扩展同语义
  * （src 原样 → 缺口语义）。恢复须重审并登记 ADR-0018/0019。 */
 export const ASSET_MIME_BY_EXT: Readonly<Record<string, string>> = {

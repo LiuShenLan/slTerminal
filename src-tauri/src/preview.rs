@@ -440,7 +440,7 @@ pub struct PreviewContent {
 ///
 /// 实现注记（2026-09-08 实测语义）：
 /// - iframe sandbox 仅 allow-scripts：内容隔离于宿主（opaque origin），doc 自带
-///   <script> 在 srcdoc 内正常执行（域内无 CSP），无法触达宿主 DOM/桥（无
+///   <script> 在 srcdoc 内正常执行（域级 CSP meta 放行内联），无法触达宿主 DOM/桥（无
 ///   allow-same-origin + tauri 初始化脚本仅注入顶层 frame——CVE-2024-35222 修复
 ///   后 main_frame_only，webview.rs for_main_frame_only 实证）。
 /// - 桥经 window.__TAURI_INTERNALS__ 原生事件 API（invoke plugin:event|listen /

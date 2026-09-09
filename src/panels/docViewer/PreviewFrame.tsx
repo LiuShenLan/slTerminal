@@ -10,7 +10,7 @@
 //     位置/尺寸/显隐（轮询 + 主窗移动监听；面板隐藏/页面切换 → 窗口隐藏不
 //     销毁——缩放/滚动态保活，CP-037 复核语义）；卸载 → 销毁窗口
 //   - 内容装配：injectScript(html, buildInjectedScript(nonce, segments)) 原样
-//     装配（注入机制迁入预览 CSP 域——自定义协议宿主页，域内无全局 CSP，
+//     装配（注入机制迁入预览 CSP 域——自定义协议宿主页，域级 CSP meta 放行内联，
 //     无差别字符串级转义已消亡，CP-031）；产物经 preview_render
 //     推送（后端存储 + 定向通知宿主拉取）
 //   - 消息桥（Tauri event，CP-044 通道退役分支）：上行 slterm_zoom /

@@ -359,7 +359,7 @@ describe("HtmlPanel", () => {
     renderHtmlPanel("C:/test/script.html");
     const doc = await waitForRender("C:/test/script.html");
     // 宿主自带 </script> 不再被转义为 <\/script>（存量转义函数消亡）——
-    // 新预览域（自定义协议宿主页，无全局 CSP）内宿主脚本真实可执行
+    // 新预览域（自定义协议宿主页，CSP meta 放行内联脚本）内宿主脚本真实可执行
     expect(doc).toContain("<script>document.body.innerHTML='JS OK'</script>");
     expect(doc).not.toContain("<\\/script>");
     // 注入脚本（zoom 运行时）仍就位

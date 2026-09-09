@@ -84,7 +84,7 @@ Workflow({ scriptPath: "docs/compromises-fix-review-fix/workflows/fix-loop.js",
 | 04 | 完成 | 2ecd7cb | 首轮 FE-10 partial（knip 红：8 项本任务 workflows 未用文件）→ 主 agent 补 knip.json ignore 后 exit 0 | 连带 knip ignore 补 `docs/compromises-fix-review-fix/**`。**收尾待办**：SEC-02 落地后「预览域无 CSP」表述残留 8 处（src/lib/injectScript.ts:11、docViewer/PreviewFrame.tsx:13、markdown/assets.ts:12、markdown/CLAUDE.md:28/29/52、csp-config.test.ts:4/93/110、html-panel.test.tsx:362）需统一修订 |
 | 05 | 完成 | f945ed0 | allFixed=true（observations 两项文档同步经主 agent 补做） | L1 首跑 scan_bench 两轮中位 202ms 红 → 同命令重跑两次绿（负载敏感边缘）；补 FE-03/FE-05 文档同步（stage-05 脚本 prompt 漏列） |
 | 06 | 完成 | 857dca0 | 首轮 TE-05/TE-09 partial + 全量 e2e 红（tab-menu 确定性 + background-tasks flaky）→ 用户裁决：修 TE-05 判定（cid 事实错误）+ 连带修 S11 漏传 projectRootPath → 全量 e2e 15/15 exit 0 | TE-08 实证=**分支 b**（control 恒真证伪分支 a）；background-tasks flaky（单跑过）；连带修 S11 既有回归（tabChrome 第 4 参改回调） |
-| 07 | 未开始 | | | 红测演练入 commit body |
+| 07 | 完成 | 75f7a74 | allFixed=true（DOC-01~11 全 fixed）；红测演练四步 0/1/0/0 符合预期 | commit body 含演练四行输出；收尾另修 SEC-02 落地后「预览域无 CSP」失实表述 11 处 |
 
 ## 收尾（全 Stage 完成后主 agent 执行）
 
