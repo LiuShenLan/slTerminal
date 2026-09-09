@@ -8,7 +8,6 @@ export type {
   ShortcutContext,
   Priority,
   KeybindingOverrides,
-  ExportedBinding,
   ShortcutRegistryAPI,
 } from "./types";
 export { getShortcutRegistry } from "./ShortcutRegistry";

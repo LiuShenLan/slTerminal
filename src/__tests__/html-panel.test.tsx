@@ -26,7 +26,6 @@ import { render, cleanup, waitFor, fireEvent, act } from "@testing-library/react
 // ─── Hoisted mocks ───
 const mocks = vi.hoisted(() => {
   const mockReadFile = vi.fn();
-  const mockExportContextBindings = vi.fn<() => { keystroke: string }[]>(() => []);
   // useCodeMirror mock：捕获调用参数（面板层逻辑真实，CM 层隔离——edit 击键
   // 经捕获的 onDocContent 手动驱动，见「viewMode 形态切换」describe）
   const mockUseCodeMirror = vi.fn();
@@ -54,7 +53,6 @@ const mocks = vi.hoisted(() => {
   });
   return {
     mockReadFile,
-    mockExportContextBindings,
     mockUseCodeMirror,
     previewSync,
     previewClose,
@@ -68,9 +66,7 @@ const mocks = vi.hoisted(() => {
     movedHandlers,
     resetAll() {
       mockReadFile.mockReset();
-      mockExportContextBindings.mockReset();
       mockUseCodeMirror.mockReset();
-      mockExportContextBindings.mockReturnValue([]);
       previewSync.mockReset();
       previewClose.mockReset();
       previewRender.mockReset();
@@ -91,12 +87,6 @@ const mocks = vi.hoisted(() => {
 
 vi.mock("../ipc/fs", () => ({
   readFile: mocks.mockReadFile,
-}));
-
-vi.mock("../features/shortcuts/ShortcutRegistry", () => ({
-  getShortcutRegistry: () => ({
-    exportContextBindings: mocks.mockExportContextBindings,
-  }),
 }));
 
 // S10-②：预览窗口编排/消息桥 mock（PreviewFrame 经 src/ipc/preview 与 src/ipc/window）
@@ -778,8 +768,7 @@ describe("HtmlPanel", () => {
 
   it("负面: 已退役键盘转发类型上行被静默忽略——无按键重放、无命令消费（CP-013）", async () => {
     // 旧键盘转发通道：合法 nonce 的键转发消息也不得触发任何 KeyboardEvent/
-    // ShortcutRegistry 查询/关页签（上行终态集合 = 渲染态白名单）
-    mocks.mockExportContextBindings.mockReturnValue([{ keystroke: "Ctrl+KeyW" }]);
+    // 关页签（上行终态集合 = 渲染态白名单）
     const { nonce } = await renderRenderedPanel();
     const spy = vi.spyOn(window, "dispatchEvent");
     await act(async () =>
@@ -799,11 +788,9 @@ describe("HtmlPanel", () => {
     await new Promise((r) => setTimeout(r, 10));
     const kbEvents = spy.mock.calls.filter(([e]) => e instanceof KeyboardEvent);
     expect(kbEvents.length).toBe(0);
-    expect(mocks.mockExportContextBindings).not.toHaveBeenCalled();
     // 无下行命令重放
     expect(mocks.emitPreviewDownlink).not.toHaveBeenCalled();
     spy.mockRestore();
-    mocks.mockExportContextBindings.mockReturnValue([]);
   });
 
   it("点重置 → 下行 slterm_reset（emitPreviewDownlink）+ 立即隐藏 + 回声不复活", async () => {

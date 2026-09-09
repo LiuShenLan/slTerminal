@@ -231,7 +231,7 @@ export interface EditorScheme {
 
 /** 三方库 CSS 变量覆盖——dockview + allotment（值随方案切换） */
 export interface LibraryOverrides {
-  /** dockview CSS 变量（"--dv-*" → 值，20 条）——PageDockviewHost 挂载点内联注入（样式表加载顺序免疫） */
+  /** dockview CSS 变量（"--dv-*" → 值，20 条）——tabChrome 挂载点内联注入（样式表加载顺序免疫） */
   dockview: Record<string, string>;
   /** allotment CSS 变量（2 键）——Workspace 根容器注入，CSS 变量继承覆盖内层 SideBarArea */
   allotment: {

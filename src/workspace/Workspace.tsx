@@ -182,4 +182,4 @@ const Workspace: React.FC = () => {
 export default Workspace;
 
 // 向后兼容：测试从 Workspace.tsx 导入 createRightHeader / createTabMenuItems / applyRename
-export { createRightHeader, createTabMenuItems, applyRename } from "./PageDockviewHost";
+export { createRightHeader, createTabMenuItems, applyRename } from "./tabChrome";

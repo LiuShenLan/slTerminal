@@ -34,7 +34,7 @@ import {
   hostContainerStyle,
   type TabContextMenuDetail,
   type TabMenuPanel,
-} from "./PageDockviewHost";
+} from "./tabChrome";
 import type { TabMenuItem } from "./TabMenuPopup";
 import { composeHostLayout, loadLayout, loadPageGroup } from "./layoutSerde";
 import {
@@ -117,6 +117,8 @@ export function enforcePanelGroupMembership(
 
 const WorkspaceDockHost: React.FC<WorkspaceDockHostProps> = () => {
   const apiRef = useRef<DockviewApi | null>(null);
+  /** FE-09: handleReady 内构建的 disposables 暂存——组件卸载时统一消费（此前无消费路径） */
+  const disposablesRef = useRef<Array<{ dispose(): void }>>([]);
   /** 恢复守卫——程序化 fromJSON 期间 onDidLayoutChange 不写回 store（语义沿革
    *  同旧 PageDockview.restoreGuardRef） */
   const restoreGuardRef = useRef(false);
@@ -264,6 +266,9 @@ const WorkspaceDockHost: React.FC<WorkspaceDockHostProps> = () => {
       },
     });
 
+    // FE-09: 暂存本批 disposables——组件级卸载 effect 统一消费
+    disposablesRef.current = disposables;
+
     // 初始恢复：全部页切片汇编 → fromJSON → 逐页重建
     const { projects } = useProjects.getState();
     const pageSlices: Array<{ pageId: string; layout: unknown }> = [];
@@ -294,6 +299,16 @@ const WorkspaceDockHost: React.FC<WorkspaceDockHostProps> = () => {
 
     setHostReady(true);
   }, [handlePanelAdded, rebuildPageAfterRestore]);
+
+  // FE-09: 宿主卸载消费 disposables——事件订阅随 dockview api dispose 自动释放，
+  // 本通道的生效点 = 自定义清理（apiRef/__dockviewApi/unregisterHostApi 置空）
+  useEffect(
+    () => () => {
+      for (const d of disposablesRef.current) d.dispose();
+      disposablesRef.current = [];
+    },
+    [],
+  );
 
   // 页面目录（增/删）→ 宿主页组同步——store 订阅（zustand 同步回调——
   // addPage 返回前页组已并入，restoreSession 等随后切页/加面板时序安全）

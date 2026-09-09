@@ -17,7 +17,6 @@ import type {
   ShortcutRegistryAPI,
   KeyStroke,
   KeybindingOverrides,
-  ExportedBinding,
 } from "./types";
 import { formatKeystroke, parseKeystroke } from "./keystroke";
 import { isReserved } from "./reserved";
@@ -150,17 +149,6 @@ class ShortcutRegistry implements ShortcutRegistryAPI {
     if (this.captureSuspended) return false; // 录制态屏蔽（SC-FE-09）
     const winner = this.findWinner(event, forceContext);
     return winner ? winner.handler(event) : false;
-  }
-
-  /** 导出某 context 当前生效的绑定（含 global，排除解绑），供未来 iframe 转发脚本用 */
-  exportContextBindings(context: ShortcutContext): ExportedBinding[] {
-    const out: ExportedBinding[] = [];
-    for (const cmd of this.commands.values()) {
-      if (cmd.context !== GLOBAL && cmd.context !== context) continue;
-      const eff = this.effectiveKeystroke(cmd);
-      if (eff) out.push({ id: cmd.id, keystroke: formatKeystroke(eff) });
-    }
-    return out;
   }
 
   /** 列出当前已注册命令的元数据（未来可视化 UI 用） */

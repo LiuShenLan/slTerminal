@@ -2,7 +2,7 @@
 //
 // 单一关闭逻辑：settings 面板 dirty → confirmDialog 确认才 api.close()；其余直关。
 // × 关闭按钮 / Ctrl+W / 鼠标中键 / 右键菜单「关闭」四路共用本函数，防守卫逻辑
-// 多路漂移（原内联于 PageDockviewHost DefaultTab ×，Ctrl+W 曾绕过守卫——F11
+// 多路漂移（原内联于 tabChrome DefaultTab ×，Ctrl+W 曾绕过守卫——F11
 // 登记的不对称修复）。判据 = panelId 的 settings- 前缀 + dirtyRegistry 真值源
 // （与壳同源读写同一真值源；CP-017 后条目脱离壳生命周期，清除收口到确认丢弃
 // 动作点；非 settings 面板 / 非 dirty 直关，行为零回归）。

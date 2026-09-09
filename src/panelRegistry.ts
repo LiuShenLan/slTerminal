@@ -21,6 +21,8 @@ export const PANEL_EDITOR = "editor" as const;
 export const PANEL_HTML_VIEWER = "htmlviewer" as const;
 /** Markdown 文档面板类型标识 */
 export const PANEL_MARKDOWN_VIEWER = "markdownviewer" as const;
+/** 设置中心面板类型标识 */
+export const PANEL_SETTINGS = "settings" as const;
 // PANEL_GIT_SHOW/PANEL_DIFF/PANEL_HOOKS_CONFIG 已删除（FE-35）——
 // 全仓零外部消费（grep 无 import），内部 PANEL_TYPES/FILE_PANEL_TYPES 改字面量。
 
@@ -83,7 +85,7 @@ export const PANEL_TYPES = [
   PANEL_MARKDOWN_VIEWER,
   "gitshow",
   "diff",
-  "settings",
+  PANEL_SETTINGS,
 ] as const;
 export type PanelType = (typeof PANEL_TYPES)[number];
 
@@ -115,6 +117,6 @@ export function isAlwaysRenderPanel(type: string): boolean {
     type === PANEL_TERMINAL ||
     type === PANEL_HTML_VIEWER ||
     type === PANEL_MARKDOWN_VIEWER ||
-    type === "settings"
+    type === PANEL_SETTINGS
   );
 }

@@ -920,3 +920,220 @@ describe("useFileTree — CP-016 恢复与提交", () => {
     }
   });
 });
+
+// ============================================================
+// FE-01/FE-07: 挂载加载窗口抑制 + loadRoot 失败双分支
+// ============================================================
+describe("useFileTree — FE-01/FE-07 加载窗口抑制与失败双分支", () => {
+  beforeEach(() => {
+    mocks.resetAll();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** 最近一次上呼 payload（onViewStateChange 末次调用参数；lib=ES2020 无 Array.at） */
+  const lastPayload = (spy: ReturnType<typeof vi.fn>) => {
+    const calls = spy.mock.calls;
+    const last = calls[calls.length - 1];
+    return last?.[0] as FileTreeViewState | undefined;
+  };
+
+  /** 目录表实现（含 src 子目录——恢复/toggle 需要） */
+  const fsTable = () => ({
+    "C:/project": [mocks.makeEntry("src", true)],
+    "C:/project/src": [mocks.makeEntry("b.ts")],
+  });
+
+  it("FE-01-1: 挂载加载窗口期不上呼空提交", async () => {
+    const table = fsTable();
+    // 首帧 readDirPage 挂起（加载窗口开启）——释放前断言零上呼
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let gated = true;
+    mocks.setReadDirImpl((path) => {
+      const entries = table[path as keyof typeof table] ?? [];
+      if (gated) {
+        gated = false;
+        return gate.then(() => entries);
+      }
+      return Promise.resolve(entries);
+    });
+    const onViewStateChange = vi.fn();
+
+    const { result } = renderHook(() =>
+      useFileTree({
+        rootPath: "C:/project",
+        viewState: {
+          rootPath: "C:/project",
+          expandedPaths: ["C:/project/src"],
+        },
+        onViewStateChange,
+      }),
+    );
+
+    // 加载窗口期：首帧未落地，空树渲染的 commit effect 被 restoringRef 短路
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(onViewStateChange).not.toHaveBeenCalled();
+
+    // 放行首帧 → 快照命中 → 恢复队列武装 → 恢复期间仍零上呼，直至队列耗尽一次性提交
+    await act(async () => {
+      release?.();
+    });
+    await waitFor(() => {
+      const src = result.current.rootNodes.find(
+        (n) => n.entry.path === "C:/project/src",
+      );
+      expect(src?.expanded).toBe(true);
+    }, { timeout: 3000 });
+    await waitFor(() => {
+      expect(lastPayload(onViewStateChange)?.expandedPaths).toContain(
+        "C:/project/src",
+      );
+    }, { timeout: 3000 });
+    // 全程无空集上呼（回归：挂载即空提交覆盖注册表槽）
+    expect(
+      onViewStateChange.mock.calls.every(
+        (c) => (c[0] as FileTreeViewState).expandedPaths.length > 0,
+      ),
+    ).toBe(true);
+  });
+
+  it("FE-01-2: 无快照场景首帧落地后提交一次真实态", async () => {
+    // 首帧 readDirPage 挂起——释放前断言零上呼（挂载空树提交被抑制）
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    mocks.setReadDirImpl(() => gate.then(() => [mocks.makeEntry("a.ts")]));
+    const onViewStateChange = vi.fn();
+
+    const { result } = renderHook(() =>
+      useFileTree({
+        rootPath: "C:/project",
+        viewState: null,
+        onViewStateChange,
+      }),
+    );
+
+    // 加载窗口期（首帧未落地）：零上呼
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(onViewStateChange).not.toHaveBeenCalled();
+
+    // 首帧落地 → 无快照分支收口：上呼真实首帧态（展开集为空——时机在首帧落地后，非挂载即空提交）
+    await act(async () => {
+      release?.();
+    });
+    await waitFor(() => {
+      expect(result.current.rootNodes.length).toBe(1);
+    }, { timeout: 3000 });
+    await waitFor(() => {
+      expect(onViewStateChange).toHaveBeenCalled();
+    }, { timeout: 3000 });
+    expect(lastPayload(onViewStateChange)?.expandedPaths).toEqual([]);
+  });
+
+  it("FE-01-3: loadRoot 首帧失败后解除抑制（后续展开正常上呼，FE-07 联动）", async () => {
+    const table = fsTable();
+    // 首次 readDirPage reject（首帧失败）→ 后续调用正常返回
+    let first = true;
+    mocks.setReadDirImpl((path) => {
+      if (first) {
+        first = false;
+        return Promise.reject(new Error("EACCES"));
+      }
+      return Promise.resolve(table[path as keyof typeof table] ?? []);
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const onViewStateChange = vi.fn();
+
+    const { result } = renderHook(() =>
+      useFileTree({
+        rootPath: "C:/project",
+        viewState: undefined,
+        onViewStateChange,
+      }),
+    );
+
+    // 首帧失败：错误占位 + 清空
+    await waitFor(() => {
+      expect(result.current.rootError).toContain("EACCES");
+    }, { timeout: 3000 });
+    expect(result.current.rootNodes).toEqual([]);
+
+    // 抑制已解除：刷新加载首帧 → 展开 → 提交正常上呼
+    await act(async () => {
+      await result.current.refresh();
+    });
+    await waitFor(() => {
+      expect(result.current.rootNodes.length).toBe(1);
+    }, { timeout: 3000 });
+    await act(async () => {
+      await result.current.toggleExpand("C:/project/src");
+    });
+    await waitFor(() => {
+      expect(lastPayload(onViewStateChange)?.expandedPaths).toContain(
+        "C:/project/src",
+      );
+    }, { timeout: 3000 });
+    expect(errorSpy).toHaveBeenCalled();
+  });
+
+  it("FE-07-1: 续页失败保留首帧（不记根错误、不清空）", async () => {
+    // 首帧 50 条 + nextCursor，续页 reject
+    const firstPage = Array.from({ length: 50 }, (_, i) =>
+      mocks.makeEntry(`f${i}.ts`),
+    );
+    mocks.mockReadDir.mockImplementation(
+      async (_path: string, cursor?: string | null) => {
+        if (cursor) throw new Error("EIO");
+        return { entries: firstPage, nextCursor: "c1" };
+      },
+    );
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const { result } = renderHook(() =>
+      useFileTree({
+        rootPath: "C:/project",
+        viewState: undefined,
+        onViewStateChange: undefined,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(result.current.rootNodes.length).toBe(50);
+    }, { timeout: 3000 });
+    await waitFor(() => {
+      expect(errorSpy).toHaveBeenCalled();
+    }, { timeout: 3000 });
+    // 续页失败不记根错误（根错误占位会替换整树）——首帧 50 条保留
+    expect(result.current.rootError).toBeNull();
+    expect(result.current.rootNodes.length).toBe(50);
+  });
+
+  it("FE-07-2: 首帧失败维持错误占位语义（错误记录 + 清空）", async () => {
+    mocks.setReadDirImpl(() => Promise.reject(new Error("EACCES")));
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const { result } = renderHook(() =>
+      useFileTree({
+        rootPath: "C:/project",
+        viewState: undefined,
+        onViewStateChange: undefined,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(result.current.rootError).toContain("EACCES");
+    }, { timeout: 3000 });
+    expect(result.current.rootNodes).toEqual([]);
+    expect(errorSpy).toHaveBeenCalled();
+  });
+});

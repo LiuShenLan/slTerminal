@@ -4,7 +4,7 @@
 // 页前缀协议）；本模块只负责 localId 侧：终端 localId = terminal-{seq}（seq 为
 // 每页独立全数字序号，与页签标题 terminal-N 同计数源——每页从 0 起，恢复布局
 // 不占号）。完整 id 构造 = panelIdInPage(pageId, makeTerminalPanelId(pageId))，
-// 见 workspace/PageDockviewHost.makeTerminalIdInPage。
+// 见 workspace/pageGroups.ts（makeTerminalIdInPage 真实所在）。
 //
 // 历史（B14）：旧格式 terminal-{pageId}-{seq}（含曾引入的 Date.now 数字段，
 // 破坏贪婪正则/切分解析——历史恢复黑屏 + 幽灵页面导航根因）。旧布局经

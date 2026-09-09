@@ -1,12 +1,12 @@
 // terminal-rename-apply.test.ts — applyRename 纯函数直测
 //
-// applyRename（PageDockviewHost.tsx 导出）：重命名动作 = updateParameters 写
+// applyRename（tabChrome.tsx 导出）：重命名动作 = updateParameters 写
 // customTitle + setTitle + 显式 onLayoutChange(saveLayout(api)) 触发持久化
 // （setTitle/updateParameters 均不触发 onDidLayoutChange，故须显式保存）。
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { describe, it, expect, vi } from "vitest";
-import { applyRename } from "../workspace/PageDockviewHost";
+import { applyRename } from "../workspace/tabChrome";
 
 describe("applyRename", () => {
   function makePanel(params?: Record<string, unknown> | undefined, title = "terminal-0") {

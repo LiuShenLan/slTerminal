@@ -40,7 +40,7 @@ import {
   createRightHeader,
   createTabMenuItems,
 } from "../workspace/Workspace";
-import { createWatermark } from "../workspace/PageDockviewHost";
+import { createWatermark } from "../workspace/tabChrome";
 import { pageGroupId } from "../workspace/pageGroups";
 
 // ---- 辅助 ----

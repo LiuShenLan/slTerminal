@@ -48,7 +48,7 @@ md 预览内容经 sandbox iframe（预览域）渲染无法引用宿主 CSS 变
 ### 测试模式
 
 - 纯管线直测（pipeline/assets/links/async 编排——mermaid 模块 mock，jsdom 无布局）。
-- 面板集成（markdown-panel.test.tsx）：mock CM 桥（onDocContent 手动驱动）/allotment（透传 children）/ShortcutRegistry；预览编排与消息桥在 ipc/preview mock 边界驱动（装配产物捕获 + 事件订阅回调）。
+- 面板集成（markdown-panel.test.tsx）：mock CM 桥（onDocContent 手动驱动）/allotment（透传 children）；预览编排与消息桥在 ipc/preview mock 边界驱动（装配产物捕获 + 事件订阅回调）。
 - L4 markdown.e2e.ts：真实 WebView2 渲染产物/图片 data/mermaid SVG/Ctrl+W/缩放（switchToWindow 驱动预览窗口，e2e-tests/CLAUDE.md「多 webview WDIO 可达性」节契约；事件属性通道在预览域无 CSP 下执行）。
 
 ## 外部坑/红线

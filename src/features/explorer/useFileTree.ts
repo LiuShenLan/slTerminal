@@ -145,6 +145,8 @@ export function useFileTree({
         if (gen === undefined || gen === genRef.current) setRootNodes([]);
         return;
       }
+      // FE-07: 首帧落地旗标——区分首帧失败（错误占位 + 清空）与续页失败（保留首帧）
+      let firstFrameCommitted = false;
       try {
         const first = await readDirPage(rp);
         // generation 检查：如果 gen 不匹配，说明 rootPath 已变化，丢弃此结果
@@ -156,6 +158,7 @@ export function useFileTree({
           return next;
         });
         setRootNodes(toTreeNodes(first.entries));
+        firstFrameCommitted = true;
         // 后台续页：游标逐页拉取，尾接已渲染节点（函数式 set 保留首帧后的展开交互）
         let cursor = first.nextCursor;
         while (cursor !== null) {
@@ -168,8 +171,17 @@ export function useFileTree({
           cursor = page.nextCursor;
         }
       } catch (err) {
-        // FE-07: 根目录加载失败按路径记录错误（首帧失败 → 错误占位；续页失败 → 可重试）
         console.error("[slTerminal] readDirPage 失败:", rp, err);
+        if (firstFrameCommitted) {
+          // FE-07: 续页失败——保留已渲染首帧；不记 dirErrors（根错误占位会替换整树）、
+          // 不清空。重试经用户刷新（refreshExpanded）或后续展开操作。
+          // FE-01 联动：首帧已落即视为加载窗口闭合——抑制由 restoreExpanded 路径正常解除
+          return;
+        }
+        // 首帧失败：现状语义（错误占位 + 清空）+ FE-01 联动解除加载抑制
+        if (gen === undefined || gen === genRef.current) {
+          restoringRef.current = false;
+        }
         const msg = getErrorMessage(err);
         setDirErrors((prev) => {
           const next = new Map(prev);
@@ -443,16 +455,25 @@ export function useFileTree({
    *  （滞后一帧 → hasPath 误判丢失），逐层展开改由渲染落定后的消费 effect 驱动 */
   const restoreExpanded = useCallback(() => {
     const stored = viewStateRef.current;
-    if (!stored) return;
-    if (stored.rootPath !== rootPathRef.current) return;
+    // FE-01: 无可恢复快照（无存/域键不符/空展开集）→ 无恢复窗口——解除加载抑制
+    // 并提交首帧真实态（此前空树渲染的 commit effect 已被 restoringRef 短路，
+    // 此处补上呼保证槽位反映真实首帧）
+    if (
+      !stored ||
+      stored.rootPath !== rootPathRef.current ||
+      stored.expandedPaths.length === 0
+    ) {
+      restoringRef.current = false;
+      commitViewState();
+      return;
+    }
     const paths = [...stored.expandedPaths].sort(
       (a, b) => a.length - b.length,
     );
-    if (paths.length === 0) return;
     // 恢复窗口开启：抑制逐层提交（队列耗尽由消费 effect 解除并一次性上呼）
     restoringRef.current = true;
     setRestoreQueue(paths);
-  }, []);
+  }, [commitViewState]);
 
   // 根路径变更时重新加载
   useEffect(() => {
@@ -472,6 +493,9 @@ export function useFileTree({
     setRootNodes([]);
     setGitStatusMap(new Map());
     setDirErrors(new Map());
+    // FE-01: 加载窗口开启——loadRoot 完成前抑制 commitViewState 空提交覆盖注册表槽
+    // （解除点：restoreExpanded 无快照分支 / 恢复队列耗尽 effect / 本 effect 下次运行）
+    restoringRef.current = true;
     loadRoot(gen).then(() => {
       if (gen !== genRef.current) return; // rootPath 已变化，丢弃过期恢复
       void restoreExpanded();

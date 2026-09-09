@@ -227,4 +227,24 @@ describe("共享宿主——多页组架构验证", () => {
     // 面板仍在 page-alpha 页组（未跨页移动）
     expect(hostApi.getPanel(panelId)!.group.id).toBe(`page-${pageA}`);
   });
+
+  it("FE-09 宿主卸载消费 disposables：__dockviewApi 置空 + 宿主 API 注销", async () => {
+    mockIPC(() => null);
+
+    const { pageA } = setupTwoPages();
+    useLayout.setState({ activePageId: pageA });
+
+    const { unmount } = render(<Workspace />);
+    // 宿主就绪：全局 API 与页组查询均可用
+    await waitFor(() => expect(getHostApi()).toBeTruthy());
+    expect(window.__dockviewApi).toBeTruthy();
+    expect(getPageApi(pageA)).toBeTruthy();
+
+    // 卸载宿主 → 自定义清理生效（apiRef/__dockviewApi/unregisterHostApi 置空）
+    unmount();
+    expect(window.__dockviewApi).toBeUndefined();
+    // getPageApi 未就绪契约 = undefined（宿主注销 + 挂载标记清空）
+    expect(getPageApi(pageA)).toBeUndefined();
+    expect(getHostApi()).toBeNull();
+  });
 });

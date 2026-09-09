@@ -19,7 +19,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### `useFileTree` 自包含加载
 
-`rootPath` 变化时 `useFileTree` 内部 effect 自动调用 `loadRoot()` + `gitStatus()`。ExplorerPanel 只负责调用 CRUD 操作后的 `refresh()`，**不在 `rootPath` 变化时重复刷新**。
+`rootPath` 变化时 `useFileTree` 内部 effect 自动调用 `loadRoot()` + `gitStatus()`。ExplorerPanel 只负责调用 CRUD 操作后的 `refresh()`，**不在 `rootPath` 变化时重复刷新**。loadRoot 分首帧/续页失败双分支：首帧失败 → 错误占位 + 清空；续页失败 → 保留已渲染首帧（不记根错误、不清空），重试经刷新（FE-07）。
 
 ### 刷新保留展开状态（`reloadPreservingExpanded`）
 
@@ -84,7 +84,7 @@ ExplorerPanel 经 `src/features/sideViews/sideViewDefs.ts` 注册为 `explorer` 
 
 - **快照结构**：`FileTreeViewState = { rootPath: string | null; expandedPaths: string[] }`（expandedPaths 自 `rootNodes` 树遍历派生，提交时展开目录行集合）。
 - **域键**：快照以 `rootPath` 为域键——与当前项目根路径不一致的整份快照作废（项目间不复用）。
-- **提交时机**：每次 `rootNodes` 渲染落定后统一上呼提交（覆盖展开/折叠、fs-event 刷新重建收缩、增删改刷新）——渲染期提交保证派生集与界面一致；恢复期间经 restoringRef 抑制逐层提交。
+- **提交时机**：每次 `rootNodes` 渲染落定后统一上呼提交（覆盖展开/折叠、fs-event 刷新重建收缩、增删改刷新）——渲染期提交保证派生集与界面一致；恢复期间经 restoringRef 抑制逐层提交；挂载加载窗口期（loadRoot 完成前）提交经 restoringRef 抑制（FE-01）——空树渲染不再上呼覆盖槽位。
 - **恢复时机**：挂载后首次加载完成时消费一次（`viewState` prop 挂载快照，不入 deps）——槽位切换/换区重建由 SideBarArea 回填后触发，rootPath 域匹配 + 存在性守卫（磁盘已删目录跳过）逐层展开恢复。
 
 槽位切换/换区仍会卸载重建（FE-21 渲染形态不变），但展开态经槽位回填恢复，不再丢失。

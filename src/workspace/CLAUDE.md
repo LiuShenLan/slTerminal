@@ -99,7 +99,7 @@ dockview 8.1.0 free core 的页签右键菜单(ContextMenu)是 **enterprise 模�
 
 ### `__dockviewApi` 宿主唯一不变量（CP-004 收敛）
 
-`window.__dockviewApi` 恒指向共享宿主 DockviewApi（`WorkspaceDockHost` onReady 置位，宿主唯一）——不再随切页重指。其他代码点经 `getPageApi(pageId)`（宿主就绪 + 页组挂载标记后返回宿主 API）访问指定页面的语义查询。
+`window.__dockviewApi` 恒指向共享宿主 DockviewApi（`WorkspaceDockHost` onReady 置位，宿主唯一）——不再随切页重指。其他代码点经 `getPageApi(pageId)`（宿主就绪 + 页组挂载标记后返回宿主 API）访问指定页面的语义查询。宿主卸载经 disposablesRef 消费清理（FE-09）——apiRef/`__dockviewApi`/unregisterHostApi 置空。
 
 ### E2E 测试支持
 

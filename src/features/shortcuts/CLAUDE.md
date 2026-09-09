@@ -59,7 +59,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### 前向接口
 
-- `exportContextBindings(context)`：导出某 context 当前生效绑定（含 global，排除解绑），供 HtmlPanel postMessage 键盘转发动态比对全局快捷键用。
 - `listCommands()`：列出已注册命令元数据，供可视化设置 UI（快捷键设置页 KeybindingsPage，F11）枚举用。
 - `getEffectiveKeystroke(id)`（F11 登记）：**生效键查询**——设置页显示与运行期同源，防显示/运行漂移；`null` = 解绑或无默认键。含用户 overrides 语义（有键→合法用之/非法回退默认/null 解绑），设置页直接用它渲染每行当前生效键。
 - `setCaptureSuspended(suspended)`（F11 登记）：**录制态屏蔽**——true 时 `handleKeyDown`/`resolve` 起始即不消费任何按键，快捷键设置页录制期间置位，防录制键触发命令（如录 Ctrl+Shift+C 真执行复制）；录制结束/取消/卸载必须复位（`_reset()` 亦清）。
@@ -120,7 +119,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 测试模式
 
-- **核心**：注册/注销、引用计数、上下文栈竞态、匹配排序、IME 透传、setOverrides 重绑/解绑/降级/冲突、resolve/forceContext、exportContextBindings。
+- **核心**：注册/注销、引用计数、上下文栈竞态、匹配排序、IME 透传、setOverrides 重绑/解绑/降级/冲突、resolve/forceContext。
 - **命令目录守卫**：默认键非保留、id 唯一、命令齐全。
 - **usePanelFocus**：focusin→pushContext+onActivate、focusout（离子树）→popContext+onDeactivate、内部焦点转移不触发、卸载清理。
 - 各面板 keyboard 测试测命令经 active 指针派发、无 active 透传、Ctrl+C 注册为 terminal.interrupt（CP-020：handler 恒返回 false 透传 + interrupt 幂等派发）。

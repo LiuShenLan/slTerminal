@@ -64,12 +64,6 @@ export interface Command extends CommandMeta {
  */
 export type KeybindingOverrides = Record<string, string | null>;
 
-/** 单条绑定导出项（exportContextBindings 返回，供未来 iframe 转发脚本用） */
-export interface ExportedBinding {
-  id: string;
-  keystroke: string;
-}
-
 /** ShortcutRegistry 公共接口 */
 export interface ShortcutRegistryAPI {
   /** 注册一组命令，返回注销函数 */
@@ -90,8 +84,6 @@ export interface ShortcutRegistryAPI {
    * 返回是否被命令消费（不调用 preventDefault——无 window 事件可取消）。
    */
   resolve(event: KeyboardEvent, forceContext?: ShortcutContext): boolean;
-  /** 导出某 context 当前生效的绑定（含 global，排除解绑），供未来 iframe 转发用 */
-  exportContextBindings(context: ShortcutContext): ExportedBinding[];
   /** 列出当前已注册命令的元数据（未来 UI 用） */
   listCommands(): CommandMeta[];
   /** 返回已注册命令数量（测试/调试用） */

@@ -1,6 +1,6 @@
 // workspace-defaulttab.test.tsx — 生产 DefaultTab 渲染测试（WRK-05）
 //
-// 直接渲染 PageDockviewHost.tsx 导出的生产 DefaultTab 组件（非手写 Mock），
+// 直接渲染 tabChrome.tsx 导出的生产 DefaultTab 组件（非手写 Mock），
 // 通过 fake PanelApi 驱动事件，验证：
 // - tabStatus → StatusDot 状态圆点渲染（IC-03：emoji/img 分支已随
 //   STATUS_EMOJI 删除，DefaultTab 改读 tabStatus 渲染 StatusDot；StatusDot
@@ -30,7 +30,7 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import React from "react";
 import { render, act, cleanup, fireEvent, waitFor } from "@testing-library/react";
-import { DefaultTab } from "../workspace/PageDockviewHost";
+import { DefaultTab } from "../workspace/tabChrome";
 import type { AgentStatus } from "../lib/agentStatus";
 import {
   setSettingsDirty,

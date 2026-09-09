@@ -190,7 +190,7 @@ export const linear: ColorScheme = {
     },
   },
   // libraries 段：三方库 CSS 变量覆盖（libraries 段独立硬编码，有意与 ui 段解耦）
-  //   dockview → 页签/面板布局（PageDockviewHost 根 div 内联注入，className="dockview-theme-dark" 保留）
+  //   dockview → 页签/面板布局（tabChrome 根 div 内联注入，className="dockview-theme-dark" 保留）
   //   allotment → 三栏布局分割线（Workspace 根容器注入，CSS 变量继承覆盖内层 SideBarArea）
   libraries: {
     dockview: {

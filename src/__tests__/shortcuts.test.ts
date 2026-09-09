@@ -11,8 +11,7 @@
 //   8. handler 返回值（true→preventDefault+stopPropagation、false→透传）
 //   9. 监听器生命周期（addEventListener/removeEventListener spy、refCount 归零移除）
 //  10. setOverrides(undefined) 边界（?? {} 降级清空覆盖）
-//  11. exportContextBindings 受 overrides 影响（返回覆盖后的键而非默认键）
-//  12. resolve handler 返回 false 不消费（区别于 handler→true 但 resolve 不 preventDefault）
+//  11. resolve handler 返回 false 不消费（区别于 handler→true 但 resolve 不 preventDefault）
 
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { getShortcutRegistry } from "../features/shortcuts/ShortcutRegistry";
@@ -666,33 +665,9 @@ describe("ShortcutRegistry", () => {
     });
   });
 
-  // ---- 12. exportContextBindings / listCommands ----
+  // ---- 12. listCommands ----
 
-  describe("exportContextBindings / listCommands", () => {
-    it("exportContextBindings 含 global + 指定 context，排除其他", () => {
-      const unreg = registry.register([
-        cmd({ id: "g", context: "global", defaultKey: { ctrlKey: true, shiftKey: false, altKey: false, metaKey: false, code: "KeyW" } }),
-        cmd({ id: "t", context: "terminal", defaultKey: { ctrlKey: true, shiftKey: true, altKey: false, metaKey: false, code: "KeyC" } }),
-        cmd({ id: "e", context: "editor", defaultKey: { ctrlKey: true, shiftKey: false, altKey: false, metaKey: false, code: "KeyS" } }),
-      ]);
-      handlers.push(unreg);
-
-      const out = registry.exportContextBindings("terminal");
-      const ids = out.map((b) => b.id).sort();
-      expect(ids).toEqual(["g", "t"]);
-      const gBind = out.find((b) => b.id === "g")!;
-      expect(gBind.keystroke).toBe("Ctrl+KeyW");
-    });
-
-    it("exportContextBindings 排除已解绑命令", () => {
-      const unreg = registry.register([
-        cmd({ id: "g", context: "global", defaultKey: { ctrlKey: true, shiftKey: false, altKey: false, metaKey: false, code: "KeyW" } }),
-      ]);
-      handlers.push(unreg);
-      registry.setOverrides({ g: null });
-      expect(registry.exportContextBindings("terminal")).toEqual([]);
-    });
-
+  describe("listCommands", () => {
     it("listCommands 返回已注册命令元数据（不含 handler）", () => {
       const unreg = registry.register([
         cmd({ id: "a", title: "命令A", category: "terminal", context: "terminal" }),
@@ -705,32 +680,6 @@ describe("ShortcutRegistry", () => {
       expect(a.title).toBe("命令A");
       expect(a.category).toBe("terminal");
       expect("handler" in a).toBe(false);
-    });
-
-    it("exportContextBindings 返回覆盖后的键而非默认键", () => {
-      const unreg = registry.register([
-        cmd({
-          id: "g",
-          context: "global",
-          defaultKey: { ctrlKey: true, shiftKey: false, altKey: false, metaKey: false, code: "KeyW" },
-        }),
-        cmd({
-          id: "t",
-          context: "terminal",
-          defaultKey: { ctrlKey: true, shiftKey: true, altKey: false, metaKey: false, code: "KeyC" },
-        }),
-      ]);
-      handlers.push(unreg);
-
-      // 重绑 terminal 命令到 Ctrl+Alt+KeyC
-      registry.setOverrides({ t: "Ctrl+Alt+KeyC" });
-
-      const out = registry.exportContextBindings("terminal");
-      const tBind = out.find((b) => b.id === "t")!;
-      expect(tBind.keystroke).toBe("Ctrl+Alt+KeyC"); // 覆盖后的键
-      // global 命令不受影响
-      const gBind = out.find((b) => b.id === "g")!;
-      expect(gBind.keystroke).toBe("Ctrl+KeyW");
     });
   });
 

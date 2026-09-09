@@ -11,7 +11,8 @@
     ".claude/**",
     "src-tauri/**",
     "scripts/**",
-    "docs/compromises-fix/**"
+    "docs/compromises-fix/**",
+    "docs/compromises-fix-review-fix/**"
   ],
   "ignoreIssues": {
     "src/features/agentHistory/historyModel.ts": [
@@ -208,7 +209,7 @@
     "src/types/notify.ts": [
       "types"
     ],
-    "src/workspace/PageDockviewHost.tsx": [
+    "src/workspace/tabChrome.tsx": [
       "exports",
       "types"
     ],

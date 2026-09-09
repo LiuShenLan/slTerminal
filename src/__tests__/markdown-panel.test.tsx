@@ -35,7 +35,6 @@ const mocks = vi.hoisted(() => {
   const mockPersist = vi.fn();
   const mockOpenUrl = vi.fn();
   const mockOpenFileInActivePage = vi.fn();
-  const mockExportContextBindings = vi.fn<() => { keystroke: string }[]>(() => []);
 
   // 预览窗口编排 mock（PreviewFrame 经 src/ipc/preview 与 src/ipc/window）
   const previewSync = vi.fn<(..._a: unknown[]) => Promise<void>>(() => Promise.resolve());
@@ -62,7 +61,6 @@ const mocks = vi.hoisted(() => {
     mockPersist,
     mockOpenUrl,
     mockOpenFileInActivePage,
-    mockExportContextBindings,
     previewSync,
     previewClose,
     previewRender,
@@ -76,12 +74,11 @@ const mocks = vi.hoisted(() => {
       for (const fn of [
         mockReadFile, mockReadResource, mockUseCodeMirror, mockMermaidRender,
         mockMermaidInit, mockPersist, mockOpenUrl, mockOpenFileInActivePage,
-        mockExportContextBindings, previewSync, previewClose, previewRender,
+        previewSync, previewClose, previewRender,
         emitPreviewDownlink, onPreviewUplink, onPreviewHostStatus, onMainWindowMoved,
       ]) {
         fn.mockReset();
       }
-      mockExportContextBindings.mockReturnValue([]);
       uplinkHandlers.length = 0;
       statusHandlers.length = 0;
       previewSync.mockResolvedValue(undefined);
@@ -97,11 +94,6 @@ vi.mock("../ipc/fs", () => ({
   readResourceBase64: mocks.mockReadResource,
 }));
 vi.mock("../ipc/shell", () => ({ openUrl: mocks.mockOpenUrl }));
-vi.mock("../features/shortcuts/ShortcutRegistry", () => ({
-  getShortcutRegistry: () => ({
-    exportContextBindings: mocks.mockExportContextBindings,
-  }),
-}));
 vi.mock("../ipc/preview", () => ({
   makePreviewLabel: (panelId: string) => `preview-${panelId}`,
   previewSync: (...a: unknown[]) => mocks.previewSync(...a),

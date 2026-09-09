@@ -1,7 +1,5 @@
-// PageDockviewHost — 共享宿主支持模块（CP-004/S11 改造：原「每页一实例组件」
-// 消亡——DockviewReact 渲染收敛 Workspace 单一宿主（WorkspaceDockHost.tsx），
-// 本文件只保留与实例无关的共享件：DefaultTab、Watermark、RightHeader、页签
-// 右键菜单（自研 TabMenuPopup + createTabMenuItems 纯函数）、标题应用辅助函数。
+// tabChrome — 页签 chrome 共享件（DefaultTab/Watermark/RightHeader/页签菜单/applyRename）。
+// S11 共享宿主改造后原「每页一实例宿主组件」消亡（CP-004），仅存页签共享件，故名随实（FE-10）。
 //
 // 页组语义：操作页面 = 宿主内顶级页组（pageGroups.ts 协议），面板 id 全量
 // 页前缀（{pageId}:localId）；本文件各工厂不再闭包页面实例，目标页在 action
