@@ -9,6 +9,8 @@ export interface EvaluateTriggerResult {
 }
 
 export function evaluateTrigger(
-  issueState: string | undefined,
-  latestVersion: string | undefined,
+  issueState: string | null | undefined,
+  latestVersion: string | null | undefined,
 ): EvaluateTriggerResult;
+
+export function getJson(url: string): Promise<unknown>;

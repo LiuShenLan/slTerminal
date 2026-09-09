@@ -13,7 +13,7 @@ DTO 类型定义层（硬约束 #4，CP-024 单源化）。`src/types/` 的 9 �
 ### 生成/刷新操作指令
 
 1. `cargo test --test lib_tests export_bindings -- --test-threads=1`（TQ-COV-06 形态；ts-rs 为每个 `#[ts(export)]` 类型自动生成 `export_bindings_<类型>` 单测，测试体内执行写盘，**必须串行**——同文件多类型合并导出依赖进程内 EXPORT_PATHS 锁表）
-2. 提交前守卫：`cargo test --test lib_tests export_bindings -- --test-threads=1 && git diff --exit-code -- src/types`——漂移即红（生成物与磁盘不一致 = 红）
+2. 提交前守卫：`cargo test --test lib_tests export_bindings -- --test-threads=1 && git diff --exit-code -- src/types`——漂移即红（生成物与磁盘不一致 = 红）（CI 门禁 step 已落地——ci.yml Guard — src/types）
 
 ### 生成关系对照（类型 → 域文件）
 

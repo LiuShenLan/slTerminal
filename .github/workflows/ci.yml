@@ -62,6 +62,13 @@ jobs:
           node scripts/gen-katex-inline.mjs
           git diff --exit-code src/panels/markdown/generated/katexInlineCss.ts
 
+      # ts-rs DTO 漂移守卫（CP-024）：改 Rust DTO 漏跑导出即红
+      # （定向形态 = --test lib_tests 显式 target，TQ-COV-06 红线不踩）
+      - name: Guard — src/types 生成物与 Rust DTO 一致
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml --test lib_tests export_bindings -- --test-threads=1
+          git diff --exit-code -- src/types
+
       - name: Lint check
         timeout-minutes: 15
         run: npx eslint src/

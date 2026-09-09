@@ -68,7 +68,7 @@ docViewer 预览内容渲染于独立 WebviewWindow（label = `preview-<panelId>
 - **新增命令必须三处注册**：`lib.rs` 的 `generate_handler!`、`build.rs` 的 `AppManifest::new().commands(...)`、`capabilities/default.json` 的 `allow-<cmd>`（SEC-07），缺一即 invoke reject。
 - **阻塞 I/O 一律 `spawn_blocking`**：不得在 async 命令体直接跑阻塞 I/O（硬约束 #3）。
 - **capabilities/ 按窗口域声明权限**：Tauri 2 自定义命令经 build.rs `AppManifest::commands` 生成 allow-<cmd>（SEC-07），capabilities 文件按窗口 label 白名单逐条 allow——主窗口 = default.json；**预览窗口域 = preview.json**（windows glob `preview-*`，最小权限：core:event:default + allow-preview-pull——宿主页桥仅事件收发与内容拉取）；新窗口域须配对应 capability 文件，不追加通配 `*`（硬约束 #10）。
-- **DTO 改 Rust 单源生成（CP-024）**：DTO 面由 Rust `#[derive(TS)]` 生成 `src/types/`（硬约束 #4）；改 DTO = 改 Rust 字段/serde/`#[ts]` 属性 → 跑 `cargo test --test lib_tests export_bindings -- --test-threads=1` → `git diff --exit-code -- src/types` 守卫，JS 侧生成物禁手改。
+- **DTO 改 Rust 单源生成（CP-024）**：DTO 面由 Rust `#[derive(TS)]` 生成 `src/types/`（硬约束 #4）；改 DTO = 改 Rust 字段/serde/`#[ts]` 属性 → 跑 `cargo test --test lib_tests export_bindings -- --test-threads=1` → `git diff --exit-code -- src/types` 守卫（CI 门禁 step 已落地——ci.yml Guard — src/types），JS 侧生成物禁手改。
 - **`project_root_lock` 必须覆盖 canonicalize+apply 全程**：不要拆锁，否则有慢路径覆盖风险（SEC-16）。
 - **不要在持锁临界区引入 panic**：parking_lot 无中毒（守卫 Drop 自动释放），但临界区仍保持短小无 panic 纪律（CP-005）。
 - **settings 顶层键白名单勿擅自扩充**：前端各 store 独立写入依赖此白名单。

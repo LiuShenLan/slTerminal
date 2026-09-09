@@ -3,9 +3,10 @@
 // 双条件同时满足(ADR-0010 TE-07)时退出码 0 并打印解除清单:
 //   ① typescript-eslint issue #10940 闭环(GitHub state === "closed")
 //   ② typescript 7.1 稳定版发布(npm dist-tags.latest = 7.1.x,无预发布后缀)
-// 未达成退出码 1;网络/解析失败退出码 2(未知态,不误导判定)。
+// 未达成退出码 1;网络/解析失败(含非 2xx 响应——TE-01)退出码 2(未知态,不误导判定)。
 // 用法:node scripts/check-ts7-trigger.mjs
 
+import http from "node:http";
 import https from "node:https";
 import { pathToFileURL } from "node:url";
 
@@ -20,11 +21,19 @@ export function evaluateTrigger(issueState, latestVersion) {
   return { issueClosed, ts71Stable, triggered: issueClosed && ts71Stable };
 }
 
-/** 极简 GET JSON(无外部依赖,避免为本工具引入 fetch polyfill 争论) */
-function getJson(url) {
+/** 极简 GET JSON(无外部依赖)——非 2xx 一律视为查询失败(落退出码 2 未知态):
+ *  限流 403 等错误页可能返回合法 JSON,误解析会假报「未达成」(退出码 1)(TE-01) */
+export function getJson(url) {
   return new Promise((resolve, reject) => {
-    https
+    const mod = url.startsWith("https:") ? https : http; // http 分支仅供测试本地桩
+    mod
       .get(url, { headers: { "user-agent": "slterminal-trigger-check" } }, (res) => {
+        const status = res.statusCode ?? 0;
+        if (status < 200 || status >= 300) {
+          res.resume(); // 排空响应防连接占用
+          reject(new Error(`HTTP ${status}`));
+          return;
+        }
         let body = "";
         res.on("data", (c) => (body += c));
         res.on("end", () => {
