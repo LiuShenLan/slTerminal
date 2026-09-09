@@ -182,7 +182,7 @@ pub async fn git_status_impl(
             // delta.new_file().path()（同为相对 workdir 路径）。
             //
             // 各状态语义（libgit2 单路径 delta 两侧同填当前路径）：
-            // - 非 renamed（modified/added/untracked/conflict/ignored）：
+            // - 非 renamed（modified/added/untracked/conflict）：
             //   entry.path() 已等于当前路径 → 保持；
             // - deleted：entry.path() = 被删路径，即 git status 显示语义 → 保持；
             // - renamed：delta 中 old_file=旧路径、new_file=新路径 → 取 new_file。

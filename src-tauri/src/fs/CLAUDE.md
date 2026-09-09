@@ -8,14 +8,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 关键约束与决策
 
-### `fs_read_dir` 游标分页（CP-006，2026-09；替代旧 BE-21「不分页整表返回」）
+### `fs_read_dir` 游标分页（CP-006，2026-09；替代旧 BE-21「不分页整表返回」；游标自 BE-02 改 keyset）
 
 `fs_read_dir(path, cursor?, limit?)` 返回 `FsReadDirPage { entries, nextCursor }`：
 
 - `limit` 缺省 500 / 上限 1000，越界钳制 `[1, 1000]`；
-- 游标 = 排序后整表起始序号的 base64（`encode_page_cursor`/`decode_page_cursor`）——**opaque**：客户端只回传不解读，解码失败返回 `Validation`；
-- `.git` 过滤与排序（文件夹→文件、同类型小写名称序）在整表收集**完成后**执行再切片——排序契约跨页稳定，按页序拼接即全量（无重复无遗漏）；
-- `nextCursor: null` = 末页；游标越界（目录已缩水）→ 空页 + null。
+- 游标 = **keyset**：上一页末条目排序键 `(isDir?0:1, 小写名)` 经 base64（`encode_page_cursor`/`decode_page_cursor`，`sort_key` 为比较基准）——**opaque**：客户端只回传不解读，解码失败返回 `Validation`；
+- 续页定位 = `partition_point(sort_key <= 游标键)` 的严格大于后缀——目录在分页间变长时，排序在游标前的新增属「已翻过页」不重放、排序在游标后的新增出现在续页（无重复无遗漏，根治旧序号游标随新增平移）；
+- `.git` 过滤与排序（文件夹→文件、同类型小写名称序）在整表收集**完成后**执行再切片——排序契约跨页稳定，按页序拼接即全量；
+- `nextCursor: null` = 末页；游标越界（游标键大于现存全部条目）→ 空页 + null。
+- **理论边界（登记）**：排序键 `(isDir, 小写名)` 冲突（同目录存在大小写变体同名条目）时，keyset 续页对同键后缀条目可能跳过/重复——Windows 默认大小写不敏感下该形态同目录不可创建，仅大小写敏感目录标志的边缘场景可触发，接受为已知边界。
 
 增量拉取由前端续页拼接（loadRoot 首帧拉首页 + 后台续页；展开/刷新路径聚合读取），**不采用 Channel 推送**——拉取式分页已削峰，推送式增加前端状态机复杂度。FileTree 虚拟化（FE-30）渲染侧承接窗口数据，对分页契约透明。
 

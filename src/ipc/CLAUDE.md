@@ -14,7 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### 目录分页读取（CP-006）
 
-`fs.readDirPage(path, cursor?, limit?)` → `fs_read_dir`（返回 `FsReadDirPage`，生成自 `src/types/fs.ts`）：后端 `.git` 过滤与排序（文件夹→文件、小写名序）整表完成后切片——跨页整体序稳定，消费方按页序拼接即全量；`nextCursor: null` = 末页。`cursor` 为 opaque（上一页回传值，只回传不解读）；`limit` 缺省 500、上限 1000（越界后端钳制）。FileTree 侧 `useFileTree` loadRoot 首帧拉首页 + 后台续页拼接，展开/刷新路径（loadDirectory/collectDirEntries）聚合读取。
+`fs.readDirPage(path, cursor?, limit?)` → `fs_read_dir`（返回 `FsReadDirPage`，生成自 `src/types/fs.ts`）：后端 `.git` 过滤与排序（文件夹→文件、小写名序）整表完成后切片——跨页整体序稳定，消费方按页序拼接即全量；`nextCursor: null` = 末页。`cursor` 为 opaque（上一页回传值，只回传不解读）；`limit` 缺省 500、上限 1000（越界后端钳制）。游标自 BE-02 起为 keyset（后端内部实现 = 上一页末条目排序键 base64）——**opaque 契约不变、前端零改动**，目录中途变长时跨页不重复不遗漏。FileTree 侧 `useFileTree` loadRoot 首帧拉首页 + 后台续页拼接，展开/刷新路径（loadDirectory/collectDirEntries）聚合读取。
 
 ### Channel 模式
 

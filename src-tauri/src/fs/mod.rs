@@ -48,23 +48,34 @@ pub struct FsReadDirPage {
 const READ_DIR_PAGE_DEFAULT: u32 = 500;
 const READ_DIR_PAGE_MAX: u32 = 1000;
 
-/// 分页游标编解码（CP-006）
-///
-/// 游标 = 排序后全量列表起始序号的十进制文本经 base64——opaque：客户端只回传
-/// 不解读，仅本模块可解析；跨页排序契约稳定，续页无重复无遗漏。
-fn encode_page_cursor(start: usize) -> String {
-    use base64::Engine as _;
-    base64::engine::general_purpose::STANDARD.encode(start.to_string())
+/// 排序键（keyset 游标比较基准）——与排序契约同源：目录在前、同类型小写名称序
+/// （b.is_dir.cmp(&a.is_dir) 降序 = 目录(true) 排前 → 键序 (0=目录, 1=文件)）
+fn sort_key(e: &DirEntry) -> (u8, String) {
+    (if e.is_dir { 0 } else { 1 }, e.name.to_lowercase())
 }
 
-fn decode_page_cursor(cursor: &str) -> Result<usize, AppError> {
+/// keyset 游标编码：base64("D\0"<小写名>) / base64("F\0"<小写名>)——上一页末条目排序键；
+/// NUL 不出现在任何文件名中，分隔安全。opaque 契约不变（客户端只回传不解读）
+fn encode_page_cursor(is_dir: bool, name: &str) -> String {
+    use base64::Engine as _;
+    let tag = if is_dir { "D" } else { "F" };
+    base64::engine::general_purpose::STANDARD.encode(format!("{tag}\u{0}{}", name.to_lowercase()))
+}
+
+fn decode_page_cursor(cursor: &str) -> Result<(u8, String), AppError> {
     use base64::Engine as _;
     let invalid = || AppError::Validation(format!("无效目录分页游标（opaque 契约）: {cursor}"));
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(cursor)
         .map_err(|_| invalid())?;
     let text = String::from_utf8(bytes).map_err(|_| invalid())?;
-    text.parse::<usize>().map_err(|_| invalid())
+    let (tag, name) = text.split_once('\u{0}').ok_or_else(invalid)?;
+    let dir_key = match tag {
+        "D" => 0u8,
+        "F" => 1u8,
+        _ => return Err(invalid()),
+    };
+    Ok((dir_key, name.to_string()))
 }
 
 /// 在 spawn_blocking 中执行阻塞任务，统一将 JoinError（含闭包 panic）映射为 AppError::TaskJoin
@@ -495,10 +506,11 @@ pub async fn fs_read_dir(
 
 /// fs_read_dir 命令内核：路径 sandbox 校验 + 阻塞列目录 + 过滤排序后游标切片
 ///
-/// 分页语义（CP-006）：`.git` 过滤与排序在整表收集完成后执行，再按游标切片
-/// （游标 = 排序后起始序号的 base64，opaque——由 [`encode_page_cursor`] 编码、
-/// [`decode_page_cursor`] 解码）；`limit` 钳制 `[1, READ_DIR_PAGE_MAX]`，缺省
-/// `READ_DIR_PAGE_DEFAULT`。增量拉取由前端续页拼接，本命令不采用 Channel 推送。
+/// 分页语义（CP-006）：`.git` 过滤与排序在整表收集完成后执行，再按 keyset 游标切片
+/// （游标 = 上一页末条目排序键的 base64，opaque——由 [`encode_page_cursor`] 编码、
+/// [`decode_page_cursor`] 解码；续页 = 严格大于游标键的后缀，目录中途变长亦无重复
+/// 无遗漏）；`limit` 钳制 `[1, READ_DIR_PAGE_MAX]`，缺省 `READ_DIR_PAGE_DEFAULT`。
+/// 增量拉取由前端续页拼接，本命令不采用 Channel 推送。
 async fn fs_read_dir_impl(
     path: String,
     cursor: Option<String>,
@@ -513,12 +525,8 @@ async fn fs_read_dir_impl(
         let limit = limit
             .map(|l| l.clamp(1, READ_DIR_PAGE_MAX))
             .unwrap_or(READ_DIR_PAGE_DEFAULT) as usize;
-        // 游标解码（None/首帧 = 从 0 开始）
-        let start = cursor
-            .as_deref()
-            .map(decode_page_cursor)
-            .transpose()?
-            .unwrap_or(0);
+        // 游标解码（None/首帧 = 从头开始）——先解码，非法游标在读目录前即失败
+        let cursor_key = cursor.as_deref().map(decode_page_cursor).transpose()?;
 
         let mut entries: Vec<DirEntry> = Vec::new();
         let dir =
@@ -569,6 +577,13 @@ async fn fs_read_dir_impl(
                 .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
         });
 
+        // keyset 定位：严格大于游标键的第一个条目
+        // （目录中途变长、新增条目排序在游标前 → 不重复不遗漏；游标键大于全部条目 → start = len → 空页）
+        let start = match &cursor_key {
+            Some(key) => entries.partition_point(|e| sort_key(e) <= *key),
+            None => 0,
+        };
+
         // 排序完成后按游标切片——排序契约跨页稳定，续页拼接无重复无遗漏
         let end = start.saturating_add(limit).min(entries.len());
         let page = if start >= entries.len() {
@@ -576,8 +591,11 @@ async fn fs_read_dir_impl(
         } else {
             entries[start..end].to_vec()
         };
-        // 切片未到末尾 → 下一页游标（末尾游标起点）；到末尾 → None（末页）
-        let next_cursor = (end < entries.len()).then(|| encode_page_cursor(end));
+        // 切片未到末尾 → 下一页游标（本页末条目排序键）；到末尾 → None（末页）
+        let next_cursor = (end < entries.len()).then(|| {
+            let last = &entries[end - 1];
+            encode_page_cursor(last.is_dir, &last.name)
+        });
 
         Ok(FsReadDirPage {
             entries: page,
@@ -954,6 +972,85 @@ mod read_dir_tests {
                 .all(|(a, b)| a.name == b.name),
             "分页拼接应与整表逐条一致（无重复无遗漏）"
         );
+    }
+
+    /// keyset 游标根治「目录中途变长」：游标前新增不重复（已翻过页不重放）、游标后新增不漏（续页可见）
+    #[test]
+    fn read_dir_keyset_cursor_growth_no_dup_no_hole() {
+        let dir = tempfile::tempdir().unwrap();
+        seed_files(dir.path(), 1201); // 500 + 500 + 201 → 三页，续页游标链完整
+        let path = dir.path().to_string_lossy().to_string();
+
+        // 首页 500（f0000..f0499），游标键 = f0499.txt
+        let page1 = run(fs_read_dir_impl(path.clone(), None, None, None)).unwrap();
+        assert_eq!(page1.entries.len(), READ_DIR_PAGE_DEFAULT as usize);
+        let cursor1 = page1.next_cursor.clone().expect("非末页应带游标");
+
+        // 排序于游标「前」的新增（0aaa.txt < f0499.txt）→ 属已翻过页，续页不得重复出现
+        std::fs::write(dir.path().join("0aaa.txt"), "x").unwrap();
+        let page2 = run(fs_read_dir_impl(path.clone(), Some(cursor1), None, None)).unwrap();
+        assert_eq!(page2.entries.len(), READ_DIR_PAGE_DEFAULT as usize);
+        let cursor2 = page2.next_cursor.clone().expect("非末页应带游标");
+        assert!(
+            page2.entries.iter().all(|e| e.name != "0aaa.txt"),
+            "排序在游标前的新增属已翻过页，续页不得出现（无重复）"
+        );
+
+        // 排序于游标「后」的新增（zzzz.txt > f0999.txt）→ 续页应看见（无遗漏）
+        std::fs::write(dir.path().join("zzzz.txt"), "x").unwrap();
+        let page3 = run(fs_read_dir_impl(path.clone(), Some(cursor2), None, None)).unwrap();
+        assert!(page3.next_cursor.is_none(), "第三页应即末页");
+        assert!(
+            page3.entries.iter().any(|e| e.name == "zzzz.txt"),
+            "排序在游标后的新增应出现在续页（无遗漏）"
+        );
+
+        // 跨页拼接无重复：逐名去重后长度不变
+        let mut joined: Vec<String> = page1
+            .entries
+            .iter()
+            .chain(page2.entries.iter())
+            .chain(page3.entries.iter())
+            .map(|e| e.name.clone())
+            .collect();
+        let mut deduped = joined.clone();
+        deduped.sort();
+        deduped.dedup();
+        assert_eq!(deduped.len(), joined.len(), "跨页拼接不得重复");
+
+        // 无遗漏核验：唯一缺席条目应为游标前新增的 0aaa.txt（正确语义），其余全量在列
+        joined.sort();
+        let full = run(collect_dir_entries(path, None)).unwrap();
+        let missing: Vec<&str> = full
+            .iter()
+            .map(|e| e.name.as_str())
+            .filter(|n| joined.binary_search(&n.to_string()).is_err())
+            .collect();
+        assert_eq!(
+            missing,
+            vec!["0aaa.txt"],
+            "唯一缺席应为游标前新增（已翻过页不重放），其余条目零遗漏"
+        );
+    }
+
+    /// keyset 游标越界（游标键大于现存全部条目）→ 空页 + next_cursor = None（形态保留）
+    #[test]
+    fn read_dir_keyset_cursor_beyond_end_empty_page() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.txt"), "a").unwrap();
+        std::fs::write(dir.path().join("b.txt"), "b").unwrap();
+
+        // 手工构造大于全部条目的键（文件、名称 zzzzzz）——末页游标越界/目录缩水的等价形态
+        let beyond = encode_page_cursor(false, "zzzzzz");
+        let page = run(fs_read_dir_impl(
+            dir.path().to_string_lossy().to_string(),
+            Some(beyond),
+            None,
+            None,
+        ))
+        .unwrap();
+        assert!(page.entries.is_empty(), "游标越界应返回空页");
+        assert!(page.next_cursor.is_none(), "空页不应带续页游标");
     }
 
     /// limit 越界（>上限）→ 钳制到 READ_DIR_PAGE_MAX

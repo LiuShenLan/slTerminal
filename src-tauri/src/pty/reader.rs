@@ -20,7 +20,6 @@ use parking_lot::Mutex;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 use tauri::ipc::Channel;
 
 /// reader 线程读取缓冲区大小
@@ -156,33 +155,6 @@ pub fn reader_loop(
                 break;
             }
         }
-    }
-}
-
-/// BE-06/CP-011: reader 线程 join 超时——3s 后按清理计划处理（上提自 spawn.rs，
-/// 纯常量无状态；state.rs PtySession::drop 与 spawn.rs pty_kill 共用）
-pub(crate) const KILL_JOIN_TIMEOUT: Duration = Duration::from_secs(3);
-
-/// BE-06: join 超时轮询间隔（10ms，轻量轮询，避免忙等）
-pub(crate) const KILL_JOIN_POLL_INTERVAL: Duration = Duration::from_millis(10);
-
-/// BE-06: 带超时的线程 join——轮询 `is_finished` 至 deadline，避免无限期阻塞
-///
-/// 返回 false = 超时未完成（调用方按 `plan_cleanup_after_join_timeout` 决策：
-/// reader detach + session 移交监督线程，CP-011）。
-/// 轮询到 is_finished 后调用 join() 回收线程资源（立即返回）。
-/// 纯逻辑 + 标准库线程，可 L1 单测（不依赖 PTY）。
-pub(crate) fn join_with_timeout(handle: std::thread::JoinHandle<()>, timeout: Duration) -> bool {
-    let deadline = std::time::Instant::now() + timeout;
-    loop {
-        if handle.is_finished() {
-            let _ = handle.join();
-            return true;
-        }
-        if std::time::Instant::now() >= deadline {
-            return false;
-        }
-        std::thread::sleep(KILL_JOIN_POLL_INTERVAL);
     }
 }
 
@@ -879,7 +851,8 @@ mod reader_tests {
         assert_eq!(tail.len(), 4096); // 4000 额度 + 一个块粒度 = 4096
     }
 
-    // ─── CP-011: plan_cleanup_after_join_timeout / join_with_timeout ───
+    // ─── CP-011: plan_cleanup_after_join_timeout ───
+    // （join_with_timeout 已上提 crate::thread_join，用例随迁 mod join_tests，BE-01）
 
     #[test]
     fn cleanup_plan_finished_reader_normal_drop() {
@@ -897,13 +870,5 @@ mod reader_tests {
             plan_cleanup_after_join_timeout(false),
             CleanupPlan::DetachReaderSupervisedDrop
         ));
-    }
-
-    #[test]
-    fn join_with_timeout_timeout_returns_false() {
-        // 永不结束的线程（park 永不 unpark）+ 10ms 短超时 → 返回 false；
-        // park 不依赖真实时钟计时，超时窗口充裕防 flaky
-        let handle = std::thread::spawn(|| std::thread::park());
-        assert!(!join_with_timeout(handle, Duration::from_millis(10)));
     }
 }

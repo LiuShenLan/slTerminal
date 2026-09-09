@@ -840,6 +840,8 @@ mod scan_bench {
     /// 机器负载敏感(定向复测 max 184.9/185.6ms),故 max 不作硬断言,仅报告
     /// 留档;中位稳定(180-185ms)是唯一硬门槛——任何进一步放宽须留数字依据;
     /// 若直扫成本经优化回落 < 50ms,应重评估删除分支(CP-007)。
+    /// 9-9 复核加固：L1/L2 并行抢核单轮中位 410ms 误红 → 断言改两轮制（冷却 2s
+    /// 重采样复判）；持续并行负载仍不抗——L1/L2 串行回归纪律登记根 CLAUDE.md（BE-06）。
     #[test]
     fn scan_bench_1000_sessions_median_under_200ms() {
         // 夹具:1000 编码目录 × 1 会话文件(内容照 write_valid_session:summary 首行 +
@@ -869,13 +871,29 @@ mod scan_bench {
         samples.sort();
         let median = samples[9]; // 20 样本取低中位(第 10 小)
         let max = samples[19];
-        // max 仅报告不作硬断言:对机器负载敏感(9-8 全量门禁与 clippy 并行时
-        // max 249.65ms 但中位 184.9ms 稳过),中位门槛已兜回归——报告留档
-        eprintln!("CP-007 基准: 样本=20 中位={median:?} max={max:?}(每样本 = 1000 会话全扫)");
-        assert!(
-            median < Duration::from_millis(200),
-            "全扫中位 {median:?} 越常驻门槛 200ms(依据 9-8 实测 180.33ms)——若回落 <50ms 重评估删除分支,放宽须留数字依据(CP-007)"
-        );
+        eprintln!("CP-007 基准(轮 1): 样本=20 中位={median:?} max={max:?}(每样本 = 1000 会话全扫)");
+        let threshold = Duration::from_millis(200);
+        if median >= threshold {
+            // 负载加固（BE-06，2026-09-09）：并行抢 CPU 的瞬态负载曾致单轮中位 410ms 误红
+            // （隔离复跑 180ms）——冷却 2s 重采样一轮再判，两轮均越门槛才红（真实回归两轮必越，
+            // 瞬态尖峰第二轮自愈）。仍不抗持续并行负载——全量回归 L1/L2 串行纪律见根 CLAUDE.md。
+            eprintln!("CP-007 基准(轮 1) 中位越门槛——冷却 2s 重采样复判");
+            std::thread::sleep(Duration::from_secs(2));
+            let mut samples2: Vec<Duration> = Vec::with_capacity(20);
+            for _ in 0..20 {
+                let t0 = Instant::now();
+                let sessions = scan_sessions_with_force(true);
+                samples2.push(t0.elapsed());
+                assert_eq!(sessions.len(), 1000, "重采样每次样本应全量命中 1000 会话");
+            }
+            samples2.sort();
+            let median2 = samples2[9];
+            eprintln!("CP-007 基准(轮 2): 中位={median2:?} max={:?}", samples2[19]);
+            assert!(
+                median2 < threshold,
+                "全扫中位两轮均越常驻门槛 200ms(轮1={median:?} 轮2={median2:?},依据 9-8 实测 180.33ms)——若回落 <50ms 重评估删除分支,放宽须留数字依据(CP-007)"
+            );
+        }
     }
 
     /// 写一个有效会话文件(UUID 文件名 + summary 首行 + user prompt 行,照 write_valid_session 形态)

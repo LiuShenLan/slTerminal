@@ -128,13 +128,17 @@ impl HookSignalWatcher {
         })
     }
 
-    /// 停止监听器（幂等）
+    /// 停止监听器（幂等；BE-01: 带超时 join——超时 detach 不再无界阻塞）
     pub fn stop(&mut self) {
         if let Some(tx) = self.stop_tx.take() {
             let _ = tx.send(());
         }
         if let Some(handle) = self.thread_handle.take() {
-            let _ = handle.join();
+            if !crate::thread_join::join_with_timeout(handle, crate::thread_join::JOIN_TIMEOUT) {
+                tracing::warn!(
+                    "hook 信号 watcher 线程 3s 内未退出——detach 由进程退出回收（BE-01）"
+                );
+            }
         }
     }
 }
@@ -445,7 +449,11 @@ mod watcher_tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         assert!(handle.is_finished(), "发送停止信号后线程应结束");
-        let _ = handle.join();
+        // BE-01: 测试全域不留裸 join——带超时 join（线程已 finished，即时成功）
+        assert!(
+            crate::thread_join::join_with_timeout(handle, Duration::from_secs(5)),
+            "测试 watcher 线程 5s 内应退出"
+        );
     }
 
     #[test]

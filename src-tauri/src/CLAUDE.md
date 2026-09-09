@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 存在理由
 
-`src-tauri/src/` 顶层单文件模块承载各功能子模块共享的全局支撑件：应用数据目录、用户 home 目录、settings/projects 持久化、全局 `AppState`、路径沙箱、统一错误类型。这些模块的跨模块契约（数据目录、home 解析、持久化格式、沙箱语义、错误消息约定）需要在顶层文档化，避免各子模块重复解释或相互穿透。
+`src-tauri/src/` 顶层单文件模块承载各功能子模块共享的全局支撑件：应用数据目录、用户 home 目录、线程 join 超时共享件、settings/projects 持久化、全局 `AppState`、路径沙箱、统一错误类型。这些模块的跨模块契约（数据目录、home 解析、持久化格式、沙箱语义、错误消息约定）需要在顶层文档化，避免各子模块重复解释或相互穿透。
 
 ## 关键约束与决策
 
@@ -23,6 +23,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Windows 事实（勿改，ADR-0016）**：dirs 6.0.0 / dirs-sys 0.5.0 的 `home_dir()` 走 `SHGetKnownFolderPath`，**完全不读 USERPROFILE/HOME env**——生产代码禁止裸 `dirs::home_dir()`（grep 收敛纪律，仅 cfg(test) 上下文允许；曾有两份照抄守卫复制 + watcher 一处裸调用，已全部收敛于此）。
 - 消费点：hooks/claude（路径辅助/注入/statusline 备份）、hooks/watcher（信号目录——跨进程一致性承重墙）、plan_balance（余量来源）、agent_history/claude/scan.rs（fallback；`SLTERM_CLAUDE_PROJECTS_DIR` env 覆盖留 provider 内部，优先级高于 home）。
 - 与 `app_dir.rs`（应用数据目录 = exe 同级/SLTERM_DATA_DIR）是两个不同概念目录：app_dir 管应用自身持久化，home 管用户配置（`~/.claude`、`~/.slterminal`）。
+
+### thread_join.rs — 线程 join 超时共享件（BE-01）
+
+`JOIN_TIMEOUT`（3s）、`JOIN_POLL_INTERVAL`（10ms）与 `join_with_timeout`（轮询 `is_finished` 至 deadline）自 pty/reader.rs 上提（app_dir/home 同形态）：全部线程退出点统一带超时 join，禁止裸 join 无界阻塞（CP-011 口径扩展至生产+测试全域）。守卫：`rg "\.join\(\)" src-tauri/src` 仅命中本文件白名单一处（`join_with_timeout` 内部回收 join）；`CleanupPlan`/`plan_cleanup_after_join_timeout` 留 pty/reader.rs（pty 专有清理语义，不随迁）。
 
 ### settings.rs — 浅合并 + 保存互斥 + 白名单
 
@@ -61,7 +65,7 @@ docViewer 预览内容渲染于独立 WebviewWindow（label = `preview-<panelId>
 
 ### parking_lot 换装（CP-005）
 
-`state.rs` 等全部持锁站点用 `parking_lot::Mutex/RwLock`，中毒攻击面消除（锁内 panic 不再连锁 panic 等待方）；新建持锁临界区一律 parking_lot，禁止再引入 `std::sync::Mutex/RwLock`（grep 守卫）。
+`state.rs` 等全部持锁站点用 `parking_lot::Mutex/RwLock`，中毒攻击面消除（锁内 panic 不再连锁 panic 等待方）；新建持锁临界区一律 parking_lot，禁止再引入 std Mutex/RwLock 原语——grep 守卫命令写死为 `rg "std::sync::(Mutex|RwLock)" src-tauri/src -g "*.rs"`（-g 限定 Rust 源文件，本行文档描述不自匹配）。
 
 ## 外部坑/红线
 

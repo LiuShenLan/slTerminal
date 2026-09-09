@@ -7,11 +7,10 @@
 /// - stdin drop：Windows 绝对不能 drop stdin（立即杀子进程）
 /// - 孤儿进程：每个子进程放入 Job Object，JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
 use crate::error::AppError;
-use crate::pty::reader::{
-    join_with_timeout, plan_cleanup_after_join_timeout, CleanupPlan, KILL_JOIN_TIMEOUT,
-};
+use crate::pty::reader::{plan_cleanup_after_join_timeout, CleanupPlan};
 use crate::pty::shell;
 use crate::state::{self as app_state, AppState, PtySession, PtyState};
+use crate::thread_join::{join_with_timeout, JOIN_TIMEOUT};
 use parking_lot::Mutex;
 #[cfg(not(windows))]
 use portable_pty::native_pty_system;
@@ -1529,7 +1528,7 @@ pub async fn pty_resize(
 /// 可能永久阻塞，正常路径随闭包尾 drop 时执行，见 CP-011），
 /// 避免持锁阻塞导致后续命令级联卡死。
 /// BE-06: kill 返回值检查（失败 warn 继续——Job Object KILL_ON_JOB_CLOSE 兜底杀子进程）；
-/// reader join 带 3s 超时（KILL_JOIN_TIMEOUT 轮询 is_finished）——超时路径
+/// reader join 带 3s 超时（JOIN_TIMEOUT 轮询 is_finished）——超时路径
 /// reader detach、session 移交监督线程执行 drop（master drop → ClosePseudoConsole
 /// 在监督线程内执行，CP-011）。
 /// SEC-08: 校验 panel_id 与 session 归属一致后再移除。
@@ -1564,7 +1563,7 @@ pub async fn pty_kill(
         }
         drop(child);
         if let Some(handle) = session.reader_handle.take() {
-            let reader_finished = join_with_timeout(handle, KILL_JOIN_TIMEOUT);
+            let reader_finished = join_with_timeout(handle, JOIN_TIMEOUT);
             // CP-011: 清理决策为纯函数（L1 锁死两分支），超时路径按下执行监督线程
             if let CleanupPlan::DetachReaderSupervisedDrop =
                 plan_cleanup_after_join_timeout(reader_finished)
@@ -1604,7 +1603,7 @@ pub async fn pty_kill(
 ///
 /// 前端关闭序列：先前端 TerminalRegistry 快速 kill，再调用本命令兜底——
 /// 前后端 session 不一致（前端 Registry 缺失条目）时防止后端 session 泄漏。
-/// 遍历 sessions 全部 kill + join（超时语义同 pty_kill：KILL_JOIN_TIMEOUT 轮询
+/// 遍历 sessions 全部 kill + join（超时语义同 pty_kill：JOIN_TIMEOUT 轮询
 /// is_finished，超时路径 reader detach、session 移交监督线程执行 drop，CP-011），
 /// 返回成功 kill 数。
 #[tauri::command]
@@ -1638,7 +1637,7 @@ async fn pty_kill_all_impl(pty: &PtyState) -> Result<u32, AppError> {
             }
             drop(child);
             if let Some(handle) = session.reader_handle.take() {
-                let reader_finished = join_with_timeout(handle, KILL_JOIN_TIMEOUT);
+                let reader_finished = join_with_timeout(handle, JOIN_TIMEOUT);
                 // CP-011 同款：reader 未退出 → session 移交监督线程执行 drop
                 if let CleanupPlan::DetachReaderSupervisedDrop =
                     plan_cleanup_after_join_timeout(reader_finished)
@@ -2153,39 +2152,7 @@ mod spawn_tests {
         }
     }
 
-    // ─── BE-06: join_with_timeout 测试（TQ-COV-03 复核增强）───
-    // 函数本体上提 reader.rs（CP-011），此处经顶层 use 引用；用例覆盖 true/false
-    // 分支——finished 用例补「快速（<1s）」时间断言；blocked 用例改 park 线程
-    // （精确阻塞，不依赖睡眠计时），timeout=50ms 注入短超时测 false 分支。
-
-    #[test]
-    fn join_with_timeout_finished_handle_returns_true() {
-        // 立即结束的线程：超时前完成 join，返回 true 且快速（<1s）
-        let start = std::time::Instant::now();
-        let handle = std::thread::spawn(|| {});
-        assert!(join_with_timeout(handle, Duration::from_millis(200)));
-        assert!(
-            start.elapsed() < Duration::from_secs(1),
-            "已结束线程的 join 应立即返回，实际耗时 {:?}",
-            start.elapsed()
-        );
-    }
-
-    #[test]
-    fn join_with_timeout_blocked_thread_returns_false() {
-        // park 的线程 + 短超时（50ms）→ 返回 false（调用方按 CP-011 决策:
-        // detach reader + 监督线程 drop）
-        let handle = std::thread::spawn(|| std::thread::park());
-        assert!(!join_with_timeout(handle, Duration::from_millis(50)));
-    }
-
-    #[test]
-    fn join_with_timeout_abandoned_thread_finishes_later_no_panic() {
-        // 超时放弃 join 后，线程自行结束不 panic（JoinHandle drop 时 detach）
-        let handle = std::thread::spawn(|| std::thread::sleep(Duration::from_millis(100)));
-        assert!(!join_with_timeout(handle, Duration::from_millis(10)));
-        std::thread::sleep(Duration::from_millis(150));
-    }
+    // ─── BE-06: join_with_timeout 用例已随迁 crate::thread_join::join_tests（BE-01）───
 
     // ─── BE-08: pty_kill_all 测试 ───
 

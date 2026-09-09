@@ -13,6 +13,7 @@ mod projects;
 pub mod pty;
 mod settings;
 mod state;
+mod thread_join;
 
 use crate::pty::win_build::get_windows_build_number;
 pub use error::AppError;

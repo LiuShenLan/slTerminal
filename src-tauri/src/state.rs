@@ -8,7 +8,7 @@ use tauri::State;
 
 use crate::error::AppError;
 use crate::notify::pool::{LruWatcherPool, WATCHER_POOL_CAPACITY};
-use crate::pty::reader::{join_with_timeout, KILL_JOIN_TIMEOUT};
+use crate::thread_join::{join_with_timeout, JOIN_TIMEOUT};
 
 /// PTY 会话 — 持有 master（读写/缩放）、子进程、writer 和 reader 线程句柄
 pub struct PtySession {
@@ -38,7 +38,7 @@ impl Drop for PtySession {
         // pty_kill/pty_kill_all take 时可达（如进程退出清空 sessions）；
         // 可达场景同样禁止无界阻塞：带超时 join，超时 detach（进程退出时 OS 回收）。
         if let Some(handle) = self.reader_handle.take() {
-            if !join_with_timeout(handle, KILL_JOIN_TIMEOUT) {
+            if !join_with_timeout(handle, JOIN_TIMEOUT) {
                 tracing::warn!("PtySession drop: reader 未退出,detach(进程退出回收)");
             }
         }

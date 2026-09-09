@@ -163,13 +163,15 @@ impl FileWatcher {
         })
     }
 
-    /// 停止监听器，等待线程退出
+    /// 停止监听器，等待线程退出（BE-01: 带超时 join——超时 detach 不再无界阻塞）
     pub fn stop(&mut self) {
         if let Some(tx) = self.stop_tx.take() {
             let _ = tx.send(());
         }
         if let Some(handle) = self.thread_handle.take() {
-            let _ = handle.join();
+            if !crate::thread_join::join_with_timeout(handle, crate::thread_join::JOIN_TIMEOUT) {
+                tracing::warn!("notify watcher 线程 3s 内未退出——detach 由进程退出回收（BE-01）");
+            }
         }
     }
 
@@ -301,8 +303,11 @@ impl Drop for FileWatcher {
         if let Some(tx) = self.stop_tx.take() {
             let _ = tx.send(());
         }
+        // BE-01: 带超时 join——超时 detach（进程退出回收），Drop 不再无界阻塞
         if let Some(handle) = self.thread_handle.take() {
-            let _ = handle.join();
+            if !crate::thread_join::join_with_timeout(handle, crate::thread_join::JOIN_TIMEOUT) {
+                tracing::warn!("notify watcher 线程 3s 内未退出——detach 由进程退出回收（BE-01）");
+            }
         }
     }
 }
@@ -963,9 +968,16 @@ mod notify_tests {
         }
 
         /// 关闭发送端并等待循环退出（循环因 Disconnected 分支退出）
+        /// BE-01: 带超时 join（测试全域同纪律，不留裸 join）
         fn shutdown(self) {
             drop(self.event_tx);
-            self.handle.join().unwrap();
+            assert!(
+                crate::thread_join::join_with_timeout(
+                    self.handle,
+                    std::time::Duration::from_secs(5)
+                ),
+                "测试 watcher 线程 5s 内应退出"
+            );
         }
     }
 

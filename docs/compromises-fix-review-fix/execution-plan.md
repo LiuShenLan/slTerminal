@@ -79,7 +79,7 @@ Workflow({ scriptPath: "docs/compromises-fix-review-fix/workflows/fix-loop.js",
 | Stage | 状态 | commit | verify 结果 | 备注 |
 |---|---|---|---|---|
 | 01 | 完成 | 7abc009 | TE-01/02/07 fixed；TE-03 静态断言全过、命令 5 提交后 exit 0 | 门禁 5 时序缺陷：TE-03 自身文档同步改 src/types/CLAUDE.md → 提交前必红，提交后绿 |
-| 02 | 未开始 | | | L4 前提：前台聚焦 |
+| 02 | 完成 | d1a6838 | 首轮 allFixed=false（2 文档项 partial + L4 门禁红）→ fix-loop 1 轮 allFixed=true；L4 补验 build:e2e + html.e2e.ts 绿 | L4 门禁时序缺陷：门禁 7 普通 build tree-shake E2E helper（与 e2e-tests/CLAUDE.md:110 冲突），须 build:e2e 重建后跑 |
 | 03 | 未开始 | | | |
 | 04 | 未开始 | | | |
 | 05 | 未开始 | | | TE-03 守卫首次真实触发 |

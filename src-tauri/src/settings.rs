@@ -524,12 +524,25 @@ mod settings_tests {
         let _guard = AppDataDirGuard::set(dir.path());
 
         // 两个独立线程各持 runtime 并发 block_on 真实 save_settings（read-merge-write 竞态）
-        let h1 =
-            std::thread::spawn(move || run_save_with_retry(serde_json::json!({"fontSize": "a"})));
-        let h2 =
-            std::thread::spawn(move || run_save_with_retry(serde_json::json!({"fontSize": "b"})));
-        h1.join().unwrap().unwrap();
-        h2.join().unwrap().unwrap();
+        // BE-01: 裸 join 清零——带超时 join，保存结果经通道取回断言（超时即断言失败）
+        let (tx1, rx1) = std::sync::mpsc::channel();
+        let (tx2, rx2) = std::sync::mpsc::channel();
+        let h1 = std::thread::spawn(move || {
+            let _ = tx1.send(run_save_with_retry(serde_json::json!({"fontSize": "a"})));
+        });
+        let h2 = std::thread::spawn(move || {
+            let _ = tx2.send(run_save_with_retry(serde_json::json!({"fontSize": "b"})));
+        });
+        assert!(
+            crate::thread_join::join_with_timeout(h1, std::time::Duration::from_secs(5)),
+            "h1 保存线程 5s 内应退出"
+        );
+        assert!(
+            crate::thread_join::join_with_timeout(h2, std::time::Duration::from_secs(5)),
+            "h2 保存线程 5s 内应退出"
+        );
+        rx1.recv().unwrap().unwrap();
+        rx2.recv().unwrap().unwrap();
 
         // 原子 persist 保证最终文件是完整文档（非撕裂），值为两者之一
         let content = std::fs::read_to_string(dir.path().join("settings.json")).unwrap();

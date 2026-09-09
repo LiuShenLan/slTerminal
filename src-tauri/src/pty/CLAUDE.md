@@ -62,7 +62,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### pty_kill 异步销毁
 
-`ClosePseudoConsole` 在 pre-Win11 24H2 上可能永久阻塞（上游 Discussion #17716，Win10 永不修复）。`pty_kill` 先提取 session 释放写锁，再在 `spawn_blocking` 中执行 `kill → join reader(3s)`：正常路径随闭包尾 drop；超时路径 reader detach、session 移入监督线程执行 drop（关 writer + ClosePseudoConsole），监督 3s 超时则清理线程 detach，进程退出时 OS 回收句柄（Job Object 保证子进程先死）。`PtySession::drop`（state.rs）同样只做带超时 join（CP-011）。
+`ClosePseudoConsole` 在 pre-Win11 24H2 上可能永久阻塞（上游 Discussion #17716，Win10 永不修复）。`pty_kill` 先提取 session 释放写锁，再在 `spawn_blocking` 中执行 `kill → join reader`（`crate::thread_join::join_with_timeout` + `JOIN_TIMEOUT`=3s，BE-01 上提 crate 顶层共享件）：正常路径随闭包尾 drop；超时路径 reader detach、session 移入监督线程执行 drop（关 writer + ClosePseudoConsole），监督 3s 超时则清理线程 detach，进程退出时 OS 回收句柄（Job Object 保证子进程先死）。`PtySession::drop`（state.rs）同样只做带超时 join（CP-011）。
 
 ### 终端能力环境变量
 
@@ -106,6 +106,7 @@ spawn 后立即向 stdin 写 `\x1b[1;1R`，补偿 ConPTY `VtIo::StartIfNeeded()`
 - **PowerShell 交互 shell 禁止 `-NoProfile`**：用户 profile（conda init 钩子等）必须原生加载——缺钩子则 `conda activate` 失效（win11 CondaError / win10 conda.bat 静默空转，B17）。
 - **不要把 `#[cfg(windows)]` 放到本模块外**。
 - **不要 drop stdin writer**。
+- **禁止裸 join（BE-01）**：全部线程退出点统一经 `crate::thread_join::join_with_timeout`（crate 顶层共享件，超时分支 `tracing::warn` + detach，不再无界阻塞）——全仓守卫 `rg "\.join\(\)" src-tauri/src` 仅命中 thread_join.rs 白名单一处；`CleanupPlan`/`plan_cleanup_after_join_timeout` 留 reader.rs（pty 专有清理语义，不随迁）。
 - **不要 stop/start 轮换 watcher**（见 @../notify/CLAUDE.md），与 pty 无关但常被误用。
 - **不要解析提示符跟踪 cwd**：portable-pty 在 Windows 不返回 cwd，只能靠 OSC 7/133 序列。
 
