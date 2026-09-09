@@ -671,7 +671,7 @@ agent 分工:CP-025 独立;CP-026+CP-021 单 agent;CP-038+CP-027 单 agent;CP-03
    - pty/CLAUDE.md「既定豁免」表「Mutex 中毒分支」行删除;git/CLAUDE.md「既定豁免」表「仓库缓存 Mutex 中毒分支」行删除;plan_balance/CLAUDE.md:17「照 hooks/mod.rs WATCHER 先例」句保留(先例本身换装,语义不冲突);
    - agent_history/CLAUDE.md、notify 相关若涉「锁中毒」措辞,grep 一并清理。
 6. **验证**:
-   - `rg "std::sync::(Mutex|RwLock)" src-tauri/` 零命中(退出码 1);
+   - `rg "std::sync::(Mutex|RwLock)" src-tauri/` 零命中(退出码 1);——落地复核（2026-09-09）：本项实际执行命令形态为 `rg "std::sync::(Mutex|RwLock)" src-tauri/src -g "*.rs"`（-g 限定 Rust 源文件，与 src-tauri/src/CLAUDE.md 现行守卫命令逐字一致），零命中退出码 1。
    - `rg "锁中毒|poison" src-tauri/src` 零命中(测试名/注释残留即红);
    - `cargo test -- --test-threads=1` 全绿(S02 后形态;若 S04 先于 S02 执行——不允许,编排上 S02 在 S04 前);
    - `cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings` 与 `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` 退出码 0。
@@ -848,7 +848,7 @@ agent 分工:CP-025 独立;CP-026+CP-021 单 agent;CP-038+CP-027 单 agent;CP-03
       pty_kill/pty_kill_all 按 plan 分支执行。
 4. **测试同步**:reader.rs `mod reader_tests` 增 `cleanup_plan_finished_reader_normal_drop` / `cleanup_plan_timeout_reader_supervised_drop` + `join_with_timeout_timeout_returns_false`(mock 永不结束线程 + 10ms 级短超时,防 flaky);PTY 集成(spawn.rs,SPAWN_LOCK 串行)既有 kill 用例全量回归;spawn.rs 涉 KILL_JOIN_TIMEOUT/join_with_timeout 用例改 import(reader.rs);state.rs Drop 用例无直接构造(由集成路径覆盖);防复发 grep:裸 `JoinHandle::join` 零命中;不可自动化登记:.claude/test-exemptions.md 增行「`pty_kill` 超时→监督线程真实阻塞路径——Win32 阻塞不可注入——兜底 = `plan_cleanup_after_join_timeout` 决策用例 + pty 集成 kill 用例 + Win10 实机人工验证点(杀会话后应用无挂起)」。
 5. **文档同步**:pty/CLAUDE.md「pty_kill 异步销毁」节(:52-54)重写(「`ClosePseudoConsole` 在 pre-Win11 24H2 上可能永久阻塞(上游 Discussion #17716,Win10 永不修复)。`pty_kill` 先提取 session 释放写锁,再在 `spawn_blocking` 中执行 `kill → join reader(3s)`:正常路径随闭包尾 drop;超时路径 reader detach、session 移入监督线程执行 drop(关 writer + ClosePseudoConsole),监督 3s 超时则清理线程 detach,进程退出时 OS 回收句柄(Job Object 保证子进程先死)」);pty/CLAUDE.md 豁免表增行;state.rs:21 字段注释补「超时/监督语义见 spawn.rs CP-011」。
-6. **验证**:`rg "随 (PtySession )?Drop 兜底|随 Drop 兜底" src-tauri/src` 零命中;`rg "handle\.join\(\)|\.join\(\)\s*;" src-tauri/src` 零命中(仅余 join_with_timeout 内部与 spawn_blocking 的 `.await` join error map_err 形态);`cargo test -- --test-threads=1`(pty 系重点)全绿;clippy/fmt 通过;人工:Win10 实机高负载会话 kill,应用不挂起、3s 内 IPC 返回。
+6. **验证**:`rg "随 (PtySession )?Drop 兜底|随 Drop 兜底" src-tauri/src` 零命中;`rg "handle\.join\(\)|\.join\(\)\s*;" src-tauri/src` 零命中(仅余 join_with_timeout 内部与 spawn_blocking 的 `.await` join error map_err 形态);——落地复核（2026-09-09）：本项实际执行命令形态为 `rg "\.join\(\)" src-tauri/src`，仅命中 thread_join.rs 守卫白名单一处（`join_with_timeout` 内部回收 join；与 src-tauri/src/CLAUDE.md 现行守卫命令逐字一致）。`cargo test -- --test-threads=1`(pty 系重点)全绿;clippy/fmt 通过;人工:Win10 实机高负载会话 kill,应用不挂起、3s 内 IPC 返回。
 
 ---
 
@@ -1912,7 +1912,7 @@ agent 分工:CP-025 独立;CP-026+CP-021 单 agent;CP-038+CP-027 单 agent;CP-03
    - **B. 新上下文重实证(② 完成后执行)**:
      1. **实证步骤(固定)**:真实 WebView2 环境渲染含数学公式(`$x^2$` + 块级)的 md,断言:公式 DOM `getComputedStyle` font-family 命中 KaTeX 字体族(非 serif 回退)、DevTools 网络面板无字体请求失败/CORS 拒绝。实证通道:新增临时 L4 spec 或在 markdown.e2e.ts 加守卫用例。
      2. **分支 B1(asset 通道可行)→ 删生成物**:删 gen 脚本与产物;`mdPipeline.ts:36` 删 import,:240 head 改经 asset 协议引用 katex css/字体(URL 形态按 S10 webview 架构定,约束:运行时取字体、渲染产物不含 data: 字体串);`tauri.conf.json:25` CSP `font-src` 增 `asset: https://asset.localhost`(与 img-src 同形态);改 L4 断言通道;`markdown/CLAUDE.md:23` 节改写为运行时取字体口径;ADR-0018 追加「逆转记录」节。
-     3. **分支 B2(仍不可行)→ 局部 CSP 兜底**:保留生成物;在 S10 新 webview 的局部 CSP 中显式放行 `font-src data:`(主窗口 CSP 不动);ADR-0018 追加实证结论(不可行证据 + 保留决策),CI 守卫(A)成为长期形态。
+     3. **分支 B2(仍不可行)→ 局部 CSP 兜底**:保留生成物;在 S10 新 webview 的局部 CSP 中显式放行 `font-src data:`(主窗口 CSP 不动);ADR-0018 追加实证结论(不可行证据 + 保留决策),CI 守卫(A)成为长期形态。（落地复核 2026-09-09：tauri 2.11 无 per-webview CSP 配置面——B2 实际形态 = 宿主页 CSP meta（preview.rs HOST_PAGE）：default-src 'none'; script-src/style-src 'unsafe-inline'; img-src data:; font-src data:，SEC-02 落地；红测演练留痕于 docs/compromises-fix-review-fix Stage 07 commit body）
 4. **测试同步**:A 步 CI 守卫自身即测试;B1 分支 `markdown.e2e.ts:136-138` 的「KaTeX 内联字体已装配」断言改为运行时字体通道断言(语义 = 公式字形命中 KaTeX 字体族),新增用例名建议「数学公式_块级与行内_字体族命中 KaTeX(非回退 serif)」;L2 `markdown-render-pipeline.test.ts` 若断言 head 含 KATEX_INLINE_CSS 特征串,同步改接新通道;B2 分支 L4 无新增,维持 A 守卫。
 5. **文档同步**:A 步 `markdown/CLAUDE.md:23` 句尾追加「一致性由 CI diff 守卫(.github/workflows/ci.yml,CP-033)」;B1 分支整节改写 + ADR-0018「逆转触发点」节后追加「逆转记录(CP-033)」;B2 分支 ADR-0018 追加「维持记录(CP-033)」。
 6. **验证**:A 步 `grep -n "KaTeX 内联产物 diff 守卫" .github/workflows/ci.yml` 命中;**红测**:本地临时改 katexInlineCss.ts 一个字符后 `node scripts/gen-katex-inline.mjs && git diff --exit-code src/panels/markdown/generated/katexInlineCss.ts` 退出码非 0,还原后退出码 0;B1:`test -f src/panels/markdown/generated/katexInlineCss.ts` 为假、`grep -rn "gen-katex-inline" scripts/ src/` 零命中、`npm run e2e` markdown spec 全绿且字体断言命中;B2:`grep -n "font-src" src-tauri/tauri.conf.json` 维持 `'self' data:`,新 webview CSP 处可见局部放行。
