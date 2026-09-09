@@ -78,7 +78,7 @@ Workflow({ scriptPath: "docs/compromises-fix-review-fix/workflows/fix-loop.js",
 
 | Stage | 状态 | commit | verify 结果 | 备注 |
 |---|---|---|---|---|
-| 01 | 未开始 | | | |
+| 01 | 完成 | 7abc009 | TE-01/02/07 fixed；TE-03 静态断言全过、命令 5 提交后 exit 0 | 门禁 5 时序缺陷：TE-03 自身文档同步改 src/types/CLAUDE.md → 提交前必红，提交后绿 |
 | 02 | 未开始 | | | L4 前提：前台聚焦 |
 | 03 | 未开始 | | | |
 | 04 | 未开始 | | | |

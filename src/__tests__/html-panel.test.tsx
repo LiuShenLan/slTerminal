@@ -4,6 +4,7 @@
 //   1. 渲染状态 — loading/ready/error + 工具条带（切换条/HUD 悬浮带）
 //   2. 预览窗口编排 — previewSync（几何/显隐）/ previewRender（装配产物推送）/
 //      previewClose（卸载销毁）/ label = preview-<panelId>
+//      （SEC-03：sync 失败一次性告警 + 成功复位；close 失败直告警）
 //   3. 竞态取消 — 快速切换 filePath / 卸载后 resolve
 //   4. 边界 — 空 HTML / 大内容 / script 标签（宿主 <script> 不经转义原样保留）
 //   5. 注入脚本内容 — fragmentNav + zoom 运行时（keydown 转发段退役，旧类型名
@@ -45,7 +46,12 @@ const mocks = vi.hoisted(() => {
     statusHandlers.push(cb);
     return () => {};
   });
-  const onMainWindowMoved = vi.fn((cb: () => void) => { void cb; return () => {}; });
+  // 主窗移动订阅回调捕获（SEC-03 用例：几何变化经移动事件即时触发下一轮 sync）
+  const movedHandlers: Array<() => void> = [];
+  const onMainWindowMoved = vi.fn((cb: () => void) => {
+    movedHandlers.push(cb);
+    return () => {};
+  });
   return {
     mockReadFile,
     mockExportContextBindings,
@@ -59,6 +65,7 @@ const mocks = vi.hoisted(() => {
     onMainWindowMoved,
     uplinkHandlers,
     statusHandlers,
+    movedHandlers,
     resetAll() {
       mockReadFile.mockReset();
       mockExportContextBindings.mockReset();
@@ -73,6 +80,7 @@ const mocks = vi.hoisted(() => {
       onMainWindowMoved.mockReset();
       uplinkHandlers.length = 0;
       statusHandlers.length = 0;
+      movedHandlers.length = 0;
       previewSync.mockResolvedValue(undefined);
       previewClose.mockResolvedValue(undefined);
       previewRender.mockResolvedValue(undefined);
@@ -532,6 +540,93 @@ describe("HtmlPanel", () => {
     unmount();
     expect(mocks.previewClose).toHaveBeenCalledTimes(1);
     expect(mocks.previewClose.mock.calls[0]![0]).toBe(PANEL_LABEL);
+  });
+
+  // ==========================================================================
+  // SEC-03：预览窗口命令 catch 可观测化（sync 一次性告警 + 成功复位；close 直告警）
+  // ==========================================================================
+
+  /** 触发主窗移动即时同步（setTimeout(syncNow, 0) → 等宏任务落地） */
+  async function triggerMovedSync() {
+    await act(async () => {
+      for (const h of mocks.movedHandlers) h();
+      await new Promise((r) => setTimeout(r, 0));
+    });
+  }
+
+  it("previewSync 失败一次性告警：连续两轮只 warn 一次；成功复位后再失败再 warn", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // 几何可变桩：轮询/移动触发的下一轮读到新矩形才真正再发 previewSync
+    // （等值早退分支不重复发——亚像素抖动抑制语义不变）
+    let rect = { x: 10, y: 20, width: 300, height: 200 };
+    const rectSpy = vi
+      .spyOn(Element.prototype, "getBoundingClientRect")
+      .mockImplementation(
+        () =>
+          ({
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+            left: rect.x,
+            top: rect.y,
+            right: rect.x + rect.width,
+            bottom: rect.y + rect.height,
+            toJSON: () => ({}),
+          }) as DOMRect,
+      );
+    try {
+      mocks.mockReadFile.mockResolvedValue("<p>test</p>");
+      mocks.previewSync.mockRejectedValue(new Error("窗口域异常"));
+      renderHtmlPanel("C:/test/a.html");
+      await waitForRender("C:/test/a.html");
+      // 挂载即 sync 一轮 → 失败 → 告警一次
+      expect(mocks.previewSync.mock.calls.length).toBeGreaterThanOrEqual(1);
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(String(warnSpy.mock.calls[0]![0])).toContain("previewSync 失败");
+
+      // 第二轮失败：几何变化触发再 sync → 旗标已置位，不重复告警
+      rect = { x: 10, y: 20, width: 320, height: 200 };
+      const callsBefore2 = mocks.previewSync.mock.calls.length;
+      await triggerMovedSync();
+      expect(mocks.previewSync.mock.calls.length).toBeGreaterThan(callsBefore2);
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+
+      // 成功一轮 → 旗标复位
+      mocks.previewSync.mockResolvedValue(undefined);
+      rect = { x: 10, y: 20, width: 340, height: 200 };
+      const callsBefore3 = mocks.previewSync.mock.calls.length;
+      await triggerMovedSync();
+      expect(mocks.previewSync.mock.calls.length).toBeGreaterThan(callsBefore3);
+
+      // 再失败 → 重新告警一次（累计 2 次）
+      mocks.previewSync.mockRejectedValue(new Error("窗口域异常"));
+      rect = { x: 10, y: 20, width: 360, height: 200 };
+      const callsBefore4 = mocks.previewSync.mock.calls.length;
+      await triggerMovedSync();
+      expect(mocks.previewSync.mock.calls.length).toBeGreaterThan(callsBefore4);
+      expect(warnSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      rectSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("previewClose 失败 → console.warn（窗口可能残留可观测，一次性事件）", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      mocks.mockReadFile.mockResolvedValue("<p>test</p>");
+      const { unmount } = renderHtmlPanel("C:/test/a.html");
+      await waitForRender("C:/test/a.html");
+      mocks.previewClose.mockRejectedValue(new Error("窗口不存在"));
+      unmount();
+      await act(async () => {});
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(String(warnSpy.mock.calls[0]![0])).toContain("previewClose 失败");
+      expect(warnSpy.mock.calls[0]![1]).toBe(PANEL_LABEL);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   // ==========================================================================

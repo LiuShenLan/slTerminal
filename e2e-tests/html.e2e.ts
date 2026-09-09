@@ -353,6 +353,44 @@ describe("HTML 面板 Ctrl+滚轮缩放", () => {
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
+
+  // ── SEC-01 防复发：页前缀协议 id 走真实 label 路径 ──
+  // 生产 panelId = "{pageId}:{localId}"（openFile.ts:98-100 经 panelIdInPage
+  // 产出）→ 预览 label = preview-<panelId> 必含 ":"；修复前后端 validate_label
+  // 仅放行字母数字/_/-，预览链路四命令（preview_sync/close/render/pull）全被
+  // Err(Validation) 静默拒绝——既有用例的裸 id 直注形态（各自测不同面）掩盖此
+  // 缺陷。本用例以页前缀形态 id 经生产打开链路（addPanel，模拟 openFile 真实
+  // 产出）建面板：label 含 ":" 能入列并推送内容 = validate_label 放行 ":" 的
+  // 端到端证据（修复前此处 waitPreviewDocContains 必超时）。裸 id 用例保留不动。
+  it("页前缀协议 panelId（{pageId}:{localId}）→ 预览链路全通（SEC-01 防复发）", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "slterm-e2e-html-pageprefix-"));
+    const htmlPath = join(tempDir, "page-prefix.html");
+    writeFileSync(htmlPath, "<h1>page-prefix fixture</h1>", "utf8");
+    let panelId: string | undefined;
+    try {
+      await waitForWorkspaceReady();
+      await createProject(tempDir);
+      await waitForDockviewApi();
+      // 页前缀协议形态（openFile.ts 真实产出同构："{pageId}:{localId}"）
+      panelId = "page-1:html-e2e-" + Date.now();
+      await browser.execute(
+        (args: { pid: string; path: string }) => {
+          window.__dockviewApi!.addPanel({
+            id: args.pid,
+            component: "htmlviewer",
+            params: { panelId: args.pid, filePath: args.path },
+          });
+        },
+        { pid: panelId, path: htmlPath },
+      );
+      // 预览窗口 label = preview-page-1:html-e2e-<ts>——validate_label 放行 ":"
+      // 才可能入列并推送到内容
+      await waitPreviewDocContains(panelId, "page-prefix fixture");
+    } finally {
+      if (panelId) await closePanelAndWaitGone(panelId);
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("HTML 面板 edit 态 Ctrl+滚轮字号", () => {

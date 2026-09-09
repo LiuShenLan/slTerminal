@@ -48,7 +48,9 @@ const MAIN_WINDOW_LABEL: &str = "main";
 /// 内容就绪通知事件（preview_render 存内容后定向通知宿主拉取）
 pub const PREVIEW_RENDER_PING_EVENT: &str = "preview:render-ping";
 
-/// label 合法字符集：仅 ASCII 字母数字 + 下划线/连字符（窗口 label 与驱动句柄共用）
+/// label 合法字符集：ASCII 字母数字 + _ - : /（对齐 tauri 窗口 label 合法集
+/// tauri-runtime-2.11.3 window.rs:534；panelId 页前缀协议形态 {pageId}:{localId}
+/// 必含 ":"，SEC-01）
 fn validate_label(label: &str) -> Result<(), AppError> {
     if !label.starts_with(PREVIEW_LABEL_PREFIX) {
         return Err(AppError::Validation(format!(
@@ -60,7 +62,7 @@ fn validate_label(label: &str) -> Result<(), AppError> {
         || rest.len() > 96
         || !rest
             .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b':' || b == b'/')
     {
         return Err(AppError::Validation(format!("非法预览窗口 label: {label}")));
     }
@@ -446,10 +448,12 @@ pub struct PreviewContent {
 ///   ESM 需 CORS，不引）；权限由 capabilities/preview.json 收敛。
 /// - 上行校验（iframe 消息）：origin "null" + source === iframe.contentWindow
 ///   （srcdoc opaque 序列化，SEC-03 同款）；具体类型/载荷校验在主窗侧。
+/// - 域级 CSP 经 meta 承载（tauri 2.11 无 per-webview CSP 配置面）——指令表见上，加宽须复核 SEC 面。
 const HOST_PAGE: &str = r##"<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:">
 <title>slTerminal preview</title>
 <style>
   html,body{width:100%;height:100%;margin:0;background:#0a0a0b;overflow:hidden}
@@ -564,10 +568,16 @@ pub fn host_protocol(
 mod preview_tests {
     use super::*;
 
-    /// label 校验：合法形态放行（preview- 前缀 + 字母数字下划线连字符）
+    /// label 校验：合法形态放行（preview- 前缀 + 字母数字下划线连字符冒号斜杠）
     #[test]
     fn label_accepts_legal_panel_ids() {
-        for label in ["preview-e2e-html-123", "preview-md_1", "preview-A1_b-c"] {
+        for label in [
+            "preview-e2e-html-123",
+            "preview-md_1",
+            "preview-A1_b-c",
+            "preview-page-1:html-2",
+            "preview-a/b",
+        ] {
             assert!(validate_label(label).is_ok(), "合法 label 应放行: {label}");
         }
     }
@@ -581,13 +591,21 @@ mod preview_tests {
             &format!("preview-{}", "a".repeat(97)),
             "preview-中文",
             "preview-a b",
-            "preview-a/b",
         ] {
             assert!(
                 validate_label(label).is_err(),
                 "非法 label 应拒绝: {label:?}"
             );
         }
+    }
+
+    /// 宿主页携带域级 CSP meta（SEC-02）：指令表锁死，加宽须复核 SEC 面
+    #[test]
+    fn host_page_carries_domain_csp() {
+        assert!(HOST_PAGE.contains("Content-Security-Policy"));
+        assert!(HOST_PAGE.contains("default-src 'none'"));
+        assert!(HOST_PAGE.contains("img-src data:"));
+        assert!(HOST_PAGE.contains("font-src data:"));
     }
 
     /// 物理坐标换算：origin + round(css × scale)

@@ -3,6 +3,7 @@
 // buildInjectedScript 基础段 + 可选段（fragmentNav/linkRouter/scrollReport）：
 //   - 各段标记字符串存在、拼接可解析（H7 parse-only 同款——防段边界 SyntaxError）
 //   - md 场景（linkRouter + scrollReport）与 html 场景（fragmentNav）段组合隔离
+//   - 注入产物 script 标签计数锁（FE-06：三组合矩阵各恰一对 <script>/</script>）
 //   - scrollRuntime 桩执行最小集：节流上行 + 下行恢复校验（zoom 同范式完整桩
 //     见 doc-viewer-zoom-runtime.test.ts）
 
@@ -65,6 +66,21 @@ describe("buildInjectedScript 段组合", () => {
     // fragment 段不注入
     expect(out).not.toContain("slterm-target");
     parseScript(out);
+  });
+
+  it("注入产物不含提前闭合——<script> 与 </script> 各恰好一次（段组合矩阵）", () => {
+    // FE-06：拼接纪律 #1 测试锁——非贪婪 parse 只取首段，提前闭合截断静默；
+    // 计数断言锁死「注入产物整体恰一对 script 标签」（buildInjectedScript.ts:13-30 纪律 1）
+    const combos: Array<[string, Parameters<typeof buildInjectedScript>[1]]> = [
+      ["无 extra 段", []],
+      ["html fragmentNav", [{ kind: "fragmentNav" }]],
+      ["md linkRouter+scrollReport", [{ kind: "linkRouter" }, { kind: "scrollReport" }]],
+    ];
+    for (const [name, extra] of combos) {
+      const out = buildInjectedScript(NONCE, extra);
+      expect(out.match(/<script>/g), `${name}：开标签恰一次`).toHaveLength(1);
+      expect(out.match(/<\/script>/g), `${name}：闭标签恰一次`).toHaveLength(1);
+    }
   });
 
   it("nonce 拼入 nav 消息（SEC-04 防伪造）", () => {

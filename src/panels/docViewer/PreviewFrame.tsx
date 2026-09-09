@@ -197,6 +197,9 @@ export const PreviewFrame: React.FC<PreviewFrameProps> = ({
     let lastW = NaN;
     let lastH = NaN;
     let lastVis: boolean | null = null;
+    // SEC-03：sync 失败一次性告警旗标——sync 由 200ms 轮询高频驱动（GEOMETRY_POLL_MS），
+    // 逐次 warn 会刷屏；首次失败告警后置位，下轮成功即复位（effect 重跑随作用域重置）
+    let syncWarned = false;
 
     /** 测量锚点矩形 → 变化时 preview_sync（CSS 视口坐标，后端换算物理屏幕坐标） */
     const syncNow = () => {
@@ -221,9 +224,23 @@ export const PreviewFrame: React.FC<PreviewFrameProps> = ({
       lastW = rw;
       lastH = rh;
       lastVis = visible;
-      void previewSync(label, x, y, rw, rh, visible, token).catch(() => {
-        /* 窗口域异常——轮询下轮自愈 */
-      });
+      void previewSync(label, x, y, rw, rh, visible, token)
+        .then(() => {
+          // SEC-03：成功即复位旗标——后续再失败重新告警一次
+          syncWarned = false;
+        })
+        .catch((err) => {
+          // SEC-03：轮询下轮自愈，但静默吞错致链路故障零信号（SEC-01 前车之鉴）——
+          // 首次失败告警一次，避免逐轮刷屏
+          if (!syncWarned) {
+            syncWarned = true;
+            console.warn(
+              "[slTerminal] previewSync 失败（下轮轮询自愈，后续失败不再重复告警）:",
+              label,
+              err,
+            );
+          }
+        });
     };
 
     syncNow();
@@ -240,8 +257,10 @@ export const PreviewFrame: React.FC<PreviewFrameProps> = ({
       offMove();
       // 面板卸载 → 销毁预览窗口（缩放/滚动态随窗口销毁——与旧 iframe 关页签销毁同语义；
       // token 同传——后端会话守卫以同 token 记录 closed，迟到的本轮 sync 不再重建）
-      void previewClose(label, token).catch(() => {
-        /* 窗口已不存在——幂等 */
+      void previewClose(label, token).catch((err) => {
+        // SEC-03：close 一次性调用非高频——直接 warn（窗口可能残留可观测；
+        // 幂等语义不变，不重试）
+        console.warn("[slTerminal] previewClose 失败（窗口可能残留）:", label, err);
       });
     };
   }, [label]);

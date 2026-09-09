@@ -52,9 +52,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 docViewer 预览内容渲染于独立 WebviewWindow（label = `preview-<panelId>`，前端 `makePreviewLabel` 对应）的窗口/内容管理单点：
 
-- **预览 CSP 域 = 自定义协议 `slterm-preview`**（Windows 映射 `http://slterm-preview.localhost`，tauri 文档实证）：`register_uri_scheme_protocol` 注册于 lib.rs run()；host_protocol 只服务宿主页（固定桥接页内嵌 const，建 sandbox iframe + 上下行中继），响应不带全局 CSP——资产协议页恒被注入全局 CSP，收紧后（CP-012）运行时内联脚本在资产域不可行（决策详见 ADR-0019 决策二）。
+- **预览 CSP 域 = 自定义协议 `slterm-preview`**（Windows 映射 `http://slterm-preview.localhost`，tauri 文档实证）：`register_uri_scheme_protocol` 注册于 lib.rs run()；host_protocol 只服务宿主页（固定桥接页内嵌 const，建 sandbox iframe + 上下行中继），响应不带全局 CSP——域级 CSP 由宿主页 meta 承载（`default-src 'none'`；script/style `'unsafe-inline'`；img/font `data:`）——资产协议页恒被注入全局 CSP，收紧后（CP-012）运行时内联脚本在资产域不可行（决策详见 ADR-0019 决策二）。
 - **内容存储**：模块级 `CONTENT_STORE`（parking_lot Mutex + HashMap，label → {seq, html, bg}）——渲染产物经 `preview_render` 存储并 emit 定向 ping（`preview:render-ping`），宿主页经 `preview_pull` 拉取（seq 防乱序；宿主加载即拉一次兜底事件丢失窗口）。
-- **label 校验**：须 `preview-` 前缀 + ASCII 字母数字/下划线/连字符、≤96 字符——全部命令入口统一校验（防任意窗口操纵）。
+- **label 校验**：须 `preview-` 前缀 + ASCII 字母数字/下划线/连字符/冒号/斜杠（tauri label 合法集对齐；panelId 页前缀含冒号）、≤96 字符——全部命令入口统一校验（防任意窗口操纵）。
 - **几何换算**：`preview_sync` 收 CSS 视口坐标（前端锚点矩形），经主窗 inner 原点 + scale_factor 换算物理屏幕坐标驱动位置/尺寸/显隐；隐藏态不建窗（内容先行存储，宿主加载后拉取）；窗口 = owned 无边框、focusable(false)、skip_taskbar。
 - **命令一律 async + run_on_main 编排**：窗口创建/几何/显隐等窗口域操作要求主线程（tao/wry 事件泵）——sync 命令在主线程 IPC 回调内建窗会等消息泵死锁（2026-09-08 实测 30s 超时）；窗口域操作一律经 `run_on_main`（mpsc + run_on_main_thread）回主线程执行并取回结果。
 - **命令清单**：preview_sync / preview_close / preview_render / preview_pull（lib.rs + build.rs + capabilities 三处注册）。

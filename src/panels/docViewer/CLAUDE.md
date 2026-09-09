@@ -14,7 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 预览内容不再经主窗口内 sandbox iframe srcDoc，改在**独立 Tauri WebviewWindow**（label = `preview-<panelId>`）中渲染：
 
-- **宿主页 = 自定义协议域静态页**（scheme `slterm-preview`，Windows 实为 `http://slterm-preview.localhost/…`，src-tauri/src/preview.rs 内嵌）——tauri 2.11 无 per-webview CSP（spike 实证），资产协议页恒被注入全局 CSP → 主窗口收紧（CP-012）后内联注入全灭；自定义协议响应不带全局 CSP → **「预览 CSP 域」即本域**，注入机制（injectScript + buildInjectedScript + nonce）原样迁入宽松执行。
+- **宿主页 = 自定义协议域静态页**（scheme `slterm-preview`，Windows 实为 `http://slterm-preview.localhost/…`，src-tauri/src/preview.rs 内嵌）——tauri 2.11 无 per-webview CSP（spike 实证），资产协议页恒被注入全局 CSP → 主窗口收紧（CP-012）后内联注入全灭；自定义协议响应不带全局 CSP——域级 CSP 由宿主页 meta 承载（`default-src 'none'`；script/style `'unsafe-inline'`；img/font `data:`，SEC-02；srcdoc iframe 继承宿主 CSP）→ **「预览 CSP 域」即本域**，注入机制（injectScript + buildInjectedScript + nonce）原样迁入执行（内联脚本/样式与 data: img/font 放行，外部出网默认全断）。
 - 宿主页桥（纯 JS，raw `__TAURI_INTERNALS__`——域内无打包模块）：建 sandbox iframe（allow-scripts、无 allow-same-origin，CVE-2024-35222 红线延续）→ 内容经 `preview_render`（后端存储 + 定向通知）→ 宿主 `preview_pull` 拉取置 srcdoc → iframe 文档消息（zoom/scroll/nav 上行、reset/zoom_set/scroll_set 下行）经 Tauri event 与主窗中继。
 - **消息桥 = Tauri event/IPC**（跨独立窗口无 window.postMessage，spike 实证）——CP-044「通道退役」分支落地：上行/下行类型白名单 + label 归属守卫 + nonce（previewMessages.ts 单点，守卫测试锁死）。
 - **窗口形态**：主窗口 owned 无边框窗口，几何 = 主窗 inner 原点 + 面板内容区矩形 × scale（PreviewFrame 轮询 + 主窗移动监听驱动 preview_sync）；面板隐藏（页签/页面切换 display:none）→ 窗口 hide 不销毁——缩放/滚动态保活（CP-037 复核语义：CM 保活在面板内照旧，预览窗口保活 = hide/show，两机制并行，workspace CSS 显隐对 webview 不适用）。
@@ -40,7 +40,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### 注入脚本组装（buildInjectedScript）——拼接纪律
 
-- 输出源码不得含 `</script>` 字面量（宿主内容不转义后，注入段自身更要避免——宿主自带 `</script>` 属其自身脚本正常闭合，与注入段互不干扰，CP-031）。
+- 输出源码不得含 `</script>` 字面量（宿主内容不转义后，注入段自身更要避免——宿主自带 `</script>` 属其自身脚本正常闭合，与注入段互不干扰，CP-031）（FE-06 起有计数断言测试锁，doc-viewer-injection.test.ts）。
 - 每段必须以完整语句 + 分号收尾（2026-09-06 实证：click 段原无分号致追加 zoom 段后同串拼接 SyntaxError——L2 全绿仅 L4 暴露）。
 - 字符串插值一律 JSON.stringify；数值常量以十进制字面量直插（iframe 内独立运行）。
 - postMessage 仅存在于 iframe ↔ 宿主页窗口树内（不跨窗口），targetOrigin "*"（SEC-03 实证语义；宿主页侧 source===iframe.contentWindow + 白名单 + nonce 校验兜底）。

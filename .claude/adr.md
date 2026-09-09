@@ -458,6 +458,7 @@
 - **执行期发现并处置（img-src data: 的主窗口唯一图像消费点）**：CM6 lint 诊断波浪线——上游 @codemirror/lint baseTheme 与本仓 theme/overrides.ts 旧实现均以 `background-image: url(data:image/svg+xml,…)` 渲染（JsonMode 语法/schema 波浪线，主窗口渲染）——img-src data: 回收会静默遮蔽 lint 波浪线。处置 = 改 text-decoration wavy 技法（非资源 fetch，零 CSP 指令依赖）+ backgroundImage 显式 none 覆盖上游 baseTheme data: svg；色值仍单点于方案 lint 键（波形由 Chromium 绘制，与 6×3 tile 幅度略有差异，D1 已评估接受）。theme-overrides.test.ts 加「规则文本零 data: url」防回潮断言。
 - **svg data: 显式禁用**：markdown assets.ts MIME 白名单剔除 image/svg+xml（本地 .svg 引用不再内联——缺口语义，与白名单外扩展同语义）；svg 载体可嵌脚本，预览域（无 CSP）内联风险面大，`<img>` 惰性上下文仅为 W3C 行为单点不作安全边界。html 侧无独立资源内联通道（仅 markdown 管线消费 assets.ts），同口径无代码落点。markdown-assets.test.ts 锁「svg MIME 不在白名单」。
 - **预览域 data: 放行口径**：预览 webview CSP 无代码落点——预览域 = 自定义协议宿主页（响应无 CSP 头，host page 无 CSP meta），content iframe（srcdoc）无从继承 → data: img/font 在预览域天然放行（③ 实证通道即此）；「若未来建立预览域局部 CSP，img/font-src 须放行 data:」维持为执行口径（本 ADR-0018 与 ADR-0019 逆转触发点同文登记）。
+- **落地复核注记（SEC-02，2026-09-09，原文保留不改写）**：上条「host page 无 CSP meta」已失实——宿主页 HOST_PAGE 现由 meta 承载域级 CSP（`default-src 'none'; script-src/style-src 'unsafe-inline'; img-src data:; font-src data:`），srcdoc iframe 继承宿主 CSP（W3C）→「若未来建立预览域局部 CSP，img/font-src 须放行 data:」触发条件已发生且两项已放行（交叉登记 ADR-0019 决策二 9）。
 - **主窗口消费面审计结论**：除 lint 波浪线外主窗口无其它 data: 图像/字体消费者（lucide 内联 svg 元素非 fetch、cli-icons/字体走 self、vite assetsInlineLimit 无 <4KB 资产内联风险）——回收后零静默断图/断字面。
 
 ## 0019 预览渲染迁独立 webview（ADR-0019：S10-① spike + S10-② 迁移落地定稿）
@@ -475,7 +476,7 @@
 
 **决策二（S10-② 迁移落地，2026-09-08）**：
 
-1. **预览承载域 = 自定义协议宿主页（② 落地面复核结论，修正 spike 的 asset 首选）**：预览窗口加载 Rust 注册的自定义协议 `slterm-preview`（Windows 映射 `http://slterm-preview.localhost/preview-host.html`，register_uri_scheme_protocol 文档实证；响应不带全局 CSP）。asset 协议页（http://tauri.localhost）恒被注入全局 CSP（响应的 CSP 头）——CP-012 主窗口收紧 script-src 后，资产域内运行时内联注入与宿主自带脚本全灭（静态内联脚本虽经构建期哈希放行，运行时注入产物不可哈希）——asset 候选否决，「预览 CSP 域」= 自定义协议域。
+1. **预览承载域 = 自定义协议宿主页（② 落地面复核结论，修正 spike 的 asset 首选）**：预览窗口加载 Rust 注册的自定义协议 `slterm-preview`（Windows 映射 `http://slterm-preview.localhost/preview-host.html`，register_uri_scheme_protocol 文档实证；响应不带全局 CSP——域级 CSP 由宿主页 meta 承载，见下 9）。asset 协议页（http://tauri.localhost）恒被注入全局 CSP（响应的 CSP 头）——CP-012 主窗口收紧 script-src 后，资产域内运行时内联注入与宿主自带脚本全灭（静态内联脚本虽经构建期哈希放行，运行时注入产物不可哈希）——asset 候选否决，「预览 CSP 域」= 自定义协议域。
 2. **宿主页 = 固定桥接页**（src-tauri/src/preview.rs 内嵌 const）：建 sandbox iframe（allow-scripts、无 allow-same-origin——CVE-2024-35222 红线延续，iframe 无 Tauri IPC 注入——main_frame_only 实证）→ 内容经 `preview_render`（后端存储 + seq + 定向 ping）→ 宿主 `preview_pull` 拉取置 srcdoc → iframe 文档消息（zoom/scroll/nav 上行、reset/zoom_set/scroll_set 下行）经 Tauri event 与主窗中继；事件名单点登记 src/ipc/preview.ts（三处同步：TS / 宿主桥 / 守卫测试）。
 3. **注入机制原样迁入**：injectScript + buildInjectedScript + nonce 装配于主窗 PreviewFrame，产物推送预览域执行；**字符串级转义消亡**（escapeScriptClose 删除——宿主 `<script>` 不经转义进入渲染文档且真实执行，CP-031 判定一/二在 ② 达成，判定三由 html.e2e 宿主 script 用例在真实 WebView2 断言）。
 4. **上行命令面收窄为零（CP-013）**：keydown 转发段与信任标记整体退役（键盘不跨窗口——预览窗口 focusable(false)，焦点恒在主窗 ShortcutRegistry 域，全局快捷键在预览态可用）；上行终态集合 = {slterm_zoom, slterm_scroll, slterm_nav}（UPLINK_MSG_TYPES 白名单守卫锁死）；下行 = {reset, zoom_set, scroll_set}。
@@ -483,6 +484,7 @@
 6. **CP-037 复核结论**：预览迁出后 workspace 层 CSS 显隐保活对预览 webview 不适用——CM 保活（面板内 allotment visible=false 恒挂载）**维持**（edit/split/preview 形态往返仍须保留 undo/光标）；预览窗口保活另成机制：**隐藏保活 = 窗口 hide 不销毁**（面板/页面隐藏 → 几何归零 → preview_sync visible=false；恢复 → show）——缩放/滚动态随 iframe 文档存亡，跨显隐保留。两机制并行，各管各层。
 7. **面板形态（波及面）**：面板根改「40px 工具条带（切换条/HUD 悬浮带，FloatingArea direction="row"）+ 内容区（PreviewFrame 锚点）」列排——预览窗口几何 = 锚点矩形（主窗 inner 原点 + CSS × scale，PreviewFrame 200ms 轮询 + 主窗移动即时同步）；窗口 owned 无边框、focusable(false)、skip_taskbar；面板卸载 → 窗口销毁（缩放随窗口销毁 = 旧关页签语义）。
 8. **键盘边界已知行为（接受）**：预览窗口不可聚焦 → 预览文档内表单键入/系统复制快捷键不可达（鼠标滚动/点击/拖选不受影响）；主窗快捷键在预览态恒可用。若未来需表单键入，须先解决「预览聚焦吞全局快捷键」问题（本决策 4 的逆转触发点）。
+9. **域级 CSP 落地（SEC-02，2026-09-09）**：宿主页 HOST_PAGE 加 `<meta http-equiv="Content-Security-Policy">`——指令表 `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:`（`default-src 'none'` 断全部出网；内联 script/style 为宿主桥 + 注入产物必需；img/font `data:` 为 markdown 本地图内联与 KaTeX 内联字体通道，ADR-0018）；srcdoc iframe 继承宿主 CSP（W3C 行为）→ 预览文档同受此约束。tauri 2.11 无 per-webview CSP 配置面 → 域级 CSP 只能由宿主页 meta 承载（响应头形态不变），加宽指令须复核 SEC 面。
 
 **被否决的备选**：
 
