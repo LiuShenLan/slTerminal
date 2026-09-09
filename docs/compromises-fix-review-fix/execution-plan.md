@@ -82,7 +82,7 @@ Workflow({ scriptPath: "docs/compromises-fix-review-fix/workflows/fix-loop.js",
 | 02 | 完成 | d1a6838 | 首轮 allFixed=false（2 文档项 partial + L4 门禁红）→ fix-loop 1 轮 allFixed=true；L4 补验 build:e2e + html.e2e.ts 绿 | L4 门禁时序缺陷：门禁 7 普通 build tree-shake E2E helper（与 e2e-tests/CLAUDE.md:110 冲突），须 build:e2e 重建后跑 |
 | 03 | 完成 | 89988d6 | allFixed=true（BE-01/02/03/04/06 全 fixed） | 连带 settings.rs:531-532 两处测试裸 join 最小换装；BE-02 用例 1201 文件（601 时第二页即末页）；BE-06 保留 samples.sort() |
 | 04 | 完成 | 2ecd7cb | 首轮 FE-10 partial（knip 红：8 项本任务 workflows 未用文件）→ 主 agent 补 knip.json ignore 后 exit 0 | 连带 knip ignore 补 `docs/compromises-fix-review-fix/**`。**收尾待办**：SEC-02 落地后「预览域无 CSP」表述残留 8 处（src/lib/injectScript.ts:11、docViewer/PreviewFrame.tsx:13、markdown/assets.ts:12、markdown/CLAUDE.md:28/29/52、csp-config.test.ts:4/93/110、html-panel.test.tsx:362）需统一修订 |
-| 05 | 未开始 | | | TE-03 守卫首次真实触发 |
+| 05 | 完成 | f945ed0 | allFixed=true（observations 两项文档同步经主 agent 补做） | L1 首跑 scan_bench 两轮中位 202ms 红 → 同命令重跑两次绿（负载敏感边缘）；补 FE-03/FE-05 文档同步（stage-05 脚本 prompt 漏列） |
 | 06 | 未开始 | | | TE-08 实证分支入 commit body |
 | 07 | 未开始 | | | 红测演练入 commit body |
 

@@ -17,7 +17,7 @@
  * 全链跟随，e2e 全部用户目录写入落假屋，真实用户目录零接触。
  *
  * 防复发校验：覆盖 USERPROFILE 前对真实屋做快照——settings.json 键级哨兵
- * （hooks/statusLine，CP-046——外部并发改写其它键属合法面，不做整文件 diff）、
+ * （hooks/statusLine/env，CP-046——外部并发改写其余键属合法面，不做整文件 diff）、
  * statusline-backup.json 文件 sha256、~/.slterminal/hooks/ 整树、hooks-events
  * 存在性，exit 时逐项比对——任何泄漏（Rust 侧收敛遗漏/未来新消费点裸 dirs）
  * 都会在退出时独立报红（exitCode=1，TQ-E-06 可观测纪律）。hooks-events 目录
@@ -27,11 +27,23 @@
  * e2e-tests/.tmp-mockcli-projects 副本（fixtures/mockcli-projects，CP-041——
  * 后端注册表 env 门控，仅 E2E 注入该 env）。
  */
-const { execSync, spawn } = require('child_process');
+const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const crypto = require('crypto');
+
+// TE-09: tauri-service "core.invoke not available after 5s" WARN 计数（性能回归感知
+// 可观测化——focus 命令面扩大 = 计数显著超基线）。stdio 改 pipe 转发以计数；
+// FORCE_COLOR=1 保子进程日志着色（pipe 后非 TTY 失色）
+let coreInvokeWarnCount = 0;
+function wireWarnCounting(src, dst) {
+  src.on('data', (chunk) => {
+    const s = chunk.toString();
+    coreInvokeWarnCount += (s.match(/core\.invoke not available after 5s/g) ?? []).length;
+    dst.write(s);
+  });
+}
 
 // ── E2E 数据目录隔离（BE-01/TE-02） ──
 // 应用全部数据写入（settings.json / 项目持久化文件等）经 SLTERM_DATA_DIR
@@ -80,10 +92,11 @@ function snapFile(p) {
   }
 }
 
-/** 本套件泄漏判定哨兵键——E2E 唯一可能写入真实屋 settings.json 的键
- *  (hooks 注入 matcher / statusLine 桥接;其余键(env/permissions/用户配置)
- *  外部并发修改合法,不做整文件 diff——CP-046 键级断言口径) */
-const SETTINGS_SENTINEL_KEYS = ["hooks", "statusLine"];
+/** 本套件泄漏判定哨兵键——E2E 可能写入真实屋 settings.json 的全部键
+ *  (hooks 注入 matcher / statusLine 桥接 / writeFakePlanEnv 假 env;TE-04 补 env
+ *  前该写入面漏检)。其余键(permissions/用户配置)外部并发修改合法;env 入哨兵后
+ *  外部并发改 env 会报红——已知限制:e2e 运行期间勿动 claude env 配置 */
+const SETTINGS_SENTINEL_KEYS = ["hooks", "statusLine", "env"];
 
 /** settings.json 哨兵键快照:{ [key]: { existed: boolean, json: unknown } }
  *  (文件不存在/解析失败 → 全键 { existed: false, json: null }) */
@@ -290,17 +303,20 @@ console.log(`[wdio-launcher] 已重建 mockcli-projects 副本 → ${tmpMockProj
 const major = parseInt(process.version.slice(1).split('.')[0], 10);
 const wdioConfig = path.resolve(__dirname, 'wdio.conf.ts');
 // 命令行参数透传（如 --spec glyph-repro.e2e.ts）：取证期单 spec 运行——
-// glyph-repro 门控用例 GLYPH_E2E=1 配套使用（e2e-tests/CLAUDE.md 运行节登记）
-const cliArgs = process.argv.slice(2).join(' ');
-
+// glyph-repro 门控用例 GLYPH_E2E=1 配套使用（e2e-tests/CLAUDE.md 运行节登记）。
+// TE-09：透传形态 = runWdio/fallback 内直接展开 process.argv.slice(2)（拼串变量弃用）
 function runWdio(nodeBin) {
   const wdioCli = path.resolve(__dirname, '..', 'node_modules', '@wdio', 'cli', 'bin', 'wdio.js');
-  try {
-    execSync(`"${nodeBin}" "${wdioCli}" run "${wdioConfig}" ${cliArgs}`, { stdio: 'inherit' });
-    return true;
-  } catch (e) {
-    process.exit(e.status || 1);
-  }
+  const child = spawn(nodeBin, [wdioCli, 'run', wdioConfig, ...process.argv.slice(2)], {
+    stdio: ['inherit', 'pipe', 'pipe'],
+    env: { ...process.env, FORCE_COLOR: '1' },
+  });
+  wireWarnCounting(child.stdout, process.stdout);
+  wireWarnCounting(child.stderr, process.stderr);
+  child.on('close', (code) => {
+    console.log(`[wdio-launcher] tauri-service core.invoke WARN 计数 = ${coreInvokeWarnCount}（基线登记见 e2e-tests/CLAUDE.md——显著超基线 = focus 命令面扩大，排查 $/click 新增点）`);
+    process.exit(code ?? 1);
+  });
 }
 
 if (major >= 26) {
@@ -315,8 +331,10 @@ if (major >= 26) {
     try { size = fs.statSync(node22).size; } catch { size = 0; }
     if (size > 1024 * 1024) {
       console.log(`[wdio-launcher] Node ${process.version} → 使用便携 Node 22`);
+      // TE-09：runWdio 改异步 spawn 转发——不能在此 process.exit(0)（会掐断子进程）；
+      // 顶层 return 跳过下方 fallback，结果由 close 回调 process.exit 承接
       runWdio(node22);
-      process.exit(0);
+      return;
     }
     console.warn('[wdio-launcher] 便携 Node 22 文件不完整(<1MB),改用当前 Node');
   }
@@ -326,8 +344,14 @@ fallback();
 function fallback() {
   const args = ['wdio', 'run', wdioConfig, ...process.argv.slice(2)];
   const wdio = spawn('npx', args, {
-    stdio: 'inherit',
+    stdio: ['inherit', 'pipe', 'pipe'],
     shell: true,
+    env: { ...process.env, FORCE_COLOR: '1' },
   });
-  wdio.on('close', (code) => process.exit(code));
+  wireWarnCounting(wdio.stdout, process.stdout);
+  wireWarnCounting(wdio.stderr, process.stderr);
+  wdio.on('close', (code) => {
+    console.log(`[wdio-launcher] tauri-service core.invoke WARN 计数 = ${coreInvokeWarnCount}（基线登记见 e2e-tests/CLAUDE.md——显著超基线 = focus 命令面扩大，排查 $/click 新增点）`);
+    process.exit(code);
+  });
 }

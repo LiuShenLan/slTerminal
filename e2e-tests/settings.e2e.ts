@@ -27,9 +27,10 @@
  */
 
 import { expect, browser } from "@wdio/globals";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
+import { writeFakePlanEnv } from "./node-helpers";
 import {
   waitForWorkspaceReady,
   waitForDockviewApi,
@@ -197,25 +198,6 @@ async function waitForSettingsFile(
   );
 }
 
-/** 写假值余量 env 到 user 层 settings.json（SEC-18 假值占位符；deepseek URL 命中
-    QUERIES 匹配集 → 后端刷新后产出占位行 → 导航树余量 footer 可断言） */
-function writeFakePlanEnv(): void {
-  let root: Record<string, unknown>;
-  try {
-    root = JSON.parse(readFileSync(claudeSettingsPath, "utf8")) as Record<string, unknown>;
-  } catch {
-    root = {};
-  }
-  const env = (root.env ?? {}) as Record<string, unknown>;
-  env.ANTHROPIC_BASE_URL = "https://api.deepseek.com/anthropic";
-  env.ANTHROPIC_AUTH_TOKEN = "sk-test-e2e"; // 假值占位符（SEC-18，非真实凭据）
-  root.env = env;
-  // 假屋为 per-pid 唯一新目录——solo 跑时 .claude 未必存在，先建父目录（2026-09-08 实证：
-  // 全量队列中 hooks spec 先行建目录故既往全量绿、单 spec 独立假屋必 ENOENT）
-  mkdirSync(dirname(claudeSettingsPath), { recursive: true });
-  writeFileSync(claudeSettingsPath, JSON.stringify(root, null, 2), "utf8");
-}
-
 describe("设置中心 (F11, SC-E2E-02)", () => {
   // 用例真实写盘两处：exe 同级 settings.json（④ backgroundTasks.planBalance 子键 / ⑥ keybindings 段）、
   // user 层 ~/.claude/settings.json（④ 假 env，假屋隔离——ADR-0016）。
@@ -366,7 +348,7 @@ describe("设置中心 (F11, SC-E2E-02)", () => {
       );
 
       // 假 env 注入（余量刷新闭环前置——见文件头注释）
-      writeFakePlanEnv();
+      writeFakePlanEnv(claudeSettingsPath);
 
       // 设 120 → 失焦提交（React 受控 input 原生 setter + input/focusout 事件）
       expect(await setInputValue('[data-e2e="settings-background-tasks-interval-planBalance"]', "120")).toBe(true);

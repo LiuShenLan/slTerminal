@@ -14,6 +14,7 @@ import {
   SCROLL_MSG_TYPE,
   SCROLL_SET_MSG_TYPE,
   NAV_MSG_TYPE,
+  FONT_PROBE_MSG_TYPE,
 } from "../panels/docViewer/previewMessages";
 
 const NONCE = "00ff00ff00ff00ff00ff00ff00ff00ff";
@@ -68,6 +69,25 @@ describe("buildInjectedScript 段组合", () => {
     parseScript(out);
   });
 
+  it("md 追加 fontProbe 段（TE-08 分支 b）：iframe 内 fonts.check 后上行宿主页", () => {
+    const out = buildInjectedScript(NONCE, [
+      { kind: "linkRouter" },
+      { kind: "scrollReport" },
+      { kind: "fontProbe" },
+    ]);
+    // 锚点取 iframe 内字体加载态（宿主 FontFaceSet 不覆盖 iframe 文档——实证
+    // 宿主 check 双真空，只能自 iframe 内取后 postMessage 上行）
+    expect(out).toContain("document.fonts.ready.then");
+    expect(out).toContain("document.fonts.check('12px \"KaTeX_Main\"')");
+    expect(out).toContain("parent.postMessage");
+    // 类型 + nonce（JSON.stringify 拼入——拼接纪律 #5 双保险）
+    expect(out).toContain(FONT_PROBE_MSG_TYPE);
+    expect(out).toContain(`nonce:${JSON.stringify(NONCE)}`);
+    // 未传段零注入（生产拼装不含该段）
+    expect(buildInjectedScript(NONCE, [{ kind: "linkRouter" }])).not.toContain(FONT_PROBE_MSG_TYPE);
+    parseScript(out);
+  });
+
   it("注入产物不含提前闭合——<script> 与 </script> 各恰好一次（段组合矩阵）", () => {
     // FE-06：拼接纪律 #1 测试锁——非贪婪 parse 只取首段，提前闭合截断静默；
     // 计数断言锁死「注入产物整体恰一对 script 标签」（buildInjectedScript.ts:13-30 纪律 1）
@@ -75,6 +95,10 @@ describe("buildInjectedScript 段组合", () => {
       ["无 extra 段", []],
       ["html fragmentNav", [{ kind: "fragmentNav" }]],
       ["md linkRouter+scrollReport", [{ kind: "linkRouter" }, { kind: "scrollReport" }]],
+      [
+        "md linkRouter+scrollReport+fontProbe",
+        [{ kind: "linkRouter" }, { kind: "scrollReport" }, { kind: "fontProbe" }],
+      ],
     ];
     for (const [name, extra] of combos) {
       const out = buildInjectedScript(NONCE, extra);

@@ -307,6 +307,8 @@ describe("MarkdownPanel", () => {
     const doc = await waitForPushedDoc("<h1>磁盘内容</h1>");
     // 渲染管线（markdown-it → 完整文档）产物
     expect(doc.startsWith("<!doctype html>")).toBe(true);
+    // TE-08：默认构建（VITE_E2E !== "1"）不注入字体探针段——生产零注入面
+    expect(doc).not.toContain("slterm_font_probe");
     // 推送 label = preview-<panelId>
     const lastCall = mocks.previewRender.mock.calls[mocks.previewRender.mock.calls.length - 1]!;
     expect(lastCall[0]).toBe(PANEL_LABEL);
@@ -314,6 +316,27 @@ describe("MarkdownPanel", () => {
     const cmCalls = mocks.mockUseCodeMirror.mock.calls;
     const last = cmCalls[cmCalls.length - 1]![0] as { container: unknown };
     expect(last.container).not.toBeNull();
+  });
+
+  it("VITE_E2E=1：预览装配追加 fontProbe 段（TE-08 字体加载锚点）", async () => {
+    // E2E 构建（VITE_E2E=1）拼装点追加字体探针段——iframe 内 fonts.check
+    // 后上行宿主页（宿主 FontFaceSet 不覆盖 iframe，实证见 markdown.e2e.ts）
+    vi.stubEnv("VITE_E2E", "1");
+    try {
+      const { container } = renderPanel();
+      await waitForCmMounted();
+      await act(async () => {
+        fireEvent.click(container.querySelector('[data-e2e="markdown-mode-preview"]')!);
+      });
+      await waitFor(() => {
+        const found = mocks.previewRender.mock.calls.some((c) =>
+          (c[1] as string).includes("slterm_font_probe"),
+        );
+        expect(found).toBe(true);
+      }, { timeout: 3000 });
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("形态切换持久化 viewMode", async () => {

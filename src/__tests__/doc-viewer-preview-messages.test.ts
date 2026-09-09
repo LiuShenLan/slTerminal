@@ -12,6 +12,7 @@ import {
   SCROLL_SET_MSG_TYPE,
   ZOOM_SET_MSG_TYPE,
   NAV_MSG_TYPE,
+  FONT_PROBE_MSG_TYPE,
   ZOOM_MIN,
   ZOOM_MAX,
   ZOOM_STEP,
@@ -130,12 +131,15 @@ describe("消息载荷构造器", () => {
 });
 
 describe("上/下行类型白名单（S10-② 终态守卫，CP-013/CP-044）", () => {
-  it("上行消息类型白名单恰好为渲染态集合——无命令/按键重放通道", () => {
-    // CP-013 终态：上行仅 {slterm_zoom, slterm_scroll, slterm_nav}（旧键转发
-    // 通道随 webview 迁移整体退役）；任何新增上行类型必须显式过本守卫
+  it("上行消息类型白名单 = 渲染态集合 + E2E 字体探针（无命令/按键重放通道）", () => {
+    // CP-013 终态：上行 = {slterm_zoom, slterm_scroll, slterm_nav}（旧键转发
+    // 通道随 webview 迁移整体退役）+ TE-08 E2E 字体探针（slterm_font_probe，
+    // 仅 VITE_E2E 构建注入可达）；任何新增上行类型必须显式过本守卫
     expect([...UPLINK_MSG_TYPES].sort()).toEqual(
-      [ZOOM_MSG_TYPE, SCROLL_MSG_TYPE, NAV_MSG_TYPE].sort(),
+      [ZOOM_MSG_TYPE, SCROLL_MSG_TYPE, NAV_MSG_TYPE, FONT_PROBE_MSG_TYPE].sort(),
     );
+    // 字体探针类型名锁死（协议常量单点——改名即断宿主桥/注入段/断言链）
+    expect(FONT_PROBE_MSG_TYPE).toBe("slterm_font_probe");
     // 显式锁死：不含 key/命令类消息（防改个名字复活重放通道）
     for (const t of UPLINK_MSG_TYPES) {
       expect(t).not.toMatch(/key|command/i);
@@ -153,6 +157,7 @@ describe("上/下行类型白名单（S10-② 终态守卫，CP-013/CP-044）", 
     const retiredKeyType = ["slterm", "key"].join("_");
     expect(isUplinkType(ZOOM_MSG_TYPE)).toBe(true);
     expect(isUplinkType(NAV_MSG_TYPE)).toBe(true);
+    expect(isUplinkType(FONT_PROBE_MSG_TYPE)).toBe(true);
     expect(isUplinkType(retiredKeyType)).toBe(false);
     expect(isUplinkType("slterm_reset")).toBe(false);
     expect(isUplinkType("other")).toBe(false);

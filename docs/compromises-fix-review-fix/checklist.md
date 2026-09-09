@@ -1285,6 +1285,8 @@ if (focused !== true) {
 - `node e2e-tests/run-wdio.cjs --spec settings.e2e.ts --spec hooks.e2e.ts` 双 spec 形态：第 2 位 worker 不再 fast-fail（日志含降级 WARN），两 spec 按各自内容通过/失败（不再有「谁在第 2 位谁失败」确定性）；
 - 单 spec/全量形态零回归：`npm run e2e` 全绿。
 
+> **落地复核（2026-09-09，S06）**：cid 语义复核证伪本条「maxInstances=1 下首 worker = `"0-0"`、其余非 `"0-"` 前缀」的隐含假设——cid 实为 `${capabilityIndex}-${workerOrdinal}`（`@wdio/cli build/index.js:963-976`/`:1177-1182`），本配置单 capability → **全部 worker 的 cid 均 `"0-N"`**，`startsWith("0-")` 判定致降级分支不可达、全量 15 worker 全 fast-fail（throw 位于 reset 之前 → `resetProjects/resetSettings` 被跳过 → 跨 spec 状态累积，tab-menu 失败）。落地形态改为 `workerId === undefined || workerId === "0-0"`（实文见 `e2e-tests/wdio.conf.ts`）；本条步骤 1 代码块字面不回溯改写（历史原文保留）。
+
 ---
 
 ### TE-06 · writeFakePlanEnv 收编单点（界外全收项）

@@ -16,10 +16,12 @@
 //     （通信层），本文仅登记文档层消息类型与上/下行类型白名单。
 //
 // 消息载荷与既有 slterm_* 平铺结构同构（{type, nonce, ...}），不引入包装层。
-// 上行类型白名单 = 渲染态集合（zoom/scroll/nav）——无命令/按键重放通道
-// （CP-013：键转发上行与信任标记随 webview 迁移整体退役，旧类型名零残留；
-// 终态集合由守卫测试锁死）。下行类型白名单 = 控制集合（reset/zoom_set/
-// scroll_set）（CP-044 守卫）。
+// 上行类型白名单 = 渲染态集合（zoom/scroll/nav）+ E2E 专用字体探针
+// （TE-08：宿主页 FontFaceSet 不覆盖 iframe 文档且 opaque origin 不可读——
+// 字体真实加载锚点只能自 iframe 内上行；该段仅 VITE_E2E 构建注入，生产零
+// 注入面）——无命令/按键重放通道（CP-013：键转发上行与信任标记随 webview
+// 迁移整体退役，旧类型名零残留；终态集合由守卫测试锁死）。下行类型白名单
+// = 控制集合（reset/zoom_set/scroll_set）（CP-044 守卫）。
 
 /** iframe → 宿主页：缩放变更上报消息类型（上行，经桥转发主窗） */
 export const ZOOM_MSG_TYPE = "slterm_zoom";
@@ -40,15 +42,24 @@ export const SCROLL_SET_MSG_TYPE = "slterm_scroll_set";
  *  分类在面板侧做：外部 → 系统浏览器，本地 → 应用内打开） */
 export const NAV_MSG_TYPE = "slterm_nav";
 
+/** iframe → 宿主页：字体加载探针上报（上行，E2E 专用，TE-08）——iframe 内
+ *  `fonts.check('12px "KaTeX_Main"')` 结果（loaded 布尔）上行；宿主页
+ *  FontFaceSet 不覆盖 iframe 文档（opaque origin 不可读），字体真实加载锚点
+ *  只能自 iframe 内取。仅 VITE_E2E 构建注入该段（生产零注入面） */
+export const FONT_PROBE_MSG_TYPE = "slterm_font_probe";
+
 // ── 窗口层事件通道（S10-②：独立 webview 消息桥 = Tauri event，CP-044 通道退役）──
 // 事件名与载荷形态登记于 src/ipc/preview.ts（跨窗口通道属通信层，单点定义，
 // 本文不重复）——上行 = iframe 文档消息（本文件类型白名单）+ 宿主状态事件。
 
-/** 上行消息类型白名单（终态，CP-013 写死）：恰好为渲染态集合 */
+/** 上行消息类型白名单（CP-013 终态 + TE-08 字体探针）：渲染态集合 + E2E
+ *  专用字体加载探针（仅 VITE_E2E 构建注入可达——生产无该段，PreviewFrame
+ *  侧另经 E2E_ENABLED 门控收束） */
 export const UPLINK_MSG_TYPES = [
   ZOOM_MSG_TYPE,
   SCROLL_MSG_TYPE,
   NAV_MSG_TYPE,
+  FONT_PROBE_MSG_TYPE,
 ] as const;
 
 /** 下行消息类型白名单（终态，CP-044 守卫）：恰好为控制集合 */

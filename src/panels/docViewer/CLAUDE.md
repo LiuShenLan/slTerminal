@@ -45,12 +45,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 字符串插值一律 JSON.stringify；数值常量以十进制字面量直插（iframe 内独立运行）。
 - postMessage 仅存在于 iframe ↔ 宿主页窗口树内（不跨窗口），targetOrigin "*"（SEC-03 实证语义；宿主页侧 source===iframe.contentWindow + 白名单 + nonce 校验兜底）。
 - **无基础段（S10-② 起）**：keydown 转发段与信任标记随键盘不跨窗口整体退役（CP-013），注入产物 = extra 段 → zoom 段（恒末位，fragmentNav 的 click 段 "},true);" 收尾衔接 "var sltermZoom="——html-panel 控制流断言正则锁死，勿调换）。
-- 可选段：fragmentNav（html：# 链接拦截 + :target 模拟）/ linkRouter（md：非 # 链接上行 slterm_nav）/ scrollReport（md：滚动节流上行 + 下行恢复）。
+- 可选段：fragmentNav（html：# 链接拦截 + :target 模拟）/ linkRouter（md：非 # 链接上行 slterm_nav）/ scrollReport（md：滚动节流上行 + 下行恢复）/ fontProbe（E2E 专用字体加载探针，TE-08——仅 VITE_E2E 拼装传入，生产零注入面；iframe 内 fonts.ready 后 check('12px "KaTeX_Main"') 上行宿主桥，结果写主窗 `__slterm_e2e_fontProbe` 供 L4 断言。宿主页 FontFaceSet 不覆盖 iframe 文档且 opaque origin 不可读——2026-09-09 实证 hostSize=0、check 对任意族名恒 true，故锚点必须自 iframe 内取）。
 - zoomRuntime/scrollRuntime 为参数化函数源码（function(doc,win)——仅与宿主页窗口树内对话）——L2 经 new Function 桩执行行为级覆盖（jsdom 不执行 srcdoc 脚本）。
 
 ### 消息协议常量单点
 
-previewMessages.ts 承载全部「iframe ↔ 宿主页」消息类型与构造/守卫（zoom/scroll/nav/reset/set）+ 上/下行类型白名单（终态集合，CP-013/044 守卫锁死）；新增消息类型在此登记并同步注入段与 PreviewFrame 分派。窗口层事件名单点登记于 `src/ipc/preview.ts`（变更须三处同步：TS 常量 / src-tauri 宿主页桥脚本 / 测试守卫）。
+previewMessages.ts 承载全部「iframe ↔ 宿主页」消息类型与构造/守卫（zoom/scroll/nav/reset/set + E2E 字体探针 fontProbe/slterm_font_probe，TE-08）+ 上/下行类型白名单（CP-013/044 终态 + 探针为第四上行类型——仅 VITE_E2E 构建注入可达，PreviewFrame 侧 E2E_ENABLED 门控收束）；新增消息类型在此登记并同步注入段与 PreviewFrame 分派。**宿主页桥（src-tauri/src/preview.rs HOST_PAGE）按字段白名单式转发**（zoom/ratio/href/loaded——新增上行字段须同步桥脚本，否则载荷静默丢弃，Rust 侧 `host_page_bridge_forwards_*` 测试锁）。窗口层事件名单点登记于 `src/ipc/preview.ts`（变更须三处同步：TS 常量 / src-tauri 宿主页桥脚本 / 测试守卫）。
 
 ## 外部坑/红线
 

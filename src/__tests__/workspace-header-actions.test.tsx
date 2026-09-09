@@ -235,19 +235,19 @@ describe("createTabMenuItems", () => {
       apiSpy?: ReturnType<typeof vi.fn>;
       /** 文件页签参数（params.filePath 判文件型） */
       filePath?: string;
-      /** 工厂第 4 参（项目根,「复制相对路径」基准） */
+      /** 工厂第 4 参回调返回值（项目根,「复制相对路径」基准） */
       rootPath?: string;
     },
   ) {
     const onRenameRequestSpy = vi.fn();
     const addPanelSpy = options?.apiSpy ?? vi.fn();
     const mockGroup = makeFakeGroup(groupId);
-    // 单宿主形态：工厂收 (getApi, pageId|null, onRenameRequest, projectRootPath)，
+    // 单宿主形态：工厂收 (getApi, pageId|null, onRenameRequest, getProjectRootPath)，
     // 返回 (panel) => items 构建器；「新建终端」action 经 addTerminalPanel 落
     // 面板属主页组（panel.id 页前缀解析，兜底 menuPageId）
     const { host } = makeFakeHost([pageId], addPanelSpy);
     const getMenu = createTabMenuItems(
-      () => host as any, pageId, onRenameRequestSpy, options?.rootPath,
+      () => host as any, pageId, onRenameRequestSpy, () => options?.rootPath,
     );
     // fake 面板：id 页前缀协议形态（panel 属主页 = pageId）；view.contentComponent
     // 判终端；api.group 供关闭族（组快照取自右键传入面板结构）

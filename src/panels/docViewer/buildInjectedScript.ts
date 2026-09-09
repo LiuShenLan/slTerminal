@@ -31,6 +31,7 @@
 
 import { buildZoomRuntimeSource } from "./zoomRuntime";
 import { buildScrollRuntimeSource } from "./scrollRuntime";
+import { FONT_PROBE_MSG_TYPE } from "./previewMessages";
 
 /** 注入到 HTML 内容中的脚本标记（幂等检测，injectScript 使用） */
 export const INJECTED_MARKER = "__slterm_preview";
@@ -42,7 +43,11 @@ export type InjectedSegment =
   /** md：链接点击分类转发（http(s)/相对本地 → 上行 slterm_nav，父侧分类） */
   | { kind: "linkRouter" }
   /** md：滚动位置节流上行（iframe 重建按比例恢复） */
-  | { kind: "scrollReport" };
+  | { kind: "scrollReport" }
+  /** md：字体加载探针上行（E2E 专用，TE-08——宿主页 FontFaceSet 不覆盖
+   *  iframe 文档，字体真实加载态只能自 iframe 内 check 后上行；仅 VITE_E2E
+   *  拼装传入，生产零注入面） */
+  | { kind: "fontProbe" };
 
 /**
  * 组装注入脚本。
@@ -54,6 +59,8 @@ export type InjectedSegment =
  *     （WebView2 sandboxed iframe 不支持 location.hash 导航，preventDefault +
  *     class-based :target 模拟，点击时动态建 style）
  *   linkRouter / scrollReport——markdownviewer 专属（见 markdown 面板文档）
+ *   fontProbe——E2E 专用字体加载探针（TE-08：仅 VITE_E2E 拼装传入，
+ *     生产零注入面；iframe 内 fonts.check 后上行宿主页）
  *
  * @param nonce 面板挂载期生成的随机值，拼入 zoom/scroll/nav 消息——父侧据此
  *   校验消息来源（SEC-04；预览内容与注入脚本同文档——内容可读到 nonce，
@@ -72,6 +79,8 @@ export function buildInjectedScript(
   extra: readonly InjectedSegment[] = [],
 ): string {
   let out = "<script>";
+  // nonce 的 JSON 形态（fontProbe 段经 JSON.stringify 拼入——拼接纪律 #5 双保险）
+  const nonceJson = JSON.stringify(nonce);
   for (const seg of extra) {
     if (seg.kind === "fragmentNav") {
       out +=
@@ -99,6 +108,12 @@ export function buildInjectedScript(
     } else if (seg.kind === "scrollReport") {
       // 滚动比例上报 + 下行恢复（keepScrollRatio）——scrollRuntime，逻辑见 scrollRuntime.ts
       out += `var sltermScroll=(${buildScrollRuntimeSource(nonce)});sltermScroll(document,window);`;
+    } else if (seg.kind === "fontProbe") {
+      // 字体加载探针（E2E 专用，TE-08）：fonts.ready 后在 iframe 内 check
+      // KaTeX_Main 真实可渲染态并上行宿主页（宿主 FontFaceSet 不覆盖 iframe）
+      out +=
+        `document.fonts.ready.then(function(){var ok=document.fonts.check('12px "KaTeX_Main"');` +
+        `parent.postMessage({type:${JSON.stringify(FONT_PROBE_MSG_TYPE)},nonce:${nonceJson},loaded:ok},"*");});`;
     }
   }
 

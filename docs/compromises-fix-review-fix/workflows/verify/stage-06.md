@@ -7,7 +7,7 @@
 
 - **TE-04**：`rg '"hooks", "statusLine", "env"' e2e-tests/run-wdio.cjs` 命中；Read 哨兵注释确认 env 入哨兵理由 + 误报面口径；`rg "唯一可能写入" e2e-tests/` 零命中（失实声明绝迹）。
 - **TE-04（文档面）**：Read `e2e-tests/CLAUDE.md`——「防复发校验」节哨兵键为三键（hooks/statusLine/env）口径；「已知并发误报面」节 env 已移除合法放行、改写为「e2e 运行期间勿动 claude env 配置」限制。
-- **TE-05**：`rg "WDIO_WORKER_ID" e2e-tests/wdio.conf.ts` 命中；Read 确认判定形态 = 首 worker（`workerId === undefined || workerId.startsWith("0-")`）fast-fail，其余 console.warn 降级继续（不 throw）；「定向运行官方形态」节已改写（多 spec 降级 warn 但 $ 族 +5s 惩罚登记——Read 确认）。
+- **TE-05**：`rg "WDIO_WORKER_ID" e2e-tests/wdio.conf.ts` 命中；Read 确认判定形态 = 首 worker（`workerId === undefined || workerId === "0-0"`——S06 落地复核修正：cid 形态 `${capabilityIndex}-${workerOrdinal}`，单 capability 配置下原 `startsWith("0-")` 前缀形态致降级分支不可达、全量 15 worker 全 fast-fail 跳过 reset）fast-fail，其余 console.warn 降级继续（不 throw）；「定向运行官方形态」节已改写（多 spec 降级 warn 但 $ 族 +5s 惩罚登记——Read 确认）。
 - **TE-06**：`rg "function writeFakePlanEnv" e2e-tests/` 仅命中 `e2e-tests/node-helpers.ts`；`rg "writeFakePlanEnv" e2e-tests/settings.e2e.ts e2e-tests/background-tasks.e2e.ts` 各命中 import/调用（无本地函数定义）；node-helpers.ts 含 mkdirSync（Read 确认）；两 spec 各自 solo 绿（重构 agent 自验报告承载——verify 抽查报告原文，必要时实跑 `node e2e-tests/run-wdio.cjs --spec background-tasks.e2e.ts` 复核）。
 - **TE-06（文档面）**：`e2e-tests/CLAUDE.md`「E2E helper 命名与挂载位置」节含 node-helpers.ts 分工条（Node API 禁进 helpers.ts——Read 确认）。
 - **TE-08（二选一，与代码现状一致）**：分支 a——`rg "fonts.check" e2e-tests/markdown.e2e.ts` 命中（双对照断言：NoSuchFontXyzQq false + KaTeX_Main true，Read 确认）；或分支 b——`rg "fontProbe\|slterm_font_probe" src/panels/docViewer/ e2e-tests/markdown.e2e.ts` 命中（buildInjectedScript 段 + 白名单第四类型 + PreviewFrame 收束 + waitUntil 断言链路齐全，Read 逐件确认）。两分支互斥——按代码现状判定哪支落地；两支皆无判 not_fixed；两支皆有判 partial（超面）。

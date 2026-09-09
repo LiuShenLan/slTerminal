@@ -37,6 +37,7 @@ import { expect, browser } from "@wdio/globals";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
+import { writeFakePlanEnv } from "./node-helpers";
 import { waitForWorkspaceReady, waitForDockviewApi, createProject } from "./specUtils";
 
 // ── Window 全局类型扩展（E2E helper 由应用侧 helpers.ts 注入） ──
@@ -256,22 +257,6 @@ async function waitForSettingsFile(
     },
     { timeout, timeoutMsg },
   );
-}
-
-/** 写假值余量 env 到 user 层 settings.json（SEC-18 假值占位符；deepseek URL 命中
-    QUERIES 匹配集 → 后端刷新后产出占位行 → 导航树余量 footer 可断言） */
-function writeFakePlanEnv(): void {
-  let root: Record<string, unknown>;
-  try {
-    root = JSON.parse(readFileSync(claudeSettingsPath, "utf8")) as Record<string, unknown>;
-  } catch {
-    root = {};
-  }
-  const env = (root.env ?? {}) as Record<string, unknown>;
-  env.ANTHROPIC_BASE_URL = "https://api.deepseek.com/anthropic";
-  env.ANTHROPIC_AUTH_TOKEN = "sk-test-e2e"; // 假值占位符（SEC-18，非真实凭据）
-  root.env = env;
-  writeFileSync(claudeSettingsPath, JSON.stringify(root, null, 2), "utf8");
 }
 
 /**
@@ -504,7 +489,7 @@ describe("后台定时任务 (F12, E2E-02/E2E-03)", () => {
 
       // 前置：假 env 注入（余量来源契约——见文件头注释）+ 手动刷新（频率提交 →
       // afterCommitted → refreshPlanBalance 真实 invoke → 占位行）使 plan-balance-row 出现
-      writeFakePlanEnv();
+      writeFakePlanEnv(claudeSettingsPath);
       await openSettingsCenter();
       await switchSettingsPage("backgroundTasks");
       await waitForTasksPageRender();

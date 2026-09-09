@@ -81,11 +81,28 @@ export const config: WebdriverIO.Config = {
     await browser.switchToWindow(MAIN_WINDOW_LABEL);
     // TQ-E-10(CP-030):窗口前台聚焦 fast-fail 探针——$ 元素命令族(findElement/
     // $/elementClick 等)触发 tauri-service ensureActiveWindowFocus,窗口未聚焦时
-    // 每命令 +5s 且交互时序断言失真。探针失败即报错退出,不静默吃延迟。
+    // 每命令 +5s 且交互时序断言失真。首 worker 探针失败即报错退出,不静默吃延迟
+    // (非首 worker 降级 warn 继续——TE-05,见下)。
     const focused = await browser.execute(() => document.hasFocus());
     if (focused !== true) {
-      throw new Error(
-        "[wdio] 应用窗口未前台聚焦——E2E 运行前提不满足(TQ-E-10 探针)。请先聚焦 slTerminal 窗口再跑 npm run e2e;CI 环境请确认 embedded driver 启动后窗口置前。",
+      // TE-05: 首 worker 维持 fast-fail；多 --spec 形态第 2 位起的 worker（独立应用
+      // 实例，Windows 前台锁定期内必失焦）降级 warn 继续——其 $ 族命令逐命令吃 +5s
+      // focus 惩罚（e2e-tests/CLAUDE.md 登记），多 spec 形态仍不推荐但不再确定性失败。
+      // WDIO_WORKER_ID = local-runner spawn 的 cid（实证 @wdio/local-runner
+      // build/index.js:257）；cid 形态 = `${capabilityIndex}-${workerOrdinal}`
+      // （@wdio/cli build/index.js:963-976/:1177-1182）——本配置单 capability，
+      // 全部 worker 的 cid 均 "0-N"，首 worker 判定须取 "0-0"（S06 落地复核：
+      // 原 "0-" 前缀形态致降级分支不可达、全量 15 worker 全 fast-fail 跳过 reset）；
+      // env 缺失按首 worker 处理（单 worker 场景维持探针原语义）
+      const workerId = process.env.WDIO_WORKER_ID;
+      const isFirstWorker = workerId === undefined || workerId === "0-0";
+      if (isFirstWorker) {
+        throw new Error(
+          "[wdio] 应用窗口未前台聚焦——E2E 运行前提不满足(TQ-E-10 探针)。请先聚焦 slTerminal 窗口再跑 npm run e2e;CI 环境请确认 embedded driver 启动后窗口置前。",
+        );
+      }
+      console.warn(
+        `[wdio] TQ-E-10 探针降级：worker ${workerId} 前台聚焦不可用（多 spec 形态非首实例必失焦）——本 worker $ 族命令将逐命令吃 +5s focus 惩罚`,
       );
     }
     await browser.execute(() => {

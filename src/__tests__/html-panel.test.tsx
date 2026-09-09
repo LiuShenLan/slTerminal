@@ -793,6 +793,32 @@ describe("HtmlPanel", () => {
     spy.mockRestore();
   });
 
+  it("上行 slterm_font_probe（TE-08 字体探针）→ nonce 校验后写主窗全局", async () => {
+    // E2E 专用上行：iframe 内 fonts.check 结果经宿主桥转发——nonce 校验同
+    // 渲染态消息（SEC-04），写 window.__slterm_e2e_fontProbe 供 L4 断言
+    const w = window as unknown as { __slterm_e2e_fontProbe?: Record<string, boolean> };
+    delete w.__slterm_e2e_fontProbe;
+    try {
+      const { nonce } = await renderRenderedPanel();
+      await act(async () =>
+        dispatchUplink({ label: PANEL_LABEL, type: "slterm_font_probe", nonce, loaded: true }),
+      );
+      expect(w.__slterm_e2e_fontProbe?.[PANEL_LABEL]).toBe(true);
+      // 伪造 nonce 拒绝——不覆盖既有值
+      await act(async () =>
+        dispatchUplink({ label: PANEL_LABEL, type: "slterm_font_probe", nonce: "bad", loaded: true }),
+      );
+      expect(w.__slterm_e2e_fontProbe?.[PANEL_LABEL]).toBe(true);
+      // loaded 非布尔 → 记 false（不误报 true）
+      await act(async () =>
+        dispatchUplink({ label: PANEL_LABEL, type: "slterm_font_probe", nonce, loaded: "yes" }),
+      );
+      expect(w.__slterm_e2e_fontProbe?.[PANEL_LABEL]).toBe(false);
+    } finally {
+      delete w.__slterm_e2e_fontProbe;
+    }
+  });
+
   it("点重置 → 下行 slterm_reset（emitPreviewDownlink）+ 立即隐藏 + 回声不复活", async () => {
     const { container, nonce } = await renderRenderedPanel();
     await act(async () => dispatchUplink(zoomUplink(nonce, 1.3)));

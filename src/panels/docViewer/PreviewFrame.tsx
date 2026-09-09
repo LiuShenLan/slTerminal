@@ -16,8 +16,10 @@
 //   - 消息桥（Tauri event，CP-044 通道退役分支）：上行 slterm_zoom /
 //     slterm_scroll / slterm_nav（经宿主桥转发）按 label 过滤 + nonce 校验 +
 //     类型白名单（UPLINK_MSG_TYPES，CP-013 终态集合——无按键重放分支，
-//     未知类型静默丢弃）；下行 reset/zoom_set/scroll_set 经事件注入宿主 →
-//     iframe（iframe 侧 source===parent + nonce 校验不变）
+//     未知类型静默丢弃；E2E 构建另含字体探针 slterm_font_probe，TE-08，
+//     经 E2E_ENABLED 门控写主窗全局供 L4 断言）；下行 reset/zoom_set/
+//     scroll_set 经事件注入宿主 → iframe（iframe 侧 source===parent +
+//     nonce 校验不变）
 //   - ref 命令接口（PreviewFrameHandle.resetZoom）：悬浮区重置按钮下行复位
 //   - keepZoom/keepScrollRatio：iframe 加载完成（宿主状态事件）后按父侧镜像
 //     下行恢复（md 开；html 保持「重建归 100%」现状语义关）
@@ -57,12 +59,14 @@ import {
   ZOOM_MSG_TYPE,
   SCROLL_MSG_TYPE,
   NAV_MSG_TYPE,
+  FONT_PROBE_MSG_TYPE,
   isFiniteZoom,
   isFiniteRatio,
   buildResetRequest,
   buildZoomSetRequest,
   buildScrollSetRequest,
 } from "./previewMessages";
+import { E2E_ENABLED } from "../../lib/e2eEnabled";
 import { onMainWindowMoved } from "../../ipc/window";
 
 /** PreviewFrame 命令接口（悬浮区重置按钮经 ref 调用下行复位） */
@@ -275,6 +279,7 @@ export const PreviewFrame: React.FC<PreviewFrameProps> = ({
       zoom?: unknown;
       ratio?: unknown;
       href?: unknown;
+      loaded?: unknown;
     }) => {
       // 载荷守卫：非对象/缺 label 静默丢弃（事件通道载荷不可信，防异常上行）
       if (!msg || typeof msg.label !== "string") return;
@@ -307,6 +312,22 @@ export const PreviewFrame: React.FC<PreviewFrameProps> = ({
         if (typeof msg.nonce !== "string" || msg.nonce !== nonceRef.current) return;
         if (typeof msg.href !== "string" || msg.href.length === 0) return;
         onNavRef.current?.(msg.href);
+        return;
+      }
+      // ── E2E 字体加载探针上行（TE-08 分支 b）：nonce 校验后经 E2E_ENABLED
+      //    门控写主窗全局（L4 断言读取；生产构建 E2E_ENABLED 编译期 false →
+      //    整块 tree-shake，且该段仅 VITE_E2E 构建注入——双保险）──
+      if (type === FONT_PROBE_MSG_TYPE) {
+        if (typeof msg.nonce !== "string" || msg.nonce !== nonceRef.current) return;
+        if (E2E_ENABLED) {
+          const w = window as unknown as {
+            __slterm_e2e_fontProbe?: Record<string, boolean>;
+          };
+          w.__slterm_e2e_fontProbe = {
+            ...(w.__slterm_e2e_fontProbe ?? {}),
+            [label]: msg.loaded === true,
+          };
+        }
         return;
       }
       // 其余类型（含已退役的键转发类型与未知类型）静默丢弃——上行终态集合

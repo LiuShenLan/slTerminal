@@ -380,7 +380,10 @@ const WorkspaceDockHost: React.FC<WorkspaceDockHostProps> = () => {
 
   // 页签右键事件监听（单宿主——DefaultTab 广播，宿主解析命中弹菜单）
   const buildTabMenuItems = useMemo(
-    () => createTabMenuItems(getApi, null, openRenameDialog),
+    () =>
+      createTabMenuItems(getApi, null, openRenameDialog, (pid) =>
+        pid ? (rootPathOfPage(pid) ?? undefined) : undefined,
+      ),
     [getApi, openRenameDialog],
   );
   useEffect(() => {

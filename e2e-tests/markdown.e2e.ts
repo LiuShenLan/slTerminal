@@ -113,6 +113,28 @@ describe("Markdown 面板三形态", () => {
       await waitPreviewDocContains(panelId, "katex-display");
       // KaTeX 内联字体已装配（ADR-0018——产物在预览域渲染）
       await waitPreviewDocContains(panelId, "data:font/woff2;base64,");
+      // KaTeX 字体真实加载锚点（TE-08 分支 b，2026-09-09 实证定案）：
+      // 宿主页 FontFaceSet 不覆盖 iframe srcdoc 文档（实证 hostSize=0 且
+      // fonts.check 对任意族名恒 true——对照组 NoSuchFontXyzQq 亦 true，语义
+      // 失效；iframe opaque origin 宿主不可读）——加载态只能自 iframe 内取：
+      // 注入的 fontProbe 段在 iframe 内 fonts.ready 后 check('12px "KaTeX_Main"')
+      // 上行宿主桥 → PreviewFrame 收束写 window.__slterm_e2e_fontProbe
+      // （E2E_ENABLED 门控；段仅 VITE_E2E 构建注入，生产零注入面）。
+      // 前置声明锚点：字体族已在渲染文档内声明（防 check 对未声明族空真）。
+      await waitPreviewDocContains(panelId, "KaTeX_Main");
+      await browser.waitUntil(
+        async () =>
+          await browser.execute(
+            (l: string) =>
+              (
+                window as unknown as {
+                  __slterm_e2e_fontProbe?: Record<string, boolean>;
+                }
+              ).__slterm_e2e_fontProbe?.[l] === true,
+            previewWindowLabel(panelId),
+          ),
+        { timeout: 10000, timeoutMsg: "预览域 KaTeX 字体未真实加载（fontProbe 未达 true）" },
+      );
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }

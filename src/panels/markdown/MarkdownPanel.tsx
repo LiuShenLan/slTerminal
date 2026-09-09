@@ -30,6 +30,7 @@ import "allotment/dist/style.css";
 import { fs, shell } from "../../ipc";
 import { PANEL_BG, ERROR_FG, HTML_PANEL_LOADING_FG } from "../../theme";
 import { PreviewFrame, type PreviewFrameHandle } from "../docViewer/PreviewFrame";
+import type { InjectedSegment } from "../docViewer/buildInjectedScript";
 import { FloatingArea } from "../docViewer/FloatingArea";
 import { useZoomHud } from "../docViewer/useZoomHud";
 import { ModeSwitcher } from "../docViewer/ModeSwitcher";
@@ -62,6 +63,11 @@ type LoadState =
 
 /** 预览防抖（ms）：停止输入后触发重渲染 */
 const PREVIEW_DEBOUNCE_MS = 300;
+
+/** TE-08：E2E 构建追加的字体加载探针段——拼装点内联 `import.meta.env.VITE_E2E`
+ *  字面量判定（生产构建编译期折叠为 false → 恒空数组，零注入面；函数调用会
+ *  阻碍 Rollup DCE，照 e2eEnabled.ts 纪律） */
+const E2E_FONT_PROBE_SEGMENTS: readonly InjectedSegment[] = [{ kind: "fontProbe" }];
 
 const MODES: Array<{ id: ViewMode; label: string; title?: string }> = [
   { id: "edit", label: "编辑" },
@@ -417,7 +423,15 @@ const MarkdownPanel: React.FC<MarkdownPanelProps> = ({
                     panelId={params.panelId}
                     html={previewHtml}
                     title={`Markdown 预览: ${params.filePath}`}
-                    segments={[{ kind: "linkRouter" }, { kind: "scrollReport" }]}
+                    segments={[
+                      { kind: "linkRouter" },
+                      { kind: "scrollReport" },
+                      // TE-08 分支 b：E2E 构建追加字体加载探针段（VITE_E2E
+                      // 字面量判定——生产编译期折叠，零注入面）
+                      ...(import.meta.env.VITE_E2E === "1"
+                        ? E2E_FONT_PROBE_SEGMENTS
+                        : []),
+                    ]}
                     keepZoom
                     keepScrollRatio
                     onZoomChange={zoomHud.report}

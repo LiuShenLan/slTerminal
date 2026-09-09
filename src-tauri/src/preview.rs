@@ -505,7 +505,8 @@ const HOST_PAGE: &str = r##"<!DOCTYPE html>
     pull(d && d.seq);
   });
 
-  // iframe 文档上行（zoom/scroll/nav）→ 转发主窗（类型白名单在主窗侧守卫）
+  // iframe 文档上行（zoom/scroll/nav + E2E 字体探针 loaded）→ 转发主窗
+  //（类型白名单在主窗侧守卫；TE-08：探针段仅 VITE_E2E 构建注入）
   window.addEventListener("message", function (e) {
     if (e.source !== frame.contentWindow) return;
     if (e.origin !== "null") return;
@@ -515,6 +516,7 @@ const HOST_PAGE: &str = r##"<!DOCTYPE html>
     if (typeof data.zoom === "number") up.zoom = data.zoom;
     if (typeof data.ratio === "number") up.ratio = data.ratio;
     if (typeof data.href === "string") up.href = data.href;
+    if (typeof data.loaded === "boolean") up.loaded = data.loaded;
     emitEvent("preview:uplink", up);
   });
 
@@ -606,6 +608,14 @@ mod preview_tests {
         assert!(HOST_PAGE.contains("default-src 'none'"));
         assert!(HOST_PAGE.contains("img-src data:"));
         assert!(HOST_PAGE.contains("font-src data:"));
+    }
+
+    /// 宿主页桥转发字体探针载荷（TE-08）：loaded 布尔透传主窗——桥对未知
+    /// 字段默认丢弃（zoom/ratio/href 白名单式转发），漏转发即链路断点
+    #[test]
+    fn host_page_bridge_forwards_font_probe_loaded() {
+        assert!(HOST_PAGE.contains("typeof data.loaded === \"boolean\""));
+        assert!(HOST_PAGE.contains("up.loaded = data.loaded"));
     }
 
     /// 物理坐标换算：origin + round(css × scale)

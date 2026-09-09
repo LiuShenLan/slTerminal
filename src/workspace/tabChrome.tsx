@@ -248,8 +248,10 @@ export function createTabMenuItems(
   getApi: () => DockviewApi | null,
   pageId: string | null,
   onRenameRequest: (panel: TabMenuPanel) => void,
-  /** 页面所属项目根——「复制相对路径」基准（区别于浏览 cwd，每页恒定） */
-  projectRootPath?: string,
+  /** 页面所属项目根查询——「复制相对路径」基准（区别于浏览 cwd，每页恒定）。
+   * 传回调而非静态值：单宿主下右键目标页在工厂构建期未知，须在 action 内按解析页现取
+   * （S11 共享宿主改造曾漏传致恒输出绝对路径——回归修复）。 */
+  getProjectRootPath?: (pageId: string | null) => string | undefined,
 ): (panel: TabMenuPanel) => TabMenuItem[] {
   return (panel: TabMenuPanel) => {
     // 单宿主右键目标必在可见（活跃）页组；面板属主页解析（防御跨页组残留）
@@ -286,7 +288,8 @@ export function createTabMenuItems(
     if (typeof filePath === "string" && filePath.length > 0) {
       items.unshift(
         item("复制相对路径", {
-          action: () => copyRelativePath(filePath, projectRootPath),
+          action: () =>
+            copyRelativePath(filePath, getProjectRootPath?.(menuPageId)),
         }),
         "separator",
       );

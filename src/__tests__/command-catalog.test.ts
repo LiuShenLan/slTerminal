@@ -71,9 +71,10 @@ describe("COMMAND_CATALOG", () => {
   // 命令重放」：上行类型集合 = 渲染态白名单（previewMessages 单点），含 key/
   // command 类即红；global 命令集仍保持最小低风险（其注册语义不受影响）
   it("预览消息通道不含命令重放（上行 = 渲染态白名单，CP-013/CP-044）", () => {
-    // 恰好为渲染态集合（守卫详值断言在 doc-viewer-preview-messages.test.ts）
+    // 恰好为渲染态集合 + TE-08 E2E 字体探针（slterm_font_probe——仅 VITE_E2E
+    // 构建注入；守卫详值断言在 doc-viewer-preview-messages.test.ts）
     expect([...UPLINK_MSG_TYPES].sort()).toEqual(
-      ["slterm_zoom", "slterm_scroll", "slterm_nav"].sort(),
+      ["slterm_zoom", "slterm_scroll", "slterm_nav", "slterm_font_probe"].sort(),
     );
     // 显式锁死：无 key/command 类消息（改名字复活重放通道即红）
     for (const t of UPLINK_MSG_TYPES) {

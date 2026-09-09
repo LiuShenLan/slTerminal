@@ -117,7 +117,9 @@ describe("页签右键菜单（tab-menu）", () => {
 
   /** 新增编辑器面板（editor.e2e.ts 先例：无需文件在盘，filePath 驱动标题/路径） */
   async function addEditorPanel(filePath: string): Promise<string> {
-    const panelId = `e2e-menu-editor-${Date.now()}`;
+    // 生产 panelId 形态 = 页前缀协议 `{pageId}:{localId}`——裸 id 在单宿主下
+    // 解析不出属主页 → 取不到项目根（「复制相对路径」恒绝对路径，S11 回归暴露点）
+    const panelId = `${pageId}:e2e-menu-editor-${Date.now()}`;
     await browser.execute(
       (args: { pid: string; path: string }) => {
         window.__dockviewApi!.addPanel({
