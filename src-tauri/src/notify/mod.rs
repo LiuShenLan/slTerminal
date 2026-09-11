@@ -299,16 +299,8 @@ fn event_loop(
 
 impl Drop for FileWatcher {
     fn drop(&mut self) {
-        // 发送停止信号并等待线程退出（确保 OS 句柄释放）
-        if let Some(tx) = self.stop_tx.take() {
-            let _ = tx.send(());
-        }
-        // BE-01: 带超时 join——超时 detach（进程退出回收），Drop 不再无界阻塞
-        if let Some(handle) = self.thread_handle.take() {
-            if !crate::thread_join::join_with_timeout(handle, crate::thread_join::JOIN_TIMEOUT) {
-                tracing::warn!("notify watcher 线程 3s 内未退出——detach 由进程退出回收（BE-01）");
-            }
-        }
+        // 委托 stop()（幂等，Option::take 双保险）——与 hooks/watcher.rs 同形态（BE-06）
+        self.stop();
     }
 }
 
@@ -937,12 +929,16 @@ mod notify_tests {
         paused: Arc<AtomicBool>,
         wps: Arc<Mutex<Vec<PathBuf>>>,
         handle: std::thread::JoinHandle<()>,
+        // 线程正常返回信令——panic 时发送端随线程死亡 drop，recv 必 Err（BE-02 panic 检测回传）
+        done_rx: mpsc::Receiver<()>,
     }
 
     impl LoopHarness {
         fn start(emitter: Arc<MockEmitter>) -> Self {
             let (event_tx, event_rx) = mpsc::channel::<DebounceEventResult>();
             let (stop_tx, stop_rx) = mpsc::channel::<()>();
+            // BE-02：done 通道——线程正常返回才发信，供 shutdown 恢复 panic 检测
+            let (done_tx, done_rx) = mpsc::channel::<()>();
             let paused = Arc::new(AtomicBool::new(false));
             let wps = Arc::new(Mutex::new(Vec::<PathBuf>::new()));
             let handle = std::thread::spawn({
@@ -956,6 +952,7 @@ mod notify_tests {
                         &wps_clone,
                         emitter.as_ref(),
                     );
+                    let _ = done_tx.send(()); // 到达 = 未 panic；send 失败 = 接收端已弃，忽略
                 }
             });
             Self {
@@ -964,6 +961,7 @@ mod notify_tests {
                 paused,
                 wps,
                 handle,
+                done_rx,
             }
         }
 
@@ -978,6 +976,10 @@ mod notify_tests {
                 ),
                 "测试 watcher 线程 5s 内应退出"
             );
+            // panic 检测：event_loop 正常返回才发信——panic 退出则 done_tx 随线程死亡 drop，recv 必 Err
+            self.done_rx
+                .recv()
+                .expect("watcher 线程 panic——event_loop 未正常返回");
         }
     }
 

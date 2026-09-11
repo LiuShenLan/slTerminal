@@ -1527,7 +1527,7 @@ pub async fn pty_resize(
 /// 再在 spawn_blocking 中执行 kill+join（ClosePseudoConsole 在 pre-Win11 24H2 上
 /// 可能永久阻塞，正常路径随闭包尾 drop 时执行，见 CP-011），
 /// 避免持锁阻塞导致后续命令级联卡死。
-/// BE-06: kill 返回值检查（失败 warn 继续——Job Object KILL_ON_JOB_CLOSE 兜底杀子进程）；
+/// 历史妥协修复轮注记: kill 返回值检查（失败 warn 继续——Job Object KILL_ON_JOB_CLOSE 兜底杀子进程）；
 /// reader join 带 3s 超时（JOIN_TIMEOUT 轮询 is_finished）——超时路径
 /// reader detach、session 移交监督线程执行 drop（master drop → ClosePseudoConsole
 /// 在监督线程内执行，CP-011）。
@@ -1556,7 +1556,7 @@ pub async fn pty_kill(
     tokio::task::spawn_blocking(move || -> Result<(), AppError> {
         let mut session = session;
         let mut child = session.child.lock();
-        // BE-06: 检查 kill 返回值——失败仅告警并继续（Job Object
+        // 历史妥协修复轮注记: 检查 kill 返回值——失败仅告警并继续（Job Object
         // KILL_ON_JOB_CLOSE 兜底杀子进程；kill 失败不阻塞销毁流程）
         if let Err(e) = child.kill() {
             tracing::warn!("pty_kill: child.kill() 失败: {e}");
@@ -1629,7 +1629,7 @@ async fn pty_kill_all_impl(pty: &PtyState) -> Result<u32, AppError> {
         let mut killed = 0u32;
         for mut session in sessions {
             let mut child = session.child.lock();
-            // BE-06 同款语义：检查 kill 返回值——失败仅告警并继续
+            // 历史妥协修复轮注记同款语义：检查 kill 返回值——失败仅告警并继续
             // （Job Object KILL_ON_JOB_CLOSE 兜底杀子进程）
             match child.kill() {
                 Ok(()) => killed += 1,
@@ -2152,7 +2152,7 @@ mod spawn_tests {
         }
     }
 
-    // ─── BE-06: join_with_timeout 用例已随迁 crate::thread_join::join_tests（BE-01）───
+    // ─── 历史妥协修复轮注记: join_with_timeout 用例已随迁 crate::thread_join::join_tests（编号属该轮次，与本仓现行编号体系无关）───
 
     // ─── BE-08: pty_kill_all 测试 ───
 

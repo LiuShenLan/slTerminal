@@ -1200,6 +1200,51 @@ mod read_dir_tests {
         assert_eq!(total, 501, ".git 过滤后应剩 501 条（跨页合计）");
     }
 
+    // ── CP-006 游标解码失败分支（opaque 契约：解码失败一律 Validation）──
+
+    /// 非法 base64 串 → Validation（base64 解码失败分支）
+    #[test]
+    fn decode_cursor_rejects_invalid_base64() {
+        let err = decode_page_cursor("%%%!!!").unwrap_err();
+        assert!(
+            matches!(err, AppError::Validation(_)),
+            "非法 base64 游标应返回 Validation"
+        );
+    }
+
+    /// 合法 base64 但载荷非法 UTF-8 → Validation（UTF-8 校验分支）
+    #[test]
+    fn decode_cursor_rejects_invalid_utf8() {
+        use base64::Engine as _;
+        // 0xFF/0xFE 在 UTF-8 中恒为非法字节（同 :73/:81 引擎构造）
+        let cursor = base64::engine::general_purpose::STANDARD.encode([0xFF, 0xFE]);
+        let err = decode_page_cursor(&cursor).unwrap_err();
+        assert!(
+            matches!(err, AppError::Validation(_)),
+            "非法 UTF-8 载荷应返回 Validation"
+        );
+    }
+
+    /// 坏 tag（"X\0x"）与无 NUL（"Dx"）两形态 → 均 Validation
+    #[test]
+    fn decode_cursor_rejects_bad_tag_and_missing_nul() {
+        use base64::Engine as _;
+        let bad_tag = base64::engine::general_purpose::STANDARD.encode("X\u{0}x");
+        let missing_nul = base64::engine::general_purpose::STANDARD.encode("Dx");
+
+        let err = decode_page_cursor(&bad_tag).unwrap_err();
+        assert!(
+            matches!(err, AppError::Validation(_)),
+            "tag 非 D|F 应返回 Validation"
+        );
+
+        let err = decode_page_cursor(&missing_nul).unwrap_err();
+        assert!(
+            matches!(err, AppError::Validation(_)),
+            "无 NUL 分隔符应返回 Validation"
+        );
+    }
+
     #[test]
     fn fs_create_dir_creates() {
         let base = tempfile::tempdir().unwrap();

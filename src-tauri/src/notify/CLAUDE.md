@@ -58,6 +58,7 @@ Windows 上 `notify` 递归注册目录树（如 `target/` 26K 文件）首次�
 
 - **MockEmitter 注入**：通过 `FileWatcher::start_with_emitter` 注入 `MockEmitter`，记录 emit 调用，无需构造 `AppHandle`。
 - **手动构造模式**：生命周期测试直接初始化 `FileWatcher` 字段 + mpsc channel，绕过 `start()`。
+- **LoopHarness 线程结果信令（BE-02）**：`shutdown` = 弃事件发送端 + `join_with_timeout` 等待 + done 通道 `recv().expect` 回传——watcher 线程 panic 时发送端随线程死亡 drop，`recv` 必 Err（线程结果信令，settings.rs mpsc 先例）；`join_with_timeout` 吞 JoinError 不再掩盖 panic。
 - **LruWatcherPool 测试**：用 `make_test_watcher` 创建带 mpsc 的模拟 watcher，覆盖命中、LRU 淘汰、替换、`pause_all_except`、remove、stop_all、Drop。
 
 ### 既定豁免
