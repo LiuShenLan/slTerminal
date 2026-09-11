@@ -2,6 +2,7 @@
 //
 // 覆盖：fs-event Modify → 重载 readFile 失败 → console.warn 保留 + toast 提示
 // （干净自动重载分支 + 脏确认重载分支）；git diff 刷新失败消息统一经 getErrorMessage
+// FE-08 重载面：外部修改重载 stat 预检 / 读后复核超限 → largeFile 引导（零读盘/不替换缓冲）
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, waitFor, act } from "@testing-library/react";
@@ -113,7 +114,11 @@ vi.mock("../features/shortcuts", async (importOriginal) => {
 });
 
 // ─── 导入被测模块 ───
-import { useCodeMirror, OPEN_RECHECK_DELAY_MS } from "../panels/editor/useCodeMirror";
+import {
+  useCodeMirror,
+  OPEN_RECHECK_DELAY_MS,
+  MAX_FILE_SIZE_BYTES,
+} from "../panels/editor/useCodeMirror";
 
 function createContainer(): HTMLDivElement {
   const el = document.createElement("div");
@@ -251,6 +256,48 @@ describe("外部修改重载失败（FE-10）", () => {
     await new Promise((r) => setTimeout(r, 50));
     expect(h.mockDispatch).not.toHaveBeenCalled();
     void result;
+  });
+});
+
+// ─── 重载大小防线（FE-08 重载面补齐） ───
+describe("外部修改重载大小防线（FE-08 重载面）", () => {
+  it("R5: 外部修改重载超限 → largeFile 引导且 readFile 未调用（FE-08 重载面）", async () => {
+    // 打开时 stat 小文件（预检通过）；fs-event 重载 stat 返回 >10MB
+    // 两次均用 mockResolvedValueOnce——持久实现对后续用例有污染
+    // （vi.clearAllMocks 只清调用记录、不清实现）
+    h.mockStatFile
+      .mockResolvedValueOnce({ sizeBytes: 0, mtimeMs: null })
+      .mockResolvedValueOnce({ sizeBytes: 11_000_000, mtimeMs: null });
+    const { result } = await renderAndWait();
+
+    // 打开路径确实读过盘（锚定下方「重载未读盘」断言非空跑）
+    expect(h.mockReadFile).toHaveBeenCalledTimes(1);
+    h.mockReadFile.mockClear(); // 清掉 initEditor 打开读盘，只观测重载路径
+    await triggerModify();
+
+    await waitFor(() => {
+      expect(result.result.current.largeFile).toEqual({ filePath: "/test/main.ts" });
+    }, { timeout: 3000 });
+    // >10MB 零读盘：不全量读入灌 CM
+    expect(h.mockReadFile).not.toHaveBeenCalled();
+    // 不产生全量替换 dispatch（未建/未改编辑缓冲）
+    expect(h.mockDispatch).not.toHaveBeenCalled();
+    // 超限引导非错误：无 toast
+    expect(h.mockToastShow).not.toHaveBeenCalled();
+  });
+
+  it("R6: stat 小但读盘超长（读后复核 TOCTOU）→ 同引导且不替换缓冲", async () => {
+    h.mockReadFile
+      .mockResolvedValueOnce("") // initEditor 打开读盘
+      .mockResolvedValueOnce("x".repeat(MAX_FILE_SIZE_BYTES + 1)); // 重载读盘：stat 与读盘间文件长大
+    const { result } = await renderAndWait();
+
+    await triggerModify();
+
+    await waitFor(() => {
+      expect(result.result.current.largeFile).toEqual({ filePath: "/test/main.ts" });
+    }, { timeout: 3000 });
+    expect(h.mockDispatch).not.toHaveBeenCalled();
   });
 });
 

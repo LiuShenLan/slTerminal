@@ -555,6 +555,21 @@ export function useCodeMirror({
       });
       if (!choice) return;
     }
+    // FE-08 重载面补齐：外部修改重载同走 stat 预检——>10MB 不全量读盘灌 CM，
+    // 置 largeFile 信号引导只读浏览（与打开路径同语义）；stat 失败按重载失败处理
+    try {
+      const meta = await fs.statFile(path);
+      if (meta.sizeBytes > MAX_FILE_SIZE_BYTES) {
+        filePathRef.current = undefined; // 防误保存覆盖原文件（同打开路径 :364）
+        setLargeFile({ filePath: path });
+        return;
+      }
+    } catch (err) {
+      const msg = getErrorMessage(err);
+      console.warn("[slTerminal] 外部修改重载失败:", msg);
+      if (opts.toastOnError) toast.show("error", `外部修改重载失败: ${msg}`);
+      return;
+    }
     let content: string;
     try {
       content = await fs.readFile(path);
@@ -564,6 +579,12 @@ export function useCodeMirror({
       const msg = getErrorMessage(err);
       console.warn("[slTerminal] 外部修改重载失败:", msg);
       if (opts.toastOnError) toast.show("error", `外部修改重载失败: ${msg}`);
+      return;
+    }
+    // 读后复核（TOCTOU 防线，同打开路径 :389-393）：stat 与读盘间文件长大超限 → 仍引导只读浏览
+    if (content.length > MAX_FILE_SIZE_BYTES) {
+      filePathRef.current = undefined;
+      setLargeFile({ filePath: path });
       return;
     }
     // await 后重取（期间可能已卸载/重建/切文件）

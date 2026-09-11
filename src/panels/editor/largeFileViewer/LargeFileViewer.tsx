@@ -33,6 +33,21 @@ function formatSize(bytes: number): string {
   return `${mb.toFixed(1)}MB`;
 }
 
+/** 抽样指纹（FE-10）：首/中/末三段各 4KB 文本拼接——同 size 同 mtime 原位改写
+ * （FAT 2s 粒度/同毫秒连写）mtime+size 比对假阴性的兜底判据；三段文本直接相等比对。
+ * 成本：每次 Modify 事件 ≤12KB 三小段 IPC（fs-event 200ms debounce 天然节流） */
+async function sampleFingerprint(filePath: string, sizeBytes: number): Promise<string> {
+  const SPAN = 4096;
+  const mid = Math.max(0, Math.floor(sizeBytes / 2) - SPAN / 2);
+  const tailStart = Math.max(0, sizeBytes - SPAN);
+  const [head, middle, tail] = await Promise.all([
+    fs.readFileRange(filePath, 0, SPAN),
+    fs.readFileRange(filePath, mid, SPAN),
+    fs.readFileRange(filePath, tailStart, SPAN),
+  ]);
+  return `${head}\n${middle}\n${tail}`;
+}
+
 /** 大文件只读浏览宿主组件 */
 export interface LargeFileViewerProps {
   filePath: string;
@@ -70,12 +85,22 @@ export const LargeFileViewer: React.FC<LargeFileViewerProps> = ({
   const [fileMeta, setFileMeta] = useState<{ sizeBytes: number; mtimeMs: number | null } | null>(
     null,
   );
-  /** 失效比对基线（stat 基线 ref——首挂 stat 与 fs-event 重 stat 共用一份） */
-  const baseMetaRef = useRef<{ sizeBytes: number; mtimeMs: number | null } | null>(null);
+  /** 失效比对基线（stat 基线 ref——首挂 stat 与 fs-event 重 stat 共用一份;FE-10 含抽样指纹） */
+  const baseMetaRef = useRef<{ sizeBytes: number; mtimeMs: number | null; fingerprint: string } | null>(
+    null,
+  );
   /** 文件代际（FE-05）——外部修改命中递增，useLineIndex 按复合键复位重扫 */
   const [fileRev, setFileRev] = useState(0);
 
-  const { lineCount, getLine, fullyIndexed, fatalError } = useLineIndex(filePath, fileRev);
+  const { lineCount, getLine, fullyIndexed, fatalError, scannedBlocks } = useLineIndex(
+    filePath,
+    fileRev,
+  );
+
+  // FE-09: 索引进度渲染期同步转发到 ref（防首挂 stat then 里闭包过期——
+  // fatalError 渲染期直读 ref 同款先例）
+  const scannedBlocksRef = useRef(0);
+  scannedBlocksRef.current = scannedBlocks;
 
   // 挂载/换文件 stat 真实元数据（FE-04）：信息条大小展示 + FE-05 失效比对基线
   useEffect(() => {
@@ -83,10 +108,20 @@ export const LargeFileViewer: React.FC<LargeFileViewerProps> = ({
     // 换文件先清基线——防旧文件基线误比对新文件事件（stat resolve 前的事件窗口）
     baseMetaRef.current = null;
     fs.statFile(filePath)
-      .then((m) => {
+      .then(async (m) => {
         if (cancelled) return;
-        baseMetaRef.current = { sizeBytes: m.sizeBytes, mtimeMs: m.mtimeMs };
+        // FE-10: 基线含抽样指纹（同 size 同 mtime 原位改写假阴性兜底）
+        const fp = await sampleFingerprint(filePath, m.sizeBytes);
+        if (cancelled) return;
+        baseMetaRef.current = { sizeBytes: m.sizeBytes, mtimeMs: m.mtimeMs, fingerprint: fp };
         setFileMeta({ sizeBytes: m.sizeBytes, mtimeMs: m.mtimeMs });
+        // FE-09: 首挂基线竞态封闭——stat resolve 前索引已推进（可能扫到修改前字节）则
+        // 保守失效重扫一次（成本一次重扫，换「base null 事件跳过 + 基线后设」窗口封闭；
+        // fileRev+1 复位后 scannedBlocks 归零，stat effect deps 仅 [filePath] 不重跑，无循环）
+        if (scannedBlocksRef.current > 0) {
+          invalidateFile(filePath);
+          setFileRev((r) => r + 1);
+        }
       })
       .catch((err) =>
         console.warn("[slTerminal] statFile 失败（信息条大小暂缺）:", filePath, err),
@@ -107,12 +142,23 @@ export const LargeFileViewer: React.FC<LargeFileViewerProps> = ({
       if (!hit) return;
       void fs
         .statFile(filePath)
-        .then((m) => {
+        .then(async (m) => {
           const base = baseMetaRef.current;
-          // 基线未就绪（首挂 stat 未归）→ 跳过：下次事件或重挂基线兜底
-          if (base !== null && (m.mtimeMs !== base.mtimeMs || m.sizeBytes !== base.sizeBytes)) {
-            baseMetaRef.current = { sizeBytes: m.sizeBytes, mtimeMs: m.mtimeMs };
+          // 基线未就绪（首挂 stat 未归）→ 跳过：同文件不重挂（effect deps [filePath]），
+          // 竞态窗口由 FE-09 首挂 resolve 封闭
+          if (base === null) return;
+          if (m.mtimeMs !== base.mtimeMs || m.sizeBytes !== base.sizeBytes) {
+            const fp = await sampleFingerprint(filePath, m.sizeBytes);
+            baseMetaRef.current = { sizeBytes: m.sizeBytes, mtimeMs: m.mtimeMs, fingerprint: fp };
             setFileMeta({ sizeBytes: m.sizeBytes, mtimeMs: m.mtimeMs });
+            invalidateFile(filePath);
+            setFileRev((r) => r + 1);
+            return;
+          }
+          // FE-10: mtime/size 未变 → 抽样指纹复核（同 size 同 mtime 原位改写假阴性兜底）
+          const fp = await sampleFingerprint(filePath, m.sizeBytes);
+          if (fp !== base.fingerprint) {
+            baseMetaRef.current = { sizeBytes: m.sizeBytes, mtimeMs: m.mtimeMs, fingerprint: fp };
             invalidateFile(filePath);
             setFileRev((r) => r + 1);
           }

@@ -72,7 +72,8 @@ function createWorkspace(): ScanWorkspace {
  * 行起始偏移索引——首块扫 \n 建初始索引,滚动至未索引区时按需向后扩展
  *
  * fileRev（FE-05）: 文件代际——外部修改失效后由宿主递增,复合键变化即全量复位重扫。
- * 返回成员为契约骨架（CP-022）;fatalError 为附加成员（块读取失败的兜底提示）。
+ * 返回成员为契约骨架（CP-022）;fatalError / scannedBlocks 为附加成员（块读取失败的
+ * 兜底提示 / FE-09 首挂基线竞态判据——渲染期直读工作区）。
  */
 export function useLineIndex(filePath: string, fileRev: number): {
   /** 总行数（索引未覆盖到 EOF 时为下界估计值） */
@@ -83,6 +84,8 @@ export function useLineIndex(filePath: string, fileRev: number): {
   fullyIndexed: boolean;
   /** 读取失败兜底提示（文件缺失/删除等;null = 无故障） */
   fatalError: string | null;
+  /** 已扫块数（渲染期直读工作区,复位归零）——FE-09 首挂基线竞态判据 */
+  scannedBlocks: number;
 } {
   const wsRef = useRef<ScanWorkspace>(createWorkspace());
   const [fileKey, setFileKey] = useState(() => `${filePath}#${fileRev}`);
@@ -341,5 +344,6 @@ export function useLineIndex(filePath: string, fileRev: number): {
     getLine,
     fullyIndexed: snap.eofByte !== null,
     fatalError: wsRef.current.fatal,
+    scannedBlocks: wsRef.current.nextBlock,
   };
 }

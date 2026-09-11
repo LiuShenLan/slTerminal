@@ -6,6 +6,9 @@
 // - FE-03: 方案切换后行文本色响应更新（schemeRegistry.onDidChange 订阅）
 // - FE-04: 信息条大小 = fs_stat 真实字节（stat 失败降级 …）
 // - FE-05: 外部修改失效——invalidateFile 清缓存/代际防脏回填/fs-event 命中重扫/未变不失效
+// - FE-07: invalidateFile 一并清在途条目（新扫描不复用旧代际在途任务）
+// - FE-09: 首挂 stat 基线竞态（stat resolve 时索引已推进 → 保守失效重扫一次）
+// - FE-10: 抽样指纹复核（同 size 同 mtime 原位改写假阴性兜底）
 // - useLineIndex 单测: 首块索引行数 / 跨块行拼接 / 多字节字符边界
 //
 // mock readFileRange 语义 = 后端 fs_read_file_range 契约简化版（逐字节区间切片）:
@@ -250,6 +253,28 @@ describe("文件变更失效（FE-05）", () => {
     expect(peekCachedBlock(FILE, 0)).toBeUndefined();
   });
 
+  it("invalidateFile 后新扫描不复用在途旧任务（重发 IPC 取新文本,FE-07）", async () => {
+    let resolveFirst!: (v: string) => void;
+    let call = 0;
+    mockReadFileRange.mockImplementation(() => {
+      call += 1;
+      // 第 1 次挂起（在途）;第 2 次直返新文本（失效后重发）
+      if (call === 1) return new Promise<string>((resolve) => (resolveFirst = resolve));
+      return Promise.resolve("fresh");
+    });
+    const pending = readBlock(FILE, 0);
+    expect(mockReadFileRange).toHaveBeenCalledTimes(1);
+    // 读取在途时失效 → 在途条目一并清除 → 新请求不复用旧任务,重发 IPC
+    invalidateFile(FILE);
+    const fresh = readBlock(FILE, 0);
+    expect(mockReadFileRange).toHaveBeenCalledTimes(2);
+    await expect(fresh).resolves.toBe("fresh");
+    // 旧任务调用方仍收响应（Promise 对象存活）——但旧代际结果不入缓存
+    resolveFirst("stale");
+    await expect(pending).resolves.toBe("stale");
+    expect(peekCachedBlock(FILE, 0)).toBe("fresh");
+  });
+
   it("fs-event Modify 命中后索引复位重建（重 stat 变化 → 缓存失效 + 重扫）", async () => {
     installVirtualFile(200);
     mockStatFile.mockResolvedValue({ sizeBytes: 200 * LINE_BYTES, mtimeMs: 1000 });
@@ -281,7 +306,7 @@ describe("文件变更失效（FE-05）", () => {
     });
   });
 
-  it("mtime/size 未变的事件不失效（缓存保留,零重读）", async () => {
+  it("mtime/size/指纹均未变 → 不失效（缓存保留零重读）", async () => {
     installVirtualFile(200);
     mockStatFile.mockResolvedValue({ sizeBytes: 200 * LINE_BYTES, mtimeMs: 1000 });
     let fireFsEvent: ((e: { paths: string[]; kind: string; detail: string }) => void) | null =
@@ -297,13 +322,17 @@ describe("文件变更失效（FE-05）", () => {
     await waitFor(() => {
       expect(fireFsEvent).not.toBeNull();
     });
+    // 稳定期: 首挂基线指纹回填与 FE-09 竞态兜底重扫（如有）先行落地,再清计数
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30));
+    });
     mockReadFileRange.mockClear();
     await act(async () => {
       fireFsEvent!({ paths: [FILE], kind: "Modify", detail: "Data" });
       await new Promise((r) => setTimeout(r, 20));
     });
-    // 同 mtime/size → 不失效: 无重读、行文本保留
-    expect(mockReadFileRange).not.toHaveBeenCalled();
+    // 同 mtime/size/指纹 → 不失效: 无块重读（FE-10 指纹复核的 4096 小段取样除外）、行文本保留
+    expect(mockReadFileRange).not.toHaveBeenCalledWith(FILE, 0, READ_BLOCK_BYTES);
     expect(lineText(container, 0)).toBe("line-0000000");
   });
 
@@ -328,6 +357,76 @@ describe("文件变更失效（FE-05）", () => {
       await new Promise((r) => setTimeout(r, 20));
     });
     expect(mockStatFile.mock.calls.length).toBe(statCalls);
+  });
+
+  it("首挂 stat resolve 前索引已推进 → 保守失效重扫一次（FE-09）", async () => {
+    installVirtualFile(200);
+    // stat 延迟 resolve——让首挂扫描先行推进（scannedBlocks > 0）
+    let resolveStat!: (m: { sizeBytes: number; mtimeMs: number | null }) => void;
+    mockStatFile.mockImplementation(
+      () =>
+        new Promise<{ sizeBytes: number; mtimeMs: number | null }>((resolve) => {
+          resolveStat = resolve;
+        }),
+    );
+    const { container } = render(<LargeFileViewer filePath={FILE} sourceLabel="" />);
+    // 扫描先于 stat 归——索引已推进渲染完成（scannedBlocks 已转发到 ref）
+    await waitFor(() => {
+      expect(lineText(container, 0)).toBe("line-0000000");
+    });
+    mockReadFileRange.mockClear();
+    // 释放 stat: 基线回填时索引已推进 → 保守失效重扫一次
+    await act(async () => {
+      resolveStat({ sizeBytes: 200 * LINE_BYTES, mtimeMs: 1000 });
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    await waitFor(() => {
+      expect(mockReadFileRange).toHaveBeenCalledWith(FILE, 0, READ_BLOCK_BYTES);
+    });
+    await waitFor(() => {
+      expect(lineText(container, 0)).toBe("line-0000000");
+    });
+  });
+
+  it("同 size 同 mtime 改写 → 指纹变 → 失效重扫（FE-10）", async () => {
+    // 可控文本 mock: 按 offset 切片返回当前版本（改写 = 原地换首行,size 不变）
+    let text = makeLinesText(0, 2000); // 26000 字节——首/中/末三段取样窗互异
+    mockReadFileRange.mockImplementation((_path: string, offset: number, length: number) => {
+      if (offset >= text.length) return Promise.resolve("");
+      return Promise.resolve(text.slice(offset, offset + length));
+    });
+    mockStatFile.mockResolvedValue({ sizeBytes: text.length, mtimeMs: 1000 });
+    let fireFsEvent: ((e: { paths: string[]; kind: string; detail: string }) => void) | null =
+      null;
+    mockOnFsEvent.mockImplementation((cb: (e: { paths: string[]; kind: string; detail: string }) => void) => {
+      fireFsEvent = cb;
+      return () => {};
+    });
+    const { container } = render(<LargeFileViewer filePath={FILE} sourceLabel="" />);
+    await waitFor(() => {
+      expect(lineText(container, 0)).toBe("line-0000000");
+    });
+    await waitFor(() => {
+      expect(fireFsEvent).not.toBeNull();
+    });
+    // 稳定期: 首挂基线指纹回填与 FE-09 竞态兜底重扫（如有）先行落地,再清计数
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    // 原位改写: 首行等长替换（size/mtime 不变——stat mock 恒定,仅指纹段变）
+    text = "zzzz-0000000\n" + text.slice(LINE_BYTES);
+    mockReadFileRange.mockClear();
+    await act(async () => {
+      fireFsEvent!({ paths: [FILE], kind: "Modify", detail: "Data" });
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    // 指纹变 → 缓存失效 + 行索引复位重扫（块 0 重新请求,渲染改写后文本）
+    await waitFor(() => {
+      expect(mockReadFileRange).toHaveBeenCalledWith(FILE, 0, READ_BLOCK_BYTES);
+    });
+    await waitFor(() => {
+      expect(lineText(container, 0)).toBe("zzzz-0000000");
+    });
   });
 });
 

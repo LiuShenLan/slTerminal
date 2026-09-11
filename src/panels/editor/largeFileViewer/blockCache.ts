@@ -92,13 +92,17 @@ function evictIfOverLimit(): void {
  *  代际已推进（失效发生于读取途中）则旧代际结果不入缓存（防失效后脏回填） */
 const fileGen = new Map<string, number>();
 
-/** 失效指定文件的全部缓存块 + 推进代际（FE-05；inflight 保留——调用方仍收响应，
- *  代际比对阻止其写缓存） */
+/** 失效指定文件的全部缓存块 + 在途条目 + 推进代际（FE-05/FE-07）；在途调用方仍收响应
+ * （Promise 对象存活），但失效后新扫描不再复用旧代际在途结果（防陈旧文本进新行索引）；
+ * 旧任务 finally 的 inflight.delete 幂等无害 */
 export function invalidateFile(filePath: string): void {
   fileGen.set(filePath, (fileGen.get(filePath) ?? 0) + 1);
   const prefix = `${filePath}${KEY_SEP}`;
   for (const k of [...cache.keys()]) {
     if (k.startsWith(prefix)) cache.delete(k);
+  }
+  for (const k of [...inflight.keys()]) {
+    if (k.startsWith(prefix)) inflight.delete(k);
   }
 }
 
