@@ -12,7 +12,8 @@
     "src-tauri/**",
     "scripts/**",
     "docs/compromises-fix/**",
-    "docs/compromises-fix-review-fix/**"
+    "docs/compromises-fix-review-fix/workflows/*.js",
+    "docs/compromises-fix-review2-fix/workflows/*.js"
   ],
   "ignoreIssues": {
     "src/features/agentHistory/historyModel.ts": [

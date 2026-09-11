@@ -36,12 +36,21 @@ const crypto = require('crypto');
 // TE-09: tauri-service "core.invoke not available after 5s" WARN 计数（性能回归感知
 // 可观测化——focus 命令面扩大 = 计数显著超基线）。stdio 改 pipe 转发以计数；
 // FORCE_COLOR=1 保子进程日志着色（pipe 后非 TTY 失色）
+const { StringDecoder } = require('string_decoder');
+const WARN_PATTERN = 'core.invoke not available after 5s';
 let coreInvokeWarnCount = 0;
 function wireWarnCounting(src, dst) {
+  const decoder = new StringDecoder('utf8'); // 多字节 UTF-8 跨 chunk 截断防乱码
+  let tail = ''; // 上 chunk 尾部残串（模式长度-1 字符）——WARN 跨 chunk 断行拼接计数；每流独立
   src.on('data', (chunk) => {
-    const s = chunk.toString();
-    coreInvokeWarnCount += (s.match(/core\.invoke not available after 5s/g) ?? []).length;
+    const s = decoder.write(chunk);
+    coreInvokeWarnCount += ((tail + s).match(/core\.invoke not available after 5s/g) ?? []).length;
+    tail = (tail + s).slice(-(WARN_PATTERN.length - 1));
     dst.write(s);
+  });
+  src.on('end', () => {
+    const rest = decoder.end();
+    if (rest) dst.write(rest);
   });
 }
 
@@ -352,6 +361,6 @@ function fallback() {
   wireWarnCounting(wdio.stderr, process.stderr);
   wdio.on('close', (code) => {
     console.log(`[wdio-launcher] tauri-service core.invoke WARN 计数 = ${coreInvokeWarnCount}（基线登记见 e2e-tests/CLAUDE.md——显著超基线 = focus 命令面扩大，排查 $/click 新增点）`);
-    process.exit(code);
+    process.exit(code ?? 1);
   });
 }

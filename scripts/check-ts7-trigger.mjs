@@ -54,7 +54,7 @@ async function main() {
   try {
     [issue, registry] = await Promise.all([getJson(ISSUE_URL), getJson(REGISTRY_URL)]);
   } catch (e) {
-    console.error(`[ts7-trigger] 查询失败(网络/解析):${e.message}`);
+    console.error(`[ts7-trigger] 查询失败(网络/HTTP/解析):${e.message}`);
     process.exit(2);
   }
   const latest = registry?.["dist-tags"]?.latest;
