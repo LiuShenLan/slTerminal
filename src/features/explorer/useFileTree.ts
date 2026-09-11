@@ -89,6 +89,17 @@ export function useFileTree({
   const [restoreQueue, setRestoreQueue] = useState<string[] | null>(null);
   /** 当前路径 toggleExpand 在途标记——防消费 effect 在根节点提交间重复派发同一路径 */
   const restoreBusyRef = useRef(false);
+  /** FE-03：加载抑制兜底守卫定时器句柄——释放原语经此清除（守卫存在 ⟺ 抑制窗口开启） */
+  const suppressGuardRef = useRef<number | undefined>(undefined);
+
+  /** FE-03：抑制解除原语——复位抑制标记并清除兜底守卫。全部解除点统一走本原语，
+   *  守卫句柄随解除一并作废——否则抑制已解除而守卫仍留册 10s（污染外部定时器计数，
+   *  如错误横幅自动消失用例的 getTimerCount 断言） */
+  const releaseSuppression = useCallback(() => {
+    restoringRef.current = false;
+    window.clearTimeout(suppressGuardRef.current);
+    suppressGuardRef.current = undefined;
+  }, []);
 
   /** 分页聚合：顺序拉取全部页拼接为整层条目（CP-006——后端跨页排序稳定，
    *  直接按页序 append；错误向上传播，由调用方按各自容错语义处理） */
@@ -179,8 +190,9 @@ export function useFileTree({
           return;
         }
         // 首帧失败：现状语义（错误占位 + 清空）+ FE-01 联动解除加载抑制
+        // （经原语解除——连同兜底守卫一并清除）
         if (gen === undefined || gen === genRef.current) {
-          restoringRef.current = false;
+          releaseSuppression();
         }
         const msg = getErrorMessage(err);
         setDirErrors((prev) => {
@@ -191,7 +203,7 @@ export function useFileTree({
         if (gen === undefined || gen === genRef.current) setRootNodes([]);
       }
     },
-    [rootPath],
+    [rootPath, releaseSuppression],
   );
 
   /** 加载子目录 */
@@ -455,16 +467,15 @@ export function useFileTree({
    *  （滞后一帧 → hasPath 误判丢失），逐层展开改由渲染落定后的消费 effect 驱动 */
   const restoreExpanded = useCallback(() => {
     const stored = viewStateRef.current;
-    // FE-01: 无可恢复快照（无存/域键不符/空展开集）→ 无恢复窗口——解除加载抑制
-    // 并提交首帧真实态（此前空树渲染的 commit effect 已被 restoringRef 短路，
-    // 此处补上呼保证槽位反映真实首帧）
+    // FE-01: 无可恢复快照 → 无恢复窗口——解除加载抑制；首帧真实态提交由 rootNodes
+    // 渲染落定后的 commit effect 统一承担（此处显式提交在微任务先于心智渲染时读过期
+    // 空树 → 生产双提交，FE-02 收口）
     if (
       !stored ||
       stored.rootPath !== rootPathRef.current ||
       stored.expandedPaths.length === 0
     ) {
-      restoringRef.current = false;
-      commitViewState();
+      releaseSuppression();
       return;
     }
     const paths = [...stored.expandedPaths].sort(
@@ -473,7 +484,7 @@ export function useFileTree({
     // 恢复窗口开启：抑制逐层提交（队列耗尽由消费 effect 解除并一次性上呼）
     restoringRef.current = true;
     setRestoreQueue(paths);
-  }, [commitViewState]);
+  }, [commitViewState, releaseSuppression]);
 
   // 根路径变更时重新加载
   useEffect(() => {
@@ -482,7 +493,7 @@ export function useFileTree({
     // （否则上一 rootPath 的队列会在新树提交后继续消费，且 restoringRef 悬挂使提交被永久抑制）
     setRestoreQueue(null);
     restoreBusyRef.current = false;
-    restoringRef.current = false;
+    releaseSuppression();
     // rootPath 变化时立即清空旧数据，避免残留旧项目的文件树
     if (!rootPath) {
       setRootNodes([]);
@@ -494,8 +505,23 @@ export function useFileTree({
     setGitStatusMap(new Map());
     setDirErrors(new Map());
     // FE-01: 加载窗口开启——loadRoot 完成前抑制 commitViewState 空提交覆盖注册表槽
-    // （解除点：restoreExpanded 无快照分支 / 恢复队列耗尽 effect / 本 effect 下次运行）
+    // （解除点：restoreExpanded 无快照分支 / 恢复队列耗尽 effect / loadRoot 首帧失败 catch
+    // / 本 effect 下次运行 / FE-03 超时兜底；各点一律经 releaseSuppression 原语，
+    // 守卫随之清除——守卫存在 ⟺ 抑制窗口开启）
     restoringRef.current = true;
+    // FE-03: 加载抑制超时兜底——loadRoot 永不 settle（后端挂起）时抑制永久悬挂；
+    // 10s 后按 gen 校验兜底解除并上呼当前真实态（优于展开态槽位永久停摆）
+    const suppressGuard = window.setTimeout(() => {
+      if (gen === genRef.current && restoringRef.current) {
+        releaseSuppression(); // 幂等：自身触发亦清守卫句柄
+        console.warn(
+          "[slTerminal] loadRoot 超时未 settle，解除提交抑制兜底:",
+          rootPath,
+        );
+        commitViewState();
+      }
+    }, 10_000);
+    suppressGuardRef.current = suppressGuard;
     loadRoot(gen).then(() => {
       if (gen !== genRef.current) return; // rootPath 已变化，丢弃过期恢复
       void restoreExpanded();
@@ -515,7 +541,18 @@ export function useFileTree({
         if (gen !== genRef.current) return; // 丢弃旧请求的错误处理
         setGitStatusMap(new Map());
       });
-  }, [rootPath, loadRoot, restoreExpanded]);
+    // FE-03: rootPath 变化/effect 重跑时旧兜底定时器作废（新代际另置新守卫）
+    return () => {
+      window.clearTimeout(suppressGuard);
+      suppressGuardRef.current = undefined;
+    };
+  }, [
+    rootPath,
+    loadRoot,
+    restoreExpanded,
+    commitViewState,
+    releaseSuppression,
+  ]);
 
   // CP-016：rootNodes 渲染落定后统一提交展开集。逐站点提交（toggleExpand/
   // reloadPreservingExpanded 末尾追加）读 rootNodesRef 时仍是上一帧树——
@@ -533,8 +570,9 @@ export function useFileTree({
   useEffect(() => {
     if (restoreQueue === null) return;
     if (restoreQueue.length === 0) {
-      // 队列耗尽 → 恢复完成：解除提交抑制并一次性上呼（最终提交兜底）
-      restoringRef.current = false;
+      // 队列耗尽 → 恢复完成：解除提交抑制并一次性上呼（最终提交兜底）；
+      // 解除经原语——连同兜底守卫一并清除
+      releaseSuppression();
       setRestoreQueue(null);
       commitViewState();
       return;
@@ -551,7 +589,14 @@ export function useFileTree({
       restoreBusyRef.current = false;
       setRestoreQueue(rest);
     });
-  }, [restoreQueue, rootNodes, toggleExpand, hasPath, commitViewState]);
+  }, [
+    restoreQueue,
+    rootNodes,
+    toggleExpand,
+    hasPath,
+    commitViewState,
+    releaseSuppression,
+  ]);
 
   // 订阅文件系统事件（200ms 去抖增量刷新）
   useEffect(() => {

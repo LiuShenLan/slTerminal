@@ -1035,7 +1035,7 @@ describe("useFileTree — FE-01/FE-07 加载窗口抑制与失败双分支", () 
       expect(result.current.rootNodes.length).toBe(1);
     }, { timeout: 3000 });
     await waitFor(() => {
-      expect(onViewStateChange).toHaveBeenCalled();
+      expect(onViewStateChange).toHaveBeenCalledTimes(1);
     }, { timeout: 3000 });
     expect(lastPayload(onViewStateChange)?.expandedPaths).toEqual([]);
   });
@@ -1084,6 +1084,75 @@ describe("useFileTree — FE-01/FE-07 加载窗口抑制与失败双分支", () 
       );
     }, { timeout: 3000 });
     expect(errorSpy).toHaveBeenCalled();
+  });
+
+  it("FE-03: loadRoot 永不 settle → 10s 兜底解除抑制并上呼", async () => {
+    vi.useFakeTimers();
+    try {
+      // readDirPage 挂起桩：永不 settle（后端挂起，加载窗口永不闭合）
+      mocks.setReadDirImpl(() => new Promise<never>(() => {}));
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const onViewStateChange = vi.fn();
+
+      renderHook(() =>
+        useFileTree({
+          rootPath: "C:/project",
+          viewState: null,
+          onViewStateChange,
+        }),
+      );
+
+      // 抑制期内（10s 未到）：零上呼
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(9_999);
+      });
+      expect(onViewStateChange).not.toHaveBeenCalled();
+
+      // 10s 兜底触发：按 gen 校验解除抑制并上呼当前真实态（首帧未落——空树）
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(onViewStateChange).toHaveBeenCalledTimes(1);
+      expect(lastPayload(onViewStateChange)?.expandedPaths).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("FE-03-2: 正常加载完成后守卫随解除清除（无残留定时器、无兜底上呼）", async () => {
+    vi.useFakeTimers();
+    try {
+      // 正常 resolve 桩：加载窗口正常闭合（抑制经无快照分支解除）
+      mocks.setReadDirImpl(() => Promise.resolve([mocks.makeEntry("a.ts")]));
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const onViewStateChange = vi.fn();
+
+      const { result } = renderHook(() =>
+        useFileTree({
+          rootPath: "C:/project",
+          viewState: null,
+          onViewStateChange,
+        }),
+      );
+
+      // 正常加载落定：首帧渲染 + 抑制解除（守卫定时器随解除一并清除——不得残留）
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(result.current.rootNodes.length).toBe(1);
+      expect(vi.getTimerCount()).toBe(0);
+
+      // 越过 10s 窗口：无兜底触发（warn 零调用、无额外上呼）
+      const callsAfterLoad = onViewStateChange.mock.calls.length;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(warnSpy).not.toHaveBeenCalled();
+      expect(onViewStateChange.mock.calls.length).toBe(callsAfterLoad);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("FE-07-1: 续页失败保留首帧（不记根错误、不清空）", async () => {

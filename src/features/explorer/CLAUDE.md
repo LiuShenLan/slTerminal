@@ -84,7 +84,7 @@ ExplorerPanel 经 `src/features/sideViews/sideViewDefs.ts` 注册为 `explorer` 
 
 - **快照结构**：`FileTreeViewState = { rootPath: string | null; expandedPaths: string[] }`（expandedPaths 自 `rootNodes` 树遍历派生，提交时展开目录行集合）。
 - **域键**：快照以 `rootPath` 为域键——与当前项目根路径不一致的整份快照作废（项目间不复用）。
-- **提交时机**：每次 `rootNodes` 渲染落定后统一上呼提交（覆盖展开/折叠、fs-event 刷新重建收缩、增删改刷新）——渲染期提交保证派生集与界面一致；恢复期间经 restoringRef 抑制逐层提交；挂载加载窗口期（loadRoot 完成前）提交经 restoringRef 抑制（FE-01）——空树渲染不再上呼覆盖槽位。
+- **提交时机**：每次 `rootNodes` 渲染落定后统一上呼提交（覆盖展开/折叠、fs-event 刷新重建收缩、增删改刷新）——渲染期提交保证派生集与界面一致；恢复期间经 restoringRef 抑制逐层提交；挂载加载窗口期（loadRoot 完成前）提交经 restoringRef 抑制（FE-01）——空树渲染不再上呼覆盖槽位；无快照分支不显式 commitViewState——微任务先于心智渲染读不到首帧树会双提交（FE-02），统一由渲染落定 commit effect 承担；抑制兜底 = 10s 超时（FE-03）——loadRoot 永不 settle 时按 gen 校验解除并上呼当前真实态；守卫随抑制解除清除（守卫存在 ⟺ 抑制窗口开启）。
 - **恢复时机**：挂载后首次加载完成时消费一次（`viewState` prop 挂载快照，不入 deps）——槽位切换/换区重建由 SideBarArea 回填后触发，rootPath 域匹配 + 存在性守卫（磁盘已删目录跳过）逐层展开恢复。
 
 槽位切换/换区仍会卸载重建（FE-21 渲染形态不变），但展开态经槽位回填恢复，不再丢失。
