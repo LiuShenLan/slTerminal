@@ -101,6 +101,8 @@ const HOST_PAGE: &str = r##"<!DOCTYPE html>
 - `cargo test --test lib_tests preview -- --test-threads=1` 绿（新用例）；
 - L4：`node e2e-tests/run-wdio.cjs --spec html.e2e.ts` + `--spec markdown.e2e.ts` 全绿（预览渲染/缩放/字体链路在 CSP 下不回归——data: 字体与内联脚本均在放行表内）。
 
+> 落地复核注记（review2-fix SEC-02，2026-09-11）：本轮 L4 实际仅执行 --spec html.e2e.ts；markdown.e2e.ts 未单独执行，由 S06 全量 e2e（15/15 exit 0，857dca0）间接覆盖。偏差登记，原文保留不改写。
+
 ---
 
 ### SEC-03 · PreviewFrame sync/close catch 静默吞错可观测化（review-03 #1 补充面）
@@ -158,6 +160,8 @@ void previewClose(label, token).catch((err) => {
 
 - `npx vitest run src/__tests__/html-panel.test.tsx` 绿（新用例）；
 - `rg -n "catch\(\(\) =>" src/panels/docViewer/PreviewFrame.tsx` 零命中（空参静默 catch 形态绝迹）。
+
+> 落地复核更正（review2-fix SEC-03，2026-09-11）：「catch(() => 零命中」字面不成立——:182 previewRender 的 .catch(() => {…})（空参但体内含 console.warn 的可观测形态）为存量保留，实际命中 1；断言意图（零输出的静默吞错形态绝迹）已达。原文保留不改写。
 
 ---
 
@@ -293,6 +297,9 @@ let start = match cursor.as_deref() {
 6. 测试同步（fs/mod.rs 内嵌测试组）：
    - 现有分页用例（`read_dir_first_page_has_cursor_when_overflow` / `read_dir_cursor_resume_mid_list` / `read_dir_page_limit_clamped_to_max` / `read_dir_sort_order_stable_across_pages` / `read_dir_git_filter_still_applied`）不解读游标内容，预期零改动全绿——若有个别断言游标形态（如解 base64 得数字），按 keyset 形态适配；
    - 新增 `read_dir_keyset_cursor_growth_no_dup_no_hole`：601 文件目录拉首页（500）→ 在排序于游标**前**的位置新增条目（如名为 `0aaa` 的目录/文件）→ 续页拉取 → 断言续页与首页拼接无重复、新增条目不出现（排序在游标前的新增属「已翻过的页」，正确语义）→ 再在排序于游标**后**的位置新增条目（`zzzz.txt`）→ 再续页 → 断言新增条目出现且无重复；
+
+   > 落地复核批注（review2-fix BE-04，2026-09-11）：实际执行为 1201 文件三页链（601 时第二页即末页，续页游标链无法验证），测试强度更高；commit body 已留痕。原文保留不改写。
+
    - 新增 `read_dir_keyset_cursor_beyond_end_empty_page`：用末页游标（或手工构造大于全部条目的键编码）续拉 → 空页 + `next_cursor.is_none()`。
 7. 文档同步：`src-tauri/src/fs/CLAUDE.md`「fs_read_dir 游标分页」节改写（keyset 口径 + 上述边界登记）；`src/ipc/CLAUDE.md`「目录分页读取（CP-006）」节同步一句（游标 keyset 化，opaque 契约不变，前端零改动）。
 8. compromises.md CP-006 注记联动归 DOC-07（Stage 07）。

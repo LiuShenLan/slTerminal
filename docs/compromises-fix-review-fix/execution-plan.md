@@ -86,6 +86,8 @@ Workflow({ scriptPath: "docs/compromises-fix-review-fix/workflows/fix-loop.js",
 | 06 | 完成 | 857dca0 | 首轮 TE-05/TE-09 partial + 全量 e2e 红（tab-menu 确定性 + background-tasks flaky）→ 用户裁决：修 TE-05 判定（cid 事实错误）+ 连带修 S11 漏传 projectRootPath → 全量 e2e 15/15 exit 0 | TE-08 实证=**分支 b**（control 恒真证伪分支 a）；background-tasks flaky（单跑过）；连带修 S11 既有回归（tabChrome 第 4 参改回调） |
 | 07 | 完成 | 75f7a74 | allFixed=true（DOC-01~11 全 fixed）；红测演练四步 0/1/0/0 符合预期 | commit body 含演练四行输出；收尾另修 SEC-02 落地后「预览域无 CSP」失实表述 11 处 |
 
+> 落地复核更正（review2-fix DOC-03，2026-09-11）：计数口径不一——row 04 写 8 处而列举实为 10 点位，row 07 写 11 处；且首轮漏改 5 处现役注释（review2 DOC-01），由 review2-fix DOC-01 补齐。以实修点位为准，原文保留不改写。
+
 ## 收尾（全 Stage 完成后主 agent 执行）
 
 1. **全量回归兜底**：`npx tsc --noEmit` → `npx eslint src/` → `cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings` → `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` → `npm test` → `cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1`（逐条串行，禁并行）。

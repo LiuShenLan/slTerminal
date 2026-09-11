@@ -170,6 +170,8 @@ SEC-02 文档同步四处按归属拆分：src-tauri/src/CLAUDE.md 归 preview-l
 | dock-host | FE-09 + FE-10 | `src/workspace/WorkspaceDockHost.tsx`、`src/workspace/PageDockviewHost.tsx`（git mv → `tabChrome.tsx`）、`src/workspace/Workspace.tsx`、`src/lib/panelId.ts`、`src/workspace/tabClose.ts`、`src/theme/schemes/types.ts`、`src/theme/schemes/linear.ts`、`knip.json`、`src/__tests__/terminal-rename-apply.test.ts`、`src/__tests__/workspace-defaulttab.test.tsx`、`src/__tests__/workspace-header-actions.test.tsx`、`src/__tests__/workspace-host-pages.test.tsx` |
 | shortcuts-retire | FE-11 | `src/features/shortcuts/ShortcutRegistry.ts`、`src/features/shortcuts/types.ts`、`src/features/shortcuts/index.ts`、`src/features/shortcuts/CLAUDE.md`、`src/__tests__/shortcuts.test.ts`、`src/__tests__/html-panel.test.tsx`、`src/__tests__/markdown-panel.test.tsx` |
 
+> 落地复核更正（review2-fix FE-05，2026-09-11）：FE-02 实际路径为 src/panelRegistry.ts（无 src/panels/ 前缀），原文保留不改写；按正确路径实跑 3 命中通过（review-04 实证）。
+
 ### 实现要点
 
 - FE-01/FE-07 联动闭环：rootPath effect 置 restoringRef=true；restoreExpanded 三分支收口解除；loadRoot catch 双分支——续页失败 console.error 后 return（首帧保留，抑制经 restoreExpanded 路径解除），首帧失败维持现状 + restoringRef=false。

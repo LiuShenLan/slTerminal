@@ -7,6 +7,9 @@
 
 - **DOC-01**：`rg "jsonSchemaCm.ts 五导出" docs/compromises.md` 零命中；`rg "七导出" docs/compromises.md` 命中 CP-002 行（Read 确认「七导出——二处生产接线，余五导出仅测试直驱」口径）。
 - **DOC-02**：`.temp/node22.bak` 不存在（Glob/PowerShell Test-Path 确认）；`rg "待全量 e2e 确认后删" docs/compromises.md` 零命中；CP-003 注记含「已于全量 e2e 确认后删除（2026-09-09）」（Read 确认）；`.temp/node22` 预置通道仍在（Test-Path 确认未误删存活功能）。
+
+  > 落地复核更正（review2-fix DOC-04，2026-09-11）：「.temp/node22 预置通道仍在」断言与常态不符——该目录为按需预置（run-wdio.cjs:322-341：存在且 >1MB 才启用），常态不存在，断言恒假；正确口径 = 预置逻辑代码仍在（rg 命中）。原文保留不改写。
+
 - **DOC-03**：exec-doc-replay agent 报告含红测演练四步记录（命令 + exit code：改一字符 → diff 非 0 → checkout 还原 → gen+diff 归 0），且四步 exit code 与预期一致（第 2 步非 0、第 4 步 0）——Read 重构 agent 报告确认；终态 `git status` 确认 `src/panels/markdown/generated/katexInlineCss.ts` 零持久变更（测试 agent 门禁第 3 条结果承载）。
 - **DOC-04**：`rg "落地复核 2026-09-09" docs/compromises-fix/workflows/verify/stage-10.md docs/compromises-fix/checklist.md` 各命中一处；Read 确认注记口径 = 宿主页 CSP meta 形态（default-src 'none'; script-src/style-src 'unsafe-inline'; img-src data:; font-src data:）且历史断言原文未改写（注记追加形态）。
 - **DOC-05**：`rg "页内分屏" docs/compromises.md` 命中 CP-004 行（Read 确认消亡登记 + 2026-09-09 裁决接受不恢复口径）。
