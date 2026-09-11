@@ -160,7 +160,7 @@ describe("HTML 面板主窗口快捷键关闭（Ctrl+W）", () => {
  * HTML 面板 Ctrl+滚轮缩放（注入接管 + 瞬态 HUD）E2E。
  *
  * 背景：预览渲染于独立 webview 宿主页内 sandbox iframe（S10-②，ADR-0019）——
- * 宿主页域（自定义协议）无全局 CSP，fixture 内联事件属性/脚本真实执行；
+ * 宿主页域（自定义协议）无全局 CSP（域级 CSP 由宿主页 meta 承载，SEC-02——内联 script/style 与 img/font data: 放行），fixture 内联事件属性/脚本真实执行；
  * 注入运行时（zoomRuntime wheel capture）先于 fixture 注册（注入段插于
  * </head> 前）→ 合成 WheelEvent → zoom → 上行 → 主窗 HUD（工具条带）。
  * embedded 驱动无法投递 OS 滚轮——fixture 自派发（行为同旧 iframe 通道）。
@@ -290,7 +290,7 @@ describe("HTML 面板 Ctrl+滚轮缩放", () => {
   // 宿主 script 吞到 EOF 永不执行（存量缺陷，原 :87 skip 空壳登记的根因）；
   // 且宿主文档继承主窗 CSP（'unsafe-inline' 依赖）。S10-② 后：宿主 <script> 段
   // 不经字符串转义进入渲染文档（escapeScriptClose 消亡），且渲染于独立预览域
-  // （自定义协议宿主页 iframe，无全局 CSP）——内联 <script> 真实可执行。
+  // （自定义协议宿主页 iframe，无全局 CSP——域级 meta CSP 放行内联 script）——内联 <script> 真实可执行。
   // 本用例 = 原 :87 skip 用例恢复为真实断言：fixture 以 <script>（非事件属性）
   // 派发合成滚轮 → zoom 上行 → 主窗 HUD 出现即证明宿主内联 <script> 已执行。
   it("宿主内联 <script> 在预览中真实执行（CP-031，原 :87 skip 恢复）", async () => {

@@ -11,7 +11,7 @@
  * 半端到端边界（e2e-tests/CLAUDE.md DOC-02）：键盘为合成 keydown（主窗口
  * ShortcutRegistry 路径）；md 内缩放触发走 raw HTML 事件属性（`<img onerror>`
  * ——宿主 <script> 静态化缺陷已随 S10-② 消亡（CP-031），事件属性通道在预览域
- * 无 CSP 下同样成立；本地缺失图片必然尝试加载 → error 稳定触发；
+ * 域级 meta CSP 放行内联 script/style 下同样成立；本地缺失图片必然尝试加载 → error 稳定触发；
  * raw img 相对 src 进资源收集 → 读取失败回退原 src（缺口语义）→ iframe
  * 内加载缺失文件触发 error——通道闭环实证）。
  */
@@ -231,7 +231,7 @@ describe("Markdown 面板三形态", () => {
   it("预览 Ctrl+滚轮缩放：事件属性通道触发注入接管 → 主窗 HUD 121%", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "slterm-e2e-md-zoom-"));
     const mdPath = join(tempDir, "doc.md");
-    // raw HTML 事件属性通道（预览域无 CSP——onerror 正常执行）：
+    // raw HTML 事件属性通道（预览域 meta CSP 放行内联 script——onerror 正常执行）：
     // 本地缺失图片必然尝试加载（img 无 preload 语义）→ error 稳定触发 →
     // 合成 2 格 Ctrl+wheel → zoomRuntime 接管 → 上行 → 主窗 HUD。
     // 注：raw img 的相对 src 会进资源收集（png 白名单）→ 读取失败回退原 src

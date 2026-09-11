@@ -443,7 +443,7 @@
 - 「沙箱内二进制入渲染面」有了统一通道（html/md 预览共用；html 相对图片顺带可用）；未来新资源类型走 MIME 白名单扩展。
 - CSP 增两 data: 放行（csp-config.test.ts 守卫）；blob:/connect-src/worker-src 不放行；script-src 政策不变（'unsafe-inline' + nonce 注入关闭为 htmlviewer 既有前置，ADR-0017 继承）。
 - 逆转触发点：动态 asset scope 出现（Tauri 支持跟随项目根时重估协议通道）；或需读 >10MB 资源/任意沙箱外路径（重估上限与边界）。
-- **已回收（ADR-0019 终步，CP-035，S10-④）**：主窗口 img-src/font-src 的 data: 放行移除（csp-config.test.ts 锁终态）；KaTeX 字体经新预览上下文实证（③ CP-033）后在预览域（无 CSP）渲染；svg data: 显式禁用（markdown assets 白名单剔除 image/svg+xml——正文「svg 惰性上下文加载」论据随 data: 放行一并失效，处置见下「回收记录（CP-035）」节）。
+- **已回收（ADR-0019 终步，CP-035，S10-④）**：主窗口 img-src/font-src 的 data: 放行移除（csp-config.test.ts 锁终态）；KaTeX 字体经新预览上下文实证（③ CP-033）后在预览域（当时无 CSP——SEC-02 起为宿主页 meta 域级 CSP，见下落地复核注记）渲染；svg data: 显式禁用（markdown assets 白名单剔除 image/svg+xml——正文「svg 惰性上下文加载」论据随 data: 放行一并失效，处置见下「回收记录（CP-035）」节）。
 
 **维持记录（CP-033，2026-09-08 S10-③ 新 webview 上下文重实证——B2 分支）**：
 
@@ -456,7 +456,7 @@
 - **前置闸判定**：③ B2 实证（KaTeX data 字体在预览域真实加载渲染 ×2 轮、asset 通道否决双证据）通过 → font-src 回收获实证许可——KaTeX 字体渲染只发生预览域（主窗口无 data: 字体消费），无需拆项登记 docs/compromises.md。
 - **主窗口 CSP 终态**：img-src `'self' asset: https://asset.localhost`（回收 data:）、font-src `'self'`（回收 data:）；style-src 'unsafe-inline' 保留（React inline style / CM6 注入样式，与本族无关）。csp-config.test.ts 三守卫锁死（img-src 恰好三项 / font-src 恰好 ['self'] / data: 不在主窗口任何指令）。
 - **执行期发现并处置（img-src data: 的主窗口唯一图像消费点）**：CM6 lint 诊断波浪线——上游 @codemirror/lint baseTheme 与本仓 theme/overrides.ts 旧实现均以 `background-image: url(data:image/svg+xml,…)` 渲染（JsonMode 语法/schema 波浪线，主窗口渲染）——img-src data: 回收会静默遮蔽 lint 波浪线。处置 = 改 text-decoration wavy 技法（非资源 fetch，零 CSP 指令依赖）+ backgroundImage 显式 none 覆盖上游 baseTheme data: svg；色值仍单点于方案 lint 键（波形由 Chromium 绘制，与 6×3 tile 幅度略有差异，D1 已评估接受）。theme-overrides.test.ts 加「规则文本零 data: url」防回潮断言。
-- **svg data: 显式禁用**：markdown assets.ts MIME 白名单剔除 image/svg+xml（本地 .svg 引用不再内联——缺口语义，与白名单外扩展同语义）；svg 载体可嵌脚本，预览域（无 CSP）内联风险面大，`<img>` 惰性上下文仅为 W3C 行为单点不作安全边界。html 侧无独立资源内联通道（仅 markdown 管线消费 assets.ts），同口径无代码落点。markdown-assets.test.ts 锁「svg MIME 不在白名单」。
+- **svg data: 显式禁用**：markdown assets.ts MIME 白名单剔除 image/svg+xml（本地 .svg 引用不再内联——缺口语义，与白名单外扩展同语义）；svg 载体可嵌脚本，预览域（当时无 CSP，同上注记——SEC-02 起为宿主页 meta 域级 CSP）内联风险面大，`<img>` 惰性上下文仅为 W3C 行为单点不作安全边界。html 侧无独立资源内联通道（仅 markdown 管线消费 assets.ts），同口径无代码落点。markdown-assets.test.ts 锁「svg MIME 不在白名单」。
 - **预览域 data: 放行口径**：预览 webview CSP 无代码落点——预览域 = 自定义协议宿主页（响应无 CSP 头，host page 无 CSP meta），content iframe（srcdoc）无从继承 → data: img/font 在预览域天然放行（③ 实证通道即此）；「若未来建立预览域局部 CSP，img/font-src 须放行 data:」维持为执行口径（本 ADR-0018 与 ADR-0019 逆转触发点同文登记）。
 - **落地复核注记（SEC-02，2026-09-09，原文保留不改写）**：上条「host page 无 CSP meta」已失实——宿主页 HOST_PAGE 现由 meta 承载域级 CSP（`default-src 'none'; script-src/style-src 'unsafe-inline'; img-src data:; font-src data:`），srcdoc iframe 继承宿主 CSP（W3C）→「若未来建立预览域局部 CSP，img/font-src 须放行 data:」触发条件已发生且两项已放行（交叉登记 ADR-0019 决策二 9）。
 - **主窗口消费面审计结论**：除 lint 波浪线外主窗口无其它 data: 图像/字体消费者（lucide 内联 svg 元素非 fetch、cli-icons/字体走 self、vite assetsInlineLimit 无 <4KB 资产内联风险）——回收后零静默断图/断字面。
@@ -502,4 +502,4 @@
 - **已知行为登记**：预览键盘键入不可达（决策二 8）；预览窗口几何跟随为轮询驱动（拖拽期亚秒级滞后）；宿主脚本现可执行（信任模型 = 本地文件全信任延续，ADR-0017 同源）。
 - **逆转触发点**：driver 升级出现子 webview/帧级寻址时重估「独立 WebviewWindow」约束；Tauri 提供 per-webview CSP 时复核预览域选择（自定义协议 vs 资产域）；出现「预览内键盘输入」需求时重评 focusable 决策（须先解全局快捷键吞键问题）；CP-033/035（③④）结果在本节追加登记。
 - **CP-033（③）结果登记（2026-09-08）**：B2 维持分支——KaTeX data 内联经新 webview 上下文真实 WebView2 实证可用（字体族命中 + 字体真实加载）；asset 通道维持否决（响应 ACAO 固定 webview origin vs 内容 iframe opaque origin null，源码 + 实测双证据）。全文见 ADR-0018「维持记录（CP-033）」；④ 若建立预览域局部 CSP 须放行 font-src data:。
-- **CP-035（④）结果登记（2026-09-08，font-src 实证记录归档）**：③ B2 实证通过 → 主窗口 CSP 终态落地——img-src/font-src 双双回收 data:（tauri.conf.json + csp-config.test.ts 三守卫锁死），预览域维持无 CSP（data: img/font 天然放行，无代码落点）；执行期发现主窗口唯一 data: 图像消费点 = CM6 lint 波浪线 svg 背景（JsonMode），改 text-decoration wavy 技法消除（theme/overrides.ts）；svg data: 显式禁用（markdown assets 白名单剔除）。处置全文见 ADR-0018「回收记录（CP-035）」；本决策 5「img-src/font-src data: 回收归 CP-035」至此执行完毕。
+- **CP-035（④）结果登记（2026-09-08，font-src 实证记录归档）**：③ B2 实证通过 → 主窗口 CSP 终态落地——img-src/font-src 双双回收 data:（tauri.conf.json + csp-config.test.ts 三守卫锁死），预览域当时维持无 CSP（data: img/font 天然放行，无代码落点——SEC-02 起宿主页 meta 承载域级 CSP，见 ADR-0018 落地复核注记）；执行期发现主窗口唯一 data: 图像消费点 = CM6 lint 波浪线 svg 背景（JsonMode），改 text-decoration wavy 技法消除（theme/overrides.ts）；svg data: 显式禁用（markdown assets 白名单剔除）。处置全文见 ADR-0018「回收记录（CP-035）」；本决策 5「img-src/font-src data: 回收归 CP-035」至此执行完毕。

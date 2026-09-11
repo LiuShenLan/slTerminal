@@ -54,6 +54,7 @@ Workflow 返回后，主 agent 检查 `verifyResult.allFixed`：
 - commit message 以 stages 文档各 Stage 原文为准（文档 Stage 是 `docs:` 前缀，非一律 `refactor:`）
 - 时间盒：Workflow 完成有 harness 自动通知，等待期间无需轮询/定时提醒（实证：B17 执行期设 cron 提醒完全多余，workflow 数分钟内完成自动通知）；仅在通知迟迟未到、单 Stage 超 60 分钟无进展时查 /workflows 后 `TaskStop` + 报告用户
 - 文档同步类 agent 必须先读 `git log`/diff 再动笔，禁凭记忆写文档
+- **Stage commit 提交即登记本 Stage 行**：execution-plan.md 进度跟踪表本 Stage 行（状态/commit hash/结果摘要）在该 Stage commit 完成后、下一 Stage 启动前必须登记——登记更新可并入紧随的文档/收尾提交，禁止跨 Stage 捎带迟登记（实证：compromises-fix-review-fix S04 由 S05 捎带、S05 由 S06 回补、S06 由 S07 回补，连续三级层层递延）
 
 #### 5.7 执行期工具故障降级（实证）
 

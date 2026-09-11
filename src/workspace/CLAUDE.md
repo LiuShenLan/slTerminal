@@ -72,7 +72,7 @@ dockview 8.1.0 free core 的页签右键菜单(ContextMenu)是 **enterprise 模�
 
 - **触发**：DefaultTab 内容根 `onContextMenu`（preventDefault + stopPropagation 拦 WebView 原生菜单与库内死监听）。右键目标 = DefaultTab 渲染的 div——它是 `.dv-tab` 的**子级**，事件从 `.dv-tab` 自身派发冒泡不会经过它（测试须右键 DefaultTab 内容根，非 `.dv-tab`）。
 - **上报链路**：DefaultTab 广播 `TAB_CONTEXT_MENU_EVENT`（`slterm:tab-context-menu`，window CustomEvent 协议，detail 带 panelId/x/y）——dockview-react 渲染 framework part 不经 React 子树，context 方案不可靠；宿主（唯一）监听，经 `getPanel(panelId)` 解析（panelId 页前缀全局唯一），命中即弹菜单。
-- **状态单点**：菜单 state（x/y/items）在 WorkspaceDockHost（宿主单点）；`createTabMenuItems(getApi, pageId|null, onRenameRequest, projectRootPath?)` 为纯函数导出供 L2 直测（终端判据 `view.contentComponent`、claudeRunning disabled、文件型 `params.filePath` 头部「复制相对路径」、关闭族 danger、separator 令牌位置——与 dockview 6.6.1 原生菜单行为零漂移）。菜单目标页 = 面板属主页（panel.id 页前缀解析，兜底入参）；action 内面板/组引用取右键瞬间快照。
+- **状态单点**：菜单 state（x/y/items）在 WorkspaceDockHost（宿主单点）；`createTabMenuItems(getApi, pageId|null, onRenameRequest, getProjectRootPath?: (pageId: string | null) => string | undefined)` 为纯函数导出供 L2 直测（终端判据 `view.contentComponent`、claudeRunning disabled、文件型 `params.filePath` 头部「复制相对路径」、关闭族 danger、separator 令牌位置——与 dockview 6.6.1 原生菜单行为零漂移）；第 4 参为回调（非静态值）：右键目标页在工厂构建期未知，action 内按解析页现取（S11 回归修复）。菜单目标页 = 面板属主页（panel.id 页前缀解析，兜底入参）；action 内面板/组引用取右键瞬间快照。
 - **渲染**：`TabMenuPopup` fixed 定位（zIndex 1000），UI-802 规格内联 token（项 28px/hover SECONDARY_BG/danger ERROR_FG/disabled 0.4 + pointerEvents none），外点 mousedown / Escape / 点击项关闭；`activePageId` 变化（切页）清菜单。
 - **能力边界**：DefaultTab 的 `IDockviewPanelProps` 无 panel 对象——面板经 `containerApi`/事件 detail 的 panelId 反查 `getPanel(id)`（`IDockviewPanel.group`、`group.panels` 均可达，结构兼容子集类型 `TabMenuPanel`）。
 
