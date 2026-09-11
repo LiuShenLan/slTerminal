@@ -608,6 +608,8 @@ mod preview_tests {
         assert!(HOST_PAGE.contains("default-src 'none'"));
         assert!(HOST_PAGE.contains("img-src data:"));
         assert!(HOST_PAGE.contains("font-src data:"));
+        assert!(HOST_PAGE.contains("script-src 'unsafe-inline'"));
+        assert!(HOST_PAGE.contains("style-src 'unsafe-inline'"));
     }
 
     /// 宿主页桥转发字体探针载荷（TE-08）：loaded 布尔透传主窗——桥对未知

@@ -234,12 +234,12 @@ export const PreviewFrame: React.FC<PreviewFrameProps> = ({
           syncWarned = false;
         })
         .catch((err) => {
-          // SEC-03：轮询下轮自愈，但静默吞错致链路故障零信号（SEC-01 前车之鉴）——
-          // 首次失败告警一次，避免逐轮刷屏
+          // SEC-03：sync 失败不在等值轮询中重发（几何比较早退）——重试仅发生于几何变化/主窗移动/重挂载；
+          // 静默吞错致链路故障零信号（SEC-01 前车之鉴）——首次失败告警一次，避免逐轮刷屏
           if (!syncWarned) {
             syncWarned = true;
             console.warn(
-              "[slTerminal] previewSync 失败（下轮轮询自愈，后续失败不再重复告警）:",
+              "[slTerminal] previewSync 失败（等值轮询不重发，几何变化/主窗移动时重试，后续失败不再重复告警）:",
               label,
               err,
             );
