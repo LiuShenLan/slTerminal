@@ -34,7 +34,7 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-/** 构造 Dockview API mock（addPanel/getPanel） */
+/** 构造 Dockview API mock（addPanel/getPanel + ADR-0020 落组解析 getGroup/groups） */
 function makeDockApi() {
   return {
     addPanel: mocks.mockAddPanel,
@@ -42,6 +42,8 @@ function makeDockApi() {
       focus: mocks.mockFocus,
       api: { setTitle: mocks.mockSetTitle },
     }),
+    getGroup: vi.fn((id: string) => ({ id })),
+    groups: [],
   };
 }
 

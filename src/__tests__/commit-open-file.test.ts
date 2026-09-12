@@ -58,6 +58,9 @@ function mockDockApi(overrides: { addPanel?: Fn; getPanel?: Fn } = {}) {
   window.__dockviewApi = {
     addPanel,
     getPanel,
+    // ADR-0020 落组解析：主组 id 命中即返回（groups 不触达）
+    getGroup: vi.fn((id: string) => ({ id })),
+    groups: [],
   } as unknown as typeof window.__dockviewApi;
   return { addPanel, getPanel };
 }

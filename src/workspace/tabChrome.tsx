@@ -26,7 +26,7 @@ import { copyRelativePath } from "../lib/copyRelativePath";
 import { TabMenuPopup } from "./TabMenuPopup";
 import type { TabMenuItem } from "./TabMenuPopup";
 import { IconEmptyBox } from "../lib/icons";
-import { pageOfPanelId, pageGroupId, pageIdOfGroupId, makeTerminalIdInPage } from "./pageGroups";
+import { pageOfPanelId, pageIdOfGroup, makeTerminalIdInPage, resolvePageGroupForAdd } from "./pageGroups";
 import { useLayout } from "../stores/layout";
 import { projectRootOfPage } from "./pageApis";
 import { saveLayout } from "./layoutSerde";
@@ -96,9 +96,9 @@ function resolvePageId(panelId: string | undefined, fallbackPageId: string | nul
 
 /**
  * 新建终端面板（宿主内共享工厂——Watermark/RightHeader/右键菜单三入口合一）：
- * addPanel 显式 position.referenceGroup = 目标页组（生命周期契约——新增面板
- * options.group 显式指定，不随切页卸载；页组 id 字符串形态，组未挂载时
- * dockview 抛错前先经 getGroup 守卫返回 null）。
+ * addPanel 显式 position.referenceGroup = resolvePageGroupForAdd 解析的目标组
+ * （生命周期契约——ADR-0020 页内分屏后主组可能被拖空删除，落组经派生归属
+ * 解析；页无任何组时解析 null → 返回 null 不落活跃组防错页）。
  * cwd 语义（D1）：显式传入优先（Explorer「在终端中打开」/历史会话恢复），
  * 缺省 = 项目根目录（projectRootOfPage 现取）——新建终端 cwd 恒项目根。
  */
@@ -107,8 +107,8 @@ export function addTerminalPanel(
   pageId: string,
   cwd: string | undefined,
 ): string | null {
-  const gid = pageGroupId(pageId);
-  if (!api.getGroup(gid)) return null;
+  const group = resolvePageGroupForAdd(api, pageId);
+  if (!group) return null;
   const id = makeTerminalIdInPage(pageId);
   api.addPanel({
     id,
@@ -116,7 +116,7 @@ export function addTerminalPanel(
     title: titleManager.getTerminalTitle(pageId),
     params: { panelId: id, cwd: cwd ?? projectRootOfPage(pageId) ?? undefined },
     renderer: "always",
-    position: { referenceGroup: gid },
+    position: { referenceGroup: group.id },
   });
   return id;
 }
@@ -180,11 +180,11 @@ function createRightHeader(
       <div style={{ display: "flex", alignItems: "center", height: "100%", paddingRight: 4 }}>
         <button
           onClick={() => {
-            // 目标页 = 组属主页（页组协议解析）兜底活跃页——页组可见性单点保证
-            // 非活跃页组不可见不可点，两值同页
+            // 目标页 = 组属主页（ADR-0020 派生归属——分屏自生组经首面板前缀
+            // 解析）兜底活跃页——可见性单点保证非活跃页组不可见不可点，两值同页
             const api = getApi();
             if (!api || !pageId) return;
-            const ownerPage = pageIdOfGroupId(group.id) ?? pageId;
+            const ownerPage = pageIdOfGroup(group) ?? pageId;
             void addTerminalPanel(api, ownerPage, undefined);
           }}
           onMouseEnter={() => setHovered(true)}

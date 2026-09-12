@@ -84,6 +84,7 @@ afterAll(() => {
 });
 
 import WorkspaceDockHost from "../workspace/WorkspaceDockHost";
+import { Terminal } from "@xterm/xterm";
 import { titleManager } from "../workspace/titleManager";
 import { resetTerminalPanelSeq } from "../lib/panelId";
 import { TerminalRegistry } from "../panels/terminal/TerminalRegistry";
@@ -91,6 +92,7 @@ import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
 import { emptyPageLayout } from "../workspace/layoutSerde";
 import { getHostApi, unregisterHostApi } from "../workspace/pageApis";
+import { addTerminalPanel } from "../workspace/tabChrome";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyApi = any;
@@ -524,6 +526,182 @@ describe("WorkspaceDockHost 真实组件（共享宿主页组语义）", () => {
       expect(getMenuItemsIn(container)().length).toBeGreaterThan(0);
       await act(async () => { useLayout.setState({ activePageId: null }); });
       expect(getMenuItemsIn(container)().length).toBe(0);
+    });
+  });
+
+  describe("页内分屏（ADR-0020——真实 dockview moveTo 分屏路径）", () => {
+    /** 种子含两页的存储（PAGE_ID + pageIdB 同项目）；返回第二页 id */
+    function seedTwoPages(): string {
+      const pageIdB = "page-dock-b";
+      useProjects.getState().addProject({
+        projectId: PROJ_ID,
+        name: "dock-test",
+        rootPath: "C:\\root",
+        pages: [
+          { pageId: PAGE_ID, name: "Page A", layout: emptyPageLayout(PAGE_ID) as Record<string, unknown>, createdAt: 1, lastAccessedAt: 1 },
+          { pageId: pageIdB, name: "Page B", layout: emptyPageLayout(pageIdB) as Record<string, unknown>, createdAt: 1, lastAccessedAt: 1 },
+        ],
+        activePageId: PAGE_ID,
+        version: 1,
+      });
+      useLayout.setState({ activePageId: PAGE_ID });
+      return pageIdB;
+    }
+
+    /** 建两终端（Watermark 建 terminal-0 + 工厂建 terminal-1），返回被拖面板：
+     *  分屏须拖 terminal-1——单面板 moveTo 会把主组拖空，dockview 自动删空组 */
+    async function seedTwoTerminals(api: AnyApi, container: HTMLElement) {
+      await act(async () => { clickButton(container, "新建终端"); });
+      await settle();
+      await act(async () => { addTerminalPanel(api, PAGE_ID, undefined); });
+      await settle();
+      expect(api.panels.length).toBe(2);
+      const dragged = api.getPanel(`${PAGE_ID}:terminal-1`);
+      expect(dragged).toBeTruthy();
+      return dragged;
+    }
+
+    /** 等价真实拖拽分屏落点：addGroup(direction) 建组 + 面板 moveTo 入组 */
+    async function splitPanelRight(api: AnyApi, panel: AnyApi) {
+      await act(async () => {
+        const newGroup = api.addGroup({ direction: "right" });
+        panel.api.moveTo({ group: newGroup });
+      });
+      await settle();
+    }
+
+    it("防复发（bug 2 面板消失）：moveTo 分屏产第二组——两组同显、面板不隐藏、老代码（maximize 单组可见+守卫回迁）本用例红", async () => {
+      mockIPC(() => null);
+      seedProject();
+      const { api, container } = await renderHost();
+      const panel = await seedTwoTerminals(api, container);
+      await splitPanelRight(api, panel);
+
+      // 两组并存同页（主组留 terminal-0 + 自生组 terminal-1），面板不消失
+      expect(api.groups.length).toBe(2);
+      const primary = api.getGroup(`page-${PAGE_ID}`);
+      expect(primary).toBeTruthy();
+      expect(primary.panels.map((p: AnyApi) => p.id)).toContain(`${PAGE_ID}:terminal-0`);
+      expect(api.getPanel(`${PAGE_ID}:terminal-1`)).toBeTruthy();
+      // 被拖面板仍归属本页（审计不回迁——自生组派生归属 = 本页）
+      expect(panel.group.id).not.toBe(`page-${PAGE_ID}`);
+      // 两组同显（老代码 maximizePageGroup 隐藏非主组 → 被拖面板 isVisible false）
+      for (const g of api.groups) expect(g.api.isVisible).toBe(true);
+    });
+
+    it("分屏后切页：本页各组同隐、他页组同显；切回同显且 Terminal 构造计数不变（xterm 不重建）", async () => {
+      mockIPC(() => null);
+      const pageIdB = seedTwoPages();
+      const { api, container } = await renderHost();
+      const panel = await seedTwoTerminals(api, container);
+      await splitPanelRight(api, panel);
+      const termCallsAfterSplit =
+        (Terminal as unknown as ReturnType<typeof vi.fn>).mock.calls.length;
+
+      // 切到 B 页：A 页两组同隐，B 页组可见
+      await act(async () => { useLayout.setState({ activePageId: pageIdB }); });
+      await settle();
+      const groupsOfA = api.groups.filter((g: AnyApi) =>
+        g.panels.some((p: AnyApi) => p.id.startsWith(`${PAGE_ID}:`)));
+      expect(groupsOfA.length).toBe(2);
+      for (const g of groupsOfA) expect(g.api.isVisible).toBe(false);
+      const groupB = api.getGroup(`page-${pageIdB}`);
+      expect(groupB.api.isVisible).toBe(true);
+
+      // 切回 A 页：两组同显，面板实例存活（xterm 不二次 open）
+      await act(async () => { useLayout.setState({ activePageId: PAGE_ID }); });
+      await settle();
+      for (const g of groupsOfA) expect(g.api.isVisible).toBe(true);
+      expect(api.getPanel(`${PAGE_ID}:terminal-1`)).toBeTruthy();
+      expect((Terminal as unknown as ReturnType<typeof vi.fn>).mock.calls.length)
+        .toBe(termCallsAfterSplit);
+    });
+
+    it("分屏布局经 onDidLayoutChange 切片持久化：store 页布局含两叶（重启恢复数据源）", async () => {
+      mockIPC(() => null);
+      seedProject();
+      const { api, container } = await renderHost();
+      const panel = await seedTwoTerminals(api, container);
+      await splitPanelRight(api, panel);
+
+      const layout = useProjects.getState().projects[PROJ_ID]
+        .pages[0].layout as { grid: { root: { data: Array<{ type: string }> } } };
+      // 切片根 branch 含两叶（主组 + 自生组——分屏形态持久化）
+      expect(layout.grid.root.data).toHaveLength(2);
+      expect(layout.grid.root.data.every((n) => n.type === "leaf")).toBe(true);
+    });
+
+    it("删页移除页内全部组（分屏两组一并清除）", async () => {
+      mockIPC(() => null);
+      const pageIdB = seedTwoPages();
+      const { api, container } = await renderHost();
+      const panel = await seedTwoTerminals(api, container);
+      await splitPanelRight(api, panel);
+      expect(api.groups.length).toBe(3); // A 两组 + B 一组
+
+      await act(async () => {
+        useProjects.getState().removePage(PROJ_ID, PAGE_ID);
+        useLayout.setState({ activePageId: pageIdB });
+      });
+      await settle();
+
+      expect(api.getPanel(`${PAGE_ID}:terminal-0`)).toBeUndefined();
+      expect(api.getPanel(`${PAGE_ID}:terminal-1`)).toBeUndefined();
+      expect(api.groups.length).toBe(1);
+      expect(api.groups[0].id).toBe(`page-${pageIdB}`);
+    });
+
+    it("主组拖空删除（单终端 moveTo）后 addTerminalPanel 落页内首组（resolvePageGroupForAdd 回退链）", async () => {
+      mockIPC(() => null);
+      seedProject();
+      const { api, container } = await renderHost();
+      await act(async () => { clickButton(container, "新建终端"); });
+      await settle();
+      const panel = api.getPanel(`${PAGE_ID}:terminal-0`);
+      const strayGroup = api.addGroup({ direction: "right" });
+      await act(async () => { panel.api.moveTo({ group: strayGroup }); });
+      await settle();
+
+      // 主组被拖空 → dockview 自动删空组，只剩自生组
+      expect(api.getGroup(`page-${PAGE_ID}`)).toBeUndefined();
+      expect(api.groups.length).toBe(1);
+      expect(api.groups[0].id).toBe(strayGroup.id);
+
+      // 再建终端：主组缺失 → 回退页内首组（自生组），不 throw 不落错页
+      let newId: string | null = null;
+      await act(async () => { newId = addTerminalPanel(api, PAGE_ID, undefined); });
+      await settle();
+      expect(newId).toBe(`${PAGE_ID}:terminal-1`);
+      const added = api.getPanel(`${PAGE_ID}:terminal-1`);
+      expect(added).toBeTruthy();
+      expect(added.group.id).toBe(strayGroup.id);
+    });
+
+    it("审计延迟语义：跨页落组面板在 addPanel 同步栈内不回迁（宏任务后审计——真实环境级联内同步 moveTo 撞 disposed，恢复链注入回归根因）", async () => {
+      mockIPC(() => null);
+      const pageIdB = seedTwoPages();
+      const { api } = await renderHost();
+      const groupB = api.getGroup(`page-${pageIdB}`);
+      expect(groupB).toBeTruthy();
+
+      // A 页前缀面板显式落 B 页主组 = 跨页越界（恢复链裸 addPanel 落滞留活跃组的等价态）
+      act(() => {
+        api.addPanel({
+          id: `${PAGE_ID}:terminal-9`,
+          component: "terminal",
+          params: { panelId: `${PAGE_ID}:terminal-9`, cwd: "C:\\root" },
+          position: { referenceGroup: groupB },
+        });
+      });
+      // 同一同步栈内审计未跑——面板仍滞留错组（若改回同步审计本断言即红；
+      // jsdom 不炸但语义锁定，真实环境 disposed 栈由 L4 mockcli 恢复用例兜底）
+      const panel = api.getPanel(`${PAGE_ID}:terminal-9`);
+      expect(panel).toBeTruthy();
+      expect(panel.group.id).toBe(`page-${pageIdB}`);
+
+      // 宏任务后：审计回迁到 A 页主组
+      await settle();
+      expect(panel.group.id).toBe(`page-${PAGE_ID}`);
     });
   });
 });

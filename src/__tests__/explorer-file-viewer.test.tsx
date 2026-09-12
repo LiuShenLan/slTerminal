@@ -135,6 +135,9 @@ describe("ExplorerPanel + FileViewerRegistry 集成", () => {
         focus: mocks.mockFocus,
         api: { setTitle: vi.fn() },
       }),
+      // ADR-0020 落组解析：主组 id 命中即返回
+      getGroup: vi.fn((id: string) => ({ id })),
+      groups: [],
     };
   });
 

@@ -46,9 +46,9 @@ import { pageGroupId } from "../workspace/pageGroups";
 
 // ---- 辅助 ----
 
-/** 创建 fake DockviewGroupPanel（满足类型，仅含 id 标识） */
+/** 创建 fake DockviewGroupPanel（满足类型；panels 空数组——ADR-0020 派生归属慢车道消费面） */
 function makeFakeGroup(id: string) {
-  return { api: { id }, id } as unknown as Record<string, unknown>;
+  return { api: { id }, id, panels: [] } as unknown as Record<string, unknown>;
 }
 
 /** 色值 → jsdom 归一化形态（#hex → "rgb(r, g, b)"；rgba 输入补空格 → "rgba(r, g, b, a)"） */
@@ -74,6 +74,7 @@ function makeFakeHost(pageIds: string[], addPanelSpy: ReturnType<typeof vi.fn> =
   const host = {
     addPanel: addPanelSpy,
     getGroup: (id: string) => (pageGroupIds.has(id) ? { id } : undefined),
+    groups: [] as Array<{ id: string }>, // ADR-0020 落组解析兜底路径（getGroup 未命中时）
   };
   return { host, addPanelSpy };
 }
@@ -218,7 +219,7 @@ describe("createRightHeader", () => {
   it("R10: 目标页组未挂载（getGroup 缺失）→ 静默不 addPanel（addTerminalPanel 守卫）", () => {
     useLayout.setState({ activePageId: "p1" });
     const addPanelSpy = vi.fn();
-    const host = { addPanel: addPanelSpy, getGroup: () => undefined };
+    const host = { addPanel: addPanelSpy, getGroup: () => undefined, groups: [] };
     const Header = createRightHeader(() => host as any);
     const result = render(
       React.createElement(Header, {
@@ -511,7 +512,7 @@ describe("Watermark 回归（页组协议）", () => {
   it("W3: 无活跃页时点击 → 不 addPanel（无落点）", () => {
     useLayout.setState({ activePageId: null });
     const addPanelSpy = vi.fn();
-    const host = { addPanel: addPanelSpy, getGroup: () => undefined };
+    const host = { addPanel: addPanelSpy, getGroup: () => undefined, groups: [] };
     const Watermark = createWatermark(() => host as any);
     render(<Watermark containerApi={{ addPanel: addPanelSpy } as never} />);
     const btns = screen.getAllByRole("button", { name: "新建终端" });

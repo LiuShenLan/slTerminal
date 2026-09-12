@@ -1,20 +1,28 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // layoutSerde — 布局序列化/反序列化（硬约束 #7 单点：操作页面布局只经本模块存取）
 //
-// CP-004/S11 契约演进（共享宿主 + 页组模型）：
-// - saveLayout(api) 不变——单宿主全量 toJSON（宿主 = 全部页面页组）。
-// - 存储形态：projects store 的 OperationPage.layout = 该页「页组子树切片」——
-//   规范切片 = { grid: { root: branch[leaf(page-{pageId})] }, panels: 页内面板, activeGroup }。
-// - composeHostLayout(页切片集合) → 宿主全量 JSON（fromJSON 前汇编单点）。
+// CP-004/S11 契约 + ADR-0020 页内分屏演进（共享宿主 + 派生归属模型）：
+// - saveLayout(api) 不变——单宿主全量 toJSON（宿主 = 全部页面叶组）。
+// - 存储形态：projects store 的 OperationPage.layout = 该页「子树切片」——
+//   root 恒为 branch 壳，其 data = 本页各组节点（单页单组 = branch[leaf]；
+//   页内分屏 = branch[leaf, leaf, ...] 或嵌套 branch——子节点直挂宿主根时
+//   深度保持，gridview 层级交替朝向语义不变）；visible 标记剥除（宿主 toJSON
+//   隐藏叶带 visible:false，入存储会致恢复恒隐藏）；floatingGroups/popoutGroups
+//   段不存（D7 仅网格分屏）。
+// - 组页归属派生（pageIdOfSerializedLeaf）：主组 id page- 前缀快车道 ??
+//   叶 views 首面板页前缀——分屏自生组（dockview 自增 id）归属可解析。
+// - composeHostLayout(页切片集合) → 宿主全量 JSON（fromJSON 前汇编单点，
+//   切片根 branch 子节点摊平直挂宿主根）。
 // - loadPageGroup(api, pageId, saved)：运行期把一页切片并入现有宿主
-//   （toJSON 合并 + fromJSON reuseExistingPanels——既有面板实例不重建）。
-// - 旧多实例格式迁移（patchLegacyLayout 增补）：无 page- 前缀页组的旧布局 →
-//   压平成该页单一页组（多组面板并入同一组，按序遍历）；白名单过滤后
+//   （先按归属移除该页全部旧叶再推入 + fromJSON reuseExistingPanels——
+//   既有面板实例不重建）。
+// - 旧多实例格式迁移（patchLegacyLayout 增补）：无可解析归属叶的旧布局 →
+//   压平成该页单一主组（多组面板并入同一组，按序遍历）；白名单过滤后
 //   无法归组/被剔除的面板丢弃 + console.error（不阻断启动，Watermark 接管空页）。
 
 import type { DockviewApi } from "dockview-react";
 import { isValidPanelType } from "../panelRegistry";
-import { pageGroupId, panelIdInPage } from "./pageGroups";
+import { pageGroupId, pageIdOfGroupId, pageOfPanelId, panelIdInPage } from "./pageGroups";
 
 /** 从 Dockview API 导出布局 JSON（全量——宿主唯一实例） */
 export function saveLayout(api: DockviewApi): object {
@@ -90,14 +98,89 @@ function patchLegacyShape(layout: JsonLayout): void {
   }
 }
 
-/** 新格式切片判定：grid 顶层 leaf 中存在 page- 前缀页组（宿主/切片形态） */
-function hasPageGroupLeaf(layout: JsonLayout): boolean {
-  const root = layout.grid?.root as JsonLayout | undefined;
-  if (!root || root.type !== "branch" || !Array.isArray(root.data)) return false;
-  return (root.data as JsonLayout[]).some(
-    (child) => child?.type === "leaf" && typeof child.data?.id === "string"
-      && (child.data.id as string).startsWith("page-"),
+/** 新格式判定：grid 树内存在可解析页归属的叶（id 前缀或 views 前缀——
+ * 分屏自生组叶经 views 解析）；全无 → 旧多实例格式走迁移 */
+function hasAnyOwnedLeaf(layout: JsonLayout): boolean {
+  return collectLeaves(layout.grid?.root as JsonLayout | undefined).some(
+    (l) => pageIdOfSerializedLeaf(l) !== null,
   );
+}
+
+/**
+ * 序列化叶 → 属主 pageId（ADR-0020 派生归属的序列化侧等价）：
+ * 1. 快车道：叶 id page- 前缀（主组——空主组归属仍成立）；
+ * 2. 慢车道：views 内首个页前缀协议面板的 pageOfPanelId（分屏自生组）；
+ * 3. 皆无 → null。
+ */
+function pageIdOfSerializedLeaf(leaf: JsonLayout): string | null {
+  const gid = leaf.data?.id;
+  if (typeof gid === "string") {
+    const fast = pageIdOfGroupId(gid);
+    if (fast !== null) return fast;
+  }
+  const views = leaf.data?.views;
+  if (Array.isArray(views)) {
+    for (const v of views) {
+      if (typeof v !== "string") continue;
+      const pid = pageOfPanelId(v);
+      if (pid !== null) return pid;
+    }
+  }
+  return null;
+}
+
+/**
+ * 树剪枝原语（通用）：递归保留 keepLeaf 命中的叶；branch 子树全空 → 剪掉
+ * （返回 null），单子 branch → 展平为子节点（单子排布无朝向语义，展平安全）。
+ * 不改输入（branch 浅拷输出；leaf 经 transformLeaf 变换，缺省原样引用）。
+ */
+function pruneTree(
+  node: JsonLayout | undefined,
+  keepLeaf: (leaf: JsonLayout) => boolean,
+  transformLeaf: (leaf: JsonLayout) => JsonLayout = (l) => l,
+): JsonLayout | null {
+  if (!node || typeof node !== "object") return null;
+  if (node.type === "leaf") return keepLeaf(node) ? transformLeaf(node) : null;
+  if (node.type !== "branch" || !Array.isArray(node.data)) return null;
+  const kept = (node.data as JsonLayout[])
+    .map((child) => pruneTree(child, keepLeaf, transformLeaf))
+    .filter((c): c is JsonLayout => c !== null);
+  if (kept.length === 0) return null;
+  if (kept.length === 1) return kept[0];
+  return { ...node, data: kept };
+}
+
+/** 叶浅拷规范化（切片持久化用）：剥 visible（宿主 toJSON 隐藏叶带
+ * visible:false——入存储会致恢复恒隐藏）；activeView ∉ views 时归位 views[0]
+ * （恢复后激活页签确定；views 空删 activeView 键） */
+function normalizeLeafCopy(leaf: JsonLayout): JsonLayout {
+  const data = { ...(leaf.data as JsonLayout) };
+  delete data.visible;
+  const views = Array.isArray(data.views) ? (data.views as string[]) : [];
+  if (views.length === 0) {
+    delete data.activeView;
+  } else if (typeof data.activeView !== "string" || !views.includes(data.activeView)) {
+    data.activeView = views[0];
+  }
+  return { ...leaf, data };
+}
+
+/** 收集节点子树全部叶 id 与 views（views 按页前缀过滤——混组存储防御） */
+function collectLeafMeta(
+  node: JsonLayout | undefined,
+  pageId: string,
+): { leafIds: string[]; views: string[] } {
+  const leafIds: string[] = [];
+  const views: string[] = [];
+  for (const leaf of collectLeaves(node)) {
+    if (typeof leaf.data?.id === "string") leafIds.push(leaf.data.id);
+    const vs = leaf.data?.views;
+    if (!Array.isArray(vs)) continue;
+    for (const v of vs) {
+      if (typeof v === "string" && pageOfPanelId(v) === pageId) views.push(v);
+    }
+  }
+  return { leafIds, views };
 }
 
 // ── 页切片（OperationPage.layout 语义）─────────────────────
@@ -186,9 +269,8 @@ function migrateLegacyToSlice(pageId: string, raw: JsonLayout): JsonLayout {
 }
 
 /**
- * 页布局归一化（存取单点）：任意形态（新格式切片/旧多实例格式/空占位）→
- * 规范页切片。返回 null = 无法解析（无 grid 且无 panels → 视为空页切片，
- * 不在此路径返回 null；仅当输入非对象时返回 null）。
+ * 页布局归一化（存取单点）：任意形态（页子树切片/宿主全量/旧多实例格式/
+ * 空占位）→ 规范页切片。返回 null = 无法解析（仅当输入非对象时）。
  */
 export function normalizePageLayout(
   pageId: string,
@@ -203,47 +285,31 @@ export function normalizePageLayout(
     && Object.keys(raw.panels).length > 0;
   if (!hasGrid && !hasPanels) return emptyPageLayout(pageId);
 
-  // 新格式（已含 page- 页组）→ 规范化：取本页页组 leaf + 页内 panels
-  if (hasPageGroupLeaf(raw)) {
+  // 新格式（存在可解析归属叶）→ 剪枝规范化（与 slicePageLayout 同路径幂等）
+  if (hasAnyOwnedLeaf(raw)) {
     const layout = deepClone(raw);
     filterInvalidPanels(layout);
     patchLegacyShape(layout);
-    const leaves = collectLeaves(layout.grid?.root as JsonLayout | undefined);
-    const myLeaf = leaves.find(
-      (l) => l.data?.id === pageGroupId(pageId),
-    ) ?? { type: "leaf", data: { id: pageGroupId(pageId), views: [] } };
-    const panelsAll = (layout.panels as Record<string, JsonLayout> | undefined) ?? {};
-    const views = Array.isArray(myLeaf.data?.views) ? myLeaf.data?.views as string[] : [];
-    const panelsOut: Record<string, JsonLayout> = {};
-    for (const v of views) {
-      if (typeof v === "string" && panelsAll[v]) panelsOut[v] = panelsAll[v];
-    }
-    // 本页组不在树中（损坏）但 panels 存在 → 全部并入（防御）
-    const inMyLeaf = new Set(views);
-    if (myLeaf.data?.id !== pageGroupId(pageId)) {
-      for (const [k, v] of Object.entries(panelsAll)) {
-        if (!inMyLeaf.has(k)) panelsOut[k] = v;
+    const sliced = slicePageLayout(pageId, layout) as JsonLayout;
+    // 损坏防御：本页面板存在但无叶引用（剪枝为空或部分孤儿）→ 并入首叶
+    const slicedPanels = (sliced.panels as Record<string, JsonLayout> | undefined) ?? {};
+    const orphans = Object.keys(
+      (layout.panels as Record<string, JsonLayout> | undefined) ?? {},
+    ).filter((k) => pageOfPanelId(k) === pageId && !slicedPanels[k]);
+    if (orphans.length > 0) {
+      console.error(
+        `[layoutSerde] 布局规范化：${orphans.length} 个本页面板无叶引用，并入首叶（页面 ${pageId}）`,
+      );
+      const root = sliced.grid.root as JsonLayout;
+      const firstLeaf = collectLeaves(root)[0];
+      const panelsAll = layout.panels as Record<string, JsonLayout>;
+      for (const k of orphans) {
+        firstLeaf.data.views.push(k);
+        slicedPanels[k] = panelsAll[k];
       }
+      sliced.panels = slicedPanels;
     }
-    return {
-      grid: {
-        orientation: "HORIZONTAL",
-        root: {
-          type: "branch",
-          data: [{
-            type: "leaf",
-            data: {
-              id: pageGroupId(pageId),
-              views: Object.keys(panelsOut),
-              activeView: views[0] ?? undefined,
-            },
-            ...(typeof myLeaf.size === "number" ? { size: myLeaf.size } : {}),
-          }],
-        },
-      },
-      panels: panelsOut,
-      activeGroup: pageGroupId(pageId),
-    };
+    return sliced;
   }
 
   // 旧多实例格式 → 迁移
@@ -251,8 +317,10 @@ export function normalizePageLayout(
 }
 
 /**
- * 从宿主全量 JSON 提取某页的规范切片（布局变更写回单点——saveLayout 后按页切分）。
- * 宿主中不存在该页页组 → 返回空页切片（页组尚未挂入/刚删除）。
+ * 从宿主全量 JSON 提取某页的规范切片（布局变更写回单点——saveLayout 后按页
+ * 切分）：按派生归属剪枝保留本页各组子树（页内分屏多组随切片持久化），
+ * 剥 visible 标记，包根 branch 壳（子节点直挂宿主根时深度保持，朝向语义不变）。
+ * 宿主中不存在该页任何组 → 返回空页切片（页组尚未挂入/刚删除）。
  */
 export function slicePageLayout(
   pageId: string,
@@ -262,42 +330,46 @@ export function slicePageLayout(
     return emptyPageLayout(pageId);
   }
   const layout = fullLayout as JsonLayout;
-  const gid = pageGroupId(pageId);
-  const leaves = collectLeaves(layout.grid?.root as JsonLayout | undefined);
-  const myLeaf = leaves.find((l) => l.data?.id === gid);
-  const panelsAll = (layout.panels as Record<string, JsonLayout> | undefined) ?? {};
-  const views = myLeaf && Array.isArray(myLeaf.data?.views)
-    ? (myLeaf.data?.views as string[]).filter((v) => typeof v === "string" && panelsAll[v])
+  const root = layout.grid?.root as JsonLayout | undefined;
+  const rootChildren = root?.type === "branch" && Array.isArray(root.data)
+    ? (root.data as JsonLayout[])
     : [];
+  // 剪枝保留本页叶（normalizeLeafCopy 浅拷规范化——不污染共享输入）
+  const kept = rootChildren
+    .map((c) => pruneTree(c, (leaf) => pageIdOfSerializedLeaf(leaf) === pageId, normalizeLeafCopy))
+    .filter((c): c is JsonLayout => c !== null);
+  if (kept.length === 0) return emptyPageLayout(pageId);
+
+  const sliceRoot: JsonLayout = { type: "branch", data: kept };
+  const { leafIds, views } = collectLeafMeta(sliceRoot, pageId);
+  const panelsAll = (layout.panels as Record<string, JsonLayout> | undefined) ?? {};
   const panelsOut: Record<string, JsonLayout> = {};
-  for (const v of views) panelsOut[v] = panelsAll[v];
+  for (const v of views) {
+    if (panelsAll[v]) panelsOut[v] = panelsAll[v];
+  }
+  // activeGroup：宿主 activeGroup 属本页 → 保留；否则本页首叶
+  const hostActive = typeof layout.activeGroup === "string" ? layout.activeGroup : null;
+  const activeGid = hostActive !== null && leafIds.includes(hostActive)
+    ? hostActive
+    : leafIds[0];
   return {
     grid: {
-      orientation: "HORIZONTAL",
-      root: {
-        type: "branch",
-        data: [{
-          type: "leaf",
-          data: {
-            id: gid,
-            views,
-            ...(myLeaf?.data?.activeView != null
-              ? { activeView: myLeaf.data.activeView }
-              : {}),
-          },
-          ...(myLeaf && typeof myLeaf.size === "number" ? { size: myLeaf.size } : {}),
-        }],
-      },
+      orientation:
+        typeof (layout.grid as JsonLayout | undefined)?.orientation === "string"
+          ? (layout.grid as JsonLayout).orientation
+          : "HORIZONTAL",
+      root: sliceRoot,
     },
     panels: panelsOut,
-    activeGroup: gid,
+    activeGroup: activeGid,
   };
 }
 
 /**
  * 宿主全量 JSON 汇编（启动/页增删后重建单点）：全部页切片合并为单宿主
- * Dockview fromJSON 输入——每个操作页面 = 根 branch 下一个顶级 leaf 页组，
- * panels 取并集，activeGroup 指向给定活跃页（无活跃页 → 第一页）。
+ * Dockview fromJSON 输入——每页切片根 branch 的子节点摊平直挂宿主根 branch
+ * （切片包壳保持的深度关系不变，gridview 层级交替朝向语义保持）；panels 取
+ * 并集；activeGroup 指向活跃页首叶（无活跃页 → 第一页首叶）。
  */
 export function composeHostLayout(
   pageSlices: Array<{ pageId: string; layout: unknown }>,
@@ -305,28 +377,45 @@ export function composeHostLayout(
 ): Record<string, unknown> {
   const rootData: JsonLayout[] = [];
   const panels: Record<string, JsonLayout> = {};
-  let firstGid: string | null = null;
+  /** 每页首叶 id + 切片声明的 activeGroup（活跃组解析用——分屏页声明值属本页
+   *  时保留，重启后聚焦回到用户工作组） */
+  const firstLeafOfPage = new Map<string, string>();
+  const declaredActiveOfPage = new Map<string, string>();
+  let firstLeafId: string | null = null;
   for (const { pageId, layout } of pageSlices) {
     const slice = (normalizePageLayout(pageId, layout)
       ?? emptyPageLayout(pageId)) as JsonLayout;
-    const leaves = collectLeaves(slice.grid?.root);
-    const leaf = leaves.find((l) => l.data?.id === pageGroupId(pageId))
-      ?? { type: "leaf", data: { id: pageGroupId(pageId), views: [] } };
-    rootData.push(leaf);
+    const sliceRoot = slice.grid?.root as JsonLayout | undefined;
+    const children = sliceRoot?.type === "branch" && Array.isArray(sliceRoot.data)
+      ? (sliceRoot.data as JsonLayout[])
+      : [];
+    rootData.push(...children);
+    const leaves = collectLeaves(sliceRoot);
+    const leafIds = new Set(
+      leaves.map((l) => l.data?.id).filter((id): id is string => typeof id === "string"),
+    );
+    const firstId = leaves[0]?.data?.id;
+    if (typeof firstId === "string") {
+      firstLeafOfPage.set(pageId, firstId);
+      firstLeafId ??= firstId;
+    }
+    const declared = slice.activeGroup;
+    if (typeof declared === "string" && leafIds.has(declared)) {
+      declaredActiveOfPage.set(pageId, declared);
+    }
     const slicePanels: Record<string, JsonLayout> = slice.panels ?? {};
     for (const [k, v] of Object.entries(slicePanels)) panels[k] = v;
-    firstGid ??= pageGroupId(pageId);
   }
-  const activeGid = activePageId ? pageGroupId(activePageId) : null;
+  const activeGid = activePageId
+    ? (declaredActiveOfPage.get(activePageId) ?? firstLeafOfPage.get(activePageId))
+    : undefined;
   return {
     grid: {
       orientation: "HORIZONTAL",
       root: { type: "branch", data: rootData },
     },
     panels,
-    activeGroup: activeGid && rootData.some((l) => l.data?.id === activeGid)
-      ? activeGid
-      : (firstGid ?? undefined),
+    activeGroup: activeGid ?? firstLeafId ?? undefined,
   };
 }
 
@@ -370,9 +459,11 @@ export function loadLayout(api: DockviewApi, saved: object): boolean {
 }
 
 /**
- * 运行期页组挂载（loadPageGroup——页新增/重启补页单点）：页切片并入当前宿主
- * 全量 JSON 后 fromJSON（reuseExistingPanels——既有面板实例跨恢复存活，终端
- * 不二次 open）；返回是否成功。调用方须在成功后自行处理可见性/标题恢复。
+ * 运行期页组挂载（loadPageGroup——页新增/重启补页单点）：先按派生归属移除
+ * 该页全部旧叶（递归剪枝——分屏多叶/嵌套分支一并清除，幂等防双叶），再把
+ * 页切片根 branch 子节点摊平推入宿主根；fromJSON reuseExistingPanels——
+ * 既有面板实例跨恢复存活，终端不二次 open；返回是否成功。调用方须在成功后
+ * 自行处理可见性/标题恢复。
  */
 export function loadPageGroup(
   api: DockviewApi,
@@ -384,27 +475,34 @@ export function loadPageGroup(
     if (!rawSlice) return false;
     const slice = rawSlice as JsonLayout;
     const current = deepClone(saveLayout(api)) as JsonLayout;
-    const gid = pageGroupId(pageId);
-    // 移除同页旧叶（幂等——重复挂载防双叶）
-    const root = current.grid?.root;
+    // D7 防御剔除（仅网格分屏——floating/popout 段不入恢复）
+    delete current.floatingGroups;
+    delete current.popoutGroups;
+    // 移除本页全部旧叶（含嵌套分支内的；空 branch 随剪枝清除）
+    let root = current.grid?.root as JsonLayout | undefined;
     if (root?.type === "branch" && Array.isArray(root.data)) {
-      root.data = (root.data as JsonLayout[]).filter(
-        (child: JsonLayout) => !(child?.type === "leaf" && child.data?.id === gid),
-      );
-    }
-    const leaves = collectLeaves(slice.grid?.root);
-    const leaf = leaves.find((l) => l.data?.id === gid)
-      ?? { type: "leaf", data: { id: gid, views: [] } };
-    if (!root) {
+      root.data = (root.data as JsonLayout[])
+        .map((c) => pruneTree(c, (leaf) => pageIdOfSerializedLeaf(leaf) !== pageId))
+        .filter((c): c is JsonLayout => c !== null);
+    } else if (!root) {
       current.grid = { orientation: "HORIZONTAL", root: { type: "branch", data: [] } };
+      root = current.grid.root as JsonLayout;
     }
-    current.grid.root.data.push(leaf);
+    // 切片根 branch 子节点摊平推入宿主根（深度保持——朝向语义不变）
+    const sliceRoot = slice.grid?.root as JsonLayout | undefined;
+    const children = sliceRoot?.type === "branch" && Array.isArray(sliceRoot.data)
+      ? (sliceRoot.data as JsonLayout[])
+      : [];
+    (root as JsonLayout).data.push(...children);
     current.panels = { ...(current.panels ?? {}) };
     const slicePanels = (slice.panels as Record<string, JsonLayout> | undefined) ?? {};
     for (const [k, v] of Object.entries(slicePanels)) {
       (current.panels as Record<string, JsonLayout>)[k] = v;
     }
-    current.activeGroup = gid;
+    // activeGroup = 切片首叶（并入页成为聚焦组——现状语义保持）
+    const sliceLeaves = collectLeaves(sliceRoot);
+    const firstId = sliceLeaves[0]?.data?.id;
+    current.activeGroup = typeof firstId === "string" ? firstId : pageGroupId(pageId);
 
     api.fromJSON(current as Parameters<DockviewApi["fromJSON"]>[0], { reuseExistingPanels: true });
     return true;

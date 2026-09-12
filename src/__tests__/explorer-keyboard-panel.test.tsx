@@ -152,6 +152,9 @@ beforeEach(() => {
   (window as any).__dockviewApi = {
     addPanel: mocks.mockAddPanel,
     getPanel: vi.fn(),
+    // ADR-0020 落组解析：主组 id 命中即返回
+    getGroup: vi.fn((id: string) => ({ id })),
+    groups: [],
   };
 });
 

@@ -201,7 +201,7 @@
 
 | 标识 | 决策 | 登记点 |
 |------|------|--------|
-| FE-01 | Workspace 多 Dockview 实例**保持**（H6 终端跨页面存活 + xterm 实例限制，D1）；以页面总数上限 `MAX_PAGES = 20` 防内存/DOM 线性增长（FE-36 跨项目全局计数修订同列）。**已作废（CP-004/S11，2026-09-08）：多实例架构被共享宿主 + 页组模型取代**——单一 DockviewReact，每操作页面 = 宿主内顶级页组（pageGroups.ts 协议：组 id `page-{pageId}`、面板 id 页前缀 `{pageId}:localId`）；页面切换 = 页组容器显隐（dockview 叶可见性，终端不卸载，#4978 约束不变）；`MAX_PAGES` 与超限 toast 删除，上限随实例数线性增长源消亡 | src/workspace/CLAUDE.md、src/stores/CLAUDE.md、src/workspace/pageGroups.ts |
+| FE-01 | Workspace 多 Dockview 实例**保持**（H6 终端跨页面存活 + xterm 实例限制，D1）；以页面总数上限 `MAX_PAGES = 20` 防内存/DOM 线性增长（FE-36 跨项目全局计数修订同列）。**已作废（CP-004/S11，2026-09-08）：多实例架构被共享宿主 + 页组模型取代**——单一 DockviewReact，每操作页面 = 宿主内顶级页组（pageGroups.ts 协议：组 id `page-{pageId}`、面板 id 页前缀 `{pageId}:localId`）；页面切换 = 页组容器显隐（dockview 叶可见性，终端不卸载，#4978 约束不变）；`MAX_PAGES` 与超限 toast 删除，上限随实例数线性增长源消亡。**再修订（ADR-0020，2026-09-12）**：「页 = 单组多页签」子约束被推翻——页内分屏合法化，组页归属改派生模型（组 id 快车道 ?? 组内首面板前缀），可见性机制 maximize → setVisible 逐组 | src/workspace/CLAUDE.md、src/stores/CLAUDE.md、src/workspace/pageGroups.ts |
 | SEC-09 | CSP `script-src 'unsafe-inline'` **保留**（D4）：srcdoc iframe 继承父 CSP（W3C 行为），HTML 预览注入脚本（锚点拦截/键盘转发/nonce）必须内联，移除即破坏预览。现状 = tauri.conf.json `script-src 'self' 'unsafe-inline'` + `dangerousDisableAssetCspModification: ["script-src"]`。**已被 ADR-0019 取代**（2026-09-08，S10-②：预览迁独立 webview 自定义协议域，主窗口回收 script-src 'unsafe-inline' 与 dangerousDisableAssetCspModification——CP-012） | src-tauri/tauri.conf.json 注释 |
 | SEC-06 | 剪贴板读权限 `clipboard-manager:allow-read-text` **保留**（D6）：唯一消费点为 keyboard.ts 的 Ctrl+Shift+V 显式手势，改后端命令不缩小攻击面（前端上下文被注入时同样能 invoke）；grep 级守卫测试锁消费点集合 | src/ipc/CLAUDE.md |
 | BE-21 | `fs_read_dir` 返回整目录列表**不分页**（登记豁免）~~已作废~~：**CP-006 已改游标分页（2026-09）**——`(path, cursor?, limit?)` 默认 500/上限 1000，过滤排序后切片、游标 opaque，前端续页拼接；FileTree 虚拟化（FE-30）渲染侧保留 | src-tauri/src/fs/CLAUDE.md |
@@ -503,3 +503,32 @@
 - **逆转触发点**：driver 升级出现子 webview/帧级寻址时重估「独立 WebviewWindow」约束；Tauri 提供 per-webview CSP 时复核预览域选择（自定义协议 vs 资产域）；出现「预览内键盘输入」需求时重评 focusable 决策（须先解全局快捷键吞键问题）；CP-033/035（③④）结果在本节追加登记。
 - **CP-033（③）结果登记（2026-09-08）**：B2 维持分支——KaTeX data 内联经新 webview 上下文真实 WebView2 实证可用（字体族命中 + 字体真实加载）；asset 通道维持否决（响应 ACAO 固定 webview origin vs 内容 iframe opaque origin null，源码 + 实测双证据）。全文见 ADR-0018「维持记录（CP-033）」；④ 若建立预览域局部 CSP 须放行 font-src data:。
 - **CP-035（④）结果登记（2026-09-08，font-src 实证记录归档）**：③ B2 实证通过 → 主窗口 CSP 终态落地——img-src/font-src 双双回收 data:（tauri.conf.json + csp-config.test.ts 三守卫锁死），预览域当时维持无 CSP（data: img/font 天然放行，无代码落点——SEC-02 起宿主页 meta 承载域级 CSP，见 ADR-0018 落地复核注记）；执行期发现主窗口唯一 data: 图像消费点 = CM6 lint 波浪线 svg 背景（JsonMode），改 text-decoration wavy 技法消除（theme/overrides.ts）；svg data: 显式禁用（markdown assets 白名单剔除）。处置全文见 ADR-0018「回收记录（CP-035）」；本决策 5「img-src/font-src data: 回收归 CP-035」至此执行完毕。
+
+## 0020 页内分屏（ADR-0020：推翻 CP-004/S11「页 = 单组多页签」）
+
+**Status**: accepted（2026-09-12。bug 2「拖拽分屏面板消失」修复定稿——D3 用户裁决支持页内分屏；D7 仅网格分屏，禁 floating/popout）
+
+**上下文**：CP-004/S11 共享宿主模型登记「页 = 单组多页签」，页内分屏不可用、拖拽拆分产物被回迁守卫清理。但该守卫实际从未对真实拖拽生效（dockview `_moving` 门控吞移动期 onDidAddPanel/onDidRemovePanel，守卫挂错事件源）；真实拖拽产 stray 组后被 sync 末尾无条件 maximizePageGroup 隐藏（面板「消失」，DOM 保留）+ 切片持久化只切主组叶把 stray 组剔除（重启真丢失）。用户裁决（D3）：支持页内分屏，推翻单组限制。
+
+**决策**：
+
+1. **共享宿主 + 派生归属模型**：单一 DockviewReact 不变。页主组 id = `page-{pageId}` 保留为恢复锚点 + Watermark 载体；页内分屏产物 = dockview 自生组（自增 id，无 page- 前缀）。**组页归属不从组 id 断言，从组内首面板 id 前缀派生**（pageGroups.ts `pageIdOfGroup`：id 快车道 ?? 组内首面板页前缀 ?? null；`groupsOfPage` 页内组枚举；`resolvePageGroupForAdd` = 主组 ?? 页内首组 ?? null——null 时调用方显式失败，不落活跃组防错页）。主组可被拖空删除（dockview 自动删空组）——新增面板落组经回退链解析。
+2. **可见性机制 = setVisible 逐组显隐（取代 maximize 单组最大化）**：`setActivePageVisibility(api, activePageId)` 遍历 grid 组按派生归属 setVisible——同页多组同隐同显；底层与 maximize 同一 setViewVisible 机制（DOM 保留不卸载，xterm 不重建），且 setViewVisible 首行 exitMaximizedView——弃 maximize 无残留冲突。**红线：dockview setVisible 无条件 fire onDidLayoutChange（等值也 fire）——必须等值跳过**，否则 sync()→setVisible→layoutChange→store 写回→sync() 死循环（jsdom 实证挂死）。
+3. **存储形态 = 页子树切片（多叶）**：`OperationPage.layout` root 恒 branch 壳，data = 本页各组节点（单组 = branch[leaf]；分屏 = 多叶或嵌套 branch）——向后兼容天然成立（旧单叶切片 = 新形态子集）；切片剥 visible 标记（toJSON 隐藏叶带 visible:false 入存储会致恢复恒隐藏）、activeView ∉ views 归位 views[0]；activeGroup 保留切片声明值（属本页叶集时）；floatingGroups/popoutGroups 段不存（D7）。
+4. **守卫重挂事件源**：`enforcePanelGroupMembership`（挂 onDidAddPanel）删除；`auditGroupMembership(api)` 挂 `onDidMovePanel`（在 movingLock 外 fire，不被吞）+ onDidAddPanel + 恢复后全量一次——自生空壳组 removeGroup、混组以首面板页为属主、少数派面板回迁（模块级重入旗标 + 幂等无环）；restoreGuard 期间跳过。
+5. **仅网格分屏（D7）**：DockviewReact `disableFloatingGroups` prop 禁 floating 手势（库内两入口均受其门控）；popout 仅 API 可达，不调用即禁用。
+6. **面板实例复用**：dockview 移动复用同一 DockviewPanel 实例、内容 DOM reparent 不重建 → xterm 不二次 open（#4978 安全），终端缓冲跨分屏/切页保留。
+
+**被否决的备选**：
+
+- **onDidAddPanel 守卫维持**：`_moving` 门控吞移动期事件（dockview-core 源码实证）——对真实拖拽从不触发，名存实亡；否决。
+- **CSS display 直接操作 dockview 叶元素**：布局管理器不知情会错位（CP-004 红线沿用）。
+- **maximize 语义扩展多叶同显**：maximize 单组语义无法表达同页多组同显；否决，改 setVisible 逐组（决策 2）。
+- **保留 floating/popout 能力**：归属派生/切片持久化/恢复链对非网格组全部复杂化，无产品需求（D7）；否决。
+
+**后果**：
+
+- 跨页组拖拽禁令不变（审计回迁少数派）；页内拖拽分屏合法化。
+- 删页 = `groupsOfPage` 逐组 removeGroup（分屏组一并清除）；页内 addPanel 五入口统一 `resolvePageGroupForAdd` 落组。
+- 组对象 identity 跨 whole-grid fromJSON 可变约束不变（CP-004 登记）。
+- L4 `workspace-split.e2e.ts` 经 moveTo 等价落点覆盖分屏路径；真实拖拽手势（pointer 序列）自动化豁免登记 test-exemptions.md。

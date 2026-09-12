@@ -36,7 +36,7 @@ function dockviewApiStub(): DockviewApi {
       panels.set(params.id, panel);
       return panel;
     }),
-    getGroup: vi.fn(() => ({ id: "g" })),
+    getGroup: vi.fn((id: string) => ({ id })),
   } as unknown as DockviewApi;
 }
 

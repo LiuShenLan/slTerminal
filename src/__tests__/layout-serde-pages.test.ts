@@ -168,29 +168,31 @@ describe("normalizePageLayout — 旧多实例格式迁移", () => {
   });
 
   it("新格式切片(含 page- 页组)→ 规范化保留视图顺序", () => {
+    const pa = panelIdInPage(PAGE, "a");
+    const pb = panelIdInPage(PAGE, "b");
     const slice = {
       grid: {
         orientation: "HORIZONTAL",
         root: {
           type: "branch",
           data: [
-            { type: "leaf", data: { id: GID, views: ["a", "b"] }, size: 30 },
+            { type: "leaf", data: { id: GID, views: [pa, pb] }, size: 30 },
             { type: "leaf", data: { id: pageGroupId("other"), views: [] }, size: 70 },
           ],
         },
       },
       panels: {
-        a: { id: "a", contentComponent: "terminal", params: {} },
-        b: { id: "b", contentComponent: "terminal", params: {} },
+        [pa]: { id: pa, contentComponent: "terminal", params: {} },
+        [pb]: { id: pb, contentComponent: "terminal", params: {} },
       },
       activeGroup: GID,
     };
     const out = normalizePageLayout(PAGE, slice) as any;
     expect(out.grid.root.data).toHaveLength(1);
-    expect(out.grid.root.data[0].data.views).toEqual(["a", "b"]);
-    expect(out.grid.root.data[0].data.activeView).toBe("a");
+    expect(out.grid.root.data[0].data.views).toEqual([pa, pb]);
+    expect(out.grid.root.data[0].data.activeView).toBe(pa);
     // 他页组面板不混入
-    expect(Object.keys(out.panels).sort()).toEqual(["a", "b"]);
+    expect(Object.keys(out.panels).sort()).toEqual([pa, pb]);
   });
 });
 
@@ -276,6 +278,122 @@ describe("slicePageLayout — 全量 JSON 按页切分", () => {
   it("宿主无该页页组 → 空页切片", () => {
     const s = slicePageLayout("page-nope", { grid: { root: { type: "branch", data: [] } }, panels: {} }) as any;
     expect(s.grid.root.data[0].data.views).toEqual([]);
+  });
+
+  it("页内分屏多叶切片（ADR-0020）：自生组叶按 views 归属保留 + 保序 + activeGroup 属本页保留", () => {
+    const t0 = panelIdInPage(PAGE, "terminal-0");
+    const e1 = panelIdInPage(PAGE, "editor-1");
+    const host = {
+      grid: {
+        orientation: "HORIZONTAL",
+        root: {
+          type: "branch",
+          data: [
+            { type: "leaf", data: { id: GID, views: [t0], activeView: t0 } },
+            // 分屏自生组（dockview 自增 id 无 page- 前缀）——views 慢车道归属本页
+            { type: "leaf", data: { id: "4", views: [e1], activeView: e1 } },
+            { type: "leaf", data: { id: pageGroupId("page-b"), views: [panelIdInPage("page-b", "terminal-0")] } },
+          ],
+        },
+      },
+      panels: {
+        [t0]: { id: t0, contentComponent: "terminal", params: {} },
+        [e1]: { id: e1, contentComponent: "editor", params: {} },
+        [panelIdInPage("page-b", "terminal-0")]: { id: panelIdInPage("page-b", "terminal-0"), contentComponent: "terminal", params: {} },
+      },
+      activeGroup: "4",
+    };
+    const slice = slicePageLayout(PAGE, host) as any;
+    // 本页两叶保序（主组 + 自生组），他页叶剔除
+    expect(slice.grid.root.data.map((l: any) => l.data.id)).toEqual([GID, "4"]);
+    expect(Object.keys(slice.panels).sort()).toEqual([e1, t0].sort());
+    // 宿主 activeGroup "4" 属本页 → 保留
+    expect(slice.activeGroup).toBe("4");
+  });
+
+  it("切片剥 visible 标记 + activeView 归位 views[0]（防恢复恒隐藏/激活不确定）", () => {
+    const t0 = panelIdInPage(PAGE, "terminal-0");
+    const e1 = panelIdInPage(PAGE, "editor-1");
+    const host = {
+      grid: {
+        orientation: "HORIZONTAL",
+        root: {
+          type: "branch",
+          data: [
+            // 宿主 toJSON 隐藏叶带 visible:false；activeView 失效（不在 views）
+            { type: "leaf", data: { id: GID, views: [t0, e1], activeView: "ghost", visible: false } },
+          ],
+        },
+      },
+      panels: {
+        [t0]: { id: t0, contentComponent: "terminal", params: {} },
+        [e1]: { id: e1, contentComponent: "editor", params: {} },
+      },
+      activeGroup: GID,
+    };
+    const slice = slicePageLayout(PAGE, host) as any;
+    const leaf = slice.grid.root.data[0];
+    expect(leaf.data.visible).toBeUndefined();
+    expect(leaf.data.activeView).toBe(t0);
+    // 输入不被污染（共享引用防御——宿主全量多页切片共用）
+    expect((host.grid.root.data[0].data as any).visible).toBe(false);
+  });
+
+  it("嵌套 branch 剪枝：他页叶剔除 + 全空 branch 清除 + 单子 branch 展平", () => {
+    const t0 = panelIdInPage(PAGE, "terminal-0");
+    const host = {
+      grid: {
+        orientation: "HORIZONTAL",
+        root: {
+          type: "branch",
+          data: [
+            {
+              type: "branch",
+              data: [
+                { type: "leaf", data: { id: GID, views: [t0] } },
+                { type: "leaf", data: { id: pageGroupId("page-b"), views: [] } },
+              ],
+            },
+            { type: "branch", data: [{ type: "leaf", data: { id: pageGroupId("page-c"), views: [] } }] },
+          ],
+        },
+      },
+      panels: { [t0]: { id: t0, contentComponent: "terminal", params: {} } },
+      activeGroup: GID,
+    };
+    const slice = slicePageLayout(PAGE, host) as any;
+    // 嵌套 branch 内他页叶剔除 → 单子展平；全空 branch 整支清除
+    expect(slice.grid.root.data).toHaveLength(1);
+    expect(slice.grid.root.data[0].data.id).toBe(GID);
+  });
+
+  it("分屏切片往返恒等：compose 摊平直挂 → slice 回切形态自洽", () => {
+    const t0 = panelIdInPage(PAGE, "terminal-0");
+    const e1 = panelIdInPage(PAGE, "editor-1");
+    const splitSlice = {
+      grid: {
+        orientation: "HORIZONTAL",
+        root: {
+          type: "branch",
+          data: [
+            { type: "leaf", data: { id: GID, views: [t0], activeView: t0 } },
+            { type: "leaf", data: { id: "4", views: [e1], activeView: e1 } },
+          ],
+        },
+      },
+      panels: {
+        [t0]: { id: t0, contentComponent: "terminal", params: {} },
+        [e1]: { id: e1, contentComponent: "editor", params: {} },
+      },
+      activeGroup: "4",
+    };
+    const host = composeHostLayout([{ pageId: PAGE, layout: splitSlice }], PAGE);
+    const back = slicePageLayout(PAGE, host) as any;
+    expect(back.grid.root.data.map((l: any) => l.data.id)).toEqual([GID, "4"]);
+    expect(back.activeGroup).toBe("4");
+    // 再 normalize 幂等（存取链路 normalize → slice 双闸自洽）
+    const renorm = normalizePageLayout(PAGE, back) as any;
+    expect(renorm.grid.root.data.map((l: any) => l.data.id)).toEqual([GID, "4"]);
   });
 });
 

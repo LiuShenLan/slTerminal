@@ -18,7 +18,7 @@ import type { DockviewApi } from "dockview-react";
 import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
 import { titleManager } from "./titleManager";
-import { panelIdInPage, pageGroupId } from "./pageGroups";
+import { panelIdInPage, resolvePageGroupForAdd } from "./pageGroups";
 import { PANEL_EDITOR, isAlwaysRenderPanel } from "../panelRegistry";
 import { fileViewerRegistry } from "../features/fileViewers";
 
@@ -103,14 +103,17 @@ export function openFileInPage(
   const renderer = isAlwaysRenderPanel(panelType) ? ("always" as const) : undefined;
 
   // addPanel 可能抛异常（如布局状态不一致），try-catch 防止 titleManager 状态污染；
-  // options.group 显式指定目标页组（生命周期契约）
+  // 落组经 resolvePageGroupForAdd 派生归属解析（ADR-0020——分屏后主组可能被
+  // 拖空删除；页无组解析 null → 返回 false 不落活跃组防错页）
+  const group = resolvePageGroupForAdd(dockApi, activePageId);
+  if (!group) return false;
   try {
     dockApi.addPanel({
       id: panelId,
       component: panelType,
       title,
       params: { panelId, filePath },
-      position: { referenceGroup: pageGroupId(activePageId) },
+      position: { referenceGroup: group.id },
       ...(renderer ? { renderer } : {}),
     });
   } catch {

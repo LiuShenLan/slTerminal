@@ -6,7 +6,7 @@
 import { useProjects } from "../../stores/projects";
 import { useLayout } from "../../stores/layout";
 import { titleManager } from "../../workspace/titleManager";
-import { panelIdInPage, pageGroupId } from "../../workspace/pageGroups";
+import { panelIdInPage, resolvePageGroupForAdd } from "../../workspace/pageGroups";
 
 /** 文件面板分派结果 */
 export interface PanelDispatch {
@@ -89,7 +89,8 @@ export function openCommitFile(
     suffix,
   );
 
-  // CP-004：面板 id 页前缀协议 + 显式落活跃页组（addPanel options.group 契约）
+  // CP-004：面板 id 页前缀协议 + 显式落活跃页组（ADR-0020 派生归属解析——
+  // 分屏后主组可能被拖空删除；页无组解析 null → 不落活跃组防错页）
   const localId = `${panelType}-${Date.now()}`;
   const panelId = panelIdInPage(activePageId, localId);
 
@@ -103,6 +104,9 @@ export function openCommitFile(
     params.oldPath = oldPath;
   }
 
+  const group = resolvePageGroupForAdd(dockApi, activePageId);
+  if (!group) return;
+
   // addPanel 可能抛异常，try-catch 防止 titleManager 状态污染
   try {
     dockApi.addPanel({
@@ -110,7 +114,7 @@ export function openCommitFile(
       component: panelType,
       title,
       params,
-      position: { referenceGroup: pageGroupId(activePageId) },
+      position: { referenceGroup: group.id },
     });
   } catch {
     return;

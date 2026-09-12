@@ -41,6 +41,7 @@
 | md/html 编辑 pane Ctrl+滚轮字号的物理滚轮与 split 双通道共存语义 | embedded WDIO 无法投递 OS 滚轮（承接 htmlviewer 缩放豁免 2026-09-06 行）；iframe 内 zoom 与 CM pane 字号双通道的物理合成交互需人手 | L2 字号接线闭环用例（markdown/html-panel.test）+ L4 合成 WheelEvent 字号用例（markdown/html e2e，.cm-scroller 字号 14→15）+ 手工清单（split 态左 pane 字号/右 iframe zoom 互不干扰、整窗缩放不被触发） | 2026-09-06 GLYPH 取证登记 |
 | run-wdio.cjs 启动器分支（Node 版本选择/便携预置/键级校验） | 进程编排壳（spawn 外部进程行为不可 jsdom 化），无单测锚点 | L4 全量 e2e（Node 26 直跑）兜底 | CP-003/046 登记 |
 | 预览窗口 HiDPI/跨屏几何（scale≠1 建窗落点、跨屏拖动 scale 变化跟随） | E2E/CI 环境 scale 恒 1——建窗与更新路径坐标系差异只在 scale≠1 可观察；双屏异 DPI 拖动需真实多屏硬件 | L1 `compute_physical_rect` 4 例（scale 放大/宽度独立于 x/round/钳制）锁死换算语义 + 建窗/更新路径共用该单源（build_window 注释红线：builder 只收逻辑像素，物理矩形必须经 Physical* setter）+ L4 `markdown.e2e.ts` 主窗移动跟随用例（scale=1 锁死事件→重同步链）+ 实机验收点（HiDPI 预览跟随） | 2026-09 预览几何修复登记 |
+| dockview 页签真实拖拽分屏手势（pointer down/move/up 序列命中 drop target） | jsdom 无真实 hit-test/布局矩形（同 ActivityBar DnD 豁免 SVC-14 同族）；embedded WDIO 无 OS 级 pointer 投递——真实手势层不可自动化 | L2 `workspace-page-dockview.test.tsx` 页内分屏 describe（真实 dockview `api.addGroup` + `panel.api.moveTo` 等价落点——与真实拖拽同一库内入口：两组同显防复发/切页同隐同显 xterm 不重建/切片两叶持久化/删页杀全组/主组拖空回退链）+ L4 `workspace-split.e2e.ts`（真实二进制 moveTo 等价落点 + 缓冲保留 + 切页显隐 + 切片落盘两叶）+ 实机验收点（分屏手感 + 终端 TUI 保活） | 2026-09-12 ADR-0020 页内分屏登记 |
 
 > 原豁免表中 `FileWatcher::start`/`notify_watch` 与 `claude_history` 命令包装两项已按 D6 从豁免重分类为补测，不再列入豁免表。  
 > **SEC-17 豁免已撤销（TQ-COV-05 翻案）**：`tracing::warn!(target: "audit")` 已由 `tracing-test` 断言锁死，豁免行删除。

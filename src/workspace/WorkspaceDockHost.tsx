@@ -1,17 +1,23 @@
 // WorkspaceDockHost — 共享 Dockview 宿主（CP-004/S11 核心：单一 DockviewReact）
 //
 // 多实例架构消亡后的替代形态：
-// - 宿主渲染唯一 `<DockviewReact>`；每个操作页面 = 宿主内一个顶级页组
-//   （groupId = page-{pageId}，pageGroups.ts 协议）。
-// - 页组容器显隐（页面切换）：dockview 网格叶级可见性——仅活跃页组可见
-//   （gridview maximize 机制：隐藏叶 DOM 保留、面板不卸载、xterm 只 open 一次，
-//   #4978 约束不变；fit/resize 仅在页组可见时执行——隐藏组 display:none 尺寸
-//   归零，ResizeObserver 不触发，切回后 dockview 重排 → 观测器自然恢复）。
-// - 生命周期契约：新增面板显式落目标页组；跨页组拖拽禁止（onDidAddPanel
-//   校验越界回迁原页组）；页面删除先经组移除（面板卸载链 kill PTY）；
-//   restoreGuardRef 恢复守卫语义不变（程序化恢复期间的布局事件不写回）。
+// - 宿主渲染唯一 `<DockviewReact>`；每个操作页面 = 宿主内一组网格叶组
+//   （主组 id = page-{pageId}；ADR-0020 起支持页内分屏——单页多组，组页归属
+//   经 pageIdOfGroup 派生，不由组 id 断言）。
+// - 叶组显隐（页面切换）：dockview 叶级可见性——仅活跃页所属各组可见
+//   （setActivePageVisibility 单点：隐藏叶 DOM 保留、面板不卸载、xterm 只
+//   open 一次，#4978 约束不变；fit/resize 仅在组可见时执行——隐藏组
+//   display:none 尺寸归零，ResizeObserver 不触发，切回后 dockview 重排 →
+//   观测器自然恢复）。仅网格分屏——disableFloatingGroups 禁 floating，
+//   popout 不调用（D7）。
+// - 生命周期契约：新增面板经 resolvePageGroupForAdd 显式落组；组归属审计
+//   （auditGroupMembership：onDidMovePanel/onDidAddPanel 事件源 + 恢复后全量，
+//   stray 空壳组清理 + 跨页混组少数派回迁——dockview `_moving` 门控吞移动期
+//   onDidAddPanel，守卫主事件源必须是 onDidMovePanel）；页面删除先经组移除
+//   （面板卸载链 kill PTY）；restoreGuardRef 恢复守卫语义不变（程序化恢复期间
+//   的布局事件不写回、审计跳过）。
 // - 布局单点：#7 —— 变更经 saveLayout/slice 写回 store；恢复经 composeHostLayout
-//   /loadPageGroup（layoutSerde.ts）。
+//   /loadPageGroup（layoutSerde.ts，页子树切片——单页多组随切片持久化）。
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -45,7 +51,7 @@ import {
   syncHostLayoutToStore,
   projectRootOfPage,
 } from "./pageApis";
-import { pageGroupId, pageIdOfGroupId, pageOfPanelId, panelBelongsToGroup, panelsOfPage } from "./pageGroups";
+import { pageIdOfGroupId, pageOfPanelId, pageIdOfGroup, groupsOfPage, panelsOfPage, resolvePageGroupForAdd } from "./pageGroups";
 import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
 import { titleManager } from "./titleManager";
@@ -60,51 +66,95 @@ export const DOCK_HOST_CLASS = "slterm-dock-host";
 export type WorkspaceDockHostProps = Record<string, never>;
 
 /**
- * 页组可见性单点（页面切换/恢复后调用）：使目标页组成为宿主内唯一可见组
- * （gridview maximize——隐藏叶 DOM 保留面板不卸载）。目标页组缺失时 no-op
- * （页组并入宿主流程会再次调用）。无活跃页 → 维持现状（宿主由外层隐藏）。
+ * 叶组可见性单点（ADR-0020；页面切换/恢复/增删页后调用）：遍历宿主全部
+ * 网格叶组，按派生归属 setVisible(属主 === 活跃页)——活跃页多组（页内分屏）
+ * 同显、其余页各组同隐（隐藏叶 DOM 保留面板不卸载）。非网格组跳过（D7 禁用
+ * floating/popout，防御分支）。无活跃页 → 全隐（宿主由外层一并隐藏）。
  */
-export function maximizePageGroup(api: DockviewApi, pageId: string | null): void {
-  if (!pageId) return;
-  const group = api.getGroup(pageGroupId(pageId));
-  if (!group) return;
-  try {
-    group.api.maximize();
-  } catch (err) {
-    console.error(`[slTerminal] 页组可见性切换失败(${pageId}):`, err);
+export function setActivePageVisibility(
+  api: DockviewApi,
+  activePageId: string | null,
+): void {
+  for (const group of api.groups) {
+    if (group.api.location.type !== "grid") continue;
+    const owner = pageIdOfGroup(group);
+    const visible = activePageId !== null && owner === activePageId;
+    // 等值跳过（红线）：dockview setVisible 无条件 fire onDidLayoutChange——
+    // 不跳过则 sync()→setVisible→layoutChange→store 写回→sync() 死循环
+    if (group.api.isVisible === visible) continue;
+    try {
+      group.api.setVisible(visible);
+    } catch (err) {
+      console.error(`[slTerminal] 组可见性设置失败(${group.id}):`, err);
+    }
   }
 }
 
+/** 审计重入旗标——audit 内 moveTo 同步触发 onDidMovePanel 重入，幂等空扫直接退出 */
+let auditingMembership = false;
+
 /**
- * 跨页组拖拽回迁守卫（导出供 L2 直测——宿主 onDidAddPanel 订阅调用）：
- * panel 页前缀 ≠ 目标组页前缀 → 回迁原页组；无页归属面板保留现组（理论不可达——
- * 旧布局已迁移）；回迁后清走空的越界组（dockview 拆分等遗留壳）。
+ * 组归属审计（ADR-0020；导出供 L2 直测——onDidMovePanel/onDidAddPanel 事件源
+ * + 恢复后全量一次）：
+ * - 主组（page- 前缀 id）：组内他页面板 moveTo 回各自页组（空主组 = Watermark
+ *   载体，不删）；
+ * - 自生组（分屏产物）：空壳 → removeGroup；混组以首面板页为属主，少数派
+ *   moveTo 回各自页组（moveTo 后源组走空由 dockview 自清 + 下轮审计兜底）。
+ * restoreGuard 期间由调用方跳过（程序化恢复产物已经剪枝合法）。
  */
-export function enforcePanelGroupMembership(
+export function auditGroupMembership(api: DockviewApi): void {
+  if (auditingMembership) return;
+  auditingMembership = true;
+  try {
+    for (const group of [...api.groups]) {
+      const groupPageId = pageIdOfGroupId(group.id);
+      if (groupPageId !== null) {
+        // 主组：他页面板回迁（主组 id 即属主，面板页前缀不一致即越界）
+        for (const panel of [...group.panels]) {
+          if (pageOfPanelId(panel.id) !== groupPageId) {
+            movePanelToPageGroup(api, panel, pageOfPanelId(panel.id));
+          }
+        }
+        continue;
+      }
+      // 自生组：空壳清理
+      if (group.panels.length === 0) {
+        try {
+          api.removeGroup(group);
+        } catch (err) {
+          console.error(`[slTerminal] 空壳组 ${group.id} 清理失败:`, err);
+        }
+        continue;
+      }
+      // 自生组：首面板页为属主，少数派回迁
+      const owner = pageOfPanelId(group.panels[0].id);
+      for (const panel of [...group.panels]) {
+        if (pageOfPanelId(panel.id) !== owner) {
+          movePanelToPageGroup(api, panel, pageOfPanelId(panel.id));
+        }
+      }
+    }
+  } finally {
+    auditingMembership = false;
+  }
+}
+
+/** 面板回迁所属页（resolvePageGroupForAdd 目标组；页已无组 → 滞留现组由删页路径收口） */
+function movePanelToPageGroup(
   api: DockviewApi,
   panel: IDockviewPanel,
+  pageId: string | null,
 ): void {
-  const targetGid = panel.group.id;
-  if (panelBelongsToGroup(panel.id, targetGid)) return;
-  const pageId = pageOfPanelId(panel.id);
-  const targetPageId = pageIdOfGroupId(targetGid);
-  console.warn(
-    `[slTerminal] 跨页组拖拽回迁:面板 ${panel.id} 落组 ${targetGid}` +
-    (targetPageId ? `（页面 ${targetPageId}）` : "（无页归属组）") +
-    (pageId ? ` → 回迁页面 ${pageId} 页组` : " → 无法归组，保留现组"),
-  );
   if (!pageId) return; // 无页归属面板（理论不可达——旧布局已迁移）保留现组
-  const homeGroup = api.getGroup(pageGroupId(pageId));
-  if (!homeGroup) return;
+  const home = resolvePageGroupForAdd(api, pageId);
+  if (!home || panel.group === home) return;
+  console.warn(`[slTerminal] 跨页组面板回迁:${panel.id} → 页面 ${pageId} 组`);
   try {
-    // moveTo 回迁原页组（dockview 面板级移动原语——含焦点/事件一致处理）
-    panel.api.moveTo({ group: homeGroup as unknown as DockviewGroupPanel });
+    // moveTo 回迁（dockview 面板级移动原语——含焦点/事件一致处理）
+    panel.api.moveTo({ group: home as unknown as DockviewGroupPanel });
   } catch (err) {
     console.error(`[slTerminal] 面板回迁失败(${panel.id}):`, err);
   }
-  // 清走空的越界组（dockview 拆分等遗留壳——回迁后无面板残留）
-  const stray = api.getGroup(targetGid);
-  if (stray && stray.panels.length === 0) api.removeGroup(stray);
 }
 
 const WorkspaceDockHost: React.FC<WorkspaceDockHostProps> = () => {
@@ -178,11 +228,6 @@ const WorkspaceDockHost: React.FC<WorkspaceDockHostProps> = () => {
     rebuildAndRecomputeTitles(api, pageId, projectRootOfPage(pageId) ?? undefined, ids);
   }, []);
 
-  /** 跨页组拖拽回迁（onDidAddPanel 守卫——实现与直测见 enforcePanelGroupMembership） */
-  const handlePanelAdded = useCallback((api: DockviewApi, panel: IDockviewPanel) => {
-    enforcePanelGroupMembership(api, panel);
-  }, []);
-
   /**
    * 宿主 onReady——单一注册点：
    * 1. 注册宿主 API + __dockviewApi（宿主唯一，收敛重指不变量）；
@@ -232,9 +277,28 @@ const WorkspaceDockHost: React.FC<WorkspaceDockHostProps> = () => {
       }),
     );
 
-    // 跨页组拖拽禁止守卫（onDidAddPanel 越界回迁——panelId 页前缀协议）
+    // 组归属审计（ADR-0020）：
+    // - onDidMovePanel = 拖拽守卫主事件源（dockview `_moving` 门控吞移动期
+    //   onDidAddPanel/onDidRemovePanel，onDidMovePanel 在 movingLock 外触发）；
+    //   移动后补一次可见性收敛（新分屏组 dockview 默认可见，本调用幂等兜底）。
+    // - onDidAddPanel = addPanel 落组兜底（E2E 裸 addPanel 无 position 落活跃组
+    //   等路径防御）。
+    // 红线（真实环境实证，2026-09-12）：两事件回调内**禁止同步** audit/可见性
+    // 读写——onDidAddPanel 在 addPanel 流程中途 fire、onDidMovePanel 在 moveTo
+    // 链路（含空组自动删除）落定前 fire，此时 audit 的 moveTo/setVisible 撞
+    // dockview 已 dispose 中间态资源（"resource is already disposed"）。一律
+    // 延迟到宏任务后执行；restoreGuard 在回调执行时点复查（恢复期间入队的
+    // 回调执行时守卫仍在——复位 setTimeout 排后）。
+    const scheduleMembershipAudit = () => {
+      setTimeout(() => {
+        if (restoreGuardRef.current) return;
+        auditGroupMembership(api);
+        setActivePageVisibility(api, useLayout.getState().activePageId);
+      }, 0);
+    };
     disposables.push(
-      api.onDidAddPanel((panel) => handlePanelAdded(api, panel)),
+      api.onDidMovePanel(scheduleMembershipAudit),
+      api.onDidAddPanel(scheduleMembershipAudit),
     );
 
     // 页组增删 → 挂载标记同步（pageGroups 协议 id 过滤——dockview 自生组不标记）
@@ -284,13 +348,15 @@ const WorkspaceDockHost: React.FC<WorkspaceDockHostProps> = () => {
     // 恢复守卫窗口结束后统一同步一次切片（fromJSON 规范化可能微调布局——
     // 守卫跳过 onDidLayoutChange 期间写回，此处显式补一次，内容幂等）
     setTimeout(() => {
+      // 恢复后全量审计一次（恢复产物经剪枝合法，本调用为防御兜底）
+      auditGroupMembership(api);
       syncHostLayoutToStore(api);
-      // 活跃页组可见性（初始状态同步——fromJSON 后网格多组平铺态收敛为单组可见）
-      maximizePageGroup(api, useLayout.getState().activePageId);
+      // 活跃页可见性（初始状态同步——fromJSON 后网格平铺态收敛为活跃页各组可见）
+      setActivePageVisibility(api, useLayout.getState().activePageId);
     }, 0);
 
     setHostReady(true);
-  }, [handlePanelAdded, rebuildPageAfterRestore]);
+  }, [rebuildPageAfterRestore]);
 
   // FE-09: 宿主卸载消费 disposables——事件订阅随 dockview api dispose 自动释放，
   // 本通道的生效点 = 自定义清理（apiRef/__dockviewApi/unregisterHostApi 置空）
@@ -315,10 +381,11 @@ const WorkspaceDockHost: React.FC<WorkspaceDockHostProps> = () => {
       for (const [, proj] of Object.entries(projects)) {
         for (const page of proj.pages) desired.add(page.pageId);
       }
-      // 宿主现有页组集合（组事件与订阅解耦，直接查宿主）
+      // 宿主现有页集合（派生归属——组事件与订阅解耦，直接查宿主；
+      // 自生组经首面板前缀派生，空主组经 id 快车道）
       const present = new Set<string>();
       for (const group of api.groups) {
-        const pid = pageIdOfGroupId(group.id);
+        const pid = pageIdOfGroup(group);
         if (pid !== null) present.add(pid);
       }
       // 新增页 → 页组并入（loadPageGroup——reuseExistingPanels 保留既有面板实例，
@@ -335,39 +402,39 @@ const WorkspaceDockHost: React.FC<WorkspaceDockHostProps> = () => {
         if (ok) {
           markPageGroupMounted(pageId);
           rebuildPageAfterRestore(api, pageId);
-          // 并入后保证可见性不变量（活跃页组经 fromJSON 重排后需重新置顶）
-          maximizePageGroup(api, useLayout.getState().activePageId);
+          // 并入后保证可见性不变量（活跃页各组经 fromJSON 重排后需重新收敛）
+          setActivePageVisibility(api, useLayout.getState().activePageId);
         } else {
           console.error(`[slTerminal] 页组 ${pageId} 并入宿主失败`);
         }
       }
-      // 删除页（store 移除后组仍残留——如 removeProject 路径）→ 组移除兜底
+      // 删除页（store 移除后组仍残留——如 removeProject 路径）→ 页内全部组
+      // 逐组移除兜底（页内分屏多组一并清除）
       for (const pageId of present) {
         if (desired.has(pageId)) continue;
-        const group = api.getGroup(pageGroupId(pageId));
-        if (group) {
+        for (const group of groupsOfPage(api, pageId)) {
           try {
             api.removeGroup(group); // 组移除 → 面板卸载链 → 终端 kill
           } catch (err) {
-            console.error(`[slTerminal] 页组 ${pageId} 移除失败:`, err);
+            console.error(`[slTerminal] 页组 ${pageId} 组 ${group.id} 移除失败:`, err);
           }
         }
         unregisterPageGroup(pageId);
         titleManager.onDeletePage(pageId);
       }
       // 兜底后可见性不变量（删除活跃页组等场景）
-      maximizePageGroup(api, useLayout.getState().activePageId);
+      setActivePageVisibility(api, useLayout.getState().activePageId);
     };
     sync();
     return useProjects.subscribe(sync);
   }, [hostReady, rebuildPageAfterRestore]);
 
-  // 活跃页 → 页组可见性（切页单点；hostReady 后订阅）
+  // 活跃页 → 叶组可见性（切页单点；hostReady 后订阅）
   useEffect(() => {
     if (!hostReady) return;
     const api = apiRef.current;
     if (!api) return;
-    maximizePageGroup(api, activePageId);
+    setActivePageVisibility(api, activePageId);
   }, [hostReady, activePageId]);
 
   // 页签右键事件监听（单宿主——DefaultTab 广播，宿主解析命中弹菜单）
@@ -431,6 +498,7 @@ const WorkspaceDockHost: React.FC<WorkspaceDockHostProps> = () => {
         watermarkComponent={Watermark}
         defaultTabComponent={DefaultTab}
         rightHeaderActionsComponent={RightHeader}
+        disableFloatingGroups={true}
       />
       {/* 页签右键菜单（自研 fixed 弹层，UI-802 规格在 TabMenuPopup）——宿主单点 */}
       <TabMenuPopup menu={tabMenu} onClose={closeTabMenu} />

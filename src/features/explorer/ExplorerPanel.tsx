@@ -12,7 +12,7 @@ import { FileTree } from "./FileTree";
 import { createDir, deleteEntry, rename, writeFile } from "../../ipc/fs";
 import { useProjects } from "../../stores/projects";
 import { useLayout } from "../../stores/layout";
-import { panelIdInPage, pageGroupId } from "../../workspace/pageGroups";
+import { panelIdInPage, resolvePageGroupForAdd } from "../../workspace/pageGroups";
 import { titleManager } from "../../workspace/titleManager";
 import { openFileInPage } from "../../workspace/openFile";
 import {
@@ -221,7 +221,10 @@ export const ExplorerPanel: React.FC<SideViewComponentProps> = ({
             : path;
         if (!activePageId) return;
         // CP-004：terminal localId 页前缀协议（terminal-open-{ts} 为免撞号 local
-        // 形态——不占页组 seq 计数）；显式落活跃页组
+        // 形态——不占页组 seq 计数）；ADR-0020 落组经派生归属解析（分屏后主组
+        // 可能被拖空删除；页无组解析 null → 不落活跃组防错页）
+        const group = resolvePageGroupForAdd(dockApi, activePageId);
+        if (!group) return;
         const localId = `terminal-open-${Date.now()}`;
         const panelId = panelIdInPage(activePageId, localId);
         const title = titleManager.getTerminalTitle(activePageId);
@@ -231,7 +234,7 @@ export const ExplorerPanel: React.FC<SideViewComponentProps> = ({
           title,
           params: { panelId, cwd: dir },
           renderer: "always",
-          position: { referenceGroup: pageGroupId(activePageId) },
+          position: { referenceGroup: group.id },
         });
       }
     },
