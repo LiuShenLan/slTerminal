@@ -1,6 +1,7 @@
 ---
 name: code-review-fix
 description: 对代码库执行多维度 exhaustive 审查，生成报告，并按指定级别修复发现的问题。
+disable-model-invocation: true
 ---
 
 # 代码审查 + 修复

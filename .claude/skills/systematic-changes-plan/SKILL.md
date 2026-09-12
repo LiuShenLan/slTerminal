@@ -1,6 +1,7 @@
 ---
 name: systematic-changes-plan
 description: 当需要对代码仓做系统性审查并制定分阶段变更计划（多维度 review → 问题清单 → Stage 划分 → workflow 编排脚本），或已有 review/debug 报告需转化为分阶段执行计划，或已有需求文档需制定分阶段开发计划与 workflow 编排时使用。实际执行已有计划用 /systematic-changes-execute。
+disable-model-invocation: true
 ---
 
 # 系统性变更计划 Skill（重构 / 修复 / 需求开发）

@@ -1,6 +1,7 @@
 ---
 name: verify-research-output
 description: Use when reviewing research/investigation markdown documents for factual correctness — the user has markdown files containing claims with cited sources and wants each claim verified against live sources. Triggers on phrases like "验证检索结果", "review 是否正确", "核查信息", "fact-check research".
+disable-model-invocation: true
 ---
 
 # 验证检索输出

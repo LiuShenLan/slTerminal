@@ -1,6 +1,7 @@
 ---
 name: systematic-changes-execute
 description: 当已有分阶段变更的执行计划与 workflow 编排脚本（docs/<task>/execution-plan.md + docs/<task>/workflows/*.js + verify 断言），需逐 Stage 实际执行代码变更、验证循环、提交并收尾时使用。制定计划用 /systematic-changes-plan。
+disable-model-invocation: true
 ---
 
 # 系统性变更执行 Skill

@@ -1,6 +1,7 @@
 ---
 name: structured-web-research
 description: Use when the user has a knowledge gap ("I don't know what X can do", "how does Y work", "research Z for me") and needs structured, multi-source, cited research output. Triggers on phrases like "检索", "搜索", "研究一下", "查找资料", "what is", "how does", "research".
+disable-model-invocation: true
 ---
 
 # 结构化网络检索
