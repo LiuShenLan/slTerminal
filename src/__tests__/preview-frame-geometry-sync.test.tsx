@@ -33,6 +33,8 @@ const mocks = vi.hoisted(() => {
     moved: { cb: null as null | (() => void) },
     resized: { cb: null as null | (() => void) },
     scaleChanged: { cb: null as null | (() => void) },
+    /** ResizeObserver 回调捕获（PreviewFrame 锚点尺寸驱动） */
+    ro: { cb: null as null | (() => void), disconnected: false },
   };
 });
 
@@ -111,6 +113,22 @@ describe("PreviewFrame 几何同步（force-sync 防复发）", () => {
     mocks.moved.cb = null;
     mocks.resized.cb = null;
     mocks.scaleChanged.cb = null;
+    mocks.ro.cb = null;
+    mocks.ro.disconnected = false;
+    // 锚点 RO 捕获版（setup.ts 全局 stub 不触发回调，本文件需驱动语义）
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(cb: () => void) {
+          mocks.ro.cb = cb;
+        }
+        observe() {}
+        unobserve() {}
+        disconnect() {
+          mocks.ro.disconnected = true;
+        }
+      },
+    );
     rect = { x: 100, y: 50, width: 400, height: 300 };
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
       () =>
@@ -131,6 +149,7 @@ describe("PreviewFrame 几何同步（force-sync 防复发）", () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     vi.useRealTimers();
   });
 
@@ -218,6 +237,37 @@ describe("PreviewFrame 几何同步（force-sync 防复发）", () => {
     });
     expect(mocks.previewSync).toHaveBeenCalledTimes(2);
     expect(syncArgs(1)).toMatchObject({ x: 120, y: 70, w: 500, h: 300 });
+  });
+
+  it("锚点尺寸变化经 ResizeObserver 即时重发（不等 200ms 轮询）", () => {
+    renderFrame();
+    expect(mocks.previewSync).toHaveBeenCalledTimes(1);
+    expect(mocks.ro.cb).not.toBeNull();
+
+    rect = { x: 100, y: 50, width: 600, height: 300 };
+    act(() => {
+      mocks.ro.cb?.();
+    });
+    // 不推进定时器——RO 回调同步驱动 syncNow
+    expect(mocks.previewSync).toHaveBeenCalledTimes(2);
+    expect(syncArgs(1)).toMatchObject({ x: 100, y: 50, w: 600, h: 300 });
+  });
+
+  it("防复发（split 空白）：首测 0×0 不可见 → RO 落定非零即刻补发 visible=true", () => {
+    // split 形态时序：预览 pane 动态挂载（Allotment addView 在父 effect，
+    // React 子 effect 先行）→ 首测 0×0 → visible=false（后端隐藏态不建窗）；
+    // 布局落定 RO 驱动即刻补发（旧代码须等 200ms 轮询，叠加去重缺陷放大为空白）
+    rect = { x: 0, y: 0, width: 0, height: 0 };
+    renderFrame();
+    expect(mocks.previewSync).toHaveBeenCalledTimes(1);
+    expect(syncArgs(0).visible).toBe(false);
+
+    rect = { x: 100, y: 50, width: 400, height: 300 };
+    act(() => {
+      mocks.ro.cb?.();
+    });
+    expect(mocks.previewSync).toHaveBeenCalledTimes(2);
+    expect(syncArgs(1)).toMatchObject({ x: 100, y: 50, w: 400, h: 300, visible: true });
   });
 
   it("卸载 → previewClose + 事件解绑 + 无后续 sync", () => {

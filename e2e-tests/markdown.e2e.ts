@@ -362,4 +362,45 @@ describe("Markdown 面板三形态", () => {
       await switchToMainWindow();
     }
   });
+
+  it("split 形态：预览窗口即刻出现且渲染，CM 编辑 pane 并存可见（防复发：split 右侧空白）", async () => {
+    // 回归锚点（2026-09 split 空白 bug）：预览 pane 动态挂载（Allotment addView
+    // 在父 effect，React 子 effect 先行）→ 首测 0×0 → 隐藏态不建窗，恢复依赖
+    // 有缺陷的同步环（去重早退吞事件 + 200ms 轮询延迟）→ 右侧恒空白。
+    // 修复 = 主窗事件 force-sync + 锚点 ResizeObserver 即时驱动——老代码本用例
+    // waitPreviewDocContains 超时红。
+    const tempDir = mkdtempSync(join(tmpdir(), "slterm-e2e-md-split-"));
+    const mdPath = join(tempDir, "doc.md");
+    writeFileSync(mdPath, "# 分屏\n\n正文标记", "utf8");
+    try {
+      const panelId = await spawnMarkdownPanel(tempDir, mdPath);
+      await browser.waitUntil(
+        async () =>
+          await browser.execute(() => !!document.querySelector('[data-e2e="markdown-mode-switcher"]')),
+        { timeout: 15000, timeoutMsg: "markdown 切换条未出现" },
+      );
+
+      // 切 split → 预览窗口出现且内容渲染
+      expect(await clickInPanel(panelId, '[data-e2e="markdown-mode-split"]')).toBe(true);
+      await waitPreviewDocContains(panelId, "<h1>分屏</h1>", 15000);
+
+      // CM 编辑 pane 并存可见（CP-037 恒挂载；本面板组内锚定过滤残留面板）
+      await switchToMainWindow();
+      const cmVisible = await browser.execute((pid: string) => {
+        const anchor = document.querySelector(`[data-e2e="tab-close-${pid}"]`);
+        if (!anchor) return false;
+        let el: HTMLElement | null = anchor.parentElement;
+        while (el) {
+          const cm = el.querySelector(".cm-content");
+          if (cm && cm.getClientRects().length > 0) return true;
+          el = el.parentElement;
+        }
+        return false;
+      }, panelId);
+      expect(cmVisible).toBe(true);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+      await switchToMainWindow();
+    }
+  });
 });

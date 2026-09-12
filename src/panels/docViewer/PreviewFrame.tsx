@@ -278,6 +278,12 @@ export const PreviewFrame: React.FC<PreviewFrameProps> = ({
 
     syncNow();
     const timer = window.setInterval(syncNow, GEOMETRY_POLL_MS);
+    // 锚点尺寸变化（split 分栏拖拽/布局落定等）即时同步——消 200ms 轮询检测延迟
+    // （split 形态预览 pane 动态挂载首测 0×0 不建窗，布局落定经 RO 即刻补建）；
+    // 轮询保留兜底（显隐 CSS 切换等 RO 不覆盖的形态）
+    const anchorEl = anchorRef.current;
+    const resizeObserver = new ResizeObserver(() => syncNow());
+    if (anchorEl) resizeObserver.observe(anchorEl);
     // 主窗拖动/resize/跨屏 scale 变化：物理换算基准变化——即时强制同步（轮询兜底防丢）
     const offMove = onMainWindowMoved(scheduleForceSync);
     const offResize = onMainWindowResized(scheduleForceSync);
@@ -286,6 +292,7 @@ export const PreviewFrame: React.FC<PreviewFrameProps> = ({
     return () => {
       disposed = true;
       window.clearInterval(timer);
+      resizeObserver.disconnect();
       if (forceSyncTimer !== null) window.clearTimeout(forceSyncTimer);
       offMove();
       offResize();
