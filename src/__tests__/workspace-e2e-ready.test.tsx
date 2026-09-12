@@ -76,7 +76,6 @@ function seedProjectAndPage() {
             pageId,
             name: "测试页面",
             layout: {},
-            cwd: rootPath,
             createdAt: Date.now(),
             lastAccessedAt: Date.now(),
           },

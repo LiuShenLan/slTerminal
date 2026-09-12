@@ -33,7 +33,7 @@ export function useCommitStatus() {
     for (const [, proj] of Object.entries(projects)) {
       const activePage = proj.pages.find((p) => p.pageId === activePageId);
       if (activePage) {
-        rootPath = activePage.cwd || proj.rootPath;
+        rootPath = proj.rootPath;
         break;
       }
     }

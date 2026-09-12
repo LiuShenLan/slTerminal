@@ -65,6 +65,19 @@ export function isHostReady(): boolean {
 }
 
 /**
+ * 页面所属项目 rootPath 现取（经 stores）——新建终端 cwd 默认值的唯一来源
+ * （决策：新建终端 cwd 恒 = 项目根，不跟随活动终端/页面 cwd）；
+ * 标题重算/复制相对路径基准共用。未命中项目 → null。
+ */
+export function projectRootOfPage(pageId: string): string | null {
+  const { projects } = useProjects.getState();
+  for (const [, proj] of Object.entries(projects)) {
+    if (proj.pages.some((p) => p.pageId === pageId)) return proj.rootPath ?? null;
+  }
+  return null;
+}
+
+/**
  * 宿主全量布局 → store 各页切片写回（硬约束 #7 的宿主侧消费单点：
  * saveLayout 全量 toJSON → slicePageLayout 逐页切分 → updatePageLayout，
  * 切片无变化跳过——拖拽/缩放期间的 onDidLayoutChange 高频事件零冗余写）。

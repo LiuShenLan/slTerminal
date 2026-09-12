@@ -24,15 +24,11 @@ import {
 import type { Project, OperationPage } from "../stores/projects";
 
 /** 构造测试用 OperationPage */
-function makePage(
-  name: string,
-  cwd?: string,
-): OperationPage {
+function makePage(name: string): OperationPage {
   return {
     pageId: createPageId(),
     name,
     layout: {},
-    cwd,
     createdAt: Date.now(),
     lastAccessedAt: Date.now(),
   };
@@ -44,7 +40,7 @@ function makeProject(overrides?: Partial<Project>): Project {
     projectId: createProjectId(),
     name: "test-project",
     rootPath: "/tmp/test-project",
-    pages: [makePage("main-page", "/tmp/test-project")],
+    pages: [makePage("main-page")],
     activePageId: null,
     version: 1,
     ...overrides,

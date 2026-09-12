@@ -5,7 +5,7 @@
 //          点击写入剪贴板相对项目根路径（Unix 正斜杠）
 //   C2 组：越界/退化兜底——目标不在项目根内 / 未提供 projectRootPath → 复制绝对路径
 //   C3 组：边界——根级空白菜单无此菜单项；writeText 失败仅 console.error
-//   C4 组：ExplorerPanel 集成——浏览根(cwd)≠ 项目根时基准仍为项目根
+//   C4 组：ExplorerPanel 集成——复制相对路径基准 = 项目根（cwd 字段已退役）
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import React from "react";
@@ -290,11 +290,11 @@ describe("边界", () => {
 });
 
 // =====================================================================
-// C4 组：ExplorerPanel 集成——浏览根(cwd) ≠ 项目根时基准仍为项目根
+// C4 组：ExplorerPanel 集成——复制相对路径基准 = 项目根
 // =====================================================================
 
 describe("ExplorerPanel 集成", () => {
-  it("C9: 页面 cwd 为项目根子目录时，复制结果仍相对项目根（含子目录前缀）", async () => {
+  it("C9: 文件位于项目根子目录时，复制结果相对项目根（含子目录前缀）", async () => {
     mocks.mockReadDir.mockResolvedValue({ entries: [
       { name: "a.ts", path: "C:/proj/sub/a.ts", isDir: false, size: 64, modified: 1 },], nextCursor: null });
     useProjects.setState({
@@ -308,7 +308,6 @@ describe("ExplorerPanel 集成", () => {
               pageId: "page-1",
               name: "页面 1",
               layout: {},
-              cwd: "C:/proj/sub", // 浏览根 ≠ 项目根
               createdAt: 1,
               lastAccessedAt: 1,
             },
@@ -331,7 +330,7 @@ describe("ExplorerPanel 集成", () => {
     fireEvent.contextMenu(getAllByText("a.ts")[0]);
     fireEvent.click(getAllByText("复制相对路径")[0]);
 
-    // 基准是项目根 C:/proj，不是浏览根 C:/proj/sub
+    // 基准是项目根 C:/proj（cwd 字段退役后恒等），文件在子目录 → 含子目录前缀
     expect(mocks.mockWriteText).toHaveBeenCalledWith("sub/a.ts");
   });
 });

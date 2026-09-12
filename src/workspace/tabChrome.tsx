@@ -5,7 +5,7 @@
 // 页前缀（{pageId}:localId）；本文件各工厂不再闭包页面实例，目标页在 action
 // 时点解析（panel 属主页 / 活跃页），跨实例假设清零。
 
-import React, { useMemo, useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import {
   type DockviewApi,
   type DockviewGroupPanel,
@@ -28,7 +28,7 @@ import type { TabMenuItem } from "./TabMenuPopup";
 import { IconEmptyBox } from "../lib/icons";
 import { pageOfPanelId, pageGroupId, pageIdOfGroupId, makeTerminalIdInPage } from "./pageGroups";
 import { useLayout } from "../stores/layout";
-import { useProjects } from "../stores/projects";
+import { projectRootOfPage } from "./pageApis";
 import { saveLayout } from "./layoutSerde";
 import {
   SECONDARY_BG,
@@ -99,6 +99,8 @@ function resolvePageId(panelId: string | undefined, fallbackPageId: string | nul
  * addPanel 显式 position.referenceGroup = 目标页组（生命周期契约——新增面板
  * options.group 显式指定，不随切页卸载；页组 id 字符串形态，组未挂载时
  * dockview 抛错前先经 getGroup 守卫返回 null）。
+ * cwd 语义（D1）：显式传入优先（Explorer「在终端中打开」/历史会话恢复），
+ * 缺省 = 项目根目录（projectRootOfPage 现取）——新建终端 cwd 恒项目根。
  */
 export function addTerminalPanel(
   api: DockviewApi,
@@ -112,7 +114,7 @@ export function addTerminalPanel(
     id,
     component: PANEL_TERMINAL,
     title: titleManager.getTerminalTitle(pageId),
-    params: { panelId: id, cwd },
+    params: { panelId: id, cwd: cwd ?? projectRootOfPage(pageId) ?? undefined },
     renderer: "always",
     position: { referenceGroup: gid },
   });
@@ -124,22 +126,12 @@ export function addTerminalPanel(
 /**
  * 创建 Watermark 组件（空页组接管——dockview 对空组渲染 watermarkComponent）。
  * 目标页 = 点击时点活跃页（空页组即活跃页组；containerApi.addPanel 无
- * position 落活跃组）。捕获 cwd 由活跃页上下文现取，不闭包页面实例。
+ * position 落活跃组）。终端 cwd 由 addTerminalPanel 工厂缺省解析（项目根）。
  */
 export function createWatermark(
   getApi: () => DockviewApi | null,
 ): React.FC<IWatermarkPanelProps> {
   const Watermark: React.FC<IWatermarkPanelProps> = () => {
-    const pageId = useLayout((s) => s.activePageId);
-    const cwd = useMemo(() => {
-      if (!pageId) return undefined;
-      const { projects } = useProjects.getState();
-      for (const [, proj] of Object.entries(projects)) {
-        const p = proj.pages.find((pg) => pg.pageId === pageId);
-        if (p) return p.cwd ?? proj.rootPath;
-      }
-      return undefined;
-    }, [pageId]);
     return (
       <div
         style={{
@@ -160,7 +152,7 @@ export function createWatermark(
               const api = getApi();
               if (!api) return;
               const target = useLayout.getState().activePageId;
-              if (target) void addTerminalPanel(api, target, cwd);
+              if (target) void addTerminalPanel(api, target, undefined);
             }}
             style={{
               background: SECONDARY_BG, border: `1px solid ${SEPARATOR_BG}`, color: SIDEBAR_FG,

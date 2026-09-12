@@ -26,8 +26,6 @@ export interface OperationPage {
   pageId: string;
   name: string;
   layout: Record<string, unknown>;
-  /** 终端工作目录（项目根路径） */
-  cwd?: string;
   createdAt: number;
   lastAccessedAt: number;
 }
@@ -241,6 +239,15 @@ export const useProjects = create<ProjectsState>()((set, get) => ({
             Array.isArray(data.projects))
         ) {
           throw new Error("项目数据格式异常：projects 字段不是对象");
+        }
+        // cwd 字段已退役（新建终端 cwd 恒取项目 rootPath——单一来源）：
+        // 旧盘数据残留的 page.cwd 键在入 store 前剥离，防死键随持久化往返
+        if (data.projects) {
+          for (const proj of Object.values(data.projects)) {
+            for (const page of proj.pages ?? []) {
+              delete (page as Partial<OperationPage> & { cwd?: string }).cwd;
+            }
+          }
         }
         set({
           projects: data.projects ?? {},

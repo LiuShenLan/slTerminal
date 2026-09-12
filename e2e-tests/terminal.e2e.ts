@@ -215,7 +215,7 @@ describe("终端跨页面存活 (H6)", () => {
       const projectId = await getProjectIdForPage(page1Id);
       if (!projectId) throw new Error("无法获取 projectId");
 
-      const page2Id = await addPage(projectId, "page2", tempDir);
+      const page2Id = await addPage(projectId, "page2");
 
       // 9-12. 切换到 page2 → 切回 page1（E2E-10：waitUntil 轮询 activePageId，替代固定 pause）
       await switchToPageAndWait(page2Id);
@@ -284,7 +284,7 @@ describe("L4 视觉/功能回归（E2E-04：headless ≠ 生产渲染器）", ()
       await waitForTerminalText("负载行 39", 10000, "全屏 TUI 负载输出未渲染进缓冲");
 
       // 3. 切页签往返（创建 page2 → 切走 → 切回）
-      const page2Id = await addPage(projectId, "page2", tempDir);
+      const page2Id = await addPage(projectId, "page2");
       await switchToPageAndWait(page2Id);
       await switchToPageAndWait(pageId);
 

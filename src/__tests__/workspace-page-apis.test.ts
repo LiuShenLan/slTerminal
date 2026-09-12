@@ -91,9 +91,9 @@ function seedTwoPageProject() {
     name: "pa-test",
     rootPath: ROOT_PATH,
     pages: [
-      { pageId: pageA, name: "Alpha", layout: {}, cwd: ROOT_PATH,
+      { pageId: pageA, name: "Alpha", layout: {},
         createdAt: 1, lastAccessedAt: 1 },
-      { pageId: pageB, name: "Beta", layout: {}, cwd: ROOT_PATH,
+      { pageId: pageB, name: "Beta", layout: {},
         createdAt: 2, lastAccessedAt: 2 },
     ],
     activePageId: pageA,
@@ -287,7 +287,7 @@ describe("switchToPageShared", () => {
       name: "no-root",
       rootPath: "",
       pages: [{
-        pageId: pageC, name: "Gamma", layout: {}, cwd: "",
+        pageId: pageC, name: "Gamma", layout: {},
         createdAt: 1, lastAccessedAt: 1,
       }],
       activePageId: null,

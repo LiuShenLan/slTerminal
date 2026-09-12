@@ -434,7 +434,7 @@ describe("Agent 会话视图与 toast 通知", () => {
       const projectId = await getProjectIdForPage(page1Id);
       if (!projectId) throw new Error("无法获取 projectId");
 
-      const page2Id = await addPage(projectId, "page2", tempDir);
+      const page2Id = await addPage(projectId, "page2");
 
       // 10-11. 切换往返（E2E-10：waitUntil 轮询 activePageId，替代固定 pause）
       await switchToPageAndWait(page2Id);
@@ -530,7 +530,7 @@ describe("Agent 会话视图与 toast 通知", () => {
       const projectId = await getProjectIdForPage(page1Id);
       if (!projectId) throw new Error("无法获取 projectId");
 
-      const page2Id = await addPage(projectId, "page2", tempDir);
+      const page2Id = await addPage(projectId, "page2");
 
       // 10-11. 切换往返（E2E-10：waitUntil 轮询 activePageId，替代固定 pause）
       await switchToPageAndWait(page2Id);

@@ -52,7 +52,6 @@ export async function openSettings(settingsPageId?: string): Promise<void> {
       pageId: newPageId,
       name: `页面-${Date.now() % 10000}`,
       layout: makeEmptyLayout(),
-      cwd: target.rootPath,
       createdAt: Date.now(),
       lastAccessedAt: Date.now(),
     });

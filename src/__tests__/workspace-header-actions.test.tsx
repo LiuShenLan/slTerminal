@@ -34,6 +34,7 @@ vi.mock("../ipc/clipboard", () => ({
 import { titleManager } from "../workspace/titleManager";
 import { TerminalRegistry } from "../panels/terminal/TerminalRegistry";
 import { useLayout } from "../stores/layout";
+import { useProjects } from "../stores/projects";
 import { resetTerminalPanelSeq } from "../lib/panelId";
 import { DIM_FG } from "../theme";
 import {
@@ -78,7 +79,7 @@ function makeFakeHost(pageIds: string[], addPanelSpy: ReturnType<typeof vi.fn> =
 }
 
 /** 渲染 Header 组件并返回 helpers（规避 StrictMode getByText 多元素问题） */
-function renderHeader(pageId: string, _cwd: string, groupId: string, activePageId = pageId) {
+function renderHeader(pageId: string, groupId: string, activePageId = pageId) {
   useLayout.setState({ activePageId: activePageId });
   const { host, addPanelSpy } = makeFakeHost([activePageId]);
   const Header = createRightHeader(() => host as any);
@@ -111,6 +112,16 @@ beforeEach(() => {
   resetTerminalPanelSeq();
   useLayout.setState({ activePageId: null });
   mocks.resetClipboard();
+  // cwd 缺省解析源（D1：新建终端 cwd 恒 = 项目根）——种子 p1 所属项目
+  useProjects.setState({
+    projects: {
+      "proj-1": {
+        projectId: "proj-1", name: "测试项目", rootPath: "/home/test",
+        pages: [{ pageId: "p1", name: "p1", layout: {}, createdAt: 1, lastAccessedAt: 1 }],
+        activePageId: "p1", version: 1,
+      },
+    },
+  });
 });
 
 // ============================================================
@@ -119,17 +130,17 @@ beforeEach(() => {
 
 describe("createRightHeader", () => {
   it("R1: 渲染 + 按钮", () => {
-    const { getAllByText } = renderHeader("p1", "/test", "group-alpha", "p1");
+    const { getAllByText } = renderHeader("p1", "group-alpha", "p1");
     expect(getAllByText("+")[0]).toBeTruthy();
   });
 
   it("R2: 按钮 title 为\"新建终端\"", () => {
-    const { getAllByTitle } = renderHeader("p1", "/test", "group-alpha", "p1");
+    const { getAllByTitle } = renderHeader("p1", "group-alpha", "p1");
     expect(getAllByTitle("新建终端")[0]).toBeTruthy();
   });
 
   it("R9: + 按钮尺寸规格 22px/圆角 4/fg-3（TAB-04）", () => {
-    const { getAllByText } = renderHeader("p1", "/test", "group-alpha", "p1");
+    const { getAllByText } = renderHeader("p1", "group-alpha", "p1");
     const btn = getAllByText("+").slice(-1)[0] as HTMLButtonElement;
     expect(btn.style.width).toBe("22px");
     expect(btn.style.height).toBe("22px");
@@ -138,13 +149,13 @@ describe("createRightHeader", () => {
   });
 
   it("R3: 点击 + 调用 addPanel（经 addTerminalPanel——getGroup 守卫后落活跃页组）", () => {
-    const { addPanelSpy, clickPlus } = renderHeader("p1", "/test", "group-alpha", "p1");
+    const { addPanelSpy, clickPlus } = renderHeader("p1", "group-alpha", "p1");
     clickPlus();
     expect(addPanelSpy).toHaveBeenCalledTimes(1);
   });
 
   it("R4/R5/R6: addPanel position.referenceGroup = 目标页组 id（页组协议字符串形态）", () => {
-    const { addPanelSpy, clickPlus } = renderHeader("p1", "/test", "page-p1", "p1");
+    const { addPanelSpy, clickPlus } = renderHeader("p1", "page-p1", "p1");
     clickPlus();
 
     const options = addPanelSpy.mock.calls[0][0];
@@ -190,7 +201,7 @@ describe("createRightHeader", () => {
   });
 
   it("R8: addPanel 参数——页前缀协议 id + renderer always + 标题 terminal-N", () => {
-    const { addPanelSpy, clickPlus } = renderHeader("p1", "/home/test", "page-p1", "p1");
+    const { addPanelSpy, clickPlus } = renderHeader("p1", "page-p1", "p1");
     clickPlus();
 
     const options = addPanelSpy.mock.calls[0][0];
@@ -200,7 +211,8 @@ describe("createRightHeader", () => {
     // CP-004 页前缀协议：id/params.panelId = {pageId}:terminal-N
     expect(options.id).toBe("p1:terminal-0");
     expect(options.params.panelId).toBe("p1:terminal-0");
-    expect(options.params.cwd).toBeUndefined();
+    // D1 防复发：cwd 缺省解析 = 项目根（旧行为 = undefined → 继承 exe 目录，bug 回归源）
+    expect(options.params.cwd).toBe("/home/test");
   });
 
   it("R10: 目标页组未挂载（getGroup 缺失）→ 静默不 addPanel（addTerminalPanel 守卫）", () => {

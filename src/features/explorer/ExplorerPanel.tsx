@@ -58,7 +58,7 @@ export const ExplorerPanel: React.FC<SideViewComponentProps> = ({
         (p) => p.pageId === activePageId,
       );
       if (activePage) {
-        rootPath = activePage.cwd || proj.rootPath;
+        rootPath = proj.rootPath;
         projectRootPath = proj.rootPath;
         break;
       }

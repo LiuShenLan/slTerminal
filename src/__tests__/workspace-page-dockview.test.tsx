@@ -195,7 +195,6 @@ function seedProject(layout: unknown = emptyPageLayout(PAGE_ID), activePageId: s
       pageId: PAGE_ID,
       name: "Page",
       layout: layout as Record<string, unknown>,
-      cwd: "C:\\root",
       createdAt: 1,
       lastAccessedAt: 1,
     }],

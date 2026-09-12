@@ -16,7 +16,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { useAgentHistory } from "../features/agentHistory/useAgentHistory";
-import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
 import { resetProjectStores, seedExplorerProject } from "./helpers/workspace-setup";
 import { backgroundTaskScheduler } from "../features/backgroundTasks/scheduler";
@@ -104,7 +103,7 @@ async function flushMicrotasks(times = 20) {
 
 beforeEach(() => {
   resetProjectStores();
-  seedExplorerProject("C:\\project"); // 页面 cwd = "C:\project\src"
+  seedExplorerProject("C:\\project");
   // 调度器/注册表每用例重置 + 任务重注册（_reset 清空后恢复——runSessionRefresh 导出
   // 供测试重注册，注册触发点仍收敛 tasks.ts）+ 注册 claude profile（history 能力参与扫描）
   backgroundTaskScheduler._reset();
@@ -130,40 +129,14 @@ afterEach(() => {
 });
 
 describe("useAgentHistory 初始态", () => {
-  it("初始 idle + 空 sessions + 空 activeStatuses，rootPath 推导自活跃页面 cwd", () => {
+  it("初始 idle + 空 sessions + 空 activeStatuses，rootPath = 活跃页所属项目 rootPath（cwd 字段已退役）", () => {
     const { result } = renderHook(() => useAgentHistory());
     expect(result.current.state).toBe("idle");
     expect(result.current.sessions).toEqual([]);
     expect(result.current.activeStatuses.size).toBe(0);
-    expect(result.current.rootPath).toBe("C:\\project\\src");
+    expect(result.current.rootPath).toBe("C:\\project");
     // 订阅已触发激活（配置读取在途）——同步时刻尚未发扫描
     expect(h.mockScanHistory).not.toHaveBeenCalled();
-  });
-
-  it("页面 cwd 为空时回退项目 rootPath", () => {
-    useProjects.setState({
-      projects: {
-        "proj-1": {
-          projectId: "proj-1",
-          name: "测试项目",
-          rootPath: "D:/root",
-          pages: [
-            {
-              pageId: "page-1",
-              name: "操作页面 1",
-              layout: {},
-              cwd: "",
-              createdAt: 1,
-              lastAccessedAt: 1,
-            },
-          ],
-          activePageId: "page-1",
-          version: 1,
-        },
-      },
-    });
-    const { result } = renderHook(() => useAgentHistory());
-    expect(result.current.rootPath).toBe("D:/root");
   });
 
   it("activeStatuses 初值 = 挂载时注册表派生结果（Map<cliId|sessionId, status> 复合键，MC-313）", () => {

@@ -574,7 +574,7 @@ describe("设置中心 (F11, SC-E2E-02)", () => {
       await waitForDockviewApi();
       const projectId = (await getProjectIdForPage(pageIdA)) ?? "";
       expect(projectId).not.toBe("");
-      const pageIdB = await addPage(projectId, "page2", tempDir);
+      const pageIdB = await addPage(projectId, "page2");
       if (!pageIdB) throw new Error("addPage 返回 null（项目缺失）");
 
       await openSettingsCenter();

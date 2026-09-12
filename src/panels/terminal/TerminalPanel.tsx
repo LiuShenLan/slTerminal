@@ -12,6 +12,7 @@ import { PANEL_BG, INPUT_BORDER } from "../../theme";
 import type { TabState } from "./useCommandDetection";
 import { TerminalRegistry } from "./TerminalRegistry";
 import { pageOfPanelId } from "../../workspace/pageGroups";
+import { projectRootOfPage } from "../../workspace/pageApis";
 import { cliProfileRegistry } from "../../features/cliProfiles";
 // AC-5: 事件名字面量只允许出现在 profiles/claude/（claude 合法领地）——
 // 缺省 cliId 兜底常量经 profiles/claude 导出（与 useAgentStatus 行建行口径一致）
@@ -58,7 +59,9 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ api, params }) => {
     return () => { cancelled = true; };
   }, []);
 
-  const cwd = params.cwd;
+  // cwd 唯一来源 = params（创建期工厂写入）；缺省兜底项目根——覆盖旧持久化
+  // 布局（cwd 字段写入前的面板）与 E2E 裸 addPanel 形态（语义同 D1：恒项目根）
+  const cwd = params.cwd ?? projectRootOfPage(pageOfPanelId(params.panelId) ?? "") ?? undefined;
 
   // P1-13: 对比 activePageId 判断可见性（CP-004: panelId 页前缀协议
   // "{pageId}:terminal-N"——pageOfPanelId 单点解析属主页，无需前缀匹配；

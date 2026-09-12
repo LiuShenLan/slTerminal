@@ -170,7 +170,6 @@ describe("restoreHistorySession 四步恢复编排", () => {
       pageId: "page-restore-test",
       name: expect.stringMatching(/^页面-\d+$/),
       layout: {},
-      cwd: "C:\\Users\\test\\proj",
       createdAt: expect.any(Number),
       lastAccessedAt: expect.any(Number),
     });

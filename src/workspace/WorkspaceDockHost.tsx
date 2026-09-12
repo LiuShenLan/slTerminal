@@ -43,6 +43,7 @@ import {
   markPageGroupMounted,
   unregisterPageGroup,
   syncHostLayoutToStore,
+  projectRootOfPage,
 } from "./pageApis";
 import { pageGroupId, pageIdOfGroupId, pageOfPanelId, panelBelongsToGroup, panelsOfPage } from "./pageGroups";
 import { useProjects } from "../stores/projects";
@@ -57,15 +58,6 @@ export const DOCK_HOST_CLASS = "slterm-dock-host";
 // display:none（旧「页面实例全隐藏」的空白主区语义——terminal 不卸载不销毁）；
 // hostReady 前保持可见（dockview 初始化需已布局容器）
 export type WorkspaceDockHostProps = Record<string, never>;
-
-/** 页面所属项目 rootPath（标题重算/复制相对路径基准）——经 stores 现取 */
-function rootPathOfPage(pageId: string): string | null {
-  const { projects } = useProjects.getState();
-  for (const [, proj] of Object.entries(projects)) {
-    if (proj.pages.some((p) => p.pageId === pageId)) return proj.rootPath ?? null;
-  }
-  return null;
-}
 
 /**
  * 页组可见性单点（页面切换/恢复后调用）：使目标页组成为宿主内唯一可见组
@@ -183,7 +175,7 @@ const WorkspaceDockHost: React.FC<WorkspaceDockHostProps> = () => {
   const rebuildPageAfterRestore = useCallback((api: DockviewApi, pageId: string) => {
     const ids = panelsOfPage(api, pageId).map((p) => p.id);
     advanceTerminalPanelSeq(pageId, ids);
-    rebuildAndRecomputeTitles(api, pageId, rootPathOfPage(pageId) ?? undefined, ids);
+    rebuildAndRecomputeTitles(api, pageId, projectRootOfPage(pageId) ?? undefined, ids);
   }, []);
 
   /** 跨页组拖拽回迁（onDidAddPanel 守卫——实现与直测见 enforcePanelGroupMembership） */
@@ -229,7 +221,7 @@ const WorkspaceDockHost: React.FC<WorkspaceDockHostProps> = () => {
         if (!pageId) return;
         const params = panel.params as { panelId?: string } | undefined;
         if (params?.panelId) titleManager.unregisterEditor(pageId, params.panelId);
-        const rootPath = rootPathOfPage(pageId);
+        const rootPath = projectRootOfPage(pageId);
         if (rootPath) {
           const updates = titleManager.recomputeTitles(pageId, rootPath);
           for (const { panelId, title } of updates) {
@@ -382,7 +374,7 @@ const WorkspaceDockHost: React.FC<WorkspaceDockHostProps> = () => {
   const buildTabMenuItems = useMemo(
     () =>
       createTabMenuItems(getApi, null, openRenameDialog, (pid) =>
-        pid ? (rootPathOfPage(pid) ?? undefined) : undefined,
+        pid ? (projectRootOfPage(pid) ?? undefined) : undefined,
       ),
     [getApi, openRenameDialog],
   );
@@ -408,7 +400,7 @@ const WorkspaceDockHost: React.FC<WorkspaceDockHostProps> = () => {
       };
       const pageId = pageOfPanelId(detail.panelId);
       if (!pageId) return;
-      const rootPath = rootPathOfPage(pageId);
+      const rootPath = projectRootOfPage(pageId);
       if (!rootPath) return;
       const api = apiRef.current;
       if (!api) return;

@@ -150,7 +150,6 @@ async function doRestore(
       pageId: createPageId(),
       name: `页面-${Date.now() % 10000}`,
       layout: makeEmptyLayout(),
-      cwd,
       createdAt: Date.now(),
       lastAccessedAt: Date.now(),
     };

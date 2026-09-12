@@ -269,7 +269,6 @@ export const NavTree: React.FC<NavTreeProps> = ({ switchToPage, onDeletePage }) 
         pageId,
         name,
         layout: makeEmptyLayout(),
-        cwd: dirPath,
         createdAt: Date.now(),
         lastAccessedAt: Date.now(),
       };
@@ -288,13 +287,12 @@ export const NavTree: React.FC<NavTreeProps> = ({ switchToPage, onDeletePage }) 
   }, []);
 
   // 新建操作页面（迁移自 SidebarTree.handleNewPage——行为不变，不自动切换）
-  const handleNewPage = useCallback((projectId: string, cwd: string) => {
+  const handleNewPage = useCallback((projectId: string) => {
     const pageId = createPageId();
     const page: OperationPage = {
       pageId,
       name: `页面-${Date.now() % 10000}`,
       layout: makeEmptyLayout(),
-      cwd,
       createdAt: Date.now(),
       lastAccessedAt: Date.now(),
     };
@@ -552,7 +550,7 @@ export const NavTree: React.FC<NavTreeProps> = ({ switchToPage, onDeletePage }) 
               items: [
                 {
                   label: "新建操作页面",
-                  action: () => handleNewPage(projId, proj.rootPath),
+                  action: () => handleNewPage(projId),
                 },
                 {
                   label: "删除项目",

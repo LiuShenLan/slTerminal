@@ -150,7 +150,6 @@ function seedProjects(): void {
             pageId: "p1",
             name: "页面 1",
             layout: {},
-            cwd: "C:\\Users\\test\\proj",
             createdAt: 1,
             lastAccessedAt: 1,
           },

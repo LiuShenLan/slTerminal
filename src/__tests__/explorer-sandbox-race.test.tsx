@@ -318,7 +318,7 @@ describe("DBG-10: ExplorerPanel setProjectRoot 沙箱竞态", () => {
     });
 
     it("DBG-10 真竞态：setProjectRoot pending 期间 mount ExplorerPanel → readDir 先于 resolve 到达被沙箱拒绝，resolve 后重试成功", async () => {
-      // 种子：活跃页面 cwd=/proj，ExplorerPanel 据此推导 rootPath（邻近 explorer 测试同模式）
+      // 种子：活跃页所属项目 rootPath=/proj，ExplorerPanel 据此推导 rootPath（邻近 explorer 测试同模式）
       useProjects.setState({
         projects: {
           "proj-1": {
@@ -330,7 +330,6 @@ describe("DBG-10: ExplorerPanel setProjectRoot 沙箱竞态", () => {
                 pageId: "page-1",
                 name: "操作页面 1",
                 layout: {},
-                cwd: "/proj",
                 createdAt: 1,
                 lastAccessedAt: 1,
               },

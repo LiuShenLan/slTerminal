@@ -68,9 +68,9 @@ function setupTwoPages() {
     name: "multi-test",
     rootPath: "/tmp/multi",
     pages: [
-      { pageId: pageA, name: "Alpha", layout: {}, cwd: "/tmp/multi",
+      { pageId: pageA, name: "Alpha", layout: {},
         createdAt: Date.now(), lastAccessedAt: Date.now() },
-      { pageId: pageB, name: "Beta", layout: {}, cwd: "/tmp/multi",
+      { pageId: pageB, name: "Beta", layout: {},
         createdAt: Date.now(), lastAccessedAt: Date.now() },
     ],
     activePageId: pageA,

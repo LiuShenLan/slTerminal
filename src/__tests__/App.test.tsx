@@ -94,7 +94,6 @@ describe("__slterm_e2e_createProject", () => {
     const proj = projects[projectIds[0]];
     expect(proj.rootPath).toBe("C:\\e2e-test");
     expect(proj.pages).toHaveLength(1);
-    expect(proj.pages[0].cwd).toBe("C:\\e2e-test");
   });
 
   it("2. 调用后 activePageId 为新建的 pageId（返回值匹配）", async () => {
@@ -106,7 +105,7 @@ describe("__slterm_e2e_createProject", () => {
     expect(activePageId).toMatch(/^page-/);
   });
 
-  it("3. 创建的 page 含正确的 layout + cwd", async () => {
+  it("3. 创建的 page 含正确的 layout", async () => {
     await callCreateProject("D:\\my-project");
 
     const { projects } = useProjects.getState();
@@ -119,9 +118,6 @@ describe("__slterm_e2e_createProject", () => {
     expect(page.layout).toEqual({});
     // T25: layout 无 grid 属性
     expect(page.layout).not.toHaveProperty("grid");
-
-    // cwd 匹配传入路径
-    expect(page.cwd).toBe("D:\\my-project");
 
     // name 为路径最后一段
     expect(page.name).toBe("my-project");

@@ -139,7 +139,7 @@ describe("ExplorerPanel 焦点上下文链路（EXP-04）", () => {
           name: "测试项目",
           rootPath: "C:/test-project",
           pages: [
-            { pageId: "page-1", name: "页面 1", layout: {}, cwd: "C:/test-project", createdAt: 1, lastAccessedAt: 1 },
+            { pageId: "page-1", name: "页面 1", layout: {}, createdAt: 1, lastAccessedAt: 1 },
           ],
           activePageId: "page-1",
           version: 1,

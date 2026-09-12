@@ -54,8 +54,8 @@ declare global {
     /** spec 间隔离前端配置类 store（wdio beforeSuite 调用；TQ-E-08） */
     __slterm_e2e_resetSettings?: () => void;
     __slterm_e2e_getProjectIdForPage?: (pageId: string) => string | null;
-    /** 新增操作页面——被 store 拒绝（超页数上限等）返回 null */
-    __slterm_e2e_addPage?: (projectId: string, name: string, rootPath: string) => string | null;
+    /** 新增操作页面——被 store 拒绝返回 null */
+    __slterm_e2e_addPage?: (projectId: string, name: string) => string | null;
     __slterm_e2e_switchToPage?: (pageId: string) => Promise<void>;
     // 页签标题
     __slterm_e2e_registerAndRecompute?: (
@@ -228,7 +228,6 @@ function installProjectHelpers(): void {
       pageId,
       name,
       layout: makeEmptyLayout(),
-      cwd: dirPath,
       createdAt: Date.now(),
       lastAccessedAt: Date.now(),
     };
@@ -279,13 +278,12 @@ function installProjectHelpers(): void {
   // __slterm_e2e_addPage —— 在已有项目中新增操作页面（H6 跨页面存活测试；
   // CP-004 后无页面总数上限——返回 null 仅表示项目不存在）
   // spec 侧 addPage 返回值断言可提前失败，避免切换幽灵页面的隐性超时
-  window.__slterm_e2e_addPage = (projectId: string, name: string, rootPath: string) => {
+  window.__slterm_e2e_addPage = (projectId: string, name: string) => {
     const pageId = createPageId();
     const page: OperationPage = {
       pageId,
       name,
       layout: makeEmptyLayout(),
-      cwd: rootPath,
       createdAt: Date.now(),
       lastAccessedAt: Date.now(),
     };

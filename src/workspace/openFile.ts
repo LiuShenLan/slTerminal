@@ -35,7 +35,7 @@ export const canOpenFile = (
 export interface OpenFileContext {
   activePageId: string | null;
   dockApi: unknown;
-  /** 页面 cwd || 项目 rootPath（标题计算相对根） */
+  /** 项目 rootPath（标题计算相对根） */
   rootPath: string | null;
   /** 项目根路径 */
   projectRootPath: string | null;
@@ -53,7 +53,7 @@ function resolveActivePaths(activePageId: string | null): Pick<
     for (const [, proj] of Object.entries(projects)) {
       const activePage = proj.pages.find((p) => p.pageId === activePageId);
       if (activePage) {
-        rootPath = activePage.cwd || proj.rootPath;
+        rootPath = proj.rootPath;
         projectRootPath = proj.rootPath;
         break;
       }

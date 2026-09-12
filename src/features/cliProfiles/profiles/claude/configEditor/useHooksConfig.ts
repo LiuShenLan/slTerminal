@@ -76,13 +76,13 @@ export function useHooksConfig(
   const projects = useProjects((s) => s.projects);
   const activePageId = useLayout((s) => s.activePageId);
 
-  // 推导 rootPath（照 useCommitStatus：页面 cwd 优先，回退项目根）
+  // 推导 rootPath（照 useCommitStatus：恒取项目根）
   let rootPath: string | null = null;
   if (activePageId) {
     for (const [, proj] of Object.entries(projects)) {
       const activePage = proj.pages.find((p) => p.pageId === activePageId);
       if (activePage) {
-        rootPath = activePage.cwd || proj.rootPath;
+        rootPath = proj.rootPath;
         break;
       }
     }

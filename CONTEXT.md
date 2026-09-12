@@ -9,7 +9,7 @@
 _Avoid_: workspace, repo
 
 **操作页面**（OperationPage）：
-项目内一个独立的工作页，拥有自己的面板布局和当前工作目录。页面间显隐切换且终端跨页面存活（详见 workspace 模块文档）。
+项目内一个独立的工作页，拥有自己的面板布局。页面间显隐切换且终端跨页面存活（详见 workspace 模块文档）。
 _Avoid_: 操作页, tab, 标签页
 
 **硬约束**（Hard Constraints）：

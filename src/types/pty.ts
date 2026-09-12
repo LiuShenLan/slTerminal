@@ -51,7 +51,10 @@ cols: number,
  */
 rows: number, 
 /**
- * 工作目录（可选，默认用户主目录；SEC-02: 经 validate_path_within_root 校验）
+ * 工作目录（可选；SEC-02: 经 validate_path_within_root 校验）。
+ * None 时 CreateProcessW lpCurrentDirectory = NULL → 子进程继承 slTerminal
+ * 进程自身 cwd（Win32 语义，无默认值兜底）——前端契约 = 新建终端恒传 cwd
+ * （默认项目根，addTerminalPanel 工厂单点），None 仅为防御形态。
  */
 cwd?: string, 
 /**

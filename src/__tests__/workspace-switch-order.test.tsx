@@ -145,11 +145,11 @@ function seedTwoPageProject() {
   const rootPath = "C:\\switch-test";
 
   const page1: OperationPage = {
-    pageId: pageA, name: "Alpha", layout: {}, cwd: rootPath,
+    pageId: pageA, name: "Alpha", layout: {},
     createdAt: 1, lastAccessedAt: 1,
   };
   const page2: OperationPage = {
-    pageId: pageB, name: "Beta", layout: {}, cwd: rootPath,
+    pageId: pageB, name: "Beta", layout: {},
     createdAt: 2, lastAccessedAt: 2,
   };
 
@@ -331,7 +331,6 @@ describe("DBG-9: switchToPage 时序", () => {
             pageId: "page-other",
             name: "其他页面",
             layout: {},
-            cwd: "C:\\other-root",
             createdAt: 9,
             lastAccessedAt: 9,
           },

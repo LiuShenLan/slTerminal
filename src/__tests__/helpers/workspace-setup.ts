@@ -54,12 +54,11 @@ export function resetProjectsOnly() {
 // ─── 页面工厂 ───
 
 /** 创建最简单页面种子（explorer 测试通用模式） */
-export function seedExplorerProject(rootPath = "C:\\project", pageCwd?: string) {
+export function seedExplorerProject(rootPath = "C:\\project") {
   const page: OperationPage = {
     pageId: "page-1",
     name: "操作页面 1",
     layout: {},
-    cwd: pageCwd ?? `${rootPath}\\src`,
     createdAt: 1,
     lastAccessedAt: 1,
   };
@@ -85,7 +84,6 @@ export function seedMultiPageProject(projId = "proj-multi", pageIds = ["page-alp
     pageId: pid,
     name: pid,
     layout: {},
-    cwd: "/tmp/multi",
     createdAt: Date.now(),
     lastAccessedAt: Date.now(),
   }));

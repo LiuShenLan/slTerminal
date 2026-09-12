@@ -269,12 +269,12 @@ export async function waitForTerminalText(
 }
 
 /** 在已有项目上新增操作页面（H6/agent 用例用），返回 page2Id */
-export async function addPage(projectId: string, name: string, rootPath: string): Promise<string> {
+export async function addPage(projectId: string, name: string): Promise<string> {
   const pageId = await browser.execute(
-    (args: { projId: string; name: string; rootPath: string }) => {
-      return (window as any).__slterm_e2e_addPage?.(args.projId, args.name, args.rootPath) ?? null;
+    (args: { projId: string; name: string }) => {
+      return (window as any).__slterm_e2e_addPage?.(args.projId, args.name) ?? null;
     },
-    { projId: projectId, name, rootPath },
+    { projId: projectId, name },
   );
   if (!pageId) throw new Error(`无法创建页面 ${name}`);
   return pageId;

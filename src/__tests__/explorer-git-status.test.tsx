@@ -94,7 +94,6 @@ function populateStore(rootPath = "C:\\project") {
             pageId: "page-1",
             name: "操作页面 1",
             layout: {},
-            cwd: `${rootPath}\\src`,
             createdAt: 1,
             lastAccessedAt: 1,
           },
@@ -147,8 +146,8 @@ describe("explorer git 状态 — A 组：useFileTree hook", () => {
     render(React.createElement(ExplorerPanel));
 
     await waitFor(() => {
-      // ExplorerPanel 用 cwd（或 rootPath）传参，此处 cwd = rootPath\src
-      expect(mocks.mockGitStatus).toHaveBeenCalledWith("C:\\project\\src");
+      // ExplorerPanel 以项目根传参（cwd 字段退役后恒 = rootPath）
+      expect(mocks.mockGitStatus).toHaveBeenCalledWith("C:\\project");
     }, { timeout: 3000 });
   });
 
@@ -171,7 +170,8 @@ describe("explorer git 状态 — A 组：useFileTree hook", () => {
     const { rerender } = render(React.createElement(ExplorerPanel));
 
     await waitFor(() => {
-      expect(mocks.mockGitStatus).toHaveBeenCalledWith("C:\\project-a\\src");
+      // cwd 字段退役：gitStatus 恒以项目根传参
+      expect(mocks.mockGitStatus).toHaveBeenCalledWith("C:\\project-a");
     }, { timeout: 3000 });
 
     // 切换到 project-b
@@ -190,7 +190,6 @@ describe("explorer git 状态 — A 组：useFileTree hook", () => {
               pageId: "page-2",
               name: "页面 2",
               layout: {},
-              cwd: "C:\\project-b",
               createdAt: 2,
               lastAccessedAt: 2,
             },
@@ -274,7 +273,8 @@ describe("explorer git 状态 — A 组：useFileTree hook", () => {
     render(React.createElement(ExplorerPanel));
 
     await waitFor(() => {
-      expect(mocks.mockGitStatus).toHaveBeenCalledWith("C:\\project\\src");
+      // cwd 字段退役：gitStatus 恒以项目根传参
+      expect(mocks.mockGitStatus).toHaveBeenCalledWith("C:\\project");
     }, { timeout: 3000 });
     expect(mocks.mockReadDir).toHaveBeenCalledTimes(1);
     expect(mocks.mockGitStatus).toHaveBeenCalledTimes(1);

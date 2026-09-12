@@ -73,17 +73,16 @@ describe("操作页面切换集成", () => {
     expect(state.projects["proj-1"].activePageId).toBe("page-b");
   });
 
-  it("有 cwd 的页面应可在 layout store 中跟踪活跃页面", () => {
-    useLayout.getState().setActivePage("page-with-cwd");
-    expect(useLayout.getState().activePageId).toBe("page-with-cwd");
+  it("页面可在 layout store 中跟踪为活跃页面", () => {
+    useLayout.getState().setActivePage("page-tracked");
+    expect(useLayout.getState().activePageId).toBe("page-tracked");
 
     const proj = makeProject("proj-2", {
       pages: [
         {
-          pageId: "page-with-cwd",
-          name: "Cwd Page",
+          pageId: "page-tracked",
+          name: "Tracked Page",
           layout: {},
-          cwd: "/tmp/test",
           createdAt: Date.now(),
           lastAccessedAt: Date.now(),
         },
@@ -91,9 +90,10 @@ describe("操作页面切换集成", () => {
     });
     useProjects.getState().addProject(proj);
 
-    // 验证 cwd 存在
+    // 页面入 store 且活跃指针不变
     const page = useProjects.getState().projects["proj-2"].pages[0];
-    expect(page.cwd).toBe("/tmp/test");
+    expect(page.pageId).toBe("page-tracked");
+    expect(useLayout.getState().activePageId).toBe("page-tracked");
   });
 
   // H5 自切换守卫

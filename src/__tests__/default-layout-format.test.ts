@@ -126,7 +126,7 @@ describe("NavTree 实际使用 makeEmptyLayout（WRK-11②，NAV-06 承接）", 
           name: "测试项目",
           rootPath: "C:\\test",
           pages: [
-            { pageId: "page-1", name: "操作页面 1", layout: {}, cwd: "C:\\test", createdAt: 1, lastAccessedAt: 1 },
+            { pageId: "page-1", name: "操作页面 1", layout: {}, createdAt: 1, lastAccessedAt: 1 },
           ],
           activePageId: "page-1",
           version: 1,

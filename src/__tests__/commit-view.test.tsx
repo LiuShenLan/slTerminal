@@ -79,7 +79,6 @@ function seedProject(rootPath: string) {
             pageId: "page-1",
             name: "操作页面 1",
             layout: {},
-            cwd: undefined,
             createdAt: 1,
             lastAccessedAt: 1,
           },
