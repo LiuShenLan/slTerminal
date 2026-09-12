@@ -37,7 +37,8 @@ describe("页签右键菜单（tab-menu）", () => {
   });
 
   after(() => {
-    rmSync(rootDir, { recursive: true, force: true });
+    // 终端 PTY 持目录句柄——rmSync 可能 EPERM，吞错（OS 回收）
+    try { rmSync(rootDir, { recursive: true, force: true }); } catch { /* 忽略 */ }
   });
 
   /** 右键指定面板的页签并等待菜单出现 */

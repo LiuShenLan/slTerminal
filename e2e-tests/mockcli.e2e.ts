@@ -184,7 +184,8 @@ describe("mockcli profile 冒烟（AC-4 ①：OSC 133 命中页签/logo）", () 
         },
       );
     } finally {
-      rmSync(tempDir, { recursive: true, force: true });
+      // 终端 PTY（pwsh）cwd = 本目录，存活期间持目录句柄——rmSync 可能 EPERM，吞错（OS 回收）
+      try { rmSync(tempDir, { recursive: true, force: true }); } catch { /* 忽略 */ }
     }
   });
 });
@@ -333,7 +334,8 @@ describe("mockcli 关键路径（CS-3：agent-event 注入 + hub 分派/保存 c
       for (const f of signalFiles) {
         try { rmSync(f, { force: true }); } catch { /* 忽略 */ }
       }
-      rmSync(tempDir, { recursive: true, force: true });
+      // 终端 PTY 持目录句柄——rmSync 可能 EPERM，吞错（OS 回收）
+      try { rmSync(tempDir, { recursive: true, force: true }); } catch { /* 忽略 */ }
     }
   });
 
@@ -438,7 +440,8 @@ describe("mockcli 关键路径（CS-3：agent-event 注入 + hub 分派/保存 c
           }
         });
       } catch { /* 忽略 */ }
-      rmSync(tempDir, { recursive: true, force: true });
+      // 终端 PTY 持目录句柄——rmSync 可能 EPERM，吞错（OS 回收）
+      try { rmSync(tempDir, { recursive: true, force: true }); } catch { /* 忽略 */ }
     }
   });
 });

@@ -265,7 +265,8 @@ describe("Agent 会话视图与 toast 通知", () => {
       }, panelId);
       expect(rowExists).toBe(false);
     } finally {
-      rmSync(tempDir, { recursive: true, force: true });
+      // 终端 PTY 持目录句柄——rmSync 可能 EPERM，吞错（OS 回收）
+      try { rmSync(tempDir, { recursive: true, force: true }); } catch { /* 忽略 */ }
     }
   });
 
