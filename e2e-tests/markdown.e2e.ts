@@ -28,6 +28,7 @@ import {
   clickInPanel,
   waitPreviewDocContains,
   switchToMainWindow,
+  switchToPreviewWindow,
   previewWindowLabel,
 } from "./specUtils";
 
@@ -309,6 +310,52 @@ describe("Markdown 面板三形态", () => {
             return scroller ? getComputedStyle(scroller).fontSize : null;
           })) === "15px",
         { timeout: 10000, timeoutMsg: "md 编辑 Ctrl+滚轮未生效（字号未 14→15）" },
+      );
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+      await switchToMainWindow();
+    }
+  });
+
+  it("主窗移动后预览窗口物理位置跟随（防复发：去重早退吞移动事件）", async () => {
+    // 回归锚点（2026-09 预览错位 bug）：前端 syncNow 去重只比 CSS 视口矩形——
+    // 主窗移动时矩形等值但物理基准已变，旧实现早退致预览窗停驻原位。
+    // 断言物理位移传递：主窗 outer 移动 Δ → 预览窗同 Δ（无边框 outer=inner，
+    // 与 scale 无关——scale=1 环境同样锁死去重早退根因）。
+    const tempDir = mkdtempSync(join(tmpdir(), "slterm-e2e-md-move-"));
+    const mdPath = join(tempDir, "doc.md");
+    writeFileSync(mdPath, "# 跟随", "utf8");
+    try {
+      const panelId = await spawnMarkdownPanel(tempDir, mdPath, "preview");
+      await waitPreviewDocContains(panelId, "跟随");
+
+      // 记录移动前主窗/预览窗物理 rect（getWindowRect 作用于当前窗口上下文）
+      await switchToMainWindow();
+      const mainBefore = await browser.getWindowRect();
+      await switchToPreviewWindow(panelId);
+      const previewBefore = await browser.getWindowRect();
+      await switchToMainWindow();
+
+      // 主窗物理位移 +150/+120（尺寸不变；最大化态由驱动先还原再移动）
+      await browser.setWindowRect(
+        mainBefore.x + 150,
+        mainBefore.y + 120,
+        mainBefore.width,
+        mainBefore.height,
+      );
+
+      // onMoved → 50ms 节流强制 sync → 后端按新 inner 原点物理重定位
+      await browser.waitUntil(
+        async () => {
+          await switchToPreviewWindow(panelId);
+          const r = await browser.getWindowRect();
+          await switchToMainWindow();
+          return (
+            Math.abs(r.x - (previewBefore.x + 150)) <= 4 &&
+            Math.abs(r.y - (previewBefore.y + 120)) <= 4
+          );
+        },
+        { timeout: 10000, timeoutMsg: "主窗移动后预览窗口未跟随（物理位置未同步）" },
       );
     } finally {
       rmSync(tempDir, { recursive: true, force: true });

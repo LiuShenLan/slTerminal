@@ -17,7 +17,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **宿主页 = 自定义协议域静态页**（scheme `slterm-preview`，Windows 实为 `http://slterm-preview.localhost/…`，src-tauri/src/preview.rs 内嵌）——tauri 2.11 无 per-webview CSP（spike 实证），资产协议页恒被注入全局 CSP → 主窗口收紧（CP-012）后内联注入全灭；自定义协议响应不带全局 CSP——域级 CSP 由宿主页 meta 承载（`default-src 'none'`；script/style `'unsafe-inline'`；img/font `data:`，SEC-02；srcdoc iframe 继承宿主 CSP）→ **「预览 CSP 域」即本域**，注入机制（injectScript + buildInjectedScript + nonce）原样迁入执行（内联脚本/样式与 data: img/font 放行，外部出网默认全断）。
 - 宿主页桥（纯 JS，raw `__TAURI_INTERNALS__`——域内无打包模块）：建 sandbox iframe（allow-scripts、无 allow-same-origin，CVE-2024-35222 红线延续）→ 内容经 `preview_render`（后端存储 + 定向通知）→ 宿主 `preview_pull` 拉取置 srcdoc → iframe 文档消息（zoom/scroll/nav 上行、reset/zoom_set/scroll_set 下行）经 Tauri event 与主窗中继。
 - **消息桥 = Tauri event/IPC**（跨独立窗口无 window.postMessage，spike 实证）——CP-044「通道退役」分支落地：上行/下行类型白名单 + label 归属守卫 + nonce（previewMessages.ts 单点，守卫测试锁死）。
-- **窗口形态**：主窗口 owned 无边框窗口，几何 = 主窗 inner 原点 + 面板内容区矩形 × scale（PreviewFrame 轮询 + 主窗移动监听驱动 preview_sync）；面板隐藏（页签/页面切换 display:none）→ 窗口 hide 不销毁——缩放/滚动态保活（CP-037 复核语义：CM 保活在面板内照旧，预览窗口保活 = hide/show，两机制并行，workspace CSS 显隐对 webview 不适用）。
+- **窗口形态**：主窗口 owned 无边框窗口，几何 = 主窗 inner 原点 + 面板内容区矩形 × scale（PreviewFrame 200ms 轮询 + 主窗移动/resize/scale 三事件强制同步驱动 preview_sync——去重早退只比 CSS 视口矩形，主窗事件经 forceSync 旗标旁路 + 50ms 节流，否则移动主窗预览不跟随）；面板隐藏（页签/页面切换 display:none）→ 窗口 hide 不销毁——缩放/滚动态保活（CP-037 复核语义：CM 保活在面板内照旧，预览窗口保活 = hide/show，两机制并行，workspace CSS 显隐对 webview 不适用）。
 - **键盘语义**：预览窗口 focusable(false)——键盘焦点恒在主窗口 ShortcutRegistry 域（预览聚焦不吞全局快捷键，CP-013 步骤 4 口径）；代价：预览文档内表单键入/系统复制快捷键不可达（已知行为登记，WebView2 鼠标交互不受影响）。
 - **宿主内联 `<script>` 真实执行（CP-031）**：injectScript 不再做字符串级转义（存量缺陷转义函数已删）——宿主脚本段原样进入渲染文档；预览与主窗口 CSP 隔离，收紧主窗口 CSP 不影响预览。
 
@@ -59,7 +59,7 @@ previewMessages.ts 承载全部「iframe ↔ 宿主页」消息类型与构造/�
 - **勿重建「悬浮区坐标机制」多轨形态**：切换条/HUD 坐标协调只有悬浮区单点一种合法形态，S10-② 起恒承载于面板工具条带（row）——任何形态不加双轨自摆。
 - **report 与 hide 语义分离**：report(1.0) 是回落变化需显示（Chrome 气泡语义）；复位/重建归 1 走 hide（静默），混用会复活或误显气泡。
 - **预览窗口 focusable=false 的键盘边界**：预览文档内键盘键入/系统复制快捷键不可达（已知行为）；任何改为可聚焦的尝试必须先解决「预览聚焦吞全局快捷键」问题（CP-013 步骤 4 口径）。
-- **预览窗口为真实 OS 窗口**：几何由主窗侧轮询驱动（~200ms + 主窗移动即时），拖拽分栏等连续尺寸变化存在亚秒级跟随延迟——不允许替代方案（如常显浮窗）破坏「内容锚定面板」的产品语义。
+- **预览窗口为真实 OS 窗口**：几何由主窗侧驱动（200ms 轮询 + 主窗移动/resize/scale 事件强制同步），拖拽分栏等连续尺寸变化存在亚秒级跟随延迟——不允许替代方案（如常显浮窗）破坏「内容锚定面板」的产品语义。
 
 ## 测试模式
 

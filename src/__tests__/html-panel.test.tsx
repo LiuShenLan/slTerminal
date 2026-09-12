@@ -103,6 +103,8 @@ vi.mock("../ipc/preview", () => ({
 
 vi.mock("../ipc/window", () => ({
   onMainWindowMoved: (cb: () => void) => mocks.onMainWindowMoved(cb),
+  onMainWindowResized: (cb: () => void) => mocks.onMainWindowMoved(cb),
+  onMainWindowScaleChanged: (cb: () => void) => mocks.onMainWindowMoved(cb),
 }));
 
 // S4: HtmlPanel 编辑态经 useCodeMirror 桥接——mock 隔离 CM 实现
@@ -536,11 +538,11 @@ describe("HtmlPanel", () => {
   // SEC-03：预览窗口命令 catch 可观测化（sync 一次性告警 + 成功复位；close 直告警）
   // ==========================================================================
 
-  /** 触发主窗移动即时同步（setTimeout(syncNow, 0) → 等宏任务落地） */
+  /** 触发主窗移动即时同步（50ms 节流定时器 → 等 60ms 越过节流窗口落地） */
   async function triggerMovedSync() {
     await act(async () => {
       for (const h of mocks.movedHandlers) h();
-      await new Promise((r) => setTimeout(r, 0));
+      await new Promise((r) => setTimeout(r, 60));
     });
   }
 

@@ -46,3 +46,6 @@ coverage/
 
 # codegraph
 .codegraph/
+
+# PowerShell 模块分析缓存（PSReadLine 运行期产物，勿入库）
+Microsoft/

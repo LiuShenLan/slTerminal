@@ -106,6 +106,8 @@ vi.mock("../ipc/preview", () => ({
 }));
 vi.mock("../ipc/window", () => ({
   onMainWindowMoved: (cb: () => void) => mocks.onMainWindowMoved(cb),
+  onMainWindowResized: (cb: () => void) => mocks.onMainWindowMoved(cb),
+  onMainWindowScaleChanged: (cb: () => void) => mocks.onMainWindowMoved(cb),
 }));
 // EDITOR_FONT_SPEC: EditorPanel→LargeFileViewer 模块级读取（CP-022 字体单点复用）——mock 缺失会致 import 期 TypeError
 vi.mock("../panels/editor/useCodeMirror", () => ({

@@ -7,8 +7,8 @@
 //
 // 职责：
 //   - 窗口生命周期：面板内容区锚点（anchor）几何 → 经 ipc.preview 同步窗口
-//     位置/尺寸/显隐（轮询 + 主窗移动监听；面板隐藏/页面切换 → 窗口隐藏不
-//     销毁——缩放/滚动态保活，CP-037 复核语义）；卸载 → 销毁窗口
+//     位置/尺寸/显隐（轮询 + 主窗移动/resize/scale 监听强制同步；面板隐藏/页面
+//     切换 → 窗口隐藏不销毁——缩放/滚动态保活，CP-037 复核语义）；卸载 → 销毁窗口
 //   - 内容装配：injectScript(html, buildInjectedScript(nonce, segments)) 原样
 //     装配（注入机制迁入预览 CSP 域——自定义协议宿主页，域级 CSP meta 放行内联，
 //     无差别字符串级转义已消亡，CP-031）；产物经 preview_render
@@ -67,7 +67,11 @@ import {
   buildScrollSetRequest,
 } from "./previewMessages";
 import { E2E_ENABLED } from "../../lib/e2eEnabled";
-import { onMainWindowMoved } from "../../ipc/window";
+import {
+  onMainWindowMoved,
+  onMainWindowResized,
+  onMainWindowScaleChanged,
+} from "../../ipc/window";
 
 /** PreviewFrame 命令接口（悬浮区重置按钮经 ref 调用下行复位） */
 export interface PreviewFrameHandle {
@@ -103,6 +107,10 @@ export interface PreviewFrameProps {
 
 /** 几何轮询间隔（ms）：面板显隐/尺寸变化（页面 CSS 切换无事件源）检测 */
 const GEOMETRY_POLL_MS = 200;
+
+/** 主窗事件强制同步节流（ms）：onMoved/onResized 拖动期高频触发，合并为
+ * 每 50ms 至多一次 sync（防 invoke 风暴） */
+const FORCE_SYNC_THROTTLE_MS = 50;
 
 /**
  * 生成面板生命周期绑定的随机 nonce（SEC-04）。
@@ -204,6 +212,12 @@ export const PreviewFrame: React.FC<PreviewFrameProps> = ({
     // SEC-03：sync 失败一次性告警旗标——sync 由 200ms 轮询高频驱动（GEOMETRY_POLL_MS），
     // 逐次 warn 会刷屏；首次失败告警后置位，下轮成功即复位（effect 重跑随作用域重置）
     let syncWarned = false;
+    // 强制同步旗标：主窗移动/resize/scale 时 CSS 视口矩形可能不变（视口内相对
+    // 位置不变），但物理换算基准已变——置位后下一次 syncNow 旁路去重早退（否则
+    // 主窗拖动时预览窗停在原屏幕位置——去重早退吞掉移动事件的失配根因）
+    let forceSync = false;
+    // 强制同步节流定时器（主窗事件高频合并，FORCE_SYNC_THROTTLE_MS 内至多一次）
+    let forceSyncTimer: number | null = null;
 
     /** 测量锚点矩形 → 变化时 preview_sync（CSS 视口坐标，后端换算物理屏幕坐标） */
     const syncNow = () => {
@@ -220,9 +234,14 @@ export const PreviewFrame: React.FC<PreviewFrameProps> = ({
       const y = round2(r.y);
       const rw = round2(w);
       const rh = round2(h);
-      if (x === lastX && y === lastY && rw === lastW && rh === lastH && visible === lastVis) {
+      // 去重早退（forceSync 旁路——物理基准变化时矩形等值也必须重发）
+      if (
+        !forceSync &&
+        x === lastX && y === lastY && rw === lastW && rh === lastH && visible === lastVis
+      ) {
         return;
       }
+      forceSync = false;
       lastX = x;
       lastY = y;
       lastW = rw;
@@ -247,18 +266,30 @@ export const PreviewFrame: React.FC<PreviewFrameProps> = ({
         });
     };
 
+    /** 主窗事件（移动/resize/scale）→ 强制同步：置旗标 + 节流合并后触发 */
+    const scheduleForceSync = () => {
+      forceSync = true;
+      if (forceSyncTimer !== null) return;
+      forceSyncTimer = window.setTimeout(() => {
+        forceSyncTimer = null;
+        syncNow();
+      }, FORCE_SYNC_THROTTLE_MS);
+    };
+
     syncNow();
     const timer = window.setInterval(syncNow, GEOMETRY_POLL_MS);
-    // 主窗拖动/移动：几何换算基准变化——即时同步（轮询兜底防丢）
-    const offMove = onMainWindowMoved(() => {
-      // 移动事件高频——合并到下一帧/宏任务（防 invoke 风暴）
-      window.setTimeout(syncNow, 0);
-    });
+    // 主窗拖动/resize/跨屏 scale 变化：物理换算基准变化——即时强制同步（轮询兜底防丢）
+    const offMove = onMainWindowMoved(scheduleForceSync);
+    const offResize = onMainWindowResized(scheduleForceSync);
+    const offScale = onMainWindowScaleChanged(scheduleForceSync);
 
     return () => {
       disposed = true;
       window.clearInterval(timer);
+      if (forceSyncTimer !== null) window.clearTimeout(forceSyncTimer);
       offMove();
+      offResize();
+      offScale();
       // 面板卸载 → 销毁预览窗口（缩放/滚动态随窗口销毁——与旧 iframe 关页签销毁同语义；
       // token 同传——后端会话守卫以同 token 记录 closed，迟到的本轮 sync 不再重建）
       void previewClose(label, token).catch((err) => {

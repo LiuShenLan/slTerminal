@@ -40,6 +40,7 @@
 | CM 字形光栅丢失（GLYPH）的像素断言环境依赖 | 缺陷仅在真实合成/光栅渲染路径与真实截图通道可判（embedded WDIO 无 OS 按键通道、输入走 execCommand；软渲染/非整数 DPI 环境差异会假阴性） | `GLYPH_E2E=1` 像素断言 spec（glyph-repro.e2e.ts：md5-frame/md10/html10/txt10 字形位 PNG 判读全命中）+ L2 repaintGuard 原语/注入契约测试（repaint-guard.test.ts）+ 人工基线（150%/225% 双档 debug build 复现矩阵：5 连输/追加 10/前缀矩阵/选中恢复） | 2026-09-06 GLYPH 取证登记 |
 | md/html 编辑 pane Ctrl+滚轮字号的物理滚轮与 split 双通道共存语义 | embedded WDIO 无法投递 OS 滚轮（承接 htmlviewer 缩放豁免 2026-09-06 行）；iframe 内 zoom 与 CM pane 字号双通道的物理合成交互需人手 | L2 字号接线闭环用例（markdown/html-panel.test）+ L4 合成 WheelEvent 字号用例（markdown/html e2e，.cm-scroller 字号 14→15）+ 手工清单（split 态左 pane 字号/右 iframe zoom 互不干扰、整窗缩放不被触发） | 2026-09-06 GLYPH 取证登记 |
 | run-wdio.cjs 启动器分支（Node 版本选择/便携预置/键级校验） | 进程编排壳（spawn 外部进程行为不可 jsdom 化），无单测锚点 | L4 全量 e2e（Node 26 直跑）兜底 | CP-003/046 登记 |
+| 预览窗口 HiDPI/跨屏几何（scale≠1 建窗落点、跨屏拖动 scale 变化跟随） | E2E/CI 环境 scale 恒 1——建窗与更新路径坐标系差异只在 scale≠1 可观察；双屏异 DPI 拖动需真实多屏硬件 | L1 `compute_physical_rect` 4 例（scale 放大/宽度独立于 x/round/钳制）锁死换算语义 + 建窗/更新路径共用该单源（build_window 注释红线：builder 只收逻辑像素，物理矩形必须经 Physical* setter）+ L4 `markdown.e2e.ts` 主窗移动跟随用例（scale=1 锁死事件→重同步链）+ 实机验收点（HiDPI 预览跟随） | 2026-09 预览几何修复登记 |
 
 > 原豁免表中 `FileWatcher::start`/`notify_watch` 与 `claude_history` 命令包装两项已按 D6 从豁免重分类为补测，不再列入豁免表。  
 > **SEC-17 豁免已撤销（TQ-COV-05 翻案）**：`tracing::warn!(target: "audit")` 已由 `tracing-test` 断言锁死，豁免行删除。

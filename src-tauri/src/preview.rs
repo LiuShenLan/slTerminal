@@ -213,7 +213,36 @@ fn to_physical(css: f64, origin: i32, scale: f64) -> i32 {
     origin + (css * scale).round() as i32
 }
 
+/// 预览窗口物理矩形换算单点（纯函数，可测）：
+/// CSS 视口矩形 + 主窗 inner 原点/scale → (px, py, pw, ph) 物理屏幕矩形。
+/// 宽/高经右/下沿坐标差换算（round((x+w)×scale) - round(x×scale)），
+/// 避免 x 与 w 各自 round 的累积误差；尺寸下限钳 1px（0 尺寸窗口 OS 拒绝）。
+/// build_window 与 preview_sync 更新路径共用——坐标系统一在 Physical*
+/// （tauri 2.11 builder 的 .position()/.inner_size() 只收逻辑像素，建窗路径
+/// 不得经 builder 传几何，见 build_window）。
+fn compute_physical_rect(
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    ox: i32,
+    oy: i32,
+    scale: f64,
+) -> (i32, i32, i32, i32) {
+    let px = to_physical(x, ox, scale);
+    let py = to_physical(y, oy, scale);
+    let pw = to_physical(x + width, ox, scale).saturating_sub(px).max(1);
+    let ph = to_physical(y + height, oy, scale).saturating_sub(py).max(1);
+    (px, py, pw, ph)
+}
+
 /// 建窗参数：owned（跟随主窗）、无边框、不可聚焦、任务栏隐藏、初始隐藏
+///
+/// 几何坐标系红线：tauri 2.11 WebviewWindowBuilder 的 `.position()/.inner_size()`
+/// 只收逻辑像素（无 Physical 重载）——物理矩形经 builder 传入会被 OS 再乘
+/// scale（HiDPI 必现错位）。故 builder 不传几何，visible(false) 建窗后立即以
+/// set_position/set_size 的 Physical* 重载落定（与 preview_sync 更新路径同
+/// 坐标系），show 由调用方在几何落定后执行（无闪屏）。
 fn build_window(
     app: &tauri::AppHandle,
     label: &str,
@@ -239,15 +268,20 @@ fn build_window(
         .shadow(false)
         .skip_taskbar(true)
         .focusable(false)
-        .visible(false)
-        .inner_size(width.max(1) as f64, height.max(1) as f64)
-        .position(x as f64, y as f64);
+        .visible(false);
     let builder = builder
         .owner(&main)
         .map_err(|e| AppError::Unknown(format!("预览窗口挂主窗失败: {e}")))?;
     let win = builder
         .build()
         .map_err(|e| AppError::Unknown(format!("创建预览窗口失败: {e}")))?;
+    win.set_position(tauri::PhysicalPosition::new(x, y))
+        .map_err(|e| AppError::Unknown(format!("定位预览窗口失败: {e}")))?;
+    win.set_size(tauri::PhysicalSize::new(
+        width.max(1) as u32,
+        height.max(1) as u32,
+    ))
+    .map_err(|e| AppError::Unknown(format!("调整预览窗口尺寸失败: {e}")))?;
     win.set_focusable(false)
         .map_err(|e| AppError::Unknown(format!("预览窗口置不可聚焦失败: {e}")))?;
     Ok(win)
@@ -301,10 +335,7 @@ pub async fn preview_sync(
             return Ok(());
         }
         let (ox, oy, scale) = main_window_geometry(&app_owned)?;
-        let px = to_physical(x, ox, scale);
-        let py = to_physical(y, oy, scale);
-        let pw = to_physical(width, ox, scale).saturating_sub(px).max(1);
-        let ph = to_physical(height, oy, scale).saturating_sub(py).max(1);
+        let (px, py, pw, ph) = compute_physical_rect(x, y, width, height, ox, oy, scale);
 
         match webview_window(&app_owned, &label) {
             Some(win) => {
@@ -569,6 +600,47 @@ pub fn host_protocol(
 #[cfg(test)]
 mod preview_tests {
     use super::*;
+
+    /// 物理矩形换算：scale=1 恒等 + 原点平移
+    #[test]
+    fn physical_rect_identity_at_scale_1() {
+        assert_eq!(
+            compute_physical_rect(10.0, 20.0, 300.0, 150.0, 100, 200, 1.0),
+            (110, 220, 300, 150)
+        );
+    }
+
+    /// 物理矩形换算：HiDPI scale 放大坐标与尺寸
+    #[test]
+    fn physical_rect_scales_position_and_size() {
+        assert_eq!(
+            compute_physical_rect(10.0, 20.0, 300.0, 150.0, 100, 200, 1.5),
+            (115, 230, 450, 225)
+        );
+    }
+
+    /// 物理矩形换算：宽/高经 (x+w) 坐标差——x≠0 时不得压缩宽度
+    /// （旧实现 to_physical(width) - px 会把 x 偏移误减进宽度，x=100/w=300
+    /// 得 200——防复发锚点）
+    #[test]
+    fn physical_rect_width_independent_of_x() {
+        let (_, _, pw, ph) = compute_physical_rect(100.0, 50.0, 300.0, 150.0, 1000, 1000, 1.0);
+        assert_eq!((pw, ph), (300, 150));
+    }
+
+    /// 物理矩形换算：亚像素 round 边界 + 尺寸下限钳 1px
+    #[test]
+    fn physical_rect_rounding_and_min_clamp() {
+        // round(0.4) = 0 → 尺寸钳 1；round(2.5) 按四舍五入到 3（f64::round 远离零）
+        assert_eq!(
+            compute_physical_rect(0.0, 0.0, 0.4, 0.4, 0, 0, 1.0),
+            (0, 0, 1, 1)
+        );
+        assert_eq!(
+            compute_physical_rect(0.0, 0.0, 2.5, 2.5, 0, 0, 1.0),
+            (0, 0, 3, 3)
+        );
+    }
 
     /// label 校验：合法形态放行（preview- 前缀 + 字母数字下划线连字符冒号斜杠）
     #[test]
