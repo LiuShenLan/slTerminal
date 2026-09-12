@@ -453,7 +453,7 @@
 
 **回收记录（CP-035，S10-④，2026-09-08）**：
 
-- **前置闸判定**：③ B2 实证（KaTeX data 字体在预览域真实加载渲染 ×2 轮、asset 通道否决双证据）通过 → font-src 回收获实证许可——KaTeX 字体渲染只发生预览域（主窗口无 data: 字体消费），无需拆项登记 docs/compromises.md。
+- **前置闸判定**：③ B2 实证（KaTeX data 字体在预览域真实加载渲染 ×2 轮、asset 通道否决双证据）通过 → font-src 回收获实证许可——KaTeX 字体渲染只发生预览域（主窗口无 data: 字体消费），无需拆项另行登记。
 - **主窗口 CSP 终态**：img-src `'self' asset: https://asset.localhost`（回收 data:）、font-src `'self'`（回收 data:）；style-src 'unsafe-inline' 保留（React inline style / CM6 注入样式，与本族无关）。csp-config.test.ts 三守卫锁死（img-src 恰好三项 / font-src 恰好 ['self'] / data: 不在主窗口任何指令）。
 - **执行期发现并处置（img-src data: 的主窗口唯一图像消费点）**：CM6 lint 诊断波浪线——上游 @codemirror/lint baseTheme 与本仓 theme/overrides.ts 旧实现均以 `background-image: url(data:image/svg+xml,…)` 渲染（JsonMode 语法/schema 波浪线，主窗口渲染）——img-src data: 回收会静默遮蔽 lint 波浪线。处置 = 改 text-decoration wavy 技法（非资源 fetch，零 CSP 指令依赖）+ backgroundImage 显式 none 覆盖上游 baseTheme data: svg；色值仍单点于方案 lint 键（波形由 Chromium 绘制，与 6×3 tile 幅度略有差异，D1 已评估接受）。theme-overrides.test.ts 加「规则文本零 data: url」防回潮断言。
 - **svg data: 显式禁用**：markdown assets.ts MIME 白名单剔除 image/svg+xml（本地 .svg 引用不再内联——缺口语义，与白名单外扩展同语义）；svg 载体可嵌脚本，预览域（当时无 CSP，同上注记——SEC-02 起为宿主页 meta 域级 CSP）内联风险面大，`<img>` 惰性上下文仅为 W3C 行为单点不作安全边界。html 侧无独立资源内联通道（仅 markdown 管线消费 assets.ts），同口径无代码落点。markdown-assets.test.ts 锁「svg MIME 不在白名单」。

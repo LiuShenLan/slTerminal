@@ -10,10 +10,7 @@
     "src/__tests__/**",
     ".claude/**",
     "src-tauri/**",
-    "scripts/**",
-    "docs/compromises-fix/**",
-    "docs/compromises-fix-review-fix/workflows/*.js",
-    "docs/compromises-fix-review2-fix/workflows/*.js"
+    "scripts/**"
   ],
   "ignoreIssues": {
     "src/features/agentHistory/historyModel.ts": [
