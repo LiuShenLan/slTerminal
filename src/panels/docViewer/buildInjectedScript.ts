@@ -3,12 +3,13 @@
 // 由原 panels/html/HtmlPanel.tsx 的 buildInjectedScript 迁入并参数化；额外段
 // （fragmentNav/linkRouter/scrollReport 等）按面板类型追加 + zoom 缩放段恒注入。
 //
-// 【S10-② 迁独立 webview 后的形态（ADR-0019/CP-013）】
-// 注入产物运行于「预览 webview 宿主页内的 sandbox iframe」——与主窗口无共享
-// 上下文，键盘事件不跨窗口（预览窗口 focusable=false，焦点恒在主窗口
-// ShortcutRegistry 域）——原「基础段 keydown 转发」（键盘上行 + global 命令
-// 重放 + 信任标记）整体退役：注入脚本不再含任何命令/按键上行，上行终态集合
-// = {zoom/scroll/nav 渲染态}（previewMessages 白名单守卫锁死，旧类型名零残留）。
+// 【ADR-0021 回迁主窗 DOM 后的形态】注入产物运行于「主窗内跨源沙箱 iframe
+// （自定义协议宿主页）内的内容 iframe（srcdoc）」——与主窗同窗口树，消息经
+// 宿主页桥 postMessage relay。keyForward 基础段恒注入（D2 收窄转发：焦点非
+// 表单元素时 keydown 描述上行 → 主窗 ShortcutRegistry global context 解析；
+// 表单焦点不转发——表单键入/复制快捷键解禁）。旧「基础段 keydown 转发」
+//（slterm_key，主窗 dispatchEvent 重放语义）随 CP-013 退役零残留，本段不
+// 复用旧名。
 //
 // 【拼接纪律（红线）】
 // 1. 输出源码不得含 "</script>" 字面量——注入段内嵌字符串若含该字面量必须先
@@ -20,21 +21,44 @@
 // 3. 字符串插值一律经 JSON.stringify；数值常量以十进制字面量直插（iframe 内
 //    独立运行，不依赖外部符号）。
 // 4. postMessage targetOrigin 一律 "*"（SEC-03 实证：iframe opaque origin 下
-//    targetOrigin 与 e.origin 序列化语义；宿主页侧 source===parent + nonce +
+//    targetOrigin 与 e.origin 序列化语义；宿主页桥侧 source 归属 + nonce +
 //    类型白名单校验兜底——* 无额外风险）。
 // 5. nonce 以 JSON.stringify 拼入（hex 无引号风险，双保险）——宿主页/主窗
 //    校验 e.data.nonce === 面板挂载期随机值（SEC-04）。
 //
-// 段序固定：extra 段 → zoom 段（恒末位）。zoom 段以 "var sltermZoom=" 开头，
-// fragmentNav 的 click 段以 "},true);" 收尾——html-panel 控制流断言正则
-// /\},true\);var sltermZoom=/ 锁死该衔接，勿调换次序。
+// 段序固定：keyForward 基础段（恒首）→ extra 段 → zoom 段（恒末位）。zoom 段
+// 以 "var sltermZoom=" 开头，fragmentNav 的 click 段以 "},true);" 收尾——
+// html-panel 控制流断言正则 /\},true\);var sltermZoom=/ 锁死该衔接，勿调换次序。
 
 import { buildZoomRuntimeSource } from "./zoomRuntime";
 import { buildScrollRuntimeSource } from "./scrollRuntime";
-import { FONT_PROBE_MSG_TYPE } from "./previewMessages";
+import { FONT_PROBE_MSG_TYPE, KEY_FWD_MSG_TYPE } from "./previewMessages";
 
 /** 注入到 HTML 内容中的脚本标记（幂等检测，injectScript 使用） */
 export const INJECTED_MARKER = "__slterm_preview";
+
+/**
+ * keyForward 基础段函数源码（ADR-0021/D2 收窄转发，恒注入首段）——参数化
+ * 匿名函数表达式（zoomRuntime/scrollRuntime 同形态）：
+ *   - 生产端：buildInjectedScript 拼入，以 sltermKeyForward(document, window) 挂载；
+ *   - 测试端：new Function 取回函数后在桩 doc/win 上真实执行（行为级覆盖）。
+ * 语义：document keydown 捕获——焦点在表单元素（INPUT/TEXTAREA/SELECT/
+ * isContentEditable）时不转发（表单键入/复制快捷键解禁）；其余场景上行按键
+ * 描述（code + 修饰键，不含 key——主窗只按 code 解析）给宿主页桥 relay 主窗，
+ * 主窗合成 KeyboardEvent 经 ShortcutRegistry global context 解析消费。
+ * 不 preventDefault（文档内默认行为保留；global 命令集修饰组合在文档内无默认
+ * 行为，不双重触发）。
+ */
+export function buildKeyForwardSource(nonce: string): string {
+  return (
+    `function(document,window){document.addEventListener("keydown",function(e){` +
+    `var t=e.target;` +
+    `if(t&&(t.tagName==="INPUT"||t.tagName==="TEXTAREA"||t.tagName==="SELECT"||t.isContentEditable))return;` +
+    `window.parent.postMessage({type:${JSON.stringify(KEY_FWD_MSG_TYPE)},nonce:${JSON.stringify(nonce)},` +
+    `code:e.code,ctrlKey:e.ctrlKey,shiftKey:e.shiftKey,altKey:e.altKey,metaKey:e.metaKey},"*");` +
+    `},true);}`
+  );
+}
 
 /** 面板类型可选的注入段（在 zoom 段之前追加） */
 export type InjectedSegment =
@@ -68,17 +92,20 @@ export type InjectedSegment =
  *
  * 【威胁模型（2026-09 起）】nonce 明文内联于渲染文档——iframe 内任意脚本（含
  * 宿主 HTML 自带 <script>，S10-② 后真实可执行）可读取注入脚本提取 nonce 并
- * 伪造 slterm_zoom / slterm_scroll / slterm_nav 消息。上行仅渲染态（zoom/
- * scroll/nav），无命令重放通道——伪造后果仅 HUD 百分比误导/滚动恢复偏差
- * （低危）；SEC-04 内部伪造威胁面随 CP-012 webview 迁移消除（ADR-0019）——
- * 预览内容与宿主桥跨窗口隔离（iframe opaque + IPC 注入 main_frame_only），
- * 内容无法触达事件通道。
+ * 伪造上行消息。渲染态上行（zoom/scroll/nav）伪造后果仅 HUD 百分比误导/滚动
+ * 恢复偏差（低危）；keyfwd 上行（ADR-0021/D2）伪造后果 = 触发主窗 global
+ * 命令（当前集合仅 global.closeTab，command-catalog 守卫锁死最小集——global
+ * 集扩充时须重估本面）。SEC-04 内部伪造威胁面随 CP-012 webview 迁移消除
+ * （ADR-0019），ADR-0021 回迁主窗 iframe 后内容仍经宿主页桥 relay——桥只验
+ * source 归属与 origin，nonce 校验恒在主窗侧。
  */
 export function buildInjectedScript(
   nonce: string,
   extra: readonly InjectedSegment[] = [],
 ): string {
   let out = "<script>";
+  // keyForward 基础段——恒首段（ADR-0021/D2 收窄转发，逻辑见 buildKeyForwardSource）
+  out += `var sltermKeyForward=(${buildKeyForwardSource(nonce)});sltermKeyForward(document,window);`;
   // nonce 的 JSON 形态（fontProbe 段经 JSON.stringify 拼入——拼接纪律 #5 双保险）
   const nonceJson = JSON.stringify(nonce);
   for (const seg of extra) {

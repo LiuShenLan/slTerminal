@@ -66,21 +66,26 @@ describe("COMMAND_CATALOG", () => {
     }
   });
 
-  // S10-②（CP-013）：原 SEC-04（D16）「预览上行含 global 键转发重放」通道随
-  // webview 迁移整体退役（键盘不跨窗口）——守卫意图迁移为「预览消息通道不含
-  // 命令重放」：上行类型集合 = 渲染态白名单（previewMessages 单点），含 key/
-  // command 类即红；global 命令集仍保持最小低风险（其注册语义不受影响）
-  it("预览消息通道不含命令重放（上行 = 渲染态白名单，CP-013/CP-044）", () => {
-    // 恰好为渲染态集合 + TE-08 E2E 字体探针（slterm_font_probe——仅 VITE_E2E
-    // 构建注入；守卫详值断言在 doc-viewer-preview-messages.test.ts）
+  // ADR-0021（D2）：预览 keyfwd 收窄转发复活「按键上行」——但语义收窄为
+  // 「表单焦点不转发 + 主窗 global context 限定消费」，非旧 slterm_key 命令
+  // 重放（dispatchEvent 重放任意按键）通道。守卫意图 = 「上行集合恰好锁定 +
+  // 旧重放通道零残留 + global 命令集保持最小低风险」（keyfwd 伪造面 = 内容
+  // 可触发 global 命令——集合最小化即危害边界）
+  it("预览消息通道上行集合恰好锁定（渲染态 + 收窄键转发 + E2E 探针，ADR-0021/CP-013/CP-044）", () => {
+    // 恰好为渲染态集合 + slterm_keyfwd 收窄键转发 + TE-08 E2E 字体探针
+    // （slterm_font_probe——仅 VITE_E2E 构建注入；守卫详值断言在
+    // doc-viewer-preview-messages.test.ts）
     expect([...UPLINK_MSG_TYPES].sort()).toEqual(
-      ["slterm_zoom", "slterm_scroll", "slterm_nav", "slterm_font_probe"].sort(),
+      ["slterm_zoom", "slterm_scroll", "slterm_nav", "slterm_font_probe", "slterm_keyfwd"].sort(),
     );
-    // 显式锁死：无 key/command 类消息（改名字复活重放通道即红）
+    // 显式锁死：旧键转发通道（拼接构造——CP-013 grep 零命中纪律）不在集合；
+    // 无 command 类消息（改名字复活重放通道即红）
+    const retiredKeyType = ["slterm", "key"].join("_");
+    expect(UPLINK_MSG_TYPES).not.toContain(retiredKeyType);
     for (const t of UPLINK_MSG_TYPES) {
-      expect(t).not.toMatch(/key|command/i);
+      expect(t).not.toMatch(/command/i);
     }
-    // global 命令集仍最小（防回潮性扩充）
+    // global 命令集仍最小（keyfwd 伪造后果边界——防回潮性扩充）
     const globals = COMMAND_CATALOG.filter((m) => m.context === "global").map((m) => m.id);
     expect(globals).toEqual(["global.closeTab"]);
   });

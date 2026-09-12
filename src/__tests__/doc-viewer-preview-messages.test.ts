@@ -13,6 +13,11 @@ import {
   ZOOM_SET_MSG_TYPE,
   NAV_MSG_TYPE,
   FONT_PROBE_MSG_TYPE,
+  KEY_FWD_MSG_TYPE,
+  HOST_READY_MSG_TYPE,
+  HOST_IFRAME_LOADED_MSG_TYPE,
+  HOST_CONTENT_MSG_TYPE,
+  PREVIEW_HOST_URL,
   ZOOM_MIN,
   ZOOM_MAX,
   ZOOM_STEP,
@@ -130,19 +135,38 @@ describe("消息载荷构造器", () => {
   });
 });
 
-describe("上/下行类型白名单（S10-② 终态守卫，CP-013/CP-044）", () => {
-  it("上行消息类型白名单 = 渲染态集合 + E2E 字体探针（无命令/按键重放通道）", () => {
-    // CP-013 终态：上行 = {slterm_zoom, slterm_scroll, slterm_nav}（旧键转发
-    // 通道随 webview 迁移整体退役）+ TE-08 E2E 字体探针（slterm_font_probe，
-    // 仅 VITE_E2E 构建注入可达）；任何新增上行类型必须显式过本守卫
+describe("上/下行类型白名单（ADR-0021 终态守卫，CP-013/CP-044）", () => {
+  it("上行消息类型白名单 = 渲染态集合 + 收窄键转发 + E2E 字体探针（无命令重放通道）", () => {
+    // ADR-0021 终态：上行 = {slterm_zoom, slterm_scroll, slterm_nav} 渲染态 +
+    // slterm_keyfwd 收窄键转发（D2：表单焦点不转发 + 主窗 global context 限定
+    // 消费；旧 slterm_key 命令重放通道不复活——零残留守卫见下）+ TE-08 E2E
+    // 字体探针（slterm_font_probe，仅 VITE_E2E 构建注入可达）；任何新增上行
+    // 类型必须显式过本守卫
     expect([...UPLINK_MSG_TYPES].sort()).toEqual(
-      [ZOOM_MSG_TYPE, SCROLL_MSG_TYPE, NAV_MSG_TYPE, FONT_PROBE_MSG_TYPE].sort(),
+      [ZOOM_MSG_TYPE, SCROLL_MSG_TYPE, NAV_MSG_TYPE, FONT_PROBE_MSG_TYPE, KEY_FWD_MSG_TYPE].sort(),
     );
-    // 字体探针类型名锁死（协议常量单点——改名即断宿主桥/注入段/断言链）
+    // 类型名锁死（协议常量单点——改名即断宿主桥/注入段/断言链）
     expect(FONT_PROBE_MSG_TYPE).toBe("slterm_font_probe");
-    // 显式锁死：不含 key/命令类消息（防改个名字复活重放通道）
+    expect(KEY_FWD_MSG_TYPE).toBe("slterm_keyfwd");
+    // 显式锁死：旧键转发类型（拼接构造——CP-013 grep 零命中纪律）不在集合；
+    // 无 command 类消息（防改个名字复活重放通道）
+    const retiredKeyType = ["slterm", "key"].join("_");
+    expect(UPLINK_MSG_TYPES).not.toContain(retiredKeyType);
     for (const t of UPLINK_MSG_TYPES) {
-      expect(t).not.toMatch(/key|command/i);
+      expect(t).not.toMatch(/command/i);
+    }
+  });
+
+  it("宿主层消息类型与 URL 常量锁定（ADR-0021——不入文档层白名单）", () => {
+    expect(HOST_READY_MSG_TYPE).toBe("slterm_host_ready");
+    expect(HOST_IFRAME_LOADED_MSG_TYPE).toBe("slterm_iframe_loaded");
+    expect(HOST_CONTENT_MSG_TYPE).toBe("slterm_host_content");
+    // 与 src-tauri/src/preview.rs PREVIEW_HOST_URL 双源同步
+    expect(PREVIEW_HOST_URL).toBe("http://slterm-preview.localhost/preview-host.html");
+    // 宿主层类型不入文档层上/下行白名单（桥生命周期信号 ≠ 渲染态消息）
+    for (const t of [HOST_READY_MSG_TYPE, HOST_IFRAME_LOADED_MSG_TYPE, HOST_CONTENT_MSG_TYPE]) {
+      expect(isUplinkType(t)).toBe(false);
+      expect(isDownlinkType(t)).toBe(false);
     }
   });
 
@@ -158,6 +182,7 @@ describe("上/下行类型白名单（S10-② 终态守卫，CP-013/CP-044）", 
     expect(isUplinkType(ZOOM_MSG_TYPE)).toBe(true);
     expect(isUplinkType(NAV_MSG_TYPE)).toBe(true);
     expect(isUplinkType(FONT_PROBE_MSG_TYPE)).toBe(true);
+    expect(isUplinkType(KEY_FWD_MSG_TYPE)).toBe(true);
     expect(isUplinkType(retiredKeyType)).toBe(false);
     expect(isUplinkType("slterm_reset")).toBe(false);
     expect(isUplinkType("other")).toBe(false);

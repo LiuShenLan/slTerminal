@@ -1,7 +1,8 @@
 // CSP 配置不变量测试（L2 回归守卫）
 //
-// 背景（S10-②/④，ADR-0019）：预览渲染已迁出主窗口（独立 webview + 自定义协议
-// 宿主页，域级 CSP meta 放行内联脚本与 data: img/font——注入机制与数据通道在域内宽松执行）。
+// 背景（S10-②/④ → ADR-0021）：预览渲染载体 = 自定义协议宿主页（域级 CSP meta
+// 放行内联脚本与 data: img/font——注入机制与数据通道在域内宽松执行）；ADR-0021
+// 起宿主页改由主窗内跨源沙箱 iframe 承载（frame-src 收窄式新增该域）。
 // 主窗口 CSP 终态 = 回收 script-src 'unsafe-inline' 与
 // dangerousDisableAssetCspModification（CP-012）+ 回收 img-src/font-src 的
 // data:（CP-035——data: 数据/字体仅存预览域渲染，主窗口零消费）。
@@ -119,5 +120,12 @@ describe("tauri.conf.json CSP 不变量", () => {
     // 无显式 connect-src = 回退 default-src 'self' = 禁外部网络连出。
     // 若未来显式添加，此处断言该快照变化。
     expect(directives["connect-src"]).toBeUndefined();
+  });
+
+  it("frame-src 终态：恰好 = ['http://slterm-preview.localhost']（ADR-0021）", () => {
+    // 预览回迁主窗 DOM——宿主页经主窗内跨源沙箱 iframe 承载（自定义协议域，
+    // Windows 映射 http://slterm-preview.localhost）；frame-src 收窄式新增仅此
+    // 一源（不放行通配/https:——其余帧源一律拒绝）
+    expect(directives["frame-src"]).toEqual(["http://slterm-preview.localhost"]);
   });
 });

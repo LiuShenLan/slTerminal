@@ -8,13 +8,17 @@
 //     见 doc-viewer-zoom-runtime.test.ts）
 
 import { describe, it, expect, vi } from "vitest";
-import { buildInjectedScript } from "../panels/docViewer/buildInjectedScript";
+import {
+  buildInjectedScript,
+  buildKeyForwardSource,
+} from "../panels/docViewer/buildInjectedScript";
 import { buildScrollRuntimeSource } from "../panels/docViewer/scrollRuntime";
 import {
   SCROLL_MSG_TYPE,
   SCROLL_SET_MSG_TYPE,
   NAV_MSG_TYPE,
   FONT_PROBE_MSG_TYPE,
+  KEY_FWD_MSG_TYPE,
 } from "../panels/docViewer/previewMessages";
 
 const NONCE = "00ff00ff00ff00ff00ff00ff00ff00ff";
@@ -30,15 +34,22 @@ function parseScript(script: string): void {
 }
 
 describe("buildInjectedScript 段组合", () => {
-  it("无 extra：zoom 运行时恒注入；keydown 转发段已退役（CP-013 零残留）", () => {
+  it("无 extra：keyForward 基础段 + zoom 运行时恒注入（旧键转发类型零残留）", () => {
     const out = buildInjectedScript(NONCE, []);
+    // keyForward 基础段（ADR-0021/D2 收窄转发）恒首段：keydown 捕获 + 表单跳过
+    expect(out).toContain("sltermKeyForward(document,window)");
+    expect(out).toContain(KEY_FWD_MSG_TYPE);
+    expect(out).toContain('addEventListener("keydown"');
+    expect(out).toContain("isContentEditable");
     expect(out).toContain("sltermZoom(document,window)");
-    // S10-②：键盘不跨窗口（预览窗口 focusable=false）——keydown 转发/信任标记
-    // 整体删除，注入脚本上行仅渲染态（zoom/scroll/nav）
-    expect(out).not.toContain(RETIRED_KEY_TYPE);
+    // 旧键转发通道（slterm_key 字面量，拼接构造 + 负向前瞻——新 keyfwd 类型
+    // 含 "slterm_key" 前缀子串，须精确排除旧名完整出现）与信任标记零残留
+    expect(out).not.toMatch(new RegExp(RETIRED_KEY_TYPE + "(?!fwd)"));
     expect(out).not.toContain(RETIRED_MARKER);
-    expect(out).not.toContain('addEventListener("keydown"');
     expect(out).not.toContain("fingerprint");
+    // 段序锁死：keyForward 恒首段、zoom 恒末位（衔接断言 /\},true\);var sltermZoom=/
+    // 在 html-panel 控制流用例——extra 段与 zoom 段直接相邻的拼接边界不动）
+    expect(out.indexOf("var sltermKeyForward=")).toBeLessThan(out.indexOf("var sltermZoom="));
     parseScript(out);
   });
 
@@ -110,6 +121,104 @@ describe("buildInjectedScript 段组合", () => {
   it("nonce 拼入 nav 消息（SEC-04 防伪造）", () => {
     const out = buildInjectedScript(NONCE, [{ kind: "linkRouter" }]);
     expect(out).toContain(`nonce:"${NONCE}"`);
+  });
+});
+
+describe("keyForward 基础段桩执行（ADR-0021/D2 收窄转发）", () => {
+  /** 取回运行时函数（new Function——zoomRuntime/scrollRuntime 同范式） */
+  function loadRuntime(): (doc: StubDoc, win: StubWin) => void {
+    const fn = new Function(
+      `return (${buildKeyForwardSource(NONCE)})`,
+    ) as () => (doc: StubDoc, win: StubWin) => void;
+    return fn();
+  }
+
+  interface KeyEvt {
+    target: { tagName?: string; isContentEditable?: boolean };
+    code: string;
+    ctrlKey: boolean;
+    shiftKey: boolean;
+    altKey: boolean;
+    metaKey: boolean;
+  }
+  interface StubDoc {
+    addEventListener(type: string, fn: (e: KeyEvt) => void, capture?: boolean): void;
+    keyHandlers: Array<(e: KeyEvt) => void>;
+    captureFlags: boolean[];
+  }
+  interface StubWin {
+    parent: { postMessage: ReturnType<typeof vi.fn> };
+  }
+
+  function makeDoc(): StubDoc {
+    const keyHandlers: Array<(e: KeyEvt) => void> = [];
+    const captureFlags: boolean[] = [];
+    return {
+      addEventListener(type, fn, capture) {
+        expect(type).toBe("keydown");
+        keyHandlers.push(fn);
+        captureFlags.push(capture === true);
+      },
+      keyHandlers,
+      captureFlags,
+    };
+  }
+  function makeWin(): StubWin {
+    return { parent: { postMessage: vi.fn() } };
+  }
+  function keyEvent(target: KeyEvt["target"], over: Partial<KeyEvt> = {}): KeyEvt {
+    return {
+      target,
+      code: "KeyW",
+      ctrlKey: true,
+      shiftKey: false,
+      altKey: false,
+      metaKey: false,
+      ...over,
+    };
+  }
+
+  it("非表单焦点 keydown → 上行按键描述（capture 段 + 完整修饰键）", () => {
+    const doc = makeDoc();
+    const win = makeWin();
+    loadRuntime()(doc, win);
+    expect(doc.captureFlags).toEqual([true]); // 捕获阶段
+    doc.keyHandlers[0]!(keyEvent({ tagName: "DIV" }));
+    expect(win.parent.postMessage).toHaveBeenCalledTimes(1);
+    expect(win.parent.postMessage).toHaveBeenCalledWith(
+      {
+        type: KEY_FWD_MSG_TYPE,
+        nonce: NONCE,
+        code: "KeyW",
+        ctrlKey: true,
+        shiftKey: false,
+        altKey: false,
+        metaKey: false,
+      },
+      "*",
+    );
+  });
+
+  it("表单焦点（INPUT/TEXTAREA/SELECT/contenteditable）不转发——键入/复制解禁", () => {
+    const doc = makeDoc();
+    const win = makeWin();
+    loadRuntime()(doc, win);
+    const handler = doc.keyHandlers[0]!;
+    handler(keyEvent({ tagName: "INPUT" }));
+    handler(keyEvent({ tagName: "TEXTAREA" }));
+    handler(keyEvent({ tagName: "SELECT" }));
+    handler(keyEvent({ tagName: "DIV", isContentEditable: true }));
+    expect(win.parent.postMessage).not.toHaveBeenCalled();
+  });
+
+  it("无 target 兜底转发（document 级按键）+ 不 preventDefault 语义（无该调用）", () => {
+    const doc = makeDoc();
+    const win = makeWin();
+    loadRuntime()(doc, win);
+    doc.keyHandlers[0]!(keyEvent(null as unknown as KeyEvt["target"]));
+    expect(win.parent.postMessage).toHaveBeenCalledTimes(1);
+    // 段源码不含 preventDefault——文档内默认行为保留（不双重触发）
+    expect(buildKeyForwardSource(NONCE)).not.toContain("preventDefault");
   });
 });
 

@@ -474,9 +474,10 @@ pub struct PreviewContent {
 ///   <script> 在 srcdoc 内正常执行（域级 CSP meta 放行内联），无法触达宿主 DOM/桥（无
 ///   allow-same-origin + tauri 初始化脚本仅注入顶层 frame——CVE-2024-35222 修复
 ///   后 main_frame_only，webview.rs for_main_frame_only 实证）。
-/// - 桥经 window.__TAURI_INTERNALS__ 原生事件 API（invoke plugin:event|listen /
-///   emit）——宿主页为独立自定义域页，无打包模块可用（tauri 资产模块跨源
-///   ESM 需 CORS，不引）；权限由 capabilities/preview.json 收敛。
+/// - 桥 = 纯 window.postMessage（ADR-0021）：宿主页改由主窗内跨源沙箱
+///   iframe 承载，main_frame_only 下 iframe 内无 tauri IPC 注入——主窗
+///   origin 白名单（tauri.localhost / dev localhost:1420）+ source 归属
+///   双校验收发；旧独立窗口的 __TAURI_INTERNALS__ 事件桥整体退役。
 /// - 上行校验（iframe 消息）：origin "null" + source === iframe.contentWindow
 ///   （srcdoc opaque 序列化，SEC-03 同款）；具体类型/载荷校验在主窗侧。
 /// - 域级 CSP 经 meta 承载（tauri 2.11 无 per-webview CSP 配置面）——指令表见上，加宽须复核 SEC 面。
@@ -496,79 +497,69 @@ const HOST_PAGE: &str = r##"<!DOCTYPE html>
 <script>
 (function () {
   "use strict";
-  var T = window.__TAURI_INTERNALS__;
-  var label = (T && T.metadata && T.metadata.currentWebview && T.metadata.currentWebview.label) || "";
+  // ADR-0021：宿主页改由主窗内跨源沙箱 iframe 承载——main_frame_only 下
+  // iframe 内无 tauri IPC 注入，桥 = 纯 window.postMessage。
   var frame = document.getElementById("preview-frame");
-  var appliedSeq = 0;
-  var ready = false;
 
-  function invoke(cmd, args) {
-    if (!T || typeof T.invoke !== "function") return Promise.reject(new Error("no internals"));
-    return T.invoke(cmd, args);
-  }
-  function listenEvent(eventName, handler) {
-    if (!T) return;
-    invoke("plugin:event|listen", {
-      event: eventName,
-      target: { kind: "Any" },
-      handler: T.transformCallback(handler)
-    }).catch(function () {});
-  }
-  function emitEvent(eventName, payload) {
-    if (!T) return;
-    invoke("plugin:event|emit", { event: eventName, payload: payload }).catch(function () {});
+  // 主窗 origin 白名单（生产 tauri.localhost / dev localhost:1420）——
+  // 下行只受理主窗（source 归属 + origin 双校验）
+  function isMain(e) {
+    return e.source === window.parent &&
+      (e.origin === "http://tauri.localhost" || e.origin === "http://localhost:1420");
   }
 
-  // 主窗下行（reset/zoom_set/scroll_set）→ 注入 iframe（type/nonce 由 iframe 侧校验）
-  // 注：事件处理器收到的 p 为事件对象 {event, id, payload}——payload 才是载荷
-  listenEvent("preview:downlink", function (p) {
-    var d = p && p.payload ? p.payload : p;
-    if (!d || d.label !== label || !frame.contentWindow) return;
-    var msg = { type: d.type, nonce: d.nonce };
-    if (typeof d.zoom === "number") msg.zoom = d.zoom;
-    if (typeof d.ratio === "number") msg.ratio = d.ratio;
-    frame.contentWindow.postMessage(msg, "*");
-  });
-
-  // 渲染内容就绪（主窗已推新内容）→ 拉取应用
-  listenEvent("preview:render-ping", function (p) {
-    var d = p && p.payload ? p.payload : p;
-    pull(d && d.seq);
-  });
-
-  // iframe 文档上行（zoom/scroll/nav + E2E 字体探针 loaded）→ 转发主窗
-  //（类型白名单在主窗侧守卫；TE-08：探针段仅 VITE_E2E 构建注入）
   window.addEventListener("message", function (e) {
+    // ── 主窗下行 ──
+    if (isMain(e)) {
+      var d = e.data;
+      if (!d || typeof d.type !== "string") return;
+      // 内容推送 → 置内容 iframe srcdoc（背景色压重建闪白）
+      if (d.type === "slterm_host_content") {
+        if (typeof d.html !== "string") return;
+        frame.style.background = typeof d.bg === "string" ? d.bg : "";
+        frame.srcdoc = d.html;
+        return;
+      }
+      // 控制下行（reset/zoom_set/scroll_set）→ relay 进内容 iframe
+      //（type/nonce 由 iframe 侧校验；字段白名单式转发）
+      if (d.type === "slterm_reset" || d.type === "slterm_zoom_set" || d.type === "slterm_scroll_set") {
+        if (!frame.contentWindow) return;
+        var msg = { type: d.type, nonce: d.nonce };
+        if (typeof d.zoom === "number") msg.zoom = d.zoom;
+        if (typeof d.ratio === "number") msg.ratio = d.ratio;
+        frame.contentWindow.postMessage(msg, "*");
+        return;
+      }
+      return;
+    }
+    // ── 内容 iframe 上行（opaque origin → e.origin === "null"）→ relay 主窗 ──
+    //（类型白名单在主窗侧守卫；字段白名单式转发——新增上行字段须同步本名单，
+    //  否则载荷静默丢弃）
     if (e.source !== frame.contentWindow) return;
     if (e.origin !== "null") return;
     var data = e.data;
     if (!data || typeof data.type !== "string") return;
-    var up = { label: label, type: data.type, nonce: data.nonce };
+    var up = { type: data.type, nonce: data.nonce };
     if (typeof data.zoom === "number") up.zoom = data.zoom;
     if (typeof data.ratio === "number") up.ratio = data.ratio;
     if (typeof data.href === "string") up.href = data.href;
     if (typeof data.loaded === "boolean") up.loaded = data.loaded;
-    emitEvent("preview:uplink", up);
+    // keyfwd 收窄转发字段（ADR-0021/D2：code + 修饰键，不含 key）
+    if (typeof data.code === "string") up.code = data.code;
+    if (typeof data.ctrlKey === "boolean") up.ctrlKey = data.ctrlKey;
+    if (typeof data.shiftKey === "boolean") up.shiftKey = data.shiftKey;
+    if (typeof data.altKey === "boolean") up.altKey = data.altKey;
+    if (typeof data.metaKey === "boolean") up.metaKey = data.metaKey;
+    window.parent.postMessage(up, "*");
   });
 
-  // iframe 每次加载完成 → 通知主窗（重建归 1 语义 + keepZoom/keepScrollRatio 恢复）
+  // 内容 iframe 每次加载完成 → 上行主窗（重建归 1 语义 + keepZoom/keepScrollRatio 恢复）
   frame.addEventListener("load", function () {
-    emitEvent("preview:host-status", { label: label, status: "iframe-loaded" });
+    window.parent.postMessage({ type: "slterm_iframe_loaded" }, "*");
   });
 
-  function pull(seqHint) {
-    invoke("preview_pull", { label: label }).then(function (c) {
-      if (!c) return;
-      if (ready && c.seq <= appliedSeq) return;
-      appliedSeq = c.seq;
-      frame.style.background = c.bg || "";
-      frame.srcdoc = c.html;
-      ready = true;
-    }).catch(function () {});
-  }
-
-  // 页面加载完成即拉一次（覆盖建窗期事件丢失窗口）
-  pull(0);
+  // 桥就绪 → 上行主窗（主窗据此推送/重推内容兜底）
+  window.parent.postMessage({ type: "slterm_host_ready" }, "*");
 })();
 </script>
 </body>
@@ -690,6 +681,59 @@ mod preview_tests {
     fn host_page_bridge_forwards_font_probe_loaded() {
         assert!(HOST_PAGE.contains("typeof data.loaded === \"boolean\""));
         assert!(HOST_PAGE.contains("up.loaded = data.loaded"));
+    }
+
+    /// 宿主页桥 = 纯 postMessage（ADR-0021）：iframe 内 main_frame_only 无
+    /// __TAURI_INTERNALS__ 注入——桥若回潮依赖 IPC 注入即静默全灭
+    #[test]
+    fn host_page_bridge_no_tauri_internals() {
+        assert!(!HOST_PAGE.contains("__TAURI_INTERNALS__"));
+        assert!(!HOST_PAGE.contains("plugin:event|"));
+        assert!(!HOST_PAGE.contains("preview_pull"));
+    }
+
+    /// 主窗下行受理校验：source 归属 + origin 白名单双闸（生产/开发两形态）
+    #[test]
+    fn host_page_bridge_is_main_origin_whitelist() {
+        assert!(HOST_PAGE.contains("e.source === window.parent"));
+        assert!(HOST_PAGE.contains("\"http://tauri.localhost\""));
+        assert!(HOST_PAGE.contains("\"http://localhost:1420\""));
+    }
+
+    /// 内容推送下行：宿主页置内容 iframe srcdoc + 背景色（压重建闪白）
+    #[test]
+    fn host_page_bridge_applies_host_content() {
+        assert!(HOST_PAGE.contains("d.type === \"slterm_host_content\""));
+        assert!(HOST_PAGE.contains("frame.srcdoc = d.html"));
+        assert!(HOST_PAGE.contains("frame.style.background"));
+    }
+
+    /// 控制下行 relay 白名单：恰好 reset/zoom_set/scroll_set 三类进内容 iframe
+    #[test]
+    fn host_page_bridge_relays_control_downlink() {
+        assert!(HOST_PAGE.contains("d.type === \"slterm_reset\""));
+        assert!(HOST_PAGE.contains("d.type === \"slterm_zoom_set\""));
+        assert!(HOST_PAGE.contains("d.type === \"slterm_scroll_set\""));
+        assert!(HOST_PAGE.contains("frame.contentWindow.postMessage(msg, \"*\")"));
+    }
+
+    /// keyfwd 收窄转发字段（ADR-0021/D2）：code + 四修饰键白名单式透传——
+    /// 漏转发即预览聚焦全局快捷键静默失效
+    #[test]
+    fn host_page_bridge_forwards_keyfwd_fields() {
+        assert!(HOST_PAGE.contains("typeof data.code === \"string\""));
+        assert!(HOST_PAGE.contains("up.code = data.code"));
+        assert!(HOST_PAGE.contains("up.ctrlKey = data.ctrlKey"));
+        assert!(HOST_PAGE.contains("up.shiftKey = data.shiftKey"));
+        assert!(HOST_PAGE.contains("up.altKey = data.altKey"));
+        assert!(HOST_PAGE.contains("up.metaKey = data.metaKey"));
+    }
+
+    /// 宿主层上行信号：iframe 加载完成 + 桥就绪（主窗重推内容兜底锚点）
+    #[test]
+    fn host_page_bridge_emits_host_signals() {
+        assert!(HOST_PAGE.contains("type: \"slterm_iframe_loaded\""));
+        assert!(HOST_PAGE.contains("type: \"slterm_host_ready\""));
     }
 
     /// 物理坐标换算：origin + round(css × scale)

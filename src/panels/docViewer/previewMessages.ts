@@ -3,25 +3,29 @@
 // 原 panels/html/zoomMath.ts 迁入（htmlviewer Ctrl+滚轮缩放协议），扩展承接
 // docViewer 预览家族（htmlviewer/markdownviewer）的消息协议：
 //
-// 【S10-② 迁独立 webview 后的双层通道（ADR-0019）】
-//  1. 文档层（iframe ↔ 宿主页，仍为 window.postMessage）：预览内容渲染于独立
-//     webview 宿主页内的 sandbox iframe（srcdoc），注入脚本（zoomRuntime/
-//     scrollRuntime/linkRouter 段）运行于该 iframe——上行 slterm_zoom /
-//     slterm_scroll / slterm_nav、下行 slterm_reset / slterm_zoom_set /
-//     slterm_scroll_set，校验语义原样（opaque origin + nonce + 白名单）。
-//     targetOrigin "*" 语义同前（iframe opaque；宿主页四层校验兜底）。
-//  2. 窗口层（宿主页 ↔ 主窗口 PreviewFrame，Tauri event）：跨独立 WebviewWindow
-//     无 window.postMessage 通道（spike 实证）——宿主页桥把 iframe 消息转发为
-//     上行事件，主窗下行事件经桥注入 iframe；事件名单点登记于 src/ipc/preview.ts
-//     （通信层），本文仅登记文档层消息类型与上/下行类型白名单。
+// 【ADR-0021 回迁主窗 DOM 后的三层通道】预览渲染于主窗 DOM 内跨源沙箱
+// iframe（src = 自定义协议宿主页，sandbox="allow-scripts"），宿主页内再嵌
+// 内容 iframe（srcdoc）——全链同窗口树，一律 window.postMessage：
+//  1. 文档层（内容 iframe ↔ 主窗，经宿主页桥 relay）：注入脚本（zoomRuntime/
+//     scrollRuntime/linkRouter/keyForward 段）运行于内容 iframe——上行
+//     slterm_zoom / slterm_scroll / slterm_nav / slterm_keyfwd /
+//     slterm_font_probe，下行 slterm_reset / slterm_zoom_set /
+//     slterm_scroll_set；opaque origin（e.origin === "null"）+ nonce +
+//     类型白名单 + source 归属校验链不变。targetOrigin 一律 "*"（opaque
+//     origin 序列化 "null"，无显式 targetOrigin 可用，2026-09-12 spike 实证）。
+//  2. 宿主层（宿主页 ↔ 主窗）：上行 slterm_host_ready（桥就绪——主窗据此
+//     推送/重推内容兜底）/ slterm_iframe_loaded（内容重建完成）；下行
+//     slterm_host_content（装配产物 + 背景色直推）。
 //
 // 消息载荷与既有 slterm_* 平铺结构同构（{type, nonce, ...}），不引入包装层。
-// 上行类型白名单 = 渲染态集合（zoom/scroll/nav）+ E2E 专用字体探针
-// （TE-08：宿主页 FontFaceSet 不覆盖 iframe 文档且 opaque origin 不可读——
-// 字体真实加载锚点只能自 iframe 内上行；该段仅 VITE_E2E 构建注入，生产零
-// 注入面）——无命令/按键重放通道（CP-013：键转发上行与信任标记随 webview
-// 迁移整体退役，旧类型名零残留；终态集合由守卫测试锁死）。下行类型白名单
-// = 控制集合（reset/zoom_set/scroll_set）（CP-044 守卫）。
+// 上行类型白名单 = 渲染态集合（zoom/scroll/nav）+ 收窄键转发（keyfwd，
+// ADR-0021/D2：焦点非表单元素时上行按键描述，主窗经 ShortcutRegistry
+// global context 解析消费——旧键转发通道 slterm_key（命令重放语义）随
+// CP-013 退役零残留，本通道不复用旧名）+ E2E 专用字体探针（TE-08：宿主页
+// FontFaceSet 不覆盖 iframe 文档且 opaque origin 不可读——字体真实加载锚点
+// 只能自 iframe 内上行；该段仅 VITE_E2E 构建注入，生产零注入面）——无命令
+// 重放通道（终态集合由守卫测试锁死）。下行类型白名单 = 控制集合
+//（reset/zoom_set/scroll_set）（CP-044 守卫）。
 
 /** iframe → 宿主页：缩放变更上报消息类型（上行，经桥转发主窗） */
 export const ZOOM_MSG_TYPE = "slterm_zoom";
@@ -48,18 +52,46 @@ export const NAV_MSG_TYPE = "slterm_nav";
  *  只能自 iframe 内取。仅 VITE_E2E 构建注入该段（生产零注入面） */
 export const FONT_PROBE_MSG_TYPE = "slterm_font_probe";
 
-// ── 窗口层事件通道（S10-②：独立 webview 消息桥 = Tauri event，CP-044 通道退役）──
-// 事件名与载荷形态登记于 src/ipc/preview.ts（跨窗口通道属通信层，单点定义，
-// 本文不重复）——上行 = iframe 文档消息（本文件类型白名单）+ 宿主状态事件。
+/** iframe → 宿主页：keydown 收窄转发（上行，ADR-0021/D2）——回迁主窗 DOM
+ *  后预览可聚焦：焦点在非表单元素（input/textarea/select/contenteditable
+ *  之外）时上行按键描述（code + 修饰键），主窗合成 KeyboardEvent 经
+ *  ShortcutRegistry global context 解析消费（全局快捷键预览聚焦仍可用）；
+ *  焦点在表单元素时不转发——表单键入/复制快捷键解禁。注入段不
+ *  preventDefault（文档内默认行为保留；global 命令集修饰组合在文档内无
+ *  默认行为，不双重触发）。
+ *  【威胁面登记】nonce 明文内联于渲染文档——内容脚本可提取伪造本类型上行，
+ *  伪造后果 = 触发主窗 global 命令（当前集合仅 global.closeTab，
+ *  command-catalog 守卫锁死最小集；global 集扩充时须重估本面）。
+ *  旧键转发通道（slterm_key，主窗 dispatchEvent 重放任意按键语义）随
+ *  CP-013 退役零残留——本通道为收窄语义新通道，不复用旧名 */
+export const KEY_FWD_MSG_TYPE = "slterm_keyfwd";
 
-/** 上行消息类型白名单（CP-013 终态 + TE-08 字体探针）：渲染态集合 + E2E
- *  专用字体加载探针（仅 VITE_E2E 构建注入可达——生产无该段，PreviewFrame
- *  侧另经 E2E_ENABLED 门控收束） */
+// ── 宿主层消息（宿主页 ↔ 主窗，ADR-0021）──
+
+/** 宿主页 → 主窗：桥就绪（宿主页脚本执行完）——主窗据此推送/重推内容兜底 */
+export const HOST_READY_MSG_TYPE = "slterm_host_ready";
+
+/** 宿主页 → 主窗：内容 iframe 加载完成（= 内容重建完成——主窗据此归 1 +
+ *  keepZoom/keepScrollRatio 下行恢复；旧 host-status iframe-loaded 语义随迁） */
+export const HOST_IFRAME_LOADED_MSG_TYPE = "slterm_iframe_loaded";
+
+/** 主窗 → 宿主页：内容推送（html = 装配产物完整文档串，bg = iframe 背景色） */
+export const HOST_CONTENT_MSG_TYPE = "slterm_host_content";
+
+/** 预览宿主页 URL（自定义协议域——与 src-tauri/src/preview.rs
+ *  PREVIEW_HOST_URL 双源同步，变更须两侧同改） */
+export const PREVIEW_HOST_URL = "http://slterm-preview.localhost/preview-host.html";
+
+/** 上行消息类型白名单（文档层终态）：渲染态集合 + 收窄键转发（ADR-0021
+ *  D2）+ E2E 专用字体加载探针（仅 VITE_E2E 构建注入可达——生产无该段，
+ *  PreviewFrame 侧另经 E2E_ENABLED 门控收束）。宿主层上行（host_ready/
+ *  iframe_loaded）为桥生命周期信号，不入本集合 */
 export const UPLINK_MSG_TYPES = [
   ZOOM_MSG_TYPE,
   SCROLL_MSG_TYPE,
   NAV_MSG_TYPE,
   FONT_PROBE_MSG_TYPE,
+  KEY_FWD_MSG_TYPE,
 ] as const;
 
 /** 下行消息类型白名单（终态，CP-044 守卫）：恰好为控制集合 */
@@ -146,6 +178,18 @@ export interface NavReport {
   type: typeof NAV_MSG_TYPE;
   nonce: string;
   href: string;
+}
+
+/** 上行 keydown 收窄转发消息（iframe 文档层，ADR-0021/D2）——仅按键描述，
+ *  主窗合成 KeyboardEvent 经 ShortcutRegistry global context 解析 */
+export interface KeyFwdReport {
+  type: typeof KEY_FWD_MSG_TYPE;
+  nonce: string;
+  code: string;
+  ctrlKey: boolean;
+  shiftKey: boolean;
+  altKey: boolean;
+  metaKey: boolean;
 }
 
 /** 构造上行缩放上报消息 */
