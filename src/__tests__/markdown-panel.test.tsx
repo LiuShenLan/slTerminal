@@ -26,6 +26,10 @@ import {
   act,
 } from "@testing-library/react";
 
+// 全量并行负载下 waitForPushedDoc 两段 waitFor + act 冲刷单用例可超 5s 默认
+// testTimeout（waitFor 超时裕度同理提额 10000——负载竞态防复发，非断言放宽）
+vi.setConfig({ testTimeout: 15000 });
+
 // ─── Hoisted mocks ───
 const mocks = vi.hoisted(() => {
   const mockReadFile = vi.fn();

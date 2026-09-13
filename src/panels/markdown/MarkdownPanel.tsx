@@ -4,8 +4,7 @@
 //   - edit：CM6 编辑全宽（lang-markdown）
 //   - split：左编辑右预览（allotment 拖拽分栏，比例随 params 持久化）
 //   - preview：渲染只读全宽
-// 面板根 = 工具条带（40px，恒承载切换条/HUD——预览窗口锚定其下内容区，条带
-// 不落入窗口覆盖范围，交互可用；S10-② 预览迁独立 webview 后形态） + 内容区
+// 面板根 = 工具条带（40px，恒承载切换条/HUD——S10-② 起条带化形态） + 内容区
 // （allotment）。PreviewFrame 只上报 zoom 变化（onZoomChange）+ 承接重置命令
 // （ref），HUD 显示不随 pane 坐标（2026-09-06 收敛，docViewer/CLAUDE.md）。
 //
@@ -108,7 +107,7 @@ const cmAreaStyle: React.CSSProperties = {
   overflow: "clip",
 };
 
-/** 预览 pane 容器（PreviewFrame 锚点自撑满——预览窗口覆盖本矩形） */
+/** 预览 pane 容器（宿主 iframe 直填自撑满） */
 const previewAreaStyle: React.CSSProperties = {
   width: "100%",
   height: "100%",
@@ -124,8 +123,7 @@ const rootColumnStyle: React.CSSProperties = {
   background: PANEL_BG,
 };
 
-/** 工具条带（S10-②：40px 常驻——切换条/HUD 悬浮带，预览窗口锚定其下，
- *  不落入窗口覆盖范围） */
+/** 工具条带（40px 常驻——切换条/HUD 悬浮带，S10-② 起条带化形态） */
 const toolbarBandStyle: React.CSSProperties = {
   position: "relative",
   flex: "0 0 auto",
@@ -384,8 +382,8 @@ const MarkdownPanel: React.FC<MarkdownPanelProps> = ({
 
   return (
     <div style={rootColumnStyle}>
-      {/* 工具条带：切换条 + 缩放 HUD（40px 常驻——预览窗口锚定其下内容区，
-          条带不落入窗口覆盖范围，交互可用；悬浮区坐标协调单点语义不变） */}
+      {/* 工具条带：切换条 + 缩放 HUD（40px 常驻，S10-② 起条带化形态；
+          悬浮区坐标协调单点语义不变） */}
       <div style={toolbarBandStyle}>
         <FloatingArea
           direction="row"

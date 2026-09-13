@@ -11,7 +11,8 @@
 //     Dockview/workspace CSS 天然驱动，无任何窗口编排代码）
 //   - 内容装配：injectScript(html, buildInjectedScript(nonce, segments)) 原样
 //     （注入机制在预览 CSP 域执行——宿主页域级 CSP meta 放行内联，CP-031）；
-//     产物经 postMessage slterm_host_content 直推宿主（host_ready 重推兜底）
+//     产物经 postMessage slterm_host_content 直推宿主（host_ready 每次到达
+//     均重推——宿主 iframe 可因 dockview reparent 二次加载，就绪序号计数）
 //   - 消息分派（window message 监听）：校验链 = source 归属（e.source ===
 //     iframe.contentWindow）+ origin "null"（opaque 序列化，2026-09-12 spike
 //     实证）→ 类型分派 → nonce + 数值守卫（文档层上行）；宿主层上行
@@ -24,8 +25,11 @@
 //   - ref 命令接口（PreviewFrameHandle.resetZoom）：悬浮区重置按钮下行复位
 //   - keepZoom/keepScrollRatio：iframe 加载完成（slterm_iframe_loaded）后按
 //     父侧镜像下行恢复（md 开；html 保持「重建归 100%」现状语义关）
-//   - E2E 字体探针上行（TE-08）：slterm_font_probe 经 E2E_ENABLED 门控写
-//     主窗全局 __slterm_e2e_fontProbe（键 = panelId）供 L4 断言
+//   - E2E 探针（TE-08 fontProbe + ADR-0021 内容/加载探针）：slterm_font_probe
+//     上行经 E2E_ENABLED 门控写主窗全局 __slterm_e2e_fontProbe（键 = panelId）；
+//     内容推送/iframe 加载完成同门控写 __slterm_e2e_previewDoc（panelId → 最近
+//     推送产物）/__slterm_e2e_iframeLoaded（panelId → 加载完成计数）——embedded
+//     driver frame 内 execute 全灭（spike Q4），L4 内容断言全走主窗探针全局
 //
 // 不拥有：文件读取、loading/error 态（面板各自持有）、缩放 HUD 显示（面板经
 // useZoomHud 持有，本组件只上报 zoom 变化与承接复位命令）、业务链接策略
@@ -132,8 +136,12 @@ export const PreviewFrame: React.FC<PreviewFrameProps> = ({
   }
   const nonce = nonceRef.current;
 
-  /** 宿主页桥就绪（slterm_host_ready 上行置位）——内容推送门控 */
-  const [hostReady, setHostReady] = useState(false);
+  /** 宿主页桥就绪序号（slterm_host_ready 上行递增）——内容推送门控 + 重推
+   *  触发源。计数而非布尔：宿主 iframe 可因 dockview 面板 DOM reparent
+   *  （setActive/布局重排——iframe 同文档 reparent 即重载）二次加载，
+   *  每次 ready 都必须重推内容（布尔 state 幂等会把二次 ready 的重推吃掉，
+   *  内容 iframe 恒空白——2026-09-13 E2E 实证） */
+  const [hostReadySeq, setHostReadySeq] = useState(0);
 
   /** 缩放镜像（keepZoom 重建恢复取值源；上行变化/复位同步，等值不重复处理） */
   const zoomRef = useRef(1);
@@ -170,17 +178,32 @@ export const PreviewFrame: React.FC<PreviewFrameProps> = ({
     [html, nonce, segKey],
   );
 
-  // ── 内容推送：宿主桥就绪后直推（host_ready 重推兜底——桥后于装配产物就绪
-  //    时由 ready 上行触发补推；装配产物变化即重推）──
+  // ── 内容推送：宿主桥就绪后直推（host_ready 每次到达均重推——装配产物就绪
+  //    晚于桥时由 ready 上行触发补推；宿主 iframe 重载（dockview reparent）
+  //    时 ready 二次到达重推兜底；装配产物变化即重推）──
   useEffect(() => {
-    if (!hostReady) return;
+    if (hostReadySeq === 0) return;
     const win = iframeRef.current?.contentWindow;
     if (!win) return;
     win.postMessage(
       { type: HOST_CONTENT_MSG_TYPE, html: srcDoc, bg: iframeBg ?? "" },
       "*",
     );
-  }, [hostReady, srcDoc, iframeBg]);
+    // E2E 内容探针（ADR-0021 spike Q4 裁决——embedded driver frame 内 execute
+    // 全灭，内容断言走「主窗 E2E 全局」探针模式，fontProbe 同款；生产构建
+    // E2E_ENABLED 编译期 false → tree-shake 零面）：最近推送产物按 panelId
+    // 记录，与 iframe_loaded 计数探针组合 = 旧「宿主页 srcdoc 属性」断言强度
+    //（推送产物含 X + 桥已受理加载完成）
+    if (E2E_ENABLED) {
+      const w = window as unknown as {
+        __slterm_e2e_previewDoc?: Record<string, string>;
+      };
+      w.__slterm_e2e_previewDoc = {
+        ...(w.__slterm_e2e_previewDoc ?? {}),
+        [panelId]: srcDoc,
+      };
+    }
+  }, [hostReadySeq, srcDoc, iframeBg, panelId]);
 
   // ── 消息分派（window message 监听；校验链 = source 归属 + origin "null" →
   //    类型分派 → nonce + 数值守卫）──
@@ -209,7 +232,8 @@ export const PreviewFrame: React.FC<PreviewFrameProps> = ({
 
       // ── 宿主层上行（桥自身信号，无 nonce 概念）──
       if (type === HOST_READY_MSG_TYPE) {
-        setHostReady(true);
+        // 每次 ready 递增序号触发重推（宿主 iframe 重载 = 内容丢失，必须补推）
+        setHostReadySeq((n) => n + 1);
         return;
       }
       if (type === HOST_IFRAME_LOADED_MSG_TYPE) {
@@ -227,6 +251,17 @@ export const PreviewFrame: React.FC<PreviewFrameProps> = ({
         }
         if (keepScrollRatio && prevRatio > 0) {
           postDownlink(buildScrollSetRequest(nonce, prevRatio));
+        }
+        // E2E 加载探针（previewDoc 同款门控）：加载完成计数按 panelId 累加——
+        // 内容断言的「桥已受理并加载完成」一环（重建恢复断言可比较计数增量）
+        if (E2E_ENABLED) {
+          const w = window as unknown as {
+            __slterm_e2e_iframeLoaded?: Record<string, number>;
+          };
+          w.__slterm_e2e_iframeLoaded = {
+            ...(w.__slterm_e2e_iframeLoaded ?? {}),
+            [panelId]: (w.__slterm_e2e_iframeLoaded?.[panelId] ?? 0) + 1,
+          };
         }
         return;
       }

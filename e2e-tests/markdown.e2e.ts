@@ -1,12 +1,12 @@
 /**
- * Markdown 面板域 E2E spec（S6 + S10-② 预览迁独立 webview 适配）：默认 edit +
+ * Markdown 面板域 E2E spec（S6；ADR-0021 预览回迁主窗 DOM 后重写）：默认 edit +
  * 形态切换、渲染管线产物（标题/表格/hljs/KaTeX/相对图片 data: URL/mermaid
  * SVG）、主窗口快捷键关闭、预览 Ctrl+滚轮缩放（事件属性通道触发注入接管）。
  *
- * 【预览渲染于独立 webview（S10-②，ADR-0019）】内容断言经 switchToWindow 到
- * 预览窗口（句柄 = preview-<panelId>）读宿主页 iframe srcdoc；HUD/切换条在
- * 主窗口工具条带；用例结束前一律切回 main（spike 驱动契约，见
- * e2e-tests/CLAUDE.md「多 webview WDIO 可达性」节）。
+ * 【预览渲染于主窗内跨源沙箱 iframe（ADR-0021）】内容断言走主窗 E2E 探针
+ * 全局（__slterm_e2e_previewDoc/__slterm_e2e_iframeLoaded——embedded driver
+ * frame 内 execute 全灭，spike Q4 裁决，e2e-tests/CLAUDE.md 外部坑登记）；
+ * HUD/切换条在主窗工具条带，直读主窗 DOM。
  *
  * 半端到端边界（e2e-tests/CLAUDE.md DOC-02）：键盘为合成 keydown（主窗口
  * ShortcutRegistry 路径）；md 内缩放触发走 raw HTML 事件属性（`<img onerror>`
@@ -27,9 +27,7 @@ import {
   activatePanel,
   clickInPanel,
   waitPreviewDocContains,
-  switchToMainWindow,
-  switchToPreviewWindow,
-  previewWindowLabel,
+  waitForPreviewFrameGone,
 } from "./specUtils";
 
 /** 建项目并打开 markdownviewer 面板；返回 panelId */
@@ -89,7 +87,7 @@ describe("Markdown 面板三形态", () => {
     );
     try {
       const panelId = await spawnMarkdownPanel(tempDir, mdPath);
-      // 默认 edit：切换条三态 + 无预览窗口编排
+      // 默认 edit：切换条三态 + 无预览宿主 iframe
       await browser.waitUntil(
         async () =>
           await browser.execute(() => !!document.querySelector('[data-e2e="markdown-mode-switcher"]')),
@@ -101,9 +99,14 @@ describe("Markdown 面板三形态", () => {
       expect(switcherText).toContain("编辑");
       expect(switcherText).toContain("编辑/预览");
       expect(switcherText).toContain("预览");
-      expect((await browser.getWindowHandles()).includes(previewWindowLabel(panelId))).toBe(false);
+      const frameMounted = await browser.execute(
+        (pid: string) =>
+          !!document.querySelector(`iframe[data-e2e="preview-frame-${pid}"]`),
+        panelId,
+      );
+      expect(frameMounted).toBe(false);
 
-      // 切预览 → 预览窗口渲染管线产物（宿主页 iframe srcdoc 可读）。
+      // 切预览 → 渲染管线产物（探针组合：推送产物含 X + 桥受理加载完成）。
       // CP-004 单宿主契约：clickInPanel 以本面板页签为锚点组内点击（残留面板
       // 切换条同 DOM 并存，全局 querySelector 首元素命中不可靠）
       expect(await clickInPanel(panelId, '[data-e2e="markdown-mode-preview"]')).toBe(true);
@@ -119,20 +122,20 @@ describe("Markdown 面板三形态", () => {
       // fonts.check 对任意族名恒 true——对照组 NoSuchFontXyzQq 亦 true，语义
       // 失效；iframe opaque origin 宿主不可读）——加载态只能自 iframe 内取：
       // 注入的 fontProbe 段在 iframe 内 fonts.ready 后 check('12px "KaTeX_Main"')
-      // 上行宿主桥 → PreviewFrame 收束写 window.__slterm_e2e_fontProbe
-      // （E2E_ENABLED 门控；段仅 VITE_E2E 构建注入，生产零注入面）。
+      // 上行（经宿主桥 relay）→ PreviewFrame 收束写 window.__slterm_e2e_fontProbe
+      //（E2E_ENABLED 门控，键 = panelId；段仅 VITE_E2E 构建注入，生产零注入面）。
       // 前置声明锚点：字体族已在渲染文档内声明（防 check 对未声明族空真）。
       await waitPreviewDocContains(panelId, "KaTeX_Main");
       await browser.waitUntil(
         async () =>
           await browser.execute(
-            (l: string) =>
+            (pid: string) =>
               (
                 window as unknown as {
                   __slterm_e2e_fontProbe?: Record<string, boolean>;
                 }
-              ).__slterm_e2e_fontProbe?.[l] === true,
-            previewWindowLabel(panelId),
+              ).__slterm_e2e_fontProbe?.[pid] === true,
+            panelId,
           ),
         { timeout: 10000, timeoutMsg: "预览域 KaTeX 字体未真实加载（fontProbe 未达 true）" },
       );
@@ -175,9 +178,8 @@ describe("Markdown 面板三形态", () => {
     try {
       const panelId = await spawnMarkdownPanel(tempDir, mdPath, "preview");
       await waitPreviewDocContains(panelId, "关闭测试");
-      // S10-②：键盘不跨窗口（预览窗口 focusable=false）——预览态下主窗口
-      // ShortcutRegistry 仍持焦点，合成 Ctrl+W → global.closeTab → 关闭活跃
-      // 面板；面板卸载 → 预览窗口随之销毁。CP-004 单宿主契约：先显式激活本
+      // 主窗口 ShortcutRegistry 合成 Ctrl+W → global.closeTab → 关闭活跃面板；
+      // 面板卸载 → 宿主 iframe 随之移除。CP-004 单宿主契约：先显式激活本
       // 面板再派发（dockview 活跃面板不随 addPanel 归属——残留面板同宿主并存）
       expect(await activatePanel(panelId)).toBe(true);
       // 轮询派发 Ctrl+W 直到面板消失且连续 3 次采样保持消失（间隔 100ms）——
@@ -219,11 +221,8 @@ describe("Markdown 面板三形态", () => {
         panelId,
       );
       expect(closed).toBe(true);
-      // 面板关闭 → PreviewFrame 卸载 → 预览窗口销毁出列（异步）
-      await browser.waitUntil(
-        async () => !(await browser.getWindowHandles()).includes(previewWindowLabel(panelId)),
-        { timeout: 10000, timeoutMsg: "关闭面板后预览窗口未出列" },
-      );
+      // 面板关闭 → PreviewFrame 卸载 → 宿主 iframe 随 React 卸载同步移除
+      await waitForPreviewFrameGone(panelId);
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
@@ -234,7 +233,7 @@ describe("Markdown 面板三形态", () => {
     const mdPath = join(tempDir, "doc.md");
     // raw HTML 事件属性通道（预览域 meta CSP 放行内联 script——onerror 正常执行）：
     // 本地缺失图片必然尝试加载（img 无 preload 语义）→ error 稳定触发 →
-    // 合成 2 格 Ctrl+wheel → zoomRuntime 接管 → 上行 → 主窗 HUD。
+    // 合成 2 格 Ctrl+wheel → zoomRuntime 接管 → 上行（经宿主桥 relay）→ 主窗 HUD。
     // 注：raw img 的相对 src 会进资源收集（png 白名单）→ 读取失败回退原 src
     //（缺口语义）→ iframe 内加载缺失文件触发 error——通道闭环。
     writeFileSync(
@@ -313,62 +312,13 @@ describe("Markdown 面板三形态", () => {
       );
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
-      await switchToMainWindow();
     }
   });
 
-  it("主窗移动后预览窗口物理位置跟随（防复发：去重早退吞移动事件）", async () => {
-    // 回归锚点（2026-09 预览错位 bug）：前端 syncNow 去重只比 CSS 视口矩形——
-    // 主窗移动时矩形等值但物理基准已变，旧实现早退致预览窗停驻原位。
-    // 断言物理位移传递：主窗 outer 移动 Δ → 预览窗同 Δ（无边框 outer=inner，
-    // 与 scale 无关——scale=1 环境同样锁死去重早退根因）。
-    const tempDir = mkdtempSync(join(tmpdir(), "slterm-e2e-md-move-"));
-    const mdPath = join(tempDir, "doc.md");
-    writeFileSync(mdPath, "# 跟随", "utf8");
-    try {
-      const panelId = await spawnMarkdownPanel(tempDir, mdPath, "preview");
-      await waitPreviewDocContains(panelId, "跟随");
-
-      // 记录移动前主窗/预览窗物理 rect（getWindowRect 作用于当前窗口上下文）
-      await switchToMainWindow();
-      const mainBefore = await browser.getWindowRect();
-      await switchToPreviewWindow(panelId);
-      const previewBefore = await browser.getWindowRect();
-      await switchToMainWindow();
-
-      // 主窗物理位移 +150/+120（尺寸不变；最大化态由驱动先还原再移动）
-      await browser.setWindowRect(
-        mainBefore.x + 150,
-        mainBefore.y + 120,
-        mainBefore.width,
-        mainBefore.height,
-      );
-
-      // onMoved → 50ms 节流强制 sync → 后端按新 inner 原点物理重定位
-      await browser.waitUntil(
-        async () => {
-          await switchToPreviewWindow(panelId);
-          const r = await browser.getWindowRect();
-          await switchToMainWindow();
-          return (
-            Math.abs(r.x - (previewBefore.x + 150)) <= 4 &&
-            Math.abs(r.y - (previewBefore.y + 120)) <= 4
-          );
-        },
-        { timeout: 10000, timeoutMsg: "主窗移动后预览窗口未跟随（物理位置未同步）" },
-      );
-    } finally {
-      rmSync(tempDir, { recursive: true, force: true });
-      await switchToMainWindow();
-    }
-  });
-
-  it("split 形态：预览窗口即刻出现且渲染，CM 编辑 pane 并存可见（防复发：split 右侧空白）", async () => {
-    // 回归锚点（2026-09 split 空白 bug）：预览 pane 动态挂载（Allotment addView
-    // 在父 effect，React 子 effect 先行）→ 首测 0×0 → 隐藏态不建窗，恢复依赖
-    // 有缺陷的同步环（去重早退吞事件 + 200ms 轮询延迟）→ 右侧恒空白。
-    // 修复 = 主窗事件 force-sync + 锚点 ResizeObserver 即时驱动——老代码本用例
-    // waitPreviewDocContains 超时红。
+  it("split 形态：宿主 iframe 即刻挂载且渲染，CM 编辑 pane 并存可见（防复发：split 右侧空白）", async () => {
+    // 回归锚点（2026-09 split 空白 bug）：预览 pane 动态挂载 + 旧独立窗口的
+    // 隐藏态不建窗/同步环缺陷 → 右侧恒空白。ADR-0021 后宿主 iframe 为主窗
+    // DOM（显隐/几何天然跟随）——本用例锁「切 split 即挂载即渲染」终态。
     const tempDir = mkdtempSync(join(tmpdir(), "slterm-e2e-md-split-"));
     const mdPath = join(tempDir, "doc.md");
     writeFileSync(mdPath, "# 分屏\n\n正文标记", "utf8");
@@ -380,12 +330,11 @@ describe("Markdown 面板三形态", () => {
         { timeout: 15000, timeoutMsg: "markdown 切换条未出现" },
       );
 
-      // 切 split → 预览窗口出现且内容渲染
+      // 切 split → 宿主 iframe 挂载且内容渲染（探针组合）
       expect(await clickInPanel(panelId, '[data-e2e="markdown-mode-split"]')).toBe(true);
       await waitPreviewDocContains(panelId, "<h1>分屏</h1>", 15000);
 
       // CM 编辑 pane 并存可见（CP-037 恒挂载；本面板组内锚定过滤残留面板）
-      await switchToMainWindow();
       const cmVisible = await browser.execute((pid: string) => {
         const anchor = document.querySelector(`[data-e2e="tab-close-${pid}"]`);
         if (!anchor) return false;
@@ -400,7 +349,6 @@ describe("Markdown 面板三形态", () => {
       expect(cmVisible).toBe(true);
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
-      await switchToMainWindow();
     }
   });
 });

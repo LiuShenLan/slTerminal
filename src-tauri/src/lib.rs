@@ -154,10 +154,6 @@ pub fn run() {
             background_tasks::background_tasks_set_config,
             plan_balance::get_plan_balance,
             plan_balance::refresh_plan_balance,
-            preview::preview_sync,
-            preview::preview_close,
-            preview::preview_render,
-            preview::preview_pull,
         ])
         .run(tauri::generate_context!())
     {

@@ -5,9 +5,9 @@
  * 环境（被 main.tsx 动态 import，注入 window 全局 helper），本文件运行在
  * wdio/Node 环境（被 spec 文件 import）。二者禁止互相 import。
  *
- * 提供：Workspace/Dockview 就绪等待、项目/终端创建、PTY session 等待、
- * hooks 注入、信号文件原子写与消费等待、页面切换等待（E2E-10 用）、
- * 共享 setup `withProjectAndTerminal`（E2E-09 提取）。
+ * 提供：预览宿主 iframe 探针驱动（ADR-0021）、Workspace/Dockview 就绪等待、
+ * 项目/终端创建、PTY session 等待、hooks 注入、信号文件原子写与消费等待、
+ * 页面切换等待（E2E-10 用）、共享 setup `withProjectAndTerminal`（E2E-09 提取）。
  */
 
 import { expect, browser } from "@wdio/globals";
@@ -26,67 +26,74 @@ declare global {
 
 // ── 就绪等待 ──
 
-// ── 预览独立 webview 驱动（S10-② 契约，e2e-tests/CLAUDE.md「多 webview
-//   WDIO 可达性」节：句柄 = label = preview-<panelId>；execute-first；显式
-//   切换抑制焦点惩罚；预览相关用例结束前一律切回 main）──
+// ── 预览宿主 iframe 驱动（ADR-0021 契约：预览渲染于主窗内跨源沙箱 iframe，
+//   不再是独立 OS 窗口——句柄/switchToWindow 契约整体退役。embedded driver
+//   frame 内 execute 全灭（spike Q4 实证，e2e-tests/CLAUDE.md 外部坑登记）——
+//   内容断言走「主窗 E2E 全局」探针模式（fontProbe 同款，PreviewFrame 经
+//   E2E_ENABLED 门控写 window.__slterm_e2e_previewDoc / __slterm_e2e_iframeLoaded）──
 
-/** 主窗口 label（tauri.conf.json windows[0] 默认 "main"） */
-export const MAIN_WINDOW_LABEL = "main";
-
-/** 面板 panelId → 预览窗口 label/句柄 */
-export function previewWindowLabel(panelId: string): string {
-  return `preview-${panelId}`;
+/** 宿主 iframe 选择器（主窗 DOM 内，data-e2e 契约） */
+function previewFrameSelector(panelId: string): string {
+  return `iframe[data-e2e="preview-frame-${panelId}"]`;
 }
 
-/** 等待预览窗口入列（创建为异步——句柄集轮询） */
-export async function waitForPreviewWindow(
+/** 等待预览宿主 iframe 挂载于主窗 DOM（面板预览形态出现） */
+export async function waitForPreviewFrame(
   panelId: string,
   timeout = 20000,
 ): Promise<void> {
-  const label = previewWindowLabel(panelId);
   await browser.waitUntil(
-    async () => (await browser.getWindowHandles()).includes(label),
-    { timeout, timeoutMsg: `预览窗口未入列（${label}）` },
+    async () =>
+      await browser.execute(
+        (sel: string) => !!document.querySelector(sel),
+        previewFrameSelector(panelId),
+      ),
+    { timeout, timeoutMsg: `预览宿主 iframe 未挂载（panelId=${panelId}）` },
   );
 }
 
-/** 切换到预览窗口上下文（句柄 = label） */
-export async function switchToPreviewWindow(panelId: string): Promise<void> {
-  await browser.switchToWindow(previewWindowLabel(panelId));
-}
-
-/** 切换回主窗口上下文（多 webview 用例结束前必须恢复） */
-export async function switchToMainWindow(): Promise<void> {
-  await browser.switchToWindow(MAIN_WINDOW_LABEL);
+/** 等待预览宿主 iframe 从主窗 DOM 移除（面板关闭/切形态——React 卸载同步） */
+export async function waitForPreviewFrameGone(
+  panelId: string,
+  timeout = 10000,
+): Promise<void> {
+  await browser.waitUntil(
+    async () =>
+      await browser.execute(
+        (sel: string) => !document.querySelector(sel),
+        previewFrameSelector(panelId),
+      ),
+    { timeout, timeoutMsg: `预览宿主 iframe 未移除（panelId=${panelId}）` },
+  );
 }
 
 /**
- * 等待预览窗口内 sandbox iframe 的 srcdoc 包含期望文本（内容渲染完成判定——
- * 宿主页文档内 iframe srcdoc 属性可读，驱动可触达）。结束时切回主窗口。
+ * 等待预览内容渲染完成（探针组合 = 旧「宿主页 srcdoc 属性含 X」断言强度）：
+ * ① __slterm_e2e_previewDoc[panelId]（最近推送产物）含 text + ②
+ * __slterm_e2e_iframeLoaded[panelId] ≥ 1（桥已受理且内容 iframe 加载完成）。
  */
 export async function waitPreviewDocContains(
   panelId: string,
   text: string,
   timeout = 20000,
 ): Promise<void> {
-  await waitForPreviewWindow(panelId, timeout);
-  await switchToPreviewWindow(panelId);
-  try {
-    await browser.waitUntil(
-      async () =>
-        await browser.execute(
-          (t: string) => {
-            const f = document.querySelector("iframe");
-            const srcDoc = f?.getAttribute("srcdoc") ?? "";
-            return srcDoc.includes(t);
-          },
-          text,
-        ),
-      { timeout, timeoutMsg: `预览 srcdoc 未包含 ${text}（${previewWindowLabel(panelId)}）` },
-    );
-  } finally {
-    await switchToMainWindow();
-  }
+  await browser.waitUntil(
+    async () =>
+      await browser.execute(
+        (args: { pid: string; t: string }) => {
+          const w = window as unknown as {
+            __slterm_e2e_previewDoc?: Record<string, string>;
+            __slterm_e2e_iframeLoaded?: Record<string, number>;
+          };
+          return (
+            (w.__slterm_e2e_previewDoc?.[args.pid]?.includes(args.t) ?? false) &&
+            (w.__slterm_e2e_iframeLoaded?.[args.pid] ?? 0) >= 1
+          );
+        },
+        { pid: panelId, t: text },
+      ),
+    { timeout, timeoutMsg: `预览内容未渲染（含 ${text}，panelId=${panelId}）` },
+  );
 }
 
 /** 等待 Workspace 就绪（__slterm_e2e_workspaceReady === true） */

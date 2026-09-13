@@ -1,15 +1,14 @@
 // HtmlPanel — HTML 文件浏览器式预览面板（docViewer 预览家族，二态）
 //
 // 形态（viewMode，随 params 持久化，默认 render）：
-//   - render：PreviewFrame 编排独立预览 webview（S10-② 迁出主窗口 iframe——
-//     渲染内容在 preview-<panelId> WebviewWindow，注入/消息桥在 docViewer 共享
-//     层；面板根工具条带承载 HUD 与切换条，FloatingArea 2026-09-06 悬浮区收敛）
+//   - render：PreviewFrame 渲染主窗内跨源沙箱宿主 iframe（ADR-0021——渲染
+//     内容在自定义协议宿主页域的嵌套 srcdoc 文档，注入/消息桥在 docViewer
+//     共享层；面板根工具条带承载 HUD 与切换条，FloatingArea 2026-09-06 悬浮区收敛）
 //   - edit：CodeMirror 6 源码编辑（lang-html；editor context 注册 Ctrl+S，
 //     保存链路复用 useCodeMirror.handleSave）
 //
-// 面板根 = 工具条带（40px，恒承载切换条/HUD——预览窗口锚定其下内容区，条带
-// 不落入窗口覆盖范围，交互可用） + 内容区（render = PreviewFrame 锚点；edit =
-// CM 容器）。
+// 面板根 = 工具条带（40px，恒承载切换条/HUD） + 内容区（render = 宿主
+// iframe 直填；edit = CM 容器）。
 //
 // 文档真值源 = 面板级 docRef（草稿优先磁盘）：
 //   - 磁盘内容读入 → doc；edit 态击键经 onDocContent 即时写回 doc；
@@ -77,8 +76,7 @@ const rootColumnStyle: React.CSSProperties = {
   background: PANEL_BG,
 };
 
-/** 工具条带（S10-②：40px 常驻——切换条/HUD 悬浮带，预览窗口锚定其下，
- *  不落入窗口覆盖范围） */
+/** 工具条带（40px 常驻——切换条/HUD 悬浮带，S10-② 起条带化形态） */
 const toolbarBandStyle: React.CSSProperties = {
   position: "relative",
   flex: "0 0 auto",
@@ -86,7 +84,7 @@ const toolbarBandStyle: React.CSSProperties = {
   background: PANEL_BG,
 };
 
-/** 内容区容器（render = PreviewFrame 锚点 / edit = CM；预览窗口覆盖本矩形） */
+/** 内容区容器（render = 宿主 iframe 直填 / edit = CM） */
 const contentAreaStyle: React.CSSProperties = {
   position: "relative",
   flex: "1 1 auto",
@@ -237,8 +235,7 @@ const HtmlPanel: React.FC<HtmlPanelProps> = ({ api, containerApi, params }) => {
   if (mode === "render") {
     return (
       <div style={rootColumnStyle}>
-        {/* 工具条带：切换条 + 缩放 HUD（40px 常驻——预览窗口锚定其下内容区，
-            条带不落入窗口覆盖范围，交互可用） */}
+        {/* 工具条带：切换条 + 缩放 HUD（40px 常驻，S10-② 起条带化形态） */}
         <div style={toolbarBandStyle}>
           <FloatingArea
             direction="row"

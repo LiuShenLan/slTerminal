@@ -1,9 +1,9 @@
 // zoomRuntime.ts — 预览 iframe 文档内 Ctrl+滚轮缩放的注入脚本源码生成器
 //
-// docViewer 预览框的渲染文档 = 预览 webview 宿主页内的 sandbox iframe（S10-②
-// 起，ADR-0019）——iframe 为 opaque origin（sandbox 无 allow-same-origin），
-// 宿主页不可触达其内部 DOM——缩放的执行逻辑必须以注入脚本形式运行在 iframe
-// 文档内。本文件把该逻辑生成为「参数化匿名函数表达式」源码：
+// docViewer 预览框的渲染文档 = 主窗内跨源沙箱宿主 iframe 内嵌的 sandbox
+// srcdoc iframe（ADR-0021）——iframe 为 opaque origin（sandbox 无
+// allow-same-origin），宿主页不可触达其内部 DOM——缩放的执行逻辑必须以注入
+// 脚本形式运行在 iframe 文档内。本文件把该逻辑生成为「参数化匿名函数表达式」源码：
 //   - 生产端：buildInjectedScript 拼入，以 sltermZoom(document, window) 挂载；
 //   - 测试端：new Function 取回函数后在桩 doc/win 上真实执行——突破 jsdom
 //     不执行 srcdoc iframe 脚本的缺口，使注入核心获得 L2 行为级覆盖。
@@ -17,14 +17,14 @@
 //      累计到阈值才步进一档，触控板/高精度滚轮鲁棒。
 //   3. 缩放状态存闭包 + documentElement.style.zoom（CSS zoom，Chromium 系
 //      非标准属性但 WebView2 成立）——随 iframe 文档存亡 = 面板会话级记忆
-//      （dockview always renderer 下切走切回文档存活、关页签销毁归 100%；
-//      预览窗口隐藏保活时窗口不销毁 → 文档存活缩放保留，CP-037 复核语义）。
+//      （dockview always renderer 下切走切回文档存活、关页签销毁归 100%——
+//      宿主 iframe 为主窗 DOM，显隐不卸载文档，CP-037 复核语义）。
 //   4. 仅 zoom 实际变化才 postMessage 上行（防回声风暴）；下行复位/设值经
 //      source===parent + nonce + type 三重校验。
-//   5. postMessage 消息不跨窗口（宿主页 ↔ 主窗走 Tauri event，CP-044 通道
-//      退役）——本运行时只与「宿主页窗口」（win.parent，同窗口树）对话：
-//      targetOrigin "*"（SEC-03 实证：iframe opaque origin 只影响父侧
-//      e.origin 序列化为 "null"，与发送 targetOrigin 无关；宿主页侧
+//   5. postMessage 仅存在于「iframe ↔ 宿主页窗口树」内（宿主页 ↔ 主窗同为
+//      postMessage relay，ADR-0021）——本运行时只与「宿主页窗口」（win.parent，
+//      同窗口树）对话：targetOrigin "*"（SEC-03 实证：iframe opaque origin
+//      只影响父侧 e.origin 序列化为 "null"，与发送 targetOrigin 无关；宿主页侧
 //      source===iframe.contentWindow + 类型白名单 + nonce 校验兜底）。
 //
 // 生成纪律：插值一律 JSON.stringify（nonce 为 hex 本就无引号风险，双保险）；

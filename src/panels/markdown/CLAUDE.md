@@ -35,11 +35,11 @@ slterm_nav 上行 → classifyLink（linkPolicy 纯函数）：external（http/h
 
 ### 预览框参数与悬浮区
 
-PreviewFrame（S10-② 起编排独立预览 webview，见 docViewer/CLAUDE.md）segments=[linkRouter, scrollReport]、keepZoom + keepScrollRatio（内容重建后按镜像恢复——宿主 iframe-loaded 状态触发）、onZoomChange={zoomHud.report} / onZoomReset={zoomHud.hide}（悬浮区显示层）。悬浮区（FloatingArea，direction="row"）恒承载于面板根工具条带（40px，内容区上方）——edit 态无缩放源传 hud=null；重置链 = PreviewFrame ref.resetZoom + zoomHud.hide（2026-09-06 收敛，S10-② 条带化，docViewer/CLAUDE.md）。
+PreviewFrame（ADR-0021 起渲染主窗内跨源沙箱宿主 iframe，见 docViewer/CLAUDE.md）segments=[linkRouter, scrollReport]、keepZoom + keepScrollRatio（内容重建后按镜像恢复——slterm_iframe_loaded 宿主信号触发）、onZoomChange={zoomHud.report} / onZoomReset={zoomHud.hide}（悬浮区显示层）。悬浮区（FloatingArea，direction="row"）恒承载于面板根工具条带（40px，内容区上方）——edit 态无缩放源传 hud=null；重置链 = PreviewFrame ref.resetZoom + zoomHud.hide（2026-09-06 收敛，docViewer/CLAUDE.md）。
 
 ### 编辑字号语义（2026-09-06 接线）
 
-md/html 编辑形态字号 = 共享 `editorFontSize` store（Ctrl+滚轮缩放，EditorPanel 同款接线：useCodeMirror 的 fontSize/onFontSizeChange props——wheel 由 hook 无条件挂载，缺 props 会吞事件无效果）。原「恒锁默认 14」行为已变更：从此与 txt 编辑器同源（范围 [8,32] clamp、2s debounce 持久化）。split 态左 pane 滚轮=字号、右预览窗口滚轮=预览 zoom（pane 边界即语义边界，预览内容在独立窗口内、主窗侧事件物理不可达无冲突）。
+md/html 编辑形态字号 = 共享 `editorFontSize` store（Ctrl+滚轮缩放，EditorPanel 同款接线：useCodeMirror 的 fontSize/onFontSizeChange props——wheel 由 hook 无条件挂载，缺 props 会吞事件无效果）。原「恒锁默认 14」行为已变更：从此与 txt 编辑器同源（范围 [8,32] clamp、2s debounce 持久化）。split 态左 pane 滚轮=字号、右预览滚轮=预览 zoom（pane 边界即语义边界——预览内容在跨源沙箱 iframe 内，wheel 被 zoomRuntime capture 接管，两通道无冲突）。
 
 ### 预览配色单点（2026-09-06 收编）
 
@@ -48,8 +48,8 @@ md 预览内容经 sandbox iframe（预览域）渲染无法引用宿主 CSS 变
 ### 测试模式
 
 - 纯管线直测（pipeline/assets/links/async 编排——mermaid 模块 mock，jsdom 无布局）。
-- 面板集成（markdown-panel.test.tsx）：mock CM 桥（onDocContent 手动驱动）/allotment（透传 children）；预览编排与消息桥在 ipc/preview mock 边界驱动（装配产物捕获 + 事件订阅回调）。
-- L4 markdown.e2e.ts：真实 WebView2 渲染产物/图片 data/mermaid SVG/Ctrl+W/缩放（switchToWindow 驱动预览窗口，e2e-tests/CLAUDE.md「多 webview WDIO 可达性」节契约；事件属性通道在预览域（CSP meta 放行内联）执行）。
+- 面板集成（markdown-panel.test.tsx）：mock CM 桥（onDocContent 手动驱动）/allotment（透传 children）；预览编排与消息桥在 postMessage 构造边界驱动（jsdom 真实 iframe + MessageEvent 上行 + contentWindow postMessage spy 捕获推送产物——spy 必须先于 host_ready dispatch 安装）。
+- L4 markdown.e2e.ts：真实 WebView2 渲染产物/图片 data/mermaid SVG/Ctrl+W/缩放（探针模式——__slterm_e2e_previewDoc/iframeLoaded 主窗全局断言，e2e-tests/CLAUDE.md「预览宿主 iframe 驱动契约」节；事件属性通道在预览域（CSP meta 放行内联）执行）。
 
 ## 外部坑/红线
 

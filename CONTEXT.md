@@ -43,7 +43,7 @@ Dockview 标签页上显示的文字。终端为 `terminal-N`（每页独立编�
 _Avoid_: 文件类型映射
 
 **docViewer 预览家族**：
-共享 `src/panels/docViewer` 基础设施的文档型预览面板（htmlviewer/markdownviewer）——iframe 预览容器、注入桥、postMessage 总线、缩放/滚动恢复、形态切换条单点收容（红线登记 docViewer/CLAUDE.md；信任模型/资源通道 ADR-0017/0018）。
+共享 `src/panels/docViewer` 基础设施的文档型预览面板（htmlviewer/markdownviewer）——预览渲染于主窗内跨源沙箱宿主 iframe（自定义协议宿主页域，ADR-0021），注入桥、postMessage 三层通道、缩放/滚动恢复、形态切换条单点收容（红线登记 docViewer/CLAUDE.md；信任模型/资源通道 ADR-0017/0018）。
 
 **查看形态**（View Mode）：
 文档面板的显示形态。markdownviewer 三态：edit / split（左右分栏拖拽）/ preview；htmlviewer 二态：render / edit。右上角常驻半透明切换条单选切换，形态随面板 params 持久化（跨会话恢复）。
@@ -54,10 +54,10 @@ docViewer 共享的切换条组件（常驻半透明胶囊，单选高亮当前�
 _Avoid_: 悬浮窗
 
 **右上悬浮区**（FloatingArea）：
-docViewer 面板根右上角悬浮 UI 单点承载——形态切换条（上）与缩放 HUD 气泡（下）纵向列排，html/md 全形态同构；缩放 HUD 状态机（useZoomHud）经 PreviewFrame zoom 上行驱动、重置经其 ref 下行（2026-09-06 收敛，见 docViewer/CLAUDE.md）。
+docViewer 面板工具条带内悬浮 UI 单点承载——形态切换条与缩放 HUD 气泡横向侧排（direction="row"），html/md 全形态同构；缩放 HUD 状态机（useZoomHud）经 PreviewFrame zoom 上行驱动、重置经其 ref 下行（2026-09-06 收敛，见 docViewer/CLAUDE.md）。
 
 **文档真值源**（docRef）：
-文档面板的草稿优先文档模型——磁盘读入与编辑内容统一存放（面板级 docRef），预览渲染永以 docRef 为准而非磁盘；形态切换草稿保留（preview-only 卸载编辑器、快照回填；光标/undo 重置为登记已知行为）。
+文档面板的草稿优先文档模型——磁盘读入与编辑内容统一存放（面板级 docRef），预览渲染永以 docRef 为准而非磁盘；形态切换草稿保留（markdownviewer CM 恒挂载保活，CP-037——undo/光标跨形态保留）。
 
 **文档预览渲染管线**（mdPipeline）：
 markdown-it 组合（GFM/任务列表/KaTeX/代码高亮/mermaid 宿主渲染/本地相对资源 data: URL 内联）的同步纯函数主体 + 异步编排（mdRenderAsync），产物为完整 HTML 文档注入 PreviewFrame。

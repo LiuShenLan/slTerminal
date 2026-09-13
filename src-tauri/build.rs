@@ -62,10 +62,6 @@ fn main() {
         "background_tasks_set_config",
         "get_plan_balance",
         "refresh_plan_balance",
-        "preview_sync",
-        "preview_close",
-        "preview_render",
-        "preview_pull",
     ]);
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest))
         .expect("tauri-build 失败");

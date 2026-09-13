@@ -110,12 +110,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **可视化 UI 已落地（F11）**：快捷键设置页（`panels/settings/pages/KeybindingsPage`）——`listCommands()` 按 category 分组渲染，行显生效键（override 高亮 + ↺ 回默认 + 默认键小字；`getEffectiveKeystroke` null → 「未绑定」占位）；录制期间 `setCaptureSuspended(true)` 屏蔽全局派发，`isReserved` 拒绝保留键、`findConflict` 同 context 冲突警告放行写入。测试 `settings-keybindings.test.tsx` + `shortcuts.test.ts`（suspended 两例）。
 
-## 预览渲染与全局键（S10-② 起：键盘不跨窗口）
+## 预览渲染与全局键（ADR-0021：keyfwd 收窄转发）
 
-预览内容现渲染于独立 webview（自定义协议宿主页内 sandbox iframe，ADR-0019），且预览窗口 **focusable(false)**——OS 键盘焦点恒在主窗口，ShortcutRegistry 的 window capture 路径天然覆盖预览态（无需任何键转发/重放：旧「iframe 内 keydown postMessage 转发」（slterm 键转发类型 + 信任标记）与旧 `forwardGlobalShortcuts.ts`（需 allow-same-origin）均已删除，注入脚本零键上行，CP-013）。
+预览内容渲染于主窗内跨源沙箱宿主 iframe（自定义协议宿主页域，ADR-0021）——iframe 可持 OS 键盘焦点，故全局键经 **keyfwd 收窄转发** 覆盖：内容 iframe keydown（焦点在 input/textarea/select/contenteditable 时注入段跳过不转发）→ slterm_keyfwd 上行（code + 四修饰键，不含 key）→ PreviewFrame 合成 KeyboardEvent 经 `resolve(ev, "global")` 消费。
 
-- 预览聚焦语义：用户阅读预览时主窗口仍持焦点 → Ctrl+W（global.closeTab）等全局快捷键照常工作；**预览文档内键盘键入不可达**（表单/系统复制快捷键——已知行为登记，docViewer/CLAUDE.md）。
-- 预览窗口 focusable 决策若未来翻转（需预览内键盘输入），必须先解决「预览聚焦吞全局快捷键」问题（ADR-0019 逆转触发点）。
+- 预览聚焦语义：用户阅读预览（焦点在预览文档）时 Ctrl+W（global.closeTab）等全局快捷键照常工作；**表单焦点不转发**——预览文档内表单键入/系统复制快捷键解禁（旧 focusable=false 窗口「表单不可达」已知行为消亡）。
+- **keyfwd 威胁面（扩充 global 集前必读）**：nonce 明文内联于注入脚本——预览内容脚本可提取伪造 keyfwd 上行；危害边界 = global 命令集（当前仅 global.closeTab，command-catalog.test.ts 锁死）。global 命令集扩充须重估本面（ADR-0021 决策 3）。
+- 旧「iframe 内 keydown postMessage 转发 + 信任标记」（slterm_key 命令重放通道）与旧 `forwardGlobalShortcuts.ts`（需 allow-same-origin）均已删除且不复活（CP-013）——keyfwd 仅经 resolve 解析消费，无命令重放。
 
 ## 测试模式
 

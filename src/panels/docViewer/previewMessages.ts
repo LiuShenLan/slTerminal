@@ -78,8 +78,8 @@ export const HOST_IFRAME_LOADED_MSG_TYPE = "slterm_iframe_loaded";
 /** 主窗 → 宿主页：内容推送（html = 装配产物完整文档串，bg = iframe 背景色） */
 export const HOST_CONTENT_MSG_TYPE = "slterm_host_content";
 
-/** 预览宿主页 URL（自定义协议域——与 src-tauri/src/preview.rs
- *  PREVIEW_HOST_URL 双源同步，变更须两侧同改） */
+/** 预览宿主页 URL（自定义协议域——scheme 注册于 src-tauri/src/preview.rs
+ *  PREVIEW_SCHEME，host_protocol 仅服务 /preview-host.html 路径；变更须两侧同改） */
 export const PREVIEW_HOST_URL = "http://slterm-preview.localhost/preview-host.html";
 
 /** 上行消息类型白名单（文档层终态）：渲染态集合 + 收窄键转发（ADR-0021

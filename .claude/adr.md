@@ -463,6 +463,8 @@
 
 ## 0019 预览渲染迁独立 webview（ADR-0019：S10-① spike + S10-② 迁移落地定稿）
 
+> **载体决策已被 ADR-0021 取代（2026-09-13）**：独立 WebviewWindow 载体已推翻——预览回迁主窗内跨源沙箱 iframe（拖动跟随延迟结构性不可归零）。**安全域决策全部保留**：自定义协议宿主页域、sandbox 无 allow-same-origin、main_frame_only 无 IPC 注入、域级 CSP meta、nonce + 类型白名单校验链。原文保留不改写。
+
 **Status**: accepted（2026-09-08。S10-① spike 四问实证（go）；S10-② 迁移落地（CP-012/013/031/044）后定稿；③④ 后续条目结果在逆转记录节追加）
 
 **上下文**：CP-012/013/035/044 同根（预览通道 iframe srcDoc 与主窗口共享 CSP/上下文，SEC-09 结构性问题）。修复方向 = 预览渲染迁出主窗口 CSP 域到独立 Tauri webview，但整个 S10 的 go/no-go 依赖「WDIO（embedded driver：tauri-plugin-wdio-webdriver 1.3.0 内嵌 WebDriver + tauri-service 1.3.0 JS 服务）能否枚举/驱动独立预览 webview」——此前零实证。
@@ -532,3 +534,32 @@
 - 删页 = `groupsOfPage` 逐组 removeGroup（分屏组一并清除）；页内 addPanel 五入口统一 `resolvePageGroupForAdd` 落组。
 - 组对象 identity 跨 whole-grid fromJSON 可变约束不变（CP-004 登记）。
 - L4 `workspace-split.e2e.ts` 经 moveTo 等价落点覆盖分屏路径；真实拖拽手势（pointer 序列）自动化豁免登记 test-exemptions.md。
+
+## 0021 预览载体回迁主窗内跨源沙箱 iframe（ADR-0021：推翻 ADR-0019 载体决策，保留其安全域决策）
+
+**Status**: accepted（2026-09-13。spike 四过一否 + 用户裁决（D1 路线 A / D2 收窄转发 / D3 frame-src / D4 两 commit 批次；Q4 失败处置 = 探针断言））
+
+**上下文**：拖动主窗时 md「预览」/html「渲染」页签跟随有延迟（编辑器页签无延迟）。根因结构性：预览 = ADR-0019 独立 OS 窗口，跟随链 = 主窗移动事件 → JS 监听 → 50ms 节流 → invoke IPC → Rust SetWindowPos，三重延迟不可归零（ADR-0019 后果区自登记「拖拽期亚秒级滞后」，force-sync 事件链 + 锚点 ResizeObserver 两轮补丁后仍属轮询/节流范式）。编辑器 = 主窗 WebView2 内 DOM，OS 移窗天然像素级跟随。
+
+**决策**：
+
+1. **预览宿主页改由主窗内跨源沙箱 iframe 承载（路线 A）**：主窗 DOM → `<iframe sandbox="allow-scripts" src="http://slterm-preview.localhost/preview-host.html">`（宿主 iframe，opaque origin）→ 宿主页内嵌 `<iframe sandbox="allow-scripts">` srcdoc = 内容文档。**安全模型不变**（ADR-0019 核心资产保留）：自定义协议域不变；sandbox 无 allow-same-origin（CVE-2024-35222 红线）不变；main_frame_only → 各层 iframe 内均无 tauri IPC 注入不变；域级 CSP meta（SEC-02 指令表）不变；nonce + 类型白名单校验链不变。独立窗口只是载体，换载体不回退威胁模型。
+2. **消息桥 = 纯 window.postMessage（三层通道）**：独立窗口时代的 Tauri event/IPC 桥（preview_render/preview_pull/preview_sync/preview_close 四命令 + CONTENT_STORE + SESSION_STATE 会话守卫 + 几何换算 + run_on_main）整体删除——宿主页与主窗同窗口树，postMessage 天然可达（与 ADR-0019 决策一 2「跨独立窗口无 postMessage」结论不冲突——该结论约束的是跨窗口形态）。通道分层（previewMessages.ts 单点登记）：文档层（内容 iframe ↔ 主窗，经宿主桥 relay）：上行 {zoom, scroll, nav, font_probe, keyfwd}，下行 {reset, zoom_set, scroll_set}；宿主层（桥生命周期信号）：上行 {host_ready, iframe_loaded}，下行 {host_content}。origin 实证（2026-09-12 spike）：opaque origin 序列化 = "null"——主窗→宿主 targetOrigin 只能 "*"；校验 = `event.source === iframe.contentWindow` + origin "null"（下行侧宿主桥 isMain = source 归属 + 主窗 origin 白名单 tauri.localhost / localhost:1420 双闸）。
+3. **键盘语义 = 收窄转发（D2）**：内容 iframe keydown（焦点在 input/textarea/select/contenteditable 时不转发）经 slterm_keyfwd 上行（载荷 = code + 四修饰键，不含 key）→ 主窗合成 KeyboardEvent 经 ShortcutRegistry `resolve(ev, "global")` 解析消费——预览聚焦时全局快捷键（Ctrl+W 等）仍可用；表单键入/系统复制快捷键从「不可达」（ADR-0019 决策二 8 已知行为）解禁。不做旧 slterm_key 的命令重放语义复活。**威胁面登记**：nonce 明文内联于注入脚本 → 内容脚本可提取伪造 keyfwd → 触发主窗 global 命令；危害边界 = global 命令集（当前仅 global.closeTab，command-catalog.test.ts 锁死）——global 集扩充须重估本面（previewMessages.ts/buildInjectedScript.ts 注释登记）。
+4. **主窗 CSP 新增 `frame-src http://slterm-preview.localhost`（D3，收窄式新增）**：script-src 'self' 终态（CP-012）不动；csp-config.test.ts 锁死 frame-src 恰为该单值。
+5. **E2E 驱动契约 = 探针模式（spike Q4 裁决）**：embedded driver frame 内 execute 全灭（同源 about:blank 对照帧同样超时——driver 不接线任何非顶层上下文，与跨源/sandbox 无关）——switchToWindow/switchToFrame 契约整体退役；内容断言走「主窗 E2E 全局」探针（fontProbe 同款，PreviewFrame 经 E2E_ENABLED 门控写 `__slterm_e2e_previewDoc`（panelId → 最近推送产物）/ `__slterm_e2e_iframeLoaded`（panelId → 加载完成计数）——组合 = 旧「宿主页 srcdoc 属性」断言强度 + 真实加载佐证）。
+
+**被否决的备选**：
+
+- **路线 B（Rust 子类化主窗 WM_MOVING 同步位移预览窗）**：保留独立窗口形态，补丁范式极限——只能收窄延迟不能归零（WebView2 合成与 OS 移窗仍不同帧），且引入子类化/消息泵侵入面；否决（D1）。
+- **路线 C（预览窗改主窗 WS_CHILD 子窗口）**：WebView2 子窗口与主窗 WebView2 合成冲突面未实证、tauri 无此配置面（须自管 Win32 句柄树）；成本/风险不对称；否决（D1）。
+- **switchToFrame 两层切入做 E2E 内容断言**：spike Q4 实证 driver 不接线任何非顶层上下文（同源对照帧同灭）——不可行，改探针模式（决策 5）。
+
+**后果**：
+
+- 拖动/resize/跨屏 HiDPI 场景预览像素级跟随（结构性消除，无轮询/节流/IPC 链）；分屏切页显隐随主窗 DOM 天然正确；md split 预览即刻出现（旧「隐藏态不建窗 + 同步环」类缺陷形态整体消亡）。
+- 前端：PreviewFrame 重写（宿主 iframe 渲染 + 消息分派 + 探针），ipc/preview.ts 删除，ipc/window.ts 主窗三事件订阅删除；几何编排/200ms 轮询/force-sync/token 会话守卫前端族消亡。
+- Rust：preview.rs 收缩为 scheme 协议 + HOST_PAGE（窗口管理/内容存储/会话守卫/四命令全删）；lib.rs/build.rs/capabilities 清理（preview.json 整删）。
+- E2E：specUtils 预览驱动族改探针模式；html.e2e/markdown.e2e 改写（窗口生命周期用例 → 宿主 iframe DOM 生命周期；「主窗移动跟随」用例结构性消除删除）；keyfwd 链路新增正/负两用例。
+- **逆转触发点**：预览内容需超出面板矩形（如画中画浮窗）时重估载体（主窗 DOM 无法出窗）；driver 出现帧级寻址能力时 E2E 可回 switchToFrame 直接断言（探针保留无妨）；global 命令集扩充时重估 keyfwd 威胁面（决策 3）。
+

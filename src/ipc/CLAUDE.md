@@ -81,17 +81,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `deleteHistorySession(cliId, sessionId)`：后端按 cliId 路由 provider，delete 前经该 provider `validate_session_id` 前置校验（前端不传路径，仅传 cliId + sessionId，SEC-05 等价强制）。
 - `readHistoryTitle(cliId, sessionId)`：回退链与历史扫描同源，会话文件不存在 → `title: null`（非 Err）。
 
-### 预览窗口域 wrapper（S10-②，ADR-0019）
-
-`preview.ts` 承载主窗侧对预览独立 webview 的全部系统调用（label = `preview-<panelId>`，`makePreviewLabel` 单点）：
-
-- `previewSync(label, x, y, w, h, visible, token)`：创建/更新窗口几何显隐（CSS 视口坐标 → 后端换算物理屏幕；幂等，可见才建窗）。消费方 = PreviewFrame（200ms 轮询 + 主窗移动/resize/scale 三事件强制同步）。
-- `previewRender(label, html, bg?)`：推送装配产物（后端存储 + 定向 ping，宿主拉取）。`previewClose(label, token)`：销毁窗口清内容。
-- **token 会话守卫（2026-09-08）**：sync/close 请求携带前端挂载期随机 token，后端按 label 记当前 token + closed 态——close 后同 token 迟到 sync 拒绝重建、异 token（旧挂载）迟到 sync/close 拒绝受理（销毁后复活僵尸根因，preview.rs 登记）。消费方 PreviewFrame 每轮生命周期 effect 生成新 token，sync/close 同传。
-- 消息桥事件（名单点在本文件，变更须三处同步：TS / src-tauri/src/preview.rs 宿主页桥 / 守卫测试）：`onPreviewUplink`（iframe 文档上行 zoom/scroll/nav 转发——按 label 过滤 + 白名单校验在 PreviewFrame）、`onPreviewHostStatus`（iframe-loaded 状态）、`emitPreviewDownlink`（下行 reset/zoom_set/scroll_set，广播 + 宿主按 label 过滤）。载荷类型与上/下行白名单见 docViewer/previewMessages.ts。
-- 宿主页（自定义协议域内）只消费 `preview_pull` 与 event API，不经本层——其页内无打包模块，raw `__TAURI_INTERNALS__` 直连（capabilities/preview.json 最小权限）。
-- `window.ts` 预览几何三事件：`onMainWindowMoved` / `onMainWindowResized` / `onMainWindowScaleChanged`——主窗移动/尺寸/缩放因子变化即预览物理换算基准变化（CSS 视口矩形可能等值，PreviewFrame 以 forceSync 旗标旁路去重即时重发；事件高频，50ms 节流合并）。
-
 ### 窗口控制 wrapper（TB-03）
 
 `window.ts` 提供六个 wrapper：

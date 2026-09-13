@@ -5,12 +5,14 @@
 // PreviewFrame 编排与校验逻辑（jsdom 不加载跨源 src、不执行宿主页脚本——
 // 桥脚本行为由 Rust 侧 host_page_bridge_* 字符串断言 + L4 E2E 验收）：
 //   1. 宿主 iframe 渲染（src/sandbox/title/data-e2e）
-//   2. 内容推送门控（host_ready 前不推 / 后推 + 重推兜底 / 内容变化重推）
+//   2. 内容推送门控（host_ready 前不推 / 后推 + 重复 ready 重推兜底——宿主
+//      iframe 重载场景 / 内容变化重推）
 //   3. 上行校验链：source 归属 + origin "null" + nonce + 数值守卫
 //   4. keyfwd 收窄转发 → ShortcutRegistry resolve(ev, "global") 消费
 //   5. 下行 reset/zoom_set/scroll_set postMessage 载荷
 //   6. iframe_loaded → keepZoom/keepScrollRatio 恢复下行
 //   7. 卸载摘除监听（不泄漏处理）
+//   8. E2E 探针（Q4 裁决）：previewDoc 推送产物 / iframeLoaded 计数写主窗全局
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import React from "react";
@@ -173,6 +175,29 @@ describe("PreviewFrame 宿主桥（ADR-0021）", () => {
     );
     await act(async () => {});
     expect(lastContentPush(post).html).toContain("changed");
+  });
+
+  // 防复发（2026-09-13 E2E 实证）：宿主 iframe 因 dockview 面板 DOM reparent
+  //（setActive/布局重排——iframe 同文档 reparent 即重载）二次加载 → host_ready
+  // 二次到达必须重推内容；布尔 state 幂等曾吃掉二次 ready 的重推，内容 iframe
+  // 恒空白（keyfwd E2E 用例 activatePanel 后必踩）
+  it("host_ready 重复到达（宿主 iframe 重载）→ 每次均重推内容", async () => {
+    const { container } = renderFrame();
+    const frame = hostFrame(container);
+    const post = spyHostPost(frame);
+    await sendHostReady(frame);
+    expect(lastContentPush(post).html).toContain("hello");
+    const pushesAfterFirst = post.mock.calls.filter(
+      ([m]) => (m as { type?: string }).type === HOST_CONTENT_MSG_TYPE,
+    ).length;
+
+    // 宿主 iframe 重载 → 桥二次 ready（同 source/origin 形态）
+    await sendHostReady(frame);
+    const pushes = post.mock.calls.filter(
+      ([m]) => (m as { type?: string }).type === HOST_CONTENT_MSG_TYPE,
+    );
+    expect(pushes.length).toBe(pushesAfterFirst + 1);
+    expect(lastContentPush(post).html).toContain("hello");
   });
 
   it("上行校验：origin 非 \"null\" 的宿主信号不受理（不推送内容）", async () => {
@@ -420,6 +445,51 @@ describe("PreviewFrame 宿主桥（ADR-0021）", () => {
       expect(w.__slterm_e2e_fontProbe?.[PANEL_ID]).toBe(true);
     } finally {
       delete w.__slterm_e2e_fontProbe;
+    }
+  });
+
+  it("E2E 内容探针：推送产物按 panelId 写主窗全局 __slterm_e2e_previewDoc", async () => {
+    // ADR-0021 spike Q4 裁决（embedded driver frame 内 execute 全灭）——L4
+    // 内容断言走主窗探针全局；vitest 下 E2E_ENABLED 恒真
+    const w = window as unknown as {
+      __slterm_e2e_previewDoc?: Record<string, string>;
+    };
+    delete w.__slterm_e2e_previewDoc;
+    try {
+      const { container } = renderFrame();
+      const frame = hostFrame(container);
+      const post = spyHostPost(frame);
+      await sendHostReady(frame);
+      const pushed = lastContentPush(post).html;
+      // 探针值 = 最近一次推送产物本身（L4 以其含 X 判定内容渲染完成）
+      expect(w.__slterm_e2e_previewDoc?.[PANEL_ID]).toBe(pushed);
+      expect(w.__slterm_e2e_previewDoc?.[PANEL_ID]).toContain("<p>hello</p>");
+    } finally {
+      delete w.__slterm_e2e_previewDoc;
+    }
+  });
+
+  it("E2E 加载探针：iframe_loaded 上行按 panelId 累加计数", async () => {
+    const w = window as unknown as {
+      __slterm_e2e_iframeLoaded?: Record<string, number>;
+    };
+    delete w.__slterm_e2e_iframeLoaded;
+    try {
+      const { container } = renderFrame();
+      const frame = hostFrame(container);
+      await sendHostReady(frame);
+      expect(w.__slterm_e2e_iframeLoaded?.[PANEL_ID]).toBeUndefined();
+      await act(async () =>
+        dispatchUp(frame, { type: HOST_IFRAME_LOADED_MSG_TYPE }),
+      );
+      expect(w.__slterm_e2e_iframeLoaded?.[PANEL_ID]).toBe(1);
+      // 重建（再次加载）计数累加——L4 重建恢复断言可比较增量
+      await act(async () =>
+        dispatchUp(frame, { type: HOST_IFRAME_LOADED_MSG_TYPE }),
+      );
+      expect(w.__slterm_e2e_iframeLoaded?.[PANEL_ID]).toBe(2);
+    } finally {
+      delete w.__slterm_e2e_iframeLoaded;
     }
   });
 
