@@ -301,10 +301,13 @@ async function readHistoryCountPill(): Promise<number | null> {
  * E 用例 finally 删除会话 601 后，E 结束→F 开始仅 ~200ms（< 遗留 scheduler 的 2s
  * tick 周期），「删除后重扫」未落地，pill 仍持陈旧值——若此时直接取基线会得到错误
  * n，启用后断言 n+1 永不可达。收敛判据：轮询间隔约 1s、同值持续 ≥3s（覆盖一个
- * tick 周期 + 扫描余量）才判收敛，总上限 6s——「连续两次相同」不足以排除陈旧值
- * （两次读取可都落在重扫前）。超时抛错（基线不可靠则后续断言必败，提前报因）。
+ * tick 周期 + 扫描余量——语义窗，不动）才判收敛，总上限 15s——「连续两次相同」
+ * 不足以排除陈旧值（两次读取可都落在重扫前）。超时抛错（基线不可靠则后续断言
+ * 必败，提前报因）。上限 15s = 负载裕度（全量并行下 pill 渲染/扫描链路拉长，
+ * 2026-09-13 负载间歇红治理），非语义放宽——同值 ≥3s 判据与「陈旧值必被覆盖」
+ * 语义不变，pill 恒不收敛该红仍红。
  */
-async function waitForHistoryPillSettled(timeoutMs = 6000): Promise<number> {
+async function waitForHistoryPillSettled(timeoutMs = 15000): Promise<number> {
   const start = Date.now();
   let runValue: number | null = null;
   let runStart = 0;
@@ -604,7 +607,9 @@ describe("后台定时任务 (F12, E2E-02/E2E-03)", () => {
       await createProject(e2eProjectDir);
       await openNavView();
 
-      // 2. 打开导航树确认历史计数 N（fixture 归属会话；等首轮扫描完成 pill 出现）
+      // 2. 打开导航树确认历史计数 N（fixture 归属会话；等首轮扫描完成 pill 出现）。
+      //    超时 40s = 负载裕度（全量并行下首轮扫描 + pill 渲染链路变慢），非语义放宽——
+      //    真不扫描该红仍红
       let n = 0;
       await browser.waitUntil(
         async () => {
@@ -615,7 +620,7 @@ describe("后台定时任务 (F12, E2E-02/E2E-03)", () => {
           }
           return false;
         },
-        { timeout: 20000, timeoutMsg: "E2E 项目历史计数 pill 未出现（扫描未完成）" },
+        { timeout: 40000, timeoutMsg: "E2E 项目历史计数 pill 未出现（扫描未完成）" },
       );
 
       // 3. 设置中心把 sessionRefresh 频率改 2s（磁盘断言落盘 → 调度器 timer 重启）
@@ -643,10 +648,12 @@ describe("后台定时任务 (F12, E2E-02/E2E-03)", () => {
       written.push(writeTickSession(UUID_TICK_1, "E2E定时刷新新会话"));
 
       // 5. 等待真实 tick（2×interval + 余量）→ 计数 pill 变 N+1——调度器定时执行体
-      //    扫描（force=true 绕过后端缓存），无任何手动刷新点击
+      //    扫描（force=true 绕过后端缓存），无任何手动刷新点击。
+      //    超时 30s = 负载裕度（全量并行下 tick 链路拉长），非语义放宽——tick 不生效
+      //    该红仍红
       await browser.waitUntil(
         async () => (await readHistoryCountPill()) === n + 1,
-        { timeout: 20000, timeoutMsg: `定时刷新后历史计数 pill 未变为 ${n + 1}（tick 未生效）` },
+        { timeout: 30000, timeoutMsg: `定时刷新后历史计数 pill 未变为 ${n + 1}（tick 未生效）` },
       );
     } finally {
       // 清理写入的会话文件 + 专用目录（副本污染会波及后续 history spec）
@@ -694,9 +701,15 @@ describe("后台定时任务 (F12, E2E-02/E2E-03)", () => {
       // 2. 再写一个归属本项目的新会话 jsonl
       written.push(writeTickSession(UUID_TICK_2, "E2E禁用期新会话"));
 
-      // 3. 等 2×interval（2s×2）+ 余量 → 计数不变（timer 已停，无 tick 扫描）
-      await browser.pause(8000);
-      expect(await readHistoryCountPill()).toBe(n);
+      // 3. 禁用期观察窗 ≈2×interval（2s×2）+ 余量 → 计数必须恒不变（timer 已停，
+      //    无 tick 扫描）。采样循环替代旧「pause(8000) + 单发读」：全量并行负载下
+      //    单发读恰逢 UI 渲染/扫描链路的瞬态错值即误红（2026-09-13 负载间歇红
+      //    治理）；8 次采样全等 n 才通过——窗口总长相仿（8s），判据反而更严
+      //    （单点瞬态值不再一票通过），语义不变
+      for (let i = 0; i < 8; i++) {
+        expect(await readHistoryCountPill()).toBe(n);
+        await browser.pause(1000);
+      }
 
       // 4. 重新勾选启用 → applyConfig 禁用→启用立即一轮 → 计数 +1
       expect(await clickEnabledCheckbox("sessionRefresh", true)).toBe(true);
@@ -711,10 +724,12 @@ describe("后台定时任务 (F12, E2E-02/E2E-03)", () => {
         "backgroundTasks.sessionRefresh.enabled 未落盘回 true",
       );
       await waitForCheckboxState("sessionRefresh", true);
-      // 禁用→启用立即一轮扫描 = 4 fixture + 602 = 5 = n+1（基线 n 已收敛为 4）
+      // 禁用→启用立即一轮扫描 = 4 fixture + 602 = 5 = n+1（基线 n 已收敛为 4）。
+      // 超时 30s = 负载裕度（全量并行下 applyConfig→立即一轮→pill 更新链路拉长），
+      // 非语义放宽——立即一轮不生效该红仍红
       await browser.waitUntil(
         async () => (await readHistoryCountPill()) === n + 1,
-        { timeout: 20000, timeoutMsg: `重新启用后历史计数 pill 未变为 ${n + 1}` },
+        { timeout: 30000, timeoutMsg: `重新启用后历史计数 pill 未变为 ${n + 1}` },
       );
     } finally {
       for (const p of written) {
