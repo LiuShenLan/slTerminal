@@ -181,7 +181,6 @@ function makeTerminalEntry(overrides?: {
     fitAddon: { dispose: () => {}, fit: () => {} } as unknown as FitAddon,
     shellKind: "pwsh",
     promptReady: false,
-    lastOutputAt: 0,
     ...(overrides?.agentSession !== undefined
       ? { agentSession: overrides.agentSession }
       : {}),

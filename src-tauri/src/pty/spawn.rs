@@ -3,7 +3,7 @@
 /// Windows 关键坑：
 /// - spawn 串行化：并发 spawn 卡死 ConPTY 输出管道 → SPAWN_LOCK
 /// - cwd 反斜杠：传给 ConPTY 前规范化成 \
-/// - CPR 响应：openpty() 后立即写 \x1b[1;1R 到 stdin
+/// - CPR 响应：不盲注——reader_loop 检测到 DSR 握手（ESC[6n）后按需代答（ADR-0022）
 /// - stdin drop：Windows 绝对不能 drop stdin（立即杀子进程）
 /// - 孤儿进程：每个子进程放入 Job Object，JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
 use crate::error::AppError;
@@ -1238,7 +1238,7 @@ fn ensure_pty_capacity(active: usize) -> Result<(), AppError> {
 /// 输出通过 on_output Channel 持续推送到前端。
 /// BE-01: async + spawn_blocking，阻塞 I/O 不占 IPC worker。
 /// BE-12: SPAWN_LOCK 仅保护 create_conpty_pair + spawn_conpty_child（锁内），
-/// take_writer、CPR 注入、add_to_job_object 在锁外。
+/// take_writer、add_to_job_object 在锁外。
 #[tauri::command]
 pub async fn pty_spawn(
     state: tauri::State<'_, AppState>,
@@ -1350,7 +1350,7 @@ pub async fn pty_spawn(
                 .map_err(|e| AppError::Pty(e.to_string()))?
         };
 
-        // BE-12: 释放 SPAWN_LOCK——子进程已启动，后续操作（take_writer、CPR、Job Object）无需串行化
+        // BE-12: 释放 SPAWN_LOCK——子进程已启动，后续操作（take_writer、Job Object）无需串行化
         drop(_lock);
 
         // take_writer 只能调一次（0.9.0 破坏性变更），Arc<Mutex> 共享
@@ -1359,14 +1359,10 @@ pub async fn pty_spawn(
             .map_err(|e| AppError::Pty(e.to_string()))?;
         let writer: Arc<Mutex<Box<dyn std::io::Write + Send>>> = Arc::new(Mutex::new(raw_writer));
 
-        // Windows: spawn 后向 stdin 写 CPR \x1b[1;1R（锁外）
-        // 补偿 ConPTY VtIo::StartIfNeeded() DSR 握手。
-        #[cfg(windows)]
-        {
-            let mut w = writer.lock();
-            w.write_all(b"\x1b[1;1R")?;
-            w.flush()?;
-        }
+        // CPR 盲注已删除（ADR-0022）：DSR 握手由 reader_loop 检测到 ESC[6n
+        // 后按需代答——Win10 捆绑 OpenConsole 1.24 握手发 DA1 不发 DSR，
+        // 盲注的 \x1b[1;1R 无人消费，被 conhost 输入状态机解析为 F3 键 →
+        // PSReadLine CharacterSearch 吞掉下一个输入字符（恢复注入丢首字符）
 
         // 将子进程放入 Job Object 防止孤儿进程（锁外）
         #[cfg(windows)]
@@ -2141,11 +2137,9 @@ mod spawn_tests {
         let (hpc, conpty_master) =
             conpty_custom::create_conpty_pair(80, 24, 26100, &ConptyInputModes::default())
                 .expect("create_conpty_pair 应成功");
-        // CPR 注入（对齐生产代码 pty_spawn 行为）
-        let mut w = conpty_master.take_writer().expect("take_writer 应成功");
-        use std::io::Write as _;
-        w.write_all(b"\x1b[1;1R").unwrap();
-        w.flush().unwrap();
+        // CPR 盲注已随生产代码一并删除（ADR-0022 按需代答）——本辅助无
+        // reader_loop，DSR 查询不应答；kill/隔离类用例不读输出，无死锁面
+        let w = conpty_master.take_writer().expect("take_writer 应成功");
         let writer: Arc<Mutex<Box<dyn std::io::Write + Send>>> = Arc::new(Mutex::new(w));
 
         let extra_envs: Vec<(String, String)> = vec![

@@ -67,7 +67,6 @@ describe('L3 终端渲染 — 生产 OSC handler（E2E-03）', () => {
       fitAddon: undefined as never,
       shellKind: 'pwsh',
       promptReady: false,
-      lastOutputAt: 0,
     });
   });
 

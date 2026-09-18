@@ -12,7 +12,6 @@ import type { MutableRefObject } from "react";
 import type { Terminal } from "@xterm/xterm";
 import type { PtyEvent } from "../../types";
 import type { TabState } from "./useCommandDetection";
-import { TerminalRegistry } from "./TerminalRegistry";
 
 /** DEC 2026 同步更新 ANSI 转义序列 */
 const DEC2026_PREFIX = "\x1b[?2026h";
@@ -62,7 +61,7 @@ export interface UsePtyOutputReturn {
  * 合帧管道：PTY 输出 → handlePtyOutput → 阈值分流 → 合帧缓冲 → 双定时器 → flushBuffer → xterm.js
  *
  * @param terminal        xterm.js Terminal 实例 ref
- * @param panelId         面板 ID（供日志/调试用）
+ * @param _panelId        面板 ID（保留位——现无消费点，PTY 元数据读写全部经 TerminalRegistry 单点）
  * @param visible         面板是否可见（非焦点终端降频积累）
  * @param onTabStateChange  页签状态变更回调（命令运行/退出时触发）
  * @param onRetrySpawn    重连 spawn 回调 ref（Enter 触发时调用，由 useXterm 设置）
@@ -71,7 +70,7 @@ export interface UsePtyOutputReturn {
  */
 export function usePtyOutput(
   terminal: MutableRefObject<Terminal | null>,
-  panelId: string,
+  _panelId: string,
   visible: boolean,
   onTabStateChange?: (state: TabState) => void,
   onRetrySpawn?: MutableRefObject<((cols: number, rows: number) => void) | null>,
@@ -192,8 +191,6 @@ export function usePtyOutput(
   const handlePtyOutput = useCallback(
     (event: PtyEvent) => {
       if (event.type === "output") {
-        // 恢复注入闸门的沉淀判据打点（注册条目不存在时 no-op）
-        TerminalRegistry.noteOutput(panelId);
         const rawBytes = new Uint8Array(event.data.bytes);
         const text = decoderRef.current.decode(rawBytes);
 

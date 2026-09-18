@@ -6,7 +6,7 @@
 /// PeekNamedPipe 查询管道可读字节数），累积至 MICRO_BATCH_MAX（64KB）
 /// 或无可读数据后，再一次批量 Channel::send（BE-12）。
 /// 「读到即续读」非定时器——不引入固定延迟。完整批次（首块+续读）统一走
-/// pending 拼接 → DA1 检测/代答 → 剥离 → 发送（旧 first/tail 两段式下
+/// pending 拼接 → 查询检测/代答 → 剥离 → 发送（旧 first/tail 两段式下
 /// 续读块不过启动剥离的缺口随之消除）。
 /// DOC-01 豁免项 1（reader_loop 残余 I/O 编排分支）随微批变动——豁免表同步在 S19，
 /// 本文件 M11 分析块已更新为微批后形态。
@@ -17,8 +17,16 @@
 /// 到达的 DA1 自答 ESC[?1;2c 并经 onData→pty_write 无差别回灌 stdin
 /// （旧调查「xterm 应答只留前端不回灌」假设已证伪）；Win10 捆绑 conhost
 /// （OpenConsole 1.24）启动握手多发 DA1，迟到的自答落入 PSReadLine 行首
-/// → 蜂鸣 + 可见 [?1;2c 字符污染，恢复注入被拼前缀。块尾 DA1 前缀残片
+/// → 蜂鸣 + 可见 [?1;2c 字符污染，恢复注入被拼前缀。块尾查询前缀残片
 /// 扣留 pending 待下块拼接（跨块防裂），EOF 时冲刷不丢字节。
+///
+/// DSR 握手按需代答（ADR-0022）：启动窗口内检测到 DSR 光标查询
+/// （ESC[6n，ConPTY VtIo::StartIfNeeded 握手）才向 stdin 代答 CPR
+/// ESC[1;1R——「问什么答什么」。旧 spawn 盲注 CPR 已删除：Win10 捆绑
+/// OpenConsole 1.24 握手发 DA1 不发 DSR，盲注的 CPR 无人消费，被 conhost
+/// 输入状态机解析为 F3 键 → PSReadLine CharacterSearch 吞掉下一个输入
+/// 字符（实测：新终端敲 abc 显示 bc；恢复注入丢首字符 c）。启动窗口外的
+/// DSR 是应用光标位置查询，应答需真实光标位置，留 xterm.js 实答不接管。
 ///
 /// 独立线程运行，不阻塞 tokio runtime。读取到 EOF（子进程退出）时发送 Exit 事件并退出。
 ///
@@ -70,10 +78,11 @@ impl Read for PtyReaderInput {
 /// - channel: Channel 直写（无替换层）；send 失败（前端已卸载）→ 退出
 /// - child: P2-11 子进程句柄，EOF 时调用 wait() 获取真实退出码
 /// - exit_code: P2-42 退出状态共享，reader 设置后记录
-/// - writer: DA1 代答注入通道（检测到 DA1 查询时写入 ESC[?64;22c）
+/// - writer: 查询代答注入通道（DA1 → ESC[?64;22c；启动窗口内 DSR → CPR ESC[1;1R）
 /// - 循环读取 PTY 输出，微批聚合后通过 Channel 发送 Output 事件（BE-05）
 /// - Ok(0) = EOF → 冲刷 pending 残片 → 发 Exit 事件 → 退出
-/// - Windows 首轮读取剥离 ConPTY 启动注入序列；DA1 查询全程剥离 + 代答
+/// - Windows 首轮读取剥离 ConPTY 启动注入序列；DA1 查询全程剥离 + 代答，
+///   DSR 握手查询启动窗口内代答 CPR
 pub fn reader_loop(
     mut input: PtyReaderInput,
     channel: Channel<PtyEvent>, // 直写，无替换层
@@ -83,17 +92,17 @@ pub fn reader_loop(
 ) {
     let mut buf = [0u8; READER_BUF_SIZE];
     let mut startup_drained = false;
-    // 跨块 DA1 前缀残片扣留缓冲（≤3 字节：ESC / ESC[ / ESC[0）
-    let mut pending_da1: Vec<u8> = Vec::new();
+    // 跨块查询前缀残片扣留缓冲（≤3 字节：ESC / ESC[ / ESC[0 / ESC[6）
+    let mut pending_query: Vec<u8> = Vec::new();
 
     loop {
         match input.read(&mut buf) {
             Ok(0) => {
                 // EOF — 子进程已退出
-                // 冲刷扣留的 DA1 前缀残片（不完整序列，原样转发不丢字节）
-                if !pending_da1.is_empty() {
+                // 冲刷扣留的查询前缀残片（不完整序列，原样转发不丢字节）
+                if !pending_query.is_empty() {
                     let _ = channel.send(PtyEvent::Output {
-                        bytes: std::mem::take(&mut pending_da1),
+                        bytes: std::mem::take(&mut pending_query),
                     });
                 }
                 // P2-11: 从 child.wait() 获取真实退出码而非硬编码 0
@@ -131,13 +140,13 @@ pub fn reader_loop(
                     micro_batch_tail(&mut input, &mut buf, MICRO_BATCH_MAX.saturating_sub(n));
                 raw.extend_from_slice(&tail);
 
-                // 跨块防裂：拼接上轮扣留残片，再扣留本块尾部 DA1 前缀
-                let mut frame = std::mem::take(&mut pending_da1);
+                // 跨块防裂：拼接上轮扣留残片，再扣留本块尾部查询前缀
+                let mut frame = std::mem::take(&mut pending_query);
                 frame.extend_from_slice(&raw);
-                let (body, rest) = split_trailing_da1_prefix(frame);
-                pending_da1 = rest;
+                let (body, rest) = split_trailing_query_prefix(frame);
+                pending_query = rest;
                 if body.is_empty() {
-                    // 整块均为 DA1 前缀残片（≤3B）——待下轮补全，不发送不置 drained
+                    // 整块均为查询前缀残片（≤3B）——待下轮补全，不发送不置 drained
                     continue;
                 }
 
@@ -146,6 +155,14 @@ pub fn reader_loop(
                 // 前端 xterm.js 不再见到 DA1，后端是唯一应答方，应答身份单一
                 if mirror_da1_query(&body) {
                     inject_da1_response(&writer);
+                }
+
+                // DSR 握手按需代答（ADR-0022）：仅启动窗口内——ConPTY VtIo 握手
+                // 查询（Win11 inbox conhost 发；Win10 捆绑 1.24 握手发 DA1 不发 DSR）。
+                // 问什么答什么，绝不盲注（盲注 CPR 在 Win10 被解析为 F3 吞键）。
+                // 窗口外 DSR 是应用光标位置查询，须 xterm 以真实位置实答
+                if should_answer_dsr(startup_drained, &body) {
+                    inject_cpr_response(&writer);
                 }
 
                 // 剥离：启动窗口内剥 ConPTY 启动序列+DA1，窗口外仅剥 DA1。
@@ -239,6 +256,25 @@ fn inject_da1_response(writer: &Mutex<Box<dyn Write + Send>>) {
     }
     if let Err(e) = w.flush() {
         tracing::warn!("DA1 响应注入失败: {}", e);
+    }
+}
+
+/// CPR 应答注入（DSR 握手按需代答，ADR-0022）
+///
+/// 启动窗口内检测到 DSR 光标查询（ESC[6n，ConPTY VtIo::StartIfNeeded 握手）
+/// 时向子进程 stdin 写入 ESC[1;1R（启动期光标恒在 1;1）。仅在握手真实
+/// 发出时才应答——Win10 捆绑 OpenConsole 1.24 握手发 DA1 不发 DSR，
+/// 盲注 CPR 会落入应用输入被解析为 F3 键（PSReadLine CharacterSearch
+/// 吞掉下一个输入字符）。检测决策 = 纯函数 `should_answer_dsr`，
+/// 注入动作为 I/O（M11 豁免项）。
+fn inject_cpr_response(writer: &Mutex<Box<dyn Write + Send>>) {
+    // 向子进程 stdin 注入 CPR 响应（不阻塞 reader 线程；CP-005: 锁无失败分支）
+    let mut w = writer.lock();
+    if let Err(e) = w.write_all(b"\x1b[1;1R") {
+        tracing::warn!("CPR 响应注入失败: {}", e);
+    }
+    if let Err(e) = w.flush() {
+        tracing::warn!("CPR 响应注入失败: {}", e);
     }
 }
 
@@ -373,14 +409,17 @@ fn strip_da1_queries(data: &[u8]) -> Vec<u8> {
     out
 }
 
-/// 切分块尾 DA1 前缀残片（纯函数）
+/// 切分块尾查询前缀残片（纯函数）
 ///
-/// DA1 查询（ESC[c / ESC[0c）可能跨 read 块边界——块尾若为其前缀
-///（ESC / ESC[ / ESC[0），扣留待下块拼接，防止半条序列送前端后被
-/// xterm.js 跨写入拼合自答（DA1 接管的跨块形态）。返回（主体, 扣留残片）。
-fn split_trailing_da1_prefix(data: Vec<u8>) -> (Vec<u8>, Vec<u8>) {
+/// 后端接管的查询序列（DA1：ESC[c / ESC[0c；DSR 握手：ESC[6n）可能跨
+/// read 块边界——块尾若为其前缀（ESC / ESC[ / ESC[0 / ESC[6），扣留待
+/// 下块拼接，防止半条序列送前端后被 xterm.js 跨写入拼合自答。扣留只延迟
+/// 不丢字节（ESC[6 也是 CUP `ESC[6;..H` 的前缀，随下块原样拼回）。
+/// 返回（主体, 扣留残片）。
+fn split_trailing_query_prefix(data: Vec<u8>) -> (Vec<u8>, Vec<u8>) {
     for prefix in [
         b"\x1b[0".as_slice(),
+        b"\x1b[6".as_slice(),
         b"\x1b[".as_slice(),
         b"\x1b".as_slice(),
     ] {
@@ -434,6 +473,30 @@ fn mirror_da1_query(data: &[u8]) -> bool {
     false
 }
 
+/// 检测输出字节流中是否含有 DSR 光标位置查询（ESC[6n）
+///
+/// 仅匹配精确形态 ESC[6n（ConPTY VtIo 握手查询）；ESC[5n（设备状态查询）、
+/// ESC[?6n 等同族不动。滑动窗口扫描，在 reader 线程每轮聚合批次上调用。
+fn mirror_dsr_query(data: &[u8]) -> bool {
+    // 滑动窗口扫描 ESC [ 6 n
+    for i in 0..data.len().saturating_sub(3) {
+        if data[i] == 0x1b && data[i + 1] == b'[' && data[i + 2] == b'6' && data[i + 3] == b'n' {
+            return true;
+        }
+    }
+    false
+}
+
+/// DSR 代答决策（纯函数，ADR-0022）
+///
+/// 仅启动窗口内（startup_drained=false）的 DSR 由后端代答 CPR——
+/// ConPTY VtIo 握手期查询，应答只要求格式合法（启动期光标恒在 1;1）。
+/// 启动窗口外的 DSR 是应用光标位置查询（应答需真实光标位置），
+/// 透传前端由 xterm.js 实答，后端不接管。
+fn should_answer_dsr(startup_drained: bool, data: &[u8]) -> bool {
+    !startup_drained && mirror_dsr_query(data)
+}
+
 #[cfg(test)]
 mod reader_tests {
     use super::*;
@@ -443,7 +506,7 @@ mod reader_tests {
     // reader_loop 主循环有三个 match 分支，均已审查可抽取性：
     //
     // 1. Ok(0) — EOF 分支：
-    //    - pending 残片冲刷      → DA1 前缀残片（不完整序列）原样转发，无决策
+    //    - pending 残片冲刷      → 查询前缀残片（不完整序列）原样转发，无决策
     //    - eof_exit_code()       → ✅ 已抽取为纯函数（PTY-12）：lock/wait 两级
     //                              失败 → None（不硬编码 0），成功 → 真实退出码
     //    - child.wait()          → portable_pty::Child::wait() 是系统调用（Windows WaitForSingleObject），I/O
@@ -451,13 +514,16 @@ mod reader_tests {
     //    - channel.send(Exit)    → Tauri IPC Channel::send()，I/O（CP-034: 直写无锁层，
     //                              断开即退出）
     //
-    // 2. Ok(n) — 数据分支（DA1 全量接管后形态：聚合 → 拼接 → 检测/代答 → 剥离 → 发送）：
+    // 2. Ok(n) — 数据分支（DA1 全量接管 + DSR 按需代答后形态：聚合 → 拼接 →
+    //    检测/代答 → 剥离 → 发送）：
     //    - micro_batch_tail()       → ✅ 已抽取为纯函数（BE-05）：pending 检查 +
     //                                 续读累积（read 为系统调用，决策已抽，调用不可抽）
-    //    - split_trailing_da1_prefix() → ✅ 纯函数（跨块 DA1 前缀扣留）
+    //    - split_trailing_query_prefix() → ✅ 纯函数（跨块查询前缀扣留）
     //    - mirror_da1_query()       → ✅ 纯函数（剥离前检测；注入动作
     //                                 inject_da1_response = writer.lock() + 管道 I/O，
     //                                 经共享 Vec writer 用例直测）
+    //    - should_answer_dsr()      → ✅ 纯函数（启动窗口内 DSR 代答决策；
+    //                                 注入动作 inject_cpr_response 同上直测）
     //    - apply_output_strip()     → ✅ 纯函数（启动序列 + DA1 剥离统一入口）
     //    - channel.send(Output)     → Channel::send()，I/O
     //
@@ -468,8 +534,9 @@ mod reader_tests {
     //
     // 结论：reader_loop 中剩余的所有分支决策均依赖锁/系统调用或 IPC send，
     // 无法在不引入运行时依赖的前提下构造测试输入，无法进一步抽取为纯函数。
-    // apply_output_strip / mirror_da1_query / split_trailing_da1_prefix /
-    // eof_exit_code / micro_batch_tail 已覆盖主循环中全部可纯函数化的决策逻辑。
+    // apply_output_strip / mirror_da1_query / should_answer_dsr /
+    // split_trailing_query_prefix / eof_exit_code / micro_batch_tail
+    // 已覆盖主循环中全部可纯函数化的决策逻辑。
     //
     // M11 状态：已尽力——剩余均为 I/O 编排无法纯函数化。
     // PTY-12 评估产出：残余不可抽分支明细 + 豁免理由见
@@ -691,6 +758,45 @@ mod reader_tests {
         assert!(mirror_da1_query(input));
     }
 
+    // ─── mirror_dsr_query / should_answer_dsr 纯函数测试（ADR-0022）───
+
+    #[test]
+    fn dsr_standard_query_detected() {
+        // DSR 光标位置查询 ESC[6n（ConPTY VtIo 握手形态）
+        assert!(mirror_dsr_query(b"\x1b[6n"));
+    }
+
+    #[test]
+    fn dsr_embedded_in_startup_burst_detected() {
+        // 启动突发内嵌 DSR（OSC 标题 + 清屏 + DSR 同块）
+        let input = b"\x1b]0;pwsh\x07\x1b[2J\x1b[6n";
+        assert!(mirror_dsr_query(input));
+    }
+
+    #[test]
+    fn dsr_lookalikes_not_detected() {
+        // ESC[5n（设备状态查询）/ ESC[?6n（私有模式查询）/ ESC[65n 均非握手 DSR
+        assert!(!mirror_dsr_query(b"\x1b[5n"));
+        assert!(!mirror_dsr_query(b"\x1b[?6n"));
+        assert!(!mirror_dsr_query(b"\x1b[65n"));
+        // 不完整前缀（跨块残片形态）不检测——由 split_trailing_query_prefix 扣留
+        assert!(!mirror_dsr_query(b"\x1b[6"));
+        // 普通文本不误触发
+        assert!(!mirror_dsr_query(b"hello [6n world"));
+    }
+
+    #[test]
+    fn dsr_answered_only_in_startup_window() {
+        // 启动窗口内（drained=false）DSR → 代答 CPR
+        assert!(should_answer_dsr(false, b"\x1b[6n"));
+        // 启动窗口外（drained=true）DSR → 不代答——应用光标位置查询须
+        // xterm 以真实位置实答（后端 1;1R 恒值会误导应用布局）
+        assert!(!should_answer_dsr(true, b"\x1b[6n"));
+        // 窗口内无 DSR → 不代答（绝不盲注——Win10 捆绑 conhost 握手发 DA1
+        // 不发 DSR，盲注 CPR 会被解析为 F3 吞键，防复发锚点）
+        assert!(!should_answer_dsr(false, b"\x1b[2J\x1b[H"));
+    }
+
     // ─── apply_output_strip 纯函数测试 ───
 
     #[test]
@@ -804,42 +910,52 @@ mod reader_tests {
 
     #[test]
     fn strip_da1_trailing_partial_forwarded_as_is() {
-        // 纯函数本身不扣留残片（扣留是 reader_loop 的 split_trailing_da1_prefix
+        // 纯函数本身不扣留残片（扣留是 reader_loop 的 split_trailing_query_prefix
         // 职责）——尾部落单的 ESC/ESC[ 原样通过，记录两层的职责边界
         assert_eq!(strip_da1_queries(b"abc\x1b"), b"abc\x1b");
         assert_eq!(strip_da1_queries(b"abc\x1b["), b"abc\x1b[");
     }
 
-    // ─── split_trailing_da1_prefix 纯函数测试 ───
+    // ─── split_trailing_query_prefix 纯函数测试 ───
 
     #[test]
     fn split_holds_trailing_esc() {
-        let (body, pending) = split_trailing_da1_prefix(b"abc\x1b".to_vec());
+        let (body, pending) = split_trailing_query_prefix(b"abc\x1b".to_vec());
         assert_eq!(body, b"abc");
         assert_eq!(pending, b"\x1b");
     }
 
     #[test]
     fn split_holds_trailing_esc_bracket() {
-        let (body, pending) = split_trailing_da1_prefix(b"abc\x1b[".to_vec());
+        let (body, pending) = split_trailing_query_prefix(b"abc\x1b[".to_vec());
         assert_eq!(body, b"abc");
         assert_eq!(pending, b"\x1b[");
     }
 
     #[test]
     fn split_holds_trailing_esc_bracket_zero() {
-        let (body, pending) = split_trailing_da1_prefix(b"abc\x1b[0".to_vec());
+        let (body, pending) = split_trailing_query_prefix(b"abc\x1b[0".to_vec());
         assert_eq!(body, b"abc");
         assert_eq!(pending, b"\x1b[0");
     }
 
     #[test]
+    fn split_holds_trailing_esc_bracket_six() {
+        // ESC[6 是 DSR 握手查询（ESC[6n）前缀——扣留防跨块裂（DSR 按需代答
+        // 的检测完整性依赖完整序列；扣留只延迟不丢字节，ESC[6;..H 等 CUP
+        // 前缀同形不误伤，随下块原样拼回）
+        let (body, pending) = split_trailing_query_prefix(b"abc\x1b[6".to_vec());
+        assert_eq!(body, b"abc");
+        assert_eq!(pending, b"\x1b[6");
+    }
+
+    #[test]
     fn split_complete_da1_not_held() {
         // 完整 DA1 查询不是前缀残片——不扣留（交检测/剥离处理）
-        let (body, pending) = split_trailing_da1_prefix(b"\x1b[c".to_vec());
+        let (body, pending) = split_trailing_query_prefix(b"\x1b[c".to_vec());
         assert_eq!(body, b"\x1b[c");
         assert!(pending.is_empty());
-        let (body, pending) = split_trailing_da1_prefix(b"\x1b[0c".to_vec());
+        let (body, pending) = split_trailing_query_prefix(b"\x1b[0c".to_vec());
         assert_eq!(body, b"\x1b[0c");
         assert!(pending.is_empty());
     }
@@ -847,17 +963,17 @@ mod reader_tests {
     #[test]
     fn split_non_da1_prefix_not_held() {
         // ESC[1 / ESC[? 等不是 DA1 前缀——不扣留（ESC[1c 非 DA1，不误伤）
-        let (body, pending) = split_trailing_da1_prefix(b"abc\x1b[1".to_vec());
+        let (body, pending) = split_trailing_query_prefix(b"abc\x1b[1".to_vec());
         assert_eq!(body, b"abc\x1b[1");
         assert!(pending.is_empty());
     }
 
     #[test]
     fn split_plain_and_empty_input() {
-        let (body, pending) = split_trailing_da1_prefix(b"plain".to_vec());
+        let (body, pending) = split_trailing_query_prefix(b"plain".to_vec());
         assert_eq!(body, b"plain");
         assert!(pending.is_empty());
-        let (body, pending) = split_trailing_da1_prefix(Vec::new());
+        let (body, pending) = split_trailing_query_prefix(Vec::new());
         assert!(body.is_empty());
         assert!(pending.is_empty());
     }
@@ -867,18 +983,33 @@ mod reader_tests {
         // 防复发回归（跨块形态）：chunk1 = "abc ESC["，chunk2 = "c def"——
         // 拼接后检测命中 + 剥离无泄漏（旧代码半条 ESC[ 送前端，
         // xterm 跨写入拼合后自答）
-        let (b1, p1) = split_trailing_da1_prefix(b"abc\x1b[".to_vec());
+        let (b1, p1) = split_trailing_query_prefix(b"abc\x1b[".to_vec());
         assert_eq!(b1, b"abc");
         assert_eq!(p1, b"\x1b[");
         let mut frame = p1;
         frame.extend_from_slice(b"c def");
-        let (b2, p2) = split_trailing_da1_prefix(frame);
+        let (b2, p2) = split_trailing_query_prefix(frame);
         assert!(p2.is_empty());
         assert!(mirror_da1_query(&b2), "拼接后应检测到 DA1 → 触发代答");
         assert_eq!(strip_da1_queries(&b2), b" def", "剥离后前端无泄漏");
     }
 
-    // ─── inject_da1_response 动作级测试（共享 Vec writer）───
+    #[test]
+    fn split_reassembly_closes_cross_chunk_dsr() {
+        // 跨块 DSR 防裂回归：chunk1 尾 = "ESC[6"，chunk2 头 = "n rest"——
+        // 拼接后 mirror_dsr_query 命中（漏扣留则半条 ESC[6 送前端，
+        // xterm 跨写入拼合后以自身位置实答，后端代答丢失）
+        let (b1, p1) = split_trailing_query_prefix(b"abc\x1b[6".to_vec());
+        assert_eq!(b1, b"abc");
+        assert_eq!(p1, b"\x1b[6");
+        let mut frame = p1;
+        frame.extend_from_slice(b"n rest");
+        let (b2, p2) = split_trailing_query_prefix(frame);
+        assert!(p2.is_empty());
+        assert!(mirror_dsr_query(&b2), "拼接后应检测到 DSR → 触发 CPR 代答");
+    }
+
+    // ─── inject_da1_response / inject_cpr_response 动作级测试（共享 Vec writer）───
 
     /// 共享 Vec writer——把注入动作（I/O）纳入 L1 直测
     struct SharedWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
@@ -917,6 +1048,14 @@ mod reader_tests {
         inject_da1_response(&writer);
         inject_da1_response(&writer);
         assert_eq!(*buf.lock().unwrap(), b"\x1b[?64;22c\x1b[?64;22c");
+    }
+
+    #[test]
+    fn inject_cpr_response_writes_home_position() {
+        // DSR 握手代答：启动期光标恒在 1;1
+        let (writer, buf) = make_shared_writer();
+        inject_cpr_response(&writer);
+        assert_eq!(*buf.lock().unwrap(), b"\x1b[1;1R");
     }
 
     // ─── eof_exit_code 纯函数测试（PTY-12）───

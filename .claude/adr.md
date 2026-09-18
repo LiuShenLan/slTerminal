@@ -586,3 +586,8 @@
 - Win10 蜂鸣/`[?1;2c` 污染/恢复失败三症状结构性消除；Win11 行为对齐（DA1 代答统一后端）。
 - `pty_spawn` 返回值 `string → SpawnResponse` 为 breaking change（允许，无兼容过渡）；全部 spawn 调用点与测试 mock 同步适配。
 - 前端 xterm.js DA1 自答通道失去触发源（查询不再到达）——xterm 升级改变自答行为对本项目无影响面。
+
+**修订（2026-09-18 同日，Win10 验收驳回后二次定位）**：
+
+1. **决策 2 的沉淀窗部分撤销**：「渲染窗口吞首字节」假设被 Win10 实测证伪（沉淀窗无效）。闸门回归纯 `promptReady` 判定，`lastOutputAt`/`noteOutput` 打点整族删除。
+2. **追加 DSR 按需代答（CPR 不盲注）**：丢首字符真实根因 = spawn 盲注 `\x1b[1;1R`——Win10 捆绑 OpenConsole 1.24 握手发 DA1 **不发 DSR**，盲注 CPR 无人消费，被 conhost 输入状态机解析为 F3 键 → PSReadLine CharacterSearch 吞掉下一个输入字符（判别验证：Win10 新终端敲 `abc` 显示 `bc`）。修复 = 盲注删除，`reader_loop` 启动窗口内检测到 `ESC[6n` 才代答（`should_answer_dsr`）；窗口外 DSR 留 xterm 实答（应用光标位置查询需真实位置）。**原则沉淀：握手应答一律按需（问什么答什么），禁止盲注——盲注字节在没有等待者时就是注入应用输入的杂散键。**

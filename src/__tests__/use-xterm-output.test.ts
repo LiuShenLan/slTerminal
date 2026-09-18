@@ -157,8 +157,6 @@ vi.mock("../panels/terminal/TerminalRegistry", () => ({
     register: mockRegistryRegister,
     get: mockRegistryGet,
     remove: mockRegistryRemove,
-    // 恢复注入闸门沉淀判据打点——本文件不测闸门语义，no-op 桩
-    noteOutput: vi.fn(),
   },
 }));
 

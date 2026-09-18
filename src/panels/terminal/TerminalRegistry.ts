@@ -36,10 +36,6 @@ export interface RegisteredTerminal {
   /** 首个提示符已渲染（OSC 133;A 到达）——恢复注入就绪闸门信号；
    *  cmd 无 shell integration 恒 false（闸门对该种类走固定延迟，不读本字段） */
   promptReady: boolean;
-  /** 最近一次 PTY 输出到达时间戳（Date.now()）——就绪闸门的输出沉淀判据：
-   *  133;A 是「渲染开始」而非「渲染完成」，渲染期控制台输入模式切换窗口会
-   *  吞首字节（Win10 捆绑 conhost 实测）；闸门要求输出静默 ≥100ms 才注入 */
-  lastOutputAt: number;
   /** 会话状态：存在即运行中，null = 明确无会话，undefined = 未设置（缺省保留旧值） */
   agentSession?: AgentSessionInfo | null;
 }
@@ -120,14 +116,6 @@ export const TerminalRegistry = {
     const entry = registry.get(panelId);
     if (!entry || entry.promptReady) return;
     entry.promptReady = true;
-  },
-
-  /** PTY 输出到达打点（usePtyOutput 每个 output 事件调用）——
-   *  恢复注入闸门的沉淀判据数据源；无 notify（闸门经 get() 轮询读取） */
-  noteOutput(panelId: string): void {
-    const entry = registry.get(panelId);
-    if (!entry) return;
-    entry.lastOutputAt = Date.now();
   },
 
   /** 订阅注册表变更：register/remove/sessionChange 后同步通知。返回退订函数 */
