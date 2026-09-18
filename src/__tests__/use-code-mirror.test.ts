@@ -1090,8 +1090,15 @@ describe("EDF-03 大文件分支与保存失败", () => {
     // 相对计数：本用例窗口内零新建（基线见上——前序存活 hook 续体污染只入基线）
     expect(createCalls() - createBase).toBe(0);
 
-    // 防误保存: filePathRef 已清 + 无编辑实例——save 无 view 可保存,不覆盖原文件
-    const activateCall = mockUsePanelFocus.mock.calls[mockUsePanelFocus.mock.calls.length - 1];
+    // 防误保存: filePathRef 已清 + 无编辑实例——save 无 view 可保存,不覆盖原文件。
+    // activate 按 container identity 过滤取本 hook 的回调（勿取 mock.calls 末位：
+    // 前序存活 hook 的 initEditor 续体 re-render 会重调 usePanelFocus 改写末位
+    // ——命中前序 hook（view 存 + filePathRef 空，如警告取消分支）经
+    // setActiveEditor 指针派发其 save 会走另存为流调 dialogSave，全量并行实证
+    // 误红；container 每用例 beforeEach 新建，identity 过滤精确锁定本 hook）
+    const activateCall = [...mockUsePanelFocus.mock.calls]
+      .reverse()
+      .find((c) => c[1] === container);
     const activateFn = activateCall?.[2] as (() => void) | undefined;
     activateFn?.();
     getActiveEditor()?.save();
