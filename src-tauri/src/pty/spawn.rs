@@ -17,7 +17,6 @@ use portable_pty::native_pty_system;
 use portable_pty::PtySize;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::ipc::Channel;
@@ -1175,6 +1174,21 @@ pub struct SpawnRequest {
     pub shell: Option<String>,
 }
 
+/// spawn 返回体
+///
+/// CP-024：ts-rs 生成 `src/types/pty.ts`。
+/// shell_kind = 实际解析的 shell 种类（`shell::shell_kind_of`），供前端恢复注入
+/// 就绪闸门分派等待策略（pwsh/powershell 等 OSC 133;A，cmd 固定延迟兜底）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/types/pty.ts")]
+pub struct SpawnResponse {
+    /// PTY 会话 ID
+    pub session_id: String,
+    /// 实际解析的 shell 种类
+    pub shell_kind: shell::ShellKind,
+}
+
 /// spawn 请求三校验（BE-14 尺寸超限 / SEC-02 shell 白名单 / SEC-02 cwd 沙箱）
 ///
 /// D2 可测性重构：从 pty_spawn 命令体抽取为纯函数——不依赖 AppState，
@@ -1230,7 +1244,7 @@ pub async fn pty_spawn(
     state: tauri::State<'_, AppState>,
     on_output: Channel<PtyEvent>,
     request: SpawnRequest,
-) -> Result<String, AppError> {
+) -> Result<SpawnResponse, AppError> {
     // BE-14/SEC-02: 三校验（尺寸超限 / shell 白名单 / cwd 沙箱）委托纯函数 validate_spawn_request
     // 注意：RwLockReadGuard 非 Send——须在块内 clone 出 Option<PathBuf> 后立即释放读锁，
     // 否则 guard 跨 await 存活导致 pty_spawn future 不满足 Send
@@ -1245,6 +1259,8 @@ pub async fn pty_spawn(
 
     // 解析 shell 程序（不依赖 portable-pty CommandBuilder，直接获取结构化信息）
     let shell_info = shell::resolve_shell_info(request.shell.as_deref())?;
+    // SpawnResponse.shell_kind 数据源——恢复注入就绪闸门按种类分派等待策略
+    let shell_kind = shell::shell_kind_of(&shell_info.program);
 
     // 注入终端能力环境变量——Claude Code 依赖此宣告启用 True Color
     // SLTERM_PANEL_ID：子进程据此识别所属面板，供 hooks 信号文件标记事件来源
@@ -1388,11 +1404,7 @@ pub async fn pty_spawn(
         let exit_code_slot: Arc<Mutex<Option<i32>>> = Arc::new(Mutex::new(None));
         let reader_exit_code = exit_code_slot.clone();
 
-        // DA1 注入防重复标志
-        let da1_injected = Arc::new(AtomicBool::new(false));
-
         let writer_reader = writer.clone();
-        let da1_injected_reader = da1_injected.clone();
 
         let reader_handle = std::thread::spawn(move || {
             crate::pty::reader::reader_loop(
@@ -1401,7 +1413,6 @@ pub async fn pty_spawn(
                 reader_child,
                 reader_exit_code,
                 writer_reader,
-                da1_injected_reader,
             );
         });
 
@@ -1411,7 +1422,6 @@ pub async fn pty_spawn(
             writer,
             reader_handle: Some(reader_handle),
             exit_code: exit_code_slot,
-            da1_injected,
             job_object: job_handle,
             panel_id, // SEC-08: 记录归属 panel
         })
@@ -1436,7 +1446,10 @@ pub async fn pty_spawn(
     }
     sessions.insert(session_id.clone(), session);
 
-    Ok(session_id)
+    Ok(SpawnResponse {
+        session_id,
+        shell_kind,
+    })
 }
 
 /// SEC-08: 校验 panel_id 与 session 归属一致（纯函数）
@@ -2149,7 +2162,6 @@ mod spawn_tests {
             writer,
             reader_handle: None,
             exit_code: Arc::new(Mutex::new(None)),
-            da1_injected: Arc::new(AtomicBool::new(false)),
             job_object: None,
             panel_id: panel_id.to_string(),
         }

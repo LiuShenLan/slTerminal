@@ -87,9 +87,13 @@ PowerShell 通过 `-EncodedCommand` 内联 `shell-integration.ps1`，避免 `%AP
 
 `strip_conpty_startup()` 在首轮读取时剥离 ConPTY `VtIo::StartIfNeeded()` 注入的序列：OSC 窗口标题（含 BEL）、清屏、光标归位、光标显隐、DSR。后续读取原样透传。
 
-### DA1 查询模拟响应
+### DA1 后端全量接管（推翻旧「模拟响应」语义）
 
-ConPTY 拦截 DA1 查询（`ESC[c`/`ESC[0c]`）后不返回响应，导致 Claude Code Ink 渲染器阻塞约 60s。`reader_loop` 在 startup_drained 后扫描输出，检测到后向 stdin 注入 `ESC[?64;22c`，同一会话仅注入一次。
+**语义终态**：DA1 查询（`ESC[c` / `ESC[0c`）一律由后端检测→代答 `ESC[?64;22c`，**永不透传前端**，全平台统一（Win11 上 xterm.js 也不再自答——应答身份唯一，消除 `?64;22c` vs `?1;2c` 双重身份）。
+
+动机：ConPTY 拦截 DA1 查询后不返回响应，Claude Code Ink 渲染器阻塞约 60s——这是旧「模拟响应」节已记录的原始动机。2026-09 Win10 实机暴露第二病灶：捆绑 OpenConsole 1.24 启动握手多发一个 DA1（Win11 inbox conhost 不发），旧剥离清单不含 DA1 → 查询透传到前端 → xterm.js 核心自动应答 `\x1b[?1;2c` 经 onData 无差别回写 stdin（**纠错作废旧假设「xterm 应答只留前端 DOM 不回灌 PTY」**——实测 onData 全量回写）→ PSReadLine 把 ESC 当无效键响铃、`[?1;2c` 落成可编辑文本，并与恢复注入竞争 stdin 造成前缀污染。
+
+`reader_loop` 处理序（每读块）：micro-batch 聚合 → 拼接跨块 pending → `split_trailing_da1_prefix` 扣留块尾 DA1 前缀（ESC/ESC[/ESC[0，防半条序列泄漏后 xterm 跨写入拼合自答）→ `mirror_da1_query` 检测 → 命中即 `inject_da1_response` 代答（**每次查询必答**，旧「同一会话仅一次」AtomicBool 已删除——谁问谁得答）→ `apply_output_strip`（启动窗口内剥启动序列+DA1；窗口外仅剥 DA1）→ 送前端。EOF 时冲刷 pending 不丢数据。DA2（`ESC[>c`）/XTVERSION（`ESC[>0q`）同族查询未接管——未观测到受害场景，观测到再议（只剥 `ESC[c`/`ESC[0c` 两形态，`ESC[1c` 等非查询不动）。
 
 ### CPR 注入
 
@@ -121,7 +125,7 @@ spawn 后立即向 stdin 写 `\x1b[1;1R`，补偿 ConPTY `VtIo::StartIfNeeded()`
 
 | 豁免项 | 原因 | 当前兜底 |
 |--------|------|---------|
-| `reader_loop` 残余 I/O 编排 | 依赖 Channel/管道系统调用，无法在 L1 构造输入（CP-034: Channel 直写，无锁层） | 可纯函数化部分（`apply_startup_strip`/`should_inject_da1`/`eof_exit_code`/`micro_batch_tail`）已由 L1 覆盖 |
+| `reader_loop` 残余 I/O 编排 | 依赖 Channel/管道系统调用，无法在 L1 构造输入（CP-034: Channel 直写，无锁层） | 可纯函数化部分（`apply_output_strip`/`strip_da1_queries`/`split_trailing_da1_prefix`/`eof_exit_code`/`micro_batch_tail`）已由 L1 覆盖 |
 | `pty_kill` 超时→监督线程真实阻塞路径 | Win32 阻塞不可注入（ClosePseudoConsole 永久阻塞无法在 L1 构造） | 清理决策由 L1 `plan_cleanup_after_join_timeout` 2 例锁死 + pty 集成 kill 用例 + Win10 实机人工验证点（杀会话后应用无挂起） |
 | 容量超限 kill 清理 | 命中上限后 kill 已 spawn 子进程依赖真实 PtySession | BE-01 判定语义由纯函数用例锁死 + Job Object 兜底 |
 | `conpty_api` vendor 提取/加载回退 | 依赖真实 DLL 加载行为 | ADR-0005 Win10 实机人工验证 + `ensure_extracted` 幂等用例 + 回退状态可观测（`pty_conpty_status` + 启动 toast） |

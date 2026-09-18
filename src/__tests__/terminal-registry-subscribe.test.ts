@@ -8,7 +8,7 @@ import type { RegisteredTerminal } from "../panels/terminal/TerminalRegistry";
 /** 测试用 stub——仅用作 subscribe 通知 payload，不实际调用 */
 function stubTerminal(): RegisteredTerminal {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return { term: {} as any, sessionId: "s1", webglAddon: null, fitAddon: {} as any };
+  return { term: {} as any, sessionId: "s1", webglAddon: null, fitAddon: {} as any, shellKind: "pwsh", promptReady: false };
 }
 
 beforeEach(() => {

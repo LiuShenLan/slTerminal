@@ -323,13 +323,17 @@ export function useXterm({
 
       pty
         .spawn({ panelId, cols, rows, cwd }, handlePtyOutput)
-        .then((sessionId) => {
+        .then(({ sessionId, shellKind }) => {
           // 注册到 TerminalRegistry（跨页面切换时可供 reattach 查询，约束 #8 单点元数据）
+          // shellKind/promptReady：恢复注入就绪闸门数据源（promptReady 初始 false，
+          // 首个 OSC 133;A 到达时经 markPromptReady 置位）
           TerminalRegistry.register(panelId, {
             term,
             sessionId,
             webglAddon: webglAddonRef.current,
             fitAddon,
+            shellKind,
+            promptReady: false,
           });
           if (E2E_ENABLED) setTerminalSessionReady(container, true);
           // PTY spawn 初始化：重置命令运行状态（覆盖持久化残留）

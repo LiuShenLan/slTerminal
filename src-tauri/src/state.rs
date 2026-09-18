@@ -1,6 +1,7 @@
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+#[cfg(test)]
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -23,8 +24,6 @@ pub struct PtySession {
     pub reader_handle: Option<JoinHandle<()>>,
     /// P2-42: 子进程退出码（reader 线程在 EOF/错误时设置并记录）
     pub exit_code: Arc<Mutex<Option<i32>>>,
-    /// DA1 注入防重复标志（同一会话只注入一次 ESC[?64;22c 响应）
-    pub da1_injected: Arc<AtomicBool>,
     /// Windows Job Object 句柄（孤儿防护，drop 时 CloseHandle）
     /// 非 Windows 平台为零大小占位类型
     pub job_object: Option<crate::pty::spawn::JobHandle>,

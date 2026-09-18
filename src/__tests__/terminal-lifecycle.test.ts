@@ -43,7 +43,7 @@ const mocks = vi.hoisted(() => {
   } as unknown as WebglAddon;
 
   const pty = {
-    spawn: vi.fn().mockResolvedValue("mock-session-001"),
+    spawn: vi.fn().mockResolvedValue({ sessionId: "mock-session-001", shellKind: "pwsh" }),
     kill: vi.fn().mockResolvedValue(undefined),
     write: vi.fn().mockResolvedValue(undefined),
     resize: vi.fn().mockResolvedValue(undefined),

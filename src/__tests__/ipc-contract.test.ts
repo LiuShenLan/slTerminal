@@ -56,15 +56,17 @@ afterEach(() => {
 
 const SPAWN_REQUEST = { panelId: 'p1', cwd: 'C:\\test', cols: 120, rows: 40 };
 const HELLO_BYTES = new Uint8Array([72, 101, 108, 108, 111]); // "Hello"
+// SpawnResponse 形状（ts-rs 生成，snake_case Rust ↔ camelCase JS）
+const SPAWN_RESPONSE = { sessionId: 'mock-session-01', shellKind: 'pwsh' };
 
 describeIpcContract('pty IPC 合约', [
   {
     name: 'spawn: 应调用 pty_spawn 命令，参数包含 request 和 onOutput Channel',
     cmd: 'pty_spawn',
     call: () => pty.spawn(SPAWN_REQUEST, onOutputStub()),
-    respond: 'mock-session-01',
+    respond: SPAWN_RESPONSE,
     expectArgs: { request: SPAWN_REQUEST, onOutput: expect.any(Channel) },
-    expectResult: 'mock-session-01',
+    expectResult: SPAWN_RESPONSE,
     assertArgs: (args) => {
       // 验证 channel.onmessage 已绑定为 onOutput 回调
       expect((args.onOutput as Channel<unknown>).onmessage).toBe(
@@ -213,16 +215,24 @@ describe('pty.spawn cols/rows 前置校验（FE-14）', () => {
     const spy = vi.fn();
     mockIPC((cmd, args) => {
       spy(cmd, args);
-      return 'mock-session-01';
+      return SPAWN_RESPONSE;
     });
     const req = { panelId: 'p1', cols: 1, rows: 32767 };
-    await expect(pty.spawn(req, onOutputStub())).resolves.toBe('mock-session-01');
+    await expect(pty.spawn(req, onOutputStub())).resolves.toEqual(SPAWN_RESPONSE);
     expect(spy).toHaveBeenCalledTimes(1);
     expect(spy.mock.calls[0][0]).toBe('pty_spawn');
     expect(spy.mock.calls[0][1]).toEqual({
       request: req,
       onOutput: expect.any(Channel),
     });
+  });
+
+  it('SpawnResponse 形状守卫：sessionId + shellKind 字面量集（pwsh/powershell/cmd）', async () => {
+    mockIPC(() => ({ sessionId: 's1', shellKind: 'cmd' }));
+    const res = await pty.spawn({ panelId: 'p1', cols: 80, rows: 24 }, onOutputStub());
+    expect(res.sessionId).toBe('s1');
+    // shellKind 字面量契约——ts-rs 生成 "pwsh" | "powershell" | "cmd"
+    expect(['pwsh', 'powershell', 'cmd']).toContain(res.shellKind);
   });
 });
 

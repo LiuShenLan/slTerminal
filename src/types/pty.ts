@@ -33,6 +33,15 @@ fallbackReason: string | null, };
 export type PtyEvent = { "type": "output", "data": { bytes: Array<number>, } } | { "type": "exit", "data": { code: number | null, } };
 
 /**
+ * Shell 种类（白名单三值，SEC-01）
+ *
+ * 供前端恢复注入就绪闸门分派等待策略：pwsh/powershell 有 shell integration
+ * （OSC 133;A 提示符信号），cmd 无 → 固定延迟兜底。
+ * CP-024：ts-rs 生成 `src/types/pty.ts`。
+ */
+export type ShellKind = "pwsh" | "powershell" | "cmd";
+
+/**
  * spawn 参数
  *
  * CP-024：ts-rs 生成 `src/types/pty.ts`。
@@ -61,3 +70,20 @@ cwd?: string,
  * shell 程序路径（可选，自动检测 pwsh→powershell→cmd；SEC-02: 经 validate_shell_allowlist 校验）
  */
 shell?: string, };
+
+/**
+ * spawn 返回体
+ *
+ * CP-024：ts-rs 生成 `src/types/pty.ts`。
+ * shell_kind = 实际解析的 shell 种类（`shell::shell_kind_of`），供前端恢复注入
+ * 就绪闸门分派等待策略（pwsh/powershell 等 OSC 133;A，cmd 固定延迟兜底）。
+ */
+export type SpawnResponse = { 
+/**
+ * PTY 会话 ID
+ */
+sessionId: string, 
+/**
+ * 实际解析的 shell 种类
+ */
+shellKind: ShellKind, };

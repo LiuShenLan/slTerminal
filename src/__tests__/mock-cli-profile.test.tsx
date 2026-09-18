@@ -406,6 +406,8 @@ describe("AC-4① OSC 133 命中（useCommandDetection 链路）", () => {
       sessionId: "sid-osc-133",
       webglAddon: null,
       fitAddon: fitStub,
+      shellKind: "pwsh",
+      promptReady: false,
     });
     renderHook(() =>
       useCommandDetection(
@@ -476,7 +478,7 @@ describe("AC-4② hooks 能力经真实链路调用", () => {
     capturedOsc133Handler = null;
     TerminalRegistry._reset();
     registerMockCliProfile();
-    h.mockPtySpawn.mockReset().mockResolvedValue("test-session-id");
+    h.mockPtySpawn.mockReset().mockResolvedValue({ sessionId: "test-session-id", shellKind: "pwsh" });
     h.mockPtyWrite.mockReset().mockResolvedValue(undefined);
     h.mockPtyResize.mockReset().mockResolvedValue(undefined);
     h.mockPtyKill.mockReset().mockResolvedValue(undefined);
@@ -801,6 +803,10 @@ describe("AC-4⑤ 恢复注入", () => {
           sessionId: "session-test-1",
           webglAddon: null,
           fitAddon: fitStub,
+          shellKind: "pwsh",
+          // 就绪闸门立即放行——恢复注入不等 10s 超时兜底（promptReady 语义由
+          // agent-history-restore.test.ts 专测）
+          promptReady: true,
         });
       }),
     };

@@ -17,12 +17,16 @@ function makeEntry(overrides?: {
   sessionId?: string;
   webglAddon?: WebglAddon | null;
   fitAddon?: FitAddon;
+  shellKind?: import("../types/pty").ShellKind;
+  promptReady?: boolean;
 }): RegisteredTerminal {
   return {
     term: { dispose: () => {} } as unknown as Terminal,
     sessionId: "test-session",
     webglAddon: null,
     fitAddon: { dispose: () => {}, fit: () => {} } as unknown as FitAddon,
+    shellKind: "pwsh",
+    promptReady: false,
     ...overrides,
   };
 }
@@ -93,6 +97,55 @@ describe("TerminalRegistry", () => {
     expect(retrieved.agentSession).toBeUndefined();
   });
 });
+
+// ═══════════════════════════════════════════════════════════════
+// markPromptReady / shellKind 契约测试（恢复注入就绪闸门）
+// ═══════════════════════════════════════════════════════════════
+
+describe("TerminalRegistry.markPromptReady + shellKind", () => {
+  beforeEach(() => {
+    TerminalRegistry._reset();
+  });
+
+  it("markPromptReady 置位 promptReady → get 读到 true", () => {
+    TerminalRegistry.register("p1", makeEntry({ promptReady: false }));
+    expect(TerminalRegistry.get("p1")!.promptReady).toBe(false);
+
+    TerminalRegistry.markPromptReady("p1");
+    expect(TerminalRegistry.get("p1")!.promptReady).toBe(true);
+  });
+
+  it("重复 markPromptReady 幂等——不重复 notify（subscribe 零调用）", () => {
+    TerminalRegistry.register("p1", makeEntry());
+    const listener = () => { throw new Error("不应收到通知"); };
+    // markPromptReady 不产事件（闸门只经 get() 轮询读取）——用抛错 listener 硬断言
+    TerminalRegistry.subscribe(listener);
+    TerminalRegistry.markPromptReady("p1");
+    TerminalRegistry.markPromptReady("p1");
+    expect(TerminalRegistry.get("p1")!.promptReady).toBe(true);
+  });
+
+  it("panelId 不存在 → no-op（不建条目）", () => {
+    TerminalRegistry.markPromptReady("ghost");
+    expect(TerminalRegistry.has("ghost")).toBe(false);
+  });
+
+  it("shellKind 随注册条目往返（pwsh/powershell/cmd 三值）", () => {
+    TerminalRegistry.register("p-pwsh", makeEntry({ shellKind: "pwsh" }));
+    TerminalRegistry.register("p-ps", makeEntry({ shellKind: "powershell" }));
+    TerminalRegistry.register("p-cmd", makeEntry({ shellKind: "cmd" }));
+    expect(TerminalRegistry.get("p-pwsh")!.shellKind).toBe("pwsh");
+    expect(TerminalRegistry.get("p-ps")!.shellKind).toBe("powershell");
+    expect(TerminalRegistry.get("p-cmd")!.shellKind).toBe("cmd");
+  });
+
+  it("_reset 后条目与 promptReady 一并清空（用例隔离）", () => {
+    TerminalRegistry.register("p1", makeEntry({ promptReady: true }));
+    TerminalRegistry._reset();
+    expect(TerminalRegistry.get("p1")).toBeUndefined();
+  });
+});
+
 
 // ═══════════════════════════════════════════════════════════════
 // setAgentSession 契约测试

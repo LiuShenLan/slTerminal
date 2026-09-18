@@ -142,7 +142,12 @@ describe("restoreHistorySession 四步恢复编排", () => {
     h.mockSendToastNotification.mockReset();
     apiStub = { addPanel: vi.fn() };
     h.mockGetPageApi.mockReturnValue(apiStub);
-    h.mockTerminalRegistryGet.mockReturnValue({ sessionId: "session-test-1" });
+    // 默认桩：pwsh + 首个提示符已渲染——就绪闸门立即放行（不空转 10s 超时兜底）
+    h.mockTerminalRegistryGet.mockReturnValue({
+      sessionId: "session-test-1",
+      shellKind: "pwsh",
+      promptReady: true,
+    });
     consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   });
 
@@ -382,8 +387,145 @@ describe("restoreHistorySession 四步恢复编排", () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════
-// FE-27 waitFor AbortSignal 中止（测试专用导出直测）
+// 恢复注入就绪闸门（OSC 133;A → promptReady；cmd 固定 500ms；超时兜底注入）
 // ═══════════════════════════════════════════════════════════════════
+describe("restoreHistorySession 就绪闸门", () => {
+  let apiStub: { addPanel: ReturnType<typeof vi.fn> };
+  let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    resetTerminalPanelSeq();
+    h.setProjects({});
+    h.mockAddProject.mockReset();
+    h.mockAddPage.mockReset();
+    h.mockSwitchToPageShared.mockReset().mockResolvedValue(undefined);
+    h.mockGetPageApi.mockReset();
+    h.mockTerminalRegistryGet.mockReset();
+    h.mockPtyWrite.mockReset().mockResolvedValue(undefined);
+    h.mockSendToastNotification.mockReset();
+    apiStub = { addPanel: vi.fn() };
+    h.mockGetPageApi.mockReturnValue(apiStub);
+    consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    consoleErrorSpy.mockRestore();
+  });
+
+  it("promptReady 到达后注入（首个提示符渲染完成才写命令）", async () => {
+    vi.useFakeTimers();
+    try {
+      const entry = { sessionId: "session-test-1", shellKind: "pwsh", promptReady: false };
+      h.mockTerminalRegistryGet.mockReturnValue(entry);
+
+      const pending = restoreHistorySession(makeSession());
+      // 轮询注册就绪期间不注入
+      await vi.advanceTimersByTimeAsync(500);
+      expect(h.mockPtyWrite).not.toHaveBeenCalled();
+
+      // 模拟 OSC 133;A 到达 → promptReady 置位 → 下一轮轮询（100ms）放行注入
+      entry.promptReady = true;
+      await vi.advanceTimersByTimeAsync(200);
+      await pending;
+
+      expect(h.mockPtyWrite).toHaveBeenCalledTimes(1);
+      const [sessionId, , data] = h.mockPtyWrite.mock.calls[0] as [string, string, Uint8Array];
+      expect(sessionId).toBe("session-test-1");
+      expect(new TextDecoder().decode(data)).toBe(`claude --resume ${SESSION_ID}\r`);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("promptReady 永不到达 → 10s 超时兜底仍注入 + console.warn 留痕", async () => {
+    vi.useFakeTimers();
+    try {
+      const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      h.mockTerminalRegistryGet.mockReturnValue({
+        sessionId: "session-test-1",
+        shellKind: "pwsh",
+        promptReady: false,
+      });
+
+      const pending = restoreHistorySession(makeSession());
+      await vi.advanceTimersByTimeAsync(10000);
+      await pending;
+
+      expect(h.mockPtyWrite).toHaveBeenCalledTimes(1);
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("首个提示符等待超时，兜底注入"),
+      );
+      consoleWarnSpy.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shellKind=cmd（无 shell integration）→ 固定 500ms 延迟后注入，不等 promptReady", async () => {
+    vi.useFakeTimers();
+    try {
+      h.mockTerminalRegistryGet.mockReturnValue({
+        sessionId: "session-test-1",
+        shellKind: "cmd",
+        promptReady: false,
+      });
+
+      const pending = restoreHistorySession(makeSession());
+      // 500ms 前不注入
+      await vi.advanceTimersByTimeAsync(499);
+      expect(h.mockPtyWrite).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      await pending;
+      expect(h.mockPtyWrite).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("闸门超时 = 10s 自定义预算（非 waitFor 缺省 5s）：10s 前不注入不报错", async () => {
+    vi.useFakeTimers();
+    try {
+      h.mockTerminalRegistryGet.mockReturnValue({
+        sessionId: "session-test-1",
+        shellKind: "pwsh",
+        promptReady: false,
+      });
+
+      const pending = restoreHistorySession(makeSession());
+      // 越过缺省 5s 上限仍不注入——证明闸门用了 PROMPT_READY_TIMEOUT_MS=10s 参数
+      await vi.advanceTimersByTimeAsync(9999);
+      expect(h.mockPtyWrite).not.toHaveBeenCalled();
+      expect(h.mockSendToastNotification).not.toHaveBeenCalled();
+
+      // 到达 10s → 超时兜底注入
+      await vi.advanceTimersByTimeAsync(1);
+      await pending;
+      expect(h.mockPtyWrite).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("取消语义穿透：闸门 waitFor 抛错时 signal 已 abort → 不兜底注入（分支守卫）", async () => {
+    // 分支覆盖：`catch (err) { if (signal.aborted) throw err; }`——
+    // 公共 API 层防重入（restoring）先于 abort() 返回，在途闸门无法经
+    // restoreHistorySession 二次调用 abort（FE-27 防御性死路径，已口头登记）；
+    // 本用例经 waitFor 直测锁定等价语义：超时错 + 已 abort signal → 错误原样穿透
+    vi.useFakeTimers();
+    try {
+      const controller = new AbortController();
+      const pending = waitFor(() => undefined, "闸门条件", controller.signal, 10000);
+      const assertion = expect(pending).rejects.toThrow("闸门条件 已取消");
+      controller.abort();
+      await vi.advanceTimersByTimeAsync(0);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("FE-27 waitFor AbortSignal", () => {
   it("signal 已 abort → 第一轮即抛「已取消」，probe 未被调用", async () => {
     const controller = new AbortController();

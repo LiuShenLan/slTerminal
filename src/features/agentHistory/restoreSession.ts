@@ -7,7 +7,9 @@
 //   3. 页面切换：switchToPageShared(pages[0].pageId)——setProjectRoot 前置 await 由其内部保证（DBG-5）；
 //      新建页面由 Workspace 的 activePageId effect 触发惰性初始化，Dockview API 在 onReady 后注册
 //   4. 终端恢复：轮询 getPageApi（100ms×50，照 openSettingsPanel）→ addPanel(terminal，
-//      title = profile.tabTitle) → 轮询 TerminalRegistry 注册 → pty.write 注入
+//      title = profile.tabTitle) → 轮询 TerminalRegistry 注册 → 就绪闸门（pwsh/powershell
+//      等首个提示符 OSC 133;A → promptReady；cmd 无 shell integration 固定 500ms 兜底；
+//      超时兜底仍注入，不劣于无闸门现状）→ pty.write 注入
 //      profile.history.buildRestoreInput(session, { fork })（MC-315 委托——注入内容
 //      含 fork 追加与 \r 结尾，由各 CLI 的 history 能力实现负责）
 //
@@ -30,16 +32,24 @@ import type { AgentHistorySession } from "../../types/agentHistory";
 const POLL_COUNT = 50;
 const POLL_INTERVAL_MS = 100;
 
-/** 轮询等待条件满足（probe 返回非 undefined），超时抛错。
+/** 就绪闸门：首个提示符（OSC 133;A）等待超时（慢 profile 负载裕度；超时兜底仍注入） */
+const PROMPT_READY_TIMEOUT_MS = 10000;
+/** cmd 恢复注入固定延迟（cmd 无 shell integration，无 OSC 133;A 可等） */
+const CMD_RESTORE_DELAY_MS = 500;
+
+/** 轮询等待条件满足（probe 返回非 undefined 真值），超时抛错。
  *  @param signal FE-27: 可选 AbortSignal——中止后停止轮询并抛错
  *   （走统一失败路径；页面切换/新恢复发起时取消在途恢复，防误操作）
+ *  @param timeoutMs 可选超时（缺省 5s = POLL_COUNT × POLL_INTERVAL_MS）
  *  导出为测试专用（FE-27 L2 直测 abort 语义；生产消费方 = 本模块内部） */
 export async function waitFor<T>(
   probe: () => T | undefined,
   label: string,
   signal?: AbortSignal,
+  timeoutMs: number = POLL_COUNT * POLL_INTERVAL_MS,
 ): Promise<T> {
-  for (let i = 0; i < POLL_COUNT; i++) {
+  const maxIterations = Math.max(1, Math.ceil(timeoutMs / POLL_INTERVAL_MS));
+  for (let i = 0; i < maxIterations; i++) {
     if (signal?.aborted) {
       throw new Error(`${label} 已取消`);
     }
@@ -57,8 +67,20 @@ export async function waitFor<T>(
     });
   }
   throw new Error(
-    `${label} 在 ${(POLL_COUNT * POLL_INTERVAL_MS) / 1000}s 内未就绪`,
+    `${label} 在 ${timeoutMs / 1000}s 内未就绪`,
   );
+}
+
+/** abort 感知固定延迟（cmd 恢复注入兜底用；abort 立即 reject 走统一失败路径） */
+function delayWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener(
+      "abort",
+      () => { clearTimeout(timer); reject(new Error("恢复已取消")); },
+      { once: true },
+    );
+  });
 }
 
 /** 模块级恢复进行中标记——防重入（并发双击同一会话行时，第二次调用直接返回） */
@@ -185,6 +207,26 @@ async function doRestore(
     `终端面板 ${panelId} 的 PTY 会话`,
     signal, // FE-27: 四步共享 Controller——页面切换/新恢复发起时中止轮询
   );
+
+  // 就绪闸门：首个提示符渲染（OSC 133;A → promptReady）后才注入——启动期杂散
+  // 字节（ConPTY 握手/应答等）不再有机会拼入恢复命令前缀。cmd 无 shell
+  // integration（133;A 永不到达）→ 固定延迟兜底；超时兜底仍注入（不劣于无闸门现状）
+  if (entry.shellKind === "cmd") {
+    await delayWithAbort(CMD_RESTORE_DELAY_MS, signal);
+  } else {
+    try {
+      await waitFor(
+        () => TerminalRegistry.get(panelId)?.promptReady || undefined,
+        `终端面板 ${panelId} 的首个提示符`,
+        signal,
+        PROMPT_READY_TIMEOUT_MS,
+      );
+    } catch (err) {
+      if (signal.aborted) throw err; // 取消语义穿透（FE-27）
+      // 超时兜底注入——console.warn 留痕，不阻断恢复
+      console.warn(`[restore] 首个提示符等待超时，兜底注入（panelId=${panelId}）`);
+    }
+  }
 
   // 注入恢复内容（决策 25，MC-315 委托）：profile.history.buildRestoreInput——
   // OSC 133 / hooks 全链路随终端自然生效，零后端改动

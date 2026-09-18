@@ -8,6 +8,7 @@ import { Terminal } from "@xterm/xterm";
 import type { FitAddon } from "@xterm/addon-fit";
 import type { WebglAddon } from "@xterm/addon-webgl";
 import type { AgentStatus } from "../../lib/agentStatus";
+import type { ShellKind } from "../../types/pty";
 
 /** 会话信息——存在即运行中（二态模型，无 running 布尔） */
 export interface AgentSessionInfo {
@@ -30,6 +31,11 @@ export interface RegisteredTerminal {
   sessionId: string;
   webglAddon: WebglAddon | null;
   fitAddon: FitAddon;
+  /** 实际解析的 shell 种类（pty.spawn 返回值）——恢复注入就绪闸门分派等待策略 */
+  shellKind: ShellKind;
+  /** 首个提示符已渲染（OSC 133;A 到达）——恢复注入就绪闸门信号；
+   *  cmd 无 shell integration 恒 false（闸门对该种类走固定延迟，不读本字段） */
+  promptReady: boolean;
   /** 会话状态：存在即运行中，null = 明确无会话，undefined = 未设置（缺省保留旧值） */
   agentSession?: AgentSessionInfo | null;
 }
@@ -101,6 +107,15 @@ export const TerminalRegistry = {
     }
 
     notify({ type: "sessionChange", panelId });
+  },
+
+  /** 标记首个提示符已渲染（OSC 133;A）——恢复注入就绪闸门信号源。
+   *  幂等（重复 A 不重复 notify——闸门只消费首次置位，经 get() 轮询读取）；
+   *  panelId 不存在时 no-op（终端已卸载的迟到 A 不建条目） */
+  markPromptReady(panelId: string): void {
+    const entry = registry.get(panelId);
+    if (!entry || entry.promptReady) return;
+    entry.promptReady = true;
   },
 
   /** 订阅注册表变更：register/remove/sessionChange 后同步通知。返回退订函数 */

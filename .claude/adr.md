@@ -563,3 +563,26 @@
 - E2E：specUtils 预览驱动族改探针模式；html.e2e/markdown.e2e 改写（窗口生命周期用例 → 宿主 iframe DOM 生命周期；「主窗移动跟随」用例结构性消除删除）；keyfwd 链路新增正/负两用例。
 - **逆转触发点**：预览内容需超出面板矩形（如画中画浮窗）时重估载体（主窗 DOM 无法出窗）；driver 出现帧级寻址能力时 E2E 可回 switchToFrame 直接断言（探针保留无妨）；global 命令集扩充时重估 keyfwd 威胁面（决策 3）。
 
+
+## 0022 DA1 后端全量接管 + 恢复注入就绪闸门（ADR-0022）
+
+**Status**: accepted（2026-09-18，grill 轮次裁决：DA1 接管全平台统一 / cmd 恢复注入固定 500ms 兜底 / 验证 = 本机自动化 + Win10 实机人工验收）
+
+**上下文**：Win10（22H2，pwsh 7.6.5）新建终端蜂鸣一声 + 行首出现可编辑 `[?1;2c`；双击历史 session 恢复时注入命令被拼成 `[?1;2cclaude resume xxx` 致恢复失败。Win11 正常。根因链：Win10 捆绑 OpenConsole 1.24 启动握手多发一个 DA1 查询（Win11 inbox conhost 不发）→ 后端启动剥离清单不含 DA1 → 查询透传前端 → xterm.js 核心自动应答 `\x1b[?1;2c` 经 onData 无差别回写 stdin（**作废旧假设「xterm 应答只留前端 DOM 不回灌 PTY」**，实测全量回写）→ PSReadLine 把 ESC 当无效键响铃、`[?1;2c` 落成可编辑文本并与恢复注入竞争 stdin。旧「DA1 模拟响应」（每会话一次 AtomicBool、仅 startup_drained 后检测）同时存在：启动窗口内全剥离块 `continue` 漏检、双重应答身份不一致（`?64;22c` vs `?1;2c`）。
+
+**决策**：
+
+1. **DA1 后端全量接管**：DA1 查询（`ESC[c`/`ESC[0c`）一律后端检测→剥离→代答 `ESC[?64;22c`，永不透传前端，全平台统一（Win11 上 xterm 不再自答，应答身份唯一）。检测前移至剥离前原始字节；解除每会话一次限制（谁问谁得答）；块尾 DA1 前缀扣留 pending 防跨块泄漏。DA2/XTVERSION 同族不接管（未观测受害场景，登记再议）。
+2. **恢复注入就绪闸门**：恢复命令在首个提示符渲染（OSC 133;A → `TerminalRegistry.promptReady`）之后注入；cmd 无 shell integration → 固定 500ms 延迟兜底；超时（10s）兜底仍注入不劣于现状。pty_spawn 返回扩展为 `SpawnResponse { sessionId, shellKind }` 供闸门分派。
+
+**被否决的备选**：
+
+- **修捆绑 conhost 回退（原方案 c）**：诊断证伪前提（该机器 bundled=true，无回退）——撤销。
+- **仅 Win10 平台启用接管**：应答身份双轨残留，Win11 仍依赖 xterm 自答时序；全平台统一更简洁。
+- **前端 onData 过滤应答**：治标——xterm 仍自答，且其他注入路径（恢复/粘贴）竞争不消除。
+
+**后果**：
+
+- Win10 蜂鸣/`[?1;2c` 污染/恢复失败三症状结构性消除；Win11 行为对齐（DA1 代答统一后端）。
+- `pty_spawn` 返回值 `string → SpawnResponse` 为 breaking change（允许，无兼容过渡）；全部 spawn 调用点与测试 mock 同步适配。
+- 前端 xterm.js DA1 自答通道失去触发源（查询不再到达）——xterm 升级改变自答行为对本项目无影响面。

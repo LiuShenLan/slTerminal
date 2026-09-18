@@ -2,7 +2,7 @@
 // invoke 只允许在本文件出现（硬约束 #1）
 
 import { invoke, Channel } from "@tauri-apps/api/core";
-import type { ConptyStatus, PtyEvent, SpawnRequest } from "../types/pty";
+import type { ConptyStatus, PtyEvent, SpawnRequest, SpawnResponse } from "../types/pty";
 
 /** PTY 尺寸合法下界（ConPTY 最小 1 列/行） */
 const MIN_PTY_DIM = 1;
@@ -29,23 +29,24 @@ function assertPtyDim(cols: number, rows: number): void {
 /**
  * 创建 PTY 会话并启动 shell
  *
- * 返回 sessionId；终端输出通过 onOutput Channel 异步推送。
+ * 返回 SpawnResponse（sessionId + shellKind——shellKind 供恢复注入就绪闸门
+ * 分派等待策略）；终端输出通过 onOutput Channel 异步推送。
  */
 export async function spawn(
   request: SpawnRequest,
   onOutput: (event: PtyEvent) => void,
-): Promise<string> {
+): Promise<SpawnResponse> {
   // FE-14：cols/rows 越界（含非整数/NaN）在 invoke 前拒绝，防止非法 ConPTY 创建参数
   assertPtyDim(request.cols, request.rows);
 
   const channel = new Channel<PtyEvent>();
   channel.onmessage = onOutput;
 
-  const sessionId: string = await invoke("pty_spawn", {
+  const response: SpawnResponse = await invoke("pty_spawn", {
     request,
     onOutput: channel,
   });
-  return sessionId;
+  return response;
 }
 
 /**

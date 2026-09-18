@@ -179,6 +179,8 @@ function makeTerminalEntry(overrides?: {
     sessionId: overrides?.sessionId ?? "test-session",
     webglAddon: null,
     fitAddon: { dispose: () => {}, fit: () => {} } as unknown as FitAddon,
+    shellKind: "pwsh",
+    promptReady: false,
     ...(overrides?.agentSession !== undefined
       ? { agentSession: overrides.agentSession }
       : {}),

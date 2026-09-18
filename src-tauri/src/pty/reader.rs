@@ -5,20 +5,28 @@
 /// BE-05 微批（I/O 编排）：read 成功后非阻塞续读（Windows 上基于
 /// PeekNamedPipe 查询管道可读字节数），累积至 MICRO_BATCH_MAX（64KB）
 /// 或无可读数据后，再一次批量 Channel::send（BE-12）。
-/// 「读到即续读」非定时器——不引入固定延迟；首块经过 ConPTY 启动序列剥离，
-/// 续读块在首块真实数据出现后原样透传（BE-13 跨 16KB 边界残留由首块剥离状态机处理）。
+/// 「读到即续读」非定时器——不引入固定延迟。完整批次（首块+续读）统一走
+/// pending 拼接 → DA1 检测/代答 → 剥离 → 发送（旧 first/tail 两段式下
+/// 续读块不过启动剥离的缺口随之消除）。
 /// DOC-01 豁免项 1（reader_loop 残余 I/O 编排分支）随微批变动——豁免表同步在 S19，
 /// 本文件 M11 分析块已更新为微批后形态。
+///
+/// DA1 全量接管（ADR 见 .claude/adr.md）：输出流中的 DA1 查询
+/// （ESC[c / ESC[0c）一律剥离、不透传前端，由后端向 stdin 代答
+/// ESC[?64;22c——每次查询都应答，单一应答身份。动机：xterm.js 核心会对
+/// 到达的 DA1 自答 ESC[?1;2c 并经 onData→pty_write 无差别回灌 stdin
+/// （旧调查「xterm 应答只留前端不回灌」假设已证伪）；Win10 捆绑 conhost
+/// （OpenConsole 1.24）启动握手多发 DA1，迟到的自答落入 PSReadLine 行首
+/// → 蜂鸣 + 可见 [?1;2c 字符污染，恢复注入被拼前缀。块尾 DA1 前缀残片
+/// 扣留 pending 待下块拼接（跨块防裂），EOF 时冲刷不丢字节。
 ///
 /// 独立线程运行，不阻塞 tokio runtime。读取到 EOF（子进程退出）时发送 Exit 事件并退出。
 ///
 /// Windows: 首轮读取时剥离 ConPTY VtIo::StartIfNeeded() 注入的启动序列
-/// （OSC 标题含 BEL→蜂鸣、清屏/归位→首字符被覆盖、DSR/光标查询），
-/// 后续读取原样透传。
+/// （OSC 标题含 BEL→蜂鸣、清屏/归位→首字符被覆盖、DSR/DA1 查询）。
 use crate::pty::spawn::PtyEvent;
 use parking_lot::Mutex;
 use std::io::{Read, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::ipc::Channel;
 
@@ -62,24 +70,32 @@ impl Read for PtyReaderInput {
 /// - channel: Channel 直写（无替换层）；send 失败（前端已卸载）→ 退出
 /// - child: P2-11 子进程句柄，EOF 时调用 wait() 获取真实退出码
 /// - exit_code: P2-42 退出状态共享，reader 设置后记录
+/// - writer: DA1 代答注入通道（检测到 DA1 查询时写入 ESC[?64;22c）
 /// - 循环读取 PTY 输出，微批聚合后通过 Channel 发送 Output 事件（BE-05）
-/// - Ok(0) = EOF → 发 Exit 事件 → 退出
-/// - Windows 首轮读取剥离 ConPTY 启动注入序列
+/// - Ok(0) = EOF → 冲刷 pending 残片 → 发 Exit 事件 → 退出
+/// - Windows 首轮读取剥离 ConPTY 启动注入序列；DA1 查询全程剥离 + 代答
 pub fn reader_loop(
     mut input: PtyReaderInput,
     channel: Channel<PtyEvent>, // 直写，无替换层
     child: Arc<Mutex<Box<dyn portable_pty::Child + Send>>>,
     exit_code: Arc<Mutex<Option<i32>>>,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
-    da1_injected: Arc<AtomicBool>,
 ) {
     let mut buf = [0u8; READER_BUF_SIZE];
     let mut startup_drained = false;
+    // 跨块 DA1 前缀残片扣留缓冲（≤3 字节：ESC / ESC[ / ESC[0）
+    let mut pending_da1: Vec<u8> = Vec::new();
 
     loop {
         match input.read(&mut buf) {
             Ok(0) => {
                 // EOF — 子进程已退出
+                // 冲刷扣留的 DA1 前缀残片（不完整序列，原样转发不丢字节）
+                if !pending_da1.is_empty() {
+                    let _ = channel.send(PtyEvent::Output {
+                        bytes: std::mem::take(&mut pending_da1),
+                    });
+                }
                 // P2-11: 从 child.wait() 获取真实退出码而非硬编码 0
                 // CP-005: parking_lot 锁无失败路径——仅 child.wait() 失败 →
                 // 退出码未知（None），不硬编码 0（降级决策见 eof_exit_code）
@@ -105,40 +121,44 @@ pub fn reader_loop(
                 break;
             }
             Ok(n) => {
-                // 首轮剥离 ConPTY 启动序列（纯函数），全部剥离则跳过本轮
-                // 仅当出现真实非启动输出后才置 drained——若本轮全为启动序列（None），
-                // 保持剥离状态以处理跨 16KB 边界的残留启动序列（BE-13）
-                let first = match apply_startup_strip(startup_drained, &buf[..n]) {
-                    Some(b) => {
+                // BE-05: 微批——read 成功后非阻塞续读（「读到即续读」，非定时器），
+                // 累积至 MICRO_BATCH_MAX（64KB）或无可读数据。先聚合成完整批次再
+                // 统一处理（续读遇 EOF/错误立即停止，tail 已含数据照常进入本批，
+                // 下一轮主循环 read 走 EOF/Err 分支，无数据丢失）
+                let mut raw = Vec::with_capacity(n + READER_BUF_SIZE);
+                raw.extend_from_slice(&buf[..n]);
+                let (tail, _eof) =
+                    micro_batch_tail(&mut input, &mut buf, MICRO_BATCH_MAX.saturating_sub(n));
+                raw.extend_from_slice(&tail);
+
+                // 跨块防裂：拼接上轮扣留残片，再扣留本块尾部 DA1 前缀
+                let mut frame = std::mem::take(&mut pending_da1);
+                frame.extend_from_slice(&raw);
+                let (body, rest) = split_trailing_da1_prefix(frame);
+                pending_da1 = rest;
+                if body.is_empty() {
+                    // 整块均为 DA1 前缀残片（≤3B）——待下轮补全，不发送不置 drained
+                    continue;
+                }
+
+                // DA1 全量接管：检测必须在剥离前的原始字节上（剥离后查询已不存在）。
+                // 每次查询都代答（旧「每会话一次」AtomicBool 语义已随接管移除）——
+                // 前端 xterm.js 不再见到 DA1，后端是唯一应答方，应答身份单一
+                if mirror_da1_query(&body) {
+                    inject_da1_response(&writer);
+                }
+
+                // 剥离：启动窗口内剥 ConPTY 启动序列+DA1，窗口外仅剥 DA1。
+                // 全部剥离则跳过本轮且不置 drained（BE-13 跨边界残留窗口保持）
+                let out = match apply_output_strip(startup_drained, &body) {
+                    Some(o) => {
                         startup_drained = true;
-                        b
+                        o
                     }
-                    None => {
-                        continue;
-                    }
+                    None => continue,
                 };
 
-                // DA1 查询模拟响应：Claude Code Ink 渲染器启动时发 ESC[c 作为同步哨兵。
-                // ConPTY 拦截 DA1 查询后内部处理，不向子进程 stdout 返回响应。
-                // 导致 Ink waitFor 永不 resolve，阻塞约 60s。
-                // 此处检测子进程发出的 DA1 查询，向 stdin 注入 ESC[?64;22c（VT420+ANSI 颜色）
-                // 模拟 ConPTY 的一致行为。同一会话仅注入一次（AtomicBool 防重复）。
-                maybe_inject_da1(&da1_injected, &writer, &first);
-
-                // BE-05: 微批——read 成功后非阻塞续读（「读到即续读」，非定时器），
-                // 累积至 MICRO_BATCH_MAX（64KB）或无可读数据，再一次批量
-                // Channel::send。续读遇 EOF/错误时立即停止
-                // （tail 已含数据照常 flush，下一轮主循环 read 走 EOF/Err 分支，
-                // 无数据丢失）；续读块不再过启动序列剥离（startup_drained 已置 true）。
-                let mut batch: Vec<u8> = Vec::with_capacity(READER_BUF_SIZE * 2);
-                batch.extend_from_slice(&first);
-                let (tail, _eof) =
-                    micro_batch_tail(&mut input, &mut buf, MICRO_BATCH_MAX - first.len());
-                // 续读块同样检测 DA1（跨块边界残留序列；AtomicBool 防重复注入）
-                maybe_inject_da1(&da1_injected, &writer, &tail);
-                batch.extend_from_slice(&tail);
-
-                if let Err(e) = channel.send(PtyEvent::Output { bytes: batch }) {
+                if let Err(e) = channel.send(PtyEvent::Output { bytes: out }) {
                     // CP-034: Channel 断开（前端已卸载）——单路径语义:退出,不缓冲
                     tracing::debug!("Channel send 失败(前端已断开),reader 退出: {e}");
                     break;
@@ -204,16 +224,14 @@ fn micro_batch_tail(input: &mut PtyReaderInput, buf: &mut [u8], limit: usize) ->
     (tail, false)
 }
 
-/// DA1 查询模拟响应注入（首块与微批续读块共用）
+/// DA1 应答注入（DA1 全量接管）
 ///
-/// 检测到 DA1 查询（ESC[c / ESC[0c）则向子进程 stdin 注入 ESC[?64;22c，
-/// 模拟 ConPTY + conhost 的一致行为；AtomicBool 保证同一会话仅注入一次。
-/// 检测决策已抽为纯函数 `should_inject_da1`，注入动作为 I/O（M11 豁免项）。
-fn maybe_inject_da1(da1_injected: &AtomicBool, writer: &Mutex<Box<dyn Write + Send>>, data: &[u8]) {
-    if !should_inject_da1(da1_injected.load(Ordering::Relaxed), data) {
-        return;
-    }
-    da1_injected.store(true, Ordering::Relaxed);
+/// 检测到 DA1 查询（ESC[c / ESC[0c）时向子进程 stdin 写入 ESC[?64;22c
+/// （VT420+ANSI 颜色——模拟 ConPTY/conhost 的应答身份，Claude Code Ink 已验证
+/// 接受该应答；缺应答 Ink 启动阻塞约 60s）。每次查询都应答——查询已不透传
+/// 前端，后端是唯一应答方（旧「每会话一次」防重语义随接管移除）。
+/// 检测决策 = 纯函数 `mirror_da1_query`，注入动作为 I/O（M11 豁免项）。
+fn inject_da1_response(writer: &Mutex<Box<dyn Write + Send>>) {
     // 向子进程 stdin 注入 DA1 响应（不阻塞 reader 线程；CP-005: 锁无失败分支）
     let mut w = writer.lock();
     if let Err(e) = w.write_all(b"\x1b[?64;22c") {
@@ -246,6 +264,8 @@ fn eof_exit_code(wait_outcome: Result<Result<i32, ()>, ()>) -> Option<i32> {
 /// - 光标归位: `ESC [ H`
 /// - 光标显隐: `ESC [ ? 2 5 h` / `ESC [ ? 2 5 l`
 /// - DSR 光标查询: `ESC [ 6 n`（已被 CPR 应答，此序列无害但多余）
+/// - DA1 查询: `ESC [ c` / `ESC [ 0 c`（接管剥离——Win10 捆绑 conhost
+///   OpenConsole 1.24 启动握手多发，透传会触发 xterm.js 自答回灌 stdin）
 ///
 /// 在非 Windows 平台此函数原样返回（无 ConPTY 启动序列）。
 fn strip_conpty_startup(data: &[u8]) -> Vec<u8> {
@@ -308,6 +328,10 @@ fn match_csi_startup(data: &[u8]) -> Option<usize> {
     }
     match data[2] {
         b'H' => Some(3),
+        // DA1 查询 ESC[c（接管剥离，不透传前端）
+        b'c' => Some(3),
+        // DA1 变体 ESC[0c
+        b'0' if data.len() >= 4 && data[3] == b'c' => Some(4),
         b'2' | b'3' if data.len() >= 4 && data[3] == b'J' => Some(4),
         b'6' if data.len() >= 4 && data[3] == b'n' => Some(4),
         b'?' if data.len() >= 6
@@ -321,30 +345,71 @@ fn match_csi_startup(data: &[u8]) -> Option<usize> {
     }
 }
 
-/// 对首轮读取应用 ConPTY 启动序列剥离
+/// 剥离 DA1 查询序列（ESC[c / ESC[0c）——启动窗口外（startup_drained 后）使用
 ///
-/// 若 `startup_drained` 为 true（非首轮），原样返回 `Some(data.to_vec())`。
-/// 若为 false（首轮），调用 `strip_conpty_startup` 剥离启动序列；
-/// 剥离后为空则返回 `None`（调用方跳过本轮），否则返回 `Some(剥离后数据)`。
-fn apply_startup_strip(startup_drained: bool, data: &[u8]) -> Option<Vec<u8>> {
-    if startup_drained {
-        Some(data.to_vec())
-    } else {
-        let stripped = strip_conpty_startup(data);
-        if stripped.is_empty() {
-            None
-        } else {
-            Some(stripped)
+/// DA1 全量接管：查询一律不透传前端（xterm.js 核心会自答并经 onData 无差别
+/// 回灌 stdin），由 reader_loop 检测后代答。仅匹配两种精确形态——
+/// DA2（ESC[>c）、XTVERSION（ESC[>0q）、带参变体（ESC[1c 等）均不动
+///（同族隐患登记于 pty/CLAUDE.md，观测到受害场景再接管）。
+fn strip_da1_queries(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(data.len());
+    let mut i = 0;
+    while i < data.len() {
+        if data[i] == 0x1b && i + 2 < data.len() && data[i + 1] == b'[' {
+            // ESC[c
+            if data[i + 2] == b'c' {
+                i += 3;
+                continue;
+            }
+            // ESC[0c
+            if i + 3 < data.len() && data[i + 2] == b'0' && data[i + 3] == b'c' {
+                i += 4;
+                continue;
+            }
         }
+        out.push(data[i]);
+        i += 1;
     }
+    out
 }
 
-/// 判断是否需要向子进程注入 DA1 响应
+/// 切分块尾 DA1 前缀残片（纯函数）
 ///
-/// 条件：尚未注入过（`already_injected == false`）且当前输出含 DA1 查询序列。
-/// 纯函数，不依赖 AtomicBool，便于单元测试。
-fn should_inject_da1(already_injected: bool, data: &[u8]) -> bool {
-    !already_injected && mirror_da1_query(data)
+/// DA1 查询（ESC[c / ESC[0c）可能跨 read 块边界——块尾若为其前缀
+///（ESC / ESC[ / ESC[0），扣留待下块拼接，防止半条序列送前端后被
+/// xterm.js 跨写入拼合自答（DA1 接管的跨块形态）。返回（主体, 扣留残片）。
+fn split_trailing_da1_prefix(data: Vec<u8>) -> (Vec<u8>, Vec<u8>) {
+    for prefix in [
+        b"\x1b[0".as_slice(),
+        b"\x1b[".as_slice(),
+        b"\x1b".as_slice(),
+    ] {
+        if data.ends_with(prefix) {
+            let at = data.len() - prefix.len();
+            return (data[..at].to_vec(), data[at..].to_vec());
+        }
+    }
+    (data, Vec::new())
+}
+
+/// 输出剥离统一入口（纯函数）
+///
+/// - 启动窗口内（startup_drained=false）：`strip_conpty_startup` 剥离 ConPTY
+///   启动序列 + DA1 查询；全部剥离返回 None——调用方跳过本轮且不置 drained
+///   （BE-13 跨边界残留窗口保持开放）
+/// - 窗口外（drained=true）：仅剥 DA1 查询；整块全是 DA1 时返回 None
+///   （无内容可发——如 Ink 启动哨兵被整块剥离），否则 Some(剥离后数据)
+fn apply_output_strip(startup_drained: bool, data: &[u8]) -> Option<Vec<u8>> {
+    let stripped = if startup_drained {
+        strip_da1_queries(data)
+    } else {
+        strip_conpty_startup(data)
+    };
+    if stripped.is_empty() {
+        None
+    } else {
+        Some(stripped)
+    }
 }
 
 /// 检测输出字节流中是否含有 DA1 终端查询（ESC[c 或 ESC[0c）
@@ -378,6 +443,7 @@ mod reader_tests {
     // reader_loop 主循环有三个 match 分支，均已审查可抽取性：
     //
     // 1. Ok(0) — EOF 分支：
+    //    - pending 残片冲刷      → DA1 前缀残片（不完整序列）原样转发，无决策
     //    - eof_exit_code()       → ✅ 已抽取为纯函数（PTY-12）：lock/wait 两级
     //                              失败 → None（不硬编码 0），成功 → 真实退出码
     //    - child.wait()          → portable_pty::Child::wait() 是系统调用（Windows WaitForSingleObject），I/O
@@ -385,13 +451,15 @@ mod reader_tests {
     //    - channel.send(Exit)    → Tauri IPC Channel::send()，I/O（CP-034: 直写无锁层，
     //                              断开即退出）
     //
-    // 2. Ok(n) — 数据分支（BE-05 微批后形态）：
-    //    - apply_startup_strip()  → ✅ 已抽取为纯函数（Phase 2）
-    //    - micro_batch_tail()     → ✅ 已抽取为纯函数（BE-05）：pending 检查 +
-    //                               续读累积（read 为系统调用，决策已抽，调用不可抽）
-    //    - should_inject_da1()    → ✅ 已抽取为纯函数（Phase 2）
-    //    - maybe_inject_da1()     → 注入动作（writer.lock() + 管道 I/O），检测决策已抽
-    //    - channel.send(Output)   → Channel::send()，I/O
+    // 2. Ok(n) — 数据分支（DA1 全量接管后形态：聚合 → 拼接 → 检测/代答 → 剥离 → 发送）：
+    //    - micro_batch_tail()       → ✅ 已抽取为纯函数（BE-05）：pending 检查 +
+    //                                 续读累积（read 为系统调用，决策已抽，调用不可抽）
+    //    - split_trailing_da1_prefix() → ✅ 纯函数（跨块 DA1 前缀扣留）
+    //    - mirror_da1_query()       → ✅ 纯函数（剥离前检测；注入动作
+    //                                 inject_da1_response = writer.lock() + 管道 I/O，
+    //                                 经共享 Vec writer 用例直测）
+    //    - apply_output_strip()     → ✅ 纯函数（启动序列 + DA1 剥离统一入口）
+    //    - channel.send(Output)     → Channel::send()，I/O
     //
     // 3. Err(e) — 读错误分支：
     //    - tracing::warn!()       → 日志宏，I/O
@@ -400,8 +468,8 @@ mod reader_tests {
     //
     // 结论：reader_loop 中剩余的所有分支决策均依赖锁/系统调用或 IPC send，
     // 无法在不引入运行时依赖的前提下构造测试输入，无法进一步抽取为纯函数。
-    // apply_startup_strip / should_inject_da1 / eof_exit_code / micro_batch_tail
-    // 已覆盖主循环中全部可纯函数化的决策逻辑。
+    // apply_output_strip / mirror_da1_query / split_trailing_da1_prefix /
+    // eof_exit_code / micro_batch_tail 已覆盖主循环中全部可纯函数化的决策逻辑。
     //
     // M11 状态：已尽力——剩余均为 I/O 编排无法纯函数化。
     // PTY-12 评估产出：残余不可抽分支明细 + 豁免理由见
@@ -445,6 +513,21 @@ mod reader_tests {
     fn strip_cursor_visibility() {
         assert_eq!(strip_conpty_startup(b"\x1b[?25h"), b"");
         assert_eq!(strip_conpty_startup(b"\x1b[?25l"), b"");
+    }
+
+    #[test]
+    fn strip_da1_query_in_startup() {
+        // DA1 全量接管：启动窗口内的 DA1 查询（Win10 捆绑 conhost 启动握手多发）
+        // 一并剥离，不透传前端
+        assert_eq!(strip_conpty_startup(b"\x1b[c"), b"");
+        assert_eq!(strip_conpty_startup(b"\x1b[0c"), b"");
+    }
+
+    #[test]
+    fn strip_preserves_da1_lookalikes() {
+        // DA2（ESC[>c）/ 带参变体（ESC[1c）不是 DA1 查询——不动（P5 出范围登记）
+        assert_eq!(strip_conpty_startup(b"\x1b[>c"), b"\x1b[>c");
+        assert_eq!(strip_conpty_startup(b"\x1b[1c"), b"\x1b[1c");
     }
 
     #[test]
@@ -608,91 +691,232 @@ mod reader_tests {
         assert!(mirror_da1_query(input));
     }
 
-    // ─── apply_startup_strip 纯函数测试 ───
+    // ─── apply_output_strip 纯函数测试 ───
 
     #[test]
-    fn startup_strip_drained_passthrough() {
-        // 非首轮：原样返回
+    fn output_strip_drained_passthrough() {
+        // 非首轮：无 DA1 的输出原样返回
         let data = b"normal output";
-        let result = apply_startup_strip(true, data);
+        let result = apply_output_strip(true, data);
         assert_eq!(result, Some(data.to_vec()));
     }
 
     #[test]
-    fn startup_strip_first_round_all_stripped() {
+    fn output_strip_drained_strips_da1() {
+        // 非首轮：DA1 查询剥离不透传前端（Ink 启动哨兵场景）
+        assert_eq!(
+            apply_output_strip(true, b"prompt> \x1b[c more"),
+            Some(b"prompt>  more".to_vec())
+        );
+        assert_eq!(
+            apply_output_strip(true, b"\x1b[0c rest"),
+            Some(b" rest".to_vec())
+        );
+    }
+
+    #[test]
+    fn output_strip_drained_all_da1_returns_none() {
+        // 非首轮：整块全是 DA1（如 Ink 哨兵独占一块）→ None 无内容可发
+        assert_eq!(apply_output_strip(true, b"\x1b[c"), None);
+        assert_eq!(apply_output_strip(true, b"\x1b[0c"), None);
+    }
+
+    #[test]
+    fn output_strip_first_round_all_stripped() {
         // 首轮全部为启动序列 → 返回 None（跳过本轮）
-        let result = apply_startup_strip(false, b"\x1b]0;pwsh\x07\x1b[2J\x1b[H");
+        let result = apply_output_strip(false, b"\x1b]0;pwsh\x07\x1b[2J\x1b[H");
         assert_eq!(result, None);
     }
 
     #[test]
-    fn startup_strip_first_round_partial_strip() {
+    fn output_strip_first_round_startup_plus_da1_all_stripped() {
+        // 防复发回归（本 bug 核心场景）：启动窗口内「启动序列 + DA1」整块——
+        // 前端零字节（旧代码 DA1 不在剥离清单 → 透传给 xterm 触发自答回灌）。
+        // 注：调用方须在剥离前的原始字节上做 mirror_da1_query 检测并代答，
+        // 旧代码的 None→continue 路径会跳过检测（第二个漏洞），现检测前移
+        let result = apply_output_strip(false, b"\x1b[2J\x1b[c\x1b[H");
+        assert_eq!(result, None);
+        assert!(mirror_da1_query(b"\x1b[2J\x1b[c\x1b[H"));
+    }
+
+    #[test]
+    fn output_strip_first_round_partial_strip() {
         // 首轮启动序列后跟正常输出 → 剥离前缀
-        let result = apply_startup_strip(false, b"\x1b[2J\x1b[HPS C:\\> ");
+        let result = apply_output_strip(false, b"\x1b[2J\x1b[HPS C:\\> ");
         assert_eq!(result, Some(b"PS C:\\> ".to_vec()));
     }
 
     #[test]
-    fn startup_strip_across_buffer_boundary() {
+    fn output_strip_across_buffer_boundary() {
         // BE-13: 跨缓冲区边界的启动序列剥离——第一轮全为启动序列（None），
         // 不置 drained；第二轮仍有启动序列 + 真实输出，应继续剥离
-        let r1 = apply_startup_strip(false, b"\x1b]0;pwsh\x07");
+        let r1 = apply_output_strip(false, b"\x1b]0;pwsh\x07");
         assert_eq!(r1, None); // 第一轮全部是 OSC 标题 → 跳过
 
         // 第二轮仍用 startup_drained=false（模拟 reader_loop 中 None 分支不改 drained）
-        let r2 = apply_startup_strip(false, b"\x1b[2J\x1b[HPS C:\\> ");
+        let r2 = apply_output_strip(false, b"\x1b[2J\x1b[HPS C:\\> ");
         assert_eq!(r2, Some(b"PS C:\\> ".to_vec())); // 清屏+归位被剥离，保留真实输出
     }
 
     #[test]
-    fn startup_strip_multi_round_all_startup_then_real() {
+    fn output_strip_multi_round_all_startup_then_real() {
         // BE-13: 多轮纯启动序列后出现真实输出——验证 drained 仅在 Some 时才置
         // 模拟三轮：OSC 标题 → 清屏 → 光标归位+真实输出
-        let r1 = apply_startup_strip(false, b"\x1b]0;pwsh\x07");
+        let r1 = apply_output_strip(false, b"\x1b]0;pwsh\x07");
         assert_eq!(r1, None);
 
-        let r2 = apply_startup_strip(false, b"\x1b[2J");
+        let r2 = apply_output_strip(false, b"\x1b[2J");
         assert_eq!(r2, None);
 
-        let r3 = apply_startup_strip(false, b"\x1b[?25h\x1b[HHello World");
+        let r3 = apply_output_strip(false, b"\x1b[?25h\x1b[HHello World");
         assert_eq!(r3, Some(b"Hello World".to_vec()));
     }
 
     #[test]
-    fn startup_strip_first_round_no_startup_seq() {
+    fn output_strip_first_round_no_startup_seq() {
         // 首轮无启动序列（如 cmd.exe 场景）→ 原样返回
         let data = b"Microsoft Windows [Version 10.0]\r\n";
-        let result = apply_startup_strip(false, data);
+        let result = apply_output_strip(false, data);
         assert_eq!(result, Some(data.to_vec()));
     }
 
-    // ─── should_inject_da1 纯函数测试 ───
+    // ─── strip_da1_queries 纯函数测试 ───
 
     #[test]
-    fn da1_inject_already_injected_returns_false() {
-        // 已注入过 → 不再注入
-        assert!(!should_inject_da1(true, b"\x1b[c"));
-        assert!(!should_inject_da1(true, b"normal output"));
+    fn strip_da1_removes_both_forms() {
+        assert_eq!(strip_da1_queries(b"\x1b[c"), b"");
+        assert_eq!(strip_da1_queries(b"\x1b[0c"), b"");
     }
 
     #[test]
-    fn da1_inject_not_injected_with_da1_returns_true() {
-        // 未注入 + 含 DA1 查询 → 应注入
-        assert!(should_inject_da1(false, b"\x1b[c"));
-        assert!(should_inject_da1(false, b"\x1b[0c"));
+    fn strip_da1_preserves_surrounding_bytes() {
+        assert_eq!(strip_da1_queries(b"ab\x1b[ccd\x1b[0cef"), b"abcdef");
     }
 
     #[test]
-    fn da1_inject_not_injected_without_da1_returns_false() {
-        // 未注入但无 DA1 → 不注入
-        assert!(!should_inject_da1(false, b"normal output"));
-        assert!(!should_inject_da1(false, b"\x1b[>c")); // DA2 不触发
+    fn strip_da1_preserves_non_da1_sequences() {
+        // DA2 / XTVERSION / 带参变体 / 其它 CSI 均不动（P5 出范围登记）
+        assert_eq!(strip_da1_queries(b"\x1b[>c"), b"\x1b[>c");
+        assert_eq!(strip_da1_queries(b"\x1b[>0q"), b"\x1b[>0q");
+        assert_eq!(strip_da1_queries(b"\x1b[1c"), b"\x1b[1c");
+        assert_eq!(strip_da1_queries(b"\x1b[2J"), b"\x1b[2J");
     }
 
     #[test]
-    fn da1_inject_embedded_in_output() {
-        // DA1 嵌入在正常输出中
-        assert!(should_inject_da1(false, b"prompt> \x1b[c more"));
+    fn strip_da1_trailing_partial_forwarded_as_is() {
+        // 纯函数本身不扣留残片（扣留是 reader_loop 的 split_trailing_da1_prefix
+        // 职责）——尾部落单的 ESC/ESC[ 原样通过，记录两层的职责边界
+        assert_eq!(strip_da1_queries(b"abc\x1b"), b"abc\x1b");
+        assert_eq!(strip_da1_queries(b"abc\x1b["), b"abc\x1b[");
+    }
+
+    // ─── split_trailing_da1_prefix 纯函数测试 ───
+
+    #[test]
+    fn split_holds_trailing_esc() {
+        let (body, pending) = split_trailing_da1_prefix(b"abc\x1b".to_vec());
+        assert_eq!(body, b"abc");
+        assert_eq!(pending, b"\x1b");
+    }
+
+    #[test]
+    fn split_holds_trailing_esc_bracket() {
+        let (body, pending) = split_trailing_da1_prefix(b"abc\x1b[".to_vec());
+        assert_eq!(body, b"abc");
+        assert_eq!(pending, b"\x1b[");
+    }
+
+    #[test]
+    fn split_holds_trailing_esc_bracket_zero() {
+        let (body, pending) = split_trailing_da1_prefix(b"abc\x1b[0".to_vec());
+        assert_eq!(body, b"abc");
+        assert_eq!(pending, b"\x1b[0");
+    }
+
+    #[test]
+    fn split_complete_da1_not_held() {
+        // 完整 DA1 查询不是前缀残片——不扣留（交检测/剥离处理）
+        let (body, pending) = split_trailing_da1_prefix(b"\x1b[c".to_vec());
+        assert_eq!(body, b"\x1b[c");
+        assert!(pending.is_empty());
+        let (body, pending) = split_trailing_da1_prefix(b"\x1b[0c".to_vec());
+        assert_eq!(body, b"\x1b[0c");
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn split_non_da1_prefix_not_held() {
+        // ESC[1 / ESC[? 等不是 DA1 前缀——不扣留（ESC[1c 非 DA1，不误伤）
+        let (body, pending) = split_trailing_da1_prefix(b"abc\x1b[1".to_vec());
+        assert_eq!(body, b"abc\x1b[1");
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn split_plain_and_empty_input() {
+        let (body, pending) = split_trailing_da1_prefix(b"plain".to_vec());
+        assert_eq!(body, b"plain");
+        assert!(pending.is_empty());
+        let (body, pending) = split_trailing_da1_prefix(Vec::new());
+        assert!(body.is_empty());
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn split_reassembly_closes_cross_chunk_da1() {
+        // 防复发回归（跨块形态）：chunk1 = "abc ESC["，chunk2 = "c def"——
+        // 拼接后检测命中 + 剥离无泄漏（旧代码半条 ESC[ 送前端，
+        // xterm 跨写入拼合后自答）
+        let (b1, p1) = split_trailing_da1_prefix(b"abc\x1b[".to_vec());
+        assert_eq!(b1, b"abc");
+        assert_eq!(p1, b"\x1b[");
+        let mut frame = p1;
+        frame.extend_from_slice(b"c def");
+        let (b2, p2) = split_trailing_da1_prefix(frame);
+        assert!(p2.is_empty());
+        assert!(mirror_da1_query(&b2), "拼接后应检测到 DA1 → 触发代答");
+        assert_eq!(strip_da1_queries(&b2), b" def", "剥离后前端无泄漏");
+    }
+
+    // ─── inject_da1_response 动作级测试（共享 Vec writer）───
+
+    /// 共享 Vec writer——把注入动作（I/O）纳入 L1 直测
+    struct SharedWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl Write for SharedWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn make_shared_writer() -> (
+        Mutex<Box<dyn Write + Send>>,
+        std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    ) {
+        let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let writer: Mutex<Box<dyn Write + Send>> = Mutex::new(Box::new(SharedWriter(buf.clone())));
+        (writer, buf)
+    }
+
+    #[test]
+    fn inject_da1_response_writes_vt420_identity() {
+        let (writer, buf) = make_shared_writer();
+        inject_da1_response(&writer);
+        assert_eq!(*buf.lock().unwrap(), b"\x1b[?64;22c");
+    }
+
+    #[test]
+    fn inject_da1_response_every_query_answered() {
+        // 防复发回归：每次查询都应答（旧「每会话一次」AtomicBool 语义下
+        // 第二次查询无应答——接管后前端不再自答，后端漏答 = 应用干等）
+        let (writer, buf) = make_shared_writer();
+        inject_da1_response(&writer);
+        inject_da1_response(&writer);
+        assert_eq!(*buf.lock().unwrap(), b"\x1b[?64;22c\x1b[?64;22c");
     }
 
     // ─── eof_exit_code 纯函数测试（PTY-12）───

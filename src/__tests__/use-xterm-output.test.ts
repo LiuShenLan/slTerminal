@@ -109,7 +109,7 @@ vi.mock("../features/shortcuts", () => ({
 // useXterm.ts import { pty } from "../../ipc" → src/ipc
 vi.mock("../ipc", () => ({
   pty: {
-    spawn: vi.fn().mockResolvedValue("test-session-id"),
+    spawn: vi.fn().mockResolvedValue({ sessionId: "test-session-id", shellKind: "pwsh" }),
     write: vi.fn().mockResolvedValue(undefined),
     resize: vi.fn().mockResolvedValue(undefined),
     kill: vi.fn().mockResolvedValue(undefined),

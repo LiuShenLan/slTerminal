@@ -24,6 +24,38 @@ pub struct ShellInfo {
     pub args: Vec<String>,
 }
 
+/// Shell 种类（白名单三值，SEC-01）
+///
+/// 供前端恢复注入就绪闸门分派等待策略：pwsh/powershell 有 shell integration
+/// （OSC 133;A 提示符信号），cmd 无 → 固定延迟兜底。
+/// CP-024：ts-rs 生成 `src/types/pty.ts`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/types/pty.ts")]
+pub enum ShellKind {
+    Pwsh,
+    Powershell,
+    Cmd,
+}
+
+/// 从 shell 程序路径推导种类（纯函数）
+///
+/// 文件名不区分大小写匹配白名单；白名单外归 Cmd（防御兜底——
+/// validate_shell_allowlist 已拦截非白名单，理论不可达；无 shell integration
+/// 假设是闸门的安全侧：固定延迟注入，不傻等永不到达的 OSC 133;A）。
+pub fn shell_kind_of(program: &str) -> ShellKind {
+    let filename = std::path::Path::new(program)
+        .file_name()
+        .and_then(|f| f.to_str())
+        .unwrap_or(program)
+        .to_ascii_lowercase();
+    match filename.as_str() {
+        "pwsh.exe" => ShellKind::Pwsh,
+        "powershell.exe" => ShellKind::Powershell,
+        _ => ShellKind::Cmd,
+    }
+}
+
 /// Shell 白名单校验——仅允许 pwsh.exe / powershell.exe / cmd.exe
 ///
 /// 提取 program 的文件名（不区分大小写）与白名单比对。
@@ -839,6 +871,39 @@ mod shell_tests {
         let path = dir.join(name);
         std::fs::write(&path, b"").expect("写假 exe 失败");
         path
+    }
+
+    // ── shell_kind_of 纯函数（ShellKind 分派，恢复注入就绪闸门数据源）──
+
+    #[test]
+    fn shell_kind_of_three_shells() {
+        assert_eq!(shell_kind_of("pwsh.exe"), ShellKind::Pwsh);
+        assert_eq!(shell_kind_of("powershell.exe"), ShellKind::Powershell);
+        assert_eq!(shell_kind_of("cmd.exe"), ShellKind::Cmd);
+    }
+
+    #[test]
+    fn shell_kind_of_full_path_and_case_insensitive() {
+        assert_eq!(
+            shell_kind_of(r"C:\Program Files\PowerShell\7\pwsh.exe"),
+            ShellKind::Pwsh
+        );
+        assert_eq!(
+            shell_kind_of(r"C:\Windows\System32\WindowsPowerShell\v1.0\POWERSHELL.EXE"),
+            ShellKind::Powershell
+        );
+        assert_eq!(
+            shell_kind_of(r"C:\Windows\System32\cmd.exe"),
+            ShellKind::Cmd
+        );
+    }
+
+    #[test]
+    fn shell_kind_of_unknown_falls_back_to_cmd() {
+        // 防御兜底：非白名单（理论不可达——validate_shell_allowlist 已拦截）归 Cmd
+        //（无 OSC 133 假设 = 闸门安全侧，固定延迟注入而非傻等）
+        assert_eq!(shell_kind_of("bash.exe"), ShellKind::Cmd);
+        assert_eq!(shell_kind_of(""), ShellKind::Cmd);
     }
 
     // ── PTY-06：resolve_shell_info 自动检测回退顺序 ──

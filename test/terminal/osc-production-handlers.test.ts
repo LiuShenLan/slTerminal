@@ -65,6 +65,8 @@ describe('L3 终端渲染 — 生产 OSC handler（E2E-03）', () => {
       sessionId: 's1',
       webglAddon: null,
       fitAddon: undefined as never,
+      shellKind: 'pwsh',
+      promptReady: false,
     });
   });
 
@@ -108,6 +110,50 @@ describe('L3 终端渲染 — 生产 OSC handler（E2E-03）', () => {
 
   // ============ OSC 133 命令边界 ============
 
+  it('OSC 133 A — 触发 onPromptStart（就绪闸门信号），onTabStateChange 不受影响', async () => {
+    const term = createTerminal();
+    const states: Array<{ active: boolean; title?: string; status?: string }> = [];
+    registerOsc133(toXtermTerminal(term), {
+      isCommandRunning: { current: false },
+      matchByCommand: (cmd) => cliProfileRegistry.matchByCommand(cmd),
+      setAgentSession: (cliId) =>
+        TerminalRegistry.setAgentSession('p1', cliId ? { cliId, matchedCommand: cliId } : null),
+      onTabStateChange: (state) => states.push(state),
+      // 生产接线（useCommandDetection）——经真实 markPromptReady 置位 promptReady
+      onPromptStart: () => TerminalRegistry.markPromptReady('p1'),
+    });
+    // shell-integration.ps1 prompt 函数发射：OSC 133 A ST（首个提示符渲染开始）
+    await writeSync(term, '\x1b]133;A\x1b\\');
+    expect(TerminalRegistry.get('p1')?.promptReady).toBe(true);
+    expect(states).toEqual([]);
+  });
+
+  it('OSC 133 A — 重复到达幂等（markPromptReady 单次置位，无 sessionChange 通知）', async () => {
+    const term = createTerminal();
+    registerOsc133(toXtermTerminal(term), {
+      isCommandRunning: { current: false },
+      matchByCommand: () => null,
+      setAgentSession: () => {},
+      onTabStateChange: () => {},
+      onPromptStart: () => TerminalRegistry.markPromptReady('p1'),
+    });
+    await writeSync(term, '\x1b]133;A\x1b\\\x1b]133;A\x1b\\');
+    expect(TerminalRegistry.get('p1')?.promptReady).toBe(true);
+  });
+
+  it('OSC 133 A — 迟到 A 不建条目（panelId 不存在时 no-op）', async () => {
+    const term = createTerminal();
+    registerOsc133(toXtermTerminal(term), {
+      isCommandRunning: { current: false },
+      matchByCommand: () => null,
+      setAgentSession: () => {},
+      onTabStateChange: () => {},
+      onPromptStart: () => TerminalRegistry.markPromptReady('ghost'),
+    });
+    await writeSync(term, '\x1b]133;A\x1b\\');
+    expect(TerminalRegistry.has('ghost')).toBe(false);
+  });
+
   it('OSC 133 C — 匹配 claude profile 时 onTabStateChange 携 status/title + 写 agentSession', async () => {
     const term = createTerminal();
     const states: Array<{ active: boolean; title?: string; status?: string }> = [];
@@ -118,6 +164,7 @@ describe('L3 终端渲染 — 生产 OSC handler（E2E-03）', () => {
       setAgentSession: (cliId) =>
         TerminalRegistry.setAgentSession('p1', cliId ? { cliId, matchedCommand: cliId } : null),
       onTabStateChange: (state) => states.push(state),
+      onPromptStart: () => TerminalRegistry.markPromptReady('p1'),
     });
     // shell-integration.ps1 Enter hook 发射：OSC 133 C;<命令行> ST
     await writeSync(term, '\x1b]133;C;claude --resume abc\x1b\\');
@@ -140,6 +187,7 @@ describe('L3 终端渲染 — 生产 OSC handler（E2E-03）', () => {
       setAgentSession: (cliId) =>
         TerminalRegistry.setAgentSession('p1', cliId ? { cliId, matchedCommand: cliId } : null),
       onTabStateChange: (state) => states.push(state),
+      onPromptStart: () => {},
     });
     await writeSync(term, '\x1b]133;C;claude -p "hi"\x1b\\');
     // prompt() 发射 OSC 133;D;<退出码> ST
@@ -160,6 +208,7 @@ describe('L3 终端渲染 — 生产 OSC handler（E2E-03）', () => {
       setAgentSession: (cliId) =>
         TerminalRegistry.setAgentSession('p1', cliId ? { cliId, matchedCommand: cliId } : null),
       onTabStateChange: (state) => states.push(state),
+      onPromptStart: () => {},
     });
     await writeSync(term, '\x1b]133;C;git status\x1b\\');
     expect(states).toEqual([]);

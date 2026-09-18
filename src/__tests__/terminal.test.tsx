@@ -37,7 +37,7 @@ const mocks = vi.hoisted(() => {
     dispose: vi.fn(),
   };
   const pty = {
-    spawn: vi.fn().mockResolvedValue("mock-session-001"),
+    spawn: vi.fn().mockResolvedValue({ sessionId: "mock-session-001", shellKind: "pwsh" }),
     // 必须返回 Promise——useXterm 卸载清理执行 pty.kill(...).catch(...)，undefined 会抛 TypeError
     kill: vi.fn().mockResolvedValue(undefined),
     write: vi.fn(),

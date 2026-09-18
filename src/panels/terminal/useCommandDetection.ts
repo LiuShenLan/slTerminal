@@ -69,6 +69,8 @@ export function useCommandDetection(
           cliId ? { cliId, matchedCommand: cliId } : null,
         ),
       onTabStateChange: (s) => onTabStateChangeRef.current?.(s as TabState),
+      // OSC 133;A（提示符渲染开始）→ 恢复注入就绪闸门信号
+      onPromptStart: () => TerminalRegistry.markPromptReady(panelId),
     });
 
     return () => {

@@ -20,7 +20,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 流式数据通过 `Channel<T>` 推送，调用方传入 `onOutput`/`onChunk` 回调。典型用例：
 
-- **PTY spawn**：`pty.spawn(request, onOutput)` 把 `Channel` 的 `onmessage` 绑定到回调。
+- **PTY spawn**：`pty.spawn(request, onOutput)` 把 `Channel` 的 `onmessage` 绑定到回调。返回 `SpawnResponse`（`sessionId` + `shellKind`，ts-rs 生成自 `pty/spawn.rs`）——shellKind 为后端实际解析的 shell 种类（pwsh/powershell/cmd 三值字面量），消费方 = 恢复注入就绪闸门分派等待策略。
 - **大文件读取（BE-03）**：`fs.readFile` 后端按 256KB 块经 `onChunk` Channel 推送，终态 `{ data: "", done: true }`；wrapper 聚合拼接后 resolve，削大文件内存/IPC 峰值。
 
 ### 大文件区间读取（CP-022）

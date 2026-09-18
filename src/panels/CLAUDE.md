@@ -123,6 +123,7 @@ xterm.js 6.0.0 原生支持 OSC 8 解析渲染。`useXterm.ts` 在 `term.open()`
 
 `shell-integration.ps1` 的 Enter hook 在命令执行前发射 OSC 133 C，prompt 在命令退出后发射 OSC 133 D。`useXterm.ts` 注册 `term.parser.registerOscHandler(133, ...)`：
 
+- **OSC 133 A**：提示符渲染开始（prompt 函数每次渲染都发，含首个）→ `TerminalRegistry.markPromptReady(panelId)` 置位 `promptReady`（幂等，无 notify）——恢复注入就绪闸门信号源（见 `features/agentHistory/CLAUDE.md`）。
 - **OSC 133 C**：提取命令行文本 → `onTabStateChange({ active: true, title, status: "attention" })`；同时 `cliProfileRegistry.matchByCommand(command)` 查 profile → 命中时覆盖 `title = profile.tabTitle`，并 `setAgentSession({ cliId: profile.id })`。
 - **OSC 133 D**：命令退出 → `onTabStateChange({ active: false })`（restoreTitle 缺省 true）→ TerminalPanel 恢复原标题并单清状态；`setAgentSession(null)` → sessionChange 驱动清 logo。
 
@@ -134,7 +135,7 @@ xterm.js 6.0.0 原生支持 OSC 8 解析渲染。`useXterm.ts` 在 `term.open()`
 
 **B14 visible 前缀匹配**：`activePageId != null && panelId.startsWith(`terminal-${activePageId}-`)`。旧恢复格式含 Date.now 数字段，正则/切分解析会吞掉多余数字段得到错误 pageId → visible 恒 false → 非焦点降频永不 flush（历史恢复黑屏根因）。
 
-**会话元数据单点（硬约束 #8）**：PTY 进程映射仅在 `panels/terminal/TerminalRegistry`（模块级 Map）管理，前端会话元数据已合并入 registry；面板只订阅，不自存。
+**会话元数据单点（硬约束 #8）**：PTY 进程映射仅在 `panels/terminal/TerminalRegistry`（模块级 Map）管理，前端会话元数据已合并入 registry；面板只订阅，不自存。注册条目含 `shellKind`（pty.spawn 返回的 shell 种类）与 `promptReady`（OSC 133;A 到达置位）两字段——恢复注入就绪闸门的数据源。
 
 **仅限于 pwsh/powershell**——shell integration 脚本仅在 PowerShell 注入，cmd.exe 无此能力。
 

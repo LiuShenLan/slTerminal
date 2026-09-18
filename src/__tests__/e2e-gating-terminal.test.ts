@@ -89,7 +89,7 @@ vi.mock("../features/shortcuts", () => ({
 
 vi.mock("../ipc", () => ({
   pty: {
-    spawn: vi.fn().mockResolvedValue("test-session-id"),
+    spawn: vi.fn().mockResolvedValue({ sessionId: "test-session-id", shellKind: "pwsh" }),
     write: vi.fn().mockResolvedValue(undefined),
     resize: vi.fn().mockResolvedValue(undefined),
     kill: vi.fn().mockResolvedValue(undefined),
@@ -154,7 +154,7 @@ describe("终端 hooks — E2E_ENABLED 门控 helper 注入", () => {
     vi.clearAllMocks();
     container = createContainer();
     raf = mockRaf();
-    (pty.spawn as any).mockResolvedValue("test-session-id");
+    (pty.spawn as any).mockResolvedValue({ sessionId: "test-session-id", shellKind: "pwsh" });
   });
 
   afterEach(() => {

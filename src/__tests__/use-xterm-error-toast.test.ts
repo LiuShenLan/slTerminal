@@ -121,7 +121,7 @@ vi.mock("../features/shortcuts", () => ({
 
 vi.mock("../ipc", () => ({
   pty: {
-    spawn: vi.fn().mockResolvedValue("test-session-id"),
+    spawn: vi.fn().mockResolvedValue({ sessionId: "test-session-id", shellKind: "pwsh" }),
     write: vi.fn().mockResolvedValue(undefined),
     resize: vi.fn().mockResolvedValue(undefined),
     kill: vi.fn().mockResolvedValue(undefined),
@@ -214,7 +214,7 @@ beforeEach(() => {
   mockRegistryMap.clear();
   capturedTerminal = null;
   mockProposeDimensions.mockReturnValue({ cols: 80, rows: 24 });
-  (pty.spawn as ReturnType<typeof vi.fn>).mockResolvedValue("test-session-id");
+  (pty.spawn as ReturnType<typeof vi.fn>).mockResolvedValue({ sessionId: "test-session-id", shellKind: "pwsh" });
   (pty.write as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
 });
 

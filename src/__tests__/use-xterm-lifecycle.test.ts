@@ -178,7 +178,7 @@ vi.mock("../features/shortcuts", () => ({
 // useXterm.ts import { pty } from "../../ipc" → src/ipc
 vi.mock("../ipc", () => ({
   pty: {
-    spawn: vi.fn().mockResolvedValue("test-session-id"),
+    spawn: vi.fn().mockResolvedValue({ sessionId: "test-session-id", shellKind: "pwsh" }),
     write: vi.fn().mockResolvedValue(undefined),
     resize: vi.fn().mockResolvedValue(undefined),
     kill: vi.fn().mockResolvedValue(undefined),
@@ -1888,7 +1888,7 @@ describe("setupRetry Enter 重连", () => {
     // 清除第一次 spawn 记录
     (pty.spawn as ReturnType<typeof vi.fn>).mockClear();
     // 恢复为 resolve 以便第二次 spawn 成功
-    (pty.spawn as ReturnType<typeof vi.fn>).mockResolvedValue("retry-session");
+    (pty.spawn as ReturnType<typeof vi.fn>).mockResolvedValue({ sessionId: "retry-session", shellKind: "pwsh" });
 
     // 获取 setupRetry 注册的 onData 回调
     const onDataCb = getLastOnDataCallback();
@@ -1947,7 +1947,7 @@ describe("setupRetry Enter 重连", () => {
 
     // 清除第一次 spawn 记录，第二次 spawn resolve
     (pty.spawn as ReturnType<typeof vi.fn>).mockClear();
-    (pty.spawn as ReturnType<typeof vi.fn>).mockResolvedValue("retry-session-3");
+    (pty.spawn as ReturnType<typeof vi.fn>).mockResolvedValue({ sessionId: "retry-session-3", shellKind: "pwsh" });
 
     const beforeCallCount = capturedTerminal!.onData.mock.calls.length;
 
@@ -2646,7 +2646,7 @@ describe("terminal actions 链路 + 卸载清理错误分支（TQ-COV-07）", ()
     mockUsePanelFocus.mockReset();
     vi.clearAllMocks();
     // 显式复位 spawn 解析值——SR 重连用例的 mockResolvedValue 跨用例残留（clearAllMocks 不清实现）
-    (pty.spawn as ReturnType<typeof vi.fn>).mockResolvedValue("test-session-id");
+    (pty.spawn as ReturnType<typeof vi.fn>).mockResolvedValue({ sessionId: "test-session-id", shellKind: "pwsh" });
     (pty.kill as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
   });
 

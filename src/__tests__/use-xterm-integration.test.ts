@@ -333,7 +333,7 @@ beforeEach(() => {
     return { cancel: vi.fn() };
   });
   // 默认 pty.spawn resolve
-  mockPtySpawn.mockResolvedValue("test-session-id");
+  mockPtySpawn.mockResolvedValue({ sessionId: "test-session-id", shellKind: "pwsh" });
   mockPtyWrite.mockResolvedValue(undefined);
   mockPtyResize.mockResolvedValue(undefined);
   mockPtyKill.mockResolvedValue(undefined);

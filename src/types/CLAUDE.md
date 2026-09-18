@@ -19,7 +19,7 @@ DTO 类型定义层（硬约束 #4，CP-024 单源化）。`src/types/` 的 9 �
 
 | Rust 类型（`#[ts(export_to)]`） | 生成文件 | 备注 |
 |---|---|---|
-| `pty/spawn.rs` PtyEvent / SpawnRequest、`pty/conpty_api.rs` ConptyStatus | `pty.ts` | ConptyStatus 为 CP-010 DTO（CP-024 清单外追加——手写 pty.ts 含之，生成物覆盖后消费面经 ipc/pty.ts 依赖） |
+| `pty/spawn.rs` PtyEvent / SpawnRequest / SpawnResponse / ShellKind、`pty/conpty_api.rs` ConptyStatus | `pty.ts` | ConptyStatus 为 CP-010 DTO（CP-024 清单外追加——手写 pty.ts 含之，生成物覆盖后消费面经 ipc/pty.ts 依赖）；SpawnResponse（sessionId + shellKind）与 ShellKind（三值字面量）为恢复注入就绪闸门 DTO（2026-09 DA1 修复追加） |
 | `fs/mod.rs` DirEntry / FsReadDirPage | `fs.ts` | FsReadDirPage 为 CP-006 游标分页 DTO（`entries + nextCursor: string \| null`） |
 | `git/mod.rs` GitStatusEntry / DiffHunk | `git.ts` | |
 | `notify/mod.rs` FsEventPayload | `notify.ts` | |

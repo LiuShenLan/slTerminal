@@ -36,7 +36,7 @@ const mocks = vi.hoisted(() => {
   } as unknown as FitAddon;
 
   const pty = {
-    spawn: vi.fn().mockResolvedValue("mock-sid-strictmode"),
+    spawn: vi.fn().mockResolvedValue({ sessionId: "mock-sid-strictmode", shellKind: "pwsh" }),
     kill: vi.fn().mockResolvedValue(undefined),
     write: vi.fn().mockResolvedValue(undefined),
     resize: vi.fn().mockResolvedValue(undefined),

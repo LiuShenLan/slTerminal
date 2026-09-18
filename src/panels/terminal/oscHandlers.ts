@@ -52,14 +52,20 @@ export interface Osc133Deps {
   matchByCommand: (command: string) => { id: string; tabTitle: string } | null;
   setAgentSession: (cliId: string | null) => void;
   onTabStateChange: (state: { active: boolean; title?: string; status?: string }) => void;
+  /** 提示符渲染开始（OSC 133;A）——恢复注入就绪闸门信号源（TerminalRegistry.markPromptReady） */
+  onPromptStart: () => void;
 }
 
-/** 注册 OSC 133 命令边界 handler（C=开始/D=结束） */
+/** 注册 OSC 133 命令边界 handler（A=提示符开始/C=命令开始/D=命令结束） */
 export function registerOsc133(term: Terminal, deps: Osc133Deps): IDisposable {
   return term.parser.registerOscHandler(133, (data: string) => {
     const semicolonIndex = data.indexOf(";");
     const type = semicolonIndex >= 0 ? data.slice(0, semicolonIndex) : data;
-    if (type === "C") {
+    if (type === "A") {
+      // OSC 133 A — 提示符渲染开始（shell-integration.ps1 的 prompt 函数每次渲染
+      // 都发，含首个提示符）；闸门只消费首次置位，幂等
+      deps.onPromptStart();
+    } else if (type === "C") {
       // OSC 133 C — 命令即将执行
       const command = semicolonIndex >= 0 ? data.slice(semicolonIndex + 1).trim() : "";
       const profile = deps.matchByCommand(command);
