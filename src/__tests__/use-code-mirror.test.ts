@@ -1019,9 +1019,16 @@ describe("EDF-03 大文件分支与保存失败", () => {
     return (last?.[0] as { doc?: string })?.doc ?? "";
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
     container = createContainer();
     capturedStateExtensions = null;
+    vi.clearAllMocks();
+    // 跨用例污染隔离（EDF-03 用例 1 全量并行间歇红实证）：vitest globals:false
+    // → RTL 无 auto-cleanup → 前序用例 renderHook 的 hook 不卸载，其 initEditor
+    // 续体可落入本用例计数窗（EditorState.create 限零断言误红）。act 冲刷排空
+    // 续体后再次清零，用例窗口起点干净（EDF-08 settleRecheck 同族对策；
+    // clearAllMocks 只清 calls 不清实现，默认重设不受影响）
+    await act(async () => {});
     vi.clearAllMocks();
     mockDialogSave.mockResolvedValue(null);
     // FE-01: 默认确认继续（大文件弹窗默认放行，用例 2 覆盖为取消）
@@ -1059,9 +1066,10 @@ describe("EDF-03 大文件分支与保存失败", () => {
     });
 
     // CP-022: 超限不再以拒绝文案替换全文——向上报告 largeFile 信号（宿主引导只读浏览）
+    //（waitFor 10000：全量并行抢核负载裕度，非断言放宽——同族先例见 html-panel 头注）
     await waitFor(() => {
       expect(holder.cur?.largeFile).not.toBeNull();
-    }, { timeout: 3000 });
+    }, { timeout: 10000 });
     // FE-04: 信号仅 filePath（真实大小由查看器 fs_stat 自取）
     expect(holder.cur?.largeFile).toEqual({ filePath: "/test/huge.js" });
     // FE-08 零读盘语义锁死：stat 超限即返回——该文件的全量 readFile 从未被调用
