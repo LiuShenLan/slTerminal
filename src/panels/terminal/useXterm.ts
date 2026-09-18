@@ -334,6 +334,7 @@ export function useXterm({
             fitAddon,
             shellKind,
             promptReady: false,
+            lastOutputAt: 0,
           });
           if (E2E_ENABLED) setTerminalSessionReady(container, true);
           // PTY spawn 初始化：重置命令运行状态（覆盖持久化残留）

@@ -408,8 +408,8 @@ describe("onCloseRequested PTY kill 路径", () => {
 
     vi.mocked(TerminalRegistry.getAll).mockReturnValue(
       new Map([
-        ["panel-1", { term: {} as never, sessionId: "session-001", webglAddon: null, fitAddon: {} as never, shellKind: "pwsh", promptReady: false }],
-        ["panel-2", { term: {} as never, sessionId: "session-002", webglAddon: null, fitAddon: {} as never, shellKind: "pwsh", promptReady: false }],
+        ["panel-1", { term: {} as never, sessionId: "session-001", webglAddon: null, fitAddon: {} as never, shellKind: "pwsh", promptReady: false, lastOutputAt: 0 }],
+        ["panel-2", { term: {} as never, sessionId: "session-002", webglAddon: null, fitAddon: {} as never, shellKind: "pwsh", promptReady: false, lastOutputAt: 0 }],
       ]),
     );
 
@@ -432,8 +432,8 @@ describe("onCloseRequested PTY kill 路径", () => {
 
     vi.mocked(TerminalRegistry.getAll).mockReturnValue(
       new Map([
-        ["panel-1", { term: {} as never, sessionId: "session-001", webglAddon: null, fitAddon: {} as never, shellKind: "pwsh", promptReady: false }],
-        ["panel-2", { term: {} as never, sessionId: "session-002", webglAddon: null, fitAddon: {} as never, shellKind: "pwsh", promptReady: false }],
+        ["panel-1", { term: {} as never, sessionId: "session-001", webglAddon: null, fitAddon: {} as never, shellKind: "pwsh", promptReady: false, lastOutputAt: 0 }],
+        ["panel-2", { term: {} as never, sessionId: "session-002", webglAddon: null, fitAddon: {} as never, shellKind: "pwsh", promptReady: false, lastOutputAt: 0 }],
       ]),
     );
 
@@ -466,7 +466,7 @@ describe("onCloseRequested PTY kill 路径", () => {
 
     vi.mocked(TerminalRegistry.getAll).mockReturnValue(
       new Map([
-        ["panel-1", { term: {} as never, sessionId: "session-001", webglAddon: null, fitAddon: {} as never, shellKind: "pwsh", promptReady: false }],
+        ["panel-1", { term: {} as never, sessionId: "session-001", webglAddon: null, fitAddon: {} as never, shellKind: "pwsh", promptReady: false, lastOutputAt: 0 }],
       ]),
     );
 
@@ -487,7 +487,7 @@ describe("onCloseRequested PTY kill 路径", () => {
 
     vi.mocked(TerminalRegistry.getAll).mockReturnValue(
       new Map([
-        ["panel-1", { term: {} as never, sessionId: "session-001", webglAddon: null, fitAddon: {} as never, shellKind: "pwsh", promptReady: false }],
+        ["panel-1", { term: {} as never, sessionId: "session-001", webglAddon: null, fitAddon: {} as never, shellKind: "pwsh", promptReady: false, lastOutputAt: 0 }],
       ]),
     );
 
@@ -529,9 +529,9 @@ describe("onCloseRequested PTY kill 路径", () => {
 
     vi.mocked(TerminalRegistry.getAll).mockReturnValue(
       new Map([
-        ["panel-1", { term: {} as never, sessionId: "session-001", webglAddon: null, fitAddon: {} as never, shellKind: "pwsh", promptReady: false }],
-        ["panel-2", { term: {} as never, sessionId: "session-002", webglAddon: null, fitAddon: {} as never, shellKind: "pwsh", promptReady: false }],
-        ["panel-3", { term: {} as never, sessionId: "session-003", webglAddon: null, fitAddon: {} as never, shellKind: "pwsh", promptReady: false }],
+        ["panel-1", { term: {} as never, sessionId: "session-001", webglAddon: null, fitAddon: {} as never, shellKind: "pwsh", promptReady: false, lastOutputAt: 0 }],
+        ["panel-2", { term: {} as never, sessionId: "session-002", webglAddon: null, fitAddon: {} as never, shellKind: "pwsh", promptReady: false, lastOutputAt: 0 }],
+        ["panel-3", { term: {} as never, sessionId: "session-003", webglAddon: null, fitAddon: {} as never, shellKind: "pwsh", promptReady: false, lastOutputAt: 0 }],
       ]),
     );
 
@@ -558,7 +558,7 @@ describe("onCloseRequested PTY kill 路径", () => {
 
     vi.mocked(TerminalRegistry.getAll).mockReturnValue(
       new Map([
-        ["panel-1", { term: {} as never, sessionId: "session-001", webglAddon: null, fitAddon: {} as never, shellKind: "pwsh", promptReady: false }],
+        ["panel-1", { term: {} as never, sessionId: "session-001", webglAddon: null, fitAddon: {} as never, shellKind: "pwsh", promptReady: false, lastOutputAt: 0 }],
       ]),
     );
     vi.mocked(pty.ptyKillAll).mockResolvedValue(2); // 后端兜底清理 2 个残留 session

@@ -8,8 +8,9 @@
 //      新建页面由 Workspace 的 activePageId effect 触发惰性初始化，Dockview API 在 onReady 后注册
 //   4. 终端恢复：轮询 getPageApi（100ms×50，照 openSettingsPanel）→ addPanel(terminal，
 //      title = profile.tabTitle) → 轮询 TerminalRegistry 注册 → 就绪闸门（pwsh/powershell
-//      等首个提示符 OSC 133;A → promptReady；cmd 无 shell integration 固定 500ms 兜底；
-//      超时兜底仍注入，不劣于无闸门现状）→ pty.write 注入
+//      等首个提示符 OSC 133;A → promptReady，且输出静默 ≥100ms 沉淀窗——133;A 是渲染
+//      开始而非完成，渲染窗口内 PSReadLine ReadKey 会吞注入首字节；cmd 无 shell
+//      integration 固定 500ms 兜底；超时兜底仍注入，不劣于无闸门现状）→ pty.write 注入
 //      profile.history.buildRestoreInput(session, { fork })（MC-315 委托——注入内容
 //      含 fork 追加与 \r 结尾，由各 CLI 的 history 能力实现负责）
 //
@@ -34,6 +35,10 @@ const POLL_INTERVAL_MS = 100;
 
 /** 就绪闸门：首个提示符（OSC 133;A）等待超时（慢 profile 负载裕度；超时兜底仍注入） */
 const PROMPT_READY_TIMEOUT_MS = 10000;
+/** 就绪闸门：输出沉淀窗口——133;A 是「渲染开始」而非「渲染完成」，渲染窗口内
+ *  PSReadLine ReadKey 会吞掉注入首字节（Win10 捆绑 conhost 实测丢 `c`）；
+ *  要求最后一个输出字节距今 ≥ 该窗口才视为提示符渲染完成 */
+const PROMPT_OUTPUT_QUIET_MS = 100;
 /** cmd 恢复注入固定延迟（cmd 无 shell integration，无 OSC 133;A 可等） */
 const CMD_RESTORE_DELAY_MS = 500;
 
@@ -208,15 +213,24 @@ async function doRestore(
     signal, // FE-27: 四步共享 Controller——页面切换/新恢复发起时中止轮询
   );
 
-  // 就绪闸门：首个提示符渲染（OSC 133;A → promptReady）后才注入——启动期杂散
-  // 字节（ConPTY 握手/应答等）不再有机会拼入恢复命令前缀。cmd 无 shell
-  // integration（133;A 永不到达）→ 固定延迟兜底；超时兜底仍注入（不劣于无闸门现状）
+  // 就绪闸门：首个提示符渲染完成（OSC 133;A → promptReady，且输出静默
+  // ≥ PROMPT_OUTPUT_QUIET_MS）后才注入——启动期杂散字节（ConPTY 握手/应答等）
+  // 不再有机会拼入恢复命令前缀，渲染窗口吞键（PSReadLine ReadKey 中断检查）
+  // 也被沉淀窗口排除。cmd 无 shell integration（133;A 永不到达）→ 固定延迟
+  // 兜底；超时兜底仍注入（不劣于无闸门现状）
   if (entry.shellKind === "cmd") {
     await delayWithAbort(CMD_RESTORE_DELAY_MS, signal);
   } else {
     try {
       await waitFor(
-        () => TerminalRegistry.get(panelId)?.promptReady || undefined,
+        () => {
+          const e = TerminalRegistry.get(panelId);
+          if (!e?.promptReady) return undefined;
+          // 输出沉淀：渲染输出突发结束（静默期达标）才算提示符就绪
+          return Date.now() - e.lastOutputAt >= PROMPT_OUTPUT_QUIET_MS
+            ? e
+            : undefined;
+        },
         `终端面板 ${panelId} 的首个提示符`,
         signal,
         PROMPT_READY_TIMEOUT_MS,

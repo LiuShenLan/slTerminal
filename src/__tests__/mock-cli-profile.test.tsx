@@ -408,6 +408,7 @@ describe("AC-4① OSC 133 命中（useCommandDetection 链路）", () => {
       fitAddon: fitStub,
       shellKind: "pwsh",
       promptReady: false,
+      lastOutputAt: 0,
     });
     renderHook(() =>
       useCommandDetection(
@@ -807,6 +808,7 @@ describe("AC-4⑤ 恢复注入", () => {
           // 就绪闸门立即放行——恢复注入不等 10s 超时兜底（promptReady 语义由
           // agent-history-restore.test.ts 专测）
           promptReady: true,
+          lastOutputAt: 0,
         });
       }),
     };

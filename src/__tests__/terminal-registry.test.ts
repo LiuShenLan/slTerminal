@@ -27,6 +27,7 @@ function makeEntry(overrides?: {
     fitAddon: { dispose: () => {}, fit: () => {} } as unknown as FitAddon,
     shellKind: "pwsh",
     promptReady: false,
+    lastOutputAt: 0,
     ...overrides,
   };
 }
@@ -143,6 +144,23 @@ describe("TerminalRegistry.markPromptReady + shellKind", () => {
     TerminalRegistry.register("p1", makeEntry({ promptReady: true }));
     TerminalRegistry._reset();
     expect(TerminalRegistry.get("p1")).toBeUndefined();
+  });
+
+  it("noteOutput 前移 lastOutputAt（闸门沉淀判据数据源），无 notify", () => {
+    TerminalRegistry.register("p1", makeEntry());
+    expect(TerminalRegistry.get("p1")!.lastOutputAt).toBe(0);
+
+    const listener = () => { throw new Error("不应收到通知"); };
+    TerminalRegistry.subscribe(listener);
+
+    const before = Date.now();
+    TerminalRegistry.noteOutput("p1");
+    expect(TerminalRegistry.get("p1")!.lastOutputAt).toBeGreaterThanOrEqual(before);
+  });
+
+  it("noteOutput 对不存在的 panelId no-op（不建条目）", () => {
+    TerminalRegistry.noteOutput("ghost");
+    expect(TerminalRegistry.has("ghost")).toBe(false);
   });
 });
 

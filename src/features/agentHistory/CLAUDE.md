@@ -55,9 +55,9 @@ Agent 历史会话查询与恢复（CLI 无关聚合，MC-310 泛化）。**宿�
 3. 页面切换：`switchToPageShared(targetPageId)`（setProjectRoot 前置 await 由其内部保证，DBG-5）。
 4. 终端恢复：轮询 `getPageApi`（100ms×50）→ `addPanel(terminal, ...)` → 轮询 `TerminalRegistry.get(panelId)` → **就绪闸门** → `pty.write` 注入 `profile.history.buildRestoreInput(session, { fork })`（MC-315 委托）。
 
-**就绪闸门（2026-09，Win10 DA1 污染修复）**：注册命中后不立即注入——启动期杂散字节（ConPTY 握手/xterm 应答回灌等）会拼入恢复命令前缀。`shellKind`（pty.spawn 返回）分派等待策略：
+**就绪闸门（2026-09，Win10 DA1 污染修复 + 丢首字符修复）**：注册命中后不立即注入——启动期杂散字节（ConPTY 握手/xterm 应答回灌等）会拼入恢复命令前缀；且 133;A 是「渲染开始」而非「渲染完成」，渲染窗口内 PSReadLine ReadKey 中断检查会吞掉注入首字节（Win10 捆绑 conhost 实测丢 `c`）。`shellKind`（pty.spawn 返回）分派等待策略：
 
-- `pwsh`/`powershell`：等首个提示符渲染信号 OSC 133;A（`TerminalRegistry.promptReady`，100ms 轮询，超时 10s）；超时兜底**仍注入** + `console.warn` 留痕（不劣于无闸门现状）。
+- `pwsh`/`powershell`：等首个提示符渲染完成——OSC 133;A（`TerminalRegistry.promptReady`）置位 **且输出静默 ≥100ms**（`lastOutputAt` 沉淀窗口，usePtyOutput 每个 output 事件打点）；100ms 轮询，超时 10s 兜底**仍注入** + `console.warn` 留痕（不劣于无闸门现状）。
 - `cmd`：无 shell integration（133;A 永不到达）→ 固定延迟 500ms 后注入。
 - 闸门全程共享 FE-27 AbortSignal；abort 穿透不兜底注入。
 

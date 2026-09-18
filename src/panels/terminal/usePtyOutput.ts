@@ -12,6 +12,7 @@ import type { MutableRefObject } from "react";
 import type { Terminal } from "@xterm/xterm";
 import type { PtyEvent } from "../../types";
 import type { TabState } from "./useCommandDetection";
+import { TerminalRegistry } from "./TerminalRegistry";
 
 /** DEC 2026 同步更新 ANSI 转义序列 */
 const DEC2026_PREFIX = "\x1b[?2026h";
@@ -70,7 +71,7 @@ export interface UsePtyOutputReturn {
  */
 export function usePtyOutput(
   terminal: MutableRefObject<Terminal | null>,
-  _panelId: string,
+  panelId: string,
   visible: boolean,
   onTabStateChange?: (state: TabState) => void,
   onRetrySpawn?: MutableRefObject<((cols: number, rows: number) => void) | null>,
@@ -191,6 +192,8 @@ export function usePtyOutput(
   const handlePtyOutput = useCallback(
     (event: PtyEvent) => {
       if (event.type === "output") {
+        // 恢复注入闸门的沉淀判据打点（注册条目不存在时 no-op）
+        TerminalRegistry.noteOutput(panelId);
         const rawBytes = new Uint8Array(event.data.bytes);
         const text = decoderRef.current.decode(rawBytes);
 

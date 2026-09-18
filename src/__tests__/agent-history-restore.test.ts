@@ -147,6 +147,7 @@ describe("restoreHistorySession 四步恢复编排", () => {
       sessionId: "session-test-1",
       shellKind: "pwsh",
       promptReady: true,
+      lastOutputAt: 0,
     });
     consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   });
@@ -415,7 +416,7 @@ describe("restoreHistorySession 就绪闸门", () => {
   it("promptReady 到达后注入（首个提示符渲染完成才写命令）", async () => {
     vi.useFakeTimers();
     try {
-      const entry = { sessionId: "session-test-1", shellKind: "pwsh", promptReady: false };
+      const entry = { sessionId: "session-test-1", shellKind: "pwsh", promptReady: false, lastOutputAt: 0 };
       h.mockTerminalRegistryGet.mockReturnValue(entry);
 
       const pending = restoreHistorySession(makeSession());
@@ -437,6 +438,60 @@ describe("restoreHistorySession 就绪闸门", () => {
     }
   });
 
+  it("输出沉淀窗口：promptReady 已置位但 100ms 内有新输出 → 等静默达标才注入", async () => {
+    vi.useFakeTimers();
+    try {
+      const entry = {
+        sessionId: "session-test-1",
+        shellKind: "pwsh",
+        promptReady: true,
+        // 模拟提示符渲染突发仍在进行——最近输出时间跟随 fake 时钟
+        lastOutputAt: Date.now(),
+      };
+      h.mockTerminalRegistryGet.mockReturnValue(entry);
+
+      const pending = restoreHistorySession(makeSession());
+      // 99ms 处仍未达沉淀窗口 → 不注入
+      await vi.advanceTimersByTimeAsync(99);
+      expect(h.mockPtyWrite).not.toHaveBeenCalled();
+
+      // 越过 100ms 静默 → 下一轮 100ms 轮询 tick（t=200ms）放行注入
+      await vi.advanceTimersByTimeAsync(101);
+      await pending;
+      expect(h.mockPtyWrite).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("沉淀窗内新输出重置计时（渲染突发延续 → 等待顺延）", async () => {
+    vi.useFakeTimers();
+    try {
+      const entry = {
+        sessionId: "session-test-1",
+        shellKind: "pwsh",
+        promptReady: true,
+        lastOutputAt: Date.now(),
+      };
+      h.mockTerminalRegistryGet.mockReturnValue(entry);
+
+      const pending = restoreHistorySession(makeSession());
+      // 50ms 处模拟渲染续写（noteOutput 语义：lastOutputAt 前移）
+      await vi.advanceTimersByTimeAsync(50);
+      entry.lastOutputAt = Date.now();
+      // 到 t=150ms（距首次 100ms 窗口仅过 50ms，距续写 100ms）→ 仍不注入
+      await vi.advanceTimersByTimeAsync(100);
+      expect(h.mockPtyWrite).not.toHaveBeenCalled();
+
+      // 续写后静默满 100ms → 下轮 tick 放行
+      await vi.advanceTimersByTimeAsync(100);
+      await pending;
+      expect(h.mockPtyWrite).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("promptReady 永不到达 → 10s 超时兜底仍注入 + console.warn 留痕", async () => {
     vi.useFakeTimers();
     try {
@@ -445,6 +500,7 @@ describe("restoreHistorySession 就绪闸门", () => {
         sessionId: "session-test-1",
         shellKind: "pwsh",
         promptReady: false,
+        lastOutputAt: 0,
       });
 
       const pending = restoreHistorySession(makeSession());
@@ -468,6 +524,7 @@ describe("restoreHistorySession 就绪闸门", () => {
         sessionId: "session-test-1",
         shellKind: "cmd",
         promptReady: false,
+        lastOutputAt: 0,
       });
 
       const pending = restoreHistorySession(makeSession());
@@ -490,6 +547,7 @@ describe("restoreHistorySession 就绪闸门", () => {
         sessionId: "session-test-1",
         shellKind: "pwsh",
         promptReady: false,
+        lastOutputAt: 0,
       });
 
       const pending = restoreHistorySession(makeSession());

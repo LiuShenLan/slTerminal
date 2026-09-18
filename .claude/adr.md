@@ -573,7 +573,7 @@
 **决策**：
 
 1. **DA1 后端全量接管**：DA1 查询（`ESC[c`/`ESC[0c`）一律后端检测→剥离→代答 `ESC[?64;22c`，永不透传前端，全平台统一（Win11 上 xterm 不再自答，应答身份唯一）。检测前移至剥离前原始字节；解除每会话一次限制（谁问谁得答）；块尾 DA1 前缀扣留 pending 防跨块泄漏。DA2/XTVERSION 同族不接管（未观测受害场景，登记再议）。
-2. **恢复注入就绪闸门**：恢复命令在首个提示符渲染（OSC 133;A → `TerminalRegistry.promptReady`）之后注入；cmd 无 shell integration → 固定 500ms 延迟兜底；超时（10s）兜底仍注入不劣于现状。pty_spawn 返回扩展为 `SpawnResponse { sessionId, shellKind }` 供闸门分派。
+2. **恢复注入就绪闸门**：恢复命令在首个提示符渲染完成（OSC 133;A → `TerminalRegistry.promptReady` **且输出静默 ≥100ms 沉淀窗**——133;A 是渲染开始而非完成，Win10 实机发现渲染窗口内 PSReadLine ReadKey 中断检查吞注入首字节丢 `c`，沉淀窗由 `lastOutputAt` 打点驱动）之后注入；cmd 无 shell integration → 固定 500ms 延迟兜底；超时（10s）兜底仍注入不劣于现状。pty_spawn 返回扩展为 `SpawnResponse { sessionId, shellKind }` 供闸门分派。
 
 **被否决的备选**：
 
