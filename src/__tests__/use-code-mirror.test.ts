@@ -1019,6 +1019,14 @@ describe("EDF-03 大文件分支与保存失败", () => {
     return (last?.[0] as { doc?: string })?.doc ?? "";
   }
 
+  // CP-039 相对计数同款（负载间歇红治理 ① 叠加层）：前序用例未卸载 hook 的
+  // initEditor 续体可在用例体内才落入计数窗（其源是用例内才 resolve 的
+  // promise 链——beforeEach「act 冲刷 + 再清零」只排空前序已排队微任务，
+  // 实证不兜底），绝对「零调用」断言被异质窗口污染误红。相对计数 = 动作前
+  // 取基线、断言增量——语义不变（本用例动作面仍锁零创建），污染只入基线
+  const createCalls = () =>
+    (EditorState.create as ReturnType<typeof vi.fn>).mock.calls.length;
+
   beforeEach(async () => {
     container = createContainer();
     capturedStateExtensions = null;
@@ -1056,6 +1064,7 @@ describe("EDF-03 大文件分支与保存失败", () => {
 
     // 渲染期捕获 hook 返回值（模块变量轮询——本文件既有惯例,不依赖 result.current 冲刷;
     // holder 容器绕开 TS 对 let 的闭包收窄）
+    const createBase = createCalls(); // 相对计数基线（本用例动作前）
     const holder: { cur: ReturnType<typeof useCodeMirror> | null } = { cur: null };
     renderHook(() => {
       holder.cur = useCodeMirror({
@@ -1078,7 +1087,8 @@ describe("EDF-03 大文件分支与保存失败", () => {
 
     // 防复发（before 形态断言）: view 不创建——拒绝文案 doc 永不出现
     expect(capturedStateExtensions).toBeNull();
-    expect(EditorState.create).not.toHaveBeenCalled();
+    // 相对计数：本用例窗口内零新建（基线见上——前序存活 hook 续体污染只入基线）
+    expect(createCalls() - createBase).toBe(0);
 
     // 防误保存: filePathRef 已清 + 无编辑实例——save 无 view 可保存,不覆盖原文件
     const activateCall = mockUsePanelFocus.mock.calls[mockUsePanelFocus.mock.calls.length - 1];
