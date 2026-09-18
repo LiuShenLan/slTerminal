@@ -22,8 +22,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import React from "react";
 import { render, cleanup, waitFor, fireEvent, act } from "@testing-library/react";
 
-// 全量并行负载下 waitForRender 两段 waitFor + act 冲刷单用例可超 5s 默认
-// testTimeout（waitFor 超时裕度同理提额 10000——负载竞态防复发，非断言放宽）
+// 全量并行负载下 waitForRender 单用例可超 5s 默认 testTimeout——负载裕度
+// 提额，非断言放宽。等待结构：第一段 waitFor(30000) 等宿主 iframe 挂载
+//（真异步：mockReadFile resolve → setState → 渲染）；此后 act 冲刷×2
+//（sendHostReady 前保消息监听注册、后保推送落地——推送链全同步），同步
+// 断言替代旧第二段 waitFor(10000)，消除真实时间依赖（2026-09-13 负载间歇红
+// 治理：四漂移红点均挂于第二段 waitFor 超时；act 冲刷间实证监听注册竞态）
 vi.setConfig({ testTimeout: 15000 });
 
 // ─── Hoisted mocks ───
@@ -142,32 +146,35 @@ function lastRenderedDoc(panelId = PANEL_ID): string {
  */
 async function waitForRender(_filePath = "C:/test/a.html", panelId = PANEL_ID) {
   void _filePath; // 形参仅作可读性标注（ready 判定与路径无关）
-  // 等宿主 iframe 挂载（ready 态 PreviewFrame 出现）
+  // 等宿主 iframe 挂载（ready 态 PreviewFrame 出现）——真异步（mockReadFile
+  // resolve → setState → 渲染），30000 负载裕度（非断言放宽）
   await waitFor(
     () => {
       expect(
         document.querySelector(`iframe[data-e2e="preview-frame-${panelId}"]`),
       ).not.toBeNull();
     },
-    { timeout: 10000 },
+    { timeout: 30000 },
   );
   const frame = frameOf(panelId);
   const spy = hostPostSpy(frame);
+  // 冲刷 mount passive effects——消息监听注册在 useEffect，DOM commit（第一段
+  // waitFor 通过点）与监听挂上之间存在窗口；抢核下紧接 dispatch host_ready
+  // 会丢包（2026-09-13 定向实证：同步断言 2/65 败于此）
+  await act(async () => {});
   // 模拟宿主页桥就绪 → 触发内容直推
   await sendHostReady(frame);
-  // 等内容推送落地 + flush passive effects（消息监听注册在 useEffect——
-  // DOM 出现不保证监听已挂，紧接派发消息会丢包，顺序竞态见消息用例失败史）
-  await waitFor(
-    () => {
-      expect(
-        spy.mock.calls.some(
-          ([m]) => (m as { type?: string }).type === "slterm_host_content",
-        ),
-      ).toBe(true);
-    },
-    { timeout: 10000 },
-  );
+  // 推送链全同步（dispatch → ready 置位 → act 内 push effect → postMessage），
+  // act 冲刷后 spy 必已捕获——同步断言消除真实时间依赖（原 waitFor 10000 为
+  // 防御性轮询，全量抢核下超时漂移红点 ×4 实证 2026-09-13：「AssertionError +
+  // DOM dump」形态 = waitFor 超时）；「监听未挂丢包」顺序竞态由第一段 waitFor
+  // + 本 act 冲刷覆盖（消息监听注册 effect 已跑）
   await act(async () => {});
+  expect(
+    spy.mock.calls.some(
+      ([m]) => (m as { type?: string }).type === "slterm_host_content",
+    ),
+  ).toBe(true);
   return lastRenderedDoc(panelId);
 }
 

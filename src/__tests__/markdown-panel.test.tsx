@@ -26,8 +26,10 @@ import {
   act,
 } from "@testing-library/react";
 
-// 全量并行负载下 waitForPushedDoc 两段 waitFor + act 冲刷单用例可超 5s 默认
-// testTimeout（waitFor 超时裕度同理提额 10000——负载竞态防复发，非断言放宽）
+// 全量并行负载下 waitForPushedDoc 单用例可超 5s 默认 testTimeout——负载裕度
+// 提额，非断言放宽。等待结构同 html-panel 侧（第一段 waitFor(30000) 等宿主
+// iframe 挂载；此后 act 冲刷×2 + 同步断言替代旧第二段 waitFor(10000)）——
+// 详见 html-panel.test.tsx 头注（2026-09-13 负载间歇红治理同款改造）
 vi.setConfig({ testTimeout: 15000 });
 
 // ─── Hoisted mocks ───
@@ -197,22 +199,27 @@ function pushedDocs(panelId = PANEL_ID): string[] {
  */
 async function waitForPushedDoc(substring: string): Promise<string> {
   // 等宿主 iframe 挂载 → 挂 postMessage 捕获 → 模拟桥就绪 → 等推送
+  //（第一段真异步：渲染管线完成（previewHtml 非 null）才挂载 PreviewFrame——
+  //  30000 负载裕度，非断言放宽）
   await waitFor(() => {
     expect(
       document.querySelector(`iframe[data-e2e="preview-frame-${PANEL_ID}"]`),
     ).not.toBeNull();
-  }, { timeout: 10000 });
+  }, { timeout: 30000 });
   const frame = frameOf();
   hostPostSpy(frame); // spy 必须先于 host_ready 安装——否则推送在捕获前落地
+  // 冲刷 mount passive effects——消息监听注册在 useEffect，DOM commit 与监听
+  // 挂上之间存在窗口，抢核下紧接 dispatch 会丢包（html 侧同款实证）
+  await act(async () => {});
   await sendHostReady(frame);
-  await waitFor(() => {
-    const found = pushedDocs().some((d) => d.includes(substring));
-    expect(found).toBe(true);
-  }, { timeout: 10000 });
-  // flush passive effects（消息监听注册在 useEffect——紧接派发上行会丢包）
+  // 推送链全同步（ready 置位/内容变化 → act 内 push effect → postMessage）——
+  // act 冲刷后同步断言，消除真实时间依赖（html 侧 waitForRender 同款改造，
+  // 全量抢核 waitFor 超时漂移红点实证 2026-09-13）
   await act(async () => {});
   const docs = pushedDocs();
-  return docs[docs.length - 1]!;
+  const found = docs.find((d) => d.includes(substring));
+  expect(found, `推送产物应含 ${substring}`).toBeDefined();
+  return found!;
 }
 
 /** 等 CM 桥就绪：最近一次 useCodeMirror 调用带非 null 容器（ready + bump 后） */
