@@ -93,13 +93,13 @@ PowerShell 通过 `-EncodedCommand` 内联 `shell-integration.ps1`，避免 `%AP
 
 动机：ConPTY 拦截 DA1 查询后不返回响应，Claude Code Ink 渲染器阻塞约 60s——这是旧「模拟响应」节已记录的原始动机。2026-09 Win10 实机暴露第二病灶：捆绑 OpenConsole 1.24 启动握手多发一个 DA1（Win11 inbox conhost 不发），旧剥离清单不含 DA1 → 查询透传到前端 → xterm.js 核心自动应答 `\x1b[?1;2c` 经 onData 无差别回写 stdin（**纠错作废旧假设「xterm 应答只留前端 DOM 不回灌 PTY」**——实测 onData 全量回写）→ PSReadLine 把 ESC 当无效键响铃、`[?1;2c` 落成可编辑文本，并与恢复注入竞争 stdin 造成前缀污染。
 
-`reader_loop` 处理序（每读块）：micro-batch 聚合 → 拼接跨块 pending → `split_trailing_query_prefix` 扣留块尾查询前缀（ESC/ESC[/ESC[0/ESC[6，防半条序列泄漏后 xterm 跨写入拼合自答）→ `mirror_da1_query` 检测 → 命中即 `inject_da1_response` 代答（**每次查询必答**，旧「同一会话仅一次」AtomicBool 已删除——谁问谁得答）→ `should_answer_dsr` 判定 → 启动窗口内 DSR 命中即 `inject_cpr_response` 代答 → `apply_output_strip`（启动窗口内剥启动序列+DA1；窗口外仅剥 DA1）→ 送前端。EOF 时冲刷 pending 不丢数据。DA2（`ESC[>c`）/XTVERSION（`ESC[>0q`）同族查询未接管——未观测到受害场景，观测到再议（只剥 `ESC[c`/`ESC[0c` 两形态，`ESC[1c` 等非查询不动）。
+`reader_loop` 处理序（每读块）：micro-batch 聚合 → 拼接跨块 pending → `split_trailing_query_prefix` 扣留块尾查询前缀（ESC/ESC[/ESC[0/ESC[6，防半条序列泄漏后 xterm 跨写入拼合自答）→ `mirror_da1_query` 检测 → 命中即 `inject_da1_response` 代答（**每次查询必答**，旧「同一会话仅一次」AtomicBool 已删除——谁问谁得答）→ `should_answer_dsr` 判定 → 启动窗口内 DSR 命中即 `inject_cpr_response` 代答 → `apply_output_strip`（启动窗口内剥启动序列+DA1+DSR；窗口外剥 DA1，`strip_dsr` 门控开启时一并剥 DSR）→ 送前端。EOF 时冲刷 pending 不丢数据。DA2（`ESC[>c`）/XTVERSION（`ESC[>0q`）同族查询未接管——未观测到受害场景，观测到再议（只剥 `ESC[c`/`ESC[0c` 两形态，`ESC[1c` 等非查询不动）。
 
-### DSR 握手按需代答（CPR 不盲注）
+### DSR 门控处置（窗口内按需代答 / 窗口外 OS 门控剥离）
 
-**语义终态**：`ESC[6n`（ConPTY `VtIo::StartIfNeeded()` DSR 握手）仅启动窗口内由后端检测→代答 `\x1b[1;1R`（启动期光标恒在 1;1）；启动窗口外的 DSR 是应用光标位置查询，应答需真实光标位置，透传前端由 xterm.js 实答，后端不接管。
+**语义终态**：`ESC[6n`（ConPTY `VtIo::StartIfNeeded()` DSR 握手）仅启动窗口内由后端检测→代答 `\x1b[1;1R`（启动期光标恒在 1;1；Win11 握手依赖此答，Win10 捆绑 1.24 握手发 DA1 不发 DSR，该臂不触发）。启动窗口外的 DSR 按传输层能力分叉——门控 `strip_dsr` 由 spawn 按 OS build 计算（`conhost_input_corrupts_cpr`，阈值 21376，含 Win10 捆绑与回退全路径）：**Win11+** 透传前端由 xterm.js 以真实光标位置实答；**Win10 家族** 剥离不答（`strip_dsr_queries`，与 DA1 同段处理）。
 
-纠错背景（2026-09 Win10 实测）：旧实现 spawn 后**盲注** `\x1b[1;1R` 补偿 DSR 握手，但 Win10 捆绑 OpenConsole 1.24 握手发 DA1 **不发 DSR** → 盲注的 CPR 无人消费 → conhost 输入状态机在无 CPR 等待时把 `CSI 1;1 R` 解析为 **F3 键** → PSReadLine 默认绑定 CharacterSearch **吞掉下一个输入字符**（实测：新终端敲 `abc` 显示 `bc`；恢复注入丢首字符 `c` 变 `laude --resume`；旧版 DA1 自答时代的蜂鸣 = CharacterSearch 未命中 ding）。教训：**握手应答一律按需（问什么答什么），禁止盲注**——盲注字节在没有等待者时就是注入应用输入的杂散键。
+纠错背景（2026-09 Win10 实测，两段根因）：①旧实现 spawn 后**盲注** `\x1b[1;1R` 补偿 DSR 握手，但 Win10 捆绑 OpenConsole 1.24 握手发 DA1 **不发 DSR** → 盲注的 CPR 无人消费 → conhost 输入状态机在无 CPR 等待时把 `CSI 1;1 R` 解析为 **F3 键** → PSReadLine 默认绑定 CharacterSearch **吞掉下一个输入字符**（实测：新终端敲 `abc` 显示 `bc`；恢复注入丢首字符 `c` 变 `laude --resume`；旧版 DA1 自答时代的蜂鸣 = CharacterSearch 未命中 ding）。②盲注删除后仍丢首字符——**窗口外 DSR 透传门**（旧设计注释「留 xterm.js 实答不接管」）：窗口外 `ESC[6n` 透传前端 → xterm 自答 `ESC[1;1R`（渲染期光标 1;1）→ onData 无过滤回灌 stdin → 同一 F3 吞键链。与 DA1 自答回灌同构，只接管 DA1 留了同类门。教训两条：**握手应答一律按需（问什么答什么），禁止盲注**——盲注字节在没有等待者时就是注入应用输入的杂散键；**键事件输入模式下 CPR 应答字节即是毒**——Win10 家族主机上任何 CPR（无论后端代答还是 xterm 实答）写入 stdin 都会变 F3 或被丢弃，应用永远拿不到真值，DSR 只能剥离不答（剥离严格不劣于现状：发起方现状拿到的本就是 F3 垃圾；DA1 代答字节在 Win10 实质丢失而应用正常是旁证）。窗口外 DSR 发起方身份未钉死（conhost 迟发 VtIo 同步或提示符工具），处置与发起方无关。
 
 ### 会话上限 MAX_PTY_SESSIONS=32（BE-01）
 
@@ -127,7 +127,7 @@ PowerShell 通过 `-EncodedCommand` 内联 `shell-integration.ps1`，避免 `%AP
 
 | 豁免项 | 原因 | 当前兜底 |
 |--------|------|---------|
-| `reader_loop` 残余 I/O 编排 | 依赖 Channel/管道系统调用，无法在 L1 构造输入（CP-034: Channel 直写，无锁层） | 可纯函数化部分（`apply_output_strip`/`strip_da1_queries`/`split_trailing_query_prefix`/`mirror_dsr_query`/`should_answer_dsr`/`eof_exit_code`/`micro_batch_tail`）已由 L1 覆盖；注入动作 `inject_da1_response`/`inject_cpr_response` 经共享 Vec writer 直测 |
+| `reader_loop` 残余 I/O 编排 | 依赖 Channel/管道系统调用，无法在 L1 构造输入（CP-034: Channel 直写，无锁层） | 可纯函数化部分（`apply_output_strip`/`strip_da1_queries`/`strip_dsr_queries`/`split_trailing_query_prefix`/`mirror_da1_query`/`mirror_dsr_query`/`should_answer_dsr`/`eof_exit_code`/`micro_batch_tail`）已由 L1 覆盖；注入动作 `inject_da1_response`/`inject_cpr_response` 经共享 Vec writer 直测；DSR 门控决策 `conhost_input_corrupts_cpr`（conpty_api.rs）纯函数 L1 锁边界 |
 | `pty_kill` 超时→监督线程真实阻塞路径 | Win32 阻塞不可注入（ClosePseudoConsole 永久阻塞无法在 L1 构造） | 清理决策由 L1 `plan_cleanup_after_join_timeout` 2 例锁死 + pty 集成 kill 用例 + Win10 实机人工验证点（杀会话后应用无挂起） |
 | 容量超限 kill 清理 | 命中上限后 kill 已 spawn 子进程依赖真实 PtySession | BE-01 判定语义由纯函数用例锁死 + Job Object 兜底 |
 | `conpty_api` vendor 提取/加载回退 | 依赖真实 DLL 加载行为 | ADR-0005 Win10 实机人工验证 + `ensure_extracted` 幂等用例 + 回退状态可观测（`pty_conpty_status` + 启动 toast） |

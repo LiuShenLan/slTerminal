@@ -20,13 +20,18 @@
 /// → 蜂鸣 + 可见 [?1;2c 字符污染，恢复注入被拼前缀。块尾查询前缀残片
 /// 扣留 pending 待下块拼接（跨块防裂），EOF 时冲刷不丢字节。
 ///
-/// DSR 握手按需代答（ADR-0022）：启动窗口内检测到 DSR 光标查询
-/// （ESC[6n，ConPTY VtIo::StartIfNeeded 握手）才向 stdin 代答 CPR
-/// ESC[1;1R——「问什么答什么」。旧 spawn 盲注 CPR 已删除：Win10 捆绑
-/// OpenConsole 1.24 握手发 DA1 不发 DSR，盲注的 CPR 无人消费，被 conhost
-/// 输入状态机解析为 F3 键 → PSReadLine CharacterSearch 吞掉下一个输入
-/// 字符（实测：新终端敲 abc 显示 bc；恢复注入丢首字符 c）。启动窗口外的
-/// DSR 是应用光标位置查询，应答需真实光标位置，留 xterm.js 实答不接管。
+/// DSR 门控处置（ADR-0022 修订）：启动窗口内检测到 DSR 光标查询
+/// （ESC[6n，ConPTY VtIo::StartIfNeeded 握手）向 stdin 代答 CPR
+/// ESC[1;1R——「问什么答什么」，绝不盲注（旧 spawn 盲注已删除：Win10
+/// 捆绑 OpenConsole 1.24 握手发 DA1 不发 DSR，盲注的 CPR 无人消费，
+/// 被 conhost 输入状态机解析为 F3 键 → PSReadLine CharacterSearch 吞掉
+/// 下一个输入字符）。启动窗口外的 DSR 按传输层能力分叉（门控 strip_dsr，
+/// spawn 按 OS build 计算）：Win11+ 透传前端由 xterm.js 以真实光标位置
+/// 实答；Win10 家族（含捆绑与回退）剥离不答——键事件输入模式把任何 CPR
+/// 应答字节写入 stdin 都解析为 F3 毒键（其他位置形态被丢弃，应用永远
+/// 拿不到真值），代答/透传皆毒，剥离不答严格不劣于现状（发起方现状
+/// 拿到的本就是 F3 垃圾）。窗口外 DSR 发起方身份未钉死（conhost 迟发
+/// VtIo 同步或提示符工具），处置与发起方无关。
 ///
 /// 独立线程运行，不阻塞 tokio runtime。读取到 EOF（子进程退出）时发送 Exit 事件并退出。
 ///
@@ -79,16 +84,20 @@ impl Read for PtyReaderInput {
 /// - child: P2-11 子进程句柄，EOF 时调用 wait() 获取真实退出码
 /// - exit_code: P2-42 退出状态共享，reader 设置后记录
 /// - writer: 查询代答注入通道（DA1 → ESC[?64;22c；启动窗口内 DSR → CPR ESC[1;1R）
+/// - strip_dsr: 窗口外 DSR 剥离门控（spawn 按 OS build 计算：Win10 家族 = true——
+///   键事件输入下 CPR 应答即 F3 毒键，DSR 剥离不答；Win11+ = false——透传前端
+///   xterm.js 实答真实光标位置）
 /// - 循环读取 PTY 输出，微批聚合后通过 Channel 发送 Output 事件（BE-05）
 /// - Ok(0) = EOF → 冲刷 pending 残片 → 发 Exit 事件 → 退出
 /// - Windows 首轮读取剥离 ConPTY 启动注入序列；DA1 查询全程剥离 + 代答，
-///   DSR 握手查询启动窗口内代答 CPR
+///   DSR 握手查询启动窗口内代答 CPR，窗口外按 strip_dsr 门控剥离或透传
 pub fn reader_loop(
     mut input: PtyReaderInput,
     channel: Channel<PtyEvent>, // 直写，无替换层
     child: Arc<Mutex<Box<dyn portable_pty::Child + Send>>>,
     exit_code: Arc<Mutex<Option<i32>>>,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
+    strip_dsr: bool,
 ) {
     let mut buf = [0u8; READER_BUF_SIZE];
     let mut startup_drained = false;
@@ -160,14 +169,17 @@ pub fn reader_loop(
                 // DSR 握手按需代答（ADR-0022）：仅启动窗口内——ConPTY VtIo 握手
                 // 查询（Win11 inbox conhost 发；Win10 捆绑 1.24 握手发 DA1 不发 DSR）。
                 // 问什么答什么，绝不盲注（盲注 CPR 在 Win10 被解析为 F3 吞键）。
-                // 窗口外 DSR 是应用光标位置查询，须 xterm 以真实位置实答
+                // 窗口外 DSR 不代答——Win11+ 透传 xterm 实答真实位置；Win10 家族
+                // 由 apply_output_strip 按 strip_dsr 门控剥离（CPR 应答在键事件
+                // 输入模式 = F3 毒键，见 strip_dsr_queries）
                 if should_answer_dsr(startup_drained, &body) {
                     inject_cpr_response(&writer);
                 }
 
-                // 剥离：启动窗口内剥 ConPTY 启动序列+DA1，窗口外仅剥 DA1。
+                // 剥离：启动窗口内剥 ConPTY 启动序列+DA1+DSR，窗口外剥 DA1
+                // （+strip_dsr 门控时剥 DSR）。
                 // 全部剥离则跳过本轮且不置 drained（BE-13 跨边界残留窗口保持）
-                let out = match apply_output_strip(startup_drained, &body) {
+                let out = match apply_output_strip(startup_drained, strip_dsr, &body) {
                     Some(o) => {
                         startup_drained = true;
                         o
@@ -409,9 +421,38 @@ fn strip_da1_queries(data: &[u8]) -> Vec<u8> {
     out
 }
 
+/// 剥离 DSR 光标查询序列（ESC[6n）——启动窗口外、Win10 家族门控开启时使用
+///
+/// Win10 家族 conhost 键事件输入把 CPR 应答（CSI 1;1R）解析为 F3 键
+/// （PSReadLine CharacterSearch 吞掉下一个输入字符）——透传前端会让
+/// xterm.js 自答回灌 stdin 复现吞键，代答 CPR 同样是毒，故该传输层上
+/// DSR 只能剥离不答（发起方现状拿到的本就是 F3 垃圾，剥离严格不劣）。
+/// 仅匹配精确形态 ESC[6n——ESC[5n（设备状态）/ ESC[?6n（私有模式）/
+/// ESC[65n 等同族不动（判别集与 mirror_dsr_query 一致）。块尾残片扣留
+/// 由 split_trailing_query_prefix 负责（ESC[6 已在前缀表），本函数不处理。
+fn strip_dsr_queries(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(data.len());
+    let mut i = 0;
+    while i < data.len() {
+        if data[i] == 0x1b
+            && i + 3 < data.len()
+            && data[i + 1] == b'['
+            && data[i + 2] == b'6'
+            && data[i + 3] == b'n'
+        {
+            // ESC[6n — DSR 光标查询（Win10 门控剥离，不透传前端）
+            i += 4;
+            continue;
+        }
+        out.push(data[i]);
+        i += 1;
+    }
+    out
+}
+
 /// 切分块尾查询前缀残片（纯函数）
 ///
-/// 后端接管的查询序列（DA1：ESC[c / ESC[0c；DSR 握手：ESC[6n）可能跨
+/// 后端接管的查询序列（DA1：ESC[c / ESC[0c；DSR：ESC[6n）可能跨
 /// read 块边界——块尾若为其前缀（ESC / ESC[ / ESC[0 / ESC[6），扣留待
 /// 下块拼接，防止半条序列送前端后被 xterm.js 跨写入拼合自答。扣留只延迟
 /// 不丢字节（ESC[6 也是 CUP `ESC[6;..H` 的前缀，随下块原样拼回）。
@@ -434,13 +475,21 @@ fn split_trailing_query_prefix(data: Vec<u8>) -> (Vec<u8>, Vec<u8>) {
 /// 输出剥离统一入口（纯函数）
 ///
 /// - 启动窗口内（startup_drained=false）：`strip_conpty_startup` 剥离 ConPTY
-///   启动序列 + DA1 查询；全部剥离返回 None——调用方跳过本轮且不置 drained
-///   （BE-13 跨边界残留窗口保持开放）
-/// - 窗口外（drained=true）：仅剥 DA1 查询；整块全是 DA1 时返回 None
-///   （无内容可发——如 Ink 启动哨兵被整块剥离），否则 Some(剥离后数据)
-fn apply_output_strip(startup_drained: bool, data: &[u8]) -> Option<Vec<u8>> {
+///   启动序列 + DA1 + DSR 查询；全部剥离返回 None——调用方跳过本轮且不置
+///   drained（BE-13 跨边界残留窗口保持开放）。窗口内行为与门控无关
+/// - 窗口外（drained=true）：剥 DA1 查询；`strip_dsr=true`（Win10 家族门控，
+///   ADR-0022 修订）时一并剥 DSR 查询（ESC[6n）——键事件输入下 CPR 应答
+///   即 F3 毒键，不透传不代答；`false`（Win11+）DSR 维持透传前端实答。
+///   整块全是查询时返回 None（无内容可发——如 Ink 启动哨兵被整块剥离），
+///   否则 Some(剥离后数据)
+fn apply_output_strip(startup_drained: bool, strip_dsr: bool, data: &[u8]) -> Option<Vec<u8>> {
     let stripped = if startup_drained {
-        strip_da1_queries(data)
+        let after_da1 = strip_da1_queries(data);
+        if strip_dsr {
+            strip_dsr_queries(&after_da1)
+        } else {
+            after_da1
+        }
     } else {
         strip_conpty_startup(data)
     };
@@ -491,8 +540,9 @@ fn mirror_dsr_query(data: &[u8]) -> bool {
 ///
 /// 仅启动窗口内（startup_drained=false）的 DSR 由后端代答 CPR——
 /// ConPTY VtIo 握手期查询，应答只要求格式合法（启动期光标恒在 1;1）。
-/// 启动窗口外的 DSR 是应用光标位置查询（应答需真实光标位置），
-/// 透传前端由 xterm.js 实答，后端不接管。
+/// 启动窗口外的 DSR 不代答：Win11+ 透传前端由 xterm.js 实答真实位置；
+/// Win10 家族由 apply_output_strip 按 strip_dsr 门控剥离（CPR 应答在
+/// 键事件输入模式 = F3 毒键，见 strip_dsr_queries）。
 fn should_answer_dsr(startup_drained: bool, data: &[u8]) -> bool {
     !startup_drained && mirror_dsr_query(data)
 }
@@ -514,8 +564,8 @@ mod reader_tests {
     //    - channel.send(Exit)    → Tauri IPC Channel::send()，I/O（CP-034: 直写无锁层，
     //                              断开即退出）
     //
-    // 2. Ok(n) — 数据分支（DA1 全量接管 + DSR 按需代答后形态：聚合 → 拼接 →
-    //    检测/代答 → 剥离 → 发送）：
+    // 2. Ok(n) — 数据分支（DA1 全量接管 + DSR 门控处置后形态：聚合 → 拼接 →
+    //    检测/代答 → 剥离（窗口外含 strip_dsr 门控 DSR 剥离） → 发送）：
     //    - micro_batch_tail()       → ✅ 已抽取为纯函数（BE-05）：pending 检查 +
     //                                 续读累积（read 为系统调用，决策已抽，调用不可抽）
     //    - split_trailing_query_prefix() → ✅ 纯函数（跨块查询前缀扣留）
@@ -524,7 +574,8 @@ mod reader_tests {
     //                                 经共享 Vec writer 用例直测）
     //    - should_answer_dsr()      → ✅ 纯函数（启动窗口内 DSR 代答决策；
     //                                 注入动作 inject_cpr_response 同上直测）
-    //    - apply_output_strip()     → ✅ 纯函数（启动序列 + DA1 剥离统一入口）
+    //    - apply_output_strip()     → ✅ 纯函数（启动序列 + DA1 + 门控 DSR 剥离
+    //                                 统一入口；strip_dsr_queries 为其子纯函数）
     //    - channel.send(Output)     → Channel::send()，I/O
     //
     // 3. Err(e) — 读错误分支：
@@ -534,7 +585,8 @@ mod reader_tests {
     //
     // 结论：reader_loop 中剩余的所有分支决策均依赖锁/系统调用或 IPC send，
     // 无法在不引入运行时依赖的前提下构造测试输入，无法进一步抽取为纯函数。
-    // apply_output_strip / mirror_da1_query / should_answer_dsr /
+    // apply_output_strip / strip_da1_queries / strip_dsr_queries /
+    // mirror_da1_query / mirror_dsr_query / should_answer_dsr /
     // split_trailing_query_prefix / eof_exit_code / micro_batch_tail
     // 已覆盖主循环中全部可纯函数化的决策逻辑。
     //
@@ -789,8 +841,9 @@ mod reader_tests {
     fn dsr_answered_only_in_startup_window() {
         // 启动窗口内（drained=false）DSR → 代答 CPR
         assert!(should_answer_dsr(false, b"\x1b[6n"));
-        // 启动窗口外（drained=true）DSR → 不代答——应用光标位置查询须
-        // xterm 以真实位置实答（后端 1;1R 恒值会误导应用布局）
+        // 启动窗口外（drained=true）DSR → 不代答——Win11+ 透传 xterm 实答真实
+        // 位置；Win10 家族经 apply_output_strip 门控剥离（CPR 应答即 F3 毒键，
+        // 后端代答/透传自答同为毒源）
         assert!(!should_answer_dsr(true, b"\x1b[6n"));
         // 窗口内无 DSR → 不代答（绝不盲注——Win10 捆绑 conhost 握手发 DA1
         // 不发 DSR，盲注 CPR 会被解析为 F3 吞键，防复发锚点）
@@ -803,7 +856,7 @@ mod reader_tests {
     fn output_strip_drained_passthrough() {
         // 非首轮：无 DA1 的输出原样返回
         let data = b"normal output";
-        let result = apply_output_strip(true, data);
+        let result = apply_output_strip(true, false, data);
         assert_eq!(result, Some(data.to_vec()));
     }
 
@@ -811,11 +864,11 @@ mod reader_tests {
     fn output_strip_drained_strips_da1() {
         // 非首轮：DA1 查询剥离不透传前端（Ink 启动哨兵场景）
         assert_eq!(
-            apply_output_strip(true, b"prompt> \x1b[c more"),
+            apply_output_strip(true, false, b"prompt> \x1b[c more"),
             Some(b"prompt>  more".to_vec())
         );
         assert_eq!(
-            apply_output_strip(true, b"\x1b[0c rest"),
+            apply_output_strip(true, false, b"\x1b[0c rest"),
             Some(b" rest".to_vec())
         );
     }
@@ -823,14 +876,56 @@ mod reader_tests {
     #[test]
     fn output_strip_drained_all_da1_returns_none() {
         // 非首轮：整块全是 DA1（如 Ink 哨兵独占一块）→ None 无内容可发
-        assert_eq!(apply_output_strip(true, b"\x1b[c"), None);
-        assert_eq!(apply_output_strip(true, b"\x1b[0c"), None);
+        assert_eq!(apply_output_strip(true, false, b"\x1b[c"), None);
+        assert_eq!(apply_output_strip(true, false, b"\x1b[0c"), None);
+    }
+
+    #[test]
+    fn output_strip_drained_dsr_gated_stripped() {
+        // 防复发回归（本 bug 核心场景）：窗口外 DSR + 门控开启（Win10 家族）→
+        // 剥离不透传（旧代码透传 → xterm 自答 ESC[1;1R 经 onData 回灌 stdin →
+        // conhost 键事件解析为 F3 → PSReadLine CharacterSearch 吞掉下一个输入字符）
+        assert_eq!(
+            apply_output_strip(true, true, b"prompt> \x1b[6nrest"),
+            Some(b"prompt> rest".to_vec())
+        );
+        // 整块全是 DSR → None 无内容可发
+        assert_eq!(apply_output_strip(true, true, b"\x1b[6n"), None);
+        // DA1 与 DSR 同块 → 一并剥离
+        assert_eq!(
+            apply_output_strip(true, true, b"\x1b[c\x1b[6nx"),
+            Some(b"x".to_vec())
+        );
+    }
+
+    #[test]
+    fn output_strip_drained_dsr_ungated_passthrough() {
+        // 门控关闭（Win11+）→ 窗口外 DSR 维持透传（xterm 实答真实光标位置，
+        // 零回归锁——Win11 主用例行为不变）
+        assert_eq!(
+            apply_output_strip(true, false, b"prompt> \x1b[6nrest"),
+            Some(b"prompt> \x1b[6nrest".to_vec())
+        );
+    }
+
+    #[test]
+    fn output_strip_first_round_unaffected_by_gate() {
+        // 窗口内剥离（strip_conpty_startup 恒含 DSR）在两门控值下行为一致
+        let input = b"\x1b[2J\x1b[6nPS> ";
+        assert_eq!(
+            apply_output_strip(false, true, input),
+            Some(b"PS> ".to_vec())
+        );
+        assert_eq!(
+            apply_output_strip(false, false, input),
+            Some(b"PS> ".to_vec())
+        );
     }
 
     #[test]
     fn output_strip_first_round_all_stripped() {
         // 首轮全部为启动序列 → 返回 None（跳过本轮）
-        let result = apply_output_strip(false, b"\x1b]0;pwsh\x07\x1b[2J\x1b[H");
+        let result = apply_output_strip(false, false, b"\x1b]0;pwsh\x07\x1b[2J\x1b[H");
         assert_eq!(result, None);
     }
 
@@ -840,7 +935,7 @@ mod reader_tests {
         // 前端零字节（旧代码 DA1 不在剥离清单 → 透传给 xterm 触发自答回灌）。
         // 注：调用方须在剥离前的原始字节上做 mirror_da1_query 检测并代答，
         // 旧代码的 None→continue 路径会跳过检测（第二个漏洞），现检测前移
-        let result = apply_output_strip(false, b"\x1b[2J\x1b[c\x1b[H");
+        let result = apply_output_strip(false, false, b"\x1b[2J\x1b[c\x1b[H");
         assert_eq!(result, None);
         assert!(mirror_da1_query(b"\x1b[2J\x1b[c\x1b[H"));
     }
@@ -848,7 +943,7 @@ mod reader_tests {
     #[test]
     fn output_strip_first_round_partial_strip() {
         // 首轮启动序列后跟正常输出 → 剥离前缀
-        let result = apply_output_strip(false, b"\x1b[2J\x1b[HPS C:\\> ");
+        let result = apply_output_strip(false, false, b"\x1b[2J\x1b[HPS C:\\> ");
         assert_eq!(result, Some(b"PS C:\\> ".to_vec()));
     }
 
@@ -856,11 +951,11 @@ mod reader_tests {
     fn output_strip_across_buffer_boundary() {
         // BE-13: 跨缓冲区边界的启动序列剥离——第一轮全为启动序列（None），
         // 不置 drained；第二轮仍有启动序列 + 真实输出，应继续剥离
-        let r1 = apply_output_strip(false, b"\x1b]0;pwsh\x07");
+        let r1 = apply_output_strip(false, false, b"\x1b]0;pwsh\x07");
         assert_eq!(r1, None); // 第一轮全部是 OSC 标题 → 跳过
 
         // 第二轮仍用 startup_drained=false（模拟 reader_loop 中 None 分支不改 drained）
-        let r2 = apply_output_strip(false, b"\x1b[2J\x1b[HPS C:\\> ");
+        let r2 = apply_output_strip(false, false, b"\x1b[2J\x1b[HPS C:\\> ");
         assert_eq!(r2, Some(b"PS C:\\> ".to_vec())); // 清屏+归位被剥离，保留真实输出
     }
 
@@ -868,13 +963,13 @@ mod reader_tests {
     fn output_strip_multi_round_all_startup_then_real() {
         // BE-13: 多轮纯启动序列后出现真实输出——验证 drained 仅在 Some 时才置
         // 模拟三轮：OSC 标题 → 清屏 → 光标归位+真实输出
-        let r1 = apply_output_strip(false, b"\x1b]0;pwsh\x07");
+        let r1 = apply_output_strip(false, false, b"\x1b]0;pwsh\x07");
         assert_eq!(r1, None);
 
-        let r2 = apply_output_strip(false, b"\x1b[2J");
+        let r2 = apply_output_strip(false, false, b"\x1b[2J");
         assert_eq!(r2, None);
 
-        let r3 = apply_output_strip(false, b"\x1b[?25h\x1b[HHello World");
+        let r3 = apply_output_strip(false, false, b"\x1b[?25h\x1b[HHello World");
         assert_eq!(r3, Some(b"Hello World".to_vec()));
     }
 
@@ -882,7 +977,7 @@ mod reader_tests {
     fn output_strip_first_round_no_startup_seq() {
         // 首轮无启动序列（如 cmd.exe 场景）→ 原样返回
         let data = b"Microsoft Windows [Version 10.0]\r\n";
-        let result = apply_output_strip(false, data);
+        let result = apply_output_strip(false, false, data);
         assert_eq!(result, Some(data.to_vec()));
     }
 
@@ -914,6 +1009,42 @@ mod reader_tests {
         // 职责）——尾部落单的 ESC/ESC[ 原样通过，记录两层的职责边界
         assert_eq!(strip_da1_queries(b"abc\x1b"), b"abc\x1b");
         assert_eq!(strip_da1_queries(b"abc\x1b["), b"abc\x1b[");
+    }
+
+    // ─── strip_dsr_queries 纯函数测试（ADR-0022 修订：Win10 门控剥离）───
+
+    #[test]
+    fn strip_dsr_removes_exact_form() {
+        assert_eq!(strip_dsr_queries(b"\x1b[6n"), b"");
+    }
+
+    #[test]
+    fn strip_dsr_preserves_surrounding_bytes() {
+        assert_eq!(strip_dsr_queries(b"ab\x1b[6ncd"), b"abcd");
+    }
+
+    #[test]
+    fn strip_dsr_removes_multiple_occurrences() {
+        assert_eq!(strip_dsr_queries(b"\x1b[6nx\x1b[6ny"), b"xy");
+    }
+
+    #[test]
+    fn strip_dsr_preserves_lookalikes() {
+        // ESC[5n（设备状态）/ ESC[?6n（私有模式）/ ESC[65n 同族不动——
+        // 判别集与 mirror_dsr_query 一致
+        assert_eq!(strip_dsr_queries(b"\x1b[5n"), b"\x1b[5n");
+        assert_eq!(strip_dsr_queries(b"\x1b[?6n"), b"\x1b[?6n");
+        assert_eq!(strip_dsr_queries(b"\x1b[65n"), b"\x1b[65n");
+        // 其他 CSI 不动
+        assert_eq!(strip_dsr_queries(b"\x1b[2J"), b"\x1b[2J");
+    }
+
+    #[test]
+    fn strip_dsr_trailing_partial_forwarded_as_is() {
+        // 纯函数本身不扣留残片（扣留是 split_trailing_query_prefix 职责，
+        // ESC[6 已在前缀表）——尾部落单 ESC/ESC[/ESC[6 原样通过
+        assert_eq!(strip_dsr_queries(b"abc\x1b"), b"abc\x1b");
+        assert_eq!(strip_dsr_queries(b"abc\x1b[6"), b"abc\x1b[6");
     }
 
     // ─── split_trailing_query_prefix 纯函数测试 ───
@@ -1007,6 +1138,22 @@ mod reader_tests {
         let (b2, p2) = split_trailing_query_prefix(frame);
         assert!(p2.is_empty());
         assert!(mirror_dsr_query(&b2), "拼接后应检测到 DSR → 触发 CPR 代答");
+    }
+
+    #[test]
+    fn split_reassembly_closes_cross_chunk_dsr_strip() {
+        // 跨块 DSR 防裂（Win10 门控剥离形态）：拼接后剥离无泄漏——漏扣留则
+        // 半条 ESC[6 送前端，xterm 跨写入拼合自答回灌 → F3 吞键复现
+        let (_b1, p1) = split_trailing_query_prefix(b"abc\x1b[6".to_vec());
+        let mut frame = p1;
+        frame.extend_from_slice(b"n rest");
+        let (b2, p2) = split_trailing_query_prefix(frame);
+        assert!(p2.is_empty());
+        assert_eq!(
+            strip_dsr_queries(&b2),
+            b" rest",
+            "门控剥离后前端无 DSR 泄漏"
+        );
     }
 
     // ─── inject_da1_response / inject_cpr_response 动作级测试（共享 Vec writer）───

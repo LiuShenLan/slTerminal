@@ -182,6 +182,16 @@ pub fn should_bundle(build_number: u32) -> bool {
     build_number < CONPTY_WIN11_MIN_BUILD
 }
 
+/// 决策纯函数：Win10 家族（build < 21376，含捆绑与回退路径）conhost 键事件
+/// 输入模式会把 CPR 应答（CSI 1;1R）解析为 F3 键（PSReadLine CharacterSearch
+/// 吞掉下一个输入字符）——该传输层上 CPR 字节写入 stdin 即是毒（其他位置
+/// 形态被键事件引擎丢弃，应用永远拿不到真值）。DSR 查询在此类主机上只能
+/// 剥离不答；Win11+ inbox conhost 传输正常，透传前端 xterm.js 实答。
+/// 阈值与 `should_bundle` 同源（Win10/Win11 分界），语义独立不复用其名。
+pub fn conhost_input_corrupts_cpr(build_number: u32) -> bool {
+    build_number < CONPTY_WIN11_MIN_BUILD
+}
+
 /// 提取目标目录：%LOCALAPPDATA%\slterminal\conpty（纯路径构造，便于测试注入）
 pub fn extraction_dir_from(localappdata: &Path) -> PathBuf {
     localappdata.join("slterminal").join("conpty")
@@ -336,6 +346,22 @@ mod conpty_api_tests {
     fn should_not_bundle_at_or_above_threshold() {
         assert!(!should_bundle(21376));
         assert!(!should_bundle(26100));
+    }
+
+    // DSR 门控决策（ADR-0022 修订）：Win10 家族 conhost 键事件输入把 CPR
+    // 应答解析为 F3 键——DSR 剥离不答；Win11+ 透传实答
+    #[test]
+    fn cpr_corrupted_below_threshold() {
+        assert!(conhost_input_corrupts_cpr(19041));
+        assert!(conhost_input_corrupts_cpr(21375));
+        // build 获取失败回退 0 → 按 Win10 处置（剥离，与 should_bundle 同源语义）
+        assert!(conhost_input_corrupts_cpr(0));
+    }
+
+    #[test]
+    fn cpr_not_corrupted_at_or_above_threshold() {
+        assert!(!conhost_input_corrupts_cpr(21376));
+        assert!(!conhost_input_corrupts_cpr(26100));
     }
 
     // T2: 提取路径构造

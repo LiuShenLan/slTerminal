@@ -3,7 +3,8 @@
 /// Windows 关键坑：
 /// - spawn 串行化：并发 spawn 卡死 ConPTY 输出管道 → SPAWN_LOCK
 /// - cwd 反斜杠：传给 ConPTY 前规范化成 \
-/// - CPR 响应：不盲注——reader_loop 检测到 DSR 握手（ESC[6n）后按需代答（ADR-0022）
+/// - CPR 响应：不盲注——reader_loop 检测到 DSR 握手（ESC[6n）后按需代答（ADR-0022）；
+///   窗口外 DSR 按 OS build 门控（Win10 家族剥离不答 / Win11+ 透传，ADR-0022 修订）
 /// - stdin drop：Windows 绝对不能 drop stdin（立即杀子进程）
 /// - 孤儿进程：每个子进程放入 Job Object，JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
 use crate::error::AppError;
@@ -1296,15 +1297,21 @@ pub async fn pty_spawn(
         // 创建 PTY 并获取 master +（Windows 独有）HPCON 用于子进程 spawn
         // Windows: 绕过 portable-pty openpty，直接调 Win32 CreatePseudoConsole 控制 flags
         #[cfg(windows)]
-        let (conpty_hpc, conpty_master) = {
+        let (conpty_hpc, conpty_master, strip_dsr) = {
             let build = super::win_build::get_windows_build_number().unwrap_or_else(|e| {
                 tracing::warn!("无法获取 Windows build 号: {}", e);
                 0
             });
             // CP-009: 读 conptyInputModes 设置段（缺失/解析失败 → 默认矩阵，不阻塞 spawn）
             let modes = read_conpty_input_modes_setting();
-            conpty_custom::create_conpty_pair(cols, rows, build, &modes)
-                .map_err(|e| AppError::Pty(e.to_string()))?
+            let (hpc, master) = conpty_custom::create_conpty_pair(cols, rows, build, &modes)
+                .map_err(|e| AppError::Pty(e.to_string()))?;
+            // DSR 门控（ADR-0022 修订）：Win10 家族（build < 21376，含捆绑与回退）
+            // conhost 键事件输入把 CPR 应答解析为 F3 吞键——窗口外 DSR 剥离不答；
+            // Win11+ 透传前端实答。build 获取失败回退 0 → 按 Win10 处置（剥离，
+            // 与 should_bundle 同源语义）
+            let strip_dsr = crate::pty::conpty_api::conhost_input_corrupts_cpr(build);
+            (hpc, master, strip_dsr)
         };
         // BE-05: 克隆 reader + 微批续读检查器（Windows 专用）——必须在 conpty_master
         // 装箱前完成（其内部字段对 pty_spawn 不可见）；非 Windows 分支在下方统一位置
@@ -1395,6 +1402,9 @@ pub async fn pty_spawn(
             // 非 Windows 无 ConPTY 管道非阻塞检查能力：微批退化为每轮一次 read（行为同现状）
             crate::pty::reader::PtyReaderInput::new(r, Box::new(|| false))
         };
+        // 非 Windows 无 ConPTY 键事件毒键问题：DSR 维持透传（门控关闭）
+        #[cfg(not(windows))]
+        let strip_dsr = false;
         let reader_child = child.clone();
         // P2-13: reader 线程通过此 Arc 回写真实退出码，同时也是 session 的 exit_code
         let exit_code_slot: Arc<Mutex<Option<i32>>> = Arc::new(Mutex::new(None));
@@ -1409,6 +1419,7 @@ pub async fn pty_spawn(
                 reader_child,
                 reader_exit_code,
                 writer_reader,
+                strip_dsr,
             );
         });
 
