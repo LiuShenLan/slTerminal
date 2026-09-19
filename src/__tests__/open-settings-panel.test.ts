@@ -27,7 +27,7 @@ const { toastShowMock } = vi.hoisted(() => ({
 vi.mock("../lib", () => ({ toast: { show: toastShowMock } }));
 
 /** DockviewApi stub：getPanel/addPanel 共享内部 Map（照 open-hooks-config-panel 测试模式） */
-function dockviewApiStub(): DockviewApi {
+function dockviewApiStub(activeGroup?: { id: string; panels: Array<{ id: string }> }): DockviewApi {
   const panels = new Map<string, { focus: ReturnType<typeof vi.fn> }>();
   return {
     getPanel: vi.fn((id: string) => panels.get(id)),
@@ -37,6 +37,8 @@ function dockviewApiStub(): DockviewApi {
       return panel;
     }),
     getGroup: vi.fn((id: string) => ({ id })),
+    // 聚焦组缺省 undefined → resolveFocusedGroupForAdd 走兜底链（主组）
+    activeGroup,
   } as unknown as DockviewApi;
 }
 
@@ -150,6 +152,17 @@ describe("openSettingsPanel", () => {
       position: { referenceGroup: pageGroupId("page-a") },
       params: { panelId: "page-a:settings", selectedPage: "hooks" },
     });
+  });
+
+  it("聚焦组属本页分屏组 → 设置面板落聚焦组而非主组（落组统一）", async () => {
+    // 分屏自生组（首面板页前缀派生归属 page-a）
+    api = dockviewApiStub({ id: "split-5", panels: [{ id: "page-a:terminal-0" }] });
+    markPageReady("page-a", api);
+    const ok = await openSettingsPanel("page-a");
+    expect(ok).toBe(true);
+    expect(api.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ position: { referenceGroup: "split-5" } }),
+    );
   });
 
   it("getPanel 命中但面板对象无 focus 方法 → 降级不抛错、addPanel 不再调用", async () => {

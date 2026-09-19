@@ -41,7 +41,7 @@ import {
   createRightHeader,
   createTabMenuItems,
 } from "../workspace/Workspace";
-import { createWatermark } from "../workspace/tabChrome";
+import { createWatermark, addTerminalPanel } from "../workspace/tabChrome";
 import { pageGroupId } from "../workspace/pageGroups";
 
 // ---- 辅助 ----
@@ -66,15 +66,20 @@ function hexToRgb(hex: string): string {
 }
 
 /**
- * fake 宿主 api：addPanel spy + getGroup（addTerminalPanel 的页组存在性守卫）——
- * 目标页组（page-{pageId}）视为已挂载。
+ * fake 宿主 api：addPanel spy + getGroup（addTerminalPanel 缺省落组的页组存在性守卫）——
+ * 目标页组（page-{pageId}）视为已挂载；activeGroup 可种子（聚焦组落组用例）。
  */
-function makeFakeHost(pageIds: string[], addPanelSpy: ReturnType<typeof vi.fn> = vi.fn()) {
+function makeFakeHost(
+  pageIds: string[],
+  addPanelSpy: ReturnType<typeof vi.fn> = vi.fn(),
+  activeGroup?: Record<string, unknown>,
+) {
   const pageGroupIds = new Set(pageIds.map((p) => pageGroupId(p)));
   const host = {
     addPanel: addPanelSpy,
     getGroup: (id: string) => (pageGroupIds.has(id) ? { id } : undefined),
     groups: [] as Array<{ id: string }>, // ADR-0020 落组解析兜底路径（getGroup 未命中时）
+    activeGroup, // 缺省 undefined → resolveFocusedGroupForAdd 回退兜底链
   };
   return { host, addPanelSpy };
 }
@@ -165,9 +170,9 @@ describe("createRightHeader", () => {
     expect(options.position.referenceGroup).toBe("page-p1");
   });
 
-  it("R7: 组头属主页优先——非活跃页组 id 不可解析时兜底活跃页；页组 id 解析优先", () => {
-    const mockGroupA = makeFakeGroup("group-left"); // 非页组 → 兜底活跃页
-    const mockGroupB = makeFakeGroup(pageGroupId("p1")); // 页组 → 组属主页
+  it("R7: 落组 = 按钮所在组（分屏语义）——自生分屏组 + 钮落本组，页组 + 钮落页组", () => {
+    const mockGroupA = makeFakeGroup("group-left"); // 分屏自生组 → 落本组
+    const mockGroupB = makeFakeGroup(pageGroupId("p1")); // 页主组 → 落本组
     const spyA = vi.fn();
     const spyB = vi.fn();
     useLayout.setState({ activePageId: "p1" });
@@ -197,8 +202,11 @@ describe("createRightHeader", () => {
     fireEvent.click(btnsA[btnsA.length - 1]);
     fireEvent.click(btnsB[btnsB.length - 1]);
 
-    expect(spyA.mock.calls[0][0].position.referenceGroup).toBe("page-p1");
+    // 分屏修复锚点：组头 + 钮的组上下文不再被丢弃（旧行为恒落最早主组 page-p1）
+    expect(spyA.mock.calls[0][0].position.referenceGroup).toBe("group-left");
     expect(spyB.mock.calls[0][0].position.referenceGroup).toBe("page-p1");
+    // 自生组目标页仍经派生归属解析（group-left 无面板 → 兜底活跃页 p1）→ 页前缀 id
+    expect(spyA.mock.calls[0][0].id).toBe("p1:terminal-0");
   });
 
   it("R8: addPanel 参数——页前缀协议 id + renderer always + 标题 terminal-N", () => {
@@ -216,21 +224,11 @@ describe("createRightHeader", () => {
     expect(options.params.cwd).toBe("/home/test");
   });
 
-  it("R10: 目标页组未挂载（getGroup 缺失）→ 静默不 addPanel（addTerminalPanel 守卫）", () => {
+  it("R10: 缺省落组路径页无组 → 返回 null 不 addPanel（addTerminalPanel 守卫；显式 targetGroup 不受此限——组上下文即存在性证明）", () => {
     useLayout.setState({ activePageId: "p1" });
     const addPanelSpy = vi.fn();
-    const host = { addPanel: addPanelSpy, getGroup: () => undefined, groups: [] };
-    const Header = createRightHeader(() => host as any);
-    const result = render(
-      React.createElement(Header, {
-        containerApi: { addPanel: addPanelSpy },
-        group: makeFakeGroup("page-p1"),
-        api: {}, panels: [], activePanel: undefined,
-        isGroupActive: false, headerPosition: "top",
-      } as any),
-    );
-    const btns = result.getAllByText("+");
-    fireEvent.click(btns[btns.length - 1]);
+    const host = { addPanel: addPanelSpy, getGroup: () => undefined, groups: [], activeGroup: undefined };
+    expect(addTerminalPanel(host as any, "p1", undefined)).toBeNull();
     expect(addPanelSpy).not.toHaveBeenCalled();
   });
 });
@@ -300,16 +298,37 @@ describe("createTabMenuItems", () => {
     expect(addPanelSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("C3/C4: addPanel position.referenceGroup = 面板属主页组 id（页组协议字符串）", () => {
+  it("C3/C4: addPanel position.referenceGroup = 右键瞬间面板所在组（分屏语义）", () => {
     const { newTerminalItem, addPanelSpy } = callMenu("p1", "group-beta");
     (newTerminalItem as any).action();
 
     const options = addPanelSpy.mock.calls[0][0];
     expect(options.position).toBeDefined();
-    expect(options.position.referenceGroup).toBe("page-p1");
+    // 分屏修复锚点：右键「新建终端」落右键时所在组（旧行为恒落最早主组 page-p1）
+    expect(options.position.referenceGroup).toBe("group-beta");
     // 页前缀协议 id（面板属主页 p1——localId 独立计数从 0 起）
     expect(options.id).toBe("p1:terminal-0");
     expect(options.params.panelId).toBe("p1:terminal-0");
+  });
+
+  it("C4b: 右键面板 api.group 缺失（防御形态）→ 缺省走聚焦组/兜底链（主组）", () => {
+    const { newTerminalItem, addPanelSpy, fakePanel } = callMenu("p1", "page-p1");
+    (fakePanel.api as any).group = undefined;
+    (newTerminalItem as any).action();
+
+    const options = addPanelSpy.mock.calls[0][0];
+    expect(options.position.referenceGroup).toBe("page-p1");
+  });
+
+  it("C4c: 无显式组上下文时聚焦组优先——activeGroup 属本页分屏组 → 落聚焦组", () => {
+    // addTerminalPanel 缺省路径（无 targetGroup）= resolveFocusedGroupForAdd：
+    // activeGroup（自生分屏组，归属经面板页前缀派生）属 p1 → 落聚焦组
+    const splitGroup = { id: "split-3", panels: [{ id: "p1:terminal-7" }] };
+    const addPanelSpy = vi.fn();
+    const { host } = makeFakeHost(["p1"], addPanelSpy, splitGroup);
+    const id = addTerminalPanel(host as any, "p1", undefined);
+    expect(id).toBe("p1:terminal-0");
+    expect(addPanelSpy.mock.calls[0][0].position.referenceGroup).toBe("split-3");
   });
 
   it("C5: 终端右键菜单完整结构（含重命名项）", () => {
@@ -470,7 +489,7 @@ describe("createTabMenuItems", () => {
 });
 
 // ============================================================
-// Watermark — 空页组「新建终端」（落活跃页组，显式页组 position）
+// Watermark — 空页组「新建终端」（落 watermark 所在组；无 group 走聚焦组/兜底链）
 // ============================================================
 
 describe("Watermark 回归（页组协议）", () => {
@@ -518,5 +537,21 @@ describe("Watermark 回归（页组协议）", () => {
     const btns = screen.getAllByRole("button", { name: "新建终端" });
     fireEvent.click(btns[btns.length - 1]);
     expect(addPanelSpy).not.toHaveBeenCalled();
+  });
+
+  it("W4: watermark 带 group prop（空分屏组形态）→ 落 watermark 所在组", () => {
+    useLayout.setState({ activePageId: "p1" });
+    const { host, addPanelSpy } = makeFakeHost(["p1"]);
+    const Watermark = createWatermark(() => host as any);
+    // dockview 对空组渲染 watermark 时传入该组对象（IWatermarkPanelProps.group）
+    render(
+      <Watermark
+        containerApi={{ addPanel: addPanelSpy } as never}
+        group={makeFakeGroup("split-empty-5") as never}
+      />,
+    );
+    const btns = screen.getAllByRole("button", { name: "新建终端" });
+    fireEvent.click(btns[btns.length - 1]);
+    expect(addPanelSpy.mock.calls[0][0].position.referenceGroup).toBe("split-empty-5");
   });
 });

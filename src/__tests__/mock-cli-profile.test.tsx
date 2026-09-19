@@ -786,7 +786,12 @@ describe("AC-4④ hub 选择行", () => {
 // ═══════════════════════════════════════════════════════════════
 
 describe("AC-4⑤ 恢复注入", () => {
-  let apiStub: { addPanel: ReturnType<typeof vi.fn> };
+  let apiStub: {
+    addPanel: ReturnType<typeof vi.fn>;
+    activeGroup: unknown;
+    getGroup: (id: string) => { id: string; panels: unknown[] } | undefined;
+    groups: unknown[];
+  };
   let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
@@ -812,6 +817,12 @@ describe("AC-4⑤ 恢复注入", () => {
           promptReady: true,
         });
       }),
+      // 落组解析消费面（resolveFocusedGroupForAdd：activeGroup undefined → 主组兜底；
+      // pageId 由真实 stores 生成不可预知——getGroup 对任意主组 id 直通）
+      activeGroup: undefined,
+      getGroup: (id: string) =>
+        id.startsWith("page-") ? { id, panels: [] } : undefined,
+      groups: [],
     };
     h.mockGetPageApi.mockReturnValue(apiStub);
     h.mockWaitPageApi.mockResolvedValue(apiStub);

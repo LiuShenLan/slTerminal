@@ -12,11 +12,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Workspace 渲染**单一** `<DockviewReact>` 共享宿主（`WorkspaceDockHost.tsx`）。每个操作页面 = 宿主内一个**主组**（id = `pageGroupId(pageId)`，`page-{pageId}`——恢复锚点 + Watermark 载体）+ 零或多个页内分屏**自生组**（dockview 自增 id，无 page- 前缀）：
 
-- **页组协议（pageGroups.ts 纯函数族，全仓承重契约）**：面板 id 全量页前缀 = `panelIdInPage(pageId, localId)`（`{pageId}:localId`）；`pageOfPanelId` 解析属主页；`panelsOfPage` 页内面板查询。**组页归属不从组 id 断言，从组内首面板 id 前缀派生**：`pageIdOfGroup`（组 id 快车道 ?? 组内首面板页前缀 ?? null）、`groupsOfPage`（页内全部组枚举——删页/切片/显隐遍历用）、`resolvePageGroupForAdd`（主组 ?? 页内首组 ?? null——主组可被拖空删除，新增面板落组经此回退链；null 时调用方显式失败，不落活跃组防错页）；`panelBelongsToGroup` 语义 = 「组派生归属 === 面板页」。终端 localId = `terminal-N`（每页从 0 起计数，`lib/panelId.ts` 单点，标题 `terminal-N` 与 id 编号同源语义不变——编号仍 local）。
+- **页组协议（pageGroups.ts 纯函数族，全仓承重契约）**：面板 id 全量页前缀 = `panelIdInPage(pageId, localId)`（`{pageId}:localId`）；`pageOfPanelId` 解析属主页；`panelsOfPage` 页内面板查询。**组页归属不从组 id 断言，从组内首面板 id 前缀派生**：`pageIdOfGroup`（组 id 快车道 ?? 组内首面板页前缀 ?? null）、`groupsOfPage`（页内全部组枚举——删页/切片/显隐遍历用）、`resolvePageGroupForAdd`（主组 ?? 页内首组 ?? null——主组可被拖空删除，落组兜底回退链；null 时调用方显式失败，不落活跃组防错页）、`resolveFocusedGroupForAdd`（交互式打开入口落组单点：activeGroup 属本页 ?? 委托 resolvePageGroupForAdd 兜底链——**分工**：打开入口一律走 focused 版，resolvePageGroupForAdd 仅作其兜底链与跨页回迁（movePanelToPageGroup）专用）；`panelBelongsToGroup` 语义 = 「组派生归属 === 面板页」。终端 localId = `terminal-N`（每页从 0 起计数，`lib/panelId.ts` 单点，标题 `terminal-N` 与 id 编号同源语义不变——编号仍 local）。
 - **页面切换 = 页组容器显隐**：仅活跃页的各组可见（dockview 网格叶级可见性，见下「可见性机制」）。切换只更新 `useLayout.activePageId`（`switchToPageShared`）——宿主订阅刷新，终端不随切页卸载/重建，xterm 实例只 open 一次。根因：xterm.js 不支持二次 `open()`（Issue #4978）。
 - **可见性机制（写死，ADR-0020 取代 maximize）**：`setActivePageVisibility(api, activePageId)` 为可见性单点（恢复/并入/切页/移动后统一调用）——遍历 `api.groups` 中 grid 组，按派生归属 `group.api.setVisible(visible)`，同页多组同隐同显。底层与 maximize 同一 setViewVisible 机制（DOM 保留、面板不卸载、React 不重挂载；jsdom/真实 WebView 双实证），且 setViewVisible 首行 exitMaximizedView——弃 maximize 无残留冲突。隐藏组 display:none 尺寸归零 → fit/resize 不触发；切回后 dockview 重排 → ResizeObserver 自然恢复（恒挂载面板 fit/resize 仅在组可见时执行）。**红线：dockview setVisible 无条件 fire onDidLayoutChange（等值也 fire）——必须等值跳过**（`group.api.isVisible === visible` continue），否则 sync()→setVisible→layoutChange→store 写回→sync() 死循环（jsdom 实证挂死）。无活跃页时整宿主容器 display:none（旧「页面实例全隐藏」空白主区语义）。
 - **页面总数上限消亡**：多实例每页一实例的内存/DOM 线性增长源消失——页面总数上限（原 FE-01/FE-36）随架构删除（见 `stores/CLAUDE.md`）。
-- **生命周期契约**：新增面板 addPanel 显式 `position.referenceGroup = resolvePageGroupForAdd(api, pageId).id`（五入口统一：tabChrome 工厂/pageApis/openFile/openCommitFile/ExplorerPanel）；**跨页组拖拽禁止**——宿主 `auditGroupMembership` 守卫（挂 `onDidMovePanel` 主事件源 + onDidAddPanel + 恢复后全量一次；两事件源经 `setTimeout(0)` 延迟执行——回调内同步审计撞 dockview 中间态 disposed，见「外部坑」：自生空壳组 removeGroup、混组以首面板页为属主、少数派面板 moveTo 回迁；模块级重入旗标防自触发）；页面删除 = `groupsOfPage` 逐组 removeGroup（先 kill 页内终端，分屏组一并清除）；`renderer="always"` 白名单语义不变（恒挂载面板在隐藏组内保持挂载）。**页内分屏（单页多组）支持（ADR-0020）**——拖拽拆分合法化为自生组；仅网格分屏（`disableFloatingGroups` prop 禁 floating 手势；popout 仅 API 可达不调用即禁用，D7）。
+- **生命周期契约**：新增面板 addPanel 显式 `position.referenceGroup`（六入口统一：tabChrome 工厂/pageApis/openFile/openCommitFile/ExplorerPanel/restoreSession）；落组三档——**显式组优先**（有触发源组上下文时传入：tabChrome 组头 + 钮/右键菜单/Watermark 经 `opts.targetGroup` 落所在组），**缺省走 `resolveFocusedGroupForAdd`**（聚焦组属本页优先 ?? 主组 ?? 页内首组兜底链——主组可被拖空删除），页无组解析 null → 调用方显式失败不落活跃组防错页；**跨页组拖拽禁止**——宿主 `auditGroupMembership` 守卫（挂 `onDidMovePanel` 主事件源 + onDidAddPanel + 恢复后全量一次；两事件源经 `setTimeout(0)` 延迟执行——回调内同步审计撞 dockview 中间态 disposed，见「外部坑」：自生空壳组 removeGroup、混组以首面板页为属主、少数派面板 moveTo 回迁；模块级重入旗标防自触发）；页面删除 = `groupsOfPage` 逐组 removeGroup（先 kill 页内终端，分屏组一并清除）；`renderer="always"` 白名单语义不变（恒挂载面板在隐藏组内保持挂载）。**页内分屏（单页多组）支持（ADR-0020）**——拖拽拆分合法化为自生组；仅网格分屏（`disableFloatingGroups` prop 禁 floating 手势；popout 仅 API 可达不调用即禁用，D7）。
 
 ### 布局恢复与变更守卫
 
@@ -44,7 +44,7 @@ Workspace 渲染**单一** `<DockviewReact>` 共享宿主（`WorkspaceDockHost.t
 
 ### Watermark 空态规范（GL-05/UI-806）
 
-空白页组（含空宿主）由 `createWatermark` 组件接管（dockview 对空组渲染 watermarkComponent）：**15px 线性图标 + 说明文字 13px + 可选「新建终端」次按钮**（SECONDARY_BG 底 + SEPARATOR_BG 描边，点击经 `addTerminalPanel` 落活跃页组——resolvePageGroupForAdd 解析，`renderer: "always"`）。
+空白页组（含空宿主）由 `createWatermark` 组件接管（dockview 对空组渲染 watermarkComponent）：**15px 线性图标 + 说明文字 13px + 可选「新建终端」次按钮**（SECONDARY_BG 底 + SEPARATOR_BG 描边，点击经 `addTerminalPanel` 落 **watermark 所在组**（IWatermarkPanelProps.group——组级 watermark 恒有；宿主级无 group 走聚焦组/兜底链解析），`renderer: "always"`）。
 
 ### 项目切换前置：setProjectRoot 先于 activePageId（DBG-5/SEC-01）
 
@@ -131,7 +131,7 @@ dockview 8.1.0 free core 的页签右键菜单(ContextMenu)是 **enterprise 模�
 
 ## 测试模式
 
-- **页组协议纯函数**：page-groups.test.ts（id 往返/派生归属 pageIdOfGroup/groupsOfPage/resolvePageGroupForAdd 回退链/panelBelongsToGroup 组对象语义）。
+- **页组协议纯函数**：page-groups.test.ts（id 往返/派生归属 pageIdOfGroup/groupsOfPage/resolvePageGroupForAdd 回退链/resolveFocusedGroupForAdd 聚焦组优先/panelBelongsToGroup 组对象语义）。
 - **真实 Dockview 集成（非 mock）**：workspace-page-dockview.test.tsx 渲染真实宿主（种子 projects store 驱动恢复/水印/右键菜单/onSaveAs——jsdom 可跑真实 dockview；含页内分屏 describe——真实 addGroup+moveTo 分屏路径：两组同显防复发/切页同隐同显 xterm 不重建/切片两叶持久化/删页杀全组/主组拖空回退链）；workspace-host-pages.test.tsx（多页组共存/切页不卸载/H6）；workspace-callback-cache.test.tsx（页面目录变更不扰动既有页组）。
 - **宿主 API 单例重置**：beforeEach `unregisterHostApi()` + stores 重置（宿主级模块态隔离）。
 - **跨页审计守卫**：workspace-cross-page-guard.test.ts（auditGroupMembership 直测——空壳清理/混组回迁/重入安全/防复发 `_moving` 吞事件终态）。

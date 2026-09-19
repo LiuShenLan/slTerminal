@@ -153,8 +153,27 @@ function panelIdOf(apiStub: { addPanel: ReturnType<typeof vi.fn> }): string {
   return (apiStub.addPanel.mock.calls[0][0] as { id: string }).id;
 }
 
+/** 恢复目标页主组桩（resolveFocusedGroupForAdd 兜底链：activeGroup undefined → 主组） */
+const GROUP_STUB = { id: "page-page-restore-test", panels: [] };
+
+/** apiStub 装配（addPanel spy + 落组解析消费面：activeGroup/getGroup/groups） */
+function makeApiStub() {
+  return {
+    addPanel: vi.fn(),
+    activeGroup: undefined,
+    // 主组 id 直通（pageId 由用例自定义——page-existing 等同样命中主组兜底）；
+    // 「无组失败」用例显式覆盖本桩为 () => undefined
+    getGroup: (id: string) =>
+      (id.startsWith("page-") ? { id, panels: [] } : undefined) as
+        | typeof GROUP_STUB
+        | undefined,
+    groups: [GROUP_STUB],
+  };
+}
+type ApiStub = ReturnType<typeof makeApiStub>;
+
 describe("restoreHistorySession 四步恢复编排", () => {
-  let apiStub: { addPanel: ReturnType<typeof vi.fn> };
+  let apiStub: ApiStub;
   let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
@@ -169,7 +188,7 @@ describe("restoreHistorySession 四步恢复编排", () => {
     h.resetRegistryListeners();
     h.mockPtyWrite.mockReset().mockResolvedValue(undefined);
     h.mockSendToastNotification.mockReset();
-    apiStub = { addPanel: vi.fn() };
+    apiStub = makeApiStub();
     h.mockWaitPageApi.mockResolvedValue(apiStub);
     // 默认桩：pwsh + 首个提示符已渲染——就绪闸门直查命中立即放行（不等事件不空转超时）
     h.mockTerminalRegistryGet.mockReturnValue({
@@ -213,7 +232,9 @@ describe("restoreHistorySession 四步恢复编排", () => {
     expect(h.mockSwitchToPageShared).toHaveBeenCalledWith("page-restore-test");
 
     // 步骤 4a：addPanel 参数（B14：panelId 页前缀协议单点生成，cwd 透传；
-    // 人工验证问题 3：初始标题 = session.title（历史回退链合成结果））
+    // 人工验证问题 3：初始标题 = session.title（历史回退链合成结果）；
+    // 落组 = resolveFocusedGroupForAdd 显式 position——activeGroup undefined
+    // 兜底主组（替换旧「无 position 落 dockview 默认活跃组」错组形态）
     expect(apiStub.addPanel).toHaveBeenCalledTimes(1);
     expect(apiStub.addPanel).toHaveBeenCalledWith({
       id: expect.stringMatching(/^page-restore-test:terminal-\d+$/),
@@ -224,6 +245,7 @@ describe("restoreHistorySession 四步恢复编排", () => {
         cwd: "C:\\Users\\test\\proj",
       },
       renderer: "always",
+      position: { referenceGroup: GROUP_STUB.id },
     });
 
     // 步骤 4b：pty.write payload（sessionId 来自 TerminalRegistry，命令以 \r 结尾）
@@ -405,13 +427,40 @@ describe("restoreHistorySession 四步恢复编排", () => {
     expect(apiStub.addPanel).not.toHaveBeenCalled();
     expect(h.mockPtyWrite).not.toHaveBeenCalled();
   });
+
+  it("聚焦组属目标页 → 恢复终端落聚焦组（分屏语义，非主组兜底）", async () => {
+    // 聚焦组 = 页内分屏自生组（id 无前缀，归属经组内面板页前缀派生）
+    const splitGroup = { id: "split-7", panels: [{ id: "page-restore-test:terminal-9" }] };
+    apiStub.activeGroup = splitGroup as never;
+    apiStub.groups = [GROUP_STUB, splitGroup] as never;
+
+    await restoreHistorySession(makeSession());
+
+    expect(apiStub.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ position: { referenceGroup: "split-7" } }),
+    );
+  });
+
+  it("页无任何组（resolveFocusedGroupForAdd null）→ 显式失败 toast，不落默认活跃组", async () => {
+    apiStub.getGroup = () => undefined;
+    apiStub.groups = [];
+
+    await restoreHistorySession(makeSession());
+
+    expect(h.mockSendToastNotification).toHaveBeenCalledWith(
+      "恢复会话失败",
+      expect.objectContaining({ body: expect.stringContaining("无可落组") }),
+    );
+    expect(apiStub.addPanel).not.toHaveBeenCalled();
+    expect(h.mockPtyWrite).not.toHaveBeenCalled();
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════
 // 恢复注入就绪闸门（OSC 133;A → promptReady 事件；cmd 固定 500ms；超时兜底注入）
 // ═══════════════════════════════════════════════════════════════════
 describe("restoreHistorySession 就绪闸门", () => {
-  let apiStub: { addPanel: ReturnType<typeof vi.fn> };
+  let apiStub: ApiStub;
   let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
@@ -426,7 +475,7 @@ describe("restoreHistorySession 就绪闸门", () => {
     h.resetRegistryListeners();
     h.mockPtyWrite.mockReset().mockResolvedValue(undefined);
     h.mockSendToastNotification.mockReset();
-    apiStub = { addPanel: vi.fn() };
+    apiStub = makeApiStub();
     h.mockWaitPageApi.mockResolvedValue(apiStub);
     consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   });

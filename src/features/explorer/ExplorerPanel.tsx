@@ -12,7 +12,7 @@ import { FileTree } from "./FileTree";
 import { createDir, deleteEntry, rename, writeFile } from "../../ipc/fs";
 import { useProjects } from "../../stores/projects";
 import { useLayout } from "../../stores/layout";
-import { panelIdInPage, resolvePageGroupForAdd } from "../../workspace/pageGroups";
+import { panelIdInPage, resolveFocusedGroupForAdd } from "../../workspace/pageGroups";
 import { titleManager } from "../../workspace/titleManager";
 import { openFileInPage } from "../../workspace/openFile";
 import {
@@ -221,9 +221,10 @@ export const ExplorerPanel: React.FC<SideViewComponentProps> = ({
             : path;
         if (!activePageId) return;
         // CP-004：terminal localId 页前缀协议（terminal-open-{ts} 为免撞号 local
-        // 形态——不占页组 seq 计数）；ADR-0020 落组经派生归属解析（分屏后主组
-        // 可能被拖空删除；页无组解析 null → 不落活跃组防错页）
-        const group = resolvePageGroupForAdd(dockApi, activePageId);
+        // 形态——不占页组 seq 计数）；ADR-0020 落组经 resolveFocusedGroupForAdd
+        // （聚焦组优先 ?? 主组 ?? 页内首组——分屏后主组可能被拖空删除；
+        // 页无组解析 null → 不落活跃组防错页）
+        const group = resolveFocusedGroupForAdd(dockApi, activePageId);
         if (!group) return;
         const localId = `terminal-open-${Date.now()}`;
         const panelId = panelIdInPage(activePageId, localId);

@@ -34,8 +34,8 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-/** 构造 Dockview API mock（addPanel/getPanel + ADR-0020 落组解析 getGroup/groups） */
-function makeDockApi() {
+/** 构造 Dockview API mock（addPanel/getPanel + ADR-0020 落组解析 getGroup/groups/activeGroup） */
+function makeDockApi(activeGroup?: { id: string; panels: Array<{ id: string }> }) {
   return {
     addPanel: mocks.mockAddPanel,
     getPanel: vi.fn().mockReturnValue({
@@ -44,6 +44,8 @@ function makeDockApi() {
     }),
     getGroup: vi.fn((id: string) => ({ id })),
     groups: [],
+    // 聚焦组缺省 undefined → resolveFocusedGroupForAdd 走兜底链（主组）
+    activeGroup,
   };
 }
 
@@ -141,6 +143,24 @@ describe("openFileInPage", () => {
     const call = mocks.mockAddPanel.mock.calls[0]![0];
     // 标题以项目根计算（同 ExplorerPanel 抽取前语义——具体值由 titleManager 测试守护）
     expect(call.title.length).toBeGreaterThan(0);
+  });
+
+  it("聚焦组属本页分屏组 → 新面板落聚焦组而非主组（落组统一）", () => {
+    // 分屏自生组（首面板页前缀派生归属 page-1）
+    const focusedGroup = { id: "split-9", panels: [{ id: "page-1:terminal-0" }] };
+    const ctx = { ...baseCtx(), dockApi: makeDockApi(focusedGroup) };
+    openFileInPage(ctx, "C:/project/src/a.ts");
+    const call = mocks.mockAddPanel.mock.calls[0]![0];
+    expect(call.position).toEqual({ referenceGroup: "split-9" });
+  });
+
+  it("聚焦组属他页 → 回退主组（不落他页组防错页）", () => {
+    const foreignGroup = { id: "split-7", panels: [{ id: "page-other:terminal-0" }] };
+    const ctx = { ...baseCtx(), dockApi: makeDockApi(foreignGroup) };
+    openFileInPage(ctx, "C:/project/src/a.ts");
+    const call = mocks.mockAddPanel.mock.calls[0]![0];
+    // getGroup 直通 → 主组 id = pageGroupId("page-1")
+    expect(call.position).toEqual({ referenceGroup: "page-page-1" });
   });
 });
 

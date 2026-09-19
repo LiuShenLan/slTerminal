@@ -78,6 +78,9 @@ export function groupsOfPage(api: DockviewApi, pageId: string): IDockviewGroupPa
  * （页内分屏后主组面板被拖空自动删除）→ 页内首组；页无任何组 → null——
  * 调用方须显式失败分支（dockview 对无效 referenceGroup 直接 throw，
  * 静默落活跃组会错页）。
+ *
+ * 分工：本函数 = 稳定兜底链（跨页回迁 movePanelToPageGroup 等审计路径专用）；
+ * 用户交互打开入口用 resolveFocusedGroupForAdd（聚焦组优先，本函数兜底）。
  */
 export function resolvePageGroupForAdd(
   api: DockviewApi,
@@ -86,6 +89,21 @@ export function resolvePageGroupForAdd(
   const primary = api.getGroup(pageGroupId(pageId));
   if (primary) return primary;
   return groupsOfPage(api, pageId)[0] ?? null;
+}
+
+/**
+ * 交互式打开入口的落组解析（新建终端/文件/git/settings/恢复会话统一）：
+ * 当前聚焦组（api.activeGroup）属于目标页 → 落聚焦组（分屏语义：在哪个
+ * 分屏操作就落哪个分屏）；无聚焦组或聚焦组属他页 → 委托
+ * resolvePageGroupForAdd 兜底链（主组 ?? 页内首组 ?? null）。
+ */
+export function resolveFocusedGroupForAdd(
+  api: DockviewApi,
+  pageId: string,
+): IDockviewGroupPanel | null {
+  const active = api.activeGroup;
+  if (active && pageIdOfGroup(active) === pageId) return active;
+  return resolvePageGroupForAdd(api, pageId);
 }
 
 /**

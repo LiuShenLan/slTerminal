@@ -26,7 +26,7 @@ import type { RegisteredTerminal } from "../../panels/terminal/TerminalRegistry"
 import { write as ptyWrite } from "../../ipc/pty";
 import { sendToastNotification } from "../../ipc/notification";
 import { normalizePath, basename } from "../../lib/path";
-import { makeTerminalIdInPage } from "../../workspace/pageGroups";
+import { makeTerminalIdInPage, resolveFocusedGroupForAdd } from "../../workspace/pageGroups";
 import { cliProfileRegistry } from "../cliProfiles";
 import type { AgentHistorySession } from "../../types/agentHistory";
 
@@ -233,6 +233,12 @@ async function doRestore(
   // CP-004: panelId 经页前缀协议单点 makeTerminalIdInPage（"{pageId}:terminal-N"，
   // local 计数模块级每页共享——与 workspace 各新建入口同源，防同页 localId 碰撞）
   const panelId = makeTerminalIdInPage(targetPageId);
+  // 落组 = 当前聚焦组（属目标页）?? 主组 ?? 页内首组（无组上下文入口统一规则）；
+  // 页无组 → 显式失败（不落 dockview 默认活跃组防错页——原默认行为曾落错组）
+  const group = resolveFocusedGroupForAdd(api, targetPageId);
+  if (!group) {
+    throw new Error(`页面 ${targetPageId} 无可落组，无法恢复终端`);
+  }
   api.addPanel({
     id: panelId,
     component: "terminal",
@@ -242,6 +248,7 @@ async function doRestore(
     title: session.title ?? session.sessionId.slice(0, 8),
     params: { panelId, cwd },
     renderer: "always",
+    position: { referenceGroup: group.id },
   });
 
   const entry = await waitForTerminalRegister(panelId, signal);

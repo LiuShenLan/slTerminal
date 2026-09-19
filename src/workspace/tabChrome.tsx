@@ -9,6 +9,7 @@ import React, { useState, useEffect } from "react";
 import {
   type DockviewApi,
   type DockviewGroupPanel,
+  type IDockviewGroupPanel,
   type IDockviewPanelProps,
   type IDockviewHeaderActionsProps,
   type IWatermarkPanelProps,
@@ -26,7 +27,7 @@ import { copyRelativePath } from "../lib/copyRelativePath";
 import { TabMenuPopup } from "./TabMenuPopup";
 import type { TabMenuItem } from "./TabMenuPopup";
 import { IconEmptyBox } from "../lib/icons";
-import { pageOfPanelId, pageIdOfGroup, makeTerminalIdInPage, resolvePageGroupForAdd } from "./pageGroups";
+import { pageOfPanelId, pageIdOfGroup, makeTerminalIdInPage, resolveFocusedGroupForAdd } from "./pageGroups";
 import { useLayout } from "../stores/layout";
 import { projectRootOfPage } from "./pageApis";
 import { saveLayout } from "./layoutSerde";
@@ -96,7 +97,9 @@ function resolvePageId(panelId: string | undefined, fallbackPageId: string | nul
 
 /**
  * 新建终端面板（宿主内共享工厂——Watermark/RightHeader/右键菜单三入口合一）：
- * addPanel 显式 position.referenceGroup = resolvePageGroupForAdd 解析的目标组
+ * addPanel 显式 position.referenceGroup——opts.targetGroup（触发源所在组，
+ * 组头 + 钮/右键菜单/Watermark 有空组上下文时传入）优先，缺省走
+ * resolveFocusedGroupForAdd（聚焦组 ?? 主组 ?? 页内首组回退链）
  * （生命周期契约——ADR-0020 页内分屏后主组可能被拖空删除，落组经派生归属
  * 解析；页无任何组时解析 null → 返回 null 不落活跃组防错页）。
  * cwd 语义（D1）：显式传入优先（Explorer「在终端中打开」/历史会话恢复），
@@ -106,8 +109,9 @@ export function addTerminalPanel(
   api: DockviewApi,
   pageId: string,
   cwd: string | undefined,
+  opts?: { targetGroup?: IDockviewGroupPanel },
 ): string | null {
-  const group = resolvePageGroupForAdd(api, pageId);
+  const group = opts?.targetGroup ?? resolveFocusedGroupForAdd(api, pageId);
   if (!group) return null;
   const id = makeTerminalIdInPage(pageId);
   api.addPanel({
@@ -125,13 +129,14 @@ export function addTerminalPanel(
 
 /**
  * 创建 Watermark 组件（空页组接管——dockview 对空组渲染 watermarkComponent）。
- * 目标页 = 点击时点活跃页（空页组即活跃页组；containerApi.addPanel 无
- * position 落活跃组）。终端 cwd 由 addTerminalPanel 工厂缺省解析（项目根）。
+ * 目标页 = 点击时点活跃页（空页组即活跃页组）；落组 = watermark 所在组
+ * （IWatermarkPanelProps.group，空宿主形态无 group → addTerminalPanel 缺省解析）。
+ * 终端 cwd 由 addTerminalPanel 工厂缺省解析（项目根）。
  */
 export function createWatermark(
   getApi: () => DockviewApi | null,
 ): React.FC<IWatermarkPanelProps> {
-  const Watermark: React.FC<IWatermarkPanelProps> = () => {
+  const Watermark: React.FC<IWatermarkPanelProps> = ({ group }) => {
     return (
       <div
         style={{
@@ -148,11 +153,12 @@ export function createWatermark(
         <div style={{ display: "flex", gap: 8 }}>
           <button
             onClick={() => {
-              // 空页组 = 当前活跃页（可见性单点保证），落活跃页组
+              // 落组 = watermark 所在空组（用户看见的组）；空宿主 watermark
+              // 无 group → 缺省走聚焦组解析（兜底主组 ?? 页内首组）
               const api = getApi();
               if (!api) return;
               const target = useLayout.getState().activePageId;
-              if (target) void addTerminalPanel(api, target, undefined);
+              if (target) void addTerminalPanel(api, target, undefined, { targetGroup: group });
             }}
             style={{
               background: SECONDARY_BG, border: `1px solid ${SEPARATOR_BG}`, color: SIDEBAR_FG,
@@ -181,11 +187,12 @@ function createRightHeader(
         <button
           onClick={() => {
             // 目标页 = 组属主页（ADR-0020 派生归属——分屏自生组经首面板前缀
-            // 解析）兜底活跃页——可见性单点保证非活跃页组不可见不可点，两值同页
+            // 解析）兜底活跃页——可见性单点保证非活跃页组不可见不可点，两值同页；
+            // 落组 = 按钮所在组（分屏语义：在哪个分屏点 + 就落哪个分屏）
             const api = getApi();
             if (!api || !pageId) return;
             const ownerPage = pageIdOfGroup(group) ?? pageId;
-            void addTerminalPanel(api, ownerPage, undefined);
+            void addTerminalPanel(api, ownerPage, undefined, { targetGroup: group });
           }}
           onMouseEnter={() => setHovered(true)}
           onMouseLeave={() => setHovered(false)}
@@ -271,8 +278,8 @@ export function createTabMenuItems(
           // 兜底活跃页——右键必发生在可见（活跃）页组
           const target = menuPageId ?? useLayout.getState().activePageId;
           if (!target) return;
-          // 新面板落 target 页组（addTerminalPanel 显式 position referenceGroup）
-          void addTerminalPanel(api, target, undefined);
+          // 新面板落右键瞬间面板所在组（分屏语义）；group 缺失（防御形态）缺省走聚焦组解析
+          void addTerminalPanel(api, target, undefined, { targetGroup: panel.api.group });
         },
       }),
       "separator",

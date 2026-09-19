@@ -21,7 +21,7 @@ import { toast } from "../lib";
 import { TerminalRegistry } from "../panels/terminal/TerminalRegistry";
 import { basename } from "../lib/path";
 import { keyOf } from "../features/agentHistory/historyModel";
-import { pageOfPanelId, panelIdInPage, resolvePageGroupForAdd } from "./pageGroups";
+import { pageOfPanelId, panelIdInPage, resolveFocusedGroupForAdd } from "./pageGroups";
 
 /** 模块级宿主 API（单例——唯一 DockviewReact 实例就绪时注册） */
 let hostApi: DockviewApi | null = null;
@@ -224,9 +224,10 @@ export async function openSettingsPanel(
     existing.focus?.();
     return true;
   }
-  // ADR-0020：落组经派生归属解析（分屏后主组可能被拖空删除）；页无组 →
-  // 显式失败（dockview 对无效 referenceGroup 直接 throw，不落活跃组防错页）
-  const group = resolvePageGroupForAdd(api, pageId);
+  // ADR-0020：落组经 resolveFocusedGroupForAdd（聚焦组优先 ?? 主组 ?? 页内
+  // 首组——分屏后主组可能被拖空删除）；页无组 → 显式失败（dockview 对无效
+  // referenceGroup 直接 throw，不落活跃组防错页）
+  const group = resolveFocusedGroupForAdd(api, pageId);
   if (!group) {
     console.warn(`[slTerminal] 页面 ${pageId} 无可落组，无法打开设置中心`);
     toast.show("warning", "设置中心打开失败:页面尚未就绪,请重试");

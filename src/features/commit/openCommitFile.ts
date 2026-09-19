@@ -6,7 +6,7 @@
 import { useProjects } from "../../stores/projects";
 import { useLayout } from "../../stores/layout";
 import { titleManager } from "../../workspace/titleManager";
-import { panelIdInPage, resolvePageGroupForAdd } from "../../workspace/pageGroups";
+import { panelIdInPage, resolveFocusedGroupForAdd } from "../../workspace/pageGroups";
 
 /** 文件面板分派结果 */
 export interface PanelDispatch {
@@ -104,7 +104,7 @@ export function openCommitFile(
     params.oldPath = oldPath;
   }
 
-  const group = resolvePageGroupForAdd(dockApi, activePageId);
+  const group = resolveFocusedGroupForAdd(dockApi, activePageId);
   if (!group) return;
 
   // addPanel 可能抛异常，try-catch 防止 titleManager 状态污染

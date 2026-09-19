@@ -550,8 +550,19 @@ describe("WorkspaceDockHost 真实组件（共享宿主页组语义）", () => {
 
     /** 建两终端（Watermark 建 terminal-0 + 工厂建 terminal-1），返回被拖面板：
      *  分屏须拖 terminal-1——单面板 moveTo 会把主组拖空，dockview 自动删空组 */
-    async function seedTwoTerminals(api: AnyApi, container: HTMLElement) {
-      await act(async () => { clickButton(container, "新建终端"); });
+    async function seedTwoTerminals(api: AnyApi) {
+      // 限定在活跃页主组 element 内点 watermark 按钮——两页并存时隐藏页空组
+      // 同样渲染 watermark（dockview 组隐藏 = splitview 去 visible class，DOM 仍在），
+      // 容器级 clickButton 会点中隐藏页按钮；C3 落组统一后 watermark 落「所在组」，
+      // 点隐藏页按钮会把面板落他页组触发审计回迁（jsdom fireEvent 无视可见性）
+      await act(async () => {
+        const groupEl = (api.getGroup(`page-${PAGE_ID}`) as AnyApi)
+          .element as HTMLElement;
+        const btn = Array.from(groupEl.querySelectorAll("button"))
+          .find((b) => b.textContent === "新建终端");
+        expect(btn, "活跃页主组内应渲染 watermark 新建终端按钮").toBeTruthy();
+        fireEvent.click(btn!);
+      });
       await settle();
       await act(async () => { addTerminalPanel(api, PAGE_ID, undefined); });
       await settle();
@@ -573,8 +584,8 @@ describe("WorkspaceDockHost 真实组件（共享宿主页组语义）", () => {
     it("防复发（bug 2 面板消失）：moveTo 分屏产第二组——两组同显、面板不隐藏、老代码（maximize 单组可见+守卫回迁）本用例红", async () => {
       mockIPC(() => null);
       seedProject();
-      const { api, container } = await renderHost();
-      const panel = await seedTwoTerminals(api, container);
+      const { api } = await renderHost();
+      const panel = await seedTwoTerminals(api);
       await splitPanelRight(api, panel);
 
       // 两组并存同页（主组留 terminal-0 + 自生组 terminal-1），面板不消失
@@ -592,8 +603,8 @@ describe("WorkspaceDockHost 真实组件（共享宿主页组语义）", () => {
     it("分屏后切页：本页各组同隐、他页组同显；切回同显且 Terminal 构造计数不变（xterm 不重建）", async () => {
       mockIPC(() => null);
       const pageIdB = seedTwoPages();
-      const { api, container } = await renderHost();
-      const panel = await seedTwoTerminals(api, container);
+      const { api } = await renderHost();
+      const panel = await seedTwoTerminals(api);
       await splitPanelRight(api, panel);
       const termCallsAfterSplit =
         (Terminal as unknown as ReturnType<typeof vi.fn>).mock.calls.length;
@@ -620,8 +631,8 @@ describe("WorkspaceDockHost 真实组件（共享宿主页组语义）", () => {
     it("分屏布局经 onDidLayoutChange 切片持久化：store 页布局含两叶（重启恢复数据源）", async () => {
       mockIPC(() => null);
       seedProject();
-      const { api, container } = await renderHost();
-      const panel = await seedTwoTerminals(api, container);
+      const { api } = await renderHost();
+      const panel = await seedTwoTerminals(api);
       await splitPanelRight(api, panel);
 
       const layout = useProjects.getState().projects[PROJ_ID]
@@ -634,8 +645,8 @@ describe("WorkspaceDockHost 真实组件（共享宿主页组语义）", () => {
     it("删页移除页内全部组（分屏两组一并清除）", async () => {
       mockIPC(() => null);
       const pageIdB = seedTwoPages();
-      const { api, container } = await renderHost();
-      const panel = await seedTwoTerminals(api, container);
+      const { api } = await renderHost();
+      const panel = await seedTwoTerminals(api);
       await splitPanelRight(api, panel);
       expect(api.groups.length).toBe(3); // A 两组 + B 一组
 

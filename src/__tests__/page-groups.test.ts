@@ -12,6 +12,7 @@ import {
   pageIdOfGroup,
   groupsOfPage,
   resolvePageGroupForAdd,
+  resolveFocusedGroupForAdd,
   panelsOfPage,
   panelBelongsToGroup,
 } from "../workspace/pageGroups";
@@ -124,6 +125,61 @@ describe("resolvePageGroupForAdd 落组解析", () => {
   it("页无任何组 → null（调用方显式失败，不落活跃组防错页）", () => {
     const api = fakeApi([{ id: pageGroupId("page-b"), panels: [] }]);
     expect(resolvePageGroupForAdd(api, PAGE)).toBeNull();
+  });
+});
+
+describe("resolveFocusedGroupForAdd 聚焦组落组解析（交互式打开入口）", () => {
+  /** fakeApi 扩展 activeGroup 字段（dockview DockviewApi.activeGroup 语义） */
+  function fakeApiWithActive(
+    groups: Array<{ id: string; panels: Array<{ id: string }> }>,
+    activeGroupId: string | undefined,
+  ) {
+    const activeGroup = groups.find((g) => g.id === activeGroupId);
+    return {
+      groups,
+      panels: [],
+      getGroup: (id: string) => groups.find((g) => g.id === id),
+      activeGroup,
+    } as never;
+  }
+
+  it("聚焦组属目标页（分屏自生组）→ 落聚焦组", () => {
+    const api = fakeApiWithActive([
+      { id: pageGroupId(PAGE), panels: [{ id: panelIdInPage(PAGE, "terminal-0") }] },
+      { id: "4", panels: [{ id: panelIdInPage(PAGE, "editor-1") }] },
+    ], "4");
+    expect(resolveFocusedGroupForAdd(api, PAGE)?.id).toBe("4");
+  });
+
+  it("聚焦组属他页 → 回退兜底链（主组）", () => {
+    const api = fakeApiWithActive([
+      { id: pageGroupId(PAGE), panels: [] },
+      { id: pageGroupId("page-b"), panels: [{ id: panelIdInPage("page-b", "terminal-0") }] },
+    ], pageGroupId("page-b"));
+    expect(resolveFocusedGroupForAdd(api, PAGE)?.id).toBe(pageGroupId(PAGE));
+  });
+
+  it("无聚焦组（activeGroup undefined）→ 兜底链（主组）", () => {
+    const api = fakeApiWithActive([
+      { id: pageGroupId(PAGE), panels: [] },
+      { id: "4", panels: [{ id: panelIdInPage(PAGE, "terminal-0") }] },
+    ], undefined);
+    expect(resolveFocusedGroupForAdd(api, PAGE)?.id).toBe(pageGroupId(PAGE));
+  });
+
+  it("主组缺失 + 聚焦组不属本页 → 页内首组", () => {
+    const api = fakeApiWithActive([
+      { id: "4", panels: [{ id: panelIdInPage(PAGE, "terminal-0") }] },
+      { id: "9", panels: [{ id: panelIdInPage("page-b", "terminal-0") }] },
+    ], "9");
+    expect(resolveFocusedGroupForAdd(api, PAGE)?.id).toBe("4");
+  });
+
+  it("页无任何组 → null", () => {
+    const api = fakeApiWithActive([
+      { id: pageGroupId("page-b"), panels: [] },
+    ], undefined);
+    expect(resolveFocusedGroupForAdd(api, PAGE)).toBeNull();
   });
 });
 

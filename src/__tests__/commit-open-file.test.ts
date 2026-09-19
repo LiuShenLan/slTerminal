@@ -52,7 +52,7 @@ function resetStores() {
 type Fn = ReturnType<typeof vi.fn>;
 
 /** 构造默认空 dockApi 并返回生效的 Mock 句柄（每用例可覆盖） */
-function mockDockApi(overrides: { addPanel?: Fn; getPanel?: Fn } = {}) {
+function mockDockApi(overrides: { addPanel?: Fn; getPanel?: Fn; activeGroup?: unknown } = {}) {
   const addPanel = overrides.addPanel ?? vi.fn();
   const getPanel = overrides.getPanel ?? vi.fn(() => null);
   window.__dockviewApi = {
@@ -61,6 +61,8 @@ function mockDockApi(overrides: { addPanel?: Fn; getPanel?: Fn } = {}) {
     // ADR-0020 落组解析：主组 id 命中即返回（groups 不触达）
     getGroup: vi.fn((id: string) => ({ id })),
     groups: [],
+    // 聚焦组缺省 undefined → resolveFocusedGroupForAdd 走兜底链（主组）
+    activeGroup: overrides.activeGroup,
   } as unknown as typeof window.__dockviewApi;
   return { addPanel, getPanel };
 }
@@ -147,6 +149,17 @@ describe("openCommitFile 双击分派", () => {
     const callArgs = mockAddPanel.mock.calls[0][0];
     expect(callArgs.component).toBe("diff");
     expect(callArgs.params.oldPath).toBeUndefined();
+  });
+
+  it("聚焦组属本页分屏组 → 新面板落聚焦组而非主组（落组统一）", () => {
+    seedProject("C:/repo");
+    const focusedGroup = { id: "split-7", panels: [{ id: "page-1:terminal-0" }] };
+    const { addPanel: mockAddPanel } = mockDockApi({ activeGroup: focusedGroup });
+
+    openCommitFile("C:/repo/src/a.ts", "modified");
+
+    expect(mockAddPanel).toHaveBeenCalledTimes(1);
+    expect(mockAddPanel.mock.calls[0][0].position).toEqual({ referenceGroup: "split-7" });
   });
 });
 
