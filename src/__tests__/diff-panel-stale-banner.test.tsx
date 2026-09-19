@@ -90,6 +90,13 @@ vi.mock("../panels/editor/activeEditor", () => ({
 // ── 导入 ──────────────────────────────────────────────────────
 
 import DiffPanel from "../panels/diff/DiffPanel";
+import type { DockviewPanelApi } from "dockview-react";
+
+/** fake 面板 api（usePanelActivationFocus 消费面：未激活恒不聚焦） */
+const FAKE_API = {
+  isActive: false,
+  isGroupActive: false,
+} as unknown as DockviewPanelApi;
 
 /** 构造测试参数 */
 function makeParams(overrides: Partial<{
@@ -116,7 +123,7 @@ function getActivate(): (() => void) | undefined {
 /** 渲染至 ready 态并返回保存 actions */
 async function renderReady() {
   const { container } = render(
-    React.createElement(DiffPanel, { params: makeParams() }),
+    React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
   );
   await waitFor(() => {
     expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
@@ -153,7 +160,7 @@ describe("DiffPanel 内容可能过时提示条（FE-10）", () => {
     mockGitDiff.mockRejectedValue(new Error("git 不可用"));
 
     const { findByTestId, findByText } = render(
-      React.createElement(DiffPanel, { params: makeParams() }),
+      React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
     );
 
     await findByTestId("diff-stale-banner", undefined, { timeout: 3000 });

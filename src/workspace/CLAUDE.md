@@ -64,6 +64,10 @@ SEC-01 effect 同时承担 `startWatch(rootPath)` / `stopWatch(prev)`——watch
 
 `openSettingsPanel(pageId, settingsPageId?)` 在 pageApis.ts——面板 id = `panelIdInPage(pageId, "settings")`（`{pageId}:settings` 页前缀协议形态）；getPanel 命中 → focus 返回 true（同页单例），未命中 → addPanel（component "settings"，**renderer "always"（CP-017）**，settingsPageId 深链注入 params.selectedPage）；页面就绪 = 页组挂载事件驱动等待 `slterm:page-api-ready`（markPageGroupMounted 派发，CP-042），5s 超时仅作防御底线——超时经 toast 可观测化后返回 false。**调用方须先切到目标页**（本函数不切页）——编排见 `features/settingsCenter/openSettings.ts`（无项目 toast 拦截在编排层，R1）。
 
+### 面板聚焦意图令牌（C4，panelFocusIntent.ts）
+
+交互式打开入口在 addPanel **前** `markPanelFocusIntent(panelId)` 写入意图（模块级 Set，take 语义消费）；面板侧 `usePanelActivationFocus` 挂载期消费 → 键盘焦点进输入区（hook 双路径契约见 `../panels/CLAUDE.md`「面板键盘焦点联动」）。写入点 = 六入口新面板分支（tabChrome 工厂/openFile/openCommitFile/openSettingsPanel/ExplorerPanel.handleOpenInTerminal/restoreSession——双击恢复 = 显式打开动作，与布局恢复豁免不冲突）；去重命中分支不写。**fromJSON 恢复路径从不写意图 → 恢复豁免零时序依赖**（否决时间窗守卫方案的原因：setTimeout(0) 复位先于 React passive effect flush 的时序竞态）。已知有界残留：mark 后 addPanel 抛错意图滞留 Set（panelId 唯一后缀实际不可复现，模块头注释登记）。
+
 ### 页签右键菜单自研（dockview 8.1 enterprise 缺位修复）
 
 dockview 8.1.0 free core 的页签右键菜单(ContextMenu)是 **enterprise 模块**——`.dv-tab` 的 contextmenu 监听为 `contextMenuService?.show(...)`，该服务仅在商业付费包 `dockview-enterprise`（license key 激活）import 自注册时存在；free core 恒短路、事件不 preventDefault。**所有环境一致（非 jsdom 现象）**。6.6.1 → 8.1.0 升级（2026-08-18）后生产页签右键菜单从不弹出，曾以 jsdom fake contextMenuService 探针测试自证而滞留两周。

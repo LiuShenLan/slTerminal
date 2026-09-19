@@ -141,6 +141,60 @@ describe("键盘快捷键", () => {
   });
 });
 
+describe("C4 新建终端键盘焦点", () => {
+  it("新建终端后焦点落 .xterm-helper-textarea，直接合成 keydown 字符经 PTY 回显", async () => {
+    // 0. 就绪链（空数据目录 → 建项目 → 空页组 watermark 接管）
+    await waitForWorkspaceReady();
+    await createProject("C:\\e2e-focus-test");
+    await waitForDockviewApi();
+
+    // 1. 真实用户入口：点 watermark「新建终端」按钮（走 addTerminalPanel 工厂 →
+    //    聚焦意图标记 → usePanelActivationFocus 消费 → term.focus() 程序化聚焦；
+    //    合成 click 仅作触发，被测焦点是程序主动行为而非 click 焦点语义）
+    await browser.waitUntil(
+      async () =>
+        await browser.execute(() => {
+          const btn = document.querySelector(
+            '[data-e2e="watermark-new-terminal"]',
+          ) as HTMLButtonElement | null;
+          if (!btn) return false;
+          btn.click();
+          return true;
+        }),
+      { timeout: 10000, timeoutMsg: "watermark 新建终端按钮未渲染" },
+    );
+
+    // 2. 核心断言：不经任何额外 focus 调用，activeElement 落新建终端的 textarea
+    await browser.waitUntil(
+      async () =>
+        await browser.execute(() => {
+          const el = document.activeElement;
+          return !!el && el.classList.contains("xterm-helper-textarea");
+        }),
+      { timeout: 10000, timeoutMsg: "新建终端后键盘焦点未落 xterm textarea（C4 意图链路失效）" },
+    );
+
+    // 3. 等 PTY 就绪后直接合成 keydown 字符（落在 activeElement 上——按键落点即焦点）
+    await waitForPtySessionReady();
+    const marker = "zzqxc4";
+    await browser.execute((text: string) => {
+      const target = document.activeElement;
+      if (!target) throw new Error("activeElement 缺失");
+      for (const ch of text) {
+        target.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: ch, code: `Key${ch.toUpperCase()}`, bubbles: true, cancelable: true,
+          }),
+        );
+      }
+    }, marker);
+
+    // 4. 字符经 xterm → PTY → shell 回显可见（焦点→输入全链真实贯通）
+    const terminalText = await waitForTerminalText(marker, 15000, "合成 keydown 字符未回显");
+    expect(terminalText).toContain(marker);
+  });
+});
+
 describe("页签标题", () => {
   it("终端页签标题为 terminal-N", async () => {
     // 等待 Workspace 就绪

@@ -28,6 +28,7 @@ import { TabMenuPopup } from "./TabMenuPopup";
 import type { TabMenuItem } from "./TabMenuPopup";
 import { IconEmptyBox } from "../lib/icons";
 import { pageOfPanelId, pageIdOfGroup, makeTerminalIdInPage, resolveFocusedGroupForAdd } from "./pageGroups";
+import { markPanelFocusIntent } from "./panelFocusIntent";
 import { useLayout } from "../stores/layout";
 import { projectRootOfPage } from "./pageApis";
 import { saveLayout } from "./layoutSerde";
@@ -114,6 +115,9 @@ export function addTerminalPanel(
   const group = opts?.targetGroup ?? resolveFocusedGroupForAdd(api, pageId);
   if (!group) return null;
   const id = makeTerminalIdInPage(pageId);
+  // C4：键盘聚焦意图——addPanel 前写入，面板挂载（挂载即激活路径）由
+  // usePanelActivationFocus 消费；fromJSON 恢复从不写意图（恢复豁免抢焦）
+  markPanelFocusIntent(id);
   api.addPanel({
     id,
     component: PANEL_TERMINAL,
@@ -152,6 +156,7 @@ export function createWatermark(
         <span style={{ color: DIM_FG, fontSize: 13 }}>{WATERMARK_TEXT}</span>
         <div style={{ display: "flex", gap: 8 }}>
           <button
+            data-e2e="watermark-new-terminal"
             onClick={() => {
               // 落组 = watermark 所在空组（用户看见的组）；空宿主 watermark
               // 无 group → 缺省走聚焦组解析（兜底主组 ?? 页内首组）

@@ -205,6 +205,13 @@ vi.mock("../stores", () => ({
 import React from "react";
 import { render, cleanup, act } from "@testing-library/react";
 import GitShowPanel, { LargeFileWarnWidget } from "../panels/gitshow/GitShowPanel";
+import type { DockviewPanelApi } from "dockview-react";
+
+/** fake 面板 api（usePanelActivationFocus 消费面：未激活恒不聚焦） */
+const FAKE_API = {
+  isActive: false,
+  isGroupActive: false,
+} as unknown as DockviewPanelApi;
 import { GIT_FILE_COLORS } from "../theme";
 // CP-039: 主题热切换用例直驱真实注册表单例
 import { schemeRegistry } from "../theme/schemeRegistry";
@@ -258,7 +265,7 @@ describe("GitShowPanel", () => {
     // gitFileAtHead 保持 pending（不 resolve），验证 loading 文案
     mockGitFileAtHead.mockReturnValue(new Promise(() => {}));
     const { container } = render(
-      React.createElement(GitShowPanel, { params: DEFAULT_PARAMS }),
+      React.createElement(GitShowPanel, { api: FAKE_API, params: DEFAULT_PARAMS }),
     );
     const span = container.querySelector("span");
     expect(span).toBeTruthy();
@@ -270,7 +277,7 @@ describe("GitShowPanel", () => {
   it("加载成功后渲染 CM6 容器", async () => {
     mockGitFileAtHead.mockResolvedValue("console.log('hello');");
     const { container } = render(
-      React.createElement(GitShowPanel, { params: DEFAULT_PARAMS }),
+      React.createElement(GitShowPanel, { api: FAKE_API, params: DEFAULT_PARAMS }),
     );
     await vi.waitFor(() => {
       const div = container.querySelector('div[style*="overflow"]');
@@ -281,7 +288,7 @@ describe("GitShowPanel", () => {
   it("content 容器使用 overflow: clip 样式", async () => {
     mockGitFileAtHead.mockResolvedValue("some content");
     const { container } = render(
-      React.createElement(GitShowPanel, { params: DEFAULT_PARAMS }),
+      React.createElement(GitShowPanel, { api: FAKE_API, params: DEFAULT_PARAMS }),
     );
     await vi.waitFor(() => {
       const cmDiv = container.querySelector('div[style*="overflow: clip"]');
@@ -295,7 +302,7 @@ describe("GitShowPanel", () => {
   it("gitFileAtHead reject 时显示错误占位文案", async () => {
     mockGitFileAtHead.mockRejectedValue(new Error("HEAD 中不存在"));
     const { container } = render(
-      React.createElement(GitShowPanel, { params: DEFAULT_PARAMS }),
+      React.createElement(GitShowPanel, { api: FAKE_API, params: DEFAULT_PARAMS }),
     );
     await vi.waitFor(() => {
       const span = container.querySelector("span");
@@ -307,7 +314,7 @@ describe("GitShowPanel", () => {
   it("错误态 span 有 color 样式", async () => {
     mockGitFileAtHead.mockRejectedValue(new Error("任意错误"));
     const { container } = render(
-      React.createElement(GitShowPanel, { params: DEFAULT_PARAMS }),
+      React.createElement(GitShowPanel, { api: FAKE_API, params: DEFAULT_PARAMS }),
     );
     await vi.waitFor(() => {
       const span = container.querySelector("span");
@@ -319,7 +326,7 @@ describe("GitShowPanel", () => {
   it("错误态背景容器存在", async () => {
     mockGitFileAtHead.mockRejectedValue(new Error("fail"));
     const { container } = render(
-      React.createElement(GitShowPanel, { params: DEFAULT_PARAMS }),
+      React.createElement(GitShowPanel, { api: FAKE_API, params: DEFAULT_PARAMS }),
     );
     await vi.waitFor(() => {
       const centerDiv = container.querySelector("div");
@@ -334,6 +341,7 @@ describe("GitShowPanel", () => {
     mockGitFileAtHead.mockResolvedValue("HEAD content");
     render(
       React.createElement(GitShowPanel, {
+        api: FAKE_API,
         params: {
           ...DEFAULT_PARAMS,
           filePath: "src/new.ts",
@@ -350,6 +358,7 @@ describe("GitShowPanel", () => {
     mockGitFileAtHead.mockResolvedValue("HEAD content");
     render(
       React.createElement(GitShowPanel, {
+        api: FAKE_API,
         params: { ...DEFAULT_PARAMS, filePath: "src/main.ts" },
       }),
     );
@@ -363,7 +372,7 @@ describe("GitShowPanel", () => {
   it("内容超过 MAX_FILE_SIZE_BYTES 时引导 LargeFileViewer 只读浏览（原拒绝文案形态防复发）", async () => {
     mockGitFileAtHead.mockResolvedValue("x".repeat(10_000_001));
     const { container } = render(
-      React.createElement(GitShowPanel, { params: DEFAULT_PARAMS }),
+      React.createElement(GitShowPanel, { api: FAKE_API, params: DEFAULT_PARAMS }),
     );
     // data-e2e 锚: 只读分片浏览渲染（替代 CM6 容器）
     await vi.waitFor(() => {
@@ -384,7 +393,7 @@ describe("GitShowPanel", () => {
     const bigContent = "line1\n" + "y".repeat(1_100_000);
     mockGitFileAtHead.mockResolvedValue(bigContent);
     render(
-      React.createElement(GitShowPanel, { params: DEFAULT_PARAMS }),
+      React.createElement(GitShowPanel, { api: FAKE_API, params: DEFAULT_PARAMS }),
     );
     await vi.waitFor(() => {
       expect(capturedEditorStateConfig.length).toBeGreaterThan(0);
@@ -411,7 +420,7 @@ describe("GitShowPanel", () => {
     // doc 含大文件标记：面板走大文件警告分支，与用例语义一致
     mockGitFileAtHead.mockResolvedValue("line1\n" + "y".repeat(1_100_000));
     const { container } = render(
-      React.createElement(GitShowPanel, { params: DEFAULT_PARAMS }),
+      React.createElement(GitShowPanel, { api: FAKE_API, params: DEFAULT_PARAMS }),
     );
     // CM6 decoration 挂载由 mock EditorView 短路（mock 不驱动 StateField），
     // 故直接驱动 widget 实例验证 DOM 产物——与真实 CM6 的 widget.toDOM 调用等价
@@ -440,7 +449,7 @@ describe("GitShowPanel", () => {
   it("CM6 状态含 readOnly 配置", async () => {
     mockGitFileAtHead.mockResolvedValue("read-only content");
     render(
-      React.createElement(GitShowPanel, { params: DEFAULT_PARAMS }),
+      React.createElement(GitShowPanel, { api: FAKE_API, params: DEFAULT_PARAMS }),
     );
     await vi.waitFor(() => {
       expect(capturedEditorStateConfig.length).toBeGreaterThan(0);
@@ -459,7 +468,7 @@ describe("GitShowPanel", () => {
   it("卸载时 destroy CM6 EditorView", async () => {
     mockGitFileAtHead.mockResolvedValue("some content");
     const { unmount } = render(
-      React.createElement(GitShowPanel, { params: DEFAULT_PARAMS }),
+      React.createElement(GitShowPanel, { api: FAKE_API, params: DEFAULT_PARAMS }),
     );
     // 等待 CM6 视图创建完成（EditorState.create 被调用后才算视图就绪）
     await vi.waitFor(() => {
@@ -483,13 +492,14 @@ describe("GitShowPanel", () => {
       .mockResolvedValueOnce(secondContent);
 
     const { rerender, container } = render(
-      React.createElement(GitShowPanel, { params: DEFAULT_PARAMS }),
+      React.createElement(GitShowPanel, { api: FAKE_API, params: DEFAULT_PARAMS }),
     );
 
     expect(mockGitFileAtHead).toHaveBeenCalledWith("C:/repo", "src/main.ts");
 
     rerender(
       React.createElement(GitShowPanel, {
+        api: FAKE_API,
         params: { ...DEFAULT_PARAMS, repoPath: "D:/other-repo" },
       }),
     );
@@ -514,7 +524,7 @@ describe("GitShowPanel", () => {
 	    .mockReturnValueOnce(secondPromise);
 
 	  const { rerender, container } = render(
-	    React.createElement(GitShowPanel, { params: DEFAULT_PARAMS }),
+	    React.createElement(GitShowPanel, { api: FAKE_API, params: DEFAULT_PARAMS }),
 	  );
 
 	  // 等待首次内容加载完成
@@ -526,6 +536,7 @@ describe("GitShowPanel", () => {
 	  // 切换 filePath，第二个请求保持 pending
 	  rerender(
 	    React.createElement(GitShowPanel, {
+	      api: FAKE_API,
 	      params: { ...DEFAULT_PARAMS, filePath: "src/other.ts" },
 	    }),
 	  );
@@ -556,7 +567,7 @@ describe("GitShowPanel", () => {
 it("includes @codemirror/search extensions in CM6 config", async () => {
   mockGitFileAtHead.mockResolvedValue("searchable content");
   render(
-    React.createElement(GitShowPanel, { params: DEFAULT_PARAMS }),
+    React.createElement(GitShowPanel, { api: FAKE_API, params: DEFAULT_PARAMS }),
   );
   await vi.waitFor(() => {
     expect(capturedEditorStateConfig.length).toBeGreaterThan(0);
@@ -571,7 +582,7 @@ it("includes @codemirror/search extensions in CM6 config", async () => {
 it("calls useFontSizeWheel with correct params", async () => {
   mockGitFileAtHead.mockResolvedValue("some content");
   render(
-    React.createElement(GitShowPanel, { params: DEFAULT_PARAMS }),
+    React.createElement(GitShowPanel, { api: FAKE_API, params: DEFAULT_PARAMS }),
   );
   await vi.waitFor(() => {
     expect(capturedEditorStateConfig.length).toBeGreaterThan(0);
@@ -589,7 +600,7 @@ it("calls useFontSizeWheel with correct params", async () => {
 it("registers editor focus via usePanelFocus", async () => {
   mockGitFileAtHead.mockResolvedValue("some content");
   render(
-    React.createElement(GitShowPanel, { params: DEFAULT_PARAMS }),
+    React.createElement(GitShowPanel, { api: FAKE_API, params: DEFAULT_PARAMS }),
   );
   await vi.waitFor(() => {
     expect(capturedEditorStateConfig.length).toBeGreaterThan(0);
@@ -604,7 +615,7 @@ it("registers editor focus via usePanelFocus", async () => {
 it("createEditorFontExtension called with default fontSize 14", async () => {
   mockGitFileAtHead.mockResolvedValue("hello");
   render(
-    React.createElement(GitShowPanel, { params: DEFAULT_PARAMS }),
+    React.createElement(GitShowPanel, { api: FAKE_API, params: DEFAULT_PARAMS }),
   );
   await vi.waitFor(() => {
     expect(capturedEditorStateConfig.length).toBeGreaterThan(0);
@@ -616,7 +627,7 @@ it("createEditorFontExtension called with default fontSize 14", async () => {
 it("CM6 creation effect does not recreate view on fontSize change", async () => {
   mockGitFileAtHead.mockResolvedValue("content");
   render(
-    React.createElement(GitShowPanel, { params: DEFAULT_PARAMS }),
+    React.createElement(GitShowPanel, { api: FAKE_API, params: DEFAULT_PARAMS }),
   );
   await vi.waitFor(() => {
     expect(capturedEditorStateConfig.length).toBeGreaterThan(0);
@@ -630,7 +641,7 @@ it("CM6 creation effect does not recreate view on fontSize change", async () => 
 it("does NOT disable editability via editable.of(false)", async () => {
   mockGitFileAtHead.mockResolvedValue("focusable content");
   render(
-    React.createElement(GitShowPanel, { params: DEFAULT_PARAMS }),
+    React.createElement(GitShowPanel, { api: FAKE_API, params: DEFAULT_PARAMS }),
   );
   await vi.waitFor(() => {
     expect(capturedEditorStateConfig.length).toBeGreaterThan(0);
@@ -647,7 +658,7 @@ it("does NOT disable editability via editable.of(false)", async () => {
 it("editorFontSize 变化触发 fontCompartment.reconfigure（dispatch + reconfigure）", async () => {
   mockGitFileAtHead.mockResolvedValue("content");
   const { rerender } = render(
-    React.createElement(GitShowPanel, { params: DEFAULT_PARAMS }),
+    React.createElement(GitShowPanel, { api: FAKE_API, params: DEFAULT_PARAMS }),
   );
   await vi.waitFor(() => {
     expect(capturedEditorStateConfig.length).toBeGreaterThan(0);
@@ -658,7 +669,7 @@ it("editorFontSize 变化触发 fontCompartment.reconfigure（dispatch + reconfi
 
   // 字号 14 → 20（rerender 触发 fontSize effect）
   mockFontSizeState.editorFontSize = 20;
-  rerender(React.createElement(GitShowPanel, { params: DEFAULT_PARAMS }));
+  rerender(React.createElement(GitShowPanel, { api: FAKE_API, params: DEFAULT_PARAMS }));
 
   await vi.waitFor(() => {
     expect(mockGitshowDispatch).toHaveBeenCalled();
@@ -678,7 +689,7 @@ it("LargeFileWarnWidget.ignoreEvent 返回 true（纯装饰，不响应指针/�
 
 it("largeFileWarnField StateField 三函数：create 挂首行行首装饰 / update 仅 map / provide 经 decorations.from 挂载", async () => {
   mockGitFileAtHead.mockResolvedValue("line1\n" + "y".repeat(1_100_000));
-  render(React.createElement(GitShowPanel, { params: DEFAULT_PARAMS }));
+  render(React.createElement(GitShowPanel, { api: FAKE_API, params: DEFAULT_PARAMS }));
   await vi.waitFor(() => {
     expect(capturedEditorStateConfig.length).toBeGreaterThan(0);
   });
@@ -724,7 +735,7 @@ it("Alt+Z 自动换行：激活编辑器后 toggleWordWrap 经 wrapCompartment �
     },
   );
 
-  render(React.createElement(GitShowPanel, { params: DEFAULT_PARAMS }));
+  render(React.createElement(GitShowPanel, { api: FAKE_API, params: DEFAULT_PARAMS }));
   await vi.waitFor(() => {
     expect(capturedEditorStateConfig.length).toBeGreaterThan(0);
     expect(capturedActivate).not.toBeNull();
@@ -765,7 +776,7 @@ it("Alt+Z 自动换行：激活编辑器后 toggleWordWrap 经 wrapCompartment �
 it("schemeRegistry.setActive 后 dispatch 携 Compartment reconfigure 效果且 EditorView 不重建", async () => {
   mockGitFileAtHead.mockResolvedValue("theme content");
   const { unmount } = render(
-    React.createElement(GitShowPanel, { params: DEFAULT_PARAMS }),
+    React.createElement(GitShowPanel, { api: FAKE_API, params: DEFAULT_PARAMS }),
   );
   await vi.waitFor(() => {
     expect(capturedEditorStateConfig.length).toBeGreaterThan(0);
@@ -793,7 +804,7 @@ it("schemeRegistry.setActive 后 dispatch 携 Compartment reconfigure 效果且 
 it("卸载后主题订阅取消——再 setActive 不 dispatch（unbind 先于 destroy）", async () => {
   mockGitFileAtHead.mockResolvedValue("theme content 2");
   const { unmount } = render(
-    React.createElement(GitShowPanel, { params: DEFAULT_PARAMS }),
+    React.createElement(GitShowPanel, { api: FAKE_API, params: DEFAULT_PARAMS }),
   );
   await vi.waitFor(() => {
     expect(capturedEditorStateConfig.length).toBeGreaterThan(0);

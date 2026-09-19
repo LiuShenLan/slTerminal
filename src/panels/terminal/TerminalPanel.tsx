@@ -11,6 +11,7 @@ import { useLayout, useFontSize } from "../../stores";
 import { PANEL_BG, INPUT_BORDER } from "../../theme";
 import type { TabState } from "./useCommandDetection";
 import { TerminalRegistry } from "./TerminalRegistry";
+import { usePanelActivationFocus } from "../usePanelActivationFocus";
 import { pageOfPanelId } from "../../workspace/pageGroups";
 import { projectRootOfPage } from "../../workspace/pageApis";
 import { cliProfileRegistry } from "../../features/cliProfiles";
@@ -187,6 +188,10 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ api, params }) => {
     onInterrupt: handleInterrupt,
     onFirstOutput: handleFirstOutput,
   });
+
+  // C4：键盘焦点联动——新建意图消费（挂载即激活路径）+ 激活事件联动
+  // （页签点击/去重聚焦）；ready = 容器已挂载（xterm focus 需 open 后的 DOM）
+  usePanelActivationFocus(api, params.panelId, focus, container !== null);
 
   // 遮罩兜底：首帧永不到达（spawn 失败等）时 1500ms 到点强制隐藏；
   // 首帧先到时 setLoading(false) 幂等，定时器到点再 set 一次无副作用

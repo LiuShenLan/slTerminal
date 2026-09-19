@@ -27,6 +27,7 @@ import { write as ptyWrite } from "../../ipc/pty";
 import { sendToastNotification } from "../../ipc/notification";
 import { normalizePath, basename } from "../../lib/path";
 import { makeTerminalIdInPage, resolveFocusedGroupForAdd } from "../../workspace/pageGroups";
+import { markPanelFocusIntent } from "../../workspace/panelFocusIntent";
 import { cliProfileRegistry } from "../cliProfiles";
 import type { AgentHistorySession } from "../../types/agentHistory";
 
@@ -239,6 +240,9 @@ async function doRestore(
   if (!group) {
     throw new Error(`页面 ${targetPageId} 无可落组，无法恢复终端`);
   }
+  // C4：键盘聚焦意图——恢复终端挂载即激活路径的焦点驱动（交互入口裁决：
+  // 双击恢复 = 显式打开动作，与布局批量恢复豁免语义不冲突）
+  markPanelFocusIntent(panelId);
   api.addPanel({
     id: panelId,
     component: "terminal",

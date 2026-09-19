@@ -13,6 +13,7 @@ import { createDir, deleteEntry, rename, writeFile } from "../../ipc/fs";
 import { useProjects } from "../../stores/projects";
 import { useLayout } from "../../stores/layout";
 import { panelIdInPage, resolveFocusedGroupForAdd } from "../../workspace/pageGroups";
+import { markPanelFocusIntent } from "../../workspace/panelFocusIntent";
 import { titleManager } from "../../workspace/titleManager";
 import { openFileInPage } from "../../workspace/openFile";
 import {
@@ -229,6 +230,8 @@ export const ExplorerPanel: React.FC<SideViewComponentProps> = ({
         const localId = `terminal-open-${Date.now()}`;
         const panelId = panelIdInPage(activePageId, localId);
         const title = titleManager.getTerminalTitle(activePageId);
+        // C4：键盘聚焦意图（新建面板挂载即激活路径的焦点驱动）
+        markPanelFocusIntent(panelId);
         dockApi.addPanel({
           id: panelId,
           component: PANEL_TERMINAL,

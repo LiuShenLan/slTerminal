@@ -22,6 +22,7 @@ import { TerminalRegistry } from "../panels/terminal/TerminalRegistry";
 import { basename } from "../lib/path";
 import { keyOf } from "../features/agentHistory/historyModel";
 import { pageOfPanelId, panelIdInPage, resolveFocusedGroupForAdd } from "./pageGroups";
+import { markPanelFocusIntent } from "./panelFocusIntent";
 
 /** 模块级宿主 API（单例——唯一 DockviewReact 实例就绪时注册） */
 let hostApi: DockviewApi | null = null;
@@ -233,6 +234,8 @@ export async function openSettingsPanel(
     toast.show("warning", "设置中心打开失败:页面尚未就绪,请重试");
     return false;
   }
+  // C4：键盘聚焦意图（新面板分支——单例命中走 existing.focus() 激活事件路径，不写意图）
+  markPanelFocusIntent(panelId);
   api.addPanel({
     id: panelId,
     component: "settings",

@@ -19,6 +19,7 @@ import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
 import { titleManager } from "./titleManager";
 import { panelIdInPage, resolveFocusedGroupForAdd } from "./pageGroups";
+import { markPanelFocusIntent } from "./panelFocusIntent";
 import { PANEL_EDITOR, isAlwaysRenderPanel } from "../panelRegistry";
 import { fileViewerRegistry } from "../features/fileViewers";
 
@@ -107,6 +108,8 @@ export function openFileInPage(
   // ADR-0020 分屏后主组可能被拖空删除；页无组解析 null → 返回 false 不落活跃组防错页）
   const group = resolveFocusedGroupForAdd(dockApi, activePageId);
   if (!group) return false;
+  // C4：键盘聚焦意图（新面板分支——去重命中走 existingPanel.focus() 激活事件路径，不写意图）
+  markPanelFocusIntent(panelId);
   try {
     dockApi.addPanel({
       id: panelId,

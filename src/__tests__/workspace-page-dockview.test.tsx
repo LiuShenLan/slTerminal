@@ -15,7 +15,7 @@
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from "vitest";
 import { mockIPC, clearMocks } from "@tauri-apps/api/mocks";
 import React from "react";
-import { render, act, fireEvent, cleanup } from "@testing-library/react";
+import { render, act, fireEvent, cleanup, waitFor } from "@testing-library/react";
 
 // Mock @xterm/xterm — xterm.js 6.1+ 渲染器初始化在 jsdom 中抛异常（同 workspace 测试）
 vi.mock("@xterm/xterm", () => ({
@@ -93,6 +93,7 @@ import { useLayout } from "../stores/layout";
 import { emptyPageLayout } from "../workspace/layoutSerde";
 import { getHostApi, unregisterHostApi } from "../workspace/pageApis";
 import { addTerminalPanel } from "../workspace/tabChrome";
+import { openFileInPage } from "../workspace/openFile";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyApi = any;
@@ -713,6 +714,93 @@ describe("WorkspaceDockHost 真实组件（共享宿主页组语义）", () => {
       // 宏任务后：审计回迁到 A 页主组
       await settle();
       expect(panel.group.id).toBe(`page-${PAGE_ID}`);
+    });
+  });
+
+  // ─── C4 键盘焦点联动（真实 dockview 集成——意图令牌 + 激活事件双路径） ───
+  describe("C4 键盘焦点联动（真实 dockview 集成）", () => {
+    /** mock Terminal 实例集合（构造序 = 终端面板创建序） */
+    function termInstances(): Array<{ focus: ReturnType<typeof vi.fn> }> {
+      return (Terminal as unknown as ReturnType<typeof vi.fn>).mock
+        .instances as Array<{ focus: ReturnType<typeof vi.fn> }>;
+    }
+
+    beforeEach(() => {
+      // Terminal mock 构造记录跨用例累计（vi.mock 工厂级不清零）——本 describe
+      // 断言「本用例新建实例」语义，用例间清记录
+      (Terminal as unknown as ReturnType<typeof vi.fn>).mockClear();
+    });
+
+    it("addTerminalPanel 新建 → 终端 focus 被调（意图消费；isGroupActive 前置假设实证）", async () => {
+      mockIPC(() => null);
+      seedProject();
+      const { api } = await renderHost();
+
+      await act(async () => { addTerminalPanel(api, PAGE_ID, undefined); });
+      await settle();
+
+      const terms = termInstances();
+      expect(terms.length).toBe(1);
+      // 挂载即激活（dockview addPanel 默认激活新面板+所在组）→ 意图消费 → focus
+      expect(terms[0].focus).toHaveBeenCalled();
+    });
+
+    it("布局恢复（fromJSON）→ 终端 focus 不被调（恢复豁免：不写意图、无激活事件）", async () => {
+      mockIPC(() => null);
+      seedProject(LEGACY_TERMINAL_TRANSIENT_LAYOUT);
+      const { api } = await renderHost();
+      await settle();
+
+      // 恢复出终端面板（迁移页前缀化：整旧 id 作 localId）
+      expect(api.getPanel(`${PAGE_ID}:terminal-page-dock-0`)).toBeTruthy();
+      expect(termInstances().length).toBe(1);
+      // 恢复路径从不写意图 → 挂载期不聚焦；fromJSON 静默置位不产激活事件
+      expect(termInstances()[0].focus).not.toHaveBeenCalled();
+    });
+
+    it("openFile 去重命中（同文件二次打开）→ 焦点进编辑器（激活事件路径，不写意图）", async () => {
+      mockIPC(() => null);
+      seedProject();
+      const { api, container } = await renderHost();
+      // 先建终端占位（后续移焦目标——验证焦点在终端与编辑器间往返）
+      await act(async () => { addTerminalPanel(api, PAGE_ID, undefined); });
+      await settle();
+      const ctx = {
+        activePageId: PAGE_ID,
+        dockApi: api,
+        rootPath: "C:\\root",
+        projectRootPath: "C:\\root",
+      };
+
+      // 第一次打开：新编辑器面板（有意图——挂载激活消费）
+      act(() => {
+        openFileInPage(ctx, "C:\\root\\a.ts");
+      });
+      await settle();
+      // 编辑器视图异步建立（读盘 mock null → catch 兜底文案建 view）
+      await waitFor(() => {
+        expect(container.querySelector(".cm-content")).toBeTruthy();
+      });
+      const editorPanelId = api.panels.find(
+        (p: AnyApi) => p.id !== `${PAGE_ID}:terminal-0`,
+      ).id;
+      expect(api.activePanel?.id).toBe(editorPanelId);
+
+      // 移焦终端（dockview 逻辑激活——等价用户点终端页签）
+      act(() => { api.getPanel(`${PAGE_ID}:terminal-0`).focus(); });
+      await settle();
+      expect(api.activePanel?.id).toBe(`${PAGE_ID}:terminal-0`);
+
+      // 第二次打开同文件：去重命中 → existingPanel.focus() → 激活事件 → CM focus
+      act(() => {
+        openFileInPage(ctx, "C:\\root\\a.ts");
+      });
+      await settle();
+
+      expect(api.panels.length).toBe(2); // 未新建（去重）
+      expect(api.activePanel?.id).toBe(editorPanelId); // 逻辑激活编辑器
+      // 键盘焦点进编辑器内容区（CM contentDOM 获焦）
+      expect(document.activeElement).toBe(container.querySelector(".cm-content"));
     });
   });
 });

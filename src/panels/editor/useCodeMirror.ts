@@ -686,6 +686,11 @@ export function useCodeMirror({
      */
     largeFile,
 
+    /** 聚焦编辑器视图（C4 面板激活联动焦点落点；view 未建/已销毁时 no-op） */
+    focus: useCallback((): void => {
+      viewRef.current?.focus();
+    }, []),
+
     /** 获取当前编辑器内容 */
     getContent: useCallback((): string => {
       return viewRef.current?.state.doc.toString() ?? "";

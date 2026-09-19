@@ -1,0 +1,62 @@
+// usePanelActivationFocus — 面板激活联动键盘焦点共享 hook（C4「新建即聚焦」）
+//
+// 两条焦点驱动路径：
+// ① 挂载期意图消费：ready && api.isActive && api.isGroupActive &&
+//    consumePanelFocusIntent(panelId) → focus()——dockview addPanel 默认激活
+//    新面板，挂载即激活的打开入口（新建终端/编辑器/git/设置/恢复注入）经
+//    panelFocusIntent 令牌驱动；ready 翻 true（异步资源就绪，如 xterm 容器
+//    挂载、CM 视图创建）时补消费一次。
+// ② 激活事件联动：onDidActiveChange / onDidActiveGroupChange（可选调用照
+//    DefaultTab 先例——测试 fake api 可能缺）双条件满足即 focus()——**不需
+//    意图**：覆盖页签点击激活、去重命中 panel.focus()、switchToPageAndFocus
+//    全路径。
+//
+// 布局批量恢复（fromJSON）豁免：恢复路径从不写意图，路径①不命中；恢复
+// 不产激活事件（dockview 按 activeGroup 字段静默置位），路径②不命中——
+// 重启恢复后无面板抢焦。
+//
+// 焦点目标由调用方面板注入（focus 回调）：终端 = xterm 输入区，编辑器 =
+// CM 视图，设置 = 壳内容容器——本 hook 只管「何时聚焦」，不管「聚焦到哪」。
+
+import { useEffect } from "react";
+import type { DockviewPanelApi } from "dockview-react";
+import { consumePanelFocusIntent } from "../workspace/panelFocusIntent";
+
+/**
+ * 面板激活联动键盘焦点。
+ * @param api 面板 DockviewPanelApi（面板 props 传入）
+ * @param panelId 面板 id（页前缀协议 id——意图令牌键）
+ * @param focus 焦点落点回调（幂等——多次调用安全）
+ * @param ready 焦点目标就绪标记（缺省 true；异步资源（xterm 容器/CM 视图）
+ *   未就绪时 false，翻 true 时补消费挂载期意图）
+ */
+export function usePanelActivationFocus(
+  api: DockviewPanelApi,
+  panelId: string,
+  focus: () => void,
+  ready: boolean = true,
+): void {
+  // 路径①：挂载期意图消费（ready 翻 true 补消费——effect 依赖 ready 重跑，
+  // 意图 take 语义保证只消费一次）。
+  // deps 不含 focus：回调由调用方 useCallback 稳定化（照 TerminalPanel
+  // handleFirstOutput 先例）；api/panelId 面板生命周期内不变
+  useEffect(() => {
+    if (!ready) return;
+    if (!api.isActive || !api.isGroupActive) return;
+    if (consumePanelFocusIntent(panelId)) focus();
+  }, [api, panelId, ready]);
+
+  // 路径②：激活事件联动（不需意图——页签点击/去重聚焦/程序化 focus 全路径）。
+  // deps 同上：api/panelId 不变；ready 变化重挂订阅（闭包读最新 ready）
+  useEffect(() => {
+    const tryFocus = () => {
+      if (ready && api.isActive && api.isGroupActive) focus();
+    };
+    const d1 = api.onDidActiveChange?.(() => tryFocus());
+    const d2 = api.onDidActiveGroupChange?.(() => tryFocus());
+    return () => {
+      d1?.dispose();
+      d2?.dispose();
+    };
+  }, [api, panelId, ready]);
+}

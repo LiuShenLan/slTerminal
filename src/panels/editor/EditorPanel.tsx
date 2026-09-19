@@ -10,8 +10,12 @@ import { useCodeMirror } from "./useCodeMirror";
 import { useFontSize } from "../../stores";
 import { EDITOR_BG } from "../../theme";
 import { LargeFileViewer } from "./largeFileViewer/LargeFileViewer";
+import { usePanelActivationFocus } from "../usePanelActivationFocus";
+import type { DockviewPanelApi } from "dockview-react";
 
 interface EditorPanelProps {
+  /** Dockview 传入的面板 API */
+  api: DockviewPanelApi;
   /** Dockview 传入的面板参数 */
   params: {
     panelId: string;
@@ -19,14 +23,14 @@ interface EditorPanelProps {
   };
 }
 
-const EditorPanel: React.FC<EditorPanelProps> = ({ params }) => {
+const EditorPanel: React.FC<EditorPanelProps> = ({ api, params }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [container, setContainer] = useState<HTMLDivElement | null>(null);
 
   const editorFontSize = useFontSize((s) => s.editorFontSize);
   const setEditorFontSize = useFontSize((s) => s.setEditorFontSize);
 
-  const { largeFile } = useCodeMirror({
+  const { largeFile, focus } = useCodeMirror({
     container,
     filePath: params.filePath,
     panelId: params.panelId,
@@ -41,6 +45,10 @@ const EditorPanel: React.FC<EditorPanelProps> = ({ params }) => {
   useEffect(() => {
     setContainer(containerRef.current);
   }, [isViewer]);
+
+  // C4：键盘焦点联动——ready = CM 容器已挂载且非大文件形态（LargeFileViewer
+  // 只读浏览不抢焦：无编辑意图场景，登记边界）
+  usePanelActivationFocus(api, params.panelId, focus, container !== null && !isViewer);
 
   if (isViewer) {
     return (

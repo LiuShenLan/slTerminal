@@ -41,6 +41,7 @@ import {
   ERROR_BANNER_FG,
 } from "../../theme";
 import type { DockviewPanelApi, DockviewApi } from "dockview-react";
+import { usePanelActivationFocus } from "../usePanelActivationFocus";
 
 /** SettingsPanel 面板参数（params 持久化单点）：selectedPage = 选中配置页 id 随布局持久化；
     pageParams = 各页内参数（按 pageId 键槽，页组件经 SettingsPageProps 读写） */
@@ -208,6 +209,13 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
   const isFirstRunRef = useRef(true);
   const closedRef = useRef(false);
   const closeGuardRef = useRef(false);
+
+  // C4：键盘焦点联动——设置面板无单一输入区，焦点落壳根容器（弱化语义：
+  // 仅为键盘焦点有确定落点，tabIndex={-1} 可编程聚焦不入 Tab 序）；
+  // ready 恒 true（壳容器同步挂载，无异步资源）
+  const panelRootRef = useRef<HTMLDivElement>(null);
+  const focusPanelRoot = useCallback(() => panelRootRef.current?.focus(), []);
+  usePanelActivationFocus(api, params?.panelId ?? "", focusPanelRoot);
 
   // 切项目自动关闭数据源订阅（SC-FE-08）：activePageId = 当前活跃页面；
   // projects = 全部项目（ownProjectId / activeProjectId 反查基准）
@@ -456,7 +464,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
   };
 
   return (
-    <div style={containerStyle} data-e2e="settings-panel">
+    <div ref={panelRootRef} tabIndex={-1} style={containerStyle} data-e2e="settings-panel">
       {/* corrupted 警示条（× 可关；不阻塞配置操作） */}
       {corrupted && !bannerDismissed && (
         <div style={bannerStyle} data-e2e="settings-corrupted-banner">

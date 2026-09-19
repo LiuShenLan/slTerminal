@@ -12,6 +12,7 @@ const { mockUseCodeMirror, mockReadFileRange } = vi.hoisted(() => ({
 // （默认 null = 正常 CM 形态;超限用例用 mockReturnValueOnce 覆盖；FE-04 起仅 filePath）
 const defaultHookResult = () => ({
   largeFile: null as { filePath: string } | null,
+  focus: vi.fn(),
   getContent: vi.fn(() => ""),
   markClean: vi.fn(),
   markDirty: vi.fn(),
@@ -39,17 +40,29 @@ vi.mock("../ipc", () => ({
 import React from "react";
 import { render, waitFor } from "@testing-library/react";
 import EditorPanel from "../panels/editor/EditorPanel";
+import type { DockviewPanelApi } from "dockview-react";
+import {
+  markPanelFocusIntent,
+  _resetPanelFocusIntent,
+} from "../workspace/panelFocusIntent";
+
+/** fake 面板 api（usePanelActivationFocus 消费面：未激活恒不聚焦） */
+const FAKE_API = {
+  isActive: false,
+  isGroupActive: false,
+} as unknown as DockviewPanelApi;
 
 afterEach(() => {
   clearMocks();
   mockUseCodeMirror.mockClear();
   mockReadFileRange.mockClear();
+  _resetPanelFocusIntent();
 });
 
 describe("EditorPanel", () => {
   it("渲染编辑器容器（暗色背景）", () => {
     const { container } = render(
-      React.createElement(EditorPanel, { params: { panelId: "editor-1" } }),
+      React.createElement(EditorPanel, { api: FAKE_API, params: { panelId: "editor-1" } }),
     );
     const el = container.querySelector('div[style*="background"]');
     expect(el).toBeTruthy();
@@ -57,7 +70,7 @@ describe("EditorPanel", () => {
 
   it("将 panelId 传递给 useCodeMirror", () => {
     render(
-      React.createElement(EditorPanel, { params: { panelId: "editor-2" } }),
+      React.createElement(EditorPanel, { api: FAKE_API, params: { panelId: "editor-2" } }),
     );
     expect(mockUseCodeMirror).toHaveBeenCalledWith(
       expect.objectContaining({ panelId: "editor-2" }),
@@ -67,6 +80,7 @@ describe("EditorPanel", () => {
   it("将 filePath 正确传递给 useCodeMirror", () => {
     render(
       React.createElement(EditorPanel, {
+        api: FAKE_API,
         params: { panelId: "editor-3", filePath: "C:\\test\\demo.rs" },
       }),
     );
@@ -78,6 +92,7 @@ describe("EditorPanel", () => {
   it("同时传递 filePath 和 panelId 给 useCodeMirror", () => {
     render(
       React.createElement(EditorPanel, {
+        api: FAKE_API,
         params: { panelId: "editor-4", filePath: "/home/user/main.py" },
       }),
     );
@@ -91,7 +106,7 @@ describe("EditorPanel", () => {
 
   it("空白编辑器（无 filePath）正确渲染容器", () => {
     const { container } = render(
-      React.createElement(EditorPanel, { params: { panelId: "editor-0" } }),
+      React.createElement(EditorPanel, { api: FAKE_API, params: { panelId: "editor-0" } }),
     );
     // 仍渲染容器
     const el = container.querySelector('div[style*="background"]');
@@ -106,7 +121,7 @@ describe("EditorPanel", () => {
 
   it("容器 div 设置 overflow: clip（非 overflow: auto/hidden）", () => {
     const { container } = render(
-      React.createElement(EditorPanel, { params: { panelId: "editor-5" } }),
+      React.createElement(EditorPanel, { api: FAKE_API, params: { panelId: "editor-5" } }),
     );
     const el = container.querySelector('div[style*="overflow"]');
     expect(el).toBeTruthy();
@@ -116,7 +131,7 @@ describe("EditorPanel", () => {
 
   it("容器 div 不包含 overflow: auto（防回归，确保双滚动上下文已消除）", () => {
     const { container } = render(
-      React.createElement(EditorPanel, { params: { panelId: "editor-6" } }),
+      React.createElement(EditorPanel, { api: FAKE_API, params: { panelId: "editor-6" } }),
     );
     const el = container.querySelector('div[style*="overflow"]');
     expect(el).toBeTruthy();
@@ -127,7 +142,7 @@ describe("EditorPanel", () => {
 
   it("容器 div 保留 width: 100% 和 height: 100%", () => {
     const { container } = render(
-      React.createElement(EditorPanel, { params: { panelId: "editor-7" } }),
+      React.createElement(EditorPanel, { api: FAKE_API, params: { panelId: "editor-7" } }),
     );
     const el = container.querySelector('div[style*="overflow"]');
     expect(el).toBeTruthy();
@@ -138,7 +153,7 @@ describe("EditorPanel", () => {
 
   it("容器 div 保留 background 暗色编辑器背景", () => {
     const { container } = render(
-      React.createElement(EditorPanel, { params: { panelId: "editor-8" } }),
+      React.createElement(EditorPanel, { api: FAKE_API, params: { panelId: "editor-8" } }),
     );
     const el = container.querySelector('div[style*="overflow"]');
     expect(el).toBeTruthy();
@@ -156,6 +171,7 @@ describe("EditorPanel", () => {
 
     const { container } = render(
       React.createElement(EditorPanel, {
+        api: FAKE_API,
         params: { panelId: "editor-lf", filePath: "C:/big/log.txt" },
       }),
     );
@@ -186,14 +202,14 @@ describe("EditorPanel", () => {
       .mockReturnValueOnce(defaultHookResult());
 
     const { rerender, container } = render(
-      React.createElement(EditorPanel, { params }),
+      React.createElement(EditorPanel, { api: FAKE_API, params }),
     );
     await waitFor(() => {
       expect(container.querySelector('[data-e2e="large-file-viewer"]')).toBeTruthy();
     });
 
     // 第二次渲染（同 params——真实切换场景由 hook 内部清信号驱动）→ CM 形态回挂
-    rerender(React.createElement(EditorPanel, { params }));
+    rerender(React.createElement(EditorPanel, { api: FAKE_API, params }));
     await waitFor(() => {
       expect(container.querySelector('div[style*="overflow: clip"]')).toBeTruthy();
     });
@@ -201,5 +217,49 @@ describe("EditorPanel", () => {
     // CM 容器重挂后 useCodeMirror 应收到非 null container（重新捕获生效）
     const lastCall = mockUseCodeMirror.mock.calls[mockUseCodeMirror.mock.calls.length - 1];
     expect(lastCall?.[0]?.container).toBeInstanceOf(HTMLElement);
+  });
+
+  // ── C4：键盘焦点联动（usePanelActivationFocus 接线） ──
+
+  it("新建意图 + 挂载即激活 → useCodeMirror focus 透传（打开文件自动聚焦）", () => {
+    const focusSpy = vi.fn();
+    // mockImplementation 而非 Once：container 翻 true 的重渲染再调 hook，
+    // Once 只覆盖首次渲染会让二次渲染拿到另一个 focus（断言失真）
+    mockUseCodeMirror.mockImplementation(() => ({ ...defaultHookResult(), focus: focusSpy }));
+    markPanelFocusIntent("editor-focus-1");
+    try {
+      render(
+        React.createElement(EditorPanel, {
+          api: { isActive: true, isGroupActive: true } as unknown as DockviewPanelApi,
+          params: { panelId: "editor-focus-1" },
+        }),
+      );
+      expect(focusSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      mockUseCodeMirror.mockImplementation(defaultHookResult);
+    }
+  });
+
+  it("大文件形态（largeFile 信号非空）不抢焦——有意图也不调 focus（只读浏览登记边界）", () => {
+    const focusSpy = vi.fn();
+    // 信号须持续覆盖每次渲染（同上单次 Once 会在重渲染回退 null 翻回 CM 形态）
+    mockUseCodeMirror.mockImplementation(() => ({
+      ...defaultHookResult(),
+      focus: focusSpy,
+      largeFile: { filePath: "C:/big/log.txt" },
+    }));
+    mockReadFileRange.mockResolvedValue("line1\n");
+    markPanelFocusIntent("editor-focus-2");
+    try {
+      render(
+        React.createElement(EditorPanel, {
+          api: { isActive: true, isGroupActive: true } as unknown as DockviewPanelApi,
+          params: { panelId: "editor-focus-2", filePath: "C:/big/log.txt" },
+        }),
+      );
+      expect(focusSpy).not.toHaveBeenCalled();
+    } finally {
+      mockUseCodeMirror.mockImplementation(defaultHookResult);
+    }
   });
 });

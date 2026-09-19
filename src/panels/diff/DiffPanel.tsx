@@ -44,6 +44,8 @@ import {
 } from "../editor/gitGutter";
 import { LargeFileViewer } from "../editor/largeFileViewer/LargeFileViewer";
 import { usePanelFocus } from "../../features/shortcuts";
+import { usePanelActivationFocus } from "../usePanelActivationFocus";
+import type { DockviewPanelApi } from "dockview-react";
 import { setActiveEditor, clearActiveEditor, type EditorActions } from "../editor/activeEditor";
 import { useFontSize } from "../../stores";
 import { useFontSizeWheel } from "../../lib/useFontSizeWheel";
@@ -152,6 +154,8 @@ export interface DiffPanelParams {
 }
 
 interface DiffPanelProps {
+  /** Dockview 传入的面板 API */
+  api: DockviewPanelApi;
   params: DiffPanelParams;
 }
 
@@ -176,7 +180,7 @@ function estimateLineHeight(fontSize: number): number {
 
 // ── 组件 ──────────────────────────────────────────────────────
 
-const DiffPanel: React.FC<DiffPanelProps> = ({ params }) => {
+const DiffPanel: React.FC<DiffPanelProps> = ({ api, params }) => {
   const { panelId, filePath, oldPath, repoPath } = params;
   const leftContainerRef = useRef<HTMLDivElement>(null);
   const rightContainerRef = useRef<HTMLDivElement>(null);
@@ -457,6 +461,17 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ params }) => {
 
   // renderKey bridge effect 确保首次 "ready" 渲染后 ref.current 非 null
   usePanelFocus("editor", rightContainerRef.current, activateEditor, deactivateEditor);
+
+  // C4：键盘焦点联动——聚焦右栏（工作区可编辑侧，编辑意图所在）；ready =
+  // ready 态且右栏非大文件引导形态（LargeFileViewer 只读浏览不抢焦）。
+  // 双 view 创建 effect 在本组件内先于本 hook 挂载期 effect 执行（hook 调用序）
+  const focusRightView = useCallback(() => rightViewRef.current?.focus(), []);
+  usePanelActivationFocus(
+    api,
+    params.panelId,
+    focusRightView,
+    state.kind === "ready" && !state.workdirLarge,
+  );
 
   // 左栏也注册 focus——让 Alt+Z 在左栏聚焦时同样生效
   usePanelFocus("editor", leftContainerRef.current, activateEditor, deactivateEditor);

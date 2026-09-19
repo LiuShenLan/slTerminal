@@ -99,6 +99,13 @@ vi.mock("../panels/editor/activeEditor", () => ({
 // ── 导入 ──────────────────────────────────────────────────────
 
 import DiffPanel from "../panels/diff/DiffPanel";
+import type { DockviewPanelApi } from "dockview-react";
+
+/** fake 面板 api（usePanelActivationFocus 消费面：未激活恒不聚焦） */
+const FAKE_API = {
+  isActive: false,
+  isGroupActive: false,
+} as unknown as DockviewPanelApi;
 import { act } from "@testing-library/react";
 import { EditorView } from "@codemirror/view";
 import { diffMarkersField, headDiffMarkersField } from "../panels/editor/gitGutter";
@@ -167,7 +174,7 @@ describe("DiffPanel", () => {
     mockReadFile.mockReturnValue(p);
 
     const { container } = render(
-      React.createElement(DiffPanel, { params: makeParams() }),
+      React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
     );
     expect(container.textContent).toContain("加载中");
   });
@@ -178,7 +185,7 @@ describe("DiffPanel", () => {
     mockGitFileAtHead.mockRejectedValue(new Error("HEAD 中不存在"));
 
     const { findByText } = render(
-      React.createElement(DiffPanel, { params: makeParams() }),
+      React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
     );
     await findByText("该文件在 HEAD 中不存在");
   });
@@ -187,7 +194,7 @@ describe("DiffPanel", () => {
 
   it("加载成功 → diff-panel 容器含 diff-left/diff-right", async () => {
     const { container } = render(
-      React.createElement(DiffPanel, { params: makeParams() }),
+      React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
     );
     await waitFor(() => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
@@ -199,7 +206,7 @@ describe("DiffPanel", () => {
   it("加载后调用 gitDiff(repoPath, filePath) 获取 diff hunks", async () => {
     const params = makeParams();
     const { container } = render(
-      React.createElement(DiffPanel, { params }),
+      React.createElement(DiffPanel, { api: FAKE_API, params }),
     );
     await waitFor(() => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
@@ -213,7 +220,7 @@ describe("DiffPanel", () => {
       filePath: "D:/repo/src/new.ts",
     });
     const { container } = render(
-      React.createElement(DiffPanel, { params }),
+      React.createElement(DiffPanel, { api: FAKE_API, params }),
     );
     await waitFor(() => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
@@ -238,7 +245,7 @@ describe("DiffPanel", () => {
     ]);
 
     const { container } = render(
-      React.createElement(DiffPanel, { params }),
+      React.createElement(DiffPanel, { api: FAKE_API, params }),
     );
     await waitFor(() => {
       expect(container.querySelector('[data-e2e="diff-left"]')).toBeTruthy();
@@ -269,7 +276,7 @@ describe("DiffPanel", () => {
   it("保存→ writeFile 写盘 + gitDiff 重调 + 双侧 gutter/占位刷新全链", async () => {
     const params = makeParams();
     const { container } = render(
-      React.createElement(DiffPanel, { params }),
+      React.createElement(DiffPanel, { api: FAKE_API, params }),
     );
     await waitFor(() => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
@@ -334,7 +341,7 @@ describe("DiffPanel", () => {
 
   it("保存失败 → toast.show(\"error\") 提示（FE-02 浮层回归）", async () => {
     const { container } = render(
-      React.createElement(DiffPanel, { params: makeParams() }),
+      React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
     );
     await waitFor(() => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
@@ -394,7 +401,7 @@ describe("DiffPanel", () => {
     /** 渲染并推进全部初始异步 */
     async function renderReady() {
       const utils = render(
-        React.createElement(DiffPanel, { params: makeParams() }),
+        React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
       );
       await flushAsync();
       return utils;
@@ -483,6 +490,7 @@ describe("DiffPanel", () => {
       mockReadFile.mockResolvedValue("// workdir v2\n");
       rerender(
         React.createElement(DiffPanel, {
+          api: FAKE_API,
           params: makeParams({ filePath: "D:/repo/src/test2.ts" }),
         }),
       );
@@ -509,7 +517,7 @@ describe("DiffPanel", () => {
 
   it("净态外部 Modify → 自动重载 readFile 并替换右侧内容", async () => {
     const { container } = render(
-      React.createElement(DiffPanel, { params: makeParams() }),
+      React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
     );
 
     await waitFor(() => {
@@ -541,7 +549,7 @@ describe("DiffPanel", () => {
 
   it("非目标文件 Modify → 不触发重载", async () => {
     const { container } = render(
-      React.createElement(DiffPanel, { params: makeParams() }),
+      React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
     );
 
     await waitFor(() => {
@@ -574,7 +582,7 @@ describe("DiffPanel", () => {
       { oldStart: 3, oldLines: 1, newStart: 3, newLines: 0 }, // 纯删 → 右侧占位
     ]);
     const { container } = render(
-      React.createElement(DiffPanel, { params: makeParams() }),
+      React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
     );
     await waitFor(() => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
@@ -592,7 +600,7 @@ describe("DiffPanel", () => {
     ]);
     const params = makeParams();
     const { container } = render(
-      React.createElement(DiffPanel, { params }),
+      React.createElement(DiffPanel, { api: FAKE_API, params }),
     );
     await waitFor(() => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
@@ -635,7 +643,7 @@ describe("DiffPanel", () => {
 
   it("左侧 .git 路径变更 → gitFileAtHead 重取并刷新左侧内容", async () => {
     const { container } = render(
-      React.createElement(DiffPanel, { params: makeParams() }),
+      React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
     );
     await waitFor(() => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
@@ -657,7 +665,7 @@ describe("DiffPanel", () => {
 
   it("左侧非 .git 路径变更 → 不重取 HEAD", async () => {
     const { container } = render(
-      React.createElement(DiffPanel, { params: makeParams() }),
+      React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
     );
     await waitFor(() => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
@@ -674,7 +682,7 @@ describe("DiffPanel", () => {
 
   it("脏态外部 Modify → confirmDialog 弹窗；取消保留本地修改", async () => {
     const { container } = render(
-      React.createElement(DiffPanel, { params: makeParams() }),
+      React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
     );
     await waitFor(() => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
@@ -711,7 +719,7 @@ describe("DiffPanel", () => {
 
   it("脏态外部 Modify 确认 → 重载磁盘内容", async () => {
     const { container } = render(
-      React.createElement(DiffPanel, { params: makeParams() }),
+      React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
     );
     await waitFor(() => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
@@ -739,7 +747,7 @@ describe("DiffPanel", () => {
   it("workdir 超过 MAX_FILE_SIZE_BYTES → 右侧引导 LargeFileViewer（原拒绝文案形态防复发）", async () => {
     mockReadFile.mockResolvedValue("x".repeat(MAX_FILE_SIZE_BYTES + 1));
     const { container } = render(
-      React.createElement(DiffPanel, { params: makeParams() }),
+      React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
     );
     // 右侧（diff-right 包裹层内）渲染只读浏览;左侧仍为 CM 双栏编辑形态
     await waitFor(() => {
@@ -763,7 +771,7 @@ describe("DiffPanel", () => {
   it("head 超过 MAX_FILE_SIZE_BYTES → 左侧引导 LargeFileViewer（HEAD 标签 + 右栏不受影响）", async () => {
     mockGitFileAtHead.mockResolvedValue("y".repeat(MAX_FILE_SIZE_BYTES + 1));
     const { container } = render(
-      React.createElement(DiffPanel, { params: makeParams() }),
+      React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
     );
     await waitFor(() => {
       const left = container.querySelector('[data-e2e="diff-left"]');
@@ -783,7 +791,7 @@ describe("DiffPanel", () => {
     mockGitFileAtHead.mockResolvedValue("h".repeat(MAX_FILE_SIZE_BYTES + 1));
     mockReadFile.mockResolvedValue("w".repeat(MAX_FILE_SIZE_BYTES + 1));
     const { container } = render(
-      React.createElement(DiffPanel, { params: makeParams() }),
+      React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
     );
     await waitFor(() => {
       const viewers = container.querySelectorAll('[data-e2e="large-file-viewer"]');
@@ -798,7 +806,7 @@ describe("DiffPanel", () => {
       "// HEAD\n" + "y".repeat(LARGE_FILE_WARN_BYTES + 100),
     );
     const { container } = render(
-      React.createElement(DiffPanel, { params: makeParams() }),
+      React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
     );
     await waitFor(() => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
@@ -813,7 +821,7 @@ describe("DiffPanel", () => {
   // 12: 左栏不使用 editable.of(false)——验证编辑器可聚焦
   it("left panel does NOT use editable.of(false)", async () => {
     const { container } = render(
-      React.createElement(DiffPanel, { params: makeParams() }),
+      React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
     );
     await waitFor(() => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
@@ -836,7 +844,7 @@ describe("DiffPanel", () => {
   // 13: 左栏含搜索扩展——Ctrl+F 触发搜索面板出现
   it("left panel includes search extensions (Ctrl+F opens search)", async () => {
     const { container } = render(
-      React.createElement(DiffPanel, { params: makeParams() }),
+      React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
     );
     await waitFor(() => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
@@ -871,7 +879,7 @@ describe("DiffPanel", () => {
   // 14: useFontSizeWheel 左右各调用一次，且收到非 null 容器
   it("calls useFontSizeWheel for both panels with non-null containers", async () => {
     const { container } = render(
-      React.createElement(DiffPanel, { params: makeParams() }),
+      React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
     );
     await waitFor(() => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
@@ -892,7 +900,7 @@ describe("DiffPanel", () => {
   // 15: usePanelFocus 注册左栏和右栏，且收到非 null 容器
   it("usePanelFocus registers both left AND right containers with non-null elements", async () => {
     const { container } = render(
-      React.createElement(DiffPanel, { params: makeParams() }),
+      React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
     );
     await waitFor(() => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
@@ -924,7 +932,7 @@ describe("DiffPanel", () => {
   // L1: 外层容器 flexDirection 为 "column"（提示条槽位 + 内部 row 双栏）；内部 row 为 "row"
   it("diff-panel outer container is column with inner row container", async () => {
     const { container } = render(
-      React.createElement(DiffPanel, { params: makeParams() }),
+      React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
     );
     await waitFor(() => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
@@ -941,7 +949,7 @@ describe("DiffPanel", () => {
   // L2: 左栏 wrapper 有 borderRight 垂直分隔线
   it("left wrapper has borderRight separator", async () => {
     const { container } = render(
-      React.createElement(DiffPanel, { params: makeParams() }),
+      React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
     );
     await waitFor(() => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
@@ -956,7 +964,7 @@ describe("DiffPanel", () => {
   // L3: 左栏 wrapper 无 borderBottom（旧分隔线已清除）
   it("left wrapper has no borderBottom", async () => {
     const { container } = render(
-      React.createElement(DiffPanel, { params: makeParams() }),
+      React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
     );
     await waitFor(() => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
@@ -971,7 +979,7 @@ describe("DiffPanel", () => {
   // B1: 左栏 useFontSizeWheel 收到非 null 容器
   it("useFontSizeWheel receives non-null container for left panel", async () => {
     const { container } = render(
-      React.createElement(DiffPanel, { params: makeParams() }),
+      React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
     );
     await waitFor(() => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
@@ -987,7 +995,7 @@ describe("DiffPanel", () => {
   // B2: useFontSizeWheel 字体范围参数正确（min=8, max=32）
   it("useFontSizeWheel receives FONT_SIZE_MIN/MAX bounds", async () => {
     const { container } = render(
-      React.createElement(DiffPanel, { params: makeParams() }),
+      React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
     );
     await waitFor(() => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
@@ -1006,7 +1014,7 @@ describe("DiffPanel", () => {
   // usePanelFocus 签名: (context, container, activate, deactivate) → c[0]="editor", c[1]=HTMLElement
   it("usePanelFocus receives non-null container for both panels", async () => {
     const { container } = render(
-      React.createElement(DiffPanel, { params: makeParams() }),
+      React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
     );
     await waitFor(() => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
@@ -1021,7 +1029,7 @@ describe("DiffPanel", () => {
   // B4: usePanelFocus context 参数均为 "editor"
   it("usePanelFocus context is editor for all registrations", async () => {
     const { container } = render(
-      React.createElement(DiffPanel, { params: makeParams() }),
+      React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
     );
     await waitFor(() => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
@@ -1038,7 +1046,7 @@ describe("DiffPanel", () => {
   // SC1: CM6 挂载后 .cm-scroller 存在于左右两侧（滚动容器可用）
   it(".cm-scroller exists in both left and right panels", async () => {
     const { container } = render(
-      React.createElement(DiffPanel, { params: makeParams() }),
+      React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
     );
     // CM6 view 创建/挂载为异步——dockview 8 渲染时序下左侧 view 可能滞后，
     // 须将两侧 .cm-scroller 就绪并入 waitFor 整体轮询（仅等 diff-panel 容器不够）
@@ -1070,7 +1078,7 @@ describe("DiffPanel", () => {
   // M1: 左 wrapper div 有 minWidth: 0（允许 flex 收缩到 50%）
   it("left wrapper div has minWidth 0", async () => {
     const { container } = render(
-      React.createElement(DiffPanel, { params: makeParams() }),
+      React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
     );
     await waitFor(() => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
@@ -1083,7 +1091,7 @@ describe("DiffPanel", () => {
   // M2: 右 wrapper div 有 minWidth: 0
   it("right wrapper div has minWidth 0", async () => {
     const { container } = render(
-      React.createElement(DiffPanel, { params: makeParams() }),
+      React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
     );
     await waitFor(() => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
@@ -1096,7 +1104,7 @@ describe("DiffPanel", () => {
   // M3: diff-left 容器有 minWidth: 0
   it("diff-left container has minWidth 0", async () => {
     const { container } = render(
-      React.createElement(DiffPanel, { params: makeParams() }),
+      React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
     );
     await waitFor(() => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
@@ -1108,7 +1116,7 @@ describe("DiffPanel", () => {
   // M4: diff-right 容器有 minWidth: 0
   it("diff-right container has minWidth 0", async () => {
     const { container } = render(
-      React.createElement(DiffPanel, { params: makeParams() }),
+      React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
     );
     await waitFor(() => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
@@ -1122,7 +1130,7 @@ describe("DiffPanel", () => {
   // O1: diff-left 保持 overflow: clip（滚轮穿透到 .cm-scroller）
   it("diff-left container preserves overflow clip", async () => {
     const { container } = render(
-      React.createElement(DiffPanel, { params: makeParams() }),
+      React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
     );
     await waitFor(() => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
@@ -1134,7 +1142,7 @@ describe("DiffPanel", () => {
   // O2: diff-right 保持 overflow: clip
   it("diff-right container preserves overflow clip", async () => {
     const { container } = render(
-      React.createElement(DiffPanel, { params: makeParams() }),
+      React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
     );
     await waitFor(() => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
@@ -1148,7 +1156,7 @@ describe("DiffPanel", () => {
   // F1: 左右 wrapper 均为 flex: 50% + display: flex（等宽分配）
   it("both wrapper divs have flex 50% and display flex", async () => {
     const { container } = render(
-      React.createElement(DiffPanel, { params: makeParams() }),
+      React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
     );
     await waitFor(() => {
       expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
@@ -1169,7 +1177,7 @@ describe("DiffPanel", () => {
 
   it("setActive 后左右两 view.dispatch 均携 reconfigure 效果且 EditorView 不重建", async () => {
     const { container } = render(
-      React.createElement(DiffPanel, { params: makeParams() }),
+      React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
     );
     await waitFor(() => {
       expect(container.querySelector('[data-e2e="diff-left"]')).toBeTruthy();

@@ -31,9 +31,13 @@ import {
   createEditorThemeSlot,
   type EditorThemeSlot,
 } from "../../theme/editorThemeSlot";
+import { usePanelActivationFocus } from "../usePanelActivationFocus";
+import type { DockviewPanelApi } from "dockview-react";
 
 /** GitShowPanel 接收的面板参数 */
 interface GitShowPanelProps {
+  /** Dockview 传入的面板 API */
+  api: DockviewPanelApi;
   params: {
     panelId: string;
     filePath: string;
@@ -113,7 +117,7 @@ const cmContainerStyle: React.CSSProperties = {
   overflow: "clip",
 };
 
-const GitShowPanel: React.FC<GitShowPanelProps> = ({ params }) => {
+const GitShowPanel: React.FC<GitShowPanelProps> = ({ api, params }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const [state, setState] = useState<LoadState>({ kind: "loading" });
@@ -275,6 +279,17 @@ const GitShowPanel: React.FC<GitShowPanelProps> = ({ params }) => {
   const activateEditor = useCallback(() => setActiveEditor(editorActions), [editorActions]);
   const deactivateEditor = useCallback(() => clearActiveEditor(editorActions), [editorActions]);
   usePanelFocus("editor", containerRef.current, activateEditor, deactivateEditor);
+
+  // C4：键盘焦点联动——ready = content 态且非大文件引导形态（LargeFileViewer
+  // 只读分片浏览不抢焦，同 EditorPanel 登记边界）；view 创建 effect 在本组件
+  // 内先于本 hook 的挂载期 effect 执行（hook 调用序），focus 时 viewRef 已就绪
+  const focusView = useCallback(() => viewRef.current?.focus(), []);
+  usePanelActivationFocus(
+    api,
+    params.panelId,
+    focusView,
+    state.kind === "content" && state.text.length <= MAX_FILE_SIZE_BYTES,
+  );
 
   if (state.kind === "loading") {
     return (

@@ -14,6 +14,10 @@ import SettingsPanel from "../panels/settings/SettingsPanel";
 import { getSettingsPageRegistry } from "../features/settingsCenter";
 import type { SettingsPageProps } from "../features/settingsCenter";
 import type { DockviewPanelApi, DockviewApi } from "dockview-react";
+import {
+  markPanelFocusIntent,
+  _resetPanelFocusIntent,
+} from "../workspace/panelFocusIntent";
 
 // 屏蔽 pages.ts side-effect 注册（真实 pages 会注册 planBalance 页，破坏空态/组序用例）
 vi.mock("../features/settingsCenter/pages", () => ({}));
@@ -118,9 +122,56 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   getSettingsPageRegistry()._reset();
+  _resetPanelFocusIntent();
 });
 
 describe("导航组序与渲染", () => {
+  it("C4：新建意图 + 挂载即激活 → 壳根容器获键盘焦点（tabIndex=-1 可编程聚焦）", () => {
+    registerStubs();
+    const api = {
+      updateParameters: vi.fn(),
+      onDidParametersChange: vi.fn(() => ({ dispose: vi.fn() })),
+      isActive: true,
+      isGroupActive: true,
+    } as unknown as DockviewPanelApi;
+    const containerApi = {
+      toJSON: vi.fn(() => ({ panels: {} })),
+    } as unknown as DockviewApi;
+    markPanelFocusIntent("page-x:settings");
+    render(
+      <SettingsPanel
+        api={api}
+        containerApi={containerApi}
+        params={{ panelId: "page-x:settings" }}
+      />,
+    );
+    const root = document.querySelector('[data-e2e="settings-panel"]');
+    expect(root).toBeTruthy();
+    expect(document.activeElement).toBe(root);
+  });
+
+  it("C4：无意图挂载即激活 → 壳根容器不获焦（布局恢复豁免）", () => {
+    registerStubs();
+    const api = {
+      updateParameters: vi.fn(),
+      onDidParametersChange: vi.fn(() => ({ dispose: vi.fn() })),
+      isActive: true,
+      isGroupActive: true,
+    } as unknown as DockviewPanelApi;
+    const containerApi = {
+      toJSON: vi.fn(() => ({ panels: {} })),
+    } as unknown as DockviewApi;
+    render(
+      <SettingsPanel
+        api={api}
+        containerApi={containerApi}
+        params={{ panelId: "page-x:settings" }}
+      />,
+    );
+    const root = document.querySelector('[data-e2e="settings-panel"]');
+    expect(document.activeElement).not.toBe(root);
+  });
+
   it("导航组序：global 组在 project 组之前（组标题 DOM 顺序）", () => {
     registerStubs();
     renderPanel({ panelId: "settings-page-a" });
