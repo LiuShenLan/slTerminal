@@ -126,7 +126,7 @@ afterEach(() => {
 });
 
 describe("导航组序与渲染", () => {
-  it("C4：新建意图 + 挂载即激活 → 壳根容器获键盘焦点（tabIndex=-1 可编程聚焦）", () => {
+  it("C4：新建意图 + 挂载即激活 → 壳根容器获键盘焦点（tabIndex=-1 可编程聚焦）", async () => {
     registerStubs();
     const api = {
       updateParameters: vi.fn(),
@@ -147,10 +147,12 @@ describe("导航组序与渲染", () => {
     );
     const root = document.querySelector('[data-e2e="settings-panel"]');
     expect(root).toBeTruthy();
-    expect(document.activeElement).toBe(root);
+    // 路径① focus 经 rAF 延迟一帧（等 dockview overlay 可见性翻开）；
+    // rAF 注册时机受 act flush 边界影响——waitFor 轮询覆盖
+    await waitFor(() => expect(document.activeElement).toBe(root));
   });
 
-  it("C4：无意图挂载即激活 → 壳根容器不获焦（布局恢复豁免）", () => {
+  it("C4：无意图挂载即激活 → 壳根容器不获焦（布局恢复豁免）", async () => {
     registerStubs();
     const api = {
       updateParameters: vi.fn(),
@@ -169,6 +171,7 @@ describe("导航组序与渲染", () => {
       />,
     );
     const root = document.querySelector('[data-e2e="settings-panel"]');
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
     expect(document.activeElement).not.toBe(root);
   });
 

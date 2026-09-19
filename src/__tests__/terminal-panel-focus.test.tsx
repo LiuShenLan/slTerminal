@@ -20,7 +20,7 @@ vi.mock("../ipc", () => ({
 }));
 
 import React from "react";
-import { render, act, cleanup } from "@testing-library/react";
+import { render, act, cleanup, waitFor } from "@testing-library/react";
 import TerminalPanel from "../panels/terminal/TerminalPanel";
 import {
   markPanelFocusIntent,
@@ -61,8 +61,16 @@ afterEach(() => {
   _resetPanelFocusIntent();
 });
 
+/** 冲刷一帧 rAF（路径① focus 延迟一帧等 dockview overlay 可见性翻开）。
+ *  仅负向断言用——正向断言用 waitFor 轮询（rAF 注册时机受 act flush 边界影响） */
+const flushRaf = async () => {
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 0));
+  });
+};
+
 describe("TerminalPanel 键盘焦点联动（C4）", () => {
-  it("新建意图 + 挂载即激活 → 容器就绪后 focus 透传（新建终端自动聚焦锚）", () => {
+  it("新建意图 + 挂载即激活 → 容器就绪后 focus 透传（新建终端自动聚焦锚）", async () => {
     const { api } = fakePanelApi({ isActive: true, isGroupActive: true });
     markPanelFocusIntent("page-f1:terminal-0");
 
@@ -73,11 +81,11 @@ describe("TerminalPanel 键盘焦点联动（C4）", () => {
       }),
     );
 
-    // container state effect → ready 翻 true → 意图补消费 → focus
-    expect(mocks.focus).toHaveBeenCalledTimes(1);
+    // container state effect → ready 翻 true → 意图补消费 → rAF 后 focus
+    await waitFor(() => expect(mocks.focus).toHaveBeenCalledTimes(1));
   });
 
-  it("无意图挂载即激活 → 不 focus（fromJSON 布局恢复豁免）", () => {
+  it("无意图挂载即激活 → 不 focus（fromJSON 布局恢复豁免）", async () => {
     const { api } = fakePanelApi({ isActive: true, isGroupActive: true });
 
     render(
@@ -87,6 +95,7 @@ describe("TerminalPanel 键盘焦点联动（C4）", () => {
       }),
     );
 
+    await flushRaf();
     expect(mocks.focus).not.toHaveBeenCalled();
   });
 

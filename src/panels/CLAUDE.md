@@ -165,13 +165,14 @@ Claude Code 在用户主动 Ctrl+C 中断时不发射任何 hook 事件。CP-020
 
 `usePanelActivationFocus(api, panelId, focus, ready?)`（`src/panels/usePanelActivationFocus.ts`）是面板「页签激活 → 键盘焦点进输入区」的共享 hook，双路径：
 
-- **路径① 挂载期意图消费**：`ready && api.isActive && api.isGroupActive && consumePanelFocusIntent(panelId)` → focus。意图令牌 = `workspace/panelFocusIntent.ts`（模块级 Set，mark/consume take 语义），由交互式打开入口在 addPanel 前写入（六入口：tabChrome 工厂/openFile/openCommitFile/openSettingsPanel/ExplorerPanel.handleOpenInTerminal/restoreSession）；去重命中分支不写意图。**fromJSON 布局恢复从不写意图 → 恢复豁免零时序依赖**（重启恢复无面板抢焦）。ready 后翻 true 补消费（容器异步挂载场景）。
+- **路径① 挂载期意图消费**：`ready && api.isActive && api.isGroupActive && consumePanelFocusIntent(panelId)` → focus（**经 requestAnimationFrame 延迟一帧**——dockview overlay 容器 attach 时 visibility:hidden、下一帧才翻开，同帧 focus 被 Chromium 静默吞掉，2026-09-19 L4 取证定案，机理见外部坑「dockview overlay 渲染容器」；jsdom 不校验 CSS 可见性测不出，勿回退同步 focus）。意图令牌 = `workspace/panelFocusIntent.ts`（模块级 Set，mark/consume take 语义），由交互式打开入口在 addPanel 前写入（六入口：tabChrome 工厂/openFile/openCommitFile/openSettingsPanel/ExplorerPanel.handleOpenInTerminal/restoreSession）；去重命中分支不写意图。**fromJSON 布局恢复从不写意图 → 恢复豁免零时序依赖**（重启恢复无面板抢焦）。ready 后翻 true 补消费（容器异步挂载场景）。
 - **路径② 激活事件联动**：订阅 `onDidActiveChange`/`onDidActiveGroupChange`（可选调用照 DefaultTab 先例）→ 双条件（isActive && isGroupActive）满足且 ready 即 focus——**不需意图**，覆盖页签点击/去重命中 focus()/switchToPageAndFocus 全路径。
 
 各面板焦点落点：terminal = xterm textarea（ready = 容器挂载）；editor/gitshow = CM view（ready = 容器就绪且非大文件形态——大文件 LargeFileViewer 只读浏览不抢焦）；diff = 右栏 CM（工作区可编辑侧，ready = "ready" 态且工作区侧未超限）；settings = 壳根容器 div（`tabIndex={-1}` 可编程聚焦，不入 Tab 序）。**docViewer 家族（htmlviewer/markdownviewer）一期不接**——跨源沙箱 iframe keyfwd 模型不同构，登记后续项。focus 回调由调用方 useCallback 稳定化（项目 eslint 无 react-hooks 插件，deps 不列 focus）。
 
 ## 外部坑/红线
 
+- **dockview overlay 渲染容器（2026-09-19 L4 取证定案）**：dockview 对 `renderer:"always"` 面板用 overlay 渲染容器（`.dv-render-overlay`）挂载——attach 时 `visibility:hidden`，经 attach 微任务 → resize → rAF 于下一帧才翻开；hidden 期间对子树内元素 `focus()` 被 Chromium 静默吞掉（不产焦点事件、activeElement 不变，但 `offsetParent`/`getClientRects` 正常——「占布局但拒焦」，可见性探针按几何口径会误判可见）。任何「面板挂载即聚焦」的代码必须延迟一帧（rAF）执行，回调内重校验激活态。
 - **xterm.js `open()` 不可复用**：同实例二次 `open()` 抛异常，必须每次挂载新建实例。
 - **WebGL 检测不带 `failIfMajorPerformanceCaveat`**（FE-26）：GPU blocklist 场景会误杀软件渲染，导致 DOM renderer 快滚掉帧。
 - **WebGL 加载时序（FE-34）**：`setupWebglWithRetry` 必须在 `term.open(container)` 之后，否则 win10 纯黑屏。

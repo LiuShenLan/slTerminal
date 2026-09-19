@@ -6,10 +6,18 @@
 //    新面板，挂载即激活的打开入口（新建终端/编辑器/git/设置/恢复注入）经
 //    panelFocusIntent 令牌驱动；ready 翻 true（异步资源就绪，如 xterm 容器
 //    挂载、CM 视图创建）时补消费一次。
+//    **focus 经 requestAnimationFrame 延迟一帧执行**（2026-09-19 L4 取证）：
+//    dockview 对 renderer:"always" 面板用 overlay 渲染容器（dv-render-overlay），
+//    attach 时 visibility:hidden，可见性要到下一帧 rAF（attach 微任务 →
+//    resize → rAF）才翻开——同帧 passive effect 内 focus() 对
+//    visibility:hidden 元素静默无效（不产焦点事件；jsdom 不校验 CSS 可见性，
+//    L2 测不出，勿回退为同步 focus）。rAF 注册序保证 dockview 的翻开回调
+//    先执行（其注册于 addPanel 同步段微任务，早于本 effect 的宏任务调度）；
+//    rAF 间隙激活态可能翻转（极速切页），回调内重校验双条件。
 // ② 激活事件联动：onDidActiveChange / onDidActiveGroupChange（可选调用照
 //    DefaultTab 先例——测试 fake api 可能缺）双条件满足即 focus()——**不需
 //    意图**：覆盖页签点击激活、去重命中 panel.focus()、switchToPageAndFocus
-//    全路径。
+//    全路径。该路径触发时面板早已可见（用户见得到才点得到），保持同步。
 //
 // 布局批量恢复（fromJSON）豁免：恢复路径从不写意图，路径①不命中；恢复
 // 不产激活事件（dockview 按 activeGroup 字段静默置位），路径②不命中——
@@ -43,7 +51,12 @@ export function usePanelActivationFocus(
   useEffect(() => {
     if (!ready) return;
     if (!api.isActive || !api.isGroupActive) return;
-    if (consumePanelFocusIntent(panelId)) focus();
+    if (!consumePanelFocusIntent(panelId)) return;
+    // 延迟一帧：等 dockview overlay 渲染容器 visibility 翻开（见文件头注）
+    const raf = requestAnimationFrame(() => {
+      if (api.isActive && api.isGroupActive) focus();
+    });
+    return () => cancelAnimationFrame(raf);
   }, [api, panelId, ready]);
 
   // 路径②：激活事件联动（不需意图——页签点击/去重聚焦/程序化 focus 全路径）。

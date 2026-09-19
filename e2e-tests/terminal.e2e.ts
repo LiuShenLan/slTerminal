@@ -8,7 +8,7 @@
  */
 
 import { expect, browser } from "@wdio/globals";
-import { rmSync, mkdtempSync } from "node:fs";
+import { rmSync, mkdtempSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -21,7 +21,6 @@ import {
   waitForPtySessionReady,
   writeToPty,
   waitForTerminalText,
-  getTerminalText,
   addPage,
   switchToPageAndWait,
   getProjectIdForPage,
@@ -142,11 +141,17 @@ describe("键盘快捷键", () => {
 });
 
 describe("C4 新建终端键盘焦点", () => {
-  it("新建终端后焦点落 .xterm-helper-textarea，直接合成 keydown 字符经 PTY 回显", async () => {
-    // 0. 就绪链（空数据目录 → 建项目 → 空页组 watermark 接管）
+  it("新建终端后焦点落 .xterm-helper-textarea，直接合成 input 字符经 PTY 回显", async () => {
+    // 0. 就绪链（空数据目录 → 建项目 → 空页组 watermark 接管）。
+    //    项目根必须真实存在：createProject helper 的 setProjectRoot 需
+    //    canonicalize（目录不存在 → catch 静默吞 → 后端 project_root=None →
+    //    watermark 工厂写入 params.cwd 后 spawn 被路径沙箱拒——state.rs
+    //    「项目根路径未设置」；helper addPanel 形态 cwd=undefined 才绕过）
     await waitForWorkspaceReady();
-    await createProject("C:\\e2e-focus-test");
-    await waitForDockviewApi();
+    const tempDir = mkdtempSync(join(tmpdir(), "slterm-e2e-focus-"));
+    try {
+      await createProject(tempDir);
+      await waitForDockviewApi();
 
     // 1. 真实用户入口：点 watermark「新建终端」按钮（走 addTerminalPanel 工厂 →
     //    聚焦意图标记 → usePanelActivationFocus 消费 → term.focus() 程序化聚焦；
@@ -165,33 +170,146 @@ describe("C4 新建终端键盘焦点", () => {
     );
 
     // 2. 核心断言：不经任何额外 focus 调用，activeElement 落新建终端的 textarea
-    await browser.waitUntil(
-      async () =>
-        await browser.execute(() => {
-          const el = document.activeElement;
-          return !!el && el.classList.contains("xterm-helper-textarea");
-        }),
-      { timeout: 10000, timeoutMsg: "新建终端后键盘焦点未落 xterm textarea（C4 意图链路失效）" },
-    );
+    //    （focus 经 rAF 延迟一帧——等 dockview overlay 容器 visibility 翻开，
+    //    见 usePanelActivationFocus 文件头注；轮询等待该帧）
+    const focused = await browser
+      .waitUntil(
+        async () =>
+          await browser.execute(() => {
+            const el = document.activeElement;
+            return !!el && el.classList.contains("xterm-helper-textarea");
+          }),
+        { timeout: 10000, interval: 200 },
+      )
+      .catch(() => false);
+    if (!focused) {
+      // 失败诊断：区分「click 链断（面板未建）」与「聚焦链断（面板在但未聚焦）」
+      const diag = await browser.execute(() => ({
+        hasFocus: document.hasFocus(),
+        textareas: document.querySelectorAll(".xterm-helper-textarea").length,
+        containers: document.querySelectorAll('[data-e2e="terminal-container"]').length,
+        activeCls: document.activeElement?.className ?? null,
+        panels: window.__dockviewApi?.panels.length ?? -1,
+      }));
+      throw new Error(
+        `新建终端后键盘焦点未落 xterm textarea（C4 意图链路失效）；诊断=${JSON.stringify(diag)}`,
+      );
+    }
 
-    // 3. 等 PTY 就绪后直接合成 keydown 字符（落在 activeElement 上——按键落点即焦点）
-    await waitForPtySessionReady();
+    // 3. 等「新终端」session 就绪再输入——sid 未注册进 TerminalRegistry 时
+    //    onData 守卫静默丢弃输入（useXterm.ts），必须精确等本面板：
+    //    无参 waitForPtySessionReady 正序遍历容器会被旧终端抢先命中
+    const newPanelId = await browser.execute(() => {
+      const ta = document.activeElement as HTMLElement | null;
+      return ta?.closest("[data-panel-id]")?.getAttribute("data-panel-id") ?? null;
+    });
+    if (!newPanelId) throw new Error("无法从聚焦 textarea 定位新终端 panelId");
+    await waitForPtySessionReady(25000, newPanelId);
     const marker = "zzqxc4";
     await browser.execute((text: string) => {
       const target = document.activeElement;
       if (!target) throw new Error("activeElement 缺失");
+      // xterm 三事件模型：keydown（功能键/转义，评估走 legacy keyCode）+
+      // keypress（可打印字符 charCode 发送）+ input insertText（直入数据）。
+      // 合成 KeyboardEvent 的 keyCode/charCode 在 Chromium 已废弃（构造器
+      // 忽略、恒 0）——keydown/keypress 合成路径全灭；input insertText
+      // 不依赖废弃字段，是合成文本输入唯一可达路径
       for (const ch of text) {
         target.dispatchEvent(
-          new KeyboardEvent("keydown", {
-            key: ch, code: `Key${ch.toUpperCase()}`, bubbles: true, cancelable: true,
+          new InputEvent("input", {
+            data: ch, inputType: "insertText", bubbles: true, cancelable: true,
           }),
         );
       }
     }, marker);
 
-    // 4. 字符经 xterm → PTY → shell 回显可见（焦点→输入全链真实贯通）
-    const terminalText = await waitForTerminalText(marker, 15000, "合成 keydown 字符未回显");
+    // 4. 字符经 xterm → PTY → shell 回显可见（焦点→输入全链真实贯通）。
+    //    容器级断言：waitForTerminalText 正序遍历命中第一个带 helper 容器——
+    //    完整 spec 上下文里前序用例残留的旧终端会抢先（marker 在 C4 容器，
+    //    读旧容器必超时）；按 newPanelId 锁定容器轮询
+    const terminalText = await browser
+      .waitUntil(
+        async () =>
+          await browser.execute((p: string, m: string) => {
+            let t: string | null = null;
+            document
+              .querySelectorAll('[data-e2e="terminal-container"]')
+              .forEach((c) => {
+                if (c.getAttribute("data-panel-id") === p) {
+                  t = (c as never as { __e2e_getTerminalText?: () => string })
+                    .__e2e_getTerminalText?.() ?? null;
+                }
+              });
+            return t && t.includes(m) ? t : false;
+          }, newPanelId, marker),
+        { timeout: 15000, timeoutMsg: "合成 input 字符未回显（C4 容器缓冲无 marker）" },
+      )
+      .catch(async (e) => {
+        // 失败取证（精简版）：同容器状态快照 + PTY 直写对照 + 落盘探针
+        // （分辨断点：xterm 事件层 / PTY 输入链 / 输出回显链）
+        const probe = await browser.execute((p: string) => {
+          let container: (HTMLElement & {
+            __e2e_writeToPty?: (t: string) => void;
+            __e2e_getTerminalText?: () => string;
+          }) | null = null;
+          document
+            .querySelectorAll('[data-e2e="terminal-container"]')
+            .forEach((c) => {
+              if (c.getAttribute("data-panel-id") === p) container = c as never;
+            });
+          container?.__e2e_writeToPty?.("WQ1PROBE\r");
+          return {
+            activeCls: document.activeElement?.className ?? null,
+            sessionReady: !!(container as never as { __e2e_sessionReady?: boolean })?.__e2e_sessionReady,
+            sessionError: (() => {
+              const err = (container as never as { __e2e_error?: unknown })?.__e2e_error;
+              if (err == null) return null;
+              try { return JSON.stringify(err); } catch { return String(err); }
+            })(),
+            bufferLen: container?.__e2e_getTerminalText?.().length ?? -1,
+            // PTY 输出到达前端计数（usePtyOutput 入口探针）——分辨后端未产出/前端未接收
+            outputCount: (() => {
+              const counts = (window as never as Record<string, Record<string, number> | undefined>)
+                .__slterm_e2e_ptyOutputCount;
+              return counts ? counts[p] ?? 0 : -1;
+            })(),
+          };
+        }, newPanelId);
+        // 落盘探针：echo 重定向写文件——文件在 = 输入链通仅回显断
+        const probeFile = join(tempDir, "wq2-probe.txt");
+        await browser.execute((p: string, pf: string) => {
+          document
+            .querySelectorAll('[data-e2e="terminal-container"]')
+            .forEach((c) => {
+              if (c.getAttribute("data-panel-id") === p) {
+                (c as never as { __e2e_writeToPty?: (t: string) => void })
+                  .__e2e_writeToPty?.(`echo WQ2PROBE > "${pf}"\r`);
+              }
+            });
+        }, newPanelId, probeFile.replace(/\//g, "\\"));
+        await new Promise((r) => setTimeout(r, 3000));
+        const tail = await browser.execute((p: string) => {
+          let t: string | null = null;
+          document
+            .querySelectorAll('[data-e2e="terminal-container"]')
+            .forEach((c) => {
+              if (c.getAttribute("data-panel-id") === p) {
+                t = (c as never as { __e2e_getTerminalText?: () => string })
+                  .__e2e_getTerminalText?.() ?? null;
+              }
+            });
+          return t?.slice(-160) ?? null;
+        }, newPanelId);
+        throw new Error(
+          `${(e as Error).message}；取证=${JSON.stringify(probe)}；` +
+          `同容器对照回显=${!!tail && tail.includes("WQ1PROBE")}；` +
+          `输入链落盘探针=${existsSync(probeFile)}；tail=${JSON.stringify(tail)}`,
+        );
+      });
     expect(terminalText).toContain(marker);
+    } finally {
+      try { rmSync(tempDir, { recursive: true, force: true }); } catch { /* 忽略 */ }
+    }
   });
 });
 

@@ -167,6 +167,14 @@ if (typeof global.ResizeObserver === 'undefined') {
   };
 }
 
+// jsdom 无 rAF（pretendToBeVisual 未开）——宏任务近似（C4 面板焦点 hook 经
+// rAF 延迟一帧等 dockview overlay 可见性翻开；0ms 定时器等价「下一宏任务」语义）
+if (typeof globalThis.requestAnimationFrame === 'undefined') {
+  globalThis.requestAnimationFrame = (cb: FrameRequestCallback) =>
+    setTimeout(() => cb(performance.now()), 0) as unknown as number;
+  globalThis.cancelAnimationFrame = (id: number) => clearTimeout(id);
+}
+
 // jsdom 缺少 matchMedia（xterm.js open() 依赖）
 if (typeof window.matchMedia !== 'function') {
   Object.defineProperty(window, 'matchMedia', {

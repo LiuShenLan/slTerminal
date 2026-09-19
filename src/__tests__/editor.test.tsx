@@ -38,7 +38,7 @@ vi.mock("../ipc", () => ({
 }));
 
 import React from "react";
-import { render, waitFor } from "@testing-library/react";
+import { render, waitFor, act } from "@testing-library/react";
 import EditorPanel from "../panels/editor/EditorPanel";
 import type { DockviewPanelApi } from "dockview-react";
 import {
@@ -221,7 +221,7 @@ describe("EditorPanel", () => {
 
   // ── C4：键盘焦点联动（usePanelActivationFocus 接线） ──
 
-  it("新建意图 + 挂载即激活 → useCodeMirror focus 透传（打开文件自动聚焦）", () => {
+  it("新建意图 + 挂载即激活 → useCodeMirror focus 透传（打开文件自动聚焦）", async () => {
     const focusSpy = vi.fn();
     // mockImplementation 而非 Once：container 翻 true 的重渲染再调 hook，
     // Once 只覆盖首次渲染会让二次渲染拿到另一个 focus（断言失真）
@@ -234,13 +234,15 @@ describe("EditorPanel", () => {
           params: { panelId: "editor-focus-1" },
         }),
       );
-      expect(focusSpy).toHaveBeenCalledTimes(1);
+      // 路径① focus 经 rAF 延迟一帧（等 dockview overlay 可见性翻开）；
+      // rAF 注册时机受 act flush 边界影响——waitFor 轮询覆盖
+      await waitFor(() => expect(focusSpy).toHaveBeenCalledTimes(1));
     } finally {
       mockUseCodeMirror.mockImplementation(defaultHookResult);
     }
   });
 
-  it("大文件形态（largeFile 信号非空）不抢焦——有意图也不调 focus（只读浏览登记边界）", () => {
+  it("大文件形态（largeFile 信号非空）不抢焦——有意图也不调 focus（只读浏览登记边界）", async () => {
     const focusSpy = vi.fn();
     // 信号须持续覆盖每次渲染（同上单次 Once 会在重渲染回退 null 翻回 CM 形态）
     mockUseCodeMirror.mockImplementation(() => ({
@@ -248,7 +250,10 @@ describe("EditorPanel", () => {
       focus: focusSpy,
       largeFile: { filePath: "C:/big/log.txt" },
     }));
-    mockReadFileRange.mockResolvedValue("line1\n");
+    // EOF mock（空串 = 后端「offset ≥ 文件长度」约定）：恒非空 mock 会让
+    // useLineIndex worker 在 jsdom 零高度视口下持续扫块 bump，async act 递归
+    // flush 永不排空挂死本用例（2026-09-19 实证，曾 5s 超时）
+    mockReadFileRange.mockResolvedValue("");
     markPanelFocusIntent("editor-focus-2");
     try {
       render(
@@ -257,6 +262,7 @@ describe("EditorPanel", () => {
           params: { panelId: "editor-focus-2", filePath: "C:/big/log.txt" },
         }),
       );
+      await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
       expect(focusSpy).not.toHaveBeenCalled();
     } finally {
       mockUseCodeMirror.mockImplementation(defaultHookResult);

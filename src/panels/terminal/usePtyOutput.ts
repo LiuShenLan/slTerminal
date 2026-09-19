@@ -11,6 +11,7 @@ import { useRef, useCallback } from "react";
 import type { MutableRefObject } from "react";
 import type { Terminal } from "@xterm/xterm";
 import type { PtyEvent } from "../../types";
+import { E2E_ENABLED } from "../../lib/e2eEnabled";
 import type { TabState } from "./useCommandDetection";
 
 /** DEC 2026 同步更新 ANSI 转义序列 */
@@ -198,6 +199,13 @@ export function usePtyOutput(
   /** 处理 PTY 输出事件 */
   const handlePtyOutput = useCallback(
     (event: PtyEvent) => {
+      // E2E 取证探针（生产零开销）：按 panelId 计数到达前端的输出块，
+      // 分辨「后端未产出」与「前端未接收」——window.__slterm_e2e_ptyOutputCount
+      if (E2E_ENABLED) {
+        const w = window as never as Record<string, Record<string, number>>;
+        (w.__slterm_e2e_ptyOutputCount ??= {})[_panelId] =
+          (w.__slterm_e2e_ptyOutputCount[_panelId] ?? 0) + 1;
+      }
       if (event.type === "output") {
         const rawBytes = new Uint8Array(event.data.bytes);
         // 首帧信号（遮罩隐藏用）：非空输出块到达即发，一次性

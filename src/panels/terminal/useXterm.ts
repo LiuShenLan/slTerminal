@@ -344,7 +344,7 @@ export function useXterm({
         })
         .catch((err) => {
           term.writeln(`\r\n[重新连接] 按 Enter 重试...\r\n`);
-          if (E2E_ENABLED) setTerminalSessionError(container, String(err));
+          if (E2E_ENABLED) setTerminalSessionError(container, getErrorMessage(err));
           console.error(`[H6] spawn FAIL panelId="${panelId}"`, err);
           // FE-08: 关键路径（spawn 失败）——toast 提醒用户，终端内仍写重连提示
           toast.show("error", `终端启动失败: ${getErrorMessage(err)}`);
