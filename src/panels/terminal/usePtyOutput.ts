@@ -67,6 +67,9 @@ export interface UsePtyOutputReturn {
  * @param onRetrySpawn    重连 spawn 回调 ref（Enter 触发时调用，由 useXterm 设置）
  * @param e2eBuffer       E2E 测试文本缓冲 ref（外部传入，与 __e2e_getTerminalText 共享同一缓冲）
  * @param cmdRunningRef   共享的命令运行状态 ref（由 useXterm 创建，供 useCommandDetection 写入）
+ * @param onFirstOutput   首个 PTY 输出块到达时触发一次（遮罩隐藏信号——不走 TerminalRegistry：
+ *                        后端 reader 线程先于 spawn resolve 启动，首帧可早于 register 到达，
+ *                        注册表路径会吞掉早到信号；React 回调链零时序依赖）
  */
 export function usePtyOutput(
   terminal: MutableRefObject<Terminal | null>,
@@ -76,6 +79,7 @@ export function usePtyOutput(
   onRetrySpawn?: MutableRefObject<((cols: number, rows: number) => void) | null>,
   e2eBuffer?: MutableRefObject<string[]>,
   cmdRunningRef?: MutableRefObject<boolean>,
+  onFirstOutput?: () => void,
 ): UsePtyOutputReturn {
   // ── 输出合帧缓冲区（Uint8Array 替代字符串拼接，减少 GC 压力 60-80%）──
   const pendingBufferRef = useRef<Uint8Array[]>([]);
@@ -98,6 +102,10 @@ export function usePtyOutput(
   // 回调 ref：避免 handlePtyOutput 依赖 onTabStateChange 导致重建
   const onTabStateChangeRef = useRef(onTabStateChange);
   onTabStateChangeRef.current = onTabStateChange;
+  // 首帧信号：每挂载周期只发一次（exit 不复位——重连后遮罩已隐藏，无需二次信号）
+  const onFirstOutputRef = useRef(onFirstOutput);
+  onFirstOutputRef.current = onFirstOutput;
+  const firstOutputSeenRef = useRef(false);
   // Enter 重连 disposable（供 setupRetry 管理）
   const retryDisposableRef = useRef<{ dispose: () => void } | null>(null);
   // 最近一次 retry 使用的终端尺寸（供 exit 时 setupRetry 调用）
@@ -192,6 +200,11 @@ export function usePtyOutput(
     (event: PtyEvent) => {
       if (event.type === "output") {
         const rawBytes = new Uint8Array(event.data.bytes);
+        // 首帧信号（遮罩隐藏用）：非空输出块到达即发，一次性
+        if (!firstOutputSeenRef.current && rawBytes.length > 0) {
+          firstOutputSeenRef.current = true;
+          onFirstOutputRef.current?.();
+        }
         const text = decoderRef.current.decode(rawBytes);
 
         // E2E 文本缓冲记录（用于测试验证）

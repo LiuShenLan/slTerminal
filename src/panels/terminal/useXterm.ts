@@ -94,6 +94,8 @@ export interface UseXtermOptions {
   onTabStateChange?: (state: TabState) => void;
   /** CP-020:本地中断提示回调——terminal.interrupt 命令命中时经 TerminalActions.interrupt 触发 */
   onInterrupt?: () => void;
+  /** 首个 PTY 输出块到达时触发一次（TerminalPanel 加载遮罩隐藏信号） */
+  onFirstOutput?: () => void;
 }
 
 /** useXterm hook 返回类型 */
@@ -139,7 +141,7 @@ export function canFit(
 export function useXterm({
   container, panelId,
   windowsBuildNumber, cwd, visible, fontSize,
-  onFontSizeChange, onTabStateChange, onInterrupt,
+  onFontSizeChange, onTabStateChange, onInterrupt, onFirstOutput,
 }: UseXtermOptions): UseXtermReturn {
 
   // ═══════════════════════════════════════════════════════════════
@@ -248,6 +250,7 @@ export function useXterm({
     doSpawnRef,
     e2eTextBufferRef,
     isCommandRunningRef,
+    onFirstOutput,
   );
 
   // 运行时 resize（ResizeObserver + X/Y 分离 debounce）

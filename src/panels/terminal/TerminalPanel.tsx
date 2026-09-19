@@ -19,7 +19,8 @@ import { cliProfileRegistry } from "../../features/cliProfiles";
 import { CLAUDE_CLI_ID } from "../../features/cliProfiles/profiles/claude";
 import type { DockviewPanelApi } from "dockview-react";
 
-/** 加载遮罩兜底超时（ms）——首帧数据未到达时自动隐藏 */
+/** 加载遮罩兜底超时（ms）——首帧 PTY 输出到达即隐藏（onFirstOutput）；
+ *  本定时器仅作兜底（spawn 失败/首帧永不到达时不至于永远盖死终端区） */
 const LOADING_MASK_TIMEOUT_MS = 1500;
 
 export interface TerminalPanelProps {
@@ -169,6 +170,9 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ api, params }) => {
     return () => d.dispose();
   }, [api]);
 
+  // 首帧到达即隐藏遮罩（onFirstOutput 一次性信号，经 useXterm → usePtyOutput 透传）
+  const handleFirstOutput = useCallback(() => setLoading(false), []);
+
   const { focus } = useXterm({
     container,
     cols: 80,
@@ -181,9 +185,11 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ api, params }) => {
     onFontSizeChange: setTerminalFontSize,
     onTabStateChange: handleTabStateChange,
     onInterrupt: handleInterrupt,
+    onFirstOutput: handleFirstOutput,
   });
 
-  // 首帧数据到达时隐藏加载遮罩
+  // 遮罩兜底：首帧永不到达（spawn 失败等）时 1500ms 到点强制隐藏；
+  // 首帧先到时 setLoading(false) 幂等，定时器到点再 set 一次无副作用
   useEffect(() => {
     const timer = setTimeout(() => setLoading(false), LOADING_MASK_TIMEOUT_MS);
     return () => clearTimeout(timer);

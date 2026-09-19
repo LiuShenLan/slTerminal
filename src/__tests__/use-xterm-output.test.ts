@@ -1249,3 +1249,47 @@ describe("usePtyOutput 缓冲上限与退出码（直接驱动）", () => {
     expect(result.current.getPendingBuffer()).toHaveLength(1);
   });
 });
+
+describe("onFirstOutput 首帧信号（遮罩隐藏用）", () => {
+  function renderWithFirstOutput(onFirstOutput: () => void) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const terminalRef: any = {
+      current: {
+        write: vi.fn(),
+        writeln: vi.fn(),
+        onData: vi.fn(() => ({ dispose: vi.fn() })),
+      },
+    };
+    const { result } = renderHook(() =>
+      usePtyOutput(terminalRef, "trm-fo", true, undefined, undefined, undefined, undefined, onFirstOutput),
+    );
+    return { result };
+  }
+
+  it("首个非空输出块触发一次 onFirstOutput", () => {
+    const onFirstOutput = vi.fn();
+    const { result } = renderWithFirstOutput(onFirstOutput);
+
+    result.current.handlePtyOutput({ type: "output", data: { bytes: [104, 105] } });
+    expect(onFirstOutput).toHaveBeenCalledTimes(1);
+  });
+
+  it("多次输出只发一次（firstOutputSeenRef 一次性语义）", () => {
+    const onFirstOutput = vi.fn();
+    const { result } = renderWithFirstOutput(onFirstOutput);
+
+    result.current.handlePtyOutput({ type: "output", data: { bytes: [97] } });
+    result.current.handlePtyOutput({ type: "output", data: { bytes: [98] } });
+    result.current.handlePtyOutput({ type: "exit", data: { code: 0 } });
+    result.current.handlePtyOutput({ type: "output", data: { bytes: [99] } });
+    expect(onFirstOutput).toHaveBeenCalledTimes(1);
+  });
+
+  it("exit 事件不触发首帧信号（遮罩由 1500ms 兜底覆盖退出路径）", () => {
+    const onFirstOutput = vi.fn();
+    const { result } = renderWithFirstOutput(onFirstOutput);
+
+    result.current.handlePtyOutput({ type: "exit", data: { code: 1 } });
+    expect(onFirstOutput).not.toHaveBeenCalled();
+  });
+});
