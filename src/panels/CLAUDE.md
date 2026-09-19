@@ -123,7 +123,7 @@ xterm.js 6.0.0 原生支持 OSC 8 解析渲染。`useXterm.ts` 在 `term.open()`
 
 `shell-integration.ps1` 的 Enter hook 在命令执行前发射 OSC 133 C，prompt 在命令退出后发射 OSC 133 D。`useXterm.ts` 注册 `term.parser.registerOscHandler(133, ...)`：
 
-- **OSC 133 A**：提示符渲染开始（prompt 函数每次渲染都发，含首个）→ `TerminalRegistry.markPromptReady(panelId)` 置位 `promptReady`（幂等，无 notify）——恢复注入就绪闸门信号源（见 `features/agentHistory/CLAUDE.md`）。
+- **OSC 133 A**：提示符渲染开始（prompt 函数每次渲染都发，含首个）→ `TerminalRegistry.markPromptReady(panelId)` 置位 `promptReady`（置位迁移时 notify `promptReady` 事件，重复 A 幂等不再 notify；panelId 未注册时暂存 pending、register 时落库补发——早到 A 不丢信号）——恢复注入就绪闸门信号源（见 `features/agentHistory/CLAUDE.md`）。
 - **OSC 133 C**：提取命令行文本 → `onTabStateChange({ active: true, title, status: "attention" })`；同时 `cliProfileRegistry.matchByCommand(command)` 查 profile → 命中时覆盖 `title = profile.tabTitle`，并 `setAgentSession({ cliId: profile.id })`。
 - **OSC 133 D**：命令退出 → `onTabStateChange({ active: false })`（restoreTitle 缺省 true）→ TerminalPanel 恢复原标题并单清状态；`setAgentSession(null)` → sessionChange 驱动清 logo。
 

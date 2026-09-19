@@ -40,11 +40,14 @@ export interface RegisteredTerminal {
   agentSession?: AgentSessionInfo | null;
 }
 
-/** 注册表变更事件（sessionChange 仅携 panelId——listener 经 get() 读现值，防快照不一致） */
-export type RegistryEvent = { type: "register" | "remove" | "sessionChange"; panelId: string };
+/** 注册表变更事件（sessionChange/promptReady 仅携 panelId——listener 经 get() 读现值，防快照不一致） */
+export type RegistryEvent = { type: "register" | "remove" | "sessionChange" | "promptReady"; panelId: string };
 
 const registry = new Map<string, RegisteredTerminal>();
 const listeners = new Set<(e: RegistryEvent) => void>();
+/** 早到 OSC 133;A 暂存：reader 线程先于 spawn resolve 启动，133;A 可早于 register
+ *  到达（空 profile 快机可命中）——无暂存则闸门信号永久丢失，恢复必吃 10s 超时兜底 */
+const pendingPromptReady = new Set<string>();
 
 function notify(event: RegistryEvent): void {
   for (const fn of listeners) {
@@ -59,6 +62,14 @@ export const TerminalRegistry = {
     if (old && entry.agentSession === undefined) {
       entry = { ...entry, agentSession: old.agentSession };
     }
+    // 早到 133;A 落库补发：pending 命中 → 条目即就绪 + 补发 promptReady 事件
+    if (pendingPromptReady.delete(panelId)) {
+      entry = { ...entry, promptReady: true };
+      registry.set(panelId, entry);
+      notify({ type: "register", panelId });
+      notify({ type: "promptReady", panelId });
+      return;
+    }
     registry.set(panelId, entry);
     notify({ type: "register", panelId });
   },
@@ -69,6 +80,7 @@ export const TerminalRegistry = {
 
   remove(panelId: string): boolean {
     const existed = registry.delete(panelId);
+    pendingPromptReady.delete(panelId); // 迟到 register 不复活（终端已卸载）
     if (existed) {
       notify({ type: "remove", panelId });
     }
@@ -110,15 +122,20 @@ export const TerminalRegistry = {
   },
 
   /** 标记首个提示符已渲染（OSC 133;A）——恢复注入就绪闸门信号源。
-   *  幂等（重复 A 不重复 notify——闸门只消费首次置位，经 get() 轮询读取）；
-   *  panelId 不存在时 no-op（终端已卸载的迟到 A 不建条目） */
+   *  幂等（重复 A 不重复 notify——闸门只消费首次置位）；
+   *  panelId 不存在时暂存 pending（早到 A 不丢信号，register 时落库补发） */
   markPromptReady(panelId: string): void {
     const entry = registry.get(panelId);
-    if (!entry || entry.promptReady) return;
+    if (!entry) {
+      pendingPromptReady.add(panelId);
+      return;
+    }
+    if (entry.promptReady) return;
     entry.promptReady = true;
+    notify({ type: "promptReady", panelId });
   },
 
-  /** 订阅注册表变更：register/remove/sessionChange 后同步通知。返回退订函数 */
+  /** 订阅注册表变更：register/remove/sessionChange/promptReady 后同步通知。返回退订函数 */
   subscribe(listener: (e: RegistryEvent) => void): () => void {
     listeners.add(listener);
     return () => {
@@ -140,5 +157,6 @@ export const TerminalRegistry = {
   _reset(): void {
     registry.clear();
     listeners.clear();
+    pendingPromptReady.clear();
   },
 };

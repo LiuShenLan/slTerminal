@@ -4,7 +4,7 @@
 // 测试覆盖 register/get/remove/has/_reset/setAgentSession/subscribe。
 // agentSession 为可选字段——stub 工厂不含该字段编译不炸（契约 1 设计目标）。
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { TerminalRegistry } from "../panels/terminal/TerminalRegistry";
 import type { RegisteredTerminal } from "../panels/terminal/TerminalRegistry";
 import type { Terminal } from "@xterm/xterm";
@@ -115,19 +115,22 @@ describe("TerminalRegistry.markPromptReady + shellKind", () => {
     expect(TerminalRegistry.get("p1")!.promptReady).toBe(true);
   });
 
-  it("重复 markPromptReady 幂等——不重复 notify（subscribe 零调用）", () => {
+  it("重复 markPromptReady 幂等——首次置位 notify 一次，其后零通知", () => {
     TerminalRegistry.register("p1", makeEntry());
-    const listener = () => { throw new Error("不应收到通知"); };
-    // markPromptReady 不产事件（闸门只经 get() 轮询读取）——用抛错 listener 硬断言
+    // 置位迁移产 promptReady 事件（恢复链事件驱动闸门信号源）；重复置位不重复 notify
+    const listener = vi.fn();
     TerminalRegistry.subscribe(listener);
     TerminalRegistry.markPromptReady("p1");
     TerminalRegistry.markPromptReady("p1");
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith({ type: "promptReady", panelId: "p1" });
     expect(TerminalRegistry.get("p1")!.promptReady).toBe(true);
   });
 
-  it("panelId 不存在 → no-op（不建条目）", () => {
+  it("panelId 不存在 → 暂存 pending（不建条目，register 时落库补发）", () => {
     TerminalRegistry.markPromptReady("ghost");
     expect(TerminalRegistry.has("ghost")).toBe(false);
+    // pending 语义专测见 terminal-registry-prompt-ready.test.ts
   });
 
   it("shellKind 随注册条目往返（pwsh/powershell/cmd 三值）", () => {

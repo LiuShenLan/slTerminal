@@ -19,6 +19,7 @@ import {
   markPageGroupMounted,
   getAllPageApis,
   getPageApi,
+  waitPageApi,
   findPanelForSession,
   findPageIdForPanelId,
   PAGE_API_READY_EVENT,
@@ -496,5 +497,60 @@ describe("markPageGroupMounted 事件派发", () => {
     const event = listener.mock.calls[0][0] as CustomEvent<string>;
     expect(event.detail).toBe(pageId);
     window.removeEventListener(PAGE_API_READY_EVENT, listener);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// waitPageApi 事件驱动等待（CP-042 + FE-27 signal——恢复链段 1 复用点）
+// ═══════════════════════════════════════════════════════════════
+
+describe("waitPageApi", () => {
+  it("页组已挂载 → 立即 resolve 宿主 api（不经事件）", async () => {
+    const host = registerFakeHost(["page-wait-ready"]);
+    await expect(waitPageApi("page-wait-ready", 5000)).resolves.toBe(host);
+  });
+
+  it("未挂载 → 等 slterm:page-api-ready 事件；其它页事件不放行", async () => {
+    const host = registerFakeHost([]);
+    const pending = waitPageApi("page-wait-later", 5000);
+    // 其它页事件 → 不放行（宿主仍未挂载目标页）
+    markPageGroupMounted("page-wait-other");
+    let settled = false;
+    void pending.then(() => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    markPageGroupMounted("page-wait-later");
+    await expect(pending).resolves.toBe(host);
+  });
+
+  it("超时 → resolve undefined（调用方显式失败分支）", async () => {
+    vi.useFakeTimers();
+    try {
+      registerFakeHost([]);
+      const pending = waitPageApi("page-wait-timeout", 5000);
+      await vi.advanceTimersByTimeAsync(5000);
+      await expect(pending).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("signal 已 abort → 立即 reject「已取消」（FE-27 恢复链取消语义）", async () => {
+    registerFakeHost([]);
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      waitPageApi("page-wait-abort", 5000, controller.signal),
+    ).rejects.toThrow("已取消");
+  });
+
+  it("等待中 abort → 立即 reject，不等超时", async () => {
+    registerFakeHost([]);
+    const controller = new AbortController();
+    const pending = waitPageApi("page-wait-abort-2", 60000, controller.signal);
+    const assertion = expect(pending).rejects.toThrow("已取消");
+    controller.abort();
+    await assertion; // 无定时器推进即完成——abort listener 直驱
   });
 });

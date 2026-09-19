@@ -6,9 +6,9 @@
 //   2. 页面保障：项目 pages 为空则 addPage（「页面-N」+ makeEmptyLayout 空布局，照 handleNewPage 模式）
 //   3. 页面切换：switchToPageShared(pages[0].pageId)——setProjectRoot 前置 await 由其内部保证（DBG-5）；
 //      新建页面由 Workspace 的 activePageId effect 触发惰性初始化，Dockview API 在 onReady 后注册
-//   4. 终端恢复：轮询 getPageApi（100ms×50，照 openSettingsPanel）→ addPanel(terminal，
-//      title = profile.tabTitle) → 轮询 TerminalRegistry 注册 → 就绪闸门（pwsh/powershell
-//      等首个提示符 OSC 133;A → promptReady——启动期 ConPTY 握手查询由后端按需代答
+//   4. 终端恢复：事件驱动等页 API 就绪（waitPageApi，CP-042）→ addPanel(terminal，
+//      title = profile.tabTitle) → 事件驱动等 TerminalRegistry 注册 → 就绪闸门（pwsh/powershell
+//      等首个提示符 OSC 133;A → promptReady 事件——启动期 ConPTY 握手查询由后端按需代答
 //      （ADR-0022），不再有机会拼入恢复命令前缀或吞首字节；cmd 无 shell integration
 //      固定 500ms 兜底；超时兜底仍注入，不劣于无闸门现状）→ pty.write 注入
 //      profile.history.buildRestoreInput(session, { fork })（MC-315 委托——注入内容
@@ -20,8 +20,9 @@
 import { useProjects, createProjectId, createPageId } from "../../stores/projects";
 import type { OperationPage } from "../../stores/projects";
 import { makeEmptyLayout } from "../navTree";
-import { switchToPageShared, getPageApi } from "../../workspace/pageApis";
+import { switchToPageShared, waitPageApi } from "../../workspace/pageApis";
 import { TerminalRegistry } from "../../panels/terminal/TerminalRegistry";
+import type { RegisteredTerminal } from "../../panels/terminal/TerminalRegistry";
 import { write as ptyWrite } from "../../ipc/pty";
 import { sendToastNotification } from "../../ipc/notification";
 import { normalizePath, basename } from "../../lib/path";
@@ -29,47 +30,88 @@ import { makeTerminalIdInPage } from "../../workspace/pageGroups";
 import { cliProfileRegistry } from "../cliProfiles";
 import type { AgentHistorySession } from "../../types/agentHistory";
 
-/** 轮询上限：100ms × 50 = 5s（照 openSettingsPanel / switchToPageAndFocus 模式） */
-const POLL_COUNT = 50;
-const POLL_INTERVAL_MS = 100;
+/** 段 1 页 API 等待超时（5s，事件驱动 waitPageApi 的防御底线） */
+const PAGE_API_TIMEOUT_MS = 5000;
+/** 段 2 终端注册等待超时（5s，事件驱动的防御底线） */
+const REGISTER_TIMEOUT_MS = 5000;
 
 /** 就绪闸门：首个提示符（OSC 133;A）等待超时（慢 profile 负载裕度；超时兜底仍注入） */
 const PROMPT_READY_TIMEOUT_MS = 10000;
 /** cmd 恢复注入固定延迟（cmd 无 shell integration，无 OSC 133;A 可等） */
 const CMD_RESTORE_DELAY_MS = 500;
 
-/** 轮询等待条件满足（probe 返回非 undefined 真值），超时抛错。
- *  @param signal FE-27: 可选 AbortSignal——中止后停止轮询并抛错
- *   （走统一失败路径；页面切换/新恢复发起时取消在途恢复，防误操作）
- *  @param timeoutMs 可选超时（缺省 5s = POLL_COUNT × POLL_INTERVAL_MS）
- *  导出为测试专用（FE-27 L2 直测 abort 语义；生产消费方 = 本模块内部） */
-export async function waitFor<T>(
-  probe: () => T | undefined,
-  label: string,
+/** 事件驱动等待终端注册（TerminalRegistry register 事件），超时/abort 抛错。
+ *  导出为测试专用（恢复链段 2 的 L2 直测；生产消费方 = 本模块内部） */
+export async function waitForTerminalRegister(
+  panelId: string,
   signal?: AbortSignal,
-  timeoutMs: number = POLL_COUNT * POLL_INTERVAL_MS,
-): Promise<T> {
-  const maxIterations = Math.max(1, Math.ceil(timeoutMs / POLL_INTERVAL_MS));
-  for (let i = 0; i < maxIterations; i++) {
-    if (signal?.aborted) {
-      throw new Error(`${label} 已取消`);
-    }
-    const value = probe();
-    if (value !== undefined) return value;
-    // FE-48：abort 感知轮询——abort 时立即 clearTimeout + resolve，不等下一 tick
-    //（循环顶部 signal?.aborted 检查在下一轮抛「已取消」——abort 后 resolve 落入顶部即退出）
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, POLL_INTERVAL_MS);
-      signal?.addEventListener(
-        "abort",
-        () => { clearTimeout(timer); resolve(); },
-        { once: true },
-      );
+  timeoutMs: number = REGISTER_TIMEOUT_MS,
+): Promise<RegisteredTerminal> {
+  const label = `终端面板 ${panelId} 的 PTY 会话`;
+  const existing = TerminalRegistry.get(panelId);
+  if (existing) return existing;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error(`${label} 在 ${timeoutMs / 1000}s 内未就绪`));
+    }, timeoutMs);
+    const unsubscribe = TerminalRegistry.subscribe((e) => {
+      if (e.type !== "register" || e.panelId !== panelId) return;
+      cleanup();
+      // register 事件先于 set 完成不可能（notify 在 set 后）——直取现值
+      resolve(TerminalRegistry.get(panelId)!);
     });
-  }
-  throw new Error(
-    `${label} 在 ${timeoutMs / 1000}s 内未就绪`,
-  );
+    const onAbort = () => {
+      cleanup();
+      reject(new Error(`${label} 已取消`));
+    };
+    const cleanup = () => {
+      clearTimeout(timer);
+      unsubscribe();
+      signal?.removeEventListener("abort", onAbort);
+    };
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/** 事件驱动等待首个提示符（promptReady 事件），超时/abort 抛错。
+ *  导出为测试专用（恢复链段 3 闸门的 L2 直测；生产消费方 = 本模块内部） */
+export async function waitForPromptReady(
+  panelId: string,
+  signal?: AbortSignal,
+  timeoutMs: number = PROMPT_READY_TIMEOUT_MS,
+): Promise<void> {
+  const label = `终端面板 ${panelId} 的首个提示符`;
+  if (TerminalRegistry.get(panelId)?.promptReady) return;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error(`${label} 在 ${timeoutMs / 1000}s 内未就绪`));
+    }, timeoutMs);
+    const unsubscribe = TerminalRegistry.subscribe((e) => {
+      if (e.type !== "promptReady" || e.panelId !== panelId) return;
+      cleanup();
+      resolve();
+    });
+    const onAbort = () => {
+      cleanup();
+      reject(new Error(`${label} 已取消`));
+    };
+    const cleanup = () => {
+      clearTimeout(timer);
+      unsubscribe();
+      signal?.removeEventListener("abort", onAbort);
+    };
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 /** abort 感知固定延迟（cmd 恢复注入兜底用；abort 立即 reject 走统一失败路径） */
@@ -183,12 +225,11 @@ async function doRestore(
   // 步骤 3：页面切换——setProjectRoot 前置 await 由 switchToPageShared 内部保证（DBG-5）
   await switchToPageShared(targetPageId);
 
-  // 步骤 4：终端恢复——轮询 API 就绪 → addPanel → 轮询 TerminalRegistry → 注入恢复命令
-  const api = await waitFor(
-    () => getPageApi(targetPageId),
-    `页面 ${targetPageId} 的 DockviewApi`,
-    signal, // FE-27: 四步共享 Controller——页面切换/新恢复发起时中止轮询
-  );
+  // 步骤 4：终端恢复——事件驱动等页 API 就绪 → addPanel → 等注册事件 → 注入恢复命令
+  const api = await waitPageApi(targetPageId, PAGE_API_TIMEOUT_MS, signal);
+  if (!api) {
+    throw new Error(`页面 ${targetPageId} 的 DockviewApi 在 5s 内未就绪`);
+  }
   // CP-004: panelId 经页前缀协议单点 makeTerminalIdInPage（"{pageId}:terminal-N"，
   // local 计数模块级每页共享——与 workspace 各新建入口同源，防同页 localId 碰撞）
   const panelId = makeTerminalIdInPage(targetPageId);
@@ -203,11 +244,7 @@ async function doRestore(
     renderer: "always",
   });
 
-  const entry = await waitFor(
-    () => TerminalRegistry.get(panelId),
-    `终端面板 ${panelId} 的 PTY 会话`,
-    signal, // FE-27: 四步共享 Controller——页面切换/新恢复发起时中止轮询
-  );
+  const entry = await waitForTerminalRegister(panelId, signal);
 
   // 就绪闸门：首个提示符渲染（OSC 133;A → promptReady）后才注入——启动期
   // ConPTY 握手查询（DA1/DSR）由后端按需代答（ADR-0022），不再有机会拼入
@@ -217,15 +254,7 @@ async function doRestore(
     await delayWithAbort(CMD_RESTORE_DELAY_MS, signal);
   } else {
     try {
-      await waitFor(
-        () => {
-          const e = TerminalRegistry.get(panelId);
-          return e?.promptReady ? e : undefined;
-        },
-        `终端面板 ${panelId} 的首个提示符`,
-        signal,
-        PROMPT_READY_TIMEOUT_MS,
-      );
+      await waitForPromptReady(panelId, signal, PROMPT_READY_TIMEOUT_MS);
     } catch (err) {
       if (signal.aborted) throw err; // 取消语义穿透（FE-27）
       // 超时兜底注入——console.warn 留痕，不阻断恢复

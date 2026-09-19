@@ -102,6 +102,7 @@ const h = vi.hoisted(() => {
     mockGetInjectionStatus: vi.fn(),
     mockSwitchToPageShared: vi.fn(),
     mockGetPageApi: vi.fn(),
+    mockWaitPageApi: vi.fn(),
     mockSwitchToPageAndFocus: vi.fn(),
     mockFit: vi.fn(),
     mockProposeDimensions: vi.fn(),
@@ -283,6 +284,7 @@ vi.mock("../features/navTree/NavTree", () => ({
 vi.mock("../workspace/pageApis", () => ({
   switchToPageShared: h.mockSwitchToPageShared,
   getPageApi: h.mockGetPageApi,
+  waitPageApi: h.mockWaitPageApi,
   switchToPageAndFocus: h.mockSwitchToPageAndFocus,
 }));
 
@@ -793,11 +795,12 @@ describe("AC-4⑤ 恢复注入", () => {
     resetStores();
     h.mockSwitchToPageShared.mockReset().mockResolvedValue(undefined);
     h.mockGetPageApi.mockReset();
+    h.mockWaitPageApi.mockReset();
     h.mockPtyWrite.mockReset().mockResolvedValue(undefined);
     h.mockSendToastNotification.mockReset();
     apiStub = {
       addPanel: vi.fn((args: { id: string }) => {
-        // 模拟真实 Dockview addPanel → TerminalRegistry 注册（恢复编排 waitFor 轮询命中）
+        // 模拟真实 Dockview addPanel → TerminalRegistry 注册（恢复编排注册等待直查命中）
         TerminalRegistry.register(args.id, {
           term: new Terminal() as unknown as Terminal,
           sessionId: "session-test-1",
@@ -811,6 +814,7 @@ describe("AC-4⑤ 恢复注入", () => {
       }),
     };
     h.mockGetPageApi.mockReturnValue(apiStub);
+    h.mockWaitPageApi.mockResolvedValue(apiStub);
     consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   });
 

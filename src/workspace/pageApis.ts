@@ -243,14 +243,17 @@ export async function openSettingsPanel(
   return true;
 }
 
-/** 等待页面 DockviewApi 注册——事件驱动（PAGE_API_READY_EVENT）+ 超时防御底线 */
-function waitPageApi(
+/** 等待页面 DockviewApi 注册——事件驱动（PAGE_API_READY_EVENT）+ 超时防御底线
+ *  （超时 resolve undefined，调用方显式失败分支）；
+ *  signal 可选（FE-27 恢复链共享 Controller）——abort 立即 reject「已取消」 */
+export function waitPageApi(
   pageId: string,
   timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<DockviewApi | undefined> {
   const existing = getPageApi(pageId);
   if (existing) return Promise.resolve(existing);
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const onReady = (e: Event) => {
       if ((e as CustomEvent<string>).detail !== pageId) return;
       cleanup();
@@ -260,11 +263,21 @@ function waitPageApi(
       cleanup();
       resolve(undefined);
     }, timeoutMs);
+    const onAbort = () => {
+      cleanup();
+      reject(new Error(`页面 ${pageId} 的 DockviewApi 已取消`));
+    };
     const cleanup = () => {
       clearTimeout(timer);
       window.removeEventListener(PAGE_API_READY_EVENT, onReady);
+      signal?.removeEventListener("abort", onAbort);
     };
     window.addEventListener(PAGE_API_READY_EVENT, onReady);
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
 

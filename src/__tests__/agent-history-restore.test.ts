@@ -3,8 +3,9 @@
 // mock 边界（只守 JS 侧形状，真实编排由 Stage 06 E2E 兜底）：
 //   stores/projects(useProjects.getState + ID 生成)、features/navTree(makeEmptyLayout,
 //   NAV-06 随 SidebarTree 退役迁入——mock 目标即 ../features/navTree/NavTree)、
-//   workspace/pageApis（switchToPageShared/getPageApi）、ipc/pty（write）、
-//   panels/terminal/TerminalRegistry（get）、ipc/notification（sendToastNotification）
+//   workspace/pageApis（switchToPageShared/waitPageApi）、ipc/pty（write）、
+//   panels/terminal/TerminalRegistry（get/subscribe——事件驱动恢复链的事件派发面）、
+//   ipc/notification（sendToastNotification）
 // 全部 mock 经 vi.hoisted() 创建，确保模块级 vi.mock 执行前就绪（项目测试惯例）。
 //
 // Stage 05（MC-315）：第 4 步注入内容 = profile.history.buildRestoreInput 输出、
@@ -13,16 +14,21 @@
 // side-effect import profiles 注册
 // 真实 claude profile（claude-history-cap 交付），注入内容断言与 claude 策略输出
 // 逐字一致（`claude --resume <id>` + fork 追加 ` --fork-session` + `\r` 结尾）。
+//
+// 恢复链三段等待 = 事件驱动（waitPageApi / register 事件 / promptReady 事件），
+// 本测试经 mockSubscribe 捕获 listener 主动派发事件驱动——零轮询空转即防复发锁。
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   restoreHistorySession,
-  waitFor,
+  waitForTerminalRegister,
+  waitForPromptReady,
 } from "../features/agentHistory/restoreSession";
 import { resetTerminalPanelSeq } from "../lib/panelId";
 import "../features/cliProfiles/profiles";
 import type { AgentHistorySession } from "../types/agentHistory";
 import type { Project, OperationPage } from "../stores/projects";
+import type { RegistryEvent } from "../panels/terminal/TerminalRegistry";
 
 // ── vi.hoisted 共享 mock 状态 ──────────────────────────────
 
@@ -31,8 +37,14 @@ const h = vi.hoisted(() => {
   const mockAddProject = vi.fn();
   const mockAddPage = vi.fn();
   const mockSwitchToPageShared = vi.fn();
-  const mockGetPageApi = vi.fn();
+  const mockWaitPageApi = vi.fn();
   const mockTerminalRegistryGet = vi.fn();
+  // subscribe 捕获 listener——测试经 fireRegistryEvent 主动派发事件
+  let registryListeners: ((e: RegistryEvent) => void)[] = [];
+  const mockSubscribe = vi.fn((listener: (e: RegistryEvent) => void) => {
+    registryListeners.push(listener);
+    return vi.fn(); // 退订 no-op（断言语义在事件派发侧）
+  });
   const mockPtyWrite = vi.fn();
   const mockSendToastNotification = vi.fn();
   return {
@@ -48,8 +60,15 @@ const h = vi.hoisted(() => {
     mockAddProject,
     mockAddPage,
     mockSwitchToPageShared,
-    mockGetPageApi,
+    mockWaitPageApi,
     mockTerminalRegistryGet,
+    mockSubscribe,
+    fireRegistryEvent: (e: RegistryEvent) => {
+      for (const l of registryListeners) l(e);
+    },
+    resetRegistryListeners: () => {
+      registryListeners = [];
+    },
     mockPtyWrite,
     mockSendToastNotification,
   };
@@ -68,7 +87,7 @@ vi.mock("../features/navTree/NavTree", () => ({
 
 vi.mock("../workspace/pageApis", () => ({
   switchToPageShared: h.mockSwitchToPageShared,
-  getPageApi: h.mockGetPageApi,
+  waitPageApi: h.mockWaitPageApi,
 }));
 
 vi.mock("../ipc/pty", () => ({
@@ -76,7 +95,10 @@ vi.mock("../ipc/pty", () => ({
 }));
 
 vi.mock("../panels/terminal/TerminalRegistry", () => ({
-  TerminalRegistry: { get: h.mockTerminalRegistryGet },
+  TerminalRegistry: {
+    get: h.mockTerminalRegistryGet,
+    subscribe: h.mockSubscribe,
+  },
 }));
 
 vi.mock("../ipc/notification", () => ({
@@ -126,6 +148,11 @@ function makePage(overrides: Partial<OperationPage> = {}): OperationPage {
   };
 }
 
+/** 从 addPanel 调用记录提取本次恢复的 panelId（事件派发匹配用） */
+function panelIdOf(apiStub: { addPanel: ReturnType<typeof vi.fn> }): string {
+  return (apiStub.addPanel.mock.calls[0][0] as { id: string }).id;
+}
+
 describe("restoreHistorySession 四步恢复编排", () => {
   let apiStub: { addPanel: ReturnType<typeof vi.fn> };
   let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
@@ -136,13 +163,15 @@ describe("restoreHistorySession 四步恢复编排", () => {
     h.mockAddProject.mockReset();
     h.mockAddPage.mockReset();
     h.mockSwitchToPageShared.mockReset().mockResolvedValue(undefined);
-    h.mockGetPageApi.mockReset();
+    h.mockWaitPageApi.mockReset();
     h.mockTerminalRegistryGet.mockReset();
+    h.mockSubscribe.mockClear();
+    h.resetRegistryListeners();
     h.mockPtyWrite.mockReset().mockResolvedValue(undefined);
     h.mockSendToastNotification.mockReset();
     apiStub = { addPanel: vi.fn() };
-    h.mockGetPageApi.mockReturnValue(apiStub);
-    // 默认桩：pwsh + 首个提示符已渲染——就绪闸门立即放行（不空转 10s 超时兜底）
+    h.mockWaitPageApi.mockResolvedValue(apiStub);
+    // 默认桩：pwsh + 首个提示符已渲染——就绪闸门直查命中立即放行（不等事件不空转超时）
     h.mockTerminalRegistryGet.mockReturnValue({
       sessionId: "session-test-1",
       shellKind: "pwsh",
@@ -183,7 +212,7 @@ describe("restoreHistorySession 四步恢复编排", () => {
     expect(h.mockSwitchToPageShared).toHaveBeenCalledTimes(1);
     expect(h.mockSwitchToPageShared).toHaveBeenCalledWith("page-restore-test");
 
-    // 步骤 4a：addPanel 参数（B14：panelId = terminal-{pageId}-{seq} 单点生成，cwd 透传；
+    // 步骤 4a：addPanel 参数（B14：panelId 页前缀协议单点生成，cwd 透传；
     // 人工验证问题 3：初始标题 = session.title（历史回退链合成结果））
     expect(apiStub.addPanel).toHaveBeenCalledTimes(1);
     expect(apiStub.addPanel).toHaveBeenCalledWith({
@@ -292,7 +321,7 @@ describe("restoreHistorySession 四步恢复编排", () => {
     const [firstId, secondId] = apiStub.addPanel.mock.calls.map(
       (call) => (call[0] as { id: string }).id,
     );
-    // 每页计数确定性递增：首次 terminal-{pageId}-0、二次 -1
+    // 每页计数确定性递增：首次 terminal-0、二次 terminal-1（页前缀协议形态）
     expect(firstId).toBe("page-restore-test:terminal-0");
     expect(secondId).toBe("page-restore-test:terminal-1");
   });
@@ -365,29 +394,21 @@ describe("restoreHistorySession 四步恢复编排", () => {
     expect(h.mockPtyWrite).not.toHaveBeenCalled();
   });
 
-  it("FE-27: getPageApi 恒不就绪 → waitFor 超时 → 统一失败 toast，不 addPanel（signal 接线不破坏超时路径）", async () => {
-    vi.useFakeTimers();
-    try {
-      h.mockGetPageApi.mockReturnValue(undefined);
-      const pending = restoreHistorySession(makeSession());
-      // 越过 50×100ms 轮询上限 → waitFor 抛超时错 → 外层 toast
-      await vi.advanceTimersByTimeAsync(50 * 100);
-      await pending;
+  it("FE-27: 页 API 不就绪（waitPageApi 超时返 undefined）→ 统一失败 toast，不 addPanel", async () => {
+    h.mockWaitPageApi.mockResolvedValue(undefined);
+    await restoreHistorySession(makeSession());
 
-      expect(h.mockSendToastNotification).toHaveBeenCalledWith(
-        "恢复会话失败",
-        expect.objectContaining({ body: expect.stringContaining("5s 内未就绪") }),
-      );
-      expect(apiStub.addPanel).not.toHaveBeenCalled();
-      expect(h.mockPtyWrite).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(h.mockSendToastNotification).toHaveBeenCalledWith(
+      "恢复会话失败",
+      expect.objectContaining({ body: expect.stringContaining("5s 内未就绪") }),
+    );
+    expect(apiStub.addPanel).not.toHaveBeenCalled();
+    expect(h.mockPtyWrite).not.toHaveBeenCalled();
   });
 });
 
 // ═══════════════════════════════════════════════════════════════════
-// 恢复注入就绪闸门（OSC 133;A → promptReady；cmd 固定 500ms；超时兜底注入）
+// 恢复注入就绪闸门（OSC 133;A → promptReady 事件；cmd 固定 500ms；超时兜底注入）
 // ═══════════════════════════════════════════════════════════════════
 describe("restoreHistorySession 就绪闸门", () => {
   let apiStub: { addPanel: ReturnType<typeof vi.fn> };
@@ -399,12 +420,14 @@ describe("restoreHistorySession 就绪闸门", () => {
     h.mockAddProject.mockReset();
     h.mockAddPage.mockReset();
     h.mockSwitchToPageShared.mockReset().mockResolvedValue(undefined);
-    h.mockGetPageApi.mockReset();
+    h.mockWaitPageApi.mockReset();
     h.mockTerminalRegistryGet.mockReset();
+    h.mockSubscribe.mockClear();
+    h.resetRegistryListeners();
     h.mockPtyWrite.mockReset().mockResolvedValue(undefined);
     h.mockSendToastNotification.mockReset();
     apiStub = { addPanel: vi.fn() };
-    h.mockGetPageApi.mockReturnValue(apiStub);
+    h.mockWaitPageApi.mockResolvedValue(apiStub);
     consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   });
 
@@ -412,29 +435,24 @@ describe("restoreHistorySession 就绪闸门", () => {
     consoleErrorSpy.mockRestore();
   });
 
-  it("promptReady 到达后注入（首个提示符渲染完成才写命令）", async () => {
-    vi.useFakeTimers();
-    try {
-      const entry = { sessionId: "session-test-1", shellKind: "pwsh", promptReady: false };
-      h.mockTerminalRegistryGet.mockReturnValue(entry);
+  it("promptReady 事件到达即注入（事件驱动——零轮询 tick，防复发锁）", async () => {
+    const entry = { sessionId: "session-test-1", shellKind: "pwsh", promptReady: false };
+    h.mockTerminalRegistryGet.mockReturnValue(entry);
 
-      const pending = restoreHistorySession(makeSession());
-      // 轮询注册就绪期间不注入
-      await vi.advanceTimersByTimeAsync(500);
-      expect(h.mockPtyWrite).not.toHaveBeenCalled();
+    const pending = restoreHistorySession(makeSession());
+    // 等编排推进到闸门订阅（直查未命中 → subscribe 等 promptReady 事件）
+    await vi.waitFor(() => expect(h.mockSubscribe).toHaveBeenCalled());
+    expect(h.mockPtyWrite).not.toHaveBeenCalled();
 
-      // 模拟 OSC 133;A 到达 → promptReady 置位 → 下一轮轮询（100ms）放行注入
-      entry.promptReady = true;
-      await vi.advanceTimersByTimeAsync(200);
-      await pending;
+    // 模拟 OSC 133;A 到达 → markPromptReady → promptReady 事件 → 立即放行注入
+    // （不经任何定时器推进——事件驱动语义断言）
+    h.fireRegistryEvent({ type: "promptReady", panelId: panelIdOf(apiStub) });
+    await pending;
 
-      expect(h.mockPtyWrite).toHaveBeenCalledTimes(1);
-      const [sessionId, , data] = h.mockPtyWrite.mock.calls[0] as [string, string, Uint8Array];
-      expect(sessionId).toBe("session-test-1");
-      expect(new TextDecoder().decode(data)).toBe(`claude --resume ${SESSION_ID}\r`);
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(h.mockPtyWrite).toHaveBeenCalledTimes(1);
+    const [sessionId, , data] = h.mockPtyWrite.mock.calls[0] as [string, string, Uint8Array];
+    expect(sessionId).toBe("session-test-1");
+    expect(new TextDecoder().decode(data)).toBe(`claude --resume ${SESSION_ID}\r`);
   });
 
   it("promptReady 永不到达 → 10s 超时兜底仍注入 + console.warn 留痕", async () => {
@@ -444,10 +462,14 @@ describe("restoreHistorySession 就绪闸门", () => {
       h.mockTerminalRegistryGet.mockReturnValue({
         sessionId: "session-test-1",
         shellKind: "pwsh",
-        promptReady: false
+        promptReady: false,
       });
 
       const pending = restoreHistorySession(makeSession());
+      // 推进微任务链到闸门订阅（事件驱动等待无轮询 tick，0ms 推进即落定）
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.mockSubscribe).toHaveBeenCalled();
+
       await vi.advanceTimersByTimeAsync(10000);
       await pending;
 
@@ -467,7 +489,7 @@ describe("restoreHistorySession 就绪闸门", () => {
       h.mockTerminalRegistryGet.mockReturnValue({
         sessionId: "session-test-1",
         shellKind: "cmd",
-        promptReady: false
+        promptReady: false,
       });
 
       const pending = restoreHistorySession(makeSession());
@@ -483,17 +505,17 @@ describe("restoreHistorySession 就绪闸门", () => {
     }
   });
 
-  it("闸门超时 = 10s 自定义预算（非 waitFor 缺省 5s）：10s 前不注入不报错", async () => {
+  it("闸门超时 = 10s 自定义预算（非段 2 的 5s）：10s 前不注入不报错", async () => {
     vi.useFakeTimers();
     try {
       h.mockTerminalRegistryGet.mockReturnValue({
         sessionId: "session-test-1",
         shellKind: "pwsh",
-        promptReady: false
+        promptReady: false,
       });
 
       const pending = restoreHistorySession(makeSession());
-      // 越过缺省 5s 上限仍不注入——证明闸门用了 PROMPT_READY_TIMEOUT_MS=10s 参数
+      // 越过 5s 仍不注入——证明闸门用 PROMPT_READY_TIMEOUT_MS=10s 参数
       await vi.advanceTimersByTimeAsync(9999);
       expect(h.mockPtyWrite).not.toHaveBeenCalled();
       expect(h.mockSendToastNotification).not.toHaveBeenCalled();
@@ -507,69 +529,101 @@ describe("restoreHistorySession 就绪闸门", () => {
     }
   });
 
-  it("取消语义穿透：闸门 waitFor 抛错时 signal 已 abort → 不兜底注入（分支守卫）", async () => {
+  it("取消语义穿透：闸门等待 abort → reject 已取消（不兜底注入的分支守卫等价锁定）", async () => {
     // 分支覆盖：`catch (err) { if (signal.aborted) throw err; }`——
     // 公共 API 层防重入（restoring）先于 abort() 返回，在途闸门无法经
     // restoreHistorySession 二次调用 abort（FE-27 防御性死路径，已口头登记）；
-    // 本用例经 waitFor 直测锁定等价语义：超时错 + 已 abort signal → 错误原样穿透
+    // 本用例经 waitForPromptReady 直测锁定等价语义：已 abort signal → 「已取消」reject
+    const controller = new AbortController();
+    h.mockTerminalRegistryGet.mockReturnValue({
+      sessionId: "session-test-1",
+      shellKind: "pwsh",
+      promptReady: false,
+    });
+    controller.abort();
+    await expect(
+      waitForPromptReady("page-restore-test:terminal-0", controller.signal),
+    ).rejects.toThrow("已取消");
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// 事件驱动等待 helper 直测（FE-27 abort 语义 / 直查命中 / 超时）
+// ═══════════════════════════════════════════════════════════════════
+describe("waitForTerminalRegister / waitForPromptReady", () => {
+  beforeEach(() => {
+    h.mockTerminalRegistryGet.mockReset();
+    h.mockSubscribe.mockClear();
+    h.resetRegistryListeners();
+  });
+
+  it("register 直查命中 → 立即返回条目，不订阅", async () => {
+    const entry = { sessionId: "s", shellKind: "pwsh", promptReady: false };
+    h.mockTerminalRegistryGet.mockReturnValue(entry);
+
+    await expect(waitForTerminalRegister("p1")).resolves.toBe(entry);
+    expect(h.mockSubscribe).not.toHaveBeenCalled();
+  });
+
+  it("未注册 → subscribe 等 register 事件，事件到达即 resolve 现值", async () => {
+    const entry = { sessionId: "s", shellKind: "pwsh", promptReady: false };
+    h.mockTerminalRegistryGet.mockReturnValueOnce(undefined).mockReturnValue(entry);
+
+    const pending = waitForTerminalRegister("p2");
+    await vi.waitFor(() => expect(h.mockSubscribe).toHaveBeenCalled());
+    h.fireRegistryEvent({ type: "register", panelId: "p2" });
+    await expect(pending).resolves.toBe(entry);
+  });
+
+  it("其它 panelId / 其它事件类型 → 不放行", async () => {
+    const entry = { sessionId: "s", shellKind: "pwsh", promptReady: false };
+    h.mockTerminalRegistryGet.mockReturnValueOnce(undefined).mockReturnValue(entry);
+
+    const pending = waitForTerminalRegister("p3", undefined, 50);
+    await vi.waitFor(() => expect(h.mockSubscribe).toHaveBeenCalled());
+    h.fireRegistryEvent({ type: "register", panelId: "other" });
+    h.fireRegistryEvent({ type: "promptReady", panelId: "p3" });
+    h.fireRegistryEvent({ type: "remove", panelId: "p3" });
+    // 50ms 超时 reject 证明上述事件均未放行
+    await expect(pending).rejects.toThrow("在 0.05s 内未就绪");
+  });
+
+  it("signal 已 abort → 即抛「已取消」", async () => {
+    h.mockTerminalRegistryGet.mockReturnValue(undefined);
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      waitForTerminalRegister("p4", controller.signal),
+    ).rejects.toThrow("终端面板 p4 的 PTY 会话 已取消");
+  });
+
+  it("等待中 abort → 立即 reject 不等超时（FE-48 语义平移）", async () => {
+    h.mockTerminalRegistryGet.mockReturnValue(undefined);
+    const controller = new AbortController();
+    const pending = waitForTerminalRegister("p5", controller.signal, 60000);
+    const assertion = expect(pending).rejects.toThrow("已取消");
+    controller.abort();
+    await assertion; // 无定时器推进即完成——abort listener 直驱
+  });
+
+  it("promptReady 已置位 → 直查命中立即返回，不订阅", async () => {
+    h.mockTerminalRegistryGet.mockReturnValue({ promptReady: true });
+    await expect(waitForPromptReady("p6")).resolves.toBeUndefined();
+    expect(h.mockSubscribe).not.toHaveBeenCalled();
+  });
+
+  it("promptReady 未置位 → subscribe 等事件，超时 reject「10s 内未就绪」", async () => {
     vi.useFakeTimers();
     try {
-      const controller = new AbortController();
-      const pending = waitFor(() => undefined, "闸门条件", controller.signal, 10000);
-      const assertion = expect(pending).rejects.toThrow("闸门条件 已取消");
-      controller.abort();
-      await vi.advanceTimersByTimeAsync(0);
+      h.mockTerminalRegistryGet.mockReturnValue({ promptReady: false });
+      const pending = waitForPromptReady("p7", undefined, 10000);
+      const assertion = expect(pending).rejects.toThrow(
+        "终端面板 p7 的首个提示符 在 10s 内未就绪",
+      );
+      await vi.advanceTimersByTimeAsync(10000);
       await assertion;
     } finally {
       vi.useRealTimers();
     }
-  });
-});
-
-describe("FE-27 waitFor AbortSignal", () => {
-  it("signal 已 abort → 第一轮即抛「已取消」，probe 未被调用", async () => {
-    const controller = new AbortController();
-    controller.abort();
-    const probe = vi.fn(() => undefined);
-
-    await expect(waitFor(probe, "测试条件", controller.signal)).rejects.toThrow(
-      "测试条件 已取消",
-    );
-    expect(probe).not.toHaveBeenCalled();
-  });
-
-  it("轮询中 abort → 停止轮询抛「已取消」，probe 次数停在 abort 前", async () => {
-    vi.useFakeTimers();
-    try {
-      const controller = new AbortController();
-      const probe = vi.fn(() => undefined);
-      const pending = waitFor(probe, "测试条件", controller.signal);
-
-      // 300ms 推进内共 4 次 probe：t=0 首次 + 100/200/300 三个定时器各触发一次
-      await vi.advanceTimersByTimeAsync(300);
-      expect(probe).toHaveBeenCalledTimes(4);
-
-      // abort → FE-48：abort listener 立即 clearTimeout + resolve，不等 100ms 定时器——
-      // 下一轮循环开头检查 aborted → 抛「已取消」；advance 0 即完成（原实现须再推进
-      // 100ms 定时器到期才能进下一轮）。先注册 rejects 断言再推进——推进触发 reject
-      // 时 handler 须已就位（防 unhandled rejection）
-      controller.abort();
-      const abortAssertion = expect(pending).rejects.toThrow("测试条件 已取消");
-      await vi.advanceTimersByTimeAsync(0);
-      await abortAssertion;
-      expect(probe).toHaveBeenCalledTimes(4); // abort 后不再轮询
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("无 signal 后向兼容：条件满足即返回，超时仍抛错", async () => {
-    let calls = 0;
-    const probe = vi.fn(() => {
-      calls += 1;
-      return calls >= 3 ? "ready" : undefined;
-    });
-    await expect(waitFor(probe, "测试条件")).resolves.toBe("ready");
-    expect(calls).toBe(3);
   });
 });

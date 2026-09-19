@@ -53,13 +53,14 @@ Agent 历史会话查询与恢复（CLI 无关聚合，MC-310 泛化）。**宿�
 1. 项目入列：`useProjects` 查 rootPath 与 `session.cwd` 规范化相等的项目，无则 `addProject`。
 2. 页面保障：项目 pages 为空则 `addPage`（默认名 + `makeEmptyLayout()` 空布局）。
 3. 页面切换：`switchToPageShared(targetPageId)`（setProjectRoot 前置 await 由其内部保证，DBG-5）。
-4. 终端恢复：轮询 `getPageApi`（100ms×50）→ `addPanel(terminal, ...)` → 轮询 `TerminalRegistry.get(panelId)` → **就绪闸门** → `pty.write` 注入 `profile.history.buildRestoreInput(session, { fork })`（MC-315 委托）。
+4. 终端恢复：事件驱动等页 API 就绪（`waitPageApi`，CP-042）→ `addPanel(terminal, ...)` → 事件驱动等 `TerminalRegistry` register 事件 → **就绪闸门** → `pty.write` 注入 `profile.history.buildRestoreInput(session, { fork })`（MC-315 委托）。
 
-**就绪闸门（2026-09，Win10 DA1 污染修复 + DSR 按需代答）**：注册命中后不立即注入——启动期 ConPTY 握手字节会拼入恢复命令前缀。`shellKind`（pty.spawn 返回）分派等待策略：
+**就绪闸门（2026-09，Win10 DA1 污染修复 + DSR 按需代答；同日事件驱动化）**：注册命中后不立即注入——启动期 ConPTY 握手字节会拼入恢复命令前缀。`shellKind`（pty.spawn 返回）分派等待策略：
 
-- `pwsh`/`powershell`：等首个提示符渲染——OSC 133;A（`TerminalRegistry.promptReady`）置位即放行；100ms 轮询，超时 10s 兜底**仍注入** + `console.warn` 留痕（不劣于无闸门现状）。
+- `pwsh`/`powershell`：等首个提示符渲染——OSC 133;A（`TerminalRegistry.promptReady`）置位即放行；**事件驱动**（subscribe promptReady 事件，直查命中零等待），超时 10s 兜底**仍注入** + `console.warn` 留痕（不劣于无闸门现状）。
 - `cmd`：无 shell integration（133;A 永不到达）→ 固定延迟 500ms 后注入。
 - 闸门全程共享 FE-27 AbortSignal；abort 穿透不兜底注入。
+- **早到 A 竞态加固**：133;A 可早于 register 到达（reader 线程先于 spawn resolve 启动）——`markPromptReady` 对未注册 panelId 暂存 pending，register 时落库补发事件（无暂存则信号丢失必吃 10s 超时）。
 
 纠错注记（ADR-0022 同日追加）：曾按「133;A 是渲染开始而非完成，渲染窗口吞首字节」假设叠加 100ms 输出沉淀窗（`lastOutputAt` 打点）——Win10 实测未命中根因。真实根因 = spawn 盲注 CPR 在 Win10 捆绑 conhost（握手发 DA1 不发 DSR）无人消费 → 被解析为 F3 键吞下一个输入字符；修复后沉淀窗整族（字段/打点/判据/用例）已撤，闸门回归纯 promptReady 判定。
 
@@ -67,7 +68,7 @@ Agent 历史会话查询与恢复（CLI 无关聚合，MC-310 泛化）。**宿�
 
 - 初始标题 = `session.title ?? session.sessionId.slice(0, 8)`（人工验证问题 3）。
 - **B14/CP-004**：panelId 经页前缀协议单点 `makeTerminalIdInPage`（`pageGroups.ts`——完整 id = `{pageId}:terminal-N`，local 计数模块级每页共享，与 workspace 各新建入口同源）——旧格式含 Date.now 数字段破坏解析，经布局迁移页前缀化后运行期不再产生。
-- **FE-27 可取消**：`waitFor` 接受 `AbortSignal`；模块级 `restoreAbortRef` Controller，新恢复发起时 abort 上一轮在途恢复。
+- **FE-27 可取消**：事件驱动等待（`waitPageApi` / `waitForTerminalRegister` / `waitForPromptReady`）接受 `AbortSignal`；模块级 `restoreAbortRef` Controller，新恢复发起时 abort 上一轮在途恢复。
 - 防重入：模块级 `restoring` 标记。
 - 失败：任何步骤异常 → `sendToastNotification("恢复会话失败", ...)` + console.error。
 - 孤儿/无 cwd 行的禁用判定由调用方负责。
