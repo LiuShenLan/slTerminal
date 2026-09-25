@@ -28,6 +28,7 @@ vi.mock("../ipc/fs", () => ({
 vi.mock("../ipc/git", () => ({ gitDiff: mockGitDiff }));
 vi.mock("../ipc/notify", () => ({
   onFsEvent: vi.fn(() => () => {}),
+  onFsPoll: vi.fn(() => () => {}),
   startWatch: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("../ipc/dialog", () => ({ save: vi.fn() }));

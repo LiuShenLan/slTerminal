@@ -678,6 +678,51 @@ describe('onFsEvent 合约（wrapper 行为契约）', () => {
   });
 });
 
+// ── onFsPoll（fs-poll 心跳订阅）——wrapper 行为契约（同 onFsEvent 形态）────
+
+describe('onFsPoll 合约（wrapper 行为契约）', () => {
+  it('onFsPoll: 应调用 listen("fs-poll", callback)', () => {
+    const mockUnlisten = vi.fn();
+    vi.mocked(listen).mockResolvedValue(mockUnlisten);
+
+    const cb = vi.fn();
+    notify.onFsPoll(cb);
+
+    expect(listen).toHaveBeenCalledWith("fs-poll", expect.any(Function));
+  });
+
+  it('onFsPoll: listen 回调应解包 event.payload 传给 callback', () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let capturedHandler: ((event: any) => void) | null = null;
+    vi.mocked(listen).mockImplementation(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ((_event: string, handler: (event: any) => void) => {
+        capturedHandler = handler;
+        return Promise.resolve(vi.fn());
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      }) as any,
+    );
+
+    const cb = vi.fn();
+    notify.onFsPoll(cb);
+
+    const testPayload = { paths: ["C:/project"] };
+    capturedHandler!({ payload: testPayload });
+    expect(cb).toHaveBeenCalledWith(testPayload);
+  });
+
+  it('onFsPoll: 返回的 unsubscribe 调用后应触发 unlisten', async () => {
+    const mockUnlisten = vi.fn();
+    vi.mocked(listen).mockResolvedValue(mockUnlisten);
+
+    const unsub = notify.onFsPoll(vi.fn());
+    unsub();
+    await Promise.resolve();
+
+    expect(mockUnlisten).toHaveBeenCalled();
+  });
+});
+
 // ═══════════════════════════════════════════════════════════════════
 // Git IPC
 // ═══════════════════════════════════════════════════════════════════

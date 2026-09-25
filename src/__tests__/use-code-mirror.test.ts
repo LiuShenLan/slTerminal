@@ -79,6 +79,7 @@ vi.mock("@codemirror/state", async (importOriginal) => {
 // Mock ipc/notify — setup.ts 中已全局 mock，但这里需要防 import 时调用
 vi.mock("../ipc/notify", () => ({
   onFsEvent: vi.fn(() => () => {}),
+  onFsPoll: vi.fn(() => () => {}),
   startWatch: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -1335,6 +1336,49 @@ describe("EDF-08 justSavedRef 多实例语义", () => {
     expect(readFileMock.mock.calls.length).toBe(baseAfterSettle);
 
     // 第二次事件：Set 已消费删除 → A 恢复自动重载（恰一次读盘）
+    await act(async () => {
+      cbA({ paths: ["/test/a.ts"], kind: "Modify" });
+    });
+    await waitFor(() => {
+      expect(readFileMock.mock.calls.length).toBe(baseAfterSettle + 1);
+    }, { timeout: 3000 });
+  });
+
+  it("3. justSaved 消费收窄到路径命中后：无关事件不消费条目（防复发）", async () => {
+    const { onFsEvent } = await import("../ipc/notify");
+    const onFsEventMock = onFsEvent as unknown as ReturnType<typeof vi.fn>;
+    const readFileMock = fs.readFile as ReturnType<typeof vi.fn>;
+
+    renderHook(() => useCodeMirror({ container: containerA, filePath: "/test/a.ts", panelId: "A" }));
+    await waitFor(() => expect(readFileMock.mock.calls.length).toBeGreaterThanOrEqual(1), {
+      timeout: 3000,
+    });
+    await settleRecheck();
+
+    const cbA = onFsEventMock.mock.calls[0][0] as (event: { paths: string[]; kind: string }) => void;
+
+    const activateA = mockUsePanelFocus.mock.calls[0]?.[2] as (() => void) | undefined;
+    activateA?.();
+    getActiveEditor()!.save();
+    await waitFor(() => expect(fs.writeFile).toHaveBeenCalled(), { timeout: 3000 });
+
+    const baseAfterSettle = readFileMock.mock.calls.length;
+
+    // 无关路径事件先到：旧逻辑任意 fs-event 到达即消费本文件抑制条目——
+    // 收窄后路径不匹配直接 return，条目保留（计数不变）
+    await act(async () => {
+      cbA({ paths: ["/test/other.ts"], kind: "Modify" });
+    });
+    expect(readFileMock.mock.calls.length).toBe(baseAfterSettle);
+
+    // 本文件保存回声随后到达：条目仍在 → 命中消费 → 跳过
+    // 【对旧代码红】：旧逻辑条目已被无关事件抢先消费，回声被误判为外部修改重载（+1）
+    await act(async () => {
+      cbA({ paths: ["/test/a.ts"], kind: "Modify" });
+    });
+    expect(readFileMock.mock.calls.length).toBe(baseAfterSettle);
+
+    // 条目一次性消费完毕 → 此后真实外部修改正常重载（恰一次读盘）
     await act(async () => {
       cbA({ paths: ["/test/a.ts"], kind: "Modify" });
     });

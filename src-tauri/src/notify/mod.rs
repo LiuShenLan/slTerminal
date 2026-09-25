@@ -23,18 +23,18 @@ use tauri::{AppHandle, Emitter};
 use crate::error::AppError;
 use crate::state::AppState;
 
-/// BE-02：watcher 事件侧排除目录（D8 定稿七元素，仅事件侧过滤）
+/// BE-02：watcher 事件侧排除目录（D8 部分翻案后六元素，仅事件侧过滤）
 ///
 /// notify 不支持目录级排除（watcher 仍注册全树），排除在事件侧完成：
 /// 事件路径任一分量命中以下目录即丢弃该事件，防大仓库
 /// （node_modules/target 等）事件风暴。fs_read_dir 不动（懒加载既定决策）。
-pub const WATCH_EXCLUDE_DIRS: [&str; 7] = [
+/// `.git` 不在此列——改由 is_git_whitelist_path 白名单窄放行（见该函数注释）。
+pub const WATCH_EXCLUDE_DIRS: [&str; 6] = [
     "node_modules",
     "target",
     ".venv",
     "venv",
     "dist",
-    ".git",
     "__pycache__",
 ];
 
@@ -63,10 +63,28 @@ pub struct FsEventPayload {
     pub detail: String,
 }
 
+/// fs-poll 心跳载荷（事件丢失补漏通道——watcher 存活且未暂停期间周期广播，
+/// 仅编辑域消费方订阅，对已打开文件做磁盘复核；paths = 监听根路径）
+///
+/// CP-024:ts-rs 生成 `src/types/notify.ts`。
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export, export_to = "../../src/types/notify.ts")]
+pub struct FsPollPayload {
+    /// 监听根路径列表
+    pub paths: Vec<String>,
+}
+
+/// fs-poll 心跳周期（补漏通道——正常路径 fs-event 0.3-1s 可达，心跳仅在
+/// 事件丢失（队列溢出/静默失效）时兜底，10s 自愈远好于永久陈旧）
+pub const FS_POLL_INTERVAL: Duration = Duration::from_secs(10);
+
 /// 文件系统事件发射抽象（D6 抽离：隔离 AppHandle，使事件循环可 L1 测试）
 pub trait EventEmitter: Send + Sync + 'static {
     /// 向前端广播文件系统事件载荷
     fn emit_fs_event(&self, payload: FsEventPayload);
+    /// 向前端广播 fs-poll 心跳载荷
+    fn emit_fs_poll(&self, payload: FsPollPayload);
 }
 
 /// 生产 EventEmitter：包装 Tauri AppHandle 的 emit（发送失败静默忽略）
@@ -77,6 +95,10 @@ pub struct AppHandleEmitter {
 impl EventEmitter for AppHandleEmitter {
     fn emit_fs_event(&self, payload: FsEventPayload) {
         let _ = self.app_handle.emit("fs-event", payload);
+    }
+
+    fn emit_fs_poll(&self, payload: FsPollPayload) {
+        let _ = self.app_handle.emit("fs-poll", payload);
     }
 }
 
@@ -151,7 +173,14 @@ impl FileWatcher {
                 move || {
                     // debouncer 存活于本线程，退出时自动 Drop
                     let _debouncer_guard = debouncer;
-                    event_loop(&event_rx, &stop_rx, &paused_clone, &wps, emitter.as_ref());
+                    event_loop(
+                        &event_rx,
+                        &stop_rx,
+                        &paused_clone,
+                        &wps,
+                        emitter.as_ref(),
+                        FS_POLL_INTERVAL,
+                    );
                 }
             })?;
 
@@ -199,6 +228,44 @@ impl FileWatcher {
     }
 }
 
+/// .git 内部路径判定（D8 部分翻案）：任一分量等于 `.git`（大小写不敏感，BE-25 先例）
+fn is_git_internal_path(path: &Path) -> bool {
+    path.components()
+        .filter_map(|c| c.as_os_str().to_str())
+        .any(|seg| seg.eq_ignore_ascii_case(".git"))
+}
+
+/// .git 白名单路径判定（D8 部分翻案——.git 由整体排除改白名单窄放行）：
+/// git 操作后 DiffPanel HEAD 侧/Commit 视图需要刷新信号，但 objects/ 等目录是
+/// commit 扇出风暴主源（D8 防风暴初衷保留），故按白名单放行：
+/// - `.git` 分量后首段为 `refs`（整棵子树——commit 更新 refs/heads/*、分支/标签增删，
+///   含 *.lock 临时文件：rename 目标事件本就携终态路径）
+/// - `.git` 分量后恰为单分量 `HEAD` / `index` / `packed-refs`
+///
+/// 其余（objects/**、logs/**、COMMIT_EDITMSG、MERGE_*、裸 .git 目录等）一律丢弃。
+/// 均大小写不敏感（Windows 文件系统不区分大小写）。
+fn is_git_whitelist_path(path: &Path) -> bool {
+    let segs: Vec<&str> = path
+        .components()
+        .filter_map(|c| c.as_os_str().to_str())
+        .collect();
+    // 定位首个 .git 分量，其后序列即仓库内部相对路径
+    let Some(pos) = segs.iter().position(|s| s.eq_ignore_ascii_case(".git")) else {
+        return false;
+    };
+    let inner = &segs[pos + 1..];
+    let Some(first) = inner.first() else {
+        return false; // 裸 .git 目录事件
+    };
+    if first.eq_ignore_ascii_case("refs") {
+        return true;
+    }
+    inner.len() == 1
+        && ["HEAD", "index", "packed-refs"]
+            .iter()
+            .any(|w| first.eq_ignore_ascii_case(w))
+}
+
 /// BE-02：事件路径是否命中排除目录（任一分量匹配即排除）
 ///
 /// 用 `components()` 按整分量比较，避免子串误伤（如 `mytarget` 不匹配 `target`）；
@@ -238,13 +305,19 @@ fn is_symlink_path(path: &Path) -> bool {
 
 /// watcher 事件循环（D6 抽离为独立函数：事件/暂停/停止全部经参数驱动，emit 经 trait 注入，
 /// 使 L1 可用 mock emitter + channel 直接驱动，无需 AppHandle）
+///
+/// fs-poll 心跳：未暂停且距上次心跳 ≥ poll_interval 时广播（payload = 监听根路径）——
+/// 事件丢失（队列溢出/静默失效）的补漏通道，仅编辑域消费方订阅。暂停期间停发且
+/// 计时不推进 → resume 后首个节拍立即补发一次；watcher 停止 → 线程退出自然终止。
 fn event_loop(
     event_rx: &mpsc::Receiver<DebounceEventResult>,
     stop_rx: &mpsc::Receiver<()>,
     paused: &AtomicBool,
     wps: &Mutex<Vec<PathBuf>>,
     emitter: &dyn EventEmitter,
+    poll_interval: Duration,
 ) {
+    let mut last_poll = std::time::Instant::now();
     loop {
         match event_rx.recv_timeout(Duration::from_millis(100)) {
             Ok(Ok(events)) => {
@@ -261,6 +334,15 @@ fn event_loop(
 
                     // BE-02：事件路径任一分量命中排除目录 → 丢弃（大目录事件风暴防护）
                     if event.paths.iter().any(|p| is_excluded_path(p)) {
+                        continue;
+                    }
+                    // .git 窄放行（D8 部分翻案）：.git 内事件仅白名单（HEAD/index/refs/**/
+                    // packed-refs）放行，其余丢弃。事件级判定——批内存在白名单路径即放行
+                    // 整条：rename(Both) 双路径事件（如 index.lock→index）按单路径判定
+                    // 会被整条误丢
+                    if event.paths.iter().any(|p| is_git_internal_path(p))
+                        && !event.paths.iter().any(|p| is_git_whitelist_path(p))
+                    {
                         continue;
                     }
                     // SEC-08：符号链接路径不 emit（防项目内 symlink 泄露外部路径）
@@ -293,6 +375,18 @@ fn event_loop(
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 break;
             }
+        }
+
+        // fs-poll 心跳段（每个 recv 节拍检查一次，节拍 ≤100ms 由 recv_timeout 提供）。
+        // 暂停时不发且 last_poll 不推进（resume 后立即补发）；暂停分支的 continue
+        // 同样到达不了这里——语义一致
+        if !paused.load(Ordering::Relaxed) && last_poll.elapsed() >= poll_interval {
+            let guard = wps.lock();
+            emitter.emit_fs_poll(FsPollPayload {
+                paths: guard.iter().map(|p| p.display().to_string()).collect(),
+            });
+            drop(guard);
+            last_poll = std::time::Instant::now();
         }
     }
 }
@@ -643,12 +737,14 @@ mod notify_tests {
     // ─── BE-02 排除目录过滤 ───
 
     #[test]
-    fn is_excluded_path_matches_all_seven_dirs() {
-        // 契约七元素逐一验证：任一分量命中即排除
+    fn is_excluded_path_matches_all_six_dirs() {
+        // 契约六元素逐一验证：任一分量命中即排除（.git 已移出——改由白名单窄放行）
         for dir in WATCH_EXCLUDE_DIRS {
             let p = PathBuf::from(format!("C:/project/{dir}/sub/file.txt"));
             assert!(is_excluded_path(&p), "分量 {dir} 应命中排除");
         }
+        // .git 不再命中通用排除（由 is_git_whitelist_path 独立判定）
+        assert!(!is_excluded_path(&PathBuf::from("C:/project/.git/HEAD")));
         // BE-25：大小写变体同样命中（Windows 文件系统不区分大小写，整分量比较忽略大小写）
         for (dir, variant) in [
             ("node_modules", "Node_Modules"),
@@ -672,6 +768,71 @@ mod notify_tests {
         );
         // 普通路径不排除
         assert!(!is_excluded_path(&PathBuf::from("C:/project/src/main.rs")));
+    }
+
+    // ─── .git 白名单窄放行（D8 部分翻案） ───
+
+    #[test]
+    fn git_whitelist_allows_head_index_packed_refs_refs_subtree() {
+        let allowed = [
+            "C:/project/.git/HEAD",
+            "C:/project/.git/index",
+            "C:/project/.git/packed-refs",
+            "C:/project/.git/refs/heads/main",
+            "C:/project/.git/refs/heads/main.lock", // rename 临时文件同覆（事件携终态路径）
+            "C:/project/.git/refs/tags/v1.0",
+        ];
+        for p in allowed {
+            assert!(is_git_whitelist_path(&PathBuf::from(p)), "{p} 应放行");
+        }
+    }
+
+    #[test]
+    fn git_whitelist_drops_objects_logs_locks_editmsg_bare_git() {
+        let dropped = [
+            "C:/project/.git/objects/ab/cdef", // commit 扇出风暴主源（D8 初衷保留）
+            "C:/project/.git/logs/HEAD",
+            "C:/project/.git/index.lock", // 单路径 lock（rename Both 双路径事件级放行见 event_loop 用例）
+            "C:/project/.git/COMMIT_EDITMSG",
+            "C:/project/.git/MERGE_HEAD",
+            "C:/project/.git/info/exclude",
+            "C:/project/.git/hooks/pre-commit",
+            "C:/project/.git", // 裸 .git 目录事件
+        ];
+        for p in dropped {
+            assert!(!is_git_whitelist_path(&PathBuf::from(p)), "{p} 应丢弃");
+        }
+    }
+
+    #[test]
+    fn git_whitelist_case_insensitive() {
+        // BE-25 同构：Windows 文件系统不区分大小写
+        assert!(is_git_whitelist_path(&PathBuf::from(
+            "C:/project/.GIT/HEAD"
+        )));
+        assert!(is_git_whitelist_path(&PathBuf::from(
+            "C:/project/.Git/Refs/heads/x"
+        )));
+        assert!(is_git_internal_path(&PathBuf::from(
+            "C:/project/.git/objects/x"
+        )));
+    }
+
+    #[test]
+    fn git_internal_path_detection_exact_component() {
+        assert!(is_git_internal_path(&PathBuf::from("C:/project/.git/HEAD")));
+        // 整分量比较：.gitkeep/.git.d 等子串不误伤
+        assert!(!is_git_internal_path(&PathBuf::from(
+            "C:/project/src/.gitkeep"
+        )));
+        assert!(!is_git_internal_path(&PathBuf::from("C:/project/.git.d/x")));
+        assert!(!is_git_internal_path(&PathBuf::from(
+            "C:/project/src/main.rs"
+        )));
+        // 非 .git 路径的白名单判定恒 false
+        assert!(!is_git_whitelist_path(&PathBuf::from(
+            "C:/project/src/HEAD"
+        )));
     }
 
     // ─── FileWatcher 生命周期测试 ───
@@ -868,11 +1029,16 @@ mod notify_tests {
     #[derive(Default)]
     struct MockEmitter {
         emitted: Mutex<Vec<FsEventPayload>>,
+        polls: Mutex<Vec<FsPollPayload>>,
     }
 
     impl EventEmitter for MockEmitter {
         fn emit_fs_event(&self, payload: FsEventPayload) {
             self.emitted.lock().push(payload);
+        }
+
+        fn emit_fs_poll(&self, payload: FsPollPayload) {
+            self.polls.lock().push(payload);
         }
     }
 
@@ -880,6 +1046,10 @@ mod notify_tests {
     impl EventEmitter for Arc<MockEmitter> {
         fn emit_fs_event(&self, payload: FsEventPayload) {
             self.emitted.lock().push(payload);
+        }
+
+        fn emit_fs_poll(&self, payload: FsPollPayload) {
+            self.polls.lock().push(payload);
         }
     }
 
@@ -890,6 +1060,14 @@ mod notify_tests {
 
         fn last(&self) -> Option<FsEventPayload> {
             self.emitted.lock().last().cloned()
+        }
+
+        fn poll_count(&self) -> usize {
+            self.polls.lock().len()
+        }
+
+        fn last_poll(&self) -> Option<FsPollPayload> {
+            self.polls.lock().last().cloned()
         }
     }
 
@@ -934,7 +1112,12 @@ mod notify_tests {
     }
 
     impl LoopHarness {
+        /// 默认心跳间隔取 1 小时——存量用例不受心跳干扰（poll 用例走 start_with_poll_interval）
         fn start(emitter: Arc<MockEmitter>) -> Self {
+            Self::start_with_poll_interval(emitter, Duration::from_secs(3600))
+        }
+
+        fn start_with_poll_interval(emitter: Arc<MockEmitter>, poll_interval: Duration) -> Self {
             let (event_tx, event_rx) = mpsc::channel::<DebounceEventResult>();
             let (stop_tx, stop_rx) = mpsc::channel::<()>();
             // BE-02：done 通道——线程正常返回才发信，供 shutdown 恢复 panic 检测
@@ -951,6 +1134,7 @@ mod notify_tests {
                         &paused_clone,
                         &wps_clone,
                         emitter.as_ref(),
+                        poll_interval,
                     );
                     let _ = done_tx.send(()); // 到达 = 未 panic；send 失败 = 接收端已弃，忽略
                 }
@@ -1073,6 +1257,97 @@ mod notify_tests {
             vec!["/project/src/main.rs".to_string()]
         );
 
+        harness.shutdown();
+    }
+
+    // ─── .git 窄放行 event_loop 用例（D8 部分翻案） ───
+
+    /// 防复发锚点：改动前 .git 在排除目录内，此用例红
+    #[test]
+    fn event_loop_git_whitelist_event_emitted() {
+        let emitter = Arc::new(MockEmitter::default());
+        let harness = LoopHarness::start(emitter.clone());
+
+        harness
+            .event_tx
+            .send(Ok(vec![make_debounced(
+                EventKind::Modify(ModifyKind::Data(DataChange::Any)),
+                vec![PathBuf::from("/project/.git/index")],
+            )]))
+            .unwrap();
+
+        wait_until(|| emitter.count() == 1, ".git/index 白名单事件应 emit");
+        assert_eq!(emitter.last().unwrap().kind, "Modify");
+        harness.shutdown();
+    }
+
+    /// 事件级放行锚点：rename(Both) 双路径批内存在白名单路径即整条放行——
+    /// 按单路径判定会被 index.lock 拖累整条误丢
+    #[test]
+    fn event_loop_git_rename_both_with_lock_emitted() {
+        let emitter = Arc::new(MockEmitter::default());
+        let harness = LoopHarness::start(emitter.clone());
+
+        harness
+            .event_tx
+            .send(Ok(vec![make_debounced(
+                EventKind::Modify(ModifyKind::Name(RenameMode::Both)),
+                vec![
+                    PathBuf::from("/project/.git/index.lock"),
+                    PathBuf::from("/project/.git/index"),
+                ],
+            )]))
+            .unwrap();
+
+        wait_until(
+            || emitter.count() == 1,
+            "rename(Both) 双路径事件（index.lock→index）应整条放行",
+        );
+        harness.shutdown();
+    }
+
+    /// D8 防风暴初衷保留：.git/objects 事件仍丢弃（300ms 负窗口零 emit）
+    #[test]
+    fn event_loop_git_objects_event_dropped() {
+        let emitter = Arc::new(MockEmitter::default());
+        let harness = LoopHarness::start(emitter.clone());
+
+        harness
+            .event_tx
+            .send(Ok(vec![make_debounced(
+                EventKind::Create(CreateKind::File),
+                vec![PathBuf::from("/project/.git/objects/ab/cdef")],
+            )]))
+            .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_millis(300);
+        while std::time::Instant::now() < deadline {
+            assert_eq!(emitter.count(), 0, ".git/objects 事件应被丢弃");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        harness.shutdown();
+    }
+
+    /// 混合批含排除目录分量 → 整条丢弃（any 语义最严，BE-02 红线不变）
+    #[test]
+    fn event_loop_mixed_excluded_batch_still_dropped() {
+        let emitter = Arc::new(MockEmitter::default());
+        let harness = LoopHarness::start(emitter.clone());
+
+        harness
+            .event_tx
+            .send(Ok(vec![make_debounced(
+                EventKind::Modify(ModifyKind::Name(RenameMode::Both)),
+                vec![
+                    PathBuf::from("/project/src/a.ts"),
+                    PathBuf::from("/project/node_modules/x.js"),
+                ],
+            )]))
+            .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_millis(300);
+        while std::time::Instant::now() < deadline {
+            assert_eq!(emitter.count(), 0, "含排除路径的混合批应整条丢弃");
+            std::thread::sleep(Duration::from_millis(10));
+        }
         harness.shutdown();
     }
 
@@ -1276,6 +1551,58 @@ mod notify_tests {
             vec!["/tmp/b.txt".to_string()]
         );
 
+        harness.shutdown();
+    }
+
+    // ─── fs-poll 心跳（事件丢失补漏通道） ───
+
+    #[test]
+    fn fs_poll_payload_serializes_camel_case() {
+        let payload = FsPollPayload {
+            paths: vec!["C:\\project".to_string()],
+        };
+        let json = serde_json::to_string(&payload).unwrap();
+        assert!(json.contains("\"paths\""));
+        assert!(json.contains("project"));
+    }
+
+    /// 防复发锚点：改动前无心跳机制，此用例红
+    #[test]
+    fn event_loop_emits_fs_poll_after_interval() {
+        let emitter = Arc::new(MockEmitter::default());
+        let harness =
+            LoopHarness::start_with_poll_interval(emitter.clone(), Duration::from_millis(100));
+        harness.wps.lock().push(PathBuf::from("/project/root"));
+
+        // 无任何文件事件也应周期广播心跳
+        wait_until(|| emitter.poll_count() >= 1, "心跳应在间隔后广播");
+        assert_eq!(
+            emitter.last_poll().unwrap().paths,
+            vec!["/project/root".to_string()],
+            "心跳载荷应携带监听根路径"
+        );
+        harness.shutdown();
+    }
+
+    /// 暂停期停发（计时不推进）→ resume 后首个节拍立即补发
+    #[test]
+    fn event_loop_fs_poll_suppressed_while_paused_emits_after_resume() {
+        let emitter = Arc::new(MockEmitter::default());
+        let harness =
+            LoopHarness::start_with_poll_interval(emitter.clone(), Duration::from_millis(100));
+        harness.wps.lock().push(PathBuf::from("/project/root"));
+
+        // 暂停期：300ms 负窗口零心跳
+        harness.paused.store(true, Ordering::SeqCst);
+        let deadline = std::time::Instant::now() + Duration::from_millis(300);
+        while std::time::Instant::now() < deadline {
+            assert_eq!(emitter.poll_count(), 0, "暂停期间不应发心跳");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        // resume：暂停期 last_poll 未推进（elapsed 早已超隔）→ 首个节拍立即补发
+        harness.paused.store(false, Ordering::SeqCst);
+        wait_until(|| emitter.poll_count() >= 1, "resume 后应立即补发心跳");
         harness.shutdown();
     }
 

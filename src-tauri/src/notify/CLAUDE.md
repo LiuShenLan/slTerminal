@@ -24,9 +24,24 @@ Windows 上 `notify` 递归注册目录树（如 `target/` 26K 文件）首次�
 
 `classify_event` 编排层调用纯函数 `classify_by_kind(kind, paths)`。`EventKind` 是 notify 公开枚举，L1 可直接构造，覆盖全部 7 种事件类型。
 
-### 事件侧排除大目录（BE-02，D8）
+### 事件侧排除大目录（BE-02，D8；2026-09-25 部分翻案）
 
-`WATCH_EXCLUDE_DIRS` 为七元素常量：`node_modules`、`target`、`.venv`、`venv`、`dist`、`.git`、`__pycache__`。任一路径分量命中即丢弃该事件。**仅事件侧过滤**——notify 不支持目录级排除，watcher 仍注册全树；`need_rescan` 分支不受影响。
+`WATCH_EXCLUDE_DIRS` 为六元素常量：`node_modules`、`target`、`.venv`、`venv`、`dist`、`__pycache__`。任一路径分量命中即丢弃该事件。**仅事件侧过滤**——notify 不支持目录级排除，watcher 仍注册全树；`need_rescan` 分支不受影响。
+
+**.git 窄放行（D8 部分翻案，2026-09-25）**：`.git` 已移出排除常量，改事件级白名单判定（`is_git_internal_path` / `is_git_whitelist_path`）——批内存在白名单路径（`.git` 后首段 `refs` 整棵子树，或恰单分量 `HEAD`/`index`/`packed-refs`，大小写不敏感）则整条放行；命中 `.git` 但无白名单路径 → 整条丢弃（objects/**、logs/**、COMMIT_EDITMSG、MERGE_* 等仍丢弃）。必须**事件级**（批内 any 判定）而非逐路径：rename(Both) 双路径批（如 `index.lock`→`index`，paths=[lock, index]）按单路径判定会把携带白名单路径的整条事件误丢。动机 = DiffPanel HEAD 侧刷新（.git 事件 → 重取 gitFileAtHead）与提交后工作区着色联动的死代码复活；消费方纪律（DiffPanel 判等加固、文件树不订阅）见前端侧登记。
+
+### fs-poll 心跳（2026-09-25，事件丢失补漏）
+
+`FS_POLL_INTERVAL = 10s`：watcher 事件循环在**未暂停**且距上次心跳 ≥10s 时向监听根 emit `fs-poll`（`FsPollPayload { paths }` = 监听根集合）。契约：
+
+- **pause 停发且不推进计时** → resume 后首轮节拍立即补发；
+- 心跳内嵌现有 `"fs-watcher"` 线程（`recv_timeout(100ms)` 天然节拍），无额外线程；
+- 消费方仅编辑域三处（useCodeMirror / DiffPanel / LargeFileViewer）——文件树/Commit 视图不订阅；
+- 定位 = **补漏兜底**（OS 事件丢失窗口的周期复核），非主通道——主同步仍是 fs-event；前端复核走 poll 模式（滚动磁盘基线判变，未变零打扰），语义见 src/panels/editor/CLAUDE.md。
+
+### FsEventPayload detail 字段不可依赖（⑤ 登记）
+
+notify 的 `EventAttributes` 在 Windows ReadDirectoryChangesW 通道下基本不产详情——`detail` 恒 `"Other"`（classify_by_kind 兜底值）。前端任何「按 detail 区分改动类型」的逻辑都是死分支，禁止新增 detail 依赖；语义判别只能用 kind + paths。
 
 ### fs-event 批量合并上限（BE-07）
 

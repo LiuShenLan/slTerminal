@@ -11,7 +11,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from
 import { useLineIndex } from "./useLineIndex";
 import { invalidateFile } from "./blockCache";
 import { fs } from "../../../ipc";
-import { onFsEvent } from "../../../ipc/notify";
+import { onFsEvent, onFsPoll } from "../../../ipc/notify";
 import { EDITOR_BG, ERROR_FG, PANEL_BG, DIM_FG, SEPARATOR_BG } from "../../../theme";
 import { schemeRegistry } from "../../../theme/schemeRegistry";
 import { EDITOR_FONT_SPEC } from "../useCodeMirror";
@@ -133,42 +133,64 @@ export const LargeFileViewer: React.FC<LargeFileViewerProps> = ({
 
   // FE-05: 外部修改 → 缓存失效 + 行索引复位重扫（只读视图无 dirty，静默重载安全；
   // 事件丢失残余窗口 = 与 editor 域同款 fs-event 依赖，登记 editor/CLAUDE.md）。
-  // 事件过滤/路径归一化比较形态照 useCodeMirror.ts:605-635 先例。
+  // 事件过滤/路径归一化比较形态照 useCodeMirror.ts 先例。
+  // stat 比对/指纹复核/失效重扫体抽取为 recheckFile——三入口共用：
+  // fs-event {Modify,Create} 命中 / Rescan 补漏 / fs-poll 心跳（2026-09 事件丢失修复）
+  const recheckFile = useCallback(() => {
+    void fs
+      .statFile(filePath)
+      .then(async (m) => {
+        const base = baseMetaRef.current;
+        // 基线未就绪（首挂 stat 未归）→ 跳过：同文件不重挂（effect deps [filePath]），
+        // 竞态窗口由 FE-09 首挂 resolve 封闭
+        if (base === null) return;
+        if (m.mtimeMs !== base.mtimeMs || m.sizeBytes !== base.sizeBytes) {
+          const fp = await sampleFingerprint(filePath, m.sizeBytes);
+          baseMetaRef.current = { sizeBytes: m.sizeBytes, mtimeMs: m.mtimeMs, fingerprint: fp };
+          setFileMeta({ sizeBytes: m.sizeBytes, mtimeMs: m.mtimeMs });
+          invalidateFile(filePath);
+          setFileRev((r) => r + 1);
+          return;
+        }
+        // FE-10: mtime/size 未变 → 抽样指纹复核（同 size 同 mtime 原位改写假阴性兜底）
+        const fp = await sampleFingerprint(filePath, m.sizeBytes);
+        if (fp !== base.fingerprint) {
+          baseMetaRef.current = { sizeBytes: m.sizeBytes, mtimeMs: m.mtimeMs, fingerprint: fp };
+          invalidateFile(filePath);
+          setFileRev((r) => r + 1);
+        }
+      })
+      .catch(() => {
+        /* stat 失败（文件已删等）——读取路径自行兜底 fatalError */
+      });
+  }, [filePath]);
+
   useEffect(() => {
     const off = onFsEvent((event) => {
-      if (event.kind !== "Modify") return;
+      // Rescan（队列溢出/超批量合并，paths=监听根——路径匹配必然落空）：忽略路径
+      // 匹配复核一次（只读视图复核幂等，无需判变闸门）
+      if (event.kind === "Rescan") {
+        recheckFile();
+        return;
+      }
+      // Create = 原子替换写（临时文件+rename）/删后重建——去抖器折叠产物，
+      // 与 Modify 同处理（2026-09 根因 1 修复，同 useCodeMirror）；其余 kind 跳过
+      if (event.kind !== "Modify" && event.kind !== "Create") return;
       const normalized = filePath.replace(/\\/g, "/");
       const hit = event.paths.some((p) => p.replace(/\\/g, "/") === normalized);
       if (!hit) return;
-      void fs
-        .statFile(filePath)
-        .then(async (m) => {
-          const base = baseMetaRef.current;
-          // 基线未就绪（首挂 stat 未归）→ 跳过：同文件不重挂（effect deps [filePath]），
-          // 竞态窗口由 FE-09 首挂 resolve 封闭
-          if (base === null) return;
-          if (m.mtimeMs !== base.mtimeMs || m.sizeBytes !== base.sizeBytes) {
-            const fp = await sampleFingerprint(filePath, m.sizeBytes);
-            baseMetaRef.current = { sizeBytes: m.sizeBytes, mtimeMs: m.mtimeMs, fingerprint: fp };
-            setFileMeta({ sizeBytes: m.sizeBytes, mtimeMs: m.mtimeMs });
-            invalidateFile(filePath);
-            setFileRev((r) => r + 1);
-            return;
-          }
-          // FE-10: mtime/size 未变 → 抽样指纹复核（同 size 同 mtime 原位改写假阴性兜底）
-          const fp = await sampleFingerprint(filePath, m.sizeBytes);
-          if (fp !== base.fingerprint) {
-            baseMetaRef.current = { sizeBytes: m.sizeBytes, mtimeMs: m.mtimeMs, fingerprint: fp };
-            invalidateFile(filePath);
-            setFileRev((r) => r + 1);
-          }
-        })
-        .catch(() => {
-          /* stat 失败（文件已删等）——读取路径自行兜底 fatalError */
-        });
+      recheckFile();
     });
     return off;
-  }, [filePath]);
+  }, [recheckFile]);
+
+  // fs-poll 心跳（事件丢失补漏，后端 watcher 10s 周期广播）：复核 stat 比对链
+  useEffect(() => {
+    const off = onFsPoll(() => {
+      recheckFile();
+    });
+    return off;
+  }, [recheckFile]);
 
   // 初始同步测量 + ResizeObserver 跟踪容器高度变化;滚动事件内重测兜底
   useLayoutEffect(() => {

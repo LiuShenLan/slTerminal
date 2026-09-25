@@ -22,7 +22,7 @@ DTO 类型定义层（硬约束 #4，CP-024 单源化）。`src/types/` 的 9 �
 | `pty/spawn.rs` PtyEvent / SpawnRequest / SpawnResponse / ShellKind、`pty/conpty_api.rs` ConptyStatus | `pty.ts` | ConptyStatus 为 CP-010 DTO（CP-024 清单外追加——手写 pty.ts 含之，生成物覆盖后消费面经 ipc/pty.ts 依赖）；SpawnResponse（sessionId + shellKind）与 ShellKind（三值字面量）为恢复注入就绪闸门 DTO（2026-09 DA1 修复追加） |
 | `fs/mod.rs` DirEntry / FsReadDirPage | `fs.ts` | FsReadDirPage 为 CP-006 游标分页 DTO（`entries + nextCursor: string \| null`） |
 | `git/mod.rs` GitStatusEntry / DiffHunk | `git.ts` | |
-| `notify/mod.rs` FsEventPayload | `notify.ts` | |
+| `notify/mod.rs` FsEventPayload / FsPollPayload | `notify.ts` | FsPollPayload 为 fs-poll 心跳 DTO（2026-09-25 追加） |
 | `hooks/signal.rs` AgentEventPayload、`hooks/mod.rs` AgentInjectionStatus / AgentHookInjectionStatus | `agent.ts` | |
 | `agent_history/mod.rs` AgentHistorySession / AgentHistoryTitle | `agentHistory.ts` | |
 | `hooks/claude/config.rs` Layer(→`HooksLayer`) / MatcherGroup(→`MatcherGroupJson`) / HookHandler(→`HookHandlerJson`) | `hooksConfig.ts` | 类型级 `#[ts(rename)]` 对齐前端消费名 |

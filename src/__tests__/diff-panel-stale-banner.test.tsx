@@ -49,6 +49,7 @@ vi.mock("../ipc", () => ({
 
 vi.mock("../ipc/notify", () => ({
   onFsEvent: mockOnFsEvent,
+  onFsPoll: vi.fn(() => () => {}),
 }));
 
 vi.mock("../lib/useFontSizeWheel", () => ({

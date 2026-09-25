@@ -9,6 +9,13 @@ export interface FsEvent {
   detail: string;
 }
 
+/** fs-poll 心跳负载（事件丢失补漏通道——后端 watcher 存活且未暂停期间每 10s 广播，
+ * paths = 监听根路径；仅编辑域（useCodeMirror/DiffPanel/LargeFileViewer）订阅，
+ * 对已打开文件做磁盘复核。文件树/Commit 视图不订阅 */
+export interface FsPoll {
+  paths: string[];
+}
+
 /** 启动对指定路径的递归文件监听（后端 300ms 去抖 → fs-event） */
 export function startWatch(path: string): Promise<void> {
   return invoke("notify_watch", { path });
@@ -27,6 +34,21 @@ export function stopWatch(path: string): Promise<void> {
  */
 export function onFsEvent(callback: (payload: FsEvent) => void): () => void {
   const unlisten = listen<FsEvent>("fs-event", (event) =>
+    callback(event.payload),
+  );
+  return () => {
+    unlisten.then((fn) => fn());
+  };
+}
+
+/**
+ * 订阅后端 fs-poll 心跳（事件丢失补漏，10s 周期）
+ *
+ * 返回取消监听的清理函数。
+ * 前端通过此封装订阅，禁止直接 import @tauri-apps/api/event。
+ */
+export function onFsPoll(callback: (payload: FsPoll) => void): () => void {
+  const unlisten = listen<FsPoll>("fs-poll", (event) =>
     callback(event.payload),
   );
   return () => {

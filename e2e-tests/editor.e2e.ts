@@ -1,10 +1,11 @@
 /**
  * 编辑器域 E2E spec（E2E-09 拆分）：编辑器页签标题（basename/冲突相对路径/
- * 关闭恢复）、Ctrl+S capture 路径写盘（mtime 断言）、dirty→clean 保存。
+ * 关闭恢复）、Ctrl+S capture 路径写盘（mtime 断言）、dirty→clean 保存、
+ * 外部原子替换写同步（temp+rename → Create 事件放行，根因 1 防复发）。
  */
 
 import { expect, browser } from "@wdio/globals";
-import { mkdtempSync, writeFileSync, readFileSync, statSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, statSync, rmSync, renameSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -383,6 +384,73 @@ describe("编辑器 dirty→clean 保存", () => {
       const diskContent = readFileSync(filePath, "utf8");
       expect(diskContent).toContain(modifiedContent);
       expect(statSync(filePath).mtimeMs).toBeGreaterThan(mtimeBefore);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("编辑器外部原子替换写同步（2026-09 根因 1 防复发）", () => {
+  // claude code 等工具用「写临时文件 + rename 原子替换」改文件——notify-debouncer-full
+  // 折叠为单条 Create(target) 事件。旧前端闸门只放行 Modify → 编辑器永不更新。
+  // 本用例在真实二进制上走「watcher → Create 事件 → 前端放行 → 重读盘」全链。
+  it("should auto-reload when file is replaced via temp-write + rename (atomic write)", async () => {
+    const markerV1 = "atomic_v1_" + Date.now();
+    const markerV2 = "atomic_v2_" + Date.now();
+    const tempDir = mkdtempSync(join(tmpdir(), "slterm-e2e-atomic-"));
+    const filePath = join(tempDir, "atomic_target.txt");
+    const tmpPath = join(tempDir, "atomic_target.txt.tmp");
+    writeFileSync(filePath, markerV1, "utf8");
+
+    try {
+      await waitForWorkspaceReady();
+      const pageId = await createProject(tempDir);
+      await waitForDockviewApi();
+
+      const panelId = `${pageId}:e2e-atomic-${Date.now()}`;
+      await browser.execute(
+        (args: { pid: string; path: string }) => {
+          window.__dockviewApi!.addPanel({
+            id: args.pid,
+            component: "editor",
+            params: { panelId: args.pid, filePath: args.path },
+          });
+        },
+        { pid: panelId, path: filePath },
+      );
+
+      // 等待编辑器加载初始内容
+      await browser.waitUntil(
+        async () =>
+          await browser.execute((m: string) => {
+            const nodes = document.querySelectorAll(".cm-content");
+            for (const n of nodes) {
+              if ((n.textContent ?? "").includes(m)) return true;
+            }
+            return false;
+          }, markerV1),
+        { timeout: 15000, timeoutMsg: "编辑器未加载初始内容" },
+      );
+
+      // 原子替换写：写临时文件 + rename 覆盖（claude code 同款写盘形态）
+      writeFileSync(tmpPath, markerV2, "utf8");
+      renameSync(tmpPath, filePath);
+
+      // 等待编辑器同步替换后内容（Create 折叠产物必须触发重读盘）
+      await browser.waitUntil(
+        async () =>
+          await browser.execute((m: string) => {
+            const nodes = document.querySelectorAll(".cm-content");
+            for (const n of nodes) {
+              if ((n.textContent ?? "").includes(m)) return true;
+            }
+            return false;
+          }, markerV2),
+        {
+          timeout: 15000,
+          timeoutMsg: "编辑器未同步原子替换写内容（Create 事件被丢弃——根因 1 复发）",
+        },
+      );
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }

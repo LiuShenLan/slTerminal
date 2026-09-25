@@ -5,7 +5,8 @@
 // - 打开文件时 ipc.fs.readFile → 填充内容 + 加载 diff 边栏
 // - Ctrl+S → 有 filePath 直接保存，无 filePath 弹出"另存为"对话框（G3）
 // - Ctrl+F 查找（@codemirror/search）
-// - 监听外部文件改动（fs-event）→ 干净自动重载 / 脏弹窗选择
+// - 监听外部文件改动（fs-event Modify/Create + Rescan/fs-poll 心跳复核）
+//   → 干净自动重载 / 脏弹窗选择（Create = 原子替换写折叠产物，语义=重读盘）
 // - cleanup 中 view.destroy()（箭头函数调，防 this 丢失）
 
 import { useEffect, useRef, useCallback, useMemo, useState } from "react";
@@ -34,7 +35,7 @@ import { confirmDialog, toast, getErrorMessage } from "../../lib";
 import { fs } from "../../ipc";
 import { diffGutter, updateDiffGutter, clearDiffGutter } from "./gitGutter";
 import { repaintGuard } from "./repaintGuard";
-import { onFsEvent } from "../../ipc/notify";
+import { onFsEvent, onFsPoll } from "../../ipc/notify";
 import { gitDiff } from "../../ipc/git";
 import { usePanelFocus } from "../../features/shortcuts";
 import { setActiveEditor, clearActiveEditor, type EditorActions } from "./activeEditor";
@@ -209,6 +210,22 @@ export function useCodeMirror({
   /** onDocContent ref —— 回调经 ref 转发，防 effect 闭包过期（fontSizeRef 同模式） */
   const onDocContentRef = useRef(onDocContent);
   onDocContentRef.current = onDocContent;
+  /** 滚动磁盘基线（poll 复核判变源）——写点：读盘建缓冲 / 保存成功 / 重载应用成功；
+   *  磁盘内容 = 基线 → 零动作（打字常态零打扰）；[container, filePath] 重建时清空 */
+  const diskBaselineRef = useRef<string | undefined>(undefined);
+  /** poll 拒绝标记——用户拒绝重载的磁盘内容：同一内容不再重复弹确认（10s 心跳防弹窗循环） */
+  const pollRejectedRef = useRef<string | undefined>(undefined);
+  /** 最近上报面板的文档内容（onDocContent 三源统一收口）——view 缺失时与读盘内容
+   *  判等短路（防心跳空转触发面板 setDoc → 预览无谓重渲染） */
+  const lastReportedContentRef = useRef("");
+  /** docRef 真值源回传统一收口——先记 lastReported 再调回调（view 缺失判等短路数据源） */
+  const reportDocContent = useCallback(
+    (text: string, source: "init" | "edit" | "reload") => {
+      lastReportedContentRef.current = text;
+      onDocContentRef.current?.(text, source);
+    },
+    [],
+  );
   /** gitGutterEnabled ref —— 保存刷新/加载分支经 ref 读取，不扩 effect 依赖 */
   const gitGutterEnabledRef = useRef(gitGutterEnabled);
   gitGutterEnabledRef.current = gitGutterEnabled;
@@ -261,6 +278,9 @@ export function useCodeMirror({
     // 等待磁盘写入完成再刷新 diff 和 git 着色（避免 fire-and-forget 时序竞态）
     try {
       await fs.writeFile(path, content);
+      // 滚动磁盘基线随写盘成功更新（poll 复核判变源）；拒绝标记同清（用户已落盘）
+      diskBaselineRef.current = content;
+      pollRejectedRef.current = undefined;
     } catch (err) {
       // P1-05: 保存失败时显示通知，保留编辑器内容不清空（FE-01: alert → toast）
       // FE-44: 错误消息统一经 getErrorMessage（解析 IPC AppError 结构化消息）
@@ -333,6 +353,11 @@ export function useCodeMirror({
 
     filePathRef.current = filePath;
     const gen = ++genRef.current;
+    // poll 复核状态随缓冲重建清空（基线/拒绝标记按文件隔离，防跨文件泄漏；
+    // container=null 提前返回不清——htmlviewer render 态保活基线与 lastReported）
+    diskBaselineRef.current = undefined;
+    pollRejectedRef.current = undefined;
+    lastReportedContentRef.current = "";
     // CP-029(S03): 打开后核对定时器（cleanup 清除；见 initEditor 内调度点）
     let recheckTimer: ReturnType<typeof setTimeout> | undefined;
     // CP-039: 主题槽订阅取消函数——view 在 async initEditor 内创建，须以 effect 作用域
@@ -391,6 +416,8 @@ export function useCodeMirror({
               setLargeFile({ filePath });
               return;
             }
+            // 滚动磁盘基线 = 打开时读到的内容（poll 复核判变源）
+            diskBaselineRef.current = doc;
           }
         } catch (err) {
           console.error("读取文件失败:", err);
@@ -427,8 +454,8 @@ export function useCodeMirror({
             EditorView.updateListener.of((update) => {
               if (update.docChanged) {
                 dirtyRef.current = true;
-                const cb = onDocContentRef.current;
-                if (cb) cb(update.state.doc.toString(), "edit");
+                if (onDocContentRef.current)
+                  reportDocContent(update.state.doc.toString(), "edit");
               }
             }),
             langCompartment.current.of(getLanguageExtension(filePath)),
@@ -447,8 +474,8 @@ export function useCodeMirror({
       unbindTheme = themeSlotRef.current!.bind(view);
 
       // 缓冲建立完成 → init 源回传（面板 docRef 初始化/草稿回填确认）
-      const cb = onDocContentRef.current;
-      if (cb) cb(view.state.doc.toString(), "init");
+      if (onDocContentRef.current)
+        reportDocContent(view.state.doc.toString(), "init");
 
       // CP-029(S03): 打开后磁盘核对（外部修改事件补偿，见 OPEN_RECHECK_DELAY_MS
       // 注释——watcher 注册空窗/去抖窗口吞并会让打开瞬间的外部写盘零事件，编辑器
@@ -527,20 +554,28 @@ export function useCodeMirror({
   // D3: 脏状态跟踪
   const dirtyRef = useRef(false);
 
-  // CP-029(S03): 外部内容变更落盘 → 缓冲刷新（fs-event 触发与打开后核对共用）。
+  // CP-029(S03): 外部内容变更落盘 → 缓冲刷新（fs-event 触发/打开后核对/fs-poll 心跳共用）。
   // 仅依赖 refs 与模块函数——经 ref 转发保最新实现（onDocContentRef 同模式，
   // 规避 effect 闭包捕获过期函数）。
-  // 两调用方语义差异（定责取证 2026-09-07 后定稿）：
+  // 三调用方语义差异：
   // - mode "event"（fs-event = 权威外部变更信号）：脏文件先弹确认（取消 → 零读盘，
   //   历史语义不变）；干净文件读盘后与缓冲内容判等短路（touch/元数据 Modify 不做
   //   同内容替换——同内容 dispatch 会产生 docChanged 误标 dirty）。
   // - mode "recheck"（打开后核对 = 补偿探测，见 OPEN_RECHECK_DELAY_MS 注释）：先读
   //   盘与「打开时读到内容(baseline)」判变——用户开始打字（doc≠baseline）而磁盘
   //   未变的常态不误报；磁盘真变了才可能弹确认。
+  // - mode "poll"（fs-poll 心跳/Rescan 补漏 = 周期静默探测）：与「滚动磁盘基线」
+  //   （diskBaselineRef，随读盘/保存/重载滚动更新）判变——磁盘未变零动作（10s
+  //   心跳下打字常态不弹窗）；磁盘真变 → 干净直接应用，脏弹确认（拒绝标记
+  //   pollRejectedRef 记同一磁盘内容不再重复弹）；toastOnError 恒 false。
   const applyExternalChangeRef = useRef<
     (
       path: string,
-      opts: { mode: "event" | "recheck"; toastOnError: boolean; baseline?: string },
+      opts: {
+        mode: "event" | "recheck" | "poll";
+        toastOnError: boolean;
+        baseline?: string;
+      },
     ) => Promise<void>
   >(async () => {});
   applyExternalChangeRef.current = async (path, opts) => {
@@ -589,11 +624,77 @@ export function useCodeMirror({
     }
     // await 后重取（期间可能已卸载/重建/切文件）
     const view = viewRef.current;
-    if (!view) return;
+    if (!view) {
+      // view 缺失分支（htmlviewer render 态：container=null 不建 view——根因 2 修复）：
+      // 读到的内容经 onDocContent("reload") 回写面板 docRef（预览随之重渲染），而非丢弃
+      // 磁盘相对打开未变（recheck）→ 无外部修改
+      if (opts.mode === "recheck" && content === opts.baseline) return;
+      const cb = onDocContentRef.current;
+      if (!cb) return; // EditorPanel 不传回调——零影响
+      // poll：磁盘相对滚动基线未变 → 零动作
+      if (
+        opts.mode === "poll" &&
+        diskBaselineRef.current !== undefined &&
+        content === diskBaselineRef.current
+      )
+        return;
+      // 与面板 docRef 判等短路（防每次心跳 setDoc → PreviewFrame 无谓重渲染）
+      if (content === lastReportedContentRef.current) {
+        if (opts.mode === "poll") diskBaselineRef.current = content;
+        return;
+      }
+      // poll/recheck 脏分支读盘后才弹确认（event 脏确认已在读盘前完成，见上）
+      if (opts.mode !== "event" && dirty) {
+        if (content === pollRejectedRef.current) return; // 已拒同一磁盘内容
+        const choice = await confirmDialog({
+          title: "外部修改",
+          message: `文件 "${path}" 已被外部修改。当前编辑器有未保存的修改。确认将重载并丢弃本地修改，取消将保留当前内容。`,
+          confirmText: "重载",
+        });
+        if (!choice) {
+          pollRejectedRef.current = content;
+          return;
+        }
+        pollRejectedRef.current = undefined;
+      }
+      lastReportedContentRef.current = content;
+      diskBaselineRef.current = content;
+      dirtyRef.current = false;
+      cb(content, "reload");
+      return;
+    }
     // 与打开时基线比较（recheck）：磁盘未变 = 无外部修改（用户打字常态不误报）
     if (opts.mode === "recheck" && content === opts.baseline) return;
     // 事件路径 + 干净文件：同内容 Modify（touch）短路——磁盘内容与缓冲一致无需重载
     if (opts.mode === "event" && !dirty && content === safeDocText(view)) return;
+    // poll 复核（fs-poll 心跳/Rescan 补漏）：
+    if (opts.mode === "poll") {
+      // 磁盘相对滚动基线未变 → 零动作（打字常态零打扰）
+      if (
+        diskBaselineRef.current !== undefined &&
+        content === diskBaselineRef.current
+      )
+        return;
+      // 干净 + 内容已一致（基线滞后）→ 同步基线短路
+      if (!dirty && content === safeDocText(view)) {
+        diskBaselineRef.current = content;
+        return;
+      }
+      if (dirty) {
+        // 用户已拒同一磁盘内容 → 不再弹（防 10s 弹窗循环）
+        if (content === pollRejectedRef.current) return;
+        const choice = await confirmDialog({
+          title: "外部修改",
+          message: `文件 "${path}" 已被外部修改。当前编辑器有未保存的修改。确认将重载并丢弃本地修改，取消将保留当前内容。`,
+          confirmText: "重载",
+        });
+        if (!choice) {
+          pollRejectedRef.current = content;
+          return;
+        }
+        pollRejectedRef.current = undefined;
+      }
+    }
     // recheck 路径脏分支此时才弹确认（先判变后弹窗，避免打字常态弹窗打扰）
     if (opts.mode === "recheck" && dirty) {
       const choice = await confirmDialog({
@@ -608,7 +709,11 @@ export function useCodeMirror({
     if (!live) return;
     // 幂等：决策期间事件路径已把缓冲刷新到与磁盘一致 → 跳过（同内容 dispatch 会
     // 产生 docChanged 误标 dirty + 无谓 edit 回传）
-    if (content === safeDocText(live)) return;
+    if (content === safeDocText(live)) {
+      // poll：缓冲已一致 → 基线跟进（防「打字回退到磁盘内容」场景每 10s 重复确认）
+      if (opts.mode === "poll") diskBaselineRef.current = content;
+      return;
+    }
     live.dispatch({
       changes: {
         from: 0,
@@ -617,9 +722,11 @@ export function useCodeMirror({
       },
     });
     dirtyRef.current = false;
+    // 滚动基线/拒绝标记同步（poll 复核语义：磁盘与缓冲已对齐基线内容）
+    diskBaselineRef.current = content;
+    pollRejectedRef.current = undefined;
     // docRef 真值源同步（reload 源）
-    const cb = onDocContentRef.current;
-    if (cb) cb(content, "reload");
+    reportDocContent(content, "reload");
   };
 
   // D3: 监听外部文件改动
@@ -627,31 +734,60 @@ export function useCodeMirror({
     // FE-01: 回调改 async——脏文件分支需 await confirmDialog（确认=重载/取消=保留）
     const unlisten = onFsEvent(async (event) => {
       const currentPath = filePathRef.current;
-      if (currentPath) {
-        // 按文件路径去重：仅跳过该编辑器实例自己保存触发的文件事件
-        const normalizedCurrent = currentPath.replace(/\\/g, "/");
-        if (justSavedRef.current.has(normalizedCurrent)) {
-          justSavedRef.current.delete(normalizedCurrent);
-          return;
-        }
+      if (!currentPath) return;
+      const normalizedCurrent = currentPath.replace(/\\/g, "/");
+
+      // Rescan（队列溢出/超批量合并，paths=监听根——路径匹配必然落空）：忽略路径
+      // 匹配，对已打开文件复核一次。走 poll 模式（内容判等天然免疫自身保存回声，
+      // 不消费 justSaved 条目）
+      if (event.kind === "Rescan") {
+        await applyExternalChangeRef.current(currentPath, {
+          mode: "poll",
+          toastOnError: false,
+        });
+        return;
       }
 
-      if (!currentPath) return;
-
       // 规范化路径比较
-      const normalizedCurrent = currentPath.replace(/\\/g, "/");
       const affected = event.paths.some(
         (p) => p.replace(/\\/g, "/") === normalizedCurrent,
       );
       if (!affected) return;
 
-      // 仅处理 Modify 事件（Create/Remove/Rescan 不触发 reload——事件源语义；
-      // CP-029 打开后核对补偿 Create 吞并 Modify 的窗口）
-      if (event.kind !== "Modify") return;
+      // 按文件路径去重：仅跳过该编辑器实例自己保存触发的文件事件。
+      // 收窄（2026-09 修复）：消费移至路径匹配之后——旧逻辑任意 fs-event 到达即
+      // 消费本文件抑制条目，无关事件抢先消费会让保存回声本身被误判为外部修改
+      if (justSavedRef.current.has(normalizedCurrent)) {
+        justSavedRef.current.delete(normalizedCurrent);
+        return;
+      }
+
+      // 处理 Modify 与 Create——Create = 原子替换写（临时文件+rename）/删后重建：
+      // 去抖器把原子写折叠为单条 Create(target)（300ms 窗口内 Modify 被吞并），
+      // 已打开路径出现 Create 的语义即「内容已被替换」，处理 = 重读盘。
+      // Remove/Access/Other 不触发 reload
+      if (event.kind !== "Modify" && event.kind !== "Create") return;
 
       await applyExternalChangeRef.current(currentPath, {
         mode: "event",
         toastOnError: true,
+      });
+    });
+
+    return () => {
+      unlisten();
+    };
+  }, []);
+
+  // fs-poll 心跳（事件丢失补漏，后端 watcher 10s 周期广播）：对已打开文件做磁盘
+  // 复核——poll 模式静默探测（磁盘相对滚动基线未变零打扰）；与 Rescan 复核同通道
+  useEffect(() => {
+    const unlisten = onFsPoll(() => {
+      const currentPath = filePathRef.current;
+      if (!currentPath) return;
+      void applyExternalChangeRef.current(currentPath, {
+        mode: "poll",
+        toastOnError: false,
       });
     });
 

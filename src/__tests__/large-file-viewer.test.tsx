@@ -17,10 +17,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, waitFor, cleanup, act, fireEvent } from "@testing-library/react";
 
-const { mockReadFileRange, mockStatFile, mockOnFsEvent } = vi.hoisted(() => ({
+const { mockReadFileRange, mockStatFile, mockOnFsEvent, mockOnFsPoll } = vi.hoisted(() => ({
   mockReadFileRange: vi.fn(),
   mockStatFile: vi.fn(),
   mockOnFsEvent: vi.fn(),
+  mockOnFsPoll: vi.fn(),
 }));
 
 vi.mock("../ipc", () => ({
@@ -30,6 +31,7 @@ vi.mock("../ipc", () => ({
 // FE-05: 外部修改订阅——onFsEvent 经 ipc/notify 直连（照 useCodeMirror/DiffPanel 先例）
 vi.mock("../ipc/notify", () => ({
   onFsEvent: mockOnFsEvent,
+  onFsPoll: mockOnFsPoll,
 }));
 
 vi.mock("../panels/editor/useCodeMirror", () => ({
@@ -336,7 +338,32 @@ describe("文件变更失效（FE-05）", () => {
     expect(lineText(container, 0)).toBe("line-0000000");
   });
 
-  it("非 Modify 类事件不触发失效比对（Create/Remove 不重 stat）", async () => {
+  it("Create 事件（原子替换写折叠产物）→ 触发失效比对（重 stat）【防复发】", async () => {
+    installVirtualFile(50);
+    let fireFsEvent: ((e: { paths: string[]; kind: string; detail: string }) => void) | null =
+      null;
+    mockOnFsEvent.mockImplementation((cb: (e: { paths: string[]; kind: string; detail: string }) => void) => {
+      fireFsEvent = cb;
+      return () => {};
+    });
+    const { container } = render(<LargeFileViewer filePath={FILE} sourceLabel="" />);
+    await waitFor(() => {
+      expect(lineText(container, 0)).toBe("line-0000000");
+    });
+    await waitFor(() => {
+      expect(fireFsEvent).not.toBeNull();
+    });
+    const statCalls = mockStatFile.mock.calls.length;
+    // 防复发（2026-09 根因 1）：原子替换写折叠为 Create(target)——旧闸门只放行
+    // Modify 致只读浏览永不失效；断言对旧代码红（Create 被丢弃 → stat 计数不变）
+    await act(async () => {
+      fireFsEvent!({ paths: [FILE], kind: "Create", detail: "Any" });
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(mockStatFile.mock.calls.length).toBeGreaterThan(statCalls);
+  });
+
+  it("Remove 事件不触发失效比对（不重 stat）", async () => {
     installVirtualFile(50);
     let fireFsEvent: ((e: { paths: string[]; kind: string; detail: string }) => void) | null =
       null;
@@ -353,10 +380,56 @@ describe("文件变更失效（FE-05）", () => {
     });
     const statCalls = mockStatFile.mock.calls.length;
     await act(async () => {
-      fireFsEvent!({ paths: [FILE], kind: "Create", detail: "Any" });
+      fireFsEvent!({ paths: [FILE], kind: "Remove", detail: "Any" });
       await new Promise((r) => setTimeout(r, 20));
     });
     expect(mockStatFile.mock.calls.length).toBe(statCalls);
+  });
+
+  it("Rescan（paths=监听根）→ 忽略路径匹配复核（重 stat 比对链）", async () => {
+    installVirtualFile(50);
+    let fireFsEvent: ((e: { paths: string[]; kind: string; detail: string }) => void) | null =
+      null;
+    mockOnFsEvent.mockImplementation((cb: (e: { paths: string[]; kind: string; detail: string }) => void) => {
+      fireFsEvent = cb;
+      return () => {};
+    });
+    const { container } = render(<LargeFileViewer filePath={FILE} sourceLabel="" />);
+    await waitFor(() => {
+      expect(lineText(container, 0)).toBe("line-0000000");
+    });
+    await waitFor(() => {
+      expect(fireFsEvent).not.toBeNull();
+    });
+    const statCalls = mockStatFile.mock.calls.length;
+    // paths 为监听根（不含本文件）——旧语义路径匹配必然落空整条丢弃
+    await act(async () => {
+      fireFsEvent!({ paths: ["/watch/root"], kind: "Rescan", detail: "Rescan" });
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(mockStatFile.mock.calls.length).toBeGreaterThan(statCalls);
+  });
+
+  it("fs-poll 心跳 → 复核 stat 比对链（事件丢失补漏）", async () => {
+    installVirtualFile(50);
+    let firePoll: (() => void) | null = null;
+    mockOnFsPoll.mockImplementation((cb: () => void) => {
+      firePoll = cb;
+      return () => {};
+    });
+    const { container } = render(<LargeFileViewer filePath={FILE} sourceLabel="" />);
+    await waitFor(() => {
+      expect(lineText(container, 0)).toBe("line-0000000");
+    });
+    await waitFor(() => {
+      expect(firePoll).not.toBeNull();
+    });
+    const statCalls = mockStatFile.mock.calls.length;
+    await act(async () => {
+      firePoll!();
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(mockStatFile.mock.calls.length).toBeGreaterThan(statCalls);
   });
 
   it("首挂 stat resolve 前索引已推进 → 保守失效重扫一次（FE-09）", async () => {

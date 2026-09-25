@@ -2,9 +2,10 @@
 //
 // 验证 onFsEvent handler 内全部路径：
 //   - onFsEvent 订阅 / unmount 取消订阅
-//   - event.kind 过滤（非 Modify 跳过）
-//   - Modify + dirty=false → 自动重载（readFile + view.dispatch）
-//   - Modify + dirty=true → window.confirm 弹窗 / 确认=重载 / 取消=保留
+//   - event.kind 过滤（Modify/Create 放行——Create=原子替换写折叠产物；Remove/Access/Other 跳过）
+//   - Modify/Create + dirty=false → 自动重载（readFile + view.dispatch）
+//   - Modify/Create + dirty=true → confirmDialog 弹窗 / 确认=重载 / 取消=保留
+//   - Rescan（paths=监听根）→ 忽略路径匹配复核已打开文件（poll 模式）
 //
 // 与旧版手动模拟 handler 逻辑不同，本文件通过 renderHook(useCodeMirror)
 // 真实驱动 hook，mock onFsEvent 捕获回调后手动触发 fs-event 验证行为。
@@ -83,6 +84,7 @@ vi.mock("../ipc/notify", () => ({
     h.mockOnFsCallback = cb;
     return h.mockUnlisten;
   }),
+  onFsPoll: vi.fn(() => () => {}),
   startWatch: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -199,19 +201,27 @@ describe("useCodeMirror fs-event 集成", () => {
     expect(h.mockUnlisten).toHaveBeenCalledTimes(1);
   });
 
-  // ── E3: event.kind 过滤 —— 非 Modify 跳过 ──
+  // ── E3: event.kind 过滤 —— Modify/Create 放行，其余跳过 ──
 
-  it("E3. kind=Create 事件 → fs.readFile 不调用", async () => {
+  it("E3. kind=Create（原子替换写折叠产物）→ 重读盘并替换内容", async () => {
     await renderAndWait();
 
     h.mockReadFile.mockClear();
+    h.mockDispatch.mockClear();
 
-    // 触发 fs-event（kind=Create，非 Modify）
-    expect(h.mockOnFsCallback).not.toBeNull();
+    // 防复发（2026-09 根因 1）：claude code 等工具「写临时文件+rename 原子替换」
+    // 经 notify-debouncer-full 折叠为单条 Create(target)——旧闸门只放行 Modify
+    // 致编辑器永不更新；断言对旧代码红（handler 为 async，须 waitFor 防 vacuous 通过）
     h.mockOnFsCallback!({ paths: ["/test/main.ts"], kind: "Create" });
 
-    // fs.readFile 不应被调用（事件被过滤）
-    expect(h.mockReadFile).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(h.mockReadFile).toHaveBeenCalledWith("/test/main.ts");
+    }, { timeout: 3000 });
+    await waitFor(() => {
+      expect(h.mockDispatch).toHaveBeenCalledWith({
+        changes: { from: 0, to: 0, insert: "// modified content" },
+      });
+    }, { timeout: 3000 });
   });
 
   it("E3b. kind=Remove 事件 → fs.readFile 不调用", async () => {
@@ -219,6 +229,17 @@ describe("useCodeMirror fs-event 集成", () => {
 
     h.mockReadFile.mockClear();
     h.mockOnFsCallback!({ paths: ["/test/main.ts"], kind: "Remove" });
+
+    expect(h.mockReadFile).not.toHaveBeenCalled();
+  });
+
+  it("E3c. kind=Access/Other 事件 → fs.readFile 不调用", async () => {
+    await renderAndWait();
+
+    h.mockReadFile.mockClear();
+    // 放行集仅 Modify/Create——Access/Other 同步闸门丢弃（无需 waitFor）
+    h.mockOnFsCallback!({ paths: ["/test/main.ts"], kind: "Access" });
+    h.mockOnFsCallback!({ paths: ["/test/main.ts"], kind: "Other" });
 
     expect(h.mockReadFile).not.toHaveBeenCalled();
   });
@@ -284,6 +305,29 @@ describe("useCodeMirror fs-event 集成", () => {
     const msg = h.mockConfirmDialog.mock.calls[0][0]?.message ?? "";
     expect(msg).toContain("已被外部修改");
     expect(msg).toContain("未保存的修改");
+  });
+
+  // ── E6b: Create + dirty=true → confirmDialog 弹窗（event 语义对 Create 保持） ──
+
+  it("E6b. Create 事件 + 脏文件 → confirmDialog 弹窗（断言调用参数）", async () => {
+    const { result } = await renderAndWait({ filePath: "/test/main.ts" });
+
+    result.result.current.markDirty();
+    h.mockReadFile.mockClear();
+    h.mockDispatch.mockClear();
+
+    h.mockOnFsCallback!({ paths: ["/test/main.ts"], kind: "Create" });
+
+    // 脏确认在读盘前同步发起（event 模式语义对 Create 不变）
+    expect(h.mockConfirmDialog).toHaveBeenCalledTimes(1);
+    expect(h.mockConfirmDialog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "外部修改",
+        message: expect.stringContaining("/test/main.ts"),
+        confirmText: "重载",
+      }),
+    );
+    expect(h.mockReadFile).not.toHaveBeenCalled();
   });
 
   // ── E7: Modify + dirty + confirmDialog=true → 重载 ──
@@ -376,5 +420,50 @@ describe("useCodeMirror fs-event 集成", () => {
         h.mockOnFsCallback({ paths: ["/test/main.ts"], kind: "Modify" });
       }
     }).not.toThrow();
+  });
+
+  // ── E11: Rescan（队列溢出补漏，paths=监听根）→ 忽略路径匹配复核已打开文件 ──
+
+  it("E11a. Rescan + 磁盘已变 → 忽略路径匹配重读盘并替换内容", async () => {
+    await renderAndWait({ filePath: "/test/main.ts" });
+    await settleRecheck();
+
+    h.mockReadFile.mockClear();
+    h.mockDispatch.mockClear();
+    h.mockReadFile.mockResolvedValue("// changed via rescan");
+
+    // paths 为监听根（不含本文件）——旧语义按路径匹配必然落空整条丢弃；
+    // 新语义忽略路径匹配对已打开文件走 poll 复核（handler async，须 waitFor）
+    h.mockOnFsCallback!({ paths: ["/test"], kind: "Rescan" });
+
+    await waitFor(() => {
+      expect(h.mockReadFile).toHaveBeenCalledWith("/test/main.ts");
+    }, { timeout: 3000 });
+    await waitFor(() => {
+      expect(h.mockDispatch).toHaveBeenCalledWith({
+        changes: { from: 0, to: 0, insert: "// changed via rescan" },
+      });
+    }, { timeout: 3000 });
+  });
+
+  it("E11b. Rescan + 磁盘未变（=滚动基线）→ 读盘一次但零打扰", async () => {
+    await renderAndWait({ filePath: "/test/main.ts" });
+    await settleRecheck();
+
+    h.mockReadFile.mockClear();
+    h.mockDispatch.mockClear();
+    // 磁盘内容 = initEditor 建立的滚动基线（"// modified content"）——
+    // poll 复核判等短路：读盘一次确认未变，无 dispatch/无弹窗
+    h.mockOnFsCallback!({ paths: ["/test"], kind: "Rescan" });
+
+    await waitFor(() => {
+      expect(h.mockReadFile).toHaveBeenCalledTimes(1);
+    }, { timeout: 3000 });
+    // readFile resolve 后判等短路为同步路径——等一拍确认无后续动作
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    expect(h.mockDispatch).not.toHaveBeenCalled();
+    expect(h.mockConfirmDialog).not.toHaveBeenCalled();
   });
 });

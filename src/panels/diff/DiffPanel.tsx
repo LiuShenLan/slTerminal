@@ -5,8 +5,11 @@
 // - 占位对齐：computeAlignment → Decoration.widget 空白行，保持两侧视觉对齐
 // - 垂直滚动同步（一侧滚动 → 另一侧 scrollTop 跟随，syncingRef 防循环），水平滚动独立
 // - 右侧 Ctrl+S：usePanelFocus("editor") + setActiveEditor → fs.writeFile → gitDiff → 刷新
-// - 左侧刷新：onFsEvent 检测 .git 路径 → 重取 HEAD
-// - 右侧外部修改：净自动重载 / 脏弹窗（照 editor 语义）
+// - 左侧刷新：onFsEvent 检测 .git 路径 → 重取 HEAD（判等加固：内容一致不 dispatch）
+// - 右侧外部修改：净自动重载 / 脏弹窗（照 editor 语义；Modify/Create 放行——
+//   Create = 原子替换写折叠产物）
+// - 事件丢失补漏：Rescan / fs-poll 心跳 → 工作区侧 poll 复核（滚动磁盘基线判变
+//   零打扰 + 拒绝标记防弹窗循环）+ HEAD 判等重取
 // - 大文件阈值复用 useCodeMirror 导出常量
 //
 // params: { panelId, filePath, oldPath?, repoPath }
@@ -27,7 +30,7 @@ import { indentWithTab } from "@codemirror/commands";
 import type { DiffHunk } from "../../types/git";
 import { gitFileAtHead, gitDiff } from "../../ipc/git";
 import { fs } from "../../ipc";
-import { onFsEvent } from "../../ipc/notify";
+import { onFsEvent, onFsPoll } from "../../ipc/notify";
 import {
   getLanguageExtension,
   MAX_FILE_SIZE_BYTES,
@@ -230,7 +233,13 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ api, params }) => {
   // 脏状态 + 路径 ref（右侧外部修改检测 / 保存抑制）
   const dirtyRef = useRef(false);
   const filePathRef = useRef(filePath);
-  const justSavedRef = useRef(false);
+  // 保存抑制按路径去重（Set<string>，同 useCodeMirror 形态）——多实例/连存互不干扰
+  const justSavedRef = useRef(new Set<string>());
+  // 滚动磁盘基线（poll 复核判变源）——写点：加载读盘 / 保存成功 / 重载应用成功；
+  // 磁盘内容 = 基线 → 零打扰（10s 心跳下打字常态不弹窗）
+  const workdirBaselineRef = useRef<string | undefined>(undefined);
+  // poll 拒绝标记——用户拒绝重载的磁盘内容：同一内容不再重复弹确认（防弹窗循环）
+  const pollRejectedRef = useRef<string | undefined>(undefined);
 
   // hunks 缓存 ref（右侧保存后重用，避免重复 gitDiff）
   const hunksRef = useRef<DiffHunk[]>([]);
@@ -261,6 +270,11 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ api, params }) => {
         ]);
 
         if (cancelled) return;
+
+        // 滚动磁盘基线 = 加载时读到的原始磁盘内容（不含警告头拼接）；
+        // 拒绝标记随文件切换清空（防跨文件泄漏）
+        workdirBaselineRef.current = workdirContent;
+        pollRejectedRef.current = undefined;
 
         // CP-022 大文件检查: >10MB 侧改引导 LargeFileViewer（只读分片浏览）——
         // 该侧内容不进 CM,对齐/滚动同步/占位对齐对只读浏览侧降级（渲染分支处理）;
@@ -396,11 +410,15 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ api, params }) => {
     const path = filePathRef.current;
     if (!path) return;
 
-    justSavedRef.current = true;
+    // 按规范化路径登记保存抑制（与 fs-event handler 的 has(规范化) 判定口径一致）
+    justSavedRef.current.add(path.replace(/\\/g, "/"));
 
     const content = view.state.doc.toString();
     try {
       await fs.writeFile(path, content);
+      // 滚动磁盘基线随写盘成功更新（poll 复核判变源）；拒绝标记同清（用户已落盘）
+      workdirBaselineRef.current = content;
+      pollRejectedRef.current = undefined;
     } catch (err) {
       // FE-43: 错误消息统一经 getErrorMessage（解析 IPC AppError 结构化消息）
       toast.show("error", `保存失败: ${getErrorMessage(err)}`);
@@ -489,14 +507,85 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ api, params }) => {
 
   // ── 右侧外部文件修改监听 ────────────────────────────────────
 
+  // HEAD 重取（.git 事件 / Rescan / fs-poll 三入口共用）——判等加固：与左栏缓冲
+  // 一致则不 dispatch（同内容 dispatch 会产生 docChanged 误标 + 无谓重渲染）。
+  // 注意：1MB-10MB 警告头拼接场景判等恒不命中（缓冲含拼接头）→ 退化为旧行为
+  // （每次都 dispatch），可接受
+  const refetchHead = useCallback(() => {
+    const queryPath = oldPath ?? filePath;
+    gitFileAtHead(repoPath, queryPath).then((content) => {
+      const leftView = leftViewRef.current;
+      if (!leftView) return;
+      if (content === leftView.state.doc.toString()) return;
+      leftView.dispatch({
+        changes: { from: 0, to: leftView.state.doc.length, insert: content },
+      });
+    }).catch(() => { /* HEAD 不存在——保持当前展示 */ });
+  }, [repoPath, filePath, oldPath]);
+  // ref 桥接：供 [] deps 的 fs-event effect 调用最新实现（防闭包过期）
+  const refetchHeadRef = useRef(refetchHead);
+  refetchHeadRef.current = refetchHead;
+
+  // 右侧工作区磁盘复核（Rescan 补漏 / fs-poll 心跳共用，镜像 useCodeMirror poll
+  // 语义）：与滚动磁盘基线判变——磁盘未变零打扰（打字常态不弹窗）；真变 → 干净
+  // 直接应用 / 脏弹确认（拒绝标记记同一磁盘内容不再重复弹）。静默探测：读盘
+  // 失败不提示（事件路径才有 toast/diffStale）
+  const recheckWorkdir = useCallback(async () => {
+    const currentPath = filePathRef.current;
+    if (!currentPath) return;
+    let content: string;
+    try {
+      content = await fs.readFile(currentPath);
+    } catch {
+      return;
+    }
+    // 磁盘相对滚动基线未变 → 零动作
+    if (content === workdirBaselineRef.current) return;
+    const view = rightViewRef.current;
+    if (!view) return; // 大文件引导态无 view——该侧由 LargeFileViewer 自管复核
+    // 干净 + 内容已一致（基线滞后）→ 同步基线短路
+    if (!dirtyRef.current && content === view.state.doc.toString()) {
+      workdirBaselineRef.current = content;
+      return;
+    }
+    if (dirtyRef.current) {
+      // 用户已拒同一磁盘内容 → 不再弹（防 10s 弹窗循环）
+      if (content === pollRejectedRef.current) return;
+      const choice = await confirmDialog({
+        title: "外部修改",
+        message: `文件 "${currentPath}" 已被外部修改。当前编辑器有未保存的修改，重载将丢弃本地修改。`,
+        confirmText: "重载",
+      });
+      if (!choice) {
+        pollRejectedRef.current = content;
+        return;
+      }
+      pollRejectedRef.current = undefined;
+    }
+    // 复核期间 view 可能已销毁 → 重取防御
+    const live = rightViewRef.current;
+    if (!live) return;
+    live.dispatch({
+      changes: { from: 0, to: live.state.doc.length, insert: content },
+    });
+    dirtyRef.current = false;
+    workdirBaselineRef.current = content;
+    pollRejectedRef.current = undefined;
+  }, []);
+
   useEffect(() => {
     const unlisten = onFsEvent(async (event) => {
       const currentPath = filePathRef.current;
       if (!currentPath) return;
 
       const normalizedCurrent = currentPath.replace(/\\/g, "/");
-      if (justSavedRef.current) {
-        justSavedRef.current = false;
+
+      // Rescan（队列溢出/超批量合并，paths=监听根——路径匹配必然落空）：忽略路径
+      // 匹配，工作区侧 poll 复核 + HEAD 判等重取（不消费 justSaved——内容判等
+      // 天然免疫自身保存回声）
+      if (event.kind === "Rescan") {
+        await recheckWorkdir();
+        refetchHeadRef.current();
         return;
       }
 
@@ -504,7 +593,20 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ api, params }) => {
         (p) => p.replace(/\\/g, "/") === normalizedCurrent,
       );
       if (!affected) return;
-      if (event.kind !== "Modify") return;
+
+      // 按文件路径去重：仅跳过本面板自己保存触发的文件事件。
+      // 收窄（2026-09 修复，同 useCodeMirror）：消费移至路径匹配之后——旧逻辑
+      // 任意 fs-event 到达即消费抑制标记，无关事件抢先消费会让保存回声本身被
+      // 误判为外部修改
+      if (justSavedRef.current.has(normalizedCurrent)) {
+        justSavedRef.current.delete(normalizedCurrent);
+        return;
+      }
+
+      // 处理 Modify 与 Create——Create = 原子替换写（临时文件+rename）/删后重建：
+      // 去抖器把原子写折叠为单条 Create(target)，已打开路径出现 Create 的语义即
+      // 「内容已被替换」，处理 = 重读盘。Remove/Access/Other 不触发 reload
+      if (event.kind !== "Modify" && event.kind !== "Create") return;
 
       const view = rightViewRef.current;
       if (!view) return;
@@ -522,6 +624,9 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ api, params }) => {
               changes: { from: 0, to: view.state.doc.length, insert: content },
             });
             dirtyRef.current = false;
+            // 滚动基线/拒绝标记同步（重载应用成功）
+            workdirBaselineRef.current = content;
+            pollRejectedRef.current = undefined;
           }).catch((err) => {
             console.warn("[slTerminal] 外部修改重载失败:", err);
             // FE-10：复用 diffStale 提示条——重载失败内容可能过时，用户可感知
@@ -533,6 +638,9 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ api, params }) => {
           view.dispatch({
             changes: { from: 0, to: view.state.doc.length, insert: content },
           });
+          // 滚动基线/拒绝标记同步（重载应用成功）
+          workdirBaselineRef.current = content;
+          pollRejectedRef.current = undefined;
         }).catch((err) => {
           console.warn("[slTerminal] 外部修改重载失败:", err);
           // FE-10：复用 diffStale 提示条——重载失败内容可能过时，用户可感知
@@ -542,7 +650,18 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ api, params }) => {
     });
 
     return () => { unlisten(); };
-  }, []);
+  }, [recheckWorkdir]);
+
+  // fs-poll 心跳（事件丢失补漏，后端 watcher 10s 周期广播）：工作区侧 poll 复核
+  // + HEAD 判等重取（与 Rescan 复核同通道）
+  useEffect(() => {
+    const unlisten = onFsPoll(() => {
+      void recheckWorkdir();
+      refetchHeadRef.current();
+    });
+
+    return () => { unlisten(); };
+  }, [recheckWorkdir]);
 
   // ── 左侧 .git 变更刷新 HEAD ─────────────────────────────────
 
@@ -553,18 +672,11 @@ const DiffPanel: React.FC<DiffPanelProps> = ({ api, params }) => {
       );
       if (!hasGitChange) return;
 
-      const queryPath = oldPath ?? filePath;
-      gitFileAtHead(repoPath, queryPath).then((content) => {
-        const leftView = leftViewRef.current;
-        if (!leftView) return;
-        leftView.dispatch({
-          changes: { from: 0, to: leftView.state.doc.length, insert: content },
-        });
-      }).catch(() => { /* HEAD 不存在——保持当前展示 */ });
+      refetchHead();
     });
 
     return () => { unlisten(); };
-  }, [repoPath, filePath, oldPath]);
+  }, [refetchHead]);
 
   // ── CM6 编辑器挂载 ──────────────────────────────────────────
 

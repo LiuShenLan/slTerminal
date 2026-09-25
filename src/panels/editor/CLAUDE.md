@@ -58,6 +58,18 @@ CM6 编辑器主题来源 = `editorThemeSlot` 主题热切换槽（CP-039）：`
 
 改动覆盖规则前必读 `@../../theme/CLAUDE.md`「editorColorOverrides 的 CM6 层叠」。
 
+### 外部修改同步三模式（2026-09-25 修复）
+
+`applyExternalChange(path, { mode, toastOnError, baseline? })` 是外部内容变更落盘 → 缓冲刷新的唯一入口，三调用方语义：
+
+- **event（fs-event = 权威信号）**：放行集 `kind ∈ {Modify, Create}`——Create = 原子替换写（临时文件+rename）/删后重建经 notify-debouncer-full 的折叠产物，已打开路径出现 Create 的语义即「内容已被替换」；Remove/Access/Other 丢弃。脏文件**读盘前**先弹确认（取消零读盘，E6/E8 语义锁死）；干净文件读盘后与缓冲判等短路（touch 类 Modify 不做同内容替换）。
+- **recheck（打开后核对，CP-029）**：与打开时基线（opts.baseline）判变——打字常态不误报。
+- **poll（fs-poll 心跳/Rescan 补漏 = 周期静默探测）**：与**滚动磁盘基线** `diskBaselineRef` 判变（写点 = 读盘建缓冲/保存成功/重载应用成功）——磁盘未变零打扰（10s 心跳下打字常态不弹窗）；真变 → 干净直接应用 / 脏读盘后弹确认（拒绝标记 `pollRejectedRef` 记同一磁盘内容不再重复弹，防 10s 弹窗循环）；`toastOnError` 恒 false。基线与拒绝标记按文件隔离，`[container, filePath]` 重建时同清（container=null 提前返回不清——htmlviewer render 态保活）。
+- **Rescan 分支**（队列溢出/超批量合并，paths=监听根）：忽略路径匹配复核已打开文件，走 poll 模式，不消费 justSaved（内容判等天然免疫保存回声）。
+- **view 缺失回写（htmlviewer render 态）**：container=null 不建 view 时，读盘内容经 `onDocContent(content, "reload")` 回写面板 docRef（预览随之重渲染）而非丢弃；`lastReportedContentRef` 判等短路防心跳空转触发面板 setDoc → 预览无谓重渲染。
+- **TOCTOU 理论窗口（⑦ 登记）**：读盘与 dispatch 之间磁盘再变 → 以读到内容为准刷新（随后事件/心跳会再校正）；窗口毫秒级，无额外防护，登记备查。
+- **justSaved 收窄与回声驻留（① 登记）**：保存抑制条目仅在「事件路径命中本文件」时消费（旧逻辑任意事件到达即消费，无关事件抢先消费会让保存回声被误判为外部修改）。代价 = 回声驻留：自身写盘事件丢失时条目驻留，会吞掉下一次同路径真实修改——由 fs-poll 心跳 10s 内容复核兜底（基线判变绕过 justSaved）。
+
 ### Ctrl+S 迁入 ShortcutRegistry
 
 `editor.save`（Ctrl+S）不再走 CodeMirror keymap。命令在 `App.tsx` 一次性注册（`createEditorShortcuts()`），handler 经 `getActiveEditor().save()` 派发到聚焦编辑器；`useCodeMirror` 经 `usePanelFocus("editor", container, activate, deactivate)` 在聚焦时 `setActiveEditor`。window capture 命中 → `stopPropagation` 屏蔽 CM；`Ctrl+F`/撤销/重做未注册 → 冒泡回 CM 内部 keymap。`save` 动作用 `handleSaveRef` 保持最新引用。

@@ -18,3 +18,15 @@ kind: string,
  * 子类型：File | Folder | Content | Name(From/To/Both) | Metadata | Any
  */
 detail: string, };
+
+/**
+ * fs-poll 心跳载荷（事件丢失补漏通道——watcher 存活且未暂停期间周期广播，
+ * 仅编辑域消费方订阅，对已打开文件做磁盘复核；paths = 监听根路径）
+ *
+ * CP-024:ts-rs 生成 `src/types/notify.ts`。
+ */
+export type FsPollPayload = { 
+/**
+ * 监听根路径列表
+ */
+paths: Array<string>, };

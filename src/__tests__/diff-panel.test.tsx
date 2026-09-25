@@ -2,7 +2,8 @@
 //
 // 覆盖：三态（loading/content/error）、data-e2e 容器渲染、gitDiff 调用、
 // 滚动同步（模拟 scroll 断言对侧 scrollTop + syncingRef 防循环）、
-// 保存后重新调 gitDiff + writeFile、外部修改重载
+// 保存后重新调 gitDiff + writeFile、外部修改重载（Modify/Create 放行、
+// justSaved 收窄、Rescan/fs-poll 复核、HEAD 判等重取）
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, waitFor, cleanup } from "@testing-library/react";
@@ -11,6 +12,7 @@ import React from "react";
 // ── mock 状态（vi.hoisted 确保模块级 mock 前就绪） ─────────
 
 const { mockGitFileAtHead, mockGitDiff, mockReadFile, mockWriteFile, mockReadFileRange, mockOnFsEvent,
+  mockOnFsPoll,
   mockUseFontSizeWheel, mockSetEditorFontSize, mockUsePanelFocus,
   mockSetActiveEditor, mockClearActiveEditor, mockConfirmDialog, mockToastShow,
   mockGetErrorMessage } = vi.hoisted(
@@ -22,6 +24,7 @@ const { mockGitFileAtHead, mockGitDiff, mockReadFile, mockWriteFile, mockReadFil
     // CP-022: >10MB 侧引导 LargeFileViewer——按需读块经 ipc/fs.readFileRange
     mockReadFileRange: vi.fn(),
     mockOnFsEvent: vi.fn(),
+    mockOnFsPoll: vi.fn(),
     mockUseFontSizeWheel: vi.fn(),
     mockSetEditorFontSize: vi.fn(),
     mockUsePanelFocus: vi.fn(),
@@ -55,6 +58,7 @@ vi.mock("../ipc", () => ({
 
 vi.mock("../ipc/notify", () => ({
   onFsEvent: mockOnFsEvent,
+  onFsPoll: mockOnFsPoll,
 }));
 
 vi.mock("../lib/useFontSizeWheel", () => ({
@@ -156,6 +160,7 @@ describe("DiffPanel", () => {
     mockReadFileRange.mockResolvedValue("");
     mockGitDiff.mockResolvedValue([]);
     mockOnFsEvent.mockReturnValue(() => {});
+    mockOnFsPoll.mockReturnValue(() => {});
   });
 
   afterEach(() => {
@@ -739,6 +744,193 @@ describe("DiffPanel", () => {
 
     await waitFor(() => {
       expect(rightView.state.doc.toString()).toBe("外部新内容");
+    });
+  });
+
+  // ── 外部修改：Create 放行（2026-09 根因 1 修复） ─────────────
+
+  it("净态外部 Create（原子替换写折叠产物）→ 自动重载右侧内容【防复发】", async () => {
+    const { container } = render(
+      React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
+    });
+    await waitFor(() => {
+      expect(mockReadFile).toHaveBeenCalledTimes(1);
+    });
+
+    const fsEventCb = mockOnFsEvent.mock.calls[0]?.[0];
+    mockReadFile.mockResolvedValue("原子替换后的内容");
+
+    // 防复发（2026-09 根因 1）：claude code 等工具「写临时文件+rename 原子替换」
+    // 经 notify-debouncer-full 折叠为单条 Create(target)——旧闸门只放行 Modify
+    // 致右栏永不更新；断言对旧代码红（Create 被丢弃 → readFile 恒 1 次）
+    fsEventCb({ paths: ["D:/repo/src/test.ts"], kind: "Create" });
+
+    await waitFor(() => {
+      expect(mockReadFile).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      const rightView = getDiffView(container, "diff-right");
+      expect(rightView?.state.doc.toString()).toBe("原子替换后的内容");
+    });
+  });
+
+  it("justSaved 消费收窄到路径命中后：无关事件不消费条目【防复发】", async () => {
+    const { container } = render(
+      React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
+    });
+
+    // 经 usePanelFocus activate 回调触发保存（照「保存后 gitDiff 返回空」先例）
+    let activate: (() => void) | undefined;
+    await waitFor(() => {
+      activate = mockUsePanelFocus.mock.calls.find((c) => c[1] !== null)?.[2];
+      expect(activate).toBeTypeOf("function");
+    });
+    activate?.();
+    const calls = mockSetActiveEditor.mock.calls;
+    const actions = (calls[calls.length - 1]?.[0] ?? undefined) as
+      | { save: () => void }
+      | undefined;
+    actions!.save();
+    await waitFor(() => {
+      expect(mockWriteFile).toHaveBeenCalled();
+    });
+
+    const fsEventCb = mockOnFsEvent.mock.calls[0]?.[0];
+    const readCountAfterSave = mockReadFile.mock.calls.length;
+
+    // 无关路径事件先到：旧逻辑任意 fs-event 到达即消费抑制标记——收窄后路径
+    // 不匹配直接 return，条目保留（不读盘）
+    fsEventCb({ paths: ["D:/repo/src/other.ts"], kind: "Modify" });
+    expect(mockReadFile.mock.calls.length).toBe(readCountAfterSave);
+
+    // 本文件保存回声随后到达：条目仍在 → 命中消费 → 跳过
+    // 【对旧代码红】：旧逻辑标记已被无关事件抢先消费，回声被误判为外部修改重载
+    // （handler 净态路径在首个 await 前同步调 readFile——立即断言有效）
+    fsEventCb({ paths: ["D:/repo/src/test.ts"], kind: "Modify" });
+    expect(mockReadFile.mock.calls.length).toBe(readCountAfterSave);
+
+    // 条目一次性消费完毕 → 此后真实外部修改正常重载
+    mockReadFile.mockResolvedValue("真实外部修改");
+    fsEventCb({ paths: ["D:/repo/src/test.ts"], kind: "Modify" });
+    await waitFor(() => {
+      expect(mockReadFile.mock.calls.length).toBe(readCountAfterSave + 1);
+    });
+  });
+
+  // ── Rescan / fs-poll 复核（2026-09 事件丢失补漏） ─────────────
+
+  it("Rescan（paths=监听根）→ 忽略路径匹配：工作区重读 + HEAD 判等重取", async () => {
+    const { container } = render(
+      React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
+    });
+    await waitFor(() => {
+      expect(getDiffView(container, "diff-right")).toBeTruthy();
+    });
+
+    const fsEventCb = mockOnFsEvent.mock.calls[0]?.[0];
+    mockReadFile.mockResolvedValue("rescan 后的工作区内容");
+    mockGitFileAtHead.mockResolvedValue("// HEAD v2\nline1\nline2\n");
+
+    // paths 为监听根（不含本文件）——旧语义路径匹配必然落空整条丢弃
+    fsEventCb({ paths: ["D:/repo"], kind: "Rescan" });
+
+    await waitFor(() => {
+      const rightView = getDiffView(container, "diff-right");
+      expect(rightView?.state.doc.toString()).toBe("rescan 后的工作区内容");
+    });
+    await waitFor(() => {
+      const leftView = getDiffView(container, "diff-left");
+      expect(leftView?.state.doc.toString()).toContain("HEAD v2");
+    });
+
+    // HEAD 判等加固：再次 Rescan 且 HEAD 内容未变 → 不 dispatch
+    // （doc 对象同一性断言——全量替换会重建 Text，判等跳过则引用不变；
+    //  占位刷新等 effects-only dispatch 不改 doc 引用，不干扰）
+    const leftView = getDiffView(container, "diff-left")!;
+    const docBefore = leftView.state.doc;
+    fsEventCb({ paths: ["D:/repo"], kind: "Rescan" });
+    await waitFor(() => {
+      expect(mockGitFileAtHead.mock.calls.length).toBeGreaterThanOrEqual(3);
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(leftView.state.doc).toBe(docBefore);
+  });
+
+  it("fs-poll 心跳：磁盘变 + 干净 → 静默重载右侧", async () => {
+    const { container } = render(
+      React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
+    );
+    await waitFor(() => {
+      expect(getDiffView(container, "diff-right")).toBeTruthy();
+    });
+
+    const pollCb = mockOnFsPoll.mock.calls[0]?.[0];
+    expect(pollCb).toBeTypeOf("function");
+    mockReadFile.mockResolvedValue("poll 心跳读到的新内容");
+
+    pollCb();
+
+    await waitFor(() => {
+      const rightView = getDiffView(container, "diff-right");
+      expect(rightView?.state.doc.toString()).toBe("poll 心跳读到的新内容");
+    });
+    expect(mockConfirmDialog).not.toHaveBeenCalled();
+  });
+
+  it("fs-poll 心跳：磁盘未变（=滚动基线）→ 零打扰", async () => {
+    const { container } = render(
+      React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector('[data-e2e="diff-panel"]')).toBeTruthy();
+    });
+    await waitFor(() => {
+      expect(mockReadFile).toHaveBeenCalledTimes(1);
+    });
+
+    const pollCb = mockOnFsPoll.mock.calls[0]?.[0];
+    // 磁盘内容 = 加载基线（"// workdir\nline1\nline2\n"）→ 判等短路
+    pollCb();
+
+    await waitFor(() => {
+      expect(mockReadFile).toHaveBeenCalledTimes(2); // 心跳照读盘一次
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    const rightView = getDiffView(container, "diff-right");
+    expect(rightView?.state.doc.toString()).toBe("// workdir\nline1\nline2\n");
+    expect(mockConfirmDialog).not.toHaveBeenCalled();
+  });
+
+  it("fs-poll 心跳：磁盘变 + 脏 → confirm 确认后重载", async () => {
+    const { container } = render(
+      React.createElement(DiffPanel, { api: FAKE_API, params: makeParams() }),
+    );
+    await waitFor(() => {
+      expect(getDiffView(container, "diff-right")).toBeTruthy();
+    });
+    const rightView = getDiffView(container, "diff-right")!;
+    rightView.dispatch({ changes: { from: 0, insert: "dirty" } });
+
+    mockConfirmDialog.mockResolvedValue(true);
+    mockReadFile.mockResolvedValue("poll 确认后重载内容");
+
+    const pollCb = mockOnFsPoll.mock.calls[0]?.[0];
+    pollCb();
+
+    await waitFor(() => {
+      expect(mockConfirmDialog).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(rightView.state.doc.toString()).toBe("poll 确认后重载内容");
     });
   });
 

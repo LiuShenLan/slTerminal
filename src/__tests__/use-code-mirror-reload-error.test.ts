@@ -72,6 +72,7 @@ vi.mock("../ipc/notify", () => ({
     h.mockOnFsCallback = cb;
     return h.mockUnlisten;
   }),
+  onFsPoll: vi.fn(() => () => {}),
   startWatch: vi.fn().mockResolvedValue(undefined),
 }));
 

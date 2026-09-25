@@ -30,7 +30,7 @@ function createGitMocks(overrides?: { gitStatus?: Fn }) {
   return { gitStatus: overrides?.gitStatus ?? vi.fn().mockResolvedValue([]) };
 }
 
-function createNotifyMocks(overrides?: { startWatch?: Fn; stopWatch?: Fn; onFsEvent?: Fn }) {
+function createNotifyMocks(overrides?: { startWatch?: Fn; stopWatch?: Fn; onFsEvent?: Fn; onFsPoll?: Fn }) {
   let fsEventCallback: (() => void) | null = null;
   return {
     startWatch: overrides?.startWatch ?? vi.fn().mockResolvedValue(undefined),
@@ -39,6 +39,7 @@ function createNotifyMocks(overrides?: { startWatch?: Fn; stopWatch?: Fn; onFsEv
       fsEventCallback = cb;
       return () => { fsEventCallback = null; };
     }),
+    onFsPoll: overrides?.onFsPoll ?? vi.fn(() => () => {}),
     triggerFsEvent() { fsEventCallback?.(); },
   };
 }
@@ -99,6 +100,7 @@ afterAll(() => {
 // ═══════════════════════════════════════════════════════════════
 vi.mock("../ipc/notify", () => ({
   onFsEvent: () => () => {},
+  onFsPoll: () => () => {},
   startWatch: () => Promise.resolve(),
   stopWatch: () => Promise.resolve(),
 }));

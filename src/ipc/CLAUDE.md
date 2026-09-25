@@ -33,7 +33,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Event 模式
 
-`onFsEvent` / `onAgentEvent` / `onPlanBalanceUpdated` 封装 Tauri `listen(...)`，返回 unsubscribe 函数。调用方负责在卸载时取消订阅。
+`onFsEvent` / `onFsPoll` / `onAgentEvent` / `onPlanBalanceUpdated` 封装 Tauri `listen(...)`，返回 unsubscribe 函数。调用方负责在卸载时取消订阅。
+
+- `onFsPoll`（2026-09-25）：后端 watcher 10s 心跳事件（`fs-poll`，`FsPollPayload { paths }` = 监听根），事件丢失补漏通道；消费方仅编辑域三处（useCodeMirror/DiffPanel/LargeFileViewer），契约细节见 src-tauri/src/notify/CLAUDE.md。
+- **unlisten 竞态（⑥ 登记）**：`listen()` 异步注册，wrapper 形态为 `unlisten.then(fn => fn())`——组件挂载后**立即卸载**时取消可能先于注册完成，此时 then 回调在注册完成后补取消，语义正确；但卸载与事件窗口叠加时 handler 闭包仍可能被已 in-flight 的事件调用一次（editor-confirm E9/E10 锁死此形态：unmount 后回调不 throw、不读盘）。消费方 handler 须幂等防御卸载后调用，勿假设 unlisten 后零回调。
 
 ### PTY 命令归属校验（SEC-08）
 

@@ -999,6 +999,30 @@ describe("HtmlPanel viewMode 形态切换", () => {
     expect(mocks.mockReadFile).toHaveBeenCalledTimes(1);
   });
 
+  it("render 态 onDocContent(\"reload\") → docRef 更新 → 预览产物重推（根因 2 接线契约锁）", async () => {
+    renderHtmlPanelWithMode(undefined); // render 态（默认）
+    await waitForRender("C:/test/index.html");
+
+    // render 态 useCodeMirror 以 container=null 调用（viewless），onDocContent
+    // 回写通道仍须挂载——外部修改重载经此回写 docRef（2026-09 根因 2 修复）
+    const cmCalls = mocks.mockUseCodeMirror.mock.calls;
+    const call = cmCalls[cmCalls.length - 1]![0] as {
+      container: unknown;
+      onDocContent?: (text: string, source: string) => void;
+    };
+    expect(call.container).toBeNull();
+    expect(call.onDocContent).toBeDefined();
+
+    await act(async () => {
+      call.onDocContent!("<h1>External Rewrite</h1>", "reload");
+    });
+
+    // docRef 更新 → 装配产物重推宿主 iframe（预览随之更新）
+    await waitFor(() => {
+      expect(lastRenderedDoc()).toContain("<h1>External Rewrite</h1>");
+    });
+  });
+
   it("viewMode=edit 布局恢复：直接 edit 形态（无宿主 iframe），读盘一次后快照回填 CM", async () => {
     const { container } = renderHtmlPanelWithMode("edit");
     // edit div 仅 ready 后渲染——loading 期间无预览宿主

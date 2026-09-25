@@ -2,7 +2,8 @@
  * HTML 面板域 E2E spec（E2E-09 拆分；ADR-0021 预览回迁主窗 DOM 后重写）：
  * 主窗口快捷键关闭链路、Ctrl+滚轮缩放（注入运行时执行于宿主 iframe 内
  * 嵌套 srcdoc 文档；HUD/工具条带在主窗 DOM）、宿主内联 <script> 执行
- * （CP-031 原 :87 skip 用例恢复）、面板关闭/形态切换的宿主 iframe 生命周期。
+ * （CP-031 原 :87 skip 用例恢复）、面板关闭/形态切换的宿主 iframe 生命周期、
+ * render 态外部改写同步（根因 2 防复发——原子替换写 → 预览探针内容更新）。
  *
  * 驱动契约（ADR-0021 + spike Q4 裁决）：预览渲染于主窗内跨源沙箱 iframe
  * （data-e2e="preview-frame-<panelId>"）——embedded driver frame 内 execute
@@ -16,7 +17,7 @@
  */
 
 import { expect, browser } from "@wdio/globals";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, renameSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -513,6 +514,57 @@ describe("HTML 面板 edit 态 Ctrl+滚轮字号", () => {
     } finally {
       // 面板关闭卫生——本用例宿主 iframe 已随 edit 切换移除，关闭面板防残留
       // dockview 面板污染后续 spec（见 closePanelAndWaitGone）
+      if (panelId) await closePanelAndWaitGone(panelId);
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("HTML 面板 render 态外部改写同步（2026-09 根因 2 防复发）", () => {
+  // htmlviewer render 态无 CM view——旧实现 fs-event 到达后 `if (!view) return`
+  // 丢弃已读内容，预览永不更新。修复后读盘内容经 onDocContent("reload") 回写
+  // docRef → 预览重渲染。探针断言推送产物含新 marker（等价预览更新）。
+  it("render 态外部原子替换写 → 预览探针内容更新", async () => {
+    const markerV1 = "render_sync_v1_" + Date.now();
+    const markerV2 = "render_sync_v2_" + Date.now();
+    const tempDir = mkdtempSync(join(tmpdir(), "slterm-e2e-html-sync-"));
+    const htmlPath = join(tempDir, "sync.html");
+    const tmpPath = join(tempDir, "sync.html.tmp");
+    writeFileSync(
+      htmlPath,
+      `<!DOCTYPE html><html><head><title>sync</title></head><body><h1>${markerV1}</h1></body></html>`,
+      "utf8",
+    );
+    let panelId: string | undefined;
+    try {
+      await waitForWorkspaceReady();
+      await createProject(tempDir);
+      await waitForDockviewApi();
+      panelId = "e2e-html-sync-" + Date.now();
+      await browser.execute(
+        (args: { pid: string; path: string }) => {
+          window.__dockviewApi!.addPanel({
+            id: args.pid,
+            component: "htmlviewer",
+            params: { panelId: args.pid, filePath: args.path },
+          });
+        },
+        { pid: panelId, path: htmlPath },
+      );
+      // render 态（默认）初始渲染到位
+      await waitPreviewDocContains(panelId, markerV1);
+
+      // 原子替换写（claude code 同款：写临时文件 + rename 覆盖）
+      writeFileSync(
+        tmpPath,
+        `<!DOCTYPE html><html><head><title>sync</title></head><body><h1>${markerV2}</h1></body></html>`,
+        "utf8",
+      );
+      renameSync(tmpPath, htmlPath);
+
+      // render 态外部改写必须同步到预览（根因 1 Create 放行 + 根因 2 回写双链）
+      await waitPreviewDocContains(panelId, markerV2);
+    } finally {
       if (panelId) await closePanelAndWaitGone(panelId);
       rmSync(tempDir, { recursive: true, force: true });
     }
