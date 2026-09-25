@@ -71,6 +71,38 @@ export async function minimizeWindow(): Promise<void> {
 }
 
 /**
+ * 查询窗口当前是否最大化
+ *
+ * 供自绘标题栏最大化钮的图标/文案状态源（TB-07）——挂载初始回查 +
+ * onWindowResized 事件内回查（onResized 事件只含 PhysicalSize，不含最大化态）。
+ */
+export async function isWindowMaximized(): Promise<boolean> {
+  const appWindow = getCurrentWindow();
+  return appWindow.isMaximized();
+}
+
+/**
+ * 注册窗口尺寸变化监听器
+ *
+ * 最大化/还原必经 resize（按钮/双击拖拽区/拖边框/Win+方向键 snap 全路径），
+ * 故作为 maximized 状态感知的事件源。回调无参——调用方在回调内回查
+ * isWindowMaximized() 获取状态。返回取消监听的清理函数。
+ * 注意：handler 须幂等防御卸载后调用（listen 异步注册竞态，见本目录 CLAUDE.md ⑥）。
+ */
+export function onWindowResized(cb: () => void): () => void {
+  const appWindow = getCurrentWindow();
+  const unlisten = appWindow.onResized(() => {
+    cb();
+  });
+  return () => {
+    // 照 registerCloseHandler（FE-26）：unlisten Promise 可能 reject——兜底记录
+    unlisten.then((fn) => fn()).catch((err) => {
+      console.warn("[slTerminal] 取消窗口尺寸监听失败:", err);
+    });
+  };
+}
+
+/**
  * 切换最大化/还原
  *
  * 供自绘标题栏最大化钮与中段双击调用（TB-03/TB-04）。

@@ -52,6 +52,7 @@ renamed 状态传 `oldPath` 给 diff 面板，用于 HEAD 侧查询旧路径内�
 - 文件名色：`GIT_FILE_COLORS[status]`（硬约束 #6，从 `theme/colors.ts` token 引用）。
 - 父目录后缀：灰色 `INPUT_BORDER`，紧接文件名右侧显示相对目录路径。
 - 可折叠：每列表标题栏点击折叠/展开，状态不持久化。
+- **横向滚动（2026-09）**：listContainer `overflowX:"auto"` + 内容层 `width:max-content; minWidth:100%`（先例 LargeFileViewer）——内容超宽出横向滚动条、不超宽自动消失，行背景随内容延伸。
 - 空态/状态提示文字色 = `DIM_FG`（人工验证问题 4 修订——原误用 `INPUT_BORDER`）。
 
 ### 右键菜单策略（`commitContextMenu.ts`）

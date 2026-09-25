@@ -776,17 +776,23 @@ export const FileTree: React.FC<FileTreeProps> = ({
 
   // 虚拟化列表：自持滚动容器 + padding 占位（top/bottom spacer 用容器 padding 而非子 div——
   // 点击占位区域命中 content 自身，可触发空白取消选中）
+  // 横向滚动（2026-09）：overflowX auto + 内容 div max-content/minWidth:100%——内容超宽
+  // 出横向滚动条、不超宽撑满自动消失；行背景随内容延伸（先例 LargeFileViewer）。
+  // spacer（垂直向）与 max-content（横向）正交共存；横向滚动条吃掉的视口高度经
+  // ResizeObserver 自动重算窗口，零额外代码。
   const virtualList = (
     <div
       ref={scrollRef}
       onScroll={handleScroll}
-      style={{ height: "100%", overflowY: "auto", overflowX: "hidden" }}
+      style={{ height: "100%", overflowY: "auto", overflowX: "auto" }}
     >
       <div
         onClick={handleContentBlankClick}
         style={{
           paddingTop: start * ROW_HEIGHT,
           paddingBottom: (total - end) * ROW_HEIGHT,
+          width: "max-content",
+          minWidth: "100%",
         }}
       >
         {visibleRows.map(renderRow)}

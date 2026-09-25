@@ -26,6 +26,7 @@ export {
   IconClose,
   IconMin,
   IconMax,
+  IconRestore,
   IconCloseWin,
   IconPlus,
   IconFolder,

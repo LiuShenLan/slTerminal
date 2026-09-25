@@ -248,6 +248,22 @@ describe("sideBar store", () => {
     expect(s.splitRatio).toBe(SPLIT_MAX);
   });
 
+  it("11b. loadFromDisk 棘轮指纹清洗——splitRatio 恰好 0.9 → 重置 SPLIT_DEFAULT", async () => {
+    mockLoadSettings.mockResolvedValue({
+      data: {
+        sideBar: {
+          zones: { top: ["nav"], bottom: [] },
+          open: { top: "nav", bottom: null },
+          width: 250,
+          splitRatio: 0.9,
+        },
+      },
+      corrupted: false,
+    });
+    await useSideBar.getState().loadFromDisk();
+    expect(useSideBar.getState().splitRatio).toBe(SPLIT_DEFAULT);
+  });
+
   it("12. loadFromDisk 脏数据 sanitize——zones/open 结构非法 → 回退默认", async () => {
     mockLoadSettings.mockResolvedValue({
       data: {

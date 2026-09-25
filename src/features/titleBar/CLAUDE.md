@@ -17,8 +17,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### 窗口控制三钮（TB-03）
 
-- 三钮 = 最小化 / 最大化/还原 / 关闭，38×26、图标 12px、`aria-label` + `title`。
+- 三钮 = 最小化 / 最大化（还原） / 关闭，38×26、图标 12px、`aria-label` + `title`。
 - IPC 一律经 `src/ipc/window` wrapper：`minimizeWindow` / `toggleMaximizeWindow` / `closeWindow`。
+- **最大化钮状态感知（TB-07，2026-09）**：图标/文案随窗口 maximized 态双态切换——`IconMax`+「最大化」 ↔ `IconRestore`+「还原」。状态源 = 文件内 `useWindowMaximized()` hook：挂载初始 `isWindowMaximized()` 回查 + `onWindowResized` 订阅（事件内再回查——onResized 只含 PhysicalSize 不含最大化态）。必须走窗口事件而非 onClick 本地翻转：最大化全路径（按钮/双击原生拖拽区/拖边框/Win+方向键 snap）必经 resize 事件。WIN_BUTTONS 因此改为渲染期派生（`buildWinButtons(maximized)`），不再是模块级静态数组。
 - **关闭 = `closeWindow()`**——触发 `onCloseRequested` 事件，复用 `registerCloseHandler` 注册的 P1-19 关窗链路（遍历 TerminalRegistry 杀 PTY + 后端 Job Object 兜底），禁止 `destroy`/`process.exit` 绕过。
 - **关闭钮 hover 例外**：hover 底 = `TITLEBAR_CLOSE_HOVER_BG`（`ui.titlebarCloseHover` 危险色，UI-301 定值，FE-07 token 化）。
 
@@ -30,11 +31,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 测试模式
 
-L2 测试：`src/__tests__/title-bar.test.tsx`（TB-06-1~9 + FE-21-1/2）：
+L2 测试：`src/__tests__/title-bar.test.tsx`（TB-06-1~9 + TB-07-1~5 + FE-21-1/2）：
 
 - 三段结构渲染、中段标题按 store 种子、三钮点击调对应 IPC wrapper。
 - 中段无 React 双击 handler；左/中段拖拽区 `data-tauri-drag-region="deep"` + `height: "100%"`。
 - FE-21 窄订阅：无关项目变更不触发重渲染，切换 layout activePageId 标题响应更新。
+- TB-07 maximized 双态：mock `../ipc/window` 需含 `isWindowMaximized`（默认 resolve false）+ `onWindowResized`（hoisted 捕获回调供触发）——覆盖初始回查、resize 事件双向翻转、卸载后回调不抛。
 
 ## 运行
 

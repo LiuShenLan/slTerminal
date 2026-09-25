@@ -71,6 +71,9 @@ vi.mock("../ipc/window", () => ({
     return () => {};
   }),
   onFocusChanged: vi.fn(() => () => {}),
+  // TB-07：TitleBar maximized 状态感知（挂载期即调用）
+  isWindowMaximized: vi.fn().mockResolvedValue(false),
+  onWindowResized: vi.fn(() => () => {}),
 }));
 
 // 关闭序列第 4 步：restoreStatusline（覆盖 setup.ts 全局 mock，spy 断言调用与 cliId 透传）
@@ -129,6 +132,8 @@ vi.mock("../lib", () => ({
   },
   IconMin: () => null,
   IconMax: () => null,
+  // TB-07: maximized 态还原图标（双态分支引用，mock 缺失则 createElement(undefined) 崩）
+  IconRestore: () => null,
   IconCloseWin: () => null,
   // OV-01: App 根部浮层挂载点（本测试不关心浮层，渲染 null）
   ConfirmDialogHost: () => null,

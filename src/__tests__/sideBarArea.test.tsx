@@ -10,44 +10,52 @@
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import React, { useEffect } from "react";
-import { render, cleanup } from "@testing-library/react";
+import { render, cleanup, act } from "@testing-library/react";
 
-// ─── Hoisted mocks ───
-const mocks = vi.hoisted(() => {
+// ─── Hoisted mocks（仅状态——组件创建须推迟到 vi.mock 工厂内，hoisted 期 React 未初始化） ───
+const mocks = vi.hoisted(() => ({
   /** Pane props 记录器（按渲染顺序追加） */
-  const panePropsList: Array<Record<string, unknown>> = [];
+  panePropsList: [] as Array<Record<string, unknown>>,
   /** 捕获的 Allotment onChange 回调 */
-  let onChangeCapture: ((sizes: number[]) => void) | null = null;
+  onChangeCell: { fn: null as ((sizes: number[]) => void) | null },
+  /** ref.resize 调用记录（比例像素纠偏契约断言点，2026-09） */
+  resizeCalls: [] as number[][],
+  getOnChange(): ((sizes: number[]) => void) | null {
+    return this.onChangeCell.fn;
+  },
+}));
 
-  const MockAllotment: any = ({ children, onChange }: any) => {
-    onChangeCapture = onChange;
-    return React.createElement(
-      "div",
-      { "data-testid": "allotment-vertical" },
-      children,
-    );
-  };
+vi.mock("allotment", async () => {
+  const React = await import("react");
+  const MockAllotment: any = React.forwardRef(
+    ({ children, onChange }: any, ref: any) => {
+      mocks.onChangeCell.fn = onChange;
+      React.useImperativeHandle(ref, () => ({
+        resize: (sizes: number[]) => {
+          mocks.resizeCalls.push([...sizes]);
+        },
+        reset: () => {},
+      }));
+      return React.createElement(
+        "div",
+        { "data-testid": "allotment-vertical" },
+        children,
+      );
+    },
+  );
 
   MockAllotment.Pane = (props: any) => {
     const { children, ...rest } = props;
-    panePropsList.push(rest);
+    mocks.panePropsList.push(rest);
     return React.createElement(
       "div",
-      { "data-testid": `allotment-pane-${panePropsList.length}` },
+      { "data-testid": `allotment-pane-${mocks.panePropsList.length}` },
       children,
     );
   };
 
-  return {
-    MockAllotment,
-    panePropsList,
-    getOnChange: (): ((sizes: number[]) => void) | null => onChangeCapture,
-  };
+  return { Allotment: MockAllotment };
 });
-
-vi.mock("allotment", () => ({
-  Allotment: mocks.MockAllotment,
-}));
 
 // 阻止 store subscribe 触发真实 saveSettings（loaded=false 已足够，但显式 mock 更安全）
 // FE-11/D11：wrapper 返回 { data, corrupted }——无文件 = data:null, corrupted:false
@@ -108,14 +116,42 @@ function resetStore() {
   });
 }
 
-/** 清空 pane 记录器 */
+/** 清空 pane 记录器 + resize 调用记录 */
 function resetPaneProps() {
   mocks.panePropsList.length = 0;
+  mocks.resizeCalls.length = 0;
+}
+
+/** 模拟容器视口高度（jsdom clientHeight 恒 0——覆盖 HTMLElement.prototype getter）。
+ *  返回恢复函数（照 explorer-virtualization 先例）。 */
+function mockClientHeight(h: number): () => void {
+  const proto = HTMLElement.prototype as unknown as { clientHeight: number };
+  const desc = Object.getOwnPropertyDescriptor(proto, "clientHeight");
+  Object.defineProperty(proto, "clientHeight", {
+    configurable: true,
+    get: () => h,
+  });
+  return () => {
+    if (desc) Object.defineProperty(proto, "clientHeight", desc);
+    else
+      delete (proto as unknown as Record<string, unknown>).clientHeight;
+  };
 }
 
 /** 获取记录的 pane props（按渲染序） */
 function getPaneProps(): Record<string, unknown>[] {
   return [...mocks.panePropsList];
+}
+
+/** 冲刷 N 帧 rAF——纠偏 effect 的就绪轮询以 rAF 驱动，断言前须跨帧 */
+async function flushRaf(rounds = 3): Promise<void> {
+  for (let i = 0; i < rounds; i++) {
+    await act(async () => {
+      await new Promise((resolve) =>
+        requestAnimationFrame(() => resolve(null)),
+      );
+    });
+  }
 }
 
 /** 默认 props */
@@ -196,20 +232,177 @@ describe("SideBarArea", () => {
     expect(paneProps[1].visible).toBe(true);
   });
 
-  // ─── SB-20: preferredSize 使用比例基数 ───
-  it("上 pane preferredSize = splitRatio * 100，下 pane preferredSize = (1-splitRatio) * 100", () => {
-    useSideBar.setState({
-      splitRatio: 0.6,
-      open: { top: "nav", bottom: "explorer" },
-    });
-    // 需要两个区都有视图才能看到 preferredSize
-    useSideBar.getState().moveButton("explorer", "bottom", 0);
+  // ─── SB-20: 比例像素纠偏契约（2026-09 二轮重写——preferredSize 无法承载比例语义；
+  //     纠偏必须等「就绪探针」（首个双 pane fire = viewItems 已 populate），否则
+  //     mount 期调 resize 读空 viewItems.minimumSize 崩溃（Bug 1）；纠偏窗口期
+  //     onChange 写回被屏蔽，比例用进入窗口前的快照） ───
+  it("挂载即双开（重启恢复路径）：就绪探针 fire 后按 splitRatio 快照纠偏", async () => {
+    const restore = mockClientHeight(600);
+    try {
+      useSideBar.setState({
+        splitRatio: 0.6,
+        open: { top: "nav", bottom: "explorer" },
+      });
+      useSideBar.getState().moveButton("explorer", "bottom", 0);
 
-    render(React.createElement(SideBarArea, defaultProps));
+      render(React.createElement(SideBarArea, defaultProps));
 
-    const paneProps = getPaneProps();
-    expect(paneProps[0].preferredSize).toBe(60); // 0.6 * 100
-    expect(paneProps[1].preferredSize).toBe(40); // 0.4 * 100
+      // 就绪探针未 fire 前不得纠偏（Bug 1 崩溃窗口）
+      expect(mocks.resizeCalls).toHaveLength(0);
+
+      // 首个双 pane fire = viewItems 已 populate（mount 链瞬时 fire 形态之一 [H,0]）
+      act(() => {
+        mocks.getOnChange()!([600, 0]);
+      });
+      await flushRaf();
+
+      expect(mocks.resizeCalls.length).toBe(1);
+      expect(mocks.resizeCalls[0]).toEqual([360, 240]); // 600*0.6 / 600*0.4
+    } finally {
+      restore();
+    }
+  });
+
+  it("首开下区（单→双转换）默认比例 0.5：resize 为均分像素（需求 2 契约）", async () => {
+    const restore = mockClientHeight(600);
+    try {
+      useSideBar.setState({ open: { top: "nav", bottom: null } });
+      render(React.createElement(SideBarArea, defaultProps));
+      // 单开不纠偏
+      await flushRaf();
+      expect(mocks.resizeCalls).toHaveLength(0);
+
+      // 首开下区（explorer 已在默认 top 区——移到下区后打开）
+      act(() => {
+        useSideBar.getState().moveButton("explorer", "bottom", 0);
+        useSideBar.getState().toggleView("explorer");
+      });
+      // 双 pane 就绪探针
+      act(() => {
+        mocks.getOnChange()!([300, 300]);
+      });
+      await flushRaf();
+
+      expect(mocks.resizeCalls.length).toBe(1);
+      expect(mocks.resizeCalls[0]).toEqual([300, 300]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("单开挂载不纠偏（比例语义只在双开时存在，与 onChange 写回守卫同边界）", async () => {
+    const restore = mockClientHeight(600);
+    try {
+      useSideBar.setState({ open: { top: "nav", bottom: null } });
+      render(React.createElement(SideBarArea, defaultProps));
+      await flushRaf();
+      expect(mocks.resizeCalls).toHaveLength(0);
+    } finally {
+      restore();
+    }
+  });
+
+  // ─── Bug 2 防复发：关闭帧瞬时 fire [H,0] 不得污染 splitRatio（旧闭包
+  //     ratio=1.0 → clamp 0.9 棘轮），重开按未污染的原比例纠偏 ───
+  it("关闭下区瞬时 fire [H,0] 不污染 splitRatio；重开后按原比例纠偏（Bug 2 防复发）", async () => {
+    const restore = mockClientHeight(600);
+    try {
+      useSideBar.setState({
+        splitRatio: 0.6,
+        zones: { top: ["nav"], bottom: ["explorer"] },
+        open: { top: "nav", bottom: "explorer" },
+      });
+      render(React.createElement(SideBarArea, defaultProps));
+
+      // 走完首轮纠偏窗口（就绪 → resize → 放行写回）
+      act(() => {
+        mocks.getOnChange()!([360, 240]);
+      });
+      await flushRaf();
+      expect(mocks.resizeCalls[0]).toEqual([360, 240]);
+      expect(useSideBar.getState().splitRatio).toBeCloseTo(0.6);
+
+      // 关闭下区——库在 layout 期同步 fire [H,0]（Bug 2 旧闭包语义复现点）
+      act(() => {
+        useSideBar.getState().toggleView("explorer");
+      });
+      act(() => {
+        mocks.getOnChange()!([600, 0]);
+      });
+      // 零尺寸闸吞掉——store 不被污染成 0.9
+      expect(useSideBar.getState().splitRatio).toBeCloseTo(0.6);
+
+      // 重开下区 → 按未污染的 0.6 纠偏（不是 [0.9H, 0.1H]）
+      act(() => {
+        useSideBar.getState().toggleView("explorer");
+      });
+      act(() => {
+        mocks.getOnChange()!([360, 240]); // cached 恢复的双 pane fire
+      });
+      await flushRaf();
+      const last = mocks.resizeCalls[mocks.resizeCalls.length - 1];
+      expect(last).toEqual([360, 240]);
+      expect(useSideBar.getState().splitRatio).toBeCloseTo(0.6);
+    } finally {
+      restore();
+    }
+  });
+
+  // ─── 第三隐患防复发：mount 链瞬时 fire [H-30,30]/[H/2,H/2] 在纠偏窗口期
+  //     被屏蔽，持久化比例不被冲掉，纠偏用窗口前快照 ───
+  it("挂载即双开：纠偏窗口期瞬时 fire 不写回，快照比例免疫（比例棘轮防复发）", async () => {
+    const restore = mockClientHeight(600);
+    try {
+      useSideBar.setState({
+        splitRatio: 0.7,
+        zones: { top: ["nav"], bottom: ["explorer"] },
+        open: { top: "nav", bottom: "explorer" },
+      });
+      render(React.createElement(SideBarArea, defaultProps));
+
+      // mount 链瞬时 fire 两种形态（库实证 [H-30,30] 与 [H/2,H/2]）
+      act(() => {
+        mocks.getOnChange()!([570, 30]);
+      });
+      act(() => {
+        mocks.getOnChange()!([300, 300]);
+      });
+      // 窗口期屏蔽：store 保持持久化值 0.7（不被冲成 0.9/0.5）
+      expect(useSideBar.getState().splitRatio).toBeCloseTo(0.7);
+
+      await flushRaf();
+      // 纠偏用快照 0.7——不是任一瞬时 fire 换算值
+      expect(mocks.resizeCalls.length).toBe(1);
+      expect(mocks.resizeCalls[0]).toEqual([420, 180]);
+    } finally {
+      restore();
+    }
+  });
+
+  // ─── 零尺寸闸独立契约：纠偏窗口已关闭后，双开态 fire 含零尺寸仍不写回 ───
+  it("onChange 双开态 fire 含零尺寸不写回（零尺寸闸独立于纠偏窗口）", async () => {
+    const restore = mockClientHeight(600);
+    try {
+      useSideBar.setState({
+        splitRatio: 0.5,
+        zones: { top: ["nav"], bottom: ["explorer"] },
+        open: { top: "nav", bottom: "explorer" },
+      });
+      render(React.createElement(SideBarArea, defaultProps));
+
+      // 先走完纠偏窗口（否则 pending 闸先行吞掉，测不到零尺寸闸）
+      act(() => {
+        mocks.getOnChange()!([300, 300]);
+      });
+      await flushRaf();
+
+      act(() => {
+        mocks.getOnChange()!([600, 0]);
+      });
+      expect(useSideBar.getState().splitRatio).toBeCloseTo(0.5);
+    } finally {
+      restore();
+    }
   });
 
   // ─── SB-20: 视图槽条件渲染（FE-21）───
@@ -418,27 +611,41 @@ describe("SideBarArea", () => {
   });
 
   // ─── SB-20: onChange 双开时 write back splitRatio ───
-  it("onChange 双开时换算 ratio 写回 setSplitRatio", () => {
-    const setSplitRatioSpy = vi.spyOn(
-      useSideBar.getState(),
-      "setSplitRatio",
-    );
+  it("onChange 双开时换算 ratio 写回 setSplitRatio", async () => {
+    const restore = mockClientHeight(600);
+    try {
+      const setSplitRatioSpy = vi.spyOn(
+        useSideBar.getState(),
+        "setSplitRatio",
+      );
 
-    useSideBar.setState({
-      zones: { top: ["nav"], bottom: ["explorer"] },
-      open: { top: "nav", bottom: "explorer" },
-      splitRatio: 0.5,
-    });
+      useSideBar.setState({
+        zones: { top: ["nav"], bottom: ["explorer"] },
+        open: { top: "nav", bottom: "explorer" },
+        splitRatio: 0.5,
+      });
 
-    render(React.createElement(SideBarArea, defaultProps));
+      render(React.createElement(SideBarArea, defaultProps));
 
-    const onChange = mocks.getOnChange();
-    expect(onChange).not.toBeNull();
+      // 先走完首轮纠偏窗口（就绪探针 + 跨帧），放行后续写回
+      act(() => {
+        mocks.getOnChange()!([300, 300]);
+      });
+      await flushRaf();
 
-    // 模拟拖拽分隔条：上区 300px，下区 200px
-    onChange!([300, 200]);
+      const onChange = mocks.getOnChange();
+      expect(onChange).not.toBeNull();
 
-    expect(setSplitRatioSpy).toHaveBeenCalledWith(0.6); // 300 / 500
+      // 模拟拖拽分隔条：上区 300px，下区 200px
+      act(() => {
+        onChange!([300, 200]);
+      });
+
+      expect(setSplitRatioSpy).toHaveBeenCalledWith(0.6); // 300 / 500
+      setSplitRatioSpy.mockRestore();
+    } finally {
+      restore();
+    }
   });
 
   // ─── SB-20: onChange 单开时除零守卫不写回 ───
@@ -566,40 +773,54 @@ describe("SideBarArea", () => {
   });
 
   // ─── FE-19: 双开→拖比例→单开→再双开，比例保留 ───
-  it("双开→拖比例→单开→再双开，splitRatio 保留用户调节值", () => {
-    const setSplitRatioSpy = vi.spyOn(
-      useSideBar.getState(),
-      "setSplitRatio",
-    );
+  it("双开→拖比例→单开→再双开，splitRatio 保留用户调节值", async () => {
+    const restore = mockClientHeight(600);
+    try {
+      const setSplitRatioSpy = vi.spyOn(
+        useSideBar.getState(),
+        "setSplitRatio",
+      );
 
-    // 初始双开
-    useSideBar.setState({
-      zones: { top: ["nav"], bottom: ["explorer"] },
-      open: { top: "nav", bottom: "explorer" },
-      splitRatio: 0.5,
-    });
+      // 初始双开
+      useSideBar.setState({
+        zones: { top: ["nav"], bottom: ["explorer"] },
+        open: { top: "nav", bottom: "explorer" },
+        splitRatio: 0.5,
+      });
 
-    const { rerender } = render(
-      React.createElement(SideBarArea, defaultProps),
-    );
+      render(React.createElement(SideBarArea, defaultProps));
 
-    // 拖分隔条：上 300 / 下 200 → ratio 0.6 写回 store
-    const onChange = mocks.getOnChange();
-    expect(onChange).not.toBeNull();
-    onChange!([300, 200]);
-    expect(useSideBar.getState().splitRatio).toBeCloseTo(0.6);
+      // 先走完首轮纠偏窗口，放行写回（否则拖拽 fire 被 pending 闸吞掉）
+      act(() => {
+        mocks.getOnChange()!([300, 300]);
+      });
+      await flushRaf();
 
-    // 单开（下区关闭）→ 再双开
-    useSideBar.setState({ open: { top: "nav", bottom: null } });
-    rerender(React.createElement(SideBarArea, defaultProps));
-    useSideBar.setState({ open: { top: "nav", bottom: "explorer" } });
-    rerender(React.createElement(SideBarArea, defaultProps));
+      // 拖分隔条：上 300 / 下 200 → ratio 0.6 写回 store
+      const onChange = mocks.getOnChange();
+      expect(onChange).not.toBeNull();
+      act(() => {
+        onChange!([300, 200]);
+      });
+      expect(useSideBar.getState().splitRatio).toBeCloseTo(0.6);
 
-    // 过渡不重置：比例保持用户调节值，0.5 未再被写入
-    expect(useSideBar.getState().splitRatio).toBeCloseTo(0.6);
-    expect(
-      setSplitRatioSpy.mock.calls.filter((c) => c[0] === 0.5),
-    ).toHaveLength(0);
-    setSplitRatioSpy.mockRestore();
+      // 单开（下区关闭）→ 再双开
+      act(() => {
+        useSideBar.setState({ open: { top: "nav", bottom: null } });
+      });
+      act(() => {
+        useSideBar.setState({ open: { top: "nav", bottom: "explorer" } });
+      });
+      await flushRaf();
+
+      // 过渡不重置：比例保持用户调节值，0.5 未再被写入
+      expect(useSideBar.getState().splitRatio).toBeCloseTo(0.6);
+      expect(
+        setSplitRatioSpy.mock.calls.filter((c) => c[0] === 0.5),
+      ).toHaveLength(0);
+      setSplitRatioSpy.mockRestore();
+    } finally {
+      restore();
+    }
   });
 });

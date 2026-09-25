@@ -634,31 +634,36 @@ export const NavTree: React.FC<NavTreeProps> = ({ switchToPage, onDeletePage }) 
         </div>
       </div>
 
-      {/* 树区 */}
+      {/* 树区
+          横向滚动（2026-09）：overflowX auto + 内容层 max-content/minWidth:100%——内容
+          超宽出横向滚动条、不超宽撑满自动消失，行背景随内容延伸（先例 LargeFileViewer）。
+          右侧 pill（marginLeft:auto）超宽时随最宽行内容滚出视口，不超宽时钉视口右端不变。 */}
       <div
         style={{
           flex: 1,
           minHeight: 0,
           overflowY: "auto",
-          overflowX: "hidden",
+          overflowX: "auto",
           padding: "0 8px 12px", // GL-04：间距收敛 6 → 8
         }}
       >
-        {visibleProjects.length === 0 ? (
-          nav.tree.length === 0 ? (
-            <EmptyState
-              icon={<IconEmptyBox size={15} />}
-              text="暂无项目，点击下方「添加项目」开始"
-            />
+        <div style={{ width: "max-content", minWidth: "100%" }}>
+          {visibleProjects.length === 0 ? (
+            nav.tree.length === 0 ? (
+              <EmptyState
+                icon={<IconEmptyBox size={15} />}
+                text="暂无项目，点击下方「添加项目」开始"
+              />
+            ) : (
+              <EmptyState
+                icon={<IconSearch size={15} />}
+                text="没有找到匹配的项目 / 页面 / 会话"
+              />
+            )
           ) : (
-            <EmptyState
-              icon={<IconSearch size={15} />}
-              text="没有找到匹配的项目 / 页面 / 会话"
-            />
-          )
-        ) : (
-          visibleProjects.map((model) => renderProject(model))
-        )}
+            visibleProjects.map((model) => renderProject(model))
+          )}
+        </div>
       </div>
 
       {/* F10 套餐余量 footer（树与添加项目钮之间；无命中来源整块不渲染） */}

@@ -8,11 +8,11 @@
 //（layout store 的 activePageId 定位；无现成 selector，直接推导，不改 store）。
 
 import { useShallow } from "zustand/react/shallow";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { CSSProperties, FC } from "react";
 import type { IconProps } from "../../lib";
-import { IconMin, IconMax, IconCloseWin } from "../../lib";
-import { minimizeWindow, toggleMaximizeWindow, closeWindow } from "../../ipc/window";
+import { IconMin, IconMax, IconRestore, IconCloseWin } from "../../lib";
+import { minimizeWindow, toggleMaximizeWindow, closeWindow, isWindowMaximized, onWindowResized } from "../../ipc/window";
 import { useLayout } from "../../stores/layout";
 import { useProjects } from "../../stores/projects";
 import {
@@ -22,13 +22,53 @@ import {
 /** app logo 终端提示符图形（lucide Terminal path，与设计稿 final-mockup 一致） */
 const LOGO_PATH = "M5 8l6 5-6 5M13 19h7";
 
-/** 窗口控制三钮定义（38×26、图标 12px，hover 底 ui.secondaryBg） */
+/** 窗口控制三钮定义（38×26、图标 12px，hover 底 ui.secondaryBg）
+ *  TB-07：最大化钮图标/文案随 maximized 态双态切换（IconMax↔IconRestore、
+ *  「最大化」↔「还原」），故按 maximized 渲染期派生，不再是模块级静态数组 */
 type WinButtonKind = "min" | "max" | "close";
-const WIN_BUTTONS: { kind: WinButtonKind; label: string; Icon: FC<IconProps>; onClick: () => void }[] = [
-  { kind: "min", label: "最小化", Icon: IconMin, onClick: () => minimizeWindow() },
-  { kind: "max", label: "最大化/还原", Icon: IconMax, onClick: () => toggleMaximizeWindow() },
-  { kind: "close", label: "关闭", Icon: IconCloseWin, onClick: () => closeWindow() },
-];
+function buildWinButtons(
+  maximized: boolean,
+): { kind: WinButtonKind; label: string; Icon: FC<IconProps>; onClick: () => void }[] {
+  return [
+    { kind: "min", label: "最小化", Icon: IconMin, onClick: () => minimizeWindow() },
+    {
+      kind: "max",
+      label: maximized ? "还原" : "最大化",
+      Icon: maximized ? IconRestore : IconMax,
+      onClick: () => toggleMaximizeWindow(),
+    },
+    { kind: "close", label: "关闭", Icon: IconCloseWin, onClick: () => closeWindow() },
+  ];
+}
+
+/**
+ * 窗口 maximized 状态感知（TB-07）
+ *
+ * 初始回查 isWindowMaximized() + 订阅 onWindowResized 事件内回查（onResized 只含
+ * PhysicalSize 不含最大化态）。最大化/还原全路径（按钮 / 双击原生拖拽区 / 拖边框 /
+ * Win+方向键 snap）必经 resize 事件，覆盖完整——不能只在按钮 onClick 里翻转本地态。
+ */
+function useWindowMaximized(): boolean {
+  const [maximized, setMaximized] = useState(false);
+  useEffect(() => {
+    let disposed = false;
+    const refresh = () => {
+      isWindowMaximized()
+        .then((v) => {
+          if (!disposed) setMaximized(v);
+        })
+        // 查询失败保持旧值——状态感知降级不阻断标题栏渲染
+        .catch(() => {});
+    };
+    refresh();
+    const unlisten = onWindowResized(refresh);
+    return () => {
+      disposed = true;
+      unlisten();
+    };
+  }, []);
+  return maximized;
+}
 
 /** 三钮公共样式（hover 底按 kind 覆盖） */
 const winButtonBaseStyle: CSSProperties = {
@@ -74,6 +114,8 @@ function useActiveProjectPage(): { projectName: string | null; pageName: string 
 export function TitleBar() {
   const { projectName, pageName } = useActiveProjectPage();
   const [hover, setHover] = useState<WinButtonKind | null>(null);
+  const maximized = useWindowMaximized();
+  const winButtons = buildWinButtons(maximized);
 
   return (
     <div
@@ -148,7 +190,7 @@ export function TitleBar() {
 
       {/* 右段：窗口控制三钮（不在拖拽区内，保证可点击，TB-04） */}
       <div style={{ display: "flex", gap: 2 }}>
-        {WIN_BUTTONS.map(({ kind, label, Icon, onClick }) => {
+        {winButtons.map(({ kind, label, Icon, onClick }) => {
           const isHovered = hover === kind;
           const isClose = kind === "close";
           return (

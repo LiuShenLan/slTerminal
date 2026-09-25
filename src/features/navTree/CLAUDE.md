@@ -64,6 +64,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 历史行：`StatusDot` 恒渲染（运行中按实际态，无运行状态 → done 灰档）+ logo + 标题 + 相对时间 + `title` tooltip；双击恢复三分支（运行中 → SessionActionDialog / 孤儿无 cwd → 无操作 / 普通 → `restoreHistorySession(..., { fork: false })`）。
 - 套餐余量 footer（F10）：树滚动区与添加项目钮之间固定区（U1）；每来源一行 28px fg-3，logo 14px 缺失 onError 隐藏；全部来源无展示整块不渲染（含发丝线）；**enabled=false 不渲染（F12）**——经 `background_tasks_list` 读取 + `background-tasks-updated` 事件订阅感知 planBalance 任务启停，禁用即整块隐藏（快照保留，重启用即重显最后快照）；行点击 = 立即刷新（前端节流 5s）；颜色全 token 无例外。
 - 行文案 `5h xx% · 7d xx%` 的 xx 为**已用百分比**（`usedPercent` = used/limit，后端计算，2026-09 起非剩余——与 `src-tauri/src/plan_balance/CLAUDE.md` 口径一致，DTO 字段名名实一致）；单窗 used 缺失时后端以 remaining 换算回退；任一窗口数值解析失败按全有或全无整体回落（保留旧快照/占位 `--`，无单窗 `--` 态）；tooltip 只含重置时间与上次更新，不含百分比。
+- **横向滚动（2026-09）**：树区 scroller `overflowX:"auto"` + 内容层 `width:max-content; minWidth:100%`（先例 LargeFileViewer）——内容超宽出横向滚动条、不超宽自动消失，行背景随内容延伸；右侧 pill（`marginLeft:auto`）超宽时随最宽行内容滚出视口（决策：pill 属次要元数据），不超宽时钉视口右端不变。
 
 ## 硬约束
 

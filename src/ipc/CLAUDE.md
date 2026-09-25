@@ -86,10 +86,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### 窗口控制 wrapper（TB-03）
 
-`window.ts` 提供六个 wrapper：
+`window.ts` 提供八个 wrapper：
 
 - `registerCloseHandler`：封装 `onCloseRequested` 生命周期（preventDefault + 回调 + finally destroy）。
 - `onFocusChanged`：窗口焦点监听。
+- `onWindowResized`（TB-07）：窗口尺寸变化监听（无参回调）——maximized 状态感知的事件源；最大化/还原全路径必经 resize。消费方在回调内回查 `isWindowMaximized()`（onResized 只含 PhysicalSize）。
+- `isWindowMaximized`（TB-07）：查询窗口当前是否最大化（标题栏图标/文案状态源）。
 - `requestUserAttention`：任务栏闪烁。
 - `minimizeWindow` / `toggleMaximizeWindow` / `closeWindow`：自绘标题栏三钮。`closeWindow` 必须走 `getCurrentWindow().close()` 触发 `onCloseRequested`——复用 P1-19 关窗链路杀 PTY，禁止 `destroy`/`process.exit` 绕过。
 

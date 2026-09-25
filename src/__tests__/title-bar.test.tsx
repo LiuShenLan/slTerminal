@@ -14,11 +14,24 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-// ─── mock ipc/window 三 wrapper（组件点击目标） ───
-vi.mock("../ipc/window", () => ({
+// ─── mock ipc/window（三 wrapper 桩 + TB-07 maximized 状态感知两 wrapper） ───
+const winMocks = vi.hoisted(() => ({
   minimizeWindow: vi.fn().mockResolvedValue(undefined),
   toggleMaximizeWindow: vi.fn().mockResolvedValue(undefined),
   closeWindow: vi.fn().mockResolvedValue(undefined),
+  isWindowMaximized: vi.fn<() => Promise<boolean>>().mockResolvedValue(false),
+  /** 捕获 onWindowResized 注册的回调，供用例手动触发窗口尺寸变化 */
+  resizeCallbacks: [] as Array<() => void>,
+}));
+vi.mock("../ipc/window", () => ({
+  minimizeWindow: winMocks.minimizeWindow,
+  toggleMaximizeWindow: winMocks.toggleMaximizeWindow,
+  closeWindow: winMocks.closeWindow,
+  isWindowMaximized: winMocks.isWindowMaximized,
+  onWindowResized: vi.fn((cb: () => void) => {
+    winMocks.resizeCallbacks.push(cb);
+    return () => {};
+  }),
 }));
 
 import { render, screen, fireEvent, cleanup, act } from "@testing-library/react";
@@ -66,6 +79,9 @@ describe("TitleBar", () => {
   beforeEach(() => {
     seedProjects();
     vi.clearAllMocks();
+    // clearAllMocks 不重置实现——TB-07 用例翻过的默认值在此归位
+    winMocks.isWindowMaximized.mockResolvedValue(false);
+    winMocks.resizeCallbacks.length = 0;
   });
 
   // 项目惯例：render 测试显式 cleanup（无 globals，RTL auto-cleanup 不生效）
@@ -222,5 +238,69 @@ describe("TitleBar", () => {
     for (const r of regions) {
       expect(r.style.height).toBe("100%");
     }
+  });
+
+  // ═══ TB-07 最大化/还原双态（图标 + 文案随 maximized 态切换） ═══
+
+  it("TB-07-1 默认（未最大化）：最大化钮 aria-label=「最大化」，旧静态文案「最大化/还原」已废", async () => {
+    render(<TitleBar />);
+    await act(async () => {}); // 冲刷初始回查微任务
+    expect(screen.getByLabelText("最大化")).not.toBeNull();
+    expect(screen.queryByLabelText("还原")).toBeNull();
+    expect(screen.queryByLabelText("最大化/还原")).toBeNull();
+  });
+
+  it("TB-07-2 初始回查 maximized=true → 钮切「还原」", async () => {
+    winMocks.isWindowMaximized.mockResolvedValue(true);
+    render(<TitleBar />);
+    await act(async () => {}); // 冲刷初始回查微任务
+    expect(screen.getByLabelText("还原")).not.toBeNull();
+    expect(screen.queryByLabelText("最大化")).toBeNull();
+  });
+
+  it("TB-07-3 图标随态切换：还原态按钮内容不同于最大化态（行为级断言，不锁 svg 实现）", async () => {
+    render(<TitleBar />);
+    await act(async () => {});
+    const maxHtml = screen.getByLabelText("最大化").innerHTML;
+    cleanup();
+
+    winMocks.isWindowMaximized.mockResolvedValue(true);
+    render(<TitleBar />);
+    await act(async () => {});
+    const restoreHtml = screen.getByLabelText("还原").innerHTML;
+
+    expect(restoreHtml).not.toBe(maxHtml);
+  });
+
+  it("TB-07-4 resize 事件驱动双向翻转（按钮/双击/Win+方向键全路径共用 resize 事件源）", async () => {
+    render(<TitleBar />);
+    await act(async () => {});
+    expect(screen.getByLabelText("最大化")).not.toBeNull();
+
+    // 模拟窗口最大化（任意路径）→ onResized 触发 → 回查 true → 切「还原」
+    winMocks.isWindowMaximized.mockResolvedValue(true);
+    act(() => {
+      winMocks.resizeCallbacks.forEach((cb) => cb());
+    });
+    await act(async () => {});
+    expect(screen.getByLabelText("还原")).not.toBeNull();
+
+    // 还原 → 切回「最大化」
+    winMocks.isWindowMaximized.mockResolvedValue(false);
+    act(() => {
+      winMocks.resizeCallbacks.forEach((cb) => cb());
+    });
+    await act(async () => {});
+    expect(screen.getByLabelText("最大化")).not.toBeNull();
+  });
+
+  it("TB-07-5 卸载后触发 resize 回调不抛（幂等防御 listen 异步注册竞态）", async () => {
+    render(<TitleBar />);
+    await act(async () => {});
+    cleanup(); // 卸载（afterEach 的再次 cleanup 安全）
+    expect(() => {
+      winMocks.resizeCallbacks.forEach((cb) => cb());
+    }).not.toThrow();
+    await act(async () => {});
   });
 });

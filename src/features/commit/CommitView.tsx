@@ -50,11 +50,13 @@ const centerHintStyle: React.CSSProperties = {
   userSelect: "none",
 };
 
-/** 列表区域滚动容器 */
+/** 列表区域滚动容器
+ *  横向滚动（2026-09）：overflowX auto + 内容层 max-content/minWidth:100%——内容超宽
+ *  出横向滚动条、不超宽撑满自动消失，行背景随内容延伸（先例 LargeFileViewer） */
 const listContainerStyle: React.CSSProperties = {
   flex: 1,
   overflowY: "auto",
-  overflowX: "hidden",
+  overflowX: "auto",
   padding: "2px 0",
 };
 
@@ -107,25 +109,28 @@ export const CommitView: React.FC = () => {
 
       {state.kind === "ready" && rootPath && (
         <div style={listContainerStyle}>
-          {/* Changes 列表：added/modified/deleted/renamed/conflict */}
-          <CommitFileList
-            title="Changes"
-            entries={state.entries.filter((e) =>
-              CHANGES_STATUSES.has(e.status),
-            )}
-            rootPath={rootPath}
-            e2eId="commit-changes"
-            onRefresh={refresh}
-          />
+          {/* 横向滚动内容层（max-content/minWidth:100%，见 listContainerStyle 注释） */}
+          <div style={{ width: "max-content", minWidth: "100%" }}>
+            {/* Changes 列表：added/modified/deleted/renamed/conflict */}
+            <CommitFileList
+              title="Changes"
+              entries={state.entries.filter((e) =>
+                CHANGES_STATUSES.has(e.status),
+              )}
+              rootPath={rootPath}
+              e2eId="commit-changes"
+              onRefresh={refresh}
+            />
 
-          {/* Unversioned Files 列表：untracked */}
-          <CommitFileList
-            title="Unversioned Files"
-            entries={state.entries.filter((e) => e.status === "untracked")}
-            rootPath={rootPath}
-            e2eId="commit-unversioned"
-            onRefresh={refresh}
-          />
+            {/* Unversioned Files 列表：untracked */}
+            <CommitFileList
+              title="Unversioned Files"
+              entries={state.entries.filter((e) => e.status === "untracked")}
+              rootPath={rootPath}
+              e2eId="commit-unversioned"
+              onRefresh={refresh}
+            />
+          </div>
         </div>
       )}
     </div>

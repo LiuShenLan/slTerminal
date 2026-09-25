@@ -55,6 +55,9 @@ vi.mock("../ipc/window", () => ({
   registerCloseHandler: vi.fn(() => () => {}),
   onFocusChanged: vi.fn(() => () => {}),
   requestUserAttention: vi.fn().mockResolvedValue(undefined),
+  // TB-07：TitleBar maximized 状态感知（挂载期即调用）
+  isWindowMaximized: vi.fn().mockResolvedValue(false),
+  onWindowResized: vi.fn(() => () => {}),
 }));
 
 vi.mock("../ipc/fs", () => ({

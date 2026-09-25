@@ -245,6 +245,32 @@ describe("CommitView 列表渲染", () => {
     expect(header).toBeTruthy();
     expect(header!.textContent).toBe("COMMIT");
   });
+
+  // 横向滚动样式契约（2026-09）：listContainer overflowX auto + 内容层
+  // max-content/minWidth:100%——内容超宽出横向滚动条、不超宽撑满消失、行背景随内容延伸
+  it("横向滚动契约：列表容器 overflowX=auto 且内容层 width=max-content/minWidth=100%", async () => {
+    seedProject("C:/repo");
+    mockGitStatus.mockResolvedValue([makeEntry("C:/repo/a.ts", "modified")]);
+    const { container } = render(React.createElement(CommitView));
+    await waitFor(() => {
+      expect(
+        container.querySelectorAll('[data-e2e="commit-file-item"]').length,
+      ).toBe(1);
+    });
+
+    // 列表滚动容器 = commit-file-item 的祖先中带 overflowX:auto 的那层
+    const item = container.querySelector('[data-e2e="commit-file-item"]')!;
+    let scroller = item.parentElement;
+    while (scroller && scroller.style.overflowX !== "auto") {
+      scroller = scroller.parentElement;
+    }
+    expect(scroller).toBeTruthy();
+    expect(scroller!.style.overflowY).toBe("auto");
+    // 内容层 = scroller 唯一子 div（包两个 CommitFileList）
+    const content = scroller!.firstElementChild as HTMLElement;
+    expect(content.style.width).toBe("max-content");
+    expect(content.style.minWidth).toBe("100%");
+  });
 });
 
 describe("CommitView 折叠交互", () => {

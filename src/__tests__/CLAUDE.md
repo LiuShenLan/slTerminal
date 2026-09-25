@@ -14,7 +14,7 @@ L2 前端单元/集成测试集中目录。本文件只记录测试架构层面�
 
 - `../ipc/notify`：`onFsEvent` 返回 no-op 取消函数，`startWatch`/`stopWatch` resolve。
 - `../ipc/agentHooks`：`onAgentEvent` no-op；`inject`/`confirmInject`/`getInjectionStatus` 返回未注入状态。
-- `@tauri-apps/api/window`：`getCurrentWindow` 返回单例 mock，含 `onFocusChanged` / `requestUserAttention`。
+- `@tauri-apps/api/window`：`getCurrentWindow` 返回单例 mock，含 `onFocusChanged` / `requestUserAttention` / `isMaximized` / `onResized`（后两者为 TB-07 标题栏 maximized 状态感知）。
 - `../ipc/planBalance`：`getPlanBalance`/`refreshPlanBalance` resolve 空数组，`onPlanBalanceUpdated` 返回 no-op 取消函数（F10）。
 - `../ipc/backgroundTasks`：`listBackgroundTasks` resolve 两任务默认配置（planBalance/sessionRefresh 全六键），`setBackgroundTaskConfig` resolve `[]`，`onBackgroundTasksUpdated` 返回 no-op 取消函数（F12——下游 nav-tree/agent-history-hook 测试经真实 useAgentHistory → 调度器 activate 会触达 `listBackgroundTasks`，全局 mock 必须先于消费到位）。
 

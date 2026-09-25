@@ -1375,3 +1375,32 @@ describe("操作页面行交互（内联重命名 / chevron，TQ-COV-09）", () 
     });
   });
 });
+
+// ═══════════════════════════════════════════════════════════════
+// 横向滚动样式契约（2026-09）：树区 scroller overflowX auto + 内容层
+// max-content/minWidth:100%——内容超宽出横向滚动条、不超宽撑满消失、
+// 行背景随内容延伸；右侧 pill 超宽时随最宽行内容滚出视口（marginLeft:auto 不动）
+// ═══════════════════════════════════════════════════════════════
+
+describe("树区横向滚动契约", () => {
+  it("树区 scroller overflowX=auto 且内容层 width=max-content/minWidth=100%", () => {
+    seedProject("C:/test", "proj-1", "测试项目", [
+      { pageId: "page1", name: "页面 1" },
+    ]);
+    seedActivePage("page1");
+    const { container } = render(<NavTree />);
+
+    // 树区滚动容器 = nav-tree 内唯一 overflowY:auto 的层
+    const scrollers = Array.from(
+      container.querySelectorAll<HTMLElement>('[data-e2e="nav-tree"] div'),
+    ).filter((el) => el.style.overflowY === "auto");
+    expect(scrollers).toHaveLength(1);
+    const scroller = scrollers[0];
+    expect(scroller.style.overflowX).toBe("auto");
+
+    // 内容层 = scroller 唯一子 div（包 EmptyState/项目行）
+    const content = scroller.firstElementChild as HTMLElement;
+    expect(content.style.width).toBe("max-content");
+    expect(content.style.minWidth).toBe("100%");
+  });
+});

@@ -140,6 +140,9 @@ vi.mock("@tauri-apps/api/window", () => {
   const createMockWindow = () => ({
     onFocusChanged: vi.fn().mockResolvedValue(() => {}),
     requestUserAttention: vi.fn().mockResolvedValue(undefined),
+    // TB-07：标题栏 maximized 状态感知（isWindowMaximized/onWindowResized wrapper 依赖）
+    isMaximized: vi.fn().mockResolvedValue(false),
+    onResized: vi.fn().mockResolvedValue(() => {}),
   });
   let mockWin: ReturnType<typeof createMockWindow> | null = null;
   return {

@@ -85,6 +85,9 @@ vi.mock("../ipc/window", () => ({
   minimizeWindow: mocks.mockMinimizeWindow,
   toggleMaximizeWindow: mocks.mockToggleMaximizeWindow,
   closeWindow: mocks.mockCloseWindow,
+  // TB-07：TitleBar maximized 状态感知（挂载期即调用）
+  isWindowMaximized: vi.fn().mockResolvedValue(false),
+  onWindowResized: vi.fn(() => () => {}),
 }));
 
 // App.tsx 启动恢复链路依赖 setProjectRoot（DBG-6 时序断言需 spy）
@@ -303,7 +306,8 @@ describe("S4 启动恢复", () => {
     // container 限定查询（screen 会撞历史用例残留 DOM）
     expect(container.querySelector('[data-tauri-drag-region="deep"]')?.textContent).toContain("slTerminal");
     expect(container.querySelector('[aria-label="最小化"]')).toBeTruthy();
-    expect(container.querySelector('[aria-label="最大化/还原"]')).toBeTruthy();
+    // TB-07：默认非最大化态 → 「最大化」（mock isWindowMaximized resolve false）
+    expect(container.querySelector('[aria-label="最大化"]')).toBeTruthy();
     expect(container.querySelector('[aria-label="关闭"]')).toBeTruthy();
   });
 

@@ -18,6 +18,7 @@ import {
   ChevronDown,
   ChevronRight,
   Clock,
+  Copy,
   FileText,
   Folder,
   FolderOpen,
@@ -62,6 +63,7 @@ export const IconPage = makeIcon(FileText); // 操作页面行图标（与 IconH
 export const IconClose = makeIcon(X); // 关闭 ×（页签/横幅/浮层）
 export const IconMin = makeIcon(Minus); // 窗口最小化（自绘标题栏）
 export const IconMax = makeIcon(Square); // 窗口最大化（自绘标题栏）
+export const IconRestore = makeIcon(Copy); // 窗口还原（自绘标题栏，最大化态替换 IconMax——两个重叠矩形，TB-07）
 export const IconCloseWin = makeIcon(XSquare); // 窗口关闭（自绘标题栏，与普通关闭区分）
 export const IconPlus = makeIcon(Plus); // 新建（页签栏「+」钮）
 export const IconFolder = makeIcon(Folder); // 文件夹通用

@@ -338,6 +338,20 @@ describe("sanitizeSideBar", () => {
     expect(result.splitRatio).toBe(SPLIT_MIN);
   });
 
+  // 棘轮指纹清洗（2026-09）：preferredSize 像素误植 bug 期间 onChange 写回恒收敛
+  // 精确 0.9 落盘——读盘值恰好 SPLIT_MAX 视为脏数据重置默认（对原始值判等，先于 clamp）
+  it("splitRatio 恰好 SPLIT_MAX(0.9) → 棘轮指纹清洗，重置 SPLIT_DEFAULT", () => {
+    const raw = { zones: DEFAULT_ZONES, open: DEFAULT_OPEN, width: 250, splitRatio: 0.9 };
+    const result = sanitizeSideBar(raw);
+    expect(result.splitRatio).toBe(SPLIT_DEFAULT);
+  });
+
+  it("splitRatio 邻近上限的合法值（0.8999）→ 不误清洗，原样保留", () => {
+    const raw = { zones: DEFAULT_ZONES, open: DEFAULT_OPEN, width: 250, splitRatio: 0.8999 };
+    const result = sanitizeSideBar(raw);
+    expect(result.splitRatio).toBe(0.8999);
+  });
+
   it("width 为 NaN/±Infinity → clamp 回退 min（Number.isFinite 守卫，SVC-13）", () => {
     for (const v of [NaN, Infinity, -Infinity]) {
       const result = sanitizeSideBar({

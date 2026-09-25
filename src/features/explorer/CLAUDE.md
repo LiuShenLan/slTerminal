@@ -96,6 +96,7 @@ ExplorerPanel 经 `src/features/sideViews/sideViewDefs.ts` 注册为 `explorer` 
 - **rootPath 为 null 立即清空**：不发起 IPC，避免沙箱拒绝报错。
 - **FileIcon 六色盘硬编码例外**：`FILE_COLORS` 常量写死于本文件，是硬约束 #6 的登记例外（IC-04）。
 - **虚拟化行高 24px**：`FileTree` 手实现窗口化虚拟化，固定行高，DOM 节点数与可见行数同量级。
+- **横向滚动（2026-09）**：scroller `overflowX:"auto"` + 内容 div `width:max-content; minWidth:100%`（先例 LargeFileViewer）——内容超宽出横向滚动条、不超宽自动消失；行背景随内容延伸。垂直 spacer（paddingTop/Bottom）与横向 max-content 正交共存于同一内容 div；横向滚动条吃掉的视口高度经既有 ResizeObserver 自动重算窗口。文件名 span 的 ellipsis 保留作防御（max-content 下自然失效）。
 - **actions 空依赖 + ref 模式**：修改 ExplorerActions 相关逻辑时，禁止把 state 直接闭包进 `useMemo` 依赖，否则聚焦后点击不再更新选中路径。
 
 ## 测试模式

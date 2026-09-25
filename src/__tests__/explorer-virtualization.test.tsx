@@ -241,4 +241,17 @@ describe("FileTree 虚拟化（FE-30）", () => {
       restore();
     }
   });
+
+  // 横向滚动样式契约（2026-09）：scroller overflowX auto + 内容 div max-content/minWidth:100%
+  // ——内容超宽出横向滚动条、不超宽撑满消失、行背景随内容延伸（先例 LargeFileViewer）
+  it("横向滚动契约：scroller overflowX=auto 且内容 div width=max-content/minWidth=100%", () => {
+    const { container } = renderFileTree(makeTree(10));
+    const scroller = findScroller(container);
+    expect(scroller.style.overflowX).toBe("auto");
+    // overflowY 保留 auto（本文件 :88 定位器与本契约同源）
+    expect(scroller.style.overflowY).toBe("auto");
+    const content = scroller.firstElementChild as HTMLElement;
+    expect(content.style.width).toBe("max-content");
+    expect(content.style.minWidth).toBe("100%");
+  });
 });

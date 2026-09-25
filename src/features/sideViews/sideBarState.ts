@@ -282,7 +282,14 @@ export function sanitizeSideBar(raw: unknown): SideBarSlice {
   const rawSplit = raw["splitRatio"];
   const splitRatio =
     typeof rawSplit === "number"
-      ? clamp(rawSplit, SPLIT_MIN, SPLIT_MAX)
+      ? // 棘轮指纹一次性清洗（2026-09）：preferredSize 像素误植 bug 期间（百分比数字
+        // 被 Allotment 当绝对像素），onChange 每帧把腐蚀像素比写回、经 setSplitRatio
+        // clamp 恒收敛精确 0.9 并落盘——读盘值恰好 0.9 视为该 bug 产物，重置默认。
+        // 必须对原始值判等（先于 clamp），否则正常越界值（如 2.5/99 → clamp 0.9）被误清洗。
+        // 已知误伤：用户手动拖到上限的合法 0.9 一次性被重置。
+        rawSplit === SPLIT_MAX
+        ? SPLIT_DEFAULT
+        : clamp(rawSplit, SPLIT_MIN, SPLIT_MAX)
       : SPLIT_DEFAULT;
 
   return { zones, open, width, splitRatio };
