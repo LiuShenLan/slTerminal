@@ -1,12 +1,43 @@
 # ADR
 
+架构决策记录。各条正文一律为**当前有效形态**——被后续决策推翻的段落已原位收敛，修订要点见各条末尾「沿革」行；完整编年史从 git log 查。
+
+## 索引
+
+| ADR | 标题 | 状态 |
+|-----|------|------|
+| 0001 | 活动栏 + 共享侧栏区（侧栏视图单槽位状态机） | accepted |
+| 0002 | 配色方案单点（schemes/ + 注册表 + facade + 重载切换） | accepted |
+| 0003 | UI 全面重设计（Linear 极黑克制） | accepted |
+| 0004 | Windows build 号钳制至 xterm「新 ConPTY」分支下界 | accepted |
+| 0005 | Win10 嵌入捆绑新版 ConPTY 宿主 | accepted |
+| 0006 | 依赖版本策略（生产精确 / 开发 ^） | accepted |
+| 0007 | xterm 三件套 beta 保留 + 升级审批约定 | accepted |
+| 0008 | notify RC 保持 | accepted |
+| 0009 | review-fix 豁免与决策汇总登记 | accepted |
+| 0010 | review-phase2-fix 决策与债务登记 | accepted |
+| 0011 | 文档代码自证原则 | accepted |
+| 0012 | 设置中心（统一配置入口 + 配置页注册表 + 后端轻量收口） | accepted |
+| 0013 | 后台定时任务双端抽象 | accepted |
+| 0014 | CLI 别名持久化走通用 save_settings 段透传 | accepted |
+| 0015 | CLI 别名不进 profile.commands，注册表持独立别名快照 | accepted |
+| 0016 | E2E 假 home 隔离 | accepted |
+| 0017 | 预览容器信任模型：md/html 同态渲染 | accepted |
+| 0018 | 本地资源通道：项目根只读 + data: 内联 | partially superseded by 0019（主窗口 CSP data: 放行回收） |
+| 0019 | 预览安全域模型（自定义协议宿主页 + sandbox iframe） | partially superseded by 0021（预览载体） |
+| 0020 | 页内分屏 | accepted |
+| 0021 | 预览载体回迁主窗内跨源沙箱 iframe | accepted |
+| 0022 | DA1 后端全量接管 + 恢复注入就绪闸门 | accepted |
+| 0023 | 设置中心组模型改全局/Agent 二分 | accepted |
+| 0024 | agent 目录沙箱白名单 + pinned watcher | accepted |
+
 ## 0001 活动栏 + 共享侧栏区（侧栏视图单槽位状态机）
 
 **Status**: accepted（2026-07-18）
 
 **上下文**：原布局为 Allotment 常驻三栏（项目列表 250px + 文件浏览器 250px + 主区），两栏均不可关闭，挤压主区宽度。需求是两者可关闭、可分区展示，且未来会新增更多同类视图。
 
-**决策**：重构为「活动栏 + 共享侧栏区」——最左新增常驻窄条**活动栏**（~40px，不可关闭），项目列表 📋、文件浏览器 📁 变为**侧栏视图**，经活动栏按钮开关；两视图共享同一**侧栏区**（Allotment 拖宽 160–500 保留），侧栏区垂直分**上区/下区**（Allotment 垂直嵌套，分隔条比例可调），按钮经拖拽归属半区。核心状态机：**每半区最多一个打开的视图（单槽位），无"打开未展示"中间态，无历史记忆**——展示是 `f(按钮归属, 各区打开的视图)` 的纯推导。
+**决策**：重构为「活动栏 + 共享侧栏区」——最左新增常驻窄条**活动栏**（不可关闭），各视图变为**侧栏视图**，经活动栏按钮开关；视图共享同一**侧栏区**（Allotment 拖宽 160–500 保留），侧栏区垂直分**上区/下区**（Allotment 垂直嵌套，分隔条比例可调），按钮经拖拽归属半区。核心状态机：**每半区最多一个打开的视图（单槽位），无"打开未展示"中间态，无历史记忆**——展示是 `f(按钮归属, 各区打开的视图)` 的纯推导。
 
 **关键规则**：
 
@@ -22,9 +53,8 @@
 - 拖拽支持半区内排序 + 跨区按落点插入；新注册视图默认追加上区末尾。
 - 关闭 = `display:none` 隐藏不卸载（视图内部状态如展开目录保留，与操作页面多实例显隐同模式）。
 - 无快捷键（用户明确不要）。
-- 默认态：两按钮均在上区，项目列表打开、文件浏览器关闭。
-- 按钮样式：Emoji 图标（项目列表 📋 / 文件浏览器 📁）+ VS Code 风格 active 指示（高亮 + 左侧指示条），配色走 `theme/colors.ts` token（硬约束 #6）。
-- 持久化（`~/.slterminal/settings.json` 新增 `sideBar` 段，复用 settings 浅合并，零后端改动）：按钮归属+区内顺序、侧栏区宽度、上下分割比例、各区打开的视图；重启恢复现场。
+- 按钮样式：VS Code 风格 active 指示（高亮 + 左侧指示条），配色走 `theme/colors.ts` token（硬约束 #6）。
+- 持久化（`~/.slterminal/settings.json` `sideBar` 段，复用 settings 浅合并，零后端改动）：按钮归属+区内顺序、侧栏区宽度、上下分割比例、各区打开的视图；重启恢复现场。
 
 **被否决的备选**：
 
@@ -39,6 +69,8 @@
 - 原 `SidebarTree`、`ExplorerPanel` 组件本体不变，仅宿主从 Allotment 常驻栏变为侧栏区视图槽。
 - **换区重建（已确认接受）**：拖拽按钮跨区（上↔下）时，视图组件从上区 pane 移入下区 pane——React 视为不同父节点，触发卸载+重建，组件内部状态（如 explorer 展开状态、rootNodes）丢失。权衡：换区为低频操作（用户通常设定一次后不改），重建成本低于跨父节点保持实例的架构复杂度。
 
+**沿革**：初始视图清单（项目列表/文件浏览器两槽）与 Emoji 图标样式已随注册表扩展与 ADR-0003 重设计演化（现为导航树/文件/Commit/Agent 全局文件四槽 + 线性 SVG 图标），以代码现状为准。
+
 ## 0002 配色方案单点（schemes/ + 注册表 + facade + 重载切换）
 
 **Status**: accepted（2026-08-07）
@@ -51,17 +83,20 @@
 - 方案切换 = settings.json `colorScheme` 段手编 + 重载窗口生效；main.tsx 启动时 React 挂载前解析（App 改动态 import 保证 facade 求值晚于 setActive）。
 - 三方库色经 overrides 通道：dockview --dv-* 与 Allotment 变量内联注入挂载点；oneDark 作 editor.theme 引用 + lint/search/背景 token 化覆盖。
 - 零视觉变化：所有覆盖值取现行有效值；死配置全清（3 死 token + 2 零消费 CSS 变量 + 1 违规收敛）。
+- 启动链 fail-safe 色（index.html/tauri.conf.json/main.tsx 三处静态层）经**构建期通道**同步：`scripts/sync-startup-colors.mjs` 从方案文件提取改写三处消费点，运行期仍不经 facade（CP-027）。
 
 **被否决的备选**：
-- 运行期即时切换（token 全面响应式）：369 处常量消费 + xterm/CM 创建期消费需全量改造，代价 vs 暗色系低频切换收益不成比例。
+- 运行期即时切换（壳层 token 全面响应式）：369 处常量消费 + xterm 创建期消费需全量改造，代价 vs 暗色系低频切换收益不成比例。编辑器侧障碍后经 CP-039 消除（见后果），壳层全面响应式仍否决。
 - oneDark 完全 token 化自绘语法色板：每方案需 10+ 语法色定义，工作量与审美风险大；editor 段引用已预留未来自定义。
-- 启动链 fail-safe 收编(运行期通道,被否决):index.html/tauri.conf.json 为静态层无法用 TS token。**2026-09 CP-027 修订**:构建期通道成立——`scripts/sync-startup-colors.mjs` 从 linear.ts 提取改写三处消费点,运行期仍不经 facade。
+- 启动链 fail-safe 运行期通道收编：index.html/tauri.conf.json 为静态层无法用 TS token（构建期通道成立后本条仅约束运行期）。
 
 **后果**：
 - 新增方案 = schemes/ 新文件 + register 一行，消费方/测试守卫零改动。
 - 注释单点在 types.ts 接口槽位（消费位置与方案无关），新方案零注释负担。
-- main.tsx 静态 import 图收敛为 react/react-dom/lib/e2eEnabled/theme/startupColors(零依赖常量模块,不触发 facade 求值)；E2E helpers 与 ROOT_CSS_VARS 注入保持原相对顺序。
-- **2026-09 CP-039 修订（编辑器侧消除常量化）**：`editorTheme` 模块级常量改 `getEditorTheme()` 函数形，消费点改 `editorThemeSlot`（Compartment + `schemeRegistry.onDidChange` 订阅热重配置）——CM 主题随方案切换即时生效、编辑器不重建（文档/光标/undo 保留）。运行期整体即时切换（壳层 token 全面响应式）仍否决；editorTheme 常量化这一系统性后果已消除，为将来运行期切换移除最后一块编辑器侧障碍。
+- main.tsx 静态 import 图收敛为 react/react-dom/lib/e2eEnabled/theme/startupColors（零依赖常量模块，不触发 facade 求值）；E2E helpers 与 ROOT_CSS_VARS 注入保持原相对顺序。
+- **编辑器主题热重配置（CP-039）**：`editorTheme` 模块级常量改 `getEditorTheme()` 函数形，消费点改 `editorThemeSlot`（Compartment + `schemeRegistry.onDidChange` 订阅热重配置）——CM 主题随方案切换即时生效、编辑器不重建（文档/光标/undo 保留）。
+
+**沿革**：2026-09 CP-027 启动链 fail-safe 构建期同步通道成立；CP-039 editorTheme 常量化消除。
 
 ## 0003 UI 全面重设计（Linear 极黑克制）
 
@@ -74,11 +109,11 @@
 - 风格锚点 Linear/Zed 近纯黑现代风；暖黑**明度阶梯** 6 档（`#0a0a0b`→`#2b2b31`），内容区最暗；分隔一律**发丝线**（半透明白 0.055/0.09）。
 - 单强调色现代蓝 `#6e9ff2`（<5% 像素占比）；语义色低饱和暖协调；终端 ANSI 16 色与编辑器语法色全量重调（**双轨配色**：壳层 token 与内容色板互不混用）。
 - 自绘 34px 一体化标题栏（原生标题栏退役）；扁平页签 + 底部 2px 指示条 + hover 才显关闭钮。
-- 侧栏 IA 重构为**统一导航树**（项目 → 页面 → 会话，历史会话折叠计数）；文件浏览器独立为活动栏视图；活动栏固定三槽（导航树/文件/Commit）。
+- 侧栏 IA 重构为**统一导航树**（项目 → 页面 → 会话，历史会话折叠计数）；文件浏览器独立为活动栏视图；活动栏固定槽位（现为四槽：导航树/文件/Commit/Agent 全局文件，第四槽随 ADR-0024 追加）。
 - 装饰图标全部单色线性 SVG（15px/1.5px 描边/currentColor）；状态 emoji → **状态圆点**（绿/黄/灰，语义来源 F3 不变）；CLI 品牌 logo 保留彩色。
 - 交付物：`design.md`（设计方案）、`requirements.md`（UI-xxx 编号需求 + 可测验收 + P0/P1 + 对比度自检附录）、`final-mockup.html`（主界面 + 组件集双页静态稿）。
 
-**与 theme 系统对接**（后续实现期）：全部色值经 ADR-0002 配色方案单点落位——新增 scheme 文件替换 darcula 内置方案，需求规格每条色值标注 types.ts 槽位；启动链 fail-safe 静态色经 sync 脚本从 linear.ts 构建期注入(CP-027)；多主题切换机制不建（硬约束）。
+**与 theme 系统对接**（后续实现期）：全部色值经 ADR-0002 配色方案单点落位——新增 scheme 文件替换 darcula 内置方案，需求规格每条色值标注 types.ts 槽位；启动链 fail-safe 静态色经 sync 脚本从 linear.ts 构建期注入（CP-027）；多主题切换机制不建（硬约束）。
 
 **被否决的备选**：
 - 候选 B（Zed 实体边框感）/ C（最暖+大圆角）：骨架内变体，层级靠边框/温度而非纯明度差，不如 A 的「界面消失」感。
@@ -90,11 +125,11 @@
 - F3 四态 emoji 的**视觉呈现**被状态圆点取代（事件→状态映射逻辑不变）；F9 品牌 logo 保留。
 - 现状侧栏（项目列表 + Agent Status 等区块）IA 将随实现重构为统一导航树；行为逻辑（快捷键/右键菜单/会话恢复）不变。
 
-**实现期决策（2026-08）**：Stage 01-08 实施（checklist.md 46 项）期间追加确认的决策，逐条落地于代码：
+**实现期追加决策（2026-08）**：Stage 01-08 实施（checklist.md 46 项）期间确认，逐条落地于代码：
 
 - **UI-405/406/407 三条剔除**（Agent 面板/composer/状态行）：为远期新功能而非视觉重设计，不属本期范围；2026-08-16 定调——聊天式 Agent 面板为独立产品方向，未来单独立项。requirements.md 三条已补「远期愿景，本期不实施」注记（DOC-04），编号保留。
 - **darcula 删除、linear 替换**：新方案 `linear` 替换并删除 darcula（schemes/ 只余 linear.ts）；启动链默认 id 改 `linear`，未知 id 回退机制内建（schemeRegistry.setActive）。
-- **配置钮入口唯一化**：活动栏底部「配置」钮 = 打开 hooks 配置面板（唯一入口）；SidebarTree 右键菜单「打开 Hooks 配置」项随 SidebarTree 退役删除。
+- **配置钮入口唯一化**：活动栏底部「配置」钮 = 设置中心唯一入口（后由 ADR-0012 承载）；SidebarTree 右键菜单「打开 Hooks 配置」项随 SidebarTree 退役删除。
 - **导航树挂法**：活跃会话挂页面下（panelId→pageId 归属）；历史会话折叠节点挂项目下（cwd 归属——规范化前缀匹配，孤儿目录不展示）。
 - **两新依赖**：`lucide-react`（装饰图标全部线性 SVG 单点封装 src/lib/icons.tsx）、`@fontsource/jetbrains-mono`（400/500 woff2 随产物打包，断网可用）。
 - **自绘标题栏取舍**：`decorations:false` + 自绘 34px 一体化标题栏，**接受失去原生标题栏/阴影与拖拽悬停时的 Snap Layouts 预览**（Win+方向键 Aero Snap 是 OS 窗口管理功能，与 decorations:false 无关，仍可用——2026-08 实机验证修订）；关闭钮经 `getCurrentWindow().close()` 复用 P1-19 关窗杀 PTY 链路。
@@ -143,7 +178,7 @@
 
 ## 0006 依赖版本策略（生产精确 / 开发 ^）
 
-**Status**: accepted（2026-08-18，TE-11）
+**Status**: accepted（2026-08-18）
 
 **上下文**：59 个 npm 依赖版本策略不一致（8 精确 + 51 `^`），生产运行时依赖浮动升级不可控——终端核心路径（xterm 等）的静默 minor/beta 浮动曾引入回归（调查5）。需求：统一版本声明策略，生产与开发工具分流。
 
@@ -151,7 +186,7 @@
 
 - **dependencies（生产运行时）全精确版本**（无 `^`，锁死当前解析版本）：浮动的任何升级都必须显式改 package.json，进入评审流程。
 - **devDependencies（开发工具）全 `^`**：开发工具升级风险低、频次高，允许 minor 浮动。
-- **overrides 段保持现状**（`^`），不随本策略调整。成因与『谁钉谁』对齐契约登记于 `e2e-tests/CLAUDE.md`(CP-032);上游放开硬钉后逐条去 overrides 化。
+- **overrides 段保持现状**（`^`），不随本策略调整。成因与『谁钉谁』对齐契约登记于 `e2e-tests/CLAUDE.md`（CP-032）；上游放开硬钉后逐条去 overrides 化。
 - 精确版本一律以 package-lock.json 当前解析版本为准（pin 不改解析版本本身，`npm install` 刷新 lock）。
 
 **后果**：
@@ -161,7 +196,7 @@
 
 ## 0007 xterm 三件套 beta 保留 + 升级审批约定
 
-**Status**: accepted（2026-08-18，TE-03）
+**Status**: accepted（2026-08-18）
 
 **上下文**：终端核心路径依赖 xterm beta（`@xterm/xterm` 6.1.0-beta.288 + addon-webgl/fit）。升级到该版本有特定动机（调查5修复，ADR-0004 被否决备选记载）——回退稳定版会回归已修复问题；且 ADR-0004 后果明示「xterm.js 升级时须重评估」：`windowsPty` build 钳制语义依赖上游阈值 21376 与 wrapping 启发式实现（`CoreTerminal.ts:283`），升级后须核对分叉逻辑是否仍成立。
 
@@ -180,7 +215,7 @@
 
 ## 0008 notify RC 保持（9.0.0-rc.4 / notify-debouncer-full 0.8.0-rc.2）
 
-**Status**: accepted（2026-08-18，TE-04）
+**Status**: accepted（2026-08-18）
 
 **上下文**：Rust 侧 `notify`（文件系统监听核心）与 `notify-debouncer-full` 为 RC 版本。一手证据（`src-tauri/Cargo.toml:36-37、48-49` 跟踪注释）：`notify` 9.0.0 仍为 RC 阶段——最新稳定版 8.2.0（2025-08-03），而 rc.4（2026-05-02）为当前**最新**版本，无更高稳定版可升；降 8.x 属功能回退。watcher 行为有 notify 模块 51 条 L1 回归测试守护。
 
@@ -191,9 +226,9 @@
 - `notify` 正式版发布即升级触发点（Cargo.toml 注释已登记），升级走常规依赖变更流程。
 - RC 风险（API 变动/缺陷）由 51 条 L1 回归守护兜底，与 9.x 前瞻收益（后续版本能力）权衡后接受。
 
-## 0009 review-fix 豁免与决策汇总登记（DOC-10）
+## 0009 review-fix 豁免与决策汇总登记
 
-**Status**: accepted（2026-08-18，DOC-10）
+**Status**: accepted（2026-08-18）
 
 **上下文**：review 修复（93 项）多处以「登记豁免/保留现状 + 文档登记」关闭，登记点散落各模块文档。此处汇总 root 侧豁免决策，避免各登记点失散；模块内明细以对应模块 CLAUDE.md 为准。
 
@@ -201,23 +236,25 @@
 
 | 标识 | 决策 | 登记点 |
 |------|------|--------|
-| FE-01 | Workspace 多 Dockview 实例**保持**（H6 终端跨页面存活 + xterm 实例限制，D1）；以页面总数上限 `MAX_PAGES = 20` 防内存/DOM 线性增长（FE-36 跨项目全局计数修订同列）。**已作废（CP-004/S11，2026-09-08）：多实例架构被共享宿主 + 页组模型取代**——单一 DockviewReact，每操作页面 = 宿主内顶级页组（pageGroups.ts 协议：组 id `page-{pageId}`、面板 id 页前缀 `{pageId}:localId`）；页面切换 = 页组容器显隐（dockview 叶可见性，终端不卸载，#4978 约束不变）；`MAX_PAGES` 与超限 toast 删除，上限随实例数线性增长源消亡。**再修订（ADR-0020，2026-09-12）**：「页 = 单组多页签」子约束被推翻——页内分屏合法化，组页归属改派生模型（组 id 快车道 ?? 组内首面板前缀），可见性机制 maximize → setVisible 逐组 | src/workspace/CLAUDE.md、src/stores/CLAUDE.md、src/workspace/pageGroups.ts |
-| SEC-09 | CSP `script-src 'unsafe-inline'` **保留**（D4）：srcdoc iframe 继承父 CSP（W3C 行为），HTML 预览注入脚本（锚点拦截/键盘转发/nonce）必须内联，移除即破坏预览。现状 = tauri.conf.json `script-src 'self' 'unsafe-inline'` + `dangerousDisableAssetCspModification: ["script-src"]`。**已被 ADR-0019 取代**（2026-09-08，S10-②：预览迁独立 webview 自定义协议域，主窗口回收 script-src 'unsafe-inline' 与 dangerousDisableAssetCspModification——CP-012） | src-tauri/tauri.conf.json 注释 |
+| FE-01 | **已作废**：Workspace 多 Dockview 实例保持 + `MAX_PAGES = 20` 上限——多实例架构被共享宿主 + 页组模型取代（CP-004/S11），「页 = 单组」子约束再被 ADR-0020 推翻 | src/workspace/CLAUDE.md |
+| SEC-09 | **已被 ADR-0019 取代**：主窗口 CSP 回收 `script-src 'unsafe-inline'` 与 `dangerousDisableAssetCspModification`（CP-012）；预览沙箱经自定义协议域承载 | src-tauri/tauri.conf.json 注释 |
 | SEC-06 | 剪贴板读权限 `clipboard-manager:allow-read-text` **保留**（D6）：唯一消费点为 keyboard.ts 的 Ctrl+Shift+V 显式手势，改后端命令不缩小攻击面（前端上下文被注入时同样能 invoke）；grep 级守卫测试锁消费点集合 | src/ipc/CLAUDE.md |
-| BE-21 | `fs_read_dir` 返回整目录列表**不分页**（登记豁免）~~已作废~~：**CP-006 已改游标分页（2026-09）**——`(path, cursor?, limit?)` 默认 500/上限 1000，过滤排序后切片、游标 opaque，前端续页拼接；FileTree 虚拟化（FE-30）渲染侧保留 | src-tauri/src/fs/CLAUDE.md |
+| BE-21 | **已作废**：`fs_read_dir` 不分页登记——CP-006 已改游标分页（默认 500/上限 1000，过滤排序后切片、游标 opaque，前端续页拼接）；FileTree 虚拟化（FE-30）渲染侧保留 | src-tauri/src/fs/CLAUDE.md |
 | FE-31 | CodeMirror 大文件**不虚拟化**（按 D3 关闭）：fs_read_file Channel 分块（BE-03）削峰 + 10MB 上限 + 1MB 警告已覆盖峰值；CM6 文档模型不支持部分加载 | src/panels/editor/CLAUDE.md |
-| 09#14 | 后端 Mutex **已换装 parking_lot**（CP-005，2026-09）：中毒攻击面结构性消除，原「保持现状」登记作废 | src-tauri/src/CLAUDE.md |
+| 09#14 | **已作废**：后端 Mutex 已换装 parking_lot（CP-005），中毒攻击面结构性消除 | src-tauri/src/CLAUDE.md |
 | TE-03 | xterm 三件套 beta 保留 + 升级审批门禁（L3 + E2E + 真实 claude 实机滚轮 + Win10 21376 阈值核对） | ADR-0007（本文件） |
 | TE-04 | notify 9.0.0-rc.4 / notify-debouncer-full 0.8.0-rc.2 保持（rc.4 即最新，无稳定版可升；51 条 L1 watcher 回归守护） | ADR-0008（本文件） |
 
 **后果**：
 
 - 新增豁免须先在本表或对应模块 CLAUDE.md 登记再关闭，禁止只改代码不留档。
-- 行为固化点：`MAX_PAGES`（L2 测试断言）、CSP（tauri.conf.json）、剪贴板守卫测试、`GIT_REPO_CACHE_CAPACITY`/`WATCHER_POOL_CAPACITY`/`MAX_PTY_SESSIONS`（L1 契约测试）。
+- 行为固化点：CSP（tauri.conf.json）、剪贴板守卫测试、`GIT_REPO_CACHE_CAPACITY`/`WATCHER_POOL_CAPACITY`/`MAX_PTY_SESSIONS`（L1 契约测试）。
 
-## 0010 review-phase2-fix 决策与债务登记（D12~D20、TE-07、TE-15）
+**沿革**：2026-09-26 文档收敛——死行（FE-01/SEC-09/BE-21/09#14）压缩为一行指针，翻转链全文从 git log 查；`MAX_PAGES` 固化点随 FE-01 作废移除。
 
-**Status**: accepted（2026-08-22，S10-C）
+## 0010 review-phase2-fix 决策与债务登记
+
+**Status**: accepted（2026-08-22）
 
 **上下文**：review-phase2-fix 清单第 0 节决策表 D12~D20（续 review-fix D1~D11，编号规则：未闭环/partial 沿用原 ID，新发现续编 SEC-15~17/BE-22~25/FE-36~48/TE-14~16/DOC-11~14）。此处汇总 root 侧决策、TE-07 妥协结论与 TE-15 工程债务，模块内明细以对应模块 CLAUDE.md 为准。
 
@@ -227,21 +264,21 @@
 |------|--------|------|
 | D12 | 修复范围 | 全量修复：P0+P1+P2+未闭环 10 项+fmt 基线，去重合并后 **37 项**（含 FE-39 验证项） |
 | D13 | TE-12 knip 门禁 | 方案 A：补 `entry`/`ignoreExports`/`ignoreFiles` 至 `npx knip --production` 退出码 0；不窄化 CI 口径 |
-| D14 | TE-07 TS7 声明失真 | 主 `typescript` 字段直改 `^7.0.2`，删 `@typescript/native` 别名与 TS6 包装器；执行前 `npm view typescript-eslint` 实查兼容版，不兼容则升级/overrides 统一或暂停 type-aware 规则并 ADR 登记（**执行结果见下节：三支 fallback 全走尽，妥协为双 TS 并存**） |
-| D15 | SEC-15 shell fallback | 收窄为「两侧 canonicalize 均失败且归一化字符串完全相同」才放行，单侧失败即拒绝；`pty/CLAUDE.md` 登记残余风险；补 L1 拒绝用例。不引入 Win32 文件身份比对。**alias 兼容保持**（Store 版 pwsh 场景两侧指向同一路径、双侧均失败，仍走 fallback 放行）。D15 残余风险已销(2026-09):字符串回退改 Win32 句柄级文件身份比对,SEC-15 单侧拒绝保留为纵深 |
-| D16 | SEC-04 nonce | 威胁模型登记（HtmlPanel 顶部注释 + `src/panels/CLAUDE.md` 修正失实描述）+ L2 守卫测试锁死 global context 命令集；不加 UI 提示、不移除 nonce。**威胁模型已消除，ADR-0019**（2026-09-08，S10-②：键转发/命令重放通道随 webview 迁移退役——上行终态 = 渲染态集合；nonce 保留为纵深） |
+| D14 | TE-07 TS7 声明失真 | **双 TS 并存（side-by-side）**——见下「TE-07 终态」节 |
+| D15 | SEC-15 shell fallback | 收窄为「两侧 canonicalize 均失败且归一化字符串完全相同」才放行，单侧失败即拒绝；`pty/CLAUDE.md` 登记残余风险；补 L1 拒绝用例。不引入 Win32 文件身份比对。alias 兼容保持（Store 版 pwsh 场景两侧指向同一路径、双侧均失败，仍走 fallback 放行）。**2026-09 残余风险已销**：字符串回退改 Win32 句柄级文件身份比对，SEC-15 单侧拒绝保留为纵深 |
+| D16 | SEC-04 nonce | **威胁模型已消除**：键转发/命令重放通道随 ADR-0019 预览迁移退役；nonce 保留为纵深。0021 以收窄 keyfwd 重建通道并登记新威胁面（global 命令集锁死，command-catalog.test.ts 守卫） | src/panels/CLAUDE.md |
 | D17 | SEC-16 root 竞态 | 后端 `tokio::sync::Mutex` 串行化整个 `set_project_root_impl`（Cargo.toml tokio 补 `"sync"` feature）；前端零改动 |
 | D18 | FE-37 store IPC | `setProjectRoot` 调用上提调用方（store 纯状态化）；toast 由 `switchToPageShared` 承担（BE-23 同链修）；不登记豁免 |
 | D19 | FE-39 嵌套项目 | 接受「最深前缀」语义；实查测试已固化（`nav-tree-history.test.tsx:302-336`），零代码改动，仅 verify 断言确认存在 |
 | D20 | FE-40/FE-41/FE-46 | 三项 P2 均实修（滚动跟随 / 空目录行移除 / ErrorBoundary 重试） |
 
-**核验留痕（计划期已实读全部修复点代码原文）**：FE-39 经实查 `nav-tree-history.test.tsx:302-336` 已含嵌套最深前缀用例（Phase 2 04 报告此项失实）——降为「验证已固化，零改动」。FE-45 实查为 **5 处** catch{}（05 报告列 3 处，projects.ts 有 2 处：:254 与 :275）。
+**核验留痕**：计划期已实读全部修复点代码原文（FE-39 已固化降为验证项；FE-45 实查为 5 处 catch{}，05 报告列 3 处失实）。
 
-**TE-07 执行结果（S02 妥协背书）**：主 typescript 直改 ^7.0.2 **不可行**，D14 三支 fallback 实测走尽（typescript-eslint 最新 8.67.0 peerDependencies `typescript: '>=4.8.4 <6.1.0'` 全系拒绝 TS7、且模块加载期硬校验 `ts.versionMajorMinor >= 7` 崩在加载期，与 type-aware 规则开关无关；overrides 钉兼容组合与根依赖 `^7.0.2` 冲突不可行）。**正式化妥协：双 TS 并存（side-by-side）**——`"typescript": "npm:@typescript/typescript6@^6.0.2"`（TS6 包装器，供 typescript-eslint 8.67.0 消费）+ `"@typescript/native": "npm:typescript@^7.0.2"`（tsc bin = TS7，`npx tsc --version` 7.0.2）。该形态全门禁绿。**升级触发条件(机检,`scripts/check-ts7-trigger.mjs`,CP-001 登记硬化)**:`node scripts/check-ts7-trigger.mjs` 退出码 0 即双条件达成——① issue #10940 `state=closed` ② `typescript` dist-tags.latest = 7.1.x 稳定版;退出码 1 = 未达成,退出码 2 = 查询失败(未知态)。触发后删 TS6 包装器与 `@typescript/native` 别名,`"typescript"` 直改 `^7.1.0`。
+**TE-07 终态（双 TS 并存）**：主 typescript 直改 ^7.0.2 **不可行**，D14 三支 fallback 实测走尽（typescript-eslint 8.67.0 peerDependencies `typescript: '>=4.8.4 <6.1.0'` 全系拒绝 TS7、且模块加载期硬校验 `ts.versionMajorMinor >= 7` 崩在加载期，与 type-aware 规则开关无关；overrides 钉兼容组合与根依赖 `^7.0.2` 冲突不可行）。正式化妥协：`"typescript": "npm:@typescript/typescript6@^6.0.2"`（TS6 包装器，供 typescript-eslint 消费）+ `"@typescript/native": "npm:typescript@^7.0.2"`（tsc bin = TS7）。**升级触发条件（机检，`scripts/check-ts7-trigger.mjs`，CP-001 登记硬化）**：退出码 0 = 双条件达成（① issue #10940 `state=closed` ② `typescript` dist-tags.latest = 7.1.x 稳定版）；退出码 1 = 未达成；退出码 2 = 查询失败。触发后删 TS6 包装器与 `@typescript/native` 别名，`"typescript"` 直改 `^7.1.0`。
 
-**TE-15 工程债务（已知债务登记，代码零改动）**：json-schema-library 9.x/11.x 双 major 并存——codemirror-json-schema@0.8.1 锁 9.x（上游约束），主声明 11.6.2；运行时两实例并存无冲突（JSON Schema 校验各自独立），待上游升级消解（TE-15）。**消解记录（CP-002，2026-09-08）**：codemirror-json-schema 已摘除，自绘 lint/hover 层（jsonSchemaCm.ts）直消费 11.x 编译单例，双 major 并存消亡。
+**TE-15 工程债务**：**已消解（CP-002，2026-09-08）**——json-schema-library 9.x/11.x 双 major 并存随 codemirror-json-schema 摘除消亡（自绘 lint/hover 层 jsonSchemaCm.ts 直消费 11.x 编译单例）。
 
-**FE-31 登记点确认**：ADR-0009 表 FE-31 行登记点链接已指向 `src/panels/editor/CLAUDE.md`（新建文件存在，编辑器专属决策已迁入，S10 核对通过）。**FE-36 语义修订**已顺带补入 ADR-0009 表 FE-01 行（MAX_PAGES 跨项目全局计数）。
+**沿革**：2026-09-26 文档收敛——D14 执行结果折叠为「TE-07 终态」、D15 残余风险已销并入、D16 威胁模型消除并入、TE-15 消解并入、FE-31 登记点确认等簿记注记删除。
 
 ## 0011 文档代码自证原则（CLAUDE.md 只记代码无法自证的信息）
 
@@ -265,12 +302,12 @@
 
 ## 0012 设置中心（统一配置入口 + 配置页注册表 + 后端轻量收口）
 
-**Status**: accepted（2026-08-30，F11）
+**Status**: accepted（2026-08-30）
 
 **上下文**：活动栏底部「配置」钮直达 hooks 配置面板（单一 hub），而配置项将增长为两类——全局级（套餐余量查询频率、快捷键等）与项目级（Hooks 配置等），「配置钮直达单一面板」的形态无法承载。前端需要统一的设置中心交互形态且新增配置页零框架改动；后端需要配置代码高内聚、低耦合、易扩展。
 
 **决策**：
-- **载体 = Dockview 面板**（面板类型 `settings`）：左导航固定 180px（全局/项目两组）+ 右侧配置页槽位，经 **SettingsPageRegistry**（硬约束 #13 注册表家族新成员，side-effect import 注册）分派渲染；页签标题固定「设置」。
+- **载体 = Dockview 面板**（面板类型 `settings`）：左导航固定 180px + 右侧配置页槽位，经 **SettingsPageRegistry**（硬约束 #13 注册表家族新成员，side-effect import 注册）分派渲染；页签标题固定「设置」。左导航组模型后经 ADR-0023 修订为全局/Agent 二分。
 - **保存模型**：各配置页自治（即时保存页离散提交不上报 dirty）+ 壳层 dirty 汇聚守卫（`onDirtyChange` 上报、导航圆点、切换页/关闭/自动关闭三处守卫走 confirmDialog）。
 - **后端轻量收口三段式**：域键名常量归域模块（settings.rs 只聚合白名单数组）；settings.rs 保持哑存储（白名单/浅合并/原子写/.bak/锁，不引入域语义）；后端消费型域自备专用命令（校验 + 内存态 + 落盘一体收在域模块内，`plan_balance_set_interval` 先例）。
 - **写入通道二分**：前端消费型配置（keybindings/fontSize 等）走通用 `save_settings` 段写；后端消费型配置（planBalance.intervalSec）走域专用命令，禁止自建第二写通道（防 SPE-06 并发写竞态回归）。
@@ -286,13 +323,12 @@
 
 **后果**：
 - 新增配置页 = 前端注册一条（组件 + `register`）+ 后端消费型另加专用命令，框架零改动。
-- **`hooksConfig` 面板类型退役**：注册表与 PANEL_TYPES 移除，老布局由恢复白名单过滤静默丢弃（无迁移映射）；hub 改造为 HooksSettingsPage 迁入设置中心项目组，编辑器归域 `cliProfiles/profiles/claude/configEditor/`。
+- **`hooksConfig` 面板类型退役**：注册表与 PANEL_TYPES 移除，老布局由恢复白名单过滤静默丢弃（无迁移映射）；hub 改造为 HooksSettingsPage 迁入设置中心（组模型后随 ADR-0023 再调整），编辑器归域 `cliProfiles/profiles/claude/configEditor/`。
 - **F10 豁免口径更新**：套餐余量轮询间隔从「启动时读一次」改为运行期可改（plan_balance 模块级 static 原子量 + 专用命令写入，每轮末按内存值 sleep），F10 相关豁免登记随之修订。
-- 第一期三配置页：Hooks 配置（项目组，迁入）、套餐余量查询频率（全局组）、快捷键（全局组）。
 
-## 0013 后台定时任务双端抽象（ADR-0013：任务元数据单点在后端 + 配置单写通道）
+## 0013 后台定时任务双端抽象（任务元数据单点在后端 + 配置单写通道）
 
-**Status**: accepted（2026-08-30，F12 规格期决策；规格文档已随实施完毕归档删除，实施细节以本 ADR 决策正文与代码为准）
+**Status**: accepted（2026-08-30）
 
 **上下文**：套餐余量查询（F10 后端 tokio poller）之后新增第二个后台定时任务「session 历史刷新」。两任务执行位置本质不同——套餐余量需后端 OS/网络能力且快照预热语义在后端；session 刷新必须与手动刷新钮严格同一代码路径（前端 `scan(true)`），而两任务配置又需统一管理与展示。浅合并写通道（settings.rs 顶层键粒度）下两任务共用 `backgroundTasks` 一段会产生写覆盖冲突（前端写整体替换顶层键，丢对方子键）。
 
@@ -301,7 +337,7 @@
 - **双端各自抽象，不设跨端统一调度器**：后端泛化 plan_balance 通用件（间隔内存原子量/每轮末 sleep/读盘初始化/set 命令）为任务骨架（静态切片注册表，照 `SOURCES`/`QUERIES` 先例）；前端新建 backgroundTasks 调度器（#13 注册表家族：全局单例、订阅者计数启停、首轮立即执行、tick 防重入、triggerNow）。
 - **任务元数据单点 = 后端注册表**（含前端任务的代管：执行体字段 None 即前端任务，后端只管 id/标题/边界/默认值与配置读写）；设置页与前端调度器统一经 `background_tasks_list()` 读通道取数，前端不复制边界/默认值——DTO `BackgroundTaskInfo` 六键**无 default 字段**（FR-2 写死）的直接后果：行内提示只写范围不写默认值，默认值变更只动后端注册表。taskId 合法值集前后端同步测试锁死（HooksLayer ↔ `Layer` 枚举先例，硬约束 #4）。
 - **配置单写通道 = 后端 `background_tasks_set_config` 命令**（taskId 子键读-改-写合并 → 复用 settings.rs 写通道），前端任务的配置也经此命令代管落盘——杜绝浅合并顶层键互覆；前端消费型 `save_settings` 段写不适用于本段。
-- **配置结构**：统一顶层段 `backgroundTasks.{taskId}.{enabled,intervalSec}`；白名单 `planBalance` 键替换为 `backgroundTasks`（仍 5 键）；单用户不做旧键迁移。
+- **配置结构**：统一顶层段 `backgroundTasks.{taskId}.{enabled,intervalSec}`；白名单 `planBalance` 键替换为 `backgroundTasks`；单用户不做旧键迁移。
 - **配置变更前端感知 = 后端 emit 事件，不建前端总线**：`background_tasks_set_config` 成功后 emit `background-tasks-updated`（payload = 完整 `BackgroundTaskInfo[]`），footer/设置页订阅即知；`background_tasks_list` 只作读通道不 emit。后端单写通道是配置真值源，前端自建总线会造成双真值源脱节。
 - **session 刷新 = 扫描执行体单一化**：手动刷新（刷新钮/triggerNow）与定时 tick 同一执行体（遍历全部已注册 history provider 逐个 `scan(true)` 聚合），仅失败处理按触发来源分化（tick 静默 / manual 置 error）；`useAgentHistory` 的 sessions/state 真值源上移调度器快照，hook 退为订阅方。
 
@@ -319,15 +355,15 @@
 - 前端调度器与 UI 解耦：NavTree 换区重建（ADR-0001）不影响定时刷新；无订阅者不空转扫盘。
 - settings.rs 浅合并语义不变，跨任务写冲突由「单写通道 + 子键合并」在命令层消化。
 
-## 0014 CLI 别名持久化走通用 save_settings 段透传（ADR-0014：校验全前端，Rust 白名单加键）
+## 0014 CLI 别名持久化走通用 save_settings 段透传（校验全前端，Rust 白名单加键）
 
-**Status**: accepted（2026-09-05，CLI 别名功能规格期决策；实施细节以代码与 aliasValidation.ts 为准）
+**Status**: accepted（2026-09-05）
 
-**上下文**：CLI 别名（claude 等编码 CLI 的用户自定义启动命令名）需持久化到 settings.json。settings 模块既有两条路径：① 通用 `save_settings` 浅合并顶层段透传（fontSize/keybindings/sideBar 先例，Rust 仅白名单校验）；② 域模块专用命令（backgroundTasks 先例，Rust 端持有任务注册表故校验/合并/emit 收后端）。别名域的语法与 D3「全命名空间唯一」（不得撞任何 profile 内置命令或其它别名）判定需要「全部 CLI 内置命令名集合」——该知识只存在于前端 CliProfileRegistry（注册表 + profiles/* 静态声明），Rust 侧仅有 hooks/history 两个 cliId 键 provider 注册表（无 commands 概念）。若仿 backgroundTasks 走专用命令，Rust 必须复刻一份 CLI 内置命令名单——双源漂移：新增 CLI 需三处同步（前端 profile、hooks provider、history provider）变四处，违背注意 1 的高内聚要求。
+**上下文**：CLI 别名（claude 等编码 CLI 的用户自定义启动命令名）需持久化到 settings.json。settings 模块既有两条路径：① 通用 `save_settings` 浅合并顶层段透传（fontSize/keybindings/sideBar 先例，Rust 仅白名单校验）；② 域模块专用命令（backgroundTasks 先例，Rust 端持有任务注册表故校验/合并/emit 收后端）。别名域的语法与 D3「全命名空间唯一」（不得撞任何 profile 内置命令或其它别名）判定需要「全部 CLI 内置命令名集合」——该知识只存在于前端 CliProfileRegistry（注册表 + profiles/* 静态声明），Rust 侧仅有 hooks/history 两个 cliId 键 provider 注册表（无 commands 概念）。若仿 backgroundTasks 走专用命令，Rust 必须复刻一份 CLI 内置命令名单——双源漂移：新增 CLI 需三处同步（前端 profile、hooks provider、history provider）变四处，违背高内聚要求。
 
 **决策**：
 
-- 别名配置存 settings.json `cliAliases` 段（cliId → 别名数组），Rust `SETTINGS_ALLOWED_KEYS` 白名单加键（5→6），内容**纯透传**：不设专用命令/DTO/emit，语法与唯一性校验全前端（cliProfiles 域纯函数 `aliasValidation.ts`），存储走通用 `save_settings` 段写 + 2s debounce（stores/cliAliases.ts，keybindings 模式同构）。
+- 别名配置存 settings.json `cliAliases` 段（cliId → 别名数组），Rust `SETTINGS_ALLOWED_KEYS` 白名单加键，内容**纯透传**：不设专用命令/DTO/emit，语法与唯一性校验全前端（cliProfiles 域纯函数 `aliasValidation.ts`），存储走通用 `save_settings` 段写 + 2s debounce（stores/cliAliases.ts，keybindings 模式同构）。
 - 手改文件/版本残留产生违例数据 → 前端 loadFromDisk sanitize 兜底（孤儿 cliId 键丢弃、语法不过丢弃、撞内置/重复先到先占）；运行期磁盘改不改内存快照（与 keybindings 行为一致，接受）。
 - 未消费方模型：别名运行时经 App 组合层注入注册表别名快照（ADR-0015），后端零感知。
 
@@ -340,12 +376,14 @@
 **后果**：
 
 - 新增 CLI 的步骤不变（前端 profile + 三处后端 provider），别名能力对新 CLI 自动适用（UI 注册表驱动分区）。
-- 白名单 6 键需前端 store 与后端双侧测试锁死（save_accepts_cli_aliases_key + 段形态契约）。
+- 白名单键集需前端 store 与后端双侧测试锁死（save_accepts_cli_aliases_key + 段形态契约）。
 - 逆转触发点：未来别名需要后端参与（如 shell 层展开/注入）或出现第二个前端外知识源时，重估专用命令方案。
 
-## 0015 CLI 别名不进 profile.commands，注册表持独立别名快照（ADR-0015：matchByCommand 内置 → 别名回退）
+**沿革**：白名单键数随后续加键演化（ADR-0024 追加 `agentGlobalFiles`），以代码现状为准。
 
-**Status**: accepted（2026-09-05，CLI 别名功能规格期决策；实施以 cliProfileRegistry.ts 为准）
+## 0015 CLI 别名不进 profile.commands，注册表持独立别名快照（matchByCommand 内置 → 别名回退）
+
+**Status**: accepted（2026-09-05）
 
 **上下文**：CodingCliProfile.commands 是「首 token 精确匹配键集」静态声明（types.ts 注释支持 ["claude","cc"] 多首词形态）。用户别名需求出现后，最直觉的落点是往 commands 数组追加——但 commands 承担三个不允许被污染的职责：① D3 命名空间计算的真值源（内置命令名集合 = `getAll().flatMap(commands)`，用户别名混入后无法区分来源）；② `register` 同 id 覆盖语义（静态覆盖 vs 用户配置生命周期不同）；③ 遍历 profile 的消费方（logo 资源守卫等）对 commands 的静态假设。且别名须运行时增删即时生效（D4），改静态字段需重注册/重遍历。
 
@@ -369,9 +407,9 @@
 - D3 唯一性查询无需注册表新 API（内置集合就地 flatMap，别名集合读 store），API 不膨胀。
 - 新 CLI profile 注册流程零变化，别名能力自动覆盖；别名与内置的命名空间冲突在 UI 校验层消化（aliasValidation）。
 
-## 0016 E2E 假 home 隔离（ADR-0016：USERPROFILE 指向临时假屋，替代备份/还原）
+## 0016 E2E 假 home 隔离（USERPROFILE 指向临时假屋，替代备份/还原）
 
-**Status**: accepted（2026-09-05，事故后修复决策；实施以 run-wdio.cjs 与 src-tauri/src/home.rs 为准）
+**Status**: accepted（2026-09-05）
 
 **上下文**：E2E 会真实写盘用户 home 配置——`settings.e2e.ts`/`background-tasks.e2e.ts` 的 `writeFakePlanEnv` 把 `~/.claude/settings.json` 的 env 键覆写为 `sk-test-e2e` 假值（suite 末才还原，窗口分钟级）；agent.e2e 起 `ensureHooksInjected` 注入 hooks matcher + statusLine 桥接，跨整个 run（10+ 分钟）。2026-09-05 事故实证：假值窗口内真实 claude 会话启动读到假 token → API 401「no token found」。旧备份/还原机制（run-wdio `.e2e-bak`）只能保证 run 后恢复，**窗口期污染与 kill 残留固化均无法消除**——且 e2e app 的 plan_balance poller 全程用真实 home env 打真实 API（真实 token 副作用）。
 
@@ -395,16 +433,16 @@
 - 残留假屋目录（IME 句柄删不净）留在 tmp 无害，OS 可回收；`.e2e-bak` 旧残留由一次性人工清理。
 - 逆转触发点：未来出现不经 `crate::home` 的 home 消费点时由 grep 纪律 + exit 校验双兜底报红；恢复备份/还原机制需重估隔离键选择。
 
-## 0017 预览容器信任模型延续：md/html 同态渲染（ADR-0017：sandbox 无 allow-same-origin + global 命令集不扩 + 宿主 script 静态化继承）
+## 0017 预览容器信任模型：md/html 同态渲染（sandbox 无 allow-same-origin + global 命令集不扩）
 
-**Status**: accepted（2026-09-06，.md 文档面板需求期决策；实施以 docViewer 共享层与 markdown 渲染管线为准）
+**Status**: accepted（2026-09-06）
 
 **上下文**：为 .md 新增预览能力时，渲染容器选型存在两条路：① 与 htmlviewer 同款的 sandbox iframe（opaque origin，注入桥 + postMessage 总线——SEC-03/04 校验体系、zoomRuntime/键转发/HUD 全现成）；② 宿主 DOM 直接注入（dangerouslySetInnerHTML，样式隔离自理）。容器选择连带决定信任模型：md 渲染产物含 raw HTML（用户 md 内嵌 <details>/<table>/<script> 等），htmlviewer 的既有语义是「本地文件全信任」（CSP 'unsafe-inline' + 无消毒，Tauri CVE-2024-35222 红线排除了 allow-same-origin）。跨 html/md/workspace/shortcuts 四模块、与 SEC-03/04 及既有 CVE 决策直接勾连，需要决策记录锚点。
 
 **决策**：
 
-- **md 预览与 html 渲染同态**：iframe sandbox="allow-scripts"（无 allow-same-origin，Tauri CVE-2024-35222）、注入桥（键转发/缩放/滚动/链接路由）与四层 postMessage 校验（origin="null" + source + nonce + type）收 docViewer/PreviewFrame 单点（复用不复制）；raw HTML 透传（markdown-it html:true），事件属性执行、宿主 `<script>` 因 escapeScriptClose 转义纪律与 htmlviewer 同态静态化——**行为继承即预期，不修复存量缺陷**。
-- **global 命令集不因 md 扩充**：预览 iframe 键转发只重放 global context 命令（当前仅 global.closeTab，command-catalog.test.ts 锁死）——面板级命令在 iframe 内不可达，扩充须先重评 SEC-04 威胁模型（nonce 明文内联于 srcdoc，防外部伪造不防预览内容自身）。**global 重放通道已退役，ADR-0019**（2026-09-08，S10-②：键盘不跨窗口——预览窗口 focusable=false，键转发通道整体删除；global 命令集保持最小的守卫意图迁移为「预览消息通道不含命令重放」）。
+- **md 预览与 html 渲染同态**：iframe sandbox="allow-scripts"（无 allow-same-origin，Tauri CVE-2024-35222）、注入桥（键转发/缩放/滚动/链接路由）与 postMessage 校验（origin="null" + source + nonce + type）收 docViewer/PreviewFrame 单点（复用不复制）；raw HTML 透传（markdown-it html:true）。原「宿主 `<script>` 因 escapeScriptClose 转义静态化」为登记存量缺陷，已随预览迁移消除（CP-031：转义函数删除，宿主脚本于预览域真实执行）。
+- **global 命令集不扩充**：预览键转发只触及 global context 命令（当前仅 global.closeTab，command-catalog.test.ts 锁死）；扩充须先重评 SEC-04 威胁模型（nonce 明文内联于注入产物，防外部伪造不防预览内容自身）。通道形态历经「主窗 iframe 键转发（本条）→ ADR-0019 独立窗口退役 → ADR-0021 收窄 keyfwd 重建（表单字段不转发、载荷不含 key 值）」，命令集最小化原则不变。
 - **链接分派收父侧**：linkRouter 段仅上行 href（slterm_nav），分类（external → 系统浏览器 opener / local → 应用内打开链路）在面板侧 linkPolicy 纯函数做——iframe 内不做任何打开决策。
 - **缩放/滚动恢复语义**：keepZoom/keepScrollRatio 重建下行恢复（钳制/比例近似，登记已知行为），缩放状态不跨会话持久化（html 现状语义继承）。
 
@@ -416,99 +454,82 @@
 **后果**：
 
 - 新预览型文件（未来 pdf/png 等）扩展路径 = 面板目录 + docViewer 注入段/回调组合，安全面不新开。
-- iframe 内宿主 script 静态化为登记存量缺陷的继承行为（不另立缺陷单）；扩充 global 命令前必读本 ADR。
-- 逆转触发点：出现预览不可信第三方内容需求（届时重新评估消毒/隔离）；或 escapeScriptClose 存量缺陷修复（宿主 script 恢复执行——需重审 md 侧是否同步放开）。
+- 扩充 global 命令集前必读本 ADR（威胁面现经 ADR-0021 决策 3 登记：keyfwd 载荷伪造危害边界 = global 命令集）。
+- 逆转触发点：出现预览不可信第三方内容需求（届时重新评估消毒/隔离）。
 
-## 0018 本地资源通道：项目根只读 + data: 内联（ADR-0018：沙箱内二进制入渲染面首例）
+**沿革**：宿主 script 静态化缺陷经 CP-031 消除（ADR-0019）；键转发通道经 ADR-0019 退役、ADR-0021 收窄重建。
 
-**Status**: accepted（2026-09-06，.md 文档面板需求期决策；实施以 fs_read_resource 与 CSP 放行为准）
+## 0018 本地资源通道：项目根只读 + data: 内联（沙箱内二进制入渲染面首例）
+
+**Status**: partially superseded by 0019（主窗口 CSP 的 img-src/font-src data: 放行已回收，CP-035）（2026-09-06）
 
 **上下文**：md/html 预览的本地相对资源（图片等）首次需要「按路径读任意二进制进渲染面」。既有 fs_read_file 只读 UTF-8 文本（编码校验）；iframe 为 opaque origin（无相对路径/asset 协议可达性，CSP font-src 无 data: 放行）。候选通道：① Tauri asset protocol（convertFileSrc）——静态 scope 无法跟随动态项目根，违背「仅项目根沙箱内」用户决策；② blob: URL——无生命周期管理点（iframe 重建即失效需 revoke，CSP 需放行 blob:）；③ 新后端命令 + data: URL 内联。全局 CSP 变更（首个 data: 放行）与「沙箱内二进制入渲染面」通道形态影响所有未来预览型面板，需决策记录锚点。
 
 **决策**：
 
-- **新命令 fs_read_resource（项目根只读通道）**：复用 extract_root 沙箱（root=None 拒绝）+ validate_path_within_root + 10MB 上限（复用 fs_read_file 常量）+ spawn_blocking；256KB 原字节分块 base64 Channel 推送（UTF-8 安全、削峰同 BE-03）；前端 readResourceBase64 聚合，MIME 推断在前端扩展名白名单（png/jpg/jpeg/gif/webp/avif/svg/bmp/ico）——后端保持「读字节」单一职责。三处注册（lib.rs/build.rs/capabilities）。
-- **data: URL 内联（非 blob:）**：渲染产物替换为 data: URL——字符串可比（重建去重）、无 revoke 生命周期、CSP 面最小（img-src/font-src 追加 data:，不放行 blob:）；svg 经 `<img>` 惰性上下文加载（内嵌 script 不执行）；资源读取失败回退原 src（缺口不阻塞整篇）；LRU 缓存（50 项）防逐字重渲染反复读盘。
-- **KaTeX 字体构建期内联**：katex.min.css woff2 url → data:font/woff2;base64（scripts/gen-katex-inline.mjs 产物提交入库 ~360KB，woff/ttf 回退剔除）；katex 升级重跑脚本 + git diff 审阅——运行时经 asset 协议取字体 CORS 行为未实证，不冒险。
+- **新命令 fs_read_resource（项目根只读通道）**：复用 extract_root 沙箱（root=None 拒绝）+ validate_path_within_root + 10MB 上限（复用 fs_read_file 常量）+ spawn_blocking；256KB 原字节分块 base64 Channel 推送（UTF-8 安全、削峰同 BE-03）；前端 readResourceBase64 聚合，MIME 推断在前端扩展名白名单（png/jpg/jpeg/gif/webp/avif/bmp/ico——svg 后于 CP-035 剔除，见下）——后端保持「读字节」单一职责。三处注册（lib.rs/build.rs/capabilities）。
+- **data: URL 内联（非 blob:）**：渲染产物替换为 data: URL——字符串可比（重建去重）、无 revoke 生命周期；资源读取失败回退原 src（缺口不阻塞整篇）；LRU 缓存（50 项）防逐字重渲染反复读盘。
+- **KaTeX 字体构建期内联**：katex.min.css woff2 url → data:font/woff2;base64（scripts/gen-katex-inline.mjs 产物提交入库，woff/ttf 回退剔除）；katex 升级重跑脚本，CI diff 守卫（漏跑即红，CP-033）为长期形态。
 - **渲染执行分层**：mermaid 宿主侧渲染（dynamic import + 按 code Promise 缓存）成 SVG 字符串注入——iframe 内零重排版、CSP 零新增、2MB 库不进主包；暗色主题变量映射 linear 内容色。
+- **CSP 终态（CP-035 回收后）**：主窗口 img-src `'self' asset: https://asset.localhost`（回收 data:）、font-src `'self'`（回收 data:），csp-config.test.ts 三守卫锁死；预览域 CSP = 宿主页 meta 域级（`img-src data:; font-src data:` 已放行，SEC-02 落地，见 ADR-0019 决策二 9）。回收期唯一主窗口 data: 消费点 = CM6 lint 诊断波浪线（上游 baseTheme 以 `background-image: url(data:image/svg+xml,…)` 渲染）——改 text-decoration wavy 技法消除（零 CSP 指令依赖），theme-overrides.test.ts 加「规则文本零 data: url」防回潮断言。
+- **svg data: 显式禁用（CP-035）**：markdown assets.ts MIME 白名单剔除 image/svg+xml（本地 .svg 引用不再内联——缺口语义）——svg 载体可嵌脚本，`<img>` 惰性上下文仅为 W3C 行为单点不作安全边界；markdown-assets.test.ts 锁「svg MIME 不在白名单」。
 
 **被否决的备选**：
 
-- **Tauri asset protocol + convertFileSrc**：assetProtocol scope 静态配置无法跟随 set_project_root 动态根（静态大 scope 违背最小沙箱）；字体/资源跨源 CORS 在 opaque origin 行为未实证。
+- **Tauri asset protocol + convertFileSrc**：assetProtocol scope 静态配置无法跟随 set_project_root 动态根（静态大 scope 违背最小沙箱）；跨源 CORS 在内容域不可过（CP-033 双证据：① tauri 2.11.5 源码实证 asset 协议响应恒带 `Access-Control-Allow-Origin: <webview 自身 origin>`，与 opaque origin 内容 iframe 的 null Origin 不匹配；② 真实 WebView2 实测 cors fetch asset 域拒绝）。
 - **blob: URL + 逐轮 revoke**：生命周期管理点缺失（iframe 重建竞态）、CSP 需放行 blob:、字符串不可比（无法跳过等值重建）。
-- **mermaid 运行时注入 iframe**：2MB+ 源码进注入串违反无 `</script>` 字面量纪律（库内必然出现，需逃逸变换——html 宿主转义缺陷同坑）；300ms 防抖每轮重建全量初始化，成本为宿主渲染数量级倍数。
+- **mermaid 运行时注入 iframe**：2MB+ 源码进注入串违反无 `</script>` 字面量纪律（库内必然出现，需逃逸变换）；300ms 防抖每轮重建全量初始化，成本为宿主渲染数量级倍数。
 
 **后果**：
 
 - 「沙箱内二进制入渲染面」有了统一通道（html/md 预览共用；html 相对图片顺带可用）；未来新资源类型走 MIME 白名单扩展。
-- CSP 增两 data: 放行（csp-config.test.ts 守卫）；blob:/connect-src/worker-src 不放行；script-src 政策不变（'unsafe-inline' + nonce 注入关闭为 htmlviewer 既有前置，ADR-0017 继承）。
+- KaTeX 构建期内联经真实 WebView2 实证在预览域可用（字体族命中 + `document.fonts.check` 为真，CP-033）——原「opaque origin 内行为未实证」缺口关闭。
 - 逆转触发点：动态 asset scope 出现（Tauri 支持跟随项目根时重估协议通道）；或需读 >10MB 资源/任意沙箱外路径（重估上限与边界）。
-- **已回收（ADR-0019 终步，CP-035，S10-④）**：主窗口 img-src/font-src 的 data: 放行移除（csp-config.test.ts 锁终态）；KaTeX 字体经新预览上下文实证（③ CP-033）后在预览域（当时无 CSP——SEC-02 起为宿主页 meta 域级 CSP，见下落地复核注记）渲染；svg data: 显式禁用（markdown assets 白名单剔除 image/svg+xml——正文「svg 惰性上下文加载」论据随 data: 放行一并失效，处置见下「回收记录（CP-035）」节）。
 
-**维持记录（CP-033，2026-09-08 S10-③ 新 webview 上下文重实证——B2 分支）**：
+**沿革**：CP-033（2026-09-08）KaTeX 预览域实证 + asset 通道维持否决双证据 + CI diff 守卫；CP-035（2026-09-08）主窗口 data: 回收 + svg 禁用 + lint 波浪线技法替换；SEC-02（2026-09-09）预览域 CSP 经宿主页 meta 落地。2026-09-26 文档收敛——「维持记录/回收记录/落地复核注记」三个追加块折叠入正文。
 
-- **实证结论（数据通道在预览域真实可用）**：markdown.e2e 临时用例（真实 WebView2）渲染含行内 $x^2$ 与块级公式的 md——预览 webview 宿主页 srcdoc iframe 内宿主 `<script>`（CP-031 通道）读公式 DOM `getComputedStyle` font-family 命中 KaTeX 字体族、`document.fonts.check`（KaTeX_Main/Math/Size1）为真、字体集零 error 态 face，结果经 zoom 上行通道编码为主窗 HUD 121% 断言通过——构建期内联 data: 字体在新 webview 上下文真实加载渲染（非 serif 回退），原「opaque origin iframe 内行为未实证」缺口关闭。
-- **asset 通道维持否决（不可行证据，两源）**：① 源码实证 tauri 2.11.5 `protocol/asset.rs`：asset 协议所有响应恒带 `Access-Control-Allow-Origin: <webview window_origin>`（manager/webview.rs 按各 webview 自身 URL origin 注册；预览窗口 = `http://slterm-preview.localhost`）——预览内容渲染于 sandbox srcdoc iframe（opaque origin，ADR-0019 决策二），跨源字体/资源请求 Origin 序列化为 null，与 ACAO 固定值不匹配 → 运行时经 asset 协议取字体的 CORS 校验在内容域不可过。② 实测：iframe 内 cors fetch `https://asset.localhost/index.html`（fetch 与字体同为 cors-mode，ACAO 匹配语义一致）→ 拒绝（HUD 110% 证据，2026-09-08）。
-- **决策**：保留构建期内联产物（generated/katexInlineCss.ts）与 gen 脚本；CI diff 守卫（.github/workflows/ci.yml，CP-033）成为长期形态——katex 升级漏跑 gen 脚本即红。**S10-④ 执行口径登记**：预览域当前无局部 CSP（自定义协议响应无 CSP 头——ADR-0019）；④ CP-035 若建立预览域局部 CSP，font-src 必须放行 data:（每个渲染文档 head 内嵌 KaTeX data 字体串），主窗口 CSP 届时照 CP-035 回收。
+## 0019 预览安全域模型：自定义协议宿主页 + sandbox iframe（S10-① spike + S10-② 迁移落地）
 
-**回收记录（CP-035，S10-④，2026-09-08）**：
+**Status**: partially superseded by 0021（预览载体：独立 WebviewWindow → 主窗内跨源沙箱 iframe；安全域决策全部保留）（2026-09-08）
 
-- **前置闸判定**：③ B2 实证（KaTeX data 字体在预览域真实加载渲染 ×2 轮、asset 通道否决双证据）通过 → font-src 回收获实证许可——KaTeX 字体渲染只发生预览域（主窗口无 data: 字体消费），无需拆项另行登记。
-- **主窗口 CSP 终态**：img-src `'self' asset: https://asset.localhost`（回收 data:）、font-src `'self'`（回收 data:）；style-src 'unsafe-inline' 保留（React inline style / CM6 注入样式，与本族无关）。csp-config.test.ts 三守卫锁死（img-src 恰好三项 / font-src 恰好 ['self'] / data: 不在主窗口任何指令）。
-- **执行期发现并处置（img-src data: 的主窗口唯一图像消费点）**：CM6 lint 诊断波浪线——上游 @codemirror/lint baseTheme 与本仓 theme/overrides.ts 旧实现均以 `background-image: url(data:image/svg+xml,…)` 渲染（JsonMode 语法/schema 波浪线，主窗口渲染）——img-src data: 回收会静默遮蔽 lint 波浪线。处置 = 改 text-decoration wavy 技法（非资源 fetch，零 CSP 指令依赖）+ backgroundImage 显式 none 覆盖上游 baseTheme data: svg；色值仍单点于方案 lint 键（波形由 Chromium 绘制，与 6×3 tile 幅度略有差异，D1 已评估接受）。theme-overrides.test.ts 加「规则文本零 data: url」防回潮断言。
-- **svg data: 显式禁用**：markdown assets.ts MIME 白名单剔除 image/svg+xml（本地 .svg 引用不再内联——缺口语义，与白名单外扩展同语义）；svg 载体可嵌脚本，预览域（当时无 CSP，同上注记——SEC-02 起为宿主页 meta 域级 CSP）内联风险面大，`<img>` 惰性上下文仅为 W3C 行为单点不作安全边界。html 侧无独立资源内联通道（仅 markdown 管线消费 assets.ts），同口径无代码落点。markdown-assets.test.ts 锁「svg MIME 不在白名单」。
-- **预览域 data: 放行口径**：预览 webview CSP 无代码落点——预览域 = 自定义协议宿主页（响应无 CSP 头，host page 无 CSP meta），content iframe（srcdoc）无从继承 → data: img/font 在预览域天然放行（③ 实证通道即此）；「若未来建立预览域局部 CSP，img/font-src 须放行 data:」维持为执行口径（本 ADR-0018 与 ADR-0019 逆转触发点同文登记）。
-- **落地复核注记（SEC-02，2026-09-09，原文保留不改写）**：上条「host page 无 CSP meta」已失实——宿主页 HOST_PAGE 现由 meta 承载域级 CSP（`default-src 'none'; script-src/style-src 'unsafe-inline'; img-src data:; font-src data:`），srcdoc iframe 继承宿主 CSP（W3C）→「若未来建立预览域局部 CSP，img/font-src 须放行 data:」触发条件已发生且两项已放行（交叉登记 ADR-0019 决策二 9）。
-- **主窗口消费面审计结论**：除 lint 波浪线外主窗口无其它 data: 图像/字体消费者（lucide 内联 svg 元素非 fetch、cli-icons/字体走 self、vite assetsInlineLimit 无 <4KB 资产内联风险）——回收后零静默断图/断字面。
+**上下文**：CP-012/013/035/044 同根（预览通道 iframe srcDoc 与主窗口共享 CSP/上下文，SEC-09 结构性问题）。修复方向 = 预览渲染迁出主窗口 CSP 域。整个 S10 的 go/no-go 依赖「WDIO（embedded driver）能否枚举/驱动独立预览 webview」——此前零实证。
 
-## 0019 预览渲染迁独立 webview（ADR-0019：S10-① spike + S10-② 迁移落地定稿）
+**决策一（S10-① spike 实证，2026-09-08，spike 代码不入库）**：
 
-> **载体决策已被 ADR-0021 取代（2026-09-13）**：独立 WebviewWindow 载体已推翻——预览回迁主窗内跨源沙箱 iframe（拖动跟随延迟结构性不可归零）。**安全域决策全部保留**：自定义协议宿主页域、sandbox 无 allow-same-origin、main_frame_only 无 IPC 注入、域级 CSP meta、nonce + 类型白名单校验链。原文保留不改写。
+1. **go——四问全 yes**：可枚举（`getWindowHandles()` = webview_windows label 全集）、execute 可达（switchToWindow 后作用于预览页上下文）、焦点语义解耦（显式 switch 后无 +5s 惩罚）、销毁语义（closeWindow 后句柄收缩、driver 存活）。
+2. **CSP 无 per-webview 覆盖**（tauri 2.11.5 builder API 无 csp 属性；CSP 为 app 级配置，资产页恒被注入全局 CSP 头 + 静态内联脚本哈希化——tauri 源码实证）——**该结论仍成立**，是预览域 CSP 只能由宿主页 meta 承载的根因。
+3. 载体相关结论（跨独立窗口无 postMessage → 消息桥走 Tauri event/IPC；WDIO 按 label 驱动窗口）已随 ADR-0021 载体回迁失效——0021 决策 2（同窗口树 postMessage 三层通道）与决策 5（E2E 探针模式）取代。
 
-**Status**: accepted（2026-09-08。S10-① spike 四问实证（go）；S10-② 迁移落地（CP-012/013/031/044）后定稿；③④ 后续条目结果在逆转记录节追加）
+**决策二（S10-② 迁移落地，2026-09-08）**——安全域决策全部延续至今：
 
-**上下文**：CP-012/013/035/044 同根（预览通道 iframe srcDoc 与主窗口共享 CSP/上下文，SEC-09 结构性问题）。修复方向 = 预览渲染迁出主窗口 CSP 域到独立 Tauri webview，但整个 S10 的 go/no-go 依赖「WDIO（embedded driver：tauri-plugin-wdio-webdriver 1.3.0 内嵌 WebDriver + tauri-service 1.3.0 JS 服务）能否枚举/驱动独立预览 webview」——此前零实证。
-
-**决策一（S10-① spike 实证，2026-09-08 主窗口 + 两个独立预览 WebviewWindow 实测，spike 代码不入库）**：
-
-1. **go——四问全 yes**：① 可枚举（`getWindowHandles()` = webview_windows label 全集，启动即入列、销毁后出列）；② execute 可达（switchToWindow 后 execute/`$` 作用于预览页上下文，含 asset 与 data: 双候选）；③ 焦点语义（driver 命令与 OS 前台焦点解耦，显式 switch 后 `$` 族无 +5s 惩罚）；④ 销毁语义（closeWindow 后句柄收缩、driver 存活，销毁异步需轮询）。
-2. **跨独立 WebviewWindow 无 window.postMessage 通道**（实测 main 收不到预览 postMessage）——**消息桥 = Tauri event/IPC**；CP-044 走「通道退役」备选结论分支：不引入 PREVIEW_ORIGIN，targetOrigin 议题随跨窗口 postMessage 退役（iframe ↔ 宿主页的窗口树内 postMessage 保留，targetOrigin "*" 语义不变）。
-3. **CSP 无 per-webview 覆盖**（tauri 2.11.5 builder API 无 csp 属性；CSP 为 app 级配置，数据页亦被注入全局 CSP meta——tauri 源码实证：Windows 资产响应带 CSP 头 + 静态内联脚本哈希化，运行时内联脚本在收紧后全灭）。
-4. **WDIO 驱动策略**：句柄 = label；`browser.switchToWindow(固定 label)` 切上下文（显式切换抑制焦点自动恢复）；每预览面板 = 独立 WebviewWindow + 固定 label（`preview-<panelId>`）；断言 execute-first、结束切回 `'main'`；TQ-E-10 焦点探针语义限单窗口。（策略全文见 e2e-tests/CLAUDE.md「多 webview WDIO 可达性」节。）
-
-**决策二（S10-② 迁移落地，2026-09-08）**：
-
-1. **预览承载域 = 自定义协议宿主页（② 落地面复核结论，修正 spike 的 asset 首选）**：预览窗口加载 Rust 注册的自定义协议 `slterm-preview`（Windows 映射 `http://slterm-preview.localhost/preview-host.html`，register_uri_scheme_protocol 文档实证；响应不带全局 CSP——域级 CSP 由宿主页 meta 承载，见下 9）。asset 协议页（http://tauri.localhost）恒被注入全局 CSP（响应的 CSP 头）——CP-012 主窗口收紧 script-src 后，资产域内运行时内联注入与宿主自带脚本全灭（静态内联脚本虽经构建期哈希放行，运行时注入产物不可哈希）——asset 候选否决，「预览 CSP 域」= 自定义协议域。
-2. **宿主页 = 固定桥接页**（src-tauri/src/preview.rs 内嵌 const）：建 sandbox iframe（allow-scripts、无 allow-same-origin——CVE-2024-35222 红线延续，iframe 无 Tauri IPC 注入——main_frame_only 实证）→ 内容经 `preview_render`（后端存储 + seq + 定向 ping）→ 宿主 `preview_pull` 拉取置 srcdoc → iframe 文档消息（zoom/scroll/nav 上行、reset/zoom_set/scroll_set 下行）经 Tauri event 与主窗中继；事件名单点登记 src/ipc/preview.ts（三处同步：TS / 宿主桥 / 守卫测试）。
-3. **注入机制原样迁入**：injectScript + buildInjectedScript + nonce 装配于主窗 PreviewFrame，产物推送预览域执行；**字符串级转义消亡**（escapeScriptClose 删除——宿主 `<script>` 不经转义进入渲染文档且真实执行，CP-031 判定一/二在 ② 达成，判定三由 html.e2e 宿主 script 用例在真实 WebView2 断言）。
-4. **上行命令面收窄为零（CP-013）**：keydown 转发段与信任标记整体退役（键盘不跨窗口——预览窗口 focusable(false)，焦点恒在主窗 ShortcutRegistry 域，全局快捷键在预览态可用）；上行终态集合 = {slterm_zoom, slterm_scroll, slterm_nav}（UPLINK_MSG_TYPES 白名单守卫锁死）；下行 = {reset, zoom_set, scroll_set}。
-5. **主窗口 CSP 终态（CP-012）**：`script-src 'self'` + 删除 dangerousDisableAssetCspModification 整键（img-src/font-src data: 回收归 CP-035）。
-6. **CP-037 复核结论**：预览迁出后 workspace 层 CSS 显隐保活对预览 webview 不适用——CM 保活（面板内 allotment visible=false 恒挂载）**维持**（edit/split/preview 形态往返仍须保留 undo/光标）；预览窗口保活另成机制：**隐藏保活 = 窗口 hide 不销毁**（面板/页面隐藏 → 几何归零 → preview_sync visible=false；恢复 → show）——缩放/滚动态随 iframe 文档存亡，跨显隐保留。两机制并行，各管各层。
-7. **面板形态（波及面）**：面板根改「40px 工具条带（切换条/HUD 悬浮带，FloatingArea direction="row"）+ 内容区（PreviewFrame 锚点）」列排——预览窗口几何 = 锚点矩形（主窗 inner 原点 + CSS × scale，PreviewFrame 200ms 轮询 + 主窗移动即时同步）；窗口 owned 无边框、focusable(false)、skip_taskbar；面板卸载 → 窗口销毁（缩放随窗口销毁 = 旧关页签语义）。
-8. **键盘边界已知行为（接受）**：预览窗口不可聚焦 → 预览文档内表单键入/系统复制快捷键不可达（鼠标滚动/点击/拖选不受影响）；主窗快捷键在预览态恒可用。若未来需表单键入，须先解决「预览聚焦吞全局快捷键」问题（本决策 4 的逆转触发点）。
-9. **域级 CSP 落地（SEC-02，2026-09-09）**：宿主页 HOST_PAGE 加 `<meta http-equiv="Content-Security-Policy">`——指令表 `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:`（`default-src 'none'` 断全部出网；内联 script/style 为宿主桥 + 注入产物必需；img/font `data:` 为 markdown 本地图内联与 KaTeX 内联字体通道，ADR-0018）；srcdoc iframe 继承宿主 CSP（W3C 行为）→ 预览文档同受此约束。tauri 2.11 无 per-webview CSP 配置面 → 域级 CSP 只能由宿主页 meta 承载（响应头形态不变），加宽指令须复核 SEC 面。
+1. **预览承载域 = 自定义协议宿主页**：预览加载 Rust 注册的自定义协议 `slterm-preview`（Windows 映射 `http://slterm-preview.localhost/preview-host.html`，register_uri_scheme_protocol 文档实证；响应不带全局 CSP）。asset 协议页恒被注入全局 CSP 头——主窗口收紧 script-src 后，资产域内运行时内联注入与宿主自带脚本全灭 → asset 候选否决。
+2. **宿主页 = 固定桥接页**（preview.rs 内嵌 const HOST_PAGE）：建 sandbox iframe（allow-scripts、无 allow-same-origin——CVE-2024-35222 红线延续，iframe 无 Tauri IPC 注入——main_frame_only 实证）。独立窗口时代的内容通道（preview_render/preview_pull/preview_sync/preview_close 四命令 + 内容存储 + 会话守卫）已经 ADR-0021 整体删除，改 postMessage 三层通道；事件名单点登记 previewMessages.ts（TS / 宿主桥 / 守卫测试三处同步）。
+3. **注入机制原样迁入**：injectScript + buildInjectedScript + nonce 装配于主窗 PreviewFrame，产物推送预览域执行；**字符串级转义消亡**（escapeScriptClose 删除——宿主 `<script>` 不经转义进入渲染文档且真实执行，CP-031，html.e2e 宿主 script 用例真实 WebView2 断言）。
+4. **上行命令面（CP-013 → ADR-0021 重建）**：独立窗口形态下键转发整体退役（预览窗口 focusable=false，键盘不跨窗口），上行集合收窄为 {slterm_zoom, slterm_scroll, slterm_nav}；ADR-0021 决策 3 以收窄 keyfwd 重建键盘通道（表单字段不转发、载荷不含 key 值），global 命令集保持最小（command-catalog.test.ts 锁死）。
+5. **主窗口 CSP 终态（CP-012）**：`script-src 'self'` + 删除 dangerousDisableAssetCspModification 整键（img-src/font-src data: 回收见 ADR-0018；`frame-src http://slterm-preview.localhost` 后经 ADR-0021 决策 4 收窄式新增）。
+6. **CM 保活维持（CP-037 复核）**：预览迁出后 workspace 层 CSS 显隐保活对预览不适用——CM 保活（面板内 allotment visible=false 恒挂载）**维持**（edit/split/preview 形态往返仍须保留 undo/光标）。独立窗口时代的「预览窗口隐藏保活（hide 不销毁）」机制随 ADR-0021 回迁消亡（显隐随主窗 DOM 天然正确）。
+7. **面板形态（延续至今）**：面板根 = 工具条带（切换条/HUD 悬浮带，FloatingArea direction="row"）+ 内容区（PreviewFrame 锚点）列排。独立窗口专属部分（窗口 owned 无边框/focusable(false)/skip_taskbar、锚点矩形几何换算 + 200ms 轮询同步）随 ADR-0021 消亡。
+8. **键盘边界已知行为——已消除**：独立窗口形态的「预览文档内表单键入/系统复制不可达」经 ADR-0021 决策 3 收窄 keyfwd 解禁。
+9. **域级 CSP 落地（SEC-02，2026-09-09）**：宿主页 HOST_PAGE 加 `<meta http-equiv="Content-Security-Policy">`——指令表 `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:`（`default-src 'none'` 断全部出网；内联 script/style 为宿主桥 + 注入产物必需；img/font `data:` 为 markdown 本地图内联与 KaTeX 内联字体通道，ADR-0018）；srcdoc iframe 继承宿主 CSP（W3C 行为）→ 预览文档同受此约束。tauri 2.11 无 per-webview CSP 配置面 → 域级 CSP 只能由宿主页 meta 承载，加宽指令须复核 SEC 面。
 
 **被否决的备选**：
 
-- **同窗口 add_child 子 webview（多 webview-in-window）**：driver 不可枚举且宿主窗口整体消失（实测）——S10 架构不可选。
-- **data: URL 注入承载预览**：内容被全局 CSP meta 包裹改写 + opaque origin + 需 webview-data-url feature（实测）——否决。
-- **asset 协议宿主页承载预览（spike 期首选）**：CSP 无 per-webview 覆盖下资产域恒带全局 CSP 头 + 静态哈希——收紧后运行时注入/宿主脚本不可行（② 落地面复核否决，见决策二 1）。
-- **主窗侧保留 iframe + 运行时经 'self' 外部 js 注入（资产域候选路线）**：运行时代码须运行时生成（nonce/段型/内容变化），无法静态化；且宿主文档 `<script>` 永不可执行（CP-031 判定三不可达）、CP-033/035 的预览域 data: 放行无落点——否决。
-- **同态维持（no-go 出口）**：四问实证通过，go 成立——未触发。
+- **同窗口 add_child 子 webview（多 webview-in-window）**：driver 不可枚举且宿主窗口整体消失（实测）。
+- **data: URL 注入承载预览**：内容被全局 CSP meta 包裹改写 + opaque origin + 需 webview-data-url feature（实测）。
+- **asset 协议宿主页承载预览（spike 期首选）**：CSP 无 per-webview 覆盖下资产域恒带全局 CSP 头 + 静态哈希——收紧后运行时注入/宿主脚本不可行。
+- **主窗侧保留 iframe + 运行时经 'self' 外部 js 注入（资产域候选路线）**：运行时代码须运行时生成（nonce/段型/内容变化），无法静态化；且宿主文档 `<script>` 永不可执行（CP-031 判定三不可达）、预览域 data: 放行无落点。（注：本备选特指资产域 `'self'` 注入路线；ADR-0021 路线 A 的「主窗内 iframe」= 自定义协议宿主页承载，安全域不变，不属本条。）
 
 **后果**：
 
-- docViewer 六件 + 面板两件重构：PreviewFrame 改窗口编排/事件桥（无 iframe）；buildInjectedScript 去 keydown 段；injectScript 去转义；previewMessages 增白名单；ipc 新增 preview 域；HtmlPanel/MarkdownPanel 工具条带化 + FloatingArea row variant；Rust 新增 preview 模块（scheme 协议 + 4 命令 + 内容存储）与 preview 能力文件（最小权限：事件 + preview_pull）。
-- 命令三处注册（lib.rs/build.rs/capabilities）新增 4 条；capabilities 新增 preview.json（windows glob `preview-*`）。
-- E2E 可达性落地：html.e2e/markdown.e2e 经 label 切换驱动预览窗口；内容断言 = 宿主页读 iframe srcdoc；HUD 断言在主窗工具条带。
-- **已知行为登记**：预览键盘键入不可达（决策二 8）；预览窗口几何跟随为轮询驱动（拖拽期亚秒级滞后）；宿主脚本现可执行（信任模型 = 本地文件全信任延续，ADR-0017 同源）。
-- **逆转触发点**：driver 升级出现子 webview/帧级寻址时重估「独立 WebviewWindow」约束；Tauri 提供 per-webview CSP 时复核预览域选择（自定义协议 vs 资产域）；出现「预览内键盘输入」需求时重评 focusable 决策（须先解全局快捷键吞键问题）；CP-033/035（③④）结果在本节追加登记。
-- **CP-033（③）结果登记（2026-09-08）**：B2 维持分支——KaTeX data 内联经新 webview 上下文真实 WebView2 实证可用（字体族命中 + 字体真实加载）；asset 通道维持否决（响应 ACAO 固定 webview origin vs 内容 iframe opaque origin null，源码 + 实测双证据）。全文见 ADR-0018「维持记录（CP-033）」；④ 若建立预览域局部 CSP 须放行 font-src data:。
-- **CP-035（④）结果登记（2026-09-08，font-src 实证记录归档）**：③ B2 实证通过 → 主窗口 CSP 终态落地——img-src/font-src 双双回收 data:（tauri.conf.json + csp-config.test.ts 三守卫锁死），预览域当时维持无 CSP（data: img/font 天然放行，无代码落点——SEC-02 起宿主页 meta 承载域级 CSP，见 ADR-0018 落地复核注记）；执行期发现主窗口唯一 data: 图像消费点 = CM6 lint 波浪线 svg 背景（JsonMode），改 text-decoration wavy 技法消除（theme/overrides.ts）；svg data: 显式禁用（markdown assets 白名单剔除）。处置全文见 ADR-0018「回收记录（CP-035）」；本决策 5「img-src/font-src data: 回收归 CP-035」至此执行完毕。
+- 安全域资产全部延续至今：自定义协议宿主页域、sandbox 无 allow-same-origin、main_frame_only 无 IPC 注入、域级 CSP meta（决策二 9）、nonce + 类型白名单校验链。
+- 独立窗口载体族已整体消亡（ADR-0021）：Rust preview 模块四命令/内容存储/会话守卫、前端几何编排/轮询/force-sync、capabilities preview.json、E2E label 驱动窗口族。
+- **逆转触发点**：Tauri 提供 per-webview CSP 时复核预览域选择；global 命令集扩充时重估 keyfwd 威胁面（ADR-0021 决策 3）。
 
-## 0020 页内分屏（ADR-0020：推翻 CP-004/S11「页 = 单组多页签」）
+**沿革**：2026-09-13 载体决策（独立 WebviewWindow）被 ADR-0021 推翻（拖动跟随延迟结构性不可归零），安全域决策全部保留；CP-033/CP-035（③④）结果登记折叠至 ADR-0018 正文；SEC-02 域级 CSP meta（决策二 9）为落地后追加。2026-09-26 文档收敛——顶部取代 banner 转入 Status 行，独立窗口运维细节压缩。
 
-**Status**: accepted（2026-09-12。bug 2「拖拽分屏面板消失」修复定稿——D3 用户裁决支持页内分屏；D7 仅网格分屏，禁 floating/popout）
+## 0020 页内分屏（推翻 CP-004/S11「页 = 单组多页签」）
+
+**Status**: accepted（2026-09-12。D3 用户裁决支持页内分屏；D7 仅网格分屏，禁 floating/popout）
 
 **上下文**：CP-004/S11 共享宿主模型登记「页 = 单组多页签」，页内分屏不可用、拖拽拆分产物被回迁守卫清理。但该守卫实际从未对真实拖拽生效（dockview `_moving` 门控吞移动期 onDidAddPanel/onDidRemovePanel，守卫挂错事件源）；真实拖拽产 stray 组后被 sync 末尾无条件 maximizePageGroup 隐藏（面板「消失」，DOM 保留）+ 切片持久化只切主组叶把 stray 组剔除（重启真丢失）。用户裁决（D3）：支持页内分屏，推翻单组限制。
 
@@ -535,17 +556,17 @@
 - 组对象 identity 跨 whole-grid fromJSON 可变约束不变（CP-004 登记）。
 - L4 `workspace-split.e2e.ts` 经 moveTo 等价落点覆盖分屏路径；真实拖拽手势（pointer 序列）自动化豁免登记 test-exemptions.md。
 
-## 0021 预览载体回迁主窗内跨源沙箱 iframe（ADR-0021：推翻 ADR-0019 载体决策，保留其安全域决策）
+## 0021 预览载体回迁主窗内跨源沙箱 iframe（推翻 ADR-0019 载体决策，保留其安全域决策）
 
-**Status**: accepted（2026-09-13。spike 四过一否 + 用户裁决（D1 路线 A / D2 收窄转发 / D3 frame-src / D4 两 commit 批次；Q4 失败处置 = 探针断言））
+**Status**: accepted（2026-09-13。spike 四过一否 + 用户裁决 D1 路线 A / D2 收窄转发 / D3 frame-src；Q4 失败处置 = 探针断言）
 
-**上下文**：拖动主窗时 md「预览」/html「渲染」页签跟随有延迟（编辑器页签无延迟）。根因结构性：预览 = ADR-0019 独立 OS 窗口，跟随链 = 主窗移动事件 → JS 监听 → 50ms 节流 → invoke IPC → Rust SetWindowPos，三重延迟不可归零（ADR-0019 后果区自登记「拖拽期亚秒级滞后」，force-sync 事件链 + 锚点 ResizeObserver 两轮补丁后仍属轮询/节流范式）。编辑器 = 主窗 WebView2 内 DOM，OS 移窗天然像素级跟随。
+**上下文**：拖动主窗时 md「预览」/html「渲染」页签跟随有延迟（编辑器页签无延迟）。根因结构性：预览 = ADR-0019 独立 OS 窗口，跟随链 = 主窗移动事件 → JS 监听 → 50ms 节流 → invoke IPC → Rust SetWindowPos，三重延迟不可归零（ADR-0019 自登记「拖拽期亚秒级滞后」，force-sync 事件链 + 锚点 ResizeObserver 两轮补丁后仍属轮询/节流范式）。编辑器 = 主窗 WebView2 内 DOM，OS 移窗天然像素级跟随。
 
 **决策**：
 
 1. **预览宿主页改由主窗内跨源沙箱 iframe 承载（路线 A）**：主窗 DOM → `<iframe sandbox="allow-scripts" src="http://slterm-preview.localhost/preview-host.html">`（宿主 iframe，opaque origin）→ 宿主页内嵌 `<iframe sandbox="allow-scripts">` srcdoc = 内容文档。**安全模型不变**（ADR-0019 核心资产保留）：自定义协议域不变；sandbox 无 allow-same-origin（CVE-2024-35222 红线）不变；main_frame_only → 各层 iframe 内均无 tauri IPC 注入不变；域级 CSP meta（SEC-02 指令表）不变；nonce + 类型白名单校验链不变。独立窗口只是载体，换载体不回退威胁模型。
-2. **消息桥 = 纯 window.postMessage（三层通道）**：独立窗口时代的 Tauri event/IPC 桥（preview_render/preview_pull/preview_sync/preview_close 四命令 + CONTENT_STORE + SESSION_STATE 会话守卫 + 几何换算 + run_on_main）整体删除——宿主页与主窗同窗口树，postMessage 天然可达（与 ADR-0019 决策一 2「跨独立窗口无 postMessage」结论不冲突——该结论约束的是跨窗口形态）。通道分层（previewMessages.ts 单点登记）：文档层（内容 iframe ↔ 主窗，经宿主桥 relay）：上行 {zoom, scroll, nav, font_probe, keyfwd}，下行 {reset, zoom_set, scroll_set}；宿主层（桥生命周期信号）：上行 {host_ready, iframe_loaded}，下行 {host_content}。origin 实证（2026-09-12 spike）：opaque origin 序列化 = "null"——主窗→宿主 targetOrigin 只能 "*"；校验 = `event.source === iframe.contentWindow` + origin "null"（下行侧宿主桥 isMain = source 归属 + 主窗 origin 白名单 tauri.localhost / localhost:1420 双闸）。
-3. **键盘语义 = 收窄转发（D2）**：内容 iframe keydown（焦点在 input/textarea/select/contenteditable 时不转发）经 slterm_keyfwd 上行（载荷 = code + 四修饰键，不含 key）→ 主窗合成 KeyboardEvent 经 ShortcutRegistry `resolve(ev, "global")` 解析消费——预览聚焦时全局快捷键（Ctrl+W 等）仍可用；表单键入/系统复制快捷键从「不可达」（ADR-0019 决策二 8 已知行为）解禁。不做旧 slterm_key 的命令重放语义复活。**威胁面登记**：nonce 明文内联于注入脚本 → 内容脚本可提取伪造 keyfwd → 触发主窗 global 命令；危害边界 = global 命令集（当前仅 global.closeTab，command-catalog.test.ts 锁死）——global 集扩充须重估本面（previewMessages.ts/buildInjectedScript.ts 注释登记）。
+2. **消息桥 = 纯 window.postMessage（三层通道）**：独立窗口时代的 Tauri event/IPC 桥（preview_render/preview_pull/preview_sync/preview_close 四命令 + CONTENT_STORE + SESSION_STATE 会话守卫 + 几何换算 + run_on_main）整体删除——宿主页与主窗同窗口树，postMessage 天然可达。通道分层（previewMessages.ts 单点登记）：文档层（内容 iframe ↔ 主窗，经宿主桥 relay）：上行 {zoom, scroll, nav, font_probe, keyfwd}，下行 {reset, zoom_set, scroll_set}；宿主层（桥生命周期信号）：上行 {host_ready, iframe_loaded}，下行 {host_content}。origin 实证（2026-09-12 spike）：opaque origin 序列化 = "null"——主窗→宿主 targetOrigin 只能 "*"；校验 = `event.source === iframe.contentWindow` + origin "null"（下行侧宿主桥 isMain = source 归属 + 主窗 origin 白名单 tauri.localhost / localhost:1420 双闸）。
+3. **键盘语义 = 收窄转发（D2）**：内容 iframe keydown（焦点在 input/textarea/select/contenteditable 时不转发）经 slterm_keyfwd 上行（载荷 = code + 四修饰键，不含 key）→ 主窗合成 KeyboardEvent 经 ShortcutRegistry `resolve(ev, "global")` 解析消费——预览聚焦时全局快捷键（Ctrl+W 等）仍可用；表单键入/系统复制快捷键解禁。不做旧 slterm_key 的命令重放语义复活。**威胁面登记**：nonce 明文内联于注入脚本 → 内容脚本可提取伪造 keyfwd → 触发主窗 global 命令；危害边界 = global 命令集（当前仅 global.closeTab，command-catalog.test.ts 锁死）——global 集扩充须重估本面（previewMessages.ts/buildInjectedScript.ts 注释登记）。
 4. **主窗 CSP 新增 `frame-src http://slterm-preview.localhost`（D3，收窄式新增）**：script-src 'self' 终态（CP-012）不动；csp-config.test.ts 锁死 frame-src 恰为该单值。
 5. **E2E 驱动契约 = 探针模式（spike Q4 裁决）**：embedded driver frame 内 execute 全灭（同源 about:blank 对照帧同样超时——driver 不接线任何非顶层上下文，与跨源/sandbox 无关）——switchToWindow/switchToFrame 契约整体退役；内容断言走「主窗 E2E 全局」探针（fontProbe 同款，PreviewFrame 经 E2E_ENABLED 门控写 `__slterm_e2e_previewDoc`（panelId → 最近推送产物）/ `__slterm_e2e_iframeLoaded`（panelId → 加载完成计数）——组合 = 旧「宿主页 srcdoc 属性」断言强度 + 真实加载佐证）。
 
@@ -563,23 +584,25 @@
 - E2E：specUtils 预览驱动族改探针模式；html.e2e/markdown.e2e 改写（窗口生命周期用例 → 宿主 iframe DOM 生命周期；「主窗移动跟随」用例结构性消除删除）；keyfwd 链路新增正/负两用例。
 - **逆转触发点**：预览内容需超出面板矩形（如画中画浮窗）时重估载体（主窗 DOM 无法出窗）；driver 出现帧级寻址能力时 E2E 可回 switchToFrame 直接断言（探针保留无妨）；global 命令集扩充时重估 keyfwd 威胁面（决策 3）。
 
+## 0022 DA1 后端全量接管 + 恢复注入就绪闸门
 
-## 0022 DA1 后端全量接管 + 恢复注入就绪闸门（ADR-0022）
-
-**Status**: accepted（2026-09-18，grill 轮次裁决：DA1 接管全平台统一 / cmd 恢复注入固定 500ms 兜底 / 验证 = 本机自动化 + Win10 实机人工验收）
+**Status**: accepted（2026-09-18。grill 轮次裁决：DA1 接管全平台统一 / cmd 恢复注入固定 500ms 兜底 / 验证 = 本机自动化 + Win10 实机人工验收）
 
 **上下文**：Win10（22H2，pwsh 7.6.5）新建终端蜂鸣一声 + 行首出现可编辑 `[?1;2c`；双击历史 session 恢复时注入命令被拼成 `[?1;2cclaude resume xxx` 致恢复失败。Win11 正常。根因链：Win10 捆绑 OpenConsole 1.24 启动握手多发一个 DA1 查询（Win11 inbox conhost 不发）→ 后端启动剥离清单不含 DA1 → 查询透传前端 → xterm.js 核心自动应答 `\x1b[?1;2c` 经 onData 无差别回写 stdin（**作废旧假设「xterm 应答只留前端 DOM 不回灌 PTY」**，实测全量回写）→ PSReadLine 把 ESC 当无效键响铃、`[?1;2c` 落成可编辑文本并与恢复注入竞争 stdin。旧「DA1 模拟响应」（每会话一次 AtomicBool、仅 startup_drained 后检测）同时存在：启动窗口内全剥离块 `continue` 漏检、双重应答身份不一致（`?64;22c` vs `?1;2c`）。
 
 **决策**：
 
 1. **DA1 后端全量接管**：DA1 查询（`ESC[c`/`ESC[0c`）一律后端检测→剥离→代答 `ESC[?64;22c`，永不透传前端，全平台统一（Win11 上 xterm 不再自答，应答身份唯一）。检测前移至剥离前原始字节；解除每会话一次限制（谁问谁得答）；块尾 DA1 前缀扣留 pending 防跨块泄漏。DA2/XTVERSION 同族不接管（未观测受害场景，登记再议）。
-2. **恢复注入就绪闸门**：恢复命令在首个提示符渲染完成（OSC 133;A → `TerminalRegistry.promptReady` **且输出静默 ≥100ms 沉淀窗**——133;A 是渲染开始而非完成，Win10 实机发现渲染窗口内 PSReadLine ReadKey 中断检查吞注入首字节丢 `c`，沉淀窗由 `lastOutputAt` 打点驱动）之后注入；cmd 无 shell integration → 固定 500ms 延迟兜底；超时（10s）兜底仍注入不劣于现状。pty_spawn 返回扩展为 `SpawnResponse { sessionId, shellKind }` 供闸门分派。
+2. **恢复注入就绪闸门**：恢复命令在首个提示符渲染完成（OSC 133;A → `TerminalRegistry.promptReady`）之后注入；cmd 无 shell integration → 固定 500ms 延迟兜底；超时（10s）兜底仍注入不劣于现状。pty_spawn 返回扩展为 `SpawnResponse { sessionId, shellKind }` 供闸门分派。（原「输出静默 ≥100ms 沉淀窗」设计已经 Win10 实测证伪撤销——「渲染窗口吞首字节」假设不成立，`lastOutputAt`/`noteOutput` 打点整族删除。）
+3. **DSR 按需代答 + 窗口外 OS 门控剥离**：禁止盲注 CPR（原 spawn 盲注 `\x1b[1;1R`——Win10 捆绑 OpenConsole 1.24 握手发 DA1 不发 DSR，盲注 CPR 无人消费，被 conhost 输入状态机解析为 F3 键 → PSReadLine CharacterSearch 吞掉下一个输入字符，实证：Win10 新终端敲 `abc` 显示 `bc`）。处置 = `reader_loop` 启动窗口内检测到 `ESC[6n` 才代答（`should_answer_dsr`）；窗口外 DSR 改 OS 门控剥离不答——`strip_dsr = conhost_input_corrupts_cpr(build)`（阈值 21376，覆盖 Win10 捆绑与回退全路径），Win11+ 维持透传 xterm 实答（主用例零回归）。**关键约束（决定方案形态）：Win10 键事件输入模式下任何 CPR 应答字节写入 stdin 都是毒**（`1;1R`→F3，其他位置形态被键事件引擎丢弃）——「后端代答 CPR」在此类主机上不可行，DSR 只能剥离不答；剥离严格不劣于现状（发起方拿到的本就是 F3 垃圾；DA1 代答字节在 Win10 实质丢失而应用正常为旁证）。
+4. **原则沉淀**：握手应答一律按需（问什么答什么），禁止盲注——盲注字节在没有等待者时就是注入应用输入的杂散键；查询处置按传输层能力分叉，「应答会被传输层损坏的查询一律后端接管或剥离」，不透传前端。
 
 **被否决的备选**：
 
 - **修捆绑 conhost 回退（原方案 c）**：诊断证伪前提（该机器 bundled=true，无回退）——撤销。
 - **仅 Win10 平台启用接管**：应答身份双轨残留，Win11 仍依赖 xterm 自答时序；全平台统一更简洁。
 - **前端 onData 过滤应答**：治标——xterm 仍自答，且其他注入路径（恢复/粘贴）竞争不消除。
+- **窗口外 DSR 留 xterm 实答（修订一短暂采用）**：与决策 1 铲除的 DA1 自答回灌完全同构——窗口外 `ESC[6n` 透传前端 → xterm 自动应答 `ESC[{y};{x}R`（渲染期光标 1;1 → 字面 `ESC[1;1R`）→ onData 无过滤回灌 stdin → 同一 F3 吞键链（Win10 实机探针证实）；修订二推翻，改 OS 门控剥离（决策 3）。
 
 **后果**：
 
@@ -587,18 +610,9 @@
 - `pty_spawn` 返回值 `string → SpawnResponse` 为 breaking change（允许，无兼容过渡）；全部 spawn 调用点与测试 mock 同步适配。
 - 前端 xterm.js DA1 自答通道失去触发源（查询不再到达）——xterm 升级改变自答行为对本项目无影响面。
 
-**修订（2026-09-18 同日，Win10 验收驳回后二次定位）**：
+**沿革**：2026-09-18 修订一（沉淀窗撤销 + DSR 按需代答）；2026-09-19 修订二（窗口外 DSR 改 OS 门控剥离不答）——两次均为 Win10 验收驳回后定位。2026-09-26 文档收敛折叠入决策 2/3/4 与被否决备选。
 
-1. **决策 2 的沉淀窗部分撤销**：「渲染窗口吞首字节」假设被 Win10 实测证伪（沉淀窗无效）。闸门回归纯 `promptReady` 判定，`lastOutputAt`/`noteOutput` 打点整族删除。
-2. **追加 DSR 按需代答（CPR 不盲注）**：丢首字符真实根因 = spawn 盲注 `\x1b[1;1R`——Win10 捆绑 OpenConsole 1.24 握手发 DA1 **不发 DSR**，盲注 CPR 无人消费，被 conhost 输入状态机解析为 F3 键 → PSReadLine CharacterSearch 吞掉下一个输入字符（判别验证：Win10 新终端敲 `abc` 显示 `bc`）。修复 = 盲注删除，`reader_loop` 启动窗口内检测到 `ESC[6n` 才代答（`should_answer_dsr`）；窗口外 DSR 留 xterm 实答（应用光标位置查询需真实位置）。**原则沉淀：握手应答一律按需（问什么答什么），禁止盲注——盲注字节在没有等待者时就是注入应用输入的杂散键。**
-
-**修订二（2026-09-19，Win10 验收再次驳回后三次定位）**：
-
-1. **撤销「窗口外 DSR 留 xterm 实答」**：该透传门与决策 1 铲除的 DA1 自答回灌完全同构——窗口外 `ESC[6n` 透传前端 → xterm.js 自动应答 `ESC[{y};{x}R`（渲染期光标 1;1 → 字面 `ESC[1;1R`）→ onData 无过滤回灌 stdin → 同一 F3 吞键链（用户 Win10 实机探针证实：手发 `ESC[6n` 后敲 `xyz` 丢 `x`；禁用窗口内代答后仍丢首字符）。盲注删除只关了注入门，透传门残留致 bug 照旧。
-2. **窗口外 DSR 改 OS 门控剥离不答**：`strip_dsr = conhost_input_corrupts_cpr(build)`（阈值 21376，覆盖 Win10 捆绑与回退全路径）——Win10 家族剥离不透传不代答；Win11+ 维持透传 xterm 实答（主用例零回归）。**关键约束（决定方案形态）：Win10 键事件输入模式下任何 CPR 应答字节写入 stdin 都是毒**（`1;1R`→F3，其他位置形态被键事件引擎丢弃）——「后端代答 CPR」在此类主机上不可行，DSR 只能剥离不答；剥离严格不劣于现状（发起方拿到的本就是 F3 垃圾；DA1 代答字节在 Win10 实质丢失而应用正常为旁证）。窗口外 DSR 发起方身份未钉死（conhost 迟发 VtIo 同步或提示符工具），处置与发起方无关。
-3. **原则升级**：查询处置按传输层能力分叉——键事件输入模式下 DSR 一律剥离不答（CPR 字节即注入毒）；查询不透传前端的原则从 DA1 推广为「应答会被传输层损坏的查询一律后端接管或剥离」。
-
-## 0023 设置中心组模型改全局/Agent 二分（ADR-0023）
+## 0023 设置中心组模型改全局/Agent 二分
 
 **Status**: accepted（2026-09-26）
 
@@ -624,7 +638,7 @@
 - 无 agent 注册时 Agent 组不渲染；selectedPage 失效回退全局首组首页（既有逻辑自然覆盖）。
 - claude profile displayName "claude" → "Claude Code"（tabTitle 保持 "claude" 不变——终端页签窄宽度场景）。
 
-## 0024 agent 目录沙箱白名单 + pinned watcher（ADR-0024）
+## 0024 agent 目录沙箱白名单 + pinned watcher
 
 **Status**: accepted（2026-09-26）
 
@@ -635,7 +649,7 @@
 1. **agent 目录 = 后端静态表唯一真值源**：`src-tauri/src/agent_dirs.rs` 持 cliId → home 相对目录硬编码表（当前仅 claude → `.claude`），`resolve_agent_dirs()` 经 `crate::home::home_dir()` 解析；DTO `AgentGlobalDir { cli_id, path, exists }` 经 ts-rs 生成，`agent_dirs_list` 命令下发。前端永不能注入任意 agent 路径。
 2. **沙箱放行域扩展**：`validate_path_within_root` 放行域 = project_root ∪ agent 目录集，canonicalize 双向比较（兼容 symlink）。fs/git/notify/pty 全族命令自动获得 agent 目录访问——编辑器/预览链路零改造，不为 agent 文件建第二套读取通道。
 3. **pinned watcher**：`notify_watch(path, pinned?)` 置条目标记——pinned 条目被 `pause_all_except` 跳过（照 touch last_used：项目切换不暂停 agent 监听，agent 监听启动也不暂停项目 watcher，两侧皆免），`evict_lru` 避让（全 pinned 退化全池 LRU）；`notify_stop_watch` 语义不变（移除即清标记）。池容量 8 足够（1 项目 + N agent）。
-4. **`agentGlobalFiles` settings 段不设 Rust DTO**：纯透传段（SEC-11 白名单 +1 共 8 项），校验/净化在前端 `features/agentFiles/filtering.ts`——照 ADR-0014 cliAliases 先例：前端消费型配置段 Rust 复刻校验即双源漂移。
+4. **`agentGlobalFiles` settings 段不设 Rust DTO**：纯透传段（SEC-11 白名单 +1），校验/净化在前端 `features/agentFiles/filtering.ts`——照 ADR-0014 cliAliases 先例：前端消费型配置段 Rust 复刻校验即双源漂移。
 5. **树交互共享经 FileTreeExplorer 抽取**：ExplorerPanel 全部树交互抽为 `FileTreeExplorer`（rootPath/rootFilter/eventPathFilter 等入参），ExplorerPanel 收敛薄壳、AgentFilesPanel 复用（红线：explorer 行为零回归）；`useFileTree` 加 `rootFilter`（根层三点统一应用：loadRoot 首帧+续页/loadDirectory 当 dir===root/refreshSubtreeAt 当 target===root）/`eventPathFilter`/内置根前缀过滤（root 外 fs-event 跳过刷新——对 explorer 属严格改进）。
 
 **被否决的备选**：
