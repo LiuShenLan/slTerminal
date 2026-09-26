@@ -10,11 +10,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### 注册表家族契约（硬约束 #13）
 
-`SettingsPageRegistry` 是模块级单例：`register(page)` 同 id 幂等覆盖 / `getAll(group?)` 按 `order ?? 注册序` / `get(id)` / `_reset()`（仅测试，清空全部条目）。`getSettingsPageRegistry()` 惰性导出。配置页类型 `SettingsPage`（id/title/group/component/order），`SettingsPageProps` 是壳透传给页组件的通道（onDirtyChange 上报 + pageParams 槽 + onPageParamsChange patch）。
+`SettingsPageRegistry` 是模块级单例：`register(page)` 同 id 幂等覆盖 / `getAll(group?)` 按 `order ?? 注册序` / `get(id)` / `_reset()`（仅测试，清空全部条目）。`getSettingsPageRegistry()` 惰性导出。配置页类型 `SettingsPage`（id/title/group/component/order + 可选 `cliId`——agent 组页归属 CLI，ADR-0023），`SettingsPageProps` 是壳透传给页组件的通道（onDirtyChange 上报 + pageParams 槽 + onPageParamsChange patch）。
 
 ### 注册触发点（side-effect import）
 
-`pages.ts` import 即注册全部配置页——生产注册触发点为 `SettingsPanel.tsx` 顶部 `import "../../features/settingsCenter/pages"`（import 链保持引用，禁止隐式初始化）。新增配置页 = pages.ts 追加 register 调用即可，壳零改动。测试在 beforeEach/afterEach 调 `_reset()` 保证用例隔离。
+`pages.ts` import 即注册全部配置页——生产注册触发点为 `SettingsPanel.tsx` 顶部 `import "../../features/settingsCenter/pages"`（import 链保持引用，禁止隐式初始化）。新增全局配置页 = pages.ts 追加 register 调用即可，壳零改动；agent 组页 = `syncAgentPagesFromProfiles()` 遍历 cliProfileRegistry 枚举（`agent.<cliId>.basic` 恒有 + `agent.<cliId>.hooks` 经 hasConfigEditor 门控），pages.ts 顶层调用一次（side-effect 语义不变）。**动态注册的 profile**（E2E mockcli 夹具）静态枚举不覆盖——注册后须手动调 `syncAgentPagesFromProfiles()` 幂等补注册（register 同 id 幂等覆盖，helpers.ts 注册 helper 先例）。测试在 beforeEach/afterEach 调 `_reset()` 保证用例隔离。
 
 ### openSettings 编排（活动栏配置钮入口）
 
@@ -33,7 +33,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## 外部坑/红线
 
 - **壳是 params 持久化单点**：页组件不得自行 updateParameters/onLayoutChange，页内参数一律经 `onPageParamsChange` patch → 壳 persistParams（settings 页随布局 JSON 持久化）。
-- **组序 global→project 固定**：规格 §4.3 组序「全局」在上、「项目」在下；注册时 group 归错会破坏导航组序。
+- **组序 global→agent 固定（ADR-0023）**：导航组序「全局」在上、「Agent」在下；Agent 组内按 cliId 分节（分节标题 = 不可点 div + logo + displayName，子页缩进 24px）；注册时 group 归错会破坏导航组序。
 - **corrupted 警示条 L4 豁免**：写坏 settings.json 需沙箱外写文件，无命令通道——L2 覆盖（loadSettings mock），L4 豁免登记于 test-exemptions。
 
 ## 测试模式

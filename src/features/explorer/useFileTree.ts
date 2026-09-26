@@ -51,12 +51,25 @@ interface UseFileTreeOptions {
   viewState?: unknown;
   /** 状态变化上呼（透传 SideViewComponentProps.onViewStateChange） */
   onViewStateChange?: (state: unknown) => void;
+  /** 根层条目过滤器（条目名 → 是否展示）——仅根层三点生效（loadRoot 首帧+续页 /
+   *  loadDirectory 当 dir===root / refreshSubtreeAt 当 target===root）；子层不受影响
+   * （「不读取」语义 = 未匹配目录不递归加载，自然成立）。
+   *  消费方须 useCallback 稳定引用；引用变化 → 自动 refreshExpanded（配置即时生效）。
+   *  消费方 = Agent 全局文件视图（全部/自定义/运行时开关过滤）；explorer 不传（undefined 零开销） */
+  rootFilter?: (name: string) => boolean;
+  /** fs-event 路径二次过滤器（绝对路径 → 是否相关）——在内置根前缀过滤之后、
+   *  debounce 之前判定；任一事件路径相关即放行刷新（事件粒度保守，不逐路径裁剪）。
+   *  消费方 = Agent 全局文件视图（名单外/运行时首段事件丢弃，防 projects/*.jsonl
+   *  高频变更驱动无谓整树刷新） */
+  eventPathFilter?: (absPath: string) => boolean;
 }
 
 export function useFileTree({
   rootPath,
   viewState,
   onViewStateChange,
+  rootFilter,
+  eventPathFilter,
 }: UseFileTreeOptions) {
   const [rootNodes, setRootNodes] = useState<TreeNode[]>([]);
   const [gitStatusMap, setGitStatusMap] = useState<Map<string, string>>(
@@ -91,6 +104,23 @@ export function useFileTree({
   const restoreBusyRef = useRef(false);
   /** FE-03：加载抑制兜底守卫定时器句柄——释放原语经此清除（守卫存在 ⟺ 抑制窗口开启） */
   const suppressGuardRef = useRef<number | undefined>(undefined);
+  // rootFilter/eventPathFilter 存 ref（每渲染同步最新引用）——加载/刷新回调读 ref，
+  // 避免过滤器引用变化引发 loadDirectory→refreshExpanded 整条 useCallback 链重建
+  const rootFilterRef = useRef(rootFilter);
+  rootFilterRef.current = rootFilter;
+  const eventPathFilterRef = useRef(eventPathFilter);
+  eventPathFilterRef.current = eventPathFilter;
+
+  /** 根层条目过滤（仅 dirPath === 当前 root 时应用；ref 读取最新过滤器） */
+  const applyRootFilter = useCallback(
+    (dirPath: string, entries: DirEntry[]): DirEntry[] => {
+      const rf = rootFilterRef.current;
+      const rp = rootPathRef.current;
+      if (!rf || rp === null || dirPath !== rp) return entries;
+      return entries.filter((e) => rf(e.name));
+    },
+    [],
+  );
 
   /** FE-03：抑制解除原语——复位抑制标记并清除兜底守卫。全部解除点统一走本原语，
    *  守卫句柄随解除一并作废——否则抑制已解除而守卫仍留册 10s（污染外部定时器计数，
@@ -118,11 +148,12 @@ export function useFileTree({
     return all;
   }, []);
 
-  /** 读取目录内容并转换为 TreeNode。失败时记录按路径错误并返回 []（子目录容错不冒泡） */
+  /** 读取目录内容并转换为 TreeNode。失败时记录按路径错误并返回 []（子目录容错不冒泡）。
+   *  dirPath === root 时应用 rootFilter（根层过滤统一点之一，另两处：loadRoot/refreshSubtreeAt） */
   const loadDirectory = useCallback(
     async (dirPath: string): Promise<TreeNode[]> => {
       try {
-        const entries = await collectDirEntries(dirPath);
+        const entries = applyRootFilter(dirPath, await collectDirEntries(dirPath));
         // 读取成功 → 清除该路径的加载错误
         setDirErrors((prev) => {
           if (!prev.has(dirPath)) return prev;
@@ -143,7 +174,7 @@ export function useFileTree({
         return [];
       }
     },
-    [collectDirEntries],
+    [collectDirEntries, applyRootFilter],
   );
 
   /** 加载根目录。gen 参数用于 rootPath 变化时丢弃旧请求的过期结果。
@@ -168,14 +199,14 @@ export function useFileTree({
           next.delete(rp);
           return next;
         });
-        setRootNodes(toTreeNodes(first.entries));
+        setRootNodes(toTreeNodes(applyRootFilter(rp, first.entries)));
         firstFrameCommitted = true;
         // 后台续页：游标逐页拉取，尾接已渲染节点（函数式 set 保留首帧后的展开交互）
         let cursor = first.nextCursor;
         while (cursor !== null) {
           const page = await readDirPage(rp, cursor);
           if (gen !== undefined && gen !== genRef.current) return;
-          const extra = toTreeNodes(page.entries);
+          const extra = toTreeNodes(applyRootFilter(rp, page.entries));
           if (extra.length > 0) {
             setRootNodes((prev) => [...prev, ...extra]);
           }
@@ -203,7 +234,7 @@ export function useFileTree({
         if (gen === undefined || gen === genRef.current) setRootNodes([]);
       }
     },
-    [rootPath, releaseSuppression],
+    [rootPath, releaseSuppression, applyRootFilter],
   );
 
   /** 加载子目录 */
@@ -371,7 +402,7 @@ export function useFileTree({
       let targetMissing = false;
       try {
         const entries = await collectDirEntries(targetPath);
-        fresh = toTreeNodes(entries);
+        fresh = toTreeNodes(applyRootFilter(targetPath, entries));
       } catch {
         targetMissing = true;
         fresh = [];
@@ -429,7 +460,7 @@ export function useFileTree({
       });
       return true;
     },
-    [collectDirEntries],
+    [collectDirEntries, applyRootFilter],
   );
 
   // CP-016：以下闭包实现展开态真值源外移——提交（遍历派生上呼）、
@@ -598,9 +629,39 @@ export function useFileTree({
     releaseSuppression,
   ]);
 
+  // rootFilter 引用变化 → 配置变更（Agent 视图模式/名单/运行时开关）即时生效：
+  // 重载保留展开态（reloadPreservingExpanded 语义）。首挂跳过——rootPath effect 的
+  // loadRoot 已应用过滤器，重复刷新无谓。
+  const prevRootFilterRef = useRef(rootFilter);
+  useEffect(() => {
+    if (prevRootFilterRef.current === rootFilter) return;
+    prevRootFilterRef.current = rootFilter;
+    void refreshExpanded();
+  }, [rootFilter, refreshExpanded]);
+
   // 订阅文件系统事件（200ms 去抖增量刷新）
   useEffect(() => {
-    const unlisten = onFsEvent(() => {
+    const unlisten = onFsEvent((payload) => {
+      // 根前缀过滤（内置）：全部事件路径在 root 外 → 与树无关，跳过刷新。
+      // 多 watcher 共存（项目 + pinned agent 目录，ADR-0024）后 fs-event 为全局广播，
+      // 无本过滤时 agent 目录事件会驱动 explorer 无谓整树刷新。
+      // need_rescan 的 paths = 监听根本身（np === root 命中）；空 paths 保守放行。
+      const rp = rootPathRef.current;
+      if (rp && payload.paths.length > 0) {
+        const norm = (p: string) =>
+          normalizePath(p).toLowerCase().replace(/\/+$/, "");
+        const root = norm(rp);
+        const anyInside = payload.paths.some((p) => {
+          const np = norm(p);
+          return np === root || np.startsWith(`${root}/`);
+        });
+        if (!anyInside) return;
+      }
+      // eventPathFilter 二次过滤（Agent 视图：名单外/运行时首段事件丢弃）
+      const epf = eventPathFilterRef.current;
+      if (epf && payload.paths.length > 0 && !payload.paths.some((p) => epf(p))) {
+        return;
+      }
       if (debounceRef.current) {
         clearTimeout(debounceRef.current);
       }

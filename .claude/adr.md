@@ -597,3 +597,55 @@
 1. **撤销「窗口外 DSR 留 xterm 实答」**：该透传门与决策 1 铲除的 DA1 自答回灌完全同构——窗口外 `ESC[6n` 透传前端 → xterm.js 自动应答 `ESC[{y};{x}R`（渲染期光标 1;1 → 字面 `ESC[1;1R`）→ onData 无过滤回灌 stdin → 同一 F3 吞键链（用户 Win10 实机探针证实：手发 `ESC[6n` 后敲 `xyz` 丢 `x`；禁用窗口内代答后仍丢首字符）。盲注删除只关了注入门，透传门残留致 bug 照旧。
 2. **窗口外 DSR 改 OS 门控剥离不答**：`strip_dsr = conhost_input_corrupts_cpr(build)`（阈值 21376，覆盖 Win10 捆绑与回退全路径）——Win10 家族剥离不透传不代答；Win11+ 维持透传 xterm 实答（主用例零回归）。**关键约束（决定方案形态）：Win10 键事件输入模式下任何 CPR 应答字节写入 stdin 都是毒**（`1;1R`→F3，其他位置形态被键事件引擎丢弃）——「后端代答 CPR」在此类主机上不可行，DSR 只能剥离不答；剥离严格不劣于现状（发起方拿到的本就是 F3 垃圾；DA1 代答字节在 Win10 实质丢失而应用正常为旁证）。窗口外 DSR 发起方身份未钉死（conhost 迟发 VtIo 同步或提示符工具），处置与发起方无关。
 3. **原则升级**：查询处置按传输层能力分叉——键事件输入模式下 DSR 一律剥离不答（CPR 字节即注入毒）；查询不透传前端的原则从 DA1 推广为「应答会被传输层损坏的查询一律后端接管或剥离」。
+
+## 0023 设置中心组模型改全局/Agent 二分（ADR-0023）
+
+**Status**: accepted（2026-09-26）
+
+**上下文**：设置中心旧组模型含「项目」组，承载 CLI 别名页与 Hooks 配置 hub 页（hub = CLI 选择行 + 子编辑器容器）。CLI 增多后「项目」组语义失真——别名/hooks 是 agent 维度的配置而非项目维度；hub 选择行在只有两个子页时纯属多余层级。
+
+**决策**：
+
+1. **组模型二分**：`SettingsPageGroup = "global" | "agent"`，删「项目」组；组序 global→agent 固定。
+2. **Agent 组按 CLI 分节**：agent 行 = 不可点分节标题（logo + displayName，div 非按钮）+ 缩进子页；页 id 形态 `agent.<cliId>.<page>`。
+3. **hooks 页迁入直渲染**：`agent.<cliId>.hooks` 直渲染 profile `configEditor`，删 hub 与 CLI 选择行；页注册经 `capabilities.hooks.hasConfigEditor` 门控（无编辑器能力的 agent 无 hooks 页）。
+4. **CLI 别名迁入基础配置页**：`agent.<cliId>.basic` = 「侧栏展示内容」节 +「CLI 别名」节（CliAliasSection 自 CliAliasesPage 抽单 cliId 形态）；别名/ hooks 两旧页删除。
+5. **动态注册 profile 补注册契约**：agent 页枚举抽为幂等导出函数 `syncAgentPagesFromProfiles()`（同 id register 幂等覆盖），模块顶层调用一次保 side-effect 语义；E2E 等运行时动态注册 profile 的场景须手动调用补注册（helpers.ts 先例）。
+
+**被否决的备选**：
+
+- **保留 hub 容器 + CLI 选择行**：两级导航重复（设置中心左侧导航本身就是选择器），选择行是纯冗余。
+- **agent 分节标题可点（兼作 agent 首页）**：与「分节标题」语义混淆；无内容可放。
+- **保留「项目」组**：组语义失真（组内页与项目无关联）。
+
+**后果**：
+
+- 页 id breaking change（`cliAliases`/`hooks` → `agent.<cliId>.basic`/`agent.<cliId>.hooks`，允许，无兼容过渡）；E2E 与 L2 测试同步适配。
+- 无 agent 注册时 Agent 组不渲染；selectedPage 失效回退全局首组首页（既有逻辑自然覆盖）。
+- claude profile displayName "claude" → "Claude Code"（tabTitle 保持 "claude" 不变——终端页签窄宽度场景）。
+
+## 0024 agent 目录沙箱白名单 + pinned watcher（ADR-0024）
+
+**Status**: accepted（2026-09-26）
+
+**上下文**：「Agent 全局文件」侧栏视图需读取 `~/.claude`（settings.json 等全局配置文件）。三个结构性障碍：① 路径沙箱 `validate_path_within_root` 仅放行 project_root，agent 目录恒在根外被拒，而编辑器/预览/「在终端打开」链路全部经沙箱命令；② watcher 池 `notify_watch` 内嵌 `pause_all_except`——agent 监听启动会暂停项目 watcher（explorer/commit/编辑器事件全停），项目切换反向暂停 agent watcher，两侧互踩；③ `~/.claude` 在 dotfiles 管理场景下可能是 symlink，字符串前缀比较不可靠。
+
+**决策**：
+
+1. **agent 目录 = 后端静态表唯一真值源**：`src-tauri/src/agent_dirs.rs` 持 cliId → home 相对目录硬编码表（当前仅 claude → `.claude`），`resolve_agent_dirs()` 经 `crate::home::home_dir()` 解析；DTO `AgentGlobalDir { cli_id, path, exists }` 经 ts-rs 生成，`agent_dirs_list` 命令下发。前端永不能注入任意 agent 路径。
+2. **沙箱放行域扩展**：`validate_path_within_root` 放行域 = project_root ∪ agent 目录集，canonicalize 双向比较（兼容 symlink）。fs/git/notify/pty 全族命令自动获得 agent 目录访问——编辑器/预览链路零改造，不为 agent 文件建第二套读取通道。
+3. **pinned watcher**：`notify_watch(path, pinned?)` 置条目标记——pinned 条目被 `pause_all_except` 跳过（照 touch last_used：项目切换不暂停 agent 监听，agent 监听启动也不暂停项目 watcher，两侧皆免），`evict_lru` 避让（全 pinned 退化全池 LRU）；`notify_stop_watch` 语义不变（移除即清标记）。池容量 8 足够（1 项目 + N agent）。
+4. **`agentGlobalFiles` settings 段不设 Rust DTO**：纯透传段（SEC-11 白名单 +1 共 8 项），校验/净化在前端 `features/agentFiles/filtering.ts`——照 ADR-0014 cliAliases 先例：前端消费型配置段 Rust 复刻校验即双源漂移。
+5. **树交互共享经 FileTreeExplorer 抽取**：ExplorerPanel 全部树交互抽为 `FileTreeExplorer`（rootPath/rootFilter/eventPathFilter 等入参），ExplorerPanel 收敛薄壳、AgentFilesPanel 复用（红线：explorer 行为零回归）；`useFileTree` 加 `rootFilter`（根层三点统一应用：loadRoot 首帧+续页/loadDirectory 当 dir===root/refreshSubtreeAt 当 target===root）/`eventPathFilter`/内置根前缀过滤（root 外 fs-event 跳过刷新——对 explorer 属严格改进）。
+
+**被否决的备选**：
+
+- **agent 文件走独立 IPC 域/读取通道**：编辑器/预览/终端打开链路要全部分叉，沙箱语义双源——否决，扩展沙箱放行域一处收口。
+- **agent watcher 独立池**：池语义重复实现；pinned 标记在既有池内解决互踩更简洁。
+- **前端经 IPC 传 agent 目录表**：注入面（前端可声明任意目录进沙箱白名单）——否决，表在后端硬编码。
+
+**后果**：
+
+- 沙箱放行面扩大至 agent 目录集（静态表白名单，无新增注入面）；`project_root=None` 时 agent 目录仍放行（视图在无项目时可用）。
+- 新增 agent = agent_dirs.rs 表内追加一行 + profile 声明 `capabilities.globalFiles`（configDir/runtimePaths）。
+- `notify_watch` 签名加可选参数为 breaking change（允许，无兼容过渡）。

@@ -58,14 +58,14 @@ htmlviewer / markdownviewer 等「文档型预览面板」共享 `src/panels/doc
 
 ### settings：设置中心壳 + 配置页注册表分派（F11）
 
-`SettingsPanel`（F11）为**壳容器**：左导航（组序 global→project，固定 180px）+ 右配置页槽位，槽位经 `SettingsPageRegistry`（features/settingsCenter）分派渲染 `page.component`（`key={selectedPage}` 强制重挂载——ADR-0001 先例，页内状态随卸载丢弃）。配置页注册集中在 `features/settingsCenter/pages.ts`（side-effect import 触发点：SettingsPanel 顶部 import 即注册全部配置页），壳零直接引用任何具体配置页组件，新增配置页 = pages.ts 追加一条 register。
+`SettingsPanel`（F11）为**壳容器**：左导航（组序 global→agent——Agent 组按 cliId 分节：不可点分节标题 div（logo + displayName）+ 缩进子页，ADR-0023，固定 180px）+ 右配置页槽位，槽位经 `SettingsPageRegistry`（features/settingsCenter）分派渲染 `page.component`（`key={selectedPage}` 强制重挂载——ADR-0001 先例，页内状态随卸载丢弃）。配置页注册集中在 `features/settingsCenter/pages.ts`（side-effect import 触发点：SettingsPanel 顶部 import 即注册全部配置页），壳零直接引用任何具体配置页组件；新增全局配置页 = pages.ts 追加一条 register，agent 页 = cliProfileRegistry 枚举自动出现（pages.ts 内 syncAgentPagesFromProfiles）。
 
 - **壳是 params 持久化单点**：选中切换与 `onPageParamsChange`（pageParams[selectedPage] 槽 merge patch）统一经 `persistParams`（`api.updateParameters` + 显式 `onLayoutChange(saveLayout)` + 按 `settings-` 前缀解析 pageId → `updatePageLayout`）——updateParameters 不触发 onDidLayoutChange，必须显式保存（F8 先例）。
 - **dirty 汇聚（SC-FE-07）**：页组件经 `SettingsPageProps.onDirtyChange` 上报 → 壳维护 dirtyMap（导航项 7px 中性色圆点，不用 F3 四态色防语义混淆）+ 同步 `dirtyRegistry`（与 DefaultTab × 关闭拦截共享同一真值源，防两处状态漂移）。切配置页时当前页 dirty → `confirmDialog` 确认丢弃（askGuard 500ms 防循环，照 hub 先例）；× 关闭拦截在 workspace 层（见 workspace/CLAUDE.md）。
 - **切项目自动关闭（SC-FE-08）**：订阅 activePageId 所属项目 ≠ 面板所属项目 → 关闭。初始评估（布局恢复挂载即不一致，新挂载不可能 dirty）静默关；变化触发 dirty 守卫 confirmDialog，取消则不关（面板暂留非活跃项目，尊重用户选择）；`activePageId === null` 不动（删除末页/启动瞬态，防连锁误关）。
 - **settings 已纳入 renderer="always"（SC-FE-06 翻案，CP-017）**：dirty 真值源（dirtyRegistry）脱离壳生命周期——壳不随页签切换卸载，dirtyMap/dirtyRegistry 条目跨切签存活（壳卸载不再 clear，条目收口到「确认丢弃关闭」动作点）。
 - **corrupted 警示条**：挂载 `loadSettings()` → corrupted → 顶部警示条（× 可关，`data-e2e="settings-corrupted-banner"`，不阻塞）。L2 覆盖（loadSettings mock），L4 豁免登记——写坏文件需沙箱外写，无命令通道。
-- claude 专属 hooks 编辑器归域 `features/cliProfiles/profiles/claude/configEditor/`（KZ-1，见 cliProfiles/CLAUDE.md），经 profile 的 `configEditor` 字段挂入；本面板经 HooksSettingsPage 页组件接入，不再跨 features 引用。
+- claude 专属 hooks 编辑器归域 `features/cliProfiles/profiles/claude/configEditor/`（KZ-1，见 cliProfiles/CLAUDE.md），经 profile 的 `configEditor` 字段挂入；本面板经 Agent 组 hooks 页（`panels/settings/pages/AgentHooksPage`——按页 cliId 直渲染 configEditor，ADR-0023）接入，不再跨 features 引用。
 
 ### Ctrl+C 保留为中断（CP-020）
 

@@ -25,6 +25,7 @@ import { switchToPageShared, getAllPageApis } from "../src/workspace/pageApis";
 import { isSettingsPanelId, pageIdOfSettingsPanel } from "../src/workspace/pageGroups";
 import { openSettings } from "../src/features/settingsCenter/openSettings";
 import { setSettingsDirty } from "../src/features/settingsCenter/dirtyRegistry";
+import { syncAgentPagesFromProfiles } from "../src/features/settingsCenter/pages";
 import { useFontSize, FONT_SIZE_DEFAULT } from "../src/stores/fontSize";
 import { useKeybindings } from "../src/stores/keybindings";
 import { useSideBar } from "../src/stores/sideBar";
@@ -618,6 +619,9 @@ function installMockCliProfile(): void {
   };
   window.__slterm_e2e_registerMockCliProfile = () => {
     cliProfileRegistry.register(mockCliProfile);
+    // ADR-0023：agent 设置页 = pages.ts 静态枚举（import 时跑）——动态注册的
+    // mockcli 经幂等同步补注册 agent.mockcli.* 页（register 同 id 幂等覆盖）
+    syncAgentPagesFromProfiles();
   };
 }
 

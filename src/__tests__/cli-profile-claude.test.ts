@@ -22,6 +22,7 @@ import { describe, it, expect, afterEach } from "vitest";
 // 导入触发 side-effect 注册（模块加载即注册 claude）
 import {
   CLAUDE_CLI_ID,
+  CLAUDE_RUNTIME_PATHS,
   claudeProfile,
 } from "../features/cliProfiles/profiles/claude";
 import {
@@ -61,11 +62,11 @@ describe("claude profile 身份域（MC-104）", () => {
     expect(profile!.id).toBe(CLAUDE_CLI_ID);
   });
 
-  it("身份域字段完整：id/displayName/commands/iconSrc/tabTitle/capabilities.hooks+history（含策略函数引用）", () => {
+  it("身份域字段完整：id/displayName/commands/iconSrc/tabTitle/capabilities.hooks+history+globalFiles（含策略函数引用）", () => {
     const profile = cliProfileRegistry.get(CLAUDE_CLI_ID)!;
     expect(profile).toEqual({
       id: "claude",
-      displayName: "claude",
+      displayName: "Claude Code",
       commands: ["claude"],
       iconSrc: "/cli-icons/claude.png",
       tabTitle: "claude",
@@ -88,6 +89,10 @@ describe("claude profile 身份域（MC-104）", () => {
           buildResumeCommand,
           buildRestoreInput,
         },
+        globalFiles: {
+          configDir: ".claude",
+          runtimePaths: CLAUDE_RUNTIME_PATHS,
+        },
       },
     });
   });
@@ -102,6 +107,27 @@ describe("claude profile 身份域（MC-104）", () => {
     expect(hooks!.hasConfigEditor).toBe(true);
     expect(hooks!.configEditor).toBe(ClaudeHooksConfigEditor);
     expect(hooks!.configLayers).toHaveLength(3);
+  });
+
+  it("capabilities.globalFiles：configDir + CLAUDE_RUNTIME_PATHS 11 项值集锁定（F1）", () => {
+    const gf = cliProfileRegistry.get(CLAUDE_CLI_ID)!.capabilities.globalFiles;
+    expect(gf).toBeDefined();
+    expect(gf!.configDir).toBe(".claude");
+    expect(gf!.runtimePaths).toBe(CLAUDE_RUNTIME_PATHS);
+    // 运行时文件名单值集（缓存/会话/日志等无配置价值的官方运行时产物）——字面量锁死
+    expect(CLAUDE_RUNTIME_PATHS).toEqual([
+      "projects",
+      "sessions",
+      "shell-snapshots",
+      "history.jsonl",
+      "telemetry",
+      "stats-cache.json",
+      "ide",
+      "paste-cache",
+      "cache",
+      "file-history",
+      "session-env",
+    ]);
   });
 
   it("computeUsagePercent 官方口径（round + clamp 0-100；无数据 null）", () => {

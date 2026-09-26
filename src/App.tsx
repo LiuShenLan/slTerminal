@@ -10,6 +10,7 @@ import { useFontSize, cancelPendingSave as cancelFontSizeSave } from "./stores/f
 import { useKeybindings, cancelPendingSave as cancelKeybindingsSave } from "./stores/keybindings";
 import { useSideBar, cancelPendingSave as cancelSideBarSave } from "./stores/sideBar";
 import { useCliAliases, cancelPendingSave as cancelCliAliasesSave } from "./stores/cliAliases";
+import { useAgentGlobalFiles, cancelPendingSave as cancelAgentGlobalFilesSave } from "./stores/agentGlobalFiles";
 import { useConptyInputModes, cancelPendingSave as cancelConptyModesSave } from "./stores/conptyInputModes";
 import type { CliAliasesState } from "./stores/cliAliases";
 import { cliProfileRegistry } from "./features/cliProfiles/cliProfileRegistry";
@@ -162,6 +163,15 @@ function App() {
         })(),
         (async () => {
           try {
+            // 加载 Agent 全局文件展示配置——sanitize 需 profile 已注册（同 cliAliases 时序）
+            await useAgentGlobalFiles.getState().loadFromDisk();
+          } catch (err) {
+            // FE-03：启动链失败不再静默——降级兜底不变（保持默认空配置），仅告警记录
+            console.warn("[App] 加载 Agent 全局文件设置失败，保持默认配置:", err);
+          }
+        })(),
+        (async () => {
+          try {
             // 加载 ConPTY 输入模式能力矩阵（CP-009）——设置页开关显示 + 关闭前冲刷
             await useConptyInputModes.getState().loadFromDisk();
           } catch (err) {
@@ -255,6 +265,7 @@ function App() {
         cancelKeybindingsSave();
         cancelSideBarSave();
         cancelCliAliasesSave();
+        cancelAgentGlobalFilesSave();
         cancelConptyModesSave();
         await Promise.race([
           saveAllProjects(),

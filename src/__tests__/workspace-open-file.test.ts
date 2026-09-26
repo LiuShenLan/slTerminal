@@ -15,6 +15,13 @@ import {
 import { titleManager } from "../workspace/titleManager";
 import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
+import { toast } from "../lib";
+
+// toast 桩（页内无组引导断言用；其余 lib 导出保持真实）
+vi.mock("../lib", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib")>()),
+  toast: { show: vi.fn() },
+}));
 
 const mocks = vi.hoisted(() => {
   const mockAddPanel = vi.fn();
@@ -136,6 +143,19 @@ describe("openFileInPage", () => {
     expect(openFileInPage(baseCtx(), "C:/project/src/a.ts")).toBe(false);
     // 异常后同路径可再次尝试（未注册进 titleManager，无残留聚焦）
     expect(mocks.mockFocus).not.toHaveBeenCalled();
+  });
+
+  it("页内无组（落组兜底链返 null）→ toast 引导 + 返回 false 不调 addPanel", () => {
+    vi.mocked(toast.show).mockClear();
+    // 主组缺失（getGroup undefined）+ 页内零组 + 无聚焦组 → resolveFocusedGroupForAdd 返 null
+    const dockApi = {
+      ...makeDockApi(),
+      getGroup: vi.fn().mockReturnValue(undefined),
+      groups: [],
+    };
+    expect(openFileInPage({ ...baseCtx(), dockApi }, "C:/project/src/a.ts")).toBe(false);
+    expect(mocks.mockAddPanel).not.toHaveBeenCalled();
+    expect(toast.show).toHaveBeenCalledWith("warning", "当前页面无面板——请先新建终端");
   });
 
   it("根内相对标题根：projectRootPath 优先参与标题计算", () => {

@@ -47,7 +47,7 @@ CLI profile 注册表（MC-1/101~108）——编码 CLI 身份域与能力策略
   - `configLayers`（KZ-4）：hooks 配置分层声明；`hasConfigEditor=true` 时必填。
 - `HistoryCapability`：supportsFork / buildResumeCommand / buildRestoreInput。
 
-能力**可选**：`capabilities.hooks` / `capabilities.history` 均可缺省。
+能力**可选**：`capabilities.hooks` / `capabilities.history` / `capabilities.globalFiles` 均可缺省。`globalFiles`（ADR-0024）= `{ configDir, runtimePaths }`——声明该 CLI 有全局配置目录（供「Agent 全局文件」侧栏视图与设置中心 Agent 组消费）；`runtimePaths` 为运行时产物名单（默认隐藏，「显示运行时文件」开关控制），claude 的 11 项字面量锁定于 `CLAUDE_RUNTIME_PATHS` 常量。
 
 ### CLAUDE_CLI_ID 常量约定（MC-205，AC-5 守卫豁免形态）
 
@@ -59,7 +59,7 @@ CLI profile 注册表（MC-1/101~108）——编码 CLI 身份域与能力策略
 
 ### 编辑器归域 `configEditor/`（KZ-1，F11 收编）
 
-claude 专属 hooks 编辑器（ClaudeHooksConfigEditor + 10 文件 + schema/）**归域 `profiles/claude/configEditor/`**——不再位于 panels、不再跨模块引用（F11 迁移后 cliProfiles 零外部面板依赖）。`profiles/claude/index.ts` import `./configEditor/ClaudeHooksConfigEditor` 挂入 `capabilities.hooks.configEditor`；设置中心 Hooks 配置页（`panels/settings/pages/HooksSettingsPage`）经该字段分派渲染，hub 零直接引用（KZ-1 依赖方向不变，只是编辑器资产物理归域）。`types.ts` 仅类型 import，运行期擦除，不构成运行循环。
+claude 专属 hooks 编辑器（ClaudeHooksConfigEditor + 10 文件 + schema/）**归域 `profiles/claude/configEditor/`**——不再位于 panels、不再跨模块引用（F11 迁移后 cliProfiles 零外部面板依赖）。`profiles/claude/index.ts` import `./configEditor/ClaudeHooksConfigEditor` 挂入 `capabilities.hooks.configEditor`；设置中心 Agent 组 hooks 页（`panels/settings/pages/AgentHooksPage`，ADR-0023）经该字段按页 cliId 分派直渲染，页零直接引用（KZ-1 依赖方向不变，只是编辑器资产物理归域）。`types.ts` 仅类型 import，运行期擦除，不构成运行循环。
 
 **schema 单点（MC-223/P3-FE-07/TE-09/TE-15）**：`configEditor/schema/` 承载 SchemaStore 官方 claude-code-settings schema 内嵌 + hooks 子 schema 提取（`properties.hooks` + 依赖 `$defs` 子集，不含 permissions 专用 permissionRule）+ Draft07 校验单例。协议知识只属于 claude profile 域，**不抽象**为通用能力——面板选择行允许其他 CLI 挂载自有编辑器，但本 schema 单点仍是 claude 专属资产。
 
@@ -76,7 +76,7 @@ claude 专属 hooks 编辑器（ClaudeHooksConfigEditor + 10 文件 + schema/）
 
 - 注册表行为全分支 + logo 资源守卫（MC-108 泛化：遍历注册表断言 iconSrc 磁盘存在 + PNG 魔数）。
 - claude 身份域字段 + 常量一致性 + side-effect 注册 + hooks/history 策略输出。
-- AC-4 mock profile 全链路验收（OSC 133 命中 / hooks 能力真实调用 / 历史聚合 UI / hub 选择行 / 恢复注入）。
+- AC-4 mock profile 全链路验收（OSC 133 命中 / hooks 能力真实调用 / 历史聚合 UI / hooks 页直渲染分派 / 恢复注入）。
 - AC-5 字面量守卫（通用层七路径扫描 "claude" 字符串/事件名/`~/.claude` 路径零残留）。
 
 ## 新增 CLI 步骤

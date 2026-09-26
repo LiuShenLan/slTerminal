@@ -44,6 +44,7 @@
     "allow-git-unstage",
     "allow-notify-watch",
     "allow-notify-stop-watch",
+    "allow-agent-dirs-list",
     "allow-agent-hooks-inject",
     "allow-agent-hooks-confirm-inject",
     "allow-agent-hooks-uninstall",

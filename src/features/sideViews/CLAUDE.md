@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 存在理由
 
-侧栏视图系统提供 VS Code 风格的活动栏 + 共享侧栏区。NAV-05 后注册三条视图：`nav`（导航树）、`explorer`（文件浏览器）、`commit`（Commit）。原 `projects` 与 `agent-status` 视图随 NAV-06/08 退役，职责并入导航树。活动栏底部固定「配置」钮**不入注册表**。
+侧栏视图系统提供 VS Code 风格的活动栏 + 共享侧栏区。NAV-05 后注册三条视图：`nav`（导航树）、`explorer`（文件浏览器）、`commit`（Commit）；ADR-0024 追加第四条 `agentFiles`（Agent 全局文件，实现归 `features/agentFiles/`）。原 `projects` 与 `agent-status` 视图随 NAV-06/08 退役，职责并入导航树。活动栏底部固定「配置」钮**不入注册表**。
 
 ## 关键约束与决策
 
@@ -35,7 +35,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 框架自动处理：活动栏按钮渲染与开关、上区/下区拖拽归属、槽位 display:none/flex 切换、持久化。
 
-默认按钮归属（`DEFAULT_ZONES`）：**top = `["nav", "explorer", "commit"]`，bottom = `[]`**；`DEFAULT_OPEN.top = "nav"`（默认打开导航树）。**活动栏固定宽度 `ACTIVITY_BAR_SIZE = 46`**（NAV-05/GL-04：40 → 46，Workspace 同步引用）。
+默认按钮归属（`DEFAULT_ZONES`）：**top = `["nav", "explorer", "commit", "agentFiles"]`，bottom = `[]`**；`DEFAULT_OPEN.top = "nav"`（默认打开导航树）。**活动栏固定宽度 `ACTIVITY_BAR_SIZE = 46`**（NAV-05/GL-04：40 → 46，Workspace 同步引用）。
 
 **「配置」钮（NAV-05 例外）**：id `config`、图标 IconConfig——**固定渲染于活动栏底部，不入 SideViewRegistry**（不参与拖拽/换区/持久化），点击 = `openSettings()`（设置中心唯一入口，F11，取代旧 openHooksConfigFromActivityBar）。编排：目标项目 = 活跃页面所属优先兜底第一个；无项目 → toast「请先创建项目」（R1：设置面板无 Dockview 宿主可挂，静默不可感知）；先 `switchToPageShared` 再 `openSettingsPanel`（同页单例语义继承 C13-7）。编排细节见 `features/settingsCenter/CLAUDE.md`。
 

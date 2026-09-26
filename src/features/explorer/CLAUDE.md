@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 文件浏览器（ExplorerPanel）展示当前活跃项目的文件树，支持 CRUD、Git 状态着色与文件系统事件增量刷新。本模块同时是 `FileViewerRegistry` 的主要调用方之一，决定文件打开时使用哪种面板类型。
 
+**共享树组件（ADR-0024 抽取）**：`FileTreeExplorer.tsx` 承载全部树交互（容器/错误横幅/FileTree 接线/选中/重命名/usePanelFocus+activeExplorer/CRUD/打开分发），入参 `rootPath / projectRootPath? / viewState? / onViewStateChange? / rootFilter? / eventPathFilter? / onOpenFile? / emptyState / testIdPrefix`；`ExplorerPanel` 收敛为薄壳（标题栏 + 活跃项目 rootPath 推导 + 委托）。「Agent 全局文件」视图（`features/agentFiles/`）经同一组件复用树交互（红线：explorer 行为零回归）。
+
 ## 关键约束与决策
 
 ### Generation 异步取消 + rootPath 清空
@@ -20,6 +22,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### `useFileTree` 自包含加载
 
 `rootPath` 变化时 `useFileTree` 内部 effect 自动调用 `loadRoot()` + `gitStatus()`。ExplorerPanel 只负责调用 CRUD 操作后的 `refresh()`，**不在 `rootPath` 变化时重复刷新**。loadRoot 分首帧/续页失败双分支：首帧失败 → 错误占位 + 清空；续页失败 → 保留已渲染首帧（不记根错误、不清空），重试经刷新（FE-07）。
+
+### `useFileTree` 过滤选项（ADR-0024）
+
+- `rootFilter?: (name) => boolean`：根层三点统一应用（loadRoot 首帧+续页 / loadDirectory 当 dir===root / refreshSubtreeAt 当 target===root）；子层不受影响（「不读取」= 不递归未匹配目录自然成立）。**rootFilter 引用变化 → effect 触发 `refreshExpanded`**（配置变更即时生效）——调用方必须以 useCallback/useMemo 稳定引用，缺省回退对象每次新建会造成刷新死循环（agentFiles 模块 CLAUDE.md 红线）。
+- `eventPathFilter?: (absPath) => boolean`：onFsEvent 前置二次过滤（根前缀过滤之后），false 跳过刷新。
+- **内置根前缀过滤**：fs-event 批内路径全在监听根之外 → 跳过刷新（agent watcher 接入后 explorer 不再对根外事件做无谓整树刷新；`need_rescan` 路径 = 监听根天然通过；空 paths 保守放行）。对 explorer 属严格改进、零回归。
 
 ### 刷新保留展开状态（`reloadPreservingExpanded`）
 

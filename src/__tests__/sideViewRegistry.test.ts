@@ -191,9 +191,9 @@ describe("SideViewRegistry", () => {
 
 // ── sideViewDefs 常量守卫（TQ-COV-10）──
 //
-// sideViewDefs.ts 是 side-effect 注册文件（NAV-05 三槽）——import 即注册，
+// sideViewDefs.ts 是 side-effect 注册文件（四槽）——import 即注册，
 // 且只执行一次（模块缓存）：静态 import 后注册态恒在，直至 afterEach _reset。
-// 守卫注册序精确契约：id 集合恒为 ["nav", "explorer", "commit"]，
+// 守卫注册序精确契约：id 集合恒为 ["nav", "explorer", "commit", "agentFiles"]，
 // 新增视图必须经此文件追加注册（防止散落注册/重复注册/顺序漂移）。
 // 断言针对全局单例（真实注册目标）；afterEach _reset 保证用例隔离
 // （注册表家族通用契约，硬约束 #13）。
@@ -203,16 +203,17 @@ describe("sideViewDefs 注册守卫（TQ-COV-10）", () => {
     sideViewRegistry._reset();
   });
 
-  it("import 触发注册三条视图：id 集合精确为 [nav, explorer, commit]（注册序），组件可挂载渲染", () => {
+  it("import 触发注册四条视图：id 集合精确为 [nav, explorer, commit, agentFiles]（注册序），组件可挂载渲染", () => {
     const all = sideViewRegistry.getAll();
     const ids = all.map((def) => def.id);
 
-    // 注册序精确契约（NAV-05 三槽）
-    expect(ids).toEqual(["nav", "explorer", "commit"]);
+    // 注册序精确契约
+    expect(ids).toEqual(["nav", "explorer", "commit", "agentFiles"]);
     // title 契约文案
     expect(all[0]).toMatchObject({ id: "nav", title: "导航树" });
     expect(all[1]).toMatchObject({ id: "explorer", title: "文件浏览器" });
     expect(all[2]).toMatchObject({ id: "commit", title: "Commit" });
+    expect(all[3]).toMatchObject({ id: "agentFiles", title: "Agent 全局文件" });
     // 图标与视图组件必须为可渲染组件（React component type）
     for (const def of all) {
       expect(typeof def.icon).toBe("function");

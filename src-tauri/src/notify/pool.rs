@@ -20,10 +20,13 @@ use super::FileWatcher;
 /// 开销可忽略，放大容量换取切换零重建。
 pub const WATCHER_POOL_CAPACITY: usize = 8;
 
-/// 池中条目：watcher + 最后使用时间（LRU 淘汰依据）
+/// 池中条目：watcher + 最后使用时间（LRU 淘汰依据）+ pinned 钉住标记
 struct WatcherEntry {
     watcher: FileWatcher,
     last_used: Instant,
+    /// pinned 语义（ADR-0024）：agent 全局目录等长期监听——`pause_all_except` 跳过
+    ///（项目切换不暂停之；其启动也不暂停项目 watcher），LRU 淘汰避让
+    pinned: bool,
 }
 
 /// LRU watcher 池
@@ -68,8 +71,9 @@ impl LruWatcherPool {
     }
 
     /// 插入新 watcher。若已存在同 path 则替换旧 watcher（旧 watcher 被 stop）。
-    /// 若池已满，淘汰最久未使用的 entry（LRU）。
-    pub fn insert(&mut self, path: PathBuf, watcher: FileWatcher) {
+    /// 若池已满，淘汰最久未使用的 entry（LRU，pinned 条目避让）。
+    /// `pinned` = true：长期监听（agent 全局目录等），不参与项目切换暂停/恢复。
+    pub fn insert(&mut self, path: PathBuf, watcher: FileWatcher, pinned: bool) {
         // 同一 path 替换：停掉旧的
         if let Some(mut old_entry) = self.entries.remove(&path) {
             old_entry.watcher.stop();
@@ -85,6 +89,7 @@ impl LruWatcherPool {
             WatcherEntry {
                 watcher,
                 last_used: Instant::now(),
+                pinned,
             },
         );
     }
@@ -97,14 +102,17 @@ impl LruWatcherPool {
         })
     }
 
-    /// 暂停除 `active` 外的所有 watcher，对 active 执行 resume。
-    /// 若 active 不在池中则只执行 pause 所有现有 watcher。
+    /// 暂停除 `active` 外的所有非 pinned watcher，对 active 执行 resume。
+    /// pinned 条目（ADR-0024）跳过暂停/恢复但仍 touch 使用时间（仍在服务，
+    /// 不应成 LRU 淘汰首选）。若 active 不在池中则只执行 pause。
     pub fn pause_all_except(&mut self, active: &Path) {
         for (path, entry) in self.entries.iter_mut() {
-            if path == active {
-                entry.watcher.resume();
-            } else {
-                entry.watcher.pause();
+            if !entry.pinned {
+                if path == active {
+                    entry.watcher.resume();
+                } else {
+                    entry.watcher.pause();
+                }
             }
             // 暂停/恢复操作更新使用时间
             entry.last_used = Instant::now();
@@ -118,13 +126,21 @@ impl LruWatcherPool {
         }
     }
 
-    /// 淘汰最久未使用的 watcher
+    /// 淘汰最久未使用的 watcher（pinned 避让——ADR-0024：agent 视图展开期间其
+    /// watcher 不被项目切换挤掉；极端全 pinned 时退化全池 LRU，保证插入不死锁）
     fn evict_lru(&mut self) {
         let lru_path = self
             .entries
             .iter()
+            .filter(|(_, e)| !e.pinned)
             .min_by_key(|(_, e)| e.last_used)
-            .map(|(p, _)| p.clone());
+            .map(|(p, _)| p.clone())
+            .or_else(|| {
+                self.entries
+                    .iter()
+                    .min_by_key(|(_, e)| e.last_used)
+                    .map(|(p, _)| p.clone())
+            });
 
         if let Some(path) = lru_path {
             self.remove(&path);
@@ -200,7 +216,7 @@ mod pool_tests {
     fn insert_and_get_hit() {
         let mut pool = LruWatcherPool::new(WATCHER_POOL_CAPACITY);
         let path = PathBuf::from("/test/project-a");
-        pool.insert(path.clone(), make_test_watcher("a"));
+        pool.insert(path.clone(), make_test_watcher("a"), false);
         assert_eq!(pool.len(), 1);
         assert!(pool.get(&path).is_some());
         assert!(pool.contains(&path));
@@ -212,8 +228,8 @@ mod pool_tests {
         let a = PathBuf::from("/test/a");
         let b = PathBuf::from("/test/b");
 
-        pool.insert(a.clone(), make_test_watcher("a"));
-        pool.insert(b.clone(), make_test_watcher("b"));
+        pool.insert(a.clone(), make_test_watcher("a"), false);
+        pool.insert(b.clone(), make_test_watcher("b"), false);
 
         // 访问 a，使其成为最近使用
         pool.get(&a);
@@ -223,6 +239,7 @@ mod pool_tests {
             pool.insert(
                 PathBuf::from(format!("/test/{name}")),
                 make_test_watcher(name),
+                false,
             );
         }
 
@@ -249,12 +266,13 @@ mod pool_tests {
             pool.insert(
                 PathBuf::from(format!("/test/{name}")),
                 make_test_watcher(name),
+                false,
             );
         }
         assert_eq!(pool.len(), WATCHER_POOL_CAPACITY);
 
         // a 是最久未使用 → 应被淘汰
-        pool.insert(PathBuf::from("/test/i"), make_test_watcher("i"));
+        pool.insert(PathBuf::from("/test/i"), make_test_watcher("i"), false);
         assert_eq!(pool.len(), WATCHER_POOL_CAPACITY);
         assert!(!pool.contains(&PathBuf::from("/test/a")), "a 应被 LRU 淘汰");
         assert!(pool.contains(&PathBuf::from("/test/i")), "i 应存在");
@@ -276,9 +294,9 @@ mod pool_tests {
         let b = PathBuf::from("/test/b");
         let c = PathBuf::from("/test/c");
 
-        pool.insert(a.clone(), make_test_watcher("a"));
-        pool.insert(b.clone(), make_test_watcher("b"));
-        pool.insert(c.clone(), make_test_watcher("c"));
+        pool.insert(a.clone(), make_test_watcher("a"), false);
+        pool.insert(b.clone(), make_test_watcher("b"), false);
+        pool.insert(c.clone(), make_test_watcher("c"), false);
 
         pool.pause_all_except(&b);
 
@@ -302,7 +320,7 @@ mod pool_tests {
     fn remove_stops_and_returns_watcher() {
         let mut pool = LruWatcherPool::new(WATCHER_POOL_CAPACITY);
         let path = PathBuf::from("/test/a");
-        pool.insert(path.clone(), make_test_watcher("a"));
+        pool.insert(path.clone(), make_test_watcher("a"), false);
         assert_eq!(pool.len(), 1);
 
         let watcher = pool.remove(&path).unwrap();
@@ -321,6 +339,7 @@ mod pool_tests {
             pool.insert(
                 PathBuf::from(format!("/test/{name}")),
                 make_test_watcher(name),
+                false,
             );
         }
         assert_eq!(pool.len(), 3);
@@ -339,6 +358,7 @@ mod pool_tests {
             pool.insert(
                 PathBuf::from(format!("/test/w{i}")),
                 make_test_watcher_with_exit(&format!("w{i}"), Some(flag.clone())),
+                false,
             );
             exit_flags.push(flag);
         }
@@ -364,12 +384,13 @@ mod pool_tests {
         pool.insert(
             path.clone(),
             make_test_watcher_with_exit("old", Some(old_exited.clone())),
+            false,
         );
         assert_eq!(pool.len(), 1);
         assert!(pool.get(&path).unwrap().is_running(), "旧 watcher 应运行中");
 
         // 同 path 直接二次 insert：真实执行 insert 内部"已存在→stop 旧 watcher"替换分支
-        pool.insert(path.clone(), make_test_watcher("new"));
+        pool.insert(path.clone(), make_test_watcher("new"), false);
         assert_eq!(pool.len(), 1, "同一 path 不应增加计数");
         assert!(pool.contains(&path));
         assert!(pool.get(&path).unwrap().is_running(), "新 watcher 应运行中");
@@ -417,7 +438,7 @@ mod pool_tests {
     #[test]
     fn remove_nonexistent_returns_none() {
         let mut pool = LruWatcherPool::new(WATCHER_POOL_CAPACITY);
-        pool.insert(PathBuf::from("/test/a"), make_test_watcher("a"));
+        pool.insert(PathBuf::from("/test/a"), make_test_watcher("a"), false);
         // 移除不存在的 path（notify_stop_watch 幂等契约）：返回 None，池不受影响
         assert!(
             pool.remove(&PathBuf::from("/test/not-exist")).is_none(),
@@ -425,6 +446,105 @@ mod pool_tests {
         );
         assert_eq!(pool.len(), 1);
         assert!(pool.contains(&PathBuf::from("/test/a")));
+    }
+
+    // ── pinned 语义（ADR-0024：agent 全局目录长期监听） ──
+
+    /// pause_all_except 跳过 pinned 条目：pinned 不暂停、非 pinned 照常暂停
+    #[test]
+    fn pause_all_except_skips_pinned() {
+        let mut pool = LruWatcherPool::new(WATCHER_POOL_CAPACITY);
+        let agent = PathBuf::from("/home/u/.claude");
+        let a = PathBuf::from("/test/a");
+        let b = PathBuf::from("/test/b");
+
+        pool.insert(agent.clone(), make_test_watcher("agent"), true);
+        pool.insert(a.clone(), make_test_watcher("a"), false);
+        pool.insert(b.clone(), make_test_watcher("b"), false);
+
+        pool.pause_all_except(&b);
+
+        assert!(
+            !pool.get(&agent).unwrap().is_paused(),
+            "pinned watcher 不应被暂停"
+        );
+        assert!(pool.get(&a).unwrap().is_paused(), "非 pinned 应被暂停");
+        assert!(!pool.get(&b).unwrap().is_paused(), "active 目标应 resume");
+    }
+
+    /// pause_all_except 对 pinned 仍 touch 使用时间（不当 LRU 淘汰首选）
+    #[test]
+    fn pause_all_except_touches_pinned_last_used() {
+        let mut pool = LruWatcherPool::new(2);
+        let agent = PathBuf::from("/home/u/.claude");
+        let a = PathBuf::from("/test/a");
+
+        pool.insert(agent.clone(), make_test_watcher("agent"), true);
+        std::thread::sleep(Duration::from_millis(5));
+        pool.insert(a.clone(), make_test_watcher("a"), false);
+
+        // pause_all_except touch agent → agent 比 a 新
+        std::thread::sleep(Duration::from_millis(5));
+        pool.pause_all_except(&a);
+
+        // 插入第三个（容量 2）→ 淘汰最久未用：a 先于 agent 插入且未被 touch → 淘汰 a
+        pool.insert(PathBuf::from("/test/c"), make_test_watcher("c"), false);
+        assert!(pool.contains(&agent), "pinned 被 touch 后不应成淘汰首选");
+        assert!(!pool.contains(&a), "a 最久未用应被淘汰");
+    }
+
+    /// evict_lru 避让 pinned：pinned 最久未用也保活，淘汰次老的非 pinned
+    #[test]
+    fn evict_lru_spares_pinned() {
+        let mut pool = LruWatcherPool::new(2);
+        let agent = PathBuf::from("/home/u/.claude");
+        let a = PathBuf::from("/test/a");
+
+        // agent 先插入（最老）但 pinned；a 后插入非 pinned
+        pool.insert(agent.clone(), make_test_watcher("agent"), true);
+        std::thread::sleep(Duration::from_millis(5));
+        pool.insert(a.clone(), make_test_watcher("a"), false);
+
+        // 池满插入第三个 → 淘汰避让 pinned 的 agent，淘汰 a
+        pool.insert(PathBuf::from("/test/c"), make_test_watcher("c"), false);
+        assert_eq!(pool.len(), 2);
+        assert!(pool.contains(&agent), "pinned watcher 应避让淘汰");
+        assert!(!pool.contains(&a), "非 pinned 的 a 应被淘汰");
+    }
+
+    /// 极端退化：全部条目 pinned 且池满 → 仍淘汰最久 pinned（插入不死锁）
+    #[test]
+    fn evict_lru_all_pinned_falls_back_to_lru() {
+        let mut pool = LruWatcherPool::new(2);
+        let a = PathBuf::from("/test/a");
+        let b = PathBuf::from("/test/b");
+
+        pool.insert(a.clone(), make_test_watcher("a"), true);
+        std::thread::sleep(Duration::from_millis(5));
+        pool.insert(b.clone(), make_test_watcher("b"), true);
+
+        pool.insert(PathBuf::from("/test/c"), make_test_watcher("c"), true);
+        assert_eq!(pool.len(), 2, "全 pinned 池满仍应淘汰最久项");
+        assert!(!pool.contains(&a), "最老的 pinned a 应被退化淘汰");
+        assert!(pool.contains(&b));
+    }
+
+    /// 同 path 替换可改变 pinned 标记（pinned → 非 pinned 替换）
+    #[test]
+    fn insert_same_path_replaces_pinned_flag() {
+        let mut pool = LruWatcherPool::new(WATCHER_POOL_CAPACITY);
+        let path = PathBuf::from("/test/a");
+        pool.insert(path.clone(), make_test_watcher("old"), true);
+        pool.insert(path.clone(), make_test_watcher("new"), false);
+
+        // 替换后条目为非 pinned → pause_all_except 对其它目标时应暂停它
+        let b = PathBuf::from("/test/b");
+        pool.insert(b.clone(), make_test_watcher("b"), false);
+        pool.pause_all_except(&b);
+        assert!(
+            pool.get(&path).unwrap().is_paused(),
+            "替换为非 pinned 后应参与暂停"
+        );
     }
 
     #[test]

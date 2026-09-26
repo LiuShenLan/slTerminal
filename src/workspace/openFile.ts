@@ -11,8 +11,9 @@
 //   （__dockviewApi 恒指活跃操作页——workspace/CLAUDE.md「__dockviewApi 重指
 //   不变量」；交互必发生在活跃页）。
 //
-// 失败语义：守卫不通过/面板创建失败 → 返回 false（不抛错、不弹窗——
-// 预览链接点击场景静默忽略，ExplorerPanel 双击场景行为与抽取前逐字等价）。
+// 失败语义：守卫不通过（无活跃页/无 API）/面板创建失败 → 返回 false 不弹窗
+//（预览链接点击场景静默忽略）；页内无组 → 返回 false + toast 引导（空页双击
+// 文件曾无任何用户反馈，2026-09-26 用户裁决补可观测化）。
 
 import type { DockviewApi } from "dockview-react";
 import { useProjects } from "../stores/projects";
@@ -22,6 +23,7 @@ import { panelIdInPage, resolveFocusedGroupForAdd } from "./pageGroups";
 import { markPanelFocusIntent } from "./panelFocusIntent";
 import { PANEL_EDITOR, isAlwaysRenderPanel } from "../panelRegistry";
 import { fileViewerRegistry } from "../features/fileViewers";
+import { toast } from "../lib";
 
 /**
  * handleOpenFile 前置守卫：无活跃操作页或无 Dockview API 时禁止打开面板。
@@ -105,9 +107,13 @@ export function openFileInPage(
 
   // addPanel 可能抛异常（如布局状态不一致），try-catch 防止 titleManager 状态污染；
   // 落组经 resolveFocusedGroupForAdd（聚焦组优先 ?? 主组 ?? 页内首组回退链——
-  // ADR-0020 分屏后主组可能被拖空删除；页无组解析 null → 返回 false 不落活跃组防错页）
+  // ADR-0020 分屏后主组可能被拖空删除；页无组解析 null → toast 引导 + 返回 false，
+  // 不落活跃组防错页——空页双击文件曾静默无反馈，toast 补可观测化）
   const group = resolveFocusedGroupForAdd(dockApi, activePageId);
-  if (!group) return false;
+  if (!group) {
+    toast.show("warning", "当前页面无面板——请先新建终端");
+    return false;
+  }
   // C4：键盘聚焦意图（新面板分支——去重命中走 existingPanel.focus() 激活事件路径，不写意图）
   markPanelFocusIntent(panelId);
   try {

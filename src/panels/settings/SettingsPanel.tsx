@@ -1,7 +1,9 @@
-// SettingsPanel — 设置中心面板壳（F11，SC-FE-03）
+// SettingsPanel — 设置中心面板壳（F11，SC-FE-03；ADR-0023 全局/Agent 二分）
 //
-// 职责：左导航（组序 global→project，固定 180px）+ 右配置页槽位（SettingsPageRegistry
+// 职责：左导航（组序 全局→Agent，固定 180px）+ 右配置页槽位（SettingsPageRegistry
 // 分派渲染，key={selectedPage} 强制重挂载——ADR-0001 先例，dirty/页内状态随卸载丢弃）。
+// - Agent 组导航：按 cliId 分节——分节标题（CLI logo + displayName，不可点 div）+
+//   该 agent 页缩进列表；无 agent 页 → 组不渲染。
 // - 选中页：params.selectedPage 命中注册表 → 用之；否则回退全局组第一页；注册表空 → 空态。
 // - 壳是 params 持久化单点：persistParams（updateParameters + 显式 onLayoutChange(saveLayout)
 //   + 按 panelId `settings-` 前缀解析 pageId → updatePageLayout 写 store）——选中切换与
@@ -18,6 +20,7 @@ import "../../features/settingsCenter/pages";
 import { isSettingsPanelId, pageIdOfSettingsPanel } from "../../workspace/pageGroups";
 import { getSettingsPageRegistry } from "../../features/settingsCenter";
 import type { SettingsPage, SettingsPageGroup } from "../../features/settingsCenter";
+import { cliProfileRegistry } from "../../features/cliProfiles/cliProfileRegistry";
 import {
   setSettingsDirty,
   clearSettingsDirty,
@@ -58,10 +61,10 @@ interface SettingsPanelProps {
   };
 }
 
-/** 导航组序（规格 §4.3：组序「全局」在上、「项目」在下） */
+/** 导航组序（ADR-0023：组序「全局」在上、「Agent」在下） */
 const GROUP_ORDER: Array<{ group: SettingsPageGroup; title: string }> = [
   { group: "global", title: "全局" },
-  { group: "project", title: "项目" },
+  { group: "agent", title: "Agent" },
 ];
 
 /** confirmDialog 弹窗关闭后守卫窗口（ms）——期间内的回归触发的重读被抑制（防循环，
@@ -123,6 +126,17 @@ const navStyle: React.CSSProperties = {
 const groupTitleStyle: React.CSSProperties = {
   padding: "6px 12px 4px",
   fontSize: 11,
+  color: DIM_FG,
+  userSelect: "none",
+};
+
+/** agent 分节标题样式（ADR-0023：logo + displayName，不可点 div） */
+const agentHeaderStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 6,
+  padding: "5px 12px 3px",
+  fontSize: 12,
   color: DIM_FG,
   userSelect: "none",
 };
@@ -424,41 +438,88 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
 
   // 导航数据（注册表挂载期稳定，组件生命周期内不重算）
   const globalPages = useMemo(() => registry.getAll("global"), [registry]);
-  const projectPages = useMemo(() => registry.getAll("project"), [registry]);
+  const agentPages = useMemo(() => registry.getAll("agent"), [registry]);
 
   // 当前选中页注册项（右侧槽位渲染分派数据源）；null → 空态
   const selectedPageObj: SettingsPage | undefined = selectedPage
     ? registry.get(selectedPage)
     : undefined;
 
-  /** 渲染一个导航组（组标题 + 页项；空组不渲染区块保持组序稳定） */
+  /** 渲染单个导航页项（indent = agent 组缩进子页形态） */
+  const renderNavItem = (p: SettingsPage, indent: boolean) => (
+    <button
+      key={p.id}
+      type="button"
+      data-e2e={`settings-nav-${p.id}`}
+      onClick={() => handlePageSelect(p.id)}
+      style={{
+        ...navItemStyle(selectedPage === p.id),
+        ...(indent ? { paddingLeft: 24 } : {}),
+      }}
+    >
+      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {p.title}
+      </span>
+      {dirtyMap[p.id] && (
+        <span data-e2e={`settings-nav-dirty-${p.id}`} style={dirtyDotStyle} />
+      )}
+    </button>
+  );
+
+  /** 渲染一个导航组（组标题 + 页项；空组不渲染区块保持组序稳定）。
+      agent 组（ADR-0023）：按 cliId 分节——分节标题（logo + displayName，不可点 div）
+      + 该 agent 页缩进列表 */
   const renderGroup = (
     group: SettingsPageGroup,
     title: string,
     pages: SettingsPage[],
   ) => {
     if (pages.length === 0) return null;
+    if (group === "agent") {
+      const byCliId = new Map<string, SettingsPage[]>();
+      for (const p of pages) {
+        const key = p.cliId ?? "";
+        const list = byCliId.get(key) ?? [];
+        list.push(p);
+        byCliId.set(key, list);
+      }
+      return (
+        <div key={group}>
+          <div style={groupTitleStyle} data-e2e={`settings-nav-group-${group}`}>
+            {title}
+          </div>
+          {[...byCliId.entries()].map(([cliId, cliPages]) => {
+            const profile = cliProfileRegistry.get(cliId);
+            return (
+              <div key={cliId}>
+                {/* agent 分节标题：不可点（纯分组语义） */}
+                <div style={agentHeaderStyle} data-e2e={`settings-nav-agent-${cliId}`}>
+                  {profile && (
+                    <img
+                      src={profile.iconSrc}
+                      width={14}
+                      height={14}
+                      style={{ flexShrink: 0, display: "block" }}
+                      alt=""
+                    />
+                  )}
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {profile?.displayName ?? cliId}
+                  </span>
+                </div>
+                {cliPages.map((p) => renderNavItem(p, true))}
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
     return (
       <div key={group}>
         <div style={groupTitleStyle} data-e2e={`settings-nav-group-${group}`}>
           {title}
         </div>
-        {pages.map((p) => (
-          <button
-            key={p.id}
-            type="button"
-            data-e2e={`settings-nav-${p.id}`}
-            onClick={() => handlePageSelect(p.id)}
-            style={navItemStyle(selectedPage === p.id)}
-          >
-            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {p.title}
-            </span>
-            {dirtyMap[p.id] && (
-              <span data-e2e={`settings-nav-dirty-${p.id}`} style={dirtyDotStyle} />
-            )}
-          </button>
-        ))}
+        {pages.map((p) => renderNavItem(p, false))}
       </div>
     );
   };
@@ -481,10 +542,10 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
         </div>
       )}
       <div style={bodyStyle}>
-        {/* 左导航（组序 global→project，固定 180px） */}
+        {/* 左导航（组序 全局→Agent，固定 180px） */}
         <nav style={navStyle}>
           {GROUP_ORDER.map(({ group, title }) =>
-            renderGroup(group, title, group === "global" ? globalPages : projectPages),
+            renderGroup(group, title, group === "global" ? globalPages : agentPages),
           )}
         </nav>
         {/* 右配置页槽位（key={selectedPage} 强制重挂载——ADR-0001 先例）；

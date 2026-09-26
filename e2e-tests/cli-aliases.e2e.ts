@@ -1,8 +1,8 @@
 /**
- * CLI 别名（cliAliases 段）L4 冒烟 spec（D9）：
+ * CLI 别名（cliAliases 段）L4 冒烟 spec（D9；ADR-0023 起入口 = Agent 组「基础配置」页）：
  *
- * 全链路真实：设置中心「CLI 别名」页添加别名 cc → store 即时生效（chip 出现）→
- * 2s debounce 真实落盘（Node 侧读 settings.json cliAliases.claude 含 cc）→
+ * 全链路真实：设置中心 agent.claude.basic 页「CLI 别名」节添加别名 cc → store 即时生效
+ * （chip 出现）→ 2s debounce 真实落盘（Node 侧读 settings.json cliAliases.claude 含 cc）→
  * 终端注入 OSC 133 C "C;cc"（__e2e_writeToTerminal → 真实 parser → matchByCommand
  * 经注册表别名快照命中 claude profile）→ 页签标题 "claude"（profile.tabTitle）+
  * 16×16 logo（/cli-icons/claude.png）+ 🟡 attention；OSC 133 D 清理还原。
@@ -57,20 +57,21 @@ async function waitForSettingsPanel(timeout = 15000): Promise<void> {
   );
 }
 
-/** 经 helper 打开设置中心 + 切到 CLI 别名页 */
+/** 经 helper 打开设置中心 + 切到 claude 基础配置页（ADR-0023：别名节在 Agent 组
+    agent.claude.basic 页内，独立 cliAliases 页已删） */
 async function openCliAliasesPage(): Promise<void> {
   await browser.execute(() => (window as any).__slterm_e2e_openSettings?.());
   await waitForSettingsPanel();
   const ok = await browser.execute(
-    () => (window as any).__slterm_e2e_switchSettingsPage?.("cliAliases") ?? false,
+    () => (window as any).__slterm_e2e_switchSettingsPage?.("agent.claude.basic") ?? false,
   );
   expect(ok).toBe(true);
   await browser.waitUntil(
     async () =>
       (await browser.execute(
-        () => !!document.querySelector('[data-e2e="settings-cli-aliases-page"]'),
+        () => !!document.querySelector('[data-e2e="agent-basic-page-claude"]'),
       )) === true,
-    { timeout: 10000, timeoutMsg: "CLI 别名配置页未渲染" },
+    { timeout: 10000, timeoutMsg: "claude 基础配置页未渲染" },
   );
 }
 
@@ -177,7 +178,7 @@ describe("CLI 别名（cliAliases 段，D9 冒烟）", function () {
     const tempDir = mkdtempSync(join(tmpdir(), "slterm-e2e-cli-aliases-"));
     let pid: string | null = null;
     try {
-      // ── 1. 打开 CLI 别名设置页（真实用户入口 + 注册表驱动分区渲染） ──
+      // ── 1. 打开 claude 基础配置页（真实用户入口 + Agent 组内「CLI 别名」节） ──
       await waitForWorkspaceReady();
       // 先建项目再等 Dockview API：空数据目录启动无默认项目/页面 → Dockview 不挂载、
       // __dockviewApi 恒 undefined（2026-09-08 CP-030 排查实证；agent/mockcli 均按
@@ -190,14 +191,14 @@ describe("CLI 别名（cliAliases 段，D9 冒烟）", function () {
           (await browser.execute(
             () => !!document.querySelector('[data-e2e="cli-aliases-group-claude"]'),
           )) === true,
-        { timeout: 10000, timeoutMsg: "CLI 别名页 claude 分区未渲染" },
+        { timeout: 10000, timeoutMsg: "CLI 别名节 claude 分区未渲染" },
       );
 
       // ── 2. 添加别名 cc（输入 + 添加按钮）→ chip 即时出现（内存态） ──
       await $('[data-e2e="cli-aliases-input-claude"]').setValue("cc");
       await $('[data-e2e="cli-aliases-add-claude"]').click();
       // 交互时序断言(CP-030 回归):真实指针序列(mousedown→input blur→mouseup→click)
-      // 驱动——blur 不清空(CliAliasesPage blur 语义)+ 成功提交清空输入两语义同时落位。
+      // 驱动——blur 不清空(CliAliasSection blur 语义)+ 成功提交清空输入两语义同时落位。
       const inputAfterAdd = await $('[data-e2e="cli-aliases-input-claude"]');
       expect(await inputAfterAdd.getValue()).toBe("");
       await browser.waitUntil(

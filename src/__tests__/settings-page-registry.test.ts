@@ -31,21 +31,21 @@ describe("SettingsPageRegistry", () => {
   it("注册后 getAll 按注册序返回（缺省 order）", () => {
     const reg = getSettingsPageRegistry();
     reg.register(makePage("a", "global"));
-    reg.register(makePage("b", "project"));
+    reg.register(makePage("b", "agent"));
     reg.register(makePage("c", "global"));
 
     const all = reg.getAll();
     expect(all.map((p) => p.id)).toEqual(["a", "b", "c"]);
   });
 
-  it("getAll(group) 分组过滤——global/project 各只含本组", () => {
+  it("getAll(group) 分组过滤——global/agent 各只含本组", () => {
     const reg = getSettingsPageRegistry();
     reg.register(makePage("a", "global"));
-    reg.register(makePage("b", "project"));
-    reg.register(makePage("c", "project"));
+    reg.register(makePage("b", "agent"));
+    reg.register(makePage("c", "agent"));
 
     expect(reg.getAll("global").map((p) => p.id)).toEqual(["a"]);
-    expect(reg.getAll("project").map((p) => p.id)).toEqual(["b", "c"]);
+    expect(reg.getAll("agent").map((p) => p.id)).toEqual(["b", "c"]);
   });
 
   it("order 排序——有序页按 order 升序在前，缺省 order 页保持注册序在后", () => {
@@ -61,12 +61,12 @@ describe("SettingsPageRegistry", () => {
   it("重复 id 注册 → 幂等覆盖（后注册者胜，无重复条目）", () => {
     const reg = getSettingsPageRegistry();
     reg.register(makePage("a", "global"));
-    reg.register(makePage("a", "project", { title: "覆盖版" }));
+    reg.register(makePage("a", "agent", { title: "覆盖版" }));
 
     const all = reg.getAll();
     expect(all).toHaveLength(1);
     expect(all[0].title).toBe("覆盖版");
-    expect(all[0].group).toBe("project");
+    expect(all[0].group).toBe("agent");
     expect(reg.get("a")?.title).toBe("覆盖版");
   });
 

@@ -1,3 +1,4 @@
+mod agent_dirs;
 pub mod agent_history;
 mod app_dir;
 mod background_tasks;
@@ -140,6 +141,7 @@ pub fn run() {
             git::git_unstage,
             notify::notify_watch,
             notify::notify_stop_watch,
+            agent_dirs::agent_dirs_list,
             hooks::agent_hooks_inject,
             hooks::agent_hooks_confirm_inject,
             hooks::agent_hooks_uninstall,

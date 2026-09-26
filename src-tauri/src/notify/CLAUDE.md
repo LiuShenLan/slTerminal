@@ -12,6 +12,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Windows 上 `notify` 递归注册目录树（如 `target/` 26K 文件）首次约 2s。`LruWatcherPool` 缓存 8 个 watcher，切换项目时 `pause_all_except(path)` 暂停非活动 watcher、恢复目标 watcher。命中缓存时延迟 <1ms，且不释放 OS 句柄。
 
+**pinned watcher（ADR-0024）**：`notify_watch(path, pinned?)` 置条目标记——pinned 条目被 `pause_all_except` 跳过（照 touch last_used；项目切换不暂停 agent 监听，agent 监听启动也不暂停项目 watcher，两侧皆免），`evict_lru` 避让（全 pinned 退化全池 LRU）。消费方 = 「Agent 全局文件」侧栏视图（展开即 pinned 监听 agent 全局目录，折叠/卸载即 stop）；`notify_stop_watch` 语义不变（移除即清 pinned 标记）。
+
 - **暂停 ≠ 停止**：`paused` 仅阻止事件上报，watcher 线程与 debouncer 继续运行；
 - **移除语义**：项目移除/切换时须调 `notify_stop_watch` → `pool.remove(path)`，否则旧 watcher 会一直占槽到 LRU 淘汰（BE-10）；
 - **池 key 用 `dunce::simplified`**，与 `fs_read_dir` 返回路径格式一致。

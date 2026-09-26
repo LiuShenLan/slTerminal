@@ -404,6 +404,9 @@ impl Drop for FileWatcher {
 /// - 命中缓存：pause 其他 watcher，resume 目标，不重建
 /// - 未命中：暂停现有 watcher，新建并插入池（超限时淘汰 LRU）
 ///
+/// `pinned`（ADR-0024）：agent 全局目录等长期监听——启动时不暂停其它 watcher，
+/// 自身亦不被后续项目切换暂停，LRU 淘汰避让（仅避让非 pinned；全 pinned 退化普通 LRU）。
+///
 /// 此模式避免每次切换都 `stop()` + `start()`（Windows 上 `ReadDirectoryChangesW`
 /// 递归注册 26K 文件的 target/ 目录需约 2 秒）。
 /// notify_watch 路径前置校验（D2 抽离，供命令与 L1 共用）：存在性 + 路径沙箱（P1-28）
@@ -417,10 +420,14 @@ fn validate_watch_path(watch_path: &Path, project_root: &Option<PathBuf>) -> Res
     crate::state::validate_path_within_root(project_root, watch_path)
 }
 
-/// notify_watch 阶段 1（持池锁调用）：暂停其他 watcher、恢复/激活目标，返回是否命中缓存
-fn notify_watch_phase1(pool: &mut pool::LruWatcherPool, watch_path: &Path) -> bool {
-    // 暂停其他 watcher，恢复/激活目标
-    pool.pause_all_except(watch_path);
+/// notify_watch 阶段 1（持池锁调用）：暂停其他 watcher、恢复/激活目标，返回是否命中缓存。
+/// pinned（ADR-0024：agent 全局目录等长期监听）跳过 pause_all_except——
+/// 其启动不暂停项目 watcher（对称地，pinned 条目自身也不被项目切换暂停，见 pool.rs）。
+fn notify_watch_phase1(pool: &mut pool::LruWatcherPool, watch_path: &Path, pinned: bool) -> bool {
+    if !pinned {
+        // 暂停其他 watcher，恢复/激活目标
+        pool.pause_all_except(watch_path);
+    }
 
     // 命中缓存：直接返回
     pool.get(watch_path).is_some()
@@ -433,6 +440,7 @@ fn notify_watch_phase3(
     pool: &mut pool::LruWatcherPool,
     watch_path: &Path,
     watcher: FileWatcher,
+    pinned: bool,
 ) -> Result<(), AppError> {
     // 竞态检查：若另一线程已在阶段 2 期间插入同路径 watcher，丢弃当前 watcher
     if pool.get(watch_path).is_some() {
@@ -441,16 +449,18 @@ fn notify_watch_phase3(
     }
 
     // 未命中：插入新 watcher（超限时自动淘汰 LRU）
-    pool.insert(watch_path.to_path_buf(), watcher);
+    pool.insert(watch_path.to_path_buf(), watcher, pinned);
     Ok(())
 }
 
 #[tauri::command]
 pub async fn notify_watch(
     path: String,
+    pinned: Option<bool>,
     state: tauri::State<'_, AppState>,
     app_handle: AppHandle,
 ) -> Result<(), AppError> {
+    let pinned = pinned.unwrap_or(false);
     let watch_path = dunce::simplified(std::path::Path::new(&path)).to_path_buf();
 
     // 路径前置校验（存在性 + 沙箱），短暂持有 project_root 锁取快照；
@@ -469,10 +479,10 @@ pub async fn notify_watch(
         Err(e) => return Err(AppError::TaskJoin(e.to_string())),
     }
 
-    // 阶段 1：持池锁 → pause_all_except + 缓存检查
+    // 阶段 1：持池锁 → pause_all_except（pinned 跳过）+ 缓存检查
     {
         let mut pool = state.file_watchers.lock();
-        if notify_watch_phase1(&mut pool, &watch_path) {
+        if notify_watch_phase1(&mut pool, &watch_path, pinned) {
             return Ok(());
         }
     } // 池锁在此释放
@@ -497,7 +507,7 @@ pub async fn notify_watch(
     // 阶段 3：短暂持锁插入池（处理可能的竞态——另一线程可能已为同一路径创建 watcher）
     {
         let mut pool = state.file_watchers.lock();
-        notify_watch_phase3(&mut pool, &watch_path, watcher)?;
+        notify_watch_phase3(&mut pool, &watch_path, watcher, pinned)?;
     }
     Ok(())
 }
@@ -1741,12 +1751,15 @@ mod notify_tests {
         let mut pool = pool::LruWatcherPool::new(pool::WATCHER_POOL_CAPACITY);
         let a = PathBuf::from("/test/a");
         let b = PathBuf::from("/test/b");
-        pool.insert(a.clone(), make_test_watcher_with_exit("a", None));
-        pool.insert(b.clone(), make_test_watcher_with_exit("b", None));
+        pool.insert(a.clone(), make_test_watcher_with_exit("a", None), false);
+        pool.insert(b.clone(), make_test_watcher_with_exit("b", None), false);
         pool.pause_all_except(&b);
         assert!(pool.get(&a).unwrap().is_paused(), "前置：a 应已暂停");
 
-        assert!(notify_watch_phase1(&mut pool, &a), "命中缓存应返回 true");
+        assert!(
+            notify_watch_phase1(&mut pool, &a, false),
+            "命中缓存应返回 true"
+        );
         assert!(!pool.get(&a).unwrap().is_paused(), "命中目标应被 resume");
         assert!(pool.get(&b).unwrap().is_paused(), "其他 watcher 应被 pause");
     }
@@ -1757,10 +1770,60 @@ mod notify_tests {
         pool.insert(
             PathBuf::from("/test/a"),
             make_test_watcher_with_exit("a", None),
+            false,
         );
         assert!(
-            !notify_watch_phase1(&mut pool, &PathBuf::from("/test/other")),
+            !notify_watch_phase1(&mut pool, &PathBuf::from("/test/other"), false),
             "未命中应返回 false"
+        );
+    }
+
+    /// pinned 启动不暂停既有 watcher（ADR-0024：agent 监听不得打断项目事件流）
+    #[test]
+    fn notify_watch_phase1_pinned_does_not_pause_others() {
+        let mut pool = pool::LruWatcherPool::new(pool::WATCHER_POOL_CAPACITY);
+        let project = PathBuf::from("/test/project");
+        pool.insert(
+            project.clone(),
+            make_test_watcher_with_exit("project", None),
+            false,
+        );
+
+        let agent = PathBuf::from("/home/u/.claude");
+        assert!(
+            !notify_watch_phase1(&mut pool, &agent, true),
+            "未命中应返回 false"
+        );
+        assert!(
+            !pool.get(&project).unwrap().is_paused(),
+            "pinned 启动不应暂停项目 watcher"
+        );
+    }
+
+    /// pinned 入池后被项目切换 pause_all_except 跳过（对称豁免）
+    #[test]
+    fn notify_watch_pinned_entry_survives_project_switch() {
+        let mut pool = pool::LruWatcherPool::new(pool::WATCHER_POOL_CAPACITY);
+        let agent = PathBuf::from("/home/u/.claude");
+        notify_watch_phase3(
+            &mut pool,
+            &agent,
+            make_test_watcher_with_exit("agent", None),
+            true,
+        )
+        .unwrap();
+
+        // 项目 watcher 启动 → pause_all_except 应跳过 pinned 的 agent
+        let project = PathBuf::from("/test/project");
+        pool.insert(
+            project.clone(),
+            make_test_watcher_with_exit("project", None),
+            false,
+        );
+        pool.pause_all_except(&project);
+        assert!(
+            !pool.get(&agent).unwrap().is_paused(),
+            "pinned watcher 不应被项目切换暂停"
         );
     }
 
@@ -1768,7 +1831,13 @@ mod notify_tests {
     fn notify_watch_phase3_inserts_watcher() {
         let mut pool = pool::LruWatcherPool::new(pool::WATCHER_POOL_CAPACITY);
         let path = PathBuf::from("/test/a");
-        notify_watch_phase3(&mut pool, &path, make_test_watcher_with_exit("a", None)).unwrap();
+        notify_watch_phase3(
+            &mut pool,
+            &path,
+            make_test_watcher_with_exit("a", None),
+            false,
+        )
+        .unwrap();
         assert!(pool.contains(&path), "新 watcher 应插入池");
         assert_eq!(pool.len(), 1);
     }
@@ -1777,7 +1846,11 @@ mod notify_tests {
     fn notify_watch_phase3_race_drops_incoming_watcher() {
         let mut pool = pool::LruWatcherPool::new(pool::WATCHER_POOL_CAPACITY);
         let path = PathBuf::from("/test/a");
-        pool.insert(path.clone(), make_test_watcher_with_exit("existing", None));
+        pool.insert(
+            path.clone(),
+            make_test_watcher_with_exit("existing", None),
+            false,
+        );
 
         // 竞态：池中已存在同路径 watcher，传入 watcher 应被丢弃（drop 自动 stop）
         let incoming_exited = Arc::new(AtomicBool::new(false));
@@ -1785,6 +1858,7 @@ mod notify_tests {
             &mut pool,
             &path,
             make_test_watcher_with_exit("incoming", Some(incoming_exited.clone())),
+            false,
         )
         .unwrap();
         assert_eq!(pool.len(), 1, "竞态时不应新增条目");

@@ -48,7 +48,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### 文件监听成对（BE-10）
 
-`notify.startWatch` / `notify.stopWatch` 必须成对调用——项目移除/切换时调用 `stopWatch` 释放后端 watcher，防占用至 LRU 淘汰。`onFsEvent` 是全局事件监听，不成对。
+`notify.startWatch` / `notify.stopWatch` 必须成对调用——项目移除/切换时调用 `stopWatch` 释放后端 watcher，防占用至 LRU 淘汰。`onFsEvent` 是全局事件监听，不成对。`startWatch(path, { pinned: true })`（ADR-0024）：pinned watcher 不参与 pause_all_except（与项目 watcher 互不暂停）且 evict_lru 避让——agent 全局目录等「跨项目常驻」监听用；消费方 = `features/agentFiles`（展开即 pinned 监听，折叠即停止）。
+
+### agent 全局目录（ADR-0024）
+
+`agentDirs.listAgentDirs()` → `agent_dirs_list`（无参），返回 `AgentGlobalDir[]`（cliId + 绝对路径 + exists）——后端静态表（cliId → home 相对目录）解析。前端永不能注入任意路径（表在后端硬编码）；agent 目录集同时纳入 `validate_path_within_root` 放行域（见 src-tauri/src/CLAUDE.md）。
 
 ### 剪贴板读权限消费点登记（SEC-06）
 

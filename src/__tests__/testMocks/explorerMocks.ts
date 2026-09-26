@@ -82,9 +82,11 @@ export interface NotifyMockOverrides {
 
 /** 创建 notify IPC mock 函数集（含 triggerFsEvent 辅助）。startWatch/stopWatch 默认 resolve。 */
 export function createNotifyMocks(overrides?: NotifyMockOverrides) {
-  let fsEventCallback: (() => void) | null = null;
+  // FsEvent 内联形态（与 src/types/notify.ts FsEventPayload 同构——payload 三键必填）
+  type FsEventPayload = { paths: string[]; kind: string; detail: string };
+  let fsEventCallback: ((payload: FsEventPayload) => void) | null = null;
 
-  const defaultOnFsEvent = vi.fn((cb: () => void) => {
+  const defaultOnFsEvent = vi.fn((cb: (payload: FsEventPayload) => void) => {
     fsEventCallback = cb;
     return () => {
       fsEventCallback = null;
@@ -98,9 +100,9 @@ export function createNotifyMocks(overrides?: NotifyMockOverrides) {
     startWatch: overrides?.startWatch ?? defaultStartWatch,
     stopWatch: overrides?.stopWatch ?? defaultStopWatch,
     onFsEvent: overrides?.onFsEvent ?? defaultOnFsEvent,
-    /** 手动触发 fs-event 回调（模拟后端文件变更通知） */
-    triggerFsEvent() {
-      fsEventCallback?.();
+    /** 手动触发 fs-event 回调（模拟后端文件变更通知）；缺省 payload = 空 paths（保守放行） */
+    triggerFsEvent(payload?: { paths: string[]; kind: string; detail: string }) {
+      fsEventCallback?.(payload ?? { paths: [], kind: "Other", detail: "Any" });
     },
   };
 }

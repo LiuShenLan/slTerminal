@@ -225,11 +225,12 @@ impl Drop for EnforceRootCheckGuard {
     }
 }
 
-/// 验证目标路径是否在项目根目录子树内（路径 sandbox）
+/// 验证目标路径是否在沙箱内：项目根目录子树 ∪ agent 全局配置目录集（ADR-0024）
 ///
 /// 相对路径先以 project_root 为基准 join 成绝对路径，再 dunce::canonicalize。
 /// 目标不存在时上溯到最近存在的祖先目录，canonicalize 后再拼接剩余部分做校验。
-/// project_root 未设置时拒绝（#[cfg(test)] 豁免，避免每个测试都需设置 project_root）。
+/// project_root 未设置时仅 agent 目录白名单放行、其余拒绝
+/// （#[cfg(test)] 豁免，避免每个测试都需设置 project_root）。
 pub fn validate_path_within_root(
     root_opt: &Option<PathBuf>,
     target: &Path,
@@ -241,6 +242,10 @@ pub fn validate_path_within_root(
             // EnforceRootCheckGuard 置位期间强制校验（None 拒绝回归用例用）
             #[cfg(test)]
             if !root_check_enforced() {
+                return Ok(());
+            }
+            // ADR-0024：无项目时 agent 全局目录白名单仍放行（agent 视图不依赖项目宿主）
+            if target.is_absolute() && is_within_agent_dirs(target) {
                 return Ok(());
             }
             return Err(AppError::IoKind {
@@ -268,12 +273,33 @@ pub fn validate_path_within_root(
     })?;
 
     if !canonical_target.starts_with(&canonical_root) {
+        // ADR-0024：项目根外但命中 agent 全局目录白名单 → 放行
+        //（canonical_target 已是 canonical 形态，helper 内部幂等重解析）
+        if is_within_agent_dirs(&canonical_target) {
+            return Ok(());
+        }
         return Err(AppError::IoKind {
             kind: "path".into(),
             message: "路径超出项目范围".into(),
         });
     }
     Ok(())
+}
+
+/// ADR-0024：目标是否在任一 agent 全局配置目录子树内（agent_dirs.rs 静态表）
+///
+/// 双侧 canonicalize_or_ancestor 后前缀比较——`~/.claude` 为 symlink 的 dotfiles
+/// 场景天然兼容；Path::starts_with 按分量比较，`.claude2` 等前缀同名目录不误命中；
+/// 任一步解析失败按未命中处理（安全默认 = 不放行）。
+fn is_within_agent_dirs(target: &Path) -> bool {
+    let Ok(canonical_target) = canonicalize_or_ancestor(target) else {
+        return false;
+    };
+    crate::agent_dirs::agent_dir_paths().iter().any(|dir| {
+        canonicalize_or_ancestor(dir)
+            .map(|canonical_dir| canonical_target.starts_with(canonical_dir))
+            .unwrap_or(false)
+    })
 }
 
 /// 设置当前项目根路径（由前端打开项目时调用）
@@ -528,6 +554,104 @@ mod sandbox_tests {
             std::path::Path::new("Z:\\nonexistent_drive\\root\\file.txt"),
         );
         assert!(result.is_err(), "根 canonicalize 失败应返回 Err");
+    }
+
+    // ── ADR-0024: agent 全局目录白名单放行 ──
+
+    /// agent 目录内路径（root=None 强制校验下）→ 放行（agent 视图不依赖项目宿主）
+    #[test]
+    fn validate_agent_dir_allowed_without_project_root() {
+        let _enforce = EnforceRootCheckGuard::enforce();
+        let home = tempfile::tempdir().unwrap();
+        let _home_guard = crate::home::HomeDirGuard::set(home.path());
+        let agent_dir = home.path().join(".claude");
+        std::fs::create_dir(&agent_dir).unwrap();
+        let target = agent_dir.join("settings.json");
+        std::fs::write(&target, "{}").unwrap();
+
+        let result = validate_path_within_root(&None, &target);
+        assert!(result.is_ok(), "agent 目录内路径在无项目时应放行");
+    }
+
+    /// agent 目录外路径（root=None 强制校验下）→ 仍拒绝
+    #[test]
+    fn validate_outside_agent_dir_rejected_without_project_root() {
+        let _enforce = EnforceRootCheckGuard::enforce();
+        let home = tempfile::tempdir().unwrap();
+        let _home_guard = crate::home::HomeDirGuard::set(home.path());
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("x.txt");
+        std::fs::write(&target, "x").unwrap();
+
+        let result = validate_path_within_root(&None, &target);
+        assert!(result.is_err(), "agent 目录外路径在无项目时应拒绝");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("项目根路径未设置"),
+            "错误消息应保持原语义，实际: {msg}"
+        );
+    }
+
+    /// root=Some 时根外但 agent 目录内 → 放行
+    #[test]
+    fn validate_agent_dir_allowed_with_project_root() {
+        let root = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let _home_guard = crate::home::HomeDirGuard::set(home.path());
+        let agent_dir = home.path().join(".claude");
+        std::fs::create_dir(&agent_dir).unwrap();
+        let target = agent_dir.join("hooks.json");
+        std::fs::write(&target, "{}").unwrap();
+
+        let result = validate_path_within_root(&Some(root.path().to_path_buf()), &target);
+        assert!(result.is_ok(), "根外 agent 目录内路径应放行");
+    }
+
+    /// agent 目录内不存在的新文件（创建场景）→ 上溯祖先后放行
+    #[test]
+    fn validate_agent_dir_nonexistent_file_allowed() {
+        let _enforce = EnforceRootCheckGuard::enforce();
+        let home = tempfile::tempdir().unwrap();
+        let _home_guard = crate::home::HomeDirGuard::set(home.path());
+        std::fs::create_dir(home.path().join(".claude")).unwrap();
+        let target = home.path().join(".claude").join("new-file.json");
+
+        let result = validate_path_within_root(&None, &target);
+        assert!(result.is_ok(), "agent 目录内待创建文件应放行");
+    }
+
+    /// 前缀同名目录不误命中：`.claude2` 分量不等于 `.claude`（Path::starts_with 分量比较）
+    #[test]
+    fn validate_similar_prefix_dir_not_matched() {
+        let _enforce = EnforceRootCheckGuard::enforce();
+        let home = tempfile::tempdir().unwrap();
+        let _home_guard = crate::home::HomeDirGuard::set(home.path());
+        let similar = home.path().join(".claude2");
+        std::fs::create_dir(&similar).unwrap();
+        let target = similar.join("x.txt");
+        std::fs::write(&target, "x").unwrap();
+
+        let result = validate_path_within_root(&None, &target);
+        assert!(result.is_err(), ".claude2 不应命中 .claude 白名单");
+    }
+
+    /// agent 目录为 symlink 指向真实目录 → 双侧 canonicalize 后放行（dotfiles 场景）
+    #[cfg(windows)]
+    #[test]
+    fn validate_agent_dir_symlink_allowed() {
+        let _enforce = EnforceRootCheckGuard::enforce();
+        let home = tempfile::tempdir().unwrap();
+        let real = tempfile::tempdir().unwrap();
+        let link = home.path().join(".claude");
+        if std::os::windows::fs::symlink_dir(real.path(), &link).is_err() {
+            return; // 无权限创建符号链接时跳过（既定豁免）
+        }
+        let _home_guard = crate::home::HomeDirGuard::set(home.path());
+        let target = link.join("settings.json");
+        std::fs::write(real.path().join("settings.json"), "{}").unwrap();
+
+        let result = validate_path_within_root(&None, &target);
+        assert!(result.is_ok(), "symlink 形态的 agent 目录应放行");
     }
 
     // ---- canonicalize_or_ancestor 纯函数测试 ----

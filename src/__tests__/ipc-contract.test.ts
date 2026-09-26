@@ -43,6 +43,7 @@ import * as projects from '../ipc/projects';
 import * as notify from '../ipc/notify';
 import * as git from '../ipc/git';
 import * as windowIpc from '../ipc/window';
+import * as agentDirs from '../ipc/agentDirs';
 // ping 测试用——index.ts 的 ping() wrapper（IHE-07①：非裸 invoke）
 import { ping } from '../ipc';
 
@@ -600,6 +601,12 @@ describeIpcContract('notify IPC 合约', [
     call: () => notify.startWatch('D:/projects/my-app'),
     expectArgs: { path: 'D:/projects/my-app' },
   },
+  {
+    name: 'startWatch: pinned 选项透传（ADR-0024 pinned watcher）',
+    cmd: 'notify_watch',
+    call: () => notify.startWatch('C:\\Users\\x\\.claude', { pinned: true }),
+    expectArgs: { path: 'C:\\Users\\x\\.claude', pinned: true },
+  },
   // ── 异常路径 ──────────────────────────────────────────────
   {
     name: 'startWatch: invoke 失败时异常应传播',
@@ -627,6 +634,27 @@ describeIpcContract('notify IPC 合约', [
     call: () => notify.stopWatch('C:\\nonexistent'),
     mockThrow: 'watcher 不存在',
     expectReject: 'watcher 不存在',
+  },
+]);
+
+// ═══════════════════════════════════════════════════════════════════
+// Agent 目录 IPC（F1：agent_dirs_list 无参列表查询）
+// ═══════════════════════════════════════════════════════════════════
+
+describeIpcContract('agentDirs IPC 合约', [
+  {
+    name: 'listAgentDirs: 应调用 agent_dirs_list 命令并透传返回数组',
+    cmd: 'agent_dirs_list',
+    call: () => agentDirs.listAgentDirs(),
+    respond: [{ cliId: 'claude', path: 'C:\\Users\\x\\.claude', exists: true }],
+    expectResult: [{ cliId: 'claude', path: 'C:\\Users\\x\\.claude', exists: true }],
+  },
+  {
+    name: 'listAgentDirs: invoke 失败时异常应传播',
+    cmd: 'agent_dirs_list',
+    call: () => agentDirs.listAgentDirs(),
+    mockThrow: 'home 目录不可解析',
+    expectReject: 'home 目录不可解析',
   },
 ]);
 

@@ -17,7 +17,9 @@ const mocks = vi.hoisted(() => {
   let mockReadDirImpl: (path: string) => Promise<DirEntry[]> = () => Promise.resolve([]);
   let mockGitStatusImpl: (path: string) => Promise<GitStatusEntry[]> = () => Promise.resolve([]);
   // CP-016：捕获 onFsEvent 处理器——测试可手动触发 fs-event（200ms 去抖 → refreshExpanded）
-  let fsEventHandler: (() => void) | null = null;
+  // payload 三键形态与 src/types/notify.ts FsEventPayload 同构
+  type FsEventPayload = { paths: string[]; kind: string; detail: string };
+  let fsEventHandler: ((payload: FsEventPayload) => void) | null = null;
 
   // CP-006：mock 兑现分页契约——便利接口（整表 DirEntry[]）结果作为末页单页返回
   const mockReadDir = vi
@@ -37,7 +39,7 @@ const mocks = vi.hoisted(() => {
   });
 
   /** onFsEvent 注册处理器捕获（CP-016 场景④手动触发） */
-  const mockOnFsEvent = vi.fn((handler: () => void) => {
+  const mockOnFsEvent = vi.fn((handler: (payload: FsEventPayload) => void) => {
     fsEventHandler = handler;
     return () => {};
   });
@@ -47,9 +49,9 @@ const mocks = vi.hoisted(() => {
     mockGitStatus,
     mockOnFsEvent,
     makeEntry,
-    /** 手动触发一次 fs-event（hooks 挂载时注册的处理器） */
-    fireFsEvent() {
-      fsEventHandler?.();
+    /** 手动触发一次 fs-event（hooks 挂载时注册的处理器）；缺省 payload = 空 paths（保守放行） */
+    fireFsEvent(payload?: { paths: string[]; kind: string; detail: string }) {
+      fsEventHandler?.(payload ?? { paths: [], kind: "Other", detail: "Any" });
     },
     resetAll() {
       fsEventHandler = null;

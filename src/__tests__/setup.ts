@@ -31,16 +31,22 @@ function createGitMocks(overrides?: { gitStatus?: Fn }) {
 }
 
 function createNotifyMocks(overrides?: { startWatch?: Fn; stopWatch?: Fn; onFsEvent?: Fn; onFsPoll?: Fn }) {
-  let fsEventCallback: (() => void) | null = null;
+  // FsEvent 内联形态（与 src/types/notify.ts FsEventPayload 同构——payload 三键必填）：
+  // 缺省空 paths = 「保守放行」语义（useFileTree 根前缀过滤对空 paths 不拦截）
+  type FsEventPayload = { paths: string[]; kind: string; detail: string };
+  let fsEventCallback: ((payload: FsEventPayload) => void) | null = null;
   return {
     startWatch: overrides?.startWatch ?? vi.fn().mockResolvedValue(undefined),
     stopWatch: overrides?.stopWatch ?? vi.fn().mockResolvedValue(undefined),
-    onFsEvent: overrides?.onFsEvent ?? vi.fn((cb: () => void) => {
+    onFsEvent: overrides?.onFsEvent ?? vi.fn((cb: (payload: FsEventPayload) => void) => {
       fsEventCallback = cb;
       return () => { fsEventCallback = null; };
     }),
     onFsPoll: overrides?.onFsPoll ?? vi.fn(() => () => {}),
-    triggerFsEvent() { fsEventCallback?.(); },
+    /** 手动触发 fs-event（模拟后端文件变更通知）；缺省 payload = 空 paths（保守放行） */
+    triggerFsEvent(payload?: FsEventPayload) {
+      fsEventCallback?.(payload ?? { paths: [], kind: "Other", detail: "Any" });
+    },
   };
 }
 

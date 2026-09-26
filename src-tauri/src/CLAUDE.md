@@ -32,7 +32,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **浅合并**：`save_settings` 只写前端传入的顶层 slice，后端浅合并 top-level 键，各 store 各写各的互不覆盖；
 - **`SETTINGS_SAVE_LOCK`**：前端三 store 启动时几乎同时触发 debounced 保存，`spawn_blocking` 闭包持锁串行化读-合并-写，避免 Windows persist rename 时句柄占用导致 PermissionDenied（SPE-06）；
-- **SEC-11**：顶层键白名单（数组共 7 项）`["fontSize", "keybindings", "sideBar", "colorScheme", background_tasks::SETTINGS_KEY, "cliAliases", pty::spawn::SETTINGS_KEY]` + 序列化后大小上限 1MB。**键名聚合决策（F11）**：前端消费型五键（fontSize/keybindings/sideBar/colorScheme/cliAliases）无后端模块可归，键名集中于此字面量；后端消费型域键名归域模块——`backgroundTasks` 段经 `crate::background_tasks::SETTINGS_KEY` 引用（契约断链先例：fontSize store 曾发平铺键被拒，已改段形态双侧锁死），`conptyInputModes` 段（CP-009，ConPTY 输入模式能力矩阵，spawn 时后端读段，前端设置页「终端输入模式」写）经 `crate::pty::spawn::SETTINGS_KEY` 引用。`backgroundTasks` 段 = F12 后台定时任务配置（子键 per taskId：enabled/intervalSec）；写入侧除手改文件外专用命令通道 `background_tasks_set_config`（校验 → 读-改-写子键合并 → 本模块写通道落盘——禁止自建第二写通道）。`cliAliases` 段 = CLI 启动别名配置（子键 per cliId：别名数组，如 `{"claude":["cc"]}`）——**纯透传段**：语法与全命名空间唯一性校验全在前端 cliProfiles 域（`aliasValidation.ts`），本层不设专用命令/DTO（前端 profile 注册表是内置命令名唯一知识源，Rust 复刻即双源漂移，ADR-0014）。
+- **SEC-11**：顶层键白名单（数组共 8 项）`["fontSize", "keybindings", "sideBar", "colorScheme", background_tasks::SETTINGS_KEY, "cliAliases", "agentGlobalFiles", pty::spawn::SETTINGS_KEY]` + 序列化后大小上限 1MB。**键名聚合决策（F11）**：前端消费型六键（fontSize/keybindings/sideBar/colorScheme/cliAliases/agentGlobalFiles）无后端模块可归，键名集中于此字面量；后端消费型域键名归域模块——`backgroundTasks` 段经 `crate::background_tasks::SETTINGS_KEY` 引用（契约断链先例：fontSize store 曾发平铺键被拒，已改段形态双侧锁死），`conptyInputModes` 段（CP-009，ConPTY 输入模式能力矩阵，spawn 时后端读段，前端设置页「终端输入模式」写）经 `crate::pty::spawn::SETTINGS_KEY` 引用。`backgroundTasks` 段 = F12 后台定时任务配置（子键 per taskId：enabled/intervalSec）；写入侧除手改文件外专用命令通道 `background_tasks_set_config`（校验 → 读-改-写子键合并 → 本模块写通道落盘——禁止自建第二写通道）。`cliAliases` 段 = CLI 启动别名配置（子键 per cliId：别名数组，如 `{"claude":["cc"]}`）——**纯透传段**：语法与全命名空间唯一性校验全在前端 cliProfiles 域（`aliasValidation.ts`），本层不设专用命令/DTO（前端 profile 注册表是内置命令名唯一知识源，Rust 复刻即双源漂移，ADR-0014）。`agentGlobalFiles` 段（ADR-0024）= Agent 全局文件视图展示配置（子键 per cliId：mode/customNames/showRuntimeFiles）——同为纯透传段，校验/净化在前端 `features/agentFiles/filtering.ts`。
 - **`save_settings_blocking` 同步写通道（F12 抽取）**：校验（白名单 + 大小上限）→ 浅合并 → 原子写 + .bak，供 async `save_settings` 命令与 `background_tasks::set_config_core`（spawn_blocking 内，跨 await 持 MutexGuard 不可行）共用——全仓唯一 settings.json 写通道，禁止另建。**读侧语义（R2b）**：读现有文件经 `read_existing_settings` 共用读法——文件不存在（NotFound）→ 按空数据合并（首次启动合法）；读失败/解析失败 → Err 传播且不落盘（曾 `.ok()` 吞错走 Null 覆盖致顶层键全丢仍写成功，已修复）——与 load 侧损坏 `.bak` 回退语义刻意不同。
 
 ### projects.rs — exe 同级 JSON 绕过沙箱
@@ -43,7 +43,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - `AppState`：pty 状态、watcher 池、git 缓存、project_root 共享；
 - `project_root_lock: tokio::sync::Mutex<()>`（SEC-16）：`set_project_root` canonicalize+apply 全程互斥，防止 A→B 快速切换时慢 canonicalize 的 A 后写回覆盖 B；
-- `validate_path_within_root`：覆盖 fs/git/notify/pty 全部受沙箱保护的命令；相对路径先 join root 再 canonicalize，目标不存在时上溯最近存在的祖先；`project_root=None` 时拒绝（`cfg!(test)` 豁免）。
+- `validate_path_within_root`：覆盖 fs/git/notify/pty 全部受沙箱保护的命令；相对路径先 join root 再 canonicalize，目标不存在时上溯最近存在的祖先；`project_root=None` 时拒绝（`cfg!(test)` 豁免）。**放行域 = project_root ∪ agent 目录集（ADR-0024）**：`agent_dirs` 静态表（cliId → home 相对目录，当前仅 claude → `.claude`）解析的目录同样放行（canonicalize 双向比较，兼容 `~/.claude` 为 symlink 的 dotfiles 场景）——编辑器/预览/「在终端打开」链路对 agent 文件零改造；前端永不能注入任意 agent 路径（表在后端硬编码）。
+
+### agent_dirs.rs — agent 全局目录静态表（ADR-0024）
+
+cliId → home 相对目录的后端唯一真值源（当前仅 claude → `.claude`）：`resolve_agent_dirs()`（经 `crate::home::home_dir()` 解析 + exists 探测）供 `agent_dirs_list` 命令与 `validate_path_within_root` 放行域共用；DTO `AgentGlobalDir { cli_id, path, exists }` 经 ts-rs 生成。新增 agent = 表内追加一行。
 
 ### error.rs — 统一错误类型与消息语义（BE-13/BE-15）
 

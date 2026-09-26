@@ -12,15 +12,18 @@ use std::path::Path;
 use tempfile::NamedTempFile;
 
 /// 设置顶层键白名单（SEC-11）：前端各 store 只允许写这些键。
-/// 前端消费型五键（fontSize/keybindings/sideBar/colorScheme/cliAliases）无后端模块可归，
-/// 键名集中于此；后端消费型域键名归域模块（background_tasks::SETTINGS_KEY /
+/// 前端消费型六键（fontSize/keybindings/sideBar/colorScheme/cliAliases/agentGlobalFiles）
+/// 无后端模块可归，键名集中于此；后端消费型域键名归域模块（background_tasks::SETTINGS_KEY /
 /// pty::spawn::SETTINGS_KEY 两个先例——键名不在此字面量出现，防双源漂移）。
 /// cliAliases 段 = CLI 启动别名配置（子键 per cliId：别名字符串数组，如 {"claude":["cc"]}），
 /// 纯透传段——语法与全命名空间唯一性校验全在前端 cliProfiles 域（aliasValidation.ts），
 /// 本层不设专用命令/DTO（前端注册表是内置命令名唯一知识源，重复即双源漂移）。
+/// agentGlobalFiles 段 = 「Agent 全局文件」侧栏视图展示配置（子键 per cliId：
+/// {mode, customNames, showRuntimeFiles}），同为纯透传段——校验/净化全在前端
+/// features/agentFiles/filtering.ts（ADR-0014 先例，不设 Rust DTO）。
 /// 契约断链先例：fontSize store 曾发平铺 terminalFontSize/editorFontSize 顶层键被拒，
 /// 已改段形态并用双侧测试锁死——前端 payload 键集合精确断言 + 后端平铺拒绝用例）
-const SETTINGS_ALLOWED_KEYS: [&str; 7] = [
+const SETTINGS_ALLOWED_KEYS: [&str; 8] = [
     "fontSize",
     "keybindings",
     "sideBar",
@@ -28,6 +31,7 @@ const SETTINGS_ALLOWED_KEYS: [&str; 7] = [
     crate::background_tasks::SETTINGS_KEY,
     "cliAliases",
     crate::pty::spawn::SETTINGS_KEY, // CP-009 第 7 键：ConPTY 输入模式能力矩阵
+    "agentGlobalFiles",              // 第 8 键：Agent 全局文件视图展示配置
 ];
 
 /// save_settings 进程内互斥（SPE-06 场景转正修复）：
@@ -704,6 +708,29 @@ mod settings_tests {
             loaded.data,
             Some(settings),
             "conptyInputModes 段应完整往返一致"
+        );
+        assert!(!loaded.corrupted);
+    }
+
+    /// 白名单第 8 键：agentGlobalFiles 段放行且 save/load 往返一致（防白名单回归）——
+    /// 段形态 = cliId → {mode, customNames, showRuntimeFiles}，内容透传不校验
+    ///（校验全前端 features/agentFiles/filtering.ts，ADR-0014 先例）
+    #[test]
+    fn save_accepts_agent_global_files_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = AppDataDirGuard::set(dir.path());
+
+        let settings = serde_json::json!({
+            "agentGlobalFiles": {
+                "claude": { "mode": "custom", "customNames": ["agents", "CLAUDE.md"], "showRuntimeFiles": true }
+            }
+        });
+        run(save_settings(settings.clone())).unwrap();
+        let loaded = run(load_settings()).unwrap();
+        assert_eq!(
+            loaded.data,
+            Some(settings),
+            "agentGlobalFiles 段应完整往返一致"
         );
         assert!(!loaded.corrupted);
     }

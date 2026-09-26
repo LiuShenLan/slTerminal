@@ -29,9 +29,9 @@ export interface SideBarSlice {
 
 // ── 默认值常量 ──
 
-/** 默认按钮归属（NAV-05 三槽）：导航树、文件浏览器、commit 均在上区 */
+/** 默认按钮归属：导航树、文件浏览器、commit、Agent 全局文件均在上区 */
 export const DEFAULT_ZONES: Zones = {
-  top: ["nav", "explorer", "commit"],
+  top: ["nav", "explorer", "commit", "agentFiles"],
   bottom: [],
 };
 

@@ -7,6 +7,8 @@
 //   ts-rs 10.1 无法为 flatten map 生成顶层 Record 别名,故引用生成物 MatcherGroupJson 组合
 // - ContextUsageSignal:前端窄视图(usedPercentage 字段已生成于 AgentEventPayload 内)
 // - BACKGROUND_TASK_IDS 常量族:前端专有常量,后端无对应导出
+// - AgentGlobalFilesConfig 族:settings.json `agentGlobalFiles` 段为纯透传段
+//   (ADR-0014 先例——校验/净化全前端 features/agentFiles/filtering.ts,Rust 复刻即双源漂移)
 
 import type { MatcherGroupJson } from "./hooksConfig";
 
@@ -32,3 +34,19 @@ export type BackgroundTaskId = (typeof BACKGROUND_TASK_IDS)[number];
 export const PLAN_BALANCE_TASK_ID: BackgroundTaskId = "planBalance";
 /** sessionRefresh 任务 id 常量（调度器订阅/applyConfig 消费） */
 export const SESSION_REFRESH_TASK_ID: BackgroundTaskId = "sessionRefresh";
+
+/** 「Agent 全局文件」视图展示模式：全部 / 自定义名单 */
+export type AgentGlobalFilesMode = "all" | "custom";
+
+/** settings.json `agentGlobalFiles` 段的 per-cliId 配置（纯透传段，校验在 filtering.ts） */
+export interface AgentGlobalFilesConfig {
+  mode: AgentGlobalFilesMode;
+  /** 自定义模式名单（根层名称，大小写不敏感；all 模式下保留不生效） */
+  customNames: string[];
+  /** 「全部」模式下是否展示并监听运行时文件（profile runtimePaths 命中项）；
+   *  custom 模式下值保留但 UI 禁用不生效 */
+  showRuntimeFiles: boolean;
+}
+
+/** agentGlobalFiles 段整体形态：cliId → 配置 */
+export type AgentGlobalFilesMap = Record<string, AgentGlobalFilesConfig>;

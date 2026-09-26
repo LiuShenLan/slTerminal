@@ -1,7 +1,8 @@
 /**
  * hooks 域 E2E spec（E2E-09 拆分 + E2E-06 新用例）：
  * 注入/卸载/状态、信号文件驱动页签状态圆点、真实 hook reporter 链路（E2E-06）、
- * hooks 配置面板 hub 用例（P3-TE-18 保存链路 + D-14 Stage 06：选择行渲染/注入三态）。
+ * hooks 配置页用例（P3-TE-18 保存链路 + 注入三态；ADR-0023 起页 = Agent 组
+ * agent.claude.hooks，选择行已删）。
  */
 
 import { expect, browser } from "@wdio/globals";
@@ -227,18 +228,16 @@ describe("hooks 状态可视化", () => {
 
 // ── hooks 配置面板保存链路（P3-TE-18） ──
 //
-// 场景：tempdir 项目 → 打开设置中心面板（settings 组件，深链 selectedPage="hooks"，
-// SC-E2E-02 适配）→ 切 project 层 → JSON 模式经
-// __slterm_e2e_setHooksConfigJson 注入合法 hooks 配置 → 点击保存 →
+// 场景：tempdir 项目 → 打开设置中心面板（settings 组件，深链
+// selectedPage="agent.claude.hooks"，ADR-0023 起 Agent 组）→ 切 project 层 →
+// JSON 模式经 __slterm_e2e_setHooksConfigJson 注入合法 hooks 配置 → 点击保存 →
 // 断言 <tempdir>/.claude/settings.json 真实写盘。
 // 断言三件事：① mtime 更新；② hooks 内容正确（写入的事件/handler 存在，且
 // 预置的旧 hooks 被整体替换）；③ merge 保留——预置的 permissions/env/$schema
 // 原样保留（验证后端 read-modify-write，P3-BE-03）。
 // 安全：全程只写 tempdir 项目的 project 层，不碰真实 ~/.claude/settings.json（C13-9）。
-// hub 面板（Stage 06 起）：面板 = 顶部 CLI 选择行 + 编辑器槽，claude 编辑器内容整体
-// 下移一层（行为零改动）；本组用例断言随 hub 结构同步——选择行渲染（单 CLI 也有
-// 选择行 + claude logo/displayName）、保存链路经 hub、注入按钮三态经 hub、
-// data-e2e="hooks-restart-hint" 断言保留。
+// ADR-0023：CLI 选择行已删——页 = AgentHooksPage 直渲染 claude configEditor；
+// 保存链路、注入按钮三态、data-e2e="hooks-restart-hint" 断言保留。
 //
 // 按钮交互统一走 browser.execute 程序化 .click()，不用 WebDriver 真实点击——两个根因：
 // 1) 面板根容器 onFocus（React focusin）触发轻量重读 reload() → setLoading(true) →
@@ -308,72 +307,41 @@ describe("hooks 配置面板保存链路 (P3-TE-18)", () => {
       await waitForDockviewApi();
 
       // 3b. 关闭前序用例遗留的设置面板（本用例保存后面板未关；mocha retries:1
-      //     重跑时旧面板残留 → addPanel 叠加出多个面板 → hub 选择行 logo 全页计数
-      //     断言（logoCount/rowButtonCount）命中间态面板——先关后开保证唯一，
-      //     照 :454 it 的既有先例）
+      //     重跑时旧面板残留 → addPanel 叠加出多个面板 → 后续断言命中间态面板
+      //     ——先关后开保证唯一，照 :454 it 的既有先例）
+      //     实现经 helper（isSettingsPanelId 判据）——旧 p.component==="settings"
+      //     判据失效（dockview 当前版本 panel 无 component 属性，实测恒 null）
       await browser.execute(() => {
-        for (const p of window.__dockviewApi!.panels) {
-          if (p.component === "settings") p.api.close();
-        }
+        (window as any).__slterm_e2e_closeAllSettingsPanels?.();
       });
 
       // 4. 打开设置中心面板（F11 形态，SC-E2E-02：组件 "settings" + 深链
-      //    selectedPage="hooks"——hooks 页迁入设置中心后的打开方式；面板 id 用
-      //    settings-e2e- 前缀——壳按 settings- 解析 pageId 查不到项目 → 不触发
-      //    切项目自动关闭，靠 finally 手动回收；唯一 id 不与同页单例约定冲突）
+      //    selectedPage="agent.claude.hooks"——ADR-0023 起 hooks 页在 Agent 组；
+      //    面板 id 用 settings-e2e- 前缀——壳按 settings- 解析 pageId 查不到项目 →
+      //    不触发切项目自动关闭，靠 finally 手动回收；唯一 id 不与同页单例约定冲突）
       const panelId = "settings-e2e-hookscfg-" + Date.now();
       await browser.execute((pid: string) => {
         window.__dockviewApi!.addPanel({
           id: pid,
           component: "settings",
           title: "设置",
-          params: { panelId: pid, selectedPage: "hooks" },
+          params: { panelId: pid, selectedPage: "agent.claude.hooks" },
         });
       }, panelId);
-      // 面板容器仅在非 loading/error 态渲染——存在即表示首次加载（user 层）完成
+      // 页根容器仅在编辑器非 loading/error 态挂载后渲染——存在即表示首次加载（user 层）完成
       await browser.waitUntil(
         async () =>
-          (await browser.execute(() => !!document.querySelector('[data-e2e="hooks-config-panel"]'))) === true,
+          (await browser.execute(() => !!document.querySelector('[data-e2e="agent-hooks-page-claude"]'))) === true,
         { timeout: 15000, timeoutMsg: "hooks 配置页未就绪" },
       );
 
-      // 4b. hub 选择行断言（D-14 Stage 06 段）：选择行位于编辑器上方（编辑器下移一层后的
-      //     hub 结构）；单 CLI 也渲染选择行（边界 1，防布局跳动）——claude logo
-      //     （iconSrc 16×16）+ displayName 文本。选择行无 data-e2e 契约，按 claude
-      //     品牌 logo img 定位；E2E 构建仅 claude 注册（mockcli 属 Stage 07 经 E2E
-      //     helper 注册）。img 查询限定面板容器作用域（3b 开前关闭已保证面板唯一）：
-      //     终端页签 logo 残留（history spec 恢复编排——双击历史行 → 创建终端 +
-      //     pty.write 注入 claude --resume 命令 → useCommandDetection 命中 → 终端
-      //     页签渲染 claude 16×16 logo；页面多 Dockview 实例 + CSS 显隐，隐藏页面板
-      //     不卸载仍留 DOM）不在面板容器内，全页计数会被污染（Stage 03 fix-loop 仅
-      //     覆盖设置面板残留来源，未覆盖终端页签 logo 来源）。
-      const hubRow = await browser.execute(() => {
-        const panel = document.querySelector('[data-e2e="hooks-config-panel"]');
-        const imgs = panel
-          ? Array.from(panel.querySelectorAll<HTMLImageElement>('img[src="/cli-icons/claude.png"]'))
-          : [];
-        const buttons = imgs
-          .map((img) => img.closest("button"))
-          .filter((b): b is HTMLButtonElement => b !== null);
-        // "编辑器"参照取选择行所属容器内的编辑器槽（容器末子元素）——data-e2e 挂在
-        // 容器上，容器 = 选择行 + 编辑器槽两层；直接用容器比位会命中祖先分支
-        // （compareDocumentPosition 对祖先不置 FOLLOWING 位，实测恒 false）
-        const row = imgs[0]?.closest('[data-e2e="hooks-config-panel"]') ?? null;
-        const editor = row?.lastElementChild ?? null;
-        return {
-          logoCount: imgs.length,
-          buttonTexts: buttons.map((b) => b.textContent ?? ""),
-          rowButtonCount: buttons.length,
-          rowAboveEditor:
-            imgs.length > 0 && editor !== null
-              ? (imgs[0].compareDocumentPosition(editor) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
-              : false,
-        };
-      });
-      expect(hubRow.logoCount).toBeGreaterThan(0); // 选择行渲染 claude logo
-      expect(hubRow.buttonTexts[0]).toContain("claude"); // 按钮 displayName
-      expect(hubRow.rowButtonCount).toBe(1); // 单 CLI 也渲染选择行（恰一枚按钮）
-      expect(hubRow.rowAboveEditor).toBe(true); // 选择行在编辑器上方（hub 结构）
+      // 4b. ADR-0023：CLI 选择行已删（导航按 agent 分节），页 = claude configEditor
+      //     直渲染——编辑器工具栏（模式切换钮）出现即编辑器已挂载
+      await browser.waitUntil(
+        async () =>
+          (await browser.execute(() => !!document.querySelector('[data-e2e="hooks-mode-json"]'))) === true,
+        { timeout: 15000, timeoutMsg: "claude hooks 编辑器未渲染" },
+      );
 
       // 5. 切到 project 层：rootPath 就绪后按钮才可点（disabled=!rootPath）——execute 轮询
       //    等待启用，再程序化 .click()（真实 onClick → setLayer → 重读 project 层；
@@ -469,9 +437,7 @@ describe("hooks 配置面板保存链路 (P3-TE-18)", () => {
       // 此时当前页仍活跃，__dockviewApi 正指向本页 dockview，关闭可达；照 :454 it
       // 「先关后开保证唯一」先例，用例结束时回收，重跑/后续用例从零开始）
       await browser.execute(() => {
-        for (const p of window.__dockviewApi!.panels) {
-          if (p.component === "settings") p.api.close();
-        }
+        (window as any).__slterm_e2e_closeAllSettingsPanels?.();
       });
       rmSync(tempDir, { recursive: true, force: true });
     }
@@ -494,23 +460,21 @@ describe("hooks 配置面板保存链路 (P3-TE-18)", () => {
     // 1. 关闭前序用例遗留的设置面板（保存用例面板未关；document.querySelector
     //    取首匹配元素，多面板并存会让状态条/按钮断言命中间态面板——先关后开保证唯一）
     await browser.execute(() => {
-      for (const p of window.__dockviewApi!.panels) {
-        if (p.component === "settings") p.api.close();
-      }
+      (window as any).__slterm_e2e_closeAllSettingsPanels?.();
     });
 
     // 2. 程序化打开设置中心面板（设置中心形态，SC-E2E-02：settings 组件 + 深链
-    //    selectedPage="hooks"；hub 容器 = 选择行 + claude 编辑器槽）
+    //    selectedPage="agent.claude.hooks"——ADR-0023 起 hooks 页在 Agent 组）
     const panelId = "settings-e2e-inject-" + Date.now();
     await browser.execute((pid: string) => {
       window.__dockviewApi!.addPanel({
         id: pid,
         component: "settings",
         title: "设置",
-        params: { panelId: pid, selectedPage: "hooks" },
+        params: { panelId: pid, selectedPage: "agent.claude.hooks" },
       });
     }, panelId);
-    // 注入状态条在编辑器工具栏——仅非 loading/error 态渲染（编辑器下移一层后同语义）
+    // 注入状态条在编辑器工具栏——仅非 loading/error 态渲染
     await browser.waitUntil(
       async () =>
         (await browser.execute(() => !!document.querySelector('[data-e2e="hooks-injection-status"]'))) === true,

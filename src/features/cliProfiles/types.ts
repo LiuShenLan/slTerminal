@@ -61,6 +61,18 @@ export interface HistoryCapability {
   ): string;
 }
 
+/** globalFiles 能力域（「Agent 全局文件」侧栏视图）——声明该 agent 拥有全局配置目录 */
+export interface GlobalFilesCapability {
+  /** home 相对配置目录（claude = ".claude"；路径字面量仅允许出现在 profiles/<cli>/，AC-5）。
+   *  仅作能力声明与展示——沙箱放行真值源是后端 agent_dirs.rs 静态表（ADR-0024），
+   *  绝对路径经 ipc/agentDirs.listAgentDirs 取回，前端不自行拼接 */
+  configDir: string;
+  /** 运行时文件根层名单（缓存/会话/日志等无配置价值产物）——「全部」模式下
+   *  默认排除不展示；「显示运行时文件」开关开启后展示并纳入事件刷新。
+   *  大小写不敏感、仅匹配根层（与自定义名单同一匹配语义） */
+  runtimePaths: string[];
+}
+
 /** CLI profile（跨边界契约，spec 00 §3.1） */
 export interface CodingCliProfile {
   /** cliId 公共键，如 "claude" */
@@ -77,5 +89,6 @@ export interface CodingCliProfile {
   capabilities: {
     hooks?: HooksCapability;
     history?: HistoryCapability;
+    globalFiles?: GlobalFilesCapability;
   };
 }

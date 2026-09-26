@@ -11,9 +11,9 @@
  * - CS-3 用例 ①（agent-event 注入）：Node 侧原子写信号文件（cliId="mockcli"，
  *   事件经桩 eventToStatus 恒等映射 working）→ 页签 ⚡ + 导航树活跃区建行
  *   （真实 watcher → agent-event → resolvePayloadCliId 三级解析 → 桩策略全链路真实）。
- * - CS-3 用例 ②（hub 分派 + 保存 cliId 透传）：设置中心 hooks 配置页（settings 组件
- *   + 深链 selectedPage="hooks"，SC-E2E-02 适配）选择行渲染 mockcli
- *   按钮（hasConfigEditor=true 过滤命中）→ 点击 → mock 编辑器桩渲染
+ * - CS-3 用例 ②（分派 + 保存 cliId 透传，ADR-0023 形态）：注册 mockcli（helper 内
+ *   幂等补注册 agent.mockcli.* 设置页）→ 设置中心深链 selectedPage=
+ *   "agent.mockcli.hooks" → AgentHooksPage 直渲染 mock 编辑器桩
  *   （data-e2e="mockcli-config-editor"）→ 桩内保存触发真实 writeHooksConfig
  *   ("mockcli", ...) → 后端「未知 cliId: mockcli」错误透传展示。
  *
@@ -340,79 +340,51 @@ describe("mockcli 关键路径（CS-3：agent-event 注入 + hub 分派/保存 c
   });
 
   /**
-   * CS-3 用例 ②（hub 分派 + 保存 cliId 透传）：打开设置中心面板（hooks 配置页）→ 选择行渲染
-   * mockcli 按钮（hasConfigEditor=true 过滤命中）→ 点击 → mock 编辑器桩渲染
-   * （data-e2e="mockcli-config-editor"）→ 桩内保存动作触发真实
-   * writeHooksConfig("mockcli", ...) → 后端「未知 cliId: mockcli」错误透传展示
-   * （mockcli 无后端 provider，错误即 cliId 全链携带的证据）。
+   * CS-3 用例 ②（分派 + 保存 cliId 透传，ADR-0023 形态）：注册 mockcli → helper 内
+   * 幂等同步补注册 agent.mockcli.* 页（pages.ts 静态枚举不覆盖动态注册 profile）→
+   * 深链 selectedPage="agent.mockcli.hooks" 打开设置中心 → AgentHooksPage 直渲染
+   * mock 编辑器桩（data-e2e="mockcli-config-editor"，选择行已删无点击切换段）→
+   * 桩内保存动作触发真实 writeHooksConfig("mockcli", ...) → 后端
+   * 「未知 cliId: mockcli」错误透传展示（mockcli 无后端 provider，错误即 cliId
+   * 全链携带的证据）。
    */
-  it("hub 选择行 mockcli 按钮 → 桩编辑器渲染 → 桩保存 → 后端「未知 cliId: mockcli」错误透传", async () => {
+  it("agent.mockcli.hooks 直渲染桩编辑器 → 桩保存 → 后端「未知 cliId: mockcli」错误透传", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "slterm-e2e-mockcli-hub-"));
     try {
-      // 0. Workspace 就绪 + 注册 mockcli（register 幂等——重复调用安全）
+      // 0. Workspace 就绪 + 注册 mockcli（register 幂等——重复调用安全；helper 内部
+      //    经 syncAgentPagesFromProfiles 幂等补注册 agent.mockcli.* 设置页）
       await waitForWorkspaceReady();
       await registerMockCliProfile();
       await waitForDockviewApi();
 
       // 0b. 关闭前序用例遗留的设置面板（mocha retries:1 重跑时旧面板残留 →
-      //     多面板并存让首匹配断言命中间态面板——先关后开保证唯一，照 hooks.e2e.ts 先例）
+      //     多面板并存让首匹配断言命中间态面板——先关后开保证唯一，照 hooks.e2e.ts 先例；
+      //     实现经 helper——p.component==="settings" 判据失效，实测恒 null）
       await browser.execute(() => {
-        for (const p of window.__dockviewApi!.panels) {
-          if (p.component === "settings") p.api.close();
-        }
+        (window as any).__slterm_e2e_closeAllSettingsPanels?.();
       });
 
       // 1. 程序化打开设置中心面板（设置中心形态，SC-E2E-02：settings 组件 + 深链
-      //    selectedPage="hooks"；hub 容器 = 选择行 + 编辑器槽）
+      //    selectedPage="agent.mockcli.hooks"——ADR-0023 起 hooks 页按 agent 分节）
       const panelId = "settings-e2e-mockcli-" + Date.now();
       await browser.execute((pid: string) => {
         window.__dockviewApi!.addPanel({
           id: pid,
           component: "settings",
           title: "设置",
-          params: { panelId: pid, selectedPage: "hooks" },
+          params: { panelId: pid, selectedPage: "agent.mockcli.hooks" },
         });
       }, panelId);
-      await browser.waitUntil(
-        async () =>
-          (await browser.execute(() => !!document.querySelector('[data-e2e="hooks-config-panel"]'))) === true,
-        { timeout: 15000, timeoutMsg: "hooks 配置页未就绪" },
-      );
 
-      // 2. 选择行渲染 mockcli 按钮（hasConfigEditor=true 过滤命中——claude + mockcli
-      //    两枚按钮；data-e2e="hooks-cli-{id}" 契约）
-      const mockcliBtn = await browser.execute(() => {
-        const btn = document.querySelector(
-          '[data-e2e="hooks-cli-mockcli"]',
-        ) as HTMLButtonElement | null;
-        return btn
-          ? { exists: true, text: btn.textContent ?? "", disabled: btn.disabled }
-          : { exists: false, text: "", disabled: true };
-      });
-      expect(mockcliBtn.exists).toBe(true);
-      expect(mockcliBtn.text).toContain("mockcli");
-
-      // 3. 点击 mockcli 按钮（程序化 .click()——不触发 focusin，规避面板根容器
-      //    focus 重读竞态，照 hooks.e2e.ts 注释先例；mockcli 桩无 dirty，切换无
-      //    确认弹窗）
-      const clicked = await browser.execute(() => {
-        const btn = document.querySelector(
-          '[data-e2e="hooks-cli-mockcli"]',
-        ) as HTMLButtonElement | null;
-        btn?.click();
-        return btn !== null;
-      });
-      expect(clicked).toBe(true);
-
-      // 4. 断言 mock 编辑器桩渲染（data-e2e="mockcli-config-editor"——helpers.ts
-      //    桩与 L2 桩同标记口径，KZ-7 双向分派断言的 L4 侧）
+      // 2. 断言 mock 编辑器桩直渲染（data-e2e="mockcli-config-editor"——helpers.ts
+      //    桩与 L2 桩同标记口径，KZ-7 分派断言的 L4 侧；桩无加载态，渲染即出现）
       await browser.waitUntil(
         async () =>
           (await browser.execute(() => !!document.querySelector('[data-e2e="mockcli-config-editor"]'))) === true,
-        { timeout: 10000, timeoutMsg: "mockcli 桩编辑器未渲染" },
+        { timeout: 15000, timeoutMsg: "mockcli 桩编辑器未渲染" },
       );
 
-      // 5. 桩内保存动作 → 真实 writeHooksConfig("mockcli", ...) → 后端
+      // 3. 桩内保存动作 → 真实 writeHooksConfig("mockcli", ...) → 后端
       //    Validation「未知 cliId: mockcli」→ 错误经桩 setState 透传展示
       await browser.execute(() => {
         const btn = document.querySelector(
@@ -435,9 +407,7 @@ describe("mockcli 关键路径（CS-3：agent-event 注入 + hub 分派/保存 c
       // 从零开始）
       try {
         await browser.execute(() => {
-          for (const p of window.__dockviewApi!.panels) {
-            if (p.component === "settings") p.api.close();
-          }
+          (window as any).__slterm_e2e_closeAllSettingsPanels?.();
         });
       } catch { /* 忽略 */ }
       // 终端 PTY 持目录句柄——rmSync 可能 EPERM，吞错（OS 回收）

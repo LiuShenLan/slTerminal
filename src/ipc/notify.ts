@@ -16,9 +16,14 @@ export interface FsPoll {
   paths: string[];
 }
 
-/** 启动对指定路径的递归文件监听（后端 300ms 去抖 → fs-event） */
-export function startWatch(path: string): Promise<void> {
-  return invoke("notify_watch", { path });
+/** 启动对指定路径的递归文件监听（后端 300ms 去抖 → fs-event）。
+ *  `pinned`（ADR-0024）：长期监听（agent 全局目录等）——启动时不暂停项目 watcher，
+ *  自身亦不被后续项目切换暂停、LRU 淘汰避让；缺省 false（项目切换语义） */
+export function startWatch(
+  path: string,
+  opts?: { pinned?: boolean },
+): Promise<void> {
+  return invoke("notify_watch", { path, pinned: opts?.pinned });
 }
 
 /** 停止对指定路径的文件监听（项目移除/切换时调用，释放后端 watcher，防占用至 LRU 淘汰） */

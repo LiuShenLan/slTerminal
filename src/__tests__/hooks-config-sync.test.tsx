@@ -13,9 +13,9 @@
 // 测试模式照 hooks-config-panel.test.tsx：mock JsonMode/GuiMode 捕获 props 驱动双向同步；
 // useHooksConfig 保存路径用 renderHook 直测（绕过 UI 禁用门控，直达校验拒绝逻辑）。
 //
-// Stage 06 hub 化：useHooksConfig 接收 cliId 参数（= hub 选中态），测试显式传入；
-// cliId 断言 = 传入的选中态 cliId（ipc 实参来自选中态，MC-220）；面板渲染经
-// renderLoadedPanel 辅助传 mock api/containerApi（照 panel 测试）。
+// ADR-0023：HooksSettingsPage 删除、选择行消亡——面板渲染经 AgentHooksPage 直渲染
+// cliId 对应 configEditor；useHooksConfig 接收 cliId 参数（= 页 cliId prop，MC-220
+// 泛化语义不变），测试显式传入。
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
@@ -43,7 +43,6 @@ const {
   mockToastShow,
   mockJsonMode,
   mockGuiMode,
-  mockOnPageParamsChange,
 } = vi.hoisted(() => ({
   mockReadHooksConfig: vi.fn(),
   mockWriteHooksConfig: vi.fn().mockResolvedValue(undefined),
@@ -52,8 +51,6 @@ const {
   // JsonMode/GuiMode mock 组件：渲染 null，测试经 mock 调用参数断言 props 传递与回调
   mockJsonMode: vi.fn(() => null),
   mockGuiMode: vi.fn(() => null),
-  // 壳 patch 通道 mock（SettingsPageProps.onPageParamsChange，SC-FE-05 迁壳）
-  mockOnPageParamsChange: vi.fn(),
 }));
 
 // mock IPC hooksConfig —— 三层 hooks 子树读写
@@ -78,9 +75,9 @@ vi.mock("../features/cliProfiles/profiles/claude/configEditor/GuiMode", () => ({
 
 import React from "react";
 import { render, fireEvent, waitFor, act, cleanup, renderHook } from "@testing-library/react";
-// SC-FE-05：hub 迁入设置中心为 HooksSettingsPage（SettingsPageProps 形态）；
+// ADR-0023：hooks 页迁入 Agent 组（agent.<cliId>.hooks），直渲染 configEditor；
 // useHooksConfig 随编辑器归域 configEditor/
-import HooksSettingsPage from "../panels/settings/pages/HooksSettingsPage";
+import AgentHooksPage from "../panels/settings/pages/AgentHooksPage";
 import { useHooksConfig } from "../features/cliProfiles/profiles/claude/configEditor/useHooksConfig";
 import { useProjects } from "../stores/projects";
 import { useLayout } from "../stores/layout";
@@ -93,7 +90,8 @@ const VALID_BASE: HooksConfigJson = {
 };
 
 /**
- * hub 选中态 cliId（MC-220：useHooksConfig 泛化命令实参 = hub 选中态）。
+ * 页 cliId（ADR-0023：AgentHooksPage 按 cliId prop 直渲染对应 configEditor；
+ * MC-220 泛化语义不变——useHooksConfig 命令实参 = 该 cliId）。
  * 测试显式传入（当前注册表唯一有编辑器能力 CLI = claude），断言实参 = 传入值。
  */
 const SELECTED_CLI_ID = CLAUDE_CLI_ID;
@@ -145,15 +143,14 @@ function guiProps(): GuiModePropsLike {
   return calls[calls.length - 1][0];
 }
 
-/** 渲染配置页（调用方随后 await waitFor(mockJsonMode 已调用) 等待加载完成）。
-    SC-FE-05：SettingsPageProps 形态——壳透传 onDirtyChange/pageParams/onPageParamsChange */
+/** 渲染 agent hooks 配置页（调用方随后 await waitFor(mockJsonMode 已调用) 等待加载完成）。
+    ADR-0023：AgentHooksPage 形态——cliId prop 直渲染，无选择行 */
 function renderLoadedPanel() {
   return render(
-    React.createElement(HooksSettingsPage, {
+    React.createElement(AgentHooksPage, {
+      cliId: SELECTED_CLI_ID,
       onDirtyChange: vi.fn(),
-      pageParams: {},
-      onPageParamsChange: mockOnPageParamsChange,
-    } as unknown as React.ComponentProps<typeof HooksSettingsPage>),
+    }),
   );
 }
 
@@ -288,7 +285,7 @@ describe("P3-TE-14 保存拒绝与提示", () => {
 
   it("语法错误（非对象）保存被拒：toast 提示 + 拒绝 writeHooksConfig + dirty 保留", async () => {
     mockReadHooksConfig.mockResolvedValue(VALID_BASE);
-    // hub 选中态 cliId 传入（MC-220：useHooksConfig 泛化命令实参 = 选中态）
+    // 页 cliId 传入（MC-220：useHooksConfig 泛化命令实参 = 页 cliId）
     const { result } = renderHook(() => useHooksConfig(SELECTED_CLI_ID));
     await waitFor(() => expect(result.current.loading).toBe(false));
 
@@ -308,7 +305,7 @@ describe("P3-TE-14 保存拒绝与提示", () => {
 
   it("schema 错误保存被拒：toast 提示诊断 + 拒绝 writeHooksConfig", async () => {
     mockReadHooksConfig.mockResolvedValue(VALID_BASE);
-    // hub 选中态 cliId 传入（MC-220：useHooksConfig 泛化命令实参 = 选中态）
+    // 页 cliId 传入（MC-220：useHooksConfig 泛化命令实参 = 页 cliId）
     const { result } = renderHook(() => useHooksConfig(SELECTED_CLI_ID));
     await waitFor(() => expect(result.current.loading).toBe(false));
 
@@ -332,7 +329,7 @@ describe("P3-TE-14 保存拒绝与提示", () => {
 
   it("合法保存成功（user 层）：confirmDialog 二次确认（SEC-05/D9）→ payload 为 hooks 子树，键集合 { layer, hooks } + saved 置位", async () => {
     mockReadHooksConfig.mockResolvedValue(VALID_BASE);
-    // hub 选中态 cliId 传入（MC-220：useHooksConfig 泛化命令实参 = 选中态）
+    // 页 cliId 传入（MC-220：useHooksConfig 泛化命令实参 = 页 cliId）
     const { result } = renderHook(() => useHooksConfig(SELECTED_CLI_ID));
     await waitFor(() => expect(result.current.loading).toBe(false));
 
@@ -351,7 +348,7 @@ describe("P3-TE-14 保存拒绝与提示", () => {
       kind: "warning",
     });
     expect(mockWriteHooksConfig).toHaveBeenCalledTimes(1);
-    // 键集合精确匹配：cliId 首参（= hub 选中态传入值）+ user 层无 projectPath → 第 4 参 undefined，
+    // 键集合精确匹配：cliId 首参（= 页 cliId）+ user 层无 projectPath → 第 4 参 undefined，
     // wrapper 层（ipc/hooksConfig.ts）按 undefined 省略 projectPath 键 → invoke payload 为 { cliId, layer, hooks }
     //（wrapper→invoke 键集合契约由 ipc-hooks-config-contract.test.ts 守卫）
     const callArgs = mockWriteHooksConfig.mock.calls[0];
@@ -368,7 +365,7 @@ describe("P3-TE-14 保存拒绝与提示", () => {
   it("合法保存成功（project 层）：不弹确认直接写（SEC-05/D9），payload 键集合 { layer, hooks, projectPath }", async () => {
     seedProject("C:/proj");
     mockReadHooksConfig.mockResolvedValue(VALID_BASE);
-    // hub 选中态 cliId 传入（MC-220：useHooksConfig 泛化命令实参 = 选中态）
+    // 页 cliId 传入（MC-220：useHooksConfig 泛化命令实参 = 页 cliId）
     const { result } = renderHook(() => useHooksConfig(SELECTED_CLI_ID));
     await waitFor(() => expect(result.current.loading).toBe(false));
 
@@ -391,7 +388,7 @@ describe("P3-TE-14 保存拒绝与提示", () => {
     // project 层不弹确认（SEC-05/D9：仅 user 层二次确认）
     expect(mockConfirmDialog).not.toHaveBeenCalled();
     expect(mockWriteHooksConfig).toHaveBeenCalledTimes(1);
-    // 键集合精确匹配：cliId 首参（= hub 选中态传入值）+ project 层含 projectPath → invoke payload 为 { cliId, layer, hooks, projectPath }
+    // 键集合精确匹配：cliId 首参（= 页 cliId）+ project 层含 projectPath → invoke payload 为 { cliId, layer, hooks, projectPath }
     const callArgs = mockWriteHooksConfig.mock.calls[0];
     expect(callArgs[0]).toBe(SELECTED_CLI_ID);
     expect(callArgs[1]).toBe("project");
@@ -520,7 +517,7 @@ describe("HKC-02 load() generation 竞态取消", () => {
     );
     // 第二次 read（project 层）直接 resolve
     mockReadHooksConfig.mockResolvedValueOnce(PROJECT_CONFIG);
-    // hub 选中态 cliId 传入（MC-220：useHooksConfig 泛化命令实参 = 选中态）
+    // 页 cliId 传入（MC-220：useHooksConfig 泛化命令实参 = 页 cliId）
     const { result } = renderHook(() => useHooksConfig(SELECTED_CLI_ID));
     await waitFor(() => expect(mockReadHooksConfig.mock.calls.length).toBe(1));
     // 切到 project 层（dirty=false 无需确认弹窗）→ 新请求发出

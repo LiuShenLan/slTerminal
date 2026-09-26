@@ -5,7 +5,7 @@
  * 真实后端落盘（background_tasks_set_config 命令真实 invoke——L4 兜底 SC-BE-03
  * 「命令未注册被前端 catch 吞 = 测试全绿但运行时静默失败」盲区）、快捷键录制（合成
  * KeyboardEvent 全链路：录制态 → setBinding → 2s debounce 落盘）、切项目自动关闭、
- * 同项目切页保留、hooks 页迁入冒烟（设置中心内 CLI 选择行渲染）、dirty 切页守卫
+ * 同项目切页保留、hooks 页迁入 Agent 组冒烟（ADR-0023 分节标题 + 页渲染）、dirty 切页守卫
  * （confirmDialog 取消不切换）、× 关闭 dirty 守卫（取消保留 / 确认关闭）。
  *
  * corrupted 警示条不做 L4（L2 覆盖 loadSettings mock；无沙箱外写坏文件通道——
@@ -608,40 +608,40 @@ describe("设置中心 (F11, SC-E2E-02)", () => {
     }
   });
 
-  /** 用例 ⑨：hooks 页迁入冒烟（设置中心内 CLI 选择行渲染） */
-  it("⑨ hooks 页迁入冒烟：设置中心内 CLI 选择行渲染", async () => {
+  /** 用例 ⑨：hooks 页迁入 Agent 组冒烟（ADR-0023：agent.claude.hooks 页渲染 +
+      Agent 组分节标题 logo/displayName） */
+  it("⑨ hooks 页迁入 Agent 组：agent.claude.hooks 渲染 + 分节标题 Claude Code", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "slterm-e2e-settings-hooksmoke-"));
     try {
       await waitForWorkspaceReady();
       await createProject(tempDir);
       await waitForDockviewApi();
       await openSettingsCenter();
-      await switchSettingsPage("hooks");
+      await switchSettingsPage("agent.claude.hooks");
 
-      // HooksSettingsPage 根容器保留 data-e2e="hooks-config-panel"（SC-FE-05 决策）
+      // AgentHooksPage 根容器 data-e2e="agent-hooks-page-claude"（ADR-0023）
       await browser.waitUntil(
         async () =>
-          (await browser.execute(() => !!document.querySelector('[data-e2e="hooks-config-panel"]'))) === true,
-        { timeout: 15000, timeoutMsg: "hooks 配置页未就绪" },
+          (await browser.execute(() => !!document.querySelector('[data-e2e="agent-hooks-page-claude"]'))) === true,
+        { timeout: 15000, timeoutMsg: "agent.claude.hooks 页未就绪" },
       );
-      // CLI 选择行：claude 按钮（logo 16×16 + displayName）+ 编辑器槽
-      const row = await browser.execute(() => {
-        const panel = document.querySelector('[data-e2e="hooks-config-panel"]');
-        const btn = panel?.querySelector('[data-e2e="hooks-cli-claude"]');
-        const imgs = panel
-          ? Array.from(panel.querySelectorAll<HTMLImageElement>('img[src="/cli-icons/claude.png"]'))
-          : [];
+      // Agent 组分节标题：不可点 div + claude logo + displayName "Claude Code"
+      const nav = await browser.execute(() => {
+        const header = document.querySelector('[data-e2e="settings-nav-agent-claude"]');
+        const img = header?.querySelector("img");
         return {
-          hasPanel: !!panel,
-          hasBtn: !!btn,
-          btnText: btn?.textContent ?? "",
-          logoCount: imgs.length,
+          hasHeader: !!header,
+          isDiv: header?.tagName === "DIV",
+          headerText: header?.textContent ?? "",
+          logoSrc: img?.getAttribute("src") ?? null,
+          navItem: !!document.querySelector('[data-e2e="settings-nav-agent.claude.hooks"]'),
         };
       });
-      expect(row.hasPanel).toBe(true);
-      expect(row.hasBtn).toBe(true);
-      expect(row.btnText).toContain("claude");
-      expect(row.logoCount).toBeGreaterThan(0);
+      expect(nav.hasHeader).toBe(true);
+      expect(nav.isDiv).toBe(true);
+      expect(nav.headerText).toContain("Claude Code");
+      expect(nav.logoSrc).toBe("/cli-icons/claude.png");
+      expect(nav.navItem).toBe(true);
     } finally {
       try { await closeSettingsPanels(); } catch { /* 忽略 */ }
       try { rmSync(tempDir, { recursive: true, force: true }); } catch { /* 忽略 */ }
@@ -656,10 +656,10 @@ describe("设置中心 (F11, SC-E2E-02)", () => {
       await createProject(tempDir);
       await waitForDockviewApi();
       await openSettingsCenter();
-      await switchSettingsPage("hooks");
+      await switchSettingsPage("agent.claude.hooks");
       await browser.waitUntil(
         async () =>
-          (await browser.execute(() => !!document.querySelector('[data-e2e="hooks-config-panel"]'))) === true,
+          (await browser.execute(() => !!document.querySelector('[data-e2e="agent-hooks-page-claude"]'))) === true,
         { timeout: 15000, timeoutMsg: "hooks 配置页未就绪" },
       );
       // JSON 模式编辑器就绪（默认 JSON 模式；JsonMode 挂载点 data-e2e 随迁移保留）
@@ -669,7 +669,7 @@ describe("设置中心 (F11, SC-E2E-02)", () => {
         { timeout: 15000, timeoutMsg: "hooks JSON 编辑器未就绪" },
       );
 
-      // 注入合法 hooks JSON → 编辑器 dirty → 壳 dirty 圆点（settings-nav-dirty-hooks）
+      // 注入合法 hooks JSON → 编辑器 dirty → 壳 dirty 圆点（settings-nav-dirty-agent.claude.hooks）
       const hooksJson = JSON.stringify({
         PreToolUse: [
           {
@@ -685,7 +685,7 @@ describe("设置中心 (F11, SC-E2E-02)", () => {
       expect(injected).toBe(true);
       await browser.waitUntil(
         async () =>
-          (await browser.execute(() => !!document.querySelector('[data-e2e="settings-nav-dirty-hooks"]'))) === true,
+          (await browser.execute(() => !!document.querySelector('[data-e2e="settings-nav-dirty-agent.claude.hooks"]'))) === true,
         { timeout: 8000, timeoutMsg: "hooks 页 dirty 圆点未出现（dirty 未上报壳）" },
       );
 
@@ -715,9 +715,9 @@ describe("设置中心 (F11, SC-E2E-02)", () => {
       const state = await browser.execute(
         () => (window as any).__slterm_e2e_getSettingsPanelState?.() ?? null,
       );
-      expect(state?.selectedPage).toBe("hooks");
+      expect(state?.selectedPage).toBe("agent.claude.hooks");
       expect(await browser.execute(
-        () => !!document.querySelector('[data-e2e="hooks-config-panel"]'),
+        () => !!document.querySelector('[data-e2e="agent-hooks-page-claude"]'),
       )).toBe(true);
       const doc = await browser.execute(
         () => (window as any).__slterm_e2e_getHooksConfigJson?.() ?? null,

@@ -13,6 +13,8 @@ import React from "react";
 import SettingsPanel from "../panels/settings/SettingsPanel";
 import { getSettingsPageRegistry } from "../features/settingsCenter";
 import type { SettingsPageProps } from "../features/settingsCenter";
+import { cliProfileRegistry } from "../features/cliProfiles/cliProfileRegistry";
+import type { CodingCliProfile } from "../features/cliProfiles/types";
 import type { DockviewPanelApi, DockviewApi } from "dockview-react";
 import {
   markPanelFocusIntent,
@@ -48,12 +50,12 @@ const StubPageA: React.FC<SettingsPageProps> = ({ pageParams, onPageParamsChange
 /** stub 配置页 B（global） */
 const StubPageB: React.FC<SettingsPageProps> = () => <div data-e2e="stub-page-b">B</div>;
 
-/** stub 配置页（project 组） */
-const StubPageProject: React.FC<SettingsPageProps> = () => (
-  <div data-e2e="stub-page-project">P</div>
+/** stub 配置页（agent 组） */
+const StubPageAgent: React.FC<SettingsPageProps> = () => (
+  <div data-e2e="stub-page-agent">P</div>
 );
 
-/** 注册 stub 页（global 两页 + project 一页；清空 pages.ts 副作用残留） */
+/** 注册 stub 页（global 两页 + agent 一页；清空 pages.ts 副作用残留） */
 function registerStubs() {
   const registry = getSettingsPageRegistry();
   registry._reset();
@@ -72,10 +74,11 @@ function registerStubs() {
     order: 20,
   });
   registry.register({
-    id: "stub-project",
-    title: "Stub Project",
-    group: "project",
-    component: StubPageProject,
+    id: "stub-agent",
+    title: "Stub Agent",
+    group: "agent",
+    cliId: "test-cli",
+    component: StubPageAgent,
     order: 5,
   });
 }
@@ -122,6 +125,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   getSettingsPageRegistry()._reset();
+  cliProfileRegistry._reset();
   _resetPanelFocusIntent();
 });
 
@@ -175,13 +179,13 @@ describe("导航组序与渲染", () => {
     expect(document.activeElement).not.toBe(root);
   });
 
-  it("导航组序：global 组在 project 组之前（组标题 DOM 顺序）", () => {
+  it("导航组序：global 组在 agent 组之前（组标题 DOM 顺序）", () => {
     registerStubs();
     renderPanel({ panelId: "settings-page-a" });
     const groups = document.querySelectorAll('[data-e2e^="settings-nav-group-"]');
     expect(groups.length).toBe(2);
     expect(groups[0].getAttribute("data-e2e")).toBe("settings-nav-group-global");
-    expect(groups[1].getAttribute("data-e2e")).toBe("settings-nav-group-project");
+    expect(groups[1].getAttribute("data-e2e")).toBe("settings-nav-group-agent");
   });
 
   it("页项 data-e2e = settings-nav-<id>；选中渲染对应页组件", () => {
@@ -189,10 +193,44 @@ describe("导航组序与渲染", () => {
     renderPanel({ panelId: "settings-page-a", selectedPage: "stub-b" });
     expect(document.querySelector('[data-e2e="settings-nav-stub-a"]')).not.toBeNull();
     expect(document.querySelector('[data-e2e="settings-nav-stub-b"]')).not.toBeNull();
-    expect(document.querySelector('[data-e2e="settings-nav-stub-project"]')).not.toBeNull();
+    expect(document.querySelector('[data-e2e="settings-nav-stub-agent"]')).not.toBeNull();
     // 选中 stub-b → 渲染 B 组件，A 不渲染
     expect(document.querySelector('[data-e2e="stub-page-b"]')).not.toBeNull();
     expect(document.querySelector('[data-e2e="stub-page-a"]')).toBeNull();
+  });
+
+  it("agent 组导航：cliId 分节标题（logo + displayName，不可点 div）+ 子页缩进列表", () => {
+    cliProfileRegistry.register({
+      id: "test-cli",
+      displayName: "Test CLI",
+      commands: ["test-cli"],
+      iconSrc: "/cli-icons/test-cli.png",
+      tabTitle: "test-cli",
+      capabilities: {},
+    } satisfies CodingCliProfile);
+    registerStubs();
+    renderPanel({ panelId: "settings-page-a" });
+
+    // 分节标题 = div（非 button，不可点）+ displayName 文本 + logo img
+    const header = document.querySelector('[data-e2e="settings-nav-agent-test-cli"]');
+    expect(header).not.toBeNull();
+    expect(header!.tagName).toBe("DIV");
+    expect(header!.textContent).toContain("Test CLI");
+    expect(header!.querySelector("img")).not.toBeNull();
+
+    // 子页按钮在分节标题之后（缩进形态 = paddingLeft 24）
+    const item = document.querySelector('[data-e2e="settings-nav-stub-agent"]');
+    expect(item).not.toBeNull();
+    expect((item as HTMLElement).style.paddingLeft).toBe("24px");
+  });
+
+  it("agent 页 cliId 未注册 profile → 分节标题回退 cliId 文本且无 logo（防御）", () => {
+    registerStubs(); // stub-agent 的 cliId = test-cli，注册表无此 profile
+    renderPanel({ panelId: "settings-page-a" });
+    const header = document.querySelector('[data-e2e="settings-nav-agent-test-cli"]');
+    expect(header).not.toBeNull();
+    expect(header!.textContent).toContain("test-cli");
+    expect(header!.querySelector("img")).toBeNull();
   });
 
   it("params.selectedPage 失效（注册表无此页）→ 回退全局组第一页", () => {

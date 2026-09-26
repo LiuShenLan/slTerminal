@@ -36,6 +36,7 @@ import {
   INPUT_BORDER,
 } from "../../../theme";
 import type { SettingsPageProps } from "../../../features/settingsCenter/types";
+import SettingsSection from "./SettingsSection";
 
 /** 分组展示序（目录序）：global/terminal/editor/explorer */
 const CATEGORY_ORDER: CommandCategory[] = ["global", "terminal", "editor", "explorer"];
@@ -188,13 +189,7 @@ const KeybindingsPage: React.FC<SettingsPageProps> = () => {
           const list = grouped.get(cat) ?? [];
           if (list.length === 0) return null;
           return (
-            <div key={cat} style={{ marginBottom: 16 }}>
-              <div
-                data-e2e={`kb-group-${cat}`}
-                style={{ fontSize: 12, color: DIM_FG, marginBottom: 6 }}
-              >
-                {CATEGORY_TITLES[cat]}
-              </div>
+            <SettingsSection key={cat} title={CATEGORY_TITLES[cat]} testId={`kb-group-${cat}`}>
               {list.map((cmd) => {
                 const effective = registry.getEffectiveKeystroke(cmd.id);
                 const hasOverride = Object.prototype.hasOwnProperty.call(overrides, cmd.id);
@@ -279,7 +274,7 @@ const KeybindingsPage: React.FC<SettingsPageProps> = () => {
                   </div>
                 );
               })}
-            </div>
+            </SettingsSection>
           );
         })}
       </div>

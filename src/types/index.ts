@@ -8,6 +8,7 @@ export * from "./git";
 export * from "./notify";
 export * from "./agent";
 export * from "./agentHistory";
+export * from "./agentDirs";
 export * from "./hooksConfig";
 export * from "./backgroundTasks";
 export * from "./planBalance";

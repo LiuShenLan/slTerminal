@@ -67,17 +67,17 @@ markdown-it 组合（GFM/任务列表/KaTeX/代码高亮/mermaid 宿主渲染/�
 ## 设置中心（F11）
 
 **设置中心**（Settings Center）：
-本应用统一配置入口的 Dockview 面板（面板类型 `settings`）。左导航（全局/项目两组）+ 右侧配置页槽位，经 SettingsPageRegistry 分派渲染；「配置」钮为唯一入口（无项目点击 → toast「请先创建项目」）。
+本应用统一配置入口的 Dockview 面板（面板类型 `settings`）。左导航（全局/Agent 两组，ADR-0023——Agent 组按 CLI 分节，分节标题不可点、子页缩进）+ 右侧配置页槽位，经 SettingsPageRegistry 分派渲染；「配置」钮为唯一入口（无项目点击 → toast「请先创建项目」）。
 _Avoid_: 配置面板, 设置面板
 
 **配置页**（Settings Page）：
-设置中心内的注册单元，一个配置域一个页。新增配置页 = 实现组件 + 注册一条，框架零改动。
+设置中心内的注册单元，一个配置域一个页。新增配置页 = 实现组件 + 注册一条，框架零改动。Agent 组页 id 形态 = `agent.<cliId>.<page>`。
 
 **全局组**：
 应用级单例配置，无需项目上下文即可编辑（快捷键、后台定时任务）。
 
-**项目组**：
-需活跃项目上下文才能编辑的配置（Hooks 配置）；无项目时入口被 toast 拦截，页不可达。
+**Agent 组**：
+按编码 CLI 分节的配置组（ADR-0023，替代原「项目组」）——每 CLI 一个分节（logo + displayName 标题），子页为该 CLI 的配置（基础配置 / Hooks 配置）。
 
 **前端消费型配置**：
 消费侧在前端（store/注册表）的配置域，后端纯透传存储（fontSize/keybindings/sideBar/colorScheme）。写通道 = 通用 `save_settings` 段写。
@@ -119,7 +119,7 @@ FIFO 字节队列。前端 Channel 断开时缓存 PTY 最新输出，重连时�
 一个编码 CLI 的完整能力描述与注册单元——身份识别（commands 内置命令集 + 品牌 logo）+ 分域能力声明（hooks 注入/事件状态映射/通知分类/历史 provider/用量百分比策略/配置编辑器），能力可选（未声明即该域不可用）。前端为统一的 CliProfileRegistry；后端按能力拆分为 hooks/history 两个 cliId 键注册表（分别见 hooks/provider.rs 与 agent_history/provider.rs）。commands 为**内置静态声明**（D3 命名空间计算的唯一真值源）；用户别名独立存 `cliAliases` 段，**不**并入 commands。
 
 **CLI 别名**（CLI Alias）：
-用户经设置中心「CLI 别名」页为某编码 CLI 追加配置的启动命令名（如 `cc` → claude），运行时经注册表别名快照并入该 CLI 的 OSC 133 C 匹配键集——别名命中与内置命令命中完全等价（页签改名/logo/session 全链路）。存应用 settings.json `cliAliases` 段（cliId → 别名数组），纯透传校验在前端；全命名空间唯一（不得撞任何 profile 内置命令或其它别名，D3），大小写敏感精确匹配（D2）。与套餐「URL 别名」（F10，计费来源判定）不同域。语义细节见 aliasValidation.ts 与 cliProfiles/CLAUDE.md、ADR-0014/0015。
+用户经设置中心 Agent 组「基础配置」页（CLI 别名节）为某编码 CLI 追加配置的启动命令名（如 `cc` → claude），运行时经注册表别名快照并入该 CLI 的 OSC 133 C 匹配键集——别名命中与内置命令命中完全等价（页签改名/logo/session 全链路）。存应用 settings.json `cliAliases` 段（cliId → 别名数组），纯透传校验在前端；全命名空间唯一（不得撞任何 profile 内置命令或其它别名，D3），大小写敏感精确匹配（D2）。与套餐「URL 别名」（F10，计费来源判定）不同域。语义细节见 aliasValidation.ts 与 cliProfiles/CLAUDE.md、ADR-0014/0015。
 
 **应用运行期**：
 应用进程的一次运行——ID 生成等"单运行期内唯一"语义的准确表述。
@@ -148,8 +148,11 @@ FIFO 字节队列。前端 Channel 断开时缓存 PTY 最新输出，重连时�
 应用最左侧的窄条（46px），容纳侧栏视图按钮。按钮可通过鼠标左键拖拽在上区/下区之间移动，决定对应视图的展示半区。底部固定「配置」钮——设置中心的唯一入口（无项目点击 → toast「请先创建项目」；不入视图注册表，不参与拖拽/持久化）。
 
 **侧栏视图**（Side View）：
-活动栏按钮对应的可开关内容视图（导航树视图、文件浏览器视图、Commit 视图）。点击按钮开关视图；视图在侧栏区中展示。
+活动栏按钮对应的可开关内容视图（导航树视图、文件浏览器视图、Commit 视图、Agent 全局文件视图）。点击按钮开关视图；视图在侧栏区中展示。
 _Avoid_: 页面, 面板
+
+**Agent 全局文件视图**：
+侧栏视图（id `agentFiles`）——agent 节点（按 CLI profile 注册序，仅声明 globalFiles 能力者）展开为该 CLI 全局配置目录（如 `~/.claude`）的文件浏览器，功能与文件浏览器完全相同；展示内容可配置（全部/自定义模式 + 「显示运行时文件」开关，配置入口在设置中心 Agent 组「基础配置」页）。
 
 **项目列表**：
 统一导航树（nav 视图）中的项目层级——项目 → 页面 → 会话三级树，历史会话折叠为计数节点挂项目下（2026-08 由原二级树并入导航树，ADR-0003）。管理项目 CRUD、操作页面 CRUD、页面切换导航。新建项目或操作页面时布局为空——不自动创建终端面板，由用户手动添加。
@@ -271,7 +274,7 @@ pty_spawn 时注入子进程环境块的环境变量。经 shell → claude → 
 CC settings.json 的三个编辑层级——user（`~/.claude/settings.json`）、project（`.claude/settings.json`）、local（`.claude/settings.local.json`）。优先级 local > project > user。
 
 **双模式面板**：
-设置中心「Hooks 配置」页（项目组）内 hooks 编辑器的两种编辑模式——GUI 表单（Master-Detail）与 JSON 编辑器（CM6 + Schema 校验），顶部切换、实时同步编辑同一份配置。
+设置中心 Agent 组「Hooks 配置」页（`agent.<cliId>.hooks`）内 hooks 编辑器的两种编辑模式——GUI 表单（Master-Detail）与 JSON 编辑器（CM6 + Schema 校验），顶部切换、实时同步编辑同一份配置。
 
 **Agent Status 视图**：
 ~~侧栏视图（id `agent-status`），一屏总览当前活跃项目所有运行中的编码 CLI 会话。~~ **已退役（2026-08）**：视图并入统一导航树（NavTree 活跃会话区，UI 重设计 ADR-0003），`useAgentStatus` 数据层留存供导航树消费（详见 agentStatus 模块文档）。
@@ -337,7 +340,7 @@ UI 背景色的 6 档离散取值（l0-content `#0a0a0b` → l5-active `#2b2b31`
 暗色界面分隔线的唯一形态——半透明白 1px 线，两档：默认 `rgba(255,255,255,0.055)`（sash/栏底线/侧栏边线/树引导线）、加强 `rgba(255,255,255,0.09)`（浮层与输入框描边）。禁止实色粗边框。
 
 **统一导航树**：
-侧栏导航视图的信息架构——树层级恰为 项目 → 页面 → 会话，活跃会话挂页面下、历史会话折叠为计数节点挂项目下；文件浏览器不在树内，是活动栏独立视图。活动栏固定三槽：导航树 / 文件 / Commit，底部「配置」钮。
+侧栏导航视图的信息架构——树层级恰为 项目 → 页面 → 会话，活跃会话挂页面下、历史会话折叠为计数节点挂项目下；文件浏览器不在树内，是活动栏独立视图。活动栏固定四槽：导航树 / 文件 / Commit / Agent 全局文件（ADR-0024），底部「配置」钮。
 
 **状态圆点**：
 会话运行状态的可视化——7px 圆点，F3 四态完整映射：working→绿=运行、attention→黄=等待、done→灰=空闲/结束、error→红=错误；出现于会话行与终端页签。替代 F3 四态 emoji 的视觉呈现（状态语义来源不变）。
@@ -360,3 +363,4 @@ UI 壳层与内容区配色各自独立的用色体系——壳层走明度阶�
 | `hook-event` / `onHookEvent` | `agent-event` / `onAgentEvent` | 信号广播按 agent 域泛化（MC-202） |
 | `claude_history_*` / `claudeHistory` / `claude-history-*` | `agent_history_*` / `agentHistory` / `agent-history-*` | 历史会话模块泛化为 CLI 无关（MC-5） |
 | `claudeSession` / `setClaudeSession` | `agentSession` / `setAgentSession` | 会话模型泛化（MC-402） |
+| 项目组（设置中心） | Agent 组 | 设置中心全局/Agent 二分（ADR-0023） |

@@ -19,6 +19,7 @@ export const config: WebdriverIO.Config = {
 
   specs: [
     './agent.e2e.ts',
+    './agent-files.e2e.ts',
     './background-tasks.e2e.ts',
     './cli-aliases.e2e.ts',
     './commit.e2e.ts',

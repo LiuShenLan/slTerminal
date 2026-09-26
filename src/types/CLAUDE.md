@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 存在理由
 
-DTO 类型定义层（硬约束 #4，CP-024 单源化）。`src/types/` 的 9 个域文件由 ts-rs 从 Rust `#[derive(TS)]` 生成（`src-tauri/` 侧各 DTO 模块），**禁手改**。本目录只放类型定义，不含逻辑；残面（Rust 无对应或组合别名的前端形态）收容于 `local.ts` / `hooksConfigGui.ts`。
+DTO 类型定义层（硬约束 #4，CP-024 单源化）。`src/types/` 的 10 个域文件由 ts-rs 从 Rust `#[derive(TS)]` 生成（`src-tauri/` 侧各 DTO 模块），**禁手改**。本目录只放类型定义，不含逻辑；残面（Rust 无对应或组合别名的前端形态）收容于 `local.ts` / `hooksConfigGui.ts`。
 
 ## 单源化（ts-rs）契约
 
@@ -28,6 +28,7 @@ DTO 类型定义层（硬约束 #4，CP-024 单源化）。`src/types/` 的 9 �
 | `hooks/claude/config.rs` Layer(→`HooksLayer`) / MatcherGroup(→`MatcherGroupJson`) / HookHandler(→`HookHandlerJson`) | `hooksConfig.ts` | 类型级 `#[ts(rename)]` 对齐前端消费名 |
 | `background_tasks/mod.rs` BackgroundTaskInfo | `backgroundTasks.ts` | |
 | `plan_balance/mod.rs` PlanBalanceInfo / AmountInfo / WindowsInfo / WindowInfo | `planBalance.ts` | |
+| `agent_dirs.rs` AgentGlobalDir | `agentDirs.ts` | ADR-0024 agent 全局目录 DTO（cliId + path + exists） |
 
 ### ts-rs 坑（10.1 实测登记，改版本前先核对）
 
@@ -49,12 +50,12 @@ DTO 类型定义层（硬约束 #4，CP-024 单源化）。`src/types/` 的 9 �
 
 | 文件 | 内容 | 理由 |
 |---|---|---|
-| `local.ts` | `TitleSource` 开放串别名；`HooksConfigJson = Record<string, MatcherGroupJson[]>` 组合别名（import 生成物）；`ContextUsageSignal` 前端窄视图；`BACKGROUND_TASK_IDS` / `BackgroundTaskId` / `PLAN_BALANCE_TASK_ID` / `SESSION_REFRESH_TASK_ID` 常量族 | 前端专有或组合别名——Rust 无对应可导出形态 |
+| `local.ts` | `TitleSource` 开放串别名；`HooksConfigJson = Record<string, MatcherGroupJson[]>` 组合别名（import 生成物）；`ContextUsageSignal` 前端窄视图；`BACKGROUND_TASK_IDS` / `BackgroundTaskId` / `PLAN_BALANCE_TASK_ID` / `SESSION_REFRESH_TASK_ID` 常量族；`AgentGlobalFilesConfig` / `AgentGlobalFilesMap` / `AgentGlobalFilesMode`（ADR-0024 agentGlobalFiles 段纯透传形态——后端不设 DTO，ADR-0014 先例） | 前端专有或组合别名——Rust 无对应可导出形态 |
 | `hooksConfigGui.ts` | `HooksConfigGui` / `HookEventGroup` / `HookMatcherGroup` / `HookHandlerGui` | 前端 GUI 模型，非后端 DTO（configEditor 面板展示/编辑用；configEditor/configModel.ts 另有同构镜像） |
 
 ### 修改注意事项
 
-改 Rust DTO 字段必须同步：Rust derive/`#[ts]` 属性 → 跑导出测试 → git diff 守卫 → `src/ipc/` 对应 wrapper（如需）→ 模块 CLAUDE.md（如需）→ `src/__tests__/ipc-*-contract.test.ts`（契约键集合零改动策略——expectExactKeys 守 JS 侧 payload 形状，与类型来源无关）。**禁止直接编辑 9 个域生成文件**。
+改 Rust DTO 字段必须同步：Rust derive/`#[ts]` 属性 → 跑导出测试 → git diff 守卫 → `src/ipc/` 对应 wrapper（如需）→ 模块 CLAUDE.md（如需）→ `src/__tests__/ipc-*-contract.test.ts`（契约键集合零改动策略——expectExactKeys 守 JS 侧 payload 形状，与类型来源无关）。**禁止直接编辑 10 个域生成文件**。
 
 ## 测试模式
 

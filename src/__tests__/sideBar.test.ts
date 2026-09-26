@@ -46,7 +46,7 @@ import {
 } from "../features/sideViews/sideBarState";
 
 // 测试用 stub 视图定义（需与 DEFAULT_ZONES 中的 id 对齐，否则 reconcileZones 会过滤未注册 id）
-// NAV-05 三槽：nav / explorer / commit（agent-status 已退役）
+// 四槽：nav / explorer / commit / agentFiles
 // icon 字段为组件形态（IC-06）——stub 不渲染内容
 function registerTestViews(): void {
   sideViewRegistry.register({
@@ -64,6 +64,12 @@ function registerTestViews(): void {
   sideViewRegistry.register({
     id: "commit",
     title: "Commit",
+    icon: () => null,
+    component: () => null,
+  });
+  sideViewRegistry.register({
+    id: "agentFiles",
+    title: "Agent 全局文件",
     icon: () => null,
     component: () => null,
   });
@@ -207,8 +213,8 @@ describe("sideBar store", () => {
     });
     await useSideBar.getState().loadFromDisk();
     const s = useSideBar.getState();
-    // reconcileZones 补全注册表中缺失的 commit
-    expect(s.zones).toEqual({ top: ["explorer", "nav", "commit"], bottom: [] });
+    // reconcileZones 补全注册表中缺失的 commit 与 agentFiles
+    expect(s.zones).toEqual({ top: ["explorer", "nav", "commit", "agentFiles"], bottom: [] });
     expect(s.open).toEqual({ top: "explorer", bottom: null });
     expect(s.width).toBe(320);
     expect(s.splitRatio).toBe(0.7);
@@ -353,8 +359,8 @@ describe("sideBar store", () => {
     });
     await useSideBar.getState().loadFromDisk();
     const s = useSideBar.getState();
-    // "ghost" 被过滤掉，explorer、commit 补全到上区末尾
-    expect(s.zones.top).toEqual(["nav", "explorer", "commit"]);
+    // "ghost" 被过滤掉，explorer、commit、agentFiles 补全到上区末尾
+    expect(s.zones.top).toEqual(["nav", "explorer", "commit", "agentFiles"]);
     expect(s.zones.bottom).toEqual([]);
     // open 指向未注册 id → 清 null
     expect(s.open).toEqual({ top: null, bottom: null });
@@ -375,9 +381,9 @@ describe("sideBar store", () => {
     });
     await useSideBar.getState().loadFromDisk();
     const s = useSideBar.getState();
-    // 未注册 id（projects/agent-status）全部丢弃；缺失的注册 id（nav）
-    // 按 registeredIds 顺序补全上区末尾；已注册的 commit 留在 bottom 原位
-    expect(s.zones).toEqual({ top: ["explorer", "nav"], bottom: ["commit"] });
+    // 未注册 id（projects/agent-status）全部丢弃；缺失的注册 id（nav/agentFiles）
+    // 按注册序补全上区末尾；已注册的 commit 留在 bottom 原位
+    expect(s.zones).toEqual({ top: ["explorer", "nav", "agentFiles"], bottom: ["commit"] });
     // open 指向被丢弃的 agent-status → 置 null；bottom 的 commit 打开态保留
     expect(s.open).toEqual({ top: null, bottom: "commit" });
     expect(s.loaded).toBe(true);

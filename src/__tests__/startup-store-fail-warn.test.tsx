@@ -21,6 +21,8 @@ const mocks = vi.hoisted(() => {
   // 后端下 reject → store 内 catch + App 外层 catch 双 warn，干扰 4 次断言
   // （照 CP-010 为 getConptyStatus 补 mock 的先例）
   const mockConptyModesLoad = vi.fn().mockResolvedValue(undefined);
+  // 第 6 个 store（agentGlobalFiles）同 CP-009 口径：mock 加载成功，计数不含
+  const mockAgentGlobalFilesLoad = vi.fn().mockResolvedValue(undefined);
   const mockLoadAllProjects = vi.fn().mockResolvedValue(undefined);
   const mockMarkPersistenceReady = vi.fn();
   const mockSetActivePage = vi.fn();
@@ -32,6 +34,7 @@ const mocks = vi.hoisted(() => {
     mockSideBarLoad,
     mockCliAliasesLoad,
     mockConptyModesLoad,
+    mockAgentGlobalFilesLoad,
     mockLoadAllProjects,
     mockMarkPersistenceReady,
     mockSetActivePage,
@@ -42,6 +45,7 @@ const mocks = vi.hoisted(() => {
       mockSideBarLoad.mockClear();
       mockCliAliasesLoad.mockClear();
       mockConptyModesLoad.mockClear();
+      mockAgentGlobalFilesLoad.mockClear();
       mockLoadAllProjects.mockClear();
       mockMarkPersistenceReady.mockClear();
       mockSetActivePage.mockClear();
@@ -172,6 +176,14 @@ vi.mock("../stores/cliAliases", () => ({
 vi.mock("../stores/conptyInputModes", () => ({
   useConptyInputModes: {
     getState: () => ({ loadFromDisk: mocks.mockConptyModesLoad }),
+  },
+  cancelPendingSave: vi.fn(),
+}));
+
+// 第 6 个 store（agentGlobalFiles）同 CP-009 口径——mock 加载成功不产 warn
+vi.mock("../stores/agentGlobalFiles", () => ({
+  useAgentGlobalFiles: {
+    getState: () => ({ loadFromDisk: mocks.mockAgentGlobalFilesLoad }),
   },
   cancelPendingSave: vi.fn(),
 }));

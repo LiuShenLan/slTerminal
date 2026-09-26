@@ -12,11 +12,13 @@
 import { NavTree } from "../navTree";
 import { ExplorerPanel } from "../explorer";
 import { CommitView } from "../commit/CommitView";
+import { AgentFilesPanel } from "../agentFiles/AgentFilesPanel";
 import { sideViewRegistry } from "./sideViewRegistry";
 import {
   IconNav,
   IconFiles,
   IconCommit,
+  IconAgentFiles,
 } from "../../lib/icons";
 
 // 注册导航树视图（NAV-05：原 projects/agent-status 两视图并入导航树）
@@ -42,4 +44,13 @@ sideViewRegistry.register({
   title: "Commit",
   icon: IconCommit,
   component: CommitView,
+});
+
+// 注册「Agent 全局文件」视图（F1：agent 节点 → 全局配置目录文件浏览器，
+// 展示内容经 settings agentGlobalFiles 段配置；pinned watcher ADR-0024）
+sideViewRegistry.register({
+  id: "agentFiles",
+  title: "Agent 全局文件",
+  icon: IconAgentFiles,
+  component: AgentFilesPanel,
 });

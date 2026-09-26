@@ -26,6 +26,25 @@ import {
 /** claude cliId 公共键（通用层缺省回退一律 import 此常量，禁止写 "claude" 字面量） */
 export const CLAUDE_CLI_ID = "claude";
 
+/** claude 全局配置目录的运行时文件名单（globalFiles 能力域，AC-5 领地单点常量）：
+ *  缓存/会话/日志等无配置价值的官方运行时产物——「Agent 全局文件」视图「全部」模式
+ *  默认排除；「显示运行时文件」开关开启后展示并监听。随 claude 版本演进补齐。
+ *  保留展示（来源/价值不确定或属配置资产，宁缺毋滥）：backups、daemon\*、jobs、tasks、
+ *  plans、agent-memory、plugins、agents、skills、CLAUDE.md、settings.json 等不在此列 */
+export const CLAUDE_RUNTIME_PATHS: string[] = [
+  "projects",
+  "sessions",
+  "shell-snapshots",
+  "history.jsonl",
+  "telemetry",
+  "stats-cache.json",
+  "ide",
+  "paste-cache",
+  "cache",
+  "file-history",
+  "session-env",
+];
+
 /** context 用量信号事件名（statusline 桥接通道）——AC-5 守卫：claude 事件名字面量
  *  只允许出现在 profiles/claude/（claude 合法领地），通用层消费一律 import 本常量 */
 export const CONTEXT_USAGE_EVENT = "ContextUsage";
@@ -46,7 +65,7 @@ export const EXIT_EVENT = "Exit";
 /** claude profile 身份域定义（导出供测试 _reset 后重注册） */
 export const claudeProfile: CodingCliProfile = {
   id: CLAUDE_CLI_ID,
-  displayName: CLAUDE_CLI_ID,
+  displayName: "Claude Code",
   commands: [CLAUDE_CLI_ID],
   iconSrc: "/cli-icons/claude.png",
   tabTitle: CLAUDE_CLI_ID,
@@ -72,6 +91,12 @@ export const claudeProfile: CodingCliProfile = {
       supportsFork: true,
       buildResumeCommand,
       buildRestoreInput,
+    },
+    // 「Agent 全局文件」侧栏视图能力：配置目录 home 相对路径 + 运行时文件名单
+    // （沙箱放行真值源在后端 agent_dirs.rs 静态表——ADR-0024，此处仅能力声明）
+    globalFiles: {
+      configDir: ".claude",
+      runtimePaths: CLAUDE_RUNTIME_PATHS,
     },
   },
 };

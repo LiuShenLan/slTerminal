@@ -543,9 +543,9 @@ describe("场景序列（S1–S6）", () => {
 // ── 常量验证 ──
 
 describe("常量", () => {
-  it("DEFAULT_ZONES 上区为 NAV-05 三槽 nav、explorer、commit", () => {
+  it("DEFAULT_ZONES 上区四槽 nav、explorer、commit、agentFiles", () => {
     expect(DEFAULT_ZONES).toEqual({
-      top: ["nav", "explorer", "commit"],
+      top: ["nav", "explorer", "commit", "agentFiles"],
       bottom: [],
     });
   });

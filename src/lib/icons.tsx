@@ -12,9 +12,12 @@
 //   时钟 IconHistory    = Clock
 //   空态 IconEmptyBox   = FolderOpen（空态文件夹）
 //   告警 IconAlertTriangle = TriangleAlert（lucide 2.x 实际导出名，旧别名 AlertTriangle 已移除）
+//   Agent 全局文件 IconAgentFiles = Bot（活动栏已有 Folder/FolderTree 两个文件夹系，
+//     第三个辨识度差；Bot 直表「Agent」语义，与视图标题组合语义完整）
 
 import type { LucideIcon } from "lucide-react";
 import {
+  Bot,
   ChevronDown,
   ChevronRight,
   Clock,
@@ -53,6 +56,7 @@ function makeIcon(Comp: LucideIcon) {
 export const IconNav = makeIcon(FolderTree); // 导航树（活动栏导航视图）
 export const IconFiles = makeIcon(Folder); // 文件浏览器（活动栏文件视图）
 export const IconCommit = makeIcon(GitBranch); // 提交（活动栏 commit 视图）
+export const IconAgentFiles = makeIcon(Bot); // Agent 全局文件（活动栏 agentFiles 视图）
 export const IconConfig = makeIcon(Settings); // 配置（活动栏底部「配置」钮）
 export const IconChevronRight = makeIcon(ChevronRight); // 树折叠节点展开箭头（12px 用法）
 export const IconChevronDown = makeIcon(ChevronDown); // 树展开节点收起箭头（12px 用法）
