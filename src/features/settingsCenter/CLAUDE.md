@@ -14,7 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### 注册触发点（side-effect import）
 
-`pages.ts` import 即注册全部配置页——生产注册触发点为 `SettingsPanel.tsx` 顶部 `import "../../features/settingsCenter/pages"`（import 链保持引用，禁止隐式初始化）。新增全局配置页 = pages.ts 追加 register 调用即可，壳零改动；agent 组页 = `syncAgentPagesFromProfiles()` 遍历 cliProfileRegistry 枚举（`agent.<cliId>.basic` 恒有 + `agent.<cliId>.hooks` 经 hasConfigEditor 门控），pages.ts 顶层调用一次（side-effect 语义不变）。**动态注册的 profile**（E2E mockcli 夹具）静态枚举不覆盖——注册后须手动调 `syncAgentPagesFromProfiles()` 幂等补注册（register 同 id 幂等覆盖，helpers.ts 注册 helper 先例）。测试在 beforeEach/afterEach 调 `_reset()` 保证用例隔离。
+`pages.ts` import 即注册全部配置页——生产注册触发点为 `SettingsPanel.tsx` 顶部 `import "../../features/settingsCenter/pages"`（import 链保持引用，禁止隐式初始化）。新增全局配置页 = pages.ts 追加 register 调用即可，壳零改动；agent 组页 = `syncAgentPagesFromProfiles()` 遍历 cliProfileRegistry 枚举（`agent.<cliId>.basic` 恒有 + `agent.<cliId>.hooks` 经 hasConfigEditor 门控），pages.ts 顶层调用一次（side-effect 语义不变）。**动态注册的 profile**（E2E mockcli 夹具）静态枚举不覆盖——注册后须手动调 `syncAgentPagesFromProfiles()` 幂等补注册（register 同 id 幂等覆盖，e2e-tests/helpers.ts 注册 helper 先例）。测试在 beforeEach/afterEach 调 `_reset()` 保证用例隔离。
 
 ### openSettings 编排（活动栏配置钮入口）
 

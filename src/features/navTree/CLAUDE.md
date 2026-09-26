@@ -56,8 +56,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### 行结构契约
 
-- 行高 28（会话行 30）、圆角 5、每级左缩 15px + 发丝引导线。
-- fg 层级映射：fg-1 = `SIDEBAR_FG` / fg-2 = `SIDEBAR_COLORS.fg` / fg-3 = `DIM_FG` / fg-4 = `PLACEHOLDER_FG`。
 - 项目行：500 字重 + 彩色文件夹图标（六色盘蓝，**硬编码例外**，IC-04/ NAV-09）+「当前」pill + 页面计数 pill。
 - 页面行：`IconPage` 14px fg-3 图标；chevron 点击仅切换会话展开；行点击 = 切换页面 + 切换展开；选中 = 活跃页面。
 - 活跃会话行：`StatusDot`（F3 四态）+ CLI logo 14px（按 `row.cliId` 查 `profile.iconSrc`）+ 标题 + 迷你用量条 pill + 百分比；点击行聚焦对应终端页签。

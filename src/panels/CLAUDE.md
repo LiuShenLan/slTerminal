@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### 终端：每次挂载新建 Terminal 实例
 
-xterm.js 不支持 `term.open()` 二次调用（GitHub Issue #4978）。因此每次面板 mount 都创建新 Terminal 实例，卸载时 dispose。跨页面终端存活由 `workspace/` 层通过共享宿主 + 页组模型解决（页组容器显隐，面板不随切页卸载重建——见 `workspace/CLAUDE.md`「共享宿主 + 页组模型」节），本层不处理实例复用。
+xterm.js 不支持 `term.open()` 二次调用（GitHub Issue #4978）。因此每次面板 mount 都创建新 Terminal 实例，卸载时 dispose。跨页面终端存活由 `workspace/` 层通过共享宿主 + 页组模型解决（页组容器显隐，面板不随切页卸载重建——见 `workspace/CLAUDE.md`「共享宿主 + 派生归属模型」节），本层不处理实例复用。
 
 ### WebGL 优先 + DOM 兜底
 
@@ -63,7 +63,7 @@ htmlviewer / markdownviewer 等「文档型预览面板」共享 `src/panels/doc
 - **壳是 params 持久化单点**：选中切换与 `onPageParamsChange`（pageParams[selectedPage] 槽 merge patch）统一经 `persistParams`（`api.updateParameters` + 显式 `onLayoutChange(saveLayout)` + 按 `settings-` 前缀解析 pageId → `updatePageLayout`）——updateParameters 不触发 onDidLayoutChange，必须显式保存（F8 先例）。
 - **dirty 汇聚（SC-FE-07）**：页组件经 `SettingsPageProps.onDirtyChange` 上报 → 壳维护 dirtyMap（导航项 7px 中性色圆点，不用 F3 四态色防语义混淆）+ 同步 `dirtyRegistry`（与 DefaultTab × 关闭拦截共享同一真值源，防两处状态漂移）。切配置页时当前页 dirty → `confirmDialog` 确认丢弃（askGuard 500ms 防循环，照 hub 先例）；× 关闭拦截在 workspace 层（见 workspace/CLAUDE.md）。
 - **切项目自动关闭（SC-FE-08）**：订阅 activePageId 所属项目 ≠ 面板所属项目 → 关闭。初始评估（布局恢复挂载即不一致，新挂载不可能 dirty）静默关；变化触发 dirty 守卫 confirmDialog，取消则不关（面板暂留非活跃项目，尊重用户选择）；`activePageId === null` 不动（删除末页/启动瞬态，防连锁误关）。
-- **settings 已纳入 renderer="always"（SC-FE-06 翻案，CP-017）**：dirty 真值源（dirtyRegistry）脱离壳生命周期——壳不随页签切换卸载，dirtyMap/dirtyRegistry 条目跨切签存活（壳卸载不再 clear，条目收口到「确认丢弃关闭」动作点）。
+- **settings 已纳入 renderer="always"（SC-FE-06 翻案，CP-017）**：dirty 真值源（dirtyRegistry）脱离壳生命周期（语义全量见 `workspace/CLAUDE.md`「面板注册表」节）；壳卸载不再 clear，条目收口到「确认丢弃关闭」动作点。
 - **corrupted 警示条**：挂载 `loadSettings()` → corrupted → 顶部警示条（× 可关，`data-e2e="settings-corrupted-banner"`，不阻塞）。L2 覆盖（loadSettings mock），L4 豁免登记——写坏文件需沙箱外写，无命令通道。
 - claude 专属 hooks 编辑器归域 `features/cliProfiles/profiles/claude/configEditor/`（KZ-1，见 cliProfiles/CLAUDE.md），经 profile 的 `configEditor` 字段挂入；本面板经 Agent 组 hooks 页（`panels/settings/pages/AgentHooksPage`——按页 cliId 直渲染 configEditor，ADR-0023）接入，不再跨 features 引用。
 
@@ -141,21 +141,7 @@ xterm.js 6.0.0 原生支持 OSC 8 解析渲染。`useXterm.ts` 在 `term.open()`
 
 ### F3 页签四态指示
 
-终端页签通过双源事件合成四态（渲染层 = `StatusDot` 圆点）：
-
-| 状态 | 圆点色 | 触发源 | 说明 |
-|------|--------|--------|------|
-| `working` | 绿 | agent-event `PreToolUse`/`PostToolUse` | 工具调用中 |
-| `attention` | 黄 | OSC 133 C 或 agent-event Notification | 命令运行中或需要关注 |
-| `done` | 灰 | agent-event `Stop` | 主代理完成响应输出 |
-| `error` | 红 | agent-event `PostToolUseFailure`/`StopFailure` | 工具调用失败或轮次因 API 错误结束 |
-
-实现要点：
-
-- `useCommandDetection`：OSC 133 C 触发时 `matchByCommand` 命中 → 先 `setAgentSession` 后 `onTabStateChange({ active: true, title: profile.tabTitle, status: "attention" })`（B12）。
-- `useXterm`：新增 `onAgentEvent` 订阅 → 按 `panelId` 过滤 → 来源 CLI 经 `resolvePayloadCliId` 三级解析（ZQ-2，空串/空白 cliId 同等回退）→ `eventToStatus(event, notificationType?)`（经 `profile.hooks` 委托）→ `onTabStateChange({ active: true, status })`；`SessionEnd ∨ Exit` 双事件清状态（ZQ-6）调 `{ active: false, restoreTitle: false }`（B13）。
-- `TerminalPanel.handleTabStateChange`：`active=true` 时只有 `title` 存在才 `setTitle`，只有 `status !== undefined` 才 `updateParameters({ tabStatus: status })`；`active=false` 时 `restoreTitle !== false` 才恢复原标题 + 单清 status。
-- `params.tabIcon` emoji/img 分支已退役（IC-03），`TabState.logo`/`icon` 字段已退役。
+终端页签状态 = 双源事件合成（OSC 133 命令边界 + agent-event hooks 事件；四态→圆点色/触发源映射为各 CLI `profile.hooks.eventToStatus` 策略实现，读码即得）。决策点：来源 CLI 经 `resolvePayloadCliId` 三级解析（ZQ-2，空串/空白 cliId 同等回退）；`SessionEnd ∨ Exit` 双事件清状态（ZQ-6），走 `{ active: false, restoreTitle: false }`；先写会话再发状态回调（B12）——B12/B13 语义见上「OSC 133 命令边界」节。`params.tabIcon` emoji/img 分支已退役（IC-03），`TabState.logo`/`icon` 字段已退役。
 
 ### 中断场景已知行为（Ctrl+C）
 
@@ -165,7 +151,7 @@ Claude Code 在用户主动 Ctrl+C 中断时不发射任何 hook 事件。CP-020
 
 `usePanelActivationFocus(api, panelId, focus, ready?)`（`src/panels/usePanelActivationFocus.ts`）是面板「页签激活 → 键盘焦点进输入区」的共享 hook，双路径：
 
-- **路径① 挂载期意图消费**：`ready && api.isActive && api.isGroupActive && consumePanelFocusIntent(panelId)` → focus（**经 requestAnimationFrame 延迟一帧**——dockview overlay 容器 attach 时 visibility:hidden、下一帧才翻开，同帧 focus 被 Chromium 静默吞掉，2026-09-19 L4 取证定案，机理见外部坑「dockview overlay 渲染容器」；jsdom 不校验 CSS 可见性测不出，勿回退同步 focus）。意图令牌 = `workspace/panelFocusIntent.ts`（模块级 Set，mark/consume take 语义），由交互式打开入口在 addPanel 前写入（六入口：tabChrome 工厂/openFile/openCommitFile/openSettingsPanel/ExplorerPanel.handleOpenInTerminal/restoreSession）；去重命中分支不写意图。**fromJSON 布局恢复从不写意图 → 恢复豁免零时序依赖**（重启恢复无面板抢焦）。ready 后翻 true 补消费（容器异步挂载场景）。
+- **路径① 挂载期意图消费**：`ready && api.isActive && api.isGroupActive && consumePanelFocusIntent(panelId)` → focus（**经 requestAnimationFrame 延迟一帧**——dockview overlay 容器 attach 时 visibility:hidden、下一帧才翻开，同帧 focus 被 Chromium 静默吞掉，2026-09-19 L4 取证定案，机理见外部坑「dockview overlay 渲染容器」；jsdom 不校验 CSS 可见性测不出，勿回退同步 focus）。意图令牌 = `workspace/panelFocusIntent.ts`（模块级 Set，mark/consume take 语义），由交互式打开入口在 addPanel 前写入（六入口清单见 `workspace/CLAUDE.md`「面板聚焦意图令牌」节）；去重命中分支不写意图。**fromJSON 布局恢复从不写意图 → 恢复豁免零时序依赖**（重启恢复无面板抢焦）。ready 后翻 true 补消费（容器异步挂载场景）。
 - **路径② 激活事件联动**：订阅 `onDidActiveChange`/`onDidActiveGroupChange`（可选调用照 DefaultTab 先例）→ 双条件（isActive && isGroupActive）满足且 ready 即 focus——**不需意图**，覆盖页签点击/去重命中 focus()/switchToPageAndFocus 全路径。
 
 各面板焦点落点：terminal = xterm textarea（ready = 容器挂载）；editor/gitshow = CM view（ready = 容器就绪且非大文件形态——大文件 LargeFileViewer 只读浏览不抢焦）；diff = 右栏 CM（工作区可编辑侧，ready = "ready" 态且工作区侧未超限）；settings = 壳根容器 div（`tabIndex={-1}` 可编程聚焦，不入 Tab 序）。**docViewer 家族（htmlviewer/markdownviewer）一期不接**——跨源沙箱 iframe keyfwd 模型不同构，登记后续项。focus 回调由调用方 useCallback 稳定化（项目 eslint 无 react-hooks 插件，deps 不列 focus）。
@@ -181,7 +167,7 @@ Claude Code 在用户主动 Ctrl+C 中断时不发射任何 hook 事件。CP-020
 - **主窗口 CSP 禁 script-src 'unsafe-inline'、禁 dangerousDisableAssetCspModification（S10-② 起，CP-012）**：预览渲染于预览 CSP 域（自定义协议宿主页 iframe，内联脚本仅该域放行——ADR-0021 回迁主窗内跨源沙箱 iframe，域不变）；主窗侧 srcdoc iframe 通道已退役。收紧主窗口 CSP 不再影响预览；回潮放宽即破 CP-012 终态（csp-config.test.ts 锁死）。**img-src/font-src 的 data: 亦已回收（CP-035）**——主窗口内任何 data: 图像/字体技法（如 CSS background url(data:)）都会被 CSP 拦截（CM6 lint 波浪线曾为此改为 text-decoration 技法，见 theme/overrides.ts 注释）；data: 数据通道仅存预览域（域级 CSP meta 放行 img/font data:），主窗口零放行由 csp-config.test.ts「data: 不在主窗口任何指令」守卫锁死。
 - **CM6 `readOnly` vs `editable`**：gitshow/diff 左栏只能用 `EditorState.readOnly`，不能用 `EditorView.editable`，否则编辑器不可聚焦、快捷键失效。
 - **DiffPanel flexbox 撑开**：CM6 `.cm-content` 的 `flex-shrink: 0` + `white-space: pre` 会撑开双层 flex，必须所有 flex 子项设 `minWidth: 0`。
-- **ConPTY 并发 spawn 死锁**：PTY spawn 由后端 `SPAWN_LOCK` 串行化（详见 ../src-tauri/src/pty/CLAUDE.md），前端不直接处理，但 L1 测试必须 `--test-threads=1`。
+- **ConPTY 并发 spawn 死锁**：PTY spawn 由后端 `SPAWN_LOCK` 串行化（详见 src-tauri/src/pty/CLAUDE.md），前端不直接处理，但 L1 测试必须 `--test-threads=1`。
 - **中文 IME 合成要尽早实测**：键盘/IME 改动后须尽早用真实 WebView2 环境验证中文输入合成，避免合成路径破坏积累。
 - **PowerShell 是 OSC 133 唯一注入目标**：cmd.exe 无 shell integration，标题/状态/命令边界检测对 cmd 会话不可用。
 

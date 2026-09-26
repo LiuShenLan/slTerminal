@@ -102,7 +102,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `context: "global"`，在 `App.tsx` 中一次性注册；overrides 经 `wireKeybindings(getShortcutRegistry(), useKeybindings)` 持续同步。优先级 0-99，面板级可覆盖。
 
-**「配置」钮 = 设置中心唯一入口（F11）**（原 `global.openHooksConfig` Ctrl+Shift+H 命令已删除；SidebarTree 右键菜单随其退役）：`openSettings()` → 先 `switchToPageShared` 切页 → `openSettingsPanel(pageId)`（同页单例语义继承 C13-7，面板 id `settings-` 前缀）。无项目 → toast「请先创建项目」。编排细节见 `features/settingsCenter/CLAUDE.md`。
+**「配置」钮 = 设置中心唯一入口（F11）**（原 `global.openHooksConfig` Ctrl+Shift+H 命令已删除；SidebarTree 右键菜单随其退役）——编排（切页/开面板/无项目 toast）见 `features/settingsCenter/CLAUDE.md`。
 
 ### 用户自定义重绑定
 

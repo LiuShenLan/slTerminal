@@ -66,13 +66,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### 终端能力环境变量
 
-spawn 阶段统一注入：
-- `COLORTERM=truecolor`
-- `TERM=xterm-256color`
-- `TERM_PROGRAM=slTerminal`
-- `SLTERM_PANEL_ID=<panelId>`
-
-`SLTERM_PANEL_ID` 供 hooks 信号文件标记事件来源，变量语义见 @../hooks/CLAUDE.md。
+spawn 阶段注入清单读码即得；其中 `SLTERM_PANEL_ID` 跨模块承重——供 hooks 信号文件标记事件来源，变量语义见 @../hooks/CLAUDE.md。
 
 ### Shell 白名单（SEC-01 / SEC-15）
 
@@ -112,7 +106,7 @@ PowerShell 通过 `-EncodedCommand` 内联 `shell-integration.ps1`，避免 `%AP
 - **PowerShell 交互 shell 禁止 `-NoProfile`**：用户 profile（conda init 钩子等）必须原生加载——缺钩子则 `conda activate` 失效（win11 CondaError / win10 conda.bat 静默空转，B17）。
 - **不要把 `#[cfg(windows)]` 放到本模块外**。
 - **不要 drop stdin writer**。
-- **禁止裸 join（BE-01）**：全部线程退出点统一经 `crate::thread_join::join_with_timeout`（crate 顶层共享件，超时分支 `tracing::warn` + detach，不再无界阻塞）——全仓守卫 `rg "\.join\(\)" src-tauri/src` 仅命中 thread_join.rs 白名单一处；`CleanupPlan`/`plan_cleanup_after_join_timeout` 留 reader.rs（pty 专有清理语义，不随迁）。
+- **禁止裸 join（BE-01）**：守卫命令与共享件明细见 src-tauri/src/CLAUDE.md thread_join.rs 节；`CleanupPlan`/`plan_cleanup_after_join_timeout` 留 reader.rs（pty 专有清理语义，不随迁）。
 - **不要 stop/start 轮换 watcher**（见 @../notify/CLAUDE.md），与 pty 无关但常被误用。
 - **不要解析提示符跟踪 cwd**：portable-pty 在 Windows 不返回 cwd，只能靠 OSC 7/133 序列。
 
@@ -136,6 +130,6 @@ PowerShell 通过 `-EncodedCommand` 内联 `shell-integration.ps1`，避免 `%AP
 | spawn.rs `conpty_custom` RawChild try_wait/wait/clone_killer/as_raw_handle/Debug + ConPtyMaster::resize 有效 hpc 路径（约 :320-328/412-414/430-497） | 依赖真实子进程句柄的 Win32 组合（集成测试只 kill 不 wait） | `pty_integration_tests` 真实会话兜底 |
 | spawn.rs AttrList/CreateProcessW 失败 bail（约 :260/617-618） | 失败注入不可行 | L1 其余分支覆盖 + 无失败注入通道登记 |
 | spawn.rs SendRawHandle pending 尾（约 :543） | 句柄发送协议尾 | 同上 |
-| shell.rs 白名单拒绝分支与 canonicalize/身份比对回退（约 :59/86-88/139/184/211/290） | 依赖真实 fs/别名身份判定分支 | shell.rs 行覆盖 95.87%（残余 ~10 生产行）+ allowlist 真机用例 |
+| shell.rs 白名单拒绝分支与 canonicalize/身份比对回退（约 :59/86-88/139/184/211/290） | 依赖真实 fs/别名身份判定分支 | shell.rs 行覆盖 95.87%（2026-09-08 TQ-COV 收尾采样，残余 ~10 生产行）+ allowlist 真机用例 |
 | conpty_api.rs Bundled fn 指针 create/close/resize 臂（约 :130-171） | vendor dll 函数指针错误臂（错误注入不可行） | T6/T7 真实 LoadLibraryW 用例 + 有效路径覆盖 |
 | conpty_api.rs 生产 conpty_status + pty_conpty_status 命令胶水（约 :293-322） | 命令胶水（lib.rs run() 同构） | L2 ipc-pty-contract + 启动链 toast 真实执行 |

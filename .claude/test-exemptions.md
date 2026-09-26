@@ -22,7 +22,7 @@
 | L4 真实 OS 级按键 | embedded WDIO 无法投递 `browser.keys` 到 WebView2 页面 | 合成事件 + 页面内 dispatch 全链路；terminal.e2e.ts 粘贴用例 = E2E helper 写读往返；Ctrl+Shift+V 消费链路由 L2 keyboard.test.ts + L3 shortcut-dispatch.test.ts（TQ-E-02）覆盖 | 13 P-15 |
 | HTML postMessage 真实 WebView2 行为（opaque origin 序列化 / CSP 强制） | jsdom 无法模拟 opaque origin 与 WebView2 CSP；`e.origin === "null"` 为 WHATWG 规范推断 | L4 `html.e2e.ts` Ctrl+W postMessage 往返 + L2 四负面用例（IHE-03） | 13 P-5 |
 | `spawn.rs` 容量超限 kill 清理与 `conpty_api.rs` vendor 提取/加载回退的残余 Win32 分支 | 清理段为 I/O + 平台 API 组合，不可纯函数化；上限判定已由 `pty_capacity_*` 用例锁死 | L1 `pty_capacity_*` 3 例 + `join_with_timeout` 3 例 + `pty_integration_tests` 真实 ConPTY 往返 | TQ-COV-03 |
-| Rust 行覆盖 89.55%（23309/26029，llvm-cov html Line 列 Totals，含测试代码口径） | 距 90% 差 0.45pp；残余缺口 = main.rs fn main 结构性零覆盖（本表 fn main 3 行胶水豁免行）+ pty 模块 8 项逐条登记（命令层胶水/Job Object Win32 组合/句柄依赖分支/失败 bail/白名单真实 fs 身份判定/vendor 函数指针错误臂，见 pty/CLAUDE.md 豁免表 CP-023 段）+ 编译器生成物计数缺失 | 重点文件已达标或逐条登记豁免（TQ-COV-01/03/06 + git/CLAUDE.md 豁免表）；pty 8 项兜底逐条对应 pty/CLAUDE.md 豁免表 | TQ-COV 收尾 CP-023 |
+| Rust 行覆盖 89.55%（23309/26029，llvm-cov html Line 列 Totals，含测试代码口径；2026-09-08 采样） | 距 90% 差 0.45pp；残余缺口 = main.rs fn main 结构性零覆盖（本表 fn main 3 行胶水豁免行）+ pty 模块 8 项逐条登记（命令层胶水/Job Object Win32 组合/句柄依赖分支/失败 bail/白名单真实 fs 身份判定/vendor 函数指针错误臂，见 pty/CLAUDE.md 豁免表 CP-023 段）+ 编译器生成物计数缺失 | 重点文件已达标或逐条登记豁免（TQ-COV-01/03/06 + git/CLAUDE.md 豁免表）；pty 8 项兜底逐条对应 pty/CLAUDE.md 豁免表 | TQ-COV 收尾 CP-023 |
 | plan_balance 真实 HTTP 查询（ureq fetch）与 tokio 轮询任务本体（含动态间隔内存读取 POLL_INTERVAL_SEC 与 set_interval 落盘/内存一致链，F11 扩注） | 真实外部 API 依赖 + Tauri 运行时（规格 §3 不做 L4） | 解析与状态机 L1 全覆盖（罐装 JSON/参数化编排 + 间隔内存默认值/四维 set_interval 直调用例）+ L2 UI 四场景 + L4 频率页真实后端落盘（settings.e2e.ts ④⑤）+ 人工实测（真实账号一轮） | F10/F11 |
 | win11/win10 真实终端 conda 激活实测（profile 加载链路 + conda 钩子 + prompt 包装链） | 依赖真实 conda/miniforge 环境与交互会话，CI 无此环境 | L1 B17 参数守卫（`pwsh_args_no_noprofile_b17`）+ 双系统 debug build 人工实测 | B17 |
 | settings.json corrupted 警示条（L4） | 写坏 settings.json 需沙箱外写文件（E2E 无命令通道），真实损坏无法在 E2E 会话内构造 | L2 覆盖（`settings-panel.test.tsx` loadSettings mock 渲染/关闭）+ 人工实测（手改文件损坏重启） | SC-E2E-02 |
@@ -30,7 +30,7 @@
 | background_tasks spawn/emit 包装层（`spawn_poller` 循环本体与 `background_tasks_set_config` 命令包装层的 emit/重 spawn 分支） | 需 `AppHandle` 与 tauri runtime（async_runtime spawn/事件发射），L1 无法直测；可测部分（`set_config_core` 校验→落盘→内存链、registry 解析钳制）已 L1 全覆盖 | L4 勾选启停端到端（`background-tasks.e2e.ts` C）+ 人工实测（运行中改配置观察 poller 生效） | BE-02 |
 | tick 失败静默 E2E 豁免（E2E-03 用例 G） | tick 失败需后端扫描故障注入通道，E2E 沙箱内无可控注入手段 | 调度器 L2 用例（`background-tasks-scheduler.test.ts` 失败处理：tick 失败快照不变/manual 失败置 error）+ 人工观察 | E2E-03 |
 | ~~background-tasks.e2e.ts 用例 F 真实 tick 时序豁免（E2E-03）~~ **已修复（2026-09-02 R2a 翻案）** | 根因实证（D1）：E 用例 finally 删除会话 601 后，E 结束→F 开始仅 ~200ms（< E 遗留 scheduler 的 2s tick），删除后重扫未落地，pill 持陈旧值 5（真实 4）→ F 基线取到错误 n=5 → 启用后扫描 = 4 fixture + 602 = 5，断言 n+1=6 永不可达 → 20s 超时。修复：F 取基线前轮询 pill 直至同值持续 ≥3s（覆盖一个 tick 周期，间隔约 1s，上限 6s），以收敛值作基线（n=4），断言目标回归 n+1=5 | 修复后 F 全程真实链路断言（收敛等待 + 落盘 10s / 计数 20s / 勾选态 8s 窗口远超实际 tick 周期）；2026-09-02 单跑与全量 e2e 各 1 次 F 连续通过 | E2E-03 |
-| `ExplorerPanel.handleRename` 同名兜底短路分支（oldPath === newPath） | UI 不可达——同名已在 `FileTree.confirmRename` 拦截（比较 basename），测试无法直传同名进入 onRename；属防御层死代码 | confirmRename 同名短路 L2 用例（explorer-rename-state 3 例）+ 后端 src==dst 幂等 L1 用例（`fs_rename_src_equals_dst_*` 2 例）双边锁死同层语义 | 修复「重命名取消误删文件」登记 |
+| `FileTreeExplorer.handleRename` 同名兜底短路分支（oldPath === newPath） | UI 不可达——同名已在 `FileTree.confirmRename` 拦截（比较 basename），测试无法直传同名进入 onRename；属防御层死代码 | confirmRename 同名短路 L2 用例（explorer-rename-state 3 例）+ 后端 src==dst 幂等 L1 用例（`fs_rename_src_equals_dst_*` 2 例）双边锁死同层语义 | 修复「重命名取消误删文件」登记 |
 | 应用图标视觉质量（1024 母版构图/16px 降采样可辨性/icon.ico 嵌入正确性） | 纯资源替换无可自动化代码逻辑；视觉呈现依赖人眼判定 | 生成脚本 `gen-app-icon.ps1` 后置像素断言（脚本内几何可复算）+ 构建产物人工检查清单（exe 图标属性/任务栏/Alt-Tab 目测，路径 `src-tauri\assets\app-icon\app-icon.png` 与 32px 抽样） | 2026-09-06 图标替换登记 |
 | HTML 面板 Ctrl+滚轮缩放的物理滚轮事件与悬停语义（真实 OS 滚轮 delta 设备 / WebView2 物理 wheel / preventDefault 对浏览器缩放的实际效果） | embedded WDIO 无法投递 OS 滚轮；缩放核心行为已由 L2 行为级覆盖（zoomRuntime 桩执行 15 例）与 L4 fixture 合成事件全链路覆盖，物理输入路径无法自动化 | L2 `html-zoom-runtime.test.ts`（new Function 桩 doc/win 行为级）+ L4 `html.e2e.ts` Ctrl+滚轮缩放 describe（fixture 合成 WheelEvent → 注入接管 → HUD）+ 下述手工验证清单（build 产物实测：悬停缩放/HUD 续期/重置/切走切回保留/终端 Ctrl+滚轮字号互不干扰/整窗缩放不被触发） | 2026-09-06 htmlviewer 缩放登记 |
 | mermaid 图布局与 KaTeX 字形渲染视觉质量（真实 DOM 布局/字体度量） | mermaid v11 渲染与 KaTeX 字体加载依赖真实浏览器布局与字体测量（jsdom 无）；自动断言止于 DOM 存在性 | L2 编排 mock（`markdown-mermaid.test.ts` / `markdown-render-pipeline.test.ts` KaTeX 标记断言）+ L4 `markdown.e2e.ts`（mermaid SVG / KaTeX 类与内联字体 data 前缀）+ 手工视觉清单（图表配色/公式字形/暗色协调） | ADR-0018 预览渲染登记 |
@@ -67,13 +67,3 @@
 - `hooks/signal.rs::process_symlink_signal_deletes_without_read`、`hooks/watcher.rs::collect_excludes_symlink_files`、`notify/mod.rs` symlink 两用例、`agent_history/claude/ops.rs` symlink 三用例（BE-17/D5 豁免先例）
 
 本地开发机（已开开发者模式）为真实覆盖来源；CI runner 未开权限时上述分支覆盖记为「不确定」。
-
-## L4 运行机制
-
-### 用户目录隔离机制（ADR-0016 假 home，替代 FIX-TE-04 + E2E-05 备份/还原）
-
-`run-wdio.cjs` 建临时假屋（`<tmp>/slterm-e2e-home-<pid>`）并注入 `USERPROFILE`——e2e 全部用户目录写入（hooks 注入/statusLine 桥接/假 env/信号文件）落假屋，真实 `~/.claude` 与 `~/.slterminal` 零接触；exit 时对真实屋做哨兵键级比对（~/.claude/settings.json 的 hooks/statusLine/env 存在性+值快照比对；~/.slterminal/statusline-backup.json 维持文件 sha256、hooks/ 维持整树快照——任何泄漏独立报红 exitCode=1）。旧备份/还原机制（`.e2e-bak`）已退役。E2E 不触碰真实 `~/.claude/projects/`（`SLTERM_CLAUDE_PROJECTS_DIR` 指向临时副本）。详见 `e2e-tests/CLAUDE.md`。
-
-### E2E 键盘输入限制（半端到端，TE-17）
-
-embedded WDIO 无法投递 OS 级按键；所有键盘用例改用页面内 dispatch 合成事件 → ShortcutRegistry → 命令 handler → 真实 IPC。唯一不真实处是事件来源。

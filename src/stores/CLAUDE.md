@@ -11,12 +11,12 @@ Zustand 全局状态真值来源。每个 store 覆盖一类状态域，面板�
 ### Store 纯状态（硬约束 #12）
 
 - `src/stores/` 只存状态与状态转换，不存业务逻辑（校验/映射/编排放到注册表、纯函数或上层组件）。
-- 持久化一律经 `src/ipc/` 对应领域函数：settings 类（`fontSize` / `keybindings` / `sideBar` / `cliAliases` / `agentGlobalFiles`）走 `src/ipc/settings`；项目数据（`projects`）走 `src/ipc/projects`。
+- 持久化一律经 `src/ipc/` 对应领域函数：settings 类（`fontSize` / `keybindings` / `sideBar` / `cliAliases` / `agentGlobalFiles` / `conptyInputModes`）走 `src/ipc/settings`；项目数据（`projects`）走 `src/ipc/projects`。
 - 禁止在 store 内直接调用 Tauri `invoke`；禁止跨 store 隐式依赖，store 间协调在上层组件/命令中完成。
 
 ### 持久化模式
 
-settings 类五 store 与 `projects` 均遵循同一模式：
+settings 类六 store 与 `projects` 均遵循同一模式：
 
 - 启动时 `loadFromDisk()` 恢复；`loaded` 守卫防止加载阶段触发空写。
 - 变更后 Zustand `subscribe` + 2s debounce 自动保存。
@@ -39,7 +39,7 @@ settings 类 store 保存时顶层键必须是段名（`fontSize` / `keybindings
 
 ### 页面总数上限随多实例架构消亡（CP-004/S11）
 
-- **页面总数上限（原 FE-01/FE-36，旧常量值 20）已删除**：多 Dockview 实例架构退役（转共享宿主 + 页组模型——`src/workspace/CLAUDE.md`「共享宿主 + 页组模型」节）后，页面不再各持一实例，容器/渲染管线共享，内存/DOM 不再随页数线性增长——上限随之消亡。
+- **页面总数上限（原 FE-01/FE-36，旧常量值 20）已删除**：多 Dockview 实例架构退役（转共享宿主 + 页组模型——`src/workspace/CLAUDE.md`「共享宿主 + 派生归属模型」节）后，页面不再各持一实例，容器/渲染管线共享，内存/DOM 不再随页数线性增长——上限随之消亡。
 - `addPage` 拒绝条件只剩「项目不存在」；不再有「页面数已达上限」toast。
 - `OperationPage.layout` 字段语义 = 该页「页组子树切片」（宿主全量 JSON 按页切分），由 `workspace/layoutSerde.ts` 单点存取（硬约束 #7）。
 
@@ -49,7 +49,7 @@ settings 类 store 保存时顶层键必须是段名（`fontSize` / `keybindings
 
 ### sideBar 默认态
 
-默认 `zones.top = ["nav", "explorer", "commit", "agentFiles"]`、`open.top = "nav"`；`projects` / `agent-status` 视图随 NAV-06/08 退役。
+默认归属/打开态初值（`DEFAULT_ZONES` / `DEFAULT_OPEN`）与 NAV-06/08 退役登记见 `features/sideViews/CLAUDE.md`，本 store 仅承载初值，不复述清单。
 
 ## 测试模式
 

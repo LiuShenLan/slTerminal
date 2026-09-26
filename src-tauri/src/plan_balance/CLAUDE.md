@@ -56,7 +56,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `merge_slot` / `poll_once_with` 全部参数化/注入，L1 不触网不触盘：`poll_once_with` 的 resolve/fetch 闭包注入。执行体 `poll_once_executor` 与轮询循环本体由 background_tasks 骨架驱动（emit 在 `apply_snapshot` 内，需 AppHandle），其 L1 豁免登记于 background_tasks/CLAUDE.md。
 - 解析纯函数（`parse_deepseek_balance` / `parse_kimi_usages` / `resolve_env`）罐装 JSON 全测。kimi 解析含真实响应快照锚点（`parse_real_response_snapshot`，防下次 API 漂移）+ 双形态变体（detail 含/不含 used、totalQuota 缺失/空对象/非数字）。
 - serde 键集合精确匹配（照 hooks/mod.rs `assert_status_key_set` 先例）——token 红线守卫。
-- `get_plan_balance` 命令核心经 current_thread runtime block_on 直测（照 hooks/mod.rs:443 先例）。
+- `get_plan_balance` 命令核心经 current_thread runtime block_on 直测（照 hooks/mod.rs `block_on` 直测先例）。
 
 ### 既定豁免
 

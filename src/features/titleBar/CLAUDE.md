@@ -17,7 +17,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### 窗口控制三钮（TB-03）
 
-- 三钮 = 最小化 / 最大化（还原） / 关闭，38×26、图标 12px、`aria-label` + `title`。
+- 三钮 = 最小化 / 最大化（还原） / 关闭，尺寸与图标读码即得。
 - IPC 一律经 `src/ipc/window` wrapper：`minimizeWindow` / `toggleMaximizeWindow` / `closeWindow`。
 - **最大化钮状态感知（TB-07，2026-09）**：图标/文案随窗口 maximized 态双态切换——`IconMax`+「最大化」 ↔ `IconRestore`+「还原」。状态源 = 文件内 `useWindowMaximized()` hook：挂载初始 `isWindowMaximized()` 回查 + `onWindowResized` 订阅（事件内再回查——onResized 只含 PhysicalSize 不含最大化态）。必须走窗口事件而非 onClick 本地翻转：最大化全路径（按钮/双击原生拖拽区/拖边框/Win+方向键 snap）必经 resize 事件。WIN_BUTTONS 因此改为渲染期派生（`buildWinButtons(maximized)`），不再是模块级静态数组。
 - **关闭 = `closeWindow()`**——触发 `onCloseRequested` 事件，复用 `registerCloseHandler` 注册的 P1-19 关窗链路（遍历 TerminalRegistry 杀 PTY + 后端 Job Object 兜底），禁止 `destroy`/`process.exit` 绕过。
@@ -25,9 +25,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### 标题数据与视觉
 
-- **数据**：中段标题 = `useLayout.activePageId` → 所属项目名 / 页面名（projects store 直接推导，**禁止改 store**）；layout 无活跃页时回退第一个项目的 `activePageId` 页。
+- **数据**：中段标题自 projects store 直接推导（**禁止改 store**，推导链读码即得）。
 - **窄订阅（FE-21）**：标题推导经 `useShallow` 包装，selector 只返回 `{projectName, pageName}` 两原始值字段——无关项目变更结果浅相等，不触发 TitleBar 重渲染。
-- **视觉**：34px 高、`TITLEBAR_BG` 底 + 底部 1px `SEPARATOR_BG` 发丝线、12px 文字、userSelect none；全部颜色经 `theme/colors.ts` token（硬约束 #6）。
+- **视觉**：全部颜色经 `theme/colors.ts` token（硬约束 #6），尺寸数值读码即得。
 
 ## 测试模式
 

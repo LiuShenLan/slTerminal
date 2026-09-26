@@ -25,7 +25,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### `useFileTree` 过滤选项（ADR-0024）
 
-- `rootFilter?: (name) => boolean`：根层三点统一应用（loadRoot 首帧+续页 / loadDirectory 当 dir===root / refreshSubtreeAt 当 target===root）；子层不受影响（「不读取」= 不递归未匹配目录自然成立）。**rootFilter 引用变化 → effect 触发 `refreshExpanded`**（配置变更即时生效）——调用方必须以 useCallback/useMemo 稳定引用，缺省回退对象每次新建会造成刷新死循环（agentFiles 模块 CLAUDE.md 红线）。
+- `rootFilter?: (name) => boolean`：根层三点统一应用（loadRoot 首帧+续页 / loadDirectory 当 dir===root / refreshSubtreeAt 当 target===root）；子层不受影响（「不读取」= 不递归未匹配目录自然成立）。**rootFilter 引用变化 → effect 触发 `refreshExpanded`**（配置变更即时生效）——调用方必须以 useCallback/useMemo 稳定引用，缺省回退对象每次新建会造成刷新死循环（红线，各调用方通用）。
 - `eventPathFilter?: (absPath) => boolean`：onFsEvent 前置二次过滤（根前缀过滤之后），false 跳过刷新。
 - **内置根前缀过滤**：fs-event 批内路径全在监听根之外 → 跳过刷新（agent watcher 接入后 explorer 不再对根外事件做无谓整树刷新；`need_rescan` 路径 = 监听根天然通过；空 paths 保守放行）。对 explorer 属严格改进、零回归。
 
@@ -45,15 +45,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 不再硬编码 `PANEL_EDITOR`，改为通过 `fileViewerRegistry.resolve(filePath)` 决定面板类型。命中策略（如 `.html` → `"htmlviewer"`）则用对应面板，返回 null 回退 `"editor"`。文件预览类面板通过 `isAlwaysRenderPanel()` 自动设置 `renderer: "always"` 保持 iframe browsing context 存活，避免页签切换白屏。新增文件预览类型无需修改 ExplorerPanel。
 
-### 选中模型：单击选中 + 双击打开 + 空白取消
+### 选中模型
 
-`selectedPath` state 由 ExplorerPanel 管理，通过 props 传入 FileTree：
-
-- 单击文件/文件夹 → `onSelect(path)` + `container.focus()`。
-- 双击文件 → `onOpenFile(path)`。
-- 单击目录 → `onSelect(path)` + `onToggleExpand(path)`。
-- 单击空白 → `onSelect(null)`。
-- 焦点离开 → 选中态保留，但 `usePanelFocus` 的 `popContext("explorer")` 阻止快捷键在失焦时误触发。
+单击选中/双击打开/空白取消的交互接线读码即得。红线：焦点离开后选中态保留，但 `usePanelFocus` 的 `popContext("explorer")` 阻止快捷键在失焦时误触发。
 
 ### 焦点管理：tabIndex={-1} + usePanelFocus("explorer")
 

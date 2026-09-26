@@ -10,17 +10,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### 策略模式 + 链式短路
 
-- `FileViewerStrategy` 接口 → `ExtensionBasedViewerStrategy`（扩展名→面板类型映射）→ `FileViewerRegistry`（组合多个策略，链式调用）。
-- 多个策略按 `addStrategy` 顺序依次调用 `resolve()`，首个非 null 结果立即返回；全部 null 时回退默认编辑器。
-- 模块级单例 `fileViewerRegistry`（同 `ShortcutRegistry` / `titleManager` 模式）。
+- 策略/注册表结构与链式短路语义读码即得；模块级单例 `fileViewerRegistry`（同 `ShortcutRegistry` / `titleManager` 模式）。
 - 默认注册抽为 `registerDefaultViewers(strategy)` 导出（TQ-B-11）——生产初始化与测试 `_reset()` 后恢复共用同一真值源。
-
-### 解析规则
-
-- **扩展名大小写不敏感**：注册和解析时统一 `toLowerCase()`。
-- **隐藏文件排除**：`.` 开头的文件名不参与扩展名匹配（如 `.gitignore`）。
-- **路径分隔符处理**：支持 `/` 和 `\`，取最后一个分隔符之后的文件名部分。
-- **默认注册**：`.html`/`.htm` → htmlviewer（渲染预览）；`.md`/`.markdown` → markdownviewer（三形态文档面板）。命中面板由 `isAlwaysRenderPanel` 决定 renderer（panelRegistry 单点）。
 
 ### 测试隔离
 

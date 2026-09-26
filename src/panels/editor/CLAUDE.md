@@ -56,7 +56,7 @@ CM6 编辑器主题来源 = `editorThemeSlot` 主题热切换槽（CP-039）：`
 - 槽内顺序契约：syntax 必须先于 theme（`[editorSyntaxHighlight(), getEditorTheme(), editorColorOverrides()]`）——`editorSyntaxHighlight` 与 oneDark 的 HighlightStyle 是同机制竞争，只能靠数组顺序决胜；`editorColorOverrides` 则靠 `&.cm-editor` 前缀提升特异性，顺序无关。
 - 消费点扩展数组只出现 `themeSlotRef.current.extension` 单槽项——禁止绕过槽裸拼三项（ACC-05 顺序由槽单点锁死）。
 
-改动覆盖规则前必读 `@../../theme/CLAUDE.md`「editorColorOverrides 的 CM6 层叠」。
+改动覆盖规则前必读 `@../../theme/CLAUDE.md`「CM6 层叠陷阱（ACC-05）」。
 
 ### 外部修改同步三模式（2026-09-25 修复）
 

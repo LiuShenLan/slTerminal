@@ -37,14 +37,14 @@ claude provider 定位与会话目录删除时：一级子目录、命中 jsonl 
 
 `SLTERM_CLAUDE_PROJECTS_DIR` 仅用于测试隔离，生产不设置。命名与解析留在 `claude/scan.rs` 的 `resolve_projects_root` 内部，不上提聚合层。fallback 解析经 `crate::home::home_dir()`（顶层共享件，ADR-0016——E2E 假 home 隔离下 fallback 落假屋空目录而非真实用户历史；env 重定向优先级恒高于共享 home）。
 
-### DTO 字段
+### DTO 字段（语义决策；键清单读码即得）
 
-- `AgentHistorySession`：serde camelCase 八键——`sessionId`/`cwd`/`title`/`titleSource`/`firstPrompt`/`mtimeMs`/`cwdExists`/`cliId`；`cwd` 一律从 JSONL 内容解析，不反解码目录名。
-- `AgentHistoryTitle`：两键 `title`/`titleSource`；文件未定位 → `Ok(title: None)`，与 delete 的「不存在 → Err」语义区分（读是幂等查询，删是有副作用操作）。
+- `AgentHistorySession.cwd` 一律从 JSONL 内容解析，不反解码目录名。
+- `AgentHistoryTitle` 文件未定位 → `Ok(title: None)`，与 delete 的「不存在 → Err」语义区分（读是幂等查询，删是有副作用操作）。
 
 ### 标题回退链
 
-`read_session_title` 与 scan 同源回退链：customTitle > aiTitle > summary > firstPrompt。
+`read_session_title` 与 scan 共用同一标题回退链（实现于 claude/jsonl.rs，链序读码即得）——改链须保持两侧同源。
 
 ## 外部坑/红线
 

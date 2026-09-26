@@ -19,12 +19,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 未知 cliId（未注册）→ `console.warn` + 返回 null（不通知，MC-206）。
 - 无 hooks 能力 profile → 返回 null（不通知）。
 
-claude 类别规则（实现于 `profiles/claude/strategies.ts`）：
-
-- **permission**：`PermissionRequest` 或（`Notification` 且 `notificationType === "permission_prompt"`）
-- **error**：`StopFailure` / `PostToolUseFailure`
-- **done**：`Stop`
-- 其他事件 → 不触发通知
+claude 类别规则实现于 `profiles/claude/strategies.ts`（映射清单读码即得，改规则须同步其契约测试）。
 
 ### 失焦门控
 

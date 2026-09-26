@@ -10,20 +10,13 @@ Commit 侧栏视图在活动栏中展示当前项目的 git 变更状态，按 C
 
 ### 状态机（优先级自上而下）
 
-CommitView 四渲染态：
+CommitView 四渲染态优先级自上而下：`no-root` → `loading` → `error` → `ready`（判定条件与文案读码即得）。
 
-| 状态 | 触发条件 | UI |
-|------|---------|-----|
-| `no-root` | `activePageId` 无对应 project | "选择一个项目以查看变更" |
-| `loading` | `gitStatus` 调用中 | "加载中…" |
-| `error` | `gitStatus` 抛异常（含非 git 仓库） | "当前项目并非 git 项目" |
-| `ready` | `gitStatus` 成功返回 | Changes (N) + Unversioned Files (N) |
-
-状态推导：`activePageId` → project → `rootPath` → `gitStatus(rootPath)`。`rootPath` 变化时立即清空旧数据并重载（generation 取消模式，照 `useFileTree`）。
+`rootPath` 变化时立即清空旧数据并重载（generation 取消模式，照 `useFileTree`）。
 
 ### 数据加载与刷新（`useCommitStatus`）
 
-- **rootPath 推导**：同 ExplorerPanel——从 `activePageId` 反查项目 `cwd || rootPath`。
+- **rootPath 推导**：同 ExplorerPanel——从 `activePageId` 反查项目 `rootPath`。
 - **首次加载**：`gitStatus(rootPath)` 一次获取全量状态。
 - **自动刷新**：`onFsEvent` + 200ms debounce 重新 `gitStatus`。
 - **切换安全**：`genRef` 计数器 + rootPath 变化时立即设 `loading` 态，旧请求回调检查 generation 后丢弃。
@@ -31,16 +24,7 @@ CommitView 四渲染态：
 
 ### 分派映射表（策略模式）
 
-双击文件列表项时，根据 git 状态决定面板类型和页签后缀：`STATUS_PANEL_MAP`（`openCommitFile.ts`）独立导出。
-
-| git 状态 | 面板类型 | 页签后缀 |
-|---------|---------|---------|
-| `added` | `editor` | `(git add)` |
-| `untracked` | `editor` | `(git not add)` |
-| `deleted` | `gitshow` | `(git delete)` |
-| `modified`/`renamed`/`conflict` | `diff` | `(git diff)` |
-
-renamed 状态传 `oldPath` 给 diff 面板，用于 HEAD 侧查询旧路径内容。
+双击文件列表项时按 git 状态决定面板类型与页签后缀——映射单点 = `STATUS_PANEL_MAP`（`openCommitFile.ts` 独立导出，映射内容读码即得）；新增状态须同步登记映射。**renamed 状态传 `oldPath`** 给 diff 面板（HEAD 侧查询旧路径内容）。
 
 ### 去重聚焦（B10）
 

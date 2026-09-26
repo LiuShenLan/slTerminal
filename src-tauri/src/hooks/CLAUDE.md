@@ -55,7 +55,7 @@ PTY spawn 时注入 `SLTERM_PANEL_ID`（见 @../pty/CLAUDE.md）。reporter 读�
 - **merge 策略**：读现有 settings → 移除旧 slterm matcher → 10 事件每事件追加 slterm handler → 原子写回；用户其他字段保留。
 - **非法 JSON 中止**：注入时格式错误返回 `AppError`，不改动文件；卸载时（9-6 翻案，废止「静默跳过配置清理但仍删目录」）read/parse 失败返回 `AppError` 且目录全保留——「要么全清、要么全不清」，防「matcher 残留 + 脚本已删」dangling 态刷 claude 错误；修复 settings.json 后重试卸载。
 - **卸载粒度**：handler 级剔除含 slterm 子串的条目，不连带删除同 matcher 组内的用户 handler。
-- **10 事件**：`SessionStart`、`SessionEnd`、`UserPromptSubmit`、`Stop`、`StopFailure`、`PreToolUse`、`PostToolUse`、`PostToolUseFailure`、`Notification`、`PermissionRequest`。
+- **10 事件全注入**：注入覆盖范围 = `HOOK_EVENTS` 常量全集（清单读码即得），增减事件须先改该常量。
 
 ### hooks 配置三层读写（P3-BE，BE-18）
 

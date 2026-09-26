@@ -121,7 +121,7 @@
 - 多 UI 模式/亮色系：用户硬约束，明确排除。
 
 **后果**：
-- 实现期按 requirements.md 逐条验收（P0 必做）；视觉验收参照 final-mockup.html 组件集页。
+- 实现期已按 requirements.md 逐条验收（P0）完成；交付物四件（design.md/requirements.md/final-mockup.html/checklist.md）已随 docs/ 清理退役，原文从 git log 查。
 - F3 四态 emoji 的**视觉呈现**被状态圆点取代（事件→状态映射逻辑不变）；F9 品牌 logo 保留。
 - 现状侧栏（项目列表 + Agent Status 等区块）IA 将随实现重构为统一导航树；行为逻辑（快捷键/右键菜单/会话恢复）不变。
 

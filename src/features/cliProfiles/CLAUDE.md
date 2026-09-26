@@ -38,16 +38,11 @@ CLI profile 注册表（MC-1/101~108）——编码 CLI 身份域与能力策略
 
 `trim().split(/\s+/)[0]` 全仓唯一实现——`matchByCommand` 对 `profile.commands` 逐键精确查表，内置未中再查别名快照（`aliasByToken`），覆盖带参变体；空命令行/仅空白 → null；**不 toLowerCase**；同首 token 多 profile 冲突时先注册者优先（别名查询不走注册序——D3 保证别名在命名空间内唯一，无同 token 多归属）。
 
-### profile 接口契约（`types.ts`，spec 00 §3.1）
+### profile 接口契约（`types.ts`，spec 00 §3.1；字段清单读码即得）
 
-- `CodingCliProfile`：id / displayName / commands / iconSrc / tabTitle / capabilities。
-- `HooksCapability`：eventToStatus / classifyNotification / computeUsagePercent / restartHint / hasConfigEditor / configEditor / configLayers。
-  - `computeUsagePercent`：用量信号 → 显示百分比（claude = 官方 `usedPercentage` 取整 + 钳位 0–100）。
-  - `configEditor`（KZ-1）：hub 配置编辑器组件；`hasConfigEditor=true` 时必填。
-  - `configLayers`（KZ-4）：hooks 配置分层声明；`hasConfigEditor=true` 时必填。
-- `HistoryCapability`：supportsFork / buildResumeCommand / buildRestoreInput。
-
-能力**可选**：`capabilities.hooks` / `capabilities.history` / `capabilities.globalFiles` 均可缺省。`globalFiles`（ADR-0024）= `{ configDir, runtimePaths }`——声明该 CLI 有全局配置目录（供「Agent 全局文件」侧栏视图与设置中心 Agent 组消费）；`runtimePaths` 为运行时产物名单（默认隐藏，「显示运行时文件」开关控制），claude 的 11 项字面量锁定于 `CLAUDE_RUNTIME_PATHS` 常量。
+- **条件必填**：`hasConfigEditor=true` 时 `configEditor`（KZ-1）与 `configLayers`（KZ-4）必填。
+- `computeUsagePercent`：用量信号 → 显示百分比（claude = 官方 `usedPercentage` 取整 + 钳位 0–100）。
+- `globalFiles`（ADR-0024）= `{ configDir, runtimePaths }`——声明该 CLI 有全局配置目录（供「Agent 全局文件」侧栏视图与设置中心 Agent 组消费）；`runtimePaths` 为运行时产物名单（默认隐藏，「显示运行时文件」开关控制），claude 的 11 项字面量锁定于 `CLAUDE_RUNTIME_PATHS` 常量。
 
 ### CLAUDE_CLI_ID 常量约定（MC-205，AC-5 守卫豁免形态）
 
@@ -61,7 +56,7 @@ CLI profile 注册表（MC-1/101~108）——编码 CLI 身份域与能力策略
 
 claude 专属 hooks 编辑器（ClaudeHooksConfigEditor + 10 文件 + schema/）**归域 `profiles/claude/configEditor/`**——不再位于 panels、不再跨模块引用（F11 迁移后 cliProfiles 零外部面板依赖）。`profiles/claude/index.ts` import `./configEditor/ClaudeHooksConfigEditor` 挂入 `capabilities.hooks.configEditor`；设置中心 Agent 组 hooks 页（`panels/settings/pages/AgentHooksPage`，ADR-0023）经该字段按页 cliId 分派直渲染，页零直接引用（KZ-1 依赖方向不变，只是编辑器资产物理归域）。`types.ts` 仅类型 import，运行期擦除，不构成运行循环。
 
-**schema 单点（MC-223/P3-FE-07/TE-09/TE-15）**：`configEditor/schema/` 承载 SchemaStore 官方 claude-code-settings schema 内嵌 + hooks 子 schema 提取（`properties.hooks` + 依赖 `$defs` 子集，不含 permissions 专用 permissionRule）+ Draft07 校验单例。协议知识只属于 claude profile 域，**不抽象**为通用能力——面板选择行允许其他 CLI 挂载自有编辑器，但本 schema 单点仍是 claude 专属资产。
+**schema 单点（MC-223/P3-FE-07/TE-09/TE-15）**：`configEditor/schema/` 承载 SchemaStore 官方 claude-code-settings schema 内嵌 + hooks 子 schema 提取（`properties.hooks` + 依赖 `$defs` 子集，不含 permissions 专用 permissionRule）+ Draft07 校验单例。协议知识只属于 claude profile 域，**不抽象**为通用能力——其他 CLI 经 `capabilities.hooks.configEditor` 自挂编辑器页（`agent.<cliId>.hooks` 直渲染分派，ADR-0023），但本 schema 单点仍是 claude 专属资产。
 
 - 升级方式：整文件替换 `configEditor/schema/claude-code-settings.json` 即可，离线可用、无网络请求（自包含性已核实：无远程 `$ref`，35 个本地 `$ref` 全指向 `#/$defs/*`）。
 - `compileSchema(schema, { draft: "draft-07" })` 单例（json-schema-library 11.x）——schema 固定不变，复用避免重复编译；本 schema 无 `$schema` 字段，缺省会选 draft-2020-12，**必须显式 `draft-07` 保持旧语义**（TE-09）。

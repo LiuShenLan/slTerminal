@@ -17,9 +17,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### 渲染管线分层
 
-- **mdPipeline（同步纯函数）**：markdown-it（html:true 透传信任模型 ADR-0017 / linkify / GFM 表删除线 / task-lists / texmath-katex dollars 就地渲染 throwOnError=false / hljs 白名单语言静态 import 高亮别名归一）+ 资源收集（<img>/<source> src 后处理，markdown 图片语法产物同被扫到）+ mermaid fence 占位（randomHex 防碰撞）+ buildPreviewDocument（完整文档 head：排版 CSS 经 buildMdPreviewStyleCss 同源装配 + KaTeX 内联字体）。模块级单例解析器可复用于多渲染。
-- **mdRenderAsync（异步编排）**：资源 data: URL 替换（LRU 50 缓存；失败回退原 src 不阻塞）/ mermaid 渲染替换 / isCancelled 丢弃。
-- **mermaidHost**：dynamic import 单例（vite 分包 2MB 不进主包）+ 按 code Promise 缓存 + 失败占位卡；宿主侧渲染成 SVG 字符串注入（iframe 零重排版、CSP 零新增）。
+- **`renderMarkdownPlan`（mdPipeline.ts，同步纯函数）**：markdown-it（html:true 透传信任模型 ADR-0017 / linkify / GFM 表删除线 / task-lists / texmath-katex dollars 就地渲染 throwOnError=false / hljs 白名单语言静态 import 高亮别名归一）+ 资源收集（<img>/<source> src 后处理，markdown 图片语法产物同被扫到）+ mermaid fence 占位（randomHex 防碰撞）+ buildPreviewDocument（完整文档 head：排版 CSS 经 buildMdPreviewStyleCss 同源装配 + KaTeX 内联字体）。模块级单例解析器可复用于多渲染。
+- **`renderMarkdownDocument`（mdRenderAsync.ts，异步编排）**：资源 data: URL 替换（LRU 50 缓存；失败回退原 src 不阻塞）/ mermaid 渲染替换 / isCancelled 丢弃。
+- **`renderDiagram`（mermaidHost.ts）**：dynamic import 单例（vite 分包 2MB 不进主包）+ 按 code Promise 缓存 + 失败占位卡；宿主侧渲染成 SVG 字符串注入（iframe 零重排版、CSP 零新增）。
 - **KaTeX 字体**：generated/katexInlineCss.ts 为构建产物（scripts/gen-katex-inline.mjs 生成，woff2 data: 内联，woff/ttf 回退剔除）——katex 升级重跑脚本 + git diff 审阅，勿手改产物；一致性由 CI diff 守卫（.github/workflows/ci.yml，CP-033）。
 
 ### 本地资源（决策 #9，ADR-0018）

@@ -57,12 +57,11 @@ docViewer 预览（md/html 本地相对图片等 data: URL 内联）按路径读
 
 ### 路径沙箱校验范围
 
-- `fs_read_file` / `fs_read_dir` / `fs_stat` / `fs_create_dir` / `fs_delete` / `fs_rename`：校验目标路径；
-- `fs_write_file`：校验父目录（文件可能尚不存在）。
+各命令校验目标路径（读码即得）；唯一例外 = `fs_write_file` 校验**父目录**（文件可能尚不存在）。
 
 ### 前端必须保证 `project_root` 已设置
 
-`validate_path_within_root` 对 `project_root=None` 一律拒绝（`cfg!(test)` 豁免）。调用下列命令前前端必须先完成 `setProjectRoot`：
+`validate_path_within_root` 对 `project_root=None` 仅放行 agent 目录集（ADR-0024，agent 视图不依赖项目宿主），其余拒绝（`cfg!(test)` 豁免）。调用下列命令前前端必须先完成 `setProjectRoot`：
 - 用户点击侧栏页面：`Workspace.switchToPage` 先 await `setProjectRoot` 再 `setActivePage`（DBG-5）；
 - 应用启动恢复 lastPage：`App.tsx` 先 await `setProjectRoot` 再 `setActivePage`（DBG-6）；
 - E2E helper：`__slterm_e2e_createProject` / `__slterm_e2e_switchToPage` 内部先 await `setProjectRoot`（DBG-8）。

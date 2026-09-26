@@ -29,7 +29,7 @@ Agent 历史会话查询与恢复（CLI 无关聚合，MC-310 泛化）。**宿�
 
 - **触发时机**：首个订阅者出现 → 立即执行一轮（接管「挂载即扫」语义）+ 按配置频率（`backgroundTasks.sessionRefresh.intervalSec`）定时刷新；最后订阅者退订 → 停 interval（调度器全局单例与 UI 解耦，NavTree 卸载无碍，ADR-0001）。
 - **手动刷新** = `triggerNow()`（刷新钮）——与 tick 共用同一扫描执行体（规格 §1 单一执行体），仅失败处理策略不同（manual 失败置 error）。
-- **force 恒 true**：扫描执行体（`sessionRefreshTask.ts`）遍历全部已注册 history provider 逐个 `scanAgentHistory(cliId, true)` 聚合——显式直扫，手动与定时同口径（规格 §8）；后端 force 通道不读键、不回填缓存（CP-007：键收集成本与重扫同量级），目录内容指纹缓存只服务非 force 调用方。
+- **force 恒 true**：扫描执行体（`sessionRefreshTask.ts`）遍历全部已注册 history provider 逐个 `scanAgentHistory(cliId, true)` 聚合，手动与定时同口径（规格 §8）；force 恒定理由与后端缓存语义见 features/backgroundTasks/CLAUDE.md（CP-007）。
 - **scan 已退役**：`scan(force?)` 从 hook 返回面移除（无参导出早于 F12 已删），历史引用全部改 `triggerNow()`。
 - `removeLocal` 经调度器 `applyLocal` 透传（删除会话后本地移除列表项，不重扫）。
 - `activeStatuses` 经 `TerminalRegistry.subscribe` 实时跟随。
@@ -37,14 +37,7 @@ Agent 历史会话查询与恢复（CLI 无关聚合，MC-310 泛化）。**宿�
 
 ### 纯函数模型（FE-05，`historyModel.ts`）
 
-零 React 依赖，展示派生集中：
-
-- `isCurrentProject(cwd, rootPath)`：规范化 + 忽略大小写后精确相等。
-- `groupByCwd(sessions)`：规范化 cwd 分组；无 cwd 归 `UNKNOWN_CWD_KEY`；组内/组间 mtimeMs 降序。
-- `matchesSearch`：标题 + firstPrompt 大小写不敏感 includes。
-- `formatRelativeTime`：六档相对时间；mtimeMs ≤ 0 → 「-」。
-- `keyOf(cliId, sessionId)`：复合键构造单点（回退 + 转义）。
-- `deriveActiveSessionStatuses()`：`TerminalRegistry.getAll()` → `Map<cliId|sessionId, AgentStatus>`。
+展示派生纯函数集中于此，零 React 依赖；函数清单与行为读码即得。
 
 ### 四步恢复编排（FE-06，`restoreSession.ts`）
 
@@ -95,7 +88,7 @@ Agent 历史会话查询与恢复（CLI 无关聚合，MC-310 泛化）。**宿�
 
 ### 历史区相对时间刷新（MC-318，CP-021 已修）
 
-1. **历史区相对时间刷新（CP-021 已修）**：`formatRelativeTime` 渲染时计算，相对时间基准 `now` 由 navTree 宿主 60s ticker 驱动重算——与 sessionRefresh 数据层节奏解耦，禁用/慢档不冻结。
+`formatRelativeTime` 渲染时计算，相对时间基准 `now` 由 navTree 宿主 60s ticker 驱动重算——与 sessionRefresh 数据层节奏解耦，禁用/慢档不冻结。
 
 ## 测试模式
 

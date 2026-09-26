@@ -27,7 +27,7 @@ export const E2E_ENABLED =
 
 ### 状态圆点单点（IC-03）
 
-四态渲染一律经 `StatusDot` 组件（页签/导航树会话行/历史行），组件不得另画圆点或 emoji。`src/lib/agentStatus.ts` 仅存四态类型与 emoji 常量；事件→状态映射按 CLI profile 分发。
+四态渲染一律经 `StatusDot` 组件（页签/导航树会话行/历史行），组件不得另画圆点或 emoji。`src/lib/agentStatus.ts` 仅存四态类型契约；事件→状态映射按 CLI profile 分发。
 
 ### 确认弹窗单点（OV-02）
 
@@ -35,7 +35,7 @@ export const E2E_ENABLED =
 
 ### panelId 生成/解析单点（B14）
 
-`makeTerminalPanelId` 是终端 panelId 唯一生成入口，`parseTerminalPageId` 是唯一解析入口。格式协议仅定义于 `panelId.ts`。
+`makeTerminalPanelId` 是终端 panelId 唯一生成入口。格式协议仅定义于 `panelId.ts`。
 
 旧恢复格式含 `Date.now` 数字段，语法切分无法判别；调用方应优先按已知 pageId 前缀匹配（TerminalPanel visible 判定与导航树定位），parse 仅兜底新格式。
 

@@ -22,7 +22,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - `rootFilter`（根层三点：loadRoot 首帧+续页 / loadDirectory 根 / refreshSubtreeAt 根）← `shouldShowAtRoot(name, config, runtimePaths)`。
 - `eventPathFilter`（fs-event 二次过滤，根前缀过滤之后）← `isRootEventRelevant(absPath, rootPath, config, runtimePaths)`——取相对根首段按同语义判定；根外/不可算 → false（防御）。
-- store 配置变更 → `config` 对象引用变化 → `rootFilter` 换引用 → useFileTree「过滤器变化即 refreshExpanded」effect 即时生效。**红线：store 缺配置回退缺省必须 useMemo 稳定引用**（`defaultConfig()` 每次新对象，直用会令过滤器每渲染换引用触发刷新死循环）。
+- store 配置变更 → `config` 对象引用变化 → `rootFilter` 换引用 → useFileTree「过滤器变化即 refreshExpanded」effect 即时生效。红线 = useFileTree「过滤器引用须稳定」契约（注册点见 features/explorer/CLAUDE.md）——本侧落点：store 缺配置回退缺省必须 useMemo 稳定引用（`defaultConfig()` 每次新对象）。
 
 ### 打开文件守卫
 
