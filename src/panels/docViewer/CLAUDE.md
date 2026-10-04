@@ -50,7 +50,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### 消息协议常量单点
 
-previewMessages.ts 承载全部消息类型与构造/守卫（三层通道，ADR-0021 头注）：文档层（zoom/scroll/nav/keyfwd/reset/set + E2E 字体探针 fontProbe/slterm_font_probe，TE-08）+ 上/下行类型白名单（keyfwd 为第五上行类型——ADR-0021/D2；探针仅 VITE_E2E 构建注入可达，PreviewFrame 侧 E2E_ENABLED 门控收束）+ 宿主层（host_ready/iframe_loaded/host_content + PREVIEW_HOST_URL）；新增消息类型在此登记并同步注入段与 PreviewFrame 分派。**宿主页桥（src-tauri/src/preview.rs HOST_PAGE）按字段白名单式转发**（zoom/ratio/href/loaded + keyfwd 五字段 code/ctrlKey/shiftKey/altKey/metaKey——新增上行字段须同步桥脚本，否则载荷静默丢弃，Rust 侧 `host_page_bridge_*` 测试锁）。
+previewMessages.ts 承载全部消息类型与构造/守卫（三层通道，ADR-0021 头注）：文档层（zoom/scroll/nav/keyfwd/reset/set + E2E 字体探针 fontProbe/slterm_font_probe，TE-08）+ 上/下行类型白名单（keyfwd 为第五上行类型——ADR-0021/D2；探针仅 VITE_E2E 构建注入可达，PreviewFrame 侧 E2E_ENABLED 门控收束）+ 宿主层（host_ready/iframe_loaded/host_content + PREVIEW_HOST_URL）；新增消息类型在此登记并同步注入段与 PreviewFrame 分派。**宿主页桥（src-tauri/src/preview.rs HOST_PAGE）按字段白名单式转发**（zoom/ratio/href/loaded + keyfwd 段 code/ctrlKey/shiftKey/altKey/metaKey——新增上行字段须同步桥脚本，否则载荷静默丢弃，Rust 侧 `host_page_bridge_*` 测试锁）。
 
 ## 外部坑/红线
 
@@ -58,12 +58,12 @@ previewMessages.ts 承载全部消息类型与构造/守卫（三层通道，ADR
 - **jsdom 无 crypto.randomUUID**（node 环境缺失实证）：占位/随机一律 crypto.getRandomValues hex（createNonce/randomHex 同款）。
 - **勿重建「悬浮区坐标机制」多轨形态**：切换条/HUD 坐标协调只有悬浮区单点一种合法形态，S10-② 起恒承载于面板工具条带（row）——任何形态不加双轨自摆。
 - **report 与 hide 语义分离**：report(1.0) 是回落变化需显示（Chrome 气泡语义）；复位/重建归 1 走 hide（静默），混用会复活或误显气泡。
-- **keyfwd 收窄边界勿扩**：内容 iframe 上行只经 resolve(ev,"global") 消费——global 命令集扩充（command-catalog）须先重估 keyfwd 伪造威胁面（nonce 明文内联，内容脚本可提取；现危害边界 = 仅 global.closeTab）；表单焦点跳过名单（input/textarea/select/contenteditable）勿删——删即吞表单键入。
+- **keyfwd 收窄边界勿扩**：内容 iframe 上行只经 resolve(ev,"global") 消费——global 命令集扩充（command-catalog）须先重估 keyfwd 伪造威胁面（nonce 明文内联，内容脚本可提取；危害边界 = command-catalog 锁死的 global 命令集）；表单焦点跳过名单（input/textarea/select/contenteditable）勿删——删即吞表单键入。
 - **宿主 iframe 跨源即不可读**：主窗 JS 无法 contentDocument 访问宿主文档（slterm-preview.localhost vs tauri.localhost）——内容断言/交互一律经消息通道或 E2E 探针，勿尝试 DOM 穿透。
 - **dockview 面板 DOM reparent → 宿主 iframe 重载**：iframe 同文档 reparent 即重新加载（浏览器行为）；dockview `setActive`/布局重排可 reparent 面板内容 DOM（2026-09-13 E2E 实证：activatePanel 后 host_ready 二次到达）——宿主 iframe 内容文档随之销毁重建，内容侧脚本状态（注入段闭包/已排队定时器/fixture script）全部丢失。主窗侧韧性 = host_ready 每次到达均重推（就绪序号计数，勿改回布尔）；E2E 用例侧注意——activatePanel 后 fixture 的延时派发以**重推后的新文档**为执行体，时序预算从第二次加载起算。
 
 ## 测试模式
 
-- 注入段字符串断言 + parse-only（doc-viewer-injection.test.ts）；zoom 桩执行（doc-viewer-zoom-runtime.test.ts）/ scroll 桩执行（doc-viewer-injection.test.ts 内）；keyForward 桩执行（doc-viewer-injection.test.ts——非表单上行完整载荷/表单四形态跳过）。
+- 注入段字符串断言 + parse-only、zoom/scroll/keyForward 桩执行（doc-viewer-injection / doc-viewer-zoom-runtime 测试族）。
 - PreviewFrame 宿主桥单元测试 = preview-frame-host-bridge.test.tsx（jsdom 真实 iframe + MessageEvent 构造边界；下行捕获 = contentWindow postMessage spy（WeakMap 缓存防叠加）——**spy 必须先于 host_ready dispatch 安装**，否则推送在捕获前落地）；面板集成面（html-panel.test.tsx / markdown-panel.test.tsx）同模式。
 - 宿主页桥脚本行为 = Rust 侧 host_page_bridge_* 字符串断言（jsdom 不加载跨源 src、不执行宿主页脚本）；真实 WebView2 往返（宿主桥 relay/iframe 执行/keyfwd 消费）由 html.e2e.ts / markdown.e2e.ts 验收（探针模式，e2e-tests/CLAUDE.md）。

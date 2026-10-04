@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 存在理由
 
-`src-tauri/src/plan_balance` 是 F10 编码套餐余量查询模块：读 user 层 `~/.claude/settings.json` 的 env 判定套餐（当前 deepseek/kimi 两家的 Anthropic 兼容端点），定时轮询外部 API，把余量快照推给前端。外部 API 语义（两套餐响应结构差异、kimi 配额耗尽冻结态、全有或全无解析、2026-08 实证修正的字段漂移）、token 安全红线与轮询编排口径无法从代码自证，必须文档化。
+`src-tauri/src/plan_balance` 是 F10 编码套餐余量查询模块：读 user 层 `~/.claude/settings.json` 的 env 判定套餐（Anthropic 兼容端点），定时轮询外部 API，把余量快照推给前端。外部 API 语义（两套餐响应结构差异、kimi 配额耗尽冻结态、全有或全无解析、2026-08 实证修正的字段漂移）、token 安全红线与轮询编排口径无法从代码自证，必须文档化。
 
 ## 关键约束与决策
 
@@ -43,7 +43,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 外部坑/红线
 
-- **token 不出后端**：DTO 六键 serde 键集合精确匹配测试锁死（无 token 字段）；本模块所有 tracing!/Err 构造消息禁止插值 token 与 Authorization 头（ureq 错误 Display 不含请求头，构造错误消息时禁止自行拼接）。测试夹具 token 一律假值占位符（`sk-test` 形态，SEC-18）；真实凭据只经 `source.rs` 读 user 层 `~/.claude/settings.json`（仓库外），禁止以真实值替换夹具或写入任何 git 追踪文件。
+- **token 不出后端**：DTO 键集 serde 精确匹配测试锁死（无 token 字段）；本模块所有 tracing!/Err 构造消息禁止插值 token 与 Authorization 头（ureq 错误 Display 不含请求头，构造错误消息时禁止自行拼接）。测试夹具 token 一律假值占位符（`sk-test` 形态，SEC-18）；真实凭据只经 `source.rs` 读 user 层 `~/.claude/settings.json`（仓库外），禁止以真实值替换夹具或写入任何 git 追踪文件。
 - **URL 归一化只小写化 + 去尾斜杠**（规格字面）：不加 trim，`trim_end_matches('/')` 不处理空白。
 - **kimi 结构实证（2026-08-28 curl 实测 + 社区审计，修正规格 §5.2 假定）**：`GET /coding/v1/usages` + `Authorization: Bearer`（非 X-Kimi-Authorization）；5h 窗数值（`used`/`limit`/`remaining`/`resetTime`）承载于 **`limits[i].detail` 内层**（外层无）；7d 窗为顶层 `usage` 对象；`remaining` 恒在、`used` 可缺（两种账号形态均实证，事实不变）→ **展示口径 = 已用百分比（2026-09 起，用户偏好展示已用量而非剩余）：`used` 优先**（used/limit×100）、**remaining 换算回退**（(limit−remaining)/limit×100）——回退路径可行恰因「remaining 恒在」实证；`.round()` + clamp 0–100 保留；limit 缺失/≤0/不可解析 → 该窗口失败（全有或全无）。`totalQuota` **无 `used` 字段**（实测可为空对象 `{}`）。真实响应快照锚点：`kimi.rs::parse_real_response_snapshot`。
 - **kimi 数值字段按字符串解析**（实证口径）：`used`/`limit`/`remaining` 均为字符串，`.as_str()` 读取——若 API 返回数字形态，须先实测确认再放宽。
@@ -54,7 +54,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## 测试模式
 
 - `merge_slot` / `poll_once_with` 全部参数化/注入，L1 不触网不触盘：`poll_once_with` 的 resolve/fetch 闭包注入。执行体 `poll_once_executor` 与轮询循环本体由 background_tasks 骨架驱动（emit 在 `apply_snapshot` 内，需 AppHandle），其 L1 豁免登记于 background_tasks/CLAUDE.md。
-- 解析纯函数（`parse_deepseek_balance` / `parse_kimi_usages` / `resolve_env`）罐装 JSON 全测。kimi 解析含真实响应快照锚点（`parse_real_response_snapshot`，防下次 API 漂移）+ 双形态变体（detail 含/不含 used、totalQuota 缺失/空对象/非数字）。
+- 解析纯函数（`parse_deepseek_balance` / `parse_kimi_usages` / `resolve_env`）罐装 JSON 全测。kimi 解析含真实响应快照锚点（`parse_real_response_snapshot`，防下次 API 漂移）+ 账号形态变体（形态语义见外部坑红线节）。
 - serde 键集合精确匹配（照 hooks/mod.rs `assert_status_key_set` 先例）——token 红线守卫。
 - `get_plan_balance` 命令核心经 current_thread runtime block_on 直测（照 hooks/mod.rs `block_on` 直测先例）。
 
@@ -62,4 +62,4 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 | 豁免项 | 原因 | 当前兜底 |
 |--------|------|---------|
-| plan_balance 真实 HTTP 查询（ureq fetch） | 真实外部 API 依赖（规格 §3 不做 L4） | 解析与状态机 L1 全覆盖（罐装 JSON/参数化编排）+ L2 UI 四场景 + 人工实测（真实账号一轮）——登记于 test-exemptions（F10） |
+| plan_balance 真实 HTTP 查询（ureq fetch） | 真实外部 API 依赖（规格 §3 不做 L4） | 解析与状态机 L1 全覆盖（罐装 JSON/参数化编排）+ L2 UI 场景 + 人工实测（真实账号一轮）——登记于 test-exemptions（F10） |

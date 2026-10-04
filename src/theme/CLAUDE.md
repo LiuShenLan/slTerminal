@@ -22,7 +22,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 不定义任何颜色值，import 时取 `schemeRegistry.getActive().ui` 逐 token 代理导出。`ROOT_CSS_VARS` 由 `main.tsx` 注入 `document.documentElement`，App.css 仅 `var()` 引用。
 
-### overrides.ts 五导出
+### overrides.ts 导出
 
 - `dockviewVarStyle()` / `allotmentVarStyle()`：active 方案 libraries 段 → CSS 变量 style 对象。
 - `getEditorTheme()`：函数形 = 当前 active 方案 `editor.theme`（linear 为 oneDark 直 import 透出）。
@@ -51,11 +51,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 4. E2E helpers
 5. `import("./App")` + render
 
-**启动链 fail-safe 三处静态色**（先于方案加载，不随方案切换）：色源 = `schemes/linear.ts`（`appBgPrimary`/`sidebarFg`/`errorFg`），构建期由 `scripts/sync-startup-colors.mjs` 提取改写 `index.html` body background、`tauri.conf.json` backgroundColor、`src/theme/startupColors.ts`（生成物，勿手改）；`main.tsx` 超时错误页读 `startupColors.ts` 常量（零依赖模块，不触发 facade 求值）。接线 = package.json `predev`/`prebuild`——硬约束 #6 自此无例外。
+**启动链 fail-safe 静态色**（先于方案加载，不随方案切换）：色源 = `schemes/linear.ts`（`appBgPrimary`/`sidebarFg`/`errorFg`），构建期由 `scripts/sync-startup-colors.mjs` 提取改写 `index.html` body background、`tauri.conf.json` backgroundColor、`src/theme/startupColors.ts`（生成物，勿手改）；`main.tsx` 超时错误页读 `startupColors.ts` 常量（零依赖模块，不触发 facade 求值）。接线 = package.json `predev`/`prebuild`——硬约束 #6 自此无例外。
 
 ### 终端 adapter
 
-`panels/terminal/theme.ts` 不再是独立主题定义，而是展开 `schemeRegistry.getActive().terminal` 25 键进 xterm `ITheme`；非色选项原位保留。新面板的终端类渲染器配色同样走方案系统，不再登记新例外。
+`panels/terminal/theme.ts` 不再是独立主题定义，而是展开 `schemeRegistry.getActive().terminal` 段全键进 xterm `ITheme`；非色选项原位保留。新面板的终端类渲染器配色同样走方案系统，不再登记新例外。
 
 ## 外部坑/红线
 

@@ -41,7 +41,7 @@ export const E2E_ENABLED =
 
 ### path.ts 规范
 
-四个纯函数统一使用正斜杠 `/`，Windows 路径在比较前规范化：
+本模块纯函数统一使用正斜杠 `/`，Windows 路径在比较前规范化：
 
 - `normalizePath`：反斜杠→正斜杠。
 - `basename`：提取文件名。

@@ -79,11 +79,11 @@
 
 **决策**：
 - src/theme/ 下设 schemes/（ColorScheme 四段：ui/terminal/editor/libraries + darcula 内置方案）+ SchemeRegistry 模块级单例（项目注册表惯例第 6 例）。
-- colors.ts 改 facade：31 个同名导出值代理 active 方案，369 处消费点零改动。
+- colors.ts 改 facade：同名导出值代理 active 方案，消费点零改动。
 - 方案切换 = settings.json `colorScheme` 段手编 + 重载窗口生效；main.tsx 启动时 React 挂载前解析（App 改动态 import 保证 facade 求值晚于 setActive）。
 - 三方库色经 overrides 通道：dockview --dv-* 与 Allotment 变量内联注入挂载点；oneDark 作 editor.theme 引用 + lint/search/背景 token 化覆盖。
 - 零视觉变化：所有覆盖值取现行有效值；死配置全清（3 死 token + 2 零消费 CSS 变量 + 1 违规收敛）。
-- 启动链 fail-safe 色（index.html/tauri.conf.json/main.tsx 三处静态层）经**构建期通道**同步：`scripts/sync-startup-colors.mjs` 从方案文件提取改写三处消费点，运行期仍不经 facade（CP-027）。
+- 启动链 fail-safe 色（index.html/tauri.conf.json/main.tsx 静态层）经**构建期通道**同步：`scripts/sync-startup-colors.mjs` 从方案文件提取改写三处消费点，运行期仍不经 facade（CP-027）。
 
 **被否决的备选**：
 - 运行期即时切换（壳层 token 全面响应式）：369 处常量消费 + xterm 创建期消费需全量改造，代价 vs 暗色系低频切换收益不成比例。编辑器侧障碍后经 CP-039 消除（见后果），壳层全面响应式仍否决。
@@ -109,7 +109,7 @@
 - 风格锚点 Linear/Zed 近纯黑现代风；暖黑**明度阶梯** 6 档（`#0a0a0b`→`#2b2b31`），内容区最暗；分隔一律**发丝线**（半透明白 0.055/0.09）。
 - 单强调色现代蓝 `#6e9ff2`（<5% 像素占比）；语义色低饱和暖协调；终端 ANSI 16 色与编辑器语法色全量重调（**双轨配色**：壳层 token 与内容色板互不混用）。
 - 自绘 34px 一体化标题栏（原生标题栏退役）；扁平页签 + 底部 2px 指示条 + hover 才显关闭钮。
-- 侧栏 IA 重构为**统一导航树**（项目 → 页面 → 会话，历史会话折叠计数）；文件浏览器独立为活动栏视图；活动栏固定槽位（现为四槽：导航树/文件/Commit/Agent 全局文件，第四槽随 ADR-0024 追加）。
+- 侧栏 IA 重构为**统一导航树**（项目 → 页面 → 会话，历史会话折叠计数）；文件浏览器独立为活动栏视图；活动栏固定槽位（导航树/文件/Commit/Agent 全局文件——agentFiles 槽随 ADR-0024 追加）。
 - 装饰图标全部单色线性 SVG（15px/1.5px 描边/currentColor）；状态 emoji → **状态圆点**（绿/黄/灰，语义来源 F3 不变）；CLI 品牌 logo 保留彩色。
 - 交付物：`design.md`（设计方案）、`requirements.md`（UI-xxx 编号需求 + 可测验收 + P0/P1 + 对比度自检附录）、`final-mockup.html`（主界面 + 组件集双页静态稿）。
 
@@ -174,7 +174,7 @@
 - vendor 二进制入库（`src-tauri/vendor/conpty/`，含 LICENSE/README，更新流程见 README）；slterminal_lib.dll 体积 +~1.1MB。
 - 杀软风险：OpenConsole.exe 为微软签名二进制，提取到用户目录风险低（先例：.NET 官方同法分发）。
 - **自动化无法守卫真实鼠标转发**（先例同 0x8/0x3）——Win10 实机验证红线：真实 claude 滚轮 + 键盘/IME/kitty + resize + 删除提取目录回退验证。
-- 行为固化点：`src-tauri/src/pty/conpty_api.rs`（L1 5 条测试守卫决策/路径/幂等）+ `compute_conpty_flags` 三态（L1 7 条）。
+- 行为固化点：`src-tauri/src/pty/conpty_api.rs`（L1 守卫决策/路径/幂等）+ `compute_conpty_flags` 三态（L1 锁死）。
 
 ## 0006 依赖版本策略（生产精确 / 开发 ^）
 
@@ -217,14 +217,14 @@
 
 **Status**: accepted（2026-08-18）
 
-**上下文**：Rust 侧 `notify`（文件系统监听核心）与 `notify-debouncer-full` 为 RC 版本。一手证据（`src-tauri/Cargo.toml:36-37、48-49` 跟踪注释）：`notify` 9.0.0 仍为 RC 阶段——最新稳定版 8.2.0（2025-08-03），而 rc.4（2026-05-02）为当前**最新**版本，无更高稳定版可升；降 8.x 属功能回退。watcher 行为有 notify 模块 51 条 L1 回归测试守护。
+**上下文**：Rust 侧 `notify`（文件系统监听核心）与 `notify-debouncer-full` 为 RC 版本。一手证据（`src-tauri/Cargo.toml` 跟踪注释）：`notify` 9.0.0 仍为 RC 阶段——最新稳定版 8.2.0（2025-08-03），而 rc.4（2026-05-02）为当前**最新**版本，无更高稳定版可升；降 8.x 属功能回退。watcher 行为有 notify 模块 L1 回归测试守护。
 
-**决策**：**保持 RC，不降 8.x**；沿用 Cargo.toml 跟踪注释关注 `https://crates.io/crates/notify` 正式发布。上游发布稳定版后升级，升级时跑 notify 模块全量 L1（51 条 watcher 回归）+ 大目录监听实测。
+**决策**：**保持 RC，不降 8.x**；沿用 Cargo.toml 跟踪注释关注 `https://crates.io/crates/notify` 正式发布。上游发布稳定版后升级，升级时跑 notify 模块全量 L1（watcher 回归）+ 大目录监听实测。
 
 **后果**：
 
 - `notify` 正式版发布即升级触发点（Cargo.toml 注释已登记），升级走常规依赖变更流程。
-- RC 风险（API 变动/缺陷）由 51 条 L1 回归守护兜底，与 9.x 前瞻收益（后续版本能力）权衡后接受。
+- RC 风险（API 变动/缺陷）由 L1 回归守护兜底，与 9.x 前瞻收益（后续版本能力）权衡后接受。
 
 ## 0009 review-fix 豁免与决策汇总登记
 
@@ -269,7 +269,7 @@
 | D16 | SEC-04 nonce | **威胁模型已消除**：键转发/命令重放通道随 ADR-0019 预览迁移退役；nonce 保留为纵深。0021 以收窄 keyfwd 重建通道并登记新威胁面（global 命令集锁死，command-catalog.test.ts 守卫） | src/panels/CLAUDE.md |
 | D17 | SEC-16 root 竞态 | 后端 `tokio::sync::Mutex` 串行化整个 `set_project_root_impl`（Cargo.toml tokio 补 `"sync"` feature）；前端零改动 |
 | D18 | FE-37 store IPC | `setProjectRoot` 调用上提调用方（store 纯状态化）；toast 由 `switchToPageShared` 承担（BE-23 同链修）；不登记豁免 |
-| D19 | FE-39 嵌套项目 | 接受「最深前缀」语义；实查测试已固化（`nav-tree-history.test.tsx:302-336`），零代码改动，仅 verify 断言确认存在 |
+| D19 | FE-39 嵌套项目 | 接受「最深前缀」语义；实查测试已固化（`nav-tree-history.test.tsx` 嵌套项目用例），零代码改动，仅 verify 断言确认存在 |
 | D20 | FE-40/FE-41/FE-46 | 三项 P2 均实修（滚动跟随 / 空目录行移除 / ErrorBoundary 重试） |
 
 **核验留痕**：计划期已实读全部修复点代码原文（FE-39 已固化降为验证项；FE-45 实查为 5 处 catch{}，05 报告列 3 处失实）。
@@ -335,7 +335,7 @@
 **决策**：
 
 - **双端各自抽象，不设跨端统一调度器**：后端泛化 plan_balance 通用件（间隔内存原子量/每轮末 sleep/读盘初始化/set 命令）为任务骨架（静态切片注册表，照 `SOURCES`/`QUERIES` 先例）；前端新建 backgroundTasks 调度器（#13 注册表家族：全局单例、订阅者计数启停、首轮立即执行、tick 防重入、triggerNow）。
-- **任务元数据单点 = 后端注册表**（含前端任务的代管：执行体字段 None 即前端任务，后端只管 id/标题/边界/默认值与配置读写）；设置页与前端调度器统一经 `background_tasks_list()` 读通道取数，前端不复制边界/默认值——DTO `BackgroundTaskInfo` 六键**无 default 字段**（FR-2 写死）的直接后果：行内提示只写范围不写默认值，默认值变更只动后端注册表。taskId 合法值集前后端同步测试锁死（HooksLayer ↔ `Layer` 枚举先例，硬约束 #4）。
+- **任务元数据单点 = 后端注册表**（含前端任务的代管：执行体字段 None 即前端任务，后端只管 id/标题/边界/默认值与配置读写）；设置页与前端调度器统一经 `background_tasks_list()` 读通道取数，前端不复制边界/默认值——DTO `BackgroundTaskInfo` 键集**无 default 字段**（FR-2 写死）的直接后果：行内提示只写范围不写默认值，默认值变更只动后端注册表。taskId 合法值集前后端同步测试锁死（HooksLayer ↔ `Layer` 枚举先例，硬约束 #4）。
 - **配置单写通道 = 后端 `background_tasks_set_config` 命令**（taskId 子键读-改-写合并 → 复用 settings.rs 写通道），前端任务的配置也经此命令代管落盘——杜绝浅合并顶层键互覆；前端消费型 `save_settings` 段写不适用于本段。
 - **配置结构**：统一顶层段 `backgroundTasks.{taskId}.{enabled,intervalSec}`；白名单 `planBalance` 键替换为 `backgroundTasks`；单用户不做旧键迁移。
 - **配置变更前端感知 = 后端 emit 事件，不建前端总线**：`background_tasks_set_config` 成功后 emit `background-tasks-updated`（payload = 完整 `BackgroundTaskInfo[]`），footer/设置页订阅即知；`background_tasks_list` 只作读通道不 emit。后端单写通道是配置真值源，前端自建总线会造成双真值源脱节。
@@ -552,7 +552,7 @@
 **后果**：
 
 - 跨页组拖拽禁令不变（审计回迁少数派）；页内拖拽分屏合法化。
-- 删页 = `groupsOfPage` 逐组 removeGroup（分屏组一并清除）；页内 addPanel 五入口统一 `resolvePageGroupForAdd` 落组。
+- 删页 = `groupsOfPage` 逐组 removeGroup（分屏组一并清除）；页内 addPanel 入口统一 `resolvePageGroupForAdd` 落组。
 - 组对象 identity 跨 whole-grid fromJSON 可变约束不变（CP-004 登记）。
 - L4 `workspace-split.e2e.ts` 经 moveTo 等价落点覆盖分屏路径；真实拖拽手势（pointer 序列）自动化豁免登记 test-exemptions.md。
 
@@ -646,7 +646,7 @@
 
 **决策**：
 
-1. **agent 目录 = 后端静态表唯一真值源**：`src-tauri/src/agent_dirs.rs` 持 cliId → home 相对目录硬编码表（当前仅 claude → `.claude`），`resolve_agent_dirs()` 经 `crate::home::home_dir()` 解析；DTO `AgentGlobalDir { cli_id, path, exists }` 经 ts-rs 生成，`agent_dirs_list` 命令下发。前端永不能注入任意 agent 路径。
+1. **agent 目录 = 后端静态表唯一真值源**：`src-tauri/src/agent_dirs.rs` 持 cliId → home 相对目录硬编码表，`resolve_agent_dirs()` 经 `crate::home::home_dir()` 解析；DTO `AgentGlobalDir { cli_id, path, exists }` 经 ts-rs 生成，`agent_dirs_list` 命令下发。前端永不能注入任意 agent 路径。
 2. **沙箱放行域扩展**：`validate_path_within_root` 放行域 = project_root ∪ agent 目录集，canonicalize 双向比较（兼容 symlink）。fs/git/notify/pty 全族命令自动获得 agent 目录访问——编辑器/预览链路零改造，不为 agent 文件建第二套读取通道。
 3. **pinned watcher**：`notify_watch(path, pinned?)` 置条目标记——pinned 条目被 `pause_all_except` 跳过（照 touch last_used：项目切换不暂停 agent 监听，agent 监听启动也不暂停项目 watcher，两侧皆免），`evict_lru` 避让（全 pinned 退化全池 LRU）；`notify_stop_watch` 语义不变（移除即清标记）。池容量 8 足够（1 项目 + N agent）。
 4. **`agentGlobalFiles` settings 段不设 Rust DTO**：纯透传段（SEC-11 白名单 +1），校验/净化在前端 `features/agentFiles/filtering.ts`——照 ADR-0014 cliAliases 先例：前端消费型配置段 Rust 复刻校验即双源漂移。

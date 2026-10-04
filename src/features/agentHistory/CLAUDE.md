@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 存在理由
 
-Agent 历史会话查询与恢复（CLI 无关聚合，MC-310 泛化）。**宿主 = 导航树历史折叠节点（NAV-03）**：`NavTree` 经 `useNavTree` 内建历史聚合（`useAgentHistory` 数据 + 按项目 cwd 归属归组），历史行 = `NavHistoryRow` 单行式。数据经 `src/ipc/agentHistory` 两命令（`agent_history_scan` / `agent_history_delete`）与后端 `src-tauri/src/agent_history` 交互。
+Agent 历史会话查询与恢复（CLI 无关聚合，MC-310 泛化）。**宿主 = 导航树历史折叠节点（NAV-03）**：`NavTree` 经 `useNavTree` 内建历史聚合（`useAgentHistory` 数据 + 按项目 cwd 归属归组），历史行 = `NavHistoryRow` 单行式。数据经 `src/ipc/agentHistory` 命令与后端 `src-tauri/src/agent_history` 交互。
 
 **重命名功能已整体移除**（前端 UI/菜单、IPC wrapper、后端命令全链路删除，官方 `/rename` 是 custom-title 唯一写入方）。**`AgentHistorySections` / `HistorySessionList` / `HistorySessionRow` 已删除（NAV-08/FE-25）**——原三区结构随 `AgentStatusView` 退役，历史区迁入导航树。
 
@@ -96,7 +96,7 @@ Agent 历史会话查询与恢复（CLI 无关聚合，MC-310 泛化）。**宿�
 - 状态机、订阅首轮自动执行（挂载即扫语义）、triggerNow、removeLocal、subscribe 驱动 activeStatuses。
 - 四步编排、可取消、防重入、失败 toast、无 history 能力防御。
 - SessionActionDialog 弹窗行为。
-- 两命令 × 四维契约验证，经 `helpers/ipc-contract.ts` 共享工厂。
+- IPC 契约验证，经 `helpers/ipc-contract.ts` 共享工厂。
 - 导航树历史节点契约（NAV-03/10）。
 
 ## 运行

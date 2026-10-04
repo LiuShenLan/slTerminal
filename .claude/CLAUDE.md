@@ -36,6 +36,8 @@ AI 拥有执行权，用户拥有**改动决策权**。任何任务（探索、�
 ## 文档规范
 
 - **代码自证原则（ADR-0011）**：凡能通过阅读代码直接理解的信息（模块职责、文件清单、入口路径、接口签名、数据流、技术栈、现状描述等）一律不写入文档——此类内容必然腐化为失真文档。文档只记录代码无法自证的信息：设计决策与原因（why）、外部依赖的坑与红线、操作指令、约定与豁免登记。
+- **快照数字禁令**：代码可自证的条目计数（spec 数/文件数/事件数/名单项数/变体数等）禁止入文档——代码即真值，计数必腐化且无决策价值；契约数值（超时/容量/阈值/尺寸，本身即设计决策）、证据锚点（实测基准/日期/hash/上游版本号）、结构性计数（概念名组成部分，如「四级测试金字塔」）不在禁列。
+- **行号引用禁令**：本仓源码/测试行号禁止引用（插行即腐）——源码引符号名、测试引用例名；上游 node_modules 行号与锁定版本共锚，允许。
 - **渐进式披露**：读取某目录代码时，Claude Code 自动加载该路径的 CLAUDE.md（渐进式披露的物理基础），无需登记索引。
 - **收录判定**：跨 ≥2 个模块适用、或每次会话必需的指令入根文件；仅触碰某模块才需要的归该模块子路径 CLAUDE.md。记录规则/说明/条件/经验/踩坑等文本内容时同样按此归位，注意精简/下沉。
 - **子文件维护**：新建模块目录时同步创建该路径 CLAUDE.md（模板结构读任一现有子文件即知，不在此复述）；改动约定/决策/红线时同步对应 CLAUDE.md——只改实现不改约定时无需动文档。
@@ -54,7 +56,7 @@ AI 拥有执行权，用户拥有**改动决策权**。任何任务（探索、�
 1. **前端绝不直接碰 OS/文件/进程**：`invoke` 只允许出现在 `src/ipc/`；其它文件只调用 `ipc/` 暴露的领域函数（→ ../src/ipc/CLAUDE.md）。
 2. **后端按功能分模块**：模块间不互相穿透，共享只经 `state.rs` 的 `AppState`（→ ../src-tauri/src/CLAUDE.md）。
 3. **命令统一注册**于 `lib.rs` 的 `generate_handler!`；一律返回 `Result<_, AppError>`；阻塞 I/O 用 `spawn_blocking`（→ ../src-tauri/src/CLAUDE.md）。
-4. **DTO 单源（CP-024）**：Rust `#[derive(TS)]` 经 ts-rs 生成 `src/types/` 对应文件（10 域文件为生成物，禁手改；改 DTO = 改 Rust → `cargo test --test lib_tests export_bindings -- --test-threads=1` → `git diff --exit-code -- src/types` 守卫）。Rust `snake_case` ↔ JS `camelCase`；前端专有形态（组合别名/常量族/GUI 模型）落 `local.ts`/`hooksConfigGui.ts` 残面。字段语义值集同步登记与双侧字面量测试契约不变（→ ../src/types/CLAUDE.md）。
+4. **DTO 单源（CP-024）**：Rust `#[derive(TS)]` 经 ts-rs 生成 `src/types/` 对应文件（生成物禁手改；改 DTO = 改 Rust → `cargo test --test lib_tests export_bindings -- --test-threads=1` → `git diff --exit-code -- src/types` 守卫）。Rust `snake_case` ↔ JS `camelCase`；前端专有形态（组合别名/常量族/GUI 模型）落 `local.ts`/`hooksConfigGui.ts` 残面。字段语义值集同步登记与双侧字面量测试契约不变（→ ../src/types/CLAUDE.md）。
 5. **面板封闭**：Dockview 面板只能是 `panels/` 下注册过的类型；新增类型 = 加目录 + 在 `panelRegistry.ts` 注册。合法形态含「hub 容器 + 注册表分派子编辑器」（→ ../src/panels/CLAUDE.md）。
 6. **配色单点**：颜色定义于 `theme/schemes/<scheme>.ts`，组件经 `theme/colors.ts` facade token 引用，禁止硬编码颜色；既定例外清单及新增例外须同步登记对应模块 CLAUDE.md（→ ../src/theme/CLAUDE.md）。
 7. **布局单点**：操作页面布局只经 `workspace/layoutSerde.ts` 用 Dockview `toJSON/fromJSON` 存取（→ ../src/workspace/CLAUDE.md）。

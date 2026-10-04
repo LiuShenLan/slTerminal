@@ -4,13 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 存在理由
 
-`src-tauri/src/agent_history` 聚合各 CLI 的历史会话数据（当前仅 claude），向前端暴露统一的 scan/delete/read_title 命令。扫描缓存策略、SEC-05 校验前置、运行中标题读取语义与 provider 注册表形态，属于跨 CLI 的设计决策，必须文档化。
+`src-tauri/src/agent_history` 聚合各 CLI 的历史会话数据，向前端暴露统一的 scan/delete/read_title 命令。扫描缓存策略、SEC-05 校验前置、运行中标题读取语义与 provider 注册表形态，属于跨 CLI 的设计决策，必须文档化。
 
 ## 关键约束与决策
 
 ### `CliHistoryProvider` trait + cliId 注册表
 
-`provider.rs` 定义四方法 trait：
+`provider.rs` 定义 provider trait：
 - `scan() -> Vec<AgentHistorySession>`（无 Err 通道，失败降级为空/部分结果）；
 - `delete(session_id)` / `read_title(session_id)`；
 - `validate_session_id(session_id)`。

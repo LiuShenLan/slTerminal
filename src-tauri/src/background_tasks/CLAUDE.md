@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### 注册表形态 = 静态切片（U2，偏离硬约束 #13 可变单例）
 
-`registry.rs` 的 `TASKS`/`RUNTIMES` 为静态切片（照 `plan_balance/source.rs` SOURCES/QUERIES 先例）。偏离 #13 可变单例的理由：Rust 无 side-effect import（#13 先例全为前端模块）。锁死手段：`tasks_registry_key_set_locked` 精确断言键集与逐任务六字段（边界表）+ `runtimes_same_length_as_tasks` 等长守卫。新增任务 = `TASKS` 追加一行 + `RUNTIMES` 追加一项 + 前端 `BACKGROUND_TASK_IDS` 加一项（taskId 值集双边字面量测试锁死，硬约束 #4 先例：HooksLayer ↔ `Layer` 枚举）。
+`registry.rs` 的 `TASKS`/`RUNTIMES` 为静态切片（照 `plan_balance/source.rs` SOURCES/QUERIES 先例）。偏离 #13 可变单例的理由：Rust 无 side-effect import（#13 先例全为前端模块）。锁死手段：`tasks_registry_key_set_locked` 精确断言键集与逐任务字段（边界表）+ `runtimes_same_length_as_tasks` 等长守卫。新增任务 = `TASKS` 追加一行 + `RUNTIMES` 追加一项 + 前端 `BACKGROUND_TASK_IDS` 加一项（taskId 值集双边字面量测试锁死，硬约束 #4 先例：HooksLayer ↔ `Layer` 枚举）。
 
 ### 顺序写死「校验 → 落盘 → 内存」
 
@@ -26,7 +26,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### 前端任务 executor=None 仅代管
 
-`executor: Option<TaskExecutor>`——None = 前端任务（sessionRefresh 先例）：后端不 spawn 循环，仅代管配置读写与元数据（id/标题/边界/默认值），执行体在前端调度器（src/features/backgroundTasks）。DTO `BackgroundTaskInfo` 六键**无 default 字段**（FR-2 写死）——默认值单点在后端注册表，前端不复制边界/默认值，行内提示只写范围不写默认值（serde 键集合精确断言锁死）。
+`executor: Option<TaskExecutor>`——None = 前端任务（sessionRefresh 先例）：后端不 spawn 循环，仅代管配置读写与元数据（id/标题/边界/默认值），执行体在前端调度器（src/features/backgroundTasks）。DTO `BackgroundTaskInfo` 键集**无 default 字段**（FR-2 写死）——默认值单点在后端注册表，前端不复制边界/默认值，行内提示只写范围不写默认值（serde 键集合精确断言锁死）。
 
 ## 外部坑/红线
 
@@ -36,8 +36,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 测试模式
 
-- `registry.rs`：`tasks_registry_key_set_locked` / `runtimes_same_length_as_tasks` / `find_hit_and_miss` / `resolve_task_config_*`（AppDataDirGuard 注入 tempdir，逐字段独立钳制）。
-- `mod.rs`：`background_task_info_serde_key_set`（六键精确）/ `list_returns_registry_order_with_defaults` / `set_config_core`（校验/落盘/合并/一致性）——每例首行 `reset_runtimes_for_test()` 重置内存值（--test-threads=1 门禁保证无并发干扰），current_thread runtime block_on 驱动 async 命令。
+- `registry.rs`：锁死用例（`tasks_registry_key_set_locked` / `runtimes_same_length_as_tasks`，见上节）+ 钳制用例（AppDataDirGuard 注入 tempdir，逐字段独立钳制）。
+- `mod.rs`：`background_task_info_serde_key_set`（键集精确）/ `list_returns_registry_order_with_defaults` / `set_config_core`（校验/落盘/合并/一致性）——每例首行 `reset_runtimes_for_test()` 重置内存值（--test-threads=1 门禁保证无并发干扰），current_thread runtime block_on 驱动 async 命令。
 - 键集前后端双边锁：本模块 serde 断言 ↔ `src/__tests__/ipc-background-tasks-contract.test.ts`（键集合 + 值集）↔ `src/__tests__/background-tasks-scheduler.test.ts`（值集断言）。
 
 ### 既定豁免

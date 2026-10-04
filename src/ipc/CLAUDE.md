@@ -35,16 +35,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `onFsEvent` / `onFsPoll` / `onAgentEvent` / `onPlanBalanceUpdated` 封装 Tauri `listen(...)`，返回 unsubscribe 函数。调用方负责在卸载时取消订阅。
 
-- `onFsPoll`（2026-09-25）：后端 watcher 10s 心跳事件（`fs-poll`，`FsPollPayload { paths }` = 监听根），事件丢失补漏通道；消费方仅编辑域三处（useCodeMirror/DiffPanel/LargeFileViewer），契约细节见 src-tauri/src/notify/CLAUDE.md。
+- `onFsPoll`（2026-09-25）：后端 watcher 10s 心跳事件（`fs-poll`，`FsPollPayload { paths }` = 监听根），事件丢失补漏通道；消费方仅限编辑域（清单与契约见 src-tauri/src/notify/CLAUDE.md）。
 - **unlisten 竞态（⑥ 登记）**：`listen()` 异步注册，wrapper 形态为 `unlisten.then(fn => fn())`——组件挂载后**立即卸载**时取消可能先于注册完成，此时 then 回调在注册完成后补取消，语义正确；但卸载与事件窗口叠加时 handler 闭包仍可能被已 in-flight 的事件调用一次（editor-confirm E9/E10 锁死此形态：unmount 后回调不 throw、不读盘）。消费方 handler 须幂等防御卸载后调用，勿假设 unlisten 后零回调。
 
 ### PTY 命令归属校验（SEC-08）
 
-`pty.write` / `pty.resize` / `pty.kill` 三 wrapper 签名均含 `panelId`，invoke payload 同步传 `panelId`（JS `panelId` ↔ Rust `panel_id` 由 Tauri 自动转换）。后端凭此校验面板归属。
+`pty.write` / `pty.resize` / `pty.kill` wrapper 签名均含 `panelId`，invoke payload 同步传 `panelId`（JS `panelId` ↔ Rust `panel_id` 由 Tauri 自动转换）。后端凭此校验面板归属。
 
 ### ConPTY 状态查询（CP-010）
 
-`getConptyStatus()` 无参 wrapper → `pty_conpty_status`，返回 `ConptyStatus`（三键 attempted/bundled/fallbackReason，双边 = `src/types/pty.ts` ↔ `src-tauri/src/pty/conpty_api.rs`）。App 启动序列一次性调用：`attempted && !bundled`（Win10 回退系统 conhost）→ toast 提示降级后果（滚轮转发不可用）；bundled/未尝试静默；invoke 失败由调用方 catch 降级，不阻断启动。
+`getConptyStatus()` 无参 wrapper → `pty_conpty_status`，返回 `ConptyStatus`（attempted/bundled/fallbackReason，双边 = `src/types/pty.ts` ↔ `src-tauri/src/pty/conpty_api.rs`）。App 启动序列一次性调用：`attempted && !bundled`（Win10 回退系统 conhost）→ toast 提示降级后果（滚轮转发不可用）；bundled/未尝试静默；invoke 失败由调用方 catch 降级，不阻断启动。
 
 ### 文件监听成对（BE-10）
 
@@ -60,7 +60,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### agent hooks 泛化命令（MC-211）
 
-`agentHooks.ts` 所有 wrapper 加 `cliId` 首参（7 命令全表：`agent_hooks_inject` / `agent_hooks_uninstall` / `agent_hooks_injection_status` / `agent_hooks_restore_statusline` / `agent_hooks_confirm_inject` / `agent_hooks_config_read` / `agent_hooks_config_write`——后两条在 hooksConfig.ts）。未知 cliId → 后端 Validation。`confirmInject(cliId)` 为 CP-043 确认注入：inject 命中可疑 statusline 命令返回 `pendingConfirmation` 时，前端展示命令原文、用户确认后二次调用（跳过审查完成注入）。
+`agentHooks.ts` 所有 wrapper 加 `cliId` 首参（全表：`agent_hooks_inject` / `agent_hooks_uninstall` / `agent_hooks_injection_status` / `agent_hooks_restore_statusline` / `agent_hooks_confirm_inject` / `agent_hooks_config_read` / `agent_hooks_config_write`——后两条在 hooksConfig.ts）。未知 cliId → 后端 Validation。`confirmInject(cliId)` 为 CP-043 确认注入：inject 命中可疑 statusline 命令返回 `pendingConfirmation` 时，前端展示命令原文、用户确认后二次调用（跳过审查完成注入）。
 
 ### hooks 配置命令与 hooks 注入命令分离
 
@@ -90,7 +90,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### 窗口控制 wrapper（TB-03）
 
-`window.ts` 提供八个 wrapper：
+`window.ts` 提供 wrapper：
 
 - `registerCloseHandler`：封装 `onCloseRequested` 生命周期（preventDefault + 回调 + finally destroy）。
 - `onFocusChanged`：窗口焦点监听。
@@ -116,7 +116,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 外部坑/红线
 
-- **mockIPC 不验证真实序列化**：契约测试用 `mockIPC` 只守 JS 侧形状（命令名、payload 字段名/类型、返回透传、异常传播）。camelCase↔snake_case 真实字段转换、Channel 序列化、Uint8Array↔number[]、listen 回调运行时解包由 L4 E2E 守卫。DTO 形状真值源 = Rust ts-rs 生成（`src/types/` 10 域文件，CP-024），JS 侧不得另造结构——形状之争一律回 Rust derive。
+- **mockIPC 不验证真实序列化**：契约测试用 `mockIPC` 只守 JS 侧形状（命令名、payload 字段名/类型、返回透传、异常传播）。camelCase↔snake_case 真实字段转换、Channel 序列化、Uint8Array↔number[]、listen 回调运行时解包由 L4 E2E 守卫。DTO 形状真值源 = Rust ts-rs 生成（`src/types/` 生成文件，CP-024），JS 侧不得另造结构——形状之争一律回 Rust derive。
 - **后端必填参数缺失时 invoke 必 reject 且被调用方 catch 吞 = 契约绿但运行时静默失败**：此场景由 L4 兜底。
 - **PTY `onOutput` 必须绑定到 `Channel.onmessage`**：spawn wrapper 负责把回调挂到 Channel，测试需断言此绑定。
 - **`dialog.ask` 不存在**：任何确认需求改走 `src/lib/ConfirmDialog`。

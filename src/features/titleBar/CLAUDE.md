@@ -31,7 +31,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 测试模式
 
-L2 测试：`src/__tests__/title-bar.test.tsx`（TB-06-1~9 + TB-07-1~5 + FE-21-1/2）：
+L2 测试：`src/__tests__/title-bar.test.tsx`：
 
 - 三段结构渲染、中段标题按 store 种子、三钮点击调对应 IPC wrapper。
 - 中段无 React 双击 handler；左/中段拖拽区 `data-tauri-drag-region="deep"` + `height: "100%"`。

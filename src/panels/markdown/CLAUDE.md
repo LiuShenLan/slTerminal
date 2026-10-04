@@ -43,13 +43,13 @@ md/html 编辑形态字号 = 共享 `editorFontSize` store（Ctrl+滚轮缩放�
 
 ### 预览配色单点（2026-09-06 收编）
 
-md 预览内容经 sandbox iframe（预览域）渲染无法引用宿主 CSS 变量，但配色值一律以 active 方案驱动：mdPreviewStyle 的 buildMdPreviewStyleCss() 每次渲染现拼——正文/底色 = editor.overrides.plainText/background、代码语法 = syntax 9 键（hljs 12 类映射）、结构色 = editor.overrides.preview 组（新增键在 schemes/types.ts 注释登记）、复选框强调引 ui.focusBorder、mermaid 错误文案引 ui.errorFg。改主题即跟随（CM 主题现经 editorThemeSlot 槽热重配置同样即时生效，CP-039）；**禁止在此手抄色值**（曾以字面量双轨登记豁免，已撤销）。
+md 预览内容经 sandbox iframe（预览域）渲染无法引用宿主 CSS 变量，但配色值一律以 active 方案驱动：mdPreviewStyle 的 buildMdPreviewStyleCss() 每次渲染现拼——正文/底色 = editor.overrides.plainText/background、代码语法 = syntax 段键集（hljs 类映射读码即得）、结构色 = editor.overrides.preview 组（新增键在 schemes/types.ts 注释登记）、复选框强调引 ui.focusBorder、mermaid 错误文案引 ui.errorFg。改主题即跟随（CM 主题现经 editorThemeSlot 槽热重配置同样即时生效，CP-039）；**禁止在此手抄色值**（曾以字面量双轨登记豁免，已撤销）。
 
 ### 测试模式
 
 - 纯管线直测（pipeline/assets/links/async 编排——mermaid 模块 mock，jsdom 无布局）。
 - 面板集成（markdown-panel.test.tsx）：mock CM 桥（onDocContent 手动驱动）/allotment（透传 children）；预览编排与消息桥在 postMessage 构造边界驱动（jsdom 真实 iframe + MessageEvent 上行 + contentWindow postMessage spy 捕获推送产物——spy 必须先于 host_ready dispatch 安装）。
-- L4 markdown.e2e.ts：真实 WebView2 渲染产物/图片 data/mermaid SVG/Ctrl+W/缩放（探针模式——__slterm_e2e_previewDoc/iframeLoaded 主窗全局断言，e2e-tests/CLAUDE.md「预览宿主 iframe 驱动契约」节；事件属性通道在预览域（CSP meta 放行内联）执行）。
+- L4 markdown.e2e.ts（探针模式——`__slterm_e2e_previewDoc`/`iframeLoaded` 主窗全局断言，见 e2e-tests/CLAUDE.md「预览宿主 iframe 驱动契约」节；事件属性通道在预览域（CSP meta 放行内联）执行）。
 
 ## 外部坑/红线
 

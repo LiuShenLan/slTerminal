@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 存在理由
 
-CLI profile 注册表（MC-1/101~108）——编码 CLI 身份域与能力策略的单点。claude 为首个 profile（MC-2：全部现有行为经 profile 驱动且零回归）。三处消费：
+CLI profile 注册表（MC-1/101~108）——编码 CLI 身份域与能力策略的单点。claude 为首个 profile（MC-2：全部现有行为经 profile 驱动且零回归）。消费域：
 
 - **身份域**（id/displayName/commands/iconSrc/tabTitle）：OSC 133 C 命中经 `matchByCommand` 取页签标题；品牌 logo 经 `agentSession.cliId` 查 iconSrc（F9）。
 - **hooks 能力**：事件→四态映射 / 通知类别判定 / computeUsagePercent / restartHint / configEditor / configLayers。
@@ -29,7 +29,7 @@ CLI profile 注册表（MC-1/101~108）——编码 CLI 身份域与能力策略
 
 用户别名（settings `cliAliases` 段）**不进 `profile.commands` 静态字段**，以旁路快照（`aliasByToken` 逆映射，别名 token → cliId）参与匹配：
 
-- **why**：commands 是 D3 命名空间计算（内置命令名集合 = `getAll().flatMap(commands)`）与 register 同 id 覆盖语义的真值源；别名混入会破坏两者并污染遍历 profile 的消费方（logo 资源守卫等）。types.ts:70 的 `["claude","cc"]` 多首词形态注释描述的是静态声明能力（未来 CLI 自身支持多命令名时用），语义不变。
+- **why**：commands 是 D3 命名空间计算（内置命令名集合 = `getAll().flatMap(commands)`）与 register 同 id 覆盖语义的真值源；别名混入会破坏两者并污染遍历 profile 的消费方（logo 资源守卫等）。types.ts 的 `["claude","cc"]` 多首词形态注释描述的是静态声明能力（未来 CLI 自身支持多命令名时用），语义不变。
 - **匹配顺序**：内置表 → 别名表（D3 保证两空间无交，顺序无观测差异；手改文件绕过 sanitize 产生违例时内置优先为保守方向）。
 - **写入编排**：快照同步在 App.tsx（loaded 守卫 + store subscribe → setAliases，仿 wireKeybindings）——alias 命中返回映射 profile 对象，消费方按 cliId 归位，与内置命中零差异（oscHandlers → TerminalRegistry → 页签/侧栏全链路无需改动）。
 - 别名校验/净化纯函数在 `aliasValidation.ts`（参数注入，零 import 本注册表）；别名数据状态在 `src/stores/cliAliases.ts`。
@@ -42,7 +42,7 @@ CLI profile 注册表（MC-1/101~108）——编码 CLI 身份域与能力策略
 
 - **条件必填**：`hasConfigEditor=true` 时 `configEditor`（KZ-1）与 `configLayers`（KZ-4）必填。
 - `computeUsagePercent`：用量信号 → 显示百分比（claude = 官方 `usedPercentage` 取整 + 钳位 0–100）。
-- `globalFiles`（ADR-0024）= `{ configDir, runtimePaths }`——声明该 CLI 有全局配置目录（供「Agent 全局文件」侧栏视图与设置中心 Agent 组消费）；`runtimePaths` 为运行时产物名单（默认隐藏，「显示运行时文件」开关控制），claude 的 11 项字面量锁定于 `CLAUDE_RUNTIME_PATHS` 常量。
+- `globalFiles`（ADR-0024）= `{ configDir, runtimePaths }`——声明该 CLI 有全局配置目录（供「Agent 全局文件」侧栏视图与设置中心 Agent 组消费）；`runtimePaths` 为运行时产物名单（默认隐藏，「显示运行时文件」开关控制），claude 的名单字面量锁定于 `CLAUDE_RUNTIME_PATHS` 常量。
 
 ### CLAUDE_CLI_ID 常量约定（MC-205，AC-5 守卫豁免形态）
 
@@ -54,11 +54,11 @@ CLI profile 注册表（MC-1/101~108）——编码 CLI 身份域与能力策略
 
 ### 编辑器归域 `configEditor/`（KZ-1，F11 收编）
 
-claude 专属 hooks 编辑器（ClaudeHooksConfigEditor + 10 文件 + schema/）**归域 `profiles/claude/configEditor/`**——不再位于 panels、不再跨模块引用（F11 迁移后 cliProfiles 零外部面板依赖）。`profiles/claude/index.ts` import `./configEditor/ClaudeHooksConfigEditor` 挂入 `capabilities.hooks.configEditor`；设置中心 Agent 组 hooks 页（`panels/settings/pages/AgentHooksPage`，ADR-0023）经该字段按页 cliId 分派直渲染，页零直接引用（KZ-1 依赖方向不变，只是编辑器资产物理归域）。`types.ts` 仅类型 import，运行期擦除，不构成运行循环。
+claude 专属 hooks 编辑器（ClaudeHooksConfigEditor + schema/ 资产族）**归域 `profiles/claude/configEditor/`**——不再位于 panels、不再跨模块引用（F11 迁移后 cliProfiles 零外部面板依赖）。`profiles/claude/index.ts` import `./configEditor/ClaudeHooksConfigEditor` 挂入 `capabilities.hooks.configEditor`；设置中心 Agent 组 hooks 页（`panels/settings/pages/AgentHooksPage`，ADR-0023）经该字段按页 cliId 分派直渲染，页零直接引用（KZ-1 依赖方向不变，只是编辑器资产物理归域）。`types.ts` 仅类型 import，运行期擦除，不构成运行循环。
 
 **schema 单点（MC-223/P3-FE-07/TE-09/TE-15）**：`configEditor/schema/` 承载 SchemaStore 官方 claude-code-settings schema 内嵌 + hooks 子 schema 提取（`properties.hooks` + 依赖 `$defs` 子集，不含 permissions 专用 permissionRule）+ Draft07 校验单例。协议知识只属于 claude profile 域，**不抽象**为通用能力——其他 CLI 经 `capabilities.hooks.configEditor` 自挂编辑器页（`agent.<cliId>.hooks` 直渲染分派，ADR-0023），但本 schema 单点仍是 claude 专属资产。
 
-- 升级方式：整文件替换 `configEditor/schema/claude-code-settings.json` 即可，离线可用、无网络请求（自包含性已核实：无远程 `$ref`，35 个本地 `$ref` 全指向 `#/$defs/*`）。
+- 升级方式：整文件替换 `configEditor/schema/claude-code-settings.json` 即可，离线可用、无网络请求（自包含性已核实：无远程 `$ref`，本地 `$ref` 全指向 `#/$defs/*`）。
 - `compileSchema(schema, { draft: "draft-07" })` 单例（json-schema-library 11.x）——schema 固定不变，复用避免重复编译；本 schema 无 `$schema` 字段，缺省会选 draft-2020-12，**必须显式 `draft-07` 保持旧语义**（TE-09）。
 - **TE-15 已消解（CP-002）**：json-schema 扩展（原锁 9.x 双 major 并存源）已摘除，自绘 lint/hover 层（`configEditor/jsonSchemaCm.ts`）直接消费本模块 11.x 编译单例；json-schema-library 全仓单实例，katex 式「待上游」债务形态不再保留。
 
@@ -72,7 +72,7 @@ claude 专属 hooks 编辑器（ClaudeHooksConfigEditor + 10 文件 + schema/）
 - 注册表行为全分支 + logo 资源守卫（MC-108 泛化：遍历注册表断言 iconSrc 磁盘存在 + PNG 魔数）。
 - claude 身份域字段 + 常量一致性 + side-effect 注册 + hooks/history 策略输出。
 - AC-4 mock profile 全链路验收（OSC 133 命中 / hooks 能力真实调用 / 历史聚合 UI / hooks 页直渲染分派 / 恢复注入）。
-- AC-5 字面量守卫（通用层七路径扫描 "claude" 字符串/事件名/`~/.claude` 路径零残留）。
+- AC-5 字面量守卫（通用层多路径扫描 "claude" 字符串/事件名/`~/.claude` 路径零残留）。
 
 ## 新增 CLI 步骤
 

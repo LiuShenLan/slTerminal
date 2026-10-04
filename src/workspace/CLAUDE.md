@@ -16,7 +16,7 @@ Workspace 渲染**单一** `<DockviewReact>` 共享宿主（`WorkspaceDockHost.t
 - **页面切换 = 页组容器显隐**：仅活跃页的各组可见（dockview 网格叶级可见性，见下「可见性机制」）。切换只更新 `useLayout.activePageId`（`switchToPageShared`）——宿主订阅刷新，终端不随切页卸载/重建，xterm 实例只 open 一次。根因：xterm.js 不支持二次 `open()`（Issue #4978）。
 - **可见性机制（写死，ADR-0020 取代 maximize）**：`setActivePageVisibility(api, activePageId)` 为可见性单点（恢复/并入/切页/移动后统一调用）——遍历 `api.groups` 中 grid 组，按派生归属 `group.api.setVisible(visible)`，同页多组同隐同显。底层与 maximize 同一 setViewVisible 机制（DOM 保留、面板不卸载、React 不重挂载；jsdom/真实 WebView 双实证），且 setViewVisible 首行 exitMaximizedView——弃 maximize 无残留冲突。隐藏组 display:none 尺寸归零 → fit/resize 不触发；切回后 dockview 重排 → ResizeObserver 自然恢复（恒挂载面板 fit/resize 仅在组可见时执行）。**红线：dockview setVisible 无条件 fire onDidLayoutChange（等值也 fire）——必须等值跳过**（`group.api.isVisible === visible` continue），否则 sync()→setVisible→layoutChange→store 写回→sync() 死循环（jsdom 实证挂死）。无活跃页时整宿主容器 display:none（旧「页面实例全隐藏」空白主区语义）。
 - **页面总数上限消亡**：多实例架构退役后上限（原 FE-01/FE-36）随其删除——全量见 `stores/CLAUDE.md`。
-- **生命周期契约**：新增面板 addPanel 显式 `position.referenceGroup`（六入口统一：tabChrome 工厂/pageApis/openFile/openCommitFile/ExplorerPanel/restoreSession）；落组三档——**显式组优先**（有触发源组上下文时传入：tabChrome 组头 + 钮/右键菜单/Watermark 经 `opts.targetGroup` 落所在组），**缺省走 `resolveFocusedGroupForAdd`**（聚焦组属本页优先 ?? 主组 ?? 页内首组兜底链——主组可被拖空删除），页无组解析 null → 调用方显式失败不落活跃组防错页；**跨页组拖拽禁止**——宿主 `auditGroupMembership` 守卫（挂 `onDidMovePanel` 主事件源 + onDidAddPanel + 恢复后全量一次；两事件源经 `setTimeout(0)` 延迟执行——回调内同步审计撞 dockview 中间态 disposed，见「外部坑」：自生空壳组 removeGroup、混组以首面板页为属主、少数派面板 moveTo 回迁；模块级重入旗标防自触发）；页面删除 = `groupsOfPage` 逐组 removeGroup（先 kill 页内终端，分屏组一并清除）；`renderer="always"` 白名单语义不变（恒挂载面板在隐藏组内保持挂载）。**页内分屏（单页多组）支持（ADR-0020）**——拖拽拆分合法化为自生组；仅网格分屏（`disableFloatingGroups` prop 禁 floating 手势；popout 仅 API 可达不调用即禁用，D7）。
+- **生命周期契约**：新增面板 addPanel 显式 `position.referenceGroup`（统一入口：tabChrome 工厂/pageApis/openFile/openCommitFile/ExplorerPanel/restoreSession）；落组三档——**显式组优先**（有触发源组上下文时传入：tabChrome 组头 + 钮/右键菜单/Watermark 经 `opts.targetGroup` 落所在组），**缺省走 `resolveFocusedGroupForAdd`**（聚焦组属本页优先 ?? 主组 ?? 页内首组兜底链——主组可被拖空删除），页无组解析 null → 调用方显式失败不落活跃组防错页；**跨页组拖拽禁止**——宿主 `auditGroupMembership` 守卫（挂 `onDidMovePanel` 主事件源 + onDidAddPanel + 恢复后全量一次；两事件源经 `setTimeout(0)` 延迟执行——回调内同步审计撞 dockview 中间态 disposed，见「外部坑」：自生空壳组 removeGroup、混组以首面板页为属主、少数派面板 moveTo 回迁；模块级重入旗标防自触发）；页面删除 = `groupsOfPage` 逐组 removeGroup（先 kill 页内终端，分屏组一并清除）；`renderer="always"` 白名单语义不变（恒挂载面板在隐藏组内保持挂载）。**页内分屏（单页多组）支持（ADR-0020）**——拖拽拆分合法化为自生组；仅网格分屏（`disableFloatingGroups` prop 禁 floating 手势；popout 仅 API 可达不调用即禁用，D7）。
 
 ### 布局恢复与变更守卫
 
@@ -39,7 +39,7 @@ Workspace 渲染**单一** `<DockviewReact>` 共享宿主（`WorkspaceDockHost.t
 - **文件型页签图标**（TAB-03）：`params.filePath` 存在（FILE_PANEL_TYPES）→ 渲染 `FileIcon` 彩色图标；与终端分支互斥。
 - **激活指示条**（TAB-01）：`isActive && isGroupActive` 时渲染底部 2px 指示条（absolute 锚定 `.dv-tab` 底边，色 `FOCUS_BORDER`，`pointerEvents: none`）。
 - **hover 关闭 ×**（TAB-02）：× 默认不可见（opacity 0 + pointerEvents none），hover 时显现。
-- **共享关闭守卫（FE-49，SC-FE-07 语义统一，CP-036 批量接入）**：`tabClose.ts` 的 `closeTabGuarded(api, panelId)`（单面板）——settings 面板且 dirty → `confirmDialog` 确认才 `api.close()`，其余直关；确认丢弃即清除 dirtyRegistry 条目（CP-017 契约）。**× / Ctrl+W / 鼠标中键 / 右键菜单「关闭」四路共用同一入口**（Ctrl+W 曾直调 `api.close()` 绕过守卫——F11 登记的不对称，FE-49 修复）；「关闭其他/关闭全部」批量路径经 `closeTabsGuarded` 统一入口（CP-036）：dirty 面板列表 + 单次确认，确认后清除 dirtyRegistry 条目再全部 close；无 dirty 零交互直关（非 settings 面板行为零回归）。**页删除路径（Workspace 删页 → 页组移除）显式不守卫登记（CP-036 收尾复核结论）**：整页销毁语义——连同运行中终端 PTY 一并 kill，页面删除即用户放弃页上一切，不做面板级 dirty 确认；被删页的 dirtyRegistry 条目随之滞留（pageId 不再复用，无查询命中面，有界可接受）。判据 = panelId 形态（`isSettingsPanelId` 单点——协议 id `{pageId}:settings`；DefaultTab 拿不到 panel——dockview 8.1.0 `IDockviewPanelProps` 无 panel 属性，`panel.view.contentComponent` 红线不适用该场景）；判据与 dirtyRegistry 键同源（SettingsPanel 以同一 params.panelId 注册），无漂移。`confirmDialog` 为 `src/lib` 命令式全局契约（无 React 依赖）——shortcuts 层可安全引用本模块。
+- **共享关闭守卫（FE-49，SC-FE-07 语义统一，CP-036 批量接入）**：`tabClose.ts` 的 `closeTabGuarded(api, panelId)`（单面板）——settings 面板且 dirty → `confirmDialog` 确认才 `api.close()`，其余直关；确认丢弃即清除 dirtyRegistry 条目（CP-017 契约）。**× / Ctrl+W / 鼠标中键 / 右键菜单「关闭」共用同一入口**（Ctrl+W 曾直调 `api.close()` 绕过守卫——F11 登记的不对称，FE-49 修复）；「关闭其他/关闭全部」批量路径经 `closeTabsGuarded` 统一入口（CP-036）：dirty 面板列表 + 单次确认，确认后清除 dirtyRegistry 条目再全部 close；无 dirty 零交互直关（非 settings 面板行为零回归）。**页删除路径（Workspace 删页 → 页组移除）显式不守卫登记（CP-036 收尾复核结论）**：整页销毁语义——连同运行中终端 PTY 一并 kill，页面删除即用户放弃页上一切，不做面板级 dirty 确认；被删页的 dirtyRegistry 条目随之滞留（pageId 不再复用，无查询命中面，有界可接受）。判据 = panelId 形态（`isSettingsPanelId` 单点——协议 id `{pageId}:settings`；DefaultTab 拿不到 panel——dockview 8.1.0 `IDockviewPanelProps` 无 panel 属性，`panel.view.contentComponent` 红线不适用该场景）；判据与 dirtyRegistry 键同源（SettingsPanel 以同一 params.panelId 注册），无漂移。`confirmDialog` 为 `src/lib` 命令式全局契约（无 React 依赖）——shortcuts 层可安全引用本模块。
 - **鼠标中键关闭页签（FE-49）**：浏览器式交互——auxclick（完整按下+弹起，按下后拖离弹起即天然取消）在 DefaultTab 内容根触发，`e.button === 1` 判中键，目标 = 本页签自身 `api`（无需聚焦/激活，对比 Ctrl+W 的 activePanel 语义）；× 上的中键经冒泡同样关闭（click 仅主键，两路径互斥）。**autoscroll 预防**：dockview `.dv-tabs-container` 为 `overflow:auto`（可横向滚动），中键按住会启动 Chromium autoscroll——宿主容器根挂 capture mousedown 单点 `preventDefault`（覆盖所有分屏组 header 含缝隙/void 空白；只消默认动作不拦传播，dockview pointerdown 对 button!==0 本就 no-op）；关闭仍走 auxclick（mousedown preventDefault 不影响其触发）。dockview 8.1.0 对中键/auxclick 零消费，无冲突。
 
 ### Watermark 空态规范（GL-05/UI-806）
@@ -66,7 +66,7 @@ SEC-01 effect 同时承担 `startWatch(rootPath)` / `stopWatch(prev)`——watch
 
 ### 面板聚焦意图令牌（C4，panelFocusIntent.ts）
 
-交互式打开入口在 addPanel **前** `markPanelFocusIntent(panelId)` 写入意图（模块级 Set，take 语义消费）；面板侧 `usePanelActivationFocus` 挂载期消费 → 键盘焦点进输入区（hook 双路径契约见 `../panels/CLAUDE.md`「面板键盘焦点联动」）。写入点 = 六入口新面板分支（tabChrome 工厂/openFile/openCommitFile/openSettingsPanel/ExplorerPanel.handleOpenInTerminal/restoreSession——双击恢复 = 显式打开动作，与布局恢复豁免不冲突）；去重命中分支不写。**fromJSON 恢复路径从不写意图 → 恢复豁免零时序依赖**（否决时间窗守卫方案的原因：setTimeout(0) 复位先于 React passive effect flush 的时序竞态）。已知有界残留：mark 后 addPanel 抛错意图滞留 Set（panelId 唯一后缀实际不可复现，模块头注释登记）。
+交互式打开入口在 addPanel **前** `markPanelFocusIntent(panelId)` 写入意图（模块级 Set，take 语义消费）；面板侧 `usePanelActivationFocus` 挂载期消费 → 键盘焦点进输入区（hook 双路径契约见 `../panels/CLAUDE.md`「面板键盘焦点联动」）。写入点 = 打开入口新面板分支（tabChrome 工厂/openFile/openCommitFile/openSettingsPanel/ExplorerPanel.handleOpenInTerminal/restoreSession——双击恢复 = 显式打开动作，与布局恢复豁免不冲突）；去重命中分支不写。**fromJSON 恢复路径从不写意图 → 恢复豁免零时序依赖**（否决时间窗守卫方案的原因：setTimeout(0) 复位先于 React passive effect flush 的时序竞态）。已知有界残留：mark 后 addPanel 抛错意图滞留 Set（panelId 唯一后缀实际不可复现，模块头注释登记）。
 
 ### 页签右键菜单自研（dockview 8.1 enterprise 缺位修复）
 
@@ -135,9 +135,9 @@ dockview 8.1.0 free core 的页签右键菜单(ContextMenu)是 **enterprise 模�
 
 ## 测试模式
 
-- **页组协议纯函数**：page-groups.test.ts（id 往返/派生归属 pageIdOfGroup/groupsOfPage/resolvePageGroupForAdd 回退链/resolveFocusedGroupForAdd 聚焦组优先/panelBelongsToGroup 组对象语义）。
-- **真实 Dockview 集成（非 mock）**：workspace-page-dockview.test.tsx 渲染真实宿主（种子 projects store 驱动恢复/水印/右键菜单/onSaveAs——jsdom 可跑真实 dockview；含页内分屏 describe——真实 addGroup+moveTo 分屏路径：两组同显防复发/切页同隐同显 xterm 不重建/切片两叶持久化/删页杀全组/主组拖空回退链）；workspace-host-pages.test.tsx（多页组共存/切页不卸载/H6）；workspace-callback-cache.test.tsx（页面目录变更不扰动既有页组）。
+- **页组协议纯函数**：page-groups.test.ts 直测（函数族见上「页组协议」契约节）。
+- **真实 Dockview 集成（非 mock）**：workspace-page-dockview.test.tsx 渲染真实宿主（jsdom 可跑真实 dockview；含页内分屏 describe——真实 addGroup+moveTo 路径，豁免明细见 test-exemptions 分屏登记）；workspace-host-pages.test.tsx / workspace-callback-cache.test.tsx 同模式。
 - **宿主 API 单例重置**：beforeEach `unregisterHostApi()` + stores 重置（宿主级模块态隔离）。
-- **跨页审计守卫**：workspace-cross-page-guard.test.ts（auditGroupMembership 直测——空壳清理/混组回迁/重入安全/防复发 `_moving` 吞事件终态）。
+- **跨页审计守卫**：workspace-cross-page-guard.test.ts（auditGroupMembership 直测）。
 - **layoutSerde**：旧格式修补 + 白名单过滤 + 深拷贝 + 页切片/汇编/迁移两分支 + 分屏多叶切片（剥 visible/activeView 归位/嵌套 branch 剪枝/往返恒等）。
 - **切换时序**：测 `setProjectRoot` 先于 `setActivePage` 生效（workspace-page-apis.test.ts）。

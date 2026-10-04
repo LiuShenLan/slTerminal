@@ -24,11 +24,11 @@ Windows 上 `notify` 递归注册目录树（如 `target/` 26K 文件）首次�
 
 ### 事件分类纯函数化
 
-`classify_event` 编排层调用纯函数 `classify_by_kind(kind, paths)`。`EventKind` 是 notify 公开枚举，L1 可直接构造，覆盖全部 7 种事件类型。
+`classify_event` 编排层调用纯函数 `classify_by_kind(kind, paths)`。`EventKind` 是 notify 公开枚举，L1 可直接构造，覆盖全部事件类型。
 
 ### 事件侧排除大目录（BE-02，D8；2026-09-25 部分翻案）
 
-`WATCH_EXCLUDE_DIRS` 为六元素常量：`node_modules`、`target`、`.venv`、`venv`、`dist`、`__pycache__`。任一路径分量命中即丢弃该事件。**仅事件侧过滤**——notify 不支持目录级排除，watcher 仍注册全树；`need_rescan` 分支不受影响。
+`WATCH_EXCLUDE_DIRS` 为排除目录名单常量（名单读码即得）：任一路径分量命中即丢弃该事件。**仅事件侧过滤**——notify 不支持目录级排除，watcher 仍注册全树；`need_rescan` 分支不受影响。
 
 **.git 窄放行（D8 部分翻案，2026-09-25）**：`.git` 已移出排除常量，改事件级白名单判定（`is_git_internal_path` / `is_git_whitelist_path`）——批内存在白名单路径（`.git` 后首段 `refs` 整棵子树，或恰单分量 `HEAD`/`index`/`packed-refs`，大小写不敏感）则整条放行；命中 `.git` 但无白名单路径 → 整条丢弃（objects/**、logs/**、COMMIT_EDITMSG、MERGE_* 等仍丢弃）。必须**事件级**（批内 any 判定）而非逐路径：rename(Both) 双路径批（如 `index.lock`→`index`，paths=[lock, index]）按单路径判定会把携带白名单路径的整条事件误丢。动机 = DiffPanel HEAD 侧刷新（.git 事件 → 重取 gitFileAtHead）与提交后工作区着色联动的死代码复活；消费方纪律（DiffPanel 判等加固、文件树不订阅）见前端侧登记。
 
@@ -38,7 +38,7 @@ Windows 上 `notify` 递归注册目录树（如 `target/` 26K 文件）首次�
 
 - **pause 停发且不推进计时** → resume 后首轮节拍立即补发；
 - 心跳内嵌现有 `"fs-watcher"` 线程（`recv_timeout(100ms)` 天然节拍），无额外线程；
-- 消费方仅编辑域三处（useCodeMirror / DiffPanel / LargeFileViewer）——文件树/Commit 视图不订阅；
+- 消费方仅限编辑域（清单 grep `fs-poll` 即得）——文件树/Commit 视图不订阅；
 - 定位 = **补漏兜底**（OS 事件丢失窗口的周期复核），非主通道——主同步仍是 fs-event；前端复核走 poll 模式（滚动磁盘基线判变，未变零打扰），语义见 src/panels/editor/CLAUDE.md。
 
 ### FsEventPayload detail 字段不可依赖（⑤ 登记）
@@ -76,7 +76,7 @@ notify 的 `EventAttributes` 在 Windows ReadDirectoryChangesW 通道下基本�
 - **MockEmitter 注入**：通过 `FileWatcher::start_with_emitter` 注入 `MockEmitter`，记录 emit 调用，无需构造 `AppHandle`。
 - **手动构造模式**：生命周期测试直接初始化 `FileWatcher` 字段 + mpsc channel，绕过 `start()`。
 - **LoopHarness 线程结果信令（BE-02）**：`shutdown` = 弃事件发送端 + `join_with_timeout` 等待 + done 通道 `recv().expect` 回传——watcher 线程 panic 时发送端随线程死亡 drop，`recv` 必 Err（线程结果信令，settings.rs mpsc 先例）；`join_with_timeout` 吞 JoinError 不再掩盖 panic。
-- **LruWatcherPool 测试**：用 `make_test_watcher` 创建带 mpsc 的模拟 watcher，覆盖命中、LRU 淘汰、替换、`pause_all_except`、remove、stop_all、Drop。
+- **LruWatcherPool 测试**：用 `make_test_watcher` 创建带 mpsc 的模拟 watcher，覆盖池操作全路径。
 
 ### 既定豁免
 

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 存在理由
 
-统一导航树（NAV-01/02/03/04/09，UI 重设计 Stage 06）——侧栏 `nav` 视图组件（sideViews 三槽之一，NAV-05 注册）。四级层级：项目 → 页面 → 活跃会话；历史会话折叠节点挂项目下。兼并原 SidebarTree（项目/页面 CRUD）与 agent-status 视图（活跃会话）双重职责（NAV-06/08 承接约定）。
+统一导航树（NAV-01/02/03/04/09，UI 重设计 Stage 06）——侧栏 `nav` 视图组件（sideViews 三槽之一，NAV-05 注册）。层级：项目 → 页面 → 活跃会话；历史会话折叠节点挂项目下。兼并原 SidebarTree（项目/页面 CRUD）与 agent-status 视图（活跃会话）双重职责（NAV-06/08 承接约定）。
 
 ## 关键约束与决策
 

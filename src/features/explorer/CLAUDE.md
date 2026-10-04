@@ -62,7 +62,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 与 terminal/editor 同模式：
 
 1. `activeExplorer.ts`：`createActivePointer<ExplorerActions>()`，模块级指针。
-2. `keyboard.ts`：`createExplorerShortcuts()` 返回 3 条命令——`explorer.delete` / `explorer.open` / `explorer.rename`。
+2. `keyboard.ts`：`createExplorerShortcuts()` 返回 `explorer.delete` / `explorer.open` / `explorer.rename` 命令。
 3. 命令在 `App.tsx` 一次性注册。
 4. handler 经 `getActiveExplorer()` 派发到聚焦实例。
 
@@ -103,7 +103,7 @@ ExplorerPanel 经 `src/features/sideViews/sideViewDefs.ts` 注册为 `explorer` 
 
 ## 测试模式
 
-- **必须 mock 三个 IPC 模块**：`../ipc/fs`、``../ipc/git``、`../ipc/notify`。
+- **必须 mock 的 IPC 模块**：`../ipc/fs`、`../ipc/git`、`../ipc/notify`。
 - `vi.hoisted()` 创建 mock 状态，确保模块级 `vi.mock()` 执行前就绪。
 - **共享工厂**：`testMocks/explorerMocks.ts`（接口）、`helpers/vfs.ts`（虚拟文件系统）、`helpers/workspace-setup.ts`（store 种子）。
 - **Zustand stores** 使用真实实现 + `.setState()` 种子数据，`beforeEach` 重置。

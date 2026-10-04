@@ -16,7 +16,7 @@ Zustand 全局状态真值来源。每个 store 覆盖一类状态域，面板�
 
 ### 持久化模式
 
-settings 类六 store 与 `projects` 均遵循同一模式：
+settings 类 store 与 `projects` 均遵循同一模式：
 
 - 启动时 `loadFromDisk()` 恢复；`loaded` 守卫防止加载阶段触发空写。
 - 变更后 Zustand `subscribe` + 2s debounce 自动保存。

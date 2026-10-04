@@ -50,7 +50,7 @@ CodeMirror 6 不支持部分文档模型，大文件编辑**不虚拟化**——
 
 ### CM6 主题扩展与层叠（ACC-05）
 
-CM6 编辑器主题来源 = `editorThemeSlot` 主题热切换槽（CP-039）：`createEditorThemeSlot()` 一次、每 EditorView 一槽，槽内 `editorThemeBundle()` 单点固化 `[editorSyntaxHighlight(), getEditorTheme(), editorColorOverrides()]` 三项（均随 active 方案响应式取色）。**一个 EditorView 一个槽**（Compartment 不可跨 view 共享——diff 双栏各自建槽）；view 创建后 `slot.bind(view)` 订阅 `schemeRegistry.onDidChange`，方案切换即 Compartment 重配置（编辑器不重建），卸载 cleanup 先调 bind 返回的取消函数再 `view.destroy()`。层叠要点：
+CM6 编辑器主题来源 = `editorThemeSlot` 主题热切换槽（CP-039）：`createEditorThemeSlot()` 一次、每 EditorView 一槽，槽内 `editorThemeBundle()` 单点固化 `[editorSyntaxHighlight(), getEditorTheme(), editorColorOverrides()]`（均随 active 方案响应式取色）。**一个 EditorView 一个槽**（Compartment 不可跨 view 共享——diff 双栏各自建槽）；view 创建后 `slot.bind(view)` 订阅 `schemeRegistry.onDidChange`，方案切换即 Compartment 重配置（编辑器不重建），卸载 cleanup 先调 bind 返回的取消函数再 `view.destroy()`。层叠要点：
 
 - `@codemirror/view` 的 `mountStyles()` 会把 styleModule facet 数组 **reverse()** 后挂载。
 - 槽内顺序契约：syntax 必须先于 theme（`[editorSyntaxHighlight(), getEditorTheme(), editorColorOverrides()]`）——`editorSyntaxHighlight` 与 oneDark 的 HighlightStyle 是同机制竞争，只能靠数组顺序决胜；`editorColorOverrides` 则靠 `&.cm-editor` 前缀提升特异性，顺序无关。
@@ -60,7 +60,7 @@ CM6 编辑器主题来源 = `editorThemeSlot` 主题热切换槽（CP-039）：`
 
 ### 外部修改同步三模式（2026-09-25 修复）
 
-`applyExternalChange(path, { mode, toastOnError, baseline? })` 是外部内容变更落盘 → 缓冲刷新的唯一入口，三调用方语义：
+`applyExternalChange(path, { mode, toastOnError, baseline? })` 是外部内容变更落盘 → 缓冲刷新的唯一入口，各调用方语义：
 
 - **event（fs-event = 权威信号）**：放行集 `kind ∈ {Modify, Create}`——Create = 原子替换写（临时文件+rename）/删后重建经 notify-debouncer-full 的折叠产物，已打开路径出现 Create 的语义即「内容已被替换」；Remove/Access/Other 丢弃。脏文件**读盘前**先弹确认（取消零读盘，E6/E8 语义锁死）；干净文件读盘后与缓冲判等短路（touch 类 Modify 不做同内容替换）。
 - **recheck（打开后核对，CP-029）**：与打开时基线（opts.baseline）判变——打字常态不误报。

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 存在理由
 
-侧栏视图系统提供 VS Code 风格的活动栏 + 共享侧栏区。NAV-05 后注册三条视图：`nav`（导航树）、`explorer`（文件浏览器）、`commit`（Commit）；ADR-0024 追加第四条 `agentFiles`（Agent 全局文件，实现归 `features/agentFiles/`）。原 `projects` 与 `agent-status` 视图随 NAV-06/08 退役，职责并入导航树。活动栏底部固定「配置」钮**不入注册表**。
+侧栏视图系统提供 VS Code 风格的活动栏 + 共享侧栏区。NAV-05 起注册视图：`nav`（导航树）、`explorer`（文件浏览器）、`commit`（Commit）；ADR-0024 追加 `agentFiles`（Agent 全局文件，实现归 `features/agentFiles/`）。原 `projects` 与 `agent-status` 视图随 NAV-06/08 退役，职责并入导航树。活动栏底部固定「配置」钮**不入注册表**。
 
 ## 关键约束与决策
 

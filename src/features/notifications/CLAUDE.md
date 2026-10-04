@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 存在理由
 
-通知调度模块（F4）——订阅 agent-event 事件流，在窗口失焦时触发桌面 toast 通知 + 任务栏闪烁。三类事件映射：权限请求 / 任务完成 / 错误。
+通知调度模块（F4）——订阅 agent-event 事件流，在窗口失焦时触发桌面 toast 通知 + 任务栏闪烁。事件类别映射委托各 CLI profile（判定读码即得）。
 
-**点击路由已放弃**：`sendToastNotification` 无 onClick（Tauri 原生通知通道），**任务栏闪烁是唯一的回窗引导通道**，三类事件全覆盖（P2-FE-09 去路由化）。
+**点击路由已放弃**：`sendToastNotification` 无 onClick（Tauri 原生通知通道），**任务栏闪烁是唯一的回窗引导通道**，事件类别全覆盖（P2-FE-09 去路由化）。
 
 ## 关键约束与决策
 
@@ -39,6 +39,6 @@ claude 类别规则实现于 `profiles/claude/strategies.ts`（映射清单读�
 
 ## 测试模式
 
-- 失焦 + 三类事件 → toast + 任务栏闪烁、聚焦时不通知、toast 正文含项目名 + 类别、classifyEvent 类别判定委托 profile 分支（P2-TE-04）。
+- 失焦 + 各类别事件 → toast + 任务栏闪烁、聚焦时不通知、toast 正文含项目名 + 类别、classifyEvent 类别判定委托 profile 分支（P2-TE-04）。
 - `src/ipc/notification.ts` 封装分支覆盖（IHE-02）。
-- 覆盖 claude `classifyNotification` 五映射纯函数层。
+- 覆盖 claude `classifyNotification` 映射纯函数层。

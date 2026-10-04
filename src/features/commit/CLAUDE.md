@@ -53,7 +53,7 @@ DELETE_STATES   = {added, untracked}                       → "删除"
 
 ### git_rollback 实现演进
 
-四次迭代修复 Windows `core.autocrlf=true` 仓库中回滚后 `statuses()` 仍报告 dirty 的问题：
+多轮迭代修复 Windows `core.autocrlf=true` 仓库中回滚后 `statuses()` 仍报告 dirty 的问题：
 
 1. `std::fs::write(blob)` — 写 LF 到磁盘，index 未更新 → status 不干净。
 2. `checkout_head(.path().force())` — git2 checkout API，index 持久化不可靠。
@@ -73,8 +73,8 @@ DELETE_STATES   = {added, untracked}                       → "删除"
 
 ## 测试模式
 
-- **状态机**：覆盖 no-root / loading / error / ready。
+- **状态机**：覆盖全渲染态。
 - **列表**：覆盖文件名着色 token、计数、字母序排序、空态、折叠交互、fs-event 200ms debounce、rootPath 切换清空 + generation 丢弃。
 - **右键菜单**：覆盖 ROLLBACK/DELETE 状态集与菜单项构造；外点关闭、菜单项点击 → confirmDialog → IPC → refresh 链路。
-- **双击分派**：覆盖四种状态 addPanel 参数、去重聚焦（B10 反向用例——同文件不同 suffix 不误匹配）。
+- **双击分派**：覆盖各状态 addPanel 参数、去重聚焦（B10 反向用例——同文件不同 suffix 不误匹配）。
 - **Mock**：`../ipc/git`（`gitStatus`）、`../ipc/notify`（`onFsEvent`）、`dockview-react`、`titleManager`。

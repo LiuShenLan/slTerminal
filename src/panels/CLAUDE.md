@@ -135,7 +135,7 @@ xterm.js 6.0.0 原生支持 OSC 8 解析渲染。`useXterm.ts` 在 `term.open()`
 
 **B14 visible 前缀匹配**：`activePageId != null && panelId.startsWith(`terminal-${activePageId}-`)`。旧恢复格式含 Date.now 数字段，正则/切分解析会吞掉多余数字段得到错误 pageId → visible 恒 false → 非焦点降频永不 flush（历史恢复黑屏根因）。
 
-**会话元数据单点（硬约束 #8）**：PTY 进程映射仅在 `panels/terminal/TerminalRegistry`（模块级 Map）管理，前端会话元数据已合并入 registry；面板只订阅，不自存。注册条目含 `shellKind`（pty.spawn 返回的 shell 种类）与 `promptReady`（OSC 133;A 到达置位）两字段——恢复注入就绪闸门的数据源（闸门 = promptReady，见 `features/agentHistory/CLAUDE.md`）。
+**会话元数据单点（硬约束 #8）**：PTY 进程映射仅在 `panels/terminal/TerminalRegistry`（模块级 Map）管理，前端会话元数据已合并入 registry；面板只订阅，不自存。注册条目含 `shellKind`（pty.spawn 返回的 shell 种类）与 `promptReady`（OSC 133;A 到达置位）——恢复注入就绪闸门的数据源（闸门 = promptReady，见 `features/agentHistory/CLAUDE.md`）。
 
 **仅限于 pwsh/powershell**——shell integration 脚本仅在 PowerShell 注入，cmd.exe 无此能力。
 
@@ -151,7 +151,7 @@ Claude Code 在用户主动 Ctrl+C 中断时不发射任何 hook 事件。CP-020
 
 `usePanelActivationFocus(api, panelId, focus, ready?)`（`src/panels/usePanelActivationFocus.ts`）是面板「页签激活 → 键盘焦点进输入区」的共享 hook，双路径：
 
-- **路径① 挂载期意图消费**：`ready && api.isActive && api.isGroupActive && consumePanelFocusIntent(panelId)` → focus（**经 requestAnimationFrame 延迟一帧**——dockview overlay 容器 attach 时 visibility:hidden、下一帧才翻开，同帧 focus 被 Chromium 静默吞掉，2026-09-19 L4 取证定案，机理见外部坑「dockview overlay 渲染容器」；jsdom 不校验 CSS 可见性测不出，勿回退同步 focus）。意图令牌 = `workspace/panelFocusIntent.ts`（模块级 Set，mark/consume take 语义），由交互式打开入口在 addPanel 前写入（六入口清单见 `workspace/CLAUDE.md`「面板聚焦意图令牌」节）；去重命中分支不写意图。**fromJSON 布局恢复从不写意图 → 恢复豁免零时序依赖**（重启恢复无面板抢焦）。ready 后翻 true 补消费（容器异步挂载场景）。
+- **路径① 挂载期意图消费**：`ready && api.isActive && api.isGroupActive && consumePanelFocusIntent(panelId)` → focus（**经 requestAnimationFrame 延迟一帧**——dockview overlay 容器 attach 时 visibility:hidden、下一帧才翻开，同帧 focus 被 Chromium 静默吞掉，2026-09-19 L4 取证定案，机理见外部坑「dockview overlay 渲染容器」；jsdom 不校验 CSS 可见性测不出，勿回退同步 focus）。意图令牌 = `workspace/panelFocusIntent.ts`（模块级 Set，mark/consume take 语义），由交互式打开入口在 addPanel 前写入（入口清单见 `workspace/CLAUDE.md`「面板聚焦意图令牌」节）；去重命中分支不写意图。**fromJSON 布局恢复从不写意图 → 恢复豁免零时序依赖**（重启恢复无面板抢焦）。ready 后翻 true 补消费（容器异步挂载场景）。
 - **路径② 激活事件联动**：订阅 `onDidActiveChange`/`onDidActiveGroupChange`（可选调用照 DefaultTab 先例）→ 双条件（isActive && isGroupActive）满足且 ready 即 focus——**不需意图**，覆盖页签点击/去重命中 focus()/switchToPageAndFocus 全路径。
 
 各面板焦点落点：terminal = xterm textarea（ready = 容器挂载）；editor/gitshow = CM view（ready = 容器就绪且非大文件形态——大文件 LargeFileViewer 只读浏览不抢焦）；diff = 右栏 CM（工作区可编辑侧，ready = "ready" 态且工作区侧未超限）；settings = 壳根容器 div（`tabIndex={-1}` 可编程聚焦，不入 Tab 序）。**docViewer 家族（htmlviewer/markdownviewer）一期不接**——跨源沙箱 iframe keyfwd 模型不同构，登记后续项。focus 回调由调用方 useCallback 稳定化（项目 eslint 无 react-hooks 插件，deps 不列 focus）。
@@ -174,7 +174,7 @@ Claude Code 在用户主动 Ctrl+C 中断时不发射任何 hook 事件。CP-020
 ## 测试模式
 
 - **L3（node + `@xterm/headless`）**：用 `@xterm/headless` 验证网格状态，Kitty 编码/亮色渲染依赖 DOM/渲染器层由 L4 验收。
-- **useXterm 是编排层**：mock 6 个子 hook 才能隔离测试（`useTerminalInstance` / `usePtyOutput` / `usePtyResize` / `useClipboardHandler` / `useCommandDetection` / `webgl`）。共享测试工厂见 `src/__tests__/helpers/xterm-test-utils.ts`。
+- **useXterm 是编排层**：按子 hook 拆分 mock 才能隔离测试（`useTerminalInstance` / `usePtyOutput` / `usePtyResize` / `useClipboardHandler` / `useCommandDetection` / `webgl`）。共享测试工厂见 `src/__tests__/helpers/xterm-test-utils.ts`。
 - **L3 复用生产实现**：`oscHandlers.ts`（TQ-E-01）与 `keyEventHandler.ts`（TQ-E-02）抽为纯函数后，L3 `production-osc.test.ts` / `shortcut-dispatch.test.ts` 直接复用生产真值源，不再复刻。
 - **HTML 面板 postMessage**：jsdom 不强制 CSP，L2 校验四层校验逻辑；真实 WebView2 行为由 L4 验收。
 - **注入脚本缩放/滚动运行时（zoomRuntime/scrollRuntime）**：jsdom 不执行 srcdoc 内脚本——运行时生成参数化函数源码（`function(doc,win)`），L2 经 `new Function` 在桩 doc/win 上真实执行（行为级，doc-viewer-zoom-runtime.test.ts / doc-viewer-injection.test.ts）；物理滚轮设备与悬停语义由 L4 fixture 合成事件 + 手工验收（豁免登记见 `.claude/test-exemptions.md`）。
