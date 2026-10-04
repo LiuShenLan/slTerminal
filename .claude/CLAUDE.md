@@ -4,12 +4,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目性质
 
-**slTerminal** — 面向 Windows 10/11、专为 Claude Code CLI 调优的通用终端模拟器。
+**slTerminal** — 面向 Windows 10/11、面向所有 AI CLI 调优的通用终端模拟器。
 
 定位约束（贯穿全程，不可违背）：
-- Windows 原生跑 `claude`（不走 WSL）；单窗口单实例；仅暗色模式；渲染 GPU 加速。
+- Windows 原生跑 AI CLI（不走 WSL）；单窗口单实例；仅暗色模式；渲染 GPU 加速。
 - 默认 shell：PowerShell 7（`pwsh.exe` → `powershell.exe` → `cmd.exe` 回退）。
-- 复制 = `Ctrl+Shift+C`（`Ctrl+C` 保留为中断，供 claude 取消）。
+- 复制 = `Ctrl+Shift+C`（`Ctrl+C` 保留为中断，供 AI CLI 取消）。
+
+## pebrel 重构基线
+
+本项目将 fork pebrel（Rust + GPUI 模块化单体终端）重构为单进程 GPUI 应用。
+
+- **baseline commit**：`e537d528c508e8607d0f5f9fd25e5902f40d661e`（pebrel main，2026-10-04）。
+- **重构 spec**：`docs/pebrel-refactor/SPEC.md`（总表）+ 同目录分片（采纳/不采纳明细）。
+- **增量参考**：在 pebrel 仓库 `git log e537d528..HEAD` 获取新改动逐个评审回采；不引入 remote/submodule。
 
 ## 开发取向（未来最优）
 
