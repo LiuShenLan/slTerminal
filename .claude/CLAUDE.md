@@ -16,7 +16,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 本项目将 fork pebrel（Rust + GPUI 模块化单体终端）重构为单进程 GPUI 应用。
 
 - **baseline commit**：`e537d528c508e8607d0f5f9fd25e5902f40d661e`（pebrel main，2026-10-04）。
-- **重构 spec**：`docs/pebrel-refactor/SPEC.md`（总表）+ 同目录分片（采纳/不采纳明细）。
 - **增量参考**：在 pebrel 仓库 `git log e537d528..HEAD` 获取新改动逐个评审回采；不引入 remote/submodule。
 
 ## 开发取向（未来最优）
