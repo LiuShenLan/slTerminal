@@ -3,8 +3,26 @@ name = "slterm_hook"
 edition.workspace = true
 rust-version.workspace = true
 
+# 纯 std 刻意为之:本二进制每个 AI 回合事件跑一次,进程启动即延迟预算——
+# 无依赖 = 最小导入面 = 冷启动 <15ms(行为合同,随迁移一字不动)。
+
+# D11-1:每 crate 显式 test target——定向测试一律
+# `cargo test -p slterm-hook --test lib_tests <filter>`,禁 filter 直打
+# 默认 target(filter/--lib 会绕过 test=false 重建默认单测 target)。
+[lib]
+test = false
+
+[[test]]
+name = "lib_tests"
+path = "src/lib.rs"
+
+# bin 自身不建单测 target:真实进程生命周期用例统一收在 lib_tests
+# (经 CARGO_BIN_EXE_slterm-hook 定位本二进制;check 模式经 cargo 布局回落)。
 [[bin]]
 name = "slterm-hook"
 path = "src/main.rs"
+test = false
 
+# 零生产依赖契约(architecture/dependencies.toml 机械强制:任何非 dev
+# 依赖条目即 ERROR);JSON 转义等工具代码在 lib 内自实现。
 [dependencies]
