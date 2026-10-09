@@ -191,25 +191,13 @@ def checked_range(base: str, head: str) -> tuple[str, str]:
     return common, head_commit
 
 
-def scan_commit_messages(revision_range: str) -> list[str]:
-    hits: list[str] = []
-    commits = git("rev-list", "--reverse", revision_range).decode("ascii").splitlines()
-    for commit in commits:
-        message = git("show", "-s", "--format=%B", commit).decode("utf-8")
-        for line_no, line in enumerate(message.splitlines(), 1):
-            if prohibited(line):
-                hits.append(f"commit-message:{commit}:{line_no}:{line}")
-    return hits
-
-
 def scan_range(base: str, head: str) -> list[str]:
     base_commit, head_commit = checked_range(base, head)
     revision_range = f"{base_commit}..{head_commit}"
-    hits = scan_commit_messages(revision_range)
-    # Scan each commit's added lines so a name added and later deleted in the
-    # same range cannot disappear from the final two-commit diff.
-    hits.extend(scan_pending_commits(revision_range))
-    return hits
+    # 口径(2026-10-09 裁决):push/range 只扫新增行——提交信息的「来源语境」提及
+    # (如引用上游仓名)无法机械区分,且历史提交信息不可改;信息扫描仅留 message 模式
+    # 约束新提交。逐提交看新增行,避免“先加入、后删除”在最终 range diff 中被抵消。
+    return scan_pending_commits(revision_range)
 
 
 def pending_push_range() -> str | None:
@@ -252,15 +240,8 @@ def main(argv: list[str]) -> int:
         if revision_range is None:
             print("No upstream branch; skipping pending-push brand check")
             return 0
-        message_text = git("log", "--format=%H:%s%n%b", revision_range).decode("utf-8")
-        hits = [
-            f"commit-message:{line_no}:{line}"
-            for line_no, line in enumerate(message_text.splitlines(), 1)
-            if prohibited(line)
-        ]
-        # 逐提交看新增行,避免“先加入、后删除”在最终 range diff 中被抵消。
-        hits.extend(scan_pending_commits(revision_range))
-        return report("commits pending push contain prohibited legacy brand names", hits)
+        # 口径同 scan_range:只扫逐提交新增行,不扫提交信息。
+        return report("commits pending push contain prohibited legacy brand names", scan_pending_commits(revision_range))
     if mode == "range":
         if len(argv) != 6 or argv[2] != "--base" or argv[4] != "--head":
             print("range mode requires --base BASE --head HEAD", file=sys.stderr)
