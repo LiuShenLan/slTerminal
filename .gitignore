@@ -37,8 +37,12 @@ e2e-tests/.tmp-claude-projects/
 e2e-tests/.tmp-mockcli-projects/
 
 # Rust
-src-tauri/target/
+/target/
 datalearncodeterax-ai-temp/
+
+# Python（架构门禁脚本族运行期字节码缓存）
+__pycache__/
+*.py[cod]
 
 # Runtime persistence
 slterminal-projects.json

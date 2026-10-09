@@ -1,0 +1,18 @@
+#!/bin/sh
+# 待推送提交禁名扫描(提交说明 + 逐提交新增行)。
+# python 探测序:python3 → python → py -3;以实跑 --version 判命中,
+# 避开 Windows 商店 python3.exe 占位 stub(存在但不可执行)。
+if python3 --version >/dev/null 2>&1; then
+    PY="python3"
+elif python --version >/dev/null 2>&1; then
+    PY="python"
+elif py -3 --version >/dev/null 2>&1; then
+    PY="py -3"
+else
+    echo "no usable python interpreter (tried python3, python, py -3)" >&2
+    exit 1
+fi
+
+# 子进程统一 UTF-8,中文提交说明命中时输出不乱码。
+export PYTHONUTF8=1
+$PY scripts/check_brand_regress.py push || exit 1

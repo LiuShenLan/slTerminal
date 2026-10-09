@@ -77,9 +77,13 @@ AI 拥有执行权，用户拥有**改动决策权**。任何任务（探索、�
 
 ## 命令
 
+> **过渡态（GPUI 重构 M0 起）**：Tauri 栈已删，本节 npm/tauri 命令全部失效；新构建 = cargo 系（`cargo check` / `cargo test` / `cargo build`），工作区根即仓根。CLAUDE.md 族全量重写归 M11，此前以 git 历史中的设计稿为实施真相源。
+
 - 开发运行：`npm run tauri dev`
 - 构建：`npx tauri build --debug --no-bundle`
 - **测试/使用流程（用户固定习惯）**：永远用 `npx tauri build --debug --no-bundle` 构建产物测试与使用，**不使用 dev 模式**（`npm run tauri dev` 仅保留为开发兜底）。产出 exe + dll（debug 模式），部署到本机或 win10 另一台 PC 使用
+- 架构门禁（提交前固定动作）：`python scripts/check_architecture.py`（行数预算棘轮 + 依赖方向）；`python scripts/check_brand_regress.py staged`（禁名回流）
+- git hooks 启用（一次性）：`git config core.hooksPath .githooks`（pre-commit 门禁 + commit-msg/pre-push 禁名扫描）
 
 ## 测试策略
 
