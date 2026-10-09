@@ -3,4 +3,22 @@ name = "slterm_completions"
 edition.workspace = true
 rust-version.workspace = true
 
+# D11-1:每 crate 显式 test target——定向测试一律
+# `cargo test -p slterm_completions --test lib_tests <filter>`,禁 filter 直打
+# 默认 lib target(filter/--lib 会绕过 test=false 重建默认单测 target)。
+[lib]
+test = false
+
+[[test]]
+name = "lib_tests"
+path = "src/lib.rs"
+
+# 生产依赖 = 匹配引擎三件套,照上游清单(nushell nu-cli 血统),仅本 crate
+# 消费,不抬 workspace 层:nucleo-matcher(fuzzy 评分与高亮索引)/unicase
+# (大小写折叠)/unicode-segmentation(grapheme 对齐的 match_indices)。
+# 上游 color feature(nu-ansi-term/lscolors)随 LS_COLORS 样式分支整砍——
+# ANSI 样式在 GPUI 自绘弹窗无消费端(08 篇不采纳点)。
 [dependencies]
+nucleo-matcher = "0.3"
+unicase = "2.9"
+unicode-segmentation = "1.13"
