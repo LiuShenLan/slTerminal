@@ -24,7 +24,7 @@
 | `slterm_app/src/git_completion.rs` + `git_completion/tracking.rs` | pebrel 照抄 | 有界本地 git 发现(3s/1MB 双预算、Snapshot TTL + generation) |
 | `slterm_app/src/suggest.rs`(display 域下沉) | pebrel `display/suggest_engine.rs` + `display/command_completion.rs` + `display/completion.rs` 收敛 | ghost 余量 + 弹窗双形态计算核心、命令位置 ghost 源、提交纪律 |
 | `slterm_app/src/ai_assistant.rs` | pebrel 照抄改造(GPUI 单进程形态) | 触发链判定纯函数族、建议条状态机、四协议族请求 |
-| `slterm_app/src/ai_providers.rs` + `provider_test.rs` | pebrel 照抄 | 十三家 provider 元数据/凭据引用体系、连通性测试十态 |
+| `slterm_app/src/ai_providers.rs` + `provider_test.rs` | pebrel 照抄 | 十三家 provider 元数据/凭据引用体系、连通性测试语义化结果枚举 |
 | `slterm_app/src/math/`(十模块) | pebrel `nebula_app/src/math/` 照抄 | 后端无关 TeX 子集引擎 + 有界栅格化 + 4MB LRU |
 | `slterm_app/src/terminal_math.rs` + `terminal_math/scan.rs` | pebrel `display/terminal_math*` 照抄 | 终端覆盖层:有界扫描、LineProjection、CoverageMask、绘制计划 |
 | `slterm_app/src/markdown/` + `markdown_view.rs` | pebrel `nebula_app/src/markdown/` + `display/markdown_view.rs` 照抄 | 自建文档模型(数学片段)+ 阅读器数学适配(measure/fit) |
@@ -327,7 +327,7 @@ pub fn should_suggest(exit_code: i32, command: &str, program: Option<&str>, igno
 //   lazygit/yazi/ranger/fzf/gh;--help/-h/-? 与 help 豁免;ignored_exit_codes 用户自定义。
 
 pub const COOLDOWN: Duration = Duration::from_secs(5);   // 同 pane 两次触发最短间隔
-pub fn is_dangerous(command: &str) -> bool;   // 本地词表 21 条与模型 danger 按位 OR:
+pub fn is_dangerous(command: &str) -> bool;   // 本地词表与模型 danger 按位 OR:
 // 模型判意图、词表判字面,单方可被骗。字面表照抄 pebrel PATTERNS(rm -rf / rm -fr /
 // git reset --hard / git push --force 与 -f / git clean -fd / remove-item -recurse /
 // rd 与 del 的递归强删形态 / format / mkfs / dd if= / shutdown / taskkill 强杀形态 /
@@ -384,13 +384,13 @@ pub fn save_api_key(id: &str, key: &str) -> io::Result<String>;
 pub fn store_provider_api_key(provider: &mut AiProvider, key: &str) -> io::Result<()>;  // 先写凭据后回写引用
 pub fn delete_api_key(id: &str) -> io::Result<()>;
 pub fn remove_provider(store: &mut ProviderStore, id: &str) -> io::Result<()>;  // 先删凭据再删元数据,不留孤儿密钥
-pub fn load_api_key(id: &str) -> io::Result<Option<Vec<u8>>>;   // 出域即 Zeroizing,日志不插值
+pub fn load_api_key(id: &str) -> io::Result<Option<SecretBytes>>;   // SecretBytes 即用即焚句柄(锚点归 10 篇),日志不插值
 pub fn test_provider(provider: &AiProvider) -> ProviderTestResult;   // 12s 超时连通性测试归设置页归 06
 // 四协议族归 ai_assistant::send_model_request:OpenAI chat/completions(Authorization Bearer)/
 // Anthropic /messages(x-api-key + anthropic-version)/ Google :generateContent(x-goog-api-key)/
 // Azure OpenAI(api-key + 部署路径);full_url 直通;30s 全局超时;响应按协议族取文本字段。
 
-// provider_test.rs —— 语义化结果枚举(十态族,UI 边界转本地化归 06)
+// provider_test.rs —— 语义化结果枚举(UI 边界转本地化归 06)
 pub enum ProviderTestOutcome {
     Success { status: u16 }, InvalidEndpoint, MissingModel, MissingApiKey,
     CredentialReadFailed, InvalidCredentialEncoding, Timeout, HostNotFound,
@@ -624,7 +624,7 @@ Event::CommandDone{exit_code}(eg 02 篇锚点;133;D 首参,裸第三方 133;D �
     x-goog-api-key/Azure api-key);全程含头拼接串 Zeroizing;日志只记状态不插值归 10
 删除:remove_provider 先删凭据再删元数据(不留孤儿密钥)
 兜底:无启用 provider 时 fallback_api_key(SLTERM_AI_KEY → OPENAI_API_KEY,Zeroizing)
-测试:test_provider 12s 超时 → ProviderTestOutcome 十态归设置页归 06 消费归本篇枚举
+测试:test_provider 12s 超时 → ProviderTestOutcome 结果枚举归设置页归 06 消费归本篇枚举
 ```
 
 ### 数学双管线(引擎单点,两消费面)
@@ -713,16 +713,12 @@ config_guard heal_all(eg 03 锚点) → ensure_runtime_skills
 | 27 | `event.rs::grid_output_tail` | 消费 Grid归 02 篇归本篇 | 光标上 24 行 + 2000 字符封顶 + 跳 WIDE_CHAR_SPACER;终端网格是权威源归数据流节 |
 | 28 | `redact_secrets` | 全量归本篇锚点 | 40+ base64/hex 打码——隐私闸门三件套之一,出厂默认写死归边界 4 |
 | 29 | `is_dangerous` 词表 + `parse_fix` 合同 | 全量归本篇锚点 | 模型判意图、词表判字面,按位 OR 单方不可被骗归关键类型节 |
-
 | 30 | `AssistantConfig` + 独立配置文件 | 形态归 D08-1归本篇 | 默认关;独立于设置主文件的理由注释随迁归改造节 9 |
 | 31 | `ai_providers.rs` 元数据/凭据体系整体 | 凭据域归 10归本篇红线归边界 5 | 引用字段 + 尾四掩码 + 先删凭据再删元数据归数据流节 |
 | 32 | `ProviderKind` 十三家枚举全家 | 全量归本篇锚点 | slTerminal 面向 27 家 AI CLI 调优,provider 面不裁剪归边界 |
-
 | 33 | `ai_assistant.rs::send_model_request` 四协议族 | 全量归本篇 | Bearer / x-api-key / x-goog-api-key / Azure api-key；全局 30s 超时照抄 |
-
 | 34 | `ai_assistant.rs::fallback_api_key` 环境变量回退链 | 归本篇（01 表 C 节未列，属本域新增映射） | `NEBULA_AI_KEY`→`SLTERM_AI_KEY`；`OPENAI_API_KEY` 直通不动 |
-
-| 35 | 建议条 UI 与 `Ctrl+.` 接线形态 | 全量归本篇；键位细节归 11 篇 | paste-only 语义（不自动执行）照抄；展示组件 GPUI 呈现形态见改造节 4 |
+| 35 | 建议条 UI 与 `Ctrl+.` 接线形态 | 全量归本篇；组件实现归改造节 4，`Ctrl+.` 动作登记归 07 键位面 | paste-only 语义（不自动执行）照抄；展示组件 GPUI 呈现形态见改造节 4 |
 
 ### 数学渲染
 
@@ -732,19 +728,16 @@ config_guard heal_all(eg 03 锚点) → ensure_runtime_skills
 | 37 | `compile_formula` / `compile_formula_source` / `normalize_formula_source` | 全量照抄 | IR→layout 编译链与源归一化不变 |
 | 38 | layout 层五值类型 + optical 常数族 | 全量照抄 | `OPTICAL_SCALE`/`MIN_SCRIPT_SCALE`/`MIN_SCRIPT_SCRIPT_SCALE`/`MIN_READABLE_MATH_PX` 等照抄 |
 | 39 | `FONT_BYTES` 字体内嵌 | 全量照抄 | LatinModernMath.otf 约 716KiB `include_bytes!`；二进制资产随迁打包链 |
-
 | 40 | rasterizer/bitmap 层 | 全量照抄 | glyph 512px 上限、gamma 0.75、bitmap 8192px/24MB 预算照抄 |
 | 41 | `MathLayoutCache` LRU | 全量照抄 | `LAYOUT_CACHE_BUDGET` 4MB；`FormulaCacheKey` 键形态照抄 |
 | 42 | `MathLimits` 八道预算 + `DEFAULT_LIMITS` | 全量照抄 | 16KB/64/8192/4096/1024/1024/8192 契约值随迁为设计决策 |
 | 43 | terminal_math 状态与扫描（`display/terminal_math/scan`） | 全量照抄 | `TerminalMathState` 与扫描常量族照抄；可见公式 64/持久 2048/1MB 等预算不变 |
-
 | 44 | overlay 三件套 `prepare_overlays`/`plan_overlay_draw`/`draw_overlays` + `LayoutResolver` | 全量照抄；呈现细节归 11 篇 | paint-pass 替换可见定界符 span；终端仍是真值纪律见边界节 |
 | 45 | 同裁定规则 `LineProjection` + `CoverageMask` | 全量照抄 | 终端/覆盖层同裁定不变；`MAX_ABSORBED_BLANK_ROWS` 等常数照抄 |
 | 46 | markdown 自含文档模型（`markdown/mod.rs`、`markdown/parser.rs`） | 全量照抄 | `MathMode`/`MathSource`/`FormattedTextLine::DisplayMath`/`FragmentContent::Math` 照抄 |
 | 47 | markdown 排版适配 `MathRun`/`measure_math`/`fit_math_run` | 全量照抄 | 自含排版度量，不依赖宿主编辑器形态 |
-
 | 48 | TextView 数学钩子薄桥（`gpui_shell/math_view.rs`） | 归 D08-3 决策 | `register`/`set_math_renderer` 薄桥照抄；fork 补丁集随迁范围待定 |
-| 49 | scientific_corpus 语料（`ai_hook/local/scientific_corpus.rs`） | 照抄；正式归置归 11/12 篇 | `DOCUMENTS`/`Case`/`read_document` 回归语料随迁，落位登记为开放问题 |
+| 49 | scientific_corpus 语料（`nebula_app/src/scientific_corpus.rs`） | 照抄；正式归置归 11/12 篇 | `DOCUMENTS`/`Case`/`read_document` 回归语料随迁，落位登记为开放问题 |
 
 ### runtime skills 与 slTerminal 现状对照
 
@@ -779,8 +772,8 @@ config_guard heal_all(eg 03 锚点) → ensure_runtime_skills
 | 设置接线 | `CompletionStyleName`/`RuntimeSettings` 消费 | 06 篇 |
 | markdown 编辑器 | `parse_markdown`/`measure_math` 供 07 篇编辑器调用 | 07 篇 |
 | 凭据域 | `credential_target`/`save_api_key` 等仅引用字段 | 10 篇（凭据细则唯一归属） |
-| GPUI 呈现与键位 | ghost/popup/建议条组件与 `Ctrl+.` 接线 | 11 篇 |
-| 测试基建 | L1 测试迁移与豁免登记 | 12 篇 |
+| GPUI 呈现与键位 | ghost/popup/建议条组件与 `Ctrl+.` 接线 | 本篇实现（改造节 4）；chrome 挂载归 05 篇、键位登记归 07 篇 |
+| 测试基建 | L1 测试迁移与豁免登记 | 11 篇 |
 
 ## 改造 / 移植 / 新建设计
 
@@ -803,13 +796,13 @@ pebrel 补全应用层的 fish-style 历史与目录历史按连接形态分池�
 - `SuggestEnv` 收敛为单态（无远端 env 快照）；`Execution` 收敛为本地进程形态，「静态只读、绝不执行」纪律（project_scripts 1MB/2s TTL）原样保留。
 - git_completion 有界发现（3s/1MB 预算、2s TTL、代际失效）原样保留。
 
-### 3. 九种额外语言砍除对补全方言的影响
+### 3. 补全方言集收敛（Posix 保留，B.21 已裁）
 
-spec 分片 08 不采纳九种额外 CLI 语言的一等支持。对本片的影响：
+`ShellSyntax` 保持 Posix/PowerShell/Cmd/Literal 四方言，不新增方言变体：
 
 - `ShellSyntax` 保持 Posix/PowerShell/Cmd/Literal 四方言，不新增方言变体。
 - 27 家 AI CLI 的命令语义经由 `CommandQuery` 词级模糊分层与 `command_hint` 语义源覆盖，不走方言扩展。
-- Posix 方言在纯 Windows 形态下的去留归开放问题 1；砍除则 `ShellSyntax` 收敛为三方言 + Literal。
+- Posix 方言保留（B.21 已裁）——服务对象 = Git Bash/MSYS 类场景，纯 Windows 形态下仍有真实消费面。
 
 ### 4. ghost / popup / 建议条的 GPUI 呈现形态
 
@@ -818,7 +811,7 @@ pebrel 中 ghost 文本与补全 popup 的绘制经 GPU 渲染层内联呈现。
 - ghost：行内幻影文本，随 `suppressed_line` Esc 语义隐藏；`SLTERM_GHOST_MAX` 96 字符预算不变。
 - popup：候选浮层，`POPUP_LIMIT` 256、`LABEL_MAX` 44 `elide_left` 截断不变。
 - 建议条：AI 修复建议以底栏条呈现，`Ctrl+.` paste-only 接线不变。
-- 三者的组件实现、焦点/键位裁决归 11 篇；本片只承诺 `semantic_candidates_at` 字节 span→edit 契约与 screen_line commit 纪律作为组件输入。
+- 三者的组件实现、焦点/键位裁决由本片承接（建议条 chrome 挂载点归 05 篇；`Ctrl+.` 动作登记归 07 篇键位面）；本片承诺 `semantic_candidates_at` 字节 span→edit 契约与 screen_line commit 纪律作为组件输入。
 - 绘制输入统一消费 `RenderSnapshot`（02 篇锚点），本片不自定义网格形态。
 
 ### 5. runtime skills 投放与 04 篇 SKILL.md 边界
@@ -836,7 +829,7 @@ pebrel 中 ghost 文本与补全 popup 的绘制经 GPU 渲染层内联呈现。
 
 ### 7. ai_providers 与 10 篇合流
 
-- 本片保留：provider 元数据面——`ProviderKind` 十三家、`PRESETS`、`AiProvider` 引用字段（`api_key_set`/`api_key_hint` 尾四掩码）、`normalize`、`test_provider`/`ProviderTestOutcome` 十七态。
+- 本片保留：provider 元数据面——`ProviderKind` 十三家、`PRESETS`、`AiProvider` 引用字段（`api_key_set`/`api_key_hint` 尾四掩码）、`normalize`、`test_provider`/`ProviderTestOutcome` 语义化结果枚举。
 - 10 篇独有：凭据域细则——`credential_target`（`Slterm/AI/<id>`）、Windows Credential Manager 读写、`Zeroizing` 纪律、凭据不出凭据域的类型级隔离。
 - 本片经 10 篇暴露的凭据接口调用，不直接触碰凭据存储；`remove_provider` 先删凭据再删元数据的顺序纪律经 10 篇接口兑现。
 - 发送协议四族（OpenAI Bearer/Anthropic x-api-key/Google x-goog-api-key/Azure api-key）归本片 `send_model_request`；10 篇不重复实现。
@@ -855,17 +848,17 @@ terminal_math 的 overlay 绘制消费带色 span。收敛约定：
 - 默认关（`enabled=false`）与独立于设置主文件的形态照抄 pebrel；其终态落位（独立文件 vs 并入 06 篇设置树）归 D08-1。
 - legacy 通道砍除：pebrel 若存在旧版配置路径/环境变量回退读取（除 `SLTERM_AI_KEY`/`OPENAI_API_KEY` 生态直通变量外），一律不迁；启动只读当前形态。
 - hook 失败边并入 AI 触发链：03 篇 `config_guard` 钩失败边默认取 `assistant_answer` 投影进入本片触发闸门（闸门后于 COOLDOWN 与 `AssistantConfig::load`），归 D08-2。
-- `should_suggest` 规则表、危险词表（21 条 OR 模型危险标记）、`USER_ABORT_CODES`、`BARE_TOOLS`/`INTERACTIVE` 表原样照抄，不裁剪。
+- `should_suggest` 规则表、危险词表（与模型危险标记按位 OR）、`USER_ABORT_CODES`、`BARE_TOOLS`/`INTERACTIVE` 表原样照抄，不裁剪。
 
 ### 10. 测试迁移登记
 
-- 本片域内 pebrel L1 测试（补全三算法、frecency、有界发现、should_suggest、redact_secrets、parse_fix、危险词表、math IR/layout/rasterizer/cache、scan 有界、LineProjection、provider 预设/掩码、runtime skills 指纹）随 crate 迁移，具体豁免与落位归 12 篇。
+- 本片域内 pebrel L1 测试（补全三算法、frecency、有界发现、should_suggest、redact_secrets、parse_fix、危险词表、math IR/layout/rasterizer/cache、scan 有界、LineProjection、provider 预设/掩码、runtime skills 指纹）随 crate 迁移，具体豁免与落位归 11 篇。
 - 红线：测试与文档仅允许假值占位符（`sk-test` 形态），真实凭据禁入 git 追踪文件（SEC-18，根 CLAUDE.md 纪律）。
 - 禁名（`test_` 前缀、规格编号前缀）归 01 篇命名纪律，本片不重复定义。
 
 ## 测试点清单
 
-本片域内须覆盖的测试点（层级归 12 篇分配，本片只列点）：
+本片域内须覆盖的测试点（层级归 11 篇分配，本片只列点）：
 
 | 测试点 | 断言要点 |
 |--------|----------|
@@ -876,7 +869,7 @@ terminal_math 的 overlay 绘制消费带色 span。收敛约定：
 | `should_suggest` 规则表 | 各规则逐条真/假例 |
 | `redact_secrets` | base64/hex 40+ 形态全部替换为 `[redacted]`，无误伤 |
 | `parse_fix` 抗噪 | 非 JSON 包裹提取、空/坏输入不 panic |
-| 危险词表 | 21 条逐条命中 + 模型危险标记 OR 语义 |
+| 危险词表 | 词表逐条命中 + 模型危险标记 OR 语义 |
 | 触发闸门 | COOLDOWN 5s、默认关、`USER_ABORT_CODES` 全集 |
 | math IR/layout | 光学常数族契约值、script 缩放下限 |
 | rasterizer | 512px glyph 上限、gamma 0.75、bitmap 24MB 预算 |
@@ -918,7 +911,6 @@ terminal_math 的 overlay 绘制消费带色 span。收敛约定：
 
 ## 开放问题
 
-1. **Posix 方言去留**：WSL/SSH 砍除后，`ShellSyntax::Posix` 在纯 Windows 形态下服务对象仅剩 Git Bash/MSYS 类场景；保留与否影响 `complete_item` 分方言路径的测试基数。归本片后续评审。
-2. **数学语料正式归置**：scientific_corpus 数学条目的最终落位（测试资产目录 vs 独立 crate）归 11/12 篇评审时定。
-3. **pwsh PSReadLine Prediction 与 ghost 并存**：pwsh 自带预测补全与 ghost 幻影文本在视觉与键位上的裁决归 02/03 篇联评；本片承诺 `suppressed_line` 语义可供其复用。
-4. **spec 分片 08 命名偏差回改**：spec 分片 08 示例文件名与 01 表 C 节不一致（见「改名映射引用」节），回改 spec 分片归 M11 文档统一性 pass。
+1. **数学语料正式归置**：scientific_corpus 数学条目的最终落位（测试资产目录 vs 独立 crate）归 11/12 篇评审时定。
+2. **pwsh PSReadLine Prediction 与 ghost 并存**：pwsh 自带预测补全与 ghost 幻影文本在视觉与键位上的裁决归 02/03 篇联评；本片承诺 `suppressed_line` 语义可供其复用。
+3. **spec 分片 08 命名偏差回改**：spec 分片 08 示例文件名与 01 表 C 节不一致（见「改名映射引用」节），回改 spec 分片归 M11 文档统一性 pass。

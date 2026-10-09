@@ -944,8 +944,8 @@ agent.wait 追加 identity 重验:每次快照到达先重查 active_agent(gener
 1. **03 篇(agent 状态暴露)**:runtime 的 `RuntimeTaskState` 投影源 = 每 pane `AgentActivity`(03 篇仲裁器)——本篇需要 03 篇给出的只读面:`AgentActivity::status`/`source`/`rule`/`hook_seen`/`primary_pid`;`RuntimeAgent` 字段装配:`kind = AgentKind::slug`、`session_id` 取 hooks 会话身份链、`state_source` 值集与 `AgentStatusSource` 对齐(Hook/Screen/Process 同名同义)。generation 事实来源 = hooks 的会话身份(session/panel 路由归 03 篇),`register_agent`/`close_agent` 由壳在 agent 启动与 SessionEnd/pane 关闭时调用;委派回传消费 `RuntimeHub::take_delegation_callback`,身份匹配归 03 篇回合完成链。`PROCESS_ENV` 双因子归 03 篇,`PaneExecContext::process_instance` 只消费。
 2. **05 篇(pane/tab 与布局)**:`PaneId`/`TabId` 锚点直接进协议序列化(禁重定义);snapshot 投影函数(Workspace → RuntimeSnapshot 草稿,eg 数据流节)归 05 篇壳层,本篇只定 RuntimeSnapshot 形状与 publish 语义;全部写命令在 UI owner 上落为 Workspace 变更(`SplitTree` 树函数裁定结局归 05 篇,壳不自行散判);`TerminalRegistry` 对应物归 05 篇(会话元数据单点硬约束 #8 的 Rust 落点),`pane.read`/`pane.exec` 经它定位 pane 宿主。
 3. **02 篇(终端核心)**:`capture_terminal_tail` 消费 `Term::bounds_to_string`(02 篇锚点);OSC 133 `CommandStart`/`CommandDone` 是 `RuntimePaneRun`/`last_run` 记账的数据源(eg 02 篇 Event 枚举);`pane.exec` 环境冻结自 PTY `Options`(02 篇 spawn 链),超时整树回收归 02 篇 Job Object 平台件;提交 running 边沿归壳的 prompt 提交通路(02 篇 `Msg` 写入)。
-4. **06 篇(设置读取面)**:`tab.new`/`agent.start` 的 shell id 解析归 06 篇设置键域(默认 shell 回退链 pwsh→powershell→cmd 归 02 篇,不进协议);`windowing_behavior` 键随单窗收编归待沉淀 D04-3;describe 的 env 段变量名与 settings 常量同源归 01/06。
-5. **09 篇(通知/托盘/系统面)**:ATTACH 的「还原窗口」落地 = 窗口聚焦/还原归 09 篇窗口管理;关窗退出链(托盘 Quit/最后窗口关闭)归 09 篇,RuntimeServer Drop 挂同一退出路径;托盘 agent 菜单直达归 09 消费同一 snapshot。
+4. **06 篇(设置读取面)**:`tab.new`/`agent.start` 的 shell id 解析归 06 篇设置键域(默认 shell 回退链 pwsh→powershell→cmd 归 02 篇,不进协议);`windowing_behavior` 键已裁删除(B.10,单窗行为硬编码归 09 篇);describe 的 env 段变量名与 settings 常量同源归 01/06。
+5. **09 篇(通知/托盘/系统面)**:ATTACH 的「还原窗口」落地 = 窗口聚焦/还原归 09 篇窗口管理;关窗退出链(托盘 Quit/最后窗口关闭)归 09 篇,RuntimeServer Drop 挂同一退出路径;托盘 agent 菜单直达归 09 消费同一 snapshot。**回登(开放问题 4 闭环)**:09 篇已答——单窗下「还原窗口」无独立语义,移交链 = 聚焦现有唯一窗 + tab.new。
 6. **07 篇(文件域,扩展位)**:`tab.open`/`tab.read`/`tab.focus` 首发不开放,eg 文件 tab 点亮后如需控制面读归 07 篇登记;git 四方法的子进程封装归 07 篇 git 域(`--no-optional-locks` 纪律归 07)。
 7. **08 篇(runtime skills 边界)**:SKILL.md 投放机制归本篇改造节;config_guard `heal_all` 的挂点归 03/08 篇,本篇只管 runtime skill 这一件资产的安装/保留用户编辑/卸载;其他 skill 归 08。
 8. **11 篇(测试基础设施)**:conformance 测试驱动形态(虚拟窗口内 pane 中真 CLI 回控归 M7 出口归 11 篇;L4 资产重生的「Runtime API 驱动」类别 eg 11 篇)。
@@ -1038,7 +1038,7 @@ const SHORT_WAIT_TIMEOUT_MS: u64 = 600_000;  // wait 默认上限:编码 Agent �
 pub(super) struct ShortOutput { pub pretty: bool }   // 全资源命令共享的薄输出面
 ```
 
-取舍:A 的优点 = 发现零成本(`SLTERM_CLI` 指向的就是它,pebrel 既有纪律)、双人格永不版本错位、打包单文件归 12 篇体积工程;代价 = Windows 子系统选择——`#![windows_subsystem = "windows"]` 下 CLI 输出无父控制台,需 `AttachConsole(ATTACH_PARENT_PROCESS)` + stdout 句柄重开(或反之 console 子系统接受启动闪窗归 12 篇裁定)。
+取舍:A 的优点 = 发现零成本(`SLTERM_CLI` 指向的就是它,pebrel 既有纪律)、双人格永不版本错位、打包单文件归 12 篇体积工程;代价 = Windows 子系统选择——D04-1 已裁 **console 子系统**(GUI 启动闪控制台窗接受,标准流正确性优先;Runtime 控制面保留,AI CLI agent 是其主要消费者),`AttachConsole` + stdout 句柄重开的 GUI 子系统臂不取。
 
 **方案 B(否决,记录理由)**:独立 `slterm-cli.exe`(仅客户端代码,~MB 级)。优点 = 免子系统麻烦、冷启动毫秒级;否决理由 = `SLTERM_CLI`/`SLTERM_BIN_DIR` 必须改指第二 exe(发现契约分叉)、双 exe 打包/签名/更新一致性成本归 12 篇、clap 定义双份漂移面——而 pane 内 CLI 冷启动非热路径(pebrel 同 exe 实证可用)。若未来出现独立 CLI 真实需求(如远端发行),机制上无阻塞:客户端代码全在 `runtime_api/cli.rs`,抽出即可。
 
@@ -1093,7 +1093,7 @@ pub struct Request {
 
 ### 6. 协议 Schema 单文件与错误码表成文
 
-- **Schema 单文件**:`docs/runtime-api-v1.schema.json` 蓝本随迁(protocol 常量改 `slterm.runtime`),落位归 12 篇(M11 前 `docs/` 临时稿清空,协议文件转正式归置归开放问题 4);`runtime.describe` 的 `schema` 字段指向相对路径(照抄)。
+- **Schema 单文件**:`docs/runtime-api-v1.schema.json` 蓝本随迁(protocol 常量改 `slterm.runtime`),落位归 12 篇(M11 前 `docs/` 临时稿清空;协议文件正式归置已裁 = 根级 `assets/`,D12-3,开放问题 1 闭环);`runtime.describe` 的 `schema` 字段指向相对路径(照抄)。
 - **错误码表**成文归本篇测试点(机器可读错误码全集):envelope 层(`invalid_request`/`protocol_version_mismatch`/`request_too_large`/`method_not_found`/`invalid_params`/`target_not_found`/`ambiguous_target`/`invalid_state`/`action_failed`)、生命周期(`pane_closed`/`pane_exited`/`agent_exited`/`agent_replaced`/`agent_closed`/`agent_name_conflict`/`agent_identity_mismatch`)、执行(`runtime_unavailable`/`runtime_timeout`/`invalid_runtime_response`/`submission_outcome_unknown`/`timeout`)、run(`exit_code_unavailable`/`run_start_timeout`/`run_aborted`)、git(`git_stale`/`git_unavailable`/`invalid_base`/`invalid_branch`/`dirty_source`/`branch_conflict`/`worktree_path_conflict`)、委派(`origin_not_agent`/`origin_identity_unavailable`/`delegation_in_progress`/`delegation_capacity`/`agent_ready_timeout`)、编排(`invalid_reference`)。SSH/WSL/远端系错误码不迁归不变更项 2。
 
 ## 测试点清单
@@ -1138,7 +1138,7 @@ pub struct Request {
 
 **M7.3 方法族与派发原语**:`RuntimeCommand` 全族 + `dispatch_runtime_command`(worktree 事务/run 分段限时/超时未知态)+ pane/agent/orchestrate/git 方法族 + 参数校验面。出口 = 校验正反向全表、generation 族、委派族、orchestrate 预检族、git 收口用例全绿;派发超时与 `cleanup_deferred` 语义用例绿。
 
-**M7.4 CLI + env 契约 + SKILL 投放**:方案 A 同 exe 分流(改造节 3,子系统细节归 12 篇归 D04-1)+ 资源动词薄别名 + `slterm env` + `apply_child_endpoint`/三级发现 + runtime skill 安装器接线(eg 03 config_guard 挂点)。出口 = CLI --wait 基线链/解析拒绝用例绿;env 离线可用用例绿;端点三级发现用例绿;SKILL 指纹/marker/Conflict 用例绿(eg 03 族)。
+**M7.4 CLI + env 契约 + SKILL 投放**:方案 A 同 exe 分流(改造节 3,console 子系统 D04-1 已裁)+ 资源动词薄别名 + `slterm env` + `apply_child_endpoint`/三级发现 + runtime skill 安装器接线(eg 03 config_guard 挂点)。出口 = CLI --wait 基线链/解析拒绝用例绿;env 离线可用用例绿;端点三级发现用例绿;SKILL 指纹/marker/Conflict 用例绿(eg 03 族)。
 
 **M7.5 单实例移交**:`RuntimeServer` 全序(owner 锁→PING→serve→CHILD_ENDPOINT)+ 移交链(ATTACH+tab.new+重试环)+ Drop 清理 + 壳启动分支接线(eg M3 壳归 05/09)。出口 = 移交链/stale 接管/Drop 只删己录用例绿;双进程移交集成用例归 11 篇豁免口径绿;对照 00-roadmap M7 出口:Runtime API conformance 测试过(eg 11 篇基础设施)+ 单实例移交测试过。
 
@@ -1163,7 +1163,7 @@ M7 全程依赖 M3(壳骨架)/M4(AgentActivity 投影源)/M5(Workspace 投影归
 
 ## 开放问题
 
-1. **Schema 单文件的正式归置**:首版 `docs/runtime-api-v1.schema.json` 落 `docs/` 临时稿归 12 篇(M11 前清空),协议文件与 SKILL.md 指引的正式归位(随安装包?随 skills 目录?独立文档仓归 docs/?归 07 篇文件域?)归 12 篇裁定归位;本篇只保证「单文件、可机器校验、describe.schema 相对路径可达」三不变量归改造节 6。
+1. **Schema 单文件的正式归置**（已闭环：D12-3 裁永久资产归根级 `assets/`,skills/schema/协议文档同址）:首版 `docs/runtime-api-v1.schema.json` 落 `docs/` 临时稿归 12 篇（M11 前清空）,M11 随 12 篇改造节 2 改指 `assets/`;本篇只保证「单文件、可机器校验、describe.schema 相对路径可达」三不变量归改造节 6。
 2. **conformance 驱动桩 vs 真 CLI**:L4 conformance 用例归 11 篇基础设施,本篇消费其驱动形态;「虚拟窗口内真起 CLI 子进程回控」与「协议桩替身」二选一归 11 篇按可重复性裁定,本篇不预设归测试点清单末行。
 3. **legacy ATTACH 回落的首发开关位**:机制照抄归改造节(33 号采纳点),但首发禁用开关归 12 篇(打包开关 or 编译 feature eg 12 篇);若首版后发现 VS Code 系等旧客户端有接入诉求,启用决策归 12 篇随扩展位重开归改造节 2 三级发现。
-4. **移交窗口还原的 09 篇落地细节**:ATTACH 后「窗口聚焦/还原 + 新 tab」中窗口聚焦归 09 篇窗口管理、消费同一快照;若 09 篇判断单窗下「还原窗口」无独立语义(关窗即退出 eg 00-roadmap 跨域不变量),移交链只剩「聚焦现有唯一窗 + tab.new」,语义简化由 09 篇回登至本片缝合点 5。
+4. **移交窗口还原的 09 篇落地细节**（已闭环）:09 篇改造节 1 已答——单窗下「还原窗口」无独立语义，移交链只剩「聚焦现有唯一窗 + tab.new」;已回登本篇缝合点 5。

@@ -13,7 +13,7 @@
 ## fork 执行路径（已定：逐 crate 迁入，禁大爆炸）
 
 1. 每个 crate 独立迁入：拷贝 pebrel 对应 crate → 裁剪（砍不采纳项：unix/SSH/远程/Lua/化学/生物/亮主题/兼容层等，spec 不采纳总表为准）→ 改名（改名映射单点表见 01-arch-baseline 篇）→ 测试转绿 → 落地。
-2. 依赖序：`slterm_settings` → `slterm_split` → `slterm_hook` → `slterm_completions` → `slterm_terminal` → `slterm_app`(`slterm_config` ±derive 的落位裁定在 M1 内完成，归 01 篇）。
+2. 依赖序：`slterm_settings` → `slterm_split` → `slterm_hook` → `slterm_completions` → `slterm_terminal` → `slterm_app`(`slterm_config` 并入 settings 单 crate,B.1 已裁）。
 3. 每步必须可编译可测：裁剪即删，不挂 feature 兼容、不留双名（无历史用户）。
 4. 旧栈（`src/` + `src-tauri/` + npm 族）M0 一次性全删，不与新 workspace 并存；slTerminal 自有资产（pty 五件套、plan_balance、安全审计、settings 写通道底座等）从 git 历史与 spec 分片提取，按分片篇的移植设计并入。
 
@@ -22,9 +22,9 @@
 | 阶段 | 内容 | 可用性状态 | 出口标准（可机验） |
 |---|---|---|---|
 | **M0 fork 基线** | 删 Tauri 全栈（`src/`、`src-tauri/`、npm 族、wdio/vitest 配置）;建 cargo workspace 骨架（rust-toolchain 钉版、edition 2024、GPUI 依赖钉 Kuddev 双 rev + 补丁注释治理）;LICENSE MIT→GPL-3.0 + THIRD-PARTY-NOTICES/licenses/ 合规族迁入；架构门禁三件套落地（含禁名表 = 禁 nebula/pebrel 回流） | 无可运行产品 | `cargo check` 过（空壳 workspace)；门禁三件套脚本自测过 |
-| **M1 底库迁入** | `slterm_settings` → `slterm_split` → `slterm_hook` → `slterm_completions` 逐迁（含裁剪/改名/单测）;`slterm_config` 落位裁定 | 无可运行产品 | `cargo test` 全绿；禁名门禁过；dependencies.toml 方向校验过 |
-| **M2 终端核心** | `slterm_terminal` 迁入：vte/OSC tee/Grid/三层渲染合同/boxdraw/ConPTY 侧载/输入/选择；slTerminal pty 五件套并入（DA1/DSR 接管、ConPTY flags 矩阵、Win10 NuGet 捆绑、Job Object、SPAWN_LOCK、shell 白名单、pwsh EncodedCommand) | 无可运行产品 | `cargo test` 全绿（含 ConPTY 集成用例、win32 输入矩阵基线） |
-| **M3 app 骨架点亮** | `slterm_app` 最小链路：GPUI 窗口 + 单终端 pane + ConPTY 直连跑通默认 shell（壳即前端，消费 RuntimeHub 状态权威） | **首个可运行态**：能开窗口打字；无分屏/无 AI/无设置页/布局不持久 | 虚拟窗口 UI 测试（终端渲染关键路径）过；`cargo test` 全绿 |
+| **M1 底库迁入** | `slterm_settings` → `slterm_split` → `slterm_hook` → `slterm_completions` 逐迁（含裁剪/改名/单测）;`slterm_config` 并入 `slterm_settings`(B.1 已裁） | 无可运行产品 | `cargo test` 全绿；禁名门禁过；dependencies.toml 方向校验过 |
+| **M2 终端核心** | `slterm_terminal` 迁入：vte/OSC tee/Grid/三层渲染合同/boxdraw/ConPTY 侧载/输入/选择；slTerminal pty 五件套并入（DA1/DSR 接管、ConPTY flags 矩阵、Win10 NuGet 捆绑、Job Object、SPAWN_LOCK、shell 白名单、pwsh EncodedCommand) | 无可运行产品 | `cargo test` 全绿（含 ConPTY 集成用例）;win32 输入矩阵脚本 GPUI 化改造编译过（M2 无可驱动 exe，基线建基与常挂比对归 M3 出口） |
+| **M3 app 骨架点亮** | `slterm_app` 最小链路：GPUI 窗口 + 单终端 pane + ConPTY 直连跑通默认 shell（壳即前端，壳内状态权威雏形直读 Workspace;RuntimeHub 投影归 M7.2 接管） | **首个可运行态**：能开窗口打字；无分屏/无 AI/无设置页/布局不持久 | 虚拟窗口 UI 测试（终端渲染关键路径）过；win32 输入矩阵基线建基 + 常挂比对过；`cargo test` 全绿 |
 | **M4 AI CLI 集成** | hook 三层拓扑（slterm-hook 小进程 + 命名管道 + 有界仲裁）、安装权威与 9 家一等安装器、AgentKind 27 家、agent_detection 屏幕规则、ai_sessions、per-pane 环境契约；SEC-12 statusline 审查并入 | AI 检测/事件链路点亮 | hook 链路契约测试过（含身份核验/有界重排）；`cargo test` 全绿 |
 | **M5 工作区与布局** | 分屏树接入 app、WorkspaceTab 三件套、session v4（下次启动恢复布局）、dock 嫁接 | 分屏/多 tab/布局恢复点亮 | session 往返序列化测试过；分屏树纯函数测试全绿；UI 测试过 |
 | **M6 设置/主题/i18n** | RuntimeSettings + JSON 持久化（写通道底座移植）、GUI 设置页、主题语义槽 + WCAG 校验（仅暗色）、i18n 双语静态生成 | 设置页/主题/双语点亮 | 设置读写往返测试、WCAG 对比度校验测试、i18n 键集硬合同测试过 |
@@ -35,6 +35,8 @@
 | **M11 打包 + 收尾** | Inno 安装器 + zip 副形态、体积工程（opt-level="s" + 热路径 O3 + 预算钉测试）；根 CLAUDE.md 族重写（新架构现实）、adr/CONTEXT 沉淀、docs/ 临时稿删除 | 发布态 | 安装器构建 + 新鲜度核验链过；体积预算钉测试过；仓内无 docs/ 引用残留 |
 
 阶段内顺序与增删由对应分片篇细化；阶段归属冲突时回 roadmap 协调。
+
+> M10 体量登记：M10 合计 12 子步（09 篇 M10.1–M10.8 系统集成 + 10 篇 M10.9–M10.12 安全），约为邻阶段的 2.4 倍，且自动更新链与凭据域风险性质互异。实现期如出口颗粒度失真（任一子步红灯整段不过），再拆「系统集成 / 安全」两段，此处先登记不重排。
 
 ## 过渡期不可用清单（用户以历史版本过渡）
 

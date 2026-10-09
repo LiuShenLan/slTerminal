@@ -12,21 +12,19 @@
 
 | 目录 = package 名 | 产出 | 层 | 生产依赖（workspace 本地边） | 职责 |
 | --- | --- | --- | --- | --- |
-| `slterm_app` | lib+bin `slterm` | application | slterm_terminal / slterm_config / slterm_config_derive / slterm_settings / slterm_split / slterm_completions | GPUI 壳、编排、平台适配、i18n、build 生成 |
+| `slterm_app` | lib+bin `slterm` | application | slterm_terminal / slterm_settings / slterm_split / slterm_completions | GPUI 壳、编排、平台适配、i18n、build 生成 |
 | `slterm_terminal` | lib | core | 无本地边 | 网格、VT、PTY 行为（细节归 02 篇） |
 | `slterm_split` | lib | core | 无（零生产依赖契约） | 分屏树、几何、导航（归 05 篇） |
-| `slterm_settings` | lib | core | 无（零生产依赖契约） | 运行时设置 + JSON 持久化契约（归 06 篇） |
+| `slterm_settings` | lib | core | 无（零生产依赖契约） | 运行时设置 + JSON 持久化契约（归 06 篇）;serde 校验/诊断薄层并入本篇（B.1) |
 | `slterm_completions` | lib | core | 无本地边 | 补全匹配（归 08 篇） |
 | `slterm_hook` | bin `slterm-hook` | hook | 无（零生产依赖契约） | AI-CLI 生命周期 hook 小进程（归 03 篇） |
-| `slterm_config` | lib | core | dev: slterm_config_derive | serde 校验/诊断薄层（去留见「待沉淀决策」D1) |
-| `slterm_config_derive` | proc-macro lib | core | dev: slterm_config | `ConfigDeserialize` / `SerdeReplace` derive |
 
 依赖方向（照抄 pebrel `docs/architecture.md` Shape 节：**composition/UI → application capabilities → shared domain rules**):
 
 - core 不依赖 app、不依赖渲染包；`slterm_settings` / `slterm_split` / `slterm_hook` 零生产依赖契约机械强制。
 - application 单向依赖全部 core；无 lab 层。
 - `slterm_hook` 是独立小进程桥，slterm_app 不依赖 slterm_hook crate（管道服务器与协议解析住在 app 的 ai_hook 域，归 03 篇）。
-- 边的无环由 dependencies.toml 检查器强制；config ↔ config_derive 的 dev 环为显式合法例外（形态同 pebrel）。
+- 边的无环由 dependencies.toml 检查器强制。
 
 ### 根 Cargo.toml 关键块（草稿）
 
@@ -35,8 +33,6 @@
 members = [
     "slterm_app",
     "slterm_terminal",
-    "slterm_config",
-    "slterm_config_derive",
     "slterm_completions",
     "slterm_hook",
     "slterm_settings",
@@ -156,7 +152,7 @@ def check(root, policy, source_roots=None, scanned_paths=None):
     # 返回 (errors, members);强制:members 显式列出且与 policy.crates 键集全等、
     # layer ∈ {core, application, lab, hook}、zero_production_dependencies、
     # renderer_packages 禁入 core/hook 生产依赖、core→非 core 生产边非法、
-    # 生产边无环(dev 环白名单 config↔config_derive)
+    # 生产边无环
 ```
 
 聚合入口 `scripts/check_architecture.py`:`run(root, base=None, report=False) -> int`，先 budgets 后 dependencies,`--base <commit>` 启用历史棘轮（对 PR base 拒绝新增/抬额债务）。
@@ -169,20 +165,12 @@ renderer_packages = ["gpui", "gpui_platform", "gpui-component", "gpui-component-
 
 [crates.slterm_app]
 layer = "application"
-dependencies = ["slterm_terminal", "slterm_config", "slterm_config_derive", "slterm_settings", "slterm_split", "slterm_completions"]
+dependencies = ["slterm_terminal", "slterm_settings", "slterm_split", "slterm_completions"]
 build-dependencies = ["slterm_settings"]
 dev-dependencies = []
 
 [crates.slterm_terminal]
 layer = "core"
-
-[crates.slterm_config]
-layer = "core"
-dev-dependencies = ["slterm_config_derive"]
-
-[crates.slterm_config_derive]
-layer = "core"
-dev-dependencies = ["slterm_config"]
 
 [crates.slterm_completions]
 layer = "core"
@@ -208,8 +196,6 @@ slTerminal 版 `architecture/file-budgets.txt` 草稿（初版零豁免）:
 limit 2000
 root slterm_app
 root slterm_terminal
-root slterm_config
-root slterm_config_derive
 root slterm_completions
 root slterm_hook
 root slterm_settings
@@ -242,15 +228,15 @@ pub const DESCRIPTION: &str = "slTerminal — GPU-accelerated terminal for AI CL
 // slterm_settings/src/paths.rs(缝合点:改写自 pebrel nebula_settings/src/paths.rs,
 // 砍掉 migration.rs——legacy Nebula→Pebrel 迁移链不迁,无历史用户)
 fn first_override(...)  // 仅 ["SLTERM_CONFIG_DIR"],双名别名层不迁
-pub fn settings_dir() -> PathBuf   // SLTERM_CONFIG_DIR 优先;默认 %APPDATA%\slTerminal
+pub fn settings_dir() -> PathBuf   // SLTERM_CONFIG_DIR 优先;默认 %APPDATA%\slterm(D2 裁决值)
 pub fn settings_path() -> PathBuf  // settings_dir().join("settings.json")——JSON 化已定,txt 文件名不迁
 ```
 
-`slterm_app::platform::dirs::{data_dir, home_dir}` 照抄 pebrel `nebula_app/src/platform/dirs.rs` 的 `OnceLock` 缓存 + USERPROFILE 形态（含「空串视为未设置」过滤器）,Windows 落点测试由 `windows_path_uses_pebrel_layout` 改写为 `windows_path_uses_slterminal_layout`。
+`slterm_app::platform::dirs::{data_dir, home_dir}` 照抄 pebrel `nebula_app/src/platform/dirs.rs` 的 `OnceLock` 缓存 + USERPROFILE 形态（含「空串视为未设置」过滤器）,Windows 落点测试由 `windows_path_uses_pebrel_layout` 改写为 `windows_path_uses_slterm_layout`。
 
-### slterm_config 薄层签名（参考保留，落位裁定时定去留）
+### 设置诊断薄层签名（B.1 已裁：并入 `slterm_settings` 单 crate)
 
-照 pebrel `nebula_config/src/lib.rs` 的公开面原样收缩（Lua 后端已砍，只剩 serde 校验/诊断）:
+照 pebrel `nebula_config/src/lib.rs` 的公开面原样收缩（Lua 后端已砍，只剩 serde 校验/诊断），以 `slterm_settings` 内部模块形态落位，settings 仍满足零生产依赖契约；独立 proc-macro crate 不迁，`ConfigDeserialize` / `SerdeReplace` 按需手实现：
 
 ```rust
 pub enum UnknownFieldPolicy { ... }
@@ -261,9 +247,6 @@ pub fn report_unknown_field(target: &'static str, field: &str);
 pub fn report_deprecated_field(target: &'static str, field: &str, message: &str);
 pub fn report_invalid_value(target: &'static str, field: &str, detail: &str);
 pub trait SerdeReplace { ... }
-// slterm_config_derive:
-#[proc_macro_derive(ConfigDeserialize, attributes(config))]
-#[proc_macro_derive(SerdeReplace)]
 ```
 
 ## 数据流与状态机
@@ -326,8 +309,8 @@ pub trait SerdeReplace { ... }
 | package `nebula-settings` | `slterm-settings` | 持久化介质改 JSON(eg 06) |
 | 目录 `nebula-completions`,package `pebrel-completions` | `slterm_completions`（目录同） | |
 | package `nebula_hook` | `slterm_hook` | |
-| package `nebula_config` | `slterm_config` | 去留见 D1 |
-| package `nebula_config_derive` | `slterm_config_derive` | 同上 |
+| package `nebula_config` | 并入 `slterm_settings` 内部模块 | B.1 已裁，不独立成 crate |
+| package `nebula_config_derive` | 不迁 | proc-macro 无独立载体，derive 按需手实现 |
 | package `nebula_gpui` | 不迁 | lab 实验场 |
 | `mobile/link`(package `pebrel-mobile-link`) | 不迁 | 随 mobile/ 整删 |
 | `third_party/winit-0.30.13` 路径补丁 | 不迁 | legacy 壳 backport |
@@ -363,7 +346,7 @@ pub trait SerdeReplace { ... }
 
 | 旧名 | 新名 | 备注 |
 | --- | --- | --- |
-| `%APPDATA%\Pebrel`（默认数据目录） | `%APPDATA%\slTerminal` | 叶子名取值见 D2 |
+| `%APPDATA%\Pebrel`（默认数据目录） | `%APPDATA%\slterm` | 叶子名 = D2 裁决值 `slterm` |
 | `pebrel_settings.txt` / `nebula_settings.txt` | `settings.json` | 持久化 JSON 化已定；写通道归 06 篇 |
 | `session.json` / `session.crashed.json` | = 不变 | 无品牌前缀 |
 | `runtime.port` | = 不变 | 归 04 篇 |
@@ -372,6 +355,7 @@ pub trait SerdeReplace { ... }
 | `pebrel-theme.json`(ThemeFormat::Pebrel 自有格式） | `slterm-theme.json` | 格式名归 06 篇；pebrel 格式导入兼容归 06 裁定 |
 | `pebrel-workspace.json` / `nebula-workspace.json`(workspace 导出） | `slterm-workspace.json` | 归 05 篇 |
 | `pebrel.json` / `pebrel.js` / `pebrel.ts`(ai_hook managed marker 族） | `slterm.json` / `slterm.js` / `slterm.ts` | eg 03 篇 config_guard 监视清单同步 |
+| 恢复点文件后缀 `.pebrel-recovery` | `.slterm-recovery` | eg 10 篇；去品牌化见 D3 |
 | `nebula_settings/src/paths/migration.rs`(Nebula→Pebrel 迁移链） | 不迁 | 无历史用户 |
 | `%APPDATA%\Nebula`(legacy 迁移来源） | 不迁 | 同上 |
 | `shell-integration/` 目录内 unix 脚本 | 不迁归 03 重建 | Windows-only 注入归 03 |
@@ -388,6 +372,7 @@ pub trait SerdeReplace { ... }
 | P-6 crate 元数据 homepage/repository(`github.com/Kuddev/pebrel`) | 本仓归 12 篇定 | |
 | P-7 线程名 `pebrel-ai-pipe` | `slterm-ai-pipe` |归 03 篇 |
 | P-8 开机启动 .lnk 名 / 托盘工具提示等系统面字符串 | slTerminal 品牌归 09 篇 | |
+| P-9 凭据管理器 target `Pebrel/AI/<id>` | `Slterm/AI/<id>` |归 10 篇锚定 |
 
 **F. 双名兼容层（pebrel 为历史用户保留的旧名并写）**
 
@@ -446,8 +431,8 @@ pebrel 的门禁挂在 GitHub Actions(`.github/workflows/architecture.yml` 的 r
 | 依赖门禁：core→app 生产边拒绝、renderer 入 core 拒绝、dev 环白名单、未知成员/分类全等 | 同上 | 移植 |
 | workspace 全等：根 Cargo.toml members 与 dependencies.toml crates 键集一致（隐含于 dependencies.check) | 同上 | 照抄 |
 | 禁名门禁四模式正/反例（staged 新增行命中、message 命中、豁免路径放行、merge combined diff) | 同上 | 改造 pebrel test_prohibited_names |
-| `settings_dir` 优先级：`SLTERM_CONFIG_DIR` 优先、空串忽略、默认 `%APPDATA%\slTerminal` | Rust `slterm_settings` 内嵌测试 | 移植 pebrel `new_override_precedes_legacy_alias_and_empty_values_are_ignored` 去别名版 |
-| `data_dir` Windows 落点命名测试（`windows_path_uses_slterminal_layout`) | Rust `slterm_app` 内嵌测试 | 移植 pebrel `windows_path_uses_pebrel_layout` |
+| `settings_dir` 优先级：`SLTERM_CONFIG_DIR` 优先、空串忽略、默认 `%APPDATA%\slterm` | Rust `slterm_settings` 内嵌测试 | 移植 pebrel `new_override_precedes_legacy_alias_and_empty_values_are_ignored` 去别名版 |
+| `data_dir` Windows 落点命名测试（`windows_path_uses_slterm_layout`) | Rust `slterm_app` 内嵌测试 | 移植 pebrel `windows_path_uses_pebrel_layout` |
 | 新代码树零旧名：全树 grep `nebula` / `pebrel` 仅命中豁免清单 | 脚本断言（可并入 check_architecture report) | 新建，M1 各 crate 迁入后逐 crate 通过 |
 | toolchain 钉版一致：rust-toolchain channel == workspace.package rust-version | 脚本断言归 governance 件 | 新建 |
 | 旧栈删除完整性：M0 删除路径清单逐项不存在 | 脚本断言（一次性，归 M0 出口脚本） | 新建 |
@@ -465,7 +450,7 @@ pebrel 的门禁挂在 GitHub Actions(`.github/workflows/architecture.yml` 的 r
 
 **M0.4 LICENSE 合规族**:LICENSE(GPL-3.0)、THIRD-PARTY-NOTICES、licenses/。出口 = 合规断言测试过。
 
-**M1 内归本片的唯一事项——`slterm_config` 落位裁定**（依赖序中 settings 首迁时触发）：出口 = 决策落定（保留双 crate 或并入 settings 单 crate); 若保留，dependencies.toml 双条目 + config↔derive dev 环白名单 + `capture_diagnostics` / `SerdeReplace` 移植用例全绿；若并入，settings 仍满足零生产依赖契约且诊断功能以模块形态存在。其余 M1 crate 迁入序归 00-roadmap（不变）。
+**M1 内归本片的事项——`slterm_config` 并入 settings**(B.1 已裁并入 settings 单 crate)：诊断薄层以 `slterm_settings` 内部模块形态落位，`capture_diagnostics` / `SerdeReplace` 移植用例全绿，settings 仍满足零生产依赖契约；dependencies.toml / file-budgets roots / members 均按 6 crate 形态开户。其余 M1 crate 迁入序归 00-roadmap（不变）。
 
 各步出口只认机验项；M0 全程无可运行产品，符合过渡期不可用清单。
 

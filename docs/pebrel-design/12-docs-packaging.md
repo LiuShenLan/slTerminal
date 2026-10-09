@@ -159,11 +159,11 @@ AppName=slTerminal
 AppVersion={#AppVersion}
 AppPublisher=LiuShenLan
 AppUpdatesURL=https://github.com/LiuShenLan/slTerminal/releases  ; 与 SLTERM_RELEASES_PAGE
-                                       ; 同真值,坐标定稿后回填(开放问题 1)
+                                       ; 同真值(坐标已裁 A 表)
 VersionInfoVersion={#NumericVersion}
 DefaultDirName={autopf}\slTerminal     ; PrivilegesRequired=lowest 下即
                                        ; %LOCALAPPDATA%\Programs\slTerminal;
-                                       ; 叶子名与 01 篇 D2 数据目录同名原则
+                                       ; 安装目录取品牌全名,数据目录取 D2=slterm,二者不同名系有意
 UsePreviousAppDir=yes
 UsePreviousGroup=no
 DisableProgramGroupPage=yes
@@ -231,7 +231,7 @@ Filename: "{app}\slterm.exe"; Parameters: "setup-ai --remove"; WorkingDir: "{app
 ```rust
 // 落位:slterm_app/src/platform/update/releases.rs(模块归 09 篇,常量值归本篇登记;
 // 09 篇 update_check 只许 use,禁另立)。
-pub(crate) const SLTERM_RELEASES_OWNER: &str = "LiuShenLan";      // 真值待定,开放问题 1
+pub(crate) const SLTERM_RELEASES_OWNER: &str = "LiuShenLan";      // 真值已裁(A 表)
 pub(crate) const SLTERM_RELEASES_REPO: &str = "slTerminal";
 pub(crate) const SLTERM_RELEASES_API: &str =
     "https://api.github.com/repos/LiuShenLan/slTerminal/releases/latest";
@@ -407,7 +407,7 @@ CHANGELOG.md 完成(人工前置)
 
 ```text
 CLAUDE.md                       # 根:全局规则 + 架构节(ownership 双列)+ 文档规范节
-slterm_app/CLAUDE.md 等 8 crate # 模块细节真值(随各 crate 迁入建立)
+slterm_app/CLAUDE.md 等 6 crate # 模块细节真值(随各 crate 迁入建立)
 scripts/CLAUDE.md               # 脚本族规则 + 发布纪律节
 architecture/notes/CLAUDE.md    # 因果 note 规则(九段/Supersedes/Revisit when)
 architecture/notes/**           # 成因档案
@@ -470,7 +470,7 @@ licenses/LICENSE / licenses/THIRD-PARTY-NOTICES / licenses/LICENSE-LATIN-MODERN-
 
 (左列 = 包内相对路径;`licenses/LICENSE-LATIN-MODERN-MATH` 随 08 篇数学字体内嵌义务存续,若 08 篇砍字体则连同 notices 对应段一并销。)
 
-**新鲜度链补强点**:pebrel 源码根含 `..\gpui-component-fork\crates` 本地路径依赖,slterm 无(GPUI 走 git rev 钉版)——slterm 版 `Assert-FreshBinaries` 源码根 = 8 个成员 crate + 根 Cargo.toml;git rev 依赖的源码变更由 `--locked` + Cargo 自身重编译保证,不进 mtime 判据。
+**新鲜度链补强点**:pebrel 源码根含 `..\gpui-component-fork\crates` 本地路径依赖,slterm 无(GPUI 走 git rev 钉版)——slterm 版 `Assert-FreshBinaries` 源码根 = 6 个成员 crate + 根 Cargo.toml;git rev 依赖的源码变更由 `--locked` + Cargo 自身重编译保证,不进 mtime 判据。
 
 **发布核验清单文本化**(`scripts/release-checklist.md`,照 pebrel `packaging/AGENTS.md` 末条核验面):标题/标签(若开 GitHub Release)/产物文件名/大小/SHA256 与 SHA256SUMS 一致/版本回读/setup.exe 在干净 Win10 或另一台 PC 安装-启动-卸载全流程/zip 解压直跑/卸载后无残留(安装目录、卸载注册表项;AI CLI hook 注入已清)。「命令成功 ≠ 核验完成」为清单首行。
 
@@ -554,8 +554,11 @@ spec 分片 12 采纳点 17 的 `package.json` 落点随 npm 族 M0 全删而消
 
 > [待沉淀] **D12-4 · 首发版本线**。真实权衡:续 0.3.0 = 与 slTerminal 0.2.0 历史用户感知连续,但 09 篇更新链的版本比较会把 0.2.0(Tauri 时代)误认为可更新对象;重计 1.0.0/0.1.0 = 语义割裂清晰,代价是版本号回退观感。难逆点:首发后版本线不可回改;更新链「版本大于当前才提示」语义会把跨架构旧版卷进来。意外因素:0.2.0 用户是真实存在的两台 PC 部署(用户既有习惯)。截止:M11.4 首发前定(默认:续 0.3.0 并在更新链对 <0.3.0 一律视为「需手动重装」——Tauri 时代安装基不构成 Inno 可更新对象)。
 
+> [待沉淀] **D12-5 · legacy ATTACH 回落的首发开关**(承接 04 篇开放问题 3,裁定权归本篇)。机制照抄归 04 篇改造节(采纳点 33:首行非 `{` 走 legacy ATTACH/PING,token 不符静默丢弃);首发是否默认禁用归本篇,候选形态 = 编译 feature 或打包参数。真实权衡:默认启用 = VS Code 系等旧客户端首发即可接入,代价是回落协议面进首发审查面;默认禁用 = 首发面最小,接入诉求出现时随 04 篇改造节 2 三级发现扩展位重开。难逆点:低——开关位设计即预留翻转,启用决策不改协议面。截止:M11.4 首发前定(默认:编译 feature 形态,首发关闭)。
+
 ## 开放问题
 
-1. **`SLTERM_RELEASES_OWNER` / `_REPO` 真值**:GitHub 仓是否建立、owner 是否 `LiuShenLan`、仓名 `slTerminal` 是否可用,均未定。默认按关键类型节常量占位;若首发不开 GitHub Release,09 篇更新链以 `update-test-source` 本地通道验收,公网坐标留占位回填。
+1. ~~首发形态与 GitHub Release 开通时点~~（已裁 2026-10-09：**首发即开**——首发即挂 Release,09 篇更新链公网验收；坐标真值 LiuShenLan/slTerminal，常量见关键类型节）。
+1a. **console 阻塞父 shell 明示**（2026-10-09 裁决登记）：安装器创建的快捷方式与文档（release notes/用户说明）须明示——从 pwsh/cmd 启动 slterm 会同步阻塞父 shell，日常启动用快捷方式或 `Start-Process slterm`；明示落点归安装器任务页与首发 release notes。
 2. **THIRD-PARTY-NOTICES 的 Tabby 归属段去留**:pebrel 的 Windows 安装 shell 检测(注册表查找序 + 品牌图标)derive 自 Tabby;slterm 侧 shell 探测 = 02 篇并入的自有白名单深检与 pebrel 对应物的最终合成面未定——若并入 pebrel 实现则声明保留,若纯自有实现则删。截止:M2 slterm_terminal 落定后,由 02 篇作者回填本篇合规裁剪清单。
 3. **arm64 可选项登记处**:iss 的 arm64 参数化形态照抄保留但构建不做(spec 已定);「Windows on ARM 后续可选项」的撤销条件是否立 note(`architecture/notes/packaging/`)登记?默认立一篇短 note(Revisit when = 出现 arm64 设备需求或 GPUI 上游 arm64 支持变化),随 M11.1 同批。

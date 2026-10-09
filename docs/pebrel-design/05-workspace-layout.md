@@ -43,8 +43,8 @@ spec 采纳点 17-26 照抄 schema、不采纳点 5 砍掉驻留语义后,sessio
 2. **类型锚点纪律**:本篇唯一定义 `PaneId`/`TabId`/`SplitTree` 族(`Rect`/`Divider`/`SplitLayout`/`RemoveOutcome`/`SplitDirection`/`SplitNav`)/`WorkspaceTab` 族(`TerminalPane`/`TabEntry`)/session schema 族(`Session`/`TabSession`/`LayoutSession`/`SplitAxis`/`LaunchSession`/`AgentSession`/`WindowState`)。他篇引用纪律:只许 `use` 或经 facade 传参,禁重定义、禁别名漂移、禁字段语义改写;新增跨领域类型先回 01 篇锚点表登记归属。`Rgb` 唯一定义归 06 篇(主题),本篇 schema 引用之。
 3. **启动身份只留本地形态**:`LaunchSession` 砍 `Ssh`(spec 不采纳点 3)与 `Shell`(WSL 发行版,spec 不采纳点 4),只留 `Default` 与本地 `Profile`(「完整命令内嵌保可移植」形态保留);默认 shell 回退链 pwsh→powershell→cmd 归 02 篇,不进 schema。
 4. **多窗/驻留语义不迁**:`Session.window_layout` 段、`WindowLayout`/`combine_sessions`/`save_combined_session` 的多窗合并、per-window snapshot 组合、`WindowRole` 过滤、residency 模块,全部不迁(spec 不采纳点 2/5);单窗口下 `Session` 扁平化为唯一窗口,`window` 字段只保留单窗尺寸/最大化态。
-5. **WindowState 只写不回放**(spec 不采纳点 12):窗口尺寸/最大化态是诊断与前向兼容数据,启动按配置列行数定形;「记住上次窗口大小」是否恢复归待沉淀 D05-1。
-6. **运行时态不进会话**:zoom(`WorkspaceTab::Terminal.zoomed`)、broadcast(spec 不采纳点 6,字段一并砍)、侧栏开合/sideViews 选中、reader focus、重命名编辑中状态,全部内存态;快照只收 Terminal tab(设置/文档/图片 tab 不进会话,pebrel 同合同)。
+5. **WindowState 回放**(D05-1 已裁回放）：窗口尺寸/最大化态持久化并在启动时回放（记住上次窗口大小/位置）,schema 字段语义 = 行为输入，不再是只写诊断数据。
+6. **运行时态不进会话**:zoom(`WorkspaceTab::Terminal.zoomed`)、broadcast(spec 不采纳点 6,字段一并砍)、reader focus、重命名编辑中状态,全部内存态;侧栏骨架态(collapsed/width/双槽 active_view)归 session schema 跟现场恢复(D05-3 已裁,见侧栏节);快照只收 Terminal tab(设置/文档/图片 tab 不进会话,pebrel 同合同)。
 7. **快照纪律照抄**:1Hz 快照恒写 `clean_exit=false`、`boot_attempts=0`;只有正常收尾(关窗)最后一笔写 `clean_exit=true`;`MAX_BOOT_ATTEMPTS` 断路值照抄;空会话(一路关标签关干净)不算崩溃。
 8. **schema 版本号重启为 1**(本篇决策,见改造节):pebrel 的 v1–v3 内存就地升级链不迁(slTerminal 无历史会话文件),但「追加字段走 `serde(default)` 免升版」的演进纪律保留。
 9. **核心不变式四条件**(见目标形态)是测试与 review 的硬判据;shell 侧 `SessionPersistence` 的 `isolated`(提权隔离不写共享存储)语义保留——单实例下管理员/普通进程仍须互不覆盖会话文件。
@@ -228,7 +228,7 @@ pub struct TabSession {
     #[serde(default)] pub active_pane: usize,              // DFS 下标,越界回退首叶
 }
 
-/// 只写不回放(spec 不采纳点 12):诊断 + 前向兼容,启动按配置列行数定形。
+/// 回放(D05-1 已裁):启动时恢复上次窗口尺寸/最大化态,字段语义 = 行为输入。
 #[derive(Serialize, Deserialize, Copy, Clone, PartialEq, Eq)]
 pub struct WindowState { pub width: u32, pub height: u32, #[serde(default)] pub maximized: bool }
 
@@ -345,17 +345,19 @@ pub fn subscribe(f: impl Fn(&RegistryEvent) + 'static) -> Subscription;
 slTerminal 旧侧栏三件套(sideViews/navTree/titleBar)经 workspace 侧栏骨架重建;**骨架与槽位模型归本片,视图内容归对应分片**(explorer eg 07、agentFiles eg 03、commit eg 07、navTree 数据源归 D05-2)。
 
 ```rust
-/// 侧栏骨架态:单窗口下的单槽位模型(形态决策见改造节)。
+/// 侧栏骨架态:ActivityBar + 上下双槽模型(D05-2 已裁双槽,R1-R9 纯函数随迁);
+/// collapsed/width/active_view 归 session 跟现场恢复(D05-3 已裁)。
 pub struct SidebarState {
-    pub collapsed: bool,                  // 开合(内存态;设置键归 06)
-    pub active_view: Option<SideViewId>,  // 当前可见 side view(单槽)
-    pub width: f32,                       // 拖宽(持久化归 06 设置键)
+    pub collapsed: bool,                       // 开合(归 session schema)
+    pub active_view_top: Option<SideViewId>,   // 上槽当前 view
+    pub active_view_bottom: Option<SideViewId>,// 下槽当前 view
+    pub width: f32,                            // 拖宽(归 session schema)
 }
 /// side view 注册项;SideViewId 封闭集归 07 篇,icon归主题归 06。
 pub struct SideViewDef { pub id: SideViewId, pub title: String }
 ```
 
-titleBar(自绘窗口标题栏 + 最小化/最大化/关闭三钮 + 拖拽区)是窗口 chrome 而非布局,壳重建归 09 篇;本片只登记它与 workspace 骨架的交界:标题数据源 = 活跃 tab 的展示名归 07 篇 TabPresentation、窗口三钮消息归 09 篇窗口域。
+titleBar(自绘窗口标题栏 + 最小化/最大化/关闭三钮 + 拖拽区)壳重建归本片（spec 归属已裁归 05,09 篇开放问题 1 闭环）;交界登记：标题数据源 = 活跃 tab 的展示名归 07 篇 TabPresentation、窗口三钮消息归 09 篇窗口域。
 
 ## 数据流与状态机
 
@@ -489,7 +491,7 @@ restore_tab(tab):
 3. **AgentSession 字段级定义归 03**:本片锚持久化挂载点(`LayoutSession::Pane.agent`)与「叶子 = 恢复注入单位」契约;`AgentSessionRef`/`restore_agent` 的形状归 03 篇。
 4. **Settings 单例 tab 归 06**:`WorkspaceTab::Settings` 变体的渲染分支与关闭语义(单例不持久化)归 06 篇;本片只锚变体存在。
 5. **Document/Image/Code tab 归 07**:三变体的渲染、tab 路由、单 tab 导出臂归 07 篇;`TabMeta` 展示字段(图标/标题派生)随 07 演化。
-6. **titleBar 归 09**:窗口三钮与拖拽区是窗口 chrome;本片只登记「标题数据源 = 活跃 tab 展示名」交界。
+6. **titleBar 归本片（05)**:titleBar 壳重建归本片（spec 归属已裁）;窗口三钮消息归 09 篇窗口域，本片只登记「标题数据源 = 活跃 tab 展示名」交界。
 7. **session 数据目录归 01**:`session.json` 落点(`platform::dirs::data_dir`)归 01 篇锚定,本片只消费。
 
 ## 改造 / 移植 / 新建设计
@@ -523,9 +525,9 @@ spec 采纳点 17-26 照抄 schema、不采纳点 5 砍掉驻留语义后,sessio
 ### navTree / sideViews / titleBar 侧栏骨架重建
 
 - **形态取 pebrel 骨架**:左侧垂直 tab 侧边栏 + 主内容区,tab 列表渲染照 pebrel `workspace/sidebar.rs`(新建钮/折叠槽/徽章位)。**不采纳** pebrel 的 `tabs` 位置配置化与折叠(不采纳点 7)。
-- **sideViews 双槽模型重建**:slTerminal 旧 `sideViews`(ActivityBar + 上下双槽 SideBarArea,`toggleViewPure`/`deriveLayout`/`reconcileZones` R1-R9 纯函数族)是既有产品面,骨架照旧重建为 Rust 侧栏骨架的一部分:活动栏按钮区 + 双槽(上/下)内容区,`SideViewRegistry` 形态收敛为 `SideViewDef` 封闭集(id + title,icon 归 06,内容归 07/03);R1-R9 状态函数以纯函数形态随迁(`deriveLayout` 的双槽布局推导可机测)。**本片「关键类型与签名」节的 `SidebarState` 单槽草稿即双槽/单槽裁定的挂账处**,按 D05-2 收敛(单槽草稿不 preempt 决策)。
+- **sideViews 双槽模型重建**:slTerminal 旧 `sideViews`(ActivityBar + 上下双槽 SideBarArea,`toggleViewPure`/`deriveLayout`/`reconcileZones` R1-R9 纯函数族)是既有产品面,骨架照旧重建为 Rust 侧栏骨架的一部分:活动栏按钮区 + 双槽(上/下)内容区,`SideViewRegistry` 形态收敛为 `SideViewDef` 封闭集(id + title,icon 归 06,内容归 07/03);R1-R9 状态函数以纯函数形态随迁(`deriveLayout` 的双槽布局推导可机测)。`SidebarState` 已按 D05-2 双槽收敛(见「关键类型与签名」节),状态字段归 session(D05-3)。
 - **navTree 数据源重接**:旧 navTree(项目 → 页面 → 活跃会话 → 历史会话)的「页面」层级随页组模型消亡;「项目」层归 01 篇开放问题 4 提取的 `slterminal-projects.json` 数据裁决(默认提取),重建后的层级与数据源归 D05-2 所在篇(本篇只登记骨架槽位)。
-- **titleBar**:窗口 chrome 归 09;本片只消费「活跃 tab 展示名 → 窗口标题」的只读交界(eg 07 篇 TabPresentation)。
+- **titleBar**：壳重建归本片（spec 归属已裁归 05)；本片只消费「活跃 tab 展示名 → 窗口标题」的只读交界（eg 07 篇 TabPresentation)，窗口三钮消息归 09 篇窗口域。
 
 ### 与 02 终端面板、07 编辑器 tab 的缝合契约
 

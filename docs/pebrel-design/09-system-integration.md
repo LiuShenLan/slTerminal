@@ -14,7 +14,7 @@
 | 通知 | 通知中心单一漏斗 `Notification` 六变体;BEL / OSC 9 / OSC 133;D / hook 生命周期四源归一;失焦门控 + 闪烁恒发先行 + 双层节流 + 失败冷却;toast 点击回焦与托盘/移交同一条 FocusWindow 语义 | `slterm_app/src/notify.rs` + `slterm_app/src/platform/notifications{,/windows}.rs` |
 | 任务栏进度 | `TaskProgress` 五态,ConEmu 码宽容映射(规范外码归清除);`ITaskbarList3` 每次自管 COM 初始化,失败静默;只投活跃 tab 聚焦 pane,agent 退出即清 | `slterm_app/src/taskbar.rs` |
 | 自动更新 | GitHub Releases best-effort 检查 → 资产四重校验 → `.part` 流式下载(长度/MZ/SHA-256/512MiB 全过才原子替换)→ 事务目录两阶段 handoff(commit 才授权安装)→ restore ticket 恢复工作区;提示状态独立文件按版本生效 | `slterm_app/src/update_check.rs` / `update_proxy.rs` / `update_download.rs`(+`handoff/`、`handoff.ps1`) |
-| 开机启动 | Startup 已知文件夹 `.lnk`(IShellLinkW 幂等重写);静默启动 = `silent_start && tray && hide_window_on_close` 三条件合取 | `slterm_app/src/platform/startup.rs` |
+| 开机启动 | Startup 已知文件夹 `.lnk`(IShellLinkW 幂等重写);静默启动 = `silent_start && tray` 两条件合取(关窗即退定位下 `hide_window_on_close` 因子消去,改造节 1) | `slterm_app/src/platform/startup.rs` |
 | 窗口特效 | 模糊走 GPUI `WindowBackgroundAppearance` 平台通道(Mica/MicaAlt 原生枚举 22H2 门控、Aero/Acrylic AccentPolicy 通道、互斥清理);透明度只透壳底色与终端默认背景;壁纸 = 底色之上单元格之下单纹理层,后台串行有界解码 | `slterm_app/src/gpui_shell/wallpaper.rs`(+`wallpaper/`) |
 | DPI / 启动几何 | 多显示器整包交 GPUI 平台层;只保留「首窗创建前主屏 DPI 查询」一个 Win32 调用点 + 启动几何推导(基准字号量网格、主显 95% 上限、亚像素 round-trip 容忍) | `slterm_app/src/platform/startup.rs` + `slterm_app/src/gpui_shell/workspace/windowing/startup_geometry.rs` |
 | 后台任务(收编) | slTerminal 旧双端调度器收编为 Rust 任务注册表 + GPUI executor:元数据静态切片单点、订阅生命周期(无订阅者不空转)、防重入闸门、按触发来源的失败策略 | `slterm_app/src/background_tasks.rs` |
@@ -30,7 +30,7 @@
 5. **类型锚点纪律**:本篇唯一定义 Notification/TaskProgress/Tray 命令/更新 DTO/VisualEffects/后台任务注册表类型;跨领域类型只消费:`OscEvent`/`Grid`(02)、`AgentKind`/`AiTurnOutcome`/`AttentionContext`/`AiHookEvent`(03)、`RuntimeSnapshot`/`RuntimeTaskState`/信封(04)、`PaneId`/`TabId`/`WorkspaceTab`(05)、`RuntimeSettings`/设置键域(06)。pebrel 侧 pane id 裸 `u64` 处本篇以 05 篇 `PaneId` newtype 承接。
 6. **更新链「下载器不信任 UI 数据」**:资产合同四重校验(名称/架构/版本/官方 URL 前缀)+ digest 字段优先、release body 内嵌 checksum 回退;落盘根目录 = slTerminal 应用数据目录(便携语义,归 01 篇 D2 决策),`update_state.json` 与用户设置正文解耦。
 7. **Quick terminal 全砍**(已定,违反单窗口定位):其托盘/热键/设置模型不留残件,消亡清单见改造节 2。
-8. **关窗即退出**:无 mux 驻留、无隐藏宿主;托盘「退出」与最后窗口关闭同一条退出链;静默启动三条件缺一不可(无托盘的静默启动 = 不可达进程)。
+8. **关窗即退出**:无 mux 驻留、无隐藏宿主;托盘「退出」与最后窗口关闭同一条退出链;静默启动两条件(`silent_start && tray`)缺一不可(无托盘的静默启动 = 不可达进程)。
 9. **多平台整包砍**:toast 只留 WinRT 通道(tray_native/notify_rust/NSBundle 不迁);更新链只留 Windows 资产面(dmg/koly trailer/scoop marker 不迁);开机启动只留 Startup `.lnk`;`#[cfg(windows)]` 收敛于平台模块(平台分支收敛不变量 4)。
 10. **GitHub Releases 坐标与发布核验归 12 篇**:本片消费 `RELEASES_API`/`RELEASES_PAGE`/下载前缀常量,值归 12 篇发布面登记;本片只管运行时更新链。`update-test-source` 本地假 release 演练通道永不回落公网。
 11. **壁纸/特效不越界进终端渲染**:壁纸层在底色之上、单元格之下,文字与彩色单元背景永不透明;模糊材质切换显式互斥清理(GPUI 平台枚举 vs AccentPolicy 通道,DWM 双通道同开行为未定义,实测 backdrop 吞 Acrylic)。
@@ -304,8 +304,9 @@ pub fn set_launch_at_login(enabled: bool) -> io::Result<()>;
 fn startup_shortcut() -> io::Result<PathBuf>;
 pub(crate) fn launch_at_login() -> bool;
 pub(crate) fn start_hidden(settings: &RuntimeSettings) -> bool;
-//   = Capabilities::hide_window_on_close && settings.silent_start && settings.tray
-//   三条件合取;无托盘的静默启动 = 不可达进程。
+//   = settings.silent_start && settings.tray
+//   两条件合取(hide_window_on_close 键不存在——关窗即退定位,因子消去,改造节 1);
+//   无托盘的静默启动 = 不可达进程。
 pub(crate) fn primary_display_scale() -> Option<f32>;
 //   首窗创建前 MonitorFromPoint + GetDpiForMonitor,供初始网格尺寸一步到位。
 ```
@@ -579,7 +580,7 @@ apply_window_effects 改壁纸路径/适应度/对齐 → VisualEffects.generati
 | # | pebrel 源 · 符号 | 缝合点 | 因果链 |
 |---|---|---|---|
 | 35 | `nebula_app/src/platform/startup.rs` · `set_launch_at_login`/`startup_shortcut`/`launch_at_login` | 06 `launch_at_login` 键 | Startup 已知文件夹 `.lnk`（`IShellLinkW`、静默参数、工作目录 home），免注册表免管理员幂等重写。 |
-| 36 | `startup.rs` `start_hidden` + `platform/capabilities.rs` `Capabilities::hide_window_on_close` | 06 `silent_start`/`tray` 键 | 静默启动 = `silent_start && tray && hide_window_on_close` 三条件合取，无托盘静默会把应用藏成不可达进程。 |
+| 36 | `startup.rs` `start_hidden` + `platform/capabilities.rs` `Capabilities::hide_window_on_close` | 06 `silent_start`/`tray` 键 | 静默启动 = `silent_start && tray` 两条件合取（`hide_window_on_close` 因子随关窗即退定位消去，改造节 1），无托盘静默会把应用藏成不可达进程。 |
 
 ### 窗口特效（点 37–41）
 
@@ -587,7 +588,7 @@ apply_window_effects 改壁纸路径/适应度/对齐 → VisualEffects.generati
 |---|---|---|---|
 | 37 | `nebula_app/src/gpui_shell/wallpaper.rs` · `background_appearance`/`initial_background_appearance`/`effective_material` | 06 `BlurMode`（D09-1） | 模糊只走 GPUI `WindowBackgroundAppearance` 平台通道，壳不自调 DWM backdrop；切档显式清另一通道。 |
 | 38 | `wallpaper.rs` · `VisualEffects`/`refresh`/`refresh_surface_opacity`/`window_opacity`/`chrome_surface_opacity` | 06 `opacity` 键 | 透明度只透壳底色与终端默认背景，全窗 alpha 让文字对比度塌掉。 |
-| 39 | `wallpaper.rs` `Wallpaper`/`update_wallpaper` + `renderer/image` `BackgroundImageFit`/`BackgroundImageAlignment`/`wallpaper_rect` | 06 `wallpaper_*` 五键 | 壁纸 = 底色之上、单元格之下一层图，fit/alignment/cover_chrome/独立透明度。 |
+| 39 | `wallpaper.rs` `Wallpaper`/`update_wallpaper` + `renderer/image` `BackgroundImageFit`/`BackgroundImageAlignment`/`wallpaper_rect` | 06 `background_image_*` 五字段 | 壁纸 = 底色之上、单元格之下一层图，fit/alignment/cover_chrome/独立透明度。 |
 | 40 | `gpui_shell/wallpaper/image_loader.rs` · `load`/`load_preview`/`Request::cancelled`/`FileStamp`/`LoadedImage` | 本篇后台线程 | 单 job 串行 + 有界（64/128MiB/2048 边）让 UI 线程零文件 I/O；generation 过期即弃。 |
 | 41 | `wallpaper.rs` `set_opacity_live` + `wallpaper/preview.rs` | 06 设置页 | live 调透明度即时预览 + 预览图小尺寸分支。 |
 
@@ -619,7 +620,7 @@ apply_window_effects 改壁纸路径/适应度/对齐 → VisualEffects.generati
 2. **03 篇**：消费 `TurnDone`/`NeedsAttention`（带 `AiTurnOutcome`/`AttentionContext`/`AgentKind`）喂漏斗 `AiTurn`/`AiTurnIssue`；agent 退出清进度（点 22）。
 3. **04 篇**：`RuntimeTaskState` 投影喂托盘 agent 清单（点 4/5）与 05 tab 徽标；FocusWindow 单语义（还原最小化+选中 tab+聚焦 pane）供 toast/托盘/动作按钮/ATTACH 四路共用（点 16）；**04 篇开放问题 4 的答案与「还原窗口」语义回登见改造节 1**；退出链 `RuntimeServer` Drop 承载托盘 `shutdown`（点 8）。
 4. **05 篇**：消费 `PaneId`/`TabId`/`WorkspaceTab` 做 pane 级节流键与 tab 选中；壳内 toast 通知面有无归 05（本片不做，点 13 不采纳项）。
-5. **06 篇**：设置键 `tray`/`silent_start`/`auto_check_updates`/`visual_*`/`launch_at_login`/`notification_duration` 单点在 06；**BlurMode 值域对齐 06 D06-4 见改造节 3**。
+5. **06 篇**：设置键 `tray`/`silent_start`/`auto_check_updates`/`background_image_*`/`launch_at_login`/`notification_duration` 单点在 06；**BlurMode 值域对齐 06 D06-4 见改造节 3**。
 6. **11 篇**：真实 toast 投递/Mica 渲染/真实 `.lnk` 登记/真实 OSC 上抛的测试豁免登记归 11；`update-test-source` 演练 infra 归 11（本片只留运行时面，点 34）。
 7. **12 篇**：GitHub Releases 坐标（owner/repo、资产命名 `slTerminal-*`、官方下载 URL 前缀、SHA256SUMS 策略）归 12 篇（点 26）。
 
@@ -783,7 +784,7 @@ pebrel toast xml **无 duration 属性**（`windows.rs::xml` 全文核对），�
 | M10.3 | 托盘线程 + 菜单 + 1Hz 推送 + 橙点 | 菜单构建不开线程测试绿；1Hz 快照去抖测试绿 |
 | M10.4 | 窗口管理 facade（focus_window/focus_pane/window_hwnd） | 四路回窗（toast/托盘/按钮/ATTACH）汇到 facade 的编译期单一实现点；ATTACH 用例绿 |
 | M10.5 | 自动更新链（检查→下载→handoff） | 假 release 服务器全链演练绿（infra eg 11）；文件机/作废链/代理解析测试全绿 |
-| M10.6 | 开机启动 .lnk + 静默启动三条件 | `.lnk` 写读 round-trip 测试绿；三条件真值表测试绿 |
+| M10.6 | 开机启动 .lnk + 静默启动两条件 | `.lnk` 写读 round-trip 测试绿；两条件真值表测试绿 |
 | M10.7 | 窗口特效 + 壁纸 + 启动几何 DPI | BlurMode gate 矩阵/透明度纪律/壁纸有界/几何容忍测试全绿 |
 | M10.8 | background_tasks 收编 | 注册表生命周期/重入/失败策略测试绿 |
 
@@ -797,6 +798,4 @@ M10 安全半程（权限确认 toast 动作按钮的确认语义、guard 锁安
 
 ## 开放问题
 
-1. **05 篇标题栏归属冲突**：05 设计文档两处写「壳重建归 09 篇」，而本 refactor spec 09 与 00 篇分工表均定标题栏三钮/拖拽归 05。本篇按 spec 归 05 执行（本片只管闪烁/进度/特效的 Win32 交互面），05 文档文字需 05 作者自洽——本片已在缝合点 5 登记。
-2. **「还原窗口」语义回登 04**：本片改造节 1 已回答 04 开放问题 4 并回登其缝合点 5；04 正式稿若改判（如保留多窗伏笔），本篇 facade 签名不变、实现回扩。
-3. **GitHub Releases 坐标归 12**：owner/repo、资产命名、官方 URL 前缀、SHA256SUMS 策略在 12 篇落定前，本片点 26 合同以占位符 `SLTERM_RELEASES_*` 常量表达，12 篇定稿后回填。
+1. **「还原窗口」语义回登 04**：本片改造节 1 已回答 04 开放问题 4 并回登其缝合点 5；04 正式稿若改判（如保留多窗伏笔），本篇 facade 签名不变、实现回扩。

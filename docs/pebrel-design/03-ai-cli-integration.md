@@ -29,9 +29,9 @@ AI CLI 集成在单进程 GPUI 世界重建为「**一进程 + 一小桥**」形
 | `slterm_app/src/ai_hook/installation/notify.rs` | pebrel 照抄改名 | notify 槽包装 + #38 指数膨胀防线 |
 | `slterm_app/src/ai_hook/local.rs` + `local/*` | pebrel 照抄改名 | 9 家安装器(claude/codex_notify/codex_hooks/cursor/kimi/extended/native_events/managed_files/config_guard/settings/runtime_skills 挂点) |
 | `slterm_app/src/ai_hook/bridges.rs` + `res/hooks/` | pebrel 照抄改名 | opencode.js / pi.ts 插件落盘桥 |
-| `slterm_app/src/ai_hook/integrations.rs` | pebrel 照抄改名 | `AGENTS` 9 家一等数组 + `HookInspection` 八字段 + `executable_directories` |
+| `slterm_app/src/ai_hook/integrations.rs` | pebrel 照抄改名 | `AGENTS` 9 家一等数组 + `HookInspection` + `executable_directories` |
 | `slterm_app/src/ai_agents.rs` + `ai_agents/screen_context.rs` | pebrel 照抄改名 | `AgentKind` 27 家(本篇锚点)+ TOML 规则引擎 + 结构判据 |
-| `slterm_agent_detection/*.toml` | pebrel 照抄改名 | 21 厂商规则 + `_shared.toml` 兜底(资源文件随仓) |
+| `slterm_agent_detection/*.toml` | pebrel 照抄改名 | 20 厂商规则 + `_shared.toml` 兜底(资源文件随仓) |
 | `slterm_app/src/ai_sessions.rs` | pebrel 照抄改名 | 有界扫描 + hook 注册表合并 + resume/fork 命令 |
 | `slterm_app/src/assistant_answer.rs` + `assistant_answer/conversation.rs` | pebrel 照抄改名 | 回答三态 + `AnswerInbox` + 有界 transcript 投影 |
 | `slterm_app/src/agent_env.rs` | pebrel 照抄改名 | per-pane 环境契约(`apply`/`executable`/幂等三件套) |
@@ -262,7 +262,7 @@ const FORWARD_TIMEOUT: Duration = Duration::from_secs(2);    // 一次性等待,
 // - 任何路径含 panic 都 exit 0:catch_unwind + 所有出口显式 process::exit(0)
 // - 超限抽干 stdin 但不转发截断 JSON(防 CLI 侧 hook write error)
 // - 非白名单首参数 = 误调用,恒无声 no-op(known_source / payload_on_stdin 路由)
-// - Outcome 七态写 SLTERM_HOOK_LOG 侧信道日志,绝不记载荷
+// - Outcome 各终态写 SLTERM_HOOK_LOG 侧信道日志,绝不记载荷
 enum Outcome { PayloadTooLarge, Sent, NotHosted, PipeUnavailable, ForeignRunner /* RemoteOsc 不迁 */ }
 
 const FOREIGN_HOOK_RUNNERS: &[&str] = &["GROK_HOOK_NAME", "GROK_HOOK_EVENT"];  // 串台门:空值不算命中
@@ -399,12 +399,10 @@ pub const PROCESS_ENV: &str = "SLTERM_PROCESS_ID";   // 宿主 PID + pane id 双
 pub fn apply(env: &mut HashMap<String, String>, pane_id: impl Display);
 // 注入组:TERM_PROGRAM/TERM_PROGRAM_VERSION(=VERSION)/PANE_ID/PROCESS_ENV/
 //   CLI/BIN_DIR(绝对路径,current_exe() 优先——嵌套启动继承值指向外层旧副本)+
-//   BIN_DIR 前置 PATH + WSLENV 合并;变量组只注本地 PTY
+//   BIN_DIR 前置 PATH;变量组只注本地 PTY(WSLENV 臂砍,WSL 全家不采纳)
 pub fn executable() -> Option<PathBuf>;              // 优先 current_exe()
-// 幂等三件套(照抄):
+// 幂等两件(照抄,WSLENV 第三件砍):
 // - PATH 前置按值判重(先移除等值项再前置;Windows 大小写不敏感归一)
-// - WSLENV 按变量名判重,尊重宿主已有标志位(/p /l 不覆盖),两来源条目全保留
-// - 编译测试 wslenv_entries_match_variables 钉死「字面量条目 == 变量名」——改名即红
 // ENDPOINT_ENV 注入与否归 04 篇 runtime API 设计(spec 采纳点 38,方向性)
 ```
 
@@ -438,11 +436,11 @@ fn claim_setup_announcement(directory: &Path) -> io::Result<bool>;
 //   安装/检视/卸载共用同一判断;被用户编辑过的同名文件报 Conflict 保留不动
 // local/config_guard.rs —— 安装/修复调度线程(notify 监听 + 唤醒 channel + Drop 停止);
 //   heal_all 拿锁后重读授权;ai_hooks=false 全局开关短路;runtime skills 挂点在此(heal_all)
-// local/settings.rs —— inspect 八字段(下详)
+// local/settings.rs —— inspect 字段面(下详)
 
 // integrations.rs —— 设置页数据源
 pub(crate) const AGENTS: [AgentKind; 9] = [Claude, Codex, OpenCode, Cursor, Kimi, Pi, OhMyPi, Copilot, Grok];
-pub(crate) struct HookInspection {                   // 八字段:installed ≠ current 两个事实分离
+pub(crate) struct HookInspection {                   // installed ≠ current 两个事实分离
     pub config_path: Option<PathBuf>, pub available: bool,
     pub installed: bool, pub needs_repair: bool, pub enabled: bool,
     pub helper_missing: bool, pub error: Option<String>,
@@ -555,13 +553,13 @@ hook 事件:apply_hook 按 kind:
 | `nebula_app/src/ai_hook/local/config_guard.rs` | 全量 | heal_all 拿锁重读授权,防旧快照回装 |
 | `nebula_app/src/ai_hook/integrations.rs` `AGENTS`/`HookInspection`/`inspect`/`executable_directories`/`find_executable` | 全量,macOS 目录分支砍 | 9 家一等清单;installed ≠ current 双事实;「agent」通用名按路径归属 |
 | `nebula_app/src/ai_agents.rs` `AgentKind`/`ALL`/`slug`/`display_name`/`aliases`/`parse`/`AgentStatus`/`AgentStatusSource`/`Detection`/`detect` | 本篇锚点 | 27 家身份事实单源;aliases 进程识别与设置页发现共用 |
-| `agent_detection/*.toml` 21 厂商 + `_shared.toml` | 资源文件随迁 | 声明式规则改不动代码;claude.toml 实测知识注释逐字保留(esc 唯一可靠证据/动画符号不可当证据/❯ ≠ 空闲) |
+| `agent_detection/*.toml` 20 厂商 + `_shared.toml` | 资源文件随迁 | 声明式规则改不动代码;claude.toml 实测知识注释逐字保留(esc 唯一可靠证据/动画符号不可当证据/❯ ≠ 空闲) |
 | `nebula_app/src/ai_agents.rs` 用户覆盖机制 + mtime 节流(≤2s) | 全量 | 运行中调参但文件系统不上每一帧;覆盖按 slug 一对一 |
 | `nebula_app/src/ai_agents/screen_context.rs` `has_live_input_controls`/`CONTROLS`/`BINARY`/`attention_region` | 全量 | 结构判据公共闸:assistant 正文里的字不是事件,只有最近控制行说了算 |
 | `nebula_app/src/ai_sessions.rs` `HEAD_BYTES`/`AiSession`/`scan`/`record_hook_session`/`relative_label`/`looks_injected` | 全量 | 64KB 头部有界扫描 + 注册表合并;注入形态筛防标题事故 |
 | `nebula_app/src/assistant_answer.rs` `AssistantAnswer`/`AnswerInbox` + `conversation.rs` 投影 | 全量 | 回答三态 + 256KB 有界投影;不从屏幕猜测 |
-| `nebula_app/src/agent_env.rs` `apply`/`executable`/PATH/WSLENV 幂等三件套 | 全量改 `SLTERM_*`,`PROCESS_ENV` 单名 | per-pane 身份变量组;current_exe 优先防嵌套套娃 |
-| `nebula_app/src/ai_hook/local/settings.rs` `inspect` | 全量 | 检视八字段(归设置页数据源,eg 06) |
+| `nebula_app/src/agent_env.rs` `apply`/`executable`/PATH 幂等两件（WSLENV 臂砍） | 全量改 `SLTERM_*`,`PROCESS_ENV` 单名 | per-pane 身份变量组;current_exe 优先防嵌套套娃 |
+| `nebula_app/src/ai_hook/local/settings.rs` `inspect` | 全量 | 检视字段面(归设置页数据源,eg 06) |
 | `nebula_app/src/process_tree.rs` `nearest_agent_ancestor` | 全量归 app 平台件 | 内核 pid → agent pid 的祖先链解析,身份核验的另一半 |
 
 ### 改名映射引用
@@ -573,7 +571,7 @@ hook 事件:apply_hook 按 kind:
 1. **02 篇(终端事件)**:OSC 133;C/D(`Event::CommandStart`/`CommandDone`)与 `Event::CwdReport` 是仲裁器的 shell 边界数据源——壳在收到 `CommandDone` 后调 `AgentActivity::command_finished`;OSC 133;C 首 token 命中 AgentKind 走 `parse_command`(静态识别),与屏幕规则(运行态观察)经同一仲裁器汇合,互不推导。
 2. **04 篇(runtime API)**:`AgentActivity::status`/`source`/`primary_pid` 暴露给 runtime 的 pane 方法族;`PROCESS_ENV` 双因子与 runtime 端点注入形态归 04;`AgentKind::slug` 是 runtime 信封里的 source 值。
 3. **05 篇(pane 归属)**:`PaneId` newtype 本篇以 `u64` 形参承接 05 篇类型(事件门/仲裁器/AnswerInbox 签名处);pane 的 `AgentActivity` 实例挂 `TerminalPane`,由 05 篇 Workspace 生命周期创建/销毁;`SLTERM_PANE_ID` 环境值与 PaneId 分配器同源(05 篇单调计数器)。
-4. **06 篇(设置双轨)**:`AgentHook` 枚举与 `ai_hooks` 全局开关键归 06 键域;设置页 hooks 组数据源 = `integrations::inspect()` 八字段(installed/needs_repair/helper_missing 三态 + config_path 直达),替换 slTerminal 旧注入三态展示。
+4. **06 篇(设置双轨)**:`AgentHook` 枚举与 `ai_hooks` 全局开关键归 06 键域;设置页 hooks 组数据源 = `integrations::inspect()` 字段面(installed/needs_repair/helper_missing 三态 + config_path 直达),替换 slTerminal 旧注入三态展示。
 5. **08 篇(AI assistant)**:config_guard `heal_all` 的 runtime skills 挂点;`AiTurnOutcome::Failed` 等失败边归 08 的建议条触发源之一。
 6. **09 篇(通知)**:TurnDone/NeedsAttention 两个状态边归 09 的 `Notification` 漏斗(枚举形态归 09 锚点,本篇只保证边干净、带上下文);attention 闪烁由生命周期状态驱动。
 7. **11 篇(测试)**：本篇全部测试点的基础设施形态(虚拟窗口/夹具/门禁登记)归 11。
@@ -588,7 +586,7 @@ hook 事件:apply_hook 按 kind:
 | `src-tauri/src/hooks/signal.rs` 信号文件读写 | 同上 | hook 载荷走管道,零中间文件 |
 | `~/.slterminal/hooks-events/` 信号目录 + `slterm-hook-reporter.js` 落盘 | 同上 | `slterm-hook.exe`(安装进各家 CLI 配置);reporter 的 C10 合同(exit 0/不写 stderr)精神由 helper 的 catch_unwind + 超时等待继承 |
 | `agent-event` Tauri 事件广播 | 跨进程边界消失 | 单进程 mpsc 直送 foreground executor 排水 |
-| 注入三态 `AgentInjectionStatus`(Injected/Outdated/NotInjected) | 数据源换代 | `HookInspection` 八字段;installed/current 双事实取代版本/哈希三态 |
+| 注入三态 `AgentInjectionStatus`(Injected/Outdated/NotInjected) | 数据源换代 | `HookInspection` 字段面;installed/current 双事实取代版本/哈希三态 |
 | settings.json 自研 merge 逻辑(`hooks/claude/inject.rs` 等) | pebrel 安装纪律为终态权威 | `ensure_claude_hooks` + marker 认领/编辑保留/不修复式覆盖/原子锁 |
 
 保留物(不随通道退役):SEC-12 审查门(改造节 2)、statusline 用量桥接(改造节 3)、关闭恢复 statusline 语义(归 09 窗口收尾挂点;备份-还原形态随安装器纪律重设计)。
@@ -716,14 +714,14 @@ pub(crate) fn restore_agent(leaf: &AgentSession) -> Option<String>;
 | cursor/native_events:五事件映射 / EncodedCommand base64 解码回 UTF-16 校验 | L1 | 迁移 |
 | 归属指纹:三通道判归属 / 用户编辑报 Conflict 保留 / 设置页不误显示同名用户文件为已接入 | L1 managed_files | 迁移 |
 | `claim_setup_announcement`:create_new 原子占位只报一次 / 并发只占一位 / 非目录报错 | L1 local.rs | 迁移 |
-| 屏幕规则:21 厂商 + `_shared.toml` 全例随迁(含 claude「esc to interrupt 唯一证据」「动画符号不当证据」「❯ ≠ 空闲」三组实测注释对应用例)/ 用户覆盖一对一 / mtime 节流 ≤2s | L1 ai_agents | 迁移 |
+| 屏幕规则:20 厂商 + `_shared.toml` 全例随迁(含 claude「esc to interrupt 唯一证据」「动画符号不当证据」「❯ ≠ 空闲」三组实测注释对应用例)/ 用户覆盖一对一 / mtime 节流 ≤2s | L1 ai_agents | 迁移 |
 | screen_context:live-control 边界(quoted 旧表单压不过新 footer)/ codex composer attention_region 特判 | L1 | 迁移 |
 | 27 家身份:`aliases_resolve_to_canonical_agents` 全别名归一 + `AgentKind::ALL` 27 项钉死(数量进测试不进文档) | L1 ai_agents | 迁移 + 新建 |
 | 可执行发现:`.grok/bin/agent` 不误报 Cursor 反例双例 / 桌面 cursor 启动器不算 Agent CLI / 扩展名序 | L1 integrations | 迁移 |
 | ai_sessions:64KB 头部读(大文件不整读)/ claude_title 回退链 / codex rollout uuid 尾提取 / `looks_injected` 五形态筛 / 注册表合并取较新 modified / id 复用 resume 构造器过滤 / `relative_label` 档 | L1 ai_sessions | 迁移 |
 | assistant_answer:三态(Complete/Missing/TooLarge)/ notice 文案 / `AnswerInbox` (provider,session) 归属 + 单调去旧 | L1 | 迁移 |
 | conversation 投影:256KB capture / 分页预算(1MB/48KB/128KB/160)/ validate_source 身份校验 / truncated 显式 | L1 | 迁移 |
-| agent_env:注入组字面量全等 / PATH 值判重幂等(嵌套不涨份)/ WSLENV 按名判重 + 标志位尊重 / `wslenv_entries_match_variables` 编译钉(改名即红)/ `executable()` current_exe 优先 | L1 agent_env | 迁移 |
+| agent_env：注入组字面量全等 / PATH 值判重幂等（嵌套不涨份）/ `executable()` current_exe 优先（WSLENV 件砍） | L1 agent_env | 迁移 |
 | **SEC-12 审查并入**:`review_statusline_command` 词表正反例 / Suspended 零写盘 / confirm 路径跳过审查 / 启动自愈命中跳过+审计 | L1(改造节 2 新建) | 新建(防复发:旧 CP-043 用例语义改写) |
 | **27 家 agent_dirs 表对齐**:表长 == `AgentKind::ALL.len()` 编译守卫 + 每行目录值字面量钉 | L1 agent_dirs | 新建 |
 | **信号通道退役守卫**:全树 grep 无 `hooks-events`/`slterm-hook-reporter.js`/`AgentInjectionStatus` 残留归 01 篇禁名门禁扩展词表 | 门禁归 01/11 | 新建 |
@@ -739,9 +737,9 @@ pub(crate) fn restore_agent(leaf: &AgentSession) -> Option<String>;
 
 **M4.3 安装权威 + 9 家安装器 + SEC-12 合流**:`installation*`/`local/*`/`bridges.rs`/`integrations.rs`/`res/hooks/` + 改造节 2 审查门。出口 = 安装权威四用例/#38 防线/claude/kimi/cursor 安装器/指纹/哨兵用例全绿;`review_statusline_command` 正反例绿;禁名门禁过(marker/备份后缀等新品牌位零旧名)。
 
-**M4.4 识别/屏幕/会话/环境**:`ai_agents`/`agent_detection/*.toml`/`screen_context`/`ai_sessions`/`assistant_answer`/`agent_env`/`agent_dirs`(27 家)。出口 = 27 家身份用例 + 屏幕规则全例 + 会话扫描/注入筛/回答三态/环境幂等三件套全绿;`wslenv_entries_match_variables` 编译钉绿;agent_dirs 对齐守卫绿。
+**M4.4 识别/屏幕/会话/环境**:`ai_agents`/`agent_detection/*.toml`/`screen_context`/`ai_sessions`/`assistant_answer`/`agent_env`/`agent_dirs`(27 家)。出口 = 27 家身份用例 + 屏幕规则全例 + 会话扫描/注入筛/回答三态/环境幂等两件全绿（WSLENV 件砍）;agent_dirs 对齐守卫绿。
 
-**M4.5 壳侧点亮(依赖 M3)**:管道服务器接线 GPUI foreground executor、`TerminalPane` 挂 `AgentActivity`/`AnswerInbox`、05 篇 `restore_agent` 缝合、09 篇通知漏斗接通。出口 = 管道端到端集成用例(真机串行)绿;`cargo test` 全绿;AI 检测/事件链路点亮对齐 00-roadmap M4 出口(hook 链路契约测试过 + 禁名门禁过)。
+**M4.5 壳侧点亮(依赖 M3)**:管道服务器接线 GPUI foreground executor;`AgentActivity`/`AnswerInbox` 挂 M3 单 pane 宿主(宿主形态归 M3)。三件前倾工作改登记为后阶段件的缝合点,不在 M4.5 落地:`TerminalPane` 三件套挂载归 05 篇 M5.3(`TerminalPane` 锚定 05 篇)、`restore_agent` 恢复注入缝合归 05 篇 M5.5、通知漏斗接通归 09 篇 M10.1——M4.5 仅做事件通道。出口 = 管道端到端集成用例(真机串行)绿;`cargo test` 全绿;AI 检测/事件链路点亮对齐 00-roadmap M4 出口(hook 链路契约测试过 + 禁名门禁过)。
 
 M4 全程关窗即退出无 mux;statusline 桥接介质随 D03-3 落地,不阻塞 M4.5 主链。
 
@@ -761,4 +759,4 @@ M4 全程关窗即退出无 mux;statusline 桥接介质随 D03-3 落地,不阻�
 2. **`AgentKind::parse_command` 与 OSC 133;C 首 token 的形态差异**:前者解析裸命令(argv 首 token),后者拿到的是 shell 整行(含参数/管道/路径前缀);壳侧匹配器(eg 改造节 4)的归一规则(路径剥离/引号/npx 包装)归 M4.5 实现期,本篇不定算法。
 3. **agent_history 旧数据的去向**:旧栈 `agent_history` 的扫描缓存与历史索引随 M0 删除;用户已有的 CLI 原生会话档案(claude/codex 目录)天然被 `ai_sessions::scan` 重新发现,无迁移义务——但旧「最近会话」列表的排序/展示偏好不可自动化恢复,属可接受损失,登记确认归 M4.4。
 4. **流键中 `bridge_instance` 仅 pi 消费的特判位置**:ordering.rs 的 `stream_key` 在 source == "pi" 时以 bridge_instance 代 session_id;该特判留在流键构造处(照抄)还是上移到 protocol 归一层(归一时填 session_id),M4.2 实现期按改动面最小定,两处测试锚等价。
-5. **设置页「Agent 组」旧 ADR-0023 的面貌**:hooks 页数据源换代(注入三态 → HookInspection 八字段)后,旧页的「注入/卸载」按钮语义直接映射 set_enabled/install/uninstall,eg 06 篇键域;页面其余区块(statusline/全局文件视图)归 06/05,本篇不 preempt。
+5. **设置页「Agent 组」旧 ADR-0023 的面貌**:hooks 页数据源换代(注入三态 → HookInspection 字段面)后,旧页的「注入/卸载」按钮语义直接映射 set_enabled/install/uninstall,eg 06 篇键域;页面其余区块(statusline/全局文件视图)归 06/05,本篇不 preempt。

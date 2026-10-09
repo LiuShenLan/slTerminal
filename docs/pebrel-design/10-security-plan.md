@@ -131,9 +131,9 @@ pub fn test_provider(provider: &AiProvider) -> ProviderTestResult;
 
 ```rust
 // slterm_app/src/encrypted_backup.rs
-// 魔数重设计:D 节决策归 M10 落地时定(默认 "SLTRMBK1" 形态,见待沉淀 D10-1);
+// 魔数 = "TRMBK001"(D10-1 已裁:去品牌形态,承接 01 篇 D3);
 // 长度契约 8 字节随迁。ARCHIVE_VERSION/SALT_LEN/NONCE_LEN/KEY_LEN 数值照抄。
-const MAGIC: &[u8; 8] = b"SLTRMBK1";       // ← D10-1 决策点,默认填
+const MAGIC: &[u8; 8] = b"TRMBK001";       // D10-1 已裁(去品牌)
 const ARCHIVE_VERSION: u32 = 1;            // 版本号校验:不符即「版本不支持」一票拒
 const SALT_LEN: usize = 16; const NONCE_LEN: usize = 12; const KEY_LEN: usize = 32;
 
@@ -223,7 +223,7 @@ pub(crate) fn poll_once_with(old: &[PlanBalanceInfo],
     now: u64) -> Vec<PlanBalanceInfo>;
 // 一轮拉取编排(D6 最小可测性):来源消失 → 本轮从数组移除;未命中套餐 → 静默降级;
 // emit 判定在 apply_snapshot——快照整体 PartialEq(含 updated_at)有变化才 emit
-fn apply_snapshot(/* 单进程形态归改造节:订阅模型替换 tauri emit,签名归 D10-3 */);
+fn apply_snapshot(/* 单进程形态:模块级 watch channel 供多消费者(D10-3 已裁) */);
 pub fn poll_once_executor(/* GPUI 后台执行器形态归改造节 */);
 
 // slterm_app/src/plan_balance/source.rs —— 余量来源(双注册表之一)
@@ -326,7 +326,7 @@ tracing::warn!(target: "audit", "hooks user 层配置写入: {}", path.display()
   find_query_by_url → None → 静默降级;命中 → fetch(token 句柄借用)
   → merge_slot(old, source_id, plan_id, result, now) 四分支
 apply_snapshot:新快照 vs SNAPSHOT 整体 PartialEq(含 updated_at)→
-  变化才推送;失败保留旧值不动不推;单进程推送形态归 D10-3
+  变化才推送;失败保留旧值不动不推;推送形态 = 模块级 watch channel(D10-3 已裁)
 不变量:token 生命周期闭在「resolve 产出 → fetch 消费 → drop」内;
 快照/DTO/推送载荷无 token 字段(类型层防线,编译期拒)
 ```
@@ -368,7 +368,7 @@ SEC-17:hooks user 层 settings.json 写入 → warn!(target:"audit", path)
 | # | pebrel 源(路径 · 符号) | 缝合点 | 因果链一句 |
 | --- | --- | --- | --- |
 | 8 | `nebula_app/src/encrypted_backup.rs::derive_key`/`encrypt_bytes`/`decrypt_bytes` | `slterm_app/src/encrypted_backup.rs` 全量 | AES-256-GCM + Argon2id 算法栈完整,参数组作契约数值随迁 |
-| 9 | `encrypted_backup.rs::MAGIC`(PEBRBAK1 作 `Payload::aad`) | 魔数归 D10-1(默认 `SLTRMBK1`) | 格式身份与密文认证绑死,不符一票拒解 |
+| 9 | `encrypted_backup.rs::MAGIC`(PEBRBAK1 作 `Payload::aad`) | 魔数 = `TRMBK001`(D10-1 已裁) | 格式身份与密文认证绑死,不符一票拒解 |
 | 10 | `encrypted_backup.rs` 模块头白名单注释 + `collect_from` | 白名单清单归 D10-2;不遍历 home 照抄 | 白名单即安全边界,枚举即授权 |
 | 11 | `filter_settings`/`add_sanitized_ssh`/`ssh_is_sanitized` 双闸 | SSH 字面量砍;双闸抽象归 D10-2 套 slterm 自有敏感文件 | 导出清洗 + 导入复验,防敏感面进出 |
 | 12 | `encrypted_backup.rs::validate_archive` | 全量 | 先验后写:任何不过整单拒写,先于任何落盘 |
@@ -390,11 +390,11 @@ SEC-17:hooks user 层 settings.json 写入 → warn!(target:"audit", path)
 | --- | --- | --- |
 | 轮询载体 | tauri poller + 前端 interval 双端调度 | GPUI background executor;executor 体归本篇 |
 | 节拍与生命周期 | 旧后端 `background_tasks` interval 调度器 | 09 篇 `background_tasks` 注册表 `planBalance` 条目归 09 锚点归本篇消费 |
-| 推送 | `apply_snapshot` tauri emit | 订阅模型归 D10-3;模块级 `SNAPSHOT` 静态存储形态不变 |
+| 推送 | `apply_snapshot` tauri emit | 模块级 watch channel 供多消费者(D10-3 已裁);模块级 `SNAPSHOT` 静态存储形态不变 |
 
 `poll_once_executor` 体(本篇锚点)= 旧 `poll_once_production(now)` 实参化:`poll_once_with(&SNAPSHOT, |s| s.resolve(), |q, t| q.fetch(t), now)` → `apply_snapshot(new)`。签名从 `fn(tauri::AppHandle)` 收敛为 `fn()`(eg 09 篇 `TaskExecutor` 消费归 09);阻塞 HTTP 全程在后台执行器,不阻塞 UI 线程。
 
-`apply_snapshot` 实现期形态归 D10-3,emit 判定语义不变:快照整体 PartialEq(含 updated_at)有变化才推,失败保留旧值不推。`refresh_plan_balance` 恒返回 Ok 语义原样——轮询失败保留旧值,错误不冒泡到 UI 线程。
+`apply_snapshot` 实现期形态 = 模块级 watch channel(D10-3 已裁),emit 判定语义不变:快照整体 PartialEq(含 updated_at)有变化才推,失败保留旧值不推。`refresh_plan_balance` 恒返回 Ok 语义原样——轮询失败保留旧值,错误不冒泡到 UI 线程。
 
 ### 2. SEC 清单二分归档表
 
@@ -425,7 +425,7 @@ SEC-17:hooks user 层 settings.json 写入 → warn!(target:"audit", path)
 | 08(ai_providers 消费) | 凭据读写只经本篇 `secrets.rs` 门面;`fallback_api_key` 归 08 配置文件、本篇不管;providers.json 形态归 08 |
 | 06(设置) | 设置 GUI 只展示凭据引用字段+尾四掩码,永不取明文;写通道原子写底座归 06,本篇凭据文件独立不走该通道 |
 | 04(runtime API) | 控制面不暴露任何凭据读/写/列方法;runtime.port 的 128bit token 本身按本篇凭据纪律存取(Zeroizing、日志不插值) |
-| 09(系统集成) | `background_tasks` 注册表挂 `planBalance` 节拍(体归本篇);日志/审计 subscriber 装配归 09;加密备份 UI 入口落位归 D10-4 |
+| 09(系统集成) | `background_tasks` 注册表挂 `planBalance` 节拍(体归本篇);日志/审计 subscriber 装配归 09;加密备份 UI 入口归 06 设置页安全分区(D10-4 已裁,恢复点清单同面) |
 | 03(hooks 安装器) | SEC-12/13 判定逻辑归 03,审计事件格式与通道归本篇 |
 
 ## 测试点清单
@@ -465,5 +465,4 @@ SEC-17:hooks user 层 settings.json 写入 → warn!(target:"audit", path)
 ## 开放问题
 
 1. **审计落盘策略**:audit target 运行期是否落独立轮转文件(便于事后取证)还是仅随主日志——归实现期,影响 SEC-17 取证能力。
-2. **恢复点清单 UI 形态**:undo 需要向用户展示恢复点列表(point.names 私有只读),展示面归 06 设置页还是独立对话框,随 D10-4 联动定。
-3. **plan_balance 旧便携数据去向**:旧版 settings.json(exe 同级)中的 plan 快照是否随 01 篇 D2/D3 数据目录裁定一并迁移,待 D2/D3 裁决后回登。
+2. **恢复点清单 UI 形态**:undo 需要向用户展示恢复点列表(point.names 私有只读),展示面随 D10-4 已裁归 06 设置页安全分区(恢复点清单同面);独立对话框形态不取。

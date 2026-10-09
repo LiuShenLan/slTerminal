@@ -25,7 +25,7 @@
 | `slterm_settings/src/scrolling.rs` / `notifications.rs` / `ligatures.rs` / `cursor_motion.rs` | pebrel 照抄 | 档位约束 + 归一钳制小域 |
 | `slterm_settings/src/reset.rs` | pebrel 照抄改造(JSON 化) | `restore_default_settings`:备份 → 删已知键 → 未知键/用户数据保留;重置覆盖对账 |
 | `slterm_settings/src/keys.rs` | 新建 | **设置注册表**:键名/默认值/域归属/搜索别名单源,白名单与重置清单由注册表驱动 |
-| `slterm_settings/src/paths.rs` | 缝合改写(归 01 篇锚) | `settings_dir`/`settings_path`(`SLTERM_CONFIG_DIR` 优先,默认 `%APPDATA%\slTerminal`,叶子名承 01 篇 D2) |
+| `slterm_settings/src/paths.rs` | 缝合改写(归 01 篇锚) | `settings_dir`/`settings_path`(`SLTERM_CONFIG_DIR` 优先,默认 `%APPDATA%\slterm`,叶子名 = 01 篇 D2 裁决值) |
 | `slterm_app/src/theme_library/` | pebrel 照抄 | `ThemeDocument`/`ThemeLibraryStore`/`RevisionPrecondition`/主题包 ZIP |
 | `slterm_app/src/gpui_shell/settings_pane.rs` + `settings_pane/` | pebrel 照抄裁剪 | 设置页壳 + 各节页(页集合按分片归属重排) |
 | `slterm_app/src/gpui_shell/theme.rs` | pebrel 照抄裁剪 | 主题解析单点(`resolve_theme_name` 仅暗色化)+ 调色板 → GPUI token 注入 |
@@ -34,12 +34,12 @@
 | `slterm_app/tests/i18n_contract.rs` + `tools/i18n-contract/` | pebrel 照抄 | 零分配/小栈/payload 预算合同测试 + 独立合同 workspace |
 | `slterm_app/src/platform/locale.rs` | pebrel 照抄裁剪 | Windows `GetUserDefaultLocaleName` + POSIX 环境变量回退(macOS 分支砍) |
 
-**裁剪不迁**(spec 不采纳点):`RawSettings::from_text` 行级 txt 协议整族、keybind 多行协议(键位归 07,JSON 段内数组)、`quick_terminal.rs` 整支、`paths/migration.rs` 的 Nebula→Pebrel 迁移本体(防御性形态参考,服务对象换成本仓旧 settings.json)、亮主题全套、`app_icon.rs` 25 色板产品功能(宏形态吸收)、SSH 代理三键、SVN 档、`tabs_position` 键(不采纳「tabs 位置配置化」)、`BlurModeName` 五档材质枚举(值域重定归 09 篇,见 D06-4)、其余九语目录、`nebula.toml` 层级、mobile/backup/providers 设置页。
+**裁剪不迁**(spec 不采纳点):`RawSettings::from_text` 行级 txt 协议整族、keybind 多行协议(键位归 07,JSON 段内数组)、`quick_terminal.rs` 整支、`paths/migration.rs` 迁移本体(零迁移,D06-2 已裁,无服务对象)、亮主题全套、`app_icon.rs` 25 色板产品功能(宏形态吸收)、SSH 代理三键、SVN 档、`tabs_position` 键(不采纳「tabs 位置配置化」)、`BlurModeName` 五档材质枚举的 pebrel 形态(blur 值域已裁 = 五材质枚举(默认 None)+ opacity 标量,D06-4/D09-1,本篇字段一次到位锚定)、其余九语目录、`nebula.toml` 层级、mobile/backup/providers 设置页。
 
 ## 边界与不变更项
 
 1. **产品定位七条**与 00-roadmap 跨领域不变量全适用;本篇涉及 WebView / IPC / Tauri 命令 / Dockview / xterm.js / vitest / CM6 / CSS 变量的词一律只在「消亡 / 映射 / 来源」语境。
-2. **类型锚点纪律**:本篇唯一定义 `Rgb`/`Rgb8`/`Rgba8`、`RuntimeSettings`、键域枚举族(`CursorShapeName`/`AcceptKeyName`/`CompletionStyleName`/`DensityName`/`NewTabPositionName`/`TabRevealName`/`WindowingBehaviorName`/`VcsDisplayName`/`BellModeName`/`CellWidthModeName` 等)、`ThemeName`、`TermTheme`/`ExactTermColors`、`ReviewedPalette`/`FreshPalette`、`ThemeDefinition`/`TerminalThemeColors`/`IndexedPalette`/`ThemeUiColors`/`ThemeTypography`/`ThemeLayout`/`ThemeEffects`/`ThemeValidationError`、`LanguagePref`/`LanguageInfo`、`AgentHook`、`Ligatures`、`CursorMotion`、`NotificationDuration`、scrolling 档位族(`SCROLLBACK_VALUES` 等)。他篇引用纪律:只许 `use` / facade 传参;**05 篇 session schema 的 `Rgb` 消费本篇**;**03 篇 `AgentHook`/`ai_hooks` 开关键消费本篇**(03 篇已登记);**02 篇 `conpty_input_modes` 键域枚举消费本篇**(02 篇已登记,键名常量引用纪律不变)。
+2. **类型锚点纪律**:本篇唯一定义 `Rgb`/`Rgb8`/`Rgba8`、`RuntimeSettings`、键域枚举族(`CursorShapeName`/`AcceptKeyName`/`CompletionStyleName`/`DensityName`/`NewTabPositionName`/`TabRevealName`/`VcsDisplayName`/`BellModeName`/`CellWidthModeName` 等)、`ThemeName`、`TermTheme`/`ExactTermColors`、`ReviewedPalette`/`FreshPalette`、`ThemeDefinition`/`TerminalThemeColors`/`IndexedPalette`/`ThemeUiColors`/`ThemeTypography`/`ThemeLayout`/`ThemeEffects`/`ThemeValidationError`、`LanguagePref`/`LanguageInfo`、`AgentHook`、`Ligatures`、`CursorMotion`、`NotificationDuration`、scrolling 档位族(`SCROLLBACK_VALUES` 等)。他篇引用纪律:只许 `use` / facade 传参;**05 篇 session schema 的 `Rgb` 消费本篇**;**03 篇 `AgentHook`/`ai_hooks` 开关键消费本篇**(03 篇已登记);**02 篇 `conpty_input_modes` 键域枚举消费本篇**(02 篇已登记,键名常量引用纪律不变)。
 3. **JSON 单源**:设置持久化唯一权威 = 数据目录 `settings.json`(路径承 01 篇 D2/D3);无 txt/Lua/toml 层,无双层优先级;「未知键保留、读-改-写」语义由 JSON 段级浅合并继承(spec 采纳点 4)。
 4. **仅暗色**:主题模型只带暗色语义;`ThemeAppearance`/`is_light`/`LIGHT_FOREGROUND`/`LIGHT_ANSI`/`follow_system_theme`/亮暗双权重混合全部不进 slterm 模型;内置主题目录只留暗色成员(亮成员见 D06-3)。
 5. **写通道纪律**(00-roadmap 跨领域不变量 1 的设置域落地):一切设置写盘 = 保存锁串行化「读-合并-写」+ 临时文件 + rename + `.bak`;损坏文件禁覆盖(读侧回退 .bak 并标记 corrupted,写侧拒绝落盘);1MB 上限;白名单经设置注册表驱动(见改造节 2)。
@@ -47,7 +47,7 @@
 7. **「显式值权威」三元模式不可违反**:默认值可来自主题/回退层,用户显式写过(哪怕恰是默认值)必须保持权威——`opacity_is_explicit`/`blur_is_explicit` 与 `pane_card_radius`/`pane_card_gutter`/`pane_card_shadow`/`pane_card_divider` 四键 `None`=跟随主题,是设置/主题优先级体系的地基;自定义主题的 `ThemeTypography`/`ThemeEffects` Option 字段同构。
 8. **i18n 零分配合同**:无参查询(`text`/`tr`/`pick` 命中路径)零分配、零文件读、零锁;`format` 是唯一允许创建 `String` 的翻译路径;en-US/zh-CN 键集硬合同在构建期 panic 强制,不靠注释自律。
 9. **凭据纪律**(SEC-18)延申:设置 JSON 与主题文档一律不得承载真实凭据值;providers 供应商配置归 10 篇凭据域,不进设置页全局组。
-10. **布局恢复归 session,禁混入 settings**(05 篇边界承接):分屏比例/tab 集合/侧栏开合快照一律走 session v4;settings 只存全局偏好;05 篇 D05-3 侧栏 collapsed/width 若裁定归设置域,经本篇键域落地。
+10. **布局恢复归 session,禁混入 settings**(05 篇边界承接):分屏比例/tab 集合快照一律走 session v4;settings 只存全局偏好;侧栏 collapsed/width/active_view 已裁归 session(D05-3),不进本篇键域。
 
 ## 关键类型与签名
 
@@ -141,7 +141,7 @@ pub struct RuntimeSettings {
     pub tab_reveal: TabRevealName,
     pub density: DensityName,
     pub new_tab_position: NewTabPositionName,
-    pub windowing_behavior: WindowingBehaviorName, // 单窗化后消费收编归 04 篇 D04-3
+    // windowing_behavior 键不迁(B.10 已裁删键,单窗行为硬编码归 09 篇)
     pub cell_width_mode: CellWidthModeName,
     pub vcs_display: VcsDisplayName,               // auto/git 两档(SVN 砍)
     pub bell: BellModeName,                        // 关/闪烁/声音/两者
@@ -155,7 +155,8 @@ pub struct RuntimeSettings {
     pub resume_ai: bool,                           //归 03 篇恢复注入消费
     pub tray: bool,                                //归 09 篇托盘消费
     pub silent_start: bool,
-    pub blur: BlurMode,                            // 值域重定归 09 篇(D06-4);显式权威模式保留
+    pub launch_at_login: bool,                     // 开机启动;归 09 篇消费
+    pub blur: BlurMode,                            // 五材质枚举(默认 None),D06-4/D09-1 已裁一次到位;显式权威模式保留
     pub opacity: f32,
     opacity_explicit: bool,                        // 「显式值权威」三元模式(不变更项 7)
     blur_explicit: bool,
@@ -169,7 +170,7 @@ pub struct RuntimeSettings {
     pub background_image_alignment: Option<String>,
     pub background_image_cover_chrome: bool,
     pub panel_resize: bool,
-    pub sidebar_width: f32,                        // 钳制 [MIN, MAX] 常量族照抄
+    // sidebar_width 键不迁(D05-3 已裁侧栏宽度归 session,05 篇锚定)
     // ssh_proxy_mode/url/no_proxy 三键不迁(SSH 砍)
     pub pane_card_radius: Option<f32>,             // None = 跟随主题自带几何(ThemeCardGeometry)
     pub pane_card_gutter: Option<f32>,             // 只作用于左/右/下三边(08-26 裁定照抄)
@@ -186,13 +187,13 @@ impl RuntimeSettings {
 }
 ```
 
-`ThemeCardGeometry`(`radius`/`gutter`/`shadow`/`divider` 四键一组)与 `DEFAULT_PANE_CARD_RADIUS` 常量族照抄,白边事故注释(旧壳/新壳各写一份字面量 = 白边来源)一并迁移;GPUI 世界 pane 卡几何消费随 workspace chrome,本篇只保留值模型槽与「跟主题走 + 显式覆盖」优先级。`DEFAULT_SIDEBAR_WIDTH`/`MIN`/`MAX_SIDEBAR_WIDTH` 常量族照抄(05 篇侧栏宽度消费)。
+`ThemeCardGeometry`(`radius`/`gutter`/`shadow`/`divider` 四键一组)与 `DEFAULT_PANE_CARD_RADIUS` 常量族照抄,白边事故注释(旧壳/新壳各写一份字面量 = 白边来源)一并迁移;GPUI 世界 pane 卡几何消费随 workspace chrome,本篇只保留值模型槽与「跟主题走 + 显式覆盖」优先级。
 
 ### 键域枚举族四件套(`slterm_settings/src/lib.rs`,照抄锚点)
 
 ```rust
 // 形态模板(CursorShapeName 例;AcceptKeyName/CompletionStyleName/TabRevealName/
-// DensityName/NewTabPositionName/WindowingBehaviorName/CellWidthModeName/VcsDisplayName/
+// DensityName/NewTabPositionName/CellWidthModeName/VcsDisplayName/
 // BellModeName 同构,个别无 ALL/VALUES 的按 GUI 需要补齐):
 pub enum CursorShapeName { Bar, Block, Underline }
 impl CursorShapeName {
@@ -208,7 +209,7 @@ impl CursorShapeName {
 ### 语言注册表(`slterm_settings/src/language.rs`,照抄裁剪)
 
 ```rust
-// languages! 宏形态不变,注册行从 10 行裁到 2 行(其余九语整删,spec 不采纳点 10):
+// languages! 宏形态不变,注册行从 11 行裁到 2 行(其余九语整删,spec 不采纳点 10):
 languages! {
     ZhCn => ("zh-CN", "简体中文", "zh-CN"),
     EnUs => ("en-US", "English", "en"),
@@ -231,7 +232,7 @@ impl AgentHook {
     pub const ALL: [Self; 9] = [ /* 九家,与 03 篇 integrations::AGENTS 同序 */ ];
     pub const fn settings_key(self) -> &'static str;
     // pebrel: "ai_hooks_claude" 等 → slTerminal: "slterm_ai_hooks_claude" 命名空间(spec 采纳点 8);
-    // 全局兜底键 "ai_hooks" → "slterm_ai_hooks"。键名精确形态归 D06-1。
+    // 全局兜底键 "ai_hooks" → "slterm_ai_hooks"。键名挂在 agent_hooks 段内(段嵌套 D06-1 已裁)。
     pub fn enabled(self, raw: &RawSettings) -> bool;
     // 每 agent 独立键 → 历史全局键兜底 → 默认两家;「读-改-写保他人选择」语义照抄
     pub fn all_updates(enabled: bool) -> Vec<(&'static str, serde_json::Value)>;  // 显式安装/卸载写全部
@@ -266,30 +267,42 @@ pub struct CursorMotion(pub bool);
 
 ### settings.json 实例(JSON 化后权威文件形态)
 
-键形态按平铺 snake_case 展示(段嵌套候选见 D06-1);`slterm_*` 前缀按 spec 采纳点 8;未设置键落盘为 `null` 还是缺键归 D06-1:
+键形态 = 段嵌套(D06-1 已裁:appearance/scrolling/… 各成段,写通道按段浅合并);`slterm_*` 前缀按 spec 采纳点 8;未设置键落盘为 `null` 还是缺键归实现期(段内同语义):
 
 ```json
 {
-  "language": "system",
-  "theme": "catppuccin-mocha",
-  "font_family": "CaskaydiaCove Nerd Font",
-  "font_size": 14.0,
-  "ligatures": "theme",
-  "cursor_shape": "bar",
-  "scrollback_lines": 10000,
-  "scroll_speed": 1.0,
-  "bell": "both",
-  "notification_duration": "default",
-  "restore_session": true,
-  "resume_ai": true,
-  "ai_toasts": true,
-  "tray": false,
-  "opacity": 1.0,
-  "pane_card_radius": null,
-  "custom_theme": null,
-  "slterm_ai_hooks": true,
-  "slterm_ai_hooks_claude": true,
-  "slterm_ai_hooks_codex": true,
+  "appearance": {
+    "language": "system",
+    "theme": "catppuccin-mocha",
+    "font_family": "CaskaydiaCove Nerd Font",
+    "font_size": 14.0,
+    "opacity": 1.0,
+    "custom_theme": null,
+    "pane_card_radius": null
+  },
+  "scrolling": {
+    "scrollback_lines": 10000,
+    "scroll_speed": 1.0
+  },
+  "interaction": {
+    "cursor_shape": "bar",
+    "ligatures": "theme",
+    "bell": "both",
+    "notification_duration": "default"
+  },
+  "session": {
+    "restore_session": true,
+    "resume_ai": true
+  },
+  "system": {
+    "ai_toasts": true,
+    "tray": false
+  },
+  "agent_hooks": {
+    "slterm_ai_hooks": true,
+    "slterm_ai_hooks_claude": true,
+    "slterm_ai_hooks_codex": true
+  },
   "future_unknown_key": { "用户手改段": "原样保留" },
   "keybind": [ { "combo": "ctrl+shift+c", "action": "copy" } ],
   "conpty_input_modes": { "win10_legacy": 3, "win11": 7 }
@@ -302,8 +315,8 @@ pub struct CursorMotion(pub bool);
 
 ```rust
 impl ThemeName {
-    /// 可选清单常量化——目录即合同。仅暗色成员终选归 D06-3;
-    /// pebrel 16 家含 8 家亮主题,亮成员整删。
+    /// 可选清单常量化——目录即合同。仅暗色成员 = pebrel 暗色子集 + linear
+    /// 作默认主题入目录(D06-3 已裁);pebrel 16 家含 8 家亮主题,亮成员整删。
     pub const BUILTIN: [Self; N] = [ /* 暗色子集 */ ];
     pub const BUILTIN_NAMES: [&'static str; Self::BUILTIN.len()];  // 持久化名=展示名
 
@@ -612,7 +625,7 @@ pub fn system_locale() -> Option<String>;   // Windows GetUserDefaultLocaleName 
 /// 新键落地 = 在本表加一行:白名单、重置覆盖、GUI 枚举、搜索别名自动入列,
 /// 防「加了新设置忘了加进重置清单」的结构性漂移(等价 reset 反射对账)。
 pub struct SettingsKeyDef {
-    pub key: &'static str,                 // 扁平 snake_case(段形态见 D06-1)
+    pub key: &'static str,                 // 段内 snake_case 键名(段嵌套 D06-1 已裁;段 = domain)
     pub default: serde_json::Value,
     pub domain: SettingsDomain,            // Appearance/Scrolling/Interaction/…(页归属)
     pub resettable: bool,                  // false = 用户数据/授权类显式选择,重置保留
@@ -767,7 +780,7 @@ ThemeEditor(草稿/基线双快照)
 | `nebula_settings/src/lib.rs` `persist_keys`/`apply_updates` 读-改-写语义 | 语义对齐,机制换 slTerminal 写通道 | 未知键保留是「用户手改不被设置页清掉」的合同;行序保留随 txt 消亡,浅合并是 JSON 等价物 |
 | `nebula_settings/src/lib.rs` `parse_hex_rgb`/`format_hex_rgb`/`Rgb8`/`Rgba8` | 全量 | 设置与主题共享的颜色文本记号,往返测试锁定 |
 | `nebula_settings/src/lib.rs` `ThemeName`/`TermTheme`/`ExactTermColors`/`ThemeCardGeometry` + 常量族 | 全量(亮字段砍) | 主题对终端色表的全部影响聚合为显式缺省语义;白边事故的「单一真源常量」教训随迁 |
-| `nebula_settings/src/language.rs` `languages!`/`LanguagePref`/`from_locale` | 全量,注册行 10→2 | 单行注册一种语言,选择器/枚举/查找表同源零分叉;locale 协商(zh Hans/Hant、地区回退)照抄 |
+| `nebula_settings/src/language.rs` `languages!`/`LanguagePref`/`from_locale` | 全量,注册行 11→2 | 单行注册一种语言,选择器/枚举/查找表同源零分叉;locale 协商(zh Hans/Hant、地区回退)照抄 |
 | `nebula_settings/src/scrolling.rs` 档位族/`normalize_scroll_speed`/`scrollback_lines` | 全量(默认值归 02 篇 D02-3) | 七档白名单 + 归一钳制,防手改出 1 行/一千万行;模式适用一切未来数值键 |
 | `nebula_settings/src/reset.rs` `restore_default_settings`/`RESET_KEYS` | JSON 化 + 注册表对账 | 重置=删已知键回默认、未知键/授权保留;反射覆盖测试以注册表等价形态守住 |
 | `nebula_settings/src/agent_hooks.rs` `AgentHook`/`enabled`/`all_updates`/`setup_updates` | 键名 `slterm_*` 命名,eg 03 | 每 CLI 独立键 + 全局兜底 + 默认两家 + 「显式装全写/恢复默认保选择」安装器合同归 03 消费 |
@@ -798,7 +811,7 @@ ThemeEditor(草稿/基线双快照)
 | 旧栈位置 · 符号 | 落位 | 处置 |
 | --- | --- | --- |
 | `src-tauri/src/settings.rs` `SETTINGS_SAVE_LOCK`/`validate_settings_input`/`merge_settings`/`read_existing_settings`/`save_settings_blocking` | `slterm_app` 写通道适配层(eg 01 篇提取清单归 06) | **移植**:比 pebrel 裸 `fs::write` 更严的原子写(tempfile persist + rename)/.bak/保存锁/损坏禁覆盖/1MB 上限全保留;白名单从八键字面量进化为注册表驱动 |
-| `src-tauri/src/app_dir.rs` `app_data_dir`/`LoadResult`(`data`/`corrupted`)/`MAX_PERSIST_BYTES` | 同上(路径单点归 01 篇锚) | **移植**:损坏三态载体;便携 exe 同级语义承 01 篇 D2 |
+| `src-tauri/src/app_dir.rs` `app_data_dir`/`LoadResult`(`data`/`corrupted`)/`MAX_PERSIST_BYTES` | 同上(路径单点归 01 篇锚) | **移植**:损坏三态载体;数据目录 = `%APPDATA%\slterm` 标准布局(D2 已裁,便携 exe 同级语义消亡,零迁移 D06-2) |
 | `src/features/settingsCenter/SettingsPageRegistry.ts` `register`/`getAll(group?)`/`_reset`/惰性单例 | `gpui_shell::settings_pane::registry`(Rust 重建归 M6) | **契约保留**:注册表家族形态(硬约束 #13)跨语言重建;`SettingsPage.group` 全局/Agent 二分(ADR-0023)保留,吸收 pebrel 导航元数据(改造节 5) |
 | `src/theme/schemes/types.ts` `UiTokens` 区域组(gitFile/gitGutter/explorer/sidebar/agentStatusUsage + 27 标量) | GPUI 主题 token 槽位集融合归改造节 4 | **纪律保留**:语义槽单点、消费只引用 token、禁硬编码颜色(硬约束 #6 跨语言重建) |
 | `src/theme/schemes/linear.ts` + `SchemeRegistry`(`setActive` 未知回退/onDidChange 订阅/`_reset`) | 内置主题目录机制(采纳点 18)+ `resolve` 链 | **映射**:多配色方案 → 内置主题目录;注册表契约(`onDidChange` 等价物归改造节 4) |
@@ -807,17 +820,17 @@ ThemeEditor(草稿/基线双快照)
 
 ### 改名映射引用
 
-本篇一切改名以 01 篇「改造 / 移植 / 新建设计」节的**改名映射单点表**为唯一权威,本篇不另立映射;直接消费点:`nebula-settings` → `slterm-settings`(A 节);`pebrel_settings.txt`/`nebula_settings.txt` → `settings.json`(D 节,JSON 化已定);`pebrel-theme.json`(ThemeFormat::Pebrel)→ `slterm-theme.json`(D 节,pebrel 格式导入兼容本篇裁定不保留,见改造节 8);`SLTERM_CONFIG_DIR`(C 节);品牌串 `Pebrel`/`Nebula` → `slTerminal`(P-5,i18n 文案与关于页消费);线程/管道/环境变量归 03/04 篇。本篇域内新增映射项:无(设置键名 `slterm_ai_hooks_*` 是键域值不是品牌映射,归 D06-1 定形态)。
+本篇一切改名以 01 篇「改造 / 移植 / 新建设计」节的**改名映射单点表**为唯一权威,本篇不另立映射;直接消费点:`nebula-settings` → `slterm-settings`(A 节);`pebrel_settings.txt`/`nebula_settings.txt` → `settings.json`(D 节,JSON 化已定);`pebrel-theme.json`(ThemeFormat::Pebrel)→ `slterm-theme.json`(D 节,pebrel 格式导入兼容本篇裁定不保留,见改造节 8);`SLTERM_CONFIG_DIR`(C 节);品牌串 `Pebrel`/`Nebula` → `slTerminal`(P-5,i18n 文案与关于页消费);线程/管道/环境变量归 03/04 篇。本篇域内新增映射项:无(设置键名 `slterm_ai_hooks_*` 是键域值不是品牌映射,挂 agent_hooks 段,段嵌套 D06-1 已裁)。
 
 ### 缝合点
 
-1. **01 篇(基线)**:`settings_dir`/`settings_path` 路径唯一权威归 01 篇锚定,本篇只消费;数据目录叶子名(D2)与文件命名去品牌化(D3)直接决定本篇迁移映射表与 theme_library 落盘文件名(开放问题 2);禁名门禁对 `docs/pebrel-design/` 临时稿的豁免 01 篇已登记,本篇引 pebrel 符号属「来源」语境。
+1. **01 篇(基线)**:`settings_dir`/`settings_path` 路径唯一权威归 01 篇锚定,本篇只消费;数据目录叶子名(D2 = `slterm`)与文件命名去品牌化(D3)直接决定本篇文件落点与 theme_library 落盘文件名(开放问题 2);禁名门禁对 `docs/pebrel-design/` 临时稿的豁免 01 篇已登记,本篇引 pebrel 符号属「来源」语境。
 2. **02 篇(终端)**:`conpty_input_modes` 键域归本篇锚定(02 篇登记),键名经 02 域模块常量引用防双源漂移;终端调色板消费 `TermTheme`/`ExactTermColors`(02 篇「壳调色板解析 eg 06」登记);`scrollback_lines` 默认值终值归 02 篇 D02-3;CJK 粗体/字宽模式键归本篇枚举族,消费归 02。
 3. **03 篇(AI CLI)**:`AgentHook` 偏好段与 `slterm_ai_hooks` 全局键本篇锚定、03 篇安装权威消费;设置页 hooks 组数据源 = `integrations::inspect()` 八字段(03 篇给出);`hooksConfigGui` 编辑域与 marker 认领组边界归 03 篇 marker 语义;SEC-12 审查门 UI(展示 Suspended 原文归 06 设置页,审查逻辑归 03)。
-4. **04 篇(Runtime API)**:settings 只读快照归 runtime 方法族消费归 04;`windowing_behavior` 单窗化收编归 04 篇 D04-3;设置写操作经 UI owner 线程执行的热应用链与 runtime 写路径的互斥归 04 篇定。
-5. **05 篇(布局)**:`WorkspaceTab::Settings` 单例 tab 的渲染分支与关闭语义归本篇(05 篇只锚变体);侧栏 collapsed/width/active_view 归设置域还是 session 归 05 篇 D05-3 裁定,若归设置则键域本篇落地;非聚焦 pane veil 的主题开关归本篇键域(05 篇开放问题 1 默认);`TabMeta.color: Option<Rgb>` 消费本篇 `Rgb` 锚点。
+4. **04 篇(Runtime API)**:settings 只读快照归 runtime 方法族消费归 04;`windowing_behavior` 键已裁删除(B.10,单窗行为硬编码归 09 篇);设置写操作经 UI owner 线程执行的热应用链与 runtime 写路径的互斥归 04 篇定。
+5. **05 篇(布局)**:`WorkspaceTab::Settings` 单例 tab 的渲染分支与关闭语义归本篇(05 篇只锚变体);侧栏 collapsed/width/active_view 已裁归 session(D05-3),不进本篇键域;非聚焦 pane veil 的主题开关归本篇键域(05 篇开放问题 1 默认);`TabMeta.color: Option<Rgb>` 消费本篇 `Rgb` 锚点。
 6. **07 篇(文件/编辑)**:`keybind` JSON 段归 07 篇锚定结构(本篇只登记格式);编辑器主题槽(editorThemeSlot 的 Rust 对应物)消费主题 token 集归 07 篇装配;设置页中编辑器相关键位行归 07。
-7. **09 篇(系统)**:托盘/静默启动/自更新三键本篇锚定、09 消费;`notification_duration` Default=不覆盖归 09 漏斗消费;`opacity`/`blur` 值域与窗口特效归 09(D06-4 对齐);壁纸四键归 09 渲染消费。
+7. **09 篇(系统)**:托盘/静默启动/自更新/开机启动键本篇锚定、09 消费;`notification_duration` Default=不覆盖归 09 漏斗消费;`opacity` 标量与 `blur` 五材质枚举(默认 None)本篇已锚定(D06-4/D09-1),窗口特效渲染消费归 09;壁纸 `background_image_*` 五字段归 09 渲染消费。
 8. **10 篇(安全)**:设置页供应商/providers 组归 10 篇凭据域,不进本篇页集合;设置文件与主题文档的凭据红线(SEC-18)本篇执行——schema 无 token 字段。
 9. **11 篇(测试)**:本篇全部测试点的虚拟窗口/夹具/门禁登记归 11;i18n 合同测试的独立 workspace 形态归本篇(上表已落);豁免登记归 11。
 10. **12 篇(打包)**:`tools/slterm-i18n-contract` 包名与 Cargo 元数据归 12 篇清单;release notes 双语形态归 12 消费 i18n 键。
@@ -833,34 +846,13 @@ ThemeEditor(草稿/基线双快照)
 - **写盘值形态布尔化**:pebrel GUI 写盘 `"1"`/`"0"` 字符串,JSON 世界写 `Value::Bool`——设置页落 JSON 真布尔(spec 采纳点 23);`AgentHook::all_updates` 等授权路径同步改布尔。
 - **键位绑定段归 07**:pebrel `keybind_pairs` 多行 txt 协议不迁,JSON 世界 = `keybind` 顶层键下数组(归 07 篇锚定结构);本篇只登记 `persist_keybinds` 整表替换语义(删旧数组、按序追加)由 07 写通道消费。
 
-### 2. 写通道底座并入(slTerminal settings.rs 移植)+ 旧 settings.json 迁移
+### 2. 写通道底座并入(slTerminal settings.rs 移植)+ 零迁移口径(D06-2 已裁)
 
 **并入点**:pebrel `persist_keys` 的裸 `fs::write` 全部替换为移植资产 `save_settings_blocking` 全链(校验 → 浅合并 → 原子写 → .bak),落 `slterm_app` 适配层(`slterm_settings` 保持零生产依赖:写通道硬机制在 app 侧,persist_keys 以函数注入或 app 实现 settings trait 的形态接线——接线形态归 M6.1 实现期,契约不变)。
 
 **白名单进化**:`SETTINGS_ALLOWED_KEYS` 八键字面量数组 → `keys.rs` 注册表 `whitelist()` 动态导出;SEC-11 语义保留(未知顶层键拒绝),「键名经域模块常量引用防双源漂移」(`background_tasks::SETTINGS_KEY`/`pty::spawn::SETTINGS_KEY` 先例)继续有效——注册表条目引用域模块常量,表体禁二次字面量。
 
-**旧 settings.json 八键一次性迁移**(spec 优化方向「数据迁移一次做净」;机制参考 pebrel `paths/migration.rs` 防御性形态,采纳点 14):
-
-```
-迁移对象:旧八键 fontSize/keybindings/sideBar/colorScheme/backgroundTasks/
-          cliAliases/conptyInputModes/agentGlobalFiles → 新 RuntimeSettings 段模型
-触发时机:首次启动 settings.json 存在且缺迁移哨兵
-机制(参考 paths/migration.rs,服务对象换成本仓自身):
-  - 锁文件 + 完成哨兵(.slterm-migration-v1):幂等重入,崩在半迁不重复执行
-  - 临时文件 + 「拒绝覆盖已存在目标」发布:并发写不互相踩
-  - 迁移产物可识别(.migrated 后缀保留原文件,处置归 D06-2 关联裁定)
-映射表(初稿,随 D06-1 键形态终定):
-  fontSize        → font_size(数值域重定:旧结构是 {terminal,editor} 段)
-  keybindings     → keybind(eg 07 结构)
-  sideBar         → sidebar_width + 侧栏开合归 05 篇 D05-3 裁定归位
-  colorScheme     → theme(「linear」→ 内置主题目录继任 id 映射表随迁移一次登记;
-                    映射目标归 D06-3)
-  backgroundTasks → bg_tasks 域归 09 篇(键名常量经域模块引用)
-  cliAliases      → 归 04 篇 CLI 动词域(eg 03/04 裁定)
-  conptyInputModes→ conpty_input_modes(eg 02)
-  agentGlobalFiles→ agent_global_files(eg 03/05 视图配置)
-迁移后:旧键不再读取;读侧只认新键
-```
+**零迁移(D06-2 已裁)**:新版只读写 `%APPDATA%\slterm` 下的 `settings.json`;旧版 exe 同级便携文件不看不迁,不做探测、不做哨兵、不做映射——旧文件存在与否行为不变。唯一例外 = `projects.json` 按 B.20 提取(归 05 篇消费)。pebrel `paths/migration.rs` 防御性形态无服务对象,不迁。
 
 ### 3. 仅暗色裁剪清单(亮主题全套消亡登记)
 
@@ -933,10 +925,10 @@ ThemeEditor(草稿/基线双快照)
 | 主题快照:`ThemeDefinition::from_builtin` 逐字节/`with_*` 编辑族不可变返回副本/validate 全错误变体 | L1 | 迁移 |
 | WCAG:`wcag_contrast_ratio` 公式锚点值(黑/白 21:1)/`meets_wcag_aa` 4.5:1 边界/`foreground_recommendations` 原色永远第一 + 多背景下候选全达标 | L1 | 迁移 |
 | `ThemeUiColors::from_terminal` 暗色单权重派生(终端前景背景逐字不动/锚点派生表) | L1 | 迁移改暗色单权重 |
-| 内置主题目录:退休 id 映射继任(老配置可解析)/`BUILTIN` 只含暗成员/BUILTIN_NAMES 与持久化名一致 | L1 themes | 迁移 + 新建(暗成员断言归 D06-3 后收敛) |
+| 内置主题目录:退休 id 映射继任(老配置可解析)/`BUILTIN` 只含暗成员(pebrel 暗色子集 + linear 默认,D06-3 已裁)/BUILTIN_NAMES 与持久化名一致 | L1 themes | 迁移 + 新建 |
 | theme_library:信封版本不符拒收/256KB 上限/未知字段留值树往返/`RevisionPrecondition` 四态(外部编辑拒写)/fork 首次保存恒 fork | L1 theme_library | 迁移 |
 | 主题包 ZIP:Manifest 版本化/整包有界检查/不解可信以外字段 | L1 | 迁移 |
-| 设置迁移:旧八键 → 新段映射全键/哨兵幂等重入(崩半迁不重复)/迁移后旧键不读/linear → 主题 id 映射 | L1(临时目录) | 新建(防复发:旧 store 键集合夹具) |
+| 零迁移断言（D06-2)：旧 exe 同级 settings.json 存在/不存在/损坏三态下，新版读写行为不变（只认 `%APPDATA%\slterm`) | L1（临时目录） | 新建（防复发：旧便携文件被误读的回归闸） |
 | 设置页三纪律:滑条拖动不触盘(预览纯内存)/松手归一化提交/写失败读回已存值复位 + toast | L3 虚拟窗口(归 11 基础设施) | 迁移 pebrel scrolling 页用例语义 |
 | 搜索路由:中英别名命中跳节(归注册表 search_index 导出)/路由 id 只追加不重用/HIDDEN 节不删位 | L1 navigation | 迁移 + 注册表接线 |
 | `localized_select_labels`:值/显示分离/语言切换刷新/标签数与值数对齐 debug_assert | L1 | 迁移 |
@@ -956,7 +948,7 @@ ThemeEditor(草稿/基线双快照)
 
 **M1 段 · `slterm_settings` 迁入**(00-roadmap 依赖序首 crate,eg 01 篇):值模型/枚举族/宽容解析/语言注册表/主题值模型/WCAG 纯函数/reset JSON 化形态随 crate 一次落地(裁剪 + 改名 + JSON 契约一次做净,不迁 txt 读写)。出口 = `cargo test` 全绿(值模型/枚举往返/宽容解析/档位归一/WCAG/256 色表/语言协商用例);零生产依赖契约校验过;禁名门禁过。**写通道硬机制(.bak/保存锁/三态)与 GUI 此期不点亮,M1 期 persist 用最小原子写过渡属库态可接受**。
 
-**M6.1 写通道底座并入 + 旧文件迁移**:移植 settings.rs 全链 + 注册表白名单 + 八键迁移。出口 = 写通道/三态/原子写/注册表对账/迁移用例全绿;`cargo test` 全绿。
+**M6.1 写通道底座并入 + 段嵌套落地**：前置项 = 段嵌套（D06-1）的键→段映射表与白名单/RESET_KEYS/键域枚举三清单的段形态重构先行产出（含 07 keybind、02 conpty_input_modes 两段归属回登），再落写通道。移植 settings.rs 全链 + 注册表白名单；零迁移断言（D06-2)：旧 exe 同级 settings.json 存在与否，读写行为不变。出口 = 写通道/三态/原子写/注册表对账/零迁移断言用例全绿；`cargo test` 全绿。
 
 **M6.2 GUI 设置页点亮**(依赖 M3 壳):SettingsPane + 注册表吸收导航 + 页集合重排落地(全局组先亮,Agent 组依赖 03 篇 inspect 联调归 M6.5)。出口 = 三纪律/搜索路由/值显示分离用例全绿;L3 设置页关键路径过;`cargo test` 全绿。
 
@@ -964,7 +956,7 @@ ThemeEditor(草稿/基线双快照)
 
 **M6.4 i18n 静态生成点亮**:build.rs 管线 + 两语硬合同 + 查询 API + locale 探测 + 语言设置页。出口 = 生成器合同族/查询零分配/合同三钉用例全绿(独立 workspace 可独立跑);`cargo test` 全绿。
 
-**M6.5 双轨缝合 + 迁移收口**(依赖 04 壳 + 03 篇 inspect):hooks 页数据源接线 + 八键迁移实测 + 全链回归。出口 = 双轨联调用例绿;迁移用例绿;`cargo check`/`cargo test`/门禁三件套全绿——对齐 00-roadmap M6 出口(设置读写往返、WCAG 对比度校验、i18n 键集硬合同测试过)。
+**M6.5 双轨缝合 + 收口**(依赖 04 壳 + 03 篇 inspect):hooks 页数据源接线 + 全链回归。出口 = 双轨联调用例绿;`cargo check`/`cargo test`/门禁三件套全绿——对齐 00-roadmap M6 出口(设置读写往返、WCAG 对比度校验、i18n 键集硬合同测试过)。
 
 M6 全程按 00-roadmap 绿灯语义:功能缺失不拦出口,只认可机验项。
 

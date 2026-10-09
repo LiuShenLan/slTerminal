@@ -100,6 +100,8 @@ fn collect_sources(root: &Path, files: &mut Vec<PathBuf>);    // 递归收集,�
 
 ### windows_console_startup console 子系统对照目标
 
+（2026-10-09 裁决:**保留重设**——对照目标重设为 console 形态启动行为,子步归本篇;防启动链回归。)
+
 照抄 pebrel `nebula_app/tests/windows_console_startup.rs` 整文件技巧,落 `slterm_app/tests/windows_console_startup.rs`:
 
 ```rust
@@ -111,7 +113,7 @@ mod console;
 mod console_tests;
 ```
 
-因果链:console 子系统目标自动继承父进程 Ctrl+C 状态,GUI 目标 `AttachConsole` 会重置并掩盖该 bug;GPUI 应用本体是 GUI 子系统,此对照目标是唯一可观测继承语义的载体。被测对象(console 启动准备)归 09 篇,本篇锚定测试技巧。
+因果链:应用本体已裁 console 子系统(D04-1,04 篇),Ctrl+C 继承语义由本体直接承载——console 子系统目标自动继承父进程 Ctrl+C 状态,GUI 目标 `AttachConsole` 会重置并掩盖该 bug;此对照目标与本体同子系统形态,作继承语义的独立自动化回归锚(本体是产品进程,不自跑测试)。被测对象(console 启动准备)归 09 篇,本篇锚定测试技巧。
 
 ### i18n 零分配契约(slterm_app/tests/i18n_contract.rs)
 
@@ -210,7 +212,7 @@ GPUI 虚拟窗口覆盖绝大部分 UI 回归;原生外观、IME 合成等少数
 | 3 | `settings_pane/cursor_motion/native_tests.rs` 的 ignore + 环境门禁 + 隔离配置形态 | 同形态,环境变量改 `SLTERM_*_QA_DIR` | 原生外观/IME 少数路径仍需真桌面;统一形态后进豁免表实机验收点清单 |
 | 4 | `tools/i18n-contract` 零分配契约 + `nebula_app/tests/i18n_contract.rs` 的 `CountingAllocator` | `slterm_app/tests/i18n_contract.rs`(全量 catalog 合同不迁) | 首次与重复翻译查找零分配的回归锚;单进程 UI 翻译查找频率不低于 pebrel |
 | 5 | `nebula_app/tests/file_line_budget.rs` | `slterm_app/tests/file_line_budget.rs` | Python 门禁与 Rust 测试消费同一 budget 文件,单一真值源双侧消费(01 篇缝合点 4 回指) |
-| 6 | `nebula_app/tests/windows_console_startup.rs` | 同名 | console 子系统目标才能观测 Ctrl+C 继承语义;GPUI 应用是 GUI 子系统,对照必要 |
+| 6 | `nebula_app/tests/windows_console_startup.rs` | 同名 | console 子系统目标承载 Ctrl+C 继承语义观测;本体已裁 console 子系统(D04-1),对照目标与本体同形态,作独立回归锚 |
 | 7 | `nebula_app/Cargo.toml` `gpui-test-support` feature | 同名同义 | 一条 feature 同时打开 gpui + gpui-component 测试支持,UI 与单测同二进制共存 |
 | 8 | 根 `Cargo.toml` 虚拟窗口补丁注释块(「下游虚拟窗口测试支持」「窗口生命周期修补」) | 归 01 篇钉版,本篇消费形态 | 无原生句柄跑完整控件回归是本地无 CI 可重复 UI 测试的根基;注释治理结构随补丁照抄 |
 | 9 | `settings_navigation/ui_tests.rs` 的 `open_workspace`/`click_tab`/`tab_bounds` 及 `switching_top_tabs_keeps_settings_reachable_until_explicit_close`;同族 `code_actions_tests.rs`、`inline_selection_tests.rs`、`cursor_motion/tests.rs`、`segmented/tests.rs`、`platform/acrylic/gpui_tests.rs` | 各模块 `ui_tests.rs` 同模板 | 「真实控件与布局路径」执行模板:refresh + draw + debug_bounds 取真实坐标 + simulate_click/keystrokes |
@@ -263,7 +265,7 @@ fork 后判定(spec 采纳点 27):
 - **根因不复活**:GPUI 应用无 tauri 依赖,Windows 平台 manifest(comctl32 v6)由 gpui 自带激活,`nebula_app` 无此结构,预期成立。
 - **等价风险面转移**:多 crate workspace 下,定向测试入口从「单 crate 的 filter/--lib 陷阱」变为「`-p` 选择子 + 目标类型组合」。防线两条:
   1. **预防性知识保留**(写入根 CLAUDE.md 测试节):任何测试目标再遇 0xc0000139 零输出崩溃,第一检查项 = 该测试目标是否嵌入了 v6 manifest(`rustc-link-arg-tests` 是否覆盖该 target);症状与根因的映射不变,排查顺序不变。
-  2. **显式 test target 形态归留归待沉淀 D1**:是否每 crate 复刻 `lib_tests` 显式 target,按 M1 落位时实测(`cargo test -p slterm_settings --lib` 是否正常)定,不照搬。
+  2. **显式 test target 机制化(D11-1 已裁)**:每 crate 复刻 `[lib] test = false` + `[[test]]` 显式 target 形态——manifest 控制可及,未来再遇 comctl32 v6 类静态导入时 `rustc-link-arg-tests` 有直接落点;定向测试入口经 `cargo xtask` 封装(`cargo xtest <filter>`,D11-2 已裁),强制 `-p` + 串行 + feature 形态切换一条命令,filter/--lib 陷阱机制化消除。
 - **文档红线**:旧豁免表中 TQ-COV-06 翻案行随 tauri 载体销项,但销项记录保留一行「已销项(根因载体消亡)」形态——与既有豁免表翻案先例同格式,防后人再排查同类症状时无据可查。
 
 ### 2. 旧纪律保留清单与新表述
@@ -331,7 +333,7 @@ fork 后判定(spec 采纳点 27):
 2. 禁名回流 staged + push 模式;
 3. file-budgets / dependencies(`--base` 棘轮归 01);
 4. `cargo test --workspace -- --test-threads=1`(feature on 形态,BE-06);
-5. **双形态编译门禁**:feature off 形态 `cargo check -p slterm_app` 必须过(UI 用例整体不编译的形态同样是受支持形态;照 spec 采纳点 12「一条命令同时覆盖两种形态」);
+5. **双形态编译门禁**:feature off 形态 `cargo check -p slterm` 必须过(UI 用例整体不编译的形态同样是受支持形态;照 spec 采纳点 12「一条命令同时覆盖两种形态」);
 6. clippy + rustfmt;
 7. 可选项(不在每次提交跑,归验收点/定期):win32 输入矩阵、内存压测、conformance、体积钉。
 
@@ -357,7 +359,7 @@ GPUI UI 测试与单测混编的开关纪律照抄(spec 采纳点 12):feature �
 | `windows_console_startup` console 子系统目标编译 + Ctrl+C 继承用例 | Rust(tests/) | 见关键类型节 |
 | i18n 零分配/小栈/载荷预算三用例 | Rust(tests/) | 若 06 篇 i18n 落地即建(已照抄裁定,非条件项) |
 | `gpui-test-support` 双形态编译门禁(feature on 全量绿 / feature off check 过) | cargo | check_all 步骤 4-5;rust-analyzer 默认 feature 形态也要绿 |
-| 虚拟窗口冒烟:首个 `ui_tests.rs` 模板用例(debug_bounds 取真实坐标 + simulate_click 命中) | #[gpui::test] | M3 终端渲染关键路径落位时建(模板归关键类型节) |
+| 虚拟窗口冒烟:首个 `ui_tests.rs` 模板用例(debug_bounds 取真实坐标 + simulate_click 命中) | #[gpui::test] | M3 终端渲染关键路径落位时建(模板归关键类型节);兼作虚拟窗口补丁实证闭环——补丁形态与设计假设不符则冒烟起不来,M3 开工第一步先跑 |
 | 键绑定真实分发双形态(解析矩阵 + Root 分发传播) | 单测 + #[gpui::test] | 复制 = Ctrl+Shift+C 语义的首个端到端锚 |
 | SPAWN_LOCK 串行化用例(并发 spawn 不卡死管道) | Rust 集成 | 归 02 篇领域,组织形态本篇定型(M2) |
 | win32 矩阵基线自身健康:probe ready 轮询预算、`-Record` 重登记路径 | PS1 自断言 + 注释 | 预算值标「负载裕度」 |
@@ -376,14 +378,14 @@ GPUI UI 测试与单测混编的开关纪律照抄(spec 采纳点 12):feature �
 |---|---|---|
 | M0 fork 基线 | 门禁三件套 + 自测四件 + hooks(归 01);`.claude/test-exemptions.md` 重审初稿(改造节 3) | 自测四件全绿;豁免表重审完成(销项/保留/改写三分完毕) |
 | M1 底库迁入 | 各 crate `mod <领域>_tests` 组织形态;三文件拆分模式可用;file_line_budget 适配器就位 | `cargo test --workspace` 全绿;file_line_budget 两用例过;双形态编译门禁建立 |
-| M2 终端核心 | `keyboard_contract_tests.rs` 族夹具;pty 集成测试目录组织;win32 矩阵脚本 + 基线 `-Record` 建基 | 键盘契约矩阵绿;SPAWN_LOCK 集成用例绿;win32 基线常挂比对过 |
-| M3 app 骨架 | `gpui-test-support` feature + 虚拟窗口补丁消费;首个 `ui_tests.rs`(终端渲染关键路径);keymap 双形态 | 虚拟窗口 UI 测试过(00-roadmap M3 出口);feature on/off 两形态绿 |
+| M2 终端核心 | `keyboard_contract_tests.rs` 族夹具;pty 集成测试目录组织 | 键盘契约矩阵绿;SPAWN_LOCK 集成用例绿 |
+| M3 app 骨架 | `gpui-test-support` feature + 虚拟窗口补丁消费;首个 `ui_tests.rs`(终端渲染关键路径);keymap 双形态;win32 矩阵脚本 GPUI 化改造 + 基线 `-Record` 建基 | 虚拟窗口 UI 测试过(00-roadmap M3 出口);feature on/off 两形态绿;win32 基线建基 + 常挂比对过 |
 | M4 AI CLI 集成 | hook 链路契约测试组织(归 03 用例点) | hook 契约测试过(归 03 出口,本篇只认组织形态就绪) |
 | M5 工作区与布局 | session round-trip serde 测试组织;分屏树 UI 测试 builder | session 往返测试过(归 05) |
 | M6 设置/主题/i18n | i18n 零分配契约三用例;i18n 键集硬合同(eg 06) | 零分配/小栈/预算三用例绿 |
 | M7 Runtime API + 单实例 | conformance 套件(Windows 裁减 + 桩模式) + golden 建基;单实例移交测试归 04 | conformance 全用例绿 + golden 建基;「golden 缺席 ≠ 失败」自测过 |
-| M8 文件与编辑 | 编辑器内核测试组织归 07;UI builder 复用 | 归 08 出口 |
-| M9 AI 辅助 | 补全引擎/should_suggest 测试归 08 | 归 09 出口 |
+| M8 文件与编辑 | 编辑器内核测试组织归 07;UI builder 复用 | 归 07 出口 |
+| M9 AI 辅助 | 补全引擎/should_suggest 测试归 08 | 归 08 出口 |
 | M10 系统集成 + 安全 | 内存压测脚本 + 检查点;凭据域边界测试归 10 | 内存压测相位自检过(阈值归 D3) |
 | M11 打包 + 收尾 | installer.tests.ps1 / package-release.tests.ps1 随迁;文档防腐条款归 12 | 体积钉/安装器自测绿(eg 12 出口);豁免表终版(实机验收点全量登记) |
 

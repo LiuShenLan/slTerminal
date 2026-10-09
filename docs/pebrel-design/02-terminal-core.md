@@ -25,7 +25,7 @@
 | `src/tty/windows/`（conpty/blocking/child/cmd_prompt/environment/spawn/mod） | pebrel 缝合 slTerminal 五件套 | ConPTY 生命周期全链 |
 | `src/lib.rs` | 改造 | 模块面 + `pty_trace`（改名 `SLTERM_BOOT_TRACE`） |
 
-`tty/unix.rs`、`src/tty/connection.sh`、`completion.sh`、`proxy.ps1`、`test/bash_input.rs`、`proxy_tests.rs` 不迁（spec 分片 02 不采纳点 1/10 与 unix 全砍）。
+`tty/unix.rs`、`src/tty/connection.sh`/`connection.ps1`、`completion.sh`/`completion.ps1`、`proxy.ps1`、`test/bash_input.rs`、`proxy_tests.rs` 不迁（spec 分片 02 不采纳点 1/10 与 unix 全砍）。
 
 ### 对 app 暴露的公共面（`lib.rs` 出口，全 crate 仅此集合）
 
@@ -332,7 +332,8 @@ pub struct EventLoopSender { ... }   // standalone() 保留（测试/独立通�
 // tty/mod.rs
 pub struct Options { pub shell: Option<Shell>, pub working_directory: Option<PathBuf>,
     pub drain_on_exit: bool, pub env: HashMap<String, String>,
-    pub env_is_complete: bool, pub escape_args: bool }   // cfg(windows) 字段全域化
+    pub env_is_complete: bool, pub escape_args: bool,
+    pub conpty_sideload: bool }   // cfg(windows) 字段全域化;conpty_sideload 由壳读 settings 键注入(归 06 键域),core 不内嵌路径推导
 pub struct Shell { program: String, args: Vec<String> }
 pub enum ChildEvent { Exited(Option<ExitStatus>) }
 pub trait EventedReadWrite { type Reader: io::Read; type Writer: io::Write;
@@ -346,7 +347,6 @@ pub struct Pty { backend: Conpty /* 必须首字段 */, conout: UnblockedReader<
                  conin: UnblockedWriter<AnonWrite>, child_watcher: ChildExitWatcher }
 pub fn new(config: &Options, window_size: WindowSize) -> Result<Pty>;  // _window_id 参数不迁
 pub fn refresh_environment(options: &mut Options) -> io::Result<()>;   // 注册表环境重建
-pub fn conpty_sideload_enabled() -> bool;                              // settings JSON 键承载（归 06）
 
 // tty/windows/conpty.rs
 pub struct ConptyApi { create: CreatePseudoConsoleFn, resize: ResizePseudoConsoleFn,
@@ -405,7 +405,7 @@ conout(匿名管道) → UnblockedReader::try_read(1MiB 缓冲, waker 补投)
 
 | 时机 | 查询方 | 处置 | 应答字节 |
 | --- | --- | --- | --- |
-| sideloaded host 启动握手 | OpenConsole | priming：spawn 前预写进 conin，host 读到的第一字节 | `\x1b[?61c` |
+| sideloaded host 启动握手 | OpenConsole | priming：spawn 前预写进 conin，host 读到的第一字节 | `\x1b[?64;22c` |
 | host 起后首个 DA1 | OpenConsole | `bringup_da1_pending` 一次性吞掉 Term 自答（`identify_terminal` 消费并跳过） | 不重答 |
 | 会话内 DA1 查询 | shell/CLI | reader 检测→代答（每次查询必答、谁问谁答） | 统一身份（见 D02-1） |
 | 启动窗口 DSR `ESC[6n` | conhost VtIo 握手 | 代答 `\x1b[1;1R`（启动期光标恒 1;1） | CPR |
@@ -438,19 +438,19 @@ spawn 请求
   → SPAWN_LOCK 持锁（仅 create + spawn 段，BE-12 锁界）
   → 容量判定：sessions 写锁内原子复查，MAX_PTY_SESSIONS 命中即 kill 已 spawn 子进程
   → ConptyApi 决策：
-      ① conpty_sideload_enabled()（settings JSON 键，归 06）?
+      ① options.conpty_sideload（壳读 settings 键注入，键域归 06;core 侧零路径逻辑）?
       ② 候选目录完整文件对（exe 旁 runtime/ 或 exe 目录）conpty.dll + OpenConsole.exe
          —— 齐则绝对路径 LoadLibraryW（PATH 同名文件不进认证边界）+ GetProcAddress 三符号
       ③ Win10 且文件对缺失：include_bytes! NuGet 捆绑 → %LOCALAPPDATA% 幂等提取 → 回到 ②
          （extraction 失败静默回退；加载/提取失败原因记入 ConptyStatus.fallback_reason）
       ④ 最终回退：系统 CreatePseudoConsole/Resize/Close 函数指针
-  → sideloaded? priming 预写 \x1b[?61c（仅 sideloaded；in-box 会把无请求应答漏成输入）
+  → sideloaded? priming 预写 \x1b[?64;22c（仅 sideloaded；in-box 会把无请求应答漏成输入）
   → flags = compute_conpty_flags(build, bundled, modes)（矩阵见下）
       · 0x4 位：bundled || build ≥ 21376 才置位；系统 host 置位被拒(E_INVALIDARG)
         → 退 flags=0 重试臂保留（preview build 兜底，自门控降级端到端成立）
       · 0x8 位：默认恒关——真实 claude 全屏滚轮失效实测，翻转须过人工实测门禁
   → spawn_shell（环境块 = refresh_environment 注册表快照 ∪ convert_custom_env
-      大小写不敏感排序去重双 NUL ∪ 固定注入 TERM/COLORTERM/TERM_PROGRAM/SLTERM_PANEL_ID）
+      大小写不敏感排序去重双 NUL ∪ 固定注入 TERM/COLORTERM/TERM_PROGRAM/SLTERM_PANE_ID）
   → Job Object 指派（KILL_ON_JOB_CLOSE）→ 释放 SPAWN_LOCK
 ```
 
@@ -517,7 +517,7 @@ spawn 请求
 2. **viewport 协议 → GPUI 布局**:GPUI element 每帧把 content rect（已扣 padding/tab 栏）喂 `ViewportTracker`;revision 过期事件壳必须丢弃。
 3. **快照 → GPUI 自绘**:`RenderSnapshot` 的 `Color` 是 vte 未解析值，壳用主题 palette + `color_overrides` 解析；`box_glyphs` 走 boxdraw 几何，永不进字形 atlas。
 4. **键盘编码三路径**（kitty/Win32 input/legacy):core 出 `TermMode`（协议状态机），编码器归壳（归 M3，本篇只定模式位契约）;win32_input_matrix 基线守三路径端到端。
-5. **per-pane 环境装配**:`Options.env` 由壳组装，`SLTERM_PANEL_ID` 等变量族归 03 篇定义，core 只负责注入时机（`convert_custom_env` 末尾叠加）。
+5. **per-pane 环境装配**:`Options.env` 由壳组装，`SLTERM_PANE_ID` 等变量族归 03 篇定义，core 只负责注入时机（`convert_custom_env` 末尾叠加）。
 6. **`ConptyInputModes` 设置键**：设置段形态归 06 篇键域枚举单源；core 侧 DTO 字段语义（0x1/0x2/0x4/0x8 矩阵 + 默认三态零漂移）本篇锚定。
 7. **OSC 52/133 消费端**：挂 `Event::ClipboardStore`/`CommandStart`/`CommandDone`，消费组件归壳（见改造节）。
 8. **复制合同**：`selection_to_string` → 壳剪贴板（选中才写）;§5.2 反馈归壳归 M3+。
@@ -543,7 +543,7 @@ spawn 请求
 | DSR | Term `device_status` 自答 | 窗口内代答 / 窗口外 Win10 剥 Win11 透传 | **Term 为唯一应答者**：窗口外交还 Term 自答（真实光标）;Win10 家族窗口外剥离臂重检键事件毒链条件后保留 |
 | 进程销毁 | `TerminateProcess` + `drain_detached` | Job Object `KILL_ON_JOB_CLOSE` + 监督线程 3s 超时销毁 | **双保险并存**:Drop 序 = TerminateProcess → Job 兜底（父崩溃路径） → drain_detached → Close;`ClosePseudoConsole` 永久阻塞（上游 Discussion #17716）双保险（前置 drain + 后置监督超时）并留 |
 | spawn 并发 | 无 | `SPAWN_LOCK` + `MAX_PTY_SESSIONS` + 写锁复查 | **slTerminal 为准**(ConPTY 并发 spawn 死锁实测红线）；锁界照 BE-12（仅 create+spawn 段） |
-| 环境构造 | `refresh_environment` 注册表快照 + `convert_custom_env` | 直接继承父进程块 + 固定注入 | **pebrel 链为准 + 注入清单保留**：注册表环境重建是净改进；`TERM`/`COLORTERM`/`TERM_PROGRAM=slterm`/`SLTERM_PANEL_ID` 末尾叠加 |
+| 环境构造 | `refresh_environment` 注册表快照 + `convert_custom_env` | 直接继承父进程块 + 固定注入 | **pebrel 链为准 + 注入清单保留**：注册表环境重建是净改进；`TERM`/`COLORTERM`/`TERM_PROGRAM=slterm`/`SLTERM_PANE_ID` 末尾叠加 |
 | 读侧缓冲 | 1MiB 直读 + FairMutex | 16KiB + `micro_batch_tail` 微批 + PeekNamedPipe pending | **1MiB 为主 + pending 判定并入**:GPUI 壳无 IPC，微批聚合自然退化；`pending` 判定（防半帧唤醒丢失）作为 `try_read` 侧判定保留 |
 
 **五件套落位：**
@@ -552,9 +552,9 @@ spawn 请求
 - `spawn.rs`（规则层）→ flags 矩阵入 `conpty.rs`;`SPAWN_LOCK`/`MAX_PTY_SESSIONS`/容量复查入 `tty/windows/spawn.rs`（新建，包住 `conpty::new` 的串行化壳）;Job Object 族入同文件（`job_name`/`job_limits` 纯函数 + 守卫用例 `job_limits_contains_kill_on_job_close`/`job_name_format_contains_pid` 随迁）。
 - `reader.rs`（纯函数族）→ `event_loop.rs` 读侧：`apply_output_strip`/`strip_da1_queries`/`strip_dsr_queries`/`split_trailing_query_prefix`/`mirror_da1_query`/`mirror_dsr_query`/`should_answer_dsr` 为纯函数（L1 全保）;`inject_da1_response`/`inject_cpr_response` 改为对 `UnblockedWriter` 注入（共享 Vec writer 测试形态保留）;`plan_cleanup_after_join_timeout`/`CleanupPlan` 并入读线程收尾；`micro_batch_tail` 降级为 `try_read` 后 pending 判定辅助。
 - `shell.rs` → `tty/windows/shell.rs`（新建）:`ShellKind`/`resolve_shell`/`validate_shell_allowlist`/`which_full_path`/`paths_match`/`file_identity`/`reparse_entry_identity`/`fallback_identity_match` 全迁（AEL reparse 身份比对红线，任一侧证据缺失即拒绝）;`build_pwsh_command`/`build_pwsh_info`/`encode_utf16le_base64` 全迁（B17 守卫 `pwsh_args_no_noprofile_b17` 随迁）;`Shell` 枚举收敛三 exe。
-- `win_build.rs` → `tty/windows/mod.rs` 平台工具（`get_windows_build_number`);`conpty_sideload_enabled` 改读 settings JSON(spec 不采纳点 3)。
+- `win_build.rs` → `tty/windows/mod.rs` 平台工具（`get_windows_build_number`);`conpty_sideload_enabled` 不迁内嵌路径推导形态，改壳读 settings 键经 `Options.conpty_sideload` 注入（spec 不采纳点 3;pebrel `ui_config.rs` 计算 `suppress_bringup_da1` 为同形态先例）。
 
-**DA1/DSR 双方案合流细节**（数据流节状态机的实现注记）：旧世界三处应答身份（priming `?61c`、Term 自答 `?6c`、reader 代答 `?64;22c`）合并为单一身份——候选以 reader 代答值为准（`?64;22c` 声明 VT220 级别 + 色彩能力，对全屏 CLI 最宽），最终选型钉死前须真实 claude 全屏验证（D02-1)。priming 的预写字节与统一身份同步改；`suppress_bringup_da1` 语义不变（吞的是 Term 自答，不是 reader 代答——reader 只代答会话内查询，启动握手由 priming 覆盖，两条链在偏移切分处正交）。
+**DA1/DSR 双方案合流细节**（数据流节状态机的实现注记）：旧世界三处应答身份（priming `?61c`、Term 自答 `?6c`、reader 代答 `?64;22c`）合并为单一身份 `?64;22c`(D02-1 已裁，slTerminal 现役值，声明 VT220 级别 + 色彩能力，对全屏 CLI 兼容面最宽；M2.4 真机复测钉死）。priming 的预写字节与统一身份同步改；`suppress_bringup_da1` 语义不变（吞的是 Term 自答，不是 reader 代答——reader 只代答会话内查询，启动握手由 priming 覆盖，两条链在偏移切分处正交）。
 
 ### 2. OSC 52/133 壳侧消费语义上移
 
@@ -624,7 +624,7 @@ xterm.js 时代的 `oscHandlers.ts`/`useCommandDetection.ts` 消费逻辑上移�
 
 本片全部属 **M2 终端核心**(00-roadmap 既定），细分四步，出口全为可机验项：
 
-**M2.1 骨架拷贝与裁剪改名**:pebrel `nebula_terminal/` → `slterm_terminal/`，砍 unix/`connection.sh`/`completion.sh`/`proxy.ps1`/`proxy_tests`/`bash_input`/`ref_test`/`sink`/`RemoteHook` 全链/`AiHookEnvelope`；按 01 篇单点表 + 本篇补充改名项改名。出口 = `cargo check` 过；禁名门禁过（core 内 `nebula`/`pebrel`/`NEBULA_` 零残留，豁免仅 01 篇登记的审计锚点）;file-budgets 新 root 登记。
+**M2.1 骨架拷贝与裁剪改名**:pebrel `nebula_terminal/` → `slterm_terminal/`，砍 unix/`connection.sh`/`connection.ps1`/`completion.sh`/`completion.ps1`/`proxy.ps1`/`proxy_tests`/`bash_input`/`ref_test`/`sink`/`RemoteHook` 全链/`AiHookEnvelope`；按 01 篇单点表 + 本篇补充改名项改名。出口 = `cargo check` 过；禁名门禁过（core 内 `nebula`/`pebrel`/`NEBULA_` 零残留，豁免仅 01 篇登记的审计锚点）;file-budgets 新 root 登记。
 
 **M2.2 L1 测试移植转绿**：照抄节清单的 pebrel 用例全量随迁改名（用例名不变）,「目标形态」模块表逐项编译到位。出口 = `cargo test` 全绿（单线程纪律）;L1 用例数不降（对照 M2.1 前基线清单）。
 
@@ -632,7 +632,7 @@ xterm.js 时代的 `oscHandlers.ts`/`useCommandDetection.ts` 消费逻辑上移�
 
 **M2.4 集成层与基线**:ConPTY 集成用例 + pwsh 真 shell 范式重建；win32_input_matrix 三件套 GPUI 化归 11 篇（本篇提供基线语义与门禁点）。出口 = 集成用例在真机 `--test-threads=1` 全绿；真机门禁清单（Win10 捆绑、flags 三态、claude 全屏滚轮、DA1 身份验证）执行记录落 `architecture/notes/slterm_terminal/`。
 
-M2 总出口对齐 00-roadmap:`cargo test` 全绿（含 ConPTY 集成用例、win32 输入矩阵基线）。M2 全程无可运行产品（纯库态），符合过渡期不可用清单。
+M2 总出口对齐 00-roadmap:`cargo test` 全绿（含 ConPTY 集成用例）;win32 输入矩阵脚本 GPUI 化改造编译过，基线建基与常挂比对归 M3 出口（M2 无可驱动 exe)。M2 全程无可运行产品（纯库态），符合过渡期不可用清单。
 
 ## 待沉淀决策
 

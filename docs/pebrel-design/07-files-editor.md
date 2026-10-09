@@ -4,7 +4,7 @@
 >
 > 本片消费锚点:`PaneId`/`TabId`/`WorkspaceTab`/`TabEntry`/`TabMeta` 归 05 篇,本片只许 `use`;`Rgb`/`ReviewedPalette`/`ThemeUiColors`/`RuntimeSettings`/设置注册表归 06 篇;`AppError`/`brand` 归 01 篇。引 pebrel 一律符号名 + 文件路径(baseline `e537d528c508e8607d0f5f9fd25e5902f40d661e` 钉死),禁行号。
 >
-> 事实修正登记:spec 分片 07 采纳点 41 称 slTerminal 自有「git 命令封装」为子进程形态;实测 `src-tauri/src/git/` 为 **git2(libgit2 vendored 静态链接)封装**,非子进程。本片改造节按此事实重述,统一裁定归待沉淀 D07-1。
+> 事实修正登记:spec 分片 07 采纳点 41 称 slTerminal 自有「git 命令封装」为子进程形态;实测 `src-tauri/src/git/` 为 **git2(libgit2 vendored 静态链接)封装**,非子进程。本片改造节按此事实重述;执行体统一裁定 D07-1 已裁 = git 子进程统一(git2 不移植,语义资产转测试夹具保留)。
 
 ## 目标形态
 
@@ -29,7 +29,7 @@
 | `slterm_app/src/side_panel/` | pebrel `display/side_panel/` 照抄改名 | 文件树模型:enumerate/gitignore/vcs/search/FileRow/SidePanel |
 | `slterm_app/src/gpui_shell/workspace/file_tree.rs` + `file_tree/path_bar.rs` | pebrel 照抄改名 | 文件树渲染 + `PathEditor` + `FileTreeContextMenu` |
 | `slterm_app/src/gpui_shell/file_drop.rs` | pebrel 照抄改名 | `FileTreeDrag` 载荷 + `FileDragGhost` |
-| `slterm_app/src/git/` | slTerminal `src-tauri/src/git/` 移植 | git2 状态/diff/hunks/HEAD/rollback/unstage(改造节 2 统一裁定) |
+| `slterm_app/src/git/` | slTerminal `src-tauri/src/git/` 语义资产转测试 + 操作面子进程重实现 | git 子进程统一(D07-1 已裁):status/diff/hunks/HEAD/rollback/unstage 经 git CLI,git2 不移植(改造节 2) |
 | `slterm_app/src/gpui_shell/editor_theme.rs` | **新建** | 编辑器配色 token 装配(消费 06 篇语义槽,改造节 8) |
 | `slterm_app/src/gpui_shell/file_editor/gutter.rs` | **新建** | git gutter(改造节 3) |
 
@@ -43,7 +43,7 @@ file_editor 内部职责照 pebrel 原分层不变:`mod.rs`(TextFileView 壳/状
 4. **配色单点**(06 篇):编辑器/gutter/diff/文件树的一切颜色经 `editor_theme.rs` 装配的语义槽消费(06 篇 `ReviewedPalette`/`ThemeUiColors`),禁硬编码颜色;文件图标色归 06 篇主题 token 体系,本片不建色表。
 5. **截断语义不可回退**(spec 采纳点 34,已定):可编辑域上限 = pebrel `MAX_BYTES`(8MB),超限 = 截断 + `truncated` 只读 + 提示横幅;slTerminal 旧分块只读浏览(`largeFileViewer`)/1MB 警告弹窗/四层防线整体消亡,不回填兼容。
 6. **只读 contract 类型层强制**:`TextSnapshot.read_only`(truncated/invalid_encoding/只读文件)在 `encode` 入口拒绝(`SaveError::ReadOnly`);gitshow/html/diff 左栏等「只读查看」一律经 `decode_prefix(.., read_only=true, ..)` 载入,不靠 UI 层自觉。
-7. **git 纪律不碰可选锁**(spec 采纳点 41,已定):一切 git 读操作不得触发 index 锁或后台 gc——子进程形态 = 每命令 `--no-optional-locks` 照抄 pebrel;git2 形态 = 进程启动设 `GIT_OPTIONAL_LOCKS=0`(libgit2 识别的等价环境变量)。具体执行体归 D07-1,纪律本身不可谈判。
+7. **git 纪律不碰可选锁**(spec 采纳点 41,已定):一切 git 读操作不得触发 index 锁或后台 gc——执行体 = git 子进程统一(D07-1 已裁),每命令 `--no-optional-locks` 照抄 pebrel;git2 形态不迁,`GIT_OPTIONAL_LOCKS=0` 等价臂随之消亡。纪律本身不可谈判。
 8. **文件树 ignored 语义调和**(两仓纪律并存,改造节 6):pebrel `FileRow.ignored` = ignored 条目仍在树中、降色渲染;slTerminal 旧「status 不扫 ignored」= 状态图不含被忽略文件。新世界两纪律同时成立,互不取消。
 9. **SSH/WSL/SVN/亮主题整面不迁**(spec 不采纳点 1/2/12 与采纳点 41 末句):`DocumentSource` 收敛 `Local(PathBuf)` 单态;`path_bar`/`enumerate` 的 WSL guest 分支、`vcs.rs` SVN 臂、`code_actions.rs` `CodeUiColors` 亮角色表全砍。
 
@@ -384,7 +384,7 @@ pub(crate) fn display_stored_combo(combo: &str) -> String;
 
 ```rust
 // slterm_app/src/gpui_shell/file_editor/gutter.rs(新建)
-pub enum GutterMark { Added, Modified, Deleted, Renamed, Untracked, Conflicted } // 值集归 D07-1 与 vcs 对账
+pub enum GutterMark { Added, Modified, Deleted, Renamed, Untracked, Conflicted } // 值集与 vcs 子进程状态值集对账(D07-1 已裁子进程统一,实现期收敛归一)
 pub struct GitGutter { marks: Vec<(u32, GutterMark)>, revision: u64 } // 按行号升序
 impl TextFileView { fn sync_git_gutter(&mut self, file_status: FileStatus, cx); }
 
@@ -517,7 +517,7 @@ matches_git_merge 命中 → 重开冲突不另开浮窗,命中既有 tab
 ### git gutter 数据流(新建,改造节 3)
 
 ```
-文档打开/保存/外部 reload 完成 + repo 状态刷新(side_panel git 快照或 git 模块状态图,D07-1 数据源)
+文档打开/保存/外部 reload 完成 + repo 状态刷新(side_panel git 快照或 git 模块状态图,同一子进程执行体,D07-1 已裁)
   → 取本文件 status → GutterMark 映射(未跟踪/新增/修改/删除/重命名/冲突)
   → modified 粒度细化:diff hunks 首行号(可选路径,D07-2 关联;文件级为零成本基线)
   → GitGutter{marks 按行升序} → revision bump → 编辑器行条重渲(色取 06 语义槽)
@@ -579,7 +579,7 @@ DiffSource::HeadToWorktree{path}
 | 38 | slTerminal `src/features/fileViewers/FileViewerRegistry.ts` | 值集并入 `viewable_file`(19),机制消亡 | 策略链/_reset 注册表契约的 WebView 载体消亡 |
 | 39 | slTerminal `src/features/navTree/`+`src/features/agentFiles/` | 挂 workspace 侧栏归 05/03,本片只登记树组件复用 | pebrel 无项目/页面模型,GPUI 重建归对应篇 |
 | 40 | slTerminal `src-tauri/src/fs/` 命令层 | 消亡;语义资产并入(改造节 1) | 单进程 std::fs 直连;CRLF 检测并 text_document;分页/分块/沙箱随 IPC 消亡 |
-| 41 | slTerminal `src-tauri/src/git/` ↔ pebrel `side_panel/vcs.rs` 纪律 | 模块落位归改造节 2(D07-1 裁定) | git2 实测修正(见篇头登记);--no-optional-locks 等价纪律不可谈判(边界条 7) |
+| 41 | slTerminal `src-tauri/src/git/` ↔ pebrel `side_panel/vcs.rs` 纪律 | 模块落位归改造节 2(D07-1 已裁子进程统一) | git2 实测修正(见篇头登记);--no-optional-locks 纪律不可谈判(边界条 7) |
 | 42 | `input_rules.rs` `enter_block`/`block_structure.rs` `PartKind::Math`/`structure_view.rs` 数学分支 | 本片编辑结构归本片;渲染归 08 | 本片消费 08 渲染结果,不重复裁定 |
 | 43 | `file_drop.rs` 消费点 `drop_text_for_path` | 载荷照抄;写 PTY 规则归 02 | 控制字符拒绝/空白加引号/尾随空格归终端输入分片 |
 | 44 | `workspace/quick_jump.rs` `rows` 文件条目投影 | 数据源登记归命令面板篇 | file_tree 是其数据源之一,本片不建 palette |
@@ -618,29 +618,29 @@ DiffSource::HeadToWorktree{path}
 
 `src-tauri/src/fs/` 语义资产(spec 采纳点 40):CRLF 64KB 样本检测并入 `text_document.rs::decode` 的 `crlf` 判定;keyset 分页/256KB 分块/10MB 上限/沙箱校验全随 IPC 消亡。「项目根外访问」产品语义由 `PathEditor` 任意路径导航替代,越出项目根允许(与 pebrel 一致)。
 
-### 2. git 执行体模块落位(事实修正 + 纪律等价物)
+### 2. git 执行体模块落位(事实修正 + D07-1 已裁:子进程统一)
 
 **事实**:spec 采纳点 41 称「git 子进程封装保留」;实测 slTerminal `src-tauri/src/git/` 为 git2(libgit2 vendored,静态链接,无系统 git 依赖)封装,操作集 = `git_status`/`git_diff`+`compute_diff_hunks`/`git_file_at_head`/`git_rollback`/`git_unstage`,配套决策(LRU 仓库缓存 BE-09、不扫 ignored CP-008、rename 双检、`rollback` 不用 checkout API 的三方字节一致、HEAD 不存在错误契约)在其模块 CLAUDE.md 有完整因果档案。pebrel 侧(`side_panel/vcs.rs`/`code_tab.rs`)为**子进程**封装,`--no-optional-locks` 为每命令 flag。
 
-**落位**(D07-1 裁定前的可并行形态):
+**落位**(D07-1 已裁 = git 子进程统一,git2 不移植):
 
-- `slterm_app/src/git/` —— slTerminal git2 栈移植(状态图/diff hunks/HEAD/rollback/unstage 与上述因果档案随迁;`validate_path_within_root` 沙箱语义消亡,`get_or_open_repo` 的 project_root 校验臂改「无校验单进程直连」)。
-- pebrel `side_panel/vcs.rs` 照抄进 `slterm_app/src/side_panel/vcs.rs` —— 文件树 git 快照(子进程)随模型照抄落地,**两执行体并存是照抄的既成事实**,非本设计主动选择。
-- **--no-optional-locks 等价纪律**(不可谈判,边界条 7):子进程面照抄每命令 flag;git2 面 = 应用启动早期 `std::env::set_var("GIT_OPTIONAL_LOCKS", "0")`(libgit2 识别的官方等价环境变量,进程级生效;单进程单实例下无跨进程副作用面)。落点归 `slterm_app` 启动序列,注释锚定纪律来源。
+- `slterm_app/src/git/` —— 操作集(status/diff hunks/HEAD/rollback/unstage)以 git CLI 子进程重实现,与 pebrel 照抄面同一执行体;`--no-optional-locks` 每命令 flag 全面照抄(边界条 7)。`validate_path_within_root` 沙箱语义消亡,`get_or_open_repo` 的 project_root 校验臂改「无校验单进程直连」。
+- pebrel `side_panel/vcs.rs` 照抄进 `slterm_app/src/side_panel/vcs.rs` —— 文件树 git 快照(子进程)随模型照抄落地,与 `src/git/` 共用一套子进程封装,无第二执行体。
+- **git2 语义资产转测试保留**:LRU 仓库缓存 BE-09、不扫 ignored CP-008、rename 双检、rollback 三方字节一致、HEAD 不存在错误契约五份因果档案转为行为规格,落成 L1 对照用例与临时仓库夹具(子进程实现须复现同等行为);git2/libgit2 依赖不进 workspace。
 
-统一裁定归 D07-1(双轨并存的消费面:file_tree 着色/gutter/diff/merge 四处接线后再合并 = 跨面返工)。
+git2 依赖剔除的收益面:vendored 静态链接体积与构建时长消亡;两套锁定纪律(git2 面 `GIT_OPTIONAL_LOCKS=0` 等价臂)与两份状态解析(git2 Status vs `git status --porcelain`)的维护面消亡;消费面(file_tree 着色/gutter/diff/merge)自始单一数据源,无接线后跨面返工。
 
 ### 3. 新建:git gutter(签名级)
 
 ```rust
 // slterm_app/src/gpui_shell/file_editor/gutter.rs
 pub enum GutterMark { Untracked, Added, Modified, Deleted, Renamed, Conflicted }
-// 值集与 file tree vcs 状态值集实现对账(D07-1 数据源统一后收敛归一)
+// 值集与 file tree vcs 状态值集实现对账(同一子进程执行体,实现期收敛归一)
 
 pub struct GitGutter { marks: Vec<(u32, GutterMark)>, revision: u64 }
 
 impl TextFileView {
-    fn sync_git_gutter(&mut self, cx);        // 三触发:文档打开/保存落盘/git 快照刷新(经 06 通知链或 side_panel 快照订阅,D07-1 后单源)
+    fn sync_git_gutter(&mut self, cx);        // 三触发:文档打开/保存落盘/git 快照刷新(经 06 通知链或 side_panel 快照订阅,子进程执行体单源)
     fn render_git_gutter(&self, cx) -> impl IntoElement; // 行条渲染:色取 editor_theme 槽(green/yellow/red/blue/muted 语义六色),禁硬编码
     fn on_gutter_click(&mut self, line: u32, window, cx); // Modified → 开 DiffTabView::HeadToWorktree;Conflicted → CodeTabView::new_git_merge 命中臂
 }
@@ -659,7 +659,7 @@ pub enum DiffSource {
 pub struct DiffBlob { pub label: String, pub bytes: Vec<u8> }  // 经 decode(read_only=true) 有界载入
 
 pub struct DiffHunk { pub old_start: u32, pub old_lines: u32, pub new_start: u32, pub new_lines: u32 }
-// 来源:git 模块 compute_diff_hunks(git2 移植)或等价纯函数(两文本直接 Myers)
+// 来源:git 模块 compute_diff_hunks(子进程实现,D07-1 已裁)或等价纯函数(两文本直接 Myers)
 
 pub struct DiffTabView {
     left: Entity<InputState>,      // 只读:TextSnapshot read_only 语义,encode 层禁写
@@ -678,7 +678,7 @@ impl DiffTabView {
 
 ### 5. gitshow 只读臂落地
 
-`git_file_at_head`(git2 移植)→ HEAD 字节;`decode_prefix(bytes, read_only=true, truncated)` → `CodeTabView` 只读渲染(标题 = `<path> @ HEAD`)。HEAD 不存在错误契约(UnbornBranch/不在 HEAD tree,消息含「HEAD 中不存在」)随迁,UI 占位文案归 06 i18n。
+`git_file_at_head`(git 子进程,D07-1 已裁)→ HEAD 字节;`decode_prefix(bytes, read_only=true, truncated)` → `CodeTabView` 只读渲染(标题 = `<path> @ HEAD`)。HEAD 不存在错误契约(UnbornBranch/不在 HEAD tree,消息含「HEAD 中不存在」)随迁,UI 占位文案归 06 i18n。
 
 ### 6. file_tree:explorer 能力并入 + ignored 语义调和
 
@@ -752,7 +752,7 @@ pub fn editor_theme_tokens(palette: ReviewedPalette, ui: &ThemeUiColors) -> Edit
 | `PathEditor`:草稿不入导航、resolve `~` 展开、UNC `\\?\` 规范化显示(WSL 分支无对象) | L1 path_bar | 迁移 pebrel 内嵌例 |
 | `FileTreeDrag` 载荷纯数据(宿主路径/PTY 原文/名称)+ `FileDragGhost` 独立于源行 | L1 file_drop | 迁移 |
 | git gutter 新建:status→GutterMark 映射、marks 行升序、revision bump 触发重渲、gutter 点击开 diff/merge 臂 | L1 gutter(注入状态源) | 新建 |
-| 通用 diff 新建:hunks 计算(HEAD↔工作区注入 git2 夹具)、双栏只读合同(encode 拒绝)、hunk 导航跳转 | L1 diff_tab | 新建 |
+| 通用 diff 新建:hunks 计算(HEAD↔工作区注入 git 子进程夹具)、双栏只读合同(encode 拒绝)、hunk 导航跳转 | L1 diff_tab | 新建 |
 | 键位:`keybind_pairs_from_json` 宽容解析(坏行跳过)/整表替换/行序即优先级/`gpui_binding_combo` 规范化往返/恢复默认 vs Unbind 精确收回/保留键覆盖拒绝 | L1 keys/keyboard_bindings | 迁移 pebrel `keybind_pairs_parse_and_rewrite` 等改写 JSON 载体 |
 | 截断横幅:`MAX_BYTES` 边界文件打开 → truncated notice + 只读(encode 拒绝) | L1 file_editor | 新建(契约值边界) |
 | 配色单点守卫:本片渲染代码 grep 禁裸颜色字面量(eg 11 门禁登记) | L1 + 门禁归 01/11 | 新建 |
@@ -778,7 +778,7 @@ pub fn editor_theme_tokens(palette: ReviewedPalette, ui: &ThemeUiColors) -> Edit
 **M8.5 新建项 + 键位收口**:gutter.rs/DiffTabView/editor_theme.rs/keybind JSON 段/EDITABLE_ACTIONS 合并/保留键红线。
 出口 = gutter/diff 新建用例绿;键位 JSON 化用例全绿;截断横幅用例绿;L3 UI 关键路径过;`cargo check`/`cargo test`/门禁三件套全绿——对齐 00-roadmap M8 出口(编辑器内核测试(撤销/outline/虚拟化)全绿;UI 测试过)。
 
-绿灯语义:M8.1–M8.4 期间 gutter/diff 缺席是过渡期预期态(00-roadmap 逐领域点亮,不设功能兜底);D07-1/D07-2 须在 M8.5 前收敛,逾期按默认(改造节 2 双轨并存/节 4 双栏形态)执行并登记。
+绿灯语义:M8.1–M8.4 期间 gutter/diff 缺席是过渡期预期态(00-roadmap 逐领域点亮,不设功能兜底);D07-2 须在 M8.5 前收敛,逾期按默认(节 4 双栏形态)执行并登记(D07-1 已裁子进程统一,改造节 2)。
 
 ## 待沉淀决策
 

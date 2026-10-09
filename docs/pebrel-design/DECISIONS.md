@@ -28,6 +28,11 @@
 | D08-2 | hook 失败边 | **默认关**(与 AI assistant 默认关闭一致) | |
 | D06-2 | 旧 settings.json | **零迁移**:新版只读写 `%APPDATA%\slterm`,旧 exe 同级文件不看不迁;仅 projects.json 按已裁定提取 | |
 | — | GitHub 仓 | **已存在**:`SLTERM_RELEASES_OWNER=LiuShenLan`、`SLTERM_RELEASES_REPO=slTerminal` | 真值落定,09/12 篇占位回填 |
+| —(review 后) | WSLENV | **砍**:spec 03 照抄合并为误裁,WSL 全家不采纳为准;03 篇删 WSLENV 合并臂及测试点 | 2026-10-09 review 裁决 |
+| —(review 后) | console 阻塞父 shell | **登记+明示**:D04-1 备注;12 篇安装器/文档明示快捷方式与 Start-Process;启动链改造子步归 13 篇 | 同上 |
+| —(review 后) | windows_console_startup 对照 | **保留重设**:对照目标重设为 console 形态启动行为,子步归 11 篇 | 同上 |
+| —(review 后) | 首发 GitHub Release | **首发即开**:首发即挂 Release,自动更新链公网验收 | 同上 |
+| D13-1 | Ctrl+Shift+C 无选区语义 | **静默吞**(照抄 pebrel;不透传中断) | 批量默认同类 |
 
 ## B. 批量确认默认(25 条,用户全部接受)
 
