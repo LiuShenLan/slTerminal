@@ -1,0 +1,26 @@
+version = 1
+renderer_packages = ["gpui", "gpui_platform", "gpui-component", "gpui-component-assets", "winit", "glutin", "crossfont"]
+
+[crates.slterm_app]
+layer = "application"
+dependencies = ["slterm_terminal", "slterm-settings", "slterm-split", "slterm_completions"]
+build-dependencies = ["slterm-settings"]
+dev-dependencies = []
+
+[crates.slterm_terminal]
+layer = "core"
+
+[crates.slterm_completions]
+layer = "core"
+
+[crates.slterm_settings]
+layer = "core"
+zero_production_dependencies = true
+
+[crates.slterm_split]
+layer = "core"
+zero_production_dependencies = true
+
+[crates.slterm_hook]
+layer = "hook"
+zero_production_dependencies = true

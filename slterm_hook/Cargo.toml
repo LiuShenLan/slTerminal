@@ -1,0 +1,10 @@
+[package]
+name = "slterm_hook"
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "slterm-hook"
+path = "src/main.rs"
+
+[dependencies]

@@ -1,0 +1,79 @@
+[workspace]
+members = [
+    "slterm_app",
+    "slterm_terminal",
+    "slterm_completions",
+    "slterm_hook",
+    "slterm_settings",
+    "slterm_split",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.97.1"
+
+[profile.release]
+# Thin LTO preserves package-specific optimization levels. Dependencies retain
+# one codegen unit; the application uses parallel codegen with the same O3 level.
+lto = "thin"
+debug = 0
+strip = "symbols"
+incremental = false
+codegen-units = 1
+# 发布包体积预算:安装包 <30MB。冷代码按体积编译;渲染/塑形/布局/VT 热路径
+# 逐个钉回 O3——热路径钉包清单随依赖迁入时建立,数值归首版实测校准(体积
+# 预算钉测试一并落地)。改动 profile 体积相关数值必须重跑体积钉测试。
+opt-level = "s"
+
+# Debug 壳仍要承担真实终端负载:GPUI 布局/字体塑形和 VT 解析若以
+# opt-level 0 运行,窗口拖拽与持续输入都会出现发布版没有的延迟。
+# 外部依赖统一 O2(图形栈/图像解码/Unicode 处理散布在
+# 几十个 crate 里,逐个点名永远漏),少数塑形/布局热点保持 O3;
+# workspace 成员不受 "*" 影响,主 crate 继续增量 debug。
+# 热路径钉包清单(resvg/rustybuzz/taffy/gpui 等)随 M 阶段依赖迁入逐个回填。
+[profile.dev]
+codegen-units = 16
+debug = "limited"
+split-debuginfo = "unpacked"
+
+[profile.dev.package]
+"*" = { opt-level = 2 }
+
+[workspace.dependencies]
+# ---- GPUI v1.16.1 固定基线 ------------------------------------------------
+#
+# 版本配对:Zed v1.16.1 提交上的 gpui 0.2.2 / gpui_platform 0.1.0,配套
+# gpui-component 0.5.2 和 gpui-component-assets 0.5.1。版本号与 Git rev 都
+# 精确固定,禁止 main、通配版本或仅凭 branch 名解析。
+#
+# GitHub 固定点(branch/tag 只用于审计,Cargo 始终使用下面的完整 SHA):
+#   上游来源:zed-industries/zed v1.16.1
+#     @ eb8e1c8b5502b7007465fbbc465f4a736fa39210
+#   Kuddev/zed nebula-v1.16.1-owned-base @ 同一 SHA(纯上游镜像)
+#   Kuddev/gpui-component nebula-v1.16.1-math
+#     @ c20dbef8ed0d4c0fbebbf2e8f02d39e4fa0ac0a7
+#     (4eb39176 owned base + 数学薄桥、GFM TextView 语义和紧凑阴影 helper)
+#   Kuddev/gpui-component nebula-v1.16.1-test-support
+#     @ fa3763c681dba5b3ea028395148488e1281d478d
+#     (c20dbef8 基线 + 下游虚拟窗口测试支持)
+#
+# 当前钉版(fork 自 pebrel 栈顶,2026-10-09):
+#   Kuddev/zed fc05d637 —— 含组件补丁 1-3/6、DirectWrite 字体所有权修补、
+#     Windows 彩色 emoji 枚举修复(先 MoveNext 再 GetCurrentRun,issue #317)
+#   Kuddev/gpui-component fc5f5cf —— 五个 Zed 依赖同步同一提交,防双 gpui 类型
+#
+# 补丁采纳立场:最小集原则——数学渲染必需补丁保留;其余随钉版携带的产品
+# 补丁(popover 阴影/TextView GFM/Input 滚动修复等)在对应领域点亮阶段增量
+# 评审决定去留,撤销条件逐条登记于上游审计链。
+#
+# 所有 Zed 依赖统一使用 Kuddev URL:Cargo 的 source identity 包含 URL,应用
+# 与 component 内部若混用官方/自有 URL,即使 SHA 相同也会解析成两套 gpui
+# 类型。新增 Zed/component 补丁必须从固定基线开独立分支、逐条提交并更新
+# exact rev,不能移动基线 branch/tag。
+gpui = { git = "https://github.com/Kuddev/zed", rev = "fc05d637cc7029d75de051fd7f52c1a0fb8fa6b4", version = "=0.2.2" }
+# GPUI v1.16.1 把平台启动入口拆到独立 crate。它必须与 `gpui` 使用完全相同
+# 的 Git URL 和 rev,否则 Cargo 会把同名类型解析成两套互不兼容的 crate。
+gpui_platform = { git = "https://github.com/Kuddev/zed", rev = "fc05d637cc7029d75de051fd7f52c1a0fb8fa6b4", version = "=0.1.0", features = ["font-kit"] }
+gpui-component = { git = "https://github.com/Kuddev/gpui-component", rev = "fc5f5cf63dd80686dafacd2a6e37345bbd1dc7ba", version = "=0.5.2" }
+gpui-component-assets = { git = "https://github.com/Kuddev/gpui-component", rev = "fc5f5cf63dd80686dafacd2a6e37345bbd1dc7ba", version = "=0.5.1" }

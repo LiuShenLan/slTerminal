@@ -1,0 +1,6 @@
+[package]
+name = "slterm-settings"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]

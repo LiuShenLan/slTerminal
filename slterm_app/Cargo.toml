@@ -1,0 +1,14 @@
+[package]
+name = "slterm"
+edition.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "slterm"
+path = "src/lib.rs"
+
+[[bin]]
+name = "slterm"
+path = "src/main.rs"
+
+[dependencies]

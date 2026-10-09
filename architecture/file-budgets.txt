@@ -1,0 +1,9 @@
+limit 2000
+root slterm_app
+root slterm_terminal
+root slterm_completions
+root slterm_hook
+root slterm_settings
+root slterm_split
+root scripts
+root tools

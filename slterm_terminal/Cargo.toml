@@ -1,0 +1,6 @@
+[package]
+name = "slterm_terminal"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
