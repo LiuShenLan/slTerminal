@@ -3,4 +3,16 @@ name = "slterm-split"
 edition.workspace = true
 rust-version.workspace = true
 
+# D11-1:每 crate 显式 test target——定向测试一律
+# `cargo test -p slterm-split --test lib_tests <filter>`,禁 filter 直打
+# 默认 lib target(filter/--lib 会绕过 test=false 重建默认单测 target)。
+[lib]
+test = false
+
+[[test]]
+name = "lib_tests"
+path = "src/lib.rs"
+
+# 零生产依赖契约(architecture/dependencies.toml 机械强制,实测:任何
+# 非 dev 依赖条目即 ERROR):纯数据 + 纯函数,无工具代码需求。
 [dependencies]
