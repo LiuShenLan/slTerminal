@@ -3,4 +3,16 @@ name = "slterm-settings"
 edition.workspace = true
 rust-version.workspace = true
 
+# D11-1:每 crate 显式 test target——定向测试一律
+# `cargo test -p slterm-settings --test lib_tests <filter>`,禁 filter 直打
+# 默认 lib target(filter/--lib 会绕过 test=false 重建默认单测 target)。
+[lib]
+test = false
+
+[[test]]
+name = "lib_tests"
+path = "src/lib.rs"
+
+# 零生产依赖契约(architecture/dependencies.toml 机械强制,实测:任何
+# 非 dev 依赖条目即 ERROR):JSON 值层由 src/json.rs 自实现。
 [dependencies]
