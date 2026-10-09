@@ -3,4 +3,51 @@ name = "slterm_terminal"
 edition.workspace = true
 rust-version.workspace = true
 
+# D11-1:每 crate 显式 test target——定向测试一律
+# `cargo test -p slterm_terminal --test lib_tests <filter>`,禁 filter 直打
+# 默认 lib target(filter/--lib 会绕过 test=false 重建默认单测 target)。
+# 本步(M2.1)不含测试模块,lib.rs 暂为空测试入口;用例迁移归 M2.2。
+[lib]
+test = false
+
+[[test]]
+name = "lib_tests"
+path = "src/lib.rs"
+
+[features]
+default = ["serde"]
+serde = ["dep:serde", "bitflags/serde", "vte/serde"]
+
+# 生产依赖照上游清单裁剪:unix 三件套(rustix-openpty/rustix/signal-hook)
+# 与 home(terminfo 探测)随裁剪删除。vte 0.15 走 crates.io 不 fork
+# (spec 采纳点 1),OSC 缺口由 osc_cwd tee 补齐。
 [dependencies]
+base64 = "0.22.0"
+bitflags = "2.4.1"
+log = "0.4"
+parking_lot = "0.12.0"
+polling = "3.8.0"
+regex-automata = "0.4.3"
+unicode-width = "0.2.0"
+vte = { version = "0.15.0", default-features = false, features = ["std", "ansi"] }
+serde = { version = "1", features = ["derive", "rc"], optional = true }
+
+[target.'cfg(windows)'.dependencies]
+piper = "0.2.1"
+miow = "0.6.0"
+windows-sys = { version = "0.59.0", features = [
+    "Win32_System_Console",
+    "Win32_Foundation",
+    "Win32_Globalization",
+    "Win32_Security",
+    # CONOUT$ 句柄(ConPTY 光标对账探针,见 event_loop)。
+    "Win32_Storage_FileSystem",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Registry",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_Threading",
+    "Win32_System_WindowsProgramming",
+]}
+
+[dev-dependencies]
+serde_json = "1.0.0"

@@ -1,0 +1,933 @@
+//! The main event loop which performs I/O on the pseudoterminal.
+
+use std::borrow::Cow;
+use std::collections::VecDeque;
+use std::fmt::{self, Display, Formatter};
+use std::io::{self, ErrorKind, Read, Write};
+use std::num::NonZeroUsize;
+use std::sync::Arc;
+use std::sync::OnceLock;
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
+
+use log::error;
+use polling::{Event as PollingEvent, Events, PollMode, Poller};
+
+use crate::event::{self, Event, EventListener, WindowSize};
+use crate::grid::Dimensions as _;
+use crate::index::{Column, Line};
+use crate::osc_cwd::OscEvent;
+use crate::sync::FairMutex;
+use crate::term::Term;
+use crate::{thread, tty};
+use vte::ansi;
+
+/// Max bytes to read from the PTY before forced terminal synchronization.
+pub(crate) const READ_BUFFER_SIZE: usize = 0x10_0000;
+
+/// Max bytes to read from the PTY while the terminal is locked.
+const MAX_LOCKED_READ: usize = u16::MAX as usize;
+
+/// ConPTY 光标对账的静默期：最后一次 resize 提交后等这么久再探针，给
+/// conhost 的内部整理（缓冲区塌缩/重锚）和 shell 的 resize 反应留时间。
+const ALIGN_DELAY: Duration = Duration::from_millis(120);
+
+/// Resize diagnostics are opt-in because PTY reads are a hot path. The trace
+/// records the local grid state at the exact stream boundaries where bytes are
+/// parsed or a resize is committed (`SLTERM_RESIZE_TRACE=1`).
+fn resize_trace_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("SLTERM_RESIZE_TRACE").is_some())
+}
+
+fn trace_terminal_state<U: EventListener>(stage: &str, terminal: &Term<U>) {
+    if !resize_trace_enabled() {
+        return;
+    }
+
+    // PowerShell's configured prompt uses U+276F. Recording every visible
+    // occurrence exposes stale prompt rows immediately after a reflow.
+    let mut prompt_rows = Vec::new();
+    for row in 0..terminal.screen_lines() {
+        if (0..terminal.columns())
+            .any(|column| terminal.grid()[Line(row as i32)][Column(column)].c == '❯')
+        {
+            prompt_rows.push(row);
+        }
+    }
+
+    let cursor = terminal.grid().cursor.point;
+    eprintln!(
+        "[slterm:resize-trace] {stage} grid={}x{} cursor={}:{} wrap={} history={} display_offset={} prompts={prompt_rows:?}",
+        terminal.columns(),
+        terminal.screen_lines(),
+        cursor.line.0,
+        cursor.column.0,
+        terminal.grid().cursor.input_needs_wrap,
+        terminal.history_size(),
+        terminal.grid().display_offset(),
+    );
+}
+
+/// One coalesced resize waiting at a stream boundary.
+///
+/// `notify_pty` records whether the child must see the resize: the geometry is
+/// the same either way, only the child's awareness of it differs.
+#[derive(Copy, Clone, Debug)]
+struct PendingResize {
+    window_size: WindowSize,
+    notify_pty: bool,
+}
+
+/// conhost 的一次光标真值读数。
+#[derive(Copy, Clone, Debug)]
+struct ConhostCursor {
+    /// 视口相对行（0 基）。
+    row: usize,
+    /// conhost 自己的视口高度，用来判断新尺寸有没有落地。
+    rows: u16,
+}
+
+/// 向 conhost 要光标真值：临时 `AttachConsole` 到 ConPTY 子进程的控制台，
+/// 读 `GetConsoleScreenBufferInfo`，换算成视口相对行（0 基）。
+///
+/// 进程同一时刻只能挂一个控制台，多 pane 并发对账用全局锁串行化；每次
+/// 探针都 attach→读→detach，窗口只有微秒级。Slterm 主进程是 GUI 子系统
+/// （自身无控制台），detach 后回到无控制台状态，不影响任何组件。失败
+/// （子进程已退出、权限等）一律返回 None，对账静默放弃。
+fn conpty_cursor_probe(pid: u32) -> Option<ConhostCursor> {
+    use std::sync::Mutex;
+
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE,
+    };
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    };
+    use windows_sys::Win32::System::Console::{
+        AttachConsole, CONSOLE_SCREEN_BUFFER_INFO, FreeConsole, GetConsoleScreenBufferInfo,
+    };
+
+    static ATTACH_LOCK: Mutex<()> = Mutex::new(());
+    let _guard = ATTACH_LOCK.lock().ok()?;
+
+    // SAFETY: 纯 Win32 控制台句柄操作；FreeConsole 对无控制台进程是无害
+    // no-op，收尾的 FreeConsole 恢复 GUI 进程的无控制台状态。
+    unsafe {
+        FreeConsole();
+        if AttachConsole(pid) == 0 {
+            return None;
+        }
+        let mut conout: Vec<u16> = "CONOUT$\0".encode_utf16().collect();
+        let handle = CreateFileW(
+            conout.as_mut_ptr(),
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            0,
+            std::ptr::null_mut(),
+        );
+        if handle == INVALID_HANDLE_VALUE {
+            FreeConsole();
+            return None;
+        }
+        let mut info: CONSOLE_SCREEN_BUFFER_INFO = std::mem::zeroed();
+        let ok = GetConsoleScreenBufferInfo(handle, &mut info);
+        CloseHandle(handle);
+        FreeConsole();
+        if ok == 0 {
+            return None;
+        }
+        let row = i32::from(info.dwCursorPosition.Y) - i32::from(info.srWindow.Top);
+        let rows = i32::from(info.srWindow.Bottom) - i32::from(info.srWindow.Top) + 1;
+        Some(ConhostCursor {
+            row: usize::try_from(row).ok()?,
+            rows: u16::try_from(rows.max(0)).ok()?,
+        })
+    }
+}
+
+/// 本地 PTY 与远端传输共用的有状态终端字节流处理器。
+/// OSC 提取必须紧贴 VT 解析，避免两类会话产生不同的目录、命令和图片状态。
+#[derive(Default)]
+pub struct StreamProcessor {
+    parser: ansi::Processor,
+    cwd_sniffer: crate::osc_cwd::CwdSniffer,
+    window_size: Option<WindowSize>,
+}
+
+impl StreamProcessor {
+    pub fn resize(&mut self, window_size: WindowSize) {
+        self.window_size = Some(window_size);
+    }
+
+    pub fn next_sync_timeout(&self) -> Option<Instant> {
+        self.parser.sync_timeout().sync_timeout()
+    }
+
+    pub fn sync_bytes_count(&self) -> usize {
+        self.parser.sync_bytes_count()
+    }
+
+    pub fn stop_sync<U: EventListener>(&mut self, terminal: &mut Term<U>) {
+        terminal.cancel_redraw_anchor();
+        self.parser.stop_sync(terminal);
+    }
+
+    fn advance<U: EventListener>(&mut self, terminal: &mut Term<U>, bytes: &[u8]) {
+        // VTE 0.15 在约 2 MiB 时强制提交同步缓冲；提前取消兼容锚点，
+        // 但不强制结束/截断输出。分块保证单次大输入也不会绕过检查。
+        for chunk in bytes.chunks(4096) {
+            if self.parser.sync_bytes_count() >= 1024 * 1024 {
+                terminal.cancel_redraw_anchor();
+            }
+            self.parser.advance(terminal, chunk);
+        }
+    }
+
+    pub fn feed<U: EventListener>(
+        &mut self,
+        terminal: &mut Term<U>,
+        event_proxy: &U,
+        bytes: &[u8],
+    ) {
+        let osc_events = self.cwd_sniffer.feed(bytes);
+        let mut advanced = 0;
+        for (offset, event) in osc_events {
+            // Titles and shell identity/cwd reports must retain wire order:
+            // coalescing a remote cwd past a parent prompt would attribute that
+            // directory to the parent shell's completion history.
+            self.advance(terminal, &bytes[advanced..offset]);
+            advanced = offset;
+            match event {
+                OscEvent::Cwd(cwd) => event_proxy.send_event(Event::CwdReport(cwd)),
+                OscEvent::CommandStart => {
+                    terminal.slterm_end_prompt();
+                    event_proxy.send_event(Event::CommandStart);
+                }
+                OscEvent::CommandDone { exit_code } => {
+                    terminal.slterm_end_prompt();
+                    event_proxy.send_event(Event::CommandDone { exit_code })
+                }
+                OscEvent::UserVar { name, value } => {
+                    event_proxy.send_event(Event::UserVar { name, value })
+                }
+                OscEvent::Notify(text) => event_proxy.send_event(Event::Notify(text)),
+                OscEvent::Progress { state, value } => {
+                    event_proxy.send_event(Event::Progress { state, value })
+                }
+                OscEvent::PromptMark => {
+                    terminal.slterm_add_prompt_mark();
+                }
+                OscEvent::PromptInput => terminal.slterm_mark_prompt_input(),
+                OscEvent::InlineImage {
+                    data,
+                    width,
+                    height,
+                } => {
+                    let (cell_w, cell_h) = self.window_size.map_or((9.0, 20.0), |ws| {
+                        (f32::from(ws.cell_width), f32::from(ws.cell_height))
+                    });
+                    let max_w = terminal.columns() as f32 * cell_w;
+                    let scale = (max_w / width as f32).min(1.0);
+                    let disp_w = width as f32 * scale;
+                    let disp_h = height as f32 * scale;
+                    let rows = (disp_h / cell_h).ceil().max(1.0) as usize;
+                    let abs_line = terminal.slterm_cursor_abs_line();
+                    for _ in 0..=rows {
+                        self.advance(terminal, b"\r\n");
+                    }
+                    event_proxy.send_event(Event::InlineImage {
+                        data: std::sync::Arc::new(data),
+                        abs_line,
+                        width: disp_w,
+                        height: disp_h,
+                    });
+                }
+            }
+        }
+        self.advance(terminal, &bytes[advanced..]);
+    }
+}
+
+/// Messages that may be sent to the `EventLoop`.
+#[derive(Debug)]
+pub enum Msg {
+    /// Data that should be written to the PTY.
+    Input(Cow<'static, [u8]>),
+
+    /// Indicates that the `EventLoop` should shut down, as Slterm is shutting down.
+    Shutdown,
+
+    /// Instruction to resize the PTY.
+    Resize(WindowSize),
+
+    /// Reflow the local grid to a new geometry without telling the child.
+    ///
+    /// Keep local grid reflow separate from notifying the child. The legacy shell
+    /// has always done this (`window_context/split.rs`: grids every drag tick,
+    /// PTYs on settle). The
+    /// two halves have opposite cost profiles: a client-side reflow is cheap and
+    /// reversible, while every `ResizePseudoConsole` makes conhost rewrap its
+    /// own buffer, and those rewraps accumulate cursor-row drift that nothing
+    /// can undo. So the grid follows the pointer frame by frame — the viewport
+    /// on screen is always a real reflow of the real geometry — and only the
+    /// child is debounced.
+    ///
+    /// Goes through the same channel as `Resize` on purpose: the resize branch
+    /// drains everything readable against the old geometry first, so absolute
+    /// CUP sequences produced at the old width are never parsed into the new
+    /// grid. A UI thread reaching into `Term::resize` directly would skip that.
+    ResizeGrid(WindowSize),
+}
+
+/// The main event loop.
+///
+/// Handles all the PTY I/O and runs the PTY parser which updates terminal
+/// state.
+pub struct EventLoop<T: tty::EventedPty, U: EventListener> {
+    poll: Arc<Poller>,
+    pty: T,
+    rx: PeekableReceiver<Msg>,
+    tx: Sender<Msg>,
+    terminal: Arc<FairMutex<Term<U>>>,
+    event_proxy: U,
+    drain_on_exit: bool,
+}
+
+impl<T, U> EventLoop<T, U>
+where
+    T: tty::EventedPty + event::OnResize + Send + 'static,
+    U: EventListener + Send + 'static,
+{
+    /// Create a new event loop.
+    pub fn new(
+        terminal: Arc<FairMutex<Term<U>>>,
+        event_proxy: U,
+        pty: T,
+        drain_on_exit: bool,
+    ) -> io::Result<EventLoop<T, U>> {
+        let (tx, rx) = mpsc::channel();
+        let poll = Poller::new()?.into();
+        Ok(EventLoop {
+            poll,
+            pty,
+            tx,
+            rx: PeekableReceiver::new(rx),
+            terminal,
+            event_proxy,
+            drain_on_exit,
+        })
+    }
+
+    pub fn channel(&self) -> EventLoopSender {
+        EventLoopSender {
+            sender: self.tx.clone(),
+            poller: self.poll.clone(),
+        }
+    }
+
+    /// Drain the channel.
+    ///
+    /// Returns `Err(())` when a shutdown message was received; otherwise the
+    /// last resize in this channel batch is returned for an ordered commit.
+    fn drain_recv_channel(&mut self, state: &mut State) -> Result<Option<PendingResize>, ()> {
+        // Resize storms (live window drags) queue faster than
+        // ResizePseudoConsole drains them — the console host performs a full
+        // viewport reflow per call. Within one drain only the newest size
+        // matters: intermediate sizes carry no information (the next message
+        // supersedes them), and the final size is never dropped because it is
+        // always the last one seen. The slower the host reflows, the more
+        // sizes pile up per drain and the harder the coalescing works.
+        //
+        // Grid-only and full resizes coalesce into the same slot, and a full
+        // resize never loses to a later grid-only one: the child must still be
+        // told about the geometry it is already producing output for. The
+        // reverse is fine — a full resize supersedes a pending grid-only one,
+        // because it reflows the grid too.
+        let mut resize: Option<PendingResize> = None;
+        while let Some(msg) = self.rx.recv() {
+            match msg {
+                Msg::Input(input) => state.write_list.push_back(input),
+                Msg::Resize(window_size) => {
+                    resize = Some(PendingResize {
+                        window_size,
+                        notify_pty: true,
+                    })
+                }
+                Msg::ResizeGrid(window_size) => {
+                    let notify_pty = resize.is_some_and(|pending| pending.notify_pty);
+                    resize = Some(PendingResize {
+                        window_size,
+                        notify_pty,
+                    });
+                }
+                Msg::Shutdown => return Err(()),
+            }
+        }
+
+        Ok(resize)
+    }
+
+    /// 向 conhost 要光标真值并把本地网格滚到同一坐标系。
+    ///
+    /// `expect_rows` 非 None 时只采信视口高度已经等于该值的读数：
+    /// `ResizePseudoConsole` 之后 conhost 若还停在旧几何，它报的行号属于上一
+    /// 个坐标系，照它对账会把网格滚到更错的位置。宁可放弃这一次——死线上的
+    /// 兜底探针会再来一遍。
+    fn realign_to_conpty(&mut self, stage: &str, expect_rows: Option<u16>) {
+        let Some(probe) = self.pty.child_pid().and_then(conpty_cursor_probe) else {
+            return;
+        };
+        if resize_trace_enabled() {
+            eprintln!(
+                "[slterm:resize-trace] {stage} conhost row={} rows={} expect_rows={expect_rows:?}",
+                probe.row, probe.rows,
+            );
+        }
+        if expect_rows.is_some_and(|rows| rows != probe.rows) {
+            return;
+        }
+        let mut terminal = self.terminal.lock();
+        trace_terminal_state(&format!("before-{stage}"), &terminal);
+        terminal.conpty_realign(probe.row);
+        trace_terminal_state(&format!("after-{stage}"), &terminal);
+        drop(terminal);
+        self.event_proxy.send_event(Event::Wakeup);
+    }
+
+    #[inline]
+    fn pty_read(&mut self, state: &mut State, buf: &mut [u8]) -> io::Result<usize> {
+        let mut unprocessed = 0;
+        let mut processed = 0;
+
+        // Reserve the next terminal lock for PTY reading.
+        let _terminal_lease = Some(self.terminal.lease());
+        let mut terminal = None;
+
+        loop {
+            // Read from the PTY.
+            match self.pty.reader().read(&mut buf[unprocessed..]) {
+                // This is received on Windows/macOS when no more data is readable from the PTY.
+                Ok(0) if unprocessed == 0 => break,
+                Ok(got) => {
+                    // Startup profiling: the process-wide first PTY output ≈
+                    // the console host finished its bring-up handshake and
+                    // the shell started talking. The first chunks are dumped
+                    // escaped so a silent boot can be aligned with the host's
+                    // handshake byte for byte.
+                    {
+                        use std::sync::atomic::{AtomicUsize, Ordering};
+                        static CHUNKS: AtomicUsize = AtomicUsize::new(0);
+                        let index = CHUNKS.fetch_add(1, Ordering::Relaxed);
+                        if index == 0 {
+                            crate::pty_trace("first conout bytes");
+                        }
+                        if index < 12 {
+                            let shown = &buf[unprocessed..unprocessed + got.min(200)];
+                            crate::pty_trace(&format!(
+                                "conout chunk {index} ({got} bytes): {}",
+                                shown.escape_ascii()
+                            ));
+                        }
+                    }
+                    unprocessed += got;
+                }
+                Err(err) => match err.kind() {
+                    ErrorKind::Interrupted | ErrorKind::WouldBlock => {
+                        // Go back to mio if we're caught up on parsing and the PTY would block.
+                        if unprocessed == 0 {
+                            break;
+                        }
+                    }
+                    _ => return Err(err),
+                },
+            }
+
+            // Attempt to lock the terminal.
+            let terminal = match &mut terminal {
+                Some(terminal) => terminal,
+                None => terminal.insert(match self.terminal.try_lock_unfair() {
+                    // Force block if we are at the buffer size limit.
+                    None if unprocessed >= READ_BUFFER_SIZE => self.terminal.lock_unfair(),
+                    None => continue,
+                    Some(terminal) => terminal,
+                }),
+            };
+
+            state
+                .stream
+                .feed(&mut **terminal, &self.event_proxy, &buf[..unprocessed]);
+            trace_terminal_state("after-pty-read", terminal);
+
+            processed += unprocessed;
+            unprocessed = 0;
+
+            // Assure we're not blocking the terminal too long unnecessarily.
+            if processed >= MAX_LOCKED_READ {
+                break;
+            }
+        }
+
+        // Queue terminal redraw unless all processed bytes were synchronized.
+        if state.stream.sync_bytes_count() < processed && processed > 0 {
+            self.event_proxy.send_event(Event::Wakeup);
+        }
+
+        // Boot profiling: a readable wake that carried no bytes is the
+        // signature of a lost or spurious wakeup; report only the first few.
+        if processed == 0 {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            static EMPTY_READS: AtomicUsize = AtomicUsize::new(0);
+            if EMPTY_READS.fetch_add(1, Ordering::Relaxed) < 8 {
+                crate::pty_trace("pty_read: readable wake with no bytes");
+            }
+        }
+
+        Ok(processed)
+    }
+
+    #[inline]
+    fn pty_write(&mut self, state: &mut State) -> io::Result<()> {
+        state.ensure_next();
+
+        'write_many: while let Some(mut current) = state.take_current() {
+            'write_one: loop {
+                match self.pty.writer().write(current.remaining_bytes()) {
+                    Ok(0) => {
+                        state.set_current(Some(current));
+                        break 'write_many;
+                    }
+                    Ok(n) => {
+                        {
+                            use std::sync::atomic::{AtomicUsize, Ordering};
+                            static WRITES: AtomicUsize = AtomicUsize::new(0);
+                            let index = WRITES.fetch_add(1, Ordering::Relaxed);
+                            if index < 12 {
+                                let shown = &current.remaining_bytes()[..n.min(200)];
+                                crate::pty_trace(&format!(
+                                    "conin write {index} ({n} bytes): {}",
+                                    shown.escape_ascii()
+                                ));
+                            }
+                        }
+                        current.advance(n);
+                        if current.finished() {
+                            state.goto_next();
+                            break 'write_one;
+                        }
+                    }
+                    Err(err) => {
+                        state.set_current(Some(current));
+                        match err.kind() {
+                            ErrorKind::Interrupted | ErrorKind::WouldBlock => break 'write_many,
+                            _ => return Err(err),
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn spawn(mut self) -> JoinHandle<(Self, State)> {
+        thread::spawn_named("PTY reader", move || {
+            let mut state = State::default();
+            let mut buf = [0u8; READ_BUFFER_SIZE];
+
+            let poll_opts = PollMode::Level;
+            let mut interest = PollingEvent::readable(0);
+
+            // Register TTY through EventedRW interface.
+            if let Err(err) = unsafe { self.pty.register(&self.poll, interest, poll_opts) } {
+                error!("Event loop registration error: {err}");
+                return (self, state);
+            }
+
+            let mut events = Events::with_capacity(NonZeroUsize::new(1024).unwrap());
+
+            // Reason the transport died without a child exit, reported after
+            // the loop: without it the app never learns the session is gone
+            // and the tab turns into a zombie (unresponsive input, no notice).
+            let mut failure: Option<String> = None;
+
+            'event_loop: loop {
+                // Wakeup the event loop when a synchronized update timeout or
+                // the pending ConPTY align deadline was reached.
+                let deadline = match (state.stream.next_sync_timeout(), state.align_at) {
+                    (Some(sync), Some(align)) => Some(sync.min(align)),
+                    (sync, align) => sync.or(align),
+                };
+                let timeout = deadline.map(|at| at.saturating_duration_since(Instant::now()));
+
+                events.clear();
+                if let Err(err) = self.poll.wait(&mut events, timeout) {
+                    match err.kind() {
+                        ErrorKind::Interrupted => continue,
+                        _ => {
+                            error!("Event loop polling error: {err}");
+                            failure = Some(format!("event loop polling error: {err}"));
+                            break 'event_loop;
+                        }
+                    }
+                }
+
+                // ConPTY 光标对账到点：向 conhost 要真值并把本地网格滚到同
+                // 一坐标系（机理见 `Term::conpty_realign`）。这是兜底的一次
+                // ——resize 边界上已经同步对过一次账，这里只补 conhost 事后
+                // 才塌缩的情况，所以不校验视口高度。
+                if state.align_at.is_some_and(|at| Instant::now() >= at) {
+                    state.align_at = None;
+                    self.realign_to_conpty("align", None);
+                }
+
+                // Handle synchronized update timeout. The align deadline can
+                // wake the loop early with empty events — only a genuinely
+                // expired sync window may force-stop the synchronized update.
+                if events.is_empty() && self.rx.peek().is_none() {
+                    if state
+                        .stream
+                        .next_sync_timeout()
+                        .is_some_and(|st| Instant::now() >= st)
+                    {
+                        state.stream.stop_sync(&mut *self.terminal.lock());
+                        self.event_proxy.send_event(Event::Wakeup);
+                    }
+                    continue;
+                }
+
+                // Handle channel events, if there are any.
+                let pending_resize = match self.drain_recv_channel(&mut state) {
+                    Ok(resize) => resize,
+                    Err(()) => break,
+                };
+
+                if let Some(PendingResize {
+                    window_size,
+                    notify_pty,
+                }) = pending_resize
+                {
+                    // A resize is a stream boundary, not a UI-side property.
+                    // Drain everything already readable while the grid still
+                    // has the old geometry; otherwise old-width absolute CUP
+                    // output can be parsed into a new-width grid. This is the
+                    // Drain readable bytes against the old grid before the
+                    // size change lands, so CUP sequences keep their geometry.
+                    loop {
+                        match self.pty_read(&mut state, &mut buf) {
+                            Ok(processed) if processed >= MAX_LOCKED_READ => continue,
+                            Ok(_) => break,
+                            Err(err) => {
+                                error!("PTY read before resize failed: {err}");
+                                failure = Some(format!("PTY read before resize failed: {err}"));
+                                break 'event_loop;
+                            }
+                        }
+                    }
+
+                    // Match ConPTY's order: reflow the client model
+                    // first, then ask ConPTY to resize. ResizePseudoConsole is
+                    // synchronous; repaint bytes it produces are consumed by
+                    // the normal readable-event path below against this grid.
+                    {
+                        let mut terminal = self.terminal.lock();
+                        trace_terminal_state("before-resize", &terminal);
+                        terminal.resize(window_size);
+                        trace_terminal_state(
+                            if notify_pty {
+                                "after-resize"
+                            } else {
+                                "after-resize-grid"
+                            },
+                            &terminal,
+                        );
+                    }
+                    // Grid-only: the child keeps the geometry it is producing
+                    // output for, so conhost's buffer is untouched and there is
+                    // nothing to reconcile against — skip both the
+                    // ResizePseudoConsole and the align probe. The reflow above
+                    // is what keeps the viewport on screen honest while a drag
+                    // is still in flight.
+                    if notify_pty {
+                        self.pty.on_resize(window_size);
+                        state.stream.resize(window_size);
+                        // 对账的唯一可信时点就是这里：`ResizePseudoConsole` 是同步
+                        // 的，返回时 conhost 已按新宽度 rewrap 完毕，而本地网格还是
+                        // 纯 reflow 的结果——两侧都没有被重绘字节动过，行号差就是
+                        // 两种折行语义的真实差值。等到下面 pty_read 把 PSReadLine
+                        // 的绝对 CUP 解析进来，光标已经被搬到 conhost 的坐标上，
+                        // 差值归零，判据就永久丢失了（字节取证：分屏后 after-resize
+                        // 是 cursor=15/prompts=[15]，120ms 后的 before-align 已经变成
+                        // cursor=19/prompts=[15]——错位既成事实却测不出来）。
+                        self.realign_to_conpty("align-sync", Some(window_size.num_lines));
+                        // conhost 事后才做的塌缩/重锚探不到，留一次死线兜底；新
+                        // resize 顺延死线，风暴天然合并成一次探针。
+                        state.align_at = Some(Instant::now() + ALIGN_DELAY);
+                        self.event_proxy.send_event(Event::Wakeup);
+                    } else {
+                        self.event_proxy.send_event(Event::Wakeup);
+                    }
+                }
+
+                for event in events.iter() {
+                    match event.key {
+                        tty::PTY_CHILD_EVENT_TOKEN => {
+                            if let Some(tty::ChildEvent::Exited(status)) =
+                                self.pty.next_child_event()
+                            {
+                                if let Some(status) = status {
+                                    self.event_proxy.send_event(Event::ChildExit(status));
+                                }
+                                if self.drain_on_exit {
+                                    let _ = self.pty_read(&mut state, &mut buf);
+                                }
+                                self.terminal.lock().exit();
+                                self.event_proxy.send_event(Event::Wakeup);
+                                break 'event_loop;
+                            }
+                        }
+
+                        tty::PTY_READ_WRITE_TOKEN => {
+                            if event.is_interrupt() {
+                                // Don't try to do I/O on a dead PTY.
+                                continue;
+                            }
+
+                            if event.readable
+                                && let Err(err) = self.pty_read(&mut state, &mut buf)
+                            {
+                                error!("Error reading from PTY in event loop: {err}");
+                                failure = Some(format!("PTY read failed: {err}"));
+                                break 'event_loop;
+                            }
+
+                            if event.writable
+                                && let Err(err) = self.pty_write(&mut state)
+                            {
+                                error!("Error writing to PTY in event loop: {err}");
+                                failure = Some(format!("PTY write failed: {err}"));
+                                break 'event_loop;
+                            }
+                        }
+                        _ => (),
+                    }
+                }
+
+                // Register write interest if necessary.
+                let needs_write = state.needs_write();
+                if needs_write != interest.writable {
+                    interest.writable = needs_write;
+
+                    // Re-register with new interest.
+                    self.pty
+                        .reregister(&self.poll, interest, poll_opts)
+                        .unwrap();
+                }
+            }
+
+            // Announce a transport death exactly like a child exit so the
+            // app's existing teardown runs (`exit()` triggers `Event::Exit`).
+            // The child-exit and shutdown paths leave `failure` unset.
+            if let Some(reason) = failure {
+                self.event_proxy.send_event(Event::PtyFailure(reason));
+                self.terminal.lock().exit();
+                self.event_proxy.send_event(Event::Wakeup);
+            }
+
+            // The evented instances are not dropped here so deregister them explicitly.
+            let _ = self.pty.deregister(&self.poll);
+
+            (self, state)
+        })
+    }
+}
+
+/// Helper type which tracks how much of a buffer has been written.
+struct Writing {
+    source: Cow<'static, [u8]>,
+    written: usize,
+}
+
+pub struct Notifier(pub EventLoopSender);
+
+impl event::Notify for Notifier {
+    fn notify<B>(&self, bytes: B)
+    where
+        B: Into<Cow<'static, [u8]>>,
+    {
+        let bytes = bytes.into();
+        // Terminal hangs if we send 0 bytes through.
+        if bytes.is_empty() {
+            return;
+        }
+
+        let _ = self.0.send(Msg::Input(bytes));
+    }
+}
+
+impl event::OnResize for Notifier {
+    fn on_resize(&mut self, window_size: WindowSize) {
+        let _ = self.0.send(Msg::Resize(window_size));
+    }
+}
+
+impl Notifier {
+    /// Reflow the grid to `window_size` and leave the child on its old size.
+    /// See [`Msg::ResizeGrid`] for why the two halves are split.
+    pub fn on_resize_grid(&mut self, window_size: WindowSize) {
+        let _ = self.0.send(Msg::ResizeGrid(window_size));
+    }
+}
+
+#[derive(Debug)]
+pub enum EventLoopSendError {
+    /// Error polling the event loop.
+    Io(io::Error),
+
+    /// Error sending a message to the event loop.
+    Send(mpsc::SendError<Msg>),
+}
+
+impl Display for EventLoopSendError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            EventLoopSendError::Io(err) => err.fmt(f),
+            EventLoopSendError::Send(err) => err.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for EventLoopSendError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            EventLoopSendError::Io(err) => err.source(),
+            EventLoopSendError::Send(err) => err.source(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct EventLoopSender {
+    sender: Sender<Msg>,
+    poller: Arc<Poller>,
+}
+
+impl EventLoopSender {
+    /// 为非 PTY 传输创建消息通道，继续复用应用既有的输入、缩放和关闭协议。
+    pub fn standalone() -> io::Result<(Self, Receiver<Msg>)> {
+        let (sender, receiver) = mpsc::channel();
+        Ok((
+            Self {
+                sender,
+                poller: Arc::new(Poller::new()?),
+            },
+            receiver,
+        ))
+    }
+
+    pub fn send(&self, msg: Msg) -> Result<(), EventLoopSendError> {
+        self.sender.send(msg).map_err(EventLoopSendError::Send)?;
+        self.poller.notify().map_err(EventLoopSendError::Io)
+    }
+}
+
+/// All of the mutable state needed to run the event loop.
+///
+/// Contains list of items to write, current write state, etc. Anything that
+/// would otherwise be mutated on the `EventLoop` goes here.
+#[derive(Default)]
+pub struct State {
+    write_list: VecDeque<Cow<'static, [u8]>>,
+    writing: Option<Writing>,
+    stream: StreamProcessor,
+    /// ConPTY 光标对账的死线：resize 提交后 `ALIGN_DELAY` 触发，见
+    /// `conpty_cursor_probe`。
+    align_at: Option<Instant>,
+}
+
+impl State {
+    #[inline]
+    fn ensure_next(&mut self) {
+        if self.writing.is_none() {
+            self.goto_next();
+        }
+    }
+
+    #[inline]
+    fn goto_next(&mut self) {
+        self.writing = self.write_list.pop_front().map(Writing::new);
+    }
+
+    #[inline]
+    fn take_current(&mut self) -> Option<Writing> {
+        self.writing.take()
+    }
+
+    #[inline]
+    fn needs_write(&self) -> bool {
+        self.writing.is_some() || !self.write_list.is_empty()
+    }
+
+    #[inline]
+    fn set_current(&mut self, new: Option<Writing>) {
+        self.writing = new;
+    }
+}
+
+impl Writing {
+    #[inline]
+    fn new(c: Cow<'static, [u8]>) -> Writing {
+        Writing {
+            source: c,
+            written: 0,
+        }
+    }
+
+    #[inline]
+    fn advance(&mut self, n: usize) {
+        self.written += n;
+    }
+
+    #[inline]
+    fn remaining_bytes(&self) -> &[u8] {
+        &self.source[self.written..]
+    }
+
+    #[inline]
+    fn finished(&self) -> bool {
+        self.written >= self.source.len()
+    }
+}
+
+struct PeekableReceiver<T> {
+    rx: Receiver<T>,
+    peeked: Option<T>,
+}
+
+impl<T> PeekableReceiver<T> {
+    fn new(rx: Receiver<T>) -> Self {
+        Self { rx, peeked: None }
+    }
+
+    fn peek(&mut self) -> Option<&T> {
+        if self.peeked.is_none() {
+            self.peeked = self.rx.try_recv().ok();
+        }
+
+        self.peeked.as_ref()
+    }
+
+    fn recv(&mut self) -> Option<T> {
+        if self.peeked.is_some() {
+            self.peeked.take()
+        } else {
+            match self.rx.try_recv() {
+                Err(TryRecvError::Disconnected) => panic!("event loop channel closed"),
+                res => res.ok(),
+            }
+        }
+    }
+}

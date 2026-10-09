@@ -7,3 +7,4 @@ root slterm_settings
 root slterm_split
 root scripts
 root tools
+slterm_terminal/src/term/mod.rs 2724
