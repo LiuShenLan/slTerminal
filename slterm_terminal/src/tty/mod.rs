@@ -12,7 +12,7 @@ pub mod windows;
 pub use self::windows::*;
 
 /// Configuration for the `Pty` interface.
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Options {
     /// Shell options.
     ///
@@ -38,9 +38,30 @@ pub struct Options {
     pub escape_args: bool,
 
     /// ConPTY 侧载开关：由壳读 settings 键注入（键域归 06 篇），core 不内嵌
-    /// 路径推导。置位时优先 exe 旁完整文件对 / NuGet 提取的 conpty.dll +
-    /// OpenConsole.exe，缺失回退系统 API。
+    /// 路径推导。置位时优先 exe 旁完整文件对 /（Win10）NuGet 提取的
+    /// conpty.dll + OpenConsole.exe，缺失回退系统 API。默认 true——侧载
+    /// host 避免 in-box resize 视口重发怪癖与老 Win10 鼠标转发缺失；单文件
+    /// exe 发布形态下 Win10 提取链必须默认可达。
     pub conpty_sideload: bool,
+
+    /// ConPTY 输入模式能力矩阵（DTO 字段语义归 02 篇锚定）：壳读 settings
+    /// 键注入；默认矩阵 = 现状三态零漂移（0x1/0x2/0x4 开、0x8 关）。
+    pub conpty_input_modes: windows::ConptyInputModes,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            shell: None,
+            working_directory: None,
+            drain_on_exit: false,
+            env: HashMap::new(),
+            env_is_complete: false,
+            escape_args: false,
+            conpty_sideload: true,
+            conpty_input_modes: windows::ConptyInputModes::default(),
+        }
+    }
 }
 
 /// Shell options.
@@ -109,6 +130,15 @@ pub trait EventedPty: EventedReadWrite {
     /// (`AttachConsole` + `GetConsoleScreenBufferInfo`).
     fn child_pid(&self) -> Option<u32> {
         None
+    }
+
+    /// 窗口外 DSR 查询剥离门控（DA1/DSR 接管族，event_loop 读侧消费）。
+    /// Windows ConPTY 后端按 OS build 预计算覆写：Win10 家族 = true（键
+    /// 事件输入下 CPR 应答即 F3 毒键，剥离不答）；其他后端默认 false
+    /// （DSR 透传，交 Term 以真实光标自答）。默认方法承载平台分叉，core
+    /// 读侧不出现 cfg。
+    fn strip_dsr_queries(&self) -> bool {
+        false
     }
 }
 

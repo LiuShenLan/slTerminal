@@ -9,6 +9,7 @@ use windows_sys::Win32::System::Threading::TerminateProcess;
 
 use crate::event::{OnResize, WindowSize};
 use crate::tty::windows::child::ChildExitWatcher;
+use crate::tty::windows::spawn::JobHandle;
 use crate::tty::{ChildEvent, EventedPty, EventedReadWrite, Options, Shell};
 
 mod blocking;
@@ -16,12 +17,17 @@ mod child;
 mod cmd_prompt;
 mod conpty;
 mod environment;
+mod shell;
+mod spawn;
 
 use blocking::{UnblockedReader, UnblockedWriter};
 use conpty::Conpty as Backend;
+pub use conpty::{ConptyStatus, conpty_status};
 pub use environment::refresh_environment;
 use miow::pipe::{AnonRead, AnonWrite};
 use polling::{Event, Poller};
+pub use shell::{ShellKind, resolve_shell, shell_kind_of};
+pub use spawn::{ConptyInputModes, MAX_PTY_SESSIONS, compute_conpty_flags};
 
 pub const PTY_CHILD_EVENT_TOKEN: usize = 1;
 pub const PTY_READ_WRITE_TOKEN: usize = 2;
@@ -36,10 +42,30 @@ pub struct Pty {
     conout: ReadPipe,
     conin: WritePipe,
     child_watcher: ChildExitWatcher,
+    /// Job Object 句柄（KILL_ON_JOB_CLOSE 孤儿防护）——会话期间持有；
+    /// 字段序最末：drop 时最后释放，子进程树由 OS 兜底清空（父崩溃路径
+    /// 同理经句柄回收触发同一语义）。
+    _job: Option<JobHandle>,
+    /// 窗口外 DSR 剥离门控：spawn 时按 OS build 预计算（Win10 家族 = true，
+    /// 键事件输入下 CPR 应答即 F3 毒键；Win11+ = false，交 Term 实答）。
+    strip_dsr: bool,
 }
 
+/// PTY 创建入口：`SPAWN_LOCK` 串行化 + 会话容量上限（spawn 规则层）包住
+/// `conpty::new` 的 create + spawn 段（BE-12 锁界）。
 pub fn new(config: &Options, window_size: WindowSize) -> Result<Pty> {
-    conpty::new(config, window_size)
+    // SEC-01：用户指定 shell 经白名单深检（core 唯一进程创建口）。
+    if let Some(shell) = &config.shell {
+        shell::validate_shell_allowlist(shell.program())?;
+    }
+    spawn::spawn_locked(config, window_size)
+}
+
+/// Windows 真实 build 号（RtlGetNtVersionNumbers 低 28 位；高 4 位是构建
+/// 类型标志）。ConPTY flags 门控 / Win10 捆绑判定 / DSR 毒链判定共用。
+pub(crate) fn get_windows_build_number() -> io::Result<u32> {
+    let (_, _, build) = nt_version::get();
+    Ok(build & 0x0FFF_FFFF)
 }
 
 impl Pty {
@@ -48,12 +74,16 @@ impl Pty {
         conout: impl Into<ReadPipe>,
         conin: impl Into<WritePipe>,
         child_watcher: ChildExitWatcher,
+        job: Option<JobHandle>,
+        strip_dsr: bool,
     ) -> Self {
         Self {
             backend: backend.into(),
             conout: conout.into(),
             conin: conin.into(),
             child_watcher,
+            _job: job,
+            strip_dsr,
         }
     }
 
@@ -78,6 +108,8 @@ impl Drop for Pty {
         // slterm.exe lingers in task manager" failure. Hand conout to a
         // detached drain thread so the flush always has a consumer.
         self.conout.drain_detached();
+        // 会话计数归还（与 spawn::spawn_locked 的占用登记配对）。
+        spawn::session_closed();
     }
 }
 
@@ -156,6 +188,10 @@ impl EventedPty for Pty {
     fn child_pid(&self) -> Option<u32> {
         self.child_watcher.pid().map(std::num::NonZeroU32::get)
     }
+
+    fn strip_dsr_queries(&self) -> bool {
+        self.strip_dsr
+    }
 }
 
 impl OnResize for Pty {
@@ -194,12 +230,12 @@ fn push_escaped_arg(cmd: &mut String, arg: &str) {
     }
 }
 
-/// 默认 shell 占位：M2.3 由 `tty/windows/shell.rs` 的 `resolve_shell`
-/// 探测链（pwsh → powershell → cmd 存在性探测 + 白名单深检 + pwsh
-/// EncodedCommand 集成）接管。上游此处经 Lua 设置 + bash/WSL 探测的形态
-/// 不迁（spec 分片 02 不采纳点 2/3）。
+/// 默认 shell：`shell::resolve_shell` 探测链（pwsh → powershell → cmd
+/// 存在性探测 + 白名单深检 + pwsh EncodedCommand 集成）。理论不可达 Err
+/// （cmd 回退经系统目录兜底恒可达）——防御性回退字面量 cmd.exe。
 fn resolved_default_shell() -> Shell {
-    Shell::new("powershell.exe".to_owned(), Vec::new())
+    shell::resolve_shell(None)
+        .unwrap_or_else(|_| Shell::new(r"C:\Windows\System32\cmd.exe".to_owned(), Vec::new()))
 }
 
 fn cmdline(config: &Options) -> String {
@@ -279,8 +315,10 @@ mod test {
             env: Default::default(),
             env_is_complete: false,
             escape_args: false,
-            // 上游此字面量之后的增量字段:M2.1 `conpty_sideload` 全域化。
+            // 上游此字面量之后的增量字段:M2.1 `conpty_sideload` 全域化,
+            // M2.3 `conpty_input_modes`(矩阵默认三态)。
             conpty_sideload: false,
+            conpty_input_modes: Default::default(),
         };
         assert_eq!(cmdline(&options), "echo hello world");
 

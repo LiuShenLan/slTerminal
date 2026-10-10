@@ -8,3 +8,4 @@ root slterm_split
 root scripts
 root tools
 slterm_terminal/src/term/mod.rs 2729
+slterm_terminal/src/event_loop.rs 2055

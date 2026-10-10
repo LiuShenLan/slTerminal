@@ -25,16 +25,100 @@ use windows_sys::Win32::System::Threading::{
     CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DeleteProcThreadAttributeList,
     EXTENDED_STARTUPINFO_PRESENT, InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST,
     PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOEXW,
-    STARTUPINFOW, UpdateProcThreadAttribute,
+    STARTUPINFOW, TerminateProcess, UpdateProcThreadAttribute,
 };
 
 use crate::event::{OnResize, WindowSize};
 use crate::tty::Options;
 use crate::tty::windows::blocking::{UnblockedReader, UnblockedWriter};
 use crate::tty::windows::child::ChildExitWatcher;
+use crate::tty::windows::spawn::{self, FLAG_WIN32_INPUT_MODE, compute_conpty_flags};
 use crate::tty::windows::{Pty, cmdline, win32_string};
 
 const PIPE_CAPACITY: usize = crate::event_loop::READ_BUFFER_SIZE;
+
+/// Win10/Win11 分界 build：捆绑判定（`should_bundle`）与 flags 0x4 门控
+/// （`compute_conpty_flags`）、DSR 毒链判定（`conhost_input_corrupts_cpr`）
+/// 共用单常量——同为 ConPTY 兼容分界，Win10/Win11 分叉同源。
+pub(crate) const CONPTY_WIN11_MIN_BUILD: u32 = 21376;
+
+// NuGet `Microsoft.Windows.Console.ConPTY` 1.24.260710001 官方构建（来源与
+// 哈希见 vendor/conpty/README.md）。`include_bytes!` 嵌入保持单文件 exe
+// 发布形态；仅 Win10（build < 21376）且 exe 旁文件对缺失时提取到
+// %LOCALAPPDATA% 加载（两阶段加载链，见 ConptyApi::new）。
+const CONPTY_DLL_BYTES: &[u8] = include_bytes!("../../../vendor/conpty/conpty.dll");
+const OPENCONSOLE_EXE_BYTES: &[u8] = include_bytes!("../../../vendor/conpty/OpenConsole.exe");
+
+/// ConPTY 后端状态（回退可观测；壳 toast 降级提示数据源，消费归 09 篇）。
+///
+/// `fallback_reason` 与 warn 日志同一来源变量——日志与查询面零漂移。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConptyStatus {
+    /// 本次是否尝试了侧载加载（`Options::conpty_sideload` 置位时）。
+    pub attempted: bool,
+    /// 实际是否走侧载 conhost（OpenConsole）。
+    pub bundled: bool,
+    /// 回退原因（attempted && !bundled 时有值）。
+    pub fallback_reason: Option<String>,
+}
+
+/// 状态记录槽：每次 `ConptyApi::new`（即每次 Pty 创建）覆盖记录——观测
+/// 「当前生效后端」，非进程级一次性快照（同一进程内不同 Pty 可能落到
+/// 不同后端，如首次提取失败后 Defender 放行再试成功）。
+static STATUS: parking_lot::Mutex<ConptyStatus> = parking_lot::Mutex::new(ConptyStatus {
+    attempted: false,
+    bundled: false,
+    fallback_reason: None,
+});
+
+fn record_status(status: ConptyStatus) {
+    *STATUS.lock() = status;
+}
+
+/// 查询 ConPTY 后端状态（Win10 回退可观测）。
+pub fn conpty_status() -> ConptyStatus {
+    STATUS.lock().clone()
+}
+
+/// 决策纯函数：仅 Win10（build < 21376）尝试 NuGet 捆绑提取。
+pub(crate) fn should_bundle(build_number: u32) -> bool {
+    build_number < CONPTY_WIN11_MIN_BUILD
+}
+
+/// 决策纯函数：Win10 家族（build < 21376，含捆绑与回退路径）conhost 键事件
+/// 输入模式会把 CPR 应答（CSI 1;1R）解析为 F3 键（PSReadLine CharacterSearch
+/// 吞掉下一个输入字符）——该传输层上 CPR 字节写入 stdin 即是毒（其他位置
+/// 形态被键事件引擎丢弃，应用永远拿不到真值）。DSR 查询在此类主机上只能
+/// 剥离不答；Win11+ inbox conhost 传输正常，交 Term 以真实光标自答。
+/// 阈值与 `should_bundle` 同源（Win10/Win11 分界），语义独立不复用其名。
+pub(crate) fn conhost_input_corrupts_cpr(build_number: u32) -> bool {
+    build_number < CONPTY_WIN11_MIN_BUILD
+}
+
+/// 提取目标目录：`%LOCALAPPDATA%\slterm\conpty`（纯路径构造，便于测试注入）。
+pub(crate) fn extraction_dir_from(localappdata: &Path) -> PathBuf {
+    localappdata.join("slterm").join("conpty")
+}
+
+/// 幂等提取：已存在且大小与嵌入一致 → 复用；否则覆盖重写（vendor 升级自愈）。
+pub(crate) fn ensure_extracted(dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    write_if_size_differs(&dir.join("conpty.dll"), CONPTY_DLL_BYTES)?;
+    write_if_size_differs(&dir.join("OpenConsole.exe"), OPENCONSOLE_EXE_BYTES)?;
+    Ok(())
+}
+
+/// 大小一致跳过写入；缺失或大小不一致时覆盖（嵌入内容编译期固定，大小
+/// 判定足够）。
+fn write_if_size_differs(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let matches = std::fs::metadata(path)
+        .map(|m| m.len() == bytes.len() as u64)
+        .unwrap_or(false);
+    if !matches {
+        std::fs::write(path, bytes)?;
+    }
+    Ok(())
+}
 
 /// Load the pseudoconsole API from conpty.dll if possible, otherwise use the
 /// standard Windows API.
@@ -74,45 +158,94 @@ impl Drop for ConptyLibrary {
 impl ConptyApi {
     /// `sideload` 来自 `Options.conpty_sideload`（壳读 settings 键注入，
     /// 键域归 06 篇；core 不内嵌设置文件读取——上游读 slterm_settings.txt
-    /// 的 `openconsole=off` 形态不迁）。
-    fn new(sideload: bool) -> Self {
-        // Side-by-side conpty.dll + OpenConsole.exe is the DEFAULT: the
-        // bundled host avoids in-box ConPTY's resize viewport re-emit quirks,
-        // which is a stability/correctness call. Opting out buys faster pane
-        // spawn (the unsigned exe pays Defender's real-time scan) at the cost
-        // of relying purely on Slterm's own resize coalescing to keep TUIs
-        // clean.
-        match sideload.then(Self::load_conpty).flatten() {
-            Some(conpty) => {
-                info!("Using conpty.dll (OpenConsole) for pseudoconsole");
-                conpty
-            }
-            None => {
-                info!("Using Windows API for pseudoconsole");
-                Self {
-                    create: CreatePseudoConsole,
-                    resize: ResizePseudoConsole,
-                    close: ClosePseudoConsole,
-                    sideloaded: false,
-                    _library: None,
+    /// 的 `openconsole=off` 形态不迁）。`build_number` 由
+    /// `get_windows_build_number` 注入，决定 Win10 提取臂是否启用。
+    ///
+    /// 两阶段加载链（Win10 兼容全链）：
+    /// ① exe 旁完整文件对（`runtime/` 或 exe 目录）——认证边界：完整对 +
+    ///    绝对路径 `LoadLibraryW`，PATH 同名文件不进边界；
+    /// ② 文件对缺失且 Win10：`include_bytes!` NuGet 捆绑 → `%LOCALAPPDATA%`
+    ///    幂等提取 → 提取目录按同一边界加载（提取失败静默回退，原因记入
+    ///    `ConptyStatus::fallback_reason`）；
+    /// ③ 终回退：系统 CreatePseudoConsole/Resize/Close 函数指针。
+    ///
+    /// Side-by-side conpty.dll + OpenConsole.exe 是默认期望路径：捆绑 host
+    /// 避免了 in-box ConPTY 的 resize 视口重发怪癖与老 Win10 的鼠标转发
+    /// 缺失；关闭侧载换来更快 pane spawn（未签名 exe 付 Defender 实时扫描
+    /// 税），代价是只能靠自身 resize 合并保持 TUI 干净。
+    fn new(sideload: bool, build_number: u32) -> Self {
+        if sideload {
+            match Self::load_sideloaded(build_number) {
+                Ok(conpty) => {
+                    info!("Using conpty.dll (OpenConsole) for pseudoconsole");
+                    record_status(ConptyStatus {
+                        attempted: true,
+                        bundled: true,
+                        fallback_reason: None,
+                    });
+                    return conpty;
+                }
+                Err(reason) => {
+                    // warn 文案与 fallback_reason 同一变量——日志与状态同源零漂移。
+                    warn!("conpty sideload failed, falling back to in-box ConPTY: {reason}");
+                    record_status(ConptyStatus {
+                        attempted: true,
+                        bundled: false,
+                        fallback_reason: Some(reason),
+                    });
                 }
             }
+        } else {
+            record_status(ConptyStatus {
+                attempted: false,
+                bundled: false,
+                fallback_reason: None,
+            });
+        }
+        info!("Using Windows API for pseudoconsole");
+        Self {
+            create: CreatePseudoConsole,
+            resize: ResizePseudoConsole,
+            close: ClosePseudoConsole,
+            sideloaded: false,
+            _library: None,
         }
     }
 
+    /// 侧载加载：① exe 旁完整文件对 → ② Win10 且缺失时 NuGet 提取 →
+    /// 同一认证边界（完整对 + 绝对路径）加载。Err 载荷 = 回退原因。
+    fn load_sideloaded(build_number: u32) -> std::result::Result<Self, String> {
+        let exe_dir = std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|dir| dir.to_path_buf()))
+            .ok_or_else(|| "current_exe 目录解析失败".to_owned())?;
+        if let Some(dir) = bundled_conpty_dir(&exe_dir) {
+            return Self::load_conpty(&dir);
+        }
+        if should_bundle(build_number) {
+            let localappdata = std::env::var_os("LOCALAPPDATA")
+                .map(PathBuf::from)
+                .ok_or_else(|| "LOCALAPPDATA 环境变量缺失".to_owned())?;
+            let dir = extraction_dir_from(&localappdata);
+            ensure_extracted(&dir).map_err(|e| format!("NuGet 捆绑提取失败: {e}"))?;
+            // 提取目录经同一文件对检查加载（runtime/ 子目录不存在的形态由
+            // bundled_conpty_dir 第二候选覆盖）。
+            if let Some(dir) = bundled_conpty_dir(&dir) {
+                return Self::load_conpty(&dir);
+            }
+            return Err("提取后完整文件对仍缺失".to_owned());
+        }
+        Err("complete conpty.dll/OpenConsole.exe pair not found in runtime/ or executable directory"
+            .to_owned())
+    }
+
     /// Try loading ConptyApi from conpty.dll library.
-    fn load_conpty() -> Option<Self> {
+    ///
+    /// `conpty_dir` 必须是已通过 `bundled_conpty_dir` 完整文件对检查的目录
+    /// ——DLL 始终按绝对路径加载，不能让 PATH 中的同名文件进入认证边界。
+    fn load_conpty(conpty_dir: &Path) -> std::result::Result<Self, String> {
         type LoadedFn = unsafe extern "system" fn() -> isize;
 
-        // 只接受同一候选目录中的完整文件对，避免把半套 runtime 与根目录混用。
-        // DLL 始终按绝对路径加载，不能让 PATH 中的同名文件进入认证边界。
-        let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
-        let Some(conpty_dir) = bundled_conpty_dir(&exe_dir) else {
-            info!(
-                "complete conpty.dll/OpenConsole.exe pair not found in runtime/ or executable directory; using in-box ConPTY"
-            );
-            return None;
-        };
         let dll_path = conpty_dir.join("conpty.dll");
         let dll_wide: Vec<u16> = dll_path
             .as_os_str()
@@ -123,14 +256,22 @@ impl ConptyApi {
         unsafe {
             let hmodule = LoadLibraryW(dll_wide.as_ptr());
             if hmodule.is_null() {
-                return None;
+                return Err(format!("LoadLibraryW 失败: {}", dll_path.display()));
             }
             let library = ConptyLibrary(hmodule);
-            let create_fn = GetProcAddress(hmodule, s!("CreatePseudoConsole"))?;
-            let resize_fn = GetProcAddress(hmodule, s!("ResizePseudoConsole"))?;
-            let close_fn = GetProcAddress(hmodule, s!("ClosePseudoConsole"))?;
+            let create_fn = GetProcAddress(hmodule, s!("CreatePseudoConsole"));
+            let resize_fn = GetProcAddress(hmodule, s!("ResizePseudoConsole"));
+            let close_fn = GetProcAddress(hmodule, s!("ClosePseudoConsole"));
+            let (Some(create_fn), Some(resize_fn), Some(close_fn)) =
+                (create_fn, resize_fn, close_fn)
+            else {
+                return Err(format!(
+                    "GetProcAddress 三符号解析失败: {}",
+                    dll_path.display()
+                ));
+            };
 
-            Some(Self {
+            Ok(Self {
                 create: mem::transmute::<LoadedFn, CreatePseudoConsoleFn>(create_fn),
                 resize: mem::transmute::<LoadedFn, ResizePseudoConsoleFn>(resize_fn),
                 close: mem::transmute::<LoadedFn, ClosePseudoConsoleFn>(close_fn),
@@ -153,6 +294,15 @@ pub struct Conpty {
     api: ConptyApi,
 }
 
+/// 终端能力固定注入清单（`convert_custom_env` 末尾叠加，只补缺不覆盖）。
+/// `TERM_PROGRAM=slterm` 与 `tty::setup_env` 的进程级注入同值；产品定位
+/// 不做 terminfo 探测，三项定死。
+const FIXED_ENV_INJECTIONS: &[(&str, &str)] = &[
+    ("TERM", "xterm-256color"),
+    ("COLORTERM", "truecolor"),
+    ("TERM_PROGRAM", "slterm"),
+];
+
 impl Drop for Conpty {
     fn drop(&mut self) {
         // XXX: This will block until the conout pipe is drained. Will cause a deadlock if the
@@ -167,12 +317,14 @@ impl Drop for Conpty {
 unsafe impl Send for Conpty {}
 
 pub fn new(config: &Options, window_size: WindowSize) -> Result<Pty> {
-    // ConPTY decodes CSI ... _ records into native INPUT_RECORDs. This is
-    // required for functional chords such as Codex's Shift+Enter, while
-    // ordinary character input still remains on the normal UTF-8 path.
-    const PSEUDOCONSOLE_WIN32_INPUT_MODE: u32 = 0x4;
+    // build 号获取失败回退 0 → 按老 Win10 处置（尝试捆绑、0x4 不置位、
+    // DSR 剥离）——安全侧降级，与 should_bundle 同源语义。
+    let build_number = super::get_windows_build_number().unwrap_or_else(|error| {
+        warn!("get_windows_build_number failed ({error}); assuming pre-21376 build");
+        0
+    });
 
-    let api = ConptyApi::new(config.conpty_sideload);
+    let api = ConptyApi::new(config.conpty_sideload, build_number);
     crate::pty_trace(if api.sideloaded {
         "conpty api ready (sideloaded OpenConsole)"
     } else {
@@ -204,13 +356,14 @@ pub fn new(config: &Options, window_size: WindowSize) -> Result<Pty> {
         crate::pty_trace("DA1 response primed");
     }
 
-    // Create the Pseudo Console, using the pipes. Win32 input mode (0x4) is
-    // an OpenConsole-era flag: the bundled host always understands it, while
-    // the in-box ConPTY only does on newer Windows builds and fails
-    // CreatePseudoConsole with E_INVALIDARG on older ones. Retry without the
-    // flag instead of dying — a host created flagless never issues DECSET
-    // 9001, the terminal never sets WIN32_INPUT_MODE, and the encoder stays
-    // on the legacy VT path, so the degradation is self-gating end to end.
+    // flags 能力矩阵：0x1/0x2 直取矩阵位；0x4（WIN32_INPUT_MODE）按
+    // `bundled || build >= 21376` 门控；0x8 默认恒关。ConPTY 把 CSI ... _
+    // 记录解码为原生 INPUT_RECORD——Codex Shift+Enter 等功能键依赖 0x4，
+    // 普通字符输入仍走常规 UTF-8 路径。E_INVALIDARG 重试臂保留为「矩阵判了
+    // 0x4 但系统 host 拒」的兜底（preview build 场景）：无 0x4 建出的 host
+    // 永不发 DECSET 9001，终端永不置 WIN32_INPUT_MODE，编码器恒走传统 VT
+    // 路径——降级端到端自门控。
+    let flags = compute_conpty_flags(build_number, api.sideloaded, &config.conpty_input_modes);
     let conin_handle = conin_pty_handle.as_raw_handle() as HANDLE;
     let conout_handle = conout_pty_handle.as_raw_handle() as HANDLE;
     let mut result = unsafe {
@@ -218,11 +371,11 @@ pub fn new(config: &Options, window_size: WindowSize) -> Result<Pty> {
             window_size.into(),
             conin_handle,
             conout_handle,
-            PSEUDOCONSOLE_WIN32_INPUT_MODE,
+            flags,
             &mut pty_handle as *mut _,
         )
     };
-    if result != S_OK {
+    if result != S_OK && flags & FLAG_WIN32_INPUT_MODE != 0 {
         warn!(
             "CreatePseudoConsole rejected win32 input mode (HRESULT {result:#x}); \
              retrying in legacy VT input mode"
@@ -233,7 +386,7 @@ pub fn new(config: &Options, window_size: WindowSize) -> Result<Pty> {
                 window_size.into(),
                 conin_handle,
                 conout_handle,
-                0,
+                flags & !FLAG_WIN32_INPUT_MODE,
                 &mut pty_handle as *mut _,
             )
         };
@@ -268,7 +421,32 @@ pub fn new(config: &Options, window_size: WindowSize) -> Result<Pty> {
     };
     let conin = UnblockedWriter::new(conin, PIPE_CAPACITY);
 
-    Ok(Pty::new(conpty, conout, conin, child_watcher))
+    // Job Object 指派（KILL_ON_JOB_CLOSE 孤儿防护）——紧跟 spawn 之后、任何
+    // 提前返回之前。指派失败即致命：孤儿防护不能静默丢失，先杀已 spawn 的
+    // 子进程再走与 spawn 失败相同的 drain-before-close 收尾。
+    let job = match child_watcher.pid() {
+        Some(pid) => match spawn::add_to_job_object(pid.get()) {
+            Ok(job) => Some(job),
+            Err(error) => {
+                unsafe {
+                    TerminateProcess(child_watcher.raw_handle(), 0);
+                }
+                conout.drain_detached();
+                return Err(error);
+            }
+        },
+        None => None,
+    };
+
+    let strip_dsr = conhost_input_corrupts_cpr(build_number);
+    Ok(Pty::new(
+        conpty,
+        conout,
+        conin,
+        child_watcher,
+        job,
+        strip_dsr,
+    ))
 }
 
 fn spawn_shell(config: &Options, conpty: &Conpty) -> Result<ChildExitWatcher> {
@@ -397,6 +575,21 @@ fn convert_custom_env(
     }
 
     if !env_is_complete {
+        // 终端能力固定注入（custom 之后、继承之前，只补缺不覆盖——custom
+        // 同名键优先）：TERM/COLORTERM 宣告 256 色与 truecolor，TERM_PROGRAM
+        // 标识终端身份；AI CLI 依赖此宣告启用全色（SLTERM_PANE_ID 等变量族
+        // 由壳组装进 custom_env，归 03 篇定义，core 只负责注入时机）。
+        // env_is_complete 不叠加：完整块来自会话持久化快照（快照自身已含
+        // 这些键），一字不差恢复是 complete 的契约。
+        for (key, value) in FIXED_ENV_INJECTIONS {
+            if !custom_env.keys().any(|k| k.eq_ignore_ascii_case(key)) {
+                environment.push(PendingEnvironmentVariable::new(
+                    OsStr::new(key),
+                    OsStr::new(value),
+                ));
+            }
+        }
+
         // Pull the current process environment after, to avoid overwriting the user provided one.
         for (inherited_key, inherited_value) in std::env::vars_os() {
             environment.push(PendingEnvironmentVariable::new(
@@ -510,7 +703,11 @@ impl From<WindowSize> for COORD {
 }
 #[cfg(test)]
 mod runtime_asset_tests {
-    use super::{bundled_conpty_dir, convert_custom_env};
+    use super::{
+        CONPTY_DLL_BYTES, CONPTY_WIN11_MIN_BUILD, ConptyApi, OPENCONSOLE_EXE_BYTES,
+        bundled_conpty_dir, conhost_input_corrupts_cpr, conpty_status, convert_custom_env,
+        ensure_extracted, extraction_dir_from, should_bundle, write_if_size_differs,
+    };
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -611,5 +808,211 @@ mod runtime_asset_tests {
             .collect();
 
         assert_eq!(entries, vec!["a-first=1", "Middle=2", "z-last=3"]);
+    }
+
+    // ─── 固定注入清单（convert_custom_env 末尾叠加）───
+
+    fn block_entries(block: &[u16]) -> Vec<String> {
+        block
+            .split(|character| *character == 0)
+            .filter(|entry| !entry.is_empty())
+            .map(String::from_utf16_lossy)
+            .collect()
+    }
+
+    #[test]
+    fn fixed_env_injections_filled_when_absent() {
+        // 增量合并形态：custom 缺能力键 → 固定清单补缺。
+        let custom = HashMap::from([("SLTERM_REFRESH_TEST".to_owned(), "fresh".to_owned())]);
+        let block = convert_custom_env(&custom, false).expect("environment block");
+        let entries = block_entries(&block);
+        assert!(entries.contains(&"TERM=xterm-256color".to_owned()));
+        assert!(entries.contains(&"COLORTERM=truecolor".to_owned()));
+        assert!(entries.contains(&"TERM_PROGRAM=slterm".to_owned()));
+    }
+
+    #[test]
+    fn fixed_env_injections_never_override_custom() {
+        // custom 同名键（大小写变体也算）优先——固定注入只补缺。
+        let custom = HashMap::from([("term".to_owned(), "custom-term".to_owned())]);
+        let block = convert_custom_env(&custom, false).expect("environment block");
+        let entries = block_entries(&block);
+        assert!(entries.contains(&"term=custom-term".to_owned()));
+        assert!(
+            !entries.contains(&"TERM=xterm-256color".to_owned()),
+            "固定注入不得覆盖 custom 同名键"
+        );
+    }
+
+    #[test]
+    fn fixed_env_injections_apply_to_inherited_merge() {
+        // 非 complete 形态（与父进程环境合并）同样叠加固定清单。
+        let custom = HashMap::new();
+        let block = convert_custom_env(&custom, false);
+        // custom 为空且非 complete → None（走父进程继承,无环境块）——本形态
+        // 不叠加;叠加语义只在「有块」时生效。
+        assert!(block.is_none());
+        let custom = HashMap::from([("A".to_owned(), "1".to_owned())]);
+        let entries = block_entries(&convert_custom_env(&custom, false).expect("block"));
+        assert!(entries.contains(&"TERM=xterm-256color".to_owned()));
+    }
+
+    // ─── ConPTY 加载决策流（两阶段合并）───
+
+    #[test]
+    fn should_bundle_below_threshold() {
+        assert!(should_bundle(19041));
+        assert!(should_bundle(21375));
+    }
+
+    #[test]
+    fn should_not_bundle_at_or_above_threshold() {
+        assert!(!should_bundle(21376));
+        assert!(!should_bundle(26100));
+    }
+
+    #[test]
+    fn cpr_corrupted_below_threshold() {
+        assert!(conhost_input_corrupts_cpr(19041));
+        assert!(conhost_input_corrupts_cpr(21375));
+        // build 获取失败回退 0 → 按 Win10 处置（剥离，安全侧）。
+        assert!(conhost_input_corrupts_cpr(0));
+    }
+
+    #[test]
+    fn cpr_not_corrupted_at_or_above_threshold() {
+        assert!(!conhost_input_corrupts_cpr(21376));
+        assert!(!conhost_input_corrupts_cpr(26100));
+    }
+
+    #[test]
+    fn extraction_dir_from_appends_segments() {
+        let dir = extraction_dir_from(Path::new(r"C:\Users\x\AppData\Local"));
+        assert_eq!(
+            dir,
+            PathBuf::from(r"C:\Users\x\AppData\Local\slterm\conpty")
+        );
+    }
+
+    #[test]
+    fn ensure_extracted_writes_then_idempotent() {
+        let tmp = TestDir::new("extract");
+        let target = tmp.path().join("conpty");
+        ensure_extracted(&target).unwrap();
+        let dll = target.join("conpty.dll");
+        let exe = target.join("OpenConsole.exe");
+        assert!(dll.is_file());
+        assert!(exe.is_file());
+        assert_eq!(std::fs::read(&dll).unwrap(), CONPTY_DLL_BYTES);
+        assert_eq!(std::fs::read(&exe).unwrap(), OPENCONSOLE_EXE_BYTES);
+        let m1 = std::fs::metadata(&dll).unwrap().modified().unwrap();
+        ensure_extracted(&target).unwrap();
+        let m2 = std::fs::metadata(&dll).unwrap().modified().unwrap();
+        assert_eq!(m1, m2, "同大小应跳过写入，mtime 不变");
+    }
+
+    #[test]
+    fn write_if_size_differs_overwrites_only_on_size_mismatch() {
+        let tmp = TestDir::new("size-check");
+        let p = tmp.path().join("conpty.dll");
+        std::fs::write(&p, b"old-vendor").unwrap();
+        write_if_size_differs(&p, b"new-vendor-bytes").unwrap();
+        assert_eq!(std::fs::read(&p).unwrap(), b"new-vendor-bytes");
+        // 同大小不同内容：跳过（嵌入内容编译期固定，大小判定足够）。
+        let p2 = tmp.path().join("OpenConsole.exe");
+        std::fs::write(&p2, b"same-len-123").unwrap();
+        write_if_size_differs(&p2, b"same-len-456").unwrap();
+        assert_eq!(std::fs::read(&p2).unwrap(), b"same-len-123");
+    }
+
+    /// 场景注入守卫：临时改写 LOCALAPPDATA 指向受控路径，drop 时还原。
+    struct LocalAppDataGuard(Option<std::ffi::OsString>);
+
+    impl LocalAppDataGuard {
+        fn set(dir: &Path) -> Self {
+            let prev = std::env::var_os("LOCALAPPDATA");
+            unsafe { std::env::set_var("LOCALAPPDATA", dir) };
+            Self(prev)
+        }
+    }
+
+    impl Drop for LocalAppDataGuard {
+        fn drop(&mut self) {
+            match &self.0 {
+                Some(v) => unsafe { std::env::set_var("LOCALAPPDATA", v) },
+                None => unsafe { std::env::remove_var("LOCALAPPDATA") },
+            }
+        }
+    }
+
+    #[test]
+    fn conpty_status_not_attempted_when_sideload_off() {
+        // sideload 关闭 → 未尝试（toast 静默形态），后端系统 API。
+        let api = ConptyApi::new(false, 19041);
+        assert!(!api.sideloaded);
+        let s = conpty_status();
+        assert!(!s.attempted, "sideload 关闭不尝试");
+        assert!(!s.bundled);
+        assert!(s.fallback_reason.is_none());
+    }
+
+    #[test]
+    fn conpty_status_win11_missing_pair_falls_back() {
+        // Win11 + exe 旁无文件对 → 不触发提取臂，直接回退（机器无关：
+        // 测试 exe 目录恒无完整文件对；LOCALAPPDATA 注入 tempdir 防真提取）。
+        let tmp = TestDir::new("win11-no-pair");
+        let _guard = LocalAppDataGuard::set(tmp.path());
+        let api = ConptyApi::new(true, CONPTY_WIN11_MIN_BUILD);
+        assert!(!api.sideloaded, "Win11 不触发提取，文件对缺失回退系统");
+        let s = conpty_status();
+        assert!(s.attempted);
+        assert!(!s.bundled);
+        assert!(s.fallback_reason.is_some(), "回退必有原因");
+        assert!(!tmp.path().join("slterm").exists(), "Win11 不得执行提取");
+    }
+
+    #[test]
+    fn conpty_status_bundled_on_win10_extraction() {
+        // Win10 + 文件对缺失 → NuGet 嵌入字节提取到注入目录 + 真实
+        // LoadLibraryW 加载 → 全量真实路径（机器无关：字节编译期嵌入）。
+        let tmp = TestDir::new("win10-extract");
+        let _guard = LocalAppDataGuard::set(tmp.path());
+        let api = ConptyApi::new(true, 19041);
+        assert!(api.sideloaded, "提取 + 加载成功应走侧载 conhost");
+        let s = conpty_status();
+        assert!(s.attempted);
+        assert!(s.bundled);
+        assert!(s.fallback_reason.is_none());
+        assert!(
+            tmp.path()
+                .join("slterm")
+                .join("conpty")
+                .join("conpty.dll")
+                .is_file(),
+            "提取目录应含 conpty.dll"
+        );
+    }
+
+    #[test]
+    fn conpty_status_fallback_reason_matches_load_error() {
+        // LOCALAPPDATA 指向文件 → 提取路径不可建 → 稳定失败注入；
+        // fallback_reason 与直跑 load_sideloaded 的 Err 同源（同一变量）。
+        let blocker = TestDir::new("win10-blocked");
+        let file_path = blocker.path().join("blocker-file");
+        std::fs::write(&file_path, b"not-a-dir").unwrap();
+        let _guard = LocalAppDataGuard::set(&file_path);
+
+        let expected = match ConptyApi::load_sideloaded(19041) {
+            Ok(_) => panic!("注入点应稳定失败（文件占用路径必使提取失败）"),
+            Err(reason) => reason,
+        };
+
+        let api = ConptyApi::new(true, 19041);
+        assert!(!api.sideloaded, "提取失败应回退系统");
+        let s = conpty_status();
+        assert!(s.attempted);
+        assert!(!s.bundled);
+        let reason = s.fallback_reason.as_deref().expect("回退必有原因");
+        assert_eq!(reason, expected, "状态原因与加载错误同源零漂移");
     }
 }

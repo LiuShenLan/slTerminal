@@ -38,13 +38,19 @@ serde = { version = "1", features = ["derive", "rc"], optional = true }
 [target.'cfg(windows)'.dependencies]
 piper = "0.2.1"
 miow = "0.6.0"
+# Windows 真实 build 号(RtlGetNtVersionNumbers 低 28 位)——ConPTY flags 门控
+# 与 Win10 捆绑判定共用(见 tty/windows/mod.rs get_windows_build_number)。
+nt_version = "0.1"
 windows-sys = { version = "0.59.0", features = [
     "Win32_System_Console",
     "Win32_Foundation",
     "Win32_Globalization",
     "Win32_Security",
-    # CONOUT$ 句柄(ConPTY 光标对账探针,见 event_loop)。
+    # CONOUT$ 句柄(ConPTY 光标对账探针,见 event_loop);shell 白名单句柄级
+    # 文件身份比对(CreateFileW/GetFileInformationByHandle,见 tty/windows/shell.rs)。
     "Win32_Storage_FileSystem",
+    # Job Object 孤儿防护(KILL_ON_JOB_CLOSE,见 tty/windows/spawn.rs)。
+    "Win32_System_JobObjects",
     "Win32_System_LibraryLoader",
     "Win32_System_Registry",
     "Win32_System_RemoteDesktop",
@@ -54,3 +60,4 @@ windows-sys = { version = "0.59.0", features = [
 
 [dev-dependencies]
 serde_json = "1.0.0"
+tempfile = "3"
