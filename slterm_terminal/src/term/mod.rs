@@ -32,8 +32,12 @@ mod clear;
 pub mod color;
 mod damage;
 mod keyboard;
+#[cfg(test)]
+mod keyboard_contract_tests;
 mod prompt;
 mod redraw_anchor;
+#[cfg(test)]
+mod redraw_anchor_tests;
 mod renderable;
 pub mod search;
 
@@ -1146,9 +1150,7 @@ impl<T> Term<T> {
         &self.config.semantic_escape_chars
     }
 
-    // 测试辅助:M2.1 测试模块未迁(M2.2 随迁后消费),暂豁免 dead_code。
     #[cfg(test)]
-    #[allow(dead_code)]
     pub(crate) fn set_semantic_escape_chars(&mut self, semantic_escape_chars: &str) {
         self.config.semantic_escape_chars = semantic_escape_chars.into();
     }
@@ -2722,3 +2724,6 @@ pub mod test {
         term
     }
 }
+
+#[cfg(test)]
+mod tests;

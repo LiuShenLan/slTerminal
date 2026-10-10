@@ -1,5 +1,8 @@
 [package]
 name = "slterm_terminal"
+# DA2 应答(`\x1b[>0;{version};1c`,term/mod.rs `version_number`)取本字段;
+# 上游用例 parse_cargo_version 钉住 ≥0.1.0 下限。
+version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 

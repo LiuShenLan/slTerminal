@@ -444,3 +444,177 @@ fn check_registry_status(status: u32) -> io::Result<()> {
         Err(io::Error::from_raw_os_error(status as i32))
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn environment(entries: &[(&str, &str)]) -> CaseInsensitiveEnv {
+        let mut environment = CaseInsensitiveEnv::default();
+        for (name, value) in entries {
+            environment.insert((*name).to_owned(), (*value).to_owned());
+        }
+        environment
+    }
+
+    fn plain(name: &str, value: &str) -> RegistryValue {
+        RegistryValue {
+            name: name.to_owned(),
+            value: value.to_owned(),
+            kind: RegistryValueKind::String,
+        }
+    }
+
+    fn expanded(name: &str, value: &str) -> RegistryValue {
+        RegistryValue {
+            name: name.to_owned(),
+            value: value.to_owned(),
+            kind: RegistryValueKind::ExpandString,
+        }
+    }
+
+    fn snapshot(hives: Vec<Vec<RegistryValue>>) -> RegistrySnapshot {
+        RegistrySnapshot { hives }
+    }
+
+    #[test]
+    fn user_variables_override_machine_variables() {
+        let mut state = EnvironmentState::new(CaseInsensitiveEnv::default());
+        let merged = state.merge(
+            snapshot(vec![
+                vec![plain("SDK", "machine")],
+                vec![plain("SDK", "user")],
+            ]),
+            CaseInsensitiveEnv::default(),
+        );
+
+        assert_eq!(merged.get("SDK"), Some("user"));
+    }
+
+    #[test]
+    fn path_variables_append_machine_before_user() {
+        let machine = PATH_VARIABLES.map(|name| plain(name, "machine"));
+        let user = PATH_VARIABLES.map(|name| plain(name, "user"));
+        let mut state = EnvironmentState::new(CaseInsensitiveEnv::default());
+        let merged = state.merge(
+            snapshot(vec![machine.to_vec(), user.to_vec()]),
+            CaseInsensitiveEnv::default(),
+        );
+
+        for name in PATH_VARIABLES {
+            assert_eq!(merged.get(name), Some("machine;user"), "{name}");
+        }
+    }
+
+    #[test]
+    fn variable_names_are_case_insensitive() {
+        let mut state = EnvironmentState::new(CaseInsensitiveEnv::default());
+        let merged = state.merge(
+            snapshot(vec![
+                vec![plain("MixedCase", "machine")],
+                vec![plain("mIXEDcASE", "user")],
+            ]),
+            CaseInsensitiveEnv::default(),
+        );
+
+        assert_eq!(merged.entries.len(), 1);
+        assert_eq!(merged.get("MIXEDCASE"), Some("user"));
+    }
+
+    #[test]
+    fn expandable_values_see_plain_values_from_the_same_hive() {
+        let mut state = EnvironmentState::new(CaseInsensitiveEnv::default());
+        let merged = state.merge(
+            snapshot(vec![vec![
+                expanded("SDK", r"%ROOT%\sdk"),
+                plain("ROOT", r"C:\tools"),
+            ]]),
+            CaseInsensitiveEnv::default(),
+        );
+
+        assert_eq!(merged.get("SDK"), Some(r"C:\tools\sdk"));
+    }
+
+    #[test]
+    fn expandable_values_see_plain_values_from_later_hives() {
+        // Volatile Environment 排在 HKCU\Environment 之后：TEMP 引用的
+        // USERPROFILE 不能按枚举顺序展开，否则 pane 的 TEMP/TMP 会保留字面量，
+        // shell 一写临时文件就在启动目录下建出 %USERPROFILE% 文件夹。
+        // 用户目录随电脑而不同，直接从当前进程取真实 USERPROFILE，断言值
+        // 也由它推导，避免把某台机器的用户名写进测试导致其他电脑失败。
+        let profile = std::env::var_os("USERPROFILE")
+            .expect("USERPROFILE must be set in the test process")
+            .to_string_lossy()
+            .into_owned();
+        let temp = r"%USERPROFILE%\AppData\Local\Temp".to_owned();
+        let mut state = EnvironmentState::new(environment(&[("USERPROFILE", profile.as_str())]));
+        let merged = state.merge(
+            snapshot(vec![
+                Vec::new(),
+                vec![expanded("TEMP", temp.as_str())],
+                vec![plain("USERPROFILE", profile.as_str())],
+            ]),
+            CaseInsensitiveEnv::default(),
+        );
+
+        let expected_temp = format!(r"{profile}\AppData\Local\Temp");
+        assert_eq!(merged.get("TEMP"), Some(expected_temp.as_str()));
+        assert_eq!(merged.get("USERPROFILE"), Some(profile.as_str()));
+    }
+
+    #[test]
+    fn later_plain_value_still_overrides_an_earlier_expanded_value() {
+        let mut state = EnvironmentState::new(environment(&[("ROOT", r"C:\base")]));
+        let merged = state.merge(
+            snapshot(vec![
+                vec![expanded("PROFILE", r"%ROOT%\machine")],
+                vec![plain("PROFILE", r"C:\Users\test")],
+            ]),
+            CaseInsensitiveEnv::default(),
+        );
+
+        assert_eq!(merged.get("PROFILE"), Some(r"C:\Users\test"));
+    }
+
+    #[test]
+    fn path_stored_as_reg_sz_is_still_expanded() {
+        let mut state = EnvironmentState::new(CaseInsensitiveEnv::default());
+        let merged = state.merge(
+            snapshot(vec![vec![
+                plain("Path", r"%ROOT%\bin"),
+                plain("ROOT", r"C:\tools"),
+            ]]),
+            CaseInsensitiveEnv::default(),
+        );
+
+        assert_eq!(merged.get("PATH"), Some(r"C:\tools\bin"));
+    }
+
+    #[test]
+    fn deleted_registry_values_do_not_remove_process_private_values() {
+        let mut state = EnvironmentState::new(environment(&[
+            ("SESSION_ONLY", "keep"),
+            ("RemovedLater", "stale inherited value"),
+        ]));
+        let first = state.merge(
+            snapshot(vec![vec![plain("RemovedLater", "fresh")]]),
+            CaseInsensitiveEnv::default(),
+        );
+        assert_eq!(first.get("RemovedLater"), Some("fresh"));
+
+        let second = state.merge(snapshot(vec![Vec::new()]), CaseInsensitiveEnv::default());
+        assert_eq!(second.get("RemovedLater"), None);
+        assert_eq!(second.get("SESSION_ONLY"), Some("keep"));
+    }
+
+    #[test]
+    fn pane_overrides_are_applied_after_the_registry_snapshot() {
+        let mut state = EnvironmentState::new(CaseInsensitiveEnv::default());
+        let merged = state.merge(
+            snapshot(vec![vec![plain("PaneValue", "registry")]]),
+            environment(&[("pANEvALUE", "pane")]),
+        );
+
+        assert_eq!(merged.get("PANEvalue"), Some("pane"));
+        assert_eq!(merged.entries.len(), 1);
+    }
+}

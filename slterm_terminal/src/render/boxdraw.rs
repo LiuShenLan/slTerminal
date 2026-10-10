@@ -843,3 +843,363 @@ fn draw(c: char, g: &mut Geom) {
         _ => unreachable!("is_builtin 与 draw 的覆盖必须一致: {c:?}"),
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const W: f32 = 9.0;
+    const H: f32 = 20.0;
+
+    fn prims(c: char) -> Vec<Primitive> {
+        primitives(c, W, H, 1.0).expect("内建字符")
+    }
+
+    fn rects(c: char) -> Vec<(Rect, f32)> {
+        prims(c)
+            .into_iter()
+            .filter_map(|p| match p {
+                Primitive::Rect { rect, alpha } => Some((rect, alpha)),
+                Primitive::Poly { .. } => None,
+            })
+            .collect()
+    }
+
+    /// 覆盖面与旧 builtin_font 一致；邻近区间不越界。
+    #[test]
+    fn coverage_matches_legacy_builtin_font() {
+        let covered = ('\u{2500}'..='\u{259f}')
+            .chain('\u{1fb00}'..='\u{1fb3b}')
+            .chain('\u{1fb82}'..='\u{1fb8b}')
+            .chain('\u{e0b0}'..='\u{e0b4}')
+            .chain(std::iter::once('\u{e0b6}'));
+        for c in covered {
+            let prims = primitives(c, W, H, 1.0).unwrap_or_else(|| panic!("{c:?} 应为内建"));
+            assert!(!prims.is_empty(), "{c:?} 不应产生空图元");
+        }
+
+        let outside = ('\u{2450}'..'\u{2500}')
+            .chain('\u{25a0}'..'\u{2600}')
+            .chain('\u{1fb3c}'..'\u{1fb82}')
+            .chain('\u{1fb8c}'..'\u{1fba0}')
+            .chain('\u{e0a0}'..'\u{e0b0}')
+            .chain(std::iter::once('\u{e0b5}'))
+            .chain('\u{e0b7}'..'\u{e0c0}');
+        for c in outside {
+            assert!(primitives(c, W, H, 1.0).is_none(), "{c:?} 不应内建");
+            assert!(!is_builtin(c));
+        }
+    }
+
+    /// '─' 精确盖满整格宽、垂直居中，笔画 = round(w/8) = 1。
+    #[test]
+    fn light_horizontal_spans_full_width() {
+        let rects = rects('\u{2500}');
+        let min_x = rects.iter().map(|(r, _)| r.x).fold(f32::MAX, f32::min);
+        let max_x = rects
+            .iter()
+            .map(|(r, _)| r.x + r.w)
+            .fold(f32::MIN, f32::max);
+        assert_eq!((min_x, max_x), (0.0, W));
+        for (rect, alpha) in &rects {
+            // y_center = 10，stroke 1：round(10 - 0.5) = 10，高 1。
+            assert_eq!((rect.y, rect.h, *alpha), (10.0, 1.0, 1.0));
+        }
+    }
+
+    /// 重笔画 '━' 是细笔画的两倍厚。
+    #[test]
+    fn heavy_stroke_doubles_light() {
+        let light: f32 = rects('\u{2500}')
+            .iter()
+            .map(|(r, _)| r.h)
+            .fold(0.0, f32::max);
+        let heavy: f32 = rects('\u{2501}')
+            .iter()
+            .map(|(r, _)| r.h)
+            .fold(0.0, f32::max);
+        assert_eq!((light, heavy), (1.0, 2.0));
+    }
+
+    /// '█' 单矩形盖满；░▒▓ 按 64/128/192 灰度的 alpha 递进。
+    #[test]
+    fn full_block_and_shades() {
+        let full = rects('\u{2588}');
+        assert_eq!(
+            full,
+            vec![(
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: W,
+                    h: H
+                },
+                1.0
+            )]
+        );
+        let alpha_of = |c: char| rects(c)[0].1;
+        assert!((alpha_of('\u{2591}') - 64.0 / 255.0).abs() < 1e-6);
+        assert!((alpha_of('\u{2592}') - 128.0 / 255.0).abs() < 1e-6);
+        assert!((alpha_of('\u{2593}') - 192.0 / 255.0).abs() < 1e-6);
+    }
+
+    /// '▀' 上半块、'▂' 下二八分、'▘' 左上象限：与旧实现同一分割。
+    #[test]
+    fn partial_blocks_and_quadrants() {
+        assert_eq!(
+            rects('\u{2580}'),
+            vec![(
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: W,
+                    h: 10.0
+                },
+                1.0
+            )]
+        );
+        assert_eq!(
+            rects('\u{2582}'),
+            vec![(
+                Rect {
+                    x: 0.0,
+                    y: 15.0,
+                    w: W,
+                    h: 5.0
+                },
+                1.0
+            )]
+        );
+        // x_center.round() = 5（4.5 away-from-zero），y_center = 10。
+        assert_eq!(
+            rects('\u{2598}'),
+            vec![(
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 5.0,
+                    h: 10.0
+                },
+                1.0
+            )]
+        );
+    }
+
+    /// '═' 双横线：两条独立的细线带，中间留缝。
+    #[test]
+    fn double_horizontal_has_two_separated_bands() {
+        let rects = rects('\u{2550}');
+        let mut bands: Vec<f32> = rects.iter().map(|(r, _)| r.y).collect();
+        bands.sort_by(f32::total_cmp);
+        bands.dedup();
+        assert_eq!(bands.len(), 2, "应有两条平行带");
+        let (top, bottom) = (bands[0], bands[1]);
+        let top_h = rects.iter().find(|(r, _)| r.y == top).unwrap().0.h;
+        assert!(bottom > top + top_h, "两带之间必须留缝");
+        // 每条带都盖满整格宽（左右两半拼接无缝）。
+        for band in [top, bottom] {
+            let xs: Vec<_> = rects.iter().filter(|(r, _)| r.y == band).collect();
+            let min_x = xs.iter().map(|(r, _)| r.x).fold(f32::MAX, f32::min);
+            let max_x = xs.iter().map(|(r, _)| r.x + r.w).fold(f32::MIN, f32::max);
+            assert_eq!((min_x, max_x), (0.0, W), "band y={band}");
+        }
+    }
+
+    /// 四臂交点无缺口：'┌' 的横臂起点必须盖到竖臂带、竖臂起点盖到横臂带。
+    #[test]
+    fn corner_arms_meet_at_joint() {
+        let rects = rects('\u{250c}');
+        // 一条横带（右臂）+ 一条竖带（下臂）。
+        let horizontal = rects
+            .iter()
+            .find(|(r, _)| r.w > r.h)
+            .map(|(r, _)| *r)
+            .expect("横臂");
+        let vertical = rects
+            .iter()
+            .find(|(r, _)| r.h > r.w)
+            .map(|(r, _)| *r)
+            .expect("竖臂");
+        assert!(horizontal.x <= vertical.x && horizontal.x + horizontal.w == W);
+        assert!(vertical.y <= horizontal.y && vertical.y + vertical.h == H);
+    }
+
+    /// Powerline 三角 ''：单个凸三角形，左缘全高、尖端指右。
+    #[test]
+    fn powerline_triangle_shape() {
+        let prims = prims('\u{e0b0}');
+        assert_eq!(prims.len(), 1);
+        let Primitive::Poly { points } = &prims[0] else {
+            panic!("应为多边形")
+        };
+        assert_eq!(points.len(), 3);
+        assert_eq!(points[0], [0.0, 1.0]);
+        assert_eq!(points[1], [9.0, 10.0]);
+        assert_eq!(points[2], [0.0, 19.0]);
+    }
+
+    /// 缩放下所有矩形边界落在设备像素网格上（清晰度前提）。
+    #[test]
+    fn rect_bounds_snap_to_device_pixels() {
+        let scale = 1.5;
+        for c in ['\u{2500}', '\u{2503}', '\u{2550}', '\u{2580}'] {
+            for prim in primitives(c, W, H, scale).unwrap() {
+                if let Primitive::Rect { rect, .. } = prim {
+                    for v in [rect.y * scale, (rect.y + rect.h) * scale] {
+                        assert!(
+                            (v - v.round()).abs() < 1e-4,
+                            "{c:?} 的 y 边界 {v} 未吸附设备像素"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    fn covers_pixel(primitives: &[Primitive], point: [f32; 2]) -> bool {
+        primitives.iter().any(|primitive| match primitive {
+            Primitive::Rect { rect, .. } => {
+                point[0] >= rect.x
+                    && point[0] < rect.x + rect.w
+                    && point[1] >= rect.y
+                    && point[1] < rect.y + rect.h
+            }
+            Primitive::Poly { points } => {
+                let mut positive = false;
+                let mut negative = false;
+                for (a, b) in points.iter().zip(points.iter().cycle().skip(1)) {
+                    let cross =
+                        (b[0] - a[0]) * (point[1] - a[1]) - (b[1] - a[1]) * (point[0] - a[0]);
+                    positive |= cross > 1e-5;
+                    negative |= cross < -1e-5;
+                }
+                !(positive && negative)
+            }
+        })
+    }
+
+    #[test]
+    fn rounded_corners_join_straight_lines_at_every_device_pixel() {
+        for width in [7, 8, 9, 10, 13, 14, 15, 16, 20, 21, 24] {
+            for height in [14, 15, 20, 21, 32, 33] {
+                for scale in [1.0, 1.25, 1.5, 2.0] {
+                    let glyph = |c| {
+                        primitives(c, width as f32 / scale, height as f32 / scale, scale).unwrap()
+                    };
+                    let horizontal = glyph('─');
+                    let vertical = glyph('│');
+                    for (c, right, down) in [
+                        ('╭', true, true),
+                        ('╮', false, true),
+                        ('╯', false, false),
+                        ('╰', true, false),
+                    ] {
+                        let corner = glyph(c);
+                        let x = if right { width as f32 - 0.5 } else { 0.5 } / scale;
+                        let y = if down { height as f32 - 0.5 } else { 0.5 } / scale;
+                        for row in 0..height {
+                            let point = [x, (row as f32 + 0.5) / scale];
+                            assert_eq!(
+                                covers_pixel(&corner, point),
+                                covers_pixel(&horizontal, point),
+                                "{c} horizontal seam at row {row}, {width}x{height}, scale {scale}",
+                            );
+                        }
+                        for column in 0..width {
+                            let point = [(column as f32 + 0.5) / scale, y];
+                            assert_eq!(
+                                covers_pixel(&corner, point),
+                                covers_pixel(&vertical, point),
+                                "{c} vertical seam at column {column}, {width}x{height}, scale {scale}",
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// 圆角 '╭' 输出直臂 + 圆环分段，并像 WT 的 aliased cell clip 一样
+    /// 把扩展 rounded-rect 裁回当前单元格。
+    #[test]
+    fn rounded_corner_is_clipped_to_cell() {
+        for c in ['\u{256d}', '\u{256e}', '\u{256f}', '\u{2570}'] {
+            let prims = prims(c);
+            let polys = prims
+                .iter()
+                .filter(|p| matches!(p, Primitive::Poly { .. }))
+                .count();
+            assert_eq!(polys, 8, "{c:?} 四分之一圆环按 8 段近似");
+            for prim in &prims {
+                if let Primitive::Poly { points } = prim {
+                    for [x, y] in points {
+                        assert!((0.0..=W).contains(x), "{c:?} x={x}");
+                        assert!((0.0..=H).contains(y), "{c:?} y={y}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rounded_corner_arms_follow_the_corner_direction() {
+        for (c, extends_down) in [
+            ('\u{256d}', true),
+            ('\u{256e}', true),
+            ('\u{256f}', false),
+            ('\u{2570}', false),
+        ] {
+            let rects = rects(c);
+            let vertical = rects
+                .iter()
+                .find(|(rect, _)| rect.h > rect.w)
+                .expect("竖直臂")
+                .0;
+            if extends_down {
+                assert!(vertical.y >= H / 2.0, "{c:?} 的竖臂应向下");
+                assert_eq!(vertical.y + vertical.h, H);
+            } else {
+                assert_eq!(vertical.y, 0.0);
+                assert!(vertical.y + vertical.h <= H / 2.0, "{c:?} 的竖臂应向上");
+            }
+        }
+    }
+
+    #[test]
+    fn rounded_corners_keep_clipped_geometry_at_narrow_dpi_sizes() {
+        for c in ['\u{256d}', '\u{256e}', '\u{256f}', '\u{2570}'] {
+            for width in [2.0, 3.0, 4.0, 7.0, 9.0] {
+                for height in [3.0, 5.0, 8.0, 20.0] {
+                    for scale in [1.0, 1.25, 1.5, 2.0] {
+                        let prims = primitives(c, width, height, scale).expect("圆角应为内建");
+                        // The public geometry contract first rounds the cell
+                        // to physical pixels. Compare against that cell, not
+                        // the unsnapped logical input (e.g. 3 * 1.5 -> 5 px).
+                        let cell_width = (width * scale).round().max(1.0) / scale;
+                        let cell_height = (height * scale).round().max(1.0) / scale;
+                        for prim in prims {
+                            match prim {
+                                Primitive::Rect { rect, .. } => {
+                                    for value in [rect.x, rect.y, rect.x + rect.w, rect.y + rect.h]
+                                    {
+                                        assert!(value.is_finite(), "{c:?} 非有限矩形边界");
+                                    }
+                                    assert!(rect.x >= 0.0 && rect.y >= 0.0, "{c:?} 越过左/上边");
+                                    assert!(rect.x + rect.w <= cell_width + 1e-4);
+                                    assert!(rect.y + rect.h <= cell_height + 1e-4);
+                                }
+                                Primitive::Poly { points } => {
+                                    assert!(!points.is_empty(), "{c:?} 不应产生空多边形");
+                                    for [x, y] in points {
+                                        assert!(x.is_finite() && y.is_finite(), "{c:?} 非有限弧点");
+                                        assert!((-1e-4..=cell_width + 1e-4).contains(&x));
+                                        assert!((-1e-4..=cell_height + 1e-4).contains(&y));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

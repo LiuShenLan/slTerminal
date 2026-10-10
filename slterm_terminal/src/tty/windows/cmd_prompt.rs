@@ -42,3 +42,76 @@ pub(super) fn prepare(config: &Options) -> Options {
     prepared.env.insert("PROMPT".into(), prompt);
     prepared
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tty::Shell;
+
+    fn cmd() -> Options {
+        Options {
+            shell: Some(Shell::new(
+                "C:\\Windows\\System32\\CMD.EXE".into(),
+                vec!["/d".into()],
+            )),
+            env_is_complete: true,
+            ..Options::default()
+        }
+    }
+
+    #[test]
+    fn native_prompt_preserves_custom_text_without_mutating_caller() {
+        let mut config = cmd();
+        config.env.insert("Prompt".into(), "[$P]$_$G".into());
+        let prepared = prepare(&config);
+        assert_eq!(
+            prepared.env.get("PROMPT").unwrap(),
+            &format!("{START}[$P]$_$G{END}")
+        );
+        assert!(!prepared.env.contains_key("Prompt"));
+        assert_eq!(config.env.get("Prompt").unwrap(), "[$P]$_$G");
+    }
+
+    #[test]
+    fn native_prompt_defaults_and_is_idempotent() {
+        let prepared = prepare(&cmd());
+        assert_eq!(
+            prepared.env.get("PROMPT").unwrap(),
+            &format!("{START}$P$G{END}")
+        );
+        assert_eq!(prepare(&prepared), prepared);
+    }
+
+    #[test]
+    fn native_prompt_does_not_instrument_other_shells() {
+        for name in ["powershell.exe", "pwsh", "wsl.exe", "mycmd.exe"] {
+            let mut config = cmd();
+            config.shell = Some(Shell::new(name.into(), vec![]));
+            assert_eq!(prepare(&config), config);
+        }
+        let mut config = cmd();
+        config.shell = None;
+        assert_eq!(prepare(&config), config);
+    }
+
+    #[test]
+    fn native_prompt_preserves_explicit_empty_prompt() {
+        let mut config = cmd();
+        config.env.insert("PROMPT".into(), String::new());
+        assert_eq!(
+            prepare(&config).env.get("PROMPT").unwrap(),
+            &format!("{START}{END}")
+        );
+    }
+
+    #[test]
+    fn native_prompt_upgrades_a_prefix_only_marker_without_duplicating_it() {
+        let mut config = cmd();
+        config.env.insert("PROMPT".into(), format!("{MARK}[$P]$S"));
+        let prepared = prepare(&config);
+        assert_eq!(
+            prepared.env.get("PROMPT").unwrap(),
+            &format!("{START}[$P]$S{END}")
+        );
+        assert_eq!(prepare(&prepared), prepared);
+    }
+}

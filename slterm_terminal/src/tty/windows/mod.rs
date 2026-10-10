@@ -226,3 +226,65 @@ fn cmdline(config: &Options) -> String {
 pub fn win32_string<S: AsRef<OsStr> + ?Sized>(value: &S) -> Vec<u16> {
     OsStr::new(value).encode_wide().chain(once(0)).collect()
 }
+
+#[cfg(test)]
+mod test {
+    use crate::tty::windows::{cmdline, push_escaped_arg};
+    use crate::tty::{Options, Shell};
+
+    #[test]
+    fn test_escape() {
+        let test_set = vec![
+            // Basic cases - no escaping needed
+            ("abc", "abc"),
+            // Cases requiring quotes (space/tab)
+            ("", "\"\""),
+            (" ", "\" \""),
+            ("ab c", "\"ab c\""),
+            ("ab\tc", "\"ab\tc\""),
+            // Cases with backslashes only (no spaces, no quotes) - no quotes added
+            ("ab\\c", "ab\\c"),
+            // Cases with quotes only (no spaces) - quotes escaped but no outer quotes
+            ("ab\"c", "ab\\\"c"),
+            ("\"", "\\\""),
+            ("a\"b\"c", "a\\\"b\\\"c"),
+            // Cases requiring both quotes and escaping (contains spaces)
+            ("ab \"c", "\"ab \\\"c\""),
+            ("a \"b\" c", "\"a \\\"b\\\" c\""),
+            // Complex real-world cases
+            ("C:\\Program Files\\", "\"C:\\Program Files\\\\\""),
+            ("C:\\Program Files\\a.txt", "\"C:\\Program Files\\a.txt\""),
+            (
+                r#"sh -c "cd /home/user; ARG='abc' \""'${SHELL:-sh}" -i -c '"'echo hello'""#,
+                r#""sh -c \"cd /home/user; ARG='abc' \\\"\"'${SHELL:-sh}\" -i -c '\"'echo hello'\"""#,
+            ),
+        ];
+
+        for (input, expected) in test_set {
+            let mut escaped_arg = String::new();
+            push_escaped_arg(&mut escaped_arg, input);
+            assert_eq!(escaped_arg, expected, "Failed for input: {}", input);
+        }
+    }
+
+    #[test]
+    fn test_cmdline() {
+        let mut options = Options {
+            shell: Some(Shell {
+                program: "echo".to_string(),
+                args: vec!["hello world".to_string()],
+            }),
+            working_directory: None,
+            drain_on_exit: true,
+            env: Default::default(),
+            env_is_complete: false,
+            escape_args: false,
+            // 上游此字面量之后的增量字段:M2.1 `conpty_sideload` 全域化。
+            conpty_sideload: false,
+        };
+        assert_eq!(cmdline(&options), "echo hello world");
+
+        options.escape_args = true;
+        assert_eq!(cmdline(&options), "echo \"hello world\"");
+    }
+}

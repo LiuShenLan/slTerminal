@@ -457,3 +457,292 @@ impl RenderSnapshot {
         snap
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::event::VoidListener;
+    use crate::grid::Dimensions;
+    use crate::index::{Column, Line, Side};
+    use crate::selection::{Selection, SelectionType};
+    use crate::term::Config;
+
+    struct TestSize {
+        cols: usize,
+        rows: usize,
+    }
+
+    impl Dimensions for TestSize {
+        fn total_lines(&self) -> usize {
+            self.rows
+        }
+
+        fn screen_lines(&self) -> usize {
+            self.rows
+        }
+
+        fn columns(&self) -> usize {
+            self.cols
+        }
+    }
+
+    fn metrics() -> CellMetrics {
+        CellMetrics {
+            cell_width: 9.0,
+            cell_height: 18.0,
+            scale: 2.0,
+        }
+    }
+
+    #[test]
+    fn viewport_floor_division_and_clamps() {
+        let vp = TerminalViewport::from_content_size(93.0, 40.0, &metrics(), 1);
+        assert_eq!((vp.cols, vp.rows), (10, 2));
+        // Below one cell: clamps to the minimum grid instead of zero.
+        let vp = TerminalViewport::from_content_size(3.0, 3.0, &metrics(), 2);
+        assert_eq!((vp.cols, vp.rows), (MIN_COLS, MIN_ROWS));
+    }
+
+    #[test]
+    fn viewport_reports_exact_text_area_pixels() {
+        let vp = TerminalViewport::from_content_size(95.0, 41.0, &metrics(), 1);
+        // 95/9 → 10 cols; device cell = 18px → 180, never the leftover 190.
+        assert_eq!(vp.text_area_width_px(), u32::from(vp.cols) * 18);
+        assert_eq!(vp.window_size().cell_width, 18);
+        assert_eq!(vp.window_size().cell_height, 36);
+    }
+
+    #[test]
+    fn tracker_coalesces_and_advances_revision() {
+        let mut tracker = ViewportTracker::default();
+        let first = tracker
+            .observe(900.0, 360.0, &metrics())
+            .expect("initial viewport");
+        assert!(first.grid_changed && first.pixel_changed);
+
+        // Sub-cell jitter: same grid, same pixels → no event.
+        assert!(tracker.observe(902.0, 361.0, &metrics()).is_none());
+
+        // One more column: grid change, revision strictly increases.
+        let second = tracker
+            .observe(911.0, 360.0, &metrics())
+            .expect("grid change");
+        assert!(second.grid_changed);
+        assert!(second.viewport.revision > first.viewport.revision);
+
+        // Same grid but larger glyphs (font size change on a fluke-equal
+        // grid): pixel change alone must still be reported.
+        let mut larger = metrics();
+        larger.scale = 3.0;
+        let third = tracker
+            .observe(911.0 / 9.0 * 9.0, 360.0, &larger)
+            .expect("pixel change");
+        assert!(third.pixel_changed);
+    }
+
+    fn term_with(content: &[&str]) -> Term<VoidListener> {
+        let size = TestSize { cols: 8, rows: 4 };
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+        for (line, text) in content.iter().enumerate() {
+            let mut col = 0usize;
+            for ch in text.chars() {
+                let line = Line(line as i32);
+                let cell = &mut term.grid_mut()[line][Column(col)];
+                cell.c = ch;
+                if unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1) == 2 {
+                    cell.flags.insert(Flags::WIDE_CHAR);
+                    col += 1;
+                    term.grid_mut()[line][Column(col)]
+                        .flags
+                        .insert(Flags::WIDE_CHAR_SPACER);
+                }
+                col += 1;
+            }
+        }
+        term
+    }
+
+    fn cfg(rows: u16, cols: u16) -> SnapshotConfig {
+        SnapshotConfig { rows, cols }
+    }
+
+    #[test]
+    fn capture_splits_segments_on_width_class() {
+        let term = term_with(&["ab中c"]);
+        let snap = RenderSnapshot::capture(&term, &cfg(4, 8));
+        let rows: Vec<_> = snap
+            .segments
+            .iter()
+            .map(|s| (s.row, s.start_col, s.wide, s.cells.len()))
+            .collect();
+        // "ab" narrow at col 0, "中" wide at col 2 (spacer col 3 skipped),
+        // "c" narrow resumes at col 4.
+        assert_eq!(
+            rows,
+            vec![(0, 0, false, 2), (0, 2, true, 1), (0, 4, false, 1)]
+        );
+    }
+
+    #[test]
+    fn capture_selects_complete_wide_cells_and_copy_keeps_complete_text() {
+        fn select_cell(term: &mut Term<VoidListener>, ty: SelectionType, col: usize) {
+            let point = crate::index::Point::new(Line(0), Column(col));
+            let mut selection = Selection::new(ty, point, Side::Left);
+            selection.update(point, Side::Right);
+            term.selection = Some(selection);
+        }
+
+        fn runs(term: &Term<VoidListener>) -> Vec<(u16, u16, u16)> {
+            RenderSnapshot::capture(term, &cfg(4, 8))
+                .selection_runs
+                .iter()
+                .map(|run| (run.row, run.start, run.end))
+                .collect()
+        }
+
+        // ASCII + 汉字 + 全角标点 + emoji + ASCII，宽字符分别位于 1..3、3..5、5..7。
+        let mut term = term_with(&["A光，🙂Z"]);
+        term.grid_mut().cursor.point = crate::index::Point::new(Line(1), Column(0));
+
+        for (leading, spacer, expected) in [(1, 2, "光"), (3, 4, "，"), (5, 6, "🙂")] {
+            for col in [leading, spacer] {
+                select_cell(&mut term, SelectionType::Simple, col);
+                assert_eq!(runs(&term), vec![(0, leading as u16, spacer as u16 + 1)]);
+                assert_eq!(term.selection_to_string().as_deref(), Some(expected));
+
+                select_cell(&mut term, SelectionType::Block, col);
+                assert_eq!(runs(&term), vec![(0, leading as u16, spacer as u16 + 1)]);
+                assert_eq!(term.selection_to_string().as_deref(), Some(expected));
+            }
+        }
+
+        term.selection = Some(Selection::new(
+            SelectionType::Semantic,
+            crate::index::Point::new(Line(0), Column(1)),
+            Side::Left,
+        ));
+        assert_eq!(runs(&term), vec![(0, 0, 8)]);
+        assert_eq!(term.selection_to_string().as_deref(), Some("A光，🙂Z"));
+
+        term.selection = Some(Selection::new(
+            SelectionType::Lines,
+            crate::index::Point::new(Line(0), Column(3)),
+            Side::Left,
+        ));
+        assert_eq!(runs(&term), vec![(0, 0, 8)]);
+        assert_eq!(term.selection_to_string().as_deref(), Some("A光，🙂Z\n"));
+    }
+
+    #[test]
+    fn capture_segments_ignore_cursor_position() {
+        // 分段随光标状态变化曾导致整行按闪烁相位重塑形（可见跳字）；
+        // 光标只能以 CursorSnapshot 形式出现，绝不改变文本分段。
+        let mut term = term_with(&["abc"]);
+        term.grid_mut().cursor.point = crate::index::Point::new(Line(0), Column(1));
+        let snap = RenderSnapshot::capture(&term, &cfg(4, 8));
+        let shape: Vec<_> = snap
+            .segments
+            .iter()
+            .map(|s| (s.start_col, s.cells.len()))
+            .collect();
+        assert_eq!(shape, vec![(0, 3)]);
+        let cursor = snap.cursor.expect("cursor visible");
+        assert_eq!((cursor.row, cursor.col, cursor.wide), (0, 1, false));
+    }
+
+    #[test]
+    fn capture_maps_a_deferred_resize_crop_to_visual_rows() {
+        let size = TestSize { cols: 8, rows: 4 };
+        let config = Config {
+            conpty_resize: true,
+            ..Config::default()
+        };
+        let mut term = Term::new(config, &size, VoidListener);
+        for (line, ch) in ['a', 'b', 'c', 'd'].into_iter().enumerate() {
+            term.grid_mut()[Line(line as i32)][Column(0)].c = ch;
+        }
+        term.grid_mut().cursor.point = crate::index::Point::new(Line(2), Column(0));
+
+        // A two-row visual viewport previews the same bottom crop that the
+        // settled ConPTY resize will commit: grid rows 2..4 become visual 0..2.
+        let snap = RenderSnapshot::capture(&term, &cfg(2, 8));
+        let rows: Vec<_> = snap
+            .segments
+            .iter()
+            .map(|segment| (segment.row, segment.cells[0].text.as_str()))
+            .collect();
+        assert_eq!(rows, vec![(0, "c"), (1, "d")]);
+        assert_eq!(snap.cursor.expect("cropped cursor").row, 0);
+    }
+
+    #[test]
+    fn capture_marks_wide_cursor() {
+        let mut term = term_with(&["中"]);
+        term.grid_mut().cursor.point = crate::index::Point::new(Line(0), Column(0));
+        let snap = RenderSnapshot::capture(&term, &cfg(4, 8));
+        assert!(snap.cursor.expect("cursor").wide);
+    }
+
+    #[test]
+    fn capture_keeps_a_hidden_cursor_and_its_cell() {
+        use vte::ansi::{Handler, NamedPrivateMode};
+
+        let mut term = term_with(&[" "]);
+        term.grid_mut().cursor.point = crate::index::Point::new(Line(0), Column(0));
+        term.grid_mut()[Line(0)][Column(0)]
+            .flags
+            .insert(Flags::INVERSE);
+        term.unset_private_mode(NamedPrivateMode::ShowCursor.into());
+        let snap = RenderSnapshot::capture(&term, &cfg(4, 8));
+        let cursor = snap.cursor.expect("hidden cursor still has a cell");
+        assert_eq!(cursor.shape, CursorShape::Hidden);
+        assert_eq!((cursor.row, cursor.col), (0, 0));
+        assert!(cursor.cell_flags.contains(Flags::INVERSE));
+        assert_eq!(cursor.cell_ch, ' ');
+        assert!(
+            snap.bg_runs
+                .iter()
+                .any(|run| run.row == 0 && run.start == 0 && 0 < run.end),
+            "inverse space still emits a bg run so the frontend can skip the black cell"
+        );
+    }
+
+    #[test]
+    fn capture_keeps_decscusr_hidden_block_glyph() {
+        use vte::ansi::Handler;
+
+        let mut term = term_with(&["█"]);
+        term.grid_mut().cursor.point = crate::index::Point::new(Line(0), Column(0));
+        term.set_cursor_shape(CursorShape::Hidden);
+        let snap = RenderSnapshot::capture(&term, &cfg(4, 8));
+        let cursor = snap
+            .cursor
+            .expect("DECSCUSR hidden cursor still has a cell");
+        assert_eq!(cursor.shape, CursorShape::Hidden);
+        assert_eq!(cursor.cell_ch, '█');
+        assert_eq!(
+            snap.box_glyphs.iter().map(|g| g.ch).collect::<Vec<_>>(),
+            vec!['█']
+        );
+    }
+
+    #[test]
+    fn capture_routes_builtin_glyphs_to_geometry() {
+        let term = term_with(&["a─█b"]);
+        let snap = RenderSnapshot::capture(&term, &cfg(4, 8));
+
+        let boxes: Vec<_> = snap
+            .box_glyphs
+            .iter()
+            .map(|b| (b.row, b.col, b.ch, b.wide))
+            .collect();
+        assert_eq!(boxes, vec![(0, 1, '─', false), (0, 2, '█', false)]);
+
+        // Text segments keep only 'a' and 'b', split at the geometry cells.
+        let segments: Vec<_> = snap
+            .segments
+            .iter()
+            .map(|s| (s.start_col, s.cells.len()))
+            .collect();
+        assert_eq!(segments, vec![(0, 1), (3, 1)]);
+    }
+}

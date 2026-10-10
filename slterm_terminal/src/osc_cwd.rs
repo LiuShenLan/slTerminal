@@ -462,3 +462,353 @@ fn hex_val(c: u8) -> Option<u8> {
         _ => None,
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn events(bytes: &[u8]) -> Vec<(usize, OscEvent)> {
+        CwdSniffer::default().feed(bytes)
+    }
+
+    /// The newest cwd within `events`, mirroring the PTY reader's use.
+    fn one_of(events: Vec<(usize, OscEvent)>) -> Option<String> {
+        events.into_iter().rev().find_map(|(_, e)| match e {
+            OscEvent::Cwd(cwd) => Some(cwd),
+            _ => None,
+        })
+    }
+
+    fn one(bytes: &[u8]) -> Option<String> {
+        one_of(events(bytes))
+    }
+
+    #[test]
+    fn osc7_windows_drive() {
+        assert_eq!(
+            one(b"\x1b]7;file:///C:/Users/foo\x07").as_deref(),
+            Some("C:/Users/foo")
+        );
+    }
+
+    #[test]
+    fn osc7_unix_with_host_and_st() {
+        assert_eq!(
+            one(b"\x1b]7;file://host/home/user\x1b\\").as_deref(),
+            Some("/home/user")
+        );
+    }
+
+    #[test]
+    fn osc7_percent_encoded_space() {
+        assert_eq!(
+            one(b"\x1b]7;file:///C:/My%20Docs\x07").as_deref(),
+            Some("C:/My Docs")
+        );
+    }
+
+    #[test]
+    fn osc9_9_conemu_path() {
+        assert_eq!(
+            one(b"\x1b]9;9;C:\\Users\\foo\\\x07").as_deref(),
+            Some("C:\\Users\\foo")
+        );
+    }
+
+    #[test]
+    fn split_across_chunks() {
+        let mut s = CwdSniffer::default();
+        assert!(s.feed(b"\x1b]7;file:///C:/Wor").is_empty());
+        assert_eq!(one_of(s.feed(b"k/dir\x07")).as_deref(), Some("C:/Work/dir"));
+    }
+
+    #[test]
+    fn keeps_order_of_multiple() {
+        let ev = events(b"\x1b]7;file:///a\x07\x1b]7;file:///b\x07");
+        assert_eq!(ev.len(), 2);
+        assert_eq!(ev[0].1, OscEvent::Cwd("/a".into()));
+        assert_eq!(ev[1].1, OscEvent::Cwd("/b".into()));
+    }
+
+    #[test]
+    fn ignores_other_osc() {
+        // OSC 0 title and an OSC 52 clipboard blob must not be mistaken for cwd.
+        assert!(events(b"\x1b]0;my title\x07").is_empty());
+        assert!(events(b"\x1b]52;c;QUJD\x07").is_empty());
+    }
+
+    #[test]
+    fn ignores_plain_text() {
+        assert!(events(b"just some normal output\n").is_empty());
+    }
+
+    #[test]
+    fn osc133_prompt_mark_bel() {
+        // ESC ] 1 3 3 ; A BEL — 8 bytes; offset points just past the BEL.
+        assert_eq!(events(b"\x1b]133;A\x07"), vec![(8, OscEvent::PromptMark)]);
+    }
+
+    #[test]
+    fn osc133_prompt_mark_st() {
+        // ST terminator: ESC ] 1 3 3 ; A ESC \ — offset just past the '\'.
+        assert_eq!(events(b"\x1b]133;A\x1b\\"), vec![(9, OscEvent::PromptMark)]);
+    }
+
+    #[test]
+    fn osc133_mark_offset_mid_stream() {
+        // The mark's offset is the advance split point after surrounding text.
+        let ev = events(b"out\x1b]133;A\x07$ ");
+        assert_eq!(ev, vec![(11, OscEvent::PromptMark)]);
+    }
+
+    #[test]
+    fn osc133_with_params() {
+        // Extra parameters on A are still a prompt mark.
+        assert_eq!(
+            events(b"\x1b]133;A;cl=m\x07"),
+            vec![(13, OscEvent::PromptMark)]
+        );
+    }
+
+    #[test]
+    fn osc133_other_phases_ignored() {
+        // B (command line start) has no consumer; C/D became events.
+        assert_eq!(events(b"\x1b]133;B\x07"), vec![(8, OscEvent::PromptInput)]);
+        assert_eq!(events(b"\x1b]133;C\x07"), vec![(8, OscEvent::CommandStart)]);
+        assert_eq!(
+            events(b"\x1b]133;D;0\x07"),
+            vec![(10, OscEvent::CommandDone { exit_code: Some(0) })]
+        );
+    }
+
+    #[test]
+    fn osc133_done_exit_code_variants() {
+        // Bare D (third-party integrations): finished, code unknown.
+        assert_eq!(
+            events(b"\x1b]133;D\x07"),
+            vec![(8, OscEvent::CommandDone { exit_code: None })]
+        );
+        // Trailing params after the code (some terminals send `;aid=<pid>`).
+        assert_eq!(
+            events(b"\x1b]133;D;127;aid=4242\x07"),
+            vec![(
+                21,
+                OscEvent::CommandDone {
+                    exit_code: Some(127)
+                }
+            )]
+        );
+        // Windows STATUS_CONTROL_C_EXIT is negative in i32 — must round-trip.
+        assert_eq!(
+            events(b"\x1b]133;D;-1073741510\x07"),
+            vec![(
+                20,
+                OscEvent::CommandDone {
+                    exit_code: Some(-1073741510)
+                }
+            )]
+        );
+        // Junk parameter degrades to None, not a dropped event.
+        assert_eq!(
+            events(b"\x1b]133;D;abc\x07"),
+            vec![(12, OscEvent::CommandDone { exit_code: None })]
+        );
+    }
+
+    #[test]
+    fn osc1337_set_user_var() {
+        use base64::Engine as _;
+        let b64 = base64::engine::general_purpose::STANDARD.encode("[mode:auto] kill port 3000");
+        let seq = format!("\x1b]1337;SetUserVar=slterm_ai_query={b64}\x07");
+        assert_eq!(
+            events(seq.as_bytes()),
+            vec![(
+                seq.len(),
+                OscEvent::UserVar {
+                    name: "slterm_ai_query".into(),
+                    value: "[mode:auto] kill port 3000".into(),
+                }
+            )]
+        );
+        // Bad base64 and hostile names are dropped, not passed through.
+        assert!(events(b"\x1b]1337;SetUserVar=x=!!!\x07").is_empty());
+        assert!(events(b"\x1b]1337;SetUserVar=bad name=QUJD\x07").is_empty());
+    }
+
+    #[test]
+    fn osc9_text_notification() {
+        assert_eq!(
+            events(b"\x1b]9;build done\x07"),
+            vec![(15, OscEvent::Notify("build done".into()))]
+        );
+        // `9;9;` (cwd) must keep precedence over the free-text notification.
+        assert_eq!(one(b"\x1b]9;9;C:\\w\x07").as_deref(), Some("C:\\w"));
+    }
+
+    /// OSC 9;4 是 ConEmu 的任务进度，不是文本通知。状态码原样带出去，规范外的
+    /// 码也要带（部分 shell 集成会用 `9;4;5;0` 表示成功完成）：在解析层判非法
+    /// 会让进度条永远停在最后一个状态上，语义收窄留给消费端。
+    #[test]
+    fn osc9_4_reports_conemu_progress() {
+        assert_eq!(
+            events(b"\x1b]9;4;1;50\x07"),
+            vec![(
+                11,
+                OscEvent::Progress {
+                    state: 1,
+                    value: Some(50)
+                }
+            )]
+        );
+        assert_eq!(
+            events(b"\x1b]9;4;3\x07"),
+            vec![(
+                8,
+                OscEvent::Progress {
+                    state: 3,
+                    value: None
+                }
+            )]
+        );
+        assert_eq!(
+            events(b"\x1b]9;4;5;0\x07"),
+            vec![(
+                10,
+                OscEvent::Progress {
+                    state: 5,
+                    value: Some(0)
+                }
+            )]
+        );
+        // 状态码读不出来就不是一条进度事件。
+        assert!(events(b"\x1b]9;4;x\x07").is_empty());
+    }
+
+    #[test]
+    fn cwd_and_mark_interleaved() {
+        let ev = events(b"\x1b]7;file:///C:/w\x07\x1b]133;A\x07");
+        assert_eq!(ev.len(), 2);
+        assert_eq!(ev[0].1, OscEvent::Cwd("C:/w".into()));
+        // First OSC is 17 bytes, the mark another 8: offset just past its BEL.
+        assert_eq!(ev[1], (25, OscEvent::PromptMark));
+    }
+
+    #[test]
+    fn mark_split_across_chunks() {
+        let mut s = CwdSniffer::default();
+        assert!(s.feed(b"\x1b]133;").is_empty());
+        // Terminator lands in the second chunk; offset is chunk-relative.
+        assert_eq!(s.feed(b"A\x07rest"), vec![(2, OscEvent::PromptMark)]);
+    }
+
+    /// A minimal valid 1x1 transparent PNG.
+    const TINY_PNG: &[u8] = &[
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F,
+        0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x00,
+        0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49,
+        0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+
+    fn tiny_png_osc() -> Vec<u8> {
+        inline_image_osc(TINY_PNG)
+    }
+
+    fn inline_image_osc(data: &[u8]) -> Vec<u8> {
+        use base64::Engine as _;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(data);
+        let mut seq = b"\x1b]1337;File=name=eC5wbmc=;size=70;inline=1:".to_vec();
+        seq.extend_from_slice(b64.as_bytes());
+        seq.push(0x07);
+        seq
+    }
+
+    #[test]
+    fn osc1337_inline_png() {
+        let seq = tiny_png_osc();
+        let ev = events(&seq);
+        assert_eq!(ev.len(), 1);
+        assert_eq!(ev[0].0, seq.len());
+        match &ev[0].1 {
+            OscEvent::InlineImage {
+                data,
+                width,
+                height,
+            } => {
+                assert_eq!((data.as_slice(), *width, *height), (TINY_PNG, 1, 1));
+            }
+            other => panic!("expected InlineImage, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn osc1337_without_inline_ignored() {
+        use base64::Engine as _;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(TINY_PNG);
+        let seq = format!("\x1b]1337;File=name=eC5wbmc=;size=70:{b64}\x07");
+        assert!(events(seq.as_bytes()).is_empty());
+    }
+
+    #[test]
+    fn osc1337_survives_chunk_splits() {
+        let seq = tiny_png_osc();
+        let mut s = CwdSniffer::default();
+        let (a, b) = seq.split_at(20);
+        assert!(s.feed(a).is_empty());
+        let ev = s.feed(b);
+        assert_eq!(ev.len(), 1);
+        assert!(matches!(
+            ev[0].1,
+            OscEvent::InlineImage {
+                width: 1,
+                height: 1,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn osc1337_accepts_jpeg_and_gif_headers() {
+        // Minimal SOF0 segment declaring a 3x2 image. The protocol layer only
+        // sniffs dimensions; the frontend decoder still rejects truncated data.
+        let jpeg = [
+            0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x02, 0x00, 0x03, 0x03, 0x01, 0x11,
+            0x00, 0x02, 0x11, 0x00, 0x03, 0x11, 0x00,
+        ];
+        let jpeg_events = events(&inline_image_osc(&jpeg));
+        assert!(matches!(
+            jpeg_events.as_slice(),
+            [(
+                _,
+                OscEvent::InlineImage {
+                    width: 3,
+                    height: 2,
+                    ..
+                }
+            )]
+        ));
+
+        let gif = b"GIF89a\x04\x00\x05\x00";
+        let gif_events = events(&inline_image_osc(gif));
+        assert!(matches!(
+            gif_events.as_slice(),
+            [(
+                _,
+                OscEvent::InlineImage {
+                    width: 4,
+                    height: 5,
+                    ..
+                }
+            )]
+        ));
+    }
+
+    #[test]
+    fn osc1337_rejects_video_unknown_formats_and_pixel_bombs() {
+        assert!(events(&inline_image_osc(b"\0\0\0\x18ftypmp42not-an-image")).is_empty());
+
+        let mut oversized = TINY_PNG.to_vec();
+        oversized[16..20].copy_from_slice(&5000u32.to_be_bytes());
+        oversized[20..24].copy_from_slice(&5000u32.to_be_bytes());
+        assert!(events(&inline_image_osc(&oversized)).is_empty());
+    }
+}

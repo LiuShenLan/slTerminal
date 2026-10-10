@@ -362,3 +362,130 @@ impl Wake for Registration {
         }
     }
 }
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    use polling::Events;
+
+    use super::*;
+
+    /// 「给一批就静默」的源：`recv` 阻塞住读线程，精确复刻 AI CLI 打完一轮
+    /// 就不再输出的时序。源不静默的话总有下一次写入替我们投递事件，缺唤醒
+    /// 也就显不出来——静默是这个 bug 的必要条件。
+    struct ScriptedSource {
+        rx: mpsc::Receiver<Vec<u8>>,
+        pending: Vec<u8>,
+    }
+
+    impl Read for ScriptedSource {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if self.pending.is_empty() {
+                match self.rx.recv() {
+                    Ok(chunk) => self.pending = chunk,
+                    // 发送端关闭 = EOF，读线程正常收尾。
+                    Err(_) => return Ok(0),
+                }
+            }
+            let n = self.pending.len().min(buf.len());
+            buf[..n].copy_from_slice(&self.pending[..n]);
+            self.pending.drain(..n);
+            Ok(n)
+        }
+    }
+
+    fn wait_until(limit: Duration, mut cond: impl FnMut() -> bool) -> bool {
+        let start = Instant::now();
+        while start.elapsed() < limit {
+            if cond() {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        cond()
+    }
+
+    fn readable_arrived(poller: &Poller, key: usize) -> bool {
+        let mut events = Events::new();
+        poller
+            .wait(&mut events, Some(Duration::from_secs(2)))
+            .unwrap();
+        events
+            .iter()
+            .any(|event| event.key == key && event.readable)
+    }
+
+    /// 把管道读空之后仍必须补投一次 readable。
+    ///
+    /// 回归防线：判据一旦退回 `read > 0 && !self.pipe.is_empty()`，这一步就再没有
+    /// 事件可等——管道已空、waker 已被 `drain_inner` 在拷贝前摘掉，源再静默下去
+    /// 便没有任何一方会投递，字节永久滞留（症状：画面停在半帧，缺 CLI 输入框，
+    /// 只有按键或 resize 能救回来）。
+    #[test]
+    fn reposts_readable_after_draining_the_pipe() {
+        const KEY: usize = 7;
+
+        let (tx, rx) = mpsc::channel();
+        let poller = Arc::new(Poller::new().unwrap());
+        let event = Event::readable(KEY);
+        let mut reader = UnblockedReader::new(
+            ScriptedSource {
+                rx,
+                pending: Vec::new(),
+            },
+            4096,
+        );
+
+        // Readiness permits another poll; it does not guarantee bytes. piper
+        // can deliberately yield for fairness and wake us again, and a queued
+        // notification can outlive the data that originally triggered it.
+        // Retry only after a notification so a genuinely lost wake still fails.
+        let read_chunk = |reader: &mut UnblockedReader<ScriptedSource>, buf: &mut [u8]| {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                let read = reader.try_read(buf);
+                if read > 0 {
+                    return read;
+                }
+                assert!(Instant::now() < deadline, "readiness never produced data");
+                assert!(readable_arrived(&poller, KEY), "pending read was not woken");
+            }
+        };
+
+        // 首次 register 自带一次无条件投递；先消化掉，后面等到的事件就只可能
+        // 来自 try_read 的补投。
+        reader.register(&poller, event, PollMode::Level);
+        assert!(readable_arrived(&poller, KEY), "首次 register 应当自投一次");
+
+        tx.send(b"hello".to_vec()).unwrap();
+        assert!(
+            wait_until(Duration::from_secs(2), || !reader.pipe.is_empty()),
+            "读线程没有把数据搬进管道"
+        );
+
+        let mut buf = [0u8; 64];
+        assert_eq!(read_chunk(&mut reader, &mut buf), 5);
+        assert_eq!(&buf[..5], b"hello");
+        assert!(
+            reader.pipe.is_empty(),
+            "这一读须把管道读空，否则测不到 TOCTOU 的那一半"
+        );
+
+        assert!(
+            readable_arrived(&poller, KEY),
+            "读空管道后没有补投 readable：源一静默，这批字节就永久滞留"
+        );
+
+        // 补投是自收敛的：再读一次返回 0，piper 借这次空读重新注册 waker，
+        // 后续写入照样能唤醒——多投的那一次不会把唤醒链弄坏。
+        assert_eq!(reader.try_read(&mut buf), 0);
+        tx.send(b"world".to_vec()).unwrap();
+        assert!(
+            readable_arrived(&poller, KEY),
+            "重新注册的 waker 失效，后续输出会卡住"
+        );
+        assert_eq!(read_chunk(&mut reader, &mut buf), 5);
+        assert_eq!(&buf[..5], b"world");
+    }
+}

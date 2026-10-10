@@ -158,3 +158,106 @@ impl Drop for ChildExitWatcher {
         }
     }
 }
+#[cfg(test)]
+mod tests {
+    use std::os::windows::io::AsHandle;
+    use std::process::{Child, Command, Stdio};
+    use std::sync::Arc;
+    use std::thread;
+    use std::time::Duration;
+
+    use super::super::PTY_CHILD_EVENT_TOKEN;
+    use super::*;
+
+    fn waiting_child() -> Child {
+        Command::new("cmd.exe")
+            .args(["/d", "/q", "/k"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap()
+    }
+
+    fn watch(child: &Child) -> ChildExitWatcher {
+        ChildExitWatcher::new(child.as_handle().try_clone_to_owned().unwrap()).unwrap()
+    }
+
+    #[test]
+    pub fn event_is_emitted_when_child_exits() {
+        const WAIT_TIMEOUT: Duration = Duration::from_secs(5);
+
+        let poller = Arc::new(Poller::new().unwrap());
+
+        let mut child = waiting_child();
+        let child_exit_watcher = watch(&child);
+        child_exit_watcher.register(&poller, Event::readable(PTY_CHILD_EVENT_TOKEN));
+
+        child.kill().unwrap();
+
+        // Poll for the event or fail with timeout if nothing has been sent.
+        let mut events = polling::Events::new();
+        poller.wait(&mut events, Some(WAIT_TIMEOUT)).unwrap();
+        assert_eq!(events.iter().next().unwrap().key, PTY_CHILD_EVENT_TOKEN);
+        // Verify that at least one `ChildEvent::Exited` was received.
+        let expected_status = ExitStatus::from_raw(1);
+        assert_eq!(
+            child_exit_watcher.event_rx().try_recv(),
+            Ok(ChildEvent::Exited(Some(expected_status)))
+        );
+        child.wait().unwrap();
+    }
+
+    #[test]
+    fn cancellation_releases_context_and_poller_before_child_exit() {
+        let mut child = waiting_child();
+        let watcher = watch(&child);
+        let context = Arc::downgrade(&watcher.context);
+        let poller = Arc::new(Poller::new().unwrap());
+        let poller_weak = Arc::downgrade(&poller);
+        watcher.register(&poller, Event::readable(PTY_CHILD_EVENT_TOKEN));
+        drop(poller);
+        drop(watcher);
+
+        let context_released = context.upgrade().is_none();
+        let poller_released = poller_weak.upgrade().is_none();
+        let still_running = child.try_wait().unwrap().is_none();
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert!(context_released && poller_released);
+        assert!(
+            still_running,
+            "dropping a watcher must not terminate its borrowed child"
+        );
+    }
+
+    #[test]
+    fn drop_waits_for_an_in_flight_callback() {
+        let mut child = waiting_child();
+        let watcher = watch(&child);
+        let context = Arc::clone(&watcher.context);
+        // The callback publishes the exit event before acquiring this lock.
+        let interest_guard = context.interest.lock().unwrap();
+        child.kill().unwrap();
+        watcher
+            .event_rx()
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        let (finished, result) = mpsc::channel();
+        let dropper = thread::spawn(move || {
+            drop(watcher);
+            finished.send(()).unwrap();
+        });
+        let returned_early = result.recv_timeout(Duration::from_millis(100)).is_ok();
+        drop(interest_guard);
+        if !returned_early {
+            result.recv_timeout(Duration::from_secs(5)).unwrap();
+        }
+        dropper.join().unwrap();
+        child.wait().unwrap();
+        assert!(
+            !returned_early,
+            "callback context cannot be freed while the callback runs"
+        );
+    }
+}

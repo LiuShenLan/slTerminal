@@ -931,3 +931,150 @@ impl<T> PeekableReceiver<T> {
         }
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::event::VoidListener;
+    use crate::term::Config;
+    use crate::term::test::TermSize;
+
+    #[test]
+    fn animation_snapshots_cannot_observe_a_partial_synchronized_update() {
+        use crate::render::{RenderSnapshot, SnapshotConfig};
+        let mut term = Term::new(Config::default(), &TermSize::new(20, 2), VoidListener);
+        let mut stream = StreamProcessor::default();
+        let cfg = SnapshotConfig { rows: 2, cols: 20 };
+        stream.feed(&mut term, &VoidListener, b"old");
+        let before = RenderSnapshot::capture(&term, &cfg);
+        for bytes in [
+            b"\x1b[?20".as_slice(),
+            b"26h\r",
+            b"new",
+            b"\x1b[10G",
+            b"\x1b[?2026",
+        ] {
+            stream.feed(&mut term, &VoidListener, bytes);
+            // Animation frames read the grid even without a Wakeup.
+            let frame = RenderSnapshot::capture(&term, &cfg);
+            assert_eq!(
+                frame.cursor.as_ref().unwrap().col,
+                before.cursor.as_ref().unwrap().col
+            );
+            assert_eq!(term.grid()[Line(0)][Column(0)].c, 'o');
+        }
+        stream.feed(&mut term, &VoidListener, b"l");
+        assert_eq!(RenderSnapshot::capture(&term, &cfg).cursor.unwrap().col, 9);
+        assert_eq!(term.grid()[Line(0)][Column(0)].c, 'n');
+        stream.feed(&mut term, &VoidListener, b"\x1b[?2026h\rtimeout");
+        assert_eq!(term.grid()[Line(0)][Column(0)].c, 'n');
+        stream.stop_sync(&mut term);
+        assert_eq!(term.grid()[Line(0)][Column(0)].c, 't');
+    }
+
+    #[test]
+    fn shell_identity_cwd_and_title_keep_wire_order_across_chunk_boundaries() {
+        #[derive(Clone, Default)]
+        struct Listener(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+        impl EventListener for Listener {
+            fn send_event(&self, event: Event) {
+                let label = match event {
+                    Event::UserVar { value, .. } => format!("shell:{value}"),
+                    Event::CwdReport(cwd) => format!("cwd:{cwd}"),
+                    Event::Title(title) => format!("title:{title}"),
+                    _ => return,
+                };
+                self.0.lock().unwrap().push(label);
+            }
+        }
+        let bytes = b"\x1b]1337;SetUserVar=slterm_shell=cmVtb3Rl\x07\x1b]7;file://box/remote\x07\x1b]2;remote\x07\x1b]1337;SetUserVar=slterm_shell=bG9jYWw=\x07\x1b]7;file://localhost/local\x07";
+        for split in 0..=bytes.len() {
+            let listener = Listener::default();
+            let size = TermSize::new(80, 24);
+            let mut terminal = Term::new(Config::default(), &size, listener.clone());
+            let mut stream = StreamProcessor::default();
+            stream.feed(&mut terminal, &listener, &bytes[..split]);
+            stream.feed(&mut terminal, &listener, &bytes[split..]);
+            assert_eq!(
+                *listener.0.lock().unwrap(),
+                [
+                    "shell:remote",
+                    "cwd:/remote",
+                    "title:remote",
+                    "shell:local",
+                    "cwd:/local"
+                ],
+                "split at {split}"
+            );
+        }
+    }
+
+    #[test]
+    fn semantic_input_boundary_survives_chunking_and_scrolling() {
+        use crate::index::{Column, Line, Point};
+
+        let bytes = b"\x1b]133;A\x07[first]\r\n>\x1b]133;B\x07pause";
+        for split in 0..=bytes.len() {
+            let mut terminal = Term::new(Config::default(), &TermSize::new(20, 2), VoidListener);
+            let mut stream = StreamProcessor::default();
+            stream.feed(&mut terminal, &VoidListener, &bytes[..split]);
+            stream.feed(&mut terminal, &VoidListener, &bytes[split..]);
+            assert_eq!(
+                terminal.slterm_prompt_input_point(),
+                Some(Point::new(Line(1), Column(1)))
+            );
+            stream.feed(&mut terminal, &VoidListener, b"\r\n");
+            assert_eq!(
+                terminal.slterm_prompt_input_point(),
+                Some(Point::new(Line(0), Column(1)))
+            );
+            stream.feed(&mut terminal, &VoidListener, b"\x1b]133;C\x07");
+            assert_eq!(terminal.slterm_prompt_input_point(), None);
+        }
+    }
+
+    #[test]
+    fn input_boundaries_require_a_prompt_and_do_not_survive_reflow_or_reset() {
+        let mut terminal = Term::new(Config::default(), &TermSize::new(20, 2), VoidListener);
+        let mut stream = StreamProcessor::default();
+        stream.feed(&mut terminal, &VoidListener, b"\x1b]133;B\x07");
+        assert_eq!(terminal.slterm_prompt_input_point(), None);
+        for ending in [b"\x1bc".as_slice(), b"\x1b]133;D;0\x07", b"\x1b]133;A\x07"] {
+            stream.feed(
+                &mut terminal,
+                &VoidListener,
+                b"\x1b]133;A\x07\x1b]133;B\x07",
+            );
+            assert!(terminal.slterm_prompt_input_point().is_some());
+            stream.feed(&mut terminal, &VoidListener, ending);
+            assert_eq!(terminal.slterm_prompt_input_point(), None);
+        }
+        stream.feed(
+            &mut terminal,
+            &VoidListener,
+            b"\x1b]133;A\x07\x1b]133;B\x07",
+        );
+        terminal.resize(TermSize::new(10, 2));
+        assert_eq!(terminal.slterm_prompt_input_point(), None);
+    }
+
+    #[test]
+    fn shell_semantic_events_track_the_active_prompt() {
+        let size = TermSize::new(80, 24);
+        let mut terminal = Term::new(Config::default(), &size, VoidListener);
+        let listener = VoidListener;
+        let mut stream = StreamProcessor::default();
+
+        stream.feed(&mut terminal, &listener, b"\x1b]133;A\x07custom prompt :: ");
+        assert!(terminal.slterm_prompt_active());
+
+        stream.feed(&mut terminal, &listener, b"\x1b]133;C\x07");
+        assert!(!terminal.slterm_prompt_active());
+
+        stream.feed(&mut terminal, &listener, b"\x1b]133;A\x07next prompt :: ");
+        assert!(terminal.slterm_prompt_active());
+
+        stream.feed(&mut terminal, &listener, b"\x1b]133;D;0\x07");
+        assert!(!terminal.slterm_prompt_active());
+    }
+}

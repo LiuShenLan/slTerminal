@@ -508,3 +508,108 @@ impl From<WindowSize> for COORD {
         }
     }
 }
+#[cfg(test)]
+mod runtime_asset_tests {
+    use super::{bundled_conpty_dir, convert_custom_env};
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static NEXT_DIR: AtomicUsize = AtomicUsize::new(0);
+
+    struct TestDir(PathBuf);
+
+    impl TestDir {
+        fn new(name: &str) -> Self {
+            let sequence = NEXT_DIR.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "slterm-conpty-{name}-{}-{sequence}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn write_pair(dir: &Path) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join("conpty.dll"), b"dll").unwrap();
+        std::fs::write(dir.join("OpenConsole.exe"), b"host").unwrap();
+    }
+
+    #[test]
+    fn conpty_prefers_complete_runtime_pair() {
+        let dir = TestDir::new("runtime");
+        write_pair(dir.path());
+        write_pair(&dir.path().join("runtime"));
+
+        assert_eq!(
+            bundled_conpty_dir(dir.path()),
+            Some(dir.path().join("runtime"))
+        );
+    }
+
+    #[test]
+    fn conpty_does_not_mix_partial_runtime_with_legacy_pair() {
+        let dir = TestDir::new("partial");
+        write_pair(dir.path());
+        let runtime = dir.path().join("runtime");
+        std::fs::create_dir(&runtime).unwrap();
+        std::fs::write(runtime.join("conpty.dll"), b"dll-only").unwrap();
+
+        assert_eq!(
+            bundled_conpty_dir(dir.path()),
+            Some(dir.path().to_path_buf())
+        );
+    }
+
+    #[test]
+    fn conpty_returns_none_without_complete_pair() {
+        let dir = TestDir::new("missing");
+        let runtime = dir.path().join("runtime");
+        std::fs::create_dir(&runtime).unwrap();
+        std::fs::write(runtime.join("OpenConsole.exe"), b"host-only").unwrap();
+
+        assert_eq!(bundled_conpty_dir(dir.path()), None);
+    }
+
+    #[test]
+    fn complete_environment_does_not_restore_parent_variables() {
+        let custom = HashMap::from([("SLTERM_REFRESH_TEST".to_owned(), "fresh".to_owned())]);
+        let block = convert_custom_env(&custom, true).expect("environment block");
+        let entries: Vec<String> = block
+            .split(|character| *character == 0)
+            .filter(|entry| !entry.is_empty())
+            .map(String::from_utf16_lossy)
+            .collect();
+
+        assert_eq!(entries, vec!["SLTERM_REFRESH_TEST=fresh"]);
+    }
+
+    #[test]
+    fn complete_environment_block_is_sorted_case_insensitively() {
+        let custom = HashMap::from([
+            ("z-last".to_owned(), "3".to_owned()),
+            ("Middle".to_owned(), "2".to_owned()),
+            ("a-first".to_owned(), "1".to_owned()),
+        ]);
+        let block = convert_custom_env(&custom, true).expect("environment block");
+        let entries: Vec<String> = block
+            .split(|character| *character == 0)
+            .filter(|entry| !entry.is_empty())
+            .map(String::from_utf16_lossy)
+            .collect();
+
+        assert_eq!(entries, vec!["a-first=1", "Middle=2", "z-last=3"]);
+    }
+}

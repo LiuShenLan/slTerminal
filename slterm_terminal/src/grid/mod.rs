@@ -13,6 +13,8 @@ use vte::ansi::{CharsetIndex, StandardCharset};
 pub mod resize;
 mod row;
 mod storage;
+#[cfg(test)]
+mod tests;
 
 pub use self::row::Row;
 use self::storage::Storage;
@@ -633,6 +635,21 @@ impl<G> Dimensions for Grid<G> {
     #[inline]
     fn columns(&self) -> usize {
         self.columns
+    }
+}
+
+#[cfg(test)]
+impl Dimensions for (usize, usize) {
+    fn total_lines(&self) -> usize {
+        self.0
+    }
+
+    fn screen_lines(&self) -> usize {
+        self.0
+    }
+
+    fn columns(&self) -> usize {
+        self.1
     }
 }
 
