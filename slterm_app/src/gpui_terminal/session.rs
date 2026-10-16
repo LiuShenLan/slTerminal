@@ -1,0 +1,163 @@
+//! PTY 会话接线:`Term` + `EventLoop` + ConPTY,全部来自 `slterm_terminal`。
+//!
+//! 事件出口是 futures channel,GPUI 前台任务可 `await` 事件。SSH 变体消亡
+//! (13 篇:`TerminalLaunch::Ssh` 不再存在,上游 `spawn_ssh`/stages/
+//! remote_reader 一并裁剪——06 篇按理想终态重设计时另立)。
+
+use std::sync::Arc;
+
+use slterm_terminal::Term;
+use slterm_terminal::event::{Event, EventListener, WindowSize};
+use slterm_terminal::event_loop::{EventLoop, EventLoopHandle, Notifier};
+use slterm_terminal::grid::Dimensions;
+use slterm_terminal::sync::FairMutex;
+use slterm_terminal::term::Config;
+use slterm_terminal::tty;
+use slterm_terminal::tty::EventedPty as _;
+
+/// 把 PTY 线程发出的终端事件转投到 GPUI 前台的异步通道。
+#[derive(Clone)]
+pub struct EventProxy {
+    pub(super) events: super::event_mailbox::EventSender,
+}
+
+impl EventListener for EventProxy {
+    fn send_event(&self, event: Event) {
+        self.events.send(event);
+    }
+}
+
+/// 初始网格尺寸;`Term::new`/`Term::resize` 只消费行列数。
+#[derive(Clone, Copy)]
+pub struct GridSize {
+    pub columns: usize,
+    pub screen_lines: usize,
+}
+
+impl Dimensions for GridSize {
+    fn total_lines(&self) -> usize {
+        self.screen_lines
+    }
+
+    fn screen_lines(&self) -> usize {
+        self.screen_lines
+    }
+
+    fn columns(&self) -> usize {
+        self.columns
+    }
+}
+
+pub struct TerminalSession {
+    pub term: Arc<FairMutex<Term<EventProxy>>>,
+    pub notifier: Notifier,
+    pub(super) native_prompt: super::event_mailbox::NativePromptState,
+    /// PTY 直系 shell PID;关闭确认的 `busy_child(shell_pid)` 判据归 02 篇。
+    #[allow(dead_code)] // M3 仅观测;关闭确认消费点归 05 篇。
+    pub shell_pid: u32,
+    /// EventLoop 句柄(M2 裁决:`spawn` 返回 must_use 句柄,Drop 兜底发
+    /// Shutdown + join)。会话必须持证:句柄随会话 Drop,后台线程才跟 pane
+    /// 生命周期走。`None` 仅存在于 test_session(无真 PTY)。
+    _event_loop: Option<EventLoopHandle<tty::Pty, EventProxy>>,
+}
+
+/// 一次会话 spawn 的完整出口:会话句柄 + 终端事件流。
+pub type SpawnedSession = (TerminalSession, super::event_mailbox::EventReceiver);
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+pub(crate) fn test_session() -> (
+    TerminalSession,
+    std::sync::mpsc::Receiver<slterm_terminal::event_loop::Msg>,
+) {
+    let (events, _event_rx) = super::event_mailbox::channel();
+    let proxy = EventProxy { events };
+    let term = Term::new(
+        Config::default(),
+        &GridSize {
+            columns: 80,
+            screen_lines: 24,
+        },
+        proxy.clone(),
+    );
+    let (sender, receiver) = slterm_terminal::event_loop::EventLoopSender::standalone().unwrap();
+    (
+        TerminalSession {
+            term: Arc::new(FairMutex::new(term)),
+            notifier: Notifier(sender),
+            native_prompt: proxy.events.native_prompt.clone(),
+            shell_pid: 0,
+            _event_loop: None,
+        },
+        receiver,
+    )
+}
+
+/// 组装本地 shell 的 PTY 启动参数。
+///
+/// `shell`:`None` 走 core 探测链(pwsh → powershell → cmd,白名单深检 +
+/// pwsh EncodedCommand 集成)。环境身份契约(`SLTERM_PANE_ID`)最后写,
+/// 以 `refresh_environment` 的快照为基准。
+pub(super) fn local_options(
+    shell: Option<tty::Shell>,
+    pane_id: slterm_split::PaneId,
+    cwd: Option<std::path::PathBuf>,
+) -> tty::Options {
+    let mut options = tty::Options {
+        shell,
+        working_directory: cwd,
+        ..Default::default()
+    };
+    // 注册表快照合并(MACHINE+USER 环境),置 env_is_complete;失败仅降级
+    // 为进程环境继承,不拦启动(与上游 prepare_local_pty 同语义)。
+    if let Err(error) = tty::refresh_environment(&mut options) {
+        log::warn!("环境快照合并失败,回退进程环境继承: {error}");
+    }
+    // conpty_sideload 硬编码 true(06 篇换设置键真读时此处是唯一换点;
+    // core `Options::default()` 同值,显式写出是登记锚)。
+    options.conpty_sideload = true;
+    // 固定身份/能力注入:core `setup_env` 只写 TERM/COLORTERM,TERM_PROGRAM
+    // 与 pane 身份是壳侧契约。
+    options.env.insert("TERM".into(), "xterm-256color".into());
+    options.env.insert("COLORTERM".into(), "truecolor".into());
+    options.env.insert("TERM_PROGRAM".into(), "slterm".into());
+    options
+        .env
+        .insert("SLTERM_PANE_ID".into(), pane_id.0.to_string());
+    options
+}
+
+pub fn spawn(
+    window_size: WindowSize,
+    term_config: Config,
+    options: tty::Options,
+) -> std::io::Result<SpawnedSession> {
+    let (tx, rx) = super::event_mailbox::channel();
+    let proxy = EventProxy { events: tx };
+
+    let grid = GridSize {
+        columns: window_size.num_cols as usize,
+        screen_lines: window_size.num_lines as usize,
+    };
+    let term = Arc::new(FairMutex::new(Term::new(term_config, &grid, proxy.clone())));
+
+    tty::setup_env();
+    let pty = tty::new(&options, window_size)?;
+    let shell_pid = pty.child_pid().unwrap_or(0);
+
+    let native_prompt = proxy.events.native_prompt.clone();
+    let event_loop = EventLoop::new(Arc::clone(&term), proxy, pty, options.drain_on_exit)?;
+    let notifier = Notifier(event_loop.channel());
+    // 句柄随会话持有:Drop 兜底(Shutdown+join)由 EventLoopHandle 保证。
+    let event_loop = event_loop.spawn();
+
+    Ok((
+        TerminalSession {
+            term,
+            notifier,
+            native_prompt,
+            shell_pid,
+            _event_loop: Some(event_loop),
+        },
+        rx,
+    ))
+}

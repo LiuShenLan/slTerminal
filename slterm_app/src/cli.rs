@@ -21,8 +21,7 @@ pub enum Program {
 }
 
 impl Program {
-    /// 消费点 = M3.2 WorkspaceStartup::LaunchTerminal 的 spawn 参数组装。
-    #[allow(dead_code)]
+    /// 消费点 = WorkspaceStartup::LaunchTerminal 的 spawn 参数组装。
     pub fn program(&self) -> &str {
         match self {
             Self::Just(program) => program,
@@ -31,7 +30,6 @@ impl Program {
     }
 
     /// 消费点同上(LaunchTerminal 组装)。
-    #[allow(dead_code)]
     pub fn args(&self) -> &[String] {
         match self {
             Self::Just(_) => &[],

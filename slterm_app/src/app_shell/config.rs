@@ -10,11 +10,9 @@ const DEFAULT_FONT_SIZE_PX: f32 = 15.0;
 /// 滚轮速度缺省(上游 settings `DEFAULT_SCROLL_SPEED` 同值)。
 const DEFAULT_SCROLL_SPEED: f32 = 1.0;
 /// 回滚行数(D02-3 裁决值)。
-#[allow(dead_code)] // 唯一消费点 term_config 随 M3.2 session 点亮接线。
 const SCROLLING_HISTORY: usize = 10000;
 
 /// 应用启动时装载一次的全局设置;M3 无热应用(apply_runtime_settings 归 06)。
-#[allow(dead_code)] // 字段读取面(渲染/排版消费)随 M3.2 终端元素点亮;M3.1 只立白名单。
 pub struct Settings {
     pub font_family: String,
     pub font_bold_family: String,
@@ -53,14 +51,17 @@ impl Settings {
 
     /// 引擎 `Term` 的启动配置。
     ///
-    /// M3.1 只定回滚行数;ConPTY 关键位(`suppress_bringup_da1`/`conpty_resize`)
-    /// 与 `kitty_keyboard` 归 M3.2 随 session 点亮回填(因果:侧载 ConPTY 的起桥
-    /// DA1 已被宿主预应答,Term 必须吞掉自己的重复应答;resize 后 ConPTY 静默
-    /// 重锚主屏,网格必须同语义——上游 config.rs `term_config` 注释链)。
-    #[allow(dead_code)] // 消费点 = M3.2 session 点亮(Term::new 接线)。
+    /// ConPTY 关键位照上游钉死(因果链):侧载 ConPTY 的起桥 DA1 已被宿主
+    /// 预应答,Term 必须吞掉自己的重复应答(`suppress_bringup_da1`,上游 =
+    /// `conpty_sideload_enabled()`——core 已无该读法,Options 默认侧载恒真,
+    /// 此处硬编码 true);resize 后 ConPTY 静默重锚主屏,网格必须同语义
+    /// (`conpty_resize`);`kitty_keyboard` 开增强键报。
     pub fn term_config(&self) -> slterm_terminal::term::Config {
         slterm_terminal::term::Config {
             scrolling_history: SCROLLING_HISTORY,
+            suppress_bringup_da1: true,
+            conpty_resize: true,
+            kitty_keyboard: true,
             ..Default::default()
         }
     }
@@ -91,5 +92,14 @@ mod config_tests {
     fn term_config_carries_the_anchored_scrollback() {
         // D02-3:回滚 10000 行是产品裁决值,不是库默认巧合——钉字面量。
         assert_eq!(Settings::load().term_config().scrolling_history, 10000);
+    }
+
+    #[test]
+    fn term_config_pins_the_conpty_and_keyboard_flags() {
+        // 上游同链三键:侧载 DA1 预应答 / ConPTY 网格同语义 / kitty 增强键报。
+        let config = Settings::load().term_config();
+        assert!(config.suppress_bringup_da1);
+        assert!(config.conpty_resize);
+        assert!(config.kitty_keyboard);
     }
 }

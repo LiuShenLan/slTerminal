@@ -19,6 +19,7 @@ pub(crate) mod gpui_terminal;
 pub(crate) mod logging;
 pub(crate) mod panic;
 pub(crate) mod platform;
+pub(crate) mod terminal_registry;
 
 use std::error::Error;
 

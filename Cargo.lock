@@ -6045,6 +6045,7 @@ name = "slterm"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "futures",
  "gpui",
  "gpui-component",
  "gpui-component-assets",
@@ -6052,7 +6053,9 @@ dependencies = [
  "log",
  "raw-window-handle",
  "slterm-settings",
+ "slterm-split",
  "slterm_terminal",
+ "vte",
  "windows-sys 0.59.0",
 ]
 

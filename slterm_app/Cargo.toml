@@ -34,10 +34,18 @@ gpui-component-assets.workspace = true
 slterm_terminal = { path = "../slterm_terminal" }
 # 包名带连字符(lib 目标名 cargo 自动转下划线,代码里 `use slterm_settings`)。
 slterm-settings = { path = "../slterm_settings" }
+# PaneId/TabId + SplitTree 分屏树(纯数据 core,M3 workspace 雏形挂接)。
+slterm-split = { path = "../slterm_split" }
+# vte 类型面(Color/CursorShape/NamedColor/Rgb + 测试注入 Processor):
+# core 刻意不再导出(「解析器不经本 crate 再导出」),壳侧同名钉版,
+# 版本/feature 必须与 slterm_terminal/Cargo.toml 逐字一致,跨 crate 类型才同一。
+vte = { version = "0.15.0", default-features = false, features = ["std", "ansi"] }
 # AppError::Gpui 的载体:gpui 的 anyhow 再导出藏在 doc(hidden) private 模块
 # (宏内部专用),业务侧必须直连 anyhow 本体。
 anyhow = "1"
 log = "0.4"
+# 事件信箱/session_pump 的异步通道与 Stream(event_mailbox.rs 随迁形态)。
+futures = "0.3"
 # first_frame 取原生 HWND 走 raw-window-handle(与 gpui 内部同版本族),
 # 不经 winit 中转——winit 事件循环本体不迁。
 raw-window-handle = "0.6"
@@ -50,6 +58,8 @@ windows-sys = { version = "0.59", features = [
     # console 归一化(SetConsoleCtrlHandler)与 panic 报告的 GetConsoleCP。
     "Win32_System_Console",
     "Win32_UI_HiDpi",
+    # GetAsyncKeyState(VK_LBUTTON):resize 手势门控(view/layout.rs)。
+    "Win32_UI_Input_KeyboardAndMouse",
     # MessageBoxW(启动错误弹面/panic 钩)、SendMessageW(首帧 present-then-show)。
     "Win32_UI_WindowsAndMessaging",
 ] }

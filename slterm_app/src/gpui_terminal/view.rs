@@ -1,0 +1,784 @@
+//! 终端视图:持有会话、处理输入与 IME、驱动重绘。
+
+mod broadcast;
+mod cwd_report;
+pub(super) mod layout;
+pub(super) mod pointer;
+pub(super) mod startup;
+pub(super) mod typography;
+
+pub use broadcast::TerminalInput;
+
+use gpui::{
+    App, Bounds, ClipboardItem, Context, EventEmitter, FocusHandle, Focusable, Font, FontStyle,
+    FontWeight, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Point, Render, ScrollWheelEvent,
+    Size, Styled as _, UTF16Selection, Window, div, point, px,
+};
+
+use std::sync::Arc;
+
+use slterm_terminal::event::{Event as TermEvent, Notify as _, WindowSize};
+use slterm_terminal::event_loop::Msg;
+use slterm_terminal::grid::Scroll;
+use slterm_terminal::index::{Column, Line, Point as TermPoint, Side};
+use slterm_terminal::render::{CellMetrics, TerminalViewport, ViewportTracker};
+use slterm_terminal::selection::{Selection, SelectionType};
+use slterm_terminal::term::TermMode;
+use vte::ansi::CursorStyle;
+
+use slterm_split::PaneId;
+
+use super::colors::Palette;
+use super::copy_feedback::CopyFeedback;
+use super::element::TerminalElement;
+use super::mouse_protocol;
+use super::session::{self, TerminalSession};
+use super::{KEY_CONTEXT, TerminalBackTab, TerminalTab};
+use crate::app_shell::config::Settings;
+use typography::{M3_CELL_WIDTH_MODE, M3_FONT_OFFSET, mono_font};
+
+/// 拖选越过网格上/下边界后的自动回滚:tick 间隔与「每远离 20px 加一行」的
+/// 速度分档取自旧壳常量(GPUI 的 `Pixels` 本就是逻辑像素,这里直接是逻辑口径)。
+pub(super) const SELECTION_SCROLL_INTERVAL: std::time::Duration =
+    std::time::Duration::from_millis(15);
+const SELECTION_SCROLL_STEP: f32 = 20.0;
+
+/// 一次自动回滚该滚几行:指针在网格上方为正(往回滚历史)、下方为负,网格
+/// 内为 0。贴边即 1 行,之后每远离 `SELECTION_SCROLL_STEP` 像素加一档。
+///
+/// `max_lines` 是每 tick 的上限:GPUI 在 Windows 上按下即 `SetCapture`,
+/// 指针甩到屏幕外时 y 可以是很大的负数,不封顶就会「一抖到底」。
+fn selection_scroll_lines(y: f32, top: f32, bottom: f32, max_lines: i32) -> i32 {
+    let step = SELECTION_SCROLL_STEP.max(1.0);
+    let max = max_lines.max(1);
+    if y < top {
+        (1 + ((top - y) / step) as i32).min(max)
+    } else if y >= bottom {
+        -((1 + ((y - bottom) / step) as i32).min(max))
+    } else {
+        0
+    }
+}
+
+fn cursor_blink_allowed(
+    terminal_blinking: bool,
+    vi_mode: bool,
+    show_cursor: bool,
+    ime_preedit: bool,
+    window_active: bool,
+    pane_focused: bool,
+) -> bool {
+    terminal_blinking && (vi_mode || show_cursor) && !ime_preedit && window_active && pane_focused
+}
+
+fn restart_cursor_blink_phase(cursor_visible: &mut bool, cursor_blink_epoch: &mut u64) -> u64 {
+    *cursor_visible = true;
+    *cursor_blink_epoch = cursor_blink_epoch.wrapping_add(1);
+    *cursor_blink_epoch
+}
+
+/// 终端视图对宿主(Workspace)暴露的状态变化。M3 白集(13 篇改造节);
+/// FocusRequested/RequestClose/Bell/Notification/Progress/菜单等臂归各自
+/// 分篇回填。
+pub enum TerminalViewEvent {
+    /// OSC 标题/cwd 变化,宿主应刷新 Tab 标题。
+    TitleChanged,
+    /// 会话结束(子进程退出或 PTY 故障),只发一次。
+    Exited,
+    /// 用户语义输入。宿主可按 tab 的广播状态扇出(广播本体归 M5);
+    /// 接收 pane 必须重新编码,不能复用发送方已受终端 mode 影响的字节。
+    #[allow(dead_code)] // 载荷消费 = M5 广播扇出;M3 宿主只收事件名。
+    UserInput(TerminalInput),
+}
+
+/// 会话种类。M3 只剩本地 shell:上游 `Ssh` 变体消亡(13 篇,06 篇按理想
+/// 终态重设计时另立)。
+///
+/// `shell` 是 Tab 创建时已经裁定好的启动命令。不能只传 cwd 再在
+/// `TerminalView::new` 里读取「此刻的默认 Shell」,否则恢复混合工作区时
+/// 每个 Tab 都会被重新解释成同一个当前默认值。
+pub enum TerminalLaunch {
+    Local {
+        cwd: Option<std::path::PathBuf>,
+        shell: Option<slterm_terminal::tty::Shell>,
+        /// 展示用 shell 名(欢迎/标题);M3 不参与 PTY 启动决策。
+        shell_name: Option<String>,
+    },
+}
+
+pub struct TerminalView {
+    pub pane_id: PaneId,
+    pub session: Option<TerminalSession>,
+    pub focus_handle: FocusHandle,
+    pub font: Font,
+    pub font_bold: Font,
+    pub font_italic: Font,
+    pub font_bold_italic: Font,
+    pub font_size: Pixels,
+    #[allow(dead_code)] // 设置热应用换字体时重读(06 篇);M3 构造期消费后闲置。
+    pub ligatures: bool,
+    /// 单元格偏移取物理像素语义(对齐 crossfont 合同),在 GPUI shaped
+    /// 实际字形之后施加。M3 恒 (0,0)(06 篇设置键回填)。
+    font_offset_x: f32,
+    font_offset_y: f32,
+    /// 主题行高倍率:`None` 保留 shaped 字体度量;`Some` 作用于逻辑字号。
+    line_height_multiplier: Option<f32>,
+    pub palette: Arc<Palette>,
+    pub marked_text: Option<String>,
+    pub ime_bounds: Bounds<Pixels>,
+    pub title: String,
+    /// shell 集成 `SLTERM|cwd|branch` 标题上报 / OSC 7 的工作目录;
+    /// tab 标签的第一优先来源。
+    pub cwd: String,
+    pub(super) error: Option<String>,
+    pub(super) exited: Option<String>,
+    pub(super) origin: Point<Pixels>,
+    pub(super) cell_width: Pixels,
+    pub(super) line_height: Pixels,
+    pub(super) cols: usize,
+    pub(super) rows: usize,
+    /// 子进程已被告知的几何。`cols`/`rows` 是屏幕上正在渲染的视口,交互式
+    /// 拖拽期间它每帧跟手、本地网格随之 reflow,而这里停在最后一次真正
+    /// 下发给 ConPTY 的边界上。判断「要不要通知子进程」只能拿这个字段比,
+    /// 拿 `cols`/`rows` 比会把每一帧都当成新几何。
+    pub(super) window_size: WindowSize,
+    /// 启动稳定闸:开窗 resize 是异步落地的,首帧可能还是旧尺寸。闸门
+    /// 关着时不向 Term/ConPTY 下发布局,直到布局命中 spawn 网格(零下发
+    /// 收口)或宽限期超时(小屏收拢等真实差异,放行一次性纠正)。没有
+    /// 这道闸,ConPTY 会在 shell 首屏输出中途被 目标→旧→目标 来回重排
+    /// (shrink 重排具破坏性),PSReadLine 的坐标缓存随之错位——表现为
+    /// 打字回显落到陈旧行。
+    pub(super) grid_synced: bool,
+    pub(super) spawn_at: std::time::Instant,
+    pub(super) viewports: ViewportTracker,
+    /// 等尾沿 resize 提交的最终可视视口。只等 PTY 那一半——网格已在
+    /// 观测当帧 reflow 过。
+    pub(super) pending_resize: Option<TerminalViewport>,
+    /// 下一次网格变化是「结构性」的,子进程立即知道、不进尾沿去抖。
+    ///
+    /// 旧壳在分屏创建/关闭、tab 新建这类一次性结构变化上同步下发
+    /// grid + PTY;若混进尾沿去抖路径,分屏后有 150ms 窗口期:子进程仍按
+    /// 旧宽度输出,那些字节按旧几何进网格,等提交时本地 reflow 与 conhost
+    /// rewrap 各折一套行数——提示符与回显从此错开几行。
+    pub(super) structural_resize: bool,
+    /// 新布局观测胜出时作废旧 settle 定时器。
+    pub(super) resize_epoch: u64,
+    pub(super) scroll_px: f32,
+    pub(super) selecting: bool,
+    /// 拖选越界后的自动回滚 tick 世代:停止或重开一轮就 +1,让在途的旧
+    /// 定时器链自行失效(同 `cursor_blink_epoch` 的模式)。
+    pub(super) selection_scroll_epoch: u64,
+    /// 是否已有一条自动回滚定时器链在跑——每次 move 都开一条会叠出 N 倍速。
+    pub(super) selection_scroll_active: bool,
+    /// 选中即复制;关闭时复制交给右键路径。
+    pub(super) copy_on_select: bool,
+    /// §5.2 复制反馈时限状态机(时限实现单点)。
+    pub(super) copy_feedback: CopyFeedback,
+    /// 鼠标模式下最后上报的单元格:move 事件按「进入新单元格」去重。
+    pub(super) last_report_point: Option<TermPoint>,
+    /// GPUI 没有旧壳 scheduler 的 blink 事件,视图自己只维护可见相位;
+    /// 光标是否允许闪烁仍由共享 `Term::cursor_style()` 裁定。
+    cursor_visible: bool,
+    cursor_blink_epoch: u64,
+    /// OS 窗口前台状态与 pane 内焦点是两层独立条件。缓存它们是因为 blink
+    /// timer 回调没有 `Window`,状态变化由 GPUI observer 立即重启相位。
+    pub(super) cursor_window_active: bool,
+    pub(super) cursor_pane_focused: bool,
+    /// Workspace 呈现可见性独立于键盘/窗口焦点:隐藏 tab 的输出不触发
+    /// 重绘无效化(见 `process_event` 的 Wakeup 臂)。
+    pub(super) output_visible: bool,
+    _cursor_blink_subscriptions: [gpui::Subscription; 3],
+    /// 最近一次下发的默认光标样式。只在它真正变化时清理 shell 的
+    /// DECSCUSR/DEC mode 12 覆盖,避免无关设置变更打断 vim 等程序光标。
+    #[allow(dead_code)] // 下发消费点随 M6 主题/设置联动点亮;M3 恒默认。
+    pub(super) default_cursor_style: CursorStyle,
+}
+
+impl TerminalView {
+    /// 默认画布(旧壳 `Dimensions { columns: 116, lines: 30 }` 同源):
+    /// 窗口按基准字号定形,spawn 网格再按当前缩放字号反推。
+    pub const DEFAULT_GRID_COLUMNS: u16 = 116;
+    pub const DEFAULT_GRID_LINES: u16 = 30;
+
+    /// 启动稳定闸的宽限期:等待开窗 resize 落地到布局的最长时间。超时
+    /// 即认定差异是真实的(如小屏收拢),按当前视口放行纠正。
+    const STARTUP_GRID_GRACE: std::time::Duration = std::time::Duration::from_millis(400);
+
+    /// 尾沿去抖窗口:视口静默这么久才向 Term/ConPTY 提交一次 resize。
+    /// 见 `set_layout` 内的合同注释(conhost rewrap 漂移取证)。
+    const RESIZE_SETTLE_DELAY: std::time::Duration = std::time::Duration::from_millis(150);
+    /// 与旧壳 `Cursor::default().blink_interval` 保持一致。
+    const CURSOR_BLINK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(750);
+
+    pub(super) fn cell_width_for_advance(&self, raw_width: f32, scale: f32) -> Pixels {
+        typography::effective_cell_width(raw_width, M3_CELL_WIDTH_MODE, scale, self.font_offset_x)
+    }
+
+    pub(super) fn line_height_for_metrics(&self, natural_height: f32, scale: f32) -> Pixels {
+        typography::line_height_for_view(
+            self.font_size,
+            self.line_height_multiplier,
+            natural_height,
+            self.font_offset_y,
+            scale,
+        )
+    }
+
+    /// 首帧前的当前单元格度量(与 element prepaint 同一公式:shape "M" 的
+    /// advance / ascent / descent + 配置 offset)。让 spawn 网格与首帧布局
+    /// 一致,避免启动即触发一次 ConPTY resize(DA 探询与回显竞态的温床)。
+    pub fn cell_metrics(window: &Window, cx: &App) -> (Pixels, Pixels) {
+        typography::cell_metrics(window, cx)
+    }
+
+    /// 窗口定形使用配置基准字号,不使用持久化缩放;缩放后的字号只影响
+    /// 最终能容纳的行列数。否则放大一级就会把 116 列全部加到窗宽上。
+    pub fn startup_cell_metrics(window: &Window, cx: &App) -> (Pixels, Pixels) {
+        typography::startup_cell_metrics(window, cx)
+    }
+
+    pub(crate) fn startup_cell_metrics_at_scale(scale: f32, cx: &App) -> (Pixels, Pixels) {
+        typography::startup_cell_metrics_at_scale(scale, cx)
+    }
+
+    /// 终端 mode 的一次锁读取(无会话 = 空 mode,所有协议判定落空)。
+    pub(super) fn term_mode(&self) -> TermMode {
+        self.session
+            .as_ref()
+            .map(|s| *s.term.lock().mode())
+            .unwrap_or_default()
+    }
+
+    /// 事件白集(M3,13 篇锚定):每条臂的归篇见 13 篇改造节;新增事件
+    /// 消费须先查归篇表,不在此自由发挥。
+    pub(super) fn process_event(&mut self, event: TermEvent, cx: &mut Context<'_, Self>) {
+        let cwd_changed = cwd_report::apply(&mut self.cwd, &event);
+        match event {
+            TermEvent::Wakeup => {
+                if self.output_visible {
+                    cx.notify();
+                }
+            }
+            TermEvent::MouseCursorDirty => {
+                cx.notify();
+            }
+            TermEvent::CursorBlinkingChange => self.restart_cursor_blink(cx),
+            TermEvent::Title(title) => {
+                // `SLTERM|cwd|branch` 标题协议:cwd 已由上面的 cwd_report
+                // 摘走;协议串不是窗口标题,更不是 tab 名。branch 字段的
+                // 消费归 05 篇 chrome,M3 不存。
+                if !title.starts_with("SLTERM|") {
+                    self.title = title;
+                }
+                cx.emit(TerminalViewEvent::TitleChanged);
+                cx.notify();
+            }
+            TermEvent::ResetTitle => {
+                self.title = String::from("shell");
+                cx.emit(TerminalViewEvent::TitleChanged);
+                cx.notify();
+            }
+            TermEvent::PtyWrite(text) => self.write_bytes(text.into_bytes()),
+            // OSC 52 写剪贴板(core Osc52 默认 OnlyCopy:选择器 c 已在
+            // 引擎侧放行)。
+            TermEvent::ClipboardStore(_, text) => {
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
+            }
+            TermEvent::ClipboardLoad(_, formatter) => {
+                let text = cx
+                    .read_from_clipboard()
+                    .and_then(|item| item.text())
+                    .unwrap_or_default();
+                self.write_bytes(formatter(&text).into_bytes());
+            }
+            TermEvent::ColorRequest(index, formatter) => {
+                let reply = self.session.as_ref().map(|session| {
+                    let term = session.term.lock();
+                    self.palette.query_reply(index, term.colors())
+                });
+                if let Some(rgb) = reply {
+                    self.write_bytes(formatter(rgb).into_bytes());
+                }
+            }
+            TermEvent::TextAreaSizeRequest(formatter) => {
+                self.write_bytes(formatter(self.window_size).into_bytes());
+            }
+            TermEvent::ChildExit(code) => {
+                self.mark_exited(format!("进程已退出({code:?})"), cx);
+            }
+            TermEvent::PtyFailure(reason) => {
+                self.mark_exited(format!("PTY 故障:{reason}"), cx);
+            }
+            TermEvent::Exit => {
+                self.mark_exited(String::from("会话已结束"), cx);
+            }
+            TermEvent::CwdReport(_) => {
+                // 标准 OSC 7 / 9;9 的目录上报:cwd 变了必须发 TitleChanged,
+                // `on_terminal_event` 才会 `cx.notify()` 重绘 tab 标题。
+                if cwd_changed {
+                    cx.emit(TerminalViewEvent::TitleChanged);
+                    cx.notify();
+                }
+            }
+            // 命令边界:03 篇 agent/运行时消费点。M3 最小消费=不产生视图态。
+            TermEvent::CommandStart | TermEvent::CommandDone { .. } => {}
+            TermEvent::Notify(_) => {}
+            // 视觉闪烁与声音归 09 篇。
+            TermEvent::Bell => {}
+            TermEvent::Progress { .. } => {}
+            TermEvent::InlineImage { .. } => {}
+            TermEvent::UserVar { .. } => {}
+        }
+    }
+
+    /// `Exited` 只对宿主发一次;重复的退出信号(ChildExit 之后必然跟 Exit)
+    /// 只更新文案。
+    fn mark_exited(&mut self, message: String, cx: &mut Context<'_, Self>) {
+        if self.exited.is_none() {
+            self.exited = Some(message);
+            cx.emit(TerminalViewEvent::Exited);
+        }
+        cx.notify();
+    }
+
+    /// 让 EventLoop 退出并回收 ConPTY/子进程。幂等:重复调用只会得到
+    /// 发送失败;线程 join 兜底在会话持有的 EventLoopHandle Drop 上。
+    pub fn shutdown(&self) {
+        if let Some(session) = &self.session {
+            let _ = session.notifier.0.send(Msg::Shutdown);
+        }
+    }
+
+    fn write_bytes(&self, bytes: Vec<u8>) {
+        if let Some(session) = &self.session {
+            session.notifier.notify(bytes);
+        }
+    }
+
+    /// 输入后回到底部并请求重绘。
+    fn write_input(&mut self, bytes: Vec<u8>, cx: &mut Context<'_, Self>) {
+        if let Some(session) = &self.session {
+            {
+                let mut term = session.term.lock();
+                // 原生提示符旁路:编辑控制键不使已盖章的提示符失效
+                // (preserves_native_prompt 判定在入队前,与解析器同锁序)。
+                let preserves_prompt = super::event_mailbox::preserves_native_prompt(&bytes);
+                session.native_prompt.observe_input(
+                    session.native_prompt.snapshot().input_epoch.wrapping_add(1),
+                    preserves_prompt,
+                );
+                term.scroll_display(Scroll::Bottom);
+                term.selection = None;
+            }
+            session.notifier.notify(bytes);
+        }
+        self.restart_cursor_blink(cx);
+        cx.notify();
+    }
+
+    fn cursor_should_blink(&self) -> bool {
+        self.session.as_ref().is_some_and(|session| {
+            let term = session.term.lock();
+            let mode = term.mode();
+            cursor_blink_allowed(
+                term.cursor_style().blinking,
+                mode.contains(TermMode::VI),
+                mode.contains(TermMode::SHOW_CURSOR),
+                self.marked_text.is_some(),
+                self.cursor_window_active,
+                self.cursor_pane_focused,
+            )
+        })
+    }
+
+    pub(super) fn restart_cursor_blink(&mut self, cx: &mut Context<'_, Self>) {
+        let epoch =
+            restart_cursor_blink_phase(&mut self.cursor_visible, &mut self.cursor_blink_epoch);
+        self.schedule_cursor_blink_tick(epoch, cx);
+        cx.notify();
+    }
+
+    fn schedule_cursor_blink_tick(&self, epoch: u64, cx: &mut Context<'_, Self>) {
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |this, cx| {
+            executor.timer(Self::CURSOR_BLINK_INTERVAL).await;
+            let _ = this.update(cx, |view, cx| {
+                if view.cursor_blink_epoch != epoch {
+                    return;
+                }
+                if !view.cursor_should_blink() {
+                    if !view.cursor_visible {
+                        view.cursor_visible = true;
+                        cx.notify();
+                    }
+                    return;
+                }
+                view.cursor_visible = !view.cursor_visible;
+                view.schedule_cursor_blink_tick(epoch, cx);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub fn cursor_visible(&self) -> bool {
+        self.cursor_visible
+    }
+
+    pub fn grid_rows(&self) -> usize {
+        self.rows
+    }
+
+    pub fn grid_cols(&self) -> usize {
+        self.cols
+    }
+
+    /// 复制选区并返回是否实际写入剪贴板。`notify` 表示显式复制
+    /// (Ctrl+Shift+C/右键):成功后清除选区并给 §5.2 对勾反馈;
+    /// copy_on_select 刻意静默且保留选区,避免鼠标抬手后立刻失去视觉反馈。
+    pub fn copy_selection(
+        &mut self,
+        notify: bool,
+        _window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> bool {
+        let Some(session) = &self.session else {
+            return false;
+        };
+        let text = session.term.lock().selection_to_string();
+        let Some(text) = text.filter(|text| !text.is_empty()) else {
+            return false;
+        };
+
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        if notify {
+            // 原始按键可能紧接着再次到来;先清除选区,下一次 Copy 才能按
+            // 「未处理」传播回终端,而不是重复复制并再次弹反馈。
+            session.term.lock().selection = None;
+            self.copy_feedback
+                .mark_copied(cx, |view| &mut view.copy_feedback);
+            cx.notify();
+        }
+        true
+    }
+
+    /// 粘贴入口。M3 无多行确认(归 03/09 篇):文本直入;bracketed-paste
+    /// 哨兵与注入过滤在 `paste_now_impl`。
+    pub fn paste(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) {
+        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
+            return;
+        };
+        self.paste_now_impl(&text, true, cx);
+    }
+
+    fn paste_now_impl(&mut self, text: &str, emit: bool, cx: &mut Context<'_, Self>) {
+        let normalized = text.replace("\r\n", "\r").replace('\n', "\r");
+        let bytes = if self.term_mode().contains(TermMode::BRACKETED_PASTE) {
+            let mut b = b"\x1b[200~".to_vec();
+            // 过滤粘贴内容里的收尾哨兵,防止注入截断。
+            b.extend_from_slice(normalized.replace("\x1b[201~", "").as_bytes());
+            b.extend_from_slice(b"\x1b[201~");
+            b
+        } else {
+            normalized.into_bytes()
+        };
+        if emit {
+            self.write_user_text(text.to_owned(), true, bytes, cx);
+        } else {
+            self.write_input(bytes, cx);
+        }
+    }
+
+    /// M3 键位分发:白名单按 13 篇改造节 3。键位编码器(keymap)归 M3.3
+    /// ——M3.2 只保留应用族放行/本地翻页/复制粘贴;普通可打印键经 IME
+    /// 管道(`replace_text_in_range`)到达,不在此编码。
+    fn on_key_down(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if self.exited.is_some() {
+            return;
+        }
+        // IME 组合和 Windows 原生窗口快捷键不编码、不拦截。GPUI Windows
+        // 在 `stop_propagation` 后会跳过 `TranslateMessage`/`DispatchMessage`,
+        // 必须保留输入法组合、窗口关闭和系统菜单的默认处理。
+        if self.marked_text.is_some() || is_native_window_shortcut(&event.keystroke) {
+            return;
+        }
+        let ks = &event.keystroke;
+        let mods = &ks.modifiers;
+
+        // 终端惯例快捷键优先于编码器。
+        if mods.control && mods.shift {
+            match ks.key.as_str() {
+                "c" => {
+                    self.copy_selection(true, window, cx);
+                    cx.stop_propagation();
+                    return;
+                }
+                "v" => {
+                    self.paste(window, cx);
+                    cx.stop_propagation();
+                    return;
+                }
+                // 应用级快捷键(新建/关闭 Tab、分屏、缩放等):不编码、不拦截,
+                // 让按键冒泡到 workspace 的 action 绑定。少写一个键位,症状就是
+                // 「快捷键没反应」外加一串 CSI 序列被打进 PTY——下面的回滚翻页
+                // 分支只吃**不带 ctrl** 的 shift+pageup,所以 ctrl+shift 这一组
+                // 必须在这里放行。
+                "t" | "w" | "b" | "p" | "f" | "d" | "s" | "g" | "o" | "enter" | "pageup"
+                | "pagedown" => return,
+                _ => {}
+            }
+        }
+        // 分屏焦点导航(ctrl+alt+方向)同样冒泡给 workspace,不编码成
+        // CSI 1;7 序列。
+        if mods.control && mods.alt && matches!(ks.key.as_str(), "left" | "right" | "up" | "down") {
+            return;
+        }
+        // 工作区切 tab(ctrl+tab / ctrl+shift+tab):不编码进 PTY。
+        if mods.control && !mods.alt && ks.key.as_str() == "tab" {
+            return;
+        }
+
+        let mode = self.term_mode();
+
+        // 回滚快捷键(仅主屏):Shift+PageUp/PageDown 翻页、Shift+Home/End
+        // 到顶/到底;备用屏下不拦截,交给应用(less 自己处理 Shift+PageUp)。
+        if mods.shift && !mods.control && !mods.alt && !mode.contains(TermMode::ALT_SCREEN) {
+            let scroll = match ks.key.as_str() {
+                "pageup" => Some(Scroll::PageUp),
+                "pagedown" => Some(Scroll::PageDown),
+                "home" => Some(Scroll::Top),
+                "end" => Some(Scroll::Bottom),
+                _ => None,
+            };
+            if let Some(scroll) = scroll {
+                if let Some(session) = &self.session {
+                    session.term.lock().scroll_display(scroll);
+                }
+                cx.notify();
+                cx.stop_propagation();
+            }
+        }
+
+        // M3.2 无键位编码器(归 M3.3):其余按键不在这里消费,可打印字符
+        // 由 IME 管道送达;控制键(Ctrl+C 等)在 M3.3 编码器落地前暂不透传。
+    }
+
+    /// 截住组件 Root 的 Tab 焦点遍历后回灌既有终端按键路径;M3.2 无编码器,
+    /// Tab 序列的注入归 M3.3(届时这里接 keymap::encode)。
+    fn dispatch_terminal_tab(
+        &mut self,
+        _shift: bool,
+        _window: &mut Window,
+        _cx: &mut Context<'_, Self>,
+    ) {
+        // M3.3 接线点。
+    }
+
+    fn on_terminal_tab(
+        &mut self,
+        _: &TerminalTab,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.dispatch_terminal_tab(false, window, cx);
+    }
+
+    fn on_terminal_back_tab(
+        &mut self,
+        _: &TerminalBackTab,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.dispatch_terminal_tab(true, window, cx);
+    }
+
+    fn marked_utf16_len(&self) -> usize {
+        self.marked_text
+            .as_deref()
+            .map(|t| t.encode_utf16().count())
+            .unwrap_or(0)
+    }
+}
+
+/// Windows 原生窗口快捷键:不编码、不拦截,保留系统默认处理。
+fn is_native_window_shortcut(keystroke: &gpui::Keystroke) -> bool {
+    keystroke.modifiers.alt && matches!(keystroke.key.as_str(), "f4" | "space")
+}
+
+impl EventEmitter<TerminalViewEvent> for TerminalView {}
+
+impl Drop for TerminalView {
+    fn drop(&mut self) {
+        // 兜底清理:无论视图以何种路径销毁(关 Tab、关窗口、退出应用),
+        // 都保证 PTY 线程和子进程被回收。
+        self.shutdown();
+    }
+}
+
+impl Focusable for TerminalView {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+impl gpui::EntityInputHandler for TerminalView {
+    fn text_for_range(
+        &mut self,
+        _range: std::ops::Range<usize>,
+        _adjusted_range: &mut Option<std::ops::Range<usize>>,
+        _window: &mut Window,
+        _cx: &mut Context<'_, Self>,
+    ) -> Option<String> {
+        None
+    }
+
+    fn selected_text_range(
+        &mut self,
+        _ignore_disabled_input: bool,
+        _window: &mut Window,
+        _cx: &mut Context<'_, Self>,
+    ) -> Option<UTF16Selection> {
+        // 终端没有文本框语义的选区;返回折叠选区让 IME 把组合文本插在光标处。
+        let len = self.marked_utf16_len();
+        Some(UTF16Selection {
+            range: len..len,
+            reversed: false,
+        })
+    }
+
+    fn marked_text_range(
+        &self,
+        _window: &mut Window,
+        _cx: &mut Context<'_, Self>,
+    ) -> Option<std::ops::Range<usize>> {
+        self.marked_text
+            .as_ref()
+            .map(|_| 0..self.marked_utf16_len())
+    }
+
+    fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) {
+        if self.marked_text.take().is_some() {
+            self.restart_cursor_blink(cx);
+        } else {
+            cx.notify();
+        }
+    }
+
+    fn replace_text_in_range(
+        &mut self,
+        _range: Option<std::ops::Range<usize>>,
+        text: &str,
+        _window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let had_marked_text = self.marked_text.take().is_some();
+        if !text.is_empty() && self.exited.is_none() {
+            self.write_user_text(text.to_owned(), false, text.as_bytes().to_vec(), cx);
+        } else if had_marked_text {
+            self.restart_cursor_blink(cx);
+        }
+        cx.notify();
+    }
+
+    fn replace_and_mark_text_in_range(
+        &mut self,
+        _range: Option<std::ops::Range<usize>>,
+        new_text: &str,
+        _new_selected_range: Option<std::ops::Range<usize>>,
+        _window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let marked_text = if new_text.is_empty() {
+            None
+        } else {
+            Some(new_text.to_string())
+        };
+        if self.marked_text == marked_text {
+            cx.notify();
+        } else {
+            self.marked_text = marked_text;
+            self.restart_cursor_blink(cx);
+        }
+    }
+
+    fn bounds_for_range(
+        &mut self,
+        _range_utf16: std::ops::Range<usize>,
+        _element_bounds: Bounds<Pixels>,
+        _window: &mut Window,
+        _cx: &mut Context<'_, Self>,
+    ) -> Option<Bounds<Pixels>> {
+        Some(self.ime_bounds)
+    }
+
+    fn character_index_for_point(
+        &mut self,
+        _point: Point<Pixels>,
+        _window: &mut Window,
+        _cx: &mut Context<'_, Self>,
+    ) -> Option<usize> {
+        None
+    }
+}
+
+impl Render for TerminalView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
+        let mut root = div()
+            .id("slterm-terminal")
+            .debug_selector(|| "slterm-terminal".to_owned())
+            .key_context(KEY_CONTEXT)
+            .size_full()
+            .relative()
+            .overflow_hidden()
+            // 卡内呼吸边距,对齐上游网格 reserve 的换算值:上下 8、左右 12。
+            // 网格因此不贴边;padding 区点击由 grid_point 的钳制兜底。
+            // 注意:startup_geometry 的 chrome 垂直量(34+16+16+2)与本
+            // padding 同链——改这里必须同步改 windowing/startup_geometry.rs。
+            .py(px(8.0))
+            .px(px(12.0))
+            .track_focus(&self.focus_handle)
+            .on_action(cx.listener(Self::on_terminal_tab))
+            .on_action(cx.listener(Self::on_terminal_back_tab))
+            .on_key_down(cx.listener(Self::on_key_down))
+            .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
+            .on_mouse_down(MouseButton::Right, cx.listener(Self::on_right_down))
+            .on_mouse_down(MouseButton::Middle, cx.listener(Self::on_middle_down))
+            .on_mouse_move(cx.listener(Self::on_mouse_move))
+            .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
+            // 拖出终端范围松手的兜底(含拖到窗口外):见 on_mouse_up_out。
+            .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up_out))
+            .on_mouse_up(MouseButton::Right, cx.listener(Self::on_right_up))
+            .on_mouse_up(MouseButton::Middle, cx.listener(Self::on_middle_up))
+            .on_scroll_wheel(cx.listener(Self::on_scroll));
+
+        if let Some(error) = &self.error {
+            root = root.child(div().p_4().child(error.clone()));
+        } else {
+            root = root.child(TerminalElement::new(cx.entity()));
+            if let Some(exited) = &self.exited {
+                root = root.child(
+                    div()
+                        .absolute()
+                        .bottom_2()
+                        .left_2()
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .bg(gpui::opaque_grey(0.2, 0.9))
+                        .text_sm()
+                        .child(exited.clone()),
+                );
+            }
+        }
+        root
+    }
+}
+
+#[cfg(test)]
+mod tests;
