@@ -195,12 +195,7 @@ struct DrivenTerm {
     term: Arc<FairMutex<Term<Recorder>>>,
     recorder: Recorder,
     tx: slterm_terminal::event_loop::EventLoopSender,
-    join: Option<
-        std::thread::JoinHandle<(
-            EventLoop<tty::Pty, Recorder>,
-            slterm_terminal::event_loop::State,
-        )>,
-    >,
+    join: Option<slterm_terminal::event_loop::EventLoopHandle<tty::Pty, Recorder>>,
     /// 子进程 PID(conhost 探针用;spawn 时取自 Pty)。
     child_pid: Option<u32>,
     /// 已回环的 PtyWrite 事件下标(事件列表只增不减)。

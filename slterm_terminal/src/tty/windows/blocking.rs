@@ -202,6 +202,10 @@ impl<R: Read + Send + 'static> UnblockedReader<R> {
 }
 
 impl<R: Read + Send + 'static> Read for UnblockedReader<R> {
+    /// 注意：返回的 `Ok(0)` **不是** EOF——管道暂空（`Poll::Pending`）同样
+    /// 归 0，此刻 waker 已注册、写入侧到货即醒。EOF 由 reader 线程退出 +
+    /// 管道关闭表达（见 `poll_fill` 的 `Ok(0)`/`BrokenPipe` 分支）。消费方
+    /// 不得以 `Ok(0)` 判定流关闭。
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         Ok(self.try_read(buf))
     }

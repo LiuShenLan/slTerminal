@@ -216,13 +216,17 @@ impl StreamProcessor {
 
         // DA1 全量接管:每次查询都代答(查询已不透传 Term,core 是唯一
         // 应答方;应答身份与 priming/Term 自答统一 `?64;22c`,D02-1)。
+        // 实测语义(m2-4 集成基线):bundled 臂子进程可读两份同身份应答
+        // (priming 一份+代答一份,VT 消费方容忍重复 DA1);in-box conhost
+        // 在宿主层自答 `?61;…`(不经 core、不可控),身份判别力仅 bundled 臂。
         if mirror_da1_query(&body) {
             inject_da1_response(writer);
         }
 
         // DSR 握手按需代答:仅启动窗口内(ConPTY VtIo 握手查询)。问什么
-        // 答什么,绝不盲注(Win10 捆绑 OpenConsole 握手发 DA1 不发 DSR,
-        // 盲注 CPR 会被键事件模式解析为 F3 吞键)。窗口外 DSR 不代答——
+        // 答什么,绝不盲注(握手查询集随宿主变——Win11+bundled OpenConsole
+        // 1.24 实测 DA1+DSR 双发;盲注 CPR 在无查询时会被键事件模式解析
+        // 为 F3 吞键)。窗口外 DSR 不代答——
         // Win11+ 透传 Term 实答真实位置;Win10 家族由 apply_output_strip
         // 门控剥离。
         if should_answer_dsr(self.startup_drained, &body) {
@@ -878,8 +882,9 @@ where
         Ok(())
     }
 
-    pub fn spawn(mut self) -> JoinHandle<(Self, State)> {
-        thread::spawn_named("PTY reader", move || {
+    pub fn spawn(mut self) -> EventLoopHandle<T, U> {
+        let tx = self.channel();
+        let join = thread::spawn_named("PTY reader", move || {
             let mut state = State::default();
             // DA1/DSR 接管:DSR 剥离门控由 PTY 后端注入(Windows ConPTY 按
             // OS build 预计算;其他后端默认 false = 透传交 Term 自答)。
@@ -1103,7 +1108,47 @@ where
             let _ = self.pty.deregister(&self.poll);
 
             (self, state)
-        })
+        });
+        EventLoopHandle {
+            join: Some(join),
+            tx,
+        }
+    }
+}
+
+/// PTY 事件循环线程句柄——防泄漏包装（BE-01 名额归还链路）。
+///
+/// 裸 `JoinHandle` drop = detach：线程结束后返回值 `(EventLoop, State)`
+/// 永存于线程结构，内含 Pty 永不析构——会话名额与 OS 句柄一并泄漏。
+/// 本包装把取回编码进类型：显式 [`join`](EventLoopHandle::join) 取终态；
+/// 未 join 而 drop 时兜底发 `Msg::Shutdown` 并 join（send 经
+/// `Poller::notify` 唤醒读循环，无死等）。
+#[must_use = "PTY 线程句柄：显式 join() 取终态，或 drop 走兜底关闭链"]
+pub struct EventLoopHandle<T: tty::EventedPty, U: EventListener> {
+    join: Option<JoinHandle<(EventLoop<T, U>, State)>>,
+    tx: EventLoopSender,
+}
+
+impl<T: tty::EventedPty, U: EventListener> EventLoopHandle<T, U> {
+    /// 正常关闭链：发 Shutdown、join 取回事件循环与终态。重复 Shutdown
+    /// 无害（线程已退出时 send 失败忽略）；线程 panic 以 Err 上抛，不在
+    /// 此处 unwrap——调用方可能在 unwind 路径（Drop）上，二次 panic 即
+    /// abort。
+    pub fn join(mut self) -> std::thread::Result<(EventLoop<T, U>, State)> {
+        let join = self.join.take().expect("EventLoopHandle 二次 join");
+        let _ = self.tx.send(Msg::Shutdown);
+        join.join()
+    }
+}
+
+impl<T: tty::EventedPty, U: EventListener> Drop for EventLoopHandle<T, U> {
+    fn drop(&mut self) {
+        if let Some(join) = self.join.take() {
+            // 未显式 join 的兜底：唤醒退出、join 取回并即弃——EventLoop
+            // (Pty) 在此析构，名额归还。线程 panic 时 unwind 已析构，Err 无害。
+            let _ = self.tx.send(Msg::Shutdown);
+            let _ = join.join();
+        }
     }
 }
 
@@ -2051,5 +2096,90 @@ mod tests {
         let _ = sp.strip_and_answer(b"tail\x1b[6", &mut w);
         assert_eq!(sp.take_pending_query(), b"\x1b[6");
         assert!(sp.take_pending_query().is_empty(), "冲刷后无残留");
+    }
+
+    /// 名额泄漏回归守卫：裸 `JoinHandle` drop = detach，线程返回值
+    /// (EventLoop 含 Pty) 永存、BE-01 名额泄漏。`EventLoopHandle` 的 Drop
+    /// 兜底 shutdown+join——不显式 join 时 Pty 也必须随返回值析构。
+    #[test]
+    fn handle_drop_without_join_reclaims_pty() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct DropCountPty {
+            drops: Arc<AtomicUsize>,
+            reader: io::Empty,
+            writer: io::Sink,
+        }
+
+        impl Drop for DropCountPty {
+            fn drop(&mut self) {
+                self.drops.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        impl tty::EventedReadWrite for DropCountPty {
+            type Reader = io::Empty;
+            type Writer = io::Sink;
+
+            unsafe fn register(
+                &mut self,
+                _: &Arc<Poller>,
+                _: PollingEvent,
+                _: PollMode,
+            ) -> io::Result<()> {
+                Ok(())
+            }
+
+            fn reregister(
+                &mut self,
+                _: &Arc<Poller>,
+                _: PollingEvent,
+                _: PollMode,
+            ) -> io::Result<()> {
+                Ok(())
+            }
+
+            fn deregister(&mut self, _: &Arc<Poller>) -> io::Result<()> {
+                Ok(())
+            }
+
+            fn reader(&mut self) -> &mut Self::Reader {
+                &mut self.reader
+            }
+
+            fn writer(&mut self) -> &mut Self::Writer {
+                &mut self.writer
+            }
+        }
+
+        impl tty::EventedPty for DropCountPty {
+            fn next_child_event(&mut self) -> Option<tty::ChildEvent> {
+                None
+            }
+        }
+
+        impl event::OnResize for DropCountPty {
+            fn on_resize(&mut self, _: WindowSize) {}
+        }
+
+        let drops = Arc::new(AtomicUsize::new(0));
+        let pty = DropCountPty {
+            drops: drops.clone(),
+            reader: io::empty(),
+            writer: io::sink(),
+        };
+        let size = TermSize::new(20, 2);
+        let terminal = Arc::new(FairMutex::new(Term::new(
+            Config::default(),
+            &size,
+            VoidListener,
+        )));
+        let event_loop = EventLoop::new(terminal, VoidListener, pty, false).unwrap();
+
+        let handle = event_loop.spawn();
+        drop(handle); // 不显式 join——Drop 兜底必须取回返回值。
+
+        assert_eq!(drops.load(Ordering::SeqCst), 1, "Pty 未随返回值析构");
     }
 }
