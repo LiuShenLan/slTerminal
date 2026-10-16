@@ -19,6 +19,14 @@ path = "src/main.rs"
 name = "lib_tests"
 path = "src/lib.rs"
 
+# console 子系统对照目标(11 篇;13 篇开放问题 2 已裁「保留重设」):
+# 与本体同 console 子系统形态,Ctrl+C 继承语义的独立回归锚。
+# 运行纪律(spawn 子进程发真 Ctrl+C,串行):
+# `cargo test -p slterm --test windows_console_startup -- --test-threads=1`。
+[[test]]
+name = "windows_console_startup"
+path = "tests/windows_console_startup.rs"
+
 [features]
 # 一条 feature 同时打开 gpui 与 gpui-component 的测试支持(11 篇锚定);
 # UI 测试全部 `#[cfg(all(test, feature = "gpui-test-support"))]` 双门控,

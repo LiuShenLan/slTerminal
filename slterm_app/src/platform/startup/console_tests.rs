@@ -1,11 +1,11 @@
 //! console 属性是进程全局的:每个场景跑在一次性子进程里(整文件随上游随迁,
 //! 环境变量改名 `SLTERM_*`)。
 //!
-//! 承载形态(13 篇开放问题 2,待裁决):M3.1 挂 lib_tests 内嵌模块
-//! (`console.rs` 的 `#[cfg(test)] mod console_tests;`),lib_tests 测试 exe 同为
-//! console 子系统,继承语义可观测;若裁决保留独立 `windows_console_startup`
-//! target(11 篇),本文件随迁回 `startup/` 旁位并改挂 `#[path]`,用例本体不变。
-//! TEST 常量与挂载点耦合,迁挂时同步改。
+//! 承载形态(13 篇开放问题 2,2026-10-09 裁决「保留重设」):由独立
+//! `windows_console_startup` target(11 篇)经 #[path] 挂载,单挂载——
+//! 挂载点即 `console_tests::` 前缀,下方 TEST 常量与挂载点耦合,迁挂同步改。
+//! `super::prepare_console_for_gui` 经独立 target crate root 的 re-export
+//! 解析(上游同形态薄适配)。
 
 use std::env;
 use std::process::{Child, Command};
@@ -16,7 +16,7 @@ use windows_sys::Win32::System::Console::{
     AllocConsole, CTRL_C_EVENT, FreeConsole, GenerateConsoleCtrlEvent, SetConsoleCtrlHandler,
 };
 
-const TEST: &str = "platform::startup::console::console_tests::gui_startup_restores_child_ctrl_c";
+const TEST: &str = "console_tests::gui_startup_restores_child_ctrl_c";
 
 struct TestChild(Child);
 
