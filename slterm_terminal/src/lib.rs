@@ -20,6 +20,12 @@ pub mod vi_mode;
 pub use crate::grid::Grid;
 pub use crate::term::Term;
 
+/// 进程级环境变量锁(仅测试):shell PATH 注入族与 conpty LOCALAPPDATA 提取族
+/// 整体替换进程环境变量,并行执行互相污染——同一锁族内串行,其余用例不受影响。
+/// 拿锁入口在两个 Guard 的构造器;毒化容错(panic 后测试继续串行)。
+#[cfg(test)]
+pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// PTY-side startup profiling (`SLTERM_BOOT_TRACE=1`): times the ConPTY
 /// bring-up stages the app-side boot trace cannot see — they happen inside
 /// this crate and the console host (CreatePseudoConsole, shell attach, the

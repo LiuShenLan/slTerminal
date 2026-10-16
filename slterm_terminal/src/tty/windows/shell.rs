@@ -318,11 +318,16 @@ mod shell_tests {
     // 可变，依赖 L1 全量 `--test-threads=1` 门禁（串行执行无污染）。
 
     /// PATH 恢复守卫——测试结束时（含 panic）还原原 PATH，避免污染后续用例。
-    struct PathGuard(Option<std::ffi::OsString>);
+    /// 持 crate 级 ENV_LOCK 至 drop：族内串行，裸 cargo test 并行亦无污染。
+    struct PathGuard {
+        old: Option<std::ffi::OsString>,
+        // 持锁不读,字段存在即串行语义;字段声明序保证 PATH 还原先于锁释放。
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
 
     impl Drop for PathGuard {
         fn drop(&mut self) {
-            match &self.0 {
+            match &self.old {
                 Some(v) => unsafe { std::env::set_var("PATH", v) },
                 None => unsafe { std::env::remove_var("PATH") },
             }
@@ -331,10 +336,11 @@ mod shell_tests {
 
     /// 用给定目录列表整体替换 PATH，返回恢复守卫。
     fn set_test_path(paths: &[&std::path::Path]) -> PathGuard {
+        let lock = crate::ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let old = std::env::var_os("PATH");
         let joined = std::env::join_paths(paths.iter()).expect("构造 PATH 失败");
         unsafe { std::env::set_var("PATH", joined) };
-        PathGuard(old)
+        PathGuard { old, _lock: lock }
     }
 
     /// 在目录中创建假可执行文件——空文件即可（which_full_path 只查 exists）。
@@ -725,6 +731,8 @@ mod shell_tests {
 
     #[test]
     fn resolve_shell_returns_full_path() {
+        // 读真实 PATH 的用例:与写方(set_test_path)同锁,防裸并行污染窗口。
+        let _env = crate::ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let shell = if which_full_path("pwsh.exe").is_some()
             || which_full_path("powershell.exe").is_some()
         {
@@ -755,6 +763,8 @@ mod shell_tests {
 
     #[test]
     fn which_full_path_finds_pwsh_or_powershell() {
+        // 读真实 PATH 的用例:与写方(set_test_path)同锁,防裸并行污染窗口。
+        let _env = crate::ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let found = which_full_path("pwsh.exe").or_else(|| which_full_path("powershell.exe"));
         assert!(found.is_some(), "至少 pwsh 或 powershell 应存在");
         let path = found.unwrap();

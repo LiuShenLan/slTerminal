@@ -926,19 +926,25 @@ mod runtime_asset_tests {
     }
 
     /// 场景注入守卫：临时改写 LOCALAPPDATA 指向受控路径，drop 时还原。
-    struct LocalAppDataGuard(Option<std::ffi::OsString>);
+    /// 持 crate 级 ENV_LOCK 至 drop：与 shell PATH 注入族同锁串行。
+    struct LocalAppDataGuard {
+        prev: Option<std::ffi::OsString>,
+        // 持锁不读,字段存在即串行语义;字段声明序保证还原先于锁释放。
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
 
     impl LocalAppDataGuard {
         fn set(dir: &Path) -> Self {
+            let lock = crate::ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
             let prev = std::env::var_os("LOCALAPPDATA");
             unsafe { std::env::set_var("LOCALAPPDATA", dir) };
-            Self(prev)
+            Self { prev, _lock: lock }
         }
     }
 
     impl Drop for LocalAppDataGuard {
         fn drop(&mut self) {
-            match &self.0 {
+            match &self.prev {
                 Some(v) => unsafe { std::env::set_var("LOCALAPPDATA", v) },
                 None => unsafe { std::env::remove_var("LOCALAPPDATA") },
             }

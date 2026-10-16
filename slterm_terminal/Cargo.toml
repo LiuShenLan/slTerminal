@@ -17,6 +17,12 @@ test = false
 name = "lib_tests"
 path = "src/lib.rs"
 
+# ConPTY 集成层(M2.4):真机真进程,独立 target 与 lib_tests 并存。
+# 运行纪律:`cargo test -p slterm_terminal --test pty_integration_tests -- --test-threads=1`。
+[[test]]
+name = "pty_integration_tests"
+path = "tests/pty_integration_tests.rs"
+
 [features]
 default = ["serde"]
 serde = ["dep:serde", "bitflags/serde", "vte/serde"]
