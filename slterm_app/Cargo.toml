@@ -3,12 +3,53 @@ name = "slterm"
 edition.workspace = true
 rust-version.workspace = true
 
+# D11-1:显式 test target——定向测试一律
+# `cargo test -p slterm_app --test lib_tests <filter>`,禁 filter 直打默认 lib target
+# (filter/--lib 会绕过 test=false 重建默认单测 target,manifest 控制随之失效)。
 [lib]
 name = "slterm"
 path = "src/lib.rs"
+test = false
 
 [[bin]]
 name = "slterm"
 path = "src/main.rs"
 
+[[test]]
+name = "lib_tests"
+path = "src/lib.rs"
+
+[features]
+# 一条 feature 同时打开 gpui 与 gpui-component 的测试支持(11 篇锚定);
+# UI 测试全部 `#[cfg(all(test, feature = "gpui-test-support"))]` 双门控,
+# feature 未开时虚拟窗口用例整体不编译,生产构建不带测试夹具。
+gpui-test-support = ["gpui/test-support", "gpui-component/test-support"]
+
 [dependencies]
+# GPUI 钉版与 URL/rev 一致性纪律见根 Cargo.toml 固定基线注释块。
+gpui.workspace = true
+gpui_platform.workspace = true
+gpui-component.workspace = true
+gpui-component-assets.workspace = true
+slterm_terminal = { path = "../slterm_terminal" }
+# 包名带连字符(lib 目标名 cargo 自动转下划线,代码里 `use slterm_settings`)。
+slterm-settings = { path = "../slterm_settings" }
+# AppError::Gpui 的载体:gpui 的 anyhow 再导出藏在 doc(hidden) private 模块
+# (宏内部专用),业务侧必须直连 anyhow 本体。
+anyhow = "1"
+log = "0.4"
+# first_frame 取原生 HWND 走 raw-window-handle(与 gpui 内部同版本族),
+# 不经 winit 中转——winit 事件循环本体不迁。
+raw-window-handle = "0.6"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    # MonitorFromPoint(开窗前 DPI 预取)。
+    "Win32_Graphics_Gdi",
+    # console 归一化(SetConsoleCtrlHandler)与 panic 报告的 GetConsoleCP。
+    "Win32_System_Console",
+    "Win32_UI_HiDpi",
+    # MessageBoxW(启动错误弹面/panic 钩)、SendMessageW(首帧 present-then-show)。
+    "Win32_UI_WindowsAndMessaging",
+] }
