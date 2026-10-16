@@ -7,8 +7,8 @@
 //! - **接收方向**(`apply_broadcast_*`):归 M5 随分屏广播落地——接收端按
 //!   **自己**的 term mode 重新编码后直接写 PTY,不再 emit(无环保证)。
 //!
-//! M3.2 只有 `Text` 的 emit 路径(IME 提交/粘贴);`Key` 变体的生产者是
-//! 键位编码器(`write_user_key`),随 M3.3 落地。
+//! M3.3 起 `Key`/`Text` 两个变体的生产点齐(键位编码器 + IME/粘贴);
+//! 接收方向(`apply_broadcast_*`)归 M5 随分屏广播落地。
 
 use gpui::Context;
 
@@ -17,8 +17,8 @@ use super::{TerminalView, TerminalViewEvent};
 /// 一次用户输入的语义载荷。
 #[derive(Clone)]
 pub enum TerminalInput {
-    /// 键位编码器路径(M3.3 落地生产点)。
-    #[allow(dead_code)]
+    /// 键位编码器路径(`on_key_down` → `write_user_key`)。
+    #[allow(dead_code)] // 载荷消费 = M5 广播扇出;M3 宿主只收事件名。
     Key(gpui::Keystroke),
     /// `paste` = 走粘贴语义。接收端据此决定要不要套 bracketed-paste 哨兵:
     /// 给单个字符套上哨兵会让 zsh/fish 拒绝执行。
@@ -27,6 +27,18 @@ pub enum TerminalInput {
 }
 
 impl TerminalView {
+    /// 编码器路径的用户按键:本 pane 照原样写入,同时把 keystroke 上报。
+    /// 与上游的形态差:`cursor_animation.note_encoded_key` 不迁——光标动画
+    /// 不在 M3 字段集(13 篇),随其归篇回填时恢复调用点。
+    pub(super) fn write_user_key(
+        &mut self,
+        keystroke: gpui::Keystroke,
+        bytes: Vec<u8>,
+        cx: &mut Context<'_, Self>,
+    ) {
+        cx.emit(TerminalViewEvent::UserInput(TerminalInput::Key(keystroke)));
+        self.write_input(bytes, cx);
+    }
     /// IME 提交与粘贴:上报**文本**而不是已经加过哨兵的字节。
     pub(super) fn write_user_text(
         &mut self,

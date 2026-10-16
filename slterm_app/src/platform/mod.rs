@@ -4,4 +4,5 @@
 //! 本层是 Windows 原生代码的直接落点,不再带平台分支。
 
 pub mod dirs;
+pub(crate) mod keyboard;
 pub(crate) mod startup;

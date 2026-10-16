@@ -6045,6 +6045,7 @@ name = "slterm"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "bitflags 2.13.2",
  "futures",
  "gpui",
  "gpui-component",

@@ -11,6 +11,7 @@ pub(crate) mod copy_feedback;
 pub(crate) mod cursor_painter;
 pub(crate) mod element;
 pub(crate) mod event_mailbox;
+pub(crate) mod keymap;
 pub(crate) mod mouse_protocol;
 pub(crate) mod session;
 pub(crate) mod session_pump;

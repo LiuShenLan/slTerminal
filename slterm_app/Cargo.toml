@@ -44,6 +44,8 @@ vte = { version = "0.15.0", default-features = false, features = ["std", "ansi"]
 # (宏内部专用),业务侧必须直连 anyhow 本体。
 anyhow = "1"
 log = "0.4"
+# keymap/sequence.rs 的修饰键位族(与 core 同版本族)。
+bitflags = "2.4.1"
 # 事件信箱/session_pump 的异步通道与 Stream(event_mailbox.rs 随迁形态)。
 futures = "0.3"
 # first_frame 取原生 HWND 走 raw-window-handle(与 gpui 内部同版本族),

@@ -32,6 +32,7 @@ use slterm_split::PaneId;
 use super::colors::Palette;
 use super::copy_feedback::CopyFeedback;
 use super::element::TerminalElement;
+use super::keymap;
 use super::mouse_protocol;
 use super::session::{self, TerminalSession};
 use super::{KEY_CONTEXT, TerminalBackTab, TerminalTab};
@@ -490,9 +491,9 @@ impl TerminalView {
         }
     }
 
-    /// M3 键位分发:白名单按 13 篇改造节 3。键位编码器(keymap)归 M3.3
-    /// ——M3.2 只保留应用族放行/本地翻页/复制粘贴;普通可打印键经 IME
-    /// 管道(`replace_text_in_range`)到达,不在此编码。
+    /// M3 键位分发:白名单按 13 篇改造节 3。分发判定唯一点 = 本函数的
+    /// 快捷键层;编码器(`keymap`)零特例——Ctrl+C 不在快捷键层出现,
+    /// ctrl_char('c')=0x03 经编码器恒透传(定位约束 7)。
     fn on_key_down(
         &mut self,
         event: &KeyDownEvent,
@@ -505,7 +506,7 @@ impl TerminalView {
         // IME 组合和 Windows 原生窗口快捷键不编码、不拦截。GPUI Windows
         // 在 `stop_propagation` 后会跳过 `TranslateMessage`/`DispatchMessage`,
         // 必须保留输入法组合、窗口关闭和系统菜单的默认处理。
-        if self.marked_text.is_some() || is_native_window_shortcut(&event.keystroke) {
+        if self.marked_text.is_some() || keymap::is_native_window_shortcut(&event.keystroke) {
             return;
         }
         let ks = &event.keystroke;
@@ -515,6 +516,8 @@ impl TerminalView {
         if mods.control && mods.shift {
             match ks.key.as_str() {
                 "c" => {
+                    // D13-1 默认语义:无选区也 stop_propagation 静默吞——
+                    // 复制键永不入 PTY;负反馈/透传中断的权衡见 13 篇待沉淀。
                     self.copy_selection(true, window, cx);
                     cx.stop_propagation();
                     return;
@@ -547,7 +550,8 @@ impl TerminalView {
         let mode = self.term_mode();
 
         // 回滚快捷键(仅主屏):Shift+PageUp/PageDown 翻页、Shift+Home/End
-        // 到顶/到底;备用屏下不拦截,交给应用(less 自己处理 Shift+PageUp)。
+        // 到顶/到底;备用屏下不拦截,交给编码器把带修饰的键序发给应用
+        // (less 自己处理 Shift+PageUp)。
         if mods.shift && !mods.control && !mods.alt && !mode.contains(TermMode::ALT_SCREEN) {
             let scroll = match ks.key.as_str() {
                 "pageup" => Some(Scroll::PageUp),
@@ -562,22 +566,45 @@ impl TerminalView {
                 }
                 cx.notify();
                 cx.stop_propagation();
+                return;
             }
         }
 
-        // M3.2 无键位编码器(归 M3.3):其余按键不在这里消费,可打印字符
-        // 由 IME 管道送达;控制键(Ctrl+C 等)在 M3.3 编码器落地前暂不透传。
+        // 编码器路径:Some(bytes) → 写 PTY + 上报语义输入;None(纯文本键)
+        // 落 IME 管道(`replace_text_in_range` → write_user_text)照旧。
+        // `running_program` 恒 None——agent 检测归 03 篇,签名留位。
+        if let Some(bytes) = keymap::encode_for_program(ks, &mode, None) {
+            keymap::trace_enter(ks, &mode, &bytes);
+            self.write_user_key(ks.clone(), bytes, cx);
+            cx.stop_propagation();
+        }
     }
 
-    /// 截住组件 Root 的 Tab 焦点遍历后回灌既有终端按键路径;M3.2 无编码器,
-    /// Tab 序列的注入归 M3.3(届时这里接 keymap::encode)。
+    /// 截住组件 Root 的 Tab 焦点遍历后回灌既有终端按键路径:合成的 tab
+    /// 按键仍走 `on_key_down` 全链(同一编码器,无第二套按键语义)。
     fn dispatch_terminal_tab(
         &mut self,
-        _shift: bool,
-        _window: &mut Window,
-        _cx: &mut Context<'_, Self>,
+        shift: bool,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
     ) {
-        // M3.3 接线点。
+        let modifiers = gpui::Modifiers {
+            shift,
+            ..Default::default()
+        };
+        self.on_key_down(
+            &KeyDownEvent {
+                keystroke: gpui::Keystroke {
+                    modifiers,
+                    key: "tab".to_owned(),
+                    key_char: None,
+                },
+                is_held: false,
+                prefer_character_input: false,
+            },
+            window,
+            cx,
+        );
     }
 
     fn on_terminal_tab(
@@ -604,11 +631,6 @@ impl TerminalView {
             .map(|t| t.encode_utf16().count())
             .unwrap_or(0)
     }
-}
-
-/// Windows 原生窗口快捷键:不编码、不拦截,保留系统默认处理。
-fn is_native_window_shortcut(keystroke: &gpui::Keystroke) -> bool {
-    keystroke.modifiers.alt && matches!(keystroke.key.as_str(), "f4" | "space")
 }
 
 impl EventEmitter<TerminalViewEvent> for TerminalView {}
@@ -782,3 +804,6 @@ impl Render for TerminalView {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod key_tests;
