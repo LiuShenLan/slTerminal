@@ -52,6 +52,8 @@ vte = { version = "0.15.0", default-features = false, features = ["std", "ansi"]
 # (宏内部专用),业务侧必须直连 anyhow 本体。
 anyhow = "1"
 log = "0.4"
+# ai_hook 信封/载荷解析(helper 不重编码,JSON 工作全在宿主侧)。
+serde_json = "1"
 # keymap/sequence.rs 的修饰键位族(与 core 同版本族)。
 bitflags = "2.4.1"
 # 事件信箱/session_pump 的异步通道与 Stream(event_mailbox.rs 随迁形态)。
@@ -67,6 +69,15 @@ windows-sys = { version = "0.59", features = [
     "Win32_Graphics_Gdi",
     # console 归一化(SetConsoleCtrlHandler)与 panic 报告的 GetConsoleCP。
     "Win32_System_Console",
+    # 命名管道服务器(ai_hook::windows;PIPE_ACCESS_INBOUND 在 FileSystem,
+    # ConnectNamedPipe/ReadFile 的 OVERLAPPED 引用经 Win32_System_IO)。
+    "Win32_System_Pipes",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    # 全机进程快照(process_snapshot::windows::NtQuerySystemInformation)。
+    "Wdk_System_SystemInformation",
+    # 快照原生回归对拍:GetProcessTimes(process_snapshot 测试)。
+    "Win32_System_Threading",
     "Win32_UI_HiDpi",
     # GetAsyncKeyState(VK_LBUTTON):resize 手势门控(view/layout.rs)。
     "Win32_UI_Input_KeyboardAndMouse",

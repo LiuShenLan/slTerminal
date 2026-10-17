@@ -12,6 +12,14 @@
 #![cfg_attr(clippy, deny(warnings))]
 
 pub(crate) mod app_shell;
+// M4.2 协议与仲裁层:消费点归 M4.5(壳侧管道接线)/05 篇(pane 宿主),
+// 接线落地后摘除本 allow。
+#[allow(dead_code)]
+pub(crate) mod ai_agents;
+#[allow(dead_code)]
+pub(crate) mod ai_hook;
+#[allow(dead_code)] // 消费点归 M4.4(AnswerInbox/会话投影)。
+pub(crate) mod assistant_answer;
 pub mod brand;
 pub(crate) mod cli;
 pub mod error;
@@ -19,6 +27,8 @@ pub(crate) mod gpui_terminal;
 pub(crate) mod logging;
 pub(crate) mod panic;
 pub(crate) mod platform;
+pub(crate) mod process_tree;
+pub(crate) mod session;
 pub(crate) mod terminal_registry;
 
 use std::error::Error;
