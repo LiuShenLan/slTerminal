@@ -10,6 +10,11 @@
 //! 含路径分隔符的输入只信任 PATH 解析出的真实路径——canonicalize 双失败时
 //! 以 Win32 句柄级文件身份（volume serial + file index）比对，任一侧证据
 //! 缺失即拒绝，字符串永不构成放行依据。
+//!
+//! 白名单的边界：只管「交互 shell 选择」（settings/默认探测）。`-e` 显式
+//! 命令走 `resolve_explicit_command` 通道（不卡三家名单，论证见该函数与
+//! `Options::explicit_command`）。裸名解析统一走 `which_full_path` 的
+//! PATHEXT 补全（dir-major，与 cmd 口径一致）。
 
 use std::io::Error;
 use std::os::windows::ffi::OsStrExt;
@@ -106,22 +111,39 @@ pub(crate) fn validate_shell_allowlist(program: &str) -> Result<(), Error> {
     let in_allowlist = ALLOWED_SHELLS.iter().any(|a| filename_lower == *a);
 
     if !in_allowlist {
-        // 文件名不在白名单：经 PATH 解析完整路径后再比较文件名。
-        if let Some(resolved) = which_full_path(filename) {
-            let resolved_name = Path::new(&resolved)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or(&resolved);
-            if ALLOWED_SHELLS
-                .iter()
-                .any(|a| resolved_name.to_lowercase() == *a)
-            {
-                return Ok(());
+        // PATHEXT 补全通道:裸名无扩展名("pwsh")经 which 补全命中白名单
+        // 文件名("pwsh.exe")视为白名单命中;补全出的文件本名仍不在白名单
+        // 才拒绝。
+        match which_full_path(filename) {
+            Some(resolved) => {
+                let resolved_name = Path::new(&resolved)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(&resolved);
+                if ALLOWED_SHELLS
+                    .iter()
+                    .any(|a| resolved_name.to_lowercase() == *a)
+                {
+                    return Ok(());
+                }
+                return Err(Error::other(format!(
+                    "不允许的 shell 程序: {program}。仅支持 pwsh.exe, powershell.exe, cmd.exe"
+                )));
+            }
+            None => {
+                // 消息区分:裸名解析失败 = PATH 里根本没有;含路径分隔符的
+                // 输入 = 路径伪造面,报白名单拒绝(SEC-01 威胁语义)。
+                if !(program.contains('\\') || program.contains('/')) {
+                    return Err(Error::new(
+                        std::io::ErrorKind::NotFound,
+                        format!("PATH 中找不到 shell 程序: {filename}"),
+                    ));
+                }
+                return Err(Error::other(format!(
+                    "不允许的 shell 程序: {program}。仅支持 pwsh.exe, powershell.exe, cmd.exe"
+                )));
             }
         }
-        return Err(Error::other(format!(
-            "不允许的 shell 程序: {program}。仅支持 pwsh.exe, powershell.exe, cmd.exe"
-        )));
     }
 
     if !(program.contains('\\') || program.contains('/')) {
@@ -274,16 +296,86 @@ fn encode_utf16le_base64(script: &str) -> String {
 }
 
 /// 在 PATH 中查找可执行文件，返回第一个匹配目录的完整路径。
+///
+/// 名字已含扩展名（`pwsh.exe`）时精确匹配；裸名（`node`）按 PATHEXT 顺序
+/// 补全（SearchPathW/cmd 口径：逐目录 × 逐扩展名，靠前目录赢靠后目录，
+/// 同目录内 PATHEXT 序决定）。PATHEXT 缺失时取 Windows 默认四件。
 fn which_full_path(name: &str) -> Option<String> {
-    if let Ok(path) = std::env::var("PATH") {
-        for dir in std::env::split_paths(&path) {
-            let full = dir.join(name);
+    let path_var = std::env::var("PATH").ok()?;
+    let dirs: Vec<std::path::PathBuf> = std::env::split_paths(&path_var).collect();
+
+    // 已含扩展名不补 PATHEXT(Win32 语义:带扩展名的名字按原样解析)。
+    let has_extension = Path::new(name)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.contains('.'));
+    if has_extension {
+        return dirs
+            .iter()
+            .map(|dir| dir.join(name))
+            .find(|full| full.exists())
+            .map(|p| p.to_string_lossy().into_owned());
+    }
+
+    for dir in &dirs {
+        for ext in &pathext_extensions() {
+            let full = dir.join(format!("{name}{ext}"));
             if full.exists() {
                 return Some(full.to_string_lossy().into_owned());
             }
         }
     }
     None
+}
+
+/// PATHEXT 扩展名表(大写原样,逐目录拼接由文件系统大小写不敏感兜底)。
+/// 环境变量缺失/全空时回退 Windows 默认四件(与 cmd 的缺省口径一致)。
+fn pathext_extensions() -> Vec<String> {
+    let exts: Vec<String> = std::env::var("PATHEXT")
+        .unwrap_or_default()
+        .split(';')
+        .filter(|e| !e.is_empty())
+        .map(|e| {
+            if e.starts_with('.') {
+                e.to_owned()
+            } else {
+                format!(".{e}")
+            }
+        })
+        .collect();
+    if exts.is_empty() {
+        vec![".COM".into(), ".EXE".into(), ".BAT".into(), ".CMD".into()]
+    } else {
+        exts
+    }
+}
+
+/// 显式命令通道(`-e` CLI 直给)的命令解析:不卡三家白名单。
+///
+/// SEC-01 白名单防的是「配置注入偷换 shell」——settings 文件等信任边界
+/// 外的数据;`-e` 显式命令是用户本人在命令行当场指定的程序,能写 CLI
+/// 参数的攻击者已具任意执行能力,白名单在此不构成防御。本通道职责收窄为
+/// 存在性校验 + 裸名 PATH 完整路径化(含 PATHEXT 补全),让「找不到」
+/// 给出确定消息,而非 CreateProcessW 的裸 os error。
+pub fn resolve_explicit_command(program: &str) -> Result<String, Error> {
+    if program.contains('\\') || program.contains('/') {
+        // 用户给了路径:原样采用(CreateProcessW 语义),只做存在性校验。
+        if Path::new(program).exists() {
+            Ok(program.to_owned())
+        } else {
+            Err(Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("命令不存在: {program}"),
+            ))
+        }
+    } else {
+        which_full_path(program).ok_or_else(|| {
+            Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("PATH 中找不到命令: {program}"),
+            )
+        })
+    }
 }
 
 /// 系统目录（%SystemRoot%\System32）下可执行文件的路径。
@@ -341,6 +433,45 @@ mod shell_tests {
         let joined = std::env::join_paths(paths.iter()).expect("构造 PATH 失败");
         unsafe { std::env::set_var("PATH", joined) };
         PathGuard { old, _lock: lock }
+    }
+
+    /// PATH + PATHEXT 组合恢复守卫(PATHEXT 补全族用;同一把 ENV_LOCK,
+    /// 字段声明序保证双还原先于锁释放)。
+    struct PathExtGuard {
+        old_path: Option<std::ffi::OsString>,
+        old_pathext: Option<std::ffi::OsString>,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl Drop for PathExtGuard {
+        fn drop(&mut self) {
+            match &self.old_path {
+                Some(v) => unsafe { std::env::set_var("PATH", v) },
+                None => unsafe { std::env::remove_var("PATH") },
+            }
+            match &self.old_pathext {
+                Some(v) => unsafe { std::env::set_var("PATHEXT", v) },
+                None => unsafe { std::env::remove_var("PATHEXT") },
+            }
+        }
+    }
+
+    /// 同时替换 PATH 与 PATHEXT(`pathext=None` = 移除该变量,测默认表)。
+    fn set_test_path_pathext(paths: &[&std::path::Path], pathext: Option<&str>) -> PathExtGuard {
+        let lock = crate::ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let old_path = std::env::var_os("PATH");
+        let old_pathext = std::env::var_os("PATHEXT");
+        let joined = std::env::join_paths(paths.iter()).expect("构造 PATH 失败");
+        unsafe { std::env::set_var("PATH", joined) };
+        match pathext {
+            Some(v) => unsafe { std::env::set_var("PATHEXT", v) },
+            None => unsafe { std::env::remove_var("PATHEXT") },
+        }
+        PathExtGuard {
+            old_path,
+            old_pathext,
+            _lock: lock,
+        }
     }
 
     /// 在目录中创建假可执行文件——空文件即可（which_full_path 只查 exists）。
@@ -802,6 +933,170 @@ mod shell_tests {
         fake_exe(dir.path(), "PwSh.ExE");
         let _guard = set_test_path(&[dir.path()]);
         assert!(which_full_path("pwsh.exe").is_some(), "应命中 PwSh.ExE");
+    }
+
+    // ─── PATHEXT 补全族(裸名解析)───
+    //
+    // 断言纪律:补全返回的是「目录 + 裸名 + PATHEXT 书写形态扩展名」的拼接
+    // 路径(与 SearchPathW 同语义),扩展名大小写跟随 PATHEXT 原文而非磁盘
+    // 真实形态——一律按大小写不敏感断言。
+
+    /// 大小写不敏感的路径相等断言(拼接形态扩展名 vs 磁盘形态)。
+    fn assert_path_eq(actual: &str, expected: &std::path::Path) {
+        assert!(
+            actual.eq_ignore_ascii_case(&expected.to_string_lossy()),
+            "实际: {actual},期望: {}",
+            expected.display()
+        );
+    }
+
+    #[test]
+    fn which_bare_name_resolves_via_pathext() {
+        let dir = tempfile::tempdir().unwrap();
+        fake_exe(dir.path(), "tool.exe");
+        let _guard = set_test_path_pathext(&[dir.path()], Some(".EXE"));
+        let found = which_full_path("tool").expect("裸名应经 PATHEXT 补全命中");
+        assert_path_eq(&found, &dir.path().join("tool.exe"));
+    }
+
+    #[test]
+    fn which_bare_name_pathext_order_wins_in_same_dir() {
+        // 同目录多扩展名:PATHEXT 序决定。
+        let dir = tempfile::tempdir().unwrap();
+        fake_exe(dir.path(), "tool.bat");
+        fake_exe(dir.path(), "tool.exe");
+        {
+            let _guard = set_test_path_pathext(&[dir.path()], Some(".BAT;.EXE"));
+            let found = which_full_path("tool").unwrap();
+            assert_path_eq(&found, &dir.path().join("tool.bat"));
+        }
+        {
+            let _guard = set_test_path_pathext(&[dir.path()], Some(".EXE;.BAT"));
+            let found = which_full_path("tool").unwrap();
+            assert_path_eq(&found, &dir.path().join("tool.exe"));
+        }
+    }
+
+    #[test]
+    fn which_bare_name_dir_major_order() {
+        // dir-major 语义(与 cmd 一致):靠前目录的低优先级扩展名赢过靠后
+        // 目录的高优先级扩展名。
+        let dir1 = tempfile::tempdir().unwrap();
+        let dir2 = tempfile::tempdir().unwrap();
+        fake_exe(dir1.path(), "tool.bat");
+        fake_exe(dir2.path(), "tool.exe");
+        let _guard = set_test_path_pathext(&[dir1.path(), dir2.path()], Some(".EXE;.BAT"));
+        let found = which_full_path("tool").expect("应命中");
+        assert_path_eq(&found, &dir1.path().join("tool.bat"));
+    }
+
+    #[test]
+    fn which_bare_name_missing_pathext_uses_default_table() {
+        let dir = tempfile::tempdir().unwrap();
+        fake_exe(dir.path(), "node.exe");
+        let _guard = set_test_path_pathext(&[dir.path()], None);
+        let found =
+            which_full_path("node").expect("PATHEXT 缺失应回退默认四件(.COM;.EXE;.BAT;.CMD)");
+        assert_path_eq(&found, &dir.path().join("node.exe"));
+    }
+
+    #[test]
+    fn which_bare_name_no_matching_extension_none() {
+        let dir = tempfile::tempdir().unwrap();
+        fake_exe(dir.path(), "tool.exe");
+        let _guard = set_test_path_pathext(&[dir.path()], Some(".COM"));
+        assert!(
+            which_full_path("tool").is_none(),
+            "PATHEXT 不含 .EXE 时裸名不得命中 tool.exe"
+        );
+    }
+
+    #[test]
+    fn which_name_with_extension_not_pathext_expanded() {
+        // 带扩展名精确匹配,不补全:只有 tool.exe 时查 tool.com 不得命中。
+        let dir = tempfile::tempdir().unwrap();
+        fake_exe(dir.path(), "tool.exe");
+        let _guard = set_test_path_pathext(&[dir.path()], Some(".EXE"));
+        assert!(which_full_path("tool.com").is_none());
+        assert!(which_full_path("tool.exe").is_some());
+    }
+
+    // ─── 白名单消息区分族(PATH 找不到 vs 不在白名单)───
+
+    #[test]
+    fn allowlist_bare_name_passes_via_pathext_completion() {
+        // "pwsh" 裸名(无扩展名)经 PATHEXT 补全命中白名单文件名 → 放行。
+        let dir = tempfile::tempdir().unwrap();
+        fake_exe(dir.path(), "pwsh.exe");
+        let _guard = set_test_path_pathext(&[dir.path()], Some(".EXE"));
+        validate_shell_allowlist("pwsh").expect("裸名 pwsh 经补全应放行");
+    }
+
+    #[test]
+    fn allowlist_bare_name_not_found_reports_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = set_test_path_pathext(&[dir.path()], Some(".EXE"));
+        let err = validate_shell_allowlist("nope-xyz").unwrap_err();
+        assert!(
+            err.to_string().contains("PATH 中找不到 shell 程序"),
+            "裸名解析失败应报「找不到」,实际: {err}"
+        );
+    }
+
+    #[test]
+    fn allowlist_found_but_not_allowlisted_reports_denied() {
+        let dir = tempfile::tempdir().unwrap();
+        fake_exe(dir.path(), "fake-shell.exe");
+        let _guard = set_test_path_pathext(&[dir.path()], Some(".EXE"));
+        let err = validate_shell_allowlist("fake-shell.exe").unwrap_err();
+        assert!(
+            err.to_string().contains("不允许的 shell 程序"),
+            "解析成功但非白名单应报「不允许」,实际: {err}"
+        );
+    }
+
+    // ─── resolve_explicit_command 族(显式命令通道,不卡白名单)───
+
+    #[test]
+    fn explicit_command_bare_name_resolves_full_path() {
+        let dir = tempfile::tempdir().unwrap();
+        fake_exe(dir.path(), "node.exe");
+        let _guard = set_test_path_pathext(&[dir.path()], Some(".EXE"));
+        let resolved = resolve_explicit_command("node").expect("裸名应解析");
+        assert_path_eq(&resolved, &dir.path().join("node.exe"));
+    }
+
+    #[test]
+    fn explicit_command_bare_name_not_found_reports() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = set_test_path_pathext(&[dir.path()], Some(".EXE"));
+        let err = resolve_explicit_command("nope-xyz").unwrap_err();
+        assert!(
+            err.to_string().contains("PATH 中找不到命令"),
+            "应报「PATH 中找不到命令」,实际: {err}"
+        );
+    }
+
+    #[test]
+    fn explicit_command_path_passthrough_when_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = fake_exe(dir.path(), "tool.exe");
+        let s = path.to_string_lossy().into_owned();
+        assert_eq!(
+            resolve_explicit_command(&s).expect("存在的路径应原样采用"),
+            s
+        );
+    }
+
+    #[test]
+    fn explicit_command_path_missing_reports() {
+        let missing = r"C:\__slterm_no_such_dir__\tool.exe";
+        assert!(!std::path::Path::new(missing).exists(), "前提:路径不存在");
+        let err = resolve_explicit_command(missing).unwrap_err();
+        assert!(
+            err.to_string().contains("命令不存在"),
+            "应报「命令不存在」,实际: {err}"
+        );
     }
 
     // ─── 集成脚本嵌入 ───

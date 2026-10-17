@@ -4,7 +4,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 # D11-1:显式 test target——定向测试一律
-# `cargo test -p slterm_app --test lib_tests <filter>`,禁 filter 直打默认 lib target
+# `cargo test -p slterm --test lib_tests <filter>`,禁 filter 直打默认 lib target
 # (filter/--lib 会绕过 test=false 重建默认单测 target,manifest 控制随之失效)。
 [lib]
 name = "slterm"

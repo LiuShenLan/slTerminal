@@ -97,16 +97,31 @@ pub(crate) fn test_session() -> (
 /// `shell`:`None` 走 core 探测链(pwsh → powershell → cmd,白名单深检 +
 /// pwsh EncodedCommand 集成)。环境身份契约(`SLTERM_PANE_ID`)最后写,
 /// 以 `refresh_environment` 的快照为基准。
+///
+/// `explicit_command`:`-e` 显式命令通道——裸名经 core
+/// `resolve_explicit_command` PATH 路径化(含 PATHEXT 补全),并在
+/// `Options` 置位跳过三家白名单(SEC-01 豁免论证见该字段);settings 键
+/// 来源(06 篇)必须传 `false`。解析失败直接 Err(「PATH 中找不到
+/// 命令」),由调用方并入 spawn 错误通道呈现。
 pub(super) fn local_options(
     shell: Option<tty::Shell>,
+    explicit_command: bool,
     pane_id: slterm_split::PaneId,
     cwd: Option<std::path::PathBuf>,
-) -> tty::Options {
+) -> std::io::Result<tty::Options> {
+    let shell = match (shell, explicit_command) {
+        (Some(shell), true) => {
+            let program = tty::resolve_explicit_command(shell.program())?;
+            Some(tty::Shell::new(program, shell.args().to_vec()))
+        }
+        (shell, _) => shell,
+    };
     let mut options = tty::Options {
         shell,
         working_directory: cwd,
         ..Default::default()
     };
+    options.explicit_command = explicit_command;
     // 注册表快照合并(MACHINE+USER 环境),置 env_is_complete;失败仅降级
     // 为进程环境继承,不拦启动(与上游 prepare_local_pty 同语义)。
     if let Err(error) = tty::refresh_environment(&mut options) {
@@ -123,7 +138,7 @@ pub(super) fn local_options(
     options
         .env
         .insert("SLTERM_PANE_ID".into(), pane_id.0.to_string());
-    options
+    Ok(options)
 }
 
 pub fn spawn(
@@ -160,4 +175,66 @@ pub fn spawn(
         },
         rx,
     ))
+}
+
+#[cfg(test)]
+mod local_options_tests {
+    use super::*;
+
+    fn pane() -> slterm_split::PaneId {
+        slterm_split::PaneId(1)
+    }
+
+    /// 显式通道:裸名经 core `resolve_explicit_command` 路径化为完整
+    /// 路径,`Options::explicit_command` 置位(tty::new 跳过白名单的
+    /// 凭据)。读真实 PATH(`cmd` 恒可解析,本 crate 测试进程无 PATH
+    /// 写方,无需锁)。
+    #[test]
+    fn explicit_command_resolves_bare_name_and_marks_options() {
+        let options = local_options(
+            Some(tty::Shell::new("cmd".into(), vec!["/q".into()])),
+            true,
+            pane(),
+            None,
+        )
+        .expect("cmd 裸名应可解析");
+        let shell = options.shell.expect("shell 应保留");
+        // 扩展名大小写跟随系统 PATHEXT 书写(拼接形态),按不敏感断言。
+        assert!(
+            shell.program().contains('\\') && shell.program().to_lowercase().ends_with("cmd.exe"),
+            "应路径化为完整路径,实际: {}",
+            shell.program()
+        );
+        assert_eq!(shell.args(), &["/q".to_string()], "参数应原样保留");
+        assert!(options.explicit_command, "显式通道标记应置位");
+    }
+
+    /// 显式通道解析失败:Err 经 spawn 同通道呈现(「PATH 中找不到命令」)。
+    #[test]
+    fn explicit_command_not_found_errs() {
+        let err = local_options(
+            Some(tty::Shell::new("slterm-no-such-command-xyz".into(), vec![])),
+            true,
+            pane(),
+            None,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("PATH 中找不到命令"), "实际: {err}");
+    }
+
+    /// 非显式通道(settings/探测链来源):program 原样保留、不路径化,
+    /// 标记不置位——白名单深检留给 core `tty::new`(SEC-01)。
+    #[test]
+    fn non_explicit_keeps_program_verbatim() {
+        let options = local_options(
+            Some(tty::Shell::new("cmd".into(), vec![])),
+            false,
+            pane(),
+            None,
+        )
+        .expect("非显式通道不解析不应失败");
+        let shell = options.shell.expect("shell 应保留");
+        assert_eq!(shell.program(), "cmd", "非显式通道应原样保留裸名");
+        assert!(!options.explicit_command, "标记不得置位");
+    }
 }

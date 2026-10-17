@@ -792,3 +792,27 @@ fn spawn_lock_serializes_and_capacity_32_enforced() {
     let pty = tty::new(&opts, SIZE).expect("归还后 spawn 应成功");
     drop(pty);
 }
+
+/// 显式命令通道(`-e`):`explicit_command=true` 时白名单外程序放行
+/// (SEC-01 豁免论证见 `Options::explicit_command`);同程序 `false` 时
+/// 仍被白名单拒绝。用 System32 恒在的 `where.exe`(非白名单三家)作探针。
+#[test]
+fn explicit_command_bypasses_shell_allowlist() {
+    let _guard = integration_lock();
+    let system_root = env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+    let where_exe = format!(r"{system_root}\System32\where.exe");
+    assert!(
+        std::path::Path::new(&where_exe).exists(),
+        "前提: where.exe 恒在"
+    );
+
+    // 默认(非显式)通道:非白名单程序必须被拒。
+    let denied = tty::new(&options(&where_exe, &[]), SIZE);
+    assert!(denied.is_err(), "非显式通道下 where.exe 应被白名单拒绝");
+
+    // 显式命令通道:同程序放行,spawn 真成功。
+    let mut opts = options(&where_exe, &[]);
+    opts.explicit_command = true;
+    let pty = tty::new(&opts, SIZE).expect("显式命令通道应放行白名单外程序");
+    drop(pty);
+}

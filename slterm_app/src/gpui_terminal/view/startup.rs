@@ -56,14 +56,16 @@ impl TerminalView {
                 cwd,
                 shell,
                 shell_name,
+                explicit_command,
             } => {
                 let initial_cwd = cwd
                     .as_ref()
                     .map(|path| path.to_string_lossy().into_owned())
                     .unwrap_or_default();
                 // M3 无设置 shell 键:launch 未指定即 None,core 探测链接手。
-                let options = session::local_options(shell, pane_id, cwd);
-                let spawned = session::spawn(initial, term_config, options);
+                // 显式命令(-e)的解析失败与 spawn 失败同通道呈现。
+                let spawned = session::local_options(shell, explicit_command, pane_id, cwd)
+                    .and_then(|options| session::spawn(initial, term_config, options));
                 let title = shell_name.unwrap_or_else(|| String::from("shell"));
                 (initial_cwd, title, spawned)
             }

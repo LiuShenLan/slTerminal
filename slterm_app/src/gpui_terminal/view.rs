@@ -105,6 +105,10 @@ pub enum TerminalLaunch {
         shell: Option<slterm_terminal::tty::Shell>,
         /// 展示用 shell 名(欢迎/标题);M3 不参与 PTY 启动决策。
         shell_name: Option<String>,
+        /// 命令来自 `-e` 显式指定(用户 CLI 直给):core 跳过 shell 白名单
+        /// 并做裸名 PATH 路径化。settings 键等配置文件来源必须 `false`
+        /// (SEC-01 防配置注入偷换 shell)。
+        explicit_command: bool,
     },
 }
 

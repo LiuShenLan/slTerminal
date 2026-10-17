@@ -28,6 +28,7 @@ fn open(cx: &mut TestAppContext) -> (Entity<TerminalView>, VisualTestContext) {
                         Vec::new(),
                     )),
                     shell_name: None,
+                    explicit_command: false,
                 },
                 window,
                 cx,

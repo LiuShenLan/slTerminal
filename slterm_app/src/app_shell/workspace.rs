@@ -105,17 +105,19 @@ impl SltermWorkspace {
         };
         match startup {
             WorkspaceStartup::NewTerminal { cwd } => {
-                workspace.add_terminal_tab(cwd, None, window, cx);
+                workspace.add_terminal_tab(cwd, None, false, window, cx);
             }
             WorkspaceStartup::LaunchTerminal { cwd, command } => {
                 // `-e` 语义:命令本体即 pane 的启动进程(不是默认 shell 里
-                // 再注入一条命令)——冻结进 launch,会话恢复照此重建。
+                // 再注入一条命令)——冻结进 launch,会话恢复照此重建。显式
+                // 命令通道:core 跳过三家白名单并做裸名 PATH 路径化(SEC-01
+                // 豁免论证见 `Options::explicit_command`)。
                 let name = command.program().to_owned();
                 let shell = slterm_terminal::tty::Shell::new(
                     command.program().to_owned(),
                     command.args().to_vec(),
                 );
-                workspace.add_terminal_tab(cwd, Some((shell, name)), window, cx);
+                workspace.add_terminal_tab(cwd, Some((shell, name)), true, window, cx);
             }
         }
         workspace.start_shell_event_pump(shell_rx, cx);
@@ -127,6 +129,7 @@ impl SltermWorkspace {
         &mut self,
         cwd: Option<std::path::PathBuf>,
         shell: Option<(slterm_terminal::tty::Shell, String)>,
+        explicit_command: bool,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
@@ -135,11 +138,13 @@ impl SltermWorkspace {
                 cwd,
                 shell: Some(shell),
                 shell_name: Some(name),
+                explicit_command,
             },
             None => TerminalLaunch::Local {
                 cwd,
                 shell: None,
                 shell_name: None,
+                explicit_command,
             },
         };
         let pane = self.new_pane(self.initial_grid, launch, window, cx);
