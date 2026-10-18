@@ -130,14 +130,12 @@ pub(super) fn local_options(
     // conpty_sideload 硬编码 true(06 篇换设置键真读时此处是唯一换点;
     // core `Options::default()` 同值,显式写出是登记锚)。
     options.conpty_sideload = true;
-    // 固定身份/能力注入:core `setup_env` 只写 TERM/COLORTERM,TERM_PROGRAM
-    // 与 pane 身份是壳侧契约。
+    // 固定身份/能力注入:core `setup_env` 只写 TERM/COLORTERM;身份组、
+    // CLI 发现与端点注入统一走 03 篇 `agent_env::apply` 末位(04 篇
+    // CHILD_ENDPOINT 在 apply 末尾注入,早于首个 PTY spawn 即已登记)。
     options.env.insert("TERM".into(), "xterm-256color".into());
     options.env.insert("COLORTERM".into(), "truecolor".into());
-    options.env.insert("TERM_PROGRAM".into(), "slterm".into());
-    options
-        .env
-        .insert("SLTERM_PANE_ID".into(), pane_id.0.to_string());
+    crate::agent_env::apply(&mut options.env, pane_id.0);
     Ok(options)
 }
 

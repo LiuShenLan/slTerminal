@@ -123,6 +123,15 @@ impl AgentPaneHost {
         true
     }
 
+    /// 04 篇「提交时同步建立 running 边沿」:`pane.prompt`/`agent.prompt`
+    /// 成功提交 Enter 的同步动作。真实完成边归 02/03 篇事件链归位。
+    pub(crate) fn submitted(&mut self, text: &str) {
+        match self.program.as_deref() {
+            Some(program) => self.activity.submitted_text(program, text),
+            None => self.activity.submitted(),
+        }
+    }
+
     /// 一次屏幕样本(最近至多 24 行)进仲裁器。身份只在没有 hook 权威时
     /// 由屏幕 chrome 建立——hook 永远是更高置信度的来源。
     pub(crate) fn observe_screen(&mut self, screen: &str) -> bool {
@@ -275,12 +284,25 @@ impl AgentHub {
     /// 严格路由合同:信封带 pane 时它必须对应现存 pane,已关闭 pane 的
     /// 迟到 hook 直接丢弃;只有信封确实缺 pane 字段(环境变量半路被剥掉)
     /// 才回退到焦点 pane。
+    #[allow(dead_code)] // 生产消费点 = dispatch_lifecycle;测试保留只取计数薄入口。
     pub(crate) fn dispatch(
         &mut self,
         events: Vec<AiHookEvent>,
         focus_fallback: Option<PaneId>,
     ) -> usize {
+        self.dispatch_lifecycle(events, focus_fallback).0
+    }
+
+    /// 同 [`Self::dispatch`],额外返回**被接纳**的事件(按处理后顺序)。
+    /// M7.5 生命周期接线只允许对通过所有权门的事件动手 SessionEnd/TurnDone,
+    /// 伪造 pane/session 的迟到信封不得关闭注册项或回投委派。
+    pub(crate) fn dispatch_lifecycle(
+        &mut self,
+        events: Vec<AiHookEvent>,
+        focus_fallback: Option<PaneId>,
+    ) -> (usize, Vec<AiHookEvent>) {
         let mut accepted = 0;
+        let mut accepted_events = Vec::new();
         for event in reorder_batch(events) {
             let target = match event.pane {
                 Some(pane) => Some(PaneId(pane)),
@@ -299,6 +321,7 @@ impl AgentHub {
             let changed = host.handle_hook(&event);
             if changed {
                 accepted += 1;
+                accepted_events.push(event.clone());
             }
             // 只在事件真的被接纳后记账:被门拒收的伪造身份不得进注册表。
             if changed
@@ -308,7 +331,14 @@ impl AgentHub {
                 recorder(&event);
             }
         }
-        accepted
+        (accepted, accepted_events)
+    }
+
+    /// 提交 running 边沿(runtime `pane.prompt`/`agent.prompt` 的同步动作)。
+    pub(crate) fn submitted(&mut self, pane_id: PaneId, text: &str) {
+        if let Some(host) = self.hosts.get_mut(&pane_id) {
+            host.submitted(text);
+        }
     }
 
     /// 屏幕看门狗单步(1 Hz 节奏由 workspace 调度)。无宿主的 pane 静默跳过。

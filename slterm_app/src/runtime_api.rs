@@ -15,6 +15,7 @@ mod agent_api;
 mod cli;
 mod command;
 mod git;
+mod lifecycle;
 mod orchestrate;
 mod run_wait;
 mod server;
@@ -24,8 +25,16 @@ mod transport;
 
 /// CLI 人格入口(M7.4):同 exe 分流后请求-响应并退出。
 pub(crate) use cli::run_cli;
+/// `pane.procs` 的进程树采集(UI owner 执行器消费)。
+pub(crate) use command::capture_process_tree;
+/// 单实例控制面服务端(随壳生命周期持有)。
+pub(crate) use server::RuntimeServer;
 /// 子进程端点注入(03 篇 `agent_env::apply` 末位消费)。
 pub(crate) use server::apply_child_endpoint;
+/// 二次启动移交(M7.5):40 × 25ms 重试环后把启动交给首实例。
+pub(crate) use server::handover_to_existing_instance;
+/// `pane.read` 的 Term 尾部读取(UI owner 执行器消费)。
+pub(crate) use terminal_read::{RuntimePaneRead, capture_terminal_tail};
 
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
@@ -1013,6 +1022,14 @@ impl RuntimeDispatch {
     pub(crate) fn respond(&self, response: Result<Value, ApiError>) {
         let _ = self.reply.send(response);
     }
+}
+
+/// 测试入口:构造一条 dispatch 并取回执接收端(UI owner 执行器用例)。
+#[cfg(all(test, feature = "gpui-test-support"))]
+pub(crate) fn dispatch_for_test(
+    command: RuntimeCommand,
+) -> (Arc<RuntimeDispatch>, Receiver<Result<Value, ApiError>>) {
+    RuntimeDispatch::new(command)
 }
 
 /// 壳事件回调。ATTACH 为 fire-and-forget(单窗语义 = 聚焦现有窗口);

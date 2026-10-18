@@ -51,7 +51,7 @@ impl TerminalView {
             cell_width: (cell_w.as_f32() * scale).round().max(1.0) as u16,
             cell_height: (line_h.as_f32() * scale).round().max(1.0) as u16,
         };
-        let (initial_cwd, initial_title, spawned) = match launch {
+        let (initial_cwd, initial_title, spawned, exec_context) = match launch {
             TerminalLaunch::Local {
                 cwd,
                 shell,
@@ -64,10 +64,17 @@ impl TerminalView {
                     .unwrap_or_default();
                 // M3 无设置 shell 键:launch 未指定即 None,core 探测链接手。
                 // 显式命令(-e)的解析失败与 spawn 失败同通道呈现。
-                let spawned = session::local_options(shell, explicit_command, pane_id, cwd)
-                    .and_then(|options| session::spawn(initial, term_config, options));
+                let options = session::local_options(shell, explicit_command, pane_id, cwd);
+                // pane.exec 的环境语义 = PTY 创建时冻结的 overrides;必须在
+                // options 被 spawn 消费前留一份只读快照。
+                let exec_context = options
+                    .as_ref()
+                    .ok()
+                    .map(crate::runtime_exec::PaneExecContext::from_pty_options);
+                let spawned =
+                    options.and_then(|options| session::spawn(initial, term_config, options));
                 let title = shell_name.unwrap_or_else(|| String::from("shell"));
-                (initial_cwd, title, spawned)
+                (initial_cwd, title, spawned, exec_context)
             }
         };
         let (session, error) = match spawned {
@@ -106,6 +113,7 @@ impl TerminalView {
         let mut view = Self {
             pane_id,
             session,
+            exec_context,
             focus_handle,
             font: mono_font(
                 &families[0],

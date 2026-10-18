@@ -287,6 +287,11 @@ pub(super) fn prepare_dispatch_command(
     command: RuntimeCommand,
     hub: &RuntimeHub,
 ) -> Result<(RuntimeCommand, Option<WorktreeTransaction>), ApiError> {
+    // 名字冲突必须在任何 UI 动作之前拒绝:注册发生在 UI owner 上,晚到
+    // 的冲突会让一个已经启动的 pane 处于无注册身份的半态。
+    if let RuntimeCommand::AgentStart { name, .. } = &command {
+        hub.ensure_agent_name_available(name)?;
+    }
     let RuntimeCommand::AgentFork {
         window_id,
         source_pane_id,

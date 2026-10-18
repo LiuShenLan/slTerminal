@@ -27,6 +27,7 @@ use crate::session::{AgentSession, LaunchSession, WindowState, load_from};
 use slterm_terminal::event_loop::Msg as EventLoopMsg;
 
 mod hooks_tests;
+mod runtime_control_tests;
 mod runtime_projection_tests;
 mod theme_tests;
 
@@ -96,8 +97,17 @@ fn open_workspace_with_startup(
     let (ai_tx, ai_rx) = mpsc::channel();
     let mut slot = None;
     let (_root, window) = cx.add_window_view(|window, cx| {
-        let workspace =
-            cx.new(|cx| SltermWorkspace::new(window, rx, Some(ai_rx), startup, plan, cx));
+        let workspace = cx.new(|cx| {
+            SltermWorkspace::new(
+                window,
+                rx,
+                Some(ai_rx),
+                startup,
+                plan,
+                crate::runtime_api::RuntimeHub::new(),
+                cx,
+            )
+        });
         slot = Some(workspace.clone());
         Root::new(workspace, window, cx)
     });

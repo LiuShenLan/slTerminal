@@ -4,6 +4,8 @@ mod broadcast;
 mod cwd_report;
 pub(super) mod layout;
 pub(super) mod pointer;
+/// 04 篇 M7.5:Runtime 写命令在 UI owner 上的终端侧执行入口。
+pub(super) mod runtime_control;
 pub(super) mod startup;
 pub(super) mod typography;
 
@@ -116,6 +118,8 @@ pub enum TerminalLaunch {
 pub struct TerminalView {
     pub pane_id: PaneId,
     pub session: Option<TerminalSession>,
+    /// PTY 创建时冻结的环境/cwd 快照(04 篇 `pane.exec` 唯一复用面)。
+    pub(crate) exec_context: Option<crate::runtime_exec::PaneExecContext>,
     pub focus_handle: FocusHandle,
     pub font: Font,
     pub font_bold: Font,

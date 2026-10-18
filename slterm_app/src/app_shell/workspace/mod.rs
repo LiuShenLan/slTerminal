@@ -23,6 +23,8 @@
 //! 结构性变化经 `TerminalView::mark_structural_resize` 同步下发,不进尾沿
 //! 去抖)。
 
+/// 04 篇 M7.5:Runtime 写命令在 Workspace 上的执行器。
+mod runtime_control;
 pub(crate) mod runtime_projection;
 pub(crate) mod session_persistence;
 pub(crate) mod session_recovery;
@@ -254,6 +256,7 @@ impl SltermWorkspace {
         ai_events: Option<mpsc::Receiver<AiHookEvent>>,
         startup: WorkspaceStartup,
         plan: StartupPlan,
+        runtime_hub: RuntimeHub,
         cx: &mut Context<'_, Self>,
     ) -> Self {
         // 侧栏宽度先于 spawn 网格入账:恢复的宽度若在首帧后才生效,会先按
@@ -282,7 +285,7 @@ impl SltermWorkspace {
             window_commands: Vec::new(),
             agent_hub: AgentHub::new(),
             session_persistence: Self::new_session_persistence(),
-            runtime_hub: RuntimeHub::new(),
+            runtime_hub,
         };
         let restored = plan
             .session
@@ -311,7 +314,7 @@ impl SltermWorkspace {
         if !cfg!(all(test, feature = "gpui-test-support")) {
             workspace.agent_hub.enable_session_registry();
         }
-        workspace.start_shell_event_pump(shell_rx, cx);
+        workspace.start_shell_event_pump(shell_rx, window.window_handle(), cx);
         workspace.start_ai_hook_pump(ai_events, cx);
         workspace.start_agent_screen_watchdog(cx);
         workspace.start_autosave_pump(cx);
@@ -596,33 +599,9 @@ impl SltermWorkspace {
         cx.notify();
     }
 
-    /// 关闭活跃 tab:逐 pane 显式 shutdown,不留孤儿 PTY;最后一个 tab
-    /// 关闭 = 关窗(单窗产品定位)。设置 tab 无 pane,直接摘除。
+    /// 关闭活跃 tab(统一入口 [`Self::close_tab_at`])。
     fn close_active_tab(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
-        let Some(entry) = self.tabs.get(self.active) else {
-            return;
-        };
-        if let WorkspaceTab::Terminal { panes, .. } = &entry.tab {
-            let views: Vec<_> = panes.iter().map(|pane| pane.view.clone()).collect();
-            let ids: Vec<_> = panes.iter().map(|pane| pane.id).collect();
-            for view in &views {
-                view.read(cx).shutdown();
-            }
-            for id in ids {
-                self.forget_pane(id);
-            }
-        }
-        self.remove_tab_entry(self.active);
-        if self.tabs.is_empty() {
-            // 空会话干净落盘:下次启动不恢复,也不把这次关标签误判成崩溃。
-            self.save_on_tabs_closed(window, cx);
-            window.remove_window();
-            return;
-        }
-        self.active = self.active.min(self.tabs.len() - 1);
-        self.focus_active(window, cx);
-        self.sync_window_title(window, cx);
-        cx.notify();
+        self.close_tab_at(self.active, window, cx);
     }
 
     /// 统一「摘除 tab」点:条目离开 tabs 的同时清掉它的节点矩形缓存。
@@ -1220,14 +1199,15 @@ impl SltermWorkspace {
 
     /// 04 篇 M7.2:渲染前把 Workspace 投影入账。hub 只发布语义变化,
     /// 事件循环空转/光标闪烁重复渲染不烧 revision、不刷订阅方。
-    fn publish_runtime_snapshot(&self, cx: &App) {
+    /// 返回发布后的规范快照(盖戳后),提交类命令随响应回传。
+    fn publish_runtime_snapshot(&self, cx: &App) -> crate::runtime_api::RuntimeSnapshot {
         let snapshot = runtime_projection::project_workspace(self, cx);
-        self.runtime_hub.publish(snapshot);
+        self.runtime_hub.publish(snapshot)
     }
 
-    /// M7.5 `RuntimeServer::spawn_callback` 接线点:服务端与壳共享同一
+    /// `RuntimeServer::spawn_callback` 接线点:服务端与壳共享同一
     /// 状态权威(同一 `Arc<Mutex<HubState>>`),不是第二份拷贝。
-    #[allow(dead_code)] // 消费点 = M7.5 RuntimeServer 接线。
+    #[allow(dead_code)] // 生产消费点 = 启动链(直接传参);测试经此读同一 hub。
     pub(crate) fn runtime_hub(&self) -> RuntimeHub {
         self.runtime_hub.clone()
     }
@@ -1389,11 +1369,15 @@ impl SltermWorkspace {
                     }
                     continue;
                 }
-                let Ok(()) = this.update(cx, |workspace, _cx| {
+                let Ok(()) = this.update(cx, |workspace, cx| {
                     // 严格 pane 路由 + 仲裁在宿主内完成;UI 消费(页签徽标/
                     // attention)归 05/09 篇,M4.5 不产生视图态。
                     let focused = workspace.focused_pane();
-                    workspace.agent_hub.dispatch(events, focused);
+                    let (_, accepted) = workspace.agent_hub.dispatch_lifecycle(events, focused);
+                    // 04 篇 M7.5:SessionEnd 关闭 managed agent、TurnDone
+                    // 完成委派回传,然后统一入账(等待方随快照唤醒)。
+                    workspace.process_agent_lifecycle_events(&accepted, cx);
+                    workspace.publish_runtime_snapshot(cx);
                 }) else {
                     return;
                 };
@@ -1445,15 +1429,16 @@ impl SltermWorkspace {
     }
 
     /// 壳事件泵(照上游 residency.rs 形态):120ms 节奏排空通道,前台线程
-    /// 派发。M3 事件族均无消费者(预埋缝,见 SltermShellEvent 逐变体注释)——
-    /// 泵本体先立,消费臂归各篇。
+    /// 派发。`RuntimeControl` 在 UI owner 上执行并 `respond` 回 transport
+    /// 线程;事件循环不可用时 dispatch 被丢弃 → `runtime_unavailable`。
     fn start_shell_event_pump(
         &mut self,
         rx: mpsc::Receiver<SltermShellEvent>,
+        window_handle: gpui::AnyWindowHandle,
         cx: &mut Context<'_, Self>,
     ) {
         let executor = cx.background_executor().clone();
-        cx.spawn(async move |_this, cx| {
+        cx.spawn(async move |this, cx| {
             loop {
                 executor.timer(Duration::from_millis(120)).await;
                 let mut events = Vec::new();
@@ -1463,18 +1448,16 @@ impl SltermWorkspace {
                 if events.is_empty() {
                     continue;
                 }
-                cx.update(|_cx| {
-                    for event in events {
-                        match event {
-                            // 预埋缝:生产者归 04 篇 M7。
-                            SltermShellEvent::MuxAttach => {}
-                            // M7.5 接线点:UI owner 按 RuntimeCommand 调既有
-                            // workspace 操作入口并 `dispatch.respond`。
-                            SltermShellEvent::RuntimeControl(_dispatch) => {}
-                            // 消费(右键「在此处打开」)归 09 篇。
-                            SltermShellEvent::OpenDirectories(_) => {}
-                        }
-                    }
+                // 窗口可能已关闭:此时丢弃事件,transport 侧收到 Disconnected
+                // 后按 runtime_unavailable 收口,不伪造成功。
+                cx.update(|cx| {
+                    let _ = window_handle.update(cx, |_root, window, cx| {
+                        let _ = this.update(cx, |workspace, cx| {
+                            for event in events {
+                                workspace.handle_shell_event(event, window, cx);
+                            }
+                        });
+                    });
                 });
             }
         })

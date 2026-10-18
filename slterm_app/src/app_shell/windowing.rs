@@ -23,6 +23,7 @@ use super::workspace::sidebar::{self, SidebarState};
 use crate::brand;
 use crate::cli::Program;
 use crate::platform::startup::first_frame;
+use crate::runtime_api::RuntimeHub;
 use crate::session::WindowState;
 
 /// 首窗的启动形态(13 篇 M3 两变体)。
@@ -114,6 +115,7 @@ pub(crate) fn open_initial_window(
     initial_cwd: Option<PathBuf>,
     initial_command: Option<Program>,
     plan: StartupPlan,
+    runtime_hub: RuntimeHub,
 ) {
     let startup = match initial_command {
         Some(command) => WorkspaceStartup::LaunchTerminal {
@@ -127,8 +129,17 @@ pub(crate) fn open_initial_window(
     let deferred_show = first_frame::defer_show(&mut options);
     let result = cx.open_window(options, move |window, cx| {
         window.set_window_title(brand::NAME);
-        let workspace =
-            cx.new(|cx| SltermWorkspace::new(window, shell_rx, Some(ai_events), startup, plan, cx));
+        let workspace = cx.new(|cx| {
+            SltermWorkspace::new(
+                window,
+                shell_rx,
+                Some(ai_events),
+                startup,
+                plan,
+                runtime_hub,
+                cx,
+            )
+        });
         cx.new(|cx| Root::new(workspace, window, cx))
     });
     match result {

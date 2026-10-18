@@ -27,6 +27,13 @@ path = "src/lib.rs"
 name = "windows_console_startup"
 path = "tests/windows_console_startup.rs"
 
+# Runtime API 行为级端到端(00-roadmap M7 出口;04 篇 M7.5):
+# 真实桌面 + 预构建 exe 才执行,`SLTERM_E2E_EXE` 未设置时打印 SKIP 计通过
+# (条件跳过登记于 .claude/test-exemptions.md)。
+[[test]]
+name = "runtime_conformance"
+path = "tests/runtime_conformance.rs"
+
 [features]
 # 一条 feature 同时打开 gpui 与 gpui-component 的测试支持(11 篇锚定);
 # UI 测试全部 `#[cfg(all(test, feature = "gpui-test-support"))]` 双门控,

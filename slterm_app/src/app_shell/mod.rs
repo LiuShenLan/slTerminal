@@ -80,6 +80,34 @@ pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>)
     let startup_plan = workspace::session_recovery::prepare_startup(restore_tabs);
     let (shell_tx, shell_rx) = mpsc::channel();
     let open_urls_tx = shell_tx.clone();
+    // 04 篇 M7.5:单实例控制面先于窗口创建。hub 是壳与服务端共享的同一份
+    // 状态权威;回调把 ATTACH/Control 桥进壳事件队列。
+    let runtime_hub = crate::runtime_api::RuntimeHub::new();
+    let runtime_server = {
+        let shell_events = shell_tx.clone();
+        crate::runtime_api::RuntimeServer::spawn_callback(
+            move |callback| {
+                let event = match callback {
+                    crate::runtime_api::RuntimeCallback::Attach => SltermShellEvent::MuxAttach,
+                    crate::runtime_api::RuntimeCallback::Control(dispatch) => {
+                        SltermShellEvent::RuntimeControl(dispatch)
+                    }
+                };
+                let _ = shell_events.send(event);
+            },
+            runtime_hub.clone(),
+        )
+    };
+    if runtime_server.is_none() && initial_command.is_none() {
+        // 与对端抢锁竞态:对方可能已拿锁但端点尚未落盘;40 × 25ms 重试
+        // 后再决定自启还是移交(D04-2 契约数值)。
+        let handover_cwd = initial_cwd.clone().or_else(|| std::env::current_dir().ok());
+        if crate::runtime_api::handover_to_existing_instance(handover_cwd.as_deref(), None) {
+            log::info!("runtime handover succeeded; this instance exits without a window");
+            return;
+        }
+    }
+    let _runtime_server = runtime_server; // 随壳生命周期持有;Drop 删自己的端口记录
     // 进程级 hook 管道(单实例,非 per-pane):必须在首个 PTY spawn 之前发布
     // `SLTERM_NOTIFY_PIPE`——ConPTY 合并当前进程环境,全部 pane 的子进程树
     // 天然携带作用域闸门。句柄活到事件循环退出,关窗后确定性回收 accept 线程。
@@ -99,6 +127,7 @@ pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>)
             initial_cwd,
             initial_command,
             startup_plan,
+            runtime_hub,
         );
     });
     // run 返回 = 最后窗口已关闭;Drop 完成自连唤醒 + join。

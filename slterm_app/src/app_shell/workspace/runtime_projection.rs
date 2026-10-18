@@ -115,7 +115,7 @@ fn runtime_layout(tree: &SplitTree<PaneId>) -> RuntimeLayout {
 
 /// 03 篇 `AgentStatus` → 协议六态。03 无边界的等待输入/失败细分:
 /// Blocked(权限/提问屏幕)归 attention;Failed 只由 run 记账链产生。
-fn runtime_task_state(status: AgentStatus) -> RuntimeTaskState {
+pub(super) fn runtime_task_state(status: AgentStatus) -> RuntimeTaskState {
     match status {
         AgentStatus::Idle => RuntimeTaskState::Idle,
         AgentStatus::Working => RuntimeTaskState::Running,

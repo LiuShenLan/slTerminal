@@ -66,4 +66,7 @@
 - `pty/shell.rs::allowlist_accepts_real_alias_when_present`
 - `hooks/signal.rs::process_symlink_signal_deletes_without_read`、`hooks/watcher.rs::collect_excludes_symlink_files`、`notify/mod.rs` symlink 用例、`agent_history/claude/ops.rs` symlink 用例（BE-17/D5 豁免先例）
 
+以下用例依赖真实桌面会话与预构建产物，`SLTERM_E2E_EXE` 未设置时打印 SKIP 并计「通过」：
+- `runtime_conformance::runtime_api_conformance_and_second_instance_handover`（04 篇 M7.5 / 00-roadmap M7 出口）：真实 GUI 进程 + 双进程移交。兜底 = L1 `server_tests` 移交/stale/Drop 用例 + UI `runtime_control_tests` 执行器用例 + 本机真机实跑（2026-10-18 通过）。串行执行：`SLTERM_E2E_EXE=target/debug/slterm.exe cargo test -p slterm --test runtime_conformance -- --test-threads=1`。
+
 本地开发机（已开开发者模式）为真实覆盖来源；CI runner 未开权限时上述分支覆盖记为「不确定」。
