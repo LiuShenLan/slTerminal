@@ -71,10 +71,12 @@
 | B43 | **`NotificationChoice` 暂无消费方**：动作按钮回传事件已通车，确认语义归 M10 安全半程，当前仅 debug 日志。 | `notify.rs` | M10.1 | M10 安全半程消费。 |
 | B44 | **焦点切换不清任务栏进度**：切换活跃 tab/聚焦 pane 时旧条保留，后台 pane 后续进度被忽略，只能等来源 pane 清除边（TurnDone/133;D/关 pane/OSC 0）。上游同行为。 | `workspace/mod.rs` 焦点路由 | M10.2 | M10.3/M10.4 裁决是否焦点切换补清。 |
 | B45 | **taskbar 测试调用记录用进程级 static**：依赖 `--test-threads=1` 既定纪律；若并行需加测试互斥锁。 | `taskbar.rs` | M10.2 | 记录。 |
-| B46 | **托盘/通知 Focus 只 `activate_window()`**：未做 `IsIconic→SW_RESTORE`，最小化时托盘点击在 M10.4 前可能只前置不还原。 | `workspace/runtime_control.rs` Focus 路径 | M10.3 | M10.4 facade 统一补还原语义。 |
-| B47 | **托盘「退出」绕过脏文件守卫**：与标题栏关闭同路径（终局快照 + remove_window），不走 `on_window_should_close` 脏确认——**托盘退出可丢弃未保存编辑器内容**（数据丢失风险）。 | `workspace/runtime_control.rs` `quit_from_tray` | M10.3 | M10.4/05 决定托盘退出是否过守卫。 |
+| B46 | ~~托盘/通知 Focus 未 SW_RESTORE~~（M10.4 facade 已补 `IsIconic→SW_RESTORE→前置`）。 | `windowing/focus.rs` | M10.3 | 已闭环。 |
+| B47 | ~~托盘「退出」绕过脏文件守卫~~（M10.4 已过 `guard_file_window_close`，`tray_quit_confirms_dirty_files_before_exiting` 锁定）。 | `workspace/runtime_control.rs` `quit_from_tray` | M10.3 | 已闭环。 |
 | B48 | **托盘 CreateWindowExW 失败闸门不复位**：失败后本进程内不再重试（上游同形）。 | `tray.rs` `THREAD_STARTED` | M10.3 | 可重置闸门重试。 |
 | B49 | **托盘 shutdown join 等模态菜单收合**（罕见，可接受）。 | `tray.rs` `shutdown` | M10.3 | 记录。 |
+| B50 | **标题栏关闭未收 facade**：`apply_titlebar_command` Close 分支（非 Windows/测试路径）仍是 save+remove，绕过脏守卫；Windows 生产由原生控制区走 `on_window_should_close`（风险低）。 | `workspace/title_bar.rs` | M10.4 | 05 标题栏重建时补 `close_window` facade 入口并复用 B47 守卫。 |
+| B51 | **`window_hwnd(cx)` 的 `cx` 未参与实现**：单窗用开窗时缓存；未来多窗须改为按 `cx` 活动窗口查询。 | `windowing/focus.rs` | M10.4 | 留锚。 |
 
 ## C. 计划内（归后续子步/阶段，重构完成时验证）
 
@@ -93,7 +95,7 @@
 | C11 | **i18n 合同独立 workspace CI 登记**：`tools/slterm-i18n-contract` 不在根 workspace，clippy/CI 不覆盖。 | 12 篇打包/CI 清单 | |
 | C12 | **旧栈语义资产转测试保留**：git2 五份语义资产（D07-1 裁定转对照用例）。 | 07/M11 | |
 | C13 | **docs/ 临时稿删除 + 篇号锚点清理**（与 A3 联动）。 | M11 | |
-| C14 | **设计措辞修正**：05 篇「窗口边缘」应为「内容区外圈」；04 篇 `reorder_batch` 签名稿与上游不符（已照源）；08 篇 `note_bell` 上游不存在（未落）；04 篇 generation 等待错误码口径（实现按设计稿 `agent_identity_mismatch`/`agent_exited`）；08 篇 D08-2 待沉淀仍写「M9.3 落地时拍板」而 DECISIONS 已裁（文档漂移）；08 篇 `compile_formula` 签名草案与上游实源不符（已按源码照抄）；08 篇 #44 `draw_overlays` 未迁，M9.5 自绘 paint pass（设计稿应标注归属）；09 篇 §6 duration 值域（Default|Short|Long）与 06 已落六档不一致（实现按六档消费，persistent 无系统常驻档）；09 篇 M10.2 出口只写「agent 退出清进度」，实现按任务书补 TurnDone/pane 关闭清除（doc 待回登）。 | 设计稿 | 重构末统一订正。 |
+| C14 | **设计措辞修正**：05 篇「窗口边缘」应为「内容区外圈」；04 篇 `reorder_batch` 签名稿与上游不符（已照源）；08 篇 `note_bell` 上游不存在（未落）；04 篇 generation 等待错误码口径（实现按设计稿 `agent_identity_mismatch`/`agent_exited`）；08 篇 D08-2 待沉淀仍写「M9.3 落地时拍板」而 DECISIONS 已裁（文档漂移）；08 篇 `compile_formula` 签名草案与上游实源不符（已按源码照抄）；08 篇 #44 `draw_overlays` 未迁，M9.5 自绘 paint pass（设计稿应标注归属）；09 篇 §6 duration 值域（Default|Short|Long）与 06 已落六档不一致（实现按六档消费，persistent 无系统常驻档）；09 篇 M10.2 出口只写「agent 退出清进度」，实现按任务书补 TurnDone/pane 关闭清除（doc 待回登）；09 篇 `focus_window(cx)`/`focus_pane(pane,cx)` 为多窗注册表签名，与单窗 GPUI（窗口更新回调内不可再 update）冲突，实现改为显式 `&mut Window` 落点、目标选择/平台调用仍单点。 | 设计稿 | 重构末统一订正。 |
 | C15 | **`D04-3 windowing_behavior` 未设键**：单窗行为硬编码 `SINGLE_WINDOW_ID`。 | 12 篇随 settings 面统一裁定 | |
 | C16 | **`request_once_bounded` 无消费方**（插件宿主）。 | M9.5/M10 | |
 | C17 | **`ProviderTestOutcome` 文案本地化**（展示边界）。 | M9.5 | |
