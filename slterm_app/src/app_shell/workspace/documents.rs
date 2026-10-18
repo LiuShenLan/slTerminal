@@ -18,7 +18,7 @@ use std::path::PathBuf;
 
 use gpui::{
     AnyElement, App, AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _,
-    IntoElement, ParentElement as _, PromptLevel, Styled as _, Window, div,
+    IntoElement, ParentElement as _, PromptLevel, Styled as _, Task, Window, div,
 };
 use slterm_split::TabId;
 
@@ -48,6 +48,50 @@ fn image_view(entry: &TabEntry) -> Option<&Entity<ImageTabView>> {
     match &entry.tab {
         WorkspaceTab::Image { view } => Some(view),
         _ => None,
+    }
+}
+
+/// Code/Document 两种可保存视图的统一句柄:脏关闭守卫与 Ctrl+S 共用。
+enum FileViewHandle {
+    Code(Entity<CodeTabView>),
+    Document(Entity<DocTabView>),
+}
+
+impl FileViewHandle {
+    fn of(tab: &WorkspaceTab) -> Option<Self> {
+        match tab {
+            WorkspaceTab::Code { view } => Some(Self::Code(view.clone())),
+            WorkspaceTab::Document { view } => Some(Self::Document(view.clone())),
+            _ => None,
+        }
+    }
+
+    fn is_saving(&self, cx: &App) -> bool {
+        match self {
+            Self::Code(view) => view.read(cx).is_saving(cx),
+            Self::Document(view) => view.read(cx).is_saving(),
+        }
+    }
+
+    fn is_dirty(&self, cx: &App) -> bool {
+        match self {
+            Self::Code(view) => view.read(cx).is_dirty(cx),
+            Self::Document(view) => view.read(cx).is_dirty(),
+        }
+    }
+
+    fn path(&self, cx: &App) -> PathBuf {
+        match self {
+            Self::Code(view) => view.read(cx).path.clone(),
+            Self::Document(view) => view.read(cx).path.clone(),
+        }
+    }
+
+    fn save<C: gpui::AppContext>(&self, cx: &mut C) -> Task<bool> {
+        match self {
+            Self::Code(view) => view.clone().update(cx, |view, cx| view.save(cx)),
+            Self::Document(view) => view.clone().update(cx, |view, cx| view.save(cx)),
+        }
     }
 }
 
@@ -122,8 +166,8 @@ impl SltermWorkspace {
             self.activate_tab(index, window, cx);
             return;
         }
-        // M8.1 预览占位:与 Code 共用只读文本视图;渲染态归 M8.3。
-        let view = cx.new(|cx| DocTabView::new(path, "markdown", true, window, cx));
+        // M8.3:Document = 渲染态打开、可编辑;源码↔预览同源同一份文档。
+        let view = cx.new(|cx| DocTabView::new_document(path, window, cx));
         self.push_file_tab(WorkspaceTab::Document { view }, window, cx);
     }
 
@@ -231,7 +275,7 @@ impl SltermWorkspace {
         }
     }
 
-    /// 文件 tab 的焦点句柄:图片臂无可编辑面(None = 不迁移焦点)。
+    /// 文件 tab 的焦点句柄:图片臂 M8.3 起也有独立焦点(动作可到达工作区)。
     pub(super) fn file_tab_focus_handle(
         &self,
         tab: &WorkspaceTab,
@@ -240,6 +284,7 @@ impl SltermWorkspace {
         match tab {
             WorkspaceTab::Document { view } => Some(view.read(cx).focus_handle(cx)),
             WorkspaceTab::Code { view } => Some(view.read(cx).focus_handle(cx)),
+            WorkspaceTab::Image { view } => Some(view.read(cx).focus_handle(cx)),
             _ => None,
         }
     }
@@ -262,23 +307,57 @@ impl SltermWorkspace {
         }
     }
 
-    /// Ctrl+S 落点:活跃 Code tab 才触发保存;其余 tab 无操作。
+    /// Ctrl+S 落点:活跃 Code/Document tab 触发保存;其余 tab 无操作。
     pub(super) fn save_active_file(&mut self, cx: &mut Context<'_, Self>) {
-        let Some(WorkspaceTab::Code { view }) = self.tabs.get(self.active).map(|entry| &entry.tab)
-        else {
+        let Some(entry) = self.tabs.get(self.active) else {
             return;
         };
-        if view.read(cx).is_read_only(cx) {
-            return;
+        match &entry.tab {
+            WorkspaceTab::Code { view } => {
+                if view.read(cx).is_read_only(cx) {
+                    return;
+                }
+                let task = view.clone().update(cx, |view, cx| view.save(cx));
+                task.detach();
+            }
+            WorkspaceTab::Document { view } => {
+                if view.read(cx).is_read_only() {
+                    return;
+                }
+                let task = view.clone().update(cx, |view, cx| view.save(cx));
+                task.detach();
+            }
+            _ => {}
         }
-        let task = view.clone().update(cx, |view, cx| view.save(cx));
-        task.detach();
+    }
+
+    /// 渲染激活位同步:只有活跃文件 tab 物化预览资产;切走的 tab 释放
+    /// 块槽/图片解码,草稿与撤销历史保留(07 篇「预览虚拟化与资产释放」)。
+    pub(super) fn sync_file_render_activity(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let active = self.active;
+        for (index, entry) in self.tabs.iter().enumerate() {
+            let is_active = index == active;
+            match &entry.tab {
+                WorkspaceTab::Code { view } => {
+                    view.update(cx, |view, cx| view.set_render_active(is_active, window, cx));
+                }
+                WorkspaceTab::Document { view } => {
+                    view.update(cx, |view, cx| view.set_render_active(is_active, window, cx));
+                }
+                _ => {}
+            }
+        }
     }
 
     /// 关闭脏文件 tab 的守卫:true = 已拦截(保存中/确认在途/弹出确认框)。
     ///
     /// 确认交互照上游原生三键提示:保存 / 不保存 / 取消。保存失败或
-    /// 取消都保留 tab 与草稿;保存成功且无新草稿才摘除 tab。
+    /// 取消都保留 tab 与草稿;保存成功且无新草稿才摘除 tab。M8.3 起
+    /// Document 与 Code 共用同一守卫。
     pub(super) fn guard_file_tab_close(
         &mut self,
         index: usize,
@@ -288,23 +367,22 @@ impl SltermWorkspace {
         let Some(entry) = self.tabs.get(index) else {
             return false;
         };
-        let WorkspaceTab::Code { view } = &entry.tab else {
+        let Some(file) = FileViewHandle::of(&entry.tab) else {
             return false;
         };
-        if view.read(cx).is_saving(cx) {
+        if file.is_saving(cx) {
             return true;
         }
-        if !view.read(cx).is_dirty(cx) {
+        if !file.is_dirty(cx) {
             return false;
         }
         if self.pending_file_close.is_some() {
             return true;
         }
         let tab_id = entry.id;
-        let file = view.clone();
         self.pending_file_close = Some(tab_id);
         let language = cx.global::<Settings>().language;
-        let detail = file.read(cx).path.display().to_string();
+        let detail = file.path(cx).display().to_string();
         let answer = window.prompt(
             PromptLevel::Warning,
             language.text(Message::EditorCloseTitle),
@@ -321,10 +399,7 @@ impl SltermWorkspace {
             let choice = answer.await;
             let should_close = match choice {
                 // 保存:等待落盘且保存完成后无新草稿。
-                Ok(0) => {
-                    let task = file.update(cx, |view, cx| view.save(cx));
-                    task.await
-                }
+                Ok(0) => file.save(cx).await,
                 // 不保存:直接丢弃草稿。
                 Ok(1) => true,
                 // 取消/对话框被系统取消。
@@ -386,6 +461,150 @@ impl SltermWorkspace {
     pub(crate) fn active_dirty_for_test(&self, cx: &gpui::App) -> Option<bool> {
         match self.tabs.get(self.active).map(|entry| &entry.tab) {
             Some(WorkspaceTab::Code { view }) => Some(view.read(cx).is_dirty(cx)),
+            Some(WorkspaceTab::Document { view }) => Some(view.read(cx).is_dirty()),
+            _ => None,
+        }
+    }
+
+    /// 测试专用:活跃 Document tab 是否渲染态。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn active_preview_for_test(&self, cx: &gpui::App) -> Option<bool> {
+        match self.tabs.get(self.active).map(|entry| &entry.tab) {
+            Some(WorkspaceTab::Document { view }) => Some(view.read(cx).is_preview_for_test()),
+            _ => None,
+        }
+    }
+
+    /// 测试专用:切换活跃 Document 的双模态。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn toggle_active_preview_for_test(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if let Some(WorkspaceTab::Document { view }) =
+            self.tabs.get(self.active).map(|entry| &entry.tab)
+        {
+            view.clone()
+                .update(cx, |view, cx| view.toggle_preview_for_test(window, cx));
+        }
+    }
+
+    /// 测试专用:活跃 Document 的预览块数。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn active_block_count_for_test(&self, cx: &gpui::App) -> Option<usize> {
+        match self.tabs.get(self.active).map(|entry| &entry.tab) {
+            Some(WorkspaceTab::Document { view }) => Some(view.read(cx).block_count_for_test()),
+            _ => None,
+        }
+    }
+
+    /// 测试专用:当帧物化的预览块下标(虚拟化断言端)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn active_rendered_blocks_for_test(&self, cx: &gpui::App) -> Option<Vec<usize>> {
+        match self.tabs.get(self.active).map(|entry| &entry.tab) {
+            Some(WorkspaceTab::Document { view }) => Some(view.read(cx).rendered_blocks_for_test()),
+            _ => None,
+        }
+    }
+
+    /// 测试专用:滚动活跃预览到指定块。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn scroll_active_preview_to_for_test(&self, block: usize, cx: &gpui::App) {
+        if let Some(WorkspaceTab::Document { view }) =
+            self.tabs.get(self.active).map(|entry| &entry.tab)
+        {
+            view.read(cx).scroll_preview_to_for_test(block);
+        }
+    }
+
+    /// 测试专用:活跃 Document 的预览防抖位。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn active_preview_stale_for_test(&self, cx: &gpui::App) -> Option<bool> {
+        match self.tabs.get(self.active).map(|entry| &entry.tab) {
+            Some(WorkspaceTab::Document { view }) => Some(view.read(cx).preview_stale_for_test()),
+            _ => None,
+        }
+    }
+
+    /// 测试专用:活跃文件 tab 的共享撤销栈组数。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn active_history_depth_for_test(&self, cx: &gpui::App) -> Option<usize> {
+        match self.tabs.get(self.active).map(|entry| &entry.tab) {
+            Some(WorkspaceTab::Document { view }) => {
+                Some(view.read(cx).history_undo_depth_for_test())
+            }
+            Some(WorkspaceTab::Code { view }) => {
+                Some(view.read(cx).history_undo_depth_for_test(cx))
+            }
+            _ => None,
+        }
+    }
+
+    /// 测试专用:在活跃 Document 的指定块开启渲染态输入。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn begin_active_live_edit_for_test(
+        &mut self,
+        block: usize,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if let Some(WorkspaceTab::Document { view }) =
+            self.tabs.get(self.active).map(|entry| &entry.tab)
+        {
+            view.clone().update(cx, |view, cx| {
+                view.begin_live_edit_for_test(block, window, cx)
+            });
+        }
+    }
+
+    /// 测试专用:指定下标 Document tab 的渲染激活位与物化块数。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn document_render_state_for_test(
+        &self,
+        index: usize,
+        cx: &gpui::App,
+    ) -> Option<(bool, usize)> {
+        match self.tabs.get(index).map(|entry| &entry.tab) {
+            Some(WorkspaceTab::Document { view }) => Some((
+                view.read(cx).render_active_for_test(),
+                view.read(cx).materialized_block_count_for_test(),
+            )),
+            _ => None,
+        }
+    }
+
+    /// 测试专用:活跃 Document 的详情侧栏宽度。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn active_details_width_for_test(&self, cx: &gpui::App) -> Option<f32> {
+        match self.tabs.get(self.active).map(|entry| &entry.tab) {
+            Some(WorkspaceTab::Document { view }) => Some(view.read(cx).details_width_for_test()),
+            _ => None,
+        }
+    }
+
+    /// 测试专用:按步进缩放活跃图片 tab(滚轮路径的确定性入口)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn zoom_active_image_for_test(&mut self, steps: f32, cx: &mut Context<'_, Self>) {
+        if let Some(WorkspaceTab::Image { view }) =
+            self.tabs.get(self.active).map(|entry| &entry.tab)
+        {
+            view.clone()
+                .update(cx, |view, cx| view.zoom_for_test_steps(steps, cx));
+        }
+    }
+
+    /// 测试专用:活跃图片 tab 是否持有键盘焦点(M8.1 问题 1 回归端)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn active_image_focused_for_test(
+        &self,
+        window: &Window,
+        cx: &gpui::App,
+    ) -> Option<bool> {
+        match self.tabs.get(self.active).map(|entry| &entry.tab) {
+            Some(WorkspaceTab::Image { view }) => {
+                Some(view.read(cx).focus_is_active_for_test(window, cx))
+            }
             _ => None,
         }
     }

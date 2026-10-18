@@ -4,8 +4,9 @@
 //! 全程 tempdir 假文件;git 夹具用真实子进程,argv 不经 shell。
 
 use super::*;
-use crate::app_shell::file_editor::SaveFile;
+use crate::app_shell::file_editor::{SaveFile, ToggleSource};
 use crate::i18n::Message;
+use std::time::Duration;
 
 // ── M8.1 文件 tab 路由 + 只读臂 ──
 
@@ -430,6 +431,428 @@ fn closing_a_dirty_file_tab_confirms_before_save_or_discard(cx: &mut TestAppCont
         "丢弃关闭不得写盘"
     );
     assert_eq!(workspace.read_with(cx, |ws, _| ws.tab_count()), 1);
+}
+
+// ── M8.3 预览 / 虚拟化 / 双模态 / 撤销统一 / 图片缩放 ──
+
+/// 预览态:标题/正文/代码块/图片占位 + 工具条与大纲侧栏真实绘制。
+#[gpui::test]
+fn document_preview_renders_markdown_code_and_image_placeholder(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    let directory = tempfile::tempdir().unwrap();
+    write_temp_file(directory.path(), "dot.png", &png_bytes());
+    let path = write_temp_file(
+        directory.path(),
+        "note.md",
+        "# 标题\n\n正文 **粗体**\n\n```rust\nfn main() {}\n```\n\n![点](dot.png)\n\n![缺失图](missing.png)\n"
+            .as_bytes(),
+    );
+    open_document_at(&workspace, &mut window, path);
+    draw_frame(&mut window);
+
+    assert_eq!(
+        workspace.read_with(cx, |ws, _| ws.active_tab_kind_for_test()),
+        "document"
+    );
+    assert_eq!(
+        workspace.read_with(cx, |ws, cx| ws.active_preview_for_test(cx)),
+        Some(true),
+        "markdown 文档默认渲染态"
+    );
+    assert!(
+        window.debug_bounds("markdown-preview-viewport").is_some(),
+        "预览视口必须绘制"
+    );
+    assert!(window.debug_bounds("file-toolbar").is_some());
+    assert!(window.debug_bounds("file-toggle-source").is_some());
+    assert!(window.debug_bounds("markdown-outline").is_some());
+    let width = workspace
+        .read_with(cx, |ws, cx| ws.active_details_width_for_test(cx))
+        .expect("详情侧栏宽度");
+    assert!(
+        (216.0..=360.0).contains(&width),
+        "详情侧栏宽度必须在常量族钳制区间: {width}"
+    );
+    assert!(
+        window.debug_bounds("outline-row-0").is_some(),
+        "大纲侧栏必须渲染标题行"
+    );
+    assert!(
+        window.debug_bounds("markdown-preview-block-0").is_some(),
+        "首个虚拟块必须物化"
+    );
+    let blocks = workspace
+        .read_with(cx, |ws, cx| ws.active_block_count_for_test(cx))
+        .expect("Document 必须有块清单");
+    assert!(blocks >= 5, "标题/正文/代码/两张图片至少五块: {blocks}");
+    assert!(
+        window.debug_bounds("markdown-code-label").is_some(),
+        "围栏代码块必须渲染(朴素高亮 + 语言标签)"
+    );
+    assert!(
+        window.debug_bounds("markdown-image").is_some(),
+        "存在的本地图片必须走图片管线"
+    );
+    assert!(
+        window.debug_bounds("markdown-image-placeholder").is_some(),
+        "缺失的本地图片必须画占位"
+    );
+}
+
+/// 虚拟化:长文档只物化可见窗口;滚动后窗口更新。
+#[gpui::test]
+fn preview_virtualizes_long_documents_and_updates_the_window_on_scroll(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    let directory = tempfile::tempdir().unwrap();
+    let source = (0..300)
+        .map(|index| format!("paragraph {index}\n\n"))
+        .collect::<String>();
+    let path = write_temp_file(directory.path(), "long.md", source.as_bytes());
+    open_document_at(&workspace, &mut window, path);
+    draw_frame(&mut window);
+
+    let total = workspace
+        .read_with(cx, |ws, cx| ws.active_block_count_for_test(cx))
+        .expect("块清单");
+    assert_eq!(total, 300);
+    let first = workspace
+        .read_with(cx, |ws, cx| ws.active_rendered_blocks_for_test(cx))
+        .expect("渲染块集合");
+    assert!(!first.is_empty(), "可见窗口必须物化");
+    assert!(
+        first.len() < total / 2,
+        "长文档不得整篇物化: {} / {total}",
+        first.len()
+    );
+    assert!(!first.contains(&250), "屏外块不得物化");
+
+    workspace.read_with(cx, |ws, cx| {
+        ws.scroll_active_preview_to_for_test(250, cx);
+    });
+    draw_frame(&mut window);
+    let after = workspace
+        .read_with(cx, |ws, cx| ws.active_rendered_blocks_for_test(cx))
+        .expect("渲染块集合");
+    assert!(
+        after.iter().any(|index| *index >= 200),
+        "滚动后可见窗口必须前移: {after:?}"
+    );
+    assert!(
+        after.len() < total / 2,
+        "滚动后仍只物化可见窗口: {}",
+        after.len()
+    );
+}
+
+/// 双模态同源:源码↔预览切换不丢编辑;源码键入触发防抖重排。
+#[gpui::test]
+fn document_source_and_preview_share_one_buffer(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    let directory = tempfile::tempdir().unwrap();
+    let path = write_temp_file(directory.path(), "dual.md", "# 标题\n\n正文\n".as_bytes());
+    open_document_at(&workspace, &mut window, path);
+    draw_frame(&mut window);
+    assert_eq!(
+        workspace.read_with(cx, |ws, cx| ws.active_preview_for_test(cx)),
+        Some(true)
+    );
+
+    // 生产动作路径:ToggleSource 由视图根动作分发切换双模态。
+    window.dispatch_action(ToggleSource);
+    window.run_until_parked();
+    draw_frame(&mut window);
+    assert_eq!(
+        workspace.read_with(cx, |ws, cx| ws.active_preview_for_test(cx)),
+        Some(false),
+        "ToggleSource 后进入源码态"
+    );
+    assert_eq!(
+        workspace.read_with(cx, |ws, cx| ws.active_editor_text_for_test(cx)),
+        Some("# 标题\n\n正文\n".to_owned()),
+        "切换不得丢已载入文本"
+    );
+
+    focus_active_file_tab(&workspace, &mut window);
+    window.simulate_input("X");
+    window.run_until_parked();
+    assert_eq!(
+        workspace.read_with(cx, |ws, cx| ws.active_editor_text_for_test(cx)),
+        Some("X# 标题\n\n正文\n".to_owned())
+    );
+    assert_eq!(
+        workspace.read_with(cx, |ws, cx| ws.active_dirty_for_test(cx)),
+        Some(true)
+    );
+
+    window.update(|window, cx| {
+        workspace.update(cx, |ws, cx| ws.toggle_active_preview_for_test(window, cx));
+    });
+    window.run_until_parked();
+    assert_eq!(
+        workspace.read_with(cx, |ws, cx| ws.active_editor_text_for_test(cx)),
+        Some("X# 标题\n\n正文\n".to_owned()),
+        "切回预览后草稿仍同源"
+    );
+    window.executor().advance_clock(Duration::from_millis(300));
+    window.run_until_parked();
+    draw_frame(&mut window);
+    assert_eq!(
+        workspace.read_with(cx, |ws, cx| ws.active_preview_stale_for_test(cx)),
+        Some(false),
+        "250ms 防抖重排必须完成"
+    );
+    assert!(
+        workspace
+            .read_with(cx, |ws, cx| ws.active_block_count_for_test(cx))
+            .unwrap_or(0)
+            > 0
+    );
+}
+
+/// 撤销统一:预览态 Ctrl+Z/Ctrl+Y 走共享 EditHistory(内建栈被拦截)。
+#[gpui::test]
+fn preview_undo_and_redo_travel_the_shared_history(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    let directory = tempfile::tempdir().unwrap();
+    let path = write_temp_file(directory.path(), "undo.md", "alpha\n\nbeta\n".as_bytes());
+    open_document_at(&workspace, &mut window, path);
+    draw_frame(&mut window);
+    window.update(|window, cx| {
+        workspace.update(cx, |ws, cx| {
+            ws.begin_active_live_edit_for_test(0, window, cx)
+        });
+    });
+    window.run_until_parked();
+    window.simulate_input("Z");
+    window.run_until_parked();
+    assert_eq!(
+        workspace.read_with(cx, |ws, cx| ws.active_editor_text_for_test(cx)),
+        Some("alphaZ\n\nbeta\n".to_owned())
+    );
+    let depth = workspace
+        .read_with(cx, |ws, cx| ws.active_history_depth_for_test(cx))
+        .expect("共享历史深度");
+    assert!(depth > 0, "渲染态键入必须进入共享历史");
+
+    window.dispatch_action(gpui_component::input::Undo);
+    window.run_until_parked();
+    assert_eq!(
+        workspace.read_with(cx, |ws, cx| ws.active_editor_text_for_test(cx)),
+        Some("alpha\n\nbeta\n".to_owned()),
+        "Ctrl+Z 必须回退到共享历史的上一项"
+    );
+    let after_undo = workspace
+        .read_with(cx, |ws, cx| ws.active_history_depth_for_test(cx))
+        .expect("共享历史深度");
+    assert!(
+        after_undo < depth,
+        "撤销必须消耗共享历史(内建栈未被旁路): {depth} -> {after_undo}"
+    );
+
+    window.dispatch_action(gpui_component::input::Redo);
+    window.run_until_parked();
+    assert_eq!(
+        workspace.read_with(cx, |ws, cx| ws.active_editor_text_for_test(cx)),
+        Some("alphaZ\n\nbeta\n".to_owned()),
+        "Ctrl+Y 必须重做"
+    );
+
+    // 源码态同样走共享历史:内建栈不得旁路(深度必须下降)。
+    window.update(|window, cx| {
+        workspace.update(cx, |ws, cx| ws.toggle_active_preview_for_test(window, cx));
+    });
+    window.run_until_parked();
+    focus_active_file_tab(&workspace, &mut window);
+    window.simulate_input("Q");
+    window.run_until_parked();
+    assert_eq!(
+        workspace.read_with(cx, |ws, cx| ws.active_editor_text_for_test(cx)),
+        Some("alphaZQ\n\nbeta\n".to_owned())
+    );
+    let source_depth = workspace
+        .read_with(cx, |ws, cx| ws.active_history_depth_for_test(cx))
+        .expect("共享历史深度");
+    window.dispatch_action(gpui_component::input::Undo);
+    window.run_until_parked();
+    assert_eq!(
+        workspace.read_with(cx, |ws, cx| ws.active_editor_text_for_test(cx)),
+        Some("alphaZ\n\nbeta\n".to_owned()),
+        "源码态 Ctrl+Z 必须回退共享历史"
+    );
+    let after_source_undo = workspace
+        .read_with(cx, |ws, cx| ws.active_history_depth_for_test(cx))
+        .expect("共享历史深度");
+    assert!(
+        after_source_undo < source_depth,
+        "源码态撤销必须消耗共享历史: {source_depth} -> {after_source_undo}"
+    );
+}
+
+/// 源码 Code tab 的撤销同样走共享历史(内建输入栈不再旁路)。
+#[gpui::test]
+fn source_code_tab_undo_uses_the_shared_history(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    let directory = tempfile::tempdir().unwrap();
+    let path = write_temp_file(directory.path(), "main.rs", b"fn main() {}\n");
+    open_document_at(&workspace, &mut window, path);
+    focus_active_file_tab(&workspace, &mut window);
+    window.simulate_input("// ");
+    window.run_until_parked();
+    let depth = workspace
+        .read_with(cx, |ws, cx| ws.active_history_depth_for_test(cx))
+        .expect("共享历史深度");
+    assert!(depth > 0, "源码键入必须进入共享历史");
+
+    window.dispatch_action(gpui_component::input::Undo);
+    window.run_until_parked();
+    assert_eq!(
+        workspace.read_with(cx, |ws, cx| ws.active_editor_text_for_test(cx)),
+        Some("fn main() {}\n".to_owned()),
+        "Code tab 的 Ctrl+Z 必须回退共享历史"
+    );
+    let after = workspace
+        .read_with(cx, |ws, cx| ws.active_history_depth_for_test(cx))
+        .expect("共享历史深度");
+    assert!(
+        after < depth,
+        "源码撤销必须消耗共享历史: {depth} -> {after}"
+    );
+}
+
+/// 图片 tab:独立焦点 + 真实缩放几何(0.25×–8× 钳制)。
+#[gpui::test]
+fn image_tab_owns_focus_and_zooms_with_real_geometry(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    let directory = tempfile::tempdir().unwrap();
+    let path = write_temp_file(directory.path(), "pixel.png", &png_bytes());
+    open_document_at(&workspace, &mut window, path);
+    draw_frame(&mut window);
+    assert_eq!(
+        workspace.read_with(cx, |ws, cx| ws.active_image_zoom_for_test(cx)),
+        Some(1.0),
+        "初始 fit-width 比例为 1.0"
+    );
+
+    focus_active_file_tab(&workspace, &mut window);
+    let focused =
+        window.update(|window, cx| workspace.read(cx).active_image_focused_for_test(window, cx));
+    assert_eq!(focused, Some(true), "M8.3 图片 tab 必须持有独立焦点");
+
+    workspace.update(cx, |ws, cx| ws.zoom_active_image_for_test(2.0, cx));
+    window.run_until_parked();
+    let zoomed = workspace
+        .read_with(cx, |ws, cx| ws.active_image_zoom_for_test(cx))
+        .unwrap();
+    assert!(
+        (zoomed - 1.18f32.powf(2.0)).abs() < 0.001,
+        "两步缩放 = 1.18²: {zoomed}"
+    );
+    workspace.update(cx, |ws, cx| ws.zoom_active_image_for_test(-100.0, cx));
+    let clamped = workspace
+        .read_with(cx, |ws, cx| ws.active_image_zoom_for_test(cx))
+        .unwrap();
+    assert_eq!(clamped, 0.25, "缩放下限 0.25×");
+    draw_frame(&mut window);
+    assert!(window.debug_bounds("slterm-image-tab").is_some());
+}
+
+/// Document 脏关闭确认:取消保留;保存关闭写盘;丢弃关闭不写盘。
+#[gpui::test]
+fn document_dirty_close_confirms_before_save_or_discard(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    let directory = tempfile::tempdir().unwrap();
+    let path = write_temp_file(directory.path(), "dirty.md", b"initial\n");
+    open_document_at(&workspace, &mut window, path.clone());
+    draw_frame(&mut window);
+    window.update(|window, cx| {
+        workspace.update(cx, |ws, cx| {
+            ws.begin_active_live_edit_for_test(0, window, cx)
+        });
+    });
+    window.run_until_parked();
+    window.simulate_input("draft ");
+    window.run_until_parked();
+    assert_eq!(
+        workspace.read_with(cx, |ws, cx| ws.active_dirty_for_test(cx)),
+        Some(true)
+    );
+
+    window.update(|window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.close_active_tab_for_test(window, cx);
+        });
+    });
+    window.run_until_parked();
+    assert!(window.has_pending_prompt(), "Document 脏关闭必须弹确认框");
+    let cancel = ui_label(cx, Message::EditorCancel);
+    window.simulate_prompt_answer(&cancel);
+    window.run_until_parked();
+    assert_eq!(
+        workspace.read_with(cx, |ws, _| ws.tab_count()),
+        2,
+        "取消后保留 tab"
+    );
+
+    window.update(|window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.close_active_tab_for_test(window, cx);
+        });
+    });
+    window.run_until_parked();
+    assert!(window.has_pending_prompt());
+    let save = ui_label(cx, Message::EditorSave);
+    window.simulate_prompt_answer(&save);
+    window.run_until_parked();
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        b"initialdraft \n",
+        "Document 保存关闭必须先落盘"
+    );
+    assert_eq!(workspace.read_with(cx, |ws, _| ws.tab_count()), 1);
+}
+
+/// 切走 tab 释放预览块槽;切回按需重新物化(草稿与历史不受影响)。
+#[gpui::test]
+fn leaving_a_preview_tab_releases_block_slots(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    let directory = tempfile::tempdir().unwrap();
+    let source = (0..80)
+        .map(|index| format!("paragraph {index}\n\n"))
+        .collect::<String>();
+    let path = write_temp_file(directory.path(), "activity.md", source.as_bytes());
+    open_document_at(&workspace, &mut window, path);
+    draw_frame(&mut window);
+    let document_index = 1;
+    let (active, materialized) = workspace
+        .read_with(cx, |ws, cx| {
+            ws.document_render_state_for_test(document_index, cx)
+        })
+        .expect("Document tab");
+    assert!(active, "活跃 Document 必须是渲染激活态");
+    assert!(materialized > 0, "渲染中的预览必须有块槽");
+
+    // 打开第二个文件把 Document 切走:workspace 渲染路径释放其块槽。
+    let code = write_temp_file(directory.path(), "other.rs", b"fn other() {}\n");
+    open_document_at(&workspace, &mut window, code);
+    draw_frame(&mut window);
+    let (active, materialized) = workspace
+        .read_with(cx, |ws, cx| {
+            ws.document_render_state_for_test(document_index, cx)
+        })
+        .expect("Document tab");
+    assert!(!active, "切走后必须落非激活位");
+    assert_eq!(materialized, 0, "切走必须释放全部块槽");
+
+    window.dispatch_action(SelectPreviousTab);
+    window.run_until_parked();
+    draw_frame(&mut window);
+    let (active, materialized) = workspace
+        .read_with(cx, |ws, cx| {
+            ws.document_render_state_for_test(document_index, cx)
+        })
+        .expect("Document tab");
+    assert!(active, "切回后恢复渲染激活位");
+    assert!(materialized > 0, "切回后按需重新物化");
 }
 
 /// 载入失败不得留下可编辑空缓冲:无快照 = 只读(无保存目标)。

@@ -1739,6 +1739,8 @@ impl Render for SltermWorkspace {
         // 04 篇 M7.2:状态变化统一在渲染路径入账——任何 cx.notify 触发的
         // 重绘都会带上一份最新投影;判等去重保证空转帧零成本。
         self.publish_runtime_snapshot(cx);
+        // 07 篇 M8.3:只有活跃文件 tab 物化预览资产;切走即释放块槽/图片。
+        self.sync_file_render_activity(window, cx);
         let content = match self.tabs.get(self.active).map(|entry| &entry.tab) {
             Some(WorkspaceTab::Terminal { .. }) => Some(self.render_terminal_tab(self.active, cx)),
             Some(WorkspaceTab::Settings { view, .. }) => Some(view.clone().into_any_element()),
@@ -1920,6 +1922,9 @@ impl Render for SltermWorkspace {
 /// 在 `gpui_component::init` 之后调用一次。
 pub fn init(cx: &mut App) {
     use gpui::KeyBinding;
+    // 07 篇编辑器动作(撤销统一/ToggleSource/渲染态键盘)绑定在 FileEditor
+    // 上下文,只对文件视图生效。
+    super::file_editor::init(cx);
     cx.bind_keys([
         KeyBinding::new("ctrl-shift-d", SplitRight, None),
         KeyBinding::new("ctrl-shift-s", SplitDown, None),

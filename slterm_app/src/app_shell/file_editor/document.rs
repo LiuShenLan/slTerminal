@@ -23,10 +23,8 @@ pub(crate) struct Document {
     /// 规范化目标路径:保存时与再次解析的路径比对,防符号链接/重定向替换。
     target: PathBuf,
     /// 载入时的完整文件大小(截断判定是 `snapshot.truncated`,本字段供信息栏)。
-    #[allow(dead_code)] // 消费点 = M8.3 详情侧栏文件统计。
     pub(crate) total_bytes: u64,
-    /// 载入/保存后的磁盘修改时间(信息栏展示;M8.3 消费)。
-    #[allow(dead_code)] // 消费点 = M8.3 详情侧栏文件统计。
+    /// 载入/保存后的磁盘修改时间(信息栏展示)。
     modified: Option<SystemTime>,
 }
 
@@ -39,6 +37,11 @@ impl std::ops::Deref for Document {
 }
 
 impl Document {
+    /// 磁盘修改时间(M8.3 信息侧栏展示)。
+    pub(crate) fn modified(&self) -> Option<SystemTime> {
+        self.modified
+    }
+
     /// 有界载入:上限检查先于解码;只读属性/截断/非法编码进入快照合同。
     pub(crate) fn load(path: &Path) -> std::io::Result<Self> {
         let target = path.canonicalize()?;

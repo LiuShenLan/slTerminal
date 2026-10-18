@@ -168,6 +168,17 @@ impl CodeTabView {
         self.file.update(cx, |file, cx| file.reload(window, cx));
     }
 
+    /// 渲染激活位:workspace 在 tab 切换时经此释放/恢复预览资产。
+    pub(super) fn set_render_active(
+        &mut self,
+        active: bool,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.file
+            .update(cx, |file, cx| file.set_render_active(active, window, cx));
+    }
+
     /// 测试专用:已载入快照文本(HEAD/工作区字节经同一通路)。
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub fn text_for_test(&self, cx: &App) -> Option<String> {
@@ -178,6 +189,12 @@ impl CodeTabView {
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub fn input_text_for_test(&self, cx: &App) -> String {
         self.file.read(cx).input_text_for_test(cx)
+    }
+
+    /// 测试专用:共享撤销栈组数。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub fn history_undo_depth_for_test(&self, cx: &App) -> usize {
+        self.file.read(cx).history_undo_depth_for_test()
     }
 }
 

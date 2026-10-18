@@ -139,6 +139,12 @@ impl EditHistory {
         self.last_edit = Some(now);
     }
 
+    /// 测试专用:撤销栈组数(撤销统一断言端)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn undo_depth_for_test(&self) -> usize {
+        self.undo.len()
+    }
+
     /// 撤销/重做一步,返回(全文,光标 span)。`redo == true` 表示重做。
     #[allow(dead_code)] // 消费点 = M8.3 撤销动作接线(与源码态输入共栈)。
     pub(crate) fn travel(&mut self, redo: bool) -> Option<(String, Range<usize>)> {

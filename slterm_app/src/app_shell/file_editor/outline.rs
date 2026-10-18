@@ -67,10 +67,40 @@ impl Outline {
         self.heading_levels.get(block).copied().flatten()
     }
 
-    /// 预览装配入口:本步只做解析与结构提取;文档图片 URL 重写(本地
-    /// GIF/WebP 压单帧)归 M8.3 预览资源链,编辑始终使用原始源码 span。
-    pub(super) fn prepare(source: &str, _base: Option<&std::path::Path>) -> Self {
-        Self::parse(source)
+    /// 预览装配入口:解析 + 文档图片 URL 重写(本地 GIF/WebP 压单帧)。
+    /// 编辑始终使用原始源码 span;只有预览块文本与部件 `preview` 携带重写。
+    pub(super) fn prepare(source: &str, base: Option<&std::path::Path>) -> Self {
+        let mut outline = Self::parse(source);
+        if base.is_none() {
+            return outline;
+        }
+        for block in &mut outline.blocks {
+            *block = super::images::rewrite_doc_images(block, base);
+        }
+        // 部件 span 是块内相对偏移:按块源码切片,不能拿全文源串直接取。
+        let block_ranges = outline.source_ranges.clone();
+        for (index, slot) in outline.structures.iter_mut().enumerate() {
+            let Some(structure) = slot else {
+                continue;
+            };
+            let Some(block_source) = block_ranges
+                .get(index)
+                .and_then(|range| source.get(range.clone()))
+            else {
+                continue;
+            };
+            let structure = std::sync::Arc::make_mut(structure);
+            for part in &mut structure.parts {
+                let Some(raw) = block_source.get(part.range.clone()) else {
+                    continue;
+                };
+                let rewritten = super::images::rewrite_doc_images(raw, base);
+                if rewritten != raw {
+                    part.preview = Some(rewritten);
+                }
+            }
+        }
+        outline
     }
 
     pub(super) fn block_source(&self, index: usize) -> String {
@@ -261,6 +291,7 @@ impl Outline {
     }
 
     /// Preview code actions must stay inside the block, not appended definitions.
+    #[allow(dead_code)] // 消费点 = M8.5 代码块语言切换(块内源码 span 定位)。
     pub(super) fn source_span(
         &self,
         block: usize,
@@ -271,6 +302,7 @@ impl Outline {
         Some((start, end))
     }
 
+    #[allow(dead_code)] // 消费点 = M8.5 结构化命令的块级回写。
     pub(super) fn replace_block(&mut self, block: usize, next: String) {
         if let Some(source) = self.blocks.get_mut(block) {
             *source = next;
@@ -380,6 +412,38 @@ fn collect_headings(node: &Node, block: usize, headings: &mut Vec<Heading>) {
 #[cfg(test)]
 mod outline_tests {
     use super::*;
+
+    /// 预览装配:本地 GIF 压帧同时作用于块文本与结构化部件;
+    /// 部件 span 是块内相对偏移(不得拿全文源串误切)。
+    #[test]
+    fn prepare_rewrites_local_animated_images_in_blocks_and_parts() {
+        let directory = tempfile::tempdir().unwrap();
+        let gif = directory.path().join("anim.gif");
+        let frame = image::RgbaImage::from_pixel(2, 2, image::Rgba([1, 2, 3, 255]));
+        let mut bytes = Vec::new();
+        image::codecs::gif::GifEncoder::new(&mut bytes)
+            .encode(frame.as_raw(), 2, 2, image::ExtendedColorType::Rgba8)
+            .unwrap();
+        std::fs::write(&gif, &bytes).unwrap();
+        let source = "before\n\n![anim](anim.gif)\n\nafter";
+        let outline = Outline::prepare(source, Some(directory.path()));
+        assert!(outline.block_source(1).contains(".png"), "块文本必须压帧");
+        let structure = outline.structures[1].as_ref().unwrap();
+        assert!(
+            structure.parts.iter().any(|part| part
+                .preview
+                .as_deref()
+                .is_some_and(|text| text.contains(".png"))),
+            "结构化部件的预览文本必须携带压帧后的 URL"
+        );
+        assert!(
+            structure.parts.iter().all(|part| part
+                .preview
+                .as_deref()
+                .is_none_or(|text| !text.contains("anim.gif"))),
+            "结构化部件不得保留原 GIF URL"
+        );
+    }
 
     #[test]
     fn history_cursor_at_paragraph_end_reuses_the_existing_block() {

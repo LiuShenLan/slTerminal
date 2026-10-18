@@ -1,49 +1,118 @@
-//! 文本文件视图与编辑内核宿主(07 篇):M8.1 只读骨架 → M8.2 源码态可编辑。
+//! 文本文件视图与编辑内核宿主(07 篇):M8.1 只读骨架 → M8.2 源码态可编辑
+//! → M8.3 双模态预览与 chrome。
 //!
 //! 载入:本地文件经 [`Document`](document::Document) 有界读 + 快照解码;
-//! gitshow 的 HEAD 字节经同一 `TextSnapshot` 通路(`decode_prefix(..,
-//! read_only=true, ..)`),encode 层拒绝写回——只读 contract 在类型层。
+//! gitshow 的 HEAD 字节经同一 `TextSnapshot` 通路,encode 层拒绝写回。
 //!
-//! 编辑与保存:输入订阅把每次变更记入 [`EditHistory`](edit_history::EditHistory)
-//! 并重算脏标记(当前文本 vs 已保存快照);保存链 = 保存前磁盘字节比对
-//! (`verify`)→ 编码(BOM/CRLF 往返)→ 原子写(`atomic_file`)。Changed /
-//! ReadOnly / Io 三态经提示横幅上抛,失败不破坏磁盘。
+//! 双模态:markdown 文档默认渲染态(`preview = true`),源码态与原生态输入
+//! 共用同一 `InputState`;渲染态块聚焦换稳定 `LiveEdit` 输入,内容写回规范
+//! 源码。两态共享 `TextDocument`/`EditHistory`,切换不丢编辑。
 //!
-//! 内核族(照抄上游实现,消费点见各文件头):document / edit_history /
-//! outline / inline_edit / block_structure / block_inline / input_rules。
-//! M8.3 接渲染态预览与 live_edit 输入实体。
+//! 撤销统一:根视图捕获 `gpui_component::input::{Undo, Redo}` 并走
+//! `EditHistory::travel`;输入实体内建栈在文件编辑上下文中被拦截(不再旁路)。
+//!
+//! 预览虚拟化:`Outline` 块清单 → `gpui::list` 只物化视口行;切走 tab 时
+//! `set_render_active(false)` 释放块槽/图片激活,草稿与历史存活。
 
-#[allow(dead_code)] // 消费点 = M8.3 内联分段渲染(live_edit)。
+#[allow(dead_code)] // 消费点 = 预览态切走/切回(activity::set_render_active)。
+mod activity;
+#[allow(dead_code)] // 消费点 = live_edit 分段渲染与结构化块。
 mod block_inline;
-#[allow(dead_code)] // 消费点 = M8.3 结构化渲染与结构命令。
+#[allow(dead_code)] // 消费点 = 结构化渲染/结构命令/outline 部件索引。
 mod block_structure;
+mod chrome;
 mod document;
 mod edit_history;
-#[allow(dead_code)] // 消费点 = M8.3 live_edit 投影与装饰(M8.2 内核 + 用例)。
+#[allow(dead_code)] // 消费点 = 预览图片解码 LRU(虚拟行资产纪律)。
+mod image_cache;
+mod images;
+mod info;
+#[allow(dead_code)] // 消费点 = live_edit 投影/装饰与渲染态编辑。
 mod inline_edit;
-#[allow(dead_code)] // 消费点 = M8.3 live_edit 输入规则接线(M8.2 规则清单 + 用例)。
+#[allow(dead_code)] // 消费点 = 相邻内联视图共享复制。
+mod inline_selection;
+#[allow(dead_code)] // 消费点 = live_edit 输入规则接线(apply_input_rule)。
 mod input_rules;
-#[allow(dead_code)] // 消费点 = M8.3 预览虚拟化与大纲侧栏。
+mod live_commands;
+mod live_edit;
+#[allow(dead_code)] // 消费点 = 跨输入边界方向键导航。
+mod live_navigation;
+#[allow(dead_code)] // 消费点 = 行内源码显影跟随光标。
+mod live_selection;
 mod outline;
+mod outline_view;
+mod preview;
+mod reader_presentation;
+#[allow(dead_code)] // 消费点 = 结构化编辑命令(续列表/缩进/表格)。
+mod structure_commands;
+#[allow(dead_code)] // 消费点 = 混合段落内联 run 渲染。
+mod structure_inline_view;
+#[allow(dead_code)] // 消费点 = 表格/列表/代码/公式结构化渲染。
+mod structure_view;
 
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
+use std::time::Duration;
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, AppContext as _, Context, Entity, FocusHandle, Focusable as _, InteractiveElement as _,
-    IntoElement, ParentElement as _, Render, Styled as _, Subscription, Task, Window, div, px,
-    relative,
+    App, AppContext as _, Context, Entity, EntityInputHandler as _, FocusHandle, Focusable, Hsla,
+    InteractiveElement as _, IntoElement, ListAlignment, ListState, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Point, Render, SharedString,
+    Styled as _, Subscription, Task, Window, div, px, relative,
 };
 use gpui_component::ActiveTheme as _;
-use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::input::{
+    self, Backspace, Copy, Enter, Escape, IndentInline, Input, InputEvent, InputState, MoveDown,
+    MoveLeft, MoveRight, MoveToEnd, MoveToStart, MoveUp, OutdentInline, SelectAll,
+};
+use gpui_component::text::{MarkdownExtensions, TextViewState};
+pub(crate) use gpui_component::{h_flex, v_flex};
 
 use crate::app_shell::config::Settings;
 use crate::git;
 use crate::i18n::Message;
 use crate::text_document::{MAX_BYTES, SaveError, TextSnapshot};
+use activity::EditCursor;
 use document::Document;
 use edit_history::EditHistory;
+use image_cache::DocumentImageCache;
+use live_edit::LiveEdit;
+use outline::Outline;
 
-gpui::actions!(file_editor, [SaveFile]);
+gpui::actions!(
+    file_editor,
+    [
+        SaveFile,
+        ToggleSource,
+        FinishBlockEdit,
+        BoldSelection,
+        ItalicSelection
+    ]
+);
+
+/// 文件编辑上下文键绑定(`gpui_component::init` 之后调用一次)。
+///
+/// Ctrl+Z/Ctrl+Y 显式绑定到组件动作,再由根视图捕获转 `EditHistory`;
+/// 渲染态粗体/斜体/块提交只在 `MarkdownLive` 上下文生效。
+pub(super) fn init(cx: &mut App) {
+    use gpui::KeyBinding;
+    cx.bind_keys([
+        KeyBinding::new("ctrl-/", ToggleSource, Some("FileEditor")),
+        KeyBinding::new("ctrl-z", input::Undo, Some("FileEditor")),
+        KeyBinding::new("ctrl-y", input::Redo, Some("FileEditor")),
+        KeyBinding::new("ctrl-shift-z", input::Redo, Some("FileEditor")),
+        KeyBinding::new("ctrl-b", BoldSelection, Some("MarkdownLive")),
+        KeyBinding::new("ctrl-i", ItalicSelection, Some("MarkdownLive")),
+        KeyBinding::new("ctrl-enter", FinishBlockEdit, Some("MarkdownLive")),
+        KeyBinding::new("escape", FinishBlockEdit, Some("MarkdownLive")),
+        KeyBinding::new("ctrl-s", SaveFile, Some("FileEditor")),
+        KeyBinding::new("ctrl-a", input::SelectAll, Some("FileEditor")),
+        KeyBinding::new("ctrl-c", Copy, Some("FileEditor")),
+    ]);
+}
 
 /// 快照来源。gitshow 与本地文件共用视图形态,只有数据源与只读意图不同。
 #[derive(Debug, Clone, Copy)]
@@ -60,12 +129,18 @@ enum LoadedDocument {
     Head(TextSnapshot),
 }
 
-/// 视图内提示:M8.2 只覆盖载入失败与保存失败三态;文案在渲染时取语言。
+/// 虚拟化块槽:屏外块置 None,不保留逐块视图。
+type PreviewBlockSlots = Rc<RefCell<Vec<Option<Entity<TextViewState>>>>>;
+/// 内联 run 视图弱句柄(只随挂载行存活)。
+type InlineViewMap = Rc<RefCell<BTreeMap<(usize, usize), gpui::WeakEntity<TextViewState>>>>;
+
+/// 视图内提示:载入失败、保存三态与预览上限。
 enum EditorNotice {
     ReadFailed(String),
     SaveFailed(String),
     SaveChanged,
     SaveReadOnly,
+    PreviewLimited,
 }
 
 /// 文件标题:文件名优先,取不到时退回完整路径。
@@ -81,13 +156,13 @@ pub struct TextFileView {
     /// 源码态原生输入(gpui-component code editor)。
     input: Entity<InputState>,
     source: TextSource,
-    /// 打开意图的只读位(gitshow true;普通源码 false;预览臂 M8.3 再定)。
+    /// 打开意图的只读位(gitshow true;普通源码/文档 false)。
     fixed_read_only: bool,
     /// 本地文档(保存目标 + 载入快照);HEAD 臂为 None。
     document: Option<Document>,
     /// HEAD 只读快照(gitshow)。
     head: Option<TextSnapshot>,
-    /// 统一撤销历史(M8.2 记录源码键入;M8.3 live_edit 同栈)。
+    /// 跨表示统一撤销历史(源码键入/渲染态提交/结构命令同栈)。
     history: EditHistory,
     /// 已保存文本(脏标记基线):载入/保存成功时更新。
     saved_text: Option<String>,
@@ -95,11 +170,67 @@ pub struct TextFileView {
     saving: bool,
     loading: bool,
     notice: Option<EditorNotice>,
+    /// markdown 文档(M8.3 双模态前提)。
+    markdown: bool,
+    /// 当前显示渲染态(仅 markdown 有意义)。
+    preview: bool,
+    /// 渲染态块聚焦可编辑(预览文档 true;纯阅读臂 false)。
+    live_mode: bool,
+    live_edit: Option<LiveEdit>,
+    render_active: bool,
+    preview_stale: bool,
+    last_edit_cursor: Option<EditCursor>,
+    resume_edit: bool,
+    show_details: bool,
+    info: bool,
+    outline: Outline,
+    blocks: PreviewBlockSlots,
+    inline_views: InlineViewMap,
+    preview_extensions: MarkdownExtensions,
+    preview_images: Entity<DocumentImageCache>,
+    scroll: ListState,
+    /// 当帧实际物化的块下标(测试/诊断;每帧 render 开头清空)。
+    rendered_blocks: Rc<RefCell<Vec<usize>>>,
+    preview_selection_scroll_epoch: u64,
+    preview_selection_scroll_active: bool,
+    outline_scroll: gpui::ScrollHandle,
+    preview_scrollbar_hovered: bool,
+    outline_scrollbar_hovered: bool,
+    details_width: f32,
+    details_resize_anchor: Option<(f32, f32)>,
+    collapsed_headings: HashSet<usize>,
+    selected_heading: Option<usize>,
+    all_selected: bool,
+    revision: u64,
+    content_revision: u64,
+    preview_task: Option<Task<()>>,
+    /// 程序化替换期间抑制输入订阅的历史记录(替换路径显式记录一次)。
+    suppress_history: bool,
+    focus: FocusHandle,
     _input_subscription: Subscription,
 }
 
 impl TextFileView {
-    /// 本地文件载入(`read_only` = 打开意图固定只读;普通源码传 false)。
+    /// 焦点句柄:渲染态优先活跃输入,其次阅读器根,最后源码输入。
+    pub fn focus_handle(&self, cx: &App) -> FocusHandle {
+        if let Some(edit) = &self.live_edit {
+            edit.input.read(cx).focus_handle(cx)
+        } else if self.preview {
+            self.focus.clone()
+        } else {
+            self.input.read(cx).focus_handle(cx)
+        }
+    }
+}
+
+impl Focusable for TextFileView {
+    fn focus_handle(&self, cx: &App) -> FocusHandle {
+        TextFileView::focus_handle(self, cx)
+    }
+}
+
+impl TextFileView {
+    /// 本地源码文件载入(源码态;`read_only` = 打开意图固定只读)。
     pub fn new(
         path: PathBuf,
         language: &'static str,
@@ -107,17 +238,30 @@ impl TextFileView {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Self {
-        Self::new_with_source(path, language, TextSource::Local, read_only, window, cx)
+        Self::new_with_source(
+            path,
+            language,
+            TextSource::Local,
+            read_only,
+            false,
+            window,
+            cx,
+        )
     }
 
-    /// gitshow 只读臂:HEAD 字节 + 恒定只读。
+    /// Markdown 文档载入(渲染态打开,可编辑;快照只读仍由合同兜底)。
+    pub fn new_document(path: PathBuf, window: &mut Window, cx: &mut Context<'_, Self>) -> Self {
+        Self::new_with_source(path, "markdown", TextSource::Local, false, true, window, cx)
+    }
+
+    /// gitshow 只读臂:HEAD 字节 + 恒定只读(源码态)。
     pub fn new_git_head(
         path: PathBuf,
         language: &'static str,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Self {
-        Self::new_with_source(path, language, TextSource::GitHead, true, window, cx)
+        Self::new_with_source(path, language, TextSource::GitHead, true, false, window, cx)
     }
 
     fn new_with_source(
@@ -125,6 +269,7 @@ impl TextFileView {
         language: &'static str,
         source: TextSource,
         fixed_read_only: bool,
+        markdown: bool,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Self {
@@ -136,16 +281,25 @@ impl TextFileView {
                 .indent_guides(false)
                 .soft_wrap(false)
         });
-        // 键入热路径:先从 Rope 提取局部差量入历史,再用当前文本重算脏标记。
-        // `set_value`(载入/重载)抑制 Change 事件,不会污染历史。
+        // 源码键入热路径:先从 Rope 提取局部差量入历史,再用当前文本重算
+        // 脏标记与预览防抖。`set_value`(载入/重载)与 `replace`(程序化
+        // 替换)是静默更新,不会进入此订阅。
         let subscription = cx.subscribe_in(&input, window, |view, _, event: &InputEvent, _, cx| {
             if matches!(event, InputEvent::Change) {
-                let input = view.input.read(cx);
-                view.history.record_rope(input.text());
-                view.dirty = view.saved_text.as_deref() != Some(input.value().as_ref());
+                view.content_revision = view.content_revision.wrapping_add(1);
+                if !view.suppress_history {
+                    let text = view.input.read(cx).text().clone();
+                    view.history.record_rope(&text);
+                }
+                let value = view.input.read(cx).value();
+                view.dirty = view.saved_text.as_deref() != Some(value.as_ref());
+                if view.markdown {
+                    view.schedule_preview(cx);
+                }
                 cx.notify();
             }
         });
+        let preview_extensions = preview::extensions(path.parent().map(PathBuf::from));
         let mut view = Self {
             path,
             title,
@@ -160,6 +314,39 @@ impl TextFileView {
             saving: false,
             loading: true,
             notice: None,
+            markdown,
+            preview: markdown,
+            // 渲染态默认接受块聚焦编辑;只读快照由 `preview_editable` 兜底。
+            live_mode: markdown,
+            live_edit: None,
+            render_active: true,
+            preview_stale: false,
+            last_edit_cursor: None,
+            resume_edit: false,
+            show_details: markdown,
+            info: false,
+            outline: Outline::default(),
+            blocks: Rc::default(),
+            inline_views: Rc::default(),
+            preview_extensions,
+            preview_images: DocumentImageCache::new(cx.entity_id(), cx),
+            scroll: ListState::new(0, ListAlignment::Top, px(500.0)),
+            rendered_blocks: Rc::default(),
+            preview_selection_scroll_epoch: 0,
+            preview_selection_scroll_active: false,
+            outline_scroll: gpui::ScrollHandle::new(),
+            preview_scrollbar_hovered: false,
+            outline_scrollbar_hovered: false,
+            details_width: reader_presentation::OUTLINE_WIDTH,
+            details_resize_anchor: None,
+            collapsed_headings: Default::default(),
+            selected_heading: None,
+            all_selected: false,
+            revision: 0,
+            content_revision: 0,
+            preview_task: None,
+            suppress_history: false,
+            focus: cx.focus_handle(),
             _input_subscription: subscription,
         };
         view.spawn_load(window, cx);
@@ -191,10 +378,6 @@ impl TextFileView {
         self.saving
     }
 
-    pub fn focus_handle(&self, cx: &App) -> FocusHandle {
-        self.input.read(cx).focus_handle(cx)
-    }
-
     /// 测试专用:后台载入完成后的快照文本(本地与 HEAD 同源)。
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub fn text_for_test(&self) -> Option<String> {
@@ -205,6 +388,69 @@ impl TextFileView {
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub fn input_text_for_test(&self, cx: &App) -> String {
         self.input.read(cx).value().to_string()
+    }
+
+    /// 测试专用:当前是否渲染态。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub fn is_preview_for_test(&self) -> bool {
+        self.preview
+    }
+
+    /// 测试专用:切换双模态(生产入口为工具栏按钮/ToggleSource 动作)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub fn toggle_preview_for_test(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        self.toggle_preview(window, cx);
+    }
+
+    /// 测试专用:预览块数(大纲块清单长度)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub fn block_count_for_test(&self) -> usize {
+        self.outline.blocks.len()
+    }
+
+    /// 测试专用:预览是否待重排(250ms 防抖窗口内 true)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub fn preview_stale_for_test(&self) -> bool {
+        self.preview_stale
+    }
+
+    /// 测试专用:已物化块槽数量(诊断与断言端)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub fn materialized_block_count_for_test(&self) -> usize {
+        self.blocks
+            .borrow()
+            .iter()
+            .filter(|slot| slot.is_some())
+            .count()
+    }
+
+    /// 测试专用:渲染激活位。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub fn render_active_for_test(&self) -> bool {
+        self.render_active
+    }
+
+    /// 测试专用:撤销栈组数(撤销统一断言端;行动作必须让它下降)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub fn history_undo_depth_for_test(&self) -> usize {
+        self.history.undo_depth_for_test()
+    }
+
+    /// 测试专用:在指定块开启渲染态输入。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub fn begin_live_edit_for_test(
+        &mut self,
+        block: usize,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.begin_live_edit(block, window, cx);
+    }
+
+    /// 测试专用:详情侧栏宽度。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub fn details_width_for_test(&self) -> f32 {
+        self.details_width
     }
 
     /// 重新读盘(同路径再次打开 / 外部修改确认后)。
@@ -281,13 +527,23 @@ impl TextFileView {
         self.document.as_deref().or(self.head.as_ref())
     }
 
-    /// 后台载入:读盘/解码不占前台线程。
+    fn source_slice(&self, range: std::ops::Range<usize>, cx: &App) -> Option<String> {
+        self.input
+            .read(cx)
+            .text()
+            .try_slice(range)
+            .ok()
+            .map(|slice| slice.to_string())
+    }
+
+    /// 后台载入:读盘/解码不占前台线程;markdown 同时预解析大纲。
     fn spawn_load(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
         let path = self.path.clone();
         let source = self.source;
+        let markdown = self.markdown;
         let task = cx
             .background_executor()
-            .spawn(async move { load_document(&path, source) });
+            .spawn(async move { load_document(&path, source, markdown) });
         let handle = window.window_handle();
         cx.spawn(async move |this, cx| {
             let loaded = task.await;
@@ -300,12 +556,12 @@ impl TextFileView {
 
     fn apply_loaded(
         &mut self,
-        loaded: Result<LoadedDocument, String>,
+        loaded: Result<(LoadedDocument, Option<Outline>), String>,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
         match loaded {
-            Ok(LoadedDocument::Local(document)) => {
+            Ok((LoadedDocument::Local(document), outline)) => {
                 let text = document.text.clone();
                 self.input.update(cx, |input, cx| {
                     input.set_value(text.clone(), window, cx);
@@ -313,8 +569,11 @@ impl TextFileView {
                 self.saved_text = Some(text);
                 self.document = Some(document);
                 self.head = None;
+                if let Some(outline) = outline {
+                    self.apply_outline(outline, cx);
+                }
             }
-            Ok(LoadedDocument::Head(snapshot)) => {
+            Ok((LoadedDocument::Head(snapshot), _)) => {
                 let text = snapshot.text.clone();
                 self.input.update(cx, |input, cx| {
                     input.set_value(text.clone(), window, cx);
@@ -332,39 +591,165 @@ impl TextFileView {
         cx.notify();
     }
 
-    /// 状态行文案:载入/保存失败优先,其次截断/非法编码/显式只读。
+    /// 250ms 防抖重排:在途任务即取消;渲染未激活或块编辑中不内联重排。
+    fn schedule_preview(&mut self, cx: &mut Context<'_, Self>) {
+        self.revision = self.revision.wrapping_add(1);
+        self.preview_stale = true;
+        self.preview_task = None;
+        if !self.preview || !self.render_active || self.live_edit.is_some() {
+            return;
+        }
+        let revision = self.revision;
+        let executor = cx.background_executor().clone();
+        self.preview_task = Some(cx.spawn(async move |this, cx| {
+            executor.timer(Duration::from_millis(250)).await;
+            let Ok((source, path)) = this.update(cx, |view, cx| {
+                (view.input.read(cx).value(), view.path.clone())
+            }) else {
+                return;
+            };
+            let outline = executor
+                .spawn(async move { Outline::prepare(&source, path.parent()) })
+                .await;
+            let _ = this.update(cx, |view, cx| {
+                if view.render_active && view.revision == revision && view.live_edit.is_none() {
+                    view.apply_outline(outline, cx);
+                }
+            });
+        }));
+    }
+
+    /// 落大纲:块槽重建、滚动位置保留、折叠/选中复位。
+    fn apply_outline(&mut self, outline: Outline, cx: &mut Context<'_, Self>) {
+        self.preview_stale = false;
+        self.inline_views.borrow_mut().clear();
+        let top = self.scroll.logical_scroll_top();
+        self.blocks = Rc::new(RefCell::new(vec![None; outline.blocks.len()]));
+        self.scroll
+            .reset(outline.blocks.len().max(usize::from(self.live_mode)));
+        if !outline.blocks.is_empty() {
+            self.scroll.scroll_to(gpui::ListOffset {
+                item_ix: top.item_ix.min(outline.blocks.len() - 1),
+                ..top
+            });
+        }
+        self.outline = outline;
+        self.collapsed_headings.clear();
+        self.selected_heading = None;
+        self.all_selected = false;
+        cx.notify();
+    }
+
+    /// 渲染态 ↔ 源码态:先把块输入提交回规范源码,再切显示面。
+    fn toggle_preview(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        self.finish_live_edit(cx);
+        self.preview = !self.preview;
+        self.preview_images.update(cx, |images, cx| {
+            images.set_active(self.render_active && self.preview, window, cx);
+        });
+        if self.preview {
+            if self.preview_stale {
+                self.schedule_preview(cx);
+            }
+            self.focus.focus(window, cx);
+        } else {
+            self.inline_views.borrow_mut().clear();
+            self.rendered_blocks.borrow_mut().clear();
+            self.stop_preview_selection_scroll();
+            for block in self.blocks.borrow_mut().iter_mut() {
+                *block = None;
+            }
+            self.all_selected = false;
+            self.input.update(cx, |input, cx| input.focus(window, cx));
+        }
+        cx.notify();
+    }
+
+    fn begin_details_resize(&mut self, event: &MouseDownEvent, cx: &mut Context<'_, Self>) {
+        if !self.show_details {
+            return;
+        }
+        self.details_resize_anchor = Some((f32::from(event.position.x), self.details_width));
+        cx.notify();
+    }
+
+    fn update_details_resize(&mut self, event: &MouseMoveEvent, cx: &mut Context<'_, Self>) {
+        let Some((start_x, start_width)) = self.details_resize_anchor else {
+            return;
+        };
+        if event.pressed_button != Some(MouseButton::Left) {
+            self.details_resize_anchor = None;
+            cx.notify();
+            return;
+        }
+        // 分隔条在面板左缘:指针左移使面板变宽。
+        let width = reader_presentation::clamp_details_width(
+            start_width + (start_x - f32::from(event.position.x)),
+        );
+        if (width - self.details_width).abs() >= 0.5 {
+            self.details_width = width;
+            cx.notify();
+        }
+    }
+
+    fn finish_details_resize(&mut self, _event: &MouseUpEvent, cx: &mut Context<'_, Self>) {
+        if self.details_resize_anchor.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    /// 状态行文案:载入/保存失败优先,其次截断/非法编码/显式只读/预览上限。
     fn notice(&self, cx: &App) -> Option<String> {
         let language = cx.global::<Settings>().language;
-        match &self.notice {
+        let mut notice = match &self.notice {
             Some(EditorNotice::ReadFailed(error)) => {
-                return Some(language.format(Message::EditorReadFailed, &[("error", error)]));
+                Some(language.format(Message::EditorReadFailed, &[("error", error)]))
             }
             Some(EditorNotice::SaveFailed(error)) => {
-                return Some(language.format(Message::EditorSaveFailed, &[("error", error)]));
+                Some(language.format(Message::EditorSaveFailed, &[("error", error)]))
             }
             Some(EditorNotice::SaveChanged) => {
-                return Some(language.text(Message::EditorSaveChanged).to_owned());
+                Some(language.text(Message::EditorSaveChanged).to_owned())
             }
             Some(EditorNotice::SaveReadOnly) => {
-                return Some(language.text(Message::EditorSaveReadOnly).to_owned());
+                Some(language.text(Message::EditorSaveReadOnly).to_owned())
             }
-            None => {}
+            Some(EditorNotice::PreviewLimited) => {
+                Some(language.text(Message::EditorPreviewLimited).to_owned())
+            }
+            None => None,
+        };
+        if notice.is_none()
+            && let Some(snapshot) = self.snapshot()
+        {
+            if snapshot.truncated {
+                notice = Some(language.text(Message::EditorTruncated).to_owned());
+            } else if snapshot.invalid_encoding {
+                notice = Some(language.text(Message::EditorInvalidEncoding).to_owned());
+            } else if snapshot.read_only && self.fixed_read_only {
+                notice = Some(language.text(Message::EditorReadOnly).to_owned());
+            }
         }
-        let snapshot = self.snapshot()?;
-        if snapshot.truncated {
-            return Some(language.text(Message::EditorTruncated).to_owned());
+        if self.preview && self.outline.limited {
+            let detail = language.text(Message::EditorPreviewLimited);
+            notice = Some(match notice {
+                Some(notice) => format!("{notice} {detail}"),
+                None => detail.to_owned(),
+            });
         }
-        if snapshot.invalid_encoding {
-            return Some(language.text(Message::EditorInvalidEncoding).to_owned());
-        }
-        (snapshot.read_only && self.fixed_read_only)
-            .then(|| language.text(Message::EditorReadOnly).to_owned())
+        notice
     }
 }
 
 impl Render for TextFileView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
-        let theme = cx.theme();
+    fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
+        self.restore_edit_cursor(window, cx);
+        let background = cx.theme().background;
+        let border = cx.theme().border;
+        let muted = cx.theme().muted_foreground;
+        let mono_font_family = cx.theme().mono_font_family.clone();
+        let mono_font_size = cx.theme().mono_font_size;
+        let editable = !self.loading && !self.is_read_only();
         let notice = self.notice(cx);
         let status = notice.map(|text| {
             div()
@@ -374,54 +759,331 @@ impl Render for TextFileView {
                 .flex()
                 .items_center()
                 .border_b_1()
-                .border_color(theme.border)
+                .border_color(border)
                 .text_size(px(11.0))
-                .text_color(theme.muted_foreground)
+                .text_color(muted)
                 .child(text)
         });
-        let disabled = self.is_read_only() || self.loading;
+        let content = if self.preview {
+            self.render_markdown_preview(cx)
+        } else {
+            div()
+                .id("file-source-content")
+                .debug_selector(|| "file-source-content".to_owned())
+                .flex_1()
+                .min_w_0()
+                .h_full()
+                .child(
+                    Input::new(&self.input)
+                        .h_full()
+                        // 只读/载入中禁用输入;可编辑性最终由 TextSnapshot
+                        // 的 read_only 合同与保存链兜底。
+                        .disabled(!editable)
+                        .appearance(false)
+                        .bordered(false)
+                        .focus_bordered(false)
+                        .rounded(px(0.0))
+                        .font_family(mono_font_family)
+                        .text_size(mono_font_size)
+                        .line_height(relative(1.55))
+                        .px(px(10.0))
+                        .py(px(8.0)),
+                )
+                .into_any_element()
+        };
         div()
             .debug_selector(|| "slterm-text-view".to_owned())
+            .id("text-file-editor")
+            .key_context("FileEditor")
+            .track_focus(&self.focus)
             .size_full()
             .min_w_0()
             .min_h_0()
             .flex()
             .flex_col()
-            .bg(theme.background)
-            .children(status)
+            .relative()
+            .overflow_hidden()
+            .bg(background)
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
+                // 指针离开分隔线时可能收不到带按键的移动:只清理拖拽态,
+                // 不影响正常阅读选区。
+                if this.details_resize_anchor.is_some()
+                    && event.pressed_button != Some(MouseButton::Left)
+                {
+                    this.details_resize_anchor = None;
+                    cx.notify();
+                }
+            }))
+            .capture_any_mouse_up(cx.listener(|this, event: &MouseUpEvent, _, cx| {
+                if this.details_resize_anchor.is_some() && event.button == MouseButton::Left {
+                    this.finish_details_resize(event, cx);
+                    cx.stop_propagation();
+                }
+            }))
+            .on_action(cx.listener(|this, _: &ToggleSource, window, cx| {
+                if this.markdown {
+                    this.toggle_preview(window, cx);
+                }
+            }))
+            // 撤销统一(源码态与渲染态全部文件 tab):捕获组件 Undo/Redo,
+            // 先于输入实体内建栈处理,统一走共享 `EditHistory::travel`。
+            .capture_action(cx.listener(|view, _: &input::Undo, window, cx| {
+                let composing = view.live_edit.as_ref().is_some_and(|edit| {
+                    edit.input.update(cx, |input, cx| {
+                        input.marked_text_range(window, cx).is_some()
+                    })
+                });
+                if composing {
+                    cx.propagate();
+                } else if view.document_input_focused(window, cx) {
+                    view.travel_history(false, window, cx);
+                    cx.stop_propagation();
+                } else {
+                    cx.propagate();
+                }
+            }))
+            .capture_action(cx.listener(|view, _: &input::Redo, window, cx| {
+                let composing = view.live_edit.as_ref().is_some_and(|edit| {
+                    edit.input.update(cx, |input, cx| {
+                        input.marked_text_range(window, cx).is_some()
+                    })
+                });
+                if composing {
+                    cx.propagate();
+                } else if view.document_input_focused(window, cx) {
+                    view.travel_history(true, window, cx);
+                    cx.stop_propagation();
+                } else {
+                    cx.propagate();
+                }
+            }))
+            .when(self.markdown, |root| {
+                root.capture_action(cx.listener(|view, _: &Escape, window, cx| {
+                    let composing = view.live_edit.as_ref().is_some_and(|edit| {
+                        edit.input.update(cx, |input, cx| {
+                            input.marked_text_range(window, cx).is_some()
+                        })
+                    });
+                    if composing {
+                        cx.propagate();
+                    } else if view.live_edit.is_some() {
+                        view.finish_live_edit(cx);
+                        view.focus.focus(window, cx);
+                        cx.stop_propagation();
+                    } else {
+                        cx.propagate();
+                    }
+                }))
+                .capture_action(cx.listener(|view, action: &Enter, window, cx| {
+                    let composing = view.live_edit.as_ref().is_some_and(|edit| {
+                        edit.input.update(cx, |input, cx| {
+                            input.marked_text_range(window, cx).is_some()
+                        })
+                    });
+                    if composing {
+                        cx.propagate();
+                    } else if action.secondary && view.live_edit.is_some() {
+                        view.finish_live_edit(cx);
+                        view.focus.focus(window, cx);
+                        cx.stop_propagation();
+                    } else if !action.shift
+                        && (view.insert_block_on_enter(window, cx)
+                            || view.navigate_table(false, true, window, cx)
+                            || view.continue_list(window, cx)
+                            || view.split_live_paragraph(window, cx))
+                    {
+                        cx.stop_propagation();
+                    } else {
+                        cx.propagate();
+                    }
+                }))
+                .capture_action(cx.listener(|view, _: &IndentInline, window, cx| {
+                    if view.navigate_table(false, false, window, cx)
+                        || view.indent_list(false, window, cx)
+                    {
+                        cx.stop_propagation();
+                    } else {
+                        cx.propagate();
+                    }
+                }))
+                .capture_action(cx.listener(|view, _: &OutdentInline, window, cx| {
+                    if view.navigate_table(true, false, window, cx)
+                        || view.indent_list(true, window, cx)
+                    {
+                        cx.stop_propagation();
+                    } else {
+                        cx.propagate();
+                    }
+                }))
+                .capture_action(cx.listener(|view, _: &MoveLeft, window, cx| {
+                    if view.move_live_edge(true, false, window, cx) {
+                        cx.stop_propagation();
+                    } else {
+                        cx.propagate();
+                    }
+                }))
+                .capture_action(cx.listener(|view, _: &MoveRight, window, cx| {
+                    if view.move_live_edge(false, false, window, cx) {
+                        cx.stop_propagation();
+                    } else {
+                        cx.propagate();
+                    }
+                }))
+                .capture_action(cx.listener(|view, _: &MoveUp, window, cx| {
+                    if view.move_live_edge(true, false, window, cx) {
+                        cx.stop_propagation();
+                    } else {
+                        cx.propagate();
+                    }
+                }))
+                .capture_action(cx.listener(|view, _: &MoveDown, window, cx| {
+                    if view.move_live_edge(false, false, window, cx) {
+                        cx.stop_propagation();
+                    } else {
+                        cx.propagate();
+                    }
+                }))
+                .capture_action(cx.listener(|view, _: &MoveToStart, window, cx| {
+                    if view.move_live_edge(true, true, window, cx) {
+                        cx.stop_propagation();
+                    } else {
+                        cx.propagate();
+                    }
+                }))
+                .capture_action(cx.listener(|view, _: &MoveToEnd, window, cx| {
+                    if view.move_live_edge(false, true, window, cx) {
+                        cx.stop_propagation();
+                    } else {
+                        cx.propagate();
+                    }
+                }))
+                .capture_action(cx.listener(
+                    |view, _: &Backspace, window, cx| {
+                        if view.backspace_list(window, cx) || view.join_live_paragraph(window, cx) {
+                            cx.stop_propagation();
+                        } else {
+                            cx.propagate();
+                        }
+                    },
+                ))
+            })
+            .on_action(cx.listener(|this, _: &FinishBlockEdit, window, cx| {
+                let composing = this.live_edit.as_ref().is_some_and(|edit| {
+                    edit.input.update(cx, |input, cx| {
+                        input.marked_text_range(window, cx).is_some()
+                    })
+                });
+                if composing {
+                    // IME 组合期:让原生实体自行收尾,不替换输入。
+                    if let Some(edit) = &this.live_edit {
+                        edit.input
+                            .update(cx, |input, cx| input.unmark_text(window, cx));
+                    }
+                    cx.notify();
+                } else {
+                    this.finish_live_edit(cx);
+                    this.focus.focus(window, cx);
+                }
+            }))
+            .on_action(cx.listener(|view, _: &BoldSelection, window, cx| {
+                view.format_live_selection("**", window, cx);
+            }))
+            .on_action(cx.listener(|view, _: &ItalicSelection, window, cx| {
+                view.format_live_selection("_", window, cx);
+            }))
+            .when(self.preview && self.live_edit.is_none(), |root| {
+                root.capture_action(cx.listener(|this, _: &SelectAll, _, cx| {
+                    for block in this.blocks.borrow().iter().flatten() {
+                        block.update(cx, |state, cx| state.select_all(cx));
+                    }
+                    this.all_selected = true;
+                    cx.stop_propagation();
+                    cx.notify();
+                }))
+                .capture_action(cx.listener(|this, _: &Copy, window, cx| {
+                    if this.all_selected {
+                        // 不为复制物化屏外块。
+                        let text = this.input.read(cx).value().to_string();
+                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                        cx.stop_propagation();
+                    } else if let Some(text) = this.inline_selected_text(window, cx) {
+                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                        cx.stop_propagation();
+                    } else {
+                        cx.propagate();
+                    }
+                }))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, cx| {
+                        this.all_selected = false;
+                        cx.notify();
+                    }),
+                )
+            })
+            .child(self.render_toolbar(editable, cx))
+            .when_some(status, |root, status| root.child(status))
             .child(
-                div().flex_1().min_h_0().child(
-                    Input::new(&self.input)
-                        // 只读/载入中禁用输入;可编辑性最终仍由 TextSnapshot
-                        // 的 read_only 合同与保存链兜底。
-                        .disabled(disabled)
-                        .bordered(false)
-                        .focus_bordered(false)
-                        .rounded(px(0.0))
-                        .font_family(theme.mono_font_family.clone())
-                        .text_size(theme.mono_font_size)
-                        .line_height(relative(1.55))
-                        .px(px(10.0))
-                        .py(px(8.0)),
-                ),
+                h_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .items_start()
+                    .child(content)
+                    .when(self.show_details, |row| {
+                        row.child(if self.info {
+                            self.render_info(cx)
+                        } else if self.markdown {
+                            self.render_outline(cx)
+                        } else {
+                            self.render_info(cx)
+                        })
+                    }),
             )
+            .when(self.details_resize_anchor.is_some(), |root| {
+                root.child(
+                    div()
+                        .id("file-details-resize-overlay")
+                        .absolute()
+                        .inset_0()
+                        .occlude()
+                        .cursor_col_resize()
+                        .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
+                            this.update_details_resize(event, cx);
+                        }))
+                        .on_mouse_up(
+                            MouseButton::Left,
+                            cx.listener(|this, event: &MouseUpEvent, _, cx| {
+                                this.finish_details_resize(event, cx);
+                            }),
+                        ),
+                )
+            })
     }
 }
 
-/// 快照载入:本地文档(带保存目标)/ HEAD 有界字节。错误保留原始文本供
-/// i18n 包装(后台线程不取语言)。
-fn load_document(path: &Path, source: TextSource) -> Result<LoadedDocument, String> {
+/// 快照载入:本地文档(带保存目标)/ HEAD 有界字节;markdown 预解析大纲。
+/// 错误保留原始文本供 i18n 包装(后台线程不取语言)。
+fn load_document(
+    path: &Path,
+    source: TextSource,
+    markdown: bool,
+) -> Result<(LoadedDocument, Option<Outline>), String> {
     match source {
         TextSource::Local => Document::load(path)
-            .map(LoadedDocument::Local)
+            .map(|document| {
+                let outline = markdown.then(|| Outline::prepare(&document.text, path.parent()));
+                (LoadedDocument::Local(document), outline)
+            })
             .map_err(|error| error.to_string()),
         TextSource::GitHead => {
             let (bytes, truncated) =
                 git::head_file(path, MAX_BYTES).map_err(|error| error.to_string())?;
             // HEAD 字节一律只读:gitshow 不提供写回语义(07 篇改造节 5)。
-            Ok(LoadedDocument::Head(TextSnapshot::decode_prefix(
-                bytes, true, truncated,
-            )))
+            Ok((
+                LoadedDocument::Head(TextSnapshot::decode_prefix(bytes, true, truncated)),
+                None,
+            ))
         }
     }
 }
