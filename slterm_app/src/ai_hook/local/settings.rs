@@ -51,12 +51,29 @@ pub(super) fn configuration(agent: AgentHook) -> Option<(PathBuf, bool)> {
 }
 
 pub(crate) fn inspect(agent: AgentHook) -> HookInspection {
-    let helper = helper_command();
+    inspect_with(agent, configuration(agent), helper_command())
+}
+
+/// 显式 claude 配置目录的检视(设置页联调/测试注入 tempdir 假 home)。
+/// helper 显式给:三态里的 helper_missing 由 `None` 直接表达。
+pub(crate) fn inspect_claude_at(dir: &Path, helper: Option<&str>) -> HookInspection {
+    inspect_with(
+        AgentHook::Claude,
+        Some((dir.join("settings.json"), dir.is_dir())),
+        helper.map(str::to_owned),
+    )
+}
+
+fn inspect_with(
+    agent: AgentHook,
+    config: Option<(PathBuf, bool)>,
+    helper: Option<String>,
+) -> HookInspection {
     let mut result = HookInspection {
         helper_missing: helper.is_none(),
         ..Default::default()
     };
-    if let Some((path, footprint)) = configuration(agent) {
+    if let Some((path, footprint)) = config {
         result.available = footprint;
         match installed_at(agent, &path, helper.as_deref().unwrap_or_default()) {
             Ok(installed) => {
@@ -231,7 +248,40 @@ pub(crate) fn set_enabled(agent: AgentHook, enabled: bool) -> io::Result<()> {
     apply_and_verify(agent, enabled)
 }
 
-pub(super) fn apply_and_verify(agent: AgentHook, enabled: bool) -> io::Result<()> {
+/// 显式 claude 目录的接入/卸载(设置页联调/测试注入;授权已由调用方经
+/// 设置写通道落盘,本入口不再写偏好)。写后经同一检视面校验。
+pub(crate) fn apply_claude_at(dir: &Path, helper: &str, enabled: bool) -> io::Result<()> {
+    if enabled {
+        match ensure_claude_hooks_at(dir, helper) {
+            InstallOutcome::Installed | InstallOutcome::Current => {}
+            InstallOutcome::Suspended { suspicious_command } => {
+                return Err(io::Error::other(format!(
+                    "statusline 原命令需二次确认(SEC-12): {suspicious_command}"
+                )));
+            }
+            InstallOutcome::Conflict => {
+                return Err(io::Error::other(
+                    "Claude hook 配置无法写入(文件被占用或形状非法)",
+                ));
+            }
+        }
+    } else {
+        remove_claude_hooks_at(dir)?;
+    }
+    let state = inspect_claude_at(dir, Some(helper));
+    if let Some(error) = state.error {
+        return Err(io::Error::other(error));
+    }
+    if state.installed != enabled || (enabled && state.needs_repair) {
+        return Err(io::Error::other(
+            "Hook configuration could not be verified after the write.",
+        ));
+    }
+    Ok(())
+}
+
+/// 按已落盘的偏好执行接入/卸载(不写授权;03 安装权威的应用入口)。
+pub(crate) fn apply_and_verify(agent: AgentHook, enabled: bool) -> io::Result<()> {
     apply(agent, enabled)?;
     let state = inspect(agent);
     if let Some(error) = state.error {

@@ -142,7 +142,19 @@ pub fn ensure_claude_hooks(gate: impl Fn(&str) -> InstallGate) -> InstallOutcome
     let Some(command) = helper_command() else {
         return InstallOutcome::Current;
     };
-    ensure_claude_hooks_in(&dir, &command, gate)
+    let outcome = ensure_claude_hooks_in(&dir, &command, gate);
+    // 一次性公告只在生产安装入口触发;显式目录注入端(设置页联调/测试)
+    // 不写进程外的使用者目录哨兵。
+    if outcome == InstallOutcome::Installed {
+        announce();
+    }
+    outcome
+}
+
+/// 显式配置目录的安装入口(设置页联调/测试注入;生产经
+/// [`ensure_claude_hooks`])。SEC-12 审查走自愈形态:命中即审计 + 零写盘。
+pub(super) fn ensure_claude_hooks_at(dir: &Path, command: &str) -> InstallOutcome {
+    ensure_claude_hooks_in(dir, command, review_statusline_command)
 }
 
 /// 参数化目录与命令的本体——测试用 tempdir 假 home,绝不触碰真实用户目录。
@@ -225,7 +237,6 @@ fn ensure_claude_hooks_in(
     match write_atomic(&path, &raw) {
         Ok(()) => {
             log::info!("ai_hook: claude hooks installed into {}", path.display());
-            announce();
             InstallOutcome::Installed
         }
         Err(err) => {
@@ -289,7 +300,8 @@ fn install_into(root: &mut Value, command: &str) -> Option<bool> {
     Some(changed)
 }
 
-fn is_our_claude_hook(entry: &Value) -> bool {
+/// marker 归属判据(双轨不交叉):编辑器与安装器共用同一份判定。
+pub(super) fn is_our_claude_hook(entry: &Value) -> bool {
     if entry.get("type").is_some_and(|kind| kind != "command") {
         return false;
     }
@@ -308,6 +320,11 @@ fn remove_hooks() -> std::io::Result<bool> {
     let Some(dir) = claude_config_dir() else {
         return Ok(false);
     };
+    remove_claude_hooks_at(&dir)
+}
+
+/// 显式配置目录的卸载入口(设置页联调/测试注入;生产经 [`remove_hooks`])。
+pub(super) fn remove_claude_hooks_at(dir: &Path) -> std::io::Result<bool> {
     let path = dir.join("settings.json");
     if !path.exists() {
         return Ok(false);
@@ -354,7 +371,8 @@ fn remove_claude_hooks_from(root: &mut Value) -> bool {
     changed
 }
 
-fn claude_config_dir() -> Option<PathBuf> {
+/// claude 配置目录:设置页 hooks 页 config_path 直达与编辑域共用同一解析。
+pub(crate) fn claude_config_dir() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("CLAUDE_CONFIG_DIR") {
         return Some(PathBuf::from(dir));
     }

@@ -26,6 +26,7 @@ use crate::cli::Program;
 use crate::session::{AgentSession, LaunchSession, WindowState, load_from};
 use slterm_terminal::event_loop::Msg as EventLoopMsg;
 
+mod hooks_tests;
 mod theme_tests;
 
 /// 与生产 init 同序的测试子集(11 篇模板同形):内嵌 Maple 在测试文本系统

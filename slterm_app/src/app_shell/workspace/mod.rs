@@ -442,7 +442,7 @@ impl SltermWorkspace {
     /// 打开设置 tab(单例):已存在则只激活;不存在则新建并订阅写盘/关闭
     /// 事件。生产路径用数据目录 settings.json。
     pub(crate) fn open_settings_tab(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
-        self.open_settings_tab_inner(None, window, cx);
+        self.open_settings_tab_inner(None, None, window, cx);
     }
 
     /// 显式路径打开设置 tab(测试 tempdir 隔离;生产经 `open_settings_tab`)。
@@ -453,12 +453,27 @@ impl SltermWorkspace {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
-        self.open_settings_tab_inner(Some(settings_path), window, cx);
+        self.open_settings_tab_inner(Some(settings_path), None, window, cx);
+    }
+
+    /// 同 [`Self::open_settings_tab_at`],额外注入 hooks 假 home(Agent 组
+    /// 联调用例:安装器只写 tempdir)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn open_settings_tab_at_with_hooks(
+        &mut self,
+        settings_path: PathBuf,
+        hooks: (PathBuf, Option<String>, Option<PathBuf>),
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.open_settings_tab_inner(Some(settings_path), Some(hooks), window, cx);
     }
 
     fn open_settings_tab_inner(
         &mut self,
         settings_path: Option<PathBuf>,
+        #[cfg_attr(not(all(test, feature = "gpui-test-support")), allow(unused_variables))]
+        hooks: Option<(PathBuf, Option<String>, Option<PathBuf>)>,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
@@ -473,6 +488,17 @@ impl SltermWorkspace {
             cx.notify();
             return;
         }
+        #[cfg(all(test, feature = "gpui-test-support"))]
+        let view = match (settings_path, hooks) {
+            (Some(path), Some((config_dir, helper, executable))) => cx.new(|cx| {
+                SettingsPane::new_at_with_claude_hooks(
+                    path, config_dir, helper, executable, window, cx,
+                )
+            }),
+            (Some(path), None) => cx.new(|cx| SettingsPane::new_at(path, window, cx)),
+            (None, _) => cx.new(|cx| SettingsPane::new(window, cx)),
+        };
+        #[cfg(not(all(test, feature = "gpui-test-support")))]
         let view = match settings_path {
             Some(path) => cx.new(|cx| SettingsPane::new_at(path, window, cx)),
             None => cx.new(|cx| SettingsPane::new(window, cx)),

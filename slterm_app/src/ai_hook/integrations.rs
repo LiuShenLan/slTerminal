@@ -37,13 +37,40 @@ pub(crate) struct AgentIntegration {
 }
 
 pub(crate) fn inspect() -> Vec<AgentIntegration> {
+    inspect_with(None)
+}
+
+/// 可注入数据源探针(设置页测试的 tempdir 假 home;生产恒 `None`)。
+/// `executable` 覆盖 claude 行以便测试控制「已检测到 CLI」这一事实。
+pub(crate) struct ClaudeProbe<'a> {
+    pub config_dir: &'a Path,
+    pub helper: Option<&'a str>,
+    pub executable: Option<&'a Path>,
+}
+
+/// 可注入数据源:显式 claude 配置目录 + helper + 可执行文件(生产传
+/// `None`)。其余 agent 仍走默认解析——编辑域与三态联调锚定 claude,
+/// 安装器写用户配置的红线只对注入路径成立。
+pub(crate) fn inspect_with(claude: Option<ClaudeProbe<'_>>) -> Vec<AgentIntegration> {
     let dirs = executable_directories();
+    let probe = claude.as_ref();
     AGENTS
         .into_iter()
-        .map(|agent| AgentIntegration {
-            agent,
-            executable: find_executable(agent, &dirs),
-            inspection: super::local::settings::inspect(agent),
+        .map(|agent| {
+            let mut executable = find_executable(agent, &dirs);
+            let mut inspection = super::local::settings::inspect(agent);
+            if agent == AgentHook::Claude
+                && let Some(probe) = probe
+            {
+                executable = probe.executable.map(Path::to_path_buf).or(executable);
+                inspection =
+                    super::local::settings::inspect_claude_at(probe.config_dir, probe.helper);
+            }
+            AgentIntegration {
+                agent,
+                executable,
+                inspection,
+            }
         })
         .collect()
 }
@@ -54,6 +81,17 @@ pub(crate) fn executable(agent: AgentHook) -> Option<PathBuf> {
 
 pub(crate) fn set_enabled(hook: AgentHook, enabled: bool) -> Result<(), String> {
     super::local::settings::set_enabled(hook, enabled).map_err(|error| error.to_string())
+}
+
+/// 03 安装权威的应用入口:偏好已由调用方经设置写通道落盘,本函数只执行
+/// 接入/卸载并校验结果(设置页 hooks 页消费;不重复写授权)。
+pub(crate) fn apply_enabled(hook: AgentHook, enabled: bool) -> Result<(), String> {
+    super::local::settings::apply_and_verify(hook, enabled).map_err(|error| error.to_string())
+}
+
+/// 显式 claude 配置目录的接入/卸载(设置页联调/测试注入)。
+pub(crate) fn apply_claude_at(dir: &Path, helper: &str, enabled: bool) -> Result<(), String> {
+    super::local::settings::apply_claude_at(dir, helper, enabled).map_err(|error| error.to_string())
 }
 
 fn executable_directories() -> Vec<PathBuf> {

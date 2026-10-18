@@ -20,7 +20,9 @@
       "interaction": "交互",
       "advanced": "高级",
       "localization": "语言",
-      "reset": "重置"
+      "reset": "重置",
+      "agents": "智能体",
+      "group_agents": "AI 智能体"
     },
     "status": {
       "corrupted": "配置文件损坏，已回退到备份或默认值；损坏原件已保留。",
@@ -71,6 +73,30 @@
       "tab_close": "显示标签关闭按钮",
       "tab_close_description": "关闭后仍可用中键关闭。",
       "cjk_bold": "中日韩粗体提亮"
+    },
+    "agents": {
+      "integration_group": "AI CLI 接入",
+      "description": "为检测到的 AI CLI 安装 slTerminal 生命周期钩子。安装与卸载由钩子安装器执行；下方编辑器只触及你自己的 handler。",
+      "refresh": "刷新",
+      "checking": "检查中…",
+      "installed": "已安装",
+      "needs_repair": "需修复",
+      "not_installed": "未安装",
+      "not_detected": "未检测到",
+      "helper_missing": "当前安装缺少 hook helper",
+      "initialize": "先启动一次该智能体，然后刷新",
+      "needs_attention": "需要处理",
+      "enabled": "已安装钩子",
+      "disabled": "已移除钩子",
+      "failed": "钩子操作失败：{error}",
+      "restart": "更改钩子安装后请重启对应 CLI。",
+      "editor_group": "Hooks 配置",
+      "editor_description": "仅你的自有 handler 可编辑；slTerminal 安装的分组只读，保存时原样保留。",
+      "editor_owned": "安装器维护分组（只读）：{count}",
+      "editor_editable": "自有 handler（JSON；事件 → matcher 组）",
+      "editor_apply": "保存 handler",
+      "editor_saved": "handler 已保存",
+      "editor_invalid": "无法编辑 hooks：{error}"
     },
     "profiles": {
       "startup": "启动",

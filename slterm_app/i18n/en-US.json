@@ -20,7 +20,9 @@
       "interaction": "Interaction",
       "advanced": "Advanced",
       "localization": "Language",
-      "reset": "Reset"
+      "reset": "Reset",
+      "agents": "Agents",
+      "group_agents": "AI agents"
     },
     "status": {
       "corrupted": "The settings file was corrupted; backup or defaults were loaded and the original kept.",
@@ -71,6 +73,30 @@
       "tab_close": "Show tab close buttons",
       "tab_close_description": "Middle-click still closes tabs when hidden.",
       "cjk_bold": "Brighten CJK bold"
+    },
+    "agents": {
+      "integration_group": "AI CLI integrations",
+      "description": "Install slTerminal lifecycle hooks for detected AI CLIs. Installation and removal run through the hook installer; the editor below only touches your own handlers.",
+      "refresh": "Refresh",
+      "checking": "Checking...",
+      "installed": "Installed",
+      "needs_repair": "Needs repair",
+      "not_installed": "Not installed",
+      "not_detected": "Not detected",
+      "helper_missing": "Hook helper missing from this installation",
+      "initialize": "Start this agent once, then refresh",
+      "needs_attention": "Needs attention",
+      "enabled": "Hooks installed",
+      "disabled": "Hooks removed",
+      "failed": "Hook operation failed: {error}",
+      "restart": "Restart the CLI after changing hook installation.",
+      "editor_group": "Hooks configuration",
+      "editor_description": "Only your own handlers are editable. Groups installed by slTerminal are read-only and survive saves unchanged.",
+      "editor_owned": "Installer-managed groups (read-only): {count}",
+      "editor_editable": "Your handlers (JSON; event -> matcher groups)",
+      "editor_apply": "Save handlers",
+      "editor_saved": "Handlers saved",
+      "editor_invalid": "Cannot edit hooks: {error}"
     },
     "profiles": {
       "startup": "Startup",

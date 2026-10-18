@@ -67,9 +67,25 @@ pub(crate) fn page_keys(page_id: &str) -> &'static [&'static str] {
             "terminal_proxy",
         ],
         "localization" => &["language"],
+        "agents" => &AGENT_PAGE_KEYS,
         _ => &[],
     }
 }
+
+/// Agent 组页拥有的控件键:全局授权键 + 9 家接入键(键名单源在
+/// `AgentHook`,此处只做页面归属映射)。
+static AGENT_PAGE_KEYS: [&str; 10] = [
+    slterm_settings::AgentHook::GLOBAL_SETTINGS_KEY,
+    slterm_settings::AgentHook::Claude.settings_key(),
+    slterm_settings::AgentHook::Codex.settings_key(),
+    slterm_settings::AgentHook::OpenCode.settings_key(),
+    slterm_settings::AgentHook::Pi.settings_key(),
+    slterm_settings::AgentHook::Copilot.settings_key(),
+    slterm_settings::AgentHook::Grok.settings_key(),
+    slterm_settings::AgentHook::OhMyPi.settings_key(),
+    slterm_settings::AgentHook::Cursor.settings_key(),
+    slterm_settings::AgentHook::Kimi.settings_key(),
+];
 
 /// 全部路由 id(注册表顺序 = 导航顺序)。
 pub(crate) fn section_ids() -> Vec<&'static str> {
@@ -95,6 +111,7 @@ pub(crate) fn section_icon(index: usize) -> gpui_component::IconName {
         Some("advanced") => IconName::Settings2,
         Some("localization") => IconName::Globe,
         Some("reset") => IconName::Undo2,
+        Some("agents") => IconName::Bot,
         _ => IconName::Settings,
     }
 }
@@ -254,10 +271,11 @@ mod navigation_tests {
             .unwrap_or_else(|| panic!("{id} 必须已注册"))
     }
 
-    /// 06 篇页集合终表:SSH/network 随 SSH 砍;providers/agents/keymap/
-    /// mobile/backup/about 不在本阶段全局组。
+    /// 06 篇页集合终表:全局组在上,Agent 组 hooks 页(03 篇 inspect 联调)
+    /// 在下;SSH/network 随 SSH 砍,providers/keymap/mobile/backup/about
+    /// 不在本阶段。
     #[test]
-    fn page_set_matches_the_reordered_global_group() {
+    fn page_set_matches_the_reordered_global_group_then_agents() {
         bootstrap();
         assert_eq!(
             section_ids(),
@@ -269,13 +287,13 @@ mod navigation_tests {
                 "advanced",
                 "localization",
                 "reset",
+                "agents",
             ]
         );
         for retired in [
             "ssh",
             "network",
             "providers",
-            "agents",
             "keymap",
             "mobile",
             "backup",
@@ -314,6 +332,10 @@ mod navigation_tests {
             ("notification", "profiles"),
             ("配置文件", "profiles"),
             ("profile", "profiles"),
+            ("智能体", "agents"),
+            ("hooks", "agents"),
+            ("claude", "agents"),
+            ("接入", "agents"),
         ];
         for (query, expected) in cases {
             let hits = matching_sections(query, UiLanguage::ZhCn);

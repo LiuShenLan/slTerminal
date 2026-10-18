@@ -14,6 +14,7 @@
 //! 值/显示分离:固定下拉的显示文案单点在 `localization`;语言切换只刷新
 //! 显示项与占位符,不重建控件实体(重建会丢焦点/编辑值/undo/订阅)。
 
+mod agents;
 mod design;
 mod localization;
 mod navigation;
@@ -114,6 +115,10 @@ pub(crate) struct SettingsPane {
     pub(crate) focus_handle: FocusHandle,
     /// 本页读写目标(生产 = 默认数据目录;测试注入 tempdir 路径)。
     settings_target: SettingsTarget,
+    /// hooks 页数据源/安装权威目标(生产 = 03 篇默认解析;测试注入假 home)。
+    hooks_target: agents::HooksTarget,
+    /// Agent 组 hooks 页状态(inspect 行 + 编辑文档)。
+    agents: agents::AgentSettingsState,
     /// 渲染与预览的单一事实源;每次成功写盘后整体重载。
     runtime: RuntimeSettings,
     /// 解析后的渲染语言缓存:System 档的 locale 探测只在运行时重载点发生,
@@ -214,7 +219,12 @@ impl SettingsTarget {
 impl SettingsPane {
     /// 生产构造:读写默认数据目录下的 settings.json。
     pub(crate) fn new(window: &mut Window, cx: &mut Context<'_, Self>) -> Self {
-        Self::new_with_target(SettingsTarget::Default, window, cx)
+        Self::new_with_target(
+            SettingsTarget::Default,
+            agents::HooksTarget::Default,
+            window,
+            cx,
+        )
     }
 
     /// 显式路径构造(测试 tempdir 隔离)。
@@ -223,11 +233,40 @@ impl SettingsPane {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Self {
-        Self::new_with_target(SettingsTarget::Path(settings_path), window, cx)
+        Self::new_with_target(
+            SettingsTarget::Path(settings_path),
+            agents::HooksTarget::Default,
+            window,
+            cx,
+        )
+    }
+
+    /// 注入假 home 的构造(hooks 页联调用例:安装器写 tempdir,绝不碰
+    /// 真实 `%USERPROFILE%`)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn new_at_with_claude_hooks(
+        settings_path: PathBuf,
+        claude_config_dir: PathBuf,
+        helper: Option<String>,
+        executable: Option<PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Self {
+        Self::new_with_target(
+            SettingsTarget::Path(settings_path),
+            agents::HooksTarget::Claude {
+                config_dir: claude_config_dir,
+                helper,
+                executable,
+            },
+            window,
+            cx,
+        )
     }
 
     fn new_with_target(
         settings_target: SettingsTarget,
+        hooks_target: agents::HooksTarget,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Self {
@@ -295,6 +334,8 @@ impl SettingsPane {
         let mut pane = Self {
             focus_handle: cx.focus_handle(),
             settings_target,
+            hooks_target,
+            agents: agents::AgentSettingsState::new(window, cx),
             runtime,
             language,
             persisted,
@@ -586,12 +627,28 @@ impl SettingsPane {
             );
         let searching = !self.search_input.read(cx).value().trim().is_empty();
         let matches = matching_sections(&self.search_input.read(cx).value(), language);
-        for index in visible_nav_sections() {
-            let active = index == self.active_section;
-            let matched = matches.contains(&index);
-            if searching && !matched {
-                continue;
+        let visible: Vec<usize> = visible_nav_sections()
+            .filter(|index| !searching || matches.contains(index))
+            .collect();
+        let mut last_group = None;
+        for index in visible {
+            let group = registry::get_all().get(index).map(|def| def.group);
+            if group != last_group {
+                if group == Some(registry::SettingsPageGroup::Agent) {
+                    nav = nav.child(
+                        div()
+                            .debug_selector(|| "settings-nav-group-agents".to_owned())
+                            .mt(px(12.0))
+                            .mb(px(4.0))
+                            .px(px(10.0))
+                            .text_size(px(11.0))
+                            .text_color(muted)
+                            .child(language.text(Message::SettingsSidebarGroupAgents)),
+                    );
+                }
+                last_group = group;
             }
+            let active = index == self.active_section;
             nav = nav.child(
                 div()
                     .id(SharedString::from(format!("settings-nav-item-{index}")))
@@ -684,6 +741,7 @@ impl SettingsPane {
             }
             "appearance" => self.page_appearance(window, cx).into_any_element(),
             "profiles" => self.page_profiles(window, cx).into_any_element(),
+            "agents" => self.page_agents(window, cx).into_any_element(),
             "interaction" => self.page_interaction(window, cx).into_any_element(),
             "advanced" => self.page_advanced(window, cx).into_any_element(),
             "localization" => self.page_localization(window, cx).into_any_element(),

@@ -18,8 +18,7 @@ use crate::i18n::Message;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SettingsPageGroup {
     Global,
-    /// Agent 组页面在 03 篇 inspect 联调后追加(M6.5);变体先立,不占渲染。
-    #[allow(dead_code)]
+    /// Agent 组页面(03 篇 inspect 联调,06 篇双轨缝合)。
     Agent,
 }
 
@@ -88,6 +87,15 @@ pub(crate) const BUILTIN_PAGES: [SettingsPageDef; 7] = [
     },
 ];
 
+/// Agent 组页面(全局组之后;组内按 `order` 排)。
+pub(crate) const AGENT_PAGES: [SettingsPageDef; 1] = [SettingsPageDef {
+    id: "agents",
+    group: SettingsPageGroup::Agent,
+    order: 0,
+    title: Message::SettingsSidebarAgents,
+    search_terms: "agents agent hooks 智能体 钩子 接入 integration claude codex cursor kimi copilot grok opencode pi",
+}];
+
 fn pages() -> &'static Mutex<Vec<SettingsPageDef>> {
     static PAGES: OnceLock<Mutex<Vec<SettingsPageDef>>> = OnceLock::new();
     PAGES.get_or_init(|| Mutex::new(Vec::new()))
@@ -141,7 +149,7 @@ pub(crate) fn _reset() {
 
 /// 注册内置页(幂等)。设置页构造时调用一次;测试可先 `_reset` 再调用。
 pub(crate) fn register_builtin_pages() {
-    for def in BUILTIN_PAGES {
+    for def in BUILTIN_PAGES.into_iter().chain(AGENT_PAGES) {
         register(def);
     }
 }
@@ -165,14 +173,18 @@ mod registry_tests {
                 "advanced",
                 "localization",
                 "reset",
+                "agents",
             ],
-            "06 篇页集合重排:SSH/network 随 SSH 砍,providers/agents/keymap/mobile/backup/about 归后续"
+            "06 篇页集合重排:全局组在上,Agent 组(hooks 页)在下"
         );
         assert_eq!(
             get_all_in(SettingsPageGroup::Global).len(),
             BUILTIN_PAGES.len()
         );
-        assert!(get_all_in(SettingsPageGroup::Agent).is_empty());
+        assert_eq!(
+            get_all_in(SettingsPageGroup::Agent).len(),
+            AGENT_PAGES.len()
+        );
         _reset();
     }
 

@@ -16,6 +16,8 @@
 //! TurnDone/NeedsAttention 两个状态边归 09 篇 M10.1。
 
 mod bridges;
+/// 设置页 hooks 编辑域(轨二):用户/第三方 handler 可编辑,marker 认领组只读。
+pub(crate) mod editor;
 mod event;
 pub(crate) mod installation;
 pub(crate) mod integrations;
