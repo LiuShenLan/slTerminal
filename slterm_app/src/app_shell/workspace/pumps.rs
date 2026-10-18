@@ -180,12 +180,66 @@ impl SltermWorkspace {
                     for (pane_id, screen) in workspace.screen_samples(cx) {
                         workspace.agent_hub.observe_screen(pane_id, &screen);
                     }
+                    // 托盘快照搭同一拍(09 篇 M10.3):秒级延迟对托盘无感,
+                    // 内容相等时 `tray::update` 内部直接返回(天然去抖)。
+                    workspace.publish_tray_snapshot(cx);
                 }) else {
                     return;
                 };
             }
         })
         .detach();
+    }
+
+    /// 托盘 1 Hz 快照推送(09 篇 M10.3):语言与托盘开关取全局设置,
+    /// 开关变化经 `set_enabled` 的判重只增删图标(线程留驻)。
+    pub(super) fn publish_tray_snapshot(&self, cx: &App) {
+        let (language, enabled) = cx
+            .try_global::<crate::app_shell::config::Settings>()
+            .map(|settings| (settings.language, settings.tray))
+            .unwrap_or((crate::i18n::UiLanguage::EnUs, true));
+        crate::tray::set_enabled(enabled);
+        crate::tray::update(self.tray_agents(cx), language);
+    }
+
+    /// 托盘与侧栏读取同一 pane 事实源(AgentHub):只收已识别为 AI CLI 的
+    /// pane;身份查不到时不进托盘菜单(09 篇 source classification)。
+    /// 单窗化后窗口目标塌缩为唯一主窗,pane 即完整路由信息。
+    fn tray_agents(&self, cx: &App) -> Vec<crate::tray::TrayAgent> {
+        let mut agents = Vec::new();
+        for entry in &self.tabs {
+            let super::WorkspaceTab::Terminal { panes, .. } = &entry.tab else {
+                continue;
+            };
+            for pane in panes {
+                let Some(host) = self.agent_hub.host(pane.id) else {
+                    continue;
+                };
+                let Some(program) = host.program() else {
+                    continue;
+                };
+                if crate::ai_agents::AgentKind::parse(program).is_none() {
+                    continue;
+                }
+                // 项目目录比 pane id 更适合作为托盘中的人工识别信息。
+                let cwd = pane.view.read(cx).cwd.trim();
+                let place = std::path::Path::new(cwd)
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                let label = if place.is_empty() {
+                    program.to_owned()
+                } else {
+                    format!("{program} · {place}")
+                };
+                agents.push(crate::tray::TrayAgent {
+                    pane: pane.id,
+                    label,
+                    needs_attention: host.status() == crate::ai_agents::AgentStatus::Blocked,
+                });
+            }
+        }
+        agents
     }
 
     /// 每个终端 pane 的屏幕观察窗口(最近至多 24 行,与屏幕规则注意力区

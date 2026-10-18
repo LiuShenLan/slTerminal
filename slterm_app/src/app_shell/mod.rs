@@ -80,6 +80,7 @@ pub(crate) enum SltermShellEvent {
     /// 消费(右键「在此处打开」/on_open_urls 落盘)归 09 篇;M3 只登记发送端。
     OpenDirectories(Vec<String>),
     /// toast 点击回窗(09 篇 M10.1;M10.4 窗口 facade 接管四路回窗)。
+    /// 托盘左键/菜单「显示」同样走这条单窗回窗语义(M10.3)。
     NotificationFocus(Option<PaneId>),
     /// 权限确认 toast 的动作按钮回传(M10 安全半程消费;本片只交付通道面)。
     NotificationChoice {
@@ -87,6 +88,16 @@ pub(crate) enum SltermShellEvent {
         request_id: u64,
         choice: usize,
     },
+    /// 托盘「退出」(09 篇 M10.3):与关窗同一条退出链(终局快照 + 退出)。
+    TrayQuit,
+}
+
+/// 托盘线程 → 壳事件队列的翻译单点(托盘线程不碰 GPUI 状态)。
+fn tray_command_event(command: crate::tray::GpuiTrayCommand) -> SltermShellEvent {
+    match command {
+        crate::tray::GpuiTrayCommand::Focus(pane) => SltermShellEvent::NotificationFocus(pane),
+        crate::tray::GpuiTrayCommand::Quit => SltermShellEvent::TrayQuit,
+    }
 }
 
 /// 在当前线程启动 GPUI 运行时并打开主窗口,阻塞直至 UI 退出。
@@ -137,6 +148,13 @@ pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>)
     // AUMID 预注册幂等,必须早于第一条通知。
     crate::notify::init_gpui_activation(shell_tx.clone());
     crate::platform::notifications::prepare();
+    // 托盘命令回调(09 篇 M10.3):托盘线程只经此把用户动作送回壳事件队列。
+    crate::tray::init_gpui({
+        let shell_events = shell_tx.clone();
+        move |command| {
+            let _ = shell_events.send(tray_command_event(command));
+        }
+    });
     let application = gpui_platform::application()
         .with_assets(assets::SltermAssets)
         .with_quit_mode(QuitMode::LastWindowClosed);
@@ -155,6 +173,9 @@ pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>)
             runtime_hub,
         );
     });
+    // 托盘收尾(09 篇 M10.3):先删图标再退进程,否则任务栏残影要等
+    // 用户悬停才消失;join 保证删图标先于进程退出。
+    crate::tray::shutdown();
     // run 返回 = 最后窗口已关闭;Drop 完成自连唤醒 + join。
     drop(pipe_server);
 }
@@ -183,6 +204,31 @@ fn register_bundled_fonts(cx: &App) {
     {
         try_write_stderr(format_args!(
             "[slterm] failed to register bundled Maple font: {error}"
+        ));
+    }
+}
+
+#[cfg(test)]
+mod shell_event_tests {
+    use super::{SltermShellEvent, tray_command_event};
+    use crate::tray::GpuiTrayCommand;
+
+    /// 托盘线程只发命令枚举;壳侧翻译单点必须把 Focus 汇到已有的回窗
+    /// 事件、把 Quit 送到关窗同语义的退出事件。
+    #[test]
+    fn tray_commands_map_to_focus_and_quit_shell_events() {
+        assert!(matches!(
+            tray_command_event(GpuiTrayCommand::Focus(None)),
+            SltermShellEvent::NotificationFocus(None)
+        ));
+        let pane = slterm_split::PaneId(7);
+        assert!(matches!(
+            tray_command_event(GpuiTrayCommand::Focus(Some(pane))),
+            SltermShellEvent::NotificationFocus(Some(focused)) if focused == pane
+        ));
+        assert!(matches!(
+            tray_command_event(GpuiTrayCommand::Quit),
+            SltermShellEvent::TrayQuit
         ));
     }
 }

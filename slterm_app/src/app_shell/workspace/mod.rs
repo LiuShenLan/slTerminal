@@ -195,6 +195,10 @@ pub struct SltermWorkspace {
     /// 平台是 unimplemented,行为断言只能落在命令分派端)。
     #[cfg(all(test, feature = "gpui-test-support"))]
     window_commands: Vec<title_bar::TitleBarCommand>,
+    /// 虚拟窗口用例的托盘「退出」记录(生产不编译;测试直接调用
+    /// `remove_window` 会绕过关窗钩子,断言只能落在请求端)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    tray_quit_requested: bool,
     /// 每 pane 的 agent 宿主(AgentActivity/AnswerInbox 归属表)。
     agent_hub: AgentHub,
     /// 任务栏进度的进程级单显示路由(09 篇 M10.2):只认活跃 tab 聚焦 pane。
@@ -309,6 +313,8 @@ impl SltermWorkspace {
             sidebar_resize: None,
             #[cfg(all(test, feature = "gpui-test-support"))]
             window_commands: Vec::new(),
+            #[cfg(all(test, feature = "gpui-test-support"))]
+            tray_quit_requested: false,
             agent_hub: AgentHub::new(),
             taskbar: crate::taskbar::TaskbarState::new(),
             session_persistence: Self::new_session_persistence(),
@@ -375,6 +381,8 @@ impl SltermWorkspace {
         workspace.start_autosave_pump(cx);
         workspace.install_window_close_save(window, cx);
         workspace.sync_window_title(window, cx);
+        // 托盘首帧快照(09 篇 M10.3):起跑即对齐,不等首秒看门狗。
+        workspace.publish_tray_snapshot(cx);
         workspace
     }
 
@@ -1302,6 +1310,12 @@ impl SltermWorkspace {
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) fn window_commands(&self) -> &[title_bar::TitleBarCommand] {
         &self.window_commands
+    }
+
+    /// 测试专用:托盘「退出」是否已请求(虚拟窗口不可直调 remove_window)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn tray_quit_requested(&self) -> bool {
+        self.tray_quit_requested
     }
 
     /// 测试专用:活跃 tab 展示名。

@@ -88,8 +88,26 @@ impl SltermWorkspace {
                     pane_id.0
                 );
             }
+            // 托盘「退出」(09 篇 M10.3):与关窗同一条退出链——先落终局
+            // 快照,再移除唯一主窗;LastWindowClosed 随即结束进程。
+            SltermShellEvent::TrayQuit => self.quit_from_tray(window, cx),
             // 消费(右键「在此处打开」)归 09 篇。
             SltermShellEvent::OpenDirectories(_) => {}
+        }
+    }
+
+    /// 托盘退出:与标题栏关闭钮同语义(自绘入口绕过 OS 关闭请求,终局
+    /// 快照在这里补)。测试构建只记录请求,虚拟窗口平台不支持真实移除。
+    fn quit_from_tray(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) {
+        #[cfg(all(test, feature = "gpui-test-support"))]
+        {
+            self.tray_quit_requested = true;
+            cx.notify();
+        }
+        #[cfg(not(all(test, feature = "gpui-test-support")))]
+        {
+            self.save_on_window_close(_window, cx);
+            _window.remove_window();
         }
     }
 

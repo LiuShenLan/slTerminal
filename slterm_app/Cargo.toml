@@ -168,6 +168,8 @@ windows-sys = { version = "0.59", features = [
     "Wdk_System_SystemInformation",
     # 快照原生回归对拍:GetProcessTimes(process_snapshot 测试)。
     "Win32_System_Threading",
+    # 托盘线程隐藏窗口的模块句柄(GetModuleHandleW,09 篇 M10.3)。
+    "Win32_System_LibraryLoader",
     "Win32_UI_HiDpi",
     # GetAsyncKeyState(VK_LBUTTON):resize 手势门控(view/layout.rs)。
     "Win32_UI_Input_KeyboardAndMouse",

@@ -44,6 +44,9 @@ pub struct Settings {
     /// 解析后的界面语言(System 档的 locale 协商只在此处发生一次;
     /// 渲染路径读缓存,不再逐帧探测系统 locale)。
     pub language: UiLanguage,
+    /// 常驻系统托盘图标(09 篇 M10.3):1 Hz 节拍按此值增删图标,
+    /// 线程留驻不随开关销毁。
+    pub tray: bool,
 }
 
 impl Global for Settings {}
@@ -109,6 +112,7 @@ impl Settings {
             ghost: runtime.ghost,
             scroll_speed: runtime.scroll_speed,
             language: LanguagePreference::from(runtime.language).resolved(),
+            tray: runtime.tray,
         }
     }
 

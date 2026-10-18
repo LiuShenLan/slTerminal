@@ -306,6 +306,13 @@
     "recovery_crashed": "Restored {count} tab(s) after an unclean shutdown.",
     "recovery_quarantined": "Repeated restore failures; the saved scene was moved to {path}"
   },
+  "tray": {
+    "show_window": "Show {app}",
+    "quit": "Quit {app}",
+    "waiting_input": "waiting for input",
+    "tip_waiting": "{app} — {count} agent(s) waiting for input",
+    "tip_running": "{app} — {count} agent(s) running"
+  },
   "terminal": {
     "ai_analyzing": "Analyzing failure…",
     "ai_fix_hint": "Ctrl+. paste · Esc dismiss"

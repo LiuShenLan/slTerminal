@@ -53,6 +53,7 @@
 | terminal_math 覆盖层上屏后的像素级字形观感（公式落点/抗锯齿/裁剪边） | 位图与布局可在 L1 逐像素/几何断言，但最终屏幕合成由 GPUI 文本与图像管线在真实 DPI 下完成，虚拟窗口不能代表字形观感 | L1 `math_overlay_tests`（扫描/投影/掩码/fit 计划）+ `math_render_tests`（位图合成预算）+ L4 `math_overlay_paint_leaves_grid_and_copy_source_untouched`（真实绘制一帧后网格/复制不变）+ 构建产物人工目测（`$x^2$`、`\\[ \\]` 块、宽字符） | 08 篇 M9.5 登记 |
 | 真实系统 toast 投递与 AUMID 注册（WinRT `Show` 跨进程 RPC + `HKCU\Software\Classes\AppUserModelId` 写） | 真实投递会污染开发机通知中心、依赖桌面会话与通知开关，且系统抑制/AUMID 生效不可从测试进程断言；测试构建显式短路真实投递 | 漏斗策略 L1 全量（前台门控/闪烁先行/全局与 pane 节流/失败 episode/160 截断/时长 XML 映射）+ `notify-test` 诊断命令真机逐段打印（注册/时长/投递，构建产物实跑 exit 0）+ 构建产物人工 smoke（系统通知中心可见 slTerminal banner 且点击回窗） | 09 篇 M10.1 登记 |
 | 真实任务栏进度投递（`ITaskbarList3::SetProgressState`/`SetProgressValue` 的 COM 调用与视觉呈现） | 真实调用依赖 Explorer 任务栏与桌面会话，条状视觉不可从测试进程断言；虚拟窗口无原生 HWND，且任务栏是纯装饰面，不可重复 | 映射/状态机 L1 全量（五态/未知码/钳制/标志位 + 焦点路由 + TurnDone/SessionEnd/pane 关闭/OSC 0/133;D 清除路径 + 跨 pane 隔离；测试构建 `apply` 只记录调用序列不触 COM）+ 构建产物人工 smoke（程序发 OSC 9;4 时任务栏出现对应条，agent 退出后消失） | 09 篇 M10.2 登记 |
+| 真实托盘交互（`Shell_NotifyIconW` 图标挂载/右键 `TrackPopupMenu` 点击/左键点击/通知区图标呈现与橙点视觉） | 依赖 Explorer 通知区、真实鼠标点击与桌面会话；托盘是进程级外部状态不可重复；测试构建显式不启动托盘线程 | 菜单构建/命令 id 映射/1 Hz 去抖/attention 聚合/命令动作映射/橙点像素 L1 全量（含原生 HMENU 结构断言，不开线程）+ 托盘回窗与退出事件 L4（焦点切 tab、退出请求）+ 构建产物人工 smoke（图标出现、右键 agent 直达与「显示」回窗、「退出」删图标且退出）；图标资产 C24 归 M12，当前占位圆盘 | 09 篇 M10.3 登记 |
 
 > 原豁免表中 `FileWatcher::start`/`notify_watch` 与 `claude_history` 命令包装两项已按 D6 从豁免重分类为补测，不再列入豁免表。  
 > **SEC-17 豁免已撤销（TQ-COV-05 翻案）**：`tracing::warn!(target: "audit")` 已由 `tracing-test` 断言锁死，豁免行删除。

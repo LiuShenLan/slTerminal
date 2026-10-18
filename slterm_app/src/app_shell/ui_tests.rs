@@ -33,6 +33,7 @@ mod runtime_control_tests;
 mod runtime_projection_tests;
 mod taskbar_tests;
 mod theme_tests;
+mod tray_tests;
 
 /// 与生产 init 同序的测试子集(11 篇模板同形):内嵌 Maple 在测试文本系统
 /// 不栅格化真实字形,20MB 注册纯属拖慢,测试不挂。
