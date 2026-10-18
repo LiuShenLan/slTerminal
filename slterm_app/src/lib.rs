@@ -73,6 +73,11 @@ pub(crate) mod history;
 // 运行时零解析、零文件读、零锁。
 pub(crate) mod i18n;
 pub(crate) mod logging;
+// 数学引擎(08 篇 M9.4):后端无关 TeX 子集——parser→validate→IR→layout→
+// compile→rasterizer/bitmap/cache/font/spacing 十模块。呈现接线(终端
+// 覆盖层 paint pass、markdown 数学)归 M9.5。
+#[allow(dead_code)] // 消费点归 M9.5。
+pub(crate) mod math;
 pub(crate) mod panic;
 pub(crate) mod platform;
 pub(crate) mod process_tree;
@@ -88,6 +93,9 @@ pub(crate) mod runtime_exec;
 // 凭据域消费接口(10 篇 M9.2 过渡形态):trait + 出域句柄;真实
 // Windows 凭据管理器三原语归 M10.9。
 pub(crate) mod secrets;
+// 回归语料(08 篇 M9.4):数学条目逐例编译/栅格不回归;化学/生物条目已裁。
+#[cfg(test)]
+pub(crate) mod scientific_corpus;
 pub(crate) mod session;
 // 侧栏文件树模型族(07 篇 M8.4):目录枚举/gitignore/文件名搜索/git 快照。
 // 模型与渲染完全分层;WSL/SVN 臂已裁。
@@ -98,6 +106,10 @@ pub(crate) mod settings_store;
 // 补全/建议计算核心(08 篇 M9.1):ghost 余量与 popup 多候选同源。
 #[allow(dead_code)] // 消费点归 M9.5 呈现接线。
 pub(crate) mod suggest;
+// 终端数学覆盖层(08 篇 M9.4):有界扫描、LineProjection、CoverageMask 与
+// 后端无关绘制计划。终端仍是真值——不改 cell/滚动/选区/复制语义。
+#[allow(dead_code)] // 消费点归 M9.5(GPUI paint pass)。
+pub(crate) mod terminal_math;
 pub(crate) mod terminal_registry;
 // 文本快照(07 篇):编码/行尾/只读合同单点;M8.2 编辑内核的共享底座。
 pub(crate) mod text_document;

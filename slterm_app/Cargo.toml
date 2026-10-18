@@ -79,8 +79,21 @@ regex = "1"
 # Markdown mdast 解析(07 篇 M8.2 编辑器内核:Outline/Projection/块结构单源)。
 # 版本与上游固定基线逐字一致,AST 语义(含 math_flow)才可照抄。
 markdown = "=1.0.0"
-# Markdown 实体解码(Projection 可见文本 ↔ 源码 span 双向映射)。
+# Markdown 实体解码(Projection 可见文本 ↔ 源码 span 双向映射;数学引擎的
+# 传输层实体解码共用同一实现)。
 html-escape = "0.2.14"
+# 数学引擎(08 篇 M9.4):TeX 事件流解析。版本与上游重构基线逐字一致
+# (pulldown-latex =0.7.1),事件语义/兼容重写才可照抄。
+pulldown-latex = "=0.7.1"
+# OpenType MATH 表访问(轴高/分式/根号/伸缩字形)。固定 0.25.1,
+# default-features 关闭后只开 MATH 所需的 opentype-layout + std。
+ttf-parser = { version = "=0.25.1", default-features = false, features = ["opentype-layout", "std"] }
+# 字形轮廓 CPU 栅格化。固定 0.1.10,保证覆盖度曲线与像素结果可回归。
+ab_glyph_rasterizer = "=0.1.10"
+# 数学字体缺字时的文本兜底列宽(半 em/全 em)。
+unicode-width = "0.2.0"
+# 公式布局 LRU 的哈希器(no-rng:确定性构造,不引入随机源)。
+ahash = { version = "0.8.6", features = ["no-rng"] }
 # keymap/sequence.rs 的修饰键位族(与 core 同版本族)。
 bitflags = "2.4.1"
 # 凭据出域句柄即用即焚(10 篇锚点;M9.2 先落消费接口 trait)。

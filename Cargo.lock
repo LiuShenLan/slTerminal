@@ -3,6 +3,12 @@
 version = 4
 
 [[package]]
+name = "ab_glyph_rasterizer"
+version = "0.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "366ffbaa4442f4684d91e2cd7c5ea7c4ed8add41959a31447066e279e432b618"
+
+[[package]]
 name = "accesskit"
 version = "0.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -127,6 +133,19 @@ dependencies = [
  "cipher",
  "cpufeatures 0.2.17",
  "zeroize",
+]
+
+[[package]]
+name = "ahash"
+version = "0.8.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a15f179cd60c4584b8a8c596927aadc462e27f2ca70c04e0071964a73ba7a75"
+dependencies = [
+ "cfg-if",
+ "getrandom 0.3.4",
+ "once_cell",
+ "version_check",
+ "zerocopy",
 ]
 
 [[package]]
@@ -4993,6 +5012,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "pulldown-latex"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3b8bc0583825170e3f560701d966dc2f0e3a16946da371e37d30d3ad7207fb7e"
+dependencies = [
+ "bumpalo",
+]
+
+[[package]]
 name = "pulp"
 version = "0.22.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6179,6 +6207,8 @@ dependencies = [
 name = "slterm"
 version = "0.0.0"
 dependencies = [
+ "ab_glyph_rasterizer",
+ "ahash",
  "anyhow",
  "base64",
  "bitflags 2.13.2",
@@ -6194,6 +6224,7 @@ dependencies = [
  "log",
  "markdown",
  "notify",
+ "pulldown-latex",
  "raw-window-handle",
  "regex",
  "serde",
@@ -6207,6 +6238,8 @@ dependencies = [
  "tempfile",
  "toml 0.8.23",
  "toml_edit 0.25.17+spec-1.1.0",
+ "ttf-parser",
+ "unicode-width",
  "vte",
  "windows-sys 0.59.0",
  "zeroize",
