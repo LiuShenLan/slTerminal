@@ -32,7 +32,7 @@ pub use notifications::NotificationDuration;
 mod paths;
 pub use paths::{settings_dir, settings_path};
 mod reset;
-pub use reset::restore_default_settings;
+pub use reset::{restore_default_settings, restore_default_settings_at};
 mod scrolling;
 pub use scrolling::{
     DEFAULT_SCROLL_SPEED, DEFAULT_SCROLLBACK_LINES, MAX_SCROLL_SPEED, MIN_SCROLL_SPEED,

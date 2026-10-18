@@ -6,6 +6,7 @@
 pub mod dirs;
 pub(crate) mod elevation;
 pub(crate) mod keyboard;
+pub(crate) mod locale;
 pub(crate) mod process;
 pub(crate) mod process_snapshot;
 pub(crate) mod startup;

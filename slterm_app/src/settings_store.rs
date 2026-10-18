@@ -23,7 +23,6 @@ use slterm_settings::{MAX_PERSIST_BYTES, RawSettings, keys, settings_path};
 
 /// settings.json 读侧三态结果。`corrupted = true` 表示数据来自 .bak 或
 /// 默认回退(损坏原件已隔离),设置页据此显示警示条(M6.2 消费)。
-#[allow(dead_code)] // 消费点:06 篇 M6.2 设置页启动读取与损坏警示条。
 pub(crate) struct LoadResult {
     pub(crate) data: RawSettings,
     pub(crate) corrupted: bool,
@@ -35,13 +34,11 @@ pub(crate) struct LoadResult {
 static SAVE_LOCK: Mutex<()> = Mutex::new(());
 
 /// 读取设置(生产入口)。IO 错误向上传播,不把权限/磁盘故障当默认值。
-#[allow(dead_code)] // 消费点:06 篇 M6.2 设置页启动读取。
 pub(crate) fn load_settings() -> io::Result<LoadResult> {
     load_settings_at(&settings_path())
 }
 
 /// 显式路径读入口(测试注入与工作区导入共用)。
-#[allow(dead_code)] // 测试注入路径;生产入口见 load_settings。
 pub(crate) fn load_settings_at(path: &Path) -> io::Result<LoadResult> {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
@@ -75,7 +72,6 @@ pub(crate) fn save_settings_blocking(updates: &[(&str, Value)]) -> io::Result<()
 
 /// 显式路径写入口:校验 → 保存锁 → 读现有 → 段级浅合并 → 大小上限 →
 /// .bak 备份 → 临时文件 + 原子替换。
-#[allow(dead_code)] // 测试注入路径;生产入口见 save_settings_blocking。
 pub(crate) fn save_settings_blocking_at(path: &Path, updates: &[(&str, Value)]) -> io::Result<()> {
     validate_updates(updates)?;
     let _guard = SAVE_LOCK

@@ -81,6 +81,8 @@ windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     # MonitorFromPoint(开窗前 DPI 预取)。
     "Win32_Graphics_Gdi",
+    # 系统 locale 探测(GetUserDefaultLocaleName):界面语言 System 档协商。
+    "Win32_Globalization",
     # console 归一化(SetConsoleCtrlHandler)与 panic 报告的 GetConsoleCP。
     "Win32_System_Console",
     # 提权态探针(OpenProcessToken 的 TOKEN_QUERY + TokenElevation)。

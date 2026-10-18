@@ -219,6 +219,49 @@ impl TerminalView {
     /// 与旧壳 `Cursor::default().blink_interval` 保持一致。
     const CURSOR_BLINK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(750);
 
+    /// 设置热应用:字体四族/字号/连字/选中复制/调色板即时生效。
+    ///
+    /// 字体度量变化属结构性几何变化(`mark_structural_resize`),下一帧
+    /// 网格观测直接同步 Term 与 ConPTY,不进尾沿去抖;仅调色板/复制语义
+    /// 变化只重绘。
+    pub fn apply_settings(&mut self, settings: &Settings, cx: &mut Context<'_, Self>) {
+        let font_changed = self.font.family.as_ref() != settings.font_family.as_str()
+            || (self.font_size.as_f32() - settings.font_size_px).abs() > f32::EPSILON
+            || self.ligatures != settings.ligatures;
+        self.font = mono_font(
+            &settings.font_family,
+            FontWeight::NORMAL,
+            FontStyle::Normal,
+            settings.ligatures,
+        );
+        self.font_bold = mono_font(
+            &settings.font_bold_family,
+            FontWeight::BOLD,
+            FontStyle::Normal,
+            settings.ligatures,
+        );
+        self.font_italic = mono_font(
+            &settings.font_italic_family,
+            FontWeight::NORMAL,
+            FontStyle::Italic,
+            settings.ligatures,
+        );
+        self.font_bold_italic = mono_font(
+            &settings.font_bold_italic_family,
+            FontWeight::BOLD,
+            FontStyle::Italic,
+            settings.ligatures,
+        );
+        self.font_size = px(settings.font_size_px);
+        self.ligatures = settings.ligatures;
+        self.copy_on_select = settings.copy_on_select;
+        self.palette = Arc::new(settings.palette.clone());
+        if font_changed {
+            self.mark_structural_resize();
+        }
+        cx.notify();
+    }
+
     pub(super) fn cell_width_for_advance(&self, raw_width: f32, scale: f32) -> Pixels {
         typography::effective_cell_width(raw_width, M3_CELL_WIDTH_MODE, scale, self.font_offset_x)
     }

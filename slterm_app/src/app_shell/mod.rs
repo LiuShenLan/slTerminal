@@ -25,6 +25,8 @@ pub(crate) mod assets;
 pub(crate) mod config;
 // 布局转换对(「布局单点」);消费点 = M5.5 快照/恢复闭环。
 pub(crate) mod session_restore;
+// GUI 设置页(06 篇):左导航 + 右表单 + 路由式搜索 + 统一写通道。
+pub(crate) mod settings_pane;
 pub(crate) mod theme;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod ui_tests;

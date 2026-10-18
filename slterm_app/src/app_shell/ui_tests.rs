@@ -31,7 +31,7 @@ use slterm_terminal::event_loop::Msg as EventLoopMsg;
 fn bootstrap(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_component::init(cx);
-        cx.set_global(super::config::Settings::load());
+        cx.set_global(super::config::Settings::default());
         super::theme::apply_dark_theme(cx);
         super::workspace::init(cx);
     });
@@ -445,6 +445,270 @@ fn screen_watchdog_identifies_agent_and_updates_status(cx: &mut TestAppContext) 
     window.run_until_parked();
     let status = workspace.read_with(cx, |ws, _| ws.agent_status(pane_id));
     assert_eq!(status, Some(crate::ai_agents::AgentStatus::Working));
+}
+
+// ── M6.2 设置页关键路径 ──
+
+/// 在临时数据目录打开设置 tab,返回设置页实体(不触碰真实 `%APPDATA%`)。
+fn open_settings_at(
+    cx: &mut TestAppContext,
+    workspace: &gpui::Entity<SltermWorkspace>,
+    window: &mut VisualTestContext,
+    path: std::path::PathBuf,
+) -> gpui::Entity<super::settings_pane::SettingsPane> {
+    window.update(|window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.open_settings_tab_at(path, window, cx);
+        });
+    });
+    window.run_until_parked();
+    workspace
+        .read_with(cx, |workspace, _| workspace.settings_pane_for_test())
+        .expect("设置 tab 必须已打开")
+}
+
+/// ActivityBar 配置钮 → 设置 tab;导航切换;返回工作区关闭设置 tab。
+#[gpui::test]
+fn settings_open_from_activity_bar_and_nav_switches_pages(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+    assert!(window.debug_bounds("sidebar-settings-btn").is_some());
+
+    click_selector(&mut window, "sidebar-settings-btn");
+    window.run_until_parked();
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+    assert!(
+        window.debug_bounds("settings-page-application").is_some(),
+        "默认落在应用页"
+    );
+    assert!(window.debug_bounds("settings-nav-appearance").is_some());
+
+    click_selector(&mut window, "settings-nav-appearance");
+    window.run_until_parked();
+    draw_frame(&mut window);
+    assert!(
+        window.debug_bounds("settings-page-appearance").is_some(),
+        "导航切换必须渲染外观页"
+    );
+    assert!(window.debug_bounds("settings-page-application").is_none());
+
+    click_selector(&mut window, "settings-back");
+    window.run_until_parked();
+    draw_frame(&mut window);
+    assert!(
+        window.debug_bounds("settings-page-appearance").is_none(),
+        "返回工作区必须关闭设置 tab"
+    );
+    assert!(
+        workspace
+            .read_with(cx, |workspace, _| workspace.settings_pane_for_test())
+            .is_none()
+    );
+}
+
+/// 三纪律之一/二:滑条拖动只改内存(不触盘),松手提交落盘;全局
+/// `Settings` 在预览阶段即热更新(滚轮消费同一份事实源)。
+#[gpui::test]
+fn settings_slider_previews_in_memory_and_release_commits(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("settings.json");
+    let pane = open_settings_at(cx, &workspace, &mut window, path.clone());
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+
+    pane.update(cx, |pane, cx| {
+        pane.preview_scroll_speed_for_test(2.0, cx);
+    });
+    assert!(!path.exists(), "预览阶段绝不落盘");
+    let (runtime_speed, global_speed) = cx.update(|cx| {
+        (
+            pane.read(cx).runtime_for_test().scroll_speed,
+            cx.global::<super::config::Settings>().scroll_speed,
+        )
+    });
+    assert_eq!(runtime_speed, 2.0, "预览必须即时更新运行时值");
+    assert_eq!(global_speed, 2.0, "预览必须热应用全局 Settings");
+
+    window.update(|window, cx| {
+        pane.update(cx, |pane, cx| {
+            pane.commit_scroll_speed_for_test(2.25, window, cx);
+        });
+    });
+    assert!(path.exists(), "松手提交必须落盘");
+    let tree = slterm_settings::json::parse(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(
+        tree.get("scrolling")
+            .and_then(|section| section.get("scroll_speed"))
+            .and_then(|value| value.as_f64()),
+        Some(2.25),
+        "归一化后的滚速写入 scrolling 段"
+    );
+    cx.update(|cx| {
+        assert_eq!(pane.read(cx).runtime_for_test().scroll_speed, 2.25);
+        assert!(pane.read(cx).status_for_test().is_none());
+    });
+}
+
+/// `Changed` 驱动热应用:字号提交后,已打开终端视图立即换字号(字体
+/// 度量变化走结构性 resize,不等下一 tab)。
+#[gpui::test]
+fn settings_font_size_change_hot_applies_to_open_terminals(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    let view = workspace.read_with(cx, |workspace, _| workspace.first_pane_view().unwrap());
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("settings.json");
+    let pane = open_settings_at(cx, &workspace, &mut window, path);
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+
+    window.update(|window, cx| {
+        pane.update(cx, |pane, cx| {
+            pane.save_text_for_test("font_size", "20", window, cx);
+        });
+    });
+    window.run_until_parked();
+    assert_eq!(
+        view.read_with(cx, |view, _| view.font_size),
+        px(20.0),
+        "已打开终端必须热应用新字号"
+    );
+    cx.update(|cx| {
+        assert_eq!(cx.global::<super::config::Settings>().font_size_px, 20.0);
+    });
+}
+
+/// 三纪律之三:写失败可感知 + 读回已存值复位控件(预览态不得残留)。
+#[gpui::test]
+fn settings_write_failure_rolls_back_the_slider_and_reports_status(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    let directory = tempfile::tempdir().unwrap();
+    // 路径是目录 → 读写通道均报错,写失败路径确定可复现。
+    let path = directory.path().join("settings.json");
+    std::fs::create_dir_all(&path).unwrap();
+    let pane = open_settings_at(cx, &workspace, &mut window, path);
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+
+    pane.update(cx, |pane, cx| pane.preview_scroll_speed_for_test(2.0, cx));
+    window.update(|window, cx| {
+        pane.update(cx, |pane, cx| {
+            pane.commit_scroll_speed_for_test(2.0, window, cx);
+        });
+    });
+    cx.update(|cx| {
+        let pane = pane.read(cx);
+        assert_eq!(
+            pane.runtime_for_test().scroll_speed,
+            1.0,
+            "写失败必须回滚到已存值"
+        );
+        assert_eq!(
+            pane.scroll_speed_slider_value_for_test(cx),
+            1.0,
+            "控件同步复位"
+        );
+        assert!(
+            pane.status_for_test()
+                .is_some_and(|status| status.is_error()),
+            "失败必须留下可感知的语义状态"
+        );
+        assert_eq!(cx.global::<super::config::Settings>().scroll_speed, 1.0);
+    });
+}
+
+/// 搜索是路由查找:查询命中跳到拥有该控件的页面,不是过滤当前页。
+#[gpui::test]
+fn settings_search_jumps_to_the_owning_page(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("settings.json");
+    open_settings_at(cx, &workspace, &mut window, path);
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+
+    click_selector(&mut window, "settings-search");
+    window.simulate_input("字体");
+    window.run_until_parked();
+    draw_frame(&mut window);
+    assert!(
+        window.debug_bounds("settings-page-appearance").is_some(),
+        "中文别名必须跳到外观页"
+    );
+    assert!(window.debug_bounds("settings-page-application").is_none());
+
+    // 清空查询后回到搜索前页面。
+    window.simulate_keystrokes("backspace backspace");
+    window.run_until_parked();
+    draw_frame(&mut window);
+    assert!(
+        window.debug_bounds("settings-page-application").is_some(),
+        "清空查询必须回到原页面"
+    );
+
+    click_selector(&mut window, "settings-search");
+    window.simulate_input("language");
+    window.run_until_parked();
+    draw_frame(&mut window);
+    assert!(
+        window.debug_bounds("settings-page-localization").is_some(),
+        "英文别名必须跳到语言页"
+    );
+}
+
+/// 值/显示分离:语言切换只刷显示项,控件实体身份不变(焦点/编辑值/
+/// undo/订阅不重建),同时语言值持久化。
+#[gpui::test]
+fn settings_language_switch_refreshes_display_without_rebuilding_controls(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("settings.json");
+    std::fs::write(&path, r#"{"appearance":{"language":"en-US"}}"#).unwrap();
+    let pane = open_settings_at(cx, &workspace, &mut window, path.clone());
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+
+    let before = cx.update(|cx| {
+        (
+            pane.read(cx)
+                .select_entity_id_for_test("language")
+                .expect("语言下拉必须存在"),
+            pane.read(cx)
+                .select_entity_id_for_test("bell")
+                .expect("铃铛下拉必须存在"),
+        )
+    });
+    window.update(|window, cx| {
+        pane.update(cx, |pane, cx| {
+            pane.commit_select_for_test("language", "zh-CN", window, cx);
+        });
+    });
+    cx.update(|cx| {
+        let pane = pane.read(cx);
+        assert_eq!(
+            pane.select_entity_id_for_test("language"),
+            Some(before.0),
+            "语言切换不得重建下拉实体"
+        );
+        assert_eq!(
+            pane.select_entity_id_for_test("bell"),
+            Some(before.1),
+            "其它下拉实体同样保留"
+        );
+        assert_eq!(
+            pane.runtime_for_test().language,
+            slterm_settings::LanguagePref::ZhCn
+        );
+    });
+    let tree = slterm_settings::json::parse(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(
+        tree.get("appearance")
+            .and_then(|section| section.get("language"))
+            .and_then(|value| value.as_str()),
+        Some("zh-CN")
+    );
 }
 
 // ── M5.3b 侧栏骨架 / 标题栏 / tab 动作 ──

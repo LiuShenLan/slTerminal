@@ -12,7 +12,7 @@ use gpui_component::Root;
 fn open(cx: &mut TestAppContext) -> (Entity<TerminalView>, VisualTestContext) {
     cx.update(|cx| {
         gpui_component::init(cx);
-        cx.set_global(Settings::load());
+        cx.set_global(Settings::default());
         crate::app_shell::theme::apply_dark_theme(cx);
     });
     let mut slot = None;

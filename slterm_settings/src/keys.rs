@@ -66,12 +66,30 @@ pub struct SettingsKeyDef {
     pub search_terms: &'static str,
 }
 
-const fn key(key: &'static str, domain: SettingsDomain) -> SettingsKeyDef {
+const fn key(
+    key: &'static str,
+    domain: SettingsDomain,
+    search_terms: &'static str,
+) -> SettingsKeyDef {
     SettingsKeyDef {
         key,
         domain,
         resettable: true,
-        search_terms: "",
+        search_terms,
+    }
+}
+
+/// 授权类键(重置保留)的注册条目;搜索别名与普通键同源登记。
+const fn protected(
+    key: &'static str,
+    domain: SettingsDomain,
+    search_terms: &'static str,
+) -> SettingsKeyDef {
+    SettingsKeyDef {
+        key,
+        domain,
+        resettable: false,
+        search_terms,
     }
 }
 
@@ -80,131 +98,309 @@ const fn key(key: &'static str, domain: SettingsDomain) -> SettingsKeyDef {
 /// 各使用点各自实例化(对账指针比较即依赖唯一实例)。
 pub static KEYS: &[SettingsKeyDef] = &[
     // ---- appearance:主题/字体/窗口材质/壁纸/卡几何/侧栏显示 ----
-    key("language", SettingsDomain::Appearance),
-    key("theme", SettingsDomain::Appearance),
-    key("font_family", SettingsDomain::Appearance),
-    key("font_family_cjk", SettingsDomain::Appearance),
-    key("ui_font_family", SettingsDomain::Appearance),
-    key("ui_font_size", SettingsDomain::Appearance),
-    key("font_size", SettingsDomain::Appearance),
-    key("density", SettingsDomain::Appearance),
-    key("tab_reveal", SettingsDomain::Appearance),
-    key("tab_close_visible", SettingsDomain::Appearance),
-    key("cjk_bold_regular", SettingsDomain::Appearance),
-    key("cell_width_mode", SettingsDomain::Appearance),
-    key("vcs_display", SettingsDomain::Appearance),
-    key("opacity", SettingsDomain::Appearance),
-    key("blur", SettingsDomain::Appearance),
-    key("background", SettingsDomain::Appearance),
-    key("theme_foreground", SettingsDomain::Appearance),
-    key("custom_theme", SettingsDomain::Appearance),
-    key("background_image", SettingsDomain::Appearance),
-    key("background_image_opacity", SettingsDomain::Appearance),
-    key("background_image_fit", SettingsDomain::Appearance),
-    key("background_image_alignment", SettingsDomain::Appearance),
-    key("background_image_cover_chrome", SettingsDomain::Appearance),
-    key("pane_card_radius", SettingsDomain::Appearance),
-    key("pane_card_gutter", SettingsDomain::Appearance),
-    key("pane_card_shadow", SettingsDomain::Appearance),
-    key("pane_card_divider", SettingsDomain::Appearance),
+    key(
+        "language",
+        SettingsDomain::Appearance,
+        "language 语言 locale 本地化",
+    ),
+    key(
+        "theme",
+        SettingsDomain::Appearance,
+        "theme 主题 colors 配色",
+    ),
+    key(
+        "font_family",
+        SettingsDomain::Appearance,
+        "font 字体 family 字族",
+    ),
+    key(
+        "font_family_cjk",
+        SettingsDomain::Appearance,
+        "cjk font 中文字体",
+    ),
+    key(
+        "ui_font_family",
+        SettingsDomain::Appearance,
+        "ui font 界面字体",
+    ),
+    key(
+        "ui_font_size",
+        SettingsDomain::Appearance,
+        "ui size 界面字号",
+    ),
+    key("font_size", SettingsDomain::Appearance, "font size 字号"),
+    key(
+        "density",
+        SettingsDomain::Appearance,
+        "density 密度 spacing 间距",
+    ),
+    key(
+        "tab_reveal",
+        SettingsDomain::Appearance,
+        "tab reveal 标签动画",
+    ),
+    key(
+        "tab_close_visible",
+        SettingsDomain::Appearance,
+        "close button 关闭按钮",
+    ),
+    key(
+        "cjk_bold_regular",
+        SettingsDomain::Appearance,
+        "cjk bold 中文粗体",
+    ),
+    key(
+        "cell_width_mode",
+        SettingsDomain::Appearance,
+        "cell width 字宽",
+    ),
+    key(
+        "vcs_display",
+        SettingsDomain::Appearance,
+        "vcs git 版本控制",
+    ),
+    key("opacity", SettingsDomain::Appearance, "opacity 不透明度"),
+    key(
+        "blur",
+        SettingsDomain::Appearance,
+        "blur 模糊 material 材质",
+    ),
+    key(
+        "background",
+        SettingsDomain::Appearance,
+        "background 背景色",
+    ),
+    key(
+        "theme_foreground",
+        SettingsDomain::Appearance,
+        "foreground 前景色",
+    ),
+    key(
+        "custom_theme",
+        SettingsDomain::Appearance,
+        "custom theme 自定义主题",
+    ),
+    key(
+        "background_image",
+        SettingsDomain::Appearance,
+        "wallpaper 壁纸 image 图片",
+    ),
+    key(
+        "background_image_opacity",
+        SettingsDomain::Appearance,
+        "wallpaper opacity 壁纸透明度",
+    ),
+    key(
+        "background_image_fit",
+        SettingsDomain::Appearance,
+        "wallpaper fit 壁纸适应",
+    ),
+    key(
+        "background_image_alignment",
+        SettingsDomain::Appearance,
+        "wallpaper alignment 壁纸对齐",
+    ),
+    key(
+        "background_image_cover_chrome",
+        SettingsDomain::Appearance,
+        "wallpaper chrome 壁纸铺满",
+    ),
+    key(
+        "pane_card_radius",
+        SettingsDomain::Appearance,
+        "card radius 圆角",
+    ),
+    key(
+        "pane_card_gutter",
+        SettingsDomain::Appearance,
+        "card gutter 卡缝",
+    ),
+    key(
+        "pane_card_shadow",
+        SettingsDomain::Appearance,
+        "card shadow 投影",
+    ),
+    key(
+        "pane_card_divider",
+        SettingsDomain::Appearance,
+        "divider 分界线",
+    ),
     // ---- scrolling:回滚与滚速 ----
-    key("scrollback_lines", SettingsDomain::Scrolling),
-    key("scroll_speed", SettingsDomain::Scrolling),
+    key(
+        "scrollback_lines",
+        SettingsDomain::Scrolling,
+        "scrollback history 回滚行数",
+    ),
+    key(
+        "scroll_speed",
+        SettingsDomain::Scrolling,
+        "scroll speed 滚动速度 wheel 滚轮",
+    ),
     // ---- interaction:光标/输入/剪贴/响铃/补全/标签行为 ----
-    key("cursor_shape", SettingsDomain::Interaction),
-    key("cursor_blink", SettingsDomain::Interaction),
-    key("cursor_motion", SettingsDomain::Interaction),
-    key("copy_on_select", SettingsDomain::Interaction),
-    key("focus_follows_mouse", SettingsDomain::Interaction),
-    key("dim_inactive_panes", SettingsDomain::Interaction),
-    key("multiline_paste_confirm", SettingsDomain::Interaction),
-    key("ligatures", SettingsDomain::Interaction),
-    key("bell", SettingsDomain::Interaction),
-    key("ctrl_wheel_font_zoom", SettingsDomain::Interaction),
-    key("ghost", SettingsDomain::Interaction),
-    key("accept", SettingsDomain::Interaction),
-    key("completion_style", SettingsDomain::Interaction),
-    key("new_tab_position", SettingsDomain::Interaction),
-    key("panel_resize", SettingsDomain::Interaction),
+    key(
+        "cursor_shape",
+        SettingsDomain::Interaction,
+        "cursor shape 光标形状",
+    ),
+    key(
+        "cursor_blink",
+        SettingsDomain::Interaction,
+        "cursor blink 光标闪烁",
+    ),
+    key(
+        "cursor_motion",
+        SettingsDomain::Interaction,
+        "cursor motion 平滑光标",
+    ),
+    key(
+        "copy_on_select",
+        SettingsDomain::Interaction,
+        "copy on select 选中复制",
+    ),
+    key(
+        "focus_follows_mouse",
+        SettingsDomain::Interaction,
+        "focus follows mouse 焦点跟随鼠标",
+    ),
+    key(
+        "dim_inactive_panes",
+        SettingsDomain::Interaction,
+        "dim inactive 压暗分屏",
+    ),
+    key(
+        "multiline_paste_confirm",
+        SettingsDomain::Interaction,
+        "paste confirm 粘贴确认",
+    ),
+    key("ligatures", SettingsDomain::Interaction, "ligatures 连字"),
+    key("bell", SettingsDomain::Interaction, "bell 铃声"),
+    key(
+        "ctrl_wheel_font_zoom",
+        SettingsDomain::Interaction,
+        "ctrl wheel zoom 滚轮缩放",
+    ),
+    key("ghost", SettingsDomain::Interaction, "ghost 命令补全"),
+    key("accept", SettingsDomain::Interaction, "accept key 接受键"),
+    key(
+        "completion_style",
+        SettingsDomain::Interaction,
+        "completion style 补全样式",
+    ),
+    key(
+        "new_tab_position",
+        SettingsDomain::Interaction,
+        "new tab 新标签位置",
+    ),
+    key(
+        "panel_resize",
+        SettingsDomain::Interaction,
+        "panel resize 侧栏宽度",
+    ),
     // ---- session:启动与会话恢复 ----
-    key("shell", SettingsDomain::Session),
-    key("startup_directory", SettingsDomain::Session),
-    key("keep_session", SettingsDomain::Session),
-    key("restore_session", SettingsDomain::Session),
-    key("resume_ai", SettingsDomain::Session),
-    key("silent_start", SettingsDomain::Session),
-    key("launch_at_login", SettingsDomain::Session),
-    key("fetch", SettingsDomain::Session),
+    key("shell", SettingsDomain::Session, "shell 默认终端"),
+    key(
+        "startup_directory",
+        SettingsDomain::Session,
+        "startup directory 启动目录",
+    ),
+    key(
+        "keep_session",
+        SettingsDomain::Session,
+        "keep session 保留会话",
+    ),
+    key(
+        "restore_session",
+        SettingsDomain::Session,
+        "restore session 恢复会话",
+    ),
+    key("resume_ai", SettingsDomain::Session, "resume ai 接续对话"),
+    key(
+        "silent_start",
+        SettingsDomain::Session,
+        "silent start 静默启动",
+    ),
+    key(
+        "launch_at_login",
+        SettingsDomain::Session,
+        "launch at login 开机启动",
+    ),
+    key("fetch", SettingsDomain::Session, "fetch 欢迎屏"),
     // ---- system:系统联动/环境/通知/更新 ----
-    key("terminal_proxy", SettingsDomain::System),
-    key("refresh_environment", SettingsDomain::System),
-    key("ai_toasts", SettingsDomain::System),
-    key("notification_duration", SettingsDomain::System),
-    key("tray", SettingsDomain::System),
-    key("auto_check_updates", SettingsDomain::System),
-    key("auto_download_updates", SettingsDomain::System),
+    key("terminal_proxy", SettingsDomain::System, "proxy 代理"),
+    key(
+        "refresh_environment",
+        SettingsDomain::System,
+        "environment 环境变量 refresh 刷新",
+    ),
+    key("ai_toasts", SettingsDomain::System, "ai toast 消息通知"),
+    key(
+        "notification_duration",
+        SettingsDomain::System,
+        "notification duration 通知时长",
+    ),
+    key("tray", SettingsDomain::System, "tray 托盘"),
+    key(
+        "auto_check_updates",
+        SettingsDomain::System,
+        "update 更新 check 检查",
+    ),
+    key(
+        "auto_download_updates",
+        SettingsDomain::System,
+        "download 下载更新",
+    ),
     // ---- agent_hooks:AI CLI 接入授权(resettable=false,重置保留选择)----
     // 键名单源在 `AgentHook::settings_key`,此处引用常量防双源漂移。
-    SettingsKeyDef {
-        key: AgentHook::GLOBAL_SETTINGS_KEY,
-        domain: SettingsDomain::AgentHooks,
-        resettable: false,
-        search_terms: "",
-    },
-    SettingsKeyDef {
-        key: AgentHook::Claude.settings_key(),
-        domain: SettingsDomain::AgentHooks,
-        resettable: false,
-        search_terms: "",
-    },
-    SettingsKeyDef {
-        key: AgentHook::Codex.settings_key(),
-        domain: SettingsDomain::AgentHooks,
-        resettable: false,
-        search_terms: "",
-    },
-    SettingsKeyDef {
-        key: AgentHook::OpenCode.settings_key(),
-        domain: SettingsDomain::AgentHooks,
-        resettable: false,
-        search_terms: "",
-    },
-    SettingsKeyDef {
-        key: AgentHook::Pi.settings_key(),
-        domain: SettingsDomain::AgentHooks,
-        resettable: false,
-        search_terms: "",
-    },
-    SettingsKeyDef {
-        key: AgentHook::Copilot.settings_key(),
-        domain: SettingsDomain::AgentHooks,
-        resettable: false,
-        search_terms: "",
-    },
-    SettingsKeyDef {
-        key: AgentHook::Grok.settings_key(),
-        domain: SettingsDomain::AgentHooks,
-        resettable: false,
-        search_terms: "",
-    },
-    SettingsKeyDef {
-        key: AgentHook::OhMyPi.settings_key(),
-        domain: SettingsDomain::AgentHooks,
-        resettable: false,
-        search_terms: "",
-    },
-    SettingsKeyDef {
-        key: AgentHook::Cursor.settings_key(),
-        domain: SettingsDomain::AgentHooks,
-        resettable: false,
-        search_terms: "",
-    },
-    SettingsKeyDef {
-        key: AgentHook::Kimi.settings_key(),
-        domain: SettingsDomain::AgentHooks,
-        resettable: false,
-        search_terms: "",
-    },
+    protected(
+        AgentHook::GLOBAL_SETTINGS_KEY,
+        SettingsDomain::AgentHooks,
+        "agent hook 智能体钩子 接入",
+    ),
+    protected(
+        AgentHook::Claude.settings_key(),
+        SettingsDomain::AgentHooks,
+        "claude hook 接入",
+    ),
+    protected(
+        AgentHook::Codex.settings_key(),
+        SettingsDomain::AgentHooks,
+        "codex hook 接入",
+    ),
+    protected(
+        AgentHook::OpenCode.settings_key(),
+        SettingsDomain::AgentHooks,
+        "opencode hook 接入",
+    ),
+    protected(
+        AgentHook::Pi.settings_key(),
+        SettingsDomain::AgentHooks,
+        "pi hook 接入",
+    ),
+    protected(
+        AgentHook::Copilot.settings_key(),
+        SettingsDomain::AgentHooks,
+        "copilot hook 接入",
+    ),
+    protected(
+        AgentHook::Grok.settings_key(),
+        SettingsDomain::AgentHooks,
+        "grok hook 接入",
+    ),
+    protected(
+        AgentHook::OhMyPi.settings_key(),
+        SettingsDomain::AgentHooks,
+        "oh my pi hook 接入",
+    ),
+    protected(
+        AgentHook::Cursor.settings_key(),
+        SettingsDomain::AgentHooks,
+        "cursor hook 接入",
+    ),
+    protected(
+        AgentHook::Kimi.settings_key(),
+        SettingsDomain::AgentHooks,
+        "kimi hook 接入",
+    ),
 ];
 
 /// 域外顶层段键名:keybind(07 篇锚定结构;写通道整表替换)。
@@ -243,6 +439,13 @@ pub fn whitelist() -> impl Iterator<Item = &'static str> {
 /// 重置删除清单:resettable=true 的全部键。
 pub fn reset_keys() -> impl Iterator<Item = &'static str> {
     KEYS.iter().filter(|def| def.resettable).map(|def| def.key)
+}
+
+/// 设置页搜索索引:键名 + 域归属 + 中英别名串(设置页路由查找消费)。
+/// 导航元数据从键注册表导出,不另立平行字面量表。
+pub fn search_index() -> impl Iterator<Item = (&'static str, SettingsDomain, &'static str)> {
+    KEYS.iter()
+        .map(|def| (def.key, def.domain, def.search_terms))
 }
 
 #[cfg(test)]
@@ -333,6 +536,20 @@ mod registry_tests {
         for key in whitelist() {
             assert!(!is_external_segment(key), "域外段混入 leaf 白名单: {key}");
         }
+    }
+
+    /// 搜索别名登记完备性:每个键至少一条中英别名,索引与白名单同集。
+    /// 新键忘登记别名 = 搜索路由无声漏键,此用例即红。
+    #[test]
+    fn every_registered_key_exports_a_non_empty_search_alias() {
+        let mut indexed = HashSet::new();
+        for (key, domain, terms) in search_index() {
+            assert!(indexed.insert(key), "搜索索引重复键: {key}");
+            assert!(!terms.trim().is_empty(), "键 {key} 缺搜索别名");
+            assert_eq!(lookup(key).map(|def| def.domain), Some(domain));
+        }
+        let whitelisted: HashSet<_> = whitelist().collect();
+        assert_eq!(indexed, whitelisted, "搜索索引与 leaf 白名单必须同集");
     }
 
     #[test]

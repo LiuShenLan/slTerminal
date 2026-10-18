@@ -21,7 +21,7 @@ use gpui::{
     MouseMoveEvent, ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _,
     div, px,
 };
-use gpui_component::ActiveTheme as _;
+use gpui_component::{ActiveTheme as _, Icon, IconName};
 use serde::{Deserialize, Serialize};
 
 use super::SltermWorkspace;
@@ -365,6 +365,31 @@ impl SltermWorkspace {
                         this.toggle_sidebar_view(def.id, cx);
                     }))
             }))
+            // 底部配置钮:设置 tab 的唯一常驻入口(05 篇 M5.3b 登记项)。
+            .child(div().flex_1())
+            .child(
+                div()
+                    .id("sidebar-settings-btn")
+                    .debug_selector(|| "sidebar-settings-btn".to_owned())
+                    .w(px(34.0))
+                    .h(px(34.0))
+                    .mb(px(4.0))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(6.0))
+                    .cursor_pointer()
+                    .text_color(cx.theme().muted_foreground)
+                    .hover({
+                        let hover_bg = cx.theme().list_hover;
+                        move |button| button.bg(hover_bg)
+                    })
+                    .child(Icon::new(IconName::Settings).size(px(16.0)))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_settings_tab(window, cx);
+                    })),
+            )
             .into_any_element()
     }
 

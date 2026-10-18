@@ -121,12 +121,16 @@ impl SltermWorkspace {
         let mut tabs = Vec::new();
         let mut active_out = 0usize;
         for (ix, entry) in self.tabs.iter().enumerate() {
+            // 快照只收 Terminal tab(05 篇合同):设置/文档类 tab 不进会话。
             let WorkspaceTab::Terminal {
                 panes,
                 tree,
                 focused,
                 ..
-            } = &entry.tab;
+            } = &entry.tab
+            else {
+                continue;
+            };
             if ix == self.active {
                 active_out = tabs.len();
             }

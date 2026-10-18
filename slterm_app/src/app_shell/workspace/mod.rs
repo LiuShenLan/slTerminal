@@ -51,6 +51,7 @@ use slterm_split::{
 };
 
 use super::SltermShellEvent;
+use super::settings_pane::{SettingsPane, SettingsPaneEvent};
 use super::windowing::{WorkspaceStartup, startup_geometry};
 use crate::agent_host::AgentHub;
 use crate::ai_hook::AiHookEvent;
@@ -80,6 +81,7 @@ gpui::actions!(
         SelectPreviousTab,
         CloseActiveTab,
         ToggleSidebar,
+        OpenSettings,
     ]
 );
 
@@ -95,8 +97,11 @@ pub struct TerminalPane {
     _subscription: Subscription,
 }
 
-/// 唯一合法 tab 类型集(面板封闭的 Rust 落点)。M5.3 只有 Terminal 变体;
-/// Settings/Document/Code 等变体归 06/07 篇按片落地。
+/// 唯一合法 tab 类型集(面板封闭的 Rust 落点)。本阶段 Terminal +
+/// Settings 两个变体;Document/Code 归 07 篇按片落地。
+///
+/// Settings 是**单例 tab**:再次打开只激活既有实例,不新建;不进会话
+/// 快照(05 篇合同:快照只收 Terminal tab)。
 pub enum WorkspaceTab {
     Terminal {
         /// 实体属主,无序按 id 查。见模块头生命周期合同。
@@ -107,6 +112,12 @@ pub enum WorkspaceTab {
         focused: PaneId,
         /// 聚焦 pane 满卡(内存态,快照不含);任何结构性操作先解除。
         zoomed: bool,
+    },
+    Settings {
+        /// 设置页实体(单例;写通道与渲染态在其内部)。
+        view: Entity<SettingsPane>,
+        /// 宿主事件订阅(Changed/Close);随 tab 一起释放。
+        _subscription: Subscription,
     },
 }
 
@@ -391,6 +402,7 @@ impl SltermWorkspace {
                         let view = pane.view.read(cx);
                         (!view.cwd.is_empty()).then(|| PathBuf::from(&view.cwd))
                     }),
+                WorkspaceTab::Settings { .. } => None,
             });
         self.add_terminal_tab(cwd, None, false, window, cx);
     }
@@ -427,20 +439,144 @@ impl SltermWorkspace {
         cx.notify();
     }
 
+    /// 打开设置 tab(单例):已存在则只激活;不存在则新建并订阅写盘/关闭
+    /// 事件。生产路径用数据目录 settings.json。
+    pub(crate) fn open_settings_tab(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        self.open_settings_tab_inner(None, window, cx);
+    }
+
+    /// 显式路径打开设置 tab(测试 tempdir 隔离;生产经 `open_settings_tab`)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn open_settings_tab_at(
+        &mut self,
+        settings_path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.open_settings_tab_inner(Some(settings_path), window, cx);
+    }
+
+    fn open_settings_tab_inner(
+        &mut self,
+        settings_path: Option<PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if let Some(index) = self
+            .tabs
+            .iter()
+            .position(|entry| matches!(entry.tab, WorkspaceTab::Settings { .. }))
+        {
+            self.active = index;
+            self.focus_active(window, cx);
+            self.sync_window_title(window, cx);
+            cx.notify();
+            return;
+        }
+        let view = match settings_path {
+            Some(path) => cx.new(|cx| SettingsPane::new_at(path, window, cx)),
+            None => cx.new(|cx| SettingsPane::new(window, cx)),
+        };
+        let subscription = cx.subscribe_in(&view, window, Self::on_settings_event);
+        let tab_id = TabId(self.next_tab);
+        self.next_tab = self.next_tab.saturating_add(1);
+        self.tabs.push(TabEntry {
+            id: tab_id,
+            tab: WorkspaceTab::Settings {
+                view,
+                _subscription: subscription,
+            },
+            meta: TabMeta::default(),
+        });
+        self.active = self.tabs.len() - 1;
+        self.focus_active(window, cx);
+        self.sync_window_title(window, cx);
+        cx.notify();
+    }
+
+    /// 设置页事件:写盘成功 = 刷新窗口(终端消费字段由全局 Settings 承载);
+    /// 关闭 = 摘除设置 tab。
+    fn on_settings_event(
+        &mut self,
+        view: &Entity<SettingsPane>,
+        event: &SettingsPaneEvent,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        match event {
+            SettingsPaneEvent::Changed => {
+                // 全局 `Settings` 已由设置页写入;这里把已消费字段扇出到
+                // 每个终端视图(字体/字号/连字/选中复制/调色板热应用)。
+                let settings = cx.global::<crate::app_shell::config::Settings>().clone();
+                self.apply_settings_to_terminals(&settings, cx);
+                self.sync_window_title(window, cx);
+                cx.refresh_windows();
+                cx.notify();
+            }
+            SettingsPaneEvent::Close => self.close_settings_tab(view, window, cx),
+        }
+    }
+
+    fn apply_settings_to_terminals(
+        &self,
+        settings: &crate::app_shell::config::Settings,
+        cx: &mut App,
+    ) {
+        let views: Vec<Entity<TerminalView>> = self
+            .tabs
+            .iter()
+            .filter_map(|entry| match &entry.tab {
+                WorkspaceTab::Terminal { panes, .. } => Some(panes),
+                WorkspaceTab::Settings { .. } => None,
+            })
+            .flat_map(|panes| panes.iter().map(|pane| pane.view.clone()))
+            .collect();
+        for view in views {
+            view.update(cx, |view, cx| view.apply_settings(settings, cx));
+        }
+    }
+
+    fn close_settings_tab(
+        &mut self,
+        view: &Entity<SettingsPane>,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(index) = self.tabs.iter().position(
+            |entry| matches!(&entry.tab, WorkspaceTab::Settings { view: open, .. } if open == view),
+        ) else {
+            return;
+        };
+        self.remove_tab_entry(index);
+        if self.tabs.is_empty() {
+            // 设置 tab 是最后一个 tab:关设置 = 关窗(单窗定位)。
+            self.save_on_tabs_closed(window, cx);
+            window.remove_window();
+            return;
+        }
+        if index <= self.active {
+            self.active = self.active.saturating_sub(1).min(self.tabs.len() - 1);
+        }
+        self.focus_active(window, cx);
+        self.sync_window_title(window, cx);
+        cx.notify();
+    }
+
     /// 关闭活跃 tab:逐 pane 显式 shutdown,不留孤儿 PTY;最后一个 tab
-    /// 关闭 = 关窗(单窗产品定位)。
+    /// 关闭 = 关窗(单窗产品定位)。设置 tab 无 pane,直接摘除。
     fn close_active_tab(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
         let Some(entry) = self.tabs.get(self.active) else {
             return;
         };
-        let WorkspaceTab::Terminal { panes, .. } = &entry.tab;
-        let views: Vec<_> = panes.iter().map(|pane| pane.view.clone()).collect();
-        let ids: Vec<_> = panes.iter().map(|pane| pane.id).collect();
-        for view in &views {
-            view.read(cx).shutdown();
-        }
-        for id in ids {
-            self.forget_pane(id);
+        if let WorkspaceTab::Terminal { panes, .. } = &entry.tab {
+            let views: Vec<_> = panes.iter().map(|pane| pane.view.clone()).collect();
+            let ids: Vec<_> = panes.iter().map(|pane| pane.id).collect();
+            for view in &views {
+                view.read(cx).shutdown();
+            }
+            for id in ids {
+                self.forget_pane(id);
+            }
         }
         self.remove_tab_entry(self.active);
         if self.tabs.is_empty() {
@@ -572,6 +708,7 @@ impl SltermWorkspace {
                 .map(|pane| pane.view.read(cx).title.clone())
                 .filter(|title| !title.is_empty())
                 .unwrap_or_else(|| "shell".to_owned()),
+            WorkspaceTab::Settings { view, .. } => view.read(cx).title(cx).to_string(),
         }
     }
 
@@ -639,7 +776,9 @@ impl SltermWorkspace {
     ) -> Option<PaneId> {
         let active = self.active;
         let entry = self.tabs.get(active)?;
-        let WorkspaceTab::Terminal { panes, focused, .. } = &entry.tab;
+        let WorkspaceTab::Terminal { panes, focused, .. } = &entry.tab else {
+            return None;
+        };
         let focused = *focused;
         let anchor = panes.iter().find(|pane| pane.id == focused)?;
         let (cols, rows, cwd) = {
@@ -661,18 +800,23 @@ impl SltermWorkspace {
 
         let attached = match self.tabs.get_mut(active) {
             Some(entry) => {
-                let WorkspaceTab::Terminal {
+                if let WorkspaceTab::Terminal {
                     panes,
                     tree,
                     focused,
                     zoomed,
-                } = &mut entry.tab;
-                // 建树挂不上 = 失败路径:立即回收 pane,不留孤儿 PTY。
-                if tree.split_leaf(*focused, new_id, direction, 0.5) {
-                    panes.push(pane);
-                    *focused = new_id;
-                    *zoomed = false;
-                    true
+                } = &mut entry.tab
+                {
+                    // 建树挂不上 = 失败路径:立即回收 pane,不留孤儿 PTY。
+                    if tree.split_leaf(*focused, new_id, direction, 0.5) {
+                        panes.push(pane);
+                        *focused = new_id;
+                        *zoomed = false;
+                        true
+                    } else {
+                        pane.view.read(cx).shutdown();
+                        false
+                    }
                 } else {
                     pane.view.read(cx).shutdown();
                     false
@@ -705,7 +849,9 @@ impl SltermWorkspace {
         let Some(entry) = self.tabs.get(tab_ix) else {
             return;
         };
-        let WorkspaceTab::Terminal { panes, .. } = &entry.tab;
+        let WorkspaceTab::Terminal { panes, .. } = &entry.tab else {
+            return;
+        };
         let views: Vec<_> = panes.iter().map(|pane| pane.view.clone()).collect();
         for view in views {
             view.update(cx, |view, _| view.mark_structural_resize());
@@ -742,6 +888,7 @@ impl SltermWorkspace {
                 .iter()
                 .find(|pane| pane.view == *view)
                 .map(|pane| pane.id),
+            WorkspaceTab::Settings { .. } => None,
         })
     }
 
@@ -750,11 +897,13 @@ impl SltermWorkspace {
     fn close_pane(&mut self, pane_id: PaneId, window: &mut Window, cx: &mut Context<'_, Self>) {
         let Some(tab_index) = self.tabs.iter().position(|entry| match &entry.tab {
             WorkspaceTab::Terminal { tree, .. } => tree.contains(pane_id),
+            WorkspaceTab::Settings { .. } => false,
         }) else {
             return;
         };
         let outcome = match &mut self.tabs[tab_index].tab {
             WorkspaceTab::Terminal { tree, .. } => tree.remove_leaf(pane_id),
+            WorkspaceTab::Settings { .. } => return,
         };
         match outcome {
             RemoveOutcome::NotFound => {}
@@ -786,7 +935,10 @@ impl SltermWorkspace {
                         focused,
                         zoomed,
                         ..
-                    } = &mut self.tabs[tab_index].tab;
+                    } = &mut self.tabs[tab_index].tab
+                    else {
+                        return;
+                    };
                     if let Some(position) = panes.iter().position(|pane| pane.id == pane_id) {
                         let pane = panes.remove(position);
                         // 被摘 pane 立即显式 shutdown,不等 Drop 兜底。
@@ -820,6 +972,7 @@ impl SltermWorkspace {
             .get(tab_index)
             .map(|entry| match &entry.tab {
                 WorkspaceTab::Terminal { panes, .. } => panes.as_slice(),
+                WorkspaceTab::Settings { .. } => &[],
             })
             .unwrap_or(&[])
             .iter()
@@ -844,7 +997,10 @@ impl SltermWorkspace {
                 focused,
                 zoomed,
                 ..
-            } = &mut entry.tab;
+            } = &mut entry.tab
+            else {
+                return;
+            };
             if !panes.iter().any(|pane| pane.id == pane_id) || *focused == pane_id {
                 return;
             }
@@ -877,7 +1033,10 @@ impl SltermWorkspace {
                 focused,
                 zoomed,
                 ..
-            } = &entry.tab;
+            } = &entry.tab
+            else {
+                return;
+            };
             if panes.len() < 2 {
                 return;
             }
@@ -934,7 +1093,10 @@ impl SltermWorkspace {
             tree,
             focused,
             zoomed,
-        } = &entry.tab;
+        } = &entry.tab
+        else {
+            return None;
+        };
         Some((
             panes.iter().map(|pane| pane.id).collect(),
             tree.leaves(),
@@ -947,7 +1109,9 @@ impl SltermWorkspace {
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) fn tab_snapshot(&self, index: usize) -> Option<(Vec<PaneId>, Vec<PaneId>)> {
         let entry = self.tabs.get(index)?;
-        let WorkspaceTab::Terminal { panes, tree, .. } = &entry.tab;
+        let WorkspaceTab::Terminal { panes, tree, .. } = &entry.tab else {
+            return None;
+        };
         Some((panes.iter().map(|pane| pane.id).collect(), tree.leaves()))
     }
 
@@ -990,7 +1154,9 @@ impl SltermWorkspace {
     /// 测试专用:活跃 tab 根节点的提交比例(单叶 = None)。
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) fn active_split_ratio(&self) -> Option<f32> {
-        let WorkspaceTab::Terminal { tree, .. } = &self.tabs.get(self.active)?.tab;
+        let WorkspaceTab::Terminal { tree, .. } = &self.tabs.get(self.active)?.tab else {
+            return None;
+        };
         match tree {
             SplitTree::Split { ratio, .. } => Some(*ratio),
             SplitTree::Leaf(_) => None,
@@ -1021,6 +1187,15 @@ impl SltermWorkspace {
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) fn sidebar_state(&self) -> &SidebarState {
         &self.sidebar
+    }
+
+    /// 测试专用:当前设置 tab 的视图实体(设置页 L4 用例的驱动端)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn settings_pane_for_test(&self) -> Option<Entity<SettingsPane>> {
+        self.tabs.iter().find_map(|entry| match &entry.tab {
+            WorkspaceTab::Settings { view, .. } => Some(view.clone()),
+            WorkspaceTab::Terminal { .. } => None,
+        })
     }
 
     /// 测试专用:直接播种双槽 active view(会话恢复消费前的渲染锚)。
@@ -1103,6 +1278,10 @@ impl SltermWorkspace {
                     window.focus(&handle, cx);
                 }
             }
+            WorkspaceTab::Settings { view, .. } => {
+                let handle = view.read(cx).focus_handle.clone();
+                window.focus(&handle, cx);
+            }
         }
     }
 
@@ -1110,8 +1289,10 @@ impl SltermWorkspace {
     fn focused_pane(&self) -> Option<PaneId> {
         self.tabs
             .get(self.active)
-            .map(|entry| &entry.tab)
-            .map(|WorkspaceTab::Terminal { focused, .. }| *focused)
+            .and_then(|entry| match &entry.tab {
+                WorkspaceTab::Terminal { focused, .. } => Some(*focused),
+                WorkspaceTab::Settings { .. } => None,
+            })
     }
 
     /// AI hook 事件泵(M4.5,照上游 agents.rs 形态):管道服务线程写进程内
@@ -1196,7 +1377,9 @@ impl SltermWorkspace {
     fn screen_samples(&self, cx: &App) -> Vec<(PaneId, String)> {
         let mut samples = Vec::new();
         for entry in &self.tabs {
-            let WorkspaceTab::Terminal { panes, .. } = &entry.tab;
+            let WorkspaceTab::Terminal { panes, .. } = &entry.tab else {
+                continue;
+            };
             for pane in panes {
                 if let Some(screen) = pane.view.read(cx).agent_screen_sample() {
                     samples.push((pane.id, screen));
@@ -1253,7 +1436,10 @@ impl SltermWorkspace {
             panes,
             focused,
             zoomed,
-        } = &entry.tab;
+        } = &entry.tab
+        else {
+            return div().into_any_element();
+        };
         if *zoomed || tree.is_leaf() {
             let pane = panes
                 .iter()
@@ -1490,6 +1676,7 @@ impl Render for SltermWorkspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         let content = match self.tabs.get(self.active).map(|entry| &entry.tab) {
             Some(WorkspaceTab::Terminal { .. }) => Some(self.render_terminal_tab(self.active, cx)),
+            Some(WorkspaceTab::Settings { view, .. }) => Some(view.clone().into_any_element()),
             None => None,
         };
         // 侧栏三件套:ActivityBar + tab 列表/双槽内容区 + 宽度拖拽热区。
@@ -1570,6 +1757,9 @@ impl Render for SltermWorkspace {
             }))
             .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| {
                 this.toggle_sidebar(cx);
+            }))
+            .on_action(cx.listener(|this, _: &OpenSettings, window, cx| {
+                this.open_settings_tab(window, cx);
             }))
             // 自绘标题栏(05 篇):活跃 tab 展示名 + 三钮 + 拖拽区。
             .child(title_bar)
@@ -1668,6 +1858,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("ctrl-tab", SelectNextTab, None),
         KeyBinding::new("ctrl-shift-tab", SelectPreviousTab, None),
         KeyBinding::new("ctrl-shift-b", ToggleSidebar, None),
+        KeyBinding::new("ctrl-,", OpenSettings, None),
     ]);
 }
 

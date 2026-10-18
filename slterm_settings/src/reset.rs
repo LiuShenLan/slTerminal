@@ -18,7 +18,7 @@ static RESET_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 /// 恢复默认设置;返回备份文件路径(原本无文件时为 None)。UI 可据此
 /// 告知用户备份在哪。
 pub fn restore_default_settings() -> io::Result<Option<PathBuf>> {
-    restore_defaults_at(&crate::settings_path())
+    restore_default_settings_at(&crate::settings_path())
 }
 
 /// 纯函数:删除全部 resettable 已知键(段内移除),未知段/未知键/
@@ -43,7 +43,9 @@ fn default_settings_tree(tree: &Value) -> Value {
     restored
 }
 
-fn restore_defaults_at(path: &Path) -> io::Result<Option<PathBuf>> {
+/// 显式路径入口(测试注入与设置页保存通道共用;生产入口见
+/// [`restore_default_settings`])。
+pub fn restore_default_settings_at(path: &Path) -> io::Result<Option<PathBuf>> {
     // 损坏文件直接报错,不覆盖(读侧宽容、写侧拒绝的刻意不对称)。
     let original = match fs::read(path) {
         Ok(bytes) => Some(
@@ -255,7 +257,7 @@ mod reset_tests {
         .unwrap();
         fs::write(&sibling, "{\"user\": \"data\"}").unwrap();
 
-        let backup = restore_defaults_at(&path)
+        let backup = restore_default_settings_at(&path)
             .unwrap()
             .expect("backup produced");
         // 备份含原文;现文件已无已知键。
@@ -277,7 +279,9 @@ mod reset_tests {
         );
 
         // 再次重置产生新备份,不覆盖旧备份。
-        let next = restore_defaults_at(&path).unwrap().expect("second backup");
+        let next = restore_default_settings_at(&path)
+            .unwrap()
+            .expect("second backup");
         assert_ne!(backup, next);
         assert!(backup.exists() && next.exists());
         fs::remove_dir_all(directory).unwrap();
@@ -288,11 +292,11 @@ mod reset_tests {
         let directory = temp_dir("invalid");
         let path = directory.join("settings.json");
         // 无文件:不动盘,无备份。
-        assert_eq!(restore_defaults_at(&path).unwrap(), None);
+        assert_eq!(restore_default_settings_at(&path).unwrap(), None);
         assert!(!path.exists());
         // 损坏文件:报错且不覆盖。
         fs::write(&path, "{ not json").unwrap();
-        assert!(restore_defaults_at(&path).is_err());
+        assert!(restore_default_settings_at(&path).is_err());
         assert_eq!(fs::read_to_string(&path).unwrap(), "{ not json");
         fs::remove_dir_all(directory).unwrap();
     }

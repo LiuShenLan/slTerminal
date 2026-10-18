@@ -292,7 +292,10 @@ impl SltermWorkspace {
             tree,
             focused,
             zoomed,
-        } = &entry.tab;
+        } = &entry.tab
+        else {
+            return None;
+        };
         if !*zoomed
             && !tree.is_leaf()
             && let Some(bounds) = self
@@ -345,7 +348,9 @@ impl SltermWorkspace {
         let Some(entry) = self.tabs.get(self.active) else {
             return vec![];
         };
-        let WorkspaceTab::Terminal { tree, zoomed, .. } = &entry.tab;
+        let WorkspaceTab::Terminal { tree, zoomed, .. } = &entry.tab else {
+            return vec![];
+        };
         if *zoomed && !tree.is_leaf() {
             return vec![];
         }
@@ -403,13 +408,17 @@ impl SltermWorkspace {
             tab: source_tab,
             meta: source_meta,
         } = entry;
-        // 封闭枚举当前只有 Terminal;新增变体时这里的解构会强制补分支。
+        // 上面两道 matches! 已锁定源/目标均为 Terminal;不可达分支保留
+        // 防御,避免新增变体时静默丢 tab。
         let WorkspaceTab::Terminal {
             panes: source_panes,
             tree: source_tree,
             focused: source_focused,
             zoomed: source_zoomed,
-        } = source_tab;
+        } = source_tab
+        else {
+            unreachable!("dock source must be a Terminal tab");
+        };
 
         // 摘掉源 tab 后活跃下标左移一格;源在活跃之后则不变。
         let active_ix = if source_ix < original_active {
@@ -430,7 +439,10 @@ impl SltermWorkspace {
                 );
                 return false;
             };
-            let WorkspaceTab::Terminal { tree, .. } = &mut active_entry.tab;
+            let WorkspaceTab::Terminal { tree, .. } = &mut active_entry.tab else {
+                // 上述 matches! 已锁定目标为 Terminal;不可达分支保留防御。
+                unreachable!("dock target must be a Terminal tab");
+            };
             match target.pane {
                 Some(pane) => tree.dock_at_leaf(pane, source_tree, target.nav),
                 None => {
