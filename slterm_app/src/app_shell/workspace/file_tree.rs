@@ -138,6 +138,45 @@ impl SltermWorkspace {
         }
         let cwd = self.active_terminal_cwd(cx);
         self.file_tree.panel.sync(cwd);
+        // B8:树根变化/重开 explorer 时对齐递归 watch(同根零成本)。
+        let root = self
+            .file_tree
+            .panel
+            .watch_root()
+            .map(std::path::Path::to_path_buf);
+        if let Some(watch) = self.fs_watch.as_mut() {
+            watch.watch_tree_root(root.as_deref());
+        }
+        self.ensure_file_tree_pump(cx);
+    }
+
+    /// 每帧 watcher 兴趣对账(渲染根调用,explorer 关闭时也执行):
+    /// - 树根 = explorer 可见时的面板根;关闭槽即释放树根 watch;
+    /// - 文件兴趣 = 全部 Code tab 中 File 模式且非 gitshow 的路径;
+    /// - 对账后确保事件泵在跑。
+    pub(super) fn sync_fs_watch(&mut self, cx: &mut Context<'_, Self>) {
+        let tree_root = if self.explorer_open() {
+            self.file_tree
+                .panel
+                .watch_root()
+                .map(std::path::Path::to_path_buf)
+        } else {
+            None
+        };
+        let files: Vec<PathBuf> = self
+            .tabs
+            .iter()
+            .filter_map(|entry| {
+                let WorkspaceTab::Code { view } = &entry.tab else {
+                    return None;
+                };
+                view.read(cx).editable_path().map(PathBuf::from)
+            })
+            .collect();
+        if let Some(watch) = self.fs_watch.as_mut() {
+            watch.watch_tree_root(tree_root.as_deref());
+            watch.retain_files(files);
+        }
         self.ensure_file_tree_pump(cx);
     }
 
@@ -151,9 +190,10 @@ impl SltermWorkspace {
         (!cwd.is_empty()).then(|| PathBuf::from(cwd))
     }
 
-    /// 后台快照/搜索结果轮询泵:worker 落地后唤醒 UI。只在有活时存在。
+    /// 后台轮询泵:文件树 worker 与 fs-notify 事件共用 30ms tick。
+    /// 只在「面板有活」或「watcher 有兴趣」时存在;两者都消失即退出。
     fn ensure_file_tree_pump(&mut self, cx: &mut Context<'_, Self>) {
-        if self.file_tree.pump_running || !self.file_tree.panel.pending() {
+        if self.file_tree.pump_running || !self.file_tree_pump_active() {
             return;
         }
         self.file_tree.pump_running = true;
@@ -163,10 +203,12 @@ impl SltermWorkspace {
                 executor.timer(Duration::from_millis(30)).await;
                 let keep = this
                     .update(cx, |workspace, cx| {
+                        // 事件合并天然发生在两次 tick 之间:脏集按路径去重。
+                        workspace.pump_fs_events(cx);
                         if workspace.file_tree.panel.harvest_pending() {
                             cx.notify();
                         }
-                        workspace.file_tree.panel.pending()
+                        workspace.file_tree_pump_active()
                     })
                     .unwrap_or(false);
                 if !keep {
@@ -176,6 +218,59 @@ impl SltermWorkspace {
             let _ = this.update(cx, |workspace, _| workspace.file_tree.pump_running = false);
         })
         .detach();
+    }
+
+    /// 泵是否应继续:面板后台任务或 watcher 兴趣任一存在。
+    fn file_tree_pump_active(&self) -> bool {
+        if self.file_tree.panel.pending() {
+            return true;
+        }
+        self.fs_watch
+            .as_ref()
+            .is_some_and(|watch| watch.has_interest())
+    }
+
+    /// 收割一次 fs 事件并落前台动作:
+    /// - 目录脏 → 重臂面板快照(仅 explorer 可见时立即起 worker);
+    /// - 文件脏 → 对路径匹配的 code tab 重读 gutter 快照。
+    fn pump_fs_events(&mut self, cx: &mut Context<'_, Self>) {
+        let pending = match self.fs_watch.as_mut() {
+            Some(watch) => watch.take_pending(),
+            None => return,
+        };
+        if pending.is_empty() {
+            return;
+        }
+        if !pending.dirs.is_empty() {
+            self.file_tree.panel.request_refresh();
+            if self.explorer_open() {
+                // 复用既有同步链:harvest + 新根对账 + worker 重臂。
+                self.sync_file_tree(cx);
+            }
+        }
+        if pending.files.is_empty() {
+            return;
+        }
+        let dirty: std::collections::HashSet<PathBuf> = pending.files.into_iter().collect();
+        let targets: Vec<Entity<crate::app_shell::code_tab::CodeTabView>> = self
+            .tabs
+            .iter()
+            .filter_map(|entry| {
+                let WorkspaceTab::Code { view } = &entry.tab else {
+                    return None;
+                };
+                let path = view.read(cx).editable_path()?;
+                dirty.contains(path).then(|| view.clone())
+            })
+            .collect();
+        if targets.is_empty() {
+            return;
+        }
+        for view in targets {
+            // 只读/gitshow 由视图内部 `spawn_gutter_sync` 跳过。
+            view.update(cx, |view, cx| view.refresh_gutter(cx));
+        }
+        cx.notify();
     }
 
     /// 搜索框变更:推进模型 query;结果由轮询泵落地。

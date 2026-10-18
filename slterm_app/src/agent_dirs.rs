@@ -17,6 +17,14 @@ use crate::ai_agents::AgentKind;
 ///
 /// 值以各 CLI 官方文档为准;Windows 上落 `%APPDATA%` 的客户端写成
 /// `AppData/Roaming/...`(本表语义始终是 home 相对路径)。
+///
+/// 2026-10-18 六家 Windows 目录复核(官方文档/官方仓库源码 + 本机实测):
+/// goose `%APPDATA%\Block\goose\config`、devin `%APPDATA%\devin`、
+/// antigravity `%USERPROFILE%\.gemini\antigravity-cli`、pi
+/// `%USERPROFILE%\.pi\agent` 与官方文档一致;maki 官方仓库按 etcetera
+/// Windows 策略取 `%APPDATA%\maki`(`~/.config/maki` 仅 Unix),kilo 官方
+/// 设置文档与 xdg-basedir 源码取 `%USERPROFILE%\.config\kilo`(Windows 仍
+/// 走 `~/.config`,非 `%APPDATA%`)。本机六家 CLI 均未安装、上述目录均不存在。
 pub(crate) const AGENT_CONFIG_DIRS: [(&str, &str); 27] = [
     ("claude", ".claude"),
     ("codex", ".codex"),
@@ -40,9 +48,9 @@ pub(crate) const AGENT_CONFIG_DIRS: [(&str, &str); 27] = [
     ("devin", "AppData/Roaming/devin"),
     ("kimi", ".kimi-code"),
     ("kiro", ".kiro"),
-    ("kilo", ".kilo"),
+    ("kilo", ".config/kilo"),
     ("qodercli", ".qoder"),
-    ("maki", ".config/maki"),
+    ("maki", "AppData/Roaming/maki"),
     ("trae-cli", ".trae"),
     ("codebuddy", ".codebuddy"),
 ];
@@ -132,9 +140,9 @@ mod agent_dirs_tests {
                 ("devin", "AppData/Roaming/devin"),
                 ("kimi", ".kimi-code"),
                 ("kiro", ".kiro"),
-                ("kilo", ".kilo"),
+                ("kilo", ".config/kilo"),
                 ("qodercli", ".qoder"),
-                ("maki", ".config/maki"),
+                ("maki", "AppData/Roaming/maki"),
                 ("trae-cli", ".trae"),
                 ("codebuddy", ".codebuddy"),
             ]

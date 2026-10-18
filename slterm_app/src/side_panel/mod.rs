@@ -614,6 +614,11 @@ impl SidePanel {
     pub(crate) fn root(&self) -> Option<&Path> {
         self.root.as_deref()
     }
+
+    /// fs-notify 树根监听读端(B8):与渲染/枚举共用同一 root 真值源。
+    pub(crate) fn watch_root(&self) -> Option<&Path> {
+        self.root.as_deref()
+    }
 }
 
 /// 一条路径落进 PTY 时该写出的字节。`None` = 这条路径不能安全地写进去。

@@ -14,13 +14,14 @@ use super::{GitCommit, GitInfo};
 ///
 /// 后台快照线程调用(同步子进程);渲染线程零调用。
 pub(crate) fn read_git(root: &Path) -> Option<GitInfo> {
-    let status = crate::git::status(root).ok()?;
+    // 只读消费面:借用共享短 TTL 快照(Arc),不 clone 整份快照。
+    let status = crate::git::status_cached(root).ok()?;
     let mut info = GitInfo {
-        branch: status.branch,
+        branch: status.branch.clone(),
         ahead: status.ahead,
         ..GitInfo::default()
     };
-    for entry in status.entries {
+    for entry in &status.entries {
         if entry.conflict {
             info.conflicts.push(('U', entry.path.clone()));
         }
@@ -29,7 +30,7 @@ pub(crate) fn read_git(root: &Path) -> Option<GitInfo> {
             info.staged.push((entry.index, entry.path.clone()));
         }
         if entry.unstaged() {
-            info.unstaged.push((entry.worktree, entry.path));
+            info.unstaged.push((entry.worktree, entry.path.clone()));
         }
     }
     let run = |args: &[&str]| run_git(root, args);

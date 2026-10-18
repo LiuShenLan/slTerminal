@@ -1118,6 +1118,8 @@ fn git_api_error(error: git::GitError) -> ApiError {
         git::GitError::Unavailable(_) => "git_unavailable",
         git::GitError::NotRepository(_) => "git_not_repository",
         git::GitError::NotInHead(_) => "git_not_in_head",
+        git::GitError::AccessDenied(_) => "git_access_denied",
+        git::GitError::Corrupt(_) => "git_corrupt",
         git::GitError::Command(_) => "git_command_failed",
     };
     ApiError::new(code, error.to_string())

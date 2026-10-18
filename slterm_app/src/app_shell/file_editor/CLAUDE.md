@@ -27,7 +27,10 @@
   不得进进程级常驻资产图。引用式图片 `![alt][id]` 的定义 `[id]: url` 同走
   压帧;纯链接引用不改写。
 - git gutter(M8.5):数据源 = `crate::git` 子进程(`file_status` + `file_hunks`),
-  与文件树 VCS 同一执行体;行标只在行标变化时推进 revision。只读文档
+  与文件树 VCS 同一执行体;仓库根经 `repository_root_cached` 短 TTL 缓存,
+  状态查询走共享缓存。触发点 = 打开/保存/重载 + watcher 检测到外部修改
+  (`refresh_gutter_from_disk`);文件状态为 `None` 时直接空行标,不为无变更
+  文件起 hunk 子进程。行标只在行标变化时推进 revision。只读文档
   (truncated/gitshow/diff)不挂 gutter。行标颜色只引用 `EditorThemeTokens`,
   禁裸色值;滚动同步读输入实体上一帧布局(`visible_row_range`/`scroll_offset`)。
 

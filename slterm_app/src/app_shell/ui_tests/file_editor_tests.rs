@@ -1226,6 +1226,126 @@ fn save_all_keeps_saving_after_one_failure(cx: &mut TestAppContext) {
     assert!(bad_path.is_dir(), "失败文件路径保持原状");
 }
 
+// ── B8:外部文件系统事件驱动刷新(gutter + 目录树) ──
+
+/// 把聚焦 pane 的 cwd 设为测试目录(文件树根跟随源)。
+fn set_pane_cwd(
+    cx: &mut TestAppContext,
+    workspace: &gpui::Entity<SltermWorkspace>,
+    directory: &std::path::Path,
+) {
+    let view = workspace
+        .read_with(cx, |ws, _| ws.first_pane_view())
+        .expect("终端 pane 必须存在");
+    view.update(cx, |view, _| {
+        view.cwd = directory.to_string_lossy().into_owned();
+    });
+}
+
+/// 打开 explorer 槽并画一帧。
+fn open_explorer(window: &mut VisualTestContext) {
+    draw_frame(window);
+    click_selector(window, "sidebar-view-btn-explorer");
+    draw_frame(window);
+}
+
+/// 轮询等待 gutter 行标清空(外部改写 → watcher 事件 → 前台刷新)。
+fn wait_for_gutter_to_clear(
+    cx: &mut TestAppContext,
+    workspace: &gpui::Entity<SltermWorkspace>,
+    window: &mut VisualTestContext,
+) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        window.executor().advance_clock(Duration::from_millis(50));
+        window.run_until_parked();
+        window.refresh().unwrap();
+        draw_frame(window);
+        if let Some(marks) = workspace.read_with(cx, |ws, cx| ws.active_gutter_marks_for_test(cx))
+            && marks.is_empty()
+        {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "外部改写后 gutter 行标未清空(watcher 刷新未落地)"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// B8:外部改写磁盘文件使其与 HEAD 一致 → watcher 事件驱动 gutter 清空。
+#[gpui::test]
+fn external_file_change_refreshes_the_gutter(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    let directory = tempfile::tempdir().unwrap();
+    let path = git_repository(directory.path(), "tracked.txt", b"one\ntwo\nthree\n");
+    std::fs::write(&path, b"one\nchanged\nthree\nfour\n").unwrap();
+
+    open_document_at(&workspace, &mut window, path.clone());
+    let marks = wait_for_gutter_marks(cx, &workspace, &mut window);
+    assert!(
+        marks.iter().any(|(mark, line)| {
+            *mark == crate::app_shell::file_editor::gutter::GutterMark::Modified && *line == 2
+        }),
+        "打开时必须有行标: {marks:?}"
+    );
+
+    // 等共享 git 状态快照短 TTL 过期,避免外部改写后的首次刷新命中
+    // 打开时写入的旧快照(TTL 为产品契约,不为测试放宽)。
+    std::thread::sleep(Duration::from_millis(600));
+    // 外部把工作区改回 HEAD 字节:无变更 → 行标必须自动清空。
+    std::fs::write(&path, b"one\ntwo\nthree\n").unwrap();
+    wait_for_gutter_to_clear(cx, &workspace, &mut window);
+}
+
+/// B8:外部新建文件 → 树根递归 watcher 事件 → 文件树自动出现该行。
+#[gpui::test]
+fn external_file_creation_refreshes_the_file_tree(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(directory.path().join("existing.txt"), b"x\n").unwrap();
+    set_pane_cwd(cx, &workspace, directory.path());
+    open_explorer(&mut window);
+
+    // 先等首份快照落地(确保树根 watch 已建立)。
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        window.executor().advance_clock(Duration::from_millis(50));
+        window.run_until_parked();
+        window.refresh().unwrap();
+        draw_frame(&mut window);
+        if workspace
+            .read_with(cx, |ws, _| ws.file_tree_row_names_for_test())
+            .iter()
+            .any(|name| name == "existing.txt")
+        {
+            break;
+        }
+        assert!(Instant::now() < deadline, "初始文件树未落地");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    // 测试线程外部新建:事件驱动刷新,不得依赖手动刷新按钮。
+    std::fs::write(directory.path().join("external.txt"), b"external\n").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        window.executor().advance_clock(Duration::from_millis(50));
+        window.run_until_parked();
+        window.refresh().unwrap();
+        draw_frame(&mut window);
+        if workspace
+            .read_with(cx, |ws, _| ws.file_tree_row_names_for_test())
+            .iter()
+            .any(|name| name == "external.txt")
+        {
+            return;
+        }
+        assert!(Instant::now() < deadline, "外部新建文件未触发文件树刷新");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 /// 保留键红线:终端焦点下 Ctrl+S 不被编辑器保存动作吞;Ctrl+C 中断与
 /// Ctrl+Shift+C 复制仍走终端自身语义(不产生编辑器动作/键入串)。
 #[gpui::test]

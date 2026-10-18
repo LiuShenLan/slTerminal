@@ -220,6 +220,25 @@ impl CodeTabView {
         self.file().is_some() && !self.git_show && self.path == path
     }
 
+    /// 外部 watcher 兴趣读端(B8):仅 File 模式的普通源码返回磁盘路径;
+    /// gitshow 与 diff 只读臂不登记。
+    pub(crate) fn editable_path(&self) -> Option<&Path> {
+        match &self.mode {
+            CodeTabMode::File(_) if !self.git_show => Some(self.path.as_path()),
+            CodeTabMode::File(_) | CodeTabMode::Diff(_) => None,
+        }
+    }
+
+    /// 外部修改触发点(B8):重读磁盘 gutter 快照并刷新行标。
+    /// 只读/gitshow 的跳过规则在 `TextFileView::refresh_gutter_from_disk`。
+    pub(crate) fn refresh_gutter(&mut self, cx: &mut Context<'_, Self>) {
+        let Some(file) = self.file() else {
+            return;
+        };
+        let file = file.clone();
+        file.update(cx, |file, cx| file.refresh_gutter_from_disk(cx));
+    }
+
     /// 同路径 gitshow tab 的重开命中。
     pub fn is_git_show_path(&self, path: &Path) -> bool {
         self.file().is_some() && self.git_show && self.path == path

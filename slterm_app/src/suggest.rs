@@ -546,25 +546,45 @@ fn path_commands() -> Vec<String> {
 }
 
 /// PowerShell cmdlet/函数/别名不在 PATH 上;不加载用户 profile 收集一次。
-/// 失败只意味着 PATH 命令仍是可用来源。
+/// 产品默认 shell 是 pwsh 7,优先探测它;启动失败或非零退出才回退 5.1。
+/// 两者都失败只意味着 PATH 命令仍是可用来源。
 fn powershell_commands() -> Vec<String> {
-    let mut command = std::process::Command::new("powershell");
-    command.args([
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        "Get-Command -CommandType Cmdlet,Function,Alias -ErrorAction SilentlyContinue \
-         | Select-Object -ExpandProperty Name",
-    ]);
-    match crate::platform::process::hidden_command(&mut command).output() {
-        Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .map(ToOwned::to_owned)
-            .collect(),
-        _ => Vec::new(),
+    powershell_commands_with(|program| {
+        let mut command = std::process::Command::new(program);
+        command.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Get-Command -CommandType Cmdlet,Function,Alias -ErrorAction SilentlyContinue \
+             | Select-Object -ExpandProperty Name",
+        ]);
+        let output = crate::platform::process::hidden_command(&mut command)
+            .output()
+            .ok()?;
+        output
+            .status
+            .success()
+            .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+    })
+    .unwrap_or_default()
+}
+
+/// `powershell_commands` 的可测形态:运行器返回 stdout(启动失败或非零退出为
+/// None),按 pwsh → 5.1 顺序取首个成功结果并去空行/trim;两者都失败返回 None。
+fn powershell_commands_with(run: impl Fn(&str) -> Option<String>) -> Option<Vec<String>> {
+    for program in ["pwsh", "powershell"] {
+        if let Some(stdout) = run(program) {
+            return Some(
+                stdout
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                    .map(ToOwned::to_owned)
+                    .collect(),
+            );
+        }
     }
+    None
 }
 
 fn collect_commands() -> Vec<String> {
@@ -668,7 +688,7 @@ pub(crate) fn path_wants_directory(line: &str) -> bool {
 #[cfg(test)]
 mod suggest_tests {
     use super::*;
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
 
     struct Fixture {
         history: Mutex<SltermHistory>,
@@ -1023,5 +1043,53 @@ mod suggest_tests {
         assert!(state.completion_query_ready("key-a"));
         state.begin_completion_query("key-b".into());
         assert!(!state.completion_query_ready("key-a"));
+    }
+
+    /// pwsh 成功即采用其输出,不再探测 5.1;输出 trim 且丢弃空行。
+    #[test]
+    fn powershell_probe_prefers_pwsh_when_it_succeeds() {
+        let calls = RefCell::new(Vec::new());
+        let commands = powershell_commands_with(|program| {
+            calls.borrow_mut().push(program.to_owned());
+            (program == "pwsh").then(|| "Get-Item\n  Write-Host  \n\n".to_owned())
+        });
+        assert_eq!(calls.borrow().as_slice(), &["pwsh".to_owned()][..]);
+        assert_eq!(
+            commands,
+            Some(vec!["Get-Item".to_owned(), "Write-Host".to_owned()])
+        );
+    }
+
+    /// pwsh 启动失败/非零退出时按顺序回退 5.1 并返回其结果。
+    #[test]
+    fn powershell_probe_falls_back_to_windows_powershell() {
+        let calls = RefCell::new(Vec::new());
+        let commands = powershell_commands_with(|program| {
+            calls.borrow_mut().push(program.to_owned());
+            (program == "powershell").then(|| "Get-Date\nSet-Location\n".to_owned())
+        });
+        assert_eq!(
+            calls.borrow().as_slice(),
+            &["pwsh".to_owned(), "powershell".to_owned()][..]
+        );
+        assert_eq!(
+            commands,
+            Some(vec!["Get-Date".to_owned(), "Set-Location".to_owned()])
+        );
+    }
+
+    /// 两者都失败时返回空,且两条探测路径都被尝试。
+    #[test]
+    fn powershell_probe_returns_empty_when_both_fail() {
+        let calls = RefCell::new(Vec::new());
+        let commands = powershell_commands_with(|program| {
+            calls.borrow_mut().push(program.to_owned());
+            None
+        });
+        assert!(commands.is_none());
+        assert_eq!(
+            calls.borrow().as_slice(),
+            &["pwsh".to_owned(), "powershell".to_owned()][..]
+        );
     }
 }

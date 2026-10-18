@@ -4,6 +4,8 @@
 //! 段落内空白属于外层段落,按源码前后空白宽度显式补齐(TextView 片段
 //! 只解析自身内容,不替外层保留空格)。
 
+use std::path::Path;
+
 use super::block_structure::{BlockStructure, InlineRun, PartKind};
 use super::*;
 use gpui::prelude::FluentBuilder as _;
@@ -168,11 +170,7 @@ impl TextFileView {
     /// 段落内联图片:本地文件或远端可解析时交给 gpui;缺失时画可感知占位。
     fn render_inline_image(&self, raw: &str, cx: &mut Context<'_, Self>) -> gpui::AnyElement {
         let (alt, url) = image_markdown_parts(raw);
-        let remote =
-            url.starts_with("http://") || url.starts_with("https://") || url.starts_with("data:");
-        let resolved = self.path.parent().map(|base| base.join(&url));
-        let available = remote || resolved.as_ref().is_some_and(|path| path.is_file());
-        if !available {
+        let Some(source) = image_source(self.path.parent(), &url) else {
             return div()
                 .debug_selector(|| "markdown-image-placeholder".to_owned())
                 .min_w(px(120.0))
@@ -187,11 +185,6 @@ impl TextFileView {
                 .text_color(cx.theme().muted_foreground)
                 .child(if alt.is_empty() { url } else { alt })
                 .into_any_element();
-        }
-        let source = if remote {
-            url
-        } else {
-            resolved.unwrap().to_string_lossy().into_owned()
         };
         img(source)
             .debug_selector(|| "markdown-image".to_owned())
@@ -205,6 +198,34 @@ impl TextFileView {
 fn is_image_markdown(raw: &str) -> bool {
     let trimmed = raw.trim_start();
     trimmed.starts_with("![") && trimmed.contains("](")
+}
+
+/// 远端图片 URL 判定:http/https/data 直接交给 gpui,不参与本地文件解析。
+fn is_remote_image_url(url: &str) -> bool {
+    url.starts_with("http://") || url.starts_with("https://") || url.starts_with("data:")
+}
+
+/// 剥离本地图片 URL 的查询串(`?` 起)与锚点(`#` 起),只看文件系统路径。
+///
+/// 两者都出现时取更早位置截断;纯本地路径原样返回。仅用于本地文件解析,
+/// 远端 URL 不经过此函数。
+fn local_image_url_path(url: &str) -> &str {
+    let cut = [url.find('?'), url.find('#')]
+        .into_iter()
+        .flatten()
+        .min()
+        .unwrap_or(url.len());
+    &url[..cut]
+}
+
+/// 解析图片最终渲染源:远端保留原始 URL;本地剥离查询串/锚点后按文档目录
+/// 拼接,文件不存在返回 None(调用方画占位)。
+fn image_source(base: Option<&Path>, url: &str) -> Option<String> {
+    if is_remote_image_url(url) {
+        return Some(url.to_owned());
+    }
+    let path = base?.join(local_image_url_path(url));
+    path.is_file().then(|| path.to_string_lossy().into_owned())
 }
 
 fn image_markdown_parts(raw: &str) -> (String, String) {
@@ -237,5 +258,66 @@ mod structure_inline_view_tests {
             image_markdown_parts("![](b.png)"),
             (String::new(), "b.png".to_owned())
         );
+    }
+
+    /// 本地图片 URL 的查询串/锚点剥离;两者兼有时取更早位置。
+    #[test]
+    fn local_image_url_path_strips_query_and_fragment() {
+        assert_eq!(local_image_url_path("images/a.png"), "images/a.png");
+        assert_eq!(local_image_url_path("images/a.png?raw=1"), "images/a.png");
+        assert_eq!(local_image_url_path("images/a.png#frag"), "images/a.png");
+        assert_eq!(
+            local_image_url_path("images/a.png?raw=1#frag"),
+            "images/a.png"
+        );
+        assert_eq!(
+            local_image_url_path("images/a.png#frag?raw=1"),
+            "images/a.png"
+        );
+        assert_eq!(local_image_url_path(""), "");
+    }
+
+    /// 带查询串/锚点的本地图片经 Markdown 解析后能定位到实际文件。
+    #[test]
+    fn image_markdown_with_query_and_fragment_resolves_existing_file() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("a.png"), b"png").unwrap();
+        for raw in [
+            "![图](a.png?raw=1)",
+            "![图](a.png#frag)",
+            "![图](a.png?raw=1#frag)",
+        ] {
+            let (_, url) = image_markdown_parts(raw);
+            assert_eq!(local_image_url_path(&url), "a.png", "{raw}");
+            let joined = temp.path().join(local_image_url_path(&url));
+            assert!(joined.is_file(), "{raw}");
+            assert_eq!(
+                image_source(Some(temp.path()), &url),
+                Some(joined.to_string_lossy().into_owned()),
+                "{raw}"
+            );
+        }
+        // 纯路径无查询串/锚点时行为不变。
+        let (_, url) = image_markdown_parts("![图](a.png)");
+        assert_eq!(local_image_url_path(&url), "a.png");
+        assert!(image_source(Some(temp.path()), &url).is_some());
+    }
+
+    /// 远端图片 URL 不剥离、不改写,原样交给渲染层。
+    #[test]
+    fn remote_image_urls_are_passed_through_unchanged() {
+        for url in [
+            "https://example.com/a.png?raw=1",
+            "http://example.com/a.png#frag",
+            "data:image/png;base64,AAAA",
+        ] {
+            let raw = format!("![图]({url})");
+            let (_, parsed) = image_markdown_parts(&raw);
+            assert_eq!(parsed, url);
+            assert_eq!(
+                image_source(Some(Path::new("ignored")), &parsed).as_deref(),
+                Some(url)
+            );
+        }
     }
 }

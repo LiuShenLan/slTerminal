@@ -227,6 +227,9 @@ pub struct SltermWorkspace {
     pane_close_confirmed: Option<PaneId>,
     /// 侧栏文件树视图状态(07 篇 M8.4;explorer 槽内容)。
     file_tree: file_tree::FileTreeState,
+    /// B8:外部文件修改监听(树根递归 + 打开文件父目录)。事件驱动刷新
+    /// gutter/目录树,不做定时目录重扫;watcher 不可用时为 None。
+    fs_watch: Option<super::fs_watch::FsWatch>,
     /// 窗口激活态订阅(09 篇 M10.1):通知漏斗前台门控的唯一写入源。
     /// 字段本身只为持有订阅生命周期。
     _window_activation: Subscription,
@@ -332,6 +335,7 @@ impl SltermWorkspace {
             window_close_confirmed: false,
             pane_close_confirmed: None,
             file_tree: file_tree::FileTreeState::new(window, cx),
+            fs_watch: super::fs_watch::FsWatch::new(),
             _window_activation: window_activation,
         };
         // 搜索框变更订阅要 workspace 实体已存在;文件树其余状态由构造给出。
@@ -1474,6 +1478,9 @@ impl Render for SltermWorkspace {
         // 04 篇 M7.2:状态变化统一在渲染路径入账——任何 cx.notify 触发的
         // 重绘都会带上一份最新投影;判等去重保证空转帧零成本。
         self.publish_runtime_snapshot(cx);
+        // B8:每帧对账 watcher 兴趣(树根 + 打开的可编辑文件)。放在渲染根
+        // 而非 explorer 槽内:explorer 关闭时 gutter 外部刷新仍须工作。
+        self.sync_fs_watch(cx);
         // 07 篇 M8.3:只有活跃文件 tab 物化预览资产;切走即释放块槽/图片。
         self.sync_file_render_activity(window, cx);
         let content = match self.tabs.get(self.active).map(|entry| &entry.tab) {

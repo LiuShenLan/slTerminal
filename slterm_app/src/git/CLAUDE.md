@@ -7,8 +7,18 @@
 - **每命令 `--no-optional-locks`**(07 篇边界条 7,不可谈判):读操作不得触发 index 锁或
   后台 gc;flag 必须位于子命令之前。
 - **argv 不经 shell**,Windows 一律挂 `CREATE_NO_WINDOW`;路径参数是纯 argv 元素。
-- **HEAD 不存在错误契约**:`UnbornBranch`(尚无提交)与「文件不在 HEAD tree」统一归
-  `GitError::NotInHead`,消息含「HEAD 中不存在」;UI 只做占位文案,不解析具体错误。
+- **HEAD 错误分类契约**:`head_file` 先 `verify_head`(unborn 判定)再
+  `cat-file -e HEAD:<relative>` 预检,`git show` 在预检通过后失败也走同一分类臂;
+  `classify_git_failure` 按 stderr(大小写不敏感)分出权限
+  (`GitError::AccessDenied`)与损坏(`GitError::Corrupt`),识别不出归
+  `GitError::NotInHead`(消息含「HEAD 中不存在」)。UI 只做占位文案,不解析具体错误。
+- **只读短 TTL 缓存边界**:`status_cached`/`repository_root_cached` 仅服务只读消费面
+  (gutter、文件树 vcs),TTL 500ms;同 root 的连续/并发读取共享一次子进程。写路径
+  (rollback、runtime revision 校验)必须走未缓存的 `status`/`file_status_uncached`,
+  不得吃缓存。状态缓存键 = 调用方传入的 root 原样(进程级单槽);仓库根缓存键 =
+  起始目录(容量上限 16,过期与超限清理,解析失败不缓存)。
+- **未跟踪展开**:共享 `status` 带 `--untracked-files=all`,快照含单文件未跟踪条目;
+  单文件状态由 `file_status_from_snapshot` 从快照派生,不为路径单独 spawn status。
 
 ## 步骤接缝
 

@@ -113,15 +113,23 @@ fn gutter_for_status(status: FileStatus) -> GutterMark {
 }
 
 /// 读文件当前 gutter 快照(后台线程调用;非仓库/git 缺失 = 空行标)。
+///
+/// 仓库根解析走 `git::repository_root_cached` 短 TTL 缓存,状态查询走共享
+/// `status_cached`(与文件树 VCS 同源)。状态为 `None` 时直接返回空行标:
+/// 无变更必无 hunk,不再为无变更文件起 diff 子进程。
 pub(crate) fn read_for_path(path: &Path) -> GitGutter {
-    let Ok(root) = git::repository_root(path) else {
+    let Ok(root) = git::repository_root_cached(path) else {
         return GitGutter::default();
     };
     let Ok(relative) = git::relative_path(&root, path) else {
         return GitGutter::default();
     };
     let status = git::file_status(&root, &relative).unwrap_or(None);
-    let hunks = git::file_hunks(&root, &relative).unwrap_or_default();
+    let hunks = if status.is_some() {
+        git::file_hunks(&root, &relative).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     GitGutter::from_status(status, &hunks)
 }
 
@@ -217,6 +225,10 @@ mod gutter_tests {
         );
         let path = root.join("tracked.txt");
         std::fs::write(&path, b"one\nchanged\nthree\nfour\n").unwrap();
+        // 未跟踪文件必须在首次读取前落盘:file_status 从 500ms 共享状态快照
+        // 派生,TTL 内第二次读取会命中首读快照,后创建的文件不可见。
+        let fresh = root.join("fresh.txt");
+        std::fs::write(&fresh, b"new\n").unwrap();
 
         let gutter = read_for_path(&path);
         assert!(
@@ -236,8 +248,6 @@ mod gutter_tests {
             gutter.marks()
         );
 
-        let fresh = root.join("fresh.txt");
-        std::fs::write(&fresh, b"new\n").unwrap();
         let untracked = read_for_path(&fresh);
         assert_eq!(untracked.marks(), [(1, GutterMark::Untracked)]);
 
@@ -245,6 +255,49 @@ mod gutter_tests {
         let plain = outside.path().join("plain.txt");
         std::fs::write(&plain, b"plain\n").unwrap();
         assert!(read_for_path(&plain).marks().is_empty(), "非仓库零标记");
+    }
+
+    /// B9:无变更文件状态为 `None` → 直接空行标,不进入 hunk 分支。
+    #[test]
+    fn unchanged_repository_file_produces_no_marks() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        git_run(
+            root,
+            &["-c", "core.autocrlf=false", "init", "--initial-branch=main"],
+        );
+        std::fs::write(root.join("clean.txt"), b"one\ntwo\n").unwrap();
+        git_run(root, &["add", "clean.txt"]);
+        git_run(
+            root,
+            &[
+                "-c",
+                "user.name=slTerminal Test",
+                "-c",
+                "user.email=slterm@example.invalid",
+                "commit",
+                "-m",
+                "initial",
+            ],
+        );
+
+        let gutter = read_for_path(&root.join("clean.txt"));
+        assert!(
+            gutter.marks().is_empty(),
+            "无变更文件不得产生行标: {:?}",
+            gutter.marks()
+        );
+        // 纯函数投影同口径:None 状态 + 空 hunk 集 = 空行标。
+        assert!(marks_from_status(None, &[]).is_empty());
+    }
+
+    /// B9:非仓库路径返回空行标且不 panic(缓存解析失败分支)。
+    #[test]
+    fn non_repository_path_returns_empty_marks() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("plain.txt");
+        std::fs::write(&path, b"plain\n").unwrap();
+        assert!(read_for_path(&path).marks().is_empty());
     }
 
     fn git_run(root: &Path, args: &[&str]) {

@@ -35,6 +35,8 @@ pub(crate) mod editor_theme;
 pub(crate) mod file_drop;
 // 文本文件视图骨架(07 篇 M8.1 只读;M8.2 接编辑内核)。
 pub(crate) mod file_editor;
+// B8:外部文件系统事件监听(树根递归 + 打开文件父目录;有界唤醒前台)。
+pub(crate) mod fs_watch;
 // 布局转换对(「布局单点」);消费点 = M5.5 快照/恢复闭环。
 pub(crate) mod session_restore;
 // GUI 设置页(06 篇):左导航 + 右表单 + 路由式搜索 + 统一写通道。

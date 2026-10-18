@@ -7,15 +7,20 @@
 //! 单构造口 [`command`],每命令 `--no-optional-locks`(07 篇边界条 7,
 //! 禁触发 index 锁与后台 gc),argv 不经 shell,Windows 挂 CREATE_NO_WINDOW。
 //!
-//! 旧 git2 语义资产(五份因果档案)转测试保留,按步骤迁移:本步迁移
-//! **HEAD 不存在错误契约**——`UnbornBranch`(尚无提交)与「文件不在 HEAD
-//! tree」统一报 [`GitError::NotInHead`],消息含「HEAD 中不存在」;UI 占位文案
-//! 归 06 篇 i18n,不解析具体错误内容。LRU 仓库缓存(BE-09)/不扫 ignored
-//! (CP-008)/rename 双检/rollback 三方字节一致归 M8.5 对照用例。
+//! 旧 git2 语义资产(五份因果档案)转测试保留,按步骤迁移:**HEAD 不存在
+//! 错误契约**——`UnbornBranch`(尚无提交)与「文件不在 HEAD tree」统一报
+//! [`GitError::NotInHead`],消息含「HEAD 中不存在」;权限/损坏经
+//! [`classify_git_failure`] 细分为 [`GitError::AccessDenied`]/
+//! [`GitError::Corrupt`]。UI 占位文案归 06 篇 i18n,不解析具体错误内容。
+//! 只读消费面的短 TTL 缓存见 [`status_cached`]/[`repository_root_cached`];
+//! 不扫 ignored(CP-008)/rename 双检/rollback 三方字节一致归 M8.5 对照用例。
 
+use std::collections::HashMap;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 /// git 执行体错误。消息保持用户可读(经 i18n `{error}` 占位展示)。
 #[derive(Debug)]
@@ -26,6 +31,10 @@ pub(crate) enum GitError {
     NotRepository(String),
     /// HEAD 不存在(尚无提交)或文件不在 HEAD tree 中;消息含「HEAD 中不存在」。
     NotInHead(String),
+    /// 权限不足:文件系统拒绝读取仓库/对象(stderr 分类所得)。
+    AccessDenied(String),
+    /// 仓库/对象损坏:corrupt、bad/loose object、object file 等(stderr 分类所得)。
+    Corrupt(String),
     /// 其他命令失败(M8.5 四方法执行复用此臂)。
     Command(String),
 }
@@ -36,6 +45,8 @@ impl std::fmt::Display for GitError {
             Self::Unavailable(message)
             | Self::NotRepository(message)
             | Self::NotInHead(message)
+            | Self::AccessDenied(message)
+            | Self::Corrupt(message)
             | Self::Command(message) => formatter.write_str(message),
         }
     }
@@ -54,18 +65,43 @@ pub(crate) fn command(cwd: &Path) -> Command {
     command
 }
 
+/// 只读 git 快照的短 TTL:同一 root 的连续/并发读取在窗口内共享一次子进程。
+///
+/// 500ms 只影响 gutter/文件树的最多半个窗口陈旧度;写路径(rollback、runtime
+/// revision 校验)一律绕过缓存,正确性不依赖本值。
+const STATUS_CACHE_TTL: Duration = Duration::from_millis(500);
+
+/// 仓库根解析缓存的 TTL(与状态快照同窗)。
+const REPOSITORY_ROOT_CACHE_TTL: Duration = Duration::from_millis(500);
+
+/// 仓库根解析缓存容量上限:超出时先清过期,仍超则淘汰最早捕获项。
+const REPOSITORY_ROOT_CACHE_CAPACITY: usize = 16;
+
+/// 状态快照缓存槽条目:单 root 槽,root 不匹配即视为未命中。
+struct StatusCacheEntry {
+    root: PathBuf,
+    captured: Instant,
+    snapshot: Arc<StatusSnapshot>,
+}
+
+/// 仓库根缓存条目(键为起始目录)。
+struct RootCacheEntry {
+    captured: Instant,
+    root: PathBuf,
+}
+
 /// 路径所在 worktree 的根(`git rev-parse --show-toplevel`)。
 ///
 /// 04 篇 `verify_repository(pane_cwd, repo_root)` 的 `repo_root` 数据源:
 /// M8.5 的 `git.*` UI 执行器以本函数重查仓库根,与 `expected_cwd` 核对。
+/// 写路径/runtime 校验用本函数(实时);只读消费面用
+/// [`repository_root_cached`]。
 pub(crate) fn repository_root(path: &Path) -> Result<PathBuf, GitError> {
-    let cwd = if path.is_dir() {
-        path
-    } else {
-        path.parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new("."))
-    };
+    resolve_repository_root(&repository_root_anchor(path))
+}
+
+/// 在给定起始目录上执行 `rev-parse`(缓存读取器与实时路径共用)。
+fn resolve_repository_root(cwd: &Path) -> Result<PathBuf, GitError> {
     let output = command(cwd)
         .args(["rev-parse", "--show-toplevel"])
         .output()
@@ -80,10 +116,82 @@ pub(crate) fn repository_root(path: &Path) -> Result<PathBuf, GitError> {
     Ok(PathBuf::from(root))
 }
 
+/// 仓库根解析的起始目录:目录路径原样,文件路径取父目录。
+fn repository_root_anchor(path: &Path) -> PathBuf {
+    if path.is_dir() {
+        return path.to_path_buf();
+    }
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf()
+}
+
+/// 仓库根解析的只读短 TTL 缓存。
+///
+/// 键 = 起始目录(见 [`repository_root_anchor`]);上限 16 条,过期与超限
+/// 都清理。解析失败不写缓存,避免把一次瞬时失败固化成 TTL 内的错误答案。
+pub(crate) fn repository_root_cached(path: &Path) -> Result<PathBuf, GitError> {
+    repository_root_cached_with(path, Instant::now(), resolve_repository_root)
+}
+
+fn repository_root_cached_with<R>(path: &Path, now: Instant, reader: R) -> Result<PathBuf, GitError>
+where
+    R: FnOnce(&Path) -> Result<PathBuf, GitError>,
+{
+    let anchor = repository_root_anchor(path);
+    let mut cache = repository_root_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(entry) = cache.get(&anchor)
+        && now.saturating_duration_since(entry.captured) < REPOSITORY_ROOT_CACHE_TTL
+    {
+        return Ok(entry.root.clone());
+    }
+    let root = reader(&anchor)?;
+    store_repository_root(
+        &mut cache,
+        anchor,
+        RootCacheEntry {
+            captured: now,
+            root: root.clone(),
+        },
+    );
+    Ok(root)
+}
+
+fn repository_root_cache() -> &'static Mutex<HashMap<PathBuf, RootCacheEntry>> {
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, RootCacheEntry>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 写入前清理过期条目;仍超上限时移除最早捕获的一条。
+fn store_repository_root(
+    cache: &mut HashMap<PathBuf, RootCacheEntry>,
+    anchor: PathBuf,
+    entry: RootCacheEntry,
+) {
+    cache.retain(|_, cached| {
+        entry.captured.saturating_duration_since(cached.captured) < REPOSITORY_ROOT_CACHE_TTL
+    });
+    while cache.len() >= REPOSITORY_ROOT_CACHE_CAPACITY {
+        let Some(oldest) = cache
+            .iter()
+            .min_by_key(|(_, cached)| cached.captured)
+            .map(|(anchor, _)| anchor.clone())
+        else {
+            break;
+        };
+        cache.remove(&oldest);
+    }
+    cache.insert(anchor, entry);
+}
+
 /// 读取文件在工作树当前 HEAD 中的字节(上限 `limit`,溢出置 truncated)。
 ///
 /// 只读数据面:不做写回,不碰 index。`limit + 1` 探到溢出后截断并终止
-/// 子进程,避免把超大 blob 全量读进内存。
+/// 子进程,避免把超大 blob 全量读进内存。对象存在性先用 `cat-file -e`
+/// 预检:失败按 stderr 分类,权限/损坏不再误报「文件不在 HEAD」。
 pub(crate) fn head_file(path: &Path, limit: usize) -> Result<(Vec<u8>, bool), GitError> {
     let root = repository_root(path)?;
     let relative = relative_to_root(&root, path)?;
@@ -91,6 +199,16 @@ pub(crate) fn head_file(path: &Path, limit: usize) -> Result<(Vec<u8>, bool), Gi
     // 同属占位文案,但前者连 show 的输入都没有。
     verify_head(&root)?;
     let spec = format!("HEAD:{relative}");
+    // 预检只判对象存在性;识别不出原因时仍归「不在 HEAD」默认臂。
+    let precheck = command(&root)
+        .args(["cat-file", "-e", &spec])
+        .output()
+        .map_err(|error| GitError::Unavailable(format!("无法运行 git: {error}")))?;
+    if !precheck.status.success() {
+        let stderr = String::from_utf8_lossy(&precheck.stderr);
+        return Err(classify_git_failure(&stderr)
+            .unwrap_or_else(|| GitError::NotInHead(format!("文件在 HEAD 中不存在: {relative}"))));
+    }
     let mut child = command(&root)
         .args(["show", &spec])
         .stdout(Stdio::piped())
@@ -120,9 +238,10 @@ pub(crate) fn head_file(path: &Path, limit: usize) -> Result<(Vec<u8>, bool), Gi
         .wait_with_output()
         .map_err(|error| GitError::Command(format!("等待 git show 失败: {error}")))?;
     if !truncated && !output.status.success() {
-        return Err(GitError::NotInHead(format!(
-            "文件在 HEAD 中不存在: {relative}"
-        )));
+        // 预检通过后 show 仍失败(如读取中途对象损坏):同一分类臂收口。
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(classify_git_failure(&stderr)
+            .unwrap_or_else(|| GitError::NotInHead(format!("文件在 HEAD 中不存在: {relative}"))));
     }
     Ok((bytes, truncated))
 }
@@ -198,10 +317,20 @@ impl StatusEntry {
 }
 
 /// 采集仓库状态快照;每条命令都带 `--no-optional-locks`。
+///
+/// `--untracked-files=all`:未跟踪目录展开为单文件条目,单文件状态可从
+/// 共享快照直接派生(不再为路径单独 spawn 一次 status)。写路径与 revision
+/// 校验使用本函数(实时)。
 pub(crate) fn status(root: &Path) -> Result<StatusSnapshot, GitError> {
     let output = command(root)
         .arg("--literal-pathspecs")
-        .args(["status", "--porcelain=v2", "--branch", "-z"])
+        .args([
+            "status",
+            "--porcelain=v2",
+            "--branch",
+            "-z",
+            "--untracked-files=all",
+        ])
         .output()
         .map_err(|error| GitError::Unavailable(format!("无法运行 git: {error}")))?;
     if !output.status.success() {
@@ -211,6 +340,42 @@ pub(crate) fn status(root: &Path) -> Result<StatusSnapshot, GitError> {
     let mut snapshot =
         parse_status(&raw).map_err(|code| GitError::Command(format!("status 解析失败: {code}")))?;
     snapshot.digest = sha256_hex(&output.stdout);
+    Ok(snapshot)
+}
+
+/// 只读消费面的状态快照:进程级单槽短 TTL 缓存。
+///
+/// 同 root 的连续/并发读取共享一次 `git status` 子进程;调用期间持锁,后到
+/// 者等待后直接命中新快照。缓存只准 gutter/文件树等只读面使用;rollback 与
+/// runtime revision 校验必须走 [`status`]/[`file_status_uncached`]。
+pub(crate) fn status_cached(root: &Path) -> Result<Arc<StatusSnapshot>, GitError> {
+    status_cached_with(root, Instant::now(), status)
+}
+
+fn status_cached_with<R>(
+    root: &Path,
+    now: Instant,
+    reader: R,
+) -> Result<Arc<StatusSnapshot>, GitError>
+where
+    R: FnOnce(&Path) -> Result<StatusSnapshot, GitError>,
+{
+    static CACHE: Mutex<Option<StatusCacheEntry>> = Mutex::new(None);
+    let mut cache = CACHE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(entry) = cache.as_ref()
+        && entry.root == root
+        && now.saturating_duration_since(entry.captured) < STATUS_CACHE_TTL
+    {
+        return Ok(Arc::clone(&entry.snapshot));
+    }
+    let snapshot = Arc::new(reader(root)?);
+    *cache = Some(StatusCacheEntry {
+        root: root.to_path_buf(),
+        captured: now,
+        snapshot: Arc::clone(&snapshot),
+    });
     Ok(snapshot)
 }
 
@@ -298,28 +463,36 @@ pub(crate) fn parse_status(output: &str) -> Result<StatusSnapshot, &'static str>
     Ok(result)
 }
 
-/// 单文件状态:由 porcelain 记录归一(无记录 = `Ok(None)`)。
+/// 单文件状态(只读消费面):从共享短 TTL 快照派生,不再单独 spawn
+/// `git status -- path`。无记录 = `Ok(None)`。
 pub(crate) fn file_status(root: &Path, relative: &str) -> Result<Option<FileStatus>, GitError> {
-    let output = command(root)
-        .arg("--literal-pathspecs")
-        .args([
-            "status",
-            "--porcelain=v2",
-            "-z",
-            "--untracked-files=all",
-            "--",
-            relative,
-        ])
-        .output()
-        .map_err(|error| GitError::Unavailable(format!("无法运行 git: {error}")))?;
-    if !output.status.success() {
-        return Err(command_failure(root, "status", &output.stderr));
-    }
-    let raw = String::from_utf8_lossy(&output.stdout).into_owned();
-    Ok(file_status_from_porcelain(&raw, relative))
+    let snapshot = status_cached(root)?;
+    Ok(file_status_from_snapshot(&snapshot, relative))
+}
+
+/// 写路径专用的实时单文件状态:绕过短 TTL 缓存(rollback 判定)。
+fn file_status_uncached(root: &Path, relative: &str) -> Result<Option<FileStatus>, GitError> {
+    let snapshot = status(root)?;
+    Ok(file_status_from_snapshot(&snapshot, relative))
+}
+
+/// 纯函数:从状态快照条目中查相对路径并归一为六值(无记录 = `None`)。
+pub(crate) fn file_status_from_snapshot(
+    snapshot: &StatusSnapshot,
+    relative: &str,
+) -> Option<FileStatus> {
+    snapshot
+        .entries
+        .iter()
+        .find(|entry| entry.path == relative)
+        .map(classify_entry)
 }
 
 /// 纯映射:porcelain 记录 → 六值状态(与 [`parse_status`] 同源语义)。
+///
+/// 生产单文件状态已改从快照派生(见 [`file_status_from_snapshot`]);本函数
+/// 保留为解析语义对照测试的唯一入口。
+#[cfg(test)]
 pub(crate) fn file_status_from_porcelain(output: &str, relative: &str) -> Option<FileStatus> {
     if output.trim_matches('\0').is_empty() {
         return None;
@@ -331,7 +504,7 @@ pub(crate) fn file_status_from_porcelain(output: &str, relative: &str) -> Option
         }
         let kind = record.as_bytes()[0];
         let (path, xy, conflict) = if kind == b'?' {
-            (record.strip_prefix("? ")?, "??", false)
+            (record.strip_prefix("? ")?, ['?', '?'], false)
         } else {
             let count = match kind {
                 b'1' => 9,
@@ -340,14 +513,14 @@ pub(crate) fn file_status_from_porcelain(output: &str, relative: &str) -> Option
                 _ => return None,
             };
             let fields: Vec<_> = record.splitn(count, ' ').collect();
-            if fields.len() != count || fields[1].len() != 2 {
+            if fields.len() != count {
                 return None;
             }
             if kind == b'2' {
                 // rename 记录后随源路径 NUL 记录,消费掉保持记录对齐。
                 let _original = records.next()?;
             }
-            (fields[count - 1], fields[1], kind == b'u')
+            (fields[count - 1], parse_xy(fields[1])?, kind == b'u')
         };
         if path != relative {
             continue;
@@ -357,21 +530,47 @@ pub(crate) fn file_status_from_porcelain(output: &str, relative: &str) -> Option
     None
 }
 
+/// `XY` 两字符状态位(非两字符即坏记录;仅供测试专用解析入口)。
+#[cfg(test)]
+fn parse_xy(field: &str) -> Option<[char; 2]> {
+    let mut chars = field.chars();
+    let xy = [chars.next()?, chars.next()?];
+    if chars.next().is_some() {
+        return None;
+    }
+    Some(xy)
+}
+
+/// 快照条目 → 六值状态:按记录种类与 XY 复用 [`classify_status`] 语义。
+fn classify_entry(entry: &StatusEntry) -> FileStatus {
+    let kind = if entry.conflict {
+        b'u'
+    } else if entry.original.is_some() {
+        b'2'
+    } else if entry.index == '?' && entry.worktree == '?' {
+        b'?'
+    } else {
+        b'1'
+    };
+    classify_status(kind, [entry.index, entry.worktree], entry.conflict)
+}
+
 /// XY/记录类型 → 六值状态。重命名与冲突优先于普通修改。
-fn classify_status(kind: u8, xy: &str, conflict: bool) -> FileStatus {
-    if conflict || kind == b'u' || matches!(xy, "AA" | "DD") {
+fn classify_status(kind: u8, xy: [char; 2], conflict: bool) -> FileStatus {
+    let contains = |needle: char| xy[0] == needle || xy[1] == needle;
+    if conflict || kind == b'u' || xy == ['A', 'A'] || xy == ['D', 'D'] {
         return FileStatus::Conflicted;
     }
-    if kind == b'2' || xy.contains('R') {
+    if kind == b'2' || contains('R') {
         return FileStatus::Renamed;
     }
-    if xy == "??" || kind == b'?' {
+    if kind == b'?' || xy == ['?', '?'] {
         return FileStatus::Untracked;
     }
-    if xy.contains('A') {
+    if contains('A') {
         return FileStatus::Added;
     }
-    if xy.contains('D') {
+    if contains('D') {
         return FileStatus::Deleted;
     }
     FileStatus::Modified
@@ -474,7 +673,8 @@ pub(crate) fn rollback(root: &Path, relative: &str) -> Result<(), GitError> {
     if target.is_dir() {
         return Err(GitError::Command("目录不支持回滚".to_owned()));
     }
-    match file_status(root, relative)? {
+    // 写路径不得吃缓存:回滚前必须用实时状态判定文件当前所属分类。
+    match file_status_uncached(root, relative)? {
         Some(FileStatus::Untracked) => std::fs::remove_file(&target).map_err(|error| {
             GitError::Command(format!("删除未跟踪文件失败 {}: {error}", target.display()))
         }),
@@ -517,6 +717,44 @@ pub(crate) fn unstage(root: &Path, relative: &str) -> Result<(), GitError> {
 /// 路径 → 仓库根相对路径(gutter/diff 的 file-scoped 命令参数)。
 pub(crate) fn relative_path(root: &Path, path: &Path) -> Result<String, GitError> {
     relative_to_root(root, path)
+}
+
+/// 纯函数:git stderr → 细分错误类别;识别不出返回 `None`。
+///
+/// 大小写不敏感。权限标记优先于损坏标记(同一 stderr 两者都出现时,权限
+/// 是根因);`None` 由调用方走默认臂——`head_file` 归 `NotInHead`。
+pub(crate) fn classify_git_failure(stderr: &str) -> Option<GitError> {
+    let lowered = stderr.to_ascii_lowercase();
+    let reason = stderr.lines().next().unwrap_or("").trim();
+    let permission_markers = [
+        "permission denied",
+        "access is denied",
+        "operation not permitted",
+        "read-only file system",
+    ];
+    if permission_markers
+        .iter()
+        .any(|marker| lowered.contains(marker))
+    {
+        return Some(GitError::AccessDenied(format!("git 访问被拒绝: {reason}")));
+    }
+    let corrupt_markers = [
+        "corrupt",
+        "bad object",
+        "loose object",
+        "object file",
+        "unable to read",
+        "invalid object",
+        "missing object",
+        "broken object",
+    ];
+    if corrupt_markers
+        .iter()
+        .any(|marker| lowered.contains(marker))
+    {
+        return Some(GitError::Corrupt(format!("git 对象/仓库损坏: {reason}")));
+    }
+    None
 }
 
 /// 命令失败的统一错误:stderr 首行进消息,便于 i18n `{error}` 展示。
@@ -566,8 +804,9 @@ fn relative_to_root(root: &Path, path: &Path) -> Result<String, GitError> {
 }
 
 #[cfg(test)]
-mod git_read_tests {
+mod git_tests {
     use super::*;
+    use std::cell::Cell;
     use std::path::Path;
 
     /// 命令形态守卫:每条 git 都带 `--no-optional-locks`(边界条 7 不可谈判)。
@@ -597,6 +836,231 @@ mod git_read_tests {
             canonical(repository.path()),
             "必须上溯到 worktree 根"
         );
+    }
+
+    /// 缓存命中/过期(注入时钟):TTL 内 reader 只跑一次,过期后重跑。
+    #[test]
+    fn status_cache_shares_reads_within_ttl_and_refreshes_after() {
+        let root = Path::new("D:/slterm-test/status-cache/root");
+        let start = Instant::now();
+        let calls = Cell::new(0u32);
+        let read = |_: &Path| {
+            calls.set(calls.get() + 1);
+            Ok(StatusSnapshot {
+                digest: calls.get().to_string(),
+                branch: "main".into(),
+                head: "abc".into(),
+                ..StatusSnapshot::default()
+            })
+        };
+
+        let first = status_cached_with(root, start, read).expect("首次读取");
+        let second =
+            status_cached_with(root, start + Duration::from_millis(400), read).expect("TTL 内");
+        assert_eq!(calls.get(), 1, "TTL 内必须共享一次子进程");
+        assert!(Arc::ptr_eq(&first, &second), "命中必须复用同一 Arc");
+
+        let third =
+            status_cached_with(root, start + Duration::from_millis(600), read).expect("过期");
+        assert_eq!(calls.get(), 2, "过期后必须重新读取");
+        assert!(!Arc::ptr_eq(&first, &third));
+        assert_eq!(third.digest, "2");
+    }
+
+    /// 仓库根缓存(注入时钟):同一起始目录 TTL 内只解析一次。
+    #[test]
+    fn repository_root_cache_shares_reads_within_ttl_and_refreshes_after() {
+        let file = Path::new("D:/slterm-test/root-cache/nested/file.txt");
+        let start = Instant::now();
+        let calls = Cell::new(0u32);
+        let read = |anchor: &Path| {
+            calls.set(calls.get() + 1);
+            Ok(anchor.join("..").join("root"))
+        };
+
+        let first = repository_root_cached_with(file, start, read).expect("首次解析");
+        let second = repository_root_cached_with(file, start + Duration::from_millis(400), read)
+            .expect("TTL 内");
+        assert_eq!(calls.get(), 1, "TTL 内必须共享一次 rev-parse");
+        assert_eq!(first, second);
+
+        let third = repository_root_cached_with(file, start + Duration::from_millis(600), read)
+            .expect("过期");
+        assert_eq!(calls.get(), 2, "过期后必须重新解析");
+        assert_eq!(third, first);
+    }
+
+    /// 解析失败不写缓存:下一次读取必须能重新尝试并成功。
+    #[test]
+    fn repository_root_failure_is_not_cached() {
+        let file = Path::new("D:/slterm-test/root-failure/file.txt");
+        let start = Instant::now();
+        let calls = Cell::new(0u32);
+        let failing = |_: &Path| {
+            calls.set(calls.get() + 1);
+            Err(GitError::NotRepository("不在仓库内".to_owned()))
+        };
+        assert!(
+            repository_root_cached_with(file, start, failing).is_err(),
+            "首次解析失败"
+        );
+        let succeeding = |_: &Path| {
+            calls.set(calls.get() + 1);
+            Ok(PathBuf::from("D:/slterm-test/resolved-root"))
+        };
+        let root = repository_root_cached_with(file, start, succeeding).expect("失败不得固化");
+        assert_eq!(root, PathBuf::from("D:/slterm-test/resolved-root"));
+        assert_eq!(calls.get(), 2, "失败后必须重新解析");
+    }
+
+    /// 超限清理:先清过期条目,仍满则淘汰最早捕获项。
+    #[test]
+    fn repository_root_cache_prunes_expired_and_caps_entries() {
+        let start = Instant::now();
+        let mut expired = HashMap::new();
+        expired.insert(
+            PathBuf::from("D:/slterm-test/root-cap/stale"),
+            RootCacheEntry {
+                captured: start,
+                root: PathBuf::from("D:/root"),
+            },
+        );
+        store_repository_root(
+            &mut expired,
+            PathBuf::from("D:/slterm-test/root-cap/fresh"),
+            RootCacheEntry {
+                captured: start + REPOSITORY_ROOT_CACHE_TTL,
+                root: PathBuf::from("D:/root"),
+            },
+        );
+        assert_eq!(expired.len(), 1, "过期条目必须清理");
+        assert!(expired.contains_key(Path::new("D:/slterm-test/root-cap/fresh")));
+
+        let mut full = HashMap::new();
+        for index in 0..REPOSITORY_ROOT_CACHE_CAPACITY {
+            full.insert(
+                PathBuf::from(format!("D:/slterm-test/root-cap/{index:02}")),
+                RootCacheEntry {
+                    captured: start + Duration::from_millis(index as u64),
+                    root: PathBuf::from("D:/root"),
+                },
+            );
+        }
+        store_repository_root(
+            &mut full,
+            PathBuf::from("D:/slterm-test/root-cap/new"),
+            RootCacheEntry {
+                captured: start + Duration::from_millis(REPOSITORY_ROOT_CACHE_CAPACITY as u64),
+                root: PathBuf::from("D:/root"),
+            },
+        );
+        assert_eq!(full.len(), REPOSITORY_ROOT_CACHE_CAPACITY, "容量上限");
+        assert!(
+            !full.contains_key(Path::new("D:/slterm-test/root-cap/00")),
+            "最早捕获项必须被淘汰"
+        );
+        assert!(full.contains_key(Path::new("D:/slterm-test/root-cap/new")));
+    }
+
+    /// 快照派生:已跟踪修改/未跟踪/无记录/rename 按既有分类语义。
+    #[test]
+    fn file_status_snapshot_lookup_covers_tracked_missing_untracked_and_rename() {
+        let snapshot = parse_status(
+            "# branch.oid abc\0# branch.head main\0\
+             1 .M N... 0 0 0 0 0 tracked.txt\0? new.txt\0\
+             2 R. N... 0 0 0 0 0 R100 renamed.txt\0old.txt\0",
+        )
+        .expect("合法快照");
+        assert_eq!(
+            file_status_from_snapshot(&snapshot, "tracked.txt"),
+            Some(FileStatus::Modified)
+        );
+        assert_eq!(
+            file_status_from_snapshot(&snapshot, "new.txt"),
+            Some(FileStatus::Untracked)
+        );
+        assert_eq!(
+            file_status_from_snapshot(&snapshot, "renamed.txt"),
+            Some(FileStatus::Renamed)
+        );
+        assert_eq!(file_status_from_snapshot(&snapshot, "clean.txt"), None);
+    }
+
+    /// 共享 status 必须展开未跟踪目录:快照含目录内单文件条目。
+    #[test]
+    fn status_snapshot_expands_untracked_directories_to_files() {
+        let repository = test_repository();
+        let root = repository.path();
+        std::fs::create_dir_all(root.join("nested")).unwrap();
+        std::fs::write(root.join("nested/one.txt"), b"one\n").unwrap();
+        std::fs::write(root.join("nested/two.txt"), b"two\n").unwrap();
+
+        let snapshot = status(root).unwrap();
+        assert!(
+            snapshot
+                .entries
+                .iter()
+                .any(|entry| entry.path == "nested/one.txt" && entry.index == '?'),
+            "目录内文件必须单列: {:?}",
+            snapshot.entries
+        );
+        assert!(
+            !snapshot.entries.iter().any(|entry| entry.path == "nested/"),
+            "不得折叠为目录条目"
+        );
+        assert_eq!(
+            file_status_from_snapshot(&snapshot, "nested/two.txt"),
+            Some(FileStatus::Untracked)
+        );
+    }
+
+    /// 写路径绕过缓存:缓存锁定的旧状态不得左右 rollback 的实时判定。
+    #[test]
+    fn rollback_reads_realtime_status_and_bypasses_the_snapshot_cache() {
+        let repository = test_repository();
+        let root = repository.path();
+
+        // 方向一:缓存锁定「无记录」,实时是未跟踪 → rollback 必须删除文件。
+        let late = root.join("late-untracked.txt");
+        let polluted = status_cached_with(root, Instant::now() + Duration::from_secs(3600), status)
+            .expect("锁定无记录快照");
+        assert_eq!(
+            file_status_from_snapshot(&polluted, "late-untracked.txt"),
+            None
+        );
+        std::fs::write(&late, "fresh\n").unwrap();
+        rollback(root, "late-untracked.txt").expect("未跟踪回滚");
+        assert!(!late.exists(), "实时未跟踪状态必须驱动删除");
+
+        // 方向二:缓存锁定「未跟踪」,实时已提交 → rollback 不得删文件。
+        let settled = root.join("settled.txt");
+        std::fs::write(&settled, "settled\n").unwrap();
+        let polluted = status_cached_with(root, Instant::now() + Duration::from_secs(7200), status)
+            .expect("锁定未跟踪快照");
+        assert_eq!(
+            file_status_from_snapshot(&polluted, "settled.txt"),
+            Some(FileStatus::Untracked)
+        );
+        assert!(git(root, ["add", "settled.txt"]).status.success());
+        let commit = git(
+            root,
+            [
+                "-c",
+                "user.name=slTerminal Test",
+                "-c",
+                "user.email=slterm@example.invalid",
+                "commit",
+                "-m",
+                "settle",
+            ],
+        );
+        assert!(
+            commit.status.success(),
+            "commit: {}",
+            String::from_utf8_lossy(&commit.stderr)
+        );
+        rollback(root, "settled.txt").expect("实时已跟踪且干净 = 空操作");
+        assert_eq!(std::fs::read(&settled).unwrap(), b"settled\n");
     }
 
     /// HEAD 字节 ≠ 工作区字节:gitshow 数据面读的是已提交内容。
@@ -731,8 +1195,9 @@ mod git_read_tests {
         let snapshot = status(root).expect("status 快照");
         assert_eq!(snapshot.digest.len(), 64, "写操作 revision 必须是 64 hex");
         assert!(snapshot.digest.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        // 写操作后的断言必须读实时状态:短 TTL 缓存可能仍是操作前的快照。
         assert_eq!(
-            file_status(root, &relative).unwrap(),
+            file_status_uncached(root, &relative).unwrap(),
             Some(FileStatus::Modified)
         );
         let hunks = file_hunks(root, &relative).unwrap();
@@ -743,7 +1208,7 @@ mod git_read_tests {
         // 回滚:工作区与索引都回到 HEAD 字节。
         rollback(root, &relative).unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"tracked\n");
-        assert_eq!(file_status(root, &relative).unwrap(), None);
+        assert_eq!(file_status_uncached(root, &relative).unwrap(), None);
 
         // 暂存后 unstage:索引清空、工作区保留修改。
         std::fs::write(&path, "staged edit\n").unwrap();
@@ -752,7 +1217,7 @@ mod git_read_tests {
             "git add"
         );
         assert_eq!(
-            file_status(root, &relative).unwrap(),
+            file_status_uncached(root, &relative).unwrap(),
             Some(FileStatus::Modified)
         );
         unstage(root, &relative).unwrap();
@@ -769,11 +1234,110 @@ mod git_read_tests {
         std::fs::write(&fresh, b"new\n").unwrap();
         let fresh_relative = relative_path(root, &fresh).unwrap();
         assert_eq!(
-            file_status(root, &fresh_relative).unwrap(),
+            file_status_uncached(root, &fresh_relative).unwrap(),
             Some(FileStatus::Untracked)
         );
         rollback(root, &fresh_relative).unwrap();
         assert!(!fresh.exists(), "未跟踪文件回滚必须删除");
+    }
+
+    /// stderr 分类:权限/损坏各自归位;普通失败与空 stderr 返回 None。
+    #[test]
+    fn git_failure_classification_separates_permission_corruption_and_unknown() {
+        let permission =
+            classify_git_failure("fatal: cannot open '.git/objects/ab/cd': Permission denied")
+                .expect("权限失败必须分类");
+        assert!(
+            matches!(permission, GitError::AccessDenied(_)),
+            "{permission:?}"
+        );
+        assert!(permission.to_string().contains("Permission denied"));
+
+        let windows = classify_git_failure("error: Access is denied.").expect("Windows 权限拒绝");
+        assert!(matches!(windows, GitError::AccessDenied(_)), "{windows:?}");
+
+        for stderr in [
+            "fatal: loose object 5d9f is corrupt",
+            "fatal: bad object HEAD",
+            "error: object file .git/objects/ab/cd is empty",
+            "fatal: unable to read tree 1234",
+        ] {
+            let corrupt = classify_git_failure(stderr).expect(stderr);
+            assert!(
+                matches!(corrupt, GitError::Corrupt(_)),
+                "{stderr}: {corrupt:?}"
+            );
+        }
+
+        assert!(
+            classify_git_failure("fatal: path 'missing.txt' exists on disk, but not in 'HEAD'")
+                .is_none(),
+            "普通失败交给调用方默认臂"
+        );
+        assert!(classify_git_failure("").is_none(), "空 stderr 不得误分类");
+    }
+
+    /// unborn HEAD:unstage 清索引条目,工作区文件保留并回到未跟踪。
+    #[test]
+    fn unstage_unborn_head_untracks_without_touching_the_worktree() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        assert!(
+            git(root, ["init", "--initial-branch=main"])
+                .status
+                .success(),
+            "git init"
+        );
+        let path = root.join("new.txt");
+        std::fs::write(&path, b"new bytes\n").unwrap();
+        assert!(git(root, ["add", "new.txt"]).status.success(), "git add");
+
+        unstage(root, "new.txt").unwrap();
+
+        let after = status(root).unwrap();
+        assert!(
+            after.entries.iter().all(|entry| !entry.staged()),
+            "索引不得再有暂存条目: {:?}",
+            after.entries
+        );
+        assert_eq!(
+            file_status_uncached(root, "new.txt").unwrap(),
+            Some(FileStatus::Untracked)
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"new bytes\n");
+    }
+
+    /// 已提交仓库:staged 新文件 unstage 后回到未跟踪且字节不变。
+    #[test]
+    fn unstage_staged_new_file_keeps_worktree_bytes_and_untracks() {
+        let repository = test_repository();
+        let root = repository.path();
+        let path = root.join("staged-new.txt");
+        let bytes = b"staged new file\n";
+        std::fs::write(&path, bytes).unwrap();
+        assert!(
+            git(root, ["add", "staged-new.txt"]).status.success(),
+            "git add"
+        );
+        assert_eq!(
+            file_status_uncached(root, "staged-new.txt").unwrap(),
+            Some(FileStatus::Added)
+        );
+
+        unstage(root, "staged-new.txt").unwrap();
+
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert_eq!(
+            file_status_uncached(root, "staged-new.txt").unwrap(),
+            Some(FileStatus::Untracked)
+        );
+        let after = status(root).unwrap();
+        let entry = after
+            .entries
+            .iter()
+            .find(|entry| entry.path == "staged-new.txt")
+            .expect("未跟踪条目必须可见");
+        assert_eq!((entry.index, entry.worktree), ('?', '?'));
     }
 
     /// hunk 解析:缺省行数与多 hunk 行号保持精确。

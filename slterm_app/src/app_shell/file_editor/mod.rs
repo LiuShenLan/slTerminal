@@ -561,6 +561,14 @@ impl TextFileView {
         success
     }
 
+    /// 外部修改触发点(B8):watcher 检测到磁盘变更后重读 gutter 快照。
+    ///
+    /// 只重算行标,不触碰编辑器缓冲/草稿;只读/gitshow 由
+    /// [`Self::spawn_gutter_sync`] 内部跳过。
+    pub(crate) fn refresh_gutter_from_disk(&mut self, cx: &mut Context<'_, Self>) {
+        self.spawn_gutter_sync(cx);
+    }
+
     /// 后台重读 gutter 快照(保存落盘/显式重载后);只读文档不挂行标。
     fn spawn_gutter_sync(&mut self, cx: &mut Context<'_, Self>) {
         if self.source == TextSource::GitHead || self.fixed_read_only {

@@ -165,6 +165,8 @@ M12/R3（2026-10-18）：A2 设置写通道全量后台相位机（Pending/Commi
 
 M12/R4（2026-10-18）：A1 容量断言改「成功句柄存活到统计完成」+ 全链 30s 负载裕度、A5 Git 方法放宽到仓库内子目录（`expected_cwd` 漂移防护保留）、A10/A13 恢复汇总统一走通知漏斗并新增启动豁免前台门控策略位、B48 托盘建窗失败复位线程闸门、B50 标题栏关闭复用脏守卫、B53 `restore_ticket` 接入启动恢复并在建窗后确认、B56 终端卡底色取调色板 `background`、C4 `spawn_config_guard` 挂启动链；C1 复核（M9.5 已接 OSC 133 两边界与 run 记账）、B54 复核（M10 已落 1 Hz NIM_ADD 重试）。
 
+M12/R5（2026-10-18）：B8 新增 fs-notify 监听器（树根递归 + 打开文件父目录引用计数、有界唤醒通道、前台 30ms 合并泵）驱动外部修改刷新 gutter 与文件树（仍无定时目录重扫）、B9 git 模块短 TTL 状态/仓库根缓存（500ms，只读面共享，rollback 等写路径绕过）且 gutter 无变更状态不再起 hunk 子进程、B15 HEAD 读取补 `cat-file -e` 预检与 stderr 权限/损坏分类（`AccessDenied`/`Corrupt`）、B16 本地图片 URL 先剥离 query/fragment 再解析、B21 六家目录按官方文档/源码复核（kilo 改 `.config/kilo`、maki 改 `AppData/Roaming/maki`，其余四家不变）、B29 补全命令探测改 pwsh 优先 + 5.1 回退、B34 补 unborn HEAD 与 staged 新文件 unstage 用例。
+
 ## E. 验收纪律补记
 
 - 自 M8.3 起验收同时跑两形态 clippy（`--workspace` 与 `-p slterm --features gpui-test-support`）——此前无 feature 形态遗漏了 M6 起的三处测试端红灯。
