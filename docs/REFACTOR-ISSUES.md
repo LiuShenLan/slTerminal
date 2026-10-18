@@ -71,6 +71,10 @@
 | B43 | **`NotificationChoice` 暂无消费方**：动作按钮回传事件已通车，确认语义归 M10 安全半程，当前仅 debug 日志。 | `notify.rs` | M10.1 | M10 安全半程消费。 |
 | B44 | **焦点切换不清任务栏进度**：切换活跃 tab/聚焦 pane 时旧条保留，后台 pane 后续进度被忽略，只能等来源 pane 清除边（TurnDone/133;D/关 pane/OSC 0）。上游同行为。 | `workspace/mod.rs` 焦点路由 | M10.2 | M10.3/M10.4 裁决是否焦点切换补清。 |
 | B45 | **taskbar 测试调用记录用进程级 static**：依赖 `--test-threads=1` 既定纪律；若并行需加测试互斥锁。 | `taskbar.rs` | M10.2 | 记录。 |
+| B46 | **托盘/通知 Focus 只 `activate_window()`**：未做 `IsIconic→SW_RESTORE`，最小化时托盘点击在 M10.4 前可能只前置不还原。 | `workspace/runtime_control.rs` Focus 路径 | M10.3 | M10.4 facade 统一补还原语义。 |
+| B47 | **托盘「退出」绕过脏文件守卫**：与标题栏关闭同路径（终局快照 + remove_window），不走 `on_window_should_close` 脏确认——**托盘退出可丢弃未保存编辑器内容**（数据丢失风险）。 | `workspace/runtime_control.rs` `quit_from_tray` | M10.3 | M10.4/05 决定托盘退出是否过守卫。 |
+| B48 | **托盘 CreateWindowExW 失败闸门不复位**：失败后本进程内不再重试（上游同形）。 | `tray.rs` `THREAD_STARTED` | M10.3 | 可重置闸门重试。 |
+| B49 | **托盘 shutdown join 等模态菜单收合**（罕见，可接受）。 | `tray.rs` `shutdown` | M10.3 | 记录。 |
 
 ## C. 计划内（归后续子步/阶段，重构完成时验证）
 
