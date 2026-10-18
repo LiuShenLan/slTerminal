@@ -20,6 +20,7 @@
 | A10 | **recovery 恢复结果无 toast 汇总**（仅 log::info）。 | M5.5 | 通知漏斗归 09 篇 M10.1，届时一并接。 |
 | A11 | **hook 失败边默认关的载体**：设计未定义独立键，实现复用 `AssistantConfig.enabled`（与 D08-2「与 AI assistant 默认关闭一致」）。 | M9.3 | 维持复用；若需独立 `hook_failure_edges` 键另行裁决。 |
 | A12 | **config_guard 锁竞争不计入失败边**：另一操作进行中不算失败，不投递；`RawSettings::try_load` 失败投递 `slterm-hook settings`。 | M9.3 | 维持边界；若要求锁竞争也计入需裁决。 |
+| A13 | **recovery 汇总走直发通道而非通知漏斗**：启动期窗口前台，漏斗门控会丢该信息，故走 `platform::notifications::show`（诊断/更新提示直发通道）。 | M10.1 | 若要求统一走漏斗，需加「启动汇总豁免前台门控」策略位。 |
 
 ## B. 待修（已知缺陷/优化）
 
@@ -67,6 +68,7 @@
 | B40 | **ghost 仅按「光标列+1」绘制**：未考虑 `suggestion_edit.replace_after_chars` 与自动折行（纯视觉小瑕疵）。 | `element.rs` ghost 绘制 | M9.5 | 按 suggestion_edit 替换区间绘制。 |
 | B41 | **公式编译在 paint 的 Term 锁内**：首次遇多条新公式可能拉长一帧持锁时间（上游同构）。 | `math_overlay.rs` `plan_frame` | M9.5 | compile 移出锁外或异步预热。 |
 | B42 | **弹窗与 AI 条并存时底部空间受限**（不互相覆盖）。 | `view.rs` 弹窗/AI 条布局 | M9.5 | 低优先级布局打磨。 |
+| B43 | **`NotificationChoice` 暂无消费方**：动作按钮回传事件已通车，确认语义归 M10 安全半程，当前仅 debug 日志。 | `notify.rs` | M10.1 | M10 安全半程消费。 |
 
 ## C. 计划内（归后续子步/阶段，重构完成时验证）
 
@@ -85,7 +87,7 @@
 | C11 | **i18n 合同独立 workspace CI 登记**：`tools/slterm-i18n-contract` 不在根 workspace，clippy/CI 不覆盖。 | 12 篇打包/CI 清单 | |
 | C12 | **旧栈语义资产转测试保留**：git2 五份语义资产（D07-1 裁定转对照用例）。 | 07/M11 | |
 | C13 | **docs/ 临时稿删除 + 篇号锚点清理**（与 A3 联动）。 | M11 | |
-| C14 | **设计措辞修正**：05 篇「窗口边缘」应为「内容区外圈」；04 篇 `reorder_batch` 签名稿与上游不符（已照源）；08 篇 `note_bell` 上游不存在（未落）；04 篇 generation 等待错误码口径（实现按设计稿 `agent_identity_mismatch`/`agent_exited`）；08 篇 D08-2 待沉淀仍写「M9.3 落地时拍板」而 DECISIONS 已裁（文档漂移）；08 篇 `compile_formula` 签名草案与上游实源不符（已按源码照抄）；08 篇 #44 `draw_overlays` 未迁，M9.5 自绘 paint pass（设计稿应标注归属）。 | 设计稿 | 重构末统一订正。 |
+| C14 | **设计措辞修正**：05 篇「窗口边缘」应为「内容区外圈」；04 篇 `reorder_batch` 签名稿与上游不符（已照源）；08 篇 `note_bell` 上游不存在（未落）；04 篇 generation 等待错误码口径（实现按设计稿 `agent_identity_mismatch`/`agent_exited`）；08 篇 D08-2 待沉淀仍写「M9.3 落地时拍板」而 DECISIONS 已裁（文档漂移）；08 篇 `compile_formula` 签名草案与上游实源不符（已按源码照抄）；08 篇 #44 `draw_overlays` 未迁，M9.5 自绘 paint pass（设计稿应标注归属）；09 篇 §6 duration 值域（Default|Short|Long）与 06 已落六档不一致（实现按六档消费，persistent 无系统常驻档）。 | 设计稿 | 重构末统一订正。 |
 | C15 | **`D04-3 windowing_behavior` 未设键**：单窗行为硬编码 `SINGLE_WINDOW_ID`。 | 12 篇随 settings 面统一裁定 | |
 | C16 | **`request_once_bounded` 无消费方**（插件宿主）。 | M9.5/M10 | |
 | C17 | **`ProviderTestOutcome` 文案本地化**（展示边界）。 | M9.5 | |
@@ -95,6 +97,8 @@
 | C21 | ~~失败边投影形态~~（M9.5 已裁：失败边**不接** `AnswerInbox` notice——进程级事实无 pane 归属且合成命令偏技术化；维持「进闸门 + log 证据」，若需提示另立进程级 notice 通道）。 | M9.5 | 已闭环。 |
 | C22 | ~~`SnapCell` 无 DIM 标志~~（M9.5 已裁：同锁窗口从 Term cell Flags 构造 `OverlayCell`，快照契约不变）。 | M9.5 | 已闭环。 |
 | C23 | **真实模型出网无自动化**：`send_model_request` 已登记豁免。 | 后续 | 用本地 mock HTTP server 补四协议族 URL/头/响应解析用例。 |
+| C24 | **AUMID 图标未物化**：09 要求 `ensure_icon_file`（appLogoOverride），本仓无 app_icon/PNG 资产（归 12 篇发布面）；横幅无 logo（notify-test 打印 `icon: unavailable`）。 | M12 | 随包落图标并启用（托盘图标同源缺口）。 |
+| C25 | **真实 toast 投递面自动化为空**：`cfg(test)` 短路 show/dispatch，已登记豁免（回收站先例）；兜底 = 漏斗纯函数用例 + notify-test 真机 + 人工 smoke。 | 11 篇 | 如需 CI 化可加假 toast sink。 |
 
 ## D. 已修（存档，防重复登记）
 
