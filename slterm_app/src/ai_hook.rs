@@ -7,13 +7,17 @@
 //! `SLTERM_HOOK_LOG` 诊断桥接投递而不记载荷;`GateVerdict` 在应用调试日志里
 //! 解释每一条被拒事件。
 //!
-//! 本步(M4.2)落盘范围:协议与仲裁层(信封解析/有界载荷/事件门/每 pane
-//! 仲裁/命名管道传输)。安装权威(`installation`/`local`/`bridges`/
-//! `integrations`)归 M4.3;壳侧接线(GPUI foreground executor 排水、
-//! `AgentActivity` 挂 pane 宿主)归 M4.5/05 篇。
+//! 本步(M4.3)落盘范围:安装权威(installation)+ 9 家安装器与 SEC-12
+//! 审查门(local/*)+ 桥接资产(bridges/res)+ 设置页发现面(integrations)。
+//! 壳侧接线(GPUI foreground executor 排水、`AgentActivity` 挂 pane 宿主、
+//! config_guard 挂 app 生命周期)归 M4.5/05 篇;设置页消费归 06 篇。
 
+mod bridges;
 mod event;
-pub(crate) mod lifecycle;
+pub(crate) mod installation;
+pub(crate) mod integrations;
+mod lifecycle;
+mod local;
 mod native_events;
 mod ordering;
 mod payload;
@@ -50,15 +54,11 @@ pub const PANE_ENV: &str = "SLTERM_PANE_ID";
 pub const HOOK_EXE_ENV: &str = "SLTERM_HOOK_EXE";
 
 /// 仅用于阻止未知 notify 包装器再次套娃;子串不能作为修改/删除的归属依据。
-///
-/// 消费点归 M4.3 安装器(codex notify 槽包装 #38 防线)。
-#[allow(dead_code)]
 fn contains_helper(value: &str) -> bool {
     value.contains("slterm-hook")
 }
 
-/// 消费点归 M4.3 安装器(幂等认领完整自有命令)。
-#[allow(dead_code)]
+/// 幂等认领完整自有命令(安装器用)。
 fn is_helper_executable(value: &str) -> bool {
     let filename = value.rsplit(['/', '\\']).next().unwrap_or_default();
     let absolute = value.starts_with('/')
@@ -78,11 +78,8 @@ fn is_helper_executable(value: &str) -> bool {
 
 /// 只接受安装器产生的单条调用;echo、管道和追加命令仍属于用户。
 ///
-/// POSIX sh 的单引号转义形态(上游经 remote::quote 校验)随 unix/remote 整支
-/// 裁剪:Windows hook 命令只认双引号包裹,单引号路径直接判非自有。
-///
-/// 消费点归 M4.3 安装器。
-#[allow(dead_code)]
+/// POSIX sh 的单引号转义形态随 unix/remote 整支裁剪:Windows hook 命令
+/// 只认双引号包裹,单引号路径直接判非自有。
 fn is_helper_shell_command(command: &str, source: &str) -> bool {
     let Some(path) = command
         .trim()
@@ -112,16 +109,10 @@ fn is_helper_shell_command(command: &str, source: &str) -> bool {
 /// hook 条目的 argv 尾。`claude` 是 `slterm-hook` 从 `args[0]` 读的 source
 /// 判别符,必须作为真实参数传递:若改成拼进命令字符串,就得由某个 shell
 /// 重解析整行——那正是上游 #80 炸掉的形态。
-///
-/// 消费点归 M4.3 安装器。
-#[allow(dead_code)]
 const HELPER_ARGS: [&str; 1] = ["claude"];
 
 /// 我们订阅的 claude hook 事件。会话边界携带 resume/fork 需要的 id;
 /// PostToolUse 让过期的权限状态在整个回合完成之前就能回到 working。
-///
-/// 消费点归 M4.3 安装器。
-#[allow(dead_code)]
 const CLAUDE_EVENTS: [&str; 10] = [
     "SessionStart",
     "UserPromptSubmit",
@@ -138,71 +129,13 @@ const CLAUDE_EVENTS: [&str; 10] = [
 #[allow(unused_imports)] // 消费点归 M4.5 壳侧接线。
 pub use windows::spawn_gpui_server;
 
-// ─── helper 定位(上游 local.rs 件,随 HOOK_EXE_ENV 导出需求提前落地)─────
-// M4.3 安装器落地时与本件合并归位 local.rs;此处保持单一名单 slterm-hook。
-
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-
-/// 配置监视器繁忙时避免每帧刷同一条警告。状态跃迁保持一次性嘈杂,重复探测
-/// 静默,直到 helper 重新出现(或之后被移除)。
-static HELPER_MISSING_ANNOUNCED: AtomicBool = AtomicBool::new(false);
-
-fn helper_path() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    let helper = helper_path_from_exe(&exe);
-    match helper {
-        Some(path) => {
-            // 允许下一次状态跃迁重新报告一次安装/移除,而不是缓存一条过期路径。
-            HELPER_MISSING_ANNOUNCED.store(false, Ordering::Relaxed);
-            Some(path)
-        }
-        None => {
-            if !HELPER_MISSING_ANNOUNCED.swap(true, Ordering::Relaxed) {
-                log::warn!(
-                    "ai_hook: hook helper missing from runtime/ and executable directory; AI integrations not installed"
-                );
-            }
-            None
-        }
-    }
-}
-
-fn helper_path_from_exe(exe: &Path) -> Option<PathBuf> {
-    let exe_dir = exe.parent()?;
-    // 分类目录优先,同目录位置留给开发构建。
-    let name = format!("slterm-hook{}", std::env::consts::EXE_SUFFIX);
-    [exe_dir.join("runtime").join(&name), exe_dir.join(&name)]
-        .into_iter()
-        .find(|path| {
-            path.metadata()
-                .map(|metadata| metadata.is_file())
-                .unwrap_or(false)
-        })
-}
+/// config_guard 落盘本体在 local;消费点归 M4.5 壳侧启动链。
+#[allow(unused_imports)]
+pub use local::spawn_config_guard;
 
 #[cfg(test)]
-mod helper_path_tests {
+mod ownership_tests {
     use super::*;
-
-    #[test]
-    fn helper_path_prefers_the_runtime_subdirectory() {
-        let dir = std::env::temp_dir().join(format!("slterm-helper-path-{}", std::process::id()));
-        let runtime = dir.join("runtime");
-        std::fs::create_dir_all(&runtime).unwrap();
-        let exe = dir.join("slterm.exe");
-        let runtime_helper = runtime.join("slterm-hook.exe");
-        let sibling_helper = dir.join("slterm-hook.exe");
-        std::fs::write(&exe, b"").unwrap();
-        std::fs::write(&runtime_helper, b"").unwrap();
-        assert_eq!(helper_path_from_exe(&exe), Some(runtime_helper.clone()));
-        std::fs::remove_file(&runtime_helper).unwrap();
-        std::fs::write(&sibling_helper, b"").unwrap();
-        assert_eq!(helper_path_from_exe(&exe), Some(sibling_helper.clone()));
-        std::fs::remove_file(&sibling_helper).unwrap();
-        assert_eq!(helper_path_from_exe(&exe), None);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
 
     #[test]
     fn helper_ownership_judges_only_complete_own_commands() {

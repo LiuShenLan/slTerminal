@@ -6045,6 +6045,7 @@ name = "slterm"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "base64",
  "bitflags 2.13.2",
  "futures",
  "gpui",
@@ -6052,11 +6053,15 @@ dependencies = [
  "gpui-component-assets",
  "gpui_platform",
  "log",
+ "notify",
  "raw-window-handle",
  "serde_json",
+ "sha2 0.11.1",
  "slterm-settings",
  "slterm-split",
  "slterm_terminal",
+ "tempfile",
+ "toml_edit 0.25.17+spec-1.1.0",
  "vte",
  "windows-sys 0.59.0",
 ]
@@ -6810,6 +6815,7 @@ dependencies = [
  "indexmap",
  "toml_datetime 1.1.2+spec-1.1.0",
  "toml_parser",
+ "toml_writer",
  "winnow 1.0.4",
 ]
 

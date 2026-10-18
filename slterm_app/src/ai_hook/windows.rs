@@ -3,7 +3,7 @@
 //! 平台收敛纪律(03 篇边界 8):`windows-sys` 命名管道/进程身份核验只允许
 //! 出现在本文件;协议解析、事件门、仲裁器平台无关。
 
-use super::helper_path;
+use super::local::helper_path;
 use crate::ai_hook::{AiHookEvent, HOOK_EXE_ENV, PIPE_ENV, parse_envelope};
 
 // ─── 管道服务器 ─────────────────────────────────────────────────────────

@@ -12,6 +12,8 @@
 #![cfg_attr(clippy, deny(warnings))]
 
 pub(crate) mod app_shell;
+// 持久化小原语(原子写/文件锁):ai_hook 安装器与各域状态写共用。
+pub(crate) mod atomic_file;
 // M4.2 协议与仲裁层:消费点归 M4.5(壳侧管道接线)/05 篇(pane 宿主),
 // 接线落地后摘除本 allow。
 #[allow(dead_code)]

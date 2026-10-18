@@ -61,6 +61,15 @@ futures = "0.3"
 # first_frame 取原生 HWND 走 raw-window-handle(与 gpui 内部同版本族),
 # 不经 winit 中转——winit 事件循环本体不迁。
 raw-window-handle = "0.6"
+# ai_hook 安装权威(M4.3):codex/kimi 的 TOML 手术保注释保格式;managed 文件
+# 归属指纹;cursor/copilot/grok 的 EncodedCommand 形态;codex 能力探针输出
+# 暂存与测试 tempdir 隔离;config_guard 的配置目录监听(notify 钉 7 与
+# gpui-component 同版本族,防双份构建)。
+toml_edit = "0.25"
+sha2 = "0.11"
+base64 = "0.22"
+tempfile = "3"
+notify = "7"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [

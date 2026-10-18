@@ -5,5 +5,6 @@
 
 pub mod dirs;
 pub(crate) mod keyboard;
+pub(crate) mod process;
 pub(crate) mod process_snapshot;
 pub(crate) mod startup;
