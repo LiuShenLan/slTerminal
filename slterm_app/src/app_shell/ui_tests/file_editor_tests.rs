@@ -499,6 +499,57 @@ fn document_preview_renders_markdown_code_and_image_placeholder(cx: &mut TestApp
     );
 }
 
+/// 详情侧栏拖拽:跟手改宽并钳制在常量族区间。
+#[gpui::test]
+fn details_sidebar_drag_resizes_within_the_geometry_range(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    let directory = tempfile::tempdir().unwrap();
+    let path = write_temp_file(directory.path(), "chrome.md", "# 标题\n\n正文\n".as_bytes());
+    open_document_at(&workspace, &mut window, path);
+    draw_frame(&mut window);
+    let before = workspace
+        .read_with(cx, |ws, cx| ws.active_details_width_for_test(cx))
+        .expect("详情侧栏宽度");
+
+    let handle = window
+        .debug_bounds("file-details-resize-handle")
+        .expect("详情拖拽热区必须绘制");
+    let start = handle.center();
+    window.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    draw_frame(&mut window);
+    let target = point(start.x - px(60.0), start.y);
+    window.simulate_mouse_move(target, MouseButton::Left, Modifiers::default());
+    draw_frame(&mut window);
+    window.simulate_mouse_up(target, MouseButton::Left, Modifiers::default());
+    window.run_until_parked();
+    draw_frame(&mut window);
+    let grown = workspace
+        .read_with(cx, |ws, cx| ws.active_details_width_for_test(cx))
+        .expect("详情侧栏宽度");
+    assert!(
+        (grown - (before + 60.0)).abs() < 1.0,
+        "左移 60px 应加宽到 {}: {grown}",
+        before + 60.0
+    );
+
+    let handle = window
+        .debug_bounds("file-details-resize-handle")
+        .expect("详情拖拽热区必须仍在");
+    let start = handle.center();
+    window.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    draw_frame(&mut window);
+    let target = point(start.x + px(200.0), start.y);
+    window.simulate_mouse_move(target, MouseButton::Left, Modifiers::default());
+    draw_frame(&mut window);
+    window.simulate_mouse_up(target, MouseButton::Left, Modifiers::default());
+    window.run_until_parked();
+    draw_frame(&mut window);
+    let narrowed = workspace
+        .read_with(cx, |ws, cx| ws.active_details_width_for_test(cx))
+        .expect("详情侧栏宽度");
+    assert_eq!(narrowed, 216.0, "右移越界必须钳到最小值");
+}
+
 /// 虚拟化:长文档只物化可见窗口;滚动后窗口更新。
 #[gpui::test]
 fn preview_virtualizes_long_documents_and_updates_the_window_on_scroll(cx: &mut TestAppContext) {
