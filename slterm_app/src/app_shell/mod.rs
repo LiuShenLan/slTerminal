@@ -95,6 +95,16 @@ pub(crate) enum SltermShellEvent {
     UpdateAvailable(crate::update_check::UpdateCheckResult),
 }
 
+/// 本次启动是否静默(09 篇 M10.6)。
+///
+/// 设置两条件(`silent_start && tray`)由 [`config::Settings::start_hidden`]
+/// 单点判定;显式 CLI 启动(`--working-directory`/`-e`)恒不静默——用户
+/// 主动发起时把窗口藏起来没有意义(上游同因果:仅 RestoreOrDefault
+/// 启动形态参与 start_hidden)。
+fn starts_hidden(restore_tabs: bool, settings: &config::Settings) -> bool {
+    restore_tabs && settings.start_hidden()
+}
+
 /// 托盘线程 → 壳事件队列的翻译单点(托盘线程不碰 GPUI 状态)。
 fn tray_command_event(command: crate::tray::GpuiTrayCommand) -> SltermShellEvent {
     match command {
@@ -187,6 +197,9 @@ pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>)
     });
     application.run(move |cx| {
         init(cx);
+        // 静默启动(09 篇 M10.6):仅无显式 CLI 启动时参与;窗口以隐藏
+        // 形态创建,托盘「显示」经 M10.4 focus facade 回窗。
+        let start_hidden = starts_hidden(restore_tabs, cx.global::<config::Settings>());
         windowing::open_initial_window(
             cx,
             shell_rx,
@@ -195,6 +208,7 @@ pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>)
             initial_command,
             startup_plan,
             runtime_hub,
+            start_hidden,
         );
     });
     // 托盘收尾(09 篇 M10.3):先删图标再退进程,否则任务栏残影要等
@@ -234,8 +248,26 @@ fn register_bundled_fonts(cx: &App) {
 
 #[cfg(test)]
 mod shell_event_tests {
-    use super::{SltermShellEvent, tray_command_event};
+    use slterm_settings::{RawSettings, RuntimeSettings};
+
+    use super::{SltermShellEvent, starts_hidden, tray_command_event};
     use crate::tray::GpuiTrayCommand;
+
+    fn silent_settings() -> crate::app_shell::config::Settings {
+        let runtime = RuntimeSettings::from_raw(&RawSettings::from_json_bytes(
+            br#"{"session":{"silent_start":true},"system":{"tray":true}}"#,
+        ));
+        crate::app_shell::config::Settings::from_runtime(&runtime)
+    }
+
+    /// 显式 CLI 启动(`--working-directory`/`-e`)恒不静默;无显式参数
+    /// 的常规启动才允许设置两条件生效。
+    #[test]
+    fn explicit_cli_launch_never_starts_hidden() {
+        let settings = silent_settings();
+        assert!(starts_hidden(true, &settings), "常规启动可静默");
+        assert!(!starts_hidden(false, &settings), "显式 CLI 启动不得隐藏");
+    }
 
     /// 托盘线程只发命令枚举;壳侧翻译单点必须把 Focus 汇到已有的回窗
     /// 事件、把 Quit 送到关窗同语义的退出事件。

@@ -19,3 +19,7 @@
   `window_hwnd` 查询。虚拟窗口无原生句柄 → None,调用方按 0 兜底。
 - **托盘退出(B47)**:`quit_from_tray` 必须先过 `guard_file_window_close`;
   确认在途/保存在途 = 本轮拦截,异步放行后由守卫自身关窗。
+- **静默启动窗口形态(M10.6)**:首窗 `show=false`/`focus=false` 创建,不
+  进入 present-then-show(未曝光无需防黑窗);托盘「显示」经本 facade 的
+  GPUI `activate_window` 消费首窗 placement 完成曝光 + 前台化。显式 CLI
+  启动(`--working-directory`/`-e`)恒不静默(设置两条件只作用于常规启动)。

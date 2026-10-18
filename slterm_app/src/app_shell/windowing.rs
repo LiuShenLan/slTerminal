@@ -106,8 +106,21 @@ pub(crate) fn workspace_window_options(
     }
 }
 
+/// 静默启动的窗口形态(09 篇 M10.6):不显示、不抢焦点。
+///
+/// 隐藏窗口不进入 present-then-show 链——该链只为「即将曝光」的窗口
+/// 防首帧黑窗;托盘「显示」时 GPUI `activate_window` 消费首窗 placement
+/// 完成曝光与前台化(M10.4 facade 同路径)。
+fn apply_start_hidden(options: &mut WindowOptions, start_hidden: bool) {
+    if start_hidden {
+        options.show = false;
+        options.focus = false;
+    }
+}
+
 /// 启动链调一次的开窗入口:命令行 `-e` → LaunchTerminal;有 cwd →
 /// NewTerminal;否则消费启动恢复计划(会话恢复归 05 篇 M5.5)。
+#[allow(clippy::too_many_arguments)] // 启动链参数逐项显式(单一调用点),不折叠中间结构体。
 pub(crate) fn open_initial_window(
     cx: &mut App,
     shell_rx: mpsc::Receiver<SltermShellEvent>,
@@ -116,6 +129,7 @@ pub(crate) fn open_initial_window(
     initial_command: Option<Program>,
     plan: StartupPlan,
     runtime_hub: RuntimeHub,
+    start_hidden: bool,
 ) {
     let startup = match initial_command {
         Some(command) => WorkspaceStartup::LaunchTerminal {
@@ -124,8 +138,10 @@ pub(crate) fn open_initial_window(
         },
         None => WorkspaceStartup::NewTerminal { cwd: initial_cwd },
     };
-    let mut options = workspace_window_options(cx, true, plan.window, &plan.sidebar);
+    let mut options = workspace_window_options(cx, !start_hidden, plan.window, &plan.sidebar);
+    apply_start_hidden(&mut options, start_hidden);
     // 首帧黑窗/半构窗口不曝光:先同步画一帧再 activate(first_frame 因果链)。
+    // 静默窗口不曝光,defer_show 自然返回 false,不进 present-then-show。
     let deferred_show = first_frame::defer_show(&mut options);
     let result = cx.open_window(options, move |window, cx| {
         window.set_window_title(brand::NAME);
@@ -200,6 +216,32 @@ mod windowing_tests {
         let display = Bounds::new(gpui::point(px(0.0), px(0.0)), size(px(1000.0), px(600.0)));
         let bounds = fit_to_display(size(px(4000.0), px(3000.0)), Some(display)).unwrap();
         assert_eq!(bounds.size, display.size, "超屏尺寸收到显示器内");
+    }
+
+    /// 静默启动只改 `show`/`focus` 两轴,且不进入 present-then-show 链;
+    /// 常规启动保持可视 + 聚焦形态(M3.1 首帧纪律不变)。
+    #[test]
+    fn start_hidden_hides_the_window_and_skips_first_frame_present() {
+        let mut hidden = WindowOptions {
+            show: true,
+            focus: true,
+            ..Default::default()
+        };
+        apply_start_hidden(&mut hidden, true);
+        assert!(!hidden.show, "静默启动不得显示窗口");
+        assert!(!hidden.focus, "静默启动不得抢焦点");
+        assert!(
+            !first_frame::defer_show(&mut hidden),
+            "未曝光窗口不进入 present-then-show"
+        );
+
+        let mut visible = WindowOptions {
+            show: true,
+            focus: true,
+            ..Default::default()
+        };
+        apply_start_hidden(&mut visible, false);
+        assert!(visible.show && visible.focus, "常规启动形态不变");
     }
 
     /// 启动命令必须原样保留程序与参数(逐字,不经 shell 二次解析)。

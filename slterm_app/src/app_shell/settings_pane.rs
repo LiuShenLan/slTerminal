@@ -272,7 +272,8 @@ impl SettingsPane {
     ) -> Self {
         // 注册表幂等注册:页面路由/搜索别名的单源就位后才能取分区顺序。
         registry::register_builtin_pages();
-        let (runtime, persisted, status) = match settings_target.load() {
+        let using_default_target = matches!(settings_target, SettingsTarget::Default);
+        let (mut runtime, persisted, status) = match settings_target.load() {
             Ok(result) => {
                 let runtime = RuntimeSettings::from_raw(&result.data);
                 let status = result.corrupted.then_some(SettingsStatus::LoadedCorrupted);
@@ -288,6 +289,12 @@ impl SettingsPane {
                 )
             }
         };
+        // 开机启动显示以实际 .lnk 为准(09 篇 M10.6):安装器与设置页管理
+        // 同一 Startup 快捷方式,设置键只承载最近一次用户意图。测试注入
+        // 目标(tempdir)不读取真实 Startup 文件夹。
+        if using_default_target {
+            runtime.launch_at_login = crate::platform::startup::launch_at_login();
+        }
         let language = resolve_language(runtime.language);
         let mut subscriptions = Vec::new();
 

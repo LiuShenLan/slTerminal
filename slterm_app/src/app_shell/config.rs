@@ -47,6 +47,9 @@ pub struct Settings {
     /// 常驻系统托盘图标(09 篇 M10.3):1 Hz 节拍按此值增删图标,
     /// 线程留驻不随开关销毁。
     pub tray: bool,
+    /// 静默启动(09 篇 M10.6):与 `tray` 合取决定首窗是否隐藏;
+    /// 显式 CLI 启动(`--working-directory`/`-e`)恒不静默。
+    pub silent_start: bool,
 }
 
 impl Global for Settings {}
@@ -113,7 +116,14 @@ impl Settings {
             scroll_speed: runtime.scroll_speed,
             language: LanguagePreference::from(runtime.language).resolved(),
             tray: runtime.tray,
+            silent_start: runtime.silent_start,
         }
+    }
+
+    /// 静默启动判定(09 篇 M10.6):公式单点在 `platform::startup`,
+    /// 壳视图只提供两个设置位,不重复实现合取。
+    pub fn start_hidden(&self) -> bool {
+        crate::platform::startup::start_hidden_for(self.silent_start, self.tray)
     }
 
     /// 引擎 `Term` 的启动配置。
@@ -315,6 +325,30 @@ mod config_tests {
                 slterm_settings::ThemeName::Linear.term_theme().background
             )
         );
+    }
+
+    /// 静默启动两条件进入壳视图:silent_start 单独不隐藏(无托盘 =
+    /// 不可达进程),两开才成立。
+    #[test]
+    fn silent_start_reaches_the_shell_view_behind_the_tray_condition() {
+        let both = Settings::from_runtime(&runtime(
+            r#"{"session":{"silent_start":true},"system":{"tray":true}}"#,
+        ));
+        assert!(both.silent_start);
+        assert!(both.tray);
+        assert!(both.start_hidden());
+
+        let no_tray = Settings::from_runtime(&runtime(
+            r#"{"session":{"silent_start":true},"system":{"tray":false}}"#,
+        ));
+        assert!(no_tray.silent_start);
+        assert!(!no_tray.tray);
+        assert!(!no_tray.start_hidden(), "托盘关闭时不得静默启动");
+
+        let no_silent = Settings::from_runtime(&runtime(
+            r#"{"session":{"silent_start":false},"system":{"tray":true}}"#,
+        ));
+        assert!(!no_silent.start_hidden());
     }
 
     #[test]

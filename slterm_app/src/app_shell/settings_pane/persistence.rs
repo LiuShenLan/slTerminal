@@ -219,6 +219,22 @@ impl SettingsPane {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
+        if key == "launch_at_login" {
+            // 开机启动是真系统副作用(09 篇 M10.6):先写/删 Startup .lnk
+            // 再持久化键值。.lnk 失败则不写设置键,避免「设置显示已开、
+            // 实际没登记」;设置键写入失败时 .lnk 已生效,下次打开设置页
+            // 以文件为准自愈。
+            let result = crate::platform::startup::set_launch_at_login(value)
+                .and_then(|()| self.try_persist(&[(key, Value::Bool(value))], cx));
+            if let Err(error) = result {
+                self.report_failure(&error, window, cx);
+                self.sync_controls_from_runtime(window, cx);
+                return;
+            }
+            self.status = None;
+            cx.notify();
+            return;
+        }
         if let Err(error) = self.try_persist(&[(key, Value::Bool(value))], cx) {
             self.report_failure(&error, window, cx);
             self.sync_controls_from_runtime(window, cx);
@@ -466,6 +482,17 @@ impl SettingsPane {
             .iter()
             .find(|entry| entry.key == key)
             .map(|entry| entry.select.entity_id())
+    }
+
+    /// 开关提交路径(与 `Switch::on_click` 同一入口的驱动端)。
+    pub(crate) fn toggle_for_test(
+        &mut self,
+        key: &'static str,
+        value: bool,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.toggle(key, value, window, cx);
     }
 
     /// 文本输入保存路径(字号热应用用例的驱动端)。

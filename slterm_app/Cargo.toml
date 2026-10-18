@@ -149,6 +149,10 @@ windows = { version = "=0.61.3", features = [
     "UI_Notifications",
     "Win32_Foundation",
     "Win32_System_Com",
+    # 开机启动 .lnk(09 篇 M10.6):IShellLinkW/IPersistFile 的 COM 写读;
+    # GetPath 的 WIN32_FIND_DATAW 参数需要 Storage 面。
+    "Win32_Storage_FileSystem",
+    "Win32_UI_Shell",
 ] }
 windows-sys = { version = "0.59", features = [
     # AUMID 注册(RegSetKeyValueW,09 篇 M10.1)。

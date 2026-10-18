@@ -571,6 +571,42 @@ fn settings_slider_previews_in_memory_and_release_commits(cx: &mut TestAppContex
     });
 }
 
+/// 开机启动开关(09 篇 M10.6):测试构建由平台层短路真实 Startup 写入,
+/// 设置键仍经统一写通道落盘;真系统副作用按 11 篇豁免走构建产物 smoke。
+#[gpui::test]
+fn launch_at_login_toggle_persists_the_setting_key(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("settings.json");
+    let pane = open_settings_at(cx, &workspace, &mut window, path.clone());
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+
+    for enabled in [true, false] {
+        window.update(|window, cx| {
+            pane.update(cx, |pane, cx| {
+                pane.toggle_for_test("launch_at_login", enabled, window, cx);
+            });
+        });
+        let tree = slterm_settings::json::parse(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            tree.get("session")
+                .and_then(|section| section.get("launch_at_login"))
+                .and_then(|value| value.as_bool()),
+            Some(enabled),
+            "开机启动设置键必须落盘"
+        );
+        cx.update(|cx| {
+            assert_eq!(
+                pane.read(cx).runtime_for_test().launch_at_login,
+                enabled,
+                "运行时视图必须同步"
+            );
+            assert!(pane.read(cx).status_for_test().is_none());
+        });
+    }
+}
+
 /// `Changed` 驱动热应用:字号提交后,已打开终端视图立即换字号(字体
 /// 度量变化走结构性 resize,不等下一 tab)。
 #[gpui::test]
