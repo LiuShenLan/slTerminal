@@ -91,6 +91,9 @@
 | B61 | **真 Credential Manager 用例依赖用户凭据库**：默认随 lib_tests 运行（隔离 target + Drop 清理）；无凭据库的服务账户 CI 会失败。 | `secrets.rs` 测试 | M10.9 | 若 CI 化改环境变量门控并登记豁免。 |
 | B62 | **备份 `add_themes` 非法主题静默跳过**：仅 audit 日志，备份会缺该类文件；若要硬失败需改。 | `encrypted_backup.rs` `add_themes` | M10.10 | 安全边界内取舍，登记。 |
 | B63 | **`SENSITIVE_KEYS` denylist 未来漂移**：provider/settings 新增字段若取名 `token` 等会被静默剥除；防漂移用例只扫 settings KEYS。 | `encrypted_backup.rs` `SENSITIVE_KEYS` | M10.10 | provider schema 演进时补同类漂移守卫。 |
+| B64 | **plan_balance 订阅者漏唤醒窗口**：订阅者在「快照落槽后、通知扇出前」注册会漏一次唤醒；消费方须订阅后先读 `current_snapshot()`（已写 doc）。 | `plan_balance/mod.rs` | M10.11 | 订阅 API 同时返回当前值。 |
+| B65 | **plan_balance home 解析仅 USERPROFILE**：旧资产经 home.rs 带 `dirs::home_dir()` 回退；Windows 影响低。 | `plan_balance/source.rs` | M10.11 | 待复核。 |
+| B66 | **`SettingsPathGuard` 仅模块内测试可用**：e2e 若需隔离 plan_balance home，需 USERPROFILE 注入或上提共享守卫。 | `plan_balance/source.rs` | M10.11 | 需要时上提。 |
 
 ## C. 计划内（归后续子步/阶段，重构完成时验证）
 
@@ -109,7 +112,7 @@
 | C11 | **i18n 合同独立 workspace CI 登记**：`tools/slterm-i18n-contract` 不在根 workspace，clippy/CI 不覆盖。 | 12 篇打包/CI 清单 | |
 | C12 | **旧栈语义资产转测试保留**：git2 五份语义资产（D07-1 裁定转对照用例）。 | 07/M11 | |
 | C13 | **docs/ 临时稿删除 + 篇号锚点清理**（与 A3 联动）。 | M11 | |
-| C14 | **设计措辞修正**：05 篇「窗口边缘」应为「内容区外圈」；04 篇 `reorder_batch` 签名稿与上游不符（已照源）；08 篇 `note_bell` 上游不存在（未落）；04 篇 generation 等待错误码口径（实现按设计稿 `agent_identity_mismatch`/`agent_exited`）；08 篇 D08-2 待沉淀仍写「M9.3 落地时拍板」而 DECISIONS 已裁（文档漂移）；08 篇 `compile_formula` 签名草案与上游实源不符（已按源码照抄）；08 篇 #44 `draw_overlays` 未迁，M9.5 自绘 paint pass（设计稿应标注归属）；09 篇 §6 duration 值域（Default|Short|Long）与 06 已落六档不一致（实现按六档消费，persistent 无系统常驻档）；09 篇 M10.2 出口只写「agent 退出清进度」，实现按任务书补 TurnDone/pane 关闭清除（doc 待回登）；09 篇 `focus_window(cx)`/`focus_pane(pane,cx)` 为多窗注册表签名，与单窗 GPUI（窗口更新回调内不可再 update）冲突，实现改为显式 `&mut Window` 落点、目标选择/平台调用仍单点；09 篇 `PreparedUpdate::commit(&self)` 实为 `commit(&mut self, windows: &[Session])`，`RELEASE_DOWNLOAD_PREFIX` 落 `update_check.rs` 而非 `update_download`（M11 原位收敛）；09 篇 row 35 写 `.lnk`「静默参数」但 CLI 无静默旗标（实现按设置两条件；doc 待删措辞或另立 `--silent`）；09 篇 TaskDef 无一次性/按需形态，实现新增 `TaskSchedule`（Once/OnDemand，M11 回登）；10 篇 `load_generic_secret` 签名 `Option<Vec<u8>>` 实为 `Option<SecretBytes>`（出域句柄补强）；`store_with_username` 空 secret 拒绝为新增语义（M11 回登或裁除）；10 篇 D10-2 类别清单未回登（实现裁 6 类 + 22 敏感键表 + 导出清洗/导入复验双闸）；`filter_settings` 签名 `Vec<u8>→Vec<u8>` 实为 `Result`；备份依赖 caret 解析 aes-gcm 0.11.1/argon2 0.6.0（上游 0.11.0/0.6.0-rc.8）。 | 设计稿 | 重构末统一订正。 |
+| C14 | **设计措辞修正**：05 篇「窗口边缘」应为「内容区外圈」；04 篇 `reorder_batch` 签名稿与上游不符（已照源）；08 篇 `note_bell` 上游不存在（未落）；04 篇 generation 等待错误码口径（实现按设计稿 `agent_identity_mismatch`/`agent_exited`）；08 篇 D08-2 待沉淀仍写「M9.3 落地时拍板」而 DECISIONS 已裁（文档漂移）；08 篇 `compile_formula` 签名草案与上游实源不符（已按源码照抄）；08 篇 #44 `draw_overlays` 未迁，M9.5 自绘 paint pass（设计稿应标注归属）；09 篇 §6 duration 值域（Default|Short|Long）与 06 已落六档不一致（实现按六档消费，persistent 无系统常驻档）；09 篇 M10.2 出口只写「agent 退出清进度」，实现按任务书补 TurnDone/pane 关闭清除（doc 待回登）；09 篇 `focus_window(cx)`/`focus_pane(pane,cx)` 为多窗注册表签名，与单窗 GPUI（窗口更新回调内不可再 update）冲突，实现改为显式 `&mut Window` 落点、目标选择/平台调用仍单点；09 篇 `PreparedUpdate::commit(&self)` 实为 `commit(&mut self, windows: &[Session])`，`RELEASE_DOWNLOAD_PREFIX` 落 `update_check.rs` 而非 `update_download`（M11 原位收敛）；09 篇 row 35 写 `.lnk`「静默参数」但 CLI 无静默旗标（实现按设置两条件；doc 待删措辞或另立 `--silent`）；09 篇 TaskDef 无一次性/按需形态，实现新增 `TaskSchedule`（Once/OnDemand，M11 回登）；10 篇 `load_generic_secret` 签名 `Option<Vec<u8>>` 实为 `Option<SecretBytes>`（出域句柄补强）；`store_with_username` 空 secret 拒绝为新增语义（M11 回登或裁除）；10 篇 D10-2 类别清单未回登（实现裁 6 类 + 22 敏感键表 + 导出清洗/导入复验双闸）；`filter_settings` 签名 `Vec<u8>→Vec<u8>` 实为 `Result`；备份依赖 caret 解析 aes-gcm 0.11.1/argon2 0.6.0（上游 0.11.0/0.6.0-rc.8）；**设计输入失实**：上游基线 e537d528 无 plan_balance 模块，行为真值源实为 slTerminal git 历史 `src-tauri/src/plan_balance/`（c59f47f^ 终态），设计稿「上游源」表述待 M11 订正；`AppError::Unknown` 变体未登记 01 篇锚点表。 | 设计稿 | 重构末统一订正。 |
 | C15 | **`D04-3 windowing_behavior` 未设键**：单窗行为硬编码 `SINGLE_WINDOW_ID`。 | 12 篇随 settings 面统一裁定 | |
 | C16 | **`request_once_bounded` 无消费方**（插件宿主）。 | M9.5/M10 | |
 | C17 | **`ProviderTestOutcome` 文案本地化**（展示边界）。 | M9.5 | |
@@ -129,6 +132,7 @@
 | C31 | **日志边界测试用 `log::Log` 而非 tracing**：仓库当前无 tracing 依赖；M10.12 引入 audit target 后需补 tracing 捕获断言。 | M10.12 | 扩展或迁移该用例。 |
 | C32 | **`RestorePoint` 无 loader**：names 私有且无 open，仅能撤回本次会话返回的句柄；跨重启恢复点清单/撤回归 06 设置页 UI 决策（上游同限制）。 | 06 UI | 落 `RestorePoint::open(path, passphrase)` 或维持会话内撤回语义。 |
 | C33 | **备份 `collect` 整单失败需 UI 展示**：settings/providers 不可解析时整单失败（安全取向），UI 须明示避免误以为成功。 | 06 UI | 随 D10-4 设置页安全分区落地。 |
+| C34 | **planBalance 生产启动链未接**：注册表条目与 executor 已就绪，但生产无订阅/poller 循环（当前仅 L1 进程内驱动）。 | M10.12 | 壳启动 `subscribe` + `background_spawn` 循环按 interval 调 `poll_once_executor`；UI 消费 `current_snapshot` + `subscribe`。 |
 
 ## D. 已修（存档，防重复登记）
 
